@@ -109,6 +109,20 @@ pub enum GcFrameSlotKind {
     GcFrameReturnSlot,
 }
 
+pub enum GcGlobalRootKind {
+    GcTopLevelLetRoot,
+    GcConstantRoot,
+    GcPackageGlobalRoot,
+    GcStaticRoot,
+}
+
+pub enum GcGlobalInitState {
+    GcGlobalDeclared,
+    GcGlobalInitializing,
+    GcGlobalReady,
+    GcGlobalPoisoned,
+}
+
 pub struct GcLiveRootSlot {
     pub slot: Int,
     pub kind: GcRootSlotKind,
@@ -136,6 +150,14 @@ pub struct GcSafepointPlan {
     pub functionName: String,
     pub frameSlots: Int,
     pub safepoints: List<GcSafepoint>,
+}
+
+pub struct GcGlobalRoot {
+    pub moduleName: String,
+    pub name: String,
+    pub kind: GcGlobalRootKind,
+    pub state: GcGlobalInitState,
+    pub objectId: Int,
 }
 
 pub struct GcFrameSlot {
@@ -185,6 +207,7 @@ pub struct GcHeap {
     phase: TracePhase,
     objects: Map<Int, GcObject>,
     roots: Set<Int>,
+    globalRoots: Map<String, GcGlobalRoot>,
     remembered: Set<Int>,
     grey: List<Int>,
     allocatedSinceLastGC: Int,
@@ -226,6 +249,150 @@ pub struct GcHeap {
 
     pub fn removeRoot(mut self, id: Int) -> Bool {
         self.roots.remove(id)
+    }
+
+    pub fn installGlobalRoot(
+        mut self,
+        moduleName: String,
+        name: String,
+        kind: GcGlobalRootKind,
+        id: Int,
+    ) -> Bool {
+        if !(self.objects.containsKey(id)) {
+            return false
+        }
+        if moduleName == "" || name == "" {
+            return false
+        }
+        let key = globalRootKey(moduleName, name)
+        if self.globalRoots.containsKey(key) {
+            return false
+        }
+        self.globalRoots.insert(
+            key,
+            GcGlobalRoot {
+                moduleName,
+                name,
+                kind,
+                state: GcGlobalReady,
+                objectId: id,
+            },
+        )
+        if self.phase == GcMarking {
+            self.shade(id)
+        }
+        true
+    }
+
+    pub fn declareGlobalRoot(mut self, moduleName: String, name: String, kind: GcGlobalRootKind) -> Bool {
+        if moduleName == "" || name == "" {
+            return false
+        }
+        let key = globalRootKey(moduleName, name)
+        if self.globalRoots.containsKey(key) {
+            return false
+        }
+        self.globalRoots.insert(
+            key,
+            GcGlobalRoot {
+                moduleName,
+                name,
+                kind,
+                state: GcGlobalDeclared,
+                objectId: -1,
+            },
+        )
+        true
+    }
+
+    pub fn beginGlobalInit(mut self, moduleName: String, name: String, kind: GcGlobalRootKind) -> Bool {
+        if moduleName == "" || name == "" {
+            return false
+        }
+        let key = globalRootKey(moduleName, name)
+        if self.globalRoots.containsKey(key) {
+            let mut root = self.globalRoots[key]
+            if root.state != GcGlobalDeclared {
+                return false
+            }
+            root.state = GcGlobalInitializing
+            root.objectId = -1
+            self.globalRoots.insert(key, root)
+            return true
+        }
+        self.globalRoots.insert(
+            key,
+            GcGlobalRoot {
+                moduleName,
+                name,
+                kind,
+                state: GcGlobalInitializing,
+                objectId: -1,
+            },
+        )
+        true
+    }
+
+    pub fn setGlobalRootObject(mut self, moduleName: String, name: String, id: Int) -> Bool {
+        let key = globalRootKey(moduleName, name)
+        if !(self.globalRoots.containsKey(key)) {
+            return false
+        }
+        if !(self.objects.containsKey(id)) {
+            return false
+        }
+        let mut root = self.globalRoots[key]
+        if root.state == GcGlobalPoisoned {
+            return false
+        }
+        root.objectId = id
+        if root.state == GcGlobalDeclared {
+            root.state = GcGlobalInitializing
+        }
+        self.globalRoots.insert(key, root)
+        if self.phase == GcMarking {
+            self.shade(id)
+        }
+        true
+    }
+
+    pub fn finishGlobalInit(mut self, moduleName: String, name: String) -> Bool {
+        let key = globalRootKey(moduleName, name)
+        if !(self.globalRoots.containsKey(key)) {
+            return false
+        }
+        let mut root = self.globalRoots[key]
+        if root.objectId < 0 || !(self.objects.containsKey(root.objectId)) {
+            return false
+        }
+        root.state = GcGlobalReady
+        self.globalRoots.insert(key, root)
+        if self.phase == GcMarking {
+            self.shade(root.objectId)
+        }
+        true
+    }
+
+    pub fn poisonGlobalRoot(mut self, moduleName: String, name: String) -> Bool {
+        let key = globalRootKey(moduleName, name)
+        if !(self.globalRoots.containsKey(key)) {
+            return false
+        }
+        let mut root = self.globalRoots[key]
+        root.state = GcGlobalPoisoned
+        root.objectId = -1
+        self.globalRoots.insert(key, root)
+        true
+    }
+
+    pub fn removeGlobalRoot(mut self, moduleName: String, name: String) -> Bool {
+        let key = globalRootKey(moduleName, name)
+        if self.globalRoots.containsKey(key) {
+            let _ = self.globalRoots.remove(key)
+            true
+        } else {
+            false
+        }
     }
 
     pub fn pin(mut self, id: Int) -> Bool {
@@ -305,6 +472,7 @@ pub struct GcHeap {
         for id in self.roots.toList() {
             self.shade(id)
         }
+        self.shadeGlobalRoots()
     }
 
     pub fn stepIncremental(mut self) -> GcStats {
@@ -455,6 +623,7 @@ pub struct GcHeap {
         for id in self.roots.toList() {
             self.shade(id)
         }
+        self.shadeGlobalRoots()
         let markSteps = self.drainGrey(0, false)
 
         self.phase = GcSweeping
@@ -503,13 +672,29 @@ pub struct GcHeap {
         self.roots.len()
     }
 
+    pub fn globalRootCount(self) -> Int {
+        self.globalRoots.len()
+    }
+
+    pub fn globalObjectRootCount(self) -> Int {
+        let mut total = 0
+        for (key, root) in self.globalRoots {
+            let _ = key
+            if root.objectId >= 0 {
+                total = total + 1
+            }
+        }
+        total
+    }
+
     pub fn rememberedCount(self) -> Int {
         self.remembered.len()
     }
 
     pub fn nurseryBytes(self) -> Int {
         let mut total = 0
-        for (_, obj) in self.objects {
+        for (id, obj) in self.objects {
+            let _ = id
             if obj.generation == 0 {
                 total = total + obj.size
             }
@@ -582,9 +767,33 @@ pub struct GcHeap {
         }
     }
 
+    pub fn globalRootObject(self, moduleName: String, name: String) -> Int? {
+        let key = globalRootKey(moduleName, name)
+        if self.globalRoots.containsKey(key) {
+            let root = self.globalRoots[key]
+            if root.objectId >= 0 {
+                Some(root.objectId)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
+    pub fn globalRootState(self, moduleName: String, name: String) -> GcGlobalInitState? {
+        let key = globalRootKey(moduleName, name)
+        if self.globalRoots.containsKey(key) {
+            Some(self.globalRoots[key].state)
+        } else {
+            None
+        }
+    }
+
     pub fn largeObjectCount(self) -> Int {
         let mut total = 0
-        for (_, obj) in self.objects {
+        for (id, obj) in self.objects {
+            let _ = id
             if obj.large {
                 total = total + 1
             }
@@ -594,7 +803,8 @@ pub struct GcHeap {
 
     pub fn pinnedObjectCount(self) -> Int {
         let mut total = 0
-        for (_, obj) in self.objects {
+        for (id, obj) in self.objects {
+            let _ = id
             if obj.pinned {
                 total = total + 1
             }
@@ -678,6 +888,30 @@ pub struct GcHeap {
         for rootId in self.roots.toList() {
             if !(self.objects.containsKey(rootId)) {
                 return Err("root references missing object {rootId}")
+            }
+        }
+
+        for (key, root) in self.globalRoots {
+            if key != globalRootKey(root.moduleName, root.name) {
+                return Err("global root key/name mismatch: {key}")
+            }
+            if root.moduleName == "" || root.name == "" {
+                return Err("global root has empty module or name")
+            }
+            if root.objectId < -1 {
+                return Err("global root {key} has invalid object id {root.objectId}")
+            }
+            if root.state == GcGlobalDeclared && root.objectId >= 0 {
+                return Err("declared global root {key} already has an object")
+            }
+            if root.state == GcGlobalReady && root.objectId < 0 {
+                return Err("ready global root {key} has no object")
+            }
+            if root.state == GcGlobalPoisoned && root.objectId >= 0 {
+                return Err("poisoned global root {key} still has an object")
+            }
+            if root.objectId >= 0 && !(self.objects.containsKey(root.objectId)) {
+                return Err("global root {key} references missing object {root.objectId}")
             }
         }
 
@@ -774,6 +1008,15 @@ pub struct GcHeap {
         }
     }
 
+    fn shadeGlobalRoots(mut self) {
+        for (key, root) in self.globalRoots {
+            let _ = key
+            if root.objectId >= 0 {
+                self.shade(root.objectId)
+            }
+        }
+    }
+
     fn shadeYoung(mut self, id: Int) {
         if self.objects.containsKey(id) {
             let obj = self.objects[id]
@@ -793,6 +1036,18 @@ pub struct GcHeap {
                 let obj = self.objects[id]
                 if obj.generation == 0 {
                     self.shadeYoung(id)
+                } else {
+                    self.shadeYoungChildren(obj)
+                }
+            }
+        }
+
+        for (key, root) in self.globalRoots {
+            let _ = key
+            if root.objectId >= 0 && self.objects.containsKey(root.objectId) {
+                let obj = self.objects[root.objectId]
+                if obj.generation == 0 {
+                    self.shadeYoung(root.objectId)
                 } else {
                     self.shadeYoungChildren(obj)
                 }
@@ -982,7 +1237,8 @@ pub struct GcHeap {
 
     fn heapSpan(self) -> Int {
         let mut span = 0
-        for (_, obj) in self.objects {
+        for (id, obj) in self.objects {
+            let _ = id
             let end = obj.address + obj.size
             if end > span {
                 span = end
@@ -1014,6 +1270,7 @@ pub fn testGcConfig() -> GcConfig {
 
 pub fn newGcHeap(config: GcConfig) -> GcHeap {
     let objects: Map<Int, GcObject> = {:}
+    let globalRoots: Map<String, GcGlobalRoot> = {:}
     let emptyRoots: List<Int> = []
     let emptyRemembered: List<Int> = []
     let grey: List<Int> = []
@@ -1029,11 +1286,16 @@ pub fn newGcHeap(config: GcConfig) -> GcHeap {
         phase: GcIdle,
         objects,
         roots: emptyRoots.toSet(),
+        globalRoots,
         remembered: emptyRemembered.toSet(),
         grey,
         allocatedSinceLastGC: 0,
         lastStats: None,
     }
+}
+
+fn globalRootKey(moduleName: String, name: String) -> String {
+    "{moduleName}::{name}"
 }
 
 pub fn gcRootSlot(slot: Int, kind: GcRootSlotKind, name: String) -> GcLiveRootSlot {

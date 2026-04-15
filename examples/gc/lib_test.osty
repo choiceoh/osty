@@ -58,6 +58,7 @@ fn testValidateHeapRejectsLiveByteMismatch() {
         },
     )
     let empty: List<Int> = []
+    let globalRoots: Map<String, GcGlobalRoot> = {:}
     let heap = GcHeap {
         config: testGcConfig(),
         nextId: 2,
@@ -69,6 +70,7 @@ fn testValidateHeapRejectsLiveByteMismatch() {
         phase: GcIdle,
         objects,
         roots: empty.toSet(),
+        globalRoots,
         remembered: empty.toSet(),
         grey: [],
         allocatedSinceLastGC: 16,
@@ -120,6 +122,7 @@ fn testValidateHeapRejectsMissingRememberedEdge() {
         },
     )
     let empty: List<Int> = []
+    let globalRoots: Map<String, GcGlobalRoot> = {:}
     let heap = GcHeap {
         config: testGcConfig(),
         nextId: 3,
@@ -131,6 +134,7 @@ fn testValidateHeapRejectsMissingRememberedEdge() {
         phase: GcIdle,
         objects,
         roots: empty.toSet(),
+        globalRoots,
         remembered: empty.toSet(),
         grey: [],
         allocatedSinceLastGC: 32,
@@ -418,6 +422,145 @@ fn testTryAllocateReportsOutOfMemoryAfterFullCollection() {
     }
     testing.assert(heap.contains(rooted))
     testing.assertEq(heap.totalLiveBytes(), 32)
+}
+
+fn testGlobalRootKeepsObjectAcrossCollections() {
+    let mut heap = newGcHeap(testGcConfig())
+    let global = heap.allocate(GcRecord, 16)
+    let child = heap.allocate(GcArray, 16)
+    let dead = heap.allocate(GcBytes, 16)
+
+    testing.assert(heap.installGlobalRoot("app", "cache", GcPackageGlobalRoot, global))
+    testing.assert(heap.link(global, child))
+    assertValid(heap)
+
+    let minor = heap.minorCollect()
+    assertValid(heap)
+
+    testing.assert(heap.contains(global))
+    testing.assert(heap.contains(child))
+    testing.assert(!(heap.contains(dead)))
+    testing.assertEq(minor.reclaimedObjects, 1)
+    testing.assertEq(heap.globalRootCount(), 1)
+    testing.assertEq(heap.globalObjectRootCount(), 1)
+    testing.assertEq(heap.globalRootObject("app", "cache") ?? -1, global)
+
+    testing.assert(heap.removeGlobalRoot("app", "cache"))
+    let major = heap.majorCollect()
+    assertValid(heap)
+
+    testing.assert(!(heap.contains(global)))
+    testing.assert(!(heap.contains(child)))
+    testing.assert(major.reclaimedObjects >= 2)
+    testing.assertEq(heap.globalRootCount(), 0)
+}
+
+fn testPartiallyInitializedGlobalSurvivesCollectionUntilPoisoned() {
+    let mut heap = newGcHeap(testGcConfig())
+    testing.assert(heap.beginGlobalInit("pkg.init", "TABLE", GcTopLevelLetRoot))
+    let table = heap.allocate(GcArray, 32)
+    testing.assert(heap.setGlobalRootObject("pkg.init", "TABLE", table))
+    assertValid(heap)
+
+    let first = heap.majorCollect()
+    assertValid(heap)
+
+    testing.assert(heap.contains(table))
+    testing.assertEq(first.reclaimedObjects, 0)
+    testing.assertEq(
+        heap.globalRootState("pkg.init", "TABLE") ?? GcGlobalPoisoned,
+        GcGlobalInitializing,
+    )
+
+    testing.assert(heap.finishGlobalInit("pkg.init", "TABLE"))
+    assertValid(heap)
+    testing.assertEq(heap.globalRootState("pkg.init", "TABLE") ?? GcGlobalPoisoned, GcGlobalReady)
+
+    testing.assert(heap.poisonGlobalRoot("pkg.init", "TABLE"))
+    assertValid(heap)
+    let second = heap.majorCollect()
+    assertValid(heap)
+
+    testing.assert(!(heap.contains(table)))
+    testing.assertEq(second.reclaimedObjects, 1)
+    testing.assertEq(
+        heap.globalRootState("pkg.init", "TABLE") ?? GcGlobalDeclared,
+        GcGlobalPoisoned,
+    )
+    testing.assertEq(heap.globalObjectRootCount(), 0)
+}
+
+fn testGlobalRootLifecycleRejectsInvalidTransitions() {
+    let mut heap = newGcHeap(testGcConfig())
+    let stable = heap.allocate(GcRecord, 16)
+
+    testing.assert(heap.declareGlobalRoot("pkg.config", "stable", GcConstantRoot))
+    testing.assert(!(heap.declareGlobalRoot("pkg.config", "stable", GcConstantRoot)))
+    testing.assert(heap.beginGlobalInit("pkg.config", "stable", GcConstantRoot))
+    testing.assert(!(heap.beginGlobalInit("pkg.config", "stable", GcConstantRoot)))
+    testing.assert(heap.setGlobalRootObject("pkg.config", "stable", stable))
+    testing.assert(heap.finishGlobalInit("pkg.config", "stable"))
+    assertValid(heap)
+
+    testing.assert(heap.poisonGlobalRoot("pkg.config", "stable"))
+    let rebound = heap.allocate(GcRecord, 16)
+    testing.assert(!(heap.setGlobalRootObject("pkg.config", "stable", rebound)))
+    testing.assert(!(heap.installGlobalRoot("pkg.config", "stable", GcConstantRoot, rebound)))
+    assertValid(heap)
+
+    testing.assertEq(heap.globalRootCount(), 1)
+    testing.assertEq(heap.globalObjectRootCount(), 0)
+    testing.assertEq(
+        heap.globalRootState("pkg.config", "stable") ?? GcGlobalDeclared,
+        GcGlobalPoisoned,
+    )
+}
+
+fn testCrossPackageGlobalReferenceKeepsDependencyObject() {
+    let mut heap = newGcHeap(testGcConfig())
+    let appGlobal = heap.allocate(GcRecord, 16)
+    let runtimeGlobal = heap.allocate(GcClosure, 24)
+    let dead = heap.allocate(GcBytes, 16)
+
+    testing.assert(heap.installGlobalRoot("app.main", "handler", GcTopLevelLetRoot, appGlobal))
+    testing.assert(heap.link(appGlobal, runtimeGlobal))
+    assertValid(heap)
+
+    let stats = heap.majorCollect()
+    assertValid(heap)
+
+    testing.assert(heap.contains(appGlobal))
+    testing.assert(heap.contains(runtimeGlobal))
+    testing.assert(!(heap.contains(dead)))
+    testing.assertEq(stats.reclaimedObjects, 1)
+}
+
+fn testGlobalRootAddedDuringIncrementalMarkingIsShaded() {
+    let mut heap = newGcHeap(testGcConfig())
+    let root = heap.allocate(GcRecord, 16)
+    let existing = heap.allocate(GcArray, 16)
+    testing.assert(heap.addRoot(root))
+    testing.assert(heap.link(root, existing))
+    assertValid(heap)
+
+    heap.startIncrementalMajor()
+    assertValid(heap)
+    let _ = heap.stepIncremental()
+    assertValid(heap)
+    testing.assertEq(heap.phaseNow(), GcMarking)
+
+    let lateGlobal = heap.allocate(GcClosure, 24)
+    testing.assert(heap.installGlobalRoot("late.module", "singleton", GcStaticRoot, lateGlobal))
+    assertValid(heap)
+
+    let done = heap.finishIncremental()
+    assertValid(heap)
+
+    testing.assertEq(done.kind, "incremental-sweep")
+    testing.assert(heap.contains(root))
+    testing.assert(heap.contains(existing))
+    testing.assert(heap.contains(lateGlobal))
+    testing.assertEq(heap.globalRootObject("late.module", "singleton") ?? -1, lateGlobal)
 }
 
 fn testSafepointPlanValidatesPreciseLiveRoots() {
@@ -778,6 +921,16 @@ fn stressReachableFromRoots(heap: GcHeap) -> Set<Int> {
         if heap.objects.containsKey(rootId) && !(seen.contains(rootId)) {
             seen.insert(rootId)
             work.push(rootId)
+        }
+    }
+
+    for (key, root) in heap.globalRoots {
+        let _ = key
+        if root.objectId >= 0 && heap.objects.containsKey(root.objectId) && !(seen.contains(
+            root.objectId,
+        )) {
+            seen.insert(root.objectId)
+            work.push(root.objectId)
         }
     }
 
