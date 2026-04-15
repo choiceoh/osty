@@ -622,10 +622,10 @@ fn opParseIfExpr(p: OstyParser) -> Int {
     let mut patIdx = -1
     let mut isIfLet = false
     if opAt(p, FrontLet) {
-        opAdvance(p)
+        let _ = opAdvance(p)
         isIfLet = true
         patIdx = opParsePattern(p)
-        opExpect(p, FrontAssign)
+        let _ = opExpect(p, FrontAssign)
     }
     let prevNoSL = p.noStructLit
     p.noStructLit = true
@@ -718,7 +718,7 @@ fn opParseClosure(p: OstyParser) -> Int {
             paramNode.text = opAdvance(p).text
         } else {
             opError(p, "expected closure parameter")
-            opAdvance(p)
+            let _ = opAdvance(p)
         }
         if opEat(p, FrontColon) {
             paramNode.right = opParseType(p)
@@ -801,7 +801,7 @@ fn opTryParsePostfix(p: OstyParser, left: Int) -> Int {
             return opParseStructLit(p, left)
         }
     }
-    -1
+    return -1
 }
 
 fn opParseCallArgs(p: OstyParser, callee: Int) -> Int {
@@ -812,7 +812,7 @@ fn opParseCallArgs(p: OstyParser, callee: Int) -> Int {
     for !(opAt(p, FrontRParen)) && !(opAt(p, FrontEOF)) {
         if opAt(p, FrontIdent) && opPeekAt(p, 1).kind == FrontColon {
             let _ = opAdvance(p)
-            opAdvance(p)
+            let _ = opAdvance(p)
         }
         args.push(opParseExpr(p))
         opSkipNewlines(p)
@@ -1256,7 +1256,7 @@ fn opParseTypeAtom(p: OstyParser) -> Int {
                     break
                 }
             }
-            opExpect(p, FrontGt)
+            let _ = opExpect(p, FrontGt)
         }
         let mut node = emptyAstNode(AstNType)
         node.text = name
@@ -1400,7 +1400,7 @@ fn opParseFnDecl(p: OstyParser, isPub: Bool, anns: List<Int>) -> Int {
                 break
             }
         }
-        opExpect(p, FrontGt)
+        let _ = opExpect(p, FrontGt)
     }
     opExpect(p, FrontLParen)
     let mut params: List<Int> = []
