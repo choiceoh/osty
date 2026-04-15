@@ -12,13 +12,15 @@ import (
 // across every file in scope, annotations apply only to the decl they
 // attach to.
 //
-// Both Allow and Deny accept the same symbolic names as #[allow(...)]:
+// Both Allow and Deny accept the same symbolic names as #[allow(...)]
+// — see allow.go for the full list. In brief:
 //
 //   - A concrete code: `L0001`, `L0040`, ...
-//   - A category alias: `unused`, `shadow`, `dead_code`, `naming`,
-//     `simplify`
-//   - A rule alias: `unused_let`, `unused_param`, `redundant_bool`, …
-//   - The wildcards `lint` or `all`
+//   - Any rule name or code from the registry (`unused_let`,
+//     `redundant_bool`, `too_many_params`, `missing_doc`, ...).
+//   - A category alias: `unused`, `shadowing`, `dead_code`, `naming`,
+//     `simplify`, `complexity`, `docs`.
+//   - The wildcards `lint` or `all`.
 //
 // When Allow and Deny both list the same code, Deny wins — the code is
 // elevated to Error. When a code appears in Allow only, matching lint

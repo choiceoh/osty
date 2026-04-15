@@ -1163,6 +1163,80 @@ fn many(a: Int, b: Int, c: Int, d: Int, e: Int, f: Int, g: Int, h: Int) {
 	assertWarns(t, runLint(t, src), diag.CodeTooManyParams)
 }
 
+// ---- L0052 function body too long ----
+
+func TestLint_FunctionTooLong(t *testing.T) {
+	// defaultMaxBodyLen is 80; 90 trivial statements must trip L0052.
+	// Each statement is a bare expression (no binding) so we don't
+	// collide with shadow / unused-let rules.
+	var b strings.Builder
+	b.WriteString("fn big() {\n")
+	for i := 0; i < 90; i++ {
+		b.WriteString("    println(1)\n")
+	}
+	b.WriteString("}\n")
+	assertWarns(t, runLint(t, b.String()), diag.CodeFunctionTooLong)
+}
+
+func TestLint_FunctionShortEnoughClean(t *testing.T) {
+	// Well under the threshold — must not fire L0052.
+	src := `
+fn small() {
+    let _x = 1
+    let _y = 2
+    let _z = 3
+}
+`
+	for _, d := range runLint(t, src) {
+		if d.Code == diag.CodeFunctionTooLong {
+			t.Fatalf("short function should not fire L0052: %s", d.Message)
+		}
+	}
+}
+
+// ---- L0053 deep nesting ----
+
+func TestLint_DeepNesting(t *testing.T) {
+	// defaultMaxNesting is 5; 7 nested `if` blocks force the pass to fire.
+	src := `
+fn deep(x: Int) -> Int {
+    if x > 0 {
+        if x > 1 {
+            if x > 2 {
+                if x > 3 {
+                    if x > 4 {
+                        if x > 5 {
+                            if x > 6 {
+                                return 1
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    0
+}
+`
+	assertWarns(t, runLint(t, src), diag.CodeDeepNesting)
+}
+
+func TestLint_ShallowNestingClean(t *testing.T) {
+	src := `
+fn shallow(x: Int) -> Int {
+    if x > 0 {
+        return 1
+    }
+    0
+}
+`
+	for _, d := range runLint(t, src) {
+		if d.Code == diag.CodeDeepNesting {
+			t.Fatalf("shallow function should not fire L0053: %s", d.Message)
+		}
+	}
+}
+
 // ---- L0070 missing doc on pub ----
 
 func TestLint_MissingDocOnPubFn(t *testing.T) {
@@ -1491,5 +1565,85 @@ func TestLint_Fixes_RoundTripThroughParser(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// ---- Registry integrity ----
+//
+// These meta-tests lock the invariant that registry.go is the single
+// source of truth for lint rules. If a new L-code is added to the diag
+// package without a corresponding registry entry (or vice versa), or
+// if a rule's canonical Name/Code isn't resolvable via LookupRule,
+// these tests fail — preventing the kind of silent drift that left 14
+// rules unsuppressible via #[allow(...)] for several releases.
+
+// knownLintCodes is every L-code declared by the diag package. Update
+// this list together with diag/codes.go. Keeping it here (rather than
+// exporting a slice from diag) avoids leaking a sorted code-index type
+// into the public API of that package.
+var knownLintCodes = []string{
+	diag.CodeUnusedLet, diag.CodeUnusedParam, diag.CodeUnusedImport,
+	diag.CodeUnusedMut, diag.CodeUnusedField, diag.CodeUnusedMethod,
+	diag.CodeIgnoredResult, diag.CodeDeadStore,
+	diag.CodeShadowedBinding,
+	diag.CodeDeadCode, diag.CodeRedundantElse, diag.CodeConstantCondition,
+	diag.CodeEmptyBranch, diag.CodeNeedlessReturn, diag.CodeIdenticalBranches,
+	diag.CodeEmptyLoopBody,
+	diag.CodeNamingType, diag.CodeNamingValue, diag.CodeNamingVariant,
+	diag.CodeRedundantBool, diag.CodeSelfCompare, diag.CodeSelfAssign,
+	diag.CodeDoubleNegation, diag.CodeBoolLiteralCompare, diag.CodeNegatedBoolLiteral,
+	diag.CodeTooManyParams, diag.CodeFunctionTooLong, diag.CodeDeepNesting,
+	diag.CodeMissingDoc,
+}
+
+func TestLint_RegistryCoversEveryCode(t *testing.T) {
+	for _, code := range knownLintCodes {
+		if _, ok := lint.LookupRule(code); !ok {
+			t.Errorf("L-code %s has no entry in registry.go allRules", code)
+		}
+	}
+}
+
+func TestLint_RegistryNamesAreResolvable(t *testing.T) {
+	// Every rule's Name and Code must be resolvable — both as
+	// #[allow(NAME)] and as #[allow(CODE)] — through the same pipeline
+	// that user annotations use. We assert this via the observable
+	// behaviour of Config.Apply with an Allow list.
+	for _, r := range lint.Rules() {
+		for _, alias := range []string{r.Code, r.Name} {
+			cfg := lint.Config{Allow: []string{alias}}
+			in := &lint.Result{Diags: []*diag.Diagnostic{
+				diag.New(diag.Warning, "probe").Code(r.Code).Build(),
+			}}
+			out := cfg.Apply(in)
+			if len(out.Diags) != 0 {
+				t.Errorf("alias %q (rule %s) did not suppress its own code %s",
+					alias, r.Name, r.Code)
+			}
+		}
+	}
+}
+
+func TestLint_RegistryCategoriesAreResolvable(t *testing.T) {
+	// Every declared category must be usable as a suppression alias and
+	// must expand to at least one rule. This guards against a category
+	// existing in the registry without any rules tagged to it.
+	for _, cat := range lint.Categories() {
+		rules := lint.RulesByCategory(cat)
+		if len(rules) == 0 {
+			t.Errorf("category %q has no rules — dead category", cat)
+			continue
+		}
+		cfg := lint.Config{Allow: []string{string(cat)}}
+		for _, r := range rules {
+			in := &lint.Result{Diags: []*diag.Diagnostic{
+				diag.New(diag.Warning, "probe").Code(r.Code).Build(),
+			}}
+			out := cfg.Apply(in)
+			if len(out.Diags) != 0 {
+				t.Errorf("category alias %q did not suppress rule %s (%s)",
+					cat, r.Name, r.Code)
+			}
+		}
 	}
 }

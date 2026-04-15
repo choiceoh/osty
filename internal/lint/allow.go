@@ -2,7 +2,6 @@ package lint
 
 import (
 	"github.com/osty/osty/internal/ast"
-	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/token"
 )
 
@@ -12,13 +11,18 @@ import (
 // with `#[allow(NAME, NAME, ...)]`. Accepted NAMEs:
 //
 //   - A concrete code: `L0001`, `L0040`, ...
-//   - A category alias: `unused`, `shadow`, `dead_code`, `naming`,
-//     `simplify`
-//   - A rule alias: `unused_let`, `unused_param`, `unused_import`,
-//     `unused_mut`, `unused_field`, `unused_method`, `ignored_result`,
-//     `shadowed_binding`, `dead_code`, `naming_type`, `naming_value`,
-//     `naming_variant`, `redundant_bool`, `self_compare`, `self_assign`
-//   - The wildcards `lint` or `all`
+//   - A rule alias (the `Name` field of any entry in registry.go's
+//     `allRules` — e.g. `unused_let`, `redundant_bool`, `self_assign`,
+//     `too_many_params`, `missing_doc`, ...).
+//   - A category alias: `unused`, `shadowing` (also `shadow`),
+//     `dead_code` (also `unreachable`), `naming`, `simplify` (also
+//     `suspicious`), `complexity`, `docs`. A category alias expands to
+//     every rule in that category.
+//   - The wildcards `lint` or `all`.
+//
+// The registry (registry.go) is the single source of truth — new rules
+// added there are automatically suppressible by code, name, and
+// category without touching this file.
 //
 // Annotations cover the annotated declaration PLUS every AST node
 // nested within it (methods, bodies, inner lets). Each annotation is
@@ -191,67 +195,62 @@ func codesFromAllow(args []*ast.AnnotationArg) map[string]bool {
 	return codes
 }
 
+// categoryAliases maps user-facing category names (including
+// backwards-compatible synonyms) to the canonical Category values
+// defined in registry.go. Keeping this list short and explicit lets us
+// reserve `Category` string values for display while still accepting
+// ergonomic synonyms in config / annotations.
+var categoryAliases = map[string]Category{
+	"unused":      CategoryUnused,
+	"shadow":      CategoryShadowing,
+	"shadowing":   CategoryShadowing,
+	"dead_code":   CategoryDeadCode,
+	"unreachable": CategoryDeadCode,
+	"naming":      CategoryNaming,
+	"simplify":    CategorySimplify,
+	"suspicious":  CategorySimplify,
+	"complexity":  CategoryComplexity,
+	"docs":        CategoryDocs,
+}
+
 // resolveAllowName maps a single argument name to one or more lint
 // codes. Unknown names resolve to an empty slice (silently ignored).
+//
+// Resolution order:
+//  1. A literal lint code (e.g. "L0001") — returned as-is.
+//  2. A category alias — returned as every code whose Rule belongs to
+//     that category.
+//  3. A rule name or code from the registry (LookupRule) — returned as
+//     a single-element slice.
+//
+// Categories take precedence over rule names because the alias
+// `dead_code` intentionally names both a category and the specific
+// rule L0020 — the broader "suppress all dead-code-family rules"
+// reading is the useful one.
+//
+// Because steps 2 and 3 consult the registry directly, adding a new
+// rule or rule name is a one-file change in registry.go.
 func resolveAllowName(name string) []string {
 	// Direct code reference: L0001, L0040, etc.
 	if isLintCode(name) {
 		return []string{name}
 	}
-	// Category aliases.
-	switch name {
-	case "unused":
-		return []string{
-			diag.CodeUnusedLet, diag.CodeUnusedParam, diag.CodeUnusedImport,
-			diag.CodeUnusedMut, diag.CodeUnusedField, diag.CodeUnusedMethod,
-			diag.CodeIgnoredResult,
+	// Category alias expands to every rule in that category.
+	if cat, ok := categoryAliases[name]; ok {
+		rules := RulesByCategory(cat)
+		codes := make([]string, 0, len(rules))
+		for _, r := range rules {
+			codes = append(codes, r.Code)
 		}
-	case "shadow", "shadowing":
-		return []string{diag.CodeShadowedBinding}
-	case "dead_code", "unreachable":
-		return []string{diag.CodeDeadCode}
-	case "naming":
-		return []string{
-			diag.CodeNamingType, diag.CodeNamingValue, diag.CodeNamingVariant,
-		}
-	case "simplify", "suspicious":
-		return []string{
-			diag.CodeRedundantBool, diag.CodeSelfCompare, diag.CodeSelfAssign,
-		}
+		return codes
 	}
-	// Individual rule aliases.
-	switch name {
-	case "unused_let":
-		return []string{diag.CodeUnusedLet}
-	case "unused_param":
-		return []string{diag.CodeUnusedParam}
-	case "unused_import":
-		return []string{diag.CodeUnusedImport}
-	case "unused_mut":
-		return []string{diag.CodeUnusedMut}
-	case "unused_field":
-		return []string{diag.CodeUnusedField}
-	case "unused_method":
-		return []string{diag.CodeUnusedMethod}
-	case "ignored_result":
-		return []string{diag.CodeIgnoredResult}
-	case "shadowed_binding":
-		return []string{diag.CodeShadowedBinding}
-	case "naming_type":
-		return []string{diag.CodeNamingType}
-	case "naming_value":
-		return []string{diag.CodeNamingValue}
-	case "naming_variant":
-		return []string{diag.CodeNamingVariant}
-	case "redundant_bool":
-		return []string{diag.CodeRedundantBool}
-	case "self_compare":
-		return []string{diag.CodeSelfCompare}
-	case "self_assign":
-		return []string{diag.CodeSelfAssign}
+	// Rule lookup (by Code or Name) — handles every entry in allRules.
+	if r, ok := LookupRule(name); ok {
+		return []string{r.Code}
 	}
 	return nil
 }
+
 
 // isLintCode reports whether a code string belongs to the L-prefixed
 // lint namespace.
