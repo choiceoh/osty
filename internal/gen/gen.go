@@ -85,6 +85,10 @@ type gen struct {
 	// prompting a runtime type definition at file top.
 	needResult bool
 
+	// needErrorRuntime is set when a value typed as Osty's Error
+	// interface needs dynamic message dispatch at runtime.
+	needErrorRuntime bool
+
 	// needStringRuntime is set when generated code needs the Osty
 	// toString protocol bridge for interpolation or nested stdlib
 	// toString implementations.
@@ -327,6 +331,9 @@ func (g *gen) run() ([]byte, error) {
 		g.useAs("net/url", "neturl")
 		g.use("strconv")
 	}
+	if g.needErrorRuntime {
+		g.use("fmt")
+	}
 	if g.needRegex {
 		g.needResult = true
 		g.use("regexp")
@@ -510,6 +517,25 @@ func resultMapErr[T any, E any, F any](r Result[T, E], f func(E) F) Result[T, F]
 		return Result[T, F]{Value: r.Value, IsOk: true}
 	}
 	return Result[T, F]{Error: f(r.Error)}
+}
+`)
+	}
+	if g.needErrorRuntime {
+		out.WriteString(`
+func ostyErrorMessage(e any) string {
+	if e == nil {
+		return ""
+	}
+	if m, ok := e.(interface{ message() string }); ok {
+		return m.message()
+	}
+	if err, ok := e.(error); ok {
+		return err.Error()
+	}
+	if s, ok := e.(string); ok {
+		return s
+	}
+	return fmt.Sprint(e)
 }
 `)
 	}

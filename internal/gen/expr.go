@@ -381,6 +381,9 @@ func (g *gen) emitCall(c *ast.CallExpr) {
 		return
 	}
 	if f, ok := c.Fn.(*ast.FieldExpr); ok {
+		if g.emitQualifiedOptionCall(c, f) {
+			return
+		}
 		if g.emitStdlibEncodingCall(c, f) {
 			return
 		}
@@ -411,6 +414,15 @@ func (g *gen) emitCall(c *ast.CallExpr) {
 		if g.emitThreadCall(c, f) {
 			return
 		}
+		if g.emitErrorMethodCall(c, f) {
+			return
+		}
+		if g.emitResultMethodCall(c, f) {
+			return
+		}
+		if g.emitOptionalMethodCall(c, f) {
+			return
+		}
 		if g.emitConcurrencyMethod(c, f) {
 			return
 		}
@@ -418,9 +430,6 @@ func (g *gen) emitCall(c *ast.CallExpr) {
 			return
 		}
 		if g.emitRandomGenericMethod(c, f) {
-			return
-		}
-		if g.emitResultMethodCall(c, f) {
 			return
 		}
 		if g.emitCollectionMethod(c, f) {
@@ -772,6 +781,23 @@ func (g *gen) emitStdlibUUIDCall(c *ast.CallExpr, _ *ast.FieldExpr) bool {
 	return true
 }
 
+func (g *gen) emitQualifiedOptionCall(c *ast.CallExpr, f *ast.FieldExpr) bool {
+	id, ok := f.X.(*ast.Ident)
+	if !ok || !g.isStdlibPackageAlias(id, "option") {
+		return false
+	}
+	switch f.Name {
+	case "Some":
+		return g.emitBuiltinCall("Some", c.Args, c)
+	case "None":
+		if len(c.Args) == 0 {
+			g.body.write("nil")
+			return true
+		}
+	}
+	return false
+}
+
 func (g *gen) emitStdlibHelperCall(helper string, args []*ast.Arg) {
 	g.body.write(helper)
 	g.body.write("(")
@@ -1051,6 +1077,137 @@ func (g *gen) emitConcurrencyMethod(c *ast.CallExpr, f *ast.FieldExpr) bool {
 		}
 	}
 	return false
+}
+
+func (g *gen) emitErrorMethodCall(c *ast.CallExpr, f *ast.FieldExpr) bool {
+	if f.Name != "message" || len(c.Args) != 0 {
+		return false
+	}
+	n, ok := types.AsNamedByName(g.typeOf(f.X), "Error")
+	if !ok || n.Sym == nil {
+		return false
+	}
+	g.needErrorRuntime = true
+	g.body.write("ostyErrorMessage(")
+	g.emitExpr(f.X)
+	g.body.write(")")
+	return true
+}
+
+// emitOptionalMethodCall lowers Option<T> methods to pointer checks.
+// Option<T> / T? is represented as *T in generated Go, so these methods
+// cannot be emitted as ordinary selector calls.
+func (g *gen) emitOptionalMethodCall(c *ast.CallExpr, f *ast.FieldExpr) bool {
+	if f.IsOptional {
+		return false
+	}
+	inner, ok := optionInnerType(g.typeOf(f.X))
+	if !ok {
+		return false
+	}
+	innerGo := "any"
+	if inner != nil {
+		innerGo = g.goType(inner)
+	}
+	switch f.Name {
+	case "isSome", "isNone":
+		if len(c.Args) != 0 {
+			return false
+		}
+		g.body.write("(")
+		g.emitExpr(f.X)
+		if f.Name == "isSome" {
+			g.body.write(" != nil)")
+		} else {
+			g.body.write(" == nil)")
+		}
+		return true
+	case "unwrap":
+		if len(c.Args) != 0 {
+			return false
+		}
+		g.body.writef("func() %s { opt := ", innerGo)
+		g.emitExpr(f.X)
+		g.body.write(`; if opt == nil { panic("called unwrap on None") }; return *opt }()`)
+		return true
+	case "unwrapOr":
+		if len(c.Args) != 1 {
+			return false
+		}
+		g.body.writef("func() %s { opt := ", innerGo)
+		g.emitExpr(f.X)
+		g.body.writef("; var fallback %s = ", innerGo)
+		g.emitExpr(c.Args[0].Value)
+		g.body.write("; if opt != nil { return *opt }; return fallback }()")
+		return true
+	case "orElse":
+		if len(c.Args) != 1 {
+			return false
+		}
+		g.body.writef("func() *%s { opt := ", innerGo)
+		g.emitExpr(f.X)
+		g.body.write("; fallback := ")
+		g.emitExpr(c.Args[0].Value)
+		g.body.write("; if opt != nil { return opt }; return fallback() }()")
+		return true
+	case "map":
+		if len(c.Args) != 1 {
+			return false
+		}
+		retGo := "any"
+		if retInner, ok := optionInnerType(g.typeOf(c)); ok && retInner != nil {
+			retGo = g.goType(retInner)
+		} else if fn, ok := g.typeOf(c.Args[0].Value).(*types.FnType); ok && fn.Return != nil {
+			retGo = g.goType(fn.Return)
+		}
+		g.body.writef("func() *%s { opt := ", retGo)
+		g.emitExpr(f.X)
+		g.body.write("; f := ")
+		g.emitExpr(c.Args[0].Value)
+		g.body.write("; if opt == nil { return nil }; var value ")
+		g.body.write(retGo)
+		g.body.write(" = f(*opt); return &value }()")
+		return true
+	case "orError":
+		if len(c.Args) != 1 {
+			return false
+		}
+		g.needResult = true
+		okGo, errGo := innerGo, "any"
+		if n, ok := types.AsNamedByName(g.typeOf(c), "Result"); ok && len(n.Args) == 2 {
+			okGo = g.goType(n.Args[0])
+			errGo = g.goType(n.Args[1])
+		}
+		resultGo := "Result[" + okGo + ", " + errGo + "]"
+		g.body.writef("func() %s { opt := ", resultGo)
+		g.emitExpr(f.X)
+		g.body.write("; var msg string = ")
+		g.emitExpr(c.Args[0].Value)
+		g.body.writef("; if opt != nil { return %s{Value: *opt, IsOk: true} }; return %s{Error: msg} }()", resultGo, resultGo)
+		return true
+	case "toString":
+		if len(c.Args) != 0 {
+			return false
+		}
+		g.use("fmt")
+		g.body.write("func() string { opt := ")
+		g.emitExpr(f.X)
+		g.body.write(`; if opt == nil { return "None" }; return fmt.Sprintf("Some(%v)", *opt) }()`)
+		return true
+	}
+	return false
+}
+
+func optionInnerType(t types.Type) (types.Type, bool) {
+	switch v := t.(type) {
+	case *types.Optional:
+		return v.Inner, true
+	case *types.Named:
+		if v.Sym != nil && v.Sym.Name == "Option" && len(v.Args) == 1 {
+			return v.Args[0], true
+		}
+	}
+	return nil, false
 }
 
 func (g *gen) emitRandomGenericMethod(c *ast.CallExpr, f *ast.FieldExpr) bool {
@@ -2639,6 +2796,9 @@ func (g *gen) emitQuestion(q *ast.QuestionExpr) {
 // Field-type lookup comes from the checker when available.
 func (g *gen) emitField(f *ast.FieldExpr) {
 	if !f.IsOptional {
+		if g.emitQualifiedOptionField(f) {
+			return
+		}
 		if g.emitStdlibMathField(f) {
 			return
 		}
@@ -2675,6 +2835,15 @@ func (g *gen) emitField(f *ast.FieldExpr) {
 	g.body.write(" != nil { v := (*")
 	g.emitExpr(f.X)
 	g.body.writef(").%s; return &v }; return nil }()", mangleIdent(f.Name))
+}
+
+func (g *gen) emitQualifiedOptionField(f *ast.FieldExpr) bool {
+	id, ok := f.X.(*ast.Ident)
+	if !ok || !g.isStdlibPackageAlias(id, "option") || f.Name != "None" {
+		return false
+	}
+	g.body.write("nil")
+	return true
 }
 
 // emitList writes a list literal. Element type comes from the checker

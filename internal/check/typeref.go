@@ -100,6 +100,18 @@ func (c *checker) namedType(n *ast.NamedType) types.Type {
 		args = append(args, c.typeOf(a))
 	}
 
+	// The std.option module declares the canonical Option<T> enum, but
+	// the checker represents all Option<T> spellings as Optional so
+	// `option.Option<Int>` and `Int?` remain fully interchangeable.
+	if sym.Name == "Option" {
+		if len(args) != 1 {
+			c.errNode(n, diag.CodeGenericArgCount,
+				"`Option` expects exactly 1 type argument, got %d", len(args))
+			return types.ErrorType
+		}
+		return &types.Optional{Inner: args[0]}
+	}
+
 	// Expand type aliases transparently (§3.7).
 	if desc, ok := c.result.Descs[sym]; ok && desc.Kind == resolve.SymTypeAlias {
 		if desc.Alias != nil && len(args) == 0 {

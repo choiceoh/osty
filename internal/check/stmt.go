@@ -85,10 +85,14 @@ func (c *checker) checkFnDecl(n *ast.FnDecl, owner *typeDesc) {
 	if owner != nil && n.Recv != nil {
 		selfSym := c.fnReceiverSymbol(n)
 		if selfSym != nil {
-			c.setSymType(selfSym, &types.Named{
+			selfT := types.Type(&types.Named{
 				Sym:  owner.Sym,
 				Args: argsOfGenerics(owner.Generics),
 			})
+			if owner.Sym != nil && owner.Sym.Name == "Option" && len(owner.Generics) == 1 {
+				selfT = &types.Optional{Inner: owner.Generics[0]}
+			}
+			c.setSymType(selfSym, selfT)
 		}
 	}
 

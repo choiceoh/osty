@@ -109,6 +109,55 @@ fn main() {
 	}
 }
 
+// TestOptionMethods verifies the std.option method surface over the
+// backend's pointer representation for Option<T>.
+func TestOptionMethods(t *testing.T) {
+	src := `use std.option
+
+fn fallback() -> Int? {
+    Some(9)
+}
+
+fn main() {
+    let a: Int? = Some(4)
+    let b: Int? = None
+    let c: Int? = option.Some(6)
+    let d: Int? = option.None
+    println("{a.isSome()} {b.isNone()}")
+    println("{a.unwrap()} {b.unwrapOr(7)}")
+    println("{c.unwrap()} {d.unwrapOr(10)}")
+    match b.orElse(fallback) {
+        Some(v) -> println("{v}"),
+        None -> println("none"),
+    }
+    let mapped = a.map(|x| x + 1)
+    println("{mapped.unwrap()}")
+    let result = b.orError("missing")
+    println("{result.isErr()}")
+    println(result.unwrapErr().message())
+    match result.err() {
+        Some(e) -> println(e.message()),
+        None -> println("no error"),
+    }
+    let mappedResult = result.map(|x| "{x}")
+    println("{mappedResult.isErr()}")
+    let mappedErr = result.mapErr(|e| e.message())
+    println(mappedErr.unwrapErr())
+    println(a.toString())
+    println(b.toString())
+}
+`
+	goSrc, err := transpileWithStdlib(t, src)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := runGo(t, goSrc)
+	want := "true true\n4 7\n6 10\n9\n5\ntrue\nmissing\nmissing\ntrue\nmissing\nSome(4)\nNone\n"
+	if out != want {
+		t.Errorf("got %q, want %q\n--- src ---\n%s", out, want, goSrc)
+	}
+}
+
 // TestDefer verifies `defer expr` runs on function exit.
 func TestDefer(t *testing.T) {
 	src := `fn main() {

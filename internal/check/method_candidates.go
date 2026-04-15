@@ -77,7 +77,7 @@ func (c *checker) methodCandidates(t types.Type) []string {
 			add(name)
 		}
 	case *types.Optional:
-		for _, name := range []string{"isSome", "isNone", "unwrap", "unwrapOr", "orElse", "map", "toString"} {
+		for _, name := range []string{"isSome", "isNone", "unwrap", "unwrapOr", "orElse", "map", "orError", "toString"} {
 			add(name)
 		}
 	case *types.TypeVar:

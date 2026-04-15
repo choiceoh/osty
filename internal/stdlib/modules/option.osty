@@ -1,11 +1,82 @@
-// std.option — signature stub for the Osty standard library.
+// std.option — Option<T> and its core combinators.
 //
-// Canonical definition site of `Option<T>`, `Some`, and `None`.
-// The prelude auto-imports these so user code can write `Some(x)`
-// without an explicit `use`. Combinators (`unwrap`, `map`, etc.) will
-// be added alongside the rest of the stdlib's method bodies.
+// Canonical definition site of `Option<T>`, `Some`, and `None`. The
+// prelude auto-imports these so user code can write `Some(x)` without
+// an explicit `use`.
 
 pub enum Option<T> {
     Some(T),
     None,
+
+    pub fn isSome(self) -> Bool {
+        match self {
+            Some(_) -> true,
+            None -> false,
+        }
+    }
+
+    pub fn isNone(self) -> Bool {
+        match self {
+            Some(_) -> false,
+            None -> true,
+        }
+    }
+
+    pub fn unwrap(self) -> T {
+        match self {
+            Some(value) -> value,
+            None -> __optionAbort("called unwrap on None"),
+        }
+    }
+
+    pub fn unwrapOr(self, fallback: T) -> T {
+        match self {
+            Some(value) -> value,
+            None -> fallback,
+        }
+    }
+
+    pub fn orElse(self, fallback: fn() -> T?) -> T? {
+        match self {
+            Some(value) -> Some(value),
+            None -> fallback(),
+        }
+    }
+
+    pub fn map<U>(self, f: fn(T) -> U) -> U? {
+        match self {
+            Some(value) -> Some(f(value)),
+            None -> None,
+        }
+    }
+
+    pub fn orError(self, msg: String) -> Result<T, Error> {
+        match self {
+            Some(value) -> Ok(value),
+            None -> __optionError::<T>(msg),
+        }
+    }
+
+    pub fn toString(self) -> String {
+        match self {
+            Some(_) -> "Some(...)",
+            None -> "None",
+        }
+    }
+}
+
+struct OptionError {
+    msg: String,
+
+    pub fn message(self) -> String {
+        self.msg
+    }
+}
+
+fn __optionAbort(msg: String) -> Never {
+    __optionAbort(msg)
+}
+
+fn __optionError<T>(msg: String) -> Result<T, Error> {
+    __optionError::<T>(msg)
 }
