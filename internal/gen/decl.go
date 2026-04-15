@@ -1,6 +1,7 @@
 package gen
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/osty/osty/internal/ast"
@@ -445,6 +446,46 @@ func (g *gen) emitStdlibRuntimeBridge(alias string, path []string, full string) 
 		return false
 	}
 	switch path[1] {
+	case "fs":
+		if !g.aliasUsedAsSelector(alias) {
+			return false
+		}
+		osAlias, utf8Alias := g.stdFSImportAliases()
+		g.needFS = true
+		g.emitUseStub(alias, fmt.Sprintf(`struct {
+			readToString func(path string) Result[string, any]
+			writeString  func(path string, contents string) Result[struct{}, any]
+			exists       func(path string) bool
+			remove       func(path string) Result[struct{}, any]
+		}{
+			readToString: func(path string) Result[string, any] {
+				data, err := %[1]s.ReadFile(path)
+				if err != nil {
+					return Result[string, any]{Error: err}
+				}
+				if !%[2]s.Valid(data) {
+					return Result[string, any]{Error: "fs.readToString: invalid UTF-8 in " + path}
+				}
+				return Result[string, any]{Value: string(data), IsOk: true}
+			},
+			writeString: func(path string, contents string) Result[struct{}, any] {
+				if err := %[1]s.WriteFile(path, []byte(contents), 0o644); err != nil {
+					return Result[struct{}, any]{Error: err}
+				}
+				return Result[struct{}, any]{Value: struct{}{}, IsOk: true}
+			},
+			exists: func(path string) bool {
+				_, err := %[1]s.Stat(path)
+				return err == nil
+			},
+			remove: func(path string) Result[struct{}, any] {
+				if err := %[1]s.Remove(path); err != nil {
+					return Result[struct{}, any]{Error: err}
+				}
+				return Result[struct{}, any]{Value: struct{}{}, IsOk: true}
+			},
+		}`, osAlias, utf8Alias), full)
+		return true
 	case "random":
 		g.needRandomRuntime = true
 		g.emitUseStub(alias, `struct {
@@ -465,6 +506,74 @@ func (g *gen) emitStdlibRuntimeBridge(alias string, path []string, full string) 
 			join:  urlJoin,
 		}`, full)
 		return true
+	}
+	return false
+}
+
+func (g *gen) stdFSImportAliases() (string, string) {
+	if g.fsOSAlias == "" {
+		g.fsOSAlias = g.freshFileIdent("_ostyStdFSOS")
+	}
+	if g.fsUTF8Alias == "" {
+		g.fsUTF8Alias = g.freshFileIdent("_ostyStdFSUTF8")
+	}
+	return g.fsOSAlias, g.fsUTF8Alias
+}
+
+func (g *gen) freshFileIdent(base string) string {
+	candidate := base
+	for i := 2; g.fileIdentUsed(candidate); i++ {
+		candidate = fmt.Sprintf("%s%d", base, i)
+	}
+	return candidate
+}
+
+func (g *gen) fileIdentUsed(name string) bool {
+	for _, alias := range g.imports {
+		if alias == name {
+			return true
+		}
+	}
+	for _, u := range g.file.Uses {
+		alias := u.Alias
+		if alias == "" {
+			if u.IsGoFFI {
+				alias = lastPathComponent(u.GoPath)
+			} else if len(u.Path) > 0 {
+				alias = u.Path[len(u.Path)-1]
+			}
+		}
+		if mangleIdent(alias) == name {
+			return true
+		}
+	}
+	for _, d := range g.file.Decls {
+		switch d := d.(type) {
+		case *ast.FnDecl:
+			if mangleIdent(d.Name) == name {
+				return true
+			}
+		case *ast.LetDecl:
+			if mangleIdent(d.Name) == name {
+				return true
+			}
+		case *ast.StructDecl:
+			if mangleIdent(d.Name) == name {
+				return true
+			}
+		case *ast.EnumDecl:
+			if mangleIdent(d.Name) == name {
+				return true
+			}
+		case *ast.InterfaceDecl:
+			if mangleIdent(d.Name) == name {
+				return true
+			}
+		case *ast.TypeAliasDecl:
+			if mangleIdent(d.Name) == name {
+				return true
+			}
+		}
 	}
 	return false
 }
@@ -647,8 +756,6 @@ func stdlibBridge(path []string) string {
 	}
 	switch path[1] {
 	case "os":
-		return "os"
-	case "fs":
 		return "os"
 	case "io":
 		return "io"

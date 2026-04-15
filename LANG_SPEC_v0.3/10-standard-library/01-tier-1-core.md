@@ -1,7 +1,13 @@
 ### 10.1 Tier 1 (Core)
 
 - `std.io` — `print`, `println`, `eprint`, `eprintln`, `readLine`
-- `std.fs` — file I/O
+- `std.fs` — file I/O:
+  `readToString(path: String) -> Result<String, Error>`,
+  `writeString(path: String, contents: String) -> Result<(), Error>`,
+  `exists(path: String) -> Bool`,
+  `remove(path: String) -> Result<(), Error>`. `readToString` returns
+  `Err` when the file bytes are not valid UTF-8; binary data should flow
+  through `Bytes` APIs when those are available.
 - `std.strings` — string manipulation
 - `std.collections` — `List`, `Map`, `Set`
 - `std.option` — `Option`, `Some`, `None` (auto-imported)
