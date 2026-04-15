@@ -228,7 +228,7 @@ func (c *checker) checkStmt(s ast.Stmt, env *env) {
 	case *ast.LetStmt:
 		c.checkLetStmt(n, env)
 	case *ast.ExprStmt:
-		c.checkExpr(n.X, nil, env)
+		c.checkExprStmt(n.X, env)
 	case *ast.AssignStmt:
 		c.checkAssignStmt(n, env)
 	case *ast.ChanSendStmt:
@@ -244,6 +244,56 @@ func (c *checker) checkStmt(s ast.Stmt, env *env) {
 	case *ast.Block:
 		c.blockAsExprType(n, nil, env)
 	}
+}
+
+func (c *checker) checkExprStmt(e ast.Expr, env *env) {
+	switch x := e.(type) {
+	case *ast.IfExpr:
+		c.checkIfStmt(x, env)
+	case *ast.MatchExpr:
+		c.checkMatchStmt(x, env)
+	case *ast.Block:
+		c.checkStmts(x.Stmts, env)
+		c.recordExpr(x, types.Unit)
+	default:
+		c.checkExpr(e, nil, env)
+	}
+}
+
+func (c *checker) checkIfStmt(e *ast.IfExpr, env *env) {
+	if e.IsIfLet {
+		condT := c.checkExpr(e.Cond, nil, env)
+		c.bindPatternTypes(e.Pattern, condT, env)
+	} else {
+		cond := c.checkExpr(e.Cond, types.Bool, env)
+		if !types.IsBool(cond) && !types.IsError(cond) {
+			c.errNode(e.Cond, diag.CodeConditionNotBool,
+				"`if` condition must be `Bool`, got `%s`", cond)
+		}
+	}
+	if e.Then != nil {
+		c.checkStmts(e.Then.Stmts, env)
+	}
+	if e.Else != nil {
+		c.checkExprStmt(e.Else, env)
+	}
+	c.recordExpr(e, types.Unit)
+}
+
+func (c *checker) checkMatchStmt(e *ast.MatchExpr, env *env) {
+	scrutT := c.checkExpr(e.Scrutinee, nil, env)
+	for _, arm := range e.Arms {
+		c.bindPatternTypes(arm.Pattern, scrutT, env)
+		if arm.Guard != nil {
+			gT := c.checkExpr(arm.Guard, types.Bool, env)
+			if !types.IsBool(gT) && !types.IsError(gT) {
+				c.errNode(arm.Guard, diag.CodeConditionNotBool,
+					"match guard must be `Bool`, got `%s`", gT)
+			}
+		}
+		c.checkExprStmt(arm.Body, env)
+	}
+	c.recordExpr(e, types.Unit)
 }
 
 func (c *checker) checkLetStmt(n *ast.LetStmt, env *env) {
