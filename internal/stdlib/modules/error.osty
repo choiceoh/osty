@@ -2,13 +2,24 @@
 //
 // Defines the auto-imported `Error` interface and the concrete
 // `BasicError` struct that most callers use for ad-hoc error values.
-// The `Error.new` constructor will be added alongside the rest of the
-// stdlib's body-carrying functions.
 
 pub interface Error {
     fn message(self) -> String
+    fn source(self) -> Error? { None }
 }
 
 pub struct BasicError {
-    pub message: String
+    pub message: String,
+
+    pub fn message(self) -> String {
+        self.message
+    }
+
+    pub fn source(self) -> Error? {
+        None
+    }
+}
+
+pub fn new(message: String) -> Error {
+    BasicError { message }
 }

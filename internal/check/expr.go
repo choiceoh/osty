@@ -410,6 +410,11 @@ func (c *checker) callType(e *ast.CallExpr, hint types.Type, env *env) types.Typ
 	if t := c.tryThreadCall(e, env); t != nil {
 		return t
 	}
+	if tf, ok := e.Fn.(*ast.TurbofishExpr); ok {
+		if t, handled := c.tryErrorDowncastCall(tf, e, env); handled {
+			return t
+		}
+	}
 
 	if tf, ok := e.Fn.(*ast.TurbofishExpr); ok {
 		if fx, fxOK := tf.Base.(*ast.FieldExpr); fxOK {
@@ -788,6 +793,22 @@ func (c *checker) tryPackageCallWithExplicit(
 }
 
 func (c *checker) methodCallType(fx *ast.FieldExpr, e *ast.CallExpr, explicit []types.Type, env *env) types.Type {
+	if fx.Name == "new" && c.isErrorTypeExpr(fx.X) {
+		c.checkExplicitGenericArity(e, 0, explicit)
+		c.checkExactArity(e, 1)
+		if len(e.Args) == 1 {
+			at := c.checkExpr(e.Args[0].Value, types.String, env)
+			if !c.accepts(types.String, at, e.Args[0].Value) {
+				c.errMismatch(e.Args[0].Value, types.String, at)
+			}
+		} else {
+			for _, a := range e.Args {
+				c.checkExpr(a.Value, nil, env)
+			}
+		}
+		return c.namedOf("Error", nil)
+	}
+
 	// Builder protocol (§3.4) takes priority over regular method lookup
 	// — Type.builder() / value.toBuilder() / chain setters / .build().
 	// tryBuilderCall handles argument type-checking on its own paths.
@@ -895,6 +916,134 @@ func (c *checker) methodCallType(fx *ast.FieldExpr, e *ast.CallExpr, explicit []
 		return &types.Optional{Inner: ret}
 	}
 	return ret
+}
+
+func (c *checker) isErrorTypeExpr(e ast.Expr) bool {
+	switch x := e.(type) {
+	case *ast.Ident:
+		sym := c.symbol(x)
+		return sym != nil && sym.Name == "Error" &&
+			(sym.Kind == resolve.SymBuiltin || sym.Kind == resolve.SymInterface)
+	case *ast.FieldExpr:
+		if x.Name != "Error" {
+			return false
+		}
+		id, ok := x.X.(*ast.Ident)
+		if !ok {
+			return false
+		}
+		pkgSym := c.symbol(id)
+		if pkgSym == nil || pkgSym.Kind != resolve.SymPackage ||
+			!isStdlibErrorUse(pkgSym, id.Name) &&
+				(pkgSym.Package == nil || pkgSym.Package.PkgScope == nil) {
+			return false
+		}
+		if isStdlibErrorUse(pkgSym, id.Name) {
+			return true
+		}
+		sym := pkgSym.Package.PkgScope.LookupLocal("Error")
+		return sym != nil && sym.Kind == resolve.SymInterface
+	}
+	return false
+}
+
+func isStdlibErrorUse(sym *resolve.Symbol, alias string) bool {
+	if sym == nil || sym.Kind != resolve.SymPackage {
+		return false
+	}
+	u, ok := sym.Decl.(*ast.UseDecl)
+	if !ok || u.IsGoFFI || len(u.Path) != 2 || u.Path[0] != "std" || u.Path[1] != "error" {
+		return false
+	}
+	name := u.Alias
+	if name == "" {
+		name = u.Path[len(u.Path)-1]
+	}
+	return name == alias
+}
+
+func (c *checker) tryErrorDowncastCall(tf *ast.TurbofishExpr, e *ast.CallExpr, env *env) (types.Type, bool) {
+	fx, ok := tf.Base.(*ast.FieldExpr)
+	if !ok || fx.Name != "downcast" {
+		return nil, false
+	}
+	recvT := c.checkExpr(fx.X, nil, env)
+	if !isErrorNamedType(recvT) && !types.IsError(recvT) {
+		c.errMethodNotFound(fx, fmt.Sprintf("type `%s`", recvT),
+			fx.Name, c.methodCandidates(recvT))
+	}
+	explicit := make([]types.Type, 0, len(tf.Args))
+	for _, a := range tf.Args {
+		explicit = append(explicit, c.typeOf(a))
+	}
+	c.checkExplicitGenericArity(e, 1, explicit)
+	if len(e.Args) != 0 {
+		c.errNode(e, diag.CodeWrongArgCount,
+			"`Error.downcast` takes no arguments, got %d", len(e.Args))
+		for _, a := range e.Args {
+			c.checkExpr(a.Value, nil, env)
+		}
+	}
+	if len(tf.Args) != 1 {
+		return types.ErrorType, true
+	}
+	target := explicit[0]
+	if !c.validErrorDowncastTarget(target) && !types.IsError(target) {
+		c.errNode(tf.Args[0], diag.CodeTypeMismatch,
+			"`Error.downcast` target must be a concrete Osty error type, got `%s`", target)
+	}
+	return &types.Optional{Inner: target}, true
+}
+
+func isErrorNamedType(t types.Type) bool {
+	n, ok := types.AsNamed(t)
+	return ok && n.Sym != nil && n.Sym.Name == "Error"
+}
+
+func (c *checker) validErrorDowncastTarget(t types.Type) bool {
+	n, ok := types.AsNamed(t)
+	if !ok || n.Sym == nil {
+		return false
+	}
+	switch n.Sym.Kind {
+	case resolve.SymStruct, resolve.SymEnum:
+		return c.hasErrorMessageMethod(t)
+	}
+	return false
+}
+
+func (c *checker) hasErrorMessageMethod(t types.Type) bool {
+	if md, _ := c.lookupMethod(t, "message"); methodReturnsString(md) {
+		return true
+	}
+	n, ok := types.AsNamed(t)
+	if !ok || n.Sym == nil {
+		return false
+	}
+	switch decl := n.Sym.Decl.(type) {
+	case *ast.StructDecl:
+		return c.declaresErrorMessageMethod(decl.Methods)
+	case *ast.EnumDecl:
+		return c.declaresErrorMessageMethod(decl.Methods)
+	}
+	return false
+}
+
+func (c *checker) declaresErrorMessageMethod(methods []*ast.FnDecl) bool {
+	for _, m := range methods {
+		if m.Name != "message" {
+			continue
+		}
+		return methodReturnsString(c.externalMethodDesc(m, nil))
+	}
+	return false
+}
+
+func methodReturnsString(md *methodDesc) bool {
+	return md != nil &&
+		md.Fn != nil &&
+		len(md.Fn.Params) == 0 &&
+		types.Identical(md.Fn.Return, types.String)
 }
 
 // stdlibMethods is the set of well-known method names for which the
@@ -1639,7 +1788,7 @@ func (c *checker) lookupMethod(recvT types.Type, name string) (*methodDesc, map[
 			}
 		}
 		// Builtin compound types carry synthetic method tables.
-		if v.Sym != nil && v.Sym.Kind == resolve.SymBuiltin {
+		if v.Sym != nil && (v.Sym.Kind == resolve.SymBuiltin || v.Sym.Name == "Error") {
 			if md := c.builtinNamedMethod(v, name); md != nil {
 				return md, nil
 			}
@@ -1711,6 +1860,13 @@ func (c *checker) optionalMethod(o *types.Optional, name string) *methodDesc {
 // stdlibCallReturn but whose core methods deserve typed signatures.
 func (c *checker) builtinNamedMethod(n *types.Named, name string) *methodDesc {
 	switch n.Sym.Name {
+	case "Error":
+		switch name {
+		case "message":
+			return simpleMethod(name, nil, types.String)
+		case "source":
+			return simpleMethod(name, nil, &types.Optional{Inner: n})
+		}
 	case "Result":
 		if len(n.Args) != 2 {
 			return nil
@@ -1757,10 +1913,6 @@ func (c *checker) builtinNamedMethod(n *types.Named, name string) *methodDesc {
 			return simpleMethod(name, nil, types.Unit)
 		case "isCancelled":
 			return simpleMethod(name, nil, types.Bool)
-		}
-	case "Error":
-		if name == "message" {
-			return simpleMethod(name, nil, types.String)
 		}
 	}
 	return nil
@@ -2237,7 +2389,11 @@ func (c *checker) tryVariantCall(id *ast.Ident, e *ast.CallExpr, hint types.Type
 			if errHint == nil {
 				errHint = types.ErrorType
 			}
-			return &types.Named{Sym: resSym, Args: []types.Type{at, errHint}}
+			okOut := at
+			if okHint != nil && !types.IsError(okHint) && c.accepts(okHint, at, e.Args[0].Value) {
+				okOut = okHint
+			}
+			return &types.Named{Sym: resSym, Args: []types.Type{okOut, errHint}}
 		case "Err":
 			if len(e.Args) != 1 {
 				c.errNode(e, diag.CodeWrongArgCount,
@@ -2257,7 +2413,11 @@ func (c *checker) tryVariantCall(id *ast.Ident, e *ast.CallExpr, hint types.Type
 			if okHint == nil {
 				okHint = types.ErrorType
 			}
-			return &types.Named{Sym: resSym, Args: []types.Type{okHint, at}}
+			errOut := at
+			if errHint != nil && !types.IsError(errHint) && c.accepts(errHint, at, e.Args[0].Value) {
+				errOut = errHint
+			}
+			return &types.Named{Sym: resSym, Args: []types.Type{okHint, errOut}}
 		}
 	}
 

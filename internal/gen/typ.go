@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/osty/osty/internal/ast"
+	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/types"
 )
 
@@ -184,6 +185,11 @@ func (g *gen) goNamedType(n *types.Named) string {
 		// cost of losing Go's error-interface polymorphism; a full
 		// fix would generate an .Error() shim per type.
 		return "any"
+	case "BasicError":
+		if isStdlibBasicError(n) {
+			g.needErrorRuntime = true
+			return "ostyBasicError"
+		}
 	case "Chan", "Channel":
 		// §8.5: channel types lower to Go's built-in chan T.
 		if len(n.Args) == 1 {
@@ -307,6 +313,15 @@ func (g *gen) goNamedAST(n *ast.NamedType) string {
 		if len(n.Path) == 2 && n.Path[1] == "Json" && g.isStdlibAliasName(n.Path[0], "json") {
 			g.needJSON = true
 			return "Json"
+		}
+		if len(n.Path) == 2 && g.isStdlibAliasName(n.Path[0], "error") {
+			switch n.Path[1] {
+			case "Error":
+				return "any"
+			case "BasicError":
+				g.needErrorRuntime = true
+				return "ostyBasicError"
+			}
 		}
 		// Qualified (pkg.Type). Phase 5 adds proper module handling.
 		return strings.Join(n.Path, ".")
@@ -438,6 +453,27 @@ func (g *gen) goFnTypeAST(f *ast.FnType) string {
 		b.WriteString(g.goTypeExpr(f.ReturnType))
 	}
 	return b.String()
+}
+
+func isStdlibBasicError(n *types.Named) bool {
+	if n == nil || n.Sym == nil || n.Sym.Name != "BasicError" || n.Sym.Kind != resolve.SymStruct {
+		return false
+	}
+	decl, ok := n.Sym.Decl.(*ast.StructDecl)
+	return ok &&
+		len(decl.Fields) == 1 &&
+		decl.Fields[0].Name == "message" &&
+		hasStructMethod(decl, "message") &&
+		hasStructMethod(decl, "source")
+}
+
+func hasStructMethod(decl *ast.StructDecl, name string) bool {
+	for _, m := range decl.Methods {
+		if m.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // isUnitAST reports whether t is the AST representation of the Osty

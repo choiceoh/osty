@@ -273,7 +273,7 @@ func TestErrorModuleResolves(t *testing.T) {
 	if mod.Package.PkgScope == nil {
 		t.Fatal(`Module "error" has nil PkgScope — resolve did not populate it`)
 	}
-	for _, name := range []string{"Error", "BasicError"} {
+	for _, name := range []string{"Error", "BasicError", "new"} {
 		sym := mod.Package.PkgScope.LookupLocal(name)
 		if sym == nil {
 			t.Errorf("PkgScope missing expected export %q", name)
@@ -283,6 +283,42 @@ func TestErrorModuleResolves(t *testing.T) {
 			t.Errorf("export %q is not pub", name)
 		}
 	}
+}
+
+func TestErrorModuleSurface(t *testing.T) {
+	mod := Load().Modules["error"]
+	if mod == nil || mod.Package == nil {
+		t.Fatal("std.error not loaded")
+	}
+	errSym := mod.Package.PkgScope.LookupLocal("Error")
+	errDecl, ok := errSym.Decl.(*ast.InterfaceDecl)
+	if !ok {
+		t.Fatalf("Error decl = %T, want interface", errSym.Decl)
+	}
+	for _, name := range []string{"message", "source"} {
+		if !hasMethod(errDecl.Methods, name) {
+			t.Errorf("Error missing method %q", name)
+		}
+	}
+	basicSym := mod.Package.PkgScope.LookupLocal("BasicError")
+	basicDecl, ok := basicSym.Decl.(*ast.StructDecl)
+	if !ok {
+		t.Fatalf("BasicError decl = %T, want struct", basicSym.Decl)
+	}
+	for _, name := range []string{"message", "source"} {
+		if !hasMethod(basicDecl.Methods, name) {
+			t.Errorf("BasicError missing method %q", name)
+		}
+	}
+}
+
+func hasMethod(methods []*ast.FnDecl, name string) bool {
+	for _, m := range methods {
+		if m.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // TestLookupPackageReturnsResolvedPackage exercises the StdlibProvider
@@ -340,6 +376,31 @@ pub fn describe(e: error.Nope) -> String {
 	if !found {
 		t.Errorf("expected CodeUnknownExportedMember for error.Nope; got %d diags: %v",
 			len(res.Diags), diagCodes(res.Diags))
+	}
+}
+
+func TestErrorModuleConstructorTypeChecks(t *testing.T) {
+	src := `use std.error
+
+pub fn describe() -> String {
+    let a = error.new("bad")
+    let b = error.Error.new("worse")
+    "{a.message()} {b.message()}"
+}
+`
+	file, parseDiags := parser.ParseDiagnostics([]byte(src))
+	for _, d := range parseDiags {
+		if d.Severity == diag.Error {
+			t.Fatalf("parse error: %s", d.Error())
+		}
+	}
+	reg := Load()
+	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), reg)
+	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives})
+	for _, d := range append(res.Diags, chk.Diags...) {
+		if d.Severity == diag.Error {
+			t.Fatalf("unexpected diagnostic: %s", d.Error())
+		}
 	}
 }
 
@@ -676,6 +737,7 @@ func TestTier1ModuleCoverage(t *testing.T) {
 		{"iter", []string{"Iter", "from", "empty", "range"}},
 		{"thread", []string{"Group", "Select", "spawn", "collectAll", "race", "chan", "sleep", "yield", "isCancelled", "checkCancelled", "select"}},
 		{"os", []string{"path", "Path", "Output", "Signal", "exec", "execShell", "exit", "pid", "hostname", "onSignal"}},
+		{"error", []string{"Error", "BasicError", "new"}},
 		{"ref", []string{"same"}},
 		{"process", []string{"abort", "unreachable", "todo", "ignoreError", "logError"}},
 		{"debug", []string{"dbg"}},

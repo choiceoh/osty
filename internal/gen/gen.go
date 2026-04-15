@@ -386,7 +386,7 @@ func (g *gen) run() ([]byte, error) {
 		g.useAs("strings", "stdstrings")
 		g.use("time")
 	}
-	if g.needResult || g.needStringRuntime {
+	if g.needResult || g.needStringRuntime || g.needErrorRuntime {
 		g.use("fmt")
 	}
 
@@ -522,6 +522,26 @@ func resultMapErr[T any, E any, F any](r Result[T, E], f func(E) F) Result[T, F]
 	}
 	if g.needErrorRuntime {
 		out.WriteString(`
+type ostyBasicError struct {
+	messageText string
+}
+
+func ostyErrorNew(message string) any {
+	return ostyBasicError{messageText: message}
+}
+
+func (e ostyBasicError) message() string { return e.messageText }
+
+func (e ostyBasicError) source() *any { return nil }
+
+func ostyErrorDowncast[T any](err any) *T {
+	v, ok := err.(T)
+	if !ok {
+		return nil
+	}
+	return &v
+}
+
 func ostyErrorMessage(e any) string {
 	if e == nil {
 		return ""
@@ -536,6 +556,16 @@ func ostyErrorMessage(e any) string {
 		return s
 	}
 	return fmt.Sprint(e)
+}
+
+func ostyErrorSource(err any) *any {
+	if err == nil {
+		return nil
+	}
+	if e, ok := err.(interface{ source() *any }); ok {
+		return e.source()
+	}
+	return nil
 }
 `)
 	}
