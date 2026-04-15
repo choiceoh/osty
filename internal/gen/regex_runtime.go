@@ -664,7 +664,8 @@ func (re Regex) findAll(text string) []RegexMatch {
 	for from := 0; from <= len(chars); {
 		sl, ok := re.runAt(chars, boff, from)
 		if !ok {
-			break
+			from++
+			continue
 		}
 		out = append(out, RegexMatch{text: text[sl[0]:sl[1]], start: sl[0], end: sl[1]})
 		ec := rxByteToChar(boff, sl[1])
@@ -786,7 +787,8 @@ func (re Regex) replaceAll(text, replacement string) string {
 	for from := 0; from <= len(chars); {
 		sl, ok := re.runAt(chars, boff, from)
 		if !ok {
-			break
+			from++
+			continue
 		}
 		out = append(out, text[lastEnd:sl[0]]...)
 		out = append(out, rxApplyRepl(replacement, sl, text, re.names)...)

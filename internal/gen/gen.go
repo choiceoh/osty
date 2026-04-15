@@ -1283,7 +1283,7 @@ func (u Url) queryValues(key string) []string {
 `)
 	}
 	if g.needRegex {
-		// TODO: regexRuntime placeholder
+		out.WriteString(regexRuntime)
 	}
 	if g.needEncoding {
 		out.WriteString(`

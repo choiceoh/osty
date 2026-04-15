@@ -2470,27 +2470,27 @@ func (g *gen) emitBuiltinCall(name string, args []*ast.Arg, call *ast.CallExpr) 
 	case "println":
 		g.use("fmt")
 		g.body.write("fmt.Println(")
-		g.emitCallArgList(args)
+		g.emitPrintArgList(args)
 		g.body.write(")")
 		return true
 	case "print":
 		g.use("fmt")
 		g.body.write("fmt.Print(")
-		g.emitCallArgList(args)
+		g.emitPrintArgList(args)
 		g.body.write(")")
 		return true
 	case "eprintln":
 		g.use("fmt")
 		g.use("os")
 		g.body.write("fmt.Fprintln(os.Stderr, ")
-		g.emitCallArgList(args)
+		g.emitPrintArgList(args)
 		g.body.write(")")
 		return true
 	case "eprint":
 		g.use("fmt")
 		g.use("os")
 		g.body.write("fmt.Fprint(os.Stderr, ")
-		g.emitCallArgList(args)
+		g.emitPrintArgList(args)
 		g.body.write(")")
 		return true
 	case "dbg":
@@ -2635,6 +2635,26 @@ func (g *gen) emitCallArgList(args []*ast.Arg) {
 	for i, a := range args {
 		if i > 0 {
 			g.body.write(", ")
+		}
+		g.emitExpr(a.Value)
+	}
+}
+
+// emitPrintArgList is like emitCallArgList but wraps Bytes arguments in
+// string() so that println/print display Bytes as text, not as a Go
+// []byte slice literal (e.g. [72 101 108 ...]).
+func (g *gen) emitPrintArgList(args []*ast.Arg) {
+	for i, a := range args {
+		if i > 0 {
+			g.body.write(", ")
+		}
+		if t := g.typeOf(a.Value); t != nil {
+			if p, ok := t.(*types.Primitive); ok && p.Kind == types.PBytes {
+				g.body.write("string(")
+				g.emitExpr(a.Value)
+				g.body.write(")")
+				continue
+			}
 		}
 		g.emitExpr(a.Value)
 	}
