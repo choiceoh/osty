@@ -34,11 +34,11 @@ import (
 // ever one of the *ptr/slice fields is set — callers switch on which
 // is non-nil.
 type value struct {
-	Str     *string
-	Int     *int64
-	Bool    *bool
-	Arr     *tomlArray
-	Tbl     *tomlTable
+	Str  *string
+	Int  *int64
+	Bool *bool
+	Arr  *tomlArray
+	Tbl  *tomlTable
 	// Line is the 1-based source line where the value begins; carried
 	// through so downstream errors point back at the right manifest
 	// line.

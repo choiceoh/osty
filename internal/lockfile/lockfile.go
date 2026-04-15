@@ -8,14 +8,14 @@
 //
 //   - Content is TOML, parsed via internal/tomlparse. Schema:
 //
-//	version = 1
+//     version = 1
 //
-//	[[package]]
-//	name = "simple"
-//	version = "1.2.3"
-//	source = "registry+https://registry.osty.dev"
-//	checksum = "sha256:abcdef..."
-//	dependencies = ["other 1.0.0"]
+//     [[package]]
+//     name = "simple"
+//     version = "1.2.3"
+//     source = "registry+https://registry.osty.dev"
+//     checksum = "sha256:abcdef..."
+//     dependencies = ["other 1.0.0"]
 //
 //   - `source` is a URI-like pin that fully describes where the
 //     package came from: "registry+URL", "git+URL?<ref>#<rev>",

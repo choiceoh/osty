@@ -16,10 +16,12 @@ import (
 //
 //   - Source actions: bulk refactors that operate on the whole file
 //     regardless of where the cursor sits. Currently:
-//       * source.organizeImports — sort, dedupe, and drop unused
-//         `use` declarations.
-//       * source.fixAll[.osty] — apply every machine-applicable
-//         compiler/lint suggestion in one edit.
+//
+//   - source.organizeImports — sort, dedupe, and drop unused
+//     `use` declarations.
+//
+//   - source.fixAll[.osty] — apply every machine-applicable
+//     compiler/lint suggestion in one edit.
 //
 // The `context.only` filter the client sends narrows what we return
 // — `["source.organizeImports"]` on save yields just that action, an

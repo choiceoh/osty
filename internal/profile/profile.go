@@ -37,16 +37,16 @@ const (
 //     values at merge time. Limited to one level of indirection so
 //     cycles are structurally impossible.
 type Profile struct {
-	Name      string
-	OptLevel  int
-	Debug     bool
-	Strip     bool
-	Overflow  bool
-	Inlining  bool
-	LTO       bool
-	GoFlags   []string
-	Env       map[string]string
-	Inherits  string
+	Name     string
+	OptLevel int
+	Debug    bool
+	Strip    bool
+	Overflow bool
+	Inlining bool
+	LTO      bool
+	GoFlags  []string
+	Env      map[string]string
+	Inherits string
 
 	// UserDefined is true when the profile came from the manifest
 	// (as opposed to the built-in defaults). Used by `osty profiles`

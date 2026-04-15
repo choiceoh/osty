@@ -81,17 +81,17 @@ const (
 	SHL    // <<
 	SHR    // >>
 
-	ASSIGN     // =
-	PLUSEQ     // +=
-	MINUSEQ    // -=
-	STAREQ     // *=
-	SLASHEQ    // /=
-	PERCENTEQ  // %=
-	BITANDEQ   // &=
-	BITOREQ    // |=
-	BITXOREQ   // ^=
-	SHLEQ      // <<=
-	SHREQ      // >>=
+	ASSIGN    // =
+	PLUSEQ    // +=
+	MINUSEQ   // -=
+	STAREQ    // *=
+	SLASHEQ   // /=
+	PERCENTEQ // %=
+	BITANDEQ  // &=
+	BITOREQ   // |=
+	BITXOREQ  // ^=
+	SHLEQ     // <<=
+	SHREQ     // >>=
 
 	QUESTION // ?
 	QDOT     // ?.
@@ -223,9 +223,9 @@ const (
 // its processed text (with escape sequences resolved). An expression segment
 // carries the tokens that were lexed inside `{ ... }`.
 type StringPart struct {
-	Kind  StringPartKind
-	Text  string  // for PartText
-	Expr  []Token // for PartExpr
+	Kind StringPartKind
+	Text string  // for PartText
+	Expr []Token // for PartExpr
 }
 
 // Token is a single lexical unit.

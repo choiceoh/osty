@@ -50,12 +50,12 @@ const SnapshotSchemaVersion = 2
 // `package` + `symbols` fields are also written when the project
 // has exactly one package, so older tools keep working).
 type Snapshot struct {
-	Schema   int                  `json:"schema"`
-	Package  string               `json:"package,omitempty"` // legacy/v1 single-package convenience
-	Version  string               `json:"version,omitempty"`
-	Edition  string               `json:"edition,omitempty"`
-	Symbols  []Symbol             `json:"symbols,omitempty"` // legacy/v1 single-package convenience
-	Packages map[string][]Symbol  `json:"packages,omitempty"`
+	Schema   int                 `json:"schema"`
+	Package  string              `json:"package,omitempty"` // legacy/v1 single-package convenience
+	Version  string              `json:"version,omitempty"`
+	Edition  string              `json:"edition,omitempty"`
+	Symbols  []Symbol            `json:"symbols,omitempty"` // legacy/v1 single-package convenience
+	Packages map[string][]Symbol `json:"packages,omitempty"`
 }
 
 // Symbol is one exported declaration. Top-level decls use a bare

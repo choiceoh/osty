@@ -26,14 +26,14 @@ func FuzzLex(f *testing.F) {
 		// Error-path seeds.
 		`"unterminated string`,
 		`"bad escape \q"`,
-		"0X1F",        // uppercase base
-		"'ab'",        // multi-char char lit
-		"\"hi, {",     // unterminated interpolation
+		"0X1F",    // uppercase base
+		"'ab'",    // multi-char char lit
+		"\"hi, {", // unterminated interpolation
 		"/* unterminated",
 		"\"\"\"\nbad indent\n  \"\"\"", // bad triple-string
-		"b'\\xFF'",    // invalid byte escape
-		"\uFEFF",      // lone BOM
-		"\x00\x01\x02", // binary noise
+		"b'\\xFF'",                     // invalid byte escape
+		"\uFEFF",                       // lone BOM
+		"\x00\x01\x02",                 // binary noise
 	}
 	for _, s := range seeds {
 		f.Add(s)

@@ -1,15 +1,20 @@
 package ci
 
 import (
+	"bytes"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/osty/osty/internal/manifest"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/stdlib"
 )
+
+const ciSkipDirective = "osty:ci-skip"
 
 // Load reads the project metadata for r.Root. It tolerates a
 // missing manifest (standalone source directory) but refuses a
@@ -46,7 +51,7 @@ func (r *Runner) Load() error {
 	if r.Manifest != nil && r.Manifest.Workspace != nil {
 		return r.loadWorkspace(true)
 	}
-	if resolve.IsWorkspaceRoot(r.Root, "") {
+	if !hasDirectPackageSources(r.Root) && resolve.IsWorkspaceRoot(r.Root, "") {
 		return r.loadWorkspace(false)
 	}
 	pkg, err := resolve.LoadPackage(r.Root)
@@ -56,10 +61,28 @@ func (r *Runner) Load() error {
 		// Record nothing and let each check decide to skip.
 		return nil
 	}
+	filterPackageCIFiles(pkg)
 	r.Packages = []*resolve.Package{pkg}
 	pr := resolve.ResolvePackage(pkg, resolve.NewPrelude())
 	r.Results = []*resolve.PackageResult{pr}
 	return nil
+}
+
+func hasDirectPackageSources(root string) bool {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if strings.HasSuffix(name, ".osty") && !strings.HasSuffix(name, "_test.osty") {
+			return true
+		}
+	}
+	return false
 }
 
 // loadWorkspace loads every member described by the manifest (or
@@ -82,6 +105,7 @@ func (r *Runner) loadWorkspace(byManifest bool) error {
 		}
 		seen[member] = true
 		if pkg, err := ws.LoadPackage(member); err == nil && pkg != nil {
+			filterPackageCIFiles(pkg)
 			r.Packages = append(r.Packages, pkg)
 			pkgPaths = append(pkgPaths, member)
 		}
@@ -108,6 +132,20 @@ func (r *Runner) loadWorkspace(byManifest bool) error {
 		r.Results = append(r.Results, allResults[path])
 	}
 	return nil
+}
+
+func filterPackageCIFiles(pkg *resolve.Package) {
+	if pkg == nil || len(pkg.Files) == 0 {
+		return
+	}
+	files := pkg.Files[:0]
+	for _, pf := range pkg.Files {
+		if pf == nil || bytes.Contains(pf.Source, []byte(ciSkipDirective)) {
+			continue
+		}
+		files = append(files, pf)
+	}
+	pkg.Files = files
 }
 
 // Run executes every enabled check and returns the aggregated
@@ -189,10 +227,11 @@ func (r *Runner) ostyFiles() []string {
 			files[pf.Path] = true
 		}
 	}
-	// Workspace mode sometimes leaves a root package unrepresented
-	// (virtual workspace). Fall back to a filesystem walk so the
-	// format check still sees every source.
-	if len(files) == 0 {
+	// When Load found no package at all, fall back to a filesystem
+	// walk so loose source trees still get a format pass. If packages
+	// were loaded but their files were explicitly CI-skipped, do not
+	// walk back into fixtures and samples.
+	if len(files) == 0 && len(r.Packages) == 0 {
 		_ = filepath.WalkDir(r.Root, func(path string, d fs.DirEntry, err error) error {
 			if err != nil || d == nil {
 				return nil
@@ -206,7 +245,10 @@ func (r *Runner) ostyFiles() []string {
 				return nil
 			}
 			if filepath.Ext(path) == ".osty" {
-				files[path] = true
+				src, err := os.ReadFile(path)
+				if err != nil || !bytes.Contains(src, []byte(ciSkipDirective)) {
+					files[path] = true
+				}
 			}
 			return nil
 		})

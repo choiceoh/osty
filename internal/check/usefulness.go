@@ -95,8 +95,8 @@ func (c *checker) coversMatrix(rows [][]ast.Pattern, cols []types.Type) bool {
 // denotes a nullary ctor (true, false, None, Empty, Unit).
 type ctor struct {
 	kind     ctorKind
-	name     string    // variant / bool tag
-	arity    int       // tuple/struct field count
+	name     string // variant / bool tag
+	arity    int    // tuple/struct field count
 	argTypes []types.Type
 	// For struct ctors, fieldOrder provides the column ordering used
 	// during specialization so field-name lookups in StructPat can

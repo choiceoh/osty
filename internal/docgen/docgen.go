@@ -100,15 +100,15 @@ func (k DeclKind) String() string {
 // strings) alongside raw metadata (Line, Doc, Deprecated) so both
 // markdown and HTML renderers can compose the exact layout they want.
 type Decl struct {
-	Kind       DeclKind
-	Name       string
-	Doc        string  // raw `///` block, newline-joined, as the parser saw it
-	Info       DocInfo // structured parse of Doc (Summary, Params, Returns, Example, See)
-	Line       int     // 1-based source line of the declaration keyword
-	Signature  string  // one-line signature (e.g. "fn new(name: String) -> Self")
-	Deprecated string  // `#[deprecated(message = ...)]` message, empty if absent
-	DeprecatedSince string // `#[deprecated(since = "0.5")]` version, empty if absent
-	DeprecatedUse   string // `#[deprecated(use = "newFn")]` replacement hint, empty if absent
+	Kind            DeclKind
+	Name            string
+	Doc             string  // raw `///` block, newline-joined, as the parser saw it
+	Info            DocInfo // structured parse of Doc (Summary, Params, Returns, Example, See)
+	Line            int     // 1-based source line of the declaration keyword
+	Signature       string  // one-line signature (e.g. "fn new(name: String) -> Self")
+	Deprecated      string  // `#[deprecated(message = ...)]` message, empty if absent
+	DeprecatedSince string  // `#[deprecated(since = "0.5")]` version, empty if absent
+	DeprecatedUse   string  // `#[deprecated(use = "newFn")]` replacement hint, empty if absent
 
 	// Fields populated for KindStruct.
 	Fields []*Field

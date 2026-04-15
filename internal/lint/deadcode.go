@@ -282,8 +282,8 @@ func stmtHasBreakEscape(s ast.Stmt) bool {
 		return exprHasBreakEscape(n.X)
 	case *ast.Block:
 		return blockHasBreakEscape(n)
-	// *ForStmt: a break inside a nested for loop targets the inner for,
-	// not the outer one we're analysing. Skip recursion into the body.
+		// *ForStmt: a break inside a nested for loop targets the inner for,
+		// not the outer one we're analysing. Skip recursion into the body.
 	}
 	return false
 }

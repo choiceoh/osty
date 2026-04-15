@@ -217,4 +217,3 @@ func (g *gen) lookupSubst(name string) (string, bool) {
 	v, ok := g.substEnv[name]
 	return v, ok
 }
-

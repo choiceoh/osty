@@ -309,7 +309,7 @@ func (r *resolver) pkg() *Package {
 // the member position to slot into the refs map) and emits a diagnostic
 // when the name is missing or private.
 func (r *resolver) resolvePackageMember(f *ast.FieldExpr, pkgSym *Symbol) {
-	_ = r.lookupPackageMember(pkgSym, f.Name, f.EndV, /*typePos*/ false)
+	_ = r.lookupPackageMember(pkgSym, f.Name, f.EndV /*typePos*/, false)
 }
 
 // lookupPackageMember walks the target package's exported scope for
@@ -1097,7 +1097,7 @@ func (r *resolver) resolveExpr(e ast.Expr) {
 			r.resolveExpr(fx.X)
 			if id, ok := fx.X.(*ast.Ident); ok {
 				if sym := r.refs[id]; sym != nil && sym.Kind == SymPackage {
-					r.lookupPackageMember(sym, fx.Name, fx.EndV, /*typePos*/ false)
+					r.lookupPackageMember(sym, fx.Name, fx.EndV /*typePos*/, false)
 				}
 			}
 		} else {
@@ -1569,7 +1569,7 @@ func (r *resolver) resolveType(t ast.Type) {
 				// segment (just `pkg`) it's a bad type position, but we
 				// still record the package symbol.
 				tail := n.Path[1]
-				resolved := r.lookupPackageMember(sym, tail, n.PosV, /*typePos*/ true)
+				resolved := r.lookupPackageMember(sym, tail, n.PosV /*typePos*/, true)
 				if resolved != nil {
 					r.typeRefs[n] = resolved
 				} else {

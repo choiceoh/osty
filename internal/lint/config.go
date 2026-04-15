@@ -27,9 +27,9 @@ import (
 //
 // Typical source: the project's `osty.toml` `[lint]` section:
 //
-//   [lint]
-//   allow = ["naming_value", "L0003"]
-//   deny  = ["dead_code", "self_assign"]
+//	[lint]
+//	allow = ["naming_value", "L0003"]
+//	deny  = ["dead_code", "self_assign"]
 type Config struct {
 	Allow []string
 	Deny  []string
