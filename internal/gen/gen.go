@@ -107,9 +107,13 @@ type gen struct {
 	// pulling in the time import used by `s.timeout(...)` arms.
 	needSelect bool
 
-	// needRandomRuntime / needURLRuntime are set by stdlib use bridges
-	// whose Osty surface cannot map directly to exported Go package
-	// identifiers (for example `random.default()` and `rng.int(...)`).
+	// needFS / needRandomRuntime / needURLRuntime are set by stdlib use
+	// bridges whose Osty surface cannot map directly to exported Go
+	// package identifiers (for example `fs.readToString(...)`,
+	// `random.default()` and `rng.int(...)`).
+	needFS            bool
+	fsOSAlias         string
+	fsUTF8Alias       string
 	needRandomRuntime bool
 	needURLRuntime    bool
 
@@ -304,6 +308,11 @@ func (g *gen) run() ([]byte, error) {
 	if g.needTaskGroup {
 		g.use("sync")
 		g.use("context")
+	}
+	if g.needFS {
+		g.needResult = true
+		g.useAs("os", g.fsOSAlias)
+		g.useAs("unicode/utf8", g.fsUTF8Alias)
 	}
 	if g.needRandomRuntime {
 		g.useAs("math/rand", "mathrand")
