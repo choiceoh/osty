@@ -377,6 +377,9 @@ func (g *gen) emitCall(c *ast.CallExpr) {
 			return
 		}
 	}
+	if g.emitStdlibJSONCall(c) {
+		return
+	}
 	if f, ok := c.Fn.(*ast.FieldExpr); ok {
 		if g.emitStdlibEncodingCall(c, f) {
 			return
@@ -471,6 +474,50 @@ func (g *gen) emitListPushCall(c *ast.CallExpr, f *ast.FieldExpr) bool {
 	g.emitExprAsType(c.Args[0].Value, n.Args[0])
 	g.body.write("); return struct{}{} }()")
 	return true
+}
+
+func (g *gen) emitStdlibJSONCall(c *ast.CallExpr) bool {
+	base := c.Fn
+	var explicit []ast.Type
+	if tf, ok := base.(*ast.TurbofishExpr); ok {
+		base = tf.Base
+		explicit = tf.Args
+	}
+	id, parts, ok := stdlibFieldChain(base)
+	if !ok || id == nil || len(parts) != 1 || !g.isStdlibPackageAlias(id, "json") {
+		return false
+	}
+	if len(c.Args) != 1 {
+		return false
+	}
+	switch parts[0] {
+	case "encode":
+		g.body.write("jsonEncode(")
+		g.emitExpr(c.Args[0].Value)
+		g.body.write(")")
+		return true
+	case "stringify":
+		g.body.write("jsonStringify(")
+		g.emitExpr(c.Args[0].Value)
+		g.body.write(")")
+		return true
+	case "decode", "parse":
+		g.body.writef("jsonDecode[%s](", g.jsonDecodeTargetGo(c, explicit))
+		g.emitExpr(c.Args[0].Value)
+		g.body.write(")")
+		return true
+	}
+	return false
+}
+
+func (g *gen) jsonDecodeTargetGo(c *ast.CallExpr, explicit []ast.Type) string {
+	if len(explicit) == 1 {
+		return g.goTypeExpr(explicit[0])
+	}
+	if n, ok := types.AsNamedByName(g.typeOf(c), "Result"); ok && len(n.Args) == 2 {
+		return g.goType(n.Args[0])
+	}
+	return "any"
 }
 
 func (g *gen) emitStdlibEncodingCall(c *ast.CallExpr, _ *ast.FieldExpr) bool {
@@ -905,6 +952,15 @@ func (g *gen) isStdlibPackageAlias(id *ast.Ident, module string) bool {
 	}
 	for _, u := range g.file.Uses {
 		if stdlibUseMatchesAlias(u, id.Name, module) {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *gen) isStdlibAliasName(alias, module string) bool {
+	for _, u := range g.file.Uses {
+		if stdlibUseMatchesAlias(u, alias, module) {
 			return true
 		}
 	}

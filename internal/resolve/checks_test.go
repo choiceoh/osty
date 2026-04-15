@@ -126,6 +126,15 @@ func TestDuplicateVariant(t *testing.T) {
 }`, diag.CodeDuplicateDecl)
 }
 
+func TestDuplicateVariantJSONTag(t *testing.T) {
+	expectCode(t, `pub enum E {
+    #[json(key = "same")]
+    A,
+    #[json(key = "same")]
+    B,
+}`, diag.CodeDuplicateDecl)
+}
+
 func TestDuplicateEnumMethod(t *testing.T) {
 	expectCode(t, `pub enum E {
     A,

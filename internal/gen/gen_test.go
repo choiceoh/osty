@@ -360,6 +360,102 @@ fn main() {
 	}
 }
 
+func TestStdJSONBridge(t *testing.T) {
+	goSrc, err := transpileWithStdlib(t, `use std.json
+
+pub struct Payload {
+    #[json(key = "user_id")]
+    pub userId: Int,
+
+    #[json(optional)]
+    pub nickname: String?,
+
+    #[json(skip)]
+    pub cache: Int,
+}
+
+pub enum Shape {
+    #[json(key = "circle")]
+    Circle(Float),
+    Empty,
+}
+
+pub struct Secret {
+    pub raw: String,
+
+    pub fn toJson(self) -> json.Json {
+        json.String("redacted")
+    }
+}
+
+pub struct FromCustom {
+    pub value: Int,
+
+    pub fn fromJson(value: json.Json) -> Result<Self, Error> {
+        Ok(Self { value: 42 })
+    }
+}
+
+fn loadPayload(text: String) -> Result<Payload, Error> {
+    let cfg: Payload = json.decode(text)?
+    Ok(cfg)
+}
+
+fn main() {
+    let missing = Payload { userId: 7, nickname: None, cache: 99 }
+    println(json.encode(missing))
+    let nick = "neo"
+    let present = Payload { userId: 8, nickname: Some(nick), cache: 0 }
+    println(json.stringify(present))
+    println(json.encode(Circle(2.5)))
+    let raw: json.Json = json.Object({"ok": json.Bool(true), "name": json.String("osty"), "none": json.Null})
+    println(json.stringify(raw))
+    let decoded: Payload = json.decode::<Payload>("\{\"user_id\":9,\"nickname\":null,\"cache\":123,\"extra\":true\}").unwrap()
+    println(json.encode(decoded))
+    let parsed: Payload = json.parse::<Payload>("\{\"user_id\":10,\"nickname\":\"trinity\"\}").unwrap()
+    println(json.encode(parsed))
+    let roundShape: Shape = json.decode::<Shape>("\{\"tag\":\"circle\",\"value\":3.5\}").unwrap()
+    println(json.encode(roundShape))
+    let shapes: List<Shape> = json.decode::<List<Shape>>("[\{\"tag\":\"circle\",\"value\":1.25\},\{\"tag\":\"Empty\"\}]").unwrap()
+    println(json.encode(shapes))
+    let shapeMap: Map<String, Shape> = json.decode::<Map<String, Shape>>("\{\"a\":\{\"tag\":\"circle\",\"value\":4.5\}\}").unwrap()
+    println(json.encode(shapeMap["a"]))
+    let loaded = loadPayload("\{\"user_id\":11\}").unwrap()
+    println(json.encode(loaded))
+    println(json.decode::<String>("\"\\uD800\"").isErr())
+    println(json.encode(Secret { raw: "top" }))
+    println(json.decode::<FromCustom>("null").unwrap().value)
+}
+`)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := strings.TrimSpace(runGo(t, goSrc))
+	want := strings.Join([]string{
+		`{"user_id":7}`,
+		`{"nickname":"neo","user_id":8}`,
+		`{"tag":"circle","value":2.5}`,
+		`{"name":"osty","none":null,"ok":true}`,
+		`{"user_id":9}`,
+		`{"nickname":"trinity","user_id":10}`,
+		`{"tag":"circle","value":3.5}`,
+		`[{"tag":"circle","value":1.25},{"tag":"Empty"}]`,
+		`{"tag":"circle","value":4.5}`,
+		`{"user_id":11}`,
+		`true`,
+		`"redacted"`,
+		`42`,
+	}, "\n")
+	if out != want {
+		t.Fatalf("stdout = %q, want %q\n--- source ---\n%s", out, want, goSrc)
+	}
+	for _, want := range []string{"stdjson.Marshal", "func (self Payload) MarshalJSON", "func (self *Payload) UnmarshalJSON", "jsonDecode[Payload]", "jsonUnmarshalShape"} {
+		if !strings.Contains(string(goSrc), want) {
+			t.Errorf("generated std.json bridge missing %s:\n%s", want, goSrc)
+		}
+	}
+}
+
 func TestStdCompressBridge(t *testing.T) {
 	goSrc, err := transpileWithStdlib(t, `use std.compress
 use std.encoding

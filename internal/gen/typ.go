@@ -220,6 +220,9 @@ func (g *gen) goNamedType(n *types.Named) string {
 	case "CsvOptions":
 		g.needCSV = true
 		return "CsvOptions"
+	case "Json":
+		g.needJSON = true
+		return "Json"
 	case "Uuid":
 		g.needUUID = true
 		return "Uuid"
@@ -301,10 +304,30 @@ func (g *gen) goNamedAST(n *ast.NamedType) string {
 		return "any"
 	}
 	if len(n.Path) > 1 {
+		if len(n.Path) == 2 && n.Path[1] == "Json" && g.isStdlibAliasName(n.Path[0], "json") {
+			g.needJSON = true
+			return "Json"
+		}
 		// Qualified (pkg.Type). Phase 5 adds proper module handling.
 		return strings.Join(n.Path, ".")
 	}
 	name := n.Path[0]
+	if name == "Self" && g.selfType != "" {
+		if len(n.Args) == 0 {
+			return g.selfType
+		}
+		var b strings.Builder
+		b.WriteString(g.selfType)
+		b.WriteByte('[')
+		for i, a := range n.Args {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			b.WriteString(g.goTypeExpr(a))
+		}
+		b.WriteByte(']')
+		return b.String()
+	}
 	// Generic type-parameter references substitute to the concrete Go
 	// type rendered at the monomorphizing call site. Applies only to
 	// bare single-path names with no type arguments — a `T<...>` shape
@@ -372,6 +395,9 @@ func (g *gen) goNamedAST(n *ast.NamedType) string {
 	case "CsvOptions":
 		g.needCSV = true
 		return "CsvOptions"
+	case "Json":
+		g.needJSON = true
+		return "Json"
 	case "Uuid":
 		g.needUUID = true
 		return "Uuid"

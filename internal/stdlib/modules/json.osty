@@ -1,6 +1,4 @@
-// std.json — JSON value model and codec protocol surface.
-
-use std.strings
+// std.json - JSON value model and codec protocol surface.
 
 pub type JsonObject = Map<String, Json>
 pub type JsonArray = List<Json>
@@ -25,22 +23,18 @@ pub interface Decode {
     fn fromJson(value: Json) -> Result<Self, Error>
 }
 
-fn quote(text: String) -> String {
-    text
+pub fn encode<T>(value: T) -> String {
+    ""
 }
 
-pub fn encode<T: Encode>(value: T) -> String {
-    stringify(value.toJson())
+pub fn stringify<T>(value: T) -> String {
+    encode(value)
 }
 
 pub fn decode<T>(text: String) -> Result<T, Error> {
     decode::<T>(text)
 }
 
-pub fn parse(text: String) -> Result<Json, Error> {
-    Ok(Null)
-}
-
-pub fn stringify(value: Json) -> String {
-    ""
+pub fn parse<T>(text: String) -> Result<T, Error> {
+    decode(text)
 }

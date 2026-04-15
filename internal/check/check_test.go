@@ -2191,7 +2191,7 @@ pub struct User {
     pub name: String,
 }
 `
-	assertCodes(t, runCheck(t, src), diag.CodeUnknownAnnotation)
+	assertCodes(t, runCheck(t, src), diag.CodeAnnotationBadArg)
 }
 
 func TestCheck_AnnotationJSONUnknownArg(t *testing.T) {
@@ -2202,6 +2202,16 @@ pub struct User {
 }
 `
 	assertCodes(t, runCheck(t, src), diag.CodeUnknownAnnotation)
+}
+
+func TestCheck_AnnotationJSONOptionalRequiresOptionalField(t *testing.T) {
+	src := `
+pub struct User {
+    #[json(optional)]
+    pub name: String,
+}
+`
+	assertCodes(t, runCheck(t, src), diag.CodeAnnotationBadArg)
 }
 
 func TestCheck_MethodReferenceHasFnType(t *testing.T) {

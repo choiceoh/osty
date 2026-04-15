@@ -91,7 +91,7 @@ const (
 // annotationRules lists the v0.9 permitted annotations (R26) and the
 // targets each applies to.
 var annotationRules = map[string]AnnotationTarget{
-	"json":       TargetStructField,
+	"json":       TargetStructField | TargetVariant,
 	"deprecated": TargetTopLevelDecl | TargetMethod,
 	// `allow` suppresses lint warnings for the annotated declaration
 	// (and its descendants). Broad target set: any place a lint rule
