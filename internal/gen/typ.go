@@ -223,6 +223,9 @@ func (g *gen) goNamedType(n *types.Named) string {
 	case "RegexError":
 		g.needRegex = true
 		return "error"
+	case "CsvOptions":
+		g.needCSV = true
+		return "CsvOptions"
 	case "Json":
 		g.needJSON = true
 		return "Json"
@@ -415,6 +418,9 @@ func (g *gen) goNamedAST(n *ast.NamedType) string {
 	case "RegexError":
 		g.needRegex = true
 		return "error"
+	case "CsvOptions":
+		g.needCSV = true
+		return "CsvOptions"
 	case "Json":
 		g.needJSON = true
 		return "Json"

@@ -454,6 +454,9 @@ func (g *gen) emitCall(c *ast.CallExpr) {
 		if g.emitStdlibEnvCall(c, f) {
 			return
 		}
+		if g.emitStdlibCSVCall(c, f) {
+			return
+		}
 		if g.emitStdlibCompressCall(c, f) {
 			return
 		}
@@ -691,10 +694,6 @@ func hasValueSemantics(t types.Type) bool {
 }
 
 func (g *gen) emitStdlibEncodingCall(c *ast.CallExpr, _ *ast.FieldExpr) bool {
-	// Pure Osty implementation — delegate to Go helpers that mirror
-	// the Osty algorithm.  The call-path matching still applies so
-	// that we inject the right runtime; only the runtime bodies differ
-	// from the previous hardcoded Go-stdlib version.
 	parts, ok := g.stdlibCallPath(c, "encoding")
 	if !ok {
 		return false
@@ -791,6 +790,45 @@ func (g *gen) emitStdlibEnvCall(c *ast.CallExpr, _ *ast.FieldExpr) bool {
 	g.needEnv = true
 	switch helper {
 	case "envRequire", "envSet", "envUnset", "envCurrentDir", "envSetCurrentDir":
+		g.needResult = true
+	}
+	g.emitStdlibHelperCall(helper, c.Args)
+	return true
+}
+
+func (g *gen) emitStdlibCSVCall(c *ast.CallExpr, _ *ast.FieldExpr) bool {
+	parts, ok := g.stdlibCallPath(c, "csv")
+	if !ok || len(parts) != 1 {
+		return false
+	}
+	var helper string
+	switch parts[0] {
+	case "encode":
+		if len(c.Args) == 1 {
+			helper = "csvEncode"
+		}
+	case "encodeWith":
+		if len(c.Args) == 2 {
+			helper = "csvEncodeWith"
+		}
+	case "decode":
+		if len(c.Args) == 1 {
+			helper = "csvDecode"
+		}
+	case "decodeHeaders":
+		if len(c.Args) == 1 {
+			helper = "csvDecodeHeaders"
+		}
+	case "decodeWith":
+		if len(c.Args) == 2 {
+			helper = "csvDecodeWith"
+		}
+	}
+	if helper == "" {
+		return false
+	}
+	g.needCSV = true
+	if strings.HasPrefix(helper, "csvDecode") {
 		g.needResult = true
 	}
 	g.emitStdlibHelperCall(helper, c.Args)
@@ -988,7 +1026,7 @@ func (g *gen) stdlibStructLitType(e ast.Expr) (string, bool) {
 	}
 	if g.isStdlibPackageAlias(id, "csv") && f.Name == "CsvOptions" {
 		g.needCSV = true
-		return "_ostyCsvOptions", true
+		return "CsvOptions", true
 	}
 	if g.isStdlibPackageAlias(id, "error") && f.Name == "BasicError" {
 		g.needErrorRuntime = true

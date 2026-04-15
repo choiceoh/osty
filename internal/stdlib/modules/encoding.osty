@@ -1,151 +1,46 @@
 // std.encoding — binary-to-text encodings.
-use std.error
 
-// ---------------------------------------------------------------------------
-// Hex encoding (lowercase)
-// ---------------------------------------------------------------------------
-
-pub struct Hex {
+pub struct Base64Url {
     pub fn encode(self, data: Bytes) -> String {
-        let lut = "0123456789abcdef"
-        let bs = data.bytes()
-        let len = bs.len()
-        let mut out = ""
-        let mut i = 0
-        for i < len {
-            let b = bs[i]
-            out = "{out}{lut[b >> 4]}{lut[b & 0x0F]}"
-            i = i + 1
-        }
-        out
+        ""
     }
 
     pub fn decode(self, text: String) -> Result<Bytes, Error> {
         self.decode(text)
     }
 }
-
-fn hexVal(b: Byte) -> Result<Byte, Error> {
-    let c = b.toInt()
-    // 0-9: 0x30-0x39
-    if c >= 0x30 && c <= 0x39 {
-        return Ok(c - 0x30)
-    }
-    // A-F: 0x41-0x46
-    if c >= 0x41 && c <= 0x46 {
-        return Ok(c - 0x41 + 10)
-    }
-    // a-f: 0x61-0x66
-    if c >= 0x61 && c <= 0x66 {
-        return Ok(c - 0x61 + 10)
-    }
-    Err(error.new("encoding/hex: invalid character"))
-}
-
-// ---------------------------------------------------------------------------
-// Base64 — URL-safe alphabet (- and _ instead of + and /)
-// ---------------------------------------------------------------------------
-
-pub struct Base64Url {
-    pub fn encode(self, data: Bytes) -> String {
-        base64Encode(data, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_", false)
-    }
-
-    pub fn decode(self, text: String) -> Result<Bytes, Error> {
-        base64Decode(text, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Base64 — standard alphabet (+ and / with = padding)
-// ---------------------------------------------------------------------------
 
 pub struct Base64 {
     pub url: Base64Url
 
     pub fn encode(self, data: Bytes) -> String {
-        base64Encode(data, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", true)
+        ""
     }
 
     pub fn decode(self, text: String) -> Result<Bytes, Error> {
-        base64Decode(text, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")
-    }
-}
-
-fn base64Encode(data: Bytes, alphabet: String, pad: Bool) -> String {
-    base64Encode(data, alphabet, pad)
-}
-
-// base64Decode decodes a base64-encoded string using the given alphabet.
-// Padding characters ('=') are accepted but not required.
-fn base64Decode(text: String, alphabet: String) -> Result<Bytes, Error> {
-    base64Decode(text, alphabet)
-}
-
-
-// ---------------------------------------------------------------------------
-// URL percent-encoding
-// ---------------------------------------------------------------------------
-
-pub struct UrlEncoding {
-    // encode applies percent-encoding to text, encoding every byte that is
-    // not in the unreserved set (RFC 3986 §2.3) as %XX.
-    pub fn encode(self, text: String) -> String {
-        let bs = text.bytes()
-        let len = bs.len()
-        let mut out = ""
-        let mut i = 0
-        for i < len {
-            let b = bs[i]
-            if isUnreserved(b) {
-                out = "{out}{b.toChar()}"
-            } else {
-                out = "{out}%{hexUpper(b >> 4)}{hexUpper(b & 0x0F)}"
-            }
-            i = i + 1
-        }
-        out
-    }
-
-    pub fn decode(self, text: String) -> Result<String, Error> {
         self.decode(text)
     }
 }
 
-// isUnreserved returns true for bytes in the RFC 3986 unreserved set:
-// ALPHA / DIGIT / "-" / "." / "_" / "~"
-fn isUnreserved(b: Byte) -> Bool {
-    // A-Z: 0x41-0x5A
-    if b >= 0x41 && b <= 0x5A {
-        return true
+pub struct Hex {
+    pub fn encode(self, data: Bytes) -> String {
+        ""
     }
-    // a-z: 0x61-0x7A
-    if b >= 0x61 && b <= 0x7A {
-        return true
-    }
-    // 0-9: 0x30-0x39
-    if b >= 0x30 && b <= 0x39 {
-        return true
-    }
-    // - _ . ~
-    if b == 0x2D || b == 0x5F || b == 0x2E || b == 0x7E {
-        return true
-    }
-    false
-}
 
-// hexUpper converts a nibble (0-15) to an uppercase hex character.
-fn hexUpper(nibble: Byte) -> Char {
-    if nibble < 10 {
-        (0x30 + nibble.toInt()).toChar()
-    } else {
-        (0x41 + nibble.toInt() - 10).toChar()
+    pub fn decode(self, text: String) -> Result<Bytes, Error> {
+        self.decode(text)
     }
 }
 
-// ---------------------------------------------------------------------------
-// Module-level instances
-// ---------------------------------------------------------------------------
+pub struct UrlEncoding {
+    pub fn encode(self, text: String) -> String {
+        text
+    }
+
+    pub fn decode(self, text: String) -> Result<String, Error> {
+        Ok(text)
+    }
+}
 
 pub let base64: Base64 = Base64 { url: Base64Url {} }
 pub let hex: Hex = Hex {}
