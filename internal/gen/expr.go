@@ -327,9 +327,6 @@ func (g *gen) emitCall(c *ast.CallExpr) {
 		if g.emitEnumMethodCall(f, c.Args) {
 			return
 		}
-		// §12 advanced FFI bridging: rewrite `pkg.Fn(args)` when the
-		// declared return type is `Result<T, Error>` (so the Go side's
-		// `(T, error)` tuple is lifted into Osty's Result runtime).
 		if g.emitFFICall(c, f) {
 			return
 		}

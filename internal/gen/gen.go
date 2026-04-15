@@ -90,15 +90,10 @@ type gen struct {
 	// pulling in the time import used by `s.timeout(...)` arms.
 	needSelect bool
 
-	// needOstyError is set when the Osty prelude `Error` interface is
-	// referenced (e.g. `Result<T, Error>`), prompting the runtime to
-	// emit the corresponding Go interface so `.message()` calls bind
-	// against a real method set rather than `any`.
-	needOstyError bool
-
-	// needFFIBasicError is set when the §12.4 FFI Result bridge wraps a
-	// Go `error` into a `basicFFIError` adapter. Implies needOstyError
-	// (the adapter structurally satisfies `ostyError`).
+	// needOstyError: Osty `Error` was referenced; emit the interface.
+	// needFFIBasicError: Result bridge wrapped a Go error; emit the
+	// adapter struct (which implies needOstyError at emit time).
+	needOstyError     bool
 	needFFIBasicError bool
 
 	// currentRetType tracks the enclosing function's return type so the
@@ -269,12 +264,13 @@ type Result[T any, E any] struct {
 }
 `)
 	}
-	if g.needOstyError {
+	// basicFFIError implements ostyError structurally, so the adapter
+	// can't be emitted without the interface it satisfies.
+	if g.needOstyError || g.needFFIBasicError {
 		out.WriteString(`
 // ostyError is the Go-side representation of Osty's prelude Error
-// interface (§7.1). Concrete Osty error types with a
-// "fn message(self) -> String" method satisfy this interface
-// structurally via Go's method-set matching.
+// interface (§7.1). Any concrete type with a "message() string"
+// method satisfies it via Go's method-set matching.
 type ostyError interface {
 	message() string
 }

@@ -49,48 +49,27 @@
 // if/match arms, loop bodies) are *not* crossed by the lift — a `?`
 // inside them binds to its own enclosing return context.
 //
-// Phase 5 coverage (Go FFI — §12):
+// Phase 5 (Go FFI — §12):
 //
-//   - `use go "path"` and `use go "path" as alias` emit real Go
-//     imports; call sites to an imported fn resolve through the Go
-//     package.
-//   - Return-type bridging for `Result<T, Error>` (§12.4): the Go
-//     side's `(T, error)` tuple is wrapped into the Osty Result
-//     runtime at the call site. The `Result<(), Error>` shape maps
-//     the bare-error Go convention `func(...) error`. A non-nil Go
-//     `error` is wrapped in a `basicFFIError` adapter that satisfies
-//     the Osty `Error` interface, so `Err(e) -> e.message()` works at
-//     both the checker and the generated-Go level. See
+//   - `use go "path"` / `as alias` emit real Go imports.
+//   - FFI struct declarations emit a Go type alias (`type Foo = pkg.Foo`)
+//     so value-carrying calls and field access bind to the real type.
+//   - Struct methods and free fns inside the block are schema-only
+//     signatures; validated by the parser and used by the checker, but
+//     no Osty body is emitted. Dispatch happens through the package
+//     import plus the Go type alias.
+//   - `Result<T, Error>` returns are lifted at the call site: the Go
+//     `(T, error)` tuple becomes an Osty Result, and Go errors are
+//     wrapped in `basicFFIError` so `.message()` stays callable. See
 //     internal/gen/ffi.go.
-//   - Return-type bridging for `T?` (§12.3): Osty Optional lowers to
-//     `*T`, which matches the Go nullable convention directly — no
-//     call-site rewrite needed.
-//   - Struct declarations inside `use go { … }` are emitted as Go type
-//     aliases (`type Foo = pkg.Foo`) so value-carrying returns
-//     (`Result<URL?, Error>`) bind to the real Go type and field
-//     access (`u.Host`) compiles against it.
-//   - FFI struct methods (`struct Time { fn Year(self) -> Int }`) are
-//     schema-only signatures that forward to the Go type's real
-//     method set through the type alias. Bodies, generics, defaults,
-//     and closure/channel-typed params are rejected with the same
-//     codes as free FFI fns.
-//   - Prelude `Error` interface is materialised as a Go `ostyError`
+//   - `T?` returns pass through directly — Osty Optional already lowers
+//     to Go `*T`.
+//   - The prelude `Error` interface lowers to a runtime `ostyError`
 //     interface with `message() string`; concrete Osty error types
-//     satisfy it structurally via Go method-set matching.
-//   - The parser enforces §12.7: fn-typed (closure) and channel-typed
-//     parameters or return types inside `use go` blocks are rejected
-//     with E0103. Defaults, methods on FFI structs, and generics stay
-//     rejected as before.
+//     satisfy it structurally.
 //
-// Out of scope (spec-hard boundary):
-//
-//   - §12.5 — Go goroutines and channels obtained via FFI are *not*
-//     integrated with Osty's structured concurrency or channel types.
-//     Channel-typed FFI declarations are rejected at parse time
-//     (E0103); there is no path to lift this without a spec revision.
-//     User code that needs producer/consumer interaction across the
-//     boundary must expose named `fn` calls on the Go side.
-//   - §12.6 — Go panics abort the Osty process. No translation to
-//     Result or recoverable error is attempted (spec forbids it);
-//     Go's default behaviour is the documented outcome.
+// §12.5 (Go goroutines/channels) and §12.6 (panic abort) are spec-hard
+// boundaries, not deferred features: channel-typed FFI declarations
+// are rejected at parse time (E0103) and Go panics abort the process
+// with their default behaviour.
 package gen

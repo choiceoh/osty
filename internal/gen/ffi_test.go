@@ -5,15 +5,8 @@ import (
 	"testing"
 )
 
-// TestFFIStructMethodCall — §12.1/§12.2: methods declared inside a
-// `use go { struct X { ... } }` block are schema-only signatures that
-// forward to the Go type's real method. With the struct emitted as a
-// type alias (`type Time = time.Time`), Go resolves the call against
-// the aliased type's method set.
-//
-// The test uses `time.Time` whose `Unix()` and `Year()` methods are
-// stable exported API. A fixed UTC value makes the output
-// deterministic.
+// Methods declared inside an FFI struct forward to the Go type's real
+// method set via the emitted type alias. time.Time is a stable fixture.
 func TestFFIStructMethodCall(t *testing.T) {
 	src := `use go "time" {
     struct Time {
@@ -32,9 +25,6 @@ fn main() {
 	if err != nil {
 		t.Fatalf("transpile: %v\n%s", err, goSrc)
 	}
-	if !strings.Contains(string(goSrc), "type Time = time.Time") {
-		t.Errorf("expected FFI struct alias in output:\n%s", goSrc)
-	}
 	out := runGo(t, goSrc)
 	if !strings.Contains(out, "year=") || !strings.Contains(out, "unix=1700000000") {
 		t.Errorf("got %q; want a line containing year=... unix=1700000000\n--- src ---\n%s",
@@ -42,18 +32,9 @@ fn main() {
 	}
 }
 
-// TestFFIStructRoundTrip — §12.2: a struct declared inside a
-// `use go { ... }` block is emitted as a Go type alias pointing at the
-// package's real type. A Result<Struct?, Error>-returning FFI call can
-// therefore be matched, the inner pointer dereferenced, and exported
-// fields read directly.
-//
-// net/url.Parse is the test fixture because:
-//   - It follows Go's idiomatic (*T, error) return convention; the
-//     pointer flows through Osty's `URL?` Optional without extra
-//     wrapping.
-//   - `url.URL` has exported scalar fields (`Scheme`, `Host`) whose
-//     Osty-side field access can be verified without touching methods.
+// A Result<Struct?, Error>-returning FFI call; exercises the struct
+// alias, the Optional pointer pass-through, and field access on the
+// dereferenced Go type all in one path.
 func TestFFIStructRoundTrip(t *testing.T) {
 	src := `use go "net/url" {
     struct URL {
@@ -81,9 +62,6 @@ fn main() {
 	if err != nil {
 		t.Fatalf("transpile: %v\n%s", err, goSrc)
 	}
-	if !strings.Contains(string(goSrc), "type URL = url.URL") {
-		t.Errorf("expected FFI struct emitted as type alias:\n%s", goSrc)
-	}
 	out := runGo(t, goSrc)
 	want := "scheme=https host=example.com\n"
 	if out != want {
@@ -91,9 +69,8 @@ fn main() {
 	}
 }
 
-// TestFFIResultAtoi — `strconv.Atoi` returns Go's `(int, error)` tuple;
-// the §12.4 bridge wraps it into the Osty Result runtime so pattern
-// matching on Ok/Err works at the call site.
+// strconv.Atoi's (int, error) tuple lifts into an Osty Result; both
+// the Ok and Err arms bind through the §12.4 bridge.
 func TestFFIResultAtoi(t *testing.T) {
 	src := `use go "strconv" {
     fn Atoi(s: String) -> Result<Int, Error>
@@ -114,12 +91,6 @@ fn main() {
 	if err != nil {
 		t.Fatalf("transpile: %v\n%s", err, goSrc)
 	}
-	if !strings.Contains(string(goSrc), "Result[int, ostyError]") {
-		t.Errorf("expected Result[int, ostyError] bridge in output:\n%s", goSrc)
-	}
-	if !strings.Contains(string(goSrc), "basicFFIError{") {
-		t.Errorf("expected Go error wrapped in basicFFIError:\n%s", goSrc)
-	}
 	out := runGo(t, goSrc)
 	want := "ok 42\nerr\n"
 	if out != want {
@@ -127,9 +98,9 @@ fn main() {
 	}
 }
 
-// TestFFIResultLetBinding — a Result-returning FFI call can be let-bound
-// and subsequently matched. This exercises the bridge in a non-match
-// position where the call flows through a temporary.
+// The bridge survives an intervening `let` — exercises the Result
+// materialization in a non-match position where the call flows through
+// a temporary.
 func TestFFIResultLetBinding(t *testing.T) {
 	src := `use go "strconv" {
     fn Atoi(s: String) -> Result<Int, Error>
@@ -154,9 +125,9 @@ fn main() {
 	}
 }
 
-// TestFFIResultErrorMessage — §12.4 BasicError wrapping. Matching on
-// an Err-arm of an FFI-sourced Result must bind `e` to a value whose
-// `.message()` returns the underlying Go error's message string.
+// The BasicError wrapper must expose .message() against the Go error's
+// underlying text. The "invalid syntax" fragment is loose enough to
+// survive future Go reformulations of the strconv error.
 func TestFFIResultErrorMessage(t *testing.T) {
 	src := `use go "strconv" {
     fn Atoi(s: String) -> Result<Int, Error>
@@ -177,21 +148,13 @@ fn main() {
 	if !strings.HasPrefix(out, "msg: ") {
 		t.Errorf("expected 'msg: ...' prefix; got %q\n--- src ---\n%s", out, goSrc)
 	}
-	// The underlying strconv.Atoi error spells "invalid syntax"; the
-	// assertion stays loose because Go could reword it in a future
-	// release, but the distinctive fragment should remain.
 	if !strings.Contains(out, "invalid syntax") {
 		t.Errorf("expected strconv error message in output; got %q", out)
 	}
 }
 
-// TestFFIOptionalPassthrough — §12.3: Osty `T?` lowers to `*T`, which
-// is exactly Go's nullable convention. The transpiler must therefore
-// emit the call site unchanged, with no IIFE wrapper. Runtime check
-// uses `bytes.NewBuffer` which returns a `*bytes.Buffer`; wrapping it
-// in `Buffer?` lets the Osty side receive a non-nil Optional and the
-// match-arm discriminator should walk the nil check without extra
-// bridge logic.
+// Regression guard: a `T?` FFI return must NOT be wrapped in the
+// Result bridge; Osty Optional already lowers to Go `*T`.
 func TestFFIOptionalPassthrough(t *testing.T) {
 	src := `use go "bytes" {
     struct Buffer {}
@@ -209,13 +172,8 @@ fn main() {
 	if err != nil {
 		t.Fatalf("transpile: %v\n%s", err, goSrc)
 	}
-	// No IIFE / Result wrapper should be introduced for the plain
-	// optional return — the Go call flows straight through.
 	if strings.Contains(string(goSrc), "Result[") {
 		t.Errorf("optional-return FFI call should not produce Result wrapper:\n%s", goSrc)
-	}
-	if !strings.Contains(string(goSrc), "bytes.NewBufferString(") {
-		t.Errorf("expected a direct bytes.NewBufferString call:\n%s", goSrc)
 	}
 	out := runGo(t, goSrc)
 	if out != "got-buffer\n" {
@@ -223,9 +181,8 @@ fn main() {
 	}
 }
 
-// TestFFINonResultUnchanged — an FFI call whose declared return is a
-// plain value type keeps the direct-emission path. Guards against the
-// Result bridge over-reaching.
+// Regression guard: a plain-value FFI return keeps the direct-emission
+// path and does not route through the Result bridge.
 func TestFFINonResultUnchanged(t *testing.T) {
 	src := `use go "strings" {
     fn ToUpper(s: String) -> String

@@ -482,140 +482,12 @@ func (p *Parser) parseUseDecl() *ast.UseDecl {
 				switch p.peek().Kind {
 				case token.FN:
 					fd := p.parseFnDecl()
-					if fd.Body != nil {
-						p.emit(diag.New(diag.Error,
-							"`use go` function declarations may not have a body").
-							Code(diag.CodeUseGoFnHasBody).
-							Primary(diag.Span{Start: fd.Body.PosV, End: fd.Body.EndV}, "").
-							Note("v0.2 R17: Go-imported functions have no Osty body — they forward to the Go function").
-							Build())
-						fd.Body = nil
-					}
-					if len(fd.Generics) > 0 {
-						p.emit(diag.New(diag.Error,
-							"`use go` function declarations may not have generic parameters").
-							Code(diag.CodeUseGoUnsupported).
-							PrimaryPos(fd.PosV, "").
-							Build())
-					}
-					for _, prm := range fd.Params {
-						if prm.Default != nil {
-							p.emit(diag.New(diag.Error,
-								"`use go` function parameters may not have defaults").
-								Code(diag.CodeUseGoUnsupported).
-								PrimaryPos(prm.PosV, "").
-								Build())
-						}
-						// §12.7: closures / function-typed parameters
-						// cannot cross the FFI boundary. Osty closures
-						// capture Osty-side bindings and have no Go
-						// equivalent; callers must expose the wanted
-						// behaviour as a named `fn` on the Go side.
-						if _, isFn := prm.Type.(*ast.FnType); isFn {
-							p.emit(diag.New(diag.Error,
-								"`use go` function parameters may not be function-typed").
-								Code(diag.CodeUseGoUnsupported).
-								PrimaryPos(prm.PosV, "").
-								Note("§12.7: closures cannot cross the FFI boundary — expose the behaviour as a named Go `fn` instead").
-								Build())
-						}
-						// §12.5/§12.7: Osty channel types and Go
-						// channels obtained via FFI do not integrate
-						// with Osty's structured concurrency. Reject
-						// them in declarations so callers use
-						// message-passing via named calls instead.
-						if isChannelTypeAST(prm.Type) {
-							p.emit(diag.New(diag.Error,
-								"`use go` function parameters may not be channel-typed").
-								Code(diag.CodeUseGoUnsupported).
-								PrimaryPos(prm.PosV, "").
-								Note("§12.5/§12.7: Go channels obtained via FFI are not integrated with Osty's structured concurrency — model the dataflow with explicit function calls").
-								Build())
-						}
-					}
-					if _, isFn := fd.ReturnType.(*ast.FnType); isFn {
-						p.emit(diag.New(diag.Error,
-							"`use go` function return types may not be function-typed").
-							Code(diag.CodeUseGoUnsupported).
-							PrimaryPos(fd.PosV, "").
-							Note("§12.7: function values cannot cross the FFI boundary").
-							Build())
-					}
-					if isChannelTypeAST(fd.ReturnType) {
-						p.emit(diag.New(diag.Error,
-							"`use go` function return types may not be channel-typed").
-							Code(diag.CodeUseGoUnsupported).
-							PrimaryPos(fd.PosV, "").
-							Note("§12.5/§12.7: Go channels obtained via FFI are not integrated with Osty's structured concurrency").
-							Build())
-					}
+					p.validateFFIFnSignature(fd, "function")
 					u.GoBody = append(u.GoBody, fd)
 				case token.STRUCT:
 					sd := p.parseStructDecl()
-					// Methods on FFI structs are schema-only: they
-					// declare the signature of a Go method so Osty call
-					// sites (`t.Method()`) type-check and the real
-					// dispatch happens through the Go type alias. The
-					// same body/generic/default restrictions that apply
-					// to free FFI fns apply here.
 					for _, m := range sd.Methods {
-						if m.Body != nil {
-							p.emit(diag.New(diag.Error,
-								"`use go` struct method declarations may not have a body").
-								Code(diag.CodeUseGoFnHasBody).
-								Primary(diag.Span{Start: m.Body.PosV, End: m.Body.EndV}, "").
-								Note("§12.1: FFI method declarations forward to the Go method — there is no Osty body").
-								Build())
-							m.Body = nil
-						}
-						if len(m.Generics) > 0 {
-							p.emit(diag.New(diag.Error,
-								"`use go` struct methods may not have generic parameters").
-								Code(diag.CodeUseGoUnsupported).
-								PrimaryPos(m.PosV, "").
-								Build())
-						}
-						for _, prm := range m.Params {
-							if prm.Default != nil {
-								p.emit(diag.New(diag.Error,
-									"`use go` struct method parameters may not have defaults").
-									Code(diag.CodeUseGoUnsupported).
-									PrimaryPos(prm.PosV, "").
-									Build())
-							}
-							if _, isFn := prm.Type.(*ast.FnType); isFn {
-								p.emit(diag.New(diag.Error,
-									"`use go` struct method parameters may not be function-typed").
-									Code(diag.CodeUseGoUnsupported).
-									PrimaryPos(prm.PosV, "").
-									Note("§12.7: closures cannot cross the FFI boundary").
-									Build())
-							}
-							if isChannelTypeAST(prm.Type) {
-								p.emit(diag.New(diag.Error,
-									"`use go` struct method parameters may not be channel-typed").
-									Code(diag.CodeUseGoUnsupported).
-									PrimaryPos(prm.PosV, "").
-									Note("§12.5/§12.7: Go channels obtained via FFI are not integrated with Osty's structured concurrency").
-									Build())
-							}
-						}
-						if _, isFn := m.ReturnType.(*ast.FnType); isFn {
-							p.emit(diag.New(diag.Error,
-								"`use go` struct method return types may not be function-typed").
-								Code(diag.CodeUseGoUnsupported).
-								PrimaryPos(m.PosV, "").
-								Note("§12.7: function values cannot cross the FFI boundary").
-								Build())
-						}
-						if isChannelTypeAST(m.ReturnType) {
-							p.emit(diag.New(diag.Error,
-								"`use go` struct method return types may not be channel-typed").
-								Code(diag.CodeUseGoUnsupported).
-								PrimaryPos(m.PosV, "").
-								Note("§12.5/§12.7: Go channels obtained via FFI are not integrated with Osty's structured concurrency").
-								Build())
-						}
+						p.validateFFIFnSignature(m, "struct method")
 					}
 					if len(sd.Generics) > 0 {
 						p.emit(diag.New(diag.Error,
@@ -725,15 +597,74 @@ done:
 	return u
 }
 
-// stringLitText returns the concatenation of all literal text parts, using
-// the raw text of any interpolation segments (best-effort). FFI paths
-// should never contain interpolations.
-// isChannelTypeAST reports whether t names an Osty channel type
-// (`Channel<…>` or `Chan<…>`). Used by the FFI parser to reject
-// channel-typed FFI declarations per §12.5/§12.7. Only the top-level
-// spelling is checked — nested occurrences (e.g. `List<Channel<Int>>`)
-// are conservatively allowed here because the Go-side type might still
-// be legal as an opaque slice element.
+// validateFFIFnSignature rejects spec-forbidden shapes on a `use go`
+// fn or struct-method declaration: bodies (§12.1), generics,
+// parameter defaults, and function- or channel-typed param/return
+// slots (§12.5/§12.7). `kind` varies the diagnostic noun
+// ("function" vs "struct method").
+func (p *Parser) validateFFIFnSignature(fd *ast.FnDecl, kind string) {
+	if fd.Body != nil {
+		p.emit(diag.New(diag.Error,
+			"`use go` "+kind+" declarations may not have a body").
+			Code(diag.CodeUseGoFnHasBody).
+			Primary(diag.Span{Start: fd.Body.PosV, End: fd.Body.EndV}, "").
+			Note("§12.1: FFI declarations forward to the Go function — there is no Osty body").
+			Build())
+		fd.Body = nil
+	}
+	if len(fd.Generics) > 0 {
+		p.emit(diag.New(diag.Error,
+			"`use go` "+kind+" declarations may not have generic parameters").
+			Code(diag.CodeUseGoUnsupported).
+			PrimaryPos(fd.PosV, "").
+			Build())
+	}
+	for _, prm := range fd.Params {
+		if prm.Default != nil {
+			p.emit(diag.New(diag.Error,
+				"`use go` "+kind+" parameters may not have defaults").
+				Code(diag.CodeUseGoUnsupported).
+				PrimaryPos(prm.PosV, "").
+				Build())
+		}
+		if _, isFn := prm.Type.(*ast.FnType); isFn {
+			p.emit(diag.New(diag.Error,
+				"`use go` "+kind+" parameters may not be function-typed").
+				Code(diag.CodeUseGoUnsupported).
+				PrimaryPos(prm.PosV, "").
+				Note("§12.7: closures cannot cross the FFI boundary — expose the behaviour as a named Go `fn` instead").
+				Build())
+		}
+		if isChannelTypeAST(prm.Type) {
+			p.emit(diag.New(diag.Error,
+				"`use go` "+kind+" parameters may not be channel-typed").
+				Code(diag.CodeUseGoUnsupported).
+				PrimaryPos(prm.PosV, "").
+				Note("§12.5/§12.7: Go channels obtained via FFI are not integrated with Osty's structured concurrency").
+				Build())
+		}
+	}
+	if _, isFn := fd.ReturnType.(*ast.FnType); isFn {
+		p.emit(diag.New(diag.Error,
+			"`use go` "+kind+" return types may not be function-typed").
+			Code(diag.CodeUseGoUnsupported).
+			PrimaryPos(fd.PosV, "").
+			Note("§12.7: function values cannot cross the FFI boundary").
+			Build())
+	}
+	if isChannelTypeAST(fd.ReturnType) {
+		p.emit(diag.New(diag.Error,
+			"`use go` "+kind+" return types may not be channel-typed").
+			Code(diag.CodeUseGoUnsupported).
+			PrimaryPos(fd.PosV, "").
+			Note("§12.5/§12.7: Go channels obtained via FFI are not integrated with Osty's structured concurrency").
+			Build())
+	}
+}
+
+// isChannelTypeAST matches a top-level `Channel<…>` or `Chan<…>`.
+// Nested occurrences are conservatively accepted because the Go side
+// may legally hold them as opaque slice/map elements.
 func isChannelTypeAST(t ast.Type) bool {
 	n, ok := t.(*ast.NamedType)
 	if !ok {
@@ -744,6 +675,10 @@ func isChannelTypeAST(t ast.Type) bool {
 	}
 	return n.Path[0] == "Channel" || n.Path[0] == "Chan"
 }
+
+// stringLitText returns the concatenation of all literal text parts, using
+// the raw text of any interpolation segments (best-effort). FFI paths
+// should never contain interpolations.
 
 func stringLitText(t token.Token) string {
 	var b strings.Builder

@@ -338,21 +338,10 @@ func (g *gen) emitTypeAliasDecl(a *ast.TypeAliasDecl) {
 
 func (g *gen) emitUseDecl(u *ast.UseDecl) {
 	if u.IsGoFFI {
-		// `use go "path" [as alias] { fn Foo(...); struct Bar { ... } }`
-		//
-		// Emit a real Go import. When the Osty alias matches the Go
-		// package's default name (last path component), a bare import
-		// suffices. Otherwise aliased imports use Go's `import alias "path"`
-		// form via the aliased-import map.
-		//
-		// The FFI body is a schema for the checker — it declares the
-		// signatures we expect from the Go package. Structs declared
-		// inside the body are also emitted as Go type aliases so
-		// value-carrying calls (e.g. `fn Parse(...) -> URL?`) resolve
-		// to the concrete Go type rather than the bare Osty name.
-		// Function declarations do not need any emission — call sites
-		// resolve through the package import (plus the Phase-5 FFI
-		// bridge for Result/Option returns).
+		// Structs in the body are emitted as Go type aliases so Osty
+		// names bind to the real package type; fn declarations are
+		// schema-only and resolve through the plain package import at
+		// the call site (or via the Phase-5 FFI bridge).
 		alias := u.Alias
 		defaultAlias := lastPathComponent(u.GoPath)
 		if alias == "" {
@@ -368,10 +357,8 @@ func (g *gen) emitUseDecl(u *ast.UseDecl) {
 			if !ok {
 				continue
 			}
-			// `type Foo = alias.Foo` so downstream references to
-			// `Foo` in Osty source (`Foo?`, `Result<Foo, Error>`, field
-			// access chains) bind to the Go package's real type.
-			g.body.writef("\ntype %s = %s.%s\n", sd.Name, alias, sd.Name)
+			g.body.nl()
+			g.body.writef("type %s = %s.%s\n", sd.Name, alias, sd.Name)
 		}
 		return
 	}
