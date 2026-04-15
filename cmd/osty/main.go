@@ -106,6 +106,14 @@ func main() {
 		runInit(args[1:])
 		return
 	}
+	// scaffold is the umbrella command for one-off code generators
+	// that aren't whole-project scaffolds. Sub-subcommands so far:
+	// fixture (table-test starter), schema (JSON sample → struct),
+	// and ffi (C header → Osty wrapper stubs).
+	if cmd == "scaffold" {
+		runScaffold(args[1:])
+		return
+	}
 	// build is the manifest-driven front-end over a directory. When
 	// passed a directory it loads osty.toml, validates, and runs
 	// check + lint across the package(s) the manifest describes.
@@ -1097,20 +1105,22 @@ func runGen(args []string, flags cliFlags) {
 func runNew(args []string) {
 	fs := flag.NewFlagSet("new", flag.ExitOnError)
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: osty new [--bin|--lib|--workspace] [--member NAME] NAME")
+		fmt.Fprintln(os.Stderr, "usage: osty new [--bin|--lib|--workspace|--cli|--service] [--member NAME] NAME")
 	}
-	var libMode, binMode, wsMode bool
+	var libMode, binMode, wsMode, cliMode, svcMode bool
 	var member string
 	fs.BoolVar(&libMode, "lib", false, "scaffold a library project (lib.osty, no main)")
 	fs.BoolVar(&binMode, "bin", false, "scaffold a binary project (main.osty) [default]")
 	fs.BoolVar(&wsMode, "workspace", false, "scaffold a virtual workspace with one default member")
+	fs.BoolVar(&cliMode, "cli", false, "scaffold a CLI app (Args struct + run() core)")
+	fs.BoolVar(&svcMode, "service", false, "scaffold an HTTP service (Request/Response + handle())")
 	fs.StringVar(&member, "member", "core", "default-member directory name when --workspace is set")
 	_ = fs.Parse(args)
 	if fs.NArg() != 1 {
 		fs.Usage()
 		os.Exit(2)
 	}
-	kind, usageErr := pickScaffoldKind(libMode, binMode, wsMode)
+	kind, usageErr := pickScaffoldKind(libMode, binMode, wsMode, cliMode, svcMode)
 	if usageErr != "" {
 		fmt.Fprintln(os.Stderr, "osty new:", usageErr)
 		os.Exit(2)
@@ -1134,13 +1144,15 @@ func runNew(args []string) {
 func runInit(args []string) {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: osty init [--bin|--lib|--workspace] [--name NAME] [--member NAME]")
+		fmt.Fprintln(os.Stderr, "usage: osty init [--bin|--lib|--workspace|--cli|--service] [--name NAME] [--member NAME]")
 	}
-	var libMode, binMode, wsMode bool
+	var libMode, binMode, wsMode, cliMode, svcMode bool
 	var name, member string
 	fs.BoolVar(&libMode, "lib", false, "scaffold a library project (lib.osty, no main)")
 	fs.BoolVar(&binMode, "bin", false, "scaffold a binary project (main.osty) [default]")
 	fs.BoolVar(&wsMode, "workspace", false, "scaffold a virtual workspace with one default member")
+	fs.BoolVar(&cliMode, "cli", false, "scaffold a CLI app (Args struct + run() core)")
+	fs.BoolVar(&svcMode, "service", false, "scaffold an HTTP service (Request/Response + handle())")
 	fs.StringVar(&name, "name", "", "project name (defaults to current directory basename)")
 	fs.StringVar(&member, "member", "core", "default-member directory name when --workspace is set")
 	_ = fs.Parse(args)
@@ -1148,7 +1160,7 @@ func runInit(args []string) {
 		fs.Usage()
 		os.Exit(2)
 	}
-	kind, usageErr := pickScaffoldKind(libMode, binMode, wsMode)
+	kind, usageErr := pickScaffoldKind(libMode, binMode, wsMode, cliMode, svcMode)
 	if usageErr != "" {
 		fmt.Fprintln(os.Stderr, "osty init:", usageErr)
 		os.Exit(2)
@@ -1173,7 +1185,7 @@ func runInit(args []string) {
 // pickScaffoldKind validates the mutually-exclusive kind flags and
 // returns the selected Kind plus an empty string, or the zero Kind
 // and a one-line usage error message.
-func pickScaffoldKind(libMode, binMode, wsMode bool) (scaffold.Kind, string) {
+func pickScaffoldKind(libMode, binMode, wsMode, cliMode, svcMode bool) (scaffold.Kind, string) {
 	count := 0
 	if libMode {
 		count++
@@ -1184,14 +1196,24 @@ func pickScaffoldKind(libMode, binMode, wsMode bool) (scaffold.Kind, string) {
 	if wsMode {
 		count++
 	}
+	if cliMode {
+		count++
+	}
+	if svcMode {
+		count++
+	}
 	if count > 1 {
-		return 0, "--bin, --lib, and --workspace are mutually exclusive"
+		return 0, "--bin, --lib, --workspace, --cli, and --service are mutually exclusive"
 	}
 	switch {
 	case libMode:
 		return scaffold.KindLib, ""
 	case wsMode:
 		return scaffold.KindWorkspace, ""
+	case cliMode:
+		return scaffold.KindCli, ""
+	case svcMode:
+		return scaffold.KindService, ""
 	default:
 		return scaffold.KindBin, ""
 	}
@@ -1205,6 +1227,10 @@ func kindLabel(k scaffold.Kind) string {
 		return "library project"
 	case scaffold.KindWorkspace:
 		return "workspace"
+	case scaffold.KindCli:
+		return "CLI app project"
+	case scaffold.KindService:
+		return "HTTP service project"
 	default:
 		return "binary project"
 	}
