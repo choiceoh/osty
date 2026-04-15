@@ -16,7 +16,7 @@ func Lex(src []byte) ([]token.Token, []*diag.Diagnostic, []token.Comment) {
 	text := string(src)
 	rt := newRuneTable(text)
 	stream := frontendLexStream(text)
-	return adaptLexStream(text, rt, stream)
+	return adaptLexStream(rt, stream, ostyLexFactsFromStream(text, stream))
 }
 
 // FrontendRun is one complete self-hosted front-end pass over a source file.
@@ -26,6 +26,7 @@ type FrontendRun struct {
 	text     string
 	rt       runeTable
 	stream   *FrontLexStream
+	lexFacts *OstyLexFacts
 	parser   *OstyParser
 	file     *ast.File
 	toks     []token.Token
@@ -53,7 +54,7 @@ func runFrontend(src []byte, adaptTokens bool) *FrontendRun {
 	if adaptTokens {
 		run.ensureLexAdapted()
 	} else {
-		run.lexDiags = lexDiagnosticsFromStream(text, rt, stream)
+		run.lexDiags = lexDiagnosticsFromFacts(rt, run.facts())
 	}
 	return run
 }
@@ -73,20 +74,27 @@ func (r *FrontendRun) Comments() []token.Comment {
 // LexDiagnostics returns lexer-only diagnostics.
 func (r *FrontendRun) LexDiagnostics() []*diag.Diagnostic {
 	if r.lexDiags == nil {
-		r.lexDiags = lexDiagnosticsFromStream(r.text, r.rt, r.stream)
+		r.lexDiags = lexDiagnosticsFromFacts(r.rt, r.facts())
 	}
 	return r.lexDiags
+}
+
+func (r *FrontendRun) facts() *OstyLexFacts {
+	if r.lexFacts == nil {
+		r.lexFacts = ostyLexFactsFromStream(r.text, r.stream)
+	}
+	return r.lexFacts
 }
 
 func (r *FrontendRun) ensureLexAdapted() {
 	if r.adapted {
 		return
 	}
-	r.toks, r.lexDiags, r.comments = adaptLexStream(r.text, r.rt, r.stream)
+	r.toks, r.lexDiags, r.comments = adaptLexStream(r.rt, r.stream, r.facts())
 	r.adapted = true
 }
 
-func adaptLexStream(text string, rt runeTable, stream *FrontLexStream) ([]token.Token, []*diag.Diagnostic, []token.Comment) {
+func adaptLexStream(rt runeTable, stream *FrontLexStream, facts *OstyLexFacts) ([]token.Token, []*diag.Diagnostic, []token.Comment) {
 	toks := make([]token.Token, 0, len(stream.tokens))
 	for _, ft := range stream.tokens {
 		startRune := ft.start.offset
@@ -97,32 +105,31 @@ func adaptLexStream(text string, rt runeTable, stream *FrontLexStream) ([]token.
 			End:        rt.pos(ft.end),
 			Value:      rt.slice(startRune, endRune),
 			Triple:     ft.triple,
-			LeadingDoc: leadingDoc(stream, len(toks), rt),
+			LeadingDoc: stringAt(facts.leadingDocs, len(toks)),
 		}
-		fillLiteralParts(&tok, rt, stream, len(toks), startRune, endRune)
+		fillLiteralParts(&tok, rt, stream, facts.stringParts, len(toks))
 		toks = append(toks, tok)
 	}
 	toks = collapseFatArrows(toks)
 
-	comments := make([]token.Comment, 0, len(stream.comments))
-	for _, c := range stream.comments {
+	comments := make([]token.Comment, 0, len(facts.comments))
+	for _, c := range facts.comments {
 		comments = append(comments, token.Comment{
-			Kind:    mapCommentKind(c.kind),
-			Pos:     rt.pos(c.start),
-			Text:    commentText(c, rt),
-			EndLine: c.end.line,
+			Kind:    token.CommentKind(c.kindCode),
+			Pos:     token.Pos{Offset: rt.byteOffset(c.startOffset), Line: c.startLine, Column: c.startCol},
+			Text:    c.text,
+			EndLine: c.endLine,
 		})
 	}
-	return toks, lexDiagnosticsFromStream(text, rt, stream), comments
+	return toks, lexDiagnosticsFromFacts(rt, facts), comments
 }
 
-func lexDiagnosticsFromStream(text string, rt runeTable, stream *FrontLexStream) []*diag.Diagnostic {
-	diags := make([]*diag.Diagnostic, 0, len(stream.diagnostics))
-	for _, d := range stream.diagnostics {
+func lexDiagnosticsFromFacts(rt runeTable, facts *OstyLexFacts) []*diag.Diagnostic {
+	diags := make([]*diag.Diagnostic, 0, len(facts.errors))
+	for _, d := range facts.errors {
 		diags = append(diags, lexDiagnostic(d, rt))
 	}
-	fixCharDiagnostics(text, diags)
-	return append(diags, fatArrowDiagnostics(text, rt)...)
+	return diags
 }
 
 // ParseDiagnostics runs the bootstrapped pure-Osty lexer and parser and
@@ -355,38 +362,30 @@ func mapTokenKind(k FrontTokenKind) token.Kind {
 	return token.ILLEGAL
 }
 
-func fillLiteralParts(tok *token.Token, rt runeTable, stream *FrontLexStream, owner, startRune, endRune int) {
+func fillLiteralParts(tok *token.Token, rt runeTable, stream *FrontLexStream, parts []*OstyLexStringPart, owner int) {
 	switch tok.Kind {
 	case token.STRING, token.RAWSTRING:
-		for partIdx, p := range stream.stringParts {
+		for _, p := range parts {
 			if p.ownerToken != owner {
 				continue
 			}
-			if _, ok := p.kind.(*FrontStringPartKind_FrontStringInterpolation); ok {
+			if p.kindCode == int(token.PartExpr) {
 				tok.Parts = append(tok.Parts, token.StringPart{
 					Kind: token.PartExpr,
-					Expr: interpolationTokens(stream, partIdx, rt),
+					Expr: interpolationTokens(stream, p.exprTokenStart, p.exprTokenCount, rt),
 				})
 				continue
 			}
-			raw := rt.slice(p.start.offset, p.end.offset)
-			if tok.Triple {
-				raw = normalizeTripleSegment(raw)
-			} else if tok.Kind == token.STRING {
+			raw := p.text
+			if p.decodeEscapes {
 				raw = decodeEscapes(raw)
 			}
 			tok.Parts = append(tok.Parts, token.StringPart{Kind: token.PartText, Text: raw})
-		}
-		if len(tok.Parts) == 0 {
-			tok.Parts = []token.StringPart{{Kind: token.PartText, Text: stringContent(tok.Value)}}
 		}
 	case token.CHAR:
 		tok.Value = decodeChar(tok.Value)
 	case token.BYTE:
 		tok.Value = decodeByte(tok.Value)
-	default:
-		_ = startRune
-		_ = endRune
 	}
 }
 
@@ -453,43 +452,18 @@ func decodeEscapes(s string) string {
 	return b.String()
 }
 
-func normalizeTripleSegment(s string) string {
-	trimIndent := strings.HasPrefix(s, "\n")
-	if strings.HasPrefix(s, "\n") {
-		s = s[1:]
+func interpolationTokens(stream *FrontLexStream, start, count int, rt runeTable) []token.Token {
+	out := make([]token.Token, 0, count)
+	end := start + count
+	if start < 0 {
+		start = 0
 	}
-	if strings.HasSuffix(s, "\n") {
-		s = s[:len(s)-1]
+	if end > len(stream.interpolationTokens) {
+		end = len(stream.interpolationTokens)
 	}
-	lines := strings.Split(s, "\n")
-	indent := ""
-	for _, line := range lines {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		for i, r := range line {
-			if r != ' ' && r != '\t' {
-				indent = line[:i]
-				break
-			}
-		}
-		break
-	}
-	if trimIndent && indent != "" {
-		for i, line := range lines {
-			lines[i] = strings.TrimPrefix(line, indent)
-		}
-	}
-	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
-		lines = lines[:len(lines)-1]
-	}
-	return strings.Join(lines, "\n")
-}
-
-func interpolationTokens(stream *FrontLexStream, ownerPart int, rt runeTable) []token.Token {
-	var out []token.Token
-	for _, it := range stream.interpolationTokens {
-		if it.ownerPart != ownerPart || it.token == nil {
+	for i := start; i < end; i++ {
+		it := stream.interpolationTokens[i]
+		if it.token == nil {
 			continue
 		}
 		ft := it.token
@@ -539,88 +513,23 @@ func decodeByte(s string) string {
 	return string(byte(r))
 }
 
-func leadingDoc(stream *FrontLexStream, owner int, rt runeTable) string {
-	if owner < 0 || owner >= len(stream.tokens) || stream.tokens[owner].leadingDocLines <= 0 {
-		return ""
-	}
-	need := stream.tokens[owner].leadingDocLines
-	var lines []string
-	for i := len(stream.comments) - 1; i >= 0 && len(lines) < need; i-- {
-		c := stream.comments[i]
-		if _, ok := c.kind.(*FrontCommentKind_FrontCommentDoc); !ok {
-			continue
-		}
-		if c.end.line >= stream.tokens[owner].start.line {
-			continue
-		}
-		lines = append([]string{strings.TrimSpace(commentText(c, rt))}, lines...)
-	}
-	if len(lines) == 0 {
-		return ""
-	}
-	return strings.Join(lines, "\n")
-}
-
-func mapCommentKind(k FrontCommentKind) token.CommentKind {
-	switch k.(type) {
-	case *FrontCommentKind_FrontCommentDoc:
-		return token.CommentDoc
-	case *FrontCommentKind_FrontCommentBlock:
-		return token.CommentBlock
-	default:
-		return token.CommentLine
-	}
-}
-
-func commentText(c *FrontComment, rt runeTable) string {
-	raw := rt.src[rt.byteOffset(c.start.offset):rt.byteOffset(c.end.offset)]
-	switch c.kind.(type) {
-	case *FrontCommentKind_FrontCommentDoc:
-		return strings.TrimPrefix(raw, "///")
-	case *FrontCommentKind_FrontCommentLine:
-		return strings.TrimPrefix(raw, "//")
-	case *FrontCommentKind_FrontCommentBlock:
-		raw = strings.TrimPrefix(raw, "/*")
-		return strings.TrimSuffix(raw, "*/")
-	default:
-		return raw
-	}
-}
-
-func lexDiagnostic(d *FrontLexDiagnostic, rt runeTable) *diag.Diagnostic {
-	code, msg := lexDiagnosticInfo(d.code)
-	b := diag.New(diag.Error, msg).
-		Code(code).
-		Primary(diag.Span{Start: rt.pos(d.start), End: rt.pos(d.end)}, "")
-	if code == diag.CodeUppercaseBasePrefix {
-		b.Hint("use lowercase base prefixes: `0x`, `0b`, or `0o`")
+func lexDiagnostic(d *OstyLexError, rt runeTable) *diag.Diagnostic {
+	start := token.Pos{Offset: rt.byteOffset(d.startOffset), Line: d.startLine, Column: d.startCol}
+	end := token.Pos{Offset: rt.byteOffset(d.endOffset), Line: d.endLine, Column: d.endCol}
+	b := diag.New(diag.Error, d.message).
+		Code(d.diagCode).
+		Primary(diag.Span{Start: start, End: end}, "")
+	if d.hint != "" {
+		b.Hint(d.hint)
 	}
 	return b.Build()
 }
 
-func lexDiagnosticInfo(code FrontLexDiagnosticCode) (string, string) {
-	switch code.(type) {
-	case *FrontLexDiagnosticCode_FrontDiagUnterminatedBlockComment:
-		return diag.CodeUnterminatedComment, "unterminated block comment"
-	case *FrontLexDiagnosticCode_FrontDiagUnterminatedString:
-		return diag.CodeUnterminatedString, "unterminated string literal"
-	case *FrontLexDiagnosticCode_FrontDiagUnterminatedInterpolation:
-		return diag.CodeUnterminatedString, "unterminated interpolation in string"
-	case *FrontLexDiagnosticCode_FrontDiagNewlineInString:
-		return diag.CodeUnterminatedString, "newline in string literal"
-	case *FrontLexDiagnosticCode_FrontDiagTripleMissingLeadingNewline, *FrontLexDiagnosticCode_FrontDiagBadTripleIndent:
-		return diag.CodeBadTripleString, "invalid triple-quoted string"
-	case *FrontLexDiagnosticCode_FrontDiagUppercaseBasePrefix:
-		return diag.CodeUppercaseBasePrefix, "uppercase base prefix is not allowed"
-	case *FrontLexDiagnosticCode_FrontDiagUnknownEscape:
-		return diag.CodeUnknownEscape, "unknown escape sequence"
-	case *FrontLexDiagnosticCode_FrontDiagEmptyChar:
-		return diag.CodeUnterminatedString, "empty char literal"
-	case *FrontLexDiagnosticCode_FrontDiagEmptyByte:
-		return diag.CodeUnterminatedString, "empty byte literal"
-	default:
-		return diag.CodeIllegalCharacter, "illegal character"
+func stringAt(items []string, idx int) string {
+	if idx < 0 || idx >= len(items) {
+		return ""
 	}
+	return items[idx]
 }
 
 func collapseFatArrows(in []token.Token) []token.Token {
@@ -638,60 +547,4 @@ func collapseFatArrows(in []token.Token) []token.Token {
 		out = append(out, in[i])
 	}
 	return out
-}
-
-func fixCharDiagnostics(src string, diags []*diag.Diagnostic) {
-	for _, d := range diags {
-		if d.Message != "empty char literal" && d.Message != "empty byte literal" {
-			continue
-		}
-		off := d.PrimaryPos().Offset
-		if d.Message == "empty byte literal" && off+2 < len(src) && src[off] == 'b' && src[off+1] == '\'' && (src[off+2] == '\n' || src[off+2] == '\r') {
-			d.Message = "unterminated byte literal"
-			continue
-		}
-		if off+1 < len(src) && src[off] == '\'' && (src[off+1] == '\n' || src[off+1] == '\r') {
-			d.Message = "unterminated char literal"
-		}
-	}
-}
-
-func fatArrowDiagnostics(src string, rt runeTable) []*diag.Diagnostic {
-	var out []*diag.Diagnostic
-	runeOffset := 0
-	for i := 0; i < len(src)-1; {
-		r, sz := utf8.DecodeRuneInString(src[i:])
-		if r == '=' && src[i+1] == '>' {
-			pos := posFromByte(src, i, runeOffset)
-			end := pos
-			end.Offset += 2
-			end.Column += 2
-			out = append(out, diag.New(diag.Error, "`=>` is not valid Osty syntax; use `->`").
-				Code(diag.CodeFatArrowRemoved).
-				Primary(diag.Span{Start: pos, End: end}, "").
-				Build())
-		}
-		i += sz
-		runeOffset++
-	}
-	_ = rt
-	return out
-}
-
-func posFromByte(src string, byteOff, runeOff int) token.Pos {
-	line, col := 1, 1
-	seen := 0
-	for off, r := range src {
-		if off >= byteOff || seen >= runeOff {
-			break
-		}
-		if r == '\n' {
-			line++
-			col = 1
-		} else {
-			col++
-		}
-		seen++
-	}
-	return token.Pos{Offset: byteOff, Line: line, Column: col}
 }
