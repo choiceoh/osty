@@ -9800,18 +9800,20 @@ func opParsePrimary(p *OstyParser) int {
 	}
 	// Osty: /tmp/selfhost_merged.osty:6450:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontUnderscore{})) {
-		// Osty: /tmp/selfhost_merged.osty:6450:38
-		opAdvance(p)
 		// Osty: /tmp/selfhost_merged.osty:6451:5
+		opErrorFull(p, "`_` can only be used as a pattern", "for ignored bindings, write `let _ = expr`", "", "E0604")
+		// Osty: /tmp/selfhost_merged.osty:6452:5
+		opAdvance(p)
+		// Osty: /tmp/selfhost_merged.osty:6453:5
 		n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNIdent{}))
 		_ = n
-		// Osty: /tmp/selfhost_merged.osty:6452:12
+		// Osty: /tmp/selfhost_merged.osty:6454:12
 		n.text = "_"
-		// Osty: /tmp/selfhost_merged.osty:6453:13
+		// Osty: /tmp/selfhost_merged.osty:6455:13
 		n.start = start
-		// Osty: /tmp/selfhost_merged.osty:6454:11
+		// Osty: /tmp/selfhost_merged.osty:6456:11
 		n.end = p.pos
-		// Osty: /tmp/selfhost_merged.osty:6455:5
+		// Osty: /tmp/selfhost_merged.osty:6457:5
 		return opAddNode(p, n)
 	}
 	// Osty: /tmp/selfhost_merged.osty:6456:5

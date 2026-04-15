@@ -276,10 +276,182 @@ func (g *gen) emitAssign(a *ast.AssignStmt) {
 		g.body.nl()
 		return
 	}
+	if a.Op == token.ASSIGN {
+		if g.emitCheckedIntegerSimpleAssign(a.Targets[0], a.Value) {
+			return
+		}
+	}
+	if binOp, ok := compoundBinaryOp(a.Op); ok {
+		if g.emitCheckedIntegerCompoundAssign(a.Targets[0], a.Value, binOp) {
+			return
+		}
+	}
 	g.emitExpr(a.Targets[0])
 	g.body.writef(" %s ", op)
 	g.emitExpr(a.Value)
 	g.body.nl()
+}
+
+func (g *gen) emitCheckedIntegerSimpleAssign(target ast.Expr, value ast.Expr) bool {
+	if _, ok := target.(*ast.Ident); !ok {
+		return false
+	}
+	targetK, ok := integerKindOf(g.typeOf(target))
+	if !ok {
+		return false
+	}
+	bin, ok := value.(*ast.BinaryExpr)
+	if !ok {
+		return false
+	}
+	if _, ok := integerKindOf(g.typeOf(bin)); !ok {
+		return false
+	}
+	switch bin.Op {
+	case token.PLUS, token.MINUS, token.STAR, token.SLASH, token.PERCENT, token.SHL, token.SHR:
+	default:
+		return false
+	}
+	g.body.writeln("func() {")
+	g.body.indent()
+	g.emitCheckedIntegerCompoundAssignBody(bin.Op, bin.Right, targetK, g.typeOf(bin.Right), func() {
+		g.emitExpr(bin.Left)
+	}, func() {
+		g.emitExpr(target)
+	})
+	g.body.dedent()
+	g.body.writeln("}()")
+	return true
+}
+
+func (g *gen) emitCheckedIntegerCompoundAssign(target ast.Expr, value ast.Expr, op token.Kind) bool {
+	targetT := g.typeOf(target)
+	targetK, ok := integerKindOf(targetT)
+	if !ok {
+		return false
+	}
+	g.body.writeln("func() {")
+	g.body.indent()
+	if idx, ok := target.(*ast.IndexExpr); ok && isMapType(g.typeOf(idx.X)) {
+		mapVar := g.freshVar("_map")
+		keyVar := g.freshVar("_key")
+		g.body.writef("%s := ", mapVar)
+		g.emitExpr(idx.X)
+		g.body.nl()
+		g.body.writef("%s := ", keyVar)
+		g.emitExpr(idx.Index)
+		g.body.nl()
+		g.emitCheckedIntegerCompoundAssignBody(op, value, targetK, g.typeOf(value), func() {
+			g.body.writef("%s[%s]", mapVar, keyVar)
+		}, func() {
+			g.body.writef("%s[%s]", mapVar, keyVar)
+		})
+	} else {
+		slotVar := g.freshVar("_slot")
+		g.body.writef("%s := &", slotVar)
+		g.emitExpr(target)
+		g.body.nl()
+		g.emitCheckedIntegerCompoundAssignBody(op, value, targetK, g.typeOf(value), func() {
+			g.body.writef("*%s", slotVar)
+		}, func() {
+			g.body.writef("*%s", slotVar)
+		})
+	}
+	g.body.dedent()
+	g.body.writeln("}()")
+	return true
+}
+
+func (g *gen) emitCheckedIntegerCompoundAssignBody(op token.Kind, value ast.Expr, targetK types.PrimitiveKind, valueT types.Type, emitCurrent, emitDest func()) {
+	goT := goPrimitive(targetK)
+	info := runtimeIntInfo(targetK)
+	cur := g.freshVar("_cur")
+	rhs := g.freshVar("_rhs")
+	g.body.writef("var %s %s = ", cur, goT)
+	emitCurrent()
+	g.body.nl()
+	switch op {
+	case token.PLUS, token.MINUS, token.STAR, token.SLASH, token.PERCENT:
+		if op == token.PLUS || op == token.MINUS || op == token.STAR || info.signed {
+			g.use("math")
+		}
+		g.body.writef("var %s %s = ", rhs, goT)
+		g.emitExpr(value)
+		g.body.nl()
+		switch op {
+		case token.PLUS:
+			g.emitIntAddOverflowGuard(info, cur, rhs, "panic(\"integer overflow\")", "panic(\"integer overflow\")")
+			emitDest()
+			g.body.writef(" = %s + %s\n", cur, rhs)
+		case token.MINUS:
+			g.emitIntSubOverflowGuard(info, cur, rhs, "panic(\"integer overflow\")", "panic(\"integer overflow\")")
+			emitDest()
+			g.body.writef(" = %s - %s\n", cur, rhs)
+		case token.STAR:
+			g.emitIntMulOverflowGuard(info, goT, cur, rhs, "panic(\"integer overflow\")", "panic(\"integer overflow\")")
+			emitDest()
+			g.body.writef(" = %s * %s\n", cur, rhs)
+		case token.SLASH:
+			g.body.writef("if %s == 0 { panic(%q) }\n", rhs, "integer division by zero")
+			if info.signed {
+				g.body.writef("if %s == %s && %s == %s(-1) { panic(%q) }\n", cur, info.min, rhs, goT, "integer overflow")
+			}
+			emitDest()
+			g.body.writef(" = %s / %s\n", cur, rhs)
+		case token.PERCENT:
+			g.body.writef("if %s == 0 { panic(%q) }\n", rhs, "integer modulo by zero")
+			if info.signed {
+				g.body.writef("if %s == %s && %s == %s(-1) { panic(%q) }\n", cur, info.min, rhs, goT, "integer overflow")
+			}
+			emitDest()
+			g.body.writef(" = %s %% %s\n", cur, rhs)
+		}
+	case token.SHL, token.SHR:
+		rightK, ok := integerKindOf(valueT)
+		if !ok {
+			rightK = targetK
+		}
+		rightGo := goPrimitive(rightK)
+		rightInfo := runtimeIntInfo(rightK)
+		if targetK == types.PInt {
+			g.use("strconv")
+		}
+		g.body.writef("var %s %s = ", rhs, rightGo)
+		g.emitExpr(value)
+		g.body.nl()
+		if rightInfo.signed {
+			g.body.writef("if %s < 0 || %s >= %s(%s) { panic(%q) }\n", rhs, rhs, rightGo, info.bits, "invalid shift count")
+		} else {
+			g.body.writef("if %s >= %s(%s) { panic(%q) }\n", rhs, rightGo, info.bits, "invalid shift count")
+		}
+		emitDest()
+		shiftOp := "<<"
+		if op == token.SHR {
+			shiftOp = ">>"
+		}
+		g.body.writef(" = %s %s uint(%s)\n", cur, shiftOp, rhs)
+	}
+}
+
+func compoundBinaryOp(k token.Kind) (token.Kind, bool) {
+	switch k {
+	case token.PLUSEQ:
+		return token.PLUS, true
+	case token.MINUSEQ:
+		return token.MINUS, true
+	case token.STAREQ:
+		return token.STAR, true
+	case token.SLASHEQ:
+		return token.SLASH, true
+	case token.PERCENTEQ:
+		return token.PERCENT, true
+	case token.SHLEQ:
+		return token.SHL, true
+	case token.SHREQ:
+		return token.SHR, true
+	default:
+		return token.ILLEGAL, false
+	}
 }
 
 // assignOp maps an Osty assignment token to its Go operator string.

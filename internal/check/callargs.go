@@ -18,8 +18,8 @@ import (
 //   - Positional args must precede every keyword arg.
 //   - A parameter may be supplied at most once.
 //   - Unknown keyword names are rejected (E0732).
-//   - A parameter without a default value must be supplied; unmet
-//     requirements produce E0701.
+//   - A parameter without a supplied argument or default value is
+//     rejected (E0701).
 func (c *checker) applyDeclaredCall(
 	e *ast.CallExpr, fn *types.FnType, generics []*types.TypeVar,
 	params []*ast.Param, hint types.Type, env *env,
@@ -63,11 +63,6 @@ func (c *checker) applyDeclaredCallWithExplicit(
 			c.errNode(a.Value, diag.CodeKeywordArgUnknown,
 				"no parameter `%s` on this call", a.Name)
 			continue
-		}
-		if params[idx].Default == nil {
-			c.errNode(a.Value, diag.CodeKeywordArgUnknown,
-				"parameter `%s` is required — pass it positionally", a.Name)
-			// Still record so the type check fires.
 		}
 		if resolved[idx] != nil {
 			c.errNode(a.Value, diag.CodeDuplicateArg,

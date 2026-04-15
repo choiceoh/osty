@@ -17,6 +17,13 @@ pub fn todo(msg: String) -> Never {
     todo(msg)
 }
 
-pub fn ignoreError<T, E>(result: Result<T, E>) {}
+pub fn ignoreError<T, E>(result: Result<T, E>) {
+    let _ = result
+}
 
-pub fn logError<T>(result: Result<T, Error>, msg: String) {}
+pub fn logError<T>(result: Result<T, Error>, msg: String) {
+    match result {
+        Ok(_) -> {},
+        Err(err) -> eprintln("{msg}: {err.message()}"),
+    }
+}

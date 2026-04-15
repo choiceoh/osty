@@ -258,6 +258,8 @@ func (r *resolver) declareUse(u *ast.UseDecl) {
 		// for FFI). Per §5.2 / §12.1.
 		if u.IsGoFFI {
 			name = lastSeg(u.GoPath, '/')
+		} else if u.RawPath != "" && strings.ContainsAny(u.RawPath, "/") {
+			name = lastSeg(u.RawPath, '/')
 		} else if len(u.Path) > 0 {
 			name = u.Path[len(u.Path)-1]
 		}

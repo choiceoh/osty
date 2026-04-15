@@ -210,6 +210,21 @@ fn f() {
 	}
 }
 
+func TestUseURLDefaultAlias(t *testing.T) {
+	res := resolveSrc(t, `use github.com/user/lib
+fn f() {
+    let x = lib
+}`)
+	if len(res.Diags) != 0 {
+		t.Fatalf("expected no diags, got %v", res.Diags)
+	}
+	for id, sym := range res.Refs {
+		if id.Name == "lib" && sym.Kind != SymPackage {
+			t.Errorf("lib kind = %v; want SymPackage", sym.Kind)
+		}
+	}
+}
+
 func TestUseGoFFIAlias(t *testing.T) {
 	res := resolveSrc(t, `use go "net/http" as http {
     fn Get(u: String) -> String

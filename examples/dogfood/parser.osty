@@ -487,7 +487,9 @@ fn opParsePrimary(p: OstyParser) -> Int {
     if tok.kind == FrontIf { return opParseIfExpr(p) }
     if tok.kind == FrontMatch { return opParseMatchExpr(p) }
     if tok.kind == FrontBitOr || tok.kind == FrontOr { return opParseClosure(p) }
-    if tok.kind == FrontUnderscore { opAdvance(p)
+    if tok.kind == FrontUnderscore {
+    opErrorFull(p, "`_` can only be used as a pattern", "for ignored bindings, write `let _ = expr`", "", "E0604")
+    opAdvance(p)
     let mut n = emptyAstNode(AstNIdent)
     n.text = "_"
     n.start = start

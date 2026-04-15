@@ -1,49 +1,49 @@
 // std.strings — string manipulation.
 
 pub fn split(s: String, sep: String) -> List<String> {
-    []
+    s.split(sep)
 }
 
 pub fn join(parts: List<String>, sep: String) -> String {
-    ""
+    sep.join(parts)
 }
 
 pub fn contains(s: String, substr: String) -> Bool {
-    false
+    s.contains(substr)
 }
 
 pub fn startsWith(s: String, prefix: String) -> Bool {
-    false
+    s.startsWith(prefix)
 }
 
 pub fn endsWith(s: String, suffix: String) -> Bool {
-    false
+    s.endsWith(suffix)
 }
 
 pub fn trim(s: String) -> String {
-    s
+    s.trim()
 }
 
 pub fn trimStart(s: String) -> String {
-    s
+    s.trimStart()
 }
 
 pub fn trimEnd(s: String) -> String {
-    s
+    s.trimEnd()
 }
 
 pub fn toUpper(s: String) -> String {
-    s
+    s.toUpper()
 }
 
 pub fn toLower(s: String) -> String {
-    s
+    s.toLower()
 }
 
 pub fn repeat(s: String, n: Int) -> String {
-    s
+    s.repeat(n)
 }
 
 pub fn replace(s: String, old: String, new: String) -> String {
-    s
+    s.replace(old, new)
 }

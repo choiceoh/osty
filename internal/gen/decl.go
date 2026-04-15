@@ -464,13 +464,13 @@ func (g *gen) emitUseDecl(u *ast.UseDecl) {
 	// mock structs when they need a callable shape. The test harness
 	// separately replaces the std.testing stub with a real runtime.
 	alias := u.Alias
-	if alias == "" && len(u.Path) > 0 {
-		alias = u.Path[len(u.Path)-1]
+	if alias == "" {
+		alias = defaultUseAlias(u)
 	}
 	if alias == "" {
 		return
 	}
-	full := strings.Join(u.Path, ".")
+	full := useFullPath(u)
 	if g.emitStdlibRuntimeBridge(alias, u.Path, full) {
 		return
 	}
@@ -641,6 +641,7 @@ func (g *gen) emitStdlibRuntimeBridge(alias string, path []string, full string) 
 		g.needResult = true
 		g.emitUseStub(alias, `struct {
 			fromString  func(s string) []byte
+			from        func(items []byte) []byte
 			toString    func(b []byte) Result[string, any]
 			len         func(b []byte) int
 			isEmpty     func(b []byte) bool
@@ -667,6 +668,7 @@ func (g *gen) emitStdlibRuntimeBridge(alias string, path []string, full string) 
 			fromHex     func(s string) Result[[]byte, any]
 		}{
 			fromString:  bytesFromString,
+			from:        bytesFrom,
 			toString:    bytesToString,
 			len:         bytesLen,
 			isEmpty:     bytesIsEmpty,
@@ -912,11 +914,7 @@ func (g *gen) fileIdentUsed(name string) bool {
 	for _, u := range g.file.Uses {
 		alias := u.Alias
 		if alias == "" {
-			if u.IsGoFFI {
-				alias = lastPathComponent(u.GoPath)
-			} else if len(u.Path) > 0 {
-				alias = u.Path[len(u.Path)-1]
-			}
+			alias = defaultUseAlias(u)
 		}
 		if mangleIdent(alias) == name {
 			return true
@@ -951,6 +949,35 @@ func (g *gen) fileIdentUsed(name string) bool {
 		}
 	}
 	return false
+}
+
+func defaultUseAlias(u *ast.UseDecl) string {
+	if u == nil {
+		return ""
+	}
+	if u.Alias != "" {
+		return u.Alias
+	}
+	if u.IsGoFFI {
+		return lastPathComponent(u.GoPath)
+	}
+	if u.RawPath != "" && strings.ContainsAny(u.RawPath, "/") {
+		return lastPathComponent(u.RawPath)
+	}
+	if len(u.Path) > 0 {
+		return u.Path[len(u.Path)-1]
+	}
+	return ""
+}
+
+func useFullPath(u *ast.UseDecl) string {
+	if u == nil {
+		return ""
+	}
+	if u.RawPath != "" {
+		return u.RawPath
+	}
+	return strings.Join(u.Path, ".")
 }
 
 func (g *gen) emitUseStub(alias, stub, full string) {
