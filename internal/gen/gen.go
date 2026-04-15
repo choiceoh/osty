@@ -156,6 +156,10 @@ type gen struct {
 	// generation/parsing helpers.
 	needUUID bool
 
+	// needBytesRuntime is set when Bytes primitive methods need runtime
+	// helpers backed by Go's bytes package.
+	needBytesRuntime bool
+
 	// needRefRuntime is set when std.ref.same lowers to the runtime
 	// reference-identity helper.
 	needRefRuntime bool
@@ -377,9 +381,15 @@ func (g *gen) run() ([]byte, error) {
 		g.use("fmt")
 		g.use("reflect")
 	}
-	if g.needCompress {
+	if g.needBytesRuntime {
 		g.needResult = true
 		g.useAs("bytes", "stdbytes")
+	}
+	if g.needCompress {
+		g.needResult = true
+		if !g.needBytesRuntime {
+			g.useAs("bytes", "stdbytes")
+		}
 		g.useAs("compress/gzip", "stdgzip")
 		g.useAs("io", "stdio")
 	}
