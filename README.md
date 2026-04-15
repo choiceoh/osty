@@ -36,7 +36,9 @@ registry (`osty add` / `osty update`), and a test runner
 | Manifest + lockfile + SemVer (`internal/manifest`, `lockfile`, `pkgmgr/semver`) | done (parse + validate + resolve) |
 | Build orchestrator (`osty build`) | wired — drives manifest → front-end → gen Phase 1 |
 | `osty test` (discovery + front-end, `std.testing` stub) | wired — validates test files and reports `test*` / `bench*` fns; runner harness pending |
-| Package registry / `osty add` / `osty update` / `osty run` | not started |
+| Package registry client (`osty add` / `osty update` / `osty publish`) | wired |
+| Package registry server (`cmd/osty-registry`, `internal/registry/server`) | wired — filesystem-backed, token-gated |
+| `osty run` | not started |
 
 The front-end (lex → parse → resolve) is **spec-complete for v0.3**:
 every syntactic construct in `LANG_SPEC_v0.3/` has a positive-corpus
@@ -88,6 +90,7 @@ osty/
 ├── SPEC_GAPS.md             # Resolved-gap archive (no open items in v0.3)
 ├── cmd/
 │   ├── osty/                # Main CLI (`osty` binary)
+│   ├── osty-registry/       # Self-hosted package registry server
 │   └── codesdoc/            # Regenerates ERROR_CODES.md from codes.go
 ├── internal/
 │   ├── token/               # Token kinds + positions
@@ -107,7 +110,9 @@ osty/
 │   ├── tomlparse/           # Generic TOML parser (subset)
 │   ├── manifest/            # osty.toml parse + validate + lookup
 │   ├── lockfile/            # osty.lock read/write
-│   └── pkgmgr/semver/       # SemVer parse, compare, constraint match
+│   ├── pkgmgr/semver/       # SemVer parse, compare, constraint match
+│   ├── registry/            # HTTP client for the registry protocol
+│   └── registry/server/     # Filesystem-backed registry server impl
 └── testdata/                # .osty fixtures used by tests
 ```
 
@@ -252,6 +257,45 @@ error[E0500]: undefined name `name`
 
   1 error(s), 0 warning(s)
 ```
+
+## Running a registry
+
+The `osty-registry` binary is a self-hosted package registry. It stores
+tarballs on local disk, gates publishes behind bearer tokens read from a
+JSON file, and implements exactly the three endpoints the `osty` CLI needs
+(`osty add`, `osty update`, `osty publish`).
+
+```sh
+# Start a registry on :8080 with data in ./registry-data.
+go build -o osty-registry ./cmd/osty-registry
+./osty-registry --root ./registry-data --tokens ./tokens.json
+
+# Point `osty` at it: add to osty.toml
+# [registries.local]
+# url = "http://localhost:8080"
+# token = "abc123"
+osty publish --registry local
+osty add hello@1.0 --registry local
+```
+
+`tokens.json` is a flat list of API tokens with scopes:
+
+```json
+{
+  "tokens": [
+    { "token": "abc123", "owner": "alice", "scopes": ["publish:*"] },
+    { "token": "ci-bot", "owner": "ci",    "scopes": ["publish:hello"] }
+  ]
+}
+```
+
+A scope of `publish:*` lets the token publish any package;
+`publish:<name>` restricts it to one. Send `SIGHUP` to the running
+server to reload `tokens.json` without dropping connections.
+
+See [`internal/registry/server/server.go`](./internal/registry/server/server.go)
+for the HTTP surface and [`cmd/osty-registry/main.go`](./cmd/osty-registry/main.go)
+for the process-level flags.
 
 ## Testing
 
