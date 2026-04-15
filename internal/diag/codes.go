@@ -58,6 +58,17 @@ const (
 	// Fix: realign the content and closing delimiter per §1.6.3.
 	CodeBadTripleString = "E0006"
 
+	// The `=>` (fat-arrow) token was removed from the grammar.
+	//
+	// `match` arms and every other arrow position use `->` instead.
+	// Any occurrence of `=>` in source is a lex error (O7, §1.7).
+	//
+	// Spec: v0.3 §1.7, OSTY_GRAMMAR_v0.3 O7
+	// Example:
+	//   match x { 0 => "zero", _ => "other" }  // rejected
+	// Fix: replace `=>` with `->`.
+	CodeFatArrowRemoved = "E0007"
+
 	// Declarations & statements.
 
 	// A token that cannot begin a top-level declaration appeared where one was expected.

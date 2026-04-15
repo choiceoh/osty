@@ -46,6 +46,15 @@ type Lexer struct {
 
 // New returns a lexer over src. The source must be UTF-8 encoded.
 func New(src []byte) *Lexer {
+	// Strip a UTF-8 BOM (U+FEFF, EF BB BF) when it appears as the very
+	// first bytes of the source. §1.1 does not mention BOMs, but editors
+	// on Windows occasionally insert one; treating it as an illegal
+	// character would reject otherwise-valid files. Only the leading
+	// BOM is stripped — an interior U+FEFF stays intact (rare but legal
+	// inside strings).
+	if len(src) >= 3 && src[0] == 0xEF && src[1] == 0xBB && src[2] == 0xBF {
+		src = src[3:]
+	}
 	// Normalize CR variants to \n: `\r\n` collapses to `\n`, and a
 	// lone `\r` (classic-Mac line ending, or a stray in a comment)
 	// also becomes `\n`. §1.1 names `\r\n` explicitly; the lone case
@@ -106,9 +115,13 @@ func (l *Lexer) Lex() []token.Token {
 
 func (l *Lexer) skipShebang() {
 	if len(l.src) >= 2 && l.src[0] == '#' && l.src[1] == '!' {
-		for l.offset < len(l.src) && l.src[l.offset] != '\n' {
-			l.offset++
-			l.col++
+		// Use advance() so multi-byte UTF-8 sequences (rare but legal
+		// in a shebang comment line) count as a single column and
+		// line/col bookkeeping stays consistent with the rest of the
+		// lexer — important for any position reported by errors that
+		// follow on line 1.
+		for l.offset < len(l.src) && l.peek() != '\n' {
+			l.advance()
 		}
 	}
 }
@@ -841,7 +854,25 @@ func (l *Lexer) scanInterpolation() []token.Token {
 func (l *Lexer) scanChar(start token.Pos) token.Token {
 	l.advance() // opening '
 	var r rune
-	if l.peek() == '\\' {
+	switch l.peek() {
+	case '\'':
+		// Empty char literal `''`. Report explicitly rather than
+		// consuming the closing quote as the value and tripping the
+		// "expected closing '" branch below with a nonsense value.
+		l.errorf(start, "empty char literal")
+		l.advance() // consume the closing '
+		r = 0xFFFD
+		end := l.pos()
+		l.setInsertTerm(token.CHAR)
+		return token.Token{Kind: token.CHAR, Pos: start, End: end, Value: string(r)}
+	case '\n', 0:
+		// Newline / EOF inside a char literal — bail before advanceRune
+		// swallows the line break and desynchronizes positions.
+		l.errorf(start, "unterminated char literal")
+		end := l.pos()
+		l.setInsertTerm(token.CHAR)
+		return token.Token{Kind: token.CHAR, Pos: start, End: end, Value: string(rune(0xFFFD))}
+	case '\\':
 		l.advance()
 		rr, ok := l.decodeEscape()
 		if !ok {
@@ -849,7 +880,7 @@ func (l *Lexer) scanChar(start token.Pos) token.Token {
 		} else {
 			r = rr
 		}
-	} else {
+	default:
 		r = l.advanceRune()
 	}
 	if l.peek() != '\'' {
@@ -867,7 +898,19 @@ func (l *Lexer) scanByte(start token.Pos) token.Token {
 	l.advance() // b
 	l.advance() // '
 	var val byte
-	if l.peek() == '\\' {
+	switch l.peek() {
+	case '\'':
+		l.errorf(start, "empty byte literal")
+		l.advance() // consume closing '
+		end := l.pos()
+		l.setInsertTerm(token.BYTE)
+		return token.Token{Kind: token.BYTE, Pos: start, End: end, Value: string(byte(0))}
+	case '\n', 0:
+		l.errorf(start, "unterminated byte literal")
+		end := l.pos()
+		l.setInsertTerm(token.BYTE)
+		return token.Token{Kind: token.BYTE, Pos: start, End: end, Value: string(byte(0))}
+	case '\\':
 		l.advance()
 		r, ok := l.decodeEscape()
 		if !ok || r > 0x7F {
@@ -876,7 +919,7 @@ func (l *Lexer) scanByte(start token.Pos) token.Token {
 		} else {
 			val = byte(r)
 		}
-	} else {
+	default:
 		b := l.peek()
 		if b >= 0x80 {
 			l.errorf(start, "byte literal must be ASCII")
@@ -1190,6 +1233,19 @@ func (l *Lexer) scanPunct(start token.Pos) token.Token {
 			l.advance()
 			l.setInsertTerm(token.EQ)
 			return token.Token{Kind: token.EQ, Pos: start, End: l.pos()}
+		}
+		if l.peek() == '>' {
+			// O7 / §1.7: `=>` is not a token. Any occurrence is a lex
+			// error. Consume both bytes so recovery continues at the
+			// next real token rather than emitting a spurious `>`.
+			l.advance()
+			end := l.pos()
+			l.errorCode(start, end,
+				diag.CodeFatArrowRemoved,
+				"`=>` is not a token in Osty",
+				"use `->` — match arms and every other arrow position use `->` (v0.3 §1.7, O7).")
+			l.setInsertTerm(token.ILLEGAL)
+			return token.Token{Kind: token.ILLEGAL, Pos: start, End: end, Value: "=>"}
 		}
 		l.setInsertTerm(token.ASSIGN)
 		return token.Token{Kind: token.ASSIGN, Pos: start, End: l.pos()}
