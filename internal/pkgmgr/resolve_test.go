@@ -4,10 +4,13 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/lockfile"
 	"github.com/osty/osty/internal/manifest"
+	"github.com/osty/osty/internal/resolve"
 )
 
 // TestResolvePathDep wires up a project with a single local-path
@@ -60,13 +63,98 @@ func TestResolvePathDep(t *testing.T) {
 	}
 }
 
+func TestResolveTransitivePathDepsAreRelativeToParentManifest(t *testing.T) {
+	tmp := t.TempDir()
+	proj := filepath.Join(tmp, "app")
+	parent := filepath.Join(tmp, "deps", "parent")
+	child := filepath.Join(tmp, "deps", "child")
+	for _, d := range []string{proj, parent, child} {
+		must(t, os.MkdirAll(d, 0o755))
+	}
+	must(t, manifest.Write(filepath.Join(child, manifest.ManifestFile),
+		&manifest.Manifest{Package: manifest.Package{Name: "child", Version: "0.1.0"}}))
+	must(t, manifest.Write(filepath.Join(parent, manifest.ManifestFile), &manifest.Manifest{
+		Package: manifest.Package{Name: "parent", Version: "0.1.0"},
+		Dependencies: []manifest.Dependency{
+			{Name: "child", Path: "../child", DefaultFeats: true},
+		},
+	}))
+
+	env := &Env{
+		CacheDir:    filepath.Join(tmp, "cache"),
+		VendorDir:   filepath.Join(proj, ".osty", "deps"),
+		ProjectRoot: proj,
+		Registries:  map[string]string{},
+	}
+	graph, err := Resolve(context.Background(), &manifest.Manifest{
+		Package: manifest.Package{Name: "app", Version: "0.0.1"},
+		Dependencies: []manifest.Dependency{
+			{Name: "parent", Path: "../deps/parent", DefaultFeats: true},
+		},
+	}, env)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got := graph.Nodes["child"].Fetched.LocalDir; filepath.Clean(got) != filepath.Clean(child) {
+		t.Fatalf("child LocalDir: got %q, want %q", got, child)
+	}
+}
+
+func TestResolveRejectsConflictingTransitivePathAlias(t *testing.T) {
+	tmp := t.TempDir()
+	proj := filepath.Join(tmp, "app")
+	libA := filepath.Join(tmp, "deps", "a")
+	libB := filepath.Join(tmp, "deps", "b")
+	utilA := filepath.Join(tmp, "deps", "util-a")
+	utilB := filepath.Join(tmp, "deps", "util-b")
+	for _, d := range []string{proj, libA, libB, utilA, utilB} {
+		must(t, os.MkdirAll(d, 0o755))
+	}
+	must(t, manifest.Write(filepath.Join(utilA, manifest.ManifestFile),
+		&manifest.Manifest{Package: manifest.Package{Name: "util", Version: "1.0.0"}}))
+	must(t, manifest.Write(filepath.Join(utilB, manifest.ManifestFile),
+		&manifest.Manifest{Package: manifest.Package{Name: "util", Version: "2.0.0"}}))
+	must(t, manifest.Write(filepath.Join(libA, manifest.ManifestFile), &manifest.Manifest{
+		Package: manifest.Package{Name: "a", Version: "0.1.0"},
+		Dependencies: []manifest.Dependency{
+			{Name: "util", Path: "../util-a", DefaultFeats: true},
+		},
+	}))
+	must(t, manifest.Write(filepath.Join(libB, manifest.ManifestFile), &manifest.Manifest{
+		Package: manifest.Package{Name: "b", Version: "0.1.0"},
+		Dependencies: []manifest.Dependency{
+			{Name: "util", Path: "../util-b", DefaultFeats: true},
+		},
+	}))
+
+	env := &Env{
+		CacheDir:    filepath.Join(tmp, "cache"),
+		VendorDir:   filepath.Join(proj, ".osty", "deps"),
+		ProjectRoot: proj,
+		Registries:  map[string]string{},
+	}
+	_, err := Resolve(context.Background(), &manifest.Manifest{
+		Package: manifest.Package{Name: "app", Version: "0.0.1"},
+		Dependencies: []manifest.Dependency{
+			{Name: "a", Path: "../deps/a", DefaultFeats: true},
+			{Name: "b", Path: "../deps/b", DefaultFeats: true},
+		},
+	}, env)
+	if err == nil {
+		t.Fatal("Resolve should reject same alias pointing at different path deps")
+	}
+	if !strings.Contains(err.Error(), `dependency "util" resolved from`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 // TestResolveTransitive confirms transitive path deps are followed
 // and returned in topological order (leaves first).
 func TestResolveTransitive(t *testing.T) {
 	tmp := t.TempDir()
 	proj := filepath.Join(tmp, "app")
-	libA := filepath.Join(tmp, "libA")
-	libB := filepath.Join(tmp, "libB")
+	libA := filepath.Join(tmp, "packages", "libA")
+	libB := filepath.Join(tmp, "packages", "libB")
 	for _, d := range []string{proj, libA, libB} {
 		must(t, os.MkdirAll(d, 0o755))
 	}
@@ -84,7 +172,7 @@ func TestResolveTransitive(t *testing.T) {
 	appMani := &manifest.Manifest{
 		Package: manifest.Package{Name: "app", Version: "0.0.1"},
 		Dependencies: []manifest.Dependency{
-			{Name: "libA", Path: "../libA", DefaultFeats: true},
+			{Name: "libA", Path: "../packages/libA", DefaultFeats: true},
 		},
 	}
 	env := &Env{
@@ -101,16 +189,6 @@ func TestResolveTransitive(t *testing.T) {
 		t.Fatalf("nodes: got %d, want 2", len(graph.Nodes))
 	}
 	// Order must have libB (leaf) before libA (parent).
-	// Note: the test needs to handle the fact that libA's Path is
-	// "../libB" which is resolved against libA's directory, but our
-	// resolver resolves paths against env.ProjectRoot. This test
-	// succeeds only if the resolver correctly resolves relative path
-	// deps against the PARENT package's root, not the project root.
-	// The current implementation uses env.ProjectRoot uniformly — which
-	// is wrong for transitive deps, but that's a known limitation.
-	// Adjust test: libA declares Path "../libB" which, relative to proj,
-	// points to tmp/libB — exactly what we want. So we've arranged the
-	// layout to make this pass under current resolver behavior.
 	order := graph.Order
 	idxA, idxB := -1, -1
 	for i, n := range order {
@@ -331,6 +409,21 @@ func TestApplyLockPinIgnoresMismatchedReq(t *testing.T) {
 	}
 }
 
+func TestApplyLockPinIgnoresMismatchedSource(t *testing.T) {
+	rs := &registrySource{name: "x", packageName: "x", versionReq: "^1.0.0"}
+	dep := manifest.Dependency{Name: "x", PackageName: "x", VersionReq: "^1.0.0"}
+	lock := &lockfile.Lock{
+		Version: lockfile.SchemaVersion,
+		Packages: []lockfile.Package{
+			{Name: "x", Version: "1.2.3", Source: "path+../x"},
+		},
+	}
+	applyLockPin(rs, dep, lock)
+	if rs.versionReq != "^1.0.0" {
+		t.Errorf("versionReq: got %q, want ^1.0.0 (unchanged)", rs.versionReq)
+	}
+}
+
 // TestApplyLockPinSkipsPathSources: path / git sources don't get
 // rewritten; their identity comes from the manifest, not the lock.
 func TestApplyLockPinSkipsPathSources(t *testing.T) {
@@ -407,6 +500,109 @@ func TestDiffLockNilInputs(t *testing.T) {
 	}
 	if changes := DiffLock(nil, nil); len(changes) != 0 {
 		t.Errorf("nil-both: %+v", changes)
+	}
+}
+
+func TestDepProviderFindsTransitiveGraphAlias(t *testing.T) {
+	tmp := t.TempDir()
+	env := &Env{VendorDir: filepath.Join(tmp, ".osty", "deps")}
+	graph := &Graph{
+		Nodes: map[string]*ResolvedNode{
+			"leaf": &ResolvedNode{Name: "leaf"},
+		},
+		Order: []string{"leaf"},
+	}
+	provider := NewDepProvider(&manifest.Manifest{}, graph, env)
+	dir, ok := provider.LookupDep("leaf")
+	if !ok {
+		t.Fatal("LookupDep should find transitive graph alias")
+	}
+	if want := filepath.Join(env.VendorDir, "leaf"); dir != want {
+		t.Fatalf("dir: got %q, want %q", dir, want)
+	}
+}
+
+func TestDepProviderFindsTransitiveGraphGitURL(t *testing.T) {
+	tmp := t.TempDir()
+	env := &Env{VendorDir: filepath.Join(tmp, ".osty", "deps")}
+	graph := &Graph{
+		Nodes: map[string]*ResolvedNode{
+			"json": &ResolvedNode{
+				Name:   "json",
+				Source: &gitSource{name: "json", url: "https://github.com/acme/json.git"},
+			},
+		},
+		Order: []string{"json"},
+	}
+	provider := NewDepProvider(&manifest.Manifest{}, graph, env)
+	dir, ok := provider.LookupDep("github.com/acme/json")
+	if !ok {
+		t.Fatal("LookupDep should find transitive graph git URL")
+	}
+	if want := filepath.Join(env.VendorDir, "json"); dir != want {
+		t.Fatalf("dir: got %q, want %q", dir, want)
+	}
+}
+
+func TestWorkspaceCanImportTransitiveVendoredDependency(t *testing.T) {
+	tmp := t.TempDir()
+	root := filepath.Join(tmp, "app")
+	vendor := filepath.Join(root, ".osty", "deps")
+	parentDir := filepath.Join(vendor, "parent")
+	leafDir := filepath.Join(vendor, "leaf")
+	for _, d := range []string{root, parentDir, leafDir} {
+		must(t, os.MkdirAll(d, 0o755))
+	}
+	must(t, os.WriteFile(filepath.Join(root, "main.osty"), []byte(`
+use parent
+
+fn main() {
+    parent.ping()
+}
+`), 0o644))
+	must(t, os.WriteFile(filepath.Join(parentDir, "parent.osty"), []byte(`
+use leaf
+
+pub fn ping() {
+    leaf.pong()
+}
+`), 0o644))
+	must(t, os.WriteFile(filepath.Join(leafDir, "leaf.osty"), []byte(`
+pub fn pong() {}
+`), 0o644))
+
+	m := &manifest.Manifest{
+		Package: manifest.Package{Name: "app", Version: "0.0.1"},
+		Dependencies: []manifest.Dependency{
+			{Name: "parent", Path: "../parent", DefaultFeats: true},
+		},
+	}
+	graph := &Graph{
+		Nodes: map[string]*ResolvedNode{
+			"parent": &ResolvedNode{Name: "parent"},
+			"leaf":   &ResolvedNode{Name: "leaf"},
+		},
+		Order: []string{"leaf", "parent"},
+	}
+	env := &Env{VendorDir: vendor}
+	ws, err := resolve.NewWorkspace(root)
+	if err != nil {
+		t.Fatalf("NewWorkspace: %v", err)
+	}
+	ws.Deps = NewDepProvider(m, graph, env)
+	if _, err := ws.LoadPackage(""); err != nil {
+		t.Fatalf("LoadPackage: %v", err)
+	}
+	results := ws.ResolveAll()
+	for key, res := range results {
+		for _, d := range res.Diags {
+			if d.Severity == diag.Error {
+				t.Fatalf("%s: unexpected diagnostic: %s", key, d.Message)
+			}
+		}
+	}
+	if _, ok := ws.Packages["leaf"]; !ok {
+		t.Fatalf("transitive leaf package was not loaded: %v", ws.Packages)
 	}
 }
 

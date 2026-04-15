@@ -2,6 +2,7 @@ package pkgmgr
 
 import (
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/osty/osty/internal/manifest"
@@ -14,16 +15,21 @@ import (
 //
 // Mapping rules (first match wins):
 //
-//  1. rawPath equals a top-level [dependencies] alias  → vendor dir.
+//  1. rawPath equals a resolved graph alias or top-level
+//     [dependencies] alias  → vendor dir.
+//     Graph aliases include transitive deps discovered while walking
+//     fetched package manifests.
 //     Matches bare-name imports like `use fastjson` against a
 //     `fastjson = { git = "..." }` entry.
 //
-//  2. rawPath is a URL that matches a dep's git URL  → vendor dir.
+//  2. rawPath is a URL that matches a graph/source git URL  →
+//     vendor dir.
 //     Matches `use github.com/user/fastjson` against the same
 //     `fastjson = { git = "github.com/user/fastjson" }`. Trailing
 //     `.git` and scheme are tolerated in either direction.
 //
-//  3. rawPath's last segment equals a dep alias  → vendor dir.
+//  3. rawPath's last segment equals a graph or manifest alias  →
+//     vendor dir.
 //     Fallback for `use github.com/user/lib` when the alias is just
 //     `lib` — the spec says `lib` is the default alias and the source
 //     form still resolves.
@@ -45,11 +51,17 @@ func (p *depProvider) LookupDep(rawPath string) (string, bool) {
 		return "", false
 	}
 	// Rule 1: direct alias match.
+	if p.hasGraphNode(rawPath) {
+		return filepath.Join(p.env.VendorDir, rawPath), true
+	}
 	if dep, ok := findDepByAlias(p.m, rawPath); ok {
 		return filepath.Join(p.env.VendorDir, dep.Name), true
 	}
 	// Rule 2: git URL match.
 	if strings.ContainsAny(rawPath, "/") {
+		if name, ok := p.findGraphNodeByGitURL(rawPath); ok {
+			return filepath.Join(p.env.VendorDir, name), true
+		}
 		if dep, ok := findDepByGitURL(p.m, rawPath); ok {
 			return filepath.Join(p.env.VendorDir, dep.Name), true
 		}
@@ -57,11 +69,58 @@ func (p *depProvider) LookupDep(rawPath string) (string, bool) {
 	// Rule 3: last-segment alias match.
 	if i := strings.LastIndex(rawPath, "/"); i >= 0 {
 		lastSeg := rawPath[i+1:]
+		if p.hasGraphNode(lastSeg) {
+			return filepath.Join(p.env.VendorDir, lastSeg), true
+		}
 		if dep, ok := findDepByAlias(p.m, lastSeg); ok {
 			return filepath.Join(p.env.VendorDir, dep.Name), true
 		}
 	}
 	return "", false
+}
+
+func (p *depProvider) hasGraphNode(alias string) bool {
+	if p == nil || p.graph == nil || p.graph.Nodes == nil {
+		return false
+	}
+	_, ok := p.graph.Nodes[alias]
+	return ok
+}
+
+func (p *depProvider) findGraphNodeByGitURL(rawPath string) (string, bool) {
+	if p == nil || p.graph == nil {
+		return "", false
+	}
+	needle := normalizeGitURL(rawPath)
+	for _, name := range p.graphNodeNames() {
+		n := p.graph.Nodes[name]
+		if n == nil {
+			continue
+		}
+		gs, ok := n.Source.(*gitSource)
+		if !ok {
+			continue
+		}
+		if normalizeGitURL(gs.url) == needle {
+			return name, true
+		}
+	}
+	return "", false
+}
+
+func (p *depProvider) graphNodeNames() []string {
+	if p == nil || p.graph == nil {
+		return nil
+	}
+	if len(p.graph.Order) > 0 {
+		return append([]string(nil), p.graph.Order...)
+	}
+	names := make([]string, 0, len(p.graph.Nodes))
+	for name := range p.graph.Nodes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // findDepByAlias walks both dependency tables and returns the entry

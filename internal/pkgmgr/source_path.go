@@ -15,8 +15,9 @@ import (
 // trusts the filesystem here — changes to the source directory
 // automatically flow into the next resolve + build.
 type pathSource struct {
-	name string
-	path string // as written in the manifest, possibly relative
+	name    string
+	path    string // as written in the manifest, possibly relative
+	baseDir string // directory containing the manifest that declared path
 }
 
 func (s *pathSource) Kind() SourceKind { return SourcePath }
@@ -30,6 +31,18 @@ func (s *pathSource) URI() string {
 	return "path+" + filepath.ToSlash(s.path)
 }
 
+func (s *pathSource) absPath(env *Env) string {
+	abs := s.path
+	if filepath.IsAbs(abs) {
+		return filepath.Clean(abs)
+	}
+	base := s.baseDir
+	if base == "" && env != nil {
+		base = env.ProjectRoot
+	}
+	return filepath.Clean(filepath.Join(base, abs))
+}
+
 // Fetch reads the dependency's osty.toml to discover its version and
 // its own declared deps. The returned LocalDir is the absolute
 // directory on disk.
@@ -39,10 +52,7 @@ func (s *pathSource) Fetch(ctx context.Context, env *Env) (*FetchedPackage, erro
 			return nil, err
 		}
 	}
-	abs := s.path
-	if !filepath.IsAbs(abs) {
-		abs = filepath.Join(env.ProjectRoot, abs)
-	}
+	abs := s.absPath(env)
 	info, err := os.Stat(abs)
 	if err != nil {
 		return nil, fmt.Errorf("path dependency %s: %w", s.name, err)
