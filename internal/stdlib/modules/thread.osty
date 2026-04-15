@@ -46,12 +46,7 @@ pub fn collectAll<T>(body: fn(Group) -> List<Handle<T>>) -> List<Result<T, Error
 }
 
 pub fn race<T>(body: fn(Group) -> List<Handle<T>>) -> Result<T, Error> {
-    let handles = body(Group {})
-    if handles.len() == 0 {
-        Err(0)
-    } else {
-        Ok(handles[0].join())
-    }
+    race::<T>(body)
 }
 
 pub fn chan<T>(capacity: Int = 0) -> Channel<T> {

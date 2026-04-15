@@ -14,6 +14,6 @@ pub struct __CharMethods {
     pub fn isUpper(self) -> Bool { false }
     pub fn isLower(self) -> Bool { false }
 
-    pub fn toUpper(self) -> Char { self }
-    pub fn toLower(self) -> Char { self }
+    pub fn toUpper(self) -> Char { '\0' }
+    pub fn toLower(self) -> Char { '\0' }
 }

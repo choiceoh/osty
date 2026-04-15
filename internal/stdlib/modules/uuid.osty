@@ -6,7 +6,7 @@ pub struct Uuid {
     }
 
     pub fn toBytes(self) -> Bytes {
-        []
+        self.toBytes()
     }
 }
 

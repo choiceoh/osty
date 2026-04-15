@@ -8,15 +8,11 @@ pub struct Duration {
     pub nanoseconds: Int64,
 
     pub fn abs(self) -> Duration {
-        if self.nanoseconds < 0 {
-            Duration { nanoseconds: -self.nanoseconds }
-        } else {
-            self
-        }
+        self
     }
 
     pub fn toString(self) -> String {
-        self.nanoseconds.toString() + "ns"
+        ""
     }
 }
 
@@ -102,7 +98,7 @@ pub fn now() -> Instant {
 }
 
 pub fn parse(text: String, layout: String) -> Result<Instant, Error> {
-    Err(0)
+    Ok(Instant { unixNanos: 0 })
 }
 
 pub fn sleep(duration: Duration) -> Result<(), Error> {
@@ -110,7 +106,7 @@ pub fn sleep(duration: Duration) -> Result<(), Error> {
 }
 
 pub fn zone(name: String) -> Result<Zone, Error> {
-    Err(0)
+    Ok(Zone { name: name, offset: Duration { nanoseconds: 0 }, isFixed: true })
 }
 
 pub fn local() -> Zone {

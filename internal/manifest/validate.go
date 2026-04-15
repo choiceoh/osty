@@ -14,7 +14,7 @@ import (
 // CurrentEdition is the Osty spec version that the toolchain targets.
 // Manifests pinning a different edition are accepted only if the
 // version appears in KnownEditions.
-const CurrentEdition = "0.3"
+const CurrentEdition = "0.4"
 
 // KnownEditions is the set of spec versions the toolchain understands.
 // Adding a new entry is the last step of graduating a spec draft —
@@ -22,6 +22,7 @@ const CurrentEdition = "0.3"
 // upgrade deliberately.
 var KnownEditions = map[string]bool{
 	"0.3": true,
+	"0.4": true,
 }
 
 // packageNameRE mirrors scaffold.nameRE: a leading letter or

@@ -287,7 +287,8 @@ closure expressions; annotations are a declaration-level feature.
 > `IDENT (':' Type)?`. The language surface is specified here so users
 > can design code against the final shape. Until the parser catches up,
 > the manual form — `|pair| { let (k, v) = pair; ... }` — remains the
-> workaround. Tracked internally as the v0.3 resolution of gap G4.
+> workaround. Front-end implementation parity is tracked in
+> `SPEC_GAPS.md` as the v0.4 G16 sweep item.
 
 ### 4.8 String Interpolation
 

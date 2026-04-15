@@ -101,7 +101,7 @@ func (c *checker) applyGenericCallResolved(
 	e *ast.CallExpr, fn *types.FnType, generics []*types.TypeVar,
 	params []*ast.Param, resolved []*ast.Arg, explicit []types.Type, hint types.Type, env *env,
 ) types.Type {
-	c.checkExplicitGenericArity(e, len(generics), len(explicit))
+	c.checkExplicitGenericArity(e, len(generics), explicit)
 	if len(generics) == 0 {
 		// Simple type-check loop without substitution work.
 		for i, a := range resolved {

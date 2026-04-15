@@ -97,6 +97,52 @@ pub fn load(path: String) -> Result<String, Error> {
 	}
 }
 
+// TestAllSignatureStubsCheck pins the v0.4 G18 contract: stdlib
+// protocol surfaces are executable front-end stubs, not unchecked text.
+// Every embedded .osty file must parse, resolve, and type-check; the
+// std.thread stub is allowed to trip E0743 in dummy bodies because its
+// public signatures intentionally construct the non-escaping Handle
+// capability that user code is otherwise forbidden to return/store.
+func TestAllSignatureStubsCheck(t *testing.T) {
+	reg := Load()
+	for _, p := range collectStubPaths() {
+		src, err := stubs.ReadFile(p)
+		if err != nil {
+			t.Fatalf("read %s: %v", p, err)
+		}
+		file, parseDiags := parser.ParseDiagnostics(src)
+		for _, d := range parseDiags {
+			if d.Severity == diag.Error {
+				t.Fatalf("%s parse: %s", p, d.Error())
+			}
+		}
+		pkg := &resolve.Package{
+			Name: moduleName(p),
+			Files: []*resolve.PackageFile{{
+				Path:       p,
+				Source:     src,
+				File:       file,
+				ParseDiags: parseDiags,
+			}},
+		}
+		res := resolve.ResolvePackage(pkg, resolve.NewPrelude())
+		for _, d := range res.Diags {
+			if d.Severity == diag.Error {
+				t.Fatalf("%s resolve: %s", p, d.Error())
+			}
+		}
+		chk := check.Package(pkg, res, check.Opts{Primitives: reg.Primitives})
+		for _, d := range chk.Diags {
+			if d.Severity == diag.Error {
+				if p == "modules/thread.osty" && d.Code == diag.CodeCapabilityEscape {
+					continue
+				}
+				t.Fatalf("%s check: %s", p, d.Error())
+			}
+		}
+	}
+}
+
 // TestLoadIsIdempotent pins the contract that Load can be called
 // repeatedly: the resulting Registries are equivalently populated and
 // do not share mutable state.

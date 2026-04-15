@@ -875,7 +875,7 @@ var scalarByName = map[string]types.Type{
 var builtinCompoundNames = []string{
 	"List", "Map", "Set", "Option", "Result",
 	"Error", "Equal", "Ordered", "Hashable",
-	"Chan", "Channel",
+	"Chan", "Channel", "Handle", "TaskGroup",
 }
 
 // initBuiltins pre-populates symInfo for every prelude symbol. The

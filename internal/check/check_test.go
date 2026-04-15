@@ -91,6 +91,33 @@ fn main() {
 	assertOK(t, runCheck(t, src))
 }
 
+func TestCheck_BuiltinTypeArity(t *testing.T) {
+	src := `
+fn useBuiltins(xs: List<Int>, h: Handle<Int>, group: TaskGroup) {
+    let xs: List<Int> = [1]
+}
+`
+	assertOK(t, runCheck(t, src))
+}
+
+func TestCheck_BuiltinMarkerInterfacesRejectTypeArgs(t *testing.T) {
+	src := `
+fn main() {
+    let x: Equal<Int>
+}
+`
+	assertCodes(t, runCheck(t, src), diag.CodeGenericArgCount)
+}
+
+func TestCheck_BuiltinValueRejectedInTypePosition(t *testing.T) {
+	src := `
+fn main() {
+    let x: Some<Int>
+}
+`
+	assertCodes(t, runCheck(t, src), diag.CodeWrongSymbolKind)
+}
+
 func TestCheck_ArithmeticSameType(t *testing.T) {
 	src := `
 fn add(a: Int, b: Int) -> Int {
@@ -403,6 +430,286 @@ fn main() {
 }
 `
 	assertOK(t, runCheck(t, src))
+}
+
+func TestCheck_ExplicitGenericArgCount(t *testing.T) {
+	src := `
+fn identity<T>(x: T) -> T {
+    x
+}
+
+fn main() {
+    let a = identity::<Int, String>(5)
+}
+`
+	assertCodes(t, runCheck(t, src), diag.CodeGenericArgCount)
+}
+
+func TestCheck_ExplicitGenericArgsOnNonGenericFunction(t *testing.T) {
+	src := `
+fn plain(x: Int) -> Int {
+    x
+}
+
+fn main() {
+    let a = plain::<Int>(5)
+}
+`
+	assertCodes(t, runCheck(t, src), diag.CodeGenericArgCount)
+}
+
+func TestCheck_FunctionValueCallTooFewArgs(t *testing.T) {
+	src := `
+fn add(a: Int, b: Int) -> Int {
+    a + b
+}
+
+fn main() {
+    let f = add
+    let x = f(1)
+}
+`
+	assertCodes(t, runCheck(t, src), diag.CodeWrongArgCount)
+}
+
+func TestCheck_FunctionValueRejectsKeywordArgs(t *testing.T) {
+	src := `
+fn connect(host: String, port: Int) -> Bool {
+    true
+}
+
+fn main() {
+    let f = connect
+    let ok = f(host: "api.com", port: 443)
+}
+`
+	assertCodes(t, runCheck(t, src), diag.CodeKeywordArgUnknown)
+}
+
+func TestCheck_GenericFunctionReferenceRejected(t *testing.T) {
+	src := `
+fn identity<T>(x: T) -> T {
+    x
+}
+
+fn main() {
+    let f = identity
+}
+`
+	assertCodes(t, runCheck(t, src), diag.CodeGenericCallableReference)
+}
+
+func TestCheck_GenericMethodTurbofish(t *testing.T) {
+	src := `
+pub struct Box<T> {
+    pub value: T,
+
+    pub fn pair<U>(self, other: U) -> (T, U) {
+        (self.value, other)
+    }
+}
+
+fn main() {
+    let b: Box<Int> = Box.builder().value(1).build()
+    let p: (Int, String) = b.pair::<String>("x")
+}
+`
+	assertOK(t, runCheck(t, src))
+}
+
+func TestCheck_GenericMethodTurbofishCountsOnlyMethodGenerics(t *testing.T) {
+	src := `
+pub struct Box<T> {
+    pub value: T,
+
+    pub fn pair<U>(self, other: U) -> (T, U) {
+        (self.value, other)
+    }
+}
+
+fn main() {
+    let b: Box<Int> = Box.builder().value(1).build()
+    let p = b.pair::<Int, String>("x")
+}
+`
+	assertCodes(t, runCheck(t, src), diag.CodeGenericArgCount)
+}
+
+func TestCheck_GenericMethodReferenceRejected(t *testing.T) {
+	src := `
+pub struct Box<T> {
+    pub value: T,
+
+    pub fn pair<U>(self, other: U) -> (T, U) {
+        (self.value, other)
+    }
+}
+
+fn main() {
+    let b: Box<Int> = Box.builder().value(1).build()
+    let f = b.pair
+}
+`
+	assertCodes(t, runCheck(t, src), diag.CodeGenericCallableReference)
+}
+
+func TestCheck_TaskGroupCapabilityMayPassToHelper(t *testing.T) {
+	src := `
+fn one() -> Int { 1 }
+
+fn useHandle(h: Handle<Int>) -> Int {
+    h.join()
+}
+
+fn main() {
+    let out = taskGroup(|g| {
+        let h = g.spawn(|| one())
+        useHandle(h)
+    })
+}
+`
+	assertOK(t, runCheck(t, src))
+}
+
+func TestCheck_TaskGroupSpawnMayCaptureGroup(t *testing.T) {
+	src := `
+fn worker(g: TaskGroup) -> Int {
+    if g.isCancelled() { 0 } else { 1 }
+}
+
+fn main() {
+    let out = taskGroup(|g| {
+        let h = g.spawn(|| worker(g))
+        h.join()
+    })
+}
+`
+	assertOK(t, runCheck(t, src))
+}
+
+func TestCheck_TaskGroupCapabilityCannotReturn(t *testing.T) {
+	src := `
+fn one() -> Int { 1 }
+
+fn leak() -> Handle<Int> {
+    taskGroup(|g| {
+        g.spawn(|| one())
+    })
+}
+`
+	assertCodes(t, runCheck(t, src), diag.CodeCapabilityEscape)
+}
+
+func TestCheck_TaskGroupCapabilityCannotStoreTopLevel(t *testing.T) {
+	src := `
+fn one() -> Int { 1 }
+
+pub let leaked = spawn(|| one())
+`
+	assertCodes(t, runCheck(t, src), diag.CodeCapabilityEscape)
+}
+
+func TestCheck_TaskGroupCapabilityCannotStoreInStructField(t *testing.T) {
+	src := `
+fn one() -> Int { 1 }
+
+pub struct Box {
+    pub h: Handle<Int>,
+}
+
+fn main() {
+    let out = taskGroup(|g| {
+        let h = g.spawn(|| one())
+        let b = Box { h: h }
+        0
+    })
+}
+`
+	assertCodes(t, runCheck(t, src), diag.CodeCapabilityEscape)
+}
+
+func TestCheck_TaskGroupCapabilityCannotStoreInList(t *testing.T) {
+	src := `
+fn one() -> Int { 1 }
+
+fn main() {
+    let out = taskGroup(|g| {
+        let h = g.spawn(|| one())
+        let hs = [h]
+        0
+    })
+}
+`
+	assertCodes(t, runCheck(t, src), diag.CodeCapabilityEscape)
+}
+
+func TestCheck_TaskGroupCapabilityCannotSendOnChannel(t *testing.T) {
+	src := `
+fn one() -> Int { 1 }
+
+fn main(ch: Chan<Handle<Int>>) {
+    let out = taskGroup(|g| {
+        let h = g.spawn(|| one())
+        ch <- h
+        0
+    })
+}
+`
+	assertCodes(t, runCheck(t, src), diag.CodeCapabilityEscape)
+}
+
+func TestCheck_TaskGroupCapabilityCannotEscapeViaClosureCapture(t *testing.T) {
+	src := `
+fn one() -> Int { 1 }
+
+fn run(f: fn() -> Int) -> Int {
+    f()
+}
+
+fn main() {
+    let out = taskGroup(|g| {
+        let h = g.spawn(|| one())
+        let f = || h.join()
+        run(f)
+    })
+}
+`
+	assertCodes(t, runCheck(t, src), diag.CodeCapabilityEscape)
+}
+
+func TestCheck_TaskGroupClosureArity(t *testing.T) {
+	src := `
+fn main() {
+    let out = taskGroup(|| 1)
+}
+`
+	assertCodes(t, runCheck(t, src), diag.CodeWrongArgCount)
+}
+
+func TestCheck_ClosurePatternParamBindsNames(t *testing.T) {
+	src := `
+fn render(f: fn((Int, Int)) -> Int, pair: (Int, Int)) -> Int {
+    f(pair)
+}
+
+fn main() {
+    let out = render(|(a, b)| a + b, (1, 2))
+}
+`
+	assertOK(t, runCheck(t, src))
+}
+
+func TestCheck_ClosurePatternParamRejectsRefutableNestedPattern(t *testing.T) {
+	src := `
+fn render(f: fn((Int, Int)) -> Int, pair: (Int, Int)) -> Int {
+    f(pair)
+}
+
+fn main() {
+    let out = render(|(_, 1)| 0, (1, 2))
+}
+`
+	assertCodes(t, runCheck(t, src), diag.CodeRefutableClosurePattern)
 }
 
 func TestCheck_InterfaceBoundSatisfiedByPrim(t *testing.T) {
@@ -1980,6 +2287,22 @@ fn describe(u: Int?) -> String {
 }
 `
 	assertCodes(t, runCheck(t, src), diag.CodeNonExhaustiveMatch)
+}
+
+func TestCheck_MatchGuardWitnessIgnoresGuardedArm(t *testing.T) {
+	src := `
+fn describe(u: Bool?) -> String {
+    match u {
+        Some(true) if true -> "guarded",
+        None -> "missing",
+    }
+}
+`
+	got := runCheck(t, src)
+	assertCodes(t, got, diag.CodeNonExhaustiveMatch)
+	if !strings.Contains(got[0].Message, "Some") {
+		t.Fatalf("expected guarded-arm witness to mention `Some`, got: %s", got[0].Message)
+	}
 }
 
 func TestCheck_MatchBoolExhaustive(t *testing.T) {

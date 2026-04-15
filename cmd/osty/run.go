@@ -28,22 +28,20 @@ import (
 //  2. Resolve the project as a package; confirm we have an entry
 //     point (manifest Bin target or default main.osty with fn main).
 //  3. Run the front-end (parse + resolve + type check).
-//  4. Transpile the entry file via internal/gen (Phase 1) into a
-//     temp directory.
+//  4. Transpile the entry file via internal/gen into a temp directory.
 //  5. `go run` the generated Go source, passing through the
 //     user-supplied arguments after `--`.
 //
-// Limitations (Phase 1 transpiler):
+// Limitations (current emitter):
 //
-//   - Multi-file packages aren't fully emitted by gen yet; only the
-//     single entry file's primitives flow through today. A project
-//     that uses structs, generics, etc. will emit TODO markers and
-//     likely fail to compile as Go.
+//   - Multi-file packages aren't fully emitted by gen yet; run executes
+//     the selected entry file. Complex unsupported lowering shapes may
+//     still emit TODO markers and fail to compile as Go.
 //
 //   - Registry / git dep code is vendored but NOT yet transpiled
 //     together with the entry file — the Workspace loader sees them
-//     for resolution, but gen Phase 2 needs to land before they
-//     contribute Go code.
+//     for resolution, but package-per-package emission still needs to
+//     land before they contribute Go code.
 //
 // Exit codes: the child `go run` process's exit code is propagated.
 // A 1–5 from the wrapper indicates an error inside osty itself.
@@ -187,8 +185,8 @@ func runRun(args []string, cliF cliFlags) {
 		fmt.Fprintf(os.Stderr, "osty run: %v\n", err)
 		os.Exit(1)
 	}
-	// Phase 1 gen returns warnings for unsupported constructs; we
-	// still try to run the output because the clean portion may compile.
+	// Gen returns warnings for unsupported lowering shapes; we still
+	// try to run the output because the clean portion may compile.
 	reportTranspileWarning("osty run", entryAbs, goPath, gerr)
 
 	// Step 5: go run. Profile-derived flags (e.g. `-gcflags=-N -l`

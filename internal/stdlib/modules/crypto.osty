@@ -29,7 +29,7 @@ pub fn md5(data: Bytes) -> Bytes {
 }
 
 pub fn randomBytes(n: Int) -> Bytes {
-    []
+    randomBytes(n)
 }
 
 pub fn constantTimeEq(a: Bytes, b: Bytes) -> Bool {

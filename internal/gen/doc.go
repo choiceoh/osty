@@ -49,8 +49,12 @@
 // if/match arms, loop bodies) are *not* crossed by the lift — a `?`
 // inside them binds to its own enclosing return context.
 //
-// Out of scope (future work):
+// Phases 5–6 coverage:
 //
-//   - use declarations, Go FFI (Phase 5)
-//   - channels, concurrency primitives (Phase 6)
+//   - use declarations and Go FFI (Phase 5)
+//   - channels and structured-concurrency primitives (Phase 6)
+//
+// Remaining TODO markers in emitted Go are backend-coverage issues for
+// particular AST shapes, not unresolved language semantics. The v0.4
+// language-decision register lives in SPEC_GAPS.md.
 package gen

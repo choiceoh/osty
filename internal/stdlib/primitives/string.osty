@@ -36,9 +36,9 @@ pub struct __StringMethods {
     pub fn graphemes(self) -> List<String> { [] }
 
     pub fn toBytes(self) -> Bytes { self.toBytes() }
-    pub fn toString(self) -> String { self }
+    pub fn toString(self) -> String { "" }
 
     // Numeric parsing
-    pub fn toInt(self) -> Result<Int, Error> { Err(0) }
-    pub fn toFloat(self) -> Result<Float, Error> { Err(0.0) }
+    pub fn toInt(self) -> Result<Int, Error> { Ok(0) }
+    pub fn toFloat(self) -> Result<Float, Error> { Ok(0.0) }
 }

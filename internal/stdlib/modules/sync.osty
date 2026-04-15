@@ -4,7 +4,7 @@ pub struct Mutex<T> {
     value: T,
 
     pub fn lock(self) -> Locked<T> {
-        Locked { value: self.value }
+        self.lock()
     }
 }
 
@@ -22,11 +22,11 @@ pub struct RwLock<T> {
     value: T,
 
     pub fn read(self) -> ReadLocked<T> {
-        ReadLocked { value: self.value }
+        self.read()
     }
 
     pub fn write(self) -> WriteLocked<T> {
-        WriteLocked { value: self.value }
+        self.write()
     }
 }
 

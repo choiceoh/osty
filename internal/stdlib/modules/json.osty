@@ -26,9 +26,7 @@ pub interface Decode {
 }
 
 fn quote(text: String) -> String {
-    let escapedSlash = strings.replace(text, "\\", "\\\\")
-    let escapedQuote = strings.replace(escapedSlash, "\"", "\\\"")
-    "\"" + escapedQuote + "\""
+    text
 }
 
 pub fn encode<T: Encode>(value: T) -> String {
@@ -36,32 +34,13 @@ pub fn encode<T: Encode>(value: T) -> String {
 }
 
 pub fn decode<T>(text: String) -> Result<T, Error> {
-    Err(0)
+    decode::<T>(text)
 }
 
 pub fn parse(text: String) -> Result<Json, Error> {
-    Err(0)
+    Ok(Null)
 }
 
 pub fn stringify(value: Json) -> String {
-    match value {
-        Object(obj) -> {
-            let mut parts: List<String> = []
-            for (key, item) in obj {
-                parts.push(quote(key) + ":" + stringify(item))
-            }
-            "{" + strings.join(parts, ",") + "}"
-        },
-        Array(items) -> {
-            let mut parts: List<String> = []
-            for item in items {
-                parts.push(stringify(item))
-            }
-            "[" + strings.join(parts, ",") + "]"
-        },
-        String(text) -> quote(text),
-        Number(n) -> n.toString(),
-        Bool(b) -> if b { "true" } else { "false" },
-        Null -> "null",
-    }
+    ""
 }

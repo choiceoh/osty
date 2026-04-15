@@ -259,7 +259,7 @@ func buildWorkspace(dir string, m *manifest.Manifest, flags cliFlags, deps resol
 	}
 	// Transpile + `go build` the root binary package (if any). Library
 	// members fall out of the binary emit for now — multi-target
-	// workspace builds are Phase 2 territory for the transpiler.
+	// workspace builds are tracked as emitter/back-end parity work.
 	if m.HasPackage {
 		rootPkg := ws.Packages[""]
 		if rootPkg != nil {
@@ -269,7 +269,7 @@ func buildWorkspace(dir string, m *manifest.Manifest, flags cliFlags, deps resol
 }
 
 // buildPackage runs the front-end over a single-package project and
-// then drives gen Phase 1 + `go build` for the binary entry point.
+// then drives gen + `go build` for the binary entry point.
 // When deps is non-nil, we wrap the package in a one-member Workspace
 // so `use` references to vendored external deps resolve through the
 // DepProvider. The plain resolve.LoadPackage path is kept as a
@@ -333,16 +333,15 @@ func buildPackage(dir string, m *manifest.Manifest, flags cliFlags, deps resolve
 // to Go via gen.Generate, writes the output under
 // .osty/out/<profile>[-<triple>]/, and invokes the Go toolchain with
 // the resolved profile's go-flags + target env. Libraries (no entry
-// file on disk) are a no-op — future gen phases will extend this to
-// emit a Go package per Osty package.
+// file on disk) are a no-op until the emitter grows package-per-package
+// output.
 //
 // Files whose header declares `@feature: NAME` via the @feature
 // pragma are skipped when NAME isn't in the active feature set, so
 // feature-gated modules drop out before transpile.
 //
 // A failure at the go-build step returns a non-zero exit; a gen-time
-// TODO marker is only logged (gen Phase 1 surfaces unsupported
-// constructs that way).
+// TODO marker is only logged so the clean portion remains inspectable.
 func emitAndBuild(root string, m *manifest.Manifest, pkg *resolve.Package, pr *resolve.PackageResult, chk *check.Result, resolved *profile.Resolved, feats map[string]bool) {
 	// 1. Locate the entry file. A library project has no entry;
 	// skip the emit path so `osty build` still works as a front-end
@@ -378,8 +377,8 @@ func emitAndBuild(root string, m *manifest.Manifest, pkg *resolve.Package, pr *r
 		fmt.Fprintf(os.Stderr, "osty build: entry %s not in package\n", entryRel)
 		os.Exit(1)
 	}
-	// 4. Transpile. Unsupported constructs produce TODO markers; we
-	// log the warning but proceed so simple programs build.
+	// 4. Transpile. Unsupported lowering shapes produce TODO markers;
+	// we log the warning but proceed so simple programs build.
 	res := &resolve.Result{
 		Refs:      entryFile.Refs,
 		TypeRefs:  entryFile.TypeRefs,
