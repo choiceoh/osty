@@ -6,7 +6,9 @@
 //
 // The checker also records the static evidence downstream phases need
 // for monomorphized generic calls, interface satisfaction, match
-// exhaustiveness, and auto-derived builder/default members.
+// exhaustiveness/unreachable arms, keyword/default-aware direct calls,
+// exact erased-callable calls, closure pattern params, and auto-derived
+// builder/default members.
 package check
 
 import (
@@ -87,4 +89,60 @@ type env struct {
 	// type so `?` can verify that a propagated Err satisfies it (or
 	// that the enclosing Error interface accepts it).
 	retResultErr types.Type
+
+	// capabilitySyms tracks bindings whose values are non-escaping
+	// structured-concurrency capabilities (`Handle<T>` / `TaskGroup`).
+	// The checker uses this to reject closure captures that could move
+	// a group-local capability beyond its structured scope.
+	capabilitySyms map[*resolve.Symbol]bool
+
+	// allowCapabilityCapture is a one-closure allowance used by
+	// `taskGroup(|g| ...)` and `g.spawn(|| ...)`: those closures are
+	// consumed immediately by the structured-concurrency primitive, so
+	// capturing the group handle there is permitted.
+	allowCapabilityCapture bool
+}
+
+func (e *env) rememberCapability(sym *resolve.Symbol) {
+	if e == nil || sym == nil {
+		return
+	}
+	if e.capabilitySyms == nil {
+		e.capabilitySyms = map[*resolve.Symbol]bool{}
+	}
+	e.capabilitySyms[sym] = true
+}
+
+func (e *env) hasCapability(sym *resolve.Symbol) bool {
+	if e == nil || sym == nil || e.capabilitySyms == nil {
+		return false
+	}
+	return e.capabilitySyms[sym]
+}
+
+func (e *env) child(ret types.Type) *env {
+	out := &env{retType: ret}
+	if rn, ok := types.AsNamedByName(ret, "Result"); ok && len(rn.Args) == 2 {
+		out.retIsResult = true
+		out.retResultErr = rn.Args[1]
+	}
+	if _, ok := ret.(*types.Optional); ok {
+		out.retIsOption = true
+	}
+	if e != nil && len(e.capabilitySyms) > 0 {
+		out.capabilitySyms = make(map[*resolve.Symbol]bool, len(e.capabilitySyms))
+		for sym, yes := range e.capabilitySyms {
+			out.capabilitySyms[sym] = yes
+		}
+	}
+	return out
+}
+
+func (e *env) withCapabilityCaptureAllowed() *env {
+	if e == nil {
+		return &env{allowCapabilityCapture: true}
+	}
+	out := e.child(e.retType)
+	out.allowCapabilityCapture = true
+	return out
 }

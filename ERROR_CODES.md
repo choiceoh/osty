@@ -465,7 +465,7 @@ pub fn f() {}
 
 ---
 
-## Type checking (E0700–E0740)
+## Type checking (E0700–E0743)
 
 ### E0700 — `CodeTypeMismatch`
 
@@ -722,6 +722,36 @@ Annotation argument has the wrong type.
 Match arm is unreachable because a previous arm fully covers its cases.
 
 **Fix**: merge or remove the shadowed arm.
+
+### E0741 — `CodeRefutableClosurePattern`
+
+Closure parameter pattern can fail to match.
+
+Closure parameters are destructured at every call site, so their patterns must be irrefutable: identifiers, `_`, tuples/structs made only of irrefutable sub-patterns, or `name @ irrefutable`.
+
+Spec: v0.4 G16
+
+**Fix**: accept the value with an irrefutable parameter pattern, then use `match` or `if let` inside the closure body.
+
+### E0742 — `CodeGenericCallableReference`
+
+Generic function or method is referenced without being called.
+
+Osty v0.4 does not have first-class polymorphic function values; generic callables must be instantiated by a call site, or wrapped in a closure that fixes the type arguments.
+
+Spec: v0.4 G14
+
+**Fix**: call the generic directly, or write a wrapper closure such as `|x| f::<Int>(x)`.
+
+### E0743 — `CodeCapabilityEscape`
+
+Structured-concurrency capability escapes its group scope.
+
+`Handle<T>` and `TaskGroup` are non-escaping capabilities. They may be used in the same `taskGroup` scope, joined/cancelled there, and passed to helpers that do not store or return them. Returning one, storing one in a field/collection, sending one over a channel, or capturing one in an escaping closure is rejected.
+
+Spec: v0.4 G13
+
+**Fix**: join/use the handle inside the `taskGroup` closure and return an ordinary value.
 
 ---
 

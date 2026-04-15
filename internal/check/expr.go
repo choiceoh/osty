@@ -2,6 +2,8 @@ package check
 
 import (
 	"fmt"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
@@ -116,6 +118,13 @@ func (c *checker) identType(id *ast.Ident, hint types.Type) types.Type {
 
 	c.warnIfDeprecated(sym, id.PosV)
 	t := c.symTypeOrError(sym)
+	if sym.Kind == resolve.SymFn {
+		if info := c.info(sym); info != nil && len(info.Generics) > 0 {
+			c.errNode(id, diag.CodeGenericCallableReference,
+				"generic function `%s` cannot be used as a function value", sym.Name)
+			return types.ErrorType
+		}
+	}
 	// If the ident references a value-returning symbol (Fn, variant)
 	// we return that fn/variant signature. For bare-variant references
 	// (`Empty`), the symbol's type is already the enum's Named.
@@ -397,10 +406,10 @@ func (c *checker) callType(e *ast.CallExpr, hint types.Type, env *env) types.Typ
 	// another package, not a method call. Look the member up in the
 	// target package's scope and type-check against its FnType.
 	if fx, ok := e.Fn.(*ast.FieldExpr); ok {
-		if t, handled := c.tryPackageCall(fx, e, hint, env); handled {
+		if t, handled := c.tryPackageCall(fx, e, nil, hint, env); handled {
 			return t
 		}
-		return c.methodCallType(fx, e, env)
+		return c.methodCallType(fx, e, nil, env)
 	}
 
 	// Ident callee: recover the fn's generics + parameter list for
@@ -435,6 +444,10 @@ func (c *checker) callType(e *ast.CallExpr, hint types.Type, env *env) types.Typ
 	// Turbofish callee: strip the turbofish wrapper, reuse its type args
 	// as the explicit instantiation.
 	if tf, ok := e.Fn.(*ast.TurbofishExpr); ok {
+		explicit := make([]types.Type, 0, len(tf.Args))
+		for _, a := range tf.Args {
+			explicit = append(explicit, c.typeOf(a))
+		}
 		if id, idOK := tf.Base.(*ast.Ident); idOK {
 			if sym := c.symbol(id); sym != nil {
 				t := c.symTypeOrError(sym)
@@ -445,14 +458,16 @@ func (c *checker) callType(e *ast.CallExpr, hint types.Type, env *env) types.Typ
 					if info != nil {
 						generics = info.Generics
 					}
-					explicit := make([]types.Type, 0, len(tf.Args))
-					for _, a := range tf.Args {
-						explicit = append(explicit, c.typeOf(a))
-					}
 					params := fnDeclParams(sym)
 					return c.applyDeclaredCallWithExplicit(e, fn, generics, params, explicit, hint, env)
 				}
 			}
+		}
+		if fx, fxOK := tf.Base.(*ast.FieldExpr); fxOK {
+			if t, handled := c.tryPackageCall(fx, e, explicit, hint, env); handled {
+				return t
+			}
+			return c.methodCallType(fx, e, explicit, env)
 		}
 	}
 
@@ -473,22 +488,23 @@ func (c *checker) callType(e *ast.CallExpr, hint types.Type, env *env) types.Typ
 	return c.applyFnTo(e, e.Args, fn, env)
 }
 
-// applyFnTo is the simple (non-generic) apply path: positional arity
-// check and per-arg type check. Kept for closure / anonymous fn-type
-// calls where generics don't apply.
+// applyFnTo is the simple (non-generic) apply path: positional-only
+// exact arity and per-arg type check. Kept for closure / anonymous
+// fn-type calls where generics and declaration metadata do not apply.
 //
 // When the expected parameter type is an interface, the argument is
 // validated structurally via satisfies(); non-interface params use the
 // usual Assignable relation.
 func (c *checker) applyFnTo(call ast.Node, args []*ast.Arg, fn *types.FnType, env *env) types.Type {
-	// Over-arity is always wrong. Under-arity is conservatively
-	// accepted because default arguments (§3.1) could legitimately
-	// forgive the gap and the FnType alone doesn't carry default
-	// metadata. When a default-aware shape is wired in, the guard
-	// should tighten to `!= len(fn.Params)`.
-	if len(args) > len(fn.Params) {
+	for _, a := range args {
+		if a.Name != "" {
+			c.errNode(a.Value, diag.CodeKeywordArgUnknown,
+				"function values do not accept keyword argument `%s`", a.Name)
+		}
+	}
+	if len(args) != len(fn.Params) {
 		c.errNode(call, diag.CodeWrongArgCount,
-			"too many arguments: expected %d, got %d",
+			"wrong number of arguments: expected %d, got %d",
 			len(fn.Params), len(args))
 	}
 	for i, a := range args {
@@ -543,17 +559,15 @@ func (c *checker) applyGenericCall(e *ast.CallExpr, fn *types.FnType, generics [
 // applyGenericCallWithArgs is applyGenericCall with an optional explicit
 // type-argument list from a turbofish.
 func (c *checker) applyGenericCallWithArgs(e *ast.CallExpr, fn *types.FnType, generics []*types.TypeVar, explicit []types.Type, hint types.Type, env *env) types.Type {
-	c.checkExplicitGenericArity(e, len(generics), len(explicit))
+	c.checkExplicitGenericArity(e, len(generics), explicit)
 	if len(generics) == 0 {
 		// Non-generic fn — arity and types only.
 		return c.applyFnTo(e, e.Args, fn, env)
 	}
 
-	// See applyFnTo for the `>`-only rationale: defaults may forgive
-	// under-arity but we can't see them from here.
-	if len(e.Args) > len(fn.Params) {
+	if len(e.Args) != len(fn.Params) {
 		c.errNode(e, diag.CodeWrongArgCount,
-			"too many arguments: expected %d, got %d",
+			"wrong number of arguments: expected %d, got %d",
 			len(fn.Params), len(e.Args))
 	}
 
@@ -624,8 +638,12 @@ func (c *checker) applyGenericCallWithArgs(e *ast.CallExpr, fn *types.FnType, ge
 	return types.Substitute(fn.Return, sub)
 }
 
-func (c *checker) checkExplicitGenericArity(e *ast.CallExpr, want, got int) {
-	if got == 0 || want == got {
+func (c *checker) checkExplicitGenericArity(e *ast.CallExpr, want int, explicit []types.Type) {
+	if explicit == nil {
+		return
+	}
+	got := len(explicit)
+	if want == got {
 		return
 	}
 	c.errNode(e, diag.CodeGenericArgCount,
@@ -643,7 +661,7 @@ func (c *checker) checkExplicitGenericArity(e *ast.CallExpr, want, got int) {
 // lookup surfaced an error diagnostic), or (nil, false) to let the
 // caller fall through to method-call handling for instance receivers.
 func (c *checker) tryPackageCall(
-	fx *ast.FieldExpr, e *ast.CallExpr, hint types.Type, env *env,
+	fx *ast.FieldExpr, e *ast.CallExpr, explicit []types.Type, hint types.Type, env *env,
 ) (types.Type, bool) {
 	id, ok := fx.X.(*ast.Ident)
 	if !ok {
@@ -716,14 +734,15 @@ func (c *checker) tryPackageCall(
 	if info != nil && len(generics) == 0 {
 		generics = info.Generics
 	}
-	return c.applyGenericCall(e, fn, generics, hint, env), true
+	return c.applyDeclaredCallWithExplicit(e, fn, generics, fnDeclParams(tgt), explicit, hint, env), true
 }
 
-func (c *checker) methodCallType(fx *ast.FieldExpr, e *ast.CallExpr, env *env) types.Type {
+func (c *checker) methodCallType(fx *ast.FieldExpr, e *ast.CallExpr, explicit []types.Type, env *env) types.Type {
 	// Builder protocol (§3.4) takes priority over regular method lookup
 	// — Type.builder() / value.toBuilder() / chain setters / .build().
 	// tryBuilderCall handles argument type-checking on its own paths.
 	if t, handled := c.tryBuilderCall(fx, e, env); handled {
+		c.checkExplicitGenericArity(e, 0, explicit)
 		return t
 	}
 	recvT := c.checkExpr(fx.X, nil, env)
@@ -731,12 +750,13 @@ func (c *checker) methodCallType(fx *ast.FieldExpr, e *ast.CallExpr, env *env) t
 	// intercept here before the standard method lookup so the returned
 	// Handle<T> carries the right T.
 	if n, ok := types.AsNamed(recvT); ok && n.Sym != nil && n.Sym.Name == "TaskGroup" && fx.Name == "spawn" {
+		c.checkExplicitGenericArity(e, 0, explicit)
 		if len(e.Args) != 1 {
 			c.errNode(e, diag.CodeWrongArgCount,
 				"`TaskGroup.spawn` takes exactly 1 argument, got %d", len(e.Args))
 			return types.ErrorType
 		}
-		at := c.checkExpr(e.Args[0].Value, nil, env)
+		at := c.checkExpr(e.Args[0].Value, nil, env.withCapabilityCaptureAllowed())
 		fn, ok := types.AsFn(at)
 		if !ok {
 			if !types.IsError(at) {
@@ -749,6 +769,11 @@ func (c *checker) methodCallType(fx *ast.FieldExpr, e *ast.CallExpr, env *env) t
 		if ret == nil {
 			ret = types.Unit
 		}
+		if len(fn.Params) != 0 {
+			c.errNode(e.Args[0].Value, diag.CodeWrongArgCount,
+				"`TaskGroup.spawn` expects a zero-argument closure, got %d parameter(s)", len(fn.Params))
+		}
+		c.rejectCapabilityEscape(e.Args[0].Value, ret, "be returned from a `TaskGroup.spawn` task")
 		return c.handleOf(ret)
 	}
 	c.recordExpr(fx, types.ErrorType) // placeholder, refine below
@@ -773,6 +798,7 @@ func (c *checker) methodCallType(fx *ast.FieldExpr, e *ast.CallExpr, env *env) t
 	md, sub := c.lookupMethod(recvT, fx.Name)
 	if md == nil {
 		if _, known := stdlibMethods[fx.Name]; known {
+			c.checkExplicitGenericArity(e, 0, explicit)
 			// Well-known stdlib / builtin method — accept any arguments
 			// and produce an approximate return type (escape hatch until
 			// the stdlib is modelled in full).
@@ -803,7 +829,7 @@ func (c *checker) methodCallType(fx *ast.FieldExpr, e *ast.CallExpr, env *env) t
 			fn.Params[i] = types.Substitute(p, sub)
 		}
 	}
-	ret := c.applyDeclaredCall(e, fn, md.Generics, md.Params, nil, env)
+	ret := c.applyDeclaredCallWithExplicit(e, fn, md.Generics, md.Params, explicit, nil, env)
 	if wasOptional && fx.IsOptional {
 		return &types.Optional{Inner: ret}
 	}
@@ -992,6 +1018,11 @@ func (c *checker) stdlibMap(e *ast.CallExpr, recvT types.Type, env *env) types.T
 	hint := &types.FnType{Params: []types.Type{elem}, Return: nil}
 	got := c.checkExpr(e.Args[0].Value, hint, env)
 	if fn, ok := types.AsFn(got); ok {
+		if len(fn.Params) != 1 {
+			c.errNode(e.Args[0].Value, diag.CodeWrongArgCount,
+				"`map` expects a one-argument closure, got %d parameter(s)", len(fn.Params))
+		}
+		c.rejectCapabilityEscape(e.Args[0].Value, fn.Return, "be stored in a collection")
 		return c.listOf(fn.Return)
 	}
 	return c.listOf(types.ErrorType)
@@ -1012,6 +1043,10 @@ func (c *checker) stdlibFilter(e *ast.CallExpr, recvT types.Type, env *env) type
 	hint := &types.FnType{Params: []types.Type{elem}, Return: types.Bool}
 	got := c.checkExpr(e.Args[0].Value, hint, env)
 	if fn, ok := types.AsFn(got); ok {
+		if len(fn.Params) != 1 {
+			c.errNode(e.Args[0].Value, diag.CodeWrongArgCount,
+				"`filter` expects a one-argument closure, got %d parameter(s)", len(fn.Params))
+		}
 		if !types.IsBool(fn.Return) && !types.IsError(fn.Return) {
 			c.errNode(e.Args[0].Value, diag.CodeTypeMismatch,
 				"`filter` callback must return `Bool`, got `%s`", fn.Return)
@@ -1407,6 +1442,11 @@ func (c *checker) tryBuiltinCall(name string, e *ast.CallExpr, hint types.Type, 
 		if ret == nil {
 			ret = types.Unit
 		}
+		if len(fn.Params) != 0 {
+			c.errNode(e.Args[0].Value, diag.CodeWrongArgCount,
+				"`spawn` expects a zero-argument closure, got %d parameter(s)", len(fn.Params))
+		}
+		c.rejectCapabilityEscape(e.Args[0].Value, ret, "be returned from a `spawn` task")
 		return c.handleOf(ret)
 	case "taskGroup":
 		// §8.1: taskGroup(|g| body) — the closure receives a TaskGroup
@@ -1432,9 +1472,14 @@ func (c *checker) tryBuiltinCall(name string, e *ast.CallExpr, hint types.Type, 
 			Params: []types.Type{&types.Named{Sym: tgSym}},
 			Return: innerRet,
 		}
-		at := c.checkExpr(e.Args[0].Value, closureHint, env)
+		at := c.checkExpr(e.Args[0].Value, closureHint, env.withCapabilityCaptureAllowed())
 		if fn, ok := types.AsFn(at); ok {
+			if len(fn.Params) != 1 {
+				c.errNode(e.Args[0].Value, diag.CodeWrongArgCount,
+					"`taskGroup` expects a one-argument closure, got %d parameter(s)", len(fn.Params))
+			}
 			if fn.Return != nil {
+				c.rejectCapabilityEscape(e.Args[0].Value, fn.Return, "escape from `taskGroup`")
 				return fn.Return
 			}
 			return types.Unit
@@ -1461,6 +1506,11 @@ func (c *checker) tryBuiltinCall(name string, e *ast.CallExpr, hint types.Type, 
 				mapperHint := &types.FnType{Params: []types.Type{n.Args[0]}, Return: mapperRet}
 				got := c.checkExpr(e.Args[2].Value, mapperHint, env)
 				if fn, ok := types.AsFn(got); ok && fn.Return != nil {
+					if len(fn.Params) != 1 {
+						c.errNode(e.Args[2].Value, diag.CodeWrongArgCount,
+							"`parallel` mapper expects a one-argument closure, got %d parameter(s)", len(fn.Params))
+					}
+					c.rejectCapabilityEscape(e.Args[2].Value, fn.Return, "be stored in a collection")
 					return c.listOf(fn.Return)
 				}
 				return c.listOf(mapperRet)
@@ -1487,6 +1537,11 @@ func (c *checker) tryBuiltinCall(name string, e *ast.CallExpr, hint types.Type, 
 			if ret == nil {
 				ret = types.Unit
 			}
+			if len(fn.Params) != 0 {
+				c.errNode(a.Value, diag.CodeWrongArgCount,
+					"`parallel` expects zero-argument closures, got %d parameter(s)", len(fn.Params))
+			}
+			c.rejectCapabilityEscape(a.Value, ret, "be stored in a collection")
 			if elemT == nil {
 				elemT = ret
 			}
@@ -1542,6 +1597,11 @@ func (c *checker) tryThreadCall(e *ast.CallExpr, env *env) types.Type {
 			if ret == nil {
 				ret = types.Unit
 			}
+			if len(fn.Params) != 0 {
+				c.errNode(e.Args[0].Value, diag.CodeWrongArgCount,
+					"`thread.spawn` expects a zero-argument closure, got %d parameter(s)", len(fn.Params))
+			}
+			c.rejectCapabilityEscape(e.Args[0].Value, ret, "be returned from a `thread.spawn` task")
 			return c.handleOf(ret)
 		}
 		return types.ErrorType
@@ -1995,6 +2055,11 @@ func (c *checker) fieldType(fx *ast.FieldExpr, env *env) types.Type {
 			// type is dropped from the signature; type-level generics
 			// on the owning type are substituted.
 			if md, sub := c.lookupMethod(recvT, fx.Name); md != nil {
+				if len(md.Generics) > 0 {
+					c.errNode(fx, diag.CodeGenericCallableReference,
+						"generic method `%s` cannot be used as a function value", fx.Name)
+					return types.ErrorType
+				}
 				ft := md.Fn
 				if len(sub) > 0 {
 					ft = &types.FnType{
@@ -2102,8 +2167,10 @@ func (c *checker) indexType(e *ast.IndexExpr, env *env) types.Type {
 // ---- Turbofish / range / tuple / list / map ----
 
 func (c *checker) turbofishType(e *ast.TurbofishExpr, hint types.Type, env *env) types.Type {
-	// Turbofish forwards the underlying expression's type; tracking
-	// per-site generic instantiation is future work.
+	// A turbofish expression used as a value forwards the underlying
+	// expression's type. Call expressions consume the explicit args in
+	// applyGenericCallWithArgs; non-call positions are just function
+	// values with their declared generic shape.
 	return c.checkExpr(e.Base, hint, env)
 }
 
@@ -2153,6 +2220,7 @@ func (c *checker) listType(e *ast.ListExpr, hint types.Type, env *env) types.Typ
 		// we produce List<?> with ErrorType element to suppress further
 		// complaints. `let xs: List<Int> = []` resolves through hint.
 		if elemHint != nil {
+			c.rejectCapabilityEscape(e, elemHint, "be stored in a collection")
 			return c.listOf(elemHint)
 		}
 		return c.listOf(types.ErrorType)
@@ -2160,6 +2228,7 @@ func (c *checker) listType(e *ast.ListExpr, hint types.Type, env *env) types.Typ
 	var elemT types.Type
 	for _, x := range e.Elems {
 		t := c.checkExpr(x, elemHint, env)
+		c.rejectCapabilityEscape(x, t, "be stored in a collection")
 		if elemT == nil {
 			elemT = t
 			continue
@@ -2186,6 +2255,8 @@ func (c *checker) mapType(e *ast.MapExpr, hint types.Type, env *env) types.Type 
 	}
 	if e.Empty || len(e.Entries) == 0 {
 		if kHint != nil && vHint != nil {
+			c.rejectCapabilityEscape(e, kHint, "be stored as a map key")
+			c.rejectCapabilityEscape(e, vHint, "be stored in a map value")
 			return c.namedOf("Map", []types.Type{kHint, vHint})
 		}
 		return c.namedOf("Map", []types.Type{types.ErrorType, types.ErrorType})
@@ -2194,6 +2265,8 @@ func (c *checker) mapType(e *ast.MapExpr, hint types.Type, env *env) types.Type 
 	for _, ent := range e.Entries {
 		kt := c.checkExpr(ent.Key, kHint, env)
 		vt := c.checkExpr(ent.Value, vHint, env)
+		c.rejectCapabilityEscape(ent.Key, kt, "be stored as a map key")
+		c.rejectCapabilityEscape(ent.Value, vt, "be stored in a map value")
 		if kT == nil {
 			kT = kt
 		} else if u, ok := types.Unify(kT, kt); ok {
@@ -2263,6 +2336,7 @@ func (c *checker) structLitType(e *ast.StructLit, env *env) types.Type {
 	spreadCoversAll := false
 	if e.Spread != nil {
 		spreadT := c.checkExpr(e.Spread, selfT, env)
+		c.rejectCapabilityEscape(e.Spread, spreadT, "be stored in a struct spread")
 		if spreadT != nil && !types.IsError(spreadT) {
 			n, ok := types.AsNamed(spreadT)
 			if !ok || n.Sym != typeSym {
@@ -2308,6 +2382,7 @@ func (c *checker) structLitType(e *ast.StructLit, env *env) types.Type {
 			id := &ast.Ident{PosV: f.PosV, EndV: f.PosV, Name: f.Name}
 			vt = c.checkExpr(id, fd.Type, env)
 		}
+		c.rejectCapabilityEscape(f, vt, "be stored in a field")
 		if !c.accepts(fd.Type, vt, f) {
 			c.errMismatch(f, fd.Type, vt)
 		}
@@ -2504,6 +2579,23 @@ func (c *checker) closureType(e *ast.ClosureExpr, hint types.Type, parent *env) 
 	if f, ok := hint.(*types.FnType); ok {
 		hintFn = f
 	}
+	if hintFn != nil && len(e.Params) != len(hintFn.Params) {
+		c.errNode(e, diag.CodeWrongArgCount,
+			"closure expects %d parameter(s), got %d", len(hintFn.Params), len(e.Params))
+	}
+	var retT types.Type = types.Unit
+	if e.ReturnType != nil {
+		retT = c.typeOf(e.ReturnType)
+	} else if hintFn != nil && hintFn.Return != nil {
+		retT = hintFn.Return
+	}
+	if parent != nil && !parent.allowCapabilityCapture {
+		if id, name, ok := c.firstCapabilityCapture(e.Body, parent); ok {
+			c.errNode(id, diag.CodeCapabilityEscape,
+				"non-escaping capability `%s` cannot be captured by an escaping closure", name)
+		}
+	}
+	bodyEnv := parent.child(retT)
 	paramTs := make([]types.Type, len(e.Params))
 	for i, p := range e.Params {
 		if p.Type != nil {
@@ -2516,22 +2608,18 @@ func (c *checker) closureType(e *ast.ClosureExpr, hint types.Type, parent *env) 
 		if p.Name != "" {
 			if sym := c.symByDecl(p); sym != nil {
 				c.setSymType(sym, paramTs[i])
+				if containsCapability(paramTs[i]) {
+					bodyEnv.rememberCapability(sym)
+				}
 			}
 		}
-	}
-	var retT types.Type = types.Unit
-	if e.ReturnType != nil {
-		retT = c.typeOf(e.ReturnType)
-	} else if hintFn != nil && hintFn.Return != nil {
-		retT = hintFn.Return
-	}
-	bodyEnv := &env{retType: retT}
-	if rn, ok := types.AsNamedByName(retT, "Result"); ok && len(rn.Args) == 2 {
-		bodyEnv.retIsResult = true
-		bodyEnv.retResultErr = rn.Args[1]
-	}
-	if _, ok := retT.(*types.Optional); ok {
-		bodyEnv.retIsOption = true
+		if p.Pattern != nil {
+			if !closureParamPatternIrrefutable(p.Pattern) {
+				c.errNode(p.Pattern, diag.CodeRefutableClosurePattern,
+					"closure parameter pattern must be irrefutable")
+			}
+			c.bindPatternTypes(p.Pattern, paramTs[i], bodyEnv)
+		}
 	}
 	bodyT := c.checkExpr(e.Body, retT, bodyEnv)
 	if e.ReturnType != nil && !c.accepts(retT, bodyT, e.Body) {
@@ -2541,6 +2629,38 @@ func (c *checker) closureType(e *ast.ClosureExpr, hint types.Type, parent *env) 
 		retT = bodyT
 	}
 	return &types.FnType{Params: paramTs, Return: retT}
+}
+
+func closureParamPatternIrrefutable(p ast.Pattern) bool {
+	switch x := p.(type) {
+	case *ast.WildcardPat:
+		return true
+	case *ast.IdentPat:
+		return !isUpperIdentName(x.Name)
+	case *ast.TuplePat:
+		for _, elem := range x.Elems {
+			if !closureParamPatternIrrefutable(elem) {
+				return false
+			}
+		}
+		return true
+	case *ast.StructPat:
+		for _, f := range x.Fields {
+			if f.Pattern != nil && !closureParamPatternIrrefutable(f.Pattern) {
+				return false
+			}
+		}
+		return true
+	case *ast.BindingPat:
+		return closureParamPatternIrrefutable(x.Pattern)
+	default:
+		return false
+	}
+}
+
+func isUpperIdentName(name string) bool {
+	r, _ := utf8.DecodeRuneInString(name)
+	return r != utf8.RuneError && unicode.IsUpper(r)
 }
 
 // blockAsExprType computes the type of a Block when used as an

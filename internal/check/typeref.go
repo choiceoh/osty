@@ -129,17 +129,22 @@ func (c *checker) builtinScalarType(name string) (types.Type, bool) {
 	return t, ok
 }
 
-// builtinGenericArity is the expected type-argument count per prelude
-// compound name. Missing entries (including the marker interfaces) are
-// accepted without an arity check — interface instantiation is future
-// work, so flagging them here would be noisy.
-var builtinGenericArity = map[string]int{
-	"List":    1,
-	"Set":     1,
-	"Map":     2,
-	"Result":  2,
-	"Chan":    1,
-	"Channel": 1,
+// builtinTypeArity is the expected type-argument count for every
+// non-scalar prelude name that is valid in type position.
+var builtinTypeArity = map[string]int{
+	"List":      1,
+	"Set":       1,
+	"Map":       2,
+	"Result":    2,
+	"Chan":      1,
+	"Channel":   1,
+	"Handle":    1,
+	"TaskGroup": 0,
+	"Error":     0,
+	"Equal":     0,
+	"Ordered":   0,
+	"Hashable":  0,
+	"Option":    1,
 }
 
 // builtinGenericType handles List<T>, Map<K,V>, Set<T>, Option<T>,
@@ -150,20 +155,22 @@ func (c *checker) builtinGenericType(n *ast.NamedType, sym *resolve.Symbol) type
 		args = append(args, c.typeOf(a))
 	}
 
+	want, ok := builtinTypeArity[sym.Name]
+	if !ok {
+		c.errNode(n, diag.CodeWrongSymbolKind,
+			"`%s` is a builtin value, not a type", sym.Name)
+		return types.ErrorType
+	}
+	if want != len(args) {
+		c.errNode(n, diag.CodeGenericArgCount,
+			"`%s` expects %d type argument(s), got %d", sym.Name, want, len(args))
+		return types.ErrorType
+	}
+
 	// Option<T> is just Optional(T) — canonicalize at the boundary so
 	// the rest of the checker only sees one form.
 	if sym.Name == "Option" {
-		if len(args) != 1 {
-			c.errNode(n, diag.CodeGenericArgCount,
-				"`Option` expects exactly 1 type argument, got %d", len(args))
-			return types.ErrorType
-		}
 		return &types.Optional{Inner: args[0]}
-	}
-
-	if want, ok := builtinGenericArity[sym.Name]; ok && want != len(args) {
-		c.errNode(n, diag.CodeGenericArgCount,
-			"`%s` expects %d type argument(s), got %d", sym.Name, want, len(args))
 	}
 	return &types.Named{Sym: sym, Args: args}
 }

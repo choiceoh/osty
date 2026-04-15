@@ -6,7 +6,7 @@ pub struct Base64Url {
     }
 
     pub fn decode(self, text: String) -> Result<Bytes, Error> {
-        Ok([])
+        self.decode(text)
     }
 }
 
@@ -18,7 +18,7 @@ pub struct Base64 {
     }
 
     pub fn decode(self, text: String) -> Result<Bytes, Error> {
-        Ok([])
+        self.decode(text)
     }
 }
 
@@ -28,7 +28,7 @@ pub struct Hex {
     }
 
     pub fn decode(self, text: String) -> Result<Bytes, Error> {
-        Ok([])
+        self.decode(text)
     }
 }
 

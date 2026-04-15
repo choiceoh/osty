@@ -92,15 +92,26 @@ fn main() {
 }
 
 // TestWorkspaceCrossPackageArgCountTooMany verifies that cross-package
-// calls catch extra arguments (the checker detects "too many"; the
-// "too few" case is a pre-existing gap not specific to cross-package
-// calls and lives on the checker TODO list).
+// calls catch extra arguments.
 func TestWorkspaceCrossPackageArgCountTooMany(t *testing.T) {
 	_, results := mkWorkspace(t, map[string]string{
 		"auth/login.osty": `pub fn login(user: String) -> Bool { true }`,
 		"main.osty": `use auth
 fn main() {
     auth.login("a", "extra", "extra")
+}`,
+	})
+	if findDiagCode(results, diag.CodeWrongArgCount) == nil {
+		t.Fatalf("expected E0701, got %v", allCheckDiags(results))
+	}
+}
+
+func TestWorkspaceCrossPackageArgCountTooFew(t *testing.T) {
+	_, results := mkWorkspace(t, map[string]string{
+		"auth/login.osty": `pub fn login(user: String, pass: String) -> Bool { true }`,
+		"main.osty": `use auth
+fn main() {
+    auth.login("a")
 }`,
 	})
 	if findDiagCode(results, diag.CodeWrongArgCount) == nil {

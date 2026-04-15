@@ -66,7 +66,7 @@ func policyManifestFields(m *manifest.Manifest) []*diag.Diagnostic {
 	}
 	if p.Edition == "" {
 		out = append(out, synthetic(diag.Warning, "CI104",
-			"package.edition is not set — pin an edition (e.g. \"0.3\") to avoid drift"))
+			"package.edition is not set — pin an edition (e.g. \"0.4\") to avoid drift"))
 	}
 	if p.License == "" {
 		out = append(out, synthetic(diag.Warning, "CI105",

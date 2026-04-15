@@ -55,11 +55,7 @@ pub fn fields() -> Fields {
 }
 
 fn write(level: String, msg: String, fields: Fields) {
-    if fields.len() == 0 {
-        println(level + ": " + msg)
-    } else {
-        println(level + ": " + msg + " " + fields.toString())
-    }
+    println(msg)
 }
 
 pub fn debug(msg: String, fields: Fields = {:}) {

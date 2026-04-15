@@ -4,7 +4,7 @@
 // Stdlib modules are authored as .osty stub files under `modules/`
 // (and, once primitive method stubs land, `primitives/`). Each stub
 // declares types, interfaces, and body-less `fn` signatures that mirror
-// the language specification in `LANG_SPEC_v0.3/10-standard-library/`.
+// the language specification in `LANG_SPEC_v0.4/10-standard-library/`.
 // The stubs are embedded at build time and parsed by the existing
 // compiler front-end so the stdlib uses the same syntax rules as user
 // code.

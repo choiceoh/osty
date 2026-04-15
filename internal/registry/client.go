@@ -61,7 +61,7 @@ func NewClient(baseURL string) *Client {
 	return &Client{
 		BaseURL:   strings.TrimRight(baseURL, "/"),
 		HTTP:      &http.Client{Timeout: DefaultTimeout},
-		UserAgent: "osty/0.3",
+		UserAgent: "osty/0.4",
 	}
 }
 

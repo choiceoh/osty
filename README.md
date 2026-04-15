@@ -2,8 +2,8 @@
 
 A work-in-progress implementation of the **Osty** programming language — a
 general-purpose, statically-typed, GC'd language specified in
-[`LANG_SPEC_v0.3/`](./LANG_SPEC_v0.3/README.md) with grammar fixed in
-[`OSTY_GRAMMAR_v0.3.md`](./OSTY_GRAMMAR_v0.3.md).
+[`LANG_SPEC_v0.4/`](./LANG_SPEC_v0.4/README.md) with grammar fixed in
+[`OSTY_GRAMMAR_v0.4.md`](./OSTY_GRAMMAR_v0.4.md).
 
 The target is transpilation to Go. Current scope: front-end
 (lex → parse → resolve → type-check), multi-file packages and
@@ -17,23 +17,22 @@ and threads the front-end + gen across the declared packages, a
 working test runner (`osty test`), API documentation generation
 (`osty doc`), CI quality tooling (`osty ci`), and a package manager
 (`osty add` / `osty update` / `osty publish`) backed by a
-file-backed HTTP registry server for local/private registries. The
-remaining pieces are Tier 2+ of the standard library; the checker now
-records generic call instantiations, validates structural interface
-satisfaction, emits match exhaustiveness diagnostics, and wires the
-auto-derived builder/default protocol.
+file-backed HTTP registry server for local/private registries. The next
+language baseline is v0.4: the grammar is frozen, the remaining
+semantic corners are closed, and the next work is implementation/runtime
+coverage rather than language-decision churn.
 
 ## Status
 
 | Phase | Status |
 |---|---|
 | Lexer (UTF-8, ASI, triple-quoted strings, interpolation) | done |
-| Parser (v0.3 grammar, error recovery, fuzz-clean) | done |
+| Parser (v0.4 grammar, error recovery, fuzz-clean) | done |
 | AST (all node kinds implement `ast.Node`) | done |
 | Diagnostics (`error[E0002]:` with caret, hints, notes) | done |
 | Name resolution (single + multi-file, workspace, typo suggestions) | done |
 | Formatter (`internal/format`) | done |
-| Type checker (`internal/check`) | partial (see gaps below) |
+| Type checker (`internal/check`) | done for v0.4 front-end core — generic instantiation, structural interface checks, exhaustiveness, builder protocol, function-value arity, closure pattern params |
 | Linter (`internal/lint`, L0001–L0042, `--fix` / `--fix-dry-run`) | done |
 | Multi-file packages (`resolve` loader/package/workspace) | done |
 | LSP (`internal/lsp`, wired as `osty lsp`) | done — hover, definition, formatting, documentSymbol, lint diagnostics |
@@ -48,44 +47,42 @@ auto-derived builder/default protocol.
 | CI quality tooling (`internal/ci`, `osty ci`) | done — signature-aware snapshots, workspace coverage, JSON reports |
 | Pipeline visualizer (`osty pipeline`) | done — per-stage timing, workspace mode, package-mode gen, baseline diff, LSP trace, `--explain` |
 | Package registry backend / `osty registry serve` | done — file-backed HTTP server for index/search/download/publish/yank, with ETag index responses and bearer-token write auth |
-| Build orchestrator (`osty build`) | wired — drives manifest → front-end → gen Phase 1 |
-| Test runner harness (`internal/testgen`) | wired — merges per-file gen output, injects a real std.testing runtime + main(), runs via `go run` |
-| `osty test` (discovery + front-end + execution) | wired — validates and **runs** discovered `test*` / `bench*` fns; failures and pass/fail totals report inline |
 | Package registry / `osty add` / `osty update` / `osty run` | done (resolve + vendor + lockfile-honoring re-resolves, ETag-cached registry index, copy fallback for symlink-less filesystems; CLI: `add`, `remove`/`rm`, `update`, `run`, `fetch`, `publish`, `search`, `info`, `yank`/`unyank`, `login`/`logout`; `--locked` / `--frozen` CI guards) |
 | Package manager (`osty add` / `osty update`, path + git + registry sources, SemVer resolver, deterministic lockfile) | wired — `add` mutates `osty.toml` and re-vendors; `update` re-resolves selectively or in full |
-| `osty run` (build + exec through gen Phase 1) | wired — resolves manifest, vendors deps, transpiles entry, `go run`s the output with profile/target-aware flags |
+| `osty run` (build + exec through gen) | wired — resolves manifest, vendors deps, transpiles entry, `go run`s the output with profile/target-aware flags |
 | `osty publish` (pack + upload tarball to a registry) | wired — deterministic gzipped tar, sha256 checksum, bearer-auth POST; `--dry-run` stops before upload |
 
-The front-end (lex → parse → resolve) is **spec-complete for v0.3**:
-every syntactic construct in `LANG_SPEC_v0.3/` has a positive-corpus
-fixture that parses cleanly, and every reject-rule has a negative
-fixture that triggers the expected `Exxxx` diagnostic. See
-[`ERROR_CODES.md`](./ERROR_CODES.md) for the full code index.
+The front-end (lex → parse → resolve → type-check) is **coverage-complete
+for the v0.4 core**: spec blocks parse, package/workspace resolution is
+covered, reject-rules have stable `Exxxx` diagnostics, and the checker
+now covers generic call-site instantiation, interface satisfaction,
+match exhaustiveness/unreachable arms, builder/default/toBuilder,
+method references as values, cross-file partial-method collisions,
+builtin type-position arity, function-call turbofish arity, and
+cross-package call arity. v0.4 additionally locks positional-only exact
+arity for erased function values and irrefutable-only closure parameter
+patterns.
 
-### Type-checker gaps
+### v0.4 Edge-Case Sweep
 
-The checker covers the common path (literals, operators, collections,
-functions, patterns, control flow, field access, method dispatch,
-Option/Result, closures, type aliases) and now closes the major static
-guarantee hooks: generic call instantiation records for the transpiler,
-structural interface satisfaction including composed interfaces, match
-exhaustiveness (`E0731`) with witnesses for closed shapes, method
-references as values, and auto-derived `default()` / builder flows.
+v0.4 closes the still-soft language corners without adding a large new
+surface area. The resolved decisions are archived in
+[`SPEC_GAPS.md`](./SPEC_GAPS.md):
 
-Minor deferred items are deliberately conservative rather than absent:
-some built-in marker-interface derivations are accepted optimistically
-outside primitives, open scalar match domains still require a catch-all,
-and type-level generic specialization remains less precise than
-function-call monomorphization.
+- structured-concurrency escape rules for `Handle<T>` / `TaskGroup`
+- exact semantics for generic method turbofish and method references
+- callable arity after function/default metadata is erased
+- closure parameter pattern implementation parity
+- finite witness diagnostics for the remaining nested pattern shapes
+- any stdlib protocol edge cases discovered while Tier 2 modules are
+  moved from prose to checked stubs
 
 ### Transpiler phases
 
 `internal/gen` is wired up as the `osty gen FILE` subcommand.
 Phases 1–6 are all implemented end-to-end (see commit
 `4829685` "gen/check: finish phases 4–6 for end-to-end CLI
-usability"). Remaining unimplemented corners of each phase still
-emit a `/* TODO(phaseN): ... */` marker so the produced Go file
-type-checks where possible. Phase scope, per `internal/gen/doc.go`:
+usability"). Phase scope, per `internal/gen/doc.go`:
 
 - **Phase 1** ✓ primitive literals/operators, user fn declarations,
   let bindings, if / for / return, list literals, print intrinsics
@@ -99,9 +96,9 @@ type-checks where possible. Phase scope, per `internal/gen/doc.go`:
 
 ```
 osty/
-├── LANG_SPEC_v0.3/          # Language spec (prose + examples, per-section)
-├── OSTY_GRAMMAR_v0.3.md     # EBNF grammar + decision log
-├── SPEC_GAPS.md             # Resolved-gap archive (no open items in v0.3)
+├── LANG_SPEC_v0.4/          # Current language spec (prose + examples)
+├── OSTY_GRAMMAR_v0.4.md     # Current EBNF grammar + decision log
+├── SPEC_GAPS.md             # Resolved-gap archive (no open items in v0.4)
 ├── cmd/
 │   ├── osty/                # Main CLI (`osty` binary)
 │   └── codesdoc/            # Regenerates ERROR_CODES.md from codes.go
@@ -150,7 +147,7 @@ osty build [DIR]       # manifest-driven: manifest → deps → front-end
 osty add PKG           # append a dependency to osty.toml and re-resolve
 osty remove NAME...    # drop dependencies from osty.toml and re-resolve (alias: rm)
 osty update [NAMES...] # refresh the lockfile (selective or full)
-osty run [-- ARGS...]  # build and exec the binary (gen Phase 1)
+osty run [-- ARGS...]  # build and exec the binary through gen
 osty test [PATH|FILTERS...] # discover & validate *_test.osty; list test + bench fns
 osty publish           # pack the project and upload to a registry
 osty search QUERY      # full-text search the registry (--registry, --limit)
@@ -270,7 +267,7 @@ creating a new one.
 `osty build` loads `osty.toml` starting at the given path (or the cwd),
 resolves dependencies against `osty.lock` (regenerated if stale),
 vendors deps into `<project>/.osty/deps/`, and runs the front-end
-(parse → resolve → check → lint) plus gen Phase 1 across every package
+(parse → resolve → check → lint) plus gen across every package
 the manifest names. Future iterations will invoke `go build` on the
 emitted source; today step emits the Go into `<project>/.osty/out/`
 and reports diagnostics.
@@ -430,8 +427,8 @@ regenerations.
 
 ## Contributing
 
-The current baseline is **v0.3** (`LANG_SPEC_v0.3/`, `OSTY_GRAMMAR_v0.3.md`).
-v0.3 closed every previously-open gap; new findings are tracked in
+The current baseline is **v0.4** (`LANG_SPEC_v0.4/`, `OSTY_GRAMMAR_v0.4.md`).
+v0.4 closed every known language-decision gap; new findings are tracked in
 [`SPEC_GAPS.md`](./SPEC_GAPS.md). The compiler follows spec decisions
 literally — if a construct "should" work but doesn't, verify it against
 the grammar first.

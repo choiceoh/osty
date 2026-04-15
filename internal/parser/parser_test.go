@@ -797,6 +797,18 @@ func TestParseTurbofishStrict(t *testing.T) {
 	expectCode(t, `fn f() { let x = foo::bar() }`, diag.CodeTurbofishMissingLT)
 }
 
+func TestParseEmptyTurbofishRejected(t *testing.T) {
+	expectCode(t, `fn f() { let x = foo::<>() }`, diag.CodeExpectedType)
+}
+
+func TestParseEmptyGenericParamsRejected(t *testing.T) {
+	expectCode(t, `fn f<>() {}`, diag.CodeUnexpectedToken)
+}
+
+func TestParseEmptyTypeArgsRejected(t *testing.T) {
+	expectCode(t, `fn f(xs: List<>) {}`, diag.CodeExpectedType)
+}
+
 // TestParseUseGoNoBody verifies v0.2 R16/R17: function declarations
 // inside a `use go` block must NOT have a body.
 func TestParseUseGoNoBody(t *testing.T) {
@@ -1161,6 +1173,19 @@ func TestParseDoubleOptionalType(t *testing.T) {
 	fd := f.Decls[0].(*ast.FnDecl)
 	assertDoubleOptionInt(t, "param", fd.Params[0].Type)
 	assertDoubleOptionInt(t, "return", fd.ReturnType)
+}
+
+func TestParseSingletonTupleType(t *testing.T) {
+	src := `fn f(x: (Int,)) {}`
+	f := parseOrFatal(t, src)
+	fd := f.Decls[0].(*ast.FnDecl)
+	tup, ok := fd.Params[0].Type.(*ast.TupleType)
+	if !ok {
+		t.Fatalf("param type = %T, want *ast.TupleType", fd.Params[0].Type)
+	}
+	if len(tup.Elems) != 1 {
+		t.Fatalf("tuple elems = %d, want 1", len(tup.Elems))
+	}
 }
 
 // TestParseTripleOptionalType ensures the `??` rewriting loop handles

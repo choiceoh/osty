@@ -28,7 +28,7 @@ pub struct Response {
     pub body: Bytes,
 
     pub fn text(self) -> Result<String, Error> {
-        Ok(self.body.toString())
+        self.body.toString()
     }
 
     pub fn json<T>(self) -> Result<T, Error> {
@@ -37,16 +37,11 @@ pub struct Response {
 }
 
 pub fn request(req: Request) -> Result<Response, Error> {
-    Err(0)
+    request(req)
 }
 
 pub fn get(url: String, headers: Headers = {:}) -> Result<Response, Error> {
-    request(Request {
-        method: Get,
-        url: url,
-        headers: headers,
-        body: [],
-    })
+    get(url, headers)
 }
 
 pub fn post(url: String, body: Bytes, headers: Headers = {:}) -> Result<Response, Error> {

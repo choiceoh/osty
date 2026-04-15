@@ -1,0 +1,41 @@
+## 14. Excluded Features
+
+- `null` / `nil`
+- exceptions, `try` / `catch`, `panic` / `recover`
+- inheritance
+- macros (declarative or procedural)
+- user-defined annotations / attributes (the annotation set is fixed
+  by the compiler — see §1.9, §3.8)
+- operator overloading
+- function overloading
+- named arguments
+- classes
+- garbage collector tuning
+- `while`, `loop` keywords (subsumed by `for`)
+- `impl` blocks (methods live inside `struct`/`enum` body)
+- `spawn` keyword (use `g.spawn` from `taskGroup`)
+- detached concurrency
+- `async` / `await`
+- lifetime annotations
+- `UInt` (machine-word unsigned integer type)
+- implicit numeric conversions
+- `as` keyword for type conversion
+- `Set` literal syntax
+- C-style `for` loops
+- labelled `break` / `continue`
+- `const` (use top-level `let`)
+- `unsafe` (use FFI for foreign code)
+- `where` clauses (use `T: I1 + I2` directly)
+- `yield` / generators
+- anonymous structs / structural records
+- silent arithmetic overflow (use `wrapping*` methods)
+- generic type-parameter default values (e.g. `<T, U = T>`)
+- declaration-site or use-site variance (`in`/`out`, Java wildcards)
+- turbofish on enum variant construction (`Option::<Int>::Some(5)` — use inference)
+- plain `Float.toInt()` (use the rounding-explicit `toIntTrunc`/`Round`/`Floor`/`Ceil`)
+- finalizers and weak references
+- `beforeEach`/`afterEach` test hooks (use helpers or `testing.context`)
+- `WaitGroup` (use `taskGroup` for all structured concurrency)
+- annotations on expressions or `use` statements
+
+---

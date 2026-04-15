@@ -8,5 +8,5 @@ pub struct __BytesMethods {
     pub fn isEmpty(self) -> Bool { false }
     pub fn get(self, i: Int) -> Byte? { None }
     pub fn concat(self, other: Bytes) -> Bytes { self.concat(other) }
-    pub fn toString(self) -> Result<String, Error> { Err(0) }
+    pub fn toString(self) -> Result<String, Error> { Ok("") }
 }

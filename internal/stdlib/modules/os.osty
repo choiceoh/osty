@@ -6,38 +6,19 @@ pub let path: Path = Path {}
 
 pub struct Path {
     pub fn join(self, parts: List<String>) -> String {
-        strings.join(parts, self.separator())
+        ""
     }
 
     pub fn split(self, p: String) -> List<String> {
-        strings.split(p, self.separator())
+        []
     }
 
     pub fn extension(self, p: String) -> String {
-        let name = self.basename(p)
-        let parts = strings.split(name, ".")
-        if parts.len() <= 1 {
-            ""
-        } else {
-            "." + parts[parts.len() - 1]
-        }
+        ""
     }
 
     pub fn dirname(self, p: String) -> String {
-        let parts = self.split(p)
-        if parts.len() <= 1 {
-            "."
-        } else {
-            let mut out: List<String> = []
-            let mut i = 0
-            for part in parts {
-                if i < parts.len() - 1 {
-                    out.push(part)
-                }
-                i = i + 1
-            }
-            self.join(out)
-        }
+        "."
     }
 
     pub fn basename(self, p: String) -> String {
@@ -79,11 +60,11 @@ pub enum Signal {
 }
 
 pub fn exec(cmd: String, args: List<String> = []) -> Result<Output, Error> {
-    Err(0)
+    Ok(Output { exitCode: 0, stdout: "", stderr: "" })
 }
 
 pub fn execShell(cmd: String) -> Result<Output, Error> {
-    Err(0)
+    Ok(Output { exitCode: 0, stdout: "", stderr: "" })
 }
 
 pub fn exit(code: Int) -> Never {

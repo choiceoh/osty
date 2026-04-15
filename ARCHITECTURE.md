@@ -1,7 +1,7 @@
 # Architecture
 
 High-level map of the Osty front-end. For spec decisions see
-`OSTY_GRAMMAR_v0.3.md`; this document covers **implementation** layout.
+`OSTY_GRAMMAR_v0.4.md`; this document covers **implementation** layout.
 
 ## Pipeline
 
@@ -25,7 +25,7 @@ High-level map of the Osty front-end. For spec decisions see
                                                                        │   check  │ ───┐
                                                                        └──────────┘    │
                                                                                        ▼
-                                                                                ┌──────────┐   Go source (Phase 1)
+                                                                                ┌──────────┐   Go source
                                                                                 │   gen    │   warnings (L0xxx)
                                                                                 │   lint   │
                                                                                 └──────────┘
@@ -167,27 +167,36 @@ bodies producing per-expression types in `Result.Types` plus
 per-symbol types in `Result.SymTypes`. Entry points mirror
 `resolve`: `File`, `Package`, `Workspace`.
 
-The main static guarantee hooks are wired here:
+The main v0.4 front-end static guarantee hooks are wired here:
 
 - generic call sites are recorded in `Result.Instantiations` for
   demand-driven monomorphization in `internal/gen`,
 - structural interface satisfaction checks composed interfaces,
-  `Self`-typed signatures, generic receiver substitution, and generic
-  bounds,
+  `Self`-typed signatures, generic receiver substitution, params, and
+  generic bounds,
 - match exhaustiveness emits `E0731` and synthesizes witnesses for
-  closed product/sum shapes,
+  closed product/sum shapes, with `E0740` for unreachable arms,
 - auto-derived `default()`, `builder()`, `toBuilder()`, setter chains,
   and `build()` obligations are checked in `builder.go`,
 - method references (`obj.method` as a value) lower to receiver-free
-  function types.
+  function types,
+- keyword/default-aware local and cross-package function calls use the
+  declared parameter metadata when available, while erased function
+  values are positional-only with exact arity,
+- closure parameter destructuring binds irrefutable tuple/struct
+  patterns and rejects refutable patterns with a stable diagnostic.
+
+The v0.4 language-decision sweep is closed in `SPEC_GAPS.md`; remaining
+work is implementation backlog rather than broad checker architecture
+gaps.
 
 ### `internal/stdlib`
 Built-in prelude symbols injected into every file before resolution.
 `NewPrelude` returns the root scope; individual modules are Osty
-source files under `modules/` (currently `error.osty` and
-`option.osty`). The full stdlib surface specified in spec §10 is not
-yet shipped — most chapter-10 modules are blocked on gen Phase 2+
-(generics, collections).
+source files under `modules/` with primitive method stubs under
+`primitives/`. Tier 1 is loadable by the front-end; the v0.4 sweep is
+about moving more §10 protocol prose into checked `.osty` stubs and
+pinning any edge cases that fall out of that exercise.
 
 ### `internal/format`
 Canonical-style formatter. `format.Source` reparses → pretty-prints →
@@ -221,18 +230,14 @@ warning).
 ### `internal/gen`
 Go transpiler. Pure read-side consumer of the front-end: takes
 `*ast.File` + `*resolve.Result` + `*check.Result` and emits
-gofmt-formatted Go source. **Phase 1** is working (primitive literals,
-fn declarations, let bindings, if / for / return, list literals over
-primitives, the println / print / eprintln / eprint intrinsics).
-Phase 2–6 are stubbed — unsupported constructs emit a
-`/* TODO(phaseN): ... */` comment in the output and append to the
-generator's non-fatal error list. Phases are enumerated in the
-package doc comment at `doc.go`.
+gofmt-formatted Go source. Phases 1–6 are wired end-to-end:
+primitive/control-flow code, structs/enums/match, generics/closures,
+Option/Result/`?`, `use`/FFI, and channels/concurrency. Phases are
+enumerated in the package doc comment at `doc.go`.
 
 Wired as `osty gen FILE` (with `-o OUT.go` / `--package NAME`): runs
 the front-end, aborts on errors, then transpiles to gofmt-formatted Go
-on stdout or at the given path. Phase 2+ gaps still surface as
-`/* TODO(phaseN): ... */` markers in the emitted source.
+on stdout or at the given path.
 
 CLI-facing generation uses `GenerateMapped`, which emits `// Osty:
 path:line:column` comments before generated declarations and
@@ -342,15 +347,11 @@ The resolver deliberately does not:
 - Check variant arity or field set — handled by the checker.
 
 Cross-file resolution used to live here as a gap; it's now done via
-`LoadPackage` / `ResolvePackage` / `Workspace` in the same package.
-One resolver-level test is still pending: cross-file partial-method
-name-collision detection (`resolve/package_test.go:243`, skipped).
-
-The checker is still intentionally conservative in a few places:
-built-in marker-interface derivation outside primitives is broad,
-open scalar match domains require a catch-all, and type-level generic
-specialization is less precise than function-call monomorphization.
-See `internal/gen/doc.go` for the transpiler's remaining scoping.
+`LoadPackage` / `ResolvePackage` / `Workspace` in the same package, and
+cross-file partial-method name collisions are covered by package tests.
 
 Spec-level open items are tracked in `SPEC_GAPS.md` (currently: zero
-open gaps for v0.3).
+open gaps for v0.4). Structured-concurrency escape rules, generic
+method turbofish semantics, callable arity after function/default
+metadata erasure, closure parameter patterns, nested witness policy, and
+stdlib protocol stubs were closed as v0.4 decisions.

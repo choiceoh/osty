@@ -9,9 +9,9 @@ import (
 )
 
 // TestSpecCodeBlocks walks every ```osty code block in the spec markdown
-// files and attempts to parse each one. As of v0.3 the language spec is a
-// directory of per-section markdown files (LANG_SPEC_v0.3/), so the test
-// recursively walks that directory in addition to OSTY_GRAMMAR_v0.3.md and
+// files and attempts to parse each one. As of v0.4 the language spec is a
+// directory of per-section markdown files (LANG_SPEC_v0.4/), so the test
+// recursively walks that directory in addition to OSTY_GRAMMAR_v0.4.md and
 // SPEC_GAPS.md.
 //
 // The test does not fail when an individual block fails to parse — many
@@ -25,12 +25,12 @@ import (
 func TestSpecCodeBlocks(t *testing.T) {
 	root := findRepoRoot(t)
 
-	// Collect candidate markdown files: every .md inside LANG_SPEC_v0.3/
+	// Collect candidate markdown files: every .md inside LANG_SPEC_v0.4/
 	// (the current split spec), plus the standalone companion files at
 	// the repo root, plus legacy single-file names (still picked up if
 	// present).
 	var paths []string
-	for _, dir := range []string{"LANG_SPEC_v0.3", "LANG_SPEC_v0.2"} {
+	for _, dir := range []string{"LANG_SPEC_v0.4", "LANG_SPEC_v0.3", "LANG_SPEC_v0.2"} {
 		_ = filepath.WalkDir(filepath.Join(root, dir), func(p string, d os.DirEntry, err error) error {
 			if err != nil {
 				return nil
@@ -45,6 +45,7 @@ func TestSpecCodeBlocks(t *testing.T) {
 		})
 	}
 	for _, name := range []string{
+		"OSTY_GRAMMAR_v0.4.md",
 		"OSTY_GRAMMAR_v0.3.md",
 		"OSTY_GRAMMAR_v0.2.md", // legacy
 		"SPEC_GAPS.md",

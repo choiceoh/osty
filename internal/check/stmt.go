@@ -108,9 +108,27 @@ func (c *checker) checkFnDecl(n *ast.FnDecl, owner *typeDesc) {
 	if _, ok := ret.(*types.Optional); ok {
 		e.retIsOption = true
 	}
+	for _, p := range n.Params {
+		if p.Name == "" {
+			continue
+		}
+		sym := c.symByDecl(p)
+		if sym != nil && containsCapability(c.symTypeOrError(sym)) {
+			e.rememberCapability(sym)
+		}
+	}
+	if owner != nil && n.Recv != nil {
+		selfSym := c.fnReceiverSymbol(n)
+		if selfSym != nil && containsCapability(c.symTypeOrError(selfSym)) {
+			e.rememberCapability(selfSym)
+		}
+	}
 
 	// Body block: the final expression's value is the implicit return.
 	bodyT := c.blockAsExprType(n.Body, ret, e)
+	if !types.IsUnit(ret) && !blockEndsInReturn(n.Body) {
+		c.rejectCapabilityEscape(n.Body, bodyT, "be returned")
+	}
 	if !types.IsUnit(ret) && !types.IsError(ret) && !c.accepts(ret, bodyT, n.Body) {
 		// Suppress the error when the body ends in an explicit `return`
 		// or when the whole body is `Never` (diverges).
@@ -182,6 +200,7 @@ func (c *checker) checkTopLet(n *ast.LetDecl) {
 			final = got
 		}
 	}
+	c.rejectCapabilityEscape(n.Value, final, "be stored at top level")
 	if sym := c.declSymbol(n); sym != nil {
 		c.setSymType(sym, final)
 	}
@@ -312,11 +331,13 @@ func (c *checker) checkAssignTarget(tgt ast.Expr, vt types.Type, env *env) {
 		// Field assignment requires receiver to be mutable; we can't
 		// check origin ownership precisely here, but we DO check that
 		// the field type accepts the value.
+		c.rejectCapabilityEscape(tgt, vt, "be stored in a field")
 		ft := c.checkExpr(x, nil, env)
 		if !c.accepts(ft, vt, tgt) {
 			c.errMismatch(tgt, ft, vt)
 		}
 	case *ast.IndexExpr:
+		c.rejectCapabilityEscape(tgt, vt, "be stored in a collection")
 		it := c.checkExpr(x, nil, env)
 		if !c.accepts(it, vt, tgt) {
 			c.errMismatch(tgt, it, vt)
@@ -336,6 +357,7 @@ func (c *checker) checkReturnStmt(n *ast.ReturnStmt, env *env) {
 		return
 	}
 	got := c.checkExpr(n.Value, env.retType, env)
+	c.rejectCapabilityEscape(n.Value, got, "be returned")
 	if !c.accepts(env.retType, got, n.Value) {
 		c.errMismatch(n.Value, env.retType, got)
 	}
@@ -362,6 +384,7 @@ func (c *checker) checkChanSend(n *ast.ChanSendStmt, env *env) {
 		elem = named.Args[0]
 	}
 	vt := c.checkExpr(n.Value, elem, env)
+	c.rejectCapabilityEscape(n.Value, vt, "be sent over a channel")
 	if elem != nil && !types.IsError(elem) && !c.accepts(elem, vt, n.Value) {
 		c.errNode(n.Value, diag.CodeChannelWrongValue,
 			"cannot send `%s` on `%s`", vt, chT)
@@ -423,6 +446,9 @@ func (c *checker) bindPatternTypes(p ast.Pattern, t types.Type, env *env) {
 			return
 		}
 		c.setSymType(sym, t)
+		if containsCapability(t) {
+			env.rememberCapability(sym)
+		}
 	case *ast.TuplePat:
 		tt, ok := t.(*types.Tuple)
 		if !ok {
@@ -464,7 +490,11 @@ func (c *checker) bindPatternTypes(p ast.Pattern, t types.Type, env *env) {
 			c.bindPatternTypes(alt, t, env)
 		}
 	case *ast.BindingPat:
-		c.setSymType(c.patBindingSym(x, x.Name, x.PosV), t)
+		sym := c.patBindingSym(x, x.Name, x.PosV)
+		c.setSymType(sym, t)
+		if containsCapability(t) {
+			env.rememberCapability(sym)
+		}
 		c.bindPatternTypes(x.Pattern, t, env)
 	}
 }
@@ -537,7 +567,11 @@ func (c *checker) bindStructPattern(p *ast.StructPat, t types.Type, env *env) {
 			c.bindPatternTypes(f.Pattern, ft, env)
 		} else {
 			// Shorthand: binds a fresh name of the same spelling.
-			c.setSymType(c.patBindingSym(f, f.Name, f.PosV), ft)
+			sym := c.patBindingSym(f, f.Name, f.PosV)
+			c.setSymType(sym, ft)
+			if containsCapability(ft) {
+				env.rememberCapability(sym)
+			}
 		}
 	}
 }

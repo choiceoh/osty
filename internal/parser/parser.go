@@ -786,6 +786,14 @@ func (p *Parser) parseFnDecl() *ast.FnDecl {
 func (p *Parser) parseGenericParams() []*ast.GenericParam {
 	p.expect(token.LT)
 	var out []*ast.GenericParam
+	if p.at(token.GT) || p.at(token.SHR) || p.at(token.GEQ) || p.at(token.SHREQ) {
+		p.emit(diag.New(diag.Error,
+			"generic parameter list requires at least one parameter").
+			Code(diag.CodeUnexpectedToken).
+			PrimaryPos(p.peek().Pos, "expected generic parameter before `>`").
+			Hint("remove `<>` or declare a parameter, e.g. `<T>`").
+			Build())
+	}
 	for !p.at(token.GT) && !p.at(token.SHR) && !p.at(token.GEQ) && !p.at(token.SHREQ) && !p.at(token.EOF) {
 		g := &ast.GenericParam{PosV: p.peek().Pos}
 		g.Name = p.expect(token.IDENT).Value
@@ -1129,16 +1137,16 @@ func (p *Parser) parseTypeBase() ast.Type {
 		}
 		var elems []ast.Type
 		elems = append(elems, p.parseType())
-		singleton := true
+		sawComma := false
 		for p.eat(token.COMMA) {
+			sawComma = true
 			if p.at(token.RPAREN) {
 				break
 			}
 			elems = append(elems, p.parseType())
-			singleton = false
 		}
 		p.expect(token.RPAREN)
-		if singleton && len(elems) == 1 {
+		if !sawComma && len(elems) == 1 {
 			return elems[0]
 		}
 		return &ast.TupleType{PosV: start, EndV: p.lastEnd(), Elems: elems}
@@ -1172,6 +1180,14 @@ func (p *Parser) parseTypeBase() ast.Type {
 		var args []ast.Type
 		if p.at(token.LT) {
 			p.advance()
+			if p.at(token.GT) || p.at(token.SHR) || p.at(token.GEQ) || p.at(token.SHREQ) {
+				p.emit(diag.New(diag.Error,
+					"type argument list requires at least one type").
+					Code(diag.CodeExpectedType).
+					PrimaryPos(p.peek().Pos, "expected type argument before `>`").
+					Hint("remove `<>` or provide a type, e.g. `<Int>`").
+					Build())
+			}
 			for !p.at(token.GT) && !p.at(token.SHR) && !p.at(token.GEQ) && !p.at(token.SHREQ) && !p.at(token.EOF) {
 				args = append(args, p.parseType())
 				if !p.eat(token.COMMA) {
@@ -2130,6 +2146,14 @@ func (p *Parser) tryParsePostfix(left ast.Expr) ast.Expr {
 		}
 		p.advance() // <
 		var args []ast.Type
+		if p.at(token.GT) || p.at(token.SHR) || p.at(token.GEQ) || p.at(token.SHREQ) {
+			p.emit(diag.New(diag.Error,
+				"turbofish requires at least one type argument").
+				Code(diag.CodeExpectedType).
+				PrimaryPos(p.peek().Pos, "expected type argument before `>`").
+				Hint("remove `::<>` or provide a type, e.g. `::<Int>`").
+				Build())
+		}
 		for !p.at(token.GT) && !p.at(token.SHR) && !p.at(token.GEQ) && !p.at(token.SHREQ) && !p.at(token.EOF) {
 			args = append(args, p.parseType())
 			if !p.eat(token.COMMA) {
