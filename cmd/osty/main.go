@@ -181,6 +181,20 @@ func main() {
 		runPublish(args[1:], flags)
 		return
 	}
+	if cmd == "ci" {
+		runCi(args[1:], flags)
+		return
+	}
+	// `osty check --ci` is an alias for `osty ci` — kept so the
+	// roadmap-canonical spelling works alongside the dedicated
+	// `ci` subcommand. Falls through to the normal `check` flow
+	// below when --ci is absent.
+	if cmd == "check" {
+		if rest, present := takeBoolFlag(args[1:], "--ci"); present {
+			runCi(rest, flags)
+			return
+		}
+	}
 	// explain looks up a diagnostic or lint code and prints its doc.
 	// Handled before the generic "file required" check because it
 	// takes a code (or nothing, to list every code) — never a path.
@@ -1021,6 +1035,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "       osty run [-- ARGS...]     (build + exec the project's binary)")
 	fmt.Fprintln(os.Stderr, "       osty test [PATH|FILTER...] (discover *_test.osty; report tests found)")
 	fmt.Fprintln(os.Stderr, "       osty publish              (pack + upload the package to a registry)")
+	fmt.Fprintln(os.Stderr, "       osty ci [flags] [PATH]    (run the CI check bundle: fmt+lint+policy+lockfile)")
+	fmt.Fprintln(os.Stderr, "       osty ci snapshot [-o OUT] (capture the exported API for future semver diffing)")
 	fmt.Fprintln(os.Stderr, "       osty profiles             (list build profiles — debug, release, ...)")
 	fmt.Fprintln(os.Stderr, "       osty targets              (list declared cross-compilation targets)")
 	fmt.Fprintln(os.Stderr, "       osty features             (list declared opt-in features)")
