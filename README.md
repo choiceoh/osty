@@ -139,6 +139,7 @@ osty lint FILE|DIR     # style + correctness warnings (L0xxx codes)
 osty fmt FILE          # format to canonical style (see --check, --write)
 osty gen FILE          # transpile to Go source (see -o, --package)
 osty lsp               # run the language server on stdio
+osty explain [CODE]    # describe a diagnostic (Exxxx/Wxxxx/Lxxxx); no arg lists every code
 ```
 
 Global flags (precede the subcommand):

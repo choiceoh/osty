@@ -12,6 +12,7 @@
 //	osty fmt <file.osty>       Format source to canonical style; see -check/-write.
 //	osty gen <file.osty>       Transpile to Go (prints to stdout; -o writes to file).
 //	osty lsp                   Run the Language Server Protocol server on stdio.
+//	osty explain [CODE]        Describe a diagnostic code; with no arg, list every code.
 //
 // Global flags (may precede the subcommand):
 //
@@ -161,6 +162,13 @@ func main() {
 	}
 	if cmd == "publish" {
 		runPublish(args[1:], flags)
+		return
+	}
+	// explain looks up a diagnostic or lint code and prints its doc.
+	// Handled before the generic "file required" check because it
+	// takes a code (or nothing, to list every code) — never a path.
+	if cmd == "explain" {
+		runExplain(args[1:])
 		return
 	}
 	if len(args) < 2 {
@@ -887,6 +895,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "       osty test [PATH|FILTER...] (discover *_test.osty; report tests found)")
 	fmt.Fprintln(os.Stderr, "       osty publish              (pack + upload the package to a registry)")
 	fmt.Fprintln(os.Stderr, "       osty lsp                  (language server on stdio)")
+	fmt.Fprintln(os.Stderr, "       osty explain [CODE]       (describe a diagnostic code; no arg lists every code)")
 	fmt.Fprintln(os.Stderr, "flags:")
 	fmt.Fprintln(os.Stderr, "  --no-color         disable ANSI escapes")
 	fmt.Fprintln(os.Stderr, "  --color            force ANSI escapes")
