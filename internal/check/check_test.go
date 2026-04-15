@@ -856,6 +856,60 @@ fn main() {
 	assertOK(t, runCheck(t, src))
 }
 
+func TestCheck_ErrorNewAndInterfaceMethods(t *testing.T) {
+	src := `
+pub struct MyError {
+    pub msg: String,
+
+    pub fn message(self) -> String { self.msg }
+}
+
+fn main() {
+    let e = Error.new("boom")
+    let msg: String = e.message()
+    let cause: Error? = e.source()
+    let concrete: MyError? = e.downcast::<MyError>()
+}
+`
+	assertOK(t, runCheck(t, src))
+}
+
+func TestCheck_StdErrorQualifiedConstructorOnOpaqueImport(t *testing.T) {
+	src := `
+use std.error as err
+
+fn main() {
+    let e: Error = err.Error.new("boom")
+    let msg: String = e.message()
+}
+`
+	assertOK(t, runCheck(t, src))
+}
+
+func TestCheck_ErrorDowncastRejectsInterfaceTarget(t *testing.T) {
+	src := `
+fn main() {
+    let e = Error.new("boom")
+    let concrete = e.downcast::<Error>()
+}
+`
+	assertCodes(t, runCheck(t, src), diag.CodeTypeMismatch)
+}
+
+func TestCheck_ErrorDowncastRejectsNonErrorTarget(t *testing.T) {
+	src := `
+pub struct Plain {
+    pub msg: String,
+}
+
+fn main() {
+    let e = Error.new("boom")
+    let concrete = e.downcast::<Plain>()
+}
+`
+	assertCodes(t, runCheck(t, src), diag.CodeTypeMismatch)
+}
+
 func TestCheck_InterfaceValueExposesRequiredMethods(t *testing.T) {
 	src := `
 pub interface Printable {
@@ -1006,6 +1060,25 @@ fn require<T: Same>(x: T) {}
 
 fn main() {
     require(Point { x: 1 })
+}
+`
+	assertOK(t, runCheck(t, src))
+}
+
+func TestCheck_InterfaceNamedReferenceIsNotSelf(t *testing.T) {
+	src := `
+pub interface Cause {
+    fn source(self) -> Cause?
+}
+
+pub struct Leaf {
+    pub fn source(self) -> Cause? { None }
+}
+
+fn require<T: Cause>(x: T) {}
+
+fn main() {
+    require(Leaf {})
 }
 `
 	assertOK(t, runCheck(t, src))

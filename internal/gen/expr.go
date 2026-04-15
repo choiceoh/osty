@@ -149,11 +149,11 @@ func (g *gen) emitStructLit(s *ast.StructLit) {
 		if i > 0 {
 			g.body.write(", ")
 		}
-		name := mangleIdent(f.Name)
+		name := structLitFieldName(typeName, f.Name)
 		g.body.writef("%s: ", name)
 		if f.Value == nil {
 			// Shorthand `Point { name }` → `Point{name: name}`.
-			g.body.write(name)
+			g.body.write(mangleIdent(f.Name))
 		} else {
 			g.emitExpr(f.Value)
 		}
@@ -175,7 +175,7 @@ func (g *gen) emitStructSpreadLit(s *ast.StructLit, typeName string) {
 	g.emitExpr(s.Spread)
 	g.body.write("; ")
 	for _, f := range s.Fields {
-		g.body.writef("%s.%s = ", tmp, mangleIdent(f.Name))
+		g.body.writef("%s.%s = ", tmp, structLitFieldName(typeName, f.Name))
 		if f.Value == nil {
 			g.body.write(mangleIdent(f.Name))
 		} else {
@@ -384,6 +384,12 @@ func (g *gen) emitCall(c *ast.CallExpr) {
 		if g.emitQualifiedOptionCall(c, f) {
 			return
 		}
+		if g.emitStdlibErrorCall(c, f) {
+			return
+		}
+		if g.emitErrorMethodCall(c, f) {
+			return
+		}
 		if g.emitStdlibEncodingCall(c, f) {
 			return
 		}
@@ -443,6 +449,9 @@ func (g *gen) emitCall(c *ast.CallExpr) {
 		}
 	}
 	if tf, ok := c.Fn.(*ast.TurbofishExpr); ok {
+		if g.emitErrorDowncastCall(c, tf) {
+			return
+		}
 		if g.emitTurbofishCall(c, tf) {
 			return
 		}
@@ -527,6 +536,77 @@ func (g *gen) jsonDecodeTargetGo(c *ast.CallExpr, explicit []ast.Type) string {
 		return g.goType(n.Args[0])
 	}
 	return "any"
+}
+
+func (g *gen) emitStdlibErrorCall(c *ast.CallExpr, f *ast.FieldExpr) bool {
+	if f.Name == "new" && g.isPreludeErrorTypeExpr(f.X) && len(c.Args) == 1 {
+		g.emitErrorNew(c.Args)
+		return true
+	}
+	parts, ok := g.stdlibCallPath(c, "error")
+	if !ok || len(c.Args) != 1 {
+		return false
+	}
+	switch strings.Join(parts, ".") {
+	case "new", "Error.new":
+		g.emitErrorNew(c.Args)
+		return true
+	}
+	return false
+}
+
+func (g *gen) emitErrorNew(args []*ast.Arg) {
+	g.needErrorRuntime = true
+	g.body.write("ostyErrorNew(")
+	g.emitExpr(args[0].Value)
+	g.body.write(")")
+}
+
+func (g *gen) emitErrorMethodCall(c *ast.CallExpr, f *ast.FieldExpr) bool {
+	if len(c.Args) != 0 || !isErrorType(g.typeOf(f.X)) {
+		return false
+	}
+	switch f.Name {
+	case "message":
+		g.needErrorRuntime = true
+		g.body.write("ostyErrorMessage(")
+		g.emitExpr(f.X)
+		g.body.write(")")
+		return true
+	case "source":
+		g.needErrorRuntime = true
+		g.body.write("ostyErrorSource(")
+		g.emitExpr(f.X)
+		g.body.write(")")
+		return true
+	}
+	return false
+}
+
+func (g *gen) emitErrorDowncastCall(c *ast.CallExpr, tf *ast.TurbofishExpr) bool {
+	f, ok := tf.Base.(*ast.FieldExpr)
+	if !ok || f.Name != "downcast" || len(tf.Args) != 1 || len(c.Args) != 0 || !isErrorType(g.typeOf(f.X)) {
+		return false
+	}
+	g.needErrorRuntime = true
+	g.body.writef("ostyErrorDowncast[%s](", g.goTypeExpr(tf.Args[0]))
+	g.emitExpr(f.X)
+	g.body.write(")")
+	return true
+}
+
+func (g *gen) isPreludeErrorTypeExpr(e ast.Expr) bool {
+	id, ok := e.(*ast.Ident)
+	if !ok || id.Name != "Error" {
+		return false
+	}
+	sym := g.symbolFor(id)
+	return sym != nil && sym.Kind == resolve.SymBuiltin && sym.Name == "Error"
+}
+
+func isErrorType(t types.Type) bool {
+	n, ok := t.(*types.Named)
+	return ok && n.Sym != nil && n.Sym.Name == "Error"
 }
 
 func (g *gen) emitStdlibEncodingCall(c *ast.CallExpr, _ *ast.FieldExpr) bool {
@@ -864,6 +944,10 @@ func (g *gen) stdlibStructLitType(e ast.Expr) (string, bool) {
 		g.needCSV = true
 		return "CsvOptions", true
 	}
+	if g.isStdlibPackageAlias(id, "error") && f.Name == "BasicError" {
+		g.needErrorRuntime = true
+		return "ostyBasicError", true
+	}
 	return "", false
 }
 
@@ -1077,21 +1161,6 @@ func (g *gen) emitConcurrencyMethod(c *ast.CallExpr, f *ast.FieldExpr) bool {
 		}
 	}
 	return false
-}
-
-func (g *gen) emitErrorMethodCall(c *ast.CallExpr, f *ast.FieldExpr) bool {
-	if f.Name != "message" || len(c.Args) != 0 {
-		return false
-	}
-	n, ok := types.AsNamedByName(g.typeOf(f.X), "Error")
-	if !ok || n.Sym == nil {
-		return false
-	}
-	g.needErrorRuntime = true
-	g.body.write("ostyErrorMessage(")
-	g.emitExpr(f.X)
-	g.body.write(")")
-	return true
 }
 
 // emitOptionalMethodCall lowers Option<T> methods to pointer checks.
@@ -2900,6 +2969,13 @@ func (g *gen) emitIfLetExpr(ie *ast.IfExpr) {
 	g.emitIfLetInner(ie, true)
 	g.body.dedent()
 	g.body.write("}()")
+}
+
+func structLitFieldName(typeName, field string) string {
+	if typeName == "ostyBasicError" && field == "message" {
+		return "messageText"
+	}
+	return mangleIdent(field)
 }
 
 // emitIfLetStmt lowers `if let ... = ... { ... } else { ... }` at

@@ -213,6 +213,9 @@ func (g *gen) emitEnumDecl(e *ast.EnumDecl) {
 		g.emitMethod(e.Name, m, true)
 	}
 	g.emitEnumJSONDecoder(e)
+	for _, m := range e.Methods {
+		g.emitEnumVariantMethodWrappers(e, m)
+	}
 }
 
 // emitVariant writes the struct + marker-method for one enum variant.
@@ -311,6 +314,52 @@ func (g *gen) emitMethod(typeName string, m *ast.FnDecl, enumMethod bool) {
 	g.body.write(" ")
 	g.emitBlockAsReturn(m.Body, m.ReturnType != nil)
 	g.body.nl()
+}
+
+func (g *gen) emitEnumVariantMethodWrappers(e *ast.EnumDecl, m *ast.FnDecl) {
+	if m.Recv == nil || len(m.Generics) != 0 {
+		return
+	}
+	for _, v := range e.Variants {
+		recvType := e.Name + "_" + v.Name
+		g.body.nl()
+		g.sourceMarker(m)
+		g.body.writef("func (self %s) %s(", recvType, m.Name)
+		paramNames := make([]string, len(m.Params))
+		for i, p := range m.Params {
+			if i > 0 {
+				g.body.write(", ")
+			}
+			name := p.Name
+			if name == "" {
+				name = "_p" + itoa(i)
+			}
+			paramNames[i] = mangleIdent(name)
+			g.body.write(paramNames[i])
+			if p.Type != nil {
+				g.body.write(" ")
+				g.body.write(g.resolveSelfType(p.Type, e.Name))
+			} else {
+				g.body.write(" any")
+			}
+		}
+		g.body.write(")")
+		hasReturn := m.ReturnType != nil && !isUnitAST(m.ReturnType)
+		if hasReturn {
+			g.body.write(" ")
+			g.body.write(g.resolveSelfType(m.ReturnType, e.Name))
+		}
+		g.body.write(" { ")
+		if hasReturn {
+			g.body.write("return ")
+		}
+		g.body.writef("%s_%s(%s(self)", e.Name, m.Name, e.Name)
+		for _, name := range paramNames {
+			g.body.write(", ")
+			g.body.write(name)
+		}
+		g.body.writeln(") }")
+	}
 }
 
 // resolveSelfType rewrites a bare `Self` type annotation to the
@@ -512,6 +561,12 @@ func (g *gen) emitStdlibRuntimeBridge(alias string, path []string, full string) 
 			Bool:      jsonBool,
 			Null:      nil,
 		}`, full)
+		return true
+	case "error":
+		// std.error calls and qualified literals are lowered directly by
+		// expr.go; no package-shaped Go value is needed here. Avoid
+		// emitting `var error ...`, which would shadow Go's predeclared
+		// error type for any runtime helper that still uses it.
 		return true
 	case "random":
 		g.needRandomRuntime = true

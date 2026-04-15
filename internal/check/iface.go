@@ -316,7 +316,7 @@ func methodSignaturesMatch(
 		return want == got
 	}
 	if wantMd.Owner != nil && wantMd.Owner.Sym != nil {
-		want = substituteSelfInFn(want, wantMd.Owner.Sym, concrete)
+		want = substituteSelfInMethodFn(wantMd, concrete)
 	}
 	if len(gotSub) > 0 {
 		got = &types.FnType{
@@ -338,6 +338,31 @@ func methodSignaturesMatch(
 	return types.Identical(want.Return, got.Return)
 }
 
+func substituteSelfInMethodFn(md *methodDesc, concrete types.Type) *types.FnType {
+	if md == nil || md.Fn == nil || md.Owner == nil || md.Owner.Sym == nil {
+		if md != nil {
+			return md.Fn
+		}
+		return nil
+	}
+	decl := md.Decl
+	if decl == nil {
+		return substituteSelfInFn(md.Fn, md.Owner.Sym, concrete)
+	}
+	out := &types.FnType{
+		Params: make([]types.Type, len(md.Fn.Params)),
+		Return: substituteSelfTypeByAST(md.Fn.Return, decl.ReturnType, md.Owner.Sym, concrete),
+	}
+	for i, p := range md.Fn.Params {
+		var astT ast.Type
+		if i < len(decl.Params) {
+			astT = decl.Params[i].Type
+		}
+		out.Params[i] = substituteSelfTypeByAST(p, astT, md.Owner.Sym, concrete)
+	}
+	return out
+}
+
 func substituteSelfInFn(fn *types.FnType, selfSym *resolve.Symbol, concrete types.Type) *types.FnType {
 	if fn == nil {
 		return nil
@@ -350,6 +375,61 @@ func substituteSelfInFn(fn *types.FnType, selfSym *resolve.Symbol, concrete type
 		out.Params[i] = substituteSelfType(p, selfSym, concrete)
 	}
 	return out
+}
+
+func substituteSelfTypeByAST(t types.Type, astT ast.Type, selfSym *resolve.Symbol, concrete types.Type) types.Type {
+	if t == nil || astT == nil || selfSym == nil || concrete == nil {
+		return t
+	}
+	switch a := astT.(type) {
+	case *ast.NamedType:
+		if len(a.Path) == 1 && a.Path[0] == "Self" {
+			return substituteSelfType(t, selfSym, concrete)
+		}
+		n, ok := t.(*types.Named)
+		if !ok || len(a.Args) == 0 || len(a.Args) != len(n.Args) {
+			return t
+		}
+		args := make([]types.Type, len(n.Args))
+		for i, arg := range n.Args {
+			args[i] = substituteSelfTypeByAST(arg, a.Args[i], selfSym, concrete)
+		}
+		return &types.Named{Sym: n.Sym, Args: args}
+	case *ast.OptionalType:
+		o, ok := t.(*types.Optional)
+		if !ok {
+			return t
+		}
+		return &types.Optional{Inner: substituteSelfTypeByAST(o.Inner, a.Inner, selfSym, concrete)}
+	case *ast.TupleType:
+		tup, ok := t.(*types.Tuple)
+		if !ok || len(a.Elems) != len(tup.Elems) {
+			return t
+		}
+		elems := make([]types.Type, len(tup.Elems))
+		for i, elem := range tup.Elems {
+			elems[i] = substituteSelfTypeByAST(elem, a.Elems[i], selfSym, concrete)
+		}
+		return &types.Tuple{Elems: elems}
+	case *ast.FnType:
+		fn, ok := t.(*types.FnType)
+		if !ok {
+			return t
+		}
+		out := &types.FnType{
+			Params: make([]types.Type, len(fn.Params)),
+			Return: substituteSelfTypeByAST(fn.Return, a.ReturnType, selfSym, concrete),
+		}
+		for i, p := range fn.Params {
+			var astP ast.Type
+			if i < len(a.Params) {
+				astP = a.Params[i]
+			}
+			out.Params[i] = substituteSelfTypeByAST(p, astP, selfSym, concrete)
+		}
+		return out
+	}
+	return t
 }
 
 func substituteSelfType(t types.Type, selfSym *resolve.Symbol, concrete types.Type) types.Type {

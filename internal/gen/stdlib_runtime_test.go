@@ -8,6 +8,113 @@ import (
 	"testing"
 )
 
+func TestStdErrorRuntimeBridge(t *testing.T) {
+	src := `use std.error
+
+fn fail() -> Result<Int, Error> {
+    Err(error.new("boom"))
+}
+
+fn main() {
+	let direct = Error.new("direct")
+	println(direct.message())
+	let qualified = error.Error.new("qualified")
+	println(qualified.message())
+	match fail() {
+		Ok(n) -> println("ok {n}"),
+		Err(e) -> println(e.message()),
+	}
+    let literal = error.BasicError { message: "literal" }
+    println(literal.message())
+}
+`
+	goSrc, err := transpileWithStdlib(t, src)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := strings.TrimSpace(runGo(t, goSrc))
+	want := strings.Join([]string{"direct", "qualified", "boom", "literal"}, "\n")
+	if out != want {
+		t.Errorf("got %q, want %q\n--- src ---\n%s", out, want, goSrc)
+	}
+	for _, want := range []string{"ostyErrorNew", "ostyErrorMessage", "type ostyBasicError struct"} {
+		if !strings.Contains(string(goSrc), want) {
+			t.Errorf("generated std.error bridge missing %s:\n%s", want, goSrc)
+		}
+	}
+}
+
+func TestStdErrorDowncastRuntimeBridge(t *testing.T) {
+	src := `use std.error
+
+pub enum FsError {
+    NotFound(String),
+    PermissionDenied(String),
+
+    pub fn message(self) -> String {
+        match self {
+            NotFound(p) -> "not found: {p}",
+            PermissionDenied(p) -> "permission denied: {p}",
+        }
+    }
+}
+
+fn read() -> Result<Int, FsError> {
+    Err(NotFound("cfg"))
+}
+
+fn load() -> Result<Int, Error> {
+    let value = read()?
+    Ok(value)
+}
+
+fn direct() -> Result<Int, Error> {
+    Err(NotFound("direct"))
+}
+
+fn main() {
+    match load() {
+        Ok(_) -> println("ok"),
+        Err(e) -> {
+            println(e.message())
+            match e.downcast::<FsError>() {
+                Some(fe) -> println(fe.message()),
+                None -> println("missing"),
+            }
+        },
+    }
+    match direct() {
+        Ok(_) -> println("direct ok"),
+        Err(e) -> println(e.message()),
+    }
+    let basic = Error.new("basic")
+    match basic.downcast::<error.BasicError>() {
+        Some(be) -> println(be.message()),
+        None -> println("missing basic"),
+    }
+}
+`
+	goSrc, err := transpileWithStdlib(t, src)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := strings.TrimSpace(runGo(t, goSrc))
+	want := strings.Join([]string{
+		"not found: cfg",
+		"not found: cfg",
+		"not found: direct",
+		"basic",
+	}, "\n")
+	if out != want {
+		t.Errorf("got %q, want %q\n--- src ---\n%s", out, want, goSrc)
+	}
+	for _, want := range []string{"ostyErrorDowncast[FsError]", "func (self FsError_NotFound) message() string"} {
+		if !strings.Contains(string(goSrc), want) {
+			t.Errorf("generated std.error downcast bridge missing %s:\n%s", want, goSrc)
+		}
+	}
+}
+
 func TestStdRandomRuntimeBridge(t *testing.T) {
 	src := `use std.random
 

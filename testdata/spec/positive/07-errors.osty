@@ -1,5 +1,7 @@
 // §7 The Error Interface — custom error types, `?` propagation.
 
+use std.error
+
 pub enum FsError {
     NotFound(String),
     PermissionDenied(String),
@@ -42,4 +44,29 @@ fn checkExists(path: String) -> Result<Bool, FsError> {
 fn loadConfig(path: String) -> Result<String, Error> {
     let text = readFile(path)?
     Ok(text)
+}
+
+// std.error constructors and methods. This doubles as a language-level
+// fixture for the public API surface that codegen lowers through the
+// std.error runtime bridge.
+fn stdErrorConstructors() -> Result<String, Error> {
+    let direct: Error = Error.new("direct")
+    let qualified: Error = error.Error.new("qualified")
+    let literal = error.BasicError { message: "literal" }
+    let _ = direct.source()
+    let _ = qualified.message()
+    let _ = literal.message()
+    Err(literal)
+}
+
+// Concrete Osty errors can still be recovered after widening to Error.
+fn describeError(err: Error) -> String {
+    match err.downcast::<FsError>() {
+        Some(fs) -> fs.message(),
+        None -> err.message(),
+    }
+}
+
+fn directWidening() -> Result<String, Error> {
+    Err(NotFound("settings.osty"))
 }
