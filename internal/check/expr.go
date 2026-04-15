@@ -693,7 +693,7 @@ func (c *checker) tryPackageCall(
 	var generics []*types.TypeVar
 	if types.IsError(t) {
 		if fnDecl, ok := tgt.Decl.(*ast.FnDecl); ok {
-			t = c.externalFnType(fnDecl)
+			t = c.externalFnType(fnDecl, pkgSym.Package)
 		}
 	}
 	fn, isFn := types.AsFn(t)
@@ -1179,14 +1179,14 @@ func (c *checker) resultOf(ok, err types.Type) types.Type {
 	return c.namedOf("Result", []types.Type{ok, err})
 }
 
-func (c *checker) externalFnType(fn *ast.FnDecl) *types.FnType {
+func (c *checker) externalFnType(fn *ast.FnDecl, pkg *resolve.Package) *types.FnType {
 	params := make([]types.Type, 0, len(fn.Params))
 	for _, p := range fn.Params {
-		params = append(params, c.ffiType(p.Type))
+		params = append(params, c.externalType(p.Type, pkg))
 	}
 	var ret types.Type = types.Unit
 	if fn.ReturnType != nil {
-		ret = c.ffiType(fn.ReturnType)
+		ret = c.externalType(fn.ReturnType, pkg)
 	}
 	return &types.FnType{Params: params, Return: ret}
 }
@@ -1213,6 +1213,11 @@ func (c *checker) lookupMethod(recvT types.Type, name string) (*methodDesc, map[
 				if md, ok := c.interfaceMethodSet(v)[name]; ok {
 					return md, nil
 				}
+			}
+		}
+		if pkg := c.externalPkgs[v.Sym]; pkg != nil {
+			if md := c.externalMethod(v.Sym, pkg, name); md != nil {
+				return md, nil
 			}
 		}
 		// Builtin compound types carry synthetic method tables.
@@ -1582,15 +1587,7 @@ func (c *checker) tryFFICall(u *ast.UseDecl, fx *ast.FieldExpr, e *ast.CallExpr,
 	if fn == nil {
 		return nil
 	}
-	params := make([]types.Type, 0, len(fn.Params))
-	for _, p := range fn.Params {
-		params = append(params, c.ffiType(p.Type))
-	}
-	var ret types.Type = types.Unit
-	if fn.ReturnType != nil {
-		ret = c.ffiType(fn.ReturnType)
-	}
-	ft := &types.FnType{Params: params, Return: ret}
+	ft := c.externalFnType(fn, nil)
 	c.recordExpr(e.Fn, ft)
 	return c.applyFnTo(e, e.Args, ft, env)
 }
@@ -1600,6 +1597,10 @@ func (c *checker) tryFFICall(u *ast.UseDecl, fx *ast.FieldExpr, e *ast.CallExpr,
 // table — the FFI body isn't walked by the resolver, so type refs there
 // have no recorded symbol.
 func (c *checker) ffiType(n ast.Type) types.Type {
+	return c.externalType(n, nil)
+}
+
+func (c *checker) externalType(n ast.Type, pkg *resolve.Package) types.Type {
 	if n == nil {
 		return types.Unit
 	}
@@ -1612,41 +1613,96 @@ func (c *checker) ffiType(n ast.Type) types.Type {
 		if t, ok := c.builtinScalarType(name); ok {
 			return t
 		}
+		args := make([]types.Type, 0, len(x.Args))
+		for _, a := range x.Args {
+			args = append(args, c.externalType(a, pkg))
+		}
 		// Generic prelude types (List<T>, Option<T>, Result<T, E>, Channel<T>).
 		if sym := c.topLevelSym(name); sym != nil {
-			args := make([]types.Type, 0, len(x.Args))
-			for _, a := range x.Args {
-				args = append(args, c.ffiType(a))
-			}
 			if name == "Option" && len(args) == 1 {
 				return &types.Optional{Inner: args[0]}
 			}
 			return &types.Named{Sym: sym, Args: args}
 		}
+		if pkg != nil && pkg.PkgScope != nil {
+			if sym := pkg.PkgScope.LookupLocal(name); sym != nil {
+				c.externalPkgs[sym] = pkg
+				return &types.Named{Sym: sym, Args: args}
+			}
+		}
 		return types.ErrorType
 	case *ast.OptionalType:
-		return &types.Optional{Inner: c.ffiType(x.Inner)}
+		return &types.Optional{Inner: c.externalType(x.Inner, pkg)}
 	case *ast.TupleType:
 		if len(x.Elems) == 0 {
 			return types.Unit
 		}
 		elems := make([]types.Type, len(x.Elems))
 		for i, e := range x.Elems {
-			elems[i] = c.ffiType(e)
+			elems[i] = c.externalType(e, pkg)
 		}
 		return &types.Tuple{Elems: elems}
 	case *ast.FnType:
 		params := make([]types.Type, len(x.Params))
 		for i, p := range x.Params {
-			params[i] = c.ffiType(p)
+			params[i] = c.externalType(p, pkg)
 		}
 		var ret types.Type = types.Unit
 		if x.ReturnType != nil {
-			ret = c.ffiType(x.ReturnType)
+			ret = c.externalType(x.ReturnType, pkg)
 		}
 		return &types.FnType{Params: params, Return: ret}
 	}
 	return types.ErrorType
+}
+
+func (c *checker) externalMethod(sym *resolve.Symbol, pkg *resolve.Package, name string) *methodDesc {
+	switch d := sym.Decl.(type) {
+	case *ast.StructDecl:
+		for _, m := range d.Methods {
+			if m.Name == name && m.Pub {
+				return c.externalMethodDesc(m, pkg)
+			}
+		}
+	case *ast.EnumDecl:
+		for _, m := range d.Methods {
+			if m.Name == name && m.Pub {
+				return c.externalMethodDesc(m, pkg)
+			}
+		}
+	case *ast.InterfaceDecl:
+		for _, m := range d.Methods {
+			if m.Name == name && m.Pub {
+				return c.externalMethodDesc(m, pkg)
+			}
+		}
+	}
+	return nil
+}
+
+func (c *checker) externalMethodDesc(fn *ast.FnDecl, pkg *resolve.Package) *methodDesc {
+	return &methodDesc{
+		Name:    fn.Name,
+		Pub:     fn.Pub,
+		Recv:    fn.Recv,
+		Fn:      c.externalFnType(fn, pkg),
+		HasBody: fn.Body != nil,
+		Params:  fn.Params,
+		Decl:    fn,
+	}
+}
+
+func (c *checker) externalField(sym *resolve.Symbol, pkg *resolve.Package, name string) (types.Type, bool) {
+	sd, ok := sym.Decl.(*ast.StructDecl)
+	if !ok {
+		return nil, false
+	}
+	for _, f := range sd.Fields {
+		if f.Name == name && f.Pub {
+			return c.externalType(f.Type, pkg), true
+		}
+	}
+	return nil, false
 }
 
 // channelOf builds a Channel<T> Named type bound to the prelude's
@@ -1895,10 +1951,24 @@ func (c *checker) fieldType(fx *ast.FieldExpr, env *env) types.Type {
 				// Resolver already reported E0508.
 				return types.ErrorType
 			}
-			return c.symTypeOrError(tgt)
+			if t := c.symTypeOrError(tgt); !types.IsError(t) {
+				return t
+			}
+			if ld, ok := tgt.Decl.(*ast.LetDecl); ok && ld.Type != nil {
+				return c.externalType(ld.Type, s.Package)
+			}
+			return types.ErrorType
 		}
 	}
 	if n, ok := types.AsNamed(recvT); ok {
+		if pkg := c.externalPkgs[n.Sym]; pkg != nil {
+			if t, ok := c.externalField(n.Sym, pkg, fx.Name); ok {
+				if wasOpt && fx.IsOptional {
+					return &types.Optional{Inner: t}
+				}
+				return t
+			}
+		}
 		if desc, ok := c.result.Descs[n.Sym]; ok {
 			// Field access on a struct — take precedence over method
 			// lookup so `foo.bar` reads the field even when a method
@@ -2167,7 +2237,15 @@ func (c *checker) structLitType(e *ast.StructLit, env *env) types.Type {
 		return types.ErrorType
 	}
 	desc, ok := c.result.Descs[typeSym]
-	if !ok || desc.Kind != resolve.SymStruct {
+	if !ok {
+		if pkg := c.externalPkgs[typeSym]; pkg != nil {
+			return c.externalStructLitType(e, typeSym, pkg, env)
+		}
+		c.errNode(e, diag.CodeNotAStruct,
+			"`%s` is not a struct", typeSym.Name)
+		return types.ErrorType
+	}
+	if desc.Kind != resolve.SymStruct {
 		c.errNode(e, diag.CodeNotAStruct,
 			"`%s` is not a struct", typeSym.Name)
 		return types.ErrorType
@@ -2253,6 +2331,85 @@ func (c *checker) structLitType(e *ast.StructLit, env *env) types.Type {
 	return selfT
 }
 
+func (c *checker) externalStructLitType(e *ast.StructLit, typeSym *resolve.Symbol, pkg *resolve.Package, env *env) types.Type {
+	sd, ok := typeSym.Decl.(*ast.StructDecl)
+	if !ok {
+		c.errNode(e, diag.CodeNotAStruct,
+			"`%s` is not a struct", typeSym.Name)
+		return types.ErrorType
+	}
+	selfT := &types.Named{Sym: typeSym}
+	want := map[string]*fieldDesc{}
+	fieldNames := make([]string, 0, len(sd.Fields))
+	for _, f := range sd.Fields {
+		fd := &fieldDesc{
+			Name:   f.Name,
+			Type:   c.externalType(f.Type, pkg),
+			Pub:    f.Pub,
+			HasDef: f.Default != nil,
+			Decl:   f,
+		}
+		want[f.Name] = fd
+		fieldNames = append(fieldNames, f.Name)
+	}
+
+	spreadCoversAll := false
+	if e.Spread != nil {
+		spreadT := c.checkExpr(e.Spread, selfT, env)
+		if spreadT != nil && !types.IsError(spreadT) {
+			n, ok := types.AsNamed(spreadT)
+			if !ok || n.Sym != typeSym {
+				c.errNode(e.Spread, diag.CodeTypeMismatch,
+					"spread source must be a `%s` value, got `%s`",
+					typeSym.Name, spreadT)
+			} else {
+				spreadCoversAll = true
+			}
+		}
+	}
+
+	provided := map[string]bool{}
+	for _, f := range e.Fields {
+		fd, ok := want[f.Name]
+		if !ok {
+			b := diag.New(diag.Error,
+				fmt.Sprintf("no field `%s` on struct `%s`", f.Name, typeSym.Name)).
+				Code(diag.CodeUnknownStructField).
+				Primary(diag.Span{Start: f.Pos(), End: f.End()}, "no such field")
+			if s := suggestFrom(f.Name, fieldNames); s != "" {
+				b.Hint(fmt.Sprintf("did you mean `%s`?", s))
+			}
+			c.emit(b.Build())
+			if f.Value != nil {
+				c.checkExpr(f.Value, nil, env)
+			}
+			continue
+		}
+		provided[f.Name] = true
+		var vt types.Type
+		if f.Value != nil {
+			vt = c.checkExpr(f.Value, fd.Type, env)
+		} else {
+			id := &ast.Ident{PosV: f.PosV, EndV: f.PosV, Name: f.Name}
+			vt = c.checkExpr(id, fd.Type, env)
+		}
+		if !types.Assignable(fd.Type, vt) {
+			c.errMismatch(f, fd.Type, vt)
+		}
+	}
+	if !spreadCoversAll {
+		for name, fd := range want {
+			if provided[name] || fd.HasDef {
+				continue
+			}
+			c.errNode(e, diag.CodeMissingStructField,
+				"struct literal for `%s` is missing field `%s`",
+				typeSym.Name, name)
+		}
+	}
+	return selfT
+}
+
 // structLitSym walks a StructLit's Type expr to recover the struct's
 // Symbol. Handles bare Ident and pkg.Type FieldExpr chains.
 func (c *checker) structLitSym(e ast.Expr) *resolve.Symbol {
@@ -2260,6 +2417,16 @@ func (c *checker) structLitSym(e ast.Expr) *resolve.Symbol {
 	case *ast.Ident:
 		return c.symbol(x)
 	case *ast.FieldExpr:
+		if id, ok := x.X.(*ast.Ident); ok {
+			if pkgSym := c.symbol(id); pkgSym != nil && pkgSym.Kind == resolve.SymPackage {
+				if pkgSym.Package != nil && pkgSym.Package.PkgScope != nil {
+					if sym := pkgSym.Package.PkgScope.LookupLocal(x.Name); sym != nil {
+						c.externalPkgs[sym] = pkgSym.Package
+						return sym
+					}
+				}
+			}
+		}
 		return c.structLitSym(x.X) // MVP: only validate the head
 	}
 	return nil
