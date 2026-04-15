@@ -69,6 +69,11 @@
 //     aliases (`type Foo = pkg.Foo`) so value-carrying returns
 //     (`Result<URL?, Error>`) bind to the real Go type and field
 //     access (`u.Host`) compiles against it.
+//   - FFI struct methods (`struct Time { fn Year(self) -> Int }`) are
+//     schema-only signatures that forward to the Go type's real
+//     method set through the type alias. Bodies, generics, defaults,
+//     and closure/channel-typed params are rejected with the same
+//     codes as free FFI fns.
 //   - Prelude `Error` interface is materialised as a Go `ostyError`
 //     interface with `message() string`; concrete Osty error types
 //     satisfy it structurally via Go method-set matching.
@@ -77,10 +82,15 @@
 //     with E0103. Defaults, methods on FFI structs, and generics stay
 //     rejected as before.
 //
-// Out of scope (future work):
+// Out of scope (spec-hard boundary):
 //
-//   - Methods on FFI struct types (spec defers method dispatch to the
-//     Go side — only field layout is mirrored).
-//   - channels, concurrency primitives across the FFI boundary
-//     (Phase 6).
+//   - §12.5 — Go goroutines and channels obtained via FFI are *not*
+//     integrated with Osty's structured concurrency or channel types.
+//     Channel-typed FFI declarations are rejected at parse time
+//     (E0103); there is no path to lift this without a spec revision.
+//     User code that needs producer/consumer interaction across the
+//     boundary must expose named `fn` calls on the Go side.
+//   - §12.6 — Go panics abort the Osty process. No translation to
+//     Result or recoverable error is attempted (spec forbids it);
+//     Go's default behaviour is the documented outcome.
 package gen

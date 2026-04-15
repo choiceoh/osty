@@ -5,6 +5,43 @@ import (
 	"testing"
 )
 
+// TestFFIStructMethodCall — §12.1/§12.2: methods declared inside a
+// `use go { struct X { ... } }` block are schema-only signatures that
+// forward to the Go type's real method. With the struct emitted as a
+// type alias (`type Time = time.Time`), Go resolves the call against
+// the aliased type's method set.
+//
+// The test uses `time.Time` whose `Unix()` and `Year()` methods are
+// stable exported API. A fixed UTC value makes the output
+// deterministic.
+func TestFFIStructMethodCall(t *testing.T) {
+	src := `use go "time" {
+    struct Time {
+        fn Year(self) -> Int
+        fn Unix(self) -> Int64
+    }
+    fn Unix(sec: Int64, nsec: Int64) -> Time
+}
+
+fn main() {
+    let t = time.Unix(1700000000, 0)
+    println("year={t.Year()} unix={t.Unix()}")
+}
+`
+	goSrc, err := transpile(t, src)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	if !strings.Contains(string(goSrc), "type Time = time.Time") {
+		t.Errorf("expected FFI struct alias in output:\n%s", goSrc)
+	}
+	out := runGo(t, goSrc)
+	if !strings.Contains(out, "year=") || !strings.Contains(out, "unix=1700000000") {
+		t.Errorf("got %q; want a line containing year=... unix=1700000000\n--- src ---\n%s",
+			out, goSrc)
+	}
+}
+
 // TestFFIStructRoundTrip — §12.2: a struct declared inside a
 // `use go { ... }` block is emitted as a Go type alias pointing at the
 // package's real type. A Result<Struct?, Error>-returning FFI call can
