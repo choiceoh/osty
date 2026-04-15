@@ -626,7 +626,11 @@ func (re Regex) runAt(chars []rune, boff []int, sp int) ([]int, bool) {
 func (re Regex) findSlots(text string) ([]int, bool) {
 	chars := []rune(text)
 	boff := rxByteOffsets(chars)
-	for sp := 0; sp <= len(chars); sp++ {
+	return re.findSlotsFrom(chars, boff, 0)
+}
+
+func (re Regex) findSlotsFrom(chars []rune, boff []int, from int) ([]int, bool) {
+	for sp := from; sp <= len(chars); sp++ {
 		if sl, ok := re.runAt(chars, boff, sp); ok {
 			return sl, true
 		}
@@ -662,7 +666,7 @@ func (re Regex) findAll(text string) []RegexMatch {
 	boff := rxByteOffsets(chars)
 	var out []RegexMatch
 	for from := 0; from <= len(chars); {
-		sl, ok := re.runAt(chars, boff, from)
+		sl, ok := re.findSlotsFrom(chars, boff, from)
 		if !ok {
 			from++
 			continue
@@ -692,7 +696,7 @@ func (re Regex) capturesAll(text string) []Captures {
 	boff := rxByteOffsets(chars)
 	var out []Captures
 	for from := 0; from <= len(chars); {
-		sl, ok := re.runAt(chars, boff, from)
+		sl, ok := re.findSlotsFrom(chars, boff, from)
 		if !ok {
 			from++
 			continue
@@ -786,7 +790,7 @@ func (re Regex) replaceAll(text, replacement string) string {
 	var out []byte
 	lastEnd := 0
 	for from := 0; from <= len(chars); {
-		sl, ok := re.runAt(chars, boff, from)
+		sl, ok := re.findSlotsFrom(chars, boff, from)
 		if !ok {
 			from++
 			continue
