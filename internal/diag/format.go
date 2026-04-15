@@ -148,8 +148,11 @@ func (f *Formatter) write(b *bytes.Buffer, d *Diagnostic) {
 			f.col(ansiGreen+ansiBold, tag),
 			label)
 		// Show the proposed replacement on the next line. An empty
-		// replacement is rendered as "(delete)" for clarity.
-		repl := sug.Replacement
+		// replacement is rendered as "(delete)" for clarity. Suggestions
+		// with a CopyFrom span expand the "%s" placeholder using the
+		// original source when available, so the user sees the concrete
+		// rewrite rather than the raw template.
+		repl := f.renderReplacement(sug)
 		if repl == "" {
 			repl = "(delete)"
 		}
@@ -157,6 +160,30 @@ func (f *Formatter) write(b *bytes.Buffer, d *Diagnostic) {
 			f.col(ansiGreen, "→"),
 			repl)
 	}
+}
+
+// renderReplacement resolves a Suggestion into the human-readable text
+// shown after the `→` marker. For plain replacements this is just the
+// literal string. For CopyFrom suggestions it expands the "%s" template
+// using the source bytes covered by CopyFrom — falling back to a
+// placeholder ("<expr>") when Source is unavailable or the span is
+// out of range.
+func (f *Formatter) renderReplacement(sug Suggestion) string {
+	if sug.CopyFrom == nil {
+		return sug.Replacement
+	}
+	var excerpt string
+	cs := sug.CopyFrom.Start.Offset
+	ce := sug.CopyFrom.End.Offset
+	if len(f.Source) > 0 && cs >= 0 && ce >= cs && ce <= len(f.Source) {
+		excerpt = string(f.Source[cs:ce])
+	} else {
+		excerpt = "<expr>"
+	}
+	if sug.Replacement == "" || !strings.Contains(sug.Replacement, "%s") {
+		return excerpt
+	}
+	return strings.Replace(sug.Replacement, "%s", excerpt, 1)
 }
 
 // writeSnippet renders the source lines for every span in the diagnostic.

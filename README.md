@@ -39,6 +39,9 @@ registry (`osty add` / `osty update`), and a test runner
 | Package registry client (`osty add` / `osty update` / `osty publish`) | wired |
 | Package registry server (`cmd/osty-registry`, `internal/registry/server`) | wired — filesystem-backed, token-gated |
 | `osty run` | not started |
+| Test runner harness (`internal/testgen`) | wired — merges per-file gen output, injects a real std.testing runtime + main(), runs via `go run` |
+| `osty test` (discovery + front-end + execution) | wired — validates and **runs** discovered `test*` / `bench*` fns; failures and pass/fail totals report inline |
+| Package registry / `osty add` / `osty update` / `osty run` | not started |
 
 The front-end (lex → parse → resolve) is **spec-complete for v0.3**:
 every syntactic construct in `LANG_SPEC_v0.3/` has a positive-corpus
@@ -105,6 +108,7 @@ osty/
 │   ├── lint/                # Style/correctness lint rules (L0xxx codes)
 │   ├── format/              # Canonical-style formatter
 │   ├── gen/                 # Go transpiler (Phase 1; `osty gen FILE`)
+│   ├── testgen/             # Test runner harness (drives `osty test`)
 │   ├── lsp/                 # Language server (stdio JSON-RPC)
 │   ├── scaffold/            # `osty new` / `osty init` project templates
 │   ├── tomlparse/           # Generic TOML parser (subset)

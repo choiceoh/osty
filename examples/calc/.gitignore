@@ -1,0 +1,8 @@
+# Build artefacts written by `osty build` / `osty test` / `osty gen`.
+.osty/
+
+# Editor / OS cruft
+.DS_Store
+.vscode/
+.idea/
+*.swp

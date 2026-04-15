@@ -164,7 +164,7 @@ type ServerCapabilities struct {
 	WorkspaceSymbolProvider    bool                     `json:"workspaceSymbolProvider,omitempty"`
 	InlayHintProvider          bool                     `json:"inlayHintProvider,omitempty"`
 	SemanticTokensProvider     *SemanticTokensOptions   `json:"semanticTokensProvider,omitempty"`
-	CodeActionProvider         bool                     `json:"codeActionProvider,omitempty"`
+	CodeActionProvider         *CodeActionOptions       `json:"codeActionProvider,omitempty"`
 	PositionEncoding           string                   `json:"positionEncoding,omitempty"`
 }
 
@@ -554,6 +554,16 @@ type SemanticTokensOptions struct {
 }
 
 // ---- Code action ----
+
+// CodeActionOptions advertises which code-action kinds the server
+// can produce. Clients that honor the list (VS Code in particular)
+// filter their "Source Action…" menu and on-save runners by it, so
+// advertising `source.organizeImports` here is what makes
+// `editor.codeActionsOnSave` actually fire for Osty files.
+type CodeActionOptions struct {
+	CodeActionKinds []string `json:"codeActionKinds,omitempty"`
+	ResolveProvider bool     `json:"resolveProvider,omitempty"`
+}
 
 // CodeActionParams is the payload of `textDocument/codeAction`. The
 // Context.Diagnostics slice holds whatever problems the editor has

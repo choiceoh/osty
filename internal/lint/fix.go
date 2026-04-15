@@ -2,6 +2,7 @@ package lint
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/osty/osty/internal/diag"
 )
@@ -15,6 +16,11 @@ import (
 // fixes touch the same byte range, only the first one (highest offset)
 // is applied; subsequent overlaps are skipped and returned via the
 // skipped count.
+//
+// Suggestions with a non-nil CopyFrom span have their replacement
+// resolved against the ORIGINAL source bytes, with the template's "%s"
+// marker (if any) substituted by the copied substring. A template of
+// plain "%s" or an empty string means "copy verbatim".
 //
 // Non-machine-applicable suggestions are ignored — those are prose
 // hints only.
@@ -35,7 +41,22 @@ func ApplyFixes(src []byte, diags []*diag.Diagnostic) (out []byte, applied, skip
 				skipped++
 				continue
 			}
-			edits = append(edits, edit{start: start, end: end, replacement: s.Replacement})
+			replacement := s.Replacement
+			if s.CopyFrom != nil {
+				cs := s.CopyFrom.Start.Offset
+				ce := s.CopyFrom.End.Offset
+				if cs < 0 || ce < cs || ce > len(src) {
+					skipped++
+					continue
+				}
+				copied := string(src[cs:ce])
+				if s.Replacement == "" || !strings.Contains(s.Replacement, "%s") {
+					replacement = copied
+				} else {
+					replacement = strings.Replace(s.Replacement, "%s", copied, 1)
+				}
+			}
+			edits = append(edits, edit{start: start, end: end, replacement: replacement})
 		}
 	}
 	if len(edits) == 0 {

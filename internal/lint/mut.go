@@ -28,47 +28,52 @@ func (l *linter) lintUnusedMut() {
 		return
 	}
 	// Step 1: find every `mut` binding's declaration node.
+	//
+	// mutPos is the position of the `mut` keyword in the enclosing let;
+	// zero when we don't have it (e.g. destructured struct fields whose
+	// enclosing LetStmt carries the token). The autofix uses this span
+	// to delete just `mut ` from the source.
 	type mutBinding struct {
-		decl ast.Node // the IdentPat or LetDecl node
-		name string
-		pos  ast.Node // same as decl; kept for clarity
+		decl   ast.Node // the IdentPat or LetDecl node
+		name   string
+		mutPos token.Pos
 	}
 	var mutBindings []mutBinding
 
-	var collectPattern func(p ast.Pattern)
-	collectPattern = func(p ast.Pattern) {
+	var collectPattern func(p ast.Pattern, mutPos token.Pos)
+	collectPattern = func(p ast.Pattern, mutPos token.Pos) {
 		if p == nil {
 			return
 		}
 		switch n := p.(type) {
 		case *ast.IdentPat:
 			if !isUnderscore(n.Name) {
-				mutBindings = append(mutBindings, mutBinding{decl: n, name: n.Name})
+				mutBindings = append(mutBindings, mutBinding{decl: n, name: n.Name, mutPos: mutPos})
 			}
 		case *ast.BindingPat:
 			if !isUnderscore(n.Name) {
-				mutBindings = append(mutBindings, mutBinding{decl: n, name: n.Name})
+				mutBindings = append(mutBindings, mutBinding{decl: n, name: n.Name, mutPos: mutPos})
 			}
-			collectPattern(n.Pattern)
+			collectPattern(n.Pattern, mutPos)
 		case *ast.TuplePat:
 			for _, e := range n.Elems {
-				collectPattern(e)
+				collectPattern(e, mutPos)
 			}
 		case *ast.StructPat:
 			for _, f := range n.Fields {
 				if f.Pattern != nil {
-					collectPattern(f.Pattern)
+					collectPattern(f.Pattern, mutPos)
 				} else if !isUnderscore(f.Name) {
-					mutBindings = append(mutBindings, mutBinding{decl: f, name: f.Name})
+					mutBindings = append(mutBindings, mutBinding{decl: f, name: f.Name, mutPos: mutPos})
 				}
 			}
 		case *ast.VariantPat:
 			for _, a := range n.Args {
-				collectPattern(a)
+				collectPattern(a, mutPos)
 			}
 		case *ast.OrPat:
 			for _, a := range n.Alts {
-				collectPattern(a)
+				collectPattern(a, mutPos)
 			}
 		}
 	}
@@ -89,7 +94,7 @@ func (l *linter) lintUnusedMut() {
 		switch n := s.(type) {
 		case *ast.LetStmt:
 			if n.Mut {
-				collectPattern(n.Pattern)
+				collectPattern(n.Pattern, n.MutPos)
 			}
 			walkExprForMut(n.Value)
 		case *ast.ExprStmt:
@@ -181,7 +186,7 @@ func (l *linter) lintUnusedMut() {
 	// Collect top-level `let mut` (LetDecl with Mut=true).
 	for _, d := range l.file.Decls {
 		if ld, ok := d.(*ast.LetDecl); ok && ld.Mut && !isUnderscore(ld.Name) {
-			mutBindings = append(mutBindings, mutBinding{decl: ld, name: ld.Name})
+			mutBindings = append(mutBindings, mutBinding{decl: ld, name: ld.Name, mutPos: ld.MutPos})
 		}
 	}
 	// Collect method and fn bodies' `let mut` bindings.
@@ -368,12 +373,33 @@ func (l *linter) lintUnusedMut() {
 	}
 
 	// Step 3: emit for each mut binding whose decl node is not in `mutated`.
+	//
+	// When we captured the `mut` keyword's position (via MutPos on
+	// LetStmt/LetDecl), attach a machine-applicable fix that deletes the
+	// token plus its single trailing space — rewriting `let mut x` to
+	// `let x`. The +4 end offset covers the four bytes `mut ` exactly;
+	// if parser layout ever changes, ApplyFixes will simply skip the
+	// suggestion as out-of-range rather than producing garbage.
 	for _, mb := range mutBindings {
 		if mutated[mb.decl] {
 			continue
 		}
-		l.warnNode(mb.decl, diag.CodeUnusedMut,
-			"binding `%s` is declared `mut` but never reassigned", mb.name)
+		b := diag.New(diag.Warning,
+			"binding `"+mb.name+"` is declared `mut` but never reassigned").
+			Code(diag.CodeUnusedMut).
+			Primary(diag.Span{Start: mb.decl.Pos(), End: mb.decl.End()}, "")
+		if mb.mutPos.Offset > 0 || mb.mutPos.Line > 0 {
+			// Delete `mut ` — four bytes. The ASCII `mut` keyword is
+			// always followed by whitespace in the surface syntax, so
+			// taking one extra byte is safe.
+			delSpan := diag.Span{
+				Start: mb.mutPos,
+				End:   token.Pos{Offset: mb.mutPos.Offset + 4, Line: mb.mutPos.Line, Column: mb.mutPos.Column + 4},
+			}
+			b = b.Hint("remove the `mut` — the binding is immutable as written").
+				Suggest(delSpan, "", "remove `mut`", true)
+		}
+		l.emit(b.Build())
 	}
 
 	// ---- L0008: dead store ----
