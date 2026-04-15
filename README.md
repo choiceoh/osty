@@ -167,7 +167,8 @@ osty resolve FILE|DIR  # name resolution; directory = package mode (--scopes for
 osty check FILE|DIR    # lex + parse + resolve + type-check (diagnostics only)
 osty typecheck FILE    # same as check, plus a per-expression type dump
 osty lint FILE|DIR     # style + correctness warnings (L0xxx codes)
-osty fmt FILE          # format to canonical style (see --check, --write)
+osty fmt FILE          # repair + format to canonical style (see --check, --write)
+osty repair FILE       # auto-fix common AI-authored syntax/idiom slips
 osty gen FILE          # transpile to Go source (see -o, --package)
 osty doc PATH          # generate API documentation (HTML + markdown)
 osty ci                # run CI quality checks (signatures, coverage, snapshots)
@@ -194,8 +195,22 @@ Global flags (precede the subcommand):
 
 `fmt`-specific flags (after the subcommand):
 
+`osty fmt` runs the same automatic source repair pass before formatting by
+default, so AI-authored syntax slips are normalized in one command.
+
 - `--check` — exit 1 if the file is not already formatted; show diff
 - `--write` — rewrite the file in place instead of printing
+- `--no-repair` — disable the default automatic source repair pass
+
+`repair`-specific flags (after the subcommand):
+
+- `--check` — exit 1 if the file contains repairable syntax slips
+- `--write` — rewrite the file in place instead of printing
+
+Repairs include common foreign-language carryovers such as `func`/`def`,
+`var`/`const`, `while`, `switch`/`case`, `nil`/`null`, Python word
+operators, JS `console.log`, semicolons, `=>`, trailing chain dots, and
+newline-separated `else`.
 
 `gen`-specific flags (after the subcommand):
 

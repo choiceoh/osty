@@ -159,6 +159,46 @@ license = "MIT"
 	}
 }
 
+func TestFmtAutoRepairWrite(t *testing.T) {
+	if testing.Short() {
+		t.Skip("CLI integration test (slow)")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.osty")
+	if err := os.WriteFile(path, []byte("function main(){ console.log(null); }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, code := runOsty(t, dir, "fmt", "--write", path)
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d. output:\n%s", code, out)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "fn main() {\n    println(None)\n}\n"
+	if string(got) != want {
+		t.Fatalf("formatted repair mismatch:\nwant:\n%s\ngot:\n%s", want, got)
+	}
+}
+
+func TestFmtNoRepairLeavesParserStrict(t *testing.T) {
+	if testing.Short() {
+		t.Skip("CLI integration test (slow)")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.osty")
+	if err := os.WriteFile(path, []byte("function main(){ console.log(null); }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, code := runOsty(t, dir, "fmt", "--no-repair", "--write", path)
+	if code == 0 {
+		t.Fatalf("expected non-zero exit without repair. output:\n%s", out)
+	}
+}
+
 func mustWrite(t *testing.T, dir, name, body string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {

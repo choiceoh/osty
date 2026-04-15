@@ -10,6 +10,7 @@ import (
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/format"
+	"github.com/osty/osty/internal/repair"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/token"
 	"github.com/osty/osty/internal/types"
@@ -419,11 +420,11 @@ func (s *Server) handleDefinition(req *rpcRequest) {
 
 // ---- Formatting ----
 
-// handleFormatting runs the same pipeline as `osty fmt` and returns
-// a single TextEdit that replaces the whole document. If the source
-// has parse errors the formatter refuses to produce output; we
-// reply with an empty edit list so the client doesn't rewrite the
-// buffer with `null`.
+// handleFormatting runs the same repair+format pipeline as `osty fmt` and
+// returns a single TextEdit that replaces the whole document. If the source
+// still has parse errors after repair, the formatter refuses to produce
+// output; we reply with an empty edit list so the client doesn't rewrite
+// the buffer with `null`.
 func (s *Server) handleFormatting(req *rpcRequest) {
 	var params DocumentFormattingParams
 	if err := unmarshalParams(req, &params); err != nil {
@@ -435,7 +436,8 @@ func (s *Server) handleFormatting(req *rpcRequest) {
 		replyJSON(s.conn, req.ID, []TextEdit{})
 		return
 	}
-	out, _, err := format.Source(doc.src)
+	repaired := repair.Source(doc.src)
+	out, _, err := format.Source(repaired.Source)
 	if err != nil {
 		replyJSON(s.conn, req.ID, []TextEdit{})
 		return

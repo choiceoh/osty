@@ -647,6 +647,33 @@ func TestFormattingProducesEdit(t *testing.T) {
 	}
 }
 
+func TestFormattingAutoRepairs(t *testing.T) {
+	sess := startSession(t)
+	defer sess.stop()
+	sess.initialize()
+	sess.openDoc(sampleURI, "function main(){ console.log(null); }\n")
+
+	sess.send("2", "textDocument/formatting", DocumentFormattingParams{
+		TextDocument: TextDocumentIdentifier{URI: sampleURI},
+		Options:      FormattingOptions{TabSize: 4, InsertSpaces: true},
+	})
+	resp := sess.waitResponse("2")
+	if resp.Error != nil {
+		t.Fatalf("formatting error: %+v", resp.Error)
+	}
+	var edits []TextEdit
+	if err := json.Unmarshal(resp.Result, &edits); err != nil {
+		t.Fatalf("decode edits: %v", err)
+	}
+	if len(edits) != 1 {
+		t.Fatalf("expected 1 edit, got %d", len(edits))
+	}
+	want := "fn main() {\n    println(None)\n}\n"
+	if edits[0].NewText != want {
+		t.Fatalf("formatting repair mismatch:\nwant:\n%s\ngot:\n%s", want, edits[0].NewText)
+	}
+}
+
 func TestMethodNotFound(t *testing.T) {
 	sess := startSession(t)
 	defer sess.stop()
