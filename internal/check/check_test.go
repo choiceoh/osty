@@ -1075,6 +1075,33 @@ fn main() {
 	assertOK(t, runCheck(t, src))
 }
 
+func TestCheck_OptionCombinators(t *testing.T) {
+	src := `
+use std.option
+
+fn main() {
+    let x: Int? = Some(5)
+    let qualified: Int? = option.Some(7)
+    let qualifiedNone: Int? = option.None
+    let qualifiedType: option.Option<Int> = option.Some(8)
+    let normalized: Int? = qualifiedType
+    let y: String? = x.map(|n| "{n}")
+    let z: Int? = None
+    let recovered: Int? = z.orElse(|| Some(9))
+    let result: Result<Int, Error> = z.orError("missing")
+    let message: String = result.unwrapErr().message()
+    let messageAgain: String = result.err().unwrap().message()
+    let mapped: Result<String, Error> = result.map(|n| "{n}")
+    let mappedErr: Result<Int, String> = result.mapErr(|e| e.message())
+    let label: String = y.unwrapOr("fallback")
+    let ok: Bool = x.isSome()
+    let missing: Bool = qualifiedNone.isNone()
+    let shown: String = recovered.toString()
+}
+`
+	assertOK(t, runCheckWithStdlib(t, src))
+}
+
 func TestCheck_ResultIsOkReturnsBool(t *testing.T) {
 	// Uses the prelude's builtin Result; no user-defined enum shadow.
 	src := `

@@ -85,6 +85,10 @@ type gen struct {
 	// prompting a runtime type definition at file top.
 	needResult bool
 
+	// needErrorRuntime is set when a value typed as Osty's Error
+	// interface needs dynamic message dispatch at runtime.
+	needErrorRuntime bool
+
 	// needRange is set when a standalone range literal is emitted, so
 	// the runtime Range struct can be injected at the top of the file.
 	needRange bool
@@ -310,6 +314,9 @@ func (g *gen) run() ([]byte, error) {
 		g.useAs("net/url", "neturl")
 		g.use("strconv")
 	}
+	if g.needErrorRuntime {
+		g.use("fmt")
+	}
 	if g.needRegex {
 		g.needResult = true
 		g.use("regexp")
@@ -435,6 +442,48 @@ func (r Result[T, E]) unwrapOr(fallback T) T {
 		return r.Value
 	}
 	return fallback
+}
+
+func (r Result[T, E]) ok() *T {
+	if !r.IsOk {
+		return nil
+	}
+	v := r.Value
+	return &v
+}
+
+func (r Result[T, E]) err() *E {
+	if r.IsOk {
+		return nil
+	}
+	v := r.Error
+	return &v
+}
+
+func (r Result[T, E]) toString() string {
+	if r.IsOk {
+		return "Ok(...)"
+	}
+	return "Err(...)"
+}
+`)
+	}
+	if g.needErrorRuntime {
+		out.WriteString(`
+func ostyErrorMessage(e any) string {
+	if e == nil {
+		return ""
+	}
+	if m, ok := e.(interface{ message() string }); ok {
+		return m.message()
+	}
+	if err, ok := e.(error); ok {
+		return err.Error()
+	}
+	if s, ok := e.(string); ok {
+		return s
+	}
+	return fmt.Sprint(e)
 }
 `)
 	}

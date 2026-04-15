@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/parser"
@@ -378,6 +379,37 @@ func TestOptionVariantViaPkgAccess(t *testing.T) {
 		sym := mod.Package.PkgScope.LookupLocal(name)
 		if sym == nil {
 			t.Errorf("std.option PkgScope missing export %q", name)
+		}
+	}
+}
+
+// TestOptionModuleMethodsResolves pins the public combinator surface on
+// std.option. The methods are authored in the Osty stub, even though the
+// Go backend lowers calls directly because Option<T> is represented as
+// a pointer.
+func TestOptionModuleMethodsResolves(t *testing.T) {
+	mod := Load().Modules["option"]
+	if mod == nil || mod.File == nil {
+		t.Fatal("std.option not loaded")
+	}
+	var methods map[string]bool
+	for _, d := range mod.File.Decls {
+		if ed, ok := d.(*ast.EnumDecl); ok && ed.Name == "Option" {
+			methods = map[string]bool{}
+			for _, m := range ed.Methods {
+				if m.Pub {
+					methods[m.Name] = true
+				}
+			}
+			break
+		}
+	}
+	if methods == nil {
+		t.Fatal("std.option missing Option enum declaration")
+	}
+	for _, name := range []string{"isSome", "isNone", "unwrap", "unwrapOr", "orElse", "map", "orError", "toString"} {
+		if !methods[name] {
+			t.Errorf("std.option Option missing pub method %q", name)
 		}
 	}
 }

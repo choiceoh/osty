@@ -64,7 +64,7 @@ func (c *checker) exprType(e ast.Expr, hint types.Type, env *env) types.Type {
 	case *ast.CallExpr:
 		return c.callType(x, hint, env)
 	case *ast.FieldExpr:
-		return c.fieldType(x, env)
+		return c.fieldType(x, hint, env)
 	case *ast.IndexExpr:
 		return c.indexType(x, env)
 	case *ast.TurbofishExpr:
@@ -707,6 +707,26 @@ func (c *checker) tryPackageCall(
 		}
 		return types.ErrorType, true
 	}
+	if stdlibPackageModule(pkgSym) == "option" {
+		switch fx.Name {
+		case "Some":
+			if len(e.Args) != 1 {
+				c.errNode(e, diag.CodeWrongArgCount,
+					"`Some` takes exactly 1 argument, got %d", len(e.Args))
+				return types.ErrorType, true
+			}
+			var innerHint types.Type
+			if o, ok := hint.(*types.Optional); ok {
+				innerHint = o.Inner
+			}
+			at := c.checkExpr(e.Args[0].Value, innerHint, env)
+			return &types.Optional{Inner: at}, true
+		case "None":
+			c.errNode(e, diag.CodeWrongArgCount,
+				"`None` is a unit variant — write `None`, not `None()`")
+			return types.ErrorType, true
+		}
+	}
 	t := c.symTypeOrError(tgt)
 	var generics []*types.TypeVar
 	if types.IsError(t) {
@@ -1305,11 +1325,17 @@ func (c *checker) optionalMethod(o *types.Optional, name string) *methodDesc {
 		fn := &types.FnType{Params: nil, Return: opt}
 		return simpleMethod(name, []types.Type{fn}, opt)
 	case "map":
-		// fn(T) -> U — but U is fresh per call. We approximate by
-		// returning Option<?> and let the specific checker path
-		// refine via the callback's inferred return.
-		fn := &types.FnType{Params: []types.Type{t}, Return: types.ErrorType}
-		return simpleMethod(name, []types.Type{fn}, &types.Optional{Inner: types.ErrorType})
+		uSym := &resolve.Symbol{Name: "U", Kind: resolve.SymGeneric}
+		u := &types.TypeVar{Sym: uSym}
+		fn := &types.FnType{Params: []types.Type{t}, Return: u}
+		return &methodDesc{
+			Name:     name,
+			Fn:       &types.FnType{Params: []types.Type{fn}, Return: &types.Optional{Inner: u}},
+			Generics: []*types.TypeVar{u},
+		}
+	case "orError":
+		return simpleMethod(name, []types.Type{types.String},
+			c.resultOf(t, c.namedOf("Error", nil)))
 	case "toString":
 		return simpleMethod(name, nil, types.String)
 	}
@@ -1366,6 +1392,10 @@ func (c *checker) builtinNamedMethod(n *types.Named, name string) *methodDesc {
 		case "isCancelled":
 			return simpleMethod(name, nil, types.Bool)
 		}
+	case "Error":
+		if name == "message" {
+			return simpleMethod(name, nil, types.String)
+		}
 	}
 	return nil
 }
@@ -1388,13 +1418,29 @@ func resultMethod(n *types.Named, name string) *methodDesc {
 	case "err":
 		return simpleMethod(name, nil, &types.Optional{Inner: e})
 	case "map":
-		fn := &types.FnType{Params: []types.Type{t}, Return: types.ErrorType}
-		return simpleMethod(name, []types.Type{fn},
-			&types.Named{Sym: n.Sym, Args: []types.Type{types.ErrorType, e}})
+		uSym := &resolve.Symbol{Name: "U", Kind: resolve.SymGeneric}
+		u := &types.TypeVar{Sym: uSym}
+		fn := &types.FnType{Params: []types.Type{t}, Return: u}
+		return &methodDesc{
+			Name: name,
+			Fn: &types.FnType{
+				Params: []types.Type{fn},
+				Return: &types.Named{Sym: n.Sym, Args: []types.Type{u, e}},
+			},
+			Generics: []*types.TypeVar{u},
+		}
 	case "mapErr":
-		fn := &types.FnType{Params: []types.Type{e}, Return: types.ErrorType}
-		return simpleMethod(name, []types.Type{fn},
-			&types.Named{Sym: n.Sym, Args: []types.Type{t, types.ErrorType}})
+		fSym := &resolve.Symbol{Name: "F", Kind: resolve.SymGeneric}
+		f := &types.TypeVar{Sym: fSym}
+		fn := &types.FnType{Params: []types.Type{e}, Return: f}
+		return &methodDesc{
+			Name: name,
+			Fn: &types.FnType{
+				Params: []types.Type{fn},
+				Return: &types.Named{Sym: n.Sym, Args: []types.Type{t, f}},
+			},
+			Generics: []*types.TypeVar{f},
+		}
 	case "toString":
 		return simpleMethod(name, nil, types.String)
 	}
@@ -1863,6 +1909,28 @@ func (c *checker) tryVariantCall(id *ast.Ident, e *ast.CallExpr, hint types.Type
 		if vd, ok := desc.Variants[sym.Name]; ok {
 			c.warnIfVariantDeprecated(vd, id.PosV)
 		}
+		if desc.Sym != nil && desc.Sym.Name == "Option" {
+			switch sym.Name {
+			case "Some":
+				if len(e.Args) != 1 {
+					c.errNode(e, diag.CodeWrongArgCount,
+						"`Some` takes exactly 1 argument, got %d", len(e.Args))
+					return types.ErrorType
+				}
+				var innerHint types.Type
+				if o, ok := hint.(*types.Optional); ok {
+					innerHint = o.Inner
+				} else if info != nil && len(info.VariantFields) == 1 {
+					innerHint = info.VariantFields[0]
+				}
+				at := c.checkExpr(e.Args[0].Value, innerHint, env)
+				return &types.Optional{Inner: at}
+			case "None":
+				c.errNode(e, diag.CodeWrongArgCount,
+					"`None` is a unit variant — write `None`, not `None()`")
+				return types.ErrorType
+			}
+		}
 		// Pull type arguments from a matching hint first so the same
 		// enum's variants flow concrete args naturally:
 		//     let r: Result<Int, Error> = Ok(5)   // 5 is Int
@@ -1981,7 +2049,7 @@ func inferFromArg(field, arg types.Type, sub map[*resolve.Symbol]types.Type) {
 
 // ---- Field / index ----
 
-func (c *checker) fieldType(fx *ast.FieldExpr, env *env) types.Type {
+func (c *checker) fieldType(fx *ast.FieldExpr, hint types.Type, env *env) types.Type {
 	recvT := c.checkExpr(fx.X, nil, env)
 	if types.IsError(recvT) {
 		return types.ErrorType
@@ -2010,6 +2078,12 @@ func (c *checker) fieldType(fx *ast.FieldExpr, env *env) types.Type {
 			if tgt == nil {
 				// Resolver already reported E0508.
 				return types.ErrorType
+			}
+			if stdlibPackageModule(s) == "option" && fx.Name == "None" {
+				if o, ok := hint.(*types.Optional); ok {
+					return o
+				}
+				return &types.Optional{Inner: types.ErrorType}
 			}
 			if t := c.symTypeOrError(tgt); !types.IsError(t) {
 				return t
@@ -2101,6 +2175,17 @@ func (c *checker) fieldType(fx *ast.FieldExpr, env *env) types.Type {
 		}
 	}
 	return types.ErrorType
+}
+
+func stdlibPackageModule(sym *resolve.Symbol) string {
+	if sym == nil {
+		return ""
+	}
+	u, ok := sym.Decl.(*ast.UseDecl)
+	if !ok || u.IsGoFFI || len(u.Path) != 2 || u.Path[0] != "std" {
+		return ""
+	}
+	return u.Path[1]
 }
 
 func (c *checker) indexType(e *ast.IndexExpr, env *env) types.Type {
