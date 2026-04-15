@@ -41,12 +41,11 @@ var indentCache = strings.Repeat(Indent, cacheLevels)
 // best-effort AST when possible. Callers that want "format only clean
 // files" should inspect the returned diagnostics themselves.
 func Source(src []byte) ([]byte, []*diag.Diagnostic, error) {
-	// Lex and parse in one shared pass so we can retrieve the lexer's
-	// comment list instead of rescanning src ourselves.
+	// Keep one lexer pass for comments; parsing itself is handled by the
+	// self-hosted front end through parser.ParseDiagnostics.
 	l := lexer.New(src)
-	toks := l.Lex()
-	file, parseDiags := parser.ParseTokens(toks)
-	diags := append(l.Errors(), parseDiags...)
+	_ = l.Lex()
+	file, diags := parser.ParseDiagnostics(src)
 	for _, d := range diags {
 		if d.Severity == diag.Error {
 			return nil, diags, fmt.Errorf("cannot format file with parse errors")

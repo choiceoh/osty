@@ -1269,6 +1269,7 @@ pub fn frontStringStructureScan(
     for idx in contentStart..contentEnd {
         if skip > 0 {
             skip = skip - 1
+            escaped = false
         } else {
             let unit = frontUnitAt(units, idx)
             if escaped {
@@ -2165,6 +2166,7 @@ pub fn frontStringLikeScan(
     let mut errors = 0
     let mut triple = false
     let mut interpolations = 0
+    let mut skip = 0
     let mut close = "\""
     let mut contentStart = start + 1
     if kind == FrontRawString {
@@ -2196,6 +2198,11 @@ pub fn frontStringLikeScan(
         let unit = frontUnitAt(units, idx)
         let next = frontUnitAt(units, idx + 1)
         let third = frontUnitAt(units, idx + 2)
+        if skip > 0 {
+            consumed = consumed + 1
+            skip = skip - 1
+            continue
+        }
         if !(triple) && frontIsNewlineUnit(unit) {
             errors = errors + 1
             return frontDetailedScanResult(
@@ -2215,7 +2222,11 @@ pub fn frontStringLikeScan(
         } else if kind != FrontRawString && unit == "\\" {
             escaped = true
         } else if kind != FrontRawString && unit == r"{" {
+            let interp = frontInterpolationScan(units, idx, unitCount, 0)
             interpolations = interpolations + 1
+            if interp.ok {
+                skip = interp.consumed - 1
+            }
         } else if triple && unit == close && next == close && third == close {
             return frontDetailedScanResult(
                 kind,
