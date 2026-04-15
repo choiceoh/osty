@@ -1,7 +1,7 @@
-// Package ir defines an independent intermediate representation (IR) for
-// Osty programs. It is a self-contained, backend-agnostic tree that sits
-// between the type-checked front-end and the Go transpiler / future
-// backends.
+// Package ir defines an independent intermediate representation (IR)
+// for Osty programs. It is a self-contained, backend-agnostic tree
+// that sits between the type-checked front-end and the Go transpiler /
+// future backends.
 //
 // Pipeline position:
 //
@@ -9,36 +9,72 @@
 //
 // Goals:
 //
-//   - Independence. No node in this package references `ast`, `resolve`,
-//     or `check`. Backends may depend on `ir` alone. Types (`ir.Type`),
-//     declarations, statements and expressions are all self-describing:
-//     names resolve as plain strings, symbol references carry the kind
-//     they point at, and every expression stores its own type.
+//   - Independence. No node in this package references `ast`,
+//     `resolve`, or `check`. Backends may depend on `ir` alone. Types
+//     (`ir.Type`), declarations, statements, expressions and patterns
+//     are all self-describing: names resolve as plain strings, every
+//     expression stores its own type, and symbol classification is
+//     carried via enum kinds (IdentKind).
 //
-//   - Stability. The IR is a normalised view: syntactic sugar is pruned
-//     (parens unwrapped, `ExprStmt` around block-final expressions turned
-//     into `Block.Result`, turbofish dropped into the call's type args),
-//     untyped literals are resolved to their concrete primitive type,
-//     and source-order-only variants are merged (e.g. there is one
-//     `ForStmt` with a variant kind field instead of three AST kinds).
+//   - Stability. The IR is a normalised view: syntactic sugar is
+//     pruned (parens unwrapped, block-final expressions hoisted into
+//     Block.Result, turbofish folded into the call's type args), and
+//     constructs are classified into distinct nodes rather than a
+//     single polymorphic shape (MethodCall vs CallExpr, VariantLit vs
+//     CallExpr, IfLetExpr vs IfExpr, TupleAccess vs FieldExpr, etc.).
 //
-//   - Lossy where appropriate. Things irrelevant to later stages (doc
-//     comments, annotations other than `deprecated`/`json`, parser-
-//     suppression state) are dropped. Source positions are retained in a
-//     `Span` field on every node so diagnostics remain anchorable.
+//   - Lossy where appropriate. Doc comments, annotation metadata
+//     unused downstream, parser-suppression state, etc. are dropped.
+//     Every node keeps a Span so diagnostics remain anchorable.
 //
-// Lower(file, res, chk) is the canonical entry point. It returns a
-// *Module carrying every top-level declaration, script-mode statements
-// (if any), and a list of issues encountered during lowering. Lowering
-// is best-effort: constructs that are not yet supported collapse to an
-// IR `ErrorExpr` / `ErrorStmt` and append a note to the issue list — the
-// same "keep going so later problems surface" philosophy used by the
-// parser and resolver.
+// Surface area
 //
-// Phase 1 of the backend needs only a modest subset of Osty, so Lower
-// implements that subset today (primitives, fn decls, let bindings,
-// if/for/return, list literals, print intrinsics, user calls). Larger
-// surface area (structs, enums, match, `?`, generics, closures) is
-// staged in follow-on work; the IR types already carry nodes for those
-// so backends written against `ir` stay forward-compatible.
+//   - Module: package name, top-level Decls, script-mode Stmts.
+//   - Decls: FnDecl, StructDecl, EnumDecl, InterfaceDecl, TypeAliasDecl,
+//     LetDecl, UseDecl.
+//   - Stmts: Block, LetStmt, ExprStmt, AssignStmt (multi-target),
+//     ReturnStmt, BreakStmt, ContinueStmt, IfStmt, ForStmt (inf /
+//     while / range / in), DeferStmt, ChanSendStmt, MatchStmt,
+//     ErrorStmt.
+//   - Exprs: literals (int/float/bool/char/byte/string/unit), Ident,
+//     UnaryExpr, BinaryExpr, CoalesceExpr, QuestionExpr, CallExpr,
+//     IntrinsicCall (print-family), MethodCall, VariantLit, FieldExpr,
+//     TupleAccess, IndexExpr, ListLit, MapLit, TupleLit, StructLit,
+//     RangeLit, Closure, BlockExpr, IfExpr, IfLetExpr, MatchExpr,
+//     ErrorExpr.
+//   - Patterns: WildPat, IdentPat, LitPat, TuplePat, StructPat,
+//     VariantPat, RangePat, OrPat, BindingPat, ErrorPat.
+//   - Types: PrimType (with canonical singletons), NamedType,
+//     OptionalType, TupleType, FnType, TypeVar, ErrType.
+//
+// Tools
+//
+//   - Lower(pkg, file, res, chk) → (*Module, []error) — convert a
+//     type-checked AST into an IR Module. Non-fatal issues are
+//     returned separately; poisoned spots collapse to ErrorStmt /
+//     ErrorExpr / ErrorPat rather than panicking.
+//
+//   - Walk(v, n) / Inspect(n, fn) — pre-order traversal over every
+//     reachable Node (decl, stmt, expr, pattern).
+//
+//   - Print(m) / PrintNode(n) — stable S-expression-like debug
+//     renderer for tests and visual inspection.
+//
+//   - Validate(m) — lightweight structural sanity check useful during
+//     backend development.
+//
+// Known gaps (follow-on work)
+//
+//   - The Go transpiler (internal/gen) still consumes the AST
+//     directly. Rewriting it against `ir` is a substantial refactor
+//     tracked as a separate effort.
+//
+//   - Generic monomorphisation info (check.Result.Instantiations) is
+//     not yet threaded through; backends that need per-call-site
+//     type arguments should consult the checker until the IR
+//     surfaces them.
+//
+//   - Destructuring `for` heads lower to ForIn with an empty Var and
+//     a note; a ForDestructure variant may emerge when a consumer
+//     actually needs it.
 package ir

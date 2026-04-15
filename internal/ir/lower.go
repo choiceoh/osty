@@ -87,11 +87,12 @@ func (l *lowerer) lowerDecl(d ast.Decl) Decl {
 		return l.lowerEnumDecl(d)
 	case *ast.LetDecl:
 		return l.lowerLetDecl(d)
-	case *ast.UseDecl, *ast.InterfaceDecl, *ast.TypeAliasDecl:
-		// Out of scope for the current IR shape. Not an error — these
-		// are either consumed by the resolver (Use) or reserved for a
-		// later IR expansion (Interface, TypeAlias).
-		return nil
+	case *ast.UseDecl:
+		return l.lowerUseDecl(d)
+	case *ast.InterfaceDecl:
+		return l.lowerInterfaceDecl(d)
+	case *ast.TypeAliasDecl:
+		return l.lowerTypeAliasDecl(d)
 	}
 	l.note("unsupported top-level decl %T", d)
 	return nil
@@ -511,6 +512,14 @@ func (l *lowerer) lowerStmt(s ast.Stmt) Stmt {
 		return l.lowerAssignStmt(s)
 	case *ast.ForStmt:
 		return l.lowerForStmt(s)
+	case *ast.DeferStmt:
+		return l.lowerDeferStmt(s)
+	case *ast.ChanSendStmt:
+		return &ChanSendStmt{
+			Channel: l.lowerExpr(s.Channel),
+			Value:   l.lowerExpr(s.Value),
+			SpanV:   nodeSpan(s),
+		}
 	}
 	// Fall through: if it's actually an if used at statement position,
 	// the parser wrapped it in an ExprStmt already; we only get here
@@ -520,17 +529,14 @@ func (l *lowerer) lowerStmt(s ast.Stmt) Stmt {
 }
 
 func (l *lowerer) lowerLetStmt(s *ast.LetStmt) Stmt {
-	// Only bare-ident patterns are lowered directly; destructuring
-	// patterns aren't representable in the current IR shape.
-	name, ok := simpleBindName(s.Pattern)
-	if !ok {
-		l.note("destructuring `let` at %v not yet lowered", s.Pos())
-		return &ErrorStmt{Note: "destructuring let", SpanV: nodeSpan(s)}
-	}
 	out := &LetStmt{
-		Name:  name,
 		Mut:   s.Mut,
 		SpanV: nodeSpan(s),
+	}
+	if name, ok := simpleBindName(s.Pattern); ok {
+		out.Name = name
+	} else {
+		out.Pattern = l.lowerPattern(s.Pattern)
 	}
 	if s.Type != nil {
 		out.Type = l.lowerType(s.Type)
@@ -555,16 +561,15 @@ func simpleBindName(p ast.Pattern) (string, bool) {
 }
 
 func (l *lowerer) lowerAssignStmt(s *ast.AssignStmt) Stmt {
-	if len(s.Targets) != 1 {
-		l.note("multi-target assignment at %v not yet lowered", s.Pos())
-		return &ErrorStmt{Note: "multi-assign", SpanV: nodeSpan(s)}
+	out := &AssignStmt{
+		Op:    assignOp(s.Op),
+		Value: l.lowerExpr(s.Value),
+		SpanV: nodeSpan(s),
 	}
-	return &AssignStmt{
-		Op:     assignOp(s.Op),
-		Target: l.lowerExpr(s.Targets[0]),
-		Value:  l.lowerExpr(s.Value),
-		SpanV:  nodeSpan(s),
+	for _, t := range s.Targets {
+		out.Targets = append(out.Targets, l.lowerExpr(t))
 	}
+	return out
 }
 
 func (l *lowerer) lowerForStmt(s *ast.ForStmt) Stmt {
@@ -576,10 +581,12 @@ func (l *lowerer) lowerForStmt(s *ast.ForStmt) Stmt {
 	if s.Pattern == nil && s.Iter != nil {
 		return &ForStmt{Kind: ForWhile, Cond: l.lowerExpr(s.Iter), Body: body, SpanV: nodeSpan(s)}
 	}
-	name, ok := simpleBindName(s.Pattern)
-	if !ok {
-		l.note("for with destructuring pattern at %v not yet lowered", s.Pos())
-		return &ErrorStmt{Note: "for destructuring", SpanV: nodeSpan(s)}
+	name, _ := simpleBindName(s.Pattern)
+	// Non-ident patterns lower to a tuple-style ForIn with a
+	// destructuring binding in the body. For now we keep Var empty and
+	// annotate the issue; a follow-on can introduce ForDestructure.
+	if name == "" {
+		l.note("for with destructuring pattern at %v collapsed to ForIn with unnamed var", s.Pos())
 	}
 	// for x in a..b is a numeric range loop.
 	if r, ok := s.Iter.(*ast.RangeExpr); ok && r.Start != nil && r.Stop != nil {
@@ -644,7 +651,6 @@ func (l *lowerer) lowerExpr(e ast.Expr) Expr {
 	case *ast.Ident:
 		return l.lowerIdent(e)
 	case *ast.ParenExpr:
-		// Parens carry no semantic content in the IR.
 		return l.lowerExpr(e.X)
 	case *ast.UnaryExpr:
 		return l.lowerUnary(e)
@@ -667,6 +673,49 @@ func (l *lowerer) lowerExpr(e ast.Expr) Expr {
 		return &BlockExpr{Block: blk, T: t, SpanV: nodeSpan(e)}
 	case *ast.IfExpr:
 		return l.lowerIfExpr(e)
+	case *ast.MatchExpr:
+		return l.lowerMatchExpr(e)
+	case *ast.FieldExpr:
+		return l.lowerFieldExpr(e)
+	case *ast.IndexExpr:
+		return &IndexExpr{
+			X:     l.lowerExpr(e.X),
+			Index: l.lowerExpr(e.Index),
+			T:     l.exprType(e),
+			SpanV: nodeSpan(e),
+		}
+	case *ast.StructLit:
+		return l.lowerStructLit(e)
+	case *ast.TupleExpr:
+		if len(e.Elems) == 1 {
+			return l.lowerExpr(e.Elems[0])
+		}
+		out := &TupleLit{T: l.exprType(e), SpanV: nodeSpan(e)}
+		for _, el := range e.Elems {
+			out.Elems = append(out.Elems, l.lowerExpr(el))
+		}
+		return out
+	case *ast.MapExpr:
+		return l.lowerMapLit(e)
+	case *ast.RangeExpr:
+		out := &RangeLit{Inclusive: e.Inclusive, T: l.exprType(e), SpanV: nodeSpan(e)}
+		if e.Start != nil {
+			out.Start = l.lowerExpr(e.Start)
+		}
+		if e.Stop != nil {
+			out.End = l.lowerExpr(e.Stop)
+		}
+		return out
+	case *ast.QuestionExpr:
+		return &QuestionExpr{
+			X:     l.lowerExpr(e.X),
+			T:     l.exprType(e),
+			SpanV: nodeSpan(e),
+		}
+	case *ast.ClosureExpr:
+		return l.lowerClosure(e)
+	case *ast.TurbofishExpr:
+		return l.lowerTurbofish(e)
 	}
 	l.note("unsupported expression %T at %v", e, e.Pos())
 	return &ErrorExpr{Note: fmt.Sprintf("%T", e), T: ErrTypeVal, SpanV: nodeSpan(e)}
@@ -763,6 +812,16 @@ func unaryOp(k token.Kind) (UnOp, bool) {
 }
 
 func (l *lowerer) lowerBinary(e *ast.BinaryExpr) Expr {
+	// `??` gets its own IR node so backends don't have to pattern-match
+	// on a BinaryExpr with a dedicated op when they have special lowering.
+	if e.Op == token.QQ {
+		return &CoalesceExpr{
+			Left:  l.lowerExpr(e.Left),
+			Right: l.lowerExpr(e.Right),
+			T:     l.exprType(e),
+			SpanV: nodeSpan(e),
+		}
+	}
 	op, ok := binaryOp(e.Op)
 	if !ok {
 		l.note("unsupported binary op %v at %v", e.Op, e.Pos())
@@ -820,7 +879,7 @@ func binaryOp(k token.Kind) (BinOp, bool) {
 }
 
 func (l *lowerer) lowerCall(e *ast.CallExpr) Expr {
-	// Detect a print-family intrinsic.
+	// Detect a print-family intrinsic on a bare identifier.
 	if id, ok := e.Fn.(*ast.Ident); ok {
 		if k, isIntrinsic := intrinsicByName(id.Name); isIntrinsic {
 			out := &IntrinsicCall{Kind: k, SpanV: nodeSpan(e)}
@@ -833,15 +892,104 @@ func (l *lowerer) lowerCall(e *ast.CallExpr) Expr {
 			}
 			return out
 		}
+		// Check if this is a variant constructor: e.g. Some(42), Ok(x).
+		if sym := l.symbol(id); sym != nil && sym.Kind == resolve.SymVariant {
+			return l.lowerVariantCall(e, "", id.Name)
+		}
+	}
+	// Strip a turbofish wrapper to retain its type arguments.
+	var typeArgs []Type
+	fn := e.Fn
+	if tf, ok := fn.(*ast.TurbofishExpr); ok {
+		for _, a := range tf.Args {
+			typeArgs = append(typeArgs, l.lowerType(a))
+		}
+		fn = tf.Base
+	}
+	// Method call: x.name(args).
+	if fx, ok := fn.(*ast.FieldExpr); ok {
+		// But `Enum.Variant(args)` is a qualified variant constructor,
+		// not a method call — detect via the resolved symbol.
+		if id, ok := fx.X.(*ast.Ident); ok {
+			if sym := l.symbol(id); sym != nil &&
+				(sym.Kind == resolve.SymEnum || sym.Kind == resolve.SymStruct) {
+				// Lookup whether fx.Name is a variant on this enum. We
+				// approximate: if the checker assigned the whole call
+				// a Named type whose Sym is an enum, treat it as a
+				// variant constructor.
+				if l.isVariantOfEnum(sym, fx.Name) {
+					return l.lowerVariantCall(e, sym.Name, fx.Name)
+				}
+			}
+		}
+		return l.lowerMethodCall(e, fx, typeArgs)
 	}
 	out := &CallExpr{
-		Callee: l.lowerExpr(e.Fn),
+		Callee: l.lowerExpr(fn),
 		T:      l.exprType(e),
 		SpanV:  nodeSpan(e),
 	}
 	for _, a := range e.Args {
 		if a.Name != "" {
 			l.note("keyword arg at %v collapsed to positional in IR", a.Pos())
+		}
+		out.Args = append(out.Args, l.lowerExpr(a.Value))
+	}
+	return out
+}
+
+// isVariantOfEnum reports whether variantName is a declared variant on
+// the enum named by sym. Consults the checker's type description table
+// when available.
+func (l *lowerer) isVariantOfEnum(sym *resolve.Symbol, variantName string) bool {
+	if sym == nil || sym.Kind != resolve.SymEnum || sym.Decl == nil {
+		return false
+	}
+	ed, ok := sym.Decl.(*ast.EnumDecl)
+	if !ok {
+		return false
+	}
+	for _, v := range ed.Variants {
+		if v.Name == variantName {
+			return true
+		}
+	}
+	return false
+}
+
+// lowerMethodCall lowers `receiver.name(args)` into an IR MethodCall,
+// preserving turbofish type arguments.
+func (l *lowerer) lowerMethodCall(e *ast.CallExpr, fx *ast.FieldExpr, typeArgs []Type) Expr {
+	out := &MethodCall{
+		Receiver: l.lowerExpr(fx.X),
+		Name:     fx.Name,
+		TypeArgs: typeArgs,
+		T:        l.exprType(e),
+		SpanV:    nodeSpan(e),
+	}
+	for _, a := range e.Args {
+		if a.Name != "" {
+			l.note("keyword arg at %v collapsed to positional in IR", a.Pos())
+		}
+		out.Args = append(out.Args, l.lowerExpr(a.Value))
+	}
+	return out
+}
+
+// lowerVariantCall builds a VariantLit from a call whose callee is a
+// variant symbol (`Some(42)`) or an enum-qualified variant
+// (`Color.Red(255)`).
+func (l *lowerer) lowerVariantCall(e *ast.CallExpr, enum, variant string) Expr {
+	out := &VariantLit{
+		Enum:    enum,
+		Variant: variant,
+		T:       l.exprType(e),
+		SpanV:   nodeSpan(e),
+	}
+	for _, a := range e.Args {
+		if a.Name != "" {
+			l.note("keyword arg to variant %s at %v not supported", variant, a.Pos())
+			continue
 		}
 		out.Args = append(out.Args, l.lowerExpr(a.Value))
 	}
@@ -885,22 +1033,35 @@ func (l *lowerer) lowerList(e *ast.ListExpr) Expr {
 func (l *lowerer) lowerIfExpr(e *ast.IfExpr) Expr {
 	t := l.exprType(e)
 	thenBlk := l.lowerBlock(e.Then)
-	var elseBlk *Block
-	switch alt := e.Else.(type) {
-	case nil:
-		// no else; should only appear in statement position.
-	case *ast.Block:
-		elseBlk = l.lowerBlock(alt)
-	case *ast.IfExpr:
-		// else-if chain: wrap the inner IfExpr into a block so the
-		// shape is uniform.
-		inner := l.lowerIfExpr(alt)
-		elseBlk = &Block{Result: inner, SpanV: nodeSpan(alt)}
-	default:
-		lowered := l.lowerExpr(alt.(ast.Expr))
-		elseBlk = &Block{Result: lowered, SpanV: nodeSpan(alt)}
+	elseBlk := l.lowerElse(e.Else)
+	if e.IsIfLet {
+		return &IfLetExpr{
+			Pattern:   l.lowerPattern(e.Pattern),
+			Scrutinee: l.lowerExpr(e.Cond),
+			Then:      thenBlk,
+			Else:      elseBlk,
+			T:         t,
+			SpanV:     nodeSpan(e),
+		}
 	}
 	return &IfExpr{Cond: l.lowerExpr(e.Cond), Then: thenBlk, Else: elseBlk, T: t, SpanV: nodeSpan(e)}
+}
+
+// lowerElse normalises an else arm (which is an ast.Expr per the
+// parser) into a *Block, or nil for no-else.
+func (l *lowerer) lowerElse(alt ast.Expr) *Block {
+	switch alt := alt.(type) {
+	case nil:
+		return nil
+	case *ast.Block:
+		return l.lowerBlock(alt)
+	case *ast.IfExpr:
+		inner := l.lowerIfExpr(alt)
+		return &Block{Result: inner, SpanV: inner.At()}
+	default:
+		lowered := l.lowerExpr(alt)
+		return &Block{Result: lowered, SpanV: lowered.At()}
+	}
 }
 
 // ==== Span helpers ====
@@ -911,4 +1072,312 @@ func posFromToken(p token.Pos) Pos {
 
 func nodeSpan(n ast.Node) Span {
 	return Span{Start: posFromToken(n.Pos()), End: posFromToken(n.End())}
+}
+
+// ==== Additional declarations ====
+
+func (l *lowerer) lowerUseDecl(u *ast.UseDecl) Decl {
+	out := &UseDecl{
+		Path:    append([]string(nil), u.Path...),
+		RawPath: u.RawPath,
+		Alias:   u.Alias,
+		IsGoFFI: u.IsGoFFI,
+		GoPath:  u.GoPath,
+		SpanV:   nodeSpan(u),
+	}
+	if out.Alias == "" && len(out.Path) > 0 {
+		out.Alias = out.Path[len(out.Path)-1]
+	}
+	for _, d := range u.GoBody {
+		if lowered := l.lowerDecl(d); lowered != nil {
+			out.GoBody = append(out.GoBody, lowered)
+		}
+	}
+	return out
+}
+
+func (l *lowerer) lowerInterfaceDecl(id *ast.InterfaceDecl) Decl {
+	out := &InterfaceDecl{
+		Name:     id.Name,
+		Exported: id.Pub,
+		SpanV:    nodeSpan(id),
+	}
+	for _, gp := range id.Generics {
+		out.Generics = append(out.Generics, l.lowerTypeParam(gp, id.Name))
+	}
+	for _, ext := range id.Extends {
+		out.Extends = append(out.Extends, l.lowerType(ext))
+	}
+	for _, m := range id.Methods {
+		out.Methods = append(out.Methods, l.lowerFnDecl(m))
+	}
+	return out
+}
+
+func (l *lowerer) lowerTypeAliasDecl(td *ast.TypeAliasDecl) Decl {
+	out := &TypeAliasDecl{
+		Name:     td.Name,
+		Target:   l.lowerType(td.Target),
+		Exported: td.Pub,
+		SpanV:    nodeSpan(td),
+	}
+	for _, gp := range td.Generics {
+		out.Generics = append(out.Generics, l.lowerTypeParam(gp, td.Name))
+	}
+	return out
+}
+
+// ==== Additional statements ====
+
+func (l *lowerer) lowerDeferStmt(s *ast.DeferStmt) Stmt {
+	// DeferStmt's X is expression-typed but almost always a Block;
+	// normalise to always a *Block in the IR so backends don't have to
+	// peek at the inner expression.
+	out := &DeferStmt{SpanV: nodeSpan(s)}
+	if blk, ok := s.X.(*ast.Block); ok {
+		out.Body = l.lowerBlock(blk)
+		return out
+	}
+	lowered := l.lowerExpr(s.X)
+	out.Body = &Block{
+		Stmts: []Stmt{&ExprStmt{X: lowered, SpanV: lowered.At()}},
+		SpanV: lowered.At(),
+	}
+	return out
+}
+
+// ==== Additional expressions ====
+
+func (l *lowerer) lowerFieldExpr(e *ast.FieldExpr) Expr {
+	// A numeric name (`t.0`) is tuple-indexed access. The parser spells
+	// it with a FieldExpr; lift it to TupleAccess to keep backends
+	// simple.
+	if idx, ok := tupleIndex(e.Name); ok {
+		return &TupleAccess{
+			X:     l.lowerExpr(e.X),
+			Index: idx,
+			T:     l.exprType(e),
+			SpanV: nodeSpan(e),
+		}
+	}
+	return &FieldExpr{
+		X:        l.lowerExpr(e.X),
+		Name:     e.Name,
+		Optional: e.IsOptional,
+		T:        l.exprType(e),
+		SpanV:    nodeSpan(e),
+	}
+}
+
+// tupleIndex parses a field name like "0" or "12" as a tuple index.
+// Returns (idx, true) when the whole string is a non-negative decimal.
+func tupleIndex(name string) (int, bool) {
+	if name == "" {
+		return 0, false
+	}
+	n := 0
+	for _, r := range name {
+		if r < '0' || r > '9' {
+			return 0, false
+		}
+		n = n*10 + int(r-'0')
+	}
+	return n, true
+}
+
+func (l *lowerer) lowerStructLit(s *ast.StructLit) Expr {
+	name := ""
+	switch h := s.Type.(type) {
+	case *ast.Ident:
+		name = h.Name
+	case *ast.FieldExpr:
+		// `pkg.Type { ... }` — keep the trailing name; the IR doesn't
+		// model packages yet.
+		name = h.Name
+	}
+	out := &StructLit{
+		TypeName: name,
+		T:        l.exprType(s),
+		SpanV:    nodeSpan(s),
+	}
+	for _, f := range s.Fields {
+		field := StructLitField{
+			Name:  f.Name,
+			SpanV: Span{Start: posFromToken(f.Pos()), End: posFromToken(f.End())},
+		}
+		if f.Value != nil {
+			field.Value = l.lowerExpr(f.Value)
+		}
+		out.Fields = append(out.Fields, field)
+	}
+	if s.Spread != nil {
+		out.Spread = l.lowerExpr(s.Spread)
+	}
+	return out
+}
+
+func (l *lowerer) lowerMapLit(m *ast.MapExpr) Expr {
+	out := &MapLit{SpanV: nodeSpan(m)}
+	for _, en := range m.Entries {
+		out.Entries = append(out.Entries, MapEntry{
+			Key:   l.lowerExpr(en.Key),
+			Value: l.lowerExpr(en.Value),
+			SpanV: Span{Start: posFromToken(en.Pos()), End: posFromToken(en.End())},
+		})
+	}
+	if t := l.exprType(m); t != nil {
+		if nt, ok := t.(*NamedType); ok && nt.Name == "Map" && len(nt.Args) == 2 {
+			out.KeyT = nt.Args[0]
+			out.ValT = nt.Args[1]
+		}
+	}
+	if out.KeyT == nil {
+		out.KeyT = ErrTypeVal
+	}
+	if out.ValT == nil {
+		out.ValT = ErrTypeVal
+	}
+	return out
+}
+
+func (l *lowerer) lowerClosure(c *ast.ClosureExpr) Expr {
+	out := &Closure{
+		Return: l.lowerType(c.ReturnType),
+		T:      l.exprType(c),
+		SpanV:  nodeSpan(c),
+	}
+	if out.Return == nil {
+		out.Return = TUnit
+	}
+	for _, p := range c.Params {
+		out.Params = append(out.Params, l.lowerParam(p))
+	}
+	// Body is always an expression. Wrap non-block bodies in a synthetic
+	// block with the expression as the Result.
+	if blk, ok := c.Body.(*ast.Block); ok {
+		out.Body = l.lowerBlock(blk)
+	} else {
+		lowered := l.lowerExpr(c.Body)
+		out.Body = &Block{Result: lowered, SpanV: lowered.At()}
+	}
+	return out
+}
+
+func (l *lowerer) lowerTurbofish(tf *ast.TurbofishExpr) Expr {
+	// A bare turbofish without a call (`f::<Int>`) is rare but legal;
+	// most appearances are stripped by lowerCall. We retain the base
+	// expression and drop the type args when not consumed, since we
+	// can't currently represent "identifier with type args" cleanly.
+	l.note("bare turbofish at %v collapsed; type args dropped", tf.Pos())
+	return l.lowerExpr(tf.Base)
+}
+
+func (l *lowerer) lowerMatchExpr(m *ast.MatchExpr) Expr {
+	out := &MatchExpr{
+		Scrutinee: l.lowerExpr(m.Scrutinee),
+		T:         l.exprType(m),
+		SpanV:     nodeSpan(m),
+	}
+	for _, arm := range m.Arms {
+		a := &MatchArm{
+			Pattern: l.lowerPattern(arm.Pattern),
+			SpanV:   Span{Start: posFromToken(arm.Pos()), End: posFromToken(arm.End())},
+		}
+		if arm.Guard != nil {
+			a.Guard = l.lowerExpr(arm.Guard)
+		}
+		a.Body = l.lowerArmBody(arm.Body)
+		out.Arms = append(out.Arms, a)
+	}
+	return out
+}
+
+// lowerArmBody normalises a match-arm body (expression or block) into a
+// *Block so consumers see a uniform shape.
+func (l *lowerer) lowerArmBody(e ast.Expr) *Block {
+	if blk, ok := e.(*ast.Block); ok {
+		return l.lowerBlock(blk)
+	}
+	lowered := l.lowerExpr(e)
+	return &Block{Result: lowered, SpanV: lowered.At()}
+}
+
+// ==== Patterns ====
+
+func (l *lowerer) lowerPattern(p ast.Pattern) Pattern {
+	if p == nil {
+		return nil
+	}
+	switch p := p.(type) {
+	case *ast.WildcardPat:
+		return &WildPat{SpanV: nodeSpan(p)}
+	case *ast.IdentPat:
+		return &IdentPat{Name: p.Name, SpanV: nodeSpan(p)}
+	case *ast.LiteralPat:
+		var val Expr
+		if p.Literal != nil {
+			val = l.lowerExpr(p.Literal)
+		}
+		return &LitPat{Value: val, SpanV: nodeSpan(p)}
+	case *ast.TuplePat:
+		out := &TuplePat{SpanV: nodeSpan(p)}
+		for _, e := range p.Elems {
+			out.Elems = append(out.Elems, l.lowerPattern(e))
+		}
+		return out
+	case *ast.StructPat:
+		out := &StructPat{Rest: p.Rest, SpanV: nodeSpan(p)}
+		if len(p.Type) > 0 {
+			out.TypeName = p.Type[len(p.Type)-1]
+		}
+		for _, f := range p.Fields {
+			field := StructPatField{
+				Name: f.Name,
+				SpanV: Span{
+					Start: posFromToken(f.Pos()),
+					End:   posFromToken(f.End()),
+				},
+			}
+			if f.Pattern != nil {
+				field.Pattern = l.lowerPattern(f.Pattern)
+			}
+			out.Fields = append(out.Fields, field)
+		}
+		return out
+	case *ast.VariantPat:
+		out := &VariantPat{SpanV: nodeSpan(p)}
+		if n := len(p.Path); n >= 1 {
+			out.Variant = p.Path[n-1]
+			if n >= 2 {
+				out.Enum = p.Path[n-2]
+			}
+		}
+		for _, a := range p.Args {
+			out.Args = append(out.Args, l.lowerPattern(a))
+		}
+		return out
+	case *ast.RangePat:
+		out := &RangePat{Inclusive: p.Inclusive, SpanV: nodeSpan(p)}
+		if p.Start != nil {
+			out.Low = l.lowerExpr(p.Start)
+		}
+		if p.Stop != nil {
+			out.High = l.lowerExpr(p.Stop)
+		}
+		return out
+	case *ast.OrPat:
+		out := &OrPat{SpanV: nodeSpan(p)}
+		for _, a := range p.Alts {
+			out.Alts = append(out.Alts, l.lowerPattern(a))
+		}
+		return out
+	case *ast.BindingPat:
+		return &BindingPat{
+			Name:    p.Name,
+			Pattern: l.lowerPattern(p.Pattern),
+			SpanV:   nodeSpan(p),
+		}
+	}
+	l.note("unsupported pattern %T at %v", p, p.Pos())
+	return &ErrorPat{Note: fmt.Sprintf("%T", p), SpanV: nodeSpan(p)}
 }

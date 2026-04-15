@@ -405,15 +405,18 @@ type Block struct {
 func (*Block) stmtNode() {}
 func (b *Block) At() Span { return b.SpanV }
 
-// LetStmt introduces a local binding. Patterns more complex than bare
-// identifiers lower to an internal temporary plus per-binding LetStmts
-// (not implemented yet — the lowerer emits an ErrorStmt in that case).
+// LetStmt introduces a local binding. For the common case (`let x = e`)
+// Pattern is nil and Name carries the bound identifier. For
+// destructuring binds (`let (a, b) = e`, `let User { name } = e`),
+// Pattern is non-nil and Name is empty; consumers dispatch on Pattern
+// to emit per-binding destructuring code.
 type LetStmt struct {
-	Name  string
-	Type  Type
-	Value Expr
-	Mut   bool
-	SpanV Span
+	Name    string
+	Pattern Pattern
+	Type    Type
+	Value   Expr
+	Mut     bool
+	SpanV   Span
 }
 
 func (*LetStmt) stmtNode() {}
@@ -445,13 +448,15 @@ const (
 	AssignShr
 )
 
-// AssignStmt covers plain and compound assignments. Tuple-destructuring
-// assignment is not yet represented here; the lowerer rejects it.
+// AssignStmt covers plain and compound assignments, including
+// multi-target tuple destructuring (`(a, b) = (c, d)`). Single-target
+// assignments still have len(Targets) == 1; consumers should branch on
+// the length rather than maintaining two shapes.
 type AssignStmt struct {
-	Op     AssignOp
-	Target Expr
-	Value  Expr
-	SpanV  Span
+	Op      AssignOp
+	Targets []Expr
+	Value   Expr
+	SpanV   Span
 }
 
 func (*AssignStmt) stmtNode() {}
@@ -815,3 +820,317 @@ func (e *ErrorExpr) Type() Type {
 	}
 	return e.T
 }
+
+// ==== Additional declarations ====
+
+// InterfaceDecl is an interface with a set of required methods and
+// optional defaults. Extends lists composed interfaces; every element
+// is a NamedType.
+type InterfaceDecl struct {
+	Name     string
+	Methods  []*FnDecl
+	Extends  []Type
+	Generics []*TypeParam
+	Exported bool
+	SpanV    Span
+}
+
+func (*InterfaceDecl) declNode()          {}
+func (i *InterfaceDecl) At() Span         { return i.SpanV }
+func (i *InterfaceDecl) DeclName() string { return i.Name }
+
+// TypeAliasDecl is `type Name<T> = Target`.
+type TypeAliasDecl struct {
+	Name     string
+	Generics []*TypeParam
+	Target   Type
+	Exported bool
+	SpanV    Span
+}
+
+func (*TypeAliasDecl) declNode()          {}
+func (t *TypeAliasDecl) At() Span         { return t.SpanV }
+func (t *TypeAliasDecl) DeclName() string { return t.Name }
+
+// UseDecl is a `use` import. Path is the source-level dotted path
+// (["std","io"]), Alias is the bound name (the last path segment when
+// the user didn't write `as alias`). GoPath / GoBody mirror the FFI
+// form `use go "path" { ... }`; they are empty for ordinary imports.
+type UseDecl struct {
+	Path    []string
+	RawPath string
+	Alias   string
+	IsGoFFI bool
+	GoPath  string
+	GoBody  []Decl
+	SpanV   Span
+}
+
+func (*UseDecl) declNode()          {}
+func (u *UseDecl) At() Span         { return u.SpanV }
+func (u *UseDecl) DeclName() string { return u.Alias }
+
+// ==== Additional statements ====
+
+// DeferStmt schedules Body to run on scope exit.
+type DeferStmt struct {
+	Body  *Block
+	SpanV Span
+}
+
+func (*DeferStmt) stmtNode() {}
+func (d *DeferStmt) At() Span { return d.SpanV }
+
+// ChanSendStmt is `channel <- value`.
+type ChanSendStmt struct {
+	Channel Expr
+	Value   Expr
+	SpanV   Span
+}
+
+func (*ChanSendStmt) stmtNode() {}
+func (c *ChanSendStmt) At() Span { return c.SpanV }
+
+// MatchStmt is a `match` scrutinee used in statement position. The
+// equivalent expression form (MatchExpr) has a non-unit Type; when the
+// checker determined the match is used for side effects only, the
+// lowerer emits MatchStmt so backends don't synthesise a wasted value.
+type MatchStmt struct {
+	Scrutinee Expr
+	Arms      []*MatchArm
+	SpanV     Span
+}
+
+func (*MatchStmt) stmtNode() {}
+func (m *MatchStmt) At() Span { return m.SpanV }
+
+// ==== Additional expressions ====
+
+// FieldExpr is `x.name` or `x?.name` (when Optional is true).
+type FieldExpr struct {
+	X        Expr
+	Name     string
+	Optional bool
+	T        Type
+	SpanV    Span
+}
+
+func (*FieldExpr) exprNode()      {}
+func (f *FieldExpr) At() Span     { return f.SpanV }
+func (f *FieldExpr) Type() Type   { return f.T }
+
+// IndexExpr is `x[i]`.
+type IndexExpr struct {
+	X     Expr
+	Index Expr
+	T     Type
+	SpanV Span
+}
+
+func (*IndexExpr) exprNode()    {}
+func (e *IndexExpr) At() Span   { return e.SpanV }
+func (e *IndexExpr) Type() Type { return e.T }
+
+// MethodCall is a user-written method call `receiver.name(args)`. Kept
+// distinct from CallExpr so backends don't have to unwrap a FieldExpr
+// callee every time. TypeArgs carries turbofish arguments; empty when
+// not supplied.
+type MethodCall struct {
+	Receiver Expr
+	Name     string
+	TypeArgs []Type
+	Args     []Expr
+	T        Type
+	SpanV    Span
+}
+
+func (*MethodCall) exprNode()    {}
+func (m *MethodCall) At() Span   { return m.SpanV }
+func (m *MethodCall) Type() Type { return m.T }
+
+// StructLit is `Type { field: value, ..spread }`. Spread is nil when
+// no `..rest` was written.
+type StructLit struct {
+	TypeName string
+	Fields   []StructLitField
+	Spread   Expr
+	T        Type
+	SpanV    Span
+}
+
+// StructLitField is `name: value` (Value set) or `name` (Value nil =
+// shorthand, resolve to a local binding named `name`).
+type StructLitField struct {
+	Name  string
+	Value Expr
+	SpanV Span
+}
+
+func (f StructLitField) At() Span { return f.SpanV }
+
+func (*StructLit) exprNode()    {}
+func (s *StructLit) At() Span   { return s.SpanV }
+func (s *StructLit) Type() Type { return s.T }
+
+// TupleLit is `(a, b, c)`; backends rely on len(Elems) ≥ 2.
+// Single-element tuples arriving from the parser lower to just their
+// inner expression (parens were informational only).
+type TupleLit struct {
+	Elems []Expr
+	T     Type
+	SpanV Span
+}
+
+func (*TupleLit) exprNode()    {}
+func (t *TupleLit) At() Span   { return t.SpanV }
+func (t *TupleLit) Type() Type { return t.T }
+
+// MapLit is `{"k": v, ...}` or the empty `{:}` literal. KeyT/ValT are
+// the declared key/value types (populated from the checker's view).
+type MapLit struct {
+	Entries []MapEntry
+	KeyT    Type
+	ValT    Type
+	SpanV   Span
+}
+
+// MapEntry is one `key: value` in a MapLit.
+type MapEntry struct {
+	Key   Expr
+	Value Expr
+	SpanV Span
+}
+
+func (e MapEntry) At() Span { return e.SpanV }
+
+func (*MapLit) exprNode()  {}
+func (m *MapLit) At() Span { return m.SpanV }
+func (m *MapLit) Type() Type {
+	return &NamedType{Name: "Map", Args: []Type{m.KeyT, m.ValT}, Builtin: true}
+}
+
+// RangeLit is a range used in value position (`let r = 0..10`). Loop
+// heads lower to ForStmt with Kind=ForRange instead of constructing a
+// RangeLit. Start and End may be nil for unbounded sides.
+type RangeLit struct {
+	Start     Expr
+	End       Expr
+	Inclusive bool
+	T         Type
+	SpanV     Span
+}
+
+func (*RangeLit) exprNode()    {}
+func (r *RangeLit) At() Span   { return r.SpanV }
+func (r *RangeLit) Type() Type { return r.T }
+
+// QuestionExpr is the postfix `?` error / Option propagation operator.
+// X is the operand; T is the unwrapped value type. Backends expand
+// this into a runtime conditional return.
+type QuestionExpr struct {
+	X     Expr
+	T     Type
+	SpanV Span
+}
+
+func (*QuestionExpr) exprNode()    {}
+func (q *QuestionExpr) At() Span   { return q.SpanV }
+func (q *QuestionExpr) Type() Type { return q.T }
+
+// CoalesceExpr is `left ?? right`: yields Left when Left is non-nil,
+// else Right. T is the joined (non-optional) type.
+type CoalesceExpr struct {
+	Left  Expr
+	Right Expr
+	T     Type
+	SpanV Span
+}
+
+func (*CoalesceExpr) exprNode()    {}
+func (c *CoalesceExpr) At() Span   { return c.SpanV }
+func (c *CoalesceExpr) Type() Type { return c.T }
+
+// Closure is `|params| body` (short form) or `|params| -> T { body }`.
+// Body is always lowered as a *Block for uniformity; a single-
+// expression closure is wrapped with Result set and Stmts empty.
+type Closure struct {
+	Params []*Param
+	Return Type
+	Body   *Block
+	T      Type
+	SpanV  Span
+}
+
+func (*Closure) exprNode()    {}
+func (c *Closure) At() Span   { return c.SpanV }
+func (c *Closure) Type() Type { return c.T }
+
+// VariantLit constructs an enum variant value: `Some(42)`, `Ok(x)`,
+// `Red` (bare), `Color.Red` (qualified). Enum is the enum's source
+// name when known; empty for unresolved prelude variants.
+type VariantLit struct {
+	Enum    string
+	Variant string
+	Args    []Expr
+	T       Type
+	SpanV   Span
+}
+
+func (*VariantLit) exprNode()    {}
+func (v *VariantLit) At() Span   { return v.SpanV }
+func (v *VariantLit) Type() Type { return v.T }
+
+// MatchExpr is `match scrutinee { arm, ... }`.
+type MatchExpr struct {
+	Scrutinee Expr
+	Arms      []*MatchArm
+	T         Type
+	SpanV     Span
+}
+
+func (*MatchExpr) exprNode()    {}
+func (m *MatchExpr) At() Span   { return m.SpanV }
+func (m *MatchExpr) Type() Type { return m.T }
+
+// MatchArm is one match case. Guard is an optional `if cond` refinement
+// applied after the pattern succeeds. Body is a block whose Result
+// carries the arm value (nil for unit-producing arms).
+type MatchArm struct {
+	Pattern Pattern
+	Guard   Expr
+	Body    *Block
+	SpanV   Span
+}
+
+func (a *MatchArm) At() Span { return a.SpanV }
+
+// IfLetExpr is `if let pat = scrutinee { then } else { else }`. Kept
+// distinct from IfExpr so backends can recognise the destructure-and-
+// match form directly; the Cond/boolean form stays as IfExpr.
+type IfLetExpr struct {
+	Pattern   Pattern
+	Scrutinee Expr
+	Then      *Block
+	Else      *Block
+	T         Type
+	SpanV     Span
+}
+
+func (*IfLetExpr) exprNode()    {}
+func (i *IfLetExpr) At() Span   { return i.SpanV }
+func (i *IfLetExpr) Type() Type { return i.T }
+
+// TupleAccess is `t.0` / `t.1` — numeric field access on tuples. The
+// AST spells this as FieldExpr with a numeric Name; the lowerer
+// hoists tuple-indexed field access to this dedicated node so
+// backends don't need to disambiguate numeric vs. alphabetic names.
+type TupleAccess struct {
+	X     Expr
+	Index int
+	T     Type
+	SpanV Span
+}
+
+func (*TupleAccess) exprNode()    {}
+func (t *TupleAccess) At() Span   { return t.SpanV }
+func (t *TupleAccess) Type() Type { return t.T }

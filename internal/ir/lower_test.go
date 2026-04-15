@@ -317,7 +317,9 @@ func walkStmtExprs(s ir.Stmt, fn func(ir.Expr)) {
 			walkExpr(s.Value, fn)
 		}
 	case *ir.AssignStmt:
-		walkExpr(s.Target, fn)
+		for _, t := range s.Targets {
+			walkExpr(t, fn)
+		}
 		walkExpr(s.Value, fn)
 	case *ir.IfStmt:
 		walkExpr(s.Cond, fn)
