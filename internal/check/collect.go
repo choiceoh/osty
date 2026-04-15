@@ -251,6 +251,20 @@ func (c *checker) collectInterface(n *ast.InterfaceDecl) {
 			desc.Methods[m.Name] = md
 		}
 	}
+
+	// §2.6.1 Composition: record each extended interface as a resolved
+	// Named pointer so satisfies() can flatten the required method set
+	// transitively. We resolve here at collect-time using c.typeOf;
+	// because a parent interface might be declared later in the same
+	// file (or in another file of the package), pass-2 satisfies() must
+	// be tolerant of nil descs and look them up lazily again — but the
+	// Named identity established here is stable.
+	for _, ext := range n.Extends {
+		t := c.typeOf(ext)
+		if nm, ok := t.(*types.Named); ok && nm != nil {
+			desc.Extends = append(desc.Extends, nm)
+		}
+	}
 }
 
 // collectAlias records a type alias. Aliases are transparent — they

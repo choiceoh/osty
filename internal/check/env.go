@@ -41,7 +41,13 @@ type typeDesc struct {
 	Variants         map[string]*variantDesc      // enum only
 	VariantOrder     []string                     // enum variant source order
 	InterfaceMethods map[string]*methodDesc       // interface signatures
-	Alias            types.Type                   // type alias target
+	// Extends lists the interfaces composed via §2.6.1
+	// (`interface ReadWriter { Reader; Writer }`). Stored as resolved
+	// Named pointers so satisfies can flatten the requirement set
+	// transitively without re-resolving AST type nodes. Only populated
+	// for SymInterface descs.
+	Extends []*types.Named
+	Alias   types.Type // type alias target
 }
 
 type fieldDesc struct {
