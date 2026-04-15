@@ -1,0 +1,12 @@
+fn add(a: Int, b: Int) -> Int {
+    a + b
+}
+
+fn main() {
+    let value = add(40, 2)
+    if value == 42 {
+        println(value)
+    } else {
+        println(0)
+    }
+}
