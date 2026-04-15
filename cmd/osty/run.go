@@ -13,6 +13,7 @@ import (
 	"github.com/osty/osty/internal/gen"
 	"github.com/osty/osty/internal/manifest"
 	"github.com/osty/osty/internal/pkgmgr"
+	"github.com/osty/osty/internal/profile"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/stdlib"
 )
@@ -47,15 +48,23 @@ import (
 func runRun(args []string, cliF cliFlags) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: osty run [--offline] [-- ARGS...]")
+		fmt.Fprintln(os.Stderr, "usage: osty run [--offline] [--profile NAME | --release] [--target TRIPLE] [--features LIST] [--no-default-features] [-- ARGS...]")
 	}
 	var offline bool
 	fs.BoolVar(&offline, "offline", false, "do not fetch dependencies; fail if caches are missing")
+	var pf profileFlags
+	pf.register(fs)
 	_ = fs.Parse(args)
 	runArgs := fs.Args()
 
 	m, root, abort := loadManifestWithDiag(".", cliF)
 	if abort {
+		os.Exit(2)
+	}
+
+	resolved, _, perr := pf.resolve(m, profile.NameDebug)
+	if perr != nil {
+		fmt.Fprintf(os.Stderr, "osty run: %v\n", perr)
 		os.Exit(2)
 	}
 	_ = filepath.Join(root, manifest.ManifestFile) // kept for future inline rewriting
@@ -143,8 +152,14 @@ func runRun(args []string, cliF cliFlags) {
 		chk = &check.Result{}
 	}
 
-	// Step 4: transpile to Go.
-	outDir := filepath.Join(root, ".osty", "out")
+	// Step 4: transpile to Go. Per-profile/target subdirectories keep
+	// debug / release / cross-built artifacts from clobbering each
+	// other.
+	triple := ""
+	if resolved.Target != nil {
+		triple = resolved.Target.Triple
+	}
+	outDir := profile.OutputDir(root, resolved.Profile.Name, triple)
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		fmt.Fprintf(os.Stderr, "osty run: %v\n", err)
 		os.Exit(1)
@@ -163,13 +178,20 @@ func runRun(args []string, cliF cliFlags) {
 		os.Exit(1)
 	}
 
-	// Step 5: go run.
-	goArgs := append([]string{"run", goPath}, runArgs...)
+	// Step 5: go run. Profile-derived flags (e.g. `-gcflags=-N -l`
+	// for debug, `-ldflags=-s -w` for release) precede the source
+	// path; cross-target env (GOOS, GOARCH, CGO_ENABLED) is layered
+	// onto the child process's environment.
+	goArgs := []string{"run"}
+	goArgs = append(goArgs, resolved.GoFlags()...)
+	goArgs = append(goArgs, goPath)
+	goArgs = append(goArgs, runArgs...)
 	cmd := exec.Command("go", goArgs...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Dir = outDir
+	cmd.Env = mergeEnv(os.Environ(), resolved.GoEnv())
 	if err := cmd.Run(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			os.Exit(exitErr.ExitCode())
@@ -177,6 +199,44 @@ func runRun(args []string, cliF cliFlags) {
 		fmt.Fprintf(os.Stderr, "osty run: exec go: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// mergeEnv overlays per-build env overrides (GOOS, GOARCH,
+// CGO_ENABLED, plus any user-declared vars) on top of the parent
+// process's environment and returns a slice suitable for exec.Cmd.Env.
+// A later entry with the same key wins — the convention matches
+// exec.Command's own lookup.
+func mergeEnv(parent []string, overrides map[string]string) []string {
+	if len(overrides) == 0 {
+		return parent
+	}
+	// Copy parent so the caller's slice stays intact.
+	out := make([]string, 0, len(parent)+len(overrides))
+	seen := map[string]bool{}
+	for k, v := range overrides {
+		out = append(out, k+"="+v)
+		seen[k] = true
+	}
+	for _, kv := range parent {
+		// KEY=VALUE — locate the '='; skip the parent entry when
+		// an override shadows it.
+		eq := -1
+		for i := 0; i < len(kv); i++ {
+			if kv[i] == '=' {
+				eq = i
+				break
+			}
+		}
+		if eq < 0 {
+			out = append(out, kv)
+			continue
+		}
+		if seen[kv[:eq]] {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }
 
 // stripLeadingDashes drops a leading `--` argument separator used to

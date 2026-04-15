@@ -47,6 +47,26 @@ type Manifest struct {
 	Workspace       *Workspace // non-nil when [workspace] is present
 	Lint            *Lint      // nil when [lint] absent; defaults apply
 
+	// Profiles are the `[profile.<name>]` tables — custom build
+	// profile overrides or new profiles inheriting from the built-in
+	// set. Keyed by profile name; a nil map means none declared.
+	Profiles map[string]*Profile
+
+	// Targets are the `[target.<triple>]` tables — cross-compilation
+	// presets the user has pinned in the manifest. Keyed by triple
+	// (e.g. "amd64-linux"); a nil slice means no declared targets.
+	Targets []*Target
+
+	// Features maps feature-name → list of dep/feature references
+	// that the feature transitively enables. Populated from the
+	// `[features]` table.
+	Features map[string][]string
+
+	// DefaultFeatures is the value of `[features].default` — the
+	// feature set enabled out of the box. `--no-default-features`
+	// on the CLI drops this to empty.
+	DefaultFeatures []string
+
 	// source and path are used for diagnostic rendering; populated by
 	// Load (or by hand via SetSource for bytes-in-memory callers).
 	source []byte
@@ -95,6 +115,46 @@ type Lint struct {
 	// Exclude is a list of path globs. Files matching any entry are
 	// skipped entirely by `osty lint`. `**` is a cross-segment wildcard.
 	Exclude []string
+}
+
+// Profile mirrors one `[profile.<name>]` table. The Has* flags
+// distinguish "set to the zero value" from "unset" so the downstream
+// profile package can merge on top of the built-in defaults without
+// clobbering unset fields.
+type Profile struct {
+	Name     string
+	Inherits string
+
+	OptLevel int
+	Debug    bool
+	Strip    bool
+	Overflow bool
+	Inlining bool
+	LTO      bool
+
+	HasOptLevel bool
+	HasDebug    bool
+	HasStrip    bool
+	HasOverflow bool
+	HasInlining bool
+	HasLTO      bool
+
+	GoFlags []string
+	Env     map[string]string
+
+	Pos token.Pos
+}
+
+// Target mirrors one `[target.<triple>]` table. A triple follows the
+// `<arch>-<os>` convention (e.g. `amd64-linux`, `arm64-darwin`).
+// HasCGO distinguishes an absent CGO key from an explicit `cgo =
+// false`.
+type Target struct {
+	Triple string
+	CGO    bool
+	HasCGO bool
+	Env    map[string]string
+	Pos    token.Pos
 }
 
 // Package is the manifest's `[package]` section.
@@ -329,6 +389,60 @@ func Parse(src []byte) (*Manifest, error) {
 		}
 		m.Lint = lc
 	}
+	// [profile.<name>]
+	if profV, ok := root.get("profile"); ok {
+		if profV.Tbl == nil {
+			return nil, fmt.Errorf("osty.toml:%d: [profile] must be a table", profV.Line)
+		}
+		m.Profiles = map[string]*Profile{}
+		for _, name := range profV.Tbl.keys {
+			entry, _ := profV.Tbl.get(name)
+			if entry.Tbl == nil {
+				return nil, fmt.Errorf("osty.toml:%d: profile.%s must be a table", entry.Line, name)
+			}
+			p, err := parseProfileSection(name, entry.Tbl)
+			if err != nil {
+				return nil, err
+			}
+			m.Profiles[name] = p
+		}
+	}
+	// [target.<triple>]
+	if tgtV, ok := root.get("target"); ok {
+		if tgtV.Tbl == nil {
+			return nil, fmt.Errorf("osty.toml:%d: [target] must be a table", tgtV.Line)
+		}
+		for _, triple := range tgtV.Tbl.keys {
+			entry, _ := tgtV.Tbl.get(triple)
+			if entry.Tbl == nil {
+				return nil, fmt.Errorf("osty.toml:%d: target.%s must be a table", entry.Line, triple)
+			}
+			t, err := parseTargetSection(triple, entry.Tbl)
+			if err != nil {
+				return nil, err
+			}
+			m.Targets = append(m.Targets, t)
+		}
+	}
+	// [features]
+	if featV, ok := root.get("features"); ok {
+		if featV.Tbl == nil {
+			return nil, fmt.Errorf("osty.toml:%d: [features] must be a table", featV.Line)
+		}
+		m.Features = map[string][]string{}
+		for _, name := range featV.Tbl.keys {
+			entry, _ := featV.Tbl.get(name)
+			items, err := stringArray(entry, fmt.Sprintf("features.%s", name))
+			if err != nil {
+				return nil, err
+			}
+			if name == "default" {
+				m.DefaultFeatures = items
+				continue
+			}
+			m.Features[name] = items
+		}
+	}
 	// A manifest must declare at least one of [package] or [workspace].
 	// This is the sole required-section check after the workspace pass
 	// so either kind of root manifest is accepted.
@@ -336,6 +450,113 @@ func Parse(src []byte) (*Manifest, error) {
 		return nil, fmt.Errorf("osty.toml: missing [package] section")
 	}
 	return m, nil
+}
+
+// parseProfileSection extracts a [profile.<name>] table. Each known
+// key sets both the value and the corresponding Has* flag so
+// downstream merging can tell "absent" from "set-to-zero".
+func parseProfileSection(name string, t *tomlTable) (*Profile, error) {
+	p := &Profile{Name: name, Pos: token.Pos{Line: t.Line, Column: 1}}
+	for _, k := range t.keys {
+		v, _ := t.get(k)
+		switch k {
+		case "inherits":
+			if v.Str == nil {
+				return nil, fmt.Errorf("osty.toml:%d: profile.%s.inherits must be a string", v.Line, name)
+			}
+			p.Inherits = *v.Str
+		case "opt-level":
+			if v.Int == nil {
+				return nil, fmt.Errorf("osty.toml:%d: profile.%s.opt-level must be an integer", v.Line, name)
+			}
+			p.OptLevel = int(*v.Int)
+			p.HasOptLevel = true
+		case "debug":
+			if v.Bool == nil {
+				return nil, fmt.Errorf("osty.toml:%d: profile.%s.debug must be a bool", v.Line, name)
+			}
+			p.Debug = *v.Bool
+			p.HasDebug = true
+		case "strip":
+			if v.Bool == nil {
+				return nil, fmt.Errorf("osty.toml:%d: profile.%s.strip must be a bool", v.Line, name)
+			}
+			p.Strip = *v.Bool
+			p.HasStrip = true
+		case "overflow-checks":
+			if v.Bool == nil {
+				return nil, fmt.Errorf("osty.toml:%d: profile.%s.overflow-checks must be a bool", v.Line, name)
+			}
+			p.Overflow = *v.Bool
+			p.HasOverflow = true
+		case "inlining":
+			if v.Bool == nil {
+				return nil, fmt.Errorf("osty.toml:%d: profile.%s.inlining must be a bool", v.Line, name)
+			}
+			p.Inlining = *v.Bool
+			p.HasInlining = true
+		case "lto":
+			if v.Bool == nil {
+				return nil, fmt.Errorf("osty.toml:%d: profile.%s.lto must be a bool", v.Line, name)
+			}
+			p.LTO = *v.Bool
+			p.HasLTO = true
+		case "go-flags":
+			flags, err := stringArray(v, fmt.Sprintf("profile.%s.go-flags", name))
+			if err != nil {
+				return nil, err
+			}
+			p.GoFlags = flags
+		case "env":
+			if v.Tbl == nil {
+				return nil, fmt.Errorf("osty.toml:%d: profile.%s.env must be a table of strings", v.Line, name)
+			}
+			p.Env = map[string]string{}
+			for _, ek := range v.Tbl.keys {
+				ev, _ := v.Tbl.get(ek)
+				if ev.Str == nil {
+					return nil, fmt.Errorf("osty.toml:%d: profile.%s.env.%s must be a string", ev.Line, name, ek)
+				}
+				p.Env[ek] = *ev.Str
+			}
+		default:
+			return nil, fmt.Errorf("osty.toml:%d: unknown key `%s` in profile.%s", v.Line, k, name)
+		}
+	}
+	return p, nil
+}
+
+// parseTargetSection extracts a [target.<triple>] table. Supported
+// keys today are `cgo` (bool) and `env` (table of strings); unknown
+// keys are rejected so typos surface immediately.
+func parseTargetSection(triple string, t *tomlTable) (*Target, error) {
+	tgt := &Target{Triple: triple, Pos: token.Pos{Line: t.Line, Column: 1}}
+	for _, k := range t.keys {
+		v, _ := t.get(k)
+		switch k {
+		case "cgo":
+			if v.Bool == nil {
+				return nil, fmt.Errorf("osty.toml:%d: target.%s.cgo must be a bool", v.Line, triple)
+			}
+			tgt.CGO = *v.Bool
+			tgt.HasCGO = true
+		case "env":
+			if v.Tbl == nil {
+				return nil, fmt.Errorf("osty.toml:%d: target.%s.env must be a table of strings", v.Line, triple)
+			}
+			tgt.Env = map[string]string{}
+			for _, ek := range v.Tbl.keys {
+				ev, _ := v.Tbl.get(ek)
+				if ev.Str == nil {
+					return nil, fmt.Errorf("osty.toml:%d: target.%s.env.%s must be a string", ev.Line, triple, ek)
+				}
+				tgt.Env[ek] = *ev.Str
+			}
+		default:
+			return nil, fmt.Errorf("osty.toml:%d: unknown key `%s` in target.%s", v.Line, k, triple)
+		}
+	}
+	return tgt, nil
 }
 
 // parsePackageSection fills out *Package from a TOML table. Missing

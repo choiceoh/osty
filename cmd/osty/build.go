@@ -4,12 +4,14 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/manifest"
 	"github.com/osty/osty/internal/pkgmgr"
+	"github.com/osty/osty/internal/profile"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/stdlib"
 )
@@ -35,10 +37,13 @@ import (
 func runBuild(args []string, flags cliFlags) {
 	fs := flag.NewFlagSet("build", flag.ExitOnError)
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: osty build [--offline] [PATH]")
+		fmt.Fprintln(os.Stderr, "usage: osty build [--offline] [--profile NAME | --release] [--target TRIPLE] [--features LIST] [--no-default-features] [--force] [PATH]")
 	}
-	var offline bool
+	var offline, force bool
 	fs.BoolVar(&offline, "offline", false, "do not fetch dependencies; fail if caches are missing")
+	fs.BoolVar(&force, "force", false, "ignore the build cache; transpile every input")
+	var pf profileFlags
+	pf.register(fs)
 	_ = fs.Parse(args)
 	start := "."
 	if fs.NArg() == 1 {
@@ -54,6 +59,37 @@ func runBuild(args []string, flags cliFlags) {
 	m, root, abort := loadManifestWithDiag(start, flags)
 	if abort {
 		os.Exit(2)
+	}
+
+	// Profile resolution. Errors here come from unknown `--profile`
+	// names or malformed `--target` triples and are usage errors.
+	resolved, profileName, perr := pf.resolve(m, profile.NameDebug)
+	if perr != nil {
+		fmt.Fprintf(os.Stderr, "osty build: %v\n", perr)
+		os.Exit(2)
+	}
+	announceProfile(resolved)
+	triple := ""
+	if resolved.Target != nil {
+		triple = resolved.Target.Triple
+	}
+
+	// Step 2.5: incremental-build shortcut. Hash every .osty file
+	// under the project root and compare against the cached
+	// fingerprint. A matching record lets us skip the front-end +
+	// gen entirely; --force overrides this.
+	if !force {
+		if fp, err := profile.ReadFingerprint(root, profileName, triple); err == nil && fp != nil {
+			curSrc, err := profile.HashSources(root, isOstySource)
+			if err == nil {
+				fresh := profile.NewFingerprint(curSrc, resolved, toolVersion())
+				if fp.Equal(fresh) {
+					fmt.Printf("Build is up to date (cache: %s)\n",
+						profile.CachePath(root, profileName, triple))
+					return
+				}
+			}
+		}
 	}
 
 	// Step 3–4: dependency resolution + vendoring. Done for both
@@ -87,9 +123,36 @@ func runBuild(args []string, flags cliFlags) {
 	deps := pkgmgr.NewDepProvider(m, graph, env)
 	if m.Workspace != nil {
 		buildWorkspace(root, m, flags, deps)
-		return
+	} else {
+		buildPackage(root, flags, deps)
 	}
-	buildPackage(root, flags, deps)
+
+	// Step 6: record the build fingerprint under .osty/cache/ so the
+	// next invocation can short-circuit on unchanged inputs. A
+	// failure to write the fingerprint is logged but doesn't fail
+	// the build — correctness is preserved, we just lose the
+	// incremental speed-up next time.
+	if sources, err := profile.HashSources(root, isOstySource); err == nil {
+		fp := profile.NewFingerprint(sources, resolved, toolVersion())
+		if err := fp.Write(root); err != nil {
+			fmt.Fprintf(os.Stderr, "osty build: warning: cache write failed: %v\n", err)
+		}
+	}
+}
+
+// isOstySource is the predicate used by cache fingerprinting. .osty
+// files under testdata/ are ordinarily source inputs too, but for
+// incremental-build purposes anything ending in .osty counts.
+func isOstySource(name string) bool {
+	return filepath.Ext(name) == ".osty"
+}
+
+// toolVersion returns a stamp used to invalidate the cache when the
+// compiler itself changes. Today it's a compile-time constant;
+// future wiring (set via -ldflags during release builds) will
+// substitute a git sha.
+func toolVersion() string {
+	return "osty-dev"
 }
 
 // buildWorkspace runs lex → parse → resolve → check over every member
