@@ -127,10 +127,6 @@ type gen struct {
 	needRandomRuntime bool
 	needURLRuntime    bool
 
-	// needRegex is set when std.regex lowers to Go's regexp package,
-	// pulling in Regex/Match/Captures runtime wrappers.
-	needRegex bool
-
 	// needEncoding is set when std.encoding lowers to Go's encoding
 	// packages, pulling in base64/hex/url helper functions.
 	needEncoding bool
@@ -354,13 +350,13 @@ func (g *gen) run() ([]byte, error) {
 	if g.needErrorRuntime {
 		g.use("fmt")
 	}
-	if g.needRegex {
-		g.needResult = true
-		g.use("regexp")
-	}
 	if g.needEncoding {
 		g.needResult = true
 		g.use("fmt")
+		g.useAs("encoding/base64", "stdbase64")
+		g.useAs("encoding/hex", "stdhex")
+		g.useAs("net/url", "neturl")
+		g.useAs("strings", "stdstrings")
 		g.useAs("unicode/utf8", "utf8")
 	}
 	if g.needEnv {
@@ -1272,118 +1268,6 @@ func (u Url) queryValues(key string) []string {
 		return []string{value}
 	}
 	return []string{}
-}
-`)
-	}
-	if g.needRegex {
-		out.WriteString(`
-type Regex struct {
-	re *regexp.Regexp
-}
-
-type RegexMatch struct {
-	text       string
-	start, end int
-}
-
-type Captures struct {
-	values []*string
-	names  map[string]int
-}
-
-func regexCompile(pattern string) Result[Regex, error] {
-	re, err := regexp.Compile(pattern)
-	if err != nil {
-		return resultErr[Regex, error](err)
-	}
-	return resultOk[Regex, error](Regex{re: re})
-}
-
-func (r Regex) matches(text string) bool { return r.re.MatchString(text) }
-
-func (r Regex) find(text string) *RegexMatch {
-	loc := r.re.FindStringIndex(text)
-	if loc == nil {
-		return nil
-	}
-	m := RegexMatch{text: text[loc[0]:loc[1]], start: loc[0], end: loc[1]}
-	return &m
-}
-
-func (r Regex) findAll(text string) []RegexMatch {
-	locs := r.re.FindAllStringIndex(text, -1)
-	out := make([]RegexMatch, 0, len(locs))
-	for _, loc := range locs {
-		out = append(out, RegexMatch{text: text[loc[0]:loc[1]], start: loc[0], end: loc[1]})
-	}
-	return out
-}
-
-func (r Regex) captures(text string) *Captures {
-	idx := r.re.FindStringSubmatchIndex(text)
-	if idx == nil {
-		return nil
-	}
-	c := regexCaptures(r.re, text, idx)
-	return &c
-}
-
-func (r Regex) capturesAll(text string) []Captures {
-	idxs := r.re.FindAllStringSubmatchIndex(text, -1)
-	out := make([]Captures, 0, len(idxs))
-	for _, idx := range idxs {
-		out = append(out, regexCaptures(r.re, text, idx))
-	}
-	return out
-}
-
-func (r Regex) replace(text, replacement string) string {
-	idx := r.re.FindStringSubmatchIndex(text)
-	if idx == nil {
-		return text
-	}
-	dst := make([]byte, 0, len(text)+len(replacement))
-	dst = append(dst, text[:idx[0]]...)
-	dst = r.re.ExpandString(dst, replacement, text, idx)
-	dst = append(dst, text[idx[1]:]...)
-	return string(dst)
-}
-
-func (r Regex) replaceAll(text, replacement string) string {
-	return r.re.ReplaceAllString(text, replacement)
-}
-
-func (r Regex) split(text string) []string { return r.re.Split(text, -1) }
-
-func regexCaptures(re *regexp.Regexp, text string, idx []int) Captures {
-	names := re.SubexpNames()
-	c := Captures{values: make([]*string, len(idx)/2), names: map[string]int{}}
-	for i := range c.values {
-		start, end := idx[2*i], idx[2*i+1]
-		if start >= 0 && end >= 0 {
-			v := text[start:end]
-			c.values[i] = &v
-		}
-		if i < len(names) && names[i] != "" {
-			c.names[names[i]] = i
-		}
-	}
-	return c
-}
-
-func (c Captures) get(i int) *string {
-	if i < 0 || i >= len(c.values) {
-		return nil
-	}
-	return c.values[i]
-}
-
-func (c Captures) named(name string) *string {
-	i, ok := c.names[name]
-	if !ok {
-		return nil
-	}
-	return c.get(i)
 }
 `)
 	}
