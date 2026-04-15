@@ -44,18 +44,19 @@ func (r *Runner) checkSemver() *Check {
 			"no package loaded; cannot capture current API"))
 		return c
 	}
-	// Snapshot only the root package (index 0). Multi-package
-	// workspaces capture the root; members should snapshot
-	// separately with an explicit `osty ci snapshot --member M`
-	// (future work).
-	pkg := r.Packages[0]
 	var curVersion, curEdition string
 	if r.Manifest != nil && r.Manifest.HasPackage {
 		curVersion = r.Manifest.Package.Version
 		curEdition = r.Manifest.Package.Edition
 	}
-	current := CapturePackage(pkg, curVersion, curEdition)
+	current := NewWorkspaceSnapshot(r.Packages, curVersion, curEdition)
+	// Compatibility mode promotes breaking changes to Warning
+	// when the major version was already bumped — the user has
+	// already signaled intent to break.
 	breakingIsError := !majorBumped(baseline.Version, current.Version)
+	if r.Opts.SemverWarnOnly {
+		breakingIsError = false
+	}
 
 	diff := Compare(baseline, current)
 	for _, s := range diff.Removed {
@@ -64,7 +65,7 @@ func (r *Runner) checkSemver() *Check {
 			sev = diag.Warning
 		}
 		c.Diags = append(c.Diags, synthetic(sev, "CI410",
-			fmt.Sprintf("breaking: exported %s %q was removed", s.Kind, s.Name)))
+			fmt.Sprintf("breaking: exported %s %q was removed", s.Symbol.Kind, s.Qualified())))
 	}
 	for _, s := range diff.Changed {
 		sev := diag.Error
@@ -72,14 +73,15 @@ func (r *Runner) checkSemver() *Check {
 			sev = diag.Warning
 		}
 		c.Diags = append(c.Diags, synthetic(sev, "CI411",
-			fmt.Sprintf("breaking: exported %s %q signature changed", s.Kind, s.Name)))
+			fmt.Sprintf("breaking: exported %s %q signature changed (now: %s)",
+				s.Symbol.Kind, s.Qualified(), s.Symbol.Sig)))
 	}
 	// Additive changes never fail CI but we still report them so
 	// `osty ci --json` output is useful for automated release-note
 	// generation.
 	for _, s := range diff.Added {
 		c.Diags = append(c.Diags, synthetic(diag.Warning, "CI420",
-			fmt.Sprintf("additive: exported %s %q is new", s.Kind, s.Name)))
+			fmt.Sprintf("additive: exported %s %q is new", s.Symbol.Kind, s.Qualified())))
 	}
 	// Warn if we flagged "additive" symbols when Strict is on;
 	// downgrade silently otherwise. The Runner's post-pass

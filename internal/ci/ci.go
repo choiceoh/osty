@@ -45,6 +45,11 @@ type Options struct {
 	// Semver enables the semver-break detector. Requires Baseline
 	// to be non-empty.
 	Semver bool
+	// SemverWarnOnly downgrades every breaking change reported by
+	// the semver check to Warning severity, regardless of the
+	// version bump. Use this for the "API compatibility report"
+	// mode that surfaces drift without failing CI.
+	SemverWarnOnly bool
 	// Strict promotes any Warning-severity diagnostic produced by
 	// the run into a failed check. Errors always fail.
 	Strict bool
@@ -91,20 +96,20 @@ const (
 // diagnostic (and no warning-severity diagnostic when Strict is
 // set).
 type Check struct {
-	Name    CheckName
-	Passed  bool
-	Skipped bool
-	Note    string // one-line explanation when Skipped or trivially OK
-	Diags   []*diag.Diagnostic
+	Name    CheckName          `json:"name"`
+	Passed  bool               `json:"passed"`
+	Skipped bool               `json:"skipped"`
+	Note    string             `json:"note,omitempty"`
+	Diags   []*diag.Diagnostic `json:"diagnostics,omitempty"`
 }
 
 // Report is the aggregated outcome of one `osty ci` run. It's the
 // authoritative object the CLI consumes to decide the exit code.
 type Report struct {
-	ProjectRoot string
-	StartedAt   time.Time
-	FinishedAt  time.Time
-	Checks      []*Check
+	ProjectRoot string    `json:"projectRoot"`
+	StartedAt   time.Time `json:"startedAt"`
+	FinishedAt  time.Time `json:"finishedAt"`
+	Checks      []*Check  `json:"checks"`
 }
 
 // AllPassed reports whether every non-skipped check passed.
@@ -137,6 +142,12 @@ type Runner struct {
 	// project: single-package tree → one entry; workspace → one
 	// entry per member. Populated by Load.
 	Packages []*resolve.Package
+	// Results is one PackageResult per Packages entry, in the
+	// same order. Holds the resolver's diagnostics + the per-file
+	// FileScope/Refs/TypeRefs maps so downstream checks (lint)
+	// can reuse the resolved state instead of re-running resolve.
+	// nil when Load failed before resolution; checks must guard.
+	Results []*resolve.PackageResult
 }
 
 // NewRunner returns a Runner whose state is uninitialized. Call

@@ -172,6 +172,12 @@ func TestSnapshotRoundTrip(t *testing.T) {
 			{Name: "Greet", Kind: "function"},
 			{Name: "User", Kind: "struct"},
 		},
+		Packages: map[string][]Symbol{
+			"demo": {
+				{Name: "Greet", Kind: "function"},
+				{Name: "User", Kind: "struct"},
+			},
+		},
 	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "api.json")
@@ -182,8 +188,6 @@ func TestSnapshotRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadSnapshot: %v", err)
 	}
-	// Pretty-print both to JSON to check structural equality —
-	// avoids depending on slice ordering internal to the struct.
 	bbs, _ := json.Marshal(base)
 	gbs, _ := json.Marshal(got)
 	if string(bbs) != string(gbs) {
@@ -195,23 +199,126 @@ func TestSnapshotRoundTrip(t *testing.T) {
 // check: a symbol present in baseline but missing from current is
 // classified as Removed.
 func TestSnapshotCompareDetectsRemoval(t *testing.T) {
-	base := &Snapshot{Symbols: []Symbol{
-		{Name: "Keep", Kind: "function"},
-		{Name: "Drop", Kind: "function"},
+	base := &Snapshot{Packages: map[string][]Symbol{
+		"demo": {
+			{Name: "Keep", Kind: "function", Sig: "() -> ()"},
+			{Name: "Drop", Kind: "function", Sig: "() -> ()"},
+		},
 	}}
-	cur := &Snapshot{Symbols: []Symbol{
-		{Name: "Keep", Kind: "function"},
-		{Name: "New", Kind: "struct"},
+	cur := &Snapshot{Packages: map[string][]Symbol{
+		"demo": {
+			{Name: "Keep", Kind: "function", Sig: "() -> ()"},
+			{Name: "New", Kind: "struct", Sig: "{}"},
+		},
 	}}
 	d := Compare(base, cur)
-	if len(d.Removed) != 1 || d.Removed[0].Name != "Drop" {
+	if len(d.Removed) != 1 || d.Removed[0].Symbol.Name != "Drop" {
 		t.Fatalf("removed wrong: %+v", d.Removed)
 	}
-	if len(d.Added) != 1 || d.Added[0].Name != "New" {
+	if len(d.Added) != 1 || d.Added[0].Symbol.Name != "New" {
 		t.Fatalf("added wrong: %+v", d.Added)
 	}
 	if len(d.Changed) != 0 {
 		t.Fatalf("changed should be empty: %+v", d.Changed)
+	}
+}
+
+// TestSnapshotCompareDetectsSigChange verifies that two symbols
+// sharing (name, kind) but differing in Sig produce a Changed
+// entry — the structural break the v2 schema was designed for.
+func TestSnapshotCompareDetectsSigChange(t *testing.T) {
+	base := &Snapshot{Packages: map[string][]Symbol{
+		"demo": {{Name: "f", Kind: "function", Sig: "(Int) -> Bool"}},
+	}}
+	cur := &Snapshot{Packages: map[string][]Symbol{
+		"demo": {{Name: "f", Kind: "function", Sig: "(String) -> Bool"}},
+	}}
+	d := Compare(base, cur)
+	if len(d.Changed) != 1 || d.Changed[0].Symbol.Name != "f" {
+		t.Fatalf("expected one changed signature, got %+v", d.Changed)
+	}
+	if len(d.Removed) != 0 || len(d.Added) != 0 {
+		t.Fatalf("removed/added should be empty: %+v / %+v", d.Removed, d.Added)
+	}
+}
+
+// TestCapturePackageFromSource is the end-to-end test that the
+// AST signature renderers actually pick up the right shapes. We
+// load real source through the resolver, capture, and assert on
+// concrete Sig strings — that catches regressions in either the
+// snapshot code or the parser/AST shape.
+func TestCapturePackageFromSource(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "lib.osty", `
+pub fn add(a: Int, b: Int) -> Int { a + b }
+
+pub struct User {
+    pub name: String,
+    pub age: Int,
+    secret: String,
+}
+
+pub enum Color {
+    Red,
+    RGB(Int, Int, Int),
+}
+
+fn private() {}
+`)
+	r := NewRunner(dir, Options{})
+	if err := r.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(r.Packages) == 0 {
+		t.Fatal("no package loaded")
+	}
+	syms := CapturePackage(r.Packages[0])
+	got := map[string]string{}
+	for _, s := range syms {
+		got[s.Kind+" "+s.Name] = s.Sig
+	}
+
+	// Spot-check the declarations we expect; the AST snapshot
+	// includes more (struct fields, variants) but we only assert
+	// on the must-haves so a future field addition doesn't
+	// brittle the test.
+	wantHave := map[string]string{
+		"function add":   "(a: Int, b: Int) -> Int",
+		"struct User":    "{name: String, age: Int}",
+		"enum Color":     "Red | RGB(Int, Int, Int)",
+		"field User.name": "String",
+		"variant Color.RGB": "RGB(Int, Int, Int)",
+	}
+	for k, want := range wantHave {
+		if got[k] != want {
+			t.Errorf("%q: got sig %q, want %q", k, got[k], want)
+		}
+	}
+	// Private decls and private fields must NOT appear.
+	if _, ok := got["function private"]; ok {
+		t.Errorf("private fn leaked into snapshot")
+	}
+	if _, ok := got["field User.secret"]; ok {
+		t.Errorf("private field leaked into snapshot")
+	}
+}
+
+// TestReadSnapshotV1Upgrades verifies a v1 snapshot (flat
+// `symbols` list, no `packages` map) is silently upgraded to the
+// v2 representation when read.
+func TestReadSnapshotV1Upgrades(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "v1.json")
+	v1 := `{"schema":1,"package":"demo","symbols":[{"name":"hello","kind":"function"}]}`
+	if err := os.WriteFile(path, []byte(v1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := ReadSnapshot(path)
+	if err != nil {
+		t.Fatalf("ReadSnapshot: %v", err)
+	}
+	if got, ok := s.Packages["demo"]; !ok || len(got) != 1 || got[0].Name != "hello" {
+		t.Fatalf("v1 upgrade lost data: %+v", s.Packages)
 	}
 }
 

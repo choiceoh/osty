@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -9,7 +10,6 @@ import (
 
 	"github.com/osty/osty/internal/ci"
 	"github.com/osty/osty/internal/diag"
-	"github.com/osty/osty/internal/resolve"
 )
 
 // defaultSnapshotPath is where `osty ci snapshot` writes by default
@@ -64,6 +64,7 @@ func runCi(args []string, cliF cliFlags) {
 		lockOn         = true
 		releaseOn      bool
 		semverOn       bool
+		semverWarnOnly bool
 		strict         bool
 		baseline       string
 		maxFileBytes   int64
@@ -75,6 +76,7 @@ func runCi(args []string, cliF cliFlags) {
 	fs.BoolVar(&lockOn, "lockfile", lockOn, "enable lockfile check")
 	fs.BoolVar(&releaseOn, "release", false, "enable release validation")
 	fs.BoolVar(&semverOn, "semver", false, "enable semver-break check")
+	fs.BoolVar(&semverWarnOnly, "api-compat", false, "warn-only API compatibility check (implies --semver)")
 	fs.BoolVar(&strict, "strict", false, "fail on warnings as well as errors")
 	fs.StringVar(&baseline, "baseline", "", "baseline api snapshot path for --semver")
 	fs.Int64Var(&maxFileBytes, "max-file-bytes", 0, "per-file size cap enforced by --policy")
@@ -91,44 +93,71 @@ func runCi(args []string, cliF cliFlags) {
 	if all {
 		fmtOn, lintOn, policyOn, lockOn, releaseOn, semverOn = true, true, true, true, true, true
 	}
-
-	// Defer to the Runner's default Baseline lookup only when
-	// --semver is on and no explicit path was given — otherwise
-	// the runner would emit CI401 for an empty Baseline.
-	if semverOn && baseline == "" {
-		baseline = defaultSnapshotPath
+	if semverWarnOnly {
+		semverOn = true
 	}
 
 	opts := ci.Options{
-		Format:       fmtOn,
-		Lint:         lintOn,
-		Policy:       policyOn,
-		Lockfile:     lockOn,
-		Release:      releaseOn,
-		Semver:       semverOn,
-		Strict:       strict,
-		Baseline:     baseline,
-		MaxFileBytes: maxFileBytes,
+		Format:         fmtOn,
+		Lint:           lintOn,
+		Policy:         policyOn,
+		Lockfile:       lockOn,
+		Release:        releaseOn,
+		Semver:         semverOn,
+		SemverWarnOnly: semverWarnOnly,
+		Strict:         strict,
+		Baseline:       baseline,
+		MaxFileBytes:   maxFileBytes,
 	}
 
-	// Manifest load + diag rendering first — same pattern every
-	// other manifest-aware command uses, so parse errors are
-	// rendered with the proper caret underlines before CI starts.
+	// Manifest parse-error rendering: surface E2xxx diagnostics
+	// with caret underlines before CI starts. We pass the parsed
+	// manifest into Runner so it doesn't re-read the file from
+	// disk — keeping the "manifest loaded once per command"
+	// invariant the rest of cmd/osty maintains.
+	runner := ci.NewRunner(start, opts)
 	if _, _, err := manifestLookupNear(start); err == nil {
-		if _, _, abort := loadManifestWithDiag(start, cliF); abort {
+		m, root, abort := loadManifestWithDiag(start, cliF)
+		if abort {
 			os.Exit(2)
 		}
+		runner.Manifest = m
+		runner.Root = root
 	}
-
-	runner := ci.NewRunner(start, opts)
 	if err := runner.Load(); err != nil {
 		fmt.Fprintf(os.Stderr, "osty ci: %v\n", err)
 		os.Exit(2)
 	}
+	// Default semver baseline is resolved relative to the
+	// project root (not cwd) so `osty ci --semver` works from
+	// any subdirectory of the project — matching how `osty
+	// build` and `osty test` find osty.toml + osty.lock.
+	if runner.Opts.Semver && runner.Opts.Baseline == "" {
+		runner.Opts.Baseline = filepath.Join(runner.Root, defaultSnapshotPath)
+	}
 	report := runner.Run()
-	printCiReport(report, runner, cliF)
+	if cliF.jsonOutput {
+		printCiReportJSON(report)
+	} else {
+		printCiReport(report, runner, cliF)
+	}
 
 	if !report.AllPassed() {
+		os.Exit(1)
+	}
+}
+
+// printCiReportJSON serializes the entire Report — checks +
+// nested diagnostics — as a single JSON object on stdout. NDJSON
+// would interleave with the per-diag --json mode used elsewhere;
+// a Report is a tree, so a single object is the cleaner shape
+// for downstream tooling (CI dashboards, release-note bots) to
+// consume.
+func printCiReportJSON(rep *ci.Report) {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(rep); err != nil {
+		fmt.Fprintf(os.Stderr, "osty ci: encode: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -169,18 +198,17 @@ func runCiSnapshot(args []string) {
 		fmt.Fprintf(os.Stderr, "osty ci snapshot: no package found at %s\n", start)
 		os.Exit(1)
 	}
-	// Resolve to populate PkgScope. Load only fills pkg.Files;
-	// without a subsequent resolve pass the PkgScope is empty and
-	// every symbol looks private.
-	pkg := runner.Packages[0]
-	_ = resolve.ResolvePackage(pkg, resolve.NewPrelude())
 
 	var pkgVersion, edition string
 	if runner.Manifest != nil && runner.Manifest.HasPackage {
 		pkgVersion = runner.Manifest.Package.Version
 		edition = runner.Manifest.Package.Edition
 	}
-	snap := ci.CapturePackage(pkg, pkgVersion, edition)
+	// Workspace-aware snapshot: every loaded package contributes
+	// its exported API. Single-package projects flow through the
+	// same constructor — NewWorkspaceSnapshot fills both the v2
+	// Packages map and the v1 single-package convenience fields.
+	snap := ci.NewWorkspaceSnapshot(runner.Packages, pkgVersion, edition)
 
 	target := out
 	if target == "" {
@@ -190,7 +218,11 @@ func runCiSnapshot(args []string) {
 		fmt.Fprintf(os.Stderr, "osty ci snapshot: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Wrote %s (%d symbols)\n", target, len(snap.Symbols))
+	total := 0
+	for _, syms := range snap.Packages {
+		total += len(syms)
+	}
+	fmt.Printf("Wrote %s (%d packages, %d symbols)\n", target, len(snap.Packages), total)
 }
 
 // printCiReport streams one human-readable line per check plus an

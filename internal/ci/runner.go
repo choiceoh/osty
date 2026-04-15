@@ -24,13 +24,20 @@ func (r *Runner) Load() error {
 	// Try to locate osty.toml upward from root. Not finding one is
 	// not an error — `osty ci .` on a directory of hand-rolled
 	// samples still runs the format + lint checks.
-	if mRoot, err := manifest.FindRoot(r.Root); err == nil {
-		m, _, loadErr := manifest.LoadDir(mRoot)
-		if loadErr != nil {
-			return loadErr
+	//
+	// The CLI layer typically pre-renders manifest diagnostics
+	// before constructing the Runner, then sets r.Manifest +
+	// r.Root directly via the constructor's pipeline; in that
+	// case we trust the caller and skip the redundant LoadDir.
+	if r.Manifest == nil {
+		if mRoot, err := manifest.FindRoot(r.Root); err == nil {
+			m, _, loadErr := manifest.LoadDir(mRoot)
+			if loadErr != nil {
+				return loadErr
+			}
+			r.Manifest = m
+			r.Root = mRoot
 		}
-		r.Manifest = m
-		r.Root = mRoot
 	}
 
 	// Workspace mode when [workspace] is declared OR when the tree
@@ -50,6 +57,8 @@ func (r *Runner) Load() error {
 		return nil
 	}
 	r.Packages = []*resolve.Package{pkg}
+	pr := resolve.ResolvePackage(pkg, resolve.NewPrelude())
+	r.Results = []*resolve.PackageResult{pr}
 	return nil
 }
 
@@ -66,6 +75,7 @@ func (r *Runner) loadWorkspace(byManifest bool) error {
 	r.Workspace = ws
 
 	seen := map[string]bool{}
+	pkgPaths := []string{}
 	add := func(member string) {
 		if seen[member] {
 			return
@@ -73,6 +83,7 @@ func (r *Runner) loadWorkspace(byManifest bool) error {
 		seen[member] = true
 		if pkg, err := ws.LoadPackage(member); err == nil && pkg != nil {
 			r.Packages = append(r.Packages, pkg)
+			pkgPaths = append(pkgPaths, member)
 		}
 	}
 	if byManifest && r.Manifest != nil {
@@ -88,6 +99,13 @@ func (r *Runner) loadWorkspace(byManifest bool) error {
 		for _, p := range resolve.WorkspacePackagePaths(r.Root) {
 			add(p)
 		}
+	}
+	// Run resolution once for the whole workspace so cross-package
+	// `use` edges resolve and lint sees the same state cmd/osty's
+	// `build` / `check` paths see.
+	allResults := ws.ResolveAll()
+	for _, path := range pkgPaths {
+		r.Results = append(r.Results, allResults[path])
 	}
 	return nil
 }

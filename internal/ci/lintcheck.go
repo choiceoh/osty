@@ -8,14 +8,17 @@ import (
 )
 
 // checkLint runs the lint pass over every loaded package, mirroring
-// what `osty lint DIR --strict` does. The manifest's [lint]
-// allow/deny/exclude configuration is applied so project-level
-// policy is respected under CI.
+// what `osty lint DIR --strict` does.
 //
-// Under --strict the caller's Options.Strict is used by Run to
-// turn warnings into failure; this function never self-promotes
-// severity — that would double-count warnings when Run inspects
-// the diag list.
+// The function reuses the PackageResult Runner.Load already produced
+// — re-resolving here would discard the workspace's stdlib / dep
+// hookup and emit false-positive "unknown package" diagnostics for
+// every `use std.*` site. The manifest's [lint] allow/deny/exclude
+// configuration is applied so project-level policy is respected.
+//
+// Strict promotion of warnings to failure happens in Run, never
+// here — that keeps the Diags list a faithful record of what each
+// rule reported, regardless of severity overrides.
 func (r *Runner) checkLint() *Check {
 	c := &Check{Name: CheckLint}
 	if len(r.Packages) == 0 {
@@ -25,14 +28,17 @@ func (r *Runner) checkLint() *Check {
 
 	cfg := lintConfigFromManifest(r)
 	opts := checkOpts()
-	for _, pkg := range r.Packages {
-		// Run resolve + check fresh so we get a PackageResult
-		// compatible with lint.Package. When the package was
-		// already resolved as part of r.Workspace, its Refs /
-		// TypeRefs maps are already populated; re-resolving is
-		// cheap compared to re-loading from disk, and gives us
-		// a known-clean Diag list untouched by any previous pass.
-		pr := resolve.ResolvePackage(pkg, resolve.NewPrelude())
+	for i, pkg := range r.Packages {
+		var pr *resolve.PackageResult
+		if i < len(r.Results) {
+			pr = r.Results[i]
+		}
+		if pr == nil {
+			// Defensive fallback. Single-file `osty ci .` paths
+			// should never land here because Load fills Results,
+			// but a future entry point that bypasses Load would.
+			pr = resolve.ResolvePackage(pkg, resolve.NewPrelude())
+		}
 		chk := check.Package(pkg, pr, opts)
 		lr := lint.Package(pkg, pr, chk)
 		if cfg != nil {
@@ -68,4 +74,3 @@ func lintConfigFromManifest(r *Runner) *lint.Config {
 	}
 	return cfg
 }
-

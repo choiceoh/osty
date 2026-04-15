@@ -167,6 +167,15 @@ func main() {
 		runCi(args[1:], flags)
 		return
 	}
+	// `osty check --ci` is an alias for `osty ci` — kept so the
+	// roadmap-canonical spelling works alongside the dedicated
+	// `ci` subcommand.
+	if cmd == "check" {
+		if rest, present := takeBoolFlag(args[1:], "--ci"); present {
+			runCi(rest, flags)
+			return
+		}
+	}
 	if len(args) < 2 {
 		usage()
 		os.Exit(2)
