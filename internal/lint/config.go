@@ -147,6 +147,39 @@ func (c Config) Apply(r *Result) *Result {
 	return out
 }
 
+// Validate returns the subset of names in Allow / Deny that don't
+// resolve to any known lint code, category, rule alias, or wildcard.
+// Callers (e.g. the pipeline loading osty.toml) can surface these as
+// configuration warnings so that typos like `self_compair` don't
+// silently disable nothing.
+//
+// The empty list means the config is fully resolvable — every name
+// was either a concrete code, a registry rule name/code, a category
+// alias, or a wildcard.
+func (c Config) Validate() (unknown []string) {
+	for _, n := range c.Allow {
+		if !isResolvableName(n) {
+			unknown = append(unknown, n)
+		}
+	}
+	for _, n := range c.Deny {
+		if !isResolvableName(n) {
+			unknown = append(unknown, n)
+		}
+	}
+	return unknown
+}
+
+// isResolvableName reports whether name matches a concrete L-code, a
+// registry entry (by Code or Name), a category alias, or a wildcard.
+// Mirrors the lookup performed by expandCodeSet.
+func isResolvableName(name string) bool {
+	if name == "lint" || name == "all" {
+		return true
+	}
+	return len(resolveAllowName(name)) > 0
+}
+
 // expandCodeSet takes a list of user-facing names (codes / aliases /
 // wildcards) and returns the concrete L-code set. "*" means "every lint
 // code"; it's emitted when any wildcard alias (`lint` / `all`) appears.

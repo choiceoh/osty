@@ -1624,6 +1624,83 @@ func TestLint_RegistryNamesAreResolvable(t *testing.T) {
 	}
 }
 
+func TestLint_RegistryEntriesWellFormed(t *testing.T) {
+	// Every rule must have a syntactically valid L-code, a non-empty
+	// lower_snake_case Name, a non-empty Summary, a non-empty
+	// Description, and a category that appears in Categories().
+	seenCodes := map[string]bool{}
+	seenNames := map[string]bool{}
+	validCats := map[lint.Category]bool{}
+	for _, c := range lint.Categories() {
+		validCats[c] = true
+	}
+	for _, r := range lint.Rules() {
+		if !lintCodePattern(r.Code) {
+			t.Errorf("rule %q has malformed Code %q (want L followed by digits)", r.Name, r.Code)
+		}
+		if seenCodes[r.Code] {
+			t.Errorf("duplicate Code %q across rules", r.Code)
+		}
+		seenCodes[r.Code] = true
+
+		if r.Name == "" {
+			t.Errorf("rule %s has empty Name", r.Code)
+		}
+		if seenNames[r.Name] {
+			t.Errorf("duplicate Name %q across rules", r.Name)
+		}
+		seenNames[r.Name] = true
+
+		if strings.TrimSpace(r.Summary) == "" {
+			t.Errorf("rule %s (%s) has empty Summary", r.Code, r.Name)
+		}
+		if strings.TrimSpace(r.Description) == "" {
+			t.Errorf("rule %s (%s) has empty Description", r.Code, r.Name)
+		}
+		if !validCats[r.Category] {
+			t.Errorf("rule %s (%s) has unknown Category %q", r.Code, r.Name, r.Category)
+		}
+	}
+}
+
+// lintCodePattern checks that s matches `L` followed by one or more
+// digits — the same shape that the annotation / config resolver
+// accepts as a literal code.
+func lintCodePattern(s string) bool {
+	if len(s) < 2 || s[0] != 'L' {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func TestLint_ConfigValidateFlagsUnknown(t *testing.T) {
+	cfg := lint.Config{
+		Allow: []string{"unused_let", "self_compair" /* typo */, "L0001"},
+		Deny:  []string{"simplify", "not_a_rule", "all"},
+	}
+	unknown := cfg.Validate()
+	sort.Strings(unknown)
+	want := []string{"not_a_rule", "self_compair"}
+	if strings.Join(unknown, ",") != strings.Join(want, ",") {
+		t.Fatalf("Validate: want %v, got %v", want, unknown)
+	}
+}
+
+func TestLint_ConfigValidateCleanOnValidConfig(t *testing.T) {
+	cfg := lint.Config{
+		Allow: []string{"lint", "L0040", "redundant_bool", "dead_code"},
+		Deny:  []string{"unused", "complexity", "docs"},
+	}
+	if unknown := cfg.Validate(); len(unknown) > 0 {
+		t.Fatalf("Validate on valid config returned unknown names: %v", unknown)
+	}
+}
+
 func TestLint_RegistryCategoriesAreResolvable(t *testing.T) {
 	// Every declared category must be usable as a suppression alias and
 	// must expand to at least one rule. This guards against a category
@@ -1646,4 +1723,45 @@ func TestLint_RegistryCategoriesAreResolvable(t *testing.T) {
 			}
 		}
 	}
+}
+
+// ---- Panic safety ----
+//
+// FuzzLintFile feeds arbitrary byte inputs through the full
+// parse → resolve → check → lint pipeline and asserts that the lint
+// pass never panics, regardless of how malformed the parser's AST is.
+// The parser is expected to tolerate garbage (it emits Diagnostics
+// instead of crashing), and lint must be at least as forgiving.
+//
+// Run with: `go test ./internal/lint/ -run=^$ -fuzz=FuzzLintFile`.
+func FuzzLintFile(f *testing.F) {
+	seeds := []string{
+		``,
+		`fn main() {}`,
+		`fn f(a: Int, b: Int) -> Int { a + b }`,
+		`struct S { x: Int }`,
+		`enum E { A, B }`,
+		`fn main() { if true { return } else { 1 } }`,
+		`fn main() { let x = 1; let x = 2 }`,
+		`pub fn g() {}`,
+		`#[allow(unused_let)] fn main() { let x = 1 }`,
+		"\x00\x01 not osty",
+	}
+	for _, s := range seeds {
+		f.Add([]byte(s))
+	}
+	f.Fuzz(func(t *testing.T, src []byte) {
+		// Cap the input so fuzzing doesn't wander into multi-second cases.
+		if len(src) > 4096 {
+			return
+		}
+		file, _ := parser.ParseDiagnostics(src)
+		if file == nil {
+			return
+		}
+		res := resolve.File(file, resolve.NewPrelude())
+		chk := check.File(file, res)
+		// The assertion is simply: lint.File does not panic.
+		_ = lint.File(file, res, chk)
+	})
 }
