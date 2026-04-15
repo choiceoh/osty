@@ -409,6 +409,8 @@ func TestTier1ModuleCoverage(t *testing.T) {
 		{"fs", []string{"readToString", "writeString", "exists", "remove"}},
 		{"strings", []string{"split", "join", "contains", "startsWith", "endsWith",
 			"trim", "trimStart", "trimEnd", "toUpper", "toLower", "repeat", "replace"}},
+		{"random", []string{"Rng", "default", "seeded"}},
+		{"url", []string{"Url", "parse", "join"}},
 		{"ref", []string{"same"}},
 		{"process", []string{"abort", "unreachable", "todo", "ignoreError", "logError"}},
 		{"debug", []string{"dbg"}},
@@ -428,6 +430,29 @@ func TestTier1ModuleCoverage(t *testing.T) {
 			if !sym.Pub {
 				t.Errorf("std.%s export %q is not pub", c.module, name)
 			}
+		}
+	}
+}
+
+func TestRandomAndURLModulesResolve(t *testing.T) {
+	reg := Load()
+	for _, c := range []struct {
+		module string
+		typ    string
+	}{
+		{"random", "Rng"},
+		{"url", "Url"},
+	} {
+		mod := reg.Modules[c.module]
+		if mod == nil || mod.Package == nil {
+			t.Fatalf("std.%s not loaded", c.module)
+		}
+		sym := mod.Package.PkgScope.LookupLocal(c.typ)
+		if sym == nil {
+			t.Fatalf("std.%s missing type %q", c.module, c.typ)
+		}
+		if sym.Kind != resolve.SymStruct {
+			t.Errorf("std.%s %q kind = %s; want struct", c.module, c.typ, sym.Kind)
 		}
 	}
 }
@@ -572,8 +597,8 @@ func TestLookupPackageMissesNonStdlib(t *testing.T) {
 	r := Load()
 	cases := []string{
 		"",
-		"io",             // missing "std." prefix
-		"std",            // bare prefix
+		"io",  // missing "std." prefix
+		"std", // bare prefix
 		"std.nonexistent",
 		"github.com/foo/bar",
 	}

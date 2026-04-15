@@ -102,6 +102,12 @@ type gen struct {
 	// pulling in the time import used by `s.timeout(...)` arms.
 	needSelect bool
 
+	// needRandomRuntime / needURLRuntime are set by stdlib use bridges
+	// whose Osty surface cannot map directly to exported Go package
+	// identifiers (for example `random.default()` and `rng.int(...)`).
+	needRandomRuntime bool
+	needURLRuntime    bool
+
 	// currentRetType tracks the enclosing function's return type so the
 	// `?` lift at let-stmt position can reconstruct the Result with the
 	// correct type parameters when the operand's T differs.
@@ -268,6 +274,16 @@ func (g *gen) run() ([]byte, error) {
 		g.use("sync")
 		g.use("context")
 	}
+	if g.needRandomRuntime {
+		g.useAs("math/rand", "mathrand")
+		g.use("sync")
+		g.use("time")
+	}
+	if g.needURLRuntime {
+		g.needResult = true
+		g.useAs("net/url", "neturl")
+		g.use("strconv")
+	}
 
 	// 3. Assemble header + body.
 	var out bytes.Buffer
@@ -357,6 +373,197 @@ func (r Result[T, E]) unwrapOr(fallback T) T {
 type Range struct {
 	Start, Stop                  int
 	HasStart, HasStop, Inclusive bool
+}
+`)
+	}
+	if g.needRandomRuntime {
+		out.WriteString(`
+// Rng is the runtime representation of std.random.Rng.
+type Rng struct {
+	mu *sync.Mutex
+	r  *mathrand.Rand
+}
+
+func newRng(seed int64) Rng {
+	return Rng{mu: &sync.Mutex{}, r: mathrand.New(mathrand.NewSource(seed))}
+}
+
+func randomDefault() Rng { return newRng(time.Now().UnixNano()) }
+
+func randomSeeded(seed int64) Rng { return newRng(seed) }
+
+func (r Rng) ready() Rng {
+	if r.r == nil {
+		return randomDefault()
+	}
+	if r.mu == nil {
+		r.mu = &sync.Mutex{}
+	}
+	return r
+}
+
+func (r Rng) int(min, max int) int {
+	if max <= min {
+		panic("std.random.Rng.int requires max > min")
+	}
+	r = r.ready()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return min + r.r.Intn(max-min)
+}
+
+func (r Rng) intInclusive(min, max int) int {
+	if max < min {
+		panic("std.random.Rng.intInclusive requires max >= min")
+	}
+	return r.int(min, max+1)
+}
+
+func (r Rng) float() float64 {
+	r = r.ready()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.r.Float64()
+}
+
+func (r Rng) bool() bool { return r.int(0, 2) == 1 }
+
+func (r Rng) bytes(n int) []byte {
+	if n < 0 {
+		panic("std.random.Rng.bytes requires n >= 0")
+	}
+	r = r.ready()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]byte, n)
+	for i := range out {
+		out[i] = byte(r.r.Intn(256))
+	}
+	return out
+}
+
+func rngChoice[T any](r Rng, items []T) *T {
+	if len(items) == 0 {
+		return nil
+	}
+	v := items[r.int(0, len(items))]
+	return &v
+}
+
+func rngShuffle[T any](r Rng, items []T) {
+	r = r.ready()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.r.Shuffle(len(items), func(i, j int) {
+		items[i], items[j] = items[j], items[i]
+	})
+}
+`)
+	}
+	if g.needURLRuntime {
+		out.WriteString(`
+// Url is the runtime representation of std.url.Url.
+type Url struct {
+	scheme   string
+	host     string
+	port     *int
+	path     string
+	query    map[string]string
+	queryAll map[string][]string
+	fragment *string
+}
+
+func urlParse(text string) Result[Url, any] {
+	parsed, err := neturl.Parse(text)
+	if err != nil {
+		return Result[Url, any]{Error: err.Error()}
+	}
+	var port *int
+	if raw := parsed.Port(); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil {
+			return Result[Url, any]{Error: err.Error()}
+		}
+		port = &n
+	}
+	var fragment *string
+	if parsed.Fragment != "" {
+		v := parsed.Fragment
+		fragment = &v
+	}
+	query := map[string]string{}
+	queryAll := map[string][]string{}
+	for key, values := range parsed.Query() {
+		cp := append([]string(nil), values...)
+		queryAll[key] = cp
+		if len(values) == 0 {
+			query[key] = ""
+		} else {
+			query[key] = values[0]
+		}
+	}
+	return Result[Url, any]{
+		Value: Url{
+			scheme:   parsed.Scheme,
+			host:     parsed.Hostname(),
+			port:     port,
+			path:     parsed.Path,
+			query:    query,
+			queryAll: queryAll,
+			fragment: fragment,
+		},
+		IsOk: true,
+	}
+}
+
+func urlJoin(base, relative string) Result[string, any] {
+	b, err := neturl.Parse(base)
+	if err != nil {
+		return Result[string, any]{Error: err.Error()}
+	}
+	r, err := neturl.Parse(relative)
+	if err != nil {
+		return Result[string, any]{Error: err.Error()}
+	}
+	return Result[string, any]{Value: b.ResolveReference(r).String(), IsOk: true}
+}
+
+func (u Url) toString() string {
+	out := neturl.URL{
+		Scheme: u.scheme,
+		Host:   u.host,
+		Path:   u.path,
+	}
+	if u.port != nil && u.host != "" {
+		out.Host = u.host + ":" + strconv.Itoa(*u.port)
+	}
+	if u.fragment != nil {
+		out.Fragment = *u.fragment
+	}
+	q := neturl.Values{}
+	if u.queryAll != nil {
+		for key, values := range u.queryAll {
+			for _, value := range values {
+				q.Add(key, value)
+			}
+		}
+	} else {
+		for key, value := range u.query {
+			q.Set(key, value)
+		}
+	}
+	out.RawQuery = q.Encode()
+	return out.String()
+}
+
+func (u Url) queryValues(key string) []string {
+	if u.queryAll != nil {
+		return append([]string(nil), u.queryAll[key]...)
+	}
+	if value, ok := u.query[key]; ok {
+		return []string{value}
+	}
+	return []string{}
 }
 `)
 	}

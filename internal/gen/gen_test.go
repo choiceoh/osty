@@ -11,6 +11,7 @@ import (
 	"github.com/osty/osty/internal/gen"
 	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/stdlib"
 )
 
 // transpile runs the full pipeline on a source snippet and returns the
@@ -25,6 +26,20 @@ func transpile(t *testing.T, src string) ([]byte, error) {
 	}
 	res := resolve.File(file, resolve.NewPrelude())
 	chk := check.File(file, res)
+	return gen.Generate("main", file, res, chk)
+}
+
+func transpileWithStdlib(t *testing.T, src string) ([]byte, error) {
+	t.Helper()
+	reg := stdlib.LoadCached()
+	file, parseDiags := parser.ParseDiagnostics([]byte(src))
+	for _, d := range parseDiags {
+		if d.Severity.String() == "error" {
+			t.Fatalf("parse error: %s", d.Message)
+		}
+	}
+	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), reg)
+	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives})
 	return gen.Generate("main", file, res, chk)
 }
 
