@@ -454,6 +454,18 @@ func (g *gen) emitFor(f *ast.ForStmt) {
 		g.emitBlock(f.Body)
 		return
 	}
+	// Channel iteration — Go's `for x := range ch` form (single value).
+	if iterT := g.typeOf(f.Iter); iterT != nil {
+		if n, ok := iterT.(*types.Named); ok && n.Sym != nil &&
+			(n.Sym.Name == "Chan" || n.Sym.Name == "Channel") {
+			safe := mangleIdent(name)
+			g.body.writef("for %s := range ", safe)
+			g.emitExpr(f.Iter)
+			g.body.write(" ")
+			g.emitBlock(f.Body)
+			return
+		}
+	}
 	// Generic: `for _, name := range iter`.
 	safe := mangleIdent(name)
 	g.body.writef("for _, %s := range ", safe)

@@ -3,6 +3,7 @@ package check
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
@@ -71,6 +72,14 @@ type Opts struct {
 	// declared on `#[intrinsic_methods(...)]` placeholder structs are
 	// reachable via `x.name()` calls on primitive receivers.
 	Primitives map[types.PrimitiveKind]map[string]*ast.FnDecl
+
+	// OnDecl, if non-nil, is invoked for every top-level declaration
+	// the checker visits, once per pass ("collect" or "check"), with
+	// the wall-clock time spent in that pass. Used by `osty pipeline
+	// --per-decl` to surface which declarations dominate the front-end
+	// budget. The callback must be safe to call from the same goroutine
+	// the checker runs on; no concurrent invocation is implied.
+	OnDecl func(decl ast.Decl, phase string, dur time.Duration)
 }
 
 // firstOpt returns the first Opts in the slice, or a zero value when
@@ -96,6 +105,7 @@ func File(f *ast.File, rr *resolve.Result, opts ...Opts) *Result {
 	c := newChecker()
 	c.file = f
 	c.resolved = rr
+	c.onDecl = firstOpt(opts).OnDecl
 	c.initBuiltins()
 	c.indexPrimitiveMethods(firstOpt(opts).Primitives)
 	c.indexSymbolsFrom(rr)
@@ -125,6 +135,7 @@ func Package(pkg *resolve.Package, pr *resolve.PackageResult, opts ...Opts) *Res
 	// scope gets us there — all files in a package share the same
 	// prelude through the package scope.
 	c.resolved = fileResult(pkg.Files[0])
+	c.onDecl = firstOpt(opts).OnDecl
 	c.initBuiltins()
 	c.indexPrimitiveMethods(firstOpt(opts).Primitives)
 
@@ -143,7 +154,7 @@ func Package(pkg *resolve.Package, pr *resolve.PackageResult, opts ...Opts) *Res
 		c.file = pf.File
 		c.resolved = fileResult(pf)
 		for _, d := range pf.File.Decls {
-			c.collect(d)
+			c.timedCollect(d)
 		}
 	}
 
@@ -152,7 +163,7 @@ func Package(pkg *resolve.Package, pr *resolve.PackageResult, opts ...Opts) *Res
 		c.file = pf.File
 		c.resolved = fileResult(pf)
 		for _, d := range pf.File.Decls {
-			c.checkDecl(d)
+			c.timedCheckDecl(d)
 		}
 	}
 
@@ -333,6 +344,10 @@ type checker struct {
 	file     *ast.File
 	resolved *resolve.Result
 	result   *Result
+
+	// onDecl mirrors Opts.OnDecl. When non-nil, the per-decl loops in
+	// run() and Package() report wall-clock time per pass.
+	onDecl func(decl ast.Decl, phase string, dur time.Duration)
 
 	// syms holds per-symbol type info built during pass 1.
 	syms map[*resolve.Symbol]*symInfo
@@ -665,12 +680,12 @@ func (c *checker) run() {
 	// source-order, so pass-2 body checking can call anything declared
 	// anywhere in the file.
 	for _, d := range c.file.Decls {
-		c.collect(d)
+		c.timedCollect(d)
 	}
 
 	// Pass 2: check bodies.
 	for _, d := range c.file.Decls {
-		c.checkDecl(d)
+		c.timedCheckDecl(d)
 	}
 
 	// Pass 3: script top-level statements, as the implicit main.
@@ -678,6 +693,31 @@ func (c *checker) run() {
 		e := &env{retType: types.Unit}
 		c.checkStmts(c.file.Stmts, e)
 	}
+}
+
+// timedCollect / timedCheckDecl wrap the per-decl passes with a
+// wall-clock timer that fires only when an OnDecl callback is wired
+// (the no-callback common path stays a single function call). The
+// reported phase name matches the pass: "collect" for pass 1, "check"
+// for pass 2.
+func (c *checker) timedCollect(d ast.Decl) {
+	if c.onDecl == nil {
+		c.collect(d)
+		return
+	}
+	t0 := time.Now()
+	c.collect(d)
+	c.onDecl(d, "collect", time.Since(t0))
+}
+
+func (c *checker) timedCheckDecl(d ast.Decl) {
+	if c.onDecl == nil {
+		c.checkDecl(d)
+		return
+	}
+	t0 := time.Now()
+	c.checkDecl(d)
+	c.onDecl(d, "check", time.Since(t0))
 }
 
 // symbol returns the resolver's symbol for an Ident, or nil if the

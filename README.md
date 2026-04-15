@@ -141,6 +141,11 @@ osty lint FILE|DIR     # style + correctness warnings (L0xxx codes)
 osty fmt FILE          # format to canonical style (see --check, --write)
 osty gen FILE          # transpile to Go source (see -o, --package)
 osty lsp               # run the language server on stdio
+osty explain [CODE]    # describe a diagnostic (Exxxx/Wxxxx/Lxxxx); no arg lists every code
+osty pipeline FILE|DIR # run every front-end phase; per-stage timing
+                       # (--json, --trace, --per-decl, --gen, --cpuprofile,
+                       #  --memprofile, --baseline)
+                       # DIR may be a single package or a workspace root
 ```
 
 Global flags (precede the subcommand):
@@ -150,6 +155,10 @@ Global flags (precede the subcommand):
 - `--json` — emit diagnostics as NDJSON on stderr (for tooling)
 - `--strict` — `lint`-only: exit 1 on any warning (CI mode)
 - `--scopes` — `resolve`-only: also dump the nested scope tree
+- `--trace` — stream per-phase timing (lex/parse/resolve/check/lint) to stderr;
+  applies to `tokens`, `parse`, `resolve`, `check`, `typecheck`, `lint`
+- `--explain` — after diagnostics, append the `osty explain CODE` text for each
+  unique code; applies to `check`, `typecheck`, `resolve`, `lint`, `parse`, `tokens`
 
 `fmt`-specific flags (after the subcommand):
 
