@@ -51,6 +51,16 @@ type Server struct {
 // comfortably; configurable per-deployment.
 const defaultMaxTarball = 32 << 20 // 32 MiB
 
+// Request-path constants: the verb segment of
+// /v1/crates/<name>/<ver>/<verb> and the Authorization scheme we
+// accept. Kept here so spelling changes are a single-line edit.
+const (
+	verbTar    = "tar"
+	verbYank   = "yank"
+	verbUnyank = "unyank"
+	authScheme = "Bearer "
+)
+
 // ServeHTTP dispatches requests to the right handler. Keeping the
 // routing inline (vs. pulling in a router) avoids a dependency; the
 // path space is small enough that hand-written matching is clearer.
@@ -92,10 +102,16 @@ func splitPath(p string) []string {
 	return strings.Split(p, "/")
 }
 
+// methodNotAllowed sets the Allow header and writes a 405. Centralised
+// so every handler rejects wrong methods identically.
+func methodNotAllowed(w http.ResponseWriter, allowed string) {
+	w.Header().Set("Allow", allowed)
+	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+}
+
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request, name string) {
 	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", "GET")
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		methodNotAllowed(w, "GET")
 		return
 	}
 	idx, err := s.Storage.ReadIndex(name)
@@ -114,24 +130,22 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request, name string
 
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request, name, version, verb string) {
 	switch verb {
-	case "tar":
+	case verbTar:
 		if r.Method != http.MethodGet {
-			w.Header().Set("Allow", "GET")
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			methodNotAllowed(w, "GET")
 			return
 		}
 		s.serveTarball(w, r, name, version)
-	case "yank", "unyank":
+	case verbYank, verbUnyank:
 		if r.Method != http.MethodPost {
-			w.Header().Set("Allow", "POST")
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			methodNotAllowed(w, "POST")
 			return
 		}
 		if err := s.authorizeRequest(r, name); err != nil {
 			s.writeAuthError(w, err)
 			return
 		}
-		if err := s.Storage.Yank(name, version, verb == "yank"); err != nil {
+		if err := s.Storage.Yank(name, version, verb == verbYank); err != nil {
 			if os.IsNotExist(err) {
 				http.Error(w, "version not found", http.StatusNotFound)
 				return
@@ -167,8 +181,7 @@ func (s *Server) serveTarball(w http.ResponseWriter, r *http.Request, name, vers
 
 func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request, name, version string) {
 	if r.Method != http.MethodPut {
-		w.Header().Set("Allow", "PUT")
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		methodNotAllowed(w, "PUT")
 		return
 	}
 	if err := s.authorizeRequest(r, name); err != nil {
@@ -228,8 +241,8 @@ func (s *Server) authorizeRequest(r *http.Request, pkg string) error {
 		return ErrUnauthorized
 	}
 	token := ""
-	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
-		token = strings.TrimPrefix(h, "Bearer ")
+	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, authScheme) {
+		token = strings.TrimPrefix(h, authScheme)
 	}
 	return s.Auth.Authorize(token, pkg)
 }

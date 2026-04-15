@@ -21,6 +21,8 @@
 package registry
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -32,6 +34,11 @@ import (
 	"sync"
 	"time"
 )
+
+// hashPrefix is the algorithm tag used in IndexEntry.Checksum values.
+// Kept local so registry stays a leaf package (pkgmgr already imports
+// registry; importing pkgmgr here would close the cycle).
+const hashPrefix = "sha256:"
 
 // Storage persists the registry's index and blobs under Root.
 type Storage struct {
@@ -157,15 +164,20 @@ func (s *Storage) Publish(entry PublishEntry, tarball io.Reader) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Reject duplicates before writing anything.
-	if existing, err := s.readIndexLocked(entry.Name); err == nil {
-		for _, v := range existing.Versions {
-			if v.Version == entry.Version {
-				return ErrVersionExists
-			}
+	// Load the existing index up front; we need it both to reject
+	// duplicates and, on success, to append the new version. Reading
+	// it twice would be wasted I/O under the write lock.
+	idx, err := s.readIndexLocked(entry.Name)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return err
 		}
-	} else if !os.IsNotExist(err) {
-		return err
+		idx = &IndexEntry{Name: entry.Name}
+	}
+	for _, v := range idx.Versions {
+		if v.Version == entry.Version {
+			return ErrVersionExists
+		}
 	}
 
 	pkgDir := filepath.Join(s.Root, "crates", entry.Name, entry.Version)
@@ -181,10 +193,8 @@ func (s *Storage) Publish(entry PublishEntry, tarball io.Reader) error {
 	if err != nil {
 		return err
 	}
-	hw := newHashWriter()
-	mw := io.MultiWriter(tmp, hw)
-	n, err := io.Copy(mw, tarball)
-	if err != nil {
+	h := sha256.New()
+	if _, err := io.Copy(io.MultiWriter(tmp, h), tarball); err != nil {
 		tmp.Close()
 		os.Remove(tmpPath)
 		return err
@@ -193,14 +203,13 @@ func (s *Storage) Publish(entry PublishEntry, tarball io.Reader) error {
 		os.Remove(tmpPath)
 		return err
 	}
-	got := hw.checksum()
+	got := hashPrefix + hex.EncodeToString(h.Sum(nil))
 	if entry.Checksum != "" && entry.Checksum != got {
 		os.Remove(tmpPath)
 		return fmt.Errorf("%w: advertised %s, got %s",
 			ErrChecksumMismatch, entry.Checksum, got)
 	}
 	entry.Checksum = got
-	entry.Size = n
 	if err := os.Rename(tmpPath, tarPath); err != nil {
 		os.Remove(tmpPath)
 		return err
@@ -214,14 +223,6 @@ func (s *Storage) Publish(entry PublishEntry, tarball io.Reader) error {
 		return err
 	}
 
-	// Update the index.
-	idx, err := s.readIndexLocked(entry.Name)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			return err
-		}
-		idx = &IndexEntry{Name: entry.Name}
-	}
 	idx.Versions = append(idx.Versions, Version{
 		Version:      entry.Version,
 		Checksum:     entry.Checksum,
@@ -278,7 +279,6 @@ type PublishEntry struct {
 	Dependencies []VersionDependency
 	Features     map[string][]string
 	Metadata     PublishMetadata
-	Size         int64 // set by Storage.Publish after reading the tarball
 }
 
 // sortVersions orders an index's versions by (parsed semver) so

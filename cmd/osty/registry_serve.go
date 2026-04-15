@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -184,17 +185,13 @@ func runRegistryAddToken(args []string) {
 		subject, all, rec.Packages, path)
 }
 
-// splitCSV breaks "a,b,c" into []string{"a","b","c"}, trimming
-// empty entries so `--pkg a,,b` still gives [a b].
+// splitCSV breaks "a,b,c" into []string{"a","b","c"}, trimming empty
+// entries so `--pkg a, ,b` still gives [a b].
 func splitCSV(s string) []string {
 	var out []string
-	start := 0
-	for i := 0; i <= len(s); i++ {
-		if i == len(s) || s[i] == ',' {
-			if i > start {
-				out = append(out, s[start:i])
-			}
-			start = i + 1
+	for _, part := range strings.Split(s, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			out = append(out, p)
 		}
 	}
 	return out
