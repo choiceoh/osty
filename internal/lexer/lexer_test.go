@@ -451,6 +451,130 @@ func TestLexTripleString(t *testing.T) {
 	}
 }
 
+// TestLexBOMStripped: a leading UTF-8 BOM (EF BB BF) is stripped so the
+// next token is the real first token of the source. §1.1 does not
+// mention BOMs but Windows editors occasionally insert them, and the
+// file would otherwise be rejected as illegal bytes.
+func TestLexBOMStripped(t *testing.T) {
+	src := append([]byte{0xEF, 0xBB, 0xBF}, []byte(`fn main() {}`)...)
+	l := New(src)
+	toks := l.Lex()
+	if errs := l.Errors(); len(errs) != 0 {
+		t.Fatalf("unexpected lex errors after BOM: %v", errs)
+	}
+	if toks[0].Kind != token.FN {
+		t.Fatalf("first token = %v; want FN (BOM should be stripped)", toks[0].Kind)
+	}
+	// Line/column of `fn` should still be 1:1, not 1:4 — offset counts
+	// post-strip, so the user-facing position matches what the editor shows.
+	if toks[0].Pos.Line != 1 || toks[0].Pos.Column != 1 {
+		t.Errorf("fn pos = %v; want 1:1", toks[0].Pos)
+	}
+}
+
+// TestLexBOMOnlyLeading: a U+FEFF inside a string literal is preserved
+// (the stripping rule only fires for the three-byte prefix at offset 0).
+func TestLexBOMOnlyLeading(t *testing.T) {
+	src := "\"a\uFEFFb\""
+	toks := lexStr(src)
+	if toks[0].Kind != token.STRING {
+		t.Fatalf("kind = %v; want STRING", toks[0].Kind)
+	}
+	if got, want := toks[0].Parts[0].Text, "a\uFEFFb"; got != want {
+		t.Errorf("text = %q; want %q", got, want)
+	}
+}
+
+// TestLexShebangUTF8: a shebang line that contains multi-byte runes in
+// a trailing comment must not desynchronize column counting — the
+// following token should still be at column 1 of line 2.
+func TestLexShebangUTF8(t *testing.T) {
+	src := "#!/usr/bin/env osty — 한글\nfn main() {}\n"
+	l := New([]byte(src))
+	toks := l.Lex()
+	if errs := l.Errors(); len(errs) != 0 {
+		t.Fatalf("unexpected lex errors: %v", errs)
+	}
+	if toks[0].Kind != token.FN {
+		t.Fatalf("first token = %v; want FN", toks[0].Kind)
+	}
+	if toks[0].Pos.Line != 2 || toks[0].Pos.Column != 1 {
+		t.Errorf("fn pos = %v; want 2:1", toks[0].Pos)
+	}
+}
+
+// TestLexEmptyCharLiteral: `''` is rejected with a dedicated
+// "empty char literal" diagnostic rather than the confusing
+// "expected closing '" path that used to swallow the closing quote
+// as the char's value.
+func TestLexEmptyCharLiteral(t *testing.T) {
+	l := New([]byte(`''`))
+	toks := l.Lex()
+	errs := l.Errors()
+	if len(errs) == 0 {
+		t.Fatalf("expected a lex error for `''`, got none; tokens=%v", toks)
+	}
+	if toks[0].Kind != token.CHAR {
+		t.Fatalf("kind = %v; want CHAR (recovery token)", toks[0].Kind)
+	}
+	found := false
+	for _, e := range errs {
+		if e.Message == "empty char literal" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("no `empty char literal` diagnostic; got %v", errs)
+	}
+}
+
+// TestLexEmptyByteLiteral: `b''` is rejected analogously to `''`.
+func TestLexEmptyByteLiteral(t *testing.T) {
+	l := New([]byte(`b''`))
+	toks := l.Lex()
+	errs := l.Errors()
+	if len(errs) == 0 {
+		t.Fatalf("expected a lex error for `b''`, got none; tokens=%v", toks)
+	}
+	if toks[0].Kind != token.BYTE {
+		t.Fatalf("kind = %v; want BYTE (recovery token)", toks[0].Kind)
+	}
+	found := false
+	for _, e := range errs {
+		if e.Message == "empty byte literal" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("no `empty byte literal` diagnostic; got %v", errs)
+	}
+}
+
+// TestLexUnterminatedCharAtEOL: `'a` followed by a newline reports an
+// unterminated-char diagnostic instead of swallowing the newline as
+// the char's value and desynchronizing line numbers.
+func TestLexUnterminatedCharAtEOL(t *testing.T) {
+	src := "'\nlet d = 1\n"
+	l := New([]byte(src))
+	_ = l.Lex()
+	errs := l.Errors()
+	if len(errs) == 0 {
+		t.Fatalf("expected a lex error for unterminated char, got none")
+	}
+	found := false
+	for _, e := range errs {
+		if e.Message == "unterminated char literal" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("no `unterminated char literal` diagnostic; got %v", errs)
+	}
+}
+
 // TestLexFatArrowRejected verifies that `=>` is reported as a lex error
 // (§1.7 / OSTY_GRAMMAR_v0.3 O7: "`=>` is not a token. Any occurrence of
 // `=>` in source is a lex error"). The lexer consumes both bytes and
