@@ -457,6 +457,405 @@ func TestRandomAndURLModulesResolve(t *testing.T) {
 	}
 }
 
+// TestMathModuleCoverage pins the std.math Tier 2 surface from spec
+// §10.17: constants plus the Float-valued function set. The stdlib
+// loader only needs signatures here; the transpiler owns the Go math
+// lowering for executable code.
+func TestMathModuleCoverage(t *testing.T) {
+	reg := Load()
+	mod := reg.Modules["math"]
+	if mod == nil || mod.Package == nil {
+		t.Fatal("std.math not loaded")
+	}
+	for _, name := range []string{
+		"PI", "E", "TAU", "INFINITY", "NAN",
+		"sin", "cos", "tan", "asin", "acos", "atan", "atan2",
+		"sinh", "cosh", "tanh", "exp", "log", "log2", "log10",
+		"sqrt", "cbrt", "pow", "floor", "ceil", "round", "trunc",
+		"abs", "min", "max", "hypot",
+	} {
+		sym := mod.Package.PkgScope.LookupLocal(name)
+		if sym == nil {
+			t.Errorf("std.math missing export %q", name)
+			continue
+		}
+		if !sym.Pub {
+			t.Errorf("std.math export %q is not pub", name)
+		}
+	}
+}
+
+// TestMathPackageTypeChecks covers the user-facing front-end path:
+// importing std.math, reading constants, and calling functions should
+// produce concrete Float types instead of opaque package-member errors.
+func TestMathPackageTypeChecks(t *testing.T) {
+	src := []byte(`use std.math
+
+pub fn score(r: Float) -> Float {
+    let circle: Float = math.PI * r * r
+    let angle: Float = math.sin(math.PI / 4.0)
+    let scaled: Float = math.log(100.0, 10.0)
+    math.max(circle, angle) + scaled
+}
+`)
+	file, parseDiags := parser.ParseDiagnostics(src)
+	for _, d := range parseDiags {
+		if d.Severity == diag.Error {
+			t.Fatalf("parse error: %s", d.Error())
+		}
+	}
+	reg := Load()
+	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), reg)
+	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives})
+	for _, d := range append(res.Diags, chk.Diags...) {
+		if d.Severity == diag.Error {
+			t.Errorf("unexpected std.math diagnostic: %s", d.Error())
+		}
+	}
+}
+
+// TestRegexModuleCoverage pins the std.regex surface from spec §10.9:
+// compile, Regex methods, Match fields, and Captures accessors.
+func TestRegexModuleCoverage(t *testing.T) {
+	reg := Load()
+	mod := reg.Modules["regex"]
+	if mod == nil || mod.Package == nil {
+		t.Fatal("std.regex not loaded")
+	}
+	for _, name := range []string{"Regex", "RegexError", "Match", "Captures", "compile"} {
+		sym := mod.Package.PkgScope.LookupLocal(name)
+		if sym == nil {
+			t.Errorf("std.regex missing export %q", name)
+			continue
+		}
+		if !sym.Pub {
+			t.Errorf("std.regex export %q is not pub", name)
+		}
+	}
+}
+
+func TestRegexPackageTypeChecks(t *testing.T) {
+	src := []byte(`use std.regex
+
+pub fn hasWord(text: String) -> Bool {
+    let re = regex.compile("[a-z]+").unwrap()
+    re.matches(text)
+}
+
+pub fn firstWord(text: String) -> String {
+    let re = regex.compile("[a-z]+").unwrap()
+    match re.find(text) {
+        Some(m) -> m.text,
+        None -> "",
+    }
+}
+
+pub fn namedWord(text: String) -> String {
+    let re = regex.compile("(?P<word>[a-z]+)").unwrap()
+    match re.captures(text) {
+        Some(caps) -> match caps.named("word") {
+            Some(word) -> word,
+            None -> "",
+        },
+        None -> "",
+    }
+}
+`)
+	file, parseDiags := parser.ParseDiagnostics(src)
+	for _, d := range parseDiags {
+		if d.Severity == diag.Error {
+			t.Fatalf("parse error: %s", d.Error())
+		}
+	}
+	reg := Load()
+	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), reg)
+	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives})
+	for _, d := range append(res.Diags, chk.Diags...) {
+		if d.Severity == diag.Error {
+			t.Errorf("unexpected std.regex diagnostic: %s", d.Error())
+		}
+	}
+}
+
+func TestEncodingModuleCoverage(t *testing.T) {
+	reg := Load()
+	mod := reg.Modules["encoding"]
+	if mod == nil || mod.Package == nil {
+		t.Fatal("std.encoding not loaded")
+	}
+	for _, name := range []string{"Base64Url", "Base64", "Hex", "UrlEncoding", "base64", "hex", "url"} {
+		sym := mod.Package.PkgScope.LookupLocal(name)
+		if sym == nil {
+			t.Errorf("std.encoding missing export %q", name)
+			continue
+		}
+		if !sym.Pub {
+			t.Errorf("std.encoding export %q is not pub", name)
+		}
+	}
+}
+
+func TestEncodingPackageTypeChecks(t *testing.T) {
+	src := []byte(`use std.encoding
+
+pub fn roundTrip(text: String) -> Bool {
+    let raw: Bytes = encoding.hex.decode("6869").unwrap()
+    let b64: String = encoding.base64.encode(raw)
+    let decoded: Bytes = encoding.base64.decode(b64).unwrap()
+    let urlB64: String = encoding.base64.url.encode(decoded)
+    let urlDecoded: Bytes = encoding.base64.url.decode(urlB64).unwrap()
+    let safe: String = encoding.url.encode(text)
+    let back: String = encoding.url.decode(safe).unwrap()
+    back == text
+}
+`)
+	file, parseDiags := parser.ParseDiagnostics(src)
+	for _, d := range parseDiags {
+		if d.Severity == diag.Error {
+			t.Fatalf("parse error: %s", d.Error())
+		}
+	}
+	reg := Load()
+	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), reg)
+	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives})
+	for _, d := range append(res.Diags, chk.Diags...) {
+		if d.Severity == diag.Error {
+			t.Errorf("unexpected std.encoding diagnostic: %s", d.Error())
+		}
+	}
+}
+
+func TestEnvModuleCoverage(t *testing.T) {
+	reg := Load()
+	mod := reg.Modules["env"]
+	if mod == nil || mod.Package == nil {
+		t.Fatal("std.env not loaded")
+	}
+	for _, name := range []string{"args", "get", "require", "set", "unset", "vars", "currentDir", "setCurrentDir"} {
+		sym := mod.Package.PkgScope.LookupLocal(name)
+		if sym == nil {
+			t.Errorf("std.env missing export %q", name)
+			continue
+		}
+		if !sym.Pub {
+			t.Errorf("std.env export %q is not pub", name)
+		}
+	}
+}
+
+func TestEnvPackageTypeChecks(t *testing.T) {
+	src := []byte(`use std.env
+
+pub fn smoke(name: String) -> Result<String, Error> {
+    let args: List<String> = env.args()
+    let maybe: String? = env.get(name)
+    env.set(name, "x")?
+    let required: String = env.require(name)?
+    let all: Map<String, String> = env.vars()
+    env.unset(name)?
+    let cwd: String = env.currentDir()?
+    env.setCurrentDir(cwd)?
+    Ok(required)
+}
+`)
+	file, parseDiags := parser.ParseDiagnostics(src)
+	for _, d := range parseDiags {
+		if d.Severity == diag.Error {
+			t.Fatalf("parse error: %s", d.Error())
+		}
+	}
+	reg := Load()
+	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), reg)
+	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives})
+	for _, d := range append(res.Diags, chk.Diags...) {
+		if d.Severity == diag.Error {
+			t.Errorf("unexpected std.env diagnostic: %s", d.Error())
+		}
+	}
+}
+
+func TestCSVModuleCoverage(t *testing.T) {
+	reg := Load()
+	mod := reg.Modules["csv"]
+	if mod == nil || mod.Package == nil {
+		t.Fatal("std.csv not loaded")
+	}
+	for _, name := range []string{"CsvOptions", "encode", "encodeWith", "decode", "decodeHeaders", "decodeWith"} {
+		sym := mod.Package.PkgScope.LookupLocal(name)
+		if sym == nil {
+			t.Errorf("std.csv missing export %q", name)
+			continue
+		}
+		if !sym.Pub {
+			t.Errorf("std.csv export %q is not pub", name)
+		}
+	}
+}
+
+func TestCSVPackageTypeChecks(t *testing.T) {
+	src := []byte(`use std.csv
+
+pub fn smoke(text: String) -> Result<String, Error> {
+    let rows: List<List<String>> = csv.decode(text)?
+    let records: List<Map<String, String>> = csv.decodeHeaders(text)?
+    let opts = csv.CsvOptions { delimiter: ';', quote: '"', trimSpace: true }
+    let out: String = csv.encodeWith(rows, opts)
+    let again: List<List<String>> = csv.decodeWith(out, opts)?
+    Ok(csv.encode(again))
+}
+`)
+	file, parseDiags := parser.ParseDiagnostics(src)
+	for _, d := range parseDiags {
+		if d.Severity == diag.Error {
+			t.Fatalf("parse error: %s", d.Error())
+		}
+	}
+	reg := Load()
+	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), reg)
+	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives})
+	for _, d := range append(res.Diags, chk.Diags...) {
+		if d.Severity == diag.Error {
+			t.Errorf("unexpected std.csv diagnostic: %s", d.Error())
+		}
+	}
+}
+
+func TestCompressModuleCoverage(t *testing.T) {
+	reg := Load()
+	mod := reg.Modules["compress"]
+	if mod == nil || mod.Package == nil {
+		t.Fatal("std.compress not loaded")
+	}
+	for _, name := range []string{"Gzip", "gzip"} {
+		sym := mod.Package.PkgScope.LookupLocal(name)
+		if sym == nil {
+			t.Errorf("std.compress missing export %q", name)
+			continue
+		}
+		if !sym.Pub {
+			t.Errorf("std.compress export %q is not pub", name)
+		}
+	}
+}
+
+func TestCompressPackageTypeChecks(t *testing.T) {
+	src := []byte(`use std.compress
+
+pub fn roundTrip(data: Bytes) -> Bytes {
+    let zipped: Bytes = compress.gzip.encode(data)
+    compress.gzip.decode(zipped).unwrap()
+}
+`)
+	file, parseDiags := parser.ParseDiagnostics(src)
+	for _, d := range parseDiags {
+		if d.Severity == diag.Error {
+			t.Fatalf("parse error: %s", d.Error())
+		}
+	}
+	reg := Load()
+	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), reg)
+	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives})
+	for _, d := range append(res.Diags, chk.Diags...) {
+		if d.Severity == diag.Error {
+			t.Errorf("unexpected std.compress diagnostic: %s", d.Error())
+		}
+	}
+}
+
+func TestCryptoModuleCoverage(t *testing.T) {
+	reg := Load()
+	mod := reg.Modules["crypto"]
+	if mod == nil || mod.Package == nil {
+		t.Fatal("std.crypto not loaded")
+	}
+	for _, name := range []string{
+		"Hmac", "hmac",
+		"sha256", "sha512", "sha1", "md5",
+		"randomBytes", "constantTimeEq",
+	} {
+		sym := mod.Package.PkgScope.LookupLocal(name)
+		if sym == nil {
+			t.Errorf("std.crypto missing export %q", name)
+			continue
+		}
+		if !sym.Pub {
+			t.Errorf("std.crypto export %q is not pub", name)
+		}
+	}
+}
+
+func TestCryptoPackageTypeChecks(t *testing.T) {
+	src := []byte(`use std.crypto
+
+pub fn digest(data: Bytes, key: Bytes) -> Bool {
+    let sha: Bytes = crypto.sha256(data)
+    let mac: Bytes = crypto.hmac.sha256(key, data)
+    let secret: Bytes = crypto.randomBytes(8)
+    crypto.constantTimeEq(sha, crypto.sha256(data)) && secret.len() == 8 && mac.len() == 32
+}
+`)
+	file, parseDiags := parser.ParseDiagnostics(src)
+	for _, d := range parseDiags {
+		if d.Severity == diag.Error {
+			t.Fatalf("parse error: %s", d.Error())
+		}
+	}
+	reg := Load()
+	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), reg)
+	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives})
+	for _, d := range append(res.Diags, chk.Diags...) {
+		if d.Severity == diag.Error {
+			t.Errorf("unexpected std.crypto diagnostic: %s", d.Error())
+		}
+	}
+}
+
+func TestUUIDModuleCoverage(t *testing.T) {
+	reg := Load()
+	mod := reg.Modules["uuid"]
+	if mod == nil || mod.Package == nil {
+		t.Fatal("std.uuid not loaded")
+	}
+	for _, name := range []string{"Uuid", "v4", "v7", "parse", "nil"} {
+		sym := mod.Package.PkgScope.LookupLocal(name)
+		if sym == nil {
+			t.Errorf("std.uuid missing export %q", name)
+			continue
+		}
+		if !sym.Pub {
+			t.Errorf("std.uuid export %q is not pub", name)
+		}
+	}
+}
+
+func TestUUIDPackageTypeChecks(t *testing.T) {
+	src := []byte(`use std.uuid
+
+pub fn smoke() -> Bool {
+    let id = uuid.v4()
+    let text: String = id.toString()
+    let parsed = uuid.parse(text).unwrap()
+    let sortable = uuid.v7()
+    let zero = uuid.nil()
+    parsed.toBytes().len() == 16 && sortable.toBytes().len() == 16 && zero.toString() == "00000000-0000-0000-0000-000000000000"
+}
+`)
+	file, parseDiags := parser.ParseDiagnostics(src)
+	for _, d := range parseDiags {
+		if d.Severity == diag.Error {
+			t.Fatalf("parse error: %s", d.Error())
+		}
+	}
+	reg := Load()
+	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), reg)
+	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives})
+	for _, d := range append(res.Diags, chk.Diags...) {
+		if d.Severity == diag.Error {
+			t.Errorf("unexpected std.uuid diagnostic: %s", d.Error())
+		}
+	}
+}
+
 // TestPrimitivesNotExposedAsModule pins that the `primitives/` stubs
 // populate the Primitives table only — they must not leak as if they
 // were `std.int` or `std.float` modules addressable from user code.

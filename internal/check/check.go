@@ -289,6 +289,7 @@ func newChecker() *checker {
 		syms:              map[*resolve.Symbol]*symInfo{},
 		declToSym:         map[ast.Node]*resolve.Symbol{},
 		externalCollected: map[*resolve.Package]bool{},
+		externalPkgs:      map[*resolve.Symbol]*resolve.Package{},
 	}
 }
 
@@ -376,6 +377,12 @@ type checker struct {
 	// packages, but package calls like `random.seeded()` still need the
 	// callee return type and the returned struct's methods.
 	externalCollected map[*resolve.Package]bool
+
+	// externalPkgs remembers which loaded package introduced a Named
+	// type discovered through a package call. Stdlib modules are
+	// resolved but not collected by the user's checker pass; this lets
+	// later field/method lookups walk their AST signatures.
+	externalPkgs map[*resolve.Symbol]*resolve.Package
 }
 
 func (c *checker) ensurePackageCollected(pkg *resolve.Package) {

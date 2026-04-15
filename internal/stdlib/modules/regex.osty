@@ -1,0 +1,59 @@
+// std.regex — RE2 regular expressions.
+
+pub struct Regex {
+    pub fn matches(self, text: String) -> Bool {
+        false
+    }
+
+    pub fn find(self, text: String) -> Match? {
+        None
+    }
+
+    pub fn findAll(self, text: String) -> List<Match> {
+        []
+    }
+
+    pub fn captures(self, text: String) -> Captures? {
+        None
+    }
+
+    pub fn capturesAll(self, text: String) -> List<Captures> {
+        []
+    }
+
+    pub fn replace(self, text: String, replacement: String) -> String {
+        text
+    }
+
+    pub fn replaceAll(self, text: String, replacement: String) -> String {
+        text
+    }
+
+    pub fn split(self, text: String) -> List<String> {
+        []
+    }
+}
+
+pub struct RegexError {
+    pub message: String
+}
+
+pub struct Match {
+    pub text: String,
+    pub start: Int,
+    pub end: Int,
+}
+
+pub struct Captures {
+    pub fn get(self, i: Int) -> String? {
+        None
+    }
+
+    pub fn named(self, name: String) -> String? {
+        None
+    }
+}
+
+pub fn compile(pattern: String) -> Result<Regex, RegexError> {
+    Ok(Regex {})
+}
