@@ -1,14 +1,65 @@
 // std.collections — List<T>, Map<K, V>, Set<T>.
 //
 // These names are already auto-imported via the prelude, so user code
-// rarely writes `use std.collections`. The module-local structs are
-// the landing pad for the eventual prelude rebind, at which point the
-// prelude's built-in `List`/`Map`/`Set` symbols will point here.
-// Method signatures from spec §10.6 will be added alongside the rest
-// of the stdlib's method bodies.
+// rarely writes `use std.collections`. The module-local structs provide
+// the canonical signature surface for the collection methods in spec
+// §10.6. Runtime lowering is intrinsic because these types map directly
+// to Go slices/maps in the current backend.
 
-pub struct List<T> {}
+pub struct List<T> {
+    pub fn len(self) -> Int
+    pub fn isEmpty(self) -> Bool
+    pub fn first(self) -> T?
+    pub fn last(self) -> T?
+    pub fn get(self, index: Int) -> T?
 
-pub struct Map<K, V> {}
+    pub fn contains(self, item: T) -> Bool
+    pub fn indexOf(self, item: T) -> Int?
+    pub fn find(self, pred: fn(T) -> Bool) -> T?
 
-pub struct Set<T> {}
+    pub fn map<R>(self, f: fn(T) -> R) -> List<R>
+    pub fn filter(self, pred: fn(T) -> Bool) -> List<T>
+    pub fn fold<A>(self, init: A, f: fn(A, T) -> A) -> A
+    pub fn sorted(self) -> List<T>
+    pub fn sortedBy<K>(self, key: fn(T) -> K) -> List<T>
+    pub fn reversed(self) -> List<T>
+    pub fn appended(self, item: T) -> List<T>
+    pub fn concat(self, other: List<T>) -> List<T>
+    pub fn zip<U>(self, other: List<U>) -> List<(T, U)>
+    pub fn enumerate(self) -> List<(Int, T)>
+
+    pub fn push(mut self, item: T)
+    pub fn pop(mut self) -> T?
+    pub fn insert(mut self, index: Int, item: T)
+    pub fn removeAt(mut self, index: Int) -> T
+    pub fn sort(mut self)
+    pub fn reverse(mut self)
+    pub fn clear(mut self)
+}
+
+pub struct Map<K: Hashable, V> {
+    pub fn len(self) -> Int
+    pub fn isEmpty(self) -> Bool
+    pub fn get(self, key: K) -> V?
+    pub fn containsKey(self, key: K) -> Bool
+    pub fn keys(self) -> List<K>
+    pub fn values(self) -> List<V>
+    pub fn entries(self) -> List<(K, V)>
+
+    pub fn insert(mut self, key: K, value: V)
+    pub fn remove(mut self, key: K) -> V?
+    pub fn clear(mut self)
+}
+
+pub struct Set<T: Hashable> {
+    pub fn len(self) -> Int
+    pub fn isEmpty(self) -> Bool
+    pub fn contains(self, item: T) -> Bool
+    pub fn union(self, other: Set<T>) -> Set<T>
+    pub fn intersect(self, other: Set<T>) -> Set<T>
+    pub fn difference(self, other: Set<T>) -> Set<T>
+
+    pub fn insert(mut self, item: T)
+    pub fn remove(mut self, item: T) -> Bool
+    pub fn clear(mut self)
+}

@@ -429,6 +429,9 @@ func (g *gen) emitCall(c *ast.CallExpr) {
 		if g.emitRandomGenericMethod(c, f) {
 			return
 		}
+		if g.emitCollectionMethod(c, f) {
+			return
+		}
 		if g.emitStaticCall(f, c.Args) {
 			return
 		}
@@ -1180,6 +1183,651 @@ func (g *gen) emitRandomGenericMethod(c *ast.CallExpr, f *ast.FieldExpr) bool {
 	g.emitExpr(c.Args[0].Value)
 	g.body.write(")")
 	return true
+}
+
+func (g *gen) emitCollectionMethod(c *ast.CallExpr, f *ast.FieldExpr) bool {
+	n, ok := g.typeOf(f.X).(*types.Named)
+	if !ok || n.Sym == nil {
+		return false
+	}
+	switch n.Sym.Name {
+	case "List":
+		return g.emitListMethod(c, f, n)
+	case "Map":
+		return g.emitMapMethod(c, f, n)
+	case "Set":
+		return g.emitSetMethod(c, f, n)
+	}
+	return false
+}
+
+func (g *gen) emitListMethod(c *ast.CallExpr, f *ast.FieldExpr, n *types.Named) bool {
+	if len(n.Args) != 1 {
+		return false
+	}
+	elemGo := g.goType(n.Args[0])
+	listGo := g.goType(n)
+	target := g.renderExpr(f.X)
+	switch f.Name {
+	case "len":
+		if len(c.Args) != 0 {
+			return false
+		}
+		g.body.write("len(")
+		g.emitExpr(f.X)
+		g.body.write(")")
+	case "isEmpty":
+		if len(c.Args) != 0 {
+			return false
+		}
+		g.body.write("(len(")
+		g.emitExpr(f.X)
+		g.body.write(") == 0)")
+	case "iter":
+		if len(c.Args) != 0 {
+			return false
+		}
+		g.emitExpr(f.X)
+	case "toList":
+		if len(c.Args) != 0 {
+			return false
+		}
+		retGo := g.callReturnGo(c, listGo)
+		g.emitCollectionIIFE(retGo, f.X, func(xs string) {
+			g.body.writef("out := make(%s, len(%s))\n", retGo, xs)
+			g.body.writef("copy(out, %s)\n", xs)
+			g.body.writeln("return out")
+		})
+	case "first":
+		if len(c.Args) != 0 {
+			return false
+		}
+		g.emitCollectionIIFE("*"+elemGo, f.X, func(xs string) {
+			g.body.writef("if len(%s) == 0 { return nil }\n", xs)
+			g.body.writef("v := %s[0]\n", xs)
+			g.body.writeln("return &v")
+		})
+	case "last":
+		if len(c.Args) != 0 {
+			return false
+		}
+		g.emitCollectionIIFE("*"+elemGo, f.X, func(xs string) {
+			g.body.writef("if len(%s) == 0 { return nil }\n", xs)
+			g.body.writef("v := %s[len(%s)-1]\n", xs, xs)
+			g.body.writeln("return &v")
+		})
+	case "get":
+		if len(c.Args) != 1 {
+			return false
+		}
+		g.emitCollectionIIFE("*"+elemGo, f.X, func(xs string) {
+			idx := g.freshVar("_idx")
+			g.body.writef("%s := ", idx)
+			g.emitExpr(c.Args[0].Value)
+			g.body.nl()
+			g.body.writef("if %s < 0 || %s >= len(%s) { return nil }\n", idx, idx, xs)
+			g.body.writef("v := %s[%s]\n", xs, idx)
+			g.body.writeln("return &v")
+		})
+	case "contains":
+		if len(c.Args) != 1 {
+			return false
+		}
+		g.use("reflect")
+		g.emitCollectionIIFE("bool", f.X, func(xs string) {
+			item := g.freshVar("_item")
+			g.body.writef("%s := ", item)
+			g.emitExpr(c.Args[0].Value)
+			g.body.nl()
+			g.body.writef("for _, v := range %s { if reflect.DeepEqual(v, %s) { return true } }\n", xs, item)
+			g.body.writeln("return false")
+		})
+	case "indexOf":
+		if len(c.Args) != 1 {
+			return false
+		}
+		g.use("reflect")
+		g.emitCollectionIIFE("*int", f.X, func(xs string) {
+			item := g.freshVar("_item")
+			g.body.writef("%s := ", item)
+			g.emitExpr(c.Args[0].Value)
+			g.body.nl()
+			g.body.writef("for i, v := range %s { if reflect.DeepEqual(v, %s) { idx := i; return &idx } }\n", xs, item)
+			g.body.writeln("return nil")
+		})
+	case "find":
+		if len(c.Args) != 1 {
+			return false
+		}
+		g.emitCollectionIIFE("*"+elemGo, f.X, func(xs string) {
+			pred := g.freshVar("_pred")
+			g.body.writef("%s := ", pred)
+			g.emitExpr(c.Args[0].Value)
+			g.body.nl()
+			g.body.writef("for _, v := range %s { if %s(v) { found := v; return &found } }\n", xs, pred)
+			g.body.writeln("return nil")
+		})
+	case "map":
+		if len(c.Args) != 1 {
+			return false
+		}
+		retGo := g.callReturnGo(c, "[]any")
+		g.emitCollectionIIFE(retGo, f.X, func(xs string) {
+			fn := g.freshVar("_fn")
+			g.body.writef("%s := ", fn)
+			g.emitExpr(c.Args[0].Value)
+			g.body.nl()
+			g.body.writef("out := make(%s, len(%s))\n", retGo, xs)
+			g.body.writef("for i, v := range %s { out[i] = %s(v) }\n", xs, fn)
+			g.body.writeln("return out")
+		})
+	case "filter":
+		if len(c.Args) != 1 {
+			return false
+		}
+		retGo := g.callReturnGo(c, listGo)
+		g.emitCollectionIIFE(retGo, f.X, func(xs string) {
+			pred := g.freshVar("_pred")
+			g.body.writef("%s := ", pred)
+			g.emitExpr(c.Args[0].Value)
+			g.body.nl()
+			g.body.writef("out := make(%s, 0, len(%s))\n", retGo, xs)
+			g.body.writef("for _, v := range %s { if %s(v) { out = append(out, v) } }\n", xs, pred)
+			g.body.writeln("return out")
+		})
+	case "fold":
+		if len(c.Args) != 2 {
+			return false
+		}
+		retGo := g.callReturnGo(c, "any")
+		g.emitCollectionIIFE(retGo, f.X, func(xs string) {
+			acc := g.freshVar("_acc")
+			fn := g.freshVar("_fn")
+			g.body.writef("%s := ", acc)
+			g.emitExpr(c.Args[0].Value)
+			g.body.nl()
+			g.body.writef("%s := ", fn)
+			g.emitExpr(c.Args[1].Value)
+			g.body.nl()
+			g.body.writef("for _, v := range %s { %s = %s(%s, v) }\n", xs, acc, fn, acc)
+			g.body.writef("return %s\n", acc)
+		})
+	case "sorted":
+		if len(c.Args) != 0 {
+			return false
+		}
+		g.use("sort")
+		retGo := g.callReturnGo(c, listGo)
+		g.emitCollectionIIFE(retGo, f.X, func(xs string) {
+			g.body.writef("out := make(%s, len(%s))\n", retGo, xs)
+			g.body.writef("copy(out, %s)\n", xs)
+			g.body.write("sort.Slice(out, func(i, j int) bool { return ")
+			g.emitCollectionLess("out[i]", "out[j]", n.Args[0])
+			g.body.writeln(" })")
+			g.body.writeln("return out")
+		})
+	case "sortedBy":
+		if len(c.Args) != 1 {
+			return false
+		}
+		g.use("sort")
+		retGo := g.callReturnGo(c, listGo)
+		keyRet := g.collectionCallbackReturnType(c)
+		g.emitCollectionIIFE(retGo, f.X, func(xs string) {
+			key := g.freshVar("_key")
+			g.body.writef("%s := ", key)
+			g.emitExpr(c.Args[0].Value)
+			g.body.nl()
+			g.body.writef("out := make(%s, len(%s))\n", retGo, xs)
+			g.body.writef("copy(out, %s)\n", xs)
+			g.body.write("sort.Slice(out, func(i, j int) bool { return ")
+			g.emitCollectionLess(key+"(out[i])", key+"(out[j])", keyRet)
+			g.body.writeln(" })")
+			g.body.writeln("return out")
+		})
+	case "reversed":
+		if len(c.Args) != 0 {
+			return false
+		}
+		retGo := g.callReturnGo(c, listGo)
+		g.emitCollectionIIFE(retGo, f.X, func(xs string) {
+			g.body.writef("out := make(%s, len(%s))\n", retGo, xs)
+			g.body.writef("copy(out, %s)\n", xs)
+			g.body.writeln("for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 { out[i], out[j] = out[j], out[i] }")
+			g.body.writeln("return out")
+		})
+	case "appended":
+		if len(c.Args) != 1 {
+			return false
+		}
+		retGo := g.callReturnGo(c, listGo)
+		g.emitCollectionIIFE(retGo, f.X, func(xs string) {
+			item := g.freshVar("_item")
+			g.body.writef("%s := ", item)
+			g.emitExpr(c.Args[0].Value)
+			g.body.nl()
+			g.body.writef("out := make(%s, 0, len(%s)+1)\n", retGo, xs)
+			g.body.writef("out = append(out, %s...)\n", xs)
+			g.body.writef("out = append(out, %s)\n", item)
+			g.body.writeln("return out")
+		})
+	case "concat":
+		if len(c.Args) != 1 {
+			return false
+		}
+		retGo := g.callReturnGo(c, listGo)
+		g.emitCollectionIIFE(retGo, f.X, func(xs string) {
+			other := g.freshVar("_other")
+			g.body.writef("%s := ", other)
+			g.emitExpr(c.Args[0].Value)
+			g.body.nl()
+			g.body.writef("out := make(%s, 0, len(%s)+len(%s))\n", retGo, xs, other)
+			g.body.writef("out = append(out, %s...)\n", xs)
+			g.body.writef("out = append(out, %s...)\n", other)
+			g.body.writeln("return out")
+		})
+	case "zip":
+		if len(c.Args) != 1 {
+			return false
+		}
+		retGo := g.callReturnGo(c, "[]struct{F0 any; F1 any}")
+		elemRetGo := g.collectionListElemGo(g.typeOf(c), "struct{F0 any; F1 any}")
+		g.emitCollectionIIFE(retGo, f.X, func(xs string) {
+			other := g.freshVar("_other")
+			g.body.writef("%s := ", other)
+			g.emitExpr(c.Args[0].Value)
+			g.body.nl()
+			g.body.writef("n := len(%s)\n", xs)
+			g.body.writef("if len(%s) < n { n = len(%s) }\n", other, other)
+			g.body.writef("out := make(%s, n)\n", retGo)
+			g.body.writef("for i := 0; i < n; i++ { out[i] = %s{F0: %s[i], F1: %s[i]} }\n", elemRetGo, xs, other)
+			g.body.writeln("return out")
+		})
+	case "enumerate":
+		if len(c.Args) != 0 {
+			return false
+		}
+		retGo := g.callReturnGo(c, "[]struct{F0 int; F1 "+elemGo+"}")
+		elemRetGo := g.collectionListElemGo(g.typeOf(c), "struct{F0 int; F1 "+elemGo+"}")
+		g.emitCollectionIIFE(retGo, f.X, func(xs string) {
+			g.body.writef("out := make(%s, len(%s))\n", retGo, xs)
+			g.body.writef("for i, v := range %s { out[i] = %s{F0: i, F1: v} }\n", xs, elemRetGo)
+			g.body.writeln("return out")
+		})
+	case "take":
+		if len(c.Args) != 1 {
+			return false
+		}
+		retGo := g.callReturnGo(c, listGo)
+		g.emitCollectionIIFE(retGo, f.X, func(xs string) {
+			limit := g.freshVar("_n")
+			g.body.writef("%s := ", limit)
+			g.emitExpr(c.Args[0].Value)
+			g.body.nl()
+			g.body.writef("if %s < 0 { %s = 0 }\n", limit, limit)
+			g.body.writef("if %s > len(%s) { %s = len(%s) }\n", limit, xs, limit, xs)
+			g.body.writef("out := make(%s, %s)\n", retGo, limit)
+			g.body.writef("copy(out, %s[:%s])\n", xs, limit)
+			g.body.writeln("return out")
+		})
+	case "toSet":
+		if len(c.Args) != 0 {
+			return false
+		}
+		retGo := g.callReturnGo(c, "map["+elemGo+"]struct{}")
+		g.emitCollectionIIFE(retGo, f.X, func(xs string) {
+			g.body.writef("out := make(%s, len(%s))\n", retGo, xs)
+			g.body.writef("for _, v := range %s { out[v] = struct{}{} }\n", xs)
+			g.body.writeln("return out")
+		})
+	case "push":
+		if len(c.Args) != 1 {
+			return false
+		}
+		g.body.write("func() { ")
+		g.body.write(target)
+		g.body.write(" = append(")
+		g.body.write(target)
+		g.body.write(", ")
+		g.emitExpr(c.Args[0].Value)
+		g.body.write(") }()")
+	case "pop":
+		if len(c.Args) != 0 {
+			return false
+		}
+		g.body.writef("func() *%s { if len(%s) == 0 { return nil }; v := %s[len(%s)-1]; var zero %s; %s[len(%s)-1] = zero; %s = %s[:len(%s)-1]; return &v }()",
+			elemGo, target, target, target, elemGo, target, target, target, target, target)
+	case "insert":
+		if len(c.Args) != 2 {
+			return false
+		}
+		idx := g.freshVar("_idx")
+		item := g.freshVar("_item")
+		g.body.writef("func() { %s := ", idx)
+		g.emitExpr(c.Args[0].Value)
+		g.body.writef("; %s := ", item)
+		g.emitExpr(c.Args[1].Value)
+		g.body.writef("; if %s < 0 || %s > len(%s) { panic(\"List.insert index out of range\") }; var zero %s; %s = append(%s, zero); copy(%s[%s+1:], %s[%s:]); %s[%s] = %s }()",
+			idx, idx, target, elemGo, target, target, target, idx, target, idx, target, idx, item)
+	case "removeAt":
+		if len(c.Args) != 1 {
+			return false
+		}
+		idx := g.freshVar("_idx")
+		g.body.writef("func() %s { %s := ", elemGo, idx)
+		g.emitExpr(c.Args[0].Value)
+		g.body.writef("; v := %s[%s]; copy(%s[%s:], %s[%s+1:]); var zero %s; %s[len(%s)-1] = zero; %s = %s[:len(%s)-1]; return v }()",
+			target, idx, target, idx, target, idx, elemGo, target, target, target, target, target)
+	case "sort":
+		if len(c.Args) != 0 {
+			return false
+		}
+		g.use("sort")
+		g.body.writef("func() { xs := %s; sort.Slice(xs, func(i, j int) bool { return ", target)
+		g.emitCollectionLess("xs[i]", "xs[j]", n.Args[0])
+		g.body.write(" }) }()")
+	case "reverse":
+		if len(c.Args) != 0 {
+			return false
+		}
+		g.body.writef("func() { xs := %s; for i, j := 0, len(xs)-1; i < j; i, j = i+1, j-1 { xs[i], xs[j] = xs[j], xs[i] } }()", target)
+	case "clear":
+		if len(c.Args) != 0 {
+			return false
+		}
+		g.body.writef("func() { %s = %s[:0] }()", target, target)
+	default:
+		return false
+	}
+	return true
+}
+
+func (g *gen) emitMapMethod(c *ast.CallExpr, f *ast.FieldExpr, n *types.Named) bool {
+	if len(n.Args) != 2 {
+		return false
+	}
+	keyGo := g.goType(n.Args[0])
+	valGo := g.goType(n.Args[1])
+	mapGo := g.goType(n)
+	target := g.renderExpr(f.X)
+	switch f.Name {
+	case "len":
+		if len(c.Args) != 0 {
+			return false
+		}
+		g.body.write("len(")
+		g.emitExpr(f.X)
+		g.body.write(")")
+	case "isEmpty":
+		if len(c.Args) != 0 {
+			return false
+		}
+		g.body.write("(len(")
+		g.emitExpr(f.X)
+		g.body.write(") == 0)")
+	case "get":
+		if len(c.Args) != 1 {
+			return false
+		}
+		g.emitCollectionIIFE("*"+valGo, f.X, func(m string) {
+			key := g.freshVar("_key")
+			g.body.writef("%s := ", key)
+			g.emitExpr(c.Args[0].Value)
+			g.body.nl()
+			g.body.writef("v, ok := %s[%s]\n", m, key)
+			g.body.writeln("if !ok { return nil }")
+			g.body.writeln("return &v")
+		})
+	case "containsKey":
+		if len(c.Args) != 1 {
+			return false
+		}
+		g.emitCollectionIIFE("bool", f.X, func(m string) {
+			key := g.freshVar("_key")
+			g.body.writef("%s := ", key)
+			g.emitExpr(c.Args[0].Value)
+			g.body.nl()
+			g.body.writef("_, ok := %s[%s]\n", m, key)
+			g.body.writeln("return ok")
+		})
+	case "keys":
+		if len(c.Args) != 0 {
+			return false
+		}
+		retGo := g.callReturnGo(c, "[]"+keyGo)
+		g.emitCollectionIIFE(retGo, f.X, func(m string) {
+			g.body.writef("out := make(%s, 0, len(%s))\n", retGo, m)
+			g.body.writef("for k := range %s { out = append(out, k) }\n", m)
+			g.body.writeln("return out")
+		})
+	case "values":
+		if len(c.Args) != 0 {
+			return false
+		}
+		retGo := g.callReturnGo(c, "[]"+valGo)
+		g.emitCollectionIIFE(retGo, f.X, func(m string) {
+			g.body.writef("out := make(%s, 0, len(%s))\n", retGo, m)
+			g.body.writef("for _, v := range %s { out = append(out, v) }\n", m)
+			g.body.writeln("return out")
+		})
+	case "entries", "iter", "toList":
+		if len(c.Args) != 0 {
+			return false
+		}
+		retGo := g.callReturnGo(c, "[]struct{F0 "+keyGo+"; F1 "+valGo+"}")
+		elemRetGo := g.collectionListElemGo(g.typeOf(c), "struct{F0 "+keyGo+"; F1 "+valGo+"}")
+		g.emitCollectionIIFE(retGo, f.X, func(m string) {
+			g.body.writef("out := make(%s, 0, len(%s))\n", retGo, m)
+			g.body.writef("for k, v := range %s { out = append(out, %s{F0: k, F1: v}) }\n", m, elemRetGo)
+			g.body.writeln("return out")
+		})
+	case "insert":
+		if len(c.Args) != 2 {
+			return false
+		}
+		key := g.freshVar("_key")
+		val := g.freshVar("_val")
+		g.body.writef("func() { if %s == nil { %s = %s{} }; %s := ", target, target, mapGo, key)
+		g.emitExpr(c.Args[0].Value)
+		g.body.writef("; %s := ", val)
+		g.emitExpr(c.Args[1].Value)
+		g.body.writef("; %s[%s] = %s }()", target, key, val)
+	case "remove":
+		if len(c.Args) != 1 {
+			return false
+		}
+		key := g.freshVar("_key")
+		g.body.writef("func() *%s { %s := ", valGo, key)
+		g.emitExpr(c.Args[0].Value)
+		g.body.writef("; v, ok := %s[%s]; if !ok { return nil }; delete(%s, %s); return &v }()", target, key, target, key)
+	case "clear":
+		if len(c.Args) != 0 {
+			return false
+		}
+		g.body.writef("func() { clear(%s) }()", target)
+	case "toMap":
+		if len(c.Args) != 0 {
+			return false
+		}
+		retGo := g.callReturnGo(c, mapGo)
+		g.emitCollectionIIFE(retGo, f.X, func(m string) {
+			g.body.writef("out := make(%s, len(%s))\n", retGo, m)
+			g.body.writef("for k, v := range %s { out[k] = v }\n", m)
+			g.body.writeln("return out")
+		})
+	default:
+		return false
+	}
+	return true
+}
+
+func (g *gen) emitSetMethod(c *ast.CallExpr, f *ast.FieldExpr, n *types.Named) bool {
+	if len(n.Args) != 1 {
+		return false
+	}
+	elemGo := g.goType(n.Args[0])
+	setGo := g.goType(n)
+	target := g.renderExpr(f.X)
+	switch f.Name {
+	case "len":
+		if len(c.Args) != 0 {
+			return false
+		}
+		g.body.write("len(")
+		g.emitExpr(f.X)
+		g.body.write(")")
+	case "isEmpty":
+		if len(c.Args) != 0 {
+			return false
+		}
+		g.body.write("(len(")
+		g.emitExpr(f.X)
+		g.body.write(") == 0)")
+	case "contains":
+		if len(c.Args) != 1 {
+			return false
+		}
+		g.emitCollectionIIFE("bool", f.X, func(s string) {
+			item := g.freshVar("_item")
+			g.body.writef("%s := ", item)
+			g.emitExpr(c.Args[0].Value)
+			g.body.nl()
+			g.body.writef("_, ok := %s[%s]\n", s, item)
+			g.body.writeln("return ok")
+		})
+	case "union", "intersect", "difference":
+		if len(c.Args) != 1 {
+			return false
+		}
+		retGo := g.callReturnGo(c, setGo)
+		g.emitCollectionIIFE(retGo, f.X, func(s string) {
+			other := g.freshVar("_other")
+			g.body.writef("%s := ", other)
+			g.emitExpr(c.Args[0].Value)
+			g.body.nl()
+			switch f.Name {
+			case "union":
+				g.body.writef("out := make(%s, len(%s)+len(%s))\n", retGo, s, other)
+				g.body.writef("for v := range %s { out[v] = struct{}{} }\n", s)
+				g.body.writef("for v := range %s { out[v] = struct{}{} }\n", other)
+			case "intersect":
+				g.body.writef("out := make(%s)\n", retGo)
+				g.body.writef("for v := range %s { if _, ok := %s[v]; ok { out[v] = struct{}{} } }\n", s, other)
+			case "difference":
+				g.body.writef("out := make(%s)\n", retGo)
+				g.body.writef("for v := range %s { if _, ok := %s[v]; !ok { out[v] = struct{}{} } }\n", s, other)
+			}
+			g.body.writeln("return out")
+		})
+	case "insert":
+		if len(c.Args) != 1 {
+			return false
+		}
+		g.body.writef("func() { if %s == nil { %s = %s{} }; %s[", target, target, setGo, target)
+		g.emitExpr(c.Args[0].Value)
+		g.body.write("] = struct{}{} }()")
+	case "remove":
+		if len(c.Args) != 1 {
+			return false
+		}
+		item := g.freshVar("_item")
+		g.body.writef("func() bool { %s := ", item)
+		g.emitExpr(c.Args[0].Value)
+		g.body.writef("; _, ok := %s[%s]; if ok { delete(%s, %s) }; return ok }()", target, item, target, item)
+	case "clear":
+		if len(c.Args) != 0 {
+			return false
+		}
+		g.body.writef("func() { clear(%s) }()", target)
+	case "iter", "toList":
+		if len(c.Args) != 0 {
+			return false
+		}
+		retGo := g.callReturnGo(c, "[]"+elemGo)
+		g.emitCollectionIIFE(retGo, f.X, func(s string) {
+			g.body.writef("out := make(%s, 0, len(%s))\n", retGo, s)
+			g.body.writef("for v := range %s { out = append(out, v) }\n", s)
+			g.body.writeln("return out")
+		})
+	case "toSet":
+		if len(c.Args) != 0 {
+			return false
+		}
+		retGo := g.callReturnGo(c, setGo)
+		g.emitCollectionIIFE(retGo, f.X, func(s string) {
+			g.body.writef("out := make(%s, len(%s))\n", retGo, s)
+			g.body.writef("for v := range %s { out[v] = struct{}{} }\n", s)
+			g.body.writeln("return out")
+		})
+	default:
+		return false
+	}
+	return true
+}
+
+func (g *gen) emitCollectionIIFE(retGo string, recv ast.Expr, body func(recvVar string)) {
+	recvVar := g.freshVar("_col")
+	g.body.write("func()")
+	if retGo != "" {
+		g.body.write(" ")
+		g.body.write(retGo)
+	}
+	g.body.writeln(" {")
+	g.body.indent()
+	g.body.writef("%s := ", recvVar)
+	g.emitExpr(recv)
+	g.body.nl()
+	body(recvVar)
+	g.body.dedent()
+	g.body.write("}()")
+}
+
+func (g *gen) renderExpr(e ast.Expr) string {
+	old := g.body
+	w := newWriter()
+	g.body = w
+	defer func() { g.body = old }()
+	g.emitExpr(e)
+	return string(w.bytes())
+}
+
+func (g *gen) callReturnGo(c *ast.CallExpr, fallback string) string {
+	if t := g.typeOf(c); t != nil && !types.IsError(t) && !types.IsUnit(t) {
+		return g.goType(t)
+	}
+	return fallback
+}
+
+func (g *gen) collectionCallbackReturnType(c *ast.CallExpr) types.Type {
+	if len(c.Args) != 1 {
+		return nil
+	}
+	if fn, ok := types.AsFn(g.typeOf(c.Args[0].Value)); ok {
+		return fn.Return
+	}
+	return nil
+}
+
+func (g *gen) emitCollectionLess(left, right string, t types.Type) {
+	if p, ok := t.(*types.Primitive); ok {
+		switch p.Kind {
+		case types.PBool:
+			g.body.writef("(!%s && %s)", left, right)
+			return
+		case types.PBytes:
+			g.use("bytes")
+			g.body.writef("bytes.Compare(%s, %s) < 0", left, right)
+			return
+		}
+	}
+	g.body.writef("%s < %s", left, right)
+}
+
+func (g *gen) collectionListElemGo(t types.Type, fallback string) string {
+	if n, ok := t.(*types.Named); ok && n.Sym != nil && n.Sym.Name == "List" && len(n.Args) == 1 {
+		return g.goType(n.Args[0])
+	}
+	return strings.TrimPrefix(fallback, "[]")
 }
 
 // emitTurbofishCall handles the two concurrency intrinsics that use the

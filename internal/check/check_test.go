@@ -738,6 +738,80 @@ fn main() {
 	assertCodes(t, runCheck(t, src), diag.CodeTypeMismatch)
 }
 
+func TestCheck_MapKeyRequiresHashableTypeArg(t *testing.T) {
+	src := `
+fn main() {
+    let m: Map<Float, Int> = {:}
+}
+`
+	assertCodes(t, runCheck(t, src), diag.CodeTypeMismatch)
+}
+
+func TestCheck_MapLiteralKeyRequiresHashable(t *testing.T) {
+	src := `
+fn main() {
+    let m = {1.5: "nope"}
+}
+`
+	assertCodes(t, runCheck(t, src), diag.CodeTypeMismatch)
+}
+
+func TestCheck_MapKeyRejectsNonHashableComposite(t *testing.T) {
+	src := `
+fn main() {
+    let m: Map<List<Int>, Int> = {:}
+}
+`
+	assertCodes(t, runCheck(t, src), diag.CodeTypeMismatch)
+}
+
+func TestCheck_MapKeyAcceptsHashableGenericBound(t *testing.T) {
+	src := `
+fn make<T: Hashable>() -> Map<T, Int> {
+    {:}
+}
+`
+	assertOK(t, runCheck(t, src))
+}
+
+func TestCheck_SetElementRequiresHashableTypeArg(t *testing.T) {
+	src := `
+fn main() {
+    let s: Set<Float> = [1.5].toSet()
+}
+`
+	assertCodes(t, runCheck(t, src), diag.CodeTypeMismatch)
+}
+
+func TestCheck_ToSetElementRequiresHashable(t *testing.T) {
+	src := `
+fn collect<T>(xs: List<T>) -> List<T> {
+    let s = xs.toSet()
+    xs
+}
+`
+	assertCodes(t, runCheck(t, src), diag.CodeTypeMismatch)
+}
+
+func TestCheck_ToSetRejectsNonHashableCompositeElement(t *testing.T) {
+	src := `
+fn main() {
+    let xs = [[1], [2]]
+    let s = xs.toSet()
+}
+`
+	assertCodes(t, runCheck(t, src), diag.CodeTypeMismatch)
+}
+
+func TestCheck_ToSetAcceptsHashableGenericBound(t *testing.T) {
+	src := `
+fn collect<T: Hashable>(xs: List<T>) -> Set<T> {
+    xs.toSet()
+}
+`
+	assertOK(t, runCheck(t, src))
+}
+
 func TestCheck_InterfaceMethodMissing(t *testing.T) {
 	// Empty struct has no `message` method → doesn't satisfy Error.
 	// Note: Error is a BUILTIN marker interface in this MVP; the
@@ -1705,6 +1779,27 @@ fn main() {
 }
 `
 	assertCodes(t, runCheck(t, src), diag.CodeTypeMismatch)
+}
+
+func TestCheck_StdlibMutatingCollectionNeedsMutBinding(t *testing.T) {
+	src := `
+fn main() {
+    let xs: List<Int> = [1, 2, 3]
+    xs.push(4)
+}
+`
+	assertCodes(t, runCheck(t, src), diag.CodeMutabilityMismatch)
+}
+
+func TestCheck_StdlibMutatingCollectionNeedsAssignableReceiver(t *testing.T) {
+	src := `
+fn make() -> List<Int> { [] }
+
+fn main() {
+    make().push(1)
+}
+`
+	assertCodes(t, runCheck(t, src), diag.CodeAssignTarget)
 }
 
 func TestCheck_StdlibEnumerateTuplePattern(t *testing.T) {
