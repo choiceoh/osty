@@ -1269,6 +1269,330 @@ func TestParseNestedQualifiedStructLit(t *testing.T) {
 	}
 }
 
+// TestParsePatternMinusLiteral covers the MINUS branch of parsePatternAtom:
+// negative numeric literals as standalone patterns (not just as range
+// endpoints).
+func TestParsePatternMinusLiteral(t *testing.T) {
+	src := `fn sign(n: Int) -> Int {
+    match n {
+        -1 -> -1,
+        0 -> 0,
+        _ -> 1,
+    }
+}`
+	f := parseOrFatal(t, src)
+	body := f.Decls[0].(*ast.FnDecl).Body
+	m := body.Stmts[0].(*ast.ExprStmt).X.(*ast.MatchExpr)
+	lp, ok := m.Arms[0].Pattern.(*ast.LiteralPat)
+	if !ok {
+		t.Fatalf("arm 0 = %T, want *ast.LiteralPat", m.Arms[0].Pattern)
+	}
+	u, ok := lp.Literal.(*ast.UnaryExpr)
+	if !ok || u.Op != token.MINUS {
+		t.Fatalf("arm 0 literal = %T %+v", lp.Literal, lp.Literal)
+	}
+}
+
+// TestParsePatternBoolLiteral covers parsePatternAtom's true/false IDENT
+// branch: bool literals in pattern position.
+func TestParsePatternBoolLiteral(t *testing.T) {
+	src := `fn describe(b: Bool) -> String {
+    match b {
+        true -> "yes",
+        false -> "no",
+    }
+}`
+	f := parseOrFatal(t, src)
+	body := f.Decls[0].(*ast.FnDecl).Body
+	m := body.Stmts[0].(*ast.ExprStmt).X.(*ast.MatchExpr)
+	for i, expected := range []bool{true, false} {
+		lp, ok := m.Arms[i].Pattern.(*ast.LiteralPat)
+		if !ok {
+			t.Fatalf("arm %d = %T", i, m.Arms[i].Pattern)
+		}
+		bl, ok := lp.Literal.(*ast.BoolLit)
+		if !ok {
+			t.Fatalf("arm %d literal = %T", i, lp.Literal)
+		}
+		if bl.Value != expected {
+			t.Fatalf("arm %d value = %v, want %v", i, bl.Value, expected)
+		}
+	}
+}
+
+// TestParsePatternAtomError covers the default/error path of parsePatternAtom:
+// an unexpected token in pattern position emits a diagnostic and returns a
+// wildcard placeholder for recovery.
+func TestParsePatternAtomError(t *testing.T) {
+	// `+` is not a valid pattern-start token.
+	src := `fn f(n: Int) -> Int {
+    match n {
+        + -> 1,
+        _ -> 0,
+    }
+}`
+	_, diags := ParseDiagnostics([]byte(src))
+	foundPattern := false
+	for _, d := range diags {
+		if strings.Contains(d.Error(), "expected pattern") {
+			foundPattern = true
+			break
+		}
+	}
+	if !foundPattern {
+		t.Fatalf("expected 'expected pattern' diagnostic; got %d diags", len(diags))
+	}
+}
+
+// TestParseGenericDoubleClose covers expectTypeGT's SHR split branch:
+// `Map<K, List<V>>` — the lexer produces a single `>>` token which
+// parseType splits into two `>` tokens for the nested generic.
+func TestParseGenericDoubleClose(t *testing.T) {
+	src := `fn f(m: Map<String, List<Int>>) -> Int { 0 }`
+	f := parseOrFatal(t, src)
+	fd := f.Decls[0].(*ast.FnDecl)
+	mt := fd.Params[0].Type.(*ast.NamedType)
+	if mt.Path[0] != "Map" || len(mt.Args) != 2 {
+		t.Fatalf("outer = %+v", mt)
+	}
+	inner := mt.Args[1].(*ast.NamedType)
+	if inner.Path[0] != "List" || len(inner.Args) != 1 {
+		t.Fatalf("inner = %+v", inner)
+	}
+}
+
+// TestParseAnnotationsOnUseRejected covers parseFile's error path for
+// annotations preceding a `use` statement — v0.3 §18.1 disallows this but
+// the parser still recovers and attaches the use.
+func TestParseAnnotationsOnUseRejected(t *testing.T) {
+	src := `#[deprecated]
+use foo.bar
+fn main() {}`
+	expectCode(t, src, diag.CodeAnnotationBadTarget)
+}
+
+// TestParseUseGoStructMethodRejected covers the diagnostic path for a
+// method declared inside a `use go` struct (v0.2 R16).
+func TestParseUseGoStructMethodRejected(t *testing.T) {
+	src := `use go "net/http" {
+    struct Client {
+        timeout: Int,
+        fn Do(req: Int) -> Int
+    }
+}
+fn main() {}`
+	expectCode(t, src, diag.CodeUseGoStructHasMethod)
+}
+
+// TestParseUseGoFnGenericsRejected covers the diagnostic for generic
+// parameters on a `use go` function.
+func TestParseUseGoFnGenericsRejected(t *testing.T) {
+	src := `use go "net/http" {
+    fn Get<T>(u: String) -> T
+}
+fn main() {}`
+	expectCode(t, src, diag.CodeUseGoUnsupported)
+}
+
+// TestParseUseGoFnParamDefaultRejected covers the diagnostic path for a
+// default value on a `use go` function parameter.
+func TestParseUseGoFnParamDefaultRejected(t *testing.T) {
+	src := `use go "net/http" {
+    fn Get(u: String, timeout: Int = 30) -> String
+}
+fn main() {}`
+	expectCode(t, src, diag.CodeUseGoUnsupported)
+}
+
+// TestParseDefaultExprAllLiterals exercises all literal forms permitted
+// as parameter defaults under R18: `None`, `Err(...)`, and the unit
+// default `()`. The existing `TestParseDefaultExprAccepted` covers the
+// majority; this adds the remaining branches.
+func TestParseDefaultExprAllLiterals(t *testing.T) {
+	src := `fn f(
+    a: Int? = None,
+    b: Result<Int, Error> = Err("boom"),
+    c: Unit = (),
+    d: String = "hi",
+    e: Char = 'c',
+    f: Float = 3.14,
+) -> Int { 0 }`
+	parseOrFatal(t, src)
+}
+
+// TestParseBinaryOpsAll exercises every infix operator to ensure
+// infixLBP returns non-zero binding power for each arm. Covers the
+// remaining branches of the infixLBP switch (||, &&, |, ^, &, <<, >>,
+// *, /, %, comparisons).
+func TestParseBinaryOpsAll(t *testing.T) {
+	cases := map[string]token.Kind{
+		"a || b": token.OR,
+		"a && b": token.AND,
+		"a == b": token.EQ,
+		"a != b": token.NEQ,
+		"a < b":  token.LT,
+		"a <= b": token.LEQ,
+		"a >= b": token.GEQ,
+		"a | b":  token.BITOR,
+		"a ^ b":  token.BITXOR,
+		"a & b":  token.BITAND,
+		"a << b": token.SHL,
+		"a >> b": token.SHR,
+		"a * b":  token.STAR,
+		"a / b":  token.SLASH,
+		"a % b":  token.PERCENT,
+	}
+	for expr, wantOp := range cases {
+		src := fmt.Sprintf(`fn f() -> Int { %s }`, expr)
+		f := parseOrFatal(t, src)
+		body := f.Decls[0].(*ast.FnDecl).Body
+		be, ok := body.Stmts[0].(*ast.ExprStmt).X.(*ast.BinaryExpr)
+		if !ok {
+			t.Errorf("%s: stmt = %T", expr, body.Stmts[0].(*ast.ExprStmt).X)
+			continue
+		}
+		if be.Op != wantOp {
+			t.Errorf("%s: op = %s, want %s", expr, be.Op, wantOp)
+		}
+	}
+}
+
+// TestParseClosureDestructureParam covers the closure-param branch that
+// accepts a destructure pattern like `|User { name }|` (a PascalCase
+// ident followed by `{`). Exercises the isUpperName check in
+// parseClosureParam.
+func TestParseClosureDestructureParam(t *testing.T) {
+	src := `fn f() -> Int {
+    let g = |User { name }| name
+    0
+}`
+	f := parseOrFatal(t, src)
+	body := f.Decls[0].(*ast.FnDecl).Body
+	cl := body.Stmts[0].(*ast.LetStmt).Value.(*ast.ClosureExpr)
+	if len(cl.Params) != 1 {
+		t.Fatalf("params = %d", len(cl.Params))
+	}
+	if cl.Params[0].Pattern == nil {
+		t.Fatalf("closure param has no destructure pattern")
+	}
+	if _, ok := cl.Params[0].Pattern.(*ast.StructPat); !ok {
+		t.Fatalf("pattern = %T, want *ast.StructPat", cl.Params[0].Pattern)
+	}
+}
+
+// TestParseGenericCloseSplitEQ covers expectTypeGT's GEQ branch:
+// `Foo<Int>=value` — the lexer produces a single `>=` token which must be
+// split into `>` and `=` so the type closes and the assignment parses.
+func TestParseGenericCloseSplitEQ(t *testing.T) {
+	src := `fn f() -> Int {
+    let x: List<Int>= x
+    0
+}`
+	f := parseOrFatal(t, src)
+	body := f.Decls[0].(*ast.FnDecl).Body
+	ls := body.Stmts[0].(*ast.LetStmt)
+	nt, ok := ls.Type.(*ast.NamedType)
+	if !ok || nt.Path[0] != "List" {
+		t.Fatalf("type = %T %+v", ls.Type, ls.Type)
+	}
+	if ls.Value == nil {
+		t.Fatalf("expected rhs")
+	}
+}
+
+// TestParseGenericCloseSplitSHREQ covers expectTypeGT's SHREQ branch:
+// `Foo<Bar<Int>>=value` — the lexer produces `>>=` which must be split
+// once into `>` and `>=`, then the inner type closes with `>=` splitting
+// again into `>` and `=`.
+func TestParseGenericCloseSplitSHREQ(t *testing.T) {
+	src := `fn f() -> Int {
+    let m: Map<Int, List<Int>>= m
+    0
+}`
+	f := parseOrFatal(t, src)
+	body := f.Decls[0].(*ast.FnDecl).Body
+	ls := body.Stmts[0].(*ast.LetStmt)
+	nt, ok := ls.Type.(*ast.NamedType)
+	if !ok || nt.Path[0] != "Map" {
+		t.Fatalf("type = %T %+v", ls.Type, ls.Type)
+	}
+	if len(nt.Args) != 2 {
+		t.Fatalf("map args = %d, want 2", len(nt.Args))
+	}
+	inner, ok := nt.Args[1].(*ast.NamedType)
+	if !ok || inner.Path[0] != "List" {
+		t.Fatalf("inner = %T %+v", nt.Args[1], nt.Args[1])
+	}
+	if ls.Value == nil {
+		t.Fatalf("expected rhs")
+	}
+}
+
+// TestConsumeFieldNameIntRecovery covers the INT-recovery branch of
+// consumeFieldName: `obj.0` emits an error (Osty doesn't use `.0` tuple
+// indexing) but advances past the INT so parsing continues — this is a
+// fmt-stability requirement since the printed form `Value` re-lexes to
+// the same tokens.
+func TestConsumeFieldNameIntRecovery(t *testing.T) {
+	src := `fn f() -> Int { obj.0 }`
+	_, diags := ParseDiagnostics([]byte(src))
+	found := false
+	for _, d := range diags {
+		if strings.Contains(d.Error(), "expected field name after `.`") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected field-name diagnostic; got %d diags", len(diags))
+	}
+}
+
+// TestParseAnnotationArgNameError covers the error-recovery path in
+// parseAnnotations when the annotation arg key is not an identifier:
+// the parser emits a diagnostic, skips the bad token, and continues.
+func TestParseAnnotationArgNameError(t *testing.T) {
+	src := `#[deprecated(+)]
+fn main() {}`
+	_, diags := ParseDiagnostics([]byte(src))
+	found := false
+	for _, d := range diags {
+		if strings.Contains(d.Error(), "expected annotation arg name") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected annotation-arg diagnostic; got %d diags", len(diags))
+	}
+}
+
+// TestParseDefaultOkWithoutParen covers parseDefaultExpr's diagnostic
+// path when `Ok`/`Err` is used as a default without the required `(`.
+func TestParseDefaultOkWithoutParen(t *testing.T) {
+	src := `fn f(x: Result<Int, Error> = Ok) -> Int { 0 }`
+	_, diags := ParseDiagnostics([]byte(src))
+	found := false
+	for _, d := range diags {
+		if strings.Contains(d.Error(), "expected `(` after `Ok`") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected Ok-paren diagnostic; got %d diags", len(diags))
+	}
+}
+
+// TestParseDefaultMinusNonNumeric covers the fall-through of the MINUS
+// branch in parseDefaultExpr: `-ident` is not a permitted default form,
+// so the CodeDefaultExprNotLiteral diagnostic is emitted.
+func TestParseDefaultMinusNonNumeric(t *testing.T) {
+	expectCode(t,
+		`fn f(n: Int = -x) -> Int { 0 }`,
+		diag.CodeDefaultExprNotLiteral)
+}
+
 // TestLowercaseQualifiedNotStructLit verifies isTypeRef rejects a FieldExpr
 // whose final segment is lowercase — `pkg.foo { ... }` must not be parsed
 // as a struct literal (the `{` must be treated as a separate block/expr).
