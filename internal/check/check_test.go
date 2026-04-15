@@ -1775,3 +1775,88 @@ fn main() {
 		t.Fatalf("expected instantiations for Int and String, got %v", seen)
 	}
 }
+
+// TestCheck_MatchEnumVariantPayloadGap verifies that even when every
+// top-level variant of an enum is matched, an uncovered sub-pattern
+// inside a variant's payload still produces E0731. Before this was
+// fixed, `Circle(true)` + `Rect` was incorrectly accepted as covering
+// `Shape`.
+func TestCheck_MatchEnumVariantPayloadGap(t *testing.T) {
+	src := `
+pub enum Shape {
+    Circle(Bool),
+    Rect,
+}
+
+fn area(s: Shape) -> Int {
+    match s {
+        Circle(true) -> 1,
+        Rect -> 0,
+    }
+}
+`
+	got := runCheck(t, src)
+	assertCodes(t, got, diag.CodeNonExhaustiveMatch)
+	if !strings.Contains(got[0].Message, "Circle(false)") {
+		t.Fatalf("expected witness `Circle(false)` in message, got: %s", got[0].Message)
+	}
+}
+
+// TestCheck_MatchEnumNestedEnumPayload exercises coverage inside an
+// enum-typed payload of another enum variant.
+func TestCheck_MatchEnumNestedEnumPayload(t *testing.T) {
+	src := `
+pub enum Color { Red, Green, Blue }
+pub enum Thing { Paint(Color), Plain }
+
+fn name(t: Thing) -> Int {
+    match t {
+        Paint(Red) -> 1,
+        Plain -> 0,
+    }
+}
+`
+	got := runCheck(t, src)
+	assertCodes(t, got, diag.CodeNonExhaustiveMatch)
+	if !strings.Contains(got[0].Message, "Paint(") {
+		t.Fatalf("expected witness naming Paint(...), got: %s", got[0].Message)
+	}
+}
+
+// TestCheck_MatchOptionPayloadGap checks that coverage descends into
+// the Some payload even when top-level Some/None are both present.
+func TestCheck_MatchOptionPayloadGap(t *testing.T) {
+	src := `
+fn describe(b: Bool?) -> Int {
+    match b {
+        Some(true) -> 1,
+        None -> 0,
+    }
+}
+`
+	got := runCheck(t, src)
+	assertCodes(t, got, diag.CodeNonExhaustiveMatch)
+	if !strings.Contains(got[0].Message, "Some(false)") {
+		t.Fatalf("expected witness `Some(false)`, got: %s", got[0].Message)
+	}
+}
+
+// TestCheck_MatchResultPayloadGap checks coverage inside Ok/Err
+// payloads when both top-level variants are present.
+func TestCheck_MatchResultPayloadGap(t *testing.T) {
+	src := `
+pub enum Status { On, Off }
+
+fn go(r: Result<Status, String>) -> Int {
+    match r {
+        Ok(On) -> 1,
+        Err(_) -> 0,
+    }
+}
+`
+	got := runCheck(t, src)
+	assertCodes(t, got, diag.CodeNonExhaustiveMatch)
+	if !strings.Contains(got[0].Message, "Ok(Off)") {
+		t.Fatalf("expected witness `Ok(Off)`, got: %s", got[0].Message)
+	}
+}
