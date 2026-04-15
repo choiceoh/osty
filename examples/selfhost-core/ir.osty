@@ -1,0 +1,559 @@
+pub enum IrNodeKind {
+    IrNodeModule,
+    IrNodeAnnotation,
+    IrNodeUseDecl,
+    IrNodeGoUseDecl,
+    IrNodeFnDecl,
+    IrNodeStructDecl,
+    IrNodeEnumDecl,
+    IrNodeInterfaceDecl,
+    IrNodeTypeAliasDecl,
+    IrNodeLetDecl,
+    IrNodeGenericParams,
+    IrNodeParamList,
+    IrNodeParam,
+    IrNodeType,
+    IrNodeBlock,
+    IrNodeLetStmt,
+    IrNodeReturnStmt,
+    IrNodeBreakStmt,
+    IrNodeContinueStmt,
+    IrNodeForStmt,
+    IrNodeDeferStmt,
+    IrNodeAssignStmt,
+    IrNodeChannelSendStmt,
+    IrNodeIfExpr,
+    IrNodeMatchExpr,
+    IrNodeMatchArm,
+    IrNodeCallExpr,
+    IrNodeIndexExpr,
+    IrNodeSelectorExpr,
+    IrNodeTurbofishExpr,
+    IrNodeClosureExpr,
+    IrNodeListExpr,
+    IrNodeMapExpr,
+    IrNodeTupleExpr,
+    IrNodeStructExpr,
+    IrNodeRangeExpr,
+    IrNodeBinaryExpr,
+    IrNodeUnaryExpr,
+    IrNodeQuestionExpr,
+    IrNodePattern,
+    IrNodeField,
+    IrNodeVariant,
+    IrNodeRecovery,
+    IrNodeError,
+}
+
+pub enum IrDiagnosticKind {
+    IrDiagUnexpectedToken,
+    IrDiagMissingName,
+    IrDiagMissingDelimiter,
+    IrDiagUnmatchedDelimiter,
+    IrDiagNonAssociativeOperator,
+    IrDiagTrailingSelector,
+    IrDiagLexerError,
+}
+
+pub struct IrNode {
+    pub kind: IrNodeKind,
+    pub start: Int,
+    pub end: Int,
+    pub depth: Int,
+    pub flags: Int,
+    pub parent: Int,
+    pub children: List<Int>,
+}
+
+pub struct IrDiagnostic {
+    pub kind: IrDiagnosticKind,
+    pub start: Int,
+    pub end: Int,
+    pub expected: String,
+    pub found: String,
+}
+
+pub struct IrArena {
+    pub nodes: List<IrNode>,
+}
+
+pub struct IrModule {
+    pub packageName: String,
+    pub arena: IrArena,
+    pub root: Int,
+    pub decls: List<Int>,
+    pub script: List<Int>,
+    pub diagnostics: List<IrDiagnostic>,
+    pub sourceTokens: Int,
+    pub coveredTokens: Int,
+    pub maxDepth: Int,
+    pub recovered: Int,
+}
+
+pub struct IrSummary {
+    pub nodes: Int,
+    pub decls: Int,
+    pub funcs: Int,
+    pub structs: Int,
+    pub enums: Int,
+    pub interfaces: Int,
+    pub aliases: Int,
+    pub uses: Int,
+    pub lets: Int,
+    pub stmts: Int,
+    pub exprs: Int,
+    pub patterns: Int,
+    pub types: Int,
+    pub diagnostics: Int,
+    pub invalidParents: Int,
+    pub maxDepth: Int,
+}
+
+pub fn emptyIrNode(kind: IrNodeKind) -> IrNode {
+    IrNode {
+        kind,
+        start: 0,
+        end: 0,
+        depth: 0,
+        flags: 0,
+        parent: -1,
+        children: [],
+    }
+}
+
+pub fn emptyIrArena() -> IrArena {
+    IrArena { nodes: [] }
+}
+
+pub fn emptyIrModule(packageName: String) -> IrModule {
+    IrModule {
+        packageName,
+        arena: emptyIrArena(),
+        root: -1,
+        decls: [],
+        script: [],
+        diagnostics: [],
+        sourceTokens: 0,
+        coveredTokens: 0,
+        maxDepth: 0,
+        recovered: 0,
+    }
+}
+
+pub fn emptyIrSummary() -> IrSummary {
+    IrSummary {
+        nodes: 0,
+        decls: 0,
+        funcs: 0,
+        structs: 0,
+        enums: 0,
+        interfaces: 0,
+        aliases: 0,
+        uses: 0,
+        lets: 0,
+        stmts: 0,
+        exprs: 0,
+        patterns: 0,
+        types: 0,
+        diagnostics: 0,
+        invalidParents: 0,
+        maxDepth: 0,
+    }
+}
+
+pub fn irArenaAdd(arena: IrArena, node: IrNode) -> Int {
+    let idx = irArenaNodeCount(arena)
+    arena.nodes.push(node)
+    idx
+}
+
+pub fn irArenaNodeCount(arena: IrArena) -> Int {
+    let mut count = 0
+    for node in arena.nodes {
+        let _ = node
+        count = count + 1
+    }
+    count
+}
+
+pub fn irArenaNodeAt(arena: IrArena, idx: Int) -> IrNode {
+    let mut i = 0
+    for node in arena.nodes {
+        if i == idx {
+            return node
+        }
+        i = i + 1
+    }
+    emptyIrNode(IrNodeError)
+}
+
+pub fn irLowerSource(packageName: String, source: String) -> IrModule {
+    irLowerParseTree(packageName, frontendParseTree(source))
+}
+
+pub fn irLowerParseTree(packageName: String, tree: FrontParseTree) -> IrModule {
+    let mut module = emptyIrModule(packageName)
+    module.sourceTokens = tree.tokens
+    module.coveredTokens = tree.coveredTokens
+    module.maxDepth = tree.maxDepth
+    module.recovered = tree.recovered
+
+    let mut stack: List<Int> = []
+    for frontNode in tree.nodes {
+        for irStackCount(stack) > frontNode.depth {
+            stack.pop()
+        }
+
+        let mut node = emptyIrNode(irKindFromFront(frontNode.kind))
+        node.start = frontNode.start
+        node.end = frontNode.end
+        node.depth = frontNode.depth
+        node.flags = frontNode.flags
+        node.parent = irParentForDepth(stack, frontNode.depth)
+
+        let idx = irArenaAdd(module.arena, node)
+        if node.parent >= 0 {
+            irAttachChild(module.arena, node.parent, idx)
+        }
+        if frontNode.depth == 0 && module.root < 0 {
+            module.root = idx
+        }
+        if frontNode.depth == 1 && irKindIsDecl(node.kind) {
+            module.decls.push(idx)
+        }
+        if frontNode.depth == 1 && !(irKindIsDecl(node.kind)) && node.kind != IrNodeRecovery {
+            module.script.push(idx)
+        }
+        stack.push(idx)
+    }
+
+    for diag in tree.diagnostics {
+        module.diagnostics.push(
+            IrDiagnostic {
+                kind: irDiagnosticKindFromFront(diag.kind),
+                start: diag.start,
+                end: diag.end,
+                expected: frontTokenKindName(diag.expected),
+                found: frontTokenKindName(diag.found),
+            },
+        )
+    }
+
+    module
+}
+
+fn irAttachChild(arena: IrArena, parent: Int, child: Int) {
+    if parent < 0 {
+        return
+    }
+    let mut node = irArenaNodeAt(arena, parent)
+    node.children.push(child)
+    arena.nodes[parent] = node
+}
+
+fn irParentForDepth(stack: List<Int>, depth: Int) -> Int {
+    if depth <= 0 {
+        return -1
+    }
+    if irStackCount(stack) < depth {
+        return -1
+    }
+    stack[depth - 1]
+}
+
+fn irStackCount(stack: List<Int>) -> Int {
+    let mut count = 0
+    for item in stack {
+        let _ = item
+        count = count + 1
+    }
+    count
+}
+
+pub fn irSummarize(module: IrModule) -> IrSummary {
+    let mut summary = emptyIrSummary()
+    summary.nodes = irArenaNodeCount(module.arena)
+    summary.decls = irListCount(module.decls)
+    summary.diagnostics = irDiagnosticCount(module)
+    summary.maxDepth = module.maxDepth
+    summary.invalidParents = irInvalidParentCount(module)
+
+    for node in module.arena.nodes {
+        if node.kind == IrNodeFnDecl {
+            summary.funcs = summary.funcs + 1
+        } else if node.kind == IrNodeStructDecl {
+            summary.structs = summary.structs + 1
+        } else if node.kind == IrNodeEnumDecl {
+            summary.enums = summary.enums + 1
+        } else if node.kind == IrNodeInterfaceDecl {
+            summary.interfaces = summary.interfaces + 1
+        } else if node.kind == IrNodeTypeAliasDecl {
+            summary.aliases = summary.aliases + 1
+        } else if node.kind == IrNodeUseDecl || node.kind == IrNodeGoUseDecl {
+            summary.uses = summary.uses + 1
+        } else if node.kind == IrNodeLetDecl {
+            summary.lets = summary.lets + 1
+        }
+        if irKindIsStmt(node.kind) {
+            summary.stmts = summary.stmts + 1
+        }
+        if irKindIsExpr(node.kind) {
+            summary.exprs = summary.exprs + 1
+        }
+        if node.kind == IrNodePattern {
+            summary.patterns = summary.patterns + 1
+        }
+        if node.kind == IrNodeType {
+            summary.types = summary.types + 1
+        }
+    }
+
+    summary
+}
+
+pub fn irDiagnosticCount(module: IrModule) -> Int {
+    let mut count = 0
+    for diag in module.diagnostics {
+        let _ = diag
+        count = count + 1
+    }
+    count
+}
+
+pub fn irChildCount(module: IrModule, idx: Int) -> Int {
+    irListCount(irArenaNodeAt(module.arena, idx).children)
+}
+
+pub fn irDeclCount(module: IrModule) -> Int {
+    irListCount(module.decls)
+}
+
+pub fn irListCount(items: List<Int>) -> Int {
+    let mut count = 0
+    for item in items {
+        let _ = item
+        count = count + 1
+    }
+    count
+}
+
+pub fn irInvalidParentCount(module: IrModule) -> Int {
+    let mut count = 0
+    let total = irArenaNodeCount(module.arena)
+    let mut idx = 0
+    for node in module.arena.nodes {
+        if idx == module.root {
+            if node.parent != -1 {
+                count = count + 1
+            }
+        } else if node.parent < 0 || node.parent >= total {
+            count = count + 1
+        }
+        idx = idx + 1
+    }
+    count
+}
+
+pub fn irKindIsDecl(kind: IrNodeKind) -> Bool {
+    match kind {
+        IrNodeUseDecl -> true,
+        IrNodeGoUseDecl -> true,
+        IrNodeFnDecl -> true,
+        IrNodeStructDecl -> true,
+        IrNodeEnumDecl -> true,
+        IrNodeInterfaceDecl -> true,
+        IrNodeTypeAliasDecl -> true,
+        IrNodeLetDecl -> true,
+        _ -> false,
+    }
+}
+
+pub fn irKindIsStmt(kind: IrNodeKind) -> Bool {
+    kind == IrNodeLetStmt || kind == IrNodeReturnStmt || kind == IrNodeBreakStmt || kind == IrNodeContinueStmt || kind == IrNodeForStmt || kind == IrNodeDeferStmt || kind == IrNodeAssignStmt || kind == IrNodeChannelSendStmt
+}
+
+pub fn irKindIsExpr(kind: IrNodeKind) -> Bool {
+    kind == IrNodeCallExpr || kind == IrNodeIndexExpr || kind == IrNodeSelectorExpr || kind == IrNodeTurbofishExpr || kind == IrNodeClosureExpr || kind == IrNodeListExpr || kind == IrNodeMapExpr || kind == IrNodeTupleExpr || kind == IrNodeStructExpr || kind == IrNodeRangeExpr || kind == IrNodeBinaryExpr || kind == IrNodeUnaryExpr || kind == IrNodeQuestionExpr || kind == IrNodeIfExpr || kind == IrNodeMatchExpr
+}
+
+pub fn irKindFromFront(kind: FrontNodeKind) -> IrNodeKind {
+    if kind == frontNodeKindByName("file") {
+        IrNodeModule
+    } else if kind == frontNodeKindByName("annotation") {
+        IrNodeAnnotation
+    } else if kind == frontNodeKindByName("use") {
+        IrNodeUseDecl
+    } else if kind == frontNodeKindByName("goUse") {
+        IrNodeGoUseDecl
+    } else if kind == frontNodeKindByName("fn") {
+        IrNodeFnDecl
+    } else if kind == frontNodeKindByName("struct") {
+        IrNodeStructDecl
+    } else if kind == frontNodeKindByName("enum") {
+        IrNodeEnumDecl
+    } else if kind == frontNodeKindByName("interface") {
+        IrNodeInterfaceDecl
+    } else if kind == frontNodeKindByName("typeAlias") {
+        IrNodeTypeAliasDecl
+    } else if kind == frontNodeKindByName("letDecl") {
+        IrNodeLetDecl
+    } else if kind == frontNodeKindByName("genericParams") {
+        IrNodeGenericParams
+    } else if kind == frontNodeKindByName("paramList") {
+        IrNodeParamList
+    } else if kind == frontNodeKindByName("param") {
+        IrNodeParam
+    } else if kind == frontNodeKindByName("type") {
+        IrNodeType
+    } else if kind == frontNodeKindByName("block") {
+        IrNodeBlock
+    } else if kind == frontNodeKindByName("letStmt") {
+        IrNodeLetStmt
+    } else if kind == frontNodeKindByName("return") {
+        IrNodeReturnStmt
+    } else if kind == frontNodeKindByName("break") {
+        IrNodeBreakStmt
+    } else if kind == frontNodeKindByName("continue") {
+        IrNodeContinueStmt
+    } else if kind == frontNodeKindByName("for") {
+        IrNodeForStmt
+    } else if kind == frontNodeKindByName("defer") {
+        IrNodeDeferStmt
+    } else if kind == frontNodeKindByName("assign") {
+        IrNodeAssignStmt
+    } else if kind == frontNodeKindByName("channelSend") {
+        IrNodeChannelSendStmt
+    } else if kind == frontNodeKindByName("if") {
+        IrNodeIfExpr
+    } else if kind == frontNodeKindByName("match") {
+        IrNodeMatchExpr
+    } else if kind == frontNodeKindByName("matchArm") {
+        IrNodeMatchArm
+    } else if kind == frontNodeKindByName("call") {
+        IrNodeCallExpr
+    } else if kind == frontNodeKindByName("index") {
+        IrNodeIndexExpr
+    } else if kind == frontNodeKindByName("selector") {
+        IrNodeSelectorExpr
+    } else if kind == frontNodeKindByName("turbofish") {
+        IrNodeTurbofishExpr
+    } else if kind == frontNodeKindByName("closure") {
+        IrNodeClosureExpr
+    } else if kind == frontNodeKindByName("list") {
+        IrNodeListExpr
+    } else if kind == frontNodeKindByName("map") {
+        IrNodeMapExpr
+    } else if kind == frontNodeKindByName("tuple") {
+        IrNodeTupleExpr
+    } else if kind == frontNodeKindByName("structExpr") {
+        IrNodeStructExpr
+    } else if kind == frontNodeKindByName("range") {
+        IrNodeRangeExpr
+    } else if kind == frontNodeKindByName("binary") {
+        IrNodeBinaryExpr
+    } else if kind == frontNodeKindByName("unary") {
+        IrNodeUnaryExpr
+    } else if kind == frontNodeKindByName("question") {
+        IrNodeQuestionExpr
+    } else if kind == frontNodeKindByName("pattern") {
+        IrNodePattern
+    } else if kind == frontNodeKindByName("field") {
+        IrNodeField
+    } else if kind == frontNodeKindByName("variant") {
+        IrNodeVariant
+    } else {
+        IrNodeRecovery
+    }
+}
+
+pub fn irDiagnosticKindFromFront(kind: FrontParseDiagnosticKind) -> IrDiagnosticKind {
+    if kind == frontParseDiagnosticKindByName("unexpected") {
+        IrDiagUnexpectedToken
+    } else if kind == frontParseDiagnosticKindByName("missingName") {
+        IrDiagMissingName
+    } else if kind == frontParseDiagnosticKindByName("missingDelimiter") {
+        IrDiagMissingDelimiter
+    } else if kind == frontParseDiagnosticKindByName("unmatchedDelimiter") {
+        IrDiagUnmatchedDelimiter
+    } else if kind == frontParseDiagnosticKindByName("nonAssoc") {
+        IrDiagNonAssociativeOperator
+    } else if kind == frontParseDiagnosticKindByName("trailingSelector") {
+        IrDiagTrailingSelector
+    } else {
+        IrDiagLexerError
+    }
+}
+
+pub fn irNodeKindName(kind: IrNodeKind) -> String {
+    match kind {
+        IrNodeModule -> "module",
+        IrNodeAnnotation -> "annotation",
+        IrNodeUseDecl -> "use",
+        IrNodeGoUseDecl -> "goUse",
+        IrNodeFnDecl -> "fn",
+        IrNodeStructDecl -> "struct",
+        IrNodeEnumDecl -> "enum",
+        IrNodeInterfaceDecl -> "interface",
+        IrNodeTypeAliasDecl -> "typeAlias",
+        IrNodeLetDecl -> "letDecl",
+        IrNodeGenericParams -> "genericParams",
+        IrNodeParamList -> "paramList",
+        IrNodeParam -> "param",
+        IrNodeType -> "type",
+        IrNodeBlock -> "block",
+        IrNodeLetStmt -> "letStmt",
+        IrNodeReturnStmt -> "return",
+        IrNodeBreakStmt -> "break",
+        IrNodeContinueStmt -> "continue",
+        IrNodeForStmt -> "for",
+        IrNodeDeferStmt -> "defer",
+        IrNodeAssignStmt -> "assign",
+        IrNodeChannelSendStmt -> "channelSend",
+        IrNodeIfExpr -> "if",
+        IrNodeMatchExpr -> "match",
+        IrNodeMatchArm -> "matchArm",
+        IrNodeCallExpr -> "call",
+        IrNodeIndexExpr -> "index",
+        IrNodeSelectorExpr -> "selector",
+        IrNodeTurbofishExpr -> "turbofish",
+        IrNodeClosureExpr -> "closure",
+        IrNodeListExpr -> "list",
+        IrNodeMapExpr -> "map",
+        IrNodeTupleExpr -> "tuple",
+        IrNodeStructExpr -> "structExpr",
+        IrNodeRangeExpr -> "range",
+        IrNodeBinaryExpr -> "binary",
+        IrNodeUnaryExpr -> "unary",
+        IrNodeQuestionExpr -> "question",
+        IrNodePattern -> "pattern",
+        IrNodeField -> "field",
+        IrNodeVariant -> "variant",
+        IrNodeRecovery -> "recovery",
+        IrNodeError -> "error",
+    }
+}
+
+pub fn irDiagnosticKindName(kind: IrDiagnosticKind) -> String {
+    match kind {
+        IrDiagUnexpectedToken -> "unexpectedToken",
+        IrDiagMissingName -> "missingName",
+        IrDiagMissingDelimiter -> "missingDelimiter",
+        IrDiagUnmatchedDelimiter -> "unmatchedDelimiter",
+        IrDiagNonAssociativeOperator -> "nonAssociativeOperator",
+        IrDiagTrailingSelector -> "trailingSelector",
+        IrDiagLexerError -> "lexerError",
+    }
+}
+
+pub fn irFnDeclKind() -> IrNodeKind {
+    IrNodeFnDecl
+}
+pub fn irMatchExprKind() -> IrNodeKind {
+    IrNodeMatchExpr
+}
+pub fn irPatternKind() -> IrNodeKind {
+    IrNodePattern
+}
+pub fn irTrailingSelectorDiagKind() -> IrDiagnosticKind {
+    IrDiagTrailingSelector
+}

@@ -99,11 +99,40 @@ func (g *gen) emitIdent(id *ast.Ident) {
 	// wrapped in the enum interface conversion so type assertions at
 	// use sites work (a bare struct value cannot be the scrutinee of a
 	// `v.(Enum_Variant)` type assertion).
-	if owner, ok := g.variantOwner[id.Name]; ok {
+	if owner, ok := g.variantOwnerForIdent(id); ok {
 		g.body.writef("%s(&%s_%s{})", owner, owner, id.Name)
 		return
 	}
 	g.body.write(mangleIdent(id.Name))
+}
+
+func (g *gen) variantOwnerForIdent(id *ast.Ident) (string, bool) {
+	if id == nil {
+		return "", false
+	}
+	if sym := g.symbolFor(id); sym != nil {
+		if sym.Kind != resolve.SymVariant {
+			return "", false
+		}
+		if owner, ok := g.variantOwnerForSymbol(sym); ok {
+			return owner, true
+		}
+	}
+	if owner, ok := g.variantOwner[id.Name]; ok {
+		return owner, true
+	}
+	return "", false
+}
+
+func (g *gen) variantOwnerForSymbol(sym *resolve.Symbol) (string, bool) {
+	t := g.symTypeOf(sym)
+	if fn, ok := t.(*types.FnType); ok {
+		t = fn.Return
+	}
+	if n, ok := types.AsNamed(t); ok && n.Sym != nil {
+		return n.Sym.Name, true
+	}
+	return "", false
 }
 
 // emitStructLit writes a struct literal. `Self { ... }` is rewritten
@@ -431,7 +460,7 @@ func (g *gen) emitCall(c *ast.CallExpr) {
 			return
 		}
 		// User-defined variant construction: Fn is a bare variant name.
-		if owner, ok := g.variantOwner[id.Name]; ok {
+		if owner, ok := g.variantOwnerForIdent(id); ok {
 			g.emitVariantCtor(owner, id.Name, c.Args)
 			return
 		}
