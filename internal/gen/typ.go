@@ -174,13 +174,14 @@ func (g *gen) goNamedType(n *types.Named) string {
 		}
 		return "Result[any, any]"
 	case "Error":
-		// Osty's prelude `Error` is a structural interface (§7.1) with
-		// .message()/.source(). Go's built-in `error` requires
-		// .Error() string, which Osty types don't expose. Mapping to
-		// `any` accepts widening from concrete error enums at the
-		// cost of losing Go's error-interface polymorphism; a full
-		// fix would generate an .Error() shim per type.
-		return "any"
+		// Osty's prelude `Error` (§7.1) is a structural interface with
+		// `message() -> String`. The runtime emits a matching Go
+		// interface (`ostyError`) so concrete error types with a
+		// `message` method satisfy it via Go's method-set matching,
+		// and `.message()` calls bind against a real method set rather
+		// than a bare `any`. See gen.run for the injection site.
+		g.needOstyError = true
+		return "ostyError"
 	case "Chan", "Channel":
 		// §8.5: channel types lower to Go's built-in chan T.
 		if len(n.Args) == 1 {
@@ -305,7 +306,8 @@ func (g *gen) goNamedAST(n *ast.NamedType) string {
 			return "*" + g.goTypeExpr(n.Args[0])
 		}
 	case "Error":
-		return "any"
+		g.needOstyError = true
+		return "ostyError"
 	case "Result":
 		g.needResult = true
 		if len(n.Args) == 2 {

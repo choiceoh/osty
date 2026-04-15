@@ -519,6 +519,19 @@ func (p *Parser) parseUseDecl() *ast.UseDecl {
 								Note("§12.7: closures cannot cross the FFI boundary — expose the behaviour as a named Go `fn` instead").
 								Build())
 						}
+						// §12.5/§12.7: Osty channel types and Go
+						// channels obtained via FFI do not integrate
+						// with Osty's structured concurrency. Reject
+						// them in declarations so callers use
+						// message-passing via named calls instead.
+						if isChannelTypeAST(prm.Type) {
+							p.emit(diag.New(diag.Error,
+								"`use go` function parameters may not be channel-typed").
+								Code(diag.CodeUseGoUnsupported).
+								PrimaryPos(prm.PosV, "").
+								Note("§12.5/§12.7: Go channels obtained via FFI are not integrated with Osty's structured concurrency — model the dataflow with explicit function calls").
+								Build())
+						}
 					}
 					if _, isFn := fd.ReturnType.(*ast.FnType); isFn {
 						p.emit(diag.New(diag.Error,
@@ -526,6 +539,14 @@ func (p *Parser) parseUseDecl() *ast.UseDecl {
 							Code(diag.CodeUseGoUnsupported).
 							PrimaryPos(fd.PosV, "").
 							Note("§12.7: function values cannot cross the FFI boundary").
+							Build())
+					}
+					if isChannelTypeAST(fd.ReturnType) {
+						p.emit(diag.New(diag.Error,
+							"`use go` function return types may not be channel-typed").
+							Code(diag.CodeUseGoUnsupported).
+							PrimaryPos(fd.PosV, "").
+							Note("§12.5/§12.7: Go channels obtained via FFI are not integrated with Osty's structured concurrency").
 							Build())
 					}
 					u.GoBody = append(u.GoBody, fd)
@@ -651,6 +672,23 @@ done:
 // stringLitText returns the concatenation of all literal text parts, using
 // the raw text of any interpolation segments (best-effort). FFI paths
 // should never contain interpolations.
+// isChannelTypeAST reports whether t names an Osty channel type
+// (`Channel<…>` or `Chan<…>`). Used by the FFI parser to reject
+// channel-typed FFI declarations per §12.5/§12.7. Only the top-level
+// spelling is checked — nested occurrences (e.g. `List<Channel<Int>>`)
+// are conservatively allowed here because the Go-side type might still
+// be legal as an opaque slice element.
+func isChannelTypeAST(t ast.Type) bool {
+	n, ok := t.(*ast.NamedType)
+	if !ok {
+		return false
+	}
+	if len(n.Path) != 1 {
+		return false
+	}
+	return n.Path[0] == "Channel" || n.Path[0] == "Chan"
+}
+
 func stringLitText(t token.Token) string {
 	var b strings.Builder
 	for _, pt := range t.Parts {

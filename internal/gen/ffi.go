@@ -70,19 +70,32 @@ func (g *gen) lookupFFIFn(f *ast.FieldExpr) (*ast.UseDecl, *ast.FnDecl) {
 // The T-is-Unit case is special-cased because the corresponding Go
 // function signature is `func(...) error` (no first return value); we
 // can't destructure `v, err := pkg.Fn(...)` in that shape.
+//
+// When the Osty-declared error slot is the prelude `Error` interface,
+// Go's `error` value is wrapped in a `basicFFIError` adapter so the
+// Err-arm binding behaves as a real Osty error: `.message()` is
+// callable, `fmt.Println` still prints the underlying Go message via
+// `Error()`.
 func (g *gen) emitFFIResultCall(c *ast.CallExpr, f *ast.FieldExpr, ret *ast.NamedType) {
 	g.needResult = true
 
-	// Determine the Go spellings for T and E. The err side is always
-	// the Osty `Error` interface, which lowers to `any` — Go's concrete
-	// `error` values assign cleanly into `any` fields.
+	// Determine the Go spellings for T and E. goTypeExpr on a Named
+	// `Error` maps to the runtime `ostyError` interface and flips the
+	// needOstyError flag, which turns `basicFFIError` into a legal
+	// value for the Result's E slot below.
 	tGo := "struct{}"
 	if len(ret.Args) >= 1 {
 		tGo = g.goTypeExpr(ret.Args[0])
 	}
 	eGo := "any"
+	wrapErr := false
 	if len(ret.Args) >= 2 {
 		eGo = g.goTypeExpr(ret.Args[1])
+		if isErrorAST(ret.Args[1]) {
+			g.needFFIBasicError = true
+			g.needOstyError = true
+			wrapErr = true
+		}
 	}
 
 	isUnit := len(ret.Args) >= 1 && isUnitAST(ret.Args[0])
@@ -100,18 +113,34 @@ func (g *gen) emitFFIResultCall(c *ast.CallExpr, f *ast.FieldExpr, ret *ast.Name
 	callBuf.WriteString(")")
 	callExpr := callBuf.String()
 
+	errExpr := "__err"
+	if wrapErr {
+		errExpr = "basicFFIError{err: __err}"
+	}
+
 	resultType := "Result[" + tGo + ", " + eGo + "]"
 	g.body.writef("func() %s { ", resultType)
 	if isUnit {
 		g.body.writef("__err := %s; ", callExpr)
-		g.body.writef("if __err != nil { return %s{Error: __err} }; ", resultType)
+		g.body.writef("if __err != nil { return %s{Error: %s} }; ", resultType, errExpr)
 		g.body.writef("return %s{IsOk: true}", resultType)
 	} else {
 		g.body.writef("__v, __err := %s; ", callExpr)
-		g.body.writef("if __err != nil { return %s{Error: __err} }; ", resultType)
+		g.body.writef("if __err != nil { return %s{Error: %s} }; ", resultType, errExpr)
 		g.body.writef("return %s{Value: __v, IsOk: true}", resultType)
 	}
 	g.body.write(" }()")
+}
+
+// isErrorAST reports whether t is the AST form of Osty's prelude
+// `Error` interface. The qualified-path cases (`std.error.Error`,
+// etc.) are rejected; the FFI body's inline types never qualify.
+func isErrorAST(t ast.Type) bool {
+	n, ok := t.(*ast.NamedType)
+	if !ok {
+		return false
+	}
+	return len(n.Path) == 1 && n.Path[0] == "Error" && len(n.Args) == 0
 }
 
 // ffiCallPrefix renders the qualified Go name for an FFI call

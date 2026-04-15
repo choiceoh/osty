@@ -767,6 +767,29 @@ fn main() {}`
 	}
 }
 
+// TestParseUseGoRejectsChannel covers §12.5/§12.7: Go channels obtained
+// via FFI do not integrate with Osty's structured concurrency, so
+// channel-typed parameters or return types inside a `use go` block
+// must be rejected.
+func TestParseUseGoRejectsChannel(t *testing.T) {
+	src := `use go "pkg" {
+    fn Consume(ch: Channel<Int>) -> Int
+    fn Produce(x: Int) -> Channel<Int>
+}
+fn main() {}`
+	_, diags := ParseDiagnostics([]byte(src))
+	var seen int
+	for _, d := range diags {
+		if d.Code == "E0103" {
+			seen++
+		}
+	}
+	if seen < 2 {
+		t.Fatalf("expected 2+ E0103 diagnostics (one per channel-typed slot); got %d\ndiags: %+v",
+			seen, diags)
+	}
+}
+
 // TestParseNilCoalescingVsLogical verifies v0.2 R1: `??` is the LOWEST
 // non-assignment precedence, right-associative — so `a || b ?? c` parses
 // as `(a || b) ?? c`.

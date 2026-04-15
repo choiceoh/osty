@@ -346,9 +346,13 @@ func (g *gen) emitUseDecl(u *ast.UseDecl) {
 		// form via the aliased-import map.
 		//
 		// The FFI body is a schema for the checker — it declares the
-		// signatures we expect from the Go package. No code is emitted
-		// for it; call sites like `fmt.Println(x)` resolve to the real
-		// Go symbol via the package import.
+		// signatures we expect from the Go package. Structs declared
+		// inside the body are also emitted as Go type aliases so
+		// value-carrying calls (e.g. `fn Parse(...) -> URL?`) resolve
+		// to the concrete Go type rather than the bare Osty name.
+		// Function declarations do not need any emission — call sites
+		// resolve through the package import (plus the Phase-5 FFI
+		// bridge for Result/Option returns).
 		alias := u.Alias
 		defaultAlias := lastPathComponent(u.GoPath)
 		if alias == "" {
@@ -358,6 +362,16 @@ func (g *gen) emitUseDecl(u *ast.UseDecl) {
 			g.use(u.GoPath)
 		} else {
 			g.useAs(u.GoPath, alias)
+		}
+		for _, gd := range u.GoBody {
+			sd, ok := gd.(*ast.StructDecl)
+			if !ok {
+				continue
+			}
+			// `type Foo = alias.Foo` so downstream references to
+			// `Foo` in Osty source (`Foo?`, `Result<Foo, Error>`, field
+			// access chains) bind to the Go package's real type.
+			g.body.writef("\ntype %s = %s.%s\n", sd.Name, alias, sd.Name)
 		}
 		return
 	}

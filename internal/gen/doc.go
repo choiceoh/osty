@@ -57,17 +57,30 @@
 //   - Return-type bridging for `Result<T, Error>` (§12.4): the Go
 //     side's `(T, error)` tuple is wrapped into the Osty Result
 //     runtime at the call site. The `Result<(), Error>` shape maps
-//     the bare-error Go convention `func(...) error`. See
+//     the bare-error Go convention `func(...) error`. A non-nil Go
+//     `error` is wrapped in a `basicFFIError` adapter that satisfies
+//     the Osty `Error` interface, so `Err(e) -> e.message()` works at
+//     both the checker and the generated-Go level. See
 //     internal/gen/ffi.go.
 //   - Return-type bridging for `T?` (§12.3): Osty Optional lowers to
 //     `*T`, which matches the Go nullable convention directly — no
 //     call-site rewrite needed.
-//   - The parser enforces §12.7: fn-typed (closure) parameters or
-//     return types inside `use go` blocks are rejected with E0103.
+//   - Struct declarations inside `use go { … }` are emitted as Go type
+//     aliases (`type Foo = pkg.Foo`) so value-carrying returns
+//     (`Result<URL?, Error>`) bind to the real Go type and field
+//     access (`u.Host`) compiles against it.
+//   - Prelude `Error` interface is materialised as a Go `ostyError`
+//     interface with `message() string`; concrete Osty error types
+//     satisfy it structurally via Go method-set matching.
+//   - The parser enforces §12.7: fn-typed (closure) and channel-typed
+//     parameters or return types inside `use go` blocks are rejected
+//     with E0103. Defaults, methods on FFI structs, and generics stay
+//     rejected as before.
 //
 // Out of scope (future work):
 //
-//   - §12.4 `BasicError` wrapping for concrete Osty Error types
-//     (currently the Go `error` value flows through as `any`)
-//   - channels, concurrency primitives (Phase 6)
+//   - Methods on FFI struct types (spec defers method dispatch to the
+//     Go side — only field layout is mirrored).
+//   - channels, concurrency primitives across the FFI boundary
+//     (Phase 6).
 package gen
