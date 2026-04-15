@@ -467,9 +467,6 @@ func (g *gen) emitCall(c *ast.CallExpr) {
 		if g.emitStdlibUUIDCall(c, f) {
 			return
 		}
-		if g.emitStdlibRegexCall(c, f) {
-			return
-		}
 		if g.emitStdlibMathCall(c, f) {
 			return
 		}
@@ -1039,22 +1036,6 @@ func (g *gen) emitStdlibHelperCall(helper string, args []*ast.Arg) {
 		g.emitExpr(a.Value)
 	}
 	g.body.write(")")
-}
-
-func (g *gen) emitStdlibRegexCall(c *ast.CallExpr, f *ast.FieldExpr) bool {
-	id, ok := f.X.(*ast.Ident)
-	if !ok || !g.isStdlibPackageAlias(id, "regex") || f.Name != "compile" {
-		return false
-	}
-	if len(c.Args) != 1 {
-		return false
-	}
-	g.needRegex = true
-	g.needResult = true
-	g.body.write("regexCompile(")
-	g.emitExpr(c.Args[0].Value)
-	g.body.write(")")
-	return true
 }
 
 func (g *gen) stdlibCallPath(c *ast.CallExpr, module string) ([]string, bool) {
@@ -2465,25 +2446,48 @@ func (g *gen) resultTypeArgsAt(callType types.Type, payloadType types.Type, isEr
 
 // emitBuiltinCall handles prelude intrinsics. Returns true when it
 // produced output; false lets the generic path take over.
+// isBytesType reports whether t is the Bytes builtin type.
+func isBytesType(t types.Type) bool {
+	n, ok := t.(*types.Named)
+	return ok && n.Sym != nil && n.Sym.Kind == resolve.SymBuiltin && n.Sym.Name == "Bytes"
+}
+
+// emitPrintArgList emits arguments for print/println, wrapping Bytes values
+// with string(...) so they display as text rather than raw byte slices.
+func (g *gen) emitPrintArgList(args []*ast.Arg) {
+	for i, a := range args {
+		if i > 0 {
+			g.body.write(", ")
+		}
+		if isBytesType(g.typeOf(a.Value)) {
+			g.body.write("string(")
+			g.emitExpr(a.Value)
+			g.body.write(")")
+		} else {
+			g.emitExpr(a.Value)
+		}
+	}
+}
+
 func (g *gen) emitBuiltinCall(name string, args []*ast.Arg, call *ast.CallExpr) bool {
 	switch name {
 	case "println":
 		g.use("fmt")
 		g.body.write("fmt.Println(")
-		g.emitCallArgList(args)
+		g.emitPrintArgList(args)
 		g.body.write(")")
 		return true
 	case "print":
 		g.use("fmt")
 		g.body.write("fmt.Print(")
-		g.emitCallArgList(args)
+		g.emitPrintArgList(args)
 		g.body.write(")")
 		return true
 	case "eprintln":
 		g.use("fmt")
 		g.use("os")
 		g.body.write("fmt.Fprintln(os.Stderr, ")
-		g.emitCallArgList(args)
+		g.emitPrintArgList(args)
 		g.body.write(")")
 		return true
 	case "eprint":
