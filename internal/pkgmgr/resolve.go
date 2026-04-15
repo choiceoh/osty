@@ -49,11 +49,28 @@ type ResolvedNode struct {
 // its pins are used to keep versions stable; unknown or newly-added
 // dependencies are resolved fresh.
 //
-// For the first iteration we implement the simplest correct
-// algorithm: DFS, first match wins within a name. The lockfile is
-// honored when the declared requirement still allows its pin. This
-// is good enough for path + git + a single-repo dev workflow; a
-// version-picking SAT solver is future work.
+// Algorithm — two phases:
+//
+//  1. Greedy DFS. Each unique local name is fetched once at the
+//     first version that satisfies its requirement (lockfile pin
+//     honored when present). Every constraint encountered along the
+//     way is recorded with its parent chain.
+//
+//  2. Iterative unification. For each registry-backed node, the
+//     resolver intersects every recorded version constraint and
+//     verifies the chosen pin still satisfies them all. When it
+//     doesn't, the node is re-fetched at the highest version
+//     satisfying the union and the new pin's transitive deps are
+//     re-walked so newly-introduced constraints fold in. The pass
+//     loops to a fixed point or reports an unsatisfiable conflict.
+//
+// Source-kind mismatches (path vs git vs registry for the same
+// local name) and path / git URI mismatches are caught structurally
+// during phase 1 with the offending parent chain in the message.
+//
+// True backtracking (changing a parent's already-pinned version to
+// admit a child) is not yet implemented; that would be a follow-up
+// pubgrub-style solver.
 func Resolve(ctx context.Context, root *manifest.Manifest, env *Env) (*Graph, error) {
 	if root == nil {
 		return nil, fmt.Errorf("nil root manifest")
@@ -63,41 +80,75 @@ func Resolve(ctx context.Context, root *manifest.Manifest, env *Env) (*Graph, er
 		return nil, err
 	}
 	r := &resolver{
-		env:      env,
-		lock:     existing,
-		root:     root,
-		graph:    &Graph{Root: root, Nodes: map[string]*ResolvedNode{}},
-		inflight: map[string]bool{},
+		env:         env,
+		lock:        existing,
+		root:        root,
+		graph:       &Graph{Root: root, Nodes: map[string]*ResolvedNode{}},
+		inflight:    map[string]bool{},
+		constraints: map[string][]constraintRef{},
 	}
 	for _, d := range root.Dependencies {
-		if _, err := r.resolveDep(ctx, d); err != nil {
+		if _, err := r.resolveDep(ctx, d, ""); err != nil {
 			return nil, err
 		}
 	}
 	for _, d := range root.DevDependencies {
-		if _, err := r.resolveDep(ctx, d); err != nil {
+		if _, err := r.resolveDep(ctx, d, ""); err != nil {
 			return nil, err
 		}
+	}
+	// Iterative refinement: the greedy first pass may have committed
+	// to versions that don't satisfy every constraint a transitive
+	// parent placed on them (the classic diamond case). Re-walk the
+	// graph upgrading registry pins to the highest version that
+	// satisfies the union of every recorded constraint, then revisit
+	// the new pin's transitive deps. Loop until the graph stops
+	// changing or we exceed the safety bound.
+	if err := r.unifyConstraints(ctx); err != nil {
+		return nil, err
 	}
 	r.graph.Order = r.topoOrder()
 	return r.graph, nil
 }
 
+// constraintRef is one observation of a dependency requirement.
+// Captured at every encounter (first-time and re-encounter) so the
+// unification pass can compute the intersection of every constraint
+// placed on a single local name and surface the parent chain in
+// conflict reports.
+type constraintRef struct {
+	parent string              // local name of the parent ("" = root manifest)
+	dep    manifest.Dependency // the original dep spec, preserves Path/Git/VersionReq
+}
+
 type resolver struct {
-	env      *Env
-	lock     *lockfile.Lock
-	root     *manifest.Manifest
-	graph    *Graph
-	inflight map[string]bool
+	env         *Env
+	lock        *lockfile.Lock
+	root        *manifest.Manifest
+	graph       *Graph
+	inflight    map[string]bool
+	constraints map[string][]constraintRef
 }
 
 // resolveDep fetches dep, records it in the graph, then recurses
-// into its own dependencies. Returns an error on cycle detection,
-// fetch failure, or conflicting versions.
-func (r *resolver) resolveDep(ctx context.Context, d manifest.Dependency) (*ResolvedNode, error) {
+// into its own dependencies. The parent argument is the local name
+// of whoever introduced this dep (the empty string for root deps);
+// it's recorded with each constraint so conflict reports can show
+// the full chain.
+//
+// Re-encounters: when the same local name is requested again from a
+// different point in the graph, the second spec is recorded as a
+// constraint. If it's structurally incompatible with the first
+// (different source kind, mismatched path / git URI), the conflict
+// is fatal. Version-only differences are deferred to unifyConstraints,
+// which runs after the greedy walk and can pick a higher version
+// satisfying every collected requirement.
+func (r *resolver) resolveDep(ctx context.Context, d manifest.Dependency, parent string) (*ResolvedNode, error) {
+	r.recordConstraint(d, parent)
 	if existing, ok := r.graph.Nodes[d.Name]; ok {
-		// Already resolved under this local name. A conflicting
-		// second Dependency spec with the same name is rejected here.
+		if err := r.checkSourceKindCompatible(existing, d, parent); err != nil {
+			return nil, err
+		}
 		return existing, nil
 	}
 	if r.inflight[d.Name] {
@@ -132,13 +183,216 @@ func (r *resolver) resolveDep(ctx context.Context, d manifest.Dependency) (*Reso
 	// followed for transitive packages — only the root's dev-deps
 	// matter.
 	for _, sub := range fetched.Manifest.Dependencies {
-		child, err := r.resolveDep(ctx, sub)
+		child, err := r.resolveDep(ctx, sub, d.Name)
 		if err != nil {
 			return nil, err
 		}
 		node.Deps = append(node.Deps, child.Name)
 	}
 	return node, nil
+}
+
+// recordConstraint appends one (parent, dep) pair to the running
+// constraint list for d.Name. Called on every encounter (first time
+// and every re-encounter) so unifyConstraints sees the full picture.
+func (r *resolver) recordConstraint(d manifest.Dependency, parent string) {
+	r.constraints[d.Name] = append(r.constraints[d.Name], constraintRef{
+		parent: parent,
+		dep:    d,
+	})
+}
+
+// checkSourceKindCompatible enforces the structural rules: a name
+// already pinned at a path source can't later be requested from git
+// or a registry; a name pinned to a git URL must come from the same
+// URL+ref everywhere; etc. Version-only conflicts are NOT raised
+// here — those are handled by unifyConstraints.
+func (r *resolver) checkSourceKindCompatible(existing *ResolvedNode, d manifest.Dependency, parent string) error {
+	wantSrc, err := NewSource(d)
+	if err != nil {
+		return err
+	}
+	if existing.Source.Kind() != wantSrc.Kind() {
+		return r.conflictError(d.Name,
+			fmt.Sprintf("source kind mismatch: %s wants %s, but %s already pinned as %s",
+				describeParent(parent), wantSrc.Kind(),
+				d.Name, existing.Source.Kind()))
+	}
+	switch existing.Source.Kind() {
+	case SourcePath:
+		if existing.Source.URI() != wantSrc.URI() {
+			return r.conflictError(d.Name,
+				fmt.Sprintf("path mismatch: %s vs %s",
+					existing.Source.URI(), wantSrc.URI()))
+		}
+	case SourceGit:
+		if existing.Source.URI() != wantSrc.URI() {
+			return r.conflictError(d.Name,
+				fmt.Sprintf("git source mismatch: %s vs %s",
+					existing.Source.URI(), wantSrc.URI()))
+		}
+	}
+	return nil
+}
+
+// conflictError formats a diamond-style conflict report including
+// every parent chain that referenced the offending name. The output
+// is multi-line so the user can immediately see who placed which
+// requirement.
+func (r *resolver) conflictError(name, reason string) error {
+	var b strings.Builder
+	fmt.Fprintf(&b, "dependency conflict on %q: %s", name, reason)
+	if refs := r.constraints[name]; len(refs) > 0 {
+		b.WriteString("\n  required by:")
+		for _, c := range refs {
+			fmt.Fprintf(&b, "\n    - %s -> %s", describeParent(c.parent), describeDepReq(c.dep))
+		}
+	}
+	return errors.New(b.String())
+}
+
+func describeParent(p string) string {
+	if p == "" {
+		return "<root>"
+	}
+	return p
+}
+
+func describeDepReq(d manifest.Dependency) string {
+	switch {
+	case d.Path != "":
+		return fmt.Sprintf("%s (path %s)", d.Name, d.Path)
+	case d.Git != nil:
+		return fmt.Sprintf("%s (git %s)", d.Name, gitRefSummary(d.Git))
+	case d.VersionReq != "":
+		return fmt.Sprintf("%s %s", d.Name, d.VersionReq)
+	}
+	return d.Name
+}
+
+func gitRefSummary(g *manifest.GitSource) string {
+	parts := []string{g.URL}
+	if g.Tag != "" {
+		parts = append(parts, "tag="+g.Tag)
+	}
+	if g.Branch != "" {
+		parts = append(parts, "branch="+g.Branch)
+	}
+	if g.Rev != "" {
+		parts = append(parts, "rev="+g.Rev)
+	}
+	return strings.Join(parts, " ")
+}
+
+// unifyConstraints is the post-DFS validation/repair pass. For each
+// registry-backed name, it intersects every recorded version
+// requirement and verifies that the currently-pinned version
+// satisfies them all. When it doesn't, the resolver re-fetches at
+// the highest version satisfying the union, swaps the node in
+// place, and re-walks the new pin's transitive deps so any new
+// constraints they introduce are caught the next iteration.
+//
+// Iterates to a fixed point. Bounded at maxIters to defend against
+// pathological version-graph oscillation; in practice convergence
+// happens in 1–2 passes for real-world graphs.
+func (r *resolver) unifyConstraints(ctx context.Context) error {
+	const maxIters = 16
+	for iter := 0; iter < maxIters; iter++ {
+		changed := false
+		// Iterate names in deterministic order so error messages and
+		// trace output don't depend on map iteration order.
+		names := make([]string, 0, len(r.graph.Nodes))
+		for name := range r.graph.Nodes {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			node := r.graph.Nodes[name]
+			if node == nil || node.Source == nil || node.Source.Kind() != SourceRegistry {
+				continue
+			}
+			rs, ok := node.Source.(*registrySource)
+			if !ok {
+				continue
+			}
+			combined, err := r.intersectRegistryReqs(name)
+			if err != nil {
+				return err
+			}
+			cur, err := semver.ParseVersion(node.Fetched.Version)
+			if err != nil {
+				return fmt.Errorf("internal: cannot parse pinned version %q for %s: %w",
+					node.Fetched.Version, name, err)
+			}
+			if combined.Match(cur) {
+				continue // pin already satisfies every constraint
+			}
+			// Re-fetch at the union req. The narrowed source is
+			// driven by mutating versionReq directly; the existing
+			// applyLockPin path uses the same trick.
+			newRs := &registrySource{
+				name:         rs.name,
+				packageName:  rs.packageName,
+				versionReq:   combined.String(),
+				registryName: rs.registryName,
+			}
+			fetched, ferr := newRs.Fetch(ctx, r.env)
+			if ferr != nil {
+				return r.conflictError(name,
+					fmt.Sprintf("no version satisfies the combined constraints (%s): %v",
+						combined.String(), ferr))
+			}
+			// Swap in the upgraded pin. Drop the old transitive
+			// edges; we'll repopulate them by re-walking the new
+			// pin's manifest below. Children that are still reached
+			// from elsewhere remain valid in r.graph.Nodes; orphans
+			// are pruned by topoOrder later.
+			node.Source = newRs
+			node.Fetched = fetched
+			node.Deps = node.Deps[:0]
+			for _, sub := range fetched.Manifest.Dependencies {
+				child, cerr := r.resolveDep(ctx, sub, name)
+				if cerr != nil {
+					return cerr
+				}
+				node.Deps = append(node.Deps, child.Name)
+			}
+			changed = true
+		}
+		if !changed {
+			return nil
+		}
+	}
+	return errors.New("dependency resolver did not converge after 16 iterations (cyclic version constraints?)")
+}
+
+// intersectRegistryReqs returns a single semver.Req representing the
+// AND of every version requirement recorded for `name`. Empty / "*"
+// reqs contribute nothing; explicit reqs are joined with a space
+// (semver's ParseReq accepts space-separated conjunctions).
+func (r *resolver) intersectRegistryReqs(name string) (semver.Req, error) {
+	var clauses []string
+	seen := map[string]bool{}
+	for _, c := range r.constraints[name] {
+		req := strings.TrimSpace(c.dep.VersionReq)
+		if req == "" || req == "*" {
+			continue
+		}
+		if seen[req] {
+			continue
+		}
+		seen[req] = true
+		clauses = append(clauses, req)
+	}
+	if len(clauses) == 0 {
+		return semver.ParseReq("*")
+	}
+	combined := strings.Join(clauses, " ")
+	parsed, err := semver.ParseReq(combined)
+	if err != nil {
+		return semver.Req{}, fmt.Errorf("intersect %s: %w", name, err)
+	}
+	return parsed, nil
 }
 
 // topoOrder returns node names in a stable, leaves-first order.
