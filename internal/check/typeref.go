@@ -119,6 +119,7 @@ func (c *checker) namedType(n *ast.NamedType) types.Type {
 				sym.Name, want, got)
 		}
 	}
+	c.checkCollectionHashableArgs(n, sym.Name, args)
 	return &types.Named{Sym: sym, Args: args}
 }
 
@@ -172,7 +173,30 @@ func (c *checker) builtinGenericType(n *ast.NamedType, sym *resolve.Symbol) type
 	if sym.Name == "Option" {
 		return &types.Optional{Inner: args[0]}
 	}
+
+	c.checkCollectionHashableArgs(n, sym.Name, args)
 	return &types.Named{Sym: sym, Args: args}
+}
+
+func (c *checker) checkCollectionHashableArgs(n *ast.NamedType, name string, args []types.Type) {
+	switch name {
+	case "Map":
+		if len(args) >= 1 {
+			pos := ast.Node(n)
+			if len(n.Args) >= 1 {
+				pos = n.Args[0]
+			}
+			c.requireHashable(args[0], pos, "Map key")
+		}
+	case "Set":
+		if len(args) >= 1 {
+			pos := ast.Node(n)
+			if len(n.Args) >= 1 {
+				pos = n.Args[0]
+			}
+			c.requireHashable(args[0], pos, "Set element")
+		}
+	}
 }
 
 // bindArgs / substituteTypeVars are aliases so the checker reads

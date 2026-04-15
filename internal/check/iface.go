@@ -48,6 +48,19 @@ func (c *checker) satisfies(concrete types.Type, iface *types.Named, pos ast.Nod
 	if types.IsError(concrete) {
 		return true // suppressed
 	}
+	if iface.Sym.Name == "Hashable" {
+		if c.typeIsHashable(concrete) {
+			return true
+		}
+		if tv, ok := concrete.(*types.TypeVar); ok {
+			c.errNode(pos, diag.CodeTypeMismatch,
+				"type parameter `%s` is not known to implement `Hashable`", tv)
+			return false
+		}
+		c.errNode(pos, diag.CodeTypeMismatch,
+			"type `%s` does not implement `Hashable`", concrete)
+		return false
+	}
 	if tv, ok := concrete.(*types.TypeVar); ok {
 		if c.typeVarKnownSatisfies(tv, iface) {
 			return true
@@ -119,6 +132,85 @@ func (c *checker) typeVarKnownSatisfies(tv *types.TypeVar, iface *types.Named) b
 		}
 	}
 	return false
+}
+
+func (c *checker) typeIsHashable(t types.Type) bool {
+	switch v := t.(type) {
+	case *types.Primitive:
+		return v.Kind.IsEqual() && !v.Kind.IsFloat()
+	case *types.Untyped:
+		return c.typeIsHashable(v.Default())
+	case *types.Optional:
+		return c.typeIsHashable(v.Inner)
+	case *types.Tuple:
+		for _, e := range v.Elems {
+			if !c.typeIsHashable(e) {
+				return false
+			}
+		}
+		return true
+	case *types.TypeVar:
+		return c.typeVarKnownSatisfies(v, c.hashableInterface())
+	case *types.Named:
+		if v.Sym == nil {
+			return false
+		}
+		switch v.Sym.Name {
+		case "List", "Map", "Set", "Result", "Chan", "Channel":
+			return false
+		case "Hashable":
+			return true
+		}
+		if desc, ok := c.result.Descs[v.Sym]; ok {
+			if desc.Kind == resolve.SymTypeAlias && desc.Alias != nil {
+				return c.typeIsHashable(types.Substitute(desc.Alias, bindArgs(desc.Generics, v.Args)))
+			}
+			if desc.Kind == resolve.SymInterface {
+				return c.interfaceImplies(v, c.hashableInterface())
+			}
+		}
+		return c.hasHashableMethods(v)
+	}
+	return false
+}
+
+func (c *checker) hashableInterface() *types.Named {
+	if sym := c.lookupBuiltin("Hashable"); sym != nil {
+		return &types.Named{Sym: sym}
+	}
+	return nil
+}
+
+func (c *checker) hasHashableMethods(t types.Type) bool {
+	hash, hashSub := c.lookupMethod(t, "hash")
+	if hash == nil || hash.Fn == nil {
+		return false
+	}
+	hashFn := specializeMethodDesc(hash, hashSub).Fn
+	if len(hashFn.Params) != 0 || !types.Identical(hashFn.Return, types.Int) {
+		return false
+	}
+	eq, eqSub := c.lookupMethod(t, "eq")
+	if eq == nil || eq.Fn == nil {
+		return false
+	}
+	eqFn := specializeMethodDesc(eq, eqSub).Fn
+	return len(eqFn.Params) == 1 &&
+		types.Identical(eqFn.Params[0], t) &&
+		types.Identical(eqFn.Return, types.Bool)
+}
+
+func (c *checker) requireHashable(t types.Type, pos ast.Node, role string) {
+	if t == nil || types.IsError(t) || c.typeIsHashable(t) {
+		return
+	}
+	if tv, ok := t.(*types.TypeVar); ok {
+		c.errNode(pos, diag.CodeTypeMismatch,
+			"%s type parameter `%s` is not known to implement `Hashable`", role, tv)
+		return
+	}
+	c.errNode(pos, diag.CodeTypeMismatch,
+		"%s type `%s` must implement `Hashable`", role, t)
 }
 
 func (c *checker) interfaceImplies(have, want *types.Named) bool {

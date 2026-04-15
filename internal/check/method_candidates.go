@@ -27,6 +27,29 @@ func (c *checker) methodCandidates(t types.Type) []string {
 		}
 		if v.Sym != nil {
 			switch v.Sym.Name {
+			case "List":
+				for _, name := range []string{
+					"len", "isEmpty", "first", "last", "get", "contains", "indexOf", "find",
+					"map", "filter", "fold", "sorted", "sortedBy", "reversed", "appended",
+					"concat", "zip", "enumerate", "push", "pop", "insert", "removeAt",
+					"sort", "reverse", "clear",
+				} {
+					add(name)
+				}
+			case "Map":
+				for _, name := range []string{
+					"len", "isEmpty", "get", "containsKey", "keys", "values", "entries",
+					"insert", "remove", "clear",
+				} {
+					add(name)
+				}
+			case "Set":
+				for _, name := range []string{
+					"len", "isEmpty", "contains", "union", "intersect", "difference",
+					"insert", "remove", "clear",
+				} {
+					add(name)
+				}
 			case "Result":
 				if len(c.resultMethods) > 0 {
 					for name := range c.resultMethods {
