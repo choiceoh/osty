@@ -2334,6 +2334,7 @@ func frontLexTokenFromScan(units []string, start int, consumed int, kind FrontTo
 	return frontLexToken(kind, frontPositionAt(units, start), frontPositionAt(units, start+consumed), consumed, leadingDocLines, triple, interpolations, baseLiteral)
 }
 
+// Osty: /tmp/selfhost_merged.osty:1452:5
 type frontPositionCacheState struct {
 	units  []string
 	target int
