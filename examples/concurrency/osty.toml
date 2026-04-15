@@ -1,0 +1,9 @@
+[package]
+name = "concurrency-demo"
+version = "0.1.0"
+edition = "0.3"
+description = "Runnable channel and structured concurrency example."
+license = "MIT"
+keywords = ["concurrency", "channels"]
+
+[dependencies]

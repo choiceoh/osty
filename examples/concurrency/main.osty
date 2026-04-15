@@ -1,0 +1,38 @@
+fn square(n: Int) -> Int {
+    n * n
+}
+
+fn producer(ch: Channel<Int>) {
+    for i in 1..=4 {
+        ch <- i
+    }
+    ch.close()
+}
+
+fn main() {
+    let ch = thread.chan::<Int>(0)
+    let h = spawn(|| producer(ch))
+    let mut sum = 0
+    for x in ch {
+        sum = sum + x
+    }
+    h.join()
+
+    let squares = parallel(
+        || square(2),
+        || square(3),
+        || square(4),
+    )
+    for n in squares {
+        sum = sum + n
+    }
+
+    let grouped = taskGroup(|g| {
+        let a = g.spawn(|| square(5))
+        let b = g.spawn(|| square(6))
+        a.join() + b.join()
+    })
+
+    println("sum={sum}")
+    println("grouped={grouped}")
+}

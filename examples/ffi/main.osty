@@ -1,0 +1,17 @@
+use go "strings" as strings {
+    fn Contains(s: String, substr: String) -> Bool
+    fn Repeat(s: String, count: Int) -> String
+    fn ToUpper(s: String) -> String
+}
+
+fn banner(name: String) -> String {
+    strings.ToUpper(strings.Repeat(name, 2))
+}
+
+fn main() {
+    let msg = banner("osty")
+    println(msg)
+    if strings.Contains(msg, "OSTY") {
+        println("ffi ok")
+    }
+}

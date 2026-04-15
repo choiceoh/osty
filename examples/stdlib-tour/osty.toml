@@ -1,0 +1,9 @@
+[package]
+name = "stdlib-tour"
+version = "0.1.0"
+edition = "0.3"
+description = "Tier 1 standard-library usage tour."
+license = "MIT"
+keywords = ["stdlib", "examples"]
+
+[dependencies]

@@ -1,0 +1,6 @@
+use core
+
+fn main() {
+    let signal = core.makeSignal("dogfood", 6, 5)
+    println(core.badge(signal))
+}
