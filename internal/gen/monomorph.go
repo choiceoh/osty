@@ -1,7 +1,6 @@
 package gen
 
 import (
-	"sort"
 	"strings"
 
 	"github.com/osty/osty/internal/ast"
@@ -11,102 +10,79 @@ import (
 // Generic monomorphization (§2.7.3).
 //
 // The checker records every generic call site's concrete type-argument
-// list on Result.Instantiations. This file consumes that map to emit
-// one specialized copy of each generic function definition per distinct
-// instantiation. Name mangling follows `fn_T1_T2` where each Ti is the
-// Go type rendering with identifier-unsafe characters flattened.
+// list on Result.Instantiations. This file drives the lowering: for
+// each reachable (generic fn × concrete type tuple) pair we emit one
+// specialized copy, rewriting its body's generic calls recursively so
+// the transform reaches transitive instantiations as well. A generic
+// fn with no reachable instantiations emits nothing — matching the
+// spec's "header-like" demand-driven framing.
 //
-// Scope (Phase-bounded): top-level fn declarations only. Generic
-// struct / enum types and generic methods still round-trip through
-// the Go-native generics path — the spec permits this because
-// monomorphization is observable only via emitted binary size, not
-// behavior, and tightening those cases is a separate, larger refactor.
+// Scope (out of scope here): generic struct / enum / alias types and
+// methods on generic types still flow through the Go-native generics
+// path. Tightening those is a separate, larger refactor.
 
-// instKey is the canonical textual key for one instantiation — a
-// tab-joined concatenation of the Go type strings. Using a tab avoids
-// clashing with the `_` used by the mangled name.
-type instKey string
-
-// instRecord captures one specialized instantiation of a generic fn.
+// instRecord is one specialized instantiation of a generic fn — the
+// concrete Go type rendering of each type argument plus the mangled
+// Go name the specialization is emitted under.
 type instRecord struct {
-	// Key is the canonical instKey — identifies the instantiation in
-	// the genericInstances map.
-	Key instKey
-	// GoTypes is the Go rendering of each type argument, used both to
-	// mangle the specialized name and to populate the substitution
-	// environment when emitting the body.
+	Fn      *ast.FnDecl
+	Sym     *resolve.Symbol
 	GoTypes []string
-	// Mangled is the Go function name the specialized copy is emitted
-	// under, and the name every call site rewrites to.
 	Mangled string
 }
 
-// buildInstances scans chk.Instantiations and groups the concrete
-// type-argument lists by the generic fn symbol they instantiate. The
-// result map is keyed by the fn's resolver Symbol; each value is a
-// deterministically-ordered slice of unique instantiations.
-//
-// Call sites that don't resolve to a user-defined fn symbol (variant
-// constructors, method calls through a value, builtins, etc.) are
-// skipped — those either have no generic body to specialize or ride
-// through a separate lowering path.
-func (g *gen) buildInstances() {
-	g.genericInstances = map[*resolve.Symbol][]instRecord{}
-	g.callMono = map[*ast.CallExpr]string{}
-	if g.chk == nil || g.res == nil {
-		return
+// requestInstance records that `(sym, goTypes)` is reachable and must
+// be emitted. Returns the mangled name the caller should emit at the
+// call site. Idempotent: repeated requests for the same (sym, tuple)
+// dedupe to the same name without re-enqueueing.
+func (g *gen) requestInstance(sym *resolve.Symbol, goTypes []string) string {
+	fn, ok := sym.Decl.(*ast.FnDecl)
+	if !ok || fn == nil {
+		return ""
 	}
-
-	for call, args := range g.chk.Instantiations {
-		sym := g.calleeSymbol(call.Fn)
-		if sym == nil || sym.Kind != resolve.SymFn {
-			continue
-		}
-		fn, ok := sym.Decl.(*ast.FnDecl)
-		if !ok || fn == nil || len(fn.Generics) == 0 {
-			continue
-		}
-		if len(args) != len(fn.Generics) {
-			// Checker produced a shape that doesn't line up with the
-			// declaration — skip rather than emit broken code.
-			continue
-		}
-
-		goTypes := make([]string, len(args))
-		parts := make([]string, len(args))
-		for i, a := range args {
-			goTypes[i] = g.goType(a)
-			parts[i] = goTypes[i]
-		}
-		key := instKey(strings.Join(parts, "\t"))
-
-		rec := instRecord{
-			Key:     key,
-			GoTypes: goTypes,
-			Mangled: mangleInst(fn.Name, goTypes),
-		}
-
-		existing := g.genericInstances[sym]
-		found := false
-		for _, r := range existing {
-			if r.Key == key {
-				rec.Mangled = r.Mangled
-				found = true
-				break
-			}
-		}
-		if !found {
-			g.genericInstances[sym] = append(existing, rec)
-		}
-		g.callMono[call] = rec.Mangled
+	key := instDedupeKey(sym, goTypes)
+	if name, ok := g.instByKey[key]; ok {
+		return name
 	}
+	mangled := mangleInst(fn.Name, goTypes)
+	rec := instRecord{Fn: fn, Sym: sym, GoTypes: goTypes, Mangled: mangled}
+	g.instByKey[key] = mangled
+	g.instQueue = append(g.instQueue, rec)
+	return mangled
+}
 
-	// Stable output order so repeated runs produce identical source.
-	for sym, recs := range g.genericInstances {
-		sort.SliceStable(recs, func(i, j int) bool {
-			return recs[i].Mangled < recs[j].Mangled
-		})
-		g.genericInstances[sym] = recs
+// instDedupeKey builds a map key that identifies a (symbol, type-tuple)
+// pair. Uses a unit-separator byte between the pointer repr and each
+// type fragment so `id_int` vs `id_int*` can't collide.
+func instDedupeKey(sym *resolve.Symbol, goTypes []string) string {
+	var b strings.Builder
+	b.WriteString(sym.Name)
+	b.WriteByte(0x1f)
+	b.WriteString(sym.Pos.String())
+	for _, t := range goTypes {
+		b.WriteByte(0x1f)
+		b.WriteString(t)
+	}
+	return b.String()
+}
+
+// initInstances resets the per-file monomorphization state. Called
+// once per gen.run() before any decl is visited.
+func (g *gen) initInstances() {
+	g.instByKey = map[string]string{}
+	g.instQueue = nil
+}
+
+// drainInstances emits every queued specialization and every further
+// specialization triggered by their bodies. Runs to a fixed point;
+// bounded by the call graph which is finite for any well-typed input.
+func (g *gen) drainInstances() {
+	// Index-based loop so appends during emission are picked up.
+	for i := 0; i < len(g.instQueue); i++ {
+		rec := g.instQueue[i]
+		cleanup := g.pushSubst(rec.Fn.Generics, rec.GoTypes)
+		g.emitFnDeclBody(rec.Fn, rec.Mangled)
+		cleanup()
 	}
 }
 
@@ -125,11 +101,57 @@ func (g *gen) calleeSymbol(fn ast.Expr) *resolve.Symbol {
 	return nil
 }
 
+// callMonoName returns the mangled specialization name for a generic
+// call site, or "" when the call isn't a generic fn call (or the
+// callee isn't a user-defined fn). Records the instantiation on the
+// pending queue as a side effect so downstream emission picks it up.
+//
+// The current substEnv is implicitly consumed: g.goType on a TypeVar
+// whose name is in substEnv substitutes its concrete Go type, so a
+// call `id(y)` inside `wrap<U>` being monomorphized at U=Int yields
+// goTypes=["int"] here. This is how transitive instantiation works —
+// a generic fn's body is visited once per outer monomorph, and each
+// inner generic call is re-specialized under that monomorph's subst.
+func (g *gen) callMonoName(c *ast.CallExpr) string {
+	if g.chk == nil {
+		return ""
+	}
+	args, ok := g.chk.Instantiations[c]
+	if !ok || len(args) == 0 {
+		return ""
+	}
+	sym := g.calleeSymbol(c.Fn)
+	if sym == nil || sym.Kind != resolve.SymFn {
+		return ""
+	}
+	fn, ok := sym.Decl.(*ast.FnDecl)
+	if !ok || fn == nil || len(fn.Generics) == 0 {
+		return ""
+	}
+	if len(args) != len(fn.Generics) {
+		return ""
+	}
+	goTypes := make([]string, len(args))
+	for i, a := range args {
+		goTypes[i] = g.goType(a)
+	}
+	// If any arg resolved to a symbolic name still (unhandled TypeVar)
+	// we bail — the call can't be safely monomorphized, fall through
+	// to the generic path. This catches bugs rather than emitting
+	// invalid Go silently.
+	for _, t := range goTypes {
+		if t == "" {
+			return ""
+		}
+	}
+	return g.requestInstance(sym, goTypes)
+}
+
 // mangleInst builds the specialized fn name. Illegal identifier
 // characters in a Go type rendering (`[`, `]`, `.`, space, `*`) are
-// flattened so `id[[]int]` becomes `id_SliceInt`-ish — we keep it simple
-// and replace with `_` / drop — the goal is only uniqueness per type
-// tuple within one file, not human readability.
+// flattened so e.g. `[]int` → `Ofint` — uniqueness within the set of
+// types Osty currently emits is preserved; human readability is a
+// non-goal here.
 func mangleInst(name string, goTypes []string) string {
 	var b strings.Builder
 	b.WriteString(name)
@@ -141,12 +163,10 @@ func mangleInst(name string, goTypes []string) string {
 }
 
 // sanitizeTypeName collapses a Go type string into a conservative
-// identifier fragment. The resulting fragment loses structural
-// information (we can't distinguish `[]int` from `[]int8` … wait, we
-// keep digits, just drop brackets). Distinctness is preserved because
-// mapping is injective within the set of types Osty currently emits:
-// brackets → `Of`, `*` → `Ptr`, `.` → `_`, space → ``, anything else
-// non-alphanumeric → `_`.
+// identifier fragment. `[` / `]` become `Of`, `*` → `Ptr`, spaces
+// dropped, anything else non-alphanumeric → `_`. The mapping is
+// injective over the set of Go type strings Osty currently emits,
+// which is what monomorphization-name distinctness requires.
 func sanitizeTypeName(t string) string {
 	var b strings.Builder
 	for _, r := range t {
@@ -196,27 +216,5 @@ func (g *gen) lookupSubst(name string) (string, bool) {
 	}
 	v, ok := g.substEnv[name]
 	return v, ok
-}
-
-// isGenericFnSym reports whether `sym` is a user-declared generic
-// function — the set whose calls need name rewriting.
-func (g *gen) isGenericFnSym(sym *resolve.Symbol) bool {
-	if sym == nil || sym.Kind != resolve.SymFn {
-		return false
-	}
-	fn, ok := sym.Decl.(*ast.FnDecl)
-	return ok && fn != nil && len(fn.Generics) > 0
-}
-
-// emitMonomorphizedFn emits every specialized copy of a generic fn.
-// Each copy substitutes the generic parameters with their concrete
-// types via the pushed substEnv — the rest of the emit path is
-// unchanged because goTypeExpr / goType now consult substEnv.
-func (g *gen) emitMonomorphizedFn(fn *ast.FnDecl, recs []instRecord) {
-	for _, rec := range recs {
-		cleanup := g.pushSubst(fn.Generics, rec.GoTypes)
-		g.emitFnDeclBody(fn, rec.Mangled)
-		cleanup()
-	}
 }
 

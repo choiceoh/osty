@@ -52,15 +52,10 @@ func (g *gen) emitFnDecl(fn *ast.FnDecl) {
 	}
 
 	if len(fn.Generics) > 0 {
-		sym := g.res.FileScope.Lookup(fn.Name)
-		recs := g.genericInstances[sym]
-		if len(recs) == 0 {
-			// No instantiations: emit nothing. Monomorphization is a
-			// demand-driven transform — a generic body with no call
-			// sites has no lowered form in the Go output.
-			return
-		}
-		g.emitMonomorphizedFn(fn, recs)
+		// Demand-driven: generic fns never emit inline. A call site
+		// (possibly inside another generic body being specialized)
+		// requests an instantiation via requestInstance, and the
+		// post-pass drainInstances materializes it.
 		return
 	}
 

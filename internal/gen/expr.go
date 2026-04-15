@@ -301,12 +301,14 @@ func (g *gen) emitCoalesce(b *ast.BinaryExpr) {
 // (`shape.area()` → `Shape_area(shape)`), and static/associated
 // function calls (`User.new("a")` → `User_new("a")`).
 func (g *gen) emitCall(c *ast.CallExpr) {
-	// Monomorphized generic-fn call: the callee was specialized to a
-	// mangled name during buildInstances. Rewrite before any of the
-	// construct-specific paths so the mangled name wins even when the
-	// source-level identifier happens to collide with, say, a variant
-	// constructor in a different scope.
-	if mangled, ok := g.callMono[c]; ok {
+	// Monomorphized generic-fn call. callMonoName consults the current
+	// substEnv so an inner call inside a generic body (e.g. `id(y)`
+	// appearing in `wrap<U>`) resolves transitively to the concrete
+	// type of the enclosing monomorph (`id_int` when emitting
+	// wrap_int). The rewrite runs before the construct-specific paths
+	// so the mangled name wins over any source-level collision with
+	// a variant constructor etc.
+	if mangled := g.callMonoName(c); mangled != "" {
 		g.body.write(mangled)
 		g.body.write("(")
 		for i, a := range c.Args {

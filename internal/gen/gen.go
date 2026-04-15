@@ -101,16 +101,19 @@ type gen struct {
 	// emitQuestion. Nil when no lift is in progress.
 	questionSubs map[*ast.QuestionExpr]string
 
-	// genericInstances groups the distinct instantiations recorded for
-	// each user-defined generic function. Populated by buildInstances
-	// before declaration emission; consumed by emitFnDecl to produce
-	// one specialized copy per entry (§2.7.3).
-	genericInstances map[*resolve.Symbol][]instRecord
+	// instQueue is the pending list of generic-fn monomorphizations
+	// that still need to be emitted. emitCall appends to this queue
+	// each time it encounters a generic call site whose (sym, type
+	// tuple) pair hasn't yet been emitted; drainInstances walks the
+	// queue to a fixed point after the normal decl pass so transitive
+	// instantiations (a generic body calling another generic fn) are
+	// materialized (§2.7.3).
+	instQueue []instRecord
 
-	// callMono maps each generic CallExpr to the mangled name its
-	// callee is emitted under. Consumed by emitCall so the argument
-	// list lands in front of the specialized function.
-	callMono map[*ast.CallExpr]string
+	// instByKey dedupes the queue — maps (sym, goTypes) key to the
+	// mangled name already assigned. Read by callers that need the
+	// mangled name without re-enqueueing.
+	instByKey map[string]string
 
 	// substEnv is the current generic-parameter → Go-type substitution
 	// environment. Non-empty only while we emit inside a monomorphized
@@ -132,7 +135,7 @@ func newGen(pkgName string, file *ast.File, res *resolve.Result, chk *check.Resu
 		methodNames:  map[string]map[string]bool{},
 	}
 	g.indexTypes()
-	g.buildInstances()
+	g.initInstances()
 	return g
 }
 
@@ -198,10 +201,20 @@ func (g *gen) run() ([]byte, error) {
 		g.emitUseDecl(u)
 	}
 
-	// 1b. Emit every declaration in source order.
+	// 1b. Emit every declaration in source order. Generic fns are
+	//     skipped inline — their specializations are materialized
+	//     by drainInstances once every reachable (fn × type-tuple)
+	//     pair has been requested by a call site.
 	for _, d := range g.file.Decls {
 		g.emitDecl(d)
 	}
+
+	// 1c. Fixed-point drain of queued monomorphizations. Emitting one
+	//     specialization may discover further generic calls in its
+	//     body (transitive instantiation); drainInstances walks the
+	//     queue with an index-based loop so append-during-iteration
+	//     works as expected.
+	g.drainInstances()
 
 	// 2. Script-mode: if the file has top-level statements, wrap them
 	//    into a synthetic `main` function. A file with neither a
