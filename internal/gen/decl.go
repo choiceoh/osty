@@ -1,6 +1,7 @@
 package gen
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 
@@ -591,8 +592,196 @@ func (g *gen) emitStdlibRuntimeBridge(alias string, path []string, full string) 
 			join:  urlJoin,
 		}`, full)
 		return true
+	case "csv":
+		if !g.aliasUsedAsSelector(alias) {
+			return false
+		}
+		g.needResult = true
+		g.needCsvRuntime = true
+		g.use("fmt")
+		g.useAs("strings", "_ostyCsvStrings")
+		g.emitUseStub(alias, `struct {
+			CsvOptions    func(_delimiter rune, _quote rune, _trimSpace bool) _ostyCsvOptions
+			encode        func(rows [][]string) string
+			encodeWith    func(rows [][]string, opts _ostyCsvOptions) string
+			decode        func(text string) Result[[][]string, any]
+			decodeHeaders func(text string) Result[[]map[string]string, any]
+			decodeWith    func(text string, opts _ostyCsvOptions) Result[[][]string, any]
+		}{
+			CsvOptions: func(_delimiter rune, _quote rune, _trimSpace bool) _ostyCsvOptions {
+				return _ostyCsvOptions{delimiter: _delimiter, quote: _quote, trimSpace: _trimSpace}
+			},
+			encode: func(rows [][]string) string {
+				return _ostyCsvEncodeWith(rows, _ostyCsvOptions{delimiter: ',', quote: '"', trimSpace: false})
+			},
+			encodeWith: _ostyCsvEncodeWith,
+			decode: func(text string) Result[[][]string, any] {
+				return _ostyCsvDecodeWith(text, _ostyCsvOptions{delimiter: ',', quote: '"', trimSpace: false})
+			},
+			decodeHeaders: _ostyCsvDecodeHeaders,
+			decodeWith:    _ostyCsvDecodeWith,
+		}`, full)
+		return true
 	}
 	return false
+}
+
+func (g *gen) emitCsvRuntime(out *bytes.Buffer) {
+	out.WriteString(`
+type _ostyCsvOptions struct {
+	delimiter rune
+	quote     rune
+	trimSpace bool
+}
+
+func _ostyCsvEncodeField(field string, delimiter rune, quote rune) string {
+	needsQuote := field == "" ||
+		_ostyCsvStrings.ContainsRune(field, delimiter) ||
+		_ostyCsvStrings.ContainsRune(field, quote) ||
+		_ostyCsvStrings.ContainsAny(field, "\r\n") ||
+		field != _ostyCsvStrings.TrimSpace(field)
+	if !needsQuote {
+		return field
+	}
+	var b _ostyCsvStrings.Builder
+	b.WriteRune(quote)
+	for _, r := range field {
+		if r == quote {
+			b.WriteRune(quote)
+		}
+		b.WriteRune(r)
+	}
+	b.WriteRune(quote)
+	return b.String()
+}
+
+func _ostyCsvEncodeWith(rows [][]string, options _ostyCsvOptions) string {
+	var b _ostyCsvStrings.Builder
+	for _, row := range rows {
+		for fi, field := range row {
+			if fi > 0 {
+				b.WriteRune(options.delimiter)
+			}
+			b.WriteString(_ostyCsvEncodeField(field, options.delimiter, options.quote))
+		}
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+func _ostyCsvDecodeWith(text string, options _ostyCsvOptions) Result[[][]string, any] {
+	var rows [][]string
+	var row []string
+	var field _ostyCsvStrings.Builder
+	var inQuote, quoted, sawAny, endedRecord bool
+	chars := []rune(text)
+	length := len(chars)
+	i := 0
+	for i < length {
+		c := chars[i]
+		sawAny = true
+		if inQuote {
+			if c == options.quote {
+				if i+1 < length && chars[i+1] == options.quote {
+					field.WriteRune(options.quote)
+					i++
+				} else {
+					inQuote = false
+					quoted = true
+				}
+			} else {
+				field.WriteRune(c)
+			}
+			endedRecord = false
+			i++
+			continue
+		}
+		if c == options.quote {
+			if field.Len() == 0 {
+				inQuote = true
+			} else {
+				field.WriteRune(c)
+			}
+			endedRecord = false
+		} else if c == options.delimiter {
+			value := field.String()
+			if options.trimSpace && !quoted {
+				value = _ostyCsvStrings.TrimSpace(value)
+			}
+			row = append(row, value)
+			field.Reset()
+			quoted = false
+			endedRecord = false
+		} else if c == '\r' {
+			if i+1 < length && chars[i+1] == '\n' {
+				i++
+			}
+			value := field.String()
+			if options.trimSpace && !quoted {
+				value = _ostyCsvStrings.TrimSpace(value)
+			}
+			row = append(row, value)
+			field.Reset()
+			quoted = false
+			rows = append(rows, row)
+			row = nil
+			endedRecord = true
+		} else if c == '\n' {
+			value := field.String()
+			if options.trimSpace && !quoted {
+				value = _ostyCsvStrings.TrimSpace(value)
+			}
+			row = append(row, value)
+			field.Reset()
+			quoted = false
+			rows = append(rows, row)
+			row = nil
+			endedRecord = true
+		} else {
+			field.WriteRune(c)
+			endedRecord = false
+		}
+		i++
+	}
+	if inQuote {
+		return resultErr[[][]string, any](fmt.Errorf("csv: unterminated quoted field"))
+	}
+	if sawAny && !endedRecord {
+		value := field.String()
+		if options.trimSpace && !quoted {
+			value = _ostyCsvStrings.TrimSpace(value)
+		}
+		row = append(row, value)
+		rows = append(rows, row)
+	}
+	return resultOk[[][]string, any](rows)
+}
+
+func _ostyCsvDecodeHeaders(text string) Result[[]map[string]string, any] {
+	rowsRes := _ostyCsvDecodeWith(text, _ostyCsvOptions{delimiter: ',', quote: '"', trimSpace: false})
+	if !rowsRes.IsOk {
+		return resultErr[[]map[string]string, any](rowsRes.Error)
+	}
+	rows := rowsRes.Value
+	if len(rows) == 0 {
+		return resultOk[[]map[string]string, any]([]map[string]string{})
+	}
+	headers := rows[0]
+	out := make([]map[string]string, 0, len(rows)-1)
+	for _, row := range rows[1:] {
+		record := map[string]string{}
+		for i, header := range headers {
+			if i < len(row) {
+				record[header] = row[i]
+			} else {
+				record[header] = ""
+			}
+		}
+		out = append(out, record)
+	}
+	return resultOk[[]map[string]string, any](out)
+}
+`)
 }
 
 func (g *gen) stdFSImportAliases() (string, string) {

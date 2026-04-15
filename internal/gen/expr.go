@@ -120,6 +120,7 @@ func (g *gen) emitIdent(id *ast.Ident) {
 // field name on the struct type.
 func (g *gen) emitStructLit(s *ast.StructLit) {
 	var typeName string
+	isStdlibLit := false
 	switch t := s.Type.(type) {
 	case *ast.Ident:
 		if t.Name == "Self" && g.selfType != "" {
@@ -130,6 +131,7 @@ func (g *gen) emitStructLit(s *ast.StructLit) {
 	case *ast.FieldExpr:
 		if name, ok := g.stdlibStructLitType(t); ok {
 			typeName = name
+			isStdlibLit = true
 		} else {
 			// Qualified type (pkg.Type) — Phase 5.
 			g.emitExpr(s.Type)
@@ -138,10 +140,12 @@ func (g *gen) emitStructLit(s *ast.StructLit) {
 		g.emitExpr(s.Type)
 	}
 	refStruct := false
-	if n, ok := g.typeOf(s).(*types.Named); ok && g.isReferenceStructSym(n.Sym) {
-		refStruct = true
-		if got := g.goType(n); strings.HasPrefix(got, "*") {
-			typeName = strings.TrimPrefix(got, "*")
+	if !isStdlibLit {
+		if n, ok := g.typeOf(s).(*types.Named); ok && g.isReferenceStructSym(n.Sym) {
+			refStruct = true
+			if got := g.goType(n); strings.HasPrefix(got, "*") {
+				typeName = strings.TrimPrefix(got, "*")
+			}
 		}
 	} else if id, ok := s.Type.(*ast.Ident); ok && g.structTypes[id.Name] {
 		refStruct = true
@@ -452,9 +456,6 @@ func (g *gen) emitCall(c *ast.CallExpr) {
 			return
 		}
 		if g.emitStdlibEnvCall(c, f) {
-			return
-		}
-		if g.emitStdlibCSVCall(c, f) {
 			return
 		}
 		if g.emitStdlibCompressCall(c, f) {
@@ -790,45 +791,6 @@ func (g *gen) emitStdlibEnvCall(c *ast.CallExpr, _ *ast.FieldExpr) bool {
 	g.needEnv = true
 	switch helper {
 	case "envRequire", "envSet", "envUnset", "envCurrentDir", "envSetCurrentDir":
-		g.needResult = true
-	}
-	g.emitStdlibHelperCall(helper, c.Args)
-	return true
-}
-
-func (g *gen) emitStdlibCSVCall(c *ast.CallExpr, _ *ast.FieldExpr) bool {
-	parts, ok := g.stdlibCallPath(c, "csv")
-	if !ok || len(parts) != 1 {
-		return false
-	}
-	var helper string
-	switch parts[0] {
-	case "encode":
-		if len(c.Args) == 1 {
-			helper = "csvEncode"
-		}
-	case "encodeWith":
-		if len(c.Args) == 2 {
-			helper = "csvEncodeWith"
-		}
-	case "decode":
-		if len(c.Args) == 1 {
-			helper = "csvDecode"
-		}
-	case "decodeHeaders":
-		if len(c.Args) == 1 {
-			helper = "csvDecodeHeaders"
-		}
-	case "decodeWith":
-		if len(c.Args) == 2 {
-			helper = "csvDecodeWith"
-		}
-	}
-	if helper == "" {
-		return false
-	}
-	g.needCsvRuntime = true
-	if strings.HasPrefix(helper, "csvDecode") {
 		g.needResult = true
 	}
 	g.emitStdlibHelperCall(helper, c.Args)

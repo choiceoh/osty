@@ -223,9 +223,6 @@ func (g *gen) goNamedType(n *types.Named) string {
 	case "RegexError":
 		g.needRegex = true
 		return "error"
-	case "CsvOptions":
-		g.needCsvRuntime = true
-		return "CsvOptions"
 	case "Json":
 		g.needJSON = true
 		return "Json"
@@ -269,8 +266,6 @@ func (g *gen) isReferenceStructSym(sym *resolve.Symbol) bool {
 		return true
 	}
 	switch sym.Name {
-	case "CsvOptions":
-		return false
 	}
 	return true
 }
@@ -418,9 +413,6 @@ func (g *gen) goNamedAST(n *ast.NamedType) string {
 	case "RegexError":
 		g.needRegex = true
 		return "error"
-	case "CsvOptions":
-		g.needCsvRuntime = true
-		return "CsvOptions"
 	case "Json":
 		g.needJSON = true
 		return "Json"
