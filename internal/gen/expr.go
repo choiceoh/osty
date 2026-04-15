@@ -2224,7 +2224,7 @@ func (g *gen) emitCollectionLess(left, right string, t types.Type) {
 }
 
 func (g *gen) collectionListElemGo(t types.Type, fallback string) string {
-	if n, ok := t.(*types.Named); ok && n.Sym != nil && n.Sym.Name == "List" && len(n.Args) == 1 {
+	if n, ok := t.(*types.Named); ok && n.Sym != nil && (n.Sym.Name == "List" || n.Sym.Name == "Iter") && len(n.Args) == 1 {
 		return g.goType(n.Args[0])
 	}
 	return strings.TrimPrefix(fallback, "[]")
