@@ -119,7 +119,7 @@ fn testBoth() {
     testing.assert(sameA())
     testing.assert(sameB())
 }
-`))
+	`))
 	pkg, chk := loadCalc(t, dir)
 
 	srcs, err := GenerateHarness(pkg, chk, nil)
@@ -167,6 +167,75 @@ fn testCrossFileVariant() {
 	}})
 	if err != nil {
 		t.Fatalf("GenerateHarness: %v\n--- main.go ---\n%s", err, srcs.Main)
+	}
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go binary not on PATH; skipping end-to-end run")
+	}
+	out := t.TempDir()
+	mustWrite(t, filepath.Join(out, "main.go"), srcs.Main)
+	mustWrite(t, filepath.Join(out, "harness.go"), srcs.Harness)
+	mustWrite(t, filepath.Join(out, "go.mod"), []byte("module ostytest\ngo 1.22\n"))
+	cmd := exec.Command("go", "run", ".")
+	cmd.Dir = out
+	combined, runErr := cmd.CombinedOutput()
+	if runErr != nil {
+		t.Fatalf("go run failed: %v\n%s\n--- main.go ---\n%s", runErr, combined, srcs.Main)
+	}
+	if want := "1 passed, 0 failed, 1 total"; !strings.Contains(string(combined), want) {
+		t.Fatalf("missing summary %q in:\n%s", want, combined)
+	}
+}
+
+func TestGenerateHarness_CrossFileEnumVariantRefs(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "token.osty"), []byte(`pub enum TokenKind {
+    EOF,
+    Newline,
+    Ident(String),
+}
+`))
+	mustWrite(t, filepath.Join(dir, "parser.osty"), []byte(`pub struct Node {
+    pub kind: TokenKind,
+}
+
+pub fn emptyNode() -> Node {
+    Node { kind: EOF }
+}
+
+pub fn identNode(text: String) -> Node {
+    Node { kind: Ident(text) }
+}
+
+pub fn isEOF(kind: TokenKind) -> Bool {
+    kind == EOF
+}
+
+pub fn isNewline(kind: TokenKind) -> Bool {
+    kind == Newline
+}
+`))
+	mustWrite(t, filepath.Join(dir, "parser_test.osty"), []byte(`fn testCrossFileEnumVariantRefs() {
+    let n = emptyNode()
+    let _ = isEOF(n.kind)
+    let _ = isNewline(Newline)
+    let _ = identNode("x")
+}
+`))
+
+	pkg, err := resolve.LoadPackageWithTests(dir)
+	if err != nil {
+		t.Fatalf("load package: %v", err)
+	}
+	res := resolve.ResolvePackage(pkg, resolve.NewPrelude())
+	chk := check.Package(pkg, res)
+	srcs, err := GenerateHarness(pkg, chk, []Entry{{
+		Name: "testCrossFileEnumVariantRefs",
+		Kind: KindTest,
+		File: "parser_test.osty",
+		Line: 1,
+	}})
+	if err != nil {
+		t.Fatalf("GenerateHarness: %v", err)
 	}
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("go binary not on PATH; skipping end-to-end run")
