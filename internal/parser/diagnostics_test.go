@@ -17,6 +17,19 @@ func findDiag(diags []*diag.Diagnostic, code string) *diag.Diagnostic {
 	return nil
 }
 
+// findDiagMessage returns the first diagnostic whose rendered message
+// contains substr, or nil. Use only when the relevant diagnostic site has
+// no Code; prefer findDiag/expectCode otherwise so tests don't couple to
+// error wording.
+func findDiagMessage(diags []*diag.Diagnostic, substr string) *diag.Diagnostic {
+	for _, d := range diags {
+		if strings.Contains(d.Error(), substr) {
+			return d
+		}
+	}
+	return nil
+}
+
 func TestDiagElseAcrossNewline(t *testing.T) {
 	src := `fn f() -> Int {
     if cond {

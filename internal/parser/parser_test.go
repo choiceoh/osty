@@ -1000,3 +1000,582 @@ func TestParseRangeInMatch(t *testing.T) {
 		t.Fatalf("arm 2 = %T", m.Arms[2].Pattern)
 	}
 }
+
+// TestParseOpenStartRangePat covers parseRangePatFromOpen: patterns that
+// start with `..` or `..=` (no lower bound), e.g. `..10`, `..=0`, and the
+// unbounded `100..` form.
+func TestParseOpenStartRangePat(t *testing.T) {
+	src := `fn classify(n: Int) -> String {
+    match n {
+        ..0 -> "neg",
+        ..=9 -> "small",
+        10..=99 -> "mid",
+        100.. -> "big",
+    }
+}`
+	f := parseOrFatal(t, src)
+	body := f.Decls[0].(*ast.FnDecl).Body
+	m := body.Stmts[0].(*ast.ExprStmt).X.(*ast.MatchExpr)
+	if len(m.Arms) != 4 {
+		t.Fatalf("arms = %d, want 4", len(m.Arms))
+	}
+	// Arm 0: `..0` — open start, exclusive, stop literal 0.
+	rp0, ok := m.Arms[0].Pattern.(*ast.RangePat)
+	if !ok {
+		t.Fatalf("arm 0 = %T, want *ast.RangePat", m.Arms[0].Pattern)
+	}
+	if rp0.Start != nil {
+		t.Fatalf("arm 0 Start = %v, want nil (open start)", rp0.Start)
+	}
+	if rp0.Inclusive {
+		t.Fatalf("arm 0 Inclusive = true, want false")
+	}
+	if _, ok := rp0.Stop.(*ast.IntLit); !ok {
+		t.Fatalf("arm 0 Stop = %T, want *ast.IntLit", rp0.Stop)
+	}
+	// Arm 1: `..=9` — open start, inclusive.
+	rp1, ok := m.Arms[1].Pattern.(*ast.RangePat)
+	if !ok {
+		t.Fatalf("arm 1 = %T, want *ast.RangePat", m.Arms[1].Pattern)
+	}
+	if rp1.Start != nil || !rp1.Inclusive {
+		t.Fatalf("arm 1 mismatch: Start=%v Inclusive=%v", rp1.Start, rp1.Inclusive)
+	}
+	// Arm 2: `10..=99` — both bounds, inclusive.
+	rp2 := m.Arms[2].Pattern.(*ast.RangePat)
+	if rp2.Start == nil || rp2.Stop == nil || !rp2.Inclusive {
+		t.Fatalf("arm 2 mismatch: %+v", rp2)
+	}
+	// Arm 3: `100..` — open end, exclusive.
+	rp3, ok := m.Arms[3].Pattern.(*ast.RangePat)
+	if !ok {
+		t.Fatalf("arm 3 = %T", m.Arms[3].Pattern)
+	}
+	if rp3.Start == nil || rp3.Stop != nil || rp3.Inclusive {
+		t.Fatalf("arm 3 mismatch: Start=%v Stop=%v Inclusive=%v",
+			rp3.Start, rp3.Stop, rp3.Inclusive)
+	}
+}
+
+// TestParseOpenStartRangePatNegative covers `..=-1` and `..-5` — open-start
+// range patterns with a negated literal endpoint. Exercises the MINUS
+// branch of parseRangeEndExpr.
+func TestParseOpenStartRangePatNegative(t *testing.T) {
+	src := `fn f(n: Int) -> Int {
+    match n {
+        ..=-1 -> -1,
+        0..10 -> 1,
+        _ -> 0,
+    }
+}`
+	f := parseOrFatal(t, src)
+	body := f.Decls[0].(*ast.FnDecl).Body
+	m := body.Stmts[0].(*ast.ExprStmt).X.(*ast.MatchExpr)
+	rp, ok := m.Arms[0].Pattern.(*ast.RangePat)
+	if !ok {
+		t.Fatalf("arm 0 = %T", m.Arms[0].Pattern)
+	}
+	if rp.Start != nil || !rp.Inclusive {
+		t.Fatalf("arm 0 mismatch: %+v", rp)
+	}
+	// Stop should be UnaryExpr(-, IntLit(1)).
+	u, ok := rp.Stop.(*ast.UnaryExpr)
+	if !ok {
+		t.Fatalf("arm 0 Stop = %T, want *ast.UnaryExpr", rp.Stop)
+	}
+	if u.Op != token.MINUS {
+		t.Fatalf("arm 0 Stop op = %s", u.Op)
+	}
+}
+
+// TestParseOrPattern covers parsePattern's OR-alternative branch:
+// `Pat1 | Pat2 | Pat3` builds an *ast.OrPat.
+func TestParseOrPattern(t *testing.T) {
+	src := `fn f(n: Int) -> String {
+    match n {
+        1 | 2 | 3 -> "low",
+        10 | 20 -> "mid",
+        _ -> "other",
+    }
+}`
+	f := parseOrFatal(t, src)
+	body := f.Decls[0].(*ast.FnDecl).Body
+	m := body.Stmts[0].(*ast.ExprStmt).X.(*ast.MatchExpr)
+	or0, ok := m.Arms[0].Pattern.(*ast.OrPat)
+	if !ok {
+		t.Fatalf("arm 0 = %T, want *ast.OrPat", m.Arms[0].Pattern)
+	}
+	if len(or0.Alts) != 3 {
+		t.Fatalf("arm 0 Alts = %d, want 3", len(or0.Alts))
+	}
+	for i, a := range or0.Alts {
+		if _, ok := a.(*ast.LiteralPat); !ok {
+			t.Fatalf("arm 0 alt %d = %T, want *ast.LiteralPat", i, a)
+		}
+	}
+	or1, ok := m.Arms[1].Pattern.(*ast.OrPat)
+	if !ok {
+		t.Fatalf("arm 1 = %T, want *ast.OrPat", m.Arms[1].Pattern)
+	}
+	if len(or1.Alts) != 2 {
+		t.Fatalf("arm 1 Alts = %d, want 2", len(or1.Alts))
+	}
+}
+
+// TestParseOrPatternVariants covers OR-patterns mixing variant patterns
+// and wildcard-adjacent forms.
+func TestParseOrPatternVariants(t *testing.T) {
+	src := `fn f(c: Color) -> Int {
+    match c {
+        Color.Red | Color.Green | Color.Blue -> 1,
+        _ -> 0,
+    }
+}`
+	f := parseOrFatal(t, src)
+	body := f.Decls[0].(*ast.FnDecl).Body
+	m := body.Stmts[0].(*ast.ExprStmt).X.(*ast.MatchExpr)
+	or, ok := m.Arms[0].Pattern.(*ast.OrPat)
+	if !ok {
+		t.Fatalf("arm 0 = %T", m.Arms[0].Pattern)
+	}
+	if len(or.Alts) != 3 {
+		t.Fatalf("alts = %d", len(or.Alts))
+	}
+	for i, a := range or.Alts {
+		vp, ok := a.(*ast.VariantPat)
+		if !ok {
+			t.Fatalf("alt %d = %T, want *ast.VariantPat", i, a)
+		}
+		if len(vp.Path) != 2 || vp.Path[0] != "Color" {
+			t.Fatalf("alt %d path = %v", i, vp.Path)
+		}
+	}
+}
+
+// TestParseDoubleOptionalType covers parseType's double-`?` handling:
+// `Int??` must parse as Option<Option<Int>>. The lexer greedily matches
+// `??` as the nil-coalescing token, so parseType splits it.
+func TestParseDoubleOptionalType(t *testing.T) {
+	src := `fn f(x: Int??) -> Int?? { x }`
+	f := parseOrFatal(t, src)
+	fd := f.Decls[0].(*ast.FnDecl)
+	assertDoubleOptionInt(t, "param", fd.Params[0].Type)
+	assertDoubleOptionInt(t, "return", fd.ReturnType)
+}
+
+// TestParseTripleOptionalType ensures the `??` rewriting loop handles
+// more than one iteration: `Int???` = Option<Option<Option<Int>>>.
+func TestParseTripleOptionalType(t *testing.T) {
+	src := `fn f(x: Int???) -> Int { 0 }`
+	f := parseOrFatal(t, src)
+	fd := f.Decls[0].(*ast.FnDecl)
+	outer, ok := fd.Params[0].Type.(*ast.OptionalType)
+	if !ok {
+		t.Fatalf("outer = %T", fd.Params[0].Type)
+	}
+	mid, ok := outer.Inner.(*ast.OptionalType)
+	if !ok {
+		t.Fatalf("mid = %T", outer.Inner)
+	}
+	inner, ok := mid.Inner.(*ast.OptionalType)
+	if !ok {
+		t.Fatalf("inner = %T", mid.Inner)
+	}
+	nt, ok := inner.Inner.(*ast.NamedType)
+	if !ok || len(nt.Path) != 1 || nt.Path[0] != "Int" {
+		t.Fatalf("leaf = %T %+v", inner.Inner, inner.Inner)
+	}
+}
+
+func assertDoubleOptionInt(t *testing.T, label string, ty ast.Type) {
+	t.Helper()
+	outer, ok := ty.(*ast.OptionalType)
+	if !ok {
+		t.Fatalf("%s: outer = %T, want *ast.OptionalType", label, ty)
+	}
+	inner, ok := outer.Inner.(*ast.OptionalType)
+	if !ok {
+		t.Fatalf("%s: inner = %T, want *ast.OptionalType", label, outer.Inner)
+	}
+	nt, ok := inner.Inner.(*ast.NamedType)
+	if !ok {
+		t.Fatalf("%s: leaf = %T", label, inner.Inner)
+	}
+	if len(nt.Path) != 1 || nt.Path[0] != "Int" {
+		t.Fatalf("%s: leaf path = %v", label, nt.Path)
+	}
+}
+
+// TestParseQualifiedStructLit covers the FieldExpr branch of isTypeRef:
+// a struct literal whose type is a dotted path (`Pkg.Type { ... }`).
+func TestParseQualifiedStructLit(t *testing.T) {
+	src := `fn f() -> Foo {
+    Pkg.Foo { x: 1, y: 2 }
+}`
+	f := parseOrFatal(t, src)
+	body := f.Decls[0].(*ast.FnDecl).Body
+	sl, ok := body.Stmts[0].(*ast.ExprStmt).X.(*ast.StructLit)
+	if !ok {
+		t.Fatalf("stmt 0 = %T, want *ast.StructLit", body.Stmts[0].(*ast.ExprStmt).X)
+	}
+	fe, ok := sl.Type.(*ast.FieldExpr)
+	if !ok {
+		t.Fatalf("Type = %T, want *ast.FieldExpr", sl.Type)
+	}
+	if fe.Name != "Foo" {
+		t.Fatalf("field name = %q", fe.Name)
+	}
+	base, ok := fe.X.(*ast.Ident)
+	if !ok || base.Name != "Pkg" {
+		t.Fatalf("base = %T %+v", fe.X, fe.X)
+	}
+	if len(sl.Fields) != 2 {
+		t.Fatalf("fields = %d", len(sl.Fields))
+	}
+}
+
+// TestParseNestedQualifiedStructLit exercises a longer dotted path where
+// the struct-literal receiver is itself a FieldExpr chain. This ensures
+// isTypeRefOrPath recurses correctly for `A.B.Type { ... }` shapes.
+func TestParseNestedQualifiedStructLit(t *testing.T) {
+	src := `fn f() -> Foo {
+    A.B.Foo { x: 1 }
+}`
+	f := parseOrFatal(t, src)
+	body := f.Decls[0].(*ast.FnDecl).Body
+	sl, ok := body.Stmts[0].(*ast.ExprStmt).X.(*ast.StructLit)
+	if !ok {
+		t.Fatalf("stmt 0 = %T", body.Stmts[0].(*ast.ExprStmt).X)
+	}
+	// Type should be FieldExpr{ X: FieldExpr{ X: Ident"A", Name:"B" }, Name:"Foo" }.
+	outer, ok := sl.Type.(*ast.FieldExpr)
+	if !ok || outer.Name != "Foo" {
+		t.Fatalf("outer = %T %+v", sl.Type, sl.Type)
+	}
+	mid, ok := outer.X.(*ast.FieldExpr)
+	if !ok || mid.Name != "B" {
+		t.Fatalf("mid = %T %+v", outer.X, outer.X)
+	}
+	base, ok := mid.X.(*ast.Ident)
+	if !ok || base.Name != "A" {
+		t.Fatalf("base = %T %+v", mid.X, mid.X)
+	}
+}
+
+// TestParsePatternMinusLiteral covers the MINUS branch of parsePatternAtom:
+// negative numeric literals as standalone patterns (not just as range
+// endpoints).
+func TestParsePatternMinusLiteral(t *testing.T) {
+	src := `fn sign(n: Int) -> Int {
+    match n {
+        -1 -> -1,
+        0 -> 0,
+        _ -> 1,
+    }
+}`
+	f := parseOrFatal(t, src)
+	body := f.Decls[0].(*ast.FnDecl).Body
+	m := body.Stmts[0].(*ast.ExprStmt).X.(*ast.MatchExpr)
+	lp, ok := m.Arms[0].Pattern.(*ast.LiteralPat)
+	if !ok {
+		t.Fatalf("arm 0 = %T, want *ast.LiteralPat", m.Arms[0].Pattern)
+	}
+	u, ok := lp.Literal.(*ast.UnaryExpr)
+	if !ok || u.Op != token.MINUS {
+		t.Fatalf("arm 0 literal = %T %+v", lp.Literal, lp.Literal)
+	}
+}
+
+// TestParsePatternBoolLiteral covers parsePatternAtom's true/false IDENT
+// branch: bool literals in pattern position.
+func TestParsePatternBoolLiteral(t *testing.T) {
+	src := `fn describe(b: Bool) -> String {
+    match b {
+        true -> "yes",
+        false -> "no",
+    }
+}`
+	f := parseOrFatal(t, src)
+	body := f.Decls[0].(*ast.FnDecl).Body
+	m := body.Stmts[0].(*ast.ExprStmt).X.(*ast.MatchExpr)
+	for i, expected := range []bool{true, false} {
+		lp, ok := m.Arms[i].Pattern.(*ast.LiteralPat)
+		if !ok {
+			t.Fatalf("arm %d = %T", i, m.Arms[i].Pattern)
+		}
+		bl, ok := lp.Literal.(*ast.BoolLit)
+		if !ok {
+			t.Fatalf("arm %d literal = %T", i, lp.Literal)
+		}
+		if bl.Value != expected {
+			t.Fatalf("arm %d value = %v, want %v", i, bl.Value, expected)
+		}
+	}
+}
+
+// TestParsePatternAtomError covers the default/error path of parsePatternAtom:
+// an unexpected token in pattern position emits a diagnostic and returns a
+// wildcard placeholder for recovery.
+func TestParsePatternAtomError(t *testing.T) {
+	// `+` is not a valid pattern-start token.
+	src := `fn f(n: Int) -> Int {
+    match n {
+        + -> 1,
+        _ -> 0,
+    }
+}`
+	_, diags := ParseDiagnostics([]byte(src))
+	if findDiagMessage(diags, "expected pattern") == nil {
+		t.Fatalf("expected 'expected pattern' diagnostic; got %d diags", len(diags))
+	}
+}
+
+// TestParseGenericDoubleClose covers expectTypeGT's SHR split branch:
+// `Map<K, List<V>>` — the lexer produces a single `>>` token which
+// parseType splits into two `>` tokens for the nested generic.
+func TestParseGenericDoubleClose(t *testing.T) {
+	src := `fn f(m: Map<String, List<Int>>) -> Int { 0 }`
+	f := parseOrFatal(t, src)
+	fd := f.Decls[0].(*ast.FnDecl)
+	mt := fd.Params[0].Type.(*ast.NamedType)
+	if mt.Path[0] != "Map" || len(mt.Args) != 2 {
+		t.Fatalf("outer = %+v", mt)
+	}
+	inner := mt.Args[1].(*ast.NamedType)
+	if inner.Path[0] != "List" || len(inner.Args) != 1 {
+		t.Fatalf("inner = %+v", inner)
+	}
+}
+
+// TestParseAnnotationsOnUseRejected covers parseFile's error path for
+// annotations preceding a `use` statement — v0.3 §18.1 disallows this but
+// the parser still recovers and attaches the use.
+func TestParseAnnotationsOnUseRejected(t *testing.T) {
+	src := `#[deprecated]
+use foo.bar
+fn main() {}`
+	expectCode(t, src, diag.CodeAnnotationBadTarget)
+}
+
+// TestParseUseGoStructMethodRejected covers the diagnostic path for a
+// method declared inside a `use go` struct (v0.2 R16).
+func TestParseUseGoStructMethodRejected(t *testing.T) {
+	src := `use go "net/http" {
+    struct Client {
+        timeout: Int,
+        fn Do(req: Int) -> Int
+    }
+}
+fn main() {}`
+	expectCode(t, src, diag.CodeUseGoStructHasMethod)
+}
+
+// TestParseUseGoFnGenericsRejected covers the diagnostic for generic
+// parameters on a `use go` function.
+func TestParseUseGoFnGenericsRejected(t *testing.T) {
+	src := `use go "net/http" {
+    fn Get<T>(u: String) -> T
+}
+fn main() {}`
+	expectCode(t, src, diag.CodeUseGoUnsupported)
+}
+
+// TestParseUseGoFnParamDefaultRejected covers the diagnostic path for a
+// default value on a `use go` function parameter.
+func TestParseUseGoFnParamDefaultRejected(t *testing.T) {
+	src := `use go "net/http" {
+    fn Get(u: String, timeout: Int = 30) -> String
+}
+fn main() {}`
+	expectCode(t, src, diag.CodeUseGoUnsupported)
+}
+
+// TestParseDefaultExprAllLiterals exercises all literal forms permitted
+// as parameter defaults under R18: `None`, `Err(...)`, and the unit
+// default `()`. The existing `TestParseDefaultExprAccepted` covers the
+// majority; this adds the remaining branches.
+func TestParseDefaultExprAllLiterals(t *testing.T) {
+	src := `fn f(
+    a: Int? = None,
+    b: Result<Int, Error> = Err("boom"),
+    c: Unit = (),
+    d: String = "hi",
+    e: Char = 'c',
+    f: Float = 3.14,
+) -> Int { 0 }`
+	parseOrFatal(t, src)
+}
+
+// TestParseBinaryOpsAll exercises every infix operator to ensure
+// infixLBP returns non-zero binding power for each arm. Covers the
+// remaining branches of the infixLBP switch (||, &&, |, ^, &, <<, >>,
+// *, /, %, comparisons).
+func TestParseBinaryOpsAll(t *testing.T) {
+	cases := map[string]token.Kind{
+		"a || b": token.OR,
+		"a && b": token.AND,
+		"a == b": token.EQ,
+		"a != b": token.NEQ,
+		"a < b":  token.LT,
+		"a <= b": token.LEQ,
+		"a >= b": token.GEQ,
+		"a | b":  token.BITOR,
+		"a ^ b":  token.BITXOR,
+		"a & b":  token.BITAND,
+		"a << b": token.SHL,
+		"a >> b": token.SHR,
+		"a * b":  token.STAR,
+		"a / b":  token.SLASH,
+		"a % b":  token.PERCENT,
+	}
+	for expr, wantOp := range cases {
+		src := fmt.Sprintf(`fn f() -> Int { %s }`, expr)
+		f := parseOrFatal(t, src)
+		body := f.Decls[0].(*ast.FnDecl).Body
+		be, ok := body.Stmts[0].(*ast.ExprStmt).X.(*ast.BinaryExpr)
+		if !ok {
+			t.Errorf("%s: stmt = %T", expr, body.Stmts[0].(*ast.ExprStmt).X)
+			continue
+		}
+		if be.Op != wantOp {
+			t.Errorf("%s: op = %s, want %s", expr, be.Op, wantOp)
+		}
+	}
+}
+
+// TestParseClosureDestructureParam covers the closure-param branch that
+// accepts a destructure pattern like `|User { name }|` (a PascalCase
+// ident followed by `{`). Exercises the isUpperName check in
+// parseClosureParam.
+func TestParseClosureDestructureParam(t *testing.T) {
+	src := `fn f() -> Int {
+    let g = |User { name }| name
+    0
+}`
+	f := parseOrFatal(t, src)
+	body := f.Decls[0].(*ast.FnDecl).Body
+	cl := body.Stmts[0].(*ast.LetStmt).Value.(*ast.ClosureExpr)
+	if len(cl.Params) != 1 {
+		t.Fatalf("params = %d", len(cl.Params))
+	}
+	if cl.Params[0].Pattern == nil {
+		t.Fatalf("closure param has no destructure pattern")
+	}
+	if _, ok := cl.Params[0].Pattern.(*ast.StructPat); !ok {
+		t.Fatalf("pattern = %T, want *ast.StructPat", cl.Params[0].Pattern)
+	}
+}
+
+// TestParseGenericCloseSplitEQ covers expectTypeGT's GEQ branch:
+// `Foo<Int>=value` — the lexer produces a single `>=` token which must be
+// split into `>` and `=` so the type closes and the assignment parses.
+func TestParseGenericCloseSplitEQ(t *testing.T) {
+	src := `fn f() -> Int {
+    let x: List<Int>= x
+    0
+}`
+	f := parseOrFatal(t, src)
+	body := f.Decls[0].(*ast.FnDecl).Body
+	ls := body.Stmts[0].(*ast.LetStmt)
+	nt, ok := ls.Type.(*ast.NamedType)
+	if !ok || nt.Path[0] != "List" {
+		t.Fatalf("type = %T %+v", ls.Type, ls.Type)
+	}
+	if ls.Value == nil {
+		t.Fatalf("expected rhs")
+	}
+}
+
+// TestParseGenericCloseSplitSHREQ covers expectTypeGT's SHREQ branch:
+// `Foo<Bar<Int>>=value` — the lexer produces `>>=` which must be split
+// once into `>` and `>=`, then the inner type closes with `>=` splitting
+// again into `>` and `=`.
+func TestParseGenericCloseSplitSHREQ(t *testing.T) {
+	src := `fn f() -> Int {
+    let m: Map<Int, List<Int>>= m
+    0
+}`
+	f := parseOrFatal(t, src)
+	body := f.Decls[0].(*ast.FnDecl).Body
+	ls := body.Stmts[0].(*ast.LetStmt)
+	nt, ok := ls.Type.(*ast.NamedType)
+	if !ok || nt.Path[0] != "Map" {
+		t.Fatalf("type = %T %+v", ls.Type, ls.Type)
+	}
+	if len(nt.Args) != 2 {
+		t.Fatalf("map args = %d, want 2", len(nt.Args))
+	}
+	inner, ok := nt.Args[1].(*ast.NamedType)
+	if !ok || inner.Path[0] != "List" {
+		t.Fatalf("inner = %T %+v", nt.Args[1], nt.Args[1])
+	}
+	if ls.Value == nil {
+		t.Fatalf("expected rhs")
+	}
+}
+
+// TestConsumeFieldNameIntRecovery covers the INT-recovery branch of
+// consumeFieldName: `obj.0` emits an error (Osty doesn't use `.0` tuple
+// indexing) but advances past the INT so parsing continues — this is a
+// fmt-stability requirement since the printed form `Value` re-lexes to
+// the same tokens.
+func TestConsumeFieldNameIntRecovery(t *testing.T) {
+	src := `fn f() -> Int { obj.0 }`
+	_, diags := ParseDiagnostics([]byte(src))
+	if findDiagMessage(diags, "expected field name after `.`") == nil {
+		t.Fatalf("expected field-name diagnostic; got %d diags", len(diags))
+	}
+}
+
+// TestParseAnnotationArgNameError covers the error-recovery path in
+// parseAnnotations when the annotation arg key is not an identifier:
+// the parser emits a diagnostic, skips the bad token, and continues.
+func TestParseAnnotationArgNameError(t *testing.T) {
+	src := `#[deprecated(+)]
+fn main() {}`
+	_, diags := ParseDiagnostics([]byte(src))
+	if findDiagMessage(diags, "expected annotation arg name") == nil {
+		t.Fatalf("expected annotation-arg diagnostic; got %d diags", len(diags))
+	}
+}
+
+// TestParseDefaultOkWithoutParen covers parseDefaultExpr's diagnostic
+// path when `Ok`/`Err` is used as a default without the required `(`.
+func TestParseDefaultOkWithoutParen(t *testing.T) {
+	src := `fn f(x: Result<Int, Error> = Ok) -> Int { 0 }`
+	_, diags := ParseDiagnostics([]byte(src))
+	if findDiagMessage(diags, "expected `(` after `Ok`") == nil {
+		t.Fatalf("expected Ok-paren diagnostic; got %d diags", len(diags))
+	}
+}
+
+// TestParseDefaultMinusNonNumeric covers the fall-through of the MINUS
+// branch in parseDefaultExpr: `-ident` is not a permitted default form,
+// so the CodeDefaultExprNotLiteral diagnostic is emitted.
+func TestParseDefaultMinusNonNumeric(t *testing.T) {
+	expectCode(t,
+		`fn f(n: Int = -x) -> Int { 0 }`,
+		diag.CodeDefaultExprNotLiteral)
+}
+
+// TestLowercaseQualifiedNotStructLit verifies isTypeRef rejects a FieldExpr
+// whose final segment is lowercase — `pkg.foo { ... }` must not be parsed
+// as a struct literal (the `{` must be treated as a separate block/expr).
+// This guards isUpperName's role in the FieldExpr branch of isTypeRef.
+func TestLowercaseQualifiedNotStructLit(t *testing.T) {
+	// `pkg.foo` followed by `{ ... }` on the next line: the trailing brace
+	// expression must NOT be absorbed as a struct literal.
+	src := `fn f() -> Int {
+    pkg.foo
+    { 1 }
+}`
+	f := parseOrFatal(t, src)
+	body := f.Decls[0].(*ast.FnDecl).Body
+	if len(body.Stmts) < 2 {
+		t.Fatalf("stmts = %d, want at least 2 (pkg.foo must not absorb braces)", len(body.Stmts))
+	}
+	// First stmt is the bare field access.
+	if _, ok := body.Stmts[0].(*ast.ExprStmt).X.(*ast.FieldExpr); !ok {
+		t.Fatalf("stmt 0 = %T, want *ast.FieldExpr", body.Stmts[0].(*ast.ExprStmt).X)
+	}
+}

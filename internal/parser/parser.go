@@ -240,18 +240,6 @@ func (p *Parser) emit(d *diag.Diagnostic) {
 	p.errs = append(p.errs, d)
 }
 
-// errorAt is the span-aware counterpart of errorf. The span is the
-// extent the caret will underline.
-func (p *Parser) errorAt(start, end token.Pos, format string, args ...any) {
-	if p.suppressedAt[start.Offset] {
-		return
-	}
-	p.suppressedAt[start.Offset] = true
-	p.errs = append(p.errs, diag.New(diag.Error, fmt.Sprintf(format, args...)).
-		Primary(diag.Span{Start: start, End: end}, "").
-		Build())
-}
-
 // syncDecl advances past tokens until we reach something that plausibly
 // starts a new top-level declaration. Called after a fatal parse error in
 // a declaration so subsequent declarations still parse cleanly.
@@ -1716,6 +1704,13 @@ func startsExpr(k token.Kind) bool {
 	return false
 }
 
+// openRangeEndBP bounds the RHS of an open-start range (`..end` / `..=end`)
+// to a primary/prefix expression only. Set above any infixLBP value so that
+// operators after the endpoint — e.g. `..5+1` — do not bind into the range;
+// the outer Pratt loop handles them. Users must parenthesize (`..(5+1)`) to
+// include infix operators in the endpoint.
+const openRangeEndBP = 100
+
 func (p *Parser) parsePrefix() ast.Expr {
 	t := p.peek()
 	switch t.Kind {
@@ -1729,7 +1724,7 @@ func (p *Parser) parsePrefix() ast.Expr {
 		p.advance()
 		var rhs ast.Expr
 		if startsExpr(p.peek().Kind) {
-			rhs = p.parseExprBP(91) // rbp of range
+			rhs = p.parseExprBP(openRangeEndBP)
 		}
 		return &ast.RangeExpr{PosV: t.Pos, EndV: p.lastEnd(), Stop: rhs, Inclusive: inclusive}
 	}
@@ -2167,17 +2162,9 @@ func isUpperName(name string) bool {
 func isTypeRef(e ast.Expr) bool {
 	switch v := e.(type) {
 	case *ast.Ident:
-		if v.Name == "" {
-			return false
-		}
-		r := v.Name[0]
-		return r >= 'A' && r <= 'Z'
+		return isUpperName(v.Name)
 	case *ast.FieldExpr:
-		if v.Name == "" {
-			return false
-		}
-		r := v.Name[0]
-		return r >= 'A' && r <= 'Z' && isTypeRefOrPath(v.X)
+		return isUpperName(v.Name) && isTypeRefOrPath(v.X)
 	}
 	return false
 }
