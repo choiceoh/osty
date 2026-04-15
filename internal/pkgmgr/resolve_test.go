@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/osty/osty/internal/lockfile"
 	"github.com/osty/osty/internal/manifest"
 )
 
@@ -232,6 +233,180 @@ func TestLockFromGraph(t *testing.T) {
 	// Path sources have empty checksum.
 	if p.Checksum != "" {
 		t.Errorf("path dep should have empty checksum, got %q", p.Checksum)
+	}
+}
+
+// TestVendorFallsBackToCopy injects a symlink function that fails
+// with the platform-shaped "unsupported" error and confirms the
+// dependency lands as a real directory tree rather than aborting
+// the build.
+func TestVendorFallsBackToCopy(t *testing.T) {
+	tmp := t.TempDir()
+	proj := filepath.Join(tmp, "app")
+	lib := filepath.Join(tmp, "lib")
+	for _, d := range []string{proj, lib} {
+		must(t, os.MkdirAll(d, 0o755))
+	}
+	must(t, manifest.Write(filepath.Join(lib, manifest.ManifestFile),
+		&manifest.Manifest{Package: manifest.Package{Name: "lib", Version: "0.1.0"}}))
+	must(t, os.WriteFile(filepath.Join(lib, "lib.osty"),
+		[]byte("pub fn hi() -> String { \"hello\" }\n"), 0o644))
+
+	// Force the symlink op to look "unsupported" so Vendor falls
+	// through to copyVendorDir.
+	prev := symlinkFunc
+	symlinkFunc = func(oldname, newname string) error { return errUnsupported }
+	t.Cleanup(func() { symlinkFunc = prev })
+
+	env := &Env{
+		CacheDir:    filepath.Join(tmp, "cache"),
+		VendorDir:   filepath.Join(proj, ".osty", "deps"),
+		ProjectRoot: proj,
+		Registries:  map[string]string{},
+	}
+	graph, err := Resolve(context.Background(), &manifest.Manifest{
+		Package: manifest.Package{Name: "app", Version: "0.0.1"},
+		Dependencies: []manifest.Dependency{
+			{Name: "lib", Path: "../lib", DefaultFeats: true},
+		},
+	}, env)
+	must(t, err)
+	must(t, Vendor(graph, env))
+
+	dst := filepath.Join(env.VendorDir, "lib")
+	info, err := os.Lstat(dst)
+	if err != nil {
+		t.Fatalf("vendored copy missing: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("expected real directory copy, got symlink (mode=%v)", info.Mode())
+	}
+	if !info.IsDir() {
+		t.Fatalf("expected directory, got %v", info.Mode())
+	}
+	if _, err := os.Stat(filepath.Join(dst, "lib.osty")); err != nil {
+		t.Errorf("copy missing source file: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, manifest.ManifestFile)); err != nil {
+		t.Errorf("copy missing manifest: %v", err)
+	}
+}
+
+// TestApplyLockPinNarrowsRegistryReq covers the lockfile-honoring
+// branch in resolveDep: when osty.lock pins a registry dep at a
+// version that still matches the manifest req, we mutate the source's
+// versionReq to the exact pinned version. Path / git deps are
+// untouched.
+func TestApplyLockPinNarrowsRegistryReq(t *testing.T) {
+	rs := &registrySource{name: "x", packageName: "x", versionReq: "^1.0.0"}
+	dep := manifest.Dependency{Name: "x", PackageName: "x", VersionReq: "^1.0.0"}
+	lock := &lockfile.Lock{
+		Version: lockfile.SchemaVersion,
+		Packages: []lockfile.Package{
+			{Name: "x", Version: "1.2.3", Source: "registry+default"},
+		},
+	}
+	applyLockPin(rs, dep, lock)
+	if rs.versionReq != "=1.2.3" {
+		t.Errorf("versionReq: got %q, want =1.2.3", rs.versionReq)
+	}
+}
+
+// TestApplyLockPinIgnoresMismatchedReq: a lockfile pin that no longer
+// satisfies the manifest's requirement (because the user edited the
+// req) must not be honored — the resolver needs to pick a fresh
+// matching version.
+func TestApplyLockPinIgnoresMismatchedReq(t *testing.T) {
+	rs := &registrySource{name: "x", packageName: "x", versionReq: "^2.0.0"}
+	dep := manifest.Dependency{Name: "x", PackageName: "x", VersionReq: "^2.0.0"}
+	lock := &lockfile.Lock{
+		Version: lockfile.SchemaVersion,
+		Packages: []lockfile.Package{
+			{Name: "x", Version: "1.2.3", Source: "registry+default"},
+		},
+	}
+	applyLockPin(rs, dep, lock)
+	if rs.versionReq != "^2.0.0" {
+		t.Errorf("versionReq: got %q, want ^2.0.0 (unchanged)", rs.versionReq)
+	}
+}
+
+// TestApplyLockPinSkipsPathSources: path / git sources don't get
+// rewritten; their identity comes from the manifest, not the lock.
+func TestApplyLockPinSkipsPathSources(t *testing.T) {
+	ps := &pathSource{name: "lib", path: "../lib"}
+	dep := manifest.Dependency{Name: "lib", Path: "../lib"}
+	lock := &lockfile.Lock{
+		Version: lockfile.SchemaVersion,
+		Packages: []lockfile.Package{
+			{Name: "lib", Version: "9.9.9", Source: "path+../lib"},
+		},
+	}
+	applyLockPin(ps, dep, lock) // must not panic; ps has no versionReq
+	if ps.path != "../lib" {
+		t.Errorf("pathSource mutated: %+v", ps)
+	}
+}
+
+// TestDiffLockReportsAddRemoveChange exercises the four kinds of
+// changes DiffLock needs to recognize for the --locked CI guard:
+// added, removed, version-changed, and checksum-changed entries.
+func TestDiffLockReportsAddRemoveChange(t *testing.T) {
+	old := &lockfile.Lock{
+		Version: lockfile.SchemaVersion,
+		Packages: []lockfile.Package{
+			{Name: "a", Version: "1.0.0", Source: "registry+default", Checksum: "sha256:aaaa"},
+			{Name: "b", Version: "1.0.0", Source: "registry+default", Checksum: "sha256:bbbb"},
+			{Name: "c", Version: "1.0.0", Source: "registry+default", Checksum: "sha256:cccc"},
+		},
+	}
+	new := &lockfile.Lock{
+		Version: lockfile.SchemaVersion,
+		Packages: []lockfile.Package{
+			{Name: "a", Version: "1.0.0", Source: "registry+default", Checksum: "sha256:aaaa"}, // unchanged
+			{Name: "b", Version: "1.1.0", Source: "registry+default", Checksum: "sha256:bbbb"}, // version bump
+			{Name: "c", Version: "1.0.0", Source: "registry+default", Checksum: "sha256:dddd"}, // checksum drift
+			{Name: "d", Version: "0.1.0", Source: "registry+default", Checksum: "sha256:dddd"}, // added
+		},
+	}
+	changes := DiffLock(old, new)
+	if len(changes) != 3 {
+		t.Fatalf("expected 3 changes, got %d: %+v", len(changes), changes)
+	}
+	kinds := map[string]string{}
+	for _, c := range changes {
+		kinds[c.Name] = c.Kind
+	}
+	if kinds["b"] != "version" {
+		t.Errorf("b kind: %v", kinds["b"])
+	}
+	if kinds["c"] != "checksum" {
+		t.Errorf("c kind: %v", kinds["c"])
+	}
+	if kinds["d"] != "added" {
+		t.Errorf("d kind: %v", kinds["d"])
+	}
+	// Removed packages should also be reported.
+	old2 := &lockfile.Lock{Packages: []lockfile.Package{{Name: "a", Version: "1.0.0"}}}
+	new2 := &lockfile.Lock{}
+	if changes := DiffLock(old2, new2); len(changes) != 1 || changes[0].Kind != "removed" {
+		t.Errorf("removed: %+v", changes)
+	}
+}
+
+// TestDiffLockNilInputs: nil inputs should mean "everything added"
+// or "everything removed" — used when the project is brand new or
+// the lockfile has been deleted.
+func TestDiffLockNilInputs(t *testing.T) {
+	new := &lockfile.Lock{Packages: []lockfile.Package{{Name: "a", Version: "1"}}}
+	if changes := DiffLock(nil, new); len(changes) != 1 || changes[0].Kind != "added" {
+		t.Errorf("nil-old: %+v", changes)
+	}
+	if changes := DiffLock(new, nil); len(changes) != 1 || changes[0].Kind != "removed" {
+		t.Errorf("nil-new: %+v", changes)
+	}
+	if changes := DiffLock(nil, nil); len(changes) != 0 {
+		t.Errorf("nil-both: %+v", changes)
 	}
 }
 

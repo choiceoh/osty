@@ -40,10 +40,12 @@ import (
 func runBuild(args []string, flags cliFlags) {
 	fs := flag.NewFlagSet("build", flag.ExitOnError)
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: osty build [--offline] [--profile NAME | --release] [--target TRIPLE] [--features LIST] [--no-default-features] [--force] [PATH]")
+		fmt.Fprintln(os.Stderr, "usage: osty build [--offline | --locked | --frozen] [--profile NAME | --release] [--target TRIPLE] [--features LIST] [--no-default-features] [--force] [PATH]")
 	}
-	var offline, force bool
+	var offline, force, locked, frozen bool
 	fs.BoolVar(&offline, "offline", false, "do not fetch dependencies; fail if caches are missing")
+	fs.BoolVar(&locked, "locked", false, "fail if osty.lock would change")
+	fs.BoolVar(&frozen, "frozen", false, "imply --locked --offline; require an existing osty.lock")
 	fs.BoolVar(&force, "force", false, "ignore the build cache; transpile every input")
 	var pf profileFlags
 	pf.register(fs)
@@ -103,7 +105,9 @@ func runBuild(args []string, flags cliFlags) {
 	var env *pkgmgr.Env
 	{
 		var err error
-		graph, env, err = resolveAndVendorEnv(m, root, offline)
+		graph, env, err = resolveAndVendorEnvOpts(m, root, resolveOpts{
+			Offline: offline, Locked: locked, Frozen: frozen,
+		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "osty build: %v\n", err)
 			os.Exit(3)

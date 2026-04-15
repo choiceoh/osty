@@ -48,10 +48,12 @@ import (
 func runRun(args []string, cliF cliFlags) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: osty run [--offline] [--profile NAME | --release] [--target TRIPLE] [--features LIST] [--no-default-features] [-- ARGS...]")
+		fmt.Fprintln(os.Stderr, "usage: osty run [--offline | --locked | --frozen] [--profile NAME | --release] [--target TRIPLE] [--features LIST] [--no-default-features] [-- ARGS...]")
 	}
-	var offline bool
+	var offline, locked, frozen bool
 	fs.BoolVar(&offline, "offline", false, "do not fetch dependencies; fail if caches are missing")
+	fs.BoolVar(&locked, "locked", false, "fail if osty.lock would change")
+	fs.BoolVar(&frozen, "frozen", false, "imply --locked --offline; require an existing osty.lock")
 	var pf profileFlags
 	pf.register(fs)
 	_ = fs.Parse(args)
@@ -82,7 +84,9 @@ func runRun(args []string, cliF cliFlags) {
 
 	// Step 1: vendor deps (also runs resolve, computes the graph +
 	// DepProvider we'll attach to the workspace).
-	graph, env, err := resolveAndVendorEnv(m, root, offline)
+	graph, env, err := resolveAndVendorEnvOpts(m, root, resolveOpts{
+		Offline: offline, Locked: locked, Frozen: frozen,
+	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty run: %v\n", err)
 		os.Exit(3)

@@ -6,11 +6,14 @@
 //
 // Endpoints:
 //
-//	GET  <base>/v1/crates/<name>           → IndexEntry (JSON)
-//	GET  <base>/v1/crates/<name>/<ver>/tar → binary .tgz
-//	PUT  <base>/v1/crates/<name>/<ver>     → upload a tarball
-//	                                          (body: application/x-tar+gzip)
-//	                                          (auth: Bearer <token>)
+//	GET  <base>/v1/crates/<name>             → IndexEntry (JSON)
+//	GET  <base>/v1/crates/<name>/<ver>/tar   → binary .tgz
+//	PUT  <base>/v1/crates/<name>/<ver>       → upload a tarball
+//	                                            (body: application/x-tar+gzip)
+//	                                            (auth: Bearer <token>)
+//	GET  <base>/v1/crates?q=<query>          → SearchResults (JSON)
+//	DELETE <base>/v1/crates/<name>/<ver>/yank   → mark a version yanked (auth)
+//	PUT    <base>/v1/crates/<name>/<ver>/unyank → un-yank a version (auth)
 //
 // The client treats 4xx / 5xx responses as errors; the body is
 // surfaced unchanged. Success responses are decoded as JSON when a
@@ -41,10 +44,14 @@ const DefaultTimeout = 60 * time.Second
 // us to the registry for metrics / rate-limiting; set Token to
 // authenticate publish requests.
 type Client struct {
-	BaseURL string
-	HTTP    *http.Client
+	BaseURL   string
+	HTTP      *http.Client
 	UserAgent string
-	Token   string
+	Token     string
+	// Cache, when non-nil, is consulted before every Versions() call
+	// so repeated resolves don't re-download an identical index.
+	// Implementations live alongside the client (DirIndexCache).
+	Cache IndexCache
 }
 
 // NewClient builds a client with default HTTP settings. Callers that
@@ -87,24 +94,68 @@ type VersionDependency struct {
 	Kind string `json:"kind"` // "normal" | "dev"
 }
 
+// IndexCache is the on-disk cache backing Versions(). When set, the
+// client persists each successful index response and replays it on
+// later calls via an If-None-Match conditional GET. A 304 reuses the
+// cached body without parsing the registry response again.
+//
+// Callers wire this up by setting Client.Cache to a *DirIndexCache
+// rooted at e.g. ~/.osty/cache/registry-index. Leaving it nil
+// disables caching — the client behaves exactly as before.
+type IndexCache interface {
+	// Load returns the cached entry + ETag for `name`, or (nil, "",
+	// nil) when there is no entry. A non-nil error means the cache
+	// itself is broken and the caller should bypass it for safety.
+	Load(name string) (*IndexEntry, string, error)
+	// Store persists entry + etag for `name`. Failures are surfaced
+	// to the caller; the client logs them and continues — a broken
+	// cache must not break a working network round-trip.
+	Store(name string, entry *IndexEntry, etag string) error
+}
+
 // Versions returns every non-yanked version of `name`. The returned
 // slice is in registry-supplied order; callers sort by semver
 // precedence if they need a specific order.
+//
+// When c.Cache is set, the request includes an If-None-Match header
+// derived from the cached ETag. A 304 response replays the cached
+// body, sparing the registry from re-serving identical bytes.
 func (c *Client) Versions(ctx context.Context, name string) ([]Version, error) {
 	u, err := c.endpoint("v1", "crates", name)
 	if err != nil {
 		return nil, err
+	}
+	var cachedEntry *IndexEntry
+	var cachedETag string
+	if c.Cache != nil {
+		if e, et, cerr := c.Cache.Load(name); cerr == nil {
+			cachedEntry = e
+			cachedETag = et
+		}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
 	}
 	c.addHeaders(req)
+	if cachedETag != "" {
+		req.Header.Set("If-None-Match", cachedETag)
+	}
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
+		// Network failure but cache hit — degrade gracefully so an
+		// offline build can still resolve against the last known
+		// index. The error is preserved when there's nothing to
+		// fall back to.
+		if cachedEntry != nil {
+			return filterYanked(cachedEntry.Versions), nil
+		}
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotModified && cachedEntry != nil {
+		return filterYanked(cachedEntry.Versions), nil
+	}
 	if err := checkStatus(resp, http.StatusOK); err != nil {
 		return nil, err
 	}
@@ -112,15 +163,22 @@ func (c *Client) Versions(ctx context.Context, name string) ([]Version, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return nil, fmt.Errorf("decode index: %w", err)
 	}
-	// Filter yanked versions up front — callers can't accept them
-	// from the normal resolver path anyway.
+	if c.Cache != nil {
+		_ = c.Cache.Store(name, &out, resp.Header.Get("ETag"))
+	}
+	return filterYanked(out.Versions), nil
+}
+
+// filterYanked drops yanked entries from a version list. Centralized
+// so the network-fresh and cache-replay paths use the same predicate.
+func filterYanked(in []Version) []Version {
 	var keep []Version
-	for _, v := range out.Versions {
+	for _, v := range in {
 		if !v.Yanked {
 			keep = append(keep, v)
 		}
 	}
-	return keep, nil
+	return keep
 }
 
 // DownloadTarball streams the package tarball for (name, version)
@@ -215,6 +273,97 @@ func (c *Client) Publish(ctx context.Context, r PublishRequest) error {
 	}
 	defer resp.Body.Close()
 	return checkStatus(resp, http.StatusOK, http.StatusCreated, http.StatusAccepted)
+}
+
+// SearchResults is the `/v1/crates?q=...` response. Hits is in
+// registry-supplied order (typically a relevance ranking).
+type SearchResults struct {
+	Hits []SearchHit `json:"hits"`
+	// Total is the number of hits the registry could return ignoring
+	// any per-page cap. Useful for showing "showing N of M" output.
+	Total int `json:"total"`
+}
+
+// SearchHit is one result row. The registry SHOULD include enough
+// metadata to make the listing useful without a follow-up index
+// fetch — name + latest version + a one-line description is the
+// minimum.
+type SearchHit struct {
+	Name          string `json:"name"`
+	LatestVersion string `json:"latest_version"`
+	Description   string `json:"description,omitempty"`
+	Downloads     int64  `json:"downloads,omitempty"`
+}
+
+// Search queries the registry's full-text search endpoint. limit caps
+// the number of hits returned; pass 0 to use the registry's default.
+func (c *Client) Search(ctx context.Context, query string, limit int) (*SearchResults, error) {
+	if strings.TrimSpace(query) == "" {
+		return nil, fmt.Errorf("registry search: query is empty")
+	}
+	u, err := c.endpoint("v1", "crates")
+	if err != nil {
+		return nil, err
+	}
+	q := url.Values{}
+	q.Set("q", query)
+	if limit > 0 {
+		q.Set("limit", fmt.Sprintf("%d", limit))
+	}
+	u = u + "?" + q.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	c.addHeaders(req)
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := checkStatus(resp, http.StatusOK); err != nil {
+		return nil, err
+	}
+	var out SearchResults
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("decode search results: %w", err)
+	}
+	return &out, nil
+}
+
+// Yank marks (name, version) as yanked. Yanked versions remain
+// downloadable for already-locked clients but disappear from the
+// active set returned by Versions(). Requires c.Token.
+func (c *Client) Yank(ctx context.Context, name, version string) error {
+	return c.yankToggle(ctx, name, version, http.MethodDelete, "yank")
+}
+
+// Unyank reverses a previous Yank. Requires c.Token. Servers that
+// don't support unyanking should return 405 / 501 with a clear body.
+func (c *Client) Unyank(ctx context.Context, name, version string) error {
+	return c.yankToggle(ctx, name, version, http.MethodPut, "unyank")
+}
+
+func (c *Client) yankToggle(ctx context.Context, name, version, method, segment string) error {
+	if c.Token == "" {
+		return fmt.Errorf("no token configured for registry %s", c.BaseURL)
+	}
+	u, err := c.endpoint("v1", "crates", name, version, segment)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, method, u, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	c.addHeaders(req)
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return checkStatus(resp, http.StatusOK, http.StatusNoContent, http.StatusAccepted)
 }
 
 // endpoint builds a URL from BaseURL + path segments.

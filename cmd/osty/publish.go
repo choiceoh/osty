@@ -109,8 +109,11 @@ func runPublish(args []string, cliF cliFlags) {
 		token = tokenFromManifest(m, regName)
 	}
 	if token == "" {
+		token = credentialFromStore(regName)
+	}
+	if token == "" {
 		fmt.Fprintln(os.Stderr,
-			"osty publish: no publish token. pass --token, set $OSTY_PUBLISH_TOKEN, or add one to [registries.<name>] in osty.toml")
+			"osty publish: no publish token. pass --token, set $OSTY_PUBLISH_TOKEN, run `osty login`, or add one to [registries.<name>] in osty.toml")
 		os.Exit(2)
 	}
 

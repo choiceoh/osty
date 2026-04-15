@@ -60,6 +60,7 @@ FFI, concurrency) is the main remaining piece.
 | Build orchestrator (`osty build`) | wired — drives manifest → front-end → gen Phase 1 |
 | Test runner harness (`internal/testgen`) | wired — merges per-file gen output, injects a real std.testing runtime + main(), runs via `go run` |
 | `osty test` (discovery + front-end + execution) | wired — validates and **runs** discovered `test*` / `bench*` fns; failures and pass/fail totals report inline |
+| Package registry / `osty add` / `osty update` / `osty run` | done (resolve + vendor + lockfile-honoring re-resolves, ETag-cached registry index, copy fallback for symlink-less filesystems; CLI: `add`, `remove`/`rm`, `update`, `run`, `fetch`, `publish`, `search`, `info`, `yank`/`unyank`, `login`/`logout`; `--locked` / `--frozen` CI guards) |
 | Package manager (`osty add` / `osty update`, path + git + registry sources, SemVer resolver, deterministic lockfile) | wired — `add` mutates `osty.toml` and re-vendors; `update` re-resolves selectively or in full |
 | `osty run` (build + exec through gen Phase 1) | wired — resolves manifest, vendors deps, transpiles entry, `go run`s the output with profile/target-aware flags |
 | `osty publish` (pack + upload tarball to a registry) | wired — deterministic gzipped tar, sha256 checksum, bearer-auth POST; `--dry-run` stops before upload |
@@ -159,10 +160,18 @@ osty new NAME          # scaffold a new project directory (--lib, --workspace)
 osty init              # scaffold into the current directory (same flags as new)
 osty build [DIR]       # manifest-driven: manifest → deps → front-end
 osty add PKG           # append a dependency to osty.toml and re-resolve
+osty remove NAME...    # drop dependencies from osty.toml and re-resolve (alias: rm)
 osty update [NAMES...] # refresh the lockfile (selective or full)
 osty run [-- ARGS...]  # build and exec the binary (gen Phase 1)
 osty test [PATH|FILTERS...] # discover & validate *_test.osty; list test + bench fns
 osty publish           # pack the project and upload to a registry
+osty search QUERY      # full-text search the registry (--registry, --limit)
+osty info PKG          # show registry metadata for a package (--all-versions)
+osty fetch             # resolve + vendor without building (--locked, --frozen)
+osty yank --version V [PKG]   # mark a published version as yanked
+osty unyank --version V [PKG] # un-yank a previously yanked version
+osty login [--registry N]     # store an API token in ~/.osty/credentials.toml
+osty logout [--registry N|--all] # forget a stored token
 osty tokens FILE       # print the token stream (debugging)
 osty parse FILE        # parse to AST, emit JSON
 osty resolve FILE|DIR  # name resolution; directory = package mode (--scopes for tree)
@@ -220,10 +229,16 @@ the current spec edition; `osty new` never overwrites an existing
 directory. `osty init` writes into the current directory instead of
 creating a new one.
 
-`build` / `run` / `test` / `add` / `update`-specific flags (after the
-subcommand):
+`build` / `run` / `test` / `add` / `update` / `fetch`-specific flags
+(after the subcommand):
 
-- `--offline` — do not fetch dependencies; fail if caches are missing
+- `--offline` — do not fetch dependencies; fail if caches are missing.
+- `--locked` — refuse to overwrite `osty.lock`; the resolve must match
+  the existing pins exactly. Intended for CI ("did the contributor
+  forget to commit the lockfile?").
+- `--frozen` — implies `--locked` and `--offline`, and additionally
+  requires `osty.lock` to already exist. Catches "fresh checkout, no
+  lockfile" mistakes before any download starts.
 
 `osty build` loads `osty.toml` starting at the given path (or the cwd),
 resolves dependencies against `osty.lock` (regenerated if stale),
@@ -250,10 +265,46 @@ and reports diagnostics.
 
 - `--registry NAME` — target registry (defaults to `[registries.""]`
   or the built-in default URL).
-- `--token T` — API token; also read from `$OSTY_PUBLISH_TOKEN` or
-  the token recorded under `[registries.<name>]`.
+- `--token T` — API token; also read from `$OSTY_PUBLISH_TOKEN`,
+  the token recorded under `[registries.<name>]`, or
+  `~/.osty/credentials.toml` (set via `osty login`).
 - `--dry-run` — build the tarball into `<project>/.osty/publish/`
   but do not upload.
+
+`yank` / `unyank`-specific flags (after the subcommand):
+
+- `--version V` — the version to flag (required).
+- `--registry NAME` — target registry (defaults to the package's
+  default registry).
+- `--token T` — API token (same fallback chain as `publish`).
+
+The package name is taken from `[package].name` in the local
+`osty.toml`; pass an explicit `PACKAGE_NAME` positional to operate on
+a different package without leaving its directory.
+
+`search`-specific flags (after the subcommand):
+
+- `--registry NAME` — registry to query (defaults to the project's
+  default, or the built-in one when run outside a project).
+- `--limit N` — maximum hits to display (default 20; pass 0 for the
+  registry's own default page size).
+
+`login` / `logout`-specific flags (after the subcommand):
+
+- `--registry NAME` — which registry the token belongs to. The
+  empty/default registry is stored under `default` in the on-disk
+  file but addressed as `--registry ""` from the CLI.
+- `--token T` — login only; supply the token directly. With no
+  `--token`, login reads `$OSTY_PUBLISH_TOKEN`, then falls back to
+  reading a single line from stdin (works with `echo $TOKEN | osty
+  login`).
+- `--all` — logout only; remove every stored token.
+
+`remove` / `rm`-specific flags (after the subcommand):
+
+- `--dev` — only remove from `[dev-dependencies]`.
+- `--offline` — re-resolve after removal without contacting any
+  registry; fail if caches are missing.
 
 ### Package-manager flow
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/lockfile"
@@ -65,37 +66,56 @@ func loadManifestWithDiag(start string, flags cliFlags) (m *manifest.Manifest, r
 	return m, root, false
 }
 
-// resolveAndVendor is the shared package-manager entry point used by
-// `osty add`, `osty update`, `osty run`, `osty test`, and `osty
-// publish`. It resolves the dependency graph declared by m, vendors
-// each node into <root>/.osty/deps/, and writes / refreshes
-// osty.lock.
+// resolveAndVendorEnv is the offline-only convenience entry point
+// retained for callers that don't care about Locked / Frozen
+// semantics. New call sites should use resolveAndVendorEnvOpts.
 //
-// A manifest with no dependencies is a no-op. A manifest with only
-// dev-dependencies still triggers resolution because those are
-// needed for `osty test`.
-func resolveAndVendor(m *manifest.Manifest, root string, offline bool) error {
-	_, _, err := resolveAndVendorEnv(m, root, offline)
-	return err
+// An empty dependency list short-circuits and returns a bare env —
+// the Workspace still gets constructed, it just has nothing to look
+// up through the provider.
+func resolveAndVendorEnv(m *manifest.Manifest, root string, offline bool) (*pkgmgr.Graph, *pkgmgr.Env, error) {
+	return resolveAndVendorEnvOpts(m, root, resolveOpts{Offline: offline})
 }
 
-// resolveAndVendorEnv is the richer variant that returns the graph +
-// env so callers needing to attach a DepProvider to their Workspace
-// (build / run / test) can reuse the same resolution. An empty deps
-// list short-circuits and returns a bare env — the Workspace still
-// gets constructed, it just has nothing to look up through the
-// provider.
-func resolveAndVendorEnv(m *manifest.Manifest, root string, offline bool) (*pkgmgr.Graph, *pkgmgr.Env, error) {
+// resolveOpts bundles the toggles the package-manager flow accepts.
+// Threaded through every CLI subcommand that touches the resolver
+// (build, run, test, fetch, publish, add, update) so behavior stays
+// consistent.
+type resolveOpts struct {
+	// Offline forbids any network or fresh-fetch work. Cached
+	// downloads still satisfy registry deps.
+	Offline bool
+	// Locked refuses to *write* a different lockfile than the one
+	// already on disk. The resolve still runs; if the result would
+	// alter osty.lock, the caller errors out instead of overwriting.
+	// Mirrors `cargo --locked`.
+	Locked bool
+	// Frozen implies Locked AND Offline AND additionally requires
+	// that osty.lock already exist. Mirrors `cargo --frozen`.
+	Frozen bool
+}
+
+func resolveAndVendorEnvOpts(m *manifest.Manifest, root string, opts resolveOpts) (*pkgmgr.Graph, *pkgmgr.Env, error) {
 	if m == nil {
 		return nil, nil, fmt.Errorf("nil manifest")
+	}
+	if opts.Frozen {
+		opts.Locked = true
+		opts.Offline = true
 	}
 	env, err := pkgmgr.DefaultEnv(root)
 	if err != nil {
 		return nil, nil, err
 	}
-	env.Offline = offline
+	env.Offline = opts.Offline
 	for _, r := range m.Registries {
 		env.Registries[r.Name] = r.URL
+	}
+	// --frozen requires an existing lockfile so CI fails fast on a
+	// fresh checkout that forgot to commit one.
+	priorLock, _ := lockfile.Read(root)
+	if opts.Frozen && priorLock == nil {
+		return nil, env, fmt.Errorf("--frozen requires an existing %s; run `osty update` first", lockfile.LockFile)
 	}
 	if len(m.Dependencies) == 0 && len(m.DevDependencies) == 0 {
 		return &pkgmgr.Graph{Root: m}, env, nil
@@ -104,11 +124,25 @@ func resolveAndVendorEnv(m *manifest.Manifest, root string, offline bool) (*pkgm
 	if err != nil {
 		return nil, env, fmt.Errorf("resolve: %w", err)
 	}
+	newLock := pkgmgr.LockFromGraph(graph)
+	if opts.Locked {
+		if changes := pkgmgr.DiffLock(priorLock, newLock); len(changes) > 0 {
+			var b strings.Builder
+			fmt.Fprintf(&b, "--locked: %s would change:\n", lockfile.LockFile)
+			for _, c := range changes {
+				fmt.Fprintf(&b, "  %s\n", c.String())
+			}
+			fmt.Fprintf(&b, "rerun without --locked to update the lockfile.")
+			return graph, env, fmt.Errorf("%s", b.String())
+		}
+	}
 	if err := pkgmgr.Vendor(graph, env); err != nil {
 		return graph, env, fmt.Errorf("vendor: %w", err)
 	}
-	if err := lockfile.Write(root, pkgmgr.LockFromGraph(graph)); err != nil {
-		return graph, env, fmt.Errorf("write lockfile: %w", err)
+	if !opts.Locked {
+		if err := lockfile.Write(root, newLock); err != nil {
+			return graph, env, fmt.Errorf("write lockfile: %w", err)
+		}
 	}
 	return graph, env, nil
 }

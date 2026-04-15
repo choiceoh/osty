@@ -2,14 +2,24 @@ package pkgmgr
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/osty/osty/internal/lockfile"
 	"github.com/osty/osty/internal/manifest"
+	"github.com/osty/osty/internal/pkgmgr/semver"
 )
+
+// errUnsupported is the sentinel symlink fallback uses to recognize
+// "this filesystem doesn't support that op". On Go 1.21+ os.ErrInvalid
+// or syscall.ENOTSUP show up depending on the platform; we keep a
+// dedicated value so tests can inject it deterministically.
+var errUnsupported = errors.New("operation not supported")
 
 // Graph is the resolved dependency graph for a project. Nodes maps
 // the local dependency name (as written in osty.toml) to a
@@ -100,6 +110,13 @@ func (r *resolver) resolveDep(ctx context.Context, d manifest.Dependency) (*Reso
 	if err != nil {
 		return nil, err
 	}
+	// If the lockfile pins a previously-resolved version that still
+	// satisfies the manifest's requirement, narrow the source so we
+	// fetch exactly that version. This keeps `osty build` reproducible
+	// across runs without forcing a network round-trip on every
+	// resolve. `osty update` clears the pin before calling Resolve, so
+	// honoring it here doesn't block intended upgrades.
+	applyLockPin(src, d, r.lock)
 	fetched, err := src.Fetch(ctx, r.env)
 	if err != nil {
 		return nil, fmt.Errorf("resolve %s: %w", d.Name, err)
@@ -207,8 +224,7 @@ func LockFromGraph(g *Graph) *lockfile.Lock {
 // Path dependencies are symlinked; git + registry deps are
 // referenced by the cache copy through a symlink to keep vendor
 // manipulation cheap. On Windows / systems where symlinks aren't
-// available we fall back to directory copy (not yet implemented —
-// error cleanly).
+// available we fall back to a recursive directory copy.
 func Vendor(g *Graph, env *Env) error {
 	if g == nil {
 		return nil
@@ -223,10 +239,102 @@ func Vendor(g *Graph, env *Env) error {
 		}
 		dst := filepath.Join(env.VendorDir, name)
 		if err := replaceSymlink(n.Fetched.LocalDir, dst); err != nil {
-			return fmt.Errorf("vendor %s: %w", name, err)
+			// Symlink creation can fail with ErrPermission /
+			// ErrUnsupported on Windows accounts that lack the
+			// SeCreateSymbolicLinkPrivilege, on filesystems mounted
+			// without symlink support (some FUSE mounts), or in
+			// sandboxed CI runners. Fall back to a directory copy
+			// rather than failing the build.
+			if !shouldFallbackToCopy(err) {
+				return fmt.Errorf("vendor %s: %w", name, err)
+			}
+			if cerr := copyVendorDir(n.Fetched.LocalDir, dst); cerr != nil {
+				return fmt.Errorf("vendor %s: copy fallback: %w (after symlink: %v)", name, cerr, err)
+			}
 		}
 	}
 	return nil
+}
+
+// shouldFallbackToCopy reports whether the symlink failure is one of
+// the expected "this OS / FS doesn't allow it" classes rather than a
+// real I/O bug we'd want to surface.
+func shouldFallbackToCopy(err error) bool {
+	return errors.Is(err, os.ErrPermission) ||
+		errors.Is(err, errUnsupported)
+}
+
+// copyVendorDir does the directory copy fallback. It mirrors the
+// vendoring contract of the symlink path: any existing dst (file,
+// symlink, or empty dir) is removed first; non-empty user dirs are
+// refused. After the copy the destination is a fresh, owned
+// directory tree under env.VendorDir.
+func copyVendorDir(src, dst string) error {
+	if err := ensureDir(filepath.Dir(dst)); err != nil {
+		return err
+	}
+	if err := removeIfSafe(dst); err != nil {
+		return err
+	}
+	return copyTree(src, dst)
+}
+
+// copyTree recursively copies src into dst, creating dst along the
+// way. Symlinks within src are recreated as symlinks (preserving
+// intra-package layout); regular files are copied byte-for-byte;
+// other special files are refused, matching the tarball extraction
+// policy.
+func copyTree(src, dst string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, rerr := filepath.Rel(src, path)
+		if rerr != nil {
+			return rerr
+		}
+		target := filepath.Join(dst, rel)
+		switch {
+		case info.IsDir():
+			return os.MkdirAll(target, 0o755)
+		case info.Mode()&os.ModeSymlink != 0:
+			link, lerr := os.Readlink(path)
+			if lerr != nil {
+				return lerr
+			}
+			_ = os.Remove(target)
+			return os.Symlink(link, target)
+		case info.Mode().IsRegular():
+			return copyFile(path, target, info.Mode().Perm())
+		default:
+			// Sockets, devices, pipes — never expected inside an osty
+			// package; refuse explicitly so a broken cache entry
+			// surfaces fast.
+			return fmt.Errorf("unsupported file type at %s", path)
+		}
+	})
+}
+
+// copyFile streams src to dst with the given perm, creating any
+// missing parent directories.
+func copyFile(src, dst string, perm os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 // replaceSymlink makes dst point at src. Any existing dst (file,
@@ -267,6 +375,141 @@ func removeIfSafe(dst string) error {
 		return removeFunc(dst)
 	}
 	return removeFunc(dst)
+}
+
+// LockfileChange describes a single difference between an existing
+// lockfile and the lockfile that would be produced by re-resolving
+// the current manifest. Used by `--locked` / `--frozen` enforcement
+// so CI can fail loudly when a contributor forgot to commit an
+// updated osty.lock.
+type LockfileChange struct {
+	Name       string
+	Kind       string // "added", "removed", "version", "checksum", "source"
+	OldVersion string
+	NewVersion string
+	Detail     string // free-form context (e.g. old/new checksum)
+}
+
+// String renders a change for human display.
+func (c LockfileChange) String() string {
+	switch c.Kind {
+	case "added":
+		return fmt.Sprintf("+ %s %s", c.Name, c.NewVersion)
+	case "removed":
+		return fmt.Sprintf("- %s %s", c.Name, c.OldVersion)
+	case "version":
+		return fmt.Sprintf("~ %s %s -> %s", c.Name, c.OldVersion, c.NewVersion)
+	case "checksum":
+		return fmt.Sprintf("~ %s %s checksum changed (%s)", c.Name, c.NewVersion, c.Detail)
+	case "source":
+		return fmt.Sprintf("~ %s source changed (%s)", c.Name, c.Detail)
+	}
+	return fmt.Sprintf("? %s", c.Name)
+}
+
+// DiffLock returns the differences from old to new. A nil old lock is
+// treated as "every package is added"; a nil new lock as "every
+// package is removed". Order is sorted by package name for stable
+// reporting.
+func DiffLock(old, new *lockfile.Lock) []LockfileChange {
+	o := map[string]lockfile.Package{}
+	if old != nil {
+		for _, p := range old.Packages {
+			o[p.Name] = p
+		}
+	}
+	n := map[string]lockfile.Package{}
+	if new != nil {
+		for _, p := range new.Packages {
+			n[p.Name] = p
+		}
+	}
+	names := map[string]bool{}
+	for k := range o {
+		names[k] = true
+	}
+	for k := range n {
+		names[k] = true
+	}
+	keys := make([]string, 0, len(names))
+	for k := range names {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var out []LockfileChange
+	for _, k := range keys {
+		op, oOK := o[k]
+		np, nOK := n[k]
+		switch {
+		case !oOK && nOK:
+			out = append(out, LockfileChange{Name: k, Kind: "added", NewVersion: np.Version})
+		case oOK && !nOK:
+			out = append(out, LockfileChange{Name: k, Kind: "removed", OldVersion: op.Version})
+		case op.Version != np.Version:
+			out = append(out, LockfileChange{
+				Name: k, Kind: "version",
+				OldVersion: op.Version, NewVersion: np.Version,
+			})
+		case op.Checksum != np.Checksum:
+			out = append(out, LockfileChange{
+				Name: k, Kind: "checksum",
+				NewVersion: np.Version,
+				Detail:     fmt.Sprintf("%s -> %s", short(op.Checksum), short(np.Checksum)),
+			})
+		case op.Source != np.Source:
+			out = append(out, LockfileChange{
+				Name: k, Kind: "source",
+				Detail: fmt.Sprintf("%s -> %s", op.Source, np.Source),
+			})
+		}
+	}
+	return out
+}
+
+func short(s string) string {
+	const prefix = "sha256:"
+	t := strings.TrimPrefix(s, prefix)
+	if len(t) > 12 {
+		return prefix + t[:12]
+	}
+	return s
+}
+
+// applyLockPin tightens src's version requirement to the version
+// recorded in the lockfile when (a) the lockfile has an entry for
+// this dep's local name, and (b) the pinned version still satisfies
+// the manifest's declared requirement. Currently applies only to
+// registry sources — git sources already pin via tag/rev in the
+// manifest itself, and path sources are re-read from disk.
+func applyLockPin(src Source, d manifest.Dependency, lock *lockfile.Lock) {
+	if lock == nil {
+		return
+	}
+	rs, ok := src.(*registrySource)
+	if !ok {
+		return
+	}
+	pinned := lock.FindByName(d.Name)
+	if len(pinned) == 0 {
+		return
+	}
+	// Take the first pinned version (we don't admit multiple per name
+	// in the simple resolver). Verify it still satisfies the declared
+	// req before narrowing — a manifest edit may have invalidated it.
+	pin := pinned[0]
+	pv, err := semver.ParseVersion(pin.Version)
+	if err != nil {
+		return
+	}
+	req, err := semver.ParseReq(rs.versionReq)
+	if err != nil {
+		return
+	}
+	if !req.Match(pv) {
+		return
+	}
+	// Narrow to an exact match. ParseReq accepts "=X.Y.Z".
+	rs.versionReq = "=" + pv.String()
 }
 
 // joinURIFields renders human-readable source info for logging. Kept
