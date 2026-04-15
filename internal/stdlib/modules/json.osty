@@ -1,0 +1,43 @@
+// std.json — reflection-based JSON encode/decode (spec §10.8).
+//
+// `encode` accepts any type whose structure is JSON-representable
+// (primitives, `String`, collections, structs, enums). `decode` is
+// the mirror, returning `Err` on malformed input or type mismatches.
+// Unknown keys in the incoming document are silently ignored; use a
+// custom `Decode` impl when strict rejection is required.
+//
+// `Json` variant names are suffixed with `Value` to avoid shadowing
+// the prelude primitive types inside the enum declaration.
+
+pub enum Json {
+    NullValue,
+    BoolValue(Bool),
+    NumberValue(Float),
+    StringValue(String),
+    ArrayValue(List<Json>),
+    ObjectValue(Map<String, Json>),
+}
+
+pub interface Encode {
+    fn toJson(self) -> Json
+}
+
+pub interface Decode {
+    fn fromJson(value: Json) -> Result<Self, Error>
+}
+
+pub fn encode<T>(value: T) -> String {
+    ""
+}
+
+pub fn encodePretty<T>(value: T) -> String {
+    ""
+}
+
+pub fn decode<T>(text: String) -> Result<T, Error> {
+    decode(text)
+}
+
+pub fn parse(text: String) -> Result<Json, Error> {
+    Ok(Json.NullValue)
+}

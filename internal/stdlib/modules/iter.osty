@@ -1,0 +1,32 @@
+// std.iter — lazy iterator chains (spec §10.7).
+//
+// Adapters return new `Iter<T>` without evaluation. Terminal methods
+// (`toList`, `toSet`, `fold`, `count`) drive evaluation. Infinite
+// sources require a bounded adapter (`take`, `takeWhile`) before a
+// terminal call.
+
+pub struct Iter<T> {}
+
+pub fn from<T>(source: List<T>) -> Iter<T> {
+    Iter {}
+}
+
+pub fn fromSet<T>(source: Set<T>) -> Iter<T> {
+    Iter {}
+}
+
+pub fn empty<T>() -> Iter<T> {
+    Iter {}
+}
+
+pub fn once<T>(value: T) -> Iter<T> {
+    Iter {}
+}
+
+pub fn repeat<T>(value: T) -> Iter<T> {
+    Iter {}
+}
+
+pub fn range(start: Int, end: Int) -> Iter<Int> {
+    Iter {}
+}

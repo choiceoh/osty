@@ -1,0 +1,70 @@
+// std.log — structured logging (spec §10.10).
+//
+// Inspired by Go's `slog`: level-filtered, field-tagged records dispatched
+// to a process-global handler. The default configuration writes human-
+// readable text to stderr at Info level.
+//
+// `Fields` is a heterogeneous `Map<String, LogValue>`; `LogValue` is a
+// closed sum type. The `log.{debug,info,warn,error}` calls insert an
+// implicit `.toLogValue()` at each value position of a `Fields { ... }`
+// literal so user code can pass primitives, strings, lists, and
+// user-defined types that auto-derive `ToLogValue`.
+//
+// Variant names are suffixed (`BoolValue`, `StringValue`, …) to avoid
+// shadowing the prelude primitive types inside the enum declaration;
+// the spec lists the variants by their shorter names, but at the stub
+// level the suffixed form is the only parse-stable spelling.
+
+pub enum Level {
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+pub enum LogValue {
+    NullValue,
+    BoolValue(Bool),
+    IntValue(Int),
+    FloatValue(Float),
+    StringValue(String),
+    ListValue(List<LogValue>),
+    MapValue(Map<String, LogValue>),
+}
+
+pub interface ToLogValue {
+    fn toLogValue(self) -> LogValue
+}
+
+pub struct Fields {
+    pub values: Map<String, LogValue>,
+}
+
+pub struct Record {
+    pub level: Level,
+    pub message: String,
+    pub fields: Fields,
+}
+
+pub interface Handler {
+    fn handle(self, record: Record)
+}
+
+pub struct TextHandler {}
+
+pub struct JsonHandler {}
+
+pub fn debug(msg: String, fields: Fields) {
+}
+
+pub fn info(msg: String, fields: Fields) {
+}
+
+pub fn warn(msg: String, fields: Fields) {
+}
+
+pub fn error(msg: String, fields: Fields) {
+}
+
+pub fn setLevel(level: Level) {
+}

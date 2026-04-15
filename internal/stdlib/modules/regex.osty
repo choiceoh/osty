@@ -1,0 +1,22 @@
+// std.regex — RE2-based regular expressions (spec §10.9).
+//
+// Linear-time matching; no catastrophic backtracking, no ReDoS.
+// Backreferences and lookaround are unsupported (RE2 limitations).
+
+pub struct Regex {}
+
+pub struct Match {
+    pub text: String,
+    pub start: Int,
+    pub end: Int,
+}
+
+pub struct Captures {}
+
+pub struct RegexError {
+    pub message: String,
+}
+
+pub fn compile(pattern: String) -> Result<Regex, RegexError> {
+    Ok(Regex {})
+}

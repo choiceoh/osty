@@ -1,0 +1,41 @@
+// std.os — paths, process control, and signals (spec §10.15).
+//
+// File I/O lives in std.fs; environment variables and arguments live
+// in std.env. This module covers the remaining OS surface: path
+// manipulation, subprocess execution, exit/pid/hostname, and signal
+// registration.
+
+pub struct Output {
+    pub exitCode: Int,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+pub enum Signal {
+    Interrupt,
+    Terminate,
+    Hangup,
+}
+
+pub fn exec(cmd: String, args: List<String>) -> Result<Output, Error> {
+    Ok(Output { exitCode: 0, stdout: "", stderr: "" })
+}
+
+pub fn execShell(command: String) -> Result<Output, Error> {
+    Ok(Output { exitCode: 0, stdout: "", stderr: "" })
+}
+
+pub fn exit(code: Int) -> Never {
+    exit(code)
+}
+
+pub fn pid() -> Int {
+    0
+}
+
+pub fn hostname() -> String {
+    ""
+}
+
+pub fn onSignal(sig: Signal, handler: fn()) {
+}

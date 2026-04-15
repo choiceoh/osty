@@ -432,6 +432,45 @@ func TestTier1ModuleCoverage(t *testing.T) {
 	}
 }
 
+// TestTier2ModuleCoverage mirrors TestTier1ModuleCoverage for the
+// Tier 2 modules listed in spec §10.2. Only the ones whose stubs have
+// landed are covered here; more names are added as each module grows.
+func TestTier2ModuleCoverage(t *testing.T) {
+	reg := Load()
+	cases := []struct {
+		module string
+		names  []string
+	}{
+		{"env", []string{"args", "get", "set", "unset", "vars"}},
+		{"iter", []string{"Iter", "from", "empty", "once", "repeat", "range"}},
+		{"regex", []string{"Regex", "Match", "Captures", "RegexError", "compile"}},
+		{"log", []string{"Level", "LogValue", "Fields", "Record", "Handler",
+			"TextHandler", "JsonHandler", "ToLogValue",
+			"debug", "info", "warn", "error", "setLevel"}},
+		{"json", []string{"Json", "Encode", "Decode",
+			"encode", "encodePretty", "decode", "parse"}},
+		{"os", []string{"Output", "Signal",
+			"exec", "execShell", "exit", "pid", "hostname", "onSignal"}},
+	}
+	for _, c := range cases {
+		mod := reg.Modules[c.module]
+		if mod == nil || mod.Package == nil {
+			t.Errorf("std.%s not loaded", c.module)
+			continue
+		}
+		for _, name := range c.names {
+			sym := mod.Package.PkgScope.LookupLocal(name)
+			if sym == nil {
+				t.Errorf("std.%s missing export %q", c.module, name)
+				continue
+			}
+			if !sym.Pub {
+				t.Errorf("std.%s export %q is not pub", c.module, name)
+			}
+		}
+	}
+}
+
 // TestPrimitivesNotExposedAsModule pins that the `primitives/` stubs
 // populate the Primitives table only — they must not leak as if they
 // were `std.int` or `std.float` modules addressable from user code.
