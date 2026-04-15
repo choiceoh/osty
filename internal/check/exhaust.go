@@ -56,19 +56,19 @@ func (c *checker) checkExhaustive(m *ast.MatchExpr, scrutT types.Type) {
 	// Enum
 	if n, ok := types.AsNamed(scrutT); ok {
 		if desc, ok := c.result.Descs[n.Sym]; ok && desc.Kind == resolve.SymEnum {
-			c.verifyEnumCoverage(m, desc, armHeads)
+			c.verifyEnumCoverage(m, desc, armHeads, scrutT)
 			return
 		}
 		// Result<T, E>: checked as a builtin shape with recursive Ok/Err
 		// payload coverage when the payload's type is a closed shape.
 		if n.Sym != nil && n.Sym.Name == "Result" && len(n.Args) == 2 {
-			c.verifyResultCoverage(m, n.Args[0], n.Args[1])
+			c.verifyResultCoverage(m, scrutT)
 			return
 		}
 	}
 	// Optional
 	if inner, ok := types.AsOptional(scrutT); ok {
-		c.verifyOptionCoverage(m, inner)
+		c.verifyOptionCoverage(m, scrutT, inner)
 		return
 	}
 	// Bool
@@ -119,16 +119,6 @@ func matrixFromArms(m *ast.MatchExpr) [][]ast.Pattern {
 		for _, alt := range splitOr(arm.Pattern) {
 			rows = append(rows, []ast.Pattern{alt})
 		}
-	}
-	return rows
-}
-
-// collectArmRows distils a match AST's arms into patRow structs for
-// the usefulness algorithm.
-func collectArmRows(m *ast.MatchExpr) []patRow {
-	rows := make([]patRow, 0, len(m.Arms))
-	for _, arm := range m.Arms {
-		rows = append(rows, patRow{pat: arm.Pattern, guarded: arm.Guard != nil})
 	}
 	return rows
 }
@@ -250,8 +240,11 @@ func isUpperFirst(s string) bool {
 }
 
 // verifyEnumCoverage checks that every variant of `desc` appears among
-// the unguarded arms (possibly via or-patterns).
-func (c *checker) verifyEnumCoverage(m *ast.MatchExpr, desc *typeDesc, arms []armHead) {
+// the unguarded arms (possibly via or-patterns). When top-level variant
+// coverage is complete, the general usefulness/witness algorithm runs
+// so that gaps inside variant payloads (e.g. `Circle(true)` missing
+// `Circle(false)`) are also reported.
+func (c *checker) verifyEnumCoverage(m *ast.MatchExpr, desc *typeDesc, arms []armHead, scrutT types.Type) {
 	covered := map[string]bool{}
 	for _, ah := range arms {
 		if ah.guarded {
@@ -270,42 +263,16 @@ func (c *checker) verifyEnumCoverage(m *ast.MatchExpr, desc *typeDesc, arms []ar
 			missing = append(missing, name)
 		}
 	}
-	if len(missing) == 0 {
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		c.errNode(m, diag.CodeNonExhaustiveMatch,
+			"non-exhaustive match on enum `%s`: missing variant(s): `%s`",
+			desc.Sym.Name, strings.Join(missing, "`, `"))
 		return
 	}
-	sort.Strings(missing)
-	c.errNode(m, diag.CodeNonExhaustiveMatch,
-		"non-exhaustive match on enum `%s`: missing variant(s): `%s`",
-		desc.Sym.Name, strings.Join(missing, "`, `"))
-}
-
-// verifySetCoverage checks a closed set of constructor names (Option,
-// Result) is fully covered.
-func (c *checker) verifySetCoverage(m *ast.MatchExpr, label string, wanted []string, arms []armHead) {
-	covered := map[string]bool{}
-	for _, ah := range arms {
-		if ah.guarded {
-			continue
-		}
-		if ah.variant != "" {
-			covered[ah.variant] = true
-		}
-		for _, alt := range ah.orAlts {
-			covered[alt] = true
-		}
-	}
-	var missing []string
-	for _, w := range wanted {
-		if !covered[w] {
-			missing = append(missing, w)
-		}
-	}
-	if len(missing) == 0 {
-		return
-	}
-	c.errNode(m, diag.CodeNonExhaustiveMatch,
-		"non-exhaustive match on `%s`: missing `%s`",
-		label, strings.Join(missing, "`, `"))
+	// Top-level variants are all present; check whether any variant
+	// payload has an uncovered sub-pattern.
+	c.reportNonExhaustiveWithWitness(m, scrutT, fmt.Sprintf("enum `%s`", desc.Sym.Name))
 }
 
 // verifyBoolCoverage requires both true and false to appear.
@@ -346,26 +313,20 @@ func (c *checker) verifyBoolCoverage(m *ast.MatchExpr, arms []armHead) {
 }
 
 // verifyOptionCoverage checks that `Some(...)` and `None` are both
-// covered. When every Some arm is unguarded, the Some payloads are
-// recursively checked against the inner type.
-func (c *checker) verifyOptionCoverage(m *ast.MatchExpr, innerT types.Type) {
-	var someArms []ast.Pattern
+// covered. When both top-level variants are present, the full
+// usefulness/witness algorithm runs so gaps inside `Some(...)` (e.g.
+// `Some(true)` missing `Some(false)`) are also reported.
+func (c *checker) verifyOptionCoverage(m *ast.MatchExpr, scrutT, innerT types.Type) {
+	_ = innerT
 	noneCovered, someCovered := false, false
-	someAllUnguarded := true
 	for _, arm := range m.Arms {
-		head := variantHeadName(arm.Pattern)
 		if arm.Guard != nil {
-			if head == "Some" {
-				someAllUnguarded = false
-			}
 			continue
 		}
+		head := variantHeadName(arm.Pattern)
 		switch head {
 		case "Some":
 			someCovered = true
-			if p := variantPayload(arm.Pattern); p != nil {
-				someArms = append(someArms, p)
-			}
 		case "None":
 			noneCovered = true
 		}
@@ -383,38 +344,23 @@ func (c *checker) verifyOptionCoverage(m *ast.MatchExpr, innerT types.Type) {
 			strings.Join(missing, "`, `"))
 		return
 	}
-	if someAllUnguarded {
-		c.verifyNestedCoverage(m, someArms, innerT, "Some")
-	}
+	c.reportNonExhaustiveWithWitness(m, scrutT, "`Option`")
 }
 
 // verifyResultCoverage mirrors verifyOptionCoverage for Result<T, E>.
-func (c *checker) verifyResultCoverage(m *ast.MatchExpr, okT, errT types.Type) {
-	var okArms, errArms []ast.Pattern
+// When both Ok and Err variants are present at top-level, the witness
+// algorithm catches any sub-pattern gaps inside their payloads.
+func (c *checker) verifyResultCoverage(m *ast.MatchExpr, scrutT types.Type) {
 	okCovered, errCovered := false, false
-	okAllUnguarded, errAllUnguarded := true, true
 	for _, arm := range m.Arms {
-		head := variantHeadName(arm.Pattern)
 		if arm.Guard != nil {
-			switch head {
-			case "Ok":
-				okAllUnguarded = false
-			case "Err":
-				errAllUnguarded = false
-			}
 			continue
 		}
-		switch head {
+		switch variantHeadName(arm.Pattern) {
 		case "Ok":
 			okCovered = true
-			if p := variantPayload(arm.Pattern); p != nil {
-				okArms = append(okArms, p)
-			}
 		case "Err":
 			errCovered = true
-			if p := variantPayload(arm.Pattern); p != nil {
-				errArms = append(errArms, p)
-			}
 		}
 	}
 	var missing []string
@@ -430,74 +376,7 @@ func (c *checker) verifyResultCoverage(m *ast.MatchExpr, okT, errT types.Type) {
 			strings.Join(missing, "`, `"))
 		return
 	}
-	if okAllUnguarded {
-		c.verifyNestedCoverage(m, okArms, okT, "Ok")
-	}
-	if errAllUnguarded {
-		c.verifyNestedCoverage(m, errArms, errT, "Err")
-	}
-}
-
-// verifyNestedCoverage descends into a variant's payload patterns
-// when every arm of that variant was unguarded. Any catch-all payload
-// covers the inner type entirely; otherwise closed-shape inner types
-// (Option, enum, Bool) are checked for exhaustiveness and open shapes
-// produce a "needs wildcard" diagnostic.
-func (c *checker) verifyNestedCoverage(m *ast.MatchExpr, payloads []ast.Pattern, innerT types.Type, parent string) {
-	for _, p := range payloads {
-		if patternIsCatchAll(p) {
-			return
-		}
-	}
-	if _, ok := types.AsOptional(innerT); ok {
-		hasSome, hasNone := false, false
-		for _, p := range payloads {
-			switch variantHeadName(p) {
-			case "Some":
-				hasSome = true
-			case "None":
-				hasNone = true
-			}
-		}
-		var miss []string
-		if !hasSome {
-			miss = append(miss, "Some(_)")
-		}
-		if !hasNone {
-			miss = append(miss, "None")
-		}
-		if len(miss) > 0 {
-			c.errNode(m, diag.CodeNonExhaustiveMatch,
-				"non-exhaustive match: `%s(%s)` is not covered",
-				parent, strings.Join(miss, " | "))
-		}
-		return
-	}
-	if n, ok := types.AsNamed(innerT); ok {
-		if desc, ok := c.result.Descs[n.Sym]; ok && desc.Kind == resolve.SymEnum {
-			covered := map[string]bool{}
-			for _, p := range payloads {
-				if name := variantHeadName(p); name != "" {
-					covered[name] = true
-				}
-			}
-			var miss []string
-			for _, v := range desc.VariantOrder {
-				if !covered[v] {
-					miss = append(miss, v)
-				}
-			}
-			if len(miss) > 0 {
-				c.errNode(m, diag.CodeNonExhaustiveMatch,
-					"non-exhaustive match: `%s` is missing variant(s): `%s`",
-					parent, strings.Join(miss, "`, `"))
-			}
-			return
-		}
-	}
-	c.errNode(m, diag.CodeNonExhaustiveMatch,
-		"non-exhaustive match: `%s(...)` payload of type `%s` needs a wildcard arm",
-		parent, innerT)
+	c.reportNonExhaustiveWithWitness(m, scrutT, "`Result`")
 }
 
 // variantHeadName returns the top-level variant name for a pattern,
@@ -519,16 +398,3 @@ func variantHeadName(p ast.Pattern) string {
 	return ""
 }
 
-// variantPayload returns the sole payload pattern of a single-arg
-// variant (`Some(x)` → x). Returns nil otherwise.
-func variantPayload(p ast.Pattern) ast.Pattern {
-	switch x := p.(type) {
-	case *ast.VariantPat:
-		if len(x.Args) == 1 {
-			return x.Args[0]
-		}
-	case *ast.BindingPat:
-		return variantPayload(x.Pattern)
-	}
-	return nil
-}
