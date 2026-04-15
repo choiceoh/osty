@@ -100,6 +100,23 @@ type gen struct {
 	// statement-level pre-lift pass (see preLiftQuestions); consumed by
 	// emitQuestion. Nil when no lift is in progress.
 	questionSubs map[*ast.QuestionExpr]string
+
+	// genericInstances groups the distinct instantiations recorded for
+	// each user-defined generic function. Populated by buildInstances
+	// before declaration emission; consumed by emitFnDecl to produce
+	// one specialized copy per entry (§2.7.3).
+	genericInstances map[*resolve.Symbol][]instRecord
+
+	// callMono maps each generic CallExpr to the mangled name its
+	// callee is emitted under. Consumed by emitCall so the argument
+	// list lands in front of the specialized function.
+	callMono map[*ast.CallExpr]string
+
+	// substEnv is the current generic-parameter → Go-type substitution
+	// environment. Non-empty only while we emit inside a monomorphized
+	// body; goTypeExpr and goType consult it so every reference to `T`
+	// in the source surfaces as the concrete Go type in the output.
+	substEnv map[string]string
 }
 
 func newGen(pkgName string, file *ast.File, res *resolve.Result, chk *check.Result) *gen {
@@ -115,6 +132,7 @@ func newGen(pkgName string, file *ast.File, res *resolve.Result, chk *check.Resu
 		methodNames:  map[string]map[string]bool{},
 	}
 	g.indexTypes()
+	g.buildInstances()
 	return g
 }
 

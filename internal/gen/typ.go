@@ -66,6 +66,9 @@ func (g *gen) goType(t types.Type) string {
 		return g.goNamedType(t)
 	case *types.TypeVar:
 		if t.Sym != nil {
+			if concrete, ok := g.lookupSubst(t.Sym.Name); ok {
+				return concrete
+			}
 			return t.Sym.Name
 		}
 		return "any"
@@ -284,6 +287,16 @@ func (g *gen) goNamedAST(n *ast.NamedType) string {
 		return strings.Join(n.Path, ".")
 	}
 	name := n.Path[0]
+	// Generic type-parameter references substitute to the concrete Go
+	// type rendered at the monomorphizing call site. Applies only to
+	// bare single-path names with no type arguments — a `T<...>` shape
+	// is nonsense for a type variable, so we fall through if Args are
+	// present.
+	if len(n.Args) == 0 {
+		if concrete, ok := g.lookupSubst(name); ok {
+			return concrete
+		}
+	}
 	if gt, ok := primitiveByName[name]; ok {
 		return gt
 	}

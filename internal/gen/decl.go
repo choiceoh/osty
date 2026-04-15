@@ -35,6 +35,14 @@ func (g *gen) emitDecl(d ast.Decl) {
 // Methods (with a receiver) are emitted in Phase 2 alongside their
 // struct/enum; a standalone FnDecl with a non-nil Recv here would be
 // a parser accident, so we skip it with a TODO.
+//
+// Generic functions with recorded instantiations are monomorphized
+// (§2.7.3): instead of emitting a single Go-generic definition, we
+// emit one specialized copy per distinct type-argument list collected
+// by the checker. A generic fn with no observed instantiations emits
+// nothing — its body becomes live only when a downstream package
+// references it with a concrete type tuple. Non-generic fns take the
+// standard single-emission path.
 func (g *gen) emitFnDecl(fn *ast.FnDecl) {
 	if fn.Recv != nil {
 		// Methods are emitted by their enclosing type in Phase 2.
@@ -42,22 +50,34 @@ func (g *gen) emitFnDecl(fn *ast.FnDecl) {
 		// for the owner; skip here.
 		return
 	}
-	g.body.nl()
-	g.body.write("func ")
-	g.body.write(fn.Name)
 
 	if len(fn.Generics) > 0 {
-		g.body.write("[")
-		for i, gp := range fn.Generics {
-			if i > 0 {
-				g.body.write(", ")
-			}
-			g.body.write(gp.Name)
-			g.body.write(" ")
-			g.body.write(g.goConstraint(gp.Constraints))
+		sym := g.res.FileScope.Lookup(fn.Name)
+		recs := g.genericInstances[sym]
+		if len(recs) == 0 {
+			// No instantiations: emit nothing. Monomorphization is a
+			// demand-driven transform — a generic body with no call
+			// sites has no lowered form in the Go output.
+			return
 		}
-		g.body.write("]")
+		g.emitMonomorphizedFn(fn, recs)
+		return
 	}
+
+	g.emitFnDeclBody(fn, fn.Name)
+}
+
+// emitFnDeclBody writes a single function definition under `name`. It
+// is the shared emission path used by both the non-generic fast path
+// and the per-instantiation loop over a monomorphized generic. Generic
+// type parameters are never emitted as Go `[T any]` brackets here —
+// when we reach this function for a generic source fn, the caller has
+// already pushed a substitution env so every type-param reference
+// resolves to a concrete Go type.
+func (g *gen) emitFnDeclBody(fn *ast.FnDecl, name string) {
+	g.body.nl()
+	g.body.write("func ")
+	g.body.write(name)
 
 	g.emitParamList(fn.Params)
 
@@ -67,7 +87,6 @@ func (g *gen) emitFnDecl(fn *ast.FnDecl) {
 	}
 
 	if fn.Body == nil {
-		// Signature-only (shouldn't happen at top level, but be safe).
 		g.body.writeln(" {}")
 		return
 	}
