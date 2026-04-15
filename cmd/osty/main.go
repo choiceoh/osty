@@ -236,6 +236,12 @@ func main() {
 		runCache(args[1:], flags)
 		return
 	}
+	// registry hosts the subcommand family for running an osty
+	// registry backend: `osty registry serve` and friends.
+	if cmd == "registry" {
+		runRegistry(args[1:], flags)
+		return
+	}
 	if len(args) < 2 {
 		usage()
 		os.Exit(2)
@@ -1050,6 +1056,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "       osty targets              (list declared cross-compilation targets)")
 	fmt.Fprintln(os.Stderr, "       osty features             (list declared opt-in features)")
 	fmt.Fprintln(os.Stderr, "       osty cache [ls|clean|info] (inspect / prune the build cache)")
+	fmt.Fprintln(os.Stderr, "       osty registry serve       (run a registry backend; see --help for flags)")
 	fmt.Fprintln(os.Stderr, "       osty lsp                  (language server on stdio)")
 	fmt.Fprintln(os.Stderr, "       osty explain [CODE]       (describe a diagnostic code; no arg lists every code)")
 	fmt.Fprintln(os.Stderr, "       osty pipeline FILE|DIR    (run every front-end phase; per-stage timing)")
