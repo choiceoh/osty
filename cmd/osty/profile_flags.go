@@ -10,6 +10,11 @@ import (
 	"github.com/osty/osty/internal/profile"
 )
 
+// profileTestFallback is `osty test`'s default profile when the user
+// doesn't pass `--profile`. Exposed as a named constant so the
+// fallback stays grep-able from both test.go and the profile docs.
+const profileTestFallback = profile.NameTest
+
 // profileFlags captures the `--profile / --release / --target /
 // --features / --no-default-features` flag set shared by `osty build`
 // and `osty run`. register() attaches them to a caller-owned

@@ -60,8 +60,11 @@ func runTest(args []string, flags cliFlags) {
 	}
 	var offline bool
 	fs.BoolVar(&offline, "offline", false, "do not fetch dependencies; fail if caches are missing")
+	var pf profileFlags
+	pf.register(fs)
 	_ = fs.Parse(args)
 	positional := fs.Args()
+
 
 	// Split positional args into path targets (existing on disk) and
 	// name filters (everything else). Paths shortcut the manifest walk
@@ -105,6 +108,16 @@ func runTest(args []string, flags cliFlags) {
 			fmt.Fprintf(os.Stderr, "osty test: %v\n", err)
 			os.Exit(2)
 		}
+		// Resolve the effective profile so feature gating + target
+		// metadata surface here too. `osty test` defaults to the
+		// built-in `test` profile unless the user picks another with
+		// --profile.
+		resolved, _, perr := pf.resolve(man, profileTestFallback)
+		if perr != nil {
+			fmt.Fprintf(os.Stderr, "osty test: %v\n", perr)
+			os.Exit(2)
+		}
+		announceProfile(resolved)
 	}
 
 	// Collect test files: explicit positional paths if given; otherwise

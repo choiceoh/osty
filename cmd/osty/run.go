@@ -67,6 +67,17 @@ func runRun(args []string, cliF cliFlags) {
 		fmt.Fprintf(os.Stderr, "osty run: %v\n", perr)
 		os.Exit(2)
 	}
+	// `osty run` is a build-and-execute shortcut. A non-host target
+	// triple would produce a binary that can't run on this machine,
+	// so steer the user toward `osty build --target` instead.
+	if resolved.Target != nil {
+		fmt.Fprintf(os.Stderr,
+			"osty run: cannot execute cross-compiled binary for %s on host\n",
+			resolved.Target.Triple)
+		fmt.Fprintln(os.Stderr,
+			"hint: use `osty build --target "+resolved.Target.Triple+"` to produce the binary")
+		os.Exit(2)
+	}
 	_ = filepath.Join(root, manifest.ManifestFile) // kept for future inline rewriting
 
 	// Step 1: vendor deps (also runs resolve, computes the graph +

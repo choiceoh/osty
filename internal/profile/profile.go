@@ -249,15 +249,30 @@ type Resolved struct {
 	Features []string
 }
 
-// OptLevelFlag returns the `-gcflags=-l=<N>` string corresponding to
-// p.OptLevel. Kept as a helper so the backend can substitute its own
-// convention (e.g. switching to LLVM gcc-style `-O<n>` if a future
-// native backend is wired in) without rewriting every call site.
-func (p *Profile) OptLevelFlag() string {
+// OptLevelFlags returns the `go build` flags implied by p.OptLevel.
+// Mapping:
+//
+//	0  →  -gcflags=all=-N -l        (no opt, no inline — debuggable)
+//	1  →  -gcflags=all=-l           (inline off, optimizations on)
+//	2  →  (empty — Go's default: inline on, opts on)
+//	3  →  (empty; LTO/strip live on Profile.LTO / Profile.Strip)
+//
+// Returned as a slice so the caller can splice it into a larger argv
+// without post-processing. Kept decoupled from GoFlags so a user
+// pinning `opt-level = 0` in the manifest deterministically gets
+// debug flags regardless of what's in the built-in GoFlags.
+func (p *Profile) OptLevelFlags() []string {
 	if p == nil {
-		return ""
+		return nil
 	}
-	return fmt.Sprintf("-gcflags=-l=%d", p.OptLevel)
+	switch p.OptLevel {
+	case 0:
+		return []string{"-gcflags=all=-N -l"}
+	case 1:
+		return []string{"-gcflags=all=-l"}
+	default:
+		return nil
+	}
 }
 
 // GoEnv collects the environment overrides this resolved config
@@ -296,15 +311,41 @@ func (r *Resolved) GoEnv() map[string]string {
 }
 
 // GoFlags returns the flat `go build` flag list for this resolved
-// config. Order: profile-derived flags, then any feature-derived
-// `-tags` invocation synthesized from r.Features. Feature names map
-// 1:1 to Go build tags so conditional gen output (future phase 5)
+// config. Order:
+//
+//  1. OptLevel-derived `-gcflags` (only when OptLevel ∈ {0, 1});
+//     skipped at default levels so the user's GoFlags control alone.
+//  2. Profile.GoFlags from the merged manifest (built-ins + user).
+//     Entries that collide with the OptLevel flag are filtered so
+//     `-gcflags=all=-N -l` doesn't appear twice.
+//  3. `-ldflags=-s -w` when Profile.Strip is true.
+//  4. `-tags=feat_*` synthesized from r.Features.
+//
+// Feature names map 1:1 to Go build tags so conditional gen output
 // can gate via `//go:build feat_<name>`.
 func (r *Resolved) GoFlags() []string {
 	if r == nil || r.Profile == nil {
 		return nil
 	}
-	flags := append([]string(nil), r.Profile.GoFlags...)
+	var flags []string
+	optFlags := r.Profile.OptLevelFlags()
+	flags = append(flags, optFlags...)
+	seen := map[string]bool{}
+	for _, f := range optFlags {
+		seen[f] = true
+	}
+	for _, f := range r.Profile.GoFlags {
+		if seen[f] {
+			continue
+		}
+		flags = append(flags, f)
+		seen[f] = true
+	}
+	stripFlag := "-ldflags=-s -w"
+	if r.Profile.Strip && !seen[stripFlag] {
+		flags = append(flags, stripFlag)
+		seen[stripFlag] = true
+	}
 	if len(r.Features) > 0 {
 		tags := make([]string, 0, len(r.Features))
 		for _, f := range r.Features {
@@ -387,4 +428,99 @@ func (c *Config) expandFeatures(requested []string, useDefaults bool) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// ReadFeaturePragma scans the first ~32 lines of src for a line of
+// the form `// @feature: NAME[, NAME...]` and returns the list of
+// feature names the file requires. Returns nil when no pragma is
+// present.
+//
+// The grammar is intentionally terse — a single-line comment that
+// starts with "@feature:" — so the check doesn't need a parser pass.
+// Callers (build driver, gen emitter) combine this with the active
+// feature set to decide whether the file participates in the build.
+func ReadFeaturePragma(src []byte) []string {
+	const maxLines = 32
+	line := 0
+	start := 0
+	for i := 0; i <= len(src) && line < maxLines; i++ {
+		// Logical line break at '\n' or at EOF.
+		if i < len(src) && src[i] != '\n' {
+			continue
+		}
+		raw := string(src[start:i])
+		trimmed := featTrim(raw)
+		if after, ok := featStrip(trimmed, "// @feature:"); ok {
+			return parseFeatureList(after)
+		}
+		if after, ok := featStrip(trimmed, "//@feature:"); ok {
+			return parseFeatureList(after)
+		}
+		// Stop as soon as we hit a non-comment, non-blank line —
+		// feature pragmas must live at the top of the file.
+		if trimmed != "" && !featHas(trimmed, "//") && !featHas(trimmed, "/*") {
+			return nil
+		}
+		start = i + 1
+		line++
+	}
+	return nil
+}
+
+// FileNeedsFeatures reads src's feature pragma and reports whether
+// every required feature is present in `active`. Files without a
+// pragma are unconditionally included. Returns (ok, missing) where
+// missing is the first feature that wasn't active.
+func FileNeedsFeatures(src []byte, active map[string]bool) (bool, string) {
+	needed := ReadFeaturePragma(src)
+	for _, f := range needed {
+		if !active[f] {
+			return false, f
+		}
+	}
+	return true, ""
+}
+
+func parseFeatureList(s string) []string {
+	var out []string
+	cur := ""
+	flush := func() {
+		t := featTrim(cur)
+		if t != "" {
+			out = append(out, t)
+		}
+		cur = ""
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == ',' || c == ' ' || c == '\t' {
+			flush()
+			continue
+		}
+		cur += string(c)
+	}
+	flush()
+	return out
+}
+
+func featTrim(s string) string {
+	i, j := 0, len(s)
+	for i < j && (s[i] == ' ' || s[i] == '\t' || s[i] == '\r') {
+		i++
+	}
+	for j > i && (s[j-1] == ' ' || s[j-1] == '\t' || s[j-1] == '\r') {
+		j--
+	}
+	return s[i:j]
+}
+
+func featStrip(s, p string) (string, bool) {
+	if len(s) >= len(p) && s[:len(p)] == p {
+		return s[len(p):], true
+	}
+	return "", false
+}
+
+func featHas(s, p string) bool {
+	return len(s) >= len(p) && s[:len(p)] == p
 }
