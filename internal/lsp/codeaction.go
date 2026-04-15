@@ -7,13 +7,25 @@ import (
 	"github.com/osty/osty/internal/lexer"
 )
 
-// handleCodeAction answers `textDocument/codeAction`. We examine the
-// diagnostics the editor attached to the request (those it has cached
-// for the current cursor range) and emit quick fixes for the subset
-// whose code we know how to patch.
+// handleCodeAction answers `textDocument/codeAction`. It produces two
+// families of results:
 //
-// Today we cover:
+//   - Diagnostic-attached quick fixes: one fix per problem the editor
+//     attached to the request (those it has cached for the current
+//     cursor range) whose code we know how to patch.
 //
+//   - Source actions: bulk refactors that operate on the whole file
+//     regardless of where the cursor sits. Currently:
+//       * source.organizeImports — sort, dedupe, and drop unused
+//         `use` declarations.
+//       * source.fixAll[.osty] — apply every machine-applicable
+//         compiler/lint suggestion in one edit.
+//
+// The `context.only` filter the client sends narrows what we return
+// — `["source.organizeImports"]` on save yields just that action, an
+// empty filter yields everything applicable.
+//
+// Quick-fix coverage:
 //   - E0500 (undefined name): suggest rename-to-nearest-match using
 //     the resolver's own scope+Levenshtein logic, so the fixes line
 //     up with the hints the compiler emitted in the first place.
@@ -31,15 +43,31 @@ func (s *Server) handleCodeAction(req *rpcRequest) {
 		replyJSON(s.conn, req.ID, []CodeAction{})
 		return
 	}
+	only := params.Context.Only
 	var actions []CodeAction
-	for _, d := range params.Context.Diagnostics {
-		switch d.Code {
-		case diag.CodeUndefinedName:
-			actions = append(actions, undefinedNameFixes(doc, d)...)
-		case diag.CodeUnusedLet, diag.CodeUnusedParam:
-			actions = append(actions, prefixUnderscoreFix(doc, d))
-		case diag.CodeUnusedImport:
-			actions = append(actions, removeLineFix(doc, d))
+	// Diagnostic-attached quick fixes (kind = quickfix).
+	if wantsKind(only, CodeActionQuickFix) {
+		for _, d := range params.Context.Diagnostics {
+			switch d.Code {
+			case diag.CodeUndefinedName:
+				actions = append(actions, undefinedNameFixes(doc, d)...)
+			case diag.CodeUnusedLet, diag.CodeUnusedParam:
+				actions = append(actions, prefixUnderscoreFix(doc, d))
+			case diag.CodeUnusedImport:
+				actions = append(actions, removeLineFix(doc, d))
+			}
+		}
+	}
+	// Source actions (kind = source.*). These are triggered on save
+	// or via the command palette, independent of the cursor range.
+	if wantsKind(only, CodeActionSourceOrganizeImports) {
+		if a := organizeImportsAction(doc); a != nil {
+			actions = append(actions, *a)
+		}
+	}
+	if wantsKind(only, CodeActionSourceFixAllOsty) || wantsKind(only, CodeActionSourceFixAll) {
+		if a := fixAllAction(doc); a != nil {
+			actions = append(actions, *a)
 		}
 	}
 	replyJSON(s.conn, req.ID, actions)

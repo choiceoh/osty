@@ -46,7 +46,14 @@ func (s *Server) handleInitialize(req *rpcRequest) {
 			RenameProvider:             true,
 			WorkspaceSymbolProvider:    true,
 			InlayHintProvider:          true,
-			CodeActionProvider:         true,
+			CodeActionProvider: &CodeActionOptions{
+				CodeActionKinds: []string{
+					CodeActionQuickFix,
+					CodeActionSourceOrganizeImports,
+					CodeActionSourceFixAllOsty,
+					CodeActionSourceFixAll,
+				},
+			},
 			CompletionProvider: &CompletionOptions{
 				// `.` triggers member completion (pkg.fn, recv.method).
 				TriggerCharacters: []string{"."},
