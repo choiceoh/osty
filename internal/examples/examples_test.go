@@ -80,15 +80,24 @@ func TestRunnableExamplesGenerateAndExecute(t *testing.T) {
 }
 
 func TestDogfoodExampleTestsExecute(t *testing.T) {
+	executeExampleTests(t, "dogfood")
+}
+
+func TestSelfhostCoreExampleTestsExecute(t *testing.T) {
+	executeExampleTests(t, "selfhost-core")
+}
+
+func executeExampleTests(t *testing.T, name string) {
+	t.Helper()
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("go binary not on PATH")
 	}
 	root := repoRoot(t)
-	dir := filepath.Join(root, "examples", "dogfood")
+	dir := filepath.Join(root, "examples", name)
 	pkg, chk := checkPackageDir(t, dir, true)
 	entries := discoverEntries(pkg)
 	if len(entries) == 0 {
-		t.Fatal("dogfood example exposed no test or benchmark entries")
+		t.Fatalf("%s example exposed no test or benchmark entries", name)
 	}
 	srcs, err := testgen.GenerateHarness(pkg, chk, entries)
 	if err != nil {
@@ -103,7 +112,7 @@ func TestDogfoodExampleTestsExecute(t *testing.T) {
 	})
 	want := fmt.Sprintf("%d passed, 0 failed, %d total", len(entries), len(entries))
 	if !strings.Contains(out, want) {
-		t.Fatalf("missing dogfood test summary %q in:\n%s", want, out)
+		t.Fatalf("missing %s test summary %q in:\n%s", name, want, out)
 	}
 }
 

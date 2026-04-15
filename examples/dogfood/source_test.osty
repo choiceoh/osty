@@ -60,6 +60,28 @@ fn testStreamLineTotalUsesChannels() {
     testing.assertEq(total, 9)
 }
 
+fn testClassifiesPackageEntriesForSelfHosting() {
+    testing.assertEq(packageEntryKindName(packageEntryKind("osty.toml")), "manifest")
+    testing.assertEq(packageEntryKindName(packageEntryKind("osty.lock")), "lockfile")
+    testing.assertEq(packageEntryKindName(packageEntryKind("src/main.osty")), "source")
+    testing.assertEq(packageEntryKindName(packageEntryKind("README.md")), "support")
+    testing.assertEq(packageEntryKindName(packageEntryKind(".osty")), "ignored")
+}
+
+fn testSkipsOnlyGeneratedPackageMetadata() {
+    testing.assert(!(shouldHashPackageEntry(".osty")))
+    testing.assert(!(shouldHashPackageEntry(".git")))
+    testing.assert(!(shouldHashPackageEntry("src/.DS_Store")))
+    testing.assert(shouldHashPackageEntry("src/main.osty"))
+    testing.assert(shouldHashPackageEntry("osty.toml"))
+}
+
+fn testDetectsAuthoredOstySources() {
+    testing.assert(isOstySourceEntry("src/lib.osty"))
+    testing.assert(!(isOstySourceEntry(".osty")))
+    testing.assert(!(isOstySourceEntry("osty.toml")))
+}
+
 fn benchSummarizeDogfoodSnippet() {
     let _ = summarize(sampleConcurrent())
 }

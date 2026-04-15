@@ -1,0 +1,71 @@
+use std.testing
+
+fn assertReqMatch(req: SemReq, version: SemVersion) {
+    testing.assert(semReqMatches(req, version))
+}
+
+fn assertReqMiss(req: SemReq, version: SemVersion) {
+    testing.assert(!(semReqMatches(req, version)))
+}
+
+fn testSemverReqExactAndRelationalGoldenCases() {
+    let exact = exactReq(stableVersion(1, 2, 3))
+    assertReqMatch(exact, stableVersion(1, 2, 3))
+    assertReqMiss(exact, stableVersion(1, 2, 4))
+    assertReqMiss(exact, stableVersion(1, 3, 0))
+
+    let ge = atLeastReq(stableVersion(1, 2, 3))
+    assertReqMatch(ge, stableVersion(1, 2, 3))
+    assertReqMatch(ge, stableVersion(2, 0, 0))
+    assertReqMiss(ge, stableVersion(1, 2, 2))
+
+    let gt = greaterThanReq(stableVersion(1, 2, 3))
+    assertReqMatch(gt, stableVersion(1, 2, 4))
+    assertReqMiss(gt, stableVersion(1, 2, 3))
+
+    let le = atMostReq(stableVersion(1, 2, 3))
+    assertReqMatch(le, stableVersion(1, 0, 0))
+    assertReqMatch(le, stableVersion(1, 2, 3))
+    assertReqMiss(le, stableVersion(1, 2, 4))
+
+    let lt = lessThanReq(stableVersion(1, 2, 3))
+    assertReqMatch(lt, stableVersion(1, 2, 2))
+    assertReqMiss(lt, stableVersion(1, 2, 3))
+}
+
+fn testSemverReqRangeGoldenCases() {
+    let caret = caretReq(stableVersion(1, 2, 3))
+    assertReqMatch(caret, stableVersion(1, 9, 9))
+    assertReqMiss(caret, stableVersion(2, 0, 0))
+    assertReqMiss(caret, stableVersion(1, 2, 2))
+
+    let caretZeroMinor = caretReq(stableVersion(0, 1, 2))
+    assertReqMatch(caretZeroMinor, stableVersion(0, 1, 9))
+    assertReqMiss(caretZeroMinor, stableVersion(0, 2, 0))
+
+    let caretZeroPatch = caretReq(stableVersion(0, 0, 1))
+    assertReqMatch(caretZeroPatch, stableVersion(0, 0, 1))
+    assertReqMiss(caretZeroPatch, stableVersion(0, 0, 2))
+
+    let tilde = tildeReq(stableVersion(1, 2, 3))
+    assertReqMatch(tilde, stableVersion(1, 2, 9))
+    assertReqMiss(tilde, stableVersion(1, 3, 0))
+
+    let majorWildcard = wildcardMajorReq(1)
+    assertReqMatch(majorWildcard, stableVersion(1, 0, 0))
+    assertReqMatch(majorWildcard, stableVersion(1, 9, 9))
+    assertReqMiss(majorWildcard, stableVersion(2, 0, 0))
+
+    let minorWildcard = wildcardMinorReq(1, 2)
+    assertReqMatch(minorWildcard, stableVersion(1, 2, 0))
+    assertReqMatch(minorWildcard, stableVersion(1, 2, 9))
+    assertReqMiss(minorWildcard, stableVersion(1, 3, 0))
+}
+
+fn testSemverReqPrereleaseGoldenCases() {
+    let stableRange = caretReq(stableVersion(1, 2, 3))
+    assertReqMiss(stableRange, prerelease1(1, 3, 0, preText("alpha")))
+
+    let preRange = caretReq(prerelease1(1, 2, 3, preText("alpha")))
+    assertReqMatch(preRange, prerelease2(1, 2, 3, preText("alpha"), preNumber(1)))
+}

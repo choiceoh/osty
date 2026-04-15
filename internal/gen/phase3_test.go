@@ -202,6 +202,30 @@ func TestNestedLists(t *testing.T) {
 	}
 }
 
+// TestListPush verifies the checker-approved List.push stdlib surface lowers
+// to append-backed mutation instead of a non-existent Go method call.
+func TestListPush(t *testing.T) {
+	src := `fn main() {
+    let mut xs: List<Int> = []
+    xs.push(10)
+    xs.push(32)
+    let mut total = 0
+    for x in xs {
+        total = total + x
+    }
+    println("{total}")
+}
+`
+	goSrc, err := transpile(t, src)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := runGo(t, goSrc)
+	if strings.TrimSpace(out) != "42" {
+		t.Errorf("unexpected output: %q\n--- src ---\n%s", out, goSrc)
+	}
+}
+
 // TestMatchOnList verifies matching on literal primitives inside a
 // function that processes a list.
 func TestMatchOnList(t *testing.T) {

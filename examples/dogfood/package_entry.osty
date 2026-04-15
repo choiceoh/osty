@@ -1,0 +1,56 @@
+use go "path/filepath" as filepath {
+    fn Base(path: String) -> String
+    fn Ext(path: String) -> String
+}
+
+/// PackageEntryKind is the self-hosting-facing shape of one package file.
+pub enum PackageEntryKind {
+    Manifest,
+    Lockfile,
+    Source,
+    Support,
+    Ignored,
+}
+
+/// packageEntryKind classifies package paths before hashing or publishing.
+pub fn packageEntryKind(rel: String) -> PackageEntryKind {
+    let base = filepath.Base(rel)
+    if base == ".osty" || base == ".git" || base == ".hg" || base == ".svn" || base == ".DS_Store" {
+        Ignored
+    } else if base == "osty.toml" {
+        Manifest
+    } else if base == "osty.lock" {
+        Lockfile
+    } else if filepath.Ext(base) == ".osty" {
+        Source
+    } else {
+        Support
+    }
+}
+
+/// packageEntryKindName returns a stable label for reports and snapshots.
+pub fn packageEntryKindName(kind: PackageEntryKind) -> String {
+    match kind {
+        Manifest -> "manifest",
+        Lockfile -> "lockfile",
+        Source -> "source",
+        Support -> "support",
+        Ignored -> "ignored",
+    }
+}
+
+/// shouldHashPackageEntry mirrors the package-manager rule for cache metadata.
+pub fn shouldHashPackageEntry(rel: String) -> Bool {
+    match packageEntryKind(rel) {
+        Ignored -> false,
+        _ -> true,
+    }
+}
+
+/// isOstySourceEntry reports whether a package path is authored Osty code.
+pub fn isOstySourceEntry(rel: String) -> Bool {
+    match packageEntryKind(rel) {
+        Source -> true,
+        _ -> false,
+    }
+}
