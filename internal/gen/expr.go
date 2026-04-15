@@ -100,7 +100,7 @@ func (g *gen) emitIdent(id *ast.Ident) {
 	// use sites work (a bare struct value cannot be the scrutinee of a
 	// `v.(Enum_Variant)` type assertion).
 	if owner, ok := g.variantOwner[id.Name]; ok {
-		g.body.writef("%s(%s_%s{})", owner, owner, id.Name)
+		g.body.writef("%s(&%s_%s{})", owner, owner, id.Name)
 		return
 	}
 	g.body.write(mangleIdent(id.Name))
@@ -137,11 +137,26 @@ func (g *gen) emitStructLit(s *ast.StructLit) {
 	default:
 		g.emitExpr(s.Type)
 	}
+	refStruct := false
+	if n, ok := g.typeOf(s).(*types.Named); ok && g.isReferenceStructSym(n.Sym) {
+		refStruct = true
+		if got := g.goType(n); strings.HasPrefix(got, "*") {
+			typeName = strings.TrimPrefix(got, "*")
+		}
+	} else if id, ok := s.Type.(*ast.Ident); ok && g.structTypes[id.Name] {
+		refStruct = true
+	}
+	if typeName != "" && g.structTypes[typeName] {
+		refStruct = true
+	}
 	if s.Spread != nil && typeName != "" {
-		g.emitStructSpreadLit(s, typeName)
+		g.emitStructSpreadLit(s, typeName, refStruct)
 		return
 	}
 	if typeName != "" {
+		if refStruct {
+			g.body.write("&")
+		}
 		g.body.write(typeName)
 	}
 	g.body.write("{")
@@ -169,9 +184,16 @@ func (g *gen) emitStructLit(s *ast.StructLit) {
 // emitStructSpreadLit lowers `Type { f: v, ..base }` to an IIFE that
 // copies base then assigns each explicit field, matching Osty's
 // "overrides win" semantics (§3.4).
-func (g *gen) emitStructSpreadLit(s *ast.StructLit, typeName string) {
+func (g *gen) emitStructSpreadLit(s *ast.StructLit, typeName string, refStruct bool) {
 	tmp := g.freshVar("_r")
-	g.body.writef("func() %s { %s := ", typeName, tmp)
+	retType := typeName
+	if refStruct {
+		retType = "*" + typeName
+	}
+	g.body.writef("func() %s { %s := ", retType, tmp)
+	if refStruct {
+		g.body.write("*")
+	}
 	g.emitExpr(s.Spread)
 	g.body.write("; ")
 	for _, f := range s.Fields {
@@ -182,6 +204,10 @@ func (g *gen) emitStructSpreadLit(s *ast.StructLit, typeName string) {
 			g.emitExpr(f.Value)
 		}
 		g.body.write("; ")
+	}
+	if refStruct {
+		g.body.writef("return &%s }()", tmp)
+		return
 	}
 	g.body.writef("return %s }()", tmp)
 }
@@ -266,10 +292,39 @@ func (g *gen) emitBinary(b *ast.BinaryExpr) {
 		g.emitCoalesce(b)
 		return
 	}
+	if (b.Op == token.EQ || b.Op == token.NEQ) && g.needsOstyEqual(b.Left, b.Right) {
+		if b.Op == token.NEQ {
+			g.body.write("!")
+		}
+		g.needEqualRuntime = true
+		g.body.write("ostyEqual(")
+		g.emitExpr(b.Left)
+		g.body.write(", ")
+		g.emitExpr(b.Right)
+		g.body.write(")")
+		return
+	}
 	op := binaryOp(b.Op)
 	g.emitExpr(b.Left)
 	g.body.writef(" %s ", op)
 	g.emitExpr(b.Right)
+}
+
+func (g *gen) needsOstyEqual(left, right ast.Expr) bool {
+	return needsOstyEqualType(g.typeOf(left)) || needsOstyEqualType(g.typeOf(right))
+}
+
+func needsOstyEqualType(t types.Type) bool {
+	switch t := t.(type) {
+	case nil:
+		return false
+	case *types.Primitive:
+		return t.Kind == types.PBytes
+	case *types.Untyped:
+		return false
+	default:
+		return true
+	}
 }
 
 func binaryOp(k token.Kind) string {
@@ -388,6 +443,9 @@ func (g *gen) emitCall(c *ast.CallExpr) {
 			return
 		}
 		if g.emitErrorMethodCall(c, f) {
+			return
+		}
+		if g.emitStdlibRefCall(c, f) {
 			return
 		}
 		if g.emitStdlibEncodingCall(c, f) {
@@ -607,6 +665,32 @@ func (g *gen) isPreludeErrorTypeExpr(e ast.Expr) bool {
 func isErrorType(t types.Type) bool {
 	n, ok := t.(*types.Named)
 	return ok && n.Sym != nil && n.Sym.Name == "Error"
+}
+
+func (g *gen) emitStdlibRefCall(c *ast.CallExpr, f *ast.FieldExpr) bool {
+	id, ok := f.X.(*ast.Ident)
+	if !ok || !g.isStdlibPackageAlias(id, "ref") || f.Name != "same" || len(c.Args) != 2 {
+		return false
+	}
+	if t := g.typeOf(c.Args[0].Value); hasValueSemantics(t) {
+		g.body.write("false")
+		return true
+	}
+	g.needRefRuntime = true
+	g.body.write("refSame(")
+	g.emitExpr(c.Args[0].Value)
+	g.body.write(", ")
+	g.emitExpr(c.Args[1].Value)
+	g.body.write(")")
+	return true
+}
+
+func hasValueSemantics(t types.Type) bool {
+	switch t.(type) {
+	case *types.Primitive, *types.Untyped, *types.Tuple:
+		return true
+	}
+	return false
 }
 
 func (g *gen) emitStdlibEncodingCall(c *ast.CallExpr, _ *ast.FieldExpr) bool {
@@ -2178,7 +2262,7 @@ func (g *gen) listReturnGo(call *ast.CallExpr, elemGo string) string {
 // to the enum interface type so downstream type assertions work even
 // when the value flows through a generic position like a `let` short-form.
 func (g *gen) emitVariantCtor(owner, name string, args []*ast.Arg) {
-	g.body.writef("%s(%s_%s{", owner, owner, name)
+	g.body.writef("%s(&%s_%s{", owner, owner, name)
 	for i, a := range args {
 		if i > 0 {
 			g.body.write(", ")
@@ -2456,9 +2540,9 @@ func (g *gen) emitBuiltinCall(name string, args []*ast.Arg, call *ast.CallExpr) 
 				callType = g.typeOf(call)
 			}
 			tArg, tErr := g.resultTypeArgsAt(callType, g.typeOf(args[0].Value), false)
-			g.body.writef("Result[%s, %s]{Value: ", tArg, tErr)
+			g.body.writef("resultOk[%s, %s](", tArg, tErr)
 			g.emitExpr(args[0].Value)
-			g.body.write(", IsOk: true}")
+			g.body.write(")")
 			return true
 		}
 	case "Err":
@@ -2469,9 +2553,9 @@ func (g *gen) emitBuiltinCall(name string, args []*ast.Arg, call *ast.CallExpr) 
 				callType = g.typeOf(call)
 			}
 			tArg, tErr := g.resultTypeArgsAt(callType, g.typeOf(args[0].Value), true)
-			g.body.writef("Result[%s, %s]{Error: ", tArg, tErr)
+			g.body.writef("resultErr[%s, %s](", tArg, tErr)
 			g.emitExpr(args[0].Value)
-			g.body.write("}")
+			g.body.write(")")
 			return true
 		}
 	}
@@ -2923,6 +3007,10 @@ func (g *gen) emitList(l *ast.ListExpr) {
 		if n, ok := t.(*types.Named); ok && n.Sym != nil && n.Sym.Name == "List" && len(n.Args) == 1 {
 			elemType = g.goType(n.Args[0])
 		}
+	}
+	if len(l.Elems) == 0 {
+		g.body.writef("make([]%s, 0, 1)", elemType)
+		return
 	}
 	g.body.writef("[]%s{", elemType)
 	for i, e := range l.Elems {

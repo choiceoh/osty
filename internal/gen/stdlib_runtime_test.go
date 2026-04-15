@@ -108,7 +108,7 @@ fn main() {
 	if out != want {
 		t.Errorf("got %q, want %q\n--- src ---\n%s", out, want, goSrc)
 	}
-	for _, want := range []string{"ostyErrorDowncast[FsError]", "func (self FsError_NotFound) message() string"} {
+	for _, want := range []string{"ostyErrorDowncast[FsError]", "func (self *FsError_NotFound) message() string"} {
 		if !strings.Contains(string(goSrc), want) {
 			t.Errorf("generated std.error downcast bridge missing %s:\n%s", want, goSrc)
 		}
@@ -158,6 +158,132 @@ fn main() {
 	want := "https example.com 8080 /path top https://example.com:8080/path?q=1#top"
 	if strings.TrimSpace(out) != want {
 		t.Errorf("got %q, want %q\n--- src ---\n%s", strings.TrimSpace(out), want, goSrc)
+	}
+}
+
+func TestStdRefSameRuntimeBridge(t *testing.T) {
+	src := `use std.ref
+
+struct Box {
+    value: Int,
+
+    fn sameAs(self, other: Self) -> Bool {
+        ref.same(self, other)
+    }
+}
+
+enum Token {
+    Word(String),
+    End,
+}
+
+fn main() {
+    let xs: List<Int> = [1, 2, 3]
+    let alias = xs
+    let other: List<Int> = [1, 2, 3]
+    let empty: List<Int> = []
+    let sameEmpty = empty
+    let otherEmpty: List<Int> = []
+
+    let names: Map<String, Int> = {"a": 1}
+    let sameNames = names
+    let otherNames: Map<String, Int> = {"a": 1}
+
+    let box = Box { value: 7 }
+    let sameBox = box
+    let otherBox = Box { value: 7 }
+    let spreadBox = Box { value: 8, ..box }
+
+    let tok = Word("osty")
+    let sameTok = tok
+    let otherTok = Word("osty")
+    let end = End
+    let sameEnd = end
+    let otherEnd = End
+
+    let fnA = || 1
+    let fnAlias = fnA
+    let fnOther = || 1
+
+    let ok: Result<Int, String> = Ok(1)
+    let sameOk = ok
+    let otherOk: Result<Int, String> = Ok(1)
+    let err: Result<Int, String> = Err("bad")
+    let sameErr = err
+    let otherErr: Result<Int, String> = Err("bad")
+
+    println("{ref.same(xs, alias)}")
+    println("{ref.same(xs, other)}")
+    println("{ref.same(empty, sameEmpty)}")
+    println("{ref.same(empty, otherEmpty)}")
+    println("{ref.same(names, sameNames)}")
+    println("{ref.same(names, otherNames)}")
+    println("{ref.same(box, sameBox)}")
+    println("{ref.same(box, otherBox)}")
+    println("{ref.same(box, spreadBox)}")
+    println("{box.sameAs(sameBox)}")
+    println("{ref.same(tok, sameTok)}")
+    println("{ref.same(tok, otherTok)}")
+    println("{ref.same(end, sameEnd)}")
+    println("{ref.same(end, otherEnd)}")
+    println("{ref.same(fnA, fnAlias)}")
+    println("{ref.same(fnA, fnOther)}")
+    println("{ref.same(ok, sameOk)}")
+    println("{ref.same(ok, otherOk)}")
+    println("{ref.same(err, sameErr)}")
+	println("{ref.same(err, otherErr)}")
+	println("{ref.same(1, 1)}")
+	println("{ref.same("osty", "osty")}")
+	println("{box == otherBox}")
+	println("{box != spreadBox}")
+	println("{tok == otherTok}")
+	println("{end == otherEnd}")
+	println("{ok == otherOk}")
+	println("{err == otherErr}")
+}
+`
+	goSrc, err := transpileWithStdlib(t, src)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := strings.TrimSpace(runGo(t, goSrc))
+	want := strings.Join([]string{
+		"true",
+		"false",
+		"true",
+		"false",
+		"true",
+		"false",
+		"true",
+		"false",
+		"false",
+		"true",
+		"true",
+		"false",
+		"true",
+		"false",
+		"true",
+		"false",
+		"true",
+		"false",
+		"true",
+		"false",
+		"false",
+		"false",
+		"true",
+		"true",
+		"true",
+		"true",
+		"true",
+		"true",
+	}, "\n")
+	if out != want {
+		t.Errorf("got %q, want %q\n--- src ---\n%s", out, want, goSrc)
+	}
+	for _, want := range []string{"func refSame", "reflect.ValueOf"} {
+		if !strings.Contains(string(goSrc), want) {
+			t.Errorf("generated std.ref bridge missing %s:\n%s", want, goSrc)
+		}
 	}
 }
 

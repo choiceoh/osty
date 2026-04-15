@@ -73,6 +73,12 @@ type gen struct {
 	// receivers at emitCall time.
 	enumTypes map[string]bool
 
+	// structTypes is the set of struct names declared in this file.
+	// User structs lower as reference types, so expression emitters need
+	// a quick local-name check even for AST nodes that the resolver does
+	// not record in Refs.
+	structTypes map[string]bool
+
 	// methodNames[typeName] is the set of method names declared on
 	// that type, used at emitCall to distinguish instance-method
 	// invocation from field access to a function-valued field.
@@ -150,6 +156,14 @@ type gen struct {
 	// generation/parsing helpers.
 	needUUID bool
 
+	// needRefRuntime is set when std.ref.same lowers to the runtime
+	// reference-identity helper.
+	needRefRuntime bool
+
+	// needEqualRuntime is set when ==/!= need Osty's structural equality
+	// instead of Go's pointer/interface identity for lowered reference values.
+	needEqualRuntime bool
+
 	// currentRetType tracks the enclosing function's return type so the
 	// `?` lift at let-stmt position can reconstruct the Result with the
 	// correct type parameters when the operand's T differs.
@@ -202,6 +216,7 @@ func newGen(pkgName string, file *ast.File, res *resolve.Result, chk *check.Resu
 		imports:      map[string]string{},
 		variantOwner: map[string]string{},
 		enumTypes:    map[string]bool{},
+		structTypes:  map[string]bool{},
 		methodNames:  map[string]map[string]bool{},
 	}
 	g.indexTypes()
@@ -227,6 +242,7 @@ func (g *gen) indexTypes() {
 				g.methodNames[d.Name][m.Name] = true
 			}
 		case *ast.StructDecl:
+			g.structTypes[d.Name] = true
 			if g.methodNames[d.Name] == nil {
 				g.methodNames[d.Name] = map[string]bool{}
 			}
@@ -389,6 +405,12 @@ func (g *gen) run() ([]byte, error) {
 	if g.needResult || g.needStringRuntime || g.needErrorRuntime {
 		g.use("fmt")
 	}
+	if g.needRefRuntime || g.needEqualRuntime {
+		g.use("reflect")
+	}
+	if g.needRefRuntime {
+		g.use("unsafe")
+	}
 
 	// 3. Assemble header + body.
 	var out bytes.Buffer
@@ -457,6 +479,17 @@ type Result[T any, E any] struct {
 	Value T
 	Error E
 	IsOk  bool
+	ref   *byte
+}
+
+func resultRef() *byte { return new(byte) }
+
+func resultOk[T any, E any](value T) Result[T, E] {
+	return Result[T, E]{Value: value, IsOk: true, ref: resultRef()}
+}
+
+func resultErr[T any, E any](err E) Result[T, E] {
+	return Result[T, E]{Error: err, ref: resultRef()}
 }
 
 func (r Result[T, E]) isOk() bool { return r.IsOk }
@@ -507,16 +540,16 @@ func (r Result[T, E]) toString() string {
 
 func resultMap[T any, E any, U any](r Result[T, E], f func(T) U) Result[U, E] {
 	if r.IsOk {
-		return Result[U, E]{Value: f(r.Value), IsOk: true}
+		return resultOk[U, E](f(r.Value))
 	}
-	return Result[U, E]{Error: r.Error}
+	return resultErr[U, E](r.Error)
 }
 
 func resultMapErr[T any, E any, F any](r Result[T, E], f func(E) F) Result[T, F] {
 	if r.IsOk {
-		return Result[T, F]{Value: r.Value, IsOk: true}
+		return resultOk[T, F](r.Value)
 	}
-	return Result[T, F]{Error: f(r.Error)}
+	return resultErr[T, F](f(r.Error))
 }
 `)
 	}
@@ -615,12 +648,12 @@ func jsonStringify(value any) string { return jsonEncode(value) }
 func jsonDecode[T any](text string) Result[T, any] {
 	var out T
 	if err := jsonRejectLoneSurrogates(text); err != nil {
-		return Result[T, any]{Error: err}
+		return resultErr[T, any](err)
 	}
 	if err := jsonUnmarshalInto([]byte(text), &out); err != nil {
-		return Result[T, any]{Error: err}
+		return resultErr[T, any](err)
 	}
-	return Result[T, any]{Value: out, IsOk: true}
+	return resultOk[T, any](out)
 }
 
 func jsonObject(value map[string]Json) Json { return value }
@@ -664,6 +697,14 @@ func jsonUnmarshalReflect(data []byte, target reflect.Type, dest reflect.Value) 
 	}
 	if target.Kind() == reflect.Pointer {
 		if jsonRawIsNull(data) {
+			if target.Implements(reflect.TypeOf((*stdjson.Unmarshaler)(nil)).Elem()) {
+				ptr := reflect.New(target.Elem())
+				if err := stdjson.Unmarshal(data, ptr.Interface()); err != nil {
+					return err
+				}
+				dest.Set(ptr)
+				return nil
+			}
 			dest.SetZero()
 			return nil
 		}
@@ -823,7 +864,6 @@ func jsonIsNil(value any) bool {
 		return false
 	}
 }
-
 func jsonRejectLoneSurrogates(text string) error {
 	inString := false
 	for i := 0; i < len(text); i++ {
@@ -883,6 +923,160 @@ func jsonHex4(s string) (rune, bool) {
 		r = r*16 + rune(v)
 	}
 	return r, true
+}
+`)
+	}
+	if g.needEqualRuntime {
+		out.WriteString(`
+func ostyEqual(a, b any) bool {
+	av := reflect.ValueOf(a)
+	bv := reflect.ValueOf(b)
+	if !av.IsValid() || !bv.IsValid() {
+		return ostyIsNilValue(av) && ostyIsNilValue(bv)
+	}
+	return ostyEqualValue(av, bv, map[ostyEqualVisit]bool{})
+}
+
+type ostyEqualVisit struct {
+	a, b uintptr
+	typ  reflect.Type
+}
+
+func ostyEqualValue(a, b reflect.Value, seen map[ostyEqualVisit]bool) bool {
+	if !a.IsValid() || !b.IsValid() {
+		return ostyIsNilValue(a) && ostyIsNilValue(b)
+	}
+	if a.Type() != b.Type() {
+		return ostyIsNilValue(a) && ostyIsNilValue(b)
+	}
+	switch a.Kind() {
+	case reflect.Interface:
+		if a.IsNil() || b.IsNil() {
+			return a.IsNil() == b.IsNil()
+		}
+		return ostyEqualValue(a.Elem(), b.Elem(), seen)
+	case reflect.Pointer:
+		if a.IsNil() || b.IsNil() {
+			return a.IsNil() == b.IsNil()
+		}
+		visit := ostyEqualVisit{a: a.Pointer(), b: b.Pointer(), typ: a.Type()}
+		if seen[visit] {
+			return true
+		}
+		seen[visit] = true
+		return ostyEqualValue(a.Elem(), b.Elem(), seen)
+	case reflect.Struct:
+		for i := 0; i < a.NumField(); i++ {
+			if a.Type().Field(i).Name == "ref" {
+				continue
+			}
+			if !ostyEqualValue(a.Field(i), b.Field(i), seen) {
+				return false
+			}
+		}
+		return true
+	case reflect.Array, reflect.Slice:
+		if a.Kind() == reflect.Slice && (a.IsNil() || b.IsNil()) {
+			return a.IsNil() == b.IsNil()
+		}
+		if a.Len() != b.Len() {
+			return false
+		}
+		for i := 0; i < a.Len(); i++ {
+			if !ostyEqualValue(a.Index(i), b.Index(i), seen) {
+				return false
+			}
+		}
+		return true
+	case reflect.Map:
+		if a.IsNil() || b.IsNil() {
+			return a.IsNil() == b.IsNil()
+		}
+		if a.Len() != b.Len() {
+			return false
+		}
+		for _, key := range a.MapKeys() {
+			bv := b.MapIndex(key)
+			if !bv.IsValid() || !ostyEqualValue(a.MapIndex(key), bv, seen) {
+				return false
+			}
+		}
+		return true
+	case reflect.String:
+		return a.String() == b.String()
+	case reflect.Bool:
+		return a.Bool() == b.Bool()
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return a.Int() == b.Int()
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return a.Uint() == b.Uint()
+	case reflect.Float32, reflect.Float64:
+		return a.Float() == b.Float()
+	case reflect.Complex64, reflect.Complex128:
+		return a.Complex() == b.Complex()
+	case reflect.Func:
+		return a.IsNil() && b.IsNil()
+	case reflect.Chan, reflect.UnsafePointer:
+		return a.Pointer() == b.Pointer()
+	default:
+		if a.CanInterface() && b.CanInterface() {
+			return reflect.DeepEqual(a.Interface(), b.Interface())
+		}
+		return false
+	}
+}
+
+func ostyIsNilValue(v reflect.Value) bool {
+	if !v.IsValid() {
+		return true
+	}
+	switch v.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return v.IsNil()
+	default:
+		return false
+	}
+}
+`)
+	}
+	if g.needRefRuntime {
+		out.WriteString(`
+func refSame(a, b any) bool {
+	av := reflect.ValueOf(a)
+	bv := reflect.ValueOf(b)
+	if !av.IsValid() || !bv.IsValid() || av.Type() != bv.Type() {
+		return false
+	}
+	switch av.Kind() {
+	case reflect.Func:
+		ap := refInterfaceData(a)
+		return ap != nil && ap == refInterfaceData(b)
+	case reflect.Slice:
+		ap := av.Pointer()
+		return ap != 0 && ap == bv.Pointer()
+	case reflect.Chan, reflect.Map, reflect.Pointer, reflect.UnsafePointer:
+		ap := av.Pointer()
+		return ap != 0 && ap == bv.Pointer()
+	case reflect.Struct:
+		af := av.FieldByName("ref")
+		bf := bv.FieldByName("ref")
+		if af.IsValid() && bf.IsValid() && af.Kind() == reflect.Pointer && bf.Kind() == reflect.Pointer {
+			ap := af.Pointer()
+			return ap != 0 && ap == bf.Pointer()
+		}
+		return false
+	default:
+		return false
+	}
+}
+
+type refInterfaceHeader struct {
+	typ  unsafe.Pointer
+	data unsafe.Pointer
+}
+
+func refInterfaceData(v any) unsafe.Pointer {
+	return (*refInterfaceHeader)(unsafe.Pointer(&v)).data
 }
 `)
 	}
@@ -986,13 +1180,13 @@ type Url struct {
 func urlParse(text string) Result[Url, any] {
 	parsed, err := neturl.Parse(text)
 	if err != nil {
-		return Result[Url, any]{Error: err.Error()}
+		return resultErr[Url, any](err.Error())
 	}
 	var port *int
 	if raw := parsed.Port(); raw != "" {
 		n, err := strconv.Atoi(raw)
 		if err != nil {
-			return Result[Url, any]{Error: err.Error()}
+			return resultErr[Url, any](err.Error())
 		}
 		port = &n
 	}
@@ -1012,30 +1206,27 @@ func urlParse(text string) Result[Url, any] {
 			query[key] = values[0]
 		}
 	}
-	return Result[Url, any]{
-		Value: Url{
-			scheme:   parsed.Scheme,
-			host:     parsed.Hostname(),
-			port:     port,
-			path:     parsed.Path,
-			query:    query,
-			queryAll: queryAll,
-			fragment: fragment,
-		},
-		IsOk: true,
-	}
+	return resultOk[Url, any](Url{
+		scheme:   parsed.Scheme,
+		host:     parsed.Hostname(),
+		port:     port,
+		path:     parsed.Path,
+		query:    query,
+		queryAll: queryAll,
+		fragment: fragment,
+	})
 }
 
 func urlJoin(base, relative string) Result[string, any] {
 	b, err := neturl.Parse(base)
 	if err != nil {
-		return Result[string, any]{Error: err.Error()}
+		return resultErr[string, any](err.Error())
 	}
 	r, err := neturl.Parse(relative)
 	if err != nil {
-		return Result[string, any]{Error: err.Error()}
+		return resultErr[string, any](err.Error())
 	}
-	return Result[string, any]{Value: b.ResolveReference(r).String(), IsOk: true}
+	return resultOk[string, any](b.ResolveReference(r).String())
 }
 
 func (u Url) toString() string {
@@ -1096,9 +1287,9 @@ type Captures struct {
 func regexCompile(pattern string) Result[Regex, error] {
 	re, err := regexp.Compile(pattern)
 	if err != nil {
-		return Result[Regex, error]{Error: err}
+		return resultErr[Regex, error](err)
 	}
-	return Result[Regex, error]{Value: Regex{re: re}, IsOk: true}
+	return resultOk[Regex, error](Regex{re: re})
 }
 
 func (r Regex) matches(text string) bool { return r.re.MatchString(text) }
@@ -1198,9 +1389,9 @@ func encodingBase64Encode(data []byte) string {
 func encodingBase64Decode(text string) Result[[]byte, any] {
 	data, err := stdbase64.StdEncoding.DecodeString(text)
 	if err != nil {
-		return Result[[]byte, any]{Error: err}
+		return resultErr[[]byte, any](err)
 	}
-	return Result[[]byte, any]{Value: data, IsOk: true}
+	return resultOk[[]byte, any](data)
 }
 
 func encodingBase64URLEncode(data []byte) string {
@@ -1210,9 +1401,9 @@ func encodingBase64URLEncode(data []byte) string {
 func encodingBase64URLDecode(text string) Result[[]byte, any] {
 	data, err := stdbase64.URLEncoding.DecodeString(text)
 	if err != nil {
-		return Result[[]byte, any]{Error: err}
+		return resultErr[[]byte, any](err)
 	}
-	return Result[[]byte, any]{Value: data, IsOk: true}
+	return resultOk[[]byte, any](data)
 }
 
 func encodingHexEncode(data []byte) string {
@@ -1222,9 +1413,9 @@ func encodingHexEncode(data []byte) string {
 func encodingHexDecode(text string) Result[[]byte, any] {
 	data, err := stdhex.DecodeString(text)
 	if err != nil {
-		return Result[[]byte, any]{Error: err}
+		return resultErr[[]byte, any](err)
 	}
-	return Result[[]byte, any]{Value: data, IsOk: true}
+	return resultOk[[]byte, any](data)
 }
 
 func encodingURLEncode(text string) string {
@@ -1234,9 +1425,9 @@ func encodingURLEncode(text string) string {
 func encodingURLDecode(text string) Result[string, any] {
 	text, err := neturl.QueryUnescape(text)
 	if err != nil {
-		return Result[string, any]{Error: err}
+		return resultErr[string, any](err)
 	}
-	return Result[string, any]{Value: text, IsOk: true}
+	return resultOk[string, any](text)
 }
 `)
 	}
@@ -1259,23 +1450,23 @@ func envGet(name string) *string {
 func envRequire(name string) Result[string, any] {
 	value, ok := os.LookupEnv(name)
 	if !ok {
-		return Result[string, any]{Error: fmt.Errorf("environment variable %s is not set", name)}
+		return resultErr[string, any](fmt.Errorf("environment variable %s is not set", name))
 	}
-	return Result[string, any]{Value: value, IsOk: true}
+	return resultOk[string, any](value)
 }
 
 func envSet(name, value string) Result[struct{}, any] {
 	if err := os.Setenv(name, value); err != nil {
-		return Result[struct{}, any]{Error: err}
+		return resultErr[struct{}, any](err)
 	}
-	return Result[struct{}, any]{Value: struct{}{}, IsOk: true}
+	return resultOk[struct{}, any](struct{}{})
 }
 
 func envUnset(name string) Result[struct{}, any] {
 	if err := os.Unsetenv(name); err != nil {
-		return Result[struct{}, any]{Error: err}
+		return resultErr[struct{}, any](err)
 	}
-	return Result[struct{}, any]{Value: struct{}{}, IsOk: true}
+	return resultOk[struct{}, any](struct{}{})
 }
 
 func envVars() map[string]string {
@@ -1291,16 +1482,16 @@ func envVars() map[string]string {
 func envCurrentDir() Result[string, any] {
 	dir, err := os.Getwd()
 	if err != nil {
-		return Result[string, any]{Error: err}
+		return resultErr[string, any](err)
 	}
-	return Result[string, any]{Value: dir, IsOk: true}
+	return resultOk[string, any](dir)
 }
 
 func envSetCurrentDir(path string) Result[struct{}, any] {
 	if err := os.Chdir(path); err != nil {
-		return Result[struct{}, any]{Error: err}
+		return resultErr[struct{}, any](err)
 	}
-	return Result[struct{}, any]{Value: struct{}{}, IsOk: true}
+	return resultOk[struct{}, any](struct{}{})
 }
 `)
 	}
@@ -1385,9 +1576,9 @@ func csvDecodeWith(text string, options CsvOptions) Result[[][]string, any] {
 	if options.quote != '"' {
 		rows, err := csvDecodeCustom(text, options)
 		if err != nil {
-			return Result[[][]string, any]{Error: err}
+			return resultErr[[][]string, any](err)
 		}
-		return Result[[][]string, any]{Value: rows, IsOk: true}
+		return resultOk[[][]string, any](rows)
 	}
 	r := stdcsv.NewReader(stdstrings.NewReader(text))
 	r.Comma = options.delimiter
@@ -1395,9 +1586,9 @@ func csvDecodeWith(text string, options CsvOptions) Result[[][]string, any] {
 	r.FieldsPerRecord = -1
 	rows, err := r.ReadAll()
 	if err != nil {
-		return Result[[][]string, any]{Error: err}
+		return resultErr[[][]string, any](err)
 	}
-	return Result[[][]string, any]{Value: rows, IsOk: true}
+	return resultOk[[][]string, any](rows)
 }
 
 func csvDecodeCustom(text string, options CsvOptions) ([][]string, error) {
@@ -1474,11 +1665,11 @@ func csvDecodeCustom(text string, options CsvOptions) ([][]string, error) {
 func csvDecodeHeaders(text string) Result[[]map[string]string, any] {
 	rowsRes := csvDecode(text)
 	if !rowsRes.IsOk {
-		return Result[[]map[string]string, any]{Error: rowsRes.Error}
+		return resultErr[[]map[string]string, any](rowsRes.Error)
 	}
 	rows := rowsRes.Value
 	if len(rows) == 0 {
-		return Result[[]map[string]string, any]{Value: []map[string]string{}, IsOk: true}
+		return resultOk[[]map[string]string, any]([]map[string]string{})
 	}
 	headers := rows[0]
 	out := make([]map[string]string, 0, len(rows)-1)
@@ -1493,7 +1684,7 @@ func csvDecodeHeaders(text string) Result[[]map[string]string, any] {
 		}
 		out = append(out, record)
 	}
-	return Result[[]map[string]string, any]{Value: out, IsOk: true}
+	return resultOk[[]map[string]string, any](out)
 }
 `)
 	}
@@ -1514,17 +1705,17 @@ func compressGzipEncode(data []byte) []byte {
 func compressGzipDecode(data []byte) Result[[]byte, any] {
 	r, err := stdgzip.NewReader(stdbytes.NewReader(data))
 	if err != nil {
-		return Result[[]byte, any]{Error: err}
+		return resultErr[[]byte, any](err)
 	}
 	out, readErr := stdio.ReadAll(r)
 	closeErr := r.Close()
 	if readErr != nil {
-		return Result[[]byte, any]{Error: readErr}
+		return resultErr[[]byte, any](readErr)
 	}
 	if closeErr != nil {
-		return Result[[]byte, any]{Error: closeErr}
+		return resultErr[[]byte, any](closeErr)
 	}
-	return Result[[]byte, any]{Value: out, IsOk: true}
+	return resultOk[[]byte, any](out)
 }
 `)
 	}
@@ -1615,17 +1806,17 @@ func uuidParse(text string) Result[Uuid, any] {
 		compact = text
 	case 36:
 		if text[8] != '-' || text[13] != '-' || text[18] != '-' || text[23] != '-' {
-			return Result[Uuid, any]{Error: fmt.Errorf("invalid UUID %q", text)}
+			return resultErr[Uuid, any](fmt.Errorf("invalid UUID %q", text))
 		}
 		compact = stdstrings.ReplaceAll(text, "-", "")
 	default:
-		return Result[Uuid, any]{Error: fmt.Errorf("invalid UUID %q", text)}
+		return resultErr[Uuid, any](fmt.Errorf("invalid UUID %q", text))
 	}
 	var u Uuid
 	if _, err := stdhex.Decode(u[:], []byte(compact)); err != nil {
-		return Result[Uuid, any]{Error: err}
+		return resultErr[Uuid, any](err)
 	}
-	return Result[Uuid, any]{Value: u, IsOk: true}
+	return resultOk[Uuid, any](u)
 }
 
 func uuidNil() Uuid { return Uuid{} }

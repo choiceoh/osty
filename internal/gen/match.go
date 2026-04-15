@@ -204,7 +204,7 @@ func (g *gen) emitPatternTest(scrut string, scrutType types.Type, p ast.Pattern)
 		// name matches a declared (or prelude) enum variant. The
 		// resolver treats it as a variant in that case; we mirror.
 		if owner, ok := g.variantOwner[p.Name]; ok {
-			g.body.writef("func() bool { _, ok := %s.(%s_%s); return ok }()",
+			g.body.writef("func() bool { _, ok := %s.(*%s_%s); return ok }()",
 				scrut, owner, p.Name)
 			return
 		}
@@ -254,7 +254,7 @@ func (g *gen) emitPatternTest(scrut string, scrutType types.Type, p ast.Pattern)
 			return
 		}
 		owner := g.enumOwnerForPath(scrutType, p.Path)
-		g.body.writef("func() bool { _, ok := %s.(%s_%s); return ok }()",
+		g.body.writef("func() bool { _, ok := %s.(*%s_%s); return ok }()",
 			scrut, owner, vname)
 	case *ast.RangePat:
 		g.emitRangeTest(scrut, p)
@@ -433,7 +433,7 @@ func (g *gen) emitPatternBindings(scrut string, scrutType types.Type, p ast.Patt
 		owner := g.enumOwnerForPath(scrutType, p.Path)
 		// Reconstruct via type assertion + per-arg Fi access.
 		tmp := g.freshVar("_v")
-		g.body.writef("%s := %s.(%s_%s); _ = %s\n", tmp, scrut, owner, vname, tmp)
+		g.body.writef("%s := %s.(*%s_%s); _ = %s\n", tmp, scrut, owner, vname, tmp)
 		for i, a := range p.Args {
 			if _, ok := a.(*ast.WildcardPat); ok {
 				continue

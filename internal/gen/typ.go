@@ -233,15 +233,25 @@ func (g *gen) goNamedType(n *types.Named) string {
 		g.needUUID = true
 		return "Uuid"
 	}
-	// User-defined: bare name + optional type args.
-	if len(n.Args) == 0 {
-		return n.Sym.Name
+	// User-defined structs have reference semantics (§2.8), so values
+	// flow as pointers to the emitted Go struct. Enums stay as their Go
+	// interface type; their variants carry identity by storing pointers
+	// to the concrete variant structs in that interface.
+	name := g.goUserNamed(n.Sym.Name, n.Args)
+	if g.isReferenceStructSym(n.Sym) || g.structTypes[n.Sym.Name] {
+		return "*" + name
 	}
-	// Generic user type — emit with Go type arg brackets.
+	return name
+}
+
+func (g *gen) goUserNamed(name string, args []types.Type) string {
+	if len(args) == 0 {
+		return name
+	}
 	var b strings.Builder
-	b.WriteString(n.Sym.Name)
+	b.WriteString(name)
 	b.WriteByte('[')
-	for i, a := range n.Args {
+	for i, a := range args {
 		if i > 0 {
 			b.WriteString(", ")
 		}
@@ -249,6 +259,20 @@ func (g *gen) goNamedType(n *types.Named) string {
 	}
 	b.WriteByte(']')
 	return b.String()
+}
+
+func (g *gen) isReferenceStructSym(sym *resolve.Symbol) bool {
+	if sym == nil || sym.Kind != resolve.SymStruct {
+		return false
+	}
+	if g.structTypes[sym.Name] {
+		return true
+	}
+	switch sym.Name {
+	case "CsvOptions":
+		return false
+	}
+	return true
 }
 
 // goTypeExpr translates an AST type node to its Go type string. Used
@@ -328,20 +352,7 @@ func (g *gen) goNamedAST(n *ast.NamedType) string {
 	}
 	name := n.Path[0]
 	if name == "Self" && g.selfType != "" {
-		if len(n.Args) == 0 {
-			return g.selfType
-		}
-		var b strings.Builder
-		b.WriteString(g.selfType)
-		b.WriteByte('[')
-		for i, a := range n.Args {
-			if i > 0 {
-				b.WriteString(", ")
-			}
-			b.WriteString(g.goTypeExpr(a))
-		}
-		b.WriteByte(']')
-		return b.String()
+		return g.goSelfTypeAST(n.Args)
 	}
 	// Generic type-parameter references substitute to the concrete Go
 	// type rendered at the monomorphizing call site. Applies only to
@@ -417,20 +428,52 @@ func (g *gen) goNamedAST(n *ast.NamedType) string {
 		g.needUUID = true
 		return "Uuid"
 	}
-	if len(n.Args) == 0 {
-		return name
-	}
-	var b strings.Builder
-	b.WriteString(name)
-	b.WriteByte('[')
-	for i, a := range n.Args {
-		if i > 0 {
-			b.WriteString(", ")
+	out := name
+	if len(n.Args) > 0 {
+		var b strings.Builder
+		b.WriteString(name)
+		b.WriteByte('[')
+		for i, a := range n.Args {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			b.WriteString(g.goTypeExpr(a))
 		}
-		b.WriteString(g.goTypeExpr(a))
+		b.WriteByte(']')
+		out = b.String()
 	}
-	b.WriteByte(']')
-	return b.String()
+	if sym := g.typeRefSym(n); g.isReferenceStructSym(sym) || g.structTypes[name] {
+		return "*" + out
+	}
+	return out
+}
+
+func (g *gen) goSelfTypeAST(args []ast.Type) string {
+	out := g.selfType
+	if len(args) > 0 {
+		var b strings.Builder
+		b.WriteString(g.selfType)
+		b.WriteByte('[')
+		for i, a := range args {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			b.WriteString(g.goTypeExpr(a))
+		}
+		b.WriteByte(']')
+		out = b.String()
+	}
+	if !g.enumTypes[g.selfType] {
+		return "*" + out
+	}
+	return out
+}
+
+func (g *gen) typeRefSym(n *ast.NamedType) *resolve.Symbol {
+	if g.res == nil || n == nil {
+		return nil
+	}
+	return g.res.TypeRefs[n]
 }
 
 func (g *gen) goFnTypeAST(f *ast.FnType) string {

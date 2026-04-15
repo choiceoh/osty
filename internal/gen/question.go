@@ -63,7 +63,7 @@ func (g *gen) emitQuestionLiftBody(tmp string, q *ast.QuestionExpr) {
 		} else if g.currentRetType != nil {
 			retGo = g.goTypeExpr(g.currentRetType)
 		}
-		g.body.writef("if !%s.IsOk { return %s{Error: %s.Error} }\n", tmp, retGo, tmp)
+		g.body.writef("if !%s.IsOk { return %s{Error: %s.Error, ref: resultRef()} }\n", tmp, retGo, tmp)
 		return
 	}
 	g.body.writef("if %s == nil { return nil }\n", tmp)

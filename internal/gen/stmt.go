@@ -212,7 +212,7 @@ func (g *gen) emitQuestionLift(name string, q *ast.QuestionExpr) {
 		} else if g.currentRetType != nil {
 			retGo = g.goTypeExpr(g.currentRetType)
 		}
-		g.body.writef("if !%s.IsOk { return %s{Error: %s.Error} }\n", tmp, retGo, tmp)
+		g.body.writef("if !%s.IsOk { return %s{Error: %s.Error, ref: resultRef()} }\n", tmp, retGo, tmp)
 		if name != "_" {
 			g.body.writef("%s := %s.Value\n_ = %s\n", name, tmp, name)
 		} else {

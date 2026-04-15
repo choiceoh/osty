@@ -222,7 +222,7 @@ func (g *gen) emitEnumDecl(e *ast.EnumDecl) {
 func (g *gen) emitVariant(e *ast.EnumDecl, v *ast.Variant) {
 	name := e.Name + "_" + v.Name
 	if len(v.Fields) == 0 {
-		g.body.writef("type %s struct{}\n", name)
+		g.body.writef("type %s struct{ _ref byte }\n", name)
 	} else {
 		g.body.writef("type %s struct {\n", name)
 		g.body.indent()
@@ -257,12 +257,7 @@ func (g *gen) emitMethod(typeName string, m *ast.FnDecl, enumMethod bool) {
 	if free {
 		g.body.writef("func %s_%s", typeName, m.Name)
 	} else {
-		// Pointer receiver for `mut self`, value for `self`.
-		if m.Recv.Mut {
-			g.body.writef("func (self *%s) %s", typeName, m.Name)
-		} else {
-			g.body.writef("func (self %s) %s", typeName, m.Name)
-		}
+		g.body.writef("func (self *%s) %s", typeName, m.Name)
 	}
 	g.body.write("(")
 	first := true
@@ -324,7 +319,7 @@ func (g *gen) emitEnumVariantMethodWrappers(e *ast.EnumDecl, m *ast.FnDecl) {
 		recvType := e.Name + "_" + v.Name
 		g.body.nl()
 		g.sourceMarker(m)
-		g.body.writef("func (self %s) %s(", recvType, m.Name)
+		g.body.writef("func (self *%s) %s(", recvType, m.Name)
 		paramNames := make([]string, len(m.Params))
 		for i, p := range m.Params {
 			if i > 0 {
@@ -366,7 +361,7 @@ func (g *gen) emitEnumVariantMethodWrappers(e *ast.EnumDecl, m *ast.FnDecl) {
 // enclosing type's name; other type expressions pass through unchanged.
 func (g *gen) resolveSelfType(t ast.Type, typeName string) string {
 	if n, ok := t.(*ast.NamedType); ok && len(n.Path) == 1 && n.Path[0] == "Self" {
-		return typeName
+		return g.goSelfTypeAST(n.Args)
 	}
 	return g.goTypeExpr(t)
 }
@@ -511,34 +506,42 @@ func (g *gen) emitStdlibRuntimeBridge(alias string, path []string, full string) 
 			writeString  func(path string, contents string) Result[struct{}, any]
 			exists       func(path string) bool
 			remove       func(path string) Result[struct{}, any]
+			}{
+				readToString: func(path string) Result[string, any] {
+					data, err := %[1]s.ReadFile(path)
+					if err != nil {
+						return resultErr[string, any](err)
+					}
+					if !%[2]s.Valid(data) {
+						return resultErr[string, any]("fs.readToString: invalid UTF-8 in " + path)
+					}
+					return resultOk[string, any](string(data))
+				},
+				writeString: func(path string, contents string) Result[struct{}, any] {
+					if err := %[1]s.WriteFile(path, []byte(contents), 0o644); err != nil {
+						return resultErr[struct{}, any](err)
+					}
+					return resultOk[struct{}, any](struct{}{})
+				},
+				exists: func(path string) bool {
+					_, err := %[1]s.Stat(path)
+					return err == nil
+				},
+				remove: func(path string) Result[struct{}, any] {
+					if err := %[1]s.Remove(path); err != nil {
+						return resultErr[struct{}, any](err)
+					}
+					return resultOk[struct{}, any](struct{}{})
+				},
+			}`, osAlias, utf8Alias), full)
+		return true
+	case "ref":
+		g.needRefRuntime = true
+		g.emitUseStub(alias, `struct {
+			same func(any, any) bool
 		}{
-			readToString: func(path string) Result[string, any] {
-				data, err := %[1]s.ReadFile(path)
-				if err != nil {
-					return Result[string, any]{Error: err}
-				}
-				if !%[2]s.Valid(data) {
-					return Result[string, any]{Error: "fs.readToString: invalid UTF-8 in " + path}
-				}
-				return Result[string, any]{Value: string(data), IsOk: true}
-			},
-			writeString: func(path string, contents string) Result[struct{}, any] {
-				if err := %[1]s.WriteFile(path, []byte(contents), 0o644); err != nil {
-					return Result[struct{}, any]{Error: err}
-				}
-				return Result[struct{}, any]{Value: struct{}{}, IsOk: true}
-			},
-			exists: func(path string) bool {
-				_, err := %[1]s.Stat(path)
-				return err == nil
-			},
-			remove: func(path string) Result[struct{}, any] {
-				if err := %[1]s.Remove(path); err != nil {
-					return Result[struct{}, any]{Error: err}
-				}
-				return Result[struct{}, any]{Value: struct{}{}, IsOk: true}
-			},
-		}`, osAlias, utf8Alias), full)
+			same: refSame,
+		}`, full)
 		return true
 	case "json":
 		g.needJSON = true

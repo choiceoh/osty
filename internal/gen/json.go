@@ -71,7 +71,9 @@ func (g *gen) emitStructJSONUnmarshal(s *ast.StructDecl) {
 		g.body.writeln("return jsonAsError(result.Error)")
 		g.body.dedent()
 		g.body.writeln("}")
-		g.body.writeln("*self = result.Value")
+		g.body.writef("if result.Value == nil { return fmt.Errorf(%q) }\n",
+			fmt.Sprintf("std.json: %s.fromJson returned nil", s.Name))
+		g.body.writeln("*self = *result.Value")
 		g.body.writeln("return nil")
 		g.body.dedent()
 		g.body.writeln("}")
@@ -172,7 +174,7 @@ func (g *gen) emitEnumJSONDecoder(e *ast.EnumDecl) {
 		g.body.indent()
 		switch len(v.Fields) {
 		case 0:
-			g.body.writef("return %s(%s{}), nil\n", e.Name, goName)
+			g.body.writef("return %s(&%s{}), nil\n", e.Name, goName)
 		case 1:
 			fieldType := g.goTypeExpr(v.Fields[0])
 			missing := fmt.Sprintf("std.json: %s missing value", label)
@@ -180,7 +182,7 @@ func (g *gen) emitEnumJSONDecoder(e *ast.EnumDecl) {
 			g.body.writef("if len(head.Value) == 0 { return nil, fmt.Errorf(%q) }\n", missing)
 			g.body.writef("var f0 %s\n", fieldType)
 			g.body.writef("if err := jsonUnmarshalInto(head.Value, &f0); err != nil { return nil, fmt.Errorf(%q, err) }\n", msg)
-			g.body.writef("return %s(%s{F0: f0}), nil\n", e.Name, goName)
+			g.body.writef("return %s(&%s{F0: f0}), nil\n", e.Name, goName)
 		default:
 			g.body.writef("values, err := jsonUnmarshalArray(head.Value, %d, %q)\n", len(v.Fields), label)
 			g.body.writeln("if err != nil {")
@@ -193,7 +195,7 @@ func (g *gen) emitEnumJSONDecoder(e *ast.EnumDecl) {
 				g.body.writef("var f%d %s\n", i, g.goTypeExpr(f))
 				g.body.writef("if err := jsonUnmarshalInto(values[%d], &f%d); err != nil { return nil, fmt.Errorf(%q, err) }\n", i, i, msg)
 			}
-			g.body.writef("return %s(%s{", e.Name, goName)
+			g.body.writef("return %s(&%s{", e.Name, goName)
 			for i := range v.Fields {
 				if i > 0 {
 					g.body.write(", ")
