@@ -123,6 +123,20 @@ pub enum GcGlobalInitState {
     GcGlobalPoisoned,
 }
 
+pub enum GcClosureCaptureKind {
+    GcCaptureScalar,
+    GcCaptureValue,
+    GcCaptureBoxedValue,
+    GcCaptureMutableBox,
+}
+
+pub enum GcAsyncFrameState {
+    GcAsyncFrameRunning,
+    GcAsyncFrameSuspended,
+    GcAsyncFrameCompleted,
+    GcAsyncFrameCancelled,
+}
+
 pub struct GcLiveRootSlot {
     pub slot: Int,
     pub kind: GcRootSlotKind,
@@ -158,6 +172,28 @@ pub struct GcGlobalRoot {
     pub kind: GcGlobalRootKind,
     pub state: GcGlobalInitState,
     pub objectId: Int,
+}
+
+pub struct GcClosureCapture {
+    pub slot: Int,
+    pub name: String,
+    pub kind: GcClosureCaptureKind,
+    pub objectId: Int,
+}
+
+pub struct GcClosureEnvironment {
+    pub closureId: Int,
+    pub functionName: String,
+    pub captures: List<GcClosureCapture>,
+}
+
+pub struct GcAsyncFrameRoot {
+    pub taskId: Int,
+    pub functionName: String,
+    pub safepointId: Int,
+    pub state: GcAsyncFrameState,
+    pub frameObjectId: Int,
+    pub roots: List<Int>,
 }
 
 pub struct GcFrameSlot {
@@ -208,6 +244,8 @@ pub struct GcHeap {
     objects: Map<Int, GcObject>,
     roots: Set<Int>,
     globalRoots: Map<String, GcGlobalRoot>,
+    closureEnvironments: Map<Int, GcClosureEnvironment>,
+    asyncFrames: Map<Int, GcAsyncFrameRoot>,
     remembered: Set<Int>,
     grey: List<Int>,
     allocatedSinceLastGC: Int,
@@ -395,6 +433,193 @@ pub struct GcHeap {
         }
     }
 
+    pub fn installClosureEnvironment(
+        mut self,
+        closureId: Int,
+        functionName: String,
+        captures: List<GcClosureCapture>,
+    ) -> Bool {
+        if !(self.objects.containsKey(closureId)) {
+            return false
+        }
+        if self.objects[closureId].kind != GcClosure {
+            return false
+        }
+        if functionName == "" {
+            return false
+        }
+        if self.closureEnvironments.containsKey(closureId) {
+            return false
+        }
+        match self.validateClosureCaptures(captures) {
+            Ok(_) -> {},
+            Err(_) -> {
+                return false
+            },
+        }
+
+        self.rewriteClosureCaptureRefs(closureId, captures)
+        self.closureEnvironments.insert(
+            closureId,
+            GcClosureEnvironment {
+                closureId,
+                functionName,
+                captures,
+            },
+        )
+        true
+    }
+
+    pub fn updateClosureCapture(mut self, closureId: Int, slot: Int, objectId: Int) -> Bool {
+        if !(self.closureEnvironments.containsKey(closureId)) {
+            return false
+        }
+        if !(self.objects.containsKey(objectId)) {
+            return false
+        }
+
+        let mut env = self.closureEnvironments[closureId]
+        let mut captures: List<GcClosureCapture> = []
+        let mut found = false
+        for capture in env.captures {
+            let mut next = capture
+            if next.slot == slot {
+                if next.kind == GcCaptureScalar {
+                    return false
+                }
+                next.objectId = objectId
+                found = true
+            }
+            captures.push(next)
+        }
+        if !(found) {
+            return false
+        }
+        match self.validateClosureCaptures(captures) {
+            Ok(_) -> {},
+            Err(_) -> {
+                return false
+            },
+        }
+
+        env.captures = captures
+        self.rewriteClosureCaptureRefs(closureId, captures)
+        self.closureEnvironments.insert(closureId, env)
+        true
+    }
+
+    pub fn removeClosureEnvironment(mut self, closureId: Int) -> Bool {
+        if self.closureEnvironments.containsKey(closureId) {
+            let _ = self.closureEnvironments.remove(closureId)
+            if self.objects.containsKey(closureId) {
+                let mut obj = self.objects[closureId]
+                obj.refs = []
+                obj.remembered = false
+                self.objects.insert(closureId, obj)
+                let _ = self.remembered.remove(closureId)
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn suspendAsyncFrame(
+        mut self,
+        taskId: Int,
+        functionName: String,
+        safepointId: Int,
+        frameObjectId: Int,
+        roots: List<Int>,
+    ) -> Bool {
+        if taskId <= 0 || functionName == "" || safepointId <= 0 {
+            return false
+        }
+        if !(self.objects.containsKey(frameObjectId)) {
+            return false
+        }
+        if self.objects[frameObjectId].kind != GcRuntimeFrame {
+            return false
+        }
+        match self.validateAsyncFrameRoots(roots) {
+            Ok(_) -> {},
+            Err(_) -> {
+                return false
+            },
+        }
+        if self.asyncFrames.containsKey(taskId) {
+            let old = self.asyncFrames[taskId]
+            if old.state == GcAsyncFrameCompleted || old.state == GcAsyncFrameCancelled {
+                return false
+            }
+        }
+
+        self.asyncFrames.insert(
+            taskId,
+            GcAsyncFrameRoot {
+                taskId,
+                functionName,
+                safepointId,
+                state: GcAsyncFrameSuspended,
+                frameObjectId,
+                roots,
+            },
+        )
+        if self.phase == GcMarking {
+            self.shade(frameObjectId)
+            self.shadeObjectList(roots)
+        }
+        true
+    }
+
+    pub fn resumeAsyncFrame(mut self, taskId: Int) -> Bool {
+        if !(self.asyncFrames.containsKey(taskId)) {
+            return false
+        }
+        let mut frame = self.asyncFrames[taskId]
+        if frame.state == GcAsyncFrameCompleted || frame.state == GcAsyncFrameCancelled {
+            return false
+        }
+        frame.state = GcAsyncFrameRunning
+        frame.frameObjectId = -1
+        frame.roots = []
+        self.asyncFrames.insert(taskId, frame)
+        true
+    }
+
+    pub fn completeAsyncFrame(mut self, taskId: Int) -> Bool {
+        if !(self.asyncFrames.containsKey(taskId)) {
+            return false
+        }
+        let mut frame = self.asyncFrames[taskId]
+        frame.state = GcAsyncFrameCompleted
+        frame.frameObjectId = -1
+        frame.roots = []
+        self.asyncFrames.insert(taskId, frame)
+        true
+    }
+
+    pub fn cancelAsyncFrame(mut self, taskId: Int) -> Bool {
+        if !(self.asyncFrames.containsKey(taskId)) {
+            return false
+        }
+        let mut frame = self.asyncFrames[taskId]
+        frame.state = GcAsyncFrameCancelled
+        frame.frameObjectId = -1
+        frame.roots = []
+        self.asyncFrames.insert(taskId, frame)
+        true
+    }
+
+    pub fn removeAsyncFrame(mut self, taskId: Int) -> Bool {
+        if self.asyncFrames.containsKey(taskId) {
+            let _ = self.asyncFrames.remove(taskId)
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn pin(mut self, id: Int) -> Bool {
         if !(self.objects.containsKey(id)) {
             return false
@@ -473,6 +698,7 @@ pub struct GcHeap {
             self.shade(id)
         }
         self.shadeGlobalRoots()
+        self.shadeAsyncFrameRoots()
     }
 
     pub fn stepIncremental(mut self) -> GcStats {
@@ -624,6 +850,7 @@ pub struct GcHeap {
             self.shade(id)
         }
         self.shadeGlobalRoots()
+        self.shadeAsyncFrameRoots()
         let markSteps = self.drainGrey(0, false)
 
         self.phase = GcSweeping
@@ -682,6 +909,52 @@ pub struct GcHeap {
             let _ = key
             if root.objectId >= 0 {
                 total = total + 1
+            }
+        }
+        total
+    }
+
+    pub fn closureEnvironmentCount(self) -> Int {
+        self.closureEnvironments.len()
+    }
+
+    pub fn closurePointerCaptureCount(self) -> Int {
+        let mut total = 0
+        for (closureId, env) in self.closureEnvironments {
+            let _ = closureId
+            for capture in env.captures {
+                if capture.objectId >= 0 {
+                    total = total + 1
+                }
+            }
+        }
+        total
+    }
+
+    pub fn asyncFrameCount(self) -> Int {
+        self.asyncFrames.len()
+    }
+
+    pub fn suspendedAsyncFrameCount(self) -> Int {
+        let mut total = 0
+        for (taskId, frame) in self.asyncFrames {
+            let _ = taskId
+            if frame.state == GcAsyncFrameSuspended {
+                total = total + 1
+            }
+        }
+        total
+    }
+
+    pub fn asyncFrameRootCount(self) -> Int {
+        let mut total = 0
+        for (taskId, frame) in self.asyncFrames {
+            let _ = taskId
+            if frame.state == GcAsyncFrameSuspended {
+                total = total + frame.roots.len()
+                if frame.frameObjectId >= 0 {
+                    total = total + 1
+                }
             }
         }
         total
@@ -915,6 +1188,68 @@ pub struct GcHeap {
             }
         }
 
+        for (closureId, env) in self.closureEnvironments {
+            if closureId != env.closureId {
+                return Err("closure environment key/id mismatch: {closureId}")
+            }
+            if !(self.objects.containsKey(env.closureId)) {
+                return Err("closure environment {closureId} references missing closure")
+            }
+            let closure = self.objects[env.closureId]
+            if closure.kind != GcClosure {
+                return Err("closure environment {closureId} is not attached to a closure object")
+            }
+            if env.functionName == "" {
+                return Err("closure environment {closureId} has empty function name")
+            }
+            match self.validateClosureCaptures(env.captures) {
+                Ok(_) -> {},
+                Err(e) -> {
+                    return Err(e)
+                },
+            }
+            let expectedRefs = closureCaptureObjectIds(env.captures)
+            if closure.refs.len() != expectedRefs.len() {
+                return Err("closure environment {closureId} refs do not match capture descriptor")
+            }
+            for refId in expectedRefs {
+                if !(closure.refs.contains(refId)) {
+                    return Err("closure environment {closureId} is missing capture ref {refId}")
+                }
+            }
+        }
+
+        for (taskId, frame) in self.asyncFrames {
+            if taskId != frame.taskId {
+                return Err("async frame key/id mismatch: {taskId}")
+            }
+            if frame.taskId <= 0 {
+                return Err("async frame id must be positive")
+            }
+            if frame.functionName == "" {
+                return Err("async frame {taskId} has empty function name")
+            }
+            if frame.state == GcAsyncFrameSuspended {
+                if frame.safepointId <= 0 {
+                    return Err("suspended async frame {taskId} has invalid safepoint")
+                }
+                if frame.frameObjectId < 0 || !(self.objects.containsKey(frame.frameObjectId)) {
+                    return Err("suspended async frame {taskId} references missing frame object")
+                }
+                if self.objects[frame.frameObjectId].kind != GcRuntimeFrame {
+                    return Err("suspended async frame {taskId} root object is not a runtime frame")
+                }
+                match self.validateAsyncFrameRoots(frame.roots) {
+                    Ok(_) -> {},
+                    Err(e) -> {
+                        return Err(e)
+                    },
+                }
+            } else if frame.frameObjectId >= 0 || frame.roots.len() > 0 {
+                return Err("inactive async frame {taskId} still retains roots")
+            }
+        }
+
         for id in self.remembered.toList() {
             if !(self.objects.containsKey(id)) {
                 return Err("remembered set references missing object {id}")
@@ -1017,6 +1352,24 @@ pub struct GcHeap {
         }
     }
 
+    fn shadeAsyncFrameRoots(mut self) {
+        for (taskId, frame) in self.asyncFrames {
+            let _ = taskId
+            if frame.state == GcAsyncFrameSuspended {
+                if frame.frameObjectId >= 0 {
+                    self.shade(frame.frameObjectId)
+                }
+                self.shadeObjectList(frame.roots)
+            }
+        }
+    }
+
+    fn shadeObjectList(mut self, ids: List<Int>) {
+        for id in ids {
+            self.shade(id)
+        }
+    }
+
     fn shadeYoung(mut self, id: Int) {
         if self.objects.containsKey(id) {
             let obj = self.objects[id]
@@ -1045,11 +1398,20 @@ pub struct GcHeap {
         for (key, root) in self.globalRoots {
             let _ = key
             if root.objectId >= 0 && self.objects.containsKey(root.objectId) {
-                let obj = self.objects[root.objectId]
-                if obj.generation == 0 {
-                    self.shadeYoung(root.objectId)
-                } else {
-                    self.shadeYoungChildren(obj)
+                self.markYoungRootObject(root.objectId)
+            }
+        }
+
+        for (taskId, frame) in self.asyncFrames {
+            let _ = taskId
+            if frame.state == GcAsyncFrameSuspended {
+                if frame.frameObjectId >= 0 && self.objects.containsKey(frame.frameObjectId) {
+                    self.markYoungRootObject(frame.frameObjectId)
+                }
+                for id in frame.roots {
+                    if self.objects.containsKey(id) {
+                        self.markYoungRootObject(id)
+                    }
                 }
             }
         }
@@ -1058,6 +1420,15 @@ pub struct GcHeap {
             if self.objects.containsKey(id) {
                 self.shadeYoungChildren(self.objects[id])
             }
+        }
+    }
+
+    fn markYoungRootObject(mut self, id: Int) {
+        let obj = self.objects[id]
+        if obj.generation == 0 {
+            self.shadeYoung(id)
+        } else {
+            self.shadeYoungChildren(obj)
         }
     }
 
@@ -1138,6 +1509,7 @@ pub struct GcHeap {
                         next.color = GcWhite
                         self.objects.insert(id, next)
                     } else {
+                        self.dropObjectSideTables(id)
                         let _ = self.objects.remove(id)
                         self.liveBytes = self.liveBytes - obj.size
                         reclaimedObjects = reclaimedObjects + 1
@@ -1169,6 +1541,7 @@ pub struct GcHeap {
                     next.color = GcWhite
                     self.objects.insert(id, next)
                 } else {
+                    self.dropObjectSideTables(id)
                     let _ = self.objects.remove(id)
                     self.liveBytes = self.liveBytes - obj.size
                     reclaimedObjects = reclaimedObjects + 1
@@ -1223,6 +1596,82 @@ pub struct GcHeap {
         }
     }
 
+    fn dropObjectSideTables(mut self, id: Int) {
+        if self.closureEnvironments.containsKey(id) {
+            let _ = self.closureEnvironments.remove(id)
+        }
+    }
+
+    fn validateClosureCaptures(self, captures: List<GcClosureCapture>) -> Result<(), String> {
+        let empty: List<Int> = []
+        let mut seenSlots = empty.toSet()
+        for capture in captures {
+            if capture.slot < 0 {
+                return Err("closure capture slot must be non-negative")
+            }
+            if capture.name == "" {
+                return Err("closure capture slot {capture.slot} is unnamed")
+            }
+            if seenSlots.contains(capture.slot) {
+                return Err("duplicate closure capture slot {capture.slot}")
+            }
+            seenSlots.insert(capture.slot)
+            if capture.kind == GcCaptureScalar {
+                if capture.objectId >= 0 {
+                    return Err("scalar closure capture {capture.name} cannot carry an object")
+                }
+            } else {
+                if capture.objectId < 0 {
+                    return Err("pointer closure capture {capture.name} has no object")
+                }
+                if !(self.objects.containsKey(capture.objectId)) {
+                    return Err(
+                        "closure capture {capture.name} references missing object {capture.objectId}",
+                    )
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn validateAsyncFrameRoots(self, roots: List<Int>) -> Result<(), String> {
+        let empty: List<Int> = []
+        let mut seen = empty.toSet()
+        for id in roots {
+            if id <= 0 {
+                return Err("async frame root id must be positive")
+            }
+            if seen.contains(id) {
+                return Err("async frame has duplicate root {id}")
+            }
+            seen.insert(id)
+            if !(self.objects.containsKey(id)) {
+                return Err("async frame references missing root {id}")
+            }
+        }
+        Ok(())
+    }
+
+    fn rewriteClosureCaptureRefs(mut self, closureId: Int, captures: List<GcClosureCapture>) {
+        if self.objects.containsKey(closureId) {
+            let mut obj = self.objects[closureId]
+            obj.refs = closureCaptureObjectIds(captures)
+            obj.remembered = obj.generation > 0 && self.hasYoungRef(obj)
+            if obj.remembered {
+                self.remembered.insert(closureId)
+            } else {
+                let _ = self.remembered.remove(closureId)
+            }
+            self.objects.insert(closureId, obj)
+
+            if self.phase == GcMarking && obj.color == GcBlack {
+                for childId in obj.refs {
+                    self.shade(childId)
+                }
+            }
+        }
+    }
+
     fn hasYoungRef(self, obj: GcObject) -> Bool {
         for childId in obj.refs {
             if self.objects.containsKey(childId) {
@@ -1271,6 +1720,8 @@ pub fn testGcConfig() -> GcConfig {
 pub fn newGcHeap(config: GcConfig) -> GcHeap {
     let objects: Map<Int, GcObject> = {:}
     let globalRoots: Map<String, GcGlobalRoot> = {:}
+    let closureEnvironments: Map<Int, GcClosureEnvironment> = {:}
+    let asyncFrames: Map<Int, GcAsyncFrameRoot> = {:}
     let emptyRoots: List<Int> = []
     let emptyRemembered: List<Int> = []
     let grey: List<Int> = []
@@ -1287,6 +1738,8 @@ pub fn newGcHeap(config: GcConfig) -> GcHeap {
         objects,
         roots: emptyRoots.toSet(),
         globalRoots,
+        closureEnvironments,
+        asyncFrames,
         remembered: emptyRemembered.toSet(),
         grey,
         allocatedSinceLastGC: 0,
@@ -1296,6 +1749,52 @@ pub fn newGcHeap(config: GcConfig) -> GcHeap {
 
 fn globalRootKey(moduleName: String, name: String) -> String {
     "{moduleName}::{name}"
+}
+
+fn closureCaptureObjectIds(captures: List<GcClosureCapture>) -> List<Int> {
+    let mut out: List<Int> = []
+    for capture in captures {
+        if capture.objectId >= 0 && !(out.contains(capture.objectId)) {
+            out.push(capture.objectId)
+        }
+    }
+    out
+}
+
+pub fn gcScalarCapture(slot: Int, name: String) -> GcClosureCapture {
+    GcClosureCapture {
+        slot,
+        name,
+        kind: GcCaptureScalar,
+        objectId: -1,
+    }
+}
+
+pub fn gcValueCapture(slot: Int, name: String, objectId: Int) -> GcClosureCapture {
+    GcClosureCapture {
+        slot,
+        name,
+        kind: GcCaptureValue,
+        objectId,
+    }
+}
+
+pub fn gcBoxedCapture(slot: Int, name: String, objectId: Int) -> GcClosureCapture {
+    GcClosureCapture {
+        slot,
+        name,
+        kind: GcCaptureBoxedValue,
+        objectId,
+    }
+}
+
+pub fn gcMutableBoxCapture(slot: Int, name: String, objectId: Int) -> GcClosureCapture {
+    GcClosureCapture {
+        slot,
+        name,
+        kind: GcCaptureMutableBox,
+        objectId,
+    }
 }
 
 pub fn gcRootSlot(slot: Int, kind: GcRootSlotKind, name: String) -> GcLiveRootSlot {
