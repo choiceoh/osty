@@ -235,8 +235,7 @@ fn opAddNode(p: OstyParser, node: AstNode) -> Int { astArenaAdd(p.arena, node) }
 
 fn opSyncDecl(p: OstyParser) {
     for !(opAt(p, FrontEOF)) {
-        let kind = opPeek(p).kind
-        if kind == FrontFn || kind == FrontStruct || kind == FrontEnum || kind == FrontInterface || kind == FrontType || kind == FrontUse || kind == FrontPub || kind == FrontHash { return }
+        if opIsDeclSyncStart(p) { return }
         let _ = opAdvance(p)
     }
 }
@@ -248,10 +247,59 @@ fn opSyncStmt(p: OstyParser) {
             let _ = opAdvance(p)
             return
         }
+        if kind == FrontSemicolon {
+            let _ = opAdvance(p)
+            return
+        }
         if kind == FrontRBrace { return }
-        if kind == FrontLet || kind == FrontReturn || kind == FrontBreak || kind == FrontContinue || kind == FrontDefer || kind == FrontFor || kind == FrontIf || kind == FrontMatch { return }
+        if opIsDeclSyncStart(p) || astStartsStmt(kind) { return }
         let _ = opAdvance(p)
     }
+}
+
+fn opSyncParam(p: OstyParser) {
+    for !(opAt(p, FrontEOF)) {
+        let kind = opPeek(p).kind
+        if kind == FrontComma || kind == FrontRParen || kind == FrontRBrace || kind == FrontArrow { return }
+        if kind == FrontNewline {
+            let _ = opAdvance(p)
+            return
+        }
+        let _ = opAdvance(p)
+    }
+}
+
+fn opSyncMember(p: OstyParser) {
+    for !(opAt(p, FrontEOF)) {
+        let kind = opPeek(p).kind
+        if kind == FrontRBrace { return }
+        if kind == FrontNewline || kind == FrontComma || kind == FrontSemicolon {
+            let _ = opAdvance(p)
+            return
+        }
+        if opIsMemberSyncStart(p) { return }
+        let _ = opAdvance(p)
+    }
+}
+
+fn opIsDeclSyncStart(p: OstyParser) -> Bool {
+    let kind = opPeek(p).kind
+    if kind == FrontFn || kind == FrontStruct || kind == FrontEnum || kind == FrontInterface || kind == FrontType || kind == FrontUse || kind == FrontLet { return true }
+    if kind == FrontPub {
+        let next = opPeekAt(p, 1).kind
+        return next == FrontFn || next == FrontStruct || next == FrontEnum || next == FrontInterface || next == FrontType || next == FrontLet || next == FrontHash
+    }
+    kind == FrontHash && opPeekAt(p, 1).kind == FrontLBracket
+}
+
+fn opIsMemberSyncStart(p: OstyParser) -> Bool {
+    let kind = opPeek(p).kind
+    if kind == FrontFn || kind == FrontIdent || kind == FrontHash { return true }
+    if kind == FrontPub {
+        let next = opPeekAt(p, 1).kind
+        return next == FrontFn || next == FrontIdent || next == FrontHash
+    }
+    false
 }
 
 fn opErrorCount(p: OstyParser) -> Int {
@@ -321,6 +369,10 @@ fn astStartsExpr(kind: FrontTokenKind) -> Bool {
 
 fn astStartsDecl(kind: FrontTokenKind) -> Bool {
     kind == FrontFn || kind == FrontStruct || kind == FrontEnum || kind == FrontInterface || kind == FrontType || kind == FrontUse || kind == FrontPub || kind == FrontHash
+}
+
+fn astStartsStmt(kind: FrontTokenKind) -> Bool {
+    kind == FrontLet || kind == FrontReturn || kind == FrontBreak || kind == FrontContinue || kind == FrontDefer || kind == FrontFor || astStartsExpr(kind)
 }
 
 // ===================================================================
@@ -1049,6 +1101,16 @@ fn opParseForStmt(p: OstyParser) -> Int {
         p.noStructLit = true
         condIdx = opParseExpr(p)
         p.noStructLit = pv
+    } else if opLooksLikeForInPattern(p) {
+        kind = "forin"
+        patIdx = opParsePattern(p)
+        if opAt(p, FrontIdent) && opPeek(p).text == "in" { let _ = opAdvance(p) } else {
+            opErrorFull(p, "expected `in` after for pattern", "write `for pattern in iterable \{ ... \}`", "", "E0001")
+        }
+        let pv2 = p.noStructLit
+        p.noStructLit = true
+        iterIdx = opParseExpr(p)
+        p.noStructLit = pv2
     } else {
         let pv = p.noStructLit
         p.noStructLit = true
@@ -1075,6 +1137,10 @@ fn opParseForStmt(p: OstyParser) -> Int {
     n.start = start
     n.end = p.pos
     opAddNode(p, n)
+}
+
+fn opLooksLikeForInPattern(p: OstyParser) -> Bool {
+    opAt(p, FrontIdent) && astIsUpperName(opPeek(p).text) && (opPeekAt(p, 1).kind == FrontLBrace || opPeekAt(p, 1).kind == FrontLParen || opPeekAt(p, 1).kind == FrontDot)
 }
 
 // ===================================================================
@@ -1564,6 +1630,7 @@ fn opParseFnDecl(p: OstyParser, isPub: Bool, anns: List<Int>) -> Int {
     opExpect(p, FrontLParen)
     let mut params: List<Int> = []
     for !(opAt(p, FrontRParen)) && !(opAt(p, FrontEOF)) {
+        let paramErrs = opErrorCount(p)
         let ps = p.pos
         let mut paramNode = emptyAstNode(AstNParam)
         if opAt(p, FrontMut) { opAdvance(p)
@@ -1576,6 +1643,7 @@ fn opParseFnDecl(p: OstyParser, isPub: Bool, anns: List<Int>) -> Int {
         paramNode.start = ps
         paramNode.end = p.pos
         params.push(opAddNode(p, paramNode))
+        if opErrorCount(p) > paramErrs { opSyncParam(p) }
         if !(opEat(p, FrontComma)) { break }
         opSkipNewlines(p)
     }
@@ -1606,6 +1674,7 @@ fn opParseStructDecl(p: OstyParser, isPub: Bool, anns: List<Int>) -> Int {
     let mut members: List<Int> = []
     opSkipNewlines(p)
     for !(opAt(p, FrontRBrace)) && !(opAt(p, FrontEOF)) {
+        let memberErrs = opErrorCount(p)
         let memberAnns = opParseAnnotations(p)
         let _ = memberAnns
         let mut memberPub = false
@@ -1627,7 +1696,8 @@ fn opParseStructDecl(p: OstyParser, isPub: Bool, anns: List<Int>) -> Int {
             if memberPub { fNode.flags = 1 }
             members.push(opAddNode(p, fNode))
         } else { opError(p, "expected field or method in struct")
-        let _ = opAdvance(p) }
+        opSyncMember(p) }
+        if opErrorCount(p) > memberErrs { opSyncMember(p) }
         opSkipNewlines(p)
         let _ = opEat(p, FrontComma)
         opSkipNewlines(p)
@@ -1653,6 +1723,7 @@ fn opParseEnumDecl(p: OstyParser, isPub: Bool, anns: List<Int>) -> Int {
     let mut members: List<Int> = []
     opSkipNewlines(p)
     for !(opAt(p, FrontRBrace)) && !(opAt(p, FrontEOF)) {
+        let memberErrs = opErrorCount(p)
         let memberAnns = opParseAnnotations(p)
         if opAt(p, FrontFn) || (opAt(p, FrontPub) && opPeekAt(p, 1).kind == FrontFn) {
             let fnPub = opEat(p, FrontPub)
@@ -1674,7 +1745,8 @@ fn opParseEnumDecl(p: OstyParser, isPub: Bool, anns: List<Int>) -> Int {
             vNode.extra = opAddAnnotationGroup(p, memberAnns)
             members.push(opAddNode(p, vNode))
         } else { opError(p, "expected variant or method in enum")
-        let _ = opAdvance(p) }
+        opSyncMember(p) }
+        if opErrorCount(p) > memberErrs { opSyncMember(p) }
         opSkipNewlines(p)
         let _ = opEat(p, FrontComma)
         opSkipNewlines(p)
@@ -1702,9 +1774,11 @@ fn opParseInterfaceDecl(p: OstyParser, isPub: Bool, anns: List<Int>) -> Int {
     let mut members: List<Int> = []
     opSkipNewlines(p)
     for !(opAt(p, FrontRBrace)) && !(opAt(p, FrontEOF)) {
+        let memberErrs = opErrorCount(p)
         if opAt(p, FrontFn) || (opAt(p, FrontPub) && opPeekAt(p, 1).kind == FrontFn) { let fnPub = opEat(p, FrontPub)
         members.push(opParseFnDecl(p, fnPub, [])) } else if opAt(p, FrontIdent) { members.push(opParseType(p)) } else { opError(p, "expected method or type in interface")
-        let _ = opAdvance(p) }
+        opSyncMember(p) }
+        if opErrorCount(p) > memberErrs { opSyncMember(p) }
         opSkipNewlines(p)
     }
     let _ = opExpect(p, FrontRBrace)

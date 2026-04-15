@@ -37,6 +37,32 @@ func TestLexEscapedUnicodeDoesNotBecomeUnknownEscape(t *testing.T) {
 	}
 }
 
+func TestParseDiagnosticsIncludesLexerDiagnostics(t *testing.T) {
+	diags := ParseDiagnostics([]byte(`"\q"`))
+	for _, d := range diags {
+		if strings.Contains(d.Message, "unknown escape") {
+			return
+		}
+	}
+	t.Fatalf("ParseDiagnostics did not include lexer diagnostic:\n%s", diagnosticsText(diags))
+}
+
+func TestFrontendRunExposesSharedSurfaces(t *testing.T) {
+	run := Run([]byte("fn main() { 1 }\n"))
+	if len(run.Tokens()) == 0 {
+		t.Fatal("Run returned no tokens")
+	}
+	if run.File() == nil {
+		t.Fatal("Run returned nil file")
+	}
+	if hasError(run.Diagnostics()) {
+		t.Fatalf("Run returned diagnostics:\n%s", diagnosticsText(run.Diagnostics()))
+	}
+	if len(run.LexDiagnostics()) != 0 {
+		t.Fatalf("Run returned lexer diagnostics:\n%s", diagnosticsText(run.LexDiagnostics()))
+	}
+}
+
 func hasError(diags []*diag.Diagnostic) bool {
 	for _, d := range diags {
 		if d.Severity == diag.Error {

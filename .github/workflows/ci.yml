@@ -56,6 +56,11 @@ jobs:
         run: |
           "$OSTY_BIN" ci .
 
+      - name: Verify generated selfhost front end
+        run: |
+          go generate ./internal/selfhost
+          git diff --exit-code -- internal/selfhost/generated.go
+
       - name: Vet
         run: go vet ./...
 
