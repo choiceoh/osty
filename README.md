@@ -164,7 +164,7 @@ osty resolve FILE|DIR  # name resolution; directory = package mode (--scopes for
 osty check FILE|DIR    # lex + parse + resolve + type-check (diagnostics only)
 osty typecheck FILE    # same as check, plus a per-expression type dump
 osty lint FILE|DIR     # style + correctness warnings (L0xxx codes)
-osty fmt FILE          # repair + format to canonical style (see --check, --write)
+osty fmt FILE          # repair + format to canonical style (see --check, --write, --engine)
 osty repair FILE       # auto-fix common AI-authored syntax/idiom slips
 osty gen FILE          # transpile to Go source (see -o, --package)
 osty doc PATH          # generate API documentation (HTML + markdown)
@@ -198,6 +198,10 @@ default, so AI-authored syntax slips are normalized in one command.
 - `--check` — exit 1 if the file is not already formatted; show diff
 - `--write` — rewrite the file in place instead of printing
 - `--no-repair` — disable the default automatic source repair pass
+- `--engine go|osty` — choose the formatter engine. `go` is the default
+  AST formatter; `osty` is a compatibility entry point that now shares the
+  same AST-backed formatting contract instead of maintaining a separate
+  token-heuristic printer.
 
 `repair`-specific flags (after the subcommand):
 
