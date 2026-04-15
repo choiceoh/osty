@@ -22,6 +22,7 @@ func Read(path string) (*Manifest, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
+	m.SetSource(src, path)
 	return m, nil
 }
 

@@ -36,9 +36,9 @@ type Graph struct {
 // declared origin; Fetched is populated once Fetch succeeds and
 // captures everything the lockfile needs to record.
 type ResolvedNode struct {
-	Name     string
-	Source   Source
-	Fetched  *FetchedPackage
+	Name    string
+	Source  Source
+	Fetched *FetchedPackage
 	// Deps is the set of *local* names this node depends on
 	// (transitive edges). Populated during graph construction.
 	Deps []string
@@ -69,13 +69,14 @@ func Resolve(ctx context.Context, root *manifest.Manifest, env *Env) (*Graph, er
 		graph:    &Graph{Root: root, Nodes: map[string]*ResolvedNode{}},
 		inflight: map[string]bool{},
 	}
+	rootDir := manifestBaseDir(root, env.ProjectRoot)
 	for _, d := range root.Dependencies {
-		if _, err := r.resolveDep(ctx, d); err != nil {
+		if _, err := r.resolveDep(ctx, d, rootDir); err != nil {
 			return nil, err
 		}
 	}
 	for _, d := range root.DevDependencies {
-		if _, err := r.resolveDep(ctx, d); err != nil {
+		if _, err := r.resolveDep(ctx, d, rootDir); err != nil {
 			return nil, err
 		}
 	}
@@ -94,19 +95,11 @@ type resolver struct {
 // resolveDep fetches dep, records it in the graph, then recurses
 // into its own dependencies. Returns an error on cycle detection,
 // fetch failure, or conflicting versions.
-func (r *resolver) resolveDep(ctx context.Context, d manifest.Dependency) (*ResolvedNode, error) {
-	if existing, ok := r.graph.Nodes[d.Name]; ok {
-		// Already resolved under this local name. A conflicting
-		// second Dependency spec with the same name is rejected here.
-		return existing, nil
-	}
+func (r *resolver) resolveDep(ctx context.Context, d manifest.Dependency, baseDir string) (*ResolvedNode, error) {
 	if r.inflight[d.Name] {
 		return nil, fmt.Errorf("cyclic dependency through %q", d.Name)
 	}
-	r.inflight[d.Name] = true
-	defer delete(r.inflight, d.Name)
-
-	src, err := NewSource(d)
+	src, err := newSourceFromDir(d, baseDir)
 	if err != nil {
 		return nil, err
 	}
@@ -117,6 +110,15 @@ func (r *resolver) resolveDep(ctx context.Context, d manifest.Dependency) (*Reso
 	// resolve. `osty update` clears the pin before calling Resolve, so
 	// honoring it here doesn't block intended upgrades.
 	applyLockPin(src, d, r.lock)
+	if existing, ok := r.graph.Nodes[d.Name]; ok {
+		if err := r.ensureCompatible(existing, src, d); err != nil {
+			return nil, err
+		}
+		return existing, nil
+	}
+	r.inflight[d.Name] = true
+	defer delete(r.inflight, d.Name)
+
 	fetched, err := src.Fetch(ctx, r.env)
 	if err != nil {
 		return nil, fmt.Errorf("resolve %s: %w", d.Name, err)
@@ -131,14 +133,71 @@ func (r *resolver) resolveDep(ctx context.Context, d manifest.Dependency) (*Reso
 	// Recurse into the fetched package's own deps. Dev-deps are NOT
 	// followed for transitive packages — only the root's dev-deps
 	// matter.
+	childBase := manifestBaseDir(fetched.Manifest, fetched.LocalDir)
 	for _, sub := range fetched.Manifest.Dependencies {
-		child, err := r.resolveDep(ctx, sub)
+		child, err := r.resolveDep(ctx, sub, childBase)
 		if err != nil {
 			return nil, err
 		}
 		node.Deps = append(node.Deps, child.Name)
 	}
 	return node, nil
+}
+
+func manifestBaseDir(m *manifest.Manifest, fallback string) string {
+	if m != nil && m.Path() != "" {
+		return filepath.Dir(m.Path())
+	}
+	return fallback
+}
+
+func (r *resolver) ensureCompatible(existing *ResolvedNode, candidate Source, d manifest.Dependency) error {
+	if existing == nil || existing.Source == nil || existing.Fetched == nil {
+		return fmt.Errorf("dependency %q already exists in graph but is incomplete", d.Name)
+	}
+	if existing.Source.Kind() != candidate.Kind() {
+		return fmt.Errorf("dependency %q resolved from %s, but another dependency requires %s",
+			d.Name, existing.Source.URI(), candidate.URI())
+	}
+	switch ex := existing.Source.(type) {
+	case *registrySource:
+		cand, ok := candidate.(*registrySource)
+		if !ok {
+			break
+		}
+		if ex.registryName != cand.registryName || ex.packageName != cand.packageName {
+			return fmt.Errorf("dependency %q resolved from %s package %q, but another dependency requires %s package %q",
+				d.Name, ex.URI(), ex.packageName, cand.URI(), cand.packageName)
+		}
+		req, err := semver.ParseReq(cand.versionReq)
+		if err != nil {
+			return fmt.Errorf("dependency %q: invalid version req %q: %w", d.Name, cand.versionReq, err)
+		}
+		picked, err := semver.ParseVersion(existing.Fetched.Version)
+		if err != nil {
+			return fmt.Errorf("dependency %q: resolved version %q is invalid: %w", d.Name, existing.Fetched.Version, err)
+		}
+		if !req.Match(picked) {
+			return fmt.Errorf("dependency %q already resolved to %s, which does not satisfy %q",
+				d.Name, existing.Fetched.Version, cand.versionReq)
+		}
+		return nil
+	case *pathSource:
+		cand, ok := candidate.(*pathSource)
+		if !ok {
+			break
+		}
+		if ex.absPath(r.env) == cand.absPath(r.env) {
+			return nil
+		}
+		return fmt.Errorf("dependency %q resolved from %s, but another dependency requires %s",
+			d.Name, ex.absPath(r.env), cand.absPath(r.env))
+	}
+	if existing.Source.URI() != candidate.URI() {
+		return fmt.Errorf("dependency %q resolved from %s, but another dependency requires %s",
+			d.Name, existing.Source.URI(), candidate.URI())
+	}
+	return nil
 }
 
 // topoOrder returns node names in a stable, leaves-first order.
@@ -493,10 +552,24 @@ func applyLockPin(src Source, d manifest.Dependency, lock *lockfile.Lock) {
 	if len(pinned) == 0 {
 		return
 	}
-	// Take the first pinned version (we don't admit multiple per name
-	// in the simple resolver). Verify it still satisfies the declared
-	// req before narrowing — a manifest edit may have invalidated it.
-	pin := pinned[0]
+	// Take the first matching-source pinned version (we don't admit
+	// multiple per name in the simple resolver). Verify it still
+	// satisfies the declared req before narrowing — a manifest edit may
+	// have invalidated it. Also require the source URI to match so an
+	// old path/git pin with the same alias does not accidentally
+	// constrain a registry dep.
+	var pin lockfile.Package
+	found := false
+	for _, p := range pinned {
+		if p.Source == "" || p.Source == rs.URI() {
+			pin = p
+			found = true
+			break
+		}
+	}
+	if !found {
+		return
+	}
 	pv, err := semver.ParseVersion(pin.Version)
 	if err != nil {
 		return

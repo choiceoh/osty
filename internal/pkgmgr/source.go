@@ -9,7 +9,7 @@
 //     returns a ResolvedGraph. Uses osty.lock when present; writes
 //     one back when the graph changes.
 //  3. pkgmgr.Vendor() materializes every node of the graph into
-//     `<project>/.osty/deps/<name>-<version>/` so the workspace
+//     `<project>/.osty/deps/<name>/` so the workspace
 //     loader can find them by directory.
 //  4. The caller builds a resolve.Workspace over the project root
 //     plus the vendored deps and proceeds with the normal front-end
@@ -170,9 +170,17 @@ var DefaultRegistryURL = "https://registry.osty.dev"
 // Exactly one of Path / Git / VersionReq must be set; NewSource
 // assumes the manifest parser enforced that.
 func NewSource(d manifest.Dependency) (Source, error) {
+	return newSourceFromDir(d, "")
+}
+
+// newSourceFromDir is the resolver's internal constructor. baseDir is
+// the directory containing the manifest that declared d, so transitive
+// path dependencies resolve relative to their own package instead of
+// the root project.
+func newSourceFromDir(d manifest.Dependency, baseDir string) (Source, error) {
 	switch {
 	case d.Path != "":
-		return &pathSource{name: d.Name, path: d.Path}, nil
+		return &pathSource{name: d.Name, path: d.Path, baseDir: baseDir}, nil
 	case d.Git != nil:
 		return &gitSource{
 			name:   d.Name,
