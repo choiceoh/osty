@@ -91,6 +91,72 @@ func TestMapIteration(t *testing.T) {
 	}
 }
 
+// TestUnitClosure_VoidBody verifies a closure whose inferred return
+// is unit emits as `func()` rather than the legacy `func() int {
+// return … }` shape — the latter would refuse to compile when the
+// body is a void method call (e.g. assertion helpers).
+//
+// Regression for the bug found while wiring `osty test` to actually
+// execute discovered tests: `testing.context("…", || { … })` fed gen
+// a closure whose body's checker type degraded to ErrorType, causing
+// the default `int` return path to fire and emit `return
+// testing.assertEq(…)` — invalid Go because assertEq returns void.
+func TestUnitClosure_VoidBody(t *testing.T) {
+	src := `fn run(f: fn() -> ()) {
+    f()
+}
+
+fn main() {
+    let mut calls = 0
+    run(|| {
+        calls = calls + 1
+    })
+    run(|| {
+        calls = calls + 10
+    })
+    println("{calls}")
+}
+`
+	goSrc, err := transpile(t, src)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	if strings.Contains(string(goSrc), "func() int {") {
+		t.Errorf("unit closure was emitted with int return:\n%s", goSrc)
+	}
+	out := runGo(t, goSrc)
+	if strings.TrimSpace(out) != "11" {
+		t.Errorf("unexpected output: %q\n--- src ---\n%s", out, goSrc)
+	}
+}
+
+// TestLetWildcardDiscard verifies `let _ = expr` lowers to plain
+// blank-identifier assignment (`_ = expr`), not the invalid Go
+// `_ := expr`. Regression for a gen bug surfaced by benchmark
+// bodies of the form `let _ = add(1, 2)`.
+func TestLetWildcardDiscard(t *testing.T) {
+	src := `fn side() -> Int {
+    42
+}
+
+fn main() {
+    let _ = side()
+    println("ok")
+}
+`
+	goSrc, err := transpile(t, src)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	if strings.Contains(string(goSrc), "_ :=") {
+		t.Errorf("`_ :=` emitted (invalid Go):\n%s", goSrc)
+	}
+	out := runGo(t, goSrc)
+	if strings.TrimSpace(out) != "ok" {
+		t.Errorf("unexpected output: %q\n--- src ---\n%s", out, goSrc)
+	}
+}
+
 // TestHigherOrderFn verifies passing a closure through a higher-order
 // function type-checks and runs.
 func TestHigherOrderFn(t *testing.T) {

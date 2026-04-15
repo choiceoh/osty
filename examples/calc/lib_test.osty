@@ -1,0 +1,104 @@
+// lib_test.osty — exercises calc/lib.osty with std.testing.
+//
+// Discovery rules (LANG_SPEC_v0.3 §11 / §11.4):
+//   - test files end in `_test.osty` and live in the same package
+//     directory as the code they exercise;
+//   - top-level fns whose names begin with `test` and take no
+//     parameters / no generics / unit return type are tests;
+//   - top-level fns whose names begin with `bench` with the same
+//     shape are benchmarks.
+//
+// Every assertion below uses the std.testing API surface that ships
+// today: assert / assertEq / assertNe / expectOk / expectError /
+// context / fail.
+
+use std.testing
+
+// ─── Pure arithmetic ──────────────────────────────────────────────
+
+fn testAddBasic() {
+    testing.assertEq(add(2, 3), 5)
+    testing.assertEq(add(0, 0), 0)
+    testing.assertEq(add(-1, 1), 0)
+}
+
+fn testSubBasic() {
+    testing.assertEq(sub(5, 3), 2)
+    testing.assertEq(sub(0, 0), 0)
+    testing.assertEq(sub(-3, -3), 0)
+}
+
+fn testMulBasic() {
+    testing.assertEq(mul(3, 4), 12)
+    testing.assertEq(mul(0, 100), 0)
+    testing.assertEq(mul(-2, 3), -6)
+}
+
+// ─── Result-returning division ────────────────────────────────────
+
+fn testDivOk() {
+    let q = testing.expectOk(div(10, 2))
+    testing.assertEq(q, 5)
+}
+
+fn testDivExactQuotients() {
+    let q1 = testing.expectOk(div(20, 4))
+    testing.assertEq(q1, 5)
+    let q2 = testing.expectOk(div(-9, 3))
+    testing.assertEq(q2, -3)
+}
+
+fn testDivByZero() {
+    testing.expectError(div(1, 0))
+    testing.expectError(div(0, 0))
+    testing.expectError(div(-100, 0))
+}
+
+// ─── Boolean predicates ───────────────────────────────────────────
+
+fn testAbs() {
+    testing.assertEq(abs(-7), 7)
+    testing.assertEq(abs(7), 7)
+    testing.assertEq(abs(0), 0)
+}
+
+fn testIsEven() {
+    testing.assert(isEven(2))
+    testing.assert(isEven(0))
+    testing.assert(isEven(-4))
+    testing.assert(!(isEven(3)))
+    testing.assert(!(isEven(-1)))
+}
+
+// ─── Table-driven test with context labels ────────────────────────
+//
+// `testing.context` pins a human-readable label to the assertions
+// inside the closure so a failure points at the offending row rather
+// than the loop body.
+
+fn testClampTable() {
+    let cases = [
+        (5, 0, 10, 5),
+        (-1, 0, 10, 0),
+        (99, 0, 10, 10),
+        (0, 0, 10, 0),
+        (10, 0, 10, 10),
+        (-50, -10, -1, -10),
+    ]
+    for c in cases {
+        let (v, lo, hi, expected) = c
+        testing.context("clamp({v}, {lo}, {hi})", || {
+            testing.assertEq(clamp(v, lo, hi), expected)
+        })
+    }
+}
+
+// ─── Benchmark ────────────────────────────────────────────────────
+//
+// `osty test` discovers `bench*` functions and reports them
+// alongside test cases. The runner harness will sample iterations
+// once it ships (spec §11.4).
+
+fn benchAddHotPath() {
+    let _ = add(1, 2)
+}
