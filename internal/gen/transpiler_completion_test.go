@@ -191,6 +191,36 @@ fn main() {
 	}
 }
 
+// TestForLetNestedDestructure verifies for-let binds nested payload
+// patterns after the match succeeds.
+func TestForLetNestedDestructure(t *testing.T) {
+	src := `fn maybePair(n: Int) -> (Int, Int)? {
+    if n < 1 { Some((2, 3)) } else { None }
+}
+
+fn main() {
+    let mut n = 0
+    let mut total = 0
+    for let Some((a, b)) = maybePair(n) {
+        total = total + a + b
+        n = n + 1
+    }
+    println("{total}")
+}
+`
+	goSrc, err := transpile(t, src)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	if strings.Contains(string(goSrc), "TODO: for-let") {
+		t.Errorf("for-let TODO marker still present:\n%s", goSrc)
+	}
+	out := runGo(t, goSrc)
+	if strings.TrimSpace(out) != "5" {
+		t.Errorf("for-let nested destructure: got %q\n--- go ---\n%s", out, goSrc)
+	}
+}
+
 // TestMatchTuplePattern verifies tuple patterns in match arms generate
 // a conjunction of per-element tests (previously hardcoded `true`).
 func TestMatchTuplePattern(t *testing.T) {
