@@ -119,6 +119,7 @@ func GenerateHarness(pkg *resolve.Package, chk *check.Result, entries []Entry) (
 	seenRange := false
 	seenOstyStringer := false
 	seenOstyToString := false
+	seenOstyEqualRuntime := map[string]bool{}
 	var firstGenErr error
 	hasProgramMain := packageHasProgramMain(pkg)
 
@@ -188,6 +189,12 @@ func GenerateHarness(pkg *resolve.Package, chk *check.Result, entries []Entry) (
 				}
 				seenOstyToString = true
 			}
+			if name := ostyEqualRuntimeName(d); name != "" {
+				if seenOstyEqualRuntime[name] {
+					continue
+				}
+				seenOstyEqualRuntime[name] = true
+			}
 			if isTestingStub(d) {
 				// Dropped — replaced by the runtime in harness.go.
 				continue
@@ -256,6 +263,28 @@ func isOstyStringerRuntime(d goast.Decl) bool {
 func isOstyToStringRuntime(d goast.Decl) bool {
 	fn, ok := d.(*goast.FuncDecl)
 	return ok && fn.Recv == nil && fn.Name != nil && fn.Name.Name == "ostyToString"
+}
+
+func ostyEqualRuntimeName(d goast.Decl) string {
+	switch d := d.(type) {
+	case *goast.FuncDecl:
+		if d.Recv != nil || d.Name == nil {
+			return ""
+		}
+		switch d.Name.Name {
+		case "ostyEqual", "ostyEqualValue", "ostyIsNilValue":
+			return d.Name.Name
+		}
+	case *goast.GenDecl:
+		if d.Tok != gotoken.TYPE || len(d.Specs) != 1 {
+			return ""
+		}
+		ts, ok := d.Specs[0].(*goast.TypeSpec)
+		if ok && ts.Name != nil && ts.Name.Name == "ostyEqualVisit" {
+			return ts.Name.Name
+		}
+	}
+	return ""
 }
 
 // isRangeRuntime reports whether d is the Range struct gen emits

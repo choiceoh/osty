@@ -13,13 +13,16 @@ the compiler evolves.
   and string parsing, ports requirement matching, filters registry
   candidates, classifies diagnostics, validates manifest feature graphs,
   ports a runnable lexer scanner and parser/type-checker seed models,
-  runs std.testing tests, calls Go FFI, and uses concurrency primitives.
+  mirrors the selfhost-core example-style tests, runs std.testing tests,
+  calls Go FFI, and uses concurrency primitives.
 - `ffi`: runnable Go FFI example using the Go `strings` package.
 - `concurrency`: runnable example covering channels, `spawn`,
   `parallel`, and `taskGroup`.
 - `selfhost-core`: standalone package for the self-hosting algorithms
   lifted out of dogfood so they can grow independently, including the
-  runnable lexer scanner and front-end seed models.
+  runnable lexer scanner, front-end seed models, and broad example-style
+  tests for SemVer, registry selection, manifest features, diagnostics,
+  and package archive classification.
 - `stdlib-tour`: front-end checked package that demonstrates Tier 1
   standard-library imports and Result-style error flow.
 - `workspace`: virtual workspace with two member packages and a
