@@ -9,13 +9,15 @@ The target is transpilation to Go. Current scope: front-end
 (lex → parse → resolve → type-check), multi-file packages and
 workspaces, formatter, linter, a JSON-RPC LSP server, a Go
 transpiler whose Phase 1 (primitives, fns, control flow) is
-working, project scaffolding (`osty new` / `osty init`), and a
+working, project scaffolding (`osty new` / `osty init`), a
 manifest-driven build orchestrator (`osty build`) that reads
 `osty.toml` / `osty.lock` and threads the front-end + gen across
-the declared packages. Phase 2+ of the transpiler (structs, enums,
-match, generics, Option / Result, FFI, concurrency), the package
-registry (`osty add` / `osty update`), and a test runner
-(`osty test`) are the main remaining pieces.
+the declared packages, a package manager (`osty add` / `osty
+update` / `osty publish`) that drives registry + git + path
+sources through a SemVer resolver into a deterministic lockfile,
+and a build-and-execute shortcut (`osty run`). Phase 2+ of the
+transpiler (structs, enums, match, generics, Option / Result,
+FFI, concurrency) is the main remaining piece.
 
 ## Status
 
@@ -37,7 +39,9 @@ registry (`osty add` / `osty update`), and a test runner
 | Build orchestrator (`osty build`) | wired — drives manifest → front-end → gen Phase 1 |
 | Test runner harness (`internal/testgen`) | wired — merges per-file gen output, injects a real std.testing runtime + main(), runs via `go run` |
 | `osty test` (discovery + front-end + execution) | wired — validates and **runs** discovered `test*` / `bench*` fns; failures and pass/fail totals report inline |
-| Package registry / `osty add` / `osty update` / `osty run` | not started |
+| Package manager (`osty add` / `osty update`, path + git + registry sources, SemVer resolver, deterministic lockfile) | wired — `add` mutates `osty.toml` and re-vendors; `update` re-resolves selectively or in full |
+| `osty run` (build + exec through gen Phase 1) | wired — resolves manifest, vendors deps, transpiles entry, `go run`s the output with profile/target-aware flags |
+| `osty publish` (pack + upload tarball to a registry) | wired — deterministic gzipped tar, sha256 checksum, bearer-auth POST; `--dry-run` stops before upload |
 
 The front-end (lex → parse → resolve) is **spec-complete for v0.3**:
 every syntactic construct in `LANG_SPEC_v0.3/` has a positive-corpus
