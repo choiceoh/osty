@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
 )
 
@@ -85,6 +86,25 @@ func TestDiagDefaultExprNotLiteral(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(d.Notes, "\n"), "R18") {
 		t.Errorf("note should reference R18: %v", d.Notes)
+	}
+}
+
+func TestDiagPrimarySpanCoversUnexpectedToken(t *testing.T) {
+	src := `fn f(t: Int = compute()) {}`
+	_, diags := ParseDiagnostics([]byte(src))
+	d := findDiag(diags, diag.CodeDefaultExprNotLiteral)
+	if d == nil {
+		t.Fatalf("no E0106 diagnostic")
+	}
+	if len(d.Spans) == 0 {
+		t.Fatal("diagnostic has no span")
+	}
+	span := d.Spans[0].Span
+	if span.End.Offset <= span.Start.Offset {
+		t.Fatalf("diagnostic span is empty: %+v", span)
+	}
+	if got := src[span.Start.Offset:span.End.Offset]; got != "compute" {
+		t.Fatalf("diagnostic span covered %q, want compute", got)
 	}
 }
 
@@ -170,6 +190,32 @@ fn good2() { 2 }`
 		t.Fatal("recovery: no decls parsed at all")
 	}
 	_ = names
+}
+
+func TestDiagRecoveryResumesStructMembers(t *testing.T) {
+	src := `struct User {
+    name: String
+    @@@
+    age: Int
+}`
+	file, diags := ParseDiagnostics([]byte(src))
+	if len(diags) == 0 {
+		t.Fatal("expected diagnostics for malformed struct member")
+	}
+	if len(file.Decls) != 1 {
+		t.Fatalf("decl count = %d, want 1", len(file.Decls))
+	}
+	sd, ok := file.Decls[0].(*ast.StructDecl)
+	if !ok {
+		t.Fatalf("decl = %T, want *ast.StructDecl", file.Decls[0])
+	}
+	fields := map[string]bool{}
+	for _, f := range sd.Fields {
+		fields[f.Name] = true
+	}
+	if !fields["name"] || !fields["age"] {
+		t.Fatalf("recovered fields = %v, want name and age", fields)
+	}
 }
 
 func TestDiagFormatterRenders(t *testing.T) {

@@ -16,6 +16,7 @@ var sourceFiles = []string{
 	"examples/dogfood/semver.osty",
 	"examples/dogfood/semver_parse.osty",
 	"examples/dogfood/frontend.osty",
+	"examples/dogfood/lexer.osty",
 	"examples/dogfood/parser.osty",
 }
 
@@ -27,6 +28,7 @@ const stringsPrelude = `use go "strings" as strings {
     fn HasPrefix(s: String, prefix: String) -> Bool
     fn HasSuffix(s: String, suffix: String) -> Bool
     fn Join(elems: List<String>, sep: String) -> String
+    fn ReplaceAll(s: String, old: String, new: String) -> String
     fn Repeat(s: String, count: Int) -> String
     fn Split(s: String, sep: String) -> List<String>
     fn SplitN(s: String, sep: String, n: Int) -> List<String>

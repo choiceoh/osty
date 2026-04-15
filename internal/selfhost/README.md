@@ -8,6 +8,7 @@ The source of truth is:
 - `examples/dogfood/semver.osty`
 - `examples/dogfood/semver_parse.osty`
 - `examples/dogfood/frontend.osty`
+- `examples/dogfood/lexer.osty`
 - `examples/dogfood/parser.osty`
 
 Regenerate the Go bridge with:
