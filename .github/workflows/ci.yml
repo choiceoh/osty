@@ -29,9 +29,6 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Download modules
-        run: go mod download
-
       - name: Format
         run: |
           unformatted="$(gofmt -l $(git ls-files '*.go'))"
@@ -40,25 +37,27 @@ jobs:
             exit 1
           fi
 
-      - name: Build
-        run: go build ./...
+      - name: Build Osty CLI
+        run: |
+          mkdir -p "$RUNNER_TEMP/osty-ci"
+          go build -o "$RUNNER_TEMP/osty-ci/osty" ./cmd/osty
+          echo "OSTY_BIN=$RUNNER_TEMP/osty-ci/osty" >> "$GITHUB_ENV"
 
       - name: Osty repair
         run: |
-          osty_bin="$(mktemp -d)/osty"
-          go build -o "$osty_bin" ./cmd/osty
           while IFS= read -r file; do
             case "$file" in
               testdata/spec/negative/*) continue ;;
             esac
-            "$osty_bin" repair --check "$file"
+            "$OSTY_BIN" repair --check "$file"
           done < <(git ls-files '*.osty')
 
       - name: Osty CI
-        run: go run ./cmd/osty ci .
+        run: |
+          "$OSTY_BIN" ci .
 
       - name: Vet
         run: go vet ./...
 
       - name: Test
-        run: go test ./...
+        run: go test -vet=off ./...
