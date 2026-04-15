@@ -46,6 +46,53 @@ func runGo(t *testing.T, src []byte) string {
 	return string(out)
 }
 
+func TestStdlibUsesRemainGeneralGenStubs(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "fs",
+			src:  "use std.fs\n",
+			want: "var fs = struct{}{} // stub for `use std.fs`",
+		},
+		{
+			name: "thread",
+			src: `use std.thread
+
+fn main() {
+    let cancelled = thread.isCancelled()
+    println("{cancelled}")
+}
+`,
+			want: "var thread = struct {",
+		},
+		{
+			name: "testing",
+			src: `use std.testing
+
+fn testTruth() {
+    testing.assert(true)
+}
+`,
+			want: "var testing = struct {",
+		},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			goSrc, err := transpile(t, c.src)
+			if err != nil {
+				t.Fatalf("transpile: %v\n%s", err, goSrc)
+			}
+			if !strings.Contains(string(goSrc), c.want) {
+				t.Fatalf("generated Go missing stdlib stub %q:\n%s", c.want, goSrc)
+			}
+		})
+	}
+}
+
 func TestHelloWorld(t *testing.T) {
 	src := `fn main() {
     println("hello, world")
