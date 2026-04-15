@@ -449,7 +449,7 @@ fn main() {
 	if out != want {
 		t.Fatalf("stdout = %q, want %q\n--- source ---\n%s", out, want, goSrc)
 	}
-	for _, want := range []string{"stdjson.Marshal", "func (self Payload) MarshalJSON", "func (self *Payload) UnmarshalJSON", "jsonDecode[Payload]", "jsonUnmarshalShape"} {
+	for _, want := range []string{"stdjson.Marshal", "func (self Payload) MarshalJSON", "func (self *Payload) UnmarshalJSON", "jsonDecode[*Payload]", "jsonUnmarshalShape"} {
 		if !strings.Contains(string(goSrc), want) {
 			t.Errorf("generated std.json bridge missing %s:\n%s", want, goSrc)
 		}
