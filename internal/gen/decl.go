@@ -72,6 +72,7 @@ func (g *gen) emitFnDecl(fn *ast.FnDecl) {
 // resolves to a concrete Go type.
 func (g *gen) emitFnDeclBody(fn *ast.FnDecl, name string) {
 	g.body.nl()
+	g.sourceMarker(fn)
 	g.body.write("func ")
 	g.body.write(name)
 
@@ -133,6 +134,7 @@ func (g *gen) emitParamList(params []*ast.Param) {
 // let the type checker police reassignment.
 func (g *gen) emitLetDecl(l *ast.LetDecl) {
 	g.body.nl()
+	g.sourceMarker(l)
 	g.body.write("var ")
 	g.body.write(mangleIdent(l.Name))
 	if l.Type != nil {
@@ -155,6 +157,7 @@ func (g *gen) emitLetDecl(l *ast.LetDecl) {
 // become package-level `TypeName_funcName`.
 func (g *gen) emitStructDecl(s *ast.StructDecl) {
 	g.body.nl()
+	g.sourceMarker(s)
 	// Generic type parameters land in Phase 3; for now we still emit
 	// the bracket block with `any` constraints so downstream code at
 	// least type-checks syntactically.
@@ -206,6 +209,7 @@ func (g *gen) emitStructDecl(s *ast.StructDecl) {
 //	func Shape_area(self Shape) float64 { ... }
 func (g *gen) emitEnumDecl(e *ast.EnumDecl) {
 	g.body.nl()
+	g.sourceMarker(e)
 	g.body.writef("type %s interface{ _is%s() }\n", e.Name, e.Name)
 	for _, v := range e.Variants {
 		g.emitVariant(e, v)
@@ -243,6 +247,7 @@ func (g *gen) emitVariant(e *ast.EnumDecl, v *ast.Variant) {
 // `TypeName_fn(...)`.
 func (g *gen) emitMethod(typeName string, m *ast.FnDecl, enumMethod bool) {
 	g.body.nl()
+	g.sourceMarker(m)
 
 	free := m.Recv == nil || enumMethod
 
@@ -324,6 +329,7 @@ func (g *gen) resolveSelfType(t ast.Type, typeName string) string {
 // Go's interface embedding.
 func (g *gen) emitInterfaceDecl(i *ast.InterfaceDecl) {
 	g.body.nl()
+	g.sourceMarker(i)
 	g.body.writef("type %s interface {\n", i.Name)
 	g.body.indent()
 	for _, ext := range i.Extends {
@@ -358,6 +364,7 @@ func (g *gen) emitInterfaceDecl(i *ast.InterfaceDecl) {
 // and are Phase 3 work; for now we emit a commented note.
 func (g *gen) emitTypeAliasDecl(a *ast.TypeAliasDecl) {
 	g.body.nl()
+	g.sourceMarker(a)
 	if len(a.Generics) > 0 {
 		g.body.writef("// TODO(phase3): generic type alias %s\n", a.Name)
 		return

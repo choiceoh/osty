@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -179,19 +181,15 @@ func runRun(args []string, cliF cliFlags) {
 		fmt.Fprintf(os.Stderr, "osty run: %v\n", err)
 		os.Exit(1)
 	}
-	goSrc, gerr := gen.Generate("main", file, res, chk)
-	if gerr != nil {
-		fmt.Fprintf(os.Stderr, "osty run: gen: %v\n", gerr)
-		// Phase 1 gen returns warnings for unsupported constructs;
-		// we still try to run the output because its non-fatal
-		// surface (TODO markers) may still compile for simple entry
-		// points.
-	}
+	goSrc, gerr := gen.GenerateMapped("main", file, res, chk, entryAbs)
 	goPath := filepath.Join(outDir, "main.go")
 	if err := os.WriteFile(goPath, goSrc, 0o644); err != nil {
 		fmt.Fprintf(os.Stderr, "osty run: %v\n", err)
 		os.Exit(1)
 	}
+	// Phase 1 gen returns warnings for unsupported constructs; we
+	// still try to run the output because the clean portion may compile.
+	reportTranspileWarning("osty run", entryAbs, goPath, gerr)
 
 	// Step 5: go run. Profile-derived flags (e.g. `-gcflags=-N -l`
 	// for debug, `-ldflags=-s -w` for release) precede the source
@@ -202,13 +200,24 @@ func runRun(args []string, cliF cliFlags) {
 	goArgs = append(goArgs, goPath)
 	goArgs = append(goArgs, runArgs...)
 	cmd := exec.Command("go", goArgs...)
+	var stderr bytes.Buffer
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stderr = io.MultiWriter(os.Stderr, &stderr)
 	cmd.Dir = outDir
 	cmd.Env = mergeEnv(os.Environ(), resolved.GoEnv())
 	if err := cmd.Run(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
+			reportGoFailure(goFailureReport{
+				Tool:      "osty run",
+				Action:    "go run",
+				Args:      cmd.Args,
+				WorkDir:   outDir,
+				Generated: []string{goPath},
+				Source:    entryAbs,
+				Stderr:    stderr.String(),
+				Err:       err,
+			})
 			os.Exit(exitErr.ExitCode())
 		}
 		fmt.Fprintf(os.Stderr, "osty run: exec go: %v\n", err)

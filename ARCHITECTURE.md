@@ -231,6 +231,13 @@ the front-end, aborts on errors, then transpiles to gofmt-formatted Go
 on stdout or at the given path. Phase 2+ gaps still surface as
 `/* TODO(phaseN): ... */` markers in the emitted source.
 
+CLI-facing generation uses `GenerateMapped`, which emits `// Osty:
+path:line:column` comments before generated declarations and
+statements. `osty build`, `osty run`, and `osty test` use those markers
+when Go compilation or runtime execution fails so users can move from a
+generated `main.go:line` or panic stack frame back to the closest Osty
+source construct.
+
 ### `internal/lsp`
 JSON-RPC language server on stdio. Lifecycle (`initialize` / `shutdown`
 / `exit`) and the document store live in `server.go`; per-method
@@ -301,6 +308,11 @@ Two rules:
 Recovery is **best-effort**: after an error the parser syncs to a
 plausible boundary and keeps going so later declarations still parse.
 Cascade suppression keeps the diagnostic list tight.
+
+Post-front-end failures are handled separately from stable compiler
+diagnostics: Go toolchain errors and runtime panics keep their original
+output, then the CLI appends generated-file paths, nearest Osty source
+markers, common package/import explanations, and a rerunnable Go command.
 
 ## Testing strategy
 

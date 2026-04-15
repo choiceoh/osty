@@ -76,7 +76,6 @@ func runTest(args []string, flags cliFlags) {
 	_ = fs.Parse(args)
 	positional := fs.Args()
 
-
 	// Split positional args into path targets (existing on disk) and
 	// name filters (everything else). Paths shortcut the manifest walk
 	// so `osty test ./foo.osty` works without an osty.toml.
@@ -605,25 +604,24 @@ func executeTestPackage(dir string, pkg *resolve.Package, chk *check.Result, ent
 		return sorted[i].Line < sorted[j].Line
 	})
 
-	srcs, err := testgen.GenerateHarness(pkg, chk, sorted)
-	if err != nil {
-		// Non-fatal gen warnings come back as (partial output, err).
-		// We still try to run the harness below because the clean
-		// portion often compiles; surface the warning first so the
-		// user sees what was skipped.
-		fmt.Fprintf(os.Stderr, "osty test: gen warnings for %s: %v\n", dir, err)
-	}
+	srcs, genErr := testgen.GenerateHarness(pkg, chk, sorted)
 
 	outDir, err := scratchDir(dir)
 	if err != nil {
 		return 0, 0, err
 	}
-	if err := os.WriteFile(filepath.Join(outDir, "main.go"), srcs.Main, 0o644); err != nil {
+	mainPath := filepath.Join(outDir, "main.go")
+	harnessPath := filepath.Join(outDir, "harness.go")
+	if err := os.WriteFile(mainPath, srcs.Main, 0o644); err != nil {
 		return 0, 0, err
 	}
-	if err := os.WriteFile(filepath.Join(outDir, "harness.go"), srcs.Harness, 0o644); err != nil {
+	if err := os.WriteFile(harnessPath, srcs.Harness, 0o644); err != nil {
 		return 0, 0, err
 	}
+	// Non-fatal gen warnings come back as (partial output, err). We
+	// still try to run the harness because the clean portion often
+	// compiles; surface the generated file path for post-mortem work.
+	reportTranspileWarning("osty test", dir, mainPath, genErr)
 	// `go run .` needs a module context. The harness has no
 	// third-party dependencies so a bare go.mod is sufficient; it
 	// also insulates the scratch directory from ambient GOPATH /
@@ -655,6 +653,16 @@ func executeTestPackage(dir string, pkg *resolve.Package, chk *check.Result, ent
 		// go run failed before the harness could print a summary.
 		// The sources were left behind under outDir for post-mortem
 		// — point the user there.
+		reportGoFailure(goFailureReport{
+			Tool:      "osty test",
+			Action:    "go run",
+			Args:      cmd.Args,
+			WorkDir:   outDir,
+			Generated: []string{mainPath, harnessPath},
+			Source:    dir,
+			Stderr:    stderr.String(),
+			Err:       runErr,
+		})
 		return 0, 0, fmt.Errorf("go run failed in %s: %w", outDir, runErr)
 	}
 	return runPass, runFail, nil

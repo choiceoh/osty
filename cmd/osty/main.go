@@ -1287,12 +1287,11 @@ func runGen(args []string, flags cliFlags) {
 		os.Exit(2)
 	}
 
-	goSrc, gerr := gen.Generate(pkgName, file, res, chk)
-	if gerr != nil {
-		// goSrc may still contain useful partial output; emit a warning
-		// but also write the source so the user can inspect it.
-		fmt.Fprintf(os.Stderr, "osty gen: %v\n", gerr)
-	}
+	absPath, _ := filepath.Abs(path)
+	goSrc, gerr := gen.GenerateMapped(pkgName, file, res, chk, absPath)
+	// goSrc may still contain useful partial output; emit a warning
+	// but also write the source so the user can inspect it.
+	reportTranspileWarning("osty gen", absPath, outPath, gerr)
 
 	if outPath != "" {
 		if err := os.WriteFile(outPath, goSrc, 0o644); err != nil {
