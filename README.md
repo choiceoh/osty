@@ -8,6 +8,19 @@ general-purpose, statically-typed, GC'd language specified in
 The target is transpilation to Go. Current scope: front-end
 (lex → parse → resolve → type-check), multi-file packages and
 workspaces, formatter, linter, a JSON-RPC LSP server, a Go
+transpiler with **Phases 1–6 wired end-to-end** (primitives,
+control flow, structs/enums/match, generics/closures,
+Option/Result/`?`, `use`/FFI, channels/concurrency), project
+scaffolding (`osty new` / `osty init`), a manifest-driven build
+orchestrator (`osty build`) that reads `osty.toml` / `osty.lock`
+and threads the front-end + gen across the declared packages, a
+working test runner (`osty test`), API documentation generation
+(`osty doc`), and CI quality tooling (`osty ci`). The remaining
+pieces are four deferred type-checker hooks (generic
+monomorphization, interface-satisfaction, match exhaustiveness,
+`#[derive(Builder)]`), Tier 2+ of the standard library, and the
+real package-registry backend behind `osty add` / `osty update` /
+`osty publish`.
 transpiler whose Phase 1 (primitives, fns, control flow) is
 working, project scaffolding (`osty new` / `osty init`), a
 manifest-driven build orchestrator (`osty build`) that reads
@@ -27,15 +40,23 @@ FFI, concurrency) is the main remaining piece.
 | Parser (v0.3 grammar, error recovery, fuzz-clean) | done |
 | AST (all node kinds implement `ast.Node`) | done |
 | Diagnostics (`error[E0002]:` with caret, hints, notes) | done |
-| Name resolution (single-file, typo suggestions) | done |
+| Name resolution (single + multi-file, workspace, typo suggestions) | done |
 | Formatter (`internal/format`) | done |
 | Type checker (`internal/check`) | partial (see gaps below) |
-| Linter (`internal/lint`, L0001–L0042) | done |
+| Linter (`internal/lint`, L0001–L0042, `--fix` / `--fix-dry-run`) | done |
 | Multi-file packages (`resolve` loader/package/workspace) | done |
-| LSP (`internal/lsp`, wired as `osty lsp`) | done |
-| Go transpiler (`internal/gen`, wired as `osty gen`) | Phase 1 done (primitives, fns, if/for) — Phase 2+ pending |
-| Project scaffolding (`internal/scaffold`, `osty new` / `osty init`) | done |
+| LSP (`internal/lsp`, wired as `osty lsp`) | done — hover, definition, formatting, documentSymbol, lint diagnostics |
+| Go transpiler (`internal/gen`, wired as `osty gen`) | Phases 1–6 wired end-to-end (primitives, structs/enums/match, generics/closures, Option/Result/`?`, `use`/FFI, channels/concurrency) |
+| Independent IR (`internal/ir`) | done — patterns, match, closures, struct/field/method |
+| Project scaffolding (`internal/scaffold`, `osty new` / `osty init`) | done — `--bin`, `--lib`, `--workspace`, `--cli`, `--service` |
 | Manifest + lockfile + SemVer (`internal/manifest`, `lockfile`, `pkgmgr/semver`) | done (parse + validate + resolve) |
+| Build orchestrator (`osty build`) | done — manifest → front-end → gen, profile/target/feature wiring |
+| Test runner harness (`internal/testgen`) | done — merges per-file gen output, injects a real std.testing runtime + main(), runs via `go run` |
+| `osty test` (discovery + front-end + execution) | done — validates and **runs** discovered `test*` / `bench*` fns; failures and pass/fail totals report inline |
+| API doc generator (`internal/docgen`, `osty doc`) | done — HTML + markdown, field docs, cross-refs, workspace mode |
+| CI quality tooling (`internal/ci`, `osty ci`) | done — signature-aware snapshots, workspace coverage, JSON reports |
+| Pipeline visualizer (`osty pipeline`) | done — per-stage timing, workspace mode, package-mode gen, baseline diff, LSP trace, `--explain` |
+| Package registry / `osty add` / `osty update` / `osty run` / `osty publish` | scaffolded — manifest wiring ready; registry backend not yet implemented |
 | Build orchestrator (`osty build`) | wired — drives manifest → front-end → gen Phase 1 |
 | Test runner harness (`internal/testgen`) | wired — merges per-file gen output, injects a real std.testing runtime + main(), runs via `go run` |
 | `osty test` (discovery + front-end + execution) | wired — validates and **runs** discovered `test*` / `bench*` fns; failures and pass/fail totals report inline |
@@ -70,19 +91,20 @@ name-collision detection (test skipped at
 
 ### Transpiler phases
 
-`internal/gen` is wired up as the `osty gen FILE` subcommand. Phase 1
-handles primitive literals/operators, user fn declarations, let bindings,
-if / for / return, list literals over primitives, and the
-println/print/eprintln/eprint intrinsics. Unimplemented forms emit a
-`/* TODO(phaseN): ... */` marker so the produced Go file still
-type-checks where possible. The remaining phases are scoped in
-`internal/gen/doc.go`:
+`internal/gen` is wired up as the `osty gen FILE` subcommand.
+Phases 1–6 are all implemented end-to-end (see commit
+`4829685` "gen/check: finish phases 4–6 for end-to-end CLI
+usability"). Remaining unimplemented corners of each phase still
+emit a `/* TODO(phaseN): ... */` marker so the produced Go file
+type-checks where possible. Phase scope, per `internal/gen/doc.go`:
 
-- **Phase 2**: structs, enums, interfaces, type aliases, match, patterns
-- **Phase 3**: generics, closures, collection methods
-- **Phase 4**: Option / Result, `?` operator, defer
-- **Phase 5**: `use` declarations, Go FFI
-- **Phase 6**: channels, concurrency primitives
+- **Phase 1** ✓ primitive literals/operators, user fn declarations,
+  let bindings, if / for / return, list literals, print intrinsics
+- **Phase 2** ✓ structs, enums, interfaces, type aliases, match, patterns
+- **Phase 3** ✓ generics, closures, collection methods
+- **Phase 4** ✓ Option / Result, `?` operator, defer
+- **Phase 5** ✓ `use` declarations, Go FFI
+- **Phase 6** ✓ channels, concurrency primitives
 
 ## Layout
 
@@ -106,13 +128,18 @@ osty/
 │   ├── check/               # Type checker
 │   ├── lint/                # Style/correctness lint rules (L0xxx codes)
 │   ├── format/              # Canonical-style formatter
-│   ├── gen/                 # Go transpiler (Phase 1; `osty gen FILE`)
+│   ├── ir/                  # Independent intermediate representation
+│   ├── gen/                 # Go transpiler (Phases 1–6; `osty gen FILE`)
 │   ├── testgen/             # Test runner harness (drives `osty test`)
+│   ├── docgen/              # API doc generator (HTML + markdown; `osty doc`)
+│   ├── ci/                  # CI quality tooling (`osty ci`)
+│   ├── profile/             # Build profiles / targets / features
 │   ├── lsp/                 # Language server (stdio JSON-RPC)
 │   ├── scaffold/            # `osty new` / `osty init` project templates
 │   ├── tomlparse/           # Generic TOML parser (subset)
 │   ├── manifest/            # osty.toml parse + validate + lookup
 │   ├── lockfile/            # osty.lock read/write
+│   ├── registry/            # Package registry client (stub)
 │   └── pkgmgr/semver/       # SemVer parse, compare, constraint match
 └── testdata/                # .osty fixtures used by tests
 ```
@@ -144,6 +171,9 @@ osty typecheck FILE    # same as check, plus a per-expression type dump
 osty lint FILE|DIR     # style + correctness warnings (L0xxx codes)
 osty fmt FILE          # format to canonical style (see --check, --write)
 osty gen FILE          # transpile to Go source (see -o, --package)
+osty doc PATH          # generate API documentation (HTML + markdown)
+osty ci                # run CI quality checks (signatures, coverage, snapshots)
+osty scaffold          # generators (fixture / schema / ffi)
 osty lsp               # run the language server on stdio
 osty explain [CODE]    # describe a diagnostic (Exxxx/Wxxxx/Lxxxx); no arg lists every code
 osty pipeline FILE|DIR # run every front-end phase; per-stage timing
