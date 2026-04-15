@@ -533,6 +533,9 @@ func (g *gen) emitCall(c *ast.CallExpr) {
 		if g.emitRandomGenericMethod(c, f) {
 			return
 		}
+		if g.emitBytesMethod(c, f) {
+			return
+		}
 		if g.emitCollectionMethod(c, f) {
 			return
 		}
@@ -1568,6 +1571,64 @@ func (g *gen) emitCollectionMethod(c *ast.CallExpr, f *ast.FieldExpr) bool {
 	return false
 }
 
+func (g *gen) emitBytesMethod(c *ast.CallExpr, f *ast.FieldExpr) bool {
+	p, ok := g.typeOf(f.X).(*types.Primitive)
+	if !ok || p.Kind != types.PBytes {
+		return false
+	}
+	switch f.Name {
+	case "len":
+		if len(c.Args) != 0 {
+			return false
+		}
+		g.body.write("len(")
+		g.emitExpr(f.X)
+		g.body.write(")")
+		return true
+	case "isEmpty":
+		if len(c.Args) != 0 {
+			return false
+		}
+		g.body.write("(len(")
+		g.emitExpr(f.X)
+		g.body.write(") == 0)")
+		return true
+	case "get":
+		if len(c.Args) != 1 {
+			return false
+		}
+		g.needBytesRuntime = true
+		g.body.write("bytesGet(")
+		g.emitExpr(f.X)
+		g.body.write(", ")
+		g.emitExpr(c.Args[0].Value)
+		g.body.write(")")
+		return true
+	case "concat":
+		if len(c.Args) != 1 {
+			return false
+		}
+		g.needBytesRuntime = true
+		g.body.write("bytesConcat(")
+		g.emitExpr(f.X)
+		g.body.write(", ")
+		g.emitExpr(c.Args[0].Value)
+		g.body.write(")")
+		return true
+	case "toString":
+		if len(c.Args) != 0 {
+			return false
+		}
+		g.needBytesRuntime = true
+		g.needResult = true
+		g.body.write("bytesToString(")
+		g.emitExpr(f.X)
+		g.body.write(")")
+		return true
+	}
+	return false
+}
+
 func (g *gen) emitListMethod(c *ast.CallExpr, f *ast.FieldExpr, n *types.Named) bool {
 	if len(n.Args) != 1 {
 		return false
@@ -1800,6 +1861,21 @@ func (g *gen) emitListMethod(c *ast.CallExpr, f *ast.FieldExpr, n *types.Named) 
 			g.body.writef("out = append(out, %s...)\n", other)
 			g.body.writeln("return out")
 		})
+	case "chain":
+		if len(c.Args) != 1 {
+			return false
+		}
+		retGo := g.callReturnGo(c, listGo)
+		g.emitCollectionIIFE(retGo, f.X, func(xs string) {
+			other := g.freshVar("_other")
+			g.body.writef("%s := ", other)
+			g.emitExpr(c.Args[0].Value)
+			g.body.nl()
+			g.body.writef("out := make(%s, 0, len(%s)+len(%s))\n", retGo, xs, other)
+			g.body.writef("out = append(out, %s...)\n", xs)
+			g.body.writef("out = append(out, %s...)\n", other)
+			g.body.writeln("return out")
+		})
 	case "zip":
 		if len(c.Args) != 1 {
 			return false
@@ -1856,6 +1932,22 @@ func (g *gen) emitListMethod(c *ast.CallExpr, f *ast.FieldExpr, n *types.Named) 
 			g.body.nl()
 			g.body.writef("out := make(%s, 0, len(%s))\n", retGo, xs)
 			g.body.writef("for _, v := range %s { if !%s(v) { break }; out = append(out, v) }\n", xs, pred)
+			g.body.writeln("return out")
+		})
+	case "skip":
+		if len(c.Args) != 1 {
+			return false
+		}
+		retGo := g.callReturnGo(c, listGo)
+		g.emitCollectionIIFE(retGo, f.X, func(xs string) {
+			start := g.freshVar("_n")
+			g.body.writef("%s := ", start)
+			g.emitExpr(c.Args[0].Value)
+			g.body.nl()
+			g.body.writef("if %s < 0 { %s = 0 }\n", start, start)
+			g.body.writef("if %s > len(%s) { %s = len(%s) }\n", start, xs, start, xs)
+			g.body.writef("out := make(%s, len(%s)-%s)\n", retGo, xs, start)
+			g.body.writef("copy(out, %s[%s:])\n", xs, start)
 			g.body.writeln("return out")
 		})
 	case "forEach":

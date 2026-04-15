@@ -29,6 +29,7 @@ bytes.isEmpty(b: Bytes) -> Bool
 bytes.get(b: Bytes, i: Int) -> Byte?
 bytes.slice(b: Bytes, start: Int, end: Int) -> Bytes
 
+bytes.equal(a: Bytes, b: Bytes) -> Bool
 bytes.contains(b: Bytes, sub: Bytes) -> Bool
 bytes.startsWith(b: Bytes, prefix: Bytes) -> Bool
 bytes.endsWith(b: Bytes, suffix: Bytes) -> Bool

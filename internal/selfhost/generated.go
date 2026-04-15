@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 )
 
 type ostyStringer interface {
@@ -2333,7 +2334,28 @@ func frontLexTokenFromScan(units []string, start int, consumed int, kind FrontTo
 	return frontLexToken(kind, frontPositionAt(units, start), frontPositionAt(units, start+consumed), consumed, leadingDocLines, triple, interpolations, baseLiteral)
 }
 
-// Osty: /tmp/selfhost_merged.osty:1451:5
+type frontPositionCacheState struct {
+	units  []string
+	target int
+	offset int
+	line   int
+	column int
+	skipLf bool
+}
+
+var frontPositionCacheMu sync.Mutex
+var frontPositionCache frontPositionCacheState
+
+func frontSameUnits(a []string, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	if len(a) == 0 {
+		return true
+	}
+	return &a[0] == &b[0]
+}
+
 func frontPositionAt(units []string, target int) *FrontPos {
 	if target < 0 {
 		target = 0
@@ -2341,11 +2363,26 @@ func frontPositionAt(units []string, target int) *FrontPos {
 	if target > len(units) {
 		target = len(units)
 	}
-	offset := 0
-	line := 1
-	column := 1
-	skipLf := false
-	for idx := 0; idx < target; idx++ {
+
+	frontPositionCacheMu.Lock()
+	defer frontPositionCacheMu.Unlock()
+
+	if !frontSameUnits(frontPositionCache.units, units) || target < frontPositionCache.target {
+		frontPositionCache = frontPositionCacheState{
+			units:  units,
+			target: 0,
+			offset: 0,
+			line:   1,
+			column: 1,
+			skipLf: false,
+		}
+	}
+
+	offset := frontPositionCache.offset
+	line := frontPositionCache.line
+	column := frontPositionCache.column
+	skipLf := frontPositionCache.skipLf
+	for idx := frontPositionCache.target; idx < target; idx++ {
 		unit := units[idx]
 		next := ""
 		if idx+1 < len(units) {
@@ -2370,6 +2407,11 @@ func frontPositionAt(units []string, target int) *FrontPos {
 			offset = offset + 1
 		}
 	}
+	frontPositionCache.target = target
+	frontPositionCache.offset = offset
+	frontPositionCache.line = line
+	frontPositionCache.column = column
+	frontPositionCache.skipLf = skipLf
 	return frontPos(offset, line, column)
 }
 
@@ -11038,6 +11080,22 @@ func opParseDeferStmt(p *OstyParser) int {
 	return opAddNode(p, n)
 }
 
+func opAtForInKeyword(p *OstyParser) bool {
+	return opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})) && opPeek(p).text == "in"
+}
+
+func opTryParseForInPattern(p *OstyParser) int {
+	savedPos := p.pos
+	savedErrors := opErrorCount(p)
+	patIdx := opParsePattern(p)
+	if opAtForInKeyword(p) {
+		return patIdx
+	}
+	p.pos = savedPos
+	opTruncateErrors(p, savedErrors)
+	return -1
+}
+
 // Osty: /tmp/selfhost_merged.osty:6994:1
 func opParseForStmt(p *OstyParser) int {
 	// Osty: /tmp/selfhost_merged.osty:6995:5
@@ -11085,24 +11143,14 @@ func opParseForStmt(p *OstyParser) int {
 		// Osty: /tmp/selfhost_merged.osty:7011:23
 		p.noStructLit = pv
 	} else {
-		// Osty: /tmp/selfhost_merged.osty:7013:9
-		pv := p.noStructLit
-		_ = pv
-		// Osty: /tmp/selfhost_merged.osty:7014:23
-		p.noStructLit = true
-		// Osty: /tmp/selfhost_merged.osty:7015:9
-		expr := opParseExpr(p)
-		_ = expr
-		// Osty: /tmp/selfhost_merged.osty:7016:23
-		p.noStructLit = pv
-		// Osty: /tmp/selfhost_merged.osty:7017:9
-		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})) && opPeek(p).text == "in" {
+		forInPat := opTryParseForInPattern(p)
+		if forInPat >= 0 {
 			// Osty: /tmp/selfhost_merged.osty:7018:13
 			_ = opAdvance(p)
 			// Osty: /tmp/selfhost_merged.osty:7019:18
 			kind = "forin"
 			// Osty: /tmp/selfhost_merged.osty:7020:20
-			patIdx = expr
+			patIdx = forInPat
 			// Osty: /tmp/selfhost_merged.osty:7021:13
 			pv2 := p.noStructLit
 			_ = pv2
@@ -11113,7 +11161,12 @@ func opParseForStmt(p *OstyParser) int {
 			// Osty: /tmp/selfhost_merged.osty:7024:27
 			p.noStructLit = pv2
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:7025:23
+			pv := p.noStructLit
+			_ = pv
+			p.noStructLit = true
+			expr := opParseExpr(p)
+			_ = expr
+			p.noStructLit = pv
 			kind = "cond"
 			// Osty: /tmp/selfhost_merged.osty:7026:17
 			condIdx = expr

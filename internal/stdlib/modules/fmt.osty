@@ -369,8 +369,8 @@ pub fn bytes(n: Int) -> String {
 // Callers must use raw strings (r"...") or escape braces (\{ \})
 // to prevent Osty's own interpolation from consuming the placeholders.
 pub fn format(template: String, args: List<String>) -> String {
-    let lbrace: Char = '{'
-    let rbrace: Char = '}'
+    let lbrace: Char = r"{".chars()[0]
+    let rbrace: Char = r"}".chars()[0]
     let chars = template.chars()
     let len = chars.len()
     let mut out = ""
@@ -460,7 +460,7 @@ pub fn numbered(items: List<String>) -> String {
     let mut lines: List<String> = []
     let width = items.len().toString().chars().len()
     for i in 0..items.len() {
-        let num = padLeft((i + 1).toString(), width)
+        let num = padLeft((i + 1).toString(), width, ' ')
         lines.push("{num}. {items[i]}")
     }
     strings.join(lines, "\n")
@@ -491,7 +491,7 @@ pub fn table(headers: List<String>, rows: List<List<String>>, sep: String = " | 
 
     let mut headerCells: List<String> = []
     for ci in 0..cols {
-        headerCells.push(padRight(headers[ci], widths[ci]))
+        headerCells.push(padRight(headers[ci], widths[ci], ' '))
     }
     let headerLine = strings.join(headerCells, sep)
 
@@ -506,7 +506,7 @@ pub fn table(headers: List<String>, rows: List<List<String>>, sep: String = " | 
         let mut cells: List<String> = []
         for ci in 0..cols {
             let cell = if ci < row.len() { row[ci] } else { "" }
-            cells.push(padRight(cell, widths[ci]))
+            cells.push(padRight(cell, widths[ci], ' '))
         }
         lines.push(strings.join(cells, sep))
     }

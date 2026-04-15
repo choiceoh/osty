@@ -20,6 +20,10 @@ pub fn slice(b: Bytes, start: Int, end: Int) -> Bytes {
     slice(b, start, end)
 }
 
+pub fn equal(a: Bytes, b: Bytes) -> Bool {
+    a == b
+}
+
 pub fn contains(b: Bytes, sub: Bytes) -> Bool {
     indexOf(b, sub).isSome()
 }

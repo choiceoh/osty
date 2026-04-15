@@ -1031,6 +1031,22 @@ fn opParseDeferStmt(p: OstyParser) -> Int {
     opAddNode(p, n)
 }
 
+fn opAtForInKeyword(p: OstyParser) -> Bool {
+    opAt(p, FrontIdent) && opPeek(p).text == "in"
+}
+
+fn opTryParseForInPattern(p: OstyParser) -> Int {
+    let savedPos = p.pos
+    let savedErrors = opErrorCount(p)
+    let patIdx = opParsePattern(p)
+    if opAtForInKeyword(p) {
+        return patIdx
+    }
+    p.pos = savedPos
+    opTruncateErrors(p, savedErrors)
+    return -1
+}
+
 fn opParseForStmt(p: OstyParser) -> Int {
     let start = p.pos
     let _ = opAdvance(p)
@@ -1050,20 +1066,23 @@ fn opParseForStmt(p: OstyParser) -> Int {
         condIdx = opParseExpr(p)
         p.noStructLit = pv
     } else {
-        let pv = p.noStructLit
-        p.noStructLit = true
-        let expr = opParseExpr(p)
-        p.noStructLit = pv
-        if opAt(p, FrontIdent) && opPeek(p).text == "in" {
+        let forInPat = opTryParseForInPattern(p)
+        if forInPat >= 0 {
             let _ = opAdvance(p)
             kind = "forin"
-            patIdx = expr
+            patIdx = forInPat
             let pv2 = p.noStructLit
             p.noStructLit = true
             iterIdx = opParseExpr(p)
             p.noStructLit = pv2
-        } else { kind = "cond"
-        condIdx = expr }
+        } else {
+            let pv = p.noStructLit
+            p.noStructLit = true
+            let expr = opParseExpr(p)
+            p.noStructLit = pv
+            kind = "cond"
+            condIdx = expr
+        }
     }
     let body = opParseBlock(p)
     p.inLoop = prevInLoop

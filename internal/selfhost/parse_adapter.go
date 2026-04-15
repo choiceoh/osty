@@ -149,6 +149,18 @@ func (l astLowerer) doc(idx int) string {
 	return ""
 }
 
+func (l astLowerer) mutPos(n *AstNode) token.Pos {
+	if n == nil || n.flags != 1 {
+		return token.Pos{}
+	}
+	for i := n.start + 1; i < n.end; i++ {
+		if l.tok(i).Kind == token.MUT {
+			return l.pos(i)
+		}
+	}
+	return token.Pos{}
+}
+
 func (l astLowerer) decl(idx int) ast.Decl {
 	n := l.node(idx)
 	if n == nil {
@@ -320,7 +332,7 @@ func (l astLowerer) letDecl(n *AstNode) *ast.LetDecl {
 	if p, ok := l.pattern(n.left).(*ast.IdentPat); ok {
 		name = p.Name
 	}
-	return &ast.LetDecl{PosV: l.nodePos(n), EndV: l.nodeEnd(n), Pub: l.tok(n.start-1).Kind == token.PUB, Mut: n.flags == 1, Name: name, Type: l.childType(n, 0), Value: l.expr(n.right), DocComment: l.doc(n.start), Annotations: l.annotations(n.extra)}
+	return &ast.LetDecl{PosV: l.nodePos(n), EndV: l.nodeEnd(n), Pub: l.tok(n.start-1).Kind == token.PUB, Mut: n.flags == 1, MutPos: l.mutPos(n), Name: name, Type: l.childType(n, 0), Value: l.expr(n.right), DocComment: l.doc(n.start), Annotations: l.annotations(n.extra)}
 }
 
 func (l astLowerer) field(n *AstNode) *ast.Field {
@@ -334,9 +346,13 @@ func (l astLowerer) param(idx int) *ast.Param {
 	}
 	p := &ast.Param{PosV: l.nodePos(n), EndV: l.nodeEnd(n), Name: n.text, Type: l.typ(n.right), Default: l.expr(n.left)}
 	if n.left >= 0 {
-		if pat := l.pattern(n.left); pat != nil {
-			p.Pattern = pat
-			p.Default = nil
+		left := l.node(n.left)
+		if left != nil {
+			if _, ok := left.kind.(*AstNodeKind_AstNPattern); ok {
+				pat := l.pattern(n.left)
+				p.Pattern = pat
+				p.Default = nil
+			}
 		}
 	}
 	return p
@@ -452,7 +468,7 @@ func (l astLowerer) stmt(idx int) ast.Stmt {
 	}
 	switch n.kind.(type) {
 	case *AstNodeKind_AstNLet:
-		return &ast.LetStmt{PosV: l.nodePos(n), EndV: l.nodeEnd(n), Pattern: l.pattern(n.left), Mut: n.flags == 1, Type: l.childType(n, 0), Value: l.expr(n.right)}
+		return &ast.LetStmt{PosV: l.nodePos(n), EndV: l.nodeEnd(n), Pattern: l.pattern(n.left), Mut: n.flags == 1, MutPos: l.mutPos(n), Type: l.childType(n, 0), Value: l.expr(n.right)}
 	case *AstNodeKind_AstNReturn:
 		return &ast.ReturnStmt{PosV: l.nodePos(n), EndV: l.nodeEnd(n), Value: l.expr(n.left)}
 	case *AstNodeKind_AstNBreak:
