@@ -3,6 +3,7 @@ package gen_test
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestTaskGroupBasic — taskGroup waits for all spawned tasks and
@@ -219,5 +220,162 @@ fn main() {
 	want := "sum = 20\nerr: bad nope\n"
 	if out != want {
 		t.Errorf("got %q, want %q\n--- src ---\n%s", out, want, goSrc)
+	}
+}
+
+// TestAutoCancelOnError — one spawned task returning Err causes
+// sibling workers that cooperate via isCancelled() to exit early,
+// without explicit g.cancel().
+func TestAutoCancelOnError(t *testing.T) {
+	src := `fn worker(id: Int, g: TaskGroup) -> Result<Int, String> {
+    for i in 0..50 {
+        if g.isCancelled() {
+            return Err("w{id}@{i}")
+        }
+        thread.sleep(5.ms)
+    }
+    Ok(id)
+}
+
+fn failFast() -> Result<Int, String> {
+    thread.sleep(15.ms)
+    Err("fail")
+}
+
+fn main() {
+    taskGroup(|g| {
+        let h1 = g.spawn(|| worker(1, g))
+        let h2 = g.spawn(|| failFast())
+        let h3 = g.spawn(|| worker(3, g))
+        match h1.join() {
+            Ok(v) -> println("w1 done: {v}"),
+            Err(e) -> println("w1: {e}"),
+        }
+        match h2.join() {
+            Ok(v) -> println("w2 done: {v}"),
+            Err(e) -> println("w2: {e}"),
+        }
+        match h3.join() {
+            Ok(v) -> println("w3 done: {v}"),
+            Err(e) -> println("w3: {e}"),
+        }
+    })
+}
+`
+	goSrc, err := transpile(t, src)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := runGo(t, goSrc)
+	if strings.Contains(out, "w1 done") || strings.Contains(out, "w3 done") {
+		t.Errorf("workers should have auto-cancelled, got:\n%s\n--- src ---\n%s",
+			out, goSrc)
+	}
+	if !strings.Contains(out, "w1: w1@") || !strings.Contains(out, "w3: w3@") {
+		t.Errorf("expected cancellation traces, got:\n%s", out)
+	}
+	if !strings.Contains(out, "w2: fail") {
+		t.Errorf("w2 should have failed: %s", out)
+	}
+}
+
+// TestNestedCancelChain — cancelling the outer group propagates into
+// a nested taskGroup's context so its workers see IsCancelled.
+func TestNestedCancelChain(t *testing.T) {
+	src := `fn runInner() -> Int {
+    taskGroup(|inner| {
+        let h = inner.spawn(|| {
+            for i in 0..30 {
+                if inner.isCancelled() { return i }
+                thread.sleep(10.ms)
+            }
+            99
+        })
+        h.join()
+    })
+}
+
+fn main() {
+    let got = taskGroup(|outer| {
+        let h = outer.spawn(|| runInner())
+        thread.sleep(30.ms)
+        outer.cancel()
+        h.join()
+    })
+    if got >= 99 {
+        println("inner completed")
+    } else {
+        println("inner cancelled")
+    }
+}
+`
+	goSrc, err := transpile(t, src)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := runGo(t, goSrc)
+	if strings.TrimSpace(out) != "inner cancelled" {
+		t.Errorf("got %q\n--- src ---\n%s", out, goSrc)
+	}
+}
+
+// TestRecvCancel — ch.recv() inside a cancelled group returns None
+// instead of blocking forever.
+func TestRecvCancel(t *testing.T) {
+	src := `fn main() {
+    taskGroup(|g| {
+        let ch = thread.chan::<Int>(0)
+        let h = g.spawn(|| {
+            match ch.recv() {
+                Some(v) -> "got {v}",
+                None -> "aborted"
+            }
+        })
+        thread.sleep(20.ms)
+        g.cancel()
+        println(h.join())
+    })
+}
+`
+	goSrc, err := transpile(t, src)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := runGo(t, goSrc)
+	if strings.TrimSpace(out) != "aborted" {
+		t.Errorf("got %q\n--- src ---\n%s", out, goSrc)
+	}
+}
+
+// TestSleepCancel — thread.sleep() interrupts on cancel. The body
+// may still complete (signaling requires explicit isCancelled), but
+// the total wall-clock time must be far below the nominal sleep.
+func TestSleepCancel(t *testing.T) {
+	src := `fn main() {
+    taskGroup(|g| {
+        let h = g.spawn(|| {
+            thread.sleep(2000.ms)
+            "ok"
+        })
+        thread.sleep(30.ms)
+        g.cancel()
+        h.join()
+    })
+    println("done")
+}
+`
+	goSrc, err := transpile(t, src)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	t0 := time.Now()
+	out := runGo(t, goSrc)
+	dur := time.Since(t0)
+	if strings.TrimSpace(out) != "done" {
+		t.Errorf("got %q", out)
+	}
+	if dur > 1500*time.Millisecond {
+		t.Errorf("sleep not interrupted: took %v (expected < 1.5s)\n--- src ---\n%s",
+			dur, goSrc)
 	}
 }

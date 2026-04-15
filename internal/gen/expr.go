@@ -369,6 +369,17 @@ func (g *gen) emitConcurrencyMethod(c *ast.CallExpr, f *ast.FieldExpr) bool {
 	case "Chan", "Channel":
 		switch f.Name {
 		case "recv":
+			// When the file uses taskGroup anywhere, recv becomes
+			// cancel-aware via the runtime's recvCancel helper: a
+			// cancelled group returns None even without a sender.
+			// Files without structured concurrency stay on the bare
+			// channel receive — cheaper and equivalent in that case.
+			if g.needTaskGroup {
+				g.body.write("recvCancel(")
+				g.emitExpr(f.X)
+				g.body.write(")")
+				return true
+			}
 			inner := "any"
 			if len(n.Args) == 1 {
 				inner = g.goType(n.Args[0])
@@ -481,9 +492,16 @@ func (g *gen) emitThreadCall(c *ast.CallExpr, f *ast.FieldExpr) bool {
 	}
 	switch f.Name {
 	case "sleep":
-		// thread.sleep(dur) → time.Sleep(dur)
+		// thread.sleep(dur) → time.Sleep(dur), or sleepCancel(dur) when
+		// a taskGroup is present so the sleep is interruptible.
 		if len(c.Args) != 1 {
 			return false
+		}
+		if g.needTaskGroup {
+			g.body.write("sleepCancel(")
+			g.emitDurationExpr(c.Args[0].Value)
+			g.body.write(")")
+			return true
 		}
 		g.use("time")
 		g.body.write("time.Sleep(")
@@ -670,19 +688,31 @@ func (g *gen) emitBuiltinCall(name string, args []*ast.Arg, call *ast.CallExpr) 
 		// §8.1: taskGroup(|g| body) → runTaskGroup[T](body).
 		// The outer call's type is T; the inner closure receives a
 		// *TaskGroup.
+		//
+		// A unit-returning closure needs a trampoline so Go's
+		// `func(*TaskGroup)` and `func(*TaskGroup) struct{}` don't
+		// clash at the runTaskGroup[struct{}] call site.
 		if len(args) == 1 {
 			g.needTaskGroup = true
 			g.needHandle = true
 			inner := "any"
+			isUnit := false
 			if call != nil {
-				if t := g.typeOf(call); t != nil && !types.IsUnit(t) && !types.IsError(t) {
-					inner = g.goType(t)
-				} else if t != nil && types.IsUnit(t) {
+				if t := g.typeOf(call); t != nil && types.IsUnit(t) {
 					inner = "struct{}"
+					isUnit = true
+				} else if t != nil && !types.IsError(t) {
+					inner = g.goType(t)
 				}
 			}
 			g.body.writef("runTaskGroup[%s](", inner)
-			g.emitExpr(args[0].Value)
+			if isUnit {
+				g.body.write("func(_g *TaskGroup) struct{} { (")
+				g.emitExpr(args[0].Value)
+				g.body.write(")(_g); return struct{}{} }")
+			} else {
+				g.emitExpr(args[0].Value)
+			}
 			g.body.write(")")
 			return true
 		}

@@ -115,7 +115,134 @@ func newGen(pkgName string, file *ast.File, res *resolve.Result, chk *check.Resu
 		methodNames:  map[string]map[string]bool{},
 	}
 	g.indexTypes()
+	// Pre-scan for structured-concurrency callsites so cancel-aware
+	// lowering of `ch.recv()` / `thread.sleep(...)` is decided before
+	// the first expression is emitted. Without this, a recv that
+	// appears lexically before the first `taskGroup(...)` would fall
+	// back to the non-cancel form even in a file that uses groups.
+	g.scanConcurrencyUse()
 	return g
+}
+
+// scanConcurrencyUse walks the file looking for taskGroup / parallel
+// / spawn / g.spawn callsites that would activate the structured
+// concurrency runtime. Sets the needTaskGroup flag when any are
+// present so subsequent emission can decide whether to use the
+// cancel-aware helpers.
+func (g *gen) scanConcurrencyUse() {
+	var hit bool
+	var visit func(n any)
+	visit = func(n any) {
+		if hit || n == nil {
+			return
+		}
+		switch x := n.(type) {
+		case *ast.CallExpr:
+			if id, ok := x.Fn.(*ast.Ident); ok {
+				switch id.Name {
+				case "taskGroup", "parallel", "spawn":
+					hit = true
+					return
+				}
+			}
+			if fx, ok := x.Fn.(*ast.FieldExpr); ok {
+				if fx.Name == "spawn" || fx.Name == "cancel" || fx.Name == "isCancelled" {
+					hit = true
+					return
+				}
+			}
+			visit(x.Fn)
+			for _, a := range x.Args {
+				visit(a.Value)
+			}
+		case *ast.BinaryExpr:
+			visit(x.Left)
+			visit(x.Right)
+		case *ast.UnaryExpr:
+			visit(x.X)
+		case *ast.ParenExpr:
+			visit(x.X)
+		case *ast.FieldExpr:
+			visit(x.X)
+		case *ast.IndexExpr:
+			visit(x.X)
+			visit(x.Index)
+		case *ast.TupleExpr:
+			for _, e := range x.Elems {
+				visit(e)
+			}
+		case *ast.ListExpr:
+			for _, e := range x.Elems {
+				visit(e)
+			}
+		case *ast.StructLit:
+			for _, f := range x.Fields {
+				if f.Value != nil {
+					visit(f.Value)
+				}
+			}
+		case *ast.IfExpr:
+			visit(x.Cond)
+			visit(x.Then)
+			visit(x.Else)
+		case *ast.MatchExpr:
+			visit(x.Scrutinee)
+			for _, a := range x.Arms {
+				visit(a.Body)
+			}
+		case *ast.Block:
+			for _, s := range x.Stmts {
+				visit(s)
+			}
+		case *ast.ClosureExpr:
+			visit(x.Body)
+		case *ast.QuestionExpr:
+			visit(x.X)
+		case *ast.ReturnStmt:
+			visit(x.Value)
+		case *ast.LetStmt:
+			visit(x.Value)
+		case *ast.AssignStmt:
+			visit(x.Value)
+		case *ast.ExprStmt:
+			visit(x.X)
+		case *ast.ForStmt:
+			visit(x.Iter)
+			visit(x.Body)
+		case *ast.DeferStmt:
+			visit(x.X)
+		case *ast.ChanSendStmt:
+			visit(x.Channel)
+			visit(x.Value)
+		case *ast.FnDecl:
+			if x.Body != nil {
+				visit(x.Body)
+			}
+		case *ast.StructDecl:
+			for _, m := range x.Methods {
+				if m.Body != nil {
+					visit(m.Body)
+				}
+			}
+		case *ast.EnumDecl:
+			for _, m := range x.Methods {
+				if m.Body != nil {
+					visit(m.Body)
+				}
+			}
+		case *ast.LetDecl:
+			visit(x.Value)
+		}
+	}
+	for _, d := range g.file.Decls {
+		visit(d)
+	}
+	for _, s := range g.file.Stmts {
+		visit(s)
+	}
+	if hit {
+		g.needTaskGroup = true
+	}
 }
 
 // indexTypes walks top-level declarations once to build the variant
@@ -203,6 +330,13 @@ func (g *gen) run() ([]byte, error) {
 	if g.needTaskGroup {
 		g.use("sync")
 		g.use("context")
+		g.use("runtime")
+		g.use("strconv")
+		g.use("time")
+		// TaskGroup implies Handle (spawn-in-group returns Handle).
+		g.needHandle = true
+		// TaskGroup implies Result for the Err-detection interface.
+		g.needResult = true
 	}
 
 	// 3. Assemble header + body.
@@ -256,6 +390,12 @@ type Result[T any, E any] struct {
 	Error E
 	IsOk  bool
 }
+
+// isErrResult is the private marker consumed by the concurrency
+// runtime's auto-cancel-on-error logic. Named generically so that a
+// file without taskGroup still compiles — the method is always safe
+// to emit because it only exposes existing state.
+func (r Result[T, E]) isErrResult() bool { return !r.IsOk }
 `)
 	}
 	if g.needRange {
@@ -291,12 +431,11 @@ func (h Handle[T]) Join() T { return <-h.result }
 	}
 	if g.needTaskGroup {
 		out.WriteString(`
-// TaskGroup backs §8 structured concurrency: every task spawned via
-// Spawn must finish before the group exits. A context is carried
-// through so Cancel propagates to cooperating children via
-// IsCancelled / Done. Context-aware stdlib blocking calls (the full
-// spec-mandated cancellation protocol) are not shipped — tasks that
-// don't explicitly check IsCancelled will run to completion.
+// TaskGroup backs §8 structured concurrency. Every task spawned via
+// Spawn must finish before the group exits. Cancellation flows
+// through a context: Cancel signals cooperative stop; child groups
+// derive their context from the enclosing one via a goroutine-local
+// registry so a parent's cancel cascades into nested taskGroups.
 type TaskGroup struct {
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -316,31 +455,127 @@ func (g *TaskGroup) IsCancelled() bool {
 
 func (g *TaskGroup) Cancel() { g.cancel() }
 
+// ostyResultErr is the marker interface satisfied by Result[T, E]
+// through its isErrResult method. It lets the runtime detect the
+// Err branch of a spawned task without a concrete type reference,
+// which powers auto-cancel-on-first-error in spawnInGroup.
+type ostyResultErr interface {
+	isErrResult() bool
+}
+
+// goroutineGroup maps each active goroutine ID to its enclosing
+// TaskGroup so nested ` + "`taskGroup`" + ` calls can derive from their parent,
+// and context-aware helpers (recvCancel, sleepCancel) can observe a
+// cancel signal without an explicit handle argument.
+var goroutineGroup sync.Map
+
+// ostyGoid reads the current goroutine's ID from the runtime stack
+// header. Called rarely — at spawn entry and at recv / sleep sites —
+// so the microsecond-scale cost is acceptable.
+func ostyGoid() uint64 {
+	var buf [64]byte
+	n := runtime.Stack(buf[:], false)
+	s := buf[:n]
+	const prefix = len("goroutine ")
+	if n <= prefix {
+		return 0
+	}
+	s = s[prefix:]
+	i := 0
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		i++
+	}
+	v, _ := strconv.ParseUint(string(s[:i]), 10, 64)
+	return v
+}
+
+// currentGroup returns the TaskGroup the calling goroutine belongs
+// to, or nil when not inside a spawned body.
+func currentGroup() *TaskGroup {
+	if v, ok := goroutineGroup.Load(ostyGoid()); ok {
+		return v.(*TaskGroup)
+	}
+	return nil
+}
+
+// currentGroupCtx returns a context to wait on for cancel-aware
+// helpers. When no group is active, Background's Done channel is
+// nil, so select arms on it never fire — select semantics then
+// match the non-cancel fallback.
+func currentGroupCtx() context.Context {
+	if g := currentGroup(); g != nil {
+		return g.ctx
+	}
+	return context.Background()
+}
+
 // spawnInGroup is the TaskGroup-aware variant of spawnHandle. The
 // WaitGroup counter increments synchronously so runTaskGroup's Wait
-// sees the task even if the goroutine hasn't started yet.
+// sees the task even if the goroutine hasn't started yet. The body's
+// return value is inspected: if it's a Result in its Err branch the
+// enclosing group is cancelled (§8.2 auto-cancel-on-first-error).
 func spawnInGroup[T any](g *TaskGroup, body func() T) Handle[T] {
 	g.wg.Add(1)
 	h := Handle[T]{result: make(chan T, 1)}
 	go func() {
-		defer g.wg.Done()
-		h.result <- body()
+		id := ostyGoid()
+		goroutineGroup.Store(id, g)
+		defer func() {
+			goroutineGroup.Delete(id)
+			g.wg.Done()
+		}()
+		v := body()
+		if r, ok := any(v).(ostyResultErr); ok && r.isErrResult() {
+			g.cancel()
+		}
+		h.result <- v
 	}()
 	return h
 }
 
 // runTaskGroup is the lowering target for ` + "`taskGroup(|g| body)`" + `.
-// The closure runs synchronously; on exit the context is cancelled
-// (so late children observing IsCancelled see the signal) and Wait
-// drains every unfinished spawned task before returning.
+// When called inside another group (detected via the goroutine
+// registry) it derives its context from the parent, so a parent
+// cancel cascades into the child. On exit the context is cancelled
+// and Wait drains every unfinished spawned task.
 func runTaskGroup[T any](body func(*TaskGroup) T) T {
-	ctx, cancel := context.WithCancel(context.Background())
+	parent := currentGroupCtx()
+	ctx, cancel := context.WithCancel(parent)
 	g := &TaskGroup{ctx: ctx, cancel: cancel}
 	defer func() {
 		cancel()
 		g.wg.Wait()
 	}()
 	return body(g)
+}
+
+// recvCancel is the cancel-aware lowering of ` + "`ch.recv()`" + `. When the
+// enclosing TaskGroup is cancelled, it returns nil (mapped to None in
+// Osty) even if the channel has no pending value. Outside a group,
+// behaves identically to a bare channel receive.
+func recvCancel[T any](ch chan T) *T {
+	ctx := currentGroupCtx()
+	select {
+	case v, ok := <-ch:
+		if !ok {
+			return nil
+		}
+		return &v
+	case <-ctx.Done():
+		return nil
+	}
+}
+
+// sleepCancel is the cancel-aware lowering of ` + "`thread.sleep(dur)`" + `.
+// Returns early when the enclosing group is cancelled.
+func sleepCancel(d time.Duration) {
+	ctx := currentGroupCtx()
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+	case <-ctx.Done():
+	}
 }
 
 // runParallel is the lowering target for ` + "`parallel(|| a, || b, ...)`" + `.
