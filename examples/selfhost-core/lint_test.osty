@@ -1,0 +1,126 @@
+use std.testing
+
+fn testSelfLintFindsCoreRules() {
+    let report = selfLintSource(
+        r"""
+            struct bad_type {}
+            enum color { red, Green }
+
+            fn BadName(unusedParam: Int, usedParam: Int) -> Int {
+                let unusedValue = 1
+                let usedValue = usedParam
+                return usedValue
+                let afterReturn = 2
+            }
+            """,
+    )
+
+    testing.assertEq(report.parseErrors, 0)
+    testing.assert(selfLintCodeCount(report, "L0030") >= 2)
+    testing.assert(selfLintCodeCount(report, "L0031") >= 1)
+    testing.assertEq(selfLintCodeCount(report, "L0032"), 1)
+    testing.assertEq(selfLintCodeCount(report, "L0002"), 1)
+    testing.assert(selfLintCodeCount(report, "L0001") >= 1)
+    testing.assertEq(selfLintCodeCount(report, "L0020"), 1)
+}
+
+fn testSelfLintLeavesCleanSnippetAlone() {
+    let report = selfLintSource(
+        r"""
+            pub struct User { pub name: String }
+            enum Color { Red, Green }
+
+            fn add(left: Int, right: Int) -> Int {
+                let total = left + right
+                total
+            }
+            """,
+    )
+
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintDiagnosticCount(report), 0)
+}
+
+fn testSelfLintFindsSimplifiableSelfOperations() {
+    let report = selfLintSource(
+        r"""
+            fn same(x: Int) -> Bool {
+                let mut y = x
+                y = y
+                x == x
+            }
+            """,
+    )
+
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0041"), 1)
+    testing.assertEq(selfLintCodeCount(report, "L0042"), 1)
+}
+
+fn testSelfLintFindsImportMutAndShadowingRules() {
+    let report = selfLintSource(
+        r"""
+            use std.testing
+            use std.fmt as fmt
+
+            fn work(value: Int) -> Int {
+                let value = 1
+                let mut neverChanged = value
+                fmt.format("{}", [])
+                value
+            }
+            """,
+    )
+
+    testing.assertEq(report.parseErrors, 0)
+    let unusedImport = selfLintCodeCount(report, "L0003")
+    let unusedMut = selfLintCodeCount(report, "L0004")
+    let shadowing = selfLintCodeCount(report, "L0010")
+    if unusedImport != 1 || unusedMut != 1 || shadowing != 1 {
+        testing.fail("counts import={unusedImport} mut={unusedMut} shadow={shadowing}")
+    }
+}
+
+fn testSelfLintFindsControlFlowAndBoolSimplifications() {
+    let report = selfLintSource(
+        r"""
+            fn flow(flag: Bool) -> Bool {
+                if true {}
+                if flag { false } else {}
+                for i in 0..10 {}
+                let same = !!flag
+                let neg = !false
+                let cmp = flag == true
+                return cmp
+            }
+            """,
+    )
+
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0022"), 1)
+    testing.assert(selfLintCodeCount(report, "L0023") >= 2)
+    testing.assertEq(selfLintCodeCount(report, "L0026"), 1)
+    testing.assertEq(selfLintCodeCount(report, "L0024"), 1)
+    testing.assertEq(selfLintCodeCount(report, "L0043"), 1)
+    testing.assertEq(selfLintCodeCount(report, "L0044"), 1)
+    testing.assertEq(selfLintCodeCount(report, "L0045"), 1)
+}
+
+fn testSelfLintFindsParameterComplexity() {
+    let report = selfLintSource(
+        r"""
+            fn many(a: Int, b: Int, c: Int, d: Int, e: Int, f: Int, g: Int) -> Int {
+                a + b + c + d + e + f + g
+            }
+            """,
+    )
+
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0050"), 1)
+}
+
+fn testSelfLintReportsParseRecoveryErrors() {
+    let report = selfLintSource(r"fn broken() { let x = 1")
+
+    testing.assert(report.parseErrors > 0)
+}

@@ -1,0 +1,745 @@
+use go "strings" as strings {
+    fn HasPrefix(s: String, prefix: String) -> Bool
+}
+
+/// SelfSymbol is the self-hosting resolver's compact symbol record.
+pub struct SelfSymbol {
+    pub name: String,
+    pub kind: String,
+    pub typeName: String,
+    pub arity: Int,
+    pub depth: Int,
+    pub start: Int,
+    pub end: Int,
+    pub public: Bool,
+}
+
+/// SelfResolveDiagnostic mirrors the compiler's name-resolution diagnostics in
+/// a small, self-host-friendly shape.
+pub struct SelfResolveDiagnostic {
+    pub code: String,
+    pub message: String,
+    pub name: String,
+    pub start: Int,
+    pub end: Int,
+}
+
+/// SelfResolveResult contains top-level/package symbols plus resolver
+/// diagnostics collected while walking function bodies.
+pub struct SelfResolveResult {
+    pub symbols: List<SelfSymbol>,
+    pub diagnostics: List<SelfResolveDiagnostic>,
+    pub refs: Int,
+    pub unresolved: Int,
+    pub duplicates: Int,
+}
+
+pub fn selfSymbol(
+    name: String,
+    kind: String,
+    typeName: String,
+    arity: Int,
+    depth: Int,
+    start: Int,
+    end: Int,
+    public: Bool,
+) -> SelfSymbol {
+    SelfSymbol { name, kind, typeName, arity, depth, start, end, public }
+}
+
+pub fn selfResolveDiagnostic(
+    code: String,
+    message: String,
+    name: String,
+    start: Int,
+    end: Int,
+) -> SelfResolveDiagnostic {
+    SelfResolveDiagnostic { code, message, name, start, end }
+}
+
+pub fn emptySelfResolveResult() -> SelfResolveResult {
+    SelfResolveResult { symbols: [], diagnostics: [], refs: 0, unresolved: 0, duplicates: 0 }
+}
+
+/// selfResolveSource builds a package-level symbol table and resolves simple
+/// function-body references using the self-hosted lexer/parser surface.
+pub fn selfResolveSource(source: String) -> SelfResolveResult {
+    let stream = frontendLexStream(source)
+    let tokens = frontTokensFromSource(source, stream)
+    let count = frontTokenListCount(tokens)
+    let mut result = emptySelfResolveResult()
+    result = selfResolveCollectTopLevel(tokens, count, result)
+    result = selfResolveScanFunctions(tokens, count, result)
+    result
+}
+
+pub fn selfResolveDiagnosticCount(result: SelfResolveResult) -> Int {
+    let mut count = 0
+    for diag in result.diagnostics {
+        let _ = diag
+        count = count + 1
+    }
+    count
+}
+
+pub fn selfResolveCodeCount(result: SelfResolveResult, code: String) -> Int {
+    let mut count = 0
+    for diag in result.diagnostics {
+        if diag.code == code {
+            count = count + 1
+        }
+    }
+    count
+}
+
+pub fn selfResolveSymbolCount(result: SelfResolveResult, kind: String) -> Int {
+    let mut count = 0
+    for sym in result.symbols {
+        if sym.kind == kind {
+            count = count + 1
+        }
+    }
+    count
+}
+
+pub fn selfResolveHasSymbol(result: SelfResolveResult, name: String, kind: String) -> Bool {
+    for sym in result.symbols {
+        if sym.name == name && sym.kind == kind {
+            return true
+        }
+    }
+    false
+}
+
+fn selfResolveCollectTopLevel(
+    tokens: List<FrontToken>,
+    count: Int,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let mut out = result
+    let mut skipUntil = -1
+    for idx in 0..count {
+        if idx < skipUntil {
+            let _ = idx
+        } else {
+            let kind = frontTokenAtList(tokens, idx).kind
+            if srKindIs(kind, "use") {
+                let consumed = frontParseUseConsumed(tokens, idx, count)
+                let end = idx + consumed
+                let alias = srUseAlias(tokens, idx, end)
+                if alias != "" {
+                    out = srAddSymbol(
+                        out,
+                        selfSymbol(alias, "package", "", 0, 0, idx, end, true),
+                    )
+                }
+                skipUntil = end
+            } else if srKindIs(kind, "fn") && srLooksLikeDeclarationStart(tokens, idx) {
+                let end = frontDeclEnd(tokens, idx, count)
+                let nameIdx = srNextIdent(tokens, idx + 1, end)
+                if nameIdx < end {
+                    let open = srFindTopLevelKind(tokens, nameIdx + 1, end, "(")
+                    let arity = if open >= 0 {
+                        let close = frontFindMatching(tokens, open, end, srKind("("), srKind(")"))
+                        srParamCount(tokens, open, close)
+                    } else {
+                        0
+                    }
+                    out = srAddSymbol(
+                        out,
+                        selfSymbol(
+                            frontTokenTextAt(tokens, nameIdx),
+                            "fn",
+                            "",
+                            arity,
+                            0,
+                            idx,
+                            end,
+                            srPrevMeaningfulIs(tokens, idx, "pub"),
+                        ),
+                    )
+                }
+                skipUntil = end
+            } else if (srKindIs(kind, "struct") || srKindIs(kind, "interface") || srKindIs(
+                kind,
+                "type",
+            )) && srLooksLikeDeclarationStart(
+                tokens,
+                idx,
+            ) {
+                let end = frontDeclEnd(tokens, idx, count)
+                let nameIdx = srNextIdent(tokens, idx + 1, end)
+                if nameIdx < end {
+                    out = srAddSymbol(
+                        out,
+                        selfSymbol(
+                            frontTokenTextAt(tokens, nameIdx),
+                            "type",
+                            "",
+                            0,
+                            0,
+                            idx,
+                            end,
+                            srPrevMeaningfulIs(tokens, idx, "pub"),
+                        ),
+                    )
+                }
+                skipUntil = end
+            } else if srKindIs(kind, "enum") && srLooksLikeDeclarationStart(tokens, idx) {
+                let end = frontDeclEnd(tokens, idx, count)
+                let nameIdx = srNextIdent(tokens, idx + 1, end)
+                if nameIdx < end {
+                    out = srAddSymbol(
+                        out,
+                        selfSymbol(
+                            frontTokenTextAt(tokens, nameIdx),
+                            "type",
+                            "",
+                            0,
+                            0,
+                            idx,
+                            end,
+                            srPrevMeaningfulIs(tokens, idx, "pub"),
+                        ),
+                    )
+                }
+                out = srCollectEnumVariants(tokens, idx, end, out)
+                skipUntil = end
+            } else if srKindIs(kind, "let") && srLooksLikeDeclarationStart(tokens, idx) {
+                let end = frontFindStatementEnd(tokens, idx, count)
+                let nameIdx = srLetNameIndex(tokens, idx)
+                if srTokenIs(tokens, nameIdx, "IDENT") || srTokenIs(tokens, nameIdx, "_") {
+                    out = srAddSymbol(
+                        out,
+                        selfSymbol(
+                            frontTokenTextAt(tokens, nameIdx),
+                            "value",
+                            "",
+                            0,
+                            0,
+                            idx,
+                            end,
+                            false,
+                        ),
+                    )
+                }
+                skipUntil = end
+            }
+        }
+    }
+    out
+}
+
+fn srCollectEnumVariants(
+    tokens: List<FrontToken>,
+    start: Int,
+    end: Int,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let mut out = result
+    let open = srFindTopLevelKind(tokens, start + 1, end, r"{")
+    if open < 0 {
+        return out
+    }
+    let close = frontFindMatching(tokens, open, end, srKind(r"{"), srKind(r"}"))
+    let mut parenDepth = 0
+    for idx in open + 1..close {
+        let kind = frontTokenAtList(tokens, idx).kind
+        if srKindIs(kind, "(") {
+            parenDepth = parenDepth + 1
+        } else if srKindIs(kind, ")") {
+            if parenDepth > 0 {
+                parenDepth = parenDepth - 1
+            }
+        } else if parenDepth == 0 && srKindIs(kind, "IDENT") && srLooksLikeVariantName(
+            tokens,
+            idx,
+            open,
+        ) {
+            out = srAddSymbol(
+                out,
+                selfSymbol(frontTokenTextAt(tokens, idx), "variant", "", 0, 0, idx, idx + 1, true),
+            )
+        }
+    }
+    out
+}
+
+fn selfResolveScanFunctions(
+    tokens: List<FrontToken>,
+    count: Int,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let mut out = result
+    let mut skipUntil = -1
+    for idx in 0..count {
+        if idx < skipUntil {
+            let _ = idx
+        } else if srTokenIs(tokens, idx, "fn") && srLooksLikeDeclarationStart(tokens, idx) {
+            let end = frontDeclEnd(tokens, idx, count)
+            out = srResolveFunction(tokens, idx, end, out)
+            skipUntil = end
+        }
+    }
+    out
+}
+
+fn srResolveFunction(
+    tokens: List<FrontToken>,
+    start: Int,
+    end: Int,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let mut out = result
+    let nameIdx = srNextIdent(tokens, start + 1, end)
+    let open = srFindTopLevelKind(tokens, nameIdx + 1, end, "(")
+    if open < 0 {
+        return out
+    }
+    let close = frontFindMatching(tokens, open, end, srKind("("), srKind(")"))
+    let bodyOpen = srFindTopLevelKind(tokens, close + 1, end, r"{")
+    if bodyOpen < 0 {
+        return out
+    }
+    let bodyClose = frontFindMatching(tokens, bodyOpen, end, srKind(r"{"), srKind(r"}"))
+    let mut locals: List<SelfSymbol> = []
+
+    for idx in open + 1..close {
+        let kind = frontTokenAtList(tokens, idx).kind
+        if (srKindIs(kind, "IDENT") || srKindIs(kind, "_")) && srLooksLikeParamName(
+            tokens,
+            idx,
+            open,
+        ) {
+            let name = frontTokenTextAt(tokens, idx)
+            if !(srIsDiscardName(name)) && name != "self" {
+                if srLocalExists(locals, name) {
+                    out = srDuplicate(out, name, idx, idx + 1)
+                }
+                locals.push(
+                    selfSymbol(
+                        name,
+                        "value",
+                        srParamType(tokens, idx, close),
+                        0,
+                        1,
+                        idx,
+                        idx + 1,
+                        false,
+                    ),
+                )
+            }
+        }
+    }
+
+    let mut skipUntil = -1
+    for idx in bodyOpen + 1..bodyClose {
+        if idx < skipUntil {
+            let _ = idx
+        } else if srTokenIs(tokens, idx, "let") {
+            let stmtEnd = frontFindStatementEnd(tokens, idx, bodyClose)
+            let assign = srFindFirstKind(tokens, idx, stmtEnd, "=")
+            if assign >= 0 {
+                out = srResolveRefs(tokens, assign + 1, stmtEnd, locals, out)
+            }
+            let nameIdx = srLetNameIndex(tokens, idx)
+            if srTokenIs(tokens, nameIdx, "IDENT") || srTokenIs(tokens, nameIdx, "_") {
+                let name = frontTokenTextAt(tokens, nameIdx)
+                if !(srIsDiscardName(name)) {
+                    if srLocalExists(locals, name) {
+                        out = srDuplicate(out, name, nameIdx, nameIdx + 1)
+                    }
+                    locals.push(
+                        selfSymbol(
+                            name,
+                            "value",
+                            srLetAnnotatedType(tokens, idx, stmtEnd),
+                            0,
+                            1,
+                            nameIdx,
+                            nameIdx + 1,
+                            false,
+                        ),
+                    )
+                }
+            }
+            skipUntil = stmtEnd
+        } else if srTokenIs(tokens, idx, "for") {
+            out = srResolveFor(tokens, idx, bodyClose, locals, out)
+        } else if srShouldResolveIdent(tokens, idx) {
+            out = srResolveOneIdent(tokens, idx, locals, out)
+        }
+    }
+    out
+}
+
+fn srResolveFor(
+    tokens: List<FrontToken>,
+    idx: Int,
+    end: Int,
+    locals: List<SelfSymbol>,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let mut out = result
+    let bindIdx = srNextMeaningfulIndex(tokens, idx + 1, end)
+    let inIdx = srNextMeaningfulIndex(tokens, bindIdx + 1, end)
+    if srTokenIs(tokens, bindIdx, "IDENT") && srTokenIs(tokens, inIdx, "IDENT") && frontTokenTextAt(
+        tokens,
+        inIdx,
+    ) == "in" {
+        let blockOpen = srFindFirstKind(tokens, inIdx + 1, end, r"{")
+        if blockOpen > inIdx {
+            out = srResolveRefs(tokens, inIdx + 1, blockOpen, locals, out)
+        }
+        if !(srLocalExists(locals, frontTokenTextAt(tokens, bindIdx))) {
+            locals.push(
+                selfSymbol(
+                    frontTokenTextAt(tokens, bindIdx),
+                    "value",
+                    "",
+                    0,
+                    1,
+                    bindIdx,
+                    bindIdx + 1,
+                    false,
+                ),
+            )
+        }
+    }
+    out
+}
+
+fn srResolveRefs(
+    tokens: List<FrontToken>,
+    start: Int,
+    end: Int,
+    locals: List<SelfSymbol>,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let mut out = result
+    for idx in start..end {
+        if srShouldResolveIdent(tokens, idx) {
+            out = srResolveOneIdent(tokens, idx, locals, out)
+        }
+    }
+    out
+}
+
+fn srResolveOneIdent(
+    tokens: List<FrontToken>,
+    idx: Int,
+    locals: List<SelfSymbol>,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let mut out = result
+    let name = frontTokenTextAt(tokens, idx)
+    if srLocalExists(locals, name) || srTopLevelExists(out.symbols, name) || srIsBuiltinName(name) {
+        out.refs = out.refs + 1
+        return out
+    }
+    out.unresolved = out.unresolved + 1
+    out.diagnostics.push(selfResolveDiagnostic("E0500", "undefined name", name, idx, idx + 1))
+    out
+}
+
+fn srAddSymbol(result: SelfResolveResult, sym: SelfSymbol) -> SelfResolveResult {
+    let mut out = result
+    if srSymbolExistsAtDepth(out.symbols, sym.name, sym.depth) {
+        out = srDuplicate(out, sym.name, sym.start, sym.end)
+    } else if !(srIsDiscardName(sym.name)) {
+        out.symbols.push(sym)
+    }
+    out
+}
+
+fn srDuplicate(result: SelfResolveResult, name: String, start: Int, end: Int) -> SelfResolveResult {
+    let mut out = result
+    out.duplicates = out.duplicates + 1
+    out.diagnostics.push(selfResolveDiagnostic("E0501", "duplicate declaration", name, start, end))
+    out
+}
+
+fn srShouldResolveIdent(tokens: List<FrontToken>, idx: Int) -> Bool {
+    if !(srTokenIs(tokens, idx, "IDENT")) {
+        return false
+    }
+    let name = frontTokenTextAt(tokens, idx)
+    if name == "in" || name == "as" || srIsBuiltinName(name) {
+        return false
+    }
+    let prev = srPrevMeaningfulKind(tokens, idx)
+    let next = srNextMeaningfulKind(tokens, idx)
+    if srKindIs(prev, ".") || srKindIs(prev, "fn") || srKindIs(prev, "struct") || srKindIs(
+        prev,
+        "enum",
+    ) || srKindIs(prev, "interface") || srKindIs(prev, "type") || srKindIs(prev, "use") || srKindIs(
+        prev,
+        "mut",
+    ) {
+        return false
+    }
+    if srKindIs(next, ":") {
+        return false
+    }
+    true
+}
+
+fn srUseAlias(tokens: List<FrontToken>, start: Int, end: Int) -> String {
+    let mut last = ""
+    let mut afterAs = false
+    for idx in start + 1..end {
+        let tok = frontTokenAtList(tokens, idx)
+        if srKindIs(tok.kind, "IDENT") {
+            if afterAs {
+                return tok.text
+            }
+            if tok.text == "as" {
+                afterAs = true
+            } else if tok.text != "go" {
+                last = tok.text
+            }
+        }
+    }
+    last
+}
+
+fn srLetNameIndex(tokens: List<FrontToken>, start: Int) -> Int {
+    let mut idx = start + 1
+    if srTokenIs(tokens, idx, "mut") {
+        idx = idx + 1
+    }
+    idx
+}
+
+fn srLetAnnotatedType(tokens: List<FrontToken>, start: Int, end: Int) -> String {
+    let nameIdx = srLetNameIndex(tokens, start)
+    let colon = srFindFirstKind(tokens, nameIdx + 1, end, ":")
+    if colon >= 0 {
+        return srTypeNameAt(tokens, colon + 1, end)
+    }
+    ""
+}
+
+fn srParamType(tokens: List<FrontToken>, nameIdx: Int, close: Int) -> String {
+    let colon = srFindFirstKind(tokens, nameIdx + 1, close, ":")
+    if colon >= 0 {
+        return srTypeNameAt(tokens, colon + 1, close)
+    }
+    ""
+}
+
+fn srTypeNameAt(tokens: List<FrontToken>, start: Int, end: Int) -> String {
+    let idx = srNextMeaningfulIndex(tokens, start, end)
+    if idx < end {
+        let tok = frontTokenAtList(tokens, idx)
+        if srKindIs(tok.kind, "IDENT") {
+            return tok.text
+        }
+        if srKindIs(tok.kind, "(") && srTokenIs(tokens, idx + 1, ")") {
+            return "()"
+        }
+        if srKindIs(tok.kind, "fn") {
+            return "fn"
+        }
+    }
+    ""
+}
+
+fn srLocalExists(symbols: List<SelfSymbol>, name: String) -> Bool {
+    for sym in symbols {
+        if sym.name == name {
+            return true
+        }
+    }
+    false
+}
+
+fn srTopLevelExists(symbols: List<SelfSymbol>, name: String) -> Bool {
+    for sym in symbols {
+        if sym.name == name && sym.depth == 0 {
+            return true
+        }
+    }
+    false
+}
+
+fn srSymbolExistsAtDepth(symbols: List<SelfSymbol>, name: String, depth: Int) -> Bool {
+    for sym in symbols {
+        if sym.name == name && sym.depth == depth {
+            return true
+        }
+    }
+    false
+}
+
+fn srIsBuiltinName(name: String) -> Bool {
+    name == "true" || name == "false" || name == "None" || name == "Some" || name == "Ok" || name == "Err" || name == "println" || name == "panic" || name == "spawn" || name == "parallel" || name == "taskGroup" || name == "thread" || name == "Int" || name == "Float" || name == "Bool" || name == "String" || name == "Bytes" || name == "Char" || name == "Never" || name == "List" || name == "Map" || name == "Set" || name == "Option" || name == "Result" || name == "Error" || name == "Unit"
+}
+
+fn srIsDiscardName(name: String) -> Bool {
+    name == "_" || strings.HasPrefix(name, "_")
+}
+
+fn srKind(name: String) -> FrontTokenKind {
+    frontTokenKindByName(name)
+}
+
+fn srKindIs(kind: FrontTokenKind, name: String) -> Bool {
+    frontTokenKindName(kind) == name
+}
+
+fn srTokenIs(tokens: List<FrontToken>, idx: Int, name: String) -> Bool {
+    srKindIs(frontTokenAtList(tokens, idx).kind, name)
+}
+
+fn srLooksLikeDeclarationStart(tokens: List<FrontToken>, idx: Int) -> Bool {
+    let immediate = srPrevTokenKind(tokens, idx)
+    let prev = srPrevMeaningfulKind(tokens, idx)
+    srKindIs(immediate, "EOF") || srKindIs(immediate, "NEWLINE") || srKindIs(immediate, ";") || srKindIs(
+        prev,
+        "pub",
+    ) || srKindIs(prev, r"{") || srKindIs(prev, r"}")
+}
+
+fn srLooksLikeVariantName(tokens: List<FrontToken>, idx: Int, open: Int) -> Bool {
+    let prev = srPrevMeaningfulKindBounded(tokens, idx, open)
+    let next = frontTokenAtList(tokens, idx + 1).kind
+    (srKindIs(prev, r"{") || srKindIs(prev, ",") || srKindIs(prev, "NEWLINE")) && !(srKindIs(
+        next,
+        ":",
+    ))
+}
+
+fn srLooksLikeParamName(tokens: List<FrontToken>, idx: Int, open: Int) -> Bool {
+    let prev = srPrevMeaningfulKindBounded(tokens, idx, open)
+    srKindIs(prev, "(") || srKindIs(prev, ",") || srKindIs(prev, "mut")
+}
+
+fn srParamCount(tokens: List<FrontToken>, open: Int, close: Int) -> Int {
+    let mut count = 0
+    for idx in open + 1..close {
+        let kind = frontTokenAtList(tokens, idx).kind
+        if (srKindIs(kind, "IDENT") || srKindIs(kind, "_")) && srLooksLikeParamName(
+            tokens,
+            idx,
+            open,
+        ) {
+            count = count + 1
+        }
+    }
+    count
+}
+
+fn srNextIdent(tokens: List<FrontToken>, start: Int, end: Int) -> Int {
+    for idx in start..end {
+        if srTokenIs(tokens, idx, "IDENT") {
+            return idx
+        }
+    }
+    end
+}
+
+fn srFindTopLevelKind(
+    tokens: List<FrontToken>,
+    start: Int,
+    end: Int,
+    target: String,
+) -> Int {
+    let mut parenDepth = 0
+    let mut bracketDepth = 0
+    let mut braceDepth = 0
+    let mut angleDepth = 0
+    for idx in start..end {
+        let kind = frontTokenAtList(tokens, idx).kind
+        if srKindIs(kind, target) && parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0 {
+            return idx
+        }
+        if srKindIs(kind, "(") {
+            parenDepth = parenDepth + 1
+        } else if srKindIs(kind, ")") {
+            if parenDepth > 0 {
+                parenDepth = parenDepth - 1
+            }
+        } else if srKindIs(kind, "[") {
+            bracketDepth = bracketDepth + 1
+        } else if srKindIs(kind, "]") {
+            if bracketDepth > 0 {
+                bracketDepth = bracketDepth - 1
+            }
+        } else if srKindIs(kind, r"{") {
+            braceDepth = braceDepth + 1
+        } else if srKindIs(kind, r"}") {
+            if braceDepth > 0 {
+                braceDepth = braceDepth - 1
+            }
+        } else if srKindIs(kind, "<") {
+            angleDepth = angleDepth + 1
+        } else if srKindIs(kind, ">") {
+            if angleDepth > 0 {
+                angleDepth = angleDepth - 1
+            }
+        }
+    }
+    -1
+}
+
+fn srFindFirstKind(
+    tokens: List<FrontToken>,
+    start: Int,
+    end: Int,
+    target: String,
+) -> Int {
+    for idx in start..end {
+        if srTokenIs(tokens, idx, target) {
+            return idx
+        }
+    }
+    -1
+}
+
+fn srNextMeaningfulIndex(tokens: List<FrontToken>, start: Int, end: Int) -> Int {
+    for idx in start..end {
+        let kind = frontTokenAtList(tokens, idx).kind
+        if !(srKindIs(kind, "NEWLINE")) && !(srKindIs(kind, ";")) {
+            return idx
+        }
+    }
+    end
+}
+
+fn srPrevMeaningfulIs(tokens: List<FrontToken>, idx: Int, name: String) -> Bool {
+    srKindIs(srPrevMeaningfulKind(tokens, idx), name)
+}
+
+fn srPrevMeaningfulKind(tokens: List<FrontToken>, idx: Int) -> FrontTokenKind {
+    srPrevMeaningfulKindBounded(tokens, idx, 0)
+}
+
+fn srPrevTokenKind(tokens: List<FrontToken>, idx: Int) -> FrontTokenKind {
+    if idx <= 0 {
+        return srKind("EOF")
+    }
+    frontTokenAtList(tokens, idx - 1).kind
+}
+
+fn srPrevMeaningfulKindBounded(tokens: List<FrontToken>, idx: Int, floor: Int) -> FrontTokenKind {
+    let mut cur = idx - 1
+    for cur >= floor {
+        let kind = frontTokenAtList(tokens, cur).kind
+        if !(srKindIs(kind, "NEWLINE")) && !(srKindIs(kind, ";")) {
+            return kind
+        }
+        cur = cur - 1
+    }
+    srKind("EOF")
+}
+
+fn srNextMeaningfulKind(tokens: List<FrontToken>, idx: Int) -> FrontTokenKind {
+    for cur in idx + 1..frontTokenListCount(tokens) {
+        let kind = frontTokenAtList(tokens, cur).kind
+        if !(srKindIs(kind, "NEWLINE")) && !(srKindIs(kind, ";")) {
+            return kind
+        }
+    }
+    srKind("EOF")
+}

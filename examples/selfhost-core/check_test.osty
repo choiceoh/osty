@@ -1,0 +1,72 @@
+use std.testing
+
+fn testSelfCheckerAcceptsPrimitiveFlow() {
+    let result = selfCheckSource(
+        r"""
+            fn inc(x: Int) -> Int {
+                let next: Int = x + 1
+                return next
+            }
+
+            fn main() {
+                let mut value: Int = inc(1)
+                value = value + 1
+            }
+            """,
+    )
+
+    testing.assertEq(result.resolveErrors, 0)
+    testing.assertEq(selfCheckDiagnosticCount(result), 0)
+    testing.assert(result.checkedExpressions >= 3)
+}
+
+fn testSelfCheckerReportsAssignmentReturnAndConditionErrors() {
+    let result = selfCheckSource(
+        r"""
+            fn bad(flag: Bool) -> Int {
+                let count: Int = "nope"
+                let value: Int = 1
+                value = 2
+                if 1 {}
+                return flag
+            }
+            """,
+    )
+
+    testing.assertEq(result.resolveErrors, 0)
+    testing.assertEq(selfCheckCodeCount(result, "E0700"), 1)
+    testing.assertEq(selfCheckCodeCount(result, "E0725"), 1)
+    testing.assertEq(selfCheckCodeCount(result, "E0715"), 1)
+    testing.assertEq(selfCheckCodeCount(result, "E0726"), 1)
+}
+
+fn testSelfCheckerReportsCallShapeErrors() {
+    let result = selfCheckSource(
+        r"""
+            fn takesInt(value: Int) -> Int {
+                value
+            }
+
+            fn main() {
+                takesInt("bad")
+                takesInt(1, 2)
+            }
+            """,
+    )
+
+    testing.assertEq(result.resolveErrors, 0)
+    testing.assertEq(selfCheckCodeCount(result, "E0700"), 1)
+    testing.assertEq(selfCheckCodeCount(result, "E0701"), 1)
+}
+
+fn testSelfCheckerCarriesResolverErrorCount() {
+    let result = selfCheckSource(
+        r"""
+            fn main() {
+                missing()
+            }
+            """,
+    )
+
+    testing.assert(result.resolveErrors > 0)
+}
