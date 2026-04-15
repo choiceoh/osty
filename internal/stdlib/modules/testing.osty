@@ -35,3 +35,10 @@ pub fn fail(msg: String) -> Never {
 pub fn context(msg: String, body: fn() -> ()) {
     body()
 }
+
+pub fn benchmark(iterations: Int, body: fn() -> Result<(), Error>) {
+    body()
+}
+
+pub fn snapshot(name: String, output: String) {
+}

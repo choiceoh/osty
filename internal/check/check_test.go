@@ -1094,6 +1094,44 @@ fn main() {
 	assertCodes(t, runCheck(t, src), diag.CodeTypeMismatch)
 }
 
+func TestCheck_StdlibEnumerateTuplePattern(t *testing.T) {
+	src := `
+fn main() {
+    let pairs = [(1, 2), (3, 4)]
+    for (i, (a, b)) in pairs.enumerate() {
+        let total: Int = i + a + b
+    }
+}
+`
+	assertOK(t, runCheck(t, src))
+}
+
+func TestCheck_ParallelMapForm(t *testing.T) {
+	src := `
+fn main() {
+    let xs: List<Int> = [1, 2, 3]
+    let rs: List<Result<Int, Error>> = parallel(xs, 2, |x| Ok(x * 2))
+}
+`
+	assertOK(t, runCheck(t, src))
+}
+
+func TestCheck_QuestionUsesClosureReturnType(t *testing.T) {
+	src := `
+fn parse() -> Result<Int, String> {
+    Ok(1)
+}
+
+fn main() {
+    let f: fn() -> Result<Int, String> = || {
+        let x = parse()?
+        Ok(x)
+    }
+}
+`
+	assertOK(t, runCheck(t, src))
+}
+
 func TestCheck_IteratorProtocolUserDefined(t *testing.T) {
 	// A type with `iter(self) -> I` where `I` has `next(mut self) -> T?`
 	// should iterate over T in `for`.

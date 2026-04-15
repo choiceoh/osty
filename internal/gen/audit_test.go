@@ -15,9 +15,10 @@ import (
 )
 
 // TestSpecCorpusAudit runs every positive spec fixture through the
-// full pipeline (parse → resolve → check → transpile → `go build`) and
-// reports which ones survive. This is NOT an assertion — a hard fail
-// would block iteration — but it's tracked so we can see progress.
+// full pipeline (parse → resolve → check → transpile → `go vet`).
+// Check diagnostics are logged because the single-file fixture harness
+// still treats some imported stdlib/package surfaces as opaque; gen
+// must nevertheless lower every positive fixture to Go that type-checks.
 //
 // Run explicitly:
 //
@@ -42,28 +43,29 @@ func TestSpecCorpusAudit(t *testing.T) {
 		}
 		file, parseDiags := parser.ParseDiagnostics(src)
 		if hasErr(parseDiags) {
-			t.Logf("SKIP %s: parse errors", name)
+			t.Errorf("FAIL(parse) %s: parse errors (%d)", name, countErrs(parseDiags))
 			continue
 		}
 		res := resolve.File(file, resolve.NewPrelude())
 		if hasErr(res.Diags) {
-			t.Logf("SKIP %s: resolve errors (%d)", name, countErrs(res.Diags))
+			t.Errorf("FAIL(resolve) %s: resolve errors (%d)", name, countErrs(res.Diags))
 			continue
 		}
 		chk := check.File(file, res)
-		// We don't skip on check errors — the transpiler is still
-		// expected to produce SOMETHING for incomplete programs.
+		if hasErr(chk.Diags) {
+			t.Logf("WARN(check) %s: check errors (%d)", name, countErrs(chk.Diags))
+		}
 
 		goSrc, gerr := gen.Generate("main", file, res, chk)
 		if gerr != nil {
-			t.Logf("FAIL(gen) %s: %v", name, gerr)
+			t.Errorf("FAIL(gen) %s: %v", name, gerr)
 			continue
 		}
 
 		dir := t.TempDir()
 		outPath := filepath.Join(dir, "out.go")
 		if err := os.WriteFile(outPath, goSrc, 0o644); err != nil {
-			t.Logf("FAIL(write) %s: %v", name, err)
+			t.Errorf("FAIL(write) %s: %v", name, err)
 			continue
 		}
 		// `go vet` type-checks without requiring a main function, so
@@ -86,7 +88,7 @@ func TestSpecCorpusAudit(t *testing.T) {
 				msg = l
 				break
 			}
-			t.Logf("FAIL(compile) %s: %s", name, msg)
+			t.Errorf("FAIL(compile) %s: %s", name, msg)
 			continue
 		}
 		t.Logf("OK   %s (%d bytes)", name, len(goSrc))

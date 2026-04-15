@@ -89,8 +89,16 @@ func (g *gen) emitFnDeclBody(fn *ast.FnDecl, name string) {
 	g.body.write(" ")
 
 	prevRet := g.currentRetType
+	prevRetGo := g.currentRetGo
 	g.currentRetType = fn.ReturnType
-	defer func() { g.currentRetType = prevRet }()
+	g.currentRetGo = ""
+	if fn.ReturnType != nil {
+		g.currentRetGo = g.goTypeExpr(fn.ReturnType)
+	}
+	defer func() {
+		g.currentRetType = prevRet
+		g.currentRetGo = prevRetGo
+	}()
 
 	g.emitBlockAsReturn(fn.Body, fn.ReturnType != nil)
 	g.body.nl()
@@ -281,10 +289,16 @@ func (g *gen) emitMethod(typeName string, m *ast.FnDecl, enumMethod bool) {
 	prev := g.selfType
 	g.selfType = typeName
 	prevRet := g.currentRetType
+	prevRetGo := g.currentRetGo
 	g.currentRetType = m.ReturnType
+	g.currentRetGo = ""
+	if m.ReturnType != nil {
+		g.currentRetGo = g.resolveSelfType(m.ReturnType, typeName)
+	}
 	defer func() {
 		g.selfType = prev
 		g.currentRetType = prevRet
+		g.currentRetGo = prevRetGo
 	}()
 
 	if m.Body == nil {
@@ -369,6 +383,10 @@ func (g *gen) emitUseDecl(u *ast.UseDecl) {
 		if alias == "" {
 			alias = defaultAlias
 		}
+		if !g.aliasUsedAsSelector(alias) {
+			g.emitUseStub(alias, "struct{}{}", u.GoPath)
+			return
+		}
 		if alias == defaultAlias {
 			g.use(u.GoPath)
 		} else {
@@ -389,7 +407,7 @@ func (g *gen) emitUseDecl(u *ast.UseDecl) {
 		return
 	}
 	full := strings.Join(u.Path, ".")
-	if bridge := stdlibBridge(u.Path); bridge != "" {
+	if bridge := stdlibBridge(u.Path); bridge != "" && g.aliasUsedAsSelector(alias) {
 		g.use(bridge)
 		// When the Go bridge's package name already matches the
 		// Osty alias, no rebinding is needed.
@@ -403,8 +421,175 @@ func (g *gen) emitUseDecl(u *ast.UseDecl) {
 	if stub == "" {
 		stub = "struct{}{}"
 	}
+	g.emitUseStub(alias, stub, full)
+}
+
+func (g *gen) emitUseStub(alias, stub, full string) {
 	g.body.writef("\nvar %s = %s // stub for `use %s`\n",
 		mangleIdent(alias), stub, full)
+}
+
+func (g *gen) aliasUsedAsSelector(alias string) bool {
+	for _, d := range g.file.Decls {
+		if g.declUsesAliasSelector(d, alias) {
+			return true
+		}
+	}
+	for _, s := range g.file.Stmts {
+		if g.stmtUsesAliasSelector(s, alias) {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *gen) declUsesAliasSelector(d ast.Decl, alias string) bool {
+	switch d := d.(type) {
+	case *ast.FnDecl:
+		return d.Body != nil && g.stmtUsesAliasSelector(d.Body, alias)
+	case *ast.LetDecl:
+		return g.exprUsesAliasSelector(d.Value, alias)
+	case *ast.StructDecl:
+		for _, m := range d.Methods {
+			if m.Body != nil && g.stmtUsesAliasSelector(m.Body, alias) {
+				return true
+			}
+		}
+	case *ast.EnumDecl:
+		for _, m := range d.Methods {
+			if m.Body != nil && g.stmtUsesAliasSelector(m.Body, alias) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (g *gen) stmtUsesAliasSelector(s ast.Stmt, alias string) bool {
+	switch s := s.(type) {
+	case *ast.Block:
+		for _, st := range s.Stmts {
+			if g.stmtUsesAliasSelector(st, alias) {
+				return true
+			}
+		}
+	case *ast.LetStmt:
+		return g.exprUsesAliasSelector(s.Value, alias)
+	case *ast.ExprStmt:
+		return g.exprUsesAliasSelector(s.X, alias)
+	case *ast.AssignStmt:
+		if g.exprUsesAliasSelector(s.Value, alias) {
+			return true
+		}
+		for _, t := range s.Targets {
+			if g.exprUsesAliasSelector(t, alias) {
+				return true
+			}
+		}
+	case *ast.ReturnStmt:
+		return g.exprUsesAliasSelector(s.Value, alias)
+	case *ast.ForStmt:
+		return g.exprUsesAliasSelector(s.Iter, alias) ||
+			(s.Body != nil && g.stmtUsesAliasSelector(s.Body, alias))
+	case *ast.DeferStmt:
+		return g.exprUsesAliasSelector(s.X, alias)
+	case *ast.ChanSendStmt:
+		return g.exprUsesAliasSelector(s.Channel, alias) ||
+			g.exprUsesAliasSelector(s.Value, alias)
+	}
+	return false
+}
+
+func (g *gen) exprUsesAliasSelector(e ast.Expr, alias string) bool {
+	switch e := e.(type) {
+	case nil:
+		return false
+	case *ast.FieldExpr:
+		if id, ok := e.X.(*ast.Ident); ok && id.Name == alias {
+			return true
+		}
+		return g.exprUsesAliasSelector(e.X, alias)
+	case *ast.CallExpr:
+		if g.exprUsesAliasSelector(e.Fn, alias) {
+			return true
+		}
+		for _, a := range e.Args {
+			if g.exprUsesAliasSelector(a.Value, alias) {
+				return true
+			}
+		}
+	case *ast.StringLit:
+		for _, p := range e.Parts {
+			if !p.IsLit && g.exprUsesAliasSelector(p.Expr, alias) {
+				return true
+			}
+		}
+	case *ast.ParenExpr:
+		return g.exprUsesAliasSelector(e.X, alias)
+	case *ast.UnaryExpr:
+		return g.exprUsesAliasSelector(e.X, alias)
+	case *ast.BinaryExpr:
+		return g.exprUsesAliasSelector(e.Left, alias) ||
+			g.exprUsesAliasSelector(e.Right, alias)
+	case *ast.QuestionExpr:
+		return g.exprUsesAliasSelector(e.X, alias)
+	case *ast.IndexExpr:
+		return g.exprUsesAliasSelector(e.X, alias) ||
+			g.exprUsesAliasSelector(e.Index, alias)
+	case *ast.TurbofishExpr:
+		return g.exprUsesAliasSelector(e.Base, alias)
+	case *ast.RangeExpr:
+		return g.exprUsesAliasSelector(e.Start, alias) ||
+			g.exprUsesAliasSelector(e.Stop, alias)
+	case *ast.TupleExpr:
+		for _, x := range e.Elems {
+			if g.exprUsesAliasSelector(x, alias) {
+				return true
+			}
+		}
+	case *ast.ListExpr:
+		for _, x := range e.Elems {
+			if g.exprUsesAliasSelector(x, alias) {
+				return true
+			}
+		}
+	case *ast.MapExpr:
+		for _, ent := range e.Entries {
+			if g.exprUsesAliasSelector(ent.Key, alias) ||
+				g.exprUsesAliasSelector(ent.Value, alias) {
+				return true
+			}
+		}
+	case *ast.StructLit:
+		if g.exprUsesAliasSelector(e.Type, alias) ||
+			g.exprUsesAliasSelector(e.Spread, alias) {
+			return true
+		}
+		for _, f := range e.Fields {
+			if g.exprUsesAliasSelector(f.Value, alias) {
+				return true
+			}
+		}
+	case *ast.IfExpr:
+		return g.exprUsesAliasSelector(e.Cond, alias) ||
+			(e.Then != nil && g.stmtUsesAliasSelector(e.Then, alias)) ||
+			g.exprUsesAliasSelector(e.Else, alias)
+	case *ast.MatchExpr:
+		if g.exprUsesAliasSelector(e.Scrutinee, alias) {
+			return true
+		}
+		for _, a := range e.Arms {
+			if g.exprUsesAliasSelector(a.Guard, alias) ||
+				g.exprUsesAliasSelector(a.Body, alias) {
+				return true
+			}
+		}
+	case *ast.ClosureExpr:
+		return g.exprUsesAliasSelector(e.Body, alias)
+	case *ast.Block:
+		return g.stmtUsesAliasSelector(e, alias)
+	}
+	return false
 }
 
 // stdlibBridge maps an Osty stdlib module path to a Go package whose
@@ -447,11 +632,13 @@ func knownStdlibStub(path []string) string {
 			assertEq  func(...any)
 			context   func(...any)
 			benchmark func(...any)
+			snapshot  func(...any)
 		}{
 			assert:    func(...any) {},
 			assertEq:  func(...any) {},
 			context:   func(...any) {},
 			benchmark: func(...any) {},
+			snapshot:  func(...any) {},
 		}`
 	case "thread":
 		return `struct {
@@ -459,11 +646,13 @@ func knownStdlibStub(path []string) string {
 			race       func(...any) any
 			chan_      func(...any) any
 			select_    func(...any) any
+			isCancelled func() bool
 		}{
 			collectAll: func(...any) any { return nil },
 			race:       func(...any) any { return nil },
 			chan_:      func(...any) any { return nil },
 			select_:    func(...any) any { return nil },
+			isCancelled: func() bool { return false },
 		}`
 	}
 	return ""
@@ -593,6 +782,14 @@ func (g *gen) isVoidExpr(e ast.Expr) bool {
 	}
 	if t := g.typeOf(call); t != nil && types.IsUnit(t) {
 		return true
+	}
+	if f, ok := call.Fn.(*ast.FieldExpr); ok {
+		if id, ok := f.X.(*ast.Ident); ok && id.Name == "testing" {
+			switch f.Name {
+			case "assert", "assertEq", "assertNe", "context", "benchmark", "snapshot":
+				return true
+			}
+		}
 	}
 	// Callee introspection: walk Fn → find the referenced FnDecl, check
 	// that it has no declared return type.

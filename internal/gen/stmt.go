@@ -218,7 +218,9 @@ func (g *gen) emitQuestionLift(name string, q *ast.QuestionExpr) {
 	if isResult {
 		// Reconstruct a Result of the enclosing function's signature.
 		retGo := "any"
-		if g.currentRetType != nil {
+		if g.currentRetGo != "" {
+			retGo = g.currentRetGo
+		} else if g.currentRetType != nil {
 			retGo = g.goTypeExpr(g.currentRetType)
 		}
 		g.body.writef("if !%s.IsOk { return %s{Error: %s.Error} }\n", tmp, retGo, tmp)
@@ -416,8 +418,17 @@ func (g *gen) emitFor(f *ast.ForStmt) {
 	if tp, ok := f.Pattern.(*ast.TuplePat); ok && len(tp.Elems) == 2 {
 		k := forPatternName(tp.Elems[0], "_")
 		v := forPatternName(tp.Elems[1], "_")
+		iter := f.Iter
+		if recv, ok := enumerateReceiver(f.Iter); ok {
+			iter = recv
+		}
+		if v == "_" {
+			if _, wildcard := tp.Elems[1].(*ast.WildcardPat); !wildcard {
+				v = g.freshVar("_it")
+			}
+		}
 		g.body.writef("for %s, %s := range ", k, v)
-		g.emitExpr(f.Iter)
+		g.emitExpr(iter)
 		g.body.writeln(" {")
 		g.body.indent()
 		if k != "_" {
@@ -425,6 +436,19 @@ func (g *gen) emitFor(f *ast.ForStmt) {
 		}
 		if v != "_" {
 			g.body.writef("_ = %s\n", v)
+		}
+		if _, id := tp.Elems[1].(*ast.IdentPat); !id {
+			if _, wildcard := tp.Elems[1].(*ast.WildcardPat); !wildcard && v != "_" {
+				synth := &ast.LetStmt{Pattern: tp.Elems[1], Value: &ast.Ident{Name: v}}
+				switch p := tp.Elems[1].(type) {
+				case *ast.TuplePat:
+					g.emitLetTupleDestructure(p, synth)
+				case *ast.StructPat:
+					g.emitLetStructDestructure(p, synth)
+				default:
+					g.body.writef("/* TODO: for tuple value pattern %T */\n", tp.Elems[1])
+				}
+			}
 		}
 		g.emitStmts(f.Body.Stmts)
 		g.body.dedent()
@@ -511,7 +535,13 @@ func (g *gen) emitForLet(f *ast.ForStmt) {
 	g.body.writeln("for {")
 	g.body.indent()
 	tmp := g.freshVar("_ol")
-	g.body.writef("%s := ", tmp)
+	if iterT := g.typeOf(f.Iter); iterT != nil && !types.IsError(iterT) {
+		g.body.writef("var %s %s = ", tmp, g.goType(iterT))
+	} else if id, ok := f.Iter.(*ast.Ident); ok && id.Name == "None" {
+		g.body.writef("var %s *any = ", tmp)
+	} else {
+		g.body.writef("%s := ", tmp)
+	}
 	g.emitExpr(f.Iter)
 	g.body.writef("\n_ = %s\n", tmp)
 	vp, ok := f.Pattern.(*ast.VariantPat)
@@ -586,6 +616,18 @@ func forPatternName(p ast.Pattern, fallback string) string {
 		return "_"
 	}
 	return fallback
+}
+
+func enumerateReceiver(e ast.Expr) (ast.Expr, bool) {
+	call, ok := e.(*ast.CallExpr)
+	if !ok || len(call.Args) != 0 {
+		return nil, false
+	}
+	field, ok := call.Fn.(*ast.FieldExpr)
+	if !ok || field.Name != "enumerate" {
+		return nil, false
+	}
+	return field.X, true
 }
 
 // emitExprAsType emits an expression with a target type context. For

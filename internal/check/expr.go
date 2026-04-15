@@ -679,6 +679,12 @@ func (c *checker) tryPackageCall(
 		return types.ErrorType, true
 	}
 	t := c.symTypeOrError(tgt)
+	var generics []*types.TypeVar
+	if types.IsError(t) {
+		if fnDecl, ok := tgt.Decl.(*ast.FnDecl); ok {
+			t = c.externalFnType(fnDecl)
+		}
+	}
 	fn, isFn := types.AsFn(t)
 	if !isFn {
 		if types.IsError(t) {
@@ -696,8 +702,7 @@ func (c *checker) tryPackageCall(
 	}
 	c.recordExpr(e.Fn, t)
 	info := c.info(tgt)
-	var generics []*types.TypeVar
-	if info != nil {
+	if info != nil && len(generics) == 0 {
 		generics = info.Generics
 	}
 	return c.applyGenericCall(e, fn, generics, hint, env), true
@@ -812,19 +817,20 @@ var stdlibMethods = map[string]types.Type{
 	"toInt64":  types.Int64,
 	"toFloat":  types.Float,
 	// Receiver-dependent — nil means "dispatch by name".
-	"get":     nil,
-	"push":    nil,
-	"map":     nil,
-	"filter":  nil,
-	"iter":    nil,
-	"entries": nil,
-	"keys":    nil,
-	"values":  nil,
-	"toList":  nil,
-	"toSet":   nil,
-	"toMap":   nil,
-	"chars":   nil,
-	"take":    nil,
+	"get":       nil,
+	"push":      nil,
+	"map":       nil,
+	"filter":    nil,
+	"iter":      nil,
+	"entries":   nil,
+	"enumerate": nil,
+	"keys":      nil,
+	"values":    nil,
+	"toList":    nil,
+	"toSet":     nil,
+	"toMap":     nil,
+	"chars":     nil,
+	"take":      nil,
 }
 
 // stdlibCallReturn synthesizes a return type for an escape-hatch stdlib
@@ -892,6 +898,9 @@ func (c *checker) stdlibCallReturn(fx *ast.FieldExpr, recvT types.Type, e *ast.C
 		c.checkExactArity(e, 0)
 		ret = c.listOf(iterElem(recvT))
 	case "entries", "keys", "values":
+		c.checkExactArity(e, 0)
+		ret = c.stdlibChainReturn(fx.Name, recvT)
+	case "enumerate":
 		c.checkExactArity(e, 0)
 		ret = c.stdlibChainReturn(fx.Name, recvT)
 	case "toSet":
@@ -1034,6 +1043,8 @@ func (c *checker) stdlibChainReturn(name string, recvT types.Type) types.Type {
 			return c.listOf(tup)
 		}
 		return list
+	case "enumerate":
+		return c.listOf(&types.Tuple{Elems: []types.Type{types.Int, elem}})
 	case "keys":
 		if n, ok := recvT.(*types.Named); ok && n.Sym != nil && n.Sym.Name == "Map" && len(n.Args) == 2 {
 			return c.listOf(n.Args[0])
@@ -1151,6 +1162,22 @@ func (c *checker) iteratorElement(t types.Type) types.Type {
 
 func (c *checker) listOf(elem types.Type) types.Type {
 	return c.namedOf("List", []types.Type{elem})
+}
+
+func (c *checker) resultOf(ok, err types.Type) types.Type {
+	return c.namedOf("Result", []types.Type{ok, err})
+}
+
+func (c *checker) externalFnType(fn *ast.FnDecl) *types.FnType {
+	params := make([]types.Type, 0, len(fn.Params))
+	for _, p := range fn.Params {
+		params = append(params, c.ffiType(p.Type))
+	}
+	var ret types.Type = types.Unit
+	if fn.ReturnType != nil {
+		ret = c.ffiType(fn.ReturnType)
+	}
+	return &types.FnType{Params: params, Return: ret}
 }
 
 func (c *checker) namedOf(name string, args []types.Type) types.Type {
@@ -1383,6 +1410,31 @@ func (c *checker) tryBuiltinCall(name string, e *ast.CallExpr, hint types.Type, 
 		}
 		return types.ErrorType
 	case "parallel":
+		// §8.3 production form:
+		//
+		//   parallel(items, concurrency, |x| work(x))
+		//
+		// maps a List<T> through a Result-returning callback and returns
+		// List<Result<R, Error>>. Keep the earlier variadic-closure form
+		// below for existing tests and simple concurrency expressions.
+		if len(e.Args) == 3 {
+			itemsT := c.checkExpr(e.Args[0].Value, nil, env)
+			if n, ok := types.AsNamed(itemsT); ok && n.Sym != nil && n.Sym.Name == "List" && len(n.Args) == 1 {
+				c.checkExpr(e.Args[1].Value, types.Int, env)
+				mapperRet := c.resultOf(types.ErrorType, c.namedOf("Error", nil))
+				if hn, ok := types.AsNamed(hint); ok && hn.Sym != nil && hn.Sym.Name == "List" && len(hn.Args) == 1 {
+					if rn, ok := types.AsNamed(hn.Args[0]); ok && rn.Sym != nil && rn.Sym.Name == "Result" && len(rn.Args) == 2 {
+						mapperRet = hn.Args[0]
+					}
+				}
+				mapperHint := &types.FnType{Params: []types.Type{n.Args[0]}, Return: mapperRet}
+				got := c.checkExpr(e.Args[2].Value, mapperHint, env)
+				if fn, ok := types.AsFn(got); ok && fn.Return != nil {
+					return c.listOf(fn.Return)
+				}
+				return c.listOf(mapperRet)
+			}
+		}
 		// §8.3: parallel(|| a, || b, ...) runs every closure concurrently
 		// and returns a List<T> in source order. All closures must
 		// agree on their return type.
@@ -1557,6 +1609,16 @@ func (c *checker) ffiType(n ast.Type) types.Type {
 			elems[i] = c.ffiType(e)
 		}
 		return &types.Tuple{Elems: elems}
+	case *ast.FnType:
+		params := make([]types.Type, len(x.Params))
+		for i, p := range x.Params {
+			params[i] = c.ffiType(p)
+		}
+		var ret types.Type = types.Unit
+		if x.ReturnType != nil {
+			ret = c.ffiType(x.ReturnType)
+		}
+		return &types.FnType{Params: params, Return: ret}
 	}
 	return types.ErrorType
 }
@@ -2237,7 +2299,7 @@ func (c *checker) matchType(e *ast.MatchExpr, hint types.Type, env *env) types.T
 	return resultT
 }
 
-func (c *checker) closureType(e *ast.ClosureExpr, hint types.Type, env *env) types.Type {
+func (c *checker) closureType(e *ast.ClosureExpr, hint types.Type, parent *env) types.Type {
 	// If hint is a FnType, use its param types for closure params that
 	// lack annotations.
 	var hintFn *types.FnType
@@ -2265,7 +2327,15 @@ func (c *checker) closureType(e *ast.ClosureExpr, hint types.Type, env *env) typ
 	} else if hintFn != nil && hintFn.Return != nil {
 		retT = hintFn.Return
 	}
-	bodyT := c.checkExpr(e.Body, retT, env)
+	bodyEnv := &env{retType: retT}
+	if rn, ok := types.AsNamedByName(retT, "Result"); ok && len(rn.Args) == 2 {
+		bodyEnv.retIsResult = true
+		bodyEnv.retResultErr = rn.Args[1]
+	}
+	if _, ok := retT.(*types.Optional); ok {
+		bodyEnv.retIsOption = true
+	}
+	bodyT := c.checkExpr(e.Body, retT, bodyEnv)
 	if e.ReturnType != nil && !types.Assignable(retT, bodyT) {
 		c.errMismatch(e.Body, retT, bodyT)
 	}

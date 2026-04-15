@@ -540,6 +540,19 @@ func (g *gen) emitThreadCall(c *ast.CallExpr, f *ast.FieldExpr) bool {
 		return false
 	}
 	switch f.Name {
+	case "collectAll":
+		if g.emitThreadCollectAll(c) {
+			return true
+		}
+	case "race":
+		if g.emitThreadRace(c) {
+			return true
+		}
+	case "isCancelled":
+		if len(c.Args) == 0 {
+			g.body.write("false")
+			return true
+		}
 	case "sleep":
 		// thread.sleep(dur) → time.Sleep(dur)
 		if len(c.Args) != 1 {
@@ -557,6 +570,137 @@ func (g *gen) emitThreadCall(c *ast.CallExpr, f *ast.FieldExpr) bool {
 		return true
 	}
 	return false
+}
+
+func (g *gen) emitThreadCollectAll(c *ast.CallExpr) bool {
+	param, spawns, ok := g.threadGroupSpawnCalls(c)
+	if !ok || len(spawns) == 0 {
+		return false
+	}
+	g.needTaskGroup = true
+	g.needHandle = true
+	inner := g.spawnCallInnerGo(spawns[0])
+	ret := g.listReturnGo(c, inner)
+	g.body.writef("runTaskGroup[%s](func(%s *TaskGroup) %s {\n", ret, param, ret)
+	g.body.indent()
+	handles := make([]string, len(spawns))
+	for i, sp := range spawns {
+		h := g.freshVar("_h")
+		handles[i] = h
+		g.body.writef("%s := spawnInGroup[%s](%s, ", h, inner, param)
+		g.emitSpawnClosure(sp.Args[0].Value, types.IsUnit(g.closureReturnType(sp.Args[0].Value)))
+		g.body.writeln(")")
+	}
+	g.body.writef("return %s{", ret)
+	for i, h := range handles {
+		if i > 0 {
+			g.body.write(", ")
+		}
+		g.body.writef("%s.Join()", h)
+	}
+	g.body.writeln("}")
+	g.body.dedent()
+	g.body.write("})")
+	return true
+}
+
+func (g *gen) emitThreadRace(c *ast.CallExpr) bool {
+	param, spawns, ok := g.threadGroupSpawnCalls(c)
+	if !ok || len(spawns) == 0 {
+		return false
+	}
+	g.needTaskGroup = true
+	g.needHandle = true
+	inner := g.spawnCallInnerGo(spawns[0])
+	g.body.writef("runTaskGroup[%s](func(%s *TaskGroup) %s {\n", inner, param, inner)
+	g.body.indent()
+	handles := make([]string, len(spawns))
+	for i, sp := range spawns {
+		h := g.freshVar("_h")
+		handles[i] = h
+		g.body.writef("%s := spawnInGroup[%s](%s, ", h, inner, param)
+		g.emitSpawnClosure(sp.Args[0].Value, types.IsUnit(g.closureReturnType(sp.Args[0].Value)))
+		g.body.writeln(")")
+	}
+	g.body.writeln("select {")
+	g.body.indent()
+	for _, h := range handles {
+		g.body.writef("case v := <-%s.result:\n", h)
+		g.body.indent()
+		g.body.writeln("return v")
+		g.body.dedent()
+	}
+	g.body.dedent()
+	g.body.writeln("}")
+	g.body.dedent()
+	g.body.write("})")
+	return true
+}
+
+func (g *gen) threadGroupSpawnCalls(c *ast.CallExpr) (string, []*ast.CallExpr, bool) {
+	if c == nil || len(c.Args) != 1 {
+		return "", nil, false
+	}
+	cl, ok := c.Args[0].Value.(*ast.ClosureExpr)
+	if !ok || len(cl.Params) == 0 {
+		return "", nil, false
+	}
+	param := "g"
+	if cl.Params[0].Name != "" {
+		param = mangleIdent(cl.Params[0].Name)
+	}
+	list, ok := cl.Body.(*ast.ListExpr)
+	if !ok {
+		return "", nil, false
+	}
+	spawns := make([]*ast.CallExpr, 0, len(list.Elems))
+	for _, e := range list.Elems {
+		call, ok := e.(*ast.CallExpr)
+		if !ok || len(call.Args) != 1 {
+			return "", nil, false
+		}
+		fx, ok := call.Fn.(*ast.FieldExpr)
+		if !ok || fx.Name != "spawn" {
+			return "", nil, false
+		}
+		if id, ok := fx.X.(*ast.Ident); !ok || mangleIdent(id.Name) != param {
+			return "", nil, false
+		}
+		spawns = append(spawns, call)
+	}
+	return param, spawns, true
+}
+
+func (g *gen) spawnCallInnerGo(call *ast.CallExpr) string {
+	if call == nil || len(call.Args) != 1 {
+		return "any"
+	}
+	t := g.closureReturnType(call.Args[0].Value)
+	if t == nil || types.IsError(t) {
+		return "any"
+	}
+	if types.IsUnit(t) {
+		return "struct{}"
+	}
+	return g.goType(t)
+}
+
+func (g *gen) closureReturnType(e ast.Expr) types.Type {
+	if t := g.typeOf(e); t != nil {
+		if fn, ok := t.(*types.FnType); ok {
+			return fn.Return
+		}
+	}
+	return nil
+}
+
+func (g *gen) listReturnGo(call *ast.CallExpr, elemGo string) string {
+	if t := g.typeOf(call); t != nil {
+		if n, ok := t.(*types.Named); ok && n.Sym != nil && n.Sym.Name == "List" && len(n.Args) == 1 {
+			return g.goType(t)
+		}
+	}
+	return "[]" + elemGo
 }
 
 // emitVariantCtor writes `Shape(Shape_Circle{F0: a0, F1: a1})` for
@@ -747,6 +891,19 @@ func (g *gen) emitBuiltinCall(name string, args []*ast.Arg, call *ast.CallExpr) 
 			return true
 		}
 	case "parallel":
+		if len(args) == 3 {
+			if itemGo, resultGo, ok := g.parallelMapTypes(call); ok {
+				g.needTaskGroup = true
+				g.body.writef("runParallelMap[%s, %s](", itemGo, resultGo)
+				g.emitExpr(args[0].Value)
+				g.body.write(", ")
+				g.emitExpr(args[1].Value)
+				g.body.write(", ")
+				g.emitExpr(args[2].Value)
+				g.body.write(")")
+				return true
+			}
+		}
 		// §8.3: parallel(|| a, || b, ...) → runParallel[T](bodies...).
 		// Every closure must return the same T; we pull T from the
 		// first argument's inferred FnType return.
@@ -828,6 +985,25 @@ func (g *gen) emitCallArgList(args []*ast.Arg) {
 		}
 		g.emitExpr(a.Value)
 	}
+}
+
+func (g *gen) parallelMapTypes(call *ast.CallExpr) (itemGo, resultGo string, ok bool) {
+	if call == nil || len(call.Args) != 3 {
+		return "", "", false
+	}
+	itemsT := g.typeOf(call.Args[0].Value)
+	n, ok := itemsT.(*types.Named)
+	if !ok || n.Sym == nil || n.Sym.Name != "List" || len(n.Args) != 1 {
+		return "", "", false
+	}
+	itemGo = g.goType(n.Args[0])
+	resultGo = "any"
+	if t := g.typeOf(call); t != nil {
+		if ln, ok := t.(*types.Named); ok && ln.Sym != nil && ln.Sym.Name == "List" && len(ln.Args) == 1 {
+			resultGo = g.goType(ln.Args[0])
+		}
+	}
+	return itemGo, resultGo, true
 }
 
 // handleInnerTypeFromCall inspects a spawn/spawn-like call's inferred
@@ -1559,6 +1735,21 @@ func (g *gen) emitClosure(c *ast.ClosureExpr) {
 		// rest of Osty's untyped-numeric default (§2.2).
 		g.body.write("int ")
 	}
+	closureRetGo := ""
+	if c.ReturnType != nil {
+		closureRetGo = g.goTypeExpr(c.ReturnType)
+	} else if inferred != nil && inferred.Return != nil &&
+		!types.IsUnit(inferred.Return) && !types.IsError(inferred.Return) {
+		closureRetGo = g.goType(inferred.Return)
+	}
+	prevRetType := g.currentRetType
+	prevRetGo := g.currentRetGo
+	g.currentRetType = c.ReturnType
+	g.currentRetGo = closureRetGo
+	defer func() {
+		g.currentRetType = prevRetType
+		g.currentRetGo = prevRetGo
+	}()
 	// Body may be a Block (return needs to come from its final expr)
 	// or a single expression (wrap in { return <expr> }). In either
 	// case, emit destructure bindings first.
