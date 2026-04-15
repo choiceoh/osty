@@ -287,4 +287,3 @@ pub fn f() {}`)
 }
 
 // ---- Miscellaneous cross-phase correctness ----
-

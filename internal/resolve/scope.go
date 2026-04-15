@@ -20,18 +20,18 @@ import (
 type SymbolKind int
 
 const (
-	SymUnknown SymbolKind = iota
-	SymFn               // top-level or method `fn`
-	SymStruct           // `struct Name`
-	SymEnum             // `enum Name`
-	SymInterface        // `interface Name`
-	SymTypeAlias        // `type Name = ...`
-	SymLet              // `let` binding (immutable or mutable)
-	SymParam            // function/closure parameter
-	SymVariant          // enum variant (`Some`, `None`, `Ok`, `Err`, ...)
-	SymGeneric          // `T` type parameter
-	SymPackage          // alias bound by a `use` declaration
-	SymBuiltin          // primitive type or prelude name
+	SymUnknown   SymbolKind = iota
+	SymFn                   // top-level or method `fn`
+	SymStruct               // `struct Name`
+	SymEnum                 // `enum Name`
+	SymInterface            // `interface Name`
+	SymTypeAlias            // `type Name = ...`
+	SymLet                  // `let` binding (immutable or mutable)
+	SymParam                // function/closure parameter
+	SymVariant              // enum variant (`Some`, `None`, `Ok`, `Err`, ...)
+	SymGeneric              // `T` type parameter
+	SymPackage              // alias bound by a `use` declaration
+	SymBuiltin              // primitive type or prelude name
 )
 
 func (k SymbolKind) String() string {

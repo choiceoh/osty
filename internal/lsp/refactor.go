@@ -14,10 +14,10 @@ const (
 	// Source-action kinds are surfaced in editors as bulk operations
 	// on the entire file (e.g. "Organize Imports", "Fix All"); they
 	// are not attached to a specific diagnostic.
-	CodeActionSource              = "source"
+	CodeActionSource                = "source"
 	CodeActionSourceOrganizeImports = "source.organizeImports"
-	CodeActionSourceFixAll        = "source.fixAll"
-	CodeActionSourceFixAllOsty    = "source.fixAll.osty"
+	CodeActionSourceFixAll          = "source.fixAll"
+	CodeActionSourceFixAllOsty      = "source.fixAll.osty"
 )
 
 // wantsKind reports whether the client's `context.only` filter (if

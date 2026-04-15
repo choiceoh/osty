@@ -32,8 +32,30 @@ jobs:
       - name: Download modules
         run: go mod download
 
+      - name: Format
+        run: |
+          unformatted="$(gofmt -l $(git ls-files '*.go'))"
+          if [ -n "$unformatted" ]; then
+            echo "$unformatted"
+            exit 1
+          fi
+
       - name: Build
         run: go build ./...
+
+      - name: Osty repair
+        run: |
+          osty_bin="$(mktemp -d)/osty"
+          go build -o "$osty_bin" ./cmd/osty
+          while IFS= read -r file; do
+            case "$file" in
+              testdata/spec/negative/*) continue ;;
+            esac
+            "$osty_bin" repair --check "$file"
+          done < <(git ls-files '*.osty')
+
+      - name: Osty CI
+        run: go run ./cmd/osty ci .
 
       - name: Vet
         run: go vet ./...

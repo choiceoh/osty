@@ -449,4 +449,3 @@ func isPotentialDecl(stmt string) bool {
 	// or extern variable — none of which the FFI scaffold handles.
 	return strings.Contains(stmt, "(") && strings.Contains(stmt, ")")
 }
-

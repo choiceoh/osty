@@ -12,10 +12,10 @@ import (
 //
 // The rule considers the following as a "mutation" of a binding `x`:
 //
-//   x = y           — simple assign, including compound forms (+=, -=, …)
-//   x[i] = v        — index assignment (mutates the backing collection)
-//   x.field = v     — field assignment
-//   x?.field = v    — optional-chained field assignment
+//	x = y           — simple assign, including compound forms (+=, -=, …)
+//	x[i] = v        — index assignment (mutates the backing collection)
+//	x.field = v     — field assignment
+//	x?.field = v    — optional-chained field assignment
 //
 // For each of these targets we walk down to the root identifier; that
 // identifier's referenced declaration is marked as mutated.

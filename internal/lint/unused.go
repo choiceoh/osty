@@ -10,9 +10,9 @@ import (
 // lintUnused flags every bound name that is never referenced anywhere in
 // the resolved source:
 //
-//   L0001 - let bindings (both statement lets and top-level LetDecls)
-//   L0002 - function / closure parameters
-//   L0003 - `use` aliases
+//	L0001 - let bindings (both statement lets and top-level LetDecls)
+//	L0002 - function / closure parameters
+//	L0003 - `use` aliases
 //
 // Names that intentionally go unused (`_foo`), publicly exported items
 // (`pub fn`, `pub let`), and the implicit `self` / `Self` are excluded.

@@ -70,6 +70,95 @@ version = "0.1.0"
 	}
 }
 
+// TestLoadPrefersRootPackageOverImplicitWorkspace protects the
+// repo-root case: a directory can contain fixture/sample subdirs
+// like testdata/ while still being a single package because it has
+// direct package sources of its own.
+func TestLoadPrefersRootPackageOverImplicitWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "lib.osty", "pub fn hello() {}\n")
+	fixtures := filepath.Join(dir, "testdata")
+	if err := os.Mkdir(fixtures, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, fixtures, "fixture.osty", "    pub fn unformattedFixture() {}\n")
+
+	r := NewRunner(dir, Options{Format: true, Lint: true})
+	if err := r.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(r.Packages) != 1 {
+		t.Fatalf("expected one root package, got %d", len(r.Packages))
+	}
+	if filepath.Clean(r.Packages[0].Dir) != filepath.Clean(dir) {
+		t.Fatalf("loaded package dir %q, want root %q", r.Packages[0].Dir, dir)
+	}
+
+	rep := r.Run()
+	if c := findCheck(rep, CheckFormat); !c.Passed {
+		t.Fatalf("format should ignore fixture subdir; diags=%v", diagMsgs(c.Diags))
+	}
+	if c := findCheck(rep, CheckLint); !c.Passed {
+		t.Fatalf("lint should ignore fixture subdir; diags=%v", diagMsgs(c.Diags))
+	}
+}
+
+// TestLoadSkipsExplicitCIFiles lets future-facing samples live next
+// to a package without breaking today's CI bundle. The skipped file is
+// deliberately unformatted, so format would fail if the directive were
+// ignored.
+func TestLoadSkipsExplicitCIFiles(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "lib.osty", "pub fn hello() {}\n")
+	writeFile(t, dir, "future.osty", "// osty:ci-skip\n    pub fn future() {}\n")
+
+	r := NewRunner(dir, Options{Format: true, Lint: true})
+	if err := r.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(r.Packages) != 1 {
+		t.Fatalf("expected one package, got %d", len(r.Packages))
+	}
+	if len(r.Packages[0].Files) != 1 {
+		t.Fatalf("expected one unskipped file, got %d", len(r.Packages[0].Files))
+	}
+	if got := filepath.Base(r.Packages[0].Files[0].Path); got != "lib.osty" {
+		t.Fatalf("loaded %q, want lib.osty", got)
+	}
+
+	rep := r.Run()
+	if c := findCheck(rep, CheckFormat); !c.Passed {
+		t.Fatalf("format should ignore ci-skipped file; diags=%v", diagMsgs(c.Diags))
+	}
+	if c := findCheck(rep, CheckLint); !c.Passed {
+		t.Fatalf("lint should ignore ci-skipped file; diags=%v", diagMsgs(c.Diags))
+	}
+}
+
+func TestAllCISkippedFilesDoNotFallbackWalk(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "future.osty", "// osty:ci-skip\n    pub fn future() {}\n")
+
+	r := NewRunner(dir, Options{Format: true, Lint: true})
+	if err := r.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(r.Packages) != 1 {
+		t.Fatalf("expected one package, got %d", len(r.Packages))
+	}
+	if len(r.Packages[0].Files) != 0 {
+		t.Fatalf("expected every file to be skipped, got %d", len(r.Packages[0].Files))
+	}
+
+	rep := r.Run()
+	if c := findCheck(rep, CheckFormat); !c.Passed {
+		t.Fatalf("format should not fallback-walk skipped files; diags=%v", diagMsgs(c.Diags))
+	}
+	if c := findCheck(rep, CheckLint); !c.Passed {
+		t.Fatalf("lint should tolerate all-skipped package; diags=%v", diagMsgs(c.Diags))
+	}
+}
+
 // TestPolicyFlagsMissingLicense confirms the policy pass warns
 // when license is missing and errors when the workspace member
 // points at a nonexistent dir.
@@ -283,10 +372,10 @@ fn private() {}
 	// on the must-haves so a future field addition doesn't
 	// brittle the test.
 	wantHave := map[string]string{
-		"function add":   "(a: Int, b: Int) -> Int",
-		"struct User":    "{name: String, age: Int}",
-		"enum Color":     "Red | RGB(Int, Int, Int)",
-		"field User.name": "String",
+		"function add":      "(a: Int, b: Int) -> Int",
+		"struct User":       "{name: String, age: Int}",
+		"enum Color":        "Red | RGB(Int, Int, Int)",
+		"field User.name":   "String",
 		"variant Color.RGB": "RGB(Int, Int, Int)",
 	}
 	for k, want := range wantHave {

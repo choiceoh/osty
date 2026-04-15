@@ -451,9 +451,9 @@ func (p *printer) printFnDecl(f *ast.FnDecl) {
 	// renderer gets one decision point (flat vs multi-line) that
 	// accounts for the whole signature — receiver included.
 	type paramItem struct {
-		isSelf   bool
-		mutSelf  bool
-		param    *ast.Param
+		isSelf  bool
+		mutSelf bool
+		param   *ast.Param
 	}
 	items := make([]paramItem, 0, len(f.Params)+1)
 	if f.Recv != nil {
@@ -1362,4 +1362,3 @@ func (p *printer) printPattern(pat ast.Pattern) {
 		p.write(fmt.Sprintf("/* unknown pattern %T */", pat))
 	}
 }
-

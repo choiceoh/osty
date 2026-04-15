@@ -50,7 +50,7 @@ fn test() {
 	entries := discoverTests(file, "inline.osty")
 
 	want := map[string]testKind{
-		"testBasic": kindTest,
+		"testBasic":  kindTest,
 		"benchBasic": kindBench,
 		"test":       kindTest,
 	}

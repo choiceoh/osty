@@ -195,7 +195,7 @@ func (n *NamedType) String() string {
 // lowering without matching on strings.
 type OptionalType struct{ Inner Type }
 
-func (*OptionalType) typeNode()     {}
+func (*OptionalType) typeNode()        {}
 func (o *OptionalType) String() string { return typeString(o.Inner) + "?" }
 
 // TupleType is `(T1, T2, ...)`. Single-element tuples are legal.
@@ -252,7 +252,7 @@ type TypeVar struct {
 	Owner string
 }
 
-func (*TypeVar) typeNode()     {}
+func (*TypeVar) typeNode()        {}
 func (v *TypeVar) String() string { return v.Name }
 
 // ErrType is the poisoned type used when lowering cannot recover a real
@@ -260,7 +260,7 @@ func (v *TypeVar) String() string { return v.Name }
 // reported" and avoid cascading diagnostics.
 type ErrType struct{}
 
-func (*ErrType) typeNode()   {}
+func (*ErrType) typeNode()      {}
 func (*ErrType) String() string { return "<error>" }
 
 // ErrTypeVal is the canonical poisoned singleton.
@@ -297,8 +297,8 @@ type FnDecl struct {
 	SpanV    Span
 }
 
-func (*FnDecl) declNode()        {}
-func (f *FnDecl) At() Span       { return f.SpanV }
+func (*FnDecl) declNode()          {}
+func (f *FnDecl) At() Span         { return f.SpanV }
 func (f *FnDecl) DeclName() string { return f.Name }
 
 // Param is one function / method parameter. Default is an already
@@ -332,8 +332,8 @@ type StructDecl struct {
 	SpanV    Span
 }
 
-func (*StructDecl) declNode()        {}
-func (s *StructDecl) At() Span       { return s.SpanV }
+func (*StructDecl) declNode()          {}
+func (s *StructDecl) At() Span         { return s.SpanV }
 func (s *StructDecl) DeclName() string { return s.Name }
 
 // Field is one struct field.
@@ -357,8 +357,8 @@ type EnumDecl struct {
 	SpanV    Span
 }
 
-func (*EnumDecl) declNode()        {}
-func (e *EnumDecl) At() Span       { return e.SpanV }
+func (*EnumDecl) declNode()          {}
+func (e *EnumDecl) At() Span         { return e.SpanV }
 func (e *EnumDecl) DeclName() string { return e.Name }
 
 // Variant is one enum case. Payload is the tuple of variant payload
@@ -381,8 +381,8 @@ type LetDecl struct {
 	SpanV    Span
 }
 
-func (*LetDecl) declNode()        {}
-func (l *LetDecl) At() Span       { return l.SpanV }
+func (*LetDecl) declNode()          {}
+func (l *LetDecl) At() Span         { return l.SpanV }
 func (l *LetDecl) DeclName() string { return l.Name }
 
 // ==== Statements ====
@@ -402,7 +402,7 @@ type Block struct {
 	SpanV  Span
 }
 
-func (*Block) stmtNode() {}
+func (*Block) stmtNode()  {}
 func (b *Block) At() Span { return b.SpanV }
 
 // LetStmt introduces a local binding. For the common case (`let x = e`)
@@ -419,7 +419,7 @@ type LetStmt struct {
 	SpanV   Span
 }
 
-func (*LetStmt) stmtNode() {}
+func (*LetStmt) stmtNode()  {}
 func (l *LetStmt) At() Span { return l.SpanV }
 
 // ExprStmt is an expression used in statement position (side effect).
@@ -428,7 +428,7 @@ type ExprStmt struct {
 	SpanV Span
 }
 
-func (*ExprStmt) stmtNode() {}
+func (*ExprStmt) stmtNode()  {}
 func (e *ExprStmt) At() Span { return e.SpanV }
 
 // AssignOp classifies the flavor of an assignment statement.
@@ -459,7 +459,7 @@ type AssignStmt struct {
 	SpanV   Span
 }
 
-func (*AssignStmt) stmtNode() {}
+func (*AssignStmt) stmtNode()  {}
 func (a *AssignStmt) At() Span { return a.SpanV }
 
 // ReturnStmt is `return` or `return value`. Value is nil for a bare
@@ -469,19 +469,19 @@ type ReturnStmt struct {
 	SpanV Span
 }
 
-func (*ReturnStmt) stmtNode() {}
+func (*ReturnStmt) stmtNode()  {}
 func (r *ReturnStmt) At() Span { return r.SpanV }
 
 // BreakStmt exits the innermost loop.
 type BreakStmt struct{ SpanV Span }
 
-func (*BreakStmt) stmtNode() {}
+func (*BreakStmt) stmtNode()  {}
 func (b *BreakStmt) At() Span { return b.SpanV }
 
 // ContinueStmt skips to the next loop iteration.
 type ContinueStmt struct{ SpanV Span }
 
-func (*ContinueStmt) stmtNode() {}
+func (*ContinueStmt) stmtNode()  {}
 func (c *ContinueStmt) At() Span { return c.SpanV }
 
 // IfStmt is a statement-position conditional. Else is nil when there
@@ -493,7 +493,7 @@ type IfStmt struct {
 	SpanV Span
 }
 
-func (*IfStmt) stmtNode() {}
+func (*IfStmt) stmtNode()  {}
 func (i *IfStmt) At() Span { return i.SpanV }
 
 // ForKind classifies the `for` variant.
@@ -525,7 +525,7 @@ type ForStmt struct {
 	SpanV     Span
 }
 
-func (*ForStmt) stmtNode() {}
+func (*ForStmt) stmtNode()  {}
 func (f *ForStmt) At() Span { return f.SpanV }
 
 // ErrorStmt is the poisoned statement emitted when lowering fails. The
@@ -536,7 +536,7 @@ type ErrorStmt struct {
 	SpanV Span
 }
 
-func (*ErrorStmt) stmtNode() {}
+func (*ErrorStmt) stmtNode()  {}
 func (e *ErrorStmt) At() Span { return e.SpanV }
 
 // ==== Expressions ====
@@ -558,8 +558,8 @@ type IntLit struct {
 	SpanV Span
 }
 
-func (*IntLit) exprNode() {}
-func (l *IntLit) At() Span { return l.SpanV }
+func (*IntLit) exprNode()    {}
+func (l *IntLit) At() Span   { return l.SpanV }
 func (l *IntLit) Type() Type { return l.T }
 
 // FloatLit is a float literal.
@@ -569,8 +569,8 @@ type FloatLit struct {
 	SpanV Span
 }
 
-func (*FloatLit) exprNode() {}
-func (l *FloatLit) At() Span { return l.SpanV }
+func (*FloatLit) exprNode()    {}
+func (l *FloatLit) At() Span   { return l.SpanV }
 func (l *FloatLit) Type() Type { return l.T }
 
 // BoolLit is `true` / `false`.
@@ -579,8 +579,8 @@ type BoolLit struct {
 	SpanV Span
 }
 
-func (*BoolLit) exprNode() {}
-func (l *BoolLit) At() Span { return l.SpanV }
+func (*BoolLit) exprNode()    {}
+func (l *BoolLit) At() Span   { return l.SpanV }
 func (l *BoolLit) Type() Type { return TBool }
 
 // CharLit is a single-code-point char literal.
@@ -589,8 +589,8 @@ type CharLit struct {
 	SpanV Span
 }
 
-func (*CharLit) exprNode() {}
-func (l *CharLit) At() Span { return l.SpanV }
+func (*CharLit) exprNode()    {}
+func (l *CharLit) At() Span   { return l.SpanV }
 func (l *CharLit) Type() Type { return TChar }
 
 // ByteLit is a byte literal (0..=255).
@@ -599,8 +599,8 @@ type ByteLit struct {
 	SpanV Span
 }
 
-func (*ByteLit) exprNode() {}
-func (l *ByteLit) At() Span { return l.SpanV }
+func (*ByteLit) exprNode()    {}
+func (l *ByteLit) At() Span   { return l.SpanV }
 func (l *ByteLit) Type() Type { return TByte }
 
 // StringLit is a possibly interpolated string literal. Parts alternate
@@ -621,7 +621,7 @@ type StringPart struct {
 	Expr  Expr
 }
 
-func (*StringLit) exprNode() {}
+func (*StringLit) exprNode()  {}
 func (s *StringLit) At() Span { return s.SpanV }
 func (*StringLit) Type() Type { return TString }
 
@@ -629,7 +629,7 @@ func (*StringLit) Type() Type { return TString }
 // result when no expression was provided.
 type UnitLit struct{ SpanV Span }
 
-func (*UnitLit) exprNode() {}
+func (*UnitLit) exprNode()  {}
 func (u *UnitLit) At() Span { return u.SpanV }
 func (*UnitLit) Type() Type { return TUnit }
 
@@ -638,14 +638,14 @@ func (*UnitLit) Type() Type { return TUnit }
 type IdentKind int
 
 const (
-	IdentUnknown IdentKind = iota
-	IdentLocal            // let binding or closure capture
-	IdentParam            // function/method parameter
-	IdentFn               // top-level function
-	IdentVariant          // enum variant
-	IdentTypeName         // struct/enum/interface/alias used as value
-	IdentGlobal           // top-level `let`
-	IdentBuiltin          // prelude / builtin
+	IdentUnknown  IdentKind = iota
+	IdentLocal              // let binding or closure capture
+	IdentParam              // function/method parameter
+	IdentFn                 // top-level function
+	IdentVariant            // enum variant
+	IdentTypeName           // struct/enum/interface/alias used as value
+	IdentGlobal             // top-level `let`
+	IdentBuiltin            // prelude / builtin
 )
 
 // Ident is a name reference. Kind distinguishes locals from calls on
@@ -658,18 +658,18 @@ type Ident struct {
 	SpanV Span
 }
 
-func (*Ident) exprNode() {}
-func (i *Ident) At() Span { return i.SpanV }
+func (*Ident) exprNode()    {}
+func (i *Ident) At() Span   { return i.SpanV }
 func (i *Ident) Type() Type { return i.T }
 
 // UnOp enumerates prefix operators.
 type UnOp int
 
 const (
-	UnNeg UnOp = iota // -x
-	UnPlus              // +x
-	UnNot               // !x
-	UnBitNot            // ~x
+	UnNeg    UnOp = iota // -x
+	UnPlus               // +x
+	UnNot                // !x
+	UnBitNot             // ~x
 )
 
 // UnaryExpr is a prefix unary operation.
@@ -680,8 +680,8 @@ type UnaryExpr struct {
 	SpanV Span
 }
 
-func (*UnaryExpr) exprNode() {}
-func (e *UnaryExpr) At() Span { return e.SpanV }
+func (*UnaryExpr) exprNode()    {}
+func (e *UnaryExpr) At() Span   { return e.SpanV }
 func (e *UnaryExpr) Type() Type { return e.T }
 
 // BinOp enumerates binary operators. Covers arithmetic, comparison,
@@ -722,8 +722,8 @@ type BinaryExpr struct {
 	SpanV Span
 }
 
-func (*BinaryExpr) exprNode() {}
-func (e *BinaryExpr) At() Span { return e.SpanV }
+func (*BinaryExpr) exprNode()    {}
+func (e *BinaryExpr) At() Span   { return e.SpanV }
 func (e *BinaryExpr) Type() Type { return e.T }
 
 // CallExpr is a user function / method / closure call.
@@ -734,8 +734,8 @@ type CallExpr struct {
 	SpanV  Span
 }
 
-func (*CallExpr) exprNode() {}
-func (c *CallExpr) At() Span { return c.SpanV }
+func (*CallExpr) exprNode()    {}
+func (c *CallExpr) At() Span   { return c.SpanV }
 func (c *CallExpr) Type() Type { return c.T }
 
 // IntrinsicKind enumerates the print-family intrinsics that Lower
@@ -759,7 +759,7 @@ type IntrinsicCall struct {
 	SpanV Span
 }
 
-func (*IntrinsicCall) exprNode() {}
+func (*IntrinsicCall) exprNode()  {}
 func (i *IntrinsicCall) At() Span { return i.SpanV }
 func (*IntrinsicCall) Type() Type { return TUnit }
 
@@ -772,8 +772,8 @@ type ListLit struct {
 	SpanV Span
 }
 
-func (*ListLit) exprNode() {}
-func (l *ListLit) At() Span { return l.SpanV }
+func (*ListLit) exprNode()    {}
+func (l *ListLit) At() Span   { return l.SpanV }
 func (l *ListLit) Type() Type { return &NamedType{Name: "List", Args: []Type{l.Elem}, Builtin: true} }
 
 // BlockExpr is a block used in expression position. The block's Result
@@ -785,8 +785,8 @@ type BlockExpr struct {
 	SpanV Span
 }
 
-func (*BlockExpr) exprNode() {}
-func (b *BlockExpr) At() Span { return b.SpanV }
+func (*BlockExpr) exprNode()    {}
+func (b *BlockExpr) At() Span   { return b.SpanV }
 func (b *BlockExpr) Type() Type { return b.T }
 
 // IfExpr is an `if` used in expression position. Both arms are
@@ -800,8 +800,8 @@ type IfExpr struct {
 	SpanV Span
 }
 
-func (*IfExpr) exprNode() {}
-func (i *IfExpr) At() Span { return i.SpanV }
+func (*IfExpr) exprNode()    {}
+func (i *IfExpr) At() Span   { return i.SpanV }
 func (i *IfExpr) Type() Type { return i.T }
 
 // ErrorExpr is the poisoned expression emitted when lowering fails for
@@ -812,7 +812,7 @@ type ErrorExpr struct {
 	SpanV Span
 }
 
-func (*ErrorExpr) exprNode() {}
+func (*ErrorExpr) exprNode()  {}
 func (e *ErrorExpr) At() Span { return e.SpanV }
 func (e *ErrorExpr) Type() Type {
 	if e.T == nil {
@@ -878,7 +878,7 @@ type DeferStmt struct {
 	SpanV Span
 }
 
-func (*DeferStmt) stmtNode() {}
+func (*DeferStmt) stmtNode()  {}
 func (d *DeferStmt) At() Span { return d.SpanV }
 
 // ChanSendStmt is `channel <- value`.
@@ -888,7 +888,7 @@ type ChanSendStmt struct {
 	SpanV   Span
 }
 
-func (*ChanSendStmt) stmtNode() {}
+func (*ChanSendStmt) stmtNode()  {}
 func (c *ChanSendStmt) At() Span { return c.SpanV }
 
 // MatchStmt is a `match` scrutinee used in statement position. The
@@ -901,7 +901,7 @@ type MatchStmt struct {
 	SpanV     Span
 }
 
-func (*MatchStmt) stmtNode() {}
+func (*MatchStmt) stmtNode()  {}
 func (m *MatchStmt) At() Span { return m.SpanV }
 
 // ==== Additional expressions ====
@@ -915,9 +915,9 @@ type FieldExpr struct {
 	SpanV    Span
 }
 
-func (*FieldExpr) exprNode()      {}
-func (f *FieldExpr) At() Span     { return f.SpanV }
-func (f *FieldExpr) Type() Type   { return f.T }
+func (*FieldExpr) exprNode()    {}
+func (f *FieldExpr) At() Span   { return f.SpanV }
+func (f *FieldExpr) Type() Type { return f.T }
 
 // IndexExpr is `x[i]`.
 type IndexExpr struct {

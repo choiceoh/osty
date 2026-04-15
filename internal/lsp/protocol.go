@@ -386,18 +386,18 @@ const (
 type CompletionItemKind int
 
 const (
-	CompletionItemFunction CompletionItemKind = 3
-	CompletionItemVariable CompletionItemKind = 6
-	CompletionItemField    CompletionItemKind = 5
-	CompletionItemConstructor CompletionItemKind = 4
-	CompletionItemModule   CompletionItemKind = 9
-	CompletionItemStruct   CompletionItemKind = 22
-	CompletionItemEnum     CompletionItemKind = 13
-	CompletionItemInterface CompletionItemKind = 8
-	CompletionItemEnumMember CompletionItemKind = 20
+	CompletionItemFunction      CompletionItemKind = 3
+	CompletionItemVariable      CompletionItemKind = 6
+	CompletionItemField         CompletionItemKind = 5
+	CompletionItemConstructor   CompletionItemKind = 4
+	CompletionItemModule        CompletionItemKind = 9
+	CompletionItemStruct        CompletionItemKind = 22
+	CompletionItemEnum          CompletionItemKind = 13
+	CompletionItemInterface     CompletionItemKind = 8
+	CompletionItemEnumMember    CompletionItemKind = 20
 	CompletionItemTypeParameter CompletionItemKind = 25
-	CompletionItemKeyword  CompletionItemKind = 14
-	CompletionItemValue    CompletionItemKind = 12
+	CompletionItemKeyword       CompletionItemKind = 14
+	CompletionItemValue         CompletionItemKind = 12
 )
 
 // CompletionItem is one suggestion. `Detail` shows a compact

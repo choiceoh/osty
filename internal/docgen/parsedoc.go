@@ -60,19 +60,19 @@ func (d DocInfo) IsEmpty() bool {
 // a declaration (Decl.Doc) into a DocInfo. The grammar is intentionally
 // lenient:
 //
-//  - The first non-empty paragraph becomes the Summary.
-//  - Subsequent paragraphs become Body until the first labeled section.
-//  - A line that begins with `<Label>:` at column 0 (after any leading
-//    spaces) opens a section. Currently recognised: `Params`, `Param`,
-//    `Arguments`, `Args`, `Returns`, `Return`, `Example`, `Examples`,
-//    `See`, `See also`. Unknown labels are treated as prose.
-//  - `Example:` sections consume every following line until the next
-//    section label or a double-blank break. Shared indentation is
-//    stripped so the embedded code starts at column 0.
-//  - `Params:` entries may be on the same line (`Params: x: foo`) or
-//    in an indented list below the label. Each entry is `name: desc`;
-//    continuation lines indented further are appended to the previous
-//    entry's description.
+//   - The first non-empty paragraph becomes the Summary.
+//   - Subsequent paragraphs become Body until the first labeled section.
+//   - A line that begins with `<Label>:` at column 0 (after any leading
+//     spaces) opens a section. Currently recognised: `Params`, `Param`,
+//     `Arguments`, `Args`, `Returns`, `Return`, `Example`, `Examples`,
+//     `See`, `See also`. Unknown labels are treated as prose.
+//   - `Example:` sections consume every following line until the next
+//     section label or a double-blank break. Shared indentation is
+//     stripped so the embedded code starts at column 0.
+//   - `Params:` entries may be on the same line (`Params: x: foo`) or
+//     in an indented list below the label. Each entry is `name: desc`;
+//     continuation lines indented further are appended to the previous
+//     entry's description.
 func parseDocComment(raw string) DocInfo {
 	var info DocInfo
 	if raw == "" {
