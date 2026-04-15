@@ -59,9 +59,6 @@ func (s *registrySource) candidateRegistryVersions(ctx context.Context, env *Env
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if env.Offline {
-		return nil, fmt.Errorf("registry dependency %s: offline mode forbids registry access", s.name)
-	}
 	regURL, ok := env.Registries[s.registryName]
 	if !ok || regURL == "" {
 		return nil, fmt.Errorf("registry %q not configured", s.registryName)
@@ -77,9 +74,17 @@ func (s *registrySource) candidateRegistryVersions(ctx context.Context, env *Env
 	// fast and let an offline machine fall back to the last known
 	// view of the registry.
 	client.Cache = registry.NewDirIndexCache(filepath.Join(env.CacheDir, "registry-index", sanitizeURL(regURL)))
-	versions, err := client.Versions(ctx, s.packageName)
-	if err != nil {
-		return nil, fmt.Errorf("registry dependency %s: %w", s.name, err)
+	var versions []registry.Version
+	if env.Offline {
+		versions, err = client.CachedVersions(s.packageName)
+		if err != nil {
+			return nil, fmt.Errorf("registry dependency %s: offline mode requires cached registry index: %w", s.name, err)
+		}
+	} else {
+		versions, err = client.Versions(ctx, s.packageName)
+		if err != nil {
+			return nil, fmt.Errorf("registry dependency %s: %w", s.name, err)
+		}
 	}
 	var candidates []registryCandidate
 	for _, v := range versions {
@@ -123,13 +128,27 @@ func (s *registrySource) fetchRegistryCandidate(ctx context.Context, env *Env, c
 
 	// Download + verify the tarball.
 	cacheRoot := filepath.Join(env.CacheDir, "registry", sanitizeURL(regURL), s.packageName, best)
-	if err := ensureDir(cacheRoot); err != nil {
-		return nil, err
+	if env.Offline {
+		if _, err := os.Stat(cacheRoot); err != nil {
+			if os.IsNotExist(err) {
+				return nil, fmt.Errorf("registry dependency %s@%s: offline mode requires cached registry tarball at %s",
+					s.name, best, filepath.Join(cacheRoot, "package.tgz"))
+			}
+			return nil, err
+		}
+	} else {
+		if err := ensureDir(cacheRoot); err != nil {
+			return nil, err
+		}
 	}
 	tarPath := filepath.Join(cacheRoot, "package.tgz")
 	if _, err := os.Stat(tarPath); err != nil {
 		if !os.IsNotExist(err) {
 			return nil, err
+		}
+		if env.Offline {
+			return nil, fmt.Errorf("registry dependency %s@%s: offline mode requires cached registry tarball at %s",
+				s.name, best, tarPath)
 		}
 		if err := client.DownloadTarball(ctx, s.packageName, best, tarPath); err != nil {
 			return nil, fmt.Errorf("registry dependency %s: download: %w", s.name, err)
