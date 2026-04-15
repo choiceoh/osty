@@ -9,6 +9,7 @@ import (
 
 	"github.com/osty/osty/internal/lockfile"
 	"github.com/osty/osty/internal/manifest"
+	"github.com/osty/osty/internal/pkgmgr/semver"
 )
 
 // Graph is the resolved dependency graph for a project. Nodes maps
@@ -100,6 +101,13 @@ func (r *resolver) resolveDep(ctx context.Context, d manifest.Dependency) (*Reso
 	if err != nil {
 		return nil, err
 	}
+	// If the lockfile pins a previously-resolved version that still
+	// satisfies the manifest's requirement, narrow the source so we
+	// fetch exactly that version. This keeps `osty build` reproducible
+	// across runs without forcing a network round-trip on every
+	// resolve. `osty update` clears the pin before calling Resolve, so
+	// honoring it here doesn't block intended upgrades.
+	applyLockPin(src, d, r.lock)
 	fetched, err := src.Fetch(ctx, r.env)
 	if err != nil {
 		return nil, fmt.Errorf("resolve %s: %w", d.Name, err)
@@ -267,6 +275,43 @@ func removeIfSafe(dst string) error {
 		return removeFunc(dst)
 	}
 	return removeFunc(dst)
+}
+
+// applyLockPin tightens src's version requirement to the version
+// recorded in the lockfile when (a) the lockfile has an entry for
+// this dep's local name, and (b) the pinned version still satisfies
+// the manifest's declared requirement. Currently applies only to
+// registry sources — git sources already pin via tag/rev in the
+// manifest itself, and path sources are re-read from disk.
+func applyLockPin(src Source, d manifest.Dependency, lock *lockfile.Lock) {
+	if lock == nil {
+		return
+	}
+	rs, ok := src.(*registrySource)
+	if !ok {
+		return
+	}
+	pinned := lock.FindByName(d.Name)
+	if len(pinned) == 0 {
+		return
+	}
+	// Take the first pinned version (we don't admit multiple per name
+	// in the simple resolver). Verify it still satisfies the declared
+	// req before narrowing — a manifest edit may have invalidated it.
+	pin := pinned[0]
+	pv, err := semver.ParseVersion(pin.Version)
+	if err != nil {
+		return
+	}
+	req, err := semver.ParseReq(rs.versionReq)
+	if err != nil {
+		return
+	}
+	if !req.Match(pv) {
+		return
+	}
+	// Narrow to an exact match. ParseReq accepts "=X.Y.Z".
+	rs.versionReq = "=" + pv.String()
 }
 
 // joinURIFields renders human-readable source info for logging. Kept

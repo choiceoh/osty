@@ -138,6 +138,98 @@ func TestPublishSendsHeaders(t *testing.T) {
 	}
 }
 
+// TestSearchDecodes confirms the search endpoint returns parsed
+// hits + total. Also exercises the query-string + limit handling.
+func TestSearchDecodes(t *testing.T) {
+	var gotQuery, gotLimit string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/crates" {
+			http.NotFound(w, r)
+			return
+		}
+		gotQuery = r.URL.Query().Get("q")
+		gotLimit = r.URL.Query().Get("limit")
+		_ = json.NewEncoder(w).Encode(SearchResults{
+			Total: 2,
+			Hits: []SearchHit{
+				{Name: "foo", LatestVersion: "1.0.0", Description: "a"},
+				{Name: "foobar", LatestVersion: "0.2.0"},
+			},
+		})
+	}))
+	defer srv.Close()
+	c := NewClient(srv.URL)
+	got, err := c.Search(context.Background(), "foo", 5)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if gotQuery != "foo" {
+		t.Errorf("query: %q", gotQuery)
+	}
+	if gotLimit != "5" {
+		t.Errorf("limit: %q", gotLimit)
+	}
+	if got.Total != 2 || len(got.Hits) != 2 {
+		t.Errorf("results: %+v", got)
+	}
+	if got.Hits[0].Name != "foo" {
+		t.Errorf("first hit: %+v", got.Hits[0])
+	}
+}
+
+// TestSearchRejectsEmptyQuery: a blank query must short-circuit
+// rather than hit the server with a meaningless request.
+func TestSearchRejectsEmptyQuery(t *testing.T) {
+	c := NewClient("http://example.invalid")
+	if _, err := c.Search(context.Background(), "  ", 0); err == nil {
+		t.Fatalf("expected error for blank query")
+	}
+}
+
+// TestYankAndUnyankSendCorrectMethods spins up a server that records
+// the (method, path, auth) of each request and verifies the client
+// sends DELETE …/yank and PUT …/unyank with the bearer token.
+func TestYankAndUnyankSendCorrectMethods(t *testing.T) {
+	type call struct{ method, path, auth string }
+	var calls []call
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, call{r.Method, r.URL.Path, r.Header.Get("Authorization")})
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	c := NewClient(srv.URL)
+	c.Token = "tok"
+	if err := c.Yank(context.Background(), "pkg", "1.2.3"); err != nil {
+		t.Fatalf("Yank: %v", err)
+	}
+	if err := c.Unyank(context.Background(), "pkg", "1.2.3"); err != nil {
+		t.Fatalf("Unyank: %v", err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("calls: %+v", calls)
+	}
+	if calls[0].method != http.MethodDelete || calls[0].path != "/v1/crates/pkg/1.2.3/yank" {
+		t.Errorf("yank call: %+v", calls[0])
+	}
+	if calls[1].method != http.MethodPut || calls[1].path != "/v1/crates/pkg/1.2.3/unyank" {
+		t.Errorf("unyank call: %+v", calls[1])
+	}
+	for _, c := range calls {
+		if c.auth != "Bearer tok" {
+			t.Errorf("auth missing in %+v", c)
+		}
+	}
+}
+
+// TestYankRequiresToken: unauthenticated callers must be rejected
+// before the request goes out.
+func TestYankRequiresToken(t *testing.T) {
+	c := NewClient("http://example.invalid")
+	if err := c.Yank(context.Background(), "x", "1.0.0"); err == nil {
+		t.Fatalf("expected token error")
+	}
+}
+
 // TestErrorBodyPropagated: when the registry returns an error, the
 // server's body should appear in the returned error so users see
 // the reason.

@@ -6,11 +6,14 @@
 //
 // Endpoints:
 //
-//	GET  <base>/v1/crates/<name>           → IndexEntry (JSON)
-//	GET  <base>/v1/crates/<name>/<ver>/tar → binary .tgz
-//	PUT  <base>/v1/crates/<name>/<ver>     → upload a tarball
-//	                                          (body: application/x-tar+gzip)
-//	                                          (auth: Bearer <token>)
+//	GET  <base>/v1/crates/<name>             → IndexEntry (JSON)
+//	GET  <base>/v1/crates/<name>/<ver>/tar   → binary .tgz
+//	PUT  <base>/v1/crates/<name>/<ver>       → upload a tarball
+//	                                            (body: application/x-tar+gzip)
+//	                                            (auth: Bearer <token>)
+//	GET  <base>/v1/crates?q=<query>          → SearchResults (JSON)
+//	DELETE <base>/v1/crates/<name>/<ver>/yank   → mark a version yanked (auth)
+//	PUT    <base>/v1/crates/<name>/<ver>/unyank → un-yank a version (auth)
 //
 // The client treats 4xx / 5xx responses as errors; the body is
 // surfaced unchanged. Success responses are decoded as JSON when a
@@ -215,6 +218,97 @@ func (c *Client) Publish(ctx context.Context, r PublishRequest) error {
 	}
 	defer resp.Body.Close()
 	return checkStatus(resp, http.StatusOK, http.StatusCreated, http.StatusAccepted)
+}
+
+// SearchResults is the `/v1/crates?q=...` response. Hits is in
+// registry-supplied order (typically a relevance ranking).
+type SearchResults struct {
+	Hits []SearchHit `json:"hits"`
+	// Total is the number of hits the registry could return ignoring
+	// any per-page cap. Useful for showing "showing N of M" output.
+	Total int `json:"total"`
+}
+
+// SearchHit is one result row. The registry SHOULD include enough
+// metadata to make the listing useful without a follow-up index
+// fetch — name + latest version + a one-line description is the
+// minimum.
+type SearchHit struct {
+	Name          string `json:"name"`
+	LatestVersion string `json:"latest_version"`
+	Description   string `json:"description,omitempty"`
+	Downloads     int64  `json:"downloads,omitempty"`
+}
+
+// Search queries the registry's full-text search endpoint. limit caps
+// the number of hits returned; pass 0 to use the registry's default.
+func (c *Client) Search(ctx context.Context, query string, limit int) (*SearchResults, error) {
+	if strings.TrimSpace(query) == "" {
+		return nil, fmt.Errorf("registry search: query is empty")
+	}
+	u, err := c.endpoint("v1", "crates")
+	if err != nil {
+		return nil, err
+	}
+	q := url.Values{}
+	q.Set("q", query)
+	if limit > 0 {
+		q.Set("limit", fmt.Sprintf("%d", limit))
+	}
+	u = u + "?" + q.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	c.addHeaders(req)
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := checkStatus(resp, http.StatusOK); err != nil {
+		return nil, err
+	}
+	var out SearchResults
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("decode search results: %w", err)
+	}
+	return &out, nil
+}
+
+// Yank marks (name, version) as yanked. Yanked versions remain
+// downloadable for already-locked clients but disappear from the
+// active set returned by Versions(). Requires c.Token.
+func (c *Client) Yank(ctx context.Context, name, version string) error {
+	return c.yankToggle(ctx, name, version, http.MethodDelete, "yank")
+}
+
+// Unyank reverses a previous Yank. Requires c.Token. Servers that
+// don't support unyanking should return 405 / 501 with a clear body.
+func (c *Client) Unyank(ctx context.Context, name, version string) error {
+	return c.yankToggle(ctx, name, version, http.MethodPut, "unyank")
+}
+
+func (c *Client) yankToggle(ctx context.Context, name, version, method, segment string) error {
+	if c.Token == "" {
+		return fmt.Errorf("no token configured for registry %s", c.BaseURL)
+	}
+	u, err := c.endpoint("v1", "crates", name, version, segment)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, method, u, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	c.addHeaders(req)
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return checkStatus(resp, http.StatusOK, http.StatusNoContent, http.StatusAccepted)
 }
 
 // endpoint builds a URL from BaseURL + path segments.

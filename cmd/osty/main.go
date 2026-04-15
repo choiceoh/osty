@@ -182,6 +182,35 @@ func main() {
 		runPublish(args[1:], flags)
 		return
 	}
+	// Registry-lifecycle commands. search hits the registry's
+	// full-text index; yank / unyank flag a specific (name, version)
+	// without deleting it; login / logout manage the on-disk
+	// credential store; remove (alias rm) drops a dep from the
+	// manifest and re-resolves.
+	if cmd == "search" {
+		runSearch(args[1:], flags)
+		return
+	}
+	if cmd == "yank" {
+		runYank(args[1:], flags)
+		return
+	}
+	if cmd == "unyank" {
+		runUnyank(args[1:], flags)
+		return
+	}
+	if cmd == "login" {
+		runLogin(args[1:], flags)
+		return
+	}
+	if cmd == "logout" {
+		runLogout(args[1:], flags)
+		return
+	}
+	if cmd == "remove" || cmd == "rm" {
+		runRemove(args[1:], flags)
+		return
+	}
 	// doc parses a file or directory and emits markdown/HTML API docs.
 	// It has its own flag parser for --out / --title / --format /
 	// --check / --verify-examples.
@@ -1043,6 +1072,12 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "       osty run [-- ARGS...]     (build + exec the project's binary)")
 	fmt.Fprintln(os.Stderr, "       osty test [PATH|FILTER...] (discover *_test.osty; report tests found)")
 	fmt.Fprintln(os.Stderr, "       osty publish              (pack + upload the package to a registry)")
+	fmt.Fprintln(os.Stderr, "       osty search QUERY         (search the registry for packages)")
+	fmt.Fprintln(os.Stderr, "       osty yank --version V [PKG]   (mark a published version as yanked)")
+	fmt.Fprintln(os.Stderr, "       osty unyank --version V [PKG] (un-yank a previously yanked version)")
+	fmt.Fprintln(os.Stderr, "       osty login [--registry N] (store an API token for publish/yank)")
+	fmt.Fprintln(os.Stderr, "       osty logout [--registry N|--all] (forget a stored token)")
+	fmt.Fprintln(os.Stderr, "       osty remove NAME [NAME...] (drop a dep from osty.toml; alias rm)")
 	fmt.Fprintln(os.Stderr, "       osty doc [--format FMT] [--out PATH] PATH (generate API docs; markdown or html)")
 	fmt.Fprintln(os.Stderr, "       osty ci [flags] [PATH]    (run the CI check bundle: fmt+lint+policy+lockfile)")
 	fmt.Fprintln(os.Stderr, "       osty ci snapshot [-o OUT] (capture the exported API for future semver diffing)")

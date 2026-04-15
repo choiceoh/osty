@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/osty/osty/internal/lockfile"
 	"github.com/osty/osty/internal/manifest"
 )
 
@@ -232,6 +233,62 @@ func TestLockFromGraph(t *testing.T) {
 	// Path sources have empty checksum.
 	if p.Checksum != "" {
 		t.Errorf("path dep should have empty checksum, got %q", p.Checksum)
+	}
+}
+
+// TestApplyLockPinNarrowsRegistryReq covers the lockfile-honoring
+// branch in resolveDep: when osty.lock pins a registry dep at a
+// version that still matches the manifest req, we mutate the source's
+// versionReq to the exact pinned version. Path / git deps are
+// untouched.
+func TestApplyLockPinNarrowsRegistryReq(t *testing.T) {
+	rs := &registrySource{name: "x", packageName: "x", versionReq: "^1.0.0"}
+	dep := manifest.Dependency{Name: "x", PackageName: "x", VersionReq: "^1.0.0"}
+	lock := &lockfile.Lock{
+		Version: lockfile.SchemaVersion,
+		Packages: []lockfile.Package{
+			{Name: "x", Version: "1.2.3", Source: "registry+default"},
+		},
+	}
+	applyLockPin(rs, dep, lock)
+	if rs.versionReq != "=1.2.3" {
+		t.Errorf("versionReq: got %q, want =1.2.3", rs.versionReq)
+	}
+}
+
+// TestApplyLockPinIgnoresMismatchedReq: a lockfile pin that no longer
+// satisfies the manifest's requirement (because the user edited the
+// req) must not be honored — the resolver needs to pick a fresh
+// matching version.
+func TestApplyLockPinIgnoresMismatchedReq(t *testing.T) {
+	rs := &registrySource{name: "x", packageName: "x", versionReq: "^2.0.0"}
+	dep := manifest.Dependency{Name: "x", PackageName: "x", VersionReq: "^2.0.0"}
+	lock := &lockfile.Lock{
+		Version: lockfile.SchemaVersion,
+		Packages: []lockfile.Package{
+			{Name: "x", Version: "1.2.3", Source: "registry+default"},
+		},
+	}
+	applyLockPin(rs, dep, lock)
+	if rs.versionReq != "^2.0.0" {
+		t.Errorf("versionReq: got %q, want ^2.0.0 (unchanged)", rs.versionReq)
+	}
+}
+
+// TestApplyLockPinSkipsPathSources: path / git sources don't get
+// rewritten; their identity comes from the manifest, not the lock.
+func TestApplyLockPinSkipsPathSources(t *testing.T) {
+	ps := &pathSource{name: "lib", path: "../lib"}
+	dep := manifest.Dependency{Name: "lib", Path: "../lib"}
+	lock := &lockfile.Lock{
+		Version: lockfile.SchemaVersion,
+		Packages: []lockfile.Package{
+			{Name: "lib", Version: "9.9.9", Source: "path+../lib"},
+		},
+	}
+	applyLockPin(ps, dep, lock) // must not panic; ps has no versionReq
+	if ps.path != "../lib" {
+		t.Errorf("pathSource mutated: %+v", ps)
 	}
 }
 
