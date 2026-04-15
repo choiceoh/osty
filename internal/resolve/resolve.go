@@ -258,8 +258,10 @@ func (r *resolver) declareUse(u *ast.UseDecl) {
 		// for FFI). Per §5.2 / §12.1.
 		if u.IsGoFFI {
 			name = lastSeg(u.GoPath, '/')
+		} else if u.RawPath != "" && strings.Contains(u.RawPath, "/") {
+			name = lastSeg(u.RawPath, '/')
 		} else if len(u.Path) > 0 {
-			name = u.Path[len(u.Path)-1]
+			name = lastSeg(u.Path[len(u.Path)-1], '/')
 		}
 	}
 	if name == "" {
@@ -1269,9 +1271,16 @@ func (r *resolver) resolveExpr(e ast.Expr) {
 }
 
 func (r *resolver) resolveIdent(id *ast.Ident) {
-	// `_` in expression position has already been reported by the
-	// parser (E0604). Avoid a cascading "undefined name" here.
-	if id.Name == "_" || id.Name == "<error>" {
+	if id.Name == "_" {
+		r.emit(diag.New(diag.Error,
+			"`_` is only valid as a pattern wildcard, not as an expression").
+			Code(diag.CodeWildcardInExpr).
+			PrimaryPos(id.PosV, "wildcard used as a value").
+			Hint("use `let _ = expr` to ignore a value").
+			Build())
+		return
+	}
+	if id.Name == "<error>" {
 		return
 	}
 	// `self` requires special handling: it is not a normal identifier.

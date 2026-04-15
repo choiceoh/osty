@@ -952,6 +952,63 @@ pub fn roundTrip(text: String) -> Bool {
 	}
 }
 
+func TestBytesModuleCoverage(t *testing.T) {
+	reg := Load()
+	mod := reg.Modules["bytes"]
+	if mod == nil || mod.Package == nil {
+		t.Fatal("std.bytes not loaded")
+	}
+	for _, name := range []string{
+		"len", "isEmpty", "get", "slice", "equal", "contains", "startsWith", "endsWith",
+		"indexOf", "lastIndexOf", "split", "join", "concat", "repeat", "replace",
+		"replaceAll", "trimLeft", "trimRight", "trim", "trimSpace", "toUpper",
+		"toLower", "fromString", "from", "toString", "toHex", "fromHex",
+	} {
+		sym := mod.Package.PkgScope.LookupLocal(name)
+		if sym == nil {
+			t.Errorf("std.bytes missing export %q", name)
+			continue
+		}
+		if !sym.Pub {
+			t.Errorf("std.bytes export %q is not pub", name)
+		}
+	}
+}
+
+func TestBytesPackageTypeChecks(t *testing.T) {
+	src := []byte(`use std.bytes
+
+pub fn smoke(data: Bytes) -> Result<String, Error> {
+    let raw: Bytes = bytes.from([b'a', b'b', b'c'])
+    let tail: Bytes = bytes.slice(raw, 1, 3)
+    let same: Bool = bytes.equal(tail, bytes.fromString("bc"))
+    let idx: Int = bytes.indexOf(data, bytes.fromString("x")) ?? -1
+    let joined: Bytes = bytes.join(bytes.split(data, bytes.fromString(",")), bytes.fromString("|"))
+    let hex: String = bytes.toHex(joined)
+    let decoded: Bytes = bytes.fromHex(hex)?
+    if same && idx >= -1 {
+        decoded.toString()
+    } else {
+        bytes.toString(tail)
+    }
+}
+`)
+	file, parseDiags := parser.ParseDiagnostics(src)
+	for _, d := range parseDiags {
+		if d.Severity == diag.Error {
+			t.Fatalf("parse error: %s", d.Error())
+		}
+	}
+	reg := Load()
+	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), reg)
+	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives, ResultMethods: reg.ResultMethods})
+	for _, d := range append(res.Diags, chk.Diags...) {
+		if d.Severity == diag.Error {
+			t.Errorf("unexpected std.bytes diagnostic: %s", d.Error())
+		}
+	}
+}
+
 func TestEnvModuleCoverage(t *testing.T) {
 	reg := Load()
 	mod := reg.Modules["env"]

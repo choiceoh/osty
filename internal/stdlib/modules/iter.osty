@@ -31,7 +31,15 @@ pub struct Iter<T> {
     }
 
     pub fn takeWhile(self, f: fn(T) -> Bool) -> Iter<T> {
-        self.takeWhile(f)
+        let mut out: List<T> = []
+        for item in self.items {
+            if f(item) {
+                out.push(item)
+            } else {
+                break
+            }
+        }
+        Iter { items: out }
     }
 
     pub fn skip(self, n: Int) -> Iter<T> {

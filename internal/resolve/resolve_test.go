@@ -92,6 +92,17 @@ func TestUndefinedNameSuggestion(t *testing.T) {
 	}
 }
 
+func TestURLUseDefaultAliasUsesLastPathSegment(t *testing.T) {
+	res := resolveSrc(t, `use github.com/user/lib
+
+fn f() {
+    let pkg = lib
+}`)
+	if len(res.Diags) != 0 {
+		t.Fatalf("expected URL-style use to bind alias `lib`, got %v", res.Diags)
+	}
+}
+
 func TestDuplicateTopLevel(t *testing.T) {
 	res := resolveSrc(t, `fn x() {}
 fn x() {}`)
