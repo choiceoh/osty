@@ -1,0 +1,50 @@
+// calc — small arithmetic library used as the system-under-test for
+// the example `osty test` package. Every function declared here is
+// exercised by lib_test.osty.
+
+pub enum CalcError {
+    DivideByZero,
+    NegativeRoot,
+}
+
+// add returns a + b.
+pub fn add(a: Int, b: Int) -> Int {
+    a + b
+}
+
+// sub returns a - b.
+pub fn sub(a: Int, b: Int) -> Int {
+    a - b
+}
+
+// mul returns a * b.
+pub fn mul(a: Int, b: Int) -> Int {
+    a * b
+}
+
+// div returns Ok(a / b) for non-zero b, or Err(DivideByZero).
+pub fn div(a: Int, b: Int) -> Result<Int, CalcError> {
+    if b == 0 { Err(DivideByZero) } else { Ok(a / b) }
+}
+
+// abs returns the absolute value of n.
+pub fn abs(n: Int) -> Int {
+    if n < 0 { -n } else { n }
+}
+
+// isEven reports whether n is divisible by two.
+pub fn isEven(n: Int) -> Bool {
+    n % 2 == 0
+}
+
+// clamp constrains v to the inclusive range [lo, hi]. Behaviour when
+// lo > hi is unspecified — callers are expected to pass a valid range.
+pub fn clamp(v: Int, lo: Int, hi: Int) -> Int {
+    if v < lo {
+        lo
+    } else if v > hi {
+        hi
+    } else {
+        v
+    }
+}

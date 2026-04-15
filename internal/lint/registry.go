@@ -34,6 +34,11 @@ type Rule struct {
 	DefaultSeverity diag.Severity // most rules warn; some may promote
 	Summary         string        // one-line description
 	Description     string        // paragraph(s) — examples included
+	// Fixable is true when the rule attaches a machine-applicable
+	// suggestion that `osty lint --fix` will auto-apply. UI surfaces
+	// (LSP code actions, `osty lint --list`) use this to badge rules
+	// as auto-fixable without having to run the analysis first.
+	Fixable bool
 }
 
 // allRules is the authoritative rule list. Kept in one place so adding
@@ -46,24 +51,28 @@ var allRules = []Rule{
 		Category: CategoryUnused, DefaultSeverity: diag.Warning,
 		Summary:     "`let` binding is never read",
 		Description: "A binding introduced by `let` is never referenced. Remove the binding, or rename it with a leading underscore (`_foo`) to mark intentional discarding.",
+		Fixable:     true,
 	},
 	{
 		Code: diag.CodeUnusedParam, Name: "unused_param",
 		Category: CategoryUnused, DefaultSeverity: diag.Warning,
 		Summary:     "function parameter is never used",
 		Description: "A parameter is declared but never read inside the body. Public functions are exempt since their signature is external contract.",
+		Fixable:     true,
 	},
 	{
 		Code: diag.CodeUnusedImport, Name: "unused_import",
 		Category: CategoryUnused, DefaultSeverity: diag.Warning,
 		Summary:     "`use` alias is never referenced",
 		Description: "An imported name is never used. Package mode unions usage across every file, so cross-file references count.",
+		Fixable:     true,
 	},
 	{
 		Code: diag.CodeUnusedMut, Name: "unused_mut",
 		Category: CategoryUnused, DefaultSeverity: diag.Warning,
 		Summary:     "`let mut` binding is never reassigned",
 		Description: "The binding is declared `mut` but is never the target of an assignment, compound assign, index-write, field-write, or method call through it. Drop the `mut` qualifier.",
+		Fixable:     true,
 	},
 	{
 		Code: diag.CodeUnusedField, Name: "unused_field",
@@ -128,6 +137,7 @@ var allRules = []Rule{
 		Category: CategoryDeadCode, DefaultSeverity: diag.Warning,
 		Summary:     "`return x` at tail is redundant",
 		Description: "Osty blocks return their tail expression implicitly (§6). Drop the `return` keyword when the `return` is the last statement.",
+		Fixable:     true,
 	},
 	{
 		Code: diag.CodeIdenticalBranches, Name: "identical_branches",
@@ -168,6 +178,7 @@ var allRules = []Rule{
 		Category: CategorySimplify, DefaultSeverity: diag.Warning,
 		Summary:     "`if c { true } else { false }` collapses to `c`",
 		Description: "Returning the condition directly (or `!cond`) is clearer.",
+		Fixable:     true,
 	},
 	{
 		Code: diag.CodeSelfCompare, Name: "self_compare",
@@ -180,24 +191,28 @@ var allRules = []Rule{
 		Category: CategorySimplify, DefaultSeverity: diag.Warning,
 		Summary:     "self-assignment is a no-op",
 		Description: "`x = x` does nothing. Likely a copy-paste bug — check the intended RHS.",
+		Fixable:     true,
 	},
 	{
 		Code: diag.CodeDoubleNegation, Name: "double_negation",
 		Category: CategorySimplify, DefaultSeverity: diag.Warning,
 		Summary:     "`!!x` is a no-op on Bool",
 		Description: "Drop both `!` operators.",
+		Fixable:     true,
 	},
 	{
 		Code: diag.CodeBoolLiteralCompare, Name: "bool_literal_compare",
 		Category: CategorySimplify, DefaultSeverity: diag.Warning,
 		Summary:     "comparison against a bool literal is redundant",
 		Description: "`x == true` is just `x`; `x == false` is `!x`. Let the Bool speak for itself.",
+		Fixable:     true,
 	},
 	{
 		Code: diag.CodeNegatedBoolLiteral, Name: "negated_bool_literal",
 		Category: CategorySimplify, DefaultSeverity: diag.Warning,
 		Summary:     "negated bool literal `!true` / `!false`",
 		Description: "Use the opposite literal directly.",
+		Fixable:     true,
 	},
 
 	// ---- Complexity (L0050-L0069) ----

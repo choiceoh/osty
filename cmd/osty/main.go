@@ -64,6 +64,7 @@ type cliFlags struct {
 	jsonOutput bool
 	strict     bool // lint: exit 1 on any warning
 	fix        bool // lint: apply machine-applicable suggestions in place
+	fixDryRun  bool // lint: compute fixes but print diff instead of writing
 	showScopes bool // resolve: also print the nested scope tree
 	trace      bool // global: stream per-phase timing to stderr
 	explain    bool // global: append `osty explain CODE` text per unique code
@@ -111,6 +112,14 @@ func main() {
 		runInit(args[1:])
 		return
 	}
+	// scaffold is the umbrella command for one-off code generators
+	// that aren't whole-project scaffolds. Sub-subcommands so far:
+	// fixture (table-test starter), schema (JSON sample → struct),
+	// and ffi (C header → Osty wrapper stubs).
+	if cmd == "scaffold" {
+		runScaffold(args[1:])
+		return
+	}
 	// build is the manifest-driven front-end over a directory. When
 	// passed a directory it loads osty.toml, validates, and runs
 	// check + lint across the package(s) the manifest describes.
@@ -136,6 +145,10 @@ func main() {
 		// downstream dispatch keeps seeing positional-only input.
 		if rest, present := takeBoolFlag(args[1:], "--fix"); present {
 			flags.fix = true
+			args = append([]string{"lint"}, rest...)
+		}
+		if rest, present := takeBoolFlag(args[1:], "--fix-dry-run"); present {
+			flags.fixDryRun = true
 			args = append([]string{"lint"}, rest...)
 		}
 		if rest, present := takeBoolFlag(args[1:], "--strict"); present {
@@ -180,6 +193,25 @@ func main() {
 	// --json and --trace.
 	if cmd == "pipeline" {
 		runPipeline(args[1:])
+		return
+	}
+	// Build-profile / target / feature / cache inspection commands.
+	// None of these take a file path — they operate on the project
+	// rooted at cwd (or report built-in defaults when outside one).
+	if cmd == "profiles" {
+		runProfiles(args[1:], flags)
+		return
+	}
+	if cmd == "targets" {
+		runTargets(args[1:], flags)
+		return
+	}
+	if cmd == "features" {
+		runFeatures(args[1:], flags)
+		return
+	}
+	if cmd == "cache" {
+		runCache(args[1:], flags)
 		return
 	}
 	if len(args) < 2 {
@@ -305,15 +337,27 @@ func main() {
 		all := append(append(append([]*diag.Diagnostic{}, parseDiags...), res.Diags...), chk.Diags...)
 		all = append(all, lr.Diags...)
 		printDiags(formatter, all, flags)
-		if flags.fix {
+		if flags.fix || flags.fixDryRun {
 			newSrc, applied, skipped := lint.ApplyFixes(src, lr.Diags)
-			if applied > 0 {
-				if err := os.WriteFile(path, newSrc, 0o644); err != nil {
-					fmt.Fprintf(os.Stderr, "osty lint --fix: %v\n", err)
+			switch {
+			case flags.fixDryRun:
+				// Write the would-be-applied source to stdout so users
+				// can pipe it through `diff` / `less` before committing
+				// to a real --fix pass. The file on disk is untouched.
+				if _, err := os.Stdout.Write(newSrc); err != nil {
+					fmt.Fprintf(os.Stderr, "osty lint --fix-dry-run: %v\n", err)
 					os.Exit(1)
 				}
+				fmt.Fprintf(os.Stderr, "osty lint --fix-dry-run: %d fix(es) would apply, %d overlap(s) would be skipped\n", applied, skipped)
+			case flags.fix:
+				if applied > 0 {
+					if err := os.WriteFile(path, newSrc, 0o644); err != nil {
+						fmt.Fprintf(os.Stderr, "osty lint --fix: %v\n", err)
+						os.Exit(1)
+					}
+				}
+				fmt.Fprintf(os.Stderr, "osty lint --fix: applied %d fix(es), skipped %d overlap(s)\n", applied, skipped)
 			}
-			fmt.Fprintf(os.Stderr, "osty lint --fix: applied %d fix(es), skipped %d overlap(s)\n", applied, skipped)
 		}
 		if hasError(all) || (flags.strict && hasWarning(all)) {
 			os.Exit(1)
@@ -335,6 +379,7 @@ func parseFlags() cliFlags {
 	flag.BoolVar(&f.jsonOutput, "json", false, "emit diagnostics as NDJSON on stderr")
 	flag.BoolVar(&f.strict, "strict", false, "exit non-zero on lint warnings (lint subcommand only)")
 	flag.BoolVar(&f.fix, "fix", false, "apply machine-applicable lint suggestions in place (lint subcommand only)")
+	flag.BoolVar(&f.fixDryRun, "fix-dry-run", false, "show the result of --fix on stdout without modifying files (lint subcommand only)")
 	flag.BoolVar(&f.showScopes, "scopes", false, "resolve: also dump the nested scope tree")
 	flag.BoolVar(&f.trace, "trace", false, "stream per-phase timing to stderr (single-file front-end commands)")
 	flag.BoolVar(&f.explain, "explain", false, "after diagnostics, print the `osty explain CODE` text for each unique code")
@@ -976,6 +1021,10 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "       osty run [-- ARGS...]     (build + exec the project's binary)")
 	fmt.Fprintln(os.Stderr, "       osty test [PATH|FILTER...] (discover *_test.osty; report tests found)")
 	fmt.Fprintln(os.Stderr, "       osty publish              (pack + upload the package to a registry)")
+	fmt.Fprintln(os.Stderr, "       osty profiles             (list build profiles — debug, release, ...)")
+	fmt.Fprintln(os.Stderr, "       osty targets              (list declared cross-compilation targets)")
+	fmt.Fprintln(os.Stderr, "       osty features             (list declared opt-in features)")
+	fmt.Fprintln(os.Stderr, "       osty cache [ls|clean|info] (inspect / prune the build cache)")
 	fmt.Fprintln(os.Stderr, "       osty lsp                  (language server on stdio)")
 	fmt.Fprintln(os.Stderr, "       osty explain [CODE]       (describe a diagnostic code; no arg lists every code)")
 	fmt.Fprintln(os.Stderr, "       osty pipeline FILE|DIR    (run every front-end phase; per-stage timing)")
@@ -1010,6 +1059,14 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  --dry-run          build the tarball but do not upload")
 	fmt.Fprintln(os.Stderr, "Common flags for build / add / update / run / test:")
 	fmt.Fprintln(os.Stderr, "  --offline          do not fetch dependencies; fail if caches are missing")
+	fmt.Fprintln(os.Stderr, "build / run flags:")
+	fmt.Fprintln(os.Stderr, "  --profile NAME     build profile (debug, release, profile, test, ...)")
+	fmt.Fprintln(os.Stderr, "  --release          shorthand for --profile release")
+	fmt.Fprintln(os.Stderr, "  --target TRIPLE    cross-compilation target (e.g. amd64-linux)")
+	fmt.Fprintln(os.Stderr, "  --features LIST    comma-separated feature flags to enable")
+	fmt.Fprintln(os.Stderr, "  --no-default-features  drop the manifest's [features].default set")
+	fmt.Fprintln(os.Stderr, "build-specific flags:")
+	fmt.Fprintln(os.Stderr, "  --force            ignore the build cache and rebuild from source")
 }
 
 // printTypes writes a compact `line:col <TYPE>` table for every
@@ -1191,20 +1248,22 @@ func runGen(args []string, flags cliFlags) {
 func runNew(args []string) {
 	fs := flag.NewFlagSet("new", flag.ExitOnError)
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: osty new [--bin|--lib|--workspace] [--member NAME] NAME")
+		fmt.Fprintln(os.Stderr, "usage: osty new [--bin|--lib|--workspace|--cli|--service] [--member NAME] NAME")
 	}
-	var libMode, binMode, wsMode bool
+	var libMode, binMode, wsMode, cliMode, svcMode bool
 	var member string
 	fs.BoolVar(&libMode, "lib", false, "scaffold a library project (lib.osty, no main)")
 	fs.BoolVar(&binMode, "bin", false, "scaffold a binary project (main.osty) [default]")
 	fs.BoolVar(&wsMode, "workspace", false, "scaffold a virtual workspace with one default member")
+	fs.BoolVar(&cliMode, "cli", false, "scaffold a CLI app (Args struct + run() core)")
+	fs.BoolVar(&svcMode, "service", false, "scaffold an HTTP service (Request/Response + handle())")
 	fs.StringVar(&member, "member", "core", "default-member directory name when --workspace is set")
 	_ = fs.Parse(args)
 	if fs.NArg() != 1 {
 		fs.Usage()
 		os.Exit(2)
 	}
-	kind, usageErr := pickScaffoldKind(libMode, binMode, wsMode)
+	kind, usageErr := pickScaffoldKind(libMode, binMode, wsMode, cliMode, svcMode)
 	if usageErr != "" {
 		fmt.Fprintln(os.Stderr, "osty new:", usageErr)
 		os.Exit(2)
@@ -1228,13 +1287,15 @@ func runNew(args []string) {
 func runInit(args []string) {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: osty init [--bin|--lib|--workspace] [--name NAME] [--member NAME]")
+		fmt.Fprintln(os.Stderr, "usage: osty init [--bin|--lib|--workspace|--cli|--service] [--name NAME] [--member NAME]")
 	}
-	var libMode, binMode, wsMode bool
+	var libMode, binMode, wsMode, cliMode, svcMode bool
 	var name, member string
 	fs.BoolVar(&libMode, "lib", false, "scaffold a library project (lib.osty, no main)")
 	fs.BoolVar(&binMode, "bin", false, "scaffold a binary project (main.osty) [default]")
 	fs.BoolVar(&wsMode, "workspace", false, "scaffold a virtual workspace with one default member")
+	fs.BoolVar(&cliMode, "cli", false, "scaffold a CLI app (Args struct + run() core)")
+	fs.BoolVar(&svcMode, "service", false, "scaffold an HTTP service (Request/Response + handle())")
 	fs.StringVar(&name, "name", "", "project name (defaults to current directory basename)")
 	fs.StringVar(&member, "member", "core", "default-member directory name when --workspace is set")
 	_ = fs.Parse(args)
@@ -1242,7 +1303,7 @@ func runInit(args []string) {
 		fs.Usage()
 		os.Exit(2)
 	}
-	kind, usageErr := pickScaffoldKind(libMode, binMode, wsMode)
+	kind, usageErr := pickScaffoldKind(libMode, binMode, wsMode, cliMode, svcMode)
 	if usageErr != "" {
 		fmt.Fprintln(os.Stderr, "osty init:", usageErr)
 		os.Exit(2)
@@ -1267,7 +1328,7 @@ func runInit(args []string) {
 // pickScaffoldKind validates the mutually-exclusive kind flags and
 // returns the selected Kind plus an empty string, or the zero Kind
 // and a one-line usage error message.
-func pickScaffoldKind(libMode, binMode, wsMode bool) (scaffold.Kind, string) {
+func pickScaffoldKind(libMode, binMode, wsMode, cliMode, svcMode bool) (scaffold.Kind, string) {
 	count := 0
 	if libMode {
 		count++
@@ -1278,14 +1339,24 @@ func pickScaffoldKind(libMode, binMode, wsMode bool) (scaffold.Kind, string) {
 	if wsMode {
 		count++
 	}
+	if cliMode {
+		count++
+	}
+	if svcMode {
+		count++
+	}
 	if count > 1 {
-		return 0, "--bin, --lib, and --workspace are mutually exclusive"
+		return 0, "--bin, --lib, --workspace, --cli, and --service are mutually exclusive"
 	}
 	switch {
 	case libMode:
 		return scaffold.KindLib, ""
 	case wsMode:
 		return scaffold.KindWorkspace, ""
+	case cliMode:
+		return scaffold.KindCli, ""
+	case svcMode:
+		return scaffold.KindService, ""
 	default:
 		return scaffold.KindBin, ""
 	}
@@ -1299,6 +1370,10 @@ func kindLabel(k scaffold.Kind) string {
 		return "library project"
 	case scaffold.KindWorkspace:
 		return "workspace"
+	case scaffold.KindCli:
+		return "CLI app project"
+	case scaffold.KindService:
+		return "HTTP service project"
 	default:
 		return "binary project"
 	}

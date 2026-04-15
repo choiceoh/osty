@@ -13,6 +13,7 @@ import (
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/diag"
+	"github.com/osty/osty/internal/lint"
 	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/resolve"
 )
@@ -285,7 +286,12 @@ type docAnalysis struct {
 	file    *ast.File
 	resolve *resolve.Result
 	check   *check.Result
-	diags   []*diag.Diagnostic
+	// lint is the lint pass output (may be nil if the pipeline
+	// skipped linting, e.g. a future mode flag). Downstream handlers
+	// use it for the source.organizeImports / source.fixAll actions
+	// so they don't re-run lint.File on every request.
+	lint  *lint.Result
+	diags []*diag.Diagnostic
 	// packages is every package loaded as part of this analysis.
 	// Empty for scratch/single-file buffers; one entry for package
 	// mode; one per package for workspace mode. Cross-file handlers
@@ -441,7 +447,8 @@ func (s *Server) analyzePackage(pkgDir, path string, src []byte) *docAnalysis {
 	substituteFileSource(pkg, path, src)
 	pr := resolve.ResolvePackage(pkg, s.prelude)
 	chk := check.Package(pkg, pr)
-	a := analysisForFileInPackage(pkg, pr, chk, path, src)
+	lr := lint.Package(pkg, pr, chk)
+	a := analysisForFileInPackage(pkg, pr, chk, lr, path, src)
 	if a != nil {
 		a.packages = []*resolve.Package{pkg}
 	}
@@ -480,10 +487,17 @@ func (s *Server) analyzeWorkspace(root, path string, src []byte) *docAnalysis {
 	for pkgPath, pkg := range ws.Packages {
 		for _, pf := range pkg.Files {
 			if pf.Path == path {
+				// Run lint over this package only — the owner of the
+				// opened file. Sibling packages aren't relevant for
+				// the diagnostics we publish to the editor, and
+				// linting every package in the workspace on every
+				// keystroke is too expensive.
+				lr := lint.Package(pkg, resolved[pkgPath], checks[pkgPath])
 				a := analysisForFileInPackage(
 					pkg,
 					resolved[pkgPath],
 					checks[pkgPath],
+					lr,
 					path, src,
 				)
 				if a != nil {
@@ -531,6 +545,7 @@ func analysisForFileInPackage(
 	pkg *resolve.Package,
 	pr *resolve.PackageResult,
 	chk *check.Result,
+	lr *lint.Result,
 	path string,
 	src []byte,
 ) *docAnalysis {
@@ -549,26 +564,28 @@ func analysisForFileInPackage(
 		TypeRefs:  pf.TypeRefs,
 		FileScope: pf.FileScope,
 	}
-	all := collectDiagsForFile(pr, chk, pf)
+	all := collectDiagsForFile(pr, chk, lr, pf)
 	return &docAnalysis{
 		lines:      newLineIndex(src),
 		file:       pf.File,
 		resolve:    fileRes,
 		check:      chk,
+		lint:       lr,
 		diags:      all,
 		identIndex: buildIdentIndex(fileRes),
 	}
 }
 
-// collectDiagsForFile picks out the parser, resolver, and checker
-// diagnostics that belong to one file. Parser diagnostics are already
-// file-attributed via PackageFile.ParseDiags; resolver and checker
-// diagnostics are filtered by byte-offset containment — positions
-// from different files have disjoint offset ranges because each file
-// was lexed against its own source buffer.
+// collectDiagsForFile picks out the parser, resolver, checker, and
+// lint diagnostics that belong to one file. Parser diagnostics are
+// already file-attributed via PackageFile.ParseDiags; the other three
+// stages are filtered by byte-offset containment — positions from
+// different files have disjoint offset ranges because each file was
+// lexed against its own source buffer.
 func collectDiagsForFile(
 	pr *resolve.PackageResult,
 	chk *check.Result,
+	lr *lint.Result,
 	pf *resolve.PackageFile,
 ) []*diag.Diagnostic {
 	var out []*diag.Diagnostic
@@ -582,6 +599,13 @@ func collectDiagsForFile(
 	}
 	if chk != nil {
 		for _, d := range chk.Diags {
+			if diagBelongsToFile(d, pf) {
+				out = append(out, d)
+			}
+		}
+	}
+	if lr != nil {
+		for _, d := range lr.Diags {
 			if diagBelongsToFile(d, pf) {
 				out = append(out, d)
 			}
@@ -613,15 +637,19 @@ func (s *Server) analyzeSingleFile(src []byte) *docAnalysis {
 	file, parseDiags := parser.ParseDiagnostics(src)
 	res := resolve.File(file, s.prelude)
 	chk := check.File(file, res)
-	all := make([]*diag.Diagnostic, 0, len(parseDiags)+len(res.Diags)+len(chk.Diags))
+	lr := lint.File(file, res, chk)
+	all := make([]*diag.Diagnostic, 0,
+		len(parseDiags)+len(res.Diags)+len(chk.Diags)+len(lr.Diags))
 	all = append(all, parseDiags...)
 	all = append(all, res.Diags...)
 	all = append(all, chk.Diags...)
+	all = append(all, lr.Diags...)
 	return &docAnalysis{
 		lines:      newLineIndex(src),
 		file:       file,
 		resolve:    res,
 		check:      chk,
+		lint:       lr,
 		diags:      all,
 		identIndex: buildIdentIndex(res),
 	}

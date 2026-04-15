@@ -318,9 +318,23 @@ func (g *gen) goFnTypeAST(f *ast.FnType) string {
 		b.WriteString(g.goTypeExpr(p))
 	}
 	b.WriteByte(')')
-	if f.ReturnType != nil {
+	// Unit return (`-> ()`) maps to no Go return clause — `func()`
+	// rather than `func() struct{}`. The latter is technically a
+	// valid Go type but is incompatible with `func() {…}` literals
+	// the body emitter produces, so closures passed by value would
+	// fail to compile.
+	if f.ReturnType != nil && !isUnitAST(f.ReturnType) {
 		b.WriteByte(' ')
 		b.WriteString(g.goTypeExpr(f.ReturnType))
 	}
 	return b.String()
+}
+
+// isUnitAST reports whether t is the AST representation of the Osty
+// unit type — a TupleType with no elements (`()`). Function-type
+// returns and parameter types both check this so the synthesized Go
+// signature stays compatible with `func()` closure literals.
+func isUnitAST(t ast.Type) bool {
+	tt, ok := t.(*ast.TupleType)
+	return ok && len(tt.Elems) == 0
 }

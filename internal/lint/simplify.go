@@ -198,6 +198,10 @@ func (l *linter) simplifyExpr(e ast.Expr) {
 
 // checkRedundantBool fires L0040 when both branches of an if-else are
 // a single BoolLit and they are opposite values.
+//
+// Fix: replace the whole IfExpr with either `cond` (then=true) or
+// `!(cond)` (then=false). The copy template keeps the original source
+// text of the condition so comments and whitespace survive.
 func (l *linter) checkRedundantBool(n *ast.IfExpr) {
 	if n.Else == nil {
 		return
@@ -217,15 +221,21 @@ func (l *linter) checkRedundantBool(n *ast.IfExpr) {
 		return
 	}
 	hint := "replace with the condition directly"
+	template := "%s"
 	if !thenLit.Value {
 		hint = "replace with `!(cond)`"
+		template = "!(%s)"
 	}
+	outer := diag.Span{Start: n.PosV, End: n.EndV}
+	condSpan := diag.Span{Start: n.Cond.Pos(), End: n.Cond.End()}
 	l.emit(diag.New(diag.Warning,
 		"redundant `if … { true } else { false }`").
 		Code(diag.CodeRedundantBool).
-		Primary(diag.Span{Start: n.PosV, End: n.EndV},
+		Primary(outer,
 			"this can be replaced with the condition").
 		Hint(hint).
+		SuggestCopy(outer, condSpan, template,
+			"replace with the condition directly", true).
 		Build())
 }
 
@@ -446,6 +456,10 @@ func blocksEqual(a, b *ast.Block, rr *resolve.Result) bool {
 }
 
 // ---- L0043: double negation `!!x` ----
+//
+// Fix: replace the whole `!!x` span with the innermost operand's source
+// text. Chains longer than two (`!!!x`) simplify one pair at a time —
+// the rule will re-fire on the rewritten source.
 
 func (l *linter) checkDoubleNegation(n *ast.UnaryExpr) {
 	if n.Op != token.NOT {
@@ -455,41 +469,64 @@ func (l *linter) checkDoubleNegation(n *ast.UnaryExpr) {
 	if !ok || inner.Op != token.NOT {
 		return
 	}
+	outer := diag.Span{Start: n.PosV, End: n.EndV}
+	operand := diag.Span{Start: inner.X.Pos(), End: inner.X.End()}
 	l.emit(diag.New(diag.Warning,
 		"double negation `!!` is a no-op on `Bool`").
 		Code(diag.CodeDoubleNegation).
-		Primary(diag.Span{Start: n.PosV, End: n.EndV},
+		Primary(outer,
 			"drop both `!`").
 		Hint("write the operand directly").
+		SuggestCopy(outer, operand, "%s",
+			"remove the double negation", true).
 		Build())
 }
 
 // ---- L0044: comparison with bool literal ----
+//
+// Fix: rewrite `x == true` / `x != false` to `x`, and `x == false` /
+// `x != true` to `!(x)`. The other operand's source text is copied
+// verbatim so comments and parentheses survive.
 
 func (l *linter) checkBoolLiteralCompare(n *ast.BinaryExpr) {
 	if n.Op != token.EQ && n.Op != token.NEQ {
 		return
 	}
-	if _, ok := n.Left.(*ast.BoolLit); ok {
-		l.emitBoolCompare(n)
+	if lit, ok := n.Left.(*ast.BoolLit); ok {
+		l.emitBoolCompare(n, lit, n.Right)
 		return
 	}
-	if _, ok := n.Right.(*ast.BoolLit); ok {
-		l.emitBoolCompare(n)
+	if lit, ok := n.Right.(*ast.BoolLit); ok {
+		l.emitBoolCompare(n, lit, n.Left)
 	}
 }
 
-func (l *linter) emitBoolCompare(n *ast.BinaryExpr) {
+func (l *linter) emitBoolCompare(n *ast.BinaryExpr, lit *ast.BoolLit, other ast.Expr) {
+	// True when the comparison is equivalent to `other` (as opposed to
+	// `!other`): `x == true`, `true == x`, `x != false`, `false != x`.
+	asItself := (n.Op == token.EQ) == lit.Value
+	template := "%s"
+	if !asItself {
+		template = "!(%s)"
+	}
+	outer := diag.Span{Start: n.PosV, End: n.EndV}
+	otherSpan := diag.Span{Start: other.Pos(), End: other.End()}
 	l.emit(diag.New(diag.Warning,
 		"comparing `Bool` against a literal is redundant").
 		Code(diag.CodeBoolLiteralCompare).
-		Primary(diag.Span{Start: n.PosV, End: n.EndV},
+		Primary(outer,
 			"use the Bool directly").
 		Hint("replace `x == true` with `x`, and `x == false` with `!x`").
+		SuggestCopy(outer, otherSpan, template,
+			"drop the redundant comparison", true).
 		Build())
 }
 
 // ---- L0045: negated bool literal `!true` / `!false` ----
+//
+// Fix: replace the whole `!true` / `!false` expression with the
+// opposite literal. This is a pure textual substitution, no source copy
+// needed.
 
 func (l *linter) checkNegatedBoolLiteral(n *ast.UnaryExpr) {
 	if n.Op != token.NOT {
@@ -503,11 +540,14 @@ func (l *linter) checkNegatedBoolLiteral(n *ast.UnaryExpr) {
 	if !lit.Value {
 		opposite = "true"
 	}
+	outer := diag.Span{Start: n.PosV, End: n.EndV}
 	l.emit(diag.New(diag.Warning,
 		"negated bool literal").
 		Code(diag.CodeNegatedBoolLiteral).
-		Primary(diag.Span{Start: n.PosV, End: n.EndV},
+		Primary(outer,
 			"simplify to `"+opposite+"`").
 		Hint("replace with the opposite literal directly").
+		Suggest(outer, opposite,
+			"replace with `"+opposite+"`", true).
 		Build())
 }

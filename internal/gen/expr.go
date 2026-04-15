@@ -958,6 +958,29 @@ func (g *gen) emitIfStmt(ie *ast.IfExpr) {
 	}
 }
 
+// closureBodyLooksVoid returns true when body is a Block that ends
+// in an expression statement whose call target is a FieldExpr method
+// call — `x.method(...)`. That shape is overwhelmingly void in
+// practice (print / log / assert APIs), and the checker can't always
+// pin their return type when the receiver is an opaque stdlib stub.
+// Used only as a last-resort fallback for unit-closure detection.
+func closureBodyLooksVoid(body ast.Expr) bool {
+	blk, ok := body.(*ast.Block)
+	if !ok || len(blk.Stmts) == 0 {
+		return false
+	}
+	last, ok := blk.Stmts[len(blk.Stmts)-1].(*ast.ExprStmt)
+	if !ok {
+		return false
+	}
+	call, ok := last.X.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	_, ok = call.Fn.(*ast.FieldExpr)
+	return ok
+}
+
 // emitClosure writes a Go closure. Simple cases map cleanly:
 //
 //	|x| x * 2                → func(x any) any { return x * 2 }
@@ -1021,13 +1044,31 @@ func (g *gen) emitClosure(c *ast.ClosureExpr) {
 	}
 	_ = plans // used below when emitting body destructure bindings
 	g.body.write(") ")
+	// Track whether the closure returns unit so the body emitter below
+	// can skip the `return <final-expr>` wrap and emit the final
+	// expression as a plain statement instead. A unit closure with a
+	// `return <int>` line doesn't compile as Go.
+	//
+	// Detection prefers the explicit type annotation, then the
+	// inferred FnType from the checker. When neither is available and
+	// the body is a single ExprStmt whose call target is an unknown
+	// method on an opaque value (e.g. `testing.assertEq(...)` where
+	// the checker couldn't pin the return), we treat the closure as
+	// unit — emitting `return <void-call>` would otherwise produce
+	// invalid Go. This is a Phase-1 pragma; once the checker tracks
+	// stdlib module types end-to-end the heuristic drops out.
+	unitClosure := false
 	switch {
 	case c.ReturnType != nil:
 		g.body.write(g.goTypeExpr(c.ReturnType))
 		g.body.write(" ")
-	case inferred != nil && inferred.Return != nil && !types.IsUnit(inferred.Return) && !types.IsError(inferred.Return):
+	case inferred != nil && inferred.Return != nil && types.IsUnit(inferred.Return):
+		unitClosure = true
+	case inferred != nil && inferred.Return != nil && !types.IsError(inferred.Return):
 		g.body.write(g.goType(inferred.Return))
 		g.body.write(" ")
+	case closureBodyLooksVoid(c.Body):
+		unitClosure = true
 	default:
 		g.body.write("int ")
 	}
@@ -1042,7 +1083,7 @@ func (g *gen) emitClosure(c *ast.ClosureExpr) {
 		}
 	}
 	if blk, ok := c.Body.(*ast.Block); ok && !hasDestructure {
-		g.emitBlockAsReturn(blk, true)
+		g.emitBlockAsReturn(blk, !unitClosure)
 		return
 	}
 	g.body.writeln("{")
@@ -1066,9 +1107,12 @@ func (g *gen) emitClosure(c *ast.ClosureExpr) {
 		}
 	}
 	if blk, ok := c.Body.(*ast.Block); ok {
-		// Inline the block stmts then return final expr.
+		// Inline the block stmts. For non-unit closures the final expr
+		// is lifted into a `return`; unit closures emit the final
+		// expression as a plain statement so Go doesn't reject a
+		// returned void call.
 		stmts := blk.Stmts
-		if len(stmts) > 0 {
+		if len(stmts) > 0 && !unitClosure {
 			last := stmts[len(stmts)-1]
 			if es, ok := last.(*ast.ExprStmt); ok {
 				for _, s := range stmts[:len(stmts)-1] {
@@ -1087,7 +1131,12 @@ func (g *gen) emitClosure(c *ast.ClosureExpr) {
 		g.body.write("}")
 		return
 	}
-	g.body.write("return ")
+	// Single-expression body (e.g. `|x| x + 1`). Unit closures skip
+	// the `return` lift here too — the expression runs purely for
+	// side effects.
+	if !unitClosure {
+		g.body.write("return ")
+	}
 	g.emitExpr(c.Body)
 	g.body.nl()
 	g.body.dedent()
