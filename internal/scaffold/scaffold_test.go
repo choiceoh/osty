@@ -310,29 +310,51 @@ func TestScaffoldedLibraryCompiles(t *testing.T) {
 	}
 }
 
-// TestCreateCliProject verifies the --cli layout: same fileset as a
-// binary project, but with the richer Args/run starter source and a
-// matching test file that drives `run` through the public symbols.
+// TestCreateCliProject verifies the --cli layout: a multi-file
+// binary package where main.osty is a thin entry shell, args.osty
+// owns the `Args` struct + parser, and app.osty owns the testable
+// `run` core. The test asserts the full fileset is present and that
+// each file carries its expected symbols.
 func TestCreateCliProject(t *testing.T) {
 	parent := t.TempDir()
 	dir, d := Create(Options{Name: "mycli", Parent: parent, Kind: KindCli})
 	if d != nil {
 		t.Fatalf("Create: %s", d.Error())
 	}
-	for _, name := range []string{"osty.toml", "main.osty", "main_test.osty", ".gitignore"} {
+	for _, name := range []string{
+		"osty.toml", "main.osty", "args.osty", "app.osty", "app_test.osty", ".gitignore",
+	} {
 		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
 			t.Errorf("missing %s: %v", name, err)
 		}
 	}
+	// main.osty is intentionally tiny — just `fn main()` calling
+	// parseArgs + run. Asserting on the call shape catches future
+	// regressions that try to inline logic back into main.
 	main := readFile(t, filepath.Join(dir, "main.osty"))
-	for _, want := range []string{"struct Args", "fn defaultArgs", "fn run(args: Args)", "fn main()"} {
-		if !strings.Contains(main, want) {
-			t.Errorf("main.osty missing %q:\n%s", want, main)
+	if !strings.Contains(main, "run(parseArgs(argv))") {
+		t.Errorf("main.osty should call run(parseArgs(argv)):\n%s", main)
+	}
+	args := readFile(t, filepath.Join(dir, "args.osty"))
+	for _, want := range []string{
+		"pub struct Args",
+		"pub fn defaultArgs()",
+		"pub fn parseArgs(argv: List<String>)",
+		"pub fn helpText()",
+	} {
+		if !strings.Contains(args, want) {
+			t.Errorf("args.osty missing %q:\n%s", want, args)
 		}
 	}
-	test := readFile(t, filepath.Join(dir, "main_test.osty"))
-	if !strings.Contains(test, "defaultArgs()") {
-		t.Errorf("test should drive defaultArgs():\n%s", test)
+	app := readFile(t, filepath.Join(dir, "app.osty"))
+	if !strings.Contains(app, "pub fn run(args: Args)") {
+		t.Errorf("app.osty should expose pub fn run(args: Args):\n%s", app)
+	}
+	test := readFile(t, filepath.Join(dir, "app_test.osty"))
+	for _, want := range []string{"parseArgs([])", `parseArgs(["-v"])`, "run(args)"} {
+		if !strings.Contains(test, want) {
+			t.Errorf("app_test.osty missing %q:\n%s", want, test)
+		}
 	}
 	manifest := readFile(t, filepath.Join(dir, "osty.toml"))
 	if !strings.Contains(manifest, "CLI app project") {
@@ -340,27 +362,46 @@ func TestCreateCliProject(t *testing.T) {
 	}
 }
 
-// TestCreateServiceProject verifies the --service layout.
+// TestCreateServiceProject verifies the --service layout: main.osty
+// is a thin entry, routes.osty owns Request/Response + dispatch +
+// per-route handlers, and routes_test.osty exercises every handler
+// plus the dispatch fan-out.
 func TestCreateServiceProject(t *testing.T) {
 	parent := t.TempDir()
 	dir, d := Create(Options{Name: "mysvc", Parent: parent, Kind: KindService})
 	if d != nil {
 		t.Fatalf("Create: %s", d.Error())
 	}
-	for _, name := range []string{"osty.toml", "main.osty", "main_test.osty", ".gitignore"} {
+	for _, name := range []string{
+		"osty.toml", "main.osty", "routes.osty", "routes_test.osty", ".gitignore",
+	} {
 		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
 			t.Errorf("missing %s: %v", name, err)
 		}
 	}
 	main := readFile(t, filepath.Join(dir, "main.osty"))
-	for _, want := range []string{"struct Request", "struct Response", "fn handle(req: Request) -> Response", `req.path == "/health"`} {
-		if !strings.Contains(main, want) {
-			t.Errorf("main.osty missing %q:\n%s", want, main)
+	if !strings.Contains(main, "dispatch(req)") {
+		t.Errorf("main.osty should call dispatch(req):\n%s", main)
+	}
+	routes := readFile(t, filepath.Join(dir, "routes.osty"))
+	for _, want := range []string{
+		"pub struct Request",
+		"pub struct Response",
+		"pub fn dispatch(req: Request) -> Response",
+		"pub fn healthHandler",
+		"pub fn rootHandler",
+		"pub fn notFoundHandler",
+		`req.path == "/health"`,
+	} {
+		if !strings.Contains(routes, want) {
+			t.Errorf("routes.osty missing %q:\n%s", want, routes)
 		}
 	}
-	test := readFile(t, filepath.Join(dir, "main_test.osty"))
-	if !strings.Contains(test, "handle(req)") {
-		t.Errorf("test should drive handle(req):\n%s", test)
+	test := readFile(t, filepath.Join(dir, "routes_test.osty"))
+	for _, want := range []string{"healthHandler(req)", "rootHandler(req)", "notFoundHandler(req)", "dispatch(req)"} {
+		if !strings.Contains(test, want) {
+			t.Errorf("routes_test.osty missing %q:\n%s", want, test)
+		}
 	}
 	manifest := readFile(t, filepath.Join(dir, "osty.toml"))
 	if !strings.Contains(manifest, "HTTP service project") {
@@ -368,17 +409,18 @@ func TestCreateServiceProject(t *testing.T) {
 	}
 }
 
-// TestScaffoldedCliCompiles loads the full --cli package (entry +
-// test) through resolve to ensure both files type-check together.
-// Test files reference public symbols from main.osty, so they must be
-// resolved as one package — the same approach used for --lib above.
+// TestScaffoldedCliCompiles loads the full --cli package (every
+// .osty file under the project root) through resolve. This is the
+// only meaningful guard for the multi-file kind — main.osty alone
+// references symbols from args.osty / app.osty, so a standalone
+// parse would always fail. The package-level check is what catches
+// real regressions in the templates.
 func TestScaffoldedCliCompiles(t *testing.T) {
 	parent := t.TempDir()
 	dir, d := Create(Options{Name: "democli", Parent: parent, Kind: KindCli})
 	if d != nil {
 		t.Fatalf("Create: %s", d.Error())
 	}
-	assertCompiles(t, readBytes(t, filepath.Join(dir, "main.osty")))
 	pkg, err := resolve.LoadPackageWithTests(dir)
 	if err != nil {
 		t.Fatalf("LoadPackageWithTests: %v", err)
@@ -399,7 +441,6 @@ func TestScaffoldedServiceCompiles(t *testing.T) {
 	if d != nil {
 		t.Fatalf("Create: %s", d.Error())
 	}
-	assertCompiles(t, readBytes(t, filepath.Join(dir, "main.osty")))
 	pkg, err := resolve.LoadPackageWithTests(dir)
 	if err != nil {
 		t.Fatalf("LoadPackageWithTests: %v", err)
