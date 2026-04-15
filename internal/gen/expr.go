@@ -1025,8 +1025,8 @@ func (g *gen) stdlibStructLitType(e ast.Expr) (string, bool) {
 		return "", false
 	}
 	if g.isStdlibPackageAlias(id, "csv") && f.Name == "CsvOptions" {
-		g.needCSV = true
-		return "CsvOptions", true
+		g.needCsvRuntime = true
+		return "_ostyCsvOptions", true
 	}
 	if g.isStdlibPackageAlias(id, "error") && f.Name == "BasicError" {
 		g.needErrorRuntime = true

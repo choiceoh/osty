@@ -356,10 +356,8 @@ func (g *gen) run() ([]byte, error) {
 	}
 	if g.needEncoding {
 		g.needResult = true
-		g.useAs("encoding/base64", "stdbase64")
-		g.useAs("encoding/hex", "stdhex")
-		g.useAs("net/url", "neturl")
-		g.useAs("strings", "stdstrings")
+		g.use("fmt")
+		g.useAs("unicode/utf8", "utf8")
 	}
 	if g.needEnv {
 		g.needResult = true
