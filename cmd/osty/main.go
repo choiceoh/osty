@@ -13,6 +13,7 @@
 //	osty gen <file.osty>       Transpile to Go (prints to stdout; -o writes to file).
 //	osty lsp                   Run the Language Server Protocol server on stdio.
 //	osty explain [CODE]        Describe a diagnostic code; with no arg, list every code.
+//	osty pipeline <file.osty>  Run every front-end phase and print per-stage timing.
 //
 // Global flags (may precede the subcommand):
 //
@@ -47,6 +48,7 @@ import (
 	"github.com/osty/osty/internal/lsp"
 	"github.com/osty/osty/internal/manifest"
 	"github.com/osty/osty/internal/parser"
+	"github.com/osty/osty/internal/pipeline"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/scaffold"
 	"github.com/osty/osty/internal/stdlib"
@@ -63,6 +65,7 @@ type cliFlags struct {
 	strict     bool // lint: exit 1 on any warning
 	fix        bool // lint: apply machine-applicable suggestions in place
 	showScopes bool // resolve: also print the nested scope tree
+	trace      bool // global: stream per-phase timing to stderr
 }
 
 func main() {
@@ -171,6 +174,13 @@ func main() {
 		runExplain(args[1:])
 		return
 	}
+	// pipeline runs every front-end phase and prints a per-stage
+	// timing/output table (or JSON). Has its own flag parser for
+	// --json and --trace.
+	if cmd == "pipeline" {
+		runPipeline(args[1:])
+		return
+	}
 	if len(args) < 2 {
 		usage()
 		os.Exit(2)
@@ -205,6 +215,14 @@ func main() {
 		os.Exit(1)
 	}
 	formatter := newFormatter(path, src, flags)
+
+	// --trace: run the full front-end once with streaming timing
+	// output before the subcommand's own work. Restricted to commands
+	// whose pipeline is a strict prefix of pipeline.Run — anything
+	// else (fmt, gen, build, …) has its own subcommand-local timing.
+	if flags.trace && isTraceableSingleFileCmd(cmd) {
+		pipeline.Run(src, os.Stderr)
+	}
 
 	switch cmd {
 	case "parse":
@@ -317,6 +335,7 @@ func parseFlags() cliFlags {
 	flag.BoolVar(&f.strict, "strict", false, "exit non-zero on lint warnings (lint subcommand only)")
 	flag.BoolVar(&f.fix, "fix", false, "apply machine-applicable lint suggestions in place (lint subcommand only)")
 	flag.BoolVar(&f.showScopes, "scopes", false, "resolve: also dump the nested scope tree")
+	flag.BoolVar(&f.trace, "trace", false, "stream per-phase timing to stderr (single-file front-end commands)")
 	flag.Usage = usage
 	flag.Parse()
 	return f
@@ -694,6 +713,21 @@ func printDiags(f *diag.Formatter, diags []*diag.Diagnostic, flags cliFlags) {
 	}
 }
 
+// isTraceableSingleFileCmd reports whether `--trace` should produce
+// per-phase timing for the given subcommand. The streaming output
+// only makes sense when the command's work is a strict prefix of the
+// front-end pipeline (lex → parse → resolve → check → lint).
+// Subcommands with their own internal phases (fmt, gen, build, run,
+// test, publish, lsp) are excluded — they would need their own
+// instrumentation, which would belong in their respective files.
+func isTraceableSingleFileCmd(cmd string) bool {
+	switch cmd {
+	case "tokens", "parse", "resolve", "check", "typecheck", "lint":
+		return true
+	}
+	return false
+}
+
 // resolveFile runs single-file name resolution with the cached stdlib
 // registry attached. Collapses what would otherwise be a three-line
 // incantation in every single-file subcommand.
@@ -896,6 +930,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "       osty publish              (pack + upload the package to a registry)")
 	fmt.Fprintln(os.Stderr, "       osty lsp                  (language server on stdio)")
 	fmt.Fprintln(os.Stderr, "       osty explain [CODE]       (describe a diagnostic code; no arg lists every code)")
+	fmt.Fprintln(os.Stderr, "       osty pipeline FILE        (run every front-end phase; print per-stage timing)")
 	fmt.Fprintln(os.Stderr, "flags:")
 	fmt.Fprintln(os.Stderr, "  --no-color         disable ANSI escapes")
 	fmt.Fprintln(os.Stderr, "  --color            force ANSI escapes")
@@ -903,6 +938,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  --json             emit diagnostics as NDJSON")
 	fmt.Fprintln(os.Stderr, "  --strict           lint: exit 1 on warnings (CI mode)")
 	fmt.Fprintln(os.Stderr, "  --scopes           resolve: also print the nested scope tree")
+	fmt.Fprintln(os.Stderr, "  --trace            stream per-phase timing to stderr (front-end commands)")
 	fmt.Fprintln(os.Stderr, "fmt-specific flags (after the subcommand):")
 	fmt.Fprintln(os.Stderr, "  --check            exit 1 if FILE is not already formatted")
 	fmt.Fprintln(os.Stderr, "  --write            overwrite FILE in place")
