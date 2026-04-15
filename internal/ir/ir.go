@@ -1,0 +1,817 @@
+package ir
+
+import "strings"
+
+// ==== Source positions ====
+
+// Pos is a 1-based line/column pair plus a byte offset into the source.
+// Kept deliberately small so every IR node can embed one without a big
+// memory footprint. Mirrors `token.Pos` structurally but lives in this
+// package so `ir` has no dependency on `token`.
+type Pos struct {
+	Offset int
+	Line   int
+	Column int
+}
+
+// Span is a half-open source range [Start, End). Carried by every IR
+// node so downstream consumers (error reporting, source maps) can point
+// back at the original source without needing the AST.
+type Span struct {
+	Start Pos
+	End   Pos
+}
+
+// Node is the common interface for every IR node. Callers that only
+// need location info can walk a tree as []Node.
+type Node interface {
+	At() Span
+}
+
+// ==== Module ====
+
+// Module is the IR form of a single Osty source file.
+//
+// Package is the emitted package name (e.g. "main" for executables).
+// Decls are top-level declarations in source order. Script is non-empty
+// when the file contained top-level statements that will be lowered
+// into a synthetic main() body by the backend.
+type Module struct {
+	Package string
+	Decls   []Decl
+	Script  []Stmt
+	SpanV   Span
+}
+
+func (m *Module) At() Span { return m.SpanV }
+
+// ==== Types ====
+
+// Type is a self-contained semantic type. Unlike the checker's
+// `types.Type`, it holds no back-references to `resolve.Symbol`; named
+// types are identified by string. Equality is by structural comparison.
+type Type interface {
+	typeNode()
+	String() string
+}
+
+// PrimKind enumerates Osty's built-in scalar types. Mirrors the
+// checker's `types.PrimitiveKind` but lives here to keep `ir`
+// self-contained.
+type PrimKind int
+
+const (
+	PrimInvalid PrimKind = iota
+
+	PrimInt
+	PrimInt8
+	PrimInt16
+	PrimInt32
+	PrimInt64
+	PrimUInt8
+	PrimUInt16
+	PrimUInt32
+	PrimUInt64
+	PrimByte
+	PrimFloat
+	PrimFloat32
+	PrimFloat64
+
+	PrimBool
+	PrimChar
+	PrimString
+	PrimBytes
+
+	PrimUnit  // ()
+	PrimNever // !
+)
+
+// PrimType is a primitive scalar type.
+type PrimType struct{ Kind PrimKind }
+
+func (*PrimType) typeNode() {}
+
+func (p *PrimType) String() string {
+	switch p.Kind {
+	case PrimInt:
+		return "Int"
+	case PrimInt8:
+		return "Int8"
+	case PrimInt16:
+		return "Int16"
+	case PrimInt32:
+		return "Int32"
+	case PrimInt64:
+		return "Int64"
+	case PrimUInt8:
+		return "UInt8"
+	case PrimUInt16:
+		return "UInt16"
+	case PrimUInt32:
+		return "UInt32"
+	case PrimUInt64:
+		return "UInt64"
+	case PrimByte:
+		return "Byte"
+	case PrimFloat:
+		return "Float"
+	case PrimFloat32:
+		return "Float32"
+	case PrimFloat64:
+		return "Float64"
+	case PrimBool:
+		return "Bool"
+	case PrimChar:
+		return "Char"
+	case PrimString:
+		return "String"
+	case PrimBytes:
+		return "Bytes"
+	case PrimUnit:
+		return "()"
+	case PrimNever:
+		return "Never"
+	}
+	return "?"
+}
+
+// Canonical primitive singletons. Backends and the lowerer reach for
+// these instead of allocating a fresh *PrimType per literal.
+var (
+	TInt     = &PrimType{Kind: PrimInt}
+	TInt8    = &PrimType{Kind: PrimInt8}
+	TInt16   = &PrimType{Kind: PrimInt16}
+	TInt32   = &PrimType{Kind: PrimInt32}
+	TInt64   = &PrimType{Kind: PrimInt64}
+	TUInt8   = &PrimType{Kind: PrimUInt8}
+	TUInt16  = &PrimType{Kind: PrimUInt16}
+	TUInt32  = &PrimType{Kind: PrimUInt32}
+	TUInt64  = &PrimType{Kind: PrimUInt64}
+	TByte    = &PrimType{Kind: PrimByte}
+	TFloat   = &PrimType{Kind: PrimFloat}
+	TFloat32 = &PrimType{Kind: PrimFloat32}
+	TFloat64 = &PrimType{Kind: PrimFloat64}
+	TBool    = &PrimType{Kind: PrimBool}
+	TChar    = &PrimType{Kind: PrimChar}
+	TString  = &PrimType{Kind: PrimString}
+	TBytes   = &PrimType{Kind: PrimBytes}
+	TUnit    = &PrimType{Kind: PrimUnit}
+	TNever   = &PrimType{Kind: PrimNever}
+)
+
+// NamedType refers to a user-declared or builtin named type by its
+// source name. Args carries type arguments for generics (e.g.
+// List<Int> → NamedType{Name:"List", Args:[TInt]}). The Builtin flag
+// distinguishes prelude-provided names (List, Map, Set, Option, Result)
+// from user declarations; backends commonly need that distinction to
+// choose between a runtime primitive and a user type.
+type NamedType struct {
+	Name    string
+	Args    []Type
+	Builtin bool
+}
+
+func (*NamedType) typeNode() {}
+
+func (n *NamedType) String() string {
+	if len(n.Args) == 0 {
+		return n.Name
+	}
+	var b strings.Builder
+	b.WriteString(n.Name)
+	b.WriteByte('<')
+	for i, a := range n.Args {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(typeString(a))
+	}
+	b.WriteByte('>')
+	return b.String()
+}
+
+// OptionalType is the surface form `T?`. Kept distinct from
+// NamedType{"Option"} so backends can special-case optional-chain
+// lowering without matching on strings.
+type OptionalType struct{ Inner Type }
+
+func (*OptionalType) typeNode()     {}
+func (o *OptionalType) String() string { return typeString(o.Inner) + "?" }
+
+// TupleType is `(T1, T2, ...)`. Single-element tuples are legal.
+type TupleType struct{ Elems []Type }
+
+func (*TupleType) typeNode() {}
+
+func (t *TupleType) String() string {
+	var b strings.Builder
+	b.WriteByte('(')
+	for i, e := range t.Elems {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(typeString(e))
+	}
+	b.WriteByte(')')
+	return b.String()
+}
+
+// FnType is `fn(A, B) -> R`.
+type FnType struct {
+	Params []Type
+	Return Type
+}
+
+func (*FnType) typeNode() {}
+
+func (f *FnType) String() string {
+	var b strings.Builder
+	b.WriteString("fn(")
+	for i, p := range f.Params {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(typeString(p))
+	}
+	b.WriteByte(')')
+	if f.Return != nil {
+		if p, ok := f.Return.(*PrimType); !ok || p.Kind != PrimUnit {
+			b.WriteString(" -> ")
+			b.WriteString(typeString(f.Return))
+		}
+	}
+	return b.String()
+}
+
+// TypeVar is a reference to a generic type parameter (`T` etc). Name is
+// the parameter's source name; Owner is the qualified owner (e.g. the
+// fn or type declaration's name) used for identity — two `T`s on
+// different owners are not equal.
+type TypeVar struct {
+	Name  string
+	Owner string
+}
+
+func (*TypeVar) typeNode()     {}
+func (v *TypeVar) String() string { return v.Name }
+
+// ErrType is the poisoned type used when lowering cannot recover a real
+// type for an expression. Backends should treat it as "already
+// reported" and avoid cascading diagnostics.
+type ErrType struct{}
+
+func (*ErrType) typeNode()   {}
+func (*ErrType) String() string { return "<error>" }
+
+// ErrTypeVal is the canonical poisoned singleton.
+var ErrTypeVal Type = &ErrType{}
+
+// typeString is a nil-safe wrapper around Type.String.
+func typeString(t Type) string {
+	if t == nil {
+		return "<nil>"
+	}
+	return t.String()
+}
+
+// ==== Declarations ====
+
+// Decl is the common interface for every top-level declaration.
+type Decl interface {
+	Node
+	declNode()
+	DeclName() string
+}
+
+// FnDecl is a top-level function. Receiver and Generics are nil/empty
+// for free functions; methods carry a non-nil Receiver naming the
+// owning type. The backend emits Methods lists inside StructDecl /
+// EnumDecl instead of threading receivers through here.
+type FnDecl struct {
+	Name     string
+	Params   []*Param
+	Return   Type
+	Body     *Block
+	Exported bool
+	Generics []*TypeParam
+	SpanV    Span
+}
+
+func (*FnDecl) declNode()        {}
+func (f *FnDecl) At() Span       { return f.SpanV }
+func (f *FnDecl) DeclName() string { return f.Name }
+
+// Param is one function / method parameter. Default is an already
+// lowered expression or nil when absent.
+type Param struct {
+	Name    string
+	Type    Type
+	Default Expr
+	SpanV   Span
+}
+
+func (p *Param) At() Span { return p.SpanV }
+
+// TypeParam is a generic type parameter `T` with optional bounds. The
+// bounds are interface names (already-lowered NamedType).
+type TypeParam struct {
+	Name   string
+	Bounds []Type
+	SpanV  Span
+}
+
+func (t *TypeParam) At() Span { return t.SpanV }
+
+// StructDecl is a struct declaration with its field list and methods.
+type StructDecl struct {
+	Name     string
+	Fields   []*Field
+	Methods  []*FnDecl
+	Generics []*TypeParam
+	Exported bool
+	SpanV    Span
+}
+
+func (*StructDecl) declNode()        {}
+func (s *StructDecl) At() Span       { return s.SpanV }
+func (s *StructDecl) DeclName() string { return s.Name }
+
+// Field is one struct field.
+type Field struct {
+	Name     string
+	Type     Type
+	Default  Expr
+	Exported bool
+	SpanV    Span
+}
+
+func (f *Field) At() Span { return f.SpanV }
+
+// EnumDecl is an enum with its variants and methods.
+type EnumDecl struct {
+	Name     string
+	Variants []*Variant
+	Methods  []*FnDecl
+	Generics []*TypeParam
+	Exported bool
+	SpanV    Span
+}
+
+func (*EnumDecl) declNode()        {}
+func (e *EnumDecl) At() Span       { return e.SpanV }
+func (e *EnumDecl) DeclName() string { return e.Name }
+
+// Variant is one enum case. Payload is the tuple of variant payload
+// types; nil for bare variants.
+type Variant struct {
+	Name    string
+	Payload []Type
+	SpanV   Span
+}
+
+func (v *Variant) At() Span { return v.SpanV }
+
+// LetDecl is a top-level `pub let NAME = value`.
+type LetDecl struct {
+	Name     string
+	Type     Type
+	Value    Expr
+	Mut      bool
+	Exported bool
+	SpanV    Span
+}
+
+func (*LetDecl) declNode()        {}
+func (l *LetDecl) At() Span       { return l.SpanV }
+func (l *LetDecl) DeclName() string { return l.Name }
+
+// ==== Statements ====
+
+// Stmt is the common interface for every IR statement.
+type Stmt interface {
+	Node
+	stmtNode()
+}
+
+// Block is a scoped sequence of statements with an optional final
+// expression (the block's "result"). Normalising blocks this way means
+// callers don't have to rescan the tail for implicit-return semantics.
+type Block struct {
+	Stmts  []Stmt
+	Result Expr // optional final expression; nil means block yields unit
+	SpanV  Span
+}
+
+func (*Block) stmtNode() {}
+func (b *Block) At() Span { return b.SpanV }
+
+// LetStmt introduces a local binding. Patterns more complex than bare
+// identifiers lower to an internal temporary plus per-binding LetStmts
+// (not implemented yet — the lowerer emits an ErrorStmt in that case).
+type LetStmt struct {
+	Name  string
+	Type  Type
+	Value Expr
+	Mut   bool
+	SpanV Span
+}
+
+func (*LetStmt) stmtNode() {}
+func (l *LetStmt) At() Span { return l.SpanV }
+
+// ExprStmt is an expression used in statement position (side effect).
+type ExprStmt struct {
+	X     Expr
+	SpanV Span
+}
+
+func (*ExprStmt) stmtNode() {}
+func (e *ExprStmt) At() Span { return e.SpanV }
+
+// AssignOp classifies the flavor of an assignment statement.
+type AssignOp int
+
+const (
+	AssignEq AssignOp = iota
+	AssignAdd
+	AssignSub
+	AssignMul
+	AssignDiv
+	AssignMod
+	AssignAnd
+	AssignOr
+	AssignXor
+	AssignShl
+	AssignShr
+)
+
+// AssignStmt covers plain and compound assignments. Tuple-destructuring
+// assignment is not yet represented here; the lowerer rejects it.
+type AssignStmt struct {
+	Op     AssignOp
+	Target Expr
+	Value  Expr
+	SpanV  Span
+}
+
+func (*AssignStmt) stmtNode() {}
+func (a *AssignStmt) At() Span { return a.SpanV }
+
+// ReturnStmt is `return` or `return value`. Value is nil for a bare
+// return (unit return type).
+type ReturnStmt struct {
+	Value Expr
+	SpanV Span
+}
+
+func (*ReturnStmt) stmtNode() {}
+func (r *ReturnStmt) At() Span { return r.SpanV }
+
+// BreakStmt exits the innermost loop.
+type BreakStmt struct{ SpanV Span }
+
+func (*BreakStmt) stmtNode() {}
+func (b *BreakStmt) At() Span { return b.SpanV }
+
+// ContinueStmt skips to the next loop iteration.
+type ContinueStmt struct{ SpanV Span }
+
+func (*ContinueStmt) stmtNode() {}
+func (c *ContinueStmt) At() Span { return c.SpanV }
+
+// IfStmt is a statement-position conditional. Else is nil when there
+// is no else clause.
+type IfStmt struct {
+	Cond  Expr
+	Then  *Block
+	Else  *Block
+	SpanV Span
+}
+
+func (*IfStmt) stmtNode() {}
+func (i *IfStmt) At() Span { return i.SpanV }
+
+// ForKind classifies the `for` variant.
+type ForKind int
+
+const (
+	ForInfinite ForKind = iota
+	ForWhile            // cond-controlled
+	ForRange            // numeric range: `for i in a..b`
+	ForIn               // iterator: `for x in xs`
+)
+
+// ForStmt covers all four `for` forms. Fields are set selectively by
+// Kind:
+//
+//	Infinite: Body
+//	While:    Cond, Body
+//	Range:    Var, Start, End, Inclusive, Body
+//	In:       Var, Iter, Body
+type ForStmt struct {
+	Kind      ForKind
+	Var       string // loop variable (Range, In)
+	Cond      Expr   // While
+	Iter      Expr   // In
+	Start     Expr   // Range
+	End       Expr   // Range
+	Inclusive bool   // Range `..=`
+	Body      *Block
+	SpanV     Span
+}
+
+func (*ForStmt) stmtNode() {}
+func (f *ForStmt) At() Span { return f.SpanV }
+
+// ErrorStmt is the poisoned statement emitted when lowering fails. The
+// Note is propagated up in the Module's issue list so backends and the
+// test suite can report it.
+type ErrorStmt struct {
+	Note  string
+	SpanV Span
+}
+
+func (*ErrorStmt) stmtNode() {}
+func (e *ErrorStmt) At() Span { return e.SpanV }
+
+// ==== Expressions ====
+
+// Expr is the common interface for every IR expression. Every
+// expression carries its inferred Type, so backends never need to look
+// up a side table.
+type Expr interface {
+	Node
+	exprNode()
+	Type() Type
+}
+
+// IntLit is an integer literal. Text is the original source form
+// (preserves radix/underscores for exact emission).
+type IntLit struct {
+	Text  string
+	T     Type
+	SpanV Span
+}
+
+func (*IntLit) exprNode() {}
+func (l *IntLit) At() Span { return l.SpanV }
+func (l *IntLit) Type() Type { return l.T }
+
+// FloatLit is a float literal.
+type FloatLit struct {
+	Text  string
+	T     Type
+	SpanV Span
+}
+
+func (*FloatLit) exprNode() {}
+func (l *FloatLit) At() Span { return l.SpanV }
+func (l *FloatLit) Type() Type { return l.T }
+
+// BoolLit is `true` / `false`.
+type BoolLit struct {
+	Value bool
+	SpanV Span
+}
+
+func (*BoolLit) exprNode() {}
+func (l *BoolLit) At() Span { return l.SpanV }
+func (l *BoolLit) Type() Type { return TBool }
+
+// CharLit is a single-code-point char literal.
+type CharLit struct {
+	Value rune
+	SpanV Span
+}
+
+func (*CharLit) exprNode() {}
+func (l *CharLit) At() Span { return l.SpanV }
+func (l *CharLit) Type() Type { return TChar }
+
+// ByteLit is a byte literal (0..=255).
+type ByteLit struct {
+	Value byte
+	SpanV Span
+}
+
+func (*ByteLit) exprNode() {}
+func (l *ByteLit) At() Span { return l.SpanV }
+func (l *ByteLit) Type() Type { return TByte }
+
+// StringLit is a possibly interpolated string literal. Parts alternate
+// literal text and inner expressions — backends format the whole thing
+// via their own formatter (fmt.Sprintf for the Go backend).
+type StringLit struct {
+	Parts    []StringPart
+	IsRaw    bool
+	IsTriple bool
+	SpanV    Span
+}
+
+// StringPart is either a literal text segment (IsLit) or an embedded
+// expression (Expr).
+type StringPart struct {
+	IsLit bool
+	Lit   string
+	Expr  Expr
+}
+
+func (*StringLit) exprNode() {}
+func (s *StringLit) At() Span { return s.SpanV }
+func (*StringLit) Type() Type { return TString }
+
+// UnitLit is the `()` zero-value expression, used as an implicit block
+// result when no expression was provided.
+type UnitLit struct{ SpanV Span }
+
+func (*UnitLit) exprNode() {}
+func (u *UnitLit) At() Span { return u.SpanV }
+func (*UnitLit) Type() Type { return TUnit }
+
+// IdentKind classifies what an Ident resolves to. Lowering populates
+// this so backends do not need a resolver.
+type IdentKind int
+
+const (
+	IdentUnknown IdentKind = iota
+	IdentLocal            // let binding or closure capture
+	IdentParam            // function/method parameter
+	IdentFn               // top-level function
+	IdentVariant          // enum variant
+	IdentTypeName         // struct/enum/interface/alias used as value
+	IdentGlobal           // top-level `let`
+	IdentBuiltin          // prelude / builtin
+)
+
+// Ident is a name reference. Kind distinguishes locals from calls on
+// top-level fn names so the backend can rewrite user calls without a
+// second resolution pass.
+type Ident struct {
+	Name  string
+	Kind  IdentKind
+	T     Type
+	SpanV Span
+}
+
+func (*Ident) exprNode() {}
+func (i *Ident) At() Span { return i.SpanV }
+func (i *Ident) Type() Type { return i.T }
+
+// UnOp enumerates prefix operators.
+type UnOp int
+
+const (
+	UnNeg UnOp = iota // -x
+	UnPlus              // +x
+	UnNot               // !x
+	UnBitNot            // ~x
+)
+
+// UnaryExpr is a prefix unary operation.
+type UnaryExpr struct {
+	Op    UnOp
+	X     Expr
+	T     Type
+	SpanV Span
+}
+
+func (*UnaryExpr) exprNode() {}
+func (e *UnaryExpr) At() Span { return e.SpanV }
+func (e *UnaryExpr) Type() Type { return e.T }
+
+// BinOp enumerates binary operators. Covers arithmetic, comparison,
+// logical, and bitwise operators. Range and coalesce operators have
+// their own expression types.
+type BinOp int
+
+const (
+	BinAdd BinOp = iota
+	BinSub
+	BinMul
+	BinDiv
+	BinMod
+
+	BinEq
+	BinNeq
+	BinLt
+	BinLeq
+	BinGt
+	BinGeq
+
+	BinAnd // &&
+	BinOr  // ||
+
+	BinBitAnd
+	BinBitOr
+	BinBitXor
+	BinShl
+	BinShr
+)
+
+// BinaryExpr is a binary infix operation.
+type BinaryExpr struct {
+	Op    BinOp
+	Left  Expr
+	Right Expr
+	T     Type
+	SpanV Span
+}
+
+func (*BinaryExpr) exprNode() {}
+func (e *BinaryExpr) At() Span { return e.SpanV }
+func (e *BinaryExpr) Type() Type { return e.T }
+
+// CallExpr is a user function / method / closure call.
+type CallExpr struct {
+	Callee Expr
+	Args   []Expr
+	T      Type
+	SpanV  Span
+}
+
+func (*CallExpr) exprNode() {}
+func (c *CallExpr) At() Span { return c.SpanV }
+func (c *CallExpr) Type() Type { return c.T }
+
+// IntrinsicKind enumerates the print-family intrinsics that Lower
+// recognises directly. Backends emit these via their runtime's
+// formatted-print machinery.
+type IntrinsicKind int
+
+const (
+	IntrinsicPrint IntrinsicKind = iota
+	IntrinsicPrintln
+	IntrinsicEprint
+	IntrinsicEprintln
+)
+
+// IntrinsicCall is a call to one of the recognised built-in print
+// intrinsics. Kept distinct from CallExpr so backends can dispatch
+// directly rather than string-matching on names.
+type IntrinsicCall struct {
+	Kind  IntrinsicKind
+	Args  []Expr
+	SpanV Span
+}
+
+func (*IntrinsicCall) exprNode() {}
+func (i *IntrinsicCall) At() Span { return i.SpanV }
+func (*IntrinsicCall) Type() Type { return TUnit }
+
+// ListLit is a homogeneous list literal `[a, b, c]`. Elem is the
+// declared element type (populated from the checker's view of the
+// expression's type).
+type ListLit struct {
+	Elems []Expr
+	Elem  Type
+	SpanV Span
+}
+
+func (*ListLit) exprNode() {}
+func (l *ListLit) At() Span { return l.SpanV }
+func (l *ListLit) Type() Type { return &NamedType{Name: "List", Args: []Type{l.Elem}, Builtin: true} }
+
+// BlockExpr is a block used in expression position. The block's Result
+// is the value produced; backends may rewrite this into an IIFE when
+// the host language lacks block-as-expression support.
+type BlockExpr struct {
+	Block *Block
+	T     Type
+	SpanV Span
+}
+
+func (*BlockExpr) exprNode() {}
+func (b *BlockExpr) At() Span { return b.SpanV }
+func (b *BlockExpr) Type() Type { return b.T }
+
+// IfExpr is an `if` used in expression position. Both arms are
+// guaranteed present; statement-form `if` without else lowers to
+// IfStmt instead.
+type IfExpr struct {
+	Cond  Expr
+	Then  *Block
+	Else  *Block
+	T     Type
+	SpanV Span
+}
+
+func (*IfExpr) exprNode() {}
+func (i *IfExpr) At() Span { return i.SpanV }
+func (i *IfExpr) Type() Type { return i.T }
+
+// ErrorExpr is the poisoned expression emitted when lowering fails for
+// a sub-expression. Backends should render a comment and skip.
+type ErrorExpr struct {
+	Note  string
+	T     Type
+	SpanV Span
+}
+
+func (*ErrorExpr) exprNode() {}
+func (e *ErrorExpr) At() Span { return e.SpanV }
+func (e *ErrorExpr) Type() Type {
+	if e.T == nil {
+		return ErrTypeVal
+	}
+	return e.T
+}
