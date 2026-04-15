@@ -122,6 +122,19 @@ type gen struct {
 	// toString implementations.
 	needStringRuntime bool
 
+	// needStdlibOsty/emittedStdlibOsty track stdlib modules that should
+	// be lowered from their bundled Osty source into this Go file instead
+	// of going through a Go bridge or an empty package stub.
+	needStdlibOsty    map[string]bool
+	emittedStdlibOsty map[string]bool
+
+	// stdlibInlineModule is non-empty while a bundled stdlib module is
+	// being emitted into another package. Top-level functions are renamed
+	// through stdlibInlineRenames so they cannot collide with user code.
+	stdlibInlineModule  string
+	stdlibInlineRenames map[string]string
+	emitGenericFnDecls  bool
+
 	// needRange is set when a standalone range literal is emitted, so
 	// the runtime Range struct can be injected at the top of the file.
 	needRange bool
@@ -234,16 +247,18 @@ type gen struct {
 
 func newGen(pkgName string, file *ast.File, res *resolve.Result, chk *check.Result) *gen {
 	g := &gen{
-		pkgName:      pkgName,
-		file:         file,
-		res:          res,
-		chk:          chk,
-		body:         newWriter(),
-		imports:      map[string]string{},
-		variantOwner: map[string]string{},
-		enumTypes:    map[string]bool{},
-		structTypes:  map[string]bool{},
-		methodNames:  map[string]map[string]bool{},
+		pkgName:           pkgName,
+		file:              file,
+		res:               res,
+		chk:               chk,
+		body:              newWriter(),
+		imports:           map[string]string{},
+		variantOwner:      map[string]string{},
+		enumTypes:         map[string]bool{},
+		structTypes:       map[string]bool{},
+		methodNames:       map[string]map[string]bool{},
+		needStdlibOsty:    map[string]bool{},
+		emittedStdlibOsty: map[string]bool{},
 	}
 	g.indexTypes()
 	g.initInstances()
@@ -402,6 +417,10 @@ func (g *gen) run() ([]byte, error) {
 		g.body.dedent()
 		g.body.writeln("}")
 	}
+
+	// 2a. Inline selected stdlib modules from their Osty sources once all
+	//     user code has had a chance to mark call-site dependencies.
+	g.emitNeededStdlibOstyModules()
 
 	// 2b. Runtime flags set during body emission may demand additional
 	//     imports. Resolve them before we serialize the import block.

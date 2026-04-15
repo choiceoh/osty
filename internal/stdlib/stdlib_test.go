@@ -117,6 +117,7 @@ func TestAllSignatureStubsCheck(t *testing.T) {
 				t.Fatalf("%s parse: %s", p, d.Error())
 			}
 		}
+		promoteTopLevelLets(file)
 		pkg := &resolve.Package{
 			Name: moduleName(p),
 			Files: []*resolve.PackageFile{{
@@ -725,8 +726,12 @@ func TestTier1ModuleCoverage(t *testing.T) {
 	}{
 		{"io", []string{"print", "println", "eprint", "eprintln", "readLine"}},
 		{"fs", []string{"readToString", "writeString", "exists", "remove"}},
-		{"strings", []string{"split", "join", "contains", "startsWith", "endsWith",
-			"trim", "trimStart", "trimEnd", "toUpper", "toLower", "repeat", "replace"}},
+		{"strings", []string{"len", "isEmpty", "charCount", "get", "slice", "concat",
+			"chars", "bytes", "graphemes", "toBytes", "split", "splitN", "lines", "join",
+			"contains", "indexOf", "lastIndexOf", "count", "startsWith", "hasPrefix",
+			"endsWith", "hasSuffix", "trim", "trimSpace", "trimStart", "trimEnd",
+			"trimPrefix", "trimSuffix", "toUpper", "toLower", "repeat", "replace",
+			"replaceAll", "replaceN"}},
 		{"random", []string{"Rng", "default", "seeded"}},
 		{"url", []string{"Url", "parse", "join"}},
 		{"json", []string{"Json", "Encode", "Decode", "encode", "decode", "parse", "stringify"}},
@@ -741,6 +746,11 @@ func TestTier1ModuleCoverage(t *testing.T) {
 		{"ref", []string{"same"}},
 		{"process", []string{"abort", "unreachable", "todo", "ignoreError", "logError"}},
 		{"debug", []string{"dbg"}},
+		{"fmt", []string{"padLeft", "padRight", "center", "truncate",
+			"intToBase", "inBase", "bin", "binary", "oct", "octal", "hex", "hexUpper",
+			"zeroPad", "fixed", "toFixed", "scientific", "percentage",
+			"repeat", "thousands", "ordinal", "sign", "signFloat", "bytes",
+			"format", "joinWith", "join", "bullet", "numbered", "table"}},
 	}
 	for _, c := range cases {
 		mod := reg.Modules[c.module]
@@ -756,6 +766,25 @@ func TestTier1ModuleCoverage(t *testing.T) {
 			}
 			if !sym.Pub {
 				t.Errorf("std.%s export %q is not pub", c.module, name)
+			}
+		}
+	}
+}
+
+func TestStringFmtDebugModulesHaveOstyBodies(t *testing.T) {
+	reg := Load()
+	for _, module := range []string{"strings", "fmt", "debug"} {
+		mod := reg.Modules[module]
+		if mod == nil || mod.File == nil {
+			t.Fatalf("std.%s not loaded", module)
+		}
+		for _, decl := range mod.File.Decls {
+			fn, ok := decl.(*ast.FnDecl)
+			if !ok || !fn.Pub {
+				continue
+			}
+			if fn.Body == nil {
+				t.Errorf("std.%s.%s is still signature-only", module, fn.Name)
 			}
 		}
 	}
