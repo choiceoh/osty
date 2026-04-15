@@ -1558,15 +1558,6 @@ func (p *Parser) parseExpr() ast.Expr {
 //
 // Postfix (`.`, `?.`, `?`, `()`, `[]`, `::<>`) and unary (`-`, `!`, `~`)
 // are handled in tryParsePostfix / parsePrefix.
-const (
-	// openRangeEndBP bounds the RHS of an open-start range (`..end` /
-	// `..=end`) to a primary/prefix expression only. Set above any infixLBP
-	// value so that operators after the endpoint — e.g. `..5+1` — do not
-	// bind into the range; the outer Pratt loop handles them. Users must
-	// parenthesize (`..(5+1)`) to include infix operators in the endpoint.
-	openRangeEndBP = 100
-)
-
 func infixLBP(k token.Kind) (lbp, rbp int) {
 	switch k {
 	case token.QQ:
@@ -1712,6 +1703,13 @@ func startsExpr(k token.Kind) bool {
 	}
 	return false
 }
+
+// openRangeEndBP bounds the RHS of an open-start range (`..end` / `..=end`)
+// to a primary/prefix expression only. Set above any infixLBP value so that
+// operators after the endpoint — e.g. `..5+1` — do not bind into the range;
+// the outer Pratt loop handles them. Users must parenthesize (`..(5+1)`) to
+// include infix operators in the endpoint.
+const openRangeEndBP = 100
 
 func (p *Parser) parsePrefix() ast.Expr {
 	t := p.peek()

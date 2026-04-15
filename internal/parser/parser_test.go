@@ -1003,8 +1003,7 @@ func TestParseRangeInMatch(t *testing.T) {
 
 // TestParseOpenStartRangePat covers parseRangePatFromOpen: patterns that
 // start with `..` or `..=` (no lower bound), e.g. `..10`, `..=0`, and the
-// unbounded `..` form. Previously uncovered — the parser-quality audit
-// flagged parseRangePatFromOpen as 0% test coverage.
+// unbounded `100..` form.
 func TestParseOpenStartRangePat(t *testing.T) {
 	src := `fn classify(n: Int) -> String {
     match n {
@@ -1090,8 +1089,7 @@ func TestParseOpenStartRangePatNegative(t *testing.T) {
 }
 
 // TestParseOrPattern covers parsePattern's OR-alternative branch:
-// `Pat1 | Pat2 | Pat3`. Exercises *ast.OrPat construction, which the
-// audit flagged as uncovered.
+// `Pat1 | Pat2 | Pat3` builds an *ast.OrPat.
 func TestParseOrPattern(t *testing.T) {
 	src := `fn f(n: Int) -> String {
     match n {
@@ -1156,16 +1154,13 @@ func TestParseOrPatternVariants(t *testing.T) {
 
 // TestParseDoubleOptionalType covers parseType's double-`?` handling:
 // `Int??` must parse as Option<Option<Int>>. The lexer greedily matches
-// `??` as the nil-coalescing token, so parseType splits it. The audit
-// flagged this path (parser.go:~1120 QQ branch) as uncovered.
+// `??` as the nil-coalescing token, so parseType splits it.
 func TestParseDoubleOptionalType(t *testing.T) {
 	src := `fn f(x: Int??) -> Int?? { x }`
 	f := parseOrFatal(t, src)
 	fd := f.Decls[0].(*ast.FnDecl)
-	// Param type: Int??
-	assertDoubleOption(t, "param", fd.Params[0].Type)
-	// Return type: Int??
-	assertDoubleOption(t, "return", fd.ReturnType)
+	assertDoubleOptionInt(t, "param", fd.Params[0].Type)
+	assertDoubleOptionInt(t, "return", fd.ReturnType)
 }
 
 // TestParseTripleOptionalType ensures the `??` rewriting loop handles
@@ -1192,7 +1187,7 @@ func TestParseTripleOptionalType(t *testing.T) {
 	}
 }
 
-func assertDoubleOption(t *testing.T, label string, ty ast.Type) {
+func assertDoubleOptionInt(t *testing.T, label string, ty ast.Type) {
 	t.Helper()
 	outer, ok := ty.(*ast.OptionalType)
 	if !ok {
@@ -1211,10 +1206,8 @@ func assertDoubleOption(t *testing.T, label string, ty ast.Type) {
 	}
 }
 
-// TestParseQualifiedStructLit covers the FieldExpr branch of isTypeRef and
-// exercises isTypeRefOrPath — struct literals whose type is dotted:
-// `Pkg.Type { ... }` and `A.B.Type { ... }`. Prior to this test, both
-// functions' FieldExpr paths had 0% coverage.
+// TestParseQualifiedStructLit covers the FieldExpr branch of isTypeRef:
+// a struct literal whose type is a dotted path (`Pkg.Type { ... }`).
 func TestParseQualifiedStructLit(t *testing.T) {
 	src := `fn f() -> Foo {
     Pkg.Foo { x: 1, y: 2 }
@@ -1332,14 +1325,7 @@ func TestParsePatternAtomError(t *testing.T) {
     }
 }`
 	_, diags := ParseDiagnostics([]byte(src))
-	foundPattern := false
-	for _, d := range diags {
-		if strings.Contains(d.Error(), "expected pattern") {
-			foundPattern = true
-			break
-		}
-	}
-	if !foundPattern {
+	if findDiagMessage(diags, "expected pattern") == nil {
 		t.Fatalf("expected 'expected pattern' diagnostic; got %d diags", len(diags))
 	}
 }
@@ -1536,14 +1522,7 @@ func TestParseGenericCloseSplitSHREQ(t *testing.T) {
 func TestConsumeFieldNameIntRecovery(t *testing.T) {
 	src := `fn f() -> Int { obj.0 }`
 	_, diags := ParseDiagnostics([]byte(src))
-	found := false
-	for _, d := range diags {
-		if strings.Contains(d.Error(), "expected field name after `.`") {
-			found = true
-			break
-		}
-	}
-	if !found {
+	if findDiagMessage(diags, "expected field name after `.`") == nil {
 		t.Fatalf("expected field-name diagnostic; got %d diags", len(diags))
 	}
 }
@@ -1555,14 +1534,7 @@ func TestParseAnnotationArgNameError(t *testing.T) {
 	src := `#[deprecated(+)]
 fn main() {}`
 	_, diags := ParseDiagnostics([]byte(src))
-	found := false
-	for _, d := range diags {
-		if strings.Contains(d.Error(), "expected annotation arg name") {
-			found = true
-			break
-		}
-	}
-	if !found {
+	if findDiagMessage(diags, "expected annotation arg name") == nil {
 		t.Fatalf("expected annotation-arg diagnostic; got %d diags", len(diags))
 	}
 }
@@ -1572,14 +1544,7 @@ fn main() {}`
 func TestParseDefaultOkWithoutParen(t *testing.T) {
 	src := `fn f(x: Result<Int, Error> = Ok) -> Int { 0 }`
 	_, diags := ParseDiagnostics([]byte(src))
-	found := false
-	for _, d := range diags {
-		if strings.Contains(d.Error(), "expected `(` after `Ok`") {
-			found = true
-			break
-		}
-	}
-	if !found {
+	if findDiagMessage(diags, "expected `(` after `Ok`") == nil {
 		t.Fatalf("expected Ok-paren diagnostic; got %d diags", len(diags))
 	}
 }
