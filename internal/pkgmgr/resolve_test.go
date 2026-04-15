@@ -1,15 +1,21 @@
 package pkgmgr
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/lockfile"
 	"github.com/osty/osty/internal/manifest"
+	"github.com/osty/osty/internal/registry"
 	"github.com/osty/osty/internal/resolve"
 )
 
@@ -145,6 +151,105 @@ func TestResolveRejectsConflictingTransitivePathAlias(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `dependency "util" resolved from`) {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestResolveBacktracksRegistryVersionConflicts(t *testing.T) {
+	tmp := t.TempDir()
+	proj := filepath.Join(tmp, "app")
+	must(t, os.MkdirAll(proj, 0o755))
+	srv := newTestRegistry(t, map[string]map[string]*manifest.Manifest{
+		"a": {
+			"1.0.0": {
+				Package: manifest.Package{Name: "a", Version: "1.0.0"},
+				Dependencies: []manifest.Dependency{
+					{Name: "util", VersionReq: "^1.0.0", DefaultFeats: true},
+				},
+			},
+			"2.0.0": {
+				Package: manifest.Package{Name: "a", Version: "2.0.0"},
+				Dependencies: []manifest.Dependency{
+					{Name: "util", VersionReq: "^2.0.0", DefaultFeats: true},
+				},
+			},
+		},
+		"b": {
+			"1.0.0": {
+				Package: manifest.Package{Name: "b", Version: "1.0.0"},
+				Dependencies: []manifest.Dependency{
+					{Name: "util", VersionReq: "^1.0.0", DefaultFeats: true},
+				},
+			},
+		},
+		"util": {
+			"1.0.0": {Package: manifest.Package{Name: "util", Version: "1.0.0"}},
+			"2.0.0": {Package: manifest.Package{Name: "util", Version: "2.0.0"}},
+		},
+	})
+	defer srv.Close()
+
+	env := &Env{
+		CacheDir:    filepath.Join(tmp, "cache"),
+		VendorDir:   filepath.Join(proj, ".osty", "deps"),
+		ProjectRoot: proj,
+		Registries:  map[string]string{"": srv.URL},
+	}
+	graph, err := Resolve(context.Background(), &manifest.Manifest{
+		Package: manifest.Package{Name: "app", Version: "0.0.1"},
+		Dependencies: []manifest.Dependency{
+			{Name: "a", VersionReq: "*", DefaultFeats: true},
+			{Name: "b", VersionReq: "*", DefaultFeats: true},
+		},
+	}, env)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got := graph.Nodes["a"].Fetched.Version; got != "1.0.0" {
+		t.Fatalf("a version: got %q, want 1.0.0", got)
+	}
+	if got := graph.Nodes["util"].Fetched.Version; got != "1.0.0" {
+		t.Fatalf("util version: got %q, want 1.0.0", got)
+	}
+	if !hasDep(graph.Nodes["a"], "util") || !hasDep(graph.Nodes["b"], "util") {
+		t.Fatalf("missing util edges: a=%v b=%v", graph.Nodes["a"].Deps, graph.Nodes["b"].Deps)
+	}
+}
+
+func TestResolvePrioritizesRegistryLockPin(t *testing.T) {
+	tmp := t.TempDir()
+	proj := filepath.Join(tmp, "app")
+	must(t, os.MkdirAll(proj, 0o755))
+	srv := newTestRegistry(t, map[string]map[string]*manifest.Manifest{
+		"util": {
+			"1.0.0": {Package: manifest.Package{Name: "util", Version: "1.0.0"}},
+			"2.0.0": {Package: manifest.Package{Name: "util", Version: "2.0.0"}},
+		},
+	})
+	defer srv.Close()
+	must(t, lockfile.Write(proj, &lockfile.Lock{
+		Version: lockfile.SchemaVersion,
+		Packages: []lockfile.Package{
+			{Name: "util", Version: "1.0.0", Source: "registry+default"},
+		},
+	}))
+
+	env := &Env{
+		CacheDir:    filepath.Join(tmp, "cache"),
+		VendorDir:   filepath.Join(proj, ".osty", "deps"),
+		ProjectRoot: proj,
+		Registries:  map[string]string{"": srv.URL},
+	}
+	graph, err := Resolve(context.Background(), &manifest.Manifest{
+		Package: manifest.Package{Name: "app", Version: "0.0.1"},
+		Dependencies: []manifest.Dependency{
+			{Name: "util", VersionReq: "*", DefaultFeats: true},
+		},
+	}, env)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got := graph.Nodes["util"].Fetched.Version; got != "1.0.0" {
+		t.Fatalf("util version: got %q, want locked 1.0.0", got)
 	}
 }
 
@@ -604,6 +709,82 @@ pub fn pong() {}
 	if _, ok := ws.Packages["leaf"]; !ok {
 		t.Fatalf("transitive leaf package was not loaded: %v", ws.Packages)
 	}
+}
+
+type testRegistryVersion struct {
+	tarball  []byte
+	checksum string
+}
+
+func newTestRegistry(t *testing.T, manifests map[string]map[string]*manifest.Manifest) *httptest.Server {
+	t.Helper()
+	fixtures := map[string]map[string]testRegistryVersion{}
+	for name, versions := range manifests {
+		fixtures[name] = map[string]testRegistryVersion{}
+		for version, mani := range versions {
+			dir := filepath.Join(t.TempDir(), name+"-"+version)
+			must(t, os.MkdirAll(dir, 0o755))
+			must(t, manifest.Write(filepath.Join(dir, manifest.ManifestFile), mani))
+			var buf bytes.Buffer
+			must(t, CreateTarGz(dir, &buf))
+			payload := append([]byte(nil), buf.Bytes()...)
+			fixtures[name][version] = testRegistryVersion{
+				tarball:  payload,
+				checksum: HashBytes(payload),
+			}
+		}
+	}
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+		if len(parts) == 3 && parts[0] == "v1" && parts[1] == "crates" {
+			versions, ok := fixtures[parts[2]]
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+			keys := make([]string, 0, len(versions))
+			for version := range versions {
+				keys = append(keys, version)
+			}
+			sort.Strings(keys)
+			entry := registry.IndexEntry{Name: parts[2]}
+			for _, version := range keys {
+				entry.Versions = append(entry.Versions, registry.Version{
+					Version:  version,
+					Checksum: versions[version].checksum,
+				})
+			}
+			_ = json.NewEncoder(w).Encode(entry)
+			return
+		}
+		if len(parts) == 5 && parts[0] == "v1" && parts[1] == "crates" && parts[4] == "tar" {
+			versions, ok := fixtures[parts[2]]
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+			version, ok := versions[parts[3]]
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+			_, _ = w.Write(version.tarball)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+}
+
+func hasDep(node *ResolvedNode, dep string) bool {
+	if node == nil {
+		return false
+	}
+	for _, d := range node.Deps {
+		if d == dep {
+			return true
+		}
+	}
+	return false
 }
 
 func must(t *testing.T, err error) {
