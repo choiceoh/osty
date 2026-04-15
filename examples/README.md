@@ -16,6 +16,9 @@ the compiler evolves.
   mirrors the selfhost-core example-style tests, runs std.testing tests,
   calls Go FFI, and uses concurrency primitives.
 - `ffi`: runnable Go FFI example using the Go `strings` package.
+- `gc`: independent garbage-collector core written in Osty, covering
+  generational collection, remembered-set barriers, incremental marking,
+  cycle reclamation, compaction, pinning, and allocation telemetry.
 - `concurrency`: runnable example covering channels, `spawn`,
   `parallel`, and `taskGroup`.
 - `selfhost-core`: standalone package for the self-hosting algorithms
