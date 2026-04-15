@@ -59,6 +59,8 @@ fn testValidateHeapRejectsLiveByteMismatch() {
     )
     let empty: List<Int> = []
     let globalRoots: Map<String, GcGlobalRoot> = {:}
+    let closureEnvironments: Map<Int, GcClosureEnvironment> = {:}
+    let asyncFrames: Map<Int, GcAsyncFrameRoot> = {:}
     let heap = GcHeap {
         config: testGcConfig(),
         nextId: 2,
@@ -71,6 +73,8 @@ fn testValidateHeapRejectsLiveByteMismatch() {
         objects,
         roots: empty.toSet(),
         globalRoots,
+        closureEnvironments,
+        asyncFrames,
         remembered: empty.toSet(),
         grey: [],
         allocatedSinceLastGC: 16,
@@ -123,6 +127,8 @@ fn testValidateHeapRejectsMissingRememberedEdge() {
     )
     let empty: List<Int> = []
     let globalRoots: Map<String, GcGlobalRoot> = {:}
+    let closureEnvironments: Map<Int, GcClosureEnvironment> = {:}
+    let asyncFrames: Map<Int, GcAsyncFrameRoot> = {:}
     let heap = GcHeap {
         config: testGcConfig(),
         nextId: 3,
@@ -135,6 +141,8 @@ fn testValidateHeapRejectsMissingRememberedEdge() {
         objects,
         roots: empty.toSet(),
         globalRoots,
+        closureEnvironments,
+        asyncFrames,
         remembered: empty.toSet(),
         grey: [],
         allocatedSinceLastGC: 32,
@@ -563,6 +571,162 @@ fn testGlobalRootAddedDuringIncrementalMarkingIsShaded() {
     testing.assertEq(heap.globalRootObject("late.module", "singleton") ?? -1, lateGlobal)
 }
 
+fn testClosureEnvironmentKeepsCapturedObjectsAlive() {
+    let mut heap = newGcHeap(testGcConfig())
+    let closure = heap.allocate(GcClosure, 24)
+    let direct = heap.allocate(GcRecord, 16)
+    let box = heap.allocate(GcRecord, 16)
+    let boxedPayload = heap.allocate(GcArray, 16)
+    let dead = heap.allocate(GcBytes, 16)
+    testing.assert(heap.link(box, boxedPayload))
+
+    let captures: List<GcClosureCapture> = [
+        gcValueCapture(0, "direct", direct),
+        gcMutableBoxCapture(1, "cell", box),
+        gcScalarCapture(2, "counter"),
+    ]
+    testing.assert(heap.installClosureEnvironment(closure, "makeHandler", captures))
+    testing.assert(heap.addRoot(closure))
+    assertValid(heap)
+
+    let first = heap.majorCollect()
+    assertValid(heap)
+
+    testing.assert(heap.contains(closure))
+    testing.assert(heap.contains(direct))
+    testing.assert(heap.contains(box))
+    testing.assert(heap.contains(boxedPayload))
+    testing.assert(!(heap.contains(dead)))
+    testing.assertEq(first.reclaimedObjects, 1)
+    testing.assertEq(heap.closureEnvironmentCount(), 1)
+    testing.assertEq(heap.closurePointerCaptureCount(), 2)
+
+    testing.assert(heap.removeRoot(closure))
+    let second = heap.majorCollect()
+    assertValid(heap)
+
+    testing.assert(!(heap.contains(closure)))
+    testing.assert(!(heap.contains(direct)))
+    testing.assert(!(heap.contains(box)))
+    testing.assert(!(heap.contains(boxedPayload)))
+    testing.assert(second.reclaimedObjects >= 4)
+    testing.assertEq(heap.closureEnvironmentCount(), 0)
+}
+
+fn testClosureCaptureUpdateDropsOldCapture() {
+    let mut heap = newGcHeap(testGcConfig())
+    let closure = heap.allocate(GcClosure, 24)
+    let firstCapture = heap.allocate(GcRecord, 16)
+    let secondCapture = heap.allocate(GcArray, 16)
+    testing.assert(heap.addRoot(closure))
+    let captures: List<GcClosureCapture> = [gcValueCapture(0, "item", firstCapture)]
+    testing.assert(heap.installClosureEnvironment(closure, "replaceCapture", captures))
+    assertValid(heap)
+
+    testing.assert(heap.updateClosureCapture(closure, 0, secondCapture))
+    let stats = heap.majorCollect()
+    assertValid(heap)
+
+    testing.assert(heap.contains(closure))
+    testing.assert(!(heap.contains(firstCapture)))
+    testing.assert(heap.contains(secondCapture))
+    testing.assertEq(stats.reclaimedObjects, 1)
+    testing.assertEq(heap.closurePointerCaptureCount(), 1)
+}
+
+fn testClosureDescriptorRejectsInvalidCaptures() {
+    let mut heap = newGcHeap(testGcConfig())
+    let closure = heap.allocate(GcClosure, 24)
+    let target = heap.allocate(GcRecord, 16)
+
+    let scalarWithObject: List<GcClosureCapture> = [
+        GcClosureCapture {
+            slot: 0,
+            name: "badScalar",
+            kind: GcCaptureScalar,
+            objectId: target,
+        },
+    ]
+    testing.assert(!(heap.installClosureEnvironment(closure, "bad", scalarWithObject)))
+
+    let duplicateSlots: List<GcClosureCapture> = [
+        gcValueCapture(0, "a", target),
+        gcValueCapture(0, "b", target),
+    ]
+    testing.assert(!(heap.installClosureEnvironment(closure, "bad", duplicateSlots)))
+
+    let missingObject: List<GcClosureCapture> = [gcValueCapture(1, "missing", 999)]
+    testing.assert(!(heap.installClosureEnvironment(closure, "bad", missingObject)))
+    assertValid(heap)
+}
+
+fn testSuspendedAsyncFrameKeepsRootsUntilResume() {
+    let mut heap = newGcHeap(testGcConfig())
+    let frame = heap.allocate(GcRuntimeFrame, 32)
+    let payload = heap.allocate(GcRecord, 16)
+    let child = heap.allocate(GcArray, 16)
+    let dead = heap.allocate(GcBytes, 16)
+    testing.assert(heap.link(payload, child))
+
+    let roots: List<Int> = [payload]
+    testing.assert(heap.suspendAsyncFrame(7, "worker.await", 4, frame, roots))
+    assertValid(heap)
+
+    let first = heap.minorCollect()
+    assertValid(heap)
+
+    testing.assert(heap.contains(frame))
+    testing.assert(heap.contains(payload))
+    testing.assert(heap.contains(child))
+    testing.assert(!(heap.contains(dead)))
+    testing.assertEq(first.reclaimedObjects, 1)
+    testing.assertEq(heap.asyncFrameCount(), 1)
+    testing.assertEq(heap.suspendedAsyncFrameCount(), 1)
+    testing.assertEq(heap.asyncFrameRootCount(), 2)
+
+    testing.assert(heap.resumeAsyncFrame(7))
+    let second = heap.majorCollect()
+    assertValid(heap)
+
+    testing.assert(!(heap.contains(frame)))
+    testing.assert(!(heap.contains(payload)))
+    testing.assert(!(heap.contains(child)))
+    testing.assert(second.reclaimedObjects >= 3)
+    testing.assertEq(heap.asyncFrameCount(), 1)
+    testing.assertEq(heap.suspendedAsyncFrameCount(), 0)
+    testing.assertEq(heap.asyncFrameRootCount(), 0)
+}
+
+fn testAsyncFrameAddedDuringIncrementalMarkingIsShaded() {
+    let mut heap = newGcHeap(testGcConfig())
+    let root = heap.allocate(GcRecord, 16)
+    let existing = heap.allocate(GcArray, 16)
+    testing.assert(heap.addRoot(root))
+    testing.assert(heap.link(root, existing))
+    assertValid(heap)
+
+    heap.startIncrementalMajor()
+    assertValid(heap)
+    let _ = heap.stepIncremental()
+    assertValid(heap)
+    testing.assertEq(heap.phaseNow(), GcMarking)
+
+    let frame = heap.allocate(GcRuntimeFrame, 32)
+    let payload = heap.allocate(GcClosure, 24)
+    let roots: List<Int> = [payload]
+    testing.assert(heap.suspendAsyncFrame(42, "task.suspend", 9, frame, roots))
+    assertValid(heap)
+
+    let done = heap.finishIncremental()
+    assertValid(heap)
+
+    testing.assertEq(done.kind, "incremental-sweep")
+    testing.assert(heap.contains(root))
+    testing.assert(heap.contains(existing))
+    testing.assert(heap.contains(frame))
+    testing.assert(heap.contains(payload))
+}
+
 fn testSafepointPlanValidatesPreciseLiveRoots() {
     let callRoots: List<GcLiveRootSlot> = [
         gcRootSlot(0, GcLocalRootSlot, "payload"),
@@ -931,6 +1095,24 @@ fn stressReachableFromRoots(heap: GcHeap) -> Set<Int> {
         )) {
             seen.insert(root.objectId)
             work.push(root.objectId)
+        }
+    }
+
+    for (taskId, frame) in heap.asyncFrames {
+        let _ = taskId
+        if frame.state == GcAsyncFrameSuspended {
+            if frame.frameObjectId >= 0 && heap.objects.containsKey(frame.frameObjectId) && !(seen.contains(
+                frame.frameObjectId,
+            )) {
+                seen.insert(frame.frameObjectId)
+                work.push(frame.frameObjectId)
+            }
+            for rootId in frame.roots {
+                if heap.objects.containsKey(rootId) && !(seen.contains(rootId)) {
+                    seen.insert(rootId)
+                    work.push(rootId)
+                }
+            }
         }
     }
 
