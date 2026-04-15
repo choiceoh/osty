@@ -1,0 +1,63 @@
+// std.http — minimal HTTP client/server signature surface.
+
+use std.json
+
+pub type Headers = Map<String, String>
+pub type Handler = fn(Request) -> Result<Response, Error>
+
+pub enum Method {
+    Get,
+    Post,
+    Put,
+    Patch,
+    Delete,
+    Head,
+    Options,
+}
+
+pub struct Request {
+    pub method: Method,
+    pub url: String,
+    pub headers: Headers = {:},
+    pub body: Bytes,
+}
+
+pub struct Response {
+    pub status: Int,
+    pub headers: Headers = {:},
+    pub body: Bytes,
+
+    pub fn text(self) -> Result<String, Error> {
+        Ok(self.body.toString())
+    }
+
+    pub fn json<T>(self) -> Result<T, Error> {
+        json.decode::<T>(self.text()?)
+    }
+}
+
+pub fn request(req: Request) -> Result<Response, Error> {
+    Err(0)
+}
+
+pub fn get(url: String, headers: Headers = {:}) -> Result<Response, Error> {
+    request(Request {
+        method: Get,
+        url: url,
+        headers: headers,
+        body: [],
+    })
+}
+
+pub fn post(url: String, body: Bytes, headers: Headers = {:}) -> Result<Response, Error> {
+    request(Request {
+        method: Post,
+        url: url,
+        headers: headers,
+        body: body,
+    })
+}
+
+pub fn serve(addr: String, handler: Handler) -> Result<(), Error> {
+    Ok(())
+}

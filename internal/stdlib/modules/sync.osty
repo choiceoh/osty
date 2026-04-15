@@ -1,0 +1,96 @@
+// std.sync — synchronization primitives.
+
+pub struct Mutex<T> {
+    value: T,
+
+    pub fn lock(self) -> Locked<T> {
+        Locked { value: self.value }
+    }
+}
+
+pub struct Locked<T> {
+    value: T,
+
+    pub fn get(self) -> T {
+        self.value
+    }
+
+    pub fn unlock(self) {}
+}
+
+pub struct RwLock<T> {
+    value: T,
+
+    pub fn read(self) -> ReadLocked<T> {
+        ReadLocked { value: self.value }
+    }
+
+    pub fn write(self) -> WriteLocked<T> {
+        WriteLocked { value: self.value }
+    }
+}
+
+pub struct ReadLocked<T> {
+    value: T,
+
+    pub fn get(self) -> T {
+        self.value
+    }
+
+    pub fn unlock(self) {}
+}
+
+pub struct WriteLocked<T> {
+    value: T,
+
+    pub fn get(self) -> T {
+        self.value
+    }
+
+    pub fn set(mut self, value: T) {
+        self.value = value
+    }
+
+    pub fn unlock(self) {}
+}
+
+pub struct AtomicBool {
+    value: Bool,
+
+    pub fn load(self) -> Bool {
+        self.value
+    }
+
+    pub fn store(mut self, value: Bool) {
+        self.value = value
+    }
+
+    pub fn swap(mut self, value: Bool) -> Bool {
+        let old = self.value
+        self.value = value
+        old
+    }
+}
+
+pub struct AtomicInt {
+    value: Int,
+
+    pub fn load(self) -> Int {
+        self.value
+    }
+
+    pub fn store(mut self, value: Int) {
+        self.value = value
+    }
+
+    pub fn add(mut self, delta: Int) -> Int {
+        self.value = self.value + delta
+        self.value
+    }
+
+    pub fn swap(mut self, value: Int) -> Int {
+        let old = self.value
+        self.value = value
+        old
+    }
+}

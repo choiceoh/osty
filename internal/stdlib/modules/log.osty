@@ -1,0 +1,89 @@
+// std.log — structured logging surface.
+
+pub type Fields = Map<String, LogValue>
+pub type LogValueList = List<LogValue>
+pub type LogBool = Bool
+pub type LogInt = Int
+pub type LogFloat = Float
+pub type LogString = String
+pub type LogBytes = Bytes
+
+pub enum Level {
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+pub struct LogInstant {}
+
+pub struct LogDuration {}
+
+pub enum LogValue {
+    Null,
+    Bool(LogBool),
+    Int(LogInt),
+    Float(LogFloat),
+    String(LogString),
+    Time(LogInstant),
+    Duration(LogDuration),
+    Bytes(LogBytes),
+    List(LogValueList),
+    Map(Fields),
+}
+
+pub struct Record {
+    pub level: Level,
+    pub message: String,
+    pub fields: Fields = {:},
+}
+
+pub interface Handler {
+    fn handle(self, record: Record)
+}
+
+pub interface ToLogValue {
+    fn toLogValue(self) -> LogValue
+}
+
+pub struct TextHandler {}
+
+pub struct JsonHandler {}
+
+pub fn fields() -> Fields {
+    {:}
+}
+
+fn write(level: String, msg: String, fields: Fields) {
+    if fields.len() == 0 {
+        println(level + ": " + msg)
+    } else {
+        println(level + ": " + msg + " " + fields.toString())
+    }
+}
+
+pub fn debug(msg: String, fields: Fields = {:}) {
+    write("debug", msg, fields)
+}
+
+pub fn info(msg: String, fields: Fields = {:}) {
+    write("info", msg, fields)
+}
+
+pub fn warn(msg: String, fields: Fields = {:}) {
+    write("warn", msg, fields)
+}
+
+pub fn error(msg: String, fields: Fields = {:}) {
+    write("error", msg, fields)
+}
+
+pub fn setLevel(level: Level) {
+    // The pure Osty fallback logs every message. Host runtimes can
+    // replace this with process-wide filtering.
+}
+
+pub fn setHandler(handler: Handler) {
+    // The pure Osty fallback writes text through println. Host runtimes
+    // can install richer handlers.
+}

@@ -1,0 +1,108 @@
+// std.iter — lazy iterator adapters and terminal operations.
+
+pub struct Iter<T> {
+    items: List<T>,
+
+    pub fn map<U>(self, f: fn(T) -> U) -> Iter<U> {
+        let mut out: List<U> = []
+        for item in self.items {
+            out.push(f(item))
+        }
+        Iter { items: out }
+    }
+
+    pub fn filter(self, f: fn(T) -> Bool) -> Iter<T> {
+        let mut out: List<T> = []
+        for item in self.items {
+            if f(item) {
+                out.push(item)
+            }
+        }
+        Iter { items: out }
+    }
+
+    pub fn take(self, n: Int) -> Iter<T> {
+        let mut out: List<T> = []
+        let mut i = 0
+        for item in self.items {
+            if i >= n {
+                break
+            }
+            out.push(item)
+            i = i + 1
+        }
+        Iter { items: out }
+    }
+
+    pub fn takeWhile(self, f: fn(T) -> Bool) -> Iter<T> {
+        let mut out: List<T> = []
+        for item in self.items {
+            if !f(item) {
+                break
+            }
+            out.push(item)
+        }
+        Iter { items: out }
+    }
+
+    pub fn skip(self, n: Int) -> Iter<T> {
+        let mut out: List<T> = []
+        let mut i = 0
+        for item in self.items {
+            if i >= n {
+                out.push(item)
+            }
+            i = i + 1
+        }
+        Iter { items: out }
+    }
+
+    pub fn chain(self, other: Iter<T>) -> Iter<T> {
+        let mut out: List<T> = []
+        for item in self.items {
+            out.push(item)
+        }
+        for item in other.items {
+            out.push(item)
+        }
+        Iter { items: out }
+    }
+
+    pub fn toList(self) -> List<T> {
+        self.items
+    }
+
+    pub fn count(self) -> Int {
+        self.items.len()
+    }
+
+    pub fn forEach(self, f: fn(T) -> ()) {
+        for item in self.items {
+            f(item)
+        }
+    }
+
+    pub fn fold<U>(self, init: U, f: fn(U, T) -> U) -> U {
+        let mut acc = init
+        for item in self.items {
+            acc = f(acc, item)
+        }
+        acc
+    }
+}
+
+pub fn from<T>(items: List<T>) -> Iter<T> {
+    Iter { items: items }
+}
+
+pub fn empty<T>() -> Iter<T> {
+    Iter { items: [] }
+}
+
+pub fn range(start: Int, stop: Int) -> Iter<Int> {
+    let mut out: List<Int> = []
+    for i in start..stop {
+        out.push(i)
+    }
+    Iter { items: out }
+}
