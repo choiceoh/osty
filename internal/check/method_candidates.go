@@ -28,8 +28,14 @@ func (c *checker) methodCandidates(t types.Type) []string {
 		if v.Sym != nil {
 			switch v.Sym.Name {
 			case "Result":
-				for _, name := range []string{"isOk", "isErr", "unwrap", "unwrapErr", "unwrapOr", "ok", "err", "map", "mapErr", "toString"} {
-					add(name)
+				if len(c.resultMethods) > 0 {
+					for name := range c.resultMethods {
+						add(name)
+					}
+				} else {
+					for _, name := range []string{"isOk", "isErr", "unwrap", "unwrapErr", "unwrapOr", "ok", "err", "map", "mapErr", "toString"} {
+						add(name)
+					}
 				}
 			case "Chan", "Channel":
 				for _, name := range []string{"recv", "send", "close"} {

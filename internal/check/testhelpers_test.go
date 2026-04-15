@@ -13,8 +13,9 @@ import (
 // a Registry — just the primitive method table. Split out so the
 // primary test file doesn't have to import the stdlib package twice.
 type registryShim struct {
-	Primitives map[types.PrimitiveKind]map[string]*ast.FnDecl
-	lookup     func(string) *resolve.Package
+	Primitives    map[types.PrimitiveKind]map[string]*ast.FnDecl
+	ResultMethods map[string]*ast.FnDecl
+	lookup        func(string) *resolve.Package
 }
 
 func (r registryShim) LookupPackage(dotPath string) *resolve.Package {
@@ -34,7 +35,11 @@ var (
 func loadRegistryOnce() registryShim {
 	registryCacheOnce.Do(func() {
 		reg := stdlib.Load()
-		registryCache = &registryShim{Primitives: reg.Primitives, lookup: reg.LookupPackage}
+		registryCache = &registryShim{
+			Primitives:    reg.Primitives,
+			ResultMethods: reg.ResultMethods,
+			lookup:        reg.LookupPackage,
+		}
 	})
 	return *registryCache
 }

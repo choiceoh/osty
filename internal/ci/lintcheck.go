@@ -57,7 +57,8 @@ func (r *Runner) checkLint() *Check {
 // checkOpts mirrors the cmd/osty helper so primitive method
 // lookup works during the CI lint pass.
 func checkOpts() check.Opts {
-	return check.Opts{Primitives: stdlib.LoadCached().Primitives}
+	reg := stdlib.LoadCached()
+	return check.Opts{Primitives: reg.Primitives, ResultMethods: reg.ResultMethods}
 }
 
 // lintConfigFromManifest extracts the [lint] section from the

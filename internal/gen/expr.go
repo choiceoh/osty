@@ -191,7 +191,7 @@ func (g *gen) emitStructSpreadLit(s *ast.StructLit, typeName string) {
 // Plain strings (no interpolation) are emitted as Go string literals
 // via strconv.Quote. Interpolated strings are rewritten to a
 // `fmt.Sprintf` call: each literal segment becomes a quoted run, each
-// expression segment becomes a `%v` verb and a trailing argument.
+// expression segment is first routed through the Osty toString bridge.
 func (g *gen) emitStringLit(s *ast.StringLit) {
 	// Fast path: no interpolation.
 	plain := true
@@ -210,8 +210,9 @@ func (g *gen) emitStringLit(s *ast.StringLit) {
 		return
 	}
 
-	// Interpolated: fmt.Sprintf("...", args...).
+	// Interpolated: fmt.Sprintf("...", ostyToString(args)...).
 	g.use("fmt")
+	g.needStringRuntime = true
 	var format strings.Builder
 	var args []ast.Expr
 	for _, p := range s.Parts {
@@ -219,14 +220,15 @@ func (g *gen) emitStringLit(s *ast.StringLit) {
 			// Escape `%` in literal runs so fmt treats them as literal.
 			format.WriteString(strings.ReplaceAll(p.Lit, "%", "%%"))
 		} else {
-			format.WriteString("%v")
+			format.WriteString("%s")
 			args = append(args, p.Expr)
 		}
 	}
 	g.body.writef("fmt.Sprintf(%s", strconv.Quote(format.String()))
 	for _, a := range args {
-		g.body.write(", ")
+		g.body.write(", ostyToString(")
 		g.emitExpr(a)
+		g.body.write(")")
 	}
 	g.body.write(")")
 }
@@ -413,6 +415,9 @@ func (g *gen) emitCall(c *ast.CallExpr) {
 			return
 		}
 		if g.emitRandomGenericMethod(c, f) {
+			return
+		}
+		if g.emitResultMethodCall(c, f) {
 			return
 		}
 		if g.emitStaticCall(f, c.Args) {
@@ -1296,6 +1301,38 @@ func (g *gen) emitStaticCall(f *ast.FieldExpr, args []*ast.Arg) bool {
 	}
 	g.body.write(")")
 	return true
+}
+
+func (g *gen) emitResultMethodCall(c *ast.CallExpr, f *ast.FieldExpr) bool {
+	n, ok := types.AsNamedBuiltin(g.typeOf(f.X), "Result")
+	if !ok || len(n.Args) != 2 {
+		return false
+	}
+	switch f.Name {
+	case "map":
+		if len(c.Args) != 1 {
+			return false
+		}
+		g.needResult = true
+		g.body.write("resultMap(")
+		g.emitExpr(f.X)
+		g.body.write(", ")
+		g.emitExpr(c.Args[0].Value)
+		g.body.write(")")
+		return true
+	case "mapErr":
+		if len(c.Args) != 1 {
+			return false
+		}
+		g.needResult = true
+		g.body.write("resultMapErr(")
+		g.emitExpr(f.X)
+		g.body.write(", ")
+		g.emitExpr(c.Args[0].Value)
+		g.body.write(")")
+		return true
+	}
+	return false
 }
 
 // emitEnumMethodCall rewrites `enumValue.method(args)` as

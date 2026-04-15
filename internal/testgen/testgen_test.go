@@ -97,6 +97,10 @@ func TestGenerateHarness_DedupesResultRuntime(t *testing.T) {
 	if count != 1 {
 		t.Errorf("expected exactly 1 Result type definition, got %d", count)
 	}
+	count = strings.Count(string(srcs.Main), "func ostyToString(v any) string")
+	if count != 1 {
+		t.Errorf("expected exactly 1 ostyToString helper, got %d", count)
+	}
 }
 
 // TestGenerateHarness_StripsTestingStub checks that the no-op `var
@@ -200,7 +204,8 @@ func loadCalc(t *testing.T, dir string) (*resolve.Package, *check.Result) {
 	if err != nil {
 		t.Fatalf("workspace: %v", err)
 	}
-	ws.Stdlib = stdlib.LoadCached()
+	reg := stdlib.LoadCached()
+	ws.Stdlib = reg
 	ws.Packages[""] = pkg
 	pkg.Name = filepath.Base(dir)
 	for _, pf := range pkg.Files {
@@ -219,7 +224,7 @@ func loadCalc(t *testing.T, dir string) (*resolve.Package, *check.Result) {
 		}
 	}
 	results := ws.ResolveAll()
-	chk := check.Package(pkg, results[""])
+	chk := check.Package(pkg, results[""], check.Opts{Primitives: reg.Primitives, ResultMethods: reg.ResultMethods})
 	return pkg, chk
 }
 

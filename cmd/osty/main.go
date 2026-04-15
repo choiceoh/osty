@@ -904,7 +904,8 @@ func resolveFile(file *ast.File) *resolve.Result {
 // checker. Sourcing from the cached registry keeps the stdlib Load
 // cost paid once per process.
 func checkOpts() check.Opts {
-	return check.Opts{Primitives: stdlib.LoadCached().Primitives}
+	reg := stdlib.LoadCached()
+	return check.Opts{Primitives: reg.Primitives, ResultMethods: reg.ResultMethods}
 }
 
 func hasError(diags []*diag.Diagnostic) bool {

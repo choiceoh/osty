@@ -1326,6 +1326,9 @@ func (c *checker) builtinNamedMethod(n *types.Named, name string) *methodDesc {
 		if len(n.Args) != 2 {
 			return nil
 		}
+		if md := c.resultMethodFromStdlib(n, name); md != nil {
+			return md
+		}
 		return resultMethod(n, name)
 	case "Chan", "Channel":
 		// §8.5: channel methods recognized by the checker. The gen
@@ -1388,13 +1391,15 @@ func resultMethod(n *types.Named, name string) *methodDesc {
 	case "err":
 		return simpleMethod(name, nil, &types.Optional{Inner: e})
 	case "map":
-		fn := &types.FnType{Params: []types.Type{t}, Return: types.ErrorType}
-		return simpleMethod(name, []types.Type{fn},
-			&types.Named{Sym: n.Sym, Args: []types.Type{types.ErrorType, e}})
+		u := resultMethodTypeVar("U")
+		fn := &types.FnType{Params: []types.Type{t}, Return: u}
+		return genericMethod(name, []types.Type{fn},
+			&types.Named{Sym: n.Sym, Args: []types.Type{u, e}}, u)
 	case "mapErr":
-		fn := &types.FnType{Params: []types.Type{e}, Return: types.ErrorType}
-		return simpleMethod(name, []types.Type{fn},
-			&types.Named{Sym: n.Sym, Args: []types.Type{t, types.ErrorType}})
+		f := resultMethodTypeVar("F")
+		fn := &types.FnType{Params: []types.Type{e}, Return: f}
+		return genericMethod(name, []types.Type{fn},
+			&types.Named{Sym: n.Sym, Args: []types.Type{t, f}}, f)
 	case "toString":
 		return simpleMethod(name, nil, types.String)
 	}
@@ -1409,6 +1414,16 @@ func simpleMethod(name string, params []types.Type, ret types.Type) *methodDesc 
 		Name: name,
 		Fn:   &types.FnType{Params: params, Return: ret},
 	}
+}
+
+func genericMethod(name string, params []types.Type, ret types.Type, generics ...*types.TypeVar) *methodDesc {
+	md := simpleMethod(name, params, ret)
+	md.Generics = generics
+	return md
+}
+
+func resultMethodTypeVar(name string) *types.TypeVar {
+	return &types.TypeVar{Sym: &resolve.Symbol{Name: name, Kind: resolve.SymGeneric}}
 }
 
 // tryBuiltinCall handles prelude-defined callables like `println`,
