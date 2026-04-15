@@ -9,7 +9,7 @@ fn testLoginSuccess() {
 
 fn testLoginRejectsBlankUser() {
     let result = login("", "anything")
-    testing.assertEq(result, Err(Invalid))
+    testing.assertEq(result, Err(Bad))
 }
 
 fn testAddTable() {

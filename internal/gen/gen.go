@@ -95,6 +95,11 @@ type gen struct {
 	// correct type parameters when the operand's T differs.
 	currentRetType ast.Type
 
+	// currentRetGo is the same contract after semantic inference. It is
+	// needed for closures, whose return type often comes from context
+	// rather than an explicit AST annotation.
+	currentRetGo string
+
 	// questionSubs maps a QuestionExpr AST node to the Go expression
 	// text that should be emitted in its place. Populated by the
 	// statement-level pre-lift pass (see preLiftQuestions); consumed by
@@ -287,6 +292,31 @@ type Result[T any, E any] struct {
 	Error E
 	IsOk  bool
 }
+
+func (r Result[T, E]) isOk() bool { return r.IsOk }
+
+func (r Result[T, E]) isErr() bool { return !r.IsOk }
+
+func (r Result[T, E]) unwrap() T {
+	if !r.IsOk {
+		panic("called unwrap on Err")
+	}
+	return r.Value
+}
+
+func (r Result[T, E]) unwrapErr() E {
+	if r.IsOk {
+		panic("called unwrapErr on Ok")
+	}
+	return r.Error
+}
+
+func (r Result[T, E]) unwrapOr(fallback T) T {
+	if r.IsOk {
+		return r.Value
+	}
+	return fallback
+}
 `)
 	}
 	if g.needRange {
@@ -386,6 +416,29 @@ func runParallel[T any](bodies ...func() T) []T {
 		go func() {
 			defer wg.Done()
 			results[i] = body()
+		}()
+	}
+	wg.Wait()
+	return results
+}
+
+// runParallelMap backs §8.3 parallel(items, concurrency, f). It keeps
+// source order in the returned slice while limiting in-flight workers.
+func runParallelMap[T any, R any](items []T, concurrency int, fn func(T) R) []R {
+	if concurrency <= 0 {
+		concurrency = 1
+	}
+	results := make([]R, len(items))
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+	for i, item := range items {
+		i, item := i, item
+		sem <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			results[i] = fn(item)
 		}()
 	}
 	wg.Wait()
