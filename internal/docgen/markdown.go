@@ -80,24 +80,61 @@ func renderDecl(b *strings.Builder, d *Decl, headingLevel int) {
 	fmt.Fprintf(b, "%s %s `%s`\n\n",
 		strings.Repeat("#", headingLevel), titleCase(d.Kind.String()), d.Name)
 
+	// Deprecation callout — promoted above the signature so readers
+	// see the warning before investing in the API.
 	if d.Deprecated != "" {
-		fmt.Fprintf(b, "> **Deprecated** — %s\n\n", d.Deprecated)
+		renderDeprecation(b, d)
 	}
 
 	fmt.Fprintf(b, "```osty\n%s\n```\n\n", d.Signature)
+	if d.Line > 0 {
+		fmt.Fprintf(b, "_Defined at line %d._\n\n", d.Line)
+	}
 
-	if d.Doc != "" {
+	// Structured doc: summary + body prose.
+	if d.Info.Summary != "" {
+		fmt.Fprintf(b, "%s\n\n", d.Info.Summary)
+	}
+	for _, para := range d.Info.Body {
+		fmt.Fprintf(b, "%s\n\n", para)
+	}
+	// If there was a doc block but no summary parsed (rare — only when
+	// the entire doc fit in a labeled section), fall back to the raw
+	// block so no content is dropped.
+	if d.Info.IsEmpty() && d.Doc != "" {
 		b.WriteString(d.Doc)
-		// Doc comments are rejoined with newlines by the lexer; ensure
-		// the block ends with exactly one blank line.
 		if !strings.HasSuffix(d.Doc, "\n") {
 			b.WriteByte('\n')
 		}
 		b.WriteByte('\n')
 	}
 
+	subHead := strings.Repeat("#", headingLevel+1)
+
+	if len(d.Info.Params) > 0 {
+		fmt.Fprintf(b, "%s Parameters\n\n", subHead)
+		b.WriteString("| Name | Description |\n|---|---|\n")
+		for _, p := range d.Info.Params {
+			fmt.Fprintf(b, "| `%s` | %s |\n", p.Name, escapePipes(p.Desc))
+		}
+		b.WriteByte('\n')
+	}
+	if d.Info.Returns != "" {
+		fmt.Fprintf(b, "%s Returns\n\n%s\n\n", subHead, d.Info.Returns)
+	}
+	for _, ex := range d.Info.Examples {
+		fmt.Fprintf(b, "%s Example\n\n```osty\n%s\n```\n\n", subHead, ex)
+	}
+	if len(d.Info.See) > 0 {
+		fmt.Fprintf(b, "%s See also\n\n", subHead)
+		for _, s := range d.Info.See {
+			fmt.Fprintf(b, "- `%s`\n", s)
+		}
+		b.WriteByte('\n')
+	}
+
 	if len(d.Fields) > 0 {
-		fmt.Fprintf(b, "%s Fields\n\n", strings.Repeat("#", headingLevel+1))
+		fmt.Fprintf(b, "%s Fields\n\n", subHead)
 		b.WriteString("| Name | Type |\n|---|---|\n")
 		for _, f := range d.Fields {
 			fmt.Fprintf(b, "| `%s` | `%s` |\n", f.Name, f.Type)
@@ -106,7 +143,7 @@ func renderDecl(b *strings.Builder, d *Decl, headingLevel int) {
 	}
 
 	if len(d.Variants) > 0 {
-		fmt.Fprintf(b, "%s Variants\n\n", strings.Repeat("#", headingLevel+1))
+		fmt.Fprintf(b, "%s Variants\n\n", subHead)
 		for _, v := range d.Variants {
 			if len(v.Payload) == 0 {
 				fmt.Fprintf(b, "- `%s`", v.Name)
@@ -122,11 +159,37 @@ func renderDecl(b *strings.Builder, d *Decl, headingLevel int) {
 	}
 
 	if len(d.Methods) > 0 {
-		fmt.Fprintf(b, "%s Methods\n\n", strings.Repeat("#", headingLevel+1))
+		fmt.Fprintf(b, "%s Methods\n\n", subHead)
 		for _, m := range d.Methods {
 			renderDecl(b, m, headingLevel+2)
 		}
 	}
+}
+
+// renderDeprecation formats the `#[deprecated]` callout into a blockquote
+// that composes the message, since-version, and replacement hint into
+// one paragraph. Separated out to keep renderDecl linear.
+func renderDeprecation(b *strings.Builder, d *Decl) {
+	parts := []string{"**Deprecated**"}
+	if d.DeprecatedSince != "" {
+		parts = append(parts, "since "+d.DeprecatedSince)
+	}
+	line := strings.Join(parts, " ")
+	if d.Deprecated != "" && d.Deprecated != "deprecated" {
+		line += " — " + d.Deprecated
+	}
+	fmt.Fprintf(b, "> %s\n", line)
+	if d.DeprecatedUse != "" {
+		fmt.Fprintf(b, "> Use `%s` instead.\n", d.DeprecatedUse)
+	}
+	b.WriteByte('\n')
+}
+
+// escapePipes replaces `|` with `\|` so a description that contains a
+// literal pipe doesn't break the enclosing markdown table. Cheap and
+// sufficient — users rarely put pipes in param docs.
+func escapePipes(s string) string {
+	return strings.ReplaceAll(s, "|", `\|`)
 }
 
 // declAnchor builds the text the slug function will turn into a link

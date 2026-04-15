@@ -102,10 +102,13 @@ func (k DeclKind) String() string {
 type Decl struct {
 	Kind       DeclKind
 	Name       string
-	Doc        string
-	Line       int    // 1-based source line of the declaration keyword
-	Signature  string // one-line signature (e.g. "fn new(name: String) -> Self")
-	Deprecated string // "deprecated" annotation message; empty if absent
+	Doc        string  // raw `///` block, newline-joined, as the parser saw it
+	Info       DocInfo // structured parse of Doc (Summary, Params, Returns, Example, See)
+	Line       int     // 1-based source line of the declaration keyword
+	Signature  string  // one-line signature (e.g. "fn new(name: String) -> Self")
+	Deprecated string  // `#[deprecated(message = ...)]` message, empty if absent
+	DeprecatedSince string // `#[deprecated(since = "0.5")]` version, empty if absent
+	DeprecatedUse   string // `#[deprecated(use = "newFn")]` replacement hint, empty if absent
 
 	// Fields populated for KindStruct.
 	Fields []*Field
@@ -180,6 +183,14 @@ func fromFile(path string, file *ast.File) *Module {
 	return m
 }
 
+// fillDeprecated populates the three deprecation fields from an
+// annotation list in one pass so each call site stays readable.
+func fillDeprecated(dst *Decl, annots []*ast.Annotation) {
+	dst.Deprecated = deprecatedMessage(annots)
+	dst.DeprecatedSince = deprecatedArg(annots, "since")
+	dst.DeprecatedUse = deprecatedArg(annots, "use")
+}
+
 // fromDecl converts one AST declaration. Returns nil for non-pub
 // declarations and for declaration kinds that don't participate in
 // the API surface (UseDecl).
@@ -189,26 +200,29 @@ func fromDecl(d ast.Decl) *Decl {
 		if !n.Pub {
 			return nil
 		}
-		return &Decl{
-			Kind:       KindFunction,
-			Name:       n.Name,
-			Doc:        n.DocComment,
-			Line:       n.PosV.Line,
-			Signature:  RenderFnSignature(n),
-			Deprecated: deprecatedMessage(n.Annotations),
+		dc := &Decl{
+			Kind:      KindFunction,
+			Name:      n.Name,
+			Doc:       n.DocComment,
+			Info:      parseDocComment(n.DocComment),
+			Line:      n.PosV.Line,
+			Signature: RenderFnSignature(n),
 		}
+		fillDeprecated(dc, n.Annotations)
+		return dc
 	case *ast.StructDecl:
 		if !n.Pub {
 			return nil
 		}
 		dc := &Decl{
-			Kind:       KindStruct,
-			Name:       n.Name,
-			Doc:        n.DocComment,
-			Line:       n.PosV.Line,
-			Signature:  renderStructHeader(n),
-			Deprecated: deprecatedMessage(n.Annotations),
+			Kind:      KindStruct,
+			Name:      n.Name,
+			Doc:       n.DocComment,
+			Info:      parseDocComment(n.DocComment),
+			Line:      n.PosV.Line,
+			Signature: renderStructHeader(n),
 		}
+		fillDeprecated(dc, n.Annotations)
 		for _, f := range n.Fields {
 			if !f.Pub {
 				continue
@@ -222,14 +236,16 @@ func fromDecl(d ast.Decl) *Decl {
 			if !m.Pub {
 				continue
 			}
-			dc.Methods = append(dc.Methods, &Decl{
-				Kind:       KindFunction,
-				Name:       m.Name,
-				Doc:        m.DocComment,
-				Line:       m.PosV.Line,
-				Signature:  RenderFnSignature(m),
-				Deprecated: deprecatedMessage(m.Annotations),
-			})
+			md := &Decl{
+				Kind:      KindFunction,
+				Name:      m.Name,
+				Doc:       m.DocComment,
+				Info:      parseDocComment(m.DocComment),
+				Line:      m.PosV.Line,
+				Signature: RenderFnSignature(m),
+			}
+			fillDeprecated(md, m.Annotations)
+			dc.Methods = append(dc.Methods, md)
 		}
 		return dc
 	case *ast.EnumDecl:
@@ -237,13 +253,14 @@ func fromDecl(d ast.Decl) *Decl {
 			return nil
 		}
 		dc := &Decl{
-			Kind:       KindEnum,
-			Name:       n.Name,
-			Doc:        n.DocComment,
-			Line:       n.PosV.Line,
-			Signature:  renderEnumHeader(n),
-			Deprecated: deprecatedMessage(n.Annotations),
+			Kind:      KindEnum,
+			Name:      n.Name,
+			Doc:       n.DocComment,
+			Info:      parseDocComment(n.DocComment),
+			Line:      n.PosV.Line,
+			Signature: renderEnumHeader(n),
 		}
+		fillDeprecated(dc, n.Annotations)
 		for _, v := range n.Variants {
 			payload := make([]string, 0, len(v.Fields))
 			for _, t := range v.Fields {
@@ -259,14 +276,16 @@ func fromDecl(d ast.Decl) *Decl {
 			if !m.Pub {
 				continue
 			}
-			dc.Methods = append(dc.Methods, &Decl{
-				Kind:       KindFunction,
-				Name:       m.Name,
-				Doc:        m.DocComment,
-				Line:       m.PosV.Line,
-				Signature:  RenderFnSignature(m),
-				Deprecated: deprecatedMessage(m.Annotations),
-			})
+			md := &Decl{
+				Kind:      KindFunction,
+				Name:      m.Name,
+				Doc:       m.DocComment,
+				Info:      parseDocComment(m.DocComment),
+				Line:      m.PosV.Line,
+				Signature: RenderFnSignature(m),
+			}
+			fillDeprecated(md, m.Annotations)
+			dc.Methods = append(dc.Methods, md)
 		}
 		return dc
 	case *ast.InterfaceDecl:
@@ -274,13 +293,14 @@ func fromDecl(d ast.Decl) *Decl {
 			return nil
 		}
 		dc := &Decl{
-			Kind:       KindInterface,
-			Name:       n.Name,
-			Doc:        n.DocComment,
-			Line:       n.PosV.Line,
-			Signature:  renderInterfaceHeader(n),
-			Deprecated: deprecatedMessage(n.Annotations),
+			Kind:      KindInterface,
+			Name:      n.Name,
+			Doc:       n.DocComment,
+			Info:      parseDocComment(n.DocComment),
+			Line:      n.PosV.Line,
+			Signature: renderInterfaceHeader(n),
 		}
+		fillDeprecated(dc, n.Annotations)
 		// Interface methods are all part of the contract regardless of
 		// pub — the interface itself being pub exposes them.
 		for _, m := range n.Methods {
@@ -288,6 +308,7 @@ func fromDecl(d ast.Decl) *Decl {
 				Kind:      KindFunction,
 				Name:      m.Name,
 				Doc:       m.DocComment,
+				Info:      parseDocComment(m.DocComment),
 				Line:      m.PosV.Line,
 				Signature: RenderFnSignature(m),
 			})
@@ -297,27 +318,30 @@ func fromDecl(d ast.Decl) *Decl {
 		if !n.Pub {
 			return nil
 		}
-		return &Decl{
+		dc := &Decl{
 			Kind:        KindTypeAlias,
 			Name:        n.Name,
 			Doc:         n.DocComment,
+			Info:        parseDocComment(n.DocComment),
 			Line:        n.PosV.Line,
 			Signature:   renderTypeAliasHeader(n),
 			AliasTarget: RenderType(n.Target),
-			Deprecated:  deprecatedMessage(n.Annotations),
 		}
+		fillDeprecated(dc, n.Annotations)
+		return dc
 	case *ast.LetDecl:
 		if !n.Pub {
 			return nil
 		}
 		dc := &Decl{
-			Kind:       KindConstant,
-			Name:       n.Name,
-			Doc:        n.DocComment,
-			Line:       n.PosV.Line,
-			Signature:  renderLetHeader(n),
-			Deprecated: deprecatedMessage(n.Annotations),
+			Kind:      KindConstant,
+			Name:      n.Name,
+			Doc:       n.DocComment,
+			Info:      parseDocComment(n.DocComment),
+			Line:      n.PosV.Line,
+			Signature: renderLetHeader(n),
 		}
+		fillDeprecated(dc, n.Annotations)
 		if n.Type != nil {
 			dc.ConstType = RenderType(n.Type)
 		}
@@ -343,6 +367,26 @@ func deprecatedMessage(annots []*ast.Annotation) string {
 			}
 		}
 		return "deprecated"
+	}
+	return ""
+}
+
+// deprecatedArg returns the value of one string-typed arg on the
+// `#[deprecated(...)]` annotation. Empty string when the annotation or
+// the requested key is absent. Keeps the `since` / `use` lookups
+// decoupled so renderers can present them independently.
+func deprecatedArg(annots []*ast.Annotation, key string) string {
+	for _, a := range annots {
+		if a.Name != "deprecated" {
+			continue
+		}
+		for _, arg := range a.Args {
+			if arg.Key == key {
+				if s, ok := stringLiteral(arg.Value); ok {
+					return s
+				}
+			}
+		}
 	}
 	return ""
 }
