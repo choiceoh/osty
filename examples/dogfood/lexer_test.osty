@@ -1,0 +1,186 @@
+use std.testing
+
+// --- Basic lexing ---
+
+fn testOstyLexSimpleTokens() {
+    let result = ostyLex(r"fn add(a: Int) -> Int { return a + 1 }")
+    testing.assert(ostyLexResultTokenCount(result) > 0)
+    testing.assertEq(ostyLexResultErrorCount(result), 0)
+    let first = ostyLexResultTokenAt(result, 0)
+    testing.assertEq(first.kind, FrontFn)
+}
+
+fn testOstyLexIdentifiesKeywords() {
+    let result = ostyLex(r"fn struct enum interface type let mut pub use if else match for return break continue defer")
+    testing.assertEq(ostyLexResultErrorCount(result), 0)
+    let first = ostyLexResultTokenAt(result, 0)
+    testing.assertEq(first.kind, FrontFn)
+    testing.assert(ostyIsKeyword(first.kind))
+}
+
+fn testOstyLexLiterals() {
+    let result = ostyLex(r"42 3.14 'a' b'x'")
+    testing.assertEq(ostyLexResultErrorCount(result), 0)
+    let first = ostyLexResultTokenAt(result, 0)
+    testing.assertEq(first.kind, FrontInt)
+    testing.assertEq(first.text, "42")
+    testing.assert(ostyIsLiteral(first.kind))
+}
+
+fn testOstyLexOperators() {
+    let result = ostyLex(r"+ - * / % == != < > <= >= && || ! & | ^ ~ << >> = += -= -> <- ? ?. ?? .. ..= :: _ @ #")
+    testing.assertEq(ostyLexResultErrorCount(result), 0)
+    let first = ostyLexResultTokenAt(result, 0)
+    testing.assertEq(first.kind, FrontPlus)
+    testing.assert(ostyIsPunctuation(first.kind))
+}
+
+fn testOstyLexStrings() {
+    let result = ostyLex("let x = \"hello world\"\n")
+    testing.assertEq(ostyLexResultErrorCount(result), 0)
+}
+
+// --- Position tracking ---
+
+fn testOstyLexPositions() {
+    let result = ostyLex("fn f() \{\}\n")
+    let first = ostyLexResultTokenAt(result, 0)
+    testing.assertEq(first.startLine, 1)
+    testing.assertEq(first.startCol, 1)
+}
+
+fn testOstyLexMultilinePositions() {
+    let result = ostyLex("let x = 1\nlet y = 2\n")
+    testing.assertEq(ostyLexResultErrorCount(result), 0)
+    testing.assert(ostyLexResultTokenCount(result) > 5)
+}
+
+// --- Comments ---
+
+fn testOstyLexLineComments() {
+    let result = ostyLex("// this is a comment\nfn f() \{\}\n")
+    testing.assertEq(ostyLexResultErrorCount(result), 0)
+    testing.assert(ostyLexResultCommentCount(result) >= 1)
+}
+
+fn testOstyLexBlockComments() {
+    let result = ostyLex("/* block */\nfn f() \{\}\n")
+    testing.assertEq(ostyLexResultErrorCount(result), 0)
+    testing.assert(ostyLexResultCommentCount(result) >= 1)
+}
+
+fn testOstyLexDocComments() {
+    let result = ostyLex("/// doc comment\nfn f() \{\}\n")
+    testing.assertEq(ostyLexResultErrorCount(result), 0)
+    testing.assert(ostyLexResultCommentCount(result) >= 1)
+}
+
+// --- Source normalization ---
+
+fn testOstyNormalizeSource() {
+    let normalized = ostyNormalizeSource("a\r\nb\rc\n")
+    testing.assertEq(normalized, "a\nb\nc\n")
+}
+
+// --- Number base prefixes ---
+
+fn testOstyLexHexLiteral() {
+    let result = ostyLex("let x = 0xFF\n")
+    testing.assertEq(ostyLexResultErrorCount(result), 0)
+}
+
+fn testOstyLexBinaryLiteral() {
+    let result = ostyLex("let x = 0b1010\n")
+    testing.assertEq(ostyLexResultErrorCount(result), 0)
+}
+
+fn testOstyLexOctalLiteral() {
+    let result = ostyLex("let x = 0o77\n")
+    testing.assertEq(ostyLexResultErrorCount(result), 0)
+}
+
+fn testOstyLexUppercaseBaseError() {
+    let result = ostyLex("let x = 0B101\n")
+    testing.assert(ostyLexResultErrorCount(result) > 0)
+}
+
+// --- BOM and shebang ---
+
+fn testOstyLexBomStripping() {
+    let result = ostyLex("\u{FEFF}fn f() \{\}\n")
+    testing.assert(result.hasBom)
+    testing.assertEq(ostyLexResultErrorCount(result), 0)
+}
+
+fn testOstyLexShebang() {
+    let result = ostyLex("#!/usr/bin/env osty\nfn f() \{\}\n")
+    testing.assert(result.hasShebang)
+    testing.assertEq(ostyLexResultErrorCount(result), 0)
+}
+
+// --- Error diagnostics ---
+
+fn testOstyLexUnterminatedString() {
+    let result = ostyLex("let x = \"unterminated\n")
+    testing.assert(ostyLexResultErrorCount(result) > 0)
+}
+
+fn testOstyLexUnterminatedBlockComment() {
+    let result = ostyLex("/* unterminated\n")
+    testing.assert(ostyLexResultErrorCount(result) > 0)
+}
+
+// --- Formatting ---
+
+fn testOstyFormatTokensDump() {
+    let result = ostyLex(r"fn f() { 42 }")
+    let dump = ostyFormatTokens(result)
+    testing.assert(dump != "")
+}
+
+fn testOstyFormatLexErrorsOutput() {
+    let result = ostyLex("let x = \"unterminated\n")
+    let formatted = ostyFormatLexErrors(result)
+    testing.assert(formatted != "")
+}
+
+// --- Integration with parser ---
+
+fn testOstyLexTokensForParser() {
+    let tokens = ostyLexTokens(r"fn f() { return 42 }")
+    let count = frontTokenListCount(tokens)
+    testing.assert(count > 0)
+}
+
+fn testOstyLexThenParse() {
+    let source = r"fn add(a: Int, b: Int) -> Int { return a + b }"
+    let file = astParse(source)
+    testing.assertEq(astFileErrorCount(file), 0)
+    testing.assertEq(astFileDeclCount(file), 1)
+
+    let result = ostyLex(source)
+    testing.assertEq(ostyLexResultErrorCount(result), 0)
+    testing.assert(ostyLexResultTokenCount(result) > 10)
+}
+
+// --- Predicate helpers ---
+
+fn testOstyTokenPredicates() {
+    testing.assert(ostyIsKeyword(FrontFn))
+    testing.assert(ostyIsKeyword(FrontStruct))
+    testing.assert(!(ostyIsKeyword(FrontIdent)))
+    testing.assert(ostyIsLiteral(FrontInt))
+    testing.assert(ostyIsLiteral(FrontString))
+    testing.assert(!(ostyIsLiteral(FrontFn)))
+    testing.assert(ostyIsPunctuation(FrontPlus))
+    testing.assert(ostyIsPunctuation(FrontLParen))
+    testing.assert(!(ostyIsPunctuation(FrontIdent)))
+    testing.assert(ostyIsAssignOp(FrontAssign))
+    testing.assert(ostyIsAssignOp(FrontPlusEq))
+    testing.assert(!(ostyIsAssignOp(FrontPlus)))
+}
+
+fn testOstyTokenKindName() {
+    testing.assertEq(ostyTokenKindName(FrontFn), "fn")
+    testing.assertEq(ostyTokenKindName(FrontPlus), "+")
+}
