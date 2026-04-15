@@ -1,0 +1,101 @@
+// std.bytes — byte-sequence manipulation, mirroring std.strings for Bytes.
+//
+// All functions return new Bytes values; nothing mutates in place.
+// Runtime lowering is intrinsic for the core operations that map
+// directly to Go slice primitives.
+
+pub fn len(b: Bytes) -> Int {
+    b.len()
+}
+
+pub fn isEmpty(b: Bytes) -> Bool {
+    b.len() == 0
+}
+
+pub fn get(b: Bytes, i: Int) -> Byte? {
+    b.get(i)
+}
+
+pub fn slice(b: Bytes, start: Int, end: Int) -> Bytes {
+    slice(b, start, end)
+}
+
+pub fn contains(b: Bytes, sub: Bytes) -> Bool {
+    indexOf(b, sub).isSome()
+}
+
+pub fn startsWith(b: Bytes, prefix: Bytes) -> Bool {
+    startsWith(b, prefix)
+}
+
+pub fn endsWith(b: Bytes, suffix: Bytes) -> Bool {
+    endsWith(b, suffix)
+}
+
+pub fn indexOf(b: Bytes, sub: Bytes) -> Int? {
+    indexOf(b, sub)
+}
+
+pub fn lastIndexOf(b: Bytes, sub: Bytes) -> Int? {
+    lastIndexOf(b, sub)
+}
+
+pub fn split(b: Bytes, sep: Bytes) -> List<Bytes> {
+    split(b, sep)
+}
+
+pub fn join(parts: List<Bytes>, sep: Bytes) -> Bytes {
+    join(parts, sep)
+}
+
+pub fn concat(a: Bytes, b: Bytes) -> Bytes {
+    a.concat(b)
+}
+
+pub fn repeat(b: Bytes, n: Int) -> Bytes {
+    repeat(b, n)
+}
+
+pub fn replace(b: Bytes, old: Bytes, new: Bytes) -> Bytes {
+    replace(b, old, new)
+}
+
+pub fn replaceAll(b: Bytes, old: Bytes, new: Bytes) -> Bytes {
+    replaceAll(b, old, new)
+}
+
+pub fn trimLeft(b: Bytes, strip: Bytes) -> Bytes {
+    trimLeft(b, strip)
+}
+
+pub fn trimRight(b: Bytes, strip: Bytes) -> Bytes {
+    trimRight(b, strip)
+}
+
+pub fn trim(b: Bytes, strip: Bytes) -> Bytes {
+    trimLeft(trimRight(b, strip), strip)
+}
+
+pub fn toUpper(b: Bytes) -> Bytes {
+    toUpper(b)
+}
+
+pub fn toLower(b: Bytes) -> Bytes {
+    toLower(b)
+}
+
+pub fn fromString(s: String) -> Bytes {
+    fromString(s)
+}
+
+pub fn toString(b: Bytes) -> Result<String, Error> {
+    b.toString()
+}
+
+pub fn toHex(b: Bytes) -> String {
+    toHex(b)
+}
+
+pub fn fromHex(s: String) -> Result<Bytes, Error> {
+    fromHex(s)
+}

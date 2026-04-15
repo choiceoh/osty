@@ -454,9 +454,6 @@ func (g *gen) emitCall(c *ast.CallExpr) {
 		if g.emitStdlibEnvCall(c, f) {
 			return
 		}
-		if g.emitStdlibCSVCall(c, f) {
-			return
-		}
 		if g.emitStdlibCompressCall(c, f) {
 			return
 		}
@@ -796,44 +793,6 @@ func (g *gen) emitStdlibEnvCall(c *ast.CallExpr, _ *ast.FieldExpr) bool {
 	return true
 }
 
-func (g *gen) emitStdlibCSVCall(c *ast.CallExpr, _ *ast.FieldExpr) bool {
-	parts, ok := g.stdlibCallPath(c, "csv")
-	if !ok || len(parts) != 1 {
-		return false
-	}
-	var helper string
-	switch parts[0] {
-	case "encode":
-		if len(c.Args) == 1 {
-			helper = "csvEncode"
-		}
-	case "encodeWith":
-		if len(c.Args) == 2 {
-			helper = "csvEncodeWith"
-		}
-	case "decode":
-		if len(c.Args) == 1 {
-			helper = "csvDecode"
-		}
-	case "decodeHeaders":
-		if len(c.Args) == 1 {
-			helper = "csvDecodeHeaders"
-		}
-	case "decodeWith":
-		if len(c.Args) == 2 {
-			helper = "csvDecodeWith"
-		}
-	}
-	if helper == "" {
-		return false
-	}
-	g.needCSV = true
-	if strings.HasPrefix(helper, "csvDecode") {
-		g.needResult = true
-	}
-	g.emitStdlibHelperCall(helper, c.Args)
-	return true
-}
 
 func (g *gen) emitStdlibCompressCall(c *ast.CallExpr, _ *ast.FieldExpr) bool {
 	parts, ok := g.stdlibCallPath(c, "compress")
@@ -1026,7 +985,7 @@ func (g *gen) stdlibStructLitType(e ast.Expr) (string, bool) {
 	}
 	if g.isStdlibPackageAlias(id, "csv") && f.Name == "CsvOptions" {
 		g.needCSV = true
-		return "CsvOptions", true
+		return "_ostyCsvOptions", true
 	}
 	if g.isStdlibPackageAlias(id, "error") && f.Name == "BasicError" {
 		g.needErrorRuntime = true
