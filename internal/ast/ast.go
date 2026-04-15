@@ -234,10 +234,15 @@ func (f *FnDecl) Doc() string       { return f.DocComment }
 func (f *FnDecl) Annots() []*Annotation { return f.Annotations }
 
 // Receiver describes the `self` or `mut self` first parameter of a method.
+//
+// MutPos records the position of the `mut` keyword when Mut is true,
+// so tools can rewrite `mut self` → `self` by deleting that token's span.
+// When Mut is false, MutPos is the zero Pos.
 type Receiver struct {
-	PosV token.Pos
-	EndV token.Pos
-	Mut  bool
+	PosV   token.Pos
+	EndV   token.Pos
+	Mut    bool
+	MutPos token.Pos
 }
 
 func (r *Receiver) Pos() token.Pos { return r.PosV }
@@ -414,11 +419,16 @@ func (t *TypeAliasDecl) Doc() string       { return t.DocComment }
 func (t *TypeAliasDecl) Annots() []*Annotation { return t.Annotations }
 
 // LetDecl — `pub let NAME = ...` at top level.
+//
+// MutPos records the position of the `mut` keyword when Mut is true so
+// lint's `unused_mut` autofix can delete the token directly. Zero Pos
+// when Mut is false.
 type LetDecl struct {
 	PosV        token.Pos
 	EndV        token.Pos
 	Pub         bool
 	Mut         bool
+	MutPos      token.Pos
 	Name        string
 	Type        Type // optional annotation
 	Value       Expr // required for top-level let
@@ -499,11 +509,15 @@ func (b *Block) End() token.Pos { return b.EndV }
 
 // LetStmt introduces one or more bindings: `let p = e`, `let (a, b) = e`,
 // `let User { name, age } = e`, etc.
+//
+// MutPos records the `mut` keyword's position when Mut is true, enabling
+// autofix of `let mut x` → `let x`. Zero Pos otherwise.
 type LetStmt struct {
 	PosV    token.Pos
 	EndV    token.Pos
 	Pattern Pattern
 	Mut     bool
+	MutPos  token.Pos
 	Type    Type // optional annotation
 	Value   Expr
 }

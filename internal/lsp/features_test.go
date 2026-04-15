@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/osty/osty/internal/diag"
 )
@@ -297,6 +298,443 @@ func TestCodeActionRenameUndefined(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected a rename-to-println quick fix, got %+v", actions)
+	}
+}
+
+// TestLintDiagnosticsPublished verifies that lint warnings (L-codes)
+// now arrive in publishDiagnostics so editors paint squigglies and
+// the per-diagnostic quick-fix handlers actually have something to
+// fire on.
+func TestLintDiagnosticsPublished(t *testing.T) {
+	sess := startSession(t)
+	defer sess.stop()
+	sess.initialize()
+
+	src := `fn main() {
+    let unused = 1
+    let x = 2
+    println(x)
+}
+`
+	sess.send("", "textDocument/didOpen", DidOpenTextDocumentParams{
+		TextDocument: TextDocumentItem{
+			URI: sampleURI, LanguageID: "osty", Version: 1, Text: src,
+		},
+	})
+	notifs := sess.drainNotifications("textDocument/publishDiagnostics", 2*time.Second)
+	if len(notifs) == 0 {
+		t.Fatal("no diagnostics published")
+	}
+	var pp PublishDiagnosticsParams
+	if err := json.Unmarshal(notifs[len(notifs)-1].Params, &pp); err != nil {
+		t.Fatal(err)
+	}
+	foundL0001 := false
+	for _, d := range pp.Diagnostics {
+		if d.Code == diag.CodeUnusedLet {
+			foundL0001 = true
+			break
+		}
+	}
+	if !foundL0001 {
+		t.Errorf("expected L0001 (unused let) in published diagnostics, got %+v", pp.Diagnostics)
+	}
+}
+
+// TestOrganizeImportsBailsOnComment verifies we refuse to rewrite
+// the use block when a line comment sits between two imports — the
+// AST doesn't track that comment, so rewriting would silently drop
+// it. The action must simply not be offered in that case.
+func TestOrganizeImportsBailsOnComment(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "zeta", "z.osty"),
+		`pub fn zz() {}
+`)
+	writeFile(t, filepath.Join(dir, "alpha", "a.osty"),
+		`pub fn aa() {}
+`)
+	mainPath := filepath.Join(dir, "main.osty")
+	// Out-of-order imports with a comment between them. Without
+	// the comment we'd offer a sort action; with it we must bail.
+	mainSrc := `use zeta
+// important ordering note
+use alpha
+
+fn main() {
+    zeta.zz()
+    alpha.aa()
+}
+`
+	writeFile(t, mainPath, mainSrc)
+
+	sess := startSession(t)
+	defer sess.stop()
+	sess.initialize()
+	mainURI := fileURI(mainPath)
+	sess.openDoc(mainURI, mainSrc)
+
+	sess.send("oi4", "textDocument/codeAction", CodeActionParams{
+		TextDocument: TextDocumentIdentifier{URI: mainURI},
+		Range:        Range{},
+		Context: CodeActionContext{
+			Only: []string{CodeActionSourceOrganizeImports},
+		},
+	})
+	resp := sess.waitResponse("oi4")
+	if resp.Error != nil {
+		t.Fatalf("codeAction error: %+v", resp.Error)
+	}
+	var actions []CodeAction
+	if err := json.Unmarshal(resp.Result, &actions); err != nil {
+		t.Fatal(err)
+	}
+	if len(actions) != 0 {
+		t.Errorf("expected no organizeImports when comment between uses; got %+v", actions)
+	}
+}
+
+// TestOrganizeImportsPreservesTrailingBlank checks that the rewrite
+// doesn't swallow blank lines the author inserted after the last
+// use — that whitespace belongs to the next declaration and must
+// survive.
+func TestOrganizeImportsPreservesTrailingBlank(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "zeta", "z.osty"),
+		`pub fn zz() {}
+`)
+	writeFile(t, filepath.Join(dir, "alpha", "a.osty"),
+		`pub fn aa() {}
+`)
+	mainPath := filepath.Join(dir, "main.osty")
+	// Out-of-order but clean (no comments).
+	mainSrc := `use zeta
+use alpha
+
+fn main() {
+    zeta.zz()
+    alpha.aa()
+}
+`
+	writeFile(t, mainPath, mainSrc)
+
+	sess := startSession(t)
+	defer sess.stop()
+	sess.initialize()
+	mainURI := fileURI(mainPath)
+	sess.openDoc(mainURI, mainSrc)
+
+	sess.send("oi5", "textDocument/codeAction", CodeActionParams{
+		TextDocument: TextDocumentIdentifier{URI: mainURI},
+		Range:        Range{},
+		Context: CodeActionContext{
+			Only: []string{CodeActionSourceOrganizeImports},
+		},
+	})
+	resp := sess.waitResponse("oi5")
+	if resp.Error != nil {
+		t.Fatalf("codeAction error: %+v", resp.Error)
+	}
+	var actions []CodeAction
+	if err := json.Unmarshal(resp.Result, &actions); err != nil {
+		t.Fatal(err)
+	}
+	if len(actions) == 0 {
+		t.Fatal("expected a sort action")
+	}
+	edits := actions[0].Edit.Changes[mainURI]
+	if len(edits) != 1 {
+		t.Fatalf("expected one edit, got %d", len(edits))
+	}
+	// Simulate applying the edit to the original source and confirm
+	// the blank line before `fn main` survives.
+	li := newLineIndex([]byte(mainSrc))
+	startOff := offsetFromLSP(li, edits[0].Range.Start)
+	endOff := offsetFromLSP(li, edits[0].Range.End)
+	if startOff < 0 || endOff > len(mainSrc) || startOff > endOff {
+		t.Fatalf("bad edit range: %+v", edits[0].Range)
+	}
+	after := mainSrc[:startOff] + edits[0].NewText + mainSrc[endOff:]
+	if !strings.Contains(after, "use alpha\nuse zeta\n\nfn main()") {
+		t.Errorf("trailing blank line lost. Applied result:\n%s", after)
+	}
+}
+
+// offsetFromLSP is a small helper that walks a lineIndex to convert
+// an LSP Position back into a byte offset — used by the organize
+// tests above to simulate applying the returned edits.
+func offsetFromLSP(li *lineIndex, p Position) int {
+	if int(p.Line) >= len(li.lines) {
+		return len(li.src)
+	}
+	return li.lspToOsty(p).Offset
+}
+
+// TestOrganizeImportsDropsUnused opens a file with one used and one
+// unused `use` and verifies source.organizeImports returns an edit
+// that rewrites the import block without the dead line.
+func TestOrganizeImportsDropsUnused(t *testing.T) {
+	dir := t.TempDir()
+	// Sibling packages so the `use` decls resolve against a real
+	// workspace — otherwise the resolver may not flag the unused
+	// imports via L0003.
+	writeFile(t, filepath.Join(dir, "auth", "login.osty"),
+		`pub fn login() {}
+`)
+	writeFile(t, filepath.Join(dir, "util", "helper.osty"),
+		`pub fn noop() {}
+`)
+	mainPath := filepath.Join(dir, "main.osty")
+	mainSrc := `use util
+use auth
+
+fn main() {
+    auth.login()
+}
+`
+	writeFile(t, mainPath, mainSrc)
+
+	sess := startSession(t)
+	defer sess.stop()
+	sess.initialize()
+	mainURI := fileURI(mainPath)
+	sess.openDoc(mainURI, mainSrc)
+
+	sess.send("oi1", "textDocument/codeAction", CodeActionParams{
+		TextDocument: TextDocumentIdentifier{URI: mainURI},
+		Range: Range{
+			Start: Position{Line: 0, Character: 0},
+			End:   Position{Line: 0, Character: 0},
+		},
+		Context: CodeActionContext{
+			Only: []string{CodeActionSourceOrganizeImports},
+		},
+	})
+	resp := sess.waitResponse("oi1")
+	if resp.Error != nil {
+		t.Fatalf("codeAction error: %+v", resp.Error)
+	}
+	var actions []CodeAction
+	if err := json.Unmarshal(resp.Result, &actions); err != nil {
+		t.Fatal(err)
+	}
+	if len(actions) == 0 {
+		t.Fatal("expected an organizeImports action")
+	}
+	a := actions[0]
+	if a.Kind != CodeActionSourceOrganizeImports {
+		t.Errorf("kind = %q, want %q", a.Kind, CodeActionSourceOrganizeImports)
+	}
+	if a.Edit == nil || len(a.Edit.Changes[mainURI]) == 0 {
+		t.Fatalf("no edits in action: %+v", a)
+	}
+	newText := a.Edit.Changes[mainURI][0].NewText
+	if strings.Contains(newText, "use util") {
+		t.Errorf("expected `use util` to be removed; got: %q", newText)
+	}
+	if !strings.Contains(newText, "use auth") {
+		t.Errorf("expected `use auth` to survive; got: %q", newText)
+	}
+}
+
+// TestOrganizeImportsSortsAlphabetically verifies a grab-bag of
+// imports comes back in sorted order so the edit is a genuine
+// canonicalization and not just a passthrough.
+func TestOrganizeImportsSortsAlphabetically(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "zeta", "z.osty"),
+		`pub fn zz() {}
+`)
+	writeFile(t, filepath.Join(dir, "alpha", "a.osty"),
+		`pub fn aa() {}
+`)
+	writeFile(t, filepath.Join(dir, "beta", "b.osty"),
+		`pub fn bb() {}
+`)
+	mainPath := filepath.Join(dir, "main.osty")
+	mainSrc := `use zeta
+use alpha
+use beta
+
+fn main() {
+    zeta.zz()
+    alpha.aa()
+    beta.bb()
+}
+`
+	writeFile(t, mainPath, mainSrc)
+
+	sess := startSession(t)
+	defer sess.stop()
+	sess.initialize()
+	mainURI := fileURI(mainPath)
+	sess.openDoc(mainURI, mainSrc)
+
+	sess.send("oi2", "textDocument/codeAction", CodeActionParams{
+		TextDocument: TextDocumentIdentifier{URI: mainURI},
+		Range:        Range{},
+		Context: CodeActionContext{
+			Only: []string{CodeActionSourceOrganizeImports},
+		},
+	})
+	resp := sess.waitResponse("oi2")
+	if resp.Error != nil {
+		t.Fatalf("codeAction error: %+v", resp.Error)
+	}
+	var actions []CodeAction
+	if err := json.Unmarshal(resp.Result, &actions); err != nil {
+		t.Fatal(err)
+	}
+	if len(actions) == 0 {
+		t.Fatal("expected a sort-imports action")
+	}
+	newText := actions[0].Edit.Changes[mainURI][0].NewText
+	// Alpha < beta < zeta — indices must be ascending in the rewrite.
+	ai := strings.Index(newText, "use alpha")
+	bi := strings.Index(newText, "use beta")
+	zi := strings.Index(newText, "use zeta")
+	if ai < 0 || bi < 0 || zi < 0 {
+		t.Fatalf("missing use line in %q", newText)
+	}
+	if !(ai < bi && bi < zi) {
+		t.Errorf("uses not sorted alphabetically: alpha@%d beta@%d zeta@%d\n%s",
+			ai, bi, zi, newText)
+	}
+}
+
+// TestOrganizeImportsNoOpOnCleanFile confirms that a file whose
+// imports are already sorted and used yields no organizeImports
+// action — the lightbulb shouldn't light up on clean code.
+func TestOrganizeImportsNoOpOnCleanFile(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "alpha", "a.osty"),
+		`pub fn aa() {}
+`)
+	writeFile(t, filepath.Join(dir, "beta", "b.osty"),
+		`pub fn bb() {}
+`)
+	mainPath := filepath.Join(dir, "main.osty")
+	mainSrc := `use alpha
+use beta
+
+fn main() {
+    alpha.aa()
+    beta.bb()
+}
+`
+	writeFile(t, mainPath, mainSrc)
+
+	sess := startSession(t)
+	defer sess.stop()
+	sess.initialize()
+	mainURI := fileURI(mainPath)
+	sess.openDoc(mainURI, mainSrc)
+
+	sess.send("oi3", "textDocument/codeAction", CodeActionParams{
+		TextDocument: TextDocumentIdentifier{URI: mainURI},
+		Range:        Range{},
+		Context: CodeActionContext{
+			Only: []string{CodeActionSourceOrganizeImports},
+		},
+	})
+	resp := sess.waitResponse("oi3")
+	if resp.Error != nil {
+		t.Fatalf("codeAction error: %+v", resp.Error)
+	}
+	var actions []CodeAction
+	if err := json.Unmarshal(resp.Result, &actions); err != nil {
+		t.Fatal(err)
+	}
+	if len(actions) != 0 {
+		t.Errorf("expected no actions for clean imports, got %+v", actions)
+	}
+}
+
+// TestFixAllBundlesSuggestions verifies source.fixAll.osty rolls
+// multiple machine-applicable lint fixes into one edit.
+func TestFixAllBundlesSuggestions(t *testing.T) {
+	sess := startSession(t)
+	defer sess.stop()
+	sess.initialize()
+
+	// Two unused bindings — each carries a MachineApplicable
+	// "prefix with _" suggestion.
+	src := `fn main() {
+    let alpha = 1
+    let beta = 2
+}
+`
+	sess.openDoc(sampleURI, src)
+
+	sess.send("fa1", "textDocument/codeAction", CodeActionParams{
+		TextDocument: TextDocumentIdentifier{URI: sampleURI},
+		Range:        Range{},
+		Context: CodeActionContext{
+			Only: []string{CodeActionSourceFixAllOsty},
+		},
+	})
+	resp := sess.waitResponse("fa1")
+	if resp.Error != nil {
+		t.Fatalf("codeAction error: %+v", resp.Error)
+	}
+	var actions []CodeAction
+	if err := json.Unmarshal(resp.Result, &actions); err != nil {
+		t.Fatal(err)
+	}
+	if len(actions) == 0 {
+		t.Fatal("expected a fixAll action")
+	}
+	a := actions[0]
+	if a.Kind != CodeActionSourceFixAllOsty {
+		t.Errorf("kind = %q, want %q", a.Kind, CodeActionSourceFixAllOsty)
+	}
+	if a.Edit == nil {
+		t.Fatal("fixAll action missing edit")
+	}
+	edits := a.Edit.Changes[sampleURI]
+	// Expect at least two fixes — one per unused binding. The exact
+	// number may be higher if the checker also contributes
+	// suggestions for the same diagnostics.
+	if len(edits) < 2 {
+		t.Errorf("expected ≥2 bundled edits, got %d: %+v", len(edits), edits)
+	}
+}
+
+// TestCodeActionCapabilityAdvertisesKinds confirms the Initialize
+// response lists the source-action kinds clients need to see before
+// they'll run them on save.
+func TestCodeActionCapabilityAdvertisesKinds(t *testing.T) {
+	sess := startSession(t)
+	defer sess.stop()
+
+	sess.send("cap", "initialize", InitializeParams{})
+	resp := sess.waitResponse("cap")
+	if resp.Error != nil {
+		t.Fatalf("initialize error: %+v", resp.Error)
+	}
+	var res InitializeResult
+	if err := json.Unmarshal(resp.Result, &res); err != nil {
+		t.Fatal(err)
+	}
+	if res.Capabilities.CodeActionProvider == nil {
+		t.Fatal("no codeActionProvider advertised")
+	}
+	kinds := res.Capabilities.CodeActionProvider.CodeActionKinds
+	wants := []string{
+		CodeActionQuickFix,
+		CodeActionSourceOrganizeImports,
+		CodeActionSourceFixAllOsty,
+	}
+	for _, w := range wants {
+		found := false
+		for _, k := range kinds {
+			if k == w {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("capability missing kind %q; got %v", w, kinds)
+		}
 	}
 }
 

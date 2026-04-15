@@ -772,7 +772,8 @@ func (p *Parser) parseFnDecl() *ast.FnDecl {
 				// continue with normal params
 			}
 		} else if p.at(token.MUT) && p.peekAt(1).Kind == token.IDENT && p.peekAt(1).Value == "self" {
-			f.Recv = &ast.Receiver{PosV: p.peek().Pos, Mut: true}
+			mutPos := p.peek().Pos
+			f.Recv = &ast.Receiver{PosV: mutPos, Mut: true, MutPos: mutPos}
 			p.advance()
 			p.advance()
 			if p.eat(token.COMMA) {
@@ -1082,6 +1083,9 @@ func (p *Parser) parseTypeAliasDecl() *ast.TypeAliasDecl {
 func (p *Parser) parseLetDecl() *ast.LetDecl {
 	l := &ast.LetDecl{PosV: p.peek().Pos}
 	p.expect(token.LET)
+	if p.at(token.MUT) {
+		l.MutPos = p.peek().Pos
+	}
 	l.Mut = p.eat(token.MUT)
 	l.Name = p.expect(token.IDENT).Value
 	if p.eat(token.COLON) {
@@ -1264,6 +1268,9 @@ func isAssignOp(k token.Kind) bool {
 func (p *Parser) parseLetStmt() *ast.LetStmt {
 	s := &ast.LetStmt{PosV: p.peek().Pos}
 	p.expect(token.LET)
+	if p.at(token.MUT) {
+		s.MutPos = p.peek().Pos
+	}
 	s.Mut = p.eat(token.MUT)
 	s.Pattern = p.parsePattern()
 	if p.eat(token.COLON) {

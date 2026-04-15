@@ -88,9 +88,22 @@ type Diagnostic struct {
 // Replacement. An empty Span (zero Start/End) means "insert at that
 // position"; an empty Replacement means "delete the span". Label is the
 // human-readable description.
+//
+// CopyFrom, when non-nil, tells the fix applier to use the source text
+// covered by that span as the replacement body, optionally wrapped by
+// Replacement's Prefix/Suffix split on a literal "%s" placeholder. This
+// lets rules propose "replace `!!x` with `x`" or "replace `x == true`
+// with `x`" without needing to read the source at lint time:
+//
+//	Replacement = "%s"     → copy the inner span verbatim
+//	Replacement = "!(%s)"  → copy wrapped in `!( ... )`
+//
+// Exactly one "%s" marker is expected when CopyFrom is set; if missing
+// the applier falls back to a plain copy.
 type Suggestion struct {
 	Span              Span
 	Replacement       string
+	CopyFrom          *Span
 	Label             string
 	MachineApplicable bool
 }
@@ -174,6 +187,25 @@ func (b *Builder) Suggest(span Span, replacement, label string, machineApplicabl
 	b.d.Suggestions = append(b.d.Suggestions, Suggestion{
 		Span:              span,
 		Replacement:       replacement,
+		Label:             label,
+		MachineApplicable: machineApplicable,
+	})
+	return b
+}
+
+// SuggestCopy attaches a structured fix that replaces the text at span
+// with the source text covered by copyFrom, optionally wrapped via a
+// template such as "!(%s)" or "%s".
+//
+// Use this when a rule wants to rewrite a construct to one of its
+// sub-expressions (e.g. `!!x` → `x`, `x == true` → `x`) without
+// the lint pass needing access to the raw source bytes.
+func (b *Builder) SuggestCopy(span, copyFrom Span, template, label string, machineApplicable bool) *Builder {
+	cf := copyFrom
+	b.d.Suggestions = append(b.d.Suggestions, Suggestion{
+		Span:              span,
+		Replacement:       template,
+		CopyFrom:          &cf,
 		Label:             label,
 		MachineApplicable: machineApplicable,
 	})

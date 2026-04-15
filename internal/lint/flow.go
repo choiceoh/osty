@@ -59,12 +59,19 @@ func (l *linter) flowStmts(stmts []ast.Stmt, isFnTail bool) {
 	if isFnTail && len(stmts) > 0 {
 		last := stmts[len(stmts)-1]
 		if ret, ok := last.(*ast.ReturnStmt); ok && ret.Value != nil {
+			// Fix: replace the whole `return expr` with just `expr`. The
+			// value's source span preserves any comments/parentheses in
+			// the original, so the rewrite round-trips cleanly.
+			outer := diag.Span{Start: ret.PosV, End: ret.EndV}
+			valSpan := diag.Span{Start: ret.Value.Pos(), End: ret.Value.End()}
 			l.emit(diag.New(diag.Warning,
 				"needless `return` at end of function body").
 				Code(diag.CodeNeedlessReturn).
-				Primary(diag.Span{Start: ret.PosV, End: ret.EndV},
+				Primary(outer,
 					"drop `return`, the bare expression is the result").
 				Hint("remove the `return` keyword — Osty uses tail-expression returns").
+				SuggestCopy(outer, valSpan, "%s",
+					"drop the `return` keyword", true).
 				Build())
 		}
 	}
