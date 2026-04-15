@@ -35,6 +35,18 @@ fn emptyTestStackMapEntry() -> GcStackMapEntry {
     }
 }
 
+fn survivorSpaceGcConfig(survivorLimit: Int, promotionAge: Int) -> GcConfig {
+    GcConfig {
+        nurseryLimit: 512,
+        survivorLimit,
+        heapLimit: 4096,
+        promotionAge,
+        incrementalBudget: 1,
+        largeObjectThreshold: 512,
+        tlabSize: 64,
+    }
+}
+
 fn testValidateHeapRejectsLiveByteMismatch() {
     let refs: List<Int> = []
     let mut objects: Map<Int, GcObject> = {:}
@@ -182,6 +194,7 @@ fn testTelemetryRecordsNurseryPressureTrigger() {
     let mut heap = newGcHeap(
         GcConfig {
             nurseryLimit: 24,
+            survivorLimit: 16,
             heapLimit: 4096,
             promotionAge: 1,
             incrementalBudget: 1,
@@ -219,6 +232,7 @@ fn testLargeObjectBypassesNurseryAndStartsHumongous() {
     let mut heap = newGcHeap(
         GcConfig {
             nurseryLimit: 24,
+            survivorLimit: 16,
             heapLimit: 4096,
             promotionAge: 1,
             incrementalBudget: 1,
@@ -301,6 +315,92 @@ fn testMinorCollectionUsesRememberedSetAndPromotes() {
     testing.assertEq(stats.promotedObjects, 1)
     testing.assertEq(stats.rememberedScanned, 1)
     testing.assertEq(heap.rememberedCount(), 0)
+}
+
+fn testMinorCollectionMovesEdenObjectToSurvivorSpace() {
+    let mut heap = newGcHeap(survivorSpaceGcConfig(64, 2))
+    let rooted = heap.allocate(GcRecord, 16)
+    testing.assert(heap.addRoot(rooted))
+    assertValid(heap)
+
+    testing.assertEq(heap.edenObjectCount(), 1)
+    testing.assertEq(heap.survivorObjectCount(), 0)
+    testing.assertEq(heap.edenBytes(), 16)
+
+    let stats = heap.minorCollect()
+    assertValid(heap)
+
+    testing.assert(heap.contains(rooted))
+    testing.assertEq(stats.promotedObjects, 0)
+    testing.assertEq(heap.generationOf(rooted) ?? -1, 0)
+    testing.assertEq(heap.ageOf(rooted) ?? -1, 1)
+    testing.assertEq(heap.regionOf(rooted) ?? GcOldRegion, GcSurvivorRegion)
+    testing.assertEq(heap.edenObjectCount(), 0)
+    testing.assertEq(heap.survivorObjectCount(), 1)
+    testing.assertEq(heap.survivorBytes(), 16)
+    testing.assertEq(heap.nurseryBytes(), 16)
+}
+
+fn testSecondMinorPromotesAgedSurvivor() {
+    let mut heap = newGcHeap(survivorSpaceGcConfig(64, 2))
+    let rooted = heap.allocate(GcRecord, 16)
+    testing.assert(heap.addRoot(rooted))
+    assertValid(heap)
+
+    let first = heap.minorCollect()
+    assertValid(heap)
+    testing.assertEq(first.promotedObjects, 0)
+    testing.assertEq(heap.regionOf(rooted) ?? GcOldRegion, GcSurvivorRegion)
+
+    let second = heap.minorCollect()
+    assertValid(heap)
+
+    testing.assert(heap.contains(rooted))
+    testing.assertEq(second.promotedObjects, 1)
+    testing.assertEq(heap.generationOf(rooted) ?? -1, 1)
+    testing.assertEq(heap.ageOf(rooted) ?? -1, 2)
+    testing.assertEq(heap.regionOf(rooted) ?? GcEdenRegion, GcOldRegion)
+    testing.assertEq(heap.survivorObjectCount(), 0)
+    testing.assertEq(heap.survivorBytes(), 0)
+    testing.assertEq(heap.tenuredObjectCount(), 1)
+}
+
+fn testSurvivorOverflowPromotesFallback() {
+    let mut heap = newGcHeap(survivorSpaceGcConfig(24, 4))
+    let first = heap.allocate(GcRecord, 16)
+    let second = heap.allocate(GcArray, 16)
+    testing.assert(heap.addRoot(first))
+    testing.assert(heap.addRoot(second))
+    assertValid(heap)
+
+    let stats = heap.minorCollect()
+    assertValid(heap)
+
+    testing.assert(heap.contains(first))
+    testing.assert(heap.contains(second))
+    testing.assertEq(stats.promotedObjects, 1)
+    testing.assertEq(heap.edenObjectCount(), 0)
+    testing.assertEq(heap.survivorObjectCount(), 1)
+    testing.assertEq(heap.survivorBytes(), 16)
+    testing.assertEq(heap.nurseryBytes(), 16)
+    testing.assertEq(heap.tenuredObjectCount(), 1)
+}
+
+fn testZeroSizedSurvivorSpacePromotesAllSurvivors() {
+    let mut heap = newGcHeap(survivorSpaceGcConfig(0, 4))
+    let rooted = heap.allocate(GcRecord, 16)
+    testing.assert(heap.addRoot(rooted))
+    assertValid(heap)
+
+    let stats = heap.minorCollect()
+    assertValid(heap)
+
+    testing.assert(heap.contains(rooted))
+    testing.assertEq(stats.promotedObjects, 1)
+    testing.assertEq(heap.generationOf(rooted) ?? -1, 1)
+    testing.assertEq(heap.regionOf(rooted) ?? GcEdenRegion, GcOldRegion)
+    testing.assertEq(heap.survivorObjectCount(), 0)
+    testing.assertEq(heap.survivorBytes(), 0)
 }
 
 fn testNurseryCycleDiesWithoutRoots() {
@@ -413,6 +513,7 @@ fn testTryAllocateReportsOutOfMemoryAfterFullCollection() {
     let mut heap = newGcHeap(
         GcConfig {
             nurseryLimit: 64,
+            survivorLimit: 32,
             heapLimit: 40,
             promotionAge: 1,
             incrementalBudget: 4,
@@ -468,6 +569,7 @@ fn testTlabRefillAccountsWasteWithoutCollecting() {
     let mut heap = newGcHeap(
         GcConfig {
             nurseryLimit: 512,
+            survivorLimit: 128,
             heapLimit: 4096,
             promotionAge: 1,
             incrementalBudget: 1,
@@ -504,6 +606,7 @@ fn testTlabRefillCanTriggerNurseryCollection() {
     let mut heap = newGcHeap(
         GcConfig {
             nurseryLimit: 48,
+            survivorLimit: 16,
             heapLimit: 4096,
             promotionAge: 1,
             incrementalBudget: 1,
@@ -556,6 +659,7 @@ fn testLargeThreadAllocationBypassesTlab() {
     let mut heap = newGcHeap(
         GcConfig {
             nurseryLimit: 256,
+            survivorLimit: 64,
             heapLimit: 4096,
             promotionAge: 1,
             incrementalBudget: 1,
@@ -1160,6 +1264,7 @@ fn testRandomGraphIncrementalInsertionBarrierStress() {
 fn stressGcConfig() -> GcConfig {
     GcConfig {
         nurseryLimit: 96,
+        survivorLimit: 48,
         heapLimit: 32768,
         promotionAge: 2,
         incrementalBudget: 3,
