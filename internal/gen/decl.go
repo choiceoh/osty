@@ -401,11 +401,13 @@ func (g *gen) emitUseDecl(u *ast.UseDecl) {
 		}
 		return
 	}
-	// Regular `use pkg.path [as alias]` — Osty module system, not yet
-	// backed by a loader. For well-known stdlib shims (std.testing,
-	// std.thread) we emit a mock struct so spec fixtures that *call*
-	// those helpers compile. Real stdlib usage bridges through Go's
-	// own packages; see stdlibBridge for the mapping.
+	// Regular `use pkg.path [as alias]` — Osty module system. The
+	// embedded stdlib is a resolved signature surface, not a runtime
+	// implementation, so general gen may still emit `std.*` package
+	// stubs. A few modules have temporary Go bridges for fixture
+	// compatibility; well-known shims (std.testing, std.thread) get
+	// mock structs when they need a callable shape. The test harness
+	// separately replaces the std.testing stub with a real runtime.
 	alias := u.Alias
 	if alias == "" && len(u.Path) > 0 {
 		alias = u.Path[len(u.Path)-1]
@@ -599,9 +601,10 @@ func (g *gen) exprUsesAliasSelector(e ast.Expr, alias string) bool {
 	return false
 }
 
-// stdlibBridge maps an Osty stdlib module path to a Go package whose
-// exported surface matches closely enough for typical spec use. Returns
-// "" when no bridge is available (caller falls back to a mock stub).
+// stdlibBridge maps a small subset of Osty stdlib module paths to Go
+// packages for fixture compatibility. This is not the stdlib runtime;
+// the embedded stdlib under internal/stdlib is a signature-stub surface.
+// Returns "" when no bridge is available (caller falls back to a stub).
 func stdlibBridge(path []string) string {
 	if len(path) < 2 || path[0] != "std" {
 		return ""
