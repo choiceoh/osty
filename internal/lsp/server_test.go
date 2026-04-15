@@ -247,14 +247,19 @@ func (s *session) initialize() {
 	s.send("", "initialized", map[string]any{})
 }
 
-// openDoc sends didOpen for uri/text and drains the first
-// publishDiagnostics so subsequent waitResponse calls won't pick it up.
+const (
+	notificationOpenWait    = 20 * time.Millisecond
+	notificationQuietPeriod = 5 * time.Millisecond
+)
+
+// openDoc sends didOpen for uri/text and briefly drains any immediate
+// publishDiagnostics so subsequent waitResponse calls usually don't pick it up.
 func (s *session) openDoc(uri, text string) {
 	s.t.Helper()
 	s.send("", "textDocument/didOpen", DidOpenTextDocumentParams{
 		TextDocument: TextDocumentItem{URI: uri, LanguageID: "osty", Version: 1, Text: text},
 	})
-	_ = s.drainNotifications("textDocument/publishDiagnostics", 1*time.Second)
+	_ = s.drainNotifications("textDocument/publishDiagnostics", notificationOpenWait)
 }
 
 // stop closes the client side and waits for Run to return.
@@ -344,10 +349,10 @@ func (s *session) waitResponse(id string) rpcResponse {
 	}
 }
 
-// drainNotifications collects every stashed-or-incoming notification
-// matching `method` within `timeout`. Useful for reading
-// textDocument/publishDiagnostics that arrives asynchronously after
-// didOpen / didChange.
+// drainNotifications waits until at least one matching notification arrives,
+// then drains any immediately-following matches. The old helper waited for
+// the whole timeout even after success, which made the LSP suite spend most
+// of its time sleeping.
 func (s *session) drainNotifications(method string, timeout time.Duration) []rpcRequest {
 	s.t.Helper()
 	var out []rpcRequest
@@ -363,7 +368,13 @@ func (s *session) drainNotifications(method string, timeout time.Duration) []rpc
 	}
 	s.pending = keep
 	s.pendMu.Unlock()
-	// Then read more until the timeout elapses with no new match.
+
+	if len(out) > 0 {
+		return s.drainReadyNotifications(method, out)
+	}
+
+	// Then wait for the first match. Once one arrives, return after a
+	// short quiet period instead of burning the caller's full timeout.
 	deadline := time.After(timeout)
 	for {
 		select {
@@ -388,9 +399,46 @@ func (s *session) drainNotifications(method string, timeout time.Duration) []rpc
 			}
 			if n.Method == method {
 				out = append(out, n)
-				// Give the server a tick to emit more of the
-				// same kind of notification (e.g. a follow-up
-				// publishDiagnostics after didChange).
+				return s.drainReadyNotifications(method, out)
+			}
+			s.pendMu.Lock()
+			s.pending = append(s.pending, n)
+			s.pendMu.Unlock()
+		}
+	}
+}
+
+func (s *session) drainReadyNotifications(method string, out []rpcRequest) []rpcRequest {
+	quiet := time.NewTimer(notificationQuietPeriod)
+	defer quiet.Stop()
+	for {
+		select {
+		case <-quiet.C:
+			return out
+		case body, ok := <-s.frames:
+			if !ok {
+				return out
+			}
+			var probe map[string]json.RawMessage
+			if err := json.Unmarshal(body, &probe); err != nil {
+				continue
+			}
+			if _, isResp := probe["id"]; isResp {
+				continue
+			}
+			var n rpcRequest
+			if err := json.Unmarshal(body, &n); err != nil {
+				continue
+			}
+			if n.Method == method {
+				out = append(out, n)
+				if !quiet.Stop() {
+					select {
+					case <-quiet.C:
+					default:
+					}
+				}
+				quiet.Reset(notificationQuietPeriod)
 				continue
 			}
 			s.pendMu.Lock()

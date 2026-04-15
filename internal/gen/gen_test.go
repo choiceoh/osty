@@ -47,6 +47,12 @@ func transpileWithStdlib(t *testing.T, src string) ([]byte, error) {
 // `go run`, and returns the captured stdout.
 func runGo(t *testing.T, src []byte) string {
 	t.Helper()
+	if testing.Short() {
+		t.Skip("generated Go execution test (slow)")
+	}
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go binary not on PATH; skipping generated Go execution")
+	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "main.go")
 	if err := os.WriteFile(path, src, 0o644); err != nil {
