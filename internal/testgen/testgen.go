@@ -157,7 +157,7 @@ func GenerateHarness(pkg *resolve.Package, chk *check.Result, entries []Entry) (
 	seenRange := false
 	seenOstyStringer := false
 	seenOstyToString := false
-	seenOstyEqualRuntime := map[string]bool{}
+	seenSharedRuntime := map[string]bool{}
 	var firstGenErr error
 	hasProgramMain := packageHasProgramMain(pkg)
 	pkgIndex := genPackageIndex(pkg)
@@ -228,11 +228,11 @@ func GenerateHarness(pkg *resolve.Package, chk *check.Result, entries []Entry) (
 				}
 				seenOstyToString = true
 			}
-			if name := ostyEqualRuntimeName(d); name != "" {
-				if seenOstyEqualRuntime[name] {
+			if name, ok := sharedRuntimeDeclName(d); ok {
+				if seenSharedRuntime[name] {
 					continue
 				}
-				seenOstyEqualRuntime[name] = true
+				seenSharedRuntime[name] = true
 			}
 			if isTestingStub(d) {
 				// Dropped — replaced by the runtime in harness.go.
@@ -269,6 +269,30 @@ func GenerateHarness(pkg *resolve.Package, chk *check.Result, entries []Entry) (
 		Main:    main.Bytes(),
 		Harness: []byte(harnessSource),
 	}, firstGenErr
+}
+
+func sharedRuntimeDeclName(d goast.Decl) (string, bool) {
+	switch d := d.(type) {
+	case *goast.FuncDecl:
+		if d.Recv == nil && d.Name != nil {
+			switch d.Name.Name {
+			case "ostyEqual", "ostyEqualValue", "ostyIsNilValue":
+				return d.Name.Name, true
+			}
+		}
+	case *goast.GenDecl:
+		if d.Tok != gotoken.TYPE || len(d.Specs) != 1 {
+			return "", false
+		}
+		ts, ok := d.Specs[0].(*goast.TypeSpec)
+		if !ok || ts.Name == nil {
+			return "", false
+		}
+		if ts.Name.Name == "ostyEqualVisit" {
+			return ts.Name.Name, true
+		}
+	}
+	return "", false
 }
 
 // isResultRuntime reports whether d is the Result[T, E] type-spec
