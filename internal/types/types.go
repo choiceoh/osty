@@ -593,7 +593,11 @@ func IsEqualable(t Type) bool {
 	return false
 }
 
-func hasBound(v *TypeVar, name string) bool {
+// HasBound reports whether the TypeVar carries a Named bound by the
+// given name. Used by both the type-rule helpers in this package and
+// by the checker's interface-bound logic to keep the bound-matching
+// rule in one place.
+func HasBound(v *TypeVar, name string) bool {
 	for _, b := range v.Bounds {
 		if n, ok := b.(*Named); ok && n.Sym != nil && n.Sym.Name == name {
 			return true
@@ -601,6 +605,9 @@ func hasBound(v *TypeVar, name string) bool {
 	}
 	return false
 }
+
+// hasBound is the in-package alias kept for the existing call sites.
+func hasBound(v *TypeVar, name string) bool { return HasBound(v, name) }
 
 // AsOptional unwraps Optional, returning (inner, true) or (nil, false).
 func AsOptional(t Type) (Type, bool) {

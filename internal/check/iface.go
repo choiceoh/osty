@@ -9,31 +9,32 @@ import (
 	"github.com/osty/osty/internal/types"
 )
 
+// Built-in marker interface names. Centralised so the structural
+// dispatch in builtinSatisfies and the prelude-binding table in
+// check.go agree by reference rather than by string.
+const (
+	builtinEqualName    = "Equal"
+	builtinOrderedName  = "Ordered"
+	builtinHashableName = "Hashable"
+	builtinErrorName    = "Error"
+)
+
 // builtinSatisfies reports whether `t` satisfies one of the built-in
-// marker interfaces per v0.3 §2.6.5. Returns (matched, ok):
+// marker interfaces per v0.3 §2.6.5 / §7.1. Returns (matched, ok):
 // matched=true means the interface name was recognized as built-in;
 // ok=true means `t` satisfies it.
-//
-// Coverage:
-//   - Primitives row 1–6 of §2.6.5
-//   - Tuple, Optional, Result: per-component derivation
-//   - List<T>, Set<T>, Map<K,V>: per-component derivation
-//     (Equal/Hashable only — §2.6.5 explicitly excludes Ordered for
-//     collections)
-//   - Error: requires `message(self) -> String`; `source` is optional
-//     (default body provided per §7.1)
 //
 // Anything not matching one of these falls through with matched=false
 // so the caller can apply the structural-method-set rule.
 func builtinSatisfies(c *checker, iface string, t types.Type) (matched, ok bool) {
 	switch iface {
-	case "Equal":
+	case builtinEqualName:
 		return true, builtinEqual(c, t)
-	case "Ordered":
+	case builtinOrderedName:
 		return true, builtinOrdered(c, t)
-	case "Hashable":
+	case builtinHashableName:
 		return true, builtinHashable(c, t)
-	case "Error":
+	case builtinErrorName:
 		return true, builtinError(c, t)
 	}
 	return false, false
@@ -98,7 +99,9 @@ func builtinEqual(c *checker, t types.Type) bool {
 		}
 		return true
 	case *types.TypeVar:
-		return typeVarHasBound(v, "Equal", "Ordered", "Hashable")
+		return types.HasBound(v, builtinEqualName) ||
+			types.HasBound(v, builtinOrderedName) ||
+			types.HasBound(v, builtinHashableName)
 	}
 	return false
 }
@@ -131,7 +134,7 @@ func builtinOrdered(c *checker, t types.Type) bool {
 		// (handled by the structural path, not here).
 		return false
 	case *types.TypeVar:
-		return typeVarHasBound(v, "Ordered")
+		return types.HasBound(v, builtinOrderedName)
 	}
 	return false
 }
@@ -195,7 +198,7 @@ func builtinHashable(c *checker, t types.Type) bool {
 		}
 		return true
 	case *types.TypeVar:
-		return typeVarHasBound(v, "Hashable")
+		return types.HasBound(v, builtinHashableName)
 	}
 	return false
 }
@@ -204,15 +207,11 @@ func builtinHashable(c *checker, t types.Type) bool {
 // `message(self) -> String`. `source(self) -> Error?` carries a default
 // body so its absence on the concrete type is acceptable.
 func builtinError(c *checker, t types.Type) bool {
-	// The prelude Error itself trivially satisfies Error.
-	if n, ok := t.(*types.Named); ok && n.Sym != nil && n.Sym.Name == "Error" && n.Sym.Kind == resolve.SymBuiltin {
+	if _, ok := types.AsNamedBuiltin(t, builtinErrorName); ok {
 		return true
 	}
 	md, _ := c.lookupMethod(t, "message")
-	if md == nil {
-		return false
-	}
-	if md.Fn == nil {
+	if md == nil || md.Fn == nil {
 		return false
 	}
 	if len(md.Fn.Params) != 0 {
@@ -221,8 +220,6 @@ func builtinError(c *checker, t types.Type) bool {
 	return types.Identical(md.Fn.Return, types.String)
 }
 
-// allFieldsSatisfy applies pred to every struct field, after
-// substituting the struct's generics with v.Args.
 func allFieldsSatisfy(c *checker, desc *typeDesc, args []types.Type, pred func(*checker, types.Type) bool) bool {
 	sub := bindArgs(desc.Generics, args)
 	for _, f := range desc.Fields {
@@ -237,8 +234,6 @@ func allFieldsSatisfy(c *checker, desc *typeDesc, args []types.Type, pred func(*
 	return true
 }
 
-// allVariantPayloadsSatisfy applies pred to every payload type across
-// every variant of an enum.
 func allVariantPayloadsSatisfy(c *checker, desc *typeDesc, args []types.Type, pred func(*checker, types.Type) bool) bool {
 	sub := bindArgs(desc.Generics, args)
 	for _, vd := range desc.Variants {
@@ -253,24 +248,6 @@ func allVariantPayloadsSatisfy(c *checker, desc *typeDesc, args []types.Type, pr
 		}
 	}
 	return true
-}
-
-// typeVarHasBound reports whether the TypeVar carries any of `names`
-// as a built-in marker bound. Mirrors the spec rule that Ordered
-// implies Equal, Hashable implies Equal.
-func typeVarHasBound(v *types.TypeVar, names ...string) bool {
-	for _, b := range v.Bounds {
-		nm, ok := b.(*types.Named)
-		if !ok || nm.Sym == nil {
-			continue
-		}
-		for _, want := range names {
-			if nm.Sym.Name == want {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // satisfies reports whether `concrete` satisfies the interface type
@@ -316,81 +293,107 @@ func (c *checker) satisfies(concrete types.Type, iface *types.Named, pos ast.Nod
 		return true
 	}
 
-	missing := []string{}
-	mismatched := []string{}
-	// Sort for deterministic diagnostic order.
-	names := make([]string, 0, len(required))
-	for n := range required {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-
-	for _, name := range names {
-		req := required[name]
+	var missing []string
+	var mismatched []sigMismatch
+	for name, req := range required {
 		gotMd, sub := c.lookupMethod(concrete, name)
 		if gotMd == nil {
-			// Default-bodied interface methods (§2.6.2) don't have to be
-			// re-implemented by the concrete type.
 			if req.md != nil && req.md.HasBody {
+				// §2.6.2 default body — concrete type may omit it.
 				continue
 			}
 			missing = append(missing, name)
 			continue
 		}
-		// Build the substitution map seen by methodSignaturesMatch:
-		//   1. concrete-side owner generics → concrete args
-		//      (already returned by lookupMethod as `sub`)
-		//   2. interface-side generics → interface args (ifaceSubs)
-		//   3. Self → concrete (handled inside methodSignaturesMatch)
 		merged := mergeSubs(sub, ifaceSubs[req.ifaceSym])
 		if !methodSignaturesMatch(req.md.Fn, gotMd.Fn, merged, req.ifaceSym, concrete) {
-			mismatched = append(mismatched, name)
+			mismatched = append(mismatched, sigMismatch{
+				name: name,
+				want: substituteForDisplay(req.md.Fn, merged, req.ifaceSym, concrete),
+				got:  gotMd.Fn,
+			})
 		}
 	}
 
 	if len(missing) == 0 && len(mismatched) == 0 {
 		return true
 	}
+	// Sort only the failing slices so the success path skips the work.
+	sort.Strings(missing)
+	sort.Slice(mismatched, func(i, j int) bool { return mismatched[i].name < mismatched[j].name })
+
 	if len(missing) > 0 {
 		c.errNode(pos, diag.CodeTypeMismatch,
 			"type `%s` does not implement `%s`: missing method(s): %s",
 			concrete, iface.Sym.Name, joinMethods(missing))
 	}
-	if len(mismatched) > 0 {
+	for _, m := range mismatched {
 		c.errNode(pos, diag.CodeTypeMismatch,
-			"type `%s` does not satisfy `%s`: method(s) with different signature: %s",
-			concrete, iface.Sym.Name, joinMethods(mismatched))
+			"type `%s` does not satisfy `%s`: method `%s` has signature `%s`, expected `%s`",
+			concrete, iface.Sym.Name, m.name, m.got, m.want)
 	}
 	return false
 }
 
-// requiredMethod records one method the satisfying type must provide,
-// along with the iface symbol it originated from (used for Self
-// substitution when matching signatures).
+// sigMismatch captures one method whose concrete signature didn't
+// match the interface's required shape, retained so the diagnostic
+// can show want-vs-got per method instead of a comma-joined name list.
+type sigMismatch struct {
+	name string
+	want *types.FnType
+	got  *types.FnType
+}
+
+// substituteForDisplay returns the want signature with all currently
+// known substitutions applied so the diagnostic shows the post-
+// substitution shape the concrete method was being matched against.
+// Errors during substitution fall back to the raw want.
+func substituteForDisplay(fn *types.FnType, sub map[*resolve.Symbol]types.Type, ifaceSym *resolve.Symbol, concrete types.Type) *types.FnType {
+	if fn == nil {
+		return nil
+	}
+	out := &types.FnType{
+		Params: make([]types.Type, len(fn.Params)),
+		Return: fn.Return,
+	}
+	rewrite := func(t types.Type) types.Type {
+		t = types.Substitute(t, sub)
+		if ifaceSym != nil && concrete != nil {
+			t = substituteSelf(t, ifaceSym, concrete)
+		}
+		return t
+	}
+	for i, p := range fn.Params {
+		out.Params[i] = rewrite(p)
+	}
+	out.Return = rewrite(fn.Return)
+	return out
+}
+
+// requiredMethod pairs a method the satisfying type must provide with
+// the interface that demanded it; ifaceSym is needed so substituteSelf
+// can rewrite the right `Self` occurrences when comparing signatures.
 type requiredMethod struct {
 	md       *methodDesc
 	ifaceSym *resolve.Symbol
 }
 
 // flattenInterface walks the §2.6.1 composition chain and returns:
-//   - required: name → requiredMethod, the union of every interface's
-//     own methods (later definitions DON'T override — every interface
-//     contributes its own signature; conflicts produce a missing-from-
-//     concrete diagnostic only if the concrete type doesn't satisfy any
-//     of them).
+//   - required: name → requiredMethod, the union of every reachable
+//     interface's own methods. Composition uses first-wins on name
+//     collisions (the iface walked earlier owns the slot); the spec
+//     does not define cross-iface signature conflict resolution and
+//     none arises in practice on the prelude shapes.
 //   - ifaceSubs: map from each visited interface symbol to its
-//     generic-arg substitution map. Used by satisfies to substitute
-//     interface-side generics in the want signature.
-//   - ok: false iff the root interface has no descriptor (stdlib stub).
+//     generic-arg substitution map; only populated for ifaces with
+//     non-empty generics so the common case carries no entry.
+//   - ok: false iff the root interface has no descriptor.
 func (c *checker) flattenInterface(iface *types.Named) (map[string]requiredMethod, map[*resolve.Symbol]map[*resolve.Symbol]types.Type, bool) {
 	if iface == nil || iface.Sym == nil {
 		return nil, nil, false
 	}
 	ifDesc, ok := c.result.Descs[iface.Sym]
-	if !ok {
-		return nil, nil, false
-	}
-	if ifDesc.Kind != resolve.SymInterface {
+	if !ok || ifDesc.Kind != resolve.SymInterface {
 		return nil, nil, false
 	}
 
@@ -408,9 +411,10 @@ func (c *checker) flattenInterface(iface *types.Named) (map[string]requiredMetho
 		if !ok || desc.Kind != resolve.SymInterface {
 			return
 		}
-		ifaceSubs[n.Sym] = bindArgs(desc.Generics, n.Args)
+		if len(desc.Generics) > 0 {
+			ifaceSubs[n.Sym] = bindArgs(desc.Generics, n.Args)
+		}
 		for name, md := range desc.InterfaceMethods {
-			// First wins; an earlier-collected interface owns the slot.
 			if _, exists := required[name]; !exists {
 				required[name] = requiredMethod{md: md, ifaceSym: n.Sym}
 			}
@@ -423,11 +427,16 @@ func (c *checker) flattenInterface(iface *types.Named) (map[string]requiredMetho
 	return required, ifaceSubs, true
 }
 
-// mergeSubs returns a shallow copy of a + b. b wins on key collisions.
-// Either argument may be nil.
+// mergeSubs unions two substitution maps. The two callers (concrete-
+// owner generics and iface-owner generics) bind disjoint key sets, so
+// the merge is just a shallow union; if it ever weren't, b would win.
+// Returns the input directly when one side is empty.
 func mergeSubs(a, b map[*resolve.Symbol]types.Type) map[*resolve.Symbol]types.Type {
-	if len(a) == 0 && len(b) == 0 {
-		return nil
+	if len(a) == 0 {
+		return b
+	}
+	if len(b) == 0 {
+		return a
 	}
 	out := make(map[*resolve.Symbol]types.Type, len(a)+len(b))
 	for k, v := range a {
@@ -439,15 +448,11 @@ func mergeSubs(a, b map[*resolve.Symbol]types.Type) map[*resolve.Symbol]types.Ty
 	return out
 }
 
-// methodSignaturesMatch compares the declared interface signature with
-// a concrete method signature after Self / generic substitution.
-// Both signatures exclude `self`, so it is a straight parameter-list +
-// return comparison.
-//
-// `ifaceSym` and `concreteSelf` are passed so occurrences of `Self`
-// inside the want signature (which the resolver pre-bound to the
-// interface's symbol) are rewritten to the concrete type before
-// identity comparison.
+// methodSignaturesMatch compares an interface signature against a
+// concrete method's, after applying generic substitutions and
+// rewriting `Self` (resolver-bound to ifaceSym) to concreteSelf. Both
+// signatures exclude the receiver, so it's a straight param/return
+// comparison post-substitution.
 func methodSignaturesMatch(want, got *types.FnType, sub map[*resolve.Symbol]types.Type, ifaceSym *resolve.Symbol, concreteSelf types.Type) bool {
 	if want == nil || got == nil {
 		return want == got
@@ -470,17 +475,10 @@ func methodSignaturesMatch(want, got *types.FnType, sub map[*resolve.Symbol]type
 	return types.Identical(rewriteSelf(want.Return), got.Return)
 }
 
-// substituteSelf walks t and rewrites every `Named{Sym: ifaceSym}`
-// occurrence to `concrete`. Inside an interface body the resolver
-// resolves `Self` to the interface's symbol; structural matching
-// against a concrete type's method must replace those occurrences with
-// the concrete type to be consistent with §2.6.3.
-//
-// The walk descends into Optional, Tuple, FnType, and Named.Args.
-// TypeVars and Primitives pass through. Any nominal `Named` whose Sym
-// is not the interface's is left intact, so a method declared in
-// `interface Foo` that returns `Bar` (where Bar is a distinct named
-// type) is not mistakenly rewritten.
+// substituteSelf rewrites Named{Sym: ifaceSym} occurrences in t to
+// `concrete` (per §2.6.3) and leaves any other Named intact so a
+// signature returning a distinct named type isn't accidentally
+// rewritten. Descends through Optional/Tuple/FnType/Named args.
 func substituteSelf(t types.Type, ifaceSym *resolve.Symbol, concrete types.Type) types.Type {
 	if t == nil || ifaceSym == nil || concrete == nil {
 		return t
@@ -555,11 +553,9 @@ func hasToString(c *checker, t types.Type) bool {
 	return hasToStringV(c, t, map[*resolve.Symbol]bool{})
 }
 
-// hasToStringV is the recursive worker. `seen` breaks cycles in
-// recursive user types (`struct Node<T> { value: T, next: Node<T>? }`).
-// A type currently mid-recursion is treated as ToString-compatible —
-// the auto-derived implementation for the enclosing type is only
-// blocked when a *non-recursive* component fails the predicate.
+// hasToStringV is the recursive worker. `seen` is mutated as it
+// descends into user types and restored on return so cycles in
+// recursive types (`struct Node<T> { next: Node<T>? }`) terminate.
 func hasToStringV(c *checker, t types.Type, seen map[*resolve.Symbol]bool) bool {
 	switch v := t.(type) {
 	case *types.Primitive:
@@ -612,28 +608,25 @@ func hasToStringV(c *checker, t types.Type, seen map[*resolve.Symbol]bool) bool 
 		if !ok {
 			return true
 		}
-		// Cycle break: treat self-recursive references as compatible —
-		// the recursion will be resolved by a base case at another
-		// node of the structure.
 		if seen[v.Sym] {
 			return true
 		}
-		// User-provided toString always wins over auto-derivation.
-		if desc.Methods != nil {
-			if md, has := desc.Methods["toString"]; has && md.Fn != nil &&
-				len(md.Fn.Params) == 0 && types.Identical(md.Fn.Return, types.String) {
-				return true
-			}
+		// User-provided toString overrides auto-derivation.
+		if md, has := desc.Methods["toString"]; has && md.Fn != nil &&
+			len(md.Fn.Params) == 0 && types.Identical(md.Fn.Return, types.String) {
+			return true
 		}
-		nextSeen := copyAndMark(seen, v.Sym)
+		seen[v.Sym] = true
+		defer delete(seen, v.Sym)
+		sub := bindArgs(desc.Generics, v.Args)
 		switch desc.Kind {
 		case resolve.SymStruct:
 			for _, f := range desc.Fields {
 				ft := f.Type
-				if len(v.Args) > 0 {
-					ft = types.Substitute(ft, bindArgs(desc.Generics, v.Args))
+				if len(sub) > 0 {
+					ft = types.Substitute(ft, sub)
 				}
-				if !hasToStringV(c, ft, nextSeen) {
+				if !hasToStringV(c, ft, seen) {
 					return false
 				}
 			}
@@ -642,10 +635,10 @@ func hasToStringV(c *checker, t types.Type, seen map[*resolve.Symbol]bool) bool 
 			for _, vd := range desc.Variants {
 				for _, ft := range vd.Fields {
 					x := ft
-					if len(v.Args) > 0 {
-						x = types.Substitute(x, bindArgs(desc.Generics, v.Args))
+					if len(sub) > 0 {
+						x = types.Substitute(x, sub)
 					}
-					if !hasToStringV(c, x, nextSeen) {
+					if !hasToStringV(c, x, seen) {
 						return false
 					}
 				}
@@ -653,16 +646,11 @@ func hasToStringV(c *checker, t types.Type, seen map[*resolve.Symbol]bool) bool 
 			return true
 		case resolve.SymTypeAlias:
 			if desc.Alias != nil {
-				return hasToStringV(c, desc.Alias, nextSeen)
+				return hasToStringV(c, desc.Alias, seen)
 			}
 			return true
-		case resolve.SymInterface:
-			// Interface values carry a vtable; the dispatch landing on
-			// the underlying concrete value's toString is guaranteed
-			// when the interface's methods include toString or it
-			// composes ToString. Accept conservatively.
-			return true
 		}
+		// Interfaces (vtable dispatch) and other named shapes default true.
 		return true
 	case *types.TypeVar:
 		// Generic parameters are assumed ToString-compatible when they
@@ -677,11 +665,3 @@ func hasToStringV(c *checker, t types.Type, seen map[*resolve.Symbol]bool) bool 
 	return false
 }
 
-func copyAndMark(seen map[*resolve.Symbol]bool, sym *resolve.Symbol) map[*resolve.Symbol]bool {
-	out := make(map[*resolve.Symbol]bool, len(seen)+1)
-	for k, v := range seen {
-		out[k] = v
-	}
-	out[sym] = true
-	return out
-}

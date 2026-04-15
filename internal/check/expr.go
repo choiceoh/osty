@@ -454,10 +454,6 @@ func (c *checker) callType(e *ast.CallExpr, hint types.Type, env *env) types.Typ
 			}
 		}
 		// `recv.method::<T>(args)` — turbofish wrapping a method call.
-		// Dispatch to methodCallType with the type args; the only
-		// currently special-cased intercept is Error.downcast (§7.4),
-		// but keeping the path open here lets future generic-method
-		// machinery hook in without re-shaping the callsite.
 		if fx, ok := tf.Base.(*ast.FieldExpr); ok {
 			return c.methodCallTypeTF(fx, tf, e, env)
 		}
@@ -711,22 +707,16 @@ func (c *checker) tryPackageCall(
 	return c.applyGenericCall(e, fn, generics, hint, env), true
 }
 
-// methodCallTypeTF handles `recv.method::<T, ...>(args)` by intercepting
-// the small set of intrinsic methods that take an explicit type
-// argument, then falling back to the standard method-call path. The
-// only intrinsic at this MVP is `Error.downcast::<T>()` per §7.4 —
-// other generic method calls follow the inference path and don't need
-// the turbofish.
+// methodCallTypeTF handles `recv.method::<T, ...>(args)`. Currently
+// only `Error.downcast::<T>()` (§7.4) needs the turbofish; generic
+// methods otherwise infer their type args from the value-arg list and
+// fall through to the regular method-call path.
 func (c *checker) methodCallTypeTF(fx *ast.FieldExpr, tf *ast.TurbofishExpr, e *ast.CallExpr, env *env) types.Type {
 	recvT := c.checkExpr(fx.X, nil, env)
 	c.recordExpr(fx, types.ErrorType) // placeholder
 
-	// §7.4 Error.downcast::<T>() — receiver must be the prelude
-	// `Error` interface; result is `T?`. The runtime mechanism is a
-	// nominal-tag check (in Go, a type assertion against the concrete
-	// type stored as the interface value).
 	if fx.Name == "downcast" {
-		if !isPreludeError(recvT) {
+		if _, ok := types.AsNamedBuiltin(recvT, "Error"); !ok {
 			c.errNode(fx, diag.CodeTypeMismatch,
 				"`downcast` is only callable on values of the `Error` interface, got `%s`", recvT)
 			for _, a := range e.Args {
@@ -750,21 +740,7 @@ func (c *checker) methodCallTypeTF(fx *ast.FieldExpr, tf *ast.TurbofishExpr, e *
 		return &types.Optional{Inner: target}
 	}
 
-	// Future generic-method intrinsics could dispatch here; for now we
-	// fall through to the regular method-call path which will infer the
-	// type args from the value-arg list.
 	return c.methodCallType(fx, e, env)
-}
-
-// isPreludeError reports whether t is the prelude `Error` interface
-// type. The check is by Sym name + builtin kind so a user-shadowed
-// `Error` in another scope doesn't accidentally match.
-func isPreludeError(t types.Type) bool {
-	n, ok := t.(*types.Named)
-	if !ok || n.Sym == nil {
-		return false
-	}
-	return n.Sym.Name == "Error" && n.Sym.Kind == resolve.SymBuiltin
 }
 
 func (c *checker) methodCallType(fx *ast.FieldExpr, e *ast.CallExpr, env *env) types.Type {
