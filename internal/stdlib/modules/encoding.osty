@@ -1,0 +1,47 @@
+// std.encoding — binary-to-text encodings.
+
+pub struct Base64Url {
+    pub fn encode(self, data: Bytes) -> String {
+        ""
+    }
+
+    pub fn decode(self, text: String) -> Result<Bytes, Error> {
+        Ok([])
+    }
+}
+
+pub struct Base64 {
+    pub url: Base64Url
+
+    pub fn encode(self, data: Bytes) -> String {
+        ""
+    }
+
+    pub fn decode(self, text: String) -> Result<Bytes, Error> {
+        Ok([])
+    }
+}
+
+pub struct Hex {
+    pub fn encode(self, data: Bytes) -> String {
+        ""
+    }
+
+    pub fn decode(self, text: String) -> Result<Bytes, Error> {
+        Ok([])
+    }
+}
+
+pub struct UrlEncoding {
+    pub fn encode(self, text: String) -> String {
+        text
+    }
+
+    pub fn decode(self, text: String) -> Result<String, Error> {
+        Ok(text)
+    }
+}
+
+pub let base64: Base64 = Base64 { url: Base64Url {} }
+pub let hex: Hex = Hex {}
+pub let url: UrlEncoding = UrlEncoding {}

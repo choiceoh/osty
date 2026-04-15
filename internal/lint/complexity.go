@@ -16,9 +16,9 @@ func sprint(a ...any) string { return fmt.Sprint(a...) }
 // trip them; users who want stricter limits can tighten via config
 // once threshold knobs are exposed.
 const (
-	defaultMaxParams   = 7
-	defaultMaxBodyLen  = 80
-	defaultMaxNesting  = 5
+	defaultMaxParams  = 7
+	defaultMaxBodyLen = 80
+	defaultMaxNesting = 5
 )
 
 // lintComplexity runs the L0050 / L0052 / L0053 checks over every

@@ -2,6 +2,7 @@ package check
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -187,6 +188,9 @@ func Package(pkg *resolve.Package, pr *resolve.PackageResult, opts ...Opts) *Res
 // per-package for display, but SymTypes / Descs span the workspace.
 //
 // Packages without bodies (stdlib stubs, cycle markers) are skipped.
+// Provider-backed stdlib packages contribute declarations/signatures to
+// the shared type environment, but their stub bodies are not checked as
+// user code.
 func Workspace(
 	ws *resolve.Workspace,
 	resolved map[string]*resolve.PackageResult,
@@ -250,6 +254,16 @@ func Workspace(
 	out := map[string]*Result{}
 	for _, e := range walk {
 		start := len(c.result.Diags)
+		if isProviderStdlibPackage(ws, e.path, e.pkg) {
+			out[e.path] = &Result{
+				Types:          c.result.Types,
+				LetTypes:       c.result.LetTypes,
+				SymTypes:       c.result.SymTypes,
+				Descs:          c.result.Descs,
+				Instantiations: c.result.Instantiations,
+			}
+			continue
+		}
 		for _, pf := range e.pkg.Files {
 			c.file = pf.File
 			c.resolved = fileResult(pf)
@@ -274,6 +288,13 @@ func Workspace(
 	return out
 }
 
+func isProviderStdlibPackage(ws *resolve.Workspace, path string, pkg *resolve.Package) bool {
+	return ws != nil &&
+		ws.Stdlib != nil &&
+		strings.HasPrefix(path, resolve.StdPrefix) &&
+		ws.Stdlib.LookupPackage(path) == pkg
+}
+
 // newChecker allocates a checker with empty shared maps; each entry
 // point (File / Package) wires the appropriate file + resolver view
 // before running the passes.
@@ -286,8 +307,10 @@ func newChecker() *checker {
 			Descs:          map[*resolve.Symbol]*typeDesc{},
 			Instantiations: map[*ast.CallExpr][]types.Type{},
 		},
-		syms:      map[*resolve.Symbol]*symInfo{},
-		declToSym: map[ast.Node]*resolve.Symbol{},
+		syms:              map[*resolve.Symbol]*symInfo{},
+		declToSym:         map[ast.Node]*resolve.Symbol{},
+		externalCollected: map[*resolve.Package]bool{},
+		externalPkgs:      map[*resolve.Symbol]*resolve.Package{},
 	}
 }
 
@@ -368,6 +391,42 @@ type checker struct {
 	// calls on primitive receivers fall through to the legacy
 	// stdlibCallReturn escape hatch.
 	primMethods map[types.PrimitiveKind]map[string]*methodDesc
+
+	// externalCollected tracks imported packages whose declaration
+	// surfaces have been collected into result.SymTypes / result.Descs.
+	// Single-file checks do not otherwise run a collect pass over stdlib
+	// packages, but package calls like `random.seeded()` still need the
+	// callee return type and the returned struct's methods.
+	externalCollected map[*resolve.Package]bool
+
+	// externalPkgs remembers which loaded package introduced a Named
+	// type discovered through a package call. Stdlib modules are
+	// resolved but not collected by the user's checker pass; this lets
+	// later field/method lookups walk their AST signatures.
+	externalPkgs map[*resolve.Symbol]*resolve.Package
+}
+
+func (c *checker) ensurePackageCollected(pkg *resolve.Package) {
+	if pkg == nil || len(pkg.Files) == 0 {
+		return
+	}
+	if c.externalCollected[pkg] {
+		return
+	}
+	c.externalCollected[pkg] = true
+
+	oldFile, oldResolved := c.file, c.resolved
+	for _, pf := range pkg.Files {
+		c.indexSymbolsFrom(fileResult(pf))
+	}
+	for _, pf := range pkg.Files {
+		c.file = pf.File
+		c.resolved = fileResult(pf)
+		for _, d := range pf.File.Decls {
+			c.collect(d)
+		}
+	}
+	c.file, c.resolved = oldFile, oldResolved
 }
 
 // indexPrimitiveMethods converts the stdlib registry's primitive method

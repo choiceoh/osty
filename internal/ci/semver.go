@@ -15,9 +15,9 @@ import (
 // Rules:
 //
 //   - Any removed exported symbol is a breaking change.
-//     * If the current major >  baseline major: Warning (expected,
-//       the user already signaled a breaking release).
-//     * Otherwise: Error (silent break).
+//   - If the current major >  baseline major: Warning (expected,
+//     the user already signaled a breaking release).
+//   - Otherwise: Error (silent break).
 //   - Added symbols are Info-equivalent — surfaced under --json
 //     but treated as passing.
 //   - Signature changes on otherwise-same symbols are Error unless

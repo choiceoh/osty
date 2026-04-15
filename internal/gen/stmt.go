@@ -97,26 +97,14 @@ func (g *gen) emitBlockInline(b *ast.Block) {
 	g.body.write("}")
 }
 
-// emitLetStmt handles `let p = e`. Phase 1 supports bare identifier
-// patterns only — destructuring (tuple / struct / variant) is Phase 2.
+// emitLetStmt handles `let p = e`.
 //
 // Mutability flag (`let mut`) is discarded: Go variables are always
 // mutable; the type checker already enforced Osty's immutability.
 func (g *gen) emitLetStmt(l *ast.LetStmt) {
-	// Tuple destructure: `let (a, b) = expr` → temp-and-project.
-	if tp, ok := l.Pattern.(*ast.TuplePat); ok {
-		g.emitLetTupleDestructure(tp, l)
-		return
-	}
-	// Struct destructure: `let Point { x, y } = p` → per-field bindings.
-	if sp, ok := l.Pattern.(*ast.StructPat); ok {
-		g.emitLetStructDestructure(sp, l)
-		return
-	}
-
 	name := identPatternName(l.Pattern)
 	if name == "" {
-		g.body.writef("/* TODO: destructuring let %T */\n", l.Pattern)
+		g.emitLetPatternDestructure(l.Pattern, l.Value)
 		return
 	}
 	safe := mangleIdent(name)
@@ -240,59 +228,17 @@ func (g *gen) emitQuestionLift(name string, q *ast.QuestionExpr) {
 	}
 }
 
-// emitLetTupleDestructure lowers `let (a, b, ...) = expr` to:
-//
-//	_tmp := expr
-//	a := _tmp.F0
-//	b := _tmp.F1
-//
-// Wildcard elements contribute no binding. Nested patterns fall back
-// to a temp + recursive destructure.
-func (g *gen) emitLetTupleDestructure(tp *ast.TuplePat, l *ast.LetStmt) {
-	tmp := g.freshVar("_t")
+// emitLetPatternDestructure lowers an irrefutable pattern binding by
+// first evaluating the RHS once and then reusing the match binding
+// machinery for tuple / struct / nested subpatterns.
+func (g *gen) emitLetPatternDestructure(p ast.Pattern, value ast.Expr) {
+	tmp := g.freshVar("_p")
+	g.preLiftQuestions(value)
+	defer g.resetQuestionSubs()
 	g.body.writef("%s := ", tmp)
-	g.emitExpr(l.Value)
+	g.emitExpr(value)
 	g.body.writef("\n_ = %s\n", tmp)
-	for i, elem := range tp.Elems {
-		switch e := elem.(type) {
-		case *ast.WildcardPat:
-			// nothing
-		case *ast.IdentPat:
-			g.body.writef("%s := %s.F%d; _ = %s\n",
-				mangleIdent(e.Name), tmp, i, mangleIdent(e.Name))
-		default:
-			g.body.writef("/* TODO: nested tuple pattern %T at index %d */\n", e, i)
-		}
-	}
-}
-
-// emitLetStructDestructure lowers `let Point { x, y, .. } = p` to:
-//
-//	_tmp := p
-//	x := _tmp.x
-//	y := _tmp.y
-func (g *gen) emitLetStructDestructure(sp *ast.StructPat, l *ast.LetStmt) {
-	tmp := g.freshVar("_s")
-	g.body.writef("%s := ", tmp)
-	g.emitExpr(l.Value)
-	g.body.writef("\n_ = %s\n", tmp)
-	for _, f := range sp.Fields {
-		bindName := f.Name
-		if f.Pattern != nil {
-			if id, ok := f.Pattern.(*ast.IdentPat); ok {
-				bindName = id.Name
-			} else {
-				// Nested pattern — fall back to binding the field to
-				// a fresh temp and recursing, but we don't have a full
-				// recursive let lowering yet.
-				g.body.writef("/* TODO: nested struct pattern on field %s */\n", f.Name)
-				continue
-			}
-		}
-		safe := mangleIdent(bindName)
-		g.body.writef("%s := %s.%s; _ = %s\n",
-			safe, tmp, mangleIdent(f.Name), safe)
-	}
+	g.emitPatternBindings(tmp, g.typeOf(value), p)
 }
 
 // emitAssign covers `a = b`, compound assigns (`+=`, `-=`, ...) and
@@ -412,71 +358,56 @@ func (g *gen) emitFor(f *ast.ForStmt) {
 		g.emitBlock(f.Body)
 		return
 	}
-	// Tuple pattern `for (k, v) in map` → `for k, v := range map`.
-	// Go flags unused variables so any pattern-bound name that the
-	// body doesn't touch gets a `_ = name` prelude. Cheaper than
-	// analysing the body.
+	// Tuple pattern over a Go two-value range source:
+	//
+	//   for (k, v) in map
+	//   for (i, x) in xs.enumerate()
+	//
+	// Plain List<(A, B)> values intentionally skip this path; Go range
+	// yields index + tuple there, so the generic destructuring branch
+	// below must bind the tuple element instead.
 	if tp, ok := f.Pattern.(*ast.TuplePat); ok && len(tp.Elems) == 2 {
-		k := forPatternName(tp.Elems[0], "_")
-		v := forPatternName(tp.Elems[1], "_")
 		iter := f.Iter
+		var keyType, valueType types.Type
+		twoValueRange := false
 		if recv, ok := enumerateReceiver(f.Iter); ok {
 			iter = recv
+			keyType = types.Int
+			valueType = iterElementType(g.typeOf(recv))
+			twoValueRange = true
+		} else if isMapType(g.typeOf(f.Iter)) {
+			keyType, valueType = mapElemTypes(g.typeOf(f.Iter))
+			twoValueRange = true
 		}
-		if v == "_" {
-			if _, wildcard := tp.Elems[1].(*ast.WildcardPat); !wildcard {
-				v = g.freshVar("_it")
-			}
+		if twoValueRange {
+			k := g.freshVar("_k")
+			v := g.freshVar("_v")
+			g.body.writef("for %s, %s := range ", k, v)
+			g.emitExpr(iter)
+			g.body.writeln(" {")
+			g.body.indent()
+			g.body.writef("_ = %s\n_ = %s\n", k, v)
+			g.emitPatternBindings(k, keyType, tp.Elems[0])
+			g.emitPatternBindings(v, valueType, tp.Elems[1])
+			g.emitStmts(f.Body.Stmts)
+			g.body.dedent()
+			g.body.writeln("}")
+			return
 		}
-		g.body.writef("for %s, %s := range ", k, v)
-		g.emitExpr(iter)
-		g.body.writeln(" {")
-		g.body.indent()
-		if k != "_" {
-			g.body.writef("_ = %s\n", k)
-		}
-		if v != "_" {
-			g.body.writef("_ = %s\n", v)
-		}
-		if _, id := tp.Elems[1].(*ast.IdentPat); !id {
-			if _, wildcard := tp.Elems[1].(*ast.WildcardPat); !wildcard && v != "_" {
-				synth := &ast.LetStmt{Pattern: tp.Elems[1], Value: &ast.Ident{Name: v}}
-				switch p := tp.Elems[1].(type) {
-				case *ast.TuplePat:
-					g.emitLetTupleDestructure(p, synth)
-				case *ast.StructPat:
-					g.emitLetStructDestructure(p, synth)
-				default:
-					g.body.writef("/* TODO: for tuple value pattern %T */\n", tp.Elems[1])
-				}
-			}
-		}
-		g.emitStmts(f.Body.Stmts)
-		g.body.dedent()
-		g.body.writeln("}")
-		return
 	}
 	// for pattern in iter — single binding.
 	name := identPatternName(f.Pattern)
 	if name == "" {
 		// Non-ident pattern: bind each iteration to a fresh temp and
-		// unpack it inside the body, reusing the let-destructure
-		// emitters so the pattern shapes stay in sync.
+		// unpack it inside the body through the same recursive pattern
+		// binding path used by match / if-let.
 		tmp := g.freshVar("_it")
 		g.body.writef("for _, %s := range ", tmp)
 		g.emitExpr(f.Iter)
 		g.body.writeln(" {")
 		g.body.indent()
 		g.body.writef("_ = %s\n", tmp)
-		synth := &ast.LetStmt{Pattern: f.Pattern, Value: &ast.Ident{Name: tmp}}
-		switch p := f.Pattern.(type) {
-		case *ast.TuplePat:
-			g.emitLetTupleDestructure(p, synth)
-		case *ast.StructPat:
-			g.emitLetStructDestructure(p, synth)
-		default:
-			g.body.writef("/* TODO: for with %T pattern */\n", f.Pattern)
-		}
+		g.emitPatternBindings(tmp, iterElementType(g.typeOf(f.Iter)), f.Pattern)
 		g.emitStmts(f.Body.Stmts)
 		g.body.dedent()
 		g.body.writeln("}")
@@ -524,14 +455,14 @@ func (g *gen) emitFor(f *ast.ForStmt) {
 //
 //	for {
 //	    _t := <expr>
-//	    if _t == nil { break }         // or: if !_t.IsOk { break }
-//	    x := *_t                       // bind(s) from the pattern
+//	    if !matches(_t, pat) { break }
+//	    // bind(s) from the pattern
 //	    <body>
 //	}
 //
-// Only `Some(…)` / `Ok(…)` / `Err(…)` variant patterns are supported
-// here; more exotic enum patterns reuse the match-arm lowering path
-// inside a `for` so arbitrary user enums keep working.
+// The pattern test/binding code is shared with match and if-let, so
+// Option, Result, user enums, tuple, struct, range and binding
+// patterns stay in one lowering path.
 func (g *gen) emitForLet(f *ast.ForStmt) {
 	g.body.writeln("for {")
 	g.body.indent()
@@ -545,78 +476,50 @@ func (g *gen) emitForLet(f *ast.ForStmt) {
 	}
 	g.emitExpr(f.Iter)
 	g.body.writef("\n_ = %s\n", tmp)
-	vp, ok := f.Pattern.(*ast.VariantPat)
-	if !ok || len(vp.Path) == 0 {
-		g.body.writef("/* TODO: for-let with %T pattern */\nbreak\n", f.Pattern)
-		g.body.dedent()
-		g.body.writeln("}")
-		return
-	}
-	head := vp.Path[len(vp.Path)-1]
-	switch head {
-	case "Some":
-		// Option<T> is represented as *T in gen. Break on nil; deref on match.
-		g.body.writef("if %s == nil { break }\n", tmp)
-		if len(vp.Args) == 1 {
-			if id, ok := vp.Args[0].(*ast.IdentPat); ok {
-				g.body.writef("%s := *%s; _ = %s\n",
-					mangleIdent(id.Name), tmp, mangleIdent(id.Name))
-			}
-		}
-	case "None":
-		// Iterates only while expr is None — typically a guard form. Once
-		// we bind here we don't extract a value.
-		g.body.writef("if %s != nil { break }\n", tmp)
-	case "Ok":
-		g.body.writef("if !%s.IsOk { break }\n", tmp)
-		if len(vp.Args) == 1 {
-			if id, ok := vp.Args[0].(*ast.IdentPat); ok {
-				g.body.writef("%s := %s.Value; _ = %s\n",
-					mangleIdent(id.Name), tmp, mangleIdent(id.Name))
-			}
-		}
-	case "Err":
-		g.body.writef("if %s.IsOk { break }\n", tmp)
-		if len(vp.Args) == 1 {
-			if id, ok := vp.Args[0].(*ast.IdentPat); ok {
-				g.body.writef("%s := %s.Error; _ = %s\n",
-					mangleIdent(id.Name), tmp, mangleIdent(id.Name))
-			}
-		}
-	default:
-		// Generic user-enum variant: type-assert to the variant struct.
-		owner, isUserVariant := g.variantOwner[head]
-		if isUserVariant {
-			variantT := owner + "_" + head
-			alt := g.freshVar("_v")
-			g.body.writef("%s, _ok := %s.(%s)\nif !_ok { break }\n_ = %s\n",
-				alt, tmp, variantT, alt)
-			for i, a := range vp.Args {
-				if id, ok := a.(*ast.IdentPat); ok {
-					g.body.writef("%s := %s.F%d; _ = %s\n",
-						mangleIdent(id.Name), alt, i, mangleIdent(id.Name))
-				}
-			}
-		} else {
-			g.body.writef("/* TODO: for-let variant %s */\nbreak\n", head)
-		}
-	}
+	scrutT := g.typeOf(f.Iter)
+	g.body.write("if !(")
+	g.emitPatternTest(tmp, scrutT, f.Pattern)
+	g.body.writeln(") { break }")
+	g.emitPatternBindings(tmp, scrutT, f.Pattern)
 	g.emitStmts(f.Body.Stmts)
 	g.body.dedent()
 	g.body.writeln("}")
 }
 
-// forPatternName returns a Go-safe name for a pattern element in a
-// destructuring `for` loop, substituting `fallback` when the pattern
-// is a wildcard or an unsupported form.
-func forPatternName(p ast.Pattern, fallback string) string {
-	switch p := p.(type) {
-	case *ast.IdentPat:
-		return mangleIdent(p.Name)
-	case *ast.WildcardPat:
-		return "_"
+func isMapType(t types.Type) bool {
+	n, ok := t.(*types.Named)
+	return ok && n.Sym != nil && n.Sym.Name == "Map" && len(n.Args) == 2
+}
+
+func mapElemTypes(t types.Type) (types.Type, types.Type) {
+	if n, ok := t.(*types.Named); ok && n.Sym != nil && n.Sym.Name == "Map" && len(n.Args) == 2 {
+		return n.Args[0], n.Args[1]
 	}
-	return fallback
+	return nil, nil
+}
+
+func iterElementType(t types.Type) types.Type {
+	switch n := t.(type) {
+	case *types.Named:
+		if n.Sym == nil {
+			return nil
+		}
+		switch n.Sym.Name {
+		case "List", "Set", "Chan", "Channel":
+			if len(n.Args) == 1 {
+				return n.Args[0]
+			}
+		case "Map":
+			if len(n.Args) == 2 {
+				return &types.Tuple{Elems: []types.Type{n.Args[0], n.Args[1]}}
+			}
+		}
+	case *types.Primitive:
+		if n.Kind == types.PString || n.Kind == types.PBytes {
+			return types.Byte
+		}
+	}
+	return nil
 }
 
 func enumerateReceiver(e ast.Expr) (ast.Expr, bool) {

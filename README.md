@@ -15,23 +15,13 @@ scaffolding (`osty new` / `osty init`), a manifest-driven build
 orchestrator (`osty build`) that reads `osty.toml` / `osty.lock`
 and threads the front-end + gen across the declared packages, a
 working test runner (`osty test`), API documentation generation
-(`osty doc`), and CI quality tooling (`osty ci`). The remaining
-pieces are Tier 2+ of the standard library and the real
-package-registry backend behind `osty add` / `osty update` /
-`osty publish`; the checker now records generic call
-instantiations, validates structural interface satisfaction, emits
-match exhaustiveness diagnostics, and wires the auto-derived
-builder/default protocol.
-transpiler whose Phase 1 (primitives, fns, control flow) is
-working, project scaffolding (`osty new` / `osty init`), a
-manifest-driven build orchestrator (`osty build`) that reads
-`osty.toml` / `osty.lock` and threads the front-end + gen across
-the declared packages, a package manager (`osty add` / `osty
-update` / `osty publish`) that drives registry + git + path
-sources through a SemVer resolver into a deterministic lockfile,
-and a build-and-execute shortcut (`osty run`). Phase 2+ of the
-transpiler (structs, enums, match, generics, Option / Result,
-FFI, concurrency) is the main remaining piece.
+(`osty doc`), CI quality tooling (`osty ci`), and a package manager
+(`osty add` / `osty update` / `osty publish`) backed by a
+file-backed HTTP registry server for local/private registries. The
+remaining pieces are Tier 2+ of the standard library; the checker now
+records generic call instantiations, validates structural interface
+satisfaction, emits match exhaustiveness diagnostics, and wires the
+auto-derived builder/default protocol.
 
 ## Status
 
@@ -57,7 +47,7 @@ FFI, concurrency) is the main remaining piece.
 | API doc generator (`internal/docgen`, `osty doc`) | done — HTML + markdown, field docs, cross-refs, workspace mode |
 | CI quality tooling (`internal/ci`, `osty ci`) | done — signature-aware snapshots, workspace coverage, JSON reports |
 | Pipeline visualizer (`osty pipeline`) | done — per-stage timing, workspace mode, package-mode gen, baseline diff, LSP trace, `--explain` |
-| Package registry / `osty add` / `osty update` / `osty run` / `osty publish` | scaffolded — manifest wiring ready; registry backend not yet implemented |
+| Package registry backend / `osty registry serve` | done — file-backed HTTP server for index/search/download/publish/yank, with ETag index responses and bearer-token write auth |
 | Build orchestrator (`osty build`) | wired — drives manifest → front-end → gen Phase 1 |
 | Test runner harness (`internal/testgen`) | wired — merges per-file gen output, injects a real std.testing runtime + main(), runs via `go run` |
 | `osty test` (discovery + front-end + execution) | wired — validates and **runs** discovered `test*` / `bench*` fns; failures and pass/fail totals report inline |
@@ -138,7 +128,7 @@ osty/
 │   ├── tomlparse/           # Generic TOML parser (subset)
 │   ├── manifest/            # osty.toml parse + validate + lookup
 │   ├── lockfile/            # osty.lock read/write
-│   ├── registry/            # Package registry client (stub)
+│   ├── registry/            # Package registry client + file-backed HTTP server
 │   └── pkgmgr/semver/       # SemVer parse, compare, constraint match
 └── testdata/                # .osty fixtures used by tests
 ```
@@ -166,6 +156,7 @@ osty publish           # pack the project and upload to a registry
 osty search QUERY      # full-text search the registry (--registry, --limit)
 osty info PKG          # show registry metadata for a package (--all-versions)
 osty fetch             # resolve + vendor without building (--locked, --frozen)
+osty registry serve    # run a local/private package registry
 osty yank --version V [PKG]   # mark a published version as yanked
 osty unyank --version V [PKG] # un-yank a previously yanked version
 osty login [--registry N]     # store an API token in ~/.osty/credentials.toml
@@ -176,7 +167,8 @@ osty resolve FILE|DIR  # name resolution; directory = package mode (--scopes for
 osty check FILE|DIR    # lex + parse + resolve + type-check (diagnostics only)
 osty typecheck FILE    # same as check, plus a per-expression type dump
 osty lint FILE|DIR     # style + correctness warnings (L0xxx codes)
-osty fmt FILE          # format to canonical style (see --check, --write)
+osty fmt FILE          # repair + format to canonical style (see --check, --write)
+osty repair FILE       # auto-fix common AI-authored syntax/idiom slips
 osty gen FILE          # transpile to Go source (see -o, --package)
 osty doc PATH          # generate API documentation (HTML + markdown)
 osty ci                # run CI quality checks (signatures, coverage, snapshots)
@@ -203,8 +195,22 @@ Global flags (precede the subcommand):
 
 `fmt`-specific flags (after the subcommand):
 
+`osty fmt` runs the same automatic source repair pass before formatting by
+default, so AI-authored syntax slips are normalized in one command.
+
 - `--check` — exit 1 if the file is not already formatted; show diff
 - `--write` — rewrite the file in place instead of printing
+- `--no-repair` — disable the default automatic source repair pass
+
+`repair`-specific flags (after the subcommand):
+
+- `--check` — exit 1 if the file contains repairable syntax slips
+- `--write` — rewrite the file in place instead of printing
+
+Repairs include common foreign-language carryovers such as `func`/`def`,
+`var`/`const`, `while`, `switch`/`case`, `nil`/`null`, Python word
+operators, JS `console.log`, semicolons, `=>`, trailing chain dots, and
+newline-separated `else`.
 
 `gen`-specific flags (after the subcommand):
 
@@ -309,6 +315,17 @@ a different package without leaving its directory.
   default, or the built-in one when run outside a project).
 - `--limit N` — maximum hits to display (default 20; pass 0 for the
   registry's own default page size).
+
+`registry serve`-specific flags (after the subcommand):
+
+- `--addr HOST:PORT` — address to listen on (default `127.0.0.1:7878`).
+- `--root DIR` — package index/tarball storage root (default
+  `.osty/registry`).
+- `--token T` — bearer token required for `publish`, `yank`, and
+  `unyank`; defaults to `$OSTY_REGISTRY_TOKEN`.
+- `--allow-anonymous-writes` — local-test escape hatch when no token
+  should be required.
+- `--max-upload-mb N` — maximum package tarball size.
 
 `login` / `logout`-specific flags (after the subcommand):
 

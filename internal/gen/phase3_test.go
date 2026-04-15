@@ -70,6 +70,33 @@ fn main() {
 	}
 }
 
+// TestGenericTypeAlias verifies generic aliases emit real Go aliases,
+// not TODO comments, and remain usable in annotations.
+func TestGenericTypeAlias(t *testing.T) {
+	src := `type Pair<T> = (T, T)
+
+fn main() {
+    let p: Pair<Int> = (3, 4)
+    println("{p.F0} {p.F1}")
+}
+`
+	goSrc, err := transpile(t, src)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := string(goSrc)
+	if strings.Contains(out, "TODO(phase3): generic type alias") {
+		t.Errorf("generic alias TODO leaked into output:\n%s", out)
+	}
+	if !strings.Contains(out, "type Pair[T any] =") {
+		t.Errorf("expected generic type alias in output:\n%s", out)
+	}
+	got := runGo(t, goSrc)
+	if strings.TrimSpace(got) != "3 4" {
+		t.Errorf("unexpected output: %q\n--- src ---\n%s", got, goSrc)
+	}
+}
+
 // TestMapIteration verifies `for (k, v) in m` pattern.
 func TestMapIteration(t *testing.T) {
 	src := `fn main() {

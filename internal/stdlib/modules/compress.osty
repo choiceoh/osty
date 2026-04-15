@@ -1,0 +1,13 @@
+// std.compress — compression codecs.
+
+pub struct Gzip {
+    pub fn encode(self, data: Bytes) -> Bytes {
+        data
+    }
+
+    pub fn decode(self, data: Bytes) -> Result<Bytes, Error> {
+        Ok(data)
+    }
+}
+
+pub let gzip: Gzip = Gzip {}

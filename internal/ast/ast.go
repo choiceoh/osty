@@ -198,14 +198,14 @@ type Decorated interface {
 
 // UseDecl represents `use path`, `use path as alias`, and FFI forms.
 type UseDecl struct {
-	PosV      token.Pos
-	EndV      token.Pos
-	Path      []string // dot-separated path, or single entry with slashes for URLs
-	RawPath   string   // e.g. "github.com/user/lib" as written
-	Alias     string   // optional `as alias`
-	IsGoFFI   bool     // `use go "..."`
-	GoPath    string   // go import path
-	GoBody    []Decl   // declarations inside `{ ... }`
+	PosV    token.Pos
+	EndV    token.Pos
+	Path    []string // dot-separated path, or single entry with slashes for URLs
+	RawPath string   // e.g. "github.com/user/lib" as written
+	Alias   string   // optional `as alias`
+	IsGoFFI bool     // `use go "..."`
+	GoPath  string   // go import path
+	GoBody  []Decl   // declarations inside `{ ... }`
 }
 
 func (*UseDecl) declNode()        {}
@@ -221,16 +221,16 @@ type FnDecl struct {
 	Generics    []*GenericParam
 	Recv        *Receiver // non-nil for methods
 	Params      []*Param
-	ReturnType  Type      // nil == unit ()
-	Body        *Block    // nil for interface-declared methods without default
+	ReturnType  Type   // nil == unit ()
+	Body        *Block // nil for interface-declared methods without default
 	DocComment  string
 	Annotations []*Annotation
 }
 
-func (*FnDecl) declNode()           {}
-func (f *FnDecl) Pos() token.Pos    { return f.PosV }
-func (f *FnDecl) End() token.Pos    { return f.EndV }
-func (f *FnDecl) Doc() string       { return f.DocComment }
+func (*FnDecl) declNode()               {}
+func (f *FnDecl) Pos() token.Pos        { return f.PosV }
+func (f *FnDecl) End() token.Pos        { return f.EndV }
+func (f *FnDecl) Doc() string           { return f.DocComment }
 func (f *FnDecl) Annots() []*Annotation { return f.Annotations }
 
 // Receiver describes the `self` or `mut self` first parameter of a method.
@@ -310,10 +310,10 @@ type StructDecl struct {
 	Annotations []*Annotation
 }
 
-func (*StructDecl) declNode()           {}
-func (s *StructDecl) Pos() token.Pos    { return s.PosV }
-func (s *StructDecl) End() token.Pos    { return s.EndV }
-func (s *StructDecl) Doc() string       { return s.DocComment }
+func (*StructDecl) declNode()               {}
+func (s *StructDecl) Pos() token.Pos        { return s.PosV }
+func (s *StructDecl) End() token.Pos        { return s.EndV }
+func (s *StructDecl) Doc() string           { return s.DocComment }
 func (s *StructDecl) Annots() []*Annotation { return s.Annotations }
 
 // Field is a struct field.
@@ -359,10 +359,10 @@ type EnumDecl struct {
 	Annotations []*Annotation
 }
 
-func (*EnumDecl) declNode()           {}
-func (e *EnumDecl) Pos() token.Pos    { return e.PosV }
-func (e *EnumDecl) End() token.Pos    { return e.EndV }
-func (e *EnumDecl) Doc() string       { return e.DocComment }
+func (*EnumDecl) declNode()               {}
+func (e *EnumDecl) Pos() token.Pos        { return e.PosV }
+func (e *EnumDecl) End() token.Pos        { return e.EndV }
+func (e *EnumDecl) Doc() string           { return e.DocComment }
 func (e *EnumDecl) Annots() []*Annotation { return e.Annotations }
 
 // Variant is one enum variant: bare or tuple-like.
@@ -399,10 +399,10 @@ type InterfaceDecl struct {
 	Annotations []*Annotation
 }
 
-func (*InterfaceDecl) declNode()           {}
-func (i *InterfaceDecl) Pos() token.Pos    { return i.PosV }
-func (i *InterfaceDecl) End() token.Pos    { return i.EndV }
-func (i *InterfaceDecl) Doc() string       { return i.DocComment }
+func (*InterfaceDecl) declNode()               {}
+func (i *InterfaceDecl) Pos() token.Pos        { return i.PosV }
+func (i *InterfaceDecl) End() token.Pos        { return i.EndV }
+func (i *InterfaceDecl) Doc() string           { return i.DocComment }
 func (i *InterfaceDecl) Annots() []*Annotation { return i.Annotations }
 
 // TypeAliasDecl — `type Name<T> = ...`.
@@ -417,10 +417,10 @@ type TypeAliasDecl struct {
 	Annotations []*Annotation
 }
 
-func (*TypeAliasDecl) declNode()           {}
-func (t *TypeAliasDecl) Pos() token.Pos    { return t.PosV }
-func (t *TypeAliasDecl) End() token.Pos    { return t.EndV }
-func (t *TypeAliasDecl) Doc() string       { return t.DocComment }
+func (*TypeAliasDecl) declNode()               {}
+func (t *TypeAliasDecl) Pos() token.Pos        { return t.PosV }
+func (t *TypeAliasDecl) End() token.Pos        { return t.EndV }
+func (t *TypeAliasDecl) Doc() string           { return t.DocComment }
 func (t *TypeAliasDecl) Annots() []*Annotation { return t.Annotations }
 
 // LetDecl — `pub let NAME = ...` at top level.
@@ -441,10 +441,10 @@ type LetDecl struct {
 	Annotations []*Annotation
 }
 
-func (*LetDecl) declNode()           {}
-func (l *LetDecl) Pos() token.Pos    { return l.PosV }
-func (l *LetDecl) End() token.Pos    { return l.EndV }
-func (l *LetDecl) Doc() string       { return l.DocComment }
+func (*LetDecl) declNode()               {}
+func (l *LetDecl) Pos() token.Pos        { return l.PosV }
+func (l *LetDecl) End() token.Pos        { return l.EndV }
+func (l *LetDecl) Doc() string           { return l.DocComment }
 func (l *LetDecl) Annots() []*Annotation { return l.Annotations }
 
 // ==== Types ====
@@ -459,7 +459,7 @@ type NamedType struct {
 	Args []Type
 }
 
-func (*NamedType) typeNode()       {}
+func (*NamedType) typeNode()        {}
 func (n *NamedType) Pos() token.Pos { return n.PosV }
 func (n *NamedType) End() token.Pos { return n.EndV }
 
@@ -470,7 +470,7 @@ type OptionalType struct {
 	Inner Type
 }
 
-func (*OptionalType) typeNode()       {}
+func (*OptionalType) typeNode()        {}
 func (o *OptionalType) Pos() token.Pos { return o.PosV }
 func (o *OptionalType) End() token.Pos { return o.EndV }
 
@@ -481,7 +481,7 @@ type TupleType struct {
 	Elems []Type
 }
 
-func (*TupleType) typeNode()       {}
+func (*TupleType) typeNode()        {}
 func (t *TupleType) Pos() token.Pos { return t.PosV }
 func (t *TupleType) End() token.Pos { return t.EndV }
 
@@ -493,7 +493,7 @@ type FnType struct {
 	ReturnType Type // nil == unit ()
 }
 
-func (*FnType) typeNode()       {}
+func (*FnType) typeNode()        {}
 func (f *FnType) Pos() token.Pos { return f.PosV }
 func (f *FnType) End() token.Pos { return f.EndV }
 
@@ -507,8 +507,8 @@ type Block struct {
 	Stmts []Stmt
 }
 
-func (*Block) stmtNode()      {}
-func (*Block) exprNode()      {}
+func (*Block) stmtNode()        {}
+func (*Block) exprNode()        {}
 func (b *Block) Pos() token.Pos { return b.PosV }
 func (b *Block) End() token.Pos { return b.EndV }
 
@@ -527,7 +527,7 @@ type LetStmt struct {
 	Value   Expr
 }
 
-func (*LetStmt) stmtNode()      {}
+func (*LetStmt) stmtNode()        {}
 func (s *LetStmt) Pos() token.Pos { return s.PosV }
 func (s *LetStmt) End() token.Pos { return s.EndV }
 
@@ -536,21 +536,21 @@ type ExprStmt struct {
 	X Expr
 }
 
-func (*ExprStmt) stmtNode()      {}
+func (*ExprStmt) stmtNode()        {}
 func (s *ExprStmt) Pos() token.Pos { return s.X.Pos() }
 func (s *ExprStmt) End() token.Pos { return s.X.End() }
 
 // AssignStmt covers `a = b`, compound assigns, and multiple assigns
 // `(a, b) = (c, d)`.
 type AssignStmt struct {
-	PosV   token.Pos
-	EndV   token.Pos
-	Op     token.Kind // ASSIGN, PLUSEQ, ...
-	Targets []Expr    // LHS; length 1 for simple, >1 for multi-assign
-	Value  Expr
+	PosV    token.Pos
+	EndV    token.Pos
+	Op      token.Kind // ASSIGN, PLUSEQ, ...
+	Targets []Expr     // LHS; length 1 for simple, >1 for multi-assign
+	Value   Expr
 }
 
-func (*AssignStmt) stmtNode()      {}
+func (*AssignStmt) stmtNode()        {}
 func (s *AssignStmt) Pos() token.Pos { return s.PosV }
 func (s *AssignStmt) End() token.Pos { return s.EndV }
 
@@ -561,7 +561,7 @@ type ReturnStmt struct {
 	Value Expr // optional
 }
 
-func (*ReturnStmt) stmtNode()      {}
+func (*ReturnStmt) stmtNode()        {}
 func (s *ReturnStmt) Pos() token.Pos { return s.PosV }
 func (s *ReturnStmt) End() token.Pos { return s.EndV }
 
@@ -571,7 +571,7 @@ type BreakStmt struct {
 	EndV token.Pos
 }
 
-func (*BreakStmt) stmtNode()      {}
+func (*BreakStmt) stmtNode()        {}
 func (s *BreakStmt) Pos() token.Pos { return s.PosV }
 func (s *BreakStmt) End() token.Pos { return s.EndV }
 
@@ -581,7 +581,7 @@ type ContinueStmt struct {
 	EndV token.Pos
 }
 
-func (*ContinueStmt) stmtNode()      {}
+func (*ContinueStmt) stmtNode()        {}
 func (s *ContinueStmt) Pos() token.Pos { return s.PosV }
 func (s *ContinueStmt) End() token.Pos { return s.EndV }
 
@@ -595,9 +595,9 @@ type ChanSendStmt struct {
 	Value   Expr
 }
 
-func (*ChanSendStmt) stmtNode()         {}
-func (s *ChanSendStmt) Pos() token.Pos  { return s.PosV }
-func (s *ChanSendStmt) End() token.Pos  { return s.EndV }
+func (*ChanSendStmt) stmtNode()        {}
+func (s *ChanSendStmt) Pos() token.Pos { return s.PosV }
+func (s *ChanSendStmt) End() token.Pos { return s.EndV }
 
 // DeferStmt schedules an expression or block to run on block exit.
 type DeferStmt struct {
@@ -606,16 +606,16 @@ type DeferStmt struct {
 	X    Expr // may be a Block
 }
 
-func (*DeferStmt) stmtNode()      {}
+func (*DeferStmt) stmtNode()        {}
 func (s *DeferStmt) Pos() token.Pos { return s.PosV }
 func (s *DeferStmt) End() token.Pos { return s.EndV }
 
 // ForStmt covers all `for` forms:
 //
-//   for cond { ... }                      // while-style (Pattern nil, Iter = cond)
-//   for { ... }                           // infinite   (Pattern nil, Iter nil)
-//   for x in xs { ... }                   // for-in     (Pattern x, Iter xs)
-//   for let Some(v) = e { ... }           // for-let    (IsForLet, Pattern, Iter)
+//	for cond { ... }                      // while-style (Pattern nil, Iter = cond)
+//	for { ... }                           // infinite   (Pattern nil, Iter nil)
+//	for x in xs { ... }                   // for-in     (Pattern x, Iter xs)
+//	for let Some(v) = e { ... }           // for-let    (IsForLet, Pattern, Iter)
 type ForStmt struct {
 	PosV     token.Pos
 	EndV     token.Pos
@@ -625,7 +625,7 @@ type ForStmt struct {
 	Body     *Block
 }
 
-func (*ForStmt) stmtNode()      {}
+func (*ForStmt) stmtNode()        {}
 func (s *ForStmt) Pos() token.Pos { return s.PosV }
 func (s *ForStmt) End() token.Pos { return s.EndV }
 
@@ -639,7 +639,7 @@ type Ident struct {
 	Name string
 }
 
-func (*Ident) exprNode()      {}
+func (*Ident) exprNode()        {}
 func (i *Ident) Pos() token.Pos { return i.PosV }
 func (i *Ident) End() token.Pos { return i.EndV }
 
@@ -650,7 +650,7 @@ type IntLit struct {
 	Text string
 }
 
-func (*IntLit) exprNode()      {}
+func (*IntLit) exprNode()        {}
 func (l *IntLit) Pos() token.Pos { return l.PosV }
 func (l *IntLit) End() token.Pos { return l.EndV }
 
@@ -660,7 +660,7 @@ type FloatLit struct {
 	Text string
 }
 
-func (*FloatLit) exprNode()      {}
+func (*FloatLit) exprNode()        {}
 func (l *FloatLit) Pos() token.Pos { return l.PosV }
 func (l *FloatLit) End() token.Pos { return l.EndV }
 
@@ -670,7 +670,7 @@ type CharLit struct {
 	Value rune
 }
 
-func (*CharLit) exprNode()      {}
+func (*CharLit) exprNode()        {}
 func (l *CharLit) Pos() token.Pos { return l.PosV }
 func (l *CharLit) End() token.Pos { return l.EndV }
 
@@ -680,16 +680,16 @@ type ByteLit struct {
 	Value byte
 }
 
-func (*ByteLit) exprNode()      {}
+func (*ByteLit) exprNode()        {}
 func (l *ByteLit) Pos() token.Pos { return l.PosV }
 func (l *ByteLit) End() token.Pos { return l.EndV }
 
 // StringLit is a string literal, possibly interpolated.
 //
-//   "hello"        -> Parts: [Lit "hello"]
-//   "hi, {name}"   -> Parts: [Lit "hi, ", Expr <Ident name>]
-//   r"\d+"         -> Parts: [Lit `\d+`], IsRaw=true
-//   """\n  x\n  """ -> Parts: [Lit "x"], IsTriple=true
+//	"hello"        -> Parts: [Lit "hello"]
+//	"hi, {name}"   -> Parts: [Lit "hi, ", Expr <Ident name>]
+//	r"\d+"         -> Parts: [Lit `\d+`], IsRaw=true
+//	"""\n  x\n  """ -> Parts: [Lit "x"], IsTriple=true
 //
 // IsTriple records the original syntactic form so the formatter can
 // emit multi-line content back in triple-quoted style. Semantically it
@@ -710,7 +710,7 @@ type StringPart struct {
 	Expr  Expr   // when !IsLit
 }
 
-func (*StringLit) exprNode()       {}
+func (*StringLit) exprNode()        {}
 func (l *StringLit) Pos() token.Pos { return l.PosV }
 func (l *StringLit) End() token.Pos { return l.EndV }
 
@@ -721,7 +721,7 @@ type BoolLit struct {
 	Value bool
 }
 
-func (*BoolLit) exprNode()      {}
+func (*BoolLit) exprNode()        {}
 func (l *BoolLit) Pos() token.Pos { return l.PosV }
 func (l *BoolLit) End() token.Pos { return l.EndV }
 
@@ -733,7 +733,7 @@ type UnaryExpr struct {
 	X    Expr
 }
 
-func (*UnaryExpr) exprNode()      {}
+func (*UnaryExpr) exprNode()        {}
 func (e *UnaryExpr) Pos() token.Pos { return e.PosV }
 func (e *UnaryExpr) End() token.Pos { return e.EndV }
 
@@ -747,7 +747,7 @@ type BinaryExpr struct {
 	Right Expr
 }
 
-func (*BinaryExpr) exprNode()      {}
+func (*BinaryExpr) exprNode()        {}
 func (e *BinaryExpr) Pos() token.Pos { return e.PosV }
 func (e *BinaryExpr) End() token.Pos { return e.EndV }
 
@@ -758,7 +758,7 @@ type QuestionExpr struct {
 	X    Expr
 }
 
-func (*QuestionExpr) exprNode()      {}
+func (*QuestionExpr) exprNode()        {}
 func (e *QuestionExpr) Pos() token.Pos { return e.PosV }
 func (e *QuestionExpr) End() token.Pos { return e.EndV }
 
@@ -785,7 +785,7 @@ func (a *Arg) End() token.Pos {
 	return a.PosV
 }
 
-func (*CallExpr) exprNode()      {}
+func (*CallExpr) exprNode()        {}
 func (e *CallExpr) Pos() token.Pos { return e.PosV }
 func (e *CallExpr) End() token.Pos { return e.EndV }
 
@@ -798,7 +798,7 @@ type FieldExpr struct {
 	IsOptional bool
 }
 
-func (*FieldExpr) exprNode()      {}
+func (*FieldExpr) exprNode()        {}
 func (e *FieldExpr) Pos() token.Pos { return e.PosV }
 func (e *FieldExpr) End() token.Pos { return e.EndV }
 
@@ -810,7 +810,7 @@ type IndexExpr struct {
 	Index Expr
 }
 
-func (*IndexExpr) exprNode()      {}
+func (*IndexExpr) exprNode()        {}
 func (e *IndexExpr) Pos() token.Pos { return e.PosV }
 func (e *IndexExpr) End() token.Pos { return e.EndV }
 
@@ -824,7 +824,7 @@ type TurbofishExpr struct {
 	Args []Type
 }
 
-func (*TurbofishExpr) exprNode()      {}
+func (*TurbofishExpr) exprNode()        {}
 func (e *TurbofishExpr) Pos() token.Pos { return e.PosV }
 func (e *TurbofishExpr) End() token.Pos { return e.EndV }
 
@@ -837,7 +837,7 @@ type RangeExpr struct {
 	Inclusive bool
 }
 
-func (*RangeExpr) exprNode()      {}
+func (*RangeExpr) exprNode()        {}
 func (e *RangeExpr) Pos() token.Pos { return e.PosV }
 func (e *RangeExpr) End() token.Pos { return e.EndV }
 
@@ -848,7 +848,7 @@ type ParenExpr struct {
 	X    Expr
 }
 
-func (*ParenExpr) exprNode()      {}
+func (*ParenExpr) exprNode()        {}
 func (e *ParenExpr) Pos() token.Pos { return e.PosV }
 func (e *ParenExpr) End() token.Pos { return e.EndV }
 
@@ -859,7 +859,7 @@ type TupleExpr struct {
 	Elems []Expr
 }
 
-func (*TupleExpr) exprNode()      {}
+func (*TupleExpr) exprNode()        {}
 func (e *TupleExpr) Pos() token.Pos { return e.PosV }
 func (e *TupleExpr) End() token.Pos { return e.EndV }
 
@@ -870,7 +870,7 @@ type ListExpr struct {
 	Elems []Expr
 }
 
-func (*ListExpr) exprNode()      {}
+func (*ListExpr) exprNode()        {}
 func (e *ListExpr) Pos() token.Pos { return e.PosV }
 func (e *ListExpr) End() token.Pos { return e.EndV }
 
@@ -903,17 +903,17 @@ func (e *MapEntry) End() token.Pos {
 	return token.Pos{}
 }
 
-func (*MapExpr) exprNode()      {}
+func (*MapExpr) exprNode()        {}
 func (e *MapExpr) Pos() token.Pos { return e.PosV }
 func (e *MapExpr) End() token.Pos { return e.EndV }
 
 // StructLit is `User { name: v, ..rest }`.
 type StructLit struct {
-	PosV    token.Pos
-	EndV    token.Pos
-	Type    Expr // usually Ident or FieldExpr chain naming the type
-	Fields  []*StructLitField
-	Spread  Expr // optional ..expr spread source
+	PosV   token.Pos
+	EndV   token.Pos
+	Type   Expr // usually Ident or FieldExpr chain naming the type
+	Fields []*StructLitField
+	Spread Expr // optional ..expr spread source
 }
 
 // StructLitField is one `name: expr` entry (or shorthand `name`).
@@ -931,7 +931,7 @@ func (f *StructLitField) End() token.Pos {
 	return f.PosV
 }
 
-func (*StructLit) exprNode()      {}
+func (*StructLit) exprNode()        {}
 func (e *StructLit) Pos() token.Pos { return e.PosV }
 func (e *StructLit) End() token.Pos { return e.EndV }
 
@@ -950,16 +950,16 @@ type IfExpr struct {
 	Else    Expr // may be *IfExpr or *Block or nil
 }
 
-func (*IfExpr) exprNode()      {}
+func (*IfExpr) exprNode()        {}
 func (e *IfExpr) Pos() token.Pos { return e.PosV }
 func (e *IfExpr) End() token.Pos { return e.EndV }
 
 // MatchExpr is `match scrutinee { arm, arm, ... }`.
 type MatchExpr struct {
-	PosV       token.Pos
-	EndV       token.Pos
-	Scrutinee  Expr
-	Arms       []*MatchArm
+	PosV      token.Pos
+	EndV      token.Pos
+	Scrutinee Expr
+	Arms      []*MatchArm
 }
 
 // MatchArm is `pattern [if guard] -> body`.
@@ -978,7 +978,7 @@ func (a *MatchArm) End() token.Pos {
 	return a.PosV
 }
 
-func (*MatchExpr) exprNode()      {}
+func (*MatchExpr) exprNode()        {}
 func (e *MatchExpr) Pos() token.Pos { return e.PosV }
 func (e *MatchExpr) End() token.Pos { return e.EndV }
 
@@ -991,7 +991,7 @@ type ClosureExpr struct {
 	Body       Expr
 }
 
-func (*ClosureExpr) exprNode()      {}
+func (*ClosureExpr) exprNode()        {}
 func (e *ClosureExpr) Pos() token.Pos { return e.PosV }
 func (e *ClosureExpr) End() token.Pos { return e.EndV }
 
@@ -1003,7 +1003,7 @@ type WildcardPat struct {
 	EndV token.Pos
 }
 
-func (*WildcardPat) patternNode()   {}
+func (*WildcardPat) patternNode()     {}
 func (p *WildcardPat) Pos() token.Pos { return p.PosV }
 func (p *WildcardPat) End() token.Pos { return p.EndV }
 
@@ -1014,7 +1014,7 @@ type LiteralPat struct {
 	Literal Expr // IntLit, FloatLit, StringLit, CharLit, BoolLit, ByteLit
 }
 
-func (*LiteralPat) patternNode()   {}
+func (*LiteralPat) patternNode()     {}
 func (p *LiteralPat) Pos() token.Pos { return p.PosV }
 func (p *LiteralPat) End() token.Pos { return p.EndV }
 
@@ -1025,7 +1025,7 @@ type IdentPat struct {
 	Name string
 }
 
-func (*IdentPat) patternNode()   {}
+func (*IdentPat) patternNode()     {}
 func (p *IdentPat) Pos() token.Pos { return p.PosV }
 func (p *IdentPat) End() token.Pos { return p.EndV }
 
@@ -1036,7 +1036,7 @@ type TuplePat struct {
 	Elems []Pattern
 }
 
-func (*TuplePat) patternNode()   {}
+func (*TuplePat) patternNode()     {}
 func (p *TuplePat) Pos() token.Pos { return p.PosV }
 func (p *TuplePat) End() token.Pos { return p.EndV }
 
@@ -1065,7 +1065,7 @@ func (f *StructPatField) End() token.Pos {
 	return f.PosV
 }
 
-func (*StructPat) patternNode()   {}
+func (*StructPat) patternNode()     {}
 func (p *StructPat) Pos() token.Pos { return p.PosV }
 func (p *StructPat) End() token.Pos { return p.EndV }
 
@@ -1078,7 +1078,7 @@ type VariantPat struct {
 	Args []Pattern // empty for bare variants
 }
 
-func (*VariantPat) patternNode()   {}
+func (*VariantPat) patternNode()     {}
 func (p *VariantPat) Pos() token.Pos { return p.PosV }
 func (p *VariantPat) End() token.Pos { return p.EndV }
 
@@ -1091,7 +1091,7 @@ type RangePat struct {
 	Inclusive bool
 }
 
-func (*RangePat) patternNode()   {}
+func (*RangePat) patternNode()     {}
 func (p *RangePat) Pos() token.Pos { return p.PosV }
 func (p *RangePat) End() token.Pos { return p.EndV }
 
@@ -1102,7 +1102,7 @@ type OrPat struct {
 	Alts []Pattern
 }
 
-func (*OrPat) patternNode()   {}
+func (*OrPat) patternNode()     {}
 func (p *OrPat) Pos() token.Pos { return p.PosV }
 func (p *OrPat) End() token.Pos { return p.EndV }
 
@@ -1114,6 +1114,6 @@ type BindingPat struct {
 	Pattern Pattern
 }
 
-func (*BindingPat) patternNode()   {}
+func (*BindingPat) patternNode()     {}
 func (p *BindingPat) Pos() token.Pos { return p.PosV }
 func (p *BindingPat) End() token.Pos { return p.EndV }

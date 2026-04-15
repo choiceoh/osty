@@ -9,11 +9,11 @@ import (
 
 // lintSimplify runs three "common bug / redundant code" checks:
 //
-//   L0040  if-then-else that just returns a bool literal (`if c { true }
-//          else { false }` ≡ `c`)
-//   L0041  self-comparison (`x == x`, `x != x`, `x < x`, …) — almost
-//          always a copy-paste bug
-//   L0042  self-assignment (`x = x`) — a no-op
+//	L0040  if-then-else that just returns a bool literal (`if c { true }
+//	       else { false }` ≡ `c`)
+//	L0041  self-comparison (`x == x`, `x != x`, `x < x`, …) — almost
+//	       always a copy-paste bug
+//	L0042  self-assignment (`x = x`) — a no-op
 //
 // All three are pure AST checks; only L0041 / L0042 consult the
 // resolver's Refs map (via exprsEqual) to answer "is this the same

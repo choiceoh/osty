@@ -9,7 +9,8 @@
 //	osty check <file.osty>     Lex+parse+resolve+type-check diagnostics only.
 //	osty typecheck <file.osty> Alias of `check` that also prints the inferred
 //	                           type of each expression (debugging aid).
-//	osty fmt <file.osty>       Format source to canonical style; see -check/-write.
+//	osty fmt <file.osty>       Repair then format source; see -check/-write/-no-repair.
+//	osty repair <file.osty>    Fix common AI-authored syntax slips; see -check/-write.
 //	osty gen <file.osty>       Transpile to Go (prints to stdout; -o writes to file).
 //	osty doc <path>            Emit markdown API docs for a file or package.
 //	osty lsp                   Run the Language Server Protocol server on stdio.
@@ -26,6 +27,7 @@
 // `fmt` subcommand flags (after the subcommand name):
 //
 //	--check        exit 1 if the file is not already formatted; print diff to stderr
+//	--no-repair    disable the default pre-format source repair pass
 //	--write        overwrite the file in place instead of printing to stdout
 package main
 
@@ -50,6 +52,7 @@ import (
 	"github.com/osty/osty/internal/manifest"
 	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/pipeline"
+	"github.com/osty/osty/internal/repair"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/scaffold"
 	"github.com/osty/osty/internal/stdlib"
@@ -81,10 +84,16 @@ func main() {
 	}
 	cmd := args[0]
 	// fmt has its own flag parser because --check/--write only make
-	// sense in that subcommand. Every other subcommand takes exactly
-	// one file path as its second positional arg.
+	// sense in that subcommand. Most front-end subcommands take exactly
+	// one file path as their second positional arg.
 	if cmd == "fmt" {
 		runFmt(args[1:])
+		return
+	}
+	// repair has its own flag parser for --check/--write. It runs before
+	// parse so it can fix syntax slips that would otherwise block fmt/lint.
+	if cmd == "repair" {
+		runRepair(args[1:])
 		return
 	}
 	// gen also has its own flag parser for --out/-o.
@@ -217,6 +226,10 @@ func main() {
 	}
 	if cmd == "info" {
 		runInfo(args[1:], flags)
+		return
+	}
+	if cmd == "registry" {
+		runRegistry(args[1:], flags)
 		return
 	}
 	// doc parses a file or directory and emits markdown/HTML API docs.
@@ -1071,7 +1084,7 @@ func printScopeNode(s *resolve.Scope, depth int) {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: osty [flags] (parse|tokens|resolve|check|typecheck|lint|fmt|gen) FILE")
+	fmt.Fprintln(os.Stderr, "usage: osty [flags] (parse|tokens|resolve|check|typecheck|lint|fmt|repair|gen) FILE")
 	fmt.Fprintln(os.Stderr, "       osty new [--lib] NAME     (scaffold a new project)")
 	fmt.Fprintln(os.Stderr, "       osty init [--lib]         (scaffold into the current directory)")
 	fmt.Fprintln(os.Stderr, "       osty build [DIR]          (manifest-driven front end over a project)")
@@ -1088,6 +1101,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "       osty remove NAME [NAME...] (drop a dep from osty.toml; alias rm)")
 	fmt.Fprintln(os.Stderr, "       osty fetch [--locked|--frozen] (resolve+vendor without building)")
 	fmt.Fprintln(os.Stderr, "       osty info NAME [--all-versions] (show registry metadata for a package)")
+	fmt.Fprintln(os.Stderr, "       osty registry serve [--addr A] [--root DIR] (run a package registry)")
 	fmt.Fprintln(os.Stderr, "       osty doc [--format FMT] [--out PATH] PATH (generate API docs; markdown or html)")
 	fmt.Fprintln(os.Stderr, "       osty ci [flags] [PATH]    (run the CI check bundle: fmt+lint+policy+lockfile)")
 	fmt.Fprintln(os.Stderr, "       osty ci snapshot [-o OUT] (capture the exported API for future semver diffing)")
@@ -1109,6 +1123,10 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  --explain          append `osty explain CODE` text after each diagnostic block")
 	fmt.Fprintln(os.Stderr, "fmt-specific flags (after the subcommand):")
 	fmt.Fprintln(os.Stderr, "  --check            exit 1 if FILE is not already formatted")
+	fmt.Fprintln(os.Stderr, "  --write            overwrite FILE in place")
+	fmt.Fprintln(os.Stderr, "  --no-repair        disable the default pre-format source repair pass")
+	fmt.Fprintln(os.Stderr, "repair-specific flags (after the subcommand):")
+	fmt.Fprintln(os.Stderr, "  --check            exit 1 if FILE would be repaired")
 	fmt.Fprintln(os.Stderr, "  --write            overwrite FILE in place")
 	fmt.Fprintln(os.Stderr, "gen-specific flags (after the subcommand):")
 	fmt.Fprintln(os.Stderr, "  -o PATH            write Go source to PATH instead of stdout")
@@ -1174,7 +1192,7 @@ func printTypes(r *check.Result) {
 
 // runFmt implements the `osty fmt` subcommand. The args slice holds
 // everything on the command line following `fmt` — zero or more of
-// --check/--write, then exactly one file path.
+// --check/--write/--no-repair, then exactly one file path.
 //
 // Exit codes match gofmt conventions:
 //
@@ -1184,14 +1202,20 @@ func printTypes(r *check.Result) {
 func runFmt(args []string) {
 	fs := flag.NewFlagSet("fmt", flag.ExitOnError)
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: osty fmt [--check] [--write] FILE")
+		fmt.Fprintln(os.Stderr, "usage: osty fmt [--check] [--write] [--no-repair] FILE")
 	}
-	var checkMode, writeMode bool
+	var checkMode, writeMode, noRepair bool
+	repairMode := true
 	fs.BoolVar(&checkMode, "check", false, "exit 1 if FILE is not already formatted")
 	fs.BoolVar(&checkMode, "c", false, "alias for --check")
 	fs.BoolVar(&writeMode, "write", false, "overwrite FILE in place")
 	fs.BoolVar(&writeMode, "w", false, "alias for --write")
+	fs.BoolVar(&repairMode, "repair", true, "enable automatic source repair before formatting")
+	fs.BoolVar(&noRepair, "no-repair", false, "disable automatic source repair before formatting")
 	_ = fs.Parse(args)
+	if noRepair {
+		repairMode = false
+	}
 	if fs.NArg() != 1 {
 		fs.Usage()
 		os.Exit(2)
@@ -1207,10 +1231,16 @@ func runFmt(args []string) {
 		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
 		os.Exit(1)
 	}
-	out, diags, ferr := format.Source(src)
+	formatSrc := src
+	var repairs repair.Result
+	if repairMode {
+		repairs = repair.Source(src)
+		formatSrc = repairs.Source
+	}
+	out, diags, ferr := format.Source(formatSrc)
 	if ferr != nil {
 		// Render parse diagnostics so the user can fix them.
-		formatter := &diag.Formatter{Filename: path, Source: src}
+		formatter := &diag.Formatter{Filename: path, Source: formatSrc}
 		if len(diags) > 0 {
 			fmt.Fprintln(os.Stderr, formatter.FormatAll(diags))
 		}
@@ -1220,7 +1250,10 @@ func runFmt(args []string) {
 
 	if checkMode {
 		if !bytes.Equal(src, out) {
-			fmt.Fprintf(os.Stderr, "%s: not formatted\n", path)
+			if repairMode && (len(repairs.Changes) > 0 || repairs.Skipped > 0) {
+				reportRepairSummary(path, repairs)
+			}
+			fmt.Fprintf(os.Stderr, "%s: not repaired/formatted\n", path)
 			os.Exit(1)
 		}
 		return

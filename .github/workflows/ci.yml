@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GOFLAGS: -mod=readonly
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download modules
+        run: go mod download
+
+      - name: Format
+        run: |
+          unformatted="$(gofmt -l $(git ls-files '*.go'))"
+          if [ -n "$unformatted" ]; then
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Build
+        run: go build ./...
+
+      - name: Osty repair
+        run: |
+          osty_bin="$(mktemp -d)/osty"
+          go build -o "$osty_bin" ./cmd/osty
+          while IFS= read -r file; do
+            case "$file" in
+              testdata/spec/negative/*) continue ;;
+            esac
+            "$osty_bin" repair --check "$file"
+          done < <(git ls-files '*.osty')
+
+      - name: Osty CI
+        run: go run ./cmd/osty ci .
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...

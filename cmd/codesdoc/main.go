@@ -136,7 +136,7 @@ type parsedDoc struct {
 
 // phaseGroup bundles consecutive codeEntries that share a phase heading.
 type phaseGroup struct {
-	Heading string       // e.g. "Lexical (E0001–E0099)"
+	Heading string // e.g. "Lexical (E0001–E0099)"
 	Entries []codeEntry
 }
 
@@ -206,7 +206,7 @@ func parseCodes(filename string, src []byte) (*parsedDocs, error) {
 		// with all the specs, in source order. Then walk.
 		type event struct {
 			pos     token.Pos
-			heading string       // non-empty for phase headings
+			heading string // non-empty for phase headings
 			spec    *ast.ValueSpec
 		}
 		var events []event

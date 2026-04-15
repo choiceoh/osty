@@ -222,4 +222,3 @@ func utf16UnitsInPrefix(p []byte) uint32 {
 	}
 	return n
 }
-

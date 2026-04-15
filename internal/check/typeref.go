@@ -80,6 +80,9 @@ func (c *checker) namedType(n *ast.NamedType) types.Type {
 
 	// Case 2: a prelude builtin scalar.
 	if sym.Kind == resolve.SymBuiltin {
+		if canonical := c.lookupBuiltin(sym.Name); canonical != nil {
+			sym = canonical
+		}
 		if t, ok := c.builtinScalarType(sym.Name); ok {
 			if len(n.Args) != 0 {
 				c.errNode(n, diag.CodeGenericArgCount,
@@ -169,6 +172,6 @@ func (c *checker) builtinGenericType(n *ast.NamedType, sym *resolve.Symbol) type
 // naturally; the implementations live in the types package where they
 // are reusable by future passes (monomorphization, interface solve).
 var (
-	bindArgs            = types.BindArgs
-	substituteTypeVars  = types.Substitute
+	bindArgs           = types.BindArgs
+	substituteTypeVars = types.Substitute
 )

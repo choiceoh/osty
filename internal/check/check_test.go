@@ -651,14 +651,14 @@ fn main() {
 	assertOK(t, runCheck(t, src))
 }
 
-// runCheckWithStdlib parses + resolves + type-checks with the primitive
-// method table from the embedded stdlib. Only required by tests that
-// exercise intrinsic primitive methods (`Int.abs`, `Float.sqrt`, ...).
+// runCheckWithStdlib parses + resolves + type-checks with the embedded
+// stdlib attached. Tests use it for intrinsic primitive methods and for
+// resolved `use std.*` module surfaces.
 func runCheckWithStdlib(t *testing.T, src string) []*diag.Diagnostic {
 	t.Helper()
 	reg := loadRegistry()
 	file, parseDiags := parser.ParseDiagnostics([]byte(src))
-	res := resolve.File(file, resolve.NewPrelude())
+	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), reg)
 	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives})
 	all := append(append([]*diag.Diagnostic{}, parseDiags...), res.Diags...)
 	all = append(all, chk.Diags...)
@@ -669,6 +669,30 @@ func runCheckWithStdlib(t *testing.T, src string) []*diag.Diagnostic {
 		}
 	}
 	return errs
+}
+
+func TestCheck_StdRandomModuleSurface(t *testing.T) {
+	src := `
+use std.random
+
+fn demo() -> Int {
+    let rng = random.seeded(42)
+    rng.int(0, 10)
+}
+`
+	assertOK(t, runCheckWithStdlib(t, src))
+}
+
+func TestCheck_StdURLParseSurface(t *testing.T) {
+	src := `
+use std.url
+
+fn hostOf(text: String) -> Result<String, Error> {
+    let parsed = url.parse(text)?
+    Ok(parsed.host)
+}
+`
+	assertOK(t, runCheckWithStdlib(t, src))
 }
 
 func TestCheck_IntAbsReturnsSelfKind(t *testing.T) {

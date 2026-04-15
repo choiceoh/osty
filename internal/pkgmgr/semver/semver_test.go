@@ -39,10 +39,10 @@ func TestParseVersionErrors(t *testing.T) {
 		"1.2.3.4",
 		"01.0.0", // leading zero
 		"1.02.0",
-		"1.2.3-",        // empty pre
-		"1.2.3-01",      // numeric ident with leading zero
-		"1.2.3-alpha+",  // empty build
-		"1.2.3-al_pha",  // invalid char
+		"1.2.3-",       // empty pre
+		"1.2.3-01",     // numeric ident with leading zero
+		"1.2.3-alpha+", // empty build
+		"1.2.3-al_pha", // invalid char
 	}
 	for _, s := range bad {
 		if _, err := ParseVersion(s); err == nil {

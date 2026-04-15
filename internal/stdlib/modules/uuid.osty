@@ -1,0 +1,27 @@
+// std.uuid — UUID generation and parsing.
+
+pub struct Uuid {
+    pub fn toString(self) -> String {
+        ""
+    }
+
+    pub fn toBytes(self) -> Bytes {
+        []
+    }
+}
+
+pub fn v4() -> Uuid {
+    Uuid {}
+}
+
+pub fn v7() -> Uuid {
+    Uuid {}
+}
+
+pub fn parse(text: String) -> Result<Uuid, Error> {
+    Ok(Uuid {})
+}
+
+pub fn nil() -> Uuid {
+    Uuid {}
+}

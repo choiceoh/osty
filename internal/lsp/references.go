@@ -297,4 +297,3 @@ func sortLocations(locs []Location) {
 		return a.Character < b.Character
 	})
 }
-

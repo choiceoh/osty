@@ -213,4 +213,3 @@ func completionKindFor(k resolve.SymbolKind) CompletionItemKind {
 	}
 	return CompletionItemValue
 }
-

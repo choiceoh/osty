@@ -128,8 +128,12 @@ func (g *gen) emitStructLit(s *ast.StructLit) {
 			typeName = t.Name
 		}
 	case *ast.FieldExpr:
-		// Qualified type (pkg.Type) — Phase 5.
-		g.emitExpr(s.Type)
+		if name, ok := g.stdlibStructLitType(t); ok {
+			typeName = name
+		} else {
+			// Qualified type (pkg.Type) — Phase 5.
+			g.emitExpr(s.Type)
+		}
 	default:
 		g.emitExpr(s.Type)
 	}
@@ -372,6 +376,30 @@ func (g *gen) emitCall(c *ast.CallExpr) {
 		}
 	}
 	if f, ok := c.Fn.(*ast.FieldExpr); ok {
+		if g.emitStdlibEncodingCall(c, f) {
+			return
+		}
+		if g.emitStdlibEnvCall(c, f) {
+			return
+		}
+		if g.emitStdlibCSVCall(c, f) {
+			return
+		}
+		if g.emitStdlibCompressCall(c, f) {
+			return
+		}
+		if g.emitStdlibCryptoCall(c, f) {
+			return
+		}
+		if g.emitStdlibUUIDCall(c, f) {
+			return
+		}
+		if g.emitStdlibRegexCall(c, f) {
+			return
+		}
+		if g.emitStdlibMathCall(c, f) {
+			return
+		}
 		if g.emitThreadSelect(c, f) {
 			return
 		}
@@ -382,6 +410,9 @@ func (g *gen) emitCall(c *ast.CallExpr) {
 			return
 		}
 		if g.emitListPushCall(c, f) {
+			return
+		}
+		if g.emitRandomGenericMethod(c, f) {
 			return
 		}
 		if g.emitStaticCall(f, c.Args) {
@@ -432,6 +463,455 @@ func (g *gen) emitListPushCall(c *ast.CallExpr, f *ast.FieldExpr) bool {
 	g.emitExprAsType(c.Args[0].Value, n.Args[0])
 	g.body.write("); return struct{}{} }()")
 	return true
+}
+
+func (g *gen) emitStdlibEncodingCall(c *ast.CallExpr, _ *ast.FieldExpr) bool {
+	parts, ok := g.stdlibCallPath(c, "encoding")
+	if !ok {
+		return false
+	}
+	var helper string
+	switch strings.Join(parts, ".") {
+	case "base64.encode":
+		if len(c.Args) == 1 {
+			helper = "encodingBase64Encode"
+		}
+	case "base64.decode":
+		if len(c.Args) == 1 {
+			helper = "encodingBase64Decode"
+		}
+	case "base64.url.encode":
+		if len(c.Args) == 1 {
+			helper = "encodingBase64URLEncode"
+		}
+	case "base64.url.decode":
+		if len(c.Args) == 1 {
+			helper = "encodingBase64URLDecode"
+		}
+	case "hex.encode":
+		if len(c.Args) == 1 {
+			helper = "encodingHexEncode"
+		}
+	case "hex.decode":
+		if len(c.Args) == 1 {
+			helper = "encodingHexDecode"
+		}
+	case "url.encode":
+		if len(c.Args) == 1 {
+			helper = "encodingURLEncode"
+		}
+	case "url.decode":
+		if len(c.Args) == 1 {
+			helper = "encodingURLDecode"
+		}
+	}
+	if helper == "" {
+		return false
+	}
+	g.needEncoding = true
+	if strings.HasSuffix(helper, "Decode") {
+		g.needResult = true
+	}
+	g.emitStdlibHelperCall(helper, c.Args)
+	return true
+}
+
+func (g *gen) emitStdlibEnvCall(c *ast.CallExpr, _ *ast.FieldExpr) bool {
+	parts, ok := g.stdlibCallPath(c, "env")
+	if !ok || len(parts) != 1 {
+		return false
+	}
+	var helper string
+	switch parts[0] {
+	case "args":
+		if len(c.Args) == 0 {
+			helper = "envArgs"
+		}
+	case "get":
+		if len(c.Args) == 1 {
+			helper = "envGet"
+		}
+	case "require":
+		if len(c.Args) == 1 {
+			helper = "envRequire"
+		}
+	case "set":
+		if len(c.Args) == 2 {
+			helper = "envSet"
+		}
+	case "unset":
+		if len(c.Args) == 1 {
+			helper = "envUnset"
+		}
+	case "vars":
+		if len(c.Args) == 0 {
+			helper = "envVars"
+		}
+	case "currentDir":
+		if len(c.Args) == 0 {
+			helper = "envCurrentDir"
+		}
+	case "setCurrentDir":
+		if len(c.Args) == 1 {
+			helper = "envSetCurrentDir"
+		}
+	}
+	if helper == "" {
+		return false
+	}
+	g.needEnv = true
+	switch helper {
+	case "envRequire", "envSet", "envUnset", "envCurrentDir", "envSetCurrentDir":
+		g.needResult = true
+	}
+	g.emitStdlibHelperCall(helper, c.Args)
+	return true
+}
+
+func (g *gen) emitStdlibCSVCall(c *ast.CallExpr, _ *ast.FieldExpr) bool {
+	parts, ok := g.stdlibCallPath(c, "csv")
+	if !ok || len(parts) != 1 {
+		return false
+	}
+	var helper string
+	switch parts[0] {
+	case "encode":
+		if len(c.Args) == 1 {
+			helper = "csvEncode"
+		}
+	case "encodeWith":
+		if len(c.Args) == 2 {
+			helper = "csvEncodeWith"
+		}
+	case "decode":
+		if len(c.Args) == 1 {
+			helper = "csvDecode"
+		}
+	case "decodeHeaders":
+		if len(c.Args) == 1 {
+			helper = "csvDecodeHeaders"
+		}
+	case "decodeWith":
+		if len(c.Args) == 2 {
+			helper = "csvDecodeWith"
+		}
+	}
+	if helper == "" {
+		return false
+	}
+	g.needCSV = true
+	if strings.HasPrefix(helper, "csvDecode") {
+		g.needResult = true
+	}
+	g.emitStdlibHelperCall(helper, c.Args)
+	return true
+}
+
+func (g *gen) emitStdlibCompressCall(c *ast.CallExpr, _ *ast.FieldExpr) bool {
+	parts, ok := g.stdlibCallPath(c, "compress")
+	if !ok {
+		return false
+	}
+	var helper string
+	switch strings.Join(parts, ".") {
+	case "gzip.encode":
+		if len(c.Args) == 1 {
+			helper = "compressGzipEncode"
+		}
+	case "gzip.decode":
+		if len(c.Args) == 1 {
+			helper = "compressGzipDecode"
+		}
+	}
+	if helper == "" {
+		return false
+	}
+	g.needCompress = true
+	if helper == "compressGzipDecode" {
+		g.needResult = true
+	}
+	g.emitStdlibHelperCall(helper, c.Args)
+	return true
+}
+
+func (g *gen) emitStdlibCryptoCall(c *ast.CallExpr, _ *ast.FieldExpr) bool {
+	parts, ok := g.stdlibCallPath(c, "crypto")
+	if !ok {
+		return false
+	}
+	var helper string
+	switch strings.Join(parts, ".") {
+	case "sha256":
+		if len(c.Args) == 1 {
+			helper = "cryptoSHA256"
+		}
+	case "sha512":
+		if len(c.Args) == 1 {
+			helper = "cryptoSHA512"
+		}
+	case "sha1":
+		if len(c.Args) == 1 {
+			helper = "cryptoSHA1"
+		}
+	case "md5":
+		if len(c.Args) == 1 {
+			helper = "cryptoMD5"
+		}
+	case "hmac.sha256":
+		if len(c.Args) == 2 {
+			helper = "cryptoHMACSHA256"
+		}
+	case "hmac.sha512":
+		if len(c.Args) == 2 {
+			helper = "cryptoHMACSHA512"
+		}
+	case "randomBytes":
+		if len(c.Args) == 1 {
+			helper = "cryptoRandomBytes"
+		}
+	case "constantTimeEq":
+		if len(c.Args) == 2 {
+			helper = "cryptoConstantTimeEq"
+		}
+	}
+	if helper == "" {
+		return false
+	}
+	g.needCrypto = true
+	g.emitStdlibHelperCall(helper, c.Args)
+	return true
+}
+
+func (g *gen) emitStdlibUUIDCall(c *ast.CallExpr, _ *ast.FieldExpr) bool {
+	parts, ok := g.stdlibCallPath(c, "uuid")
+	if !ok || len(parts) != 1 {
+		return false
+	}
+	var helper string
+	switch parts[0] {
+	case "v4":
+		if len(c.Args) == 0 {
+			helper = "uuidV4"
+		}
+	case "v7":
+		if len(c.Args) == 0 {
+			helper = "uuidV7"
+		}
+	case "parse":
+		if len(c.Args) == 1 {
+			helper = "uuidParse"
+		}
+	case "nil":
+		if len(c.Args) == 0 {
+			helper = "uuidNil"
+		}
+	}
+	if helper == "" {
+		return false
+	}
+	g.needUUID = true
+	if helper == "uuidParse" {
+		g.needResult = true
+	}
+	g.emitStdlibHelperCall(helper, c.Args)
+	return true
+}
+
+func (g *gen) emitStdlibHelperCall(helper string, args []*ast.Arg) {
+	g.body.write(helper)
+	g.body.write("(")
+	for i, a := range args {
+		if i > 0 {
+			g.body.write(", ")
+		}
+		g.emitExpr(a.Value)
+	}
+	g.body.write(")")
+}
+
+func (g *gen) emitStdlibRegexCall(c *ast.CallExpr, f *ast.FieldExpr) bool {
+	id, ok := f.X.(*ast.Ident)
+	if !ok || !g.isStdlibPackageAlias(id, "regex") || f.Name != "compile" {
+		return false
+	}
+	if len(c.Args) != 1 {
+		return false
+	}
+	g.needRegex = true
+	g.needResult = true
+	g.body.write("regexCompile(")
+	g.emitExpr(c.Args[0].Value)
+	g.body.write(")")
+	return true
+}
+
+func (g *gen) stdlibCallPath(c *ast.CallExpr, module string) ([]string, bool) {
+	id, parts, ok := stdlibFieldChain(c.Fn)
+	if !ok || id == nil || len(parts) == 0 {
+		return nil, false
+	}
+	if !g.isStdlibPackageAlias(id, module) {
+		return nil, false
+	}
+	return parts, true
+}
+
+func stdlibFieldChain(e ast.Expr) (*ast.Ident, []string, bool) {
+	switch x := e.(type) {
+	case *ast.Ident:
+		return x, nil, true
+	case *ast.FieldExpr:
+		id, parts, ok := stdlibFieldChain(x.X)
+		if !ok {
+			return nil, nil, false
+		}
+		return id, append(parts, x.Name), true
+	}
+	return nil, nil, false
+}
+
+func (g *gen) stdlibStructLitType(e ast.Expr) (string, bool) {
+	f, ok := e.(*ast.FieldExpr)
+	if !ok {
+		return "", false
+	}
+	id, ok := f.X.(*ast.Ident)
+	if !ok {
+		return "", false
+	}
+	if g.isStdlibPackageAlias(id, "csv") && f.Name == "CsvOptions" {
+		g.needCSV = true
+		return "CsvOptions", true
+	}
+	return "", false
+}
+
+func (g *gen) emitStdlibMathCall(c *ast.CallExpr, f *ast.FieldExpr) bool {
+	id, ok := f.X.(*ast.Ident)
+	if !ok || !g.isStdlibPackageAlias(id, "math") {
+		return false
+	}
+	alias := g.useStdlibMath(id.Name)
+	if f.Name == "log" {
+		switch len(c.Args) {
+		case 1:
+			g.body.writef("%s.Log(", alias)
+			g.emitExpr(c.Args[0].Value)
+			g.body.write(")")
+			return true
+		case 2:
+			g.body.write("(")
+			g.body.writef("%s.Log(", alias)
+			g.emitExpr(c.Args[0].Value)
+			g.body.write(") / ")
+			g.body.writef("%s.Log(", alias)
+			g.emitExpr(c.Args[1].Value)
+			g.body.write("))")
+			return true
+		}
+		return false
+	}
+	name, ok := stdlibMathFuncs[f.Name]
+	if !ok {
+		return false
+	}
+	g.body.writef("%s.%s(", alias, name)
+	for i, a := range c.Args {
+		if i > 0 {
+			g.body.write(", ")
+		}
+		g.emitExpr(a.Value)
+	}
+	g.body.write(")")
+	return true
+}
+
+func (g *gen) emitStdlibMathField(f *ast.FieldExpr) bool {
+	id, ok := f.X.(*ast.Ident)
+	if !ok || !g.isStdlibPackageAlias(id, "math") {
+		return false
+	}
+	alias := g.useStdlibMath(id.Name)
+	switch f.Name {
+	case "PI":
+		g.body.writef("%s.Pi", alias)
+	case "E":
+		g.body.writef("%s.E", alias)
+	case "TAU":
+		g.body.writef("(2 * %s.Pi)", alias)
+	case "INFINITY":
+		g.body.writef("%s.Inf(1)", alias)
+	case "NAN":
+		g.body.writef("%s.NaN()", alias)
+	default:
+		return false
+	}
+	return true
+}
+
+var stdlibMathFuncs = map[string]string{
+	"sin":   "Sin",
+	"cos":   "Cos",
+	"tan":   "Tan",
+	"asin":  "Asin",
+	"acos":  "Acos",
+	"atan":  "Atan",
+	"atan2": "Atan2",
+	"sinh":  "Sinh",
+	"cosh":  "Cosh",
+	"tanh":  "Tanh",
+	"exp":   "Exp",
+	"log2":  "Log2",
+	"log10": "Log10",
+	"sqrt":  "Sqrt",
+	"cbrt":  "Cbrt",
+	"pow":   "Pow",
+	"floor": "Floor",
+	"ceil":  "Ceil",
+	"round": "Round",
+	"trunc": "Trunc",
+	"abs":   "Abs",
+	"min":   "Min",
+	"max":   "Max",
+	"hypot": "Hypot",
+}
+
+func (g *gen) useStdlibMath(alias string) string {
+	goAlias := mangleIdent(alias)
+	if goAlias == "math" {
+		g.use("math")
+	} else {
+		g.useAs("math", goAlias)
+	}
+	return goAlias
+}
+
+func (g *gen) isStdlibPackageAlias(id *ast.Ident, module string) bool {
+	if sym := g.symbolFor(id); sym != nil && sym.Kind == resolve.SymPackage {
+		if u, ok := sym.Decl.(*ast.UseDecl); ok {
+			return stdlibUseMatchesAlias(u, id.Name, module)
+		}
+	}
+	if g.res != nil {
+		return false
+	}
+	for _, u := range g.file.Uses {
+		if stdlibUseMatchesAlias(u, id.Name, module) {
+			return true
+		}
+	}
+	return false
+}
+
+func stdlibUseMatchesAlias(u *ast.UseDecl, alias, module string) bool {
+	if u == nil || u.IsGoFFI || len(u.Path) != 2 || u.Path[0] != "std" || u.Path[1] != module {
+		return false
+	}
+	name := u.Alias
+	if name == "" {
+		name = u.Path[len(u.Path)-1]
+	}
+	return name == alias
 }
 
 // emitConcurrencyMethod recognizes the small set of channel / handle
@@ -507,6 +987,37 @@ func (g *gen) emitConcurrencyMethod(c *ast.CallExpr, f *ast.FieldExpr) bool {
 		}
 	}
 	return false
+}
+
+func (g *gen) emitRandomGenericMethod(c *ast.CallExpr, f *ast.FieldExpr) bool {
+	if f.Name != "choice" && f.Name != "shuffle" {
+		return false
+	}
+	recvT := g.typeOf(f.X)
+	n, ok := recvT.(*types.Named)
+	if !ok || n.Sym == nil || n.Sym.Name != "Rng" {
+		return false
+	}
+	if len(c.Args) != 1 {
+		return false
+	}
+	elemGo := "any"
+	if itemsT := g.typeOf(c.Args[0].Value); itemsT != nil {
+		if list, ok := itemsT.(*types.Named); ok && list.Sym != nil && list.Sym.Name == "List" && len(list.Args) == 1 {
+			elemGo = g.goType(list.Args[0])
+		}
+	}
+	switch f.Name {
+	case "choice":
+		g.body.writef("rngChoice[%s](", elemGo)
+	case "shuffle":
+		g.body.writef("rngShuffle[%s](", elemGo)
+	}
+	g.emitExpr(f.X)
+	g.body.write(", ")
+	g.emitExpr(c.Args[0].Value)
+	g.body.write(")")
+	return true
 }
 
 // emitTurbofishCall handles the two concurrency intrinsics that use the
@@ -1387,6 +1898,9 @@ func (g *gen) emitQuestion(q *ast.QuestionExpr) {
 // Field-type lookup comes from the checker when available.
 func (g *gen) emitField(f *ast.FieldExpr) {
 	if !f.IsOptional {
+		if g.emitStdlibMathField(f) {
+			return
+		}
 		// Numeric literals need parens to disambiguate from float
 		// literals: `5.s` would be lexed as `5.` + `s` by Go. The
 		// Osty spec uses `5.s` for duration-literal shorthand
@@ -1685,6 +2199,7 @@ func (g *gen) emitClosure(c *ast.ClosureExpr) {
 	type paramPlan struct {
 		outerName string
 		pattern   ast.Pattern
+		typ       types.Type
 	}
 	plans := make([]paramPlan, len(c.Params))
 
@@ -1708,6 +2223,7 @@ func (g *gen) emitClosure(c *ast.ClosureExpr) {
 		case p.Type != nil:
 			g.body.write(g.goTypeExpr(p.Type))
 		case inferred != nil && i < len(inferred.Params) && !types.IsError(inferred.Params[i]):
+			plans[i].typ = inferred.Params[i]
 			g.body.write(g.goType(inferred.Params[i]))
 		case plans[i].pattern != nil:
 			// Pattern-without-annotation: synthesise a shape from the
@@ -1806,19 +2322,7 @@ func (g *gen) emitClosure(c *ast.ClosureExpr) {
 		if pl.pattern == nil {
 			continue
 		}
-		// Only simple tuple patterns supported here; nested ones fall
-		// through to TODO in emitPatternBindings (unused for the spec).
-		if tp, ok := pl.pattern.(*ast.TuplePat); ok {
-			for i, elem := range tp.Elems {
-				switch e := elem.(type) {
-				case *ast.WildcardPat:
-					// skip
-				case *ast.IdentPat:
-					g.body.writef("%s := %s.F%d; _ = %s\n",
-						mangleIdent(e.Name), pl.outerName, i, mangleIdent(e.Name))
-				}
-			}
-		}
+		g.emitPatternBindings(mangleIdent(pl.outerName), pl.typ, pl.pattern)
 	}
 	if blk, ok := c.Body.(*ast.Block); ok {
 		// Inline the block stmts then return final expr (unless the

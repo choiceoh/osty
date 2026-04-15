@@ -11,6 +11,7 @@ import (
 	"github.com/osty/osty/internal/gen"
 	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/stdlib"
 )
 
 // transpile runs the full pipeline on a source snippet and returns the
@@ -25,6 +26,20 @@ func transpile(t *testing.T, src string) ([]byte, error) {
 	}
 	res := resolve.File(file, resolve.NewPrelude())
 	chk := check.File(file, res)
+	return gen.Generate("main", file, res, chk)
+}
+
+func transpileWithStdlib(t *testing.T, src string) ([]byte, error) {
+	t.Helper()
+	reg := stdlib.LoadCached()
+	file, parseDiags := parser.ParseDiagnostics([]byte(src))
+	for _, d := range parseDiags {
+		if d.Severity.String() == "error" {
+			t.Fatalf("parse error: %s", d.Message)
+		}
+	}
+	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), reg)
+	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives})
 	return gen.Generate("main", file, res, chk)
 }
 
@@ -44,6 +59,338 @@ func runGo(t *testing.T, src []byte) string {
 			err, src, out)
 	}
 	return string(out)
+}
+
+func TestStdlibUsesRemainGeneralGenStubs(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "fs",
+			src:  "use std.fs\n",
+			want: "var fs = struct{}{} // stub for `use std.fs`",
+		},
+		{
+			name: "thread",
+			src: `use std.thread
+
+fn main() {
+    let cancelled = thread.isCancelled()
+    println("{cancelled}")
+}
+`,
+			want: "var thread = struct {",
+		},
+		{
+			name: "testing",
+			src: `use std.testing
+
+fn testTruth() {
+    testing.assert(true)
+}
+`,
+			want: "var testing = struct {",
+		},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			goSrc, err := transpile(t, c.src)
+			if err != nil {
+				t.Fatalf("transpile: %v\n%s", err, goSrc)
+			}
+			if !strings.Contains(string(goSrc), c.want) {
+				t.Fatalf("generated Go missing stdlib stub %q:\n%s", c.want, goSrc)
+			}
+		})
+	}
+}
+
+func TestStdMathBridge(t *testing.T) {
+	goSrc, err := transpile(t, `use std.math
+
+fn main() {
+    let x = math.sin(math.PI / 2.0)
+    let y = math.log(100.0, 10.0)
+    let z = math.sqrt(81.0)
+    println("{math.round(x + y + z)}")
+}
+`)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := strings.TrimSpace(runGo(t, goSrc))
+	if out != "12" {
+		t.Fatalf("stdout = %q, want 12\n--- source ---\n%s", out, goSrc)
+	}
+	for _, want := range []string{"math.Sin", "math.Log", "math.Sqrt", "math.Round", "math.Pi"} {
+		if !strings.Contains(string(goSrc), want) {
+			t.Errorf("generated std.math bridge missing %s:\n%s", want, goSrc)
+		}
+	}
+}
+
+func TestStdRegexBridge(t *testing.T) {
+	goSrc, err := transpileWithStdlib(t, `use std.regex
+
+fn main() {
+    let re = regex.compile("(?P<word>[a-z][a-z][a-z])-([0-9]+)").unwrap()
+    println("{re.matches("abc-123")}")
+    match re.find("xxabc-123yy") {
+        Some(m) -> println("{m.text}:{m.start}:{m.end}"),
+        None -> println("no match"),
+    }
+    let captured = match re.captures("abc-123") {
+        Some(caps) -> match caps.named("word") {
+            Some(word) -> word,
+            None -> "no word",
+        },
+        None -> "no caps",
+    }
+    println(captured)
+    println(re.replace("abc-123 abc-456", "X"))
+    println(re.replaceAll("abc-123 abc-456", "X"))
+    let parts = re.split("oneabc-123twoabc-456three")
+    println(parts[1])
+}
+`)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := strings.TrimSpace(runGo(t, goSrc))
+	want := strings.Join([]string{
+		"true",
+		"abc-123:2:9",
+		"abc",
+		"X abc-456",
+		"X X",
+		"two",
+	}, "\n")
+	if out != want {
+		t.Fatalf("stdout = %q, want %q\n--- source ---\n%s", out, want, goSrc)
+	}
+	for _, want := range []string{"regexp.Compile", "regexCompile", "type Regex struct", "type Captures struct"} {
+		if !strings.Contains(string(goSrc), want) {
+			t.Errorf("generated std.regex bridge missing %s:\n%s", want, goSrc)
+		}
+	}
+}
+
+func TestStdEncodingBridge(t *testing.T) {
+	goSrc, err := transpileWithStdlib(t, `use std.encoding
+
+fn main() {
+    let raw = encoding.hex.decode("68656c6c6f3f").unwrap()
+    let b64 = encoding.base64.encode(raw)
+    println(b64)
+    println(encoding.hex.encode(encoding.base64.decode(b64).unwrap()))
+    let safe = encoding.url.encode("hello world&foo=bar")
+    println(safe)
+    println(encoding.url.decode(safe).unwrap())
+    let urlB64 = encoding.base64.url.encode(raw)
+    println(urlB64)
+    println(encoding.hex.encode(encoding.base64.url.decode(urlB64).unwrap()))
+}
+`)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := strings.TrimSpace(runGo(t, goSrc))
+	want := strings.Join([]string{
+		"aGVsbG8/",
+		"68656c6c6f3f",
+		"hello%20world%26foo%3Dbar",
+		"hello world&foo=bar",
+		"aGVsbG8_",
+		"68656c6c6f3f",
+	}, "\n")
+	if out != want {
+		t.Fatalf("stdout = %q, want %q\n--- source ---\n%s", out, want, goSrc)
+	}
+	for _, want := range []string{"stdbase64.StdEncoding", "stdhex.DecodeString", "neturl.QueryEscape"} {
+		if !strings.Contains(string(goSrc), want) {
+			t.Errorf("generated std.encoding bridge missing %s:\n%s", want, goSrc)
+		}
+	}
+}
+
+func TestStdEnvBridge(t *testing.T) {
+	goSrc, err := transpileWithStdlib(t, `use std.env
+
+fn main() {
+    env.set("OSTY_STD_ENV_TEST", "ready").unwrap()
+    match env.get("OSTY_STD_ENV_TEST") {
+        Some(v) -> println(v),
+        None -> println("missing"),
+    }
+    println(env.require("OSTY_STD_ENV_TEST").unwrap())
+    let all = env.vars()
+    println(all["OSTY_STD_ENV_TEST"])
+    env.unset("OSTY_STD_ENV_TEST").unwrap()
+    match env.get("OSTY_STD_ENV_TEST") {
+        Some(v) -> println(v),
+        None -> println("gone"),
+    }
+    println(env.currentDir().unwrap() != "")
+}
+`)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := strings.TrimSpace(runGo(t, goSrc))
+	want := strings.Join([]string{
+		"ready",
+		"ready",
+		"ready",
+		"gone",
+		"true",
+	}, "\n")
+	if out != want {
+		t.Fatalf("stdout = %q, want %q\n--- source ---\n%s", out, want, goSrc)
+	}
+	for _, want := range []string{"envGet", "envVars", "os.Setenv"} {
+		if !strings.Contains(string(goSrc), want) {
+			t.Errorf("generated std.env bridge missing %s:\n%s", want, goSrc)
+		}
+	}
+}
+
+func TestStdCSVBridge(t *testing.T) {
+	goSrc, err := transpileWithStdlib(t, `use std.csv
+
+fn main() {
+    let rows = [["name", "age"], ["alice", "30"], ["bob", "25"]]
+    let text = csv.encode(rows)
+    let decoded = csv.decode(text).unwrap()
+    println(decoded[1][0])
+    let records = csv.decodeHeaders(text).unwrap()
+    println(records[1]["age"])
+    let opts = csv.CsvOptions { delimiter: ';', quote: '|', trimSpace: true }
+    let semi = csv.encodeWith([["left;side", "right"], ["up", "down"]], opts)
+    let again = csv.decodeWith(semi, opts).unwrap()
+    println(again[0][0])
+    println(again[1][1])
+}
+`)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := strings.TrimSpace(runGo(t, goSrc))
+	want := strings.Join([]string{"alice", "25", "left;side", "down"}, "\n")
+	if out != want {
+		t.Fatalf("stdout = %q, want %q\n--- source ---\n%s", out, want, goSrc)
+	}
+	for _, want := range []string{"stdcsv.NewWriter", "stdcsv.NewReader", "type CsvOptions struct"} {
+		if !strings.Contains(string(goSrc), want) {
+			t.Errorf("generated std.csv bridge missing %s:\n%s", want, goSrc)
+		}
+	}
+}
+
+func TestStdCompressBridge(t *testing.T) {
+	goSrc, err := transpileWithStdlib(t, `use std.compress
+use std.encoding
+
+fn main() {
+    let raw = encoding.hex.decode("68656c6c6f206f737479").unwrap()
+    let zipped = compress.gzip.encode(raw)
+    let round = compress.gzip.decode(zipped).unwrap()
+    println(encoding.hex.encode(round))
+}
+`)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := strings.TrimSpace(runGo(t, goSrc))
+	if out != "68656c6c6f206f737479" {
+		t.Fatalf("stdout = %q, want hex round-trip\n--- source ---\n%s", out, goSrc)
+	}
+	for _, want := range []string{"stdgzip.NewWriter", "stdgzip.NewReader", "compressGzipDecode"} {
+		if !strings.Contains(string(goSrc), want) {
+			t.Errorf("generated std.compress bridge missing %s:\n%s", want, goSrc)
+		}
+	}
+}
+
+func TestStdCryptoBridge(t *testing.T) {
+	goSrc, err := transpileWithStdlib(t, `use std.crypto
+use std.encoding
+
+fn main() {
+    let data = encoding.hex.decode("68656c6c6f").unwrap()
+    let key = encoding.hex.decode("6b6579").unwrap()
+    println(encoding.hex.encode(crypto.sha256(data)))
+    println(encoding.hex.encode(crypto.sha512(data)))
+    println(encoding.hex.encode(crypto.sha1(data)))
+    println(encoding.hex.encode(crypto.md5(data)))
+    println(encoding.hex.encode(crypto.hmac.sha256(key, data)))
+    println(encoding.hex.encode(crypto.hmac.sha512(key, data)))
+    println(crypto.constantTimeEq(crypto.sha256(data), crypto.sha256(data)))
+    let secret = crypto.randomBytes(4)
+    println(crypto.constantTimeEq(secret, secret))
+}
+`)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := strings.TrimSpace(runGo(t, goSrc))
+	want := strings.Join([]string{
+		"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+		"9b71d224bd62f3785d96d46ad3ea3d73319bfbc2890caadae2dff72519673ca72323c3d99ba5c11d7c7acc6e14b8c5da0c4663475c2e5c3adef46f73bcdec043",
+		"aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d",
+		"5d41402abc4b2a76b9719d911017c592",
+		"9307b3b915efb5171ff14d8cb55fbcc798c6c0ef1456d66ded1a6aa723a58b7b",
+		"ff06ab36757777815c008d32c8e14a705b4e7bf310351a06a23b612dc4c7433e7757d20525a5593b71020ea2ee162d2311b247e9855862b270122419652c0c92",
+		"true",
+		"true",
+	}, "\n")
+	if out != want {
+		t.Fatalf("stdout = %q, want %q\n--- source ---\n%s", out, want, goSrc)
+	}
+	for _, want := range []string{"stdsha256.Sum256", "stdhmac.New", "stdrand.Read", "stdsubtle.ConstantTimeCompare"} {
+		if !strings.Contains(string(goSrc), want) {
+			t.Errorf("generated std.crypto bridge missing %s:\n%s", want, goSrc)
+		}
+	}
+}
+
+func TestStdUUIDBridge(t *testing.T) {
+	goSrc, err := transpileWithStdlib(t, `use std.uuid
+use std.encoding
+
+fn main() {
+    let zero = uuid.nil()
+    println(zero.toString())
+    let parsed = uuid.parse("00112233-4455-6677-8899-aabbccddeeff").unwrap()
+    println(parsed.toString())
+    println(encoding.hex.encode(parsed.toBytes()))
+    let id = uuid.v4()
+    let text = id.toString()
+    println(uuid.parse(text).unwrap().toString() == text)
+    println(uuid.v7().toString() != "")
+}
+`)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := strings.TrimSpace(runGo(t, goSrc))
+	want := strings.Join([]string{
+		"00000000-0000-0000-0000-000000000000",
+		"00112233-4455-6677-8899-aabbccddeeff",
+		"00112233445566778899aabbccddeeff",
+		"true",
+		"true",
+	}, "\n")
+	if out != want {
+		t.Fatalf("stdout = %q, want %q\n--- source ---\n%s", out, want, goSrc)
+	}
+	for _, want := range []string{"type Uuid [16]byte", "uuidV4", "uuidV7", "uuidParse"} {
+		if !strings.Contains(string(goSrc), want) {
+			t.Errorf("generated std.uuid bridge missing %s:\n%s", want, goSrc)
+		}
+	}
 }
 
 func TestHelloWorld(t *testing.T) {

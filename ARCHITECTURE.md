@@ -290,8 +290,9 @@ land. Diagnostics use `E2050–E2069`; callers render them through the
 shared `diag.Formatter`.
 
 ### `internal/pkgmgr` & `internal/lockfile` & `internal/registry`
-Dependency resolver, lockfile reader/writer, and (stub) registry
-client. Driven by `osty build` / `osty add` / `osty update`. Out of
+Dependency resolver, lockfile reader/writer, registry HTTP client,
+and file-backed registry server. Driven by `osty build` / `osty add`
+/ `osty update` / `osty publish` / `osty registry serve`. Out of
 scope for this document's front-end focus — see the package-level
 doc comments.
 

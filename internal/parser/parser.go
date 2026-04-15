@@ -1870,11 +1870,11 @@ func (p *Parser) parseListLit() ast.Expr {
 // parseBlockOrMap disambiguates `{ ... }` between a block expression and a
 // map/set literal. Heuristics:
 //
-//   `{:}`              -> empty map
-//   `{ "k": v, ... }`  -> map
-//   `{ let x = ... }`  -> block (starts with keyword)
-//   `{ expr, expr }`   -> ambiguous; treated as block (statements).
-//                          A map literal requires at least one `:` entry.
+//	`{:}`              -> empty map
+//	`{ "k": v, ... }`  -> map
+//	`{ let x = ... }`  -> block (starts with keyword)
+//	`{ expr, expr }`   -> ambiguous; treated as block (statements).
+//	                       A map literal requires at least one `:` entry.
 //
 // We look ahead: if after `{` we see `:` immediately, it's `{:}`. Else we
 // scan the first top-level token. If we find a `:` before a statement

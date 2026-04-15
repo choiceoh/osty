@@ -51,6 +51,74 @@ func TestForTuplePatternAnyArity(t *testing.T) {
 	}
 }
 
+// TestForTuplePatternPairList verifies a two-element tuple pattern
+// over a List<(A, B)> destructures the element value. This is distinct
+// from the `for (k, v) in map` lowering, where Go's range supplies key
+// and value separately.
+func TestForTuplePatternPairList(t *testing.T) {
+	src := `fn main() {
+    let pairs: List<(Int, Int)> = [(1, 2), (3, 4)]
+    let mut total = 0
+    for (a, b) in pairs {
+        total = total + a + b
+    }
+    println("{total}")
+}
+`
+	goSrc, err := transpile(t, src)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := runGo(t, goSrc)
+	if strings.TrimSpace(out) != "10" {
+		t.Errorf("for pair-list tuple pattern: got %q; want 10\n--- go ---\n%s", out, goSrc)
+	}
+}
+
+// TestForEnumerateNestedTuplePattern covers the rebase merge point:
+// origin/main added enumerate() lowering while the completion patch
+// moved tuple destructuring onto the recursive pattern-binding path.
+func TestForEnumerateNestedTuplePattern(t *testing.T) {
+	src := `fn main() {
+    let pairs: List<(Int, Int)> = [(1, 2), (3, 4)]
+    let mut total = 0
+    for (i, (a, b)) in pairs.enumerate() {
+        total = total + i + a + b
+    }
+    println("{total}")
+}
+`
+	goSrc, err := transpile(t, src)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := runGo(t, goSrc)
+	if strings.TrimSpace(out) != "11" {
+		t.Errorf("for enumerate nested tuple pattern: got %q; want 11\n--- go ---\n%s", out, goSrc)
+	}
+}
+
+// TestNestedLetPattern verifies nested tuple destructuring inside a
+// struct `let` pattern reuses the same binding machinery as match.
+func TestNestedLetPattern(t *testing.T) {
+	src := `struct PairBox { pair: (Int, Int), tail: Int }
+
+fn main() {
+    let box = PairBox { pair: (2, 3), tail: 4 }
+    let PairBox { pair: (a, b), tail } = box
+    println("{a + b + tail}")
+}
+`
+	goSrc, err := transpile(t, src)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := runGo(t, goSrc)
+	if strings.TrimSpace(out) != "9" {
+		t.Errorf("nested let pattern: got %q; want 9\n--- go ---\n%s", out, goSrc)
+	}
+}
+
 // TestForLet verifies the `for let pat = expr { ... }` lowering emits
 // the expected break-on-miss loop shell. We don't exercise full runtime
 // behaviour here — the end-to-end `osty test` path on examples/calc
@@ -84,6 +152,72 @@ fn main() {
 	out := runGo(t, goSrc)
 	if strings.TrimSpace(out) != "done" {
 		t.Errorf("for-let: got %q; want done", out)
+	}
+}
+
+// TestForLetUserEnum verifies `for let` goes through the general
+// pattern-test path, not just the Option/Result special cases.
+func TestForLetUserEnum(t *testing.T) {
+	src := `enum Step {
+    More(Int),
+    Done,
+}
+
+fn next(n: Int) -> Step {
+    if n > 0 {
+        More(n)
+    } else {
+        Done
+    }
+}
+
+fn main() {
+    let mut n = 3
+    let mut total = 0
+    for let More(v) = next(n) {
+        total = total + v
+        n = n - 1
+    }
+    println("{total}")
+}
+`
+	goSrc, err := transpile(t, src)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := runGo(t, goSrc)
+	if strings.TrimSpace(out) != "6" {
+		t.Errorf("for-let user enum: got %q; want 6\n--- go ---\n%s", out, goSrc)
+	}
+}
+
+// TestForLetNestedDestructure verifies for-let binds nested payload
+// patterns after the match succeeds.
+func TestForLetNestedDestructure(t *testing.T) {
+	src := `fn maybePair(n: Int) -> (Int, Int)? {
+    if n < 1 { Some((2, 3)) } else { None }
+}
+
+fn main() {
+    let mut n = 0
+    let mut total = 0
+    for let Some((a, b)) = maybePair(n) {
+        total = total + a + b
+        n = n + 1
+    }
+    println("{total}")
+}
+`
+	goSrc, err := transpile(t, src)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	if strings.Contains(string(goSrc), "TODO: for-let") {
+		t.Errorf("for-let TODO marker still present:\n%s", goSrc)
+	}
+	out := runGo(t, goSrc)
+	if strings.TrimSpace(out) != "5" {
+		t.Errorf("for-let nested destructure: got %q\n--- go ---\n%s", out, goSrc)
 	}
 }
 
@@ -176,5 +310,29 @@ fn main() {
 	out := runGo(t, goSrc)
 	if strings.TrimSpace(out) != "ok" {
 		t.Errorf("closure void tail: got %q; want ok", out)
+	}
+}
+
+// TestClosureStructPatternParam verifies closure parameter
+// destructuring supports the struct LetPattern form from v0.3.
+func TestClosureStructPatternParam(t *testing.T) {
+	src := `struct User { name: String, age: Int }
+
+fn render(f: fn(User) -> String, u: User) -> String {
+    f(u)
+}
+
+fn main() {
+    let out = render(|User { name, age }| "{name}:{age}", User { name: "ada", age: 37 })
+    println(out)
+}
+`
+	goSrc, err := transpile(t, src)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := runGo(t, goSrc)
+	if strings.TrimSpace(out) != "ada:37" {
+		t.Errorf("closure struct pattern: got %q; want ada:37\n--- go ---\n%s", out, goSrc)
 	}
 }

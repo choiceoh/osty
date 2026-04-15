@@ -1,5 +1,7 @@
 package types
 
+import "github.com/osty/osty/internal/resolve"
+
 // Identical reports whether two types are the same type up to structural
 // equality. This is the strictest relation: used for method signature
 // matching, method receiver checks, and places where no coercion is
@@ -65,7 +67,7 @@ func Identical(a, b Type) bool {
 		return Identical(x.Return, y.Return)
 	case *Named:
 		y, ok := b.(*Named)
-		if !ok || x.Sym != y.Sym {
+		if !ok || !sameNamedSymbol(x.Sym, y.Sym) {
 			return false
 		}
 		if len(x.Args) != len(y.Args) {
@@ -88,6 +90,17 @@ func Identical(a, b Type) bool {
 		}
 	}
 	return false
+}
+
+func sameNamedSymbol(a, b *resolve.Symbol) bool {
+	if a == b {
+		return true
+	}
+	return a != nil &&
+		b != nil &&
+		a.IsBuiltin() &&
+		b.IsBuiltin() &&
+		a.Name == b.Name
 }
 
 // Assignable reports whether a value of type `src` can be assigned to a

@@ -102,10 +102,10 @@ func TestLexStringUTF8(t *testing.T) {
 		src  string
 		want string
 	}{
-		{`"a — b"`, "a — b"},         // em-dash (3-byte UTF-8)
-		{`"α β γ"`, "α β γ"},          // 2-byte runes
-		{`"한국어"`, "한국어"},            // 3-byte runes
-		{`"😀 hi"`, "😀 hi"},          // 4-byte rune
+		{`"a — b"`, "a — b"},                       // em-dash (3-byte UTF-8)
+		{`"α β γ"`, "α β γ"},                       // 2-byte runes
+		{`"한국어"`, "한국어"},                           // 3-byte runes
+		{`"😀 hi"`, "😀 hi"},                         // 4-byte rune
 		{"\"a\u00A0b\u2014c\"", "a\u00A0b\u2014c"}, // NBSP + em-dash
 	}
 	for _, c := range cases {
@@ -503,7 +503,7 @@ func TestLexShebangUTF8(t *testing.T) {
 	}
 }
 
-// TestLexEmptyCharLiteral: `''` is rejected with a dedicated
+// TestLexEmptyCharLiteral: `”` is rejected with a dedicated
 // "empty char literal" diagnostic rather than the confusing
 // "expected closing '" path that used to swallow the closing quote
 // as the char's value.
@@ -529,7 +529,7 @@ func TestLexEmptyCharLiteral(t *testing.T) {
 	}
 }
 
-// TestLexEmptyByteLiteral: `b''` is rejected analogously to `''`.
+// TestLexEmptyByteLiteral: `b”` is rejected analogously to `”`.
 func TestLexEmptyByteLiteral(t *testing.T) {
 	l := New([]byte(`b''`))
 	toks := l.Lex()

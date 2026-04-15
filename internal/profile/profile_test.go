@@ -33,9 +33,9 @@ func TestDefaultProfilesShape(t *testing.T) {
 // TestParseTriple covers the common shapes plus one error path.
 func TestParseTriple(t *testing.T) {
 	cases := []struct {
-		in           string
-		arch, os     string
-		expectError  bool
+		in          string
+		arch, os    string
+		expectError bool
 	}{
 		{"amd64-linux", "amd64", "linux", false},
 		{"arm64-darwin", "arm64", "darwin", false},

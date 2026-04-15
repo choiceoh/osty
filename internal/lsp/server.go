@@ -630,7 +630,6 @@ func diagBelongsToFile(d *diag.Diagnostic, pf *resolve.PackageFile) bool {
 	return pos.Offset <= len(pf.Source)
 }
 
-
 // analyzeSingleFile is the original file-only analysis used for
 // scratch buffers and files without .osty siblings.
 func (s *Server) analyzeSingleFile(src []byte) *docAnalysis {
