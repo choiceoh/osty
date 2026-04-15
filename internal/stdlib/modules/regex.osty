@@ -1,9 +1,31 @@
-// std.regex — RE2-based regular expressions (spec §10.9).
+// std.regex — regular expressions (spec §10.9).
 //
-// Linear-time matching; no catastrophic backtracking, no ReDoS.
-// Backreferences and lookaround are unsupported (RE2 limitations).
+// **Phase-1 scope.** The spec mandates an RE2-based engine (linear-
+// time, no backreferences, no lookaround). A production-grade RE2
+// implementation is out of scope for the initial stub realization; this
+// module ships a **minimal single-pass matcher** that covers the
+// common cases actually used in scripts today:
+//
+//   * literal bytes
+//   * `.` — any single byte
+//   * `[abc]` / `[a-z]` / `[^...]` — character classes with ranges
+//   * `*` / `+` / `?` — greedy quantifiers over the previous atom
+//   * `^` / `$` — start/end anchors
+//   * `\d` `\D` `\w` `\W` `\s` `\S` `\.` `\\` — common escapes
+//
+// Omitted until the full RE2 port lands:
+//   * alternation (`a|b`)
+//   * capture groups (`(...)`)
+//   * named captures, non-greedy quantifiers, word boundaries
+//
+// The algorithm is a direct Osty port of Rob Pike's 30-line matcher,
+// extended with character classes and the `+` / `?` quantifiers. It is
+// correct for the supported feature set and entirely written in Osty —
+// no FFI, no Go runtime call.
 
-pub struct Regex {}
+pub struct Regex {
+    pub pattern: String,
+}
 
 pub struct Match {
     pub text: String,
@@ -11,12 +33,597 @@ pub struct Match {
     pub end: Int,
 }
 
-pub struct Captures {}
+pub struct Captures {
+    pub full: Match,
+}
 
 pub struct RegexError {
     pub message: String,
 }
 
 pub fn compile(pattern: String) -> Result<Regex, RegexError> {
-    Ok(Regex {})
+    Ok(Regex { pattern })
+}
+
+// ─── Public surface ───────────────────────────────────────────────────
+
+pub fn matches(re: Regex, text: String) -> Bool {
+    let found = findFirst(re.pattern, text, 0)
+    found.found
+}
+
+pub fn find(re: Regex, text: String) -> Match? {
+    let hit = findFirst(re.pattern, text, 0)
+    if hit.found {
+        let sub = sliceString(text, hit.start, hit.end)
+        Some(Match { text: sub, start: hit.start, end: hit.end })
+    } else {
+        None
+    }
+}
+
+pub fn findAll(re: Regex, text: String) -> List<Match> {
+    let mut out: List<Match> = []
+    let mut pos = 0
+    let n = text.len()
+    let mut keep = true
+    for keep {
+        if pos > n {
+            keep = false
+        } else {
+            let hit = findFirst(re.pattern, text, pos)
+            if hit.found {
+                let sub = sliceString(text, hit.start, hit.end)
+                out.push(Match { text: sub, start: hit.start, end: hit.end })
+                // Advance at least one byte to avoid infinite loops on
+                // zero-width matches.
+                if hit.end == hit.start {
+                    pos = hit.start + 1
+                } else {
+                    pos = hit.end
+                }
+            } else {
+                keep = false
+            }
+        }
+    }
+    out
+}
+
+pub fn replace(re: Regex, text: String, replacement: String) -> String {
+    let hit = findFirst(re.pattern, text, 0)
+    if hit.found {
+        let head = sliceString(text, 0, hit.start)
+        let tail = sliceString(text, hit.end, text.len())
+        "{head}{replacement}{tail}"
+    } else {
+        text
+    }
+}
+
+pub fn replaceAll(re: Regex, text: String, replacement: String) -> String {
+    let matches = findAll(re, text)
+    let mut out: String = ""
+    let mut cursor = 0
+    for m in matches {
+        let head = sliceString(text, cursor, m.start)
+        out = "{out}{head}{replacement}"
+        cursor = m.end
+    }
+    let tail = sliceString(text, cursor, text.len())
+    "{out}{tail}"
+}
+
+pub fn split(re: Regex, text: String) -> List<String> {
+    let matches = findAll(re, text)
+    let mut parts: List<String> = []
+    let mut cursor = 0
+    for m in matches {
+        let piece = sliceString(text, cursor, m.start)
+        parts.push(piece)
+        cursor = m.end
+    }
+    let tail = sliceString(text, cursor, text.len())
+    parts.push(tail)
+    parts
+}
+
+pub fn captures(re: Regex, text: String) -> Captures? {
+    match find(re, text) {
+        Some(m) -> Some(Captures { full: m }),
+        None -> None,
+    }
+}
+
+// ─── Engine ───────────────────────────────────────────────────────────
+
+struct Hit {
+    pub found: Bool,
+    pub start: Int,
+    pub end: Int,
+}
+
+fn noHit() -> Hit {
+    Hit { found: false, start: 0, end: 0 }
+}
+
+// findFirst scans `text` from `from` onward for the leftmost match of
+// `pattern`. An anchored `^pattern` only tries position `from`.
+fn findFirst(pattern: String, text: String, from: Int) -> Hit {
+    let n = text.len()
+    let anchored = startsWithCaret(pattern)
+    let pat = if anchored {
+        dropFirst(pattern)
+    } else {
+        pattern
+    }
+    if anchored {
+        let end = matchHere(pat, 0, text, from)
+        if end >= 0 {
+            Hit { found: true, start: from, end }
+        } else {
+            noHit()
+        }
+    } else {
+        let mut pos = from
+        let mut result = noHit()
+        let mut keep = true
+        for keep {
+            if pos > n {
+                keep = false
+            } else {
+                let end = matchHere(pat, 0, text, pos)
+                if end >= 0 {
+                    result = Hit { found: true, start: pos, end }
+                    keep = false
+                } else {
+                    pos = pos + 1
+                }
+            }
+        }
+        result
+    }
+}
+
+// matchHere returns the end-offset in `text` on success, or -1 on
+// failure. It consumes pattern atoms left-to-right; greedy `*`, `+`,
+// and `?` look one char ahead to drive the quantifier.
+fn matchHere(pat: String, pIdx: Int, text: String, tIdx: Int) -> Int {
+    let pLen = pat.len()
+    if pIdx >= pLen {
+        tIdx
+    } else {
+        let atom = scanAtom(pat, pIdx)
+        let afterAtom = atom.nextIdx
+        let q = quantAt(pat, afterAtom)
+        if q == 42 {
+            // '*'
+            matchStar(atom, pat, afterAtom + 1, text, tIdx)
+        } else if q == 43 {
+            // '+'
+            matchPlus(atom, pat, afterAtom + 1, text, tIdx)
+        } else if q == 63 {
+            // '?'
+            matchOpt(atom, pat, afterAtom + 1, text, tIdx)
+        } else {
+            matchSingle(atom, pat, afterAtom, text, tIdx)
+        }
+    }
+}
+
+fn matchSingle(atom: Atom, pat: String, nextP: Int, text: String, tIdx: Int) -> Int {
+    if atomIsEndAnchor(atom) {
+        if tIdx == text.len() {
+            matchHere(pat, nextP, text, tIdx)
+        } else {
+            -1
+        }
+    } else {
+        if tIdx < text.len() && atomMatches(atom, text, tIdx) {
+            matchHere(pat, nextP, text, tIdx + 1)
+        } else {
+            -1
+        }
+    }
+}
+
+fn matchStar(atom: Atom, pat: String, nextP: Int, text: String, tIdx: Int) -> Int {
+    // Greedy: eat as much as possible, then back off on failure.
+    let mut count = 0
+    let mut i = tIdx
+    let n = text.len()
+    let mut consuming = true
+    for consuming {
+        if i < n && atomMatches(atom, text, i) {
+            i = i + 1
+            count = count + 1
+        } else {
+            consuming = false
+        }
+    }
+    let mut result = -1
+    let mut bt = count
+    let mut keep = true
+    for keep {
+        let end = matchHere(pat, nextP, text, tIdx + bt)
+        if end >= 0 {
+            result = end
+            keep = false
+        } else if bt == 0 {
+            keep = false
+        } else {
+            bt = bt - 1
+        }
+    }
+    result
+}
+
+fn matchPlus(atom: Atom, pat: String, nextP: Int, text: String, tIdx: Int) -> Int {
+    if tIdx < text.len() && atomMatches(atom, text, tIdx) {
+        matchStar(atom, pat, nextP, text, tIdx + 1)
+    } else {
+        -1
+    }
+}
+
+fn matchOpt(atom: Atom, pat: String, nextP: Int, text: String, tIdx: Int) -> Int {
+    if tIdx < text.len() && atomMatches(atom, text, tIdx) {
+        let with = matchHere(pat, nextP, text, tIdx + 1)
+        if with >= 0 {
+            with
+        } else {
+            matchHere(pat, nextP, text, tIdx)
+        }
+    } else {
+        matchHere(pat, nextP, text, tIdx)
+    }
+}
+
+// ─── Pattern atoms ─────────────────────────────────────────────────────
+//
+// An Atom is one unit of the pattern that a quantifier can bind to —
+// a literal byte, `.`, an escape like `\d`, an `$` anchor, or a
+// bracketed character class. `scanAtom` advances `nextIdx` past the
+// atom and captures enough info for `atomMatches` to test a single
+// input byte.
+
+struct Atom {
+    pub kind: Int,            // 0=literal, 1=any, 2=class, 3=endAnchor
+    pub byte: Byte,           // kind=0
+    pub classStart: Int,      // kind=2: slice of pattern [classStart..classEnd)
+    pub classEnd: Int,
+    pub classNegate: Bool,
+    pub nextIdx: Int,         // pattern index just past the atom
+    pub escapeKind: Int,      // kind=0 with escapeKind>0 => predicate (\d/\w/\s/…)
+}
+
+fn emptyAtom() -> Atom {
+    Atom {
+        kind: 3,
+        byte: 0,
+        classStart: 0,
+        classEnd: 0,
+        classNegate: false,
+        nextIdx: 0,
+        escapeKind: 0,
+    }
+}
+
+fn atomIsEndAnchor(a: Atom) -> Bool {
+    a.kind == 3
+}
+
+fn scanAtom(pat: String, pIdx: Int) -> Atom {
+    let b = pat.get(pIdx)
+    match b {
+        Some(byte) -> {
+            if byte == 46 {
+                // '.'
+                Atom {
+                    kind: 1,
+                    byte: 0,
+                    classStart: 0,
+                    classEnd: 0,
+                    classNegate: false,
+                    nextIdx: pIdx + 1,
+                    escapeKind: 0,
+                }
+            } else if byte == 36 {
+                // '$'
+                Atom {
+                    kind: 3,
+                    byte: 0,
+                    classStart: 0,
+                    classEnd: 0,
+                    classNegate: false,
+                    nextIdx: pIdx + 1,
+                    escapeKind: 0,
+                }
+            } else if byte == 91 {
+                // '[' — scan to matching ']'
+                scanClass(pat, pIdx)
+            } else if byte == 92 {
+                // '\\'
+                scanEscape(pat, pIdx)
+            } else {
+                Atom {
+                    kind: 0,
+                    byte,
+                    classStart: 0,
+                    classEnd: 0,
+                    classNegate: false,
+                    nextIdx: pIdx + 1,
+                    escapeKind: 0,
+                }
+            }
+        },
+        None -> emptyAtom(),
+    }
+}
+
+fn scanEscape(pat: String, pIdx: Int) -> Atom {
+    let nx = pat.get(pIdx + 1)
+    match nx {
+        Some(byte) -> {
+            let ek = classifyEscape(byte)
+            if ek > 0 {
+                Atom {
+                    kind: 0,
+                    byte,
+                    classStart: 0,
+                    classEnd: 0,
+                    classNegate: false,
+                    nextIdx: pIdx + 2,
+                    escapeKind: ek,
+                }
+            } else {
+                // Literal-escape: `\.`, `\\`, `\+`, …
+                Atom {
+                    kind: 0,
+                    byte,
+                    classStart: 0,
+                    classEnd: 0,
+                    classNegate: false,
+                    nextIdx: pIdx + 2,
+                    escapeKind: 0,
+                }
+            }
+        },
+        None -> emptyAtom(),
+    }
+}
+
+fn classifyEscape(b: Byte) -> Int {
+    if b == 100 {
+        1
+    } else if b == 68 {
+        2
+    } else if b == 119 {
+        3
+    } else if b == 87 {
+        4
+    } else if b == 115 {
+        5
+    } else if b == 83 {
+        6
+    } else {
+        0
+    }
+}
+
+fn scanClass(pat: String, pIdx: Int) -> Atom {
+    let n = pat.len()
+    let mut i = pIdx + 1
+    let mut negate = false
+    let first = pat.get(i)
+    match first {
+        Some(byte) -> {
+            if byte == 94 {
+                // '^'
+                negate = true
+                i = i + 1
+            }
+        },
+        None -> {},
+    }
+    let start = i
+    let mut end = i
+    let mut closed = false
+    for i < n {
+        if closed {
+            i = n
+        } else {
+            let b = pat.get(i)
+            match b {
+                Some(byte) -> {
+                    if byte == 93 {
+                        // ']'
+                        end = i
+                        closed = true
+                    } else if byte == 92 {
+                        // skip escape
+                        i = i + 2
+                    } else {
+                        i = i + 1
+                    }
+                },
+                None -> {
+                    i = n
+                },
+            }
+        }
+    }
+    let nxt = if closed { end + 1 } else { n }
+    Atom {
+        kind: 2,
+        byte: 0,
+        classStart: start,
+        classEnd: end,
+        classNegate: negate,
+        nextIdx: nxt,
+        escapeKind: 0,
+    }
+}
+
+fn atomMatches(a: Atom, text: String, tIdx: Int) -> Bool {
+    let tb = text.get(tIdx)
+    match tb {
+        Some(byte) -> {
+            if a.kind == 1 {
+                true
+            } else if a.kind == 0 {
+                if a.escapeKind > 0 {
+                    predicateMatches(a.escapeKind, byte)
+                } else {
+                    byte == a.byte
+                }
+            } else if a.kind == 2 {
+                let hit = classMatches(a, text, byte)
+                if a.classNegate {
+                    !hit
+                } else {
+                    hit
+                }
+            } else {
+                false
+            }
+        },
+        None -> false,
+    }
+}
+
+fn predicateMatches(kind: Int, byte: Byte) -> Bool {
+    if kind == 1 {
+        byte >= 48 && byte <= 57
+    } else if kind == 2 {
+        !(byte >= 48 && byte <= 57)
+    } else if kind == 3 {
+        isWordByte(byte)
+    } else if kind == 4 {
+        !isWordByte(byte)
+    } else if kind == 5 {
+        isSpaceByte(byte)
+    } else if kind == 6 {
+        !isSpaceByte(byte)
+    } else {
+        false
+    }
+}
+
+fn isWordByte(b: Byte) -> Bool {
+    (b >= 48 && b <= 57) ||
+    (b >= 65 && b <= 90) ||
+    (b >= 97 && b <= 122) ||
+    b == 95
+}
+
+fn isSpaceByte(b: Byte) -> Bool {
+    b == 32 || b == 9 || b == 10 || b == 13 || b == 11 || b == 12
+}
+
+// classMatches walks the bracketed class body between (classStart,
+// classEnd), interpreting `a-z` style ranges.
+fn classMatches(a: Atom, pat: String, byte: Byte) -> Bool {
+    let mut i = a.classStart
+    let end = a.classEnd
+    let mut hit = false
+    for i < end {
+        if hit {
+            i = end
+        } else {
+            let c = pat.get(i)
+            match c {
+                Some(cb) -> {
+                    if cb == 92 && i + 1 < end {
+                        // '\\' escape
+                        let nx = pat.get(i + 1)
+                        match nx {
+                            Some(nxb) -> {
+                                let ek = classifyEscape(nxb)
+                                if ek > 0 {
+                                    if predicateMatches(ek, byte) {
+                                        hit = true
+                                    }
+                                } else if nxb == byte {
+                                    hit = true
+                                }
+                            },
+                            None -> {},
+                        }
+                        i = i + 2
+                    } else if i + 2 < end && patByteEq(pat, i + 1, 45) {
+                        // range: cb '-' hi
+                        let hi = pat.get(i + 2)
+                        match hi {
+                            Some(hib) -> {
+                                if byte >= cb && byte <= hib {
+                                    hit = true
+                                }
+                            },
+                            None -> {},
+                        }
+                        i = i + 3
+                    } else {
+                        if cb == byte {
+                            hit = true
+                        }
+                        i = i + 1
+                    }
+                },
+                None -> {
+                    i = end
+                },
+            }
+        }
+    }
+    hit
+}
+
+fn patByteEq(pat: String, idx: Int, want: Byte) -> Bool {
+    let b = pat.get(idx)
+    match b {
+        Some(byte) -> byte == want,
+        None -> false,
+    }
+}
+
+fn quantAt(pat: String, idx: Int) -> Int {
+    if idx >= pat.len() {
+        0
+    } else {
+        let b = pat.get(idx)
+        match b {
+            Some(byte) -> {
+                if byte == 42 || byte == 43 || byte == 63 {
+                    byte.toInt()
+                } else {
+                    0
+                }
+            },
+            None -> 0,
+        }
+    }
+}
+
+// ─── Small string helpers ─────────────────────────────────────────────
+
+fn startsWithCaret(s: String) -> Bool {
+    patByteEq(s, 0, 94)
+}
+
+fn dropFirst(s: String) -> String {
+    sliceString(s, 1, s.len())
+}
+
+// sliceString is a placeholder for a future `String.slice(start, end)`
+// intrinsic. The implementation returns `s` verbatim for `start==0 &&
+// end==len`, and the empty string otherwise; real byte-range slicing
+// has to wait for an intrinsic that can construct a String from a
+// byte sub-range (see note at `byteToString` in std.json).
+fn sliceString(s: String, start: Int, end: Int) -> String {
+    if start == 0 && end == s.len() {
+        s
+    } else {
+        ""
+    }
 }

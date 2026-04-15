@@ -443,12 +443,14 @@ func TestTier2ModuleCoverage(t *testing.T) {
 	}{
 		{"env", []string{"args", "get", "set", "unset", "vars"}},
 		{"iter", []string{"Iter", "from", "empty", "once", "repeat", "range"}},
-		{"regex", []string{"Regex", "Match", "Captures", "RegexError", "compile"}},
+		{"regex", []string{"Regex", "Match", "Captures", "RegexError",
+			"compile", "matches", "find", "findAll",
+			"replace", "replaceAll", "split", "captures"}},
 		{"log", []string{"Level", "LogValue", "Fields", "Record", "Handler",
 			"TextHandler", "JsonHandler", "ToLogValue",
 			"debug", "info", "warn", "error", "setLevel"}},
 		{"json", []string{"Json", "Encode", "Decode",
-			"encode", "encodePretty", "decode", "parse"}},
+			"encode", "encodePretty", "decode", "parse", "encodeValue"}},
 		{"os", []string{"Output", "Signal",
 			"exec", "execShell", "exit", "pid", "hostname", "onSignal"}},
 		{"http", []string{"Method", "Request", "Response", "Client", "Server",
@@ -495,6 +497,66 @@ func TestTier2ModuleCoverage(t *testing.T) {
 			if !sym.Pub {
 				t.Errorf("std.%s export %q is not pub", c.module, name)
 			}
+		}
+	}
+}
+
+// TestJsonRealizedInOsty pins the in-Osty std.json body: the
+// encoder/parser are written in Osty rather than routed through a Go
+// builtin, so the public surface — `encodeValue`, `parse` — must
+// resolve and type-check when called from user code.
+func TestJsonRealizedInOsty(t *testing.T) {
+	res := resolveSrc(t, `use std.json
+
+pub fn build() -> String {
+    let j = json.ObjectValue({
+        "name": json.StringValue("alice"),
+        "count": json.NumberValue(3.0),
+    })
+    json.encodeValue(j)
+}
+
+pub fn read(text: String) -> Result<json.Json, Error> {
+    json.parse(text)
+}
+`, Load())
+	for _, d := range res.Diags {
+		if d.Severity == diag.Error {
+			t.Errorf("unexpected diag on json usage: %s", d.Error())
+		}
+	}
+}
+
+// TestRegexRealizedInOsty pins the in-Osty std.regex body: compile /
+// matches / findAll / replaceAll resolve and type-check through the
+// Osty-implemented Pike-style matcher.
+func TestRegexRealizedInOsty(t *testing.T) {
+	res := resolveSrc(t, `use std.regex
+
+pub fn anyLetter(text: String) -> Bool {
+    match regex.compile("[A-Za-z]+") {
+        Ok(re) -> regex.matches(re, text),
+        Err(_) -> false,
+    }
+}
+
+pub fn scrub(text: String) -> String {
+    match regex.compile("\\s+") {
+        Ok(re) -> regex.replaceAll(re, text, " "),
+        Err(_) -> text,
+    }
+}
+
+pub fn numbers(text: String) -> List<regex.Match> {
+    match regex.compile("\\d+") {
+        Ok(re) -> regex.findAll(re, text),
+        Err(_) -> [],
+    }
+}
+`, Load())
+	for _, d := range res.Diags {
+		if d.Severity == diag.Error {
+			t.Errorf("unexpected diag on regex usage: %s", d.Error())
 		}
 	}
 }

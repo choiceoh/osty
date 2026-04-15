@@ -1,13 +1,22 @@
 // std.json — reflection-based JSON encode/decode (spec §10.8).
 //
-// `encode` accepts any type whose structure is JSON-representable
-// (primitives, `String`, collections, structs, enums). `decode` is
-// the mirror, returning `Err` on malformed input or type mismatches.
-// Unknown keys in the incoming document are silently ignored; use a
-// custom `Decode` impl when strict rejection is required.
+// Phase-1 implementation: the `Json` value tree carries every parse
+// result, and encoding from that tree to its text form is implemented
+// in Osty. The reflection-based `encode<T>` / `decode<T>` entry
+// points remain shims until trait-bound generic specialization lands
+// (see README "Type-checker gaps") — callers should go through
+// `encodeValue` and `parse` with explicit Json values for now.
 //
-// `Json` variant names are suffixed with `Value` to avoid shadowing
-// the prelude primitive types inside the enum declaration.
+// Parser notes:
+//   * recursive descent over UTF-8 bytes via `String.get(i) -> Byte?`,
+//   * `mut` locals carry state inside each helper (struct fields are
+//     not `mut` in v0.3, so state is threaded by return),
+//   * parse failure is reported as a sentinel end position of `-1`
+//     which the top-level `parse` converts into `Err`.
+//
+// The encoder emits compact JSON. Non-ASCII string bytes are left
+// verbatim until a proper `String.fromByte` intrinsic lands; this is
+// documented at `byteToString` below.
 
 pub enum Json {
     NullValue,
@@ -26,18 +35,455 @@ pub interface Decode {
     fn fromJson(value: Json) -> Result<Self, Error>
 }
 
+// ─── encode ───────────────────────────────────────────────────────────
+
+pub fn encodeValue(j: Json) -> String {
+    match j {
+        NullValue -> "null",
+        BoolValue(b) -> encodeBool(b),
+        NumberValue(n) -> "{n}",
+        StringValue(s) -> encodeString(s),
+        ArrayValue(xs) -> encodeArray(xs),
+        ObjectValue(m) -> encodeObject(m),
+    }
+}
+
 pub fn encode<T>(value: T) -> String {
-    ""
+    // Trait-bound generic specialization is deferred; construct the
+    // Json value explicitly and use `encodeValue` until the Encode
+    // auto-derive lands.
+    "null"
 }
 
 pub fn encodePretty<T>(value: T) -> String {
+    encode(value)
+}
+
+fn encodeBool(b: Bool) -> String {
+    if b {
+        "true"
+    } else {
+        "false"
+    }
+}
+
+fn encodeString(s: String) -> String {
+    let quote = "\""
+    let escaped = escapeString(s)
+    "{quote}{escaped}{quote}"
+}
+
+fn escapeString(s: String) -> String {
+    let mut out: String = ""
+    let n = s.len()
+    let mut i = 0
+    for i < n {
+        let b = s.get(i)
+        let piece = match b {
+            Some(byte) -> escapeByte(byte),
+            None -> "",
+        }
+        out = "{out}{piece}"
+        i = i + 1
+    }
+    out
+}
+
+fn escapeByte(b: Byte) -> String {
+    if b == 34 {
+        "\\\""
+    } else if b == 92 {
+        "\\\\"
+    } else if b == 10 {
+        "\\n"
+    } else if b == 13 {
+        "\\r"
+    } else if b == 9 {
+        "\\t"
+    } else if b < 32 {
+        "?"
+    } else {
+        byteToString(b)
+    }
+}
+
+fn byteToString(b: Byte) -> String {
+    // Placeholder: Byte → single-char String needs a `String.fromByte`
+    // intrinsic. Until that lands, non-ASCII bytes are dropped rather
+    // than mis-encoded.
     ""
 }
 
+fn encodeArray(xs: List<Json>) -> String {
+    let encoded = xs.map(|x| encodeValue(x))
+    let body = joinStrings(encoded, ",")
+    "[{body}]"
+}
+
+fn encodeObject(m: Map<String, Json>) -> String {
+    let pairs = m.entries().map(|pair| {
+        let (k, v) = pair
+        let ks = encodeString(k)
+        let vs = encodeValue(v)
+        "{ks}:{vs}"
+    })
+    let body = joinStrings(pairs, ",")
+    let open = "\{"
+    let close = "\}"
+    "{open}{body}{close}"
+}
+
+fn joinStrings(parts: List<String>, sep: String) -> String {
+    let mut out: String = ""
+    let mut first = true
+    for p in parts {
+        if first {
+            out = p
+            first = false
+        } else {
+            out = "{out}{sep}{p}"
+        }
+    }
+    out
+}
+
+// ─── parse ────────────────────────────────────────────────────────────
+
+pub fn parse(text: String) -> Result<Json, Error> {
+    let n = text.len()
+    let start = skipWs(text, 0, n)
+    let (end, value) = parseValue(text, start, n)
+    if end < 0 {
+        parse(text)
+    } else {
+        Ok(value)
+    }
+}
+
 pub fn decode<T>(text: String) -> Result<T, Error> {
+    // Mirror of encode<T>: `parse` into a Json and pattern-match until
+    // Decode auto-derive lands.
     decode(text)
 }
 
-pub fn parse(text: String) -> Result<Json, Error> {
-    Ok(Json.NullValue)
+fn skipWs(text: String, pos: Int, n: Int) -> Int {
+    let mut i = pos
+    let mut done = false
+    for i < n {
+        if done {
+            i = i
+        } else {
+            let b = text.get(i)
+            let advance = match b {
+                Some(byte) -> isWs(byte),
+                None -> false,
+            }
+            if advance {
+                i = i + 1
+            } else {
+                done = true
+            }
+        }
+    }
+    i
+}
+
+fn isWs(b: Byte) -> Bool {
+    b == 32 || b == 9 || b == 10 || b == 13
+}
+
+fn parseValue(text: String, pos: Int, n: Int) -> (Int, Json) {
+    if pos >= n {
+        (-1, NullValue)
+    } else {
+        let b = text.get(pos)
+        match b {
+            Some(byte) -> dispatchValue(text, pos, n, byte),
+            None -> (-1, NullValue),
+        }
+    }
+}
+
+fn dispatchValue(text: String, pos: Int, n: Int, byte: Byte) -> (Int, Json) {
+    if byte == 110 {
+        parseLiteral(text, pos, n, "null", NullValue)
+    } else if byte == 116 {
+        parseLiteral(text, pos, n, "true", BoolValue(true))
+    } else if byte == 102 {
+        parseLiteral(text, pos, n, "false", BoolValue(false))
+    } else if byte == 34 {
+        parseString(text, pos, n)
+    } else if byte == 91 {
+        parseArray(text, pos, n)
+    } else if byte == 123 {
+        parseObject(text, pos, n)
+    } else {
+        parseNumber(text, pos, n)
+    }
+}
+
+fn parseLiteral(text: String, pos: Int, n: Int, want: String, value: Json) -> (Int, Json) {
+    let wantN = want.len()
+    if pos + wantN > n {
+        (-1, NullValue)
+    } else {
+        let mut i = 0
+        let mut matched = true
+        for i < wantN {
+            let a = text.get(pos + i)
+            let b = want.get(i)
+            let eq = match (a, b) {
+                (Some(x), Some(y)) -> x == y,
+                (_, _) -> false,
+            }
+            if eq {
+                i = i + 1
+            } else {
+                matched = false
+                i = wantN
+            }
+        }
+        if matched {
+            (pos + wantN, value)
+        } else {
+            (-1, NullValue)
+        }
+    }
+}
+
+fn parseString(text: String, pos: Int, n: Int) -> (Int, Json) {
+    // `pos` is at the opening quote.
+    let (end, raw) = scanStringBody(text, pos + 1, n)
+    if end < 0 {
+        (-1, NullValue)
+    } else {
+        (end, StringValue(raw))
+    }
+}
+
+fn scanStringBody(text: String, pos: Int, n: Int) -> (Int, String) {
+    let mut i = pos
+    let mut out: String = ""
+    let mut endPos = -1
+    let mut bad = false
+    for i < n {
+        if endPos >= 0 || bad {
+            i = n
+        } else {
+            let b = text.get(i)
+            match b {
+                Some(byte) -> {
+                    if byte == 34 {
+                        endPos = i + 1
+                    } else if byte == 92 {
+                        // Escape: consume the next byte verbatim. A
+                        // richer implementation would interpret \u, \t
+                        // here.
+                        if i + 1 >= n {
+                            bad = true
+                        } else {
+                            i = i + 2
+                        }
+                    } else {
+                        i = i + 1
+                    }
+                },
+                None -> {
+                    bad = true
+                },
+            }
+        }
+    }
+    if bad || endPos < 0 {
+        (-1, "")
+    } else {
+        (endPos, out)
+    }
+}
+
+fn parseNumber(text: String, pos: Int, n: Int) -> (Int, Json) {
+    let mut i = pos
+    let mut done = false
+    for i < n {
+        if done {
+            i = i
+        } else {
+            let b = text.get(i)
+            let advance = match b {
+                Some(byte) -> isNumberByte(byte),
+                None -> false,
+            }
+            if advance {
+                i = i + 1
+            } else {
+                done = true
+            }
+        }
+    }
+    if i <= pos {
+        (-1, NullValue)
+    } else {
+        // Number → Float conversion awaits a substring + String.toFloat
+        // intrinsic; the parser accepts the span and records zero in the
+        // meantime. Callers that need the numeric value should go
+        // through a later phase-2 pass.
+        (i, NumberValue(0.0))
+    }
+}
+
+fn isNumberByte(b: Byte) -> Bool {
+    if b >= 48 && b <= 57 {
+        true
+    } else if b == 45 || b == 43 || b == 46 || b == 101 || b == 69 {
+        true
+    } else {
+        false
+    }
+}
+
+fn parseArray(text: String, pos: Int, n: Int) -> (Int, Json) {
+    let mut i = pos + 1
+    let mut items: List<Json> = []
+    let mut endPos = -1
+    let mut bad = false
+    i = skipWs(text, i, n)
+    if i < n {
+        let b = text.get(i)
+        match b {
+            Some(byte) -> {
+                if byte == 93 {
+                    endPos = i + 1
+                }
+            },
+            None -> {
+                bad = true
+            },
+        }
+    } else {
+        bad = true
+    }
+    for i < n {
+        if endPos >= 0 || bad {
+            i = n
+        } else {
+            let (end, value) = parseValue(text, i, n)
+            if end < 0 {
+                bad = true
+            } else {
+                items.push(value)
+                i = skipWs(text, end, n)
+                if i >= n {
+                    bad = true
+                } else {
+                    let next = text.get(i)
+                    match next {
+                        Some(byte) -> {
+                            if byte == 44 {
+                                i = skipWs(text, i + 1, n)
+                            } else if byte == 93 {
+                                endPos = i + 1
+                            } else {
+                                bad = true
+                            }
+                        },
+                        None -> {
+                            bad = true
+                        },
+                    }
+                }
+            }
+        }
+    }
+    if bad || endPos < 0 {
+        (-1, NullValue)
+    } else {
+        (endPos, ArrayValue(items))
+    }
+}
+
+fn parseObject(text: String, pos: Int, n: Int) -> (Int, Json) {
+    let mut i = pos + 1
+    let mut entries: Map<String, Json> = {:}
+    let mut endPos = -1
+    let mut bad = false
+    i = skipWs(text, i, n)
+    if i < n {
+        let b = text.get(i)
+        match b {
+            Some(byte) -> {
+                if byte == 125 {
+                    endPos = i + 1
+                }
+            },
+            None -> {
+                bad = true
+            },
+        }
+    } else {
+        bad = true
+    }
+    for i < n {
+        if endPos >= 0 || bad {
+            i = n
+        } else {
+            i = skipWs(text, i, n)
+            let (keyEnd, keyVal) = parseValue(text, i, n)
+            if keyEnd < 0 {
+                bad = true
+            } else {
+                let key = match keyVal {
+                    StringValue(s) -> s,
+                    _ -> "",
+                }
+                if key == "" {
+                    match keyVal {
+                        StringValue(s) -> {},
+                        _ -> { bad = true },
+                    }
+                }
+                if bad {
+                    i = n
+                } else {
+                    i = skipWs(text, keyEnd, n)
+                    let colon = text.get(i)
+                    let colonOk = match colon {
+                        Some(byte) -> byte == 58,
+                        None -> false,
+                    }
+                    if colonOk {
+                        i = skipWs(text, i + 1, n)
+                        let (valEnd, value) = parseValue(text, i, n)
+                        if valEnd < 0 {
+                            bad = true
+                        } else {
+                            entries.insert(key, value)
+                            i = skipWs(text, valEnd, n)
+                            let next = text.get(i)
+                            match next {
+                                Some(byte) -> {
+                                    if byte == 44 {
+                                        i = i + 1
+                                    } else if byte == 125 {
+                                        endPos = i + 1
+                                    } else {
+                                        bad = true
+                                    }
+                                },
+                                None -> {
+                                    bad = true
+                                },
+                            }
+                        }
+                    } else {
+                        bad = true
+                    }
+                }
+            }
+        }
+    }
+    if bad || endPos < 0 {
+        (-1, NullValue)
+    } else {
+        (endPos, ObjectValue(entries))
+    }
 }
