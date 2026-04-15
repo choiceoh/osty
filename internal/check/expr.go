@@ -679,6 +679,7 @@ func (c *checker) tryPackageCall(
 		}
 		return types.ErrorType, true
 	}
+	c.ensurePackageCollected(pkgSym.Package)
 	tgt := pkgSym.Package.PkgScope.LookupLocal(fx.Name)
 	if tgt == nil {
 		// Resolver already reported E0508; stay silent here and keep
@@ -1888,6 +1889,7 @@ func (c *checker) fieldType(fx *ast.FieldExpr, env *env) types.Type {
 			if s.Package == nil || s.Package.PkgScope == nil {
 				return types.ErrorType
 			}
+			c.ensurePackageCollected(s.Package)
 			tgt := s.Package.PkgScope.LookupLocal(fx.Name)
 			if tgt == nil {
 				// Resolver already reported E0508.

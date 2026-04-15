@@ -381,6 +381,9 @@ func (g *gen) emitCall(c *ast.CallExpr) {
 		if g.emitConcurrencyMethod(c, f) {
 			return
 		}
+		if g.emitRandomGenericMethod(c, f) {
+			return
+		}
 		if g.emitStaticCall(f, c.Args) {
 			return
 		}
@@ -483,6 +486,37 @@ func (g *gen) emitConcurrencyMethod(c *ast.CallExpr, f *ast.FieldExpr) bool {
 		}
 	}
 	return false
+}
+
+func (g *gen) emitRandomGenericMethod(c *ast.CallExpr, f *ast.FieldExpr) bool {
+	if f.Name != "choice" && f.Name != "shuffle" {
+		return false
+	}
+	recvT := g.typeOf(f.X)
+	n, ok := recvT.(*types.Named)
+	if !ok || n.Sym == nil || n.Sym.Name != "Rng" {
+		return false
+	}
+	if len(c.Args) != 1 {
+		return false
+	}
+	elemGo := "any"
+	if itemsT := g.typeOf(c.Args[0].Value); itemsT != nil {
+		if list, ok := itemsT.(*types.Named); ok && list.Sym != nil && list.Sym.Name == "List" && len(list.Args) == 1 {
+			elemGo = g.goType(list.Args[0])
+		}
+	}
+	switch f.Name {
+	case "choice":
+		g.body.writef("rngChoice[%s](", elemGo)
+	case "shuffle":
+		g.body.writef("rngShuffle[%s](", elemGo)
+	}
+	g.emitExpr(f.X)
+	g.body.write(", ")
+	g.emitExpr(c.Args[0].Value)
+	g.body.write(")")
+	return true
 }
 
 // emitTurbofishCall handles the two concurrency intrinsics that use the

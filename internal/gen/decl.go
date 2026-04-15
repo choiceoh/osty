@@ -420,6 +420,9 @@ func (g *gen) emitUseDecl(u *ast.UseDecl) {
 		return
 	}
 	full := strings.Join(u.Path, ".")
+	if g.emitStdlibRuntimeBridge(alias, u.Path, full) {
+		return
+	}
 	if bridge := stdlibBridge(u.Path); bridge != "" && g.aliasUsedAsSelector(alias) {
 		g.use(bridge)
 		// When the Go bridge's package name already matches the
@@ -435,6 +438,35 @@ func (g *gen) emitUseDecl(u *ast.UseDecl) {
 		stub = "struct{}{}"
 	}
 	g.emitUseStub(alias, stub, full)
+}
+
+func (g *gen) emitStdlibRuntimeBridge(alias string, path []string, full string) bool {
+	if len(path) != 2 || path[0] != "std" {
+		return false
+	}
+	switch path[1] {
+	case "random":
+		g.needRandomRuntime = true
+		g.emitUseStub(alias, `struct {
+			default_ func() Rng
+			seeded   func(seed int64) Rng
+		}{
+			default_: randomDefault,
+			seeded:   randomSeeded,
+		}`, full)
+		return true
+	case "url":
+		g.needURLRuntime = true
+		g.emitUseStub(alias, `struct {
+			parse func(text string) Result[Url, any]
+			join  func(base string, relative string) Result[string, any]
+		}{
+			parse: urlParse,
+			join:  urlJoin,
+		}`, full)
+		return true
+	}
+	return false
 }
 
 func (g *gen) emitUseStub(alias, stub, full string) {

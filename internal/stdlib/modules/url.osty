@@ -1,0 +1,24 @@
+// std.url — URL parsing and building.
+//
+// This module exposes the parsed Url shape from spec §10.16. Runtime
+// parsing/joining is bridged by the Go generator.
+
+pub struct Url {
+    pub scheme: String,
+    pub host: String,
+    pub port: Int?,
+    pub path: String,
+    pub query: Map<String, String>,
+    pub fragment: String?,
+
+    pub fn toString(self) -> String { "" }
+    pub fn queryValues(self, key: String) -> List<String> { [] }
+}
+
+pub fn parse(text: String) -> Result<Url, Error> {
+    Err(0)
+}
+
+pub fn join(base: String, relative: String) -> Result<String, Error> {
+    Err(0)
+}

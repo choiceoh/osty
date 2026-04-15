@@ -286,8 +286,9 @@ func newChecker() *checker {
 			Descs:          map[*resolve.Symbol]*typeDesc{},
 			Instantiations: map[*ast.CallExpr][]types.Type{},
 		},
-		syms:      map[*resolve.Symbol]*symInfo{},
-		declToSym: map[ast.Node]*resolve.Symbol{},
+		syms:              map[*resolve.Symbol]*symInfo{},
+		declToSym:         map[ast.Node]*resolve.Symbol{},
+		externalCollected: map[*resolve.Package]bool{},
 	}
 }
 
@@ -368,6 +369,36 @@ type checker struct {
 	// calls on primitive receivers fall through to the legacy
 	// stdlibCallReturn escape hatch.
 	primMethods map[types.PrimitiveKind]map[string]*methodDesc
+
+	// externalCollected tracks imported packages whose declaration
+	// surfaces have been collected into result.SymTypes / result.Descs.
+	// Single-file checks do not otherwise run a collect pass over stdlib
+	// packages, but package calls like `random.seeded()` still need the
+	// callee return type and the returned struct's methods.
+	externalCollected map[*resolve.Package]bool
+}
+
+func (c *checker) ensurePackageCollected(pkg *resolve.Package) {
+	if pkg == nil || len(pkg.Files) == 0 {
+		return
+	}
+	if c.externalCollected[pkg] {
+		return
+	}
+	c.externalCollected[pkg] = true
+
+	oldFile, oldResolved := c.file, c.resolved
+	for _, pf := range pkg.Files {
+		c.indexSymbolsFrom(fileResult(pf))
+	}
+	for _, pf := range pkg.Files {
+		c.file = pf.File
+		c.resolved = fileResult(pf)
+		for _, d := range pf.File.Decls {
+			c.collect(d)
+		}
+	}
+	c.file, c.resolved = oldFile, oldResolved
 }
 
 // indexPrimitiveMethods converts the stdlib registry's primitive method
