@@ -66,6 +66,7 @@ type cliFlags struct {
 	fix        bool // lint: apply machine-applicable suggestions in place
 	showScopes bool // resolve: also print the nested scope tree
 	trace      bool // global: stream per-phase timing to stderr
+	explain    bool // global: append `osty explain CODE` text per unique code
 }
 
 func main() {
@@ -336,6 +337,7 @@ func parseFlags() cliFlags {
 	flag.BoolVar(&f.fix, "fix", false, "apply machine-applicable lint suggestions in place (lint subcommand only)")
 	flag.BoolVar(&f.showScopes, "scopes", false, "resolve: also dump the nested scope tree")
 	flag.BoolVar(&f.trace, "trace", false, "stream per-phase timing to stderr (single-file front-end commands)")
+	flag.BoolVar(&f.explain, "explain", false, "after diagnostics, print the `osty explain CODE` text for each unique code")
 	flag.Usage = usage
 	flag.Parse()
 	return f
@@ -711,6 +713,52 @@ func printDiags(f *diag.Formatter, diags []*diag.Diagnostic, flags cliFlags) {
 			fmt.Fprintf(os.Stderr, "  %d error(s), %d warning(s)\n", errs, warns)
 		}
 	}
+	if flags.explain && !flags.jsonOutput {
+		printExplainBlock(diags)
+	}
+}
+
+// printExplainBlock walks the diagnostic list, deduplicates by code,
+// and appends the same documentation `osty explain CODE` would emit.
+// Skipped under --json (machine consumers should call `osty explain`
+// themselves) and when no diagnostic carries a code.
+func printExplainBlock(diags []*diag.Diagnostic) {
+	seen := map[string]bool{}
+	var codes []string
+	for _, d := range diags {
+		if d.Code == "" || seen[d.Code] {
+			continue
+		}
+		seen[d.Code] = true
+		codes = append(codes, d.Code)
+	}
+	if len(codes) == 0 {
+		return
+	}
+	sort.Strings(codes)
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, "── explanations ──────────────────────────────────────────────")
+	for _, code := range codes {
+		fmt.Fprintln(os.Stderr)
+		// Reuse the same lookup paths the standalone `osty explain` uses
+		// so output stays consistent across the two entry points.
+		if r, ok := lint.LookupRule(code); ok {
+			fmt.Fprintf(os.Stderr, "%s  %s\n", r.Code, r.Name)
+			fmt.Fprintf(os.Stderr, "  %s\n", r.Summary)
+			continue
+		}
+		if d, ok := diag.Explain(code); ok {
+			fmt.Fprintf(os.Stderr, "%s  %s\n", d.Code, d.Name)
+			if d.Summary != "" {
+				fmt.Fprintf(os.Stderr, "  %s\n", d.Summary)
+			}
+			if d.Fix != "" {
+				fmt.Fprintf(os.Stderr, "  Fix: %s\n", d.Fix)
+			}
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "%s  (no explanation registered)\n", code)
+	}
 }
 
 // isTraceableSingleFileCmd reports whether `--trace` should produce
@@ -939,6 +987,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  --strict           lint: exit 1 on warnings (CI mode)")
 	fmt.Fprintln(os.Stderr, "  --scopes           resolve: also print the nested scope tree")
 	fmt.Fprintln(os.Stderr, "  --trace            stream per-phase timing to stderr (front-end commands)")
+	fmt.Fprintln(os.Stderr, "  --explain          append `osty explain CODE` text after each diagnostic block")
 	fmt.Fprintln(os.Stderr, "fmt-specific flags (after the subcommand):")
 	fmt.Fprintln(os.Stderr, "  --check            exit 1 if FILE is not already formatted")
 	fmt.Fprintln(os.Stderr, "  --write            overwrite FILE in place")

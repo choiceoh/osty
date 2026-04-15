@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/check"
@@ -47,6 +48,12 @@ type Server struct {
 	// the next loop iteration so callers can translate shutdown
 	// state into a process exit code themselves.
 	exit chan struct{}
+
+	// trace is enabled via the OSTY_LSP_TRACE environment variable
+	// (any non-empty value). When set, dispatch wraps each request
+	// with a wall-clock timer and logs `lsp-trace: <method> <dur>`
+	// per request. Useful for diagnosing slow editor interactions.
+	trace bool
 
 	docs docStore
 
@@ -92,6 +99,7 @@ func NewServer(in io.Reader, out io.Writer, logOut io.Writer) *Server {
 		prelude: resolve.NewPrelude(),
 		docs:    docStore{m: map[string]*document{}},
 		exit:    make(chan struct{}),
+		trace:   os.Getenv("OSTY_LSP_TRACE") != "",
 	}
 }
 
@@ -157,6 +165,12 @@ func (s *Server) ExitCode() int {
 // synchronization. Long-running work (none today) can be parallelized
 // later with per-method goroutines.
 func (s *Server) dispatch(req *rpcRequest) {
+	if s.trace {
+		t0 := time.Now()
+		defer func() {
+			s.log.Printf("lsp-trace: %-40s %v", req.Method, time.Since(t0))
+		}()
+	}
 	// Fast-path the lifecycle methods that can legally appear
 	// before `initialized`.
 	switch req.Method {
@@ -342,6 +356,13 @@ func (d *docStore) remove(uri string) {
 // surface correct types. Off-disk buffers (unsaved scratch docs) fall
 // back to single-file mode.
 func (s *Server) analyze(uri string, src []byte) *docAnalysis {
+	if s.trace {
+		t0 := time.Now()
+		defer func() {
+			s.log.Printf("lsp-trace:   analyze(%s, %d bytes) %v",
+				uri, len(src), time.Since(t0))
+		}()
+	}
 	if path, ok := fileURIPath(uri); ok {
 		if a := s.analyzePackageContaining(path, src); a != nil {
 			return a

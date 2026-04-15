@@ -8,6 +8,7 @@ import (
 	"runtime/pprof"
 
 	"github.com/osty/osty/internal/pipeline"
+	"github.com/osty/osty/internal/resolve"
 )
 
 // runPipeline implements
@@ -47,6 +48,7 @@ func runPipeline(args []string) {
 		runGen     bool
 		cpuProfile string
 		memProfile string
+		baseline   string
 	)
 	fs.BoolVar(&jsonOut, "json", false, "emit machine-readable JSON instead of the text table")
 	fs.BoolVar(&trace, "trace", false, "stream a trace line to stderr as each phase completes")
@@ -54,6 +56,7 @@ func runPipeline(args []string) {
 	fs.BoolVar(&runGen, "gen", false, "also run the Go transpiler as a final pipeline phase (file mode)")
 	fs.StringVar(&cpuProfile, "cpuprofile", "", "write a CPU pprof profile to this path")
 	fs.StringVar(&memProfile, "memprofile", "", "write a memory pprof profile to this path after the pipeline")
+	fs.StringVar(&baseline, "baseline", "", "compare against a previous --json snapshot at this path")
 	_ = fs.Parse(args)
 	if fs.NArg() != 1 {
 		fs.Usage()
@@ -94,7 +97,15 @@ func runPipeline(args []string) {
 
 	var r pipeline.Result
 	if info.IsDir() {
-		r, err = pipeline.RunPackage(target, stream, cfg)
+		// Workspace vs single-package detection mirrors what `osty
+		// check DIR` does: a workspace root has no top-level .osty
+		// files but contains subdirectories that do (and/or carries
+		// `[workspace]` in its osty.toml).
+		if resolve.IsWorkspaceRoot(target, "") {
+			r, err = pipeline.RunWorkspace(target, stream, cfg)
+		} else {
+			r, err = pipeline.RunPackage(target, stream, cfg)
+		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "osty pipeline: %v\n", err)
 			os.Exit(1)
@@ -108,7 +119,35 @@ func runPipeline(args []string) {
 		r = pipeline.RunWithConfig(src, stream, cfg)
 	}
 
-	if jsonOut {
+	// Baseline mode supersedes the regular table: we render the diff
+	// instead so users can spot regressions at a glance. The current
+	// run's full snapshot still goes to stdout when --json is also
+	// set, so CI can record both diff and updated baseline at once.
+	if baseline != "" {
+		f, err := os.Open(baseline)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "osty pipeline: --baseline: %v\n", err)
+			os.Exit(1)
+		}
+		snap, err := pipeline.LoadSnapshot(f)
+		f.Close()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "osty pipeline: --baseline: %v\n", err)
+			os.Exit(1)
+		}
+		cmp := pipeline.Compare(snap, r)
+		if jsonOut {
+			// JSON path keeps the full snapshot — comparison is text-only
+			// because the delta semantics are best read by a human.
+			if err := r.RenderJSON(os.Stdout); err != nil {
+				fmt.Fprintf(os.Stderr, "osty pipeline: %v\n", err)
+				os.Exit(1)
+			}
+			cmp.RenderText(os.Stderr)
+		} else {
+			cmp.RenderText(os.Stdout)
+		}
+	} else if jsonOut {
 		if err := r.RenderJSON(os.Stdout); err != nil {
 			fmt.Fprintf(os.Stderr, "osty pipeline: %v\n", err)
 			os.Exit(1)

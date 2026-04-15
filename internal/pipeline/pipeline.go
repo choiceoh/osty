@@ -446,12 +446,299 @@ func RunPackage(dir string, stream io.Writer, cfg Config) (Result, error) {
 		Counts:   map[string]int{"findings": len(lintDiags)},
 	})
 
-	// gen is single-file only; for packages we don't run it because
-	// the transpiler's per-file Generate doesn't aggregate. Surfacing
-	// "package gen" would invent semantics gen.go doesn't currently
-	// have, so we skip it and document that limitation.
+	// gen (optional, per-file aggregated). The transpiler is per-file;
+	// in package mode we run it once per file with that file's
+	// resolve view but the shared check.Result, then sum bytes-out
+	// and surface the first fatal error. Output bytes are concatenated
+	// into r.GenBytes with file headers so a downstream consumer can
+	// still reconstruct per-file boundaries.
 	if cfg.RunGen {
-		fmt.Fprintln(stream, "trace: gen      skipped   (per-package gen is not yet supported)")
+		t0 = time.Now()
+		pkgName := cfg.GenPackageName
+		if pkgName == "" {
+			pkgName = pkg.Name
+		}
+		var genBuf []byte
+		var firstErr error
+		genErrs := 0
+		for _, pf := range pkg.Files {
+			if pf.File == nil {
+				continue
+			}
+			fileRes := &resolve.Result{
+				Refs:      pf.Refs,
+				TypeRefs:  pf.TypeRefs,
+				FileScope: pf.FileScope,
+			}
+			out, err := gen.Generate(pkgName, pf.File, fileRes, chk)
+			header := fmt.Sprintf("\n// ---- %s ----\n", pf.Path)
+			genBuf = append(genBuf, []byte(header)...)
+			genBuf = append(genBuf, out...)
+			if err != nil {
+				genErrs++
+				if firstErr == nil {
+					firstErr = err
+				}
+			}
+		}
+		r.GenBytes = genBuf
+		r.GenError = firstErr
+		summary := fmt.Sprintf("%d bytes Go (across %d files)", len(genBuf), len(pkg.Files))
+		if firstErr != nil {
+			summary = fmt.Sprintf("%d bytes Go, %d file error(s); first: %v",
+				len(genBuf), genErrs, firstErr)
+		}
+		emit(Stage{
+			Name:     "gen",
+			Duration: time.Since(t0),
+			Output:   summary,
+			Errors:   genErrs,
+			Warnings: 0,
+			Counts: map[string]int{
+				"bytes":       len(genBuf),
+				"files":       len(pkg.Files),
+				"file_errors": genErrs,
+			},
+		})
+	}
+
+	return r, nil
+}
+
+// RunWorkspace runs the front-end across every package in a workspace
+// rooted at dir. Stages here are still load → resolve → check → lint
+// (+ optional gen) but each stage's counts roll up across every
+// package. Per-package diagnostic ordering is preserved in AllDiags so
+// downstream renderers can still attribute findings.
+//
+// A workspace contains zero or more package directories underneath a
+// root marked by `osty.toml [workspace]` or by an empty root holding
+// only subdirectories with `.osty` files. Use this when --pipeline
+// runs on the workspace root; for a leaf package call RunPackage.
+func RunWorkspace(dir string, stream io.Writer, cfg Config) (Result, error) {
+	var r Result
+	emit := func(s Stage) {
+		r.Stages = append(r.Stages, s)
+		if stream != nil {
+			fmt.Fprintf(stream, "trace: %-8s %8s   %s\n",
+				s.Name, formatDuration(s.Duration), traceTail(s))
+		}
+	}
+
+	// --- load (lex + parse, every package) ---
+	t0 := time.Now()
+	ws, err := resolve.NewWorkspace(dir)
+	if err != nil {
+		return r, err
+	}
+	ws.Stdlib = stdlib.LoadCached()
+	for _, p := range resolve.WorkspacePackagePaths(dir) {
+		_, _ = ws.LoadPackage(p)
+	}
+
+	totalFiles, totalBytes, totalDecls, totalStmts, totalUses := 0, 0, 0, 0, 0
+	var loadDiags []*diag.Diagnostic
+	pkgPaths := make([]string, 0, len(ws.Packages))
+	for p := range ws.Packages {
+		pkgPaths = append(pkgPaths, p)
+	}
+	sort.Strings(pkgPaths)
+	for _, p := range pkgPaths {
+		pkg := ws.Packages[p]
+		if pkg == nil {
+			continue
+		}
+		for _, pf := range pkg.Files {
+			totalFiles++
+			totalBytes += len(pf.Source)
+			loadDiags = append(loadDiags, pf.ParseDiags...)
+			if pf.File != nil {
+				totalDecls += len(pf.File.Decls)
+				totalStmts += len(pf.File.Stmts)
+				totalUses += len(pf.File.Uses)
+			}
+		}
+	}
+	r.AllDiags = append(r.AllDiags, loadDiags...)
+	emit(Stage{
+		Name:     "load",
+		Duration: time.Since(t0),
+		Output: fmt.Sprintf("%d packages, %d files, %d bytes, %d decls",
+			len(pkgPaths), totalFiles, totalBytes, totalDecls),
+		Errors:   countSeverity(loadDiags, diag.Error),
+		Warnings: countSeverity(loadDiags, diag.Warning),
+		Counts: map[string]int{
+			"packages": len(pkgPaths),
+			"files":    totalFiles,
+			"bytes":    totalBytes,
+			"decls":    totalDecls,
+			"stmts":    totalStmts,
+			"uses":     totalUses,
+		},
+	})
+
+	// --- resolve (workspace-wide) ---
+	t0 = time.Now()
+	results := ws.ResolveAll()
+	totalRefs, totalTypeRefs := 0, 0
+	var resolveDiags []*diag.Diagnostic
+	for _, p := range pkgPaths {
+		pr, ok := results[p]
+		if !ok || pr == nil {
+			continue
+		}
+		resolveDiags = append(resolveDiags, pr.Diags...)
+		pkg := ws.Packages[p]
+		if pkg == nil {
+			continue
+		}
+		for _, pf := range pkg.Files {
+			totalRefs += len(pf.Refs)
+			totalTypeRefs += len(pf.TypeRefs)
+		}
+	}
+	r.AllDiags = append(r.AllDiags, resolveDiags...)
+	emit(Stage{
+		Name:     "resolve",
+		Duration: time.Since(t0),
+		Output:   fmt.Sprintf("%d refs, %d type refs", totalRefs, totalTypeRefs),
+		Errors:   countSeverity(resolveDiags, diag.Error),
+		Warnings: countSeverity(resolveDiags, diag.Warning),
+		Counts: map[string]int{
+			"refs":      totalRefs,
+			"type_refs": totalTypeRefs,
+		},
+	})
+
+	// --- check (cross-package) ---
+	t0 = time.Now()
+	checkOpts := check.Opts{Primitives: stdlib.LoadCached().Primitives}
+	if cfg.PerDecl {
+		checkOpts.OnDecl = func(d ast.Decl, phase string, dur time.Duration) {
+			r.PerDecl = append(r.PerDecl, DeclTiming{
+				Name:       declName(d),
+				Kind:       declKind(d),
+				Phase:      phase,
+				Duration:   dur,
+				DurationMS: float64(dur.Microseconds()) / 1000.0,
+			})
+		}
+	}
+	checks := check.Workspace(ws, results, checkOpts)
+	var checkDiags []*diag.Diagnostic
+	totalTypedExprs, totalLetTypes, totalSymTypes := 0, 0, 0
+	for _, p := range pkgPaths {
+		cr, ok := checks[p]
+		if !ok || cr == nil {
+			continue
+		}
+		checkDiags = append(checkDiags, cr.Diags...)
+		for _, t := range cr.Types {
+			if !types.IsError(t) {
+				totalTypedExprs++
+			}
+		}
+		totalLetTypes += len(cr.LetTypes)
+		totalSymTypes += len(cr.SymTypes)
+	}
+	r.AllDiags = append(r.AllDiags, checkDiags...)
+	emit(Stage{
+		Name:     "check",
+		Duration: time.Since(t0),
+		Output:   fmt.Sprintf("%d typed exprs, %d let bindings", totalTypedExprs, totalLetTypes),
+		Errors:   countSeverity(checkDiags, diag.Error),
+		Warnings: countSeverity(checkDiags, diag.Warning),
+		Counts: map[string]int{
+			"typed_exprs": totalTypedExprs,
+			"let_types":   totalLetTypes,
+			"sym_types":   totalSymTypes,
+		},
+	})
+
+	// --- lint (per-file across every package) ---
+	t0 = time.Now()
+	var lintDiags []*diag.Diagnostic
+	for _, p := range pkgPaths {
+		pkg := ws.Packages[p]
+		cr := checks[p]
+		if pkg == nil || cr == nil {
+			continue
+		}
+		for _, pf := range pkg.Files {
+			fileRes := &resolve.Result{
+				Refs:      pf.Refs,
+				TypeRefs:  pf.TypeRefs,
+				FileScope: pf.FileScope,
+			}
+			lr := lint.File(pf.File, fileRes, cr)
+			lintDiags = append(lintDiags, lr.Diags...)
+		}
+	}
+	r.AllDiags = append(r.AllDiags, lintDiags...)
+	emit(Stage{
+		Name:     "lint",
+		Duration: time.Since(t0),
+		Output:   fmt.Sprintf("%d lint findings (across %d packages)", len(lintDiags), len(pkgPaths)),
+		Errors:   countSeverity(lintDiags, diag.Error),
+		Warnings: countSeverity(lintDiags, diag.Warning),
+		Counts:   map[string]int{"findings": len(lintDiags)},
+	})
+
+	// --- gen (workspace-wide aggregation) ---
+	if cfg.RunGen {
+		t0 = time.Now()
+		var genBuf []byte
+		var firstErr error
+		genErrs := 0
+		for _, p := range pkgPaths {
+			pkg := ws.Packages[p]
+			cr := checks[p]
+			if pkg == nil || cr == nil {
+				continue
+			}
+			pkgName := cfg.GenPackageName
+			if pkgName == "" {
+				pkgName = pkg.Name
+			}
+			for _, pf := range pkg.Files {
+				if pf.File == nil {
+					continue
+				}
+				fileRes := &resolve.Result{
+					Refs:      pf.Refs,
+					TypeRefs:  pf.TypeRefs,
+					FileScope: pf.FileScope,
+				}
+				out, err := gen.Generate(pkgName, pf.File, fileRes, cr)
+				header := fmt.Sprintf("\n// ---- %s ----\n", pf.Path)
+				genBuf = append(genBuf, []byte(header)...)
+				genBuf = append(genBuf, out...)
+				if err != nil {
+					genErrs++
+					if firstErr == nil {
+						firstErr = err
+					}
+				}
+			}
+		}
+		r.GenBytes = genBuf
+		r.GenError = firstErr
+		summary := fmt.Sprintf("%d bytes Go (across %d packages)", len(genBuf), len(pkgPaths))
+		if firstErr != nil {
+			summary = fmt.Sprintf("%d bytes Go, %d file error(s); first: %v",
+				len(genBuf), genErrs, firstErr)
+		}
+		emit(Stage{
+			Name:     "gen",
+			Duration: time.Since(t0),
+			Output:   summary,
+			Errors:   genErrs,
+			Warnings: 0,
+			Counts: map[string]int{
+				"bytes":       len(genBuf),
+				"file_errors": genErrs,
+			},
+		})
 	}
 
 	return r, nil

@@ -156,6 +156,61 @@ func TestRunGen(t *testing.T) {
 	}
 }
 
+// Compare(baseline, current) should produce a per-stage delta whose
+// signs reflect the relative timings, and a diff histogram only for
+// codes whose counts changed.
+func TestCompareBasic(t *testing.T) {
+	baseline := Snapshot{
+		Stages: []SnapshotStage{
+			{Name: "lex", DurationMS: 1.0, Errors: 0},
+			{Name: "parse", DurationMS: 2.0, Errors: 1},
+		},
+		DiagnosticsByCode: map[string]int{"E0001": 1, "E0002": 2},
+	}
+	current := Result{
+		Stages: []Stage{
+			{Name: "lex", Duration: 2 * 1000 * 1000, Errors: 0},   // 2.0ms
+			{Name: "parse", Duration: 1 * 1000 * 1000, Errors: 0}, // 1.0ms
+		},
+	}
+	cmp := Compare(baseline, current)
+	if len(cmp.Stages) != 2 {
+		t.Fatalf("Stages: got %d, want 2", len(cmp.Stages))
+	}
+	if cmp.Stages[0].Name != "lex" || cmp.Stages[0].DeltaMS <= 0 {
+		t.Errorf("lex delta should be positive (slower); got %+v", cmp.Stages[0])
+	}
+	if cmp.Stages[1].Name != "parse" || cmp.Stages[1].DeltaMS >= 0 {
+		t.Errorf("parse delta should be negative (faster); got %+v", cmp.Stages[1])
+	}
+}
+
+// Snapshot round-trip: a Result → JSON → LoadSnapshot → Snapshot
+// should preserve the per-stage counts, output strings, and diag hist.
+func TestSnapshotRoundTrip(t *testing.T) {
+	r := Run([]byte(cleanSrc), nil)
+	var buf bytes.Buffer
+	if err := r.RenderJSON(&buf); err != nil {
+		t.Fatalf("RenderJSON: %v", err)
+	}
+	snap, err := LoadSnapshot(&buf)
+	if err != nil {
+		t.Fatalf("LoadSnapshot: %v", err)
+	}
+	if len(snap.Stages) != len(r.Stages) {
+		t.Errorf("stage count mismatch: snap=%d, result=%d",
+			len(snap.Stages), len(r.Stages))
+	}
+	for i, s := range snap.Stages {
+		if s.Name != r.Stages[i].Name {
+			t.Errorf("stage[%d].Name = %q, want %q", i, s.Name, r.Stages[i].Name)
+		}
+		if s.Output != r.Stages[i].Output {
+			t.Errorf("stage[%d].Output = %q, want %q", i, s.Output, r.Stages[i].Output)
+		}
+	}
+}
+
 func stageNames(ss []Stage) []string {
 	out := make([]string, len(ss))
 	for i, s := range ss {
