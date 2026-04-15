@@ -1,0 +1,105 @@
+/// DiagnosticSeverity is the stable user-facing diagnostic bucket.
+pub enum DiagnosticSeverity {
+    SeverityError,
+    SeverityWarning,
+    SeverityLint,
+    SeverityUnknown,
+}
+
+/// DiagnosticFamily groups codes by compiler phase or tool surface.
+pub enum DiagnosticFamily {
+    FamilyLexical,
+    FamilyDeclaration,
+    FamilyExpression,
+    FamilyTypePattern,
+    FamilyAnnotation,
+    FamilyResolution,
+    FamilyControlFlow,
+    FamilyTypeChecking,
+    FamilyManifest,
+    FamilyScaffold,
+    FamilyLint,
+    FamilyWarning,
+    FamilyUnknown,
+}
+
+/// diagnosticSeverity classifies a stable code by prefix.
+pub fn diagnosticSeverity(code: String) -> DiagnosticSeverity {
+    if code >= "E0000" && code <= "E9999" {
+        SeverityError
+    } else if code >= "W0000" && code <= "W9999" {
+        SeverityWarning
+    } else if code >= "L0000" && code <= "L9999" {
+        SeverityLint
+    } else {
+        SeverityUnknown
+    }
+}
+
+/// diagnosticSeverityName returns the stable CLI label for a severity.
+pub fn diagnosticSeverityName(severity: DiagnosticSeverity) -> String {
+    match severity {
+        SeverityError -> "error",
+        SeverityWarning -> "warning",
+        SeverityLint -> "lint",
+        SeverityUnknown -> "unknown",
+    }
+}
+
+/// diagnosticFamily classifies codes into the ranges owned by compiler phases.
+pub fn diagnosticFamily(code: String) -> DiagnosticFamily {
+    if code >= "E0001" && code <= "E0007" {
+        FamilyLexical
+    } else if code >= "E0100" && code <= "E0106" {
+        FamilyDeclaration
+    } else if code >= "E0200" && code <= "E0204" {
+        FamilyExpression
+    } else if code >= "E0300" && code <= "E0301" {
+        FamilyTypePattern
+    } else if code >= "E0400" && code <= "E0400" {
+        FamilyAnnotation
+    } else if code >= "E0500" && code <= "E0509" {
+        FamilyResolution
+    } else if code >= "E0600" && code <= "E0609" {
+        FamilyControlFlow
+    } else if code >= "E0700" && code <= "E0762" {
+        FamilyTypeChecking
+    } else if code >= "E2000" && code <= "E2032" {
+        FamilyManifest
+    } else if code >= "E2050" && code <= "E2052" {
+        FamilyScaffold
+    } else if code >= "L0001" && code <= "L9999" {
+        FamilyLint
+    } else if code >= "W0000" && code <= "W9999" {
+        FamilyWarning
+    } else {
+        FamilyUnknown
+    }
+}
+
+/// diagnosticFamilyName returns a stable label for docs and reports.
+pub fn diagnosticFamilyName(family: DiagnosticFamily) -> String {
+    match family {
+        FamilyLexical -> "lexical",
+        FamilyDeclaration -> "declaration",
+        FamilyExpression -> "expression",
+        FamilyTypePattern -> "type-pattern",
+        FamilyAnnotation -> "annotation",
+        FamilyResolution -> "resolution",
+        FamilyControlFlow -> "control-flow",
+        FamilyTypeChecking -> "type-checking",
+        FamilyManifest -> "manifest",
+        FamilyScaffold -> "scaffold",
+        FamilyLint -> "lint",
+        FamilyWarning -> "warning",
+        FamilyUnknown -> "unknown",
+    }
+}
+
+/// diagnosticIsCompilerError reports whether a code blocks compilation.
+pub fn diagnosticIsCompilerError(code: String) -> Bool {
+    match diagnosticSeverity(code) {
+        SeverityError -> true,
+        _ -> false,
+    }
+}

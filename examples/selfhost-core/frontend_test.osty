@@ -1,0 +1,291 @@
+use std.testing
+
+fn testFrontendLexerSummarizesCompilerTokens() {
+    let summary = frontendLexSummary(r"pub fn add ( value : Int ) -> Int { let answer = 42 }")
+
+    testing.assertEq(summary.tokens, 17)
+    testing.assertEq(summary.keywords, 3)
+    testing.assertEq(summary.identifiers, 5)
+    testing.assertEq(summary.literals, 1)
+    testing.assertEq(summary.punctuation, 7)
+    testing.assertEq(summary.errors, 0)
+    testing.assertEq(summary.first, "pub")
+    testing.assertEq(summary.second, "fn")
+    testing.assertEq(summary.third, "IDENT")
+}
+
+fn testFrontendLexerScansPackedSource() {
+    let summary = frontendLexSummary(r"pub fn add(value:Int)->Int{let answer=42}")
+
+    testing.assertEq(summary.tokens, 17)
+    testing.assertEq(summary.keywords, 3)
+    testing.assertEq(summary.identifiers, 5)
+    testing.assertEq(summary.literals, 1)
+    testing.assertEq(summary.punctuation, 7)
+    testing.assertEq(summary.errors, 0)
+}
+
+fn testFrontendLexerHandlesCommentsAndLiterals() {
+    let source = "/// docs\nfn main() // line\nlet s = \"hi\"\nlet raw = r\"json\"\nlet c = 'x'\nlet b = b'z'\n"
+    let summary = frontendLexSummary(source)
+
+    testing.assertEq(summary.docs, 1)
+    testing.assertEq(summary.newlines, 5)
+    testing.assertEq(summary.tokens, 26)
+    testing.assertEq(summary.keywords, 5)
+    testing.assertEq(summary.identifiers, 5)
+    testing.assertEq(summary.literals, 4)
+    testing.assertEq(summary.punctuation, 6)
+    testing.assertEq(summary.errors, 0)
+}
+
+fn testFrontendLexerHandlesOperatorsAndBlockComments() {
+    let summary = frontendLexSummary("a==b && c!=d\nx <<= 1\n/* block */_")
+
+    testing.assertEq(summary.tokens, 14)
+    testing.assertEq(summary.identifiers, 5)
+    testing.assertEq(summary.literals, 1)
+    testing.assertEq(summary.punctuation, 5)
+    testing.assertEq(summary.newlines, 2)
+    testing.assertEq(summary.errors, 0)
+}
+
+fn testFrontendLexerHandlesBomShebangAndCrLf() {
+    let summary = frontendLexSummary("\u{FEFF}#!/usr/bin/env osty\r\nfn main()\r\n\{\r\n\}\r")
+
+    testing.assertEq(summary.bomStripped, 1)
+    testing.assertEq(summary.shebangs, 1)
+    testing.assertEq(summary.keywords, 1)
+    testing.assertEq(summary.identifiers, 1)
+    testing.assertEq(summary.punctuation, 4)
+    testing.assertEq(summary.newlines, 2)
+    testing.assertEq(summary.errors, 0)
+}
+
+fn testFrontendLexerHandlesBasePrefixesAndExponentFloats() {
+    let summary = frontendLexSummary("0xFF 0B101 0o77 3.0e+2 1..10")
+
+    testing.assertEq(summary.literals, 6)
+    testing.assertEq(summary.baseLiterals, 3)
+    testing.assertEq(summary.uppercaseBasePrefixes, 1)
+    testing.assertEq(summary.punctuation, 1)
+    testing.assertEq(summary.errors, 1)
+}
+
+fn testFrontendLexerHandlesTripleStringsAndInterpolation() {
+    let source = "\"\"\"\n\{x\}\n\"\"\" r\"\"\"\nraw\n\"\"\" \"hi \{name\}\""
+    let summary = frontendLexSummary(source)
+
+    testing.assertEq(summary.literals, 3)
+    testing.assertEq(summary.tripleStrings, 2)
+    testing.assertEq(summary.interpolations, 2)
+    testing.assertEq(summary.errors, 0)
+}
+
+fn testFrontendLexerReportsUnterminatedLiteralsAndComments() {
+    let summary = frontendLexSummary("\"oops\n/* nope")
+
+    testing.assertEq(summary.errors, 2)
+}
+
+fn testFrontendLexerEmitsRichTokenStream() {
+    let stream = frontendLexStream("/// docs\nfn main() \{\nlet x = 1\n\}\n")
+
+    testing.assertEq(frontLexTokenCount(stream), 12)
+    testing.assertEq(frontCommentCount(stream), 1)
+    testing.assertEq(frontLexDiagnosticCount(stream), 0)
+    testing.assertEq(stream.sourceUnits, 33)
+
+    let first = frontLexTokenAt(stream, 0)
+    testing.assertEq(frontTokenKindName(first.kind), "fn")
+    testing.assertEq(first.leadingDocLines, 1)
+    testing.assertEq(first.start.line, 2)
+    testing.assertEq(first.start.column, 1)
+
+    let intTok = frontLexTokenAt(stream, 8)
+    testing.assertEq(frontTokenKindName(intTok.kind), "INT")
+    testing.assertEq(intTok.start.line, 3)
+    testing.assertEq(intTok.start.column, 9)
+    testing.assertEq(intTok.end.column, 10)
+
+    let doc = frontCommentAt(stream, 0)
+    testing.assertEq(frontCommentKindName(doc.kind), "doc")
+    testing.assertEq(doc.start.line, 1)
+}
+
+fn testFrontendLexerEmitsStructuredDiagnostics() {
+    let stream = frontendLexStream("0B101\n\"oops\n/* nope")
+
+    testing.assertEq(frontLexDiagnosticCount(stream), 3)
+    testing.assertEq(
+        frontLexDiagnosticCodeName(frontLexDiagnosticAt(stream, 0).code),
+        "E_LEX_UPPERCASE_BASE_PREFIX",
+    )
+    testing.assertEq(
+        frontLexDiagnosticCodeName(frontLexDiagnosticAt(stream, 1).code),
+        "E_LEX_NEWLINE_IN_STRING",
+    )
+    testing.assertEq(
+        frontLexDiagnosticCodeName(frontLexDiagnosticAt(stream, 2).code),
+        "E_LEX_UNTERMINATED_BLOCK_COMMENT",
+    )
+
+    let firstDiag = frontLexDiagnosticAt(stream, 0)
+    testing.assertEq(firstDiag.start.line, 1)
+    testing.assertEq(firstDiag.end.column, 3)
+}
+
+fn testFrontendLexerTokenizesInterpolationExpressions() {
+    let stream = frontendLexStream("\"hi \{name + 1\}\"")
+
+    testing.assertEq(frontStringPartCount(stream), 2)
+    testing.assertEq(frontInterpolationTokenCount(stream), 3)
+
+    let text = frontStringPartAt(stream, 0)
+    testing.assertEq(frontStringPartKindName(text.kind), "text")
+    testing.assertEq(text.length, 3)
+    testing.assertEq(text.start.column, 2)
+
+    let expr = frontStringPartAt(stream, 1)
+    testing.assertEq(frontStringPartKindName(expr.kind), "interpolation")
+    testing.assertEq(expr.ownerToken, 0)
+    testing.assertEq(expr.exprTokenStart, 0)
+    testing.assertEq(expr.exprTokenCount, 3)
+
+    testing.assertEq(frontTokenKindName(frontInterpolationTokenAt(stream, 0).token.kind), "IDENT")
+    testing.assertEq(frontInterpolationTokenAt(stream, 0).token.start.column, 6)
+    testing.assertEq(frontTokenKindName(frontInterpolationTokenAt(stream, 1).token.kind), "+")
+    testing.assertEq(frontTokenKindName(frontInterpolationTokenAt(stream, 2).token.kind), "INT")
+}
+
+fn testFrontendLexerNormalizesTripleStrings() {
+    let stream = frontendLexStream("\"\"\"\n    alpha\n    beta\n    \"\"\"")
+
+    testing.assertEq(frontLexDiagnosticCount(stream), 0)
+    testing.assertEq(stream.normalizedTripleUnits, 10)
+    testing.assertEq(stream.tripleIndentErrors, 0)
+
+    let token = frontLexTokenAt(stream, 0)
+    testing.assert(token.triple)
+    testing.assertEq(token.interpolations, 0)
+
+    let part = frontStringPartAt(stream, 0)
+    testing.assertEq(frontStringPartKindName(part.kind), "text")
+    testing.assertEq(part.normalizedLength, 10)
+}
+
+fn testFrontendLexerReportsDeepStringDiagnostics() {
+    let stream = frontendLexStream("\"bad \\q\" \"hi \{name\" \"\"\"\n  ok\nbad\n  \"\"\" '' b''")
+
+    testing.assertEq(stream.escapeErrors, 1)
+    testing.assertEq(stream.tripleIndentErrors, 1)
+    testing.assertEq(frontLexDiagnosticCount(stream), 5)
+    testing.assertEq(
+        frontLexDiagnosticCodeName(frontLexDiagnosticAt(stream, 0).code),
+        "E_LEX_UNKNOWN_ESCAPE",
+    )
+    testing.assertEq(
+        frontLexDiagnosticCodeName(frontLexDiagnosticAt(stream, 1).code),
+        "E_LEX_UNTERMINATED_INTERPOLATION",
+    )
+    testing.assertEq(
+        frontLexDiagnosticCodeName(frontLexDiagnosticAt(stream, 2).code),
+        "E_LEX_BAD_TRIPLE_INDENT",
+    )
+    testing.assertEq(
+        frontLexDiagnosticCodeName(frontLexDiagnosticAt(stream, 3).code),
+        "E_LEX_EMPTY_CHAR",
+    )
+    testing.assertEq(
+        frontLexDiagnosticCodeName(frontLexDiagnosticAt(stream, 4).code),
+        "E_LEX_EMPTY_BYTE",
+    )
+}
+
+fn testFrontendLexerBridgesDirectlyIntoParser() {
+    let parsed = frontendParseLexedSummary("pub fn add() \{\}\nstruct User \{\}\n")
+
+    testing.assertEq(parsed.decls, 2)
+    testing.assertEq(parsed.funcs, 1)
+    testing.assertEq(parsed.structs, 1)
+    testing.assertEq(parsed.publicDecls, 1)
+    testing.assertEq(parsed.errors, 0)
+}
+
+fn testFrontendParserCountsTopLevelDeclarations() {
+    testing.assertEq(frontTokenKindName(frontToken("pub", "pub").kind), "pub")
+    testing.assertEq(frontTokenKindName(frontToken("fn", "add").kind), "fn")
+
+    let parsed = frontendParseSummary(
+        [
+            frontToken("pub", "pub"),
+            frontToken("fn", "add"),
+            frontToken("IDENT", "add"),
+            frontToken(r"{", r"{"),
+            frontToken(r"}", r"}"),
+            frontToken("struct", "struct"),
+            frontToken("IDENT", "User"),
+            frontToken("enum", "enum"),
+            frontToken("IDENT", "Result"),
+            frontToken("use", "use"),
+            frontEOF(),
+        ],
+    )
+
+    testing.assertEq(parsed.decls, 4)
+    testing.assertEq(parsed.funcs, 1)
+    testing.assertEq(parsed.structs, 1)
+    testing.assertEq(parsed.enums, 1)
+    testing.assertEq(parsed.uses, 1)
+    testing.assertEq(parsed.publicDecls, 1)
+    testing.assertEq(parsed.maxBlockDepth, 1)
+    testing.assertEq(parsed.errors, 0)
+}
+
+fn testFrontendParserReportsBraceRecoveryErrors() {
+    let parsed = frontendParseSummary(
+        [
+            frontToken("fn", "broken"),
+            frontToken(r"{", r"{"),
+            frontEOF(),
+        ],
+    )
+
+    testing.assertEq(parsed.decls, 1)
+    testing.assertEq(parsed.errors, 1)
+}
+
+fn testFrontendTypeCheckerModelsAssignableLiterals() {
+    testing.assert(frontAssignableName("Int", "UntypedInt"))
+    testing.assert(frontAssignableName("Float", "UntypedInt"))
+    testing.assert(frontAssignableName("Float", "UntypedFloat"))
+    testing.assert(frontAssignableName("String", "Never"))
+
+    testing.assert(!(frontAssignableName("Int", "Float")))
+    testing.assert(!(frontAssignableName("Int", "UntypedFloat")))
+}
+
+fn testFrontendTypeCheckerInfersAndCombinesPrimitiveTypes() {
+    testing.assertEq(frontInferLiteralName("123"), "UntypedInt")
+    testing.assertEq(frontInferLiteralName("1.25"), "UntypedFloat")
+    testing.assertEq(frontInferLiteralName("\"hi\""), "String")
+
+    testing.assertEq(frontBinaryResultName("+", "UntypedInt", "Int"), "Int")
+    testing.assertEq(frontBinaryResultName("+", "UntypedInt", "Float"), "Float")
+    testing.assertEq(frontBinaryResultName("&&", "Bool", "Bool"), "Bool")
+    testing.assertEq(frontBinaryResultName("+", "String", "String"), "Invalid")
+}
+
+fn testFrontendTypeCheckerAssignmentBatch() {
+    let checked = frontendCheckAssignments(
+        [
+            frontAssignment("Int", "UntypedInt"),
+            frontAssignment("Float", "UntypedFloat"),
+            frontAssignment("Bool", "String"),
+        ],
+    )
+
+    testing.assertEq(checked.assignments, 3)
+    testing.assertEq(checked.accepted, 2)
+    testing.assertEq(checked.errors, 1)
+}

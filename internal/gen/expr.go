@@ -409,6 +409,9 @@ func (g *gen) emitCall(c *ast.CallExpr) {
 		if g.emitConcurrencyMethod(c, f) {
 			return
 		}
+		if g.emitListPushCall(c, f) {
+			return
+		}
 		if g.emitRandomGenericMethod(c, f) {
 			return
 		}
@@ -439,6 +442,27 @@ func (g *gen) emitCall(c *ast.CallExpr) {
 		g.emitExpr(a.Value)
 	}
 	g.body.write(")")
+}
+
+// emitListPushCall lowers `xs.push(v)` to an append-backed mutation. The
+// checker already verifies the receiver is List<T> and the argument matches T;
+// this keeps generated Go in sync with that accepted stdlib surface.
+func (g *gen) emitListPushCall(c *ast.CallExpr, f *ast.FieldExpr) bool {
+	if f.Name != "push" || len(c.Args) != 1 {
+		return false
+	}
+	n, ok := g.typeOf(f.X).(*types.Named)
+	if !ok || n.Sym == nil || n.Sym.Name != "List" || len(n.Args) != 1 {
+		return false
+	}
+	g.body.write("func() struct{} { ")
+	g.emitExpr(f.X)
+	g.body.write(" = append(")
+	g.emitExpr(f.X)
+	g.body.write(", ")
+	g.emitExprAsType(c.Args[0].Value, n.Args[0])
+	g.body.write("); return struct{}{} }()")
+	return true
 }
 
 func (g *gen) emitStdlibEncodingCall(c *ast.CallExpr, _ *ast.FieldExpr) bool {
