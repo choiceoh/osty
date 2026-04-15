@@ -7,16 +7,52 @@
 // block compilation. The CLI surfaces them via `osty lint`, with
 // `--strict` flipping warnings into a non-zero exit for CI use.
 //
-// Currently implemented rules:
+// Currently implemented rules. The authoritative list (with summaries,
+// descriptions, and aliases) lives in registry.go; this comment is a
+// quick navigational index.
 //
-//	L0001  unused `let` binding
-//	L0002  unused function / closure parameter
-//	L0003  unused `use` alias (file-local)
-//	L0010  inner `let` shadows an outer binding
-//	L0020  statement after a terminating return / break / continue
-//	L0030  type name not UpperCamelCase
-//	L0031  fn / let / param name not lowerCamelCase
-//	L0032  enum variant name not UpperCamelCase
+//	Unused (L0001-L0008)
+//	  L0001  unused `let` binding
+//	  L0002  unused function / closure parameter
+//	  L0003  unused `use` alias (package-wide)
+//	  L0004  `let mut` binding never reassigned
+//	  L0005  private struct field never read
+//	  L0006  private method never called
+//	  L0007  Result/Option discarded at statement level
+//	  L0008  dead store: mut binding overwritten before being read
+//
+//	Shadowing (L0010)
+//	  L0010  inner binding hides an outer name
+//
+//	Dead code / control flow (L0020-L0026)
+//	  L0020  statement after a terminating return / break / continue
+//	  L0021  redundant `else` after an unconditional `return`
+//	  L0022  `if` condition is a compile-time constant
+//	  L0023  empty `if` / `else` body
+//	  L0024  needless `return` at function tail
+//	  L0025  both `if` / `else` branches are identical
+//	  L0026  empty loop body
+//
+//	Naming (L0030-L0032)
+//	  L0030  type name not UpperCamelCase
+//	  L0031  fn / let / param name not lowerCamelCase
+//	  L0032  enum variant name not UpperCamelCase
+//
+//	Simplify (L0040-L0045)
+//	  L0040  `if c { true } else { false }` collapses to `c`
+//	  L0041  operand compared with itself
+//	  L0042  self-assignment `x = x`
+//	  L0043  double negation `!!x`
+//	  L0044  comparison against a bool literal
+//	  L0045  negated bool literal `!true` / `!false`
+//
+//	Complexity (L0050, L0052, L0053)
+//	  L0050  function takes too many parameters
+//	  L0052  function body too long
+//	  L0053  control flow nested too deeply
+//
+//	Docs (L0070)
+//	  L0070  public declaration has no doc comment
 //
 // Additional rules (e.g. unreachable via Never, dead match arms, magic
 // numbers) belong here once the underlying analyses (type checker,
@@ -142,9 +178,12 @@ func Package(pkg *resolve.Package, pr *resolve.PackageResult, chk *check.Result)
 		l.lintShadowing()
 		l.lintDeadCode()
 		l.extendDeadCodeWithTypeInfo()
+		l.lintFlow()
 		l.lintIgnoredResult()
 		l.lintNaming()
 		l.lintSimplify()
+		l.lintComplexity()
+		l.lintDocs()
 		l.filterSuppressed()
 		res.Diags = append(res.Diags, local.Diags...)
 	}

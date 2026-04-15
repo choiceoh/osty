@@ -107,7 +107,7 @@ var allRules = []Rule{
 		Description: "A `let`, closure param, for-loop pattern, or match-arm pattern reuses a name already bound in an enclosing scope. Rename, or prefix with `_` to mark intentional.",
 	},
 
-	// ---- Dead code (L0020-L0029) ----
+	// ---- Dead code (L0020-L0026) ----
 	{
 		Code: diag.CodeDeadCode, Name: "dead_code",
 		Category: CategoryDeadCode, DefaultSeverity: diag.Warning,
