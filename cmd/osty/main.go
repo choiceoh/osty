@@ -106,6 +106,14 @@ func main() {
 		runInit(args[1:])
 		return
 	}
+	// scaffold is the umbrella command for one-off code generators
+	// that aren't whole-project scaffolds. Sub-subcommands so far:
+	// fixture (table-test starter), schema (JSON sample → struct),
+	// and ffi (C header → Osty wrapper stubs).
+	if cmd == "scaffold" {
+		runScaffold(args[1:])
+		return
+	}
 	// build is the manifest-driven front-end over a directory. When
 	// passed a directory it loads osty.toml, validates, and runs
 	// check + lint across the package(s) the manifest describes.
