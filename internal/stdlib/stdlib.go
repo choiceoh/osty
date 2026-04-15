@@ -62,6 +62,12 @@ type Registry struct {
 	// carries signature and body; the type checker consumes this map
 	// when resolving `x.abs()`-style calls where `x` is a primitive.
 	Primitives map[types.PrimitiveKind]map[string]*ast.FnDecl
+	// ResultMethods holds the methods declared on std.result's
+	// canonical Result<T, E> enum. The checker can use these source
+	// declarations as the stdlib-backed method surface for the prelude
+	// builtin Result, while still retaining a bootstrap fallback when
+	// no registry is supplied.
+	ResultMethods map[string]*ast.FnDecl
 	// Diags aggregates parse diagnostics from every stub. A well-formed
 	// Registry has zero error-severity entries.
 	Diags []*diag.Diagnostic
@@ -100,8 +106,9 @@ type Module struct {
 // re-parsing on every invocation.
 func Load() *Registry {
 	r := &Registry{
-		Modules:    map[string]*Module{},
-		Primitives: map[types.PrimitiveKind]map[string]*ast.FnDecl{},
+		Modules:       map[string]*Module{},
+		Primitives:    map[types.PrimitiveKind]map[string]*ast.FnDecl{},
+		ResultMethods: map[string]*ast.FnDecl{},
 	}
 
 	// One prelude shared across every stub's resolve pass. The prelude
@@ -142,6 +149,9 @@ func Load() *Registry {
 			r.absorbPrimitiveStub(file, p)
 			continue
 		}
+		if moduleName(p) == "result" {
+			r.absorbResultStub(file)
+		}
 		r.Modules[moduleName(p)] = &Module{
 			Name:    moduleName(p),
 			Path:    p,
@@ -178,6 +188,19 @@ func (r *Registry) absorbPrimitiveStub(file *ast.File, path string) {
 			}
 		}
 		_ = path // reserved for richer diagnostics in a later step
+	}
+}
+
+func (r *Registry) absorbResultStub(file *ast.File) {
+	for _, decl := range file.Decls {
+		enum, ok := decl.(*ast.EnumDecl)
+		if !ok || enum.Name != "Result" {
+			continue
+		}
+		for _, m := range enum.Methods {
+			r.ResultMethods[m.Name] = m
+		}
+		return
 	}
 }
 

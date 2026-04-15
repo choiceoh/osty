@@ -59,6 +59,12 @@ func runRun(args []string, cliF cliFlags) {
 	_ = fs.Parse(args)
 	runArgs := fs.Args()
 
+	runDir, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "osty run: get cwd: %v\n", err)
+		os.Exit(1)
+	}
+
 	m, root, abort := loadManifestWithDiag(".", cliF)
 	if abort {
 		os.Exit(2)
@@ -195,14 +201,19 @@ func runRun(args []string, cliF cliFlags) {
 	// onto the child process's environment.
 	goArgs := []string{"run"}
 	goArgs = append(goArgs, resolved.GoFlags()...)
-	goArgs = append(goArgs, goPath)
+	goPathArg, err := filepath.Abs(goPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "osty run: %v\n", err)
+		os.Exit(1)
+	}
+	goArgs = append(goArgs, goPathArg)
 	goArgs = append(goArgs, runArgs...)
 	cmd := exec.Command("go", goArgs...)
 	var stderr bytes.Buffer
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = io.MultiWriter(os.Stderr, &stderr)
-	cmd.Dir = outDir
+	cmd.Dir = runDir
 	cmd.Env = mergeEnv(os.Environ(), resolved.GoEnv())
 	if err := cmd.Run(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
@@ -210,8 +221,8 @@ func runRun(args []string, cliF cliFlags) {
 				Tool:      "osty run",
 				Action:    "go run",
 				Args:      cmd.Args,
-				WorkDir:   outDir,
-				Generated: []string{goPath},
+				WorkDir:   runDir,
+				Generated: []string{goPathArg},
 				Source:    entryAbs,
 				Stderr:    stderr.String(),
 				Err:       err,

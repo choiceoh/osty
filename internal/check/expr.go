@@ -1352,6 +1352,9 @@ func (c *checker) builtinNamedMethod(n *types.Named, name string) *methodDesc {
 		if len(n.Args) != 2 {
 			return nil
 		}
+		if md := c.resultMethodFromStdlib(n, name); md != nil {
+			return md
+		}
 		return resultMethod(n, name)
 	case "Chan", "Channel":
 		// §8.5: channel methods recognized by the checker. The gen
@@ -1418,29 +1421,15 @@ func resultMethod(n *types.Named, name string) *methodDesc {
 	case "err":
 		return simpleMethod(name, nil, &types.Optional{Inner: e})
 	case "map":
-		uSym := &resolve.Symbol{Name: "U", Kind: resolve.SymGeneric}
-		u := &types.TypeVar{Sym: uSym}
+		u := resultMethodTypeVar("U")
 		fn := &types.FnType{Params: []types.Type{t}, Return: u}
-		return &methodDesc{
-			Name: name,
-			Fn: &types.FnType{
-				Params: []types.Type{fn},
-				Return: &types.Named{Sym: n.Sym, Args: []types.Type{u, e}},
-			},
-			Generics: []*types.TypeVar{u},
-		}
+		return genericMethod(name, []types.Type{fn},
+			&types.Named{Sym: n.Sym, Args: []types.Type{u, e}}, u)
 	case "mapErr":
-		fSym := &resolve.Symbol{Name: "F", Kind: resolve.SymGeneric}
-		f := &types.TypeVar{Sym: fSym}
+		f := resultMethodTypeVar("F")
 		fn := &types.FnType{Params: []types.Type{e}, Return: f}
-		return &methodDesc{
-			Name: name,
-			Fn: &types.FnType{
-				Params: []types.Type{fn},
-				Return: &types.Named{Sym: n.Sym, Args: []types.Type{t, f}},
-			},
-			Generics: []*types.TypeVar{f},
-		}
+		return genericMethod(name, []types.Type{fn},
+			&types.Named{Sym: n.Sym, Args: []types.Type{t, f}}, f)
 	case "toString":
 		return simpleMethod(name, nil, types.String)
 	}
@@ -1455,6 +1444,16 @@ func simpleMethod(name string, params []types.Type, ret types.Type) *methodDesc 
 		Name: name,
 		Fn:   &types.FnType{Params: params, Return: ret},
 	}
+}
+
+func genericMethod(name string, params []types.Type, ret types.Type, generics ...*types.TypeVar) *methodDesc {
+	md := simpleMethod(name, params, ret)
+	md.Generics = generics
+	return md
+}
+
+func resultMethodTypeVar(name string) *types.TypeVar {
+	return &types.TypeVar{Sym: &resolve.Symbol{Name: name, Kind: resolve.SymGeneric}}
 }
 
 // tryBuiltinCall handles prelude-defined callables like `println`,

@@ -2,20 +2,14 @@
 //
 // The Tier 1 surface is intentionally narrow: read the whole file,
 // write the whole file, check existence, remove. Streaming I/O, file
-// handles, and directory iteration live in higher-tier modules.
+// handles, and directory iteration live in higher-tier modules. The
+// runtime implementation is provided by the generator's std.fs bridge.
+// `readToString` returns Err when the file bytes are not valid UTF-8.
 
-pub fn readToString(path: String) -> Result<String, Error> {
-    Ok("")
-}
+pub fn readToString(path: String) -> Result<String, Error>
 
-pub fn writeString(path: String, contents: String) -> Result<(), Error> {
-    Ok(())
-}
+pub fn writeString(path: String, contents: String) -> Result<(), Error>
 
-pub fn exists(path: String) -> Bool {
-    false
-}
+pub fn exists(path: String) -> Bool
 
-pub fn remove(path: String) -> Result<(), Error> {
-    Ok(())
-}
+pub fn remove(path: String) -> Result<(), Error>

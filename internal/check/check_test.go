@@ -966,7 +966,7 @@ func runCheckWithStdlib(t *testing.T, src string) []*diag.Diagnostic {
 	reg := loadRegistry()
 	file, parseDiags := parser.ParseDiagnostics([]byte(src))
 	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), reg)
-	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives})
+	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives, ResultMethods: reg.ResultMethods})
 	all := append(append([]*diag.Diagnostic{}, parseDiags...), res.Diags...)
 	all = append(all, chk.Diags...)
 	var errs []*diag.Diagnostic
@@ -1110,6 +1110,85 @@ fn test(r: Result<Int, String>) -> Bool {
 }
 `
 	assertOK(t, runCheck(t, src))
+}
+
+func TestCheck_ResultCombinatorsPreservePreciseTypes(t *testing.T) {
+	src := `
+fn parse() -> Result<Int, String> { Ok(1) }
+
+fn test() {
+    let mapped: Result<String, String> = parse().map(|n| "value={n}")
+    let mappedErr: Result<Int, Int> = parse().mapErr(|e| e.len())
+    let okValue: Int? = parse().ok()
+    let errValue: String? = parse().err()
+}
+`
+	assertOK(t, runCheck(t, src))
+}
+
+func TestCheck_ResultMapRejectsWrongReturnType(t *testing.T) {
+	src := `
+fn parse() -> Result<Int, String> { Ok(1) }
+
+fn test() {
+    let mapped: Result<Int, String> = parse().map(|n| "value={n}")
+}
+`
+	assertCodes(t, runCheck(t, src), diag.CodeTypeMismatch)
+}
+
+func TestCheck_ResultMethodsCanComeFromStdlibSource(t *testing.T) {
+	method := resultMethodForTest(t, "map", `pub enum Result<T, E> {
+    Ok(T),
+    Err(E),
+
+    pub fn map(self) -> Bool { true }
+}
+`)
+	src := `
+fn parse() -> Result<Int, String> { Ok(1) }
+
+fn test() {
+    let b: Bool = parse().map()
+}
+`
+	file, parseDiags := parser.ParseDiagnostics([]byte(src))
+	res := resolve.File(file, resolve.NewPrelude())
+	chk := check.File(file, res, check.Opts{ResultMethods: map[string]*ast.FnDecl{"map": method}})
+	all := append(append([]*diag.Diagnostic{}, parseDiags...), res.Diags...)
+	all = append(all, chk.Diags...)
+	assertOK(t, onlyErrors(all))
+}
+
+func resultMethodForTest(t *testing.T, name, src string) *ast.FnDecl {
+	t.Helper()
+	file, diags := parser.ParseDiagnostics([]byte(src))
+	if errs := onlyErrors(diags); len(errs) > 0 {
+		t.Fatalf("parse result stub: %v", errs[0])
+	}
+	for _, d := range file.Decls {
+		enum, ok := d.(*ast.EnumDecl)
+		if !ok || enum.Name != "Result" {
+			continue
+		}
+		for _, m := range enum.Methods {
+			if m.Name == name {
+				return m
+			}
+		}
+	}
+	t.Fatalf("result method %q not found", name)
+	return nil
+}
+
+func onlyErrors(diags []*diag.Diagnostic) []*diag.Diagnostic {
+	errs := make([]*diag.Diagnostic, 0, len(diags))
+	for _, d := range diags {
+		if d.Severity == diag.Error {
+			errs = append(errs, d)
+		}
+	}
+	return errs
 }
 
 // loadRegistry loads the stdlib registry once per test run. Isolated

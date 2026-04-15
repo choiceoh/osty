@@ -229,7 +229,8 @@ func RunWithConfig(src []byte, stream io.Writer, cfg Config) Result {
 
 	// --- check ---
 	t0 = time.Now()
-	checkOpts := check.Opts{Primitives: stdlib.LoadCached().Primitives}
+	reg := stdlib.LoadCached()
+	checkOpts := check.Opts{Primitives: reg.Primitives, ResultMethods: reg.ResultMethods}
 	if cfg.PerDecl {
 		checkOpts.OnDecl = func(d ast.Decl, phase string, dur time.Duration) {
 			r.PerDecl = append(r.PerDecl, DeclTiming{
@@ -389,7 +390,8 @@ func RunPackage(dir string, stream io.Writer, cfg Config) (Result, error) {
 
 	// --- check (whole-package) ---
 	t0 = time.Now()
-	checkOpts := check.Opts{Primitives: stdlib.LoadCached().Primitives}
+	reg := stdlib.LoadCached()
+	checkOpts := check.Opts{Primitives: reg.Primitives, ResultMethods: reg.ResultMethods}
 	if cfg.PerDecl {
 		checkOpts.OnDecl = func(d ast.Decl, phase string, dur time.Duration) {
 			r.PerDecl = append(r.PerDecl, DeclTiming{
@@ -612,7 +614,8 @@ func RunWorkspace(dir string, stream io.Writer, cfg Config) (Result, error) {
 
 	// --- check (cross-package) ---
 	t0 = time.Now()
-	checkOpts := check.Opts{Primitives: stdlib.LoadCached().Primitives}
+	reg := stdlib.LoadCached()
+	checkOpts := check.Opts{Primitives: reg.Primitives, ResultMethods: reg.ResultMethods}
 	if cfg.PerDecl {
 		checkOpts.OnDecl = func(d ast.Decl, phase string, dur time.Duration) {
 			r.PerDecl = append(r.PerDecl, DeclTiming{

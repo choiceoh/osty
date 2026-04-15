@@ -102,6 +102,81 @@ fn main() {
 	}
 }
 
+func TestResultIntrinsicMethodsRuntime(t *testing.T) {
+	src := `fn main() {
+    let ok: Result<Int, String> = Ok(5)
+    println(ok.isOk())
+    println(ok.isErr())
+    println(ok.unwrap())
+    println(ok.unwrapOr(9))
+    println(ok.toString())
+    let nested: Result<Result<Int, String>, String> = Ok(ok)
+    println(nested.toString())
+    println("{nested}")
+    match ok.ok() {
+        Some(n) -> println("ok value: {n}"),
+        None -> println("missing"),
+    }
+
+    let err: Result<Int, String> = Err("bad")
+    println(err.isOk())
+    println(err.isErr())
+    println(err.unwrapOr(9))
+    println(err.unwrapErr())
+    println(err.toString())
+    match err.err() {
+        Some(e) -> println("err value: {e}"),
+        None -> println("missing"),
+    }
+}
+`
+	goSrc, err := transpile(t, src)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := runGo(t, goSrc)
+	want := "true\nfalse\n5\n5\nOk(5)\nOk(Ok(5))\nOk(Ok(5))\nok value: 5\nfalse\ntrue\n9\nbad\nErr(bad)\nerr value: bad\n"
+	if out != want {
+		t.Errorf("got %q, want %q\n--- src ---\n%s", out, want, goSrc)
+	}
+}
+
+func TestResultMapAndMapErr(t *testing.T) {
+	src := `fn parse(s: String) -> Result<Int, Int> {
+    if s == "ok" { Ok(2) } else { Err(40) }
+}
+
+fn main() {
+    let mapped: Result<String, Int> = parse("ok").map(|n| "v={n}")
+    match mapped {
+        Ok(s) -> println("mapped {s}"),
+        Err(e) -> println("err {e}"),
+    }
+
+    let stillErr: Result<String, Int> = parse("bad").map(|n| "v={n}")
+    match stillErr {
+        Ok(s) -> println("mapped {s}"),
+        Err(e) -> println("still err {e}"),
+    }
+
+    let errMapped: Result<Int, String> = parse("bad").mapErr(|e| "e={e}")
+    match errMapped {
+        Ok(n) -> println("ok {n}"),
+        Err(e) -> println("mapped err {e}"),
+    }
+}
+`
+	goSrc, err := transpile(t, src)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := runGo(t, goSrc)
+	want := "mapped v=2\nstill err 40\nmapped err e=40\n"
+	if out != want {
+		t.Errorf("got %q, want %q\n--- src ---\n%s", out, want, goSrc)
+	}
+}
+
 // TestResultChainedQuestion — two `?` lifts in a row, both in a
 // Result-returning function.
 func TestResultChainedQuestion(t *testing.T) {
