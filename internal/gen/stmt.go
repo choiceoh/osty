@@ -165,6 +165,15 @@ func (g *gen) emitLetStmt(l *ast.LetStmt) {
 		g.body.writef("var %s any\n", safe)
 		return
 	}
+	// `let _ = expr`: Go forbids `_ :=`, so emit plain blank-ident
+	// assignment. Keeps side effects of the RHS while explicitly
+	// discarding the value.
+	if safe == "_" {
+		g.body.write("_ = ")
+		g.emitExpr(l.Value)
+		g.body.nl()
+		return
+	}
 	g.body.writef("%s := ", safe)
 	g.emitExpr(l.Value)
 	g.body.nl()
