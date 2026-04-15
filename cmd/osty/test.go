@@ -65,10 +65,12 @@ import (
 func runTest(args []string, flags cliFlags) {
 	fs := flag.NewFlagSet("test", flag.ExitOnError)
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: osty test [--offline] [PATH|FILTER...]")
+		fmt.Fprintln(os.Stderr, "usage: osty test [--offline | --locked | --frozen] [PATH|FILTER...]")
 	}
-	var offline bool
+	var offline, locked, frozen bool
 	fs.BoolVar(&offline, "offline", false, "do not fetch dependencies; fail if caches are missing")
+	fs.BoolVar(&locked, "locked", false, "fail if osty.lock would change")
+	fs.BoolVar(&frozen, "frozen", false, "imply --locked --offline; require an existing osty.lock")
 	var pf profileFlags
 	pf.register(fs)
 	_ = fs.Parse(args)
@@ -113,7 +115,9 @@ func runTest(args []string, flags cliFlags) {
 	// Vendor deps when a manifest exists and declares any. No-op
 	// otherwise — the resolver still works without [dependencies].
 	if man != nil {
-		if err := resolveAndVendor(man, root, offline); err != nil {
+		if _, _, err := resolveAndVendorEnvOpts(man, root, resolveOpts{
+			Offline: offline, Locked: locked, Frozen: frozen,
+		}); err != nil {
 			fmt.Fprintf(os.Stderr, "osty test: %v\n", err)
 			os.Exit(2)
 		}

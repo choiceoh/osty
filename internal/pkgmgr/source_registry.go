@@ -58,6 +58,11 @@ func (s *registrySource) Fetch(ctx context.Context, env *Env) (*FetchedPackage, 
 			s.name, s.versionReq, err)
 	}
 	client := registry.NewClient(regURL)
+	// Attach a per-registry index cache rooted under the user cache
+	// dir. Conditional GETs (If-None-Match) keep repeated resolves
+	// fast and let an offline machine fall back to the last known
+	// view of the registry.
+	client.Cache = registry.NewDirIndexCache(filepath.Join(env.CacheDir, "registry-index", sanitizeURL(regURL)))
 	versions, err := client.Versions(ctx, s.packageName)
 	if err != nil {
 		return nil, fmt.Errorf("registry dependency %s: %w", s.name, err)

@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 
 	"github.com/osty/osty/internal/lockfile"
-	"github.com/osty/osty/internal/manifest"
 	"github.com/osty/osty/internal/pkgmgr"
 )
 
@@ -38,7 +37,6 @@ func runUpdate(args []string, cliF cliFlags) {
 	if abort {
 		os.Exit(2)
 	}
-	_ = filepath.Join(root, manifest.ManifestFile) // reserved for future selective-rewrite support
 	env, err := pkgmgr.DefaultEnv(root)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty update: %v\n", err)
@@ -49,12 +47,43 @@ func runUpdate(args []string, cliF cliFlags) {
 		env.Registries[r.Name] = r.URL
 	}
 
-	// Selective update: we implement it by discarding just the
-	// targeted entries from the lockfile before resolving. The
-	// resolver will then pick fresh versions for those names while
-	// honoring existing pins for the rest.
+	// Capture the pre-update versions so we can render a meaningful
+	// diff at the end. A missing lockfile (first-time resolve) gives
+	// us an empty map, in which case the diff degenerates to the
+	// usual "Updated N" listing.
+	prev := map[string]string{}
+	if existing, _ := lockfile.Read(root); existing != nil {
+		for _, p := range existing.Packages {
+			prev[p.Name] = p.Version
+		}
+	}
+
+	// Selective update: discard just the targeted entries from the
+	// lockfile before resolving. The resolver then picks fresh
+	// versions for those names while honoring existing pins for the
+	// rest (see pkgmgr.applyLockPin).
 	targets := fs.Args()
 	if len(targets) > 0 {
+		// Validate that every targeted name actually appears as a
+		// top-level dependency in the manifest. Otherwise the user
+		// gets a silent no-op when they typo a name.
+		known := map[string]bool{}
+		for _, d := range m.Dependencies {
+			known[d.Name] = true
+		}
+		for _, d := range m.DevDependencies {
+			known[d.Name] = true
+		}
+		var unknown []string
+		for _, t := range targets {
+			if !known[t] {
+				unknown = append(unknown, t)
+			}
+		}
+		if len(unknown) > 0 {
+			fmt.Fprintf(os.Stderr, "osty update: no such dependency in osty.toml: %v\n", unknown)
+			os.Exit(2)
+		}
 		if err := dropLockEntries(root, targets); err != nil {
 			fmt.Fprintf(os.Stderr, "osty update: %v\n", err)
 			os.Exit(1)
@@ -79,13 +108,29 @@ func runUpdate(args []string, cliF cliFlags) {
 		fmt.Fprintf(os.Stderr, "osty update: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Updated %d dependencies\n", len(graph.Nodes))
+	// Diff render. For each resolved package: → marks an upgrade,
+	// + marks a freshly-added entry, blank prefix means no change.
+	changed := 0
+	fmt.Printf("Resolved %d dependencies\n", len(graph.Nodes))
 	for _, name := range graph.Order {
 		n := graph.Nodes[name]
 		if n == nil || n.Fetched == nil {
 			continue
 		}
-		fmt.Printf("  %s %s\n", name, n.Fetched.Version)
+		old, hadPrev := prev[name]
+		switch {
+		case !hadPrev:
+			fmt.Printf("  + %s %s\n", name, n.Fetched.Version)
+			changed++
+		case old != n.Fetched.Version:
+			fmt.Printf("  → %s %s -> %s\n", name, old, n.Fetched.Version)
+			changed++
+		default:
+			fmt.Printf("    %s %s\n", name, n.Fetched.Version)
+		}
+	}
+	if changed == 0 {
+		fmt.Println("Lockfile already up-to-date")
 	}
 	_ = cliF
 }

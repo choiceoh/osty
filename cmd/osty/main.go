@@ -211,6 +211,14 @@ func main() {
 		runRemove(args[1:], flags)
 		return
 	}
+	if cmd == "fetch" {
+		runFetch(args[1:], flags)
+		return
+	}
+	if cmd == "info" {
+		runInfo(args[1:], flags)
+		return
+	}
 	// doc parses a file or directory and emits markdown/HTML API docs.
 	// It has its own flag parser for --out / --title / --format /
 	// --check / --verify-examples.
@@ -1078,6 +1086,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "       osty login [--registry N] (store an API token for publish/yank)")
 	fmt.Fprintln(os.Stderr, "       osty logout [--registry N|--all] (forget a stored token)")
 	fmt.Fprintln(os.Stderr, "       osty remove NAME [NAME...] (drop a dep from osty.toml; alias rm)")
+	fmt.Fprintln(os.Stderr, "       osty fetch [--locked|--frozen] (resolve+vendor without building)")
+	fmt.Fprintln(os.Stderr, "       osty info NAME [--all-versions] (show registry metadata for a package)")
 	fmt.Fprintln(os.Stderr, "       osty doc [--format FMT] [--out PATH] PATH (generate API docs; markdown or html)")
 	fmt.Fprintln(os.Stderr, "       osty ci [flags] [PATH]    (run the CI check bundle: fmt+lint+policy+lockfile)")
 	fmt.Fprintln(os.Stderr, "       osty ci snapshot [-o OUT] (capture the exported API for future semver diffing)")

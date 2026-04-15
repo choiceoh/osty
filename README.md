@@ -37,7 +37,7 @@ registry (`osty add` / `osty update`), and a test runner
 | Build orchestrator (`osty build`) | wired — drives manifest → front-end → gen Phase 1 |
 | Test runner harness (`internal/testgen`) | wired — merges per-file gen output, injects a real std.testing runtime + main(), runs via `go run` |
 | `osty test` (discovery + front-end + execution) | wired — validates and **runs** discovered `test*` / `bench*` fns; failures and pass/fail totals report inline |
-| Package registry / `osty add` / `osty update` / `osty run` | done (resolve + vendor + lockfile-honoring re-resolves; CLI: `add`, `remove`/`rm`, `update`, `run`, `publish`, `search`, `yank`/`unyank`, `login`/`logout`) |
+| Package registry / `osty add` / `osty update` / `osty run` | done (resolve + vendor + lockfile-honoring re-resolves, ETag-cached registry index, copy fallback for symlink-less filesystems; CLI: `add`, `remove`/`rm`, `update`, `run`, `fetch`, `publish`, `search`, `info`, `yank`/`unyank`, `login`/`logout`; `--locked` / `--frozen` CI guards) |
 
 The front-end (lex → parse → resolve) is **spec-complete for v0.3**:
 every syntactic construct in `LANG_SPEC_v0.3/` has a positive-corpus
@@ -134,6 +134,8 @@ osty run [-- ARGS...]  # build and exec the binary (gen Phase 1)
 osty test [PATH|FILTERS...] # discover & validate *_test.osty; list test + bench fns
 osty publish           # pack the project and upload to a registry
 osty search QUERY      # full-text search the registry (--registry, --limit)
+osty info PKG          # show registry metadata for a package (--all-versions)
+osty fetch             # resolve + vendor without building (--locked, --frozen)
 osty yank --version V [PKG]   # mark a published version as yanked
 osty unyank --version V [PKG] # un-yank a previously yanked version
 osty login [--registry N]     # store an API token in ~/.osty/credentials.toml
@@ -192,10 +194,16 @@ the current spec edition; `osty new` never overwrites an existing
 directory. `osty init` writes into the current directory instead of
 creating a new one.
 
-`build` / `run` / `test` / `add` / `update`-specific flags (after the
-subcommand):
+`build` / `run` / `test` / `add` / `update` / `fetch`-specific flags
+(after the subcommand):
 
-- `--offline` — do not fetch dependencies; fail if caches are missing
+- `--offline` — do not fetch dependencies; fail if caches are missing.
+- `--locked` — refuse to overwrite `osty.lock`; the resolve must match
+  the existing pins exactly. Intended for CI ("did the contributor
+  forget to commit the lockfile?").
+- `--frozen` — implies `--locked` and `--offline`, and additionally
+  requires `osty.lock` to already exist. Catches "fresh checkout, no
+  lockfile" mistakes before any download starts.
 
 `osty build` loads `osty.toml` starting at the given path (or the cwd),
 resolves dependencies against `osty.lock` (regenerated if stale),

@@ -230,6 +230,76 @@ func TestYankRequiresToken(t *testing.T) {
 	}
 }
 
+// TestVersionsServesFromCacheOn304 confirms the conditional GET
+// path: when the server returns 304, the client must replay the
+// cached entry instead of re-decoding an empty body.
+func TestVersionsServesFromCacheOn304(t *testing.T) {
+	const etag = `W/"abc123"`
+	requestCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		if r.Header.Get("If-None-Match") == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", etag)
+		_ = json.NewEncoder(w).Encode(IndexEntry{
+			Name: "foo",
+			Versions: []Version{
+				{Version: "1.0.0", Checksum: "sha256:aaa"},
+			},
+		})
+	}))
+	defer srv.Close()
+	c := NewClient(srv.URL)
+	c.Cache = NewDirIndexCache(t.TempDir())
+	// First call populates the cache.
+	got1, err := c.Versions(context.Background(), "foo")
+	if err != nil || len(got1) != 1 {
+		t.Fatalf("first call: %v / %+v", err, got1)
+	}
+	// Second call should send If-None-Match and replay the cached
+	// body when the server answers 304.
+	got2, err := c.Versions(context.Background(), "foo")
+	if err != nil || len(got2) != 1 || got2[0].Version != "1.0.0" {
+		t.Fatalf("second call: %v / %+v", err, got2)
+	}
+	if requestCount != 2 {
+		t.Errorf("expected 2 server hits (initial + conditional), got %d", requestCount)
+	}
+}
+
+// TestVersionsCacheFallbackOnNetworkFail simulates a registry going
+// dark after the first fetch — the client should still return the
+// last known set rather than failing the resolve.
+func TestVersionsCacheFallbackOnNetworkFail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", `"v1"`)
+		_ = json.NewEncoder(w).Encode(IndexEntry{
+			Name: "bar",
+			Versions: []Version{
+				{Version: "0.5.0", Checksum: "sha256:bbb"},
+			},
+		})
+	}))
+	c := NewClient(srv.URL)
+	c.Cache = NewDirIndexCache(t.TempDir())
+	if _, err := c.Versions(context.Background(), "bar"); err != nil {
+		t.Fatalf("warm-up: %v", err)
+	}
+	// Now point the client at a dead URL and confirm the cached
+	// entry rescues us.
+	srv.Close()
+	c.BaseURL = "http://127.0.0.1:1" // closed port; instant ECONNREFUSED
+	got, err := c.Versions(context.Background(), "bar")
+	if err != nil {
+		t.Fatalf("expected cache fallback, got error: %v", err)
+	}
+	if len(got) != 1 || got[0].Version != "0.5.0" {
+		t.Errorf("cache fallback returned %+v", got)
+	}
+}
+
 // TestErrorBodyPropagated: when the registry returns an error, the
 // server's body should appear in the returned error so users see
 // the reason.
