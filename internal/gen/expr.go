@@ -1661,6 +1661,7 @@ func (g *gen) emitClosure(c *ast.ClosureExpr) {
 	type paramPlan struct {
 		outerName string
 		pattern   ast.Pattern
+		typ       types.Type
 	}
 	plans := make([]paramPlan, len(c.Params))
 
@@ -1684,6 +1685,7 @@ func (g *gen) emitClosure(c *ast.ClosureExpr) {
 		case p.Type != nil:
 			g.body.write(g.goTypeExpr(p.Type))
 		case inferred != nil && i < len(inferred.Params) && !types.IsError(inferred.Params[i]):
+			plans[i].typ = inferred.Params[i]
 			g.body.write(g.goType(inferred.Params[i]))
 		case plans[i].pattern != nil:
 			// Pattern-without-annotation: synthesise a shape from the
@@ -1782,19 +1784,7 @@ func (g *gen) emitClosure(c *ast.ClosureExpr) {
 		if pl.pattern == nil {
 			continue
 		}
-		// Only simple tuple patterns supported here; nested ones fall
-		// through to TODO in emitPatternBindings (unused for the spec).
-		if tp, ok := pl.pattern.(*ast.TuplePat); ok {
-			for i, elem := range tp.Elems {
-				switch e := elem.(type) {
-				case *ast.WildcardPat:
-					// skip
-				case *ast.IdentPat:
-					g.body.writef("%s := %s.F%d; _ = %s\n",
-						mangleIdent(e.Name), pl.outerName, i, mangleIdent(e.Name))
-				}
-			}
-		}
+		g.emitPatternBindings(mangleIdent(pl.outerName), pl.typ, pl.pattern)
 	}
 	if blk, ok := c.Body.(*ast.Block); ok {
 		// Inline the block stmts then return final expr (unless the
