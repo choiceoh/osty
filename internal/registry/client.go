@@ -77,10 +77,10 @@ type IndexEntry struct {
 // fields here are enough for semver resolution, checksum verification,
 // and dependency graph construction.
 type Version struct {
-	Version      string             `json:"version"`
-	Checksum     string             `json:"checksum"`
-	PublishedAt  time.Time          `json:"published_at"`
-	Yanked       bool               `json:"yanked"`
+	Version      string              `json:"version"`
+	Checksum     string              `json:"checksum"`
+	PublishedAt  time.Time           `json:"published_at"`
+	Yanked       bool                `json:"yanked"`
 	Dependencies []VersionDependency `json:"dependencies"`
 	Features     map[string][]string `json:"features,omitempty"`
 }
@@ -167,6 +167,22 @@ func (c *Client) Versions(ctx context.Context, name string) ([]Version, error) {
 		_ = c.Cache.Store(name, &out, resp.Header.Get("ETag"))
 	}
 	return filterYanked(out.Versions), nil
+}
+
+// CachedVersions returns every non-yanked version of `name` from the
+// configured index cache without contacting the registry.
+func (c *Client) CachedVersions(name string) ([]Version, error) {
+	if c.Cache == nil {
+		return nil, fmt.Errorf("registry index cache is not configured")
+	}
+	entry, _, err := c.Cache.Load(name)
+	if err != nil {
+		return nil, err
+	}
+	if entry == nil {
+		return nil, fmt.Errorf("registry index cache missing entry for %s", name)
+	}
+	return filterYanked(entry.Versions), nil
 }
 
 // filterYanked drops yanked entries from a version list. Centralized
