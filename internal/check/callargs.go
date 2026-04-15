@@ -24,10 +24,17 @@ func (c *checker) applyDeclaredCall(
 	e *ast.CallExpr, fn *types.FnType, generics []*types.TypeVar,
 	params []*ast.Param, hint types.Type, env *env,
 ) types.Type {
+	return c.applyDeclaredCallWithExplicit(e, fn, generics, params, nil, hint, env)
+}
+
+func (c *checker) applyDeclaredCallWithExplicit(
+	e *ast.CallExpr, fn *types.FnType, generics []*types.TypeVar,
+	params []*ast.Param, explicit []types.Type, hint types.Type, env *env,
+) types.Type {
 	// Fast path: no param metadata → fall back to the positional-only
 	// generic-aware path.
 	if len(params) == 0 {
-		return c.applyGenericCall(e, fn, generics, hint, env)
+		return c.applyGenericCallWithArgs(e, fn, generics, explicit, hint, env)
 	}
 
 	// Walk the surface-call arguments once to classify positional vs
@@ -82,7 +89,7 @@ func (c *checker) applyDeclaredCall(
 	// Now drive the generic-aware positional check using `resolved` as
 	// the effective argument list. Missing slots (defaults) are filled
 	// with nil and skipped.
-	return c.applyGenericCallResolved(e, fn, generics, params, resolved, hint, env)
+	return c.applyGenericCallResolved(e, fn, generics, params, resolved, explicit, hint, env)
 }
 
 // applyGenericCallResolved mirrors applyGenericCallWithArgs but pulls
@@ -92,8 +99,9 @@ func (c *checker) applyDeclaredCall(
 // type still participates in return-type inference.
 func (c *checker) applyGenericCallResolved(
 	e *ast.CallExpr, fn *types.FnType, generics []*types.TypeVar,
-	params []*ast.Param, resolved []*ast.Arg, hint types.Type, env *env,
+	params []*ast.Param, resolved []*ast.Arg, explicit []types.Type, hint types.Type, env *env,
 ) types.Type {
+	c.checkExplicitGenericArity(e, len(generics), len(explicit))
 	if len(generics) == 0 {
 		// Simple type-check loop without substitution work.
 		for i, a := range resolved {
@@ -102,7 +110,7 @@ func (c *checker) applyGenericCallResolved(
 			}
 			pt := fn.Params[i]
 			at := c.checkExpr(a.Value, pt, env)
-			if pt != nil && !types.IsError(pt) && !types.Assignable(pt, at) {
+			if pt != nil && !types.IsError(pt) && !c.accepts(pt, at, a.Value) {
 				c.errMismatch(a.Value, pt, at)
 			}
 		}
@@ -110,6 +118,11 @@ func (c *checker) applyGenericCallResolved(
 	}
 
 	sub := make(map[*resolve.Symbol]types.Type, len(generics))
+	for i, g := range generics {
+		if i < len(explicit) {
+			sub[g.Sym] = explicit[i]
+		}
+	}
 	if hint != nil && !types.IsError(hint) {
 		inferFromArg(fn.Return, hint, sub)
 	}
@@ -140,7 +153,7 @@ func (c *checker) applyGenericCallResolved(
 		}
 		pt := types.Substitute(fn.Params[i], sub)
 		at := c.result.Types[a.Value]
-		if pt != nil && !types.IsError(pt) && at != nil && !types.Assignable(pt, at) {
+		if pt != nil && !types.IsError(pt) && at != nil && !c.accepts(pt, at, a.Value) {
 			c.errMismatch(a.Value, pt, at)
 		}
 	}

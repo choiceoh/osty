@@ -184,16 +184,26 @@ func (c *checker) builderSet(b *types.Builder, fx *ast.FieldExpr, e *ast.CallExp
 			fx.Name, len(e.Args))
 		return b
 	}
-	// Apply any receiver-side generic substitution.
-	ft := target.Type
-	if sub := types.BindArgs(desc.Generics, b.Struct.Args); len(sub) > 0 {
-		ft = types.Substitute(ft, sub)
-	}
+	// Apply receiver-side generic substitution, but leave still-symbolic
+	// builder args open so this setter can infer them:
+	// `Box.builder().value(1).build()` narrows Builder<Box<T>> to
+	// Builder<Box<Int>> at the setter call.
+	sub := openBuilderSub(desc.Generics, b.Struct.Args)
+	ft := types.Substitute(target.Type, sub)
 	at := c.checkExpr(e.Args[0].Value, ft, env)
-	if !types.Assignable(ft, at) {
+	inferFromArg(target.Type, at, sub)
+	nextArgs := materializeBuilderArgs(desc.Generics, b.Struct.Args, sub)
+	if len(nextArgs) > 0 {
+		ft = types.Substitute(target.Type, types.BindArgs(desc.Generics, nextArgs))
+	}
+	if !c.accepts(ft, at, e.Args[0].Value) {
 		c.errMismatch(e.Args[0].Value, ft, at)
 	}
-	return b.WithField(fx.Name)
+	next := b.WithField(fx.Name)
+	if len(nextArgs) > 0 {
+		next.Struct = &types.Named{Sym: b.Struct.Sym, Args: nextArgs}
+	}
+	return next
 }
 
 // builderBuild validates a `.build()` terminal call: every required
@@ -254,4 +264,53 @@ func hasZeroValue(t types.Type) bool {
 		}
 	}
 	return false
+}
+
+func openBuilderSub(generics []*types.TypeVar, args []types.Type) map[*resolve.Symbol]types.Type {
+	if len(generics) == 0 || len(args) == 0 {
+		return map[*resolve.Symbol]types.Type{}
+	}
+	sub := make(map[*resolve.Symbol]types.Type, len(generics))
+	for i, g := range generics {
+		if i >= len(args) || g == nil || g.Sym == nil {
+			break
+		}
+		if tv, ok := args[i].(*types.TypeVar); ok && tv.Sym == g.Sym {
+			continue
+		}
+		sub[g.Sym] = args[i]
+	}
+	return sub
+}
+
+func materializeBuilderArgs(
+	generics []*types.TypeVar,
+	current []types.Type,
+	sub map[*resolve.Symbol]types.Type,
+) []types.Type {
+	if len(generics) == 0 {
+		return nil
+	}
+	out := make([]types.Type, len(generics))
+	for i, g := range generics {
+		if g != nil && g.Sym != nil {
+			if t, ok := sub[g.Sym]; ok && t != nil {
+				out[i] = defaultUntyped(t)
+				continue
+			}
+		}
+		if i < len(current) && current[i] != nil {
+			out[i] = defaultUntyped(current[i])
+			continue
+		}
+		out[i] = g
+	}
+	return out
+}
+
+func defaultUntyped(t types.Type) types.Type {
+	if u, ok := t.(*types.Untyped); ok {
+		return u.Default()
+	}
+	return t
 }

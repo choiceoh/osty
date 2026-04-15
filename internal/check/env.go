@@ -4,9 +4,9 @@
 // *Result (per-expression types + per-symbol types + collected struct /
 // enum / interface / alias shapes) plus diagnostics.
 //
-// Known gaps (each has a hook where the real implementation will land):
-// full generic monomorphization, interface-satisfaction validation,
-// match-exhaustiveness (E0731), and builder auto-derivation (§3.4).
+// The checker also records the static evidence downstream phases need
+// for monomorphized generic calls, interface satisfaction, match
+// exhaustiveness, and auto-derived builder/default members.
 package check
 
 import (
@@ -36,12 +36,13 @@ type typeDesc struct {
 	Sym              *resolve.Symbol
 	Kind             resolve.SymbolKind
 	Generics         []*types.TypeVar
-	Fields           []*fieldDesc                 // struct only
+	Fields           []*fieldDesc // struct only
 	Methods          map[string]*methodDesc
-	Variants         map[string]*variantDesc      // enum only
-	VariantOrder     []string                     // enum variant source order
-	InterfaceMethods map[string]*methodDesc       // interface signatures
-	Alias            types.Type                   // type alias target
+	Variants         map[string]*variantDesc // enum only
+	VariantOrder     []string                // enum variant source order
+	InterfaceMethods map[string]*methodDesc  // interface signatures
+	InterfaceExtends []types.Type            // interface composition clauses
+	Alias            types.Type              // type alias target
 }
 
 type fieldDesc struct {
@@ -60,6 +61,7 @@ type methodDesc struct {
 	HasBody       bool
 	Params        []*ast.Param
 	Decl          *ast.FnDecl
+	Owner         *typeDesc        // enclosing type/interface, if any
 	Generics      []*types.TypeVar // method's own type parameters (e.g. <U>)
 	OwnerGenerics []*types.TypeVar // enclosing type's generics
 }

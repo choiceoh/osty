@@ -1,8 +1,69 @@
 package check
 
-import "github.com/osty/osty/internal/types"
+import (
+	"sort"
+
+	"github.com/osty/osty/internal/types"
+)
 
 // methodCandidates returns a list of nearby method names on a type,
-// used for typo suggestions in "unknown method" diagnostics. Stubbed
-// while the real type-aware analysis is being reworked.
-func (c *checker) methodCandidates(_ types.Type) []string { return nil }
+// used for typo suggestions in "unknown method" diagnostics.
+func (c *checker) methodCandidates(t types.Type) []string {
+	seen := map[string]bool{}
+	add := func(name string) {
+		if name != "" {
+			seen[name] = true
+		}
+	}
+	switch v := t.(type) {
+	case *types.Named:
+		if desc, ok := c.result.Descs[v.Sym]; ok {
+			for name := range desc.Methods {
+				add(name)
+			}
+			for name := range c.interfaceMethodSet(v) {
+				add(name)
+			}
+		}
+		if v.Sym != nil {
+			switch v.Sym.Name {
+			case "Result":
+				for _, name := range []string{"isOk", "isErr", "unwrap", "unwrapErr", "unwrapOr", "ok", "err", "map", "mapErr", "toString"} {
+					add(name)
+				}
+			case "Chan", "Channel":
+				for _, name := range []string{"recv", "send", "close"} {
+					add(name)
+				}
+			case "Handle":
+				add("join")
+			case "TaskGroup":
+				for _, name := range []string{"spawn", "cancel", "isCancelled"} {
+					add(name)
+				}
+			}
+		}
+	case *types.Primitive:
+		for name := range c.primMethods[v.Kind] {
+			add(name)
+		}
+	case *types.Optional:
+		for _, name := range []string{"isSome", "isNone", "unwrap", "unwrapOr", "orElse", "map", "toString"} {
+			add(name)
+		}
+	case *types.TypeVar:
+		for _, b := range v.Bounds {
+			if n, ok := b.(*types.Named); ok {
+				for name := range c.interfaceMethodSet(n) {
+					add(name)
+				}
+			}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for name := range seen {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}

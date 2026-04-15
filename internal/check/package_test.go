@@ -119,6 +119,34 @@ func TestPackageCrossFileEnumMatch(t *testing.T) {
 	}
 }
 
+func TestPackageCrossFileInterfaceComposition(t *testing.T) {
+	a := `pub interface Named {
+    fn name(self) -> String
+}`
+	b := `pub interface DisplayNamed {
+    Named
+}`
+	csrc := `pub struct User {
+    pub label: String,
+
+    pub fn name(self) -> String { self.label }
+}
+
+fn useIt<T: DisplayNamed>(x: T) -> String {
+    x.name()
+}
+
+fn main() {
+    useIt(User { label: "ada" })
+}`
+	r := mkPkg(t, a, b, csrc)
+	for _, d := range r.Diags {
+		if d.Severity == diag.Error {
+			t.Errorf("unexpected error: %s", d.Error())
+		}
+	}
+}
+
 // TestPackageCrossFileFieldTypeMismatch verifies the checker catches a
 // wrong-type literal in a cross-file struct constructor.
 func TestPackageCrossFileFieldTypeMismatch(t *testing.T) {

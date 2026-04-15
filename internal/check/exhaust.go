@@ -152,11 +152,11 @@ func (c *checker) checkVariantReachability(m *ast.MatchExpr, arms []armHead) {
 // match anything (wildcards or plain ident bindings), which signals
 // that the arm fully covers its variant.
 type armHead struct {
-	guarded          bool
-	variant          string   // "" when no top-level variant (tuple/struct/literal)
-	orAlts           []string // alternatives in an or-pattern
-	catchAllPayload  bool     // variant arm whose payload is all catch-all
-	pattern          ast.Pattern
+	guarded         bool
+	variant         string   // "" when no top-level variant (tuple/struct/literal)
+	orAlts          []string // alternatives in an or-pattern
+	catchAllPayload bool     // variant arm whose payload is all catch-all
+	pattern         ast.Pattern
 }
 
 func classifyArmPattern(p ast.Pattern, guarded bool) armHead {
@@ -323,12 +323,19 @@ func (c *checker) verifyOptionCoverage(m *ast.MatchExpr, scrutT, innerT types.Ty
 		if arm.Guard != nil {
 			continue
 		}
-		head := variantHeadName(arm.Pattern)
-		switch head {
-		case "Some":
+		heads, catchAll := variantHeadCoverage(arm.Pattern)
+		if catchAll {
 			someCovered = true
-		case "None":
 			noneCovered = true
+			continue
+		}
+		for _, head := range heads {
+			switch head {
+			case "Some":
+				someCovered = true
+			case "None":
+				noneCovered = true
+			}
 		}
 	}
 	var missing []string
@@ -356,11 +363,19 @@ func (c *checker) verifyResultCoverage(m *ast.MatchExpr, scrutT types.Type) {
 		if arm.Guard != nil {
 			continue
 		}
-		switch variantHeadName(arm.Pattern) {
-		case "Ok":
+		heads, catchAll := variantHeadCoverage(arm.Pattern)
+		if catchAll {
 			okCovered = true
-		case "Err":
 			errCovered = true
+			continue
+		}
+		for _, head := range heads {
+			switch head {
+			case "Ok":
+				okCovered = true
+			case "Err":
+				errCovered = true
+			}
 		}
 	}
 	var missing []string
@@ -398,3 +413,23 @@ func variantHeadName(p ast.Pattern) string {
 	return ""
 }
 
+func variantHeadCoverage(p ast.Pattern) ([]string, bool) {
+	if op, ok := p.(*ast.OrPat); ok {
+		var out []string
+		for _, alt := range op.Alts {
+			heads, catchAll := variantHeadCoverage(alt)
+			if catchAll {
+				return nil, true
+			}
+			out = append(out, heads...)
+		}
+		return out, false
+	}
+	if patternIsCatchAll(p) {
+		return nil, true
+	}
+	if h := variantHeadName(p); h != "" {
+		return []string{h}, false
+	}
+	return nil, false
+}

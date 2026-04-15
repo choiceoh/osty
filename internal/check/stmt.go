@@ -111,7 +111,7 @@ func (c *checker) checkFnDecl(n *ast.FnDecl, owner *typeDesc) {
 
 	// Body block: the final expression's value is the implicit return.
 	bodyT := c.blockAsExprType(n.Body, ret, e)
-	if !types.IsUnit(ret) && !types.IsError(ret) && !types.Assignable(ret, bodyT) {
+	if !types.IsUnit(ret) && !types.IsError(ret) && !c.accepts(ret, bodyT, n.Body) {
 		// Suppress the error when the body ends in an explicit `return`
 		// or when the whole body is `Never` (diverges).
 		if !blockEndsInReturn(n.Body) && !types.IsNever(bodyT) {
@@ -171,7 +171,7 @@ func (c *checker) checkTopLet(n *ast.LetDecl) {
 	}
 	e := &env{retType: types.Unit}
 	got := c.checkExpr(n.Value, want, e)
-	if want != nil && !types.Assignable(want, got) {
+	if want != nil && !c.accepts(want, got, n.Value) {
 		c.errMismatch(n.Value, want, got)
 	}
 	final := want
@@ -230,7 +230,7 @@ func (c *checker) checkLetStmt(n *ast.LetStmt, env *env) {
 	if n.Value != nil {
 		got = c.checkExpr(n.Value, want, env)
 	}
-	if want != nil && got != nil && !types.Assignable(want, got) {
+	if want != nil && got != nil && !c.accepts(want, got, n.Value) {
 		if n.Type != nil {
 			c.errMismatchWithSource(n.Value, n.Type, want, got,
 				"expected because of this annotation")
@@ -305,7 +305,7 @@ func (c *checker) checkAssignTarget(tgt ast.Expr, vt types.Type, env *env) {
 			return
 		}
 		want := c.symTypeOrError(sym)
-		if want != nil && !types.IsError(want) && !types.Assignable(want, vt) {
+		if want != nil && !types.IsError(want) && !c.accepts(want, vt, tgt) {
 			c.errMismatch(tgt, want, vt)
 		}
 	case *ast.FieldExpr:
@@ -313,12 +313,12 @@ func (c *checker) checkAssignTarget(tgt ast.Expr, vt types.Type, env *env) {
 		// check origin ownership precisely here, but we DO check that
 		// the field type accepts the value.
 		ft := c.checkExpr(x, nil, env)
-		if !types.Assignable(ft, vt) {
+		if !c.accepts(ft, vt, tgt) {
 			c.errMismatch(tgt, ft, vt)
 		}
 	case *ast.IndexExpr:
 		it := c.checkExpr(x, nil, env)
-		if !types.Assignable(it, vt) {
+		if !c.accepts(it, vt, tgt) {
 			c.errMismatch(tgt, it, vt)
 		}
 	default:
@@ -336,7 +336,7 @@ func (c *checker) checkReturnStmt(n *ast.ReturnStmt, env *env) {
 		return
 	}
 	got := c.checkExpr(n.Value, env.retType, env)
-	if !types.Assignable(env.retType, got) {
+	if !c.accepts(env.retType, got, n.Value) {
 		c.errMismatch(n.Value, env.retType, got)
 	}
 }
@@ -362,7 +362,7 @@ func (c *checker) checkChanSend(n *ast.ChanSendStmt, env *env) {
 		elem = named.Args[0]
 	}
 	vt := c.checkExpr(n.Value, elem, env)
-	if elem != nil && !types.IsError(elem) && !types.Assignable(elem, vt) {
+	if elem != nil && !types.IsError(elem) && !c.accepts(elem, vt, n.Value) {
 		c.errNode(n.Value, diag.CodeChannelWrongValue,
 			"cannot send `%s` on `%s`", vt, chT)
 	}
@@ -409,7 +409,7 @@ func (c *checker) bindPatternTypes(p ast.Pattern, t types.Type, env *env) {
 		// nothing to bind
 	case *ast.LiteralPat:
 		lt := c.checkExpr(x.Literal, t, env)
-		if !types.Assignable(t, lt) && !types.IsError(t) && !types.IsError(lt) {
+		if !c.accepts(t, lt, x) && !types.IsError(t) && !types.IsError(lt) {
 			c.errNode(x, diag.CodeLitPatternMismatch,
 				"literal pattern `%s` does not match scrutinee of type `%s`",
 				lt, t)

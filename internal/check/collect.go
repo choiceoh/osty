@@ -243,6 +243,11 @@ func (c *checker) collectInterface(n *ast.InterfaceDecl) {
 	selfT := &types.Named{Sym: sym, Args: argsOfGenerics(desc.Generics)}
 	c.setSymType(sym, selfT)
 
+	for _, ext := range n.Extends {
+		if t := c.typeOf(ext); t != nil {
+			desc.InterfaceExtends = append(desc.InterfaceExtends, t)
+		}
+	}
 	for _, m := range n.Methods {
 		md := c.methodDescOf(m, desc)
 		desc.InterfaceMethods[m.Name] = md
@@ -322,6 +327,7 @@ func (c *checker) methodDescOf(n *ast.FnDecl, owner *typeDesc) *methodDesc {
 		HasBody:       n.Body != nil,
 		Params:        n.Params,
 		Decl:          n,
+		Owner:         owner,
 		Generics:      ownGenerics,
 		OwnerGenerics: ownerGenerics,
 	}

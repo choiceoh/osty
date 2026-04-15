@@ -475,6 +475,182 @@ fn main() {
 	assertOK(t, runCheck(t, src))
 }
 
+func TestCheck_InterfaceValueExposesRequiredMethods(t *testing.T) {
+	src := `
+pub interface Printable {
+    fn show(self) -> String
+}
+
+fn render(p: Printable) -> String {
+    p.show()
+}
+`
+	assertOK(t, runCheck(t, src))
+}
+
+func TestCheck_InterfaceBoundExposesRequiredMethods(t *testing.T) {
+	src := `
+pub interface Printable {
+    fn show(self) -> String
+}
+
+fn render<T: Printable>(p: T) -> String {
+    p.show()
+}
+`
+	assertOK(t, runCheck(t, src))
+}
+
+func TestCheck_InterfaceReturnRequiresGenericBound(t *testing.T) {
+	src := `
+pub interface Printable {
+    fn show(self) -> String
+}
+
+fn render<T>(p: T) -> Printable {
+    p
+}
+`
+	assertCodes(t, runCheck(t, src), diag.CodeTypeMismatch)
+}
+
+func TestCheck_InterfaceReturnAcceptsGenericBound(t *testing.T) {
+	src := `
+pub interface Printable {
+    fn show(self) -> String
+}
+
+fn render<T: Printable>(p: T) -> Printable {
+    p
+}
+`
+	assertOK(t, runCheck(t, src))
+}
+
+func TestCheck_InterfaceReturnRejectsDifferentBoundSignature(t *testing.T) {
+	src := `
+pub interface IntBox {
+    fn get(self) -> Int
+}
+
+pub interface StringBox {
+    fn get(self) -> String
+}
+
+fn render<T: IntBox>(p: T) -> StringBox {
+    p
+}
+`
+	assertCodes(t, runCheck(t, src), diag.CodeTypeMismatch)
+}
+
+func TestCheck_InterfaceCompositionSatisfiedStructurally(t *testing.T) {
+	src := `
+pub interface Named {
+    fn name(self) -> String
+}
+
+pub interface Printable {
+    fn show(self) -> String
+}
+
+pub interface DisplayNamed {
+    Named
+    Printable
+}
+
+pub struct User {
+    pub label: String,
+
+    pub fn name(self) -> String { self.label }
+    pub fn show(self) -> String { self.label }
+}
+
+fn render<T: DisplayNamed>(x: T) -> String {
+    let n = x.name()
+    x.show()
+}
+
+fn main() {
+    let u = User { label: "ada" }
+    render(u)
+}
+`
+	assertOK(t, runCheck(t, src))
+}
+
+func TestCheck_InterfaceCompositionMissingInheritedMethod(t *testing.T) {
+	src := `
+pub interface Named {
+    fn name(self) -> String
+}
+
+pub interface Printable {
+    fn show(self) -> String
+}
+
+pub interface DisplayNamed {
+    Named
+    Printable
+}
+
+pub struct OnlyNamed {
+    pub label: String,
+
+    pub fn name(self) -> String { self.label }
+}
+
+fn render<T: DisplayNamed>(x: T) {}
+
+fn main() {
+    render(OnlyNamed { label: "ada" })
+}
+`
+	assertCodes(t, runCheck(t, src), diag.CodeTypeMismatch)
+}
+
+func TestCheck_InterfaceSelfSignatureMatchesConcreteSelf(t *testing.T) {
+	src := `
+pub interface Same {
+    fn same(self, other: Self) -> Bool
+}
+
+pub struct Point {
+    pub x: Int,
+
+    pub fn same(self, other: Point) -> Bool { true }
+}
+
+fn require<T: Same>(x: T) {}
+
+fn main() {
+    require(Point { x: 1 })
+}
+`
+	assertOK(t, runCheck(t, src))
+}
+
+func TestCheck_InterfaceSatisfactionSubstitutesGenericReceiver(t *testing.T) {
+	src := `
+pub interface IntBox {
+    fn get(self) -> Int
+}
+
+pub struct Box<T> {
+    pub value: T,
+
+    pub fn get(self) -> T { self.value }
+}
+
+fn require<T: IntBox>(x: T) {}
+
+fn main() {
+    require(Box.builder().value(1).build())
+}
+`
+	assertOK(t, runCheck(t, src))
+}
+
 // runCheckWithStdlib parses + resolves + type-checks with the primitive
 // method table from the embedded stdlib. Only required by tests that
 // exercise intrinsic primitive methods (`Int.abs`, `Float.sqrt`, ...).
@@ -1675,6 +1851,19 @@ fn main() {
 	assertOK(t, runCheck(t, src))
 }
 
+func TestCheck_GenericBuilderInfersTypeArgsFromSetter(t *testing.T) {
+	src := `
+pub struct Box<T> {
+    pub value: T,
+}
+
+fn main() {
+    let b: Box<Int> = Box.builder().value(1).build()
+}
+`
+	assertOK(t, runCheck(t, src))
+}
+
 func TestCheck_StructDefaultAllFieldsHaveDefaults(t *testing.T) {
 	src := `
 pub struct Settings {
@@ -1741,6 +1930,17 @@ fn describe(u: Int?) -> String {
 }
 `
 	assertCodes(t, runCheck(t, src), diag.CodeNonExhaustiveMatch)
+}
+
+func TestCheck_MatchOptionOrPatternExhaustive(t *testing.T) {
+	src := `
+fn describe(b: Bool?) -> Int {
+    match b {
+        Some(_) | _ -> 0,
+    }
+}
+`
+	assertOK(t, runCheck(t, src))
 }
 
 func TestCheck_MatchGuardsRequireCatchAll(t *testing.T) {
@@ -1812,6 +2012,17 @@ fn main() {
 	if !seen["Int"] || !seen["String"] {
 		t.Fatalf("expected instantiations for Int and String, got %v", seen)
 	}
+}
+
+func TestCheck_TurbofishWrongTypeArgCount(t *testing.T) {
+	src := `
+fn identity<T>(x: T) -> T { x }
+
+fn main() {
+    let x = identity::<Int, String>(1)
+}
+`
+	assertCodes(t, runCheck(t, src), diag.CodeGenericArgCount)
 }
 
 // TestCheck_MatchEnumVariantPayloadGap verifies that even when every
