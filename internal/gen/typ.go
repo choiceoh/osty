@@ -156,6 +156,11 @@ func (g *gen) goNamedType(n *types.Named) string {
 			return "[]" + g.goType(n.Args[0])
 		}
 		return "[]any"
+	case "Iter":
+		if len(n.Args) == 1 {
+			return "[]" + g.goType(n.Args[0])
+		}
+		return "[]any"
 	case "Map":
 		if len(n.Args) == 2 {
 			return "map[" + g.goType(n.Args[0]) + "]" + g.goType(n.Args[1])

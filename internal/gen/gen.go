@@ -567,6 +567,87 @@ func resultMapErr[T any, E any, F any](r Result[T, E], f func(E) F) Result[T, F]
 }
 `)
 	}
+	if g.needBytesRuntime {
+		out.WriteString(`
+func bytesFromString(s string) []byte { return []byte(s) }
+
+func bytesToString(b []byte) Result[string, any] { return resultOk[string, any](string(b)) }
+
+func bytesLen(b []byte) int { return len(b) }
+
+func bytesIsEmpty(b []byte) bool { return len(b) == 0 }
+
+func bytesGet(b []byte, i int) *byte {
+	if i < 0 || i >= len(b) {
+		return nil
+	}
+	v := b[i]
+	return &v
+}
+
+func bytesEqual(a []byte, b []byte) bool { return stdbytes.Equal(a, b) }
+
+func bytesContains(b []byte, sub []byte) bool { return stdbytes.Contains(b, sub) }
+
+func bytesStartsWith(b []byte, prefix []byte) bool { return stdbytes.HasPrefix(b, prefix) }
+
+func bytesEndsWith(b []byte, suffix []byte) bool { return stdbytes.HasSuffix(b, suffix) }
+
+func bytesIndexOf(b []byte, sub []byte) *int {
+	i := stdbytes.Index(b, sub)
+	if i < 0 {
+		return nil
+	}
+	return &i
+}
+
+func bytesLastIndexOf(b []byte, sub []byte) *int {
+	i := stdbytes.LastIndex(b, sub)
+	if i < 0 {
+		return nil
+	}
+	return &i
+}
+
+func bytesSplit(b []byte, sep []byte) [][]byte { return stdbytes.Split(b, sep) }
+
+func bytesJoin(parts [][]byte, sep []byte) []byte { return stdbytes.Join(parts, sep) }
+
+func bytesConcat(a []byte, b []byte) []byte { return append(append([]byte(nil), a...), b...) }
+
+func bytesRepeat(b []byte, n int) []byte { return stdbytes.Repeat(b, n) }
+
+func bytesReplace(b []byte, old []byte, new []byte) []byte {
+	return stdbytes.Replace(b, old, new, 1)
+}
+
+func bytesReplaceAll(b []byte, old []byte, new []byte) []byte {
+	return stdbytes.ReplaceAll(b, old, new)
+}
+
+func bytesTrimLeft(b []byte, strip []byte) []byte { return stdbytes.TrimLeft(b, string(strip)) }
+
+func bytesTrimRight(b []byte, strip []byte) []byte { return stdbytes.TrimRight(b, string(strip)) }
+
+func bytesTrim(b []byte, strip []byte) []byte { return stdbytes.Trim(b, string(strip)) }
+
+func bytesTrimSpace(b []byte) []byte { return stdbytes.TrimSpace(b) }
+
+func bytesToUpper(b []byte) []byte { return stdbytes.ToUpper(b) }
+
+func bytesToLower(b []byte) []byte { return stdbytes.ToLower(b) }
+
+func bytesToHex(b []byte) string { return _ostybyteshex.EncodeToString(b) }
+
+func bytesFromHex(s string) Result[[]byte, any] {
+	b, err := _ostybyteshex.DecodeString(s)
+	if err != nil {
+		return resultErr[[]byte, any](err)
+	}
+	return resultOk[[]byte, any](b)
+}
+`)
+	}
 	if g.needErrorRuntime {
 		out.WriteString(`
 type ostyBasicError struct {
@@ -679,6 +760,126 @@ func jsonString(value string) Json { return value }
 func jsonNumber(value float64) Json { return value }
 
 func jsonBool(value bool) Json { return value }
+
+func jsonStringifyValue(value Json) string {
+	data, err := jsonMarshalAny(value)
+	if err != nil {
+		panic(fmt.Sprintf("std.json.stringifyValue: %v", err))
+	}
+	return string(data)
+}
+
+func jsonParseValueResult(text string) Result[Json, any] {
+	value, err := jsonParseValue([]byte(text))
+	if err != nil {
+		return resultErr[Json, any](err)
+	}
+	return resultOk[Json, any](value)
+}
+
+func jsonIsNullVal(value Json) bool { return value == nil }
+
+func jsonIsBoolVal(value Json) bool {
+	_, ok := value.(bool)
+	return ok
+}
+
+func jsonIsNumberVal(value Json) bool {
+	_, ok := value.(float64)
+	return ok
+}
+
+func jsonIsStringVal(value Json) bool {
+	_, ok := value.(string)
+	return ok
+}
+
+func jsonIsArrayVal(value Json) bool {
+	_, ok := value.([]Json)
+	return ok
+}
+
+func jsonIsObjectVal(value Json) bool {
+	_, ok := value.(map[string]Json)
+	return ok
+}
+
+func jsonAsBoolResult(value Json) Result[bool, any] {
+	if v, ok := value.(bool); ok {
+		return resultOk[bool, any](v)
+	}
+	return resultErr[bool, any](fmt.Errorf("std.json: expected bool, got %s", jsonValueKind(value)))
+}
+
+func jsonAsNumberResult(value Json) Result[float64, any] {
+	if v, ok := value.(float64); ok {
+		return resultOk[float64, any](v)
+	}
+	return resultErr[float64, any](fmt.Errorf("std.json: expected number, got %s", jsonValueKind(value)))
+}
+
+func jsonAsStringResult(value Json) Result[string, any] {
+	if v, ok := value.(string); ok {
+		return resultOk[string, any](v)
+	}
+	return resultErr[string, any](fmt.Errorf("std.json: expected string, got %s", jsonValueKind(value)))
+}
+
+func jsonAsArrayResult(value Json) Result[[]Json, any] {
+	if v, ok := value.([]Json); ok {
+		return resultOk[[]Json, any](v)
+	}
+	return resultErr[[]Json, any](fmt.Errorf("std.json: expected array, got %s", jsonValueKind(value)))
+}
+
+func jsonAsObjectResult(value Json) Result[map[string]Json, any] {
+	if v, ok := value.(map[string]Json); ok {
+		return resultOk[map[string]Json, any](v)
+	}
+	return resultErr[map[string]Json, any](fmt.Errorf("std.json: expected object, got %s", jsonValueKind(value)))
+}
+
+func jsonGetFieldResult(value Json, key string) Result[Json, any] {
+	obj, ok := value.(map[string]Json)
+	if !ok {
+		return resultErr[Json, any](fmt.Errorf("std.json: expected object, got %s", jsonValueKind(value)))
+	}
+	field, ok := obj[key]
+	if !ok {
+		return resultErr[Json, any](fmt.Errorf("std.json: missing object field %q", key))
+	}
+	return resultOk[Json, any](field)
+}
+
+func jsonGetIndexResult(value Json, index int) Result[Json, any] {
+	arr, ok := value.([]Json)
+	if !ok {
+		return resultErr[Json, any](fmt.Errorf("std.json: expected array, got %s", jsonValueKind(value)))
+	}
+	if index < 0 || index >= len(arr) {
+		return resultErr[Json, any](fmt.Errorf("std.json: array index %d out of bounds", index))
+	}
+	return resultOk[Json, any](arr[index])
+}
+
+func jsonValueKind(value Json) string {
+	switch value.(type) {
+	case nil:
+		return "null"
+	case bool:
+		return "bool"
+	case float64:
+		return "number"
+	case string:
+		return "string"
+	case []Json:
+		return "array"
+	case map[string]Json:
+		return "object"
+	default:
+		return fmt.Sprintf("%T", value)
+	}
+}
 
 func jsonMarshalAny(value any) ([]byte, error) {
 	if enc, ok := value.(jsonEncoder); ok {
@@ -1283,7 +1484,7 @@ func (u Url) queryValues(key string) []string {
 `)
 	}
 	if g.needRegex {
-		// TODO: regexRuntime placeholder
+		out.WriteString(regexRuntime)
 	}
 	if g.needEncoding {
 		out.WriteString(`

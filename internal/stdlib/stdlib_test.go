@@ -1053,7 +1053,14 @@ func TestJSONModuleCoverage(t *testing.T) {
 	if mod == nil || mod.Package == nil {
 		t.Fatal("std.json not loaded")
 	}
-	for _, name := range []string{"Json", "Encode", "Decode", "encode", "stringify", "decode", "parse"} {
+	for _, name := range []string{
+		"Json", "JsonObject", "JsonArray", "JsonString", "JsonNumber", "JsonBool",
+		"Encode", "Decode", "encode", "stringify", "decode", "parse",
+		"stringifyValue", "parseValue",
+		"isNull", "isBool", "isNumber", "isString", "isArray", "isObject",
+		"asBool", "asNumber", "asString", "asArray", "asObject",
+		"getField", "getIndex",
+	} {
 		sym := mod.Package.PkgScope.LookupLocal(name)
 		if sym == nil {
 			t.Errorf("std.json missing export %q", name)
@@ -1084,7 +1091,13 @@ pub fn smoke(user: User) -> String {
     let decoded: Result<User, Error> = json.decode(encoded)
     let parsed: Result<User, Error> = json.parse(encoded)
     let value: json.Json = json.Object({"ok": json.Bool(true), "name": json.String("osty"), "none": json.Null})
-    json.stringify(value)
+    let valueText: String = json.stringifyValue(value)
+    let parsedValue: json.Json = json.parseValue(valueText).unwrap()
+    let field: json.Json = json.getField(parsedValue, "name").unwrap()
+    let name: String = json.asString(field).unwrap()
+    let arr: json.Json = json.Array([json.Number(1.0)])
+    let first: json.Json = json.getIndex(arr, 0).unwrap()
+    json.stringifyValue(json.String(name))
 }
 `)
 	file, parseDiags := parser.ParseDiagnostics(src)

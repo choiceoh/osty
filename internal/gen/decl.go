@@ -596,6 +596,17 @@ func (g *gen) emitStdlibRuntimeBridge(alias string, path []string, full string) 
 			getIndex:       jsonGetIndexResult,
 		}`, full)
 		return true
+	case "regex":
+		if !g.aliasUsedAsSelector(alias) {
+			return false
+		}
+		g.needRegex = true
+		g.emitUseStub(alias, `struct {
+			compile func(pattern string) Result[Regex, error]
+		}{
+			compile: regexCompile,
+		}`, full)
+		return true
 	case "error":
 		// std.error calls and qualified literals are lowered directly by
 		// expr.go; no package-shaped Go value is needed here. Avoid
@@ -655,55 +666,31 @@ func (g *gen) emitStdlibRuntimeBridge(alias string, path []string, full string) 
 			toHex       func(b []byte) string
 			fromHex     func(s string) Result[[]byte, any]
 		}{
-			fromString: func(s string) []byte { return []byte(s) },
-			toString:   func(b []byte) Result[string, any] { return resultOk[string, any](string(b)) },
-			len:        func(b []byte) int { return len(b) },
-			isEmpty:    func(b []byte) bool { return len(b) == 0 },
-			get: func(b []byte, i int) *byte {
-				if i < 0 || i >= len(b) {
-					return nil
-				}
-				v := b[i]
-				return &v
-			},
-			equal:       stdbytes.Equal,
-			contains:    stdbytes.Contains,
-			startsWith:  stdbytes.HasPrefix,
-			endsWith:    stdbytes.HasSuffix,
-			indexOf: func(b []byte, sub []byte) *int {
-				i := stdbytes.Index(b, sub)
-				if i < 0 {
-					return nil
-				}
-				return &i
-			},
-			lastIndexOf: func(b []byte, sub []byte) *int {
-				i := stdbytes.LastIndex(b, sub)
-				if i < 0 {
-					return nil
-				}
-				return &i
-			},
-			split:      stdbytes.Split,
-			join:       stdbytes.Join,
-			concat:     func(a []byte, b []byte) []byte { return append(append([]byte(nil), a...), b...) },
-			repeat:     stdbytes.Repeat,
-			replace:    func(b []byte, old []byte, new []byte) []byte { return stdbytes.Replace(b, old, new, 1) },
-			replaceAll: func(b []byte, old []byte, new []byte) []byte { return stdbytes.ReplaceAll(b, old, new) },
-			trimLeft:   func(b []byte, strip []byte) []byte { return stdbytes.TrimLeft(b, string(strip)) },
-			trimRight:  func(b []byte, strip []byte) []byte { return stdbytes.TrimRight(b, string(strip)) },
-			trim:       func(b []byte, strip []byte) []byte { return stdbytes.Trim(b, string(strip)) },
-			trimSpace:  stdbytes.TrimSpace,
-			toUpper:    stdbytes.ToUpper,
-			toLower:    stdbytes.ToLower,
-			toHex:      _ostybyteshex.EncodeToString,
-			fromHex: func(s string) Result[[]byte, any] {
-				b, err := _ostybyteshex.DecodeString(s)
-				if err != nil {
-					return resultErr[[]byte, any](err)
-				}
-				return resultOk[[]byte, any](b)
-			},
+			fromString:  bytesFromString,
+			toString:    bytesToString,
+			len:         bytesLen,
+			isEmpty:     bytesIsEmpty,
+			get:         bytesGet,
+			equal:       bytesEqual,
+			contains:    bytesContains,
+			startsWith:  bytesStartsWith,
+			endsWith:    bytesEndsWith,
+			indexOf:     bytesIndexOf,
+			lastIndexOf: bytesLastIndexOf,
+			split:       bytesSplit,
+			join:        bytesJoin,
+			concat:      bytesConcat,
+			repeat:      bytesRepeat,
+			replace:     bytesReplace,
+			replaceAll:  bytesReplaceAll,
+			trimLeft:    bytesTrimLeft,
+			trimRight:   bytesTrimRight,
+			trim:        bytesTrim,
+			trimSpace:   bytesTrimSpace,
+			toUpper:     bytesToUpper,
+			toLower:     bytesToLower,
+			toHex:       bytesToHex,
+			fromHex:     bytesFromHex,
 		}`, full)
 		return true
 	case "csv":

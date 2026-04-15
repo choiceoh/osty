@@ -55,6 +55,7 @@ pub struct __IntMethods {
     pub fn toInt32(self) -> Result<Int32, Error> { Ok(0) }
     pub fn toInt64(self) -> Int64 { 0 }
     pub fn toUInt8(self) -> Result<UInt8, Error> { Ok(0) }
+    pub fn toByte(self) -> Result<Byte, Error> { Ok(b'\0') }
     pub fn toUInt16(self) -> Result<UInt16, Error> { Ok(0) }
     pub fn toUInt32(self) -> Result<UInt32, Error> { Ok(0) }
     pub fn toUInt64(self) -> Result<UInt64, Error> { Ok(0) }

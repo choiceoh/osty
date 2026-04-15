@@ -439,6 +439,9 @@ func (g *gen) emitCall(c *ast.CallExpr) {
 	if g.emitStdlibJSONCall(c) {
 		return
 	}
+	if g.emitStdlibIterCall(c) {
+		return
+	}
 	if f, ok := c.Fn.(*ast.FieldExpr); ok {
 		if g.emitQualifiedOptionCall(c, f) {
 			return
@@ -1026,6 +1029,69 @@ func (g *gen) emitQualifiedOptionCall(c *ast.CallExpr, f *ast.FieldExpr) bool {
 	return false
 }
 
+func (g *gen) emitStdlibIterCall(c *ast.CallExpr) bool {
+	name, ok := g.stdlibIterCallName(c)
+	if !ok {
+		return false
+	}
+	switch name {
+	case "range":
+		if len(c.Args) != 2 {
+			return false
+		}
+		retGo := g.callReturnGo(c, "[]int")
+		start := g.freshVar("_start")
+		stop := g.freshVar("_stop")
+		g.body.writef("func() %s {\n", retGo)
+		g.body.indent()
+		g.body.writef("%s := ", start)
+		g.emitExpr(c.Args[0].Value)
+		g.body.nl()
+		g.body.writef("%s := ", stop)
+		g.emitExpr(c.Args[1].Value)
+		g.body.nl()
+		g.body.writef("out := make(%s, 0)\n", retGo)
+		g.body.writef("if %s > %s { out = make(%s, 0, %s-%s) }\n", stop, start, retGo, stop, start)
+		g.body.writef("for i := %s; i < %s; i++ { out = append(out, i) }\n", start, stop)
+		g.body.writeln("return out")
+		g.body.dedent()
+		g.body.write("}()")
+		return true
+	case "from":
+		if len(c.Args) != 1 {
+			return false
+		}
+		g.emitExpr(c.Args[0].Value)
+		return true
+	case "empty":
+		if len(c.Args) != 0 {
+			return false
+		}
+		g.body.write(g.callReturnGo(c, "[]any"))
+		g.body.write("{}")
+		return true
+	}
+	return false
+}
+
+func (g *gen) stdlibIterCallName(c *ast.CallExpr) (string, bool) {
+	if path, ok := g.stdlibCallPath(c, "iter"); ok && len(path) == 1 {
+		return path[0], true
+	}
+	if id, parts, ok := stdlibFieldChain(c.Fn); ok && id != nil && len(parts) == 1 && g.isStdlibAliasName(id.Name, "iter") {
+		return parts[0], true
+	}
+	tf, ok := c.Fn.(*ast.TurbofishExpr)
+	if !ok {
+		return "", false
+	}
+	id, parts, ok := stdlibFieldChain(tf.Base)
+	if !ok || id == nil || len(parts) != 1 || (!g.isStdlibPackageAlias(id, "iter") && !g.isStdlibAliasName(id.Name, "iter")) {
+		return "", false
+	}
+	return parts[0], true
+}
+
 func (g *gen) emitStdlibHelperCall(helper string, args []*ast.Arg) {
 	g.body.write(helper)
 	g.body.write("(")
@@ -1448,7 +1514,7 @@ func (g *gen) emitCollectionMethod(c *ast.CallExpr, f *ast.FieldExpr) bool {
 		return false
 	}
 	switch n.Sym.Name {
-	case "List":
+	case "List", "Iter":
 		return g.emitListMethod(c, f, n)
 	case "Map":
 		return g.emitMapMethod(c, f, n)
@@ -1480,6 +1546,13 @@ func (g *gen) emitListMethod(c *ast.CallExpr, f *ast.FieldExpr, n *types.Named) 
 		g.body.write("(len(")
 		g.emitExpr(f.X)
 		g.body.write(") == 0)")
+	case "count":
+		if len(c.Args) != 0 {
+			return false
+		}
+		g.body.write("len(")
+		g.emitExpr(f.X)
+		g.body.write(")")
 	case "iter":
 		if len(c.Args) != 0 {
 			return false
@@ -1590,6 +1663,20 @@ func (g *gen) emitListMethod(c *ast.CallExpr, f *ast.FieldExpr, n *types.Named) 
 			g.body.nl()
 			g.body.writef("out := make(%s, 0, len(%s))\n", retGo, xs)
 			g.body.writef("for _, v := range %s { if %s(v) { out = append(out, v) } }\n", xs, pred)
+			g.body.writeln("return out")
+		})
+	case "takeWhile":
+		if len(c.Args) != 1 {
+			return false
+		}
+		retGo := g.callReturnGo(c, listGo)
+		g.emitCollectionIIFE(retGo, f.X, func(xs string) {
+			pred := g.freshVar("_pred")
+			g.body.writef("%s := ", pred)
+			g.emitExpr(c.Args[0].Value)
+			g.body.nl()
+			g.body.writef("out := make(%s, 0, len(%s))\n", retGo, xs)
+			g.body.writef("for _, v := range %s { if !%s(v) { break }; out = append(out, v) }\n", xs, pred)
 			g.body.writeln("return out")
 		})
 	case "fold":
@@ -2448,6 +2535,9 @@ func (g *gen) resultTypeArgsAt(callType types.Type, payloadType types.Type, isEr
 // produced output; false lets the generic path take over.
 // isBytesType reports whether t is the Bytes builtin type.
 func isBytesType(t types.Type) bool {
+	if p, ok := t.(*types.Primitive); ok && p.Kind == types.PBytes {
+		return true
+	}
 	n, ok := t.(*types.Named)
 	return ok && n.Sym != nil && n.Sym.Kind == resolve.SymBuiltin && n.Sym.Name == "Bytes"
 }
@@ -2494,7 +2584,7 @@ func (g *gen) emitBuiltinCall(name string, args []*ast.Arg, call *ast.CallExpr) 
 		g.use("fmt")
 		g.use("os")
 		g.body.write("fmt.Fprint(os.Stderr, ")
-		g.emitCallArgList(args)
+		g.emitPrintArgList(args)
 		g.body.write(")")
 		return true
 	case "dbg":

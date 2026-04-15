@@ -71,12 +71,12 @@ pub fn parse<T>(text: String) -> Result<T, Error> {
 
 pub fn stringifyValue(value: Json) -> String {
     match value {
-        Json.Null -> "null",
-        Json.Bool(b) -> if b { "true" } else { "false" },
-        Json.Number(n) -> formatJsonNumber(n),
-        Json.String(s) -> escapeJsonString(s),
-        Json.Array(arr) -> stringifyArray(arr),
-        Json.Object(obj) -> stringifyObject(obj),
+        Null -> "null",
+        Bool(b) -> if b { "true" } else { "false" },
+        Number(n) -> formatJsonNumber(n),
+        String(s) -> escapeJsonString(s),
+        Array(arr) -> stringifyArray(arr),
+        Object(obj) -> stringifyObject(obj),
     }
 }
 
@@ -101,9 +101,9 @@ fn stringifyObject(obj: JsonObject) -> String {
     let entries = obj.entries()
     let len = entries.len()
     if len == 0 {
-        return "{}"
+        return "\{\}"
     }
-    let mut out = "{"
+    let mut out = "\{"
     let mut i = 0
     for i < len {
         let (key, val) = entries[i]
@@ -113,7 +113,7 @@ fn stringifyObject(obj: JsonObject) -> String {
         out = "{out}{escapeJsonString(key)}:{stringifyValue(val)}"
         i = i + 1
     }
-    "{out}}"
+    "{out}\}"
 }
 
 fn escapeJsonString(s: String) -> String {
@@ -150,7 +150,7 @@ fn escapeJsonString(s: String) -> String {
 
 fn hexNibble(n: Int) -> Char {
     let lut = "0123456789abcdef"
-    lut[n & 0x0F]
+    lut[n & 0x0F].toChar()
 }
 
 fn formatJsonNumber(n: Float) -> String {
@@ -195,7 +195,7 @@ fn parseVal(bs: List<Byte>, pos: Int, len: Int) -> Result<(Json, Int), Error> {
     if c == 0x22 {
         // " — string
         let (s, next) = parseStr(bs, pos, len)?
-        Ok((Json.String(s), next))
+        Ok((String(s), next))
     } else if c == 0x7B {
         // { — object
         parseObj(bs, pos, len)
@@ -204,13 +204,13 @@ fn parseVal(bs: List<Byte>, pos: Int, len: Int) -> Result<(Json, Int), Error> {
         parseArr(bs, pos, len)
     } else if c == 0x74 {
         // t — true
-        parseLiteral(bs, pos, len, "true", Json.Bool(true))
+        parseLiteral(bs, pos, len, "true", Bool(true))
     } else if c == 0x66 {
         // f — false
-        parseLiteral(bs, pos, len, "false", Json.Bool(false))
+        parseLiteral(bs, pos, len, "false", Bool(false))
     } else if c == 0x6E {
         // n — null
-        parseLiteral(bs, pos, len, "null", Json.Null)
+        parseLiteral(bs, pos, len, "null", Null)
     } else if c == 0x2D || (c >= 0x30 && c <= 0x39) {
         // - or 0-9 — number
         parseNum(bs, pos, len)
@@ -257,21 +257,21 @@ fn parseStr(bs: List<Byte>, pos: Int, len: Int) -> Result<(String, Int), Error> 
             }
             let esc = bs[i].toInt()
             if esc == 0x22 {
-                buf.push(0x22)
+                pushByte(buf, 0x22)
             } else if esc == 0x5C {
-                buf.push(0x5C)
+                pushByte(buf, 0x5C)
             } else if esc == 0x2F {
-                buf.push(0x2F)
+                pushByte(buf, 0x2F)
             } else if esc == 0x62 {
-                buf.push(0x08)
+                pushByte(buf, 0x08)
             } else if esc == 0x66 {
-                buf.push(0x0C)
+                pushByte(buf, 0x0C)
             } else if esc == 0x6E {
-                buf.push(0x0A)
+                pushByte(buf, 0x0A)
             } else if esc == 0x72 {
-                buf.push(0x0D)
+                pushByte(buf, 0x0D)
             } else if esc == 0x74 {
-                buf.push(0x09)
+                pushByte(buf, 0x09)
             } else if esc == 0x75 {
                 // \uXXXX
                 if i + 4 >= len {
@@ -321,12 +321,13 @@ fn parseHex4(bs: List<Byte>, pos: Int) -> Result<Int, Error> {
     let mut i = 0
     for i < 4 {
         let b = bs[pos + i].toInt()
-        let v = if b >= 0x30 && b <= 0x39 {
-            b - 0x30
+        let mut v = 0
+        if b >= 0x30 && b <= 0x39 {
+            v = b - 0x30
         } else if b >= 0x41 && b <= 0x46 {
-            b - 0x41 + 10
+            v = b - 0x41 + 10
         } else if b >= 0x61 && b <= 0x66 {
-            b - 0x61 + 10
+            v = b - 0x61 + 10
         } else {
             return Err(error.new("json: invalid hex digit in unicode escape"))
         }
@@ -336,21 +337,25 @@ fn parseHex4(bs: List<Byte>, pos: Int) -> Result<Int, Error> {
     Ok(result)
 }
 
+fn pushByte(buf: List<Byte>, n: Int) {
+    buf.push(n.toByte().unwrap())
+}
+
 fn encodeUtf8(buf: List<Byte>, cp: Int) {
     if cp < 0x80 {
-        buf.push(cp)
+        pushByte(buf, cp)
     } else if cp < 0x800 {
-        buf.push(0xC0 | (cp >> 6))
-        buf.push(0x80 | (cp & 0x3F))
+        pushByte(buf, 0xC0 | (cp >> 6))
+        pushByte(buf, 0x80 | (cp & 0x3F))
     } else if cp < 0x10000 {
-        buf.push(0xE0 | (cp >> 12))
-        buf.push(0x80 | ((cp >> 6) & 0x3F))
-        buf.push(0x80 | (cp & 0x3F))
+        pushByte(buf, 0xE0 | (cp >> 12))
+        pushByte(buf, 0x80 | ((cp >> 6) & 0x3F))
+        pushByte(buf, 0x80 | (cp & 0x3F))
     } else {
-        buf.push(0xF0 | (cp >> 18))
-        buf.push(0x80 | ((cp >> 12) & 0x3F))
-        buf.push(0x80 | ((cp >> 6) & 0x3F))
-        buf.push(0x80 | (cp & 0x3F))
+        pushByte(buf, 0xF0 | (cp >> 18))
+        pushByte(buf, 0x80 | ((cp >> 12) & 0x3F))
+        pushByte(buf, 0x80 | ((cp >> 6) & 0x3F))
+        pushByte(buf, 0x80 | (cp & 0x3F))
     }
 }
 
@@ -409,7 +414,7 @@ fn parseNum(bs: List<Byte>, pos: Int, len: Int) -> Result<(Json, Int), Error> {
     }
     let numStr = Bytes.from(numBuf).toString()?
     let n = numStr.toFloat()?
-    Ok((Json.Number(n), i))
+    Ok((Number(n), i))
 }
 
 // ---------------------------------------------------------------------------
@@ -420,7 +425,7 @@ fn parseArr(bs: List<Byte>, pos: Int, len: Int) -> Result<(Json, Int), Error> {
     let mut i = skipWs(bs, pos + 1, len)
     let mut items: List<Json> = []
     if i < len && bs[i].toInt() == 0x5D {
-        return Ok((Json.Array(items), i + 1))
+        return Ok((Array(items), i + 1))
     }
     for i < len {
         let (val, next) = parseVal(bs, i, len)?
@@ -430,7 +435,7 @@ fn parseArr(bs: List<Byte>, pos: Int, len: Int) -> Result<(Json, Int), Error> {
             return Err(error.new("json: unterminated array"))
         }
         if bs[i].toInt() == 0x5D {
-            return Ok((Json.Array(items), i + 1))
+            return Ok((Array(items), i + 1))
         }
         if bs[i].toInt() != 0x2C {
             return Err(error.new("json: expected ',' or ']' in array"))
@@ -446,9 +451,9 @@ fn parseArr(bs: List<Byte>, pos: Int, len: Int) -> Result<(Json, Int), Error> {
 
 fn parseObj(bs: List<Byte>, pos: Int, len: Int) -> Result<(Json, Int), Error> {
     let mut i = skipWs(bs, pos + 1, len)
-    let mut entries: Map<String, Json> = {}
+    let mut entries: Map<String, Json> = {:}
     if i < len && bs[i].toInt() == 0x7D {
-        return Ok((Json.Object(entries), i + 1))
+        return Ok((Object(entries), i + 1))
     }
     for i < len {
         if bs[i].toInt() != 0x22 {
@@ -467,7 +472,7 @@ fn parseObj(bs: List<Byte>, pos: Int, len: Int) -> Result<(Json, Int), Error> {
             return Err(error.new("json: unterminated object"))
         }
         if bs[i].toInt() == 0x7D {
-            return Ok((Json.Object(entries), i + 1))
+            return Ok((Object(entries), i + 1))
         }
         if bs[i].toInt() != 0x2C {
             return Err(error.new("json: expected ',' or '}' in object"))
@@ -499,42 +504,42 @@ fn skipWs(bs: List<Byte>, pos: Int, len: Int) -> Int {
 
 pub fn isNull(value: Json) -> Bool {
     match value {
-        Json.Null -> true,
+        Null -> true,
         _ -> false,
     }
 }
 
 pub fn isBool(value: Json) -> Bool {
     match value {
-        Json.Bool(_) -> true,
+        Bool(_) -> true,
         _ -> false,
     }
 }
 
 pub fn isNumber(value: Json) -> Bool {
     match value {
-        Json.Number(_) -> true,
+        Number(_) -> true,
         _ -> false,
     }
 }
 
 pub fn isString(value: Json) -> Bool {
     match value {
-        Json.String(_) -> true,
+        String(_) -> true,
         _ -> false,
     }
 }
 
 pub fn isArray(value: Json) -> Bool {
     match value {
-        Json.Array(_) -> true,
+        Array(_) -> true,
         _ -> false,
     }
 }
 
 pub fn isObject(value: Json) -> Bool {
     match value {
-        Json.Object(_) -> true,
+        Object(_) -> true,
         _ -> false,
     }
 }
@@ -543,38 +548,38 @@ pub fn isObject(value: Json) -> Bool {
 // Narrowing accessors
 // ---------------------------------------------------------------------------
 
-pub fn asBool(value: Json) -> Bool? {
+pub fn asBool(value: Json) -> Result<Bool, Error> {
     match value {
-        Json.Bool(b) -> Some(b),
-        _ -> None,
+        Bool(b) -> Ok(b),
+        _ -> Err(error.new("json: expected bool")),
     }
 }
 
-pub fn asNumber(value: Json) -> Float? {
+pub fn asNumber(value: Json) -> Result<Float, Error> {
     match value {
-        Json.Number(n) -> Some(n),
-        _ -> None,
+        Number(n) -> Ok(n),
+        _ -> Err(error.new("json: expected number")),
     }
 }
 
-pub fn asString(value: Json) -> String? {
+pub fn asString(value: Json) -> Result<String, Error> {
     match value {
-        Json.String(s) -> Some(s),
-        _ -> None,
+        String(s) -> Ok(s),
+        _ -> Err(error.new("json: expected string")),
     }
 }
 
-pub fn asArray(value: Json) -> JsonArray? {
+pub fn asArray(value: Json) -> Result<JsonArray, Error> {
     match value {
-        Json.Array(a) -> Some(a),
-        _ -> None,
+        Array(a) -> Ok(a),
+        _ -> Err(error.new("json: expected array")),
     }
 }
 
-pub fn asObject(value: Json) -> JsonObject? {
+pub fn asObject(value: Json) -> Result<JsonObject, Error> {
     match value {
-        Json.Object(o) -> Some(o),
-        _ -> None,
+        Object(o) -> Ok(o),
+        _ -> Err(error.new("json: expected object")),
     }
 }
 
@@ -582,16 +587,22 @@ pub fn asObject(value: Json) -> JsonObject? {
 // Indexed access
 // ---------------------------------------------------------------------------
 
-pub fn getField(obj: Json, key: String) -> Json? {
+pub fn getField(obj: Json, key: String) -> Result<Json, Error> {
     match obj {
-        Json.Object(o) -> o.get(key)?.let(|v| Some(v)),
-        _ -> None,
+        Object(o) -> match o.get(key) {
+            Some(v) -> Ok(v),
+            None -> Err(error.new("json: missing object field: {key}")),
+        },
+        _ -> Err(error.new("json: expected object")),
     }
 }
 
-pub fn getIndex(arr: Json, index: Int) -> Json? {
+pub fn getIndex(arr: Json, index: Int) -> Result<Json, Error> {
     match arr {
-        Json.Array(a) -> a.get(index)?.let(|v| Some(v)),
-        _ -> None,
+        Array(a) -> match a.get(index) {
+            Some(v) -> Ok(v),
+            None -> Err(error.new("json: array index out of bounds: {index}")),
+        },
+        _ -> Err(error.new("json: expected array")),
     }
 }
