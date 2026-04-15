@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/osty/osty/internal/manifest"
 	"github.com/osty/osty/internal/pkgmgr/semver"
@@ -19,6 +20,11 @@ type registrySource struct {
 	packageName  string // the canonical name on the registry; may differ from `name`
 	versionReq   string
 	registryName string // "" = default registry
+}
+
+type registryCandidate struct {
+	Version semver.Version
+	Meta    registry.Version
 }
 
 func (s *registrySource) Kind() SourceKind { return SourceRegistry }
@@ -39,6 +45,14 @@ func (s *registrySource) URI() string {
 // tarball, and unpacks it to the user cache. Returned LocalDir is
 // that unpacked directory.
 func (s *registrySource) Fetch(ctx context.Context, env *Env) (*FetchedPackage, error) {
+	candidates, err := s.candidateRegistryVersions(ctx, env)
+	if err != nil {
+		return nil, err
+	}
+	return s.fetchRegistryCandidate(ctx, env, candidates[0])
+}
+
+func (s *registrySource) candidateRegistryVersions(ctx context.Context, env *Env) ([]registryCandidate, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -67,8 +81,7 @@ func (s *registrySource) Fetch(ctx context.Context, env *Env) (*FetchedPackage, 
 	if err != nil {
 		return nil, fmt.Errorf("registry dependency %s: %w", s.name, err)
 	}
-	var parsed []semver.Version
-	versionByString := map[string]registry.Version{}
+	var candidates []registryCandidate
 	for _, v := range versions {
 		sv, err := semver.ParseVersion(v.Version)
 		if err != nil {
@@ -77,18 +90,39 @@ func (s *registrySource) Fetch(ctx context.Context, env *Env) (*FetchedPackage, 
 			// valid resolutions.
 			continue
 		}
-		parsed = append(parsed, sv)
-		versionByString[sv.String()] = v
+		if !req.Match(sv) {
+			continue
+		}
+		candidates = append(candidates, registryCandidate{Version: sv, Meta: v})
 	}
-	best, ok := semver.Max(req, parsed)
-	if !ok {
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return semver.Compare(candidates[i].Version, candidates[j].Version) > 0
+	})
+	if len(candidates) == 0 {
 		return nil, fmt.Errorf("registry dependency %s: no version matches %q",
 			s.name, s.versionReq)
 	}
-	picked := versionByString[best.String()]
+	return candidates, nil
+}
+
+func (s *registrySource) fetchRegistryCandidate(ctx context.Context, env *Env, candidate registryCandidate) (*FetchedPackage, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	regURL, ok := env.Registries[s.registryName]
+	if !ok || regURL == "" {
+		return nil, fmt.Errorf("registry %q not configured", s.registryName)
+	}
+	client := registry.NewClient(regURL)
+	client.Cache = registry.NewDirIndexCache(filepath.Join(env.CacheDir, "registry-index", sanitizeURL(regURL)))
+	best := candidate.Version.String()
+	picked := candidate.Meta
 
 	// Download + verify the tarball.
-	cacheRoot := filepath.Join(env.CacheDir, "registry", sanitizeURL(regURL), s.packageName, best.String())
+	cacheRoot := filepath.Join(env.CacheDir, "registry", sanitizeURL(regURL), s.packageName, best)
 	if err := ensureDir(cacheRoot); err != nil {
 		return nil, err
 	}
@@ -97,7 +131,7 @@ func (s *registrySource) Fetch(ctx context.Context, env *Env) (*FetchedPackage, 
 		if !os.IsNotExist(err) {
 			return nil, err
 		}
-		if err := client.DownloadTarball(ctx, s.packageName, best.String(), tarPath); err != nil {
+		if err := client.DownloadTarball(ctx, s.packageName, best, tarPath); err != nil {
 			return nil, fmt.Errorf("registry dependency %s: download: %w", s.name, err)
 		}
 	}
@@ -133,7 +167,7 @@ func (s *registrySource) Fetch(ctx context.Context, env *Env) (*FetchedPackage, 
 	return &FetchedPackage{
 		LocalDir: unpackDir,
 		Manifest: depManifest,
-		Version:  best.String(),
+		Version:  best,
 		Checksum: picked.Checksum,
 	}, nil
 }

@@ -63,85 +63,259 @@ func Resolve(ctx context.Context, root *manifest.Manifest, env *Env) (*Graph, er
 		return nil, err
 	}
 	r := &resolver{
-		env:      env,
-		lock:     existing,
-		root:     root,
-		graph:    &Graph{Root: root, Nodes: map[string]*ResolvedNode{}},
-		inflight: map[string]bool{},
+		env:   env,
+		lock:  existing,
+		graph: &Graph{Root: root, Nodes: map[string]*ResolvedNode{}},
 	}
 	rootDir := manifestBaseDir(root, env.ProjectRoot)
+	var pending []resolveRequest
 	for _, d := range root.Dependencies {
-		if _, err := r.resolveDep(ctx, d, rootDir); err != nil {
-			return nil, err
-		}
+		pending = append(pending, resolveRequest{dep: d, baseDir: rootDir})
 	}
 	for _, d := range root.DevDependencies {
-		if _, err := r.resolveDep(ctx, d, rootDir); err != nil {
-			return nil, err
-		}
+		pending = append(pending, resolveRequest{dep: d, baseDir: rootDir})
 	}
+	solved, err := r.solve(ctx, &resolveState{
+		graph:   r.graph,
+		pending: pending,
+	})
+	if err != nil {
+		return nil, err
+	}
+	r.graph = solved.graph
 	r.graph.Order = r.topoOrder()
 	return r.graph, nil
 }
 
 type resolver struct {
-	env      *Env
-	lock     *lockfile.Lock
-	root     *manifest.Manifest
-	graph    *Graph
-	inflight map[string]bool
+	env   *Env
+	lock  *lockfile.Lock
+	graph *Graph
 }
 
-// resolveDep fetches dep, records it in the graph, then recurses
-// into its own dependencies. Returns an error on cycle detection,
-// fetch failure, or conflicting versions.
-func (r *resolver) resolveDep(ctx context.Context, d manifest.Dependency, baseDir string) (*ResolvedNode, error) {
-	if r.inflight[d.Name] {
-		return nil, fmt.Errorf("cyclic dependency through %q", d.Name)
+type resolveRequest struct {
+	dep       manifest.Dependency
+	baseDir   string
+	parent    string
+	ancestors map[string]bool
+}
+
+type resolveState struct {
+	graph   *Graph
+	pending []resolveRequest
+}
+
+type resolveCandidate struct {
+	source Source
+	fetch  func(context.Context) (*FetchedPackage, error)
+}
+
+func (r *resolver) solve(ctx context.Context, st *resolveState) (*resolveState, error) {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 	}
-	src, err := newSourceFromDir(d, baseDir)
+	if len(st.pending) == 0 {
+		return st, nil
+	}
+	req := st.pending[0]
+	rest := append([]resolveRequest(nil), st.pending[1:]...)
+	if req.ancestors[req.dep.Name] {
+		return nil, fmt.Errorf("cyclic dependency through %q", req.dep.Name)
+	}
+	src, err := newSourceFromDir(req.dep, req.baseDir)
 	if err != nil {
 		return nil, err
 	}
-	// If the lockfile pins a previously-resolved version that still
-	// satisfies the manifest's requirement, narrow the source so we
-	// fetch exactly that version. This keeps `osty build` reproducible
-	// across runs without forcing a network round-trip on every
-	// resolve. `osty update` clears the pin before calling Resolve, so
-	// honoring it here doesn't block intended upgrades.
-	applyLockPin(src, d, r.lock)
-	if existing, ok := r.graph.Nodes[d.Name]; ok {
-		if err := r.ensureCompatible(existing, src, d); err != nil {
+	if existing, ok := st.graph.Nodes[req.dep.Name]; ok {
+		if err := r.ensureCompatible(existing, src, req.dep); err != nil {
 			return nil, err
 		}
-		return existing, nil
+		next := st.cloneWithPending(rest)
+		addDepEdge(next.graph, req.parent, existing.Name)
+		return r.solve(ctx, next)
 	}
-	r.inflight[d.Name] = true
-	defer delete(r.inflight, d.Name)
 
-	fetched, err := src.Fetch(ctx, r.env)
+	candidates, err := r.resolveCandidates(ctx, src, req.dep)
 	if err != nil {
-		return nil, fmt.Errorf("resolve %s: %w", d.Name, err)
+		return nil, err
 	}
-	node := &ResolvedNode{
-		Name:    d.Name,
-		Source:  src,
-		Fetched: fetched,
-	}
-	r.graph.Nodes[d.Name] = node
-
-	// Recurse into the fetched package's own deps. Dev-deps are NOT
-	// followed for transitive packages — only the root's dev-deps
-	// matter.
-	childBase := manifestBaseDir(fetched.Manifest, fetched.LocalDir)
-	for _, sub := range fetched.Manifest.Dependencies {
-		child, err := r.resolveDep(ctx, sub, childBase)
+	var firstErr error
+	for _, candidate := range candidates {
+		fetched, err := candidate.fetch(ctx)
 		if err != nil {
-			return nil, err
+			if firstErr == nil {
+				firstErr = fmt.Errorf("resolve %s: %w", req.dep.Name, err)
+			}
+			continue
 		}
-		node.Deps = append(node.Deps, child.Name)
+		next := st.cloneWithPending(nil)
+		node := &ResolvedNode{
+			Name:    req.dep.Name,
+			Source:  candidate.source,
+			Fetched: fetched,
+		}
+		next.graph.Nodes[req.dep.Name] = node
+		addDepEdge(next.graph, req.parent, node.Name)
+		children := childRequests(req, node.Name, fetched)
+		next.pending = append(children, rest...)
+		solved, err := r.solve(ctx, next)
+		if err == nil {
+			return solved, nil
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
 	}
-	return node, nil
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	return nil, fmt.Errorf("resolve %s: no candidates", req.dep.Name)
+}
+
+func (r *resolver) resolveCandidates(ctx context.Context, src Source, d manifest.Dependency) ([]resolveCandidate, error) {
+	rs, ok := src.(*registrySource)
+	if !ok {
+		return []resolveCandidate{{
+			source: src,
+			fetch: func(ctx context.Context) (*FetchedPackage, error) {
+				return src.Fetch(ctx, r.env)
+			},
+		}}, nil
+	}
+	candidates, err := rs.candidateRegistryVersions(ctx, r.env)
+	if err != nil {
+		return nil, err
+	}
+	candidates = r.prioritizeLockedRegistryCandidate(rs, d, candidates)
+	out := make([]resolveCandidate, 0, len(candidates))
+	for _, c := range candidates {
+		candidate := c
+		exact := &registrySource{
+			name:         rs.name,
+			packageName:  rs.packageName,
+			versionReq:   "=" + candidate.Version.String(),
+			registryName: rs.registryName,
+		}
+		out = append(out, resolveCandidate{
+			source: exact,
+			fetch: func(ctx context.Context) (*FetchedPackage, error) {
+				return exact.fetchRegistryCandidate(ctx, r.env, candidate)
+			},
+		})
+	}
+	return out, nil
+}
+
+func (r *resolver) prioritizeLockedRegistryCandidate(rs *registrySource, d manifest.Dependency, candidates []registryCandidate) []registryCandidate {
+	pinned, ok := r.lockedRegistryVersion(rs, d)
+	if !ok {
+		return candidates
+	}
+	for i, c := range candidates {
+		if semver.Equal(c.Version, pinned) {
+			if i == 0 {
+				return candidates
+			}
+			out := append([]registryCandidate{c}, candidates[:i]...)
+			return append(out, candidates[i+1:]...)
+		}
+	}
+	return candidates
+}
+
+func (r *resolver) lockedRegistryVersion(rs *registrySource, d manifest.Dependency) (semver.Version, bool) {
+	if r.lock == nil {
+		return semver.Version{}, false
+	}
+	req, err := semver.ParseReq(rs.versionReq)
+	if err != nil {
+		return semver.Version{}, false
+	}
+	for _, p := range r.lock.FindByName(d.Name) {
+		if p.Source != "" && p.Source != rs.URI() {
+			continue
+		}
+		pv, err := semver.ParseVersion(p.Version)
+		if err != nil {
+			continue
+		}
+		if req.Match(pv) {
+			return pv, true
+		}
+	}
+	return semver.Version{}, false
+}
+
+func childRequests(parent resolveRequest, parentName string, fetched *FetchedPackage) []resolveRequest {
+	if fetched == nil || fetched.Manifest == nil {
+		return nil
+	}
+	childBase := manifestBaseDir(fetched.Manifest, fetched.LocalDir)
+	ancestors := extendAncestors(parent.ancestors, parentName)
+	out := make([]resolveRequest, 0, len(fetched.Manifest.Dependencies))
+	for _, sub := range fetched.Manifest.Dependencies {
+		out = append(out, resolveRequest{
+			dep:       sub,
+			baseDir:   childBase,
+			parent:    parentName,
+			ancestors: ancestors,
+		})
+	}
+	return out
+}
+
+func extendAncestors(in map[string]bool, name string) map[string]bool {
+	out := make(map[string]bool, len(in)+1)
+	for k, v := range in {
+		out[k] = v
+	}
+	out[name] = true
+	return out
+}
+
+func (st *resolveState) cloneWithPending(pending []resolveRequest) *resolveState {
+	return &resolveState{
+		graph:   cloneGraph(st.graph),
+		pending: append([]resolveRequest(nil), pending...),
+	}
+}
+
+func cloneGraph(g *Graph) *Graph {
+	if g == nil {
+		return &Graph{Nodes: map[string]*ResolvedNode{}}
+	}
+	out := &Graph{
+		Root:  g.Root,
+		Nodes: make(map[string]*ResolvedNode, len(g.Nodes)),
+		Order: append([]string(nil), g.Order...),
+	}
+	for name, node := range g.Nodes {
+		if node == nil {
+			continue
+		}
+		copyNode := *node
+		copyNode.Deps = append([]string(nil), node.Deps...)
+		out.Nodes[name] = &copyNode
+	}
+	return out
+}
+
+func addDepEdge(g *Graph, parent, child string) {
+	if g == nil || parent == "" || child == "" {
+		return
+	}
+	node := g.Nodes[parent]
+	if node == nil {
+		return
+	}
+	for _, dep := range node.Deps {
+		if dep == child {
+			return
+		}
+	}
+	node.Deps = append(node.Deps, child)
 }
 
 func manifestBaseDir(m *manifest.Manifest, fallback string) string {
