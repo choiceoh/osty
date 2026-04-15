@@ -1,0 +1,696 @@
+// std.net — TCP/UDP sockets, IP address types, DNS resolution, and CIDR blocks.
+//
+// Pure-Osty surface:
+//   - Ipv4Addr / Ipv6Addr / IpAddr  — parsing, classification, formatting
+//   - SocketAddr                    — (ip, port) pairs with text round-trips
+//   - Ipv4Net                       — CIDR blocks (mask, network, broadcast, contains)
+//   - splitHostPort / parseSocketAddr / parseCidr
+//
+// Runtime-bridged surface (body-less declarations, gen supplies Go):
+//   - TcpStream / TcpListener       — TCP client and server
+//   - UdpSocket                     — UDP datagram socket
+//   - tcpConnect / tcpListen / udpBind
+//   - lookup / lookupAddr           — DNS forward and reverse resolution
+
+use std.strings
+use std.error
+
+// ── IPv4 addresses ────────────────────────────────────────────────────────────
+
+pub struct Ipv4Addr {
+    pub a: Int,
+    pub b: Int,
+    pub c: Int,
+    pub d: Int,
+
+    pub fn toString(self) -> String {
+        "{self.a}.{self.b}.{self.c}.{self.d}"
+    }
+
+    pub fn toBytes(self) -> List<Int> {
+        [self.a, self.b, self.c, self.d]
+    }
+
+    pub fn toUInt32(self) -> Int {
+        ((self.a & 0xFF) << 24) | ((self.b & 0xFF) << 16) | ((self.c & 0xFF) << 8) | (self.d & 0xFF)
+    }
+
+    pub fn toIp(self) -> IpAddr {
+        V4(self)
+    }
+
+    pub fn isLoopback(self) -> Bool {
+        self.a == 127
+    }
+
+    pub fn isPrivate(self) -> Bool {
+        if self.a == 10 {
+            return true
+        }
+        if self.a == 172 && self.b >= 16 && self.b <= 31 {
+            return true
+        }
+        if self.a == 192 && self.b == 168 {
+            return true
+        }
+        false
+    }
+
+    pub fn isMulticast(self) -> Bool {
+        self.a >= 224 && self.a <= 239
+    }
+
+    pub fn isLinkLocal(self) -> Bool {
+        self.a == 169 && self.b == 254
+    }
+
+    pub fn isUnspecified(self) -> Bool {
+        self.a == 0 && self.b == 0 && self.c == 0 && self.d == 0
+    }
+
+    pub fn isBroadcast(self) -> Bool {
+        self.a == 255 && self.b == 255 && self.c == 255 && self.d == 255
+    }
+
+    pub fn isDocumentation(self) -> Bool {
+        if self.a == 192 && self.b == 0 && self.c == 2 {
+            return true
+        }
+        if self.a == 198 && self.b == 51 && self.c == 100 {
+            return true
+        }
+        if self.a == 203 && self.b == 0 && self.c == 113 {
+            return true
+        }
+        false
+    }
+
+    pub fn isGlobalUnicast(self) -> Bool {
+        if self.isLoopback() {
+            return false
+        }
+        if self.isPrivate() {
+            return false
+        }
+        if self.isLinkLocal() {
+            return false
+        }
+        if self.isMulticast() {
+            return false
+        }
+        if self.isUnspecified() {
+            return false
+        }
+        if self.isBroadcast() {
+            return false
+        }
+        if self.isDocumentation() {
+            return false
+        }
+        true
+    }
+}
+
+pub fn ipv4FromUInt32(n: Int) -> Ipv4Addr {
+    Ipv4Addr {
+        a: (n >> 24) & 0xFF,
+        b: (n >> 16) & 0xFF,
+        c: (n >> 8) & 0xFF,
+        d: n & 0xFF,
+    }
+}
+
+// ── IPv6 addresses ────────────────────────────────────────────────────────────
+
+pub struct Ipv6Addr {
+    pub groups: List<Int>,
+
+    pub fn toString(self) -> String {
+        let g = self.groups
+        let mut bestStart = -1
+        let mut bestLen = 0
+        let mut curStart = -1
+        let mut curLen = 0
+        let mut i = 0
+        for i < 8 {
+            if g[i] == 0 {
+                if curStart == -1 {
+                    curStart = i
+                    curLen = 1
+                } else {
+                    curLen = curLen + 1
+                }
+                if curLen > bestLen {
+                    bestLen = curLen
+                    bestStart = curStart
+                }
+            } else {
+                curStart = -1
+                curLen = 0
+            }
+            i = i + 1
+        }
+        if bestLen < 2 {
+            bestStart = -1
+        }
+        if bestStart != -1 {
+            let mut left = ""
+            let mut li = 0
+            for li < bestStart {
+                if li > 0 {
+                    left = "{left}:"
+                }
+                left = "{left}{intToLowHex(g[li])}"
+                li = li + 1
+            }
+            let mut right = ""
+            let mut ri = bestStart + bestLen
+            let mut firstRight = true
+            for ri < 8 {
+                if firstRight {
+                    firstRight = false
+                } else {
+                    right = "{right}:"
+                }
+                right = "{right}{intToLowHex(g[ri])}"
+                ri = ri + 1
+            }
+            return "{left}::{right}"
+        }
+        let mut out = ""
+        let mut k = 0
+        for k < 8 {
+            if k > 0 {
+                out = "{out}:"
+            }
+            out = "{out}{intToLowHex(g[k])}"
+            k = k + 1
+        }
+        out
+    }
+
+    pub fn toIp(self) -> IpAddr {
+        V6(self)
+    }
+
+    pub fn isLoopback(self) -> Bool {
+        let g = self.groups
+        g[0] == 0 && g[1] == 0 && g[2] == 0 && g[3] == 0 &&
+        g[4] == 0 && g[5] == 0 && g[6] == 0 && g[7] == 1
+    }
+
+    pub fn isUnspecified(self) -> Bool {
+        let g = self.groups
+        g[0] == 0 && g[1] == 0 && g[2] == 0 && g[3] == 0 &&
+        g[4] == 0 && g[5] == 0 && g[6] == 0 && g[7] == 0
+    }
+
+    pub fn isMulticast(self) -> Bool {
+        (self.groups[0] >> 8) == 0xFF
+    }
+
+    pub fn isLinkLocal(self) -> Bool {
+        (self.groups[0] & 0xFFC0) == 0xFE80
+    }
+
+    pub fn isMappedIpv4(self) -> Bool {
+        let g = self.groups
+        g[0] == 0 && g[1] == 0 && g[2] == 0 && g[3] == 0 &&
+        g[4] == 0 && g[5] == 0xFFFF
+    }
+
+    pub fn toMappedIpv4(self) -> Ipv4Addr? {
+        if self.isMappedIpv4() {
+            let hi = self.groups[6]
+            let lo = self.groups[7]
+            Some(Ipv4Addr {
+                a: (hi >> 8) & 0xFF,
+                b: hi & 0xFF,
+                c: (lo >> 8) & 0xFF,
+                d: lo & 0xFF,
+            })
+        } else {
+            None
+        }
+    }
+}
+
+// ── IpAddr ────────────────────────────────────────────────────────────────────
+
+pub enum IpAddr {
+    V4(Ipv4Addr),
+    V6(Ipv6Addr),
+
+    pub fn toString(self) -> String {
+        match self {
+            V4(addr) -> addr.toString(),
+            V6(addr) -> addr.toString(),
+        }
+    }
+
+    pub fn isLoopback(self) -> Bool {
+        match self {
+            V4(addr) -> addr.isLoopback(),
+            V6(addr) -> addr.isLoopback(),
+        }
+    }
+
+    pub fn isUnspecified(self) -> Bool {
+        match self {
+            V4(addr) -> addr.isUnspecified(),
+            V6(addr) -> addr.isUnspecified(),
+        }
+    }
+
+    pub fn isMulticast(self) -> Bool {
+        match self {
+            V4(addr) -> addr.isMulticast(),
+            V6(addr) -> addr.isMulticast(),
+        }
+    }
+
+    pub fn isV4(self) -> Bool {
+        match self {
+            V4(_) -> true,
+            V6(_) -> false,
+        }
+    }
+
+    pub fn isV6(self) -> Bool {
+        match self {
+            V4(_) -> false,
+            V6(_) -> true,
+        }
+    }
+
+    pub fn asV4(self) -> Ipv4Addr? {
+        match self {
+            V4(addr) -> Some(addr),
+            V6(_) -> None,
+        }
+    }
+
+    pub fn asV6(self) -> Ipv6Addr? {
+        match self {
+            V4(_) -> None,
+            V6(addr) -> Some(addr),
+        }
+    }
+}
+
+// ── SocketAddr ────────────────────────────────────────────────────────────────
+
+pub struct SocketAddr {
+    pub ip: IpAddr,
+    pub port: Int,
+
+    pub fn toString(self) -> String {
+        match self.ip {
+            V4(_) -> "{self.ip}:{self.port}",
+            V6(_) -> "[{self.ip}]:{self.port}",
+        }
+    }
+
+    pub fn isV4(self) -> Bool {
+        self.ip.isV4()
+    }
+
+    pub fn isV6(self) -> Bool {
+        self.ip.isV6()
+    }
+}
+
+// ── IPv4 CIDR network blocks ──────────────────────────────────────────────────
+
+pub struct Ipv4Net {
+    pub addr: Ipv4Addr,
+    pub prefixLen: Int,
+
+    pub fn toString(self) -> String {
+        "{self.addr}/{self.prefixLen}"
+    }
+
+    pub fn mask(self) -> Ipv4Addr {
+        ipv4FromUInt32(cidrMask(self.prefixLen))
+    }
+
+    pub fn network(self) -> Ipv4Addr {
+        ipv4FromUInt32(self.addr.toUInt32() & cidrMask(self.prefixLen))
+    }
+
+    pub fn broadcast(self) -> Ipv4Addr {
+        let net = self.addr.toUInt32() & cidrMask(self.prefixLen)
+        let hostBits = 32 - self.prefixLen
+        let hostMask = if hostBits == 0 { 0 } else { pow2(hostBits) - 1 }
+        ipv4FromUInt32(net | hostMask)
+    }
+
+    pub fn contains(self, addr: Ipv4Addr) -> Bool {
+        let m = cidrMask(self.prefixLen)
+        (self.addr.toUInt32() & m) == (addr.toUInt32() & m)
+    }
+
+    pub fn hostCount(self) -> Int {
+        if self.prefixLen >= 32 {
+            return 1
+        }
+        if self.prefixLen == 31 {
+            return 2
+        }
+        pow2(32 - self.prefixLen) - 2
+    }
+}
+
+// ── Well-known addresses ──────────────────────────────────────────────────────
+
+pub let LOCALHOST_V4: Ipv4Addr = Ipv4Addr { a: 127, b: 0, c: 0, d: 1 }
+pub let UNSPECIFIED_V4: Ipv4Addr = Ipv4Addr { a: 0, b: 0, c: 0, d: 0 }
+pub let BROADCAST_V4: Ipv4Addr = Ipv4Addr { a: 255, b: 255, c: 255, d: 255 }
+
+pub let LOCALHOST_V6: Ipv6Addr = Ipv6Addr { groups: [0, 0, 0, 0, 0, 0, 0, 1] }
+pub let UNSPECIFIED_V6: Ipv6Addr = Ipv6Addr { groups: [0, 0, 0, 0, 0, 0, 0, 0] }
+
+// ── Parsing ───────────────────────────────────────────────────────────────────
+
+pub fn parseIpv4(text: String) -> Result<Ipv4Addr, Error> {
+    let parts = strings.split(text, ".")
+    if parts.len() != 4 {
+        return Err(error.new("net: invalid IPv4 address: {text}"))
+    }
+    let a = parseOctet(parts[0])?
+    let b = parseOctet(parts[1])?
+    let c = parseOctet(parts[2])?
+    let d = parseOctet(parts[3])?
+    Ok(Ipv4Addr { a, b, c, d })
+}
+
+pub fn parseIpv6(text: String) -> Result<Ipv6Addr, Error> {
+    let dcIdx = findDoubleColon(text)
+    if dcIdx != -1 {
+        let leftText = text[0..dcIdx]
+        let rightText = text[dcIdx + 2..]
+        let leftGroups: List<Int> = if leftText.isEmpty() {
+            []
+        } else {
+            parseHexGroups(leftText)?
+        }
+        let rightGroups: List<Int> = if rightText.isEmpty() {
+            []
+        } else {
+            parseHexGroups(rightText)?
+        }
+        let fill = 8 - leftGroups.len() - rightGroups.len()
+        if fill < 0 {
+            return Err(error.new("net: too many groups in IPv6 address: {text}"))
+        }
+        let mut groups: List<Int> = []
+        for g in leftGroups {
+            groups.push(g)
+        }
+        let mut z = 0
+        for z < fill {
+            groups.push(0)
+            z = z + 1
+        }
+        for g in rightGroups {
+            groups.push(g)
+        }
+        return Ok(Ipv6Addr { groups })
+    }
+    let groups = parseHexGroups(text)?
+    if groups.len() != 8 {
+        return Err(error.new("net: IPv6 address must have 8 groups: {text}"))
+    }
+    Ok(Ipv6Addr { groups })
+}
+
+pub fn parseIp(text: String) -> Result<IpAddr, Error> {
+    if strings.contains(text, ":") {
+        let addr = parseIpv6(text)?
+        return Ok(V6(addr))
+    }
+    let addr = parseIpv4(text)?
+    Ok(V4(addr))
+}
+
+pub fn parseSocketAddr(text: String) -> Result<SocketAddr, Error> {
+    let (host, portStr) = splitHostPort(text)?
+    let port = parseDecInt(portStr)?
+    if port < 0 || port > 65535 {
+        return Err(error.new("net: port out of range: {portStr}"))
+    }
+    let ip = parseIp(host)?
+    Ok(SocketAddr { ip, port })
+}
+
+pub fn parseCidr(text: String) -> Result<Ipv4Net, Error> {
+    let slashIdx = findChar(text, '/')
+    if slashIdx == -1 {
+        return Err(error.new("net: missing / in CIDR notation: {text}"))
+    }
+    let addrPart = text[0..slashIdx]
+    let lenPart = text[slashIdx + 1..]
+    let addr = parseIpv4(addrPart)?
+    let prefixLen = parseDecInt(lenPart)?
+    if prefixLen < 0 || prefixLen > 32 {
+        return Err(error.new("net: invalid prefix length: {lenPart}"))
+    }
+    Ok(Ipv4Net { addr, prefixLen })
+}
+
+pub fn splitHostPort(hostport: String) -> Result<(String, String), Error> {
+    if hostport.isEmpty() {
+        return Err(error.new("net: empty address"))
+    }
+    let chars = hostport.chars()
+    if chars[0] == '[' {
+        let closeIdx = findChar(hostport, ']')
+        if closeIdx == -1 {
+            return Err(error.new("net: missing ] in address: {hostport}"))
+        }
+        let host = hostport[1..closeIdx]
+        let rest = hostport[closeIdx + 1..]
+        if rest.isEmpty() || rest.chars()[0] != ':' {
+            return Err(error.new("net: missing port after ] in address: {hostport}"))
+        }
+        let port = rest[1..]
+        return Ok((host, port))
+    }
+    let lastColon = lastIndexOfChar(hostport, ':')
+    if lastColon == -1 {
+        return Err(error.new("net: missing port in address: {hostport}"))
+    }
+    let host = hostport[0..lastColon]
+    let port = hostport[lastColon + 1..]
+    Ok((host, port))
+}
+
+// ── DNS (runtime-bridged) ─────────────────────────────────────────────────────
+
+pub fn lookup(host: String) -> Result<List<IpAddr>, Error>
+
+pub fn lookupAddr(ip: IpAddr) -> Result<List<String>, Error>
+
+// ── TCP (runtime-bridged) ─────────────────────────────────────────────────────
+
+pub struct TcpStream {
+    pub fn read(self, maxBytes: Int) -> Result<Bytes, Error>
+    pub fn readExact(self, n: Int) -> Result<Bytes, Error>
+    pub fn write(self, data: Bytes) -> Result<Int, Error>
+    pub fn writeAll(self, data: Bytes) -> Result<(), Error>
+    pub fn flush(self) -> Result<(), Error>
+    pub fn close(self) -> Result<(), Error>
+    pub fn localAddr(self) -> Result<SocketAddr, Error>
+    pub fn peerAddr(self) -> Result<SocketAddr, Error>
+    pub fn setReadTimeout(self, ms: Int?) -> Result<(), Error>
+    pub fn setWriteTimeout(self, ms: Int?) -> Result<(), Error>
+    pub fn setNoDelay(self, on: Bool) -> Result<(), Error>
+    pub fn setKeepAlive(self, on: Bool) -> Result<(), Error>
+}
+
+pub struct TcpListener {
+    pub fn accept(self) -> Result<TcpStream, Error>
+    pub fn localAddr(self) -> Result<SocketAddr, Error>
+    pub fn close(self) -> Result<(), Error>
+}
+
+pub fn tcpConnect(addr: String) -> Result<TcpStream, Error>
+
+pub fn tcpConnectTimeout(addr: String, timeoutMs: Int) -> Result<TcpStream, Error>
+
+pub fn tcpListen(addr: String) -> Result<TcpListener, Error>
+
+// ── UDP (runtime-bridged) ─────────────────────────────────────────────────────
+
+pub struct UdpSocket {
+    pub fn send(self, data: Bytes, addr: String) -> Result<Int, Error>
+    pub fn sendTo(self, data: Bytes, addr: SocketAddr) -> Result<Int, Error>
+    pub fn recv(self, maxBytes: Int) -> Result<(Bytes, SocketAddr), Error>
+    pub fn recvFrom(self, maxBytes: Int) -> Result<(Bytes, SocketAddr), Error>
+    pub fn localAddr(self) -> Result<SocketAddr, Error>
+    pub fn close(self) -> Result<(), Error>
+    pub fn setBroadcast(self, on: Bool) -> Result<(), Error>
+    pub fn joinMulticastV4(self, group: Ipv4Addr, iface: Ipv4Addr) -> Result<(), Error>
+    pub fn leaveMulticastV4(self, group: Ipv4Addr, iface: Ipv4Addr) -> Result<(), Error>
+    pub fn setMulticastTtl(self, ttl: Int) -> Result<(), Error>
+}
+
+pub fn udpBind(addr: String) -> Result<UdpSocket, Error>
+
+// ── Internal helpers ──────────────────────────────────────────────────────────
+
+fn parseOctet(s: String) -> Result<Int, Error> {
+    let n = parseDecInt(s)?
+    if n < 0 || n > 255 {
+        return Err(error.new("net: octet out of range: {s}"))
+    }
+    Ok(n)
+}
+
+fn parseDecInt(s: String) -> Result<Int, Error> {
+    if s.isEmpty() {
+        return Err(error.new("net: empty number string"))
+    }
+    let chars = s.chars()
+    let mut result = 0
+    let mut i = 0
+    for i < chars.len() {
+        let c = chars[i]
+        if c.isDigit() {
+            result = result * 10 + (c.toInt() - '0'.toInt())
+        } else {
+            return Err(error.new("net: non-digit in number: {s}"))
+        }
+        i = i + 1
+    }
+    Ok(result)
+}
+
+fn parseHexGroups(text: String) -> Result<List<Int>, Error> {
+    let parts = strings.split(text, ":")
+    let mut groups: List<Int> = []
+    for part in parts {
+        if part.isEmpty() {
+            return Err(error.new("net: empty group in IPv6 address"))
+        }
+        let v = parseHexInt(part)?
+        if v < 0 || v > 0xFFFF {
+            return Err(error.new("net: group out of range: {part}"))
+        }
+        groups.push(v)
+    }
+    Ok(groups)
+}
+
+fn parseHexInt(s: String) -> Result<Int, Error> {
+    if s.isEmpty() {
+        return Err(error.new("net: empty hex string"))
+    }
+    let chars = s.chars()
+    let mut result = 0
+    let mut i = 0
+    for i < chars.len() {
+        let v = hexDigitValue(chars[i])?
+        result = result * 16 + v
+        i = i + 1
+    }
+    Ok(result)
+}
+
+fn hexDigitValue(c: Char) -> Result<Int, Error> {
+    if c >= '0' && c <= '9' {
+        return Ok(c.toInt() - '0'.toInt())
+    }
+    if c >= 'a' && c <= 'f' {
+        return Ok(c.toInt() - 'a'.toInt() + 10)
+    }
+    if c >= 'A' && c <= 'F' {
+        return Ok(c.toInt() - 'A'.toInt() + 10)
+    }
+    Err(error.new("net: invalid hex digit: {c}"))
+}
+
+fn intToLowHex(val: Int) -> String {
+    if val == 0 {
+        return "0"
+    }
+    let hexChars = "0123456789abcdef"
+    let mut result = ""
+    let mut v = val
+    for v > 0 {
+        let digit = v & 0xF
+        result = "{hexChars[digit]}{result}"
+        v = v >> 4
+    }
+    result
+}
+
+fn findDoubleColon(s: String) -> Int {
+    let chars = s.chars()
+    let len = chars.len()
+    if len < 2 {
+        return -1
+    }
+    let mut i = 0
+    for i < len - 1 {
+        if chars[i] == ':' && chars[i + 1] == ':' {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
+
+fn findChar(s: String, target: Char) -> Int {
+    let chars = s.chars()
+    let len = chars.len()
+    let mut i = 0
+    for i < len {
+        if chars[i] == target {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
+
+fn lastIndexOfChar(s: String, target: Char) -> Int {
+    let chars = s.chars()
+    let len = chars.len()
+    let mut i = len - 1
+    for i >= 0 {
+        if chars[i] == target {
+            return i
+        }
+        i = i - 1
+    }
+    -1
+}
+
+fn cidrMask(prefix: Int) -> Int {
+    if prefix == 0 {
+        return 0
+    }
+    if prefix >= 32 {
+        return 0xFFFFFFFF
+    }
+    let mut mask = 0
+    let mut bit = 31
+    let mut count = 0
+    for count < prefix {
+        mask = mask | (1 << bit)
+        bit = bit - 1
+        count = count + 1
+    }
+    mask
+}
+
+fn pow2(n: Int) -> Int {
+    let mut result = 1
+    let mut i = 0
+    for i < n {
+        result = result * 2
+        i = i + 1
+    }
+    result
+}
