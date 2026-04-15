@@ -69,3 +69,55 @@ fn testSemverReqPrereleaseGoldenCases() {
     let preRange = caretReq(prerelease1(1, 2, 3, preText("alpha")))
     assertReqMatch(preRange, prerelease2(1, 2, 3, preText("alpha"), preNumber(1)))
 }
+
+fn testSemverReqAnyMatchesStableOnly() {
+    let any = anySemReq()
+    assertReqMatch(any, stableVersion(0, 0, 0))
+    assertReqMatch(any, stableVersion(99, 1, 2))
+    assertReqMiss(any, prerelease1(1, 0, 0, preText("alpha")))
+}
+
+fn testSemverReqBoundedConjunctionExamples() {
+    let req = boundedReq(stableVersion(1, 4, 0), stableVersion(1, 6, 0))
+
+    assertReqMiss(req, stableVersion(1, 3, 9))
+    assertReqMatch(req, stableVersion(1, 4, 0))
+    assertReqMatch(req, stableVersion(1, 5, 9))
+    assertReqMiss(req, stableVersion(1, 6, 0))
+}
+
+fn testSemverReqMaxMatchingSkipsPrereleasesByDefault() {
+    let versions = [
+        prerelease1(2, 0, 0, preText("alpha")),
+        stableVersion(1, 9, 9),
+        stableVersion(1, 8, 0),
+    ]
+    let best = maxMatchingVersion(atLeastReq(stableVersion(1, 0, 0)), versions)
+
+    testing.assert(best.found)
+    testing.assertEq(compareSemVersion(best.version, stableVersion(1, 9, 9)), 0)
+}
+
+fn testSemverReqMaxMatchingCanSelectPrereleaseWhenRequested() {
+    let req = exactReq(prerelease1(2, 0, 0, preText("alpha")))
+    let versions = [
+        stableVersion(1, 9, 9),
+        prerelease1(2, 0, 0, preText("alpha")),
+        prerelease1(2, 0, 0, preText("beta")),
+    ]
+    let best = maxMatchingVersion(req, versions)
+
+    testing.assert(best.found)
+    testing.assertEq(compareSemVersion(best.version, prerelease1(2, 0, 0, preText("alpha"))), 0)
+}
+
+fn testSemverReqMaxMatchingReportsNoMatch() {
+    let versions = [
+        stableVersion(0, 9, 0),
+        stableVersion(2, 0, 0),
+    ]
+    let best = maxMatchingVersion(wildcardMinorReq(1, 4), versions)
+
+    testing.assert(!(best.found))
+    testing.assertEq(compareSemVersion(best.version, stableVersion(0, 0, 0)), 0)
+}

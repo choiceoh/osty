@@ -1,0 +1,66 @@
+use std.testing
+
+fn assertRegistryBest(req: SemReq, versions: List<RegistryVersion>, want: SemVersion) {
+    let best = bestRegistryVersion(req, versions)
+    testing.assert(best.found)
+    testing.assertEq(compareSemVersion(best.version, want), 0)
+}
+
+fn testRegistryExamplesSelectHighestVisibleMatch() {
+    let versions = [
+        registryVersion(stableVersion(1, 0, 0), false),
+        registryVersion(stableVersion(1, 4, 0), false),
+        registryVersion(stableVersion(1, 5, 0), true),
+        registryVersion(stableVersion(2, 0, 0), false),
+    ]
+
+    testing.assertEq(visibleRegistryCount(versions), 3)
+    assertRegistryBest(wildcardMajorReq(1), versions, stableVersion(1, 4, 0))
+}
+
+fn testRegistryExamplesReportNoMatchWhenOnlyCandidateIsYanked() {
+    let versions = [
+        registryVersion(stableVersion(1, 2, 0), true),
+        registryVersion(stableVersion(2, 0, 0), false),
+    ]
+    let best = bestRegistryVersion(wildcardMinorReq(1, 2), versions)
+
+    testing.assert(!(best.found))
+    testing.assertEq(compareSemVersion(best.version, stableVersion(0, 0, 0)), 0)
+}
+
+fn testRegistryExamplesHonorPrereleasePolicy() {
+    let alpha = prerelease1(1, 1, 0, preText("alpha"))
+    let versions = [
+        registryVersion(alpha, false),
+        registryVersion(stableVersion(1, 0, 0), false),
+    ]
+
+    assertRegistryBest(wildcardMajorReq(1), versions, stableVersion(1, 0, 0))
+    assertRegistryBest(exactReq(alpha), versions, alpha)
+}
+
+fn testRegistryExamplesHandleUnsortedIndexes() {
+    let versions = [
+        registryVersion(stableVersion(1, 9, 0), false),
+        registryVersion(stableVersion(1, 7, 0), false),
+        registryVersion(stableVersion(1, 8, 5), false),
+        registryVersion(stableVersion(1, 10, 0), true),
+    ]
+
+    assertRegistryBest(wildcardMajorReq(1), versions, stableVersion(1, 9, 0))
+}
+
+fn testRegistryExamplesCountVisibleVersionsSeparatelyFromMatching() {
+    let versions = [
+        registryVersion(stableVersion(0, 9, 0), false),
+        registryVersion(stableVersion(1, 0, 0), true),
+        registryVersion(stableVersion(1, 1, 0), false),
+        registryVersion(stableVersion(2, 0, 0), false),
+    ]
+    let best = bestRegistryVersion(wildcardMajorReq(1), versions)
+
+    testing.assertEq(visibleRegistryCount(versions), 3)
+    testing.assert(best.found)
+    testing.assertEq(compareSemVersion(best.version, stableVersion(1, 1, 0)), 0)
+}

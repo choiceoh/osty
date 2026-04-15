@@ -39,3 +39,51 @@ fn testSemverIgnoresBuildMetadata() {
     let b = versionWithBuild(1, 0, 0, "build.2")
     testing.assertEq(compareSemVersion(a, b), 0)
 }
+
+fn testSemverConstructorsExposePrereleaseSlots() {
+    let v = semVersion(
+        2,
+        3,
+        4,
+        preText("rc"),
+        preNumber(2),
+        preText("hotfix"),
+        "build.9",
+    )
+
+    testing.assertEq(v.major, 2)
+    testing.assertEq(v.minor, 3)
+    testing.assertEq(v.patch, 4)
+    testing.assertEq(v.build, "build.9")
+    testing.assert(isSemPrerelease(v))
+    testing.assertEq(comparePreIdent(v.pre1, preText("rc")), 0)
+    testing.assertEq(comparePreIdent(v.pre2, preNumber(2)), 0)
+    testing.assertEq(comparePreIdent(v.pre3, preText("hotfix")), 0)
+}
+
+fn testSemverOrdersShorterPrereleaseBeforeLongerPrefix() {
+    let alpha = prerelease1(1, 0, 0, preText("alpha"))
+    let alpha0 = prerelease2(1, 0, 0, preText("alpha"), preNumber(0))
+    let alpha0Build = semVersion(1, 0, 0, preText("alpha"), preNumber(0), preText("build"), "")
+
+    testing.assertEq(compareSemVersion(alpha, alpha0), -1)
+    testing.assertEq(compareSemVersion(alpha0, alpha0Build), -1)
+    testing.assertEq(comparePreIdent(preNone(), preNumber(1)), -1)
+}
+
+fn testSemverOrdersNumericPrereleaseBeforeText() {
+    testing.assertEq(comparePreIdent(preNumber(10), preText("alpha")), -1)
+    testing.assertEq(comparePreIdent(preText("alpha"), preNumber(10)), 1)
+    testing.assertEq(comparePreIdent(preText("alpha"), preText("beta")), -1)
+    testing.assertEq(comparePreIdent(preText("rc"), preText("rc")), 0)
+}
+
+fn testSemverComparisonHelpersAreThreeWay() {
+    testing.assertEq(signInt(1, 2), -1)
+    testing.assertEq(signInt(2, 1), 1)
+    testing.assertEq(signInt(2, 2), 0)
+
+    testing.assertEq(signString("alpha", "beta"), -1)
+    testing.assertEq(signString("beta", "alpha"), 1)
+    testing.assertEq(signString("rc", "rc"), 0)
+}

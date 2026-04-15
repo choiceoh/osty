@@ -77,3 +77,77 @@ fn testManifestFeatureValidation() {
     testing.assertEq(bad.undefinedDefault, 1)
     testing.assertEq(bad.selfReferences, 1)
 }
+
+fn parsedSelfhostVersion(text: String) -> SemVersion {
+    let mut out = stableVersion(0, 0, 0)
+    match parseSemVersionText(text) {
+        Ok(version) -> {
+            out = version
+        },
+        Err(e) -> testing.fail(e),
+    }
+    out
+}
+
+fn testSelfhostExampleDependencyResolutionScenario() {
+    let versions = [
+        registryVersion(parsedSelfhostVersion("1.4.0"), false),
+        registryVersion(parsedSelfhostVersion("1.4.1"), false),
+        registryVersion(parsedSelfhostVersion("1.5.0"), true),
+        registryVersion(parsedSelfhostVersion("1.5.1-alpha"), false),
+        registryVersion(parsedSelfhostVersion("2.0.0"), false),
+    ]
+    let best = bestRegistryVersion(caretReq(parsedSelfhostVersion("1.4.0")), versions)
+
+    testing.assert(best.found)
+    testing.assertEq(compareSemVersion(best.version, parsedSelfhostVersion("1.4.1")), 0)
+}
+
+fn testSelfhostExamplePackageArchiveScenario() {
+    let paths = [
+        "osty.toml",
+        "osty.lock",
+        "src/lib.osty",
+        "src/parser_test.osty",
+        "README.md",
+        ".osty",
+        ".git",
+    ]
+    let mut sources = 0
+    let mut hashed = 0
+    let mut ignored = 0
+    for path in paths {
+        if isOstySourceEntry(path) {
+            sources = sources + 1
+        }
+        if shouldHashPackageEntry(path) {
+            hashed = hashed + 1
+        } else {
+            ignored = ignored + 1
+        }
+    }
+
+    testing.assertEq(sources, 2)
+    testing.assertEq(hashed, 5)
+    testing.assertEq(ignored, 2)
+}
+
+fn testSelfhostExampleFrontEndPipelineScenario() {
+    let source = r"""
+        /// Adds two integers.
+        pub fn add(a: Int, b: Int) -> Int {
+            let sum = a + b
+            return sum
+        }
+        """
+    let lexed = frontendLexStream(source)
+    let tree = frontendParseTree(source)
+
+    testing.assert(frontLexTokenCount(lexed) > 0)
+    testing.assertEq(frontLexDiagnosticCount(lexed), 0)
+    testing.assertEq(frontLeadingDocAttachmentCount(lexed), 1)
+    testing.assertEq(frontParseTreeDiagnosticCount(tree), 0)
+    testing.assertEq(frontParseTreeNodeNameCount(tree, "fn"), 1)
+    testing.assert(frontParseTreeNodeNameCount(tree, "param") >= 2)
+    testing.assert(frontParseTreeNodeNameCount(tree, "return") >= 1)
+}

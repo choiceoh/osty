@@ -1,0 +1,55 @@
+use std.testing
+
+fn testManifestFeatureExamplesFindDeclaredFeatures() {
+    let features = [
+        featureSpec("default", ["serde", "cli"]),
+        featureSpec("serde", []),
+        featureSpec("cli", ["serde"]),
+    ]
+
+    testing.assert(featureExists("default", features))
+    testing.assert(featureExists("serde", features))
+    testing.assert(!(featureExists("missing", features)))
+}
+
+fn testManifestFeatureExamplesValidateEmptyGraph() {
+    let result = validateFeatureGraph([], [])
+
+    testing.assertEq(result.undefinedDefault, 0)
+    testing.assertEq(result.selfReferences, 0)
+}
+
+fn testManifestFeatureExamplesCountMissingDefaults() {
+    let features = [
+        featureSpec("cli", []),
+        featureSpec("serde", []),
+    ]
+    let result = validateFeatureGraph(["default", "full", "cli"], features)
+
+    testing.assertEq(result.undefinedDefault, 2)
+    testing.assertEq(result.selfReferences, 0)
+}
+
+fn testManifestFeatureExamplesCountSelfReferences() {
+    let features = [
+        featureSpec("default", ["serde"]),
+        featureSpec("serde", ["serde"]),
+        featureSpec("cli", ["serde", "cli"]),
+        featureSpec("docs", ["cli"]),
+    ]
+    let result = validateFeatureGraph(["default", "cli"], features)
+
+    testing.assertEq(result.undefinedDefault, 0)
+    testing.assertEq(result.selfReferences, 2)
+}
+
+fn testManifestFeatureExamplesReportIndependentProblems() {
+    let features = [
+        featureSpec("default", ["default"]),
+        featureSpec("serde", []),
+    ]
+    let result = validateFeatureGraph(["default", "missing"], features)
+
+    testing.assertEq(result.undefinedDefault, 1)
+    testing.assertEq(result.selfReferences, 1)
+}

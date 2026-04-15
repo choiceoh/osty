@@ -232,28 +232,57 @@ func newGen(pkgName string, file *ast.File, res *resolve.Result, chk *check.Resu
 // owner / enum-type / method-name maps. Keeps the emit path branch-free
 // by having direct lookups available.
 func (g *gen) indexTypes() {
+	g.indexScopeTypes()
 	for _, d := range g.file.Decls {
 		switch d := d.(type) {
 		case *ast.EnumDecl:
-			g.enumTypes[d.Name] = true
-			for _, v := range d.Variants {
-				g.variantOwner[v.Name] = d.Name
-			}
-			if g.methodNames[d.Name] == nil {
-				g.methodNames[d.Name] = map[string]bool{}
-			}
-			for _, m := range d.Methods {
-				g.methodNames[d.Name][m.Name] = true
-			}
+			g.indexEnumDecl(d)
 		case *ast.StructDecl:
-			g.structTypes[d.Name] = true
-			if g.methodNames[d.Name] == nil {
-				g.methodNames[d.Name] = map[string]bool{}
-			}
-			for _, m := range d.Methods {
-				g.methodNames[d.Name][m.Name] = true
+			g.indexStructDecl(d)
+		}
+	}
+}
+
+func (g *gen) indexScopeTypes() {
+	if g.res == nil || g.res.FileScope == nil {
+		return
+	}
+	for scope := g.res.FileScope; scope != nil; scope = scope.Parent() {
+		for _, sym := range scope.Symbols() {
+			switch sym.Kind {
+			case resolve.SymEnum:
+				if decl, ok := sym.Decl.(*ast.EnumDecl); ok {
+					g.indexEnumDecl(decl)
+				}
+			case resolve.SymStruct:
+				if decl, ok := sym.Decl.(*ast.StructDecl); ok {
+					g.indexStructDecl(decl)
+				}
 			}
 		}
+	}
+}
+
+func (g *gen) indexEnumDecl(e *ast.EnumDecl) {
+	g.enumTypes[e.Name] = true
+	for _, v := range e.Variants {
+		g.variantOwner[v.Name] = e.Name
+	}
+	if g.methodNames[e.Name] == nil {
+		g.methodNames[e.Name] = map[string]bool{}
+	}
+	for _, m := range e.Methods {
+		g.methodNames[e.Name][m.Name] = true
+	}
+}
+
+func (g *gen) indexStructDecl(s *ast.StructDecl) {
+	g.structTypes[s.Name] = true
+	if g.methodNames[s.Name] == nil {
+		g.methodNames[s.Name] = map[string]bool{}
+	}
+	for _, m := range s.Methods {
+		g.methodNames[s.Name][m.Name] = true
 	}
 }
 
