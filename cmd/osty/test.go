@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -53,7 +54,7 @@ import (
 // Test execution is driven by the internal/testgen package: after
 // the front-end validates a package, gen transpiles every source
 // file to Go, testgen merges them, writes an auto-generated harness
-// alongside, and `go run` executes the suite. Assertion failures
+// alongside, and executes a cached test binary. Assertion failures
 // surface as FAIL lines and the overall exit code reflects the
 // combined verdict.
 //
@@ -579,17 +580,17 @@ func filterTestFiles(files []string, filters []string) []string {
 
 // executeTestPackage transpiles pkg via testgen, writes the Go
 // sources into a per-package scratch directory under $TMPDIR, and
-// invokes `go run` to execute the suite. It returns the runtime
-// pass/fail counts parsed from the harness's own summary line.
+// executes a cached test binary for the generated suite. It returns
+// the runtime pass/fail counts parsed from the harness's own summary
+// line.
 //
 // The scratch directory is keyed by the SHA-1 of the package's
 // absolute path so concurrent invocations targeting different
-// packages don't collide. Contents are rewritten every run — we
-// don't assume anything about staleness since gen output is cheap
-// to reproduce.
+// packages don't collide. Generated sources are rewritten every run;
+// compiled binaries are keyed by source content and toolchain identity.
 //
 // A non-nil error indicates an I/O problem, a testgen merge error,
-// or a `go run` invocation failure unrelated to test verdicts.
+// or a Go build / invocation failure unrelated to test verdicts.
 // Individual test failures show up as FAIL lines in the harness's
 // stdout and are counted into runFail; they don't become a Go
 // error from this function.
@@ -622,19 +623,40 @@ func executeTestPackage(dir string, pkg *resolve.Package, chk *check.Result, ent
 	// still try to run the harness because the clean portion often
 	// compiles; surface the generated file path for post-mortem work.
 	reportTranspileWarning("osty test", dir, mainPath, genErr)
-	// `go run .` needs a module context. The harness has no
+	// The generated package needs a module context. The harness has no
 	// third-party dependencies so a bare go.mod is sufficient; it
 	// also insulates the scratch directory from ambient GOPATH /
 	// workspace settings that might otherwise hijack the build.
-	if err := os.WriteFile(filepath.Join(outDir, "go.mod"),
-		[]byte("module ostytest\n\ngo 1.22\n"), 0o644); err != nil {
+	goMod := []byte("module ostytest\n\ngo 1.22\n")
+	goModPath := filepath.Join(outDir, "go.mod")
+	if err := os.WriteFile(goModPath, goMod, 0o644); err != nil {
 		return 0, 0, err
 	}
 
 	fmt.Printf("\n--- running tests in %s ---\n", relOrSelf(dir, root))
 
+	binPath := cachedTestBinaryPath(outDir, map[string][]byte{
+		"main.go":    srcs.Main,
+		"harness.go": srcs.Harness,
+		"go.mod":     goMod,
+	})
+	buildArgs, buildStderr, buildErr := ensureCachedTestBinary(outDir, binPath)
+	if buildErr != nil {
+		reportGoFailure(goFailureReport{
+			Tool:      "osty test",
+			Action:    "go build",
+			Args:      buildArgs,
+			WorkDir:   outDir,
+			Generated: []string{mainPath, harnessPath},
+			Source:    dir,
+			Stderr:    buildStderr,
+			Err:       buildErr,
+		})
+		return 0, 0, fmt.Errorf("go build failed in %s: %w", outDir, buildErr)
+	}
+
 	var stdout, stderr bytes.Buffer
-	cmd := exec.Command("go", "run", ".")
+	cmd := exec.Command(binPath)
 	cmd.Dir = outDir
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -650,12 +672,12 @@ func executeTestPackage(dir string, pkg *resolve.Package, chk *check.Result, ent
 
 	runPass, runFail, parsed := parseHarnessSummary(stdout.String())
 	if runErr != nil && !parsed {
-		// go run failed before the harness could print a summary.
+		// The generated program failed before the harness could print a summary.
 		// The sources were left behind under outDir for post-mortem
 		// — point the user there.
 		reportGoFailure(goFailureReport{
 			Tool:      "osty test",
-			Action:    "go run",
+			Action:    "test binary",
 			Args:      cmd.Args,
 			WorkDir:   outDir,
 			Generated: []string{mainPath, harnessPath},
@@ -663,9 +685,83 @@ func executeTestPackage(dir string, pkg *resolve.Package, chk *check.Result, ent
 			Stderr:    stderr.String(),
 			Err:       runErr,
 		})
-		return 0, 0, fmt.Errorf("go run failed in %s: %w", outDir, runErr)
+		return 0, 0, fmt.Errorf("test binary failed in %s: %w", outDir, runErr)
 	}
 	return runPass, runFail, nil
+}
+
+func cachedTestBinaryPath(outDir string, files map[string][]byte) string {
+	h := sha1.New()
+	h.Write([]byte(runtime.GOOS))
+	h.Write([]byte{0})
+	h.Write([]byte(runtime.GOARCH))
+	h.Write([]byte{0})
+	h.Write([]byte(runtime.Version()))
+	h.Write([]byte{0})
+	if path, err := exec.LookPath("go"); err == nil {
+		h.Write([]byte(path))
+		h.Write([]byte{0})
+		if info, err := os.Stat(path); err == nil {
+			fmt.Fprintf(h, "%d:%d", info.Size(), info.ModTime().UnixNano())
+			h.Write([]byte{0})
+		}
+	}
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		h.Write([]byte(name))
+		h.Write([]byte{0})
+		h.Write(files[name])
+		h.Write([]byte{0})
+	}
+	sum := h.Sum(nil)
+	name := "osty-test-bin-" + hex.EncodeToString(sum[:8])
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	return filepath.Join(outDir, name)
+}
+
+func ensureCachedTestBinary(outDir, binPath string) ([]string, string, error) {
+	if _, err := os.Stat(binPath); err == nil {
+		return []string{binPath}, "", nil
+	} else if !os.IsNotExist(err) {
+		return nil, "", err
+	}
+
+	tmp, err := os.CreateTemp(outDir, ".osty-test-bin-*")
+	if err != nil {
+		return nil, "", err
+	}
+	tmpPath := tmp.Name()
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return nil, "", err
+	}
+	if err := os.Remove(tmpPath); err != nil {
+		return nil, "", err
+	}
+
+	var stdout, stderr bytes.Buffer
+	cmd := exec.Command("go", "build", "-o", tmpPath, ".")
+	cmd.Dir = outDir
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		_ = os.Remove(tmpPath)
+		return cmd.Args, stdout.String() + stderr.String(), err
+	}
+	if err := os.Rename(tmpPath, binPath); err != nil {
+		_ = os.Remove(tmpPath)
+		if _, statErr := os.Stat(binPath); statErr == nil {
+			return []string{binPath}, "", nil
+		}
+		return cmd.Args, "", err
+	}
+	return []string{binPath}, "", nil
 }
 
 // scratchDir returns a stable per-package scratch directory under

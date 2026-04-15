@@ -2,12 +2,15 @@ package examples_test
 
 import (
 	"bytes"
+	"crypto/sha1"
+	"encoding/hex"
 	"fmt"
 	goparser "go/parser"
 	gotoken "go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -322,27 +325,112 @@ func runGo(t *testing.T, src []byte) string {
 
 func runGoPackage(t *testing.T, files map[string][]byte) string {
 	t.Helper()
-	dir := t.TempDir()
+	allFiles := map[string][]byte{}
 	for name, src := range files {
+		allFiles[name] = src
+	}
+	if _, ok := allFiles["go.mod"]; !ok {
+		allFiles["go.mod"] = []byte("module example\n\ngo 1.22\n")
+	}
+
+	dir := exampleGoRunDir(t, allFiles)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("create Go run dir: %v", err)
+	}
+	for name, src := range allFiles {
 		if err := os.WriteFile(filepath.Join(dir, name), src, 0o644); err != nil {
 			t.Fatalf("write %s: %v", name, err)
 		}
 	}
-	if _, ok := files["go.mod"]; !ok {
-		if err := os.WriteFile(filepath.Join(dir, "go.mod"),
-			[]byte("module example\n\ngo 1.22\n"), 0o644); err != nil {
-			t.Fatalf("write go.mod: %v", err)
+
+	bin := exampleGoRunBinary(t, dir)
+	if _, err := os.Stat(bin); err != nil {
+		if !os.IsNotExist(err) {
+			t.Fatalf("stat cached binary: %v", err)
+		}
+		tmp, err := os.CreateTemp(dir, ".osty-example-*")
+		if err != nil {
+			t.Fatalf("create temp binary: %v", err)
+		}
+		tmpPath := tmp.Name()
+		if err := tmp.Close(); err != nil {
+			t.Fatalf("close temp binary: %v", err)
+		}
+		if err := os.Remove(tmpPath); err != nil {
+			t.Fatalf("remove temp binary placeholder: %v", err)
+		}
+		build := exec.Command("go", "build", "-o", tmpPath, ".")
+		build.Dir = dir
+		var out bytes.Buffer
+		build.Stdout = &out
+		build.Stderr = &out
+		if err := build.Run(); err != nil {
+			_ = os.Remove(tmpPath)
+			t.Fatalf("go build failed: %v\n%s", err, out.String())
+		}
+		if err := os.Rename(tmpPath, bin); err != nil {
+			_ = os.Remove(tmpPath)
+			if _, statErr := os.Stat(bin); statErr != nil {
+				t.Fatalf("cache Go binary: %v", err)
+			}
 		}
 	}
-	cmd := exec.Command("go", "run", ".")
+
+	cmd := exec.Command(bin)
 	cmd.Dir = dir
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	if err := cmd.Run(); err != nil {
-		t.Fatalf("go run failed: %v\n%s", err, out.String())
+		t.Fatalf("generated Go program failed: %v\n%s", err, out.String())
 	}
 	return out.String()
+}
+
+func exampleGoRunDir(t *testing.T, files map[string][]byte) string {
+	t.Helper()
+	h := hashGoRunFiles(files)
+	return filepath.Join(os.TempDir(), "osty-example-run-"+h)
+}
+
+func exampleGoRunBinary(t *testing.T, dir string) string {
+	t.Helper()
+	name := "program"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	return filepath.Join(dir, name)
+}
+
+func hashGoRunFiles(files map[string][]byte) string {
+	h := sha1.New()
+	h.Write([]byte(runtime.GOOS))
+	h.Write([]byte{0})
+	h.Write([]byte(runtime.GOARCH))
+	h.Write([]byte{0})
+	h.Write([]byte(runtime.Version()))
+	h.Write([]byte{0})
+	if path, err := exec.LookPath("go"); err == nil {
+		h.Write([]byte(path))
+		h.Write([]byte{0})
+		if info, err := os.Stat(path); err == nil {
+			fmt.Fprintf(h, "%d:%d", info.Size(), info.ModTime().UnixNano())
+			h.Write([]byte{0})
+		}
+	}
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		h.Write([]byte(name))
+		h.Write([]byte{0})
+		h.Write(files[name])
+		h.Write([]byte{0})
+	}
+	sum := h.Sum(nil)
+	return hex.EncodeToString(sum[:8])
 }
 
 func repoRoot(t *testing.T) string {
