@@ -153,7 +153,152 @@ func Validate(m *Manifest) []*diag.Diagnostic {
 		validateDepVersionReq(d, "dev-dependencies", &out)
 	}
 
+	// Profile / target / feature checks. All three additive:
+	// an unknown profile field would have been rejected at parse
+	// time, but opt-level range and inherits-graph validity are
+	// semantic and belong here.
+	validateProfiles(m, &out)
+	validateTargets(m, &out)
+	validateFeatures(m, &out)
+
 	return out
+}
+
+// validateProfiles enforces the manifest's [profile.*] invariants:
+//
+//   - opt-level must lie in [0, 3]
+//   - inherits must name a profile that exists (built-in or manifest)
+//     or be one of the declared profile names in this manifest
+//   - the inherits chain must not contain a cycle
+//
+// Built-in profile names are always valid inherits targets.
+func validateProfiles(m *Manifest, out *[]*diag.Diagnostic) {
+	if len(m.Profiles) == 0 {
+		return
+	}
+	builtins := map[string]bool{
+		"debug": true, "release": true, "profile": true, "test": true,
+	}
+	for name, p := range m.Profiles {
+		if p == nil {
+			continue
+		}
+		if p.HasOptLevel && (p.OptLevel < 0 || p.OptLevel > 3) {
+			*out = append(*out, diag.New(diag.Error,
+				fmt.Sprintf("profile.%s.opt-level %d out of range (want 0–3)",
+					name, p.OptLevel)).
+				Code(diag.CodeManifestFieldType).
+				PrimaryPos(p.Pos, "").
+				Build())
+		}
+		if p.Inherits != "" {
+			if !builtins[p.Inherits] {
+				if _, ok := m.Profiles[p.Inherits]; !ok {
+					*out = append(*out, diag.New(diag.Error,
+						fmt.Sprintf("profile.%s.inherits = %q: unknown base profile",
+							name, p.Inherits)).
+						Code(diag.CodeManifestBadDepSpec).
+						PrimaryPos(p.Pos, "").
+						Hint("must be a built-in (debug, release, profile, test) or a manifest-declared profile").
+						Build())
+				}
+			}
+		}
+	}
+	// Cycle detection via DFS. Colors: 0 unvisited, 1 on stack, 2 done.
+	color := map[string]int{}
+	var visit func(name string) bool
+	visit = func(name string) bool {
+		if builtins[name] {
+			return false
+		}
+		p, ok := m.Profiles[name]
+		if !ok || p == nil {
+			return false
+		}
+		if color[name] == 1 {
+			*out = append(*out, diag.New(diag.Error,
+				fmt.Sprintf("profile.%s: inherits chain forms a cycle", name)).
+				Code(diag.CodeManifestBadDepSpec).
+				PrimaryPos(p.Pos, "").
+				Build())
+			return true
+		}
+		if color[name] == 2 {
+			return false
+		}
+		color[name] = 1
+		if p.Inherits != "" {
+			if visit(p.Inherits) {
+				return true
+			}
+		}
+		color[name] = 2
+		return false
+	}
+	for name := range m.Profiles {
+		visit(name)
+	}
+}
+
+// validateTargets enforces triple well-formedness for [target.*].
+// The resolver already accepts triples optimistically; here we catch
+// typos like `[target.amd64]` or `[target.-linux]` at manifest time
+// so users get a clean error instead of a cryptic `go build` failure
+// much later.
+func validateTargets(m *Manifest, out *[]*diag.Diagnostic) {
+	for _, t := range m.Targets {
+		if t == nil {
+			continue
+		}
+		parts := splitTriple(t.Triple)
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			*out = append(*out, diag.New(diag.Error,
+				fmt.Sprintf("target.%s: triple must be <arch>-<os>", t.Triple)).
+				Code(diag.CodeManifestBadDepSpec).
+				PrimaryPos(t.Pos, "").
+				Hint("examples: amd64-linux, arm64-darwin, wasm-js").
+				Build())
+		}
+	}
+}
+
+// validateFeatures makes sure a feature doesn't name itself as a
+// dependency and that `[features].default` only mentions features
+// that actually exist. Cross-dep feature refs (`<dep>/<feat>`) are
+// passed through unchecked — that's the pkgmgr's concern, not ours.
+func validateFeatures(m *Manifest, out *[]*diag.Diagnostic) {
+	for _, f := range m.DefaultFeatures {
+		if _, ok := m.Features[f]; !ok {
+			*out = append(*out, diag.New(diag.Error,
+				fmt.Sprintf("features.default references undefined feature %q", f)).
+				Code(diag.CodeManifestBadDepSpec).
+				PrimaryPos(token.Pos{Line: 1, Column: 1}, "").
+				Build())
+		}
+	}
+	for name, deps := range m.Features {
+		for _, d := range deps {
+			if d == name {
+				*out = append(*out, diag.New(diag.Error,
+					fmt.Sprintf("features.%s lists itself", name)).
+					Code(diag.CodeManifestBadDepSpec).
+					PrimaryPos(token.Pos{Line: 1, Column: 1}, "").
+					Build())
+			}
+		}
+	}
+}
+
+// splitTriple does the equivalent of profile.ParseTriple without
+// taking the package dep — mirrors the lightweight <arch>-<os> grammar.
+func splitTriple(s string) []string {
+	for i := 0; i < len(s); i++ {
+		if s[i] == '-' {
+			return []string{s[:i], s[i+1:]}
+		}
+	}
+	return []string{s}
 }
 
 // validateDepVersionReq parses d.VersionReq through pkgmgr/semver.ParseReq

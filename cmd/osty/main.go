@@ -176,6 +176,25 @@ func main() {
 		runPublish(args[1:], flags)
 		return
 	}
+	// Build-profile / target / feature / cache inspection commands.
+	// None of these take a file path — they operate on the project
+	// rooted at cwd (or report built-in defaults when outside one).
+	if cmd == "profiles" {
+		runProfiles(args[1:], flags)
+		return
+	}
+	if cmd == "targets" {
+		runTargets(args[1:], flags)
+		return
+	}
+	if cmd == "features" {
+		runFeatures(args[1:], flags)
+		return
+	}
+	if cmd == "cache" {
+		runCache(args[1:], flags)
+		return
+	}
 	if len(args) < 2 {
 		usage()
 		os.Exit(2)
@@ -912,6 +931,10 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "       osty run [-- ARGS...]     (build + exec the project's binary)")
 	fmt.Fprintln(os.Stderr, "       osty test [PATH|FILTER...] (discover *_test.osty; report tests found)")
 	fmt.Fprintln(os.Stderr, "       osty publish              (pack + upload the package to a registry)")
+	fmt.Fprintln(os.Stderr, "       osty profiles             (list build profiles — debug, release, ...)")
+	fmt.Fprintln(os.Stderr, "       osty targets              (list declared cross-compilation targets)")
+	fmt.Fprintln(os.Stderr, "       osty features             (list declared opt-in features)")
+	fmt.Fprintln(os.Stderr, "       osty cache [ls|clean|info] (inspect / prune the build cache)")
 	fmt.Fprintln(os.Stderr, "       osty lsp                  (language server on stdio)")
 	fmt.Fprintln(os.Stderr, "flags:")
 	fmt.Fprintln(os.Stderr, "  --no-color         disable ANSI escapes")
@@ -942,6 +965,14 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  --dry-run          build the tarball but do not upload")
 	fmt.Fprintln(os.Stderr, "Common flags for build / add / update / run / test:")
 	fmt.Fprintln(os.Stderr, "  --offline          do not fetch dependencies; fail if caches are missing")
+	fmt.Fprintln(os.Stderr, "build / run flags:")
+	fmt.Fprintln(os.Stderr, "  --profile NAME     build profile (debug, release, profile, test, ...)")
+	fmt.Fprintln(os.Stderr, "  --release          shorthand for --profile release")
+	fmt.Fprintln(os.Stderr, "  --target TRIPLE    cross-compilation target (e.g. amd64-linux)")
+	fmt.Fprintln(os.Stderr, "  --features LIST    comma-separated feature flags to enable")
+	fmt.Fprintln(os.Stderr, "  --no-default-features  drop the manifest's [features].default set")
+	fmt.Fprintln(os.Stderr, "build-specific flags:")
+	fmt.Fprintln(os.Stderr, "  --force            ignore the build cache and rebuild from source")
 }
 
 // printTypes writes a compact `line:col <TYPE>` table for every
