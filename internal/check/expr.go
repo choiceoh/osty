@@ -374,13 +374,20 @@ func (c *checker) questionType(e *ast.QuestionExpr, env *env) types.Type {
 func (c *checker) callType(e *ast.CallExpr, hint types.Type, env *env) types.Type {
 	// Built-in prelude functions handled by name.
 	if id, ok := e.Fn.(*ast.Ident); ok {
-		if b := c.tryBuiltinCall(id.Name, e, env); b != nil {
+		if b := c.tryBuiltinCall(id.Name, e, hint, env); b != nil {
 			return b
 		}
 		// Named constructor of Option / Result variant: Some(x), Ok(v), Err(e), None.
 		if t := c.tryVariantCall(id, e, hint, env); t != nil {
 			return t
 		}
+	}
+	// Concurrency intrinsics: `thread.chan::<T>(cap)` → Channel<T>,
+	// `thread.spawn(f)` → Handle<T>. The generator lowers these to Go
+	// primitives; here we only need the checker to agree on the type so
+	// downstream method calls (`ch.recv()`, `h.join()`) resolve.
+	if t := c.tryThreadCall(e, env); t != nil {
+		return t
 	}
 
 	// Method call via field: `recv.method(args)`.
@@ -637,10 +644,25 @@ func (c *checker) tryPackageCall(
 		return nil, false
 	}
 	c.recordExpr(fx.X, types.ErrorType)
-	// Opaque packages (stdlib stubs, FFI) have no loaded PkgScope. The
-	// resolver already approved the access permissively; produce an
-	// ErrorType so subsequent operations degrade gracefully rather than
-	// noising up diagnostics with questions we can't answer yet.
+	// FFI packages (`use go "path" { fn ... }`) carry their signatures
+	// inline in UseDecl.GoBody. The resolver doesn't publish these in a
+	// normal PkgScope, so we match by name against the FFI body here so
+	// calls like `fmt.Println("x")` type-check against the declared
+	// signature and return the declared type.
+	if u, ok := pkgSym.Decl.(*ast.UseDecl); ok && u.IsGoFFI {
+		if t := c.tryFFICall(u, fx, e, env); t != nil {
+			return t, true
+		}
+		for _, a := range e.Args {
+			c.checkExpr(a.Value, nil, env)
+		}
+		return types.ErrorType, true
+	}
+	// Opaque packages (stdlib stubs, FFI without a matching body) have
+	// no loaded PkgScope. The resolver already approved the access
+	// permissively; produce an ErrorType so subsequent operations
+	// degrade gracefully rather than noising up diagnostics with
+	// questions we can't answer yet.
 	if pkgSym.Package == nil || pkgSym.Package.PkgScope == nil {
 		for _, a := range e.Args {
 			c.checkExpr(a.Value, nil, env)
@@ -689,6 +711,30 @@ func (c *checker) methodCallType(fx *ast.FieldExpr, e *ast.CallExpr, env *env) t
 		return t
 	}
 	recvT := c.checkExpr(fx.X, nil, env)
+	// TaskGroup.spawn(|| body) is parametric in the closure's return —
+	// intercept here before the standard method lookup so the returned
+	// Handle<T> carries the right T.
+	if n, ok := types.AsNamed(recvT); ok && n.Sym != nil && n.Sym.Name == "TaskGroup" && fx.Name == "spawn" {
+		if len(e.Args) != 1 {
+			c.errNode(e, diag.CodeWrongArgCount,
+				"`TaskGroup.spawn` takes exactly 1 argument, got %d", len(e.Args))
+			return types.ErrorType
+		}
+		at := c.checkExpr(e.Args[0].Value, nil, env)
+		fn, ok := types.AsFn(at)
+		if !ok {
+			if !types.IsError(at) {
+				c.errNode(e.Args[0].Value, diag.CodeTypeMismatch,
+					"`TaskGroup.spawn` expects a closure, got `%s`", at)
+			}
+			return types.ErrorType
+		}
+		ret := fn.Return
+		if ret == nil {
+			ret = types.Unit
+		}
+		return c.handleOf(ret)
+	}
 	c.recordExpr(fx, types.ErrorType) // placeholder, refine below
 	if types.IsError(recvT) {
 		for _, a := range e.Args {
@@ -1188,6 +1234,45 @@ func (c *checker) builtinNamedMethod(n *types.Named, name string) *methodDesc {
 			return nil
 		}
 		return resultMethod(n, name)
+	case "Chan", "Channel":
+		// §8.5: channel methods recognized by the checker. The gen
+		// package rewrites these to Go's built-in chan primitives at
+		// call time, so the signatures below only need to type-check
+		// the arguments and the return.
+		if len(n.Args) != 1 {
+			return nil
+		}
+		t := n.Args[0]
+		switch name {
+		case "recv":
+			return simpleMethod(name, nil, &types.Optional{Inner: t})
+		case "close":
+			return simpleMethod(name, nil, types.Unit)
+		case "send":
+			return simpleMethod(name, []types.Type{t}, types.Unit)
+		}
+	case "Handle":
+		if len(n.Args) != 1 {
+			return nil
+		}
+		t := n.Args[0]
+		switch name {
+		case "join":
+			return simpleMethod(name, nil, t)
+		}
+	case "TaskGroup":
+		// §8.1: TaskGroup.spawn is parametric in the closure's return
+		// type; methodCallType intercepts it before reaching here so
+		// the synthesized desc below is only used as a fallback shape.
+		switch name {
+		case "spawn":
+			fn := &types.FnType{Params: nil, Return: types.ErrorType}
+			return simpleMethod(name, []types.Type{fn}, types.ErrorType)
+		case "cancel":
+			return simpleMethod(name, nil, types.Unit)
+		case "isCancelled":
+			return simpleMethod(name, nil, types.Bool)
+		}
 	}
 	return nil
 }
@@ -1236,15 +1321,263 @@ func simpleMethod(name string, params []types.Type, ret types.Type) *methodDesc 
 // tryBuiltinCall handles prelude-defined callables like `println`,
 // `print`, `dbg`, `parallel`, `taskGroup`. Returns nil when `name` isn't
 // a known builtin.
-func (c *checker) tryBuiltinCall(name string, e *ast.CallExpr, env *env) types.Type {
+func (c *checker) tryBuiltinCall(name string, e *ast.CallExpr, hint types.Type, env *env) types.Type {
 	switch name {
 	case "println", "print", "eprintln", "eprint", "dbg":
 		for _, a := range e.Args {
 			c.checkExpr(a.Value, nil, env)
 		}
 		return types.Unit
+	case "spawn":
+		// `spawn(|| body)` — takes a 0-arg closure, runs it asynchronously,
+		// returns Handle<T> where T is the closure's return type.
+		if len(e.Args) != 1 {
+			c.errNode(e, diag.CodeWrongArgCount,
+				"`spawn` takes exactly 1 argument, got %d", len(e.Args))
+			return types.ErrorType
+		}
+		at := c.checkExpr(e.Args[0].Value, nil, env)
+		fn, ok := types.AsFn(at)
+		if !ok {
+			if !types.IsError(at) {
+				c.errNode(e.Args[0].Value, diag.CodeTypeMismatch,
+					"`spawn` expects a closure, got `%s`", at)
+			}
+			return types.ErrorType
+		}
+		ret := fn.Return
+		if ret == nil {
+			ret = types.Unit
+		}
+		return c.handleOf(ret)
+	case "taskGroup":
+		// §8.1: taskGroup(|g| body) — the closure receives a TaskGroup
+		// handle and returns T; the group waits for all spawned tasks
+		// before the outer call returns T. The enclosing call's hint
+		// (e.g. `return taskGroup(...)` from an fn returning Result<...>)
+		// flows into the closure so its `Ok(...)` / `Err(...)` pick up
+		// the expected type parameters.
+		if len(e.Args) != 1 {
+			c.errNode(e, diag.CodeWrongArgCount,
+				"`taskGroup` takes exactly 1 argument, got %d", len(e.Args))
+			return types.ErrorType
+		}
+		tgSym := c.topLevelSym("TaskGroup")
+		if tgSym == nil {
+			return types.ErrorType
+		}
+		var innerRet types.Type = types.ErrorType
+		if hint != nil && !types.IsError(hint) {
+			innerRet = hint
+		}
+		closureHint := &types.FnType{
+			Params: []types.Type{&types.Named{Sym: tgSym}},
+			Return: innerRet,
+		}
+		at := c.checkExpr(e.Args[0].Value, closureHint, env)
+		if fn, ok := types.AsFn(at); ok {
+			if fn.Return != nil {
+				return fn.Return
+			}
+			return types.Unit
+		}
+		return types.ErrorType
+	case "parallel":
+		// §8.3: parallel(|| a, || b, ...) runs every closure concurrently
+		// and returns a List<T> in source order. All closures must
+		// agree on their return type.
+		if len(e.Args) == 0 {
+			return c.listOf(types.Unit)
+		}
+		var elemT types.Type
+		for _, a := range e.Args {
+			at := c.checkExpr(a.Value, nil, env)
+			fn, ok := types.AsFn(at)
+			if !ok {
+				if !types.IsError(at) {
+					c.errNode(a.Value, diag.CodeTypeMismatch,
+						"`parallel` expects closures, got `%s`", at)
+				}
+				continue
+			}
+			ret := fn.Return
+			if ret == nil {
+				ret = types.Unit
+			}
+			if elemT == nil {
+				elemT = ret
+			}
+		}
+		if elemT == nil {
+			elemT = types.ErrorType
+		}
+		return c.listOf(elemT)
 	}
 	return nil
+}
+
+// tryThreadCall handles the `thread.chan::<T>(cap)` and related
+// intrinsics. Returns the synthesized return type, or nil when the
+// expression isn't a recognized intrinsic.
+func (c *checker) tryThreadCall(e *ast.CallExpr, env *env) types.Type {
+	// Unwrap optional turbofish to get to `thread.<name>`.
+	base := e.Fn
+	var typeArgs []ast.Type
+	if tf, ok := base.(*ast.TurbofishExpr); ok {
+		base = tf.Base
+		typeArgs = tf.Args
+	}
+	fx, ok := base.(*ast.FieldExpr)
+	if !ok {
+		return nil
+	}
+	head, ok := fx.X.(*ast.Ident)
+	if !ok || head.Name != "thread" {
+		return nil
+	}
+	switch fx.Name {
+	case "chan":
+		// Signature: thread.chan::<T>(cap: Int) -> Channel<T>
+		for _, a := range e.Args {
+			c.checkExpr(a.Value, types.Int, env)
+		}
+		var t types.Type = types.ErrorType
+		if len(typeArgs) == 1 {
+			t = c.typeOf(typeArgs[0])
+		}
+		return c.channelOf(t)
+	case "spawn":
+		// thread.spawn(|| body) → Handle<T>
+		if len(e.Args) != 1 {
+			c.errNode(e, diag.CodeWrongArgCount,
+				"`thread.spawn` takes exactly 1 argument, got %d", len(e.Args))
+			return types.ErrorType
+		}
+		at := c.checkExpr(e.Args[0].Value, nil, env)
+		if fn, ok := types.AsFn(at); ok {
+			ret := fn.Return
+			if ret == nil {
+				ret = types.Unit
+			}
+			return c.handleOf(ret)
+		}
+		return types.ErrorType
+	case "sleep":
+		// thread.sleep(dur: Duration) -> (). Accept any arg; the gen
+		// stage rewrites N.s / N.ms shorthand into time.Duration.
+		for _, a := range e.Args {
+			c.checkExpr(a.Value, nil, env)
+		}
+		return types.Unit
+	case "yield":
+		return types.Unit
+	case "select":
+		// thread.select(|s| { ... }) — the selector arms are method
+		// calls on an anonymous selector; we don't model its type,
+		// and the gen stage lowers the closure body to a Go select
+		// statement. Check the closure permissively.
+		for _, a := range e.Args {
+			c.checkExpr(a.Value, nil, env)
+		}
+		return types.Unit
+	}
+	return nil
+}
+
+// tryFFICall matches `pkg.Name(args)` against an FFI body's fn
+// declaration and type-checks the call against the declared signature.
+// Returns the declared return type, or nil when no matching fn is
+// found.
+//
+// FFI body type references (e.g. `String` in `fn Println(s: String)`)
+// aren't walked by the resolver, so c.typeOf can't resolve them via the
+// TypeRefs table. We fall back to a name-based prelude lookup here
+// which covers the scalar types and common generic prelude shapes.
+func (c *checker) tryFFICall(u *ast.UseDecl, fx *ast.FieldExpr, e *ast.CallExpr, env *env) types.Type {
+	var fn *ast.FnDecl
+	for _, gd := range u.GoBody {
+		if f, ok := gd.(*ast.FnDecl); ok && f.Name == fx.Name {
+			fn = f
+			break
+		}
+	}
+	if fn == nil {
+		return nil
+	}
+	params := make([]types.Type, 0, len(fn.Params))
+	for _, p := range fn.Params {
+		params = append(params, c.ffiType(p.Type))
+	}
+	var ret types.Type = types.Unit
+	if fn.ReturnType != nil {
+		ret = c.ffiType(fn.ReturnType)
+	}
+	ft := &types.FnType{Params: params, Return: ret}
+	c.recordExpr(e.Fn, ft)
+	return c.applyFnTo(e, e.Args, ft, env)
+}
+
+// ffiType resolves an FFI body AST type reference via name-based prelude
+// lookup. Mirrors c.typeOf but doesn't require the resolver's TypeRefs
+// table — the FFI body isn't walked by the resolver, so type refs there
+// have no recorded symbol.
+func (c *checker) ffiType(n ast.Type) types.Type {
+	if n == nil {
+		return types.Unit
+	}
+	switch x := n.(type) {
+	case *ast.NamedType:
+		if len(x.Path) != 1 {
+			return types.ErrorType
+		}
+		name := x.Path[0]
+		if t, ok := c.builtinScalarType(name); ok {
+			return t
+		}
+		// Generic prelude types (List<T>, Option<T>, Result<T, E>, Channel<T>).
+		if sym := c.topLevelSym(name); sym != nil {
+			args := make([]types.Type, 0, len(x.Args))
+			for _, a := range x.Args {
+				args = append(args, c.ffiType(a))
+			}
+			if name == "Option" && len(args) == 1 {
+				return &types.Optional{Inner: args[0]}
+			}
+			return &types.Named{Sym: sym, Args: args}
+		}
+		return types.ErrorType
+	case *ast.OptionalType:
+		return &types.Optional{Inner: c.ffiType(x.Inner)}
+	case *ast.TupleType:
+		if len(x.Elems) == 0 {
+			return types.Unit
+		}
+		elems := make([]types.Type, len(x.Elems))
+		for i, e := range x.Elems {
+			elems[i] = c.ffiType(e)
+		}
+		return &types.Tuple{Elems: elems}
+	}
+	return types.ErrorType
+}
+
+// channelOf builds a Channel<T> Named type bound to the prelude's
+// Channel builtin. Returns an error type when the prelude name is
+// missing (shouldn't happen in normal builds).
+func (c *checker) channelOf(t types.Type) types.Type {
+	if sym := c.topLevelSym("Channel"); sym != nil {
+		return &types.Named{Sym: sym, Args: []types.Type{t}}
+	}
+	return types.ErrorType
+}
+
+// handleOf builds a Handle<T> Named type bound to the prelude's Handle
+// builtin, for the return of spawn.
+func (c *checker) handleOf(t types.Type) types.Type {
+	if sym := c.topLevelSym("Handle"); sym != nil {
+		return &types.Named{Sym: sym, Args: []types.Type{t}}
+	}
+	return types.ErrorType
 }
 
 // tryVariantCall handles calls of the form `Some(x)`, `None()` (rejected

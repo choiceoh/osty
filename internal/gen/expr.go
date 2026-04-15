@@ -312,10 +312,24 @@ func (g *gen) emitCall(c *ast.CallExpr) {
 		}
 	}
 	if f, ok := c.Fn.(*ast.FieldExpr); ok {
+		if g.emitThreadSelect(c, f) {
+			return
+		}
+		if g.emitThreadCall(c, f) {
+			return
+		}
+		if g.emitConcurrencyMethod(c, f) {
+			return
+		}
 		if g.emitStaticCall(f, c.Args) {
 			return
 		}
 		if g.emitEnumMethodCall(f, c.Args) {
+			return
+		}
+	}
+	if tf, ok := c.Fn.(*ast.TurbofishExpr); ok {
+		if g.emitTurbofishCall(c, tf) {
 			return
 		}
 	}
@@ -334,6 +348,155 @@ func (g *gen) emitCall(c *ast.CallExpr) {
 		g.emitExpr(a.Value)
 	}
 	g.body.write(")")
+}
+
+// emitConcurrencyMethod recognizes the small set of channel / handle
+// method calls from §8 and rewrites them to Go primitives.
+//
+//	ch.recv()     → func() *T { v, ok := <-ch; if !ok { return nil }; return &v }()
+//	ch.close()    → close(ch)
+//	h.join()      → h.Join()
+//
+// The receiver must have a Chan / Channel / Handle named type; when the
+// checker lost that info, we fall through so the generic path takes over.
+func (g *gen) emitConcurrencyMethod(c *ast.CallExpr, f *ast.FieldExpr) bool {
+	recvT := g.typeOf(f.X)
+	n, ok := recvT.(*types.Named)
+	if !ok || n.Sym == nil {
+		return false
+	}
+	switch n.Sym.Name {
+	case "Chan", "Channel":
+		switch f.Name {
+		case "recv":
+			inner := "any"
+			if len(n.Args) == 1 {
+				inner = g.goType(n.Args[0])
+			}
+			g.body.writef("func() *%s { v, ok := <-", inner)
+			g.emitExpr(f.X)
+			g.body.write("; if !ok { return nil }; return &v }()")
+			return true
+		case "close":
+			g.body.write("close(")
+			g.emitExpr(f.X)
+			g.body.write(")")
+			return true
+		case "send":
+			// Defensive: `ch.send(v)` surface form; spec uses `ch <- v`
+			// but a fluent helper is natural to emit through.
+			if len(c.Args) == 1 {
+				g.emitExpr(f.X)
+				g.body.write(" <- ")
+				g.emitExpr(c.Args[0].Value)
+				return true
+			}
+		}
+	case "Handle":
+		if f.Name == "join" {
+			g.emitExpr(f.X)
+			g.body.write(".Join()")
+			return true
+		}
+	case "TaskGroup":
+		switch f.Name {
+		case "spawn":
+			if len(c.Args) == 1 {
+				g.needTaskGroup = true
+				g.needHandle = true
+				inner, isUnit := g.handleInnerTypeFromCall(c)
+				g.body.writef("spawnInGroup[%s](", inner)
+				g.emitExpr(f.X)
+				g.body.write(", ")
+				g.emitSpawnClosure(c.Args[0].Value, isUnit)
+				g.body.write(")")
+				return true
+			}
+		case "cancel":
+			g.emitExpr(f.X)
+			g.body.write(".Cancel()")
+			return true
+		case "isCancelled":
+			g.emitExpr(f.X)
+			g.body.write(".IsCancelled()")
+			return true
+		}
+	}
+	return false
+}
+
+// emitTurbofishCall handles the two concurrency intrinsics that use the
+// turbofish syntax to pin a type argument:
+//
+//	thread.chan::<T>(cap)  → make(chan T, cap)
+//	thread.spawn::<T>(f)   → spawnHandle[T](f)
+//
+// Returns false when the turbofish base isn't a recognized intrinsic.
+// The base has already been confirmed as the Fn of a CallExpr.
+func (g *gen) emitTurbofishCall(c *ast.CallExpr, tf *ast.TurbofishExpr) bool {
+	fe, ok := tf.Base.(*ast.FieldExpr)
+	if !ok {
+		return false
+	}
+	head, ok := fe.X.(*ast.Ident)
+	if !ok || head.Name != "thread" {
+		return false
+	}
+	switch fe.Name {
+	case "chan":
+		inner := "any"
+		if len(tf.Args) == 1 {
+			inner = g.goTypeExpr(tf.Args[0])
+		}
+		g.body.writef("make(chan %s", inner)
+		if len(c.Args) >= 1 {
+			g.body.write(", ")
+			g.emitExpr(c.Args[0].Value)
+		}
+		g.body.write(")")
+		return true
+	case "spawn":
+		g.needHandle = true
+		inner := "any"
+		if len(tf.Args) == 1 {
+			inner = g.goTypeExpr(tf.Args[0])
+		}
+		if len(c.Args) != 1 {
+			return false
+		}
+		g.body.writef("spawnHandle[%s](", inner)
+		g.emitExpr(c.Args[0].Value)
+		g.body.write(")")
+		return true
+	}
+	return false
+}
+
+// emitThreadCall intercepts non-turbofish thread.* helpers like
+// `thread.sleep(dur)` and `thread.yield()`.
+func (g *gen) emitThreadCall(c *ast.CallExpr, f *ast.FieldExpr) bool {
+	head, ok := f.X.(*ast.Ident)
+	if !ok || head.Name != "thread" {
+		return false
+	}
+	switch f.Name {
+	case "sleep":
+		// thread.sleep(dur) → time.Sleep(dur)
+		if len(c.Args) != 1 {
+			return false
+		}
+		g.use("time")
+		g.body.write("time.Sleep(")
+		g.emitDurationExpr(c.Args[0].Value)
+		g.body.write(")")
+		return true
+	case "yield":
+		// thread.yield() → runtime.Gosched()
+		g.use("runtime")
+		g.body.write("runtime.Gosched()")
+		return true
+	}
+	return false
 }
 
 // emitVariantCtor writes `Shape(Shape_Circle{F0: a0, F1: a1})` for
@@ -486,6 +649,72 @@ func (g *gen) emitBuiltinCall(name string, args []*ast.Arg, call *ast.CallExpr) 
 		}
 		g.body.write("; fmt.Println(\"dbg:\", v); return v }()")
 		return true
+	case "spawn":
+		// §8: spawn(|| body) → spawnHandle[T](body). The checker
+		// inferred the closure's return type; we pull it from the call
+		// expression's Handle<T> type to pin the type parameter.
+		//
+		// Unit-returning closures need a trampoline — Go treats
+		// `func()` and `func() struct{}` as distinct types — so we
+		// wrap with `func() struct{} { <closure>(); return struct{}{} }`
+		// to satisfy spawnHandle's `func() T` signature.
+		if len(args) == 1 {
+			g.needHandle = true
+			inner, isUnit := g.handleInnerTypeFromCall(call)
+			g.body.writef("spawnHandle[%s](", inner)
+			g.emitSpawnClosure(args[0].Value, isUnit)
+			g.body.write(")")
+			return true
+		}
+	case "taskGroup":
+		// §8.1: taskGroup(|g| body) → runTaskGroup[T](body).
+		// The outer call's type is T; the inner closure receives a
+		// *TaskGroup.
+		if len(args) == 1 {
+			g.needTaskGroup = true
+			g.needHandle = true
+			inner := "any"
+			if call != nil {
+				if t := g.typeOf(call); t != nil && !types.IsUnit(t) && !types.IsError(t) {
+					inner = g.goType(t)
+				} else if t != nil && types.IsUnit(t) {
+					inner = "struct{}"
+				}
+			}
+			g.body.writef("runTaskGroup[%s](", inner)
+			g.emitExpr(args[0].Value)
+			g.body.write(")")
+			return true
+		}
+	case "parallel":
+		// §8.3: parallel(|| a, || b, ...) → runParallel[T](bodies...).
+		// Every closure must return the same T; we pull T from the
+		// first argument's inferred FnType return.
+		if len(args) > 0 {
+			g.needTaskGroup = true
+			g.needHandle = true
+			inner := "any"
+			isUnit := false
+			if t := g.typeOf(args[0].Value); t != nil {
+				if fn, ok := t.(*types.FnType); ok && fn.Return != nil {
+					if types.IsUnit(fn.Return) {
+						inner = "struct{}"
+						isUnit = true
+					} else if !types.IsError(fn.Return) {
+						inner = g.goType(fn.Return)
+					}
+				}
+			}
+			g.body.writef("runParallel[%s](", inner)
+			for i, a := range args {
+				if i > 0 {
+					g.body.write(", ")
+				}
+				g.emitSpawnClosure(a.Value, isUnit)
+			}
+			g.body.write(")")
+			return true
+		}
 	case "Some":
 		if len(args) == 1 {
 			// Some(x) lowers to a typed pointer-to-copy so the result
@@ -539,6 +768,219 @@ func (g *gen) emitCallArgList(args []*ast.Arg) {
 		}
 		g.emitExpr(a.Value)
 	}
+}
+
+// handleInnerTypeFromCall inspects a spawn/spawn-like call's inferred
+// Handle<T> return and returns (goType for T, isUnit). isUnit==true
+// means the caller must wrap the closure in a struct{}-returning
+// trampoline.
+func (g *gen) handleInnerTypeFromCall(call *ast.CallExpr) (string, bool) {
+	if call == nil {
+		return "any", false
+	}
+	t := g.typeOf(call)
+	if t == nil {
+		return "any", false
+	}
+	n, ok := t.(*types.Named)
+	if !ok || n.Sym == nil || n.Sym.Name != "Handle" || len(n.Args) != 1 {
+		return "any", false
+	}
+	if types.IsUnit(n.Args[0]) {
+		return "struct{}", true
+	}
+	return g.goType(n.Args[0]), false
+}
+
+// emitSpawnClosure emits the `body` argument of spawn / parallel,
+// wrapping unit-returning closures in a `func() struct{} { ...(); return struct{}{} }`
+// trampoline so it satisfies the runtime's `func() T` signature.
+func (g *gen) emitSpawnClosure(e ast.Expr, isUnit bool) {
+	if !isUnit {
+		g.emitExpr(e)
+		return
+	}
+	g.body.write("func() struct{} { ")
+	g.emitExpr(e)
+	g.body.write("(); return struct{}{} }")
+}
+
+// emitThreadSelect lowers `thread.select(|s| { ... })` to a Go
+// `select { ... }` statement wrapped in an IIFE.
+//
+// Each statement in the closure body is expected to be a method call
+// on the selector binding (`s.recv`, `s.send`, `s.timeout`, `s.default`).
+// Anything else is preserved verbatim as a Go stmt inside the IIFE,
+// which may or may not be what the author intended — but forbidding
+// it outright would be too strict for a v0 MVP.
+//
+// Returns false when the call shape doesn't match `thread.select(...)`,
+// letting the generic call emitter take over.
+func (g *gen) emitThreadSelect(c *ast.CallExpr, f *ast.FieldExpr) bool {
+	head, ok := f.X.(*ast.Ident)
+	if !ok || head.Name != "thread" || f.Name != "select" {
+		return false
+	}
+	if len(c.Args) != 1 {
+		return false
+	}
+	cl, ok := c.Args[0].Value.(*ast.ClosureExpr)
+	if !ok {
+		return false
+	}
+	blk, ok := cl.Body.(*ast.Block)
+	if !ok {
+		return false
+	}
+	g.body.writeln("func() {")
+	g.body.indent()
+	g.body.writeln("select {")
+	for _, s := range blk.Stmts {
+		g.emitSelectArm(s)
+	}
+	g.body.writeln("}")
+	g.body.dedent()
+	g.body.write("}()")
+	return true
+}
+
+// emitSelectArm translates one `s.<kind>(...)` statement inside a
+// thread.select closure into a `case .../default:` arm.
+func (g *gen) emitSelectArm(s ast.Stmt) {
+	es, ok := s.(*ast.ExprStmt)
+	if !ok {
+		return
+	}
+	call, ok := es.X.(*ast.CallExpr)
+	if !ok {
+		return
+	}
+	fx, ok := call.Fn.(*ast.FieldExpr)
+	if !ok {
+		return
+	}
+	switch fx.Name {
+	case "recv":
+		// s.recv(ch, |v| body) — case v, ok := <-ch: if ok { body(v) }
+		if len(call.Args) != 2 {
+			return
+		}
+		tmp := g.freshVar("_v")
+		okV := g.freshVar("_ok")
+		g.body.writef("case %s, %s := <-", tmp, okV)
+		g.emitExpr(call.Args[0].Value)
+		g.body.writef(":\n")
+		g.body.indent()
+		g.body.writef("if %s {\n", okV)
+		g.body.indent()
+		g.emitInvokeClosureArg(call.Args[1].Value, tmp)
+		g.body.dedent()
+		g.body.writeln("}")
+		g.body.dedent()
+	case "send":
+		// s.send(ch, val, || body) — case ch <- val: body()
+		if len(call.Args) != 3 {
+			return
+		}
+		g.body.write("case ")
+		g.emitExpr(call.Args[0].Value)
+		g.body.write(" <- ")
+		g.emitExpr(call.Args[1].Value)
+		g.body.writeln(":")
+		g.body.indent()
+		g.emitInvokeClosureArg(call.Args[2].Value)
+		g.body.dedent()
+	case "timeout":
+		// s.timeout(dur, || body) — case <-time.After(dur): body()
+		if len(call.Args) != 2 {
+			return
+		}
+		g.use("time")
+		g.body.write("case <-time.After(")
+		g.emitDurationExpr(call.Args[0].Value)
+		g.body.writeln("):")
+		g.body.indent()
+		g.emitInvokeClosureArg(call.Args[1].Value)
+		g.body.dedent()
+	case "default":
+		// s.default(|| body) — default: body()
+		if len(call.Args) != 1 {
+			return
+		}
+		g.body.writeln("default:")
+		g.body.indent()
+		g.emitInvokeClosureArg(call.Args[0].Value)
+		g.body.dedent()
+	}
+}
+
+// emitInvokeClosureArg emits `(<closure>)(args...)` — synthesising an
+// immediate call of the closure expression passed as an argument.
+// If the closure is a literal (ClosureExpr), its body is inlined
+// directly to avoid a redundant trampoline. Additional arg names are
+// passed positionally.
+func (g *gen) emitInvokeClosureArg(e ast.Expr, argNames ...string) {
+	if cl, ok := e.(*ast.ClosureExpr); ok {
+		// Inline: bind each closure param to the supplied arg name,
+		// then emit the body as statements.
+		for i, p := range cl.Params {
+			if i < len(argNames) && p.Name != "" {
+				g.body.writef("%s := %s\n_ = %s\n",
+					mangleIdent(p.Name), argNames[i], mangleIdent(p.Name))
+			}
+		}
+		if b, ok := cl.Body.(*ast.Block); ok {
+			g.emitStmts(b.Stmts)
+			return
+		}
+		g.emitExpr(cl.Body)
+		g.body.nl()
+		return
+	}
+	// Generic: treat as a callable value.
+	g.body.write("(")
+	g.emitExpr(e)
+	g.body.write(")(")
+	for i, n := range argNames {
+		if i > 0 {
+			g.body.write(", ")
+		}
+		g.body.write(n)
+	}
+	g.body.writeln(")")
+}
+
+// emitDurationExpr emits an expression expected to evaluate to a
+// time.Duration. Osty's `N.s` / `N.ms` / `N.us` / `N.ns` duration-
+// literal shorthand is rewritten to `time.Second` / `time.Millisecond`
+// / `time.Microsecond` / `time.Nanosecond` here so the Go code
+// compiles. Everything else passes through verbatim.
+func (g *gen) emitDurationExpr(e ast.Expr) {
+	if f, ok := e.(*ast.FieldExpr); ok {
+		if lit, ok := f.X.(*ast.IntLit); ok {
+			unit := ""
+			switch f.Name {
+			case "s", "sec", "seconds":
+				unit = "time.Second"
+			case "ms", "millis":
+				unit = "time.Millisecond"
+			case "us", "micros":
+				unit = "time.Microsecond"
+			case "ns", "nanos":
+				unit = "time.Nanosecond"
+			case "min", "minutes":
+				unit = "time.Minute"
+			case "h", "hours":
+				unit = "time.Hour"
+			}
+			if unit != "" {
+				g.use("time")
+				g.body.writef("%s*%s", lit.Text, unit)
+				return
+			}
+		}
+	}
+	g.emitExpr(e)
 }
 
 // emitRangeExpr lowers a standalone range literal (`0..10`, `..=N`,
@@ -958,29 +1400,6 @@ func (g *gen) emitIfStmt(ie *ast.IfExpr) {
 	}
 }
 
-// closureBodyLooksVoid returns true when body is a Block that ends
-// in an expression statement whose call target is a FieldExpr method
-// call — `x.method(...)`. That shape is overwhelmingly void in
-// practice (print / log / assert APIs), and the checker can't always
-// pin their return type when the receiver is an opaque stdlib stub.
-// Used only as a last-resort fallback for unit-closure detection.
-func closureBodyLooksVoid(body ast.Expr) bool {
-	blk, ok := body.(*ast.Block)
-	if !ok || len(blk.Stmts) == 0 {
-		return false
-	}
-	last, ok := blk.Stmts[len(blk.Stmts)-1].(*ast.ExprStmt)
-	if !ok {
-		return false
-	}
-	call, ok := last.X.(*ast.CallExpr)
-	if !ok {
-		return false
-	}
-	_, ok = call.Fn.(*ast.FieldExpr)
-	return ok
-}
-
 // emitClosure writes a Go closure. Simple cases map cleanly:
 //
 //	|x| x * 2                → func(x any) any { return x * 2 }
@@ -1044,32 +1463,20 @@ func (g *gen) emitClosure(c *ast.ClosureExpr) {
 	}
 	_ = plans // used below when emitting body destructure bindings
 	g.body.write(") ")
-	// Track whether the closure returns unit so the body emitter below
-	// can skip the `return <final-expr>` wrap and emit the final
-	// expression as a plain statement instead. A unit closure with a
-	// `return <int>` line doesn't compile as Go.
-	//
-	// Detection prefers the explicit type annotation, then the
-	// inferred FnType from the checker. When neither is available and
-	// the body is a single ExprStmt whose call target is an unknown
-	// method on an opaque value (e.g. `testing.assertEq(...)` where
-	// the checker couldn't pin the return), we treat the closure as
-	// unit — emitting `return <void-call>` would otherwise produce
-	// invalid Go. This is a Phase-1 pragma; once the checker tracks
-	// stdlib module types end-to-end the heuristic drops out.
-	unitClosure := false
 	switch {
 	case c.ReturnType != nil:
 		g.body.write(g.goTypeExpr(c.ReturnType))
 		g.body.write(" ")
 	case inferred != nil && inferred.Return != nil && types.IsUnit(inferred.Return):
-		unitClosure = true
+		// Unit return — leave the signature as `func(args)`.
 	case inferred != nil && inferred.Return != nil && !types.IsError(inferred.Return):
 		g.body.write(g.goType(inferred.Return))
 		g.body.write(" ")
-	case closureBodyLooksVoid(c.Body):
-		unitClosure = true
 	default:
+		// No inferred type and no annotation — default to int for
+		// arithmetic-shaped closure bodies (`|x| x * 2`). A truly
+		// untyped closure body is a corner case; `int` matches the
+		// rest of Osty's untyped-numeric default (§2.2).
 		g.body.write("int ")
 	}
 	// Body may be a Block (return needs to come from its final expr)
@@ -1082,8 +1489,13 @@ func (g *gen) emitClosure(c *ast.ClosureExpr) {
 			break
 		}
 	}
+	wantReturn := true
+	if c.ReturnType == nil && inferred != nil && inferred.Return != nil &&
+		types.IsUnit(inferred.Return) {
+		wantReturn = false
+	}
 	if blk, ok := c.Body.(*ast.Block); ok && !hasDestructure {
-		g.emitBlockAsReturn(blk, !unitClosure)
+		g.emitBlockAsReturn(blk, wantReturn)
 		return
 	}
 	g.body.writeln("{")
@@ -1107,12 +1519,10 @@ func (g *gen) emitClosure(c *ast.ClosureExpr) {
 		}
 	}
 	if blk, ok := c.Body.(*ast.Block); ok {
-		// Inline the block stmts. For non-unit closures the final expr
-		// is lifted into a `return`; unit closures emit the final
-		// expression as a plain statement so Go doesn't reject a
-		// returned void call.
+		// Inline the block stmts then return final expr (unless the
+		// inferred return is Unit — then just run the stmts).
 		stmts := blk.Stmts
-		if len(stmts) > 0 && !unitClosure {
+		if wantReturn && len(stmts) > 0 {
 			last := stmts[len(stmts)-1]
 			if es, ok := last.(*ast.ExprStmt); ok {
 				for _, s := range stmts[:len(stmts)-1] {
@@ -1131,10 +1541,7 @@ func (g *gen) emitClosure(c *ast.ClosureExpr) {
 		g.body.write("}")
 		return
 	}
-	// Single-expression body (e.g. `|x| x + 1`). Unit closures skip
-	// the `return` lift here too — the expression runs purely for
-	// side effects.
-	if !unitClosure {
+	if wantReturn {
 		g.body.write("return ")
 	}
 	g.emitExpr(c.Body)
