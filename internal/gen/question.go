@@ -38,8 +38,7 @@ func (g *gen) preLiftQuestions(e ast.Expr) {
 		}
 		tmp := g.freshVar("_q")
 		g.emitQuestionLiftBody(tmp, q)
-		operandT := g.typeOf(q.X)
-		if isResultOperand(operandT) {
+		if g.isResultOperand(q.X) {
 			g.questionSubs[q] = tmp + ".Value"
 		} else {
 			g.questionSubs[q] = "*" + tmp
@@ -51,8 +50,7 @@ func (g *gen) preLiftQuestions(e ast.Expr) {
 // prelude for one lifted `?` occurrence. Shared by the let-stmt fast
 // path, the return-stmt lift, and preLiftQuestions.
 func (g *gen) emitQuestionLiftBody(tmp string, q *ast.QuestionExpr) {
-	operandT := g.typeOf(q.X)
-	isResult := isResultOperand(operandT)
+	isResult := g.isResultOperand(q.X)
 	g.body.writef("%s := ", tmp)
 	g.emitExpr(q.X)
 	g.body.nl()
@@ -67,13 +65,46 @@ func (g *gen) emitQuestionLiftBody(tmp string, q *ast.QuestionExpr) {
 	g.body.writef("if %s == nil { return nil }\n", tmp)
 }
 
-// isResultOperand reports whether the operand type of a `?` is
-// Result<T, E>. Any other type (Optional, bare named, or nil) is
-// treated as Option for lift purposes — which matches Osty's spec:
-// only Result and Option support `?`.
-func isResultOperand(t types.Type) bool {
-	if n, ok := t.(*types.Named); ok && n.Sym != nil && n.Sym.Name == "Result" {
-		return true
+// isResultOperand reports whether the operand of a `?` yields a
+// Result<T, E>. Prefers the checker-inferred type; falls back to an
+// AST shape check for stdlib calls the checker hasn't typed (e.g.
+// `fs.readToString(p)?` inside a registry-less transpile pass).
+func (g *gen) isResultOperand(e ast.Expr) bool {
+	if t := g.typeOf(e); t != nil {
+		if n, ok := t.(*types.Named); ok && n.Sym != nil && n.Sym.Name == "Result" {
+			return true
+		}
+	}
+	return g.astShapeIsResult(e)
+}
+
+// astShapeIsResult inspects the AST of an expression whose checker type
+// is missing to decide whether it returns a Result. Currently recognises
+// stdlib fs calls that are declared with a Result return type; this is
+// the set of calls the pre-lift might otherwise miss when the checker
+// didn't propagate the stub's signature to the call expression.
+func (g *gen) astShapeIsResult(e ast.Expr) bool {
+	call, ok := e.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	f, ok := call.Fn.(*ast.FieldExpr)
+	if !ok {
+		return false
+	}
+	id, ok := f.X.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	mod, ok := g.stdAliases[id.Name]
+	if !ok {
+		return false
+	}
+	if mod == "fs" {
+		switch f.Name {
+		case "readToString", "writeString", "remove":
+			return true
+		}
 	}
 	return false
 }

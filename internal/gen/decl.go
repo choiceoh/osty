@@ -374,6 +374,14 @@ func (g *gen) emitUseDecl(u *ast.UseDecl) {
 		return
 	}
 	full := strings.Join(u.Path, ".")
+	if mod := stdModuleWithRewrites(u.Path); mod != "" {
+		// std.math / std.env / std.strings / std.fs: their call sites
+		// are rewritten into Go stdlib calls by the per-module emitters
+		// (see stdlib_calls.go). No Go import is emitted here — each
+		// rewrite requests the Go package it needs via g.use().
+		g.stdAliases[alias] = mod
+		return
+	}
 	if bridge := stdlibBridge(u.Path); bridge != "" {
 		g.use(bridge)
 		// When the Go bridge's package name already matches the

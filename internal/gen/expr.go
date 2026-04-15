@@ -321,6 +321,9 @@ func (g *gen) emitCall(c *ast.CallExpr) {
 		if g.emitConcurrencyMethod(c, f) {
 			return
 		}
+		if g.emitStdlibCall(c, f) {
+			return
+		}
 		if g.emitStaticCall(f, c.Args) {
 			return
 		}
@@ -593,6 +596,23 @@ func (g *gen) resultTypeArgsAt(callType types.Type, payloadType types.Type, isEr
 	if n, ok := callType.(*types.Named); ok && n.Sym != nil && n.Sym.Name == "Result" && len(n.Args) == 2 {
 		tArg = g.goType(n.Args[0])
 		tErr = g.goType(n.Args[1])
+		if tArg != "any" || tErr != "any" {
+			return tArg, tErr
+		}
+		// Both args were "any" — probably because the checker couldn't
+		// propagate types through the enclosing expression. Prefer the
+		// function's declared return type over this information-free
+		// guess so tail-position `Ok(x)` aligns with the signature.
+	}
+	// Fall back to the enclosing function's return type when the checker
+	// didn't pin one on this specific call. This lets `Ok(x)` in tail
+	// position align with the signature's Result<T, E> even when the
+	// checker hasn't propagated call-level types (e.g. stdlib calls via
+	// the registry).
+	if nt, ok := g.currentRetType.(*ast.NamedType); ok && len(nt.Path) > 0 &&
+		nt.Path[len(nt.Path)-1] == "Result" && len(nt.Args) == 2 {
+		tArg = g.goTypeExpr(nt.Args[0])
+		tErr = g.goTypeExpr(nt.Args[1])
 		return tArg, tErr
 	}
 	// Fallback to payload type on the known side.
@@ -1126,6 +1146,9 @@ func (g *gen) emitQuestion(q *ast.QuestionExpr) {
 //
 // Field-type lookup comes from the checker when available.
 func (g *gen) emitField(f *ast.FieldExpr) {
+	if !f.IsOptional && g.emitStdlibField(f) {
+		return
+	}
 	if !f.IsOptional {
 		// Numeric literals need parens to disambiguate from float
 		// literals: `5.s` would be lexed as `5.` + `s` by Go. The

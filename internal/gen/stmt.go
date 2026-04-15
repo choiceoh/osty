@@ -207,11 +207,7 @@ func identPatternName(p ast.Pattern) string {
 // discarded.
 func (g *gen) emitQuestionLift(name string, q *ast.QuestionExpr) {
 	tmp := g.freshVar("_q")
-	operandT := g.typeOf(q.X)
-	isResult := false
-	if n, ok := operandT.(*types.Named); ok && n.Sym != nil && n.Sym.Name == "Result" {
-		isResult = true
-	}
+	isResult := g.isResultOperand(q.X)
 	g.body.writef("%s := ", tmp)
 	g.emitExpr(q.X)
 	g.body.nl()

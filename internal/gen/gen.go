@@ -100,6 +100,13 @@ type gen struct {
 	// statement-level pre-lift pass (see preLiftQuestions); consumed by
 	// emitQuestion. Nil when no lift is in progress.
 	questionSubs map[*ast.QuestionExpr]string
+
+	// stdAliases maps a user-visible alias to the stdlib module name
+	// (e.g. "math", "strings", "fs", "env") whose free functions the
+	// gen rewrites into Go stdlib calls. Populated by emitUseDecl when
+	// it recognises a `use std.<mod>` whose call/field surface has a
+	// dedicated per-module rewriter.
+	stdAliases map[string]string
 }
 
 func newGen(pkgName string, file *ast.File, res *resolve.Result, chk *check.Result) *gen {
@@ -113,6 +120,7 @@ func newGen(pkgName string, file *ast.File, res *resolve.Result, chk *check.Resu
 		variantOwner: map[string]string{},
 		enumTypes:    map[string]bool{},
 		methodNames:  map[string]map[string]bool{},
+		stdAliases:   map[string]string{},
 	}
 	g.indexTypes()
 	return g

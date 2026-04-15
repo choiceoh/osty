@@ -412,6 +412,16 @@ func TestTier1ModuleCoverage(t *testing.T) {
 		{"ref", []string{"same"}},
 		{"process", []string{"abort", "unreachable", "todo", "ignoreError", "logError"}},
 		{"debug", []string{"dbg"}},
+		{"math", []string{
+			"PI", "E", "TAU", "INFINITY", "NAN",
+			"sin", "cos", "tan", "asin", "acos", "atan", "atan2",
+			"sinh", "cosh", "tanh",
+			"exp", "log", "log2", "log10",
+			"sqrt", "cbrt", "pow",
+			"floor", "ceil", "round", "trunc", "abs",
+			"min", "max", "hypot",
+		}},
+		{"env", []string{"args", "get", "set"}},
 	}
 	for _, c := range cases {
 		mod := reg.Modules[c.module]
