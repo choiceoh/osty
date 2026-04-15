@@ -74,6 +74,12 @@ type Opts struct {
 	// reachable via `x.name()` calls on primitive receivers.
 	Primitives map[types.PrimitiveKind]map[string]*ast.FnDecl
 
+	// ResultMethods is the method table from std.result's canonical
+	// Result<T, E> enum. When supplied, builtin Result method
+	// signatures are derived from these stdlib declarations; when nil,
+	// the checker keeps its bootstrap fallback signatures.
+	ResultMethods map[string]*ast.FnDecl
+
 	// OnDecl, if non-nil, is invoked for every top-level declaration
 	// the checker visits, once per pass ("collect" or "check"), with
 	// the wall-clock time spent in that pass. Used by `osty pipeline
@@ -109,6 +115,7 @@ func File(f *ast.File, rr *resolve.Result, opts ...Opts) *Result {
 	c.onDecl = firstOpt(opts).OnDecl
 	c.initBuiltins()
 	c.indexPrimitiveMethods(firstOpt(opts).Primitives)
+	c.resultMethods = firstOpt(opts).ResultMethods
 	c.indexSymbolsFrom(rr)
 	c.run()
 	return c.result
@@ -139,6 +146,7 @@ func Package(pkg *resolve.Package, pr *resolve.PackageResult, opts ...Opts) *Res
 	c.onDecl = firstOpt(opts).OnDecl
 	c.initBuiltins()
 	c.indexPrimitiveMethods(firstOpt(opts).Primitives)
+	c.resultMethods = firstOpt(opts).ResultMethods
 
 	// Phase A: build symbol indexes from every file's Refs/TypeRefs
 	// BEFORE any collect pass runs, so the checker can cross-reference
@@ -216,6 +224,7 @@ func Workspace(
 
 	c := newChecker()
 	c.indexPrimitiveMethods(firstOpt(opts).Primitives)
+	c.resultMethods = firstOpt(opts).ResultMethods
 	// Seed c.resolved with any file's view so initBuiltins can walk up
 	// to the prelude. Every file in the workspace reaches the same
 	// prelude, so this is independent of which package we pick first.
@@ -391,6 +400,12 @@ type checker struct {
 	// calls on primitive receivers fall through to the legacy
 	// stdlibCallReturn escape hatch.
 	primMethods map[types.PrimitiveKind]map[string]*methodDesc
+
+	// resultMethods points at std.result's canonical Result enum
+	// methods when the caller supplied a stdlib Registry through Opts.
+	// Builtin Result dispatch consults this before using its bootstrap
+	// fallback signatures.
+	resultMethods map[string]*ast.FnDecl
 
 	// externalCollected tracks imported packages whose declaration
 	// surfaces have been collected into result.SymTypes / result.Descs.

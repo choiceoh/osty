@@ -39,7 +39,7 @@ func transpileWithStdlib(t *testing.T, src string) ([]byte, error) {
 		}
 	}
 	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), reg)
-	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives})
+	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives, ResultMethods: reg.ResultMethods})
 	return gen.Generate("main", file, res, chk)
 }
 

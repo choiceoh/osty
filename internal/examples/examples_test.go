@@ -132,14 +132,15 @@ func TestWorkspaceExampleChecks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWorkspace: %v", err)
 	}
-	ws.Stdlib = stdlib.LoadCached()
+	reg := stdlib.LoadCached()
+	ws.Stdlib = reg
 	for _, member := range m.Workspace.Members {
 		if _, err := ws.LoadPackage(member); err != nil {
 			t.Fatalf("load workspace member %s: %v", member, err)
 		}
 	}
 	results := ws.ResolveAll()
-	checks := check.Workspace(ws, results, check.Opts{Primitives: stdlib.LoadCached().Primitives})
+	checks := check.Workspace(ws, results, check.Opts{Primitives: reg.Primitives, ResultMethods: reg.ResultMethods})
 	paths := make([]string, 0, len(ws.Packages))
 	for p := range ws.Packages {
 		paths = append(paths, p)
@@ -188,7 +189,8 @@ func checkPackageDir(t *testing.T, dir string, includeTests bool) (*resolve.Pack
 	if err != nil {
 		t.Fatalf("workspace %s: %v", dir, err)
 	}
-	ws.Stdlib = stdlib.LoadCached()
+	reg := stdlib.LoadCached()
+	ws.Stdlib = reg
 	ws.Packages[""] = pkg
 	pkg.Name = filepath.Base(dir)
 	preloadPackageUses(ws, pkg)
@@ -198,7 +200,7 @@ func checkPackageDir(t *testing.T, dir string, includeTests bool) (*resolve.Pack
 		t.Fatalf("missing root package result for %s", dir)
 	}
 	failOnErrors(t, rel(repoRoot(t), dir)+" resolve", pr.Diags)
-	chk := check.Package(pkg, pr, check.Opts{Primitives: stdlib.LoadCached().Primitives})
+	chk := check.Package(pkg, pr, check.Opts{Primitives: reg.Primitives, ResultMethods: reg.ResultMethods})
 	failOnErrors(t, rel(repoRoot(t), dir)+" check", chk.Diags)
 	return pkg, chk
 }
@@ -235,7 +237,7 @@ func transpileFile(t *testing.T, path string) []byte {
 	reg := stdlib.LoadCached()
 	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), reg)
 	failOnErrors(t, rel(repoRoot(t), path)+" resolve", res.Diags)
-	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives})
+	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives, ResultMethods: reg.ResultMethods})
 	failOnErrors(t, rel(repoRoot(t), path)+" check", chk.Diags)
 	goSrc, err := gen.Generate("main", file, res, chk)
 	if err != nil {

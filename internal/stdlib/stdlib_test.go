@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/parser"
@@ -137,6 +138,68 @@ func TestOptionModuleParsed(t *testing.T) {
 	}
 	if m.Path != "modules/option.osty" {
 		t.Errorf(`Module "option" Path = %q, want "modules/option.osty"`, m.Path)
+	}
+}
+
+func TestResultModuleMethods(t *testing.T) {
+	r := Load()
+	m, ok := r.Modules["result"]
+	if !ok {
+		t.Fatal(`Registry missing module "result"`)
+	}
+	var resultEnum *ast.EnumDecl
+	for _, d := range m.File.Decls {
+		if e, ok := d.(*ast.EnumDecl); ok && e.Name == "Result" {
+			resultEnum = e
+			break
+		}
+	}
+	if resultEnum == nil {
+		t.Fatal(`Module "result" missing Result enum`)
+	}
+	got := map[string]bool{}
+	hasBody := map[string]bool{}
+	for _, method := range resultEnum.Methods {
+		got[method.Name] = true
+		hasBody[method.Name] = method.Body != nil
+	}
+	for _, name := range []string{
+		"isOk", "isErr", "unwrap", "unwrapErr", "unwrapOr",
+		"ok", "err", "map", "mapErr", "toString",
+	} {
+		if !got[name] {
+			t.Errorf("Result missing method %q", name)
+		}
+		if r.ResultMethods[name] == nil {
+			t.Errorf("Registry.ResultMethods missing method %q", name)
+		}
+	}
+	for _, name := range []string{"isOk", "isErr", "unwrapOr", "ok", "err", "map", "mapErr", "toString"} {
+		if !hasBody[name] {
+			t.Errorf("Result.%s should have an Osty body", name)
+		}
+	}
+	for _, name := range []string{"unwrap", "unwrapErr"} {
+		if hasBody[name] {
+			t.Errorf("Result.%s should stay runtime-intrinsic", name)
+		}
+	}
+}
+
+func TestResultModuleBodiesTypeCheck(t *testing.T) {
+	mod := Load().Modules["result"]
+	if mod == nil {
+		t.Fatal("std.result not loaded")
+	}
+	file, parseDiags := parser.ParseDiagnostics(mod.Source)
+	res := resolve.File(file, resolve.NewPrelude())
+	chk := check.File(file, res)
+	all := append(append([]*diag.Diagnostic{}, parseDiags...), res.Diags...)
+	all = append(all, chk.Diags...)
+	for _, d := range all {
+		if d.Severity == diag.Error {
+			t.Fatalf("std.result should type-check: [%s] %s", d.Code, d.Message)
+		}
 	}
 }
 
@@ -571,7 +634,7 @@ pub fn score(r: Float) -> Float {
 	}
 	reg := Load()
 	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), reg)
-	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives})
+	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives, ResultMethods: reg.ResultMethods})
 	for _, d := range append(res.Diags, chk.Diags...) {
 		if d.Severity == diag.Error {
 			t.Errorf("unexpected std.math diagnostic: %s", d.Error())
@@ -634,7 +697,7 @@ pub fn namedWord(text: String) -> String {
 	}
 	reg := Load()
 	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), reg)
-	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives})
+	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives, ResultMethods: reg.ResultMethods})
 	for _, d := range append(res.Diags, chk.Diags...) {
 		if d.Severity == diag.Error {
 			t.Errorf("unexpected std.regex diagnostic: %s", d.Error())
@@ -682,7 +745,7 @@ pub fn roundTrip(text: String) -> Bool {
 	}
 	reg := Load()
 	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), reg)
-	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives})
+	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives, ResultMethods: reg.ResultMethods})
 	for _, d := range append(res.Diags, chk.Diags...) {
 		if d.Severity == diag.Error {
 			t.Errorf("unexpected std.encoding diagnostic: %s", d.Error())
@@ -731,7 +794,7 @@ pub fn smoke(name: String) -> Result<String, Error> {
 	}
 	reg := Load()
 	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), reg)
-	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives})
+	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives, ResultMethods: reg.ResultMethods})
 	for _, d := range append(res.Diags, chk.Diags...) {
 		if d.Severity == diag.Error {
 			t.Errorf("unexpected std.env diagnostic: %s", d.Error())
@@ -777,7 +840,7 @@ pub fn smoke(text: String) -> Result<String, Error> {
 	}
 	reg := Load()
 	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), reg)
-	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives})
+	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives, ResultMethods: reg.ResultMethods})
 	for _, d := range append(res.Diags, chk.Diags...) {
 		if d.Severity == diag.Error {
 			t.Errorf("unexpected std.csv diagnostic: %s", d.Error())
@@ -819,7 +882,7 @@ pub fn roundTrip(data: Bytes) -> Bytes {
 	}
 	reg := Load()
 	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), reg)
-	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives})
+	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives, ResultMethods: reg.ResultMethods})
 	for _, d := range append(res.Diags, chk.Diags...) {
 		if d.Severity == diag.Error {
 			t.Errorf("unexpected std.compress diagnostic: %s", d.Error())
@@ -867,7 +930,7 @@ pub fn digest(data: Bytes, key: Bytes) -> Bool {
 	}
 	reg := Load()
 	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), reg)
-	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives})
+	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives, ResultMethods: reg.ResultMethods})
 	for _, d := range append(res.Diags, chk.Diags...) {
 		if d.Severity == diag.Error {
 			t.Errorf("unexpected std.crypto diagnostic: %s", d.Error())
@@ -913,7 +976,7 @@ pub fn smoke() -> Bool {
 	}
 	reg := Load()
 	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), reg)
-	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives})
+	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives, ResultMethods: reg.ResultMethods})
 	for _, d := range append(res.Diags, chk.Diags...) {
 		if d.Severity == diag.Error {
 			t.Errorf("unexpected std.uuid diagnostic: %s", d.Error())
@@ -977,7 +1040,7 @@ func TestPrimitiveMethodCheckerIntegration(t *testing.T) {
 	}
 	reg := Load()
 	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), reg)
-	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives})
+	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives, ResultMethods: reg.ResultMethods})
 	for _, d := range chk.Diags {
 		if d.Severity == diag.Error {
 			t.Errorf("unexpected checker error: %s", d.Error())
@@ -998,7 +1061,7 @@ func TestRegistryShadowsEscapeHatch_Abs(t *testing.T) {
 	file, _ := parser.ParseDiagnostics(src)
 	reg := Load()
 	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), reg)
-	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives})
+	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives, ResultMethods: reg.ResultMethods})
 	for _, d := range chk.Diags {
 		if d.Code == diag.CodeUnknownMethod {
 			t.Errorf("Registry dispatch regressed — abs fell through to escape hatch: %s",

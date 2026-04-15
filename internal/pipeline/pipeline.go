@@ -117,9 +117,9 @@ type Result struct {
 // DeclTiming records how long the type checker spent on one
 // declaration during one pass ("collect" or "check").
 type DeclTiming struct {
-	Name     string        `json:"name"`     // best-effort declaration name
-	Kind     string        `json:"kind"`     // "fn", "struct", "enum", …
-	Phase    string        `json:"phase"`    // "collect" | "check"
+	Name     string        `json:"name"`  // best-effort declaration name
+	Kind     string        `json:"kind"`  // "fn", "struct", "enum", …
+	Phase    string        `json:"phase"` // "collect" | "check"
 	Duration time.Duration `json:"-"`
 	// DurationMS mirrors Duration for JSON consumers.
 	DurationMS float64 `json:"duration_ms"`
@@ -229,7 +229,8 @@ func RunWithConfig(src []byte, stream io.Writer, cfg Config) Result {
 
 	// --- check ---
 	t0 = time.Now()
-	checkOpts := check.Opts{Primitives: stdlib.LoadCached().Primitives}
+	reg := stdlib.LoadCached()
+	checkOpts := check.Opts{Primitives: reg.Primitives, ResultMethods: reg.ResultMethods}
 	if cfg.PerDecl {
 		checkOpts.OnDecl = func(d ast.Decl, phase string, dur time.Duration) {
 			r.PerDecl = append(r.PerDecl, DeclTiming{
@@ -257,10 +258,10 @@ func RunWithConfig(src []byte, stream io.Writer, cfg Config) Result {
 		Errors:   countSeverity(chk.Diags, diag.Error),
 		Warnings: countSeverity(chk.Diags, diag.Warning),
 		Counts: map[string]int{
-			"typed_exprs":  typedExprs,
-			"let_types":    len(chk.LetTypes),
-			"sym_types":    len(chk.SymTypes),
-			"instantiate":  len(chk.Instantiations),
+			"typed_exprs": typedExprs,
+			"let_types":   len(chk.LetTypes),
+			"sym_types":   len(chk.SymTypes),
+			"instantiate": len(chk.Instantiations),
 		},
 	})
 
@@ -389,7 +390,8 @@ func RunPackage(dir string, stream io.Writer, cfg Config) (Result, error) {
 
 	// --- check (whole-package) ---
 	t0 = time.Now()
-	checkOpts := check.Opts{Primitives: stdlib.LoadCached().Primitives}
+	reg := stdlib.LoadCached()
+	checkOpts := check.Opts{Primitives: reg.Primitives, ResultMethods: reg.ResultMethods}
 	if cfg.PerDecl {
 		checkOpts.OnDecl = func(d ast.Decl, phase string, dur time.Duration) {
 			r.PerDecl = append(r.PerDecl, DeclTiming{
@@ -612,7 +614,8 @@ func RunWorkspace(dir string, stream io.Writer, cfg Config) (Result, error) {
 
 	// --- check (cross-package) ---
 	t0 = time.Now()
-	checkOpts := check.Opts{Primitives: stdlib.LoadCached().Primitives}
+	reg := stdlib.LoadCached()
+	checkOpts := check.Opts{Primitives: reg.Primitives, ResultMethods: reg.ResultMethods}
 	if cfg.PerDecl {
 		checkOpts.OnDecl = func(d ast.Decl, phase string, dur time.Duration) {
 			r.PerDecl = append(r.PerDecl, DeclTiming{
@@ -812,12 +815,12 @@ func (r Result) RenderText(w io.Writer) {
 // downstream tooling can pick fields without re-parsing the human Output.
 func (r Result) RenderJSON(w io.Writer) error {
 	type stageJSON struct {
-		Name        string         `json:"name"`
-		DurationMS  float64        `json:"duration_ms"`
-		Output      string         `json:"output"`
-		Errors      int            `json:"errors"`
-		Warnings    int            `json:"warnings"`
-		Counts      map[string]int `json:"counts,omitempty"`
+		Name       string         `json:"name"`
+		DurationMS float64        `json:"duration_ms"`
+		Output     string         `json:"output"`
+		Errors     int            `json:"errors"`
+		Warnings   int            `json:"warnings"`
+		Counts     map[string]int `json:"counts,omitempty"`
 	}
 	stages := make([]stageJSON, len(r.Stages))
 	for i, s := range r.Stages {

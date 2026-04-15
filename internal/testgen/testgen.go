@@ -11,13 +11,14 @@
 //
 //  1. For each PackageFile, invoke gen.Generate. Each result is a
 //     complete Go file with its own `package main` clause, imports,
-//     and (when applicable) a copy of the Result<T, E> runtime type.
+//     and (when applicable) a copy of the Result<T, E> / toString
+//     runtime helpers.
 //
 //  2. Parse every result with go/parser, then merge them into one
-//     ast.File: dedupe imports, keep the first Result<T, E>
-//     definition seen, and strip the no-op `var testing = struct{…}{…}`
-//     stub that gen emits for `use std.testing`. The resulting
-//     merged ast.File is printed back out as main.go.
+//     ast.File: dedupe imports, keep the first runtime helper
+//     definitions seen, and strip the no-op `var testing = struct{…}{…}`
+//     stub that gen emits for `use std.testing`. The resulting merged
+//     ast.File is printed back out as main.go.
 //
 //  3. Rename any user-defined func main to _ostyProgramMain, rewrite
 //     direct main() calls to that preserved entry point, then append a
@@ -116,6 +117,8 @@ func GenerateHarness(pkg *resolve.Package, chk *check.Result, entries []Entry) (
 	var importSpecs []goast.Spec
 	seenResult := false
 	seenRange := false
+	seenOstyStringer := false
+	seenOstyToString := false
 	var firstGenErr error
 	hasProgramMain := packageHasProgramMain(pkg)
 
@@ -173,6 +176,18 @@ func GenerateHarness(pkg *resolve.Package, chk *check.Result, entries []Entry) (
 				}
 				seenRange = true
 			}
+			if isOstyStringerRuntime(d) {
+				if seenOstyStringer {
+					continue
+				}
+				seenOstyStringer = true
+			}
+			if isOstyToStringRuntime(d) {
+				if seenOstyToString {
+					continue
+				}
+				seenOstyToString = true
+			}
 			if isTestingStub(d) {
 				// Dropped — replaced by the runtime in harness.go.
 				continue
@@ -227,6 +242,20 @@ func isResultRuntime(d goast.Decl) bool {
 	}
 	_, isStruct := ts.Type.(*goast.StructType)
 	return isStruct
+}
+
+func isOstyStringerRuntime(d goast.Decl) bool {
+	gd, ok := d.(*goast.GenDecl)
+	if !ok || gd.Tok != gotoken.TYPE || len(gd.Specs) != 1 {
+		return false
+	}
+	ts, ok := gd.Specs[0].(*goast.TypeSpec)
+	return ok && ts.Name != nil && ts.Name.Name == "ostyStringer"
+}
+
+func isOstyToStringRuntime(d goast.Decl) bool {
+	fn, ok := d.(*goast.FuncDecl)
+	return ok && fn.Recv == nil && fn.Name != nil && fn.Name.Name == "ostyToString"
 }
 
 // isRangeRuntime reports whether d is the Range struct gen emits

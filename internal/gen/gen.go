@@ -85,6 +85,11 @@ type gen struct {
 	// prompting a runtime type definition at file top.
 	needResult bool
 
+	// needStringRuntime is set when generated code needs the Osty
+	// toString protocol bridge for interpolation or nested stdlib
+	// toString implementations.
+	needStringRuntime bool
+
 	// needRange is set when a standalone range literal is emitted, so
 	// the runtime Range struct can be injected at the top of the file.
 	needRange bool
@@ -356,6 +361,9 @@ func (g *gen) run() ([]byte, error) {
 		g.useAs("strings", "stdstrings")
 		g.use("time")
 	}
+	if g.needResult || g.needStringRuntime {
+		g.use("fmt")
+	}
 
 	// 3. Assemble header + body.
 	var out bytes.Buffer
@@ -402,6 +410,20 @@ func (g *gen) run() ([]byte, error) {
 	// Inject the runtime type definitions we depend on. Emitted at top
 	// of body (after imports) so every downstream declaration can use
 	// them without caring about order.
+	if g.needResult || g.needStringRuntime {
+		out.WriteString(`
+type ostyStringer interface {
+	toString() string
+}
+
+func ostyToString(v any) string {
+	if s, ok := v.(ostyStringer); ok {
+		return s.toString()
+	}
+	return fmt.Sprint(v)
+}
+`)
+	}
 	if g.needResult {
 		out.WriteString(`
 // Result is the runtime representation of Osty's Result<T, E>.
@@ -435,6 +457,41 @@ func (r Result[T, E]) unwrapOr(fallback T) T {
 		return r.Value
 	}
 	return fallback
+}
+
+func (r Result[T, E]) ok() *T {
+	if r.IsOk {
+		return &r.Value
+	}
+	return nil
+}
+
+func (r Result[T, E]) err() *E {
+	if !r.IsOk {
+		return &r.Error
+	}
+	return nil
+}
+
+func (r Result[T, E]) toString() string {
+	if r.IsOk {
+		return "Ok(" + ostyToString(r.Value) + ")"
+	}
+	return "Err(" + ostyToString(r.Error) + ")"
+}
+
+func resultMap[T any, E any, U any](r Result[T, E], f func(T) U) Result[U, E] {
+	if r.IsOk {
+		return Result[U, E]{Value: f(r.Value), IsOk: true}
+	}
+	return Result[U, E]{Error: r.Error}
+}
+
+func resultMapErr[T any, E any, F any](r Result[T, E], f func(E) F) Result[T, F] {
+	if r.IsOk {
+		return Result[T, F]{Value: r.Value, IsOk: true}
+	}
+	return Result[T, F]{Error: f(r.Error)}
 }
 `)
 	}
