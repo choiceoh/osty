@@ -564,24 +564,129 @@ func (g *gen) emitStdlibJSONCall(c *ast.CallExpr) bool {
 	if !ok || id == nil || len(parts) != 1 || !g.isStdlibPackageAlias(id, "json") {
 		return false
 	}
-	if len(c.Args) != 1 {
-		return false
-	}
+	nargs := len(c.Args)
 	switch parts[0] {
 	case "encode":
+		if nargs != 1 {
+			return false
+		}
 		g.body.write("jsonEncode(")
 		g.emitExpr(c.Args[0].Value)
 		g.body.write(")")
 		return true
 	case "stringify":
+		if nargs != 1 {
+			return false
+		}
 		g.body.write("jsonStringify(")
 		g.emitExpr(c.Args[0].Value)
 		g.body.write(")")
 		return true
 	case "decode", "parse":
+		if nargs != 1 {
+			return false
+		}
 		g.body.writef("jsonDecode[%s](", g.jsonDecodeTargetGo(c, explicit))
 		g.emitExpr(c.Args[0].Value)
 		g.body.write(")")
+		return true
+	case "stringifyValue":
+		if nargs != 1 {
+			return false
+		}
+		g.emitStdlibHelperCall("jsonStringifyValue", c.Args)
+		return true
+	case "parseValue":
+		if nargs != 1 {
+			return false
+		}
+		g.needResult = true
+		g.emitStdlibHelperCall("jsonParseValueResult", c.Args)
+		return true
+	case "isNull":
+		if nargs != 1 {
+			return false
+		}
+		g.emitStdlibHelperCall("jsonIsNullVal", c.Args)
+		return true
+	case "isBool":
+		if nargs != 1 {
+			return false
+		}
+		g.emitStdlibHelperCall("jsonIsBoolVal", c.Args)
+		return true
+	case "isNumber":
+		if nargs != 1 {
+			return false
+		}
+		g.emitStdlibHelperCall("jsonIsNumberVal", c.Args)
+		return true
+	case "isString":
+		if nargs != 1 {
+			return false
+		}
+		g.emitStdlibHelperCall("jsonIsStringVal", c.Args)
+		return true
+	case "isArray":
+		if nargs != 1 {
+			return false
+		}
+		g.emitStdlibHelperCall("jsonIsArrayVal", c.Args)
+		return true
+	case "isObject":
+		if nargs != 1 {
+			return false
+		}
+		g.emitStdlibHelperCall("jsonIsObjectVal", c.Args)
+		return true
+	case "asBool":
+		if nargs != 1 {
+			return false
+		}
+		g.needResult = true
+		g.emitStdlibHelperCall("jsonAsBoolResult", c.Args)
+		return true
+	case "asNumber":
+		if nargs != 1 {
+			return false
+		}
+		g.needResult = true
+		g.emitStdlibHelperCall("jsonAsNumberResult", c.Args)
+		return true
+	case "asString":
+		if nargs != 1 {
+			return false
+		}
+		g.needResult = true
+		g.emitStdlibHelperCall("jsonAsStringResult", c.Args)
+		return true
+	case "asArray":
+		if nargs != 1 {
+			return false
+		}
+		g.needResult = true
+		g.emitStdlibHelperCall("jsonAsArrayResult", c.Args)
+		return true
+	case "asObject":
+		if nargs != 1 {
+			return false
+		}
+		g.needResult = true
+		g.emitStdlibHelperCall("jsonAsObjectResult", c.Args)
+		return true
+	case "getField":
+		if nargs != 2 {
+			return false
+		}
+		g.needResult = true
+		g.emitStdlibHelperCall("jsonGetFieldResult", c.Args)
+		return true
+	case "getIndex":
+		if nargs != 2 {
+			return false
+		}
+		g.needResult = true
+		g.emitStdlibHelperCall("jsonGetIndexResult", c.Args)
 		return true
 	}
 	return false

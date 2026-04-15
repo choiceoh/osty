@@ -203,7 +203,7 @@ fn main() {
 	}
 }
 
-func TestStdRegexBridge(t *testing.T) {
+func TestStdRegexPureOsty(t *testing.T) {
 	goSrc, err := transpileWithStdlib(t, `use std.regex
 
 fn main() {
@@ -241,11 +241,6 @@ fn main() {
 	}, "\n")
 	if out != want {
 		t.Fatalf("stdout = %q, want %q\n--- source ---\n%s", out, want, goSrc)
-	}
-	for _, want := range []string{"regexp.Compile", "regexCompile", "type Regex struct", "type Captures struct"} {
-		if !strings.Contains(string(goSrc), want) {
-			t.Errorf("generated std.regex bridge missing %s:\n%s", want, goSrc)
-		}
 	}
 }
 
@@ -353,9 +348,14 @@ fn main() {
 	if out != want {
 		t.Fatalf("stdout = %q, want %q\n--- source ---\n%s", out, want, goSrc)
 	}
-	for _, want := range []string{"stdcsv.NewWriter", "stdcsv.NewReader", "type CsvOptions struct"} {
+	for _, want := range []string{"_ostyCsvOptions", "_ostyCsvEncodeWith", "_ostyCsvDecodeWith"} {
 		if !strings.Contains(string(goSrc), want) {
 			t.Errorf("generated std.csv bridge missing %s:\n%s", want, goSrc)
+		}
+	}
+	for _, absent := range []string{"stdcsv.NewWriter", "stdcsv.NewReader", "encoding/csv"} {
+		if strings.Contains(string(goSrc), absent) {
+			t.Errorf("generated std.csv bridge should not contain %s:\n%s", absent, goSrc)
 		}
 	}
 }

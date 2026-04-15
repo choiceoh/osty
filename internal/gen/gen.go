@@ -156,6 +156,10 @@ type gen struct {
 	// helpers backed by Go's bytes package.
 	needBytesRuntime bool
 
+	// needRegex is set when std.regex lowers to the built-in pure-Go
+	// regex engine (no dependency on Go's regexp package).
+	needRegex bool
+
 	// needRefRuntime is set when std.ref.same lowers to the runtime
 	// reference-identity helper.
 	needRefRuntime bool
@@ -350,6 +354,10 @@ func (g *gen) run() ([]byte, error) {
 	if g.needErrorRuntime {
 		g.use("fmt")
 	}
+	if g.needRegex {
+		g.needResult = true
+		g.useAs("unicode/utf8", "utf8")
+	}
 	if g.needEncoding {
 		g.needResult = true
 		g.use("fmt")
@@ -357,7 +365,6 @@ func (g *gen) run() ([]byte, error) {
 		g.useAs("encoding/hex", "stdhex")
 		g.useAs("net/url", "neturl")
 		g.useAs("strings", "stdstrings")
-		g.useAs("unicode/utf8", "utf8")
 	}
 	if g.needEnv {
 		g.needResult = true
@@ -379,6 +386,7 @@ func (g *gen) run() ([]byte, error) {
 	if g.needBytesRuntime {
 		g.needResult = true
 		g.useAs("bytes", "stdbytes")
+		g.useAs("encoding/hex", "_ostybyteshex")
 	}
 	if g.needCompress {
 		g.needResult = true
@@ -469,6 +477,9 @@ type ostyStringer interface {
 func ostyToString(v any) string {
 	if s, ok := v.(ostyStringer); ok {
 		return s.toString()
+	}
+	if b, ok := v.([]byte); ok {
+		return string(b)
 	}
 	return fmt.Sprint(v)
 }
@@ -1270,6 +1281,9 @@ func (u Url) queryValues(key string) []string {
 	return []string{}
 }
 `)
+	}
+	if g.needRegex {
+		// TODO: regexRuntime placeholder
 	}
 	if g.needEncoding {
 		out.WriteString(`

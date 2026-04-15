@@ -547,23 +547,53 @@ func (g *gen) emitStdlibRuntimeBridge(alias string, path []string, full string) 
 	case "json":
 		g.needJSON = true
 		g.emitUseStub(alias, `struct {
-			encode    func(value any) string
-			stringify func(value any) string
-			Object    func(value map[string]Json) Json
-			Array     func(value []Json) Json
-			String    func(value string) Json
-			Number    func(value float64) Json
-			Bool      func(value bool) Json
-			Null      Json
+			encode         func(value any) string
+			stringify      func(value any) string
+			Object         func(value map[string]Json) Json
+			Array          func(value []Json) Json
+			String         func(value string) Json
+			Number         func(value float64) Json
+			Bool           func(value bool) Json
+			Null           Json
+			stringifyValue func(value Json) string
+			parseValue     func(text string) Result[Json, any]
+			isNull         func(value Json) bool
+			isBool         func(value Json) bool
+			isNumber       func(value Json) bool
+			isString       func(value Json) bool
+			isArray        func(value Json) bool
+			isObject       func(value Json) bool
+			asBool         func(value Json) Result[bool, any]
+			asNumber       func(value Json) Result[float64, any]
+			asString       func(value Json) Result[string, any]
+			asArray        func(value Json) Result[[]Json, any]
+			asObject       func(value Json) Result[map[string]Json, any]
+			getField       func(value Json, key string) Result[Json, any]
+			getIndex       func(value Json, index int) Result[Json, any]
 		}{
-			encode:    jsonEncode,
-			stringify: jsonStringify,
-			Object:    jsonObject,
-			Array:     jsonArray,
-			String:    jsonString,
-			Number:    jsonNumber,
-			Bool:      jsonBool,
-			Null:      nil,
+			encode:         jsonEncode,
+			stringify:      jsonStringify,
+			Object:         jsonObject,
+			Array:          jsonArray,
+			String:         jsonString,
+			Number:         jsonNumber,
+			Bool:           jsonBool,
+			Null:           nil,
+			stringifyValue: jsonStringifyValue,
+			parseValue:     jsonParseValueResult,
+			isNull:         jsonIsNullVal,
+			isBool:         jsonIsBoolVal,
+			isNumber:       jsonIsNumberVal,
+			isString:       jsonIsStringVal,
+			isArray:        jsonIsArrayVal,
+			isObject:       jsonIsObjectVal,
+			asBool:         jsonAsBoolResult,
+			asNumber:       jsonAsNumberResult,
+			asString:       jsonAsStringResult,
+			asArray:        jsonAsArrayResult,
+			asObject:       jsonAsObjectResult,
+			getField:       jsonGetFieldResult,
+			getIndex:       jsonGetIndexResult,
 		}`, full)
 		return true
 	case "error":
@@ -590,6 +620,90 @@ func (g *gen) emitStdlibRuntimeBridge(alias string, path []string, full string) 
 		}{
 			parse: urlParse,
 			join:  urlJoin,
+		}`, full)
+		return true
+	case "bytes":
+		if !g.aliasUsedAsSelector(alias) {
+			return false
+		}
+		g.needBytesRuntime = true
+		g.needResult = true
+		g.emitUseStub(alias, `struct {
+			fromString  func(s string) []byte
+			toString    func(b []byte) Result[string, any]
+			len         func(b []byte) int
+			isEmpty     func(b []byte) bool
+			get         func(b []byte, i int) *byte
+			equal       func(a []byte, b []byte) bool
+			contains    func(b []byte, sub []byte) bool
+			startsWith  func(b []byte, prefix []byte) bool
+			endsWith    func(b []byte, suffix []byte) bool
+			indexOf     func(b []byte, sub []byte) *int
+			lastIndexOf func(b []byte, sub []byte) *int
+			split       func(b []byte, sep []byte) [][]byte
+			join        func(parts [][]byte, sep []byte) []byte
+			concat      func(a []byte, b []byte) []byte
+			repeat      func(b []byte, n int) []byte
+			replace     func(b []byte, old []byte, new []byte) []byte
+			replaceAll  func(b []byte, old []byte, new []byte) []byte
+			trimLeft    func(b []byte, strip []byte) []byte
+			trimRight   func(b []byte, strip []byte) []byte
+			trim        func(b []byte, strip []byte) []byte
+			trimSpace   func(b []byte) []byte
+			toUpper     func(b []byte) []byte
+			toLower     func(b []byte) []byte
+			toHex       func(b []byte) string
+			fromHex     func(s string) Result[[]byte, any]
+		}{
+			fromString: func(s string) []byte { return []byte(s) },
+			toString:   func(b []byte) Result[string, any] { return resultOk[string, any](string(b)) },
+			len:        func(b []byte) int { return len(b) },
+			isEmpty:    func(b []byte) bool { return len(b) == 0 },
+			get: func(b []byte, i int) *byte {
+				if i < 0 || i >= len(b) {
+					return nil
+				}
+				v := b[i]
+				return &v
+			},
+			equal:       stdbytes.Equal,
+			contains:    stdbytes.Contains,
+			startsWith:  stdbytes.HasPrefix,
+			endsWith:    stdbytes.HasSuffix,
+			indexOf: func(b []byte, sub []byte) *int {
+				i := stdbytes.Index(b, sub)
+				if i < 0 {
+					return nil
+				}
+				return &i
+			},
+			lastIndexOf: func(b []byte, sub []byte) *int {
+				i := stdbytes.LastIndex(b, sub)
+				if i < 0 {
+					return nil
+				}
+				return &i
+			},
+			split:      stdbytes.Split,
+			join:       stdbytes.Join,
+			concat:     func(a []byte, b []byte) []byte { return append(append([]byte(nil), a...), b...) },
+			repeat:     stdbytes.Repeat,
+			replace:    func(b []byte, old []byte, new []byte) []byte { return stdbytes.Replace(b, old, new, 1) },
+			replaceAll: func(b []byte, old []byte, new []byte) []byte { return stdbytes.ReplaceAll(b, old, new) },
+			trimLeft:   func(b []byte, strip []byte) []byte { return stdbytes.TrimLeft(b, string(strip)) },
+			trimRight:  func(b []byte, strip []byte) []byte { return stdbytes.TrimRight(b, string(strip)) },
+			trim:       func(b []byte, strip []byte) []byte { return stdbytes.Trim(b, string(strip)) },
+			trimSpace:  stdbytes.TrimSpace,
+			toUpper:    stdbytes.ToUpper,
+			toLower:    stdbytes.ToLower,
+			toHex:      _ostybyteshex.EncodeToString,
+			fromHex: func(s string) Result[[]byte, any] {
+				b, err := _ostybyteshex.DecodeString(s)
+				if err != nil {
+					return resultErr[[]byte, any](err)
+				}
+				return resultOk[[]byte, any](b)
+			},
 		}`, full)
 		return true
 	case "csv":

@@ -8,30 +8,6 @@ fn testAstParserSimpleFunction() {
     testing.assertEq(astFileErrorCount(file), 0)
 }
 
-fn testAstParserBinaryPrecedence() {
-    let file = astParse(r"fn f() { let x = 1 + 2 * 3 }")
-    testing.assertEq(astFileDeclCount(file), 1)
-    testing.assertEq(astFileErrorCount(file), 0)
-    let s = astCountSummary(file)
-    testing.assertEq(s.binaryOps, 2)
-    testing.assertEq(s.literals, 3)
-}
-
-fn testAstParserIfElse() {
-    let file = astParse(r"fn f() { if true { 1 } else { 2 } }")
-    testing.assertEq(astFileErrorCount(file), 0)
-    let s = astCountSummary(file)
-    testing.assertEq(s.ifs, 1)
-}
-
-fn testAstParserMatchExpression() {
-    let file = astParse(r"fn f(x: Int) { match x { 0 -> 1, _ -> 2 } }")
-    testing.assertEq(astFileErrorCount(file), 0)
-    let s = astCountSummary(file)
-    testing.assertEq(s.matches, 1)
-    testing.assertEq(s.matchArms, 2)
-}
-
 fn testAstParserMultipleDeclarations() {
     let file = astParse("fn a() \{\}\nstruct B \{\}\nenum C \{ X, Y \}\n")
     testing.assertEq(astFileDeclCount(file), 3)
@@ -42,19 +18,60 @@ fn testAstParserMultipleDeclarations() {
     testing.assertEq(s.enums, 1)
 }
 
-fn testAstParserLetBinding() {
-    let file = astParse(r"fn f() { let x = 1 }")
+fn testAstParserPublicDecls() {
+    let file = astParse("pub fn a() \{\}\npub struct B \{\}\nfn c() \{\}\n")
+    testing.assertEq(astFileDeclCount(file), 3)
     testing.assertEq(astFileErrorCount(file), 0)
-    let s = astCountSummary(file)
-    testing.assertEq(s.lets, 1)
+    testing.assertEq(astCountSummary(file).publicDecls, 2)
 }
 
-fn testAstParserMutableBinding() {
-    let file = astParse(r"fn f() { let mut y = 2 }")
+fn testAstParserUseDecl() {
+    let file = astParse("use std.testing\n")
+    testing.assertEq(astFileDeclCount(file), 1)
+    testing.assertEq(astFileErrorCount(file), 0)
+    testing.assertEq(astCountSummary(file).uses, 1)
+}
+
+fn testAstParserTypeAlias() {
+    let file = astParse(r"type Names = List<String>")
+    testing.assertEq(astFileDeclCount(file), 1)
+    testing.assertEq(astFileErrorCount(file), 0)
+    testing.assertEq(astCountSummary(file).aliases, 1)
+}
+
+fn testAstParserInterface() {
+    let file = astParse(r"interface Reader { fn read(self, buf: Bytes) -> Int }")
+    testing.assertEq(astFileDeclCount(file), 1)
+    testing.assertEq(astFileErrorCount(file), 0)
+    testing.assertEq(astCountSummary(file).interfaces, 1)
+}
+
+fn testAstParserBinaryPrecedence() {
+    let file = astParse(r"fn f() { let x = 1 + 2 * 3 }")
     testing.assertEq(astFileErrorCount(file), 0)
     let s = astCountSummary(file)
-    testing.assertEq(s.lets, 1)
-    testing.assertEq(s.mutableBindings, 1)
+    testing.assertEq(s.binaryOps, 2)
+    testing.assertEq(s.literals, 3)
+}
+
+fn testAstParserUnaryExpr() {
+    let file = astParse(r"fn f() { let x = -1 }")
+    testing.assertEq(astFileErrorCount(file), 0)
+    testing.assertEq(astCountSummary(file).unaryOps, 1)
+}
+
+fn testAstParserIfElse() {
+    let file = astParse(r"fn f() { if true { 1 } else { 2 } }")
+    testing.assertEq(astFileErrorCount(file), 0)
+    testing.assertEq(astCountSummary(file).ifs, 1)
+}
+
+fn testAstParserMatchExpression() {
+    let file = astParse(r"fn f(x: Int) { match x { 0 -> 1, _ -> 2 } }")
+    testing.assertEq(astFileErrorCount(file), 0)
+    let s = astCountSummary(file)
+    testing.assertEq(s.matches, 1)
+    testing.assertEq(s.matchArms, 2)
 }
 
 fn testAstParserListLiteral() {
@@ -65,11 +82,48 @@ fn testAstParserListLiteral() {
     testing.assertEq(s.literals, 3)
 }
 
+fn testAstParserLetBinding() {
+    let file = astParse(r"fn f() { let x = 1 }")
+    testing.assertEq(astFileErrorCount(file), 0)
+    testing.assertEq(astCountSummary(file).lets, 1)
+}
+
+fn testAstParserMutableBinding() {
+    let file = astParse(r"fn f() { let mut y = 2 }")
+    testing.assertEq(astFileErrorCount(file), 0)
+    let s = astCountSummary(file)
+    testing.assertEq(s.lets, 1)
+    testing.assertEq(s.mutableBindings, 1)
+}
+
 fn testAstParserClosure() {
     let file = astParse(r"fn f() { let g = |x| x + 1 }")
     testing.assertEq(astFileErrorCount(file), 0)
-    let s = astCountSummary(file)
-    testing.assertEq(s.closures, 1)
+    testing.assertEq(astCountSummary(file).closures, 1)
+}
+
+fn testAstParserEmptyClosure() {
+    let file = astParse(r"fn f() { let g = || 42 }")
+    testing.assertEq(astFileErrorCount(file), 0)
+    testing.assertEq(astCountSummary(file).closures, 1)
+}
+
+fn testAstParserFunctionCall() {
+    let file = astParse(r"fn f() { let x = add(1, 2) }")
+    testing.assertEq(astFileErrorCount(file), 0)
+    testing.assertEq(astCountSummary(file).calls, 1)
+}
+
+fn testAstParserIndexExpression() {
+    let file = astParse(r"fn f() { let x = xs[0] }")
+    testing.assertEq(astFileErrorCount(file), 0)
+    testing.assertEq(astCountSummary(file).indexes, 1)
+}
+
+fn testAstParserQuestionOp() {
+    let file = astParse(r"fn f() { let x = getValue()? }")
+    testing.assertEq(astFileErrorCount(file), 0)
+    testing.assertEq(astCountSummary(file).questionOps, 1)
 }
 
 fn testAstParserForLoop() {
@@ -80,49 +134,16 @@ fn testAstParserForLoop() {
     testing.assertEq(s.ranges, 1)
 }
 
-fn testAstParserFunctionCall() {
-    let file = astParse(r"fn f() { let x = add(1, 2) }")
-    testing.assertEq(astFileErrorCount(file), 0)
-    let s = astCountSummary(file)
-    testing.assertEq(s.calls, 1)
-}
-
-fn testAstParserUseDecl() {
-    let file = astParse("use std.testing\n")
-    testing.assertEq(astFileDeclCount(file), 1)
-    testing.assertEq(astFileErrorCount(file), 0)
-    let s = astCountSummary(file)
-    testing.assertEq(s.uses, 1)
-}
-
-fn testAstParserTypeAlias() {
-    let file = astParse(r"type Names = List<String>")
-    testing.assertEq(astFileDeclCount(file), 1)
-    testing.assertEq(astFileErrorCount(file), 0)
-    let s = astCountSummary(file)
-    testing.assertEq(s.aliases, 1)
-}
-
-fn testAstParserInterface() {
-    let file = astParse(r"interface Reader { fn read(self, buf: Bytes) -> Int }")
-    testing.assertEq(astFileDeclCount(file), 1)
-    testing.assertEq(astFileErrorCount(file), 0)
-    let s = astCountSummary(file)
-    testing.assertEq(s.interfaces, 1)
-}
-
 fn testAstParserReturnStmt() {
     let file = astParse(r"fn f() { return 42 }")
     testing.assertEq(astFileErrorCount(file), 0)
-    let s = astCountSummary(file)
-    testing.assertEq(s.returns, 1)
+    testing.assertEq(astCountSummary(file).returns, 1)
 }
 
-fn testAstParserQuestionOp() {
-    let file = astParse(r"fn f() { let x = getValue()? }")
+fn testAstParserDefer() {
+    let file = astParse(r"fn f() { defer close() }")
     testing.assertEq(astFileErrorCount(file), 0)
-    let s = astCountSummary(file)
-    testing.assertEq(s.questionOps, 1)
+    testing.assertEq(astCountSummary(file).defers, 1)
 }
 
 fn testAstParserRecoverFromError() {
@@ -130,38 +151,109 @@ fn testAstParserRecoverFromError() {
     testing.assert(astFileDeclCount(file) >= 2)
 }
 
-fn testAstParserEmptyClosure() {
-    let file = astParse(r"fn f() { let g = || 42 }")
+// --- v2: Generics stored ---
+
+fn testAstParserGenericFnStored() {
+    let file = astParse(r"fn map<T, U>(list: List<T>, f: fn(T) -> U) -> List<U> { }")
     testing.assertEq(astFileErrorCount(file), 0)
-    let s = astCountSummary(file)
-    testing.assertEq(s.closures, 1)
+    let decl = astFileDeclAt(file, 0)
+    testing.assertEq(decl.text, "map")
+    let mut gpCount = 0
+    for gp in decl.children2 {
+        let _ = gp
+        gpCount = gpCount + 1
+    }
+    testing.assertEq(gpCount, 2)
 }
 
-fn testAstParserIndexExpression() {
-    let file = astParse(r"fn f() { let x = xs[0] }")
+fn testAstParserGenericStructStored() {
+    let file = astParse("struct Pair<A, B> \{ pub first: A\npub second: B \}")
     testing.assertEq(astFileErrorCount(file), 0)
-    let s = astCountSummary(file)
-    testing.assertEq(s.indexes, 1)
+    let decl = astFileDeclAt(file, 0)
+    testing.assertEq(decl.text, "Pair")
+    let mut gpCount = 0
+    for gp in decl.children2 {
+        let _ = gp
+        gpCount = gpCount + 1
+    }
+    testing.assertEq(gpCount, 2)
 }
 
-fn testAstParserDefer() {
-    let file = astParse(r"fn f() { defer close() }")
+fn testAstParserGenericEnumStored() {
+    let file = astParse("enum Option<T> \{ Some(T), None \}")
     testing.assertEq(astFileErrorCount(file), 0)
-    let s = astCountSummary(file)
-    testing.assertEq(s.defers, 1)
+    let decl = astFileDeclAt(file, 0)
+    testing.assertEq(decl.text, "Option")
+    let mut gpCount = 0
+    for gp in decl.children2 {
+        let _ = gp
+        gpCount = gpCount + 1
+    }
+    testing.assertEq(gpCount, 1)
 }
 
-fn testAstParserPublicDecls() {
-    let file = astParse("pub fn a() \{\}\npub struct B \{\}\nfn c() \{\}\n")
-    testing.assertEq(astFileDeclCount(file), 3)
-    testing.assertEq(astFileErrorCount(file), 0)
-    let s = astCountSummary(file)
-    testing.assertEq(s.publicDecls, 2)
+// --- v2: Non-associative chain diagnostics ---
+
+fn testAstParserNonAssocComparisonChain() {
+    let file = astParse(r"fn f() { let x = a == b == c }")
+    testing.assert(astFileErrorCount(file) > 0)
+    let err = astFileErrorAt(file, 0)
+    testing.assert(err.code == "E0200")
 }
 
-fn testAstParserUnaryExpr() {
-    let file = astParse(r"fn f() { let x = -1 }")
+fn testAstParserNonAssocRangeChain() {
+    let file = astParse(r"fn f() { let x = 1..2..3 }")
+    testing.assert(astFileErrorCount(file) > 0)
+    let err = astFileErrorAt(file, 0)
+    testing.assert(err.code == "E0200")
+}
+
+// --- v2: break/continue validation ---
+
+fn testAstParserBreakOutsideLoop() {
+    let file = astParse(r"fn f() { break }")
+    testing.assert(astFileErrorCount(file) > 0)
+    testing.assert(astFileErrorAt(file, 0).code == "E0100")
+}
+
+fn testAstParserBreakInsideLoopOk() {
+    let file = astParse(r"fn f() { for true { break } }")
     testing.assertEq(astFileErrorCount(file), 0)
-    let s = astCountSummary(file)
-    testing.assertEq(s.unaryOps, 1)
+}
+
+fn testAstParserContinueOutsideLoop() {
+    let file = astParse(r"fn f() { continue }")
+    testing.assert(astFileErrorCount(file) > 0)
+    testing.assert(astFileErrorAt(file, 0).code == "E0101")
+}
+
+// --- v2: Error recovery, hints, pretty-print ---
+
+fn testAstParserStmtRecovery() {
+    let file = astParse(r"fn f() { @@@ let x = 1 }")
+    testing.assert(astCountSummary(file).lets >= 1)
+}
+
+fn testAstParserErrorHasHint() {
+    let file = astParse(r"fn f() { let x = @ }")
+    testing.assert(astFileErrorCount(file) > 0)
+    testing.assert(astFileErrorAt(file, 0).hint != "")
+}
+
+fn testAstPrettyPrintBasic() {
+    let file = astParse(r"fn add(a: Int) -> Int { return a }")
+    let pp = astPrettyPrint(file)
+    testing.assert(pp != "")
+}
+
+fn testAstParserAnnotationName() {
+    let file = astParse(r"#[deprecated] fn f() {}")
+    testing.assertEq(astFileErrorCount(file), 0)
+    testing.assertEq(astFileDeclCount(file), 1)
+}
+
+fn testAstErrorFormatter() {
+    let file = astParse(r"fn f() { let x = @ }")
+    let formatted = astFormatErrors(file)
+    testing.assert(formatted != "")
 }
