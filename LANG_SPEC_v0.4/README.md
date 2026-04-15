@@ -7,6 +7,8 @@ This directory holds the specification, split into per-section files for easier 
 
 **Companion documents.**
 
+- [`ABRIDGED.md`](./ABRIDGED.md) — short, example-free quick spec for AI
+  agents generating or editing Osty code.
 - `../OSTY_GRAMMAR_v0.4.md` — formal grammar (R1–R26 + EBNF). The lexer/parser ground truth.
 - `../SPEC_GAPS.md` — archive of resolved gaps per version. No open items as of v0.4.
 
