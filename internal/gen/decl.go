@@ -183,6 +183,8 @@ func (g *gen) emitStructDecl(s *ast.StructDecl) {
 	for _, m := range s.Methods {
 		g.emitMethod(s.Name, m, false)
 	}
+	g.emitStructJSONMarshal(s)
+	g.emitStructJSONUnmarshal(s)
 }
 
 // emitEnumDecl writes an enum as an interface plus one struct per
@@ -210,6 +212,7 @@ func (g *gen) emitEnumDecl(e *ast.EnumDecl) {
 	for _, m := range e.Methods {
 		g.emitMethod(e.Name, m, true)
 	}
+	g.emitEnumJSONDecoder(e)
 }
 
 // emitVariant writes the struct + marker-method for one enum variant.
@@ -227,6 +230,7 @@ func (g *gen) emitVariant(e *ast.EnumDecl, v *ast.Variant) {
 		g.body.writeln("}")
 	}
 	g.body.writef("func (%s) _is%s() {}\n", name, e.Name)
+	g.emitVariantJSONMarshal(e, v, name)
 }
 
 // emitMethod writes a single method.
@@ -241,6 +245,9 @@ func (g *gen) emitVariant(e *ast.EnumDecl, v *ast.Variant) {
 func (g *gen) emitMethod(typeName string, m *ast.FnDecl, enumMethod bool) {
 	g.body.nl()
 	g.sourceMarker(m)
+
+	prevSelf := g.selfType
+	g.selfType = typeName
 
 	free := m.Recv == nil || enumMethod
 
@@ -284,8 +291,6 @@ func (g *gen) emitMethod(typeName string, m *ast.FnDecl, enumMethod bool) {
 		g.body.write(g.resolveSelfType(m.ReturnType, typeName))
 	}
 
-	prev := g.selfType
-	g.selfType = typeName
 	prevRet := g.currentRetType
 	prevRetGo := g.currentRetGo
 	g.currentRetType = m.ReturnType
@@ -294,7 +299,7 @@ func (g *gen) emitMethod(typeName string, m *ast.FnDecl, enumMethod bool) {
 		g.currentRetGo = g.resolveSelfType(m.ReturnType, typeName)
 	}
 	defer func() {
-		g.selfType = prev
+		g.selfType = prevSelf
 		g.currentRetType = prevRet
 		g.currentRetGo = prevRetGo
 	}()
@@ -485,6 +490,28 @@ func (g *gen) emitStdlibRuntimeBridge(alias string, path []string, full string) 
 				return Result[struct{}, any]{Value: struct{}{}, IsOk: true}
 			},
 		}`, osAlias, utf8Alias), full)
+		return true
+	case "json":
+		g.needJSON = true
+		g.emitUseStub(alias, `struct {
+			encode    func(value any) string
+			stringify func(value any) string
+			Object    func(value map[string]Json) Json
+			Array     func(value []Json) Json
+			String    func(value string) Json
+			Number    func(value float64) Json
+			Bool      func(value bool) Json
+			Null      Json
+		}{
+			encode:    jsonEncode,
+			stringify: jsonStringify,
+			Object:    jsonObject,
+			Array:     jsonArray,
+			String:    jsonString,
+			Number:    jsonNumber,
+			Bool:      jsonBool,
+			Null:      nil,
+		}`, full)
 		return true
 	case "random":
 		g.needRandomRuntime = true

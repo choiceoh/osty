@@ -527,17 +527,17 @@ func (r *resolver) checkAnnotations(annots []*ast.Annotation, target ast.Annotat
 			continue
 		}
 		seen[a.Name] = a
-		r.checkAnnotationArgs(a)
+		r.checkAnnotationArgs(a, target)
 	}
 }
 
 // checkAnnotationArgs validates each `#[name(arg = value)]` argument
 // against the fixed signature for that annotation (§3.8). Unknown keys
 // and wrong-typed values are both reported here.
-func (r *resolver) checkAnnotationArgs(a *ast.Annotation) {
+func (r *resolver) checkAnnotationArgs(a *ast.Annotation, target ast.AnnotationTarget) {
 	switch a.Name {
 	case "json":
-		r.checkJSONArgs(a)
+		r.checkJSONArgs(a, target)
 	case "deprecated":
 		r.checkDeprecatedArgs(a)
 	}
@@ -551,7 +551,7 @@ func (r *resolver) checkAnnotationArgs(a *ast.Annotation) {
 //
 // The combined-argument constraints (skip mutually excludes key /
 // optional) are enforced here too.
-func (r *resolver) checkJSONArgs(a *ast.Annotation) {
+func (r *resolver) checkJSONArgs(a *ast.Annotation, target ast.AnnotationTarget) {
 	var hasKey, hasSkip, hasOptional bool
 	for _, arg := range a.Args {
 		switch arg.Key {
@@ -560,7 +560,7 @@ func (r *resolver) checkJSONArgs(a *ast.Annotation) {
 			if _, ok := stringArg(arg.Value); !ok {
 				r.emit(diag.New(diag.Error,
 					"`#[json(key = ...)]` requires a string literal").
-					Code(diag.CodeUnknownAnnotation).
+					Code(diag.CodeAnnotationBadArg).
 					PrimaryPos(arg.PosV, "expected string literal here").
 					Build())
 			}
@@ -569,16 +569,23 @@ func (r *resolver) checkJSONArgs(a *ast.Annotation) {
 			if !isFlagOrTrue(arg) {
 				r.emit(diag.New(diag.Error,
 					"`#[json(skip)]` takes no value or `skip = true`").
-					Code(diag.CodeUnknownAnnotation).
+					Code(diag.CodeAnnotationBadArg).
 					PrimaryPos(arg.PosV, "unexpected value").
 					Build())
 			}
 		case "optional":
 			hasOptional = true
+			if target != ast.TargetStructField {
+				r.emit(diag.New(diag.Error,
+					"`#[json(optional)]` is only valid on struct fields").
+					Code(diag.CodeAnnotationBadArg).
+					PrimaryPos(arg.PosV, "not a struct field option").
+					Build())
+			}
 			if !isFlagOrTrue(arg) {
 				r.emit(diag.New(diag.Error,
 					"`#[json(optional)]` takes no value or `optional = true`").
-					Code(diag.CodeUnknownAnnotation).
+					Code(diag.CodeAnnotationBadArg).
 					PrimaryPos(arg.PosV, "unexpected value").
 					Build())
 			}
@@ -594,7 +601,7 @@ func (r *resolver) checkJSONArgs(a *ast.Annotation) {
 	if hasSkip && (hasKey || hasOptional) {
 		r.emit(diag.New(diag.Error,
 			"`skip` is mutually exclusive with `key` and `optional`").
-			Code(diag.CodeUnknownAnnotation).
+			Code(diag.CodeAnnotationBadArg).
 			PrimaryPos(a.PosV, "remove `skip` or the other argument").
 			Build())
 	}
@@ -822,6 +829,7 @@ func (r *resolver) resolveStructDecl(s *ast.StructDecl) {
 		r.checkDuplicateMethods(s.Methods)
 		for _, fld := range s.Fields {
 			r.checkAnnotations(fld.Annotations, ast.TargetStructField)
+			r.checkJSONFieldArgs(fld)
 			r.resolveType(fld.Type)
 			if fld.Default != nil {
 				r.resolveExpr(fld.Default)
@@ -837,6 +845,7 @@ func (r *resolver) resolveStructDecl(s *ast.StructDecl) {
 func (r *resolver) resolveEnumDecl(e *ast.EnumDecl) {
 	r.resolveTypeBody(e.Name, "enum", e.PosV, e, e.Generics, func(selfSym *Symbol) {
 		r.checkDuplicateVariants(e.Variants)
+		r.checkDuplicateVariantJSONTags(e)
 		r.checkDuplicateMethods(e.Methods)
 		// Variant annotations were already validated in declareTopLevel;
 		// only resolve variant-field types here.
@@ -879,6 +888,83 @@ func (r *resolver) checkDuplicateFields(fields []*ast.Field) {
 
 func (r *resolver) checkDuplicateVariants(variants []*ast.Variant) {
 	checkDuplicateNamed(r, variants, "variant", "")
+}
+
+func (r *resolver) checkDuplicateVariantJSONTags(e *ast.EnumDecl) {
+	type record struct {
+		variant *ast.Variant
+		tag     string
+	}
+	seen := map[string]record{}
+	for _, v := range e.Variants {
+		tag, skipped := jsonVariantTag(v)
+		if skipped {
+			continue
+		}
+		if prev, ok := seen[tag]; ok {
+			r.emit(diag.New(diag.Error,
+				fmt.Sprintf("enum `%s` has duplicate JSON tag `%s`", e.Name, tag)).
+				Code(diag.CodeDuplicateDecl).
+				Primary(diag.Span{Start: v.Pos(), End: v.End()},
+					"duplicate JSON tag here").
+				Secondary(diag.Span{Start: prev.variant.Pos(), End: prev.variant.End()},
+					"previous JSON tag here").
+				Build())
+			continue
+		}
+		seen[tag] = record{variant: v, tag: tag}
+	}
+}
+
+func (r *resolver) checkJSONFieldArgs(f *ast.Field) {
+	for _, ann := range f.Annotations {
+		if ann.Name != "json" {
+			continue
+		}
+		for _, arg := range ann.Args {
+			if arg.Key != "optional" {
+				continue
+			}
+			if !jsonFieldTypeAllowsOptional(f.Type) {
+				r.emit(diag.New(diag.Error,
+					"`#[json(optional)]` requires an optional field type").
+					Code(diag.CodeAnnotationBadArg).
+					PrimaryPos(arg.PosV, "field type is not optional").
+					Build())
+			}
+		}
+	}
+}
+
+func jsonVariantTag(v *ast.Variant) (string, bool) {
+	tag := v.Name
+	for _, ann := range v.Annotations {
+		if ann.Name != "json" {
+			continue
+		}
+		for _, arg := range ann.Args {
+			switch arg.Key {
+			case "key":
+				if s, ok := stringArg(arg.Value); ok {
+					tag = s
+				}
+			case "skip":
+				return tag, true
+			}
+		}
+	}
+	return tag, false
+}
+
+func jsonFieldTypeAllowsOptional(t ast.Type) bool {
+	switch t := t.(type) {
+	case *ast.OptionalType:
+		return true
+	case *ast.NamedType:
+		return len(t.Path) == 1 && t.Path[0] == "Option"
+	default:
+		return false
+	}
 }
 
 func (r *resolver) checkDuplicateMethods(methods []*ast.FnDecl) {
@@ -1555,14 +1641,16 @@ func (r *resolver) resolveType(t ast.Type) {
 				r.typeRefs[n] = r.methodCtx.selfType
 			}
 		default:
-			sym := r.current.LookupType(first)
+			sym, shadow := r.current.LookupTypeHead(first)
 			switch {
 			case sym == nil:
-				r.errorf(n.PosV, diag.CodeUndefinedName,
-					"undefined type `%s`", first)
-			case !sym.Kind.IsType() && sym.Kind != SymPackage:
-				r.errorf(n.PosV, diag.CodeWrongSymbolKind,
-					"`%s` is a %s, not a type", first, sym.Kind)
+				if shadow != nil {
+					r.errorf(n.PosV, diag.CodeWrongSymbolKind,
+						"`%s` is a %s, not a type", first, shadow.Kind)
+				} else {
+					r.errorf(n.PosV, diag.CodeUndefinedName,
+						"undefined type `%s`", first)
+				}
 			case sym.Kind == SymPackage && len(n.Path) >= 2:
 				// `pkg.Type` — look the tail up in the target package's
 				// exported scope and attach that symbol. With only one

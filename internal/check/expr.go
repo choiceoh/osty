@@ -60,7 +60,7 @@ func (c *checker) exprType(e ast.Expr, hint types.Type, env *env) types.Type {
 	case *ast.BinaryExpr:
 		return c.binaryType(x, env)
 	case *ast.QuestionExpr:
-		return c.questionType(x, env)
+		return c.questionType(x, hint, env)
 	case *ast.CallExpr:
 		return c.callType(x, hint, env)
 	case *ast.FieldExpr:
@@ -334,8 +334,20 @@ func (c *checker) binaryOpResult(e *ast.BinaryExpr, op token.Kind, lt, rt types.
 
 // ---- Error propagation (?) ----
 
-func (c *checker) questionType(e *ast.QuestionExpr, env *env) types.Type {
-	t := c.checkExpr(e.X, nil, env)
+func (c *checker) questionType(e *ast.QuestionExpr, hint types.Type, env *env) types.Type {
+	var operandHint types.Type
+	if hint != nil && !types.IsError(hint) {
+		if env.retIsResult {
+			errT := env.retResultErr
+			if errT == nil {
+				errT = c.namedOf("Error", nil)
+			}
+			operandHint = c.resultOf(hint, errT)
+		} else if env.retIsOption {
+			operandHint = &types.Optional{Inner: hint}
+		}
+	}
+	t := c.checkExpr(e.X, operandHint, env)
 	if types.IsError(t) {
 		return types.ErrorType
 	}
@@ -397,6 +409,18 @@ func (c *checker) callType(e *ast.CallExpr, hint types.Type, env *env) types.Typ
 	// downstream method calls (`ch.recv()`, `h.join()`) resolve.
 	if t := c.tryThreadCall(e, env); t != nil {
 		return t
+	}
+
+	if tf, ok := e.Fn.(*ast.TurbofishExpr); ok {
+		if fx, fxOK := tf.Base.(*ast.FieldExpr); fxOK {
+			explicit := make([]types.Type, 0, len(tf.Args))
+			for _, a := range tf.Args {
+				explicit = append(explicit, c.typeOf(a))
+			}
+			if t, handled := c.tryPackageCallWithExplicit(fx, e, hint, env, explicit); handled {
+				return t
+			}
+		}
 	}
 
 	// Method call via field: `recv.method(args)`.
@@ -662,6 +686,12 @@ func (c *checker) checkExplicitGenericArity(e *ast.CallExpr, want int, explicit 
 // caller fall through to method-call handling for instance receivers.
 func (c *checker) tryPackageCall(
 	fx *ast.FieldExpr, e *ast.CallExpr, explicit []types.Type, hint types.Type, env *env,
+) (types.Type, bool) {
+	return c.tryPackageCallWithExplicit(fx, e, hint, env, nil)
+}
+
+func (c *checker) tryPackageCallWithExplicit(
+	fx *ast.FieldExpr, e *ast.CallExpr, hint types.Type, env *env, explicit []types.Type,
 ) (types.Type, bool) {
 	id, ok := fx.X.(*ast.Ident)
 	if !ok {

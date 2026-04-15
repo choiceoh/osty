@@ -902,6 +902,62 @@ pub fn smoke(text: String) -> Result<String, Error> {
 	}
 }
 
+func TestJSONModuleCoverage(t *testing.T) {
+	reg := Load()
+	mod := reg.Modules["json"]
+	if mod == nil || mod.Package == nil {
+		t.Fatal("std.json not loaded")
+	}
+	for _, name := range []string{"Json", "Encode", "Decode", "encode", "stringify", "decode", "parse"} {
+		sym := mod.Package.PkgScope.LookupLocal(name)
+		if sym == nil {
+			t.Errorf("std.json missing export %q", name)
+			continue
+		}
+		if !sym.Pub {
+			t.Errorf("std.json export %q is not pub", name)
+		}
+	}
+}
+
+func TestJSONPackageTypeChecks(t *testing.T) {
+	src := []byte(`use std.json
+
+pub struct User {
+    #[json(key = "user_id")]
+    pub userId: Int,
+
+    #[json(optional)]
+    pub nickname: String?,
+
+    #[json(skip)]
+    pub cache: Int,
+}
+
+pub fn smoke(user: User) -> String {
+    let encoded: String = json.encode(user)
+    let decoded: Result<User, Error> = json.decode(encoded)
+    let parsed: Result<User, Error> = json.parse(encoded)
+    let value: json.Json = json.Object({"ok": json.Bool(true), "name": json.String("osty"), "none": json.Null})
+    json.stringify(value)
+}
+`)
+	file, parseDiags := parser.ParseDiagnostics(src)
+	for _, d := range parseDiags {
+		if d.Severity == diag.Error {
+			t.Fatalf("parse error: %s", d.Error())
+		}
+	}
+	reg := Load()
+	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), reg)
+	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives})
+	for _, d := range append(res.Diags, chk.Diags...) {
+		if d.Severity == diag.Error {
+			t.Errorf("unexpected std.json diagnostic: %s", d.Error())
+		}
+	}
+}
+
 func TestCompressModuleCoverage(t *testing.T) {
 	reg := Load()
 	mod := reg.Modules["compress"]

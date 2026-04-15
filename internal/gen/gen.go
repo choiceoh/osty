@@ -132,6 +132,9 @@ type gen struct {
 	// functions and the CsvOptions runtime struct.
 	needCSV bool
 
+	// needJSON is set when std.json lowers to encoding/json helpers.
+	needJSON bool
+
 	// needCompress is set when std.compress lowers to gzip helpers.
 	needCompress bool
 
@@ -347,6 +350,12 @@ func (g *gen) run() ([]byte, error) {
 		g.use("fmt")
 		g.useAs("strings", "stdstrings")
 	}
+	if g.needJSON {
+		g.needResult = true
+		g.useAs("encoding/json", "stdjson")
+		g.use("fmt")
+		g.use("reflect")
+	}
 	if g.needCompress {
 		g.needResult = true
 		g.useAs("bytes", "stdbytes")
@@ -511,6 +520,313 @@ func resultMapErr[T any, E any, F any](r Result[T, E], f func(E) F) Result[T, F]
 type Range struct {
 	Start, Stop                  int
 	HasStart, HasStop, Inclusive bool
+}
+`)
+	}
+	if g.needJSON {
+		out.WriteString(`
+// Json is the runtime representation of std.json.Json.
+type Json = any
+
+type jsonEncoder interface {
+	toJson() Json
+}
+
+type jsonDecoderFunc func([]byte) (any, error)
+
+type jsonField struct {
+	Name    string
+	Value   any
+	OmitNil bool
+}
+
+var jsonDecoders = map[reflect.Type]jsonDecoderFunc{}
+
+func jsonRegisterDecoder(t reflect.Type, fn jsonDecoderFunc) {
+	jsonDecoders[t] = fn
+}
+
+func jsonEncode(value any) string {
+	data, err := jsonMarshalAny(value)
+	if err != nil {
+		panic(fmt.Sprintf("std.json.encode: %v", err))
+	}
+	return string(data)
+}
+
+func jsonStringify(value any) string { return jsonEncode(value) }
+
+func jsonDecode[T any](text string) Result[T, any] {
+	var out T
+	if err := jsonRejectLoneSurrogates(text); err != nil {
+		return Result[T, any]{Error: err}
+	}
+	if err := jsonUnmarshalInto([]byte(text), &out); err != nil {
+		return Result[T, any]{Error: err}
+	}
+	return Result[T, any]{Value: out, IsOk: true}
+}
+
+func jsonObject(value map[string]Json) Json { return value }
+
+func jsonArray(value []Json) Json { return value }
+
+func jsonString(value string) Json { return value }
+
+func jsonNumber(value float64) Json { return value }
+
+func jsonBool(value bool) Json { return value }
+
+func jsonMarshalAny(value any) ([]byte, error) {
+	if enc, ok := value.(jsonEncoder); ok {
+		return jsonMarshalAny(enc.toJson())
+	}
+	return stdjson.Marshal(value)
+}
+
+func jsonUnmarshalInto[T any](data []byte, out *T) error {
+	target := reflect.TypeOf((*T)(nil)).Elem()
+	return jsonUnmarshalReflect(data, target, reflect.ValueOf(out).Elem())
+}
+
+func jsonUnmarshalReflect(data []byte, target reflect.Type, dest reflect.Value) error {
+	if dec := jsonDecoders[target]; dec != nil {
+		value, err := dec(data)
+		if err != nil {
+			return err
+		}
+		rv := reflect.ValueOf(value)
+		if !rv.Type().AssignableTo(target) {
+			if rv.Type().ConvertibleTo(target) {
+				rv = rv.Convert(target)
+			} else {
+				return fmt.Errorf("std.json: decoded %T cannot be assigned to %v", value, target)
+			}
+		}
+		dest.Set(rv)
+		return nil
+	}
+	if target.Kind() == reflect.Pointer {
+		if jsonRawIsNull(data) {
+			dest.SetZero()
+			return nil
+		}
+		ptr := reflect.New(target.Elem())
+		if err := jsonUnmarshalReflect(data, target.Elem(), ptr.Elem()); err != nil {
+			return err
+		}
+		dest.Set(ptr)
+		return nil
+	}
+	if jsonRawIsNull(data) && target.Kind() != reflect.Interface {
+		if dest.CanAddr() && reflect.PointerTo(target).Implements(reflect.TypeOf((*stdjson.Unmarshaler)(nil)).Elem()) {
+			return stdjson.Unmarshal(data, dest.Addr().Interface())
+		}
+		return fmt.Errorf("std.json: null cannot be decoded into %v", target)
+	}
+	switch target.Kind() {
+	case reflect.Slice:
+		var raw []stdjson.RawMessage
+		if err := stdjson.Unmarshal(data, &raw); err != nil {
+			return err
+		}
+		out := reflect.MakeSlice(target, len(raw), len(raw))
+		for i := range raw {
+			if err := jsonUnmarshalReflect(raw[i], target.Elem(), out.Index(i)); err != nil {
+				return fmt.Errorf("std.json: array[%d]: %w", i, err)
+			}
+		}
+		dest.Set(out)
+		return nil
+	case reflect.Array:
+		var raw []stdjson.RawMessage
+		if err := stdjson.Unmarshal(data, &raw); err != nil {
+			return err
+		}
+		if len(raw) != target.Len() {
+			return fmt.Errorf("std.json: array expected %d values, got %d", target.Len(), len(raw))
+		}
+		for i := range raw {
+			if err := jsonUnmarshalReflect(raw[i], target.Elem(), dest.Index(i)); err != nil {
+				return fmt.Errorf("std.json: array[%d]: %w", i, err)
+			}
+		}
+		return nil
+	case reflect.Map:
+		if target.Key().Kind() == reflect.String {
+			var raw map[string]stdjson.RawMessage
+			if err := stdjson.Unmarshal(data, &raw); err != nil {
+				return err
+			}
+			out := reflect.MakeMapWithSize(target, len(raw))
+			for key, value := range raw {
+				elem := reflect.New(target.Elem()).Elem()
+				if err := jsonUnmarshalReflect(value, target.Elem(), elem); err != nil {
+					return fmt.Errorf("std.json: object[%q]: %w", key, err)
+				}
+				out.SetMapIndex(reflect.ValueOf(key).Convert(target.Key()), elem)
+			}
+			dest.Set(out)
+			return nil
+		}
+	}
+	if dest.CanAddr() {
+		return stdjson.Unmarshal(data, dest.Addr().Interface())
+	}
+	ptr := reflect.New(target)
+	if err := stdjson.Unmarshal(data, ptr.Interface()); err != nil {
+		return err
+	}
+	dest.Set(ptr.Elem())
+	return nil
+}
+
+func jsonParseValue(data []byte) (Json, error) {
+	if err := jsonRejectLoneSurrogates(string(data)); err != nil {
+		return nil, err
+	}
+	var value Json
+	if err := stdjson.Unmarshal(data, &value); err != nil {
+		return nil, err
+	}
+	return value, nil
+}
+
+func jsonAsError(value any) error {
+	if err, ok := value.(error); ok {
+		return err
+	}
+	return fmt.Errorf("%v", value)
+}
+
+func jsonMarshalObject(fields []jsonField) ([]byte, error) {
+	out := make(map[string]stdjson.RawMessage, len(fields))
+	for _, field := range fields {
+		if field.OmitNil && jsonIsNil(field.Value) {
+			continue
+		}
+		data, err := jsonMarshalAny(field.Value)
+		if err != nil {
+			return nil, err
+		}
+		out[field.Name] = stdjson.RawMessage(data)
+	}
+	return stdjson.Marshal(out)
+}
+
+func jsonMarshalEnum(tag string, values ...any) ([]byte, error) {
+	fields := []jsonField{{Name: "tag", Value: tag}}
+	switch len(values) {
+	case 0:
+	case 1:
+		fields = append(fields, jsonField{Name: "value", Value: values[0]})
+	default:
+		fields = append(fields, jsonField{Name: "value", Value: values})
+	}
+	return jsonMarshalObject(fields)
+}
+
+func jsonSkippedVariant(enumName, variantName string) ([]byte, error) {
+	return nil, fmt.Errorf("std.json: %s.%s is marked #[json(skip)]", enumName, variantName)
+}
+
+func jsonUnmarshalArray(data []byte, want int, label string) ([]stdjson.RawMessage, error) {
+	if len(data) == 0 {
+		return nil, fmt.Errorf("std.json: %s missing value", label)
+	}
+	var values []stdjson.RawMessage
+	if err := stdjson.Unmarshal(data, &values); err != nil {
+		return nil, fmt.Errorf("std.json: %s value: %w", label, err)
+	}
+	if len(values) != want {
+		return nil, fmt.Errorf("std.json: %s expected %d values, got %d", label, want, len(values))
+	}
+	return values, nil
+}
+
+func jsonRawIsNull(data []byte) bool {
+	start, end := 0, len(data)
+	for start < end && data[start] <= ' ' {
+		start++
+	}
+	for end > start && data[end-1] <= ' ' {
+		end--
+	}
+	return end-start == 4 && string(data[start:end]) == "null"
+}
+
+func jsonIsNil(value any) bool {
+	if value == nil {
+		return true
+	}
+	v := reflect.ValueOf(value)
+	switch v.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return v.IsNil()
+	default:
+		return false
+	}
+}
+
+func jsonRejectLoneSurrogates(text string) error {
+	inString := false
+	for i := 0; i < len(text); i++ {
+		switch text[i] {
+		case '"':
+			inString = !inString
+		case '\\':
+			if !inString || i+1 >= len(text) {
+				continue
+			}
+			if text[i+1] != 'u' {
+				i++
+				continue
+			}
+			r, ok := jsonHex4(text[i+2:])
+			if !ok {
+				continue
+			}
+			if r >= 0xD800 && r <= 0xDBFF {
+				low, lowOK := rune(0), false
+				if i+12 <= len(text) && text[i+6] == '\\' && text[i+7] == 'u' {
+					low, lowOK = jsonHex4(text[i+8:])
+				}
+				if !lowOK || low < 0xDC00 || low > 0xDFFF {
+					return fmt.Errorf("std.json.decode: lone surrogate escape \\u%04X", r)
+				}
+				i += 11
+				continue
+			}
+			if r >= 0xDC00 && r <= 0xDFFF {
+				return fmt.Errorf("std.json.decode: lone surrogate escape \\u%04X", r)
+			}
+			i += 5
+		}
+	}
+	return nil
+}
+
+func jsonHex4(s string) (rune, bool) {
+	if len(s) < 4 {
+		return 0, false
+	}
+	var r rune
+	for i := 0; i < 4; i++ {
+		c := s[i]
+		var v byte
+		switch {
+		case c >= '0' && c <= '9':
+			v = c - '0'
+		case c >= 'a' && c <= 'f':
+			v = c - 'a' + 10
+		case c >= 'A' && c <= 'F':
+			v = c - 'A' + 10
+		default:
+			return 0, false
+		}
+		r = r*16 + rune(v)
+	}
+	return r, true
 }
 `)
 	}

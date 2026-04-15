@@ -71,6 +71,13 @@ func (k SymbolKind) IsType() bool {
 	return false
 }
 
+// IsTypeHead reports whether the symbol can appear as the first segment
+// of a type reference. Packages are accepted here only so `pkg.Type`
+// can resolve the tail in the package's exported scope.
+func (k SymbolKind) IsTypeHead() bool {
+	return k.IsType() || k == SymPackage
+}
+
 // IsValue reports whether the symbol can appear in an expression position
 // (function call target, variable reference, variant constructor).
 func (k SymbolKind) IsValue() bool {
@@ -242,6 +249,25 @@ func (s *Scope) LookupType(name string) *Symbol {
 		}
 	}
 	return nil
+}
+
+// LookupTypeHead resolves a name in type position. Osty keeps type and
+// value lookup separate enough that a local value or variant named
+// `String` should not prevent the builtin type `String` from being used
+// in a field or annotation. The returned shadow is the first non-type
+// symbol seen; callers use it only when no type head exists anywhere.
+func (s *Scope) LookupTypeHead(name string) (typ *Symbol, shadow *Symbol) {
+	for cur := s; cur != nil; cur = cur.parent {
+		if sym, ok := cur.syms[name]; ok {
+			if sym.Kind.IsTypeHead() {
+				return sym, shadow
+			}
+			if shadow == nil {
+				shadow = sym
+			}
+		}
+	}
+	return nil, shadow
 }
 
 // LookupLocal returns a symbol only if it is defined in THIS scope (not
