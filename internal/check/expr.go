@@ -449,7 +449,8 @@ func (c *checker) callType(e *ast.CallExpr, hint types.Type, env *env) types.Typ
 					for _, a := range tf.Args {
 						explicit = append(explicit, c.typeOf(a))
 					}
-					return c.applyGenericCallWithArgs(e, fn, generics, explicit, hint, env)
+					params := fnDeclParams(sym)
+					return c.applyDeclaredCallWithExplicit(e, fn, generics, params, explicit, hint, env)
 				}
 			}
 		}
@@ -503,7 +504,7 @@ func (c *checker) applyFnTo(call ast.Node, args []*ast.Arg, fn *types.FnType, en
 			c.satisfies(at, ifaceN, a.Value)
 			continue
 		}
-		if !types.Assignable(pt, at) {
+		if !c.accepts(pt, at, a.Value) {
 			c.errMismatch(a.Value, pt, at)
 		}
 	}
@@ -542,6 +543,7 @@ func (c *checker) applyGenericCall(e *ast.CallExpr, fn *types.FnType, generics [
 // applyGenericCallWithArgs is applyGenericCall with an optional explicit
 // type-argument list from a turbofish.
 func (c *checker) applyGenericCallWithArgs(e *ast.CallExpr, fn *types.FnType, generics []*types.TypeVar, explicit []types.Type, hint types.Type, env *env) types.Type {
+	c.checkExplicitGenericArity(e, len(generics), len(explicit))
 	if len(generics) == 0 {
 		// Non-generic fn — arity and types only.
 		return c.applyFnTo(e, e.Args, fn, env)
@@ -597,7 +599,7 @@ func (c *checker) applyGenericCallWithArgs(e *ast.CallExpr, fn *types.FnType, ge
 		}
 		pt := types.Substitute(fn.Params[i], sub)
 		at := c.result.Types[a.Value]
-		if pt != nil && !types.IsError(pt) && at != nil && !types.Assignable(pt, at) {
+		if pt != nil && !types.IsError(pt) && at != nil && !c.accepts(pt, at, a.Value) {
 			c.errMismatch(a.Value, pt, at)
 		}
 	}
@@ -620,6 +622,14 @@ func (c *checker) applyGenericCallWithArgs(e *ast.CallExpr, fn *types.FnType, ge
 	}
 
 	return types.Substitute(fn.Return, sub)
+}
+
+func (c *checker) checkExplicitGenericArity(e *ast.CallExpr, want, got int) {
+	if got == 0 || want == got {
+		return
+	}
+	c.errNode(e, diag.CodeGenericArgCount,
+		"generic call expects %d type argument(s), got %d", want, got)
 }
 
 // methodCallType resolves `recv.method(args)` by looking up the method
@@ -859,7 +869,7 @@ func (c *checker) stdlibCallReturn(fx *ast.FieldExpr, recvT types.Type, e *ast.C
 		} else {
 			elem := stdlibElement(recvT)
 			at := c.checkExpr(e.Args[0].Value, elem, env)
-			if elem != nil && !types.IsError(elem) && !types.Assignable(elem, at) {
+			if elem != nil && !types.IsError(elem) && !c.accepts(elem, at, e.Args[0].Value) {
 				c.errMismatch(e.Args[0].Value, elem, at)
 			}
 		}
@@ -869,7 +879,7 @@ func (c *checker) stdlibCallReturn(fx *ast.FieldExpr, recvT types.Type, e *ast.C
 		if len(e.Args) == 1 {
 			keyT := stdlibKeyOrIndex(recvT)
 			at := c.checkExpr(e.Args[0].Value, keyT, env)
-			if keyT != nil && !types.IsError(keyT) && !types.Assignable(keyT, at) {
+			if keyT != nil && !types.IsError(keyT) && !c.accepts(keyT, at, e.Args[0].Value) {
 				c.errMismatch(e.Args[0].Value, keyT, at)
 			}
 		}
@@ -879,7 +889,7 @@ func (c *checker) stdlibCallReturn(fx *ast.FieldExpr, recvT types.Type, e *ast.C
 		if len(e.Args) == 1 {
 			elem := stdlibElement(recvT)
 			at := c.checkExpr(e.Args[0].Value, elem, env)
-			if elem != nil && !types.IsError(elem) && !types.Assignable(elem, at) {
+			if elem != nil && !types.IsError(elem) && !c.accepts(elem, at, e.Args[0].Value) {
 				c.errMismatch(e.Args[0].Value, elem, at)
 			}
 		}
@@ -1198,6 +1208,11 @@ func (c *checker) lookupMethod(recvT types.Type, name string) (*methodDesc, map[
 				sub := bindArgs(desc.Generics, v.Args)
 				return md, sub
 			}
+			if desc.Kind == resolve.SymInterface {
+				if md, ok := c.interfaceMethodSet(v)[name]; ok {
+					return md, nil
+				}
+			}
 		}
 		// Builtin compound types carry synthetic method tables.
 		if v.Sym != nil && v.Sym.Kind == resolve.SymBuiltin {
@@ -1217,6 +1232,16 @@ func (c *checker) lookupMethod(recvT types.Type, name string) (*methodDesc, map[
 	case *types.Optional:
 		if md := c.optionalMethod(v, name); md != nil {
 			return md, nil
+		}
+	case *types.TypeVar:
+		for _, b := range v.Bounds {
+			n, ok := b.(*types.Named)
+			if !ok {
+				continue
+			}
+			if md, ok := c.interfaceMethodSet(n)[name]; ok {
+				return md, nil
+			}
 		}
 	}
 	return nil, nil
@@ -1763,7 +1788,7 @@ func (c *checker) tryVariantCall(id *ast.Ident, e *ast.CallExpr, hint types.Type
 			if i < len(fields) {
 				inferFromArg(fields[i], at, sub)
 			}
-			if ft != nil && !types.IsError(ft) && !types.Assignable(ft, at) {
+			if ft != nil && !types.IsError(ft) && !c.accepts(ft, at, a.Value) {
 				c.errMismatch(a.Value, ft, at)
 			}
 		}
@@ -1925,8 +1950,12 @@ func (c *checker) fieldType(fx *ast.FieldExpr, env *env) types.Type {
 				}
 				c.errFieldNotFound(fx, n.Sym.Name, fx.Name, cand)
 			} else {
-				cand := make([]string, 0, len(desc.Methods))
+				methods := c.interfaceMethodSet(n)
+				cand := make([]string, 0, len(desc.Methods)+len(methods))
 				for name := range desc.Methods {
+					cand = append(cand, name)
+				}
+				for name := range methods {
 					cand = append(cand, name)
 				}
 				c.errMethodNotFound(fx, fmt.Sprintf("type `%s`", recvT), fx.Name, cand)
@@ -2199,7 +2228,7 @@ func (c *checker) structLitType(e *ast.StructLit, env *env) types.Type {
 			id := &ast.Ident{PosV: f.PosV, EndV: f.PosV, Name: f.Name}
 			vt = c.checkExpr(id, fd.Type, env)
 		}
-		if !types.Assignable(fd.Type, vt) {
+		if !c.accepts(fd.Type, vt, f) {
 			c.errMismatch(f, fd.Type, vt)
 		}
 	}
@@ -2336,7 +2365,7 @@ func (c *checker) closureType(e *ast.ClosureExpr, hint types.Type, parent *env) 
 		bodyEnv.retIsOption = true
 	}
 	bodyT := c.checkExpr(e.Body, retT, bodyEnv)
-	if e.ReturnType != nil && !types.Assignable(retT, bodyT) {
+	if e.ReturnType != nil && !c.accepts(retT, bodyT, e.Body) {
 		c.errMismatch(e.Body, retT, bodyT)
 	}
 	if e.ReturnType == nil {

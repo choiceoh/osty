@@ -167,16 +167,19 @@ bodies producing per-expression types in `Result.Types` plus
 per-symbol types in `Result.SymTypes`. Entry points mirror
 `resolve`: `File`, `Package`, `Workspace`.
 
-Known gaps (hooks reserved but not yet wired) live in a package doc
-comment at `env.go`:
+The main static guarantee hooks are wired here:
 
-- generic monomorphization,
-- interface-satisfaction validation,
-- match-exhaustiveness (`E0731` reserved in `diag/codes.go`),
-- builder auto-derivation (§3.4).
-
-Method references (`obj.method` as a value) are also deferred —
-`expr.go:1106` returns `ErrorType` with a TODO comment.
+- generic call sites are recorded in `Result.Instantiations` for
+  demand-driven monomorphization in `internal/gen`,
+- structural interface satisfaction checks composed interfaces,
+  `Self`-typed signatures, generic receiver substitution, and generic
+  bounds,
+- match exhaustiveness emits `E0731` and synthesizes witnesses for
+  closed product/sum shapes,
+- auto-derived `default()`, `builder()`, `toBuilder()`, setter chains,
+  and `build()` obligations are checked in `builder.go`,
+- method references (`obj.method` as a value) lower to receiver-free
+  function types.
 
 ### `internal/stdlib`
 Built-in prelude symbols injected into every file before resolution.
@@ -342,11 +345,11 @@ Cross-file resolution used to live here as a gap; it's now done via
 One resolver-level test is still pending: cross-file partial-method
 name-collision detection (`resolve/package_test.go:243`, skipped).
 
-The checker still defers four items (see `internal/check/env.go`):
-generic monomorphization, interface-satisfaction validation, match
-exhaustiveness (`E0731`), and builder auto-derivation. The
-transpiler's Phase 2+ is the other large remaining surface — see
-`internal/gen/doc.go` for the scoping.
+The checker is still intentionally conservative in a few places:
+built-in marker-interface derivation outside primitives is broad,
+open scalar match domains require a catch-all, and type-level generic
+specialization is less precise than function-call monomorphization.
+See `internal/gen/doc.go` for the transpiler's remaining scoping.
 
 Spec-level open items are tracked in `SPEC_GAPS.md` (currently: zero
 open gaps for v0.3).

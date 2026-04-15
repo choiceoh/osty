@@ -16,11 +16,12 @@ orchestrator (`osty build`) that reads `osty.toml` / `osty.lock`
 and threads the front-end + gen across the declared packages, a
 working test runner (`osty test`), API documentation generation
 (`osty doc`), and CI quality tooling (`osty ci`). The remaining
-pieces are four deferred type-checker hooks (generic
-monomorphization, interface-satisfaction, match exhaustiveness,
-`#[derive(Builder)]`), Tier 2+ of the standard library, and the
-real package-registry backend behind `osty add` / `osty update` /
-`osty publish`.
+pieces are Tier 2+ of the standard library and the real
+package-registry backend behind `osty add` / `osty update` /
+`osty publish`; the checker now records generic call
+instantiations, validates structural interface satisfaction, emits
+match exhaustiveness diagnostics, and wires the auto-derived
+builder/default protocol.
 transpiler whose Phase 1 (primitives, fns, control flow) is
 working, project scaffolding (`osty new` / `osty init`), a
 manifest-driven build orchestrator (`osty build`) that reads
@@ -75,20 +76,17 @@ fixture that triggers the expected `Exxxx` diagnostic. See
 
 The checker covers the common path (literals, operators, collections,
 functions, patterns, control flow, field access, method dispatch,
-Option/Result, closures, type aliases) but has four consciously-deferred
-hooks documented at `internal/check/env.go`:
+Option/Result, closures, type aliases) and now closes the major static
+guarantee hooks: generic call instantiation records for the transpiler,
+structural interface satisfaction including composed interfaces, match
+exhaustiveness (`E0731`) with witnesses for closed shapes, method
+references as values, and auto-derived `default()` / builder flows.
 
-- **Generic monomorphization** — generic fns aren't specialized per call site.
-- **Interface-satisfaction validation** — structs aren't checked to actually
-  implement their declared interfaces.
-- **Match exhaustiveness (`E0731`)** — code reserved in `diag/codes.go`
-  but not yet emitted.
-- **Builder auto-derivation** (§3.4) — `#[derive(Builder)]` not supported.
-
-Minor deferred items: method references as values (`obj.method` without
-a call) at `internal/check/expr.go:1106`, and cross-file partial-method
-name-collision detection (test skipped at
-`internal/resolve/package_test.go:243`).
+Minor deferred items are deliberately conservative rather than absent:
+some built-in marker-interface derivations are accepted optimistically
+outside primitives, open scalar match domains still require a catch-all,
+and type-level generic specialization remains less precise than
+function-call monomorphization.
 
 ### Transpiler phases
 
