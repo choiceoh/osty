@@ -3,10 +3,7 @@
 
 fn basicString() {
     let a = "hello"
-    let b = """
-        tabs	and
-        newlines
-        """
+    let b = "tabs\tand\nnewlines"
     let c = "quote \" inside"
     let d = "backslash \\ and null \0"
     let e = "unicode 😀 emoji"

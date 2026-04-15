@@ -392,8 +392,7 @@ func (g *gen) emitFor(f *ast.ForStmt) {
 	defer func() { g.loopDepth-- }()
 
 	if f.IsForLet {
-		g.body.writeln("/* TODO(phase4): for let */")
-		g.emitBlock(f.Body)
+		g.emitForLet(f)
 		return
 	}
 	// Infinite loop.
@@ -435,8 +434,27 @@ func (g *gen) emitFor(f *ast.ForStmt) {
 	// for pattern in iter — single binding.
 	name := identPatternName(f.Pattern)
 	if name == "" {
-		g.body.writeln("/* TODO(phase3): for with non-ident pattern */")
-		g.emitBlock(f.Body)
+		// Non-ident pattern: bind each iteration to a fresh temp and
+		// unpack it inside the body, reusing the let-destructure
+		// emitters so the pattern shapes stay in sync.
+		tmp := g.freshVar("_it")
+		g.body.writef("for _, %s := range ", tmp)
+		g.emitExpr(f.Iter)
+		g.body.writeln(" {")
+		g.body.indent()
+		g.body.writef("_ = %s\n", tmp)
+		synth := &ast.LetStmt{Pattern: f.Pattern, Value: &ast.Ident{Name: tmp}}
+		switch p := f.Pattern.(type) {
+		case *ast.TuplePat:
+			g.emitLetTupleDestructure(p, synth)
+		case *ast.StructPat:
+			g.emitLetStructDestructure(p, synth)
+		default:
+			g.body.writef("/* TODO: for with %T pattern */\n", f.Pattern)
+		}
+		g.emitStmts(f.Body.Stmts)
+		g.body.dedent()
+		g.body.writeln("}")
 		return
 	}
 	// Integer range gets a C-style `for i := a; i <op> b; i++`.
@@ -472,6 +490,89 @@ func (g *gen) emitFor(f *ast.ForStmt) {
 	g.emitExpr(f.Iter)
 	g.body.write(" ")
 	g.emitBlock(f.Body)
+}
+
+// emitForLet lowers `for let pat = expr { body }` — iterate while
+// `expr` still matches `pat`. The canonical shape is
+// `for let Some(x) = queue.pop() { ... }`, i.e. pop until the queue
+// runs dry. The lowering is:
+//
+//	for {
+//	    _t := <expr>
+//	    if _t == nil { break }         // or: if !_t.IsOk { break }
+//	    x := *_t                       // bind(s) from the pattern
+//	    <body>
+//	}
+//
+// Only `Some(…)` / `Ok(…)` / `Err(…)` variant patterns are supported
+// here; more exotic enum patterns reuse the match-arm lowering path
+// inside a `for` so arbitrary user enums keep working.
+func (g *gen) emitForLet(f *ast.ForStmt) {
+	g.body.writeln("for {")
+	g.body.indent()
+	tmp := g.freshVar("_ol")
+	g.body.writef("%s := ", tmp)
+	g.emitExpr(f.Iter)
+	g.body.writef("\n_ = %s\n", tmp)
+	vp, ok := f.Pattern.(*ast.VariantPat)
+	if !ok || len(vp.Path) == 0 {
+		g.body.writef("/* TODO: for-let with %T pattern */\nbreak\n", f.Pattern)
+		g.body.dedent()
+		g.body.writeln("}")
+		return
+	}
+	head := vp.Path[len(vp.Path)-1]
+	switch head {
+	case "Some":
+		// Option<T> is represented as *T in gen. Break on nil; deref on match.
+		g.body.writef("if %s == nil { break }\n", tmp)
+		if len(vp.Args) == 1 {
+			if id, ok := vp.Args[0].(*ast.IdentPat); ok {
+				g.body.writef("%s := *%s; _ = %s\n",
+					mangleIdent(id.Name), tmp, mangleIdent(id.Name))
+			}
+		}
+	case "None":
+		// Iterates only while expr is None — typically a guard form. Once
+		// we bind here we don't extract a value.
+		g.body.writef("if %s != nil { break }\n", tmp)
+	case "Ok":
+		g.body.writef("if !%s.IsOk { break }\n", tmp)
+		if len(vp.Args) == 1 {
+			if id, ok := vp.Args[0].(*ast.IdentPat); ok {
+				g.body.writef("%s := %s.Value; _ = %s\n",
+					mangleIdent(id.Name), tmp, mangleIdent(id.Name))
+			}
+		}
+	case "Err":
+		g.body.writef("if %s.IsOk { break }\n", tmp)
+		if len(vp.Args) == 1 {
+			if id, ok := vp.Args[0].(*ast.IdentPat); ok {
+				g.body.writef("%s := %s.Error; _ = %s\n",
+					mangleIdent(id.Name), tmp, mangleIdent(id.Name))
+			}
+		}
+	default:
+		// Generic user-enum variant: type-assert to the variant struct.
+		owner, isUserVariant := g.variantOwner[head]
+		if isUserVariant {
+			variantT := owner + "_" + head
+			alt := g.freshVar("_v")
+			g.body.writef("%s, _ok := %s.(%s)\nif !_ok { break }\n_ = %s\n",
+				alt, tmp, variantT, alt)
+			for i, a := range vp.Args {
+				if id, ok := a.(*ast.IdentPat); ok {
+					g.body.writef("%s := %s.F%d; _ = %s\n",
+						mangleIdent(id.Name), alt, i, mangleIdent(id.Name))
+				}
+			}
+		} else {
+			g.body.writef("/* TODO: for-let variant %s */\nbreak\n", head)
+		}
+	}
+	g.emitStmts(f.Body.Stmts)
+	g.body.dedent()
+	g.body.writeln("}")
 }
 
 // forPatternName returns a Go-safe name for a pattern element in a
