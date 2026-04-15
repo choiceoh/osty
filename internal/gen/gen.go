@@ -90,6 +90,11 @@ type gen struct {
 	// pulling in the time import used by `s.timeout(...)` arms.
 	needSelect bool
 
+	// needCollections is set when any §10.6 collection helper is
+	// referenced. Injects the runtime helpers (sort/slices-based) at
+	// file top.
+	needCollections bool
+
 	// currentRetType tracks the enclosing function's return type so the
 	// `?` lift at let-stmt position can reconstruct the Result with the
 	// correct type parameters when the operand's T differs.
@@ -359,6 +364,252 @@ func runParallel[T any](bodies ...func() T) []T {
 	}
 	wg.Wait()
 	return results
+}
+`)
+	}
+	if g.needCollections {
+		out.WriteString(`
+// ostyListFirst / ostyListLast return Optional T for List<T>.first/last.
+func ostyListFirst[T any](xs []T) *T {
+	if len(xs) == 0 {
+		return nil
+	}
+	v := xs[0]
+	return &v
+}
+
+func ostyListLast[T any](xs []T) *T {
+	if len(xs) == 0 {
+		return nil
+	}
+	v := xs[len(xs)-1]
+	return &v
+}
+
+func ostyListGet[T any](xs []T, i int) *T {
+	if i < 0 || i >= len(xs) {
+		return nil
+	}
+	v := xs[i]
+	return &v
+}
+
+func ostyListContains[T comparable](xs []T, v T) bool {
+	for _, x := range xs {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}
+
+func ostyListIndexOf[T comparable](xs []T, v T) *int {
+	for i, x := range xs {
+		if x == v {
+			i := i
+			return &i
+		}
+	}
+	return nil
+}
+
+func ostyListFind[T any](xs []T, pred func(T) bool) *T {
+	for _, x := range xs {
+		if pred(x) {
+			v := x
+			return &v
+		}
+	}
+	return nil
+}
+
+func ostyListMap[T any, R any](xs []T, f func(T) R) []R {
+	out := make([]R, len(xs))
+	for i, x := range xs {
+		out[i] = f(x)
+	}
+	return out
+}
+
+func ostyListFilter[T any](xs []T, pred func(T) bool) []T {
+	out := make([]T, 0, len(xs))
+	for _, x := range xs {
+		if pred(x) {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
+func ostyListFold[T any, A any](xs []T, init A, f func(A, T) A) A {
+	acc := init
+	for _, x := range xs {
+		acc = f(acc, x)
+	}
+	return acc
+}
+
+func ostyListReversed[T any](xs []T) []T {
+	out := make([]T, len(xs))
+	for i, x := range xs {
+		out[len(xs)-1-i] = x
+	}
+	return out
+}
+
+func ostyListAppended[T any](xs []T, v T) []T {
+	out := make([]T, len(xs), len(xs)+1)
+	copy(out, xs)
+	return append(out, v)
+}
+
+func ostyListConcat[T any](xs []T, ys []T) []T {
+	out := make([]T, 0, len(xs)+len(ys))
+	out = append(out, xs...)
+	out = append(out, ys...)
+	return out
+}
+
+// ostyListPop / Push / Insert / RemoveAt / Sort / Reverse / Clear
+// take a *[]T so the caller's slice header is mutated.
+func ostyListPush[T any](xs *[]T, v T) { *xs = append(*xs, v) }
+
+func ostyListPop[T any](xs *[]T) *T {
+	s := *xs
+	if len(s) == 0 {
+		return nil
+	}
+	v := s[len(s)-1]
+	*xs = s[:len(s)-1]
+	return &v
+}
+
+func ostyListInsert[T any](xs *[]T, i int, v T) {
+	s := *xs
+	if i < 0 {
+		i = 0
+	}
+	if i > len(s) {
+		i = len(s)
+	}
+	s = append(s, v)
+	copy(s[i+1:], s[i:])
+	s[i] = v
+	*xs = s
+}
+
+func ostyListRemoveAt[T any](xs *[]T, i int) T {
+	s := *xs
+	v := s[i]
+	*xs = append(s[:i], s[i+1:]...)
+	return v
+}
+
+func ostyListClear[T any](xs *[]T) { *xs = (*xs)[:0] }
+
+func ostyListReverseInPlace[T any](xs *[]T) {
+	s := *xs
+	for i, j := 0, len(s)-1; i < j; i, j = i+1, j-1 {
+		s[i], s[j] = s[j], s[i]
+	}
+}
+
+// Map helpers.
+func ostyMapGet[K comparable, V any](m map[K]V, k K) *V {
+	if v, ok := m[k]; ok {
+		return &v
+	}
+	return nil
+}
+
+func ostyMapContainsKey[K comparable, V any](m map[K]V, k K) bool {
+	_, ok := m[k]
+	return ok
+}
+
+func ostyMapKeys[K comparable, V any](m map[K]V) []K {
+	out := make([]K, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+func ostyMapValues[K comparable, V any](m map[K]V) []V {
+	out := make([]V, 0, len(m))
+	for _, v := range m {
+		out = append(out, v)
+	}
+	return out
+}
+
+func ostyMapInsert[K comparable, V any](m map[K]V, k K, v V) { m[k] = v }
+
+func ostyMapRemove[K comparable, V any](m map[K]V, k K) *V {
+	if v, ok := m[k]; ok {
+		delete(m, k)
+		return &v
+	}
+	return nil
+}
+
+func ostyMapClear[K comparable, V any](m map[K]V) {
+	for k := range m {
+		delete(m, k)
+	}
+}
+
+// Set is represented as map[T]struct{}. Helpers mirror the Map surface.
+func ostySetContains[T comparable](s map[T]struct{}, v T) bool {
+	_, ok := s[v]
+	return ok
+}
+
+func ostySetInsert[T comparable](s map[T]struct{}, v T) { s[v] = struct{}{} }
+
+func ostySetRemove[T comparable](s map[T]struct{}, v T) bool {
+	if _, ok := s[v]; ok {
+		delete(s, v)
+		return true
+	}
+	return false
+}
+
+func ostySetClear[T comparable](s map[T]struct{}) {
+	for k := range s {
+		delete(s, k)
+	}
+}
+
+func ostySetUnion[T comparable](a, b map[T]struct{}) map[T]struct{} {
+	out := make(map[T]struct{}, len(a)+len(b))
+	for k := range a {
+		out[k] = struct{}{}
+	}
+	for k := range b {
+		out[k] = struct{}{}
+	}
+	return out
+}
+
+func ostySetIntersect[T comparable](a, b map[T]struct{}) map[T]struct{} {
+	out := make(map[T]struct{})
+	for k := range a {
+		if _, ok := b[k]; ok {
+			out[k] = struct{}{}
+		}
+	}
+	return out
+}
+
+func ostySetDifference[T comparable](a, b map[T]struct{}) map[T]struct{} {
+	out := make(map[T]struct{})
+	for k := range a {
+		if _, ok := b[k]; !ok {
+			out[k] = struct{}{}
+		}
+	}
+	return out
 }
 `)
 	}

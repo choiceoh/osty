@@ -327,6 +327,9 @@ func (g *gen) emitCall(c *ast.CallExpr) {
 		if g.emitEnumMethodCall(f, c.Args) {
 			return
 		}
+		if g.emitCollectionMethod(c, f) {
+			return
+		}
 	}
 	if tf, ok := c.Fn.(*ast.TurbofishExpr); ok {
 		if g.emitTurbofishCall(c, tf) {

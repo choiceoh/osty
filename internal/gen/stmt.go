@@ -417,6 +417,26 @@ func (g *gen) emitFor(f *ast.ForStmt) {
 	if tp, ok := f.Pattern.(*ast.TuplePat); ok && len(tp.Elems) == 2 {
 		k := forPatternName(tp.Elems[0], "_")
 		v := forPatternName(tp.Elems[1], "_")
+		// Special case: iterating over a List-of-tuples (from
+		// `.enumerate()` / `.entries()`) needs to destructure the
+		// element struct, not use (index, element). Detect via the
+		// iterator's inferred type.
+		if g.iterYieldsTuple(f.Iter) {
+			g.body.write("for _, _pair := range ")
+			g.emitExpr(f.Iter)
+			g.body.writeln(" {")
+			g.body.indent()
+			if k != "_" {
+				g.body.writef("%s := _pair.F0\n_ = %s\n", k, k)
+			}
+			if v != "_" {
+				g.body.writef("%s := _pair.F1\n_ = %s\n", v, v)
+			}
+			g.emitStmts(f.Body.Stmts)
+			g.body.dedent()
+			g.body.writeln("}")
+			return
+		}
 		g.body.writef("for %s, %s := range ", k, v)
 		g.emitExpr(f.Iter)
 		g.body.writeln(" {")
@@ -472,6 +492,26 @@ func (g *gen) emitFor(f *ast.ForStmt) {
 	g.emitExpr(f.Iter)
 	g.body.write(" ")
 	g.emitBlock(f.Body)
+}
+
+// iterYieldsTuple reports whether the iterator expression yields a
+// 2-tuple element per iteration — true for List<(A, B)> as produced by
+// `.enumerate()` and `.entries()`. Callers use this to decide whether
+// to destructure the tuple or treat the range as Go's (index, element).
+func (g *gen) iterYieldsTuple(iter ast.Expr) bool {
+	t := g.typeOf(iter)
+	if t == nil {
+		return false
+	}
+	n, ok := t.(*types.Named)
+	if !ok || n.Sym == nil || n.Sym.Name != "List" || len(n.Args) != 1 {
+		return false
+	}
+	tup, ok := n.Args[0].(*types.Tuple)
+	if !ok {
+		return false
+	}
+	return len(tup.Elems) == 2
 }
 
 // forPatternName returns a Go-safe name for a pattern element in a

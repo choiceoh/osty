@@ -803,28 +803,51 @@ func (c *checker) methodCallType(fx *ast.FieldExpr, e *ast.CallExpr, env *env) t
 // receiver (`get`, `map`, `filter`, …) have a nil entry and go through
 // the per-name switch below.
 var stdlibMethods = map[string]types.Type{
-	"len":      types.Int,
-	"isEmpty":  types.Bool,
-	"contains": types.Bool,
-	"toString": types.String,
-	"toInt":    types.Int,
-	"toInt32":  types.Int32,
-	"toInt64":  types.Int64,
-	"toFloat":  types.Float,
+	"len":         types.Int,
+	"isEmpty":     types.Bool,
+	"contains":    types.Bool,
+	"containsKey": types.Bool,
+	"toString":    types.String,
+	"toInt":       types.Int,
+	"toInt32":     types.Int32,
+	"toInt64":     types.Int64,
+	"toFloat":     types.Float,
 	// Receiver-dependent — nil means "dispatch by name".
-	"get":     nil,
-	"push":    nil,
-	"map":     nil,
-	"filter":  nil,
-	"iter":    nil,
-	"entries": nil,
-	"keys":    nil,
-	"values":  nil,
-	"toList":  nil,
-	"toSet":   nil,
-	"toMap":   nil,
-	"chars":   nil,
-	"take":    nil,
+	"get":        nil,
+	"first":      nil,
+	"last":       nil,
+	"indexOf":    nil,
+	"find":       nil,
+	"push":       nil,
+	"pop":        nil,
+	"insert":     nil,
+	"removeAt":   nil,
+	"remove":     nil,
+	"clear":      nil,
+	"sort":       nil,
+	"reverse":    nil,
+	"sorted":     nil,
+	"sortedBy":   nil,
+	"reversed":   nil,
+	"appended":   nil,
+	"concat":     nil,
+	"zip":        nil,
+	"enumerate":  nil,
+	"fold":       nil,
+	"map":        nil,
+	"filter":     nil,
+	"iter":       nil,
+	"entries":    nil,
+	"keys":       nil,
+	"values":     nil,
+	"toList":     nil,
+	"toSet":      nil,
+	"toMap":      nil,
+	"chars":      nil,
+	"take":       nil,
+	"union":      nil,
+	"intersect":  nil,
+	"difference": nil,
 }
 
 // stdlibCallReturn synthesizes a return type for an escape-hatch stdlib
@@ -868,6 +891,21 @@ func (c *checker) stdlibCallReturn(fx *ast.FieldExpr, recvT types.Type, e *ast.C
 			}
 		}
 		ret = stdlibGetReturn(recvT)
+	case "containsKey":
+		if len(e.Args) != 1 {
+			c.errNode(e, diag.CodeWrongArgCount,
+				"`containsKey` takes 1 argument, got %d", len(e.Args))
+			for _, a := range e.Args {
+				c.checkExpr(a.Value, nil, env)
+			}
+		} else {
+			keyT := stdlibKeyOrIndex(recvT)
+			at := c.checkExpr(e.Args[0].Value, keyT, env)
+			if keyT != nil && !types.IsError(keyT) && !types.Assignable(keyT, at) {
+				c.errMismatch(e.Args[0].Value, keyT, at)
+			}
+		}
+		ret = types.Bool
 	case "push":
 		c.checkExactArity(e, 1)
 		if len(e.Args) == 1 {
@@ -878,6 +916,64 @@ func (c *checker) stdlibCallReturn(fx *ast.FieldExpr, recvT types.Type, e *ast.C
 			}
 		}
 		ret = types.Unit
+	case "pop":
+		c.checkExactArity(e, 0)
+		ret = &types.Optional{Inner: listElem(recvT)}
+	case "first", "last":
+		c.checkExactArity(e, 0)
+		ret = &types.Optional{Inner: listElem(recvT)}
+	case "insert":
+		ret = c.stdlibInsert(e, recvT, env)
+	case "removeAt":
+		c.checkExactArity(e, 1)
+		if len(e.Args) == 1 {
+			c.checkExpr(e.Args[0].Value, types.Int, env)
+		}
+		ret = listElem(recvT)
+	case "remove":
+		ret = c.stdlibRemove(e, recvT, env)
+	case "clear", "sort", "reverse":
+		c.checkExactArity(e, 0)
+		ret = types.Unit
+	case "sorted":
+		c.checkExactArity(e, 0)
+		ret = c.listOf(listElem(recvT))
+	case "sortedBy":
+		ret = c.stdlibSortedBy(e, recvT, env)
+	case "reversed":
+		c.checkExactArity(e, 0)
+		ret = c.listOf(listElem(recvT))
+	case "appended":
+		ret = c.stdlibAppended(e, recvT, env)
+	case "concat":
+		ret = c.stdlibConcat(e, recvT, env)
+	case "zip":
+		ret = c.stdlibZip(e, recvT, env)
+	case "enumerate":
+		c.checkExactArity(e, 0)
+		elem := listElem(recvT)
+		tup := &types.Tuple{Elems: []types.Type{types.Int, elem}}
+		ret = c.listOf(tup)
+	case "indexOf":
+		c.checkExactArity(e, 1)
+		if len(e.Args) == 1 {
+			elem := listElem(recvT)
+			at := c.checkExpr(e.Args[0].Value, elem, env)
+			if elem != nil && !types.IsError(elem) && !types.Assignable(elem, at) {
+				c.errMismatch(e.Args[0].Value, elem, at)
+			}
+		}
+		ret = &types.Optional{Inner: types.Int}
+	case "find":
+		ret = c.stdlibFind(e, recvT, env)
+	case "fold":
+		ret = c.stdlibFold(e, recvT, env)
+	case "union", "intersect", "difference":
+		c.checkExactArity(e, 1)
+		if len(e.Args) == 1 {
+			c.checkExpr(e.Args[0].Value, recvT, env)
+		}
+		ret = recvT
 	case "map":
 		ret = c.stdlibMap(e, recvT, env)
 	case "filter":
@@ -998,6 +1094,184 @@ func (c *checker) stdlibFilter(e *ast.CallExpr, recvT types.Type, env *env) type
 		}
 	}
 	return c.listOf(elem)
+}
+
+// listElem returns the element type T for List<T> / Set<T>, or
+// ErrorType when the receiver isn't one of those. Unlike iterElem,
+// Map<K,V> returns its value type here (since pop/first/last on a
+// Map are ill-defined — callers use iterElem for those).
+func listElem(recvT types.Type) types.Type {
+	if n, ok := recvT.(*types.Named); ok && n.Sym != nil {
+		switch n.Sym.Name {
+		case "List", "Set":
+			if len(n.Args) == 1 {
+				return n.Args[0]
+			}
+		case "Map":
+			if len(n.Args) == 2 {
+				return n.Args[1]
+			}
+		}
+	}
+	return types.ErrorType
+}
+
+// stdlibInsert handles List<T>.insert(Int, T) and Map<K,V>.insert(K, V).
+// Returns Unit.
+func (c *checker) stdlibInsert(e *ast.CallExpr, recvT types.Type, env *env) types.Type {
+	if n, ok := recvT.(*types.Named); ok && n.Sym != nil {
+		switch n.Sym.Name {
+		case "List":
+			c.checkExactArity(e, 2)
+			if len(e.Args) == 2 {
+				c.checkExpr(e.Args[0].Value, types.Int, env)
+				elem := listElem(recvT)
+				at := c.checkExpr(e.Args[1].Value, elem, env)
+				if elem != nil && !types.IsError(elem) && !types.Assignable(elem, at) {
+					c.errMismatch(e.Args[1].Value, elem, at)
+				}
+			}
+			return types.Unit
+		case "Map":
+			c.checkExactArity(e, 2)
+			if len(e.Args) == 2 && len(n.Args) == 2 {
+				c.checkExpr(e.Args[0].Value, n.Args[0], env)
+				c.checkExpr(e.Args[1].Value, n.Args[1], env)
+			}
+			return types.Unit
+		case "Set":
+			c.checkExactArity(e, 1)
+			if len(e.Args) == 1 {
+				elem := listElem(recvT)
+				c.checkExpr(e.Args[0].Value, elem, env)
+			}
+			return types.Unit
+		}
+	}
+	for _, a := range e.Args {
+		c.checkExpr(a.Value, nil, env)
+	}
+	return types.Unit
+}
+
+// stdlibRemove handles Map<K,V>.remove(K) -> V? and Set<T>.remove(T) -> Bool.
+func (c *checker) stdlibRemove(e *ast.CallExpr, recvT types.Type, env *env) types.Type {
+	c.checkExactArity(e, 1)
+	if n, ok := recvT.(*types.Named); ok && n.Sym != nil {
+		switch n.Sym.Name {
+		case "Map":
+			if len(e.Args) == 1 && len(n.Args) == 2 {
+				c.checkExpr(e.Args[0].Value, n.Args[0], env)
+			}
+			if len(n.Args) == 2 {
+				return &types.Optional{Inner: n.Args[1]}
+			}
+		case "Set":
+			if len(e.Args) == 1 && len(n.Args) == 1 {
+				c.checkExpr(e.Args[0].Value, n.Args[0], env)
+			}
+			return types.Bool
+		}
+	}
+	for _, a := range e.Args {
+		c.checkExpr(a.Value, nil, env)
+	}
+	return &types.Optional{Inner: types.ErrorType}
+}
+
+// stdlibSortedBy handles `xs.sortedBy(|x| x.key)`. Returns List<T>.
+func (c *checker) stdlibSortedBy(e *ast.CallExpr, recvT types.Type, env *env) types.Type {
+	elem := listElem(recvT)
+	if len(e.Args) != 1 {
+		c.errNode(e, diag.CodeWrongArgCount,
+			"`sortedBy` takes 1 callback argument, got %d", len(e.Args))
+		for _, a := range e.Args {
+			c.checkExpr(a.Value, nil, env)
+		}
+		return c.listOf(elem)
+	}
+	hint := &types.FnType{Params: []types.Type{elem}, Return: nil}
+	c.checkExpr(e.Args[0].Value, hint, env)
+	return c.listOf(elem)
+}
+
+// stdlibAppended handles `xs.appended(item)` -> List<T>.
+func (c *checker) stdlibAppended(e *ast.CallExpr, recvT types.Type, env *env) types.Type {
+	elem := listElem(recvT)
+	c.checkExactArity(e, 1)
+	if len(e.Args) == 1 {
+		at := c.checkExpr(e.Args[0].Value, elem, env)
+		if elem != nil && !types.IsError(elem) && !types.Assignable(elem, at) {
+			c.errMismatch(e.Args[0].Value, elem, at)
+		}
+	}
+	return c.listOf(elem)
+}
+
+// stdlibConcat handles `xs.concat(ys)` -> List<T>.
+func (c *checker) stdlibConcat(e *ast.CallExpr, recvT types.Type, env *env) types.Type {
+	elem := listElem(recvT)
+	list := c.listOf(elem)
+	c.checkExactArity(e, 1)
+	if len(e.Args) == 1 {
+		at := c.checkExpr(e.Args[0].Value, list, env)
+		if !types.IsError(at) && !types.Assignable(list, at) {
+			c.errMismatch(e.Args[0].Value, list, at)
+		}
+	}
+	return list
+}
+
+// stdlibZip handles `xs.zip(ys)` -> List<(T,U)>.
+func (c *checker) stdlibZip(e *ast.CallExpr, recvT types.Type, env *env) types.Type {
+	elem := listElem(recvT)
+	c.checkExactArity(e, 1)
+	var otherElem types.Type = types.ErrorType
+	if len(e.Args) == 1 {
+		at := c.checkExpr(e.Args[0].Value, nil, env)
+		otherElem = listElem(at)
+	}
+	tup := &types.Tuple{Elems: []types.Type{elem, otherElem}}
+	return c.listOf(tup)
+}
+
+// stdlibFind handles `xs.find(|x| bool)` -> T?.
+func (c *checker) stdlibFind(e *ast.CallExpr, recvT types.Type, env *env) types.Type {
+	elem := listElem(recvT)
+	if len(e.Args) != 1 {
+		c.errNode(e, diag.CodeWrongArgCount,
+			"`find` takes 1 callback argument, got %d", len(e.Args))
+		for _, a := range e.Args {
+			c.checkExpr(a.Value, nil, env)
+		}
+		return &types.Optional{Inner: elem}
+	}
+	hint := &types.FnType{Params: []types.Type{elem}, Return: types.Bool}
+	got := c.checkExpr(e.Args[0].Value, hint, env)
+	if fn, ok := types.AsFn(got); ok {
+		if !types.IsBool(fn.Return) && !types.IsError(fn.Return) {
+			c.errNode(e.Args[0].Value, diag.CodeTypeMismatch,
+				"`find` callback must return `Bool`, got `%s`", fn.Return)
+		}
+	}
+	return &types.Optional{Inner: elem}
+}
+
+// stdlibFold handles `xs.fold(init, |acc, x| ...)` -> A.
+func (c *checker) stdlibFold(e *ast.CallExpr, recvT types.Type, env *env) types.Type {
+	elem := listElem(recvT)
+	if len(e.Args) != 2 {
+		c.errNode(e, diag.CodeWrongArgCount,
+			"`fold` takes 2 arguments (init, callback), got %d", len(e.Args))
+		for _, a := range e.Args {
+			c.checkExpr(a.Value, nil, env)
+		}
+		return types.ErrorType
+	}
+	initT := c.checkExpr(e.Args[0].Value, nil, env)
+	hint := &types.FnType{Params: []types.Type{initT, elem}, Return: initT}
+	c.checkExpr(e.Args[1].Value, hint, env)
+	return initT
 }
 
 // stdlibGetReturn returns `T?` for List<T>.get / Set<T>.get, `V?` for
