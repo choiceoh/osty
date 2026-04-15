@@ -1,0 +1,132 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "osty: check current file",
+      "type": "shell",
+      "command": "osty",
+      "args": [
+        "check",
+        "${file}"
+      ],
+      "group": "build",
+      "problemMatcher": {
+        "owner": "osty",
+        "fileLocation": [
+          "relative",
+          "${workspaceFolder}"
+        ],
+        "pattern": [
+          {
+            "regexp": "^\\s*(error|warning)\\[(E\\d+|W\\d+|L\\d+)\\]:\\s+(.*)$",
+            "severity": 1,
+            "code": 2,
+            "message": 3
+          },
+          {
+            "regexp": "^\\s*-->\\s+(.+):(\\d+):(\\d+)$",
+            "file": 1,
+            "line": 2,
+            "column": 3
+          }
+        ]
+      }
+    },
+    {
+      "label": "osty: build current project",
+      "type": "shell",
+      "command": "osty",
+      "args": [
+        "build",
+        "${fileDirname}"
+      ],
+      "group": "build",
+      "problemMatcher": {
+        "owner": "osty",
+        "fileLocation": [
+          "relative",
+          "${workspaceFolder}"
+        ],
+        "pattern": [
+          {
+            "regexp": "^\\s*(error|warning)\\[(E\\d+|W\\d+|L\\d+)\\]:\\s+(.*)$",
+            "severity": 1,
+            "code": 2,
+            "message": 3
+          },
+          {
+            "regexp": "^\\s*-->\\s+(.+):(\\d+):(\\d+)$",
+            "file": 1,
+            "line": 2,
+            "column": 3
+          }
+        ]
+      }
+    },
+    {
+      "label": "osty: test current project",
+      "type": "shell",
+      "command": "osty",
+      "args": [
+        "test",
+        "${fileDirname}"
+      ],
+      "group": "test",
+      "problemMatcher": {
+        "owner": "osty",
+        "fileLocation": [
+          "relative",
+          "${workspaceFolder}"
+        ],
+        "pattern": [
+          {
+            "regexp": "^\\s*(error|warning)\\[(E\\d+|W\\d+|L\\d+)\\]:\\s+(.*)$",
+            "severity": 1,
+            "code": 2,
+            "message": 3
+          },
+          {
+            "regexp": "^\\s*-->\\s+(.+):(\\d+):(\\d+)$",
+            "file": 1,
+            "line": 2,
+            "column": 3
+          }
+        ]
+      }
+    },
+    {
+      "label": "osty: format current file",
+      "type": "shell",
+      "command": "osty",
+      "args": [
+        "fmt",
+        "--write",
+        "${file}"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "go: test all",
+      "type": "shell",
+      "command": "go",
+      "args": [
+        "test",
+        "./..."
+      ],
+      "group": "test",
+      "problemMatcher": "$go"
+    },
+    {
+      "label": "vscode: install Osty extension locally",
+      "type": "shell",
+      "command": "npm",
+      "args": [
+        "--prefix",
+        "${workspaceFolder}/editors/vscode-osty",
+        "run",
+        "install-local"
+      ],
+      "problemMatcher": []
+    }
+  ]
+}

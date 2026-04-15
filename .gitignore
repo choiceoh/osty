@@ -1,0 +1,12 @@
+# Osty build/test output
+.osty/
+**/.osty/
+
+# VS Code extension dependencies and packages
+node_modules/
+*.vsix
+
+# Local editor and OS files
+.DS_Store
+.idea/
+*.swp

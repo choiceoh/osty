@@ -350,6 +350,10 @@ func (w *Workspace) ResolveAll() map[string]*PackageResult {
 			continue
 		}
 		pkg.workspace = w
+		if w.isPreResolvedStdlib(path, pkg) {
+			results[path] = &PackageResult{PackageScope: pkg.PkgScope}
+			continue
+		}
 		resolvers[path] = newPkgResolver(pkg, prelude)
 	}
 	// Pass A (across workspace): populate every package's PkgScope
@@ -359,7 +363,9 @@ func (w *Workspace) ResolveAll() map[string]*PackageResult {
 		if pkg.isStub {
 			continue
 		}
-		resolvers[path].declarePass(pkg)
+		if r := resolvers[path]; r != nil {
+			r.declarePass(pkg)
+		}
 	}
 	// Pass B (across workspace): walk bodies, expression references,
 	// type references. Each resolver sees every other package through
@@ -369,6 +375,9 @@ func (w *Workspace) ResolveAll() map[string]*PackageResult {
 			continue
 		}
 		r := resolvers[path]
+		if r == nil {
+			continue
+		}
 		r.bodyPass(pkg)
 		results[path] = &PackageResult{
 			PackageScope: pkg.PkgScope,
@@ -383,6 +392,17 @@ func (w *Workspace) ResolveAll() map[string]*PackageResult {
 		}
 	}
 	return results
+}
+
+// isPreResolvedStdlib reports whether pkg came from an attached
+// StdlibProvider. Bundled stdlib modules are resolved when the registry
+// is loaded, so a workspace pass should reuse their scopes instead of
+// declaring the same top-level names a second time.
+func (w *Workspace) isPreResolvedStdlib(path string, pkg *Package) bool {
+	return w.Stdlib != nil &&
+		strings.HasPrefix(path, StdPrefix) &&
+		pkg != nil &&
+		pkg.PkgScope != nil
 }
 
 // importCycleDiag pairs a cycle diagnostic with the package that
@@ -466,8 +486,8 @@ func (w *Workspace) detectCycles() []importCycleDiag {
 // emit CodeCyclicImport.
 func cycleMarker(dotPath string) *Package {
 	return &Package{
-		Name:           lastDotSeg(dotPath),
-		isCycleMarker:  true,
+		Name:          lastDotSeg(dotPath),
+		isCycleMarker: true,
 	}
 }
 

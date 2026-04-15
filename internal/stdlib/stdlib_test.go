@@ -1,6 +1,9 @@
 package stdlib
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/osty/osty/internal/check"
@@ -28,6 +31,68 @@ func TestLoadAllModules(t *testing.T) {
 			t.Errorf("parse error in stdlib stub: [%s] %s", d.Code, d.Message)
 		case diag.Warning:
 			t.Errorf("parse warning in stdlib stub: [%s] %s", d.Code, d.Message)
+		}
+	}
+}
+
+func TestWorkspaceResolveReusesResolvedStdlibScopes(t *testing.T) {
+	dir := t.TempDir()
+	src := `use std.debug
+
+fn main() {
+    let _ = debug.dbg(1)
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "main.osty"), []byte(src), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ws, err := resolve.NewWorkspace(dir)
+	if err != nil {
+		t.Fatalf("workspace: %v", err)
+	}
+	ws.Stdlib = Load()
+	if _, err := ws.LoadPackage(""); err != nil {
+		t.Fatalf("load package: %v", err)
+	}
+	results := ws.ResolveAll()
+	for path, res := range results {
+		for _, d := range res.Diags {
+			if d.Code == diag.CodeDuplicateDecl {
+				t.Fatalf("unexpected duplicate while resolving %s: %s", path, d.Error())
+			}
+		}
+	}
+}
+
+func TestWorkspaceCheckUsesStdlibSignaturesWithoutCheckingStubBodies(t *testing.T) {
+	dir := t.TempDir()
+	src := `use std.fs
+
+pub fn load(path: String) -> Result<String, Error> {
+    fs.readToString(path)
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "lib.osty"), []byte(src), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ws, err := resolve.NewWorkspace(dir)
+	if err != nil {
+		t.Fatalf("workspace: %v", err)
+	}
+	ws.Stdlib = Load()
+	if _, err := ws.LoadPackage(""); err != nil {
+		t.Fatalf("load package: %v", err)
+	}
+	resolved := ws.ResolveAll()
+	checked := check.Workspace(ws, resolved)
+	for path, res := range checked {
+		for _, d := range res.Diags {
+			if strings.HasPrefix(path, resolve.StdPrefix) {
+				t.Fatalf("unexpected stdlib body diagnostic in %s: %s", path, d.Error())
+			}
+			if d.Severity == diag.Error {
+				t.Fatalf("unexpected user diagnostic in %s: %s", path, d.Error())
+			}
 		}
 	}
 }

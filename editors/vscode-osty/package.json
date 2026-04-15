@@ -1,0 +1,84 @@
+{
+  "name": "osty-vscode",
+  "displayName": "Osty",
+  "description": "Language support for Osty, backed by the osty lsp command.",
+  "version": "0.1.0",
+  "publisher": "osty-lang",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.84.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:osty",
+    "onCommand:osty.restartLanguageServer"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "osty",
+        "aliases": [
+          "Osty",
+          "osty"
+        ],
+        "extensions": [
+          ".osty"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "osty",
+        "scopeName": "source.osty",
+        "path": "./syntaxes/osty.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Osty",
+      "properties": {
+        "osty.languageServer.command": {
+          "type": "string",
+          "default": "osty",
+          "description": "Command used to start the Osty language server."
+        },
+        "osty.languageServer.args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "lsp"
+          ],
+          "description": "Arguments passed to the Osty language server command."
+        },
+        "osty.languageServer.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Trace communication with the Osty language server."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "osty.restartLanguageServer",
+        "title": "Osty: Restart Language Server"
+      }
+    ]
+  },
+  "scripts": {
+    "check": "node -c extension.js",
+    "install-local": "bash scripts/install-local.sh"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}
