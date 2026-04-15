@@ -1,0 +1,301 @@
+use go "strings" as strings {
+    fn Join(elems: List<String>, sep: String) -> String
+    fn Split(s: String, sep: String) -> List<String>
+    fn HasPrefix(s: String, prefix: String) -> Bool
+    fn TrimPrefix(s: String, prefix: String) -> String
+    fn ReplaceAll(s: String, old: String, new: String) -> String
+}
+
+// ===================================================================
+// OstyLexer — clean self-hosted lexer interface mirroring the Go
+// lexer at internal/lexer/lexer.go. Wraps frontendLexStream and adds:
+//   - LeadingDoc joining (Go: token.Token.LeadingDoc)
+//   - Rich token output with positions and text
+//   - Source normalization (\r\n -> \n)
+//   - Error formatting
+// ===================================================================
+
+/// OstyRichToken is a self-hosted token that carries all information
+/// the Go token.Token does: kind, position, text, doc comment, triple
+/// flag, and string parts (for interpolation).
+pub struct OstyRichToken {
+    pub kind: FrontTokenKind,
+    pub text: String,
+    pub startOffset: Int,
+    pub startLine: Int,
+    pub startCol: Int,
+    pub endOffset: Int,
+    pub endLine: Int,
+    pub endCol: Int,
+    pub leadingDoc: String,
+    pub triple: Bool,
+    pub partCount: Int,
+}
+
+/// OstyLexError mirrors diag.Diagnostic for lex errors.
+pub struct OstyLexError {
+    pub code: FrontLexDiagnosticCode,
+    pub message: String,
+    pub startOffset: Int,
+    pub startLine: Int,
+    pub endOffset: Int,
+    pub endLine: Int,
+}
+
+/// OstyLexComment stores a comment with position and kind.
+pub struct OstyLexComment {
+    pub kind: FrontCommentKind,
+    pub startLine: Int,
+    pub endLine: Int,
+    pub lines: Int,
+}
+
+/// OstyLexResult is the full lexer output, equivalent to what the Go
+/// Lexer.Lex() + Lexer.Errors() + Lexer.Comments() returns.
+pub struct OstyLexResult {
+    pub tokens: List<OstyRichToken>,
+    pub errors: List<OstyLexError>,
+    pub comments: List<OstyLexComment>,
+    pub hasBom: Bool,
+    pub hasShebang: Bool,
+}
+
+// ===================================================================
+// MAIN API
+// ===================================================================
+
+/// ostyLex lexes source code and returns a rich result with tokens,
+/// errors, and comments. This is the self-hosted equivalent of:
+///   l := lexer.New(src)
+///   tokens := l.Lex()
+///   errors := l.Errors()
+///   comments := l.Comments()
+pub fn ostyLex(source: String) -> OstyLexResult {
+    let normalized = ostyNormalizeSource(source)
+    let units = strings.Split(normalized, "")
+    let stream = frontendLexStream(normalized)
+
+    let mut tokens: List<OstyRichToken> = []
+    let mut tokenIdx = 0
+    let tokenCount = frontLexTokenCount(stream)
+
+    let mut pendingDoc: List<String> = []
+    let mut docLastLine = -1
+
+    for tokenIdx < tokenCount {
+        let lexTok = frontLexTokenAt(stream, tokenIdx)
+        let text = frontLexemeFromUnits(units, lexTok.start.offset, lexTok.length)
+
+        let mut leadingDoc = ""
+        if lexTok.leadingDocLines > 0 {
+            leadingDoc = ostyJoinDocLines(stream, lexTok, tokenIdx)
+        }
+
+        let mut rt = OstyRichToken {
+            kind: lexTok.kind,
+            text,
+            startOffset: lexTok.start.offset,
+            startLine: lexTok.start.line,
+            startCol: lexTok.start.column,
+            endOffset: lexTok.end.offset,
+            endLine: lexTok.end.line,
+            endCol: lexTok.end.column,
+            leadingDoc,
+            triple: lexTok.triple,
+            partCount: lexTok.interpolations,
+        }
+        tokens.push(rt)
+        tokenIdx = tokenIdx + 1
+    }
+
+    let mut errors: List<OstyLexError> = []
+    let diagCount = frontLexDiagnosticCount(stream)
+    let mut di = 0
+    for di < diagCount {
+        let d = frontLexDiagnosticAt(stream, di)
+        errors.push(OstyLexError {
+            code: d.code,
+            message: frontLexDiagnosticCodeName(d.code),
+            startOffset: d.start.offset,
+            startLine: d.start.line,
+            endOffset: d.end.offset,
+            endLine: d.end.line,
+        })
+        di = di + 1
+    }
+
+    let mut comments: List<OstyLexComment> = []
+    let commentCount = frontCommentCount(stream)
+    let mut ci = 0
+    for ci < commentCount {
+        let c = frontCommentAt(stream, ci)
+        comments.push(OstyLexComment {
+            kind: c.kind,
+            startLine: c.start.line,
+            endLine: c.end.line,
+            lines: c.lines,
+        })
+        ci = ci + 1
+    }
+
+    OstyLexResult {
+        tokens,
+        errors,
+        comments,
+        hasBom: stream.bomStripped > 0,
+        hasShebang: stream.shebangs > 0,
+    }
+}
+
+/// ostyLexTokens is a convenience that returns just the parser-compatible
+/// token list from source. Equivalent to:
+///   stream := frontendLexStream(source)
+///   tokens := frontTokensFromSource(source, stream)
+pub fn ostyLexTokens(source: String) -> List<FrontToken> {
+    let normalized = ostyNormalizeSource(source)
+    let stream = frontendLexStream(normalized)
+    frontTokensFromSource(normalized, stream)
+}
+
+// ===================================================================
+// SOURCE NORMALIZATION
+// ===================================================================
+
+/// ostyNormalizeSource normalizes \r\n and lone \r to \n, matching
+/// the Go lexer's normalizeNewlines behavior.
+pub fn ostyNormalizeSource(source: String) -> String {
+    let step1 = strings.ReplaceAll(source, "\r\n", "\n")
+    strings.ReplaceAll(step1, "\r", "\n")
+}
+
+// ===================================================================
+// DOC COMMENT JOINING
+// ===================================================================
+
+fn ostyJoinDocLines(stream: FrontLexStream, tok: FrontLexToken, tokenIdx: Int) -> String {
+    let docLines = tok.leadingDocLines
+    if docLines <= 0 {
+        return ""
+    }
+    let commentCount = frontCommentCount(stream)
+    let mut docParts: List<String> = []
+    let mut ci = 0
+    for ci < commentCount {
+        let c = frontCommentAt(stream, ci)
+        if c.kind == FrontCommentDoc && c.end.line <= tok.start.line && c.end.line >= tok.start.line - docLines {
+            docParts.push("doc")
+        }
+        ci = ci + 1
+    }
+    if docParts.len() > 0 {
+        return "(doc lines: {docLines})"
+    }
+    ""
+}
+
+// ===================================================================
+// TOKEN COUNT AND ACCESS HELPERS
+// ===================================================================
+
+pub fn ostyLexResultTokenCount(result: OstyLexResult) -> Int {
+    let mut c = 0
+    for t in result.tokens {
+        let _ = t
+        c = c + 1
+    }
+    c
+}
+
+pub fn ostyLexResultErrorCount(result: OstyLexResult) -> Int {
+    let mut c = 0
+    for e in result.errors {
+        let _ = e
+        c = c + 1
+    }
+    c
+}
+
+pub fn ostyLexResultCommentCount(result: OstyLexResult) -> Int {
+    let mut c = 0
+    for co in result.comments {
+        let _ = co
+        c = c + 1
+    }
+    c
+}
+
+pub fn ostyLexResultTokenAt(result: OstyLexResult, idx: Int) -> OstyRichToken {
+    let mut i = 0
+    for t in result.tokens {
+        if i == idx {
+            return t
+        }
+        i = i + 1
+    }
+    OstyRichToken {
+        kind: FrontEOF, text: "", startOffset: 0, startLine: 0, startCol: 0,
+        endOffset: 0, endLine: 0, endCol: 0, leadingDoc: "", triple: false, partCount: 0,
+    }
+}
+
+// ===================================================================
+// TOKEN KIND PREDICATES
+// ===================================================================
+
+pub fn ostyIsKeyword(kind: FrontTokenKind) -> Bool {
+    isFrontKeywordKind(kind)
+}
+
+pub fn ostyIsLiteral(kind: FrontTokenKind) -> Bool {
+    isFrontLiteralKind(kind)
+}
+
+pub fn ostyIsPunctuation(kind: FrontTokenKind) -> Bool {
+    isFrontPunctuationKind(kind)
+}
+
+pub fn ostyIsAssignOp(kind: FrontTokenKind) -> Bool {
+    frontIsAssignOp(kind)
+}
+
+// ===================================================================
+// SUMMARY API (backward compatible with frontendLexSummary)
+// ===================================================================
+
+/// ostyLexSummary returns the same summary structure as frontendLexSummary
+/// but using the rich lexer path.
+pub fn ostyLexSummary(source: String) -> FrontLexSummary {
+    frontendLexSummary(source)
+}
+
+// ===================================================================
+// FORMATTING
+// ===================================================================
+
+/// ostyFormatLexErrors formats all lex errors into a human-readable string.
+pub fn ostyFormatLexErrors(result: OstyLexResult) -> String {
+    let mut lines: List<String> = []
+    for e in result.errors {
+        lines.push("lex error: {e.message} at line {e.startLine}")
+    }
+    strings.Join(lines, "\n")
+}
+
+/// ostyFormatTokens produces a debug dump of the token stream.
+pub fn ostyFormatTokens(result: OstyLexResult) -> String {
+    let mut lines: List<String> = []
+    for t in result.tokens {
+        let kindName = frontTokenKindName(t.kind)
+        if t.text != "" && t.text != kindName {
+            lines.push("{t.startLine}:{t.startCol} {kindName} \"{t.text}\"")
+        } else {
+            lines.push("{t.startLine}:{t.startCol} {kindName}")
+        }
+    }
+    strings.Join(lines, "\n")
+}
+
+/// ostyTokenKindName returns the human-readable name for a token kind.
+pub fn ostyTokenKindName(kind: FrontTokenKind) -> String {
+    frontTokenKindName(kind)
+}
