@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -386,10 +388,7 @@ func emitAndBuild(root string, m *manifest.Manifest, pkg *resolve.Package, pr *r
 	if chk == nil {
 		chk = &check.Result{}
 	}
-	goSrc, gerr := gen.Generate("main", entryFile.File, res, chk)
-	if gerr != nil {
-		fmt.Fprintf(os.Stderr, "osty build: gen: %v\n", gerr)
-	}
+	goSrc, gerr := gen.GenerateMapped("main", entryFile.File, res, chk, entryAbs)
 	// 5. Write the generated Go into the profile-scoped out dir.
 	profileName, triple := resolvedKey(resolved)
 	outDir := profile.OutputDir(root, profileName, triple)
@@ -403,6 +402,7 @@ func emitAndBuild(root string, m *manifest.Manifest, pkg *resolve.Package, pr *r
 		fmt.Fprintf(os.Stderr, "osty build: %v\n", err)
 		os.Exit(1)
 	}
+	reportTranspileWarning("osty build", entryAbs, goPath, gerr)
 	// 6. Invoke `go build -o <bin>` with profile flags + target env.
 	binName := binaryName(m)
 	if triple != "" {
@@ -416,12 +416,23 @@ func emitAndBuild(root string, m *manifest.Manifest, pkg *resolve.Package, pr *r
 	buildArgs = append(buildArgs, resolved.GoFlags()...)
 	buildArgs = append(buildArgs, "-o", binPath, goPath)
 	cmd := exec.Command("go", buildArgs...)
+	var stderr bytes.Buffer
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stderr = io.MultiWriter(os.Stderr, &stderr)
 	cmd.Dir = outDir
 	cmd.Env = mergeEnv(os.Environ(), resolved.GoEnv())
 	if err := cmd.Run(); err != nil {
+		reportGoFailure(goFailureReport{
+			Tool:      "osty build",
+			Action:    "go build",
+			Args:      cmd.Args,
+			WorkDir:   outDir,
+			Generated: []string{goPath},
+			Source:    entryAbs,
+			Stderr:    stderr.String(),
+			Err:       err,
+		})
 		fmt.Fprintf(os.Stderr, "osty build: go build: %v\n", err)
 		os.Exit(1)
 	}

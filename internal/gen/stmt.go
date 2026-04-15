@@ -22,6 +22,7 @@ func (g *gen) emitStmts(stmts []ast.Stmt) {
 // is emitted so the lift blocks land above it; the subs map is
 // cleared after the statement so it doesn't leak into the next.
 func (g *gen) emitStmt(s ast.Stmt) {
+	g.sourceMarker(s)
 	switch s := s.(type) {
 	case *ast.Block:
 		g.emitBlock(s)

@@ -213,6 +213,29 @@ Global flags (precede the subcommand):
 - `-o PATH` / `--out PATH` — write Go source to `PATH` instead of stdout
 - `--package NAME` — Go package clause for the emitted file (default: `main`)
 
+### Debugging build / run / test failures
+
+`osty gen`, `osty build`, `osty run`, and `osty test` keep the generated
+Go inspectable. Emitted Go now includes comments like:
+
+```go
+// Osty: /path/to/main.osty:12:5
+```
+
+When `go build`, `go run`, or the test harness fails after the Osty
+front-end has succeeded, the CLI prints a short post-mortem:
+
+- the generated Go file or scratch directory to inspect;
+- the nearest Osty source marker for Go compile errors and panic stack traces;
+- a category for common Go-side failures such as `package/import`,
+  `transpile output`, `generated Go type/check`, or `runtime panic`;
+- the exact Go command to rerun from the generated output directory.
+
+For package/import errors, start with the reported `use go "..."` path
+or project dependency configuration. For runtime panics, read the Go
+stack trace above the summary and use the mapped Osty line as the first
+source location to inspect.
+
 `new` / `init`-specific flags (after the subcommand):
 
 - `--bin` — scaffold a binary project (default): `main.osty` with `fn main`

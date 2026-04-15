@@ -123,7 +123,7 @@ func GenerateHarness(pkg *resolve.Package, chk *check.Result, entries []Entry) (
 			TypeRefs:  pf.TypeRefs,
 			FileScope: pf.FileScope,
 		}
-		src, gerr := gen.Generate("main", pf.File, res, chk)
+		src, gerr := gen.GenerateMapped("main", pf.File, res, chk, pf.Path)
 		if gerr != nil && firstGenErr == nil {
 			// Non-fatal: gen returns warnings alongside formatted
 			// source. Remember the first one so the CLI can surface
