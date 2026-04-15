@@ -8,6 +8,18 @@ fn testAstParserSimpleFunction() {
     testing.assertEq(astFileErrorCount(file), 0)
 }
 
+fn testAstParserConsumesOstyLexedSource() {
+    let lexed = ostyLexSource(r"fn add(a: Int, b: Int) -> Int { return a + b }")
+    let file = astParseLexedSource(lexed)
+    testing.assertEq(astFileDeclCount(file), 1)
+    testing.assertEq(astFileErrorCount(file), 0)
+}
+
+fn testAstParserCountsLexerDiagnostics() {
+    let file = astParse("fn bad() \{ let s = \"unterminated\n\}")
+    testing.assert(astFileErrorCount(file) > 0)
+}
+
 fn testAstParserMultipleDeclarations() {
     let file = astParse("fn a() \{\}\nstruct B \{\}\nenum C \{ X, Y \}\n")
     testing.assertEq(astFileDeclCount(file), 3)

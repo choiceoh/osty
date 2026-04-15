@@ -1174,6 +1174,7 @@ fn opParsePatternOneAlt(p: OstyParser) -> Int {
         }
         if name == "true" || name == "false" { let mut n = emptyAstNode(AstNPattern)
         n.text = "literal:{name}"
+        if name == "true" { n.flags = 1 } else { n.flags = 2 }
         n.start = start
         n.end = p.pos
         return opAddNode(p, n) }
@@ -1218,6 +1219,7 @@ fn opParsePatternOneAlt(p: OstyParser) -> Int {
             opExpect(p, FrontRBrace)
             let mut n = emptyAstNode(AstNPattern)
             n.text = "struct:{qualifiedName}"
+            n.op = FrontLBrace
             n.children = fields
             n.start = start
             n.end = p.pos
@@ -1228,6 +1230,7 @@ fn opParsePatternOneAlt(p: OstyParser) -> Int {
         let inner = opParsePatternOneAlt(p)
         let mut n = emptyAstNode(AstNPattern)
         n.text = "binding:{name}"
+        n.op = FrontAt
         n.left = inner
         n.start = start
         n.end = p.pos
@@ -1774,6 +1777,7 @@ fn opParseUseDecl(p: OstyParser) -> Int {
     }
     let mut n = emptyAstNode(AstNUseDecl)
     n.text = strings.Join(path, ".")
+    if alias != "" { n.text = alias }
     n.children = goItems
     n.start = start
     n.end = p.pos
@@ -1891,12 +1895,43 @@ pub fn astFormatErrors(file: AstFile) -> String {
 
 pub struct AstFile { pub arena: AstArena }
 
-pub fn astParse(source: String) -> AstFile {
-    let stream = frontendLexStream(source)
-    let tokens = frontTokensFromSource(source, stream)
+fn astRecordLexDiagnostics(p: OstyParser, stream: FrontLexStream) {
+    let count = frontLexDiagnosticCount(stream)
+    for idx in 0..count {
+        let diag = frontLexDiagnosticAt(stream, idx)
+        let code = frontLexDiagnosticCodeName(diag.code)
+        p.arena.errors.push(
+            AstParseError {
+                message: "lexer error: {code}",
+                tokenIndex: idx,
+                hint: "",
+                note: "",
+                code,
+            },
+        )
+    }
+}
+
+pub fn astParseTokens(tokens: List<FrontToken>) -> AstFile {
     let mut p = newOstyParser(tokens)
     opParseFile(p)
     AstFile { arena: p.arena }
+}
+
+pub fn astParseLexed(source: String, stream: FrontLexStream) -> AstFile {
+    let tokens = frontTokensFromSource(source, stream)
+    let mut p = newOstyParser(tokens)
+    astRecordLexDiagnostics(p, stream)
+    opParseFile(p)
+    AstFile { arena: p.arena }
+}
+
+pub fn astParseLexedSource(lexed: OstyLexedSource) -> AstFile {
+    astParseLexed(lexed.source, lexed.stream)
+}
+
+pub fn astParse(source: String) -> AstFile {
+    astParseLexedSource(ostyLexSource(source))
 }
 
 pub fn astParseSummary(source: String) -> FrontParseSummary { let file = astParse(source)

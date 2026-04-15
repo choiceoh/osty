@@ -3343,10 +3343,22 @@ func (c *checker) blockAsExprType(b *ast.Block, hint types.Type, env *env) types
 			"unreachable statement: the preceding statement always diverges")
 	}
 	if es, ok := last.(*ast.ExprStmt); ok {
+		if _, ok := es.X.(*ast.IfExpr); ok && ifExprRequiresStatementContext(es.X) {
+			c.checkExprStmt(es.X, env)
+			return types.Unit
+		}
 		return c.checkExpr(es.X, hint, env)
 	}
 	c.checkStmt(last, env)
 	return types.Unit
+}
+
+func ifExprRequiresStatementContext(e ast.Expr) bool {
+	x, ok := e.(*ast.IfExpr)
+	if !ok {
+		return false
+	}
+	return x.Else == nil
 }
 
 // stmtDiverges reports whether a statement always transfers control

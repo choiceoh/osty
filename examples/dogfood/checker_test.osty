@@ -1,0 +1,1263 @@
+use std.testing
+
+fn testFrontendAstTypeCheckerAcceptsPrimitiveProgram() {
+    let source = r"""
+            fn add(a: Int, b: Int) -> Int {
+                let mut x: Int = a + b
+                x = x + 1
+                return x
+            }
+            """
+    let checked = frontendCheckSource(source)
+
+    testing.assertEq(checked.errors, 0)
+    testing.assertEq(checked.assignments, 3)
+    testing.assertEq(checked.accepted, 3)
+}
+
+fn testFrontendAstTypeCheckerConsumesOstyLexedSource() {
+    let lexed = ostyLexSource(
+        r"""
+            fn add(a: Int, b: Int) -> Int {
+                return a + b
+            }
+            """,
+    )
+    let checked = frontendCheckLexedSource(lexed)
+
+    testing.assertEq(checked.errors, 0)
+    testing.assertEq(checked.accepted, 1)
+}
+
+fn testFrontendAstTypeCheckerCountsLexerDiagnostics() {
+    let checked = frontendCheckSource("fn bad() \{ let s = \"unterminated\n\}")
+    testing.assert(checked.errors > 0)
+}
+
+fn testFrontendAstTypeCheckerRejectsBadAssignmentsAndReturns() {
+    let checked = frontendCheckSource(
+        r"""
+            fn bad() -> Int {
+                let x: Bool = 1
+                return "no"
+            }
+            """,
+    )
+
+    testing.assertEq(checked.assignments, 2)
+    testing.assertEq(checked.accepted, 0)
+    testing.assertEq(checked.errors, 2)
+}
+
+fn testFrontendAstTypeCheckerChecksFunctionCalls() {
+    let checked = frontendCheckSource(
+        r"""
+            fn id(x: Int) -> Int { x }
+            fn main() {
+                let good: Int = id(1)
+                let bad: Bool = id("no")
+            }
+            """,
+    )
+
+    testing.assertEq(checked.assignments, 5)
+    testing.assertEq(checked.accepted, 3)
+    testing.assertEq(checked.errors, 2)
+}
+
+fn testFrontendAstTypeCheckerChecksIfBranches() {
+    let good = frontendCheckSource(
+        r"""
+            fn pick(flag: Bool) -> Int {
+                if flag { 1 } else { 2 }
+            }
+            """,
+    )
+    let bad = frontendCheckSource(
+        r"""
+            fn pick(flag: Bool) -> Int {
+                if flag { 1 } else { "bad" }
+            }
+            """,
+    )
+
+    testing.assertEq(good.errors, 0)
+    testing.assert(bad.errors > 0)
+}
+
+fn testFrontendAstTypeCheckerChecksStructFieldsAndMethods() {
+    let good = frontendCheckSource(
+        r"""
+            struct Point {
+                x: Int
+                y: Int = 0
+                fn sum(self) -> Int { self.x + self.y }
+            }
+
+            fn main() {
+                let p = Point { x: 1 }
+                let total: Int = p.sum()
+            }
+            """,
+    )
+    let bad = frontendCheckSource(
+        r"""
+            struct Point { x: Int, y: Int }
+
+            fn main() {
+                let p = Point { x: 1 }
+                let wrong: Bool = p.x
+                let missing = p.z
+            }
+            """,
+    )
+
+    testing.assertEq(good.errors, 0)
+    testing.assert(bad.errors > 0)
+}
+
+fn testFrontendAstTypeCheckerChecksGenericEnumsAndMatchBindings() {
+    let good = frontendCheckSource(
+        r"""
+            enum Maybe<T> { Some(T), None }
+
+            fn get(m: Maybe<Int>) -> Int {
+                match m {
+                    Some(x) -> x,
+                    None -> 0,
+                }
+            }
+            """,
+    )
+    let bad = frontendCheckSource(
+        r"""
+            enum Maybe<T> { Some(T), None }
+
+            fn get(m: Maybe<Int>) -> String {
+                match m {
+                    Some(x) -> x,
+                    None -> "none",
+                }
+            }
+            """,
+    )
+
+    testing.assertEq(good.errors, 0)
+    testing.assert(bad.errors > 0)
+}
+
+fn testFrontendAstTypeCheckerChecksEnumMatchExhaustiveness() {
+    let good = frontendCheckSource(
+        r"""
+            enum Maybe<T> { Some(T), None }
+
+            fn get(m: Maybe<Int>) -> Int {
+                match m {
+                    Some(x) -> x,
+                    None -> 0,
+                }
+            }
+            """,
+    )
+    let bad = frontendCheckSource(
+        r"""
+            enum Maybe<T> { Some(T), None }
+
+            fn get(m: Maybe<Int>) -> Int {
+                match m {
+                    Some(x) -> x,
+                }
+            }
+            """,
+    )
+
+    testing.assertEq(good.errors, 0)
+    testing.assert(bad.errors > 0)
+}
+
+fn testFrontendAstTypeCheckerChecksGenericsAndStdMethods() {
+    let idOnlyParsed = astParse(
+        r"""
+            fn id<T>(x: T) -> T { x }
+            """,
+    )
+    let idOnly = frontendCheckSource(
+        r"""
+            fn id<T>(x: T) -> T { x }
+            """,
+    )
+    let idIntOnly = frontendCheckSource(
+        r"""
+            fn id<T>(x: T) -> T { x }
+            fn main() { let a: Int = id(1) }
+            """,
+    )
+    let genericGood = frontendCheckSource(
+        r"""
+            fn id<T>(x: T) -> T { x }
+
+            fn main() {
+                let a: Int = id(1)
+                let b: String = id("s")
+            }
+            """,
+    )
+    let listGood = frontendCheckSource(
+        r"""
+            fn main() {
+                let mut xs: List<Int> = [1]
+                xs.push(2)
+                let y: Int = xs.pop().unwrap()
+            }
+            """,
+    )
+    let higherGood = frontendCheckSource(
+        r"""
+            fn id<T>(x: T) -> T { x }
+
+            fn main() {
+                let mut xs: List<Int> = [id(1)]
+                xs.push(2)
+                let y: Int = xs.pop().unwrap()
+                let doubled: List<Int> = xs.map(|x| x * 2)
+                let kept: List<Int> = doubled.filter(|x| x > 1)
+                let total: Int = kept.fold(0, |acc, x| acc + x)
+            }
+            """,
+    )
+    let bad = frontendCheckSource(
+        r"""
+            fn id<T>(x: T) -> T { x }
+
+            fn main() {
+                let xs: List<Int> = [1]
+                xs.push("bad")
+                let wrong: Bool = id(1)
+            }
+            """,
+    )
+
+    testing.assertEq(astFileErrorCount(idOnlyParsed), 0)
+    testing.assertEq(idOnly.errors, 0)
+    testing.assertEq(idIntOnly.errors, 0)
+    testing.assertEq(genericGood.errors, 0)
+    testing.assertEq(listGood.errors, 0)
+    testing.assertEq(higherGood.errors, 0)
+    testing.assert(bad.errors > 0)
+}
+
+fn testFrontendAstTypeCheckerChecksScopesIndexesAndFfiCalls() {
+    let good = frontendCheckSource(
+        r"""
+            use go "strings" as strings {
+                fn Join(elems: List<String>, sep: String) -> String
+            }
+
+            fn main() {
+                let joined: String = strings.Join(["a", "b"], ",")
+                let nums: List<Int> = [1, 2]
+                let first: Int = nums[0]
+            }
+            """,
+    )
+    let bad = frontendCheckSource(
+        r"""
+            use go "strings" as strings {
+                fn Join(elems: List<String>, sep: String) -> String
+            }
+
+            fn main() {
+                if true { let hidden = 1 }
+                let leak: Int = hidden
+                let joined: Int = strings.Join(["a"], ",")
+            }
+            """,
+    )
+
+    testing.assertEq(good.errors, 0)
+    testing.assert(bad.errors > 0)
+}
+
+fn testFrontendAstTypeCheckerChecksAliasReceiversAndNestedFnTypes() {
+    let aliasGood = frontendCheckSource(
+        r"""
+            type Names = List<String>
+
+            fn main() {
+                let names: Names = ["ada", "grace"]
+                let count: Int = names.len()
+                let first: String = names[0]
+            }
+            """,
+    )
+    let fnGood = frontendCheckSource(
+        r"""
+            fn useIt(f: fn(fn(Int) -> Int) -> Int, g: fn(Int) -> Int) -> Int {
+                f(g)
+            }
+
+            fn main() {
+                let out: Int = useIt(|h| h(1), |x| x + 1)
+            }
+            """,
+    )
+
+    testing.assertEq(aliasGood.errors, 0)
+    testing.assertEq(fnGood.errors, 0)
+}
+
+fn testFrontendAstTypeCheckerChecksGenericTupleAliases() {
+    let pairGood = frontendCheckSource(
+        r"""
+            type Pair<T> = (T, T)
+
+            fn main() {
+                let p: Pair<Int> = (1, 2)
+            }
+            """,
+    )
+    let bad = frontendCheckSource(
+        r"""
+            type Pair<T> = (T, T)
+
+            fn main() {
+                let p: Pair<Int> = (1, "bad")
+            }
+            """,
+    )
+
+    testing.assertEq(pairGood.errors, 0)
+    testing.assert(bad.errors > 0)
+}
+
+fn testFrontendAstTypeCheckerUsesCanonicalNestedTypeShapes() {
+    let good = frontendCheckSource(
+        r"""
+            type Pair<T> = (T, Bool)
+            type Handler<T> = fn(Pair<T>, List<T>) -> Result<Pair<T>, String>
+
+            fn accepts(f: Handler<Int>) -> Handler<Int> {
+                f
+            }
+
+            fn good(f: fn((Int, Bool), List<Int>) -> Result<(Int, Bool), String>) -> Handler<Int> {
+                accepts(f)
+            }
+            """,
+    )
+    let bad = frontendCheckSource(
+        r"""
+            type Pair<T> = (T, Bool)
+            type Handler<T> = fn(Pair<T>, List<T>) -> Result<Pair<T>, String>
+
+            fn accepts(f: Handler<Int>) -> Handler<Int> {
+                f
+            }
+
+            fn bad(f: fn((Int, Bool), List<Int>) -> Result<(String, Bool), String>) -> Handler<Int> {
+                accepts(f)
+            }
+            """,
+    )
+
+    testing.assertEq(good.errors, 0)
+    testing.assert(bad.errors > 0)
+}
+
+fn testFrontendAstTypeCheckerBindsGenericsInsideFnTypes() {
+    let good = frontendCheckSource(
+        r"""
+            fn apply<T>(f: fn(T) -> T, value: T) -> T {
+                f(value)
+            }
+
+            fn main() {
+                let out: Int = apply(|x: Int| x + 1, 1)
+            }
+            """,
+    )
+    let bad = frontendCheckSource(
+        r"""
+            fn apply<T>(f: fn(T) -> T, value: T) -> T {
+                f(value)
+            }
+
+            fn main() {
+                let out: String = apply(|x: Int| x + 1, 1)
+            }
+            """,
+    )
+
+    testing.assertEq(good.errors, 0)
+    testing.assert(bad.errors > 0)
+}
+
+fn testFrontendAstTypeCheckerChecksGenericListAliases() {
+    let checked = frontendCheckSource(
+        r"""
+            type Names<T> = List<T>
+
+            fn main() {
+                let names: Names<String> = ["ada"]
+                let first: String = names[0]
+            }
+            """,
+    )
+
+    testing.assertEq(checked.errors, 0)
+}
+
+fn testFrontendAstTypeCheckerInfersGenericStructLiterals() {
+    let good = frontendCheckSource(
+        r"""
+            struct Box<T> {
+                value: T
+                fn get(self) -> T { self.value }
+            }
+
+            fn main() {
+                let a: Box<Int> = Box { value: 1 }
+                let n: Int = a.get()
+                let b = Box { value: "s" }
+                let s: String = b.get()
+            }
+            """,
+    )
+    let bad = frontendCheckSource(
+        r"""
+            struct Box<T> { value: T }
+
+            fn main() {
+                let a: Box<String> = Box { value: 1 }
+            }
+            """,
+    )
+
+    testing.assertEq(good.errors, 0)
+    testing.assert(bad.errors > 0)
+}
+
+fn testFrontendAstTypeCheckerUsesHintsForVariantsAndBranches() {
+    let good = frontendCheckSource(
+        r"""
+            fn maybe(flag: Bool) -> Int? {
+                if flag { Some(1) } else { None }
+            }
+
+            fn result(flag: Bool) -> Result<Int, String> {
+                if flag { Ok(1) } else { Err("bad") }
+            }
+            """,
+    )
+    let bad = frontendCheckSource(
+        r"""
+            fn result() -> Result<Int, String> {
+                Ok("bad")
+            }
+            """,
+    )
+
+    testing.assertEq(good.errors, 0)
+    testing.assert(bad.errors > 0)
+}
+
+fn testFrontendAstTypeCheckerChecksQuestionReturnContext() {
+    let good = frontendCheckSource(
+        r"""
+            fn maybe(x: Int?) -> Int? {
+                let y = x?
+                Some(y)
+            }
+
+            fn result(x: Result<Int, String>) -> Result<Int, String> {
+                let y = x?
+                Ok(y)
+            }
+            """,
+    )
+    let bad = frontendCheckSource(
+        r"""
+            fn maybe(x: Int?) -> Int {
+                x?
+            }
+
+            fn result(x: Result<Int, String>) -> Result<Int, Bool> {
+                x?
+            }
+            """,
+    )
+
+    testing.assertEq(good.errors, 0)
+    testing.assert(bad.errors > 0)
+}
+
+fn testFrontendAstTypeCheckerUsesHintsForMapsAndTuples() {
+    let good = frontendCheckSource(
+        r"""
+            fn main() {
+                let empty: Map<String, Int> = {:}
+                let scores: Map<String, Int> = {"ada": 1}
+                let pair: (String, Int?) = ("ada", None)
+            }
+            """,
+    )
+    let bad = frontendCheckSource(
+        r"""
+            fn main() {
+                let scores: Map<String, Int> = {"ada": "bad"}
+                let pair: (String, Int) = ("ada", "bad")
+            }
+            """,
+    )
+
+    testing.assertEq(good.errors, 0)
+    testing.assert(bad.errors > 0)
+}
+
+fn testFrontendAstTypeCheckerChecksBuiltinVariantsAndCalls() {
+    let checked = frontendCheckSource(
+        r"""
+            fn main() {
+                let empty: Int? = None
+                let present: Int? = Some(1)
+                let got: Int = present.unwrap()
+                println("value", got)
+                print("done")
+                let count: Int = len([1, 2, 3])
+            }
+            """,
+    )
+
+    testing.assertEq(checked.errors, 0)
+}
+
+fn testFrontendAstTypeCheckerChecksTurbofishArguments() {
+    let good = frontendCheckSource(
+        r"""
+            fn id<T>(x: T) -> T { x }
+
+            fn main() {
+                let value: String = id::<String>("ok")
+            }
+            """,
+    )
+    let bad = frontendCheckSource(
+        r"""
+            fn id<T>(x: T) -> T { x }
+
+            fn main() {
+                let value: String = id::<Int>("bad")
+            }
+            """,
+    )
+
+    testing.assertEq(good.errors, 0)
+    testing.assert(bad.errors > 0)
+}
+
+fn testFrontendAstTypeCheckerChecksGenericMethodTurbofishArguments() {
+    let good = frontendCheckSource(
+        r"""
+            struct Box<T> {
+                value: T
+                fn choose<U>(self, other: U) -> U { other }
+            }
+
+            fn main() {
+                let b = Box { value: 1 }
+                let s: String = b.choose::<String>("ok")
+            }
+            """,
+    )
+    let bad = frontendCheckSource(
+        r"""
+            struct Box<T> {
+                value: T
+                fn choose<U>(self, other: U) -> U { other }
+            }
+
+            fn main() {
+                let b = Box { value: 1 }
+                let s: String = b.choose::<Int>("bad")
+            }
+            """,
+    )
+
+    testing.assertEq(good.errors, 0)
+    testing.assert(bad.errors > 0)
+}
+
+fn testFrontendAstTypeCheckerChecksOrPatternBindings() {
+    let good = frontendCheckSource(
+        r"""
+            enum Tag { A(Int), B(Int), C }
+
+            fn value(t: Tag) -> Int {
+                match t {
+                    A(n) | B(n) -> n,
+                    C -> 0,
+                }
+            }
+            """,
+    )
+    let bad = frontendCheckSource(
+        r"""
+            enum Tag { A(Int), B(Int), C }
+
+            fn value(t: Tag) -> Int {
+                match t {
+                    A(n) | C -> n,
+                    B(n) -> n,
+                }
+            }
+            """,
+    )
+
+    testing.assertEq(good.errors, 0)
+    testing.assert(bad.errors > 0)
+}
+
+fn testFrontendAstTypeCheckerChecksInterfaceValues() {
+    let good = frontendCheckSource(
+        r"""
+            interface Named {
+                fn name(self) -> String
+            }
+
+            struct User {
+                label: String
+                fn name(self) -> String { self.label }
+            }
+
+            fn greet(n: Named) -> String {
+                n.name()
+            }
+
+            fn main() {
+                let user = User { label: "ada" }
+                let label: String = greet(user)
+            }
+            """,
+    )
+    let bad = frontendCheckSource(
+        r"""
+            interface Named {
+                fn name(self) -> String
+            }
+
+            struct Empty {}
+
+            fn greet(n: Named) -> String {
+                n.name()
+            }
+
+            fn main() {
+                let empty = Empty {}
+                let label: String = greet(empty)
+            }
+            """,
+    )
+
+    testing.assertEq(good.errors, 0)
+    testing.assert(bad.errors > 0)
+}
+
+fn testFrontendAstTypeCheckerChecksInterfaceGenericBounds() {
+    let good = frontendCheckSource(
+        r"""
+            interface Named {
+                fn name(self) -> String
+            }
+
+            struct User {
+                label: String
+                fn name(self) -> String { self.label }
+            }
+
+            fn render<T: Named>(value: T) -> String {
+                value.name()
+            }
+
+            fn main() {
+                let user = User { label: "ada" }
+                let label: String = render(user)
+            }
+            """,
+    )
+    let bad = frontendCheckSource(
+        r"""
+            interface Named {
+                fn name(self) -> String
+            }
+
+            struct Empty {}
+
+            fn render<T: Named>(value: T) {}
+
+            fn main() {
+                render(Empty {})
+            }
+            """,
+    )
+
+    testing.assertEq(good.errors, 0)
+    testing.assert(bad.errors > 0)
+}
+
+fn testFrontendAstTypeCheckerChecksInheritedInterfaceMethods() {
+    let valueGood = frontendCheckSource(
+        r"""
+            interface Named {
+                fn name(self) -> String
+            }
+
+            interface Printable {
+                fn show(self) -> String
+            }
+
+            interface DisplayNamed {
+                Named
+                Printable
+            }
+
+            struct User {
+                label: String
+                fn name(self) -> String { self.label }
+                fn show(self) -> String { self.label }
+            }
+
+            fn render(x: DisplayNamed) -> String {
+                let n: String = x.name()
+                x.show()
+            }
+            """,
+    )
+    let boundGood = frontendCheckSource(
+        r"""
+            interface Named {
+                fn name(self) -> String
+            }
+
+            interface Printable {
+                fn show(self) -> String
+            }
+
+            interface DisplayNamed {
+                Named
+                Printable
+            }
+
+            struct User {
+                label: String
+                fn name(self) -> String { self.label }
+                fn show(self) -> String { self.label }
+            }
+
+            fn render<T: DisplayNamed>(x: T) -> String {
+                let n: String = x.name()
+                x.show()
+            }
+
+            fn main() {
+                let user = User { label: "ada" }
+                let label: String = render(user)
+            }
+            """,
+    )
+
+    testing.assertEq(valueGood.errors, 0)
+    testing.assertEq(boundGood.errors, 0)
+}
+
+fn testFrontendAstTypeCheckerChecksInterfaceSelfSignatures() {
+    let good = frontendCheckSource(
+        r"""
+            interface Cloneable {
+                fn clone(self) -> Self
+                fn maybe(self) -> Self?
+            }
+
+            struct User {
+                label: String
+                fn clone(self) -> User { self }
+                fn maybe(self) -> User? { None }
+            }
+
+            fn cloneGeneric<T: Cloneable>(value: T) -> T {
+                value.clone()
+            }
+
+            fn cloneValue(value: Cloneable) -> Cloneable {
+                value.clone()
+            }
+
+            fn main() {
+                let user = User { label: "ada" }
+                let cloned: User = cloneGeneric(user)
+            }
+            """,
+    )
+    let bad = frontendCheckSource(
+        r"""
+            interface Cloneable {
+                fn clone(self) -> Self
+                fn maybe(self) -> Self?
+            }
+
+            struct Bad {
+                fn clone(self) -> String { "bad" }
+                fn maybe(self) -> String? { None }
+            }
+
+            fn require<T: Cloneable>(value: T) {}
+
+            fn main() {
+                require(Bad {})
+            }
+            """,
+    )
+
+    testing.assertEq(good.errors, 0)
+    testing.assert(bad.errors > 0)
+}
+
+fn testFrontendAstTypeCheckerChecksBoolMatchExhaustiveness() {
+    let good = frontendCheckSource(
+        r"""
+            fn classify(flag: Bool) -> Int {
+                match flag {
+                    true -> 1,
+                    false -> 0,
+                }
+            }
+            """,
+    )
+    let bad = frontendCheckSource(
+        r"""
+            fn classify(flag: Bool) -> Int {
+                match flag {
+                    true -> 1,
+                }
+            }
+            """,
+    )
+
+    testing.assertEq(good.errors, 0)
+    testing.assert(bad.errors > 0)
+}
+
+fn testFrontendAstTypeCheckerChecksBoolTupleMatchExhaustiveness() {
+    let good = frontendCheckSource(
+        r"""
+            fn classify(pair: (Bool, Bool)) -> Int {
+                match pair {
+                    (true, true) -> 3,
+                    (true, false) -> 2,
+                    (false, true) -> 1,
+                    (false, false) -> 0,
+                }
+            }
+            """,
+    )
+    let wildcardGood = frontendCheckSource(
+        r"""
+            fn classify(pair: (Bool, Bool)) -> Int {
+                match pair {
+                    (_, true) -> 1,
+                    (_, false) -> 0,
+                }
+            }
+            """,
+    )
+    let bad = frontendCheckSource(
+        r"""
+            fn classify(pair: (Bool, Bool)) -> Int {
+                match pair {
+                    (true, true) -> 3,
+                    (false, _) -> 0,
+                }
+            }
+            """,
+    )
+
+    testing.assertEq(good.errors, 0)
+    testing.assertEq(wildcardGood.errors, 0)
+    testing.assert(bad.errors > 0)
+}
+
+fn testFrontendAstTypeCheckerChecksStructMatchExhaustiveness() {
+    let good = frontendCheckSource(
+        r"""
+            struct Point { x: Int, y: Int }
+
+            fn sum(p: Point) -> Int {
+                match p {
+                    Point { x: a, y: b } -> a + b,
+                }
+            }
+            """,
+    )
+    let restGood = frontendCheckSource(
+        r"""
+            struct Point { x: Int, y: Int }
+
+            fn sum(p: Point) -> Int {
+                match p {
+                    Point { x: _, .. } -> p.x,
+                }
+            }
+            """,
+    )
+    let bad = frontendCheckSource(
+        r"""
+            struct Point { x: Int, y: Int }
+
+            fn sum(p: Point) -> Int {
+                match p {
+                    Point { x: 0, .. } -> 0,
+                }
+            }
+            """,
+    )
+
+    testing.assertEq(good.errors, 0)
+    testing.assertEq(restGood.errors, 0)
+    testing.assert(bad.errors > 0)
+}
+
+fn testFrontendAstTypeCheckerChecksEnumPayloadBoolExhaustiveness() {
+    let good = frontendCheckSource(
+        r"""
+            enum MaybeFlag { Some(Bool), None }
+
+            fn classify(flag: MaybeFlag) -> Int {
+                match flag {
+                    Some(true) -> 1,
+                    Some(false) -> 0,
+                    None -> 2,
+                }
+            }
+            """,
+    )
+    let wildcardGood = frontendCheckSource(
+        r"""
+            enum MaybeFlag { Some(Bool), None }
+
+            fn classify(flag: MaybeFlag) -> Int {
+                match flag {
+                    Some(_) -> 1,
+                    None -> 0,
+                }
+            }
+            """,
+    )
+    let bad = frontendCheckSource(
+        r"""
+            enum MaybeFlag { Some(Bool), None }
+
+            fn classify(flag: MaybeFlag) -> Int {
+                match flag {
+                    Some(true) -> 1,
+                    None -> 0,
+                }
+            }
+            """,
+    )
+
+    testing.assertEq(good.errors, 0)
+    testing.assertEq(wildcardGood.errors, 0)
+    testing.assert(bad.errors > 0)
+}
+
+fn testFrontendAstTypeCheckerChecksEnumMultiPayloadBoolExhaustiveness() {
+    let good = frontendCheckSource(
+        r"""
+            enum Bits { Pair(Bool, Bool), None }
+
+            fn classify(bits: Bits) -> Int {
+                match bits {
+                    Pair(true, true) -> 3,
+                    Pair(true, false) -> 2,
+                    Pair(false, true) -> 1,
+                    Pair(false, false) -> 0,
+                    None -> 4,
+                }
+            }
+            """,
+    )
+    let wildcardGood = frontendCheckSource(
+        r"""
+            enum Bits { Pair(Bool, Bool), None }
+
+            fn classify(bits: Bits) -> Int {
+                match bits {
+                    Pair(_, true) -> 1,
+                    Pair(_, false) -> 0,
+                    None -> 2,
+                }
+            }
+            """,
+    )
+    let bad = frontendCheckSource(
+        r"""
+            enum Bits { Pair(Bool, Bool), None }
+
+            fn classify(bits: Bits) -> Int {
+                match bits {
+                    Pair(true, true) -> 3,
+                    Pair(false, _) -> 0,
+                    None -> 4,
+                }
+            }
+            """,
+    )
+
+    testing.assertEq(good.errors, 0)
+    testing.assertEq(wildcardGood.errors, 0)
+    testing.assert(bad.errors > 0)
+}
+
+fn testFrontendAstTypeCheckerChecksNestedEnumPayloadExhaustiveness() {
+    let good = frontendCheckSource(
+        r"""
+            enum MaybeFlag { Some(Bool), None }
+            enum Wrapped { Wrap(MaybeFlag), Empty }
+
+            fn classify(value: Wrapped) -> Int {
+                match value {
+                    Wrap(Some(true)) -> 1,
+                    Wrap(Some(false)) -> 0,
+                    Wrap(None) -> 2,
+                    Empty -> 3,
+                }
+            }
+            """,
+    )
+    let wildcardGood = frontendCheckSource(
+        r"""
+            enum MaybeFlag { Some(Bool), None }
+            enum Wrapped { Wrap(MaybeFlag), Empty }
+
+            fn classify(value: Wrapped) -> Int {
+                match value {
+                    Wrap(Some(_)) -> 1,
+                    Wrap(None) -> 2,
+                    Empty -> 3,
+                }
+            }
+            """,
+    )
+    let bad = frontendCheckSource(
+        r"""
+            enum MaybeFlag { Some(Bool), None }
+            enum Wrapped { Wrap(MaybeFlag), Empty }
+
+            fn classify(value: Wrapped) -> Int {
+                match value {
+                    Wrap(Some(true)) -> 1,
+                    Wrap(None) -> 2,
+                    Empty -> 3,
+                }
+            }
+            """,
+    )
+
+    testing.assertEq(good.errors, 0)
+    testing.assertEq(wildcardGood.errors, 0)
+    testing.assert(bad.errors > 0)
+}
+
+fn testFrontendAstTypeCheckerRejectsUnreachableMatchArms() {
+    let catchAll = frontendCheckSource(
+        r"""
+            fn classify(flag: Bool) -> Int {
+                match flag {
+                    _ -> 0,
+                    true -> 1,
+                }
+            }
+            """,
+    )
+    let duplicateBool = frontendCheckSource(
+        r"""
+            fn classify(flag: Bool) -> Int {
+                match flag {
+                    true -> 1,
+                    true -> 2,
+                    false -> 0,
+                }
+            }
+            """,
+    )
+    let duplicateVariant = frontendCheckSource(
+        r"""
+            enum Tag { A, B }
+
+            fn classify(t: Tag) -> Int {
+                match t {
+                    A -> 1,
+                    A -> 2,
+                    B -> 0,
+                }
+            }
+            """,
+    )
+
+    testing.assert(catchAll.errors > 0)
+    testing.assert(duplicateBool.errors > 0)
+    testing.assert(duplicateVariant.errors > 0)
+}
+
+fn testFrontendAstTypeCheckerChecksRangeAndNegativePatterns() {
+    let good = frontendCheckSource(
+        r"""
+            fn classify(n: Int) -> String {
+                match n {
+                    -1 -> "neg",
+                    0..=9 -> "digit",
+                    _ -> "other",
+                }
+            }
+            """,
+    )
+    let bad = frontendCheckSource(
+        r"""
+            fn classify(s: String) -> Int {
+                match s {
+                    0..=9 -> 1,
+                    _ -> 0,
+                }
+            }
+            """,
+    )
+
+    testing.assertEq(good.errors, 0)
+    testing.assert(bad.errors > 0)
+}
+
+fn testFrontendAstTypeCheckerRejectsDuplicateStructLiteralFields() {
+    let checked = frontendCheckSource(
+        r"""
+            struct Point { x: Int, y: Int }
+
+            fn main() {
+                let p = Point { x: 1, x: 2, y: 3 }
+            }
+            """,
+    )
+
+    testing.assert(checked.errors > 0)
+}
+
+fn testFrontendAstTypeCheckerRejectsDuplicateDeclarations() {
+    let duplicateFns = frontendCheckSource(
+        r"""
+            fn same() {}
+            fn same() {}
+            """,
+    )
+    let duplicateTypes = frontendCheckSource(
+        r"""
+            struct User {}
+            enum User { Guest }
+            """,
+    )
+    let duplicateFields = frontendCheckSource(
+        r"""
+            struct Point {
+                x: Int
+                x: String
+            }
+            """,
+    )
+    let duplicateVariants = frontendCheckSource(
+        r"""
+            enum Tag {
+                A
+                A
+            }
+            """,
+    )
+
+    testing.assert(duplicateFns.errors > 0)
+    testing.assert(duplicateTypes.errors > 0)
+    testing.assert(duplicateFields.errors > 0)
+    testing.assert(duplicateVariants.errors > 0)
+}
+
+fn testFrontendAstTypeCheckerRejectsDuplicateGenericParameters() {
+    let duplicateFn = frontendCheckSource(
+        r"""
+            fn id<T, T>(x: T) -> T { x }
+            """,
+    )
+    let duplicateStruct = frontendCheckSource(
+        r"""
+            struct Box<T, T> { value: T }
+            """,
+    )
+    let duplicateAlias = frontendCheckSource(
+        r"""
+            type Pair<T, T> = (T, T)
+            """,
+    )
+
+    testing.assert(duplicateFn.errors > 0)
+    testing.assert(duplicateStruct.errors > 0)
+    testing.assert(duplicateAlias.errors > 0)
+}
+
+fn testFrontendAstTypeCheckerCollectsTopLevelLetsBeforeFunctions() {
+    let checked = frontendCheckSource(
+        r"""
+            fn get() -> Int { answer }
+
+            let answer: Int = 42
+            """,
+    )
+    let bad = frontendCheckSource(
+        r"""
+            fn get() -> String { answer }
+
+            let answer: Int = 42
+            """,
+    )
+
+    testing.assertEq(checked.errors, 0)
+    testing.assert(bad.errors > 0)
+}
+
+fn testFrontendAstTypeCheckerRejectsRefutableLetAndClosurePatterns() {
+    let badLetVariant = frontendCheckSource(
+        r"""
+            enum Maybe<T> { Some(T), None }
+
+            fn main() {
+                let value: Maybe<Int> = None
+                let Some(x) = value
+            }
+            """,
+    )
+    let badLetLiteral = frontendCheckSource(
+        r"""
+            fn main() {
+                let (x, 1) = (1, 1)
+            }
+            """,
+    )
+    let badClosure = frontendCheckSource(
+        r"""
+            fn apply(f: fn((Int, Int)) -> Int) -> Int {
+                f((1, 2))
+            }
+
+            fn main() {
+                let value = apply(|(x, 1)| x)
+            }
+            """,
+    )
+
+    testing.assert(badLetVariant.errors > 0)
+    testing.assert(badLetLiteral.errors > 0)
+    testing.assert(badClosure.errors > 0)
+}
