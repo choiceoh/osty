@@ -1000,3 +1000,293 @@ func TestParseRangeInMatch(t *testing.T) {
 		t.Fatalf("arm 2 = %T", m.Arms[2].Pattern)
 	}
 }
+
+// TestParseOpenStartRangePat covers parseRangePatFromOpen: patterns that
+// start with `..` or `..=` (no lower bound), e.g. `..10`, `..=0`, and the
+// unbounded `..` form. Previously uncovered — the parser-quality audit
+// flagged parseRangePatFromOpen as 0% test coverage.
+func TestParseOpenStartRangePat(t *testing.T) {
+	src := `fn classify(n: Int) -> String {
+    match n {
+        ..0 -> "neg",
+        ..=9 -> "small",
+        10..=99 -> "mid",
+        100.. -> "big",
+    }
+}`
+	f := parseOrFatal(t, src)
+	body := f.Decls[0].(*ast.FnDecl).Body
+	m := body.Stmts[0].(*ast.ExprStmt).X.(*ast.MatchExpr)
+	if len(m.Arms) != 4 {
+		t.Fatalf("arms = %d, want 4", len(m.Arms))
+	}
+	// Arm 0: `..0` — open start, exclusive, stop literal 0.
+	rp0, ok := m.Arms[0].Pattern.(*ast.RangePat)
+	if !ok {
+		t.Fatalf("arm 0 = %T, want *ast.RangePat", m.Arms[0].Pattern)
+	}
+	if rp0.Start != nil {
+		t.Fatalf("arm 0 Start = %v, want nil (open start)", rp0.Start)
+	}
+	if rp0.Inclusive {
+		t.Fatalf("arm 0 Inclusive = true, want false")
+	}
+	if _, ok := rp0.Stop.(*ast.IntLit); !ok {
+		t.Fatalf("arm 0 Stop = %T, want *ast.IntLit", rp0.Stop)
+	}
+	// Arm 1: `..=9` — open start, inclusive.
+	rp1, ok := m.Arms[1].Pattern.(*ast.RangePat)
+	if !ok {
+		t.Fatalf("arm 1 = %T, want *ast.RangePat", m.Arms[1].Pattern)
+	}
+	if rp1.Start != nil || !rp1.Inclusive {
+		t.Fatalf("arm 1 mismatch: Start=%v Inclusive=%v", rp1.Start, rp1.Inclusive)
+	}
+	// Arm 2: `10..=99` — both bounds, inclusive.
+	rp2 := m.Arms[2].Pattern.(*ast.RangePat)
+	if rp2.Start == nil || rp2.Stop == nil || !rp2.Inclusive {
+		t.Fatalf("arm 2 mismatch: %+v", rp2)
+	}
+	// Arm 3: `100..` — open end, exclusive.
+	rp3, ok := m.Arms[3].Pattern.(*ast.RangePat)
+	if !ok {
+		t.Fatalf("arm 3 = %T", m.Arms[3].Pattern)
+	}
+	if rp3.Start == nil || rp3.Stop != nil || rp3.Inclusive {
+		t.Fatalf("arm 3 mismatch: Start=%v Stop=%v Inclusive=%v",
+			rp3.Start, rp3.Stop, rp3.Inclusive)
+	}
+}
+
+// TestParseOpenStartRangePatNegative covers `..=-1` and `..-5` — open-start
+// range patterns with a negated literal endpoint. Exercises the MINUS
+// branch of parseRangeEndExpr.
+func TestParseOpenStartRangePatNegative(t *testing.T) {
+	src := `fn f(n: Int) -> Int {
+    match n {
+        ..=-1 -> -1,
+        0..10 -> 1,
+        _ -> 0,
+    }
+}`
+	f := parseOrFatal(t, src)
+	body := f.Decls[0].(*ast.FnDecl).Body
+	m := body.Stmts[0].(*ast.ExprStmt).X.(*ast.MatchExpr)
+	rp, ok := m.Arms[0].Pattern.(*ast.RangePat)
+	if !ok {
+		t.Fatalf("arm 0 = %T", m.Arms[0].Pattern)
+	}
+	if rp.Start != nil || !rp.Inclusive {
+		t.Fatalf("arm 0 mismatch: %+v", rp)
+	}
+	// Stop should be UnaryExpr(-, IntLit(1)).
+	u, ok := rp.Stop.(*ast.UnaryExpr)
+	if !ok {
+		t.Fatalf("arm 0 Stop = %T, want *ast.UnaryExpr", rp.Stop)
+	}
+	if u.Op != token.MINUS {
+		t.Fatalf("arm 0 Stop op = %s", u.Op)
+	}
+}
+
+// TestParseOrPattern covers parsePattern's OR-alternative branch:
+// `Pat1 | Pat2 | Pat3`. Exercises *ast.OrPat construction, which the
+// audit flagged as uncovered.
+func TestParseOrPattern(t *testing.T) {
+	src := `fn f(n: Int) -> String {
+    match n {
+        1 | 2 | 3 -> "low",
+        10 | 20 -> "mid",
+        _ -> "other",
+    }
+}`
+	f := parseOrFatal(t, src)
+	body := f.Decls[0].(*ast.FnDecl).Body
+	m := body.Stmts[0].(*ast.ExprStmt).X.(*ast.MatchExpr)
+	or0, ok := m.Arms[0].Pattern.(*ast.OrPat)
+	if !ok {
+		t.Fatalf("arm 0 = %T, want *ast.OrPat", m.Arms[0].Pattern)
+	}
+	if len(or0.Alts) != 3 {
+		t.Fatalf("arm 0 Alts = %d, want 3", len(or0.Alts))
+	}
+	for i, a := range or0.Alts {
+		if _, ok := a.(*ast.LiteralPat); !ok {
+			t.Fatalf("arm 0 alt %d = %T, want *ast.LiteralPat", i, a)
+		}
+	}
+	or1, ok := m.Arms[1].Pattern.(*ast.OrPat)
+	if !ok {
+		t.Fatalf("arm 1 = %T, want *ast.OrPat", m.Arms[1].Pattern)
+	}
+	if len(or1.Alts) != 2 {
+		t.Fatalf("arm 1 Alts = %d, want 2", len(or1.Alts))
+	}
+}
+
+// TestParseOrPatternVariants covers OR-patterns mixing variant patterns
+// and wildcard-adjacent forms.
+func TestParseOrPatternVariants(t *testing.T) {
+	src := `fn f(c: Color) -> Int {
+    match c {
+        Color.Red | Color.Green | Color.Blue -> 1,
+        _ -> 0,
+    }
+}`
+	f := parseOrFatal(t, src)
+	body := f.Decls[0].(*ast.FnDecl).Body
+	m := body.Stmts[0].(*ast.ExprStmt).X.(*ast.MatchExpr)
+	or, ok := m.Arms[0].Pattern.(*ast.OrPat)
+	if !ok {
+		t.Fatalf("arm 0 = %T", m.Arms[0].Pattern)
+	}
+	if len(or.Alts) != 3 {
+		t.Fatalf("alts = %d", len(or.Alts))
+	}
+	for i, a := range or.Alts {
+		vp, ok := a.(*ast.VariantPat)
+		if !ok {
+			t.Fatalf("alt %d = %T, want *ast.VariantPat", i, a)
+		}
+		if len(vp.Path) != 2 || vp.Path[0] != "Color" {
+			t.Fatalf("alt %d path = %v", i, vp.Path)
+		}
+	}
+}
+
+// TestParseDoubleOptionalType covers parseType's double-`?` handling:
+// `Int??` must parse as Option<Option<Int>>. The lexer greedily matches
+// `??` as the nil-coalescing token, so parseType splits it. The audit
+// flagged this path (parser.go:~1120 QQ branch) as uncovered.
+func TestParseDoubleOptionalType(t *testing.T) {
+	src := `fn f(x: Int??) -> Int?? { x }`
+	f := parseOrFatal(t, src)
+	fd := f.Decls[0].(*ast.FnDecl)
+	// Param type: Int??
+	assertDoubleOption(t, "param", fd.Params[0].Type)
+	// Return type: Int??
+	assertDoubleOption(t, "return", fd.ReturnType)
+}
+
+// TestParseTripleOptionalType ensures the `??` rewriting loop handles
+// more than one iteration: `Int???` = Option<Option<Option<Int>>>.
+func TestParseTripleOptionalType(t *testing.T) {
+	src := `fn f(x: Int???) -> Int { 0 }`
+	f := parseOrFatal(t, src)
+	fd := f.Decls[0].(*ast.FnDecl)
+	outer, ok := fd.Params[0].Type.(*ast.OptionalType)
+	if !ok {
+		t.Fatalf("outer = %T", fd.Params[0].Type)
+	}
+	mid, ok := outer.Inner.(*ast.OptionalType)
+	if !ok {
+		t.Fatalf("mid = %T", outer.Inner)
+	}
+	inner, ok := mid.Inner.(*ast.OptionalType)
+	if !ok {
+		t.Fatalf("inner = %T", mid.Inner)
+	}
+	nt, ok := inner.Inner.(*ast.NamedType)
+	if !ok || len(nt.Path) != 1 || nt.Path[0] != "Int" {
+		t.Fatalf("leaf = %T %+v", inner.Inner, inner.Inner)
+	}
+}
+
+func assertDoubleOption(t *testing.T, label string, ty ast.Type) {
+	t.Helper()
+	outer, ok := ty.(*ast.OptionalType)
+	if !ok {
+		t.Fatalf("%s: outer = %T, want *ast.OptionalType", label, ty)
+	}
+	inner, ok := outer.Inner.(*ast.OptionalType)
+	if !ok {
+		t.Fatalf("%s: inner = %T, want *ast.OptionalType", label, outer.Inner)
+	}
+	nt, ok := inner.Inner.(*ast.NamedType)
+	if !ok {
+		t.Fatalf("%s: leaf = %T", label, inner.Inner)
+	}
+	if len(nt.Path) != 1 || nt.Path[0] != "Int" {
+		t.Fatalf("%s: leaf path = %v", label, nt.Path)
+	}
+}
+
+// TestParseQualifiedStructLit covers the FieldExpr branch of isTypeRef and
+// exercises isTypeRefOrPath — struct literals whose type is dotted:
+// `Pkg.Type { ... }` and `A.B.Type { ... }`. Prior to this test, both
+// functions' FieldExpr paths had 0% coverage.
+func TestParseQualifiedStructLit(t *testing.T) {
+	src := `fn f() -> Foo {
+    Pkg.Foo { x: 1, y: 2 }
+}`
+	f := parseOrFatal(t, src)
+	body := f.Decls[0].(*ast.FnDecl).Body
+	sl, ok := body.Stmts[0].(*ast.ExprStmt).X.(*ast.StructLit)
+	if !ok {
+		t.Fatalf("stmt 0 = %T, want *ast.StructLit", body.Stmts[0].(*ast.ExprStmt).X)
+	}
+	fe, ok := sl.Type.(*ast.FieldExpr)
+	if !ok {
+		t.Fatalf("Type = %T, want *ast.FieldExpr", sl.Type)
+	}
+	if fe.Name != "Foo" {
+		t.Fatalf("field name = %q", fe.Name)
+	}
+	base, ok := fe.X.(*ast.Ident)
+	if !ok || base.Name != "Pkg" {
+		t.Fatalf("base = %T %+v", fe.X, fe.X)
+	}
+	if len(sl.Fields) != 2 {
+		t.Fatalf("fields = %d", len(sl.Fields))
+	}
+}
+
+// TestParseNestedQualifiedStructLit exercises a longer dotted path where
+// the struct-literal receiver is itself a FieldExpr chain. This ensures
+// isTypeRefOrPath recurses correctly for `A.B.Type { ... }` shapes.
+func TestParseNestedQualifiedStructLit(t *testing.T) {
+	src := `fn f() -> Foo {
+    A.B.Foo { x: 1 }
+}`
+	f := parseOrFatal(t, src)
+	body := f.Decls[0].(*ast.FnDecl).Body
+	sl, ok := body.Stmts[0].(*ast.ExprStmt).X.(*ast.StructLit)
+	if !ok {
+		t.Fatalf("stmt 0 = %T", body.Stmts[0].(*ast.ExprStmt).X)
+	}
+	// Type should be FieldExpr{ X: FieldExpr{ X: Ident"A", Name:"B" }, Name:"Foo" }.
+	outer, ok := sl.Type.(*ast.FieldExpr)
+	if !ok || outer.Name != "Foo" {
+		t.Fatalf("outer = %T %+v", sl.Type, sl.Type)
+	}
+	mid, ok := outer.X.(*ast.FieldExpr)
+	if !ok || mid.Name != "B" {
+		t.Fatalf("mid = %T %+v", outer.X, outer.X)
+	}
+	base, ok := mid.X.(*ast.Ident)
+	if !ok || base.Name != "A" {
+		t.Fatalf("base = %T %+v", mid.X, mid.X)
+	}
+}
+
+// TestLowercaseQualifiedNotStructLit verifies isTypeRef rejects a FieldExpr
+// whose final segment is lowercase — `pkg.foo { ... }` must not be parsed
+// as a struct literal (the `{` must be treated as a separate block/expr).
+// This guards isUpperName's role in the FieldExpr branch of isTypeRef.
+func TestLowercaseQualifiedNotStructLit(t *testing.T) {
+	// `pkg.foo` followed by `{ ... }` on the next line: the trailing brace
+	// expression must NOT be absorbed as a struct literal.
+	src := `fn f() -> Int {
+    pkg.foo
+    { 1 }
+}`
+	f := parseOrFatal(t, src)
+	body := f.Decls[0].(*ast.FnDecl).Body
+	if len(body.Stmts) < 2 {
+		t.Fatalf("stmts = %d, want at least 2 (pkg.foo must not absorb braces)", len(body.Stmts))
+	}
+	// First stmt is the bare field access.
+	if _, ok := body.Stmts[0].(*ast.ExprStmt).X.(*ast.FieldExpr); !ok {
+		t.Fatalf("stmt 0 = %T, want *ast.FieldExpr", body.Stmts[0].(*ast.ExprStmt).X)
+	}
+}
