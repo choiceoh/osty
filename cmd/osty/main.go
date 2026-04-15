@@ -11,6 +11,7 @@
 //	                           type of each expression (debugging aid).
 //	osty fmt <file.osty>       Format source to canonical style; see -check/-write.
 //	osty gen <file.osty>       Transpile to Go (prints to stdout; -o writes to file).
+//	osty doc <path>            Emit markdown API docs for a file or package.
 //	osty lsp                   Run the Language Server Protocol server on stdio.
 //	osty explain [CODE]        Describe a diagnostic code; with no arg, list every code.
 //	osty pipeline <file.osty>  Run every front-end phase and print per-stage timing.
@@ -179,6 +180,13 @@ func main() {
 	}
 	if cmd == "publish" {
 		runPublish(args[1:], flags)
+		return
+	}
+	// doc parses a file or directory and emits markdown/HTML API docs.
+	// It has its own flag parser for --out / --title / --format /
+	// --check / --verify-examples.
+	if cmd == "doc" {
+		runDoc(args[1:], flags)
 		return
 	}
 	if cmd == "ci" {
@@ -1035,6 +1043,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "       osty run [-- ARGS...]     (build + exec the project's binary)")
 	fmt.Fprintln(os.Stderr, "       osty test [PATH|FILTER...] (discover *_test.osty; report tests found)")
 	fmt.Fprintln(os.Stderr, "       osty publish              (pack + upload the package to a registry)")
+	fmt.Fprintln(os.Stderr, "       osty doc [--format FMT] [--out PATH] PATH (generate API docs; markdown or html)")
 	fmt.Fprintln(os.Stderr, "       osty ci [flags] [PATH]    (run the CI check bundle: fmt+lint+policy+lockfile)")
 	fmt.Fprintln(os.Stderr, "       osty ci snapshot [-o OUT] (capture the exported API for future semver diffing)")
 	fmt.Fprintln(os.Stderr, "       osty profiles             (list build profiles — debug, release, ...)")

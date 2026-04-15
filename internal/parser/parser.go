@@ -927,13 +927,19 @@ func (p *Parser) parseStructDecl() *ast.StructDecl {
 	p.expect(token.LBRACE)
 	p.skipNewlines()
 	for !p.at(token.RBRACE) && !p.at(token.EOF) {
+		// Capture LeadingDoc BEFORE consuming annotations: the lexer
+		// attaches `///` blocks to the next significant token, which
+		// for an annotated decl is the `#` of the annotation. Reading
+		// it here ensures both bare and annotated declarations carry
+		// their doc comment downstream.
+		doc := p.peek().LeadingDoc
 		annots := p.parseAnnotations()
 		if p.isFieldStart() {
 			f := p.parseField()
 			f.Annotations = annots
+			f.DocComment = doc
 			s.Fields = append(s.Fields, f)
 		} else if p.at(token.FN) || (p.at(token.PUB) && p.peekAt(1).Kind == token.FN) {
-			doc := p.peek().LeadingDoc
 			pub := p.eat(token.PUB)
 			m := p.parseFnDecl()
 			m.Pub = pub
