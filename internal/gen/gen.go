@@ -138,9 +138,9 @@ type gen struct {
 	// needEnv is set when std.env lowers to os-backed helper functions.
 	needEnv bool
 
-	// needCSV is set when std.csv lowers to encoding/csv helper
-	// functions and the CsvOptions runtime struct.
-	needCSV bool
+	// needCsvRuntime is set when std.csv is used and needs inline
+	// Go runtime helpers (_ostyCsv* functions).
+	needCsvRuntime bool
 
 	// needJSON is set when std.json lowers to encoding/json helpers.
 	needJSON bool
@@ -365,7 +365,7 @@ func (g *gen) run() ([]byte, error) {
 		g.use("os")
 		g.useAs("strings", "stdstrings")
 	}
-	if g.needCSV {
+	if g.needCsvRuntime {
 		g.needResult = true
 		g.useAs("encoding/csv", "stdcsv")
 		g.use("fmt")
@@ -1493,7 +1493,7 @@ func envSetCurrentDir(path string) Result[struct{}, any] {
 }
 `)
 	}
-	if g.needCSV {
+	if g.needCsvRuntime {
 		out.WriteString(`
 type CsvOptions struct {
 	delimiter rune
