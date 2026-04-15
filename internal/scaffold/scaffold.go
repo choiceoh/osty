@@ -34,6 +34,29 @@
 //	    ├── main_test.osty
 //	    └── .gitignore
 //
+//	# CLI app project (--cli)
+//	NAME/
+//	├── osty.toml
+//	├── main.osty           # Args struct, defaultArgs(), run(), main()
+//	├── main_test.osty      # exercises run() with crafted Args
+//	└── .gitignore
+//
+//	# HTTP service project (--service)
+//	NAME/
+//	├── osty.toml
+//	├── main.osty           # Request/Response structs and handle()
+//	├── main_test.osty      # routes through handle() with sample requests
+//	└── .gitignore
+//
+// The --cli and --service variants are still binary packages (they
+// build a `fn main`), but their starter source replaces the bare
+// "Hello, Osty!" with a small but realistic skeleton: a typed entry
+// point that splits the testable core (`run` / `handle`) from the
+// process-binding `main`. The intent is to give users the same
+// structural shape Osty itself favours — explicit struct types, a
+// pure-ish core function, a thin shell around it — rather than a
+// snippet they have to delete before writing real code.
+//
 // `osty init` writes the chosen layout into the current directory in
 // place (no outer wrapper) after verifying that no conflicting files
 // already exist. The two entry points share every template so a
@@ -71,6 +94,18 @@ const (
 	// want additional members scaffold them separately with a second
 	// Create call rooted at the workspace directory.
 	KindWorkspace
+	// KindCli scaffolds a binary package with a CLI-shaped starter:
+	// an `Args` struct, a `defaultArgs` constructor, and a `run(args)`
+	// core function that `main` calls. The split is meant to nudge
+	// users toward writing tests against `run` rather than `main`.
+	KindCli
+	// KindService scaffolds a binary package with an HTTP-style
+	// request/response skeleton: `Request` and `Response` structs and
+	// a `handle(req) -> Response` core that `main` exercises with a
+	// sample request. There is no actual network code — std.net is
+	// not in Tier 1 — but the shape matches what a real service body
+	// would grow into.
+	KindService
 )
 
 // CurrentEdition is the spec version the scaffolder records in
@@ -281,6 +316,13 @@ func expectedPaths(dir string, opts Options) []string {
 			filepath.Join(dir, member, "main_test.osty"),
 			filepath.Join(dir, member, ".gitignore"),
 		}
+	case KindCli, KindService:
+		return []string{
+			filepath.Join(dir, "osty.toml"),
+			filepath.Join(dir, "main.osty"),
+			filepath.Join(dir, "main_test.osty"),
+			filepath.Join(dir, ".gitignore"),
+		}
 	default: // KindBin
 		return []string{
 			filepath.Join(dir, "osty.toml"),
@@ -328,6 +370,28 @@ func writeLayout(dir string, opts Options) *diag.Diagnostic {
 			{filepath.Join(dir, "osty.toml"), renderManifest(opts.Name, edition, KindLib)},
 			{filepath.Join(dir, "lib.osty"), libSourceTemplate},
 			{filepath.Join(dir, "lib_test.osty"), libTestTemplate},
+			{filepath.Join(dir, ".gitignore"), gitignoreTemplate},
+		}
+		return writeFiles(files)
+	case KindCli:
+		files := []struct {
+			path    string
+			content string
+		}{
+			{filepath.Join(dir, "osty.toml"), renderManifest(opts.Name, edition, KindCli)},
+			{filepath.Join(dir, "main.osty"), cliSourceTemplate},
+			{filepath.Join(dir, "main_test.osty"), cliTestTemplate},
+			{filepath.Join(dir, ".gitignore"), gitignoreTemplate},
+		}
+		return writeFiles(files)
+	case KindService:
+		files := []struct {
+			path    string
+			content string
+		}{
+			{filepath.Join(dir, "osty.toml"), renderManifest(opts.Name, edition, KindService)},
+			{filepath.Join(dir, "main.osty"), serviceSourceTemplate},
+			{filepath.Join(dir, "main_test.osty"), serviceTestTemplate},
 			{filepath.Join(dir, ".gitignore"), gitignoreTemplate},
 		}
 		return writeFiles(files)
@@ -385,19 +449,31 @@ func RenderManifest(name, edition string, k Kind) string {
 // package kind. Workspace templates do not call this — they scaffold
 // their member as KindBin under the hood.
 func RenderSource(k Kind) string {
-	if k == KindLib {
+	switch k {
+	case KindLib:
 		return libSourceTemplate
+	case KindCli:
+		return cliSourceTemplate
+	case KindService:
+		return serviceSourceTemplate
+	default:
+		return binSourceTemplate
 	}
-	return binSourceTemplate
 }
 
 // RenderTestSource returns the starter `_test.osty` file for the
 // given package kind.
 func RenderTestSource(k Kind) string {
-	if k == KindLib {
+	switch k {
+	case KindLib:
 		return libTestTemplate
+	case KindCli:
+		return cliTestTemplate
+	case KindService:
+		return serviceTestTemplate
+	default:
+		return binTestTemplate
 	}
-	return binTestTemplate
 }
 
 // RenderWorkspaceManifest returns the osty.toml contents for a virtual
@@ -408,8 +484,13 @@ func RenderWorkspaceManifest(name, edition, member string) string {
 
 func renderManifest(name, edition string, k Kind) string {
 	header := "# Binary project; `osty gen main.osty` transpiles the entry point to Go."
-	if k == KindLib {
+	switch k {
+	case KindLib:
 		header = "# Library project; exposes a public API via `pub` declarations."
+	case KindCli:
+		header = "# CLI app project; main.osty splits parsed Args from the testable run() core."
+	case KindService:
+		header = "# HTTP service project; main.osty defines Request/Response and a handle() core."
 	}
 	return fmt.Sprintf(`%s
 
@@ -479,6 +560,124 @@ fn testGreetReturnsNonEmpty() {
     // Placeholder. Replace with ` + "`testing.assertEq`" + ` once
     // std.testing ships (spec §10 / §11).
     let _ = greet("world")
+}
+`
+
+// cliSourceTemplate is the entry source for `--cli`. The shape is:
+// a parsed-Args struct, a default-args constructor, a `run` core that
+// takes Args (so tests can drive it), and a `main` that wires
+// defaults to `run`. Real arg parsing belongs in a future std.flag /
+// std.env module — once that lands, `defaultArgs` will be replaced
+// with `parseArgs(env.args())` without changing the test surface.
+const cliSourceTemplate = `// main.osty — CLI app entry point.
+//
+// ` + "`Args`" + ` collects parsed command-line options. ` + "`run`" + ` is the testable
+// core; ` + "`main`" + ` is a thin shell that wires defaults to ` + "`run`" + ` so unit
+// tests can exercise the logic without spawning a process.
+
+pub struct Args {
+    pub verbose: Bool,
+    pub name: String,
+}
+
+pub fn defaultArgs() -> Args {
+    Args { verbose: false, name: "world" }
+}
+
+pub fn run(args: Args) {
+    if args.verbose {
+        println("verbose: greeting {args.name}")
+    }
+    println("Hello, {args.name}!")
+}
+
+fn main() {
+    run(defaultArgs())
+}
+`
+
+// cliTestTemplate exercises the public ` + "`run`" + ` core with a crafted
+// Args value, which is the whole point of the run/main split. The
+// scaffold loads main.osty + main_test.osty as one package
+// (` + "`resolve.LoadPackageWithTests`" + `) so test files can name the
+// public symbols from the entry source directly.
+const cliTestTemplate = `// main_test.osty — tests for main.osty (spec §11).
+//
+// Test files end in ` + "`_test.osty`" + ` and are discovered by
+// ` + "`osty test`" + `. Functions whose names begin with ` + "`test`" + `
+// are run as tests. Replace the placeholder bodies with
+// ` + "`testing.assertEq`" + ` once std.testing ships (spec §10 / §11).
+
+fn testDefaultArgsAreNonVerbose() {
+    let args = defaultArgs()
+    let _ = args.verbose
+}
+
+fn testRunWithCustomName() {
+    let args = Args { verbose: false, name: "tester" }
+    run(args)
+}
+`
+
+// serviceSourceTemplate is the entry source for `--service`. It
+// models an HTTP-shaped handler without depending on a network stack:
+// a `Request` and `Response` pair plus a pure `handle` function. A
+// future std.http (or user-picked dependency) will plug a listener
+// loop into `main` that calls `handle` per request — until then,
+// `main` invokes `handle` with one sample request so `osty run`
+// produces visible output.
+const serviceSourceTemplate = `// main.osty — HTTP service entry point.
+//
+// ` + "`handle`" + ` is the routing core: it takes a ` + "`Request`" + ` and returns a
+// ` + "`Response`" + `. Keeping it pure (no I/O, no globals) means tests can
+// drive every code path without a live socket. ` + "`main`" + ` exists to
+// demonstrate the wiring; a real binary would replace it with a
+// listener loop that forwards each incoming request to ` + "`handle`" + `.
+
+pub struct Request {
+    pub method: String,
+    pub path: String,
+}
+
+pub struct Response {
+    pub status: Int,
+    pub body: String,
+}
+
+pub fn handle(req: Request) -> Response {
+    if req.path == "/health" {
+        Response { status: 200, body: "ok" }
+    } else {
+        Response { status: 200, body: "Hello from {req.path}" }
+    }
+}
+
+fn main() {
+    let req = Request { method: "GET", path: "/" }
+    let res = handle(req)
+    println("{res.status} {res.body}")
+}
+`
+
+// serviceTestTemplate exercises both branches of the example router
+// (the /health short-circuit and the default greeting) so users see
+// the suggested table-test shape rather than a single smoke check.
+const serviceTestTemplate = `// main_test.osty — tests for main.osty (spec §11).
+//
+// Tests live in the same package as ` + "`main.osty`" + `, so they call
+// the public symbols directly. Replace the placeholder bodies with
+// ` + "`testing.assertEq`" + ` once std.testing ships (spec §10 / §11).
+
+fn testHealthRouteReturnsOk() {
+    let req = Request { method: "GET", path: "/health" }
+    let res = handle(req)
+    let _ = res.status
+}
+
+fn testDefaultRouteGreets() {
+    let req = Request { method: "GET", path: "/hello" }
+    let res = handle(req)
+    let _ = res.body
 }
 `
 

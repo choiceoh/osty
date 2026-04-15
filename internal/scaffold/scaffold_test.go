@@ -310,6 +310,108 @@ func TestScaffoldedLibraryCompiles(t *testing.T) {
 	}
 }
 
+// TestCreateCliProject verifies the --cli layout: same fileset as a
+// binary project, but with the richer Args/run starter source and a
+// matching test file that drives `run` through the public symbols.
+func TestCreateCliProject(t *testing.T) {
+	parent := t.TempDir()
+	dir, d := Create(Options{Name: "mycli", Parent: parent, Kind: KindCli})
+	if d != nil {
+		t.Fatalf("Create: %s", d.Error())
+	}
+	for _, name := range []string{"osty.toml", "main.osty", "main_test.osty", ".gitignore"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Errorf("missing %s: %v", name, err)
+		}
+	}
+	main := readFile(t, filepath.Join(dir, "main.osty"))
+	for _, want := range []string{"struct Args", "fn defaultArgs", "fn run(args: Args)", "fn main()"} {
+		if !strings.Contains(main, want) {
+			t.Errorf("main.osty missing %q:\n%s", want, main)
+		}
+	}
+	test := readFile(t, filepath.Join(dir, "main_test.osty"))
+	if !strings.Contains(test, "defaultArgs()") {
+		t.Errorf("test should drive defaultArgs():\n%s", test)
+	}
+	manifest := readFile(t, filepath.Join(dir, "osty.toml"))
+	if !strings.Contains(manifest, "CLI app project") {
+		t.Errorf("manifest header should mark CLI variant:\n%s", manifest)
+	}
+}
+
+// TestCreateServiceProject verifies the --service layout.
+func TestCreateServiceProject(t *testing.T) {
+	parent := t.TempDir()
+	dir, d := Create(Options{Name: "mysvc", Parent: parent, Kind: KindService})
+	if d != nil {
+		t.Fatalf("Create: %s", d.Error())
+	}
+	for _, name := range []string{"osty.toml", "main.osty", "main_test.osty", ".gitignore"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Errorf("missing %s: %v", name, err)
+		}
+	}
+	main := readFile(t, filepath.Join(dir, "main.osty"))
+	for _, want := range []string{"struct Request", "struct Response", "fn handle(req: Request) -> Response", `req.path == "/health"`} {
+		if !strings.Contains(main, want) {
+			t.Errorf("main.osty missing %q:\n%s", want, main)
+		}
+	}
+	test := readFile(t, filepath.Join(dir, "main_test.osty"))
+	if !strings.Contains(test, "handle(req)") {
+		t.Errorf("test should drive handle(req):\n%s", test)
+	}
+	manifest := readFile(t, filepath.Join(dir, "osty.toml"))
+	if !strings.Contains(manifest, "HTTP service project") {
+		t.Errorf("manifest header should mark service variant:\n%s", manifest)
+	}
+}
+
+// TestScaffoldedCliCompiles loads the full --cli package (entry +
+// test) through resolve to ensure both files type-check together.
+// Test files reference public symbols from main.osty, so they must be
+// resolved as one package — the same approach used for --lib above.
+func TestScaffoldedCliCompiles(t *testing.T) {
+	parent := t.TempDir()
+	dir, d := Create(Options{Name: "democli", Parent: parent, Kind: KindCli})
+	if d != nil {
+		t.Fatalf("Create: %s", d.Error())
+	}
+	assertCompiles(t, readBytes(t, filepath.Join(dir, "main.osty")))
+	pkg, err := resolve.LoadPackageWithTests(dir)
+	if err != nil {
+		t.Fatalf("LoadPackageWithTests: %v", err)
+	}
+	res := resolve.ResolvePackage(pkg, resolve.NewPrelude())
+	for _, dd := range res.Diags {
+		if dd.Severity == diag.Error {
+			t.Errorf("cli package error: %s", dd.Error())
+		}
+	}
+}
+
+// TestScaffoldedServiceCompiles is the --service analogue of
+// TestScaffoldedCliCompiles.
+func TestScaffoldedServiceCompiles(t *testing.T) {
+	parent := t.TempDir()
+	dir, d := Create(Options{Name: "demosvc", Parent: parent, Kind: KindService})
+	if d != nil {
+		t.Fatalf("Create: %s", d.Error())
+	}
+	assertCompiles(t, readBytes(t, filepath.Join(dir, "main.osty")))
+	pkg, err := resolve.LoadPackageWithTests(dir)
+	if err != nil {
+		t.Fatalf("LoadPackageWithTests: %v", err)
+	}
+	res := resolve.ResolvePackage(pkg, resolve.NewPrelude())
+	for _, dd := range res.Diags {
+		if dd.Severity == diag.Error {
+			t.Errorf("service package error: %s", dd.Error())
+		}
+	}
+}
+
 // TestScaffoldedWorkspaceMemberCompiles runs the workspace member
 // through the front-end. Workspace root has no package so we only
 // exercise the member.
