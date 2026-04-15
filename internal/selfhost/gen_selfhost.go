@@ -33,6 +33,7 @@ const stringsPrelude = `use go "strings" as strings {
     fn Split(s: String, sep: String) -> List<String>
     fn SplitN(s: String, sep: String, n: Int) -> List<String>
     fn TrimPrefix(s: String, prefix: String) -> String
+    fn TrimSpace(s: String) -> String
 }
 `
 
