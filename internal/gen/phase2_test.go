@@ -169,6 +169,36 @@ fn main() {
 	}
 }
 
+func TestEnumQualifiedVariant(t *testing.T) {
+	src := `enum Shape {
+    Circle(Int),
+    Empty,
+}
+
+fn main() {
+    let c: Shape = Shape.Circle(3)
+    let e: Shape = Shape.Empty
+    let n = match c {
+        Shape.Circle(v) -> v,
+        Shape.Empty -> 0,
+    }
+    let ok = match e {
+        Shape.Empty -> true,
+        Shape.Circle(_) -> false,
+    }
+    println("{n} {ok}")
+}
+`
+	goSrc, err := transpile(t, src)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := runGo(t, goSrc)
+	if strings.TrimSpace(out) != "3 true" {
+		t.Errorf("unexpected output: %q\n--- src ---\n%s", out, goSrc)
+	}
+}
+
 // TestMatchGuard verifies `if guard` on a match arm.
 func TestMatchGuard(t *testing.T) {
 	src := `fn classify(n: Int) -> String {

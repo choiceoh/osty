@@ -403,6 +403,11 @@ func (c *checker) callType(e *ast.CallExpr, hint types.Type, env *env) types.Typ
 			return t
 		}
 	}
+	if fx, ok := e.Fn.(*ast.FieldExpr); ok {
+		if t, handled := c.tryEnumVariantCall(fx, e, hint, env); handled {
+			return t
+		}
+	}
 	// Concurrency intrinsics: `thread.chan::<T>(cap)` → Channel<T>,
 	// `thread.spawn(f)` → Handle<T>. The generator lowers these to Go
 	// primitives; here we only need the checker to agree on the type so
@@ -2453,78 +2458,105 @@ func (c *checker) tryVariantCall(id *ast.Ident, e *ast.CallExpr, hint types.Type
 				return types.ErrorType
 			}
 		}
-		// Pull type arguments from a matching hint first so the same
-		// enum's variants flow concrete args naturally:
-		//     let r: Result<Int, Error> = Ok(5)   // 5 is Int
-		var tArgs []types.Type
-		if n, ok := types.AsNamed(hint); ok && n.Sym == desc.Sym && len(n.Args) == len(desc.Generics) {
-			tArgs = n.Args
-		} else {
-			// Fresh argument slot per generic; we'll refine while
-			// checking each payload arg.
-			tArgs = make([]types.Type, len(desc.Generics))
-			for i := range tArgs {
-				tArgs[i] = nil
-			}
-		}
-
-		// Check argument count.
-		fields := info.VariantFields
-		if len(e.Args) != len(fields) {
-			c.errNode(e, diag.CodeVariantShape,
-				"variant `%s` takes %d payload value(s), got %d",
-				sym.Name, len(fields), len(e.Args))
-		}
-		// Check each argument. If the field type is a TypeVar, try to
-		// infer it from the argument's actual type.
-		sub := map[*resolve.Symbol]types.Type{}
-		for i, g := range desc.Generics {
-			if i < len(tArgs) && tArgs[i] != nil {
-				sub[g.Sym] = tArgs[i]
-			}
-		}
-		for i, a := range e.Args {
-			var ft types.Type
-			if i < len(fields) {
-				ft = fields[i]
-				if len(sub) > 0 {
-					ft = substituteTypeVars(ft, sub)
-				}
-			}
-			at := c.checkExpr(a.Value, ft, env)
-			if i < len(fields) {
-				inferFromArg(fields[i], at, sub)
-			}
-			if ft != nil && !types.IsError(ft) && !c.accepts(ft, at, a.Value) {
-				c.errMismatch(a.Value, ft, at)
-			}
-		}
-		// Materialize the concrete type-argument list: hint wins, then
-		// inferred; generics we couldn't pin stay as TypeVars to avoid
-		// synthesizing wrong concrete types.
-		finalArgs := make([]types.Type, len(desc.Generics))
-		for i, g := range desc.Generics {
-			if t, ok := sub[g.Sym]; ok && t != nil {
-				finalArgs[i] = t
-				continue
-			}
-			if i < len(tArgs) && tArgs[i] != nil {
-				finalArgs[i] = tArgs[i]
-				continue
-			}
-			finalArgs[i] = g
-		}
-		// Untyped fallbacks: if we inferred an untyped int/float for a
-		// generic, default it rather than leaking the Untyped marker.
-		for i, t := range finalArgs {
-			if u, ok := t.(*types.Untyped); ok {
-				finalArgs[i] = u.Default()
-			}
-		}
-		return &types.Named{Sym: desc.Sym, Args: finalArgs}
+		return c.variantCtorType(desc, sym.Name, info.VariantFields, e, hint, env)
 	}
 
 	return nil
+}
+
+func (c *checker) tryEnumVariantCall(fx *ast.FieldExpr, e *ast.CallExpr, hint types.Type, env *env) (types.Type, bool) {
+	desc, vd, ok := c.enumVariantField(fx)
+	if !ok {
+		return nil, false
+	}
+	if vd.Sym != nil {
+		c.warnIfDeprecated(vd.Sym, fx.PosV)
+	}
+	c.warnIfVariantDeprecated(vd, fx.PosV)
+	return c.variantCtorType(desc, vd.Name, vd.Fields, e, hint, env), true
+}
+
+func (c *checker) enumVariantField(fx *ast.FieldExpr) (*typeDesc, *variantDesc, bool) {
+	id, ok := fx.X.(*ast.Ident)
+	if !ok {
+		return nil, nil, false
+	}
+	sym := c.symbol(id)
+	if sym == nil || sym.Kind != resolve.SymEnum {
+		return nil, nil, false
+	}
+	desc, ok := c.result.Descs[sym]
+	if !ok || desc == nil || desc.Kind != resolve.SymEnum {
+		return nil, nil, false
+	}
+	vd, ok := desc.Variants[fx.Name]
+	if !ok {
+		return nil, nil, false
+	}
+	return desc, vd, true
+}
+
+func (c *checker) variantCtorType(desc *typeDesc, name string, fields []types.Type, e *ast.CallExpr, hint types.Type, env *env) types.Type {
+	// Pull type arguments from a matching hint first so the same enum's
+	// variants flow concrete args naturally:
+	//     let r: Result<Int, Error> = Ok(5)   // 5 is Int
+	var tArgs []types.Type
+	if n, ok := types.AsNamed(hint); ok && n.Sym == desc.Sym && len(n.Args) == len(desc.Generics) {
+		tArgs = n.Args
+	} else {
+		// Fresh argument slot per generic; we'll refine while checking
+		// each payload arg.
+		tArgs = make([]types.Type, len(desc.Generics))
+		for i := range tArgs {
+			tArgs[i] = nil
+		}
+	}
+
+	if len(e.Args) != len(fields) {
+		c.errNode(e, diag.CodeVariantShape,
+			"variant `%s` takes %d payload value(s), got %d",
+			name, len(fields), len(e.Args))
+	}
+	sub := map[*resolve.Symbol]types.Type{}
+	for i, g := range desc.Generics {
+		if i < len(tArgs) && tArgs[i] != nil {
+			sub[g.Sym] = tArgs[i]
+		}
+	}
+	for i, a := range e.Args {
+		var ft types.Type
+		if i < len(fields) {
+			ft = fields[i]
+			if len(sub) > 0 {
+				ft = substituteTypeVars(ft, sub)
+			}
+		}
+		at := c.checkExpr(a.Value, ft, env)
+		if i < len(fields) {
+			inferFromArg(fields[i], at, sub)
+		}
+		if ft != nil && !types.IsError(ft) && !c.accepts(ft, at, a.Value) {
+			c.errMismatch(a.Value, ft, at)
+		}
+	}
+	finalArgs := make([]types.Type, len(desc.Generics))
+	for i, g := range desc.Generics {
+		if t, ok := sub[g.Sym]; ok && t != nil {
+			finalArgs[i] = t
+			continue
+		}
+		if i < len(tArgs) && tArgs[i] != nil {
+			finalArgs[i] = tArgs[i]
+			continue
+		}
+		finalArgs[i] = g
+	}
+	for i, t := range finalArgs {
+		if u, ok := t.(*types.Untyped); ok {
+			finalArgs[i] = u.Default()
+		}
+	}
+	return &types.Named{Sym: desc.Sym, Args: finalArgs}
 }
 
 // inferFromArg populates `sub` when `field` is a TypeVar and `arg` is
@@ -2572,6 +2604,9 @@ func inferFromArg(field, arg types.Type, sub map[*resolve.Symbol]types.Type) {
 // ---- Field / index ----
 
 func (c *checker) fieldType(fx *ast.FieldExpr, hint types.Type, env *env) types.Type {
+	if _, vd, ok := c.enumVariantField(fx); ok && vd.Sym != nil {
+		return c.symTypeOrError(vd.Sym)
+	}
 	recvT := c.checkExpr(fx.X, nil, env)
 	if types.IsError(recvT) {
 		return types.ErrorType

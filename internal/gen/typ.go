@@ -24,7 +24,7 @@ func itoa(n int) string { return strconv.Itoa(n) }
 //	()                          → struct{}
 //	Never                       → struct{} (unreachable placeholder)
 //	T?                          → *T
-//	List<T>                     → []T
+//	List<T>, Iter<T>            → []T
 //	Map<K, V>                   → map[K]V
 //	User-defined Named          → its name verbatim
 //	TypeVar T                   → T
@@ -151,7 +151,7 @@ func (g *gen) goNamedType(n *types.Named) string {
 		return "any"
 	}
 	switch n.Sym.Name {
-	case "List":
+	case "List", "Iter":
 		if len(n.Args) == 1 {
 			return "[]" + g.goType(n.Args[0])
 		}
@@ -351,7 +351,7 @@ func (g *gen) goNamedAST(n *ast.NamedType) string {
 		return gt
 	}
 	switch name {
-	case "List":
+	case "List", "Iter":
 		if len(n.Args) == 1 {
 			return "[]" + g.goTypeExpr(n.Args[0])
 		}

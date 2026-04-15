@@ -254,8 +254,10 @@ fn opErrorCount(p: OstyParser) -> Int {
 
 fn opTruncateErrors(p: OstyParser, target: Int) {
     let mut cur = opErrorCount(p)
-    for cur > target { p.arena.errors.pop()
-    cur = cur - 1 }
+    for cur > target {
+        let _ = p.arena.errors.pop()
+        cur = cur - 1
+    }
 }
 
 // ===================================================================
@@ -628,7 +630,11 @@ fn opParseIfExpr(p: OstyParser) -> Int {
     let thenBlock = opParseBlock(p)
     let mut elseIdx = -1
     if opEat(p, FrontElse) {
-        if opAt(p, FrontIf) { elseIdx = opParseIfExpr(p) } else { elseIdx = opParseBlock(p) }
+        if opAt(p, FrontIf) {
+            elseIdx = opParseIfExpr(p)
+        } else {
+            elseIdx = opParseBlock(p)
+        }
     } else if opPeekPastNewlines(p).kind == FrontElse {
         opErrorFull(p, "`else` must be on the same line as `\}`", "move `else` to the same line: `\} else \{`", "v0.2 O2: `\} else` must sit on the same line", "E0201")
     }
@@ -644,7 +650,7 @@ fn opParseIfExpr(p: OstyParser) -> Int {
 
 fn opParseMatchExpr(p: OstyParser) -> Int {
     let start = p.pos
-    opAdvance(p)
+    let _ = opAdvance(p)
     let prevNoSL = p.noStructLit
     p.noStructLit = true
     let scrutinee = opParseExpr(p)
@@ -656,12 +662,14 @@ fn opParseMatchExpr(p: OstyParser) -> Int {
         let armStart = p.pos
         let pat = opParsePattern(p)
         let mut guard = -1
-        if opAt(p, FrontIf) { opAdvance(p)
-        let pv = p.noStructLit
-        p.noStructLit = true
-        guard = opParseExpr(p)
-        p.noStructLit = pv }
-        opExpect(p, FrontArrow)
+        if opAt(p, FrontIf) {
+            let _ = opAdvance(p)
+            let pv = p.noStructLit
+            p.noStructLit = true
+            guard = opParseExpr(p)
+            p.noStructLit = pv
+        }
+        let _ = opExpect(p, FrontArrow)
         let body = opParseExpr(p)
         let mut armNode = emptyAstNode(AstNMatchArm)
         armNode.left = pat
@@ -685,12 +693,14 @@ fn opParseMatchExpr(p: OstyParser) -> Int {
 
 fn opParseClosure(p: OstyParser) -> Int {
     let start = p.pos
-    if opEat(p, FrontOr) { let body = opParseClosureBody(p, false)
-    let mut n = emptyAstNode(AstNClosure)
-    n.left = body
-    n.start = start
-    n.end = p.pos
-    return opAddNode(p, n) }
+    if opEat(p, FrontOr) {
+        let body = opParseClosureBody(p, false)
+        let mut n = emptyAstNode(AstNClosure)
+        n.left = body
+        n.start = start
+        n.end = p.pos
+        return opAddNode(p, n)
+    }
     let _ = opExpect(p, FrontBitOr)
     let mut params: List<Int> = []
     for !(opAt(p, FrontBitOr)) && !(opAt(p, FrontEOF)) {
@@ -735,37 +745,42 @@ fn opParseClosureBody(p: OstyParser, requireBlock: Bool) -> Int {
 
 fn opTryParsePostfix(p: OstyParser, lhs: Int) -> Int {
     let tok = opPeek(p)
-    if tok.kind == FrontDot { let s = p.pos
-    let _ = opAdvance(p)
-    let nm = opAdvance(p).text
-    let mut n = emptyAstNode(AstNField)
-    n.left = lhs
-    n.text = nm
-    n.start = s
-    n.end = p.pos
-    return opAddNode(p, n) }
-    if tok.kind == FrontQDot { let s = p.pos
-    let _ = opAdvance(p)
-    let nm = opAdvance(p).text
-    let mut n = emptyAstNode(AstNField)
-    n.left = lhs
-    n.text = nm
-    n.flags = 1
-    n.start = s
-    n.end = p.pos
-    return opAddNode(p, n) }
+    if tok.kind == FrontDot {
+        let s = p.pos
+        let _ = opAdvance(p)
+        let nm = opAdvance(p).text
+        let mut n = emptyAstNode(AstNField)
+        n.left = lhs
+        n.text = nm
+        n.start = s
+        n.end = p.pos
+        return opAddNode(p, n)
+    }
+    if tok.kind == FrontQDot {
+        let s = p.pos
+        let _ = opAdvance(p)
+        let nm = opAdvance(p).text
+        let mut n = emptyAstNode(AstNField)
+        n.left = lhs
+        n.text = nm
+        n.flags = 1
+        n.start = s
+        n.end = p.pos
+        return opAddNode(p, n)
+    }
     if tok.kind == FrontLParen { return opParseCallArgs(p, lhs) }
     if tok.kind == FrontLBracket { return opParseIndex(p, lhs) }
-    if tok.kind == FrontQuestion { let s = p.pos
-    let _ = opAdvance(p)
-    let mut n = emptyAstNode(AstNQuestion)
-    n.left = lhs
-    n.start = s
-    n.end = p.pos
-    return opAddNode(p, n) }
+    if tok.kind == FrontQuestion {
+        let s = p.pos
+        let _ = opAdvance(p)
+        let mut n = emptyAstNode(AstNQuestion)
+        n.left = lhs
+        n.start = s
+        n.end = p.pos
+        return opAddNode(p, n)
+    }
     if tok.kind == FrontColonColon && opPeekAt(p, 1).kind == FrontLt { return opParseTurbofish(p, lhs) }
-    let canStructLit = tok.kind == FrontLBrace && !(p.noStructLit)
-    if canStructLit {
+    if tok.kind == FrontLBrace && !(p.noStructLit) && lhs >= 0 {
         let leftNode = astArenaNodeAt(p.arena, lhs)
         if leftNode.kind == AstNIdent && astIsUpperName(leftNode.text) { return opParseStructLit(p, lhs) }
     }
@@ -774,7 +789,7 @@ fn opTryParsePostfix(p: OstyParser, lhs: Int) -> Int {
 
 fn opParseCallArgs(p: OstyParser, callee: Int) -> Int {
     let start = p.pos
-    opAdvance(p)
+    let _ = opAdvance(p)
     let mut args: List<Int> = []
     opSkipNewlines(p)
     for !(opAt(p, FrontRParen)) && !(opAt(p, FrontEOF)) {
@@ -798,9 +813,9 @@ fn opParseCallArgs(p: OstyParser, callee: Int) -> Int {
 
 fn opParseIndex(p: OstyParser, object: Int) -> Int {
     let start = p.pos
-    opAdvance(p)
+    let _ = opAdvance(p)
     let index = opParseExpr(p)
-    opExpect(p, FrontRBracket)
+    let _ = opExpect(p, FrontRBracket)
     let mut n = emptyAstNode(AstNIndex)
     n.left = object
     n.right = index
@@ -811,12 +826,12 @@ fn opParseIndex(p: OstyParser, object: Int) -> Int {
 
 fn opParseTurbofish(p: OstyParser, callee: Int) -> Int {
     let start = p.pos
-    opAdvance(p)
-    opAdvance(p)
+    let _ = opAdvance(p)
+    let _ = opAdvance(p)
     let mut typeArgs: List<Int> = []
     for !(opAt(p, FrontGt)) && !(opAt(p, FrontEOF)) { typeArgs.push(opParseType(p))
     if !(opEat(p, FrontComma)) { break } }
-    opExpect(p, FrontGt)
+    let _ = opExpect(p, FrontGt)
     let mut n = emptyAstNode(AstNTurbofish)
     n.left = callee
     n.children = typeArgs
@@ -827,16 +842,18 @@ fn opParseTurbofish(p: OstyParser, callee: Int) -> Int {
 
 fn opParseStructLit(p: OstyParser, name: Int) -> Int {
     let start = p.pos
-    opAdvance(p)
+    let _ = opAdvance(p)
     let mut fields: List<Int> = []
     let mut spreadIdx = -1
     opSkipNewlines(p)
     for !(opAt(p, FrontRBrace)) && !(opAt(p, FrontEOF)) {
-        if opAt(p, FrontDotDot) { opAdvance(p)
-        spreadIdx = opParseExpr(p)
-        opSkipNewlines(p)
-        opEat(p, FrontComma)
-        break }
+        if opAt(p, FrontDotDot) {
+            let _ = opAdvance(p)
+            spreadIdx = opParseExpr(p)
+            opSkipNewlines(p)
+            let _ = opEat(p, FrontComma)
+            break
+        }
         let fs = p.pos
         let fn_ = opAdvance(p).text
         let mut valIdx = -1
@@ -851,7 +868,7 @@ fn opParseStructLit(p: OstyParser, name: Int) -> Int {
         if !(opEat(p, FrontComma)) { break }
         opSkipNewlines(p)
     }
-    opExpect(p, FrontRBrace)
+    let _ = opExpect(p, FrontRBrace)
     let mut n = emptyAstNode(AstNStructLit)
     n.left = name
     n.right = spreadIdx
@@ -877,7 +894,7 @@ fn opParseStmt(p: OstyParser) -> Int {
     if tok.kind == FrontReturn { return opParseReturnStmt(p) }
     if tok.kind == FrontBreak {
         let s = p.pos
-        opAdvance(p)
+        let _ = opAdvance(p)
         if !(p.inLoop) { opErrorFull(p, "`break` outside of loop", "move inside a `for` loop", "", "E0100") }
         let mut n = emptyAstNode(AstNBreak)
         n.start = s
@@ -886,7 +903,7 @@ fn opParseStmt(p: OstyParser) -> Int {
     }
     if tok.kind == FrontContinue {
         let s = p.pos
-        opAdvance(p)
+        let _ = opAdvance(p)
         if !(p.inLoop) { opErrorFull(p, "`continue` outside of loop", "move inside a `for` loop", "", "E0101") }
         let mut n = emptyAstNode(AstNContinue)
         n.start = s
@@ -898,7 +915,7 @@ fn opParseStmt(p: OstyParser) -> Int {
     let expr = opParseExpr(p)
     let next = opPeek(p)
     if next.kind == FrontChanArrow { let s = p.pos
-    opAdvance(p)
+    let _ = opAdvance(p)
     let v = opParseExpr(p)
     let mut n = emptyAstNode(AstNChanSend)
     n.left = expr
@@ -907,7 +924,7 @@ fn opParseStmt(p: OstyParser) -> Int {
     n.end = p.pos
     return opAddNode(p, n) }
     if frontIsAssignOp(next.kind) { let s = p.pos
-    opAdvance(p)
+    let _ = opAdvance(p)
     let v = opParseExpr(p)
     let mut n = emptyAstNode(AstNAssign)
     n.left = expr
@@ -925,7 +942,7 @@ fn opParseStmt(p: OstyParser) -> Int {
 
 fn opParseLetStmt(p: OstyParser) -> Int {
     let start = p.pos
-    opAdvance(p)
+    let _ = opAdvance(p)
     let mut isMut = false
     if opEat(p, FrontMut) { isMut = true }
     let pat = opParsePattern(p)
@@ -945,7 +962,7 @@ fn opParseLetStmt(p: OstyParser) -> Int {
 
 fn opParseReturnStmt(p: OstyParser) -> Int {
     let start = p.pos
-    opAdvance(p)
+    let _ = opAdvance(p)
     let mut valueIdx = -1
     if !(opAt(p, FrontNewline)) && !(opAt(p, FrontEOF)) && !(opAt(p, FrontRBrace)) { valueIdx = opParseExpr(p) }
     let mut n = emptyAstNode(AstNReturn)
@@ -957,7 +974,7 @@ fn opParseReturnStmt(p: OstyParser) -> Int {
 
 fn opParseDeferStmt(p: OstyParser) -> Int {
     let start = p.pos
-    opAdvance(p)
+    let _ = opAdvance(p)
     let expr = opParseExpr(p)
     let mut n = emptyAstNode(AstNDefer)
     n.left = expr
@@ -968,7 +985,7 @@ fn opParseDeferStmt(p: OstyParser) -> Int {
 
 fn opParseForStmt(p: OstyParser) -> Int {
     let start = p.pos
-    opAdvance(p)
+    let _ = opAdvance(p)
     let prevInLoop = p.inLoop
     p.inLoop = true
     let mut kind = "infinite"
@@ -977,9 +994,9 @@ fn opParseForStmt(p: OstyParser) -> Int {
     let mut iterIdx = -1
     if opAt(p, FrontLBrace) { kind = "infinite" } else if opAt(p, FrontLet) {
         kind = "forlet"
-        opAdvance(p)
+        let _ = opAdvance(p)
         patIdx = opParsePattern(p)
-        opExpect(p, FrontAssign)
+        let _ = opExpect(p, FrontAssign)
         let pv = p.noStructLit
         p.noStructLit = true
         condIdx = opParseExpr(p)
@@ -990,7 +1007,7 @@ fn opParseForStmt(p: OstyParser) -> Int {
         let expr = opParseExpr(p)
         p.noStructLit = pv
         if opAt(p, FrontIdent) && opPeek(p).text == "in" {
-            opAdvance(p)
+            let _ = opAdvance(p)
             kind = "forin"
             patIdx = expr
             let pv2 = p.noStructLit
@@ -1359,10 +1376,10 @@ fn opParseFnDecl(p: OstyParser, isPub: Bool, anns: List<Int>) -> Int {
 
 fn opParseStructDecl(p: OstyParser, isPub: Bool) -> Int {
     let start = p.pos
-    opAdvance(p)
+    let _ = opAdvance(p)
     let name = opExpect(p, FrontIdent).text
     let genericParams = opParseGenericParams(p)
-    opExpect(p, FrontLBrace)
+    let _ = opExpect(p, FrontLBrace)
     let mut members: List<Int> = []
     opSkipNewlines(p)
     for !(opAt(p, FrontRBrace)) && !(opAt(p, FrontEOF)) {
@@ -1390,10 +1407,10 @@ fn opParseStructDecl(p: OstyParser, isPub: Bool) -> Int {
             let _ = opAdvance(p)
         }
         opSkipNewlines(p)
-        opEat(p, FrontComma)
+        let _ = opEat(p, FrontComma)
         opSkipNewlines(p)
     }
-    opExpect(p, FrontRBrace)
+    let _ = opExpect(p, FrontRBrace)
     let mut n = emptyAstNode(AstNStructDecl)
     n.text = name
     n.children = members
@@ -1406,10 +1423,10 @@ fn opParseStructDecl(p: OstyParser, isPub: Bool) -> Int {
 
 fn opParseEnumDecl(p: OstyParser, isPub: Bool) -> Int {
     let start = p.pos
-    opAdvance(p)
+    let _ = opAdvance(p)
     let name = opExpect(p, FrontIdent).text
     let genericParams = opParseGenericParams(p)
-    opExpect(p, FrontLBrace)
+    let _ = opExpect(p, FrontLBrace)
     let mut members: List<Int> = []
     opSkipNewlines(p)
     for !(opAt(p, FrontRBrace)) && !(opAt(p, FrontEOF)) {
@@ -1436,10 +1453,10 @@ fn opParseEnumDecl(p: OstyParser, isPub: Bool) -> Int {
             let _ = opAdvance(p)
         }
         opSkipNewlines(p)
-        opEat(p, FrontComma)
+        let _ = opEat(p, FrontComma)
         opSkipNewlines(p)
     }
-    opExpect(p, FrontRBrace)
+    let _ = opExpect(p, FrontRBrace)
     let mut n = emptyAstNode(AstNEnumDecl)
     n.text = name
     n.children = members
@@ -1452,12 +1469,12 @@ fn opParseEnumDecl(p: OstyParser, isPub: Bool) -> Int {
 
 fn opParseInterfaceDecl(p: OstyParser, isPub: Bool) -> Int {
     let start = p.pos
-    opAdvance(p)
+    let _ = opAdvance(p)
     let name = opExpect(p, FrontIdent).text
     let mut supers: List<Int> = []
     if opEat(p, FrontColon) { for { supers.push(opParseType(p))
     if !(opEat(p, FrontComma)) && !(opEat(p, FrontPlus)) { break } } }
-    opExpect(p, FrontLBrace)
+    let _ = opExpect(p, FrontLBrace)
     let mut members: List<Int> = []
     opSkipNewlines(p)
     for !(opAt(p, FrontRBrace)) && !(opAt(p, FrontEOF)) {
@@ -1485,10 +1502,10 @@ fn opParseInterfaceDecl(p: OstyParser, isPub: Bool) -> Int {
 
 fn opParseTypeAliasDecl(p: OstyParser, isPub: Bool) -> Int {
     let start = p.pos
-    opAdvance(p)
+    let _ = opAdvance(p)
     let name = opExpect(p, FrontIdent).text
     let genericParams = opParseGenericParams(p)
-    opExpect(p, FrontAssign)
+    let _ = opExpect(p, FrontAssign)
     let typeIdx = opParseType(p)
     let mut n = emptyAstNode(AstNTypeAlias)
     n.text = name
@@ -1502,7 +1519,7 @@ fn opParseTypeAliasDecl(p: OstyParser, isPub: Bool) -> Int {
 
 fn opParseUseDecl(p: OstyParser) -> Int {
     let start = p.pos
-    opAdvance(p)
+    let _ = opAdvance(p)
     let mut path: List<String> = []
     let mut isGo = false
     let mut alias = ""

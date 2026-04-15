@@ -89,6 +89,44 @@ type Sources struct {
 	Harness []byte
 }
 
+func genPackageIndex(pkg *resolve.Package) gen.PackageIndex {
+	idx := gen.PackageIndex{
+		VariantOwner: map[string]string{},
+		EnumTypes:    map[string]bool{},
+		StructTypes:  map[string]bool{},
+		MethodNames:  map[string]map[string]bool{},
+	}
+	for _, pf := range pkg.Files {
+		if pf == nil || pf.File == nil {
+			continue
+		}
+		for _, d := range pf.File.Decls {
+			switch d := d.(type) {
+			case *ostyast.EnumDecl:
+				idx.EnumTypes[d.Name] = true
+				if idx.MethodNames[d.Name] == nil {
+					idx.MethodNames[d.Name] = map[string]bool{}
+				}
+				for _, v := range d.Variants {
+					idx.VariantOwner[v.Name] = d.Name
+				}
+				for _, m := range d.Methods {
+					idx.MethodNames[d.Name][m.Name] = true
+				}
+			case *ostyast.StructDecl:
+				idx.StructTypes[d.Name] = true
+				if idx.MethodNames[d.Name] == nil {
+					idx.MethodNames[d.Name] = map[string]bool{}
+				}
+				for _, m := range d.Methods {
+					idx.MethodNames[d.Name][m.Name] = true
+				}
+			}
+		}
+	}
+	return idx
+}
+
 // GenerateHarness produces a Sources bundle for pkg. chk is the
 // per-package check result; entries is the flat list of discovered
 // tests and benchmarks (in declaration order across files).
@@ -122,6 +160,7 @@ func GenerateHarness(pkg *resolve.Package, chk *check.Result, entries []Entry) (
 	seenOstyEqualRuntime := map[string]bool{}
 	var firstGenErr error
 	hasProgramMain := packageHasProgramMain(pkg)
+	pkgIndex := genPackageIndex(pkg)
 
 	for _, pf := range files {
 		if pf.File == nil {
@@ -132,7 +171,7 @@ func GenerateHarness(pkg *resolve.Package, chk *check.Result, entries []Entry) (
 			TypeRefs:  pf.TypeRefs,
 			FileScope: pf.FileScope,
 		}
-		src, gerr := gen.GenerateMapped("main", pf.File, res, chk, pf.Path)
+		src, gerr := gen.GenerateMappedWithIndex("main", pf.File, res, chk, pf.Path, pkgIndex)
 		if gerr != nil && firstGenErr == nil {
 			// Non-fatal: gen returns warnings alongside formatted
 			// source. Remember the first one so the CLI can surface

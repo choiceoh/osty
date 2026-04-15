@@ -1,6 +1,8 @@
 package check
 
 import (
+	"strings"
+
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/resolve"
@@ -657,16 +659,30 @@ func (c *checker) bindVariantPattern(p *ast.VariantPat, t types.Type, env *env) 
 	// falling back to scope lookup for bare names like `Red`.
 	var varSym *resolve.Symbol
 	var enumDesc *typeDesc
-	if n, ok := types.AsNamed(t); ok {
-		if desc, ok := c.result.Descs[n.Sym]; ok && desc.Kind == resolve.SymEnum {
-			if v, found := desc.Variants[head]; found {
-				enumDesc = desc
-				varSym = v.Sym
+	variantName := head
+	if len(p.Path) >= 2 {
+		if sym := c.topLevelSym(p.Path[len(p.Path)-2]); sym != nil && sym.Kind == resolve.SymEnum {
+			if desc, ok := c.result.Descs[sym]; ok && desc != nil && desc.Kind == resolve.SymEnum {
+				if vd, found := desc.Variants[p.Path[len(p.Path)-1]]; found {
+					enumDesc = desc
+					variantName = vd.Name
+					varSym = vd.Sym
+				}
 			}
 		}
 	}
 	if varSym == nil {
-		if sym := c.topLevelSym(head); sym != nil && sym.Kind == resolve.SymVariant {
+		if n, ok := types.AsNamed(t); ok {
+			if desc, ok := c.result.Descs[n.Sym]; ok && desc.Kind == resolve.SymEnum {
+				if v, found := desc.Variants[variantName]; found {
+					enumDesc = desc
+					varSym = v.Sym
+				}
+			}
+		}
+	}
+	if varSym == nil {
+		if sym := c.topLevelSym(variantName); sym != nil && sym.Kind == resolve.SymVariant {
 			varSym = sym
 			if info := c.info(sym); info != nil {
 				enumDesc = info.Enum
@@ -679,7 +695,7 @@ func (c *checker) bindVariantPattern(p *ast.VariantPat, t types.Type, env *env) 
 		// overrides). At this point we couldn't resolve it; emit a
 		// diagnostic only when the scrutinee isn't already Error.
 		if !types.IsError(t) {
-			c.errNode(p, diag.CodeUnknownVariant, "unknown variant `%s`", head)
+			c.errNode(p, diag.CodeUnknownVariant, "unknown variant `%s`", strings.Join(p.Path, "."))
 		}
 		for _, a := range p.Args {
 			c.bindPatternTypes(a, types.ErrorType, env)
@@ -695,13 +711,13 @@ func (c *checker) bindVariantPattern(p *ast.VariantPat, t types.Type, env *env) 
 		if n.Sym != enumDesc.Sym && !types.IsError(t) {
 			c.errNode(p, diag.CodeTypeMismatch,
 				"variant `%s` belongs to enum `%s`, not `%s`",
-				head, enumDesc.Sym.Name, n.Sym.Name)
+				variantName, enumDesc.Sym.Name, n.Sym.Name)
 		}
 	}
 	if len(p.Args) != len(info.VariantFields) {
 		c.errNode(p, diag.CodeVariantShape,
 			"variant `%s` takes %d payload pattern(s), got %d",
-			head, len(info.VariantFields), len(p.Args))
+			variantName, len(info.VariantFields), len(p.Args))
 		return
 	}
 	// Apply scrutinee's type-arg substitutions to variant fields.

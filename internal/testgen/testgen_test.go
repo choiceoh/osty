@@ -103,6 +103,89 @@ func TestGenerateHarness_DedupesResultRuntime(t *testing.T) {
 	}
 }
 
+func TestGenerateHarness_DedupesEqualRuntime(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "a.osty"), []byte(`fn sameA() -> Bool {
+    [1] == [1]
+}
+`))
+	mustWrite(t, filepath.Join(dir, "b.osty"), []byte(`fn sameB() -> Bool {
+    [2] == [2]
+}
+`))
+	mustWrite(t, filepath.Join(dir, "main_test.osty"), []byte(`use std.testing
+
+fn testBoth() {
+    testing.assert(sameA())
+    testing.assert(sameB())
+}
+`))
+	pkg, chk := loadCalc(t, dir)
+
+	srcs, err := GenerateHarness(pkg, chk, nil)
+	if err != nil {
+		t.Fatalf("GenerateHarness: %v", err)
+	}
+	main := string(srcs.Main)
+	for _, needle := range []string{
+		"func ostyEqual(a, b any) bool",
+		"type ostyEqualVisit struct",
+		"func ostyEqualValue(a, b reflect.Value, seen map[ostyEqualVisit]bool) bool",
+		"func ostyIsNilValue(v reflect.Value) bool",
+	} {
+		if count := strings.Count(main, needle); count != 1 {
+			t.Fatalf("expected exactly 1 %q helper, got %d\n%s", needle, count, main)
+		}
+	}
+}
+
+func TestGenerateHarness_CrossFileEnumVariantIndex(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "kind.osty"), []byte(`enum Item {
+    Boxed(Int),
+    Empty,
+}
+`))
+	mustWrite(t, filepath.Join(dir, "use.osty"), []byte(`fn makeItem() -> Item {
+    Boxed(3)
+}
+`))
+	mustWrite(t, filepath.Join(dir, "main_test.osty"), []byte(`use std.testing
+
+fn testCrossFileVariant() {
+    let _ = makeItem()
+    testing.assert(true)
+}
+`))
+	pkg, chk := loadCalc(t, dir)
+
+	srcs, err := GenerateHarness(pkg, chk, []Entry{{
+		Name: "testCrossFileVariant",
+		Kind: KindTest,
+		File: "main_test.osty",
+		Line: 3,
+	}})
+	if err != nil {
+		t.Fatalf("GenerateHarness: %v\n--- main.go ---\n%s", err, srcs.Main)
+	}
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go binary not on PATH; skipping end-to-end run")
+	}
+	out := t.TempDir()
+	mustWrite(t, filepath.Join(out, "main.go"), srcs.Main)
+	mustWrite(t, filepath.Join(out, "harness.go"), srcs.Harness)
+	mustWrite(t, filepath.Join(out, "go.mod"), []byte("module ostytest\ngo 1.22\n"))
+	cmd := exec.Command("go", "run", ".")
+	cmd.Dir = out
+	combined, runErr := cmd.CombinedOutput()
+	if runErr != nil {
+		t.Fatalf("go run failed: %v\n%s\n--- main.go ---\n%s", runErr, combined, srcs.Main)
+	}
+	if want := "1 passed, 0 failed, 1 total"; !strings.Contains(string(combined), want) {
+		t.Fatalf("missing summary %q in:\n%s", want, combined)
+	}
+}
+
 // TestGenerateHarness_StripsTestingStub checks that the no-op `var
 // testing = struct{…}{…}` gen emits for `use std.testing` is removed
 // from the merged output — the runtime in harness.go owns that name
