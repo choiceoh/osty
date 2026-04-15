@@ -691,6 +691,10 @@ func hasValueSemantics(t types.Type) bool {
 }
 
 func (g *gen) emitStdlibEncodingCall(c *ast.CallExpr, _ *ast.FieldExpr) bool {
+	// Pure Osty implementation — delegate to Go helpers that mirror
+	// the Osty algorithm.  The call-path matching still applies so
+	// that we inject the right runtime; only the runtime bodies differ
+	// from the previous hardcoded Go-stdlib version.
 	parts, ok := g.stdlibCallPath(c, "encoding")
 	if !ok {
 		return false
@@ -792,7 +796,6 @@ func (g *gen) emitStdlibEnvCall(c *ast.CallExpr, _ *ast.FieldExpr) bool {
 	g.emitStdlibHelperCall(helper, c.Args)
 	return true
 }
-
 
 func (g *gen) emitStdlibCompressCall(c *ast.CallExpr, _ *ast.FieldExpr) bool {
 	parts, ok := g.stdlibCallPath(c, "compress")
