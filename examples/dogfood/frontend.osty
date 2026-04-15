@@ -3,12 +3,13 @@ use go "strings" as strings {
     fn Fields(s: String) -> List<String>
     fn HasPrefix(s: String, prefix: String) -> Bool
     fn HasSuffix(s: String, suffix: String) -> Bool
+    fn Join(elems: List<String>, sep: String) -> String
     fn Split(s: String, sep: String) -> List<String>
     fn SplitN(s: String, sep: String, n: Int) -> List<String>
 }
 
 /// FrontTokenKind mirrors the compiler token categories needed by the
-/// self-hosting front-end seed.
+/// self-hosting front end.
 pub enum FrontTokenKind {
     FrontEOF,
     FrontIllegal,
@@ -91,7 +92,7 @@ pub enum FrontTokenKind {
     FrontHash,
 }
 
-/// FrontToken is the compact token shape used by the Osty parser seed.
+/// FrontToken is the compact token shape used by the Osty parser core.
 pub struct FrontToken {
     pub kind: FrontTokenKind,
     pub text: String,
@@ -206,8 +207,8 @@ pub struct FrontLexSummary {
     pub third: String,
 }
 
-/// FrontParseSummary is the top-level declaration model that grows toward the
-/// real recursive-descent parser.
+/// FrontParseSummary is the compatibility metrics surface emitted by the
+/// self-hosting parser core.
 pub struct FrontParseSummary {
     pub decls: Int,
     pub funcs: Int,
@@ -219,6 +220,63 @@ pub struct FrontParseSummary {
     pub publicDecls: Int,
     pub maxBlockDepth: Int,
     pub errors: Int,
+    pub genericParams: Int,
+    pub params: Int,
+    pub fields: Int,
+    pub methods: Int,
+    pub variants: Int,
+    pub variantFields: Int,
+    pub typeRefs: Int,
+    pub blocks: Int,
+    pub statements: Int,
+    pub lets: Int,
+    pub returns: Int,
+    pub breaks: Int,
+    pub continues: Int,
+    pub fors: Int,
+    pub defers: Int,
+    pub ifs: Int,
+    pub matches: Int,
+    pub calls: Int,
+    pub indexes: Int,
+    pub selectors: Int,
+    pub literals: Int,
+    pub binaryOps: Int,
+    pub unaryOps: Int,
+    pub assignments: Int,
+    pub annotations: Int,
+    pub docComments: Int,
+    pub goUses: Int,
+    pub useAliases: Int,
+    pub useGoItems: Int,
+    pub mutableBindings: Int,
+    pub defaultValues: Int,
+    pub ifLets: Int,
+    pub elseBranches: Int,
+    pub matchArms: Int,
+    pub matchGuards: Int,
+    pub closures: Int,
+    pub closureParams: Int,
+    pub keywordArgs: Int,
+    pub turbofish: Int,
+    pub listLits: Int,
+    pub mapLits: Int,
+    pub tupleLits: Int,
+    pub structLits: Int,
+    pub structLitFields: Int,
+    pub spreads: Int,
+    pub ranges: Int,
+    pub channelSends: Int,
+    pub questionOps: Int,
+    pub optionalTypes: Int,
+    pub fnTypes: Int,
+    pub tupleTypes: Int,
+    pub tuplePatterns: Int,
+    pub structPatterns: Int,
+    pub variantPatterns: Int,
+    pub orPatterns: Int,
+    pub rangePatterns: Int,
+    pub wildcardPatterns: Int,
 }
 
 pub enum FrontTypeKind {
@@ -295,6 +353,94 @@ pub struct FrontTripleNormalization {
 pub struct FrontTripleLineStats {
     pub normalizedUnits: Int,
     pub badIndent: Bool,
+}
+
+pub struct FrontParseResult {
+    pub summary: FrontParseSummary,
+    pub consumed: Int,
+}
+
+pub enum FrontNodeKind {
+    FrontNodeFile,
+    FrontNodeAnnotation,
+    FrontNodeUseDecl,
+    FrontNodeGoUseDecl,
+    FrontNodeFnDecl,
+    FrontNodeStructDecl,
+    FrontNodeEnumDecl,
+    FrontNodeInterfaceDecl,
+    FrontNodeTypeAliasDecl,
+    FrontNodeLetDecl,
+    FrontNodeGenericParams,
+    FrontNodeParamList,
+    FrontNodeParam,
+    FrontNodeType,
+    FrontNodeBlock,
+    FrontNodeLetStmt,
+    FrontNodeReturnStmt,
+    FrontNodeBreakStmt,
+    FrontNodeContinueStmt,
+    FrontNodeForStmt,
+    FrontNodeDeferStmt,
+    FrontNodeAssignStmt,
+    FrontNodeChannelSendStmt,
+    FrontNodeIfExpr,
+    FrontNodeMatchExpr,
+    FrontNodeMatchArm,
+    FrontNodeCallExpr,
+    FrontNodeIndexExpr,
+    FrontNodeSelectorExpr,
+    FrontNodeTurbofishExpr,
+    FrontNodeClosureExpr,
+    FrontNodeListExpr,
+    FrontNodeMapExpr,
+    FrontNodeTupleExpr,
+    FrontNodeStructExpr,
+    FrontNodeRangeExpr,
+    FrontNodeBinaryExpr,
+    FrontNodeUnaryExpr,
+    FrontNodeQuestionExpr,
+    FrontNodePattern,
+    FrontNodeField,
+    FrontNodeVariant,
+    FrontNodeRecovery,
+}
+
+pub enum FrontParseDiagnosticKind {
+    FrontParseDiagUnexpectedToken,
+    FrontParseDiagMissingName,
+    FrontParseDiagMissingDelimiter,
+    FrontParseDiagUnmatchedDelimiter,
+    FrontParseDiagNonAssociativeOperator,
+    FrontParseDiagTrailingSelector,
+    FrontParseDiagLexerError,
+}
+
+pub struct FrontParseNode {
+    pub kind: FrontNodeKind,
+    pub start: Int,
+    pub end: Int,
+    pub depth: Int,
+    pub flags: Int,
+}
+
+pub struct FrontParseDiagnostic {
+    pub kind: FrontParseDiagnosticKind,
+    pub start: Int,
+    pub end: Int,
+    pub expected: FrontTokenKind,
+    pub found: FrontTokenKind,
+}
+
+pub struct FrontParseTree {
+    pub nodes: List<FrontParseNode>,
+    pub diagnostics: List<FrontParseDiagnostic>,
+    pub summary: FrontParseSummary,
+    pub tokens: Int,
+    pub coveredTokens: Int,
+    pub maxDepth: Int,
+    pub recovered: Int,
+    pub precedenceDiagnostics: Int,
 }
 
 pub fn frontToken(kindName: String, text: String) -> FrontToken {
@@ -1714,11 +1860,38 @@ pub fn frontInterpolationTokenAt(stream: FrontLexStream, target: Int) -> FrontIn
 
 pub fn frontendParseLexedSummary(source: String) -> FrontParseSummary {
     let stream = frontendLexStream(source)
+    frontendParseSummary(frontTokensFromStream(stream))
+}
+
+pub fn frontTokensFromStream(stream: FrontLexStream) -> List<FrontToken> {
     let mut parseTokens: List<FrontToken> = []
     for tok in stream.tokens {
         parseTokens.push(FrontToken { kind: tok.kind, text: frontTokenKindName(tok.kind) })
     }
-    frontendParseSummary(parseTokens)
+    parseTokens
+}
+
+pub fn frontTokensFromSource(source: String, stream: FrontLexStream) -> List<FrontToken> {
+    let units = strings.Split(source, "")
+    let mut parseTokens: List<FrontToken> = []
+    for tok in stream.tokens {
+        parseTokens.push(
+            FrontToken {
+                kind: tok.kind,
+                text: frontLexemeFromUnits(units, tok.start.offset, tok.length),
+            },
+        )
+    }
+    parseTokens
+}
+
+pub fn frontLexemeFromUnits(units: List<String>, start: Int, length: Int) -> String {
+    let mut parts: List<String> = []
+    let end = start + length
+    for idx in start..end {
+        parts.push(frontUnitAt(units, idx))
+    }
+    strings.Join(parts, "")
 }
 
 /// frontendLexSummary scans Osty source at character granularity. It mirrors
@@ -2846,7 +3019,2344 @@ pub fn emptyFrontParseSummary() -> FrontParseSummary {
         publicDecls: 0,
         maxBlockDepth: 0,
         errors: 0,
+        genericParams: 0,
+        params: 0,
+        fields: 0,
+        methods: 0,
+        variants: 0,
+        variantFields: 0,
+        typeRefs: 0,
+        blocks: 0,
+        statements: 0,
+        lets: 0,
+        returns: 0,
+        breaks: 0,
+        continues: 0,
+        fors: 0,
+        defers: 0,
+        ifs: 0,
+        matches: 0,
+        calls: 0,
+        indexes: 0,
+        selectors: 0,
+        literals: 0,
+        binaryOps: 0,
+        unaryOps: 0,
+        assignments: 0,
+        annotations: 0,
+        docComments: 0,
+        goUses: 0,
+        useAliases: 0,
+        useGoItems: 0,
+        mutableBindings: 0,
+        defaultValues: 0,
+        ifLets: 0,
+        elseBranches: 0,
+        matchArms: 0,
+        matchGuards: 0,
+        closures: 0,
+        closureParams: 0,
+        keywordArgs: 0,
+        turbofish: 0,
+        listLits: 0,
+        mapLits: 0,
+        tupleLits: 0,
+        structLits: 0,
+        structLitFields: 0,
+        spreads: 0,
+        ranges: 0,
+        channelSends: 0,
+        questionOps: 0,
+        optionalTypes: 0,
+        fnTypes: 0,
+        tupleTypes: 0,
+        tuplePatterns: 0,
+        structPatterns: 0,
+        variantPatterns: 0,
+        orPatterns: 0,
+        rangePatterns: 0,
+        wildcardPatterns: 0,
     }
+}
+
+pub fn frontParseResult(summary: FrontParseSummary, consumed: Int) -> FrontParseResult {
+    FrontParseResult { summary, consumed }
+}
+
+pub fn frontParseNode(kind: FrontNodeKind, start: Int, end: Int, depth: Int, flags: Int) -> FrontParseNode {
+    FrontParseNode { kind, start, end, depth, flags }
+}
+
+pub fn frontParseDiagnostic(
+    kind: FrontParseDiagnosticKind,
+    start: Int,
+    end: Int,
+    expected: FrontTokenKind,
+    found: FrontTokenKind,
+) -> FrontParseDiagnostic {
+    FrontParseDiagnostic { kind, start, end, expected, found }
+}
+
+pub fn emptyFrontParseTree(summary: FrontParseSummary, tokens: Int) -> FrontParseTree {
+    FrontParseTree {
+        nodes: [],
+        diagnostics: [],
+        summary,
+        tokens,
+        coveredTokens: 0,
+        maxDepth: 0,
+        recovered: 0,
+        precedenceDiagnostics: 0,
+    }
+}
+
+pub fn frontTreePushNode(tree: FrontParseTree, node: FrontParseNode) -> FrontParseTree {
+    let mut out = tree
+    out.nodes.push(node)
+    if node.depth > out.maxDepth {
+        out.maxDepth = node.depth
+    }
+    out
+}
+
+pub fn frontTreePushDiagnostic(
+    tree: FrontParseTree,
+    diag: FrontParseDiagnostic,
+) -> FrontParseTree {
+    let mut out = tree
+    out.diagnostics.push(diag)
+    out.recovered = out.recovered + 1
+    if diag.kind == FrontParseDiagNonAssociativeOperator {
+        out.precedenceDiagnostics = out.precedenceDiagnostics + 1
+    }
+    out
+}
+
+pub fn frontendParseTree(source: String) -> FrontParseTree {
+    let stream = frontendLexStream(source)
+    let tokens = frontTokensFromSource(source, stream)
+    let count = frontTokenListCount(tokens)
+    let summary = frontendParseRichSummary(source)
+    let mut tree = frontBuildParseTree(tokens, count, summary)
+    let lexErrors = frontLexDiagnosticCount(stream)
+    for idx in 0..lexErrors {
+        tree = frontTreePushDiagnostic(
+            tree,
+            frontParseDiagnostic(
+                FrontParseDiagLexerError,
+                idx,
+                idx + 1,
+                FrontEOF,
+                FrontIllegal,
+            ),
+        )
+    }
+    tree
+}
+
+/// frontendParseRichSummary keeps the legacy summary API on top of the
+/// self-hosting parser core. New callers should prefer frontendParseTree when
+/// they need lossless spans, node events, and recovery diagnostics.
+pub fn frontendParseRichSummary(source: String) -> FrontParseSummary {
+    let stream = frontendLexStream(source)
+    let tokens = frontTokensFromSource(source, stream)
+    let count = frontTokenListCount(tokens)
+    let mut summary = emptyFrontParseSummary()
+    summary.errors = frontLexDiagnosticCount(stream)
+    summary.docComments = frontLeadingDocAttachmentCount(stream)
+    let mut skip = 0
+    let mut pendingPub = false
+
+    for idx in 0..count {
+        if skip > 0 {
+            skip = skip - 1
+        } else {
+            let kind = frontTokenAtList(tokens, idx).kind
+            if kind == FrontHash && frontTokenAtList(tokens, idx + 1).kind == FrontLBracket {
+                let close = frontFindMatching(tokens, idx + 1, count, FrontLBracket, FrontRBracket)
+                summary.annotations = summary.annotations + 1
+                skip = close - idx
+            } else if kind == FrontPub {
+                pendingPub = true
+            } else if kind == FrontUse {
+                summary.decls = summary.decls + 1
+                summary.uses = summary.uses + 1
+                let parsed = frontParseUseShape(tokens, idx, count, summary)
+                summary = parsed.summary
+                skip = parsed.consumed - 1
+                pendingPub = false
+            } else if kind == FrontFn {
+                summary.decls = summary.decls + 1
+                summary.funcs = summary.funcs + 1
+                if pendingPub {
+                    summary.publicDecls = summary.publicDecls + 1
+                }
+                let parsed = frontParseFnShape(tokens, idx, count, summary)
+                summary = parsed.summary
+                skip = parsed.consumed - 1
+                pendingPub = false
+            } else if kind == FrontStruct {
+                summary.decls = summary.decls + 1
+                summary.structs = summary.structs + 1
+                if pendingPub {
+                    summary.publicDecls = summary.publicDecls + 1
+                }
+                let parsed = frontParseStructShape(tokens, idx, count, summary)
+                summary = parsed.summary
+                skip = parsed.consumed - 1
+                pendingPub = false
+            } else if kind == FrontEnum {
+                summary.decls = summary.decls + 1
+                summary.enums = summary.enums + 1
+                if pendingPub {
+                    summary.publicDecls = summary.publicDecls + 1
+                }
+                let parsed = frontParseEnumShape(tokens, idx, count, summary)
+                summary = parsed.summary
+                skip = parsed.consumed - 1
+                pendingPub = false
+            } else if kind == FrontInterface {
+                summary.decls = summary.decls + 1
+                summary.interfaces = summary.interfaces + 1
+                if pendingPub {
+                    summary.publicDecls = summary.publicDecls + 1
+                }
+                let parsed = frontParseInterfaceShape(tokens, idx, count, summary)
+                summary = parsed.summary
+                skip = parsed.consumed - 1
+                pendingPub = false
+            } else if kind == FrontType {
+                summary.decls = summary.decls + 1
+                summary.aliases = summary.aliases + 1
+                if pendingPub {
+                    summary.publicDecls = summary.publicDecls + 1
+                }
+                let parsed = frontParseTypeAliasShape(tokens, idx, count, summary)
+                summary = parsed.summary
+                skip = parsed.consumed - 1
+                pendingPub = false
+            } else if kind == FrontLet {
+                summary.decls = summary.decls + 1
+                summary.lets = summary.lets + 1
+                let parsed = frontParseLetShape(tokens, idx, count, summary)
+                summary = parsed.summary
+                skip = parsed.consumed - 1
+                pendingPub = false
+            } else if kind == FrontNewline || kind == FrontEOF {
+                let _ = kind
+            } else {
+                if kind != FrontIllegal {
+                    summary.errors = summary.errors + 1
+                }
+                pendingPub = false
+            }
+        }
+    }
+
+    summary.maxBlockDepth = frontMaxBraceDepth(tokens)
+    summary.errors = summary.errors + frontBraceBalanceErrors(tokens)
+    summary = frontScanProgramExtras(tokens, count, summary)
+    summary
+}
+
+pub fn frontTokenListCount(tokens: List<FrontToken>) -> Int {
+    let mut count = 0
+    for tok in tokens {
+        let _ = tok
+        count = count + 1
+    }
+    count
+}
+
+pub fn frontTokenAtList(tokens: List<FrontToken>, target: Int) -> FrontToken {
+    let mut idx = 0
+    for tok in tokens {
+        if idx == target {
+            return tok
+        }
+        idx = idx + 1
+    }
+    frontEOF()
+}
+
+pub fn frontLeadingDocAttachmentCount(stream: FrontLexStream) -> Int {
+    let mut count = 0
+    for tok in stream.tokens {
+        if tok.leadingDocLines > 0 {
+            count = count + 1
+        }
+    }
+    count
+}
+
+pub fn frontTokenTextAt(tokens: List<FrontToken>, target: Int) -> String {
+    frontTokenAtList(tokens, target).text
+}
+
+pub fn frontBuildParseTree(
+    tokens: List<FrontToken>,
+    count: Int,
+    summary: FrontParseSummary,
+) -> FrontParseTree {
+    let mut tree = emptyFrontParseTree(summary, count)
+    tree = frontTreePushNode(tree, frontParseNode(FrontNodeFile, 0, count, 0, 0))
+    tree.coveredTokens = count
+    let mut skip = 0
+    for idx in 0..count {
+        if skip > 0 {
+            skip = skip - 1
+        } else {
+            let kind = frontTokenAtList(tokens, idx).kind
+            if kind == FrontEOF {
+                let _ = kind
+            } else if kind == FrontHash && frontTokenAtList(tokens, idx + 1).kind == FrontLBracket {
+                let close = frontFindMatching(tokens, idx + 1, count, FrontLBracket, FrontRBracket)
+                tree = frontTreePushNode(
+                    tree,
+                    frontParseNode(FrontNodeAnnotation, idx, close + 1, 1, 0),
+                )
+                skip = close - idx
+            } else if kind == FrontUse {
+                let consumed = frontParseUseConsumed(tokens, idx, count)
+                let end = idx + consumed
+                if frontUseIsGo(tokens, idx, end) {
+                    tree = frontTreePushNode(
+                        tree,
+                        frontParseNode(FrontNodeGoUseDecl, idx, end, 1, 0),
+                    )
+                } else {
+                    tree = frontTreePushNode(
+                        tree,
+                        frontParseNode(FrontNodeUseDecl, idx, end, 1, 0),
+                    )
+                }
+                tree = frontCollectTreeSpan(tokens, idx, end, 2, tree)
+                skip = consumed - 1
+            } else if kind == FrontFn {
+                let end = frontDeclEnd(tokens, idx, count)
+                tree = frontTreePushNode(tree, frontParseNode(FrontNodeFnDecl, idx, end, 1, 0))
+                tree = frontCollectFnTree(tokens, idx, end, 2, tree)
+                skip = end - idx - 1
+            } else if kind == FrontStruct {
+                let end = frontDeclEnd(tokens, idx, count)
+                tree = frontTreePushNode(
+                    tree,
+                    frontParseNode(FrontNodeStructDecl, idx, end, 1, 0),
+                )
+                tree = frontCollectAggregateTree(tokens, idx, end, 2, tree)
+                skip = end - idx - 1
+            } else if kind == FrontEnum {
+                let end = frontDeclEnd(tokens, idx, count)
+                tree = frontTreePushNode(tree, frontParseNode(FrontNodeEnumDecl, idx, end, 1, 0))
+                tree = frontCollectAggregateTree(tokens, idx, end, 2, tree)
+                skip = end - idx - 1
+            } else if kind == FrontInterface {
+                let end = frontDeclEnd(tokens, idx, count)
+                tree = frontTreePushNode(
+                    tree,
+                    frontParseNode(FrontNodeInterfaceDecl, idx, end, 1, 0),
+                )
+                tree = frontCollectAggregateTree(tokens, idx, end, 2, tree)
+                skip = end - idx - 1
+            } else if kind == FrontType {
+                let end = frontDeclEnd(tokens, idx, count)
+                tree = frontTreePushNode(
+                    tree,
+                    frontParseNode(FrontNodeTypeAliasDecl, idx, end, 1, 0),
+                )
+                tree = frontCollectTypeTree(tokens, idx, end, 2, tree)
+                skip = end - idx - 1
+            } else if kind == FrontLet {
+                let end = frontDeclEnd(tokens, idx, count)
+                tree = frontTreePushNode(tree, frontParseNode(FrontNodeLetDecl, idx, end, 1, 0))
+                tree = frontCollectTreeSpan(tokens, idx, end, 2, tree)
+                skip = end - idx - 1
+            } else if kind == FrontPub || kind == FrontNewline || kind == FrontSemicolon {
+                let _ = kind
+            } else {
+                tree = frontTreePushNode(
+                    tree,
+                    frontParseNode(FrontNodeRecovery, idx, idx + 1, 1, 0),
+                )
+                tree = frontTreePushDiagnostic(
+                    tree,
+                    frontParseDiagnostic(
+                        FrontParseDiagUnexpectedToken,
+                        idx,
+                        idx + 1,
+                        FrontEOF,
+                        kind,
+                    ),
+                )
+            }
+        }
+    }
+    tree = frontAddDelimiterDiagnostics(tokens, count, tree)
+    tree
+}
+
+pub fn frontDeclEnd(tokens: List<FrontToken>, start: Int, count: Int) -> Int {
+    let kind = frontTokenAtList(tokens, start).kind
+    if kind == FrontFn {
+        start + frontParseFnShape(tokens, start, count, emptyFrontParseSummary()).consumed
+    } else if kind == FrontStruct {
+        start + frontParseStructShape(tokens, start, count, emptyFrontParseSummary()).consumed
+    } else if kind == FrontEnum {
+        start + frontParseEnumShape(tokens, start, count, emptyFrontParseSummary()).consumed
+    } else if kind == FrontInterface {
+        start + frontParseInterfaceShape(tokens, start, count, emptyFrontParseSummary()).consumed
+    } else if kind == FrontType {
+        start + frontParseTypeAliasShape(tokens, start, count, emptyFrontParseSummary()).consumed
+    } else if kind == FrontLet {
+        frontFindStatementEnd(tokens, start, count)
+    } else {
+        frontFindStatementEnd(tokens, start, count)
+    }
+}
+
+pub fn frontUseIsGo(tokens: List<FrontToken>, start: Int, end: Int) -> Bool {
+    for idx in start + 1..end {
+        let tok = frontTokenAtList(tokens, idx)
+        if tok.kind == FrontIdent && tok.text == "go" {
+            return true
+        }
+    }
+    false
+}
+
+pub fn frontCollectFnTree(
+    tokens: List<FrontToken>,
+    start: Int,
+    end: Int,
+    depth: Int,
+    tree: FrontParseTree,
+) -> FrontParseTree {
+    let mut out = tree
+    for idx in start..end {
+        let kind = frontTokenAtList(tokens, idx).kind
+        if kind == FrontLt {
+            let close = frontFindMatching(tokens, idx, end, FrontLt, FrontGt)
+            out = frontTreePushNode(
+                out,
+                frontParseNode(FrontNodeGenericParams, idx, close + 1, depth, 0),
+            )
+            out = frontCollectTypeTree(tokens, idx + 1, close, depth + 1, out)
+        } else if kind == FrontLParen {
+            let close = frontFindMatching(tokens, idx, end, FrontLParen, FrontRParen)
+            out = frontTreePushNode(
+                out,
+                frontParseNode(FrontNodeParamList, idx, close + 1, depth, 0),
+            )
+            out = frontCollectParamNodes(tokens, idx, close, depth + 1, out)
+        } else if kind == FrontArrow {
+            let typeEnd = frontFindTypeEnd(tokens, idx + 1, end)
+            out = frontCollectTypeTree(tokens, idx + 1, typeEnd, depth, out)
+        } else if kind == FrontLBrace {
+            let close = frontFindMatching(tokens, idx, end, FrontLBrace, FrontRBrace)
+            out = frontTreePushNode(out, frontParseNode(FrontNodeBlock, idx, close + 1, depth, 0))
+            out = frontCollectTreeSpan(tokens, idx + 1, close, depth + 1, out)
+        }
+    }
+    out
+}
+
+pub fn frontCollectAggregateTree(
+    tokens: List<FrontToken>,
+    start: Int,
+    end: Int,
+    depth: Int,
+    tree: FrontParseTree,
+) -> FrontParseTree {
+    let mut out = tree
+    for idx in start..end {
+        let kind = frontTokenAtList(tokens, idx).kind
+        if kind == FrontHash && frontTokenAtList(tokens, idx + 1).kind == FrontLBracket {
+            let close = frontFindMatching(tokens, idx + 1, end, FrontLBracket, FrontRBracket)
+            out = frontTreePushNode(
+                out,
+                frontParseNode(FrontNodeAnnotation, idx, close + 1, depth, 0),
+            )
+        } else if kind == FrontLBrace {
+            let close = frontFindMatching(tokens, idx, end, FrontLBrace, FrontRBrace)
+            out = frontTreePushNode(out, frontParseNode(FrontNodeBlock, idx, close + 1, depth, 0))
+        } else if kind == FrontFn {
+            let fnEnd = frontDeclEnd(tokens, idx, end)
+            out = frontTreePushNode(out, frontParseNode(FrontNodeFnDecl, idx, fnEnd, depth, 1))
+            out = frontCollectFnTree(tokens, idx, fnEnd, depth + 1, out)
+        } else if frontIsFieldStart(tokens, idx) {
+            let fieldEnd = frontFindMemberEnd(tokens, idx, end)
+            out = frontTreePushNode(out, frontParseNode(FrontNodeField, idx, fieldEnd, depth, 0))
+            out = frontCollectTypeTree(tokens, idx, fieldEnd, depth + 1, out)
+        } else if kind == FrontIdent && frontTokenAtList(tokens, idx + 1).kind != FrontColon {
+            let variantEnd = frontVariantConsumed(tokens, idx, end)
+            out = frontTreePushNode(
+                out,
+                frontParseNode(FrontNodeVariant, idx, idx + variantEnd, depth, 0),
+            )
+        }
+    }
+    out
+}
+
+pub fn frontCollectParamNodes(
+    tokens: List<FrontToken>,
+    open: Int,
+    close: Int,
+    depth: Int,
+    tree: FrontParseTree,
+) -> FrontParseTree {
+    let mut out = tree
+    let mut skip = 0
+    for idx in open + 1..close {
+        if skip > 0 {
+            skip = skip - 1
+        } else if (frontTokenAtList(tokens, idx).kind == FrontIdent || frontTokenAtList(tokens, idx).kind == FrontUnderscore) && frontTokenAtList(
+            tokens,
+            idx + 1,
+        ).kind == FrontColon {
+            let typeEnd = frontFindTypeEnd(tokens, idx + 2, close)
+            out = frontTreePushNode(out, frontParseNode(FrontNodeParam, idx, typeEnd, depth, 0))
+            out = frontCollectTypeTree(tokens, idx + 2, typeEnd, depth + 1, out)
+            skip = typeEnd - idx - 1
+        }
+    }
+    out
+}
+
+pub fn frontCollectTypeTree(
+    tokens: List<FrontToken>,
+    start: Int,
+    end: Int,
+    depth: Int,
+    tree: FrontParseTree,
+) -> FrontParseTree {
+    let mut out = tree
+    for idx in start..end {
+        let kind = frontTokenAtList(tokens, idx).kind
+        if kind == FrontIdent || kind == FrontFn {
+            out = frontTreePushNode(out, frontParseNode(FrontNodeType, idx, idx + 1, depth, 0))
+        } else if kind == FrontQuestion || kind == FrontQQ {
+            out = frontTreePushNode(out, frontParseNode(FrontNodeType, idx, idx + 1, depth, 1))
+        } else if kind == FrontLParen {
+            let close = frontFindMatching(tokens, idx, end, FrontLParen, FrontRParen)
+            if close == idx + 1 || frontContainsTopLevelKind(tokens, idx + 1, close, FrontComma) {
+                out = frontTreePushNode(
+                    out,
+                    frontParseNode(FrontNodeType, idx, close + 1, depth, 2),
+                )
+            }
+        }
+    }
+    out
+}
+
+pub fn frontCollectTreeSpan(
+    tokens: List<FrontToken>,
+    start: Int,
+    end: Int,
+    depth: Int,
+    tree: FrontParseTree,
+) -> FrontParseTree {
+    let mut out = tree
+    let mut skip = 0
+    for idx in start..end {
+        if skip > 0 {
+            skip = skip - 1
+        } else {
+            let kind = frontTokenAtList(tokens, idx).kind
+            if kind == FrontLet {
+                let stmtEnd = frontFindStatementEnd(tokens, idx, end)
+                out = frontTreePushNode(
+                    out,
+                    frontParseNode(FrontNodeLetStmt, idx, stmtEnd, depth, 0),
+                )
+                let patternEnd = frontFindLetPatternEnd(tokens, idx + 1, stmtEnd)
+                out = frontTreePushNode(
+                    out,
+                    frontParseNode(FrontNodePattern, idx + 1, patternEnd, depth + 1, 0),
+                )
+                for exprStart in patternEnd..stmtEnd {
+                    if frontTokenAtList(tokens, exprStart).kind == FrontAssign {
+                        out = frontCollectTreeSpan(tokens, exprStart + 1, stmtEnd, depth + 1, out)
+                    }
+                }
+                skip = stmtEnd - idx - 1
+            } else if kind == FrontReturn {
+                out = frontTreePushNode(
+                    out,
+                    frontParseNode(
+                        FrontNodeReturnStmt,
+                        idx,
+                        frontFindStatementEnd(tokens, idx, end),
+                        depth,
+                        0,
+                    ),
+                )
+            } else if kind == FrontBreak {
+                out = frontTreePushNode(
+                    out,
+                    frontParseNode(FrontNodeBreakStmt, idx, idx + 1, depth, 0),
+                )
+            } else if kind == FrontContinue {
+                out = frontTreePushNode(
+                    out,
+                    frontParseNode(FrontNodeContinueStmt, idx, idx + 1, depth, 0),
+                )
+            } else if kind == FrontFor {
+                let bodyClose = frontFindFollowingBlockClose(tokens, idx, end)
+                out = frontTreePushNode(
+                    out,
+                    frontParseNode(FrontNodeForStmt, idx, bodyClose + 1, depth, 0),
+                )
+            } else if kind == FrontDefer {
+                out = frontTreePushNode(
+                    out,
+                    frontParseNode(
+                        FrontNodeDeferStmt,
+                        idx,
+                        frontFindStatementEnd(tokens, idx, end),
+                        depth,
+                        0,
+                    ),
+                )
+            } else if kind == FrontIf {
+                let bodyClose = frontFindFollowingBlockClose(tokens, idx, end)
+                out = frontTreePushNode(
+                    out,
+                    frontParseNode(FrontNodeIfExpr, idx, bodyClose + 1, depth, 0),
+                )
+            } else if kind == FrontMatch {
+                let bodyClose = frontFindFollowingBlockClose(tokens, idx, end)
+                out = frontTreePushNode(
+                    out,
+                    frontParseNode(FrontNodeMatchExpr, idx, bodyClose + 1, depth, 0),
+                )
+                out = frontCollectMatchArmNodes(tokens, idx, bodyClose, depth + 1, out)
+            } else if kind == FrontLParen && frontIsCallOpen(tokens, idx, start) {
+                let close = frontFindMatching(tokens, idx, end, FrontLParen, FrontRParen)
+                out = frontTreePushNode(
+                    out,
+                    frontParseNode(FrontNodeCallExpr, idx - 1, close + 1, depth, 0),
+                )
+            } else if kind == FrontLBracket {
+                let close = frontFindMatching(tokens, idx, end, FrontLBracket, FrontRBracket)
+                if frontIsIndexOpen(tokens, idx, start) {
+                    out = frontTreePushNode(
+                        out,
+                        frontParseNode(FrontNodeIndexExpr, idx - 1, close + 1, depth, 0),
+                    )
+                } else {
+                    out = frontTreePushNode(
+                        out,
+                        frontParseNode(FrontNodeListExpr, idx, close + 1, depth, 0),
+                    )
+                }
+            } else if kind == FrontLParen {
+                let close = frontFindMatching(tokens, idx, end, FrontLParen, FrontRParen)
+                if close == idx + 1 || frontContainsTopLevelKind(tokens, idx + 1, close, FrontComma) {
+                    out = frontTreePushNode(
+                        out,
+                        frontParseNode(FrontNodeTupleExpr, idx, close + 1, depth, 0),
+                    )
+                }
+            } else if kind == FrontLBrace {
+                let close = frontFindMatching(tokens, idx, end, FrontLBrace, FrontRBrace)
+                if frontIsStructLiteralOpen(tokens, idx, start) {
+                    out = frontTreePushNode(
+                        out,
+                        frontParseNode(FrontNodeStructExpr, idx - 1, close + 1, depth, 0),
+                    )
+                } else if frontIsMapLiteralOpen(tokens, idx, end) {
+                    out = frontTreePushNode(
+                        out,
+                        frontParseNode(FrontNodeMapExpr, idx, close + 1, depth, 0),
+                    )
+                } else {
+                    out = frontTreePushNode(
+                        out,
+                        frontParseNode(FrontNodeBlock, idx, close + 1, depth, 0),
+                    )
+                }
+            } else if kind == FrontColonColon && frontTokenAtList(tokens, idx + 1).kind == FrontLt {
+                let close = frontFindMatching(tokens, idx + 1, end, FrontLt, FrontGt)
+                out = frontTreePushNode(
+                    out,
+                    frontParseNode(FrontNodeTurbofishExpr, idx, close + 1, depth, 0),
+                )
+                skip = close - idx
+            } else if kind == FrontBitOr && frontIsClosurePipe(tokens, idx, start, end) {
+                let close = frontFindNextTokenKind(tokens, idx + 1, end, FrontBitOr)
+                out = frontTreePushNode(
+                    out,
+                    frontParseNode(FrontNodeClosureExpr, idx, close + 1, depth, 0),
+                )
+            } else if kind == FrontOr && frontIsClosureZeroPipe(tokens, idx, start) {
+                out = frontTreePushNode(
+                    out,
+                    frontParseNode(FrontNodeClosureExpr, idx, idx + 1, depth, 1),
+                )
+            } else if kind == FrontDot || kind == FrontQDot {
+                out = frontTreePushNode(
+                    out,
+                    frontParseNode(FrontNodeSelectorExpr, idx, idx + 1, depth, 0),
+                )
+                if frontTokenAtList(tokens, idx + 1).kind == FrontNewline || frontTokenAtList(
+                    tokens,
+                    idx + 1,
+                ).kind == FrontEOF {
+                    out = frontTreePushDiagnostic(
+                        out,
+                        frontParseDiagnostic(
+                            FrontParseDiagTrailingSelector,
+                            idx,
+                            idx + 1,
+                            FrontIdent,
+                            frontTokenAtList(tokens, idx + 1).kind,
+                        ),
+                    )
+                }
+            } else if kind == FrontChanArrow {
+                out = frontTreePushNode(
+                    out,
+                    frontParseNode(FrontNodeChannelSendStmt, idx - 1, idx + 2, depth, 0),
+                )
+            } else if kind == FrontQuestion {
+                out = frontTreePushNode(
+                    out,
+                    frontParseNode(FrontNodeQuestionExpr, idx, idx + 1, depth, 0),
+                )
+            } else if (kind == FrontDotDot || kind == FrontDotDotEq) && !(frontIsSpreadToken(
+                tokens,
+                idx,
+                start,
+            )) {
+                out = frontTreePushNode(
+                    out,
+                    frontParseNode(FrontNodeRangeExpr, idx, idx + 1, depth, 0),
+                )
+                out = frontMaybeNonAssocDiagnostic(tokens, idx, end, out)
+            } else if frontIsAssignOp(kind) {
+                out = frontTreePushNode(
+                    out,
+                    frontParseNode(FrontNodeAssignStmt, idx - 1, idx + 2, depth, 0),
+                )
+            } else if frontIsBinaryOp(kind) {
+                out = frontTreePushNode(
+                    out,
+                    frontParseNode(FrontNodeBinaryExpr, idx, idx + 1, depth, 0),
+                )
+                out = frontMaybeNonAssocDiagnostic(tokens, idx, end, out)
+            } else if frontIsUnaryOp(kind) {
+                out = frontTreePushNode(
+                    out,
+                    frontParseNode(FrontNodeUnaryExpr, idx, idx + 1, depth, 0),
+                )
+            }
+        }
+    }
+    out
+}
+
+pub fn frontCollectMatchArmNodes(
+    tokens: List<FrontToken>,
+    matchIdx: Int,
+    close: Int,
+    depth: Int,
+    tree: FrontParseTree,
+) -> FrontParseTree {
+    let mut out = tree
+    let mut armStart = matchIdx + 1
+    let mut braceDepth = 0
+    for idx in matchIdx + 1..close {
+        let kind = frontTokenAtList(tokens, idx).kind
+        if kind == FrontLBrace {
+            braceDepth = braceDepth + 1
+        } else if kind == FrontRBrace {
+            if braceDepth > 0 {
+                braceDepth = braceDepth - 1
+            }
+        } else if braceDepth == 1 && kind == FrontArrow {
+            out = frontTreePushNode(
+                out,
+                frontParseNode(FrontNodeMatchArm, armStart, idx + 1, depth, 0),
+            )
+            out = frontTreePushNode(
+                out,
+                frontParseNode(FrontNodePattern, armStart, idx, depth + 1, 0),
+            )
+            armStart = idx + 1
+        } else if braceDepth == 1 && kind == FrontComma {
+            armStart = idx + 1
+        }
+    }
+    out
+}
+
+pub fn frontMaybeNonAssocDiagnostic(
+    tokens: List<FrontToken>,
+    idx: Int,
+    end: Int,
+    tree: FrontParseTree,
+) -> FrontParseTree {
+    let op = frontTokenAtList(tokens, idx).kind
+    if !(frontIsNonAssocOp(op)) {
+        return tree
+    }
+    let next = frontFindNextTopLevelOperator(tokens, idx + 1, end)
+    let nextKind = frontTokenAtList(tokens, next).kind
+    if next < end && frontIsNonAssocOp(nextKind) && frontSameNonAssocLevel(op, nextKind) {
+        frontTreePushDiagnostic(
+            tree,
+            frontParseDiagnostic(
+                FrontParseDiagNonAssociativeOperator,
+                next,
+                next + 1,
+                FrontLParen,
+                nextKind,
+            ),
+        )
+    } else {
+        tree
+    }
+}
+
+pub fn frontFindNextTopLevelOperator(tokens: List<FrontToken>, start: Int, end: Int) -> Int {
+    let mut parenDepth = 0
+    let mut bracketDepth = 0
+    let mut braceDepth = 0
+    for idx in start..end {
+        let kind = frontTokenAtList(tokens, idx).kind
+        if kind == FrontLParen {
+            parenDepth = parenDepth + 1
+        } else if kind == FrontRParen {
+            if parenDepth > 0 {
+                parenDepth = parenDepth - 1
+            }
+        } else if kind == FrontLBracket {
+            bracketDepth = bracketDepth + 1
+        } else if kind == FrontRBracket {
+            if bracketDepth > 0 {
+                bracketDepth = bracketDepth - 1
+            }
+        } else if kind == FrontLBrace {
+            braceDepth = braceDepth + 1
+        } else if kind == FrontRBrace {
+            if braceDepth > 0 {
+                braceDepth = braceDepth - 1
+            }
+        } else if parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && frontIsBinaryOp(kind) {
+            return idx
+        }
+    }
+    end
+}
+
+pub fn frontIsNonAssocOp(kind: FrontTokenKind) -> Bool {
+    kind == FrontEq || kind == FrontNeq || kind == FrontLt || kind == FrontGt || kind == FrontLeq || kind == FrontGeq || kind == FrontDotDot || kind == FrontDotDotEq
+}
+
+pub fn frontSameNonAssocLevel(left: FrontTokenKind, right: FrontTokenKind) -> Bool {
+    if (left == FrontDotDot || left == FrontDotDotEq) && (right == FrontDotDot || right == FrontDotDotEq) {
+        return true
+    }
+    frontIsComparisonOp(left) && frontIsComparisonOp(right)
+}
+
+pub fn frontIsComparisonOp(kind: FrontTokenKind) -> Bool {
+    kind == FrontEq || kind == FrontNeq || kind == FrontLt || kind == FrontGt || kind == FrontLeq || kind == FrontGeq
+}
+
+pub fn frontAddDelimiterDiagnostics(
+    tokens: List<FrontToken>,
+    count: Int,
+    tree: FrontParseTree,
+) -> FrontParseTree {
+    let mut out = tree
+    let mut parenDepth = 0
+    let mut braceDepth = 0
+    let mut bracketDepth = 0
+    for idx in 0..count {
+        let kind = frontTokenAtList(tokens, idx).kind
+        if kind == FrontLParen {
+            parenDepth = parenDepth + 1
+        } else if kind == FrontRParen {
+            if parenDepth == 0 {
+                out = frontTreePushDiagnostic(
+                    out,
+                    frontParseDiagnostic(
+                        FrontParseDiagUnmatchedDelimiter,
+                        idx,
+                        idx + 1,
+                        FrontLParen,
+                        kind,
+                    ),
+                )
+            } else {
+                parenDepth = parenDepth - 1
+            }
+        } else if kind == FrontLBrace {
+            braceDepth = braceDepth + 1
+        } else if kind == FrontRBrace {
+            if braceDepth == 0 {
+                out = frontTreePushDiagnostic(
+                    out,
+                    frontParseDiagnostic(
+                        FrontParseDiagUnmatchedDelimiter,
+                        idx,
+                        idx + 1,
+                        FrontLBrace,
+                        kind,
+                    ),
+                )
+            } else {
+                braceDepth = braceDepth - 1
+            }
+        } else if kind == FrontLBracket {
+            bracketDepth = bracketDepth + 1
+        } else if kind == FrontRBracket {
+            if bracketDepth == 0 {
+                out = frontTreePushDiagnostic(
+                    out,
+                    frontParseDiagnostic(
+                        FrontParseDiagUnmatchedDelimiter,
+                        idx,
+                        idx + 1,
+                        FrontLBracket,
+                        kind,
+                    ),
+                )
+            } else {
+                bracketDepth = bracketDepth - 1
+            }
+        }
+    }
+    if parenDepth > 0 {
+        out = frontTreePushDiagnostic(
+            out,
+            frontParseDiagnostic(
+                FrontParseDiagMissingDelimiter,
+                count - 1,
+                count,
+                FrontRParen,
+                FrontEOF,
+            ),
+        )
+    }
+    if braceDepth > 0 {
+        out = frontTreePushDiagnostic(
+            out,
+            frontParseDiagnostic(
+                FrontParseDiagMissingDelimiter,
+                count - 1,
+                count,
+                FrontRBrace,
+                FrontEOF,
+            ),
+        )
+    }
+    if bracketDepth > 0 {
+        out = frontTreePushDiagnostic(
+            out,
+            frontParseDiagnostic(
+                FrontParseDiagMissingDelimiter,
+                count - 1,
+                count,
+                FrontRBracket,
+                FrontEOF,
+            ),
+        )
+    }
+    out
+}
+
+pub fn frontParseTreeNodeCount(tree: FrontParseTree) -> Int {
+    let mut count = 0
+    for node in tree.nodes {
+        let _ = node
+        count = count + 1
+    }
+    count
+}
+
+pub fn frontParseTreeDiagnosticCount(tree: FrontParseTree) -> Int {
+    let mut count = 0
+    for diag in tree.diagnostics {
+        let _ = diag
+        count = count + 1
+    }
+    count
+}
+
+pub fn frontParseTreeNodeKindCount(tree: FrontParseTree, kind: FrontNodeKind) -> Int {
+    let mut count = 0
+    for node in tree.nodes {
+        if node.kind == kind {
+            count = count + 1
+        }
+    }
+    count
+}
+
+pub fn frontParseTreeDiagnosticKindCount(
+    tree: FrontParseTree,
+    kind: FrontParseDiagnosticKind,
+) -> Int {
+    let mut count = 0
+    for diag in tree.diagnostics {
+        if diag.kind == kind {
+            count = count + 1
+        }
+    }
+    count
+}
+
+pub fn frontParseTreeNodeNameCount(tree: FrontParseTree, name: String) -> Int {
+    frontParseTreeNodeKindCount(tree, frontNodeKindByName(name))
+}
+
+pub fn frontParseTreeDiagnosticNameCount(tree: FrontParseTree, name: String) -> Int {
+    frontParseTreeDiagnosticKindCount(tree, frontParseDiagnosticKindByName(name))
+}
+
+pub fn frontNodeKindByName(name: String) -> FrontNodeKind {
+    if name == "file" {
+        FrontNodeFile
+    } else if name == "annotation" {
+        FrontNodeAnnotation
+    } else if name == "use" {
+        FrontNodeUseDecl
+    } else if name == "goUse" {
+        FrontNodeGoUseDecl
+    } else if name == "fn" {
+        FrontNodeFnDecl
+    } else if name == "struct" {
+        FrontNodeStructDecl
+    } else if name == "enum" {
+        FrontNodeEnumDecl
+    } else if name == "interface" {
+        FrontNodeInterfaceDecl
+    } else if name == "typeAlias" {
+        FrontNodeTypeAliasDecl
+    } else if name == "letDecl" {
+        FrontNodeLetDecl
+    } else if name == "genericParams" {
+        FrontNodeGenericParams
+    } else if name == "paramList" {
+        FrontNodeParamList
+    } else if name == "param" {
+        FrontNodeParam
+    } else if name == "type" {
+        FrontNodeType
+    } else if name == "block" {
+        FrontNodeBlock
+    } else if name == "letStmt" {
+        FrontNodeLetStmt
+    } else if name == "return" {
+        FrontNodeReturnStmt
+    } else if name == "break" {
+        FrontNodeBreakStmt
+    } else if name == "continue" {
+        FrontNodeContinueStmt
+    } else if name == "for" {
+        FrontNodeForStmt
+    } else if name == "defer" {
+        FrontNodeDeferStmt
+    } else if name == "assign" {
+        FrontNodeAssignStmt
+    } else if name == "channelSend" {
+        FrontNodeChannelSendStmt
+    } else if name == "if" {
+        FrontNodeIfExpr
+    } else if name == "match" {
+        FrontNodeMatchExpr
+    } else if name == "matchArm" {
+        FrontNodeMatchArm
+    } else if name == "call" {
+        FrontNodeCallExpr
+    } else if name == "index" {
+        FrontNodeIndexExpr
+    } else if name == "selector" {
+        FrontNodeSelectorExpr
+    } else if name == "turbofish" {
+        FrontNodeTurbofishExpr
+    } else if name == "closure" {
+        FrontNodeClosureExpr
+    } else if name == "list" {
+        FrontNodeListExpr
+    } else if name == "map" {
+        FrontNodeMapExpr
+    } else if name == "tuple" {
+        FrontNodeTupleExpr
+    } else if name == "structExpr" {
+        FrontNodeStructExpr
+    } else if name == "range" {
+        FrontNodeRangeExpr
+    } else if name == "binary" {
+        FrontNodeBinaryExpr
+    } else if name == "unary" {
+        FrontNodeUnaryExpr
+    } else if name == "question" {
+        FrontNodeQuestionExpr
+    } else if name == "pattern" {
+        FrontNodePattern
+    } else if name == "field" {
+        FrontNodeField
+    } else if name == "variant" {
+        FrontNodeVariant
+    } else {
+        FrontNodeRecovery
+    }
+}
+
+pub fn frontParseDiagnosticKindByName(name: String) -> FrontParseDiagnosticKind {
+    if name == "unexpected" {
+        FrontParseDiagUnexpectedToken
+    } else if name == "missingName" {
+        FrontParseDiagMissingName
+    } else if name == "missingDelimiter" {
+        FrontParseDiagMissingDelimiter
+    } else if name == "unmatchedDelimiter" {
+        FrontParseDiagUnmatchedDelimiter
+    } else if name == "nonAssoc" {
+        FrontParseDiagNonAssociativeOperator
+    } else if name == "trailingSelector" {
+        FrontParseDiagTrailingSelector
+    } else {
+        FrontParseDiagLexerError
+    }
+}
+
+pub fn frontParseTreeInvalidSpanCount(tree: FrontParseTree) -> Int {
+    let mut invalid = 0
+    for node in tree.nodes {
+        if node.start < 0 || node.end < node.start || node.end > tree.tokens {
+            invalid = invalid + 1
+        }
+    }
+    for diag in tree.diagnostics {
+        if diag.start < 0 || diag.end < diag.start || diag.end > tree.tokens {
+            invalid = invalid + 1
+        }
+    }
+    invalid
+}
+
+pub fn frontParseUseConsumed(tokens: List<FrontToken>, start: Int, count: Int) -> Int {
+    let mut consumed = 1
+    for idx in start + 1..count {
+        let kind = frontTokenAtList(tokens, idx).kind
+        if kind == FrontLBrace {
+            let close = frontFindMatching(tokens, idx, count, FrontLBrace, FrontRBrace)
+            return close - start + 1
+        }
+        if kind == FrontNewline || kind == FrontEOF {
+            return consumed
+        }
+        consumed = consumed + 1
+    }
+    consumed
+}
+
+pub fn frontParseUseShape(
+    tokens: List<FrontToken>,
+    start: Int,
+    count: Int,
+    summary: FrontParseSummary,
+) -> FrontParseResult {
+    let mut out = summary
+    let consumed = frontParseUseConsumed(tokens, start, count)
+    let end = start + consumed
+    let mut isGo = false
+    for idx in start + 1..end {
+        let tok = frontTokenAtList(tokens, idx)
+        if tok.kind == FrontIdent && tok.text == "go" {
+            isGo = true
+            out.goUses = out.goUses + 1
+        } else if tok.kind == FrontIdent && tok.text == "as" {
+            out.useAliases = out.useAliases + 1
+        } else if isGo && (tok.kind == FrontFn || tok.kind == FrontStruct) {
+            out.useGoItems = out.useGoItems + 1
+        }
+    }
+    frontParseResult(out, consumed)
+}
+
+pub fn frontParseFnShape(
+    tokens: List<FrontToken>,
+    start: Int,
+    count: Int,
+    summary: FrontParseSummary,
+) -> FrontParseResult {
+    let mut out = summary
+    let mut idx = start + 1
+    if frontTokenAtList(tokens, idx).kind == FrontIdent {
+        idx = idx + 1
+    } else {
+        out.errors = out.errors + 1
+    }
+
+    if frontTokenAtList(tokens, idx).kind == FrontLt {
+        let close = frontFindMatching(tokens, idx, count, FrontLt, FrontGt)
+        out.genericParams = out.genericParams + frontCountGenericParams(tokens, idx + 1, close)
+        out = frontScanTypeShape(tokens, idx + 1, close, out)
+        idx = close + 1
+    }
+
+    if frontTokenAtList(tokens, idx).kind == FrontLParen {
+        let close = frontFindMatching(tokens, idx, count, FrontLParen, FrontRParen)
+        out.params = out.params + frontCountParams(tokens, idx, close)
+        out = frontScanParamListShape(tokens, idx, close, out)
+        idx = close + 1
+    } else {
+        out.errors = out.errors + 1
+    }
+
+    if frontTokenAtList(tokens, idx).kind == FrontArrow {
+        let typeEnd = frontFindTypeEnd(tokens, idx + 1, count)
+        out = frontScanTypeShape(tokens, idx + 1, typeEnd, out)
+        idx = typeEnd
+    }
+
+    if frontTokenAtList(tokens, idx).kind == FrontLBrace {
+        let parsed = frontParseBlockShape(tokens, idx, count, out)
+        out = parsed.summary
+        idx = idx + parsed.consumed
+    } else if frontTokenAtList(tokens, idx).kind != FrontNewline && frontTokenAtList(tokens, idx).kind != FrontEOF && frontTokenAtList(
+        tokens,
+        idx,
+    ).kind != FrontComma && frontTokenAtList(tokens, idx).kind != FrontRBrace {
+        out.errors = out.errors + 1
+    }
+    frontParseResult(out, idx - start)
+}
+
+pub fn frontParseStructShape(
+    tokens: List<FrontToken>,
+    start: Int,
+    count: Int,
+    summary: FrontParseSummary,
+) -> FrontParseResult {
+    let mut out = summary
+    let mut idx = start + 1
+    if frontTokenAtList(tokens, idx).kind == FrontIdent {
+        idx = idx + 1
+    } else {
+        out.errors = out.errors + 1
+    }
+    if frontTokenAtList(tokens, idx).kind == FrontLt {
+        let close = frontFindMatching(tokens, idx, count, FrontLt, FrontGt)
+        out.genericParams = out.genericParams + frontCountGenericParams(tokens, idx + 1, close)
+        out = frontScanTypeShape(tokens, idx + 1, close, out)
+        idx = close + 1
+    }
+    if frontTokenAtList(tokens, idx).kind != FrontLBrace {
+        out.errors = out.errors + 1
+        return frontParseResult(out, frontLineConsumed(tokens, start, count))
+    }
+    let close = frontFindMatching(tokens, idx, count, FrontLBrace, FrontRBrace)
+    let mut skip = 0
+    for at in idx + 1..close {
+        if skip > 0 {
+            skip = skip - 1
+        } else {
+            let kind = frontTokenAtList(tokens, at).kind
+            if kind == FrontHash && frontTokenAtList(tokens, at + 1).kind == FrontLBracket {
+                out.annotations = out.annotations + 1
+                let annClose = frontFindMatching(
+                    tokens,
+                    at + 1,
+                    close,
+                    FrontLBracket,
+                    FrontRBracket,
+                )
+                skip = annClose - at
+            } else if kind == FrontFn || (kind == FrontPub && frontTokenAtList(tokens, at + 1).kind == FrontFn) {
+                out.methods = out.methods + 1
+                let fnStart = frontFnStartAt(tokens, at)
+                let parsed = frontParseFnShape(tokens, fnStart, close, out)
+                out = parsed.summary
+                skip = fnStart - at + parsed.consumed - 1
+            } else if frontIsFieldStart(tokens, at) {
+                out.fields = out.fields + 1
+                let nameIdx = frontFieldNameIndex(tokens, at)
+                let typeEnd = frontFindTypeEnd(tokens, nameIdx + 2, close)
+                out = frontScanTypeShape(tokens, nameIdx + 2, typeEnd, out)
+                let stmtEnd = frontFindMemberEnd(tokens, at, close)
+                let mut consumedEnd = typeEnd
+                if frontContainsTopLevelKind(tokens, typeEnd, stmtEnd, FrontAssign) {
+                    out.defaultValues = out.defaultValues + 1
+                    out = frontScanExprShape(tokens, typeEnd + 1, stmtEnd, out)
+                    consumedEnd = stmtEnd
+                }
+                skip = consumedEnd - at - 1
+            }
+        }
+    }
+    frontParseResult(out, close - start + 1)
+}
+
+pub fn frontParseEnumShape(
+    tokens: List<FrontToken>,
+    start: Int,
+    count: Int,
+    summary: FrontParseSummary,
+) -> FrontParseResult {
+    let mut out = summary
+    let mut idx = start + 1
+    if frontTokenAtList(tokens, idx).kind == FrontIdent {
+        idx = idx + 1
+    } else {
+        out.errors = out.errors + 1
+    }
+    if frontTokenAtList(tokens, idx).kind == FrontLt {
+        let close = frontFindMatching(tokens, idx, count, FrontLt, FrontGt)
+        out.genericParams = out.genericParams + frontCountGenericParams(tokens, idx + 1, close)
+        out = frontScanTypeShape(tokens, idx + 1, close, out)
+        idx = close + 1
+    }
+    if frontTokenAtList(tokens, idx).kind != FrontLBrace {
+        out.errors = out.errors + 1
+        return frontParseResult(out, frontLineConsumed(tokens, start, count))
+    }
+    let close = frontFindMatching(tokens, idx, count, FrontLBrace, FrontRBrace)
+    let mut skip = 0
+    for at in idx + 1..close {
+        if skip > 0 {
+            skip = skip - 1
+        } else {
+            let kind = frontTokenAtList(tokens, at).kind
+            if kind == FrontHash && frontTokenAtList(tokens, at + 1).kind == FrontLBracket {
+                out.annotations = out.annotations + 1
+                let annClose = frontFindMatching(
+                    tokens,
+                    at + 1,
+                    close,
+                    FrontLBracket,
+                    FrontRBracket,
+                )
+                skip = annClose - at
+            } else if kind == FrontFn || (kind == FrontPub && frontTokenAtList(tokens, at + 1).kind == FrontFn) {
+                out.methods = out.methods + 1
+                let fnStart = frontFnStartAt(tokens, at)
+                let parsed = frontParseFnShape(tokens, fnStart, close, out)
+                out = parsed.summary
+                skip = fnStart - at + parsed.consumed - 1
+            } else if kind == FrontIdent {
+                out.variants = out.variants + 1
+                if frontTokenAtList(tokens, at + 1).kind == FrontLParen {
+                    let parenClose = frontFindMatching(
+                        tokens,
+                        at + 1,
+                        close,
+                        FrontLParen,
+                        FrontRParen,
+                    )
+                    let fields = frontCountTopLevelCommaItems(tokens, at + 2, parenClose)
+                    out.variantFields = out.variantFields + fields
+                    out = frontScanTypeShape(tokens, at + 2, parenClose, out)
+                    skip = parenClose - at
+                } else {
+                    skip = frontVariantConsumed(tokens, at, close) - 1
+                }
+            }
+        }
+    }
+    frontParseResult(out, close - start + 1)
+}
+
+pub fn frontParseInterfaceShape(
+    tokens: List<FrontToken>,
+    start: Int,
+    count: Int,
+    summary: FrontParseSummary,
+) -> FrontParseResult {
+    let mut out = summary
+    let mut idx = start + 1
+    if frontTokenAtList(tokens, idx).kind == FrontIdent {
+        idx = idx + 1
+    } else {
+        out.errors = out.errors + 1
+    }
+    if frontTokenAtList(tokens, idx).kind == FrontLt {
+        let close = frontFindMatching(tokens, idx, count, FrontLt, FrontGt)
+        out.genericParams = out.genericParams + frontCountGenericParams(tokens, idx + 1, close)
+        out = frontScanTypeShape(tokens, idx + 1, close, out)
+        idx = close + 1
+    }
+    if frontTokenAtList(tokens, idx).kind == FrontColon {
+        let extendsEnd = frontFindTypeEnd(tokens, idx + 1, count)
+        out = frontScanTypeShape(tokens, idx + 1, extendsEnd, out)
+        idx = extendsEnd
+    }
+    if frontTokenAtList(tokens, idx).kind != FrontLBrace {
+        out.errors = out.errors + 1
+        return frontParseResult(out, frontLineConsumed(tokens, start, count))
+    }
+    let close = frontFindMatching(tokens, idx, count, FrontLBrace, FrontRBrace)
+    let mut skip = 0
+    for at in idx + 1..close {
+        if skip > 0 {
+            skip = skip - 1
+        } else if frontTokenAtList(tokens, at).kind == FrontHash && frontTokenAtList(tokens, at + 1).kind == FrontLBracket {
+            out.annotations = out.annotations + 1
+            let annClose = frontFindMatching(tokens, at + 1, close, FrontLBracket, FrontRBracket)
+            skip = annClose - at
+        } else if frontTokenAtList(tokens, at).kind == FrontFn || (frontTokenAtList(tokens, at).kind == FrontPub && frontTokenAtList(
+            tokens,
+            at + 1,
+        ).kind == FrontFn) {
+            out.methods = out.methods + 1
+            let fnStart = frontFnStartAt(tokens, at)
+            let parsed = frontParseFnShape(tokens, fnStart, close, out)
+            out = parsed.summary
+            skip = fnStart - at + parsed.consumed - 1
+        } else if frontTokenAtList(tokens, at).kind == FrontIdent {
+            let typeEnd = frontFindTypeEnd(tokens, at, close)
+            out = frontScanTypeShape(tokens, at, typeEnd, out)
+            skip = typeEnd - at - 1
+        }
+    }
+    frontParseResult(out, close - start + 1)
+}
+
+pub fn frontParseTypeAliasShape(
+    tokens: List<FrontToken>,
+    start: Int,
+    count: Int,
+    summary: FrontParseSummary,
+) -> FrontParseResult {
+    let mut out = summary
+    let mut idx = start + 1
+    if frontTokenAtList(tokens, idx).kind == FrontIdent {
+        idx = idx + 1
+    } else {
+        out.errors = out.errors + 1
+    }
+    if frontTokenAtList(tokens, idx).kind == FrontLt {
+        let close = frontFindMatching(tokens, idx, count, FrontLt, FrontGt)
+        out.genericParams = out.genericParams + frontCountGenericParams(tokens, idx + 1, close)
+        out = frontScanTypeShape(tokens, idx + 1, close, out)
+        idx = close + 1
+    }
+    if frontTokenAtList(tokens, idx).kind == FrontAssign {
+        let typeEnd = frontFindTypeEnd(tokens, idx + 1, count)
+        out = frontScanTypeShape(tokens, idx + 1, typeEnd, out)
+        idx = typeEnd
+    } else {
+        out.errors = out.errors + 1
+    }
+    frontParseResult(out, idx - start)
+}
+
+pub fn frontParseLetShape(
+    tokens: List<FrontToken>,
+    start: Int,
+    count: Int,
+    summary: FrontParseSummary,
+) -> FrontParseResult {
+    let mut out = summary
+    let end = frontFindStatementEnd(tokens, start, count)
+    out.statements = out.statements + 1
+    let mut patternStart = start + 1
+    if frontTokenAtList(tokens, patternStart).kind == FrontMut {
+        out.mutableBindings = out.mutableBindings + 1
+        patternStart = patternStart + 1
+    }
+    let patternEnd = frontFindLetPatternEnd(tokens, patternStart, end)
+    out = frontScanPatternShape(tokens, patternStart, patternEnd, out)
+    for idx in start..end {
+        let kind = frontTokenAtList(tokens, idx).kind
+        if kind == FrontColon {
+            let typeEnd = frontFindTypeEnd(tokens, idx + 1, end)
+            out = frontScanTypeShape(tokens, idx + 1, typeEnd, out)
+        } else if kind == FrontAssign {
+            out.assignments = out.assignments + 1
+            out = frontScanExprShape(tokens, idx + 1, end, out)
+        }
+    }
+    frontParseResult(out, end - start)
+}
+
+pub fn frontParseBlockShape(
+    tokens: List<FrontToken>,
+    open: Int,
+    count: Int,
+    summary: FrontParseSummary,
+) -> FrontParseResult {
+    let mut out = summary
+    out.blocks = out.blocks + 1
+    let close = frontFindMatching(tokens, open, count, FrontLBrace, FrontRBrace)
+    out = frontScanExprShape(tokens, open + 1, close, out)
+    for idx in open + 1..close {
+        let kind = frontTokenAtList(tokens, idx).kind
+        if kind == FrontLet {
+            out.statements = out.statements + 1
+            out.lets = out.lets + 1
+        } else if kind == FrontReturn {
+            out.statements = out.statements + 1
+            out.returns = out.returns + 1
+        } else if kind == FrontBreak {
+            out.statements = out.statements + 1
+            out.breaks = out.breaks + 1
+        } else if kind == FrontContinue {
+            out.statements = out.statements + 1
+            out.continues = out.continues + 1
+        } else if kind == FrontFor {
+            out.statements = out.statements + 1
+            out.fors = out.fors + 1
+        } else if kind == FrontDefer {
+            out.statements = out.statements + 1
+            out.defers = out.defers + 1
+        }
+    }
+    frontParseResult(out, close - open + 1)
+}
+
+pub fn frontScanExprShape(
+    tokens: List<FrontToken>,
+    start: Int,
+    end: Int,
+    summary: FrontParseSummary,
+) -> FrontParseSummary {
+    let mut out = summary
+    for idx in start..end {
+        let kind = frontTokenAtList(tokens, idx).kind
+        let next = frontTokenAtList(tokens, idx + 1).kind
+        if isFrontLiteralKind(kind) {
+            out.literals = out.literals + 1
+        } else if kind == FrontIf {
+            out.ifs = out.ifs + 1
+            if next == FrontLet {
+                out.ifLets = out.ifLets + 1
+            }
+        } else if kind == FrontElse {
+            out.elseBranches = out.elseBranches + 1
+        } else if kind == FrontMatch {
+            out.matches = out.matches + 1
+            let close = frontFindFollowingBlockClose(tokens, idx, end)
+            if close > idx {
+                out.matchArms = out.matchArms + frontCountMatchArms(tokens, idx, close)
+                out.matchGuards = out.matchGuards + frontCountMatchGuards(tokens, idx, close)
+            }
+        } else if kind == FrontLParen && frontIsCallOpen(tokens, idx, start) {
+            out.calls = out.calls + 1
+            let close = frontFindMatching(tokens, idx, end, FrontLParen, FrontRParen)
+            out.keywordArgs = out.keywordArgs + frontCountKeywordArgs(tokens, idx + 1, close)
+        } else if kind == FrontLBracket {
+            if frontIsIndexOpen(tokens, idx, start) {
+                out.indexes = out.indexes + 1
+            } else {
+                out.listLits = out.listLits + 1
+            }
+        } else if kind == FrontLParen {
+            let close = frontFindMatching(tokens, idx, end, FrontLParen, FrontRParen)
+            if close == idx + 1 || frontContainsTopLevelKind(tokens, idx + 1, close, FrontComma) {
+                out.tupleLits = out.tupleLits + 1
+            }
+        } else if kind == FrontLBrace {
+            if frontIsStructLiteralOpen(tokens, idx, start) {
+                let close = frontFindMatching(tokens, idx, end, FrontLBrace, FrontRBrace)
+                out.structLits = out.structLits + 1
+                out.structLitFields = out.structLitFields + frontCountStructLiteralFields(
+                    tokens,
+                    idx + 1,
+                    close,
+                )
+                out.spreads = out.spreads + frontCountSpreads(tokens, idx + 1, close)
+            } else if frontIsMapLiteralOpen(tokens, idx, end) {
+                out.mapLits = out.mapLits + 1
+            }
+        } else if kind == FrontColonColon && next == FrontLt {
+            out.turbofish = out.turbofish + 1
+            let close = frontFindMatching(tokens, idx + 1, end, FrontLt, FrontGt)
+            out = frontScanTypeShape(tokens, idx + 2, close, out)
+        } else if kind == FrontBitOr && frontIsClosurePipe(tokens, idx, start, end) {
+            let close = frontFindNextTokenKind(tokens, idx + 1, end, FrontBitOr)
+            out.closures = out.closures + 1
+            out.closureParams = out.closureParams + frontCountTopLevelCommaItems(
+                tokens,
+                idx + 1,
+                close,
+            )
+        } else if kind == FrontOr && frontIsClosureZeroPipe(tokens, idx, start) {
+            out.closures = out.closures + 1
+        } else if kind == FrontDot || kind == FrontQDot {
+            out.selectors = out.selectors + 1
+        } else if kind == FrontChanArrow {
+            out.channelSends = out.channelSends + 1
+        } else if kind == FrontQuestion {
+            out.questionOps = out.questionOps + 1
+        } else if (kind == FrontDotDot || kind == FrontDotDotEq) && !(frontIsSpreadToken(
+            tokens,
+            idx,
+            start,
+        )) {
+            out.ranges = out.ranges + 1
+            out.binaryOps = out.binaryOps + 1
+        } else if frontIsAssignOp(kind) {
+            out.assignments = out.assignments + 1
+        } else if frontIsBinaryOp(kind) {
+            out.binaryOps = out.binaryOps + 1
+        } else if frontIsUnaryOp(kind) {
+            out.unaryOps = out.unaryOps + 1
+        }
+    }
+    out
+}
+
+pub fn frontIsCallOpen(tokens: List<FrontToken>, open: Int, start: Int) -> Bool {
+    if open <= start {
+        return false
+    }
+    let prev = frontTokenAtList(tokens, open - 1).kind
+    prev == FrontIdent || prev == FrontRParen || prev == FrontRBracket || prev == FrontQuestion || prev == FrontGt
+}
+
+pub fn frontIsIndexOpen(tokens: List<FrontToken>, open: Int, start: Int) -> Bool {
+    if open <= start {
+        return false
+    }
+    let prev = frontTokenAtList(tokens, open - 1).kind
+    prev == FrontIdent || prev == FrontRParen || prev == FrontRBracket || prev == FrontQuestion
+}
+
+pub fn frontIsStructLiteralOpen(tokens: List<FrontToken>, open: Int, start: Int) -> Bool {
+    if open <= start {
+        return false
+    }
+    let prev = frontTokenAtList(tokens, open - 1).kind
+    if prev != FrontIdent && prev != FrontRParen && prev != FrontRBracket {
+        return false
+    }
+    !(frontLineHasControlBefore(tokens, open, start))
+}
+
+pub fn frontIsMapLiteralOpen(tokens: List<FrontToken>, open: Int, end: Int) -> Bool {
+    if frontTokenAtList(tokens, open + 1).kind == FrontColon {
+        return true
+    }
+    let close = frontFindMatching(tokens, open, end, FrontLBrace, FrontRBrace)
+    frontContainsTopLevelKind(tokens, open + 1, close, FrontColon)
+}
+
+pub fn frontLineHasControlBefore(tokens: List<FrontToken>, at: Int, start: Int) -> Bool {
+    let mut sawControl = false
+    for idx in start..at {
+        let kind = frontTokenAtList(tokens, idx).kind
+        if kind == FrontNewline || kind == FrontLBrace || kind == FrontRBrace || kind == FrontSemicolon {
+            sawControl = false
+        }
+        if kind == FrontIf || kind == FrontFor || kind == FrontMatch || kind == FrontElse || kind == FrontFn {
+            sawControl = true
+        }
+    }
+    sawControl
+}
+
+pub fn frontCountStructLiteralFields(tokens: List<FrontToken>, start: Int, end: Int) -> Int {
+    let mut fields = 0
+    let mut depth = 0
+    let mut itemHasField = false
+    let mut itemIsSpread = false
+    for idx in start..end {
+        let kind = frontTokenAtList(tokens, idx).kind
+        if kind == FrontLParen || kind == FrontLBracket || kind == FrontLBrace || kind == FrontLt {
+            depth = depth + 1
+        } else if kind == FrontRParen || kind == FrontRBracket || kind == FrontRBrace || kind == FrontGt {
+            if depth > 0 {
+                depth = depth - 1
+            }
+        } else if depth == 0 && kind == FrontDotDot {
+            itemHasField = false
+            itemIsSpread = true
+        } else if depth == 0 && kind == FrontIdent && !(itemIsSpread) {
+            itemHasField = true
+        } else if depth == 0 && kind == FrontComma {
+            if itemHasField {
+                fields = fields + 1
+            }
+            itemHasField = false
+            itemIsSpread = false
+        }
+    }
+    if itemHasField {
+        fields = fields + 1
+    }
+    fields
+}
+
+pub fn frontCountSpreads(tokens: List<FrontToken>, start: Int, end: Int) -> Int {
+    let mut spreads = 0
+    let mut depth = 0
+    for idx in start..end {
+        let kind = frontTokenAtList(tokens, idx).kind
+        if kind == FrontLParen || kind == FrontLBracket || kind == FrontLBrace {
+            depth = depth + 1
+        } else if kind == FrontRParen || kind == FrontRBracket || kind == FrontRBrace {
+            if depth > 0 {
+                depth = depth - 1
+            }
+        } else if depth == 0 && kind == FrontDotDot {
+            spreads = spreads + 1
+        }
+    }
+    spreads
+}
+
+pub fn frontIsSpreadToken(tokens: List<FrontToken>, at: Int, start: Int) -> Bool {
+    if frontTokenAtList(tokens, at).kind != FrontDotDot {
+        return false
+    }
+    if at <= start {
+        return false
+    }
+    let prev = frontTokenAtList(tokens, at - 1).kind
+    prev == FrontLBrace || prev == FrontComma
+}
+
+pub fn frontIsClosurePipe(tokens: List<FrontToken>, pipe: Int, start: Int, end: Int) -> Bool {
+    frontIsExprPrefixContext(tokens, pipe, start) && frontFindNextTokenKind(
+        tokens,
+        pipe + 1,
+        end,
+        FrontBitOr,
+    ) < end
+}
+
+pub fn frontIsClosureZeroPipe(tokens: List<FrontToken>, pipe: Int, start: Int) -> Bool {
+    frontIsExprPrefixContext(tokens, pipe, start)
+}
+
+pub fn frontIsExprPrefixContext(tokens: List<FrontToken>, at: Int, start: Int) -> Bool {
+    if at <= start {
+        return true
+    }
+    let prev = frontTokenAtList(tokens, at - 1).kind
+    prev == FrontLParen || prev == FrontLBracket || prev == FrontLBrace || prev == FrontComma || prev == FrontAssign || prev == FrontReturn || prev == FrontArrow || prev == FrontNewline || prev == FrontColon
+}
+
+pub fn frontFindNextTokenKind(
+    tokens: List<FrontToken>,
+    start: Int,
+    end: Int,
+    target: FrontTokenKind,
+) -> Int {
+    for idx in start..end {
+        if frontTokenAtList(tokens, idx).kind == target {
+            return idx
+        }
+    }
+    end
+}
+
+pub fn frontFindFollowingBlockClose(tokens: List<FrontToken>, start: Int, end: Int) -> Int {
+    for idx in start..end {
+        if frontTokenAtList(tokens, idx).kind == FrontLBrace {
+            return frontFindMatching(tokens, idx, end, FrontLBrace, FrontRBrace)
+        }
+    }
+    start
+}
+
+pub fn frontCountKeywordArgs(tokens: List<FrontToken>, start: Int, end: Int) -> Int {
+    let mut args = 0
+    let mut depth = 0
+    for idx in start..end {
+        let kind = frontTokenAtList(tokens, idx).kind
+        if kind == FrontLParen || kind == FrontLBracket || kind == FrontLBrace {
+            depth = depth + 1
+        } else if kind == FrontRParen || kind == FrontRBracket || kind == FrontRBrace {
+            if depth > 0 {
+                depth = depth - 1
+            }
+        } else if depth == 0 && kind == FrontIdent && frontTokenAtList(tokens, idx + 1).kind == FrontColon {
+            args = args + 1
+        }
+    }
+    args
+}
+
+pub fn frontCountMatchArms(tokens: List<FrontToken>, matchIdx: Int, close: Int) -> Int {
+    let mut arms = 0
+    let mut depth = 0
+    for idx in matchIdx..close {
+        let kind = frontTokenAtList(tokens, idx).kind
+        if kind == FrontLParen || kind == FrontLBracket || kind == FrontLBrace {
+            depth = depth + 1
+        } else if kind == FrontRParen || kind == FrontRBracket || kind == FrontRBrace {
+            if depth > 0 {
+                depth = depth - 1
+            }
+        } else if depth == 1 && kind == FrontArrow {
+            arms = arms + 1
+        }
+    }
+    arms
+}
+
+pub fn frontCountMatchGuards(tokens: List<FrontToken>, matchIdx: Int, close: Int) -> Int {
+    let mut guards = 0
+    let mut depth = 0
+    for idx in matchIdx..close {
+        let kind = frontTokenAtList(tokens, idx).kind
+        if kind == FrontLParen || kind == FrontLBracket || kind == FrontLBrace {
+            depth = depth + 1
+        } else if kind == FrontRParen || kind == FrontRBracket || kind == FrontRBrace {
+            if depth > 0 {
+                depth = depth - 1
+            }
+        } else if depth == 1 && kind == FrontIf {
+            guards = guards + 1
+        }
+    }
+    guards
+}
+
+pub fn frontFindMatching(
+    tokens: List<FrontToken>,
+    open: Int,
+    count: Int,
+    openKind: FrontTokenKind,
+    closeKind: FrontTokenKind,
+) -> Int {
+    let mut depth = 0
+    for idx in open..count {
+        let kind = frontTokenAtList(tokens, idx).kind
+        if kind == openKind {
+            depth = depth + 1
+        } else if kind == closeKind {
+            depth = depth - 1
+            if depth == 0 {
+                return idx
+            }
+        } else if kind == FrontEOF {
+            return idx
+        }
+    }
+    count - 1
+}
+
+pub fn frontFindTypeEnd(tokens: List<FrontToken>, start: Int, count: Int) -> Int {
+    let mut parenDepth = 0
+    let mut bracketDepth = 0
+    let mut angleDepth = 0
+    for idx in start..count {
+        let kind = frontTokenAtList(tokens, idx).kind
+        if kind == FrontLParen {
+            parenDepth = parenDepth + 1
+        } else if kind == FrontRParen {
+            if parenDepth == 0 && bracketDepth == 0 && angleDepth == 0 {
+                return idx
+            }
+            if parenDepth > 0 {
+                parenDepth = parenDepth - 1
+            }
+        } else if kind == FrontLBracket {
+            bracketDepth = bracketDepth + 1
+        } else if kind == FrontRBracket {
+            if bracketDepth > 0 {
+                bracketDepth = bracketDepth - 1
+            }
+        } else if kind == FrontLt {
+            angleDepth = angleDepth + 1
+        } else if kind == FrontGt {
+            if angleDepth > 0 {
+                angleDepth = angleDepth - 1
+            } else if parenDepth == 0 && bracketDepth == 0 {
+                return idx
+            }
+        } else if parenDepth == 0 && bracketDepth == 0 && angleDepth == 0 && kind == FrontFn && idx > start {
+            return idx
+        } else if parenDepth == 0 && bracketDepth == 0 && angleDepth == 0 && (kind == FrontComma || kind == FrontNewline || kind == FrontLBrace || kind == FrontRBrace || kind == FrontAssign || kind == FrontEOF) {
+            return idx
+        }
+    }
+    count
+}
+
+pub fn frontFindStatementEnd(tokens: List<FrontToken>, start: Int, count: Int) -> Int {
+    let mut parenDepth = 0
+    let mut bracketDepth = 0
+    let mut braceDepth = 0
+    for idx in start..count {
+        let kind = frontTokenAtList(tokens, idx).kind
+        if kind == FrontLParen {
+            parenDepth = parenDepth + 1
+        } else if kind == FrontRParen {
+            if parenDepth > 0 {
+                parenDepth = parenDepth - 1
+            }
+        } else if kind == FrontLBracket {
+            bracketDepth = bracketDepth + 1
+        } else if kind == FrontRBracket {
+            if bracketDepth > 0 {
+                bracketDepth = bracketDepth - 1
+            }
+        } else if kind == FrontLBrace {
+            braceDepth = braceDepth + 1
+        } else if kind == FrontRBrace {
+            if braceDepth == 0 {
+                return idx
+            }
+            braceDepth = braceDepth - 1
+        } else if parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && (kind == FrontNewline || kind == FrontSemicolon || kind == FrontEOF) {
+            return idx
+        }
+    }
+    count
+}
+
+pub fn frontFindMemberEnd(tokens: List<FrontToken>, start: Int, count: Int) -> Int {
+    let mut parenDepth = 0
+    let mut bracketDepth = 0
+    let mut braceDepth = 0
+    let mut angleDepth = 0
+    for idx in start..count {
+        let kind = frontTokenAtList(tokens, idx).kind
+        if kind == FrontLParen {
+            parenDepth = parenDepth + 1
+        } else if kind == FrontRParen {
+            if parenDepth > 0 {
+                parenDepth = parenDepth - 1
+            }
+        } else if kind == FrontLBracket {
+            bracketDepth = bracketDepth + 1
+        } else if kind == FrontRBracket {
+            if bracketDepth > 0 {
+                bracketDepth = bracketDepth - 1
+            }
+        } else if kind == FrontLBrace {
+            braceDepth = braceDepth + 1
+        } else if kind == FrontRBrace {
+            if braceDepth == 0 {
+                return idx
+            }
+            braceDepth = braceDepth - 1
+        } else if kind == FrontLt {
+            angleDepth = angleDepth + 1
+        } else if kind == FrontGt {
+            if angleDepth > 0 {
+                angleDepth = angleDepth - 1
+            }
+        } else if parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0 && (kind == FrontComma || kind == FrontNewline || kind == FrontFn || kind == FrontEOF) {
+            return idx
+        } else if parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0 && kind == FrontPub && frontTokenAtList(
+            tokens,
+            idx + 1,
+        ).kind == FrontFn {
+            return idx
+        }
+    }
+    count
+}
+
+pub fn frontLineConsumed(tokens: List<FrontToken>, start: Int, count: Int) -> Int {
+    frontFindStatementEnd(tokens, start, count) - start
+}
+
+pub fn frontVariantConsumed(tokens: List<FrontToken>, start: Int, count: Int) -> Int {
+    for idx in start..count {
+        let kind = frontTokenAtList(tokens, idx).kind
+        if kind == FrontComma || kind == FrontNewline || kind == FrontRBrace || kind == FrontEOF {
+            return idx - start + 1
+        }
+    }
+    count - start
+}
+
+pub fn frontFnStartAt(tokens: List<FrontToken>, at: Int) -> Int {
+    if frontTokenAtList(tokens, at).kind == FrontPub && frontTokenAtList(tokens, at + 1).kind == FrontFn {
+        at + 1
+    } else {
+        at
+    }
+}
+
+pub fn frontIsFieldStart(tokens: List<FrontToken>, at: Int) -> Bool {
+    frontTokenAtList(tokens, at).kind == FrontIdent && frontTokenAtList(tokens, at + 1).kind == FrontColon || frontTokenAtList(
+        tokens,
+        at,
+    ).kind == FrontPub && frontTokenAtList(tokens, at + 1).kind == FrontIdent && frontTokenAtList(
+        tokens,
+        at + 2,
+    ).kind == FrontColon
+}
+
+pub fn frontFieldNameIndex(tokens: List<FrontToken>, at: Int) -> Int {
+    if frontTokenAtList(tokens, at).kind == FrontPub {
+        at + 1
+    } else {
+        at
+    }
+}
+
+pub fn frontScanParamListShape(
+    tokens: List<FrontToken>,
+    open: Int,
+    close: Int,
+    summary: FrontParseSummary,
+) -> FrontParseSummary {
+    let mut out = summary
+    let mut skip = 0
+    for idx in open + 1..close {
+        if skip > 0 {
+            skip = skip - 1
+        } else {
+            let kind = frontTokenAtList(tokens, idx).kind
+            if kind == FrontColon {
+                let typeEnd = frontFindTypeEnd(tokens, idx + 1, close)
+                out = frontScanTypeShape(tokens, idx + 1, typeEnd, out)
+                if frontTokenAtList(tokens, typeEnd).kind == FrontAssign {
+                    let exprEnd = frontFindParamDefaultEnd(tokens, typeEnd + 1, close)
+                    out.defaultValues = out.defaultValues + 1
+                    out = frontScanExprShape(tokens, typeEnd + 1, exprEnd, out)
+                    skip = exprEnd - idx
+                } else {
+                    skip = typeEnd - idx
+                }
+            } else if kind == FrontAssign {
+                let exprEnd = frontFindParamDefaultEnd(tokens, idx + 1, close)
+                out.defaultValues = out.defaultValues + 1
+                out = frontScanExprShape(tokens, idx + 1, exprEnd, out)
+                skip = exprEnd - idx
+            } else if kind == FrontMut {
+                out.mutableBindings = out.mutableBindings + 1
+            }
+        }
+    }
+    out
+}
+
+pub fn frontScanTypeShape(
+    tokens: List<FrontToken>,
+    start: Int,
+    end: Int,
+    summary: FrontParseSummary,
+) -> FrontParseSummary {
+    let mut out = summary
+    let mut skip = 0
+    for idx in start..end {
+        if skip > 0 {
+            skip = skip - 1
+        } else {
+            let kind = frontTokenAtList(tokens, idx).kind
+            if frontIsTypeRefToken(kind) {
+                out.typeRefs = out.typeRefs + 1
+                if kind == FrontFn {
+                    out.fnTypes = out.fnTypes + 1
+                }
+            } else if kind == FrontQuestion {
+                out.optionalTypes = out.optionalTypes + 1
+            } else if kind == FrontQQ {
+                out.optionalTypes = out.optionalTypes + 2
+            } else if kind == FrontLParen {
+                let close = frontFindMatching(tokens, idx, end, FrontLParen, FrontRParen)
+                if frontTokenAtList(tokens, idx - 1).kind != FrontFn && (close == idx + 1 || frontContainsTopLevelKind(
+                    tokens,
+                    idx + 1,
+                    close,
+                    FrontComma,
+                )) {
+                    out.tupleTypes = out.tupleTypes + 1
+                }
+            }
+        }
+    }
+    out
+}
+
+pub fn frontFindParamDefaultEnd(tokens: List<FrontToken>, start: Int, close: Int) -> Int {
+    let mut parenDepth = 0
+    let mut bracketDepth = 0
+    let mut braceDepth = 0
+    for idx in start..close {
+        let kind = frontTokenAtList(tokens, idx).kind
+        if kind == FrontLParen {
+            parenDepth = parenDepth + 1
+        } else if kind == FrontRParen {
+            if parenDepth > 0 {
+                parenDepth = parenDepth - 1
+            }
+        } else if kind == FrontLBracket {
+            bracketDepth = bracketDepth + 1
+        } else if kind == FrontRBracket {
+            if bracketDepth > 0 {
+                bracketDepth = bracketDepth - 1
+            }
+        } else if kind == FrontLBrace {
+            braceDepth = braceDepth + 1
+        } else if kind == FrontRBrace {
+            if braceDepth > 0 {
+                braceDepth = braceDepth - 1
+            }
+        } else if parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && kind == FrontComma {
+            return idx
+        }
+    }
+    close
+}
+
+pub fn frontFindLetPatternEnd(tokens: List<FrontToken>, start: Int, end: Int) -> Int {
+    let mut parenDepth = 0
+    let mut braceDepth = 0
+    for idx in start..end {
+        let kind = frontTokenAtList(tokens, idx).kind
+        if kind == FrontLParen {
+            parenDepth = parenDepth + 1
+        } else if kind == FrontRParen {
+            if parenDepth > 0 {
+                parenDepth = parenDepth - 1
+            }
+        } else if kind == FrontLBrace {
+            braceDepth = braceDepth + 1
+        } else if kind == FrontRBrace {
+            if braceDepth > 0 {
+                braceDepth = braceDepth - 1
+            }
+        } else if parenDepth == 0 && braceDepth == 0 && (kind == FrontColon || kind == FrontAssign || kind == FrontNewline || kind == FrontEOF) {
+            return idx
+        }
+    }
+    end
+}
+
+pub fn frontScanPatternShape(
+    tokens: List<FrontToken>,
+    start: Int,
+    end: Int,
+    summary: FrontParseSummary,
+) -> FrontParseSummary {
+    let mut out = summary
+    for idx in start..end {
+        let kind = frontTokenAtList(tokens, idx).kind
+        if kind == FrontUnderscore {
+            out.wildcardPatterns = out.wildcardPatterns + 1
+        } else if kind == FrontLParen {
+            out.tuplePatterns = out.tuplePatterns + 1
+        } else if kind == FrontLBrace {
+            out.structPatterns = out.structPatterns + 1
+        } else if kind == FrontIdent && frontTokenAtList(tokens, idx + 1).kind == FrontLParen {
+            out.variantPatterns = out.variantPatterns + 1
+        } else if kind == FrontBitOr {
+            out.orPatterns = out.orPatterns + 1
+        } else if kind == FrontDotDot || kind == FrontDotDotEq {
+            out.rangePatterns = out.rangePatterns + 1
+        }
+    }
+    out
+}
+
+pub fn frontContainsTopLevelKind(
+    tokens: List<FrontToken>,
+    start: Int,
+    end: Int,
+    target: FrontTokenKind,
+) -> Bool {
+    let mut parenDepth = 0
+    let mut bracketDepth = 0
+    let mut braceDepth = 0
+    let mut angleDepth = 0
+    for idx in start..end {
+        let kind = frontTokenAtList(tokens, idx).kind
+        if kind == FrontLParen {
+            parenDepth = parenDepth + 1
+        } else if kind == FrontRParen {
+            if parenDepth > 0 {
+                parenDepth = parenDepth - 1
+            }
+        } else if kind == FrontLBracket {
+            bracketDepth = bracketDepth + 1
+        } else if kind == FrontRBracket {
+            if bracketDepth > 0 {
+                bracketDepth = bracketDepth - 1
+            }
+        } else if kind == FrontLBrace {
+            braceDepth = braceDepth + 1
+        } else if kind == FrontRBrace {
+            if braceDepth > 0 {
+                braceDepth = braceDepth - 1
+            }
+        } else if kind == FrontLt {
+            angleDepth = angleDepth + 1
+        } else if kind == FrontGt {
+            if angleDepth > 0 {
+                angleDepth = angleDepth - 1
+            }
+        } else if kind == target && parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0 {
+            return true
+        }
+    }
+    false
+}
+
+pub fn frontCountParams(tokens: List<FrontToken>, open: Int, close: Int) -> Int {
+    let mut count = 0
+    let mut skip = 0
+    for idx in open + 1..close {
+        if skip > 0 {
+            skip = skip - 1
+        } else if (frontTokenAtList(tokens, idx).kind == FrontIdent || frontTokenAtList(tokens, idx).kind == FrontUnderscore) && frontTokenAtList(
+            tokens,
+            idx + 1,
+        ).kind == FrontColon {
+            count = count + 1
+            let typeEnd = frontFindTypeEnd(tokens, idx + 2, close)
+            skip = typeEnd - idx - 1
+        }
+    }
+    count
+}
+
+pub fn frontCountParamTypeRefs(tokens: List<FrontToken>, open: Int, close: Int) -> Int {
+    let mut refs = 0
+    let mut skip = 0
+    for idx in open + 1..close {
+        if skip > 0 {
+            skip = skip - 1
+        } else if frontTokenAtList(tokens, idx).kind == FrontColon {
+            let typeEnd = frontFindTypeEnd(tokens, idx + 1, close)
+            refs = refs + frontCountTypeRefs(tokens, idx + 1, typeEnd)
+            skip = typeEnd - idx
+        }
+    }
+    refs
+}
+
+pub fn frontCountGenericParams(tokens: List<FrontToken>, start: Int, end: Int) -> Int {
+    let mut count = 0
+    for idx in start..end {
+        if frontTokenAtList(tokens, idx).kind == FrontIdent {
+            let prev = frontTokenAtList(tokens, idx - 1).kind
+            if prev == FrontLt || prev == FrontComma {
+                count = count + 1
+            }
+        }
+    }
+    count
+}
+
+pub fn frontCountTopLevelCommaItems(tokens: List<FrontToken>, start: Int, end: Int) -> Int {
+    if start >= end {
+        return 0
+    }
+    let mut count = 1
+    let mut depth = 0
+    for idx in start..end {
+        let kind = frontTokenAtList(tokens, idx).kind
+        if kind == FrontLParen || kind == FrontLBracket || kind == FrontLt {
+            depth = depth + 1
+        } else if kind == FrontRParen || kind == FrontRBracket || kind == FrontGt {
+            if depth > 0 {
+                depth = depth - 1
+            }
+        } else if kind == FrontComma && depth == 0 {
+            count = count + 1
+        }
+    }
+    count
+}
+
+pub fn frontCountTypeRefs(tokens: List<FrontToken>, start: Int, end: Int) -> Int {
+    let mut count = 0
+    for idx in start..end {
+        let kind = frontTokenAtList(tokens, idx).kind
+        if frontIsTypeRefToken(kind) {
+            count = count + 1
+        }
+    }
+    count
+}
+
+pub fn frontIsTypeRefToken(kind: FrontTokenKind) -> Bool {
+    kind == FrontIdent || kind == FrontFn
+}
+
+pub fn frontScanProgramExtras(
+    tokens: List<FrontToken>,
+    count: Int,
+    summary: FrontParseSummary,
+) -> FrontParseSummary {
+    let mut out = summary
+    let mut skip = 0
+    for idx in 0..count {
+        if skip > 0 {
+            skip = skip - 1
+        } else {
+            let kind = frontTokenAtList(tokens, idx).kind
+            if kind == FrontLet {
+                let mut patternStart = idx + 1
+                let end = frontFindStatementEnd(tokens, idx, count)
+                if frontTokenAtList(tokens, patternStart).kind == FrontMut {
+                    out.mutableBindings = out.mutableBindings + 1
+                    patternStart = patternStart + 1
+                }
+                let patternEnd = frontFindLetPatternEnd(tokens, patternStart, end)
+                out = frontScanPatternShape(tokens, patternStart, patternEnd, out)
+                skip = end - idx
+            } else if kind == FrontFor && frontTokenAtList(tokens, idx + 1).kind == FrontLet {
+                let end = frontFindStatementEnd(tokens, idx, count)
+                let patternStart = idx + 2
+                let patternEnd = frontFindLetPatternEnd(tokens, patternStart, end)
+                out = frontScanPatternShape(tokens, patternStart, patternEnd, out)
+            } else if kind == FrontIf && frontTokenAtList(tokens, idx + 1).kind == FrontLet {
+                let end = frontFindStatementEnd(tokens, idx, count)
+                let patternStart = idx + 2
+                let patternEnd = frontFindLetPatternEnd(tokens, patternStart, end)
+                out = frontScanPatternShape(tokens, patternStart, patternEnd, out)
+            }
+        }
+    }
+    out
+}
+
+pub fn frontIsAssignOp(kind: FrontTokenKind) -> Bool {
+    kind == FrontAssign || kind == FrontPlusEq || kind == FrontMinusEq || kind == FrontStarEq || kind == FrontSlashEq || kind == FrontPercentEq || kind == FrontBitAndEq || kind == FrontBitOrEq || kind == FrontBitXorEq || kind == FrontShlEq || kind == FrontShrEq
+}
+
+pub fn frontIsBinaryOp(kind: FrontTokenKind) -> Bool {
+    kind == FrontPlus || kind == FrontMinus || kind == FrontStar || kind == FrontSlash || kind == FrontPercent || kind == FrontEq || kind == FrontNeq || kind == FrontLt || kind == FrontGt || kind == FrontLeq || kind == FrontGeq || kind == FrontAnd || kind == FrontOr || kind == FrontBitAnd || kind == FrontBitOr || kind == FrontBitXor || kind == FrontShl || kind == FrontShr || kind == FrontQQ || kind == FrontDotDot || kind == FrontDotDotEq
+}
+
+pub fn frontIsUnaryOp(kind: FrontTokenKind) -> Bool {
+    kind == FrontNot || kind == FrontBitNot || kind == FrontQuestion
+}
+
+pub fn frontMaxBraceDepth(tokens: List<FrontToken>) -> Int {
+    let mut depth = 0
+    let mut maxDepth = 0
+    for tok in tokens {
+        if tok.kind == FrontLBrace {
+            depth = depth + 1
+            if depth > maxDepth {
+                maxDepth = depth
+            }
+        } else if tok.kind == FrontRBrace {
+            if depth > 0 {
+                depth = depth - 1
+            }
+        }
+    }
+    maxDepth
+}
+
+pub fn frontBraceBalanceErrors(tokens: List<FrontToken>) -> Int {
+    let mut depth = 0
+    let mut errors = 0
+    for tok in tokens {
+        if tok.kind == FrontLBrace {
+            depth = depth + 1
+        } else if tok.kind == FrontRBrace {
+            if depth == 0 {
+                errors = errors + 1
+            } else {
+                depth = depth - 1
+            }
+        }
+    }
+    if depth > 0 {
+        errors = errors + 1
+    }
+    errors
 }
 
 /// frontendParseSummary recognizes top-level declaration heads and performs

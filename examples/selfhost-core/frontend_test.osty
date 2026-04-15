@@ -255,6 +255,211 @@ fn testFrontendParserReportsBraceRecoveryErrors() {
     testing.assertEq(parsed.errors, 1)
 }
 
+fn testFrontendParserPortsFunctionShape() {
+    let parsed = frontendParseRichSummary(
+        r"pub fn map<T>(xs: List<Int>, f: fn(Int) -> Int) -> List<Int> { let y = f(1 + 2) return y }",
+    )
+
+    testing.assertEq(parsed.decls, 1)
+    testing.assertEq(parsed.funcs, 1)
+    testing.assertEq(parsed.publicDecls, 1)
+    testing.assertEq(parsed.genericParams, 1)
+    testing.assertEq(parsed.params, 2)
+    testing.assertEq(parsed.typeRefs, 8)
+    testing.assertEq(parsed.blocks, 1)
+    testing.assertEq(parsed.statements, 2)
+    testing.assertEq(parsed.lets, 1)
+    testing.assertEq(parsed.returns, 1)
+    testing.assertEq(parsed.calls, 1)
+    testing.assertEq(parsed.literals, 2)
+    testing.assertEq(parsed.binaryOps, 1)
+    testing.assertEq(parsed.errors, 0)
+}
+
+fn testFrontendParserPortsAggregateDeclarations() {
+    let source = "use std.testing\npub struct Box<T> \{ value: T fn get(value: T) -> T \{ return value \} \}\nenum Maybe<T> \{ Some(T), None, fn has(flag: Bool) -> Bool \{ return flag \} \}\ninterface Reader: Closeable \{ fn read(buf: Bytes) -> Int \}\ntype Names = List<String>\n"
+    let parsed = frontendParseRichSummary(source)
+
+    testing.assertEq(parsed.decls, 5)
+    testing.assertEq(parsed.uses, 1)
+    testing.assertEq(parsed.structs, 1)
+    testing.assertEq(parsed.enums, 1)
+    testing.assertEq(parsed.interfaces, 1)
+    testing.assertEq(parsed.aliases, 1)
+    testing.assertEq(parsed.publicDecls, 1)
+    testing.assertEq(parsed.genericParams, 2)
+    testing.assertEq(parsed.fields, 1)
+    testing.assertEq(parsed.methods, 3)
+    testing.assertEq(parsed.variants, 2)
+    testing.assertEq(parsed.variantFields, 1)
+    testing.assertEq(parsed.params, 3)
+    testing.assert(parsed.typeRefs >= 10)
+    testing.assertEq(parsed.blocks, 2)
+    testing.assertEq(parsed.returns, 2)
+    testing.assertEq(parsed.maxBlockDepth, 2)
+    testing.assertEq(parsed.errors, 0)
+}
+
+fn testFrontendParserRecoversRichShapeFromBrokenBlock() {
+    let parsed = frontendParseRichSummary(r"fn broken(x: Int) -> Int { if x { return 1")
+
+    testing.assertEq(parsed.decls, 1)
+    testing.assertEq(parsed.funcs, 1)
+    testing.assertEq(parsed.params, 1)
+    testing.assertEq(parsed.blocks, 1)
+    testing.assertEq(parsed.ifs, 1)
+    testing.assertEq(parsed.returns, 1)
+    testing.assertEq(parsed.literals, 1)
+    testing.assert(parsed.errors > 0)
+}
+
+fn testFrontendParserPortsDeclarationSurface() {
+    let parsed = frontendParseRichSummary(
+        r"""
+            use go "net/http" as http {
+                fn Get(url: String) -> Result<Response, Error>
+            }
+
+            /// A user.
+            #[deprecated(message = "use Account")]
+            pub struct User {
+                #[json(key = "user_name")]
+                pub name: String,
+                age: Int = 0,
+                pub fn greet(self) -> String { "hi" }
+            }
+
+            pub interface ReadWriter {
+                Reader
+                Writer
+                fn source(self) -> Error? { None }
+            }
+
+            pub type Handler = fn(Request) -> Result<(Response, Error), Error?>
+            pub fn connect(timeout: Int = 30) -> Handler { makeHandler(timeout) }
+            """,
+    )
+
+    testing.assertEq(parsed.goUses, 1)
+    testing.assertEq(parsed.useAliases, 1)
+    testing.assertEq(parsed.useGoItems, 1)
+    testing.assert(parsed.annotations >= 2)
+    testing.assert(parsed.docComments >= 1)
+    testing.assertEq(parsed.fields, 2)
+    testing.assertEq(parsed.defaultValues, 2)
+    testing.assert(parsed.fnTypes >= 1)
+    testing.assert(parsed.optionalTypes >= 2)
+    testing.assert(parsed.tupleTypes >= 1)
+    testing.assert(parsed.typeRefs >= 14)
+    testing.assertEq(parsed.errors, 0)
+}
+
+fn testFrontendParserPortsExpressionSurface() {
+    let parsed = frontendParseRichSummary(
+        r"""
+            fn f(ch: Chan<Int>, items: List<Int>, maybe: Result<Int, Error>?) -> Int {
+                let mut point = Point { x: 0, y: 1, ..origin }
+                let xs = [1, 2, 3]
+                let pair = (1, 2)
+                let cfg = json.parse::<Config>(text, timeout: 60)
+                let v = xs[0] ?? 1
+                ch <- v
+                defer point.close()
+                for let Some(x) = maybe {
+                    if let Some(y) = next() {
+                        match y {
+                            0..=9 -> process(|n| n + x),
+                            _ if y > 10 -> process(|| y),
+                        }
+                    } else { break }
+                }
+                return v?
+            }
+            """,
+    )
+
+    testing.assertEq(parsed.mutableBindings, 1)
+    testing.assert(parsed.variantPatterns >= 2)
+    testing.assertEq(parsed.ifLets, 1)
+    testing.assertEq(parsed.elseBranches, 1)
+    testing.assertEq(parsed.matchArms, 2)
+    testing.assertEq(parsed.matchGuards, 1)
+    testing.assertEq(parsed.closures, 2)
+    testing.assertEq(parsed.closureParams, 1)
+    testing.assertEq(parsed.turbofish, 1)
+    testing.assertEq(parsed.keywordArgs, 1)
+    testing.assertEq(parsed.listLits, 1)
+    testing.assertEq(parsed.tupleLits, 1)
+    testing.assertEq(parsed.structLits, 1)
+    testing.assertEq(parsed.structLitFields, 2)
+    testing.assertEq(parsed.spreads, 1)
+    testing.assertEq(parsed.indexes, 1)
+    testing.assertEq(parsed.ranges, 1)
+    testing.assertEq(parsed.channelSends, 1)
+    testing.assertEq(parsed.questionOps, 1)
+    testing.assertEq(parsed.errors, 0)
+}
+
+fn testFrontendParserBuildsLosslessParseTree() {
+    let source = r"""
+        use std.testing
+        #[deprecated(message = "old")]
+        pub fn f(xs: List<Int>) -> Result<Int, Error> {
+            let value = xs[0] ?? 1
+            return process::<Int>(value)
+        }
+        """
+    let tree = frontendParseTree(source)
+    let lexed = frontendLexStream(source)
+
+    testing.assertEq(tree.tokens, frontLexTokenCount(lexed))
+    testing.assertEq(tree.coveredTokens, tree.tokens)
+    testing.assertEq(frontParseTreeInvalidSpanCount(tree), 0)
+    testing.assertEq(frontParseTreeDiagnosticCount(tree), 0)
+    testing.assertEq(frontParseTreeNodeNameCount(tree, "file"), 1)
+    testing.assertEq(frontParseTreeNodeNameCount(tree, "use"), 1)
+    testing.assertEq(frontParseTreeNodeNameCount(tree, "fn"), 1)
+    testing.assert(frontParseTreeNodeNameCount(tree, "param") >= 1)
+    testing.assert(frontParseTreeNodeNameCount(tree, "block") >= 1)
+    testing.assert(frontParseTreeNodeNameCount(tree, "letStmt") >= 1)
+    testing.assert(frontParseTreeNodeNameCount(tree, "return") >= 1)
+    testing.assert(frontParseTreeNodeNameCount(tree, "index") >= 1)
+    testing.assert(frontParseTreeNodeNameCount(tree, "turbofish") >= 1)
+}
+
+fn testFrontendParserTreeRecoversAndContinues() {
+    let tree = frontendParseTree(
+        r"""
+            fn good() { 1 }
+            @ bad
+            fn good2() { 2 }
+            """,
+    )
+
+    testing.assertEq(frontParseTreeNodeNameCount(tree, "fn"), 2)
+    testing.assert(frontParseTreeNodeNameCount(tree, "recovery") >= 1)
+    testing.assert(frontParseTreeDiagnosticNameCount(tree, "unexpected") >= 1)
+    testing.assert(tree.recovered >= 1)
+    testing.assertEq(frontParseTreeInvalidSpanCount(tree), 0)
+}
+
+fn testFrontendParserTreeReportsPrecedenceDiagnostics() {
+    let tree = frontendParseTree(
+        r"""
+            fn f() {
+                a < b < c
+                let r = a..b..c
+            }
+            """,
+    )
+
+    testing.assert(frontParseTreeDiagnosticNameCount(tree, "nonAssoc") >= 2)
+    testing.assert(tree.precedenceDiagnostics >= 2)
+    testing.assert(frontParseTreeNodeNameCount(tree, "binary") >= 1)
+    testing.assert(frontParseTreeNodeNameCount(tree, "range") >= 1)
+    testing.assertEq(frontParseTreeInvalidSpanCount(tree), 0)
+}
+
 fn testFrontendTypeCheckerModelsAssignableLiterals() {
     testing.assert(frontAssignableName("Int", "UntypedInt"))
     testing.assert(frontAssignableName("Float", "UntypedInt"))
