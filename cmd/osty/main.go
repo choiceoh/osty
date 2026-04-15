@@ -61,6 +61,7 @@ type cliFlags struct {
 	jsonOutput bool
 	strict     bool // lint: exit 1 on any warning
 	fix        bool // lint: apply machine-applicable suggestions in place
+	fixDryRun  bool // lint: compute fixes but print diff instead of writing
 	showScopes bool // resolve: also print the nested scope tree
 }
 
@@ -139,6 +140,10 @@ func main() {
 		// downstream dispatch keeps seeing positional-only input.
 		if rest, present := takeBoolFlag(args[1:], "--fix"); present {
 			flags.fix = true
+			args = append([]string{"lint"}, rest...)
+		}
+		if rest, present := takeBoolFlag(args[1:], "--fix-dry-run"); present {
+			flags.fixDryRun = true
 			args = append([]string{"lint"}, rest...)
 		}
 		if rest, present := takeBoolFlag(args[1:], "--strict"); present {
@@ -286,15 +291,27 @@ func main() {
 		all := append(append(append([]*diag.Diagnostic{}, parseDiags...), res.Diags...), chk.Diags...)
 		all = append(all, lr.Diags...)
 		printDiags(formatter, all, flags)
-		if flags.fix {
+		if flags.fix || flags.fixDryRun {
 			newSrc, applied, skipped := lint.ApplyFixes(src, lr.Diags)
-			if applied > 0 {
-				if err := os.WriteFile(path, newSrc, 0o644); err != nil {
-					fmt.Fprintf(os.Stderr, "osty lint --fix: %v\n", err)
+			switch {
+			case flags.fixDryRun:
+				// Write the would-be-applied source to stdout so users
+				// can pipe it through `diff` / `less` before committing
+				// to a real --fix pass. The file on disk is untouched.
+				if _, err := os.Stdout.Write(newSrc); err != nil {
+					fmt.Fprintf(os.Stderr, "osty lint --fix-dry-run: %v\n", err)
 					os.Exit(1)
 				}
+				fmt.Fprintf(os.Stderr, "osty lint --fix-dry-run: %d fix(es) would apply, %d overlap(s) would be skipped\n", applied, skipped)
+			case flags.fix:
+				if applied > 0 {
+					if err := os.WriteFile(path, newSrc, 0o644); err != nil {
+						fmt.Fprintf(os.Stderr, "osty lint --fix: %v\n", err)
+						os.Exit(1)
+					}
+				}
+				fmt.Fprintf(os.Stderr, "osty lint --fix: applied %d fix(es), skipped %d overlap(s)\n", applied, skipped)
 			}
-			fmt.Fprintf(os.Stderr, "osty lint --fix: applied %d fix(es), skipped %d overlap(s)\n", applied, skipped)
 		}
 		if hasError(all) || (flags.strict && hasWarning(all)) {
 			os.Exit(1)
@@ -316,6 +333,7 @@ func parseFlags() cliFlags {
 	flag.BoolVar(&f.jsonOutput, "json", false, "emit diagnostics as NDJSON on stderr")
 	flag.BoolVar(&f.strict, "strict", false, "exit non-zero on lint warnings (lint subcommand only)")
 	flag.BoolVar(&f.fix, "fix", false, "apply machine-applicable lint suggestions in place (lint subcommand only)")
+	flag.BoolVar(&f.fixDryRun, "fix-dry-run", false, "show the result of --fix on stdout without modifying files (lint subcommand only)")
 	flag.BoolVar(&f.showScopes, "scopes", false, "resolve: also dump the nested scope tree")
 	flag.Usage = usage
 	flag.Parse()
