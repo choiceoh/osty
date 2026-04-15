@@ -158,18 +158,10 @@ func (g *gen) emitLetDecl(l *ast.LetDecl) {
 func (g *gen) emitStructDecl(s *ast.StructDecl) {
 	g.body.nl()
 	g.sourceMarker(s)
-	// Generic type parameters land in Phase 3; for now we still emit
-	// the bracket block with `any` constraints so downstream code at
-	// least type-checks syntactically.
 	if len(s.Generics) > 0 {
-		g.body.writef("type %s[", s.Name)
-		for i, gp := range s.Generics {
-			if i > 0 {
-				g.body.write(", ")
-			}
-			g.body.writef("%s any", gp.Name)
-		}
-		g.body.write("] struct {")
+		g.body.writef("type %s", s.Name)
+		g.emitGenericParamList(s.Generics)
+		g.body.write(" struct {")
 	} else {
 		g.body.writef("type %s struct {", s.Name)
 	}
@@ -359,17 +351,29 @@ func (g *gen) emitInterfaceDecl(i *ast.InterfaceDecl) {
 	g.body.writeln("}")
 }
 
-// emitTypeAliasDecl writes `type Name = Target` (Go type alias) for
-// non-generic aliases. Generic aliases require Go 1.24+ features
-// and are Phase 3 work; for now we emit a commented note.
+// emitTypeAliasDecl writes a Go type alias. Generic aliases are emitted
+// with Go type parameters; constraints currently lower to `any`, matching
+// the existing generic struct/function backend surface.
 func (g *gen) emitTypeAliasDecl(a *ast.TypeAliasDecl) {
 	g.body.nl()
 	g.sourceMarker(a)
-	if len(a.Generics) > 0 {
-		g.body.writef("// TODO(phase3): generic type alias %s\n", a.Name)
+	g.body.writef("type %s", a.Name)
+	g.emitGenericParamList(a.Generics)
+	g.body.writef(" = %s\n", g.goTypeExpr(a.Target))
+}
+
+func (g *gen) emitGenericParamList(params []*ast.GenericParam) {
+	if len(params) == 0 {
 		return
 	}
-	g.body.writef("type %s = %s\n", a.Name, g.goTypeExpr(a.Target))
+	g.body.write("[")
+	for i, p := range params {
+		if i > 0 {
+			g.body.write(", ")
+		}
+		g.body.writef("%s any", p.Name)
+	}
+	g.body.write("]")
 }
 
 func (g *gen) emitUseDecl(u *ast.UseDecl) {
