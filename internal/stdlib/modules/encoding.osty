@@ -1,46 +1,307 @@
 // std.encoding — binary-to-text encodings.
+use std.error
 
-pub struct Base64Url {
+// ---------------------------------------------------------------------------
+// Hex encoding (lowercase)
+// ---------------------------------------------------------------------------
+
+pub struct Hex {
     pub fn encode(self, data: Bytes) -> String {
-        ""
+        let lut = "0123456789abcdef"
+        let bs = data.bytes()
+        let len = bs.len()
+        let mut out = ""
+        let mut i = 0
+        for i < len {
+            let b = bs[i]
+            out = "{out}{lut[b >> 4]}{lut[b & 0x0F]}"
+            i = i + 1
+        }
+        out
     }
 
     pub fn decode(self, text: String) -> Result<Bytes, Error> {
-        self.decode(text)
+        let s = text.toBytes()
+        let len = s.len()
+        if len % 2 != 0 {
+            return Err(error.new("encoding/hex: odd length"))
+        }
+        let mut buf: List<Byte> = []
+        let mut i = 0
+        for i < len {
+            let hi = hexVal(s[i])?
+            let lo = hexVal(s[i + 1])?
+            buf.push((hi << 4) | lo)
+            i = i + 2
+        }
+        Ok(Bytes.from(buf))
     }
 }
+
+fn hexVal(b: Byte) -> Result<Byte, Error> {
+    let c = b.toInt()
+    // 0-9: 0x30-0x39
+    if c >= 0x30 && c <= 0x39 {
+        return Ok(c - 0x30)
+    }
+    // A-F: 0x41-0x46
+    if c >= 0x41 && c <= 0x46 {
+        return Ok(c - 0x41 + 10)
+    }
+    // a-f: 0x61-0x66
+    if c >= 0x61 && c <= 0x66 {
+        return Ok(c - 0x61 + 10)
+    }
+    Err(error.new("encoding/hex: invalid character"))
+}
+
+// ---------------------------------------------------------------------------
+// Base64 — URL-safe alphabet (- and _ instead of + and /)
+// ---------------------------------------------------------------------------
+
+pub struct Base64Url {
+    pub fn encode(self, data: Bytes) -> String {
+        base64Encode(data, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_", false)
+    }
+
+    pub fn decode(self, text: String) -> Result<Bytes, Error> {
+        base64Decode(text, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Base64 — standard alphabet (+ and / with = padding)
+// ---------------------------------------------------------------------------
 
 pub struct Base64 {
     pub url: Base64Url
 
     pub fn encode(self, data: Bytes) -> String {
-        ""
+        base64Encode(data, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", true)
     }
 
     pub fn decode(self, text: String) -> Result<Bytes, Error> {
-        self.decode(text)
+        base64Decode(text, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")
     }
 }
 
-pub struct Hex {
-    pub fn encode(self, data: Bytes) -> String {
-        ""
+// base64Encode encodes raw bytes into a base64 string using the given
+// alphabet. When pad is true, standard '=' padding is appended.
+fn base64Encode(data: Bytes, alphabet: String, pad: Bool) -> String {
+    let bs = data.bytes()
+    let len = bs.len()
+    let mut out = ""
+    let mut i = 0
+    // Full 3-byte groups: each group produces 4 base64 characters
+    for i + 3 <= len {
+        let n = (bs[i].toInt() << 16) | (bs[i + 1].toInt() << 8) | bs[i + 2].toInt()
+        out = "{out}{alphabet[n >> 18 & 0x3F]}"
+        out = "{out}{alphabet[n >> 12 & 0x3F]}"
+        out = "{out}{alphabet[n >> 6 & 0x3F]}"
+        out = "{out}{alphabet[n & 0x3F]}"
+        i = i + 3
     }
-
-    pub fn decode(self, text: String) -> Result<Bytes, Error> {
-        self.decode(text)
+    // Handle remaining 1 or 2 bytes
+    let rem = len - i
+    if rem == 1 {
+        let n = bs[i].toInt() << 16
+        out = "{out}{alphabet[n >> 18 & 0x3F]}"
+        out = "{out}{alphabet[n >> 12 & 0x3F]}"
+        if pad {
+            out = "{out}=="
+        }
+    } else if rem == 2 {
+        let n = (bs[i].toInt() << 16) | (bs[i + 1].toInt() << 8)
+        out = "{out}{alphabet[n >> 18 & 0x3F]}"
+        out = "{out}{alphabet[n >> 12 & 0x3F]}"
+        out = "{out}{alphabet[n >> 6 & 0x3F]}"
+        if pad {
+            out = "{out}="
+        }
     }
+    out
 }
+
+// base64Decode decodes a base64-encoded string using the given alphabet.
+// Padding characters ('=') are accepted but not required.
+fn base64Decode(text: String, alphabet: String) -> Result<Bytes, Error> {
+    let s = text.toBytes()
+    let len = s.len()
+    if len == 0 {
+        return Ok(Bytes.from([]))
+    }
+    // Build 256-entry reverse lookup table; -1 means invalid
+    let mut lut: List<Int> = []
+    let mut j = 0
+    for j < 256 {
+        lut.push(-1)
+        j = j + 1
+    }
+    let alpha = alphabet.bytes()
+    let alphaLen = alpha.len()
+    let mut k = 0
+    for k < alphaLen {
+        lut[alpha[k].toInt()] = k
+        k = k + 1
+    }
+    // Strip trailing padding and whitespace
+    let mut dataEnd = len
+    for dataEnd > 0 && (s[dataEnd - 1] == '=' || s[dataEnd - 1] == 0x0A || s[dataEnd - 1] == 0x0D || s[dataEnd - 1] == 0x20 || s[dataEnd - 1] == 0x09) {
+        dataEnd = dataEnd - 1
+    }
+    if dataEnd == 0 {
+        return Ok(Bytes.from([]))
+    }
+    // After stripping, valid unpadded lengths: 2, 3, or 4 mod 4
+    let mod4 = dataEnd % 4
+    if mod4 == 1 {
+        return Err(error.new("encoding/base64: invalid length"))
+    }
+    // Decode all complete 4-char groups
+    let mut buf: List<Byte> = []
+    let fullGroups = dataEnd / 4
+    let mut i = 0
+    for i < fullGroups {
+        let off = i * 4
+        let a = lut[s[off].toInt()]
+        let b = lut[s[off + 1].toInt()]
+        let c = lut[s[off + 2].toInt()]
+        let d = lut[s[off + 3].toInt()]
+        if a < 0 || b < 0 || c < 0 || d < 0 {
+            return Err(error.new("encoding/base64: invalid character"))
+        }
+        buf.push(((a << 2) | (b >> 4)) & 0xFF)
+        buf.push(((b << 4) | (c >> 2)) & 0xFF)
+        buf.push(((c << 6) | d) & 0xFF)
+        i = i + 1
+    }
+    let tailStart = fullGroups * 4
+    let tailLen = dataEnd - tailStart
+    if tailLen > 0 {
+        // Handle remaining 2 or 3 characters
+        if tailLen < 2 {
+            return Err(error.new("encoding/base64: invalid length"))
+        }
+        let a = lut[s[tailStart].toInt()]
+        let b = lut[s[tailStart + 1].toInt()]
+        if a < 0 || b < 0 {
+            return Err(error.new("encoding/base64: invalid character"))
+        }
+        buf.push(((a << 2) | (b >> 4)) & 0xFF)
+        if tailLen >= 3 {
+            let c = lut[s[tailStart + 2].toInt()]
+            if c < 0 {
+                return Err(error.new("encoding/base64: invalid character"))
+            }
+            buf.push(((b << 4) | (c >> 2)) & 0xFF)
+            if tailLen == 3 {
+                // 3 tail chars without padding: bottom 2 bits of c must be zero
+                if c & 0x03 != 0 {
+                    return Err(error.new("encoding/base64: invalid padding"))
+                }
+            }
+        } else {
+            // 2 tail chars: bottom 4 bits of b must be zero
+            if b & 0x0F != 0 {
+                return Err(error.new("encoding/base64: invalid padding"))
+            }
+        }
+    }
+    Ok(Bytes.from(buf))
+}
+
+// ---------------------------------------------------------------------------
+// URL percent-encoding
+// ---------------------------------------------------------------------------
 
 pub struct UrlEncoding {
+    // encode applies percent-encoding to text, encoding every byte that is
+    // not in the unreserved set (RFC 3986 section 2.3) as %XX.
     pub fn encode(self, text: String) -> String {
-        text
+        let bs = text.bytes()
+        let len = bs.len()
+        let mut out = ""
+        let mut i = 0
+        for i < len {
+            let b = bs[i]
+            if isUnreserved(b) {
+                out = "{out}{b.toChar()}"
+            } else {
+                out = "{out}%{hexUpper(b >> 4)}{hexUpper(b & 0x0F)}"
+            }
+            i = i + 1
+        }
+        out
     }
 
+    // decode reverses percent-encoding. '+' is decoded as space (form
+    // encoding mode). Invalid escape sequences and malformed UTF-8
+    // sequences produce an error.
     pub fn decode(self, text: String) -> Result<String, Error> {
-        Ok(text)
+        let bs = text.toBytes()
+        let len = bs.len()
+        let mut buf: List<Byte> = []
+        let mut i = 0
+        for i < len {
+            if bs[i] == '%' {
+                if i + 2 >= len {
+                    return Err(error.new("encoding/url: incomplete percent escape"))
+                }
+                let hi = hexVal(bs[i + 1])?
+                let lo = hexVal(bs[i + 2])?
+                buf.push((hi << 4) | lo)
+                i = i + 3
+            } else if bs[i] == '+' {
+                buf.push(0x20)
+                i = i + 1
+            } else {
+                buf.push(bs[i])
+                i = i + 1
+            }
+        }
+        // Validate UTF-8 and convert to String
+        let result = Bytes.from(buf)
+        match result.toString() {
+            Ok(s) -> Ok(s),
+            Err(_) -> Err(error.new("encoding/url: invalid UTF-8 in decoded output")),
+        }
     }
 }
+
+// isUnreserved returns true for bytes in the RFC 3986 unreserved set:
+// ALPHA / DIGIT / "-" / "." / "_" / "~"
+fn isUnreserved(b: Byte) -> Bool {
+    // A-Z: 0x41-0x5A
+    if b >= 0x41 && b <= 0x5A {
+        return true
+    }
+    // a-z: 0x61-0x7A
+    if b >= 0x61 && b <= 0x7A {
+        return true
+    }
+    // 0-9: 0x30-0x39
+    if b >= 0x30 && b <= 0x39 {
+        return true
+    }
+    // - _ . ~
+    if b == 0x2D || b == 0x5F || b == 0x2E || b == 0x7E {
+        return true
+    }
+    false
+}
+
+// hexUpper converts a nibble (0-15) to an uppercase hex character.
+fn hexUpper(nibble: Byte) -> Char {
+    if nibble < 10 {
+        (0x30 + nibble.toInt()).toChar()
+    } else {
+        (0x41 + nibble.toInt() - 10).toChar()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Module-level instances
+// ---------------------------------------------------------------------------
 
 pub let base64: Base64 = Base64 { url: Base64Url {} }
 pub let hex: Hex = Hex {}
