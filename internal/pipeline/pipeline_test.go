@@ -3,6 +3,8 @@ package pipeline
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -153,6 +155,52 @@ func TestRunGen(t *testing.T) {
 	}
 	if !strings.Contains(string(r.GenBytes), "package main") {
 		t.Errorf("GenBytes missing 'package main' clause; got: %s", r.GenBytes)
+	}
+}
+
+func TestRunPackageGenSanitizesManifestPackageName(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "selfhost-core")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatalf("mkdir package: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "osty.toml"), []byte(`[package]
+name = "selfhost-core"
+version = "0.1.0"
+edition = "0.3"
+`), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main.osty"), []byte(`pub fn answer() -> Int {
+    42
+}
+`), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+
+	r, err := RunPackage(dir, nil, Config{RunGen: true})
+	if err != nil {
+		t.Fatalf("RunPackage: %v", err)
+	}
+	if r.GenError != nil {
+		t.Fatalf("GenError = %v\n--- generated ---\n%s", r.GenError, r.GenBytes)
+	}
+	if !strings.Contains(string(r.GenBytes), "package selfhost_core") {
+		t.Fatalf("generated package name was not sanitized:\n%s", r.GenBytes)
+	}
+}
+
+func TestSanitizeGoPackageName(t *testing.T) {
+	cases := map[string]string{
+		"selfhost-core": "selfhost_core",
+		"123pkg":        "_123pkg",
+		"type":          "_type",
+		"---":           "main",
+		"":              "main",
+	}
+	for in, want := range cases {
+		if got := sanitizeGoPackageName(in); got != want {
+			t.Errorf("sanitizeGoPackageName(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 

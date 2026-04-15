@@ -321,6 +321,12 @@ func (g *gen) goNamedAST(n *ast.NamedType) string {
 			g.needJSON = true
 			return "Json"
 		}
+		if len(n.Path) == 2 && n.Path[1] == "Iter" && g.isStdlibAliasName(n.Path[0], "iter") {
+			if len(n.Args) == 1 {
+				return "[]" + g.goTypeExpr(n.Args[0])
+			}
+			return "[]any"
+		}
 		if len(n.Path) == 2 && g.isStdlibAliasName(n.Path[0], "error") {
 			switch n.Path[1] {
 			case "Error":

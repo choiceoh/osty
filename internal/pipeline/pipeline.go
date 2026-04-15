@@ -141,8 +141,72 @@ type Config struct {
 	RunGen bool
 
 	// GenPackageName is the Go package clause used when RunGen is set.
-	// Defaults to "main".
+	// Single-file mode defaults to "main"; package/workspace mode derives
+	// a valid Go identifier from the Osty package name when this is empty.
 	GenPackageName string
+}
+
+func genPackageName(cfgName, fallback string) string {
+	if cfgName != "" {
+		return sanitizeGoPackageName(cfgName)
+	}
+	if fallback == "" {
+		return "main"
+	}
+	return sanitizeGoPackageName(fallback)
+}
+
+func sanitizeGoPackageName(name string) string {
+	var b strings.Builder
+	for i, r := range name {
+		ok := r == '_' || (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (i > 0 && r >= '0' && r <= '9')
+		if ok {
+			b.WriteRune(r)
+			continue
+		}
+		if i == 0 && r >= '0' && r <= '9' {
+			b.WriteByte('_')
+			b.WriteRune(r)
+			continue
+		}
+		b.WriteByte('_')
+	}
+	out := b.String()
+	if out == "" || strings.Trim(out, "_") == "" {
+		return "main"
+	}
+	if goKeywords[out] {
+		return "_" + out
+	}
+	return out
+}
+
+var goKeywords = map[string]bool{
+	"break":       true,
+	"default":     true,
+	"func":        true,
+	"interface":   true,
+	"select":      true,
+	"case":        true,
+	"defer":       true,
+	"go":          true,
+	"map":         true,
+	"struct":      true,
+	"chan":        true,
+	"else":        true,
+	"goto":        true,
+	"package":     true,
+	"switch":      true,
+	"const":       true,
+	"fallthrough": true,
+	"if":          true,
+	"range":       true,
+	"type":        true,
+	"continue":    true,
+	"for":         true,
+	"import":      true,
+	"return":      true,
+	"var":         true,
 }
 
 // Run executes lex → parse → resolve → check → lint over src with
@@ -287,10 +351,7 @@ func RunWithConfig(src []byte, stream io.Writer, cfg Config) Result {
 	// makes the situation obvious.
 	if cfg.RunGen {
 		t0 = time.Now()
-		pkg := cfg.GenPackageName
-		if pkg == "" {
-			pkg = "main"
-		}
+		pkg := genPackageName(cfg.GenPackageName, "main")
 		out, err := gen.Generate(pkg, file, res, chk)
 		r.GenBytes = out
 		r.GenError = err
@@ -456,10 +517,7 @@ func RunPackage(dir string, stream io.Writer, cfg Config) (Result, error) {
 	// still reconstruct per-file boundaries.
 	if cfg.RunGen {
 		t0 = time.Now()
-		pkgName := cfg.GenPackageName
-		if pkgName == "" {
-			pkgName = pkg.Name
-		}
+		pkgName := genPackageName(cfg.GenPackageName, pkg.Name)
 		var genBuf []byte
 		var firstErr error
 		genErrs := 0
@@ -700,9 +758,7 @@ func RunWorkspace(dir string, stream io.Writer, cfg Config) (Result, error) {
 				continue
 			}
 			pkgName := cfg.GenPackageName
-			if pkgName == "" {
-				pkgName = pkg.Name
-			}
+			pkgName = genPackageName(pkgName, pkg.Name)
 			for _, pf := range pkg.Files {
 				if pf.File == nil {
 					continue
