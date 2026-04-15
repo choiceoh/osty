@@ -271,12 +271,72 @@ func (g *gen) emitPatternTest(scrut string, scrutType types.Type, p ast.Pattern)
 		// `name @ inner` — binding always succeeds, the test is inner.
 		g.emitPatternTest(scrut, scrutType, p.Pattern)
 	case *ast.TuplePat:
-		g.body.write("true /* TODO(phase3): tuple pattern test */")
+		g.emitTuplePatTest(scrut, scrutType, p)
 	case *ast.StructPat:
-		g.body.write("true /* TODO(phase3): struct pattern test */")
+		g.emitStructPatTest(scrut, scrutType, p)
 	default:
 		g.body.writef("true /* TODO: pattern %T */", p)
 	}
+}
+
+// emitTuplePatTest writes `scrut.F0 matches p0 && scrut.F1 matches p1 && ...`
+// for a tuple pattern. Wildcard / bare-ident sub-patterns always succeed
+// so they're elided from the conjunction, leaving `true` in the
+// degenerate case (pure binding tuple).
+func (g *gen) emitTuplePatTest(scrut string, scrutType types.Type, p *ast.TuplePat) {
+	var elemTypes []types.Type
+	if tup, ok := scrutType.(*types.Tuple); ok {
+		elemTypes = tup.Elems
+	}
+	g.body.write("(")
+	wrote := false
+	for i, elem := range p.Elems {
+		if isCatchAll(elem) {
+			continue
+		}
+		if wrote {
+			g.body.write(" && ")
+		}
+		wrote = true
+		field := scrut + ".F" + itoa(i)
+		var et types.Type
+		if i < len(elemTypes) {
+			et = elemTypes[i]
+		}
+		g.emitPatternTest(field, et, elem)
+	}
+	if !wrote {
+		g.body.write("true")
+	}
+	g.body.write(")")
+}
+
+// emitStructPatTest writes the conjunction of per-field tests for a
+// struct pattern. A rest (`..`) or wildcard sub-pattern is a success by
+// construction and is omitted from the output.
+func (g *gen) emitStructPatTest(scrut string, scrutType types.Type, p *ast.StructPat) {
+	g.body.write("(")
+	wrote := false
+	for _, f := range p.Fields {
+		sub := f.Pattern
+		if sub == nil {
+			// Shorthand `{ name }` — pure binding, always succeeds.
+			continue
+		}
+		if isCatchAll(sub) {
+			continue
+		}
+		if wrote {
+			g.body.write(" && ")
+		}
+		wrote = true
+		field := scrut + "." + mangleIdent(f.Name)
+		g.emitPatternTest(field, nil, sub)
+	}
+	if !wrote {
+		g.body.write("true")
+	}
+	g.body.write(")")
 }
 
 // emitRangeTest writes `scrut >= start && scrut <(=) stop` for a range
@@ -398,8 +458,48 @@ func (g *gen) emitPatternBindings(scrut string, scrutType types.Type, p ast.Patt
 		if len(p.Alts) > 0 {
 			g.emitPatternBindings(scrut, scrutType, p.Alts[0])
 		}
-	case *ast.TuplePat, *ast.StructPat, *ast.LiteralPat, *ast.RangePat:
-		// no bindings beyond what's in nested IdentPats — Phase 2 omits.
+	case *ast.TuplePat:
+		// Recurse into each element: `scrut.Fi` is the sub-scrutinee.
+		var elemTypes []types.Type
+		if tup, ok := scrutType.(*types.Tuple); ok {
+			elemTypes = tup.Elems
+		}
+		for i, elem := range p.Elems {
+			if _, ok := elem.(*ast.WildcardPat); ok {
+				continue
+			}
+			field := g.freshVar("_tf")
+			g.body.writef("%s := %s.F%d; _ = %s\n", field, scrut, i, field)
+			var et types.Type
+			if i < len(elemTypes) {
+				et = elemTypes[i]
+			}
+			g.emitPatternBindings(field, et, elem)
+		}
+	case *ast.StructPat:
+		for _, f := range p.Fields {
+			if f.Pattern == nil {
+				// Shorthand `{ name }` — bind the field directly.
+				g.body.writef("%s := %s.%s; _ = %s\n",
+					mangleIdent(f.Name), scrut, mangleIdent(f.Name), mangleIdent(f.Name))
+				continue
+			}
+			if _, ok := f.Pattern.(*ast.WildcardPat); ok {
+				continue
+			}
+			if id, ok := f.Pattern.(*ast.IdentPat); ok {
+				g.body.writef("%s := %s.%s; _ = %s\n",
+					mangleIdent(id.Name), scrut, mangleIdent(f.Name), mangleIdent(id.Name))
+				continue
+			}
+			// Nested pattern: recurse on the field projection.
+			sub := g.freshVar("_sf")
+			g.body.writef("%s := %s.%s; _ = %s\n",
+				sub, scrut, mangleIdent(f.Name), sub)
+			g.emitPatternBindings(sub, nil, f.Pattern)
+		}
+	case *ast.LiteralPat, *ast.RangePat:
+		// Literal / range patterns introduce no bindings.
 	}
 }
 

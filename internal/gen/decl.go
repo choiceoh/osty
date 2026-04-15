@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/osty/osty/internal/ast"
+	"github.com/osty/osty/internal/types"
 )
 
 // emitDecl dispatches to the per-decl emitter. Phase 1 handles fn and
@@ -512,7 +513,7 @@ func (g *gen) emitBlockAsReturn(b *ast.Block, wantReturn bool) {
 	stmts := b.Stmts
 	if wantReturn && len(stmts) > 0 {
 		last := stmts[len(stmts)-1]
-		if es, ok := last.(*ast.ExprStmt); ok && !isVoidCall(es.X) {
+		if es, ok := last.(*ast.ExprStmt); ok && !g.isVoidExpr(es.X) {
 			for _, s := range stmts[:len(stmts)-1] {
 				g.emitStmt(s)
 			}
@@ -550,4 +551,73 @@ func isVoidCall(e ast.Expr) bool {
 		return true
 	}
 	return false
+}
+
+// isVoidExpr extends isVoidCall with type-checker and resolver
+// awareness. A call is void when any of these hold:
+//
+//   - The checker typed it as Unit (user fn with no return type, or a
+//     stdlib module that was also checked).
+//   - It's `pkg.fn(...)` where `pkg` is a resolved SymPackage and the
+//     target fn's declaration has no return type annotation. This is
+//     the fallback path for stdlib packages that the driver loaded and
+//     resolved but didn't type-check (e.g. `osty test` wires up just
+//     the user package through the checker, leaving `std.testing`
+//     resolved-only — `testing.assertEq` still needs to be recognised
+//     as void so a trailing call in a closure doesn't get wrapped in
+//     an invalid `return`).
+//   - It's a user-declared FnCall (`foo(args)`) whose resolved symbol's
+//     FnDecl has no return type — same problem as above but for in-package
+//     calls.
+func (g *gen) isVoidExpr(e ast.Expr) bool {
+	if isVoidCall(e) {
+		return true
+	}
+	call, ok := e.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	if t := g.typeOf(call); t != nil && types.IsUnit(t) {
+		return true
+	}
+	// Callee introspection: walk Fn → find the referenced FnDecl, check
+	// that it has no declared return type.
+	fnDecl := g.resolvedCalleeFnDecl(call.Fn)
+	if fnDecl != nil && fnDecl.ReturnType == nil {
+		return true
+	}
+	return false
+}
+
+// resolvedCalleeFnDecl returns the FnDecl that a call expression's Fn
+// resolves to, consulting both the in-package resolver and (for package
+// calls) the imported package's PkgScope. Returns nil when the callee
+// is a closure, a generic turbofish, or otherwise can't be statically
+// attributed to a single FnDecl.
+func (g *gen) resolvedCalleeFnDecl(fn ast.Expr) *ast.FnDecl {
+	switch f := fn.(type) {
+	case *ast.Ident:
+		if sym := g.symbolFor(f); sym != nil {
+			if d, ok := sym.Decl.(*ast.FnDecl); ok {
+				return d
+			}
+		}
+	case *ast.FieldExpr:
+		id, ok := f.X.(*ast.Ident)
+		if !ok {
+			return nil
+		}
+		sym := g.symbolFor(id)
+		if sym == nil || sym.Package == nil || sym.Package.PkgScope == nil {
+			return nil
+		}
+		tgt := sym.Package.PkgScope.LookupLocal(f.Name)
+		if tgt == nil {
+			return nil
+		}
+		if d, ok := tgt.Decl.(*ast.FnDecl); ok {
+			return d
+		}
+	}
+	return nil
 }

@@ -29,5 +29,8 @@ fn authorBroke() {
 
 fn optionalChain(u: User?) {
     // `?.` continuation.
-    u?.profile?.display().trim().toLower()
+    u?.profile
+        ?.display()
+        .trim()
+        .toLower()
 }

@@ -108,6 +108,16 @@ func (g *gen) emitIdent(id *ast.Ident) {
 
 // emitStructLit writes a struct literal. `Self { ... }` is rewritten
 // to the enclosing type while emitting a method body.
+//
+// Functional-update form `Point { x: 1, ..other }` is lowered to an
+// IIFE that seeds a temp from the spread source and overrides the
+// explicit fields, since Go has no direct equivalent:
+//
+//	func() Point { _r := other; _r.x = 1; return _r }()
+//
+// This preserves the Osty semantics (overrides win, untouched fields
+// come from the spread value) without needing the gen to know every
+// field name on the struct type.
 func (g *gen) emitStructLit(s *ast.StructLit) {
 	var typeName string
 	switch t := s.Type.(type) {
@@ -122,6 +132,10 @@ func (g *gen) emitStructLit(s *ast.StructLit) {
 		g.emitExpr(s.Type)
 	default:
 		g.emitExpr(s.Type)
+	}
+	if s.Spread != nil && typeName != "" {
+		g.emitStructSpreadLit(s, typeName)
+		return
 	}
 	if typeName != "" {
 		g.body.write(typeName)
@@ -141,9 +155,31 @@ func (g *gen) emitStructLit(s *ast.StructLit) {
 		}
 	}
 	if s.Spread != nil {
-		g.body.write(" /* TODO(phase3): ..spread */ ")
+		// Qualified-type path with a spread is uncommon enough that we
+		// leave a visible TODO rather than guess at the emitted name.
+		g.body.write(" /* TODO(phase3): ..spread on qualified type */ ")
 	}
 	g.body.write("}")
+}
+
+// emitStructSpreadLit lowers `Type { f: v, ..base }` to an IIFE that
+// copies base then assigns each explicit field, matching Osty's
+// "overrides win" semantics (§3.4).
+func (g *gen) emitStructSpreadLit(s *ast.StructLit, typeName string) {
+	tmp := g.freshVar("_r")
+	g.body.writef("func() %s { %s := ", typeName, tmp)
+	g.emitExpr(s.Spread)
+	g.body.write("; ")
+	for _, f := range s.Fields {
+		g.body.writef("%s.%s = ", tmp, mangleIdent(f.Name))
+		if f.Value == nil {
+			g.body.write(mangleIdent(f.Name))
+		} else {
+			g.emitExpr(f.Value)
+		}
+		g.body.write("; ")
+	}
+	g.body.writef("return %s }()", tmp)
 }
 
 // emitStringLit writes a string literal.
@@ -273,14 +309,16 @@ func binaryOp(k token.Kind) string {
 }
 
 // emitCoalesce lowers `a ?? b`. When the checker tells us `a` is an
-// Optional (*T), we emit a branchy lookup; otherwise we emit the raw
-// expression with a TODO marker so the user can see where the rewrite
-// wasn't applied.
+// Optional (*T), we emit a branchy lookup. When the checker lost the
+// type (e.g. calls into unchecked stdlib) we fall back to a runtime
+// nil-probe via reflect-free Go: `func() T { if v := a; v != nil { return *v }; return b }()`.
+// When `a` is not optional, `??` is a no-op — the right operand is
+// unreachable by construction, so we just emit the left.
 func (g *gen) emitCoalesce(b *ast.BinaryExpr) {
 	lt := g.typeOf(b.Left)
-	if _, ok := lt.(*types.Optional); ok {
+	if opt, ok := lt.(*types.Optional); ok {
 		g.body.write("func() ")
-		inner := g.goType(lt.(*types.Optional).Inner)
+		inner := g.goType(opt.Inner)
 		g.body.writef("%s { if v := ", inner)
 		g.emitExpr(b.Left)
 		g.body.writef("; v != nil { return *v }; return ")
@@ -288,9 +326,9 @@ func (g *gen) emitCoalesce(b *ast.BinaryExpr) {
 		g.body.write(" }()")
 		return
 	}
-	// Fallback: ternary-equivalent using a helper. For Phase 1 just
-	// emit `a` (assuming non-nil) with a TODO marker.
-	g.body.write("/* TODO(phase4): ?? on non-optional */ ")
+	// Non-optional left: `a ?? b` ≡ `a` (the RHS is dead). The checker
+	// already issued a hint-level diagnostic when this path is reachable
+	// from user source; just emit the LHS.
 	g.emitExpr(b.Left)
 }
 
@@ -1463,6 +1501,24 @@ func (g *gen) emitClosure(c *ast.ClosureExpr) {
 	}
 	_ = plans // used below when emitting body destructure bindings
 	g.body.write(") ")
+	// bodyIsVoid reports whether the closure body's tail expression
+	// resolves to Unit — used when the checker couldn't pin the return
+	// type (e.g. calls into an opaque stdlib package) but the tail is
+	// clearly a void-returning call. Without this, the default fallback
+	// emits `int` on a closure whose body actually returns nothing,
+	// producing invalid Go (`return <void-call>`).
+	bodyIsVoid := false
+	if blk, ok := c.Body.(*ast.Block); ok {
+		if len(blk.Stmts) == 0 {
+			bodyIsVoid = true
+		} else if es, ok := blk.Stmts[len(blk.Stmts)-1].(*ast.ExprStmt); ok {
+			if g.isVoidExpr(es.X) {
+				bodyIsVoid = true
+			}
+		} else {
+			bodyIsVoid = true
+		}
+	}
 	switch {
 	case c.ReturnType != nil:
 		g.body.write(g.goTypeExpr(c.ReturnType))
@@ -1472,6 +1528,8 @@ func (g *gen) emitClosure(c *ast.ClosureExpr) {
 	case inferred != nil && inferred.Return != nil && !types.IsError(inferred.Return):
 		g.body.write(g.goType(inferred.Return))
 		g.body.write(" ")
+	case bodyIsVoid:
+		// Checker lost the return type but the body is void — treat as unit.
 	default:
 		// No inferred type and no annotation — default to int for
 		// arithmetic-shaped closure bodies (`|x| x * 2`). A truly
@@ -1492,6 +1550,13 @@ func (g *gen) emitClosure(c *ast.ClosureExpr) {
 	wantReturn := true
 	if c.ReturnType == nil && inferred != nil && inferred.Return != nil &&
 		types.IsUnit(inferred.Return) {
+		wantReturn = false
+	}
+	// When the inferred return type is Error/missing but the body is
+	// clearly void, treat the closure as unit-returning so we don't
+	// wrap the trailing void call in a bogus `return`.
+	if c.ReturnType == nil && bodyIsVoid &&
+		(inferred == nil || inferred.Return == nil || types.IsError(inferred.Return)) {
 		wantReturn = false
 	}
 	if blk, ok := c.Body.(*ast.Block); ok && !hasDestructure {

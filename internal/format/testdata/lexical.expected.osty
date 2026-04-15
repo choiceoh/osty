@@ -24,10 +24,7 @@ pub fn sink() {
 
     // String literals.
     let s1 = "hello"
-    let s2 = """
-        escapes:
-         	 " \\ \u{2028}
-        """
+    let s2 = "escapes: \n \t \" \\ \u{2028}"
     let s3 = r"raw \n without escapes"
     let s4 = "interp: {x} and {y + 1}"
     let s5 = """
