@@ -40,6 +40,7 @@ pub struct GcConfig {
     pub promotionAge: Int,
     pub incrementalBudget: Int,
     pub largeObjectThreshold: Int,
+    pub tlabSize: Int,
 }
 
 pub struct GcStats {
@@ -80,6 +81,17 @@ pub struct GcObject {
     pub refs: List<Int>,
     pub remembered: Bool,
     pub allocatedCycle: Int,
+}
+
+pub struct GcTlab {
+    pub ownerId: Int,
+    pub start: Int,
+    pub cursor: Int,
+    pub limit: Int,
+    pub refills: Int,
+    pub fastAllocations: Int,
+    pub slowAllocations: Int,
+    pub wasteBytes: Int,
 }
 
 pub enum GcSafepointKind {
@@ -246,6 +258,7 @@ pub struct GcHeap {
     globalRoots: Map<String, GcGlobalRoot>,
     closureEnvironments: Map<Int, GcClosureEnvironment>,
     asyncFrames: Map<Int, GcAsyncFrameRoot>,
+    tlabs: Map<Int, GcTlab>,
     remembered: Set<Int>,
     grey: List<Int>,
     allocatedSinceLastGC: Int,
@@ -270,8 +283,36 @@ pub struct GcHeap {
         }
     }
 
+    pub fn tryAllocateThread(mut self, ownerId: Int, kind: ObjectKind, size: Int) -> Result<Int, String> {
+        let normalized = normalizeSize(size)
+        if ownerId <= 0 {
+            return Err("tlab owner id must be positive")
+        }
+        if self.config.tlabSize <= 0 || self.isLargeSize(normalized) || normalized > self.config.tlabSize {
+            return self.tryAllocate(kind, normalized)
+        }
+        if self.tlabCanAllocate(ownerId, normalized) && self.heapLimitAllows(normalized) {
+            return Ok(self.allocateRawInTlab(ownerId, kind, normalized))
+        }
+        match self.refillTlab(ownerId, normalized) {
+            Ok(_) -> {},
+            Err(e) -> {
+                return Err(e)
+            },
+        }
+        if self.tlabCanAllocate(ownerId, normalized) && self.heapLimitAllows(normalized) {
+            Ok(self.allocateRawInTlab(ownerId, kind, normalized))
+        } else {
+            Err("gc heap exhausted: requested {normalized} bytes with {self.liveBytes} live bytes")
+        }
+    }
+
     pub fn allocate(mut self, kind: ObjectKind, size: Int) -> Int {
         self.tryAllocate(kind, size).unwrap()
+    }
+
+    pub fn allocateThread(mut self, ownerId: Int, kind: ObjectKind, size: Int) -> Int {
+        self.tryAllocateThread(ownerId, kind, size).unwrap()
     }
 
     pub fn addRoot(mut self, id: Int) -> Bool {
@@ -693,6 +734,7 @@ pub struct GcHeap {
     pub fn startIncrementalMajor(mut self) {
         self.cycle = self.cycle + 1
         self.phase = GcMarking
+        self.retireAllTlabs()
         self.clearAllMarks()
         for id in self.roots.toList() {
             self.shade(id)
@@ -791,6 +833,7 @@ pub struct GcHeap {
 
     fn minorCollectFor(mut self, trigger: String) -> GcStats {
         self.cycle = self.cycle + 1
+        self.retireAllTlabs()
         let beforeObjects = self.objectCount()
         let beforeBytes = self.liveBytes
         let beforeFragmentedBytes = self.fragmentedBytes()
@@ -839,6 +882,7 @@ pub struct GcHeap {
 
     fn majorCollectFor(mut self, trigger: String) -> GcStats {
         self.cycle = self.cycle + 1
+        self.retireAllTlabs()
         let beforeObjects = self.objectCount()
         let beforeBytes = self.liveBytes
         let beforeFragmentedBytes = self.fragmentedBytes()
@@ -956,6 +1000,54 @@ pub struct GcHeap {
                     total = total + 1
                 }
             }
+        }
+        total
+    }
+
+    pub fn tlabCount(self) -> Int {
+        self.tlabs.len()
+    }
+
+    pub fn tlabRemaining(self, ownerId: Int) -> Int? {
+        if self.tlabs.containsKey(ownerId) {
+            Some(tlabRemainingBytes(self.tlabs[ownerId]))
+        } else {
+            None
+        }
+    }
+
+    pub fn tlabRefillCount(self) -> Int {
+        let mut total = 0
+        for (ownerId, tlab) in self.tlabs {
+            let _ = ownerId
+            total = total + tlab.refills
+        }
+        total
+    }
+
+    pub fn tlabFastAllocationCount(self) -> Int {
+        let mut total = 0
+        for (ownerId, tlab) in self.tlabs {
+            let _ = ownerId
+            total = total + tlab.fastAllocations
+        }
+        total
+    }
+
+    pub fn tlabSlowAllocationCount(self) -> Int {
+        let mut total = 0
+        for (ownerId, tlab) in self.tlabs {
+            let _ = ownerId
+            total = total + tlab.slowAllocations
+        }
+        total
+    }
+
+    pub fn tlabWasteBytes(self) -> Int {
+        let mut total = 0
+        for (ownerId, tlab) in self.tlabs {
+            let _ = ownerId
+            total = total + tlab.wasteBytes
         }
         total
     }
@@ -1250,6 +1342,30 @@ pub struct GcHeap {
             }
         }
 
+        for (ownerId, tlab) in self.tlabs {
+            if ownerId != tlab.ownerId {
+                return Err("tlab key/owner mismatch: {ownerId}")
+            }
+            if tlab.ownerId <= 0 {
+                return Err("tlab owner id must be positive")
+            }
+            if tlab.start < 0 || tlab.cursor < 0 || tlab.limit < 0 {
+                return Err("tlab {ownerId} has negative range metadata")
+            }
+            if tlab.cursor < tlab.start || tlab.cursor > tlab.limit {
+                return Err("tlab {ownerId} cursor is outside its range")
+            }
+            if tlab.limit > self.nextAddress {
+                return Err("tlab {ownerId} limit is beyond heap cursor")
+            }
+            if tlab.refills < 0 || tlab.fastAllocations < 0 || tlab.slowAllocations < 0 || tlab.wasteBytes < 0 {
+                return Err("tlab {ownerId} has negative accounting")
+            }
+            if tlab.slowAllocations > tlab.refills {
+                return Err("tlab {ownerId} has more slow allocations than refills")
+            }
+        }
+
         for id in self.remembered.toList() {
             if !(self.objects.containsKey(id)) {
                 return Err("remembered set references missing object {id}")
@@ -1297,8 +1413,84 @@ pub struct GcHeap {
         id
     }
 
+    fn allocateRawInTlab(mut self, ownerId: Int, kind: ObjectKind, size: Int) -> Int {
+        let mut tlab = self.tlabs[ownerId]
+        let id = self.nextId
+        let address = tlab.cursor
+        tlab.cursor = tlab.cursor + size
+        tlab.fastAllocations = tlab.fastAllocations + 1
+        self.tlabs.insert(ownerId, tlab)
+        self.nextId = self.nextId + 1
+        self.liveBytes = self.liveBytes + size
+        self.allocatedSinceLastGC = self.allocatedSinceLastGC + size
+        self.objects.insert(id, newGcObject(id, kind, size, address, self.cycle, false))
+        id
+    }
+
+    fn refillTlab(mut self, ownerId: Int, requested: Int) -> Result<(), String> {
+        if self.phase == GcIdle && self.config.nurseryLimit > 0 && self.nurseryBytes() + requested > self.config.nurseryLimit {
+            let _ = self.minorCollectFor("tlab-refill")
+        }
+        if self.config.heapLimit > 0 && self.liveBytes + requested > self.config.heapLimit {
+            let _ = self.majorCollectFor("tlab-heap-pressure")
+        }
+        if self.config.heapLimit > 0 && self.liveBytes + requested > self.config.heapLimit {
+            return Err(
+                "gc heap exhausted: requested {requested} bytes with {self.liveBytes} live bytes",
+            )
+        }
+
+        let mut tlab = if self.tlabs.containsKey(ownerId) {
+            self.tlabs[ownerId]
+        } else {
+            emptyTlab(ownerId)
+        }
+        let waste = tlabRemainingBytes(tlab)
+        if waste > 0 {
+            tlab.wasteBytes = tlab.wasteBytes + waste
+        }
+        let refillSize = tlabRefillSize(self.config.tlabSize, requested)
+        tlab.start = self.nextAddress
+        tlab.cursor = self.nextAddress
+        tlab.limit = self.nextAddress + refillSize
+        tlab.refills = tlab.refills + 1
+        tlab.slowAllocations = tlab.slowAllocations + 1
+        self.nextAddress = self.nextAddress + refillSize
+        self.tlabs.insert(ownerId, tlab)
+        Ok(())
+    }
+
     fn isLargeSize(self, size: Int) -> Bool {
         self.config.largeObjectThreshold > 0 && size >= self.config.largeObjectThreshold
+    }
+
+    fn heapLimitAllows(self, size: Int) -> Bool {
+        self.config.heapLimit <= 0 || self.liveBytes + size <= self.config.heapLimit
+    }
+
+    fn tlabCanAllocate(self, ownerId: Int, size: Int) -> Bool {
+        if self.tlabs.containsKey(ownerId) {
+            tlabRemainingBytes(self.tlabs[ownerId]) >= size
+        } else {
+            false
+        }
+    }
+
+    fn retireAllTlabs(mut self) {
+        let ownerIds = self.tlabs.keys()
+        for ownerId in ownerIds {
+            if self.tlabs.containsKey(ownerId) {
+                let mut tlab = self.tlabs[ownerId]
+                let waste = tlabRemainingBytes(tlab)
+                if waste > 0 {
+                    tlab.wasteBytes = tlab.wasteBytes + waste
+                }
+                tlab.start = 0
+                tlab.cursor = 0
+                tlab.limit = 0
+                self.tlabs.insert(ownerId, tlab)
+            }
+        }
     }
 
     fn clearAllMarks(mut self) {
@@ -1704,6 +1896,7 @@ pub fn productionGcConfig() -> GcConfig {
         promotionAge: 2,
         incrementalBudget: 64,
         largeObjectThreshold: 128 * 1024,
+        tlabSize: 32 * 1024,
     }
 }
 
@@ -1714,6 +1907,7 @@ pub fn testGcConfig() -> GcConfig {
         promotionAge: 1,
         incrementalBudget: 1,
         largeObjectThreshold: 512,
+        tlabSize: 64,
     }
 }
 
@@ -1722,6 +1916,7 @@ pub fn newGcHeap(config: GcConfig) -> GcHeap {
     let globalRoots: Map<String, GcGlobalRoot> = {:}
     let closureEnvironments: Map<Int, GcClosureEnvironment> = {:}
     let asyncFrames: Map<Int, GcAsyncFrameRoot> = {:}
+    let tlabs: Map<Int, GcTlab> = {:}
     let emptyRoots: List<Int> = []
     let emptyRemembered: List<Int> = []
     let grey: List<Int> = []
@@ -1740,6 +1935,7 @@ pub fn newGcHeap(config: GcConfig) -> GcHeap {
         globalRoots,
         closureEnvironments,
         asyncFrames,
+        tlabs,
         remembered: emptyRemembered.toSet(),
         grey,
         allocatedSinceLastGC: 0,
@@ -1759,6 +1955,35 @@ fn closureCaptureObjectIds(captures: List<GcClosureCapture>) -> List<Int> {
         }
     }
     out
+}
+
+fn emptyTlab(ownerId: Int) -> GcTlab {
+    GcTlab {
+        ownerId,
+        start: 0,
+        cursor: 0,
+        limit: 0,
+        refills: 0,
+        fastAllocations: 0,
+        slowAllocations: 0,
+        wasteBytes: 0,
+    }
+}
+
+fn tlabRemainingBytes(tlab: GcTlab) -> Int {
+    if tlab.limit > tlab.cursor {
+        tlab.limit - tlab.cursor
+    } else {
+        0
+    }
+}
+
+fn tlabRefillSize(configured: Int, requested: Int) -> Int {
+    if configured > requested {
+        configured
+    } else {
+        requested
+    }
 }
 
 pub fn gcScalarCapture(slot: Int, name: String) -> GcClosureCapture {

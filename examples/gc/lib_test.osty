@@ -61,6 +61,7 @@ fn testValidateHeapRejectsLiveByteMismatch() {
     let globalRoots: Map<String, GcGlobalRoot> = {:}
     let closureEnvironments: Map<Int, GcClosureEnvironment> = {:}
     let asyncFrames: Map<Int, GcAsyncFrameRoot> = {:}
+    let tlabs: Map<Int, GcTlab> = {:}
     let heap = GcHeap {
         config: testGcConfig(),
         nextId: 2,
@@ -75,6 +76,7 @@ fn testValidateHeapRejectsLiveByteMismatch() {
         globalRoots,
         closureEnvironments,
         asyncFrames,
+        tlabs,
         remembered: empty.toSet(),
         grey: [],
         allocatedSinceLastGC: 16,
@@ -129,6 +131,7 @@ fn testValidateHeapRejectsMissingRememberedEdge() {
     let globalRoots: Map<String, GcGlobalRoot> = {:}
     let closureEnvironments: Map<Int, GcClosureEnvironment> = {:}
     let asyncFrames: Map<Int, GcAsyncFrameRoot> = {:}
+    let tlabs: Map<Int, GcTlab> = {:}
     let heap = GcHeap {
         config: testGcConfig(),
         nextId: 3,
@@ -143,6 +146,7 @@ fn testValidateHeapRejectsMissingRememberedEdge() {
         globalRoots,
         closureEnvironments,
         asyncFrames,
+        tlabs,
         remembered: empty.toSet(),
         grey: [],
         allocatedSinceLastGC: 32,
@@ -182,6 +186,7 @@ fn testTelemetryRecordsNurseryPressureTrigger() {
             promotionAge: 1,
             incrementalBudget: 1,
             largeObjectThreshold: 512,
+            tlabSize: 64,
         },
     )
     let first = heap.allocate(GcRecord, 16)
@@ -218,6 +223,7 @@ fn testLargeObjectBypassesNurseryAndStartsHumongous() {
             promotionAge: 1,
             incrementalBudget: 1,
             largeObjectThreshold: 32,
+            tlabSize: 64,
         },
     )
     let small = heap.allocate(GcRecord, 16)
@@ -411,6 +417,7 @@ fn testTryAllocateReportsOutOfMemoryAfterFullCollection() {
             promotionAge: 1,
             incrementalBudget: 4,
             largeObjectThreshold: 512,
+            tlabSize: 64,
         },
     )
     let rooted = heap.allocate(GcRecord, 32)
@@ -430,6 +437,141 @@ fn testTryAllocateReportsOutOfMemoryAfterFullCollection() {
     }
     testing.assert(heap.contains(rooted))
     testing.assertEq(heap.totalLiveBytes(), 32)
+}
+
+fn testTlabFastPathAllocatesFromThreadLocalBuffer() {
+    let mut heap = newGcHeap(testGcConfig())
+
+    let first = heap.allocateThread(1, GcRecord, 16)
+    let second = heap.allocateThread(1, GcArray, 16)
+    let third = heap.allocateThread(1, GcClosure, 16)
+    assertValid(heap)
+
+    testing.assert(heap.contains(first))
+    testing.assert(heap.contains(second))
+    testing.assert(heap.contains(third))
+    testing.assertEq(heap.addressOf(first) ?? -1, 0)
+    testing.assertEq(heap.addressOf(second) ?? -1, 16)
+    testing.assertEq(heap.addressOf(third) ?? -1, 32)
+    testing.assertEq(heap.tlabCount(), 1)
+    testing.assertEq(heap.tlabRefillCount(), 1)
+    testing.assertEq(heap.tlabSlowAllocationCount(), 1)
+    testing.assertEq(heap.tlabFastAllocationCount(), 3)
+    testing.assertEq(heap.tlabRemaining(1) ?? -1, 16)
+    match heap.lastCollectionStats() {
+        Some(_) -> testing.fail("tlab fast allocation unexpectedly ran collection"),
+        None -> {},
+    }
+}
+
+fn testTlabRefillAccountsWasteWithoutCollecting() {
+    let mut heap = newGcHeap(
+        GcConfig {
+            nurseryLimit: 512,
+            heapLimit: 4096,
+            promotionAge: 1,
+            incrementalBudget: 1,
+            largeObjectThreshold: 512,
+            tlabSize: 64,
+        },
+    )
+
+    let first = heap.allocateThread(1, GcRecord, 16)
+    let second = heap.allocateThread(1, GcArray, 40)
+    testing.assertEq(heap.tlabRemaining(1) ?? -1, 8)
+
+    let third = heap.allocateThread(1, GcClosure, 16)
+    assertValid(heap)
+
+    testing.assert(heap.contains(first))
+    testing.assert(heap.contains(second))
+    testing.assert(heap.contains(third))
+    testing.assertEq(heap.addressOf(first) ?? -1, 0)
+    testing.assertEq(heap.addressOf(second) ?? -1, 16)
+    testing.assertEq(heap.addressOf(third) ?? -1, 64)
+    testing.assertEq(heap.tlabRefillCount(), 2)
+    testing.assertEq(heap.tlabSlowAllocationCount(), 2)
+    testing.assertEq(heap.tlabFastAllocationCount(), 3)
+    testing.assertEq(heap.tlabWasteBytes(), 8)
+    testing.assertEq(heap.tlabRemaining(1) ?? -1, 48)
+    match heap.lastCollectionStats() {
+        Some(_) -> testing.fail("tlab refill unexpectedly ran collection"),
+        None -> {},
+    }
+}
+
+fn testTlabRefillCanTriggerNurseryCollection() {
+    let mut heap = newGcHeap(
+        GcConfig {
+            nurseryLimit: 48,
+            heapLimit: 4096,
+            promotionAge: 1,
+            incrementalBudget: 1,
+            largeObjectThreshold: 512,
+            tlabSize: 64,
+        },
+    )
+
+    let deadA = heap.allocateThread(1, GcRecord, 16)
+    let deadB = heap.allocateThread(1, GcArray, 40)
+    testing.assert(heap.contains(deadA))
+    testing.assert(heap.contains(deadB))
+    testing.assertEq(heap.tlabRemaining(1) ?? -1, 8)
+
+    let survivor = heap.allocateThread(1, GcClosure, 16)
+    assertValid(heap)
+
+    testing.assert(!(heap.contains(deadA)))
+    testing.assert(!(heap.contains(deadB)))
+    testing.assert(heap.contains(survivor))
+    testing.assertEq(heap.tlabRefillCount(), 2)
+    testing.assertEq(heap.tlabWasteBytes(), 8)
+    testing.assertEq(heap.tlabRemaining(1) ?? -1, 48)
+    match heap.lastCollectionStats() {
+        Some(stats) -> {
+            testing.assertEq(stats.kind, "minor")
+            testing.assertEq(stats.trigger, "tlab-refill")
+            testing.assertEq(stats.reclaimedObjects, 2)
+        },
+        None -> testing.fail("missing tlab refill collection stats"),
+    }
+}
+
+fn testCollectionRetiresActiveTlabAndAccountsWaste() {
+    let mut heap = newGcHeap(testGcConfig())
+    let rooted = heap.allocateThread(1, GcRecord, 16)
+    testing.assert(heap.addRoot(rooted))
+    testing.assertEq(heap.tlabRemaining(1) ?? -1, 48)
+
+    let stats = heap.minorCollect()
+    assertValid(heap)
+
+    testing.assert(heap.contains(rooted))
+    testing.assertEq(stats.kind, "minor")
+    testing.assertEq(heap.tlabRemaining(1) ?? -1, 0)
+    testing.assertEq(heap.tlabWasteBytes(), 48)
+}
+
+fn testLargeThreadAllocationBypassesTlab() {
+    let mut heap = newGcHeap(
+        GcConfig {
+            nurseryLimit: 256,
+            heapLimit: 4096,
+            promotionAge: 1,
+            incrementalBudget: 1,
+            largeObjectThreshold: 32,
+            tlabSize: 64,
+        },
+    )
+
+    let large = heap.allocateThread(1, GcBytes, 64)
+    assertValid(heap)
+
+    testing.assert(heap.contains(large))
+    testing.assert(heap.isLarge(large) ?? false)
+    testing.assertEq(heap.regionOf(large) ?? GcEdenRegion, GcHumongousRegion)
+    testing.assertEq(heap.tlabCount(), 0)
+    testing.assertEq(heap.tlabFastAllocationCount(), 0)
 }
 
 fn testGlobalRootKeepsObjectAcrossCollections() {
@@ -1022,6 +1164,7 @@ fn stressGcConfig() -> GcConfig {
         promotionAge: 2,
         incrementalBudget: 3,
         largeObjectThreshold: 80,
+        tlabSize: 64,
     }
 }
 
