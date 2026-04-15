@@ -1,0 +1,8 @@
+error[E0105]: expected `}`, got `else`
+ --> test.osty:5:5
+    |
+  5 |     x + y
+    |     ^^^^ orphaned `else` here
+    |
+ = note: the `if` block was already closed on the previous line
+ = help: move `else` onto the same line as `}`

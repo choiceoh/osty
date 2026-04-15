@@ -1,0 +1,44 @@
+// primitives/string — intrinsic methods on `String`. String is an
+// immutable UTF-8 sequence (§2.1). Indexing is byte-addressable
+// (§4.10); the protocol iterators `chars()`, `bytes()`, `graphemes()`
+// let users iterate at the scalar or cluster level.
+
+#[intrinsic_methods(String)]
+pub struct __StringMethods {
+    pub fn len(self) -> Int { 0 }
+    pub fn isEmpty(self) -> Bool { false }
+    pub fn charCount(self) -> Int { 0 }
+
+    pub fn get(self, i: Int) -> Byte? { None }
+
+    pub fn contains(self, s: String) -> Bool { false }
+    pub fn startsWith(self, s: String) -> Bool { false }
+    pub fn endsWith(self, s: String) -> Bool { false }
+
+    pub fn indexOf(self, s: String) -> Int? { None }
+
+    pub fn split(self, sep: String) -> List<String> { [] }
+    pub fn lines(self) -> List<String> { [] }
+    pub fn join(self, parts: List<String>) -> String { "" }
+
+    pub fn trim(self) -> String { "" }
+    pub fn trimStart(self) -> String { "" }
+    pub fn trimEnd(self) -> String { "" }
+
+    pub fn toUpper(self) -> String { "" }
+    pub fn toLower(self) -> String { "" }
+
+    pub fn replace(self, old: String, new: String) -> String { "" }
+    pub fn repeat(self, n: Int) -> String { "" }
+
+    pub fn chars(self) -> List<Char> { [] }
+    pub fn bytes(self) -> List<Byte> { [] }
+    pub fn graphemes(self) -> List<String> { [] }
+
+    pub fn toBytes(self) -> Bytes { self.toBytes() }
+    pub fn toString(self) -> String { self }
+
+    // Numeric parsing
+    pub fn toInt(self) -> Result<Int, Error> { Err(0) }
+    pub fn toFloat(self) -> Result<Float, Error> { Err(0.0) }
+}

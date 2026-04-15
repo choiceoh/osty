@@ -1,0 +1,973 @@
+package diag
+
+// Stable diagnostic codes. The doc comment on each constant is the
+// authoritative copy for ERROR_CODES.md — regenerate the markdown with
+// `go generate ./internal/diag/...` whenever you add or edit a code.
+//
+//go:generate go run ../../cmd/codesdoc -in codes.go -w ../../ERROR_CODES.md
+
+const (
+	// Lexical.
+
+	// A string literal reaches end-of-file without a closing quote.
+	//
+	// Example:
+	//   let s = "hello
+	// Fix: add the closing `"`. For multi-line text use triple-quoted strings.
+	CodeUnterminatedString = "E0001"
+
+	// Base prefixes must be lowercase.
+	//
+	// Spec: v0.2 R11 / v0.3 §1.6.1
+	// Example:
+	//   let n = 0X1F  // rejected
+	// Fix: use `0x1F` / `0b1010` / `0o777`.
+	CodeUppercaseBasePrefix = "E0002"
+
+	// The escape sequence is unknown or references an invalid Unicode scalar value.
+	//
+	// Most commonly a surrogate code point.
+	//
+	// Spec: v0.3 §2.1
+	// Example:
+	//   let c = '\u{D800}'  // rejected
+	// Fix: use a non-surrogate scalar (U+0..U+D7FF or U+E000..U+10FFFF).
+	CodeUnknownEscape = "E0003"
+
+	// A block comment reaches end-of-file without closing.
+	//
+	// Example:
+	//   /* never closed
+	// Fix: close the block with `*/`.
+	CodeUnterminatedComment = "E0004"
+
+	// A byte that does not begin any valid token.
+	//
+	// Commonly non-ASCII input outside of string literals.
+	//
+	// Fix: remove the stray byte or move it inside a string.
+	CodeIllegalCharacter = "E0005"
+
+	// Triple-quoted string violates the indent rules.
+	//
+	// The opening `"""` must be followed by a newline, every content line
+	// must begin with the closing-line's whitespace prefix, and the
+	// closing `"""` must be on its own line.
+	//
+	// Spec: v0.3 §1.6.3
+	// Fix: realign the content and closing delimiter per §1.6.3.
+	CodeBadTripleString = "E0006"
+
+	// Declarations & statements.
+
+	// A token that cannot begin a top-level declaration appeared where one was expected.
+	//
+	// Fix: precede the token with a valid declaration keyword (`fn`, `let`, `struct`, …).
+	CodeExpectedDecl = "E0100"
+
+	// Functions declared inside `use go "..."` must not have a body.
+	//
+	// They forward to the imported Go function.
+	//
+	// Spec: v0.3 R17
+	// Example:
+	//   use go "net/http" {
+	//       fn Get(url: String) -> String { "x" }  // rejected
+	//   }
+	// Fix: drop the body — keep only the signature.
+	CodeUseGoFnHasBody = "E0101"
+
+	// Structs inside `use go { ... }` blocks mirror Go field layout only.
+	//
+	// Methods live on the Go side.
+	//
+	// Spec: v0.3 R16
+	// Fix: move the method definition to the Go file that owns the type.
+	CodeUseGoStructHasMethod = "E0102"
+
+	// A feature not permitted inside a `use go` block.
+	//
+	// Generics, parameter defaults, enums, interfaces, type aliases, and
+	// bodies on `fn` are all rejected.
+	//
+	// Fix: simplify the declaration to a bare field layout or signature.
+	CodeUseGoUnsupported = "E0103"
+
+	// A `use` path mixes dotted and urlish forms.
+	//
+	// A path is either dotted (`std.fs`) OR urlish (`github.com/x/y`) —
+	// the two cannot mix.
+	//
+	// Spec: v0.3 R15
+	// Fix: choose one form for the whole path.
+	CodeUsePathMixed = "E0104"
+
+	// `else` appears on a new line.
+	//
+	// It must sit on the same line as the closing `}` of the `if` body.
+	//
+	// Spec: v0.3 O2
+	// Example:
+	//   if cond {
+	//       ...
+	//   }
+	//   else {  // rejected
+	//       ...
+	//   }
+	// Fix: move `else` onto the same line as the preceding `}`.
+	CodeElseAcrossNewline = "E0105"
+
+	// Parameter or field default is not a literal.
+	//
+	// Defaults must be restricted literal forms (literal, `-` numeric,
+	// `None`, `Ok(lit)`, `Err(lit)`, `[]`, `{:}`, `()`).
+	//
+	// Spec: v0.3 R18
+	// Example:
+	//   fn connect(t: Int = computeTimeout()) {}  // rejected
+	// Fix: use a literal default, or move the computation into the body.
+	CodeDefaultExprNotLiteral = "E0106"
+
+	// Expressions.
+
+	// Comparison or range operators are non-associative.
+	//
+	// Spec: v0.3 R1
+	// Example:
+	//   a < b < c      // rejected
+	//   0..10..20      // rejected
+	// Fix: parenthesize — `(a < b) && (b < c)`.
+	CodeNonAssocChain = "E0200"
+
+	// `::` is reserved for turbofish and must be followed by `<`.
+	//
+	// Spec: v0.3 O6
+	// Example:
+	//   foo::bar()     // rejected — did you mean `foo.bar()`?
+	// Fix: use `.` for member access or `::<T>` for type application.
+	CodeTurbofishMissingLT = "E0201"
+
+	// Method chains must continue with a leading dot on the next line.
+	//
+	// A trailing `.` then newline is a syntax error.
+	//
+	// Spec: v0.3 O3
+	// Fix: move the `.` to the start of the continuation line.
+	CodeTrailingDot = "E0202"
+
+	// A closure with an explicit return type must have a block body.
+	//
+	// Spec: v0.3 R25
+	// Example:
+	//   let f = |x: Int| -> Int x * 2       // rejected
+	//   let f = |x: Int| -> Int { x * 2 }   // ok
+	// Fix: wrap the expression in `{ ... }`.
+	CodeClosureRetReqBlock = "E0203"
+
+	// Fallback for expression-position tokens that don't begin a valid primary expression.
+	//
+	// Fix: check for a missing operand, operator, or brace.
+	CodeUnexpectedToken = "E0204"
+
+	// Types & patterns.
+
+	// A token that cannot begin a type appeared in a type position.
+	//
+	// Fix: supply a type name, `Self`, or a parenthesized type form.
+	CodeExpectedType = "E0300"
+
+	// A token that cannot begin a pattern appeared in a pattern position.
+	//
+	// Fix: supply a literal, variant, struct, tuple, or `_` pattern.
+	CodeExpectedPattern = "E0301"
+
+	// Annotations.
+
+	// The annotation name is not recognized.
+	//
+	// Only `#[json(...)]` and `#[deprecated(...)]` are defined today.
+	//
+	// Spec: v0.3 R26
+	// Fix: remove the annotation or use one of the recognized names.
+	CodeUnknownAnnotation = "E0400"
+
+	// Name resolution.
+
+	// The referenced identifier is not in scope.
+	//
+	// Typo suggestions use edit distance — the diagnostic says
+	// "did you mean `X`?" when a nearby name exists.
+	//
+	// Fix: import the name, or correct the spelling.
+	CodeUndefinedName = "E0500"
+
+	// The same name is declared twice in the same scope.
+	//
+	// Scopes affected: top-level, struct fields, enum variants,
+	// methods, or a single block.
+	//
+	// Fix: rename one of the declarations.
+	CodeDuplicateDecl = "E0501"
+
+	// A name is used in a position that disagrees with its declaration.
+	//
+	// For example, a function name used where a type is expected.
+	//
+	// Fix: use a name of the right kind, or adjust the expected position.
+	CodeWrongSymbolKind = "E0502"
+
+	// `self` is only valid as the first parameter of a method and inside that method's body.
+	//
+	// Fix: move the reference inside a method, or rename the identifier.
+	CodeSelfOutsideMethod = "E0503"
+
+	// `Self` is only valid inside a `struct`, `enum`, or `interface` body.
+	//
+	// Fix: replace with the actual type name outside the declaration.
+	CodeSelfTypeOutside = "E0504"
+
+	// The referenced package cannot be found.
+	//
+	// Spec: v0.3 §5
+	// Fix: check the `use` path and verify the package is on disk or in the manifest.
+	CodeUnknownPackage = "E0505"
+
+	// A `use` graph contains a cycle.
+	//
+	// Package A imports B which eventually imports A. The resolver
+	// breaks the cycle and reports the first edge that closes it.
+	//
+	// Spec: v0.3 §5.3
+	// Fix: extract shared declarations into a third package that both sides import.
+	CodeCyclicImport = "E0506"
+
+	// A cross-package reference targets a non-`pub` item.
+	//
+	// Private items are visible only to other files in the same package.
+	//
+	// Spec: v0.3 §5.2
+	// Fix: add `pub` to the declaration, or move the caller into the same package.
+	CodePrivateAcrossPackages = "E0507"
+
+	// Package member access names an item that isn't exported.
+	//
+	// The member might be private, misspelled, or from a different package.
+	//
+	// Spec: v0.3 §5.2
+	// Fix: verify the name is `pub` and matches the exported spelling.
+	CodeUnknownExportedMember = "E0508"
+
+	// A `use std.*` import cannot be resolved because the stdlib provider is unavailable.
+	//
+	// The compiler runs with a lazily-loaded stdlib descriptor; if it
+	// hasn't been loaded for the current invocation, `std.*` names
+	// fall back to this error.
+	//
+	// Fix: invoke the compiler with the standard entrypoint that wires up the stdlib.
+	CodeStdlibNotAvailable = "E0509"
+
+	// Control flow / context.
+
+	// `break` must be inside a `for` loop.
+	//
+	// Fix: enclose the statement in a `for` body, or remove it.
+	CodeBreakOutsideLoop = "E0600"
+
+	// `continue` must be inside a `for` loop.
+	//
+	// Fix: enclose the statement in a `for` body, or remove it.
+	CodeContinueOutsideLoop = "E0601"
+
+	// `return` must be inside a function body.
+	//
+	// Scripts count — their top-level statements are wrapped in an implicit `main()`.
+	//
+	// Fix: move the `return` into a function, or drop it from a library file.
+	CodeReturnOutsideFn = "E0602"
+
+	// `defer` must be inside a function body.
+	//
+	// Fix: move the `defer` into a function.
+	CodeDeferOutsideFn = "E0603"
+
+	// `_` is a pattern wildcard; it cannot stand in for a value in an expression.
+	//
+	// Example:
+	//   let x = _  // rejected
+	// Fix: for ignored bindings use `let _ = expr`.
+	CodeWildcardInExpr = "E0604"
+
+	// Every alternative of an or-pattern must bind the same names.
+	//
+	// Spec: v0.3 §4.3.1
+	// Example:
+	//   match e {
+	//       A(x) | B(x, y) -> ...   // rejected: `y` not bound by A
+	//   }
+	// Fix: rebalance the alternatives to bind the same names.
+	CodeOrPatternBindingMismatch = "E0605"
+
+	// An interface default method may not access fields on `self`.
+	//
+	// The interface has no view of the implementing type's layout.
+	//
+	// Spec: v0.3 §2.6.2
+	// Fix: call other interface methods instead of reading fields directly.
+	CodeInterfaceDefaultField = "E0606"
+
+	// The annotation's target is not in its permitted set.
+	//
+	// `#[json]` only attaches to struct fields; `#[deprecated]` to
+	// top-level declarations and methods; neither attaches to `use`.
+	//
+	// Spec: v0.3 §18.1
+	// Fix: move the annotation to a permitted target.
+	CodeAnnotationBadTarget = "E0607"
+
+	// Bare `defer` at the top level of a script is rejected.
+	//
+	// Spec: v0.3 §6 / §18.3
+	// Fix: wrap the cleanup in an explicit `fn` or move it inside an existing function body.
+	CodeDeferAtScriptTop = "E0608"
+
+	// The same annotation name may not appear twice on a single target.
+	//
+	// Spec: v0.3 §18.1
+	// Example:
+	//   #[deprecated]
+	//   #[deprecated]           // rejected
+	//   pub fn f() {}
+	// Fix: remove the duplicate.
+	CodeDuplicateAnnotation = "E0609"
+
+	// Type checking.
+
+	// Wrong type in assignment, return, or argument position.
+	//
+	// Fix: convert or choose a compatible type.
+	CodeTypeMismatch = "E0700"
+
+	// Call arity mismatch.
+	//
+	// Fix: pass the expected number of arguments.
+	CodeWrongArgCount = "E0701"
+
+	// `foo.bar` — no such field.
+	//
+	// Fix: check the field name against the struct definition.
+	CodeUnknownField = "E0702"
+
+	// `foo.bar()` — no such method.
+	//
+	// Fix: verify the method exists on the type or its implemented interfaces.
+	CodeUnknownMethod = "E0703"
+
+	// Call target isn't a function, method, or variant.
+	//
+	// Fix: only functions, methods, and tuple-struct/variant constructors are callable.
+	CodeNotCallable = "E0704"
+
+	// `x[i]` — type has no indexing.
+	//
+	// Fix: switch to a type that supports indexing (list, map, string).
+	CodeNotIndexable = "E0705"
+
+	// `T { ... }` — `T` isn't a struct.
+	//
+	// Fix: use a struct type, or construct via the correct factory.
+	CodeNotAStruct = "E0706"
+
+	// Struct literal names a field the struct doesn't have.
+	//
+	// Fix: remove the extra field or correct its name.
+	CodeUnknownStructField = "E0707"
+
+	// Struct literal omits a required field.
+	//
+	// Fix: add the missing field or give it a default in the declaration.
+	CodeMissingStructField = "E0708"
+
+	// Enum variant payload has the wrong arity or shape.
+	//
+	// Fix: match the payload signature declared on the variant.
+	CodeVariantShape = "E0709"
+
+	// Pattern names something that isn't a variant.
+	//
+	// Fix: use a real variant of the scrutinee's enum.
+	CodeNotAVariant = "E0710"
+
+	// Match arms don't unify to a single result type.
+	//
+	// Fix: coerce arms to a common type or split the match.
+	CodeMatchArmMismatch = "E0711"
+
+	// `if` / `else` branches don't unify.
+	//
+	// Fix: give both branches the same type, or use `if` as a statement.
+	CodeIfBranchMismatch = "E0712"
+
+	// Operator not defined on the operand types.
+	//
+	// Fix: convert an operand or use a different operator.
+	CodeBinaryOpUntyped = "E0713"
+
+	// Unary operator not defined on the operand type.
+	//
+	// Fix: check that the type supports the operator (e.g. `Bool` for `!`, `Int`/`Float` for `-`).
+	CodeUnaryOpUntyped = "E0714"
+
+	// `if` / `for` condition isn't `Bool`.
+	//
+	// Fix: produce a `Bool` from the expression (e.g. `x != 0`).
+	CodeConditionNotBool = "E0715"
+
+	// `for x in e` — `e` has no iterator.
+	//
+	// Fix: iterate over a list, map, range, or `Iterator`-implementing type.
+	CodeNotIterable = "E0716"
+
+	// `?` used on a non-`Result` / non-`Option` value.
+	//
+	// Fix: only use `?` on fallible types.
+	CodeQuestionNotPropagate = "E0717"
+
+	// `?` used where the enclosing return type cannot hold the propagated error.
+	//
+	// Fix: change the fn return type to `Result<...>` / `Option<...>`.
+	CodeQuestionBadReturn = "E0718"
+
+	// `?.` used on a non-`Option` receiver.
+	//
+	// Fix: drop the `?` (plain `.`) or wrap the receiver in `Option`.
+	CodeOptionalChainOnNon = "E0719"
+
+	// `??` left-hand side is not `Option`.
+	//
+	// Fix: change the LHS to an optional, or replace `??` with another fallback form.
+	CodeCoalesceNonOptional = "E0720"
+
+	// Numeric literal does not fit in the inferred type.
+	//
+	// Example:
+	//   let x: UInt8 = 300  // rejected
+	// Fix: widen the target type or shrink the literal.
+	CodeNumericLitRange = "E0721"
+
+	// Literal pattern type does not match the scrutinee.
+	//
+	// Fix: use a pattern whose type matches the value.
+	CodeLitPatternMismatch = "E0722"
+
+	// Range pattern requires an `Ordered` scrutinee.
+	//
+	// Fix: switch to an ordered type (numbers, chars) or explode the range.
+	CodeRangePatternNonOrd = "E0723"
+
+	// LHS of `=` is not assignable.
+	//
+	// Fix: assign into a `let mut` binding, a struct field, or an index.
+	CodeAssignTarget = "E0724"
+
+	// Assign into a non-`mut` binding, or into a field of a non-`mut` receiver.
+	//
+	// Fix: add `mut` to the binding, or rebind via `let`.
+	CodeMutabilityMismatch = "E0725"
+
+	// Return expression doesn't match the fn signature.
+	//
+	// Fix: return a value of the declared type, or change the signature.
+	CodeReturnTypeMismatch = "E0726"
+
+	// Wrong number of type arguments for a generic.
+	//
+	// Fix: supply exactly as many type args as the generic declares (or omit for inference).
+	CodeGenericArgCount = "E0727"
+
+	// `Enum.Variant` — `Variant` isn't declared on the enum.
+	//
+	// Fix: check the variant name against the enum definition.
+	CodeUnknownVariant = "E0728"
+
+	// `<`, `<=`, `>`, `>=` used on a non-`Ordered` type.
+	//
+	// Fix: only compare types that implement `Ordered`.
+	CodeTypeNotOrdered = "E0729"
+
+	// `==` / `!=` used on a non-`Equal` type.
+	//
+	// Fix: only compare types that implement `Equal`.
+	CodeTypeNotEqual = "E0730"
+
+	// Match doesn't cover every case of the scrutinee.
+	//
+	// Fix: add the missing arms or a catch-all `_ ->` branch.
+	CodeNonExhaustiveMatch = "E0731"
+
+	// Keyword argument names no such parameter.
+	//
+	// Fix: check the parameter name against the fn signature.
+	CodeKeywordArgUnknown = "E0732"
+
+	// Positional argument appears after a keyword argument.
+	//
+	// Fix: move all positional arguments before the first keyword argument.
+	CodePositionalAfterKw = "E0733"
+
+	// Same parameter passed twice (positionally and by name, or two keyword args).
+	//
+	// Fix: pass each parameter at most once.
+	CodeDuplicateArg = "E0734"
+
+	// Interpolated expression doesn't implement `ToString`.
+	//
+	// Fix: call `.toString()` explicitly or wrap in `str(...)`.
+	CodeInterpolationNonStr = "E0735"
+
+	// `for-in` receiver doesn't implement the `Iterator` protocol.
+	//
+	// The resolver accepts any value the checker couldn't disprove, but
+	// the checker requires either a built-in iterable or a type that
+	// implements `Iterator<Item = T>` / `next()`.
+	//
+	// Fix: implement `Iterator` on the type, or convert to a known iterable.
+	CodeIterableNotProtocol = "E0736"
+
+	// `ch <- v` where `v`'s type doesn't match the channel element type.
+	//
+	// Fix: send a value of the channel's `Chan<T>` element type.
+	CodeChannelWrongValue = "E0737"
+
+	// `ch <- v` where `ch` isn't a `Chan<T>`.
+	//
+	// Fix: use a channel on the left-hand side of `<-`.
+	CodeChannelNotChan = "E0738"
+
+	// Annotation argument has the wrong type.
+	//
+	// Example:
+	//   #[json(key = 42)]   // `key` expects a String
+	// Fix: pass an argument whose type matches the annotation's schema.
+	CodeAnnotationBadArg = "E0739"
+
+	// Match arm is unreachable because a previous arm fully covers its cases.
+	//
+	// Fix: merge or remove the shadowed arm.
+	CodeUnreachableArm = "E0740"
+
+	// Deprecation warning.
+
+	// Use site references an item marked `#[deprecated]`.
+	//
+	// Emitted as a `diag.Warning`. Tooling can promote it to error via
+	// build configuration.
+	//
+	// Spec: v0.3 §3.8.2
+	// Fix: migrate to the replacement noted in the `#[deprecated]` annotation.
+	CodeDeprecatedUse = "W0750"
+
+	// Control flow diagnostics (E0760-E0769).
+	//
+	// CodeUnreachableCode: a statement appears after a divergent
+	// construct (return, break, continue, or an expression of type
+	// Never) and therefore can never execute.
+	// Spec: v0.3 §4 control flow, §2.1 Never
+	// Fix: delete the dead statement or move it above the divergent one.
+	CodeUnreachableCode = "E0760"
+
+	// CodeMissingReturn: a non-unit function's body could reach its
+	// end without producing a value matching the return type.
+	// Spec: v0.3 §3.1
+	// Fix: add an explicit `return` or make the final expression the
+	//      function's result.
+	CodeMissingReturn = "E0761"
+
+	// CodeDefaultNotLiteral: a default argument expression is not a
+	// literal (§3.1 forbids computed defaults).
+	// Fix: replace the expression with a numeric, string, char, byte,
+	//      bool, `None`, `Ok(literal)`, `Err(literal)`, `[]`, `{:}`,
+	//      or `()` literal.
+	CodeDefaultNotLiteral = "E0762"
+
+	// Manifest — TOML syntax.
+
+	// Fallback TOML syntax error in `osty.toml`.
+	//
+	// Fix: validate the file with a TOML linter; check for quotes and brackets.
+	CodeManifestSyntax = "E2000"
+
+	// String or inline table in `osty.toml` is unterminated.
+	//
+	// Fix: close the quote or table on the same line.
+	CodeManifestUnterminated = "E2001"
+
+	// Same key set twice in the same TOML table.
+	//
+	// Fix: keep one key; remove or rename the duplicate.
+	CodeManifestDuplicateKey = "E2002"
+
+	// Same `[table]` header declared twice.
+	//
+	// Fix: consolidate the two sections into one.
+	CodeManifestDuplicateTable = "E2003"
+
+	// Unknown `\escape` in a TOML string.
+	//
+	// Fix: use a supported escape or a literal string (`'...'`).
+	CodeManifestBadEscape = "E2004"
+
+	// Manifest — schema.
+
+	// `osty.toml` has no `[package]` table.
+	//
+	// Fix: add a `[package]` section with at least `name` and `version`.
+	CodeManifestMissingPackage = "E2010"
+
+	// A required field is absent from the manifest.
+	//
+	// Fix: add the named field under the expected table.
+	CodeManifestMissingField = "E2011"
+
+	// Unrecognized key for a known table.
+	//
+	// Fix: remove the key or rename it to a documented one.
+	CodeManifestUnknownKey = "E2012"
+
+	// Manifest field has the wrong TOML type.
+	//
+	// Fix: quote strings, wrap arrays in `[]`, and use bare identifiers where required.
+	CodeManifestFieldType = "E2013"
+
+	// `[package]` name does not satisfy identifier rules.
+	//
+	// Fix: use a lowercase name with letters, digits, and `-` / `_`.
+	CodeManifestBadName = "E2014"
+
+	// `version` is not a valid semver triple.
+	//
+	// Fix: set `version = "MAJOR.MINOR.PATCH"` (pre-release suffix allowed).
+	CodeManifestBadVersion = "E2015"
+
+	// `edition` is not a recognized value.
+	//
+	// Fix: pick a supported edition (e.g. `"2024"`).
+	CodeManifestBadEdition = "E2016"
+
+	// Dependency entry is missing `path`, `git`, or `version`.
+	//
+	// Fix: add at least one source for the dependency.
+	CodeManifestBadDepSpec = "E2017"
+
+	// `[workspace]` section declares no members.
+	//
+	// Fix: add at least one member path under `members = [...]`.
+	CodeManifestWorkspaceEmpty = "E2018"
+
+	// Manifest — I/O.
+
+	// `osty.toml` missing from a directory that needs it.
+	//
+	// Fix: create the file or run the command in a different directory.
+	CodeManifestNotFound = "E2030"
+
+	// I/O error reading `osty.toml`.
+	//
+	// Fix: check file permissions and disk state.
+	CodeManifestReadError = "E2031"
+
+	// A workspace member path doesn't exist.
+	//
+	// Fix: create the directory, or remove the member entry.
+	CodeManifestMemberMiss = "E2032"
+
+	// Scaffolding.
+
+	// `osty new NAME` — NAME doesn't satisfy identifier rules.
+	//
+	// Fix: pick a name starting with a letter, using `[a-z0-9_-]`.
+	CodeScaffoldInvalidName = "E2050"
+
+	// Destination directory already exists.
+	//
+	// The scaffolder never overwrites — it requires a fresh target path.
+	//
+	// Fix: choose an empty target, or delete / move the existing directory first.
+	CodeScaffoldDestExists = "E2051"
+
+	// I/O error creating the new project files.
+	//
+	// Fix: check write permissions and free space.
+	CodeScaffoldWriteError = "E2052"
+)
+
+const (
+	// Lint — unused declarations.
+
+	// A `let` binding is introduced but never referenced.
+	//
+	// Example:
+	//   fn f() {
+	//       let unused = 42   // warning: binding `unused` is never used
+	//       println("hi")
+	//   }
+	// Fix: remove the binding, or rename it to begin with `_` to acknowledge the intentional discard.
+	CodeUnusedLet = "L0001"
+
+	// A function or closure parameter is declared but never referenced.
+	//
+	// Public functions (`pub fn`) are exempt since their parameters are
+	// part of the external contract.
+	//
+	// Example:
+	//   fn greet(name: String, times: Int) {   // warning on `times`
+	//       println(name)
+	//   }
+	// Fix: remove the parameter, or rename it to `_times`.
+	CodeUnusedParam = "L0002"
+
+	// A `use` alias is introduced but never referenced.
+	//
+	// Works at package scope: cross-file uses of the alias count.
+	//
+	// Example:
+	//   use foo.bar.baz
+	//
+	//   fn main() { println("hi") }   // warning: imported `baz` never used
+	// Fix: remove the `use`, or prefix the alias with `_` if kept for side effects.
+	CodeUnusedImport = "L0003"
+
+	// `let mut x = ...` is declared mutable but never reassigned.
+	//
+	// Fix: drop the `mut` qualifier.
+	CodeUnusedMut = "L0004"
+
+	// A `mut` binding is reassigned without the previous value ever being
+	// read — the old write is "dead" and the first assignment is wasted
+	// work.
+	//
+	// Example:
+	//   let mut x = heavy()   // warning: value overwritten before use
+	//   x = 1
+	//   println(x)
+	// Fix: remove the initial assignment, or read the old value before overwriting.
+	CodeDeadStore = "L0008"
+
+	// Struct field is never read anywhere in the package.
+	//
+	// Fix: remove the field, or mark it `pub` if it's part of the external contract.
+	CodeUnusedField = "L0005"
+
+	// Private method is never called.
+	//
+	// Fix: remove the method, or make it `pub` if it's intended as public API.
+	CodeUnusedMethod = "L0006"
+
+	// `Result` / `Option` value discarded at statement level.
+	//
+	// Silently dropping a fallible result usually indicates a missed error path.
+	//
+	// Fix: bind the result (`let _ = ...`), propagate with `?`, or match on it.
+	CodeIgnoredResult = "L0007"
+
+	// Lint — shadowing.
+
+	// Inner `let` hides an outer name.
+	//
+	// Example:
+	//   fn f() {
+	//       let x = 1
+	//       {
+	//           let x = 2   // warning: `x` shadows an outer binding
+	//           println(x)
+	//       }
+	//   }
+	// Fix: rename the inner binding, or prefix with `_` if the shadow is intentional.
+	CodeShadowedBinding = "L0010"
+
+	// Lint — unreachable / dead code.
+
+	// Statement appears after an unconditional terminator.
+	//
+	// A statement after `return`, `break`, or `continue` at the same
+	// block level is unreachable.
+	//
+	// Example:
+	//   fn f() -> Int {
+	//       return 1
+	//       let dead = 2     // warning: unreachable code
+	//       dead
+	//   }
+	// Fix: remove the unreachable code, or move the terminator.
+	CodeDeadCode = "L0020"
+
+	// `else` after an `if` branch that unconditionally returns is
+	// redundant — the body below the `if` is only reached when the
+	// condition is false.
+	//
+	// Example:
+	//   if c {
+	//       return 1
+	//   } else {                 // warning: redundant `else`
+	//       return 2
+	//   }
+	// Fix: hoist the `else` body to the top level.
+	CodeRedundantElse = "L0021"
+
+	// The `if` condition is a compile-time constant — the branch is
+	// either always taken or always skipped.
+	//
+	// Plain `for { ... }` is an idiomatic infinite loop and is NOT
+	// flagged; this rule targets only `if true`, `if false`, `if !true`,
+	// `if !false`, and `while`-like for-conditions with the same shape.
+	//
+	// Example:
+	//   if true { do() }    // warning: always-true condition
+	// Fix: drop the `if`, or replace with the real condition.
+	CodeConstantCondition = "L0022"
+
+	// An `if`/`else` branch is an empty block `{}`. Usually a
+	// placeholder the author forgot to fill in — noisy in real programs.
+	//
+	// Example:
+	//   if c {
+	//       work()
+	//   } else {                 // warning: empty else branch
+	//   }
+	// Fix: remove the empty branch, or fill it in.
+	CodeEmptyBranch = "L0023"
+
+	// A `return x` at the tail position of a function body is
+	// unnecessary — the expression alone is already the return value
+	// (§6 implicit return).
+	//
+	// Example:
+	//   fn f() -> Int {
+	//       return 42   // warning: use the bare expression instead
+	//   }
+	// Fix: drop the `return` keyword.
+	CodeNeedlessReturn = "L0024"
+
+	// Both `if` and `else` branches evaluate to the same expression — the
+	// condition is dead code.
+	//
+	// Example:
+	//   let y = if c { 1 } else { 1 }   // warning: both branches identical
+	// Fix: replace with the expression directly (dropping `if`).
+	CodeIdenticalBranches = "L0025"
+
+	// Loop body is empty.
+	//
+	// `for x in xs {}` and `for cond {}` with no side-effecting body are
+	// almost always a bug, or the loop should be replaced with a call
+	// that consumes the iterator.
+	//
+	// Example:
+	//   for x in work() { }   // warning: empty loop body
+	// Fix: do something with each item, or drop the loop.
+	CodeEmptyLoopBody = "L0026"
+
+	// Lint — naming conventions.
+
+	// Type name is not written in UpperCamelCase.
+	//
+	// Applies to structs, enums, interfaces, type aliases, and generic parameters.
+	//
+	// Example:
+	//   struct my_struct { x: Int }   // warning: should be `MyStruct`
+	// Fix: rename using UpperCamelCase.
+	CodeNamingType = "L0030"
+
+	// Function, method, `let`, or parameter name is not written in lowerCamelCase.
+	//
+	// Example:
+	//   fn LoadConfig() { }          // warning: should be `loadConfig`
+	//   fn f(User_Id: Int) {}        // warning: should be `userId`
+	// Fix: rename using lowerCamelCase.
+	CodeNamingValue = "L0031"
+
+	// Enum variant is not written in UpperCamelCase.
+	//
+	// Example:
+	//   enum Color { red, Green }   // warning on `red`
+	// Fix: rename using UpperCamelCase.
+	CodeNamingVariant = "L0032"
+
+	// Lint — redundant forms.
+
+	// `if c { true } else { false }` collapses to `c`.
+	//
+	// Fix: replace with the bare condition.
+	CodeRedundantBool = "L0040"
+
+	// `x == x` / `x != x` compares a value to itself.
+	//
+	// Almost always a typo — one side was meant to be a different name.
+	//
+	// Fix: compare to the intended operand.
+	CodeSelfCompare = "L0041"
+
+	// `x = x` assigns a variable to itself.
+	//
+	// Fix: remove the assignment, or correct one of the operands.
+	CodeSelfAssign = "L0042"
+
+	// `!!x` is a no-op on Bool.
+	//
+	// Example:
+	//   if !!ready { ... }   // warning: double negation
+	// Fix: drop both `!` operators.
+	CodeDoubleNegation = "L0043"
+
+	// `x == true` / `x == false` / `x != true` / `x != false` — comparing
+	// a Bool to a Bool literal is redundant.
+	//
+	// Example:
+	//   if done == true { ... }   // warning: drop `== true`
+	// Fix: use the Bool directly (`if done`, `if !done`).
+	CodeBoolLiteralCompare = "L0044"
+
+	// `!true` / `!false` — negated literal is just the other literal.
+	//
+	// Example:
+	//   let x = !true      // warning: use `false` directly
+	// Fix: replace with the opposite literal.
+	CodeNegatedBoolLiteral = "L0045"
+
+	// Lint — complexity.
+
+	// A function declares too many parameters (> 7 by default).
+	//
+	// Long parameter lists are a maintenance hazard and often mean the
+	// function should be split or should take a config struct.
+	//
+	// Fix: group related parameters into a struct, or split the function.
+	CodeTooManyParams = "L0050"
+
+	// A function body is too long (> 80 statements by default).
+	//
+	// Long bodies are hard to review; extract helpers.
+	//
+	// Fix: factor out cohesive subtasks into helper functions.
+	CodeFunctionTooLong = "L0052"
+
+	// Control-flow nesting is too deep (> 5 levels by default).
+	//
+	// Deeply nested code is hard to follow; early-return or extract
+	// helpers.
+	//
+	// Fix: flatten the structure via early returns / guard clauses, or
+	// extract inner branches into helpers.
+	CodeDeepNesting = "L0053"
+
+	// Lint — documentation.
+
+	// A `pub` declaration has no doc comment.
+	//
+	// Public items are the module's external contract — callers benefit
+	// from a one-line `///` description.
+	//
+	// Example:
+	//   pub fn hashPassword(p: String) -> String { ... }   // warning: missing doc
+	// Fix: add a doc comment, or drop `pub` if the item is internal.
+	CodeMissingDoc = "L0070"
+)

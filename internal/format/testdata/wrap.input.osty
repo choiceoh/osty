@@ -1,0 +1,33 @@
+// Line-length wrap — expressions that fit stay single-line, ones
+// that overflow MaxLineWidth (100) break to one-per-line + trailing
+// comma.
+
+fn shortStuff() {
+    let a = [1, 2, 3]
+    let b = callShort(a, b, c)
+    let c = User { name: "x", age: 1 }
+}
+
+fn longList() {
+    let xs = [10000001, 10000002, 10000003, 10000004, 10000005, 10000006, 10000007, 10000008, 10000009, 10000010]
+}
+
+fn longCall() {
+    let r = compute(firstArgumentName, secondArgumentName, thirdArgumentName, fourthArgumentName, fifthArgumentName)
+}
+
+fn longStructLit() {
+    let u = User { firstName: "Alexander", lastName: "Hamilton", email: "alex@example.com", role: "admin" }
+}
+
+fn longSignature(first: String, second: String, third: String, fourth: String, fifth: String, sixth: String) -> Int {
+    0
+}
+
+fn longMap() {
+    let m = {"first_key": 1000, "second_key": 2000, "third_key": 3000, "fourth_key": 4000, "fifth_key": 5000}
+}
+
+fn deeplyNestedStillFits() {
+    let x = f(a, g(b, h(c, d)))
+}

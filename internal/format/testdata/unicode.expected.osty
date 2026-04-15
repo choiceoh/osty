@@ -1,0 +1,26 @@
+// Unicode round-trip fixture. Previously, multi-byte UTF-8 chars in
+// string literals leaked into `advance()` being called once per BYTE,
+// which ate the two following bytes after each 3-byte rune. `" — shape"`
+// became `" —hape"` on the first format pass and `" —pe"` on the second.
+fn greetings() {
+    let em_dash = "a — b"
+    let korean = "한국어 test"
+    let mixed = "{em_dash} — 한 {korean}"
+    let emoji = "good morning 😀🎉"
+    let arrow = "x → y ← z"
+}
+
+fn tripleStrings() {
+    let poem = """
+        한국어
+        émoji: 😀
+        arrows: → ← ↔
+        """
+    let raw = r"한글 raw — no escape"
+}
+
+fn chars() {
+    let c1 = '한'
+    let c2 = '—'
+    let c3 = '😀'
+}

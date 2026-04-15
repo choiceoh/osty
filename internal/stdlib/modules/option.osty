@@ -1,0 +1,11 @@
+// std.option — signature stub for the Osty standard library.
+//
+// Canonical definition site of `Option<T>`, `Some`, and `None`.
+// The prelude auto-imports these so user code can write `Some(x)`
+// without an explicit `use`. Combinators (`unwrap`, `map`, etc.) will
+// be added alongside the rest of the stdlib's method bodies.
+
+pub enum Option<T> {
+    Some(T),
+    None,
+}

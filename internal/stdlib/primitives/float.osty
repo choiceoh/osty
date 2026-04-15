@@ -1,0 +1,51 @@
+// primitives/float — intrinsic methods on floating-point primitive
+// types. Same placeholder-struct pattern as primitives/int.osty.
+
+#[intrinsic_methods(Float, Float32, Float64)]
+pub struct __FloatMethods {
+    pub fn abs(self) -> Self { self }
+    pub fn min(self, other: Self) -> Self { self }
+    pub fn max(self, other: Self) -> Self { self }
+    pub fn clamp(self, lo: Self, hi: Self) -> Self { self }
+    pub fn signum(self) -> Self { self }
+    pub fn floor(self) -> Self { self }
+    pub fn ceil(self) -> Self { self }
+    pub fn round(self) -> Self { self }
+    pub fn trunc(self) -> Self { self }
+    pub fn fract(self) -> Self { self }
+
+    pub fn sqrt(self) -> Self { self }
+    pub fn cbrt(self) -> Self { self }
+    pub fn ln(self) -> Self { self }
+    pub fn log2(self) -> Self { self }
+    pub fn log10(self) -> Self { self }
+    pub fn exp(self) -> Self { self }
+    pub fn sin(self) -> Self { self }
+    pub fn cos(self) -> Self { self }
+    pub fn tan(self) -> Self { self }
+    pub fn asin(self) -> Self { self }
+    pub fn acos(self) -> Self { self }
+    pub fn atan(self) -> Self { self }
+    pub fn atan2(self, other: Self) -> Self { self }
+
+    pub fn pow(self, exp: Self) -> Self { self }
+
+    pub fn isNaN(self) -> Bool { false }
+    pub fn isInfinite(self) -> Bool { false }
+    pub fn isFinite(self) -> Bool { false }
+    pub fn toBits(self) -> UInt64 { 0 }
+
+    // Conversions to integer types. Per §2.3 overflow aborts; no
+    // Result wrapping on the lossy path. The toInt family here
+    // mirrors Int's outward-facing conversions but loses the
+    // fractional part.
+    pub fn toInt(self) -> Int { 0 }
+    pub fn toInt32(self) -> Int32 { 0 }
+    pub fn toInt64(self) -> Int64 { 0 }
+
+    pub fn toFloat(self) -> Float { 0.0 }
+    pub fn toFloat32(self) -> Float32 { 0.0 }
+    pub fn toFloat64(self) -> Float64 { 0.0 }
+
+    pub fn toString(self) -> String { "" }
+}

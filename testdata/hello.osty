@@ -1,0 +1,6 @@
+#!/usr/bin/env osty
+// Small script that exercises interpolation, Option, and error propagation.
+
+let args = env.args()
+let name = args.get(1) ?? "world"
+println("hello, {name}")

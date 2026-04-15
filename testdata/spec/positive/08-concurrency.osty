@@ -1,0 +1,72 @@
+// §8 Concurrency — structured concurrency, channels, select.
+
+use std.thread
+
+fn structured() -> Result<(Int, Int, Int), Error> {
+    taskGroup(|g| {
+        let h1 = g.spawn(|| fetchA())
+        let h2 = g.spawn(|| fetchB())
+        let h3 = g.spawn(|| fetchC())
+        Ok((h1.join()?, h2.join()?, h3.join()?))
+    })
+}
+
+fn collectAll_demo() -> List<Result<Int, Error>> {
+    thread.collectAll(|g| [
+        g.spawn(|| fetchA()),
+        g.spawn(|| fetchB()),
+    ])
+}
+
+fn parallel_demo(items: List<Int>) -> List<Result<Int, Error>> {
+    parallel(items, 4, |x| Ok(x * 2))
+}
+
+fn race_demo() -> Result<Int, Error> {
+    thread.race(|g| [
+        g.spawn(|| fetchA()),
+        g.spawn(|| fetchB()),
+    ])
+}
+
+fn channels() {
+    let ch = thread.chan::<Int>(100)
+    ch <- 1
+    ch <- 2
+    let x = ch.recv()
+    for v in ch {
+        handle(v)
+    }
+    ch.close()
+}
+
+fn select_demo() {
+    let ch1 = thread.chan::<Int>(0)
+    let ch2 = thread.chan::<String>(0)
+    let out = thread.chan::<Int>(0)
+    thread.select(|s| {
+        s.recv(ch1, |x| handleInt(x))
+        s.recv(ch2, |x| handleStr(x))
+        s.send(out, 42, || sent())
+        s.timeout(5.s, || giveUp())
+        s.default(|| nonBlocking())
+    })
+}
+
+fn cancellation_check() {
+    for i in 0..1000 {
+        if thread.isCancelled() { break }
+        compute(i)
+    }
+}
+
+fn fetchA() -> Result<Int, Error> { Ok(1) }
+fn fetchB() -> Result<Int, Error> { Ok(2) }
+fn fetchC() -> Result<Int, Error> { Ok(3) }
+fn handle(_x: Int) {}
+fn handleInt(_x: Int) {}
+fn handleStr(_s: String) {}
+fn sent() {}
+fn giveUp() {}
+fn nonBlocking() {}
+fn compute(_x: Int) {}

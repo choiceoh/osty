@@ -1,0 +1,50 @@
+// §11 Testing — _test.osty file patterns, assertions, benchmarks.
+
+use std.testing
+
+fn testLoginSuccess() {
+    let result = login("alice", "valid")
+    testing.assert(result.isOk())
+}
+
+fn testLoginRejectsBlankUser() {
+    let result = login("", "anything")
+    testing.assertEq(result, Err(Invalid))
+}
+
+fn testAddTable() {
+    let cases = [
+        (1, 2, 3),
+        (0, 0, 0),
+        (-1, -1, -2),
+    ]
+    for (i, (a, b, expected)) in cases.enumerate() {
+        testing.context("case {i}: add({a}, {b})", || {
+            testing.assertEq(add(a, b), expected)
+        })
+    }
+}
+
+fn benchParseJson() {
+    testing.benchmark(1000, || {
+        let _: Config = decode(sample())?
+        Ok(())
+    })
+}
+
+fn testRenderSnapshot() {
+    let output = render(42)
+    testing.snapshot("render_42", output)
+}
+
+fn login(_u: String, _p: String) -> Result<Int, Error> { Ok(0) }
+fn add(a: Int, b: Int) -> Int { a + b }
+fn decode(_t: String) -> Result<Config, Error> { Ok(Config.new()) }
+fn sample() -> String { "" }
+fn render(_n: Int) -> String { "" }
+
+pub struct Config {
+    pub fn new() -> Self { Self {} }
+}
+
+pub enum Invalid { Bad }

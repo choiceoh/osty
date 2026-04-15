@@ -1,0 +1,7 @@
+error[E0500]: undefined name `unknown`
+ --> test.osty:2:13
+    |
+  2 |     let x = unknown
+    |             ^^^^^^^ not in scope
+    |
+ = help: did you mean `unknownField`?

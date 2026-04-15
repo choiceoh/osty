@@ -1,0 +1,68 @@
+// word_freq_test.osty
+// ----------------------------------------------------------
+// Grammar v0.2 / LANG_SPEC v0.9 준수 확인됨.
+
+use std.testing
+
+fn testTokenizeBasic() {
+    let toks = testing.expectOk(tokenize("hello, world! it's fine."))
+    testing.assertEq(toks, ["hello", "world", "it's", "fine"])
+}
+
+fn testTokenizeEmpty() {
+    let toks = testing.expectOk(tokenize(""))
+    testing.assertEq(toks.len(), 0)
+}
+
+fn testTokenizeIgnoresDigits() {
+    let toks = testing.expectOk(tokenize("abc 123 def 456"))
+    testing.assertEq(toks, ["abc", "def"])
+}
+
+fn testTallyCountsCorrectly() {
+    let counts = tally(["a", "b", "a", "c", "a"])
+    testing.assertEq(counts.get("a"), Some(3))
+    testing.assertEq(counts.get("b"), Some(1))
+    testing.assertEq(counts.get("c"), Some(1))
+    testing.assertEq(counts.len(), 3)
+}
+
+fn testTallyEmpty() {
+    let counts = tally([])
+    testing.assertEq(counts.len(), 0)
+}
+
+fn testTopNOrder() {
+    // Grammar §2.7: LetPattern 재귀 허용 — 중첩 튜플 destructure OK.
+    let cases = [
+        ({"a": 5, "b": 2, "c": 8}, 2, [("c", 8), ("a", 5)]),
+        ({"x": 1, "y": 1},         1, [("x", 1)]),
+        ({:},                      3, []),
+    ]
+    for (i, (input, n, expected)) in cases.enumerate() {
+        testing.context("case {i}", || {
+            let got = topN(input, n).map(|e| (e.word, e.count))
+            testing.assertEq(got.len(), expected.len())
+            for (j, pair) in got.enumerate() {
+                let (gotWord, gotCount) = pair
+                match expected.get(j) {
+                    Some(exp) -> {
+                        let (expWord, expCount) = exp
+                        testing.assertEq(gotWord, expWord)
+                        testing.assertEq(gotCount, expCount)
+                    },
+                    None -> testing.fail("missing expected[{j}]"),
+                }
+            }
+        })
+    }
+}
+
+fn testTopNWithEmptyMap() {
+    let empty: Map<String, Int> = {:}
+    testing.assertEq(topN(empty, 5).len(), 0)
+}
+
+fn testCountFileRejectsMissing() {
+    testing.expectError(countFile("/nonexistent/path.txt"))
+}

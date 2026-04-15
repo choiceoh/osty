@@ -1,0 +1,34 @@
+// §5 Modules / §12 FFI — every `use` form.
+
+use std.fs
+use std.http
+use std.io as stdio
+use github.com/user/lib
+use github.com/user/lib2 as lib2
+
+use go "net/http" as ghttp {
+    fn Get(url: String) -> Result<Response, Error>
+}
+
+use go "github.com/user/bar" as bar {
+    fn DoThing(x: Int) -> Int
+
+    struct Config {
+        Host: String,
+        Port: Int,
+    }
+}
+
+pub struct Response {
+    pub code: Int,
+}
+
+fn demo() {
+    let r = fs
+    let h = http
+    let gh = ghttp
+    let s = stdio
+    let pkg = lib
+    let pkg2 = lib2
+    let bp = bar
+}

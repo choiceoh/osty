@@ -1,0 +1,17 @@
+// File-level line comment at the top.
+
+use std.fs  // trailing on use
+
+// A freestanding comment above a function.
+fn greet(name: String) -> String {
+    // Inside the function.
+    let msg = "hi, {name}"
+    /* A block comment in the middle. */
+    msg
+}
+
+fn compute(x: Int) -> Int {
+    let y = x * 2   // trailing line comment
+    let z = y + 1
+    z
+}

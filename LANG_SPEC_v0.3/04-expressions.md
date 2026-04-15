@@ -1,0 +1,406 @@
+## 4. Expressions
+
+### 4.1 Block Expressions
+
+```osty
+let x = {
+    let tmp = compute()
+    tmp * 2
+}
+```
+
+A block evaluates to its final expression. `{}` evaluates to `()` in
+expression position. Empty map is `{:}`.
+
+Blocks introduce lexical scope. `defer` statements registered inside run
+on block exit (§4.12).
+
+#### 4.1.1 Restricted Expression Position
+
+Several constructs (`if`, `for`, `match`, `if let`, `for let`) take an
+expression as their head. In these positions, **a struct literal of the
+form `Type { ... }` is forbidden** because the trailing `{` would be
+ambiguous with the block that follows. Wrapping in parentheses lifts the
+restriction. The grammar refers to this as `RestrictedExpr`.
+
+```osty
+if (Point { x: 0, y: 0 }) == origin { ... }      // OK
+if Point { x: 0, y: 0 } == origin { ... }         // ERROR
+
+match (User { name: n, age: a }) { ... }          // OK
+match User { name: n, age: a } { ... }            // ERROR
+
+for x in (List { items: xs }).iter() { ... }      // OK
+```
+
+The same restriction applies to:
+- The condition of `if` (§4.2)
+- The scrutinee of `match` (§4.3)
+- The iterable of `for x in <expr>` and the condition of `for <expr>` (§4.4)
+- The right-hand side of `if let P = <expr>` and `for let P = <expr>`
+
+### 4.2 If Expressions
+
+```osty
+let label = if score >= 90 {
+    "A"
+} else if score >= 80 {
+    "B"
+} else {
+    "C"
+}
+```
+
+When used as an expression, all branches must produce the same type and
+`else` is required.
+
+**`if let` form.** Pattern-matching form that binds on success:
+
+```osty
+if let Some(u) = user {
+    println("hi, {u.name}")
+}
+
+if let Ok(cfg) = loadConfig() {
+    apply(cfg)
+} else {
+    useDefaults()
+}
+```
+
+Struct literals in the `if` head must be parenthesized — see §4.1.1
+(restricted expression position). The same rule applies to `for` and
+`match` heads.
+
+### 4.3 Match Expressions
+
+```osty
+let area = match shape {
+    Circle(r) -> 3.14 * r * r,
+    Rect(w, h) -> w * h,
+    Empty -> 0.0,
+}
+```
+
+Match is exhaustive. `_` matches anything. Arms may be expressions or
+blocks.
+
+#### 4.3.1 Patterns
+
+Supported patterns:
+
+- **Wildcard:** `_` matches anything without binding.
+- **Literal:** `42`, `"yes"`, `true`, `'\n'`.
+- **Identifier:** `x` binds the matched value.
+- **Tuple:** `(a, b)` destructures tuples.
+- **Struct:** `User { name, age }`, `User { name, .. }` (ignore rest),
+  `User { name: "alice", .. }` (match specific field value and bind
+  nothing), `User { name: n, age }` (match and rename binding).
+- **Variant:** `Some(x)`, `Ok(v)`, `Rect(w, h)`, `Empty`.
+- **Range:** `0..=9`, `10..20`, `..=0`, `100..` (half-open ranges).
+  Range patterns require an `Ordered` scrutinee. Numeric types and
+  `Char` (e.g. `'a'..='z'`) are permitted; `String` and other types
+  without a useful total order are a compile error.
+- **Or:** `A | B | C` matches any alternative. All alternatives must
+  bind the same names with the same types. Alternatives at different
+  nesting depths are allowed (`A(B(x)) | C(D(x))`) as long as the
+  bindings agree.
+- **Literal patterns** are type-strict: `42 -> ...` does not match a
+  `Float` scrutinee, and `'A' -> ...` does not match a `Byte`. There
+  is no implicit numeric coercion in patterns.
+- **Binding (`@`):** `name @ pattern` binds the whole matched value
+  while also matching against `pattern`:
+  ```osty
+  match n {
+      x @ 0..=9 -> "single digit: {x}",
+      x @ 10..=99 -> "two digits: {x}",
+      _ -> "more",
+  }
+  ```
+
+Patterns nest. `Ok(Some(x))`, `Circle(r @ 0.0..=1.0)`, and
+`User { name, age @ 18..=65 }` are all valid.
+
+#### 4.3.2 Guards
+
+A match arm may be conditioned on a boolean expression:
+
+```osty
+let label = match x {
+    Some(n) if n > 0 -> "positive",
+    Some(n) if n < 0 -> "negative",
+    Some(_) -> "zero",
+    None -> "missing",
+}
+```
+
+Arms are tried in order; both the pattern and the guard must succeed.
+Exhaustiveness treats guarded arms conservatively: a type is fully
+covered only by arms without guards (or catch-alls). An otherwise
+exhaustive match composed only of guarded arms requires a final
+catch-all.
+
+Guards may reference bindings introduced by the pattern — the guard
+and the arm body share the same scope, so `Some(n) if n > 0` works as
+expected. Guards may not introduce new bindings (no `if let` inside a
+guard).
+
+### 4.4 Loops
+
+```osty
+for i in 0..10 { ... }
+for i in 0..=10 { ... }
+for item in xs { ... }
+for (k, v) in map { ... }
+
+for cond { ... }                 // while-style
+for { ... }                      // infinite
+
+for x in xs {
+    if found(x) { break }
+}
+
+for item in items {
+    if !item.valid { continue }
+    process(item)
+}
+```
+
+**`for let` form.** Loop while a pattern match succeeds:
+
+```osty
+for let Some(x) = queue.pop() {
+    process(x)
+}
+
+for let Ok(line) = reader.readLine() {
+    handle(line)
+}
+```
+
+On each iteration, the expression is evaluated and matched. If it fails,
+the loop exits.
+
+There is no C-style `for (init; cond; step)`.
+
+`break` exits the innermost enclosing loop; `continue` skips to the next
+iteration. Labelled `break` / `continue` are not provided.
+
+### 4.5 Error Propagation
+
+```osty
+fn loadConfig(path: String) -> Result<Config, Error> {
+    let text = fs.readToString(path)?
+    let cfg: Config = json.parse(text)?
+    Ok(cfg)
+}
+
+fn findActive(id: Int) -> User? {
+    let user = lookupUser(id)?
+    if user.active { Some(user) } else { None }
+}
+```
+
+The postfix `?` operator applies to `Result<T, E>` and `Option<T>`:
+
+- On `Result<T, E>`: `Ok(v)` evaluates to `v`; `Err(e)` returns `Err(e)`
+  from the enclosing function. The error type must be `E`, or `e` must
+  satisfy `Error` with enclosing return `Result<_, Error>`.
+- On `Option<T>`: `Some(v)` evaluates to `v`; `None` returns `None` from
+  the enclosing function. The enclosing return must be `Option<_>`.
+
+Mixing `Option<T>?` in a `Result<_, _>` function (or vice versa) is a
+compile error. Convert explicitly with `Option.orError(msg)` or
+`Result.ok()`.
+
+The `?` operator chains freely with method calls:
+
+```osty
+let upper = fetchUser()?.getName()?.toUpper()
+```
+
+### 4.6 Optional Chaining and Nil-Coalescing
+
+The `?.` operator accesses a field or calls a method on an `Option<T>`.
+If `None`, the result is `None`; if `Some(v)`, the access is performed
+on `v`:
+
+```osty
+let name: String? = user?.name
+let city: String? = user?.address?.city
+let len: Int? = user?.name?.len()
+```
+
+Chained access short-circuits on the first `None`.
+
+The `??` operator supplies a default for `None`:
+
+```osty
+let name = user?.name ?? "anonymous"
+let count = countCache?.value ?? 0
+```
+
+The right operand is evaluated only when the left is `None`. `??` binds
+tighter than assignment but looser than comparison. `?.` binds at the
+same precedence as `.`.
+
+### 4.7 Closures
+
+```osty
+let double = |x| x * 2
+let add = |a, b| a + b
+list.map(|x| x * 2)
+
+list.map(|x| {
+    let doubled = x * 2
+    doubled + 1
+})
+
+let f = |x: Int| -> Int { x * 2 }
+```
+
+Closures capture by reference. Mutability is inherited from the captured
+binding's declaration. A closure that outlives the block in which it was
+created keeps the captured bindings alive (the GC roots them through the
+closure value).
+
+**Closure parameter patterns.** Any `LetPattern` (§3.2) is permitted as
+a closure parameter, with the same destructuring and wildcard rules
+applied at call time:
+
+```osty
+counts.entries().map(|(k, v)| "{k} = {v}")
+users.map(|User { name, age }| "{name}({age})")
+pairs.map(|(_, second)| second)
+```
+
+Only **irrefutable** patterns are allowed. Patterns that could fail to
+match (enum variants like `Some(x)`, range patterns, or struct patterns
+against multi-variant enums) are a compile error — call sites must
+supply a value the closure can always destructure.
+
+Annotations (`#[deprecated]`, `#[json]`, …) may not be applied to
+closure expressions; annotations are a declaration-level feature.
+
+> **Parser status (v0.3).** The reference parser does not yet implement
+> patterned closure parameters; it currently accepts only
+> `IDENT (':' Type)?`. The language surface is specified here so users
+> can design code against the final shape. Until the parser catches up,
+> the manual form — `|pair| { let (k, v) = pair; ... }` — remains the
+> workaround. Tracked internally as the v0.3 resolution of gap G4.
+
+### 4.8 String Interpolation
+
+See §1.6.3.
+
+### 4.9 Member Access and Method Calls
+
+```osty
+user.name
+user.greet()
+User.new(...)
+math.sqrt(2.0)
+```
+
+`.` for all member access. `::` only for turbofish.
+
+### 4.10 Indexing
+
+```osty
+xs[0]                  // aborts on out-of-range
+m["key"]               // aborts on missing key
+xs.get(0)              // T?
+m.get("key")           // V?
+xs[2..5]               // slicing
+s[2..5]                // String byte slicing; aborts on invalid UTF-8 boundary
+```
+
+**String indexing is in bytes, not Unicode scalars.** This matches the
+Go and Rust convention: a `String` is an immutable UTF-8-encoded byte
+sequence. `s.len()` returns the number of bytes; `s[i]` returns the
+byte at index `i` as a `Byte`; `s[a..b]` returns a `String` slice (no
+copy) that aborts at runtime if either endpoint falls inside a multi-
+byte UTF-8 sequence.
+
+For Unicode-scalar or grapheme iteration, use the explicit converters
+exposed by `std.strings`:
+
+```osty
+for c in s.chars() { ... }         // Iterator<Char>
+for g in s.graphemes() { ... }     // Iterator<String> — extended grapheme clusters
+let n = s.charCount()              // O(n) scan
+```
+
+`Bytes` indexing follows the same rules but never aborts on UTF-8
+boundaries, since it carries no encoding contract.
+
+### 4.11 Block Scope
+
+Every `{ }` introduces a lexical scope. Scope exits occur when control
+flow leaves the block (end of block, `return`, `break`/`continue` out
+of loop, `?` propagation).
+
+### 4.12 Defer
+
+`defer` schedules an expression or block to run when the enclosing block
+exits.
+
+```osty
+fn process(path: String) -> Result<(), Error> {
+    let f = fs.open(path)?
+    defer f.close()
+
+    let conn = net.connect("api.com")?
+    defer conn.close()
+
+    let data = f.read()?
+    let result = conn.send(data)?
+    Ok(())
+}
+```
+
+Inside a loop, `defer` runs at the end of each iteration:
+
+```osty
+for path in paths {
+    let f = fs.open(path)?
+    defer f.close()
+    process(f)?
+}
+```
+
+Rules:
+
+1. `defer` is a statement.
+2. The argument is an expression or block.
+3. Multiple `defer`s in the same block run in LIFO order.
+4. `defer` is scoped to the enclosing block. It is not valid at the
+   top level of a script (§6); wrap top-level cleanup in an explicit
+   `{ ... }` block.
+5. Captured variables and expressions are evaluated at execution time.
+6. Errors raised inside a deferred expression do not propagate.
+7. `defer` runs on normal block exit, on `?`-propagated early return,
+   and on task **cancellation** (§8.4.3). It does **not** run when
+   the process terminates via `abort`, `unreachable`, `todo`, or
+   `os.exit`; those are immediate.
+8. Blocking calls inside a `defer` body are **not** cancellation
+   points — cleanup is uninterruptible. Authors who need bounded
+   cleanup must enforce their own timeout inside the `defer` body.
+9. A deferred expression whose type is `Result<_, _>` produces an
+   unused-result warning. Handle the result explicitly with one of the
+   helpers from `std.process` (§10.1):
+
+```osty
+defer ignoreError(conn.close())
+defer logError(f.close(), "file close failed")
+
+// Or handle manually
+defer {
+    match db.close() {
+        Ok(_) -> {},
+        Err(e) -> log.warn("db close failed: {e.message()}"),
+    }
+}
+```
+
+---

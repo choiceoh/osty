@@ -1,0 +1,16 @@
+// §6 Scripts — top-level statements wrapped in implicit main.
+
+use std.fs
+
+/// Top-level declarations are fine, local to implicit main.
+fn greet(name: String) -> String {
+    "hi, {name}"
+}
+
+// Top-level statements begin here — makes this a script file.
+let args = env()
+let name = first(args) ?? "world"
+println("{greet(name)}")
+
+fn env() -> List<String> { [] }
+fn first(xs: List<String>) -> String? { None }

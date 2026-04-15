@@ -1,0 +1,29 @@
+// Method-chain rendering.
+//
+// - ≥ 3 post-base segments → always break to leading-dot style.
+// - Fewer segments: break only if the source already broke them.
+
+fn shortChain() {
+    // 0 segs — a.b() single call, no chain.
+    iter.from(xs)
+    // 1 seg, single-line in source → stay single-line.
+    iter.from(xs).map(|x| x)
+    // 2 segs, single-line in source → stay single-line.
+    iter.from(xs).map(|x| x).filter(|x| x > 0)
+}
+
+fn longChain() {
+    // 4 segs → break.
+    iter.from(xs).map(|x| x * 2).filter(|x| x > 10).take(5).toList()
+}
+
+fn authorBroke() {
+    // 2 segs but already multi-line in source → preserve.
+    iter.from(xs)
+        .map(|x| x)
+}
+
+fn optionalChain(u: User?) {
+    // `?.` continuation.
+    u?.profile?.display().trim().toLower()
+}

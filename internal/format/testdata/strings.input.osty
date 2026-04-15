@@ -1,0 +1,41 @@
+// String literal edge cases — raw, interpolated, triple-quoted, and
+// their escape policies.
+
+fn basicString() {
+    let a = "hello"
+    let b = "tabs\tand\nnewlines"
+    let c = "quote \" inside"
+    let d = "backslash \\ and null \0"
+    let e = "unicode \u{1F600} emoji"
+    let f = "한글과 emoji 🎉 round-trip"
+}
+
+fn interpolated(name: String, count: Int) -> String {
+    let msg = "hi, {name}"
+    let multi = "{name} has {count} items"
+    let literal = "open brace \{ close brace \}"
+    let nested = "value is {user.profile.display()}"
+    msg
+}
+
+fn rawString() {
+    let pattern = r"\d+\.\d+"
+    let path = r"C:\Users\name"
+    let empty = r""
+    let withBraces = r"not {interp} here"
+}
+
+fn tripleString() {
+    let sql = """
+        SELECT *
+        FROM users
+        WHERE id = {id}
+        """
+    let rawDoc = r"""
+        Literal \n stays literal.
+        No {interp} either.
+        """
+    let shortTriple = """
+        one line
+        """
+}

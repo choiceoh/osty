@@ -1,0 +1,27 @@
+// std.cmp — comparison interfaces.
+//
+// Canonical definition site of `Equal`, `Ordered`, and `Hashable`. All
+// three are auto-imported via the prelude so user types can declare
+// generic bounds like `<T: Ordered>` without an explicit `use`.
+//
+// Comparison operators (`==`, `!=`, `<`, `<=`, `>`, `>=`) desugar to
+// method calls on these interfaces. Primitive types are treated as
+// built-in instances per §2.6.5 of the language specification.
+
+pub interface Equal {
+    fn eq(self, other: Self) -> Bool
+    fn ne(self, other: Self) -> Bool { !self.eq(other) }
+}
+
+pub interface Ordered {
+    Equal
+    fn lt(self, other: Self) -> Bool
+    fn le(self, other: Self) -> Bool { self.lt(other) || self.eq(other) }
+    fn gt(self, other: Self) -> Bool { !self.le(other) }
+    fn ge(self, other: Self) -> Bool { !self.lt(other) }
+}
+
+pub interface Hashable {
+    Equal
+    fn hash(self) -> Int
+}

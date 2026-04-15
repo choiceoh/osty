@@ -1,0 +1,45 @@
+// §7 The Error Interface — custom error types, `?` propagation.
+
+pub enum FsError {
+    NotFound(String),
+    PermissionDenied(String),
+    IoError(String),
+
+    pub fn message(self) -> String {
+        match self {
+            NotFound(p) -> "not found: {p}",
+            PermissionDenied(p) -> "permission denied: {p}",
+            IoError(p) -> "io error: {p}",
+        }
+    }
+
+    pub fn source(self) -> Error? { None }
+}
+
+pub struct ParseError {
+    pub line: Int,
+    pub column: Int,
+    pub msg: String,
+
+    pub fn message(self) -> String {
+        "{self.msg} at {self.line}:{self.column}"
+    }
+
+    pub fn source(self) -> Error? { None }
+}
+
+// `?` propagation with a concrete error type.
+fn readFile(path: String) -> Result<String, FsError> {
+    let exists = checkExists(path)?
+    Ok("")
+}
+
+fn checkExists(path: String) -> Result<Bool, FsError> {
+    Ok(true)
+}
+
+// `?` with error widening to the generic `Error` interface.
+fn loadConfig(path: String) -> Result<String, Error> {
+    let text = readFile(path)?
+    Ok(text)
+}

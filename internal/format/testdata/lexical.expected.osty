@@ -1,0 +1,51 @@
+// §1 Lexical Structure — every literal form and comment kind.
+
+// Line comment
+/* block comment */
+/// Doc comment attached to the next declaration.
+pub fn sink() {
+    // Identifiers, keywords, contextual idents.
+    let _unused = 0
+    let x = 0
+    let mut y: Int = 10
+    y = y + 1
+
+    // Integer literals with separators and every base prefix (lowercase only).
+    let a = 42
+    let b = 1_000_000
+    let c = 0xFF_FF
+    let d = 0b1010
+    let e = 0o777
+
+    // Float literals.
+    let f = 3.14
+    let g = 1.0e10
+    let h = 2.5e-3
+
+    // String literals.
+    let s1 = "hello"
+    let s2 = """
+        escapes:
+         	 " \\ \u{2028}
+        """
+    let s3 = r"raw \n without escapes"
+    let s4 = "interp: {x} and {y + 1}"
+    let s5 = """
+        triple
+        with {x} interpolation
+        """
+
+    // Char and byte literals.
+    let ch1 = 'A'
+    let ch2 = '\n'
+    let ch3 = '😀'
+    let b1 = b'A'
+
+    // Collection literals.
+    let xs: List<Int> = [1, 2, 3]
+    let empty: List<Int> = []
+    let m: Map<String, Int> = {"a": 1, "b": 2}
+    let em: Map<String, Int> = {:}
+    let t = (1, "two", 3.0)
+    let one = (42,)
+}

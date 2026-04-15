@@ -1,0 +1,73 @@
+// Self-contained resolver fixture: every name used here is either
+// declared in this file or part of the v0.2 prelude.
+
+pub interface Reader {
+    fn read(self, buf: Bytes) -> Result<Int, Error>
+}
+
+pub interface Writer {
+    fn write(self, data: Bytes) -> Result<Int, Error>
+}
+
+pub struct User {
+    pub name: String,
+    pub age: Int,
+    email: String,
+
+    pub fn new(name: String, email: String) -> Self {
+        Self { name, age: 0, email }
+    }
+
+    pub fn greet(self) -> String {
+        "hi, {self.name}"
+    }
+}
+
+pub enum Shape {
+    Circle(Float),
+    Rect(Float, Float),
+    Empty,
+
+    pub fn area(self) -> Float {
+        match self {
+            Circle(r) -> 3.14 * r * r,
+            Rect(w, h) -> w * h,
+            Empty -> 0.0,
+        }
+    }
+}
+
+fn max<T: Ordered>(a: T, b: T) -> T {
+    if a > b { a } else { b }
+}
+
+fn categorize(n: Int) -> String {
+    match n {
+        x @ 0..=9 -> "single: {x}",
+        x @ 10..=99 -> "double: {x}",
+        _ -> "many",
+    }
+}
+
+fn process(items: List<Int>) -> Int {
+    let mut total = 0
+    for i in items {
+        total = total + i
+    }
+    total
+}
+
+fn demoOption(u: User?) -> String {
+    if let Some(user) = u {
+        user.greet()
+    } else {
+        "anonymous"
+    }
+}
+
+fn main() {
+    let u = User.new("alice", "a@x.com")
+    let s = Circle(2.0)
+    let m = max(1, 2)
+    println("{u.greet()} — shape area {s.area()}, max {m}")
+}

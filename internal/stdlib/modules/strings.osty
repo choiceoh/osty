@@ -1,0 +1,49 @@
+// std.strings — string manipulation.
+
+pub fn split(s: String, sep: String) -> List<String> {
+    []
+}
+
+pub fn join(parts: List<String>, sep: String) -> String {
+    ""
+}
+
+pub fn contains(s: String, substr: String) -> Bool {
+    false
+}
+
+pub fn startsWith(s: String, prefix: String) -> Bool {
+    false
+}
+
+pub fn endsWith(s: String, suffix: String) -> Bool {
+    false
+}
+
+pub fn trim(s: String) -> String {
+    s
+}
+
+pub fn trimStart(s: String) -> String {
+    s
+}
+
+pub fn trimEnd(s: String) -> String {
+    s
+}
+
+pub fn toUpper(s: String) -> String {
+    s
+}
+
+pub fn toLower(s: String) -> String {
+    s
+}
+
+pub fn repeat(s: String, n: Int) -> String {
+    s
+}
+
+pub fn replace(s: String, old: String, new: String) -> String {
+    s
+}

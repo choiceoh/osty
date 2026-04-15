@@ -1,0 +1,42 @@
+// Basic declarations and expressions.
+
+use std.fs
+use std.http
+
+/// The maximum number of retries before giving up.
+pub let MAX_RETRIES = 3
+
+/// Represents a point on a 2D plane.
+pub struct Point {
+    pub x: Int,
+    pub y: Int,
+
+    pub fn new(x: Int, y: Int) -> Point {
+        Point { x, y }
+    }
+
+    pub fn origin() -> Point {
+        Point { x: 0, y: 0 }
+    }
+}
+
+pub enum Shape {
+    Circle(Float),
+    Rect(Float, Float),
+    Empty,
+
+    pub fn area(self) -> Float {
+        match self {
+            Circle(r) -> 3.14 * r * r,
+            Rect(w, h) -> w * h,
+            Empty -> 0.0,
+        }
+    }
+}
+
+fn main() {
+    let p = Point.new(1, 2)
+    let shape = Circle(1.5)
+    let a = shape.area()
+    println("area = {a}")
+}

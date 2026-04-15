@@ -1,0 +1,135 @@
+// §4 Expressions — blocks, if/match/for, closures, ranges, ?/?./??, etc.
+
+pub enum Shape {
+    Circle(Float),
+    Rect(Float, Float),
+    Empty,
+}
+
+fn block_expr() -> Int {
+    let x = {
+        let tmp = 1 + 2
+        tmp * 2
+    }
+    x
+}
+
+fn if_expr(score: Int) -> String {
+    if score >= 90 {
+        "A"
+    } else if score >= 80 {
+        "B"
+    } else {
+        "C"
+    }
+}
+
+fn if_let(u: Int?) -> Int {
+    if let Some(n) = u {
+        n
+    } else {
+        0
+    }
+}
+
+fn match_expr(s: Shape) -> Float {
+    match s {
+        Circle(r) -> 3.14 * r * r,
+        Rect(w, h) -> w * h,
+        Empty -> 0.0,
+    }
+}
+
+fn match_guards(n: Int?) -> String {
+    match n {
+        Some(v) if v > 0 -> "positive",
+        Some(v) if v < 0 -> "negative",
+        Some(_) -> "zero",
+        None -> "missing",
+    }
+}
+
+fn patterns(n: Int) -> String {
+    match n {
+        0 -> "zero",
+        x @ 1..=9 -> "single: {x}",
+        x @ 10..=99 -> "double: {x}",
+        _ -> "many",
+    }
+}
+
+fn or_pattern(s: Shape) -> Float {
+    match s {
+        Circle(r) | Rect(r, _) -> r,
+        Empty -> 0.0,
+    }
+}
+
+fn loops() {
+    for i in 0..10 {
+        if i > 5 { break }
+    }
+    for i in 0..=10 { }
+    for x in [1, 2, 3] {
+        if x == 2 { continue }
+    }
+    for let Some(_) = None { }
+    for cond() {
+        break
+    }
+    for {
+        break
+    }
+}
+
+fn cond() -> Bool { false }
+
+fn error_propagation(path: String) -> Result<Int, Error> {
+    let text = readOrErr(path)?
+    let parsed: Int = parseOrErr(text)?
+    Ok(parsed)
+}
+
+fn readOrErr(_p: String) -> Result<String, Error> { Ok("") }
+fn parseOrErr(_t: String) -> Result<Int, Error> { Ok(0) }
+
+fn optional_chaining(u: User?) -> String {
+    let name = u?.name ?? "anonymous"
+    name
+}
+
+pub struct User {
+    pub name: String,
+}
+
+fn closures() {
+    let double = |x| x * 2
+    let add = |a: Int, b: Int| -> Int { a + b }
+    let destructure = |(k, v)| k + v
+    let wildcard_closure = |(_, second)| second
+    let block_body = |x| {
+        let y = x * 2
+        y + 1
+    }
+}
+
+fn ranges() {
+    let r1 = 0..10
+    let r2 = 0..=10
+    let r3 = ..50
+    let r4 = 100..
+}
+
+fn defers(path: String) -> Result<(), Error> {
+    let h = open(path)?
+    defer close(h)
+
+    let conn = connect()?
+    defer close(conn)
+
+    Ok(())
+}
+
+fn open(_path: String) -> Result<Int, Error> { Ok(0) }
+fn close(_h: Int) { }
+fn connect() -> Result<Int, Error> { Ok(0) }

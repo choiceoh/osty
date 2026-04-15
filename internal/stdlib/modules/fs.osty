@@ -1,0 +1,21 @@
+// std.fs — filesystem access (minimal subset per spec §10.1).
+//
+// The Tier 1 surface is intentionally narrow: read the whole file,
+// write the whole file, check existence, remove. Streaming I/O, file
+// handles, and directory iteration live in higher-tier modules.
+
+pub fn readToString(path: String) -> Result<String, Error> {
+    Ok("")
+}
+
+pub fn writeString(path: String, contents: String) -> Result<(), Error> {
+    Ok(())
+}
+
+pub fn exists(path: String) -> Bool {
+    false
+}
+
+pub fn remove(path: String) -> Result<(), Error> {
+    Ok(())
+}

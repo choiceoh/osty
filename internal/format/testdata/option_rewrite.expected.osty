@@ -1,0 +1,14 @@
+// Spec §2.5 / §13.3: formatter canonicalizes Option<T> to T?.
+
+fn findUser(id: Int) -> User? {
+    None
+}
+
+fn chain(x: Int??) -> Int? {
+    None
+}
+
+pub struct Cache {
+    data: Map<String, Int?>,
+    fallback: String? = None,
+}

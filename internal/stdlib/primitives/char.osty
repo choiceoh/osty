@@ -1,0 +1,19 @@
+// primitives/char — intrinsic methods on `Char` (§2.1). `Char`
+// represents one Unicode scalar value; the checked `toChar` converter
+// lives here, while the total `toInt` returns its scalar value.
+
+#[intrinsic_methods(Char)]
+pub struct __CharMethods {
+    pub fn toInt(self) -> Int { 0 }
+    pub fn toString(self) -> String { "" }
+
+    pub fn isDigit(self) -> Bool { false }
+    pub fn isAlpha(self) -> Bool { false }
+    pub fn isAlphanumeric(self) -> Bool { false }
+    pub fn isWhitespace(self) -> Bool { false }
+    pub fn isUpper(self) -> Bool { false }
+    pub fn isLower(self) -> Bool { false }
+
+    pub fn toUpper(self) -> Char { self }
+    pub fn toLower(self) -> Char { self }
+}

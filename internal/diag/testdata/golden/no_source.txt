@@ -1,0 +1,2 @@
+warning[E0400]: deprecated API
+ --> test.osty:10:5

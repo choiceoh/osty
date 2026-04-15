@@ -1,0 +1,151 @@
+#!/usr/bin/env osty
+//
+// word_freq.osty
+// ----------------------------------------------------------
+// 여러 텍스트 파일에서 단어 빈도를 병렬 집계해 상위 N개를 JSON으로 출력.
+//
+// 사용:  osty run word_freq.osty -- <file1> <file2> ...
+//
+// Grammar v0.2 / LANG_SPEC v0.9 준수 확인됨.
+//
+
+use std.fs
+use std.env
+use std.json
+use std.log
+use std.regex
+use std.os
+use std.iter
+
+let TOP_N = 20
+let CONCURRENCY = 8
+
+// ─── 도메인 타입 ──────────────────────────────────────────
+//
+// 타입 내부는 Osty camelCase 관례(§1.4),
+// JSON 와이어 포맷은 snake_case — #[json(key=...)]로 분리 (R26).
+
+pub struct FileReport {
+    #[json(key = "path")]
+    pub path: String,
+
+    #[json(key = "counts")]
+    pub counts: Map<String, Int>,
+
+    #[json(key = "total_tokens")]
+    pub totalTokens: Int,
+}
+
+pub struct FreqEntry {
+    #[json(key = "word")]
+    pub word: String,
+
+    #[json(key = "count")]
+    pub count: Int,
+}
+
+pub struct Summary {
+    #[json(key = "total_tokens")]
+    pub totalTokens: Int,
+
+    #[json(key = "unique_tokens")]
+    pub uniqueTokens: Int,
+
+    #[json(key = "failures")]
+    pub failures: Int,
+
+    #[json(key = "top")]
+    pub top: List<FreqEntry>,
+}
+
+// ─── 순수 함수 ────────────────────────────────────────────
+
+fn tokenize(text: String) -> Result<List<String>, Error> {
+    let re = regex.compile(r"[A-Za-z][A-Za-z']*")?
+    let tokens = iter.from(re.findAll(text))
+        .map(|m| m.text)
+        .toList()
+    Ok(tokens)
+}
+
+fn tally(tokens: List<String>) -> Map<String, Int> {
+    let mut counts: Map<String, Int> = {:}
+    for t in tokens {
+        let n = counts.get(t) ?? 0
+        counts.insert(t, n + 1)
+    }
+    counts
+}
+
+fn topN(counts: Map<String, Int>, n: Int) -> List<FreqEntry> {
+    // 클로저 파라미터는 IDENT만 허용(Grammar §2.11) — let에서 destructure.
+    let entries = counts.entries().map(|pair| {
+        let (k, v) = pair
+        FreqEntry { word: k, count: v }
+    })
+    let ranked = entries.sortedBy(|e| e.count).reversed()
+    iter.from(ranked).take(n).toList()
+}
+
+fn countFile(path: String) -> Result<FileReport, Error> {
+    let text = fs.readToString(path)?
+    let tokens = tokenize(text)?
+    let counts = tally(tokens)
+    Ok(FileReport { path, counts, totalTokens: tokens.len() })
+}
+
+// ─── 스크립트 본문 ────────────────────────────────────────
+
+log.setLevel(log.Level.Info)
+
+let args = env.args()
+let mut paths: List<String> = []
+for (i, a) in args.enumerate() {
+    if i == 0 { continue }                 // args[0] = 프로그램명
+    paths.push(a)
+}
+
+if paths.isEmpty() {
+    eprintln("usage: word_freq <file>...")
+    os.exit(1)
+}
+
+log.info("starting", Fields { "files": paths.len() })
+
+// 일부 파일 실패해도 나머지는 계속 — §8.3 parallel.
+// `parallel`은 prelude (§10.4)이므로 prefix 불필요.
+let results = parallel(paths, CONCURRENCY, countFile)
+
+let mut merged: Map<String, Int> = {:}
+let mut totalTokens = 0
+let mut failures = 0
+
+for r in results {
+    match r {
+        Ok(rep) -> {
+            log.info("ok", Fields {
+                "path": rep.path,
+                "tokens": rep.totalTokens,
+                "unique": rep.counts.len(),
+            })
+            for (k, v) in rep.counts {
+                let current = merged.get(k) ?? 0
+                merged.insert(k, current + v)
+            }
+            totalTokens = totalTokens + rep.totalTokens
+        },
+        Err(e) -> {
+            failures = failures + 1
+            log.warn("file failed", Fields { "error": e.message() })
+        },
+    }
+}
+
+let summary = Summary {
+    totalTokens,
+    uniqueTokens: merged.len(),
+    failures,
+    top: topN(merged, TOP_N),
+}
+
+println(json.encode(summary))

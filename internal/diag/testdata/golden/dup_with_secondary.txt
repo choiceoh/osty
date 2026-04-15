@@ -1,0 +1,10 @@
+error[E0501]: `foo` is already defined
+ --> test.osty:4:1
+    |
+  1 | fn broken() {
+    | --------- previous declaration here
+    ...
+  4 | fn other() {
+    | ^^^^^^^^^ duplicate declaration
+    |
+ = help: rename or remove one

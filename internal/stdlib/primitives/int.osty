@@ -1,0 +1,68 @@
+// primitives/int — intrinsic methods on integer primitive types.
+//
+// Each method below applies uniformly to every integer kind listed in
+// the `#[intrinsic_methods(...)]` annotation. The stdlib loader treats
+// the enclosing struct as a placeholder, never registering it as a
+// real type; it simply walks the methods and fans them out across the
+// annotated primitive kinds, substituting `Self` for the target kind
+// at each expansion. Method bodies are present for parser satisfaction
+// but are discarded by the loader — the transpiler wires up the actual
+// Go-level implementations.
+
+#[intrinsic_methods(Int, Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Byte)]
+pub struct __IntMethods {
+    // Unary / comparison helpers (§2.3 and §10.4).
+    pub fn abs(self) -> Self { self }
+    pub fn min(self, other: Self) -> Self { self }
+    pub fn max(self, other: Self) -> Self { self }
+    pub fn clamp(self, lo: Self, hi: Self) -> Self { self }
+    pub fn signum(self) -> Self { self }
+
+    // Wrapping / checked / saturating arithmetic (§2.3).
+    pub fn wrappingAdd(self, other: Self) -> Self { self }
+    pub fn wrappingSub(self, other: Self) -> Self { self }
+    pub fn wrappingMul(self, other: Self) -> Self { self }
+    pub fn wrappingDiv(self, other: Self) -> Self { self }
+    pub fn wrappingMod(self, other: Self) -> Self { self }
+    pub fn wrappingShl(self, b: Self) -> Self { self }
+    pub fn wrappingShr(self, b: Self) -> Self { self }
+    pub fn wrappingAbs(self) -> Self { self }
+    pub fn wrappingNeg(self) -> Self { self }
+
+    pub fn checkedAdd(self, other: Self) -> Self? { None }
+    pub fn checkedSub(self, other: Self) -> Self? { None }
+    pub fn checkedMul(self, other: Self) -> Self? { None }
+    pub fn checkedDiv(self, other: Self) -> Self? { None }
+    pub fn checkedMod(self, other: Self) -> Self? { None }
+    pub fn checkedShl(self, b: Self) -> Self? { None }
+    pub fn checkedShr(self, b: Self) -> Self? { None }
+    pub fn checkedAbs(self) -> Self? { None }
+    pub fn checkedNeg(self) -> Self? { None }
+
+    pub fn saturatingAdd(self, other: Self) -> Self { self }
+    pub fn saturatingSub(self, other: Self) -> Self { self }
+    pub fn saturatingMul(self, other: Self) -> Self { self }
+    pub fn saturatingDiv(self, other: Self) -> Self { self }
+
+    pub fn pow(self, exp: Int) -> Self { self }
+
+    // Conversions (§2.2). Widening / same-width are lossless and
+    // return the target directly; narrowing can overflow and returns
+    // `Result<T, Error>`.
+    pub fn toInt(self) -> Int { 0 }
+    pub fn toInt8(self) -> Result<Int8, Error> { Err(0) }
+    pub fn toInt16(self) -> Result<Int16, Error> { Err(0) }
+    pub fn toInt32(self) -> Result<Int32, Error> { Err(0) }
+    pub fn toInt64(self) -> Int64 { 0 }
+    pub fn toUInt8(self) -> Result<UInt8, Error> { Err(0) }
+    pub fn toUInt16(self) -> Result<UInt16, Error> { Err(0) }
+    pub fn toUInt32(self) -> Result<UInt32, Error> { Err(0) }
+    pub fn toUInt64(self) -> Result<UInt64, Error> { Err(0) }
+    pub fn toFloat(self) -> Float { 0.0 }
+    pub fn toFloat32(self) -> Float32 { 0.0 }
+    pub fn toFloat64(self) -> Float64 { 0.0 }
+
+    pub fn toChar(self) -> Char { '\0' }
+
+    pub fn toString(self) -> String { "" }
+}

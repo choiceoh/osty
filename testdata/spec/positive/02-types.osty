@@ -1,0 +1,51 @@
+// §2 Type System — primitives, composites, generics, optionals, fn types.
+
+pub struct Demo {
+    p0: Int,
+    p1: Int8,
+    p2: Int16,
+    p3: Int32,
+    p4: Int64,
+    u0: UInt8,
+    u1: UInt16,
+    u2: UInt32,
+    u3: UInt64,
+    b0: Byte,
+    f0: Float,
+    f1: Float32,
+    f2: Float64,
+    bl: Bool,
+    ch: Char,
+    st: String,
+    by: Bytes,
+
+    // Composite / nested generic types with splittable `>>`.
+    list: List<Int>,
+    nested: List<List<Int>>,
+    map: Map<String, List<User>>,
+
+    // Optional sugar and canonical form.
+    opt1: Int?,
+    opt2: Option<Int>,
+
+    // Tuple type and function type.
+    tup: (Int, String, Bool),
+    fn1: fn(Int, Int) -> Int,
+    fn2: fn() -> (),
+
+    // Nested Option (`T??` chain of `?` postfixes on types).
+    deep: Int??,
+}
+
+pub struct User {
+    pub name: String,
+}
+
+// Generic fn with constraints (multi-bound via `+`).
+fn max<T: Ordered>(a: T, b: T) -> T {
+    if a > b { a } else { b }
+}
+
+fn sortUnique<T: Ordered + Hashable>(xs: List<T>) -> List<T> {
+    xs
+}

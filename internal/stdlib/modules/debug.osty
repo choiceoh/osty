@@ -1,0 +1,9 @@
+// std.debug — debug helpers.
+//
+// `dbg(value)` is the canonical pass-through debug printer: it writes
+// the value's `toString` to stderr and returns the value unchanged so
+// it can be dropped into expressions without disturbing data flow.
+
+pub fn dbg<T>(value: T) -> T {
+    value
+}

@@ -1,0 +1,179 @@
+// Comprehensive parser-coverage sample for Osty per OSTY_GRAMMAR_v0.3.
+//
+// Exercises: declarations, generics, interfaces, enums, matches, ranges,
+// closures (incl. destructuring patterns), struct literals (incl. update),
+// error propagation, channel send, annotations, doc comments, and the
+// restricted FFI block.
+
+use std.fs
+use std.http
+use github.com/user/lib as mylib
+
+/// Maximum number of users tracked by the runtime.
+pub let MAX_USERS = 10000
+
+/// Standard application error interface.
+pub interface Error {
+    fn message(self) -> String
+    fn source(self) -> Error? { None }
+}
+
+pub interface ReadWriter {
+    Reader
+    Writer
+}
+
+/// A registered application user.
+pub struct User {
+    #[json(key = "user_name")]
+    pub name: String,
+
+    #[json(key = "user_age")]
+    pub age: Int = 0,
+
+    #[json(skip)]
+    email: String,
+
+    pub fn new(name: String, email: String) -> User {
+        User { name, email }
+    }
+
+    /// Returns a friendly greeting for this user.
+    pub fn greet(self) -> String {
+        "hi, {self.name}"
+    }
+
+    fn setAge(mut self, age: Int) {
+        self.age = age
+    }
+}
+
+#[deprecated(since = "0.5", use = "User.new", message = "use User.new")]
+pub fn makeUser(name: String, email: String) -> User {
+    User { name, email }
+}
+
+pub enum Shape {
+    Circle(Float),
+    Rect(Float, Float),
+    Empty,
+
+    pub fn area(self) -> Float {
+        match self {
+            Circle(r) -> 3.14 * r * r,
+            Rect(w, h) -> w * h,
+            Empty -> 0.0,
+        }
+    }
+}
+
+pub enum Result<T, E> {
+    Ok(T),
+    Err(E),
+
+    pub fn isOk(self) -> Bool {
+        match self {
+            Ok(_) -> true,
+            Err(_) -> false,
+        }
+    }
+}
+
+fn max<T: Ordered>(a: T, b: T) -> T {
+    if a > b { a } else { b }
+}
+
+fn categorize(n: Int) -> String {
+    match n {
+        x @ 0..=9 -> "single digit: {x}",
+        x @ 10..=99 -> "two digits: {x}",
+        _ -> "more",
+    }
+}
+
+pub fn loadConfig(path: String) -> Result<Config, Error> {
+    let text = fs.readToString(path)?
+    let cfg: Config = json.parse::<Config>(text)?
+    Ok(cfg)
+}
+
+fn demoRanges() {
+    for i in 0..10 { }
+    for i in 0..=10 { }
+    let all = 0..100
+    let half = ..50
+}
+
+fn demoClosures() {
+    let double = |x| x * 2
+    let add = |a: Int, b: Int| -> Int { a + b }
+    list.map(|x| {
+        let doubled = x * 2
+        doubled + 1
+    })
+    // SPEC_GAPS G4: closure parameter destructuring.
+    let entries = m.entries()
+    entries.map(|(k, v)| k + v)
+    entries.map(|(_, v)| v)
+}
+
+fn demoStructs() {
+    let user = User { name: "alice", age: 30, email: "a@x.com" }
+    let older = User { ..user, age: 31 }
+    let rebranded = User { ..user, email: "new@x.com", name: "Alice" }
+}
+
+fn demoMapList() {
+    let xs = [1, 2, 3]
+    let empty: List<Int> = []
+    let m = {"a": 1, "b": 2}
+    let em: Map<String, Int> = {:}
+    let t = (1, "two", 3.0)
+}
+
+fn demoDefer(path: String) -> Result<(), Error> {
+    let f = fs.open(path)?
+    defer f.close()
+
+    let conn = net.connect("api.com")?
+    defer conn.close()
+
+    let data = f.read()?
+    let result = conn.send(data)?
+    Ok(())
+}
+
+// v0.2 R2 case 2: leading `.` continues a method chain across newlines.
+fn demoMethodChain(xs: List<Int>) -> List<Int> {
+    iter.from(xs)
+        .map(|x| x * 2)
+        .filter(|x| x > 10)
+        .take(5)
+        .toList()
+}
+
+// §8.5: channel send is a statement, never an expression.
+fn demoChannel(ch: Chan<Int>) {
+    ch <- 1
+    ch <- computeValue()
+}
+
+// §8.1: structured concurrency.
+fn demoTaskGroup() -> Result<(Int, Int), Error> {
+    taskGroup(|g| {
+        let h1 = g.spawn(|| fetchA())
+        let h2 = g.spawn(|| fetchB())
+        Ok((h1.join()?, h2.join()?))
+    })
+}
+
+// §12: FFI to a Go package. Per v0.2 R16/R17 the body is restricted to
+// fn signatures (no body) and struct field declarations (no methods).
+use go "net/http" as http {
+    fn Get(url: String) -> Result<Response, Error>
+
+    struct Response {
+        StatusCode: Int,
+        Body: Reader,
+    }
+}

@@ -1,0 +1,74 @@
+// §3 Declarations — fn, struct, enum, interface, type alias, pub let.
+
+/// Top-level let with pub modifier.
+pub let MAX_USERS = 10000
+
+/// A struct with fields (pub and private), annotations, methods.
+pub struct User {
+    #[json(key = "user_name")]
+    pub name: String,
+
+    #[json(optional)]
+    pub age: Int? = None,
+
+    #[json(skip)]
+    internal: Int = 0,
+
+    /// Constructor associated fn.
+    pub fn new(name: String) -> Self {
+        Self { name, age: None, internal: 0 }
+    }
+
+    pub fn greet(self) -> String {
+        "hi, {self.name}"
+    }
+
+    fn setAge(mut self, age: Int) {
+        self.age = Some(age)
+    }
+}
+
+/// Enum with bare, tuple variants, and methods.
+pub enum Shape {
+    Empty,
+    Circle(Float),
+    Rect(Float, Float),
+
+    pub fn area(self) -> Float {
+        match self {
+            Empty -> 0.0,
+            Circle(r) -> 3.14 * r * r,
+            Rect(w, h) -> w * h,
+        }
+    }
+}
+
+/// Interface with composition and default method.
+pub interface Writer {
+    fn write(self, data: Bytes) -> Result<Int, Error>
+    fn close(self) -> Result<(), Error>
+}
+
+pub interface Reader {
+    fn read(self, buf: Bytes) -> Result<Int, Error>
+}
+
+pub interface ReadWriter {
+    Reader
+    Writer
+}
+
+/// Type aliases.
+type UserMap = Map<String, List<User>>
+type Handler = fn(Int) -> Result<Int, Error>
+pub type Pair<T> = (T, T)
+
+/// Functions with keyword-arg defaults (restricted literal forms only).
+fn connect(host: String, port: Int = 80, timeout: Int = 30) -> Result<Int, Error> {
+    Ok(0)
+}
+
+#[deprecated(since = "0.5", use = "User.new", message = "migrate to User.new")]
+pub fn makeUser(name: String) -> User {
+    User.new(name)
+}

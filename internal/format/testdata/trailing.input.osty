@@ -1,0 +1,60 @@
+// Trailing-comma normalization fixtures.
+//
+// Every multi-line comma-separated construct should emit a trailing
+// comma; single-line forms must not. Per §1.8 a 1-tuple on a single
+// line always keeps its `,`.
+
+fn oneLineCall() {
+    // Single-line call — no trailing comma.
+    doThing(a, b, c)
+    // List — no trailing comma.
+    let xs = [1, 2, 3]
+    // Map — no trailing comma.
+    let m = {"a": 1, "b": 2}
+    // 1-tuple keeps its `,` (single-line).
+    let t = (1,)
+    // 3-tuple — no trailing comma.
+    let p = (1, 2, 3)
+    // Struct literal, single-line, no trailing comma.
+    let u = User { name: "alice", age: 30 }
+}
+
+fn multilineCall() {
+    // Multi-line call — trailing comma on every line.
+    doThing(
+        first,
+        second,
+        third
+    )
+    // Multi-line list.
+    let xs = [
+        1,
+        2,
+        3
+    ]
+    // Multi-line map.
+    let m = {
+        "a": 1,
+        "b": 2
+    }
+    // Multi-line tuple.
+    let p = (
+        1,
+        2,
+        3
+    )
+    // Multi-line struct literal.
+    let u = User {
+        name: "alice",
+        age: 30,
+        email: "a@x.com"
+    }
+}
+
+fn multilineParams(
+    first: Int,
+    second: String,
+    third: Bool
+) -> Int {
+    first
+}

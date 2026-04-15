@@ -1,0 +1,22 @@
+// std.process — abort, unreachable, todo, ignoreError, logError.
+//
+// `abort`, `unreachable`, and `todo` return `Never` (the bottom type),
+// so calling any of them unifies with any expected result type.
+// `ignoreError` and `logError` are the canonical helpers for `defer`
+// bodies that can't propagate a Result.
+
+pub fn abort(msg: String) -> Never {
+    abort(msg)
+}
+
+pub fn unreachable() -> Never {
+    unreachable()
+}
+
+pub fn todo(msg: String) -> Never {
+    todo(msg)
+}
+
+pub fn ignoreError<T, E>(result: Result<T, E>) {}
+
+pub fn logError<T>(result: Result<T, Error>, msg: String) {}

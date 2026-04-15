@@ -1,0 +1,122 @@
+// Negative corpus — one file per rejected construct would explode the
+// corpus count, so this file bundles representative "must reject" cases.
+// The integration test invokes the parser+resolver on each subsection
+// and asserts the expected diagnostic code. Subsections are delimited
+// by `// === CASE: <Code> === <hint>` lines and terminated by `// === END`.
+
+// === CASE: E0002 === uppercase base prefix
+fn f() { let n = 0X1F }
+// === END
+
+// === CASE: E0003 === surrogate code point in escape
+fn f() { let c = '\u{D800}' }
+// === END
+
+// === CASE: E0101 === `use go` fn with body
+use go "net/http" { fn Get(u: String) -> String { "x" } }
+// === END
+
+// === CASE: E0104 === mixed dot/slash in use path
+use a/b.c
+// === END
+
+// === CASE: E0105 === `} else` across newline
+fn f() -> Int {
+    if cond() {
+        1
+    }
+    else {
+        2
+    }
+}
+fn cond() -> Bool { false }
+// === END
+
+// === CASE: E0106 === non-literal default value
+fn connect(t: Int = compute()) {}
+fn compute() -> Int { 0 }
+// === END
+
+// === CASE: E0200 === non-associative comparison chain
+fn f() { a() < b() < c() }
+fn a() -> Int { 0 }
+fn b() -> Int { 0 }
+fn c() -> Int { 0 }
+// === END
+
+// === CASE: E0201 === `::` not followed by `<`
+fn f() { let x = foo::bar() }
+fn foo() {}
+// === END
+
+// === CASE: E0203 === closure with return type but no block body
+fn f() { let g = |x: Int| -> Int x * 2 }
+// === END
+
+// === CASE: E0400 === unknown annotation
+#[inline]
+pub fn f() {}
+// === END
+
+// === CASE: E0500 === undefined name
+fn f() { let x = undefinedThing }
+// === END
+
+// === CASE: E0501 === duplicate top-level declaration
+fn dup() {}
+fn dup() {}
+// === END
+
+// === CASE: E0503 === `self` outside a method
+fn f() { let x = self }
+// === END
+
+// === CASE: E0504 === `Self` outside a type body
+fn f() -> Self { 0 }
+// === END
+
+// === CASE: E0600 === `break` outside a loop
+fn f() { break }
+// === END
+
+// === CASE: E0601 === `continue` outside a loop
+fn f() { continue }
+// === END
+
+// === CASE: E0604 === `_` in expression position
+fn f() { let x = _ }
+// === END
+
+// === CASE: E0605 === or-pattern with inconsistent bindings
+pub enum E { A(Int), B(Int, Int) }
+fn f(e: E) -> Int {
+    match e { A(x) | B(x, y) -> x }
+}
+// === END
+
+// === CASE: E0606 === interface default body reading a field on self
+pub interface Greeter {
+    fn greet(self) -> String { self.name }
+}
+// === END
+
+// === CASE: E0607 === annotation on the wrong target
+#[json]
+pub fn wrongTarget() {}
+// === END
+
+// === CASE: E0607 === annotation on a `use` statement
+#[deprecated]
+use std.fs
+// === END
+
+// === CASE: E0608 === top-level `defer` in script
+let x = 1
+defer println("{x}")
+// === END
+
+// === CASE: E0609 === duplicate annotation name
+#[deprecated]
+#[deprecated]
+pub fn f() {}
+// === END

@@ -1,0 +1,37 @@
+// std.testing — assertion API for `osty test` per LANG_SPEC_v0.3 §11.
+//
+// Test files use the `_test.osty` suffix and live alongside code in the
+// same package. Functions whose names begin with lowercase `test` and
+// take no arguments are discovered and run by `osty test`; functions
+// whose names begin with `bench` are benchmarks (§11.4).
+//
+// Bodies below are placeholders sized to satisfy the type checker. The
+// `osty test` runner supplies real behavior at run time — assertion
+// failures are converted into recorded test results via panic / recover
+// in the generated Go harness, so these stubs are never actually called
+// in the happy path of a passing test.
+
+pub fn assert(cond: Bool) {
+}
+
+pub fn assertEq<T: Equal>(actual: T, expected: T) {
+}
+
+pub fn assertNe<T: Equal>(actual: T, expected: T) {
+}
+
+pub fn expectOk<T, E>(result: Result<T, E>) -> T {
+    result.unwrap()
+}
+
+pub fn expectError<T, E>(result: Result<T, E>) -> E {
+    result.unwrapErr()
+}
+
+pub fn fail(msg: String) -> Never {
+    fail(msg)
+}
+
+pub fn context(msg: String, body: fn() -> ()) {
+    body()
+}

@@ -1,0 +1,9 @@
+// primitives/bool — intrinsic methods on `Bool`. Boolean operators
+// (`!`, `&&`, `||`) are built into the language; the stdlib only adds
+// conversion helpers here.
+
+#[intrinsic_methods(Bool)]
+pub struct __BoolMethods {
+    pub fn toString(self) -> String { "" }
+    pub fn toInt(self) -> Int { 0 }
+}

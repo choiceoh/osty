@@ -1,0 +1,16 @@
+// Scrambled use block — the formatter should reorder into
+// std → external → FFI groups, alphabetized within each group,
+// and insert a blank line between groups.
+
+use std.fs
+use std.http
+use std.json
+
+use github.com/other/pkg
+use github.com/user/lib as mylib
+
+use go "net/http" as http
+
+fn main() {
+    println("hi")
+}

@@ -1,0 +1,14 @@
+// std.collections — List<T>, Map<K, V>, Set<T>.
+//
+// These names are already auto-imported via the prelude, so user code
+// rarely writes `use std.collections`. The module-local structs are
+// the landing pad for the eventual prelude rebind, at which point the
+// prelude's built-in `List`/`Map`/`Set` symbols will point here.
+// Method signatures from spec §10.6 will be added alongside the rest
+// of the stdlib's method bodies.
+
+pub struct List<T> {}
+
+pub struct Map<K, V> {}
+
+pub struct Set<T> {}

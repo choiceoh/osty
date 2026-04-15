@@ -1,0 +1,190 @@
+package gen_test
+
+import (
+	"strings"
+	"testing"
+)
+
+// TestClosureInferredParam verifies closures with a body expression
+// (no explicit annotation) compile and run.
+func TestClosureInferredParam(t *testing.T) {
+	src := `fn apply(f: fn(Int) -> Int, x: Int) -> Int {
+    f(x)
+}
+
+fn main() {
+    let double = |x: Int| -> Int { x * 2 }
+    println("{apply(double, 5)}")
+}
+`
+	goSrc, err := transpile(t, src)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := runGo(t, goSrc)
+	if strings.TrimSpace(out) != "10" {
+		t.Errorf("unexpected output: %q\n--- src ---\n%s", out, goSrc)
+	}
+}
+
+// TestClosureBlockBody verifies a closure whose body is a block.
+func TestClosureBlockBody(t *testing.T) {
+	src := `fn main() {
+    let square_plus_one = |x: Int| -> Int {
+        let y = x * x
+        y + 1
+    }
+    println("{square_plus_one(5)}")
+}
+`
+	goSrc, err := transpile(t, src)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := runGo(t, goSrc)
+	if strings.TrimSpace(out) != "26" {
+		t.Errorf("unexpected output: %q\n--- src ---\n%s", out, goSrc)
+	}
+}
+
+// TestGenericFunction verifies a generic identity function compiles
+// with multiple instantiations.
+func TestGenericFunction(t *testing.T) {
+	src := `fn id<T>(x: T) -> T {
+    x
+}
+
+fn main() {
+    let a = id(42)
+    let b = id("hello")
+    println("{a} {b}")
+}
+`
+	goSrc, err := transpile(t, src)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := runGo(t, goSrc)
+	if strings.TrimSpace(out) != "42 hello" {
+		t.Errorf("unexpected output: %q\n--- src ---\n%s", out, goSrc)
+	}
+}
+
+// TestMapIteration verifies `for (k, v) in m` pattern.
+func TestMapIteration(t *testing.T) {
+	src := `fn main() {
+    let m = {"a": 1, "b": 2, "c": 3}
+    let mut total = 0
+    for (k, v) in m {
+        total = total + v
+    }
+    println("{total}")
+}
+`
+	goSrc, err := transpile(t, src)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := runGo(t, goSrc)
+	if strings.TrimSpace(out) != "6" {
+		t.Errorf("unexpected output: %q\n--- src ---\n%s", out, goSrc)
+	}
+}
+
+// TestHigherOrderFn verifies passing a closure through a higher-order
+// function type-checks and runs.
+func TestHigherOrderFn(t *testing.T) {
+	src := `fn twice(f: fn(Int) -> Int, x: Int) -> Int {
+    f(f(x))
+}
+
+fn main() {
+    let inc = |n: Int| -> Int { n + 1 }
+    println("{twice(inc, 5)}")
+}
+`
+	goSrc, err := transpile(t, src)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := runGo(t, goSrc)
+	if strings.TrimSpace(out) != "7" {
+		t.Errorf("unexpected output: %q\n--- src ---\n%s", out, goSrc)
+	}
+}
+
+// TestNestedLists verifies `List<List<Int>>` transpiles to `[][]int`.
+func TestNestedLists(t *testing.T) {
+	src := `fn main() {
+    let grid = [[1, 2], [3, 4], [5, 6]]
+    let mut total = 0
+    for row in grid {
+        for x in row {
+            total = total + x
+        }
+    }
+    println("{total}")
+}
+`
+	goSrc, err := transpile(t, src)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := runGo(t, goSrc)
+	if strings.TrimSpace(out) != "21" {
+		t.Errorf("unexpected output: %q\n--- src ---\n%s", out, goSrc)
+	}
+}
+
+// TestMatchOnList verifies matching on literal primitives inside a
+// function that processes a list.
+func TestMatchOnList(t *testing.T) {
+	src := `fn classify(n: Int) -> String {
+    match n {
+        0 -> "zero",
+        1 | 2 | 3 -> "small",
+        _ -> "big",
+    }
+}
+
+fn main() {
+    let xs = [0, 1, 2, 5, 10]
+    for x in xs {
+        println(classify(x))
+    }
+}
+`
+	goSrc, err := transpile(t, src)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := runGo(t, goSrc)
+	want := "zero\nsmall\nsmall\nbig\nbig\n"
+	if out != want {
+		t.Errorf("got %q, want %q\n--- src ---\n%s", out, want, goSrc)
+	}
+}
+
+// TestFibRecursive verifies a more complex recursive function with
+// multiple returns.
+func TestFibRecursive(t *testing.T) {
+	src := `fn fib(n: Int) -> Int {
+    if n < 2 {
+        return n
+    }
+    fib(n - 1) + fib(n - 2)
+}
+
+fn main() {
+    println("{fib(10)}")
+}
+`
+	goSrc, err := transpile(t, src)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := runGo(t, goSrc)
+	if strings.TrimSpace(out) != "55" {
+		t.Errorf("unexpected output: %q\n--- src ---\n%s", out, goSrc)
+	}
+}

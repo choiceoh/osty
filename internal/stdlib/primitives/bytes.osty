@@ -1,0 +1,12 @@
+// primitives/bytes — intrinsic methods on `Bytes` (§2.4.1). Bytes is
+// an immutable byte sequence; indexing never aborts on UTF-8
+// boundaries because no encoding contract is carried.
+
+#[intrinsic_methods(Bytes)]
+pub struct __BytesMethods {
+    pub fn len(self) -> Int { 0 }
+    pub fn isEmpty(self) -> Bool { false }
+    pub fn get(self, i: Int) -> Byte? { None }
+    pub fn concat(self, other: Bytes) -> Bytes { self.concat(other) }
+    pub fn toString(self) -> Result<String, Error> { Err(0) }
+}
