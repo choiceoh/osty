@@ -24,6 +24,9 @@ import (
 //
 //	go test ./internal/gen/ -run TestSpecCorpusAudit -v
 func TestSpecCorpusAudit(t *testing.T) {
+	if testing.Short() {
+		t.Skip("spec corpus Go vet audit (slow)")
+	}
 	fixtures, err := filepath.Glob("../../testdata/spec/positive/*.osty")
 	if err != nil {
 		t.Fatal(err)

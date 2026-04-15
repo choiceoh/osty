@@ -394,6 +394,17 @@ go test -fuzz=FuzzLex   -fuzztime=30s ./internal/lexer/
 go test -fuzz=FuzzParse -fuzztime=30s ./internal/parser/
 ```
 
+Fast local loops are captured in the `justfile`:
+
+```sh
+just front                 # uncached front-end packages, usually a few seconds
+just short                 # skips generated-Go/runtime-heavy integration paths
+just gen TestQuestionOp    # one gen test or regex
+just lsp TestCompletion    # one LSP test or regex
+just pipe examples/calc    # front-end timing for an Osty package
+just pipe-gen path/file.osty
+```
+
 The **spec corpus** lives under `testdata/spec/`:
 
 - `positive/NN-<chapter>.osty` — one fixture per spec chapter;

@@ -10,19 +10,13 @@ import (
 	"testing"
 )
 
-// runOsty invokes the cmd/osty binary via `go run` with the
-// given args. Returning combined stdout+stderr keeps the test
-// terse — every assertion in this file checks substring
-// presence, not stream-of-origin.
-//
-// `go run` is slow (a fresh build per call) but the test only
-// runs three times, so the cost is acceptable for CLI-surface
-// coverage we can't get any other way.
+// runOsty invokes the shared cmd/osty test binary with the given args.
+// Returning combined stdout+stderr keeps the test terse — every assertion
+// in this file checks substring presence, not stream-of-origin.
 func runOsty(t *testing.T, dir string, args ...string) (combined string, exitCode int) {
 	t.Helper()
-	full := append([]string{"run", "."}, args...)
-	cmd := exec.Command("go", full...)
-	cmd.Dir = repoRoot(t)
+	cmd := exec.Command(buildOstyBinary(t), args...)
+	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GOFLAGS=") // ensure -mod is unset
 	var buf bytes.Buffer
 	cmd.Stdout = &buf

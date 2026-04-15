@@ -55,6 +55,9 @@ func TestExampleManifestsValidate(t *testing.T) {
 }
 
 func TestRunnableExamplesGenerateAndExecute(t *testing.T) {
+	if testing.Short() {
+		t.Skip("example generated-Go execution test (slow)")
+	}
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("go binary not on PATH")
 	}
@@ -105,6 +108,10 @@ func executeExampleTests(t *testing.T, name string) {
 	}
 	assertParsesAsGo(t, "main.go", srcs.Main)
 	assertParsesAsGo(t, "harness.go", srcs.Harness)
+	if testing.Short() {
+		t.Log("skipping generated Go execution in short mode")
+		return
+	}
 
 	out := runGoPackage(t, map[string][]byte{
 		"main.go":    srcs.Main,

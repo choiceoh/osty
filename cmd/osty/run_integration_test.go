@@ -7,10 +7,27 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/osty/osty/internal/profile"
 )
+
+var (
+	ostyBinOnce   sync.Once
+	ostyBinDir    string
+	ostyBinPath   string
+	ostyBinErr    error
+	ostyBinOutput string
+)
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if ostyBinDir != "" {
+		_ = os.RemoveAll(ostyBinDir)
+	}
+	os.Exit(code)
+}
 
 func TestRunStdFSUsesInvocationCwd(t *testing.T) {
 	if testing.Short() {
@@ -103,21 +120,29 @@ fn main() {
 
 func buildOstyBinary(t *testing.T) string {
 	t.Helper()
-	name := "osty"
-	if runtime.GOOS == "windows" {
-		name += ".exe"
+	ostyBinOnce.Do(func() {
+		name := "osty"
+		if runtime.GOOS == "windows" {
+			name += ".exe"
+		}
+		ostyBinDir, ostyBinErr = os.MkdirTemp("", "osty-test-bin-*")
+		if ostyBinErr != nil {
+			return
+		}
+		ostyBinPath = filepath.Join(ostyBinDir, name)
+		cmd := exec.Command("go", "build", "-o", ostyBinPath, ".")
+		cmd.Dir = repoRoot(t)
+		cmd.Env = append(os.Environ(), "GOFLAGS=")
+		var buf bytes.Buffer
+		cmd.Stdout = &buf
+		cmd.Stderr = &buf
+		ostyBinErr = cmd.Run()
+		ostyBinOutput = buf.String()
+	})
+	if ostyBinErr != nil {
+		t.Fatalf("go build osty: %v\n%s", ostyBinErr, ostyBinOutput)
 	}
-	bin := filepath.Join(t.TempDir(), name)
-	cmd := exec.Command("go", "build", "-o", bin, ".")
-	cmd.Dir = repoRoot(t)
-	cmd.Env = append(os.Environ(), "GOFLAGS=")
-	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("go build osty: %v\n%s", err, buf.String())
-	}
-	return bin
+	return ostyBinPath
 }
 
 func runBuiltOsty(t *testing.T, bin, dir string, args ...string) (combined string, exitCode int) {

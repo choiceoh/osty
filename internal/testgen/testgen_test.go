@@ -60,6 +60,10 @@ func TestGenerateHarness_CalcExample(t *testing.T) {
 	// End-to-end smoke: write both files into a scratch dir with a
 	// minimal go.mod and confirm `go run .` exits 0 and prints the
 	// expected summary. Skips automatically if `go` isn't on PATH.
+	if testing.Short() {
+		t.Log("skipping generated harness execution in short mode")
+		return
+	}
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("go binary not on PATH; skipping end-to-end run")
 	}
@@ -168,6 +172,10 @@ fn testCrossFileVariant() {
 	if err != nil {
 		t.Fatalf("GenerateHarness: %v\n--- main.go ---\n%s", err, srcs.Main)
 	}
+	if testing.Short() {
+		t.Log("skipping generated harness execution in short mode")
+		return
+	}
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("go binary not on PATH; skipping end-to-end run")
 	}
@@ -236,6 +244,10 @@ pub fn isNewline(kind: TokenKind) -> Bool {
 	}})
 	if err != nil {
 		t.Fatalf("GenerateHarness: %v", err)
+	}
+	if testing.Short() {
+		t.Log("skipping generated harness execution in short mode")
+		return
 	}
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("go binary not on PATH; skipping end-to-end run")
@@ -309,6 +321,10 @@ func TestGenerateHarness_RenamesBinaryMain(t *testing.T) {
 	}
 	if !strings.Contains(main, "\t_ostyProgramMain()\n") {
 		t.Fatalf("test call to main() was not rewritten to _ostyProgramMain():\n%s", main)
+	}
+	if testing.Short() {
+		t.Log("skipping generated harness execution in short mode")
+		return
 	}
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("go binary not on PATH; skipping end-to-end run")
