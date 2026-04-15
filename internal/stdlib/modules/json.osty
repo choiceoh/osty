@@ -38,3 +38,48 @@ pub fn decode<T>(text: String) -> Result<T, Error> {
 pub fn parse<T>(text: String) -> Result<T, Error> {
     decode(text)
 }
+
+// ---------------------------------------------------------------------------
+// Json value serialization / deserialization
+// ---------------------------------------------------------------------------
+
+pub fn stringifyValue(value: Json) -> String {
+    ""
+}
+
+pub fn parseValue(text: String) -> Result<Json, Error> {
+    Err(Error)
+}
+
+// ---------------------------------------------------------------------------
+// Type predicates
+// ---------------------------------------------------------------------------
+
+pub fn isNull(value: Json) -> Bool { false }
+pub fn isBool(value: Json) -> Bool { false }
+pub fn isNumber(value: Json) -> Bool { false }
+pub fn isString(value: Json) -> Bool { false }
+pub fn isArray(value: Json) -> Bool { false }
+pub fn isObject(value: Json) -> Bool { false }
+
+// ---------------------------------------------------------------------------
+// Narrowing accessors
+// ---------------------------------------------------------------------------
+
+pub fn asBool(value: Json) -> Result<Bool, Error> { Err(Error) }
+pub fn asNumber(value: Json) -> Result<Float, Error> { Err(Error) }
+pub fn asString(value: Json) -> Result<String, Error> { Err(Error) }
+pub fn asArray(value: Json) -> Result<JsonArray, Error> { Err(Error) }
+pub fn asObject(value: Json) -> Result<JsonObject, Error> { Err(Error) }
+
+// ---------------------------------------------------------------------------
+// Indexed access
+// ---------------------------------------------------------------------------
+
+pub fn getField(value: Json, key: String) -> Result<Json, Error> {
+    Err(Error)
+}
+
+pub fn getIndex(value: Json, index: Int) -> Result<Json, Error> {
+    Err(Error)
+}

@@ -729,7 +729,7 @@ func TestTier1ModuleCoverage(t *testing.T) {
 			"trim", "trimStart", "trimEnd", "toUpper", "toLower", "repeat", "replace"}},
 		{"random", []string{"Rng", "default", "seeded"}},
 		{"url", []string{"Url", "parse", "join"}},
-		{"json", []string{"Json", "Encode", "Decode", "encode", "decode", "parse", "stringify"}},
+		{"json", []string{"Json", "Encode", "Decode", "encode", "decode", "parse", "stringify", "stringifyValue", "parseValue", "isNull", "isBool", "isNumber", "isString", "isArray", "isObject", "asBool", "asNumber", "asString", "asArray", "asObject", "getField", "getIndex"}},
 		{"time", []string{"Duration", "Instant", "Zone", "ZonedTime", "Weekday", "now", "parse", "sleep", "zone", "local", "utc", "ISO_8601", "RFC_3339", "RFC_2822"}},
 		{"log", []string{"Level", "Fields", "LogValue", "Record", "Handler", "TextHandler", "JsonHandler", "debug", "info", "warn", "error", "setLevel", "setHandler"}},
 		{"http", []string{"Method", "Headers", "Request", "Response", "Handler", "request", "get", "post", "serve"}},

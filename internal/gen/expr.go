@@ -827,7 +827,7 @@ func (g *gen) emitStdlibCSVCall(c *ast.CallExpr, _ *ast.FieldExpr) bool {
 	if helper == "" {
 		return false
 	}
-	g.needCSV = true
+	g.needCsvRuntime = true
 	if strings.HasPrefix(helper, "csvDecode") {
 		g.needResult = true
 	}

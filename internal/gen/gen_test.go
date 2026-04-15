@@ -560,6 +560,59 @@ fn main() {
 	}
 }
 
+func TestStdBytesBridge(t *testing.T) {
+	goSrc, err := transpileWithStdlib(t, `use std.bytes
+
+fn main() {
+    let b = bytes.fromString("Hello, World!")
+    println(bytes.len(b))
+    println(bytes.isEmpty(b))
+    println(bytes.equal(b, bytes.fromString("Hello, World!")))
+    println(bytes.contains(b, bytes.fromString("World")))
+    println(bytes.startsWith(b, bytes.fromString("Hello")))
+    println(bytes.endsWith(b, bytes.fromString("!")))
+    println(bytes.toUpper(b))
+    println(bytes.toLower(b))
+    let hex = bytes.toHex(bytes.fromString("abc"))
+    println(hex)
+    let back = bytes.fromHex(hex).unwrap()
+    println(bytes.equal(back, bytes.fromString("abc")))
+    let parts = bytes.split(b, bytes.fromString(", "))
+    println(parts.len())
+    let joined = bytes.join(parts, bytes.fromString("-"))
+    println(bytes.toString(joined).unwrap())
+    println(bytes.trimSpace(bytes.fromString("  hi  ")))
+}
+`)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := strings.TrimSpace(runGo(t, goSrc))
+	want := strings.Join([]string{
+		"13",
+		"false",
+		"true",
+		"true",
+		"true",
+		"true",
+		"HELLO, WORLD!",
+		"hello, world!",
+		"616263",
+		"true",
+		"2",
+		"Hello-World!",
+		"hi",
+	}, "\n")
+	if out != want {
+		t.Fatalf("stdout = %q, want:\n%s\n--- source ---\n%s", out, want, goSrc)
+	}
+	for _, needle := range []string{"bytesEqual", "bytesContains", "bytesToUpper", "bytesFromHex"} {
+		if !strings.Contains(string(goSrc), needle) {
+			t.Errorf("generated std.bytes bridge missing %s:\n%s", needle, goSrc)
+		}
+	}
+}
+
 func TestHelloWorld(t *testing.T) {
 	src := `fn main() {
     println("hello, world")
