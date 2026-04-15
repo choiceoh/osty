@@ -11,6 +11,7 @@
 //	                           type of each expression (debugging aid).
 //	osty fmt <file.osty>       Format source to canonical style; see -check/-write.
 //	osty gen <file.osty>       Transpile to Go (prints to stdout; -o writes to file).
+//	osty doc <path>            Emit markdown API docs for a file or package.
 //	osty lsp                   Run the Language Server Protocol server on stdio.
 //
 // Global flags (may precede the subcommand):
@@ -161,6 +162,12 @@ func main() {
 	}
 	if cmd == "publish" {
 		runPublish(args[1:], flags)
+		return
+	}
+	// doc parses a file or directory and emits markdown API docs. It has
+	// its own flag parser for --out / --title.
+	if cmd == "doc" {
+		runDoc(args[1:], flags)
 		return
 	}
 	if len(args) < 2 {
@@ -886,6 +893,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "       osty run [-- ARGS...]     (build + exec the project's binary)")
 	fmt.Fprintln(os.Stderr, "       osty test [PATH|FILTER...] (discover *_test.osty; report tests found)")
 	fmt.Fprintln(os.Stderr, "       osty publish              (pack + upload the package to a registry)")
+	fmt.Fprintln(os.Stderr, "       osty doc [--out PATH] PATH (generate markdown API docs from source)")
 	fmt.Fprintln(os.Stderr, "       osty lsp                  (language server on stdio)")
 	fmt.Fprintln(os.Stderr, "flags:")
 	fmt.Fprintln(os.Stderr, "  --no-color         disable ANSI escapes")
