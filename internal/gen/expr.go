@@ -332,6 +332,9 @@ func (g *gen) emitCall(c *ast.CallExpr) {
 		if g.emitTurbofishCall(c, tf) {
 			return
 		}
+		if g.emitErrorDowncast(c, tf) {
+			return
+		}
 	}
 	g.emitExpr(c.Fn)
 	g.body.write("(")
@@ -470,6 +473,36 @@ func (g *gen) emitTurbofishCall(c *ast.CallExpr, tf *ast.TurbofishExpr) bool {
 		return true
 	}
 	return false
+}
+
+// emitErrorDowncast lowers `err.downcast::<T>()` (§7.4) to a Go
+// type-assertion thunk producing `*T` — Osty's `Optional<T>` is `*T`
+// in the runtime, so a successful assertion returns `&v`, a failure
+// returns nil. The receiver value is `any` (Error's Go mapping); the
+// assertion is against the target type's Go form.
+//
+// The rewrite is:
+//
+//	err.downcast::<FsError>()
+//	  →
+//	(func() *FsError {
+//	    if v, ok := err.(FsError); ok { return &v }
+//	    return nil
+//	}())
+//
+// Returns false when the turbofish base isn't a recognized
+// `<expr>.downcast::<T>()` shape so the caller can fall through to a
+// later intrinsic or the generic emission path.
+func (g *gen) emitErrorDowncast(c *ast.CallExpr, tf *ast.TurbofishExpr) bool {
+	fe, ok := tf.Base.(*ast.FieldExpr)
+	if !ok || fe.Name != "downcast" || len(tf.Args) != 1 || len(c.Args) != 0 {
+		return false
+	}
+	target := g.goTypeExpr(tf.Args[0])
+	g.body.writef("(func() *%s { if v, ok := ", target)
+	g.emitExpr(fe.X)
+	g.body.writef(".(%s); ok { return &v }; return nil }())", target)
+	return true
 }
 
 // emitThreadCall intercepts non-turbofish thread.* helpers like

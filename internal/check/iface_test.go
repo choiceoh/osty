@@ -334,6 +334,61 @@ fn main() {
 	mustHaveCode(t, runCheckIface(t, src), diag.CodeTypeMismatch)
 }
 
+// ---- §7.4 Error.downcast::<T>() ----
+
+// `err.downcast::<FsError>()` on an Error-typed value type-checks and
+// produces FsError? at the call site.
+func TestIface_ErrorDowncastTypeChecks(t *testing.T) {
+	src := `
+pub enum FsError {
+    NotFound,
+
+    pub fn message(self) -> String { "nf" }
+}
+
+fn handle(err: Error) -> FsError? {
+    err.downcast::<FsError>()
+}
+
+fn main() {}
+`
+	mustBeOK(t, runCheckIface(t, src))
+}
+
+// downcast on a non-Error receiver fails.
+func TestIface_DowncastOnNonErrorRejected(t *testing.T) {
+	src := `
+pub enum FsError {
+    NotFound,
+    pub fn message(self) -> String { "nf" }
+}
+
+fn main() {
+    let n: Int = 5
+    let _ = n.downcast::<FsError>()
+}
+`
+	mustHaveCode(t, runCheckIface(t, src), diag.CodeTypeMismatch)
+}
+
+// downcast with no type arguments is rejected.
+func TestIface_DowncastRequiresTypeArg(t *testing.T) {
+	src := `
+fn handle(err: Error) {
+    let _ = err.downcast()
+}
+
+fn main() {}
+`
+	// The bare `err.downcast()` (no turbofish) goes through the
+	// standard method-call path, which can't find `downcast` on
+	// Error and emits an unknown-method diagnostic.
+	got := runCheckIface(t, src)
+	if len(got) == 0 {
+		t.Fatalf("expected an error for bare downcast() call without turbofish")
+	}
+}
+
 // ---- All-violations diagnostic ----
 
 // Both missing and mismatched methods are reported in one check.
