@@ -64,3 +64,55 @@ fn testIrKindNamesAreStable() {
         "missingName",
     )
 }
+
+fn testIrCarriesSemanticGraph() {
+    let module = irLowerSource(
+        "main",
+        r"""
+            use std.testing
+            pub struct Box<T> { value: T }
+            fn add(left: Int, right: Int) -> Int {
+                let total = left + right
+                return total
+            }
+            """,
+    )
+    let summary = irSummarize(module)
+    let root = irArenaNodeAt(module.arena, module.root)
+
+    testing.assert(root.scope >= 0)
+    testing.assert(summary.scopes >= 2)
+    testing.assert(summary.symbols >= 6)
+    testing.assert(summary.typedNodes >= 3)
+    testing.assert(summary.effectfulNodes == 0)
+    testing.assert(summary.terminalNodes >= 1)
+    testing.assertEq(summary.invalidScopes, 0)
+    testing.assertEq(summary.unresolvedRefs, 0)
+}
+
+fn testIrSemanticSymbolsUseStableNames() {
+    let module = irLowerSource(
+        "main",
+        r"""
+            use std.testing as t
+            fn add(left: Int) -> Int { left }
+            """,
+    )
+    let mut foundUse = false
+    let mut foundFn = false
+    let mut foundParam = false
+    for symbol in module.semantic.symbols {
+        if symbol.name == "t" && irSymbolKindName(symbol.kind) == "package" {
+            foundUse = true
+        } else if symbol.name == "add" && irSymbolKindName(symbol.kind) == "function" {
+            foundFn = true
+        } else if symbol.name == "left" && irSymbolKindName(symbol.kind) == "parameter" {
+            foundParam = true
+        }
+    }
+
+    testing.assert(foundUse)
+    testing.assert(foundFn)
+    testing.assert(foundParam)
+    testing.assertEq(irInvalidScopeCount(module), 0)
+}
