@@ -226,6 +226,24 @@ func (s *Scope) Lookup(name string) *Symbol {
 	return nil
 }
 
+// LookupType walks the scope chain searching for a symbol that can appear in
+// type position. Value-only symbols with the same spelling, such as enum
+// variants, do not shadow outer/prelude types.
+func (s *Scope) LookupType(name string) *Symbol {
+	for cur := s; cur != nil; cur = cur.parent {
+		if sym, ok := cur.syms[name]; ok {
+			if sym.Kind.IsType() || sym.Kind == SymPackage {
+				return sym
+			}
+			if sym.Kind == SymVariant {
+				continue
+			}
+			return sym
+		}
+	}
+	return nil
+}
+
 // LookupLocal returns a symbol only if it is defined in THIS scope (not
 // in any parent). Used to detect shadowing.
 func (s *Scope) LookupLocal(name string) *Symbol {

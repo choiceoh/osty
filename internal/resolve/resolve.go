@@ -1555,7 +1555,7 @@ func (r *resolver) resolveType(t ast.Type) {
 				r.typeRefs[n] = r.methodCtx.selfType
 			}
 		default:
-			sym := r.current.Lookup(first)
+			sym := r.current.LookupType(first)
 			switch {
 			case sym == nil:
 				r.errorf(n.PosV, diag.CodeUndefinedName,

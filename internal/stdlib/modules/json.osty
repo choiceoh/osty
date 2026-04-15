@@ -1,0 +1,67 @@
+// std.json — JSON value model and codec protocol surface.
+
+use std.strings
+
+pub type JsonObject = Map<String, Json>
+pub type JsonArray = List<Json>
+pub type JsonString = String
+pub type JsonNumber = Float
+pub type JsonBool = Bool
+
+pub enum Json {
+    Object(JsonObject),
+    Array(JsonArray),
+    String(JsonString),
+    Number(JsonNumber),
+    Bool(JsonBool),
+    Null,
+}
+
+pub interface Encode {
+    fn toJson(self) -> Json
+}
+
+pub interface Decode {
+    fn fromJson(value: Json) -> Result<Self, Error>
+}
+
+fn quote(text: String) -> String {
+    let escapedSlash = strings.replace(text, "\\", "\\\\")
+    let escapedQuote = strings.replace(escapedSlash, "\"", "\\\"")
+    "\"" + escapedQuote + "\""
+}
+
+pub fn encode<T: Encode>(value: T) -> String {
+    stringify(value.toJson())
+}
+
+pub fn decode<T>(text: String) -> Result<T, Error> {
+    Err(0)
+}
+
+pub fn parse(text: String) -> Result<Json, Error> {
+    Err(0)
+}
+
+pub fn stringify(value: Json) -> String {
+    match value {
+        Object(obj) -> {
+            let mut parts: List<String> = []
+            for (key, item) in obj {
+                parts.push(quote(key) + ":" + stringify(item))
+            }
+            "{" + strings.join(parts, ",") + "}"
+        },
+        Array(items) -> {
+            let mut parts: List<String> = []
+            for item in items {
+                parts.push(stringify(item))
+            }
+            "[" + strings.join(parts, ",") + "]"
+        },
+        String(text) -> quote(text),
+        Number(n) -> n.toString(),
+        Bool(b) -> if b { "true" } else { "false" },
+        Null -> "null",
+    }
+}

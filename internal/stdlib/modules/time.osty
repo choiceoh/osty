@@ -1,0 +1,130 @@
+// std.time — instants, durations, zones, and formatting constants.
+
+pub let ISO_8601: String = "2006-01-02T15:04:05Z07:00"
+pub let RFC_3339: String = "2006-01-02T15:04:05Z07:00"
+pub let RFC_2822: String = "Mon, 02 Jan 2006 15:04:05 -0700"
+
+pub struct Duration {
+    pub nanoseconds: Int64,
+
+    pub fn abs(self) -> Duration {
+        if self.nanoseconds < 0 {
+            Duration { nanoseconds: -self.nanoseconds }
+        } else {
+            self
+        }
+    }
+
+    pub fn toString(self) -> String {
+        self.nanoseconds.toString() + "ns"
+    }
+}
+
+pub struct Instant {
+    pub unixNanos: Int64,
+
+    pub fn add(self, duration: Duration) -> Instant {
+        Instant { unixNanos: self.unixNanos + duration.nanoseconds }
+    }
+
+    pub fn sub(self, other: Instant) -> Duration {
+        Duration { nanoseconds: self.unixNanos - other.unixNanos }
+    }
+
+    pub fn format(self, layout: String) -> String {
+        self.unixNanos.toString()
+    }
+
+    pub fn inZone(self, zone: Zone) -> ZonedTime {
+        ZonedTime { instant: self, zone: zone }
+    }
+}
+
+pub struct Zone {
+    pub name: String,
+    pub offset: Duration,
+    pub isFixed: Bool,
+}
+
+pub enum Weekday {
+    Mon,
+    Tue,
+    Wed,
+    Thu,
+    Fri,
+    Sat,
+    Sun,
+}
+
+pub struct ZonedTime {
+    pub instant: Instant,
+    pub zone: Zone,
+
+    pub fn year(self) -> Int {
+        0
+    }
+
+    pub fn month(self) -> Int {
+        0
+    }
+
+    pub fn day(self) -> Int {
+        0
+    }
+
+    pub fn hour(self) -> Int {
+        0
+    }
+
+    pub fn minute(self) -> Int {
+        0
+    }
+
+    pub fn second(self) -> Int {
+        0
+    }
+
+    pub fn nanosecond(self) -> Int {
+        0
+    }
+
+    pub fn weekday(self) -> Weekday {
+        Mon
+    }
+
+    pub fn format(self, layout: String) -> String {
+        self.instant.format(layout)
+    }
+}
+
+pub fn now() -> Instant {
+    Instant { unixNanos: 0 }
+}
+
+pub fn parse(text: String, layout: String) -> Result<Instant, Error> {
+    Err(0)
+}
+
+pub fn sleep(duration: Duration) -> Result<(), Error> {
+    Ok(())
+}
+
+pub fn zone(name: String) -> Result<Zone, Error> {
+    Err(0)
+}
+
+pub fn local() -> Zone {
+    Zone {
+        name: "local",
+        offset: Duration { nanoseconds: 0 },
+        isFixed: false,
+    }
+}
+
+pub fn utc() -> Zone {
+    Zone {
+        name: "UTC",
+        offset: Duration { nanoseconds: 0 },
+        isFixed: true,
+    }
+}

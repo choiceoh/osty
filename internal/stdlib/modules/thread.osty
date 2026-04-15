@@ -1,0 +1,75 @@
+// std.thread — task, channel, cancellation, and select surface.
+
+pub struct Duration {}
+
+pub struct Group {
+    pub fn spawn<T>(self, body: fn() -> T) -> Handle<T> {
+        thread.spawn(body)
+    }
+
+    pub fn cancel(self) {}
+
+    pub fn isCancelled(self) -> Bool {
+        false
+    }
+}
+
+pub struct Select {
+    pub fn recv<T>(self, ch: Channel<T>, f: fn(T) -> ()) -> Select {
+        self
+    }
+
+    pub fn send<T>(self, ch: Channel<T>, value: T) -> Select {
+        self
+    }
+
+    pub fn timeout(self, duration: Duration, f: fn() -> ()) -> Select {
+        self
+    }
+
+    pub fn default(self, f: fn() -> ()) -> Select {
+        self
+    }
+}
+
+pub fn spawn<T>(body: fn() -> T) -> Handle<T> {
+    spawn(body)
+}
+
+pub fn collectAll<T>(body: fn(Group) -> List<Handle<T>>) -> List<Result<T, Error>> {
+    let handles = body(Group {})
+    let mut out: List<Result<T, Error>> = []
+    for handle in handles {
+        out.push(Ok(handle.join()))
+    }
+    out
+}
+
+pub fn race<T>(body: fn(Group) -> List<Handle<T>>) -> Result<T, Error> {
+    let handles = body(Group {})
+    if handles.len() == 0 {
+        Err(0)
+    } else {
+        Ok(handles[0].join())
+    }
+}
+
+pub fn chan<T>(capacity: Int = 0) -> Channel<T> {
+    thread.chan::<T>(capacity)
+}
+
+pub fn sleep(duration: Duration) -> Result<(), Error> {
+    Ok(())
+}
+
+pub fn yield() {}
+
+pub fn isCancelled() -> Bool {
+    false
+}
+
+pub fn checkCancelled() -> Result<(), Error> {
+    Ok(())
+}
+
+pub fn select(body: fn(Select) -> ()) {}
