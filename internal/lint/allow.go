@@ -54,7 +54,7 @@ func (l *linter) filterSuppressed() {
 	kept := l.result.Diags[:0]
 diag_loop:
 	for _, d := range l.result.Diags {
-		if !isLintCode(d.Code) {
+		if !IsCode(d.Code) {
 			kept = append(kept, d)
 			continue
 		}
@@ -214,53 +214,35 @@ var categoryAliases = map[string]Category{
 }
 
 // resolveAllowName maps a single argument name to one or more lint
-// codes. Unknown names resolve to an empty slice (silently ignored).
-//
-// Resolution order:
-//  1. A literal lint code (e.g. "L0001") — returned as-is.
-//  2. A category alias — returned as every code whose Rule belongs to
-//     that category.
-//  3. A rule name or code from the registry (LookupRule) — returned as
-//     a single-element slice.
-//
-// Categories take precedence over rule names because the alias
-// `dead_code` intentionally names both a category and the specific
-// rule L0020 — the broader "suppress all dead-code-family rules"
-// reading is the useful one.
-//
-// Because steps 2 and 3 consult the registry directly, adding a new
-// rule or rule name is a one-file change in registry.go.
+// codes. Unknown names resolve to nil (silently ignored). Categories
+// are checked before rule names so the alias `dead_code` — which is
+// both a category and the specific rule L0020 — expands to the whole
+// family rather than just L0020.
 func resolveAllowName(name string) []string {
-	// Direct code reference: L0001, L0040, etc.
-	if isLintCode(name) {
+	if IsCode(name) {
 		return []string{name}
 	}
-	// Category alias expands to every rule in that category.
+	ensureIndex()
 	if cat, ok := categoryAliases[name]; ok {
-		rules := RulesByCategory(cat)
-		codes := make([]string, 0, len(rules))
-		for _, r := range rules {
-			codes = append(codes, r.Code)
-		}
-		return codes
+		return codesByCategory[cat]
 	}
-	// Rule lookup (by Code or Name) — handles every entry in allRules.
-	if r, ok := LookupRule(name); ok {
+	if r, ok := ruleByCode[name]; ok {
+		return []string{r.Code}
+	}
+	if r, ok := ruleByName[name]; ok {
 		return []string{r.Code}
 	}
 	return nil
 }
 
-
-// isLintCode reports whether a code string belongs to the L-prefixed
-// lint namespace.
-func isLintCode(code string) bool {
-	if len(code) < 2 || code[0] != 'L' {
+// IsCode reports whether s has the shape of a lint code: the letter L
+// followed by one or more digits.
+func IsCode(s string) bool {
+	if len(s) < 2 || s[0] != 'L' {
 		return false
 	}
-	for i := 1; i < len(code); i++ {
-		c := code[i]
-		if c < '0' || c > '9' {
+	for i := 1; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
 			return false
 		}
 	}

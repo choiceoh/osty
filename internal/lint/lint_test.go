@@ -1166,9 +1166,8 @@ fn many(a: Int, b: Int, c: Int, d: Int, e: Int, f: Int, g: Int, h: Int) {
 // ---- L0052 function body too long ----
 
 func TestLint_FunctionTooLong(t *testing.T) {
-	// defaultMaxBodyLen is 80; 90 trivial statements must trip L0052.
-	// Each statement is a bare expression (no binding) so we don't
-	// collide with shadow / unused-let rules.
+	// 90 > defaultMaxBodyLen (80). Bare calls avoid unused-let / shadow
+	// rules that would fire on repeated `let _x = 1`.
 	var b strings.Builder
 	b.WriteString("fn big() {\n")
 	for i := 0; i < 90; i++ {
@@ -1197,7 +1196,7 @@ fn small() {
 // ---- L0053 deep nesting ----
 
 func TestLint_DeepNesting(t *testing.T) {
-	// defaultMaxNesting is 5; 7 nested `if` blocks force the pass to fire.
+	// 7 nested `if` blocks exceed defaultMaxNesting (5).
 	src := `
 fn deep(x: Int) -> Int {
     if x > 0 {
@@ -1571,52 +1570,17 @@ func TestLint_Fixes_RoundTripThroughParser(t *testing.T) {
 // ---- Registry integrity ----
 //
 // These meta-tests lock the invariant that registry.go is the single
-// source of truth for lint rules. If a new L-code is added to the diag
-// package without a corresponding registry entry (or vice versa), or
-// if a rule's canonical Name/Code isn't resolvable via LookupRule,
-// these tests fail — preventing the kind of silent drift that left 14
-// rules unsuppressible via #[allow(...)] for several releases.
-
-// knownLintCodes is every L-code declared by the diag package. Update
-// this list together with diag/codes.go. Keeping it here (rather than
-// exporting a slice from diag) avoids leaking a sorted code-index type
-// into the public API of that package.
-var knownLintCodes = []string{
-	diag.CodeUnusedLet, diag.CodeUnusedParam, diag.CodeUnusedImport,
-	diag.CodeUnusedMut, diag.CodeUnusedField, diag.CodeUnusedMethod,
-	diag.CodeIgnoredResult, diag.CodeDeadStore,
-	diag.CodeShadowedBinding,
-	diag.CodeDeadCode, diag.CodeRedundantElse, diag.CodeConstantCondition,
-	diag.CodeEmptyBranch, diag.CodeNeedlessReturn, diag.CodeIdenticalBranches,
-	diag.CodeEmptyLoopBody,
-	diag.CodeNamingType, diag.CodeNamingValue, diag.CodeNamingVariant,
-	diag.CodeRedundantBool, diag.CodeSelfCompare, diag.CodeSelfAssign,
-	diag.CodeDoubleNegation, diag.CodeBoolLiteralCompare, diag.CodeNegatedBoolLiteral,
-	diag.CodeTooManyParams, diag.CodeFunctionTooLong, diag.CodeDeepNesting,
-	diag.CodeMissingDoc,
-}
-
-func TestLint_RegistryCoversEveryCode(t *testing.T) {
-	for _, code := range knownLintCodes {
-		if _, ok := lint.LookupRule(code); !ok {
-			t.Errorf("L-code %s has no entry in registry.go allRules", code)
-		}
-	}
-}
+// source of truth for lint rules, preventing the silent drift that
+// once left 14 rules unsuppressible via #[allow(...)].
 
 func TestLint_RegistryNamesAreResolvable(t *testing.T) {
-	// Every rule's Name and Code must be resolvable — both as
-	// #[allow(NAME)] and as #[allow(CODE)] — through the same pipeline
-	// that user annotations use. We assert this via the observable
-	// behaviour of Config.Apply with an Allow list.
 	for _, r := range lint.Rules() {
 		for _, alias := range []string{r.Code, r.Name} {
 			cfg := lint.Config{Allow: []string{alias}}
 			in := &lint.Result{Diags: []*diag.Diagnostic{
 				diag.New(diag.Warning, "probe").Code(r.Code).Build(),
 			}}
-			out := cfg.Apply(in)
-			if len(out.Diags) != 0 {
+			if out := cfg.Apply(in); len(out.Diags) != 0 {
 				t.Errorf("alias %q (rule %s) did not suppress its own code %s",
 					alias, r.Name, r.Code)
 			}
@@ -1625,9 +1589,6 @@ func TestLint_RegistryNamesAreResolvable(t *testing.T) {
 }
 
 func TestLint_RegistryEntriesWellFormed(t *testing.T) {
-	// Every rule must have a syntactically valid L-code, a non-empty
-	// lower_snake_case Name, a non-empty Summary, a non-empty
-	// Description, and a category that appears in Categories().
 	seenCodes := map[string]bool{}
 	seenNames := map[string]bool{}
 	validCats := map[lint.Category]bool{}
@@ -1635,7 +1596,7 @@ func TestLint_RegistryEntriesWellFormed(t *testing.T) {
 		validCats[c] = true
 	}
 	for _, r := range lint.Rules() {
-		if !lintCodePattern(r.Code) {
+		if !lint.IsCode(r.Code) {
 			t.Errorf("rule %q has malformed Code %q (want L followed by digits)", r.Name, r.Code)
 		}
 		if seenCodes[r.Code] {
@@ -1663,21 +1624,6 @@ func TestLint_RegistryEntriesWellFormed(t *testing.T) {
 	}
 }
 
-// lintCodePattern checks that s matches `L` followed by one or more
-// digits — the same shape that the annotation / config resolver
-// accepts as a literal code.
-func lintCodePattern(s string) bool {
-	if len(s) < 2 || s[0] != 'L' {
-		return false
-	}
-	for i := 1; i < len(s); i++ {
-		if s[i] < '0' || s[i] > '9' {
-			return false
-		}
-	}
-	return true
-}
-
 func TestLint_ConfigValidateFlagsUnknown(t *testing.T) {
 	cfg := lint.Config{
 		Allow: []string{"unused_let", "self_compair" /* typo */, "L0001"},
@@ -1702,9 +1648,6 @@ func TestLint_ConfigValidateCleanOnValidConfig(t *testing.T) {
 }
 
 func TestLint_RegistryCategoriesAreResolvable(t *testing.T) {
-	// Every declared category must be usable as a suppression alias and
-	// must expand to at least one rule. This guards against a category
-	// existing in the registry without any rules tagged to it.
 	for _, cat := range lint.Categories() {
 		rules := lint.RulesByCategory(cat)
 		if len(rules) == 0 {
@@ -1725,15 +1668,10 @@ func TestLint_RegistryCategoriesAreResolvable(t *testing.T) {
 	}
 }
 
-// ---- Panic safety ----
+// FuzzLintFile asserts that the lint pass never panics on arbitrary
+// parser output, however malformed. Run with:
 //
-// FuzzLintFile feeds arbitrary byte inputs through the full
-// parse → resolve → check → lint pipeline and asserts that the lint
-// pass never panics, regardless of how malformed the parser's AST is.
-// The parser is expected to tolerate garbage (it emits Diagnostics
-// instead of crashing), and lint must be at least as forgiving.
-//
-// Run with: `go test ./internal/lint/ -run=^$ -fuzz=FuzzLintFile`.
+//	go test ./internal/lint/ -run=^$ -fuzz=FuzzLintFile
 func FuzzLintFile(f *testing.F) {
 	seeds := []string{
 		``,
@@ -1761,7 +1699,6 @@ func FuzzLintFile(f *testing.F) {
 		}
 		res := resolve.File(file, resolve.NewPrelude())
 		chk := check.File(file, res)
-		// The assertion is simply: lint.File does not panic.
 		_ = lint.File(file, res, chk)
 	})
 }

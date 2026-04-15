@@ -2,6 +2,7 @@ package lint
 
 import (
 	"sort"
+	"sync"
 
 	"github.com/osty/osty/internal/diag"
 )
@@ -244,6 +245,34 @@ var allRules = []Rule{
 	},
 }
 
+// Package-level indexes over allRules. Built lazily on first query so
+// the linter's hot path (resolveAllowName runs per annotation arg and
+// per Allow/Deny entry) is O(1) instead of O(len(allRules)).
+var (
+	indexOnce       sync.Once
+	ruleByCode      map[string]Rule
+	ruleByName      map[string]Rule
+	codesByCategory map[Category][]string
+	sortedCats      []Category
+)
+
+func ensureIndex() {
+	indexOnce.Do(func() {
+		ruleByCode = make(map[string]Rule, len(allRules))
+		ruleByName = make(map[string]Rule, len(allRules))
+		codesByCategory = make(map[Category][]string)
+		for _, r := range allRules {
+			ruleByCode[r.Code] = r
+			ruleByName[r.Name] = r
+			codesByCategory[r.Category] = append(codesByCategory[r.Category], r.Code)
+		}
+		for c := range codesByCategory {
+			sortedCats = append(sortedCats, c)
+		}
+		sort.Slice(sortedCats, func(i, j int) bool { return sortedCats[i] < sortedCats[j] })
+	})
+}
+
 // Rules returns a copy of the full rule list, sorted by code.
 func Rules() []Rule {
 	out := append([]Rule(nil), allRules...)
@@ -254,10 +283,12 @@ func Rules() []Rule {
 // LookupRule finds a rule by its code (L0001) or by its alias
 // (unused_let). Returns ok=false if neither matches.
 func LookupRule(name string) (Rule, bool) {
-	for _, r := range allRules {
-		if r.Code == name || r.Name == name {
-			return r, true
-		}
+	ensureIndex()
+	if r, ok := ruleByCode[name]; ok {
+		return r, true
+	}
+	if r, ok := ruleByName[name]; ok {
+		return r, true
 	}
 	return Rule{}, false
 }
@@ -265,11 +296,11 @@ func LookupRule(name string) (Rule, bool) {
 // RulesByCategory returns the rules belonging to a category, sorted
 // by code. Returns an empty slice for unknown categories.
 func RulesByCategory(c Category) []Rule {
-	var out []Rule
-	for _, r := range allRules {
-		if r.Category == c {
-			out = append(out, r)
-		}
+	ensureIndex()
+	codes := codesByCategory[c]
+	out := make([]Rule, 0, len(codes))
+	for _, code := range codes {
+		out = append(out, ruleByCode[code])
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Code < out[j].Code })
 	return out
@@ -277,14 +308,6 @@ func RulesByCategory(c Category) []Rule {
 
 // Categories returns every distinct category, alphabetically.
 func Categories() []Category {
-	seen := map[Category]bool{}
-	var out []Category
-	for _, r := range allRules {
-		if !seen[r.Category] {
-			seen[r.Category] = true
-			out = append(out, r.Category)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
-	return out
+	ensureIndex()
+	return append([]Category(nil), sortedCats...)
 }

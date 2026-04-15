@@ -12,15 +12,8 @@ import (
 // across every file in scope, annotations apply only to the decl they
 // attach to.
 //
-// Both Allow and Deny accept the same symbolic names as #[allow(...)]
-// — see allow.go for the full list. In brief:
-//
-//   - A concrete code: `L0001`, `L0040`, ...
-//   - Any rule name or code from the registry (`unused_let`,
-//     `redundant_bool`, `too_many_params`, `missing_doc`, ...).
-//   - A category alias: `unused`, `shadowing`, `dead_code`, `naming`,
-//     `simplify`, `complexity`, `docs`.
-//   - The wildcards `lint` or `all`.
+// Allow and Deny accept the same symbolic names as #[allow(...)] —
+// see allow.go for the accepted grammar.
 //
 // When Allow and Deny both list the same code, Deny wins — the code is
 // elevated to Error. When a code appears in Allow only, matching lint
@@ -128,7 +121,7 @@ func (c Config) Apply(r *Result) *Result {
 
 	out := &Result{}
 	for _, d := range r.Diags {
-		if !isLintCode(d.Code) {
+		if !IsCode(d.Code) {
 			out.Diags = append(out.Diags, d)
 			continue
 		}
@@ -152,32 +145,16 @@ func (c Config) Apply(r *Result) *Result {
 // Callers (e.g. the pipeline loading osty.toml) can surface these as
 // configuration warnings so that typos like `self_compair` don't
 // silently disable nothing.
-//
-// The empty list means the config is fully resolvable — every name
-// was either a concrete code, a registry rule name/code, a category
-// alias, or a wildcard.
 func (c Config) Validate() (unknown []string) {
-	for _, n := range c.Allow {
-		if !isResolvableName(n) {
-			unknown = append(unknown, n)
+	for _, n := range append(append([]string(nil), c.Allow...), c.Deny...) {
+		if n == "lint" || n == "all" {
+			continue
 		}
-	}
-	for _, n := range c.Deny {
-		if !isResolvableName(n) {
+		if len(resolveAllowName(n)) == 0 {
 			unknown = append(unknown, n)
 		}
 	}
 	return unknown
-}
-
-// isResolvableName reports whether name matches a concrete L-code, a
-// registry entry (by Code or Name), a category alias, or a wildcard.
-// Mirrors the lookup performed by expandCodeSet.
-func isResolvableName(name string) bool {
-	if name == "lint" || name == "all" {
-		return true
-	}
-	return len(resolveAllowName(name)) > 0
 }
 
 // expandCodeSet takes a list of user-facing names (codes / aliases /
