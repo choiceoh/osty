@@ -2,6 +2,7 @@ package check
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -187,6 +188,9 @@ func Package(pkg *resolve.Package, pr *resolve.PackageResult, opts ...Opts) *Res
 // per-package for display, but SymTypes / Descs span the workspace.
 //
 // Packages without bodies (stdlib stubs, cycle markers) are skipped.
+// Provider-backed stdlib packages contribute declarations/signatures to
+// the shared type environment, but their stub bodies are not checked as
+// user code.
 func Workspace(
 	ws *resolve.Workspace,
 	resolved map[string]*resolve.PackageResult,
@@ -250,6 +254,16 @@ func Workspace(
 	out := map[string]*Result{}
 	for _, e := range walk {
 		start := len(c.result.Diags)
+		if isProviderStdlibPackage(ws, e.path, e.pkg) {
+			out[e.path] = &Result{
+				Types:          c.result.Types,
+				LetTypes:       c.result.LetTypes,
+				SymTypes:       c.result.SymTypes,
+				Descs:          c.result.Descs,
+				Instantiations: c.result.Instantiations,
+			}
+			continue
+		}
 		for _, pf := range e.pkg.Files {
 			c.file = pf.File
 			c.resolved = fileResult(pf)
@@ -272,6 +286,13 @@ func Workspace(
 		}
 	}
 	return out
+}
+
+func isProviderStdlibPackage(ws *resolve.Workspace, path string, pkg *resolve.Package) bool {
+	return ws != nil &&
+		ws.Stdlib != nil &&
+		strings.HasPrefix(path, resolve.StdPrefix) &&
+		ws.Stdlib.LookupPackage(path) == pkg
 }
 
 // newChecker allocates a checker with empty shared maps; each entry

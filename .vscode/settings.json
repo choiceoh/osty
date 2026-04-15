@@ -1,0 +1,21 @@
+{
+  "files.associations": {
+    "*.osty": "osty",
+    "osty.toml": "toml"
+  },
+  "files.exclude": {
+    "**/.osty": true
+  },
+  "search.exclude": {
+    "**/.osty": true
+  },
+  "[osty]": {
+    "editor.insertSpaces": true,
+    "editor.tabSize": 4,
+    "editor.formatOnSave": false
+  },
+  "osty.languageServer.command": "osty",
+  "osty.languageServer.args": [
+    "lsp"
+  ]
+}

@@ -19,10 +19,11 @@
 //     stub that gen emits for `use std.testing`. The resulting
 //     merged ast.File is printed back out as main.go.
 //
-//  3. Append a synthetic main() that iterates every discovered test
-//     function (by name), wraps each call in defer/recover through
-//     the harness, and prints a summary before exiting with the
-//     appropriate code.
+//  3. Rename any user-defined func main to _ostyProgramMain, rewrite
+//     direct main() calls to that preserved entry point, then append a
+//     synthetic main() that iterates every discovered test function (by
+//     name), wraps each call in defer/recover through the harness, and
+//     prints a summary before exiting with the appropriate code.
 //
 //  4. Emit a separate harness.go next to main.go that defines the
 //     testing runtime struct, the _TestHarness type, and the helper
@@ -44,10 +45,13 @@ import (
 	"sort"
 	"strings"
 
+	ostyast "github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/gen"
 	"github.com/osty/osty/internal/resolve"
 )
+
+const programMainName = "_ostyProgramMain"
 
 // EntryKind identifies how the harness should invoke an entry — as a
 // regular test (recorded in pass/fail totals) or as a benchmark
@@ -113,6 +117,7 @@ func GenerateHarness(pkg *resolve.Package, chk *check.Result, entries []Entry) (
 	seenResult := false
 	seenRange := false
 	var firstGenErr error
+	hasProgramMain := packageHasProgramMain(pkg)
 
 	for _, pf := range files {
 		if pf.File == nil {
@@ -171,6 +176,9 @@ func GenerateHarness(pkg *resolve.Package, chk *check.Result, entries []Entry) (
 			if isTestingStub(d) {
 				// Dropped — replaced by the runtime in harness.go.
 				continue
+			}
+			if hasProgramMain {
+				rewriteProgramMain(d)
 			}
 			merged.Decls = append(merged.Decls, d)
 		}
@@ -259,6 +267,55 @@ func isTestingStub(d goast.Decl) bool {
 	}
 	_, ok = cl.Type.(*goast.StructType)
 	return ok
+}
+
+func packageHasProgramMain(pkg *resolve.Package) bool {
+	for _, pf := range pkg.Files {
+		if pf == nil || pf.File == nil {
+			continue
+		}
+		for _, d := range pf.File.Decls {
+			fn, ok := d.(*ostyast.FnDecl)
+			if ok && fn.Recv == nil && fn.Name == "main" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func rewriteProgramMain(d goast.Decl) {
+	renameProgramMain(d)
+	rewriteProgramMainCalls(d)
+}
+
+// renameProgramMain preserves a binary package's entry point without
+// colliding with the synthetic harness main(). Keeping the function body
+// also keeps any imports it needs marked as used in the merged Go file.
+func renameProgramMain(d goast.Decl) {
+	fn, ok := d.(*goast.FuncDecl)
+	if !ok || fn.Recv != nil || fn.Name == nil || fn.Name.Name != "main" {
+		return
+	}
+	fn.Name.Name = programMainName
+}
+
+// rewriteProgramMainCalls lets binary tests call main() directly while
+// the harness still owns Go's real package main. The generator emits a
+// plain identifier call for Osty's top-level main, so selectors and
+// indirect function values intentionally stay untouched.
+func rewriteProgramMainCalls(d goast.Decl) {
+	goast.Inspect(d, func(n goast.Node) bool {
+		call, ok := n.(*goast.CallExpr)
+		if !ok {
+			return true
+		}
+		id, ok := call.Fun.(*goast.Ident)
+		if ok && id.Name == "main" {
+			id.Name = programMainName
+		}
+		return true
+	})
 }
 
 // renderMain emits the synthetic main() that drives the discovered

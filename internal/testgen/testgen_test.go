@@ -119,6 +119,63 @@ func TestGenerateHarness_StripsTestingStub(t *testing.T) {
 	}
 }
 
+func TestGenerateHarness_RenamesBinaryMain(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "main.osty"), []byte(`fn main() {
+    println("Hello, Osty!")
+}
+`))
+	mustWrite(t, filepath.Join(dir, "main_test.osty"), []byte(`fn testMainRuns() {
+    main()
+}
+`))
+	pkg, err := resolve.LoadPackageWithTests(dir)
+	if err != nil {
+		t.Fatalf("load package: %v", err)
+	}
+	res := resolve.ResolvePackage(pkg, resolve.NewPrelude())
+	chk := check.Package(pkg, res)
+	srcs, err := GenerateHarness(pkg, chk, []Entry{{
+		Name: "testMainRuns",
+		Kind: KindTest,
+		File: "main_test.osty",
+		Line: 1,
+	}})
+	if err != nil {
+		t.Fatalf("GenerateHarness: %v", err)
+	}
+	main := string(srcs.Main)
+	if strings.Count(main, "func main()") != 1 {
+		t.Fatalf("expected only harness main, got:\n%s", main)
+	}
+	if !strings.Contains(main, "func _ostyProgramMain()") {
+		t.Fatalf("binary entry point was not preserved under _ostyProgramMain:\n%s", main)
+	}
+	if !strings.Contains(main, "\t_ostyProgramMain()\n") {
+		t.Fatalf("test call to main() was not rewritten to _ostyProgramMain():\n%s", main)
+	}
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go binary not on PATH; skipping end-to-end run")
+	}
+	out := t.TempDir()
+	mustWrite(t, filepath.Join(out, "main.go"), srcs.Main)
+	mustWrite(t, filepath.Join(out, "harness.go"), srcs.Harness)
+	mustWrite(t, filepath.Join(out, "go.mod"), []byte("module ostytest\ngo 1.22\n"))
+	cmd := exec.Command("go", "run", ".")
+	cmd.Dir = out
+	combined, runErr := cmd.CombinedOutput()
+	if runErr != nil {
+		t.Fatalf("go run failed: %v\n%s", runErr, combined)
+	}
+	outText := string(combined)
+	if !strings.Contains(outText, "Hello, Osty!") {
+		t.Fatalf("rewritten main() call did not execute program entry point:\n%s", combined)
+	}
+	if !strings.Contains(outText, "1 passed, 0 failed, 1 total") {
+		t.Fatalf("missing summary in:\n%s", combined)
+	}
+}
+
 // TestGenerateHarness_NilPackage ensures the bad-input path returns
 // an error rather than panicking. Defensive — the CLI always passes a
 // non-nil package today, but keeping the contract explicit guards
