@@ -36,6 +36,7 @@ pub enum TracePhase {
 
 pub struct GcConfig {
     pub nurseryLimit: Int,
+    pub survivorLimit: Int,
     pub heapLimit: Int,
     pub promotionAge: Int,
     pub incrementalBudget: Int,
@@ -1067,6 +1068,61 @@ pub struct GcHeap {
         total
     }
 
+    pub fn edenBytes(self) -> Int {
+        let mut total = 0
+        for (id, obj) in self.objects {
+            let _ = id
+            if obj.region == GcEdenRegion {
+                total = total + obj.size
+            }
+        }
+        total
+    }
+
+    pub fn survivorBytes(self) -> Int {
+        let mut total = 0
+        for (id, obj) in self.objects {
+            let _ = id
+            if obj.region == GcSurvivorRegion {
+                total = total + obj.size
+            }
+        }
+        total
+    }
+
+    pub fn edenObjectCount(self) -> Int {
+        let mut total = 0
+        for (id, obj) in self.objects {
+            let _ = id
+            if obj.region == GcEdenRegion {
+                total = total + 1
+            }
+        }
+        total
+    }
+
+    pub fn survivorObjectCount(self) -> Int {
+        let mut total = 0
+        for (id, obj) in self.objects {
+            let _ = id
+            if obj.region == GcSurvivorRegion {
+                total = total + 1
+            }
+        }
+        total
+    }
+
+    pub fn tenuredObjectCount(self) -> Int {
+        let mut total = 0
+        for (id, obj) in self.objects {
+            let _ = id
+            if obj.generation == 1 {
+                total = total + 1
+            }
+        }
+        total
+    }
+
     pub fn totalLiveBytes(self) -> Int {
         self.liveBytes
     }
@@ -1095,6 +1151,14 @@ pub struct GcHeap {
     pub fn generationOf(self, id: Int) -> Int? {
         if self.objects.containsKey(id) {
             Some(self.objects[id].generation)
+        } else {
+            None
+        }
+    }
+
+    pub fn ageOf(self, id: Int) -> Int? {
+        if self.objects.containsKey(id) {
+            Some(self.objects[id].age)
         } else {
             None
         }
@@ -1181,6 +1245,25 @@ pub struct GcHeap {
         let mut byteSum = 0
         let mut maxEnd = 0
 
+        if self.config.nurseryLimit < 0 {
+            return Err("nurseryLimit is negative: {self.config.nurseryLimit}")
+        }
+        if self.config.survivorLimit < 0 {
+            return Err("survivorLimit is negative: {self.config.survivorLimit}")
+        }
+        if self.config.promotionAge < 0 {
+            return Err("promotionAge is negative: {self.config.promotionAge}")
+        }
+        if self.config.incrementalBudget < 0 {
+            return Err("incrementalBudget is negative: {self.config.incrementalBudget}")
+        }
+        if self.config.largeObjectThreshold < 0 {
+            return Err("largeObjectThreshold is negative: {self.config.largeObjectThreshold}")
+        }
+        if self.config.tlabSize < 0 {
+            return Err("tlabSize is negative: {self.config.tlabSize}")
+        }
+
         for (id, obj) in self.objects {
             if obj.id != id {
                 return Err("heap object key/id mismatch: key={id}, object={obj.id}")
@@ -1205,6 +1288,12 @@ pub struct GcHeap {
             }
             if obj.large && obj.generation != 1 {
                 return Err("large object {id} is not tenured")
+            }
+            if !(obj.pinned) && !(obj.large) && obj.generation == 0 && obj.age == 0 && obj.region != GcEdenRegion {
+                return Err("young object {id} with age 0 is not in eden")
+            }
+            if !(obj.pinned) && !(obj.large) && obj.generation == 0 && obj.age > 0 && obj.region != GcSurvivorRegion {
+                return Err("aged young object {id} is not in survivor space")
             }
             if obj.region != regionForObject(obj) {
                 return Err("object {id} has stale region metadata")
@@ -1248,6 +1337,12 @@ pub struct GcHeap {
         }
         if self.allocatedSinceLastGC < 0 {
             return Err("allocatedSinceLastGC is negative: {self.allocatedSinceLastGC}")
+        }
+        let survivorBytes = self.survivorBytes()
+        if survivorBytes > self.config.survivorLimit {
+            return Err(
+                "survivor space overflow: bytes={survivorBytes}, limit={self.config.survivorLimit}",
+            )
         }
 
         for rootId in self.roots.toList() {
@@ -1683,6 +1778,7 @@ pub struct GcHeap {
         let mut reclaimedObjects = 0
         let mut reclaimedBytes = 0
         let mut promotedObjects = 0
+        let mut survivorBytes = 0
         let ids = self.objects.keys()
 
         for id in ids {
@@ -1692,9 +1788,11 @@ pub struct GcHeap {
                     if obj.marked {
                         let mut next = obj
                         next.age = next.age + 1
-                        if next.age >= self.config.promotionAge || next.pinned {
+                        if self.shouldPromoteYoungSurvivor(next, survivorBytes) {
                             next.generation = 1
                             promotedObjects = promotedObjects + 1
+                        } else {
+                            survivorBytes = survivorBytes + next.size
                         }
                         next.region = regionForObject(next)
                         next.marked = false
@@ -1712,6 +1810,19 @@ pub struct GcHeap {
         }
 
         (reclaimedObjects, reclaimedBytes, promotedObjects)
+    }
+
+    fn shouldPromoteYoungSurvivor(self, obj: GcObject, survivorBytes: Int) -> Bool {
+        if obj.pinned {
+            return true
+        }
+        if obj.age >= self.config.promotionAge {
+            return true
+        }
+        if self.config.survivorLimit <= 0 {
+            return true
+        }
+        survivorBytes + obj.size > self.config.survivorLimit
     }
 
     fn sweepAll(mut self) -> (Int, Int) {
@@ -1892,6 +2003,7 @@ pub struct GcHeap {
 pub fn productionGcConfig() -> GcConfig {
     GcConfig {
         nurseryLimit: 64 * 1024,
+        survivorLimit: 16 * 1024,
         heapLimit: 16 * 1024 * 1024,
         promotionAge: 2,
         incrementalBudget: 64,
@@ -1903,6 +2015,7 @@ pub fn productionGcConfig() -> GcConfig {
 pub fn testGcConfig() -> GcConfig {
     GcConfig {
         nurseryLimit: 256,
+        survivorLimit: 64,
         heapLimit: 4096,
         promotionAge: 1,
         incrementalBudget: 1,
