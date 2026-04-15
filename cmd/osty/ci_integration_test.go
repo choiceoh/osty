@@ -177,6 +177,69 @@ func TestFmtAutoRepairWrite(t *testing.T) {
 	}
 }
 
+func TestFmtOstyEngineWrite(t *testing.T) {
+	if testing.Short() {
+		t.Skip("CLI integration test (slow)")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.osty")
+	if err := os.WriteFile(path, []byte("fn add(a:Int,b:Int)->Int{return a+b}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, code := runOsty(t, dir, "fmt", "--engine=osty", "--no-repair", "--write", path)
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d. output:\n%s", code, out)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "fn add(a: Int, b: Int) -> Int {\n    return a + b\n}\n"
+	if string(got) != want {
+		t.Fatalf("osty engine formatted mismatch:\nwant:\n%s\ngot:\n%s", want, got)
+	}
+}
+
+func TestFmtOstyEngineMatchesDefault(t *testing.T) {
+	if testing.Short() {
+		t.Skip("CLI integration test (slow)")
+	}
+	dir := t.TempDir()
+	src := []byte(`struct User{name:Int}
+fn f(ok:Bool,x:Int)->Bool{return if ok{1}else{2}< -x}
+fn g(u:User)->Int{if let User{name}=u{return name}else{return 0}}
+`)
+	goPath := filepath.Join(dir, "go.osty")
+	ostyPath := filepath.Join(dir, "osty.osty")
+	if err := os.WriteFile(goPath, src, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ostyPath, src, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, code := runOsty(t, dir, "fmt", "--no-repair", "--write", goPath)
+	if code != 0 {
+		t.Fatalf("default engine exit %d. output:\n%s", code, out)
+	}
+	out, code = runOsty(t, dir, "fmt", "--engine=osty", "--no-repair", "--write", ostyPath)
+	if code != 0 {
+		t.Fatalf("osty engine exit %d. output:\n%s", code, out)
+	}
+	goOut, err := os.ReadFile(goPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ostyOut, err := os.ReadFile(ostyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(ostyOut, goOut) {
+		t.Fatalf("osty engine diverged from default:\n--- osty ---\n%s--- default ---\n%s", ostyOut, goOut)
+	}
+}
+
 func TestFmtNoRepairLeavesParserStrict(t *testing.T) {
 	if testing.Short() {
 		t.Skip("CLI integration test (slow)")

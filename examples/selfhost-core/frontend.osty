@@ -5569,3 +5569,52 @@ pub fn frontendCheckAssignments(assignments: List<FrontAssignment>) -> FrontChec
     }
     summary
 }
+
+// ===================================================================
+// PURE OSTY FORMATTER
+// ===================================================================
+
+/// OstyFormatResult is the pure-Osty formatter result surface.
+pub struct OstyFormatResult {
+    pub ok: Bool,
+    pub output: String,
+    pub message: String,
+}
+
+/// OstyFormatCheckResult reports whether a source string is already in the
+/// formatter's canonical form.
+pub struct OstyFormatCheckResult {
+    pub ok: Bool,
+    pub changed: Bool,
+    pub output: String,
+    pub message: String,
+}
+
+/// ostyFormatSource formats Osty source without calling the Go formatter.
+///
+/// The public formatter routes through the self-hosted AST parser and printer.
+/// Comments and annotations are recovered as trivia from the lexer, but
+/// declarations, statements, expressions, patterns, and types are printed from
+/// AST node roles rather than token-depth heuristics.
+pub fn ostyFormatSource(source: String) -> OstyFormatResult {
+    ostyAstFormatSource(source)
+}
+
+/// ostyFormatCheck formats source and marks whether the result differs.
+pub fn ostyFormatCheck(source: String) -> OstyFormatCheckResult {
+    let formatted = ostyFormatSource(source)
+    if !(formatted.ok) {
+        return OstyFormatCheckResult {
+            ok: false,
+            changed: false,
+            output: "",
+            message: formatted.message,
+        }
+    }
+    OstyFormatCheckResult {
+        ok: true,
+        changed: formatted.output != source,
+        output: formatted.output,
+        message: "",
+    }
+}

@@ -27,6 +27,7 @@
 // `fmt` subcommand flags (after the subcommand name):
 //
 //	--check        exit 1 if the file is not already formatted; print diff to stderr
+//	--engine NAME  formatter engine: go (default) or osty
 //	--no-repair    disable the default pre-format source repair pass
 //	--write        overwrite the file in place instead of printing to stdout
 package main
@@ -1124,6 +1125,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  --explain          append `osty explain CODE` text after each diagnostic block")
 	fmt.Fprintln(os.Stderr, "fmt-specific flags (after the subcommand):")
 	fmt.Fprintln(os.Stderr, "  --check            exit 1 if FILE is not already formatted")
+	fmt.Fprintln(os.Stderr, "  --engine NAME      formatter engine: go (default) or osty")
 	fmt.Fprintln(os.Stderr, "  --write            overwrite FILE in place")
 	fmt.Fprintln(os.Stderr, "  --no-repair        disable the default pre-format source repair pass")
 	fmt.Fprintln(os.Stderr, "repair-specific flags (after the subcommand):")
@@ -1193,7 +1195,7 @@ func printTypes(r *check.Result) {
 
 // runFmt implements the `osty fmt` subcommand. The args slice holds
 // everything on the command line following `fmt` — zero or more of
-// --check/--write/--no-repair, then exactly one file path.
+// --check/--write/--no-repair/--engine, then exactly one file path.
 //
 // Exit codes match gofmt conventions:
 //
@@ -1203,9 +1205,10 @@ func printTypes(r *check.Result) {
 func runFmt(args []string) {
 	fs := flag.NewFlagSet("fmt", flag.ExitOnError)
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: osty fmt [--check] [--write] [--no-repair] FILE")
+		fmt.Fprintln(os.Stderr, "usage: osty fmt [--check] [--write] [--no-repair] [--engine go|osty] FILE")
 	}
 	var checkMode, writeMode, noRepair bool
+	engine := "go"
 	repairMode := true
 	fs.BoolVar(&checkMode, "check", false, "exit 1 if FILE is not already formatted")
 	fs.BoolVar(&checkMode, "c", false, "alias for --check")
@@ -1213,6 +1216,7 @@ func runFmt(args []string) {
 	fs.BoolVar(&writeMode, "w", false, "alias for --write")
 	fs.BoolVar(&repairMode, "repair", true, "enable automatic source repair before formatting")
 	fs.BoolVar(&noRepair, "no-repair", false, "disable automatic source repair before formatting")
+	fs.StringVar(&engine, "engine", engine, "formatter engine (go|osty)")
 	_ = fs.Parse(args)
 	if noRepair {
 		repairMode = false
@@ -1238,7 +1242,20 @@ func runFmt(args []string) {
 		repairs = repair.Source(src)
 		formatSrc = repairs.Source
 	}
-	out, diags, ferr := format.Source(formatSrc)
+	var (
+		out   []byte
+		diags []*diag.Diagnostic
+		ferr  error
+	)
+	switch engine {
+	case "", "go", "ast":
+		out, diags, ferr = format.Source(formatSrc)
+	case "osty":
+		out, diags, ferr = format.OstySource(formatSrc)
+	default:
+		fmt.Fprintf(os.Stderr, "osty fmt: unknown engine %q (want go or osty)\n", engine)
+		os.Exit(2)
+	}
 	if ferr != nil {
 		// Render parse diagnostics so the user can fix them.
 		formatter := &diag.Formatter{Filename: path, Source: formatSrc}
