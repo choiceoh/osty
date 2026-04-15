@@ -320,6 +320,11 @@ type Field struct {
 	Type        Type
 	Default     Expr // optional, literal only
 	Annotations []*Annotation
+	// DocComment is the `///` block immediately above the field,
+	// captured by the parser. Same convention as FnDecl.DocComment:
+	// the `///` prefix is stripped and lines are joined with `\n`.
+	// Empty when no doc was attached.
+	DocComment string
 }
 
 func (f *Field) Pos() token.Pos { return f.PosV }

@@ -14,9 +14,13 @@ import (
 // Layout mirrors the markdown renderer: package heading, per-module
 // TOC, then one `<section>` per decl with sub-sections for parameters,
 // returns, examples, fields, variants, and methods. Every decl gets
-// a stable id derived from its kind+name for anchored links.
+// a stable id derived from its kind+name for anchored links, and
+// type names inside signatures are wrapped in `<a href="#anchor">`
+// when they reference another documented type — so the page is
+// browseable without any client-side scripting.
 func RenderHTML(pkg *Package) string {
 	var b strings.Builder
+	idx := BuildIndex(pkg)
 	b.WriteString("<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n")
 	fmt.Fprintf(&b, "<title>%s — Osty API docs</title>\n", html.EscapeString(pkg.Name))
 	b.WriteString(htmlStylesheet)
@@ -45,7 +49,7 @@ func RenderHTML(pkg *Package) string {
 		fmt.Fprintf(&b, "<section class=\"module\">\n<h2><code>%s</code></h2>\n",
 			html.EscapeString(label))
 		for _, d := range m.Decls {
-			renderHTMLDecl(&b, d, 3)
+			renderHTMLDecl(&b, d, 3, idx)
 		}
 		b.WriteString("</section>\n")
 	}
@@ -85,7 +89,7 @@ func renderHTMLTOC(pkg *Package) string {
 // recurse with an incremented heading level, capped at <h6> per HTML's
 // own maximum — deeper nesting falls back to a styled class-only div
 // so structure is preserved even when the heading depth bottoms out.
-func renderHTMLDecl(b *strings.Builder, d *Decl, level int) {
+func renderHTMLDecl(b *strings.Builder, d *Decl, level int, idx Index) {
 	if level > 6 {
 		level = 6
 	}
@@ -102,7 +106,7 @@ func renderHTMLDecl(b *strings.Builder, d *Decl, level int) {
 	}
 
 	fmt.Fprintf(b, "<pre class=\"sig\"><code>%s</code></pre>\n",
-		html.EscapeString(d.Signature))
+		linkifyHTML(d.Signature, idx, d.Name))
 	if d.Line > 0 {
 		fmt.Fprintf(b, "<p class=\"source-line\">Defined at line %d.</p>\n", d.Line)
 	}
@@ -147,11 +151,28 @@ func renderHTMLDecl(b *strings.Builder, d *Decl, level int) {
 	}
 
 	if len(d.Fields) > 0 {
-		b.WriteString("<h4>Fields</h4>\n<table class=\"fields\">\n")
-		b.WriteString("<thead><tr><th>Name</th><th>Type</th></tr></thead>\n<tbody>\n")
+		anyDoc := false
 		for _, f := range d.Fields {
-			fmt.Fprintf(b, "<tr><td><code>%s</code></td><td><code>%s</code></td></tr>\n",
-				html.EscapeString(f.Name), html.EscapeString(f.Type))
+			if f.Doc != "" {
+				anyDoc = true
+				break
+			}
+		}
+		b.WriteString("<h4>Fields</h4>\n<table class=\"fields\">\n")
+		if anyDoc {
+			b.WriteString("<thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead>\n<tbody>\n")
+			for _, f := range d.Fields {
+				fmt.Fprintf(b, "<tr><td><code>%s</code></td><td><code>%s</code></td><td>%s</td></tr>\n",
+					html.EscapeString(f.Name),
+					linkifyHTML(f.Type, idx, d.Name),
+					html.EscapeString(firstLineOf(f.Doc)))
+			}
+		} else {
+			b.WriteString("<thead><tr><th>Name</th><th>Type</th></tr></thead>\n<tbody>\n")
+			for _, f := range d.Fields {
+				fmt.Fprintf(b, "<tr><td><code>%s</code></td><td><code>%s</code></td></tr>\n",
+					html.EscapeString(f.Name), linkifyHTML(f.Type, idx, d.Name))
+			}
 		}
 		b.WriteString("</tbody></table>\n")
 	}
@@ -163,11 +184,11 @@ func renderHTMLDecl(b *strings.Builder, d *Decl, level int) {
 			b.WriteString(html.EscapeString(v.Name))
 			if len(v.Payload) > 0 {
 				b.WriteString("(")
-				escaped := make([]string, len(v.Payload))
+				linked := make([]string, len(v.Payload))
 				for i, p := range v.Payload {
-					escaped[i] = html.EscapeString(p)
+					linked[i] = linkifyHTML(p, idx, d.Name)
 				}
-				b.WriteString(strings.Join(escaped, ", "))
+				b.WriteString(strings.Join(linked, ", "))
 				b.WriteString(")")
 			}
 			b.WriteString("</code>")
@@ -182,7 +203,7 @@ func renderHTMLDecl(b *strings.Builder, d *Decl, level int) {
 	if len(d.Methods) > 0 {
 		b.WriteString("<h4>Methods</h4>\n<div class=\"methods\">\n")
 		for _, m := range d.Methods {
-			renderHTMLDecl(b, m, level+1)
+			renderHTMLDecl(b, m, level+1, idx)
 		}
 		b.WriteString("</div>\n")
 	}

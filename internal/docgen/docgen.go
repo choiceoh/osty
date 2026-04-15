@@ -230,6 +230,7 @@ func fromDecl(d ast.Decl) *Decl {
 			dc.Fields = append(dc.Fields, &Field{
 				Name: f.Name,
 				Type: RenderType(f.Type),
+				Doc:  f.DocComment,
 			})
 		}
 		for _, m := range n.Methods {

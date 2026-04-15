@@ -20,8 +20,14 @@ import (
 //
 // Anchors for cross-linking follow the common GitHub-style lowercased
 // slug so renderers that build a TOC can reference decls directly.
+//
+// Type references inside a decl's signature are surfaced as a
+// "References:" footer because GitHub-flavoured markdown strips
+// hyperlinks inside fenced code blocks. The HTML renderer wraps
+// references inline instead.
 func RenderMarkdown(pkg *Package) string {
 	var b strings.Builder
+	idx := BuildIndex(pkg)
 	fmt.Fprintf(&b, "# Package `%s`\n\n", pkg.Name)
 	if pkg.Dir != "" {
 		fmt.Fprintf(&b, "_Source directory: `%s`_\n\n", pkg.Dir)
@@ -44,7 +50,7 @@ func RenderMarkdown(pkg *Package) string {
 		}
 		fmt.Fprintf(&b, "## `%s`\n\n", label)
 		for _, d := range m.Decls {
-			renderDecl(&b, d, 3)
+			renderDecl(&b, d, 3, idx)
 		}
 	}
 	return b.String()
@@ -75,8 +81,10 @@ func renderTOC(pkg *Package) string {
 
 // renderDecl writes one declaration's section. headingLevel controls
 // the depth of the emitted `#` so the renderer can nest methods under
-// their parent type cleanly.
-func renderDecl(b *strings.Builder, d *Decl, headingLevel int) {
+// their parent type cleanly. idx is the package's cross-reference
+// index used to surface a "References:" footer when the signature
+// touches another documented type.
+func renderDecl(b *strings.Builder, d *Decl, headingLevel int, idx Index) {
 	fmt.Fprintf(b, "%s %s `%s`\n\n",
 		strings.Repeat("#", headingLevel), titleCase(d.Kind.String()), d.Name)
 
@@ -89,6 +97,14 @@ func renderDecl(b *strings.Builder, d *Decl, headingLevel int) {
 	fmt.Fprintf(b, "```osty\n%s\n```\n\n", d.Signature)
 	if d.Line > 0 {
 		fmt.Fprintf(b, "_Defined at line %d._\n\n", d.Line)
+	}
+
+	// Cross-references — a comma-separated list of links to every
+	// other documented type the decl touches. Skipped when there are
+	// no references so a simple `fn add(Int, Int) -> Int` doesn't
+	// produce noise.
+	if refs := referencesIn(d, idx); len(refs) > 0 {
+		fmt.Fprintf(b, "_References: %s_\n\n", joinRefLinks(refs, idx))
 	}
 
 	// Structured doc: summary + body prose.
@@ -135,9 +151,27 @@ func renderDecl(b *strings.Builder, d *Decl, headingLevel int) {
 
 	if len(d.Fields) > 0 {
 		fmt.Fprintf(b, "%s Fields\n\n", subHead)
-		b.WriteString("| Name | Type |\n|---|---|\n")
+		// Add a Description column only when at least one field has a
+		// doc comment — keeps the simple two-column table for the
+		// majority of types whose fields are self-explanatory.
+		anyDoc := false
 		for _, f := range d.Fields {
-			fmt.Fprintf(b, "| `%s` | `%s` |\n", f.Name, f.Type)
+			if f.Doc != "" {
+				anyDoc = true
+				break
+			}
+		}
+		if anyDoc {
+			b.WriteString("| Name | Type | Description |\n|---|---|---|\n")
+			for _, f := range d.Fields {
+				fmt.Fprintf(b, "| `%s` | `%s` | %s |\n",
+					f.Name, f.Type, escapePipes(firstLineOf(f.Doc)))
+			}
+		} else {
+			b.WriteString("| Name | Type |\n|---|---|\n")
+			for _, f := range d.Fields {
+				fmt.Fprintf(b, "| `%s` | `%s` |\n", f.Name, f.Type)
+			}
 		}
 		b.WriteByte('\n')
 	}
@@ -161,9 +195,23 @@ func renderDecl(b *strings.Builder, d *Decl, headingLevel int) {
 	if len(d.Methods) > 0 {
 		fmt.Fprintf(b, "%s Methods\n\n", subHead)
 		for _, m := range d.Methods {
-			renderDecl(b, m, headingLevel+2)
+			renderDecl(b, m, headingLevel+2, idx)
 		}
 	}
+}
+
+// joinRefLinks formats a list of type names as a comma-separated
+// markdown link list pointing to each one's anchor.
+func joinRefLinks(refs []string, idx Index) string {
+	parts := make([]string, 0, len(refs))
+	for _, r := range refs {
+		anchor, ok := idx[r]
+		if !ok {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("[`%s`](#%s)", r, anchor))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // renderDeprecation formats the `#[deprecated]` callout into a blockquote

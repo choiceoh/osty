@@ -11,6 +11,7 @@ import (
 	"github.com/osty/osty/internal/docgen"
 	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/stdlib"
 )
 
 // runDoc implements the `osty doc` subcommand: parse source (single
@@ -88,6 +89,18 @@ func runDoc(args []string, flags cliFlags) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty doc: %v\n", err)
 		os.Exit(1)
+	}
+
+	// Workspace mode — `osty doc <workspace-root>` produces one doc
+	// file per package plus an index page. Detected by the same
+	// heuristic the rest of the CLI uses (resolve.IsWorkspaceRoot).
+	// Workspace mode requires --out: we'd refuse to dump every
+	// package's markdown to stdout, but we also can't mix workspace
+	// rendering with stdout output, --check or --verify-examples
+	// because those flags target a single rendered artifact.
+	if info.IsDir() && resolve.IsWorkspaceRoot(path, "") {
+		runWorkspaceDoc(path, format, outPath, title, checkMode, verifyEx, flags)
+		return
 	}
 
 	var pkgDoc *docgen.Package
@@ -182,6 +195,137 @@ func runDoc(args []string, flags cliFlags) {
 		fmt.Fprintf(os.Stderr, "osty doc: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// runWorkspaceDoc handles the workspace branch of `osty doc`: load
+// every package under root, render each as its own file (markdown or
+// HTML), and write an `index.<ext>` listing them all. The CLI calls
+// this only for actual workspace roots so the simple file/single-
+// package paths stay unchanged.
+//
+// Constraints:
+//   - --out is required and must name a directory (we create it if
+//     missing). Stdout output makes no sense when N+1 files are
+//     produced.
+//   - --check is unsupported in this mode for now: the comparison
+//     would need to walk every emitted file, which is more plumbing
+//     than this iteration warrants. Surface a usage error instead of
+//     silently doing the wrong thing.
+//   - --verify-examples runs across every package's examples and
+//     aggregates the failures.
+func runWorkspaceDoc(root, format, outPath, title string,
+	checkMode, verifyEx bool, flags cliFlags) {
+	if outPath == "" || outPath == "-" {
+		fmt.Fprintln(os.Stderr,
+			"osty doc: workspace mode requires --out DIR (multiple files are produced)")
+		os.Exit(2)
+	}
+	if checkMode {
+		fmt.Fprintln(os.Stderr,
+			"osty doc: --check is not supported in workspace mode")
+		os.Exit(2)
+	}
+
+	ws, err := resolve.NewWorkspace(root)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "osty doc: %v\n", err)
+		os.Exit(1)
+	}
+	ws.Stdlib = stdlib.LoadCached()
+	for _, p := range resolve.WorkspacePackagePaths(root) {
+		_, _ = ws.LoadPackage(p)
+	}
+
+	// Build docgen Packages keyed by the workspace's import paths so
+	// the index page's display order matches the resolver's view.
+	docPkgs := map[string]*docgen.Package{}
+	anyFatal := false
+	for impPath, pkg := range ws.Packages {
+		if pkg == nil {
+			continue
+		}
+		// Surface parse diagnostics for each file as before — keeps
+		// "docs from a noisy WIP tree" workable, fails only on AST-
+		// less files.
+		for _, f := range pkg.Files {
+			if f.File == nil {
+				anyFatal = true
+			}
+			if len(f.ParseDiags) > 0 {
+				fmter := newFormatter(f.Path, f.Source, flags)
+				printDiags(fmter, f.ParseDiags, flags)
+			}
+		}
+		dp := docgen.FromPackage(pkg)
+		// Workspace packages often have no Name set by the loader —
+		// fall back to the import path or directory basename.
+		dp.Name = docgen.PreferredPackageName(dp.Name, impPath, pkg.Dir)
+		docPkgs[impPath] = dp
+	}
+	if anyFatal {
+		os.Exit(1)
+	}
+
+	wsDoc := docgen.FromWorkspaceMap(root, docPkgs)
+	_ = title // workspace heading is "Workspace API documentation" by convention
+
+	if verifyEx {
+		var totalErrs int
+		for _, dp := range wsDoc.Packages {
+			errs := docgen.VerifyExamples(dp)
+			totalErrs += len(errs)
+			for _, e := range errs {
+				fmt.Fprintln(os.Stderr, e.Format())
+			}
+		}
+		if totalErrs > 0 {
+			fmt.Fprintf(os.Stderr, "osty doc: %d example(s) failed to parse\n", totalErrs)
+			os.Exit(1)
+		}
+	}
+
+	ext := extForFormat(format)
+	dir := strings.TrimRight(outPath, "/"+string(os.PathSeparator))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "osty doc: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Per-package files first, then the index — that ordering means a
+	// half-written run still leaves valid per-package docs even if
+	// something goes wrong producing the index.
+	for _, dp := range wsDoc.Packages {
+		var rendered string
+		if format == "html" {
+			rendered = docgen.RenderHTML(dp)
+		} else {
+			rendered = docgen.RenderMarkdown(dp)
+		}
+		fname := safeDocFilename(dp.Name) + ext
+		target := filepath.Join(dir, fname)
+		if err := os.WriteFile(target, []byte(rendered), 0o644); err != nil {
+			fmt.Fprintf(os.Stderr, "osty doc: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	// Index page lives at <out>/index.<ext>. Hardcoded name keeps
+	// links predictable and matches the convention of every static-
+	// site generator on the planet.
+	var index string
+	if format == "html" {
+		index = docgen.RenderWorkspaceHTML(wsDoc, ext)
+	} else {
+		index = docgen.RenderWorkspaceMarkdown(wsDoc, ext)
+	}
+	indexPath := filepath.Join(dir, "index"+ext)
+	if err := os.WriteFile(indexPath, []byte(index), 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "osty doc: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Fprintf(os.Stderr, "osty doc: wrote %d package(s) + index to %s\n",
+		len(wsDoc.Packages), dir)
 }
 
 // extForFormat maps a format name to the on-disk extension the writer
