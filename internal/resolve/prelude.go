@@ -70,6 +70,14 @@ var preludeNames = []struct {
 	{"dbg", SymBuiltin},
 	{"taskGroup", SymBuiltin},
 	{"parallel", SymBuiltin},
+	{"spawn", SymBuiltin},
+
+	// Concurrency module (§8). Surface as a name so `thread.chan::<T>(n)`
+	// and `thread.select(...)` resolve; the generator intercepts specific
+	// method calls and lowers them to Go channel primitives.
+	{"thread", SymBuiltin},
+	{"Handle", SymBuiltin},
+	{"TaskGroup", SymBuiltin},
 }
 
 // NewPrelude returns a fresh root scope pre-populated with every prelude

@@ -12,6 +12,8 @@
 //	osty fmt <file.osty>       Format source to canonical style; see -check/-write.
 //	osty gen <file.osty>       Transpile to Go (prints to stdout; -o writes to file).
 //	osty lsp                   Run the Language Server Protocol server on stdio.
+//	osty explain [CODE]        Describe a diagnostic code; with no arg, list every code.
+//	osty pipeline <file.osty>  Run every front-end phase and print per-stage timing.
 //
 // Global flags (may precede the subcommand):
 //
@@ -46,6 +48,7 @@ import (
 	"github.com/osty/osty/internal/lsp"
 	"github.com/osty/osty/internal/manifest"
 	"github.com/osty/osty/internal/parser"
+	"github.com/osty/osty/internal/pipeline"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/scaffold"
 	"github.com/osty/osty/internal/stdlib"
@@ -63,6 +66,8 @@ type cliFlags struct {
 	fix        bool // lint: apply machine-applicable suggestions in place
 	fixDryRun  bool // lint: compute fixes but print diff instead of writing
 	showScopes bool // resolve: also print the nested scope tree
+	trace      bool // global: stream per-phase timing to stderr
+	explain    bool // global: append `osty explain CODE` text per unique code
 }
 
 func main() {
@@ -190,6 +195,20 @@ func main() {
 			return
 		}
 	}
+	// explain looks up a diagnostic or lint code and prints its doc.
+	// Handled before the generic "file required" check because it
+	// takes a code (or nothing, to list every code) — never a path.
+	if cmd == "explain" {
+		runExplain(args[1:])
+		return
+	}
+	// pipeline runs every front-end phase and prints a per-stage
+	// timing/output table (or JSON). Has its own flag parser for
+	// --json and --trace.
+	if cmd == "pipeline" {
+		runPipeline(args[1:])
+		return
+	}
 	// Build-profile / target / feature / cache inspection commands.
 	// None of these take a file path — they operate on the project
 	// rooted at cwd (or report built-in defaults when outside one).
@@ -243,6 +262,14 @@ func main() {
 		os.Exit(1)
 	}
 	formatter := newFormatter(path, src, flags)
+
+	// --trace: run the full front-end once with streaming timing
+	// output before the subcommand's own work. Restricted to commands
+	// whose pipeline is a strict prefix of pipeline.Run — anything
+	// else (fmt, gen, build, …) has its own subcommand-local timing.
+	if flags.trace && isTraceableSingleFileCmd(cmd) {
+		pipeline.Run(src, os.Stderr)
+	}
 
 	switch cmd {
 	case "parse":
@@ -368,6 +395,8 @@ func parseFlags() cliFlags {
 	flag.BoolVar(&f.fix, "fix", false, "apply machine-applicable lint suggestions in place (lint subcommand only)")
 	flag.BoolVar(&f.fixDryRun, "fix-dry-run", false, "show the result of --fix on stdout without modifying files (lint subcommand only)")
 	flag.BoolVar(&f.showScopes, "scopes", false, "resolve: also dump the nested scope tree")
+	flag.BoolVar(&f.trace, "trace", false, "stream per-phase timing to stderr (single-file front-end commands)")
+	flag.BoolVar(&f.explain, "explain", false, "after diagnostics, print the `osty explain CODE` text for each unique code")
 	flag.Usage = usage
 	flag.Parse()
 	return f
@@ -743,6 +772,67 @@ func printDiags(f *diag.Formatter, diags []*diag.Diagnostic, flags cliFlags) {
 			fmt.Fprintf(os.Stderr, "  %d error(s), %d warning(s)\n", errs, warns)
 		}
 	}
+	if flags.explain && !flags.jsonOutput {
+		printExplainBlock(diags)
+	}
+}
+
+// printExplainBlock walks the diagnostic list, deduplicates by code,
+// and appends the same documentation `osty explain CODE` would emit.
+// Skipped under --json (machine consumers should call `osty explain`
+// themselves) and when no diagnostic carries a code.
+func printExplainBlock(diags []*diag.Diagnostic) {
+	seen := map[string]bool{}
+	var codes []string
+	for _, d := range diags {
+		if d.Code == "" || seen[d.Code] {
+			continue
+		}
+		seen[d.Code] = true
+		codes = append(codes, d.Code)
+	}
+	if len(codes) == 0 {
+		return
+	}
+	sort.Strings(codes)
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, "── explanations ──────────────────────────────────────────────")
+	for _, code := range codes {
+		fmt.Fprintln(os.Stderr)
+		// Reuse the same lookup paths the standalone `osty explain` uses
+		// so output stays consistent across the two entry points.
+		if r, ok := lint.LookupRule(code); ok {
+			fmt.Fprintf(os.Stderr, "%s  %s\n", r.Code, r.Name)
+			fmt.Fprintf(os.Stderr, "  %s\n", r.Summary)
+			continue
+		}
+		if d, ok := diag.Explain(code); ok {
+			fmt.Fprintf(os.Stderr, "%s  %s\n", d.Code, d.Name)
+			if d.Summary != "" {
+				fmt.Fprintf(os.Stderr, "  %s\n", d.Summary)
+			}
+			if d.Fix != "" {
+				fmt.Fprintf(os.Stderr, "  Fix: %s\n", d.Fix)
+			}
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "%s  (no explanation registered)\n", code)
+	}
+}
+
+// isTraceableSingleFileCmd reports whether `--trace` should produce
+// per-phase timing for the given subcommand. The streaming output
+// only makes sense when the command's work is a strict prefix of the
+// front-end pipeline (lex → parse → resolve → check → lint).
+// Subcommands with their own internal phases (fmt, gen, build, run,
+// test, publish, lsp) are excluded — they would need their own
+// instrumentation, which would belong in their respective files.
+func isTraceableSingleFileCmd(cmd string) bool {
+	switch cmd {
+	case "tokens", "parse", "resolve", "check", "typecheck", "lint":
+		return true
+	}
+	return false
 }
 
 // resolveFile runs single-file name resolution with the cached stdlib
@@ -952,6 +1042,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "       osty features             (list declared opt-in features)")
 	fmt.Fprintln(os.Stderr, "       osty cache [ls|clean|info] (inspect / prune the build cache)")
 	fmt.Fprintln(os.Stderr, "       osty lsp                  (language server on stdio)")
+	fmt.Fprintln(os.Stderr, "       osty explain [CODE]       (describe a diagnostic code; no arg lists every code)")
+	fmt.Fprintln(os.Stderr, "       osty pipeline FILE|DIR    (run every front-end phase; per-stage timing)")
 	fmt.Fprintln(os.Stderr, "flags:")
 	fmt.Fprintln(os.Stderr, "  --no-color         disable ANSI escapes")
 	fmt.Fprintln(os.Stderr, "  --color            force ANSI escapes")
@@ -959,6 +1051,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  --json             emit diagnostics as NDJSON")
 	fmt.Fprintln(os.Stderr, "  --strict           lint: exit 1 on warnings (CI mode)")
 	fmt.Fprintln(os.Stderr, "  --scopes           resolve: also print the nested scope tree")
+	fmt.Fprintln(os.Stderr, "  --trace            stream per-phase timing to stderr (front-end commands)")
+	fmt.Fprintln(os.Stderr, "  --explain          append `osty explain CODE` text after each diagnostic block")
 	fmt.Fprintln(os.Stderr, "fmt-specific flags (after the subcommand):")
 	fmt.Fprintln(os.Stderr, "  --check            exit 1 if FILE is not already formatted")
 	fmt.Fprintln(os.Stderr, "  --write            overwrite FILE in place")

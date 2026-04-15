@@ -338,23 +338,34 @@ func (g *gen) emitTypeAliasDecl(a *ast.TypeAliasDecl) {
 
 func (g *gen) emitUseDecl(u *ast.UseDecl) {
 	if u.IsGoFFI {
-		// `use go "path" { ... }` — full FFI (typed stubs + real
-		// import) lands in Phase 5. For the audit we emit a placeholder
-		// binding so references to the alias compile; the real Go
-		// import is intentionally NOT added because fixtures reference
-		// nonexistent paths like `github.com/user/bar`.
+		// `use go "path" [as alias] { fn Foo(...); struct Bar { ... } }`
+		//
+		// Emit a real Go import. When the Osty alias matches the Go
+		// package's default name (last path component), a bare import
+		// suffices. Otherwise aliased imports use Go's `import alias "path"`
+		// form via the aliased-import map.
+		//
+		// The FFI body is a schema for the checker — it declares the
+		// signatures we expect from the Go package. No code is emitted
+		// for it; call sites like `fmt.Println(x)` resolve to the real
+		// Go symbol via the package import.
 		alias := u.Alias
+		defaultAlias := lastPathComponent(u.GoPath)
 		if alias == "" {
-			alias = lastPathComponent(u.GoPath)
+			alias = defaultAlias
 		}
-		g.body.writef("\nvar %s = struct{}{} // Phase-5 stub for `use go %q`\n",
-			mangleIdent(alias), u.GoPath)
+		if alias == defaultAlias {
+			g.use(u.GoPath)
+		} else {
+			g.useAs(u.GoPath, alias)
+		}
 		return
 	}
-	// Regular `use pkg.path [as alias]`. No real loader yet — emit a
-	// placeholder value the alias can bind to so downstream references
-	// survive gofmt/go build. Well-known stdlib modules get richer
-	// stubs so fixtures that call their methods compile.
+	// Regular `use pkg.path [as alias]` — Osty module system, not yet
+	// backed by a loader. For well-known stdlib shims (std.testing,
+	// std.thread) we emit a mock struct so spec fixtures that *call*
+	// those helpers compile. Real stdlib usage bridges through Go's
+	// own packages; see stdlibBridge for the mapping.
 	alias := u.Alias
 	if alias == "" && len(u.Path) > 0 {
 		alias = u.Path[len(u.Path)-1]
@@ -363,12 +374,48 @@ func (g *gen) emitUseDecl(u *ast.UseDecl) {
 		return
 	}
 	full := strings.Join(u.Path, ".")
+	if bridge := stdlibBridge(u.Path); bridge != "" {
+		g.use(bridge)
+		// When the Go bridge's package name already matches the
+		// Osty alias, no rebinding is needed.
+		if lastPathComponent(bridge) == alias {
+			return
+		}
+		g.useAs(bridge, alias)
+		return
+	}
 	stub := knownStdlibStub(u.Path)
 	if stub == "" {
 		stub = "struct{}{}"
 	}
-	g.body.writef("\nvar %s = %s // Phase-5 stub for `use %s`\n",
+	g.body.writef("\nvar %s = %s // stub for `use %s`\n",
 		mangleIdent(alias), stub, full)
+}
+
+// stdlibBridge maps an Osty stdlib module path to a Go package whose
+// exported surface matches closely enough for typical spec use. Returns
+// "" when no bridge is available (caller falls back to a mock stub).
+func stdlibBridge(path []string) string {
+	if len(path) < 2 || path[0] != "std" {
+		return ""
+	}
+	switch path[1] {
+	case "os":
+		return "os"
+	case "fs":
+		return "os"
+	case "io":
+		return "io"
+	case "time":
+		return "time"
+	case "strings":
+		return "strings"
+	case "math":
+		return "math"
+	case "errors":
+		return "errors"
+	}
+	return ""
 }
 
 // knownStdlibStub returns a Go expression that emulates just enough of
