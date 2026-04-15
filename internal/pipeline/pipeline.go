@@ -20,6 +20,7 @@ import (
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/diag"
+	"github.com/osty/osty/internal/gen"
 	"github.com/osty/osty/internal/lexer"
 	"github.com/osty/osty/internal/lint"
 	"github.com/osty/osty/internal/parser"
@@ -28,6 +29,50 @@ import (
 	"github.com/osty/osty/internal/token"
 	"github.com/osty/osty/internal/types"
 )
+
+// declName returns the user-visible name of a top-level declaration,
+// or a placeholder when the AST node has no Name field. Used by the
+// per-decl timing table so each row is identifiable at a glance.
+func declName(d ast.Decl) string {
+	switch n := d.(type) {
+	case *ast.FnDecl:
+		return n.Name
+	case *ast.StructDecl:
+		return n.Name
+	case *ast.EnumDecl:
+		return n.Name
+	case *ast.InterfaceDecl:
+		return n.Name
+	case *ast.TypeAliasDecl:
+		return n.Name
+	case *ast.LetDecl:
+		return n.Name
+	case *ast.UseDecl:
+		return n.RawPath
+	}
+	return "<anonymous>"
+}
+
+// declKind returns a short human label for a declaration's category.
+func declKind(d ast.Decl) string {
+	switch d.(type) {
+	case *ast.FnDecl:
+		return "fn"
+	case *ast.StructDecl:
+		return "struct"
+	case *ast.EnumDecl:
+		return "enum"
+	case *ast.InterfaceDecl:
+		return "interface"
+	case *ast.TypeAliasDecl:
+		return "alias"
+	case *ast.LetDecl:
+		return "let"
+	case *ast.UseDecl:
+		return "use"
+	}
+	return "?"
+}
 
 // Stage records what happened during one pipeline phase. Output is a
 // human-readable one-line summary of what the phase produced (e.g.
@@ -58,19 +103,64 @@ type Result struct {
 	Check    *check.Result
 	Lint     *lint.Result
 	AllDiags []*diag.Diagnostic // every diag from every phase, in phase order
+
+	// PerDecl is populated when Config.PerDecl is set. One entry per
+	// (declaration, pass) pair the type checker visited. Sorted by
+	// total descending in RenderText / RenderJSON.
+	PerDecl []DeclTiming
+
+	// GenBytes, GenError are populated when Config.RunGen is set.
+	GenBytes []byte
+	GenError error
 }
 
-// Run executes lex → parse → resolve → check → lint over src and
-// returns a fully populated Result. Phases that depend on a previous
-// phase still run even if the previous phase produced errors — the
-// front-end is designed to keep going so users see as many problems
-// per invocation as possible. The same diagnostic ordering is preserved
-// in AllDiags.
+// DeclTiming records how long the type checker spent on one
+// declaration during one pass ("collect" or "check").
+type DeclTiming struct {
+	Name     string        `json:"name"`     // best-effort declaration name
+	Kind     string        `json:"kind"`     // "fn", "struct", "enum", …
+	Phase    string        `json:"phase"`    // "collect" | "check"
+	Duration time.Duration `json:"-"`
+	// DurationMS mirrors Duration for JSON consumers.
+	DurationMS float64 `json:"duration_ms"`
+}
+
+// Config tweaks what Run does. The zero value runs the standard
+// front-end (lex → parse → resolve → check → lint) without optional
+// instrumentation; opting into PerDecl or RunGen extends what gets
+// recorded but never changes the order or count of the always-on
+// phases.
+type Config struct {
+	// PerDecl turns on the type checker's OnDecl callback so the
+	// returned Result includes a per-declaration timing table.
+	PerDecl bool
+
+	// RunGen runs the Go transpiler as a sixth pipeline phase. The
+	// returned GenBytes are the (possibly partial) Go source the
+	// transpiler emitted; GenError holds any fatal generator error.
+	RunGen bool
+
+	// GenPackageName is the Go package clause used when RunGen is set.
+	// Defaults to "main".
+	GenPackageName string
+}
+
+// Run executes lex → parse → resolve → check → lint over src with
+// default Config and returns a fully populated Result. See RunWithConfig
+// for the optional per-decl timing and gen-phase extensions.
 //
 // stream, if non-nil, receives one human-readable trace line per
 // completed phase (used by the --trace global flag). Pass nil to
 // suppress streaming output.
 func Run(src []byte, stream io.Writer) Result {
+	return RunWithConfig(src, stream, Config{})
+}
+
+// RunWithConfig is the configurable form of Run. The stage list always
+// includes lex/parse/resolve/check/lint in that order; gen is appended
+// when cfg.RunGen is set. Per-decl timing is collected when cfg.PerDecl
+// is set and surfaces in Result.PerDecl.
+func RunWithConfig(src []byte, stream io.Writer, cfg Config) Result {
 	var r Result
 	emit := func(s Stage) {
 		r.Stages = append(r.Stages, s)
@@ -139,7 +229,19 @@ func Run(src []byte, stream io.Writer) Result {
 
 	// --- check ---
 	t0 = time.Now()
-	chk := check.File(file, res, check.Opts{Primitives: stdlib.LoadCached().Primitives})
+	checkOpts := check.Opts{Primitives: stdlib.LoadCached().Primitives}
+	if cfg.PerDecl {
+		checkOpts.OnDecl = func(d ast.Decl, phase string, dur time.Duration) {
+			r.PerDecl = append(r.PerDecl, DeclTiming{
+				Name:       declName(d),
+				Kind:       declKind(d),
+				Phase:      phase,
+				Duration:   dur,
+				DurationMS: float64(dur.Microseconds()) / 1000.0,
+			})
+		}
+	}
+	chk := check.File(file, res, checkOpts)
 	r.Check = chk
 	r.AllDiags = append(r.AllDiags, chk.Diags...)
 	typedExprs := 0
@@ -176,7 +278,183 @@ func Run(src []byte, stream io.Writer) Result {
 		Counts:   map[string]int{"findings": len(lr.Diags)},
 	})
 
+	// --- gen (optional) ---
+	// The transpiler is only meaningful on a clean front-end: a check
+	// error means the type info gen relies on is partial, and the Go
+	// it would emit is at best unhelpful. We still run gen if the user
+	// asked, but report the error in the stage stats so the table
+	// makes the situation obvious.
+	if cfg.RunGen {
+		t0 = time.Now()
+		pkg := cfg.GenPackageName
+		if pkg == "" {
+			pkg = "main"
+		}
+		out, err := gen.Generate(pkg, file, res, chk)
+		r.GenBytes = out
+		r.GenError = err
+		genErr := 0
+		summary := fmt.Sprintf("%d bytes Go", len(out))
+		if err != nil {
+			genErr = 1
+			summary = fmt.Sprintf("%d bytes Go (error: %v)", len(out), err)
+		}
+		emit(Stage{
+			Name:     "gen",
+			Duration: time.Since(t0),
+			Output:   summary,
+			Errors:   genErr,
+			Warnings: 0,
+			Counts:   map[string]int{"bytes": len(out)},
+		})
+	}
+
 	return r
+}
+
+// RunPackage runs the front-end over a directory of `.osty` files,
+// using the same stage shape as Run. The stages are renamed slightly
+// so the table reflects what actually happened: "load" combines the
+// loader's lex + parse step (LoadPackage doesn't expose them
+// separately), and the rest mirrors Run. Workspaces are not handled
+// here — point at a leaf package directory.
+//
+// If LoadPackage fails (e.g. directory unreadable), the returned
+// Result has empty Stages and the error is returned to the caller so
+// the CLI can decide whether to abort.
+func RunPackage(dir string, stream io.Writer, cfg Config) (Result, error) {
+	var r Result
+	emit := func(s Stage) {
+		r.Stages = append(r.Stages, s)
+		if stream != nil {
+			fmt.Fprintf(stream, "trace: %-8s %8s   %s\n",
+				s.Name, formatDuration(s.Duration), traceTail(s))
+		}
+	}
+
+	// --- load (lex + parse, all files) ---
+	t0 := time.Now()
+	pkg, err := resolve.LoadPackage(dir)
+	if err != nil {
+		return r, err
+	}
+	totalBytes, totalDecls, totalStmts, totalUses := 0, 0, 0, 0
+	var loadDiags []*diag.Diagnostic
+	for _, pf := range pkg.Files {
+		totalBytes += len(pf.Source)
+		loadDiags = append(loadDiags, pf.ParseDiags...)
+		if pf.File != nil {
+			totalDecls += len(pf.File.Decls)
+			totalStmts += len(pf.File.Stmts)
+			totalUses += len(pf.File.Uses)
+		}
+	}
+	r.AllDiags = append(r.AllDiags, loadDiags...)
+	emit(Stage{
+		Name:     "load",
+		Duration: time.Since(t0),
+		Output: fmt.Sprintf("%d files, %d bytes, %d decls",
+			len(pkg.Files), totalBytes, totalDecls),
+		Errors:   countSeverity(loadDiags, diag.Error),
+		Warnings: countSeverity(loadDiags, diag.Warning),
+		Counts: map[string]int{
+			"files": len(pkg.Files),
+			"bytes": totalBytes,
+			"decls": totalDecls,
+			"stmts": totalStmts,
+			"uses":  totalUses,
+		},
+	})
+
+	// --- resolve (whole-package) ---
+	t0 = time.Now()
+	res := resolve.ResolvePackage(pkg, resolve.NewPrelude())
+	r.AllDiags = append(r.AllDiags, res.Diags...)
+	totalRefs, totalTypeRefs := 0, 0
+	for _, pf := range pkg.Files {
+		totalRefs += len(pf.Refs)
+		totalTypeRefs += len(pf.TypeRefs)
+	}
+	emit(Stage{
+		Name:     "resolve",
+		Duration: time.Since(t0),
+		Output:   fmt.Sprintf("%d refs, %d type refs", totalRefs, totalTypeRefs),
+		Errors:   countSeverity(res.Diags, diag.Error),
+		Warnings: countSeverity(res.Diags, diag.Warning),
+		Counts: map[string]int{
+			"refs":      totalRefs,
+			"type_refs": totalTypeRefs,
+		},
+	})
+
+	// --- check (whole-package) ---
+	t0 = time.Now()
+	checkOpts := check.Opts{Primitives: stdlib.LoadCached().Primitives}
+	if cfg.PerDecl {
+		checkOpts.OnDecl = func(d ast.Decl, phase string, dur time.Duration) {
+			r.PerDecl = append(r.PerDecl, DeclTiming{
+				Name:       declName(d),
+				Kind:       declKind(d),
+				Phase:      phase,
+				Duration:   dur,
+				DurationMS: float64(dur.Microseconds()) / 1000.0,
+			})
+		}
+	}
+	chk := check.Package(pkg, res, checkOpts)
+	r.Check = chk
+	r.AllDiags = append(r.AllDiags, chk.Diags...)
+	typedExprs := 0
+	for _, t := range chk.Types {
+		if !types.IsError(t) {
+			typedExprs++
+		}
+	}
+	emit(Stage{
+		Name:     "check",
+		Duration: time.Since(t0),
+		Output:   fmt.Sprintf("%d typed exprs, %d let bindings", typedExprs, len(chk.LetTypes)),
+		Errors:   countSeverity(chk.Diags, diag.Error),
+		Warnings: countSeverity(chk.Diags, diag.Warning),
+		Counts: map[string]int{
+			"typed_exprs": typedExprs,
+			"let_types":   len(chk.LetTypes),
+			"sym_types":   len(chk.SymTypes),
+			"instantiate": len(chk.Instantiations),
+		},
+	})
+
+	// --- lint (per-file, aggregated) ---
+	t0 = time.Now()
+	var lintDiags []*diag.Diagnostic
+	for _, pf := range pkg.Files {
+		fileRes := &resolve.Result{
+			Refs:      pf.Refs,
+			TypeRefs:  pf.TypeRefs,
+			FileScope: pf.FileScope,
+		}
+		lr := lint.File(pf.File, fileRes, chk)
+		lintDiags = append(lintDiags, lr.Diags...)
+	}
+	r.AllDiags = append(r.AllDiags, lintDiags...)
+	emit(Stage{
+		Name:     "lint",
+		Duration: time.Since(t0),
+		Output:   fmt.Sprintf("%d lint findings (across %d files)", len(lintDiags), len(pkg.Files)),
+		Errors:   countSeverity(lintDiags, diag.Error),
+		Warnings: countSeverity(lintDiags, diag.Warning),
+		Counts:   map[string]int{"findings": len(lintDiags)},
+	})
+
+	// gen is single-file only; for packages we don't run it because
+	// the transpiler's per-file Generate doesn't aggregate. Surfacing
+	// "package gen" would invent semantics gen.go doesn't currently
+	// have, so we skip it and document that limitation.
+	if cfg.RunGen {
+		fmt.Fprintln(stream, "trace: gen      skipped   (per-package gen is not yet supported)")
+	}
+
+	return r, nil
 }
 
 // RenderText writes a fixed-width table summarising the run to w.
@@ -198,6 +476,24 @@ func (r Result) RenderText(w io.Writer) {
 	fmt.Fprintln(w, strings.Repeat("-", 90))
 	fmt.Fprintf(w, "%-8s  %10s  %-50s  %6d  %6d\n",
 		"TOTAL", formatDuration(total), "", totalErr, totalWarn)
+
+	// Per-declaration timing — present only when Config.PerDecl was
+	// set. Sorted by total time descending so the slow declarations
+	// land at the top.
+	if len(r.PerDecl) > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "per-declaration timing (slowest first):")
+		fmt.Fprintf(w, "  %-9s  %-8s  %-8s  %s\n", "TIME", "PHASE", "KIND", "NAME")
+		fmt.Fprintln(w, "  "+strings.Repeat("-", 60))
+		rows := append([]DeclTiming(nil), r.PerDecl...)
+		sort.Slice(rows, func(i, j int) bool {
+			return rows[i].Duration > rows[j].Duration
+		})
+		for _, dt := range rows {
+			fmt.Fprintf(w, "  %9s  %-8s  %-8s  %s\n",
+				formatDuration(dt.Duration), dt.Phase, dt.Kind, dt.Name)
+		}
+	}
 
 	// Diagnostic-code histogram — useful when one phase reports lots
 	// of findings and you want to know which code dominates.
@@ -256,9 +552,10 @@ func (r Result) RenderJSON(w io.Writer) error {
 		hist[c]++
 	}
 	out := struct {
-		Stages           []stageJSON    `json:"stages"`
+		Stages            []stageJSON    `json:"stages"`
 		DiagnosticsByCode map[string]int `json:"diagnostics_by_code"`
-	}{Stages: stages, DiagnosticsByCode: hist}
+		PerDecl           []DeclTiming   `json:"per_decl,omitempty"`
+	}{Stages: stages, DiagnosticsByCode: hist, PerDecl: r.PerDecl}
 
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")

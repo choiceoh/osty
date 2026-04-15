@@ -107,3 +107,59 @@ func TestRenderJSON(t *testing.T) {
 		t.Errorf("expected 5 stages in JSON, got %d", len(doc.Stages))
 	}
 }
+
+// PerDecl should record one entry per (decl, phase) pair when enabled.
+// cleanSrc has one fn (main), so we expect exactly two entries:
+// one for collect, one for check.
+func TestRunPerDecl(t *testing.T) {
+	r := RunWithConfig([]byte(cleanSrc), nil, Config{PerDecl: true})
+	if len(r.PerDecl) != 2 {
+		t.Fatalf("PerDecl: got %d entries, want 2; entries=%+v", len(r.PerDecl), r.PerDecl)
+	}
+	phases := map[string]bool{}
+	for _, dt := range r.PerDecl {
+		if dt.Name != "main" {
+			t.Errorf("PerDecl entry name = %q, want main", dt.Name)
+		}
+		if dt.Kind != "fn" {
+			t.Errorf("PerDecl entry kind = %q, want fn", dt.Kind)
+		}
+		phases[dt.Phase] = true
+	}
+	for _, want := range []string{"collect", "check"} {
+		if !phases[want] {
+			t.Errorf("PerDecl missing %q phase", want)
+		}
+	}
+}
+
+// RunGen should append a sixth "gen" stage and populate GenBytes on a
+// Phase-1-clean program. cleanSrc only uses primitives + println, both
+// covered by Phase 1.
+func TestRunGen(t *testing.T) {
+	r := RunWithConfig([]byte(cleanSrc), nil, Config{RunGen: true})
+	if len(r.Stages) != 6 {
+		t.Fatalf("Stages: got %d, want 6 (lex/parse/resolve/check/lint/gen); names=%v",
+			len(r.Stages), stageNames(r.Stages))
+	}
+	if r.Stages[5].Name != "gen" {
+		t.Errorf("Stages[5].Name = %q, want gen", r.Stages[5].Name)
+	}
+	if len(r.GenBytes) == 0 {
+		t.Errorf("GenBytes is empty after a successful gen on clean source")
+	}
+	if r.GenError != nil {
+		t.Errorf("GenError = %v on clean source", r.GenError)
+	}
+	if !strings.Contains(string(r.GenBytes), "package main") {
+		t.Errorf("GenBytes missing 'package main' clause; got: %s", r.GenBytes)
+	}
+}
+
+func stageNames(ss []Stage) []string {
+	out := make([]string, len(ss))
+	for i, s := range ss {
+		out[i] = s.Name
+	}
+	return out
+}

@@ -140,7 +140,8 @@ osty fmt FILE          # format to canonical style (see --check, --write)
 osty gen FILE          # transpile to Go source (see -o, --package)
 osty lsp               # run the language server on stdio
 osty explain [CODE]    # describe a diagnostic (Exxxx/Wxxxx/Lxxxx); no arg lists every code
-osty pipeline FILE     # run every front-end phase; print per-stage timing (--json, --trace)
+osty pipeline FILE|DIR # run every front-end phase; per-stage timing
+                       # (--json, --trace, --per-decl, --gen, --cpuprofile, --memprofile)
 ```
 
 Global flags (precede the subcommand):

@@ -930,7 +930,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "       osty publish              (pack + upload the package to a registry)")
 	fmt.Fprintln(os.Stderr, "       osty lsp                  (language server on stdio)")
 	fmt.Fprintln(os.Stderr, "       osty explain [CODE]       (describe a diagnostic code; no arg lists every code)")
-	fmt.Fprintln(os.Stderr, "       osty pipeline FILE        (run every front-end phase; print per-stage timing)")
+	fmt.Fprintln(os.Stderr, "       osty pipeline FILE|DIR    (run every front-end phase; per-stage timing)")
 	fmt.Fprintln(os.Stderr, "flags:")
 	fmt.Fprintln(os.Stderr, "  --no-color         disable ANSI escapes")
 	fmt.Fprintln(os.Stderr, "  --color            force ANSI escapes")
