@@ -1,0 +1,17 @@
+// std.random — non-cryptographic pseudorandom numbers (spec §10.14).
+//
+// For security-sensitive randomness (tokens, keys, IVs) use
+// `std.crypto.randomBytes` instead. `default()` returns a thread-local
+// auto-seeded `Rng`; `seeded(n)` is reproducible.
+
+pub struct Rng {
+    pub state: Int64,
+}
+
+pub fn default() -> Rng {
+    Rng { state: 0 }
+}
+
+pub fn seeded(seed: Int64) -> Rng {
+    Rng { state: seed }
+}

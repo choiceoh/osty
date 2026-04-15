@@ -1,0 +1,38 @@
+// std.crypto — hashing, HMAC, secure random (spec §10.12).
+//
+// Asymmetric crypto (RSA, Ed25519) is out of scope per spec; those
+// live in community packages. Spec uses a nested form for HMAC
+// (`crypto.hmac.sha256`); the resolver does not yet support nested
+// modules, so the stub exposes flat `hmacSha256` / `hmacSha512`.
+
+pub fn sha256(data: Bytes) -> Bytes {
+    data
+}
+
+pub fn sha512(data: Bytes) -> Bytes {
+    data
+}
+
+pub fn sha1(data: Bytes) -> Bytes {
+    data
+}
+
+pub fn md5(data: Bytes) -> Bytes {
+    data
+}
+
+pub fn hmacSha256(key: Bytes, message: Bytes) -> Bytes {
+    message
+}
+
+pub fn hmacSha512(key: Bytes, message: Bytes) -> Bytes {
+    message
+}
+
+pub fn randomBytes(n: Int) -> Bytes {
+    randomBytes(n)
+}
+
+pub fn constantTimeEq(a: Bytes, b: Bytes) -> Bool {
+    false
+}

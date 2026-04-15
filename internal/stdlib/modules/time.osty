@@ -1,0 +1,69 @@
+// std.time — instants, durations, zones, formatting, parsing (§10.20).
+//
+// `Duration` is a signed span with nanosecond resolution; `Instant` is
+// a point on the monotonic clock. Duration literals (`5.s`, `100.ms`,
+// …) desugar to methods on `Int` / `Float`; those intrinsics live in
+// `primitives/` — this stub only declares the free-function surface
+// and the two core structs plus zone/formatted-time helpers.
+//
+// `time.sleep(d)` is a cancellation point per §8.4.2: on cancel it
+// returns `Err(Cancelled { cause })` immediately regardless of the
+// remaining duration.
+
+pub struct Duration {
+    pub nanos: Int64,
+}
+
+pub struct Instant {
+    pub seconds: Int64,
+    pub nanos: Int32,
+}
+
+pub struct Zone {
+    pub name: String,
+    pub offset: Duration,
+    pub isFixed: Bool,
+}
+
+pub enum Weekday {
+    Mon,
+    Tue,
+    Wed,
+    Thu,
+    Fri,
+    Sat,
+    Sun,
+}
+
+pub struct ZonedTime {
+    pub instant: Instant,
+    pub zone: Zone,
+}
+
+pub let ISO_8601 = "2006-01-02T15:04:05Z07:00"
+pub let RFC_3339 = "2006-01-02T15:04:05Z07:00"
+pub let RFC_2822 = "Mon, 02 Jan 2006 15:04:05 -0700"
+
+pub fn now() -> Instant {
+    Instant { seconds: 0, nanos: 0 }
+}
+
+pub fn sleep(d: Duration) -> Result<(), Error> {
+    Ok(())
+}
+
+pub fn parse(text: String, layout: String) -> Result<Instant, Error> {
+    parse(text, layout)
+}
+
+pub fn zone(name: String) -> Result<Zone, Error> {
+    Ok(Zone { name, offset: Duration { nanos: 0 }, isFixed: false })
+}
+
+pub fn local() -> Zone {
+    Zone { name: "Local", offset: Duration { nanos: 0 }, isFixed: false }
+}
+
+pub fn utc() -> Zone {
+    Zone { name: "UTC", offset: Duration { nanos: 0 }, isFixed: true }
+}

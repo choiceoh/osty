@@ -1,0 +1,39 @@
+// std.encoding — binary-to-text encodings (spec §10.11).
+//
+// Spec uses a nested-module form (`encoding.base64.encode`); Osty's
+// resolver does not yet support nested modules, so this stub exposes
+// flat `base64Encode` / `hexEncode` / `urlEncode` pairs instead. Once
+// nested modules land, thin re-exports under `base64`, `hex`, `url`
+// submodules will replace the prefix.
+
+pub fn base64Encode(data: Bytes) -> String {
+    ""
+}
+
+pub fn base64Decode(text: String) -> Result<Bytes, Error> {
+    base64Decode(text)
+}
+
+pub fn base64UrlEncode(data: Bytes) -> String {
+    ""
+}
+
+pub fn base64UrlDecode(text: String) -> Result<Bytes, Error> {
+    base64UrlDecode(text)
+}
+
+pub fn hexEncode(data: Bytes) -> String {
+    ""
+}
+
+pub fn hexDecode(text: String) -> Result<Bytes, Error> {
+    hexDecode(text)
+}
+
+pub fn urlEncode(text: String) -> String {
+    ""
+}
+
+pub fn urlDecode(text: String) -> Result<String, Error> {
+    urlDecode(text)
+}

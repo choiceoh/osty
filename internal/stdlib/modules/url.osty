@@ -1,0 +1,35 @@
+// std.url — URL parsing and building (spec §10.16).
+
+pub struct Url {
+    pub scheme: String,
+    pub host: String,
+    pub port: Int?,
+    pub path: String,
+    pub query: Map<String, String>,
+    pub fragment: String?,
+}
+
+pub struct UrlBuilder {
+    pub parts: Url,
+}
+
+pub fn parse(text: String) -> Result<Url, Error> {
+    parse(text)
+}
+
+pub fn join(base: String, relative: String) -> Result<String, Error> {
+    Ok("")
+}
+
+pub fn builder() -> UrlBuilder {
+    UrlBuilder {
+        parts: Url {
+            scheme: "",
+            host: "",
+            port: None,
+            path: "",
+            query: {:},
+            fragment: None,
+        },
+    }
+}

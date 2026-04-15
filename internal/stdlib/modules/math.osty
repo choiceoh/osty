@@ -1,0 +1,44 @@
+// std.math — mathematical functions and constants (spec §10.17).
+//
+// All trigonometric, exponential, and power operations take `Float`.
+// Integer-specific math (gcd, rem-euclid, saturating ops, etc.) lives
+// on the integer primitive methods (§10.5).
+
+pub let PI = 3.141592653589793
+pub let E = 2.718281828459045
+pub let TAU = 6.283185307179586
+pub let INFINITY = 1.0
+pub let NAN = 0.0
+
+pub fn sin(x: Float) -> Float { 0.0 }
+pub fn cos(x: Float) -> Float { 0.0 }
+pub fn tan(x: Float) -> Float { 0.0 }
+
+pub fn asin(x: Float) -> Float { 0.0 }
+pub fn acos(x: Float) -> Float { 0.0 }
+pub fn atan(x: Float) -> Float { 0.0 }
+pub fn atan2(y: Float, x: Float) -> Float { 0.0 }
+
+pub fn sinh(x: Float) -> Float { 0.0 }
+pub fn cosh(x: Float) -> Float { 0.0 }
+pub fn tanh(x: Float) -> Float { 0.0 }
+
+pub fn exp(x: Float) -> Float { 0.0 }
+pub fn log(x: Float) -> Float { 0.0 }
+pub fn logBase(x: Float, base: Float) -> Float { 0.0 }
+pub fn log2(x: Float) -> Float { 0.0 }
+pub fn log10(x: Float) -> Float { 0.0 }
+
+pub fn sqrt(x: Float) -> Float { 0.0 }
+pub fn cbrt(x: Float) -> Float { 0.0 }
+pub fn pow(x: Float, y: Float) -> Float { 0.0 }
+
+pub fn floor(x: Float) -> Float { 0.0 }
+pub fn ceil(x: Float) -> Float { 0.0 }
+pub fn round(x: Float) -> Float { 0.0 }
+pub fn trunc(x: Float) -> Float { 0.0 }
+
+pub fn abs(x: Float) -> Float { 0.0 }
+pub fn min(a: Float, b: Float) -> Float { a }
+pub fn max(a: Float, b: Float) -> Float { a }
+pub fn hypot(a: Float, b: Float) -> Float { 0.0 }

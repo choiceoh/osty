@@ -1,0 +1,14 @@
+// std.compress — gzip compression (spec §10.19).
+//
+// Spec uses a nested form (`compress.gzip.encode`); until nested
+// modules are supported, the flat `gzipEncode` / `gzipDecode` pair
+// carries the surface. Other formats (zstd, brotli, lz4) are available
+// as community packages and intentionally excluded here.
+
+pub fn gzipEncode(data: Bytes) -> Bytes {
+    data
+}
+
+pub fn gzipDecode(data: Bytes) -> Result<Bytes, Error> {
+    Ok(data)
+}

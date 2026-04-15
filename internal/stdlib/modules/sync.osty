@@ -1,0 +1,38 @@
+// std.sync — mutual exclusion, reader/writer locks, atomics (§10.2).
+//
+// Shared-state helpers. Task coordination primitives (taskGroup,
+// channels) live in std.thread. Lock acquisition/release is the
+// canonical escape hatch when data must be shared across `taskGroup`
+// boundaries; otherwise prefer channels.
+
+pub struct Mutex<T> {
+    pub value: T,
+}
+
+pub struct RwLock<T> {
+    pub value: T,
+}
+
+pub struct AtomicInt {
+    pub value: Int,
+}
+
+pub struct AtomicBool {
+    pub value: Bool,
+}
+
+pub fn mutex<T>(value: T) -> Mutex<T> {
+    Mutex { value }
+}
+
+pub fn rwlock<T>(value: T) -> RwLock<T> {
+    RwLock { value }
+}
+
+pub fn atomicInt(initial: Int) -> AtomicInt {
+    AtomicInt { value: initial }
+}
+
+pub fn atomicBool(initial: Bool) -> AtomicBool {
+    AtomicBool { value: initial }
+}

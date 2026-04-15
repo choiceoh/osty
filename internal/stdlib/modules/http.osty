@@ -1,0 +1,58 @@
+// std.http — HTTP client and server (spec §10.2).
+//
+// Tier 2 production essential: a minimal request/response surface
+// suitable for the common "fetch a URL" and "serve a handler" cases.
+// Richer middleware (cookies, retries, connection pools) is left to
+// community packages; the stubs below stake out only the client/server
+// entry points that appear in the spec's examples.
+
+pub enum Method {
+    Get,
+    Head,
+    Post,
+    Put,
+    Delete,
+    Patch,
+    Options,
+}
+
+pub struct Request {
+    pub method: Method,
+    pub url: String,
+    pub headers: Map<String, String>,
+    pub body: Bytes,
+}
+
+pub struct Response {
+    pub status: Int,
+    pub headers: Map<String, String>,
+    pub body: Bytes,
+}
+
+pub struct Client {
+    pub baseUrl: String,
+}
+
+pub struct Server {
+    pub addr: String,
+}
+
+pub fn get(url: String) -> Result<Response, Error> {
+    get(url)
+}
+
+pub fn post(url: String, body: Bytes) -> Result<Response, Error> {
+    post(url, body)
+}
+
+pub fn send(request: Request) -> Result<Response, Error> {
+    send(request)
+}
+
+pub fn client(baseUrl: String) -> Client {
+    Client { baseUrl }
+}
+
+pub fn server(addr: String, handler: fn(Request) -> Response) -> Result<Server, Error> {
+    Ok(Server { addr })
+}

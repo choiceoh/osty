@@ -1,0 +1,42 @@
+// std.thread — structured concurrency primitives (spec §8, §10.2).
+//
+// `taskGroup`, `parallel`, and `race` are prelude-aliased so user code
+// can call them unqualified. `chan`, `select`, and cancellation helpers
+// stay under the `thread.` namespace. Bodies are placeholders; the
+// transpiler replaces the calls with real goroutine / channel code.
+
+pub struct Group {}
+
+pub struct Handle<T> {}
+
+pub struct Chan<T> {}
+
+pub struct SelectBuilder {}
+
+pub enum Cancelled {
+    Signal(Error),
+}
+
+pub fn collectAll<T>(body: fn(Group) -> List<Handle<T>>) -> List<Result<T, Error>> {
+    []
+}
+
+pub fn race<T>(body: fn(Group) -> List<Handle<T>>) -> Result<T, Error> {
+    race(body)
+}
+
+pub fn chan<T>(capacity: Int) -> Chan<T> {
+    Chan {}
+}
+
+pub fn select<T>(body: fn(SelectBuilder) -> T) -> T {
+    select(body)
+}
+
+pub fn isCancelled() -> Bool {
+    false
+}
+
+pub fn checkCancelled() -> Result<(), Error> {
+    Ok(())
+}

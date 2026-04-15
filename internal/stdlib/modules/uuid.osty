@@ -1,0 +1,24 @@
+// std.uuid — UUID generation and parsing (spec §10.13).
+//
+// `v4` is random; `v7` is time-ordered and preferred for database
+// keys. `Uuid` satisfies `Equal`, `Hashable`, and `Ordered`.
+
+pub struct Uuid {
+    pub bytes: Bytes,
+}
+
+pub fn v4() -> Uuid {
+    Uuid { bytes: v4().bytes }
+}
+
+pub fn v7() -> Uuid {
+    Uuid { bytes: v7().bytes }
+}
+
+pub fn parse(text: String) -> Result<Uuid, Error> {
+    parse(text)
+}
+
+pub fn nil() -> Uuid {
+    Uuid { bytes: nil().bytes }
+}

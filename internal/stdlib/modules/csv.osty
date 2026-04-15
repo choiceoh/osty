@@ -1,0 +1,31 @@
+// std.csv — RFC 4180-compliant CSV read/write (spec §10.18).
+
+pub struct CsvOptions {
+    pub delimiter: Char,
+    pub quote: Char,
+    pub trimSpace: Bool,
+}
+
+pub fn encode(rows: List<List<String>>) -> String {
+    ""
+}
+
+pub fn encodeWith(rows: List<List<String>>, options: CsvOptions) -> String {
+    ""
+}
+
+pub fn decode(text: String) -> Result<List<List<String>>, Error> {
+    Ok([])
+}
+
+pub fn decodeHeaders(text: String) -> Result<List<Map<String, String>>, Error> {
+    Ok([])
+}
+
+pub fn decodeWith(text: String, options: CsvOptions) -> Result<List<List<String>>, Error> {
+    Ok([])
+}
+
+pub fn defaultOptions() -> CsvOptions {
+    CsvOptions { delimiter: ',', quote: '"', trimSpace: false }
+}
