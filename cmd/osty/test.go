@@ -1,9 +1,13 @@
 package main
 
 import (
+	"bytes"
+	"crypto/sha1"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -14,6 +18,7 @@ import (
 	"github.com/osty/osty/internal/manifest"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/stdlib"
+	"github.com/osty/osty/internal/testgen"
 )
 
 // runTest implements `osty test [--offline] [PATH|FILTER...]` per
@@ -45,13 +50,17 @@ import (
 //   - `bench*` top-level fns with the same shape are benchmarks;
 //   - every other declaration is ignored for discovery purposes.
 //
-// Actual test *execution* (the Go runner harness) is pending — this
-// command currently validates the tests and reports what was found.
+// Test execution is driven by the internal/testgen package: after
+// the front-end validates a package, gen transpiles every source
+// file to Go, testgen merges them, writes an auto-generated harness
+// alongside, and `go run` executes the suite. Assertion failures
+// surface as FAIL lines and the overall exit code reflects the
+// combined verdict.
 //
 // Exit codes:
 //
-//	0   every test file's package type-checks cleanly
-//	1   at least one error-severity diagnostic was emitted
+//	0   every discovered test passed
+//	1   at least one test failed OR a front-end error was emitted
 //	2   usage error or manifest / I/O failure
 func runTest(args []string, flags cliFlags) {
 	fs := flag.NewFlagSet("test", flag.ExitOnError)
@@ -140,8 +149,9 @@ func runTest(args []string, flags cliFlags) {
 	anyErr := false
 	passed := 0
 	totalTests, totalBenches := 0, 0
+	totalPass, totalFail := 0, 0
 	for _, dir := range dirs {
-		ok, t, b := runTestDir(dir, byDir[dir], root, flags)
+		ok, t, b, runPass, runFail := runTestDir(dir, byDir[dir], root, flags)
 		if !ok {
 			anyErr = true
 			continue
@@ -149,16 +159,15 @@ func runTest(args []string, flags cliFlags) {
 		passed += len(byDir[dir])
 		totalTests += t
 		totalBenches += b
+		totalPass += runPass
+		totalFail += runFail
 	}
 
-	fmt.Printf("\n%d / %d test file(s) pass — %d tests, %d benchmarks discovered\n",
+	fmt.Printf("\n%d / %d test file(s) validated — %d tests, %d benchmarks discovered\n",
 		passed, len(testFiles), totalTests, totalBenches)
-	fmt.Println()
-	fmt.Println("note: test execution is not yet implemented; `osty test` currently")
-	fmt.Println("validates and reports discovered functions. The runner harness will")
-	fmt.Println("arrive in a later phase — see LANG_SPEC_v0.3 §11.")
+	fmt.Printf("execution: %d passed, %d failed\n", totalPass, totalFail)
 
-	if anyErr {
+	if anyErr || totalFail > 0 {
 		os.Exit(1)
 	}
 }
@@ -169,13 +178,16 @@ func runTest(args []string, flags cliFlags) {
 // *_test.osty match); every .osty file in dir — including non-test
 // files — is loaded for resolution so cross-file refs work.
 //
-// Returns (ok, totalTests, totalBenchmarks). ok is false when any
-// error-severity diagnostic was printed for this package.
-func runTestDir(dir string, interesting []string, root string, flags cliFlags) (bool, int, int) {
+// Returns (ok, totalTests, totalBenchmarks, runPass, runFail). ok is
+// false when any error-severity diagnostic was printed for this
+// package; runPass/runFail come from the compiled harness's own
+// pass/fail counts (zero when the front-end failed and execution was
+// skipped, or when code generation hit a construct gen can't emit).
+func runTestDir(dir string, interesting []string, root string, flags cliFlags) (bool, int, int, int, int) {
 	pkg, err := resolve.LoadPackageWithTests(dir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty test: %v\n", err)
-		return false, 0, 0
+		return false, 0, 0, 0, 0
 	}
 
 	pr := resolveTestPackage(dir, pkg)
@@ -202,6 +214,7 @@ func runTestDir(dir string, interesting []string, root string, flags cliFlags) (
 	// an indented list of discovered test/bench functions.
 	fileOK := true
 	totalTests, totalBenches := 0, 0
+	var allEntries []testgen.Entry
 	// Order the output by file path so runs against the same tree are
 	// deterministic regardless of filesystem walk order.
 	sorted := make([]*resolve.PackageFile, 0, len(pkg.Files))
@@ -232,6 +245,12 @@ func runTestDir(dir string, interesting []string, root string, flags cliFlags) (
 			} else {
 				tests++
 			}
+			allEntries = append(allEntries, testgen.Entry{
+				Name: e.name,
+				Kind: testgenKind(e.kind),
+				File: filepath.Base(pf.Path),
+				Line: e.line,
+			})
 		}
 		totalTests += tests
 		totalBenches += benches
@@ -241,7 +260,31 @@ func runTestDir(dir string, interesting []string, root string, flags cliFlags) (
 				e.kind.label(), e.name, e.line)
 		}
 	}
-	return fileOK, totalTests, totalBenches
+
+	// Execute if the package validated cleanly and we found at least
+	// one discoverable entry. Front-end failures short-circuit
+	// execution — running a package that didn't type-check would
+	// just surface confusing Go-compile errors downstream.
+	runPass, runFail := 0, 0
+	if fileOK && len(allEntries) > 0 {
+		var execErr error
+		runPass, runFail, execErr = executeTestPackage(dir, pkg, chk, allEntries, root)
+		if execErr != nil {
+			fmt.Fprintf(os.Stderr, "osty test: %v\n", execErr)
+			fileOK = false
+		}
+	}
+	return fileOK, totalTests, totalBenches, runPass, runFail
+}
+
+// testgenKind converts the cmd-local testKind to the testgen Entry
+// kind. Kept as a tiny helper so cmd/osty doesn't have to import
+// testgen solely for a type constant in the enum switch.
+func testgenKind(k testKind) testgen.EntryKind {
+	if k == kindBench {
+		return testgen.KindBench
+	}
+	return testgen.KindTest
 }
 
 // fileHasErrors reports whether any error-severity diagnostic in diags
@@ -516,4 +559,129 @@ func filterTestFiles(files []string, filters []string) []string {
 		}
 	}
 	return out
+}
+
+// executeTestPackage transpiles pkg via testgen, writes the Go
+// sources into a per-package scratch directory under $TMPDIR, and
+// invokes `go run` to execute the suite. It returns the runtime
+// pass/fail counts parsed from the harness's own summary line.
+//
+// The scratch directory is keyed by the SHA-1 of the package's
+// absolute path so concurrent invocations targeting different
+// packages don't collide. Contents are rewritten every run — we
+// don't assume anything about staleness since gen output is cheap
+// to reproduce.
+//
+// A non-nil error indicates an I/O problem, a testgen merge error,
+// or a `go run` invocation failure unrelated to test verdicts.
+// Individual test failures show up as FAIL lines in the harness's
+// stdout and are counted into runFail; they don't become a Go
+// error from this function.
+func executeTestPackage(dir string, pkg *resolve.Package, chk *check.Result, entries []testgen.Entry, root string) (int, int, error) {
+	// Sort entries in source-declaration order so the harness output
+	// mirrors the validation listing printed above it.
+	sorted := append([]testgen.Entry(nil), entries...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		if sorted[i].File != sorted[j].File {
+			return sorted[i].File < sorted[j].File
+		}
+		return sorted[i].Line < sorted[j].Line
+	})
+
+	srcs, err := testgen.GenerateHarness(pkg, chk, sorted)
+	if err != nil {
+		// Non-fatal gen warnings come back as (partial output, err).
+		// We still try to run the harness below because the clean
+		// portion often compiles; surface the warning first so the
+		// user sees what was skipped.
+		fmt.Fprintf(os.Stderr, "osty test: gen warnings for %s: %v\n", dir, err)
+	}
+
+	outDir, err := scratchDir(dir)
+	if err != nil {
+		return 0, 0, err
+	}
+	if err := os.WriteFile(filepath.Join(outDir, "main.go"), srcs.Main, 0o644); err != nil {
+		return 0, 0, err
+	}
+	if err := os.WriteFile(filepath.Join(outDir, "harness.go"), srcs.Harness, 0o644); err != nil {
+		return 0, 0, err
+	}
+	// `go run .` needs a module context. The harness has no
+	// third-party dependencies so a bare go.mod is sufficient; it
+	// also insulates the scratch directory from ambient GOPATH /
+	// workspace settings that might otherwise hijack the build.
+	if err := os.WriteFile(filepath.Join(outDir, "go.mod"),
+		[]byte("module ostytest\n\ngo 1.22\n"), 0o644); err != nil {
+		return 0, 0, err
+	}
+
+	fmt.Printf("\n--- running tests in %s ---\n", relOrSelf(dir, root))
+
+	var stdout, stderr bytes.Buffer
+	cmd := exec.Command("go", "run", ".")
+	cmd.Dir = outDir
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	runErr := cmd.Run()
+
+	// The harness prints each TEST line and a trailing summary to
+	// stdout. Echo everything so the user sees the live output,
+	// then parse the "N passed, M failed" tail for our counts.
+	os.Stdout.Write(stdout.Bytes())
+	if stderr.Len() > 0 {
+		os.Stderr.Write(stderr.Bytes())
+	}
+
+	runPass, runFail, parsed := parseHarnessSummary(stdout.String())
+	if runErr != nil && !parsed {
+		// go run failed before the harness could print a summary.
+		// The sources were left behind under outDir for post-mortem
+		// — point the user there.
+		return 0, 0, fmt.Errorf("go run failed in %s: %w", outDir, runErr)
+	}
+	return runPass, runFail, nil
+}
+
+// scratchDir returns a stable per-package scratch directory under
+// $TMPDIR keyed by the SHA-1 of the absolute package path. The
+// returned directory is created if it doesn't exist; contents are
+// overwritten on each run.
+func scratchDir(pkgDir string) (string, error) {
+	abs, err := filepath.Abs(pkgDir)
+	if err != nil {
+		return "", err
+	}
+	sum := sha1.Sum([]byte(abs))
+	key := hex.EncodeToString(sum[:8])
+	base := filepath.Join(os.TempDir(), "osty-test-"+key)
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		return "", err
+	}
+	return base, nil
+}
+
+// parseHarnessSummary scans the harness's stdout for the trailing
+// "N passed, M failed, K total" line and returns the parsed counts.
+// ok is false when no line matched — which means the harness didn't
+// reach its summary() call (usually a go-compile error upstream).
+func parseHarnessSummary(out string) (pass int, fail int, ok bool) {
+	for _, line := range strings.Split(out, "\n") {
+		var p, f, t int
+		n, err := fmt.Sscanf(strings.TrimSpace(line), "%d passed, %d failed, %d total", &p, &f, &t)
+		if err == nil && n == 3 {
+			return p, f, true
+		}
+	}
+	return 0, 0, false
+}
+
+// relOrSelf returns a path relative to root when possible, otherwise
+// the original path. Used to render compact status headers like
+// "running tests in examples/calc" instead of absolute paths.
+func relOrSelf(p, root string) string {
+	if rel, err := filepath.Rel(root, p); err == nil {
+		return rel
+	}
+	return p
 }
