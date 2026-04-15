@@ -2508,6 +2508,29 @@ fn name(c: Color) -> String {
 	assertOK(t, runCheck(t, src))
 }
 
+func TestCheck_QualifiedEnumVariants(t *testing.T) {
+	src := `
+pub enum Jsonish {
+    Null,
+    String(String),
+}
+
+fn main() {
+    let a: Jsonish = Jsonish.String("osty")
+    let b: Jsonish = Jsonish.Null
+    let shown: String = match a {
+        Jsonish.String(s) -> s,
+        Jsonish.Null -> "null",
+    }
+    let empty: Bool = match b {
+        Jsonish.Null -> true,
+        Jsonish.String(_) -> false,
+    }
+}
+`
+	assertOK(t, runCheck(t, src))
+}
+
 func TestCheck_MatchNonExhaustiveEnum(t *testing.T) {
 	src := `
 pub enum Color { Red, Green, Blue }

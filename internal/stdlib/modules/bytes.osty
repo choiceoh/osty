@@ -88,6 +88,10 @@ pub fn fromString(s: String) -> Bytes {
     fromString(s)
 }
 
+pub fn from(list: List<Byte>) -> Bytes {
+    from(list)
+}
+
 pub fn toString(b: Bytes) -> Result<String, Error> {
     b.toString()
 }

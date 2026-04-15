@@ -666,8 +666,8 @@ func (g *gen) emitStdlibRuntimeBridge(alias string, path []string, full string) 
 				v := b[i]
 				return &v
 			},
-			equal:       stdbytes.Equal,
-			contains:    stdbytes.Contains,
+			equal:       bytesEqual,
+			contains:    bytesContains,
 			startsWith:  stdbytes.HasPrefix,
 			endsWith:    stdbytes.HasSuffix,
 			indexOf: func(b []byte, sub []byte) *int {
@@ -694,16 +694,10 @@ func (g *gen) emitStdlibRuntimeBridge(alias string, path []string, full string) 
 			trimRight:  func(b []byte, strip []byte) []byte { return stdbytes.TrimRight(b, string(strip)) },
 			trim:       func(b []byte, strip []byte) []byte { return stdbytes.Trim(b, string(strip)) },
 			trimSpace:  stdbytes.TrimSpace,
-			toUpper:    stdbytes.ToUpper,
+			toUpper:    bytesToUpper,
 			toLower:    stdbytes.ToLower,
 			toHex:      _ostybyteshex.EncodeToString,
-			fromHex: func(s string) Result[[]byte, any] {
-				b, err := _ostybyteshex.DecodeString(s)
-				if err != nil {
-					return resultErr[[]byte, any](err)
-				}
-				return resultOk[[]byte, any](b)
-			},
+			fromHex: bytesFromHex,
 		}`, full)
 		return true
 	case "csv":

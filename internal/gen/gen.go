@@ -39,6 +39,28 @@ func GenerateMapped(pkgName string, file *ast.File, res *resolve.Result, chk *ch
 	return g.run()
 }
 
+// PackageIndex supplements file-local codegen knowledge with declarations
+// from sibling files in the same Osty package. Most callers generate one
+// source file in isolation and should use Generate/GenerateMapped; package
+// harnesses that merge several generated files can pass this index so
+// cross-file enum variants and methods lower the same way as local ones.
+type PackageIndex struct {
+	VariantOwner map[string]string
+	EnumTypes    map[string]bool
+	StructTypes  map[string]bool
+	MethodNames  map[string]map[string]bool
+}
+
+// GenerateMappedWithIndex is GenerateMapped with package-local declaration
+// metadata supplied by the caller. The index must contain only declarations
+// from the package being generated, not imported stdlib/workspace packages.
+func GenerateMappedWithIndex(pkgName string, file *ast.File, res *resolve.Result, chk *check.Result, sourcePath string, idx PackageIndex) ([]byte, error) {
+	g := newGen(pkgName, file, res, chk)
+	g.sourcePath = sourcePath
+	g.applyPackageIndex(idx)
+	return g.run()
+}
+
 // gen is the transpiler state for one file.
 type gen struct {
 	pkgName string
@@ -286,6 +308,28 @@ func (g *gen) indexStructDecl(s *ast.StructDecl) {
 	}
 }
 
+func (g *gen) applyPackageIndex(idx PackageIndex) {
+	for name, owner := range idx.VariantOwner {
+		if _, ok := g.variantOwner[name]; !ok {
+			g.variantOwner[name] = owner
+		}
+	}
+	for name := range idx.EnumTypes {
+		g.enumTypes[name] = true
+	}
+	for name := range idx.StructTypes {
+		g.structTypes[name] = true
+	}
+	for typeName, methods := range idx.MethodNames {
+		if g.methodNames[typeName] == nil {
+			g.methodNames[typeName] = map[string]bool{}
+		}
+		for methodName := range methods {
+			g.methodNames[typeName][methodName] = true
+		}
+	}
+}
+
 // use records a Go import with no alias (bare `import "path"`). A
 // subsequent useAs for the same path overrides with an alias; a
 // bare use after an alias leaves the alias intact.
@@ -385,6 +429,7 @@ func (g *gen) run() ([]byte, error) {
 	}
 	if g.needRegex {
 		g.needResult = true
+		g.use("fmt")
 		g.useAs("unicode/utf8", "utf8")
 	}
 	if g.needEncoding {
@@ -832,6 +877,129 @@ func jsonParseValue(data []byte) (Json, error) {
 	return value, nil
 }
 
+func jsonStringifyValue(value Json) string { return jsonEncode(value) }
+
+func jsonParseValueResult(text string) Result[Json, any] {
+	value, err := jsonParseValue([]byte(text))
+	if err != nil {
+		return resultErr[Json, any](err)
+	}
+	return resultOk[Json, any](value)
+}
+
+func jsonIsNullVal(value Json) bool { return value == nil }
+
+func jsonIsBoolVal(value Json) bool {
+	_, ok := value.(bool)
+	return ok
+}
+
+func jsonIsNumberVal(value Json) bool {
+	switch value.(type) {
+	case float64, float32, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		return true
+	default:
+		return false
+	}
+}
+
+func jsonIsStringVal(value Json) bool {
+	_, ok := value.(string)
+	return ok
+}
+
+func jsonIsArrayVal(value Json) bool {
+	_, ok := value.([]Json)
+	return ok
+}
+
+func jsonIsObjectVal(value Json) bool {
+	_, ok := value.(map[string]Json)
+	return ok
+}
+
+func jsonAsBoolResult(value Json) Result[bool, any] {
+	if v, ok := value.(bool); ok {
+		return resultOk[bool, any](v)
+	}
+	return resultErr[bool, any](fmt.Sprintf("std.json: expected Bool, got %T", value))
+}
+
+func jsonAsNumberResult(value Json) Result[float64, any] {
+	switch v := value.(type) {
+	case float64:
+		return resultOk[float64, any](v)
+	case float32:
+		return resultOk[float64, any](float64(v))
+	case int:
+		return resultOk[float64, any](float64(v))
+	case int8:
+		return resultOk[float64, any](float64(v))
+	case int16:
+		return resultOk[float64, any](float64(v))
+	case int32:
+		return resultOk[float64, any](float64(v))
+	case int64:
+		return resultOk[float64, any](float64(v))
+	case uint:
+		return resultOk[float64, any](float64(v))
+	case uint8:
+		return resultOk[float64, any](float64(v))
+	case uint16:
+		return resultOk[float64, any](float64(v))
+	case uint32:
+		return resultOk[float64, any](float64(v))
+	case uint64:
+		return resultOk[float64, any](float64(v))
+	default:
+		return resultErr[float64, any](fmt.Sprintf("std.json: expected Number, got %T", value))
+	}
+}
+
+func jsonAsStringResult(value Json) Result[string, any] {
+	if v, ok := value.(string); ok {
+		return resultOk[string, any](v)
+	}
+	return resultErr[string, any](fmt.Sprintf("std.json: expected String, got %T", value))
+}
+
+func jsonAsArrayResult(value Json) Result[[]Json, any] {
+	if v, ok := value.([]Json); ok {
+		return resultOk[[]Json, any](v)
+	}
+	return resultErr[[]Json, any](fmt.Sprintf("std.json: expected Array, got %T", value))
+}
+
+func jsonAsObjectResult(value Json) Result[map[string]Json, any] {
+	if v, ok := value.(map[string]Json); ok {
+		return resultOk[map[string]Json, any](v)
+	}
+	return resultErr[map[string]Json, any](fmt.Sprintf("std.json: expected Object, got %T", value))
+}
+
+func jsonGetFieldResult(value Json, key string) Result[Json, any] {
+	obj, ok := value.(map[string]Json)
+	if !ok {
+		return resultErr[Json, any](fmt.Sprintf("std.json: expected Object, got %T", value))
+	}
+	field, ok := obj[key]
+	if !ok {
+		return resultErr[Json, any](fmt.Sprintf("std.json: missing field %q", key))
+	}
+	return resultOk[Json, any](field)
+}
+
+func jsonGetIndexResult(value Json, index int) Result[Json, any] {
+	arr, ok := value.([]Json)
+	if !ok {
+		return resultErr[Json, any](fmt.Sprintf("std.json: expected Array, got %T", value))
+	}
+	if index < 0 || index >= len(arr) {
+		return resultErr[Json, any](fmt.Sprintf("std.json: index %d out of bounds", index))
+	}
+	return resultOk[Json, any](arr[index])
+}
+
 func jsonAsError(value any) error {
 	if err, ok := value.(error); ok {
 		return err
@@ -1123,6 +1291,23 @@ func refInterfaceData(v any) unsafe.Pointer {
 }
 `)
 	}
+	if g.needBytesRuntime {
+		out.WriteString(`
+func bytesEqual(a, b []byte) bool { return stdbytes.Equal(a, b) }
+
+func bytesContains(b, sub []byte) bool { return stdbytes.Contains(b, sub) }
+
+func bytesToUpper(b []byte) []byte { return stdbytes.ToUpper(b) }
+
+func bytesFromHex(s string) Result[[]byte, any] {
+	b, err := _ostybyteshex.DecodeString(s)
+	if err != nil {
+		return resultErr[[]byte, any](err)
+	}
+	return resultOk[[]byte, any](b)
+}
+`)
+	}
 	if g.needRandomRuntime {
 		out.WriteString(`
 // Rng is the runtime representation of std.random.Rng.
@@ -1312,7 +1497,7 @@ func (u Url) queryValues(key string) []string {
 `)
 	}
 	if g.needRegex {
-		// TODO: regexRuntime placeholder
+		out.WriteString(regexRuntime)
 	}
 	if g.needEncoding {
 		out.WriteString(`
