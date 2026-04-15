@@ -1,0 +1,45 @@
+use std.debug
+use std.fs
+use std.strings
+
+/// Document is a tiny value loaded through the std.fs and std.strings examples.
+pub struct Document {
+    pub path: String,
+    pub title: String,
+    pub body: String,
+}
+
+/// normalizedTitle trims surrounding whitespace and lowercases a title.
+pub fn normalizedTitle(raw: String) -> String {
+    strings.toLower(strings.trim(raw))
+}
+
+/// loadDocument reads a file and packages its path, normalized title, and body.
+pub fn loadDocument(path: String) -> Result<Document, Error> {
+    let text = fs.readToString(path)?
+    Ok(Document {
+        path,
+        title: normalizedTitle(path),
+        body: text,
+    })
+}
+
+/// containsNeedle performs a case-insensitive body search.
+pub fn containsNeedle(doc: Document, needle: String) -> Bool {
+    strings.contains(strings.toLower(doc.body), strings.toLower(needle))
+}
+
+/// removeIfPresent removes a path only when std.fs reports that it exists.
+pub fn removeIfPresent(path: String) -> Result<Bool, Error> {
+    if fs.exists(path) {
+        let _ = fs.remove(path)?
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+/// debugSize routes through std.debug and returns the original value.
+pub fn debugSize(n: Int) -> Int {
+    debug.dbg(n)
+}

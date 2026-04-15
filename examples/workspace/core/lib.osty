@@ -1,0 +1,24 @@
+/// BuildSignal is the shared value passed between workspace members.
+pub struct BuildSignal {
+    pub name: String,
+    pub score: Int,
+    pub runnable: Bool,
+}
+
+/// makeSignal computes a readiness score from test and example counts.
+pub fn makeSignal(name: String, tests: Int, examples: Int) -> BuildSignal {
+    BuildSignal {
+        name,
+        score: tests * 3 + examples * 2,
+        runnable: tests > 0 && examples > 0,
+    }
+}
+
+/// badge renders a compact status string for CLI-style output.
+pub fn badge(signal: BuildSignal) -> String {
+    if signal.runnable {
+        "{signal.name}:{signal.score}:ready"
+    } else {
+        "{signal.name}:{signal.score}:draft"
+    }
+}

@@ -1,0 +1,65 @@
+use std.testing
+
+fn sampleLib() -> SourceFile {
+    let text = r"""
+        use std.testing
+        use go strings
+        fn parse() {}
+        fn render() {}
+        """
+    source("lib.osty", text)
+}
+
+fn sampleTest() -> SourceFile {
+    let text = r"""
+        use std.testing
+        fn testParse() {}
+        fn testRender() {}
+        """
+    source("lib_test.osty", text)
+}
+
+fn sampleConcurrent() -> SourceFile {
+    let text = r"""
+        fn worker() { spawn(|| println("work")) }
+        fn fanout() { thread.yield() }
+        """
+    source("worker.osty", text)
+}
+
+fn testSummarizesOneSourceFile() {
+    let summary = summarize(sampleLib())
+    testing.assertEq(summary.files, 1)
+    testing.assertEq(summary.functions, 2)
+    testing.assertEq(summary.tests, 0)
+    testing.assertEq(summary.imports, 2)
+    testing.assert(summary.hasFFI)
+    testing.assert(!(summary.hasConcurrency))
+}
+
+fn testDetectsTestFileShape() {
+    testing.assert(isTestFile(sampleTest()))
+    testing.assert(!(isTestFile(sampleLib())))
+
+    let summary = summarize(sampleTest())
+    testing.assertEq(summary.tests, 2)
+    testing.assertEq(readinessScore(summary), 11)
+}
+
+fn testBatchSummaryUsesParallelWorkers() {
+    let summary = summarizeBatch(sampleLib(), sampleTest(), sampleConcurrent())
+    testing.assertEq(summary.files, 3)
+    testing.assertEq(summary.functions, 6)
+    testing.assertEq(summary.tests, 2)
+    testing.assert(summary.hasFFI)
+    testing.assert(summary.hasConcurrency)
+}
+
+fn testStreamLineTotalUsesChannels() {
+    let total = streamLineTotal([sampleLib(), sampleTest(), sampleConcurrent()])
+    testing.assertEq(total, 9)
+}
+
+fn benchSummarizeDogfoodSnippet() {
+    let _ = summarize(sampleConcurrent())
+}

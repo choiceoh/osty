@@ -1,0 +1,8 @@
+[package]
+name = "core"
+version = "0.1.0"
+edition = "0.3"
+description = "Shared library member for the workspace example."
+license = "MIT"
+
+[dependencies]

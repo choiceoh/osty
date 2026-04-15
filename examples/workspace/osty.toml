@@ -1,0 +1,4 @@
+# Virtual workspace root used by the dogfood example tests.
+
+[workspace]
+members = ["core", "cli"]
