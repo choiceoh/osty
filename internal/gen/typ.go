@@ -181,6 +181,27 @@ func (g *gen) goNamedType(n *types.Named) string {
 		// cost of losing Go's error-interface polymorphism; a full
 		// fix would generate an .Error() shim per type.
 		return "any"
+	case "Chan", "Channel":
+		// §8.5: channel types lower to Go's built-in chan T.
+		if len(n.Args) == 1 {
+			return "chan " + g.goType(n.Args[0])
+		}
+		return "chan any"
+	case "Handle":
+		// §8.1: a task handle wraps a future result. We emit a runtime
+		// Handle[T] struct (see needHandle); the mapping here just
+		// requests it.
+		g.needHandle = true
+		if len(n.Args) == 1 {
+			return "Handle[" + g.goType(n.Args[0]) + "]"
+		}
+		return "Handle[any]"
+	case "TaskGroup":
+		// §8.1 structured-concurrency group. Emitted as a pointer so
+		// the same value is seen by the closure body and by
+		// runTaskGroup's Wait call.
+		g.needTaskGroup = true
+		return "*TaskGroup"
 	}
 	// User-defined: bare name + optional type args.
 	if len(n.Args) == 0 {
@@ -291,6 +312,20 @@ func (g *gen) goNamedAST(n *ast.NamedType) string {
 			return "Result[" + g.goTypeExpr(n.Args[0]) + ", " + g.goTypeExpr(n.Args[1]) + "]"
 		}
 		return "Result[any, any]"
+	case "Chan", "Channel":
+		if len(n.Args) == 1 {
+			return "chan " + g.goTypeExpr(n.Args[0])
+		}
+		return "chan any"
+	case "Handle":
+		g.needHandle = true
+		if len(n.Args) == 1 {
+			return "Handle[" + g.goTypeExpr(n.Args[0]) + "]"
+		}
+		return "Handle[any]"
+	case "TaskGroup":
+		g.needTaskGroup = true
+		return "*TaskGroup"
 	}
 	if len(n.Args) == 0 {
 		return name

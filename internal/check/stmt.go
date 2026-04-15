@@ -582,6 +582,38 @@ func (c *checker) bindVariantPattern(p *ast.VariantPat, t types.Type, env *env) 
 		return
 	}
 
+	// Result sugar: Ok(v) / Err(e) against Result<T, E>. Like Some/None,
+	// Result is a prelude builtin without a typeDesc entry — we resolve
+	// the inner types from the scrutinee's Named type args directly.
+	//
+	// A user-defined `enum Result { ... }` shadowing the prelude would
+	// still hit this branch first. That's intentional: Osty's spec treats
+	// Ok/Err as canonical Result constructors, and shadowing at the enum-
+	// declaration level is already flagged elsewhere.
+	if head == "Ok" || head == "Err" {
+		if n, ok := types.AsNamedByName(t, "Result"); ok && len(n.Args) == 2 {
+			inner := n.Args[0]
+			if head == "Err" {
+				inner = n.Args[1]
+			}
+			if len(p.Args) != 1 {
+				c.errNode(p, diag.CodeVariantShape,
+					"`%s` takes exactly 1 pattern argument, got %d", head, len(p.Args))
+				return
+			}
+			c.bindPatternTypes(p.Args[0], inner, env)
+			return
+		}
+		if !types.IsError(t) {
+			c.errNode(p, diag.CodeTypeMismatch,
+				"`%s(...)` pattern against non-Result type `%s`", head, t)
+		}
+		for _, a := range p.Args {
+			c.bindPatternTypes(a, types.ErrorType, env)
+		}
+		return
+	}
+
 	// Prefer the variant declared on the scrutinee's enum (handles
 	// user-defined Result<T, E> whose `Ok` shadows the prelude builtin),
 	// falling back to scope lookup for bare names like `Red`.
