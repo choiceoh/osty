@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/osty/osty/internal/diag"
 )
@@ -298,6 +299,174 @@ func TestCodeActionRenameUndefined(t *testing.T) {
 	if !found {
 		t.Errorf("expected a rename-to-println quick fix, got %+v", actions)
 	}
+}
+
+// TestLintDiagnosticsPublished verifies that lint warnings (L-codes)
+// now arrive in publishDiagnostics so editors paint squigglies and
+// the per-diagnostic quick-fix handlers actually have something to
+// fire on.
+func TestLintDiagnosticsPublished(t *testing.T) {
+	sess := startSession(t)
+	defer sess.stop()
+	sess.initialize()
+
+	src := `fn main() {
+    let unused = 1
+    let x = 2
+    println(x)
+}
+`
+	sess.send("", "textDocument/didOpen", DidOpenTextDocumentParams{
+		TextDocument: TextDocumentItem{
+			URI: sampleURI, LanguageID: "osty", Version: 1, Text: src,
+		},
+	})
+	notifs := sess.drainNotifications("textDocument/publishDiagnostics", 2*time.Second)
+	if len(notifs) == 0 {
+		t.Fatal("no diagnostics published")
+	}
+	var pp PublishDiagnosticsParams
+	if err := json.Unmarshal(notifs[len(notifs)-1].Params, &pp); err != nil {
+		t.Fatal(err)
+	}
+	foundL0001 := false
+	for _, d := range pp.Diagnostics {
+		if d.Code == diag.CodeUnusedLet {
+			foundL0001 = true
+			break
+		}
+	}
+	if !foundL0001 {
+		t.Errorf("expected L0001 (unused let) in published diagnostics, got %+v", pp.Diagnostics)
+	}
+}
+
+// TestOrganizeImportsBailsOnComment verifies we refuse to rewrite
+// the use block when a line comment sits between two imports — the
+// AST doesn't track that comment, so rewriting would silently drop
+// it. The action must simply not be offered in that case.
+func TestOrganizeImportsBailsOnComment(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "zeta", "z.osty"),
+		`pub fn zz() {}
+`)
+	writeFile(t, filepath.Join(dir, "alpha", "a.osty"),
+		`pub fn aa() {}
+`)
+	mainPath := filepath.Join(dir, "main.osty")
+	// Out-of-order imports with a comment between them. Without
+	// the comment we'd offer a sort action; with it we must bail.
+	mainSrc := `use zeta
+// important ordering note
+use alpha
+
+fn main() {
+    zeta.zz()
+    alpha.aa()
+}
+`
+	writeFile(t, mainPath, mainSrc)
+
+	sess := startSession(t)
+	defer sess.stop()
+	sess.initialize()
+	mainURI := fileURI(mainPath)
+	sess.openDoc(mainURI, mainSrc)
+
+	sess.send("oi4", "textDocument/codeAction", CodeActionParams{
+		TextDocument: TextDocumentIdentifier{URI: mainURI},
+		Range:        Range{},
+		Context: CodeActionContext{
+			Only: []string{CodeActionSourceOrganizeImports},
+		},
+	})
+	resp := sess.waitResponse("oi4")
+	if resp.Error != nil {
+		t.Fatalf("codeAction error: %+v", resp.Error)
+	}
+	var actions []CodeAction
+	if err := json.Unmarshal(resp.Result, &actions); err != nil {
+		t.Fatal(err)
+	}
+	if len(actions) != 0 {
+		t.Errorf("expected no organizeImports when comment between uses; got %+v", actions)
+	}
+}
+
+// TestOrganizeImportsPreservesTrailingBlank checks that the rewrite
+// doesn't swallow blank lines the author inserted after the last
+// use — that whitespace belongs to the next declaration and must
+// survive.
+func TestOrganizeImportsPreservesTrailingBlank(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "zeta", "z.osty"),
+		`pub fn zz() {}
+`)
+	writeFile(t, filepath.Join(dir, "alpha", "a.osty"),
+		`pub fn aa() {}
+`)
+	mainPath := filepath.Join(dir, "main.osty")
+	// Out-of-order but clean (no comments).
+	mainSrc := `use zeta
+use alpha
+
+fn main() {
+    zeta.zz()
+    alpha.aa()
+}
+`
+	writeFile(t, mainPath, mainSrc)
+
+	sess := startSession(t)
+	defer sess.stop()
+	sess.initialize()
+	mainURI := fileURI(mainPath)
+	sess.openDoc(mainURI, mainSrc)
+
+	sess.send("oi5", "textDocument/codeAction", CodeActionParams{
+		TextDocument: TextDocumentIdentifier{URI: mainURI},
+		Range:        Range{},
+		Context: CodeActionContext{
+			Only: []string{CodeActionSourceOrganizeImports},
+		},
+	})
+	resp := sess.waitResponse("oi5")
+	if resp.Error != nil {
+		t.Fatalf("codeAction error: %+v", resp.Error)
+	}
+	var actions []CodeAction
+	if err := json.Unmarshal(resp.Result, &actions); err != nil {
+		t.Fatal(err)
+	}
+	if len(actions) == 0 {
+		t.Fatal("expected a sort action")
+	}
+	edits := actions[0].Edit.Changes[mainURI]
+	if len(edits) != 1 {
+		t.Fatalf("expected one edit, got %d", len(edits))
+	}
+	// Simulate applying the edit to the original source and confirm
+	// the blank line before `fn main` survives.
+	li := newLineIndex([]byte(mainSrc))
+	startOff := offsetFromLSP(li, edits[0].Range.Start)
+	endOff := offsetFromLSP(li, edits[0].Range.End)
+	if startOff < 0 || endOff > len(mainSrc) || startOff > endOff {
+		t.Fatalf("bad edit range: %+v", edits[0].Range)
+	}
+	after := mainSrc[:startOff] + edits[0].NewText + mainSrc[endOff:]
+	if !strings.Contains(after, "use alpha\nuse zeta\n\nfn main()") {
+		t.Errorf("trailing blank line lost. Applied result:\n%s", after)
+	}
+}
+
+// offsetFromLSP is a small helper that walks a lineIndex to convert
+// an LSP Position back into a byte offset — used by the organize
+// tests above to simulate applying the returned edits.
+func offsetFromLSP(li *lineIndex, p Position) int {
+	if int(p.Line) >= len(li.lines) {
+		return len(li.src)
+	}
+	return li.lspToOsty(p).Offset
 }
 
 // TestOrganizeImportsDropsUnused opens a file with one used and one

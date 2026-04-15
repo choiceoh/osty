@@ -6,7 +6,6 @@ import (
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
-	"github.com/osty/osty/internal/lint"
 )
 
 // LSP code-action kind strings (LSP 3.17 §codeActionKind). Only the
@@ -64,9 +63,15 @@ func organizeImportsAction(doc *document) *CodeAction {
 		return nil
 	}
 	uses := a.file.Uses
-	// Drop uses whose primary span overlaps a parser error — we don't
-	// trust their offsets enough to rewrite the file. A single bad line
-	// shouldn't void the whole organize operation; just skip that one.
+	// Bail out if any meaningful trivia sits between consecutive use
+	// decls — line comments, doc comments, or annotations that the
+	// AST doesn't attach to the UseDecl itself. Rewriting the block
+	// would silently relocate or delete those bytes. The user can
+	// still delete unused imports via the per-diagnostic quick fix,
+	// so organizing is just unavailable, not broken.
+	if hasTriviaBetweenUses(doc.src, uses) {
+		return nil
+	}
 	unused := unusedUseSet(doc)
 
 	type keyed struct {
@@ -190,8 +195,10 @@ func useSourceText(src []byte, u *ast.UseDecl) string {
 }
 
 // endOfLineOffset advances from `off` over any trailing whitespace
-// plus one line terminator, returning the offset of the first byte of
-// the next line (or len(src) if we hit EOF first).
+// plus exactly one line terminator, returning the offset of the first
+// byte of the next line (or len(src) if we hit EOF first). Trailing
+// blank lines the user inserted between the last `use` and the next
+// decl are preserved — we stop after consuming the first newline.
 func endOfLineOffset(src []byte, off int) int {
 	for off < len(src) && (src[off] == ' ' || src[off] == '\t') {
 		off++
@@ -205,15 +212,48 @@ func endOfLineOffset(src []byte, off int) int {
 	return off
 }
 
-// unusedUseSet runs the single-file lint pass and returns the set of
-// UseDecl nodes flagged L0003 ("unused import"). Reuses lint.File so
-// the organize action stays in lockstep with the standalone `osty
-// lint` CLI — if lint's unused-import logic evolves, the refactor
-// follows automatically.
+// hasTriviaBetweenUses reports whether non-whitespace bytes appear
+// between the end of one UseDecl's line and the start of the next.
+// Osty's parser strips comments before handing the token stream to
+// the AST builder, so a `// ...` line between two `use` decls has no
+// AST node — it only shows up when we scan the raw source. Finding
+// ANY non-whitespace / non-`use` byte in that gap tells us there's
+// trivia we shouldn't stomp.
+//
+// The scan runs from each use's end-of-line to the next use's
+// PosV.Offset. If it sees anything other than ASCII whitespace or a
+// second `use` keyword, we treat the block as too risky to rewrite.
+func hasTriviaBetweenUses(src []byte, uses []*ast.UseDecl) bool {
+	for i := 0; i+1 < len(uses); i++ {
+		if uses[i] == nil || uses[i+1] == nil {
+			continue
+		}
+		gapStart := uses[i].EndV.Offset
+		gapEnd := uses[i+1].PosV.Offset
+		if gapStart < 0 || gapEnd > len(src) || gapStart >= gapEnd {
+			continue
+		}
+		for off := gapStart; off < gapEnd; off++ {
+			b := src[off]
+			if b == ' ' || b == '\t' || b == '\n' || b == '\r' {
+				continue
+			}
+			// Any other byte (comment start `/`, `#` annotation,
+			// stray text) means we can't safely rewrite.
+			return true
+		}
+	}
+	return false
+}
+
+// unusedUseSet returns the set of UseDecl nodes flagged L0003
+// ("unused import") by the analysis pipeline's lint pass. Uses the
+// cached result on doc.analysis so organizing imports costs one diag
+// scan, not another full lint walk.
 func unusedUseSet(doc *document) map[*ast.UseDecl]bool {
 	out := map[*ast.UseDecl]bool{}
 	a := doc.analysis
-	if a == nil || a.file == nil {
+	if a == nil || a.file == nil || a.lint == nil {
 		return out
 	}
 	// Build a by-offset index of every use decl so we can map lint
@@ -225,11 +265,7 @@ func unusedUseSet(doc *document) map[*ast.UseDecl]bool {
 			byOffset[u.PosV.Offset] = u
 		}
 	}
-	lr := lint.File(a.file, a.resolve, a.check)
-	if lr == nil {
-		return out
-	}
-	for _, d := range lr.Diags {
+	for _, d := range a.lint.Diags {
 		if d.Code != diag.CodeUnusedImport {
 			continue
 		}
@@ -244,9 +280,9 @@ func unusedUseSet(doc *document) map[*ast.UseDecl]bool {
 
 // ---- Fix All ----
 
-// fixAllAction collects every machine-applicable suggestion the lint
-// pass produced for this file and folds them into a single
-// WorkspaceEdit. The action is offered only when at least one
+// fixAllAction collects every machine-applicable suggestion the
+// analysis pipeline produced for this file and folds them into a
+// single WorkspaceEdit. The action is offered only when at least one
 // applicable fix exists so the lightbulb doesn't light up on clean
 // files.
 //
@@ -262,11 +298,13 @@ func fixAllAction(doc *document) *CodeAction {
 	if len(edits) == 0 {
 		return nil
 	}
-	// Offsets may overlap between competing suggestions for the same
-	// span (two renames of the same ident). applyEditsInReverse keeps
-	// only the first suggestion at each offset so we never produce
-	// overlapping edits, which clients reject outright.
-	edits = dedupeEdits(edits)
+	// Overlapping edits within one WorkspaceEdit are illegal per LSP
+	// 3.17; clients reject the bundle outright when any two ranges
+	// touch. Sort by start + drop any edit whose range intersects
+	// one we've already kept — earlier sources (parse, resolve,
+	// check) win over lint, which matches the "errors first" intent
+	// of fix-all.
+	edits = resolveOverlaps(edits)
 	return &CodeAction{
 		Title: "Fix all auto-fixable problems",
 		Kind:  CodeActionSourceFixAllOsty,
@@ -278,20 +316,16 @@ func fixAllAction(doc *document) *CodeAction {
 	}
 }
 
-// collectMachineApplicable harvests every diagnostic suggestion (from
-// parse, resolve, check, AND an on-demand lint pass) whose
-// MachineApplicable bit is set, converts each into a TextEdit, and
-// returns them in document order. Lint diagnostics are re-run here
-// because the LSP analysis cache currently skips the lint stage.
+// collectMachineApplicable harvests every diagnostic suggestion on
+// the cached analysis whose MachineApplicable bit is set, converts
+// each into a TextEdit, and returns them in the order they appeared.
+// The cache already contains parse + resolve + check + lint diags
+// (see analyzeSingleFile / analysisForFileInPackage), so this is a
+// single pass with no redundant lint work.
 func collectMachineApplicable(doc *document) []TextEdit {
 	a := doc.analysis
-	var sources []*diag.Diagnostic
-	sources = append(sources, a.diags...)
-	if lr := lint.File(a.file, a.resolve, a.check); lr != nil {
-		sources = append(sources, lr.Diags...)
-	}
 	var out []TextEdit
-	for _, d := range sources {
+	for _, d := range a.diags {
 		for _, sg := range d.Suggestions {
 			if !sg.MachineApplicable {
 				continue
@@ -311,31 +345,84 @@ func collectMachineApplicable(doc *document) []TextEdit {
 	return out
 }
 
-// dedupeEdits drops edits whose range duplicates an earlier entry's
-// range. LSP disallows overlapping edits within one WorkspaceEdit —
-// two suggestions for the same ident span would both try to rename
-// it, and the client would reject the bundle. We keep the first
-// suggestion encountered (diagnostics are ordered by severity, so
-// errors win over warnings).
-func dedupeEdits(in []TextEdit) []TextEdit {
+// resolveOverlaps sorts edits by start position (ties broken by end)
+// and drops any whose range intersects an edit already kept. Two
+// ranges overlap when [s1,e1) ∩ [s2,e2) is non-empty. A pure-insert
+// edit at position p (start == end) is treated as a point; two
+// inserts at the same point are considered duplicates so we keep
+// just the first.
+//
+// Input order encodes source priority: parse/resolve/check
+// suggestions come before lint, so when two fixes collide the
+// earlier-sourced (stronger) fix wins. After deduplication the
+// result is in document order, which LSP clients prefer even though
+// the spec doesn't strictly require it.
+func resolveOverlaps(in []TextEdit) []TextEdit {
 	if len(in) <= 1 {
 		return in
 	}
-	type key struct {
-		sLine, sChar, eLine, eChar uint32
+	// Remember original index so the stable-sort preserves source
+	// priority for equal-range edits.
+	type indexed struct {
+		e   TextEdit
+		idx int
 	}
-	seen := make(map[key]bool, len(in))
-	out := in[:0]
-	for _, e := range in {
-		k := key{
-			e.Range.Start.Line, e.Range.Start.Character,
-			e.Range.End.Line, e.Range.End.Character,
+	tagged := make([]indexed, len(in))
+	for i, e := range in {
+		tagged[i] = indexed{e: e, idx: i}
+	}
+	sort.SliceStable(tagged, func(i, j int) bool {
+		a, b := tagged[i].e.Range, tagged[j].e.Range
+		if a.Start.Line != b.Start.Line {
+			return a.Start.Line < b.Start.Line
 		}
-		if seen[k] {
-			continue
+		if a.Start.Character != b.Start.Character {
+			return a.Start.Character < b.Start.Character
 		}
-		seen[k] = true
-		out = append(out, e)
+		// Same start: the earlier-sourced edit wins the tie so the
+		// stable order puts it first.
+		return tagged[i].idx < tagged[j].idx
+	})
+	out := make([]TextEdit, 0, len(tagged))
+	var lastStart, lastEnd Position
+	var have bool
+	for _, t := range tagged {
+		start := t.e.Range.Start
+		end := t.e.Range.End
+		if have {
+			// Strict overlap: this edit begins before the previous
+			// edit ended. Drop it.
+			if posBefore(start, lastEnd) {
+				continue
+			}
+			// Edge-on case: start == lastEnd. This is a valid
+			// adjacency for replacements, but two inserts at the
+			// exact same point (start == end == lastStart ==
+			// lastEnd) would both rewrite "at the caret" and the
+			// client has no way to pick an order. Collapse to the
+			// first.
+			if posEqual(start, lastEnd) && posEqual(start, end) &&
+				posEqual(lastStart, lastEnd) {
+				continue
+			}
+		}
+		out = append(out, t.e)
+		lastStart = start
+		lastEnd = end
+		have = true
 	}
 	return out
+}
+
+// posBefore reports whether a is strictly before b.
+func posBefore(a, b Position) bool {
+	if a.Line != b.Line {
+		return a.Line < b.Line
+	}
+	return a.Character < b.Character
+}
+
+// posEqual reports whether two LSP positions are identical.
+func posEqual(a, b Position) bool {
+	return a.Line == b.Line && a.Character == b.Character
 }
