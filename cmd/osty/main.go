@@ -1134,6 +1134,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "gen-specific flags (after the subcommand):")
 	fmt.Fprintln(os.Stderr, "  -o PATH            write Go source to PATH instead of stdout")
 	fmt.Fprintln(os.Stderr, "  --package NAME     Go package clause (default: main)")
+	fmt.Fprintln(os.Stderr, "  --backend NAME     code generation backend (go or llvm; default go)")
+	fmt.Fprintln(os.Stderr, "  --emit MODE        artifact mode (go or llvm-ir; default follows backend)")
 	fmt.Fprintln(os.Stderr, "new-specific flags (after the subcommand):")
 	fmt.Fprintln(os.Stderr, "  --lib              scaffold a library project (lib.osty, no main)")
 	fmt.Fprintln(os.Stderr, "  --bin              scaffold a binary project (main.osty) [default]")
@@ -1150,12 +1152,14 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  --dry-run          build the tarball but do not upload")
 	fmt.Fprintln(os.Stderr, "Common flags for build / add / update / run / test:")
 	fmt.Fprintln(os.Stderr, "  --offline          do not fetch dependencies; fail if caches are missing")
-	fmt.Fprintln(os.Stderr, "build / run flags:")
+	fmt.Fprintln(os.Stderr, "build / run / test flags:")
 	fmt.Fprintln(os.Stderr, "  --profile NAME     build profile (debug, release, profile, test, ...)")
 	fmt.Fprintln(os.Stderr, "  --release          shorthand for --profile release")
 	fmt.Fprintln(os.Stderr, "  --target TRIPLE    cross-compilation target (e.g. amd64-linux)")
 	fmt.Fprintln(os.Stderr, "  --features LIST    comma-separated feature flags to enable")
 	fmt.Fprintln(os.Stderr, "  --no-default-features  drop the manifest's [features].default set")
+	fmt.Fprintln(os.Stderr, "  --backend NAME     code generation backend (go or llvm; default go)")
+	fmt.Fprintln(os.Stderr, "  --emit MODE        artifact mode (go, llvm-ir, object, or binary)")
 	fmt.Fprintln(os.Stderr, "build-specific flags:")
 	fmt.Fprintln(os.Stderr, "  --force            ignore the build cache and rebuild from source")
 }
@@ -1307,14 +1311,19 @@ func runFmt(args []string) {
 func runGen(args []string, flags cliFlags) {
 	fs := flag.NewFlagSet("gen", flag.ExitOnError)
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: osty gen [-o OUT.go] FILE.osty")
+		fmt.Fprintln(os.Stderr, "usage: osty gen [--backend NAME] [--emit MODE] [-o OUT] FILE.osty")
 	}
 	var outPath string
 	var pkgName string
+	var backendName string
+	var emitName string
 	fs.StringVar(&outPath, "o", "", "write Go source to this file instead of stdout")
 	fs.StringVar(&outPath, "out", "", "alias for -o")
 	fs.StringVar(&pkgName, "package", "main", "Go package clause (default: main)")
+	fs.StringVar(&backendName, "backend", defaultBackendName(), "code generation backend (go or llvm)")
+	fs.StringVar(&emitName, "emit", "", "artifact mode (go or llvm-ir; default follows backend)")
 	_ = fs.Parse(args)
+	_, _ = resolveBackendAndEmitFlags("gen", backendName, emitName)
 	if fs.NArg() != 1 {
 		fs.Usage()
 		os.Exit(2)

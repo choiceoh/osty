@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/gen"
@@ -49,9 +50,14 @@ func TestSpecCorpusAudit(t *testing.T) {
 			t.Errorf("FAIL(parse) %s: parse errors (%d)", name, countErrs(parseDiags))
 			continue
 		}
-		res := resolve.File(file, resolve.NewPrelude())
+		file, res, err := resolveAuditFixture(t, src)
+		if err != nil {
+			t.Errorf("FAIL(resolve setup) %s: %v", name, err)
+			continue
+		}
 		if hasErr(res.Diags) {
-			t.Errorf("FAIL(resolve) %s: resolve errors (%d)", name, countErrs(res.Diags))
+			t.Errorf("FAIL(resolve) %s: resolve errors (%d): %s",
+				name, countErrs(res.Diags), firstErr(res.Diags))
 			continue
 		}
 		chk := check.File(file, res)
@@ -117,4 +123,73 @@ func countErrs(ds []*diag.Diagnostic) int {
 		}
 	}
 	return n
+}
+
+func firstErr(ds []*diag.Diagnostic) string {
+	for _, d := range ds {
+		if d.Severity == diag.Error {
+			return d.Error()
+		}
+	}
+	return ""
+}
+
+type auditDepProvider map[string]string
+
+func (p auditDepProvider) LookupDep(rawPath string) (string, bool) {
+	dir, ok := p[rawPath]
+	return dir, ok
+}
+
+func resolveAuditFixture(t *testing.T, src []byte) (*ast.File, *resolve.Result, error) {
+	t.Helper()
+
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "main.osty"), src, 0o644); err != nil {
+		return nil, nil, err
+	}
+
+	deps, err := writeAuditDeps(t.TempDir())
+	if err != nil {
+		return nil, nil, err
+	}
+	ws, err := resolve.NewWorkspace(root)
+	if err != nil {
+		return nil, nil, err
+	}
+	ws.Deps = deps
+	if _, err := ws.LoadPackage(""); err != nil {
+		return nil, nil, err
+	}
+	results := ws.ResolveAll()
+	pkg := ws.Packages[""]
+	if pkg == nil || len(pkg.Files) == 0 {
+		return nil, nil, os.ErrNotExist
+	}
+	pf := pkg.Files[0]
+	pr := results[""]
+	if pr == nil {
+		pr = &resolve.PackageResult{}
+	}
+	return pf.File, &resolve.Result{
+		Refs:      pf.Refs,
+		TypeRefs:  pf.TypeRefs,
+		FileScope: pf.FileScope,
+		Diags:     append(append([]*diag.Diagnostic{}, pf.ParseDiags...), pr.Diags...),
+	}, nil
+}
+
+func writeAuditDeps(root string) (auditDepProvider, error) {
+	provider := auditDepProvider{}
+	for _, key := range []string{"github.com/user/lib", "github.com/user/lib2"} {
+		dir := filepath.Join(root, strings.ReplaceAll(key, "/", "_"))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(filepath.Join(dir, "lib.osty"), []byte("pub fn marker() -> Int { 0 }\n"), 0o644); err != nil {
+			return nil, err
+		}
+		provider[key] = dir
+	}
+	return provider, nil
 }

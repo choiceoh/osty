@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 )
 
 type ostyStringer interface {
@@ -2334,6 +2335,28 @@ func frontLexTokenFromScan(units []string, start int, consumed int, kind FrontTo
 }
 
 // Osty: /tmp/selfhost_merged.osty:1453:5
+type frontPositionCacheState struct {
+	units  []string
+	target int
+	offset int
+	line   int
+	column int
+	skipLf bool
+}
+
+var frontPositionCacheMu sync.Mutex
+var frontPositionCache frontPositionCacheState
+
+func frontSameUnits(a []string, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	if len(a) == 0 {
+		return true
+	}
+	return &a[0] == &b[0]
+}
+
 func frontPositionAt(units []string, target int) *FrontPos {
 	if target < 0 {
 		target = 0
@@ -2341,11 +2364,26 @@ func frontPositionAt(units []string, target int) *FrontPos {
 	if target > len(units) {
 		target = len(units)
 	}
-	offset := 0
-	line := 1
-	column := 1
-	skipLf := false
-	for idx := 0; idx < target; idx++ {
+
+	frontPositionCacheMu.Lock()
+	defer frontPositionCacheMu.Unlock()
+
+	if !frontSameUnits(frontPositionCache.units, units) || target < frontPositionCache.target {
+		frontPositionCache = frontPositionCacheState{
+			units:  units,
+			target: 0,
+			offset: 0,
+			line:   1,
+			column: 1,
+			skipLf: false,
+		}
+	}
+
+	offset := frontPositionCache.offset
+	line := frontPositionCache.line
+	column := frontPositionCache.column
+	skipLf := frontPositionCache.skipLf
+	for idx := frontPositionCache.target; idx < target; idx++ {
 		unit := units[idx]
 		next := ""
 		if idx+1 < len(units) {
@@ -2370,6 +2408,11 @@ func frontPositionAt(units []string, target int) *FrontPos {
 			offset = offset + 1
 		}
 	}
+	frontPositionCache.target = target
+	frontPositionCache.offset = offset
+	frontPositionCache.line = line
+	frontPositionCache.column = column
+	frontPositionCache.skipLf = skipLf
 	return frontPos(offset, line, column)
 }
 
