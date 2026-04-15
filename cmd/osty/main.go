@@ -163,6 +163,10 @@ func main() {
 		runPublish(args[1:], flags)
 		return
 	}
+	if cmd == "ci" {
+		runCi(args[1:], flags)
+		return
+	}
 	if len(args) < 2 {
 		usage()
 		os.Exit(2)
@@ -886,6 +890,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "       osty run [-- ARGS...]     (build + exec the project's binary)")
 	fmt.Fprintln(os.Stderr, "       osty test [PATH|FILTER...] (discover *_test.osty; report tests found)")
 	fmt.Fprintln(os.Stderr, "       osty publish              (pack + upload the package to a registry)")
+	fmt.Fprintln(os.Stderr, "       osty ci [flags] [PATH]    (run the CI check bundle: fmt+lint+policy+lockfile)")
+	fmt.Fprintln(os.Stderr, "       osty ci snapshot [-o OUT] (capture the exported API for future semver diffing)")
 	fmt.Fprintln(os.Stderr, "       osty lsp                  (language server on stdio)")
 	fmt.Fprintln(os.Stderr, "flags:")
 	fmt.Fprintln(os.Stderr, "  --no-color         disable ANSI escapes")
