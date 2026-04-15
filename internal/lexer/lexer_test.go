@@ -451,6 +451,39 @@ func TestLexTripleString(t *testing.T) {
 	}
 }
 
+// TestLexFatArrowRejected verifies that `=>` is reported as a lex error
+// (§1.7 / OSTY_GRAMMAR_v0.3 O7: "`=>` is not a token. Any occurrence of
+// `=>` in source is a lex error"). The lexer consumes both bytes and
+// emits a single ILLEGAL token so recovery continues with the next real
+// token rather than emitting a spurious `>`.
+func TestLexFatArrowRejected(t *testing.T) {
+	l := New([]byte(`match x { 0 => 1 }`))
+	toks := l.Lex()
+	errs := l.Errors()
+	if len(errs) == 0 {
+		t.Fatalf("expected a lex error for `=>`, got none; tokens=%v", toks)
+	}
+	var illegal *token.Token
+	for i := range toks {
+		if toks[i].Kind == token.ILLEGAL {
+			illegal = &toks[i]
+			break
+		}
+	}
+	if illegal == nil {
+		t.Fatalf("expected an ILLEGAL token for `=>`; got %v", toks)
+	}
+	if illegal.Value != "=>" {
+		t.Errorf("illegal value = %q; want %q", illegal.Value, "=>")
+	}
+	// No stray `>` token should follow the ILLEGAL — both bytes were consumed.
+	for i, tk := range toks {
+		if tk.Kind == token.ILLEGAL && i+1 < len(toks) && toks[i+1].Kind == token.GT {
+			t.Errorf("spurious GT after ILLEGAL `=>`: %v", toks)
+		}
+	}
+}
+
 func kindsEq(a, b []token.Kind) bool {
 	if len(a) != len(b) {
 		return false

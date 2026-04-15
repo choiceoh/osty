@@ -1191,6 +1191,19 @@ func (l *Lexer) scanPunct(start token.Pos) token.Token {
 			l.setInsertTerm(token.EQ)
 			return token.Token{Kind: token.EQ, Pos: start, End: l.pos()}
 		}
+		if l.peek() == '>' {
+			// O7 / §1.7: `=>` is not a token. Any occurrence is a lex
+			// error. Consume both bytes so recovery continues at the
+			// next real token rather than emitting a spurious `>`.
+			l.advance()
+			end := l.pos()
+			l.errorCode(start, end,
+				diag.CodeFatArrowRemoved,
+				"`=>` is not a token in Osty",
+				"use `->` — match arms and every other arrow position use `->` (v0.3 §1.7, O7).")
+			l.setInsertTerm(token.ILLEGAL)
+			return token.Token{Kind: token.ILLEGAL, Pos: start, End: end, Value: "=>"}
+		}
 		l.setInsertTerm(token.ASSIGN)
 		return token.Token{Kind: token.ASSIGN, Pos: start, End: l.pos()}
 

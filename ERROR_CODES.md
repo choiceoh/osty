@@ -26,7 +26,7 @@ Codes are namespaced by phase:
 
 ---
 
-## Lexical (E0001–E0006)
+## Lexical (E0001–E0007)
 
 ### E0001 — `CodeUnterminatedString`
 
@@ -91,6 +91,20 @@ The opening `"""` must be followed by a newline, every content line must begin w
 Spec: v0.3 §1.6.3
 
 **Fix**: realign the content and closing delimiter per §1.6.3.
+
+### E0007 — `CodeFatArrowRemoved`
+
+The `=>` (fat-arrow) token was removed from the grammar.
+
+`match` arms and every other arrow position use `->` instead. Any occurrence of `=>` in source is a lex error (O7, §1.7).
+
+Spec: v0.3 §1.7, OSTY_GRAMMAR_v0.3 O7
+
+```osty
+match x { 0 => "zero", _ => "other" }  // rejected
+```
+
+**Fix**: replace `=>` with `->`.
 
 ---
 
@@ -711,7 +725,7 @@ Match arm is unreachable because a previous arm fully covers its cases.
 
 ---
 
-## Deprecation warning (W0750)
+## Deprecation warning (W0750–E0762)
 
 ### W0750 — `CodeDeprecatedUse`
 
@@ -722,6 +736,34 @@ Emitted as a `diag.Warning`. Tooling can promote it to error via build configura
 Spec: v0.3 §3.8.2
 
 **Fix**: migrate to the replacement noted in the `#[deprecated]` annotation.
+
+### E0760 — `CodeUnreachableCode`
+
+Control flow diagnostics (E0760-E0769).
+
+CodeUnreachableCode: a statement appears after a divergent construct (return, break, continue, or an expression of type Never) and therefore can never execute.
+
+Spec: v0.3 §4 control flow, §2.1 Never
+
+**Fix**: delete the dead statement or move it above the divergent one.
+
+### E0761 — `CodeMissingReturn`
+
+CodeMissingReturn: a non-unit function's body could reach its end without producing a value matching the return type.
+
+function's result.
+
+Spec: v0.3 §3.1
+
+**Fix**: add an explicit `return` or make the final expression the
+
+### E0762 — `CodeDefaultNotLiteral`
+
+CodeDefaultNotLiteral: a default argument expression is not a literal (§3.1 forbids computed defaults).
+
+bool, `None`, `Ok(literal)`, `Err(literal)`, `[]`, `{:}`, or `()` literal.
+
+**Fix**: replace the expression with a numeric, string, char, byte,
 
 ---
 
@@ -912,6 +954,18 @@ fn main() { println("hi") }   // warning: imported `baz` never used
 
 **Fix**: drop the `mut` qualifier.
 
+### L0008 — `CodeDeadStore`
+
+A `mut` binding is reassigned without the previous value ever being read — the old write is "dead" and the first assignment is wasted work.
+
+```osty
+let mut x = heavy()   // warning: value overwritten before use
+x = 1
+println(x)
+```
+
+**Fix**: remove the initial assignment, or read the old value before overwriting.
+
 ### L0005 — `CodeUnusedField`
 
 Struct field is never read anywhere in the package.
@@ -954,7 +1008,7 @@ fn f() {
 
 ---
 
-## Lint — unreachable / dead code (L0020)
+## Lint — unreachable / dead code (L0020–L0026)
 
 ### L0020 — `CodeDeadCode`
 
@@ -971,6 +1025,79 @@ fn f() -> Int {
 ```
 
 **Fix**: remove the unreachable code, or move the terminator.
+
+### L0021 — `CodeRedundantElse`
+
+`else` after an `if` branch that unconditionally returns is redundant — the body below the `if` is only reached when the condition is false.
+
+```osty
+if c {
+    return 1
+} else {                 // warning: redundant `else`
+    return 2
+}
+```
+
+**Fix**: hoist the `else` body to the top level.
+
+### L0022 — `CodeConstantCondition`
+
+The `if` condition is a compile-time constant — the branch is either always taken or always skipped.
+
+Plain `for { ... }` is an idiomatic infinite loop and is NOT flagged; this rule targets only `if true`, `if false`, `if !true`, `if !false`, and `while`-like for-conditions with the same shape.
+
+```osty
+if true { do() }    // warning: always-true condition
+```
+
+**Fix**: drop the `if`, or replace with the real condition.
+
+### L0023 — `CodeEmptyBranch`
+
+An `if`/`else` branch is an empty block `{}`. Usually a placeholder the author forgot to fill in — noisy in real programs.
+
+```osty
+if c {
+    work()
+} else {                 // warning: empty else branch
+}
+```
+
+**Fix**: remove the empty branch, or fill it in.
+
+### L0024 — `CodeNeedlessReturn`
+
+A `return x` at the tail position of a function body is unnecessary — the expression alone is already the return value (§6 implicit return).
+
+```osty
+fn f() -> Int {
+    return 42   // warning: use the bare expression instead
+}
+```
+
+**Fix**: drop the `return` keyword.
+
+### L0025 — `CodeIdenticalBranches`
+
+Both `if` and `else` branches evaluate to the same expression — the condition is dead code.
+
+```osty
+let y = if c { 1 } else { 1 }   // warning: both branches identical
+```
+
+**Fix**: replace with the expression directly (dropping `if`).
+
+### L0026 — `CodeEmptyLoopBody`
+
+Loop body is empty.
+
+`for x in xs {}` and `for cond {}` with no side-effecting body are almost always a bug, or the loop should be replaced with a call that consumes the iterator.
+
+```osty
+for x in work() { }   // warning: empty loop body
+```
+
+**Fix**: do something with each item, or drop the loop.
 
 ---
 
@@ -1011,7 +1138,7 @@ enum Color { red, Green }   // warning on `red`
 
 ---
 
-## Lint — redundant forms (L0040–L0042)
+## Lint — redundant forms (L0040–L0045)
 
 ### L0040 — `CodeRedundantBool`
 
@@ -1032,6 +1159,82 @@ Almost always a typo — one side was meant to be a different name.
 `x = x` assigns a variable to itself.
 
 **Fix**: remove the assignment, or correct one of the operands.
+
+### L0043 — `CodeDoubleNegation`
+
+`!!x` is a no-op on Bool.
+
+```osty
+if !!ready { ... }   // warning: double negation
+```
+
+**Fix**: drop both `!` operators.
+
+### L0044 — `CodeBoolLiteralCompare`
+
+`x == true` / `x == false` / `x != true` / `x != false` — comparing a Bool to a Bool literal is redundant.
+
+```osty
+if done == true { ... }   // warning: drop `== true`
+```
+
+**Fix**: use the Bool directly (`if done`, `if !done`).
+
+### L0045 — `CodeNegatedBoolLiteral`
+
+`!true` / `!false` — negated literal is just the other literal.
+
+```osty
+let x = !true      // warning: use `false` directly
+```
+
+**Fix**: replace with the opposite literal.
+
+---
+
+## Lint — complexity (L0050–L0053)
+
+### L0050 — `CodeTooManyParams`
+
+A function declares too many parameters (> 7 by default).
+
+Long parameter lists are a maintenance hazard and often mean the function should be split or should take a config struct.
+
+**Fix**: group related parameters into a struct, or split the function.
+
+### L0052 — `CodeFunctionTooLong`
+
+A function body is too long (> 80 statements by default).
+
+Long bodies are hard to review; extract helpers.
+
+**Fix**: factor out cohesive subtasks into helper functions.
+
+### L0053 — `CodeDeepNesting`
+
+Control-flow nesting is too deep (> 5 levels by default).
+
+Deeply nested code is hard to follow; early-return or extract helpers.
+
+extract inner branches into helpers.
+
+**Fix**: flatten the structure via early returns / guard clauses, or
+
+---
+
+## Lint — documentation (L0070)
+
+### L0070 — `CodeMissingDoc`
+
+A `pub` declaration has no doc comment.
+
+Public items are the module's external contract — callers benefit from a one-line `///` description.
+
+```osty
+pub fn hashPassword(p: String) -> String { ... }   // warning: missing doc
+```
+
+**Fix**: add a doc comment, or drop `pub` if the item is internal.
 
 ---
 
