@@ -511,6 +511,32 @@ func TestCollectionsModuleResolves(t *testing.T) {
 			t.Errorf("export %q has kind %s; want struct", name, sym.Kind)
 		}
 	}
+	wantMethods := map[string][]string{
+		"List": {"len", "isEmpty", "first", "last", "get", "contains", "indexOf", "find", "map", "filter", "fold", "sorted", "sortedBy", "reversed", "appended", "concat", "zip", "enumerate", "push", "pop", "insert", "removeAt", "sort", "reverse", "clear"},
+		"Map":  {"len", "isEmpty", "get", "containsKey", "keys", "values", "entries", "insert", "remove", "clear"},
+		"Set":  {"len", "isEmpty", "contains", "union", "intersect", "difference", "insert", "remove", "clear"},
+	}
+	decls := map[string]*ast.StructDecl{}
+	for _, d := range mod.File.Decls {
+		if sd, ok := d.(*ast.StructDecl); ok {
+			decls[sd.Name] = sd
+		}
+	}
+	for typ, methods := range wantMethods {
+		sd := decls[typ]
+		if sd == nil {
+			t.Fatalf("std.collections missing struct %s", typ)
+		}
+		have := map[string]bool{}
+		for _, m := range sd.Methods {
+			have[m.Name] = true
+		}
+		for _, name := range methods {
+			if !have[name] {
+				t.Errorf("std.collections %s missing method %q", typ, name)
+			}
+		}
+	}
 }
 
 // TestCollectionsViaPkgAccess verifies the user-visible shape: a file
@@ -527,6 +553,32 @@ pub fn take(xs: collections.List<Int>) -> collections.List<Int> {
 	for _, d := range res.Diags {
 		if d.Severity == diag.Error {
 			t.Errorf("unexpected diag on std.collections reference: %s", d.Error())
+		}
+	}
+}
+
+func TestCollectionsViaPkgMethodsTypeCheck(t *testing.T) {
+	src := []byte(`use std.collections
+
+pub fn describe(xs: collections.List<Int>, m: collections.Map<String, Int>, s: collections.Set<Int>) -> Int {
+    let a = xs.first() ?? 0
+    let b = m.get("fallback") ?? 0
+    let c = if s.contains(1) { 1 } else { 0 }
+    a + b + c
+}
+`)
+	file, parseDiags := parser.ParseDiagnostics(src)
+	for _, d := range parseDiags {
+		if d.Severity == diag.Error {
+			t.Fatalf("parse error: %s", d.Error())
+		}
+	}
+	reg := Load()
+	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), reg)
+	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives})
+	for _, d := range append(res.Diags, chk.Diags...) {
+		if d.Severity == diag.Error {
+			t.Errorf("unexpected std.collections method diagnostic: %s", d.Error())
 		}
 	}
 }

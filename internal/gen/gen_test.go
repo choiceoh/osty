@@ -132,6 +132,77 @@ fn main() {
 	}
 }
 
+func TestCollectionMethodsCompileAndRun(t *testing.T) {
+	goSrc, err := transpile(t, `
+fn main() {
+    let mut xs = [3, 1, 2]
+    xs.push(4)
+    xs.insert(1, 9)
+    let removed = xs.removeAt(1)
+    let popped = xs.pop() ?? 0
+    let mapped = xs.map(|x| x * 2).filter(|x| x > 2).reversed()
+    let sorted = xs.sorted()
+    let sum = xs.fold(0, |acc, x| acc + x)
+    println("{xs.len()} {removed} {popped} {mapped.get(0) ?? 0} {sorted.get(0) ?? 0} {sum} {xs.contains(3)} {xs.indexOf(2) ?? -1}")
+    let snap = xs.toList()
+    xs.clear()
+    println("{xs.isEmpty()} {snap.len()} {snap.first() ?? 0} {snap.last() ?? 0} {snap.find(|x| x == 1) ?? 0}")
+    let mut combo = snap.appended(7).concat([8])
+    let zipped = combo.zip(["a", "b"])
+    let taken = combo.take(2)
+    combo.reverse()
+    combo.sort()
+    println("{combo.get(0) ?? 0} {combo.get(combo.len() - 1) ?? 0} {zipped.len()} {taken.last() ?? 0}")
+
+    let nested = [[1, 2], [3]]
+    let mut flags = [true, false]
+    flags.sort()
+    let sortedFlags = flags.sorted()
+    println("{nested.contains([1, 2])} {nested.indexOf([3]) ?? -1} {flags.get(0) ?? true} {sortedFlags.last() ?? false}")
+
+    let mut m: Map<String, Int> = {:}
+    m.insert("a", 1)
+    m.insert("b", 2)
+    let old = m.remove("a") ?? 0
+    let hasB = m.containsKey("b")
+    let gotB = m.get("b") ?? 0
+    let copied = m.toMap()
+    println("{hasB} {old} {m.len()} {m.keys().len()} {m.values().len()} {m.entries().len()}")
+    m.clear()
+    println("{gotB} {m.isEmpty()} {copied.len()}")
+
+    let s = snap.toSet()
+    let mut t = [2].toSet()
+    t.insert(5)
+    let u = s.union(t)
+    let i = s.intersect(t)
+    let d = u.difference(i)
+    println("{s.contains(3)} {u.contains(5)} {i.contains(2)} {d.contains(5)}")
+    let removedTwo = t.remove(2)
+    let tItems = t.toList()
+    t.clear()
+    println("{removedTwo} {t.isEmpty()} {tItems.len()}")
+}
+`)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := strings.TrimSpace(runGo(t, goSrc))
+	want := strings.Join([]string{
+		"3 9 4 4 1 6 true 2",
+		"true 3 3 2 1",
+		"1 8 2 1",
+		"true 1 false true",
+		"true 1 1 1 1 1",
+		"2 true 1",
+		"true true true true",
+		"true true 1",
+	}, "\n")
+	if out != want {
+		t.Fatalf("stdout = %q, want %q\n--- source ---\n%s", out, want, goSrc)
+	}
+}
+
 func TestStdRegexBridge(t *testing.T) {
 	goSrc, err := transpileWithStdlib(t, `use std.regex
 

@@ -799,6 +799,17 @@ func (c *checker) methodCallType(fx *ast.FieldExpr, e *ast.CallExpr, explicit []
 	if md == nil {
 		if _, known := stdlibMethods[fx.Name]; known {
 			c.checkExplicitGenericArity(e, 0, explicit)
+			if !stdlibMethodAllowed(fx.Name, recvT) {
+				c.errMethodNotFound(fx, fmt.Sprintf("type `%s`", recvT),
+					fx.Name, c.methodCandidates(recvT))
+				for _, a := range e.Args {
+					c.checkExpr(a.Value, nil, env)
+				}
+				if wasOptional && fx.IsOptional {
+					return &types.Optional{Inner: types.ErrorType}
+				}
+				return types.ErrorType
+			}
 			// Well-known stdlib / builtin method — accept any arguments
 			// and produce an approximate return type (escape hatch until
 			// the stdlib is modelled in full).
@@ -845,29 +856,125 @@ func (c *checker) methodCallType(fx *ast.FieldExpr, e *ast.CallExpr, explicit []
 // receiver (`get`, `map`, `filter`, …) have a nil entry and go through
 // the per-name switch below.
 var stdlibMethods = map[string]types.Type{
-	"len":      types.Int,
-	"isEmpty":  types.Bool,
-	"contains": types.Bool,
-	"toString": types.String,
-	"toInt":    types.Int,
-	"toInt32":  types.Int32,
-	"toInt64":  types.Int64,
-	"toFloat":  types.Float,
+	"len":         types.Int,
+	"isEmpty":     types.Bool,
+	"contains":    types.Bool,
+	"containsKey": types.Bool,
+	"toString":    types.String,
+	"toInt":       types.Int,
+	"toInt32":     types.Int32,
+	"toInt64":     types.Int64,
+	"toFloat":     types.Float,
 	// Receiver-dependent — nil means "dispatch by name".
-	"get":       nil,
-	"push":      nil,
-	"map":       nil,
-	"filter":    nil,
-	"iter":      nil,
-	"entries":   nil,
-	"enumerate": nil,
-	"keys":      nil,
-	"values":    nil,
-	"toList":    nil,
-	"toSet":     nil,
-	"toMap":     nil,
-	"chars":     nil,
-	"take":      nil,
+	"get":        nil,
+	"first":      nil,
+	"last":       nil,
+	"indexOf":    nil,
+	"find":       nil,
+	"push":       nil,
+	"pop":        nil,
+	"insert":     nil,
+	"remove":     nil,
+	"removeAt":   nil,
+	"clear":      nil,
+	"sort":       nil,
+	"reverse":    nil,
+	"fold":       nil,
+	"map":        nil,
+	"filter":     nil,
+	"sorted":     nil,
+	"sortedBy":   nil,
+	"reversed":   nil,
+	"appended":   nil,
+	"concat":     nil,
+	"zip":        nil,
+	"iter":       nil,
+	"entries":    nil,
+	"enumerate":  nil,
+	"keys":       nil,
+	"values":     nil,
+	"toList":     nil,
+	"toSet":      nil,
+	"toMap":      nil,
+	"union":      nil,
+	"intersect":  nil,
+	"difference": nil,
+	"chars":      nil,
+	"take":       nil,
+}
+
+func stdlibMethodAllowed(name string, recvT types.Type) bool {
+	kind := ""
+	if n, ok := recvT.(*types.Named); ok && n.Sym != nil {
+		kind = n.Sym.Name
+	}
+	switch name {
+	case "first", "last", "indexOf", "find", "fold", "sorted", "sortedBy",
+		"reversed", "appended", "concat", "zip", "push", "pop", "removeAt",
+		"sort", "reverse":
+		return kind == "List"
+	case "containsKey", "keys", "values", "entries":
+		return kind == "Map"
+	case "union", "intersect", "difference":
+		return kind == "Set"
+	case "insert", "clear":
+		return kind == "List" || kind == "Map" || kind == "Set"
+	case "remove":
+		return kind == "Map" || kind == "Set"
+	}
+	return true
+}
+
+func stdlibMutatesReceiver(name string, recvT types.Type) bool {
+	kind := ""
+	if n, ok := recvT.(*types.Named); ok && n.Sym != nil {
+		kind = n.Sym.Name
+	}
+	switch name {
+	case "push", "pop", "removeAt", "sort", "reverse":
+		return kind == "List"
+	case "insert", "clear":
+		return kind == "List" || kind == "Map" || kind == "Set"
+	case "remove":
+		return kind == "Map" || kind == "Set"
+	}
+	return false
+}
+
+func (c *checker) checkStdlibMutReceiver(fx *ast.FieldExpr, recvT types.Type) {
+	if !stdlibMutatesReceiver(fx.Name, recvT) {
+		return
+	}
+	root := rootIdent(fx.X)
+	if root == nil {
+		c.errNode(fx.X, diag.CodeAssignTarget,
+			"`%s` requires a mutable collection receiver", fx.Name)
+		return
+	}
+	sym := c.symbol(root)
+	if sym == nil {
+		return
+	}
+	info := c.info(sym)
+	if sym.Kind == resolve.SymLet && info != nil && !info.Mut {
+		c.errNode(fx.X, diag.CodeMutabilityMismatch,
+			"`%s` requires mutable binding `%s`", fx.Name, sym.Name)
+	}
+}
+
+func rootIdent(e ast.Expr) *ast.Ident {
+	switch x := e.(type) {
+	case *ast.Ident:
+		return x
+	case *ast.FieldExpr:
+		return rootIdent(x.X)
+	case *ast.IndexExpr:
+		return rootIdent(x.X)
+	case *ast.ParenExpr:
+		return rootIdent(x.X)
+	default:
+		return nil
+	}
 }
 
 // stdlibCallReturn synthesizes a return type for an escape-hatch stdlib
@@ -875,6 +982,7 @@ var stdlibMethods = map[string]types.Type{
 // map, filter, push, get — arguments are type-checked against the
 // expected signature; other names accept any arguments permissively.
 func (c *checker) stdlibCallReturn(fx *ast.FieldExpr, recvT types.Type, e *ast.CallExpr, env *env, optChain bool) types.Type {
+	c.checkStdlibMutReceiver(fx, recvT)
 	var ret types.Type
 	switch fx.Name {
 	case "len", "isEmpty":
@@ -887,19 +995,10 @@ func (c *checker) stdlibCallReturn(fx *ast.FieldExpr, recvT types.Type, e *ast.C
 		c.checkExactArity(e, 0)
 		ret = stdlibMethods[fx.Name]
 	case "contains":
-		if len(e.Args) != 1 {
-			c.errNode(e, diag.CodeWrongArgCount,
-				"`contains` takes 1 argument, got %d", len(e.Args))
-			for _, a := range e.Args {
-				c.checkExpr(a.Value, nil, env)
-			}
-		} else {
-			elem := stdlibElement(recvT)
-			at := c.checkExpr(e.Args[0].Value, elem, env)
-			if elem != nil && !types.IsError(elem) && !c.accepts(elem, at, e.Args[0].Value) {
-				c.errMismatch(e.Args[0].Value, elem, at)
-			}
-		}
+		c.checkStdlibArg(e, "contains", 0, stdlibKeyOrElem(recvT), env)
+		ret = types.Bool
+	case "containsKey":
+		c.checkStdlibArg(e, "containsKey", 0, stdlibKeyOrIndex(recvT), env)
 		ret = types.Bool
 	case "get":
 		c.checkExactArity(e, 1)
@@ -911,20 +1010,63 @@ func (c *checker) stdlibCallReturn(fx *ast.FieldExpr, recvT types.Type, e *ast.C
 			}
 		}
 		ret = stdlibGetReturn(recvT)
+	case "first", "last", "pop":
+		c.checkExactArity(e, 0)
+		ret = stdlibGetReturn(recvT)
+	case "indexOf":
+		c.checkStdlibArg(e, "indexOf", 0, stdlibElement(recvT), env)
+		ret = &types.Optional{Inner: types.Int}
+	case "find":
+		ret = c.stdlibFind(e, recvT, env)
 	case "push":
+		c.checkStdlibArg(e, "push", 0, stdlibElement(recvT), env)
+		ret = types.Unit
+	case "insert":
+		ret = c.stdlibInsert(e, recvT, env)
+	case "remove":
+		ret = c.stdlibRemove(e, recvT, env)
+	case "removeAt":
 		c.checkExactArity(e, 1)
 		if len(e.Args) == 1 {
-			elem := stdlibElement(recvT)
-			at := c.checkExpr(e.Args[0].Value, elem, env)
-			if elem != nil && !types.IsError(elem) && !c.accepts(elem, at, e.Args[0].Value) {
-				c.errMismatch(e.Args[0].Value, elem, at)
-			}
+			c.checkExpr(e.Args[0].Value, types.Int, env)
+		}
+		ret = iterElem(recvT)
+	case "clear", "reverse":
+		c.checkExactArity(e, 0)
+		ret = types.Unit
+	case "sort":
+		c.checkExactArity(e, 0)
+		if elem := iterElem(recvT); !types.IsOrdered(elem) && !types.IsError(elem) {
+			c.errNode(e, diag.CodeTypeNotOrdered,
+				"`sort` requires elements that implement `Ordered`, got `%s`", elem)
 		}
 		ret = types.Unit
 	case "map":
 		ret = c.stdlibMap(e, recvT, env)
 	case "filter":
 		ret = c.stdlibFilter(e, recvT, env)
+	case "fold":
+		ret = c.stdlibFold(e, recvT, env)
+	case "sorted":
+		c.checkExactArity(e, 0)
+		if elem := iterElem(recvT); !types.IsOrdered(elem) && !types.IsError(elem) {
+			c.errNode(e, diag.CodeTypeNotOrdered,
+				"`sorted` requires elements that implement `Ordered`, got `%s`", elem)
+		}
+		ret = c.listOf(iterElem(recvT))
+	case "reversed":
+		c.checkExactArity(e, 0)
+		ret = c.listOf(iterElem(recvT))
+	case "sortedBy":
+		ret = c.stdlibSortedBy(e, recvT, env)
+	case "appended":
+		c.checkStdlibArg(e, "appended", 0, iterElem(recvT), env)
+		ret = c.listOf(iterElem(recvT))
+	case "concat":
+		c.checkStdlibArg(e, "concat", 0, c.listOf(iterElem(recvT)), env)
+		ret = c.listOf(iterElem(recvT))
+	case "zip":
+		ret = c.stdlibZip(e, recvT, env)
 	case "take":
 		c.checkExactArity(e, 1)
 		if len(e.Args) == 1 {
@@ -942,9 +1084,14 @@ func (c *checker) stdlibCallReturn(fx *ast.FieldExpr, recvT types.Type, e *ast.C
 		ret = c.stdlibChainReturn(fx.Name, recvT)
 	case "toSet":
 		c.checkExactArity(e, 0)
-		ret = c.namedOf("Set", []types.Type{iterElem(recvT)})
+		elem := iterElem(recvT)
+		c.requireHashable(elem, e, "Set element")
+		ret = c.namedOf("Set", []types.Type{elem})
 	case "toMap":
 		c.checkExactArity(e, 0)
+		ret = recvT
+	case "union", "intersect", "difference":
+		c.checkStdlibArg(e, fx.Name, 0, recvT, env)
 		ret = recvT
 	case "chars":
 		c.checkExactArity(e, 0)
@@ -973,11 +1120,49 @@ func (c *checker) checkExactArity(e *ast.CallExpr, want int) {
 		"expected %d argument(s), got %d", want, len(e.Args))
 }
 
+func (c *checker) checkStdlibArgCount(e *ast.CallExpr, name string, want int, env *env) bool {
+	if len(e.Args) == want {
+		return true
+	}
+	c.errNode(e, diag.CodeWrongArgCount,
+		"`%s` takes %d argument(s), got %d", name, want, len(e.Args))
+	for _, a := range e.Args {
+		c.checkExpr(a.Value, nil, env)
+	}
+	return false
+}
+
+func (c *checker) checkStdlibArg(e *ast.CallExpr, name string, index int, want types.Type, env *env) {
+	if !c.checkStdlibArgCount(e, name, index+1, env) {
+		return
+	}
+	at := c.checkExpr(e.Args[index].Value, want, env)
+	if want != nil && !types.IsError(want) && !c.accepts(want, at, e.Args[index].Value) {
+		c.errMismatch(e.Args[index].Value, want, at)
+	}
+}
+
 // stdlibElement returns the element type for an iterable receiver.
 // For List<T>/Set<T>/Chan<T> that's T; for Map<K,V> it's (K, V). For
 // non-iterable receivers returns ErrorType so the caller can skip
 // callback shape checks without emitting a type mismatch.
 func stdlibElement(recvT types.Type) types.Type {
+	return iterElem(recvT)
+}
+
+func stdlibKeyOrElem(recvT types.Type) types.Type {
+	if n, ok := recvT.(*types.Named); ok && n.Sym != nil {
+		switch n.Sym.Name {
+		case "Set":
+			if len(n.Args) == 1 {
+				return n.Args[0]
+			}
+		case "Map":
+			if len(n.Args) == 2 {
+				return &types.Tuple{Elems: []types.Type{n.Args[0], n.Args[1]}}
+			}
+		}
+	}
 	return iterElem(recvT)
 }
 
@@ -1053,6 +1238,154 @@ func (c *checker) stdlibFilter(e *ast.CallExpr, recvT types.Type, env *env) type
 		}
 	}
 	return c.listOf(elem)
+}
+
+func (c *checker) stdlibFind(e *ast.CallExpr, recvT types.Type, env *env) types.Type {
+	if len(e.Args) != 1 {
+		c.errNode(e, diag.CodeWrongArgCount,
+			"`find` takes 1 callback argument, got %d", len(e.Args))
+		for _, a := range e.Args {
+			c.checkExpr(a.Value, nil, env)
+		}
+		return &types.Optional{Inner: iterElem(recvT)}
+	}
+	elem := iterElem(recvT)
+	hint := &types.FnType{Params: []types.Type{elem}, Return: types.Bool}
+	got := c.checkExpr(e.Args[0].Value, hint, env)
+	if fn, ok := types.AsFn(got); ok {
+		if !types.IsBool(fn.Return) && !types.IsError(fn.Return) {
+			c.errNode(e.Args[0].Value, diag.CodeTypeMismatch,
+				"`find` callback must return `Bool`, got `%s`", fn.Return)
+		}
+	}
+	return &types.Optional{Inner: elem}
+}
+
+func (c *checker) stdlibFold(e *ast.CallExpr, recvT types.Type, env *env) types.Type {
+	if len(e.Args) != 2 {
+		c.errNode(e, diag.CodeWrongArgCount,
+			"`fold` takes an initial value and callback, got %d argument(s)", len(e.Args))
+		for _, a := range e.Args {
+			c.checkExpr(a.Value, nil, env)
+		}
+		return types.ErrorType
+	}
+	acc := c.checkExpr(e.Args[0].Value, nil, env)
+	if u, ok := acc.(*types.Untyped); ok {
+		acc = u.Default()
+	}
+	elem := iterElem(recvT)
+	hint := &types.FnType{Params: []types.Type{acc, elem}, Return: acc}
+	got := c.checkExpr(e.Args[1].Value, hint, env)
+	if fn, ok := types.AsFn(got); ok {
+		if !types.IsError(acc) && !c.accepts(acc, fn.Return, e.Args[1].Value) {
+			c.errNode(e.Args[1].Value, diag.CodeTypeMismatch,
+				"`fold` callback must return `%s`, got `%s`", acc, fn.Return)
+		}
+	}
+	return acc
+}
+
+func (c *checker) stdlibSortedBy(e *ast.CallExpr, recvT types.Type, env *env) types.Type {
+	if len(e.Args) != 1 {
+		c.errNode(e, diag.CodeWrongArgCount,
+			"`sortedBy` takes 1 callback argument, got %d", len(e.Args))
+		for _, a := range e.Args {
+			c.checkExpr(a.Value, nil, env)
+		}
+		return c.listOf(iterElem(recvT))
+	}
+	elem := iterElem(recvT)
+	hint := &types.FnType{Params: []types.Type{elem}, Return: nil}
+	got := c.checkExpr(e.Args[0].Value, hint, env)
+	if fn, ok := types.AsFn(got); ok {
+		if !types.IsOrdered(fn.Return) && !types.IsError(fn.Return) {
+			c.errNode(e.Args[0].Value, diag.CodeTypeNotOrdered,
+				"`sortedBy` key must implement `Ordered`, got `%s`", fn.Return)
+		}
+	}
+	return c.listOf(elem)
+}
+
+func (c *checker) stdlibZip(e *ast.CallExpr, recvT types.Type, env *env) types.Type {
+	elem := iterElem(recvT)
+	if !c.checkStdlibArgCount(e, "zip", 1, env) {
+		return c.listOf(&types.Tuple{Elems: []types.Type{elem, types.ErrorType}})
+	}
+	at := c.checkExpr(e.Args[0].Value, nil, env)
+	if n, ok := at.(*types.Named); !ok || n.Sym == nil || n.Sym.Name != "List" || len(n.Args) != 1 {
+		if !types.IsError(at) {
+			c.errNode(e.Args[0].Value, diag.CodeTypeMismatch,
+				"`zip` expects a `List`, got `%s`", at)
+		}
+		return c.listOf(&types.Tuple{Elems: []types.Type{elem, types.ErrorType}})
+	}
+	otherElem := iterElem(at)
+	return c.listOf(&types.Tuple{Elems: []types.Type{elem, otherElem}})
+}
+
+func (c *checker) stdlibInsert(e *ast.CallExpr, recvT types.Type, env *env) types.Type {
+	n, _ := recvT.(*types.Named)
+	if n == nil || n.Sym == nil {
+		for _, a := range e.Args {
+			c.checkExpr(a.Value, nil, env)
+		}
+		return types.Unit
+	}
+	switch n.Sym.Name {
+	case "List":
+		if !c.checkStdlibArgCount(e, "insert", 2, env) {
+			return types.Unit
+		}
+		c.checkExpr(e.Args[0].Value, types.Int, env)
+		elem := iterElem(recvT)
+		at := c.checkExpr(e.Args[1].Value, elem, env)
+		if !types.IsError(elem) && !c.accepts(elem, at, e.Args[1].Value) {
+			c.errMismatch(e.Args[1].Value, elem, at)
+		}
+	case "Map":
+		if len(n.Args) == 2 && c.checkStdlibArgCount(e, "insert", 2, env) {
+			k := c.checkExpr(e.Args[0].Value, n.Args[0], env)
+			if !c.accepts(n.Args[0], k, e.Args[0].Value) {
+				c.errMismatch(e.Args[0].Value, n.Args[0], k)
+			}
+			v := c.checkExpr(e.Args[1].Value, n.Args[1], env)
+			if !c.accepts(n.Args[1], v, e.Args[1].Value) {
+				c.errMismatch(e.Args[1].Value, n.Args[1], v)
+			}
+		}
+	case "Set":
+		c.checkStdlibArg(e, "insert", 0, iterElem(recvT), env)
+	default:
+		for _, a := range e.Args {
+			c.checkExpr(a.Value, nil, env)
+		}
+	}
+	return types.Unit
+}
+
+func (c *checker) stdlibRemove(e *ast.CallExpr, recvT types.Type, env *env) types.Type {
+	n, _ := recvT.(*types.Named)
+	if n == nil || n.Sym == nil {
+		for _, a := range e.Args {
+			c.checkExpr(a.Value, nil, env)
+		}
+		return types.ErrorType
+	}
+	switch n.Sym.Name {
+	case "Map":
+		if len(n.Args) == 2 {
+			c.checkStdlibArg(e, "remove", 0, n.Args[0], env)
+			return &types.Optional{Inner: n.Args[1]}
+		}
+	case "Set":
+		c.checkStdlibArg(e, "remove", 0, iterElem(recvT), env)
+		return types.Bool
+	}
+	for _, a := range e.Args {
+		c.checkExpr(a.Value, nil, env)
+	}
+	return types.ErrorType
 }
 
 // stdlibGetReturn returns `T?` for List<T>.get / Set<T>.get, `V?` for
@@ -2272,6 +2605,7 @@ func (c *checker) mapType(e *ast.MapExpr, hint types.Type, env *env) types.Type 
 		if kHint != nil && vHint != nil {
 			c.rejectCapabilityEscape(e, kHint, "be stored as a map key")
 			c.rejectCapabilityEscape(e, vHint, "be stored in a map value")
+			c.requireHashable(kHint, e, "Map key")
 			return c.namedOf("Map", []types.Type{kHint, vHint})
 		}
 		return c.namedOf("Map", []types.Type{types.ErrorType, types.ErrorType})
@@ -2303,6 +2637,7 @@ func (c *checker) mapType(e *ast.MapExpr, hint types.Type, env *env) types.Type 
 	if u, ok := vT.(*types.Untyped); ok {
 		vT = u.Default()
 	}
+	c.requireHashable(kT, e, "Map key")
 	return c.namedOf("Map", []types.Type{kT, vT})
 }
 
