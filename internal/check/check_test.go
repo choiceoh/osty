@@ -242,6 +242,35 @@ fn main() {
 	assertCodes(t, runCheck(t, src), diag.CodeIfBranchMismatch)
 }
 
+func TestCheck_IfStatementDiscardsBranchValues(t *testing.T) {
+	src := `
+fn value() -> Int { 1 }
+
+fn main() {
+    if true {
+        value()
+    }
+}
+`
+	assertOK(t, runCheck(t, src))
+}
+
+func TestCheck_IfElseStatementDiscardsBranchValues(t *testing.T) {
+	src := `
+fn value() -> Int { 1 }
+
+fn main() {
+    if true {
+        value()
+    } else {
+        "ignored"
+    }
+    let done = 0
+}
+`
+	assertOK(t, runCheck(t, src))
+}
+
 func TestCheck_ConditionNotBool(t *testing.T) {
 	src := `
 fn main() {

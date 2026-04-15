@@ -60,9 +60,28 @@ pub struct OstyLexResult {
     pub hasShebang: Bool,
 }
 
+/// OstyLexedSource is the parser/checker boundary for self-hosted callers.
+/// It keeps the normalized source next to the parser-compatible lexer stream
+/// so later stages never have to reconstruct token text from a different
+/// source buffer.
+pub struct OstyLexedSource {
+    pub source: String,
+    pub stream: FrontLexStream,
+}
+
 // ===================================================================
 // MAIN API
 // ===================================================================
+
+/// ostyLexSource returns the normalized source and frontend-compatible token
+/// stream used by the self-hosted parser and checker.
+pub fn ostyLexSource(source: String) -> OstyLexedSource {
+    let normalized = ostyNormalizeSource(source)
+    OstyLexedSource {
+        source: normalized,
+        stream: frontendLexStream(normalized),
+    }
+}
 
 /// ostyLex lexes source code and returns a rich result with tokens,
 /// errors, and comments. This is the self-hosted equivalent of:
@@ -71,9 +90,9 @@ pub struct OstyLexResult {
 ///   errors := l.Errors()
 ///   comments := l.Comments()
 pub fn ostyLex(source: String) -> OstyLexResult {
-    let normalized = ostyNormalizeSource(source)
-    let units = strings.Split(normalized, "")
-    let stream = frontendLexStream(normalized)
+    let lexed = ostyLexSource(source)
+    let units = strings.Split(lexed.source, "")
+    let stream = lexed.stream
 
     let mut tokens: List<OstyRichToken> = []
     let mut tokenIdx = 0
@@ -152,9 +171,8 @@ pub fn ostyLex(source: String) -> OstyLexResult {
 ///   stream := frontendLexStream(source)
 ///   tokens := frontTokensFromSource(source, stream)
 pub fn ostyLexTokens(source: String) -> List<FrontToken> {
-    let normalized = ostyNormalizeSource(source)
-    let stream = frontendLexStream(normalized)
-    frontTokensFromSource(normalized, stream)
+    let lexed = ostyLexSource(source)
+    frontTokensFromSource(lexed.source, lexed.stream)
 }
 
 // ===================================================================
