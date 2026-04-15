@@ -28,12 +28,29 @@
 //   - user function calls
 //   - list literals over primitive types
 //
-// Out of scope for Phase 1 (future work):
+// Phases 2–4 coverage (what's implemented beyond Phase 1):
 //
 //   - structs, enums, interfaces, type aliases (Phase 2)
 //   - match expressions, pattern destructuring (Phase 2)
 //   - generics, closures, collection methods (Phase 3)
-//   - Option/Result and `?` operator, defer (Phase 4)
+//   - Option / Result and `?` operator, defer (Phase 4)
+//
+// Result is lowered to a parametric Go struct (Value/Error/IsOk) and
+// pattern tests read `IsOk` directly rather than using type assertions
+// (see internal/gen/question.go and the Result helpers in match.go).
+//
+// The `?` operator is lifted out of any direct-evaluation position by
+// preLiftQuestions: a statement that contains one or more `?` gets a
+// prelude of `tmp := operand; if failure { return … }` pairs, and the
+// original expression is rewritten to read `tmp.Value` / `*tmp`. This
+// covers `let x = e?`, `return e?`, `e?` as a discard-statement, and
+// `?` nested in call arguments, binary operators, field chains, and
+// implicit block-final returns. Control-flow boundaries (closures,
+// if/match arms, loop bodies) are *not* crossed by the lift — a `?`
+// inside them binds to its own enclosing return context.
+//
+// Out of scope (future work):
+//
 //   - use declarations, Go FFI (Phase 5)
 //   - channels, concurrency primitives (Phase 6)
 package gen
