@@ -13,24 +13,41 @@ import (
 // Parse runs the bootstrapped pure-Osty lexer and parser, then lowers the
 // self-hosted arena into the compiler's public AST.
 func Parse(src []byte) (*ast.File, []*diag.Diagnostic) {
-	text := string(src)
-	rt := newRuneTable(text)
-	stream := frontendLexStream(text)
-	frontToks := frontTokensFromSource(text, stream)
-	p := newOstyParser(frontToks)
-	opParseFile(p)
+	run := Run(src)
+	return run.File(), run.Diagnostics()
+}
 
-	toks, lexDiags, _ := Lex(src)
-	l := astLowerer{arena: p.arena, toks: toks}
-	file := l.file()
-	diags := append(lexDiags, parseDiagnosticsFromArena(p.arena, stream, rt)...)
-	return file, dedupeDiagnostics(diags)
+// File lowers the parser arena into the public Go AST.
+func (r *FrontendRun) File() *ast.File {
+	if r.file != nil {
+		return r.file
+	}
+	l := astLowerer{arena: r.parser.arena, toks: r.Tokens()}
+	r.file = l.file()
+	return r.file
+}
+
+// Diagnostics returns lexer and parser diagnostics from this run.
+func (r *FrontendRun) Diagnostics() []*diag.Diagnostic {
+	if r.diags != nil {
+		return r.diags
+	}
+	lexDiags := r.LexDiagnostics()
+	parseDiags := parseDiagnosticsFromArena(r.parser.arena, r.stream, r.rt)
+	diags := make([]*diag.Diagnostic, 0, len(lexDiags)+len(parseDiags))
+	diags = append(diags, lexDiags...)
+	diags = append(diags, parseDiags...)
+	r.diags = dedupeDiagnostics(diags)
+	return r.diags
 }
 
 func dedupeDiagnostics(in []*diag.Diagnostic) []*diag.Diagnostic {
 	out := in[:0]
 	seen := map[token.Pos]bool{}
 	for _, d := range in {
+		if d == nil {
+			continue
+		}
 		pos := d.PrimaryPos()
 		if seen[pos] {
 			continue
@@ -44,11 +61,7 @@ func dedupeDiagnostics(in []*diag.Diagnostic) []*diag.Diagnostic {
 func parseDiagnosticsFromArena(arena *AstArena, stream *FrontLexStream, rt runeTable) []*diag.Diagnostic {
 	out := make([]*diag.Diagnostic, 0, len(arena.errors))
 	for _, e := range arena.errors {
-		pos := token.Pos{Line: 1, Column: 1}
-		if e.tokenIndex >= 0 && e.tokenIndex < len(stream.tokens) {
-			pos = rt.pos(stream.tokens[e.tokenIndex].start)
-		}
-		b := diag.New(diag.Error, e.message).PrimaryPos(pos, "")
+		b := diag.New(diag.Error, e.message).Primary(parseErrorSpan(e, stream, rt), "")
 		if e.code != "" {
 			b.Code(e.code)
 		}
@@ -61,6 +74,19 @@ func parseDiagnosticsFromArena(arena *AstArena, stream *FrontLexStream, rt runeT
 		out = append(out, b.Build())
 	}
 	return out
+}
+
+func parseErrorSpan(e *AstParseError, stream *FrontLexStream, rt runeTable) diag.Span {
+	pos := token.Pos{Line: 1, Column: 1}
+	if e == nil || e.tokenIndex < 0 || e.tokenIndex >= len(stream.tokens) {
+		return diag.Span{Start: pos, End: pos}
+	}
+	tok := stream.tokens[e.tokenIndex]
+	span := rt.span(tok.start, tok.end)
+	if span.End.Offset < span.Start.Offset {
+		span.End = span.Start
+	}
+	return span
 }
 
 type astLowerer struct {
@@ -280,14 +306,13 @@ func (l astLowerer) typeAliasDecl(n *AstNode) *ast.TypeAliasDecl {
 
 func (l astLowerer) useDecl(n *AstNode) *ast.UseDecl {
 	raw := unquoteMaybe(n.text)
+	if reconstructed := l.useRawPath(n); reconstructed != "" {
+		raw = reconstructed
+	}
 	u := &ast.UseDecl{PosV: l.nodePos(n), EndV: l.nodeEnd(n), RawPath: raw, IsGoFFI: n.flags == 1}
 	if u.IsGoFFI {
 		u.GoPath = raw
 	} else {
-		if reconstructed := l.useRawPath(n); reconstructed != "" {
-			raw = reconstructed
-			u.RawPath = reconstructed
-		}
 		u.Path = splitPath(raw)
 	}
 	if len(n.children2) > 0 {
@@ -307,6 +332,9 @@ func (l astLowerer) useRawPath(n *AstNode) string {
 	if n == nil {
 		return ""
 	}
+	if n.flags == 1 {
+		return l.useGoRawPath(n)
+	}
 	var b strings.Builder
 	for i := n.start + 1; i < n.end; i++ {
 		tok := l.tok(i)
@@ -325,6 +353,19 @@ func (l astLowerer) useRawPath(n *AstNode) string {
 		}
 	}
 	return b.String()
+}
+
+func (l astLowerer) useGoRawPath(n *AstNode) string {
+	for i := n.start + 1; i < n.end; i++ {
+		tok := l.tok(i)
+		switch tok.Kind {
+		case token.STRING, token.RAWSTRING:
+			return unquoteMaybe(tok.Value)
+		case token.LBRACE, token.NEWLINE, token.EOF:
+			return ""
+		}
+	}
+	return ""
 }
 
 func (l astLowerer) letDecl(n *AstNode) *ast.LetDecl {

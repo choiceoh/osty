@@ -151,3 +151,41 @@ fn testSelfhostExampleFrontEndPipelineScenario() {
     testing.assert(frontParseTreeNodeNameCount(tree, "param") >= 2)
     testing.assert(frontParseTreeNodeNameCount(tree, "return") >= 1)
 }
+
+fn testSelfhostExamplePipelineWiresIrWithAnalyzerCores() {
+    let source = r"""
+        pub struct User { pub name: String }
+        enum Color { Red, Green }
+
+        fn add(left: Int, right: Int) -> Int {
+            let total = left + right
+            total
+        }
+        """
+    let report = selfhostPipelineSource("main", source)
+
+    testing.assert(report.tokens > 0)
+    testing.assert(report.parseNodes > 0)
+    testing.assert(report.irNodes >= report.parseNodes)
+    testing.assertEq(report.irDecls, 3)
+    testing.assertEq(report.irFuncs, 1)
+    testing.assert(report.irStmts >= 1)
+    testing.assert(report.irExprs >= 1)
+    testing.assert(report.irScopes >= 2)
+    testing.assert(report.irSymbols >= 5)
+    testing.assert(report.irTypedNodes >= 3)
+    testing.assert(report.irTerminalNodes == 0)
+    testing.assertEq(report.irInvalidScopes, 0)
+    testing.assert(report.resolveSymbols >= 5)
+    testing.assert(report.checkedExpressions >= 1)
+    testing.assertEq(report.lintDiagnostics, 0)
+    testing.assertEq(selfhostPipelineBlockingErrorCount(report), 0)
+}
+
+fn testSelfhostExamplePipelineCarriesRecoveryIntoIr() {
+    let report = selfhostPipelineSource("main", r"fn broken( {")
+
+    testing.assert(report.parseDiagnostics > 0)
+    testing.assert(report.irDiagnostics > 0)
+    testing.assert(report.lintParseErrors > 0)
+}

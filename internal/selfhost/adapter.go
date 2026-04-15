@@ -5,6 +5,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/token"
 )
@@ -15,7 +16,77 @@ func Lex(src []byte) ([]token.Token, []*diag.Diagnostic, []token.Comment) {
 	text := string(src)
 	rt := newRuneTable(text)
 	stream := frontendLexStream(text)
+	return adaptLexStream(text, rt, stream)
+}
 
+// FrontendRun is one complete self-hosted front-end pass over a source file.
+// It owns the shared lex stream, parser arena, public token adaptation, and
+// diagnostic adaptation so callers do not accidentally re-run the front end.
+type FrontendRun struct {
+	text     string
+	rt       runeTable
+	stream   *FrontLexStream
+	parser   *OstyParser
+	file     *ast.File
+	toks     []token.Token
+	comments []token.Comment
+	lexDiags []*diag.Diagnostic
+	diags    []*diag.Diagnostic
+	adapted  bool
+}
+
+// Run executes the self-hosted lexer and parser once and keeps all adapted
+// public surfaces available through FrontendRun methods.
+func Run(src []byte) *FrontendRun {
+	return runFrontend(src, true)
+}
+
+func runFrontend(src []byte, adaptTokens bool) *FrontendRun {
+	text := string(src)
+	rt := newRuneTable(text)
+	stream := frontendLexStream(text)
+	frontToks := frontTokensFromSource(text, stream)
+	p := newOstyParser(frontToks)
+	opParseFile(p)
+
+	run := &FrontendRun{text: text, rt: rt, stream: stream, parser: p}
+	if adaptTokens {
+		run.ensureLexAdapted()
+	} else {
+		run.lexDiags = lexDiagnosticsFromStream(text, rt, stream)
+	}
+	return run
+}
+
+// Tokens returns the public token stream, including EOF.
+func (r *FrontendRun) Tokens() []token.Token {
+	r.ensureLexAdapted()
+	return r.toks
+}
+
+// Comments returns every comment in source order.
+func (r *FrontendRun) Comments() []token.Comment {
+	r.ensureLexAdapted()
+	return r.comments
+}
+
+// LexDiagnostics returns lexer-only diagnostics.
+func (r *FrontendRun) LexDiagnostics() []*diag.Diagnostic {
+	if r.lexDiags == nil {
+		r.lexDiags = lexDiagnosticsFromStream(r.text, r.rt, r.stream)
+	}
+	return r.lexDiags
+}
+
+func (r *FrontendRun) ensureLexAdapted() {
+	if r.adapted {
+		return
+	}
+	r.toks, r.lexDiags, r.comments = adaptLexStream(r.text, r.rt, r.stream)
+	r.adapted = true
+}
+
+func adaptLexStream(text string, rt runeTable, stream *FrontLexStream) ([]token.Token, []*diag.Diagnostic, []token.Comment) {
 	toks := make([]token.Token, 0, len(stream.tokens))
 	for _, ft := range stream.tokens {
 		startRune := ft.start.offset
@@ -33,13 +104,6 @@ func Lex(src []byte) ([]token.Token, []*diag.Diagnostic, []token.Comment) {
 	}
 	toks = collapseFatArrows(toks)
 
-	diags := make([]*diag.Diagnostic, 0, len(stream.diagnostics))
-	for _, d := range stream.diagnostics {
-		diags = append(diags, lexDiagnostic(d, rt))
-	}
-	fixCharDiagnostics(text, diags)
-	diags = append(diags, fatArrowDiagnostics(text, rt)...)
-
 	comments := make([]token.Comment, 0, len(stream.comments))
 	for _, c := range stream.comments {
 		comments = append(comments, token.Comment{
@@ -49,38 +113,22 @@ func Lex(src []byte) ([]token.Token, []*diag.Diagnostic, []token.Comment) {
 			EndLine: c.end.line,
 		})
 	}
-	return toks, diags, comments
+	return toks, lexDiagnosticsFromStream(text, rt, stream), comments
 }
 
-// ParseDiagnostics runs the bootstrapped pure-Osty parser and returns only
-// diagnostics. Full AST lowering is handled by Parse in parse_adapter.go.
-func ParseDiagnostics(src []byte) []*diag.Diagnostic {
-	text := string(src)
-	rt := newRuneTable(text)
-	stream := frontendLexStream(text)
-	tokens := frontTokensFromSource(text, stream)
-	p := newOstyParser(tokens)
-	opParseFile(p)
-
-	out := make([]*diag.Diagnostic, 0, len(p.arena.errors))
-	for _, e := range p.arena.errors {
-		pos := token.Pos{Line: 1, Column: 1}
-		if e.tokenIndex >= 0 && e.tokenIndex < len(stream.tokens) {
-			pos = rt.pos(stream.tokens[e.tokenIndex].start)
-		}
-		b := diag.New(diag.Error, e.message).PrimaryPos(pos, "")
-		if e.code != "" {
-			b.Code(e.code)
-		}
-		if e.hint != "" {
-			b.Hint(e.hint)
-		}
-		if e.note != "" {
-			b.Note(e.note)
-		}
-		out = append(out, b.Build())
+func lexDiagnosticsFromStream(text string, rt runeTable, stream *FrontLexStream) []*diag.Diagnostic {
+	diags := make([]*diag.Diagnostic, 0, len(stream.diagnostics))
+	for _, d := range stream.diagnostics {
+		diags = append(diags, lexDiagnostic(d, rt))
 	}
-	return out
+	fixCharDiagnostics(text, diags)
+	return append(diags, fatArrowDiagnostics(text, rt)...)
+}
+
+// ParseDiagnostics runs the bootstrapped pure-Osty lexer and parser and
+// returns their combined diagnostics without lowering the full public AST.
+func ParseDiagnostics(src []byte) []*diag.Diagnostic {
+	return runFrontend(src, false).Diagnostics()
 }
 
 type runeTable struct {
@@ -104,6 +152,15 @@ func (rt runeTable) pos(p *FrontPos) token.Pos {
 		return token.Pos{Line: 1, Column: 1}
 	}
 	return token.Pos{Offset: rt.byteOffset(p.offset), Line: p.line, Column: p.column}
+}
+
+func (rt runeTable) span(start, end *FrontPos) diag.Span {
+	startPos := rt.pos(start)
+	endPos := rt.pos(end)
+	if endPos.Offset < startPos.Offset {
+		endPos = startPos
+	}
+	return diag.Span{Start: startPos, End: endPos}
 }
 
 func (rt runeTable) byteOffset(runeOffset int) int {

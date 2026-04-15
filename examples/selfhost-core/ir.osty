@@ -55,6 +55,36 @@ pub enum IrDiagnosticKind {
     IrDiagLexerError,
 }
 
+pub enum IrSymbolKind {
+    IrSymNone,
+    IrSymPackage,
+    IrSymFunction,
+    IrSymType,
+    IrSymVariant,
+    IrSymField,
+    IrSymParameter,
+    IrSymLocal,
+    IrSymGeneric,
+}
+
+pub enum IrValueKind {
+    IrValueNone,
+    IrValueType,
+    IrValueFunction,
+    IrValuePlace,
+    IrValueRValue,
+    IrValuePattern,
+}
+
+pub enum IrFlowKind {
+    IrFlowFallthrough,
+    IrFlowReturns,
+    IrFlowBreaks,
+    IrFlowContinues,
+    IrFlowDiverges,
+    IrFlowMixed,
+}
+
 pub struct IrNode {
     pub kind: IrNodeKind,
     pub start: Int,
@@ -63,6 +93,12 @@ pub struct IrNode {
     pub flags: Int,
     pub parent: Int,
     pub children: List<Int>,
+    pub scope: Int,
+    pub symbol: Int,
+    pub typeName: String,
+    pub value: IrValueKind,
+    pub flow: IrFlowKind,
+    pub effects: Int,
 }
 
 pub struct IrDiagnostic {
@@ -77,6 +113,36 @@ pub struct IrArena {
     pub nodes: List<IrNode>,
 }
 
+pub struct IrScope {
+    pub id: Int,
+    pub parent: Int,
+    pub owner: Int,
+    pub depth: Int,
+    pub symbols: List<Int>,
+}
+
+pub struct IrSymbol {
+    pub id: Int,
+    pub name: String,
+    pub kind: IrSymbolKind,
+    pub typeName: String,
+    pub scope: Int,
+    pub node: Int,
+    pub parent: Int,
+    pub public: Bool,
+    pub mutable: Bool,
+}
+
+pub struct IrSemantic {
+    pub scopes: List<IrScope>,
+    pub symbols: List<IrSymbol>,
+    pub typedNodes: Int,
+    pub effectfulNodes: Int,
+    pub terminalNodes: Int,
+    pub invalidScopes: Int,
+    pub unresolvedRefs: Int,
+}
+
 pub struct IrModule {
     pub packageName: String,
     pub arena: IrArena,
@@ -84,6 +150,7 @@ pub struct IrModule {
     pub decls: List<Int>,
     pub script: List<Int>,
     pub diagnostics: List<IrDiagnostic>,
+    pub semantic: IrSemantic,
     pub sourceTokens: Int,
     pub coveredTokens: Int,
     pub maxDepth: Int,
@@ -106,6 +173,13 @@ pub struct IrSummary {
     pub types: Int,
     pub diagnostics: Int,
     pub invalidParents: Int,
+    pub scopes: Int,
+    pub symbols: Int,
+    pub typedNodes: Int,
+    pub effectfulNodes: Int,
+    pub terminalNodes: Int,
+    pub invalidScopes: Int,
+    pub unresolvedRefs: Int,
     pub maxDepth: Int,
 }
 
@@ -118,11 +192,29 @@ pub fn emptyIrNode(kind: IrNodeKind) -> IrNode {
         flags: 0,
         parent: -1,
         children: [],
+        scope: -1,
+        symbol: -1,
+        typeName: "",
+        value: IrValueNone,
+        flow: IrFlowFallthrough,
+        effects: 0,
     }
 }
 
 pub fn emptyIrArena() -> IrArena {
     IrArena { nodes: [] }
+}
+
+pub fn emptyIrSemantic() -> IrSemantic {
+    IrSemantic {
+        scopes: [],
+        symbols: [],
+        typedNodes: 0,
+        effectfulNodes: 0,
+        terminalNodes: 0,
+        invalidScopes: 0,
+        unresolvedRefs: 0,
+    }
 }
 
 pub fn emptyIrModule(packageName: String) -> IrModule {
@@ -133,6 +225,7 @@ pub fn emptyIrModule(packageName: String) -> IrModule {
         decls: [],
         script: [],
         diagnostics: [],
+        semantic: emptyIrSemantic(),
         sourceTokens: 0,
         coveredTokens: 0,
         maxDepth: 0,
@@ -157,6 +250,13 @@ pub fn emptyIrSummary() -> IrSummary {
         types: 0,
         diagnostics: 0,
         invalidParents: 0,
+        scopes: 0,
+        symbols: 0,
+        typedNodes: 0,
+        effectfulNodes: 0,
+        terminalNodes: 0,
+        invalidScopes: 0,
+        unresolvedRefs: 0,
         maxDepth: 0,
     }
 }
@@ -188,7 +288,12 @@ pub fn irArenaNodeAt(arena: IrArena, idx: Int) -> IrNode {
 }
 
 pub fn irLowerSource(packageName: String, source: String) -> IrModule {
-    irLowerParseTree(packageName, frontendParseTree(source))
+    let stream = frontendLexStream(source)
+    let tokens = frontTokensFromSource(source, stream)
+    let tree = frontendParseTree(source)
+    let mut module = irLowerParseTree(packageName, tree)
+    irFinalizeSemanticGraph(module, tokens)
+    module
 }
 
 pub fn irLowerParseTree(packageName: String, tree: FrontParseTree) -> IrModule {
@@ -239,7 +344,329 @@ pub fn irLowerParseTree(packageName: String, tree: FrontParseTree) -> IrModule {
         )
     }
 
+    let emptyTokens: List<FrontToken> = []
+    irFinalizeSemanticGraph(module, emptyTokens)
     module
+}
+
+pub fn irFinalizeSemanticGraph(module: IrModule, tokens: List<FrontToken>) {
+    module.semantic = emptyIrSemantic()
+    let rootScope = irSemanticAddScope(module.semantic, -1, module.root, 0)
+    let total = irArenaNodeCount(module.arena)
+    let mut idx = 0
+    for current in module.arena.nodes {
+        let mut node = current
+        let parentScope = if idx == module.root {
+            rootScope
+        } else if node.parent >= 0 && node.parent < total {
+            irArenaNodeAt(module.arena, node.parent).scope
+        } else {
+            -1
+        }
+        if idx == module.root {
+            node.scope = rootScope
+        } else if irKindCreatesScope(node.kind) {
+            node.scope = irSemanticAddScope(module.semantic, parentScope, idx, node.depth)
+        } else {
+            node.scope = parentScope
+        }
+        node.value = irValueKindForNode(node.kind)
+        node.flow = irFlowKindForNode(node.kind)
+        node.effects = irEffectsForNode(node.kind)
+        node.typeName = irSemanticTypeName(tokens, node)
+
+        let symKind = irSymbolKindForNode(node.kind, node.depth)
+        if symKind != IrSymNone {
+            let symID = irSemanticAddSymbol(
+                module.semantic,
+                IrSymbol {
+                    id: -1,
+                    name: irSemanticName(tokens, node, idx),
+                    kind: symKind,
+                    typeName: node.typeName,
+                    scope: node.scope,
+                    node: idx,
+                    parent: -1,
+                    public: node.flags > 0,
+                    mutable: node.kind == IrNodeLetStmt && node.flags > 0,
+                },
+            )
+            node.symbol = symID
+            irSemanticScopeAddSymbol(module.semantic, node.scope, symID)
+        }
+
+        module.arena.nodes[idx] = node
+        idx = idx + 1
+    }
+    module.semantic.invalidScopes = irInvalidScopeCount(module)
+    module.semantic.unresolvedRefs = irUnresolvedReferenceCount(module)
+    irRefreshSemanticCounters(module)
+}
+
+fn irSemanticAddScope(semantic: IrSemantic, parent: Int, owner: Int, depth: Int) -> Int {
+    let id = irScopeCount(semantic)
+    semantic.scopes.push(IrScope { id, parent, owner, depth, symbols: [] })
+    id
+}
+
+fn irSemanticAddSymbol(semantic: IrSemantic, symbol: IrSymbol) -> Int {
+    let id = irSymbolCount(semantic)
+    let mut s = symbol
+    s.id = id
+    semantic.symbols.push(s)
+    id
+}
+
+fn irSemanticScopeAddSymbol(semantic: IrSemantic, scopeID: Int, symbolID: Int) {
+    let mut idx = 0
+    for scope in semantic.scopes {
+        if scope.id == scopeID {
+            let mut updated = scope
+            updated.symbols.push(symbolID)
+            semantic.scopes[idx] = updated
+            return
+        }
+        idx = idx + 1
+    }
+}
+
+fn irRefreshSemanticCounters(module: IrModule) {
+    let mut typed = 0
+    let mut effectful = 0
+    let mut terminal = 0
+    for node in module.arena.nodes {
+        if node.typeName != "" && node.typeName != "Unknown" {
+            typed = typed + 1
+        }
+        if node.effects != 0 {
+            effectful = effectful + 1
+        }
+        if node.flow != IrFlowFallthrough {
+            terminal = terminal + 1
+        }
+    }
+    module.semantic.typedNodes = typed
+    module.semantic.effectfulNodes = effectful
+    module.semantic.terminalNodes = terminal
+}
+
+pub fn irScopeCount(semantic: IrSemantic) -> Int {
+    let mut count = 0
+    for scope in semantic.scopes {
+        let _ = scope
+        count = count + 1
+    }
+    count
+}
+
+pub fn irSymbolCount(semantic: IrSemantic) -> Int {
+    let mut count = 0
+    for symbol in semantic.symbols {
+        let _ = symbol
+        count = count + 1
+    }
+    count
+}
+
+pub fn irSymbolAt(semantic: IrSemantic, id: Int) -> IrSymbol {
+    for symbol in semantic.symbols {
+        if symbol.id == id {
+            return symbol
+        }
+    }
+    IrSymbol {
+        id: -1,
+        name: "",
+        kind: IrSymNone,
+        typeName: "",
+        scope: -1,
+        node: -1,
+        parent: -1,
+        public: false,
+        mutable: false,
+    }
+}
+
+pub fn irScopeAt(semantic: IrSemantic, id: Int) -> IrScope {
+    for scope in semantic.scopes {
+        if scope.id == id {
+            return scope
+        }
+    }
+    IrScope { id: -1, parent: -1, owner: -1, depth: 0, symbols: [] }
+}
+
+pub fn irSemanticName(tokens: List<FrontToken>, node: IrNode, fallback: Int) -> String {
+    let count = frontTokenListCount(tokens)
+    if count == 0 {
+        return "{irNodeKindName(node.kind)}#{fallback}"
+    }
+    if node.kind == IrNodeUseDecl || node.kind == IrNodeGoUseDecl {
+        let alias = irUseAliasFromTokens(tokens, node.start, node.end)
+        if alias != "" {
+            return alias
+        }
+    }
+    let name = irFirstIdentText(tokens, node.start, node.end)
+    if name != "" {
+        return name
+    }
+    "{irNodeKindName(node.kind)}#{fallback}"
+}
+
+fn irSemanticTypeName(tokens: List<FrontToken>, node: IrNode) -> String {
+    if node.kind == IrNodeType {
+        let name = irFirstIdentText(tokens, node.start, node.end)
+        if name != "" {
+            return name
+        }
+        return "Type"
+    }
+    if node.kind == IrNodeFnDecl {
+        return "fn"
+    }
+    if node.kind == IrNodeStructDecl || node.kind == IrNodeEnumDecl || node.kind == IrNodeInterfaceDecl || node.kind == IrNodeTypeAliasDecl {
+        return "Type"
+    }
+    if node.kind == IrNodeUseDecl || node.kind == IrNodeGoUseDecl {
+        return "Package"
+    }
+    if node.kind == IrNodeReturnStmt || node.kind == IrNodeBreakStmt || node.kind == IrNodeContinueStmt {
+        return "Never"
+    }
+    if node.kind == IrNodeLetStmt || node.kind == IrNodeLetDecl || node.kind == IrNodeParam || node.kind == IrNodeField || node.kind == IrNodeVariant || node.kind == IrNodePattern {
+        return "Unknown"
+    }
+    if irKindIsExpr(node.kind) {
+        return "Unknown"
+    }
+    ""
+}
+
+fn irFirstIdentText(tokens: List<FrontToken>, start: Int, end: Int) -> String {
+    let count = frontTokenListCount(tokens)
+    let stop = if end < count { end } else { count }
+    let mut idx = start
+    for idx < stop {
+        let tok = frontTokenAtList(tokens, idx)
+        if tok.kind == FrontIdent {
+            return tok.text
+        }
+        idx = idx + 1
+    }
+    ""
+}
+
+fn irUseAliasFromTokens(tokens: List<FrontToken>, start: Int, end: Int) -> String {
+    let count = frontTokenListCount(tokens)
+    let stop = if end < count { end } else { count }
+    let mut idx = start
+    let mut last = ""
+    let mut afterAs = false
+    for idx < stop {
+        let tok = frontTokenAtList(tokens, idx)
+        if tok.kind == FrontIdent {
+            if afterAs {
+                return tok.text
+            }
+            if tok.text == "as" {
+                afterAs = true
+            } else if tok.text != "go" {
+                last = tok.text
+            }
+        }
+        idx = idx + 1
+    }
+    last
+}
+
+fn irKindCreatesScope(kind: IrNodeKind) -> Bool {
+    kind == IrNodeFnDecl || kind == IrNodeBlock || kind == IrNodeClosureExpr || kind == IrNodeMatchArm
+}
+
+fn irSymbolKindForNode(kind: IrNodeKind, depth: Int) -> IrSymbolKind {
+    if kind == IrNodeUseDecl || kind == IrNodeGoUseDecl {
+        return IrSymPackage
+    }
+    if kind == IrNodeFnDecl {
+        return IrSymFunction
+    }
+    if kind == IrNodeStructDecl || kind == IrNodeEnumDecl || kind == IrNodeInterfaceDecl || kind == IrNodeTypeAliasDecl {
+        return IrSymType
+    }
+    if kind == IrNodeVariant {
+        return IrSymVariant
+    }
+    if kind == IrNodeField {
+        return IrSymField
+    }
+    if kind == IrNodeParam {
+        return IrSymParameter
+    }
+    if kind == IrNodeLetDecl || kind == IrNodeLetStmt {
+        return IrSymLocal
+    }
+    if kind == IrNodeGenericParams {
+        return IrSymGeneric
+    }
+    if depth < 0 {
+        return IrSymNone
+    }
+    IrSymNone
+}
+
+fn irValueKindForNode(kind: IrNodeKind) -> IrValueKind {
+    if kind == IrNodeFnDecl {
+        return IrValueFunction
+    }
+    if kind == IrNodeStructDecl || kind == IrNodeEnumDecl || kind == IrNodeInterfaceDecl || kind == IrNodeTypeAliasDecl || kind == IrNodeType {
+        return IrValueType
+    }
+    if kind == IrNodeLetDecl || kind == IrNodeLetStmt || kind == IrNodeParam || kind == IrNodeField {
+        return IrValuePlace
+    }
+    if kind == IrNodePattern {
+        return IrValuePattern
+    }
+    if irKindIsExpr(kind) {
+        return IrValueRValue
+    }
+    IrValueNone
+}
+
+fn irFlowKindForNode(kind: IrNodeKind) -> IrFlowKind {
+    if kind == IrNodeReturnStmt {
+        return IrFlowReturns
+    }
+    if kind == IrNodeBreakStmt {
+        return IrFlowBreaks
+    }
+    if kind == IrNodeContinueStmt {
+        return IrFlowContinues
+    }
+    if kind == IrNodeError {
+        return IrFlowDiverges
+    }
+    IrFlowFallthrough
+}
+
+fn irEffectsForNode(kind: IrNodeKind) -> Int {
+    if kind == IrNodeCallExpr {
+        return 1
+    }
+    if kind == IrNodeAssignStmt {
+        return 2
+    }
+    if kind == IrNodeChannelSendStmt {
+        return 4
+    }
+    if kind == IrNodeDeferStmt {
+        return 8
+    }
+    if kind == IrNodeQuestionExpr {
+        return 16
+    }
+    0
 }
 
 fn irAttachChild(arena: IrArena, parent: Int, child: Int) {
@@ -277,6 +704,13 @@ pub fn irSummarize(module: IrModule) -> IrSummary {
     summary.diagnostics = irDiagnosticCount(module)
     summary.maxDepth = module.maxDepth
     summary.invalidParents = irInvalidParentCount(module)
+    summary.scopes = irScopeCount(module.semantic)
+    summary.symbols = irSymbolCount(module.semantic)
+    summary.typedNodes = module.semantic.typedNodes
+    summary.effectfulNodes = module.semantic.effectfulNodes
+    summary.terminalNodes = module.semantic.terminalNodes
+    summary.invalidScopes = module.semantic.invalidScopes
+    summary.unresolvedRefs = module.semantic.unresolvedRefs
 
     for node in module.arena.nodes {
         if node.kind == IrNodeFnDecl {
@@ -352,6 +786,60 @@ pub fn irInvalidParentCount(module: IrModule) -> Int {
         idx = idx + 1
     }
     count
+}
+
+pub fn irInvalidScopeCount(module: IrModule) -> Int {
+    let mut count = 0
+    let totalScopes = irScopeCount(module.semantic)
+    let totalNodes = irArenaNodeCount(module.arena)
+    for node in module.arena.nodes {
+        if node.scope < 0 || node.scope >= totalScopes {
+            count = count + 1
+        }
+        if node.symbol >= 0 {
+            let sym = irSymbolAt(module.semantic, node.symbol)
+            if sym.id < 0 || sym.node < 0 || sym.node >= totalNodes {
+                count = count + 1
+            }
+        }
+    }
+    for scope in module.semantic.scopes {
+        if scope.parent >= totalScopes {
+            count = count + 1
+        }
+        if scope.owner >= totalNodes {
+            count = count + 1
+        }
+        for symbolID in scope.symbols {
+            let sym = irSymbolAt(module.semantic, symbolID)
+            if sym.id < 0 || sym.scope != scope.id {
+                count = count + 1
+            }
+        }
+    }
+    for symbol in module.semantic.symbols {
+        if symbol.scope < 0 || symbol.scope >= totalScopes || symbol.node < 0 || symbol.node >= totalNodes {
+            count = count + 1
+        }
+    }
+    count
+}
+
+pub fn irUnresolvedReferenceCount(module: IrModule) -> Int {
+    let mut count = 0
+    let totalSymbols = irSymbolCount(module.semantic)
+    for node in module.arena.nodes {
+        if irKindDeclaresSymbol(node.kind) {
+            let _ = node
+        } else if (node.kind == IrNodeSelectorExpr || node.kind == IrNodeCallExpr || node.kind == IrNodeIndexExpr) && node.symbol >= totalSymbols {
+            count = count + 1
+        }
+    }
+    count
+}
+
+fn irKindDeclaresSymbol(kind: IrNodeKind) -> Bool {
+    irSymbolKindForNode(kind, 0) != IrSymNone
 }
 
 pub fn irKindIsDecl(kind: IrNodeKind) -> Bool {
@@ -542,6 +1030,42 @@ pub fn irDiagnosticKindName(kind: IrDiagnosticKind) -> String {
         IrDiagNonAssociativeOperator -> "nonAssociativeOperator",
         IrDiagTrailingSelector -> "trailingSelector",
         IrDiagLexerError -> "lexerError",
+    }
+}
+
+pub fn irSymbolKindName(kind: IrSymbolKind) -> String {
+    match kind {
+        IrSymNone -> "none",
+        IrSymPackage -> "package",
+        IrSymFunction -> "function",
+        IrSymType -> "type",
+        IrSymVariant -> "variant",
+        IrSymField -> "field",
+        IrSymParameter -> "parameter",
+        IrSymLocal -> "local",
+        IrSymGeneric -> "generic",
+    }
+}
+
+pub fn irValueKindName(kind: IrValueKind) -> String {
+    match kind {
+        IrValueNone -> "none",
+        IrValueType -> "type",
+        IrValueFunction -> "function",
+        IrValuePlace -> "place",
+        IrValueRValue -> "rvalue",
+        IrValuePattern -> "pattern",
+    }
+}
+
+pub fn irFlowKindName(kind: IrFlowKind) -> String {
+    match kind {
+        IrFlowFallthrough -> "fallthrough",
+        IrFlowReturns -> "returns",
+        IrFlowBreaks -> "breaks",
+        IrFlowContinues -> "continues",
+        IrFlowDiverges -> "diverges",
+        IrFlowMixed -> "mixed",
     }
 }
 
