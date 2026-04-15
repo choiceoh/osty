@@ -50,32 +50,24 @@ func (fr *fakeRegistry) publish(name, version string, depReqs ...string) {
 		entry = &registry.IndexEntry{Name: name}
 		fr.crate[name] = entry
 	}
-	v := registry.Version{
-		Version:     version,
-		Checksum:    "", // computed once tar bytes are known
-		PublishedAt: time.Now().UTC(),
+	m := &manifest.Manifest{
+		Package: manifest.Package{Name: name, Version: version},
 	}
-	// Build the package's osty.toml referencing its declared deps so
-	// the resolver's manifest parser sees them after extraction.
-	var manifestBuf bytes.Buffer
-	manifestBuf.WriteString("[package]\n")
-	manifestBuf.WriteString("name = \"" + name + "\"\n")
-	manifestBuf.WriteString("version = \"" + version + "\"\n")
-	if len(depReqs) > 0 {
-		manifestBuf.WriteString("\n[dependencies]\n")
-	}
+	v := registry.Version{Version: version, PublishedAt: time.Now().UTC()}
 	for _, dr := range depReqs {
-		parts := strings.SplitN(dr, "@", 2)
-		if len(parts) != 2 {
+		depName, req, ok := strings.Cut(dr, "@")
+		if !ok {
 			fr.t.Fatalf("bad depReq %q", dr)
 		}
-		manifestBuf.WriteString(parts[0] + " = \"" + parts[1] + "\"\n")
+		m.Dependencies = append(m.Dependencies, manifest.Dependency{
+			Name: depName, PackageName: depName, VersionReq: req, DefaultFeats: true,
+		})
 		v.Dependencies = append(v.Dependencies, registry.VersionDependency{
-			Name: parts[0], Req: parts[1], Kind: "normal",
+			Name: depName, Req: req, Kind: "normal",
 		})
 	}
 	pkgDir := fr.t.TempDir()
-	if err := os.WriteFile(filepath.Join(pkgDir, manifest.ManifestFile), manifestBuf.Bytes(), 0o644); err != nil {
+	if err := manifest.Write(filepath.Join(pkgDir, manifest.ManifestFile), m); err != nil {
 		fr.t.Fatal(err)
 	}
 	// A trivial source file ensures the tar isn't empty.
@@ -218,13 +210,13 @@ func TestDiamondConflictUnsatisfiable(t *testing.T) {
 		t.Fatalf("expected diamond conflict error")
 	}
 	msg := err.Error()
-	// The error must name the conflicting package and at least hint
-	// at the chain so the user knows where to look.
-	if !strings.Contains(msg, `"B"`) {
-		t.Errorf("error should name B: %v", err)
-	}
-	if !strings.Contains(msg, "required by") && !strings.Contains(msg, "no version satisfies") {
-		t.Errorf("error should explain origin: %v", err)
+	// The error must name the offending package, state the
+	// unsatisfiability, AND surface the parent chain so the user
+	// sees who placed each requirement.
+	for _, want := range []string{`"B"`, "no published version satisfies", "required by", "<root>"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error missing %q substring: %v", want, err)
+		}
 	}
 }
 

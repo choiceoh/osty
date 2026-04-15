@@ -97,13 +97,6 @@ func Resolve(ctx context.Context, root *manifest.Manifest, env *Env) (*Graph, er
 			return nil, err
 		}
 	}
-	// Iterative refinement: the greedy first pass may have committed
-	// to versions that don't satisfy every constraint a transitive
-	// parent placed on them (the classic diamond case). Re-walk the
-	// graph upgrading registry pins to the highest version that
-	// satisfies the union of every recorded constraint, then revisit
-	// the new pin's transitive deps. Loop until the graph stops
-	// changing or we exceed the safety bound.
 	if err := r.unifyConstraints(ctx); err != nil {
 		return nil, err
 	}
@@ -218,17 +211,15 @@ func (r *resolver) checkSourceKindCompatible(existing *ResolvedNode, d manifest.
 				describeParent(parent), wantSrc.Kind(),
 				d.Name, existing.Source.Kind()))
 	}
+	// Path and git pins are identified by their URI — any drift
+	// between two uses of the same name is unreconcilable here.
+	// Registry pins are version-only and handled by unifyConstraints.
 	switch existing.Source.Kind() {
-	case SourcePath:
+	case SourcePath, SourceGit:
 		if existing.Source.URI() != wantSrc.URI() {
 			return r.conflictError(d.Name,
-				fmt.Sprintf("path mismatch: %s vs %s",
-					existing.Source.URI(), wantSrc.URI()))
-		}
-	case SourceGit:
-		if existing.Source.URI() != wantSrc.URI() {
-			return r.conflictError(d.Name,
-				fmt.Sprintf("git source mismatch: %s vs %s",
+				fmt.Sprintf("%s source mismatch: %s vs %s",
+					existing.Source.Kind(),
 					existing.Source.URI(), wantSrc.URI()))
 		}
 	}
@@ -327,29 +318,31 @@ func (r *resolver) unifyConstraints(ctx context.Context) error {
 			if combined.Match(cur) {
 				continue // pin already satisfies every constraint
 			}
-			// Re-fetch at the union req. The narrowed source is
-			// driven by mutating versionReq directly; the existing
-			// applyLockPin path uses the same trick.
-			newRs := &registrySource{
-				name:         rs.name,
-				packageName:  rs.packageName,
-				versionReq:   combined.String(),
-				registryName: rs.registryName,
-			}
+			// applyLockPin narrows by mutating versionReq on the
+			// existing source; reuse that same knob here so the
+			// re-fetch path doesn't depend on registrySource's field
+			// layout.
+			newRs := *rs
+			newRs.versionReq = combined.String()
 			fetched, ferr := newRs.Fetch(ctx, r.env)
 			if ferr != nil {
-				return r.conflictError(name,
-					fmt.Sprintf("no version satisfies the combined constraints (%s): %v",
-						combined.String(), ferr))
+				// Distinguish "the registry doesn't publish anything
+				// satisfying the intersection" from a transient fetch
+				// failure — "no version matches" is the deterministic
+				// signal registrySource emits for the former.
+				reason := fmt.Sprintf("could not resolve a version for combined constraint %s: %v",
+					combined.String(), ferr)
+				if strings.Contains(ferr.Error(), "no version matches") {
+					reason = fmt.Sprintf("no published version satisfies the combined constraint %s",
+						combined.String())
+				}
+				return r.conflictError(name, reason)
 			}
-			// Swap in the upgraded pin. Drop the old transitive
-			// edges; we'll repopulate them by re-walking the new
-			// pin's manifest below. Children that are still reached
-			// from elsewhere remain valid in r.graph.Nodes; orphans
-			// are pruned by topoOrder later.
-			node.Source = newRs
+			// Orphaned children are pruned by topoOrder later; the
+			// resolveDep cache short-circuits unchanged names.
+			node.Source = &newRs
 			node.Fetched = fetched
-			node.Deps = node.Deps[:0]
+			node.Deps = nil
 			for _, sub := range fetched.Manifest.Dependencies {
 				child, cerr := r.resolveDep(ctx, sub, name)
 				if cerr != nil {
