@@ -211,18 +211,6 @@ func (g *gen) goNamedType(n *types.Named) string {
 		// runTaskGroup's Wait call.
 		g.needTaskGroup = true
 		return "*TaskGroup"
-	case "Regex":
-		g.needRegex = true
-		return "Regex"
-	case "Match":
-		g.needRegex = true
-		return "RegexMatch"
-	case "Captures":
-		g.needRegex = true
-		return "Captures"
-	case "RegexError":
-		g.needRegex = true
-		return "error"
 	case "Json":
 		g.needJSON = true
 		return "Json"
@@ -401,18 +389,6 @@ func (g *gen) goNamedAST(n *ast.NamedType) string {
 	case "TaskGroup":
 		g.needTaskGroup = true
 		return "*TaskGroup"
-	case "Regex":
-		g.needRegex = true
-		return "Regex"
-	case "Match":
-		g.needRegex = true
-		return "RegexMatch"
-	case "Captures":
-		g.needRegex = true
-		return "Captures"
-	case "RegexError":
-		g.needRegex = true
-		return "error"
 	case "Json":
 		g.needJSON = true
 		return "Json"
