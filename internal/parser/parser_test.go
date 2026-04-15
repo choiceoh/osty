@@ -744,6 +744,29 @@ fn main() {}`
 	}
 }
 
+// TestParseUseGoRejectsFnType covers §12.7: closures / function-typed
+// parameters cannot cross the FFI boundary. The parser emits
+// CodeUseGoUnsupported when a `use go` fn signature uses `fn(...) -> T`
+// for either a parameter or its return type.
+func TestParseUseGoRejectsFnType(t *testing.T) {
+	src := `use go "pkg" {
+    fn OnTick(cb: fn(Int) -> Int) -> Int
+    fn Factory(x: Int) -> fn(Int) -> Int
+}
+fn main() {}`
+	_, diags := ParseDiagnostics([]byte(src))
+	var seen int
+	for _, d := range diags {
+		if d.Code == "E0103" {
+			seen++
+		}
+	}
+	if seen < 2 {
+		t.Fatalf("expected 2+ E0103 diagnostics (one per fn-typed slot); got %d\ndiags: %+v",
+			seen, diags)
+	}
+}
+
 // TestParseNilCoalescingVsLogical verifies v0.2 R1: `??` is the LOWEST
 // non-assignment precedence, right-associative — so `a || b ?? c` parses
 // as `(a || b) ?? c`.

@@ -49,8 +49,25 @@
 // if/match arms, loop bodies) are *not* crossed by the lift — a `?`
 // inside them binds to its own enclosing return context.
 //
+// Phase 5 coverage (Go FFI — §12):
+//
+//   - `use go "path"` and `use go "path" as alias` emit real Go
+//     imports; call sites to an imported fn resolve through the Go
+//     package.
+//   - Return-type bridging for `Result<T, Error>` (§12.4): the Go
+//     side's `(T, error)` tuple is wrapped into the Osty Result
+//     runtime at the call site. The `Result<(), Error>` shape maps
+//     the bare-error Go convention `func(...) error`. See
+//     internal/gen/ffi.go.
+//   - Return-type bridging for `T?` (§12.3): Osty Optional lowers to
+//     `*T`, which matches the Go nullable convention directly — no
+//     call-site rewrite needed.
+//   - The parser enforces §12.7: fn-typed (closure) parameters or
+//     return types inside `use go` blocks are rejected with E0103.
+//
 // Out of scope (future work):
 //
-//   - use declarations, Go FFI (Phase 5)
+//   - §12.4 `BasicError` wrapping for concrete Osty Error types
+//     (currently the Go `error` value flows through as `any`)
 //   - channels, concurrency primitives (Phase 6)
 package gen

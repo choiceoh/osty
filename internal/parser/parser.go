@@ -506,6 +506,27 @@ func (p *Parser) parseUseDecl() *ast.UseDecl {
 								PrimaryPos(prm.PosV, "").
 								Build())
 						}
+						// §12.7: closures / function-typed parameters
+						// cannot cross the FFI boundary. Osty closures
+						// capture Osty-side bindings and have no Go
+						// equivalent; callers must expose the wanted
+						// behaviour as a named `fn` on the Go side.
+						if _, isFn := prm.Type.(*ast.FnType); isFn {
+							p.emit(diag.New(diag.Error,
+								"`use go` function parameters may not be function-typed").
+								Code(diag.CodeUseGoUnsupported).
+								PrimaryPos(prm.PosV, "").
+								Note("§12.7: closures cannot cross the FFI boundary — expose the behaviour as a named Go `fn` instead").
+								Build())
+						}
+					}
+					if _, isFn := fd.ReturnType.(*ast.FnType); isFn {
+						p.emit(diag.New(diag.Error,
+							"`use go` function return types may not be function-typed").
+							Code(diag.CodeUseGoUnsupported).
+							PrimaryPos(fd.PosV, "").
+							Note("§12.7: function values cannot cross the FFI boundary").
+							Build())
 					}
 					u.GoBody = append(u.GoBody, fd)
 				case token.STRUCT:
