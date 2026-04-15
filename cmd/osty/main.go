@@ -219,6 +219,10 @@ func main() {
 		runInfo(args[1:], flags)
 		return
 	}
+	if cmd == "registry" {
+		runRegistry(args[1:], flags)
+		return
+	}
 	// doc parses a file or directory and emits markdown/HTML API docs.
 	// It has its own flag parser for --out / --title / --format /
 	// --check / --verify-examples.
@@ -1088,6 +1092,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "       osty remove NAME [NAME...] (drop a dep from osty.toml; alias rm)")
 	fmt.Fprintln(os.Stderr, "       osty fetch [--locked|--frozen] (resolve+vendor without building)")
 	fmt.Fprintln(os.Stderr, "       osty info NAME [--all-versions] (show registry metadata for a package)")
+	fmt.Fprintln(os.Stderr, "       osty registry serve [--addr A] [--root DIR] (run a package registry)")
 	fmt.Fprintln(os.Stderr, "       osty doc [--format FMT] [--out PATH] PATH (generate API docs; markdown or html)")
 	fmt.Fprintln(os.Stderr, "       osty ci [flags] [PATH]    (run the CI check bundle: fmt+lint+policy+lockfile)")
 	fmt.Fprintln(os.Stderr, "       osty ci snapshot [-o OUT] (capture the exported API for future semver diffing)")
