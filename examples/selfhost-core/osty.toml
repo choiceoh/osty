@@ -4,6 +4,6 @@ version = "0.1.0"
 edition = "0.3"
 description = "Self-hosting core algorithms ported to Osty."
 license = "MIT"
-keywords = ["selfhost", "semver", "registry", "manifest", "diagnostics"]
+keywords = ["selfhost", "semver", "registry", "manifest", "diagnostics", "lint", "resolve", "check"]
 
 [dependencies]

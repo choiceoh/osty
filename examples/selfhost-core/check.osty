@@ -1,0 +1,774 @@
+/// SelfFunctionSig is the checker-facing shape of a resolved function
+/// declaration.
+pub struct SelfFunctionSig {
+    pub name: String,
+    pub returnType: String,
+    pub paramNames: List<String>,
+    pub paramTypes: List<String>,
+    pub start: Int,
+    pub end: Int,
+}
+
+pub struct SelfTypeBinding {
+    pub name: String,
+    pub typeName: String,
+    pub mutable: Bool,
+}
+
+pub struct SelfCheckDiagnostic {
+    pub code: String,
+    pub message: String,
+    pub name: String,
+    pub start: Int,
+    pub end: Int,
+}
+
+pub struct SelfCheckResult {
+    pub diagnostics: List<SelfCheckDiagnostic>,
+    pub checkedExpressions: Int,
+    pub assignments: Int,
+    pub errors: Int,
+    pub resolveErrors: Int,
+}
+
+pub fn selfFunctionSig(
+    name: String,
+    returnType: String,
+    paramNames: List<String>,
+    paramTypes: List<String>,
+    start: Int,
+    end: Int,
+) -> SelfFunctionSig {
+    SelfFunctionSig { name, returnType, paramNames, paramTypes, start, end }
+}
+
+pub fn selfTypeBinding(name: String, typeName: String, mutable: Bool) -> SelfTypeBinding {
+    SelfTypeBinding { name, typeName, mutable }
+}
+
+pub fn selfCheckDiagnostic(
+    code: String,
+    message: String,
+    name: String,
+    start: Int,
+    end: Int,
+) -> SelfCheckDiagnostic {
+    SelfCheckDiagnostic { code, message, name, start, end }
+}
+
+pub fn emptySelfCheckResult(resolveErrors: Int) -> SelfCheckResult {
+    SelfCheckResult {
+        diagnostics: [],
+        checkedExpressions: 0,
+        assignments: 0,
+        errors: 0,
+        resolveErrors,
+    }
+}
+
+/// selfCheckSource performs a self-hosted resolver pass, then checks primitive
+/// assignment/return/call typing over the same token stream.
+pub fn selfCheckSource(source: String) -> SelfCheckResult {
+    let resolved = selfResolveSource(source)
+    let stream = frontendLexStream(source)
+    let tokens = frontTokensFromSource(source, stream)
+    let count = frontTokenListCount(tokens)
+    let sigs = selfCheckCollectFunctions(tokens, count)
+    let mut result = emptySelfCheckResult(selfResolveDiagnosticCount(resolved))
+    result = selfCheckFunctions(tokens, count, sigs, result)
+    result
+}
+
+pub fn selfCheckDiagnosticCount(result: SelfCheckResult) -> Int {
+    let mut count = 0
+    for diag in result.diagnostics {
+        let _ = diag
+        count = count + 1
+    }
+    count
+}
+
+pub fn selfCheckCodeCount(result: SelfCheckResult, code: String) -> Int {
+    let mut count = 0
+    for diag in result.diagnostics {
+        if diag.code == code {
+            count = count + 1
+        }
+    }
+    count
+}
+
+fn selfCheckEmit(
+    result: SelfCheckResult,
+    code: String,
+    message: String,
+    name: String,
+    start: Int,
+    end: Int,
+) -> SelfCheckResult {
+    let mut out = result
+    out.errors = out.errors + 1
+    out.diagnostics.push(selfCheckDiagnostic(code, message, name, start, end))
+    out
+}
+
+fn selfCheckCollectFunctions(tokens: List<FrontToken>, count: Int) -> List<SelfFunctionSig> {
+    let mut sigs: List<SelfFunctionSig> = []
+    let mut skipUntil = -1
+    for idx in 0..count {
+        if idx < skipUntil {
+            let _ = idx
+        } else if scTokenIs(tokens, idx, "fn") && scLooksLikeDeclarationStart(tokens, idx) {
+            let end = frontDeclEnd(tokens, idx, count)
+            let sig = scReadFunctionSig(tokens, idx, end)
+            if sig.name != "" {
+                sigs.push(sig)
+            }
+            skipUntil = end
+        }
+    }
+    sigs
+}
+
+fn scReadFunctionSig(tokens: List<FrontToken>, start: Int, end: Int) -> SelfFunctionSig {
+    let nameIdx = scNextIdent(tokens, start + 1, end)
+    let mut paramNames: List<String> = []
+    let mut paramTypes: List<String> = []
+    let name = if nameIdx < end {
+        frontTokenTextAt(tokens, nameIdx)
+    } else {
+        ""
+    }
+    let open = scFindTopLevelKind(tokens, nameIdx + 1, end, "(")
+    let mut afterParams = nameIdx + 1
+    if open >= 0 {
+        let close = frontFindMatching(tokens, open, end, scKind("("), scKind(")"))
+        afterParams = close + 1
+        for idx in open + 1..close {
+            let kind = frontTokenAtList(tokens, idx).kind
+            if (scKindIs(kind, "IDENT") || scKindIs(kind, "_")) && scLooksLikeParamName(
+                tokens,
+                idx,
+                open,
+            ) {
+                paramNames.push(frontTokenTextAt(tokens, idx))
+                paramTypes.push(scParamType(tokens, idx, close))
+            }
+        }
+    }
+
+    let arrow = scFindFirstKind(tokens, afterParams, end, "->")
+    let returnType = if arrow >= 0 {
+        scTypeNameAt(tokens, arrow + 1, end)
+    } else {
+        "()"
+    }
+    selfFunctionSig(name, returnType, paramNames, paramTypes, start, end)
+}
+
+fn selfCheckFunctions(
+    tokens: List<FrontToken>,
+    count: Int,
+    sigs: List<SelfFunctionSig>,
+    result: SelfCheckResult,
+) -> SelfCheckResult {
+    let mut out = result
+    let mut skipUntil = -1
+    for idx in 0..count {
+        if idx < skipUntil {
+            let _ = idx
+        } else if scTokenIs(tokens, idx, "fn") && scLooksLikeDeclarationStart(tokens, idx) {
+            let end = frontDeclEnd(tokens, idx, count)
+            let sig = scSignatureAt(
+                sigs,
+                frontTokenTextAt(tokens, scNextIdent(tokens, idx + 1, end)),
+            )
+            out = scCheckFunction(tokens, idx, end, sigs, sig, out)
+            skipUntil = end
+        }
+    }
+    out
+}
+
+fn scCheckFunction(
+    tokens: List<FrontToken>,
+    start: Int,
+    end: Int,
+    sigs: List<SelfFunctionSig>,
+    sig: SelfFunctionSig,
+    result: SelfCheckResult,
+) -> SelfCheckResult {
+    let mut out = result
+    let nameIdx = scNextIdent(tokens, start + 1, end)
+    let open = scFindTopLevelKind(tokens, nameIdx + 1, end, "(")
+    if open < 0 {
+        return out
+    }
+    let close = frontFindMatching(tokens, open, end, scKind("("), scKind(")"))
+    let bodyOpen = scFindTopLevelKind(tokens, close + 1, end, r"{")
+    if bodyOpen < 0 {
+        return out
+    }
+    let bodyClose = frontFindMatching(tokens, bodyOpen, end, scKind(r"{"), scKind(r"}"))
+    let mut locals: List<SelfTypeBinding> = []
+    for idx in 0..scStringListCount(sig.paramNames) {
+        locals.push(
+            selfTypeBinding(scStringAt(sig.paramNames, idx), scStringAt(sig.paramTypes, idx), false),
+        )
+    }
+
+    let mut skipUntil = -1
+    for idx in bodyOpen + 1..bodyClose {
+        if idx < skipUntil {
+            let _ = idx
+        } else if scTokenIs(tokens, idx, "let") {
+            let stmtEnd = frontFindStatementEnd(tokens, idx, bodyClose)
+            out = scCheckLet(tokens, idx, stmtEnd, sigs, locals, out)
+            let nameIdx = scLetNameIndex(tokens, idx)
+            let typ = scLetType(tokens, idx, stmtEnd, sigs, locals)
+            if scTokenIs(tokens, nameIdx, "IDENT") || scTokenIs(tokens, nameIdx, "_") {
+                locals.push(
+                    selfTypeBinding(
+                        frontTokenTextAt(tokens, nameIdx),
+                        typ,
+                        scTokenIs(tokens, idx + 1, "mut"),
+                    ),
+                )
+            }
+            skipUntil = stmtEnd
+        } else if scTokenIs(tokens, idx, "return") {
+            let stmtEnd = frontFindStatementEnd(tokens, idx, bodyClose)
+            out = scCheckReturn(tokens, idx, stmtEnd, sigs, locals, sig.returnType, out)
+            skipUntil = stmtEnd
+        } else if scTokenIs(tokens, idx, "if") {
+            out = scCheckCondition(tokens, idx, bodyClose, sigs, locals, out)
+        } else if scTokenIs(tokens, idx, "for") {
+            out = scCheckCondition(tokens, idx, bodyClose, sigs, locals, out)
+        } else if scTokenIs(tokens, idx + 1, "=") && scTokenIs(tokens, idx, "IDENT") {
+            let stmtEnd = frontFindStatementEnd(tokens, idx, bodyClose)
+            out = scCheckAssignment(tokens, idx, stmtEnd, sigs, locals, out)
+            skipUntil = stmtEnd
+        } else if scTokenIs(tokens, idx, "IDENT") && scTokenIs(
+            tokens,
+            scNextMeaningfulIndex(tokens, idx + 1, bodyClose),
+            "(",
+        ) {
+            out = scCheckCallAt(tokens, idx, bodyClose, sigs, locals, out)
+        }
+    }
+    out
+}
+
+fn scCheckLet(
+    tokens: List<FrontToken>,
+    start: Int,
+    end: Int,
+    sigs: List<SelfFunctionSig>,
+    locals: List<SelfTypeBinding>,
+    result: SelfCheckResult,
+) -> SelfCheckResult {
+    let mut out = result
+    let nameIdx = scLetNameIndex(tokens, start)
+    let colon = scFindFirstKind(tokens, nameIdx + 1, end, ":")
+    let assign = scFindFirstKind(tokens, nameIdx + 1, end, "=")
+    if assign < 0 {
+        return out
+    }
+    let annotated = if colon >= 0 {
+        scTypeNameAt(tokens, colon + 1, end)
+    } else {
+        ""
+    }
+    let exprType = scInferExpr(tokens, assign + 1, end, sigs, locals)
+    out.checkedExpressions = out.checkedExpressions + 1
+    out.assignments = out.assignments + 1
+    if annotated != "" && !(scAssignable(annotated, exprType)) {
+        out = selfCheckEmit(
+            out,
+            "E0700",
+            "type mismatch in let binding",
+            frontTokenTextAt(tokens, nameIdx),
+            assign + 1,
+            end,
+        )
+    }
+    out
+}
+
+fn scCheckReturn(
+    tokens: List<FrontToken>,
+    start: Int,
+    end: Int,
+    sigs: List<SelfFunctionSig>,
+    locals: List<SelfTypeBinding>,
+    returnType: String,
+    result: SelfCheckResult,
+) -> SelfCheckResult {
+    let mut out = result
+    let exprStart = scNextMeaningfulIndex(tokens, start + 1, end)
+    let exprType = if exprStart < end {
+        scInferExpr(tokens, exprStart, end, sigs, locals)
+    } else {
+        "()"
+    }
+    out.checkedExpressions = out.checkedExpressions + 1
+    if !(scAssignable(returnType, exprType)) {
+        out = selfCheckEmit(out, "E0726", "return type mismatch", returnType, start, end)
+    }
+    out
+}
+
+fn scCheckAssignment(
+    tokens: List<FrontToken>,
+    start: Int,
+    end: Int,
+    sigs: List<SelfFunctionSig>,
+    locals: List<SelfTypeBinding>,
+    result: SelfCheckResult,
+) -> SelfCheckResult {
+    let mut out = result
+    let name = frontTokenTextAt(tokens, start)
+    let binding = scBindingAt(locals, name)
+    let exprType = scInferExpr(tokens, start + 2, end, sigs, locals)
+    out.checkedExpressions = out.checkedExpressions + 1
+    out.assignments = out.assignments + 1
+    if binding.name != "" && !(binding.mutable) {
+        out = selfCheckEmit(
+            out,
+            "E0725",
+            "cannot assign into immutable binding",
+            name,
+            start,
+            start + 1,
+        )
+    } else if binding.name != "" && !(scAssignable(binding.typeName, exprType)) {
+        out = selfCheckEmit(out, "E0700", "type mismatch in assignment", name, start + 2, end)
+    }
+    out
+}
+
+fn scCheckCondition(
+    tokens: List<FrontToken>,
+    start: Int,
+    end: Int,
+    sigs: List<SelfFunctionSig>,
+    locals: List<SelfTypeBinding>,
+    result: SelfCheckResult,
+) -> SelfCheckResult {
+    let block = scFindFirstKind(tokens, start + 1, end, r"{")
+    if block < 0 {
+        return result
+    }
+    let exprType = scInferExpr(tokens, start + 1, block, sigs, locals)
+    if exprType != "Invalid" && !(scAssignable("Bool", exprType)) {
+        selfCheckEmit(result, "E0715", "condition must be Bool", "", start, block)
+    } else {
+        result
+    }
+}
+
+fn scCheckCallAt(
+    tokens: List<FrontToken>,
+    start: Int,
+    end: Int,
+    sigs: List<SelfFunctionSig>,
+    locals: List<SelfTypeBinding>,
+    result: SelfCheckResult,
+) -> SelfCheckResult {
+    if scKindIs(scPrevMeaningfulKind(tokens, start), ".") {
+        return result
+    }
+    let name = frontTokenTextAt(tokens, start)
+    let sig = scSignatureAt(sigs, name)
+    if sig.name == "" {
+        return result
+    }
+    let open = scNextMeaningfulIndex(tokens, start + 1, end)
+    if !(scTokenIs(tokens, open, "(")) {
+        return result
+    }
+    let close = frontFindMatching(tokens, open, end, scKind("("), scKind(")"))
+    scCheckCallArgs(tokens, open, close, sigs, locals, sig, result)
+}
+
+fn scCheckCallArgs(
+    tokens: List<FrontToken>,
+    open: Int,
+    close: Int,
+    sigs: List<SelfFunctionSig>,
+    locals: List<SelfTypeBinding>,
+    sig: SelfFunctionSig,
+    result: SelfCheckResult,
+) -> SelfCheckResult {
+    let mut out = result
+    let got = scArgCount(tokens, open, close)
+    let want = scStringListCount(sig.paramTypes)
+    if got != want {
+        return selfCheckEmit(out, "E0701", "call arity mismatch", sig.name, open, close + 1)
+    }
+    let mut argStart = scNextMeaningfulIndex(tokens, open + 1, close)
+    let mut paramIdx = 0
+    let mut depth = 0
+    for idx in argStart..close + 1 {
+        let kind = frontTokenAtList(tokens, idx).kind
+        let atEnd = idx == close
+        if scKindIs(kind, "(") || scKindIs(kind, "[") || scKindIs(kind, r"{") {
+            depth = depth + 1
+        } else if scKindIs(kind, ")") || scKindIs(kind, "]") || scKindIs(kind, r"}") {
+            if depth > 0 && !(atEnd) {
+                depth = depth - 1
+            }
+        }
+        if atEnd || (depth == 0 && scKindIs(kind, ",")) {
+            let argType = scInferExpr(tokens, argStart, idx, sigs, locals)
+            let paramType = scStringAt(sig.paramTypes, paramIdx)
+            out.checkedExpressions = out.checkedExpressions + 1
+            if !(scAssignable(paramType, argType)) {
+                out = selfCheckEmit(out, "E0700", "argument type mismatch", sig.name, argStart, idx)
+            }
+            paramIdx = paramIdx + 1
+            argStart = scNextMeaningfulIndex(tokens, idx + 1, close)
+        }
+    }
+    out
+}
+
+fn scLetType(
+    tokens: List<FrontToken>,
+    start: Int,
+    end: Int,
+    sigs: List<SelfFunctionSig>,
+    locals: List<SelfTypeBinding>,
+) -> String {
+    let nameIdx = scLetNameIndex(tokens, start)
+    let colon = scFindFirstKind(tokens, nameIdx + 1, end, ":")
+    if colon >= 0 {
+        return scTypeNameAt(tokens, colon + 1, end)
+    }
+    let assign = scFindFirstKind(tokens, nameIdx + 1, end, "=")
+    if assign >= 0 {
+        return scInferExpr(tokens, assign + 1, end, sigs, locals)
+    }
+    "Invalid"
+}
+
+fn scInferExpr(
+    tokens: List<FrontToken>,
+    start: Int,
+    end: Int,
+    sigs: List<SelfFunctionSig>,
+    locals: List<SelfTypeBinding>,
+) -> String {
+    let first = scNextMeaningfulIndex(tokens, start, end)
+    let lastEnd = scTrimEnd(tokens, first, end)
+    if first >= lastEnd {
+        return "()"
+    }
+    if scTokenIs(tokens, first, "(") && frontFindMatching(
+        tokens,
+        first,
+        lastEnd,
+        scKind("("),
+        scKind(")"),
+    ) == lastEnd - 1 {
+        return scInferExpr(tokens, first + 1, lastEnd - 1, sigs, locals)
+    }
+    let op = scFindTopLevelBinary(tokens, first, lastEnd)
+    if op >= 0 {
+        let left = scInferExpr(tokens, first, op, sigs, locals)
+        let right = scInferExpr(tokens, op + 1, lastEnd, sigs, locals)
+        return frontBinaryResultName(
+            frontTokenKindName(frontTokenAtList(tokens, op).kind),
+            left,
+            right,
+        )
+    }
+    let tok = frontTokenAtList(tokens, first)
+    if scKindIs(tok.kind, "INT") || scKindIs(tok.kind, "FLOAT") || scKindIs(tok.kind, "STRING") {
+        return frontInferLiteralName(tok.text)
+    }
+    if scKindIs(tok.kind, "IDENT") && (tok.text == "true" || tok.text == "false") {
+        return "Bool"
+    }
+    if scKindIs(tok.kind, "IDENT") {
+        let next = scNextMeaningfulIndex(tokens, first + 1, lastEnd)
+        if next < lastEnd && scTokenIs(tokens, next, "(") {
+            let sig = scSignatureAt(sigs, tok.text)
+            if sig.name != "" {
+                return sig.returnType
+            }
+        }
+        let binding = scBindingAt(locals, tok.text)
+        if binding.name != "" {
+            return binding.typeName
+        }
+    }
+    "Invalid"
+}
+
+fn scAssignable(dst: String, src: String) -> Bool {
+    if dst == "" || dst == "Invalid" || src == "" || src == "Invalid" {
+        return false
+    }
+    if dst == src {
+        return true
+    }
+    if frontTypeName(frontTypeByName(dst)) != "Invalid" || frontTypeName(frontTypeByName(src)) != "Invalid" {
+        return frontAssignableName(dst, src)
+    }
+    false
+}
+
+fn scFindTopLevelBinary(tokens: List<FrontToken>, start: Int, end: Int) -> Int {
+    let mut parenDepth = 0
+    let mut bracketDepth = 0
+    let mut braceDepth = 0
+    for idx in start..end {
+        let kind = frontTokenAtList(tokens, idx).kind
+        if scKindIs(kind, "(") {
+            parenDepth = parenDepth + 1
+        } else if scKindIs(kind, ")") {
+            if parenDepth > 0 {
+                parenDepth = parenDepth - 1
+            }
+        } else if scKindIs(kind, "[") {
+            bracketDepth = bracketDepth + 1
+        } else if scKindIs(kind, "]") {
+            if bracketDepth > 0 {
+                bracketDepth = bracketDepth - 1
+            }
+        } else if scKindIs(kind, r"{") {
+            braceDepth = braceDepth + 1
+        } else if scKindIs(kind, r"}") {
+            if braceDepth > 0 {
+                braceDepth = braceDepth - 1
+            }
+        } else if parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && frontIsBinaryOp(kind) {
+            return idx
+        }
+    }
+    -1
+}
+
+fn scArgCount(tokens: List<FrontToken>, open: Int, close: Int) -> Int {
+    let first = scNextMeaningfulIndex(tokens, open + 1, close)
+    if first >= close {
+        return 0
+    }
+    let mut count = 1
+    let mut depth = 0
+    for idx in first..close {
+        let kind = frontTokenAtList(tokens, idx).kind
+        if scKindIs(kind, "(") || scKindIs(kind, "[") || scKindIs(kind, r"{") {
+            depth = depth + 1
+        } else if scKindIs(kind, ")") || scKindIs(kind, "]") || scKindIs(kind, r"}") {
+            if depth > 0 {
+                depth = depth - 1
+            }
+        } else if depth == 0 && scKindIs(kind, ",") {
+            count = count + 1
+        }
+    }
+    count
+}
+
+fn scBindingAt(bindings: List<SelfTypeBinding>, name: String) -> SelfTypeBinding {
+    for binding in bindings {
+        if binding.name == name {
+            return binding
+        }
+    }
+    selfTypeBinding("", "Invalid", false)
+}
+
+fn scSignatureAt(sigs: List<SelfFunctionSig>, name: String) -> SelfFunctionSig {
+    for sig in sigs {
+        if sig.name == name {
+            return sig
+        }
+    }
+    selfFunctionSig("", "Invalid", [], [], 0, 0)
+}
+
+fn scStringAt(items: List<String>, target: Int) -> String {
+    let mut idx = 0
+    for item in items {
+        if idx == target {
+            return item
+        }
+        idx = idx + 1
+    }
+    ""
+}
+
+fn scStringListCount(items: List<String>) -> Int {
+    let mut count = 0
+    for item in items {
+        let _ = item
+        count = count + 1
+    }
+    count
+}
+
+fn scParamType(tokens: List<FrontToken>, nameIdx: Int, close: Int) -> String {
+    let colon = scFindFirstKind(tokens, nameIdx + 1, close, ":")
+    if colon >= 0 {
+        return scTypeNameAt(tokens, colon + 1, close)
+    }
+    "Invalid"
+}
+
+fn scTypeNameAt(tokens: List<FrontToken>, start: Int, end: Int) -> String {
+    let idx = scNextMeaningfulIndex(tokens, start, end)
+    if idx < end {
+        let tok = frontTokenAtList(tokens, idx)
+        if scKindIs(tok.kind, "IDENT") {
+            return tok.text
+        }
+        if scKindIs(tok.kind, "(") && scTokenIs(tokens, idx + 1, ")") {
+            return "()"
+        }
+    }
+    "Invalid"
+}
+
+fn scLetNameIndex(tokens: List<FrontToken>, start: Int) -> Int {
+    let mut idx = start + 1
+    if scTokenIs(tokens, idx, "mut") {
+        idx = idx + 1
+    }
+    idx
+}
+
+fn scKind(name: String) -> FrontTokenKind {
+    frontTokenKindByName(name)
+}
+
+fn scKindIs(kind: FrontTokenKind, name: String) -> Bool {
+    frontTokenKindName(kind) == name
+}
+
+fn scTokenIs(tokens: List<FrontToken>, idx: Int, name: String) -> Bool {
+    scKindIs(frontTokenAtList(tokens, idx).kind, name)
+}
+
+fn scLooksLikeDeclarationStart(tokens: List<FrontToken>, idx: Int) -> Bool {
+    let immediate = scPrevTokenKind(tokens, idx)
+    let prev = scPrevMeaningfulKind(tokens, idx)
+    scKindIs(immediate, "EOF") || scKindIs(immediate, "NEWLINE") || scKindIs(immediate, ";") || scKindIs(
+        prev,
+        "pub",
+    ) || scKindIs(prev, r"{") || scKindIs(prev, r"}")
+}
+
+fn scLooksLikeParamName(tokens: List<FrontToken>, idx: Int, open: Int) -> Bool {
+    let prev = scPrevMeaningfulKindBounded(tokens, idx, open)
+    scKindIs(prev, "(") || scKindIs(prev, ",") || scKindIs(prev, "mut")
+}
+
+fn scNextIdent(tokens: List<FrontToken>, start: Int, end: Int) -> Int {
+    for idx in start..end {
+        if scTokenIs(tokens, idx, "IDENT") {
+            return idx
+        }
+    }
+    end
+}
+
+fn scFindTopLevelKind(
+    tokens: List<FrontToken>,
+    start: Int,
+    end: Int,
+    target: String,
+) -> Int {
+    let mut parenDepth = 0
+    let mut bracketDepth = 0
+    let mut braceDepth = 0
+    let mut angleDepth = 0
+    for idx in start..end {
+        let kind = frontTokenAtList(tokens, idx).kind
+        if scKindIs(kind, target) && parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0 {
+            return idx
+        }
+        if scKindIs(kind, "(") {
+            parenDepth = parenDepth + 1
+        } else if scKindIs(kind, ")") {
+            if parenDepth > 0 {
+                parenDepth = parenDepth - 1
+            }
+        } else if scKindIs(kind, "[") {
+            bracketDepth = bracketDepth + 1
+        } else if scKindIs(kind, "]") {
+            if bracketDepth > 0 {
+                bracketDepth = bracketDepth - 1
+            }
+        } else if scKindIs(kind, r"{") {
+            braceDepth = braceDepth + 1
+        } else if scKindIs(kind, r"}") {
+            if braceDepth > 0 {
+                braceDepth = braceDepth - 1
+            }
+        } else if scKindIs(kind, "<") {
+            angleDepth = angleDepth + 1
+        } else if scKindIs(kind, ">") {
+            if angleDepth > 0 {
+                angleDepth = angleDepth - 1
+            }
+        }
+    }
+    -1
+}
+
+fn scFindFirstKind(tokens: List<FrontToken>, start: Int, end: Int, target: String) -> Int {
+    for idx in start..end {
+        if scTokenIs(tokens, idx, target) {
+            return idx
+        }
+    }
+    -1
+}
+
+fn scTrimEnd(tokens: List<FrontToken>, start: Int, end: Int) -> Int {
+    let mut cur = end
+    for cur > start {
+        let kind = frontTokenAtList(tokens, cur - 1).kind
+        if !(scKindIs(kind, "NEWLINE")) && !(scKindIs(kind, ";")) {
+            return cur
+        }
+        cur = cur - 1
+    }
+    start
+}
+
+fn scNextMeaningfulIndex(tokens: List<FrontToken>, start: Int, end: Int) -> Int {
+    for idx in start..end {
+        let kind = frontTokenAtList(tokens, idx).kind
+        if !(scKindIs(kind, "NEWLINE")) && !(scKindIs(kind, ";")) {
+            return idx
+        }
+    }
+    end
+}
+
+fn scPrevMeaningfulKind(tokens: List<FrontToken>, idx: Int) -> FrontTokenKind {
+    scPrevMeaningfulKindBounded(tokens, idx, 0)
+}
+
+fn scPrevTokenKind(tokens: List<FrontToken>, idx: Int) -> FrontTokenKind {
+    if idx <= 0 {
+        return scKind("EOF")
+    }
+    frontTokenAtList(tokens, idx - 1).kind
+}
+
+fn scPrevMeaningfulKindBounded(tokens: List<FrontToken>, idx: Int, floor: Int) -> FrontTokenKind {
+    let mut cur = idx - 1
+    for cur >= floor {
+        let kind = frontTokenAtList(tokens, cur).kind
+        if !(scKindIs(kind, "NEWLINE")) && !(scKindIs(kind, ";")) {
+            return kind
+        }
+        cur = cur - 1
+    }
+    scKind("EOF")
+}

@@ -22,7 +22,8 @@ the compiler evolves.
   lifted out of dogfood so they can grow independently, including the
   runnable lexer scanner, front-end seed models, and broad example-style
   tests for SemVer, registry selection, manifest features, diagnostics,
-  and package archive classification.
+  package archive classification, and Osty-written linter, resolver, and
+  checker cores.
 - `stdlib-tour`: front-end checked package that demonstrates Tier 1
   standard-library imports and Result-style error flow.
 - `workspace`: virtual workspace with two member packages and a
