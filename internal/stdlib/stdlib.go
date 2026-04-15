@@ -102,9 +102,17 @@ type Module struct {
 // time rather than lazily on first import, so drift in a stub is
 // surfaced as a failing test rather than a cryptic runtime error.
 //
-// Long-running tools (CLI, LSP) should prefer LoadCached to avoid
-// re-parsing on every invocation.
+// The parsed registry is immutable after construction. Load returns
+// independent top-level maps while sharing that immutable content, so
+// repeated callers do not re-parse large vendored stdlib tables.
 func Load() *Registry {
+	loadOnce.Do(func() {
+		loaded = loadRegistry()
+	})
+	return cloneRegistry(loaded)
+}
+
+func loadRegistry() *Registry {
 	r := &Registry{
 		Modules:       map[string]*Module{},
 		Primitives:    map[types.PrimitiveKind]map[string]*ast.FnDecl{},
@@ -130,6 +138,7 @@ func Load() *Registry {
 		if file == nil {
 			continue
 		}
+		promoteTopLevelLets(file)
 		pkg := &resolve.Package{
 			Name: moduleName(p),
 			Files: []*resolve.PackageFile{{
@@ -161,6 +170,65 @@ func Load() *Registry {
 		}
 	}
 	return r
+}
+
+func cloneRegistry(r *Registry) *Registry {
+	if r == nil {
+		return nil
+	}
+	out := &Registry{
+		Modules:       make(map[string]*Module, len(r.Modules)),
+		Primitives:    make(map[types.PrimitiveKind]map[string]*ast.FnDecl, len(r.Primitives)),
+		ResultMethods: make(map[string]*ast.FnDecl, len(r.ResultMethods)),
+		Diags:         append([]*diag.Diagnostic(nil), r.Diags...),
+	}
+	for k, v := range r.Modules {
+		out.Modules[k] = v
+	}
+	for k, v := range r.Primitives {
+		inner := make(map[string]*ast.FnDecl, len(v))
+		for name, fn := range v {
+			inner[name] = fn
+		}
+		out.Primitives[k] = inner
+	}
+	for k, v := range r.ResultMethods {
+		out.ResultMethods[k] = v
+	}
+	return out
+}
+
+func promoteTopLevelLets(file *ast.File) {
+	if file == nil || len(file.Stmts) == 0 {
+		return
+	}
+	promoted := make([]ast.Decl, 0, len(file.Stmts))
+	kept := file.Stmts[:0]
+	for _, stmt := range file.Stmts {
+		let, ok := stmt.(*ast.LetStmt)
+		if !ok {
+			kept = append(kept, stmt)
+			continue
+		}
+		pat, ok := let.Pattern.(*ast.IdentPat)
+		if !ok {
+			kept = append(kept, stmt)
+			continue
+		}
+		promoted = append(promoted, &ast.LetDecl{
+			PosV:   let.PosV,
+			EndV:   let.EndV,
+			Mut:    let.Mut,
+			MutPos: let.MutPos,
+			Name:   pat.Name,
+			Type:   let.Type,
+			Value:  let.Value,
+		})
+	}
+	file.Stmts = kept
+	if len(promoted) > 0 {
+		file.Decls = append(promoted, file.Decls...)
+	}
 }
 
 // absorbPrimitiveStub walks the `#[intrinsic_methods(...)]`-annotated
@@ -236,10 +304,9 @@ func primitiveKindByName(name string) (types.PrimitiveKind, bool) {
 	return p.Kind, true
 }
 
-// LoadCached returns a Registry loaded once per process. Callers that
-// only read the result (the common case) can safely share this instance
-// across goroutines — the Registry is read-only after Load completes.
-// Tests that need a fresh Registry should call Load directly.
+// LoadCached returns a Registry handle loaded once per process. Callers
+// that only read the result (the common case) can safely share this
+// instance across goroutines.
 func LoadCached() *Registry {
 	cachedOnce.Do(func() {
 		cached = Load()
@@ -248,6 +315,9 @@ func LoadCached() *Registry {
 }
 
 var (
+	loadOnce sync.Once
+	loaded   *Registry
+
 	cachedOnce sync.Once
 	cached     *Registry
 )

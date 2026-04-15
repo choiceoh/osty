@@ -55,6 +55,10 @@ func (g *gen) emitFnDecl(fn *ast.FnDecl) {
 	}
 
 	if len(fn.Generics) > 0 {
+		if g.emitGenericFnDecls {
+			g.emitFnDeclBody(fn, g.renamedFnName(fn.Name))
+			return
+		}
 		// Demand-driven: generic fns never emit inline. A call site
 		// (possibly inside another generic body being specialized)
 		// requests an instantiation via requestInstance, and the
@@ -62,7 +66,7 @@ func (g *gen) emitFnDecl(fn *ast.FnDecl) {
 		return
 	}
 
-	g.emitFnDeclBody(fn, fn.Name)
+	g.emitFnDeclBody(fn, g.renamedFnName(fn.Name))
 }
 
 // emitFnDeclBody writes a single function definition under `name`. It
@@ -77,6 +81,9 @@ func (g *gen) emitFnDeclBody(fn *ast.FnDecl, name string) {
 	g.sourceMarker(fn)
 	g.body.write("func ")
 	g.body.write(name)
+	if g.emitGenericFnDecls && len(fn.Generics) > 0 {
+		g.emitGenericParamList(fn.Generics)
+	}
 
 	g.emitParamList(fn.Params)
 
@@ -138,7 +145,11 @@ func (g *gen) emitLetDecl(l *ast.LetDecl) {
 	g.body.nl()
 	g.sourceMarker(l)
 	g.body.write("var ")
-	g.body.write(mangleIdent(l.Name))
+	name := g.renamedFnName(l.Name)
+	if name == l.Name {
+		name = mangleIdent(l.Name)
+	}
+	g.body.write(name)
 	if l.Type != nil {
 		g.body.write(" ")
 		g.body.write(g.goTypeExpr(l.Type))
@@ -468,6 +479,12 @@ func (g *gen) emitUseDecl(u *ast.UseDecl) {
 		return
 	}
 	full := strings.Join(u.Path, ".")
+	if module, ok := stdlibOstyModulePath(u.Path); ok {
+		if g.aliasUsedAsSelector(alias) {
+			g.requestStdlibOsty(module)
+		}
+		return
+	}
 	if g.emitStdlibRuntimeBridge(alias, u.Path, full) {
 		return
 	}
@@ -1191,8 +1208,6 @@ func stdlibBridge(path []string) string {
 		return "io"
 	case "time":
 		return "time"
-	case "strings":
-		return "strings"
 	case "math":
 		return "math"
 	case "errors":
