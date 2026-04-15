@@ -641,6 +641,87 @@ func resultMapErr[T any, E any, F any](r Result[T, E], f func(E) F) Result[T, F]
 }
 `)
 	}
+	if g.needBytesRuntime {
+		out.WriteString(`
+func bytesFromString(s string) []byte { return []byte(s) }
+
+func bytesToString(b []byte) Result[string, any] { return resultOk[string, any](string(b)) }
+
+func bytesLen(b []byte) int { return len(b) }
+
+func bytesIsEmpty(b []byte) bool { return len(b) == 0 }
+
+func bytesGet(b []byte, i int) *byte {
+	if i < 0 || i >= len(b) {
+		return nil
+	}
+	v := b[i]
+	return &v
+}
+
+func bytesEqual(a []byte, b []byte) bool { return stdbytes.Equal(a, b) }
+
+func bytesContains(b []byte, sub []byte) bool { return stdbytes.Contains(b, sub) }
+
+func bytesStartsWith(b []byte, prefix []byte) bool { return stdbytes.HasPrefix(b, prefix) }
+
+func bytesEndsWith(b []byte, suffix []byte) bool { return stdbytes.HasSuffix(b, suffix) }
+
+func bytesIndexOf(b []byte, sub []byte) *int {
+	i := stdbytes.Index(b, sub)
+	if i < 0 {
+		return nil
+	}
+	return &i
+}
+
+func bytesLastIndexOf(b []byte, sub []byte) *int {
+	i := stdbytes.LastIndex(b, sub)
+	if i < 0 {
+		return nil
+	}
+	return &i
+}
+
+func bytesSplit(b []byte, sep []byte) [][]byte { return stdbytes.Split(b, sep) }
+
+func bytesJoin(parts [][]byte, sep []byte) []byte { return stdbytes.Join(parts, sep) }
+
+func bytesConcat(a []byte, b []byte) []byte { return append(append([]byte(nil), a...), b...) }
+
+func bytesRepeat(b []byte, n int) []byte { return stdbytes.Repeat(b, n) }
+
+func bytesReplace(b []byte, old []byte, new []byte) []byte {
+	return stdbytes.Replace(b, old, new, 1)
+}
+
+func bytesReplaceAll(b []byte, old []byte, new []byte) []byte {
+	return stdbytes.ReplaceAll(b, old, new)
+}
+
+func bytesTrimLeft(b []byte, strip []byte) []byte { return stdbytes.TrimLeft(b, string(strip)) }
+
+func bytesTrimRight(b []byte, strip []byte) []byte { return stdbytes.TrimRight(b, string(strip)) }
+
+func bytesTrim(b []byte, strip []byte) []byte { return stdbytes.Trim(b, string(strip)) }
+
+func bytesTrimSpace(b []byte) []byte { return stdbytes.TrimSpace(b) }
+
+func bytesToUpper(b []byte) []byte { return stdbytes.ToUpper(b) }
+
+func bytesToLower(b []byte) []byte { return stdbytes.ToLower(b) }
+
+func bytesToHex(b []byte) string { return _ostybyteshex.EncodeToString(b) }
+
+func bytesFromHex(s string) Result[[]byte, any] {
+	b, err := _ostybyteshex.DecodeString(s)
+	if err != nil {
+		return resultErr[[]byte, any](err)
+	}
+	return resultOk[[]byte, any](b)
+}
+`)
+	}
 	if g.needErrorRuntime {
 		out.WriteString(`
 type ostyBasicError struct {
@@ -1288,23 +1369,6 @@ type refInterfaceHeader struct {
 
 func refInterfaceData(v any) unsafe.Pointer {
 	return (*refInterfaceHeader)(unsafe.Pointer(&v)).data
-}
-`)
-	}
-	if g.needBytesRuntime {
-		out.WriteString(`
-func bytesEqual(a, b []byte) bool { return stdbytes.Equal(a, b) }
-
-func bytesContains(b, sub []byte) bool { return stdbytes.Contains(b, sub) }
-
-func bytesToUpper(b []byte) []byte { return stdbytes.ToUpper(b) }
-
-func bytesFromHex(s string) Result[[]byte, any] {
-	b, err := _ostybyteshex.DecodeString(s)
-	if err != nil {
-		return resultErr[[]byte, any](err)
-	}
-	return resultOk[[]byte, any](b)
 }
 `)
 	}

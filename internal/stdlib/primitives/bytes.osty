@@ -4,6 +4,7 @@
 
 #[intrinsic_methods(Bytes)]
 pub struct __BytesMethods {
+    pub fn from(items: List<Byte>) -> Bytes { "".toBytes() }
     pub fn len(self) -> Int { 0 }
     pub fn isEmpty(self) -> Bool { false }
     pub fn get(self, i: Int) -> Byte? { None }

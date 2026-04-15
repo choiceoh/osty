@@ -1072,7 +1072,7 @@ func (g *gen) emitStdlibIterCall(c *ast.CallExpr) bool {
 		explicit = tf.Args
 	}
 	id, parts, ok := stdlibFieldChain(base)
-	if !ok || id == nil || len(parts) != 1 || !g.isStdlibPackageAlias(id, "iter") {
+	if !ok || id == nil || len(parts) != 1 || (!g.isStdlibPackageAlias(id, "iter") && !g.isStdlibAliasName(id.Name, "iter")) {
 		return false
 	}
 	switch parts[0] {

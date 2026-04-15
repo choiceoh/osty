@@ -76,6 +76,10 @@ pub fn trim(b: Bytes, strip: Bytes) -> Bytes {
     trimLeft(trimRight(b, strip), strip)
 }
 
+pub fn trimSpace(b: Bytes) -> Bytes {
+    trimSpace(b)
+}
+
 pub fn toUpper(b: Bytes) -> Bytes {
     toUpper(b)
 }
