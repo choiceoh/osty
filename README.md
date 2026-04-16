@@ -154,20 +154,20 @@ This repository also ships a repo-local wrapper at
 Normal use no longer needs any env var:
 
 ```sh
-go run ./cmd/osty check examples/gc
+go run ./cmd/osty check examples/calc
 ```
 
 To force a specific checker binary:
 
 ```sh
 export OSTY_NATIVE_CHECKER_BIN="$PWD/scripts/osty-native-checker"
-go run ./cmd/osty check examples/gc
+go run ./cmd/osty check examples/calc
 ```
 
 Or wrap a single command:
 
 ```sh
-./scripts/with-native-checker go run ./cmd/osty build --backend llvm --emit llvm-ir examples/gc
+./scripts/with-native-checker go run ./cmd/osty build --backend llvm --emit llvm-ir examples/calc
 ```
 
 If you prefer a prebuilt binary for speed:
@@ -176,6 +176,20 @@ If you prefer a prebuilt binary for speed:
 go build -o .osty/bin/osty-native-checker ./cmd/osty-native-checker
 export OSTY_NATIVE_CHECKER_BIN="$PWD/.osty/bin/osty-native-checker"
 ```
+
+## Runtime GC
+
+The active GC implementation path is the LLVM/native runtime path, not the
+large executable model under `examples/gc`.
+
+The current source of truth is:
+
+- [`RUNTIME_GC.md`](./RUNTIME_GC.md)
+- [`internal/llvmgen/llvmgen.go`](./internal/llvmgen/llvmgen.go)
+- [`internal/backend/runtime/osty_runtime.c`](./internal/backend/runtime/osty_runtime.c)
+
+`examples/gc` remains useful as a prototype/invariant lab, but new GC
+implementation work should land in the runtime path first.
 
 ## CLI
 

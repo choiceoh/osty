@@ -9,9 +9,9 @@ the compiler evolves.
 
 - `calc`: small library used by the `osty test` harness smoke test.
 - `ffi`: legacy Go FFI example kept for bootstrap/checker coverage.
-- `gc`: independent garbage-collector core written in Osty, covering
-  generational collection, remembered-set barriers, incremental marking,
-  cycle reclamation, compaction, pinning, and allocation telemetry.
+- `gc`: large executable GC model kept for prototype/invariant coverage.
+  It is no longer the primary implementation path for native runtime GC;
+  see [`../RUNTIME_GC.md`](../RUNTIME_GC.md).
 - `concurrency`: runnable example covering channels, `spawn`,
   `parallel`, and `taskGroup`.
 - `stdlib-tour`: front-end checked package that demonstrates Tier 1

@@ -25,4 +25,8 @@
 // source. This includes phase-54~63 payload generalization for `Float` and
 // `String` payload enums (return/param/mut/reversed/wildcard match coverage).
 // Qualified constructor/pattern forms remain for a later phase.
+//
+// The active GC implementation path paired with this lowering lives in
+// `internal/backend/runtime/osty_runtime.c`; `examples/gc` remains a model/
+// prototype corpus rather than the source of truth for runtime GC behavior.
 package llvmgen

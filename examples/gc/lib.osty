@@ -1,10 +1,14 @@
-// gc - a high-grade independent garbage-collector core written in Osty.
+// gc - a high-grade GC reference model written in Osty.
 //
-// This package models the runtime pieces a native Osty backend would need:
-// a managed object graph, explicit roots, a nursery and tenured generation,
-// old-to-young remembered-set write barriers, incremental tri-color marking,
-// cycle collection, compaction, pinning, allocation pressure triggers, and
-// telemetry for every collection.
+// This package is a prototype/invariant model, not the executable source of
+// truth for the shipped LLVM runtime GC path. The active native/runtime path
+// lives in `internal/llvmgen/llvmgen.go` and
+// `internal/backend/runtime/osty_runtime.c`.
+//
+// This package still models the larger runtime shape: a managed object graph,
+// explicit roots, a nursery and tenured generation, old-to-young remembered-set
+// write barriers, incremental tri-color marking, cycle collection, compaction,
+// pinning, allocation pressure triggers, and telemetry for every collection.
 
 pub enum ObjectKind {
     GcRecord,
