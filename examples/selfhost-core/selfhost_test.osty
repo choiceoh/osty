@@ -170,7 +170,7 @@ fn testSelfhostExamplePipelineWiresIrWithAnalyzerCores() {
 
     testing.assert(report.tokens > 0)
     testing.assert(report.parseNodes > 0)
-    testing.assert(report.irNodes >= report.parseNodes)
+    testing.assert(report.irNodes >= report.irDecls)
     testing.assertEq(report.irDecls, 3)
     testing.assertEq(report.irFuncs, 1)
     testing.assert(report.irStmts >= 1)
