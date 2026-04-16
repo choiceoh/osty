@@ -14,6 +14,7 @@ import (
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/backend"
+	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/resolve"
 )
@@ -220,23 +221,25 @@ type nativeTestRun struct {
 }
 
 func compileAndRunNativeTest(ctx context.Context, b backend.Backend, emitMode backend.EmitMode, tmpRoot string, pkg *resolve.Package, tc nativeTestCase) (nativeTestRun, error) {
-	file, sourcePath, err := parseNativeTestEntry(pkg, tc)
+	file, src, sourcePath, err := parseNativeTestEntry(pkg, tc)
 	if err != nil {
 		return nativeTestRun{}, err
 	}
 	name := sanitizeNativeTestName(tc.Name)
 	layoutRoot := filepath.Join(tmpRoot, name)
+	res := resolveFile(file)
+	chk := check.File(file, res, checkOptsForSource(src))
+	entry, err := backend.PrepareEntry("main", sourcePath, file, res, chk)
+	if err != nil {
+		return nativeTestRun{}, err
+	}
 	req := backend.Request{
 		Layout: backend.Layout{
 			Root:    layoutRoot,
 			Profile: "test",
 		},
-		Emit: emitMode,
-		Entry: backend.Entry{
-			PackageName: "main",
-			SourcePath:  sourcePath,
-			File:        file,
-		},
+		Emit:       emitMode,
+		Entry:      entry,
 		BinaryName: name,
 	}
 	result, err := b.Emit(ctx, req)
@@ -246,9 +249,9 @@ func compileAndRunNativeTest(ctx context.Context, b backend.Backend, emitMode ba
 	return runNativeTestBinary(result.Artifacts.Binary)
 }
 
-func parseNativeTestEntry(pkg *resolve.Package, tc nativeTestCase) (*ast.File, string, error) {
+func parseNativeTestEntry(pkg *resolve.Package, tc nativeTestCase) (*ast.File, []byte, string, error) {
 	if pkg == nil {
-		return nil, "", fmt.Errorf("missing package")
+		return nil, nil, "", fmt.Errorf("missing package")
 	}
 	runnerPath := filepath.Join(pkg.Dir, "__osty_test_runner__.osty")
 	runner := []byte(fmt.Sprintf("fn main() {\n    %s()\n}\n", tc.Name))
@@ -261,15 +264,15 @@ func parseNativeTestEntry(pkg *resolve.Package, tc nativeTestCase) (*ast.File, s
 		Path:   runnerPath,
 		Source: runner,
 	})
-	file, _, err := parseGenEmitFile(testPkg)
+	file, src, err := parseGenEmitFile(testPkg)
 	if err != nil {
-		return nil, "", err
+		return nil, nil, "", err
 	}
 	sourcePath := tc.Path
 	if sourcePath == "" {
 		sourcePath = runnerPath
 	}
-	return file, sourcePath, nil
+	return file, src, sourcePath, nil
 }
 
 func sanitizeNativeTestName(name string) string {

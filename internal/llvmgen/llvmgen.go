@@ -185,6 +185,10 @@ func toUnsupportedDiagnostic(diag UnsupportedDiagnostic) *LlvmUnsupportedDiagnos
 
 // Generate emits textual LLVM IR for a minimal, scalar subset.
 func Generate(file *ast.File, opts Options) ([]byte, error) {
+	return generateASTFile(file, opts)
+}
+
+func generateASTFile(file *ast.File, opts Options) ([]byte, error) {
 	if file == nil {
 		return nil, unsupported("source-layout", "nil file")
 	}

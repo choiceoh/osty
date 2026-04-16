@@ -260,20 +260,18 @@ func emitConfiguredGen(cfg Config, pkgName string, file *ast.File, res *resolve.
 		return nil, err
 	}
 	defer os.RemoveAll(tmpRoot)
+	entry, err := backend.PrepareEntry(pkgName, sourcePath, file, res, chk)
+	if err != nil {
+		return nil, err
+	}
 
 	result, emitErr := b.Emit(context.Background(), backend.Request{
 		Layout: backend.Layout{
 			Root:    tmpRoot,
 			Profile: "pipeline",
 		},
-		Emit: mode,
-		Entry: backend.Entry{
-			PackageName: pkgName,
-			SourcePath:  sourcePath,
-			File:        file,
-			Resolve:     res,
-			Check:       chk,
-		},
+		Emit:  mode,
+		Entry: entry,
 	})
 	if result == nil {
 		return nil, emitErr
