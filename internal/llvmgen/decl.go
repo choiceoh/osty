@@ -345,19 +345,16 @@ func collectBuiltinResultTypes(file *ast.File, env typeEnv) map[string]builtinRe
 	for _, decl := range file.Decls {
 		switch d := decl.(type) {
 		case *ast.FnDecl:
-			for _, param := range d.Params {
-				if param == nil {
-					continue
-				}
-				collectBuiltinResultTypeFromAST(out, param.Type, env)
-			}
-			collectBuiltinResultTypeFromAST(out, d.ReturnType, env)
+			collectBuiltinResultTypesFromFn(out, d, env)
 		case *ast.StructDecl:
 			for _, field := range d.Fields {
 				if field == nil {
 					continue
 				}
 				collectBuiltinResultTypeFromAST(out, field.Type, env)
+			}
+			for _, method := range d.Methods {
+				collectBuiltinResultTypesFromFn(out, method, env)
 			}
 		case *ast.EnumDecl:
 			for _, variant := range d.Variants {
@@ -368,11 +365,154 @@ func collectBuiltinResultTypes(file *ast.File, env typeEnv) map[string]builtinRe
 					collectBuiltinResultTypeFromAST(out, field, env)
 				}
 			}
+			for _, method := range d.Methods {
+				collectBuiltinResultTypesFromFn(out, method, env)
+			}
 		case *ast.LetDecl:
 			collectBuiltinResultTypeFromAST(out, d.Type, env)
 		}
 	}
+	for _, stmt := range file.Stmts {
+		collectBuiltinResultTypesFromStmt(out, stmt, env)
+	}
 	return out
+}
+
+func collectBuiltinResultTypesFromFn(out map[string]builtinResultType, fn *ast.FnDecl, env typeEnv) {
+	if out == nil || fn == nil {
+		return
+	}
+	for _, param := range fn.Params {
+		if param == nil {
+			continue
+		}
+		collectBuiltinResultTypeFromAST(out, param.Type, env)
+	}
+	collectBuiltinResultTypeFromAST(out, fn.ReturnType, env)
+	collectBuiltinResultTypesFromBlock(out, fn.Body, env)
+}
+
+func collectBuiltinResultTypesFromBlock(out map[string]builtinResultType, block *ast.Block, env typeEnv) {
+	if out == nil || block == nil {
+		return
+	}
+	for _, stmt := range block.Stmts {
+		collectBuiltinResultTypesFromStmt(out, stmt, env)
+	}
+}
+
+func collectBuiltinResultTypesFromStmt(out map[string]builtinResultType, stmt ast.Stmt, env typeEnv) {
+	if out == nil || stmt == nil {
+		return
+	}
+	switch s := stmt.(type) {
+	case *ast.Block:
+		collectBuiltinResultTypesFromBlock(out, s, env)
+	case *ast.LetStmt:
+		collectBuiltinResultTypeFromAST(out, s.Type, env)
+		collectBuiltinResultTypesFromExpr(out, s.Value, env)
+	case *ast.ExprStmt:
+		collectBuiltinResultTypesFromExpr(out, s.X, env)
+	case *ast.AssignStmt:
+		for _, target := range s.Targets {
+			collectBuiltinResultTypesFromExpr(out, target, env)
+		}
+		collectBuiltinResultTypesFromExpr(out, s.Value, env)
+	case *ast.ReturnStmt:
+		collectBuiltinResultTypesFromExpr(out, s.Value, env)
+	case *ast.ChanSendStmt:
+		collectBuiltinResultTypesFromExpr(out, s.Channel, env)
+		collectBuiltinResultTypesFromExpr(out, s.Value, env)
+	case *ast.DeferStmt:
+		collectBuiltinResultTypesFromExpr(out, s.X, env)
+	case *ast.ForStmt:
+		collectBuiltinResultTypesFromExpr(out, s.Iter, env)
+		collectBuiltinResultTypesFromBlock(out, s.Body, env)
+	}
+}
+
+func collectBuiltinResultTypesFromExpr(out map[string]builtinResultType, expr ast.Expr, env typeEnv) {
+	if out == nil || expr == nil {
+		return
+	}
+	switch e := expr.(type) {
+	case *ast.Block:
+		collectBuiltinResultTypesFromBlock(out, e, env)
+	case *ast.ParenExpr:
+		collectBuiltinResultTypesFromExpr(out, e.X, env)
+	case *ast.UnaryExpr:
+		collectBuiltinResultTypesFromExpr(out, e.X, env)
+	case *ast.BinaryExpr:
+		collectBuiltinResultTypesFromExpr(out, e.Left, env)
+		collectBuiltinResultTypesFromExpr(out, e.Right, env)
+	case *ast.QuestionExpr:
+		collectBuiltinResultTypesFromExpr(out, e.X, env)
+	case *ast.CallExpr:
+		collectBuiltinResultTypesFromExpr(out, e.Fn, env)
+		for _, arg := range e.Args {
+			if arg != nil {
+				collectBuiltinResultTypesFromExpr(out, arg.Value, env)
+			}
+		}
+	case *ast.FieldExpr:
+		collectBuiltinResultTypesFromExpr(out, e.X, env)
+	case *ast.IndexExpr:
+		collectBuiltinResultTypesFromExpr(out, e.X, env)
+		collectBuiltinResultTypesFromExpr(out, e.Index, env)
+	case *ast.TupleExpr:
+		for _, elem := range e.Elems {
+			collectBuiltinResultTypesFromExpr(out, elem, env)
+		}
+	case *ast.ListExpr:
+		for _, elem := range e.Elems {
+			collectBuiltinResultTypesFromExpr(out, elem, env)
+		}
+	case *ast.MapExpr:
+		for _, entry := range e.Entries {
+			if entry == nil {
+				continue
+			}
+			collectBuiltinResultTypesFromExpr(out, entry.Key, env)
+			collectBuiltinResultTypesFromExpr(out, entry.Value, env)
+		}
+	case *ast.StructLit:
+		collectBuiltinResultTypesFromExpr(out, e.Type, env)
+		for _, field := range e.Fields {
+			if field != nil {
+				collectBuiltinResultTypesFromExpr(out, field.Value, env)
+			}
+		}
+		collectBuiltinResultTypesFromExpr(out, e.Spread, env)
+	case *ast.IfExpr:
+		collectBuiltinResultTypesFromExpr(out, e.Cond, env)
+		collectBuiltinResultTypesFromBlock(out, e.Then, env)
+		collectBuiltinResultTypesFromExpr(out, e.Else, env)
+	case *ast.MatchExpr:
+		collectBuiltinResultTypesFromExpr(out, e.Scrutinee, env)
+		for _, arm := range e.Arms {
+			if arm == nil {
+				continue
+			}
+			collectBuiltinResultTypesFromExpr(out, arm.Guard, env)
+			collectBuiltinResultTypesFromExpr(out, arm.Body, env)
+		}
+	case *ast.ClosureExpr:
+		for _, param := range e.Params {
+			if param != nil {
+				collectBuiltinResultTypeFromAST(out, param.Type, env)
+			}
+		}
+		collectBuiltinResultTypeFromAST(out, e.ReturnType, env)
+		collectBuiltinResultTypesFromExpr(out, e.Body, env)
+	case *ast.TurbofishExpr:
+		collectBuiltinResultTypesFromExpr(out, e.Base, env)
+		for _, arg := range e.Args {
+			collectBuiltinResultTypeFromAST(out, arg, env)
+		}
+	case *ast.RangeExpr:
+		collectBuiltinResultTypesFromExpr(out, e.Start, env)
+		collectBuiltinResultTypesFromExpr(out, e.Stop, env)
+	}
 }
 
 func collectTupleTypes(file *ast.File, env typeEnv) map[string]tupleTypeInfo {

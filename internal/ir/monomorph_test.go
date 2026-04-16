@@ -1171,6 +1171,167 @@ func TestMonomorphizeVariantLitEnumFieldMangled(t *testing.T) {
 	}
 }
 
+func TestMonomorphizeVariantLitUsesLetContextType(t *testing.T) {
+	maybe := genericMaybeEnum()
+	valueType := &NamedType{Name: "Maybe", Args: []Type{TInt}}
+	lit := &VariantLit{
+		Enum:    "Maybe",
+		Variant: "Some",
+		T:       ErrTypeVal,
+		Args:    []Arg{{Value: intLit("42")}},
+	}
+	main := &FnDecl{
+		Name: "main", Return: TUnit,
+		Body: &Block{Stmts: []Stmt{&LetStmt{Name: "m", Type: valueType, Value: lit}}},
+	}
+	in := &Module{Package: "main", Decls: []Decl{maybe, main}}
+	out, _ := Monomorphize(in)
+	mainCp := out.Decls[0].(*FnDecl)
+	letCp := mainCp.Body.Stmts[0].(*LetStmt)
+	litCp := letCp.Value.(*VariantLit)
+	if !strings.HasPrefix(litCp.Enum, "_ZTS") {
+		t.Fatalf("VariantLit.Enum should use let-context mangled type, got %q", litCp.Enum)
+	}
+	nt, ok := litCp.T.(*NamedType)
+	if !ok || nt.Name != litCp.Enum {
+		t.Fatalf("VariantLit.T should match mangled enum, got %#v", litCp.T)
+	}
+}
+
+func TestMonomorphizeVariantPatternUsesScrutineeType(t *testing.T) {
+	maybe := genericMaybeEnum()
+	valueType := &NamedType{Name: "Maybe", Args: []Type{TInt}}
+	main := &FnDecl{
+		Name: "main", Return: TUnit,
+		Body: &Block{Stmts: []Stmt{
+			&ExprStmt{X: &IfLetExpr{
+				Pattern: &VariantPat{
+					Enum:    "Maybe",
+					Variant: "Some",
+					Args:    []Pattern{&IdentPat{Name: "x"}},
+				},
+				Scrutinee: &Ident{Name: "m", Kind: IdentLocal, T: valueType},
+				Then:      &Block{},
+				Else:      &Block{},
+				T:         TUnit,
+			}},
+		}},
+	}
+	in := &Module{Package: "main", Decls: []Decl{maybe, main}}
+	out, _ := Monomorphize(in)
+	mainCp := out.Decls[0].(*FnDecl)
+	ifLet := mainCp.Body.Stmts[0].(*ExprStmt).X.(*IfLetExpr)
+	pat := ifLet.Pattern.(*VariantPat)
+	if !strings.HasPrefix(pat.Enum, "_ZTS") {
+		t.Fatalf("VariantPat.Enum should use scrutinee mangled type, got %q", pat.Enum)
+	}
+}
+
+func TestMonomorphizeVariantLitInfersTypeFromPayload(t *testing.T) {
+	maybe := genericMaybeEnum()
+	main := &FnDecl{
+		Name: "main", Return: TUnit,
+		Body: &Block{Stmts: []Stmt{
+			&LetStmt{
+				Name: "m",
+				Type: ErrTypeVal,
+				Value: &VariantLit{
+					Enum:    "Maybe",
+					Variant: "Some",
+					T:       ErrTypeVal,
+					Args:    []Arg{{Value: intLit("42")}},
+				},
+			},
+			&ExprStmt{X: &IfLetExpr{
+				Pattern: &VariantPat{
+					Enum:    "Maybe",
+					Variant: "Some",
+					Args:    []Pattern{&IdentPat{Name: "x"}},
+				},
+				Scrutinee: &Ident{Name: "m", Kind: IdentLocal, T: ErrTypeVal},
+				Then:      &Block{},
+				Else:      &Block{},
+				T:         TUnit,
+			}},
+		}},
+	}
+	in := &Module{Package: "main", Decls: []Decl{maybe, main}}
+	out, errs := Monomorphize(in)
+	if len(errs) != 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	mainCp := out.Decls[0].(*FnDecl)
+	letCp := mainCp.Body.Stmts[0].(*LetStmt)
+	nt, ok := letCp.Type.(*NamedType)
+	if !ok || !strings.HasPrefix(nt.Name, "_ZTS") {
+		t.Fatalf("let type should infer to mangled enum, got %#v", letCp.Type)
+	}
+	litCp := letCp.Value.(*VariantLit)
+	if litCp.Enum != nt.Name {
+		t.Fatalf("VariantLit.Enum = %q, want %q", litCp.Enum, nt.Name)
+	}
+	ifLet := mainCp.Body.Stmts[1].(*ExprStmt).X.(*IfLetExpr)
+	scrutinee := ifLet.Scrutinee.(*Ident)
+	scrutineeType, ok := scrutinee.T.(*NamedType)
+	if !ok || scrutineeType.Name != nt.Name {
+		t.Fatalf("scrutinee type should reuse inferred enum, got %#v", scrutinee.T)
+	}
+	pat := ifLet.Pattern.(*VariantPat)
+	if pat.Enum != nt.Name {
+		t.Fatalf("pattern enum = %q, want %q", pat.Enum, nt.Name)
+	}
+}
+
+func TestMonomorphizePayloadFreeVariantUsesLetContextType(t *testing.T) {
+	maybe := genericMaybeEnum()
+	valueType := &NamedType{Name: "Maybe", Args: []Type{TInt}}
+	main := &FnDecl{
+		Name: "main", Return: TUnit,
+		Body: &Block{Stmts: []Stmt{
+			&LetStmt{
+				Name: "m",
+				Type: valueType,
+				Value: &FieldExpr{
+					X:    &Ident{Name: "Maybe", Kind: IdentTypeName, T: valueType},
+					Name: "None",
+					T:    ErrTypeVal,
+				},
+			},
+			&ExprStmt{X: &IfLetExpr{
+				Pattern:   &VariantPat{Enum: "Maybe", Variant: "None"},
+				Scrutinee: &Ident{Name: "m", Kind: IdentLocal, T: ErrTypeVal},
+				Then:      &Block{},
+				Else:      &Block{},
+				T:         TUnit,
+			}},
+		}},
+	}
+	in := &Module{Package: "main", Decls: []Decl{maybe, main}}
+	out, errs := Monomorphize(in)
+	if len(errs) != 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	mainCp := out.Decls[0].(*FnDecl)
+	letCp := mainCp.Body.Stmts[0].(*LetStmt)
+	nt, ok := letCp.Type.(*NamedType)
+	if !ok || !strings.HasPrefix(nt.Name, "_ZTS") {
+		t.Fatalf("let type should rewrite to mangled enum, got %#v", letCp.Type)
+	}
+	fieldCp := letCp.Value.(*FieldExpr)
+	if fieldCp.T == nil || fieldCp.T.String() != nt.String() {
+		t.Fatalf("field expr type = %#v, want %q", fieldCp.T, nt.String())
+	}
+	base := fieldCp.X.(*Ident)
+	if base.Name != nt.Name {
+		t.Fatalf("field base name = %q, want %q", base.Name, nt.Name)
+	}
+	ifLet := mainCp.Body.Stmts[1].(*ExprStmt).X.(*IfLetExpr)
+	pat := ifLet.Pattern.(*VariantPat)
+	if pat.Enum != nt.Name {
+		t.Fatalf("pattern enum = %q, want %q", pat.Enum, nt.Name)
+	}
+}
+
 func TestMonomorphizeStructMethodSpecialization(t *testing.T) {
 	// struct Pair<T, U> { … } impl { fn first(self) -> T { self.first } }
 	// fn main() { let p = Pair<Int, Bool>; p.first() }

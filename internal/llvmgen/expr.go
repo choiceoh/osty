@@ -2039,22 +2039,39 @@ func (g *generator) emitTestingValueCall(call *ast.CallExpr) (value, bool, error
 	}
 }
 
+func builtinResultConstructorName(expr ast.Expr) (string, bool) {
+	switch fn := expr.(type) {
+	case *ast.Ident:
+		if fn.Name == "Ok" || fn.Name == "Err" {
+			return fn.Name, true
+		}
+	case *ast.FieldExpr:
+		base, ok := fn.X.(*ast.Ident)
+		if ok && base.Name == "Result" && (fn.Name == "Ok" || fn.Name == "Err") {
+			return fn.Name, true
+		}
+	case *ast.TurbofishExpr:
+		return builtinResultConstructorName(fn.Base)
+	}
+	return "", false
+}
+
 func (g *generator) emitBuiltinResultConstructor(call *ast.CallExpr) (value, bool, error) {
-	id, ok := call.Fn.(*ast.Ident)
-	if !ok || (id.Name != "Ok" && id.Name != "Err") {
+	name, ok := builtinResultConstructorName(call.Fn)
+	if !ok {
 		return value{}, false, nil
 	}
 	info, ok := g.currentBuiltinResultType()
 	if !ok {
-		return value{}, true, unsupportedf("call", "%s requires a concrete Result<T, E> context", id.Name)
+		return value{}, true, unsupportedf("call", "%s requires a concrete Result<T, E> context", name)
 	}
 	if len(call.Args) != 1 || call.Args[0] == nil || call.Args[0].Name != "" || call.Args[0].Value == nil {
-		return value{}, true, unsupportedf("call", "%s requires one positional argument", id.Name)
+		return value{}, true, unsupportedf("call", "%s requires one positional argument", name)
 	}
 	payloadIndex := 1
 	payloadType := info.okTyp
 	tag := "0"
-	if id.Name == "Err" {
+	if name == "Err" {
 		payloadIndex = 2
 		payloadType = info.errTyp
 		tag = "1"
@@ -2064,7 +2081,7 @@ func (g *generator) emitBuiltinResultConstructor(call *ast.CallExpr) (value, boo
 		return value{}, true, err
 	}
 	if payload.typ != payloadType {
-		return value{}, true, unsupportedf("type-system", "%s payload type %s, want %s", id.Name, payload.typ, payloadType)
+		return value{}, true, unsupportedf("type-system", "%s payload type %s, want %s", name, payload.typ, payloadType)
 	}
 	emitter := g.toOstyEmitter()
 	fields := []*LlvmValue{

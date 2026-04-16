@@ -82,11 +82,13 @@ func Monomorphize(mod *Module) (*Module, []error) {
 		state.out.Decls = append(state.out.Decls, out)
 		state.scanDecl(out)
 	}
+	state.pushLocalTypeScope()
 	for _, s := range mod.Script {
 		cloned := cloneStmt(s)
 		state.out.Script = append(state.out.Script, cloned)
 		state.scanStmt(cloned)
 	}
+	state.popLocalTypeScope()
 
 	// Pass 3+4 (interleaved): drain both queues until neither grows.
 	// Emitting a specialization may discover further generic call sites
@@ -146,6 +148,10 @@ type monoState struct {
 	typeSeen map[string]string
 	// typeQueue is the worklist of pending struct/enum specializations.
 	typeQueue []monoTypeInstance
+	// localTypeScopes tracks statement-local bindings while scanning a
+	// concrete function or script body so unresolved Idents can recover
+	// a type from an earlier let-binding.
+	localTypeScopes []map[string]Type
 }
 
 // monoInstance is one pending free-fn specialization.
@@ -438,6 +444,11 @@ func (s *monoState) rewriteExprType(e Expr) {
 	case *FloatLit:
 		x.T = s.rewriteType(x.T)
 	case *Ident:
+		if isUnresolvedType(x.T) && (x.Kind == IdentLocal || x.Kind == IdentParam) {
+			if inferred, ok := s.lookupLocalType(x.Name); ok {
+				x.T = CloneType(inferred)
+			}
+		}
 		x.T = s.rewriteType(x.T)
 		for i, ta := range x.TypeArgs {
 			x.TypeArgs[i] = s.rewriteType(ta)
@@ -474,6 +485,11 @@ func (s *monoState) rewriteExprType(e Expr) {
 			}
 		}
 	case *VariantLit:
+		if isUnresolvedType(x.T) {
+			if inferred := s.inferVariantLiteralType(x); inferred != nil {
+				x.T = inferred
+			}
+		}
 		x.T = s.rewriteType(x.T)
 		if nt, ok := x.T.(*NamedType); ok && nt.Name != "" {
 			if x.Enum != "" && x.Enum != nt.Name {
@@ -489,6 +505,21 @@ func (s *monoState) rewriteExprType(e Expr) {
 	case *MatchExpr:
 		x.T = s.rewriteType(x.T)
 	case *FieldExpr:
+		if field, base, ok := s.enumVariantFieldExpr(x); ok {
+			if isUnresolvedType(field.T) {
+				if named, ok := base.T.(*NamedType); ok && named != nil && named.Name != "" && !containsTypeVar(named) {
+					field.T = CloneType(named)
+				}
+			}
+			field.T = s.rewriteType(field.T)
+			if nt, ok := field.T.(*NamedType); ok && nt.Name != "" {
+				base.T = CloneType(nt)
+				if base.Name != nt.Name {
+					base.Name = nt.Name
+				}
+			}
+			return
+		}
 		x.T = s.rewriteType(x.T)
 	case *IndexExpr:
 		x.T = s.rewriteType(x.T)
@@ -604,7 +635,11 @@ func (s *monoState) scanDecl(d Decl) {
 	case *LetDecl:
 		d.Type = s.rewriteType(d.Type)
 		if d.Value != nil {
+			s.seedVariantTypeFromContext(d.Type, d.Value)
 			s.scanExpr(d.Value)
+			if isUnresolvedType(d.Type) {
+				d.Type = cloneResolvedType(d.Value.Type())
+			}
 		}
 	}
 }
@@ -633,13 +668,23 @@ func (s *monoState) scanFnBody(fn *FnDecl) {
 	if fn == nil || fn.Body == nil {
 		return
 	}
+	s.pushLocalTypeScope()
+	for _, p := range fn.Params {
+		if p == nil || p.Name == "" || isUnresolvedType(p.Type) {
+			continue
+		}
+		s.bindLocalType(p.Name, p.Type)
+	}
 	s.scanBlock(fn.Body)
+	s.popLocalTypeScope()
 }
 
 func (s *monoState) scanBlock(b *Block) {
 	if b == nil {
 		return
 	}
+	s.pushLocalTypeScope()
+	defer s.popLocalTypeScope()
 	for _, st := range b.Stmts {
 		s.scanStmt(st)
 	}
@@ -655,7 +700,14 @@ func (s *monoState) scanStmt(st Stmt) {
 	case *LetStmt:
 		st.Type = s.rewriteType(st.Type)
 		if st.Value != nil {
+			s.seedVariantTypeFromContext(st.Type, st.Value)
 			s.scanExpr(st.Value)
+			if isUnresolvedType(st.Type) {
+				st.Type = cloneResolvedType(st.Value.Type())
+			}
+		}
+		if st.Name != "" && !isUnresolvedType(st.Type) {
+			s.bindLocalType(st.Name, st.Type)
 		}
 	case *ExprStmt:
 		s.scanExpr(st.X)
@@ -697,10 +749,326 @@ func (s *monoState) scanStmt(st Stmt) {
 			if a == nil {
 				continue
 			}
+			s.rewritePatternFromScrutinee(a.Pattern, st.Scrutinee.Type())
 			if a.Guard != nil {
 				s.scanExpr(a.Guard)
 			}
 			s.scanBlock(a.Body)
+		}
+	}
+}
+
+func (s *monoState) seedVariantTypeFromContext(expect Type, expr Expr) {
+	if expect == nil || expr == nil {
+		return
+	}
+	if field, base, ok := s.enumVariantFieldExpr(expr); ok {
+		named, ok := expect.(*NamedType)
+		if !ok || named == nil || named.Name == "" {
+			return
+		}
+		field.T = expect
+		if base != nil {
+			base.T = expect
+		}
+		return
+	}
+	lit, ok := expr.(*VariantLit)
+	if !ok || lit == nil {
+		return
+	}
+	if lit.T != nil {
+		if _, unresolved := lit.T.(*ErrType); !unresolved {
+			return
+		}
+	}
+	named, ok := expect.(*NamedType)
+	if !ok || named == nil || named.Name == "" {
+		return
+	}
+	if lit.Enum == "" {
+		return
+	}
+	if _, generic := s.genericEnumsByName[lit.Enum]; !generic && lit.Enum != named.Name {
+		return
+	}
+	lit.T = expect
+}
+
+func (s *monoState) enumVariantFieldExpr(expr Expr) (*FieldExpr, *Ident, bool) {
+	field, ok := expr.(*FieldExpr)
+	if !ok || field == nil || field.Optional {
+		return nil, nil, false
+	}
+	base, ok := field.X.(*Ident)
+	if !ok || base == nil || base.Kind != IdentTypeName {
+		return nil, nil, false
+	}
+	decl := s.genericEnumsByName[base.Name]
+	if decl == nil {
+		return nil, nil, false
+	}
+	for _, variant := range decl.Variants {
+		if variant != nil && variant.Name == field.Name && len(variant.Payload) == 0 {
+			return field, base, true
+		}
+	}
+	return nil, nil, false
+}
+
+func (s *monoState) pushLocalTypeScope() {
+	s.localTypeScopes = append(s.localTypeScopes, map[string]Type{})
+}
+
+func (s *monoState) popLocalTypeScope() {
+	if len(s.localTypeScopes) == 0 {
+		return
+	}
+	s.localTypeScopes = s.localTypeScopes[:len(s.localTypeScopes)-1]
+}
+
+func (s *monoState) bindLocalType(name string, t Type) {
+	if name == "" || isUnresolvedType(t) || len(s.localTypeScopes) == 0 {
+		return
+	}
+	s.localTypeScopes[len(s.localTypeScopes)-1][name] = CloneType(t)
+}
+
+func (s *monoState) lookupLocalType(name string) (Type, bool) {
+	for i := len(s.localTypeScopes) - 1; i >= 0; i-- {
+		if t, ok := s.localTypeScopes[i][name]; ok && !isUnresolvedType(t) {
+			return t, true
+		}
+	}
+	return nil, false
+}
+
+func (s *monoState) inferVariantLiteralType(lit *VariantLit) Type {
+	if lit == nil || lit.Enum == "" {
+		return nil
+	}
+	decl := s.genericEnumsByName[lit.Enum]
+	if decl == nil || len(decl.Generics) == 0 {
+		return nil
+	}
+	var variant *Variant
+	for _, candidate := range decl.Variants {
+		if candidate != nil && candidate.Name == lit.Variant {
+			variant = candidate
+			break
+		}
+	}
+	if variant == nil || len(variant.Payload) != len(lit.Args) {
+		return nil
+	}
+	env := SubstEnv{}
+	for i, payload := range variant.Payload {
+		arg := lit.Args[i].Value
+		argType := s.resolvedExprType(arg)
+		if isUnresolvedType(argType) {
+			return nil
+		}
+		if !bindInferredTypeArgs(env, payload, argType) {
+			return nil
+		}
+	}
+	args := make([]Type, 0, len(decl.Generics))
+	for _, param := range decl.Generics {
+		if param == nil {
+			return nil
+		}
+		arg, ok := env[param.Name]
+		if !ok || isUnresolvedType(arg) || containsTypeVar(arg) {
+			return nil
+		}
+		args = append(args, CloneType(arg))
+	}
+	return &NamedType{Name: decl.Name, Args: args}
+}
+
+func bindInferredTypeArgs(env SubstEnv, pattern Type, actual Type) bool {
+	if pattern == nil || actual == nil || isUnresolvedType(actual) {
+		return false
+	}
+	switch p := pattern.(type) {
+	case *TypeVar:
+		if p.Name == "" {
+			return false
+		}
+		if bound, ok := env[p.Name]; ok {
+			return typesEqual(bound, actual)
+		}
+		env[p.Name] = CloneType(actual)
+		return true
+	case *PrimType:
+		a, ok := actual.(*PrimType)
+		return ok && p.Kind == a.Kind
+	case *NamedType:
+		a, ok := actual.(*NamedType)
+		if !ok || p.Name != a.Name || p.Package != a.Package || p.Builtin != a.Builtin || len(p.Args) != len(a.Args) {
+			return false
+		}
+		for i := range p.Args {
+			if !bindInferredTypeArgs(env, p.Args[i], a.Args[i]) {
+				return false
+			}
+		}
+		return true
+	case *OptionalType:
+		a, ok := actual.(*OptionalType)
+		return ok && bindInferredTypeArgs(env, p.Inner, a.Inner)
+	case *TupleType:
+		a, ok := actual.(*TupleType)
+		if !ok || len(p.Elems) != len(a.Elems) {
+			return false
+		}
+		for i := range p.Elems {
+			if !bindInferredTypeArgs(env, p.Elems[i], a.Elems[i]) {
+				return false
+			}
+		}
+		return true
+	case *FnType:
+		a, ok := actual.(*FnType)
+		if !ok || len(p.Params) != len(a.Params) {
+			return false
+		}
+		for i := range p.Params {
+			if !bindInferredTypeArgs(env, p.Params[i], a.Params[i]) {
+				return false
+			}
+		}
+		return bindInferredTypeArgs(env, p.Return, a.Return)
+	default:
+		return false
+	}
+}
+
+func typesEqual(left Type, right Type) bool {
+	switch l := left.(type) {
+	case nil:
+		return right == nil
+	case *PrimType:
+		r, ok := right.(*PrimType)
+		return ok && l.Kind == r.Kind
+	case *NamedType:
+		r, ok := right.(*NamedType)
+		if !ok || l.Name != r.Name || l.Package != r.Package || l.Builtin != r.Builtin || len(l.Args) != len(r.Args) {
+			return false
+		}
+		for i := range l.Args {
+			if !typesEqual(l.Args[i], r.Args[i]) {
+				return false
+			}
+		}
+		return true
+	case *OptionalType:
+		r, ok := right.(*OptionalType)
+		return ok && typesEqual(l.Inner, r.Inner)
+	case *TupleType:
+		r, ok := right.(*TupleType)
+		if !ok || len(l.Elems) != len(r.Elems) {
+			return false
+		}
+		for i := range l.Elems {
+			if !typesEqual(l.Elems[i], r.Elems[i]) {
+				return false
+			}
+		}
+		return true
+	case *FnType:
+		r, ok := right.(*FnType)
+		if !ok || len(l.Params) != len(r.Params) {
+			return false
+		}
+		for i := range l.Params {
+			if !typesEqual(l.Params[i], r.Params[i]) {
+				return false
+			}
+		}
+		return typesEqual(l.Return, r.Return)
+	case *TypeVar:
+		r, ok := right.(*TypeVar)
+		return ok && l.Name == r.Name && l.Owner == r.Owner
+	case *ErrType:
+		_, ok := right.(*ErrType)
+		return ok
+	default:
+		return false
+	}
+}
+
+func isUnresolvedType(t Type) bool {
+	if t == nil {
+		return true
+	}
+	_, ok := t.(*ErrType)
+	return ok
+}
+
+func cloneResolvedType(t Type) Type {
+	if isUnresolvedType(t) {
+		return t
+	}
+	return CloneType(t)
+}
+
+func (s *monoState) resolvedExprType(e Expr) Type {
+	if e == nil {
+		return nil
+	}
+	if t := e.Type(); !isUnresolvedType(t) {
+		return t
+	}
+	switch x := e.(type) {
+	case *IntLit:
+		return TInt
+	case *FloatLit:
+		return TFloat
+	case *Ident:
+		if inferred, ok := s.lookupLocalType(x.Name); ok {
+			return inferred
+		}
+	case *VariantLit:
+		if inferred := s.inferVariantLiteralType(x); inferred != nil {
+			return inferred
+		}
+	}
+	return e.Type()
+}
+
+func (s *monoState) rewritePatternFromScrutinee(pattern Pattern, scrutinee Type) {
+	if pattern == nil {
+		return
+	}
+	switch p := pattern.(type) {
+	case *BindingPat:
+		s.rewritePatternFromScrutinee(p.Pattern, scrutinee)
+	case *OrPat:
+		for _, alt := range p.Alts {
+			s.rewritePatternFromScrutinee(alt, scrutinee)
+		}
+	case *StructPat:
+		if named, ok := scrutinee.(*NamedType); ok && named != nil && named.Name != "" {
+			if _, generic := s.genericStructsByName[p.TypeName]; generic || p.TypeName == named.Name {
+				p.TypeName = named.Name
+			}
+		}
+		for _, field := range p.Fields {
+			s.rewritePatternFromScrutinee(field.Pattern, nil)
+		}
+	case *VariantPat:
+		if named, ok := scrutinee.(*NamedType); ok && named != nil && named.Name != "" && p.Enum != "" {
+			if _, generic := s.genericEnumsByName[p.Enum]; generic || p.Enum == named.Name {
+				p.Enum = named.Name
+			}
+		}
+		for _, arg := range p.Args {
+			s.rewritePatternFromScrutinee(arg, nil)
+		}
+	case *TuplePat:
+		for _, elem := range p.Elems {
+			s.rewritePatternFromScrutinee(elem, nil)
 		}
 	}
 }
@@ -775,6 +1143,7 @@ func (s *monoState) scanExpr(e Expr) {
 		s.scanBlock(e.Else)
 	case *IfLetExpr:
 		s.scanExpr(e.Scrutinee)
+		s.rewritePatternFromScrutinee(e.Pattern, e.Scrutinee.Type())
 		s.scanBlock(e.Then)
 		s.scanBlock(e.Else)
 	case *MatchExpr:
@@ -783,6 +1152,7 @@ func (s *monoState) scanExpr(e Expr) {
 			if a == nil {
 				continue
 			}
+			s.rewritePatternFromScrutinee(a.Pattern, e.Scrutinee.Type())
 			if a.Guard != nil {
 				s.scanExpr(a.Guard)
 			}
