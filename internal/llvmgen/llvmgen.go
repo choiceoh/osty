@@ -1876,11 +1876,20 @@ func (g *generator) emitTagEnumMatchExprValue(scrutinee value, arms []*ast.Match
 	if len(arms) == 2 {
 		return g.emitTagEnumMatchIfExprValue(scrutinee, arms[0], arms[1])
 	}
+	selectSafe := true
 	for _, arm := range arms {
 		if !matchArmBodyIsSelectSafe(arm.Body) {
-			return value{}, unsupported("expression", "multi-arm match currently requires literal/identifier arm bodies")
+			selectSafe = false
+			break
 		}
 	}
+	if selectSafe {
+		return g.emitTagEnumMatchSelectValue(scrutinee, arms)
+	}
+	return g.emitTagEnumMatchChainValue(scrutinee, arms)
+}
+
+func (g *generator) emitTagEnumMatchSelectValue(scrutinee value, arms []*ast.MatchArm) (value, error) {
 	var current value
 	haveCurrent := false
 	for i := len(arms) - 1; i >= 0; i-- {
@@ -1928,6 +1937,61 @@ func (g *generator) emitTagEnumMatchExprValue(scrutinee value, arms []*ast.Match
 		return value{}, unsupported("expression", "match with no arms")
 	}
 	return current, nil
+}
+
+func (g *generator) emitTagEnumMatchChainValue(scrutinee value, arms []*ast.MatchArm) (value, error) {
+	if len(arms) == 0 {
+		return value{}, unsupported("expression", "match with no arms")
+	}
+	arm := arms[0]
+	if arm == nil {
+		return value{}, unsupported("expression", "nil match arm")
+	}
+	if len(arms) == 1 {
+		if _, catchAll := arm.Pattern.(*ast.WildcardPat); !catchAll {
+			if _, ok, err := g.matchEnumTag(arm.Pattern); err != nil {
+				return value{}, err
+			} else if !ok {
+				return value{}, unsupported("expression", "match arm must be a payload-free enum variant")
+			}
+		}
+		return g.emitMatchArmBodyValue(arm.Body)
+	}
+	if _, catchAll := arm.Pattern.(*ast.WildcardPat); catchAll {
+		return value{}, unsupported("expression", "wildcard match arm must be last")
+	}
+	tag, ok, err := g.matchEnumTag(arm.Pattern)
+	if err != nil {
+		return value{}, err
+	}
+	if !ok {
+		return value{}, unsupported("expression", "match arm must be a payload-free enum variant")
+	}
+	emitter := g.toOstyEmitter()
+	cond := llvmCompare(emitter, "eq", toOstyValue(scrutinee), toOstyValue(value{typ: "i64", ref: strconv.Itoa(tag)}))
+	labels := llvmIfExprStart(emitter, cond)
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = labels.thenLabel
+
+	thenValue, err := g.emitMatchArmBodyValue(arm.Body)
+	if err != nil {
+		return value{}, err
+	}
+	thenPred := g.currentBlock
+	emitter = g.toOstyEmitter()
+	llvmIfExprElse(emitter, labels)
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = labels.elseLabel
+
+	elseValue, err := g.emitTagEnumMatchChainValue(scrutinee, arms[1:])
+	if err != nil {
+		return value{}, err
+	}
+	elsePred := g.currentBlock
+	if thenValue.typ != elseValue.typ {
+		return value{}, unsupportedf("type-system", "match arm types %s/%s", thenValue.typ, elseValue.typ)
+	}
+	return g.emitIfExprPhi(labels, thenPred, elsePred, thenValue, elseValue)
 }
 
 func (g *generator) emitGuardedMatchExprValue(scrutinee value, arms []*ast.MatchArm) (value, error) {
