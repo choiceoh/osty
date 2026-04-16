@@ -304,3 +304,73 @@ fn main() {
 		t.Fatalf("binary stdout = %q, want %q", got, want)
 	}
 }
+
+func TestLLVMBackendBinaryForInOverTemporaryManagedListSurvivesPressure(t *testing.T) {
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
+
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitBinary, `use runtime.strings as strings {
+    fn Split(s: String, sep: String) -> List<String>
+}
+
+fn main() {
+    for item in strings.Split("a,b", ",") {
+        println(item)
+    }
+}
+`)
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	cmd := exec.Command(result.Artifacts.Binary)
+	cmd.Env = append(os.Environ(), "OSTY_GC_THRESHOLD_BYTES=1")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
+	}
+	if got, want := string(output), "a\nb\n"; got != want {
+		t.Fatalf("binary stdout = %q, want %q", got, want)
+	}
+}
+
+func TestLLVMBackendBinaryManagedTemporaryCallArgSurvivesPressure(t *testing.T) {
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
+
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitBinary, `use runtime.strings as strings {
+    fn Split(s: String, sep: String) -> List<String>
+}
+
+fn count() -> Int {
+    1
+}
+
+fn take(items: List<String>, n: Int) -> Int {
+    items.len() + n
+}
+
+fn main() {
+    println(take(strings.Split("a,b", ","), count()))
+}
+`)
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	cmd := exec.Command(result.Artifacts.Binary)
+	cmd.Env = append(os.Environ(), "OSTY_GC_THRESHOLD_BYTES=1")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
+	}
+	if got, want := string(output), "3\n"; got != want {
+		t.Fatalf("binary stdout = %q, want %q", got, want)
+	}
+}

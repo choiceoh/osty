@@ -288,6 +288,7 @@ type generator struct {
 	gcRootSlots    []value
 	gcRootMarks    []int
 	nextSafepoint  int
+	hiddenLocalID  int
 }
 
 type declarations struct {
@@ -859,6 +860,7 @@ func (g *generator) beginFunction() {
 	g.gcRootSlots = nil
 	g.gcRootMarks = []int{0}
 	g.nextSafepoint = 1
+	g.hiddenLocalID = 0
 	g.currentBlock = "entry"
 }
 
@@ -2209,6 +2211,7 @@ func (g *generator) emitSelectValue(cond *LlvmValue, thenValue, elseValue value)
 		out.listElemTyp = thenValue.listElemTyp
 		out.gcManaged = thenValue.gcManaged || elseValue.gcManaged
 	}
+	out.rootPaths = g.rootPathsForType(out.typ)
 	return out, nil
 }
 
@@ -2223,6 +2226,8 @@ func (g *generator) emitListExprWithHint(expr *ast.ListExpr, hintedElemTyp strin
 	if expr == nil {
 		return value{}, unsupported("expression", "nil list literal")
 	}
+	g.pushScope()
+	defer g.popScope()
 	elemTyp := hintedElemTyp
 	emittedElems := make([]value, 0, len(expr.Elems))
 	for _, elem := range expr.Elems {
@@ -2236,7 +2241,7 @@ func (g *generator) emitListExprWithHint(expr *ast.ListExpr, hintedElemTyp strin
 		if v.typ != elemTyp {
 			return value{}, unsupportedf("type-system", "list literal element type %s, want %s", v.typ, elemTyp)
 		}
-		emittedElems = append(emittedElems, v)
+		emittedElems = append(emittedElems, g.protectManagedTemporary("list.elem", v))
 	}
 	if elemTyp == "" {
 		return value{}, unsupported("expression", "empty list literal requires an explicit List<T> type")
@@ -2253,15 +2258,19 @@ func (g *generator) emitListExprWithHint(expr *ast.ListExpr, hintedElemTyp strin
 	}
 	pushSymbol := listRuntimePushSymbol(elemTyp)
 	g.declareRuntimeSymbol(pushSymbol, "void", []paramInfo{{typ: "ptr"}, {typ: elemTyp}})
-	emitter = g.toOstyEmitter()
 	for _, elem := range emittedElems {
+		loaded, err := g.loadIfPointer(elem)
+		if err != nil {
+			return value{}, err
+		}
+		emitter = g.toOstyEmitter()
 		emitter.body = append(emitter.body, fmt.Sprintf(
 			"  call void @%s(%s)",
 			pushSymbol,
-			llvmCallArgs([]*LlvmValue{toOstyValue(listValue), toOstyValue(elem)}),
+			llvmCallArgs([]*LlvmValue{toOstyValue(listValue), toOstyValue(loaded)}),
 		))
+		g.takeOstyEmitter(emitter)
 	}
-	g.takeOstyEmitter(emitter)
 	return listValue, nil
 }
 
@@ -2301,6 +2310,8 @@ func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
 	if len(call.Args) != 1 || call.Args[0].Name != "" || call.Args[0].Value == nil {
 		return true, unsupported("call", "list.push requires one positional argument")
 	}
+	g.pushScope()
+	defer g.popScope()
 	emitter := g.toOstyEmitter()
 	g.emitGCSafepoint(emitter)
 	g.takeOstyEmitter(emitter)
@@ -2311,6 +2322,7 @@ func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
 	if base.typ != "ptr" || elemTyp == "" {
 		return true, unsupportedf("type-system", "list receiver type %s", base.typ)
 	}
+	base = g.protectManagedTemporary("list.base", base)
 	arg, err := g.emitExpr(call.Args[0].Value)
 	if err != nil {
 		return true, err
@@ -2320,17 +2332,27 @@ func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
 	}
 	pushSymbol := listRuntimePushSymbol(elemTyp)
 	g.declareRuntimeSymbol(pushSymbol, "void", []paramInfo{{typ: "ptr"}, {typ: elemTyp}})
+	baseValue, err := g.loadIfPointer(base)
+	if err != nil {
+		return true, err
+	}
+	argValue, err := g.loadIfPointer(arg)
+	if err != nil {
+		return true, err
+	}
 	emitter = g.toOstyEmitter()
 	emitter.body = append(emitter.body, fmt.Sprintf(
 		"  call void @%s(%s)",
 		pushSymbol,
-		llvmCallArgs([]*LlvmValue{toOstyValue(base), toOstyValue(arg)}),
+		llvmCallArgs([]*LlvmValue{toOstyValue(baseValue), toOstyValue(argValue)}),
 	))
 	g.takeOstyEmitter(emitter)
 	return true, nil
 }
 
 func (g *generator) emitListFor(stmt *ast.ForStmt, iterName, elemTyp string) error {
+	g.pushScope()
+	defer g.popScope()
 	iterable, err := g.emitExpr(stmt.Iter)
 	if err != nil {
 		return err
@@ -2338,16 +2360,26 @@ func (g *generator) emitListFor(stmt *ast.ForStmt, iterName, elemTyp string) err
 	if iterable.typ != "ptr" || elemTyp == "" {
 		return unsupportedf("type-system", "for-in iterable type %s", iterable.typ)
 	}
+	iterable = g.protectManagedTemporary("for.iter", iterable)
 	g.declareRuntimeSymbol(listRuntimeLenSymbol(), "i64", []paramInfo{{typ: "ptr"}})
 	getSymbol := listRuntimeGetSymbol(elemTyp)
 	g.declareRuntimeSymbol(getSymbol, elemTyp, []paramInfo{{typ: "ptr"}, {typ: "i64"}})
+	iterableValue, err := g.loadIfPointer(iterable)
+	if err != nil {
+		return err
+	}
 	emitter := g.toOstyEmitter()
-	lenValue := llvmCall(emitter, "i64", listRuntimeLenSymbol(), []*LlvmValue{toOstyValue(iterable)})
+	lenValue := llvmCall(emitter, "i64", listRuntimeLenSymbol(), []*LlvmValue{toOstyValue(iterableValue)})
 	loop := llvmRangeStart(emitter, iterName+"_idx", llvmIntLiteral(0), lenValue, false)
 	g.takeOstyEmitter(emitter)
 	g.pushScope()
+	iterableValue, err = g.loadIfPointer(iterable)
+	if err != nil {
+		g.popScope()
+		return err
+	}
 	emitter = g.toOstyEmitter()
-	item := llvmCall(emitter, elemTyp, getSymbol, []*LlvmValue{toOstyValue(iterable), llvmI64(loop.current)})
+	item := llvmCall(emitter, elemTyp, getSymbol, []*LlvmValue{toOstyValue(iterableValue), llvmI64(loop.current)})
 	g.takeOstyEmitter(emitter)
 	g.bindLocal(iterName, fromOstyValue(item))
 	if err := g.emitBlock(stmt.Body.Stmts); err != nil {
@@ -2609,13 +2641,16 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 	emitter := g.toOstyEmitter()
 	g.emitGCSafepoint(emitter)
 	g.takeOstyEmitter(emitter)
+	g.pushScope()
 	args, err := g.userCallArgs(sig, call)
 	if err != nil {
+		g.popScope()
 		return value{}, err
 	}
 	emitter = g.toOstyEmitter()
 	out := llvmCall(emitter, sig.ret, sig.name, args)
 	g.takeOstyEmitter(emitter)
+	g.popScope()
 	ret := fromOstyValue(out)
 	ret.listElemTyp = sig.retListElemTyp
 	ret.gcManaged = sig.retListElemTyp != ""
@@ -2634,14 +2669,17 @@ func (g *generator) emitRuntimeFFICall(call *ast.CallExpr) (value, bool, error) 
 	emitter := g.toOstyEmitter()
 	g.emitGCSafepoint(emitter)
 	g.takeOstyEmitter(emitter)
+	g.pushScope()
 	args, err := g.runtimeFFICallArgs(fn, call.Args)
 	if err != nil {
+		g.popScope()
 		return value{}, true, err
 	}
 	g.declareRuntimeFFI(fn)
 	emitter = g.toOstyEmitter()
 	out := llvmCall(emitter, fn.ret, fn.symbol, args)
 	g.takeOstyEmitter(emitter)
+	g.popScope()
 	ret := fromOstyValue(out)
 	ret.listElemTyp = fn.listElemTyp
 	ret.gcManaged = fn.listElemTyp != ""
@@ -2657,18 +2695,22 @@ func (g *generator) emitRuntimeFFICallStmt(call *ast.CallExpr) (bool, error) {
 	emitter := g.toOstyEmitter()
 	g.emitGCSafepoint(emitter)
 	g.takeOstyEmitter(emitter)
+	g.pushScope()
 	args, err := g.runtimeFFICallArgs(fn, call.Args)
 	if err != nil {
+		g.popScope()
 		return true, err
 	}
 	g.declareRuntimeFFI(fn)
 	if fn.ret == "void" {
 		g.body = append(g.body, fmt.Sprintf("  call void @%s(%s)", fn.symbol, llvmCallArgs(args)))
+		g.popScope()
 		return true, nil
 	}
 	emitter = g.toOstyEmitter()
 	llvmCall(emitter, fn.ret, fn.symbol, args)
 	g.takeOstyEmitter(emitter)
+	g.popScope()
 	return true, nil
 }
 
@@ -2684,8 +2726,10 @@ func (g *generator) emitUserCallStmt(call *ast.CallExpr) (bool, error) {
 	emitter := g.toOstyEmitter()
 	g.emitGCSafepoint(emitter)
 	g.takeOstyEmitter(emitter)
+	g.pushScope()
 	args, err := g.userCallArgs(sig, call)
 	if err != nil {
+		g.popScope()
 		return true, err
 	}
 	emitter = g.toOstyEmitter()
@@ -2695,6 +2739,7 @@ func (g *generator) emitUserCallStmt(call *ast.CallExpr) (bool, error) {
 		llvmCall(emitter, sig.ret, sig.name, args)
 	}
 	g.takeOstyEmitter(emitter)
+	g.popScope()
 	return true, nil
 }
 
@@ -2702,7 +2747,7 @@ func (g *generator) userCallArgs(sig *fnSig, call *ast.CallExpr) ([]*LlvmValue, 
 	if len(call.Args) != len(sig.params) {
 		return nil, unsupportedf("call", "function %q argument count", sig.name)
 	}
-	args := make([]*LlvmValue, 0, len(call.Args))
+	values := make([]value, 0, len(call.Args))
 	for i, arg := range call.Args {
 		if arg.Name != "" || arg.Value == nil {
 			return nil, unsupportedf("call", "function %q requires positional arguments", sig.name)
@@ -2715,7 +2760,15 @@ func (g *generator) userCallArgs(sig *fnSig, call *ast.CallExpr) ([]*LlvmValue, 
 		if v.typ != param.typ {
 			return nil, unsupportedf("type-system", "function %q arg %d type %s, want %s", sig.name, i+1, v.typ, param.typ)
 		}
-		args = append(args, toOstyValue(v))
+		values = append(values, g.protectManagedTemporary(sig.name+".arg", v))
+	}
+	args := make([]*LlvmValue, 0, len(values))
+	for _, v := range values {
+		loaded, err := g.loadIfPointer(v)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, toOstyValue(loaded))
 	}
 	return args, nil
 }
@@ -2754,7 +2807,7 @@ func (g *generator) runtimeFFICallArgs(fn *runtimeFFIFunction, callArgs []*ast.A
 	if len(callArgs) != len(fn.params) {
 		return nil, unsupportedf("call", "runtime FFI %s.%s argument count", fn.path, fn.sourceName)
 	}
-	args := make([]*LlvmValue, 0, len(callArgs))
+	values := make([]value, 0, len(callArgs))
 	for i, arg := range callArgs {
 		if arg == nil || arg.Name != "" || arg.Value == nil {
 			return nil, unsupportedf("call", "runtime FFI %s.%s requires positional arguments", fn.path, fn.sourceName)
@@ -2767,7 +2820,15 @@ func (g *generator) runtimeFFICallArgs(fn *runtimeFFIFunction, callArgs []*ast.A
 		if v.typ != param.typ {
 			return nil, unsupportedf("type-system", "runtime FFI %s.%s arg %d type %s, want %s", fn.path, fn.sourceName, i+1, v.typ, param.typ)
 		}
-		args = append(args, toOstyValue(v))
+		values = append(values, g.protectManagedTemporary(fn.symbol+".arg", v))
+	}
+	args := make([]*LlvmValue, 0, len(values))
+	for _, v := range values {
+		loaded, err := g.loadIfPointer(v)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, toOstyValue(loaded))
 	}
 	return args, nil
 }
@@ -3132,6 +3193,32 @@ func (g *generator) aggregateFieldType(typ string, index int) (string, bool) {
 
 func (g *generator) bindLocal(name string, v value) {
 	g.locals[len(g.locals)-1][name] = v
+}
+
+func (g *generator) nextHiddenLocalName(prefix string) string {
+	name := fmt.Sprintf("$%s.%d", prefix, g.hiddenLocalID)
+	g.hiddenLocalID++
+	return name
+}
+
+func (g *generator) needsSafepointProtection(v value) bool {
+	if v.ptr {
+		return false
+	}
+	return (v.typ == "ptr" && v.gcManaged) || len(v.rootPaths) != 0
+}
+
+func (g *generator) protectManagedTemporary(prefix string, v value) value {
+	if !g.needsSafepointProtection(v) {
+		return v
+	}
+	name := g.nextHiddenLocalName(prefix)
+	g.bindNamedLocal(name, v, false)
+	protected, ok := g.lookupLocal(name)
+	if !ok {
+		return v
+	}
+	return protected
 }
 
 func (g *generator) lookupLocal(name string) (value, bool) {
