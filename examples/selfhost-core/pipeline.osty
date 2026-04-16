@@ -31,9 +31,9 @@ pub struct SelfhostPipelineReport {
 pub fn selfhostPipelineSource(packageName: String, source: String) -> SelfhostPipelineReport {
     let stream = frontendLexStream(source)
     let tree = frontendParseTree(source)
-    let module = irLowerSource(packageName, source)
-    let ir = irSummarize(module)
     let ast = astParse(source)
+    let module = irLowerAstFile(packageName, ast)
+    let ir = irSummarize(module)
     let resolved = selfResolveAstFile(ast)
     let checked = frontendCheckSource(source)
     let linted = selfLintResolvedAstSource(source, ast, resolved)
