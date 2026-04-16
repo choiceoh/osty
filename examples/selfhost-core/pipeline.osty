@@ -1,3 +1,7 @@
+use go "strings" as strings {
+    fn Join(elems: List<String>, sep: String) -> String
+}
+
 pub struct SelfhostPipelineReport {
     pub tokens: Int,
     pub parseNodes: Int,
@@ -21,6 +25,7 @@ pub struct SelfhostPipelineReport {
     pub checkedExpressions: Int,
     pub lintDiagnostics: Int,
     pub lintParseErrors: Int,
+    pub diagnostics: String,
 }
 
 pub fn selfhostPipelineSource(packageName: String, source: String) -> SelfhostPipelineReport {
@@ -28,9 +33,10 @@ pub fn selfhostPipelineSource(packageName: String, source: String) -> SelfhostPi
     let tree = frontendParseTree(source)
     let module = irLowerSource(packageName, source)
     let ir = irSummarize(module)
-    let resolved = selfResolveSource(source)
+    let ast = astParse(source)
+    let resolved = selfResolveAstFile(ast)
     let checked = frontendCheckSource(source)
-    let linted = selfLintSource(source)
+    let linted = selfLintResolvedAstSource(source, ast, resolved)
 
     SelfhostPipelineReport {
         tokens: frontLexTokenCount(stream),
@@ -55,6 +61,7 @@ pub fn selfhostPipelineSource(packageName: String, source: String) -> SelfhostPi
         checkedExpressions: checked.accepted,
         lintDiagnostics: selfLintDiagnosticCount(linted),
         lintParseErrors: linted.parseErrors,
+        diagnostics: selfhostPipelineDiagnosticOutput(source, resolved, linted),
     }
 }
 
@@ -69,4 +76,21 @@ fn selfhostPipelineSymbolCount(result: SelfResolveResult) -> Int {
         count = count + 1
     }
     count
+}
+
+fn selfhostPipelineDiagnosticOutput(
+    source: String,
+    resolved: SelfResolveResult,
+    linted: SelfLintReport,
+) -> String {
+    let mut lines: List<String> = []
+    let resolveText = diagnosticFormatSelfResolveDiagnostics(source, resolved)
+    if resolveText != "" {
+        lines.push(resolveText)
+    }
+    let lintText = diagnosticFormatSelfLintDiagnostics(source, linted)
+    if lintText != "" {
+        lines.push(lintText)
+    }
+    strings.Join(lines, "\n")
 }

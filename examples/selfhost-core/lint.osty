@@ -17,17 +17,19 @@ pub struct SelfLintDiagnostic {
     pub name: String,
     pub start: Int,
     pub end: Int,
+    pub node: Int,
 }
 
-/// SelfLintReport carries lint diagnostics plus parse-recovery diagnostics from
-/// the self-hosting front end.
+/// SelfLintReport carries lint diagnostics plus parse and resolver diagnostics
+/// from the self-hosting front end.
 pub struct SelfLintReport {
     pub diagnostics: List<SelfLintDiagnostic>,
     pub parseErrors: Int,
+    pub resolveErrors: Int,
 }
 
 pub fn emptySelfLintReport(parseErrors: Int) -> SelfLintReport {
-    SelfLintReport { diagnostics: [], parseErrors }
+    SelfLintReport { diagnostics: [], parseErrors, resolveErrors: 0 }
 }
 
 pub fn selfLintDiagnostic(
@@ -37,21 +39,40 @@ pub fn selfLintDiagnostic(
     start: Int,
     end: Int,
 ) -> SelfLintDiagnostic {
-    SelfLintDiagnostic { code, message, name, start, end }
+    selfLintDiagnosticAtNode(code, message, name, start, end, -1)
+}
+
+fn selfLintDiagnosticAtNode(
+    code: String,
+    message: String,
+    name: String,
+    start: Int,
+    end: Int,
+    node: Int,
+) -> SelfLintDiagnostic {
+    SelfLintDiagnostic { code, message, name, start, end, node }
 }
 
 /// selfLintSource runs the self-hosting lexer/parser and emits a conservative
-/// style/correctness lint report from the resulting token stream.
+/// style/correctness lint report from the parsed AST plus resolver references.
 pub fn selfLintSource(source: String) -> SelfLintReport {
+    selfLintAstSource(source, astParse(source))
+}
+
+pub fn selfLintAstSource(source: String, file: AstFile) -> SelfLintReport {
+    let resolved = selfResolveAstFile(file)
+    selfLintResolvedAstSource(source, file, resolved)
+}
+
+pub fn selfLintResolvedAstSource(
+    source: String,
+    file: AstFile,
+    resolved: SelfResolveResult,
+) -> SelfLintReport {
     let stream = frontendLexStream(source)
-    let tokens = frontTokensFromSource(source, stream)
-    let count = frontTokenListCount(tokens)
-    let tree = frontendParseTree(source)
-    let mut report = emptySelfLintReport(frontParseTreeDiagnosticCount(tree))
-    report = selfLintScanDeclarations(tokens, count, report)
-    report = selfLintScanDeadCode(tokens, count, report)
-    report = selfLintScanSimplify(tokens, count, report)
-    report
+    let mut report = emptySelfLintReport(frontLexDiagnosticCount(stream) + astFileErrorCount(file))
+    report.resolveErrors = selfResolveDiagnosticCount(resolved)
+    selfLintAstFile(file, resolved, report)
 }
 
 pub fn selfLintDiagnosticCount(report: SelfLintReport) -> Int {
@@ -88,799 +109,1134 @@ fn selfLintEmit(
     start: Int,
     end: Int,
 ) -> SelfLintReport {
+    selfLintEmitAtNode(report, code, message, name, start, end, -1)
+}
+
+fn selfLintEmitAtNode(
+    report: SelfLintReport,
+    code: String,
+    message: String,
+    name: String,
+    start: Int,
+    end: Int,
+    node: Int,
+) -> SelfLintReport {
     let mut out = report
-    out.diagnostics.push(selfLintDiagnostic(code, message, name, start, end))
+    out.diagnostics.push(selfLintDiagnosticAtNode(code, message, name, start, end, node))
     out
 }
 
-fn selfLintKind(name: String) -> FrontTokenKind {
-    frontTokenKindByName(name)
+struct SelfLintName {
+    name: String,
+    start: Int,
+    end: Int,
+    node: Int,
 }
 
-fn selfLintKindIs(kind: FrontTokenKind, name: String) -> Bool {
-    frontTokenKindName(kind) == name
+fn selfLintName(name: String, start: Int, end: Int) -> SelfLintName {
+    selfLintNameAtNode(name, start, end, -1)
 }
 
-fn selfLintTokenIs(tokens: List<FrontToken>, idx: Int, name: String) -> Bool {
-    selfLintKindIs(frontTokenAtList(tokens, idx).kind, name)
+fn selfLintNameAtNode(name: String, start: Int, end: Int, node: Int) -> SelfLintName {
+    SelfLintName { name, start, end, node }
 }
 
-fn selfLintLooksLikeDeclarationStart(tokens: List<FrontToken>, idx: Int) -> Bool {
-    let immediate = selfLintPrevTokenKind(tokens, idx)
-    let prev = selfLintPrevMeaningfulKind(tokens, idx)
-    selfLintKindIs(immediate, "EOF") || selfLintKindIs(immediate, "NEWLINE") || selfLintKindIs(
-        immediate,
-        ";",
-    ) || selfLintKindIs(prev, "pub") || selfLintKindIs(prev, r"{") || selfLintKindIs(prev, r"}")
-}
-
-fn selfLintScanDeclarations(
-    tokens: List<FrontToken>,
-    count: Int,
+fn selfLintAstFile(
+    file: AstFile,
+    resolved: SelfResolveResult,
     report: SelfLintReport,
 ) -> SelfLintReport {
     let mut out = report
-    let mut skipUntil = -1
-    for idx in 0..count {
-        if idx < skipUntil {
-            let _ = idx
-        } else {
-            let kind = frontTokenAtList(tokens, idx).kind
-            if selfLintKindIs(kind, "use") {
-                let consumed = frontParseUseConsumed(tokens, idx, count)
-                let end = idx + consumed
-                if frontUseIsGo(tokens, idx, end) {
-                    skipUntil = end
-                } else {
-                    out = selfLintCheckUse(tokens, idx, end, count, out)
-                }
-            } else if selfLintKindIs(kind, "fn") && selfLintLooksLikeDeclarationStart(tokens, idx) {
-                out = selfLintCheckFunction(tokens, idx, count, out)
-            } else if (selfLintKindIs(kind, "struct") || selfLintKindIs(kind, "interface") || selfLintKindIs(
-                kind,
-                "type",
-            )) && selfLintLooksLikeDeclarationStart(
-                tokens,
-                idx,
-            ) {
-                out = selfLintCheckTypeDecl(tokens, idx, count, out)
-            } else if selfLintKindIs(kind, "enum") && selfLintLooksLikeDeclarationStart(tokens, idx) {
-                out = selfLintCheckTypeDecl(tokens, idx, count, out)
-                out = selfLintCheckEnumVariants(tokens, idx, count, out)
-            } else if selfLintKindIs(kind, "let") {
-                out = selfLintCheckLet(tokens, idx, count, out)
-            }
-        }
+    for declIdx in file.arena.decls {
+        out = selfLintAstDecl(file, declIdx, resolved, out)
     }
     out
 }
 
-fn selfLintCheckUse(
-    tokens: List<FrontToken>,
-    start: Int,
-    end: Int,
-    count: Int,
+fn selfLintAstDecl(
+    file: AstFile,
+    idx: Int,
+    resolved: SelfResolveResult,
     report: SelfLintReport,
 ) -> SelfLintReport {
-    let alias = selfLintUseAlias(tokens, start, end)
+    if idx < 0 {
+        return report
+    }
+    let node = selfLintAstNode(file, idx)
+    let mut out = report
+    if node.kind == AstNUseDecl {
+        return selfLintAstCheckUse(file, idx, node, resolved, out)
+    }
+    if node.kind == AstNFnDecl {
+        return selfLintAstCheckFunction(file, idx, node, out)
+    }
+    if node.kind == AstNStructDecl || node.kind == AstNInterfaceDecl || node.kind == AstNTypeAlias {
+        out = selfLintAstCheckTypeDecl(file, idx, node, out)
+        out = selfLintAstCheckMemberFunctions(file, node.children, out)
+        return out
+    }
+    if node.kind == AstNEnumDecl {
+        out = selfLintAstCheckTypeDecl(file, idx, node, out)
+        out = selfLintAstCheckEnumMembers(file, node.children, out)
+        return out
+    }
+    if node.kind == AstNLet {
+        out = selfLintAstCheckLetNames(file, node, out)
+        if node.right >= 0 {
+            out = selfLintAstCheckSimplifyNode(file, node.right, out)
+        }
+        return out
+    }
+    out
+}
+
+fn selfLintAstNode(file: AstFile, idx: Int) -> AstNode {
+    astArenaNodeAt(file.arena, idx)
+}
+
+fn selfLintAstCheckUse(
+    file: AstFile,
+    idx: Int,
+    node: AstNode,
+    resolved: SelfResolveResult,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    if node.flags == 1 {
+        return report
+    }
+    let alias = selfLintAstUseAlias(file, node)
     if alias == "" || selfLintIsIntentionalDiscard(alias) {
         return report
     }
-    if selfLintCountIdent(tokens, end, count, alias) == 0 {
-        selfLintEmit(report, "L0003", "import is never used", alias, start, end)
-    } else {
-        report
+    let used = selfResolveHasRef(resolved, alias)
+    if !(used) {
+        return selfLintEmitAtNode(
+            report,
+            "L0003",
+            "import is never used",
+            alias,
+            node.start,
+            node.end,
+            idx,
+        )
     }
+    report
 }
 
-fn selfLintUseAlias(tokens: List<FrontToken>, start: Int, end: Int) -> String {
+fn selfLintAstUseAlias(file: AstFile, node: AstNode) -> String {
+    let aliasIdx = selfLintAstChildAt(node.children2, 0)
+    if aliasIdx >= 0 {
+        let alias = selfLintAstNode(file, aliasIdx)
+        if alias.text != "" {
+            return alias.text
+        }
+    }
+    selfLintLastPathSegment(node.text)
+}
+
+fn selfLintLastPathSegment(path: String) -> String {
     let mut last = ""
-    let mut afterAs = false
-    for idx in start + 1..end {
-        let tok = frontTokenAtList(tokens, idx)
-        if selfLintKindIs(tok.kind, "IDENT") {
-            if afterAs {
-                return tok.text
-            }
-            if tok.text == "as" {
-                afterAs = true
-            } else if tok.text != "go" {
-                last = tok.text
-            }
+    for part in strings.Split(path, ".") {
+        if part != "" {
+            last = part
         }
     }
     last
 }
 
-fn selfLintCheckFunction(
-    tokens: List<FrontToken>,
-    start: Int,
-    count: Int,
+fn selfLintAstCheckTypeDecl(
+    file: AstFile,
+    idx: Int,
+    node: AstNode,
     report: SelfLintReport,
 ) -> SelfLintReport {
     let mut out = report
-    let end = frontDeclEnd(tokens, start, count)
-    let nameIdx = selfLintNextIdent(tokens, start + 1, end)
-    if nameIdx < end {
-        let name = frontTokenTextAt(tokens, nameIdx)
-        if !(selfLintIsLowerCamel(name)) {
-            out = selfLintEmit(
-                out,
-                "L0031",
-                "function name should be lowerCamelCase",
-                name,
-                nameIdx,
-                nameIdx + 1,
-            )
-        }
-        out = selfLintCheckGenericParamsAfterName(tokens, nameIdx + 1, end, out)
-    }
-
-    let open = selfLintFindTopLevelKind(tokens, nameIdx + 1, end, "(")
-    if open >= 0 {
-        let close = frontFindMatching(tokens, open, end, selfLintKind("("), selfLintKind(")"))
-        let bodyOpen = selfLintFindTopLevelKind(tokens, close + 1, end, r"{")
-        let mut bodyClose = bodyOpen
-        if bodyOpen >= 0 {
-            bodyClose = frontFindMatching(
-                tokens,
-                bodyOpen,
-                end,
-                selfLintKind(r"{"),
-                selfLintKind(r"}"),
-            )
-        }
-        let isPub = selfLintKindIs(selfLintPrevMeaningfulKind(tokens, start), "pub")
-        out = selfLintCheckParams(tokens, open, close, bodyOpen, bodyClose, isPub, out)
-        if bodyOpen >= 0 {
-            out = selfLintCheckFunctionShadowing(tokens, open, close, bodyOpen, bodyClose, out)
-            out = selfLintCheckFunctionComplexity(tokens, open, close, bodyOpen, bodyClose, out)
-        }
-    }
-    out
-}
-
-fn selfLintCheckTypeDecl(
-    tokens: List<FrontToken>,
-    start: Int,
-    count: Int,
-    report: SelfLintReport,
-) -> SelfLintReport {
-    let mut out = report
-    let end = frontDeclEnd(tokens, start, count)
-    let nameIdx = selfLintNextIdent(tokens, start + 1, end)
-    if nameIdx < end {
-        let name = frontTokenTextAt(tokens, nameIdx)
-        if !(selfLintIsUpperCamel(name)) {
-            out = selfLintEmit(
-                out,
-                "L0030",
-                "type name should be UpperCamelCase",
-                name,
-                nameIdx,
-                nameIdx + 1,
-            )
-        }
-        out = selfLintCheckGenericParamsAfterName(tokens, nameIdx + 1, end, out)
-    }
-    out
-}
-
-fn selfLintCheckGenericParamsAfterName(
-    tokens: List<FrontToken>,
-    start: Int,
-    end: Int,
-    report: SelfLintReport,
-) -> SelfLintReport {
-    let mut out = report
-    if !(selfLintTokenIs(tokens, start, "<")) {
-        return out
-    }
-    let close = frontFindMatching(tokens, start, end, selfLintKind("<"), selfLintKind(">"))
-    let mut expectName = true
-    let mut angleDepth = 0
-    for idx in start + 1..close {
-        let kind = frontTokenAtList(tokens, idx).kind
-        if selfLintKindIs(kind, "<") {
-            angleDepth = angleDepth + 1
-        } else if selfLintKindIs(kind, ">") {
-            if angleDepth > 0 {
-                angleDepth = angleDepth - 1
-            }
-        } else if angleDepth == 0 && selfLintKindIs(kind, ",") {
-            expectName = true
-        } else if angleDepth == 0 && expectName && selfLintKindIs(kind, "IDENT") {
-            let name = frontTokenTextAt(tokens, idx)
-            if !(selfLintIsUpperCamel(name)) {
-                out = selfLintEmit(
-                    out,
-                    "L0030",
-                    "generic parameter should be UpperCamelCase",
-                    name,
-                    idx,
-                    idx + 1,
-                )
-            }
-            expectName = false
-        }
-    }
-    out
-}
-
-fn selfLintCheckParams(
-    tokens: List<FrontToken>,
-    open: Int,
-    close: Int,
-    bodyOpen: Int,
-    bodyClose: Int,
-    isPub: Bool,
-    report: SelfLintReport,
-) -> SelfLintReport {
-    let mut out = report
-    let mut parenDepth = 0
-    let mut angleDepth = 0
-    for idx in open + 1..close {
-        let kind = frontTokenAtList(tokens, idx).kind
-        if selfLintKindIs(kind, "(") {
-            parenDepth = parenDepth + 1
-        } else if selfLintKindIs(kind, ")") {
-            if parenDepth > 0 {
-                parenDepth = parenDepth - 1
-            }
-        } else if selfLintKindIs(kind, "<") {
-            angleDepth = angleDepth + 1
-        } else if selfLintKindIs(kind, ">") {
-            if angleDepth > 0 {
-                angleDepth = angleDepth - 1
-            }
-        } else if parenDepth == 0 && angleDepth == 0 && (selfLintKindIs(kind, "IDENT") || selfLintKindIs(
-            kind,
-            "_",
-        )) && selfLintLooksLikeParamName(
-            tokens,
-            idx,
-            open,
-        ) {
-            let name = frontTokenTextAt(tokens, idx)
-            if !(selfLintIsIntentionalDiscard(name)) && name != "self" {
-                if !(selfLintIsLowerCamel(name)) {
-                    out = selfLintEmit(
-                        out,
-                        "L0031",
-                        "parameter name should be lowerCamelCase",
-                        name,
-                        idx,
-                        idx + 1,
-                    )
-                }
-                if !(isPub) && bodyOpen >= 0 && selfLintCountIdent(
-                    tokens,
-                    bodyOpen + 1,
-                    bodyClose,
-                    name,
-                ) == 0 {
-                    out = selfLintEmit(out, "L0002", "parameter is never used", name, idx, idx + 1)
-                }
-            }
-        }
-    }
-    out
-}
-
-fn selfLintCheckFunctionShadowing(
-    tokens: List<FrontToken>,
-    open: Int,
-    close: Int,
-    bodyOpen: Int,
-    bodyClose: Int,
-    report: SelfLintReport,
-) -> SelfLintReport {
-    let mut out = report
-    let mut names: List<String> = []
-    for idx in open + 1..close {
-        let kind = frontTokenAtList(tokens, idx).kind
-        if (selfLintKindIs(kind, "IDENT") || selfLintKindIs(kind, "_")) && selfLintLooksLikeParamName(
-            tokens,
-            idx,
-            open,
-        ) {
-            let name = frontTokenTextAt(tokens, idx)
-            if !(selfLintIsIntentionalDiscard(name)) && name != "self" {
-                if selfLintStringListContains(names, name) {
-                    out = selfLintEmit(
-                        out,
-                        "L0010",
-                        "binding shadows an earlier binding",
-                        name,
-                        idx,
-                        idx + 1,
-                    )
-                }
-                names.push(name)
-            }
-        }
-    }
-
-    for idx in bodyOpen + 1..bodyClose {
-        if selfLintTokenIs(tokens, idx, "let") {
-            let nameIdx = selfLintLetNameIndex(tokens, idx)
-            let kind = frontTokenAtList(tokens, nameIdx).kind
-            if selfLintKindIs(kind, "IDENT") || selfLintKindIs(kind, "_") {
-                let name = frontTokenTextAt(tokens, nameIdx)
-                if !(selfLintIsIntentionalDiscard(name)) {
-                    if selfLintStringListContains(names, name) {
-                        out = selfLintEmit(
-                            out,
-                            "L0010",
-                            "binding shadows an earlier binding",
-                            name,
-                            nameIdx,
-                            nameIdx + 1,
-                        )
-                    }
-                    names.push(name)
-                }
-            }
-        }
-    }
-    out
-}
-
-fn selfLintCheckFunctionComplexity(
-    tokens: List<FrontToken>,
-    open: Int,
-    close: Int,
-    bodyOpen: Int,
-    bodyClose: Int,
-    report: SelfLintReport,
-) -> SelfLintReport {
-    let mut out = report
-    let params = selfLintParamCount(tokens, open, close)
-    if params > 6 {
-        out = selfLintEmit(out, "L0050", "function takes too many parameters", "", open, close + 1)
-    }
-    let statements = selfLintStatementCount(tokens, bodyOpen, bodyClose)
-    if statements > 40 {
-        out = selfLintEmit(out, "L0052", "function body is too long", "", bodyOpen, bodyClose + 1)
-    }
-    let nesting = selfLintMaxBraceDepth(tokens, bodyOpen, bodyClose)
-    if nesting > 4 {
-        out = selfLintEmit(
+    if !(selfLintIsUpperCamel(node.text)) {
+        out = selfLintEmitAtNode(
             out,
-            "L0053",
-            "control flow is nested too deeply",
-            "",
-            bodyOpen,
-            bodyClose + 1,
+            "L0030",
+            "type name should be UpperCamelCase",
+            node.text,
+            node.start + 1,
+            node.start + 2,
+            idx,
         )
     }
-    out
+    selfLintAstCheckGenericParams(file, node.children2, out)
 }
 
-fn selfLintLooksLikeParamName(tokens: List<FrontToken>, idx: Int, open: Int) -> Bool {
-    let prev = selfLintPrevMeaningfulKindBounded(tokens, idx, open)
-    selfLintKindIs(prev, "(") || selfLintKindIs(prev, ",") || selfLintKindIs(prev, "mut")
-}
-
-fn selfLintCheckLet(
-    tokens: List<FrontToken>,
-    start: Int,
-    count: Int,
+fn selfLintAstCheckGenericParams(
+    file: AstFile,
+    params: List<Int>,
     report: SelfLintReport,
 ) -> SelfLintReport {
     let mut out = report
-    let end = frontFindStatementEnd(tokens, start, count)
-    let scopeEnd = selfLintNearestEnclosingBlockEnd(tokens, start, count)
-    let nameIdx = selfLintLetNameIndex(tokens, start)
-    let isMut = selfLintTokenIs(tokens, start + 1, "mut")
-    let kind = frontTokenAtList(tokens, nameIdx).kind
-    if selfLintKindIs(kind, "IDENT") || selfLintKindIs(kind, "_") {
-        let name = frontTokenTextAt(tokens, nameIdx)
-        if !(selfLintIsIntentionalDiscard(name)) {
-            if !(selfLintIsLowerCamel(name)) {
-                out = selfLintEmit(
-                    out,
-                    "L0031",
-                    "binding name should be lowerCamelCase",
-                    name,
-                    nameIdx,
-                    nameIdx + 1,
-                )
-            }
-            if selfLintCountIdent(tokens, end, scopeEnd, name) == 0 {
-                out = selfLintEmit(
-                    out,
-                    "L0001",
-                    "binding is never used",
-                    name,
-                    nameIdx,
-                    nameIdx + 1,
-                )
-            }
-            if isMut && selfLintCountWrites(tokens, end, scopeEnd, name) == 0 {
-                out = selfLintEmit(
-                    out,
-                    "L0004",
-                    "mutable binding is never reassigned",
-                    name,
-                    start + 1,
-                    nameIdx + 1,
-                )
-            }
+    for paramIdx in params {
+        let param = selfLintAstNode(file, paramIdx)
+        if !(selfLintIsUpperCamel(param.text)) {
+            out = selfLintEmitAtNode(
+                out,
+                "L0030",
+                "generic parameter should be UpperCamelCase",
+                param.text,
+                param.start,
+                param.end,
+                paramIdx,
+            )
         }
     }
     out
 }
 
-fn selfLintLetNameIndex(tokens: List<FrontToken>, start: Int) -> Int {
-    let mut nameIdx = start + 1
-    if selfLintTokenIs(tokens, nameIdx, "mut") {
-        nameIdx = nameIdx + 1
-    }
-    nameIdx
-}
-
-fn selfLintCheckEnumVariants(
-    tokens: List<FrontToken>,
-    start: Int,
-    count: Int,
+fn selfLintAstCheckMemberFunctions(
+    file: AstFile,
+    members: List<Int>,
     report: SelfLintReport,
 ) -> SelfLintReport {
     let mut out = report
-    let end = frontDeclEnd(tokens, start, count)
-    let open = selfLintFindTopLevelKind(tokens, start + 1, end, r"{")
-    if open < 0 {
-        return out
+    for memberIdx in members {
+        let member = selfLintAstNode(file, memberIdx)
+        if member.kind == AstNFnDecl {
+            out = selfLintAstCheckFunction(file, memberIdx, member, out)
+        }
     }
-    let close = frontFindMatching(tokens, open, end, selfLintKind(r"{"), selfLintKind(r"}"))
-    let mut parenDepth = 0
-    for idx in open + 1..close {
-        let kind = frontTokenAtList(tokens, idx).kind
-        if selfLintKindIs(kind, "(") {
-            parenDepth = parenDepth + 1
-        } else if selfLintKindIs(kind, ")") {
-            if parenDepth > 0 {
-                parenDepth = parenDepth - 1
-            }
-        } else if parenDepth == 0 && selfLintKindIs(kind, "IDENT") && selfLintLooksLikeVariantName(
-            tokens,
-            idx,
-            open,
-        ) {
-            let name = frontTokenTextAt(tokens, idx)
-            if !(selfLintIsUpperCamel(name)) {
-                out = selfLintEmit(
+    out
+}
+
+fn selfLintAstCheckEnumMembers(
+    file: AstFile,
+    members: List<Int>,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    let mut out = report
+    for memberIdx in members {
+        let member = selfLintAstNode(file, memberIdx)
+        if member.kind == AstNVariant {
+            if !(selfLintIsUpperCamel(member.text)) {
+                out = selfLintEmitAtNode(
                     out,
                     "L0032",
                     "enum variant should be UpperCamelCase",
-                    name,
-                    idx,
-                    idx + 1,
+                    member.text,
+                    member.start,
+                    member.end,
+                    memberIdx,
+                )
+            }
+        } else if member.kind == AstNFnDecl {
+            out = selfLintAstCheckFunction(file, memberIdx, member, out)
+        }
+    }
+    out
+}
+
+fn selfLintAstCheckFunction(
+    file: AstFile,
+    idx: Int,
+    node: AstNode,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    let mut out = report
+    if !(selfLintIsLowerCamel(node.text)) {
+        out = selfLintEmitAtNode(
+            out,
+            "L0031",
+            "function name should be lowerCamelCase",
+            node.text,
+            node.start + 1,
+            node.start + 2,
+            idx,
+        )
+    }
+    out = selfLintAstCheckGenericParams(file, node.children2, out)
+    out = selfLintAstCheckFunctionParams(file, node, out)
+    if selfLintAstListCount(node.children) > 6 {
+        out = selfLintEmitAtNode(
+            out,
+            "L0050",
+            "function takes too many parameters",
+            "",
+            node.start,
+            node.end,
+            idx,
+        )
+    }
+    if node.right >= 0 {
+        out = selfLintAstCheckFunctionScopes(file, node, out)
+        out = selfLintAstCheckBlockUsage(file, node.right, out)
+        out = selfLintAstCheckDeadCode(file, node.right, out)
+        out = selfLintAstCheckFlow(file, node.right, out)
+        out = selfLintAstCheckSimplifyNode(file, node.right, out)
+        let statements = selfLintAstStatementCount(file, node.right)
+        if statements > 40 {
+            out = selfLintEmitAtNode(
+                out,
+                "L0052",
+                "function body is too long",
+                "",
+                node.start,
+                node.end,
+                idx,
+            )
+        }
+        let nesting = selfLintAstMaxNesting(file, node.right, -1)
+        if nesting > 4 {
+            out = selfLintEmitAtNode(
+                out,
+                "L0053",
+                "control flow is nested too deeply",
+                "",
+                node.start,
+                node.end,
+                idx,
+            )
+        }
+    }
+    out
+}
+
+fn selfLintAstCheckFunctionParams(
+    file: AstFile,
+    fnNode: AstNode,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    let mut out = report
+    for paramIdx in fnNode.children {
+        let param = selfLintAstNode(file, paramIdx)
+        let names = selfLintAstParamNames(file, param)
+        for item in names {
+            if !(selfLintIsIntentionalDiscard(item.name)) && item.name != "self" {
+                if !(selfLintIsLowerCamel(item.name)) {
+                    out = selfLintEmitAtNode(
+                        out,
+                        "L0031",
+                        "parameter name should be lowerCamelCase",
+                        item.name,
+                        item.start,
+                        item.end,
+                        item.node,
+                    )
+                }
+                if fnNode.flags != 1 && fnNode.right >= 0 && selfLintAstCountIdentInNode(
+                    file,
+                    fnNode.right,
+                    item.name,
+                ) == 0 {
+                    out = selfLintEmitAtNode(
+                        out,
+                        "L0002",
+                        "parameter is never used",
+                        item.name,
+                        item.start,
+                        item.end,
+                        item.node,
+                    )
+                }
+            }
+        }
+    }
+    out
+}
+
+fn selfLintAstCheckFunctionScopes(
+    file: AstFile,
+    fnNode: AstNode,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    let mut names: List<String> = []
+    let mut out = report
+    for paramIdx in fnNode.children {
+        let param = selfLintAstNode(file, paramIdx)
+        let paramNames = selfLintAstParamNames(file, param)
+        for item in paramNames {
+            if !(selfLintIsIntentionalDiscard(item.name)) && item.name != "self" {
+                if selfLintStringListContains(names, item.name) {
+                    out = selfLintEmitAtNode(
+                        out,
+                        "L0010",
+                        "binding shadows an earlier binding",
+                        item.name,
+                        item.start,
+                        item.end,
+                        item.node,
+                    )
+                }
+                names.push(item.name)
+            }
+        }
+    }
+    selfLintAstCheckBlockScopes(file, fnNode.right, names, out)
+}
+
+fn selfLintAstCheckBlockScopes(
+    file: AstFile,
+    blockIdx: Int,
+    visible: List<String>,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    if blockIdx < 0 {
+        return report
+    }
+    let block = selfLintAstNode(file, blockIdx)
+    if block.kind != AstNBlock {
+        return report
+    }
+    let mut out = report
+    let mut local = selfLintStringListCopy(visible)
+    for stmtIdx in block.children {
+        let stmt = selfLintAstNode(file, stmtIdx)
+        if stmt.kind == AstNLet {
+            out = selfLintAstCheckPatternShadowing(file, stmt.left, local, out)
+            local = selfLintAstAppendPatternNames(file, stmt.left, local)
+            if stmt.right >= 0 {
+                out = selfLintAstCheckExprScopes(file, stmt.right, local, out)
+            }
+        } else {
+            out = selfLintAstCheckStmtScopes(file, stmtIdx, local, out)
+        }
+    }
+    out
+}
+
+fn selfLintAstCheckStmtScopes(
+    file: AstFile,
+    idx: Int,
+    visible: List<String>,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    if idx < 0 {
+        return report
+    }
+    let node = selfLintAstNode(file, idx)
+    let mut out = report
+    if node.kind == AstNFor {
+        let mut loopNames = selfLintStringListCopy(visible)
+        let patIdx = selfLintAstChildAt(node.children, 0)
+        out = selfLintAstCheckPatternShadowing(file, patIdx, loopNames, out)
+        loopNames = selfLintAstAppendPatternNames(file, patIdx, loopNames)
+        out = selfLintAstCheckBlockScopes(file, node.right, loopNames, out)
+        if node.left >= 0 {
+            out = selfLintAstCheckExprScopes(file, node.left, visible, out)
+        }
+        let iterIdx = selfLintAstChildAt(node.children, 1)
+        if iterIdx >= 0 {
+            out = selfLintAstCheckExprScopes(file, iterIdx, visible, out)
+        }
+    } else if node.kind == AstNExprStmt {
+        out = selfLintAstCheckExprScopes(file, node.left, visible, out)
+    } else if node.kind == AstNReturn || node.kind == AstNDefer {
+        out = selfLintAstCheckExprScopes(file, node.left, visible, out)
+    } else if node.kind == AstNAssign || node.kind == AstNChanSend {
+        out = selfLintAstCheckExprScopes(file, node.left, visible, out)
+        out = selfLintAstCheckExprScopes(file, node.right, visible, out)
+    } else {
+        out = selfLintAstCheckExprScopes(file, idx, visible, out)
+    }
+    out
+}
+
+fn selfLintAstCheckExprScopes(
+    file: AstFile,
+    idx: Int,
+    visible: List<String>,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    if idx < 0 {
+        return report
+    }
+    let node = selfLintAstNode(file, idx)
+    let mut out = report
+    if node.kind == AstNBlock {
+        return selfLintAstCheckBlockScopes(file, idx, visible, out)
+    }
+    if node.kind == AstNIf {
+        out = selfLintAstCheckExprScopes(file, node.left, visible, out)
+        out = selfLintAstCheckBlockScopes(file, node.right, visible, out)
+        let elseIdx = selfLintAstChildAt(node.children, 0)
+        if elseIdx >= 0 {
+            out = selfLintAstCheckExprScopes(file, elseIdx, visible, out)
+        }
+        return out
+    }
+    if node.kind == AstNMatch {
+        out = selfLintAstCheckExprScopes(file, node.left, visible, out)
+        for armIdx in node.children {
+            let arm = selfLintAstNode(file, armIdx)
+            let mut armNames = selfLintStringListCopy(visible)
+            out = selfLintAstCheckPatternShadowing(file, arm.left, armNames, out)
+            armNames = selfLintAstAppendPatternNames(file, arm.left, armNames)
+            out = selfLintAstCheckExprScopes(file, arm.right, armNames, out)
+            let guard = selfLintAstChildAt(arm.children, 0)
+            if guard >= 0 {
+                out = selfLintAstCheckExprScopes(file, guard, armNames, out)
+            }
+        }
+        return out
+    }
+    if node.kind == AstNClosure {
+        let mut closureNames = selfLintStringListCopy(visible)
+        for paramIdx in node.children {
+            let param = selfLintAstNode(file, paramIdx)
+            let paramNames = selfLintAstParamNames(file, param)
+            for item in paramNames {
+                if !(selfLintIsIntentionalDiscard(item.name)) {
+                    if selfLintStringListContains(closureNames, item.name) {
+                        out = selfLintEmitAtNode(
+                            out,
+                            "L0010",
+                            "binding shadows an earlier binding",
+                            item.name,
+                            item.start,
+                            item.end,
+                            item.node,
+                        )
+                    }
+                    closureNames.push(item.name)
+                }
+            }
+        }
+        return selfLintAstCheckExprScopes(file, node.left, closureNames, out)
+    }
+    out = selfLintAstCheckExprScopes(file, node.left, visible, out)
+    out = selfLintAstCheckExprScopes(file, node.right, visible, out)
+    for child in node.children {
+        out = selfLintAstCheckExprScopes(file, child, visible, out)
+    }
+    for child in node.children2 {
+        out = selfLintAstCheckExprScopes(file, child, visible, out)
+    }
+    out
+}
+
+fn selfLintAstCheckPatternShadowing(
+    file: AstFile,
+    patternIdx: Int,
+    visible: List<String>,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    let names = selfLintAstPatternNames(file, patternIdx, [])
+    let mut out = report
+    let mut local = selfLintStringListCopy(visible)
+    for item in names {
+        if !(selfLintIsIntentionalDiscard(item.name)) {
+            if selfLintStringListContains(local, item.name) {
+                out = selfLintEmitAtNode(
+                    out,
+                    "L0010",
+                    "binding shadows an earlier binding",
+                    item.name,
+                    item.start,
+                    item.end,
+                    item.node,
+                )
+            }
+            local.push(item.name)
+        }
+    }
+    out
+}
+
+fn selfLintAstAppendPatternNames(
+    file: AstFile,
+    patternIdx: Int,
+    visible: List<String>,
+) -> List<String> {
+    let names = selfLintAstPatternNames(file, patternIdx, [])
+    let mut out = selfLintStringListCopy(visible)
+    for item in names {
+        if !(selfLintIsIntentionalDiscard(item.name)) {
+            out.push(item.name)
+        }
+    }
+    out
+}
+
+fn selfLintAstCheckBlockUsage(
+    file: AstFile,
+    blockIdx: Int,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    if blockIdx < 0 {
+        return report
+    }
+    let block = selfLintAstNode(file, blockIdx)
+    if block.kind != AstNBlock {
+        return report
+    }
+    let mut out = report
+    let mut ordinal = 0
+    for stmtIdx in block.children {
+        let stmt = selfLintAstNode(file, stmtIdx)
+        if stmt.kind == AstNLet {
+            out = selfLintAstCheckLetNames(file, stmt, out)
+            let names = selfLintAstPatternNames(file, stmt.left, [])
+            for item in names {
+                if !(selfLintIsIntentionalDiscard(item.name)) {
+                    if selfLintAstCountIdentAfter(file, block.children, ordinal, item.name) == 0 {
+                        out = selfLintEmitAtNode(
+                            out,
+                            "L0001",
+                            "binding is never used",
+                            item.name,
+                            item.start,
+                            item.end,
+                            item.node,
+                        )
+                    }
+                    if stmt.flags == 1 && selfLintAstCountWritesAfter(
+                        file,
+                        block.children,
+                        ordinal,
+                        item.name,
+                    ) == 0 {
+                        out = selfLintEmitAtNode(
+                            out,
+                            "L0004",
+                            "mutable binding is never reassigned",
+                            item.name,
+                            stmt.start,
+                            item.end,
+                            item.node,
+                        )
+                    }
+                }
+            }
+            if stmt.right >= 0 {
+                out = selfLintAstCheckUsageInNode(file, stmt.right, out)
+            }
+        } else {
+            out = selfLintAstCheckUsageInNode(file, stmtIdx, out)
+        }
+        ordinal = ordinal + 1
+    }
+    out
+}
+
+fn selfLintAstCheckUsageInNode(file: AstFile, idx: Int, report: SelfLintReport) -> SelfLintReport {
+    if idx < 0 {
+        return report
+    }
+    let node = selfLintAstNode(file, idx)
+    let mut out = report
+    if node.kind == AstNBlock {
+        return selfLintAstCheckBlockUsage(file, idx, out)
+    }
+    if node.kind == AstNIf {
+        out = selfLintAstCheckUsageInNode(file, node.left, out)
+        out = selfLintAstCheckBlockUsage(file, node.right, out)
+        let elseIdx = selfLintAstChildAt(node.children, 0)
+        if elseIdx >= 0 {
+            out = selfLintAstCheckUsageInNode(file, elseIdx, out)
+        }
+        return out
+    }
+    if node.kind == AstNFor {
+        out = selfLintAstCheckUsageInNode(file, node.left, out)
+        out = selfLintAstCheckUsageInNode(file, node.right, out)
+        let iterIdx = selfLintAstChildAt(node.children, 1)
+        if iterIdx >= 0 {
+            out = selfLintAstCheckUsageInNode(file, iterIdx, out)
+        }
+        return out
+    }
+    if node.kind == AstNMatch {
+        out = selfLintAstCheckUsageInNode(file, node.left, out)
+        for armIdx in node.children {
+            let arm = selfLintAstNode(file, armIdx)
+            out = selfLintAstCheckUsageInNode(file, arm.right, out)
+            let guard = selfLintAstChildAt(arm.children, 0)
+            if guard >= 0 {
+                out = selfLintAstCheckUsageInNode(file, guard, out)
+            }
+        }
+        return out
+    }
+    out = selfLintAstCheckUsageInNode(file, node.left, out)
+    out = selfLintAstCheckUsageInNode(file, node.right, out)
+    for child in node.children {
+        out = selfLintAstCheckUsageInNode(file, child, out)
+    }
+    for child in node.children2 {
+        out = selfLintAstCheckUsageInNode(file, child, out)
+    }
+    out
+}
+
+fn selfLintAstCheckLetNames(file: AstFile, node: AstNode, report: SelfLintReport) -> SelfLintReport {
+    let mut out = report
+    let names = selfLintAstPatternNames(file, node.left, [])
+    for item in names {
+        if !(selfLintIsIntentionalDiscard(item.name)) && !(selfLintIsLowerCamel(item.name)) {
+            out = selfLintEmitAtNode(
+                out,
+                "L0031",
+                "binding name should be lowerCamelCase",
+                item.name,
+                item.start,
+                item.end,
+                item.node,
+            )
+        }
+    }
+    out
+}
+
+fn selfLintAstCheckDeadCode(file: AstFile, idx: Int, report: SelfLintReport) -> SelfLintReport {
+    if idx < 0 {
+        return report
+    }
+    let node = selfLintAstNode(file, idx)
+    let mut out = report
+    if node.kind == AstNBlock {
+        out = selfLintAstCheckBlockDeadCode(file, idx, out)
+    }
+    out = selfLintAstCheckDeadCode(file, node.left, out)
+    out = selfLintAstCheckDeadCode(file, node.right, out)
+    for child in node.children {
+        out = selfLintAstCheckDeadCode(file, child, out)
+    }
+    for child in node.children2 {
+        out = selfLintAstCheckDeadCode(file, child, out)
+    }
+    out
+}
+
+fn selfLintAstCheckBlockDeadCode(
+    file: AstFile,
+    blockIdx: Int,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    let block = selfLintAstNode(file, blockIdx)
+    let mut out = report
+    let mut terminated = false
+    for stmtIdx in block.children {
+        let stmt = selfLintAstNode(file, stmtIdx)
+        if terminated {
+            return selfLintEmitAtNode(out, "L0020", "statement is unreachable", "", stmt.start, stmt.end, stmtIdx)
+        }
+        if selfLintAstIsTerminator(stmt) {
+            terminated = true
+        }
+    }
+    let lastIdx = selfLintAstLastChild(block.children)
+    if lastIdx >= 0 {
+        let last = selfLintAstNode(file, lastIdx)
+        if last.kind == AstNReturn && last.left >= 0 {
+            out = selfLintEmitAtNode(out, "L0024", "tail return is redundant", "", last.start, last.end, lastIdx)
+        }
+    }
+    out
+}
+
+fn selfLintAstCheckFlow(file: AstFile, idx: Int, report: SelfLintReport) -> SelfLintReport {
+    if idx < 0 {
+        return report
+    }
+    let node = selfLintAstNode(file, idx)
+    let mut out = report
+    if node.kind == AstNIf {
+        if selfLintAstIsConstantBoolCondition(file, node.left) {
+            out = selfLintEmitAtNode(out, "L0022", "condition is constant", "", node.start, node.start + 1, node.left)
+        }
+        if selfLintAstBlockIsEmpty(file, node.right) {
+            out = selfLintEmitAtNode(out, "L0023", "if branch is empty", "", node.start, node.end, node.right)
+        }
+        let elseIdx = selfLintAstChildAt(node.children, 0)
+        if elseIdx >= 0 {
+            let elseNode = selfLintAstNode(file, elseIdx)
+            if elseNode.kind == AstNBlock && selfLintAstBlockIsEmpty(file, elseIdx) {
+                out = selfLintEmitAtNode(
+                    out,
+                    "L0023",
+                    "else branch is empty",
+                    "",
+                    elseNode.start,
+                    elseNode.end,
+                    elseIdx,
                 )
             }
         }
-    }
-    out
-}
-
-fn selfLintLooksLikeVariantName(tokens: List<FrontToken>, idx: Int, open: Int) -> Bool {
-    let prev = selfLintPrevMeaningfulKindBounded(tokens, idx, open)
-    let next = frontTokenAtList(tokens, idx + 1).kind
-    (selfLintKindIs(prev, r"{") || selfLintKindIs(prev, ",") || selfLintKindIs(prev, "NEWLINE")) && !(selfLintKindIs(
-        next,
-        ":",
-    ))
-}
-
-fn selfLintScanDeadCode(
-    tokens: List<FrontToken>,
-    count: Int,
-    report: SelfLintReport,
-) -> SelfLintReport {
-    let mut out = report
-    for idx in 0..count {
-        if selfLintTokenIs(tokens, idx, r"{") {
-            let close = frontFindMatching(
-                tokens,
-                idx,
-                count,
-                selfLintKind(r"{"),
-                selfLintKind(r"}"),
-            )
-            out = selfLintCheckBlockDeadCode(tokens, idx, close, out)
+    } else if node.kind == AstNFor {
+        if selfLintAstBlockIsEmpty(file, node.right) {
+            out = selfLintEmitAtNode(out, "L0026", "loop body is empty", "", node.start, node.end, node.right)
         }
     }
-    out
-}
-
-fn selfLintCheckBlockDeadCode(
-    tokens: List<FrontToken>,
-    open: Int,
-    close: Int,
-    report: SelfLintReport,
-) -> SelfLintReport {
-    let mut out = report
-    let mut depth = 0
-    let mut terminator = -1
-    for idx in open + 1..close {
-        let kind = frontTokenAtList(tokens, idx).kind
-        if selfLintKindIs(kind, r"{") {
-            depth = depth + 1
-        } else if selfLintKindIs(kind, r"}") {
-            if depth > 0 {
-                depth = depth - 1
-            }
-        } else if depth == 0 {
-            if terminator >= 0 && selfLintStartsStatement(kind) {
-                return selfLintEmit(out, "L0020", "statement is unreachable", "", idx, idx + 1)
-            }
-            if selfLintKindIs(kind, "return") || selfLintKindIs(kind, "break") || selfLintKindIs(
-                kind,
-                "continue",
-            ) {
-                if selfLintKindIs(kind, "return") && selfLintReturnHasValue(tokens, idx, close) && !(selfLintHasNextStatement(
-                    tokens,
-                    frontFindStatementEnd(
-                        tokens,
-                        idx,
-                        close,
-                    ),
-                    close,
-                )) {
-                    out = selfLintEmit(
-                        out,
-                        "L0024",
-                        "tail return is redundant",
-                        "",
-                        idx,
-                        frontFindStatementEnd(tokens, idx, close),
-                    )
-                }
-                terminator = idx
-            }
-        }
+    out = selfLintAstCheckFlow(file, node.left, out)
+    out = selfLintAstCheckFlow(file, node.right, out)
+    for child in node.children {
+        out = selfLintAstCheckFlow(file, child, out)
+    }
+    for child in node.children2 {
+        out = selfLintAstCheckFlow(file, child, out)
     }
     out
 }
 
-fn selfLintStartsStatement(kind: FrontTokenKind) -> Bool {
-    selfLintKindIs(kind, "let") || selfLintKindIs(kind, "return") || selfLintKindIs(kind, "break") || selfLintKindIs(
-        kind,
-        "continue",
-    ) || selfLintKindIs(kind, "for") || selfLintKindIs(kind, "if") || selfLintKindIs(kind, "match") || selfLintKindIs(
-        kind,
-        "defer",
-    ) || selfLintKindIs(kind, "IDENT") || selfLintKindIs(kind, "INT") || selfLintKindIs(
-        kind,
-        "FLOAT",
-    ) || selfLintKindIs(kind, "STRING") || selfLintKindIs(kind, "RAWSTRING") || selfLintKindIs(
-        kind,
-        "(",
-    ) || selfLintKindIs(kind, "[")
-}
-
-fn selfLintScanSimplify(
-    tokens: List<FrontToken>,
-    count: Int,
-    report: SelfLintReport,
-) -> SelfLintReport {
+fn selfLintAstCheckSimplifyNode(file: AstFile, idx: Int, report: SelfLintReport) -> SelfLintReport {
+    if idx < 0 {
+        return report
+    }
+    let node = selfLintAstNode(file, idx)
     let mut out = report
-    for idx in 1..count - 1 {
-        let kind = frontTokenAtList(tokens, idx).kind
-        let left = frontTokenAtList(tokens, idx - 1)
-        let right = frontTokenAtList(tokens, idx + 1)
-        if selfLintKindIs(kind, "if") {
-            out = selfLintCheckIfSimplify(tokens, idx, count, out)
-        } else if selfLintKindIs(kind, "for") {
-            out = selfLintCheckLoopSimplify(tokens, idx, count, out)
-        } else if selfLintKindIs(kind, "!") && selfLintTokenIs(tokens, idx + 1, "!") {
-            out = selfLintEmit(out, "L0043", "double negation has no effect", "", idx, idx + 2)
-        } else if selfLintKindIs(kind, "!") && selfLintTokenIsBoolLiteral(tokens, idx + 1) {
-            out = selfLintEmit(
+    if node.kind == AstNUnary && node.op == FrontNot {
+        let inner = selfLintAstNode(file, node.left)
+        if inner.kind == AstNUnary && inner.op == FrontNot {
+            out = selfLintEmitAtNode(out, "L0043", "double negation has no effect", "", node.start, node.end, idx)
+        } else if inner.kind == AstNBoolLit {
+            out = selfLintEmitAtNode(
                 out,
                 "L0045",
                 "negated bool literal can be simplified",
-                frontTokenTextAt(tokens, idx + 1),
+                inner.text,
+                node.start,
+                node.end,
                 idx,
-                idx + 2,
             )
-        } else if frontIsComparisonOp(kind) && (selfLintTokenIsBoolLiteralToken(left) || selfLintTokenIsBoolLiteralToken(
-            right,
-        )) {
-            out = selfLintEmit(
+        }
+    } else if node.kind == AstNBinary && frontIsComparisonOp(node.op) {
+        if selfLintAstIsBoolLiteral(file, node.left) || selfLintAstIsBoolLiteral(file, node.right) {
+            out = selfLintEmitAtNode(
                 out,
                 "L0044",
                 "comparison against bool literal is redundant",
                 "",
-                idx - 1,
-                idx + 2,
+                node.start,
+                node.end,
+                idx,
             )
-        } else if frontIsComparisonOp(kind) && selfLintKindIs(left.kind, "IDENT") && selfLintKindIs(
-            right.kind,
-            "IDENT",
-        ) && left.text == right.text {
-            out = selfLintEmit(
-                out,
-                "L0041",
-                "value is compared with itself",
-                left.text,
-                idx - 1,
-                idx + 2,
-            )
-        } else if selfLintKindIs(kind, "=") && selfLintKindIs(left.kind, "IDENT") && selfLintKindIs(
-            right.kind,
-            "IDENT",
-        ) && left.text == right.text && !(selfLintAssignBelongsToLet(
-            tokens,
-            idx,
-        )) {
-            out = selfLintEmit(
+        } else {
+            let left = selfLintAstIdentName(file, node.left)
+            let right = selfLintAstIdentName(file, node.right)
+            if left != "" && left == right {
+                out = selfLintEmitAtNode(
+                    out,
+                    "L0041",
+                    "value is compared with itself",
+                    left,
+                    node.start,
+                    node.end,
+                    idx,
+                )
+            }
+        }
+    } else if node.kind == AstNAssign && node.op == FrontAssign {
+        let left = selfLintAstIdentName(file, node.left)
+        let right = selfLintAstIdentName(file, node.right)
+        if left != "" && left == right {
+            out = selfLintEmitAtNode(
                 out,
                 "L0042",
                 "self-assignment has no effect",
-                left.text,
-                idx - 1,
-                idx + 2,
+                left,
+                node.start,
+                node.end,
+                idx,
             )
         }
     }
-    out
-}
-
-fn selfLintCheckIfSimplify(
-    tokens: List<FrontToken>,
-    idx: Int,
-    count: Int,
-    report: SelfLintReport,
-) -> SelfLintReport {
-    let mut out = report
-    let condIdx = selfLintNextMeaningfulIndex(tokens, idx + 1, count)
-    if selfLintTokenIsBoolLiteral(tokens, condIdx) || (selfLintTokenIs(tokens, condIdx, "!") && selfLintTokenIsBoolLiteral(
-        tokens,
-        selfLintNextMeaningfulIndex(tokens, condIdx + 1, count),
-    )) {
-        out = selfLintEmit(out, "L0022", "condition is constant", "", idx, condIdx + 1)
+    out = selfLintAstCheckSimplifyNode(file, node.left, out)
+    out = selfLintAstCheckSimplifyNode(file, node.right, out)
+    for child in node.children {
+        out = selfLintAstCheckSimplifyNode(file, child, out)
     }
-    let open = selfLintFindFirstKind(tokens, idx + 1, count, r"{")
-    if open >= 0 {
-        let close = frontFindMatching(tokens, open, count, selfLintKind(r"{"), selfLintKind(r"}"))
-        if selfLintBlockIsEmpty(tokens, open, close) {
-            out = selfLintEmit(out, "L0023", "if branch is empty", "", open, close + 1)
-        }
-        let after = selfLintNextMeaningfulIndex(tokens, close + 1, count)
-        if selfLintTokenIs(tokens, after, "else") {
-            let elseOpen = selfLintFindFirstKind(tokens, after + 1, count, r"{")
-            if elseOpen >= 0 {
-                let elseClose = frontFindMatching(
-                    tokens,
-                    elseOpen,
-                    count,
-                    selfLintKind(r"{"),
-                    selfLintKind(r"}"),
-                )
-                if selfLintBlockIsEmpty(tokens, elseOpen, elseClose) {
-                    out = selfLintEmit(
-                        out,
-                        "L0023",
-                        "else branch is empty",
-                        "",
-                        elseOpen,
-                        elseClose + 1,
-                    )
-                }
-            }
-        }
+    for child in node.children2 {
+        out = selfLintAstCheckSimplifyNode(file, child, out)
     }
     out
 }
 
-fn selfLintCheckLoopSimplify(
-    tokens: List<FrontToken>,
-    idx: Int,
-    count: Int,
-    report: SelfLintReport,
-) -> SelfLintReport {
-    let open = selfLintFindFirstKind(tokens, idx + 1, count, r"{")
-    if open < 0 {
-        return report
+fn selfLintAstParamNames(file: AstFile, param: AstNode) -> List<SelfLintName> {
+    let mut names: List<SelfLintName> = []
+    if param.text != "" {
+        names.push(selfLintName(param.text, param.start, param.end))
+        return names
     }
-    let close = frontFindMatching(tokens, open, count, selfLintKind(r"{"), selfLintKind(r"}"))
-    if selfLintBlockIsEmpty(tokens, open, close) {
-        selfLintEmit(report, "L0026", "loop body is empty", "", open, close + 1)
+    selfLintAstPatternNames(file, param.left, names)
+}
+
+fn selfLintAstPatternNames(
+    file: AstFile,
+    idx: Int,
+    names: List<SelfLintName>,
+) -> List<SelfLintName> {
+    if idx < 0 {
+        return names
+    }
+    let node = selfLintAstNode(file, idx)
+    let mut out = names
+    if node.kind == AstNIdent {
+        out.push(selfLintNameAtNode(node.text, node.start, node.end, idx))
+        return out
+    }
+    if node.kind != AstNPattern {
+        return out
+    }
+    if node.extra == astPatternIdentKind() {
+        out.push(selfLintNameAtNode(node.text, node.start, node.end, idx))
+    } else if node.extra == astPatternBindingKind() {
+        out.push(selfLintNameAtNode(node.text, node.start, node.start + 1, idx))
+        out = selfLintAstPatternNames(file, node.left, out)
+    } else if node.extra == astPatternFieldKind() {
+        if node.left >= 0 {
+            out = selfLintAstPatternNames(file, node.left, out)
+        } else {
+            out.push(selfLintNameAtNode(node.text, node.start, node.end, idx))
+        }
     } else {
-        report
-    }
-}
-
-fn selfLintAssignBelongsToLet(tokens: List<FrontToken>, idx: Int) -> Bool {
-    let beforeName = selfLintPrevMeaningfulKindBounded(tokens, idx - 1, 0)
-    selfLintKindIs(beforeName, "let") || selfLintKindIs(beforeName, "mut") || selfLintKindIs(
-        beforeName,
-        ":",
-    )
-}
-
-fn selfLintNextIdent(tokens: List<FrontToken>, start: Int, end: Int) -> Int {
-    for idx in start..end {
-        if selfLintTokenIs(tokens, idx, "IDENT") {
-            return idx
+        out = selfLintAstPatternNames(file, node.left, out)
+        out = selfLintAstPatternNames(file, node.right, out)
+        for child in node.children {
+            out = selfLintAstPatternNames(file, child, out)
         }
     }
-    end
+    out
 }
 
-fn selfLintFindTopLevelKind(
-    tokens: List<FrontToken>,
-    start: Int,
-    end: Int,
-    target: String,
+fn selfLintAstCountIdentAfter(
+    file: AstFile,
+    stmts: List<Int>,
+    ordinal: Int,
+    name: String,
 ) -> Int {
-    let mut parenDepth = 0
-    let mut bracketDepth = 0
-    let mut braceDepth = 0
-    let mut angleDepth = 0
-    for idx in start..end {
-        let kind = frontTokenAtList(tokens, idx).kind
-        if selfLintKindIs(kind, target) && parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0 {
-            return idx
+    let mut count = 0
+    let mut idx = 0
+    for stmtIdx in stmts {
+        if idx > ordinal {
+            count = count + selfLintAstCountIdentInNode(file, stmtIdx, name)
         }
-        if selfLintKindIs(kind, "(") {
-            parenDepth = parenDepth + 1
-        } else if selfLintKindIs(kind, ")") {
-            if parenDepth > 0 {
-                parenDepth = parenDepth - 1
-            }
-        } else if selfLintKindIs(kind, "[") {
-            bracketDepth = bracketDepth + 1
-        } else if selfLintKindIs(kind, "]") {
-            if bracketDepth > 0 {
-                bracketDepth = bracketDepth - 1
-            }
-        } else if selfLintKindIs(kind, r"{") {
-            braceDepth = braceDepth + 1
-        } else if selfLintKindIs(kind, r"}") {
-            if braceDepth > 0 {
-                braceDepth = braceDepth - 1
-            }
-        } else if selfLintKindIs(kind, "<") {
-            angleDepth = angleDepth + 1
-        } else if selfLintKindIs(kind, ">") {
-            if angleDepth > 0 {
-                angleDepth = angleDepth - 1
-            }
+        idx = idx + 1
+    }
+    count
+}
+
+fn selfLintAstCountWritesAfter(
+    file: AstFile,
+    stmts: List<Int>,
+    ordinal: Int,
+    name: String,
+) -> Int {
+    let mut count = 0
+    let mut idx = 0
+    for stmtIdx in stmts {
+        if idx > ordinal {
+            count = count + selfLintAstCountWritesInNode(file, stmtIdx, name)
         }
+        idx = idx + 1
+    }
+    count
+}
+
+fn selfLintAstCountIdentInNode(file: AstFile, idx: Int, name: String) -> Int {
+    if idx < 0 {
+        return 0
+    }
+    let node = selfLintAstNode(file, idx)
+    let mut count = 0
+    if node.kind == AstNIdent && node.text == name {
+        count = count + 1
+    }
+    count = count + selfLintAstCountIdentInNode(file, node.left, name)
+    count = count + selfLintAstCountIdentInNode(file, node.right, name)
+    for child in node.children {
+        count = count + selfLintAstCountIdentInNode(file, child, name)
+    }
+    for child in node.children2 {
+        count = count + selfLintAstCountIdentInNode(file, child, name)
+    }
+    count
+}
+
+fn selfLintAstCountWritesInNode(file: AstFile, idx: Int, name: String) -> Int {
+    if idx < 0 {
+        return 0
+    }
+    let node = selfLintAstNode(file, idx)
+    let mut count = 0
+    if node.kind == AstNAssign && selfLintAstWriteTargetMatches(file, node.left, name) {
+        count = count + 1
+    }
+    if node.kind == AstNCall && selfLintAstMutatingCallMatches(file, node, name) {
+        count = count + 1
+    }
+    count = count + selfLintAstCountWritesInNode(file, node.left, name)
+    count = count + selfLintAstCountWritesInNode(file, node.right, name)
+    for child in node.children {
+        count = count + selfLintAstCountWritesInNode(file, child, name)
+    }
+    for child in node.children2 {
+        count = count + selfLintAstCountWritesInNode(file, child, name)
+    }
+    count
+}
+
+fn selfLintAstWriteTargetMatches(file: AstFile, idx: Int, name: String) -> Bool {
+    if idx < 0 {
+        return false
+    }
+    let node = selfLintAstNode(file, idx)
+    if node.kind == AstNIdent {
+        return node.text == name
+    }
+    if node.kind == AstNField || node.kind == AstNIndex || node.kind == AstNQuestion {
+        return selfLintAstWriteTargetMatches(file, node.left, name)
+    }
+    false
+}
+
+fn selfLintAstMutatingCallMatches(file: AstFile, node: AstNode, name: String) -> Bool {
+    let callee = selfLintAstNode(file, node.left)
+    if callee.kind == AstNField && selfLintMutatingMethodName(callee.text) {
+        return selfLintAstWriteTargetMatches(file, callee.left, name)
+    }
+    false
+}
+
+fn selfLintAstIsTerminator(node: AstNode) -> Bool {
+    node.kind == AstNReturn || node.kind == AstNBreak || node.kind == AstNContinue
+}
+
+fn selfLintAstIsConstantBoolCondition(file: AstFile, idx: Int) -> Bool {
+    if idx < 0 {
+        return false
+    }
+    let node = selfLintAstNode(file, idx)
+    if node.kind == AstNBoolLit {
+        return true
+    }
+    if node.kind == AstNUnary && node.op == FrontNot {
+        return selfLintAstIsBoolLiteral(file, node.left)
+    }
+    false
+}
+
+fn selfLintAstIsBoolLiteral(file: AstFile, idx: Int) -> Bool {
+    if idx < 0 {
+        return false
+    }
+    let node = selfLintAstNode(file, idx)
+    if node.kind == AstNBoolLit {
+        return true
+    }
+    if node.kind == AstNParen {
+        return selfLintAstIsBoolLiteral(file, node.left)
+    }
+    false
+}
+
+fn selfLintAstIdentName(file: AstFile, idx: Int) -> String {
+    if idx < 0 {
+        return ""
+    }
+    let node = selfLintAstNode(file, idx)
+    if node.kind == AstNIdent {
+        return node.text
+    }
+    if node.kind == AstNParen {
+        return selfLintAstIdentName(file, node.left)
+    }
+    ""
+}
+
+fn selfLintAstBlockIsEmpty(file: AstFile, idx: Int) -> Bool {
+    if idx < 0 {
+        return false
+    }
+    let node = selfLintAstNode(file, idx)
+    node.kind == AstNBlock && selfLintAstListCount(node.children) == 0
+}
+
+fn selfLintAstStatementCount(file: AstFile, idx: Int) -> Int {
+    if idx < 0 {
+        return 0
+    }
+    let node = selfLintAstNode(file, idx)
+    let mut count = 0
+    if selfLintAstIsStatementNode(node) {
+        count = count + 1
+    }
+    count = count + selfLintAstStatementCount(file, node.left)
+    count = count + selfLintAstStatementCount(file, node.right)
+    for child in node.children {
+        count = count + selfLintAstStatementCount(file, child)
+    }
+    for child in node.children2 {
+        count = count + selfLintAstStatementCount(file, child)
+    }
+    count
+}
+
+fn selfLintAstIsStatementNode(node: AstNode) -> Bool {
+    node.kind == AstNLet || node.kind == AstNReturn || node.kind == AstNBreak || node.kind == AstNContinue || node.kind == AstNFor || node.kind == AstNDefer || node.kind == AstNAssign || node.kind == AstNChanSend || node.kind == AstNExprStmt
+}
+
+fn selfLintAstMaxNesting(file: AstFile, idx: Int, depth: Int) -> Int {
+    if idx < 0 {
+        return depth
+    }
+    let node = selfLintAstNode(file, idx)
+    let childDepth = if node.kind == AstNBlock || node.kind == AstNIf || node.kind == AstNFor || node.kind == AstNMatch {
+        depth + 1
+    } else {
+        depth
+    }
+    let mut maxDepth = childDepth
+    let left = selfLintAstMaxNesting(file, node.left, childDepth)
+    if left > maxDepth {
+        maxDepth = left
+    }
+    let right = selfLintAstMaxNesting(file, node.right, childDepth)
+    if right > maxDepth {
+        maxDepth = right
+    }
+    for child in node.children {
+        let nested = selfLintAstMaxNesting(file, child, childDepth)
+        if nested > maxDepth {
+            maxDepth = nested
+        }
+    }
+    for child in node.children2 {
+        let nested = selfLintAstMaxNesting(file, child, childDepth)
+        if nested > maxDepth {
+            maxDepth = nested
+        }
+    }
+    maxDepth
+}
+
+fn selfLintAstChildAt(children: List<Int>, target: Int) -> Int {
+    let mut idx = 0
+    for child in children {
+        if idx == target {
+            return child
+        }
+        idx = idx + 1
     }
     -1
 }
 
-fn selfLintCountIdent(tokens: List<FrontToken>, start: Int, end: Int, name: String) -> Int {
+fn selfLintAstLastChild(children: List<Int>) -> Int {
+    let mut last = -1
+    for child in children {
+        last = child
+    }
+    last
+}
+
+fn selfLintAstListCount(items: List<Int>) -> Int {
     let mut count = 0
-    for idx in start..end {
-        let tok = frontTokenAtList(tokens, idx)
-        if selfLintKindIs(tok.kind, "IDENT") && tok.text == name {
-            count = count + 1
-        }
+    for item in items {
+        let _ = item
+        count = count + 1
     }
     count
 }
 
-fn selfLintCountWrites(tokens: List<FrontToken>, start: Int, end: Int, name: String) -> Int {
-    let mut count = 0
-    for idx in start..end {
-        let tok = frontTokenAtList(tokens, idx)
-        if selfLintKindIs(tok.kind, "IDENT") && tok.text == name {
-            let next = selfLintNextMeaningfulIndex(tokens, idx + 1, end)
-            if next < end && frontIsAssignOp(frontTokenAtList(tokens, next).kind) {
-                count = count + 1
-            } else if next < end && selfLintTokenIs(tokens, next, ".") {
-                let method = selfLintNextMeaningfulIndex(tokens, next + 1, end)
-                if method < end && selfLintMutatingMethodName(frontTokenTextAt(tokens, method)) {
-                    count = count + 1
-                }
-            }
-        }
+fn selfLintStringListCopy(items: List<String>) -> List<String> {
+    let mut out: List<String> = []
+    for item in items {
+        out.push(item)
     }
-    count
+    out
 }
 
 fn selfLintMutatingMethodName(name: String) -> Bool {
@@ -894,162 +1250,6 @@ fn selfLintStringListContains(items: List<String>, target: String) -> Bool {
         }
     }
     false
-}
-
-fn selfLintParamCount(tokens: List<FrontToken>, open: Int, close: Int) -> Int {
-    let mut count = 0
-    let mut parenDepth = 0
-    let mut angleDepth = 0
-    for idx in open + 1..close {
-        let kind = frontTokenAtList(tokens, idx).kind
-        if selfLintKindIs(kind, "(") {
-            parenDepth = parenDepth + 1
-        } else if selfLintKindIs(kind, ")") {
-            if parenDepth > 0 {
-                parenDepth = parenDepth - 1
-            }
-        } else if selfLintKindIs(kind, "<") {
-            angleDepth = angleDepth + 1
-        } else if selfLintKindIs(kind, ">") {
-            if angleDepth > 0 {
-                angleDepth = angleDepth - 1
-            }
-        } else if parenDepth == 0 && angleDepth == 0 && (selfLintKindIs(kind, "IDENT") || selfLintKindIs(
-            kind,
-            "_",
-        )) && selfLintLooksLikeParamName(
-            tokens,
-            idx,
-            open,
-        ) {
-            count = count + 1
-        }
-    }
-    count
-}
-
-fn selfLintStatementCount(tokens: List<FrontToken>, open: Int, close: Int) -> Int {
-    let mut count = 0
-    for idx in open + 1..close {
-        let kind = frontTokenAtList(tokens, idx).kind
-        if selfLintStartsStatement(kind) {
-            count = count + 1
-        }
-    }
-    count
-}
-
-fn selfLintMaxBraceDepth(tokens: List<FrontToken>, open: Int, close: Int) -> Int {
-    let mut current = 0
-    let mut maxDepth = 0
-    for idx in open + 1..close {
-        let kind = frontTokenAtList(tokens, idx).kind
-        if selfLintKindIs(kind, r"{") {
-            current = current + 1
-            if current > maxDepth {
-                maxDepth = current
-            }
-        } else if selfLintKindIs(kind, r"}") {
-            if current > 0 {
-                current = current - 1
-            }
-        }
-    }
-    maxDepth
-}
-
-fn selfLintNearestEnclosingBlockEnd(tokens: List<FrontToken>, idx: Int, count: Int) -> Int {
-    let mut depth = 0
-    let mut cur = idx - 1
-    for cur >= 0 {
-        let kind = frontTokenAtList(tokens, cur).kind
-        if selfLintKindIs(kind, r"}") {
-            depth = depth + 1
-        } else if selfLintKindIs(kind, r"{") {
-            if depth == 0 {
-                return frontFindMatching(tokens, cur, count, selfLintKind(r"{"), selfLintKind(r"}"))
-            }
-            depth = depth - 1
-        }
-        cur = cur - 1
-    }
-    count
-}
-
-fn selfLintNextMeaningfulIndex(tokens: List<FrontToken>, start: Int, end: Int) -> Int {
-    for idx in start..end {
-        let kind = frontTokenAtList(tokens, idx).kind
-        if !(selfLintKindIs(kind, "NEWLINE")) && !(selfLintKindIs(kind, ";")) {
-            return idx
-        }
-    }
-    end
-}
-
-fn selfLintFindFirstKind(
-    tokens: List<FrontToken>,
-    start: Int,
-    end: Int,
-    name: String,
-) -> Int {
-    for idx in start..end {
-        if selfLintTokenIs(tokens, idx, name) {
-            return idx
-        }
-    }
-    -1
-}
-
-fn selfLintBlockIsEmpty(tokens: List<FrontToken>, open: Int, close: Int) -> Bool {
-    let next = selfLintNextMeaningfulIndex(tokens, open + 1, close)
-    next >= close
-}
-
-fn selfLintReturnHasValue(tokens: List<FrontToken>, idx: Int, end: Int) -> Bool {
-    let stmtEnd = frontFindStatementEnd(tokens, idx, end)
-    let next = selfLintNextMeaningfulIndex(tokens, idx + 1, stmtEnd)
-    next < stmtEnd
-}
-
-fn selfLintHasNextStatement(tokens: List<FrontToken>, start: Int, end: Int) -> Bool {
-    for idx in start..end {
-        let kind = frontTokenAtList(tokens, idx).kind
-        if selfLintStartsStatement(kind) {
-            return true
-        }
-    }
-    false
-}
-
-fn selfLintTokenIsBoolLiteral(tokens: List<FrontToken>, idx: Int) -> Bool {
-    selfLintTokenIsBoolLiteralToken(frontTokenAtList(tokens, idx))
-}
-
-fn selfLintTokenIsBoolLiteralToken(tok: FrontToken) -> Bool {
-    selfLintKindIs(tok.kind, "IDENT") && (tok.text == "true" || tok.text == "false")
-}
-
-fn selfLintPrevMeaningfulKind(tokens: List<FrontToken>, idx: Int) -> FrontTokenKind {
-    selfLintPrevMeaningfulKindBounded(tokens, idx, 0)
-}
-
-fn selfLintPrevTokenKind(tokens: List<FrontToken>, idx: Int) -> FrontTokenKind {
-    if idx <= 0 {
-        return selfLintKind("EOF")
-    }
-    frontTokenAtList(tokens, idx - 1).kind
-}
-
-fn selfLintPrevMeaningfulKindBounded(tokens: List<FrontToken>, idx: Int, floor: Int) -> FrontTokenKind {
-    let mut cur = idx - 1
-    for cur >= floor {
-        let kind = frontTokenAtList(tokens, cur).kind
-        if !(selfLintKindIs(kind, "NEWLINE")) && !(selfLintKindIs(kind, ";")) {
-            return kind
-        }
-        cur = cur - 1
-    }
-    selfLintKind("EOF")
 }
 
 fn selfLintIsIntentionalDiscard(name: String) -> Bool {

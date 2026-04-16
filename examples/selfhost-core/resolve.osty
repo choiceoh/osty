@@ -1,5 +1,6 @@
 use go "strings" as strings {
     fn HasPrefix(s: String, prefix: String) -> Bool
+    fn Split(s: String, sep: String) -> List<String>
 }
 
 /// SelfSymbol is the self-hosting resolver's compact symbol record.
@@ -12,6 +13,7 @@ pub struct SelfSymbol {
     pub start: Int,
     pub end: Int,
     pub public: Bool,
+    pub node: Int,
 }
 
 /// SelfResolveDiagnostic mirrors the compiler's name-resolution diagnostics in
@@ -22,6 +24,7 @@ pub struct SelfResolveDiagnostic {
     pub name: String,
     pub start: Int,
     pub end: Int,
+    pub node: Int,
 }
 
 /// SelfResolveResult contains top-level/package symbols plus resolver
@@ -30,6 +33,8 @@ pub struct SelfResolveResult {
     pub symbols: List<SelfSymbol>,
     pub diagnostics: List<SelfResolveDiagnostic>,
     pub refs: Int,
+    pub refNames: List<String>,
+    pub refNodes: List<Int>,
     pub unresolved: Int,
     pub duplicates: Int,
 }
@@ -44,7 +49,21 @@ pub fn selfSymbol(
     end: Int,
     public: Bool,
 ) -> SelfSymbol {
-    SelfSymbol { name, kind, typeName, arity, depth, start, end, public }
+    SelfSymbol { name, kind, typeName, arity, depth, start, end, public, node: -1 }
+}
+
+fn selfSymbolAtNode(
+    name: String,
+    kind: String,
+    typeName: String,
+    arity: Int,
+    depth: Int,
+    start: Int,
+    end: Int,
+    public: Bool,
+    node: Int,
+) -> SelfSymbol {
+    SelfSymbol { name, kind, typeName, arity, depth, start, end, public, node }
 }
 
 pub fn selfResolveDiagnostic(
@@ -54,22 +73,42 @@ pub fn selfResolveDiagnostic(
     start: Int,
     end: Int,
 ) -> SelfResolveDiagnostic {
-    SelfResolveDiagnostic { code, message, name, start, end }
+    selfResolveDiagnosticAtNode(code, message, name, start, end, -1)
+}
+
+fn selfResolveDiagnosticAtNode(
+    code: String,
+    message: String,
+    name: String,
+    start: Int,
+    end: Int,
+    node: Int,
+) -> SelfResolveDiagnostic {
+    SelfResolveDiagnostic { code, message, name, start, end, node }
 }
 
 pub fn emptySelfResolveResult() -> SelfResolveResult {
-    SelfResolveResult { symbols: [], diagnostics: [], refs: 0, unresolved: 0, duplicates: 0 }
+    SelfResolveResult {
+        symbols: [],
+        diagnostics: [],
+        refs: 0,
+        refNames: [],
+        refNodes: [],
+        unresolved: 0,
+        duplicates: 0,
+    }
 }
 
 /// selfResolveSource builds a package-level symbol table and resolves simple
-/// function-body references using the self-hosted lexer/parser surface.
+/// function-body references using the self-hosted AST surface.
 pub fn selfResolveSource(source: String) -> SelfResolveResult {
-    let stream = frontendLexStream(source)
-    let tokens = frontTokensFromSource(source, stream)
-    let count = frontTokenListCount(tokens)
+    selfResolveAstFile(astParse(source))
+}
+
+pub fn selfResolveAstFile(file: AstFile) -> SelfResolveResult {
     let mut result = emptySelfResolveResult()
-    result = selfResolveCollectTopLevel(tokens, count, result)
-    result = selfResolveScanFunctions(tokens, count, result)
+    result = selfResolveAstCollectTopLevel(file, result)
+    result = selfResolveAstScanFunctions(file, result)
     result
 }
 
@@ -111,341 +150,606 @@ pub fn selfResolveHasSymbol(result: SelfResolveResult, name: String, kind: Strin
     false
 }
 
-fn selfResolveCollectTopLevel(
-    tokens: List<FrontToken>,
-    count: Int,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
-    let mut out = result
-    let mut skipUntil = -1
-    for idx in 0..count {
-        if idx < skipUntil {
-            let _ = idx
-        } else {
-            let kind = frontTokenAtList(tokens, idx).kind
-            if srKindIs(kind, "use") {
-                let consumed = frontParseUseConsumed(tokens, idx, count)
-                let end = idx + consumed
-                let alias = srUseAlias(tokens, idx, end)
-                if alias != "" {
-                    out = srAddSymbol(
-                        out,
-                        selfSymbol(alias, "package", "", 0, 0, idx, end, true),
-                    )
-                }
-                skipUntil = end
-            } else if srKindIs(kind, "fn") && srLooksLikeDeclarationStart(tokens, idx) {
-                let end = frontDeclEnd(tokens, idx, count)
-                let nameIdx = srNextIdent(tokens, idx + 1, end)
-                if nameIdx < end {
-                    let open = srFindTopLevelKind(tokens, nameIdx + 1, end, "(")
-                    let arity = if open >= 0 {
-                        let close = frontFindMatching(tokens, open, end, srKind("("), srKind(")"))
-                        srParamCount(tokens, open, close)
-                    } else {
-                        0
-                    }
-                    out = srAddSymbol(
-                        out,
-                        selfSymbol(
-                            frontTokenTextAt(tokens, nameIdx),
-                            "fn",
-                            "",
-                            arity,
-                            0,
-                            idx,
-                            end,
-                            srPrevMeaningfulIs(tokens, idx, "pub"),
-                        ),
-                    )
-                }
-                skipUntil = end
-            } else if (srKindIs(kind, "struct") || srKindIs(kind, "interface") || srKindIs(
-                kind,
-                "type",
-            )) && srLooksLikeDeclarationStart(
-                tokens,
-                idx,
-            ) {
-                let end = frontDeclEnd(tokens, idx, count)
-                let nameIdx = srNextIdent(tokens, idx + 1, end)
-                if nameIdx < end {
-                    out = srAddSymbol(
-                        out,
-                        selfSymbol(
-                            frontTokenTextAt(tokens, nameIdx),
-                            "type",
-                            "",
-                            0,
-                            0,
-                            idx,
-                            end,
-                            srPrevMeaningfulIs(tokens, idx, "pub"),
-                        ),
-                    )
-                }
-                skipUntil = end
-            } else if srKindIs(kind, "enum") && srLooksLikeDeclarationStart(tokens, idx) {
-                let end = frontDeclEnd(tokens, idx, count)
-                let nameIdx = srNextIdent(tokens, idx + 1, end)
-                if nameIdx < end {
-                    out = srAddSymbol(
-                        out,
-                        selfSymbol(
-                            frontTokenTextAt(tokens, nameIdx),
-                            "type",
-                            "",
-                            0,
-                            0,
-                            idx,
-                            end,
-                            srPrevMeaningfulIs(tokens, idx, "pub"),
-                        ),
-                    )
-                }
-                out = srCollectEnumVariants(tokens, idx, end, out)
-                skipUntil = end
-            } else if srKindIs(kind, "let") && srLooksLikeDeclarationStart(tokens, idx) {
-                let end = frontFindStatementEnd(tokens, idx, count)
-                let nameIdx = srLetNameIndex(tokens, idx)
-                if srTokenIs(tokens, nameIdx, "IDENT") || srTokenIs(tokens, nameIdx, "_") {
-                    out = srAddSymbol(
-                        out,
-                        selfSymbol(
-                            frontTokenTextAt(tokens, nameIdx),
-                            "value",
-                            "",
-                            0,
-                            0,
-                            idx,
-                            end,
-                            false,
-                        ),
-                    )
-                }
-                skipUntil = end
-            }
+pub fn selfResolveHasRef(result: SelfResolveResult, name: String) -> Bool {
+    for refName in result.refNames {
+        if refName == name {
+            return true
         }
+    }
+    false
+}
+
+pub fn selfResolveHasRefNode(result: SelfResolveResult, node: Int) -> Bool {
+    for refNode in result.refNodes {
+        if refNode == node {
+            return true
+        }
+    }
+    false
+}
+
+struct SelfResolveName {
+    name: String,
+    start: Int,
+    end: Int,
+    node: Int,
+}
+
+fn selfResolveName(name: String, start: Int, end: Int, node: Int) -> SelfResolveName {
+    SelfResolveName { name, start, end, node }
+}
+
+fn selfResolveAstCollectTopLevel(file: AstFile, result: SelfResolveResult) -> SelfResolveResult {
+    let mut out = result
+    for declIdx in file.arena.decls {
+        out = srAstCollectDecl(file, declIdx, out)
     }
     out
 }
 
-fn srCollectEnumVariants(
-    tokens: List<FrontToken>,
-    start: Int,
-    end: Int,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
-    let mut out = result
-    let open = srFindTopLevelKind(tokens, start + 1, end, r"{")
-    if open < 0 {
-        return out
+fn srAstCollectDecl(file: AstFile, idx: Int, result: SelfResolveResult) -> SelfResolveResult {
+    if idx < 0 {
+        return result
     }
-    let close = frontFindMatching(tokens, open, end, srKind(r"{"), srKind(r"}"))
-    let mut parenDepth = 0
-    for idx in open + 1..close {
-        let kind = frontTokenAtList(tokens, idx).kind
-        if srKindIs(kind, "(") {
-            parenDepth = parenDepth + 1
-        } else if srKindIs(kind, ")") {
-            if parenDepth > 0 {
-                parenDepth = parenDepth - 1
-            }
-        } else if parenDepth == 0 && srKindIs(kind, "IDENT") && srLooksLikeVariantName(
-            tokens,
-            idx,
-            open,
-        ) {
+    let node = srAstNode(file, idx)
+    let mut out = result
+    if node.kind == AstNUseDecl {
+        let alias = srAstUseAlias(file, node)
+        if alias != "" {
             out = srAddSymbol(
                 out,
-                selfSymbol(frontTokenTextAt(tokens, idx), "variant", "", 0, 0, idx, idx + 1, true),
+                selfSymbolAtNode(alias, "package", "", 0, 0, node.start, node.end, true, idx),
+            )
+        }
+    } else if node.kind == AstNFnDecl {
+        out = srAstAddFunctionSymbol(file, idx, out)
+    } else if node.kind == AstNStructDecl || node.kind == AstNInterfaceDecl || node.kind == AstNTypeAlias {
+        out = srAddSymbol(
+            out,
+            selfSymbolAtNode(node.text, "type", "", 0, 0, node.start, node.end, node.flags == 1, idx),
+        )
+        out = srAstCollectMemberFunctions(file, node.children, out)
+    } else if node.kind == AstNEnumDecl {
+        out = srAddSymbol(
+            out,
+            selfSymbolAtNode(node.text, "type", "", 0, 0, node.start, node.end, node.flags == 1, idx),
+        )
+        for memberIdx in node.children {
+            let member = srAstNode(file, memberIdx)
+            if member.kind == AstNVariant {
+                out = srAddSymbol(
+                    out,
+                    selfSymbolAtNode(
+                        member.text,
+                        "variant",
+                        "",
+                        0,
+                        0,
+                        member.start,
+                        member.end,
+                        true,
+                        memberIdx,
+                    ),
+                )
+            }
+        }
+        out = srAstCollectMemberFunctions(file, node.children, out)
+    } else if node.kind == AstNLet {
+        let names = srAstPatternNames(file, node.left, [])
+        for item in names {
+            out = srAddSymbol(
+                out,
+                selfSymbolAtNode(item.name, "value", srAstLetTypeName(file, node), 0, 0, item.start, item.end, false, item.node),
             )
         }
     }
     out
 }
 
-fn selfResolveScanFunctions(
-    tokens: List<FrontToken>,
-    count: Int,
+fn srAstCollectMemberFunctions(
+    file: AstFile,
+    members: List<Int>,
     result: SelfResolveResult,
 ) -> SelfResolveResult {
     let mut out = result
-    let mut skipUntil = -1
-    for idx in 0..count {
-        if idx < skipUntil {
-            let _ = idx
-        } else if srTokenIs(tokens, idx, "fn") && srLooksLikeDeclarationStart(tokens, idx) {
-            let end = frontDeclEnd(tokens, idx, count)
-            out = srResolveFunction(tokens, idx, end, out)
-            skipUntil = end
+    for memberIdx in members {
+        let member = srAstNode(file, memberIdx)
+        if member.kind == AstNFnDecl {
+            out = srAstAddFunctionSymbol(file, memberIdx, out)
         }
     }
     out
 }
 
-fn srResolveFunction(
-    tokens: List<FrontToken>,
-    start: Int,
-    end: Int,
+fn srAstAddFunctionSymbol(
+    file: AstFile,
+    idx: Int,
     result: SelfResolveResult,
 ) -> SelfResolveResult {
-    let mut out = result
-    let nameIdx = srNextIdent(tokens, start + 1, end)
-    let open = srFindTopLevelKind(tokens, nameIdx + 1, end, "(")
-    if open < 0 {
-        return out
-    }
-    let close = frontFindMatching(tokens, open, end, srKind("("), srKind(")"))
-    let bodyOpen = srFindTopLevelKind(tokens, close + 1, end, r"{")
-    if bodyOpen < 0 {
-        return out
-    }
-    let bodyClose = frontFindMatching(tokens, bodyOpen, end, srKind(r"{"), srKind(r"}"))
-    let mut locals: List<SelfSymbol> = []
-
-    for idx in open + 1..close {
-        let kind = frontTokenAtList(tokens, idx).kind
-        if (srKindIs(kind, "IDENT") || srKindIs(kind, "_")) && srLooksLikeParamName(
-            tokens,
+    let node = srAstNode(file, idx)
+    srAddSymbol(
+        result,
+        selfSymbolAtNode(
+            node.text,
+            "fn",
+            "",
+            srAstListCount(node.children),
+            0,
+            node.start,
+            node.end,
+            node.flags == 1,
             idx,
-            open,
-        ) {
-            let name = frontTokenTextAt(tokens, idx)
-            if !(srIsDiscardName(name)) && name != "self" {
-                if srLocalExists(locals, name) {
-                    out = srDuplicate(out, name, idx, idx + 1)
+        ),
+    )
+}
+
+fn selfResolveAstScanFunctions(file: AstFile, result: SelfResolveResult) -> SelfResolveResult {
+    let mut out = result
+    for declIdx in file.arena.decls {
+        out = srAstScanFunctionsInDecl(file, declIdx, out)
+    }
+    out
+}
+
+fn srAstScanFunctionsInDecl(
+    file: AstFile,
+    idx: Int,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    if idx < 0 {
+        return result
+    }
+    let node = srAstNode(file, idx)
+    let mut out = result
+    if node.kind == AstNFnDecl {
+        return srAstResolveFunction(file, idx, out)
+    }
+    if node.kind == AstNStructDecl || node.kind == AstNEnumDecl || node.kind == AstNInterfaceDecl {
+        for memberIdx in node.children {
+            let member = srAstNode(file, memberIdx)
+            if member.kind == AstNFnDecl {
+                out = srAstResolveFunction(file, memberIdx, out)
+            }
+        }
+    }
+    out
+}
+
+fn srAstResolveFunction(
+    file: AstFile,
+    idx: Int,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let node = srAstNode(file, idx)
+    let mut out = result
+    let mut locals: List<SelfSymbol> = []
+    for paramIdx in node.children {
+        let param = srAstNode(file, paramIdx)
+        if param.left >= 0 && param.text != "" {
+            out = srAstResolveExpr(file, param.left, locals, out)
+        }
+        let names = srAstParamNames(file, param)
+        for item in names {
+            if !(srIsDiscardName(item.name)) && item.name != "self" {
+                if srLocalExists(locals, item.name) {
+                    out = srDuplicateAtNode(out, item.name, item.start, item.end, item.node)
                 }
                 locals.push(
-                    selfSymbol(
-                        name,
+                    selfSymbolAtNode(
+                        item.name,
                         "value",
-                        srParamType(tokens, idx, close),
+                        srAstTypeName(file, param.right),
                         0,
                         1,
-                        idx,
-                        idx + 1,
+                        item.start,
+                        item.end,
                         false,
+                        item.node,
                     ),
                 )
             }
         }
     }
+    srAstResolveBlock(file, node.right, locals, out)
+}
 
-    let mut skipUntil = -1
-    for idx in bodyOpen + 1..bodyClose {
-        if idx < skipUntil {
-            let _ = idx
-        } else if srTokenIs(tokens, idx, "let") {
-            let stmtEnd = frontFindStatementEnd(tokens, idx, bodyClose)
-            let assign = srFindFirstKind(tokens, idx, stmtEnd, "=")
-            if assign >= 0 {
-                out = srResolveRefs(tokens, assign + 1, stmtEnd, locals, out)
+fn srAstResolveBlock(
+    file: AstFile,
+    idx: Int,
+    locals: List<SelfSymbol>,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    if idx < 0 {
+        return result
+    }
+    let node = srAstNode(file, idx)
+    if node.kind != AstNBlock {
+        return srAstResolveExpr(file, idx, locals, result)
+    }
+    let mut out = result
+    for stmtIdx in node.children {
+        let stmt = srAstNode(file, stmtIdx)
+        if stmt.kind == AstNLet {
+            if stmt.right >= 0 {
+                out = srAstResolveExpr(file, stmt.right, locals, out)
             }
-            let nameIdx = srLetNameIndex(tokens, idx)
-            if srTokenIs(tokens, nameIdx, "IDENT") || srTokenIs(tokens, nameIdx, "_") {
-                let name = frontTokenTextAt(tokens, nameIdx)
-                if !(srIsDiscardName(name)) {
-                    if srLocalExists(locals, name) {
-                        out = srDuplicate(out, name, nameIdx, nameIdx + 1)
+            let names = srAstPatternNames(file, stmt.left, [])
+            for item in names {
+                if !(srIsDiscardName(item.name)) {
+                    if srLocalExists(locals, item.name) {
+                        out = srDuplicateAtNode(out, item.name, item.start, item.end, item.node)
                     }
-                    locals.push(
-                        selfSymbol(
-                            name,
-                            "value",
-                            srLetAnnotatedType(tokens, idx, stmtEnd),
-                            0,
-                            1,
-                            nameIdx,
-                            nameIdx + 1,
-                            false,
-                        ),
-                    )
+                    locals.push(srAstLocalSymbol(file, stmt, item))
                 }
             }
-            skipUntil = stmtEnd
-        } else if srTokenIs(tokens, idx, "for") {
-            out = srResolveFor(tokens, idx, bodyClose, locals, out)
-        } else if srShouldResolveIdent(tokens, idx) {
-            out = srResolveOneIdent(tokens, idx, locals, out)
+        } else {
+            out = srAstResolveStmt(file, stmtIdx, locals, out)
         }
     }
     out
 }
 
-fn srResolveFor(
-    tokens: List<FrontToken>,
+fn srAstResolveStmt(
+    file: AstFile,
     idx: Int,
-    end: Int,
+    locals: List<SelfSymbol>,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    if idx < 0 {
+        return result
+    }
+    let node = srAstNode(file, idx)
+    let mut out = result
+    if node.kind == AstNFor {
+        return srAstResolveFor(file, node, locals, out)
+    }
+    if node.kind == AstNReturn || node.kind == AstNDefer || node.kind == AstNExprStmt {
+        return srAstResolveExpr(file, node.left, locals, out)
+    }
+    if node.kind == AstNAssign || node.kind == AstNChanSend {
+        out = srAstResolveExpr(file, node.left, locals, out)
+        return srAstResolveExpr(file, node.right, locals, out)
+    }
+    srAstResolveExpr(file, idx, locals, out)
+}
+
+fn srAstResolveFor(
+    file: AstFile,
+    node: AstNode,
     locals: List<SelfSymbol>,
     result: SelfResolveResult,
 ) -> SelfResolveResult {
     let mut out = result
-    let bindIdx = srNextMeaningfulIndex(tokens, idx + 1, end)
-    let inIdx = srNextMeaningfulIndex(tokens, bindIdx + 1, end)
-    if srTokenIs(tokens, bindIdx, "IDENT") && srTokenIs(tokens, inIdx, "IDENT") && frontTokenTextAt(
-        tokens,
-        inIdx,
-    ) == "in" {
-        let blockOpen = srFindFirstKind(tokens, inIdx + 1, end, r"{")
-        if blockOpen > inIdx {
-            out = srResolveRefs(tokens, inIdx + 1, blockOpen, locals, out)
+    out = srAstResolveExpr(file, node.left, locals, out)
+    let iterIdx = srAstChildAt(node.children, 1)
+    out = srAstResolveExpr(file, iterIdx, locals, out)
+    let mut loopLocals = srSymbolListCopy(locals)
+    let patIdx = srAstChildAt(node.children, 0)
+    let names = srAstPatternNames(file, patIdx, [])
+    for item in names {
+        if !(srIsDiscardName(item.name)) {
+            if srLocalExists(loopLocals, item.name) {
+                out = srDuplicateAtNode(out, item.name, item.start, item.end, item.node)
+            }
+            loopLocals.push(srAstLocalSymbol(file, node, item))
         }
-        if !(srLocalExists(locals, frontTokenTextAt(tokens, bindIdx))) {
-            locals.push(
-                selfSymbol(
-                    frontTokenTextAt(tokens, bindIdx),
-                    "value",
-                    "",
-                    0,
-                    1,
-                    bindIdx,
-                    bindIdx + 1,
-                    false,
-                ),
-            )
+    }
+    srAstResolveBlock(file, node.right, loopLocals, out)
+}
+
+fn srAstResolveExpr(
+    file: AstFile,
+    idx: Int,
+    locals: List<SelfSymbol>,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    if idx < 0 {
+        return result
+    }
+    let node = srAstNode(file, idx)
+    let mut out = result
+    if node.kind == AstNIdent {
+        return srResolveOneAstIdent(node.text, node.start, node.end, idx, locals, out)
+    }
+    if node.kind == AstNField {
+        return srAstResolveExpr(file, node.left, locals, out)
+    }
+    if node.kind == AstNStructLit {
+        out = srAstResolveExpr(file, node.left, locals, out)
+        for fieldIdx in node.children {
+            out = srAstResolveStructField(file, fieldIdx, locals, out)
         }
+        return srAstResolveExpr(file, node.right, locals, out)
+    }
+    if node.kind == AstNIf {
+        return srAstResolveIf(file, node, locals, out)
+    }
+    if node.kind == AstNMatch {
+        return srAstResolveMatch(file, node, locals, out)
+    }
+    if node.kind == AstNClosure {
+        return srAstResolveClosure(file, node, locals, out)
+    }
+    if node.kind == AstNBlock {
+        let mut blockLocals = srSymbolListCopy(locals)
+        return srAstResolveBlock(file, idx, blockLocals, out)
+    }
+    if node.kind == AstNType || node.kind == AstNPattern || node.kind == AstNParam || node.kind == AstNGenericParam {
+        return out
+    }
+    out = srAstResolveExpr(file, node.left, locals, out)
+    out = srAstResolveExpr(file, node.right, locals, out)
+    for child in node.children {
+        out = srAstResolveExpr(file, child, locals, out)
+    }
+    for child in node.children2 {
+        out = srAstResolveExpr(file, child, locals, out)
     }
     out
 }
 
-fn srResolveRefs(
-    tokens: List<FrontToken>,
+fn srAstResolveStructField(
+    file: AstFile,
+    idx: Int,
+    locals: List<SelfSymbol>,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    if idx < 0 {
+        return result
+    }
+    let node = srAstNode(file, idx)
+    if node.kind != AstNField_ {
+        return srAstResolveExpr(file, idx, locals, result)
+    }
+    if node.left >= 0 {
+        return srAstResolveExpr(file, node.left, locals, result)
+    }
+    srResolveOneAstIdent(node.text, node.start, node.end, idx, locals, result)
+}
+
+fn srAstResolveIf(
+    file: AstFile,
+    node: AstNode,
+    locals: List<SelfSymbol>,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let mut out = srAstResolveExpr(file, node.left, locals, result)
+    let mut thenLocals = srSymbolListCopy(locals)
+    if node.flags == 1 {
+        let patIdx = srAstChildAt(node.children, 1)
+        let names = srAstPatternNames(file, patIdx, [])
+        for item in names {
+            if !(srIsDiscardName(item.name)) {
+                if srLocalExists(thenLocals, item.name) {
+                    out = srDuplicateAtNode(out, item.name, item.start, item.end, item.node)
+                }
+                thenLocals.push(srAstLocalSymbol(file, node, item))
+            }
+        }
+    }
+    out = srAstResolveBlock(file, node.right, thenLocals, out)
+    let elseIdx = srAstChildAt(node.children, 0)
+    let mut elseLocals = srSymbolListCopy(locals)
+    srAstResolveExpr(file, elseIdx, elseLocals, out)
+}
+
+fn srAstResolveMatch(
+    file: AstFile,
+    node: AstNode,
+    locals: List<SelfSymbol>,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let mut out = srAstResolveExpr(file, node.left, locals, result)
+    for armIdx in node.children {
+        let arm = srAstNode(file, armIdx)
+        let mut armLocals = srSymbolListCopy(locals)
+        let names = srAstPatternNames(file, arm.left, [])
+        for item in names {
+            if !(srIsDiscardName(item.name)) {
+                if srLocalExists(armLocals, item.name) {
+                    out = srDuplicateAtNode(out, item.name, item.start, item.end, item.node)
+                }
+                armLocals.push(srAstLocalSymbol(file, arm, item))
+            }
+        }
+        let guardIdx = srAstChildAt(arm.children, 0)
+        out = srAstResolveExpr(file, guardIdx, armLocals, out)
+        out = srAstResolveExpr(file, arm.right, armLocals, out)
+    }
+    out
+}
+
+fn srAstResolveClosure(
+    file: AstFile,
+    node: AstNode,
+    locals: List<SelfSymbol>,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let mut out = result
+    let mut closureLocals = srSymbolListCopy(locals)
+    for paramIdx in node.children {
+        let param = srAstNode(file, paramIdx)
+        let names = srAstParamNames(file, param)
+        for item in names {
+            if !(srIsDiscardName(item.name)) {
+                if srLocalExists(closureLocals, item.name) {
+                    out = srDuplicateAtNode(out, item.name, item.start, item.end, item.node)
+                }
+                closureLocals.push(srAstLocalSymbol(file, param, item))
+            }
+        }
+    }
+    srAstResolveExpr(file, node.left, closureLocals, out)
+}
+
+fn srAstLocalSymbol(
+    file: AstFile,
+    owner: AstNode,
+    item: SelfResolveName,
+) -> SelfSymbol {
+    selfSymbolAtNode(
+        item.name,
+        "value",
+        srAstLetTypeNameFromOwner(file, owner),
+        0,
+        1,
+        item.start,
+        item.end,
+        false,
+        item.node,
+    )
+}
+
+fn srResolveOneAstIdent(
+    name: String,
     start: Int,
     end: Int,
+    node: Int,
     locals: List<SelfSymbol>,
     result: SelfResolveResult,
 ) -> SelfResolveResult {
     let mut out = result
-    for idx in start..end {
-        if srShouldResolveIdent(tokens, idx) {
-            out = srResolveOneIdent(tokens, idx, locals, out)
-        }
+    if srIsBuiltinName(name) {
+        return out
     }
-    out
-}
-
-fn srResolveOneIdent(
-    tokens: List<FrontToken>,
-    idx: Int,
-    locals: List<SelfSymbol>,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
-    let mut out = result
-    let name = frontTokenTextAt(tokens, idx)
-    if srLocalExists(locals, name) || srTopLevelExists(out.symbols, name) || srIsBuiltinName(name) {
+    if srLocalExists(locals, name) || srTopLevelExists(out.symbols, name) {
         out.refs = out.refs + 1
+        out.refNames.push(name)
+        out.refNodes.push(node)
         return out
     }
     out.unresolved = out.unresolved + 1
-    out.diagnostics.push(selfResolveDiagnostic("E0500", "undefined name", name, idx, idx + 1))
+    out.diagnostics.push(selfResolveDiagnosticAtNode("E0500", "undefined name", name, start, end, node))
+    out
+}
+
+fn srAstParamNames(file: AstFile, param: AstNode) -> List<SelfResolveName> {
+    let mut names: List<SelfResolveName> = []
+    if param.text != "" {
+        names.push(selfResolveName(param.text, param.start, param.end, -1))
+        return names
+    }
+    srAstPatternNames(file, param.left, names)
+}
+
+fn srAstPatternNames(
+    file: AstFile,
+    idx: Int,
+    names: List<SelfResolveName>,
+) -> List<SelfResolveName> {
+    if idx < 0 {
+        return names
+    }
+    let node = srAstNode(file, idx)
+    let mut out = names
+    if node.kind == AstNIdent {
+        out.push(selfResolveName(node.text, node.start, node.end, idx))
+        return out
+    }
+    if node.kind != AstNPattern {
+        return out
+    }
+    if node.extra == astPatternIdentKind() {
+        out.push(selfResolveName(node.text, node.start, node.end, idx))
+    } else if node.extra == astPatternBindingKind() {
+        out.push(selfResolveName(node.text, node.start, node.start + 1, idx))
+        out = srAstPatternNames(file, node.left, out)
+    } else if node.extra == astPatternFieldKind() {
+        if node.left >= 0 {
+            out = srAstPatternNames(file, node.left, out)
+        } else {
+            out.push(selfResolveName(node.text, node.start, node.end, idx))
+        }
+    } else {
+        out = srAstPatternNames(file, node.left, out)
+        out = srAstPatternNames(file, node.right, out)
+        for child in node.children {
+            out = srAstPatternNames(file, child, out)
+        }
+    }
+    out
+}
+
+fn srAstLetTypeName(file: AstFile, node: AstNode) -> String {
+    srAstTypeName(file, srAstChildAt(node.children, 0))
+}
+
+fn srAstLetTypeNameFromOwner(file: AstFile, owner: AstNode) -> String {
+    if owner.kind == AstNLet {
+        return srAstLetTypeName(file, owner)
+    }
+    ""
+}
+
+fn srAstTypeName(file: AstFile, idx: Int) -> String {
+    if idx < 0 {
+        return ""
+    }
+    let node = srAstNode(file, idx)
+    if node.kind == AstNType {
+        return node.text
+    }
+    ""
+}
+
+fn srAstUseAlias(file: AstFile, node: AstNode) -> String {
+    let aliasIdx = srAstChildAt(node.children2, 0)
+    if aliasIdx >= 0 {
+        let alias = srAstNode(file, aliasIdx)
+        if alias.text != "" {
+            return alias.text
+        }
+    }
+    srPathLastSegment(node.text)
+}
+
+fn srPathLastSegment(path: String) -> String {
+    let parts = strings.Split(path, ".")
+    let mut last = ""
+    for part in parts {
+        if part != "" {
+            last = part
+        }
+    }
+    last
+}
+
+fn srAstNode(file: AstFile, idx: Int) -> AstNode {
+    astArenaNodeAt(file.arena, idx)
+}
+
+fn srAstChildAt(children: List<Int>, target: Int) -> Int {
+    let mut idx = 0
+    for child in children {
+        if idx == target {
+            return child
+        }
+        idx = idx + 1
+    }
+    -1
+}
+
+fn srAstListCount(items: List<Int>) -> Int {
+    let mut count = 0
+    for item in items {
+        let _ = item
+        count = count + 1
+    }
+    count
+}
+
+fn srSymbolListCopy(items: List<SelfSymbol>) -> List<SelfSymbol> {
+    let mut out: List<SelfSymbol> = []
+    for item in items {
+        out.push(item)
+    }
     out
 }
 
 fn srAddSymbol(result: SelfResolveResult, sym: SelfSymbol) -> SelfResolveResult {
     let mut out = result
     if srSymbolExistsAtDepth(out.symbols, sym.name, sym.depth) {
-        out = srDuplicate(out, sym.name, sym.start, sym.end)
+        out = srDuplicateAtNode(out, sym.name, sym.start, sym.end, sym.node)
     } else if !(srIsDiscardName(sym.name)) {
         out.symbols.push(sym)
     }
@@ -453,96 +757,22 @@ fn srAddSymbol(result: SelfResolveResult, sym: SelfSymbol) -> SelfResolveResult 
 }
 
 fn srDuplicate(result: SelfResolveResult, name: String, start: Int, end: Int) -> SelfResolveResult {
+    srDuplicateAtNode(result, name, start, end, -1)
+}
+
+fn srDuplicateAtNode(
+    result: SelfResolveResult,
+    name: String,
+    start: Int,
+    end: Int,
+    node: Int,
+) -> SelfResolveResult {
     let mut out = result
     out.duplicates = out.duplicates + 1
-    out.diagnostics.push(selfResolveDiagnostic("E0501", "duplicate declaration", name, start, end))
+    out.diagnostics.push(
+        selfResolveDiagnosticAtNode("E0501", "duplicate declaration", name, start, end, node),
+    )
     out
-}
-
-fn srShouldResolveIdent(tokens: List<FrontToken>, idx: Int) -> Bool {
-    if !(srTokenIs(tokens, idx, "IDENT")) {
-        return false
-    }
-    let name = frontTokenTextAt(tokens, idx)
-    if name == "in" || name == "as" || srIsBuiltinName(name) {
-        return false
-    }
-    let prev = srPrevMeaningfulKind(tokens, idx)
-    let next = srNextMeaningfulKind(tokens, idx)
-    if srKindIs(prev, ".") || srKindIs(prev, "fn") || srKindIs(prev, "struct") || srKindIs(
-        prev,
-        "enum",
-    ) || srKindIs(prev, "interface") || srKindIs(prev, "type") || srKindIs(prev, "use") || srKindIs(
-        prev,
-        "mut",
-    ) {
-        return false
-    }
-    if srKindIs(next, ":") {
-        return false
-    }
-    true
-}
-
-fn srUseAlias(tokens: List<FrontToken>, start: Int, end: Int) -> String {
-    let mut last = ""
-    let mut afterAs = false
-    for idx in start + 1..end {
-        let tok = frontTokenAtList(tokens, idx)
-        if srKindIs(tok.kind, "IDENT") {
-            if afterAs {
-                return tok.text
-            }
-            if tok.text == "as" {
-                afterAs = true
-            } else if tok.text != "go" {
-                last = tok.text
-            }
-        }
-    }
-    last
-}
-
-fn srLetNameIndex(tokens: List<FrontToken>, start: Int) -> Int {
-    let mut idx = start + 1
-    if srTokenIs(tokens, idx, "mut") {
-        idx = idx + 1
-    }
-    idx
-}
-
-fn srLetAnnotatedType(tokens: List<FrontToken>, start: Int, end: Int) -> String {
-    let nameIdx = srLetNameIndex(tokens, start)
-    let colon = srFindFirstKind(tokens, nameIdx + 1, end, ":")
-    if colon >= 0 {
-        return srTypeNameAt(tokens, colon + 1, end)
-    }
-    ""
-}
-
-fn srParamType(tokens: List<FrontToken>, nameIdx: Int, close: Int) -> String {
-    let colon = srFindFirstKind(tokens, nameIdx + 1, close, ":")
-    if colon >= 0 {
-        return srTypeNameAt(tokens, colon + 1, close)
-    }
-    ""
-}
-
-fn srTypeNameAt(tokens: List<FrontToken>, start: Int, end: Int) -> String {
-    let idx = srNextMeaningfulIndex(tokens, start, end)
-    if idx < end {
-        let tok = frontTokenAtList(tokens, idx)
-        if srKindIs(tok.kind, "IDENT") {
-            return tok.text
-        }
-        if srKindIs(tok.kind, "(") && srTokenIs(tokens, idx + 1, ")") {
-            return "()"
-        }
-        if srKindIs(tok.kind, "fn") {
-            return "fn"
-        }
-    }
-    ""
 }
 
 fn srLocalExists(symbols: List<SelfSymbol>, name: String) -> Bool {
@@ -578,168 +808,4 @@ fn srIsBuiltinName(name: String) -> Bool {
 
 fn srIsDiscardName(name: String) -> Bool {
     name == "_" || strings.HasPrefix(name, "_")
-}
-
-fn srKind(name: String) -> FrontTokenKind {
-    frontTokenKindByName(name)
-}
-
-fn srKindIs(kind: FrontTokenKind, name: String) -> Bool {
-    frontTokenKindName(kind) == name
-}
-
-fn srTokenIs(tokens: List<FrontToken>, idx: Int, name: String) -> Bool {
-    srKindIs(frontTokenAtList(tokens, idx).kind, name)
-}
-
-fn srLooksLikeDeclarationStart(tokens: List<FrontToken>, idx: Int) -> Bool {
-    let immediate = srPrevTokenKind(tokens, idx)
-    let prev = srPrevMeaningfulKind(tokens, idx)
-    srKindIs(immediate, "EOF") || srKindIs(immediate, "NEWLINE") || srKindIs(immediate, ";") || srKindIs(
-        prev,
-        "pub",
-    ) || srKindIs(prev, r"{") || srKindIs(prev, r"}")
-}
-
-fn srLooksLikeVariantName(tokens: List<FrontToken>, idx: Int, open: Int) -> Bool {
-    let prev = srPrevMeaningfulKindBounded(tokens, idx, open)
-    let next = frontTokenAtList(tokens, idx + 1).kind
-    (srKindIs(prev, r"{") || srKindIs(prev, ",") || srKindIs(prev, "NEWLINE")) && !(srKindIs(
-        next,
-        ":",
-    ))
-}
-
-fn srLooksLikeParamName(tokens: List<FrontToken>, idx: Int, open: Int) -> Bool {
-    let prev = srPrevMeaningfulKindBounded(tokens, idx, open)
-    srKindIs(prev, "(") || srKindIs(prev, ",") || srKindIs(prev, "mut")
-}
-
-fn srParamCount(tokens: List<FrontToken>, open: Int, close: Int) -> Int {
-    let mut count = 0
-    for idx in open + 1..close {
-        let kind = frontTokenAtList(tokens, idx).kind
-        if (srKindIs(kind, "IDENT") || srKindIs(kind, "_")) && srLooksLikeParamName(
-            tokens,
-            idx,
-            open,
-        ) {
-            count = count + 1
-        }
-    }
-    count
-}
-
-fn srNextIdent(tokens: List<FrontToken>, start: Int, end: Int) -> Int {
-    for idx in start..end {
-        if srTokenIs(tokens, idx, "IDENT") {
-            return idx
-        }
-    }
-    end
-}
-
-fn srFindTopLevelKind(
-    tokens: List<FrontToken>,
-    start: Int,
-    end: Int,
-    target: String,
-) -> Int {
-    let mut parenDepth = 0
-    let mut bracketDepth = 0
-    let mut braceDepth = 0
-    let mut angleDepth = 0
-    for idx in start..end {
-        let kind = frontTokenAtList(tokens, idx).kind
-        if srKindIs(kind, target) && parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0 {
-            return idx
-        }
-        if srKindIs(kind, "(") {
-            parenDepth = parenDepth + 1
-        } else if srKindIs(kind, ")") {
-            if parenDepth > 0 {
-                parenDepth = parenDepth - 1
-            }
-        } else if srKindIs(kind, "[") {
-            bracketDepth = bracketDepth + 1
-        } else if srKindIs(kind, "]") {
-            if bracketDepth > 0 {
-                bracketDepth = bracketDepth - 1
-            }
-        } else if srKindIs(kind, r"{") {
-            braceDepth = braceDepth + 1
-        } else if srKindIs(kind, r"}") {
-            if braceDepth > 0 {
-                braceDepth = braceDepth - 1
-            }
-        } else if srKindIs(kind, "<") {
-            angleDepth = angleDepth + 1
-        } else if srKindIs(kind, ">") {
-            if angleDepth > 0 {
-                angleDepth = angleDepth - 1
-            }
-        }
-    }
-    -1
-}
-
-fn srFindFirstKind(
-    tokens: List<FrontToken>,
-    start: Int,
-    end: Int,
-    target: String,
-) -> Int {
-    for idx in start..end {
-        if srTokenIs(tokens, idx, target) {
-            return idx
-        }
-    }
-    -1
-}
-
-fn srNextMeaningfulIndex(tokens: List<FrontToken>, start: Int, end: Int) -> Int {
-    for idx in start..end {
-        let kind = frontTokenAtList(tokens, idx).kind
-        if !(srKindIs(kind, "NEWLINE")) && !(srKindIs(kind, ";")) {
-            return idx
-        }
-    }
-    end
-}
-
-fn srPrevMeaningfulIs(tokens: List<FrontToken>, idx: Int, name: String) -> Bool {
-    srKindIs(srPrevMeaningfulKind(tokens, idx), name)
-}
-
-fn srPrevMeaningfulKind(tokens: List<FrontToken>, idx: Int) -> FrontTokenKind {
-    srPrevMeaningfulKindBounded(tokens, idx, 0)
-}
-
-fn srPrevTokenKind(tokens: List<FrontToken>, idx: Int) -> FrontTokenKind {
-    if idx <= 0 {
-        return srKind("EOF")
-    }
-    frontTokenAtList(tokens, idx - 1).kind
-}
-
-fn srPrevMeaningfulKindBounded(tokens: List<FrontToken>, idx: Int, floor: Int) -> FrontTokenKind {
-    let mut cur = idx - 1
-    for cur >= floor {
-        let kind = frontTokenAtList(tokens, cur).kind
-        if !(srKindIs(kind, "NEWLINE")) && !(srKindIs(kind, ";")) {
-            return kind
-        }
-        cur = cur - 1
-    }
-    srKind("EOF")
-}
-
-fn srNextMeaningfulKind(tokens: List<FrontToken>, idx: Int) -> FrontTokenKind {
-    for cur in idx + 1..frontTokenListCount(tokens) {
-        let kind = frontTokenAtList(tokens, cur).kind
-        if !(srKindIs(kind, "NEWLINE")) && !(srKindIs(kind, ";")) {
-            return kind
-        }
-    }
-    srKind("EOF")
 }

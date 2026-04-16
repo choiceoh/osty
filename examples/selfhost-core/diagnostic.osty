@@ -1,3 +1,7 @@
+use go "strings" as strings {
+    fn Join(elems: List<String>, sep: String) -> String
+}
+
 /// DiagnosticSeverity is the stable user-facing diagnostic bucket.
 pub enum DiagnosticSeverity {
     SeverityError,
@@ -102,4 +106,115 @@ pub fn diagnosticIsCompilerError(code: String) -> Bool {
         SeverityError -> true,
         _ -> false,
     }
+}
+
+/// DiagnosticLocation maps analyzer token spans back to lexer source positions.
+pub struct DiagnosticLocation {
+    pub line: Int,
+    pub column: Int,
+    pub endLine: Int,
+    pub endColumn: Int,
+    pub token: Int,
+    pub endToken: Int,
+}
+
+pub fn diagnosticLocation(
+    line: Int,
+    column: Int,
+    endLine: Int,
+    endColumn: Int,
+    token: Int,
+    endToken: Int,
+) -> DiagnosticLocation {
+    DiagnosticLocation { line, column, endLine, endColumn, token, endToken }
+}
+
+fn diagnosticClampTokenIndex(index: Int, count: Int) -> Int {
+    if count <= 0 {
+        return 0
+    }
+    if index < 0 {
+        return 0
+    }
+    if index >= count {
+        return count - 1
+    }
+    index
+}
+
+fn diagnosticLocationFromStream(stream: FrontLexStream, start: Int, end: Int) -> DiagnosticLocation {
+    let count = frontLexTokenCount(stream)
+    let startToken = diagnosticClampTokenIndex(start, count)
+    let mut lastToken = startToken
+    if end > start {
+        lastToken = diagnosticClampTokenIndex(end - 1, count)
+    }
+    let first = frontLexTokenAt(stream, startToken)
+    let last = frontLexTokenAt(stream, lastToken)
+    diagnosticLocation(
+        first.start.line,
+        first.start.column,
+        last.end.line,
+        last.end.column,
+        startToken,
+        lastToken,
+    )
+}
+
+/// diagnosticSourceLocation returns the source position for a parser/analyzer
+/// token span.
+pub fn diagnosticSourceLocation(source: String, start: Int, end: Int) -> DiagnosticLocation {
+    diagnosticLocationFromStream(frontendLexStream(source), start, end)
+}
+
+fn diagnosticSubject(name: String) -> String {
+    if name == "" {
+        ""
+    } else {
+        " `{name}`"
+    }
+}
+
+fn diagnosticFormatOne(
+    source: String,
+    code: String,
+    message: String,
+    name: String,
+    start: Int,
+    end: Int,
+) -> String {
+    let loc = diagnosticSourceLocation(source, start, end)
+    let severity = diagnosticSeverityName(diagnosticSeverity(code))
+    let family = diagnosticFamilyName(diagnosticFamily(code))
+    "{severity}[{code}] {family} at {loc.line}:{loc.column}: {message}{diagnosticSubject(name)}"
+}
+
+pub fn diagnosticFormatSelfResolveDiagnostic(
+    source: String,
+    diag: SelfResolveDiagnostic,
+) -> String {
+    diagnosticFormatOne(source, diag.code, diag.message, diag.name, diag.start, diag.end)
+}
+
+pub fn diagnosticFormatSelfResolveDiagnostics(
+    source: String,
+    result: SelfResolveResult,
+) -> String {
+    let mut lines: List<String> = []
+    for diag in result.diagnostics {
+        lines.push(diagnosticFormatSelfResolveDiagnostic(source, diag))
+    }
+    strings.Join(lines, "\n")
+}
+
+pub fn diagnosticFormatSelfLintDiagnostic(source: String, diag: SelfLintDiagnostic) -> String {
+    diagnosticFormatOne(source, diag.code, diag.message, diag.name, diag.start, diag.end)
+}
+
+pub fn diagnosticFormatSelfLintDiagnostics(source: String, report: SelfLintReport) -> String {
+    let mut lines: List<String> = []
+    for diag in report.diagnostics {
+        lines.push(diagnosticFormatSelfLintDiagnostic(source, diag))
+    }
+    strings.Join(lines, "\n")
 }

@@ -1,11 +1,21 @@
 use std.testing
 
+use go "strings" as diagStrings {
+    fn Contains(s: String, substr: String) -> Bool
+}
+
 fn assertDiagnosticSeverity(code: String, want: String) {
     testing.assertEq(diagnosticSeverityName(diagnosticSeverity(code)), want)
 }
 
 fn assertDiagnosticFamily(code: String, want: String) {
     testing.assertEq(diagnosticFamilyName(diagnosticFamily(code)), want)
+}
+
+fn assertDiagnosticTextContains(output: String, text: String) {
+    if !(diagStrings.Contains(output, text)) {
+        testing.fail("missing {text} in {output}")
+    }
 }
 
 fn testDiagnosticExamplesClassifySeverityPrefixes() {
@@ -57,4 +67,38 @@ fn testDiagnosticExamplesIdentifyCompilationBlockers() {
     testing.assert(!(diagnosticIsCompilerError("W0001")))
     testing.assert(!(diagnosticIsCompilerError("L0001")))
     testing.assert(!(diagnosticIsCompilerError("Z0000")))
+}
+
+fn testDiagnosticSourceLocationUsesAnalyzerTokenSpans() {
+    let source = "fn main() \{\n    missing()\n\}\n"
+    let result = selfResolveSource(source)
+    let diag = result.diagnostics[0]
+    let loc = diagnosticSourceLocation(source, diag.start, diag.end)
+
+    testing.assertEq(loc.line, 2)
+    testing.assertEq(loc.column, 5)
+    testing.assert(loc.endColumn > loc.column)
+    testing.assert(loc.token <= loc.endToken)
+}
+
+fn testDiagnosticFormatsResolveDiagnosticsWithLocations() {
+    let source = "fn main() \{\n    missing()\n\}\n"
+    let result = selfResolveSource(source)
+    let output = diagnosticFormatSelfResolveDiagnostics(source, result)
+
+    assertDiagnosticTextContains(output, "error[E0500]")
+    assertDiagnosticTextContains(output, "resolution")
+    assertDiagnosticTextContains(output, "at 2:5")
+    assertDiagnosticTextContains(output, "undefined name `missing`")
+}
+
+fn testDiagnosticFormatsLintDiagnosticsWithLocations() {
+    let source = "fn same(x: Int) -> Bool \{\n    x == (x)\n\}\n"
+    let report = selfLintSource(source)
+    let output = diagnosticFormatSelfLintDiagnostics(source, report)
+
+    assertDiagnosticTextContains(output, "lint[L0041]")
+    assertDiagnosticTextContains(output, "lint")
+    assertDiagnosticTextContains(output, "at 2:5")
+    assertDiagnosticTextContains(output, "value is compared with itself `x`")
 }
