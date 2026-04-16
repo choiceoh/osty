@@ -4,10 +4,27 @@
 #include <stdlib.h>
 #include <string.h>
 
+typedef void (*osty_gc_trace_fn)(void *payload);
+typedef void (*osty_gc_destroy_fn)(void *payload);
+
+typedef struct osty_gc_header {
+    struct osty_gc_header *next;
+    struct osty_gc_header *prev;
+    int64_t object_kind;
+    int64_t byte_size;
+    int64_t root_count;
+    bool marked;
+    osty_gc_trace_fn trace;
+    osty_gc_destroy_fn destroy;
+    const char *site;
+    void *payload;
+} osty_gc_header;
+
 typedef struct osty_rt_list {
     int64_t len;
     int64_t cap;
     size_t elem_size;
+    bool pointer_elems;
     unsigned char *data;
 } osty_rt_list;
 
@@ -17,9 +34,147 @@ typedef struct osty_rt_list {
 #define OSTY_GC_SYMBOL(name) name
 #endif
 
+enum {
+    OSTY_GC_KIND_GENERIC = 1,
+    OSTY_GC_KIND_LIST = 1024,
+    OSTY_GC_KIND_STRING = 1025,
+};
+
+static osty_gc_header *osty_gc_objects = NULL;
+static int64_t osty_gc_live_count = 0;
+static int64_t osty_gc_collection_count = 0;
+
 static void osty_rt_abort(const char *message) {
     fprintf(stderr, "osty llvm runtime: %s\n", message);
     abort();
+}
+
+static void osty_gc_link(osty_gc_header *header) {
+    header->next = osty_gc_objects;
+    header->prev = NULL;
+    if (osty_gc_objects != NULL) {
+        osty_gc_objects->prev = header;
+    }
+    osty_gc_objects = header;
+    osty_gc_live_count += 1;
+}
+
+static void osty_gc_unlink(osty_gc_header *header) {
+    if (header->prev != NULL) {
+        header->prev->next = header->next;
+    } else {
+        osty_gc_objects = header->next;
+    }
+    if (header->next != NULL) {
+        header->next->prev = header->prev;
+    }
+    osty_gc_live_count -= 1;
+}
+
+static osty_gc_header *osty_gc_find_header(void *payload) {
+    osty_gc_header *header = osty_gc_objects;
+    while (header != NULL) {
+        if (header->payload == payload) {
+            return header;
+        }
+        header = header->next;
+    }
+    return NULL;
+}
+
+static void *osty_gc_allocate_managed(size_t byte_size, int64_t object_kind, const char *site, osty_gc_trace_fn trace, osty_gc_destroy_fn destroy) {
+    osty_gc_header *header;
+    size_t payload_size = byte_size;
+    size_t total_size;
+
+    if (payload_size == 0) {
+        payload_size = 1;
+    }
+    if (payload_size > SIZE_MAX - sizeof(osty_gc_header)) {
+        osty_rt_abort("GC allocation overflow");
+    }
+    total_size = sizeof(osty_gc_header) + payload_size;
+    header = (osty_gc_header *)calloc(1, total_size);
+    if (header == NULL) {
+        osty_rt_abort("out of memory");
+    }
+    header->object_kind = object_kind;
+    header->byte_size = (int64_t)payload_size;
+    header->trace = trace;
+    header->destroy = destroy;
+    header->site = site;
+    header->payload = (void *)(header + 1);
+    osty_gc_link(header);
+    return header->payload;
+}
+
+static void osty_gc_mark_payload(void *payload);
+
+static void osty_rt_list_trace(void *payload) {
+    osty_rt_list *list = (osty_rt_list *)payload;
+    int64_t i;
+
+    if (list == NULL || !list->pointer_elems || list->data == NULL) {
+        return;
+    }
+    for (i = 0; i < list->len; i++) {
+        void *child = NULL;
+        memcpy(&child, list->data + ((size_t)i * list->elem_size), sizeof(child));
+        if (child != NULL) {
+            osty_gc_mark_payload(child);
+        }
+    }
+}
+
+static void osty_rt_list_destroy(void *payload) {
+    osty_rt_list *list = (osty_rt_list *)payload;
+    if (list != NULL) {
+        free(list->data);
+    }
+}
+
+static void osty_gc_mark_header(osty_gc_header *header) {
+    if (header == NULL || header->marked) {
+        return;
+    }
+    header->marked = true;
+    if (header->trace != NULL) {
+        header->trace(header->payload);
+    }
+}
+
+static void osty_gc_mark_payload(void *payload) {
+    osty_gc_mark_header(osty_gc_find_header(payload));
+}
+
+static void osty_gc_collect_now(void) {
+    osty_gc_header *header = osty_gc_objects;
+    osty_gc_header *next;
+
+    while (header != NULL) {
+        header->marked = false;
+        header = header->next;
+    }
+    header = osty_gc_objects;
+    while (header != NULL) {
+        if (header->root_count > 0) {
+            osty_gc_mark_header(header);
+        }
+        header = header->next;
+    }
+    header = osty_gc_objects;
+    while (header != NULL) {
+        next = header->next;
+        if (!header->marked) {
+            if (header->destroy != NULL) {
+                header->destroy(header->payload);
+            }
+            osty_gc_unlink(header);
+            free(header);
+        }
+        header = next;
+    }
+    osty_gc_collection_count += 1;
 }
 
 static osty_rt_list *osty_rt_list_cast(void *raw_list) {
@@ -29,13 +184,17 @@ static osty_rt_list *osty_rt_list_cast(void *raw_list) {
     return (osty_rt_list *)raw_list;
 }
 
-static void osty_rt_list_ensure_elem_size(osty_rt_list *list, size_t elem_size) {
+static void osty_rt_list_ensure_layout(osty_rt_list *list, size_t elem_size, bool pointer_elems) {
     if (list->elem_size == 0) {
         list->elem_size = elem_size;
+        list->pointer_elems = pointer_elems;
         return;
     }
     if (list->elem_size != elem_size) {
         osty_rt_abort("list element size mismatch");
+    }
+    if (list->pointer_elems != pointer_elems) {
+        osty_rt_abort("list element pointer-kind mismatch");
     }
 }
 
@@ -72,28 +231,25 @@ static void osty_rt_list_reserve(osty_rt_list *list, int64_t min_cap) {
     list->cap = next_cap;
 }
 
-static void osty_rt_list_push_bytes(void *raw_list, const void *value, size_t elem_size) {
+static void osty_rt_list_push_bytes(void *raw_list, const void *value, size_t elem_size, bool pointer_elems) {
     osty_rt_list *list = osty_rt_list_cast(raw_list);
-    osty_rt_list_ensure_elem_size(list, elem_size);
+    osty_rt_list_ensure_layout(list, elem_size, pointer_elems);
     osty_rt_list_reserve(list, list->len + 1);
     memcpy(list->data + ((size_t)list->len * list->elem_size), value, elem_size);
     list->len += 1;
 }
 
-static void *osty_rt_list_get_bytes(void *raw_list, int64_t index, size_t elem_size) {
+static void *osty_rt_list_get_bytes(void *raw_list, int64_t index, size_t elem_size, bool pointer_elems) {
     osty_rt_list *list = osty_rt_list_cast(raw_list);
     if (index < 0 || index >= list->len) {
         osty_rt_abort("list index out of range");
     }
-    osty_rt_list_ensure_elem_size(list, elem_size);
+    osty_rt_list_ensure_layout(list, elem_size, pointer_elems);
     return list->data + ((size_t)index * list->elem_size);
 }
 
 static char *osty_rt_string_dup_range(const char *start, size_t len) {
-    char *out = (char *)malloc(len + 1);
-    if (out == NULL) {
-        osty_rt_abort("out of memory");
-    }
+    char *out = (char *)osty_gc_allocate_managed(len + 1, OSTY_GC_KIND_STRING, "runtime.strings.split.part", NULL, NULL);
     if (len != 0) {
         memcpy(out, start, len);
     }
@@ -102,11 +258,7 @@ static char *osty_rt_string_dup_range(const char *start, size_t len) {
 }
 
 void *osty_rt_list_new(void) {
-    osty_rt_list *list = (osty_rt_list *)calloc(1, sizeof(osty_rt_list));
-    if (list == NULL) {
-        osty_rt_abort("out of memory");
-    }
-    return list;
+    return osty_gc_allocate_managed(sizeof(osty_rt_list), OSTY_GC_KIND_LIST, "runtime.list", osty_rt_list_trace, osty_rt_list_destroy);
 }
 
 int64_t osty_rt_list_len(void *raw_list) {
@@ -115,42 +267,42 @@ int64_t osty_rt_list_len(void *raw_list) {
 }
 
 void osty_rt_list_push_i64(void *raw_list, int64_t value) {
-    osty_rt_list_push_bytes(raw_list, &value, sizeof(value));
+    osty_rt_list_push_bytes(raw_list, &value, sizeof(value), false);
 }
 
 void osty_rt_list_push_i1(void *raw_list, bool value) {
-    osty_rt_list_push_bytes(raw_list, &value, sizeof(value));
+    osty_rt_list_push_bytes(raw_list, &value, sizeof(value), false);
 }
 
 void osty_rt_list_push_f64(void *raw_list, double value) {
-    osty_rt_list_push_bytes(raw_list, &value, sizeof(value));
+    osty_rt_list_push_bytes(raw_list, &value, sizeof(value), false);
 }
 
 void osty_rt_list_push_ptr(void *raw_list, void *value) {
-    osty_rt_list_push_bytes(raw_list, &value, sizeof(value));
+    osty_rt_list_push_bytes(raw_list, &value, sizeof(value), true);
 }
 
 int64_t osty_rt_list_get_i64(void *raw_list, int64_t index) {
     int64_t value;
-    memcpy(&value, osty_rt_list_get_bytes(raw_list, index, sizeof(value)), sizeof(value));
+    memcpy(&value, osty_rt_list_get_bytes(raw_list, index, sizeof(value), false), sizeof(value));
     return value;
 }
 
 bool osty_rt_list_get_i1(void *raw_list, int64_t index) {
     bool value;
-    memcpy(&value, osty_rt_list_get_bytes(raw_list, index, sizeof(value)), sizeof(value));
+    memcpy(&value, osty_rt_list_get_bytes(raw_list, index, sizeof(value), false), sizeof(value));
     return value;
 }
 
 double osty_rt_list_get_f64(void *raw_list, int64_t index) {
     double value;
-    memcpy(&value, osty_rt_list_get_bytes(raw_list, index, sizeof(value)), sizeof(value));
+    memcpy(&value, osty_rt_list_get_bytes(raw_list, index, sizeof(value), false), sizeof(value));
     return value;
 }
 
 void *osty_rt_list_get_ptr(void *raw_list, int64_t index) {
     void *value;
-    memcpy(&value, osty_rt_list_get_bytes(raw_list, index, sizeof(value)), sizeof(value));
+    memcpy(&value, osty_rt_list_get_bytes(raw_list, index, sizeof(value), true), sizeof(value));
     return value;
 }
 
@@ -204,17 +356,10 @@ void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_
 void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
 
 void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) {
-    void *memory;
-    (void)object_kind;
-    (void)site;
     if (byte_size < 0) {
         osty_rt_abort("negative GC allocation size");
     }
-    memory = calloc(1, (size_t)byte_size);
-    if (memory == NULL) {
-        osty_rt_abort("out of memory");
-    }
-    return memory;
+    return osty_gc_allocate_managed((size_t)byte_size, object_kind == 0 ? OSTY_GC_KIND_GENERIC : object_kind, site, NULL, NULL);
 }
 
 void osty_gc_post_write_v1(void *owner, void *value, int64_t slot_kind) {
@@ -224,9 +369,35 @@ void osty_gc_post_write_v1(void *owner, void *value, int64_t slot_kind) {
 }
 
 void osty_gc_root_bind_v1(void *root) {
-    (void)root;
+    osty_gc_header *header = osty_gc_find_header(root);
+    if (header == NULL) {
+        return;
+    }
+    if (header->root_count == INT64_MAX) {
+        osty_rt_abort("GC root count overflow");
+    }
+    header->root_count += 1;
 }
 
 void osty_gc_root_release_v1(void *root) {
-    (void)root;
+    osty_gc_header *header = osty_gc_find_header(root);
+    if (header == NULL) {
+        return;
+    }
+    if (header->root_count <= 0) {
+        osty_rt_abort("GC root release underflow");
+    }
+    header->root_count -= 1;
+}
+
+void osty_gc_debug_collect(void) {
+    osty_gc_collect_now();
+}
+
+int64_t osty_gc_debug_live_count(void) {
+    return osty_gc_live_count;
+}
+
+int64_t osty_gc_debug_collection_count(void) {
+    return osty_gc_collection_count;
 }
