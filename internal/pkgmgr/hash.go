@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 )
 
 // HashPrefix is the algorithm tag used in lockfile `checksum` fields.
@@ -102,16 +101,7 @@ func HashDir(dir string) (string, error) {
 // Ignores prefix differences as long as the algorithm family
 // matches HashPrefix.
 func VerifyChecksum(want, got string) error {
-	if want == "" {
-		return nil
-	}
-	if !strings.HasPrefix(want, HashPrefix) || !strings.HasPrefix(got, HashPrefix) {
-		return fmt.Errorf("checksum mismatch: want %q, got %q (unsupported algorithm)", want, got)
-	}
-	if want != got {
-		return fmt.Errorf("checksum mismatch:\n  want %s\n  got  %s", want, got)
-	}
-	return nil
+	return SelfhostVerifyChecksum(want, got)
 }
 
 // skipDirEntry returns true for filesystem entries the packager

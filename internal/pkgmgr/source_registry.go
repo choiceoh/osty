@@ -34,10 +34,7 @@ func (s *registrySource) URI() string {
 	// URL portion is resolved later (Fetch sees Env.Registries); the
 	// lockfile URI embeds the declared registry name so different
 	// registry hosts don't accidentally coalesce.
-	if s.registryName == "" {
-		return "registry+default"
-	}
-	return "registry+" + s.registryName
+	return SelfhostRegistrySourceURI(s.registryName)
 }
 
 // Fetch queries the registry index for matching versions, selects the
@@ -86,7 +83,8 @@ func (s *registrySource) candidateRegistryVersions(ctx context.Context, env *Env
 			return nil, fmt.Errorf("registry dependency %s: %w", s.name, err)
 		}
 	}
-	var candidates []registryCandidate
+	allCandidates := make([]registryCandidate, 0, len(versions))
+	selfhostCandidates := make([]SelfhostRegistryCandidate, 0, len(versions))
 	for _, v := range versions {
 		sv, err := semver.ParseVersion(v.Version)
 		if err != nil {
@@ -95,19 +93,49 @@ func (s *registrySource) candidateRegistryVersions(ctx context.Context, env *Env
 			// valid resolutions.
 			continue
 		}
-		if !req.Match(sv) {
-			continue
-		}
-		candidates = append(candidates, registryCandidate{Version: sv, Meta: v})
+		allCandidates = append(allCandidates, registryCandidate{Version: sv, Meta: v})
+		selfhostCandidates = append(selfhostCandidates, SelfhostRegistryCandidate{
+			PackageName: s.packageName,
+			Version:     v.Version,
+			Checksum:    v.Checksum,
+			Yanked:      v.Yanked,
+		})
 	}
-	sort.SliceStable(candidates, func(i, j int) bool {
-		return semver.Compare(candidates[i].Version, candidates[j].Version) > 0
-	})
+	var candidates []registryCandidate
+	if ranked, err := SelfhostRankRegistryCandidates(s.name, s.packageName, s.registryName, s.versionReq, selfhostCandidates); err == nil {
+		candidates = registryCandidatesInSelfhostOrder(allCandidates, ranked)
+	} else {
+		for _, c := range allCandidates {
+			if !req.Match(c.Version) {
+				continue
+			}
+			candidates = append(candidates, c)
+		}
+		sort.SliceStable(candidates, func(i, j int) bool {
+			return semver.Compare(candidates[i].Version, candidates[j].Version) > 0
+		})
+	}
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("registry dependency %s: no version matches %q",
 			s.name, s.versionReq)
 	}
 	return candidates, nil
+}
+
+func registryCandidatesInSelfhostOrder(candidates []registryCandidate, ranked []SelfhostRegistryCandidate) []registryCandidate {
+	used := make([]bool, len(candidates))
+	out := make([]registryCandidate, 0, len(ranked))
+	for _, r := range ranked {
+		for i, c := range candidates {
+			if used[i] || c.Meta.Version != r.Version {
+				continue
+			}
+			used[i] = true
+			out = append(out, c)
+			break
+		}
+	}
+	return out
 }
 
 func (s *registrySource) fetchRegistryCandidate(ctx context.Context, env *Env, candidate registryCandidate) (*FetchedPackage, error) {

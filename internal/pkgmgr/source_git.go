@@ -32,21 +32,7 @@ func (s *gitSource) Name() string     { return s.name }
 // encoded as a query string so the URI is parseable even by tools
 // that don't understand our schema.
 func (s *gitSource) URI() string {
-	b := "git+" + s.url
-	params := []string{}
-	if s.tag != "" {
-		params = append(params, "tag="+s.tag)
-	}
-	if s.branch != "" {
-		params = append(params, "branch="+s.branch)
-	}
-	if s.rev != "" {
-		params = append(params, "rev="+s.rev)
-	}
-	if len(params) > 0 {
-		b += "?" + strings.Join(params, "&")
-	}
-	return b
+	return SelfhostGitSourceURI(s.url, s.tag, s.branch, s.rev)
 }
 
 // Fetch clones the repository into the user cache and checks out the
@@ -170,15 +156,7 @@ func (s *gitSource) snapshot(ctx context.Context, repo, commit, dst string) erro
 // order rev > tag > branch > HEAD. The fetcher resolves this into a
 // commit hash via rev-parse.
 func (s *gitSource) checkoutRef() string {
-	switch {
-	case s.rev != "":
-		return s.rev
-	case s.tag != "":
-		return "refs/tags/" + s.tag
-	case s.branch != "":
-		return "origin/" + s.branch
-	}
-	return "origin/HEAD"
+	return SelfhostGitCheckoutRef(s.url, s.tag, s.branch, s.rev)
 }
 
 // sanitizeURL turns a URL into a filesystem-safe directory name.
@@ -186,19 +164,7 @@ func (s *gitSource) checkoutRef() string {
 // human-readability, so a simple replacement of non-alnum chars with
 // `_` is enough.
 func sanitizeURL(u string) string {
-	var b strings.Builder
-	for _, r := range u {
-		switch {
-		case r >= 'A' && r <= 'Z',
-			r >= 'a' && r <= 'z',
-			r >= '0' && r <= '9',
-			r == '-' || r == '.' || r == '_':
-			b.WriteRune(r)
-		default:
-			b.WriteByte('_')
-		}
-	}
-	return b.String()
+	return SelfhostSanitizeURL(u)
 }
 
 // runGit executes `git <args>` in dir, inheriting stderr so users see
