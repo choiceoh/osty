@@ -1,5 +1,3 @@
-//go:build !selfhostgen
-
 package selfhost
 
 // CheckSummary is the exported Go shape for the bootstrapped Osty checker.

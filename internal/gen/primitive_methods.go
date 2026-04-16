@@ -221,7 +221,9 @@ func (g *gen) emitStringMethod(c *ast.CallExpr, f *ast.FieldExpr) bool {
 		}
 		g.use("strings")
 		g.body.write("strings.Join(")
-		g.emitExpr(c.Args[0].Value)
+		if !g.emitExprWithExpectedListElem(c.Args[0].Value, "string") {
+			g.emitExpr(c.Args[0].Value)
+		}
 		g.body.write(", ")
 		g.emitExpr(f.X)
 		g.body.write(")")

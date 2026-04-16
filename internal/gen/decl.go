@@ -1440,15 +1440,25 @@ func (g *gen) resolvedCalleeFnDecl(fn ast.Expr) *ast.FnDecl {
 			return nil
 		}
 		sym := g.symbolFor(id)
-		if sym == nil || sym.Package == nil || sym.Package.PkgScope == nil {
+		if sym == nil {
 			return nil
 		}
-		tgt := sym.Package.PkgScope.LookupLocal(f.Name)
-		if tgt == nil {
-			return nil
+		if sym.Package != nil && sym.Package.PkgScope != nil {
+			tgt := sym.Package.PkgScope.LookupLocal(f.Name)
+			if tgt == nil {
+				return nil
+			}
+			if d, ok := tgt.Decl.(*ast.FnDecl); ok {
+				return d
+			}
 		}
-		if d, ok := tgt.Decl.(*ast.FnDecl); ok {
-			return d
+		if useDecl, ok := sym.Decl.(*ast.UseDecl); ok {
+			for _, decl := range useDecl.GoBody {
+				fn, ok := decl.(*ast.FnDecl)
+				if ok && fn.Name == f.Name {
+					return fn
+				}
+			}
 		}
 	}
 	return nil

@@ -723,6 +723,12 @@ func (g *gen) emitCall(c *ast.CallExpr) {
 	}
 	g.emitExpr(c.Fn)
 	g.body.write("(")
+	if fnDecl := g.resolvedCalleeFnDecl(c.Fn); fnDecl != nil {
+		if g.emitArgsForParams(fnDecl.Params, c.Args) {
+			g.body.write(")")
+			return
+		}
+	}
 	for i, a := range c.Args {
 		if i > 0 {
 			g.body.write(", ")
@@ -745,16 +751,35 @@ func (g *gen) emitListPushCall(c *ast.CallExpr, f *ast.FieldExpr) bool {
 	if f.Name != "push" || len(c.Args) != 1 {
 		return false
 	}
-	n, ok := g.typeOf(f.X).(*types.Named)
-	if !ok || n.Sym == nil || n.Sym.Name != "List" || len(n.Args) != 1 {
-		return false
+	recvType := g.typeOf(f.X)
+	if recvType == nil {
+		if id, ok := f.X.(*ast.Ident); ok {
+			recvType = g.symTypeOf(g.symbolFor(id))
+			if recvType == nil {
+				recvType = g.bindingTypeOfIdent(id)
+			}
+		}
 	}
+	n, ok := recvType.(*types.Named)
+	if ok && n.Sym != nil && n.Sym.Name == "List" && len(n.Args) == 1 {
+		g.body.write("func() struct{} { ")
+		g.emitExpr(f.X)
+		g.body.write(" = append(")
+		g.emitExpr(f.X)
+		g.body.write(", ")
+		g.emitExprAsType(c.Args[0].Value, n.Args[0])
+		g.body.write("); return struct{}{} }()")
+		return true
+	}
+	// Bootstrap fallback: the selfhostgen pipeline uses `.push` only for
+	// list mutation. When checker data is missing, emit append-based
+	// mutation directly and let Go type-check the assignment.
 	g.body.write("func() struct{} { ")
 	g.emitExpr(f.X)
 	g.body.write(" = append(")
 	g.emitExpr(f.X)
 	g.body.write(", ")
-	g.emitExprAsType(c.Args[0].Value, n.Args[0])
+	g.emitExpr(c.Args[0].Value)
 	g.body.write("); return struct{}{} }()")
 	return true
 }
@@ -963,6 +988,73 @@ func (g *gen) emitErrorDowncastCall(c *ast.CallExpr, tf *ast.TurbofishExpr) bool
 	g.emitExpr(f.X)
 	g.body.write(")")
 	return true
+}
+
+func (g *gen) bindingTypeOfIdent(id *ast.Ident) types.Type {
+	if g.chk == nil || id == nil {
+		return nil
+	}
+	sym := g.symbolFor(id)
+	if sym == nil || sym.Decl == nil {
+		return nil
+	}
+	for node, t := range g.chk.LetTypes {
+		switch n := node.(type) {
+		case *ast.LetDecl:
+			if sym.Decl == n {
+				return t
+			}
+		case *ast.LetStmt:
+			if patternBindsNode(n.Pattern, sym.Decl) {
+				return t
+			}
+		}
+	}
+	return nil
+}
+
+func patternBindsNode(p ast.Pattern, target ast.Node) bool {
+	if p == nil || target == nil {
+		return false
+	}
+	if p == target {
+		return true
+	}
+	switch p := p.(type) {
+	case *ast.TuplePat:
+		for _, elem := range p.Elems {
+			if patternBindsNode(elem, target) {
+				return true
+			}
+		}
+	case *ast.StructPat:
+		for _, field := range p.Fields {
+			if field == target {
+				return true
+			}
+			if patternBindsNode(field.Pattern, target) {
+				return true
+			}
+		}
+	case *ast.VariantPat:
+		for _, arg := range p.Args {
+			if patternBindsNode(arg, target) {
+				return true
+			}
+		}
+	case *ast.OrPat:
+		for _, alt := range p.Alts {
+			if patternBindsNode(alt, target) {
+				return true
+			}
+		}
+	case *ast.BindingPat:
+		if p == target {
+			return true
+		}
+		return patternBindsNode(p.Pattern, target)
+	}
+	return false
 }
 
 func (g *gen) isPreludeErrorTypeExpr(e ast.Expr) bool {
@@ -3562,7 +3654,13 @@ func (g *gen) emitList(l *ast.ListExpr) {
 		if n, ok := t.(*types.Named); ok && n.Sym != nil && n.Sym.Name == "List" && len(n.Args) == 1 {
 			elemType = g.goType(n.Args[0])
 		}
+	} else if inferred := g.inferCommonExprGoType(l.Elems); inferred != "" {
+		elemType = inferred
 	}
+	g.emitListWithElemType(l, elemType)
+}
+
+func (g *gen) emitListWithElemType(l *ast.ListExpr, elemType string) {
 	if len(l.Elems) == 0 {
 		g.body.writef("make([]%s, 0, 1)", elemType)
 		return
@@ -3575,6 +3673,68 @@ func (g *gen) emitList(l *ast.ListExpr) {
 		g.emitExpr(e)
 	}
 	g.body.write("}")
+}
+
+func (g *gen) inferCommonExprGoType(exprs []ast.Expr) string {
+	common := ""
+	for _, expr := range exprs {
+		got := g.fallbackExprGoType(expr)
+		if got == "" || got == "any" {
+			return ""
+		}
+		if common == "" {
+			common = got
+			continue
+		}
+		if got != common {
+			return ""
+		}
+	}
+	return common
+}
+
+func (g *gen) fallbackExprGoType(expr ast.Expr) string {
+	if expr == nil {
+		return ""
+	}
+	if t := g.typeOf(expr); t != nil && !types.IsError(t) {
+		return g.goType(t)
+	}
+	switch expr := expr.(type) {
+	case *ast.StringLit:
+		return "string"
+	case *ast.IntLit:
+		return "int"
+	case *ast.FloatLit:
+		return "float64"
+	case *ast.BoolLit:
+		return "bool"
+	case *ast.CharLit:
+		return "rune"
+	case *ast.ByteLit:
+		return "byte"
+	case *ast.Ident:
+		if sym := g.symbolFor(expr); sym != nil {
+			if t := g.symTypeOf(sym); t != nil && !types.IsError(t) {
+				return g.goType(t)
+			}
+			switch decl := sym.Decl.(type) {
+			case *ast.Param:
+				if decl.Type != nil {
+					return g.goTypeExpr(decl.Type)
+				}
+			case *ast.LetDecl:
+				if decl.Type != nil {
+					return g.goTypeExpr(decl.Type)
+				}
+			}
+		}
+	case *ast.CallExpr:
+		if decl := g.resolvedCalleeFnDecl(expr.Fn); decl != nil && decl.ReturnType != nil {
+			return g.goTypeExpr(decl.ReturnType)
+		}
+	}
+	return ""
 }
 
 // emitMap writes a map literal.

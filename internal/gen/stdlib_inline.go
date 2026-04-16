@@ -252,7 +252,11 @@ func (g *gen) emitArgsForParams(params []*ast.Param, args []*ast.Arg) bool {
 		if arg == nil {
 			return false
 		}
-		g.emitExpr(arg)
+		if p.Type != nil {
+			g.emitExprAsTypeExpr(arg, p.Type)
+		} else {
+			g.emitExpr(arg)
+		}
 	}
 	return true
 }

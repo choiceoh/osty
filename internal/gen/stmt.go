@@ -709,11 +709,47 @@ func enumerateReceiver(e ast.Expr) (ast.Expr, bool) {
 }
 
 // emitExprAsType emits an expression with a target type context. For
-// numeric literals this rewrites them into the target's Go form so
-// gofmt doesn't complain about untyped constant overflow; for other
-// expressions it falls back to bare emission.
-func (g *gen) emitExprAsType(e ast.Expr, _ types.Type) {
-	// Phase 1: no special handling — the base emitter renders each
-	// literal with its source text which is already Go-compatible.
+// list literals this preserves the element type even when checker info
+// is missing on the literal itself; other expressions fall back to
+// bare emission.
+func (g *gen) emitExprAsType(e ast.Expr, target types.Type) {
+	if g.emitExprWithExpectedListElem(e, g.listElemGoType(target)) {
+		return
+	}
 	g.emitExpr(e)
+}
+
+func (g *gen) emitExprAsTypeExpr(e ast.Expr, target ast.Type) {
+	if g.emitExprWithExpectedListElem(e, g.listElemGoTypeExpr(target)) {
+		return
+	}
+	g.emitExpr(e)
+}
+
+func (g *gen) emitExprWithExpectedListElem(e ast.Expr, elemGo string) bool {
+	if elemGo == "" {
+		return false
+	}
+	list, ok := e.(*ast.ListExpr)
+	if !ok {
+		return false
+	}
+	g.emitListWithElemType(list, elemGo)
+	return true
+}
+
+func (g *gen) listElemGoType(target types.Type) string {
+	n, ok := target.(*types.Named)
+	if !ok || n.Sym == nil || n.Sym.Name != "List" || len(n.Args) != 1 {
+		return ""
+	}
+	return g.goType(n.Args[0])
+}
+
+func (g *gen) listElemGoTypeExpr(target ast.Type) string {
+	n, ok := target.(*ast.NamedType)
+	if !ok || len(n.Path) == 0 || n.Path[len(n.Path)-1] != "List" || len(n.Args) != 1 {
+		return ""
+	}
+	return g.goTypeExpr(n.Args[0])
 }
