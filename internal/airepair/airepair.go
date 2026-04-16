@@ -15,6 +15,7 @@ import (
 	"github.com/osty/osty/internal/repair"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/stdlib"
+	"github.com/osty/osty/internal/token"
 )
 
 type phaseFunc func(src []byte, diags []*diag.Diagnostic) repair.Result
@@ -84,11 +85,22 @@ type Report struct {
 	PassesUsed        int                `json:"passes_used"`
 	Skipped           int                `json:"skipped"`
 	Changes           []repair.Change    `json:"changes"`
+	ChangeDetails     []ReportChange     `json:"change_details"`
 	Before            ProbeStats         `json:"before"`
 	After             ProbeStats         `json:"after"`
 	DiagnosticsBefore []*diag.Diagnostic `json:"diagnostics_before"`
 	DiagnosticsAfter  []*diag.Diagnostic `json:"diagnostics_after"`
 	Source            string             `json:"source"`
+}
+
+// ReportChange adds airepair-specific metadata to a user-facing change.
+type ReportChange struct {
+	Kind        string    `json:"kind"`
+	Message     string    `json:"message"`
+	Pos         token.Pos `json:"pos"`
+	Phase       string    `json:"phase"`
+	SourceHabit string    `json:"source_habit"`
+	Confidence  float64   `json:"confidence"`
 }
 
 // Analyze runs the current airepair pipeline against one source blob.
@@ -111,6 +123,8 @@ func Analyze(req Request) Result {
 		func(src []byte, _ []*diag.Diagnostic) repair.Result { return repair.Source(src) },
 		func(src []byte, _ []*diag.Diagnostic) repair.Result { return structuralSource(src) },
 		diagnosticGuidedSource,
+		diagnosticForeignLoopSource,
+		diagnosticTupleLoopSource,
 	}
 	if req.MaxPasses <= 0 || req.MaxPasses > len(phases) {
 		req.MaxPasses = len(phases)
@@ -159,6 +173,10 @@ func Analyze(req Request) Result {
 
 // JSONReport returns a serialization-oriented view of Result.
 func (r Result) JSONReport() Report {
+	details := make([]ReportChange, 0, len(r.Repair.Changes))
+	for _, change := range r.Repair.Changes {
+		details = append(details, annotateReportChange(change))
+	}
 	return Report{
 		Filename:          r.Filename,
 		Mode:              r.Mode,
@@ -168,6 +186,7 @@ func (r Result) JSONReport() Report {
 		PassesUsed:        r.PassesUsed,
 		Skipped:           r.Repair.Skipped,
 		Changes:           append([]repair.Change(nil), r.Repair.Changes...),
+		ChangeDetails:     details,
 		Before:            r.Before,
 		After:             r.After,
 		DiagnosticsBefore: append([]*diag.Diagnostic(nil), r.DiagnosticsBefore...),

@@ -277,6 +277,7 @@ Legacy alias: `osty repair`
 - `--check` — exit 1 if the file contains repairable syntax slips
 - `--write` — rewrite the file in place instead of printing
 - `--json` — emit a structured report including before/after front-end diagnostics
+  and `change_details` metadata (`phase`, `source_habit`, `confidence`) for tooling
 - `--stdin-name NAME` — filename to use in reports when reading from stdin via `-`
 - `--mode rewrite|parse|frontend` — choose whether airepair scores candidate output by rewrite activity, parse diagnostics, or full front-end diagnostics
 
@@ -517,6 +518,7 @@ error[E0500]: undefined name `name`
 go test ./...                                           # unit tests
 go test ./... -run TestSpecCodeBlocks -v                # spec markdown coverage
 go test ./internal/resolve/ -run TestSpec -v            # positive + negative corpus
+go test ./internal/airepair -run TestAnalyzeCorpus -v   # AI syntax-adaptation corpus
 go test -fuzz=FuzzLex   -fuzztime=30s ./internal/lexer/
 go test -fuzz=FuzzParse -fuzztime=30s ./internal/parser/
 ```
@@ -540,6 +542,14 @@ The **spec corpus** lives under `testdata/spec/`:
 - `negative/reject.osty` — a bundled file of `// === CASE: Exxxx ===`
   blocks; `TestSpecNegativeCorpus` extracts each block and asserts the
   declared diagnostic code fires.
+
+The **airepair corpus** lives under `internal/airepair/testdata/corpus/`:
+
+- `*.input.osty` / `*.expected.osty` fixture pairs capture common
+  foreign-language habits from AI-authored Osty.
+- `TestAnalyzeCorpus` checks exact repaired output plus before/after
+  diagnostic counts so new repair phases can grow without silently
+  regressing older adaptation paths.
 
 ### Golden snapshot updates
 

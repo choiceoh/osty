@@ -132,12 +132,18 @@ func TestAIRepairJSONReportFromStdin(t *testing.T) {
 	}
 
 	var report struct {
-		Filename string `json:"filename"`
-		Mode     string `json:"mode"`
-		Changed  bool   `json:"changed"`
-		Improved bool   `json:"improved"`
-		Accepted bool   `json:"accepted"`
-		Before   struct {
+		Filename      string `json:"filename"`
+		Mode          string `json:"mode"`
+		Changed       bool   `json:"changed"`
+		Improved      bool   `json:"improved"`
+		Accepted      bool   `json:"accepted"`
+		ChangeDetails []struct {
+			Kind        string  `json:"kind"`
+			Phase       string  `json:"phase"`
+			SourceHabit string  `json:"source_habit"`
+			Confidence  float64 `json:"confidence"`
+		} `json:"change_details"`
+		Before struct {
 			Parse struct {
 				Errors int `json:"errors"`
 			} `json:"parse"`
@@ -169,6 +175,21 @@ func TestAIRepairJSONReportFromStdin(t *testing.T) {
 	}
 	if report.Source != "fn main() {}\n" {
 		t.Fatalf("source = %q, want repaired source", report.Source)
+	}
+	if len(report.ChangeDetails) != 1 {
+		t.Fatalf("len(change_details) = %d, want 1", len(report.ChangeDetails))
+	}
+	if got := report.ChangeDetails[0].Kind; got != "function_keyword" {
+		t.Fatalf("change_details[0].kind = %q, want function_keyword", got)
+	}
+	if got := report.ChangeDetails[0].Phase; got != "lexical" {
+		t.Fatalf("change_details[0].phase = %q, want lexical", got)
+	}
+	if got := report.ChangeDetails[0].SourceHabit; got != "foreign_function_keyword" {
+		t.Fatalf("change_details[0].source_habit = %q, want foreign_function_keyword", got)
+	}
+	if report.ChangeDetails[0].Confidence <= 0.0 {
+		t.Fatalf("change_details[0].confidence = %v, want > 0", report.ChangeDetails[0].Confidence)
 	}
 }
 
@@ -212,6 +233,138 @@ func TestCheckWithAIRepairPassesPythonStyleBlocks(t *testing.T) {
 	}
 	if !strings.Contains(with.stderr, "osty check --airepair: applied 2 repair(s)") {
 		t.Fatalf("stderr = %q, want multi-phase airepair summary", with.stderr)
+	}
+}
+
+func TestCheckWithAIRepairPassesPythonElifBlocks(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.osty")
+	source := "fn main() {\n    if true:\n        println(1)\n    elif false:\n        println(2)\n    else:\n        println(0)\n}\n"
+	if err := os.WriteFile(path, []byte(source), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+
+	without := runOstyCLI(t, "check", path)
+	if without.exit == 0 {
+		t.Fatalf("check without airepair exit = %d, want non-zero parse failure", without.exit)
+	}
+
+	with := runOstyCLI(t, "check", "--airepair", "--airepair-mode=parse", path)
+	if with.exit != 0 {
+		t.Fatalf("check --airepair exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", with.exit, with.stdout, with.stderr)
+	}
+	if !strings.Contains(with.stderr, "osty check --airepair: applied 3 repair(s)") {
+		t.Fatalf("stderr = %q, want multi-phase elif airepair summary", with.stderr)
+	}
+}
+
+func TestCheckWithAIRepairPassesPythonBareTupleForBlocks(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.osty")
+	source := "fn main() {\n    let items = [(1, 2)]\n    for k, v in items:\n        println(k)\n}\n"
+	if err := os.WriteFile(path, []byte(source), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+
+	without := runOstyCLI(t, "check", path)
+	if without.exit == 0 {
+		t.Fatalf("check without airepair exit = %d, want non-zero parse failure", without.exit)
+	}
+
+	with := runOstyCLI(t, "check", "--airepair", "--airepair-mode=parse", path)
+	if with.exit != 0 {
+		t.Fatalf("check --airepair exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", with.exit, with.stdout, with.stderr)
+	}
+	if !strings.Contains(with.stderr, "osty check --airepair: applied 2 repair(s)") {
+		t.Fatalf("stderr = %q, want tuple-loop airepair summary", with.stderr)
+	}
+}
+
+func TestCheckWithAIRepairPassesJSForOfLoops(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.osty")
+	source := "fn main() {\n    let items = [1, 2]\n    for (const item of items) {\n        println(item)\n    }\n}\n"
+	if err := os.WriteFile(path, []byte(source), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+
+	without := runOstyCLI(t, "check", path)
+	if without.exit == 0 {
+		t.Fatalf("check without airepair exit = %d, want non-zero parse failure", without.exit)
+	}
+
+	with := runOstyCLI(t, "check", "--airepair", "--airepair-mode=parse", path)
+	if with.exit != 0 {
+		t.Fatalf("check --airepair exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", with.exit, with.stdout, with.stderr)
+	}
+	if !strings.Contains(with.stderr, "osty check --airepair: applied 1 repair(s)") {
+		t.Fatalf("stderr = %q, want JS for-of airepair summary", with.stderr)
+	}
+}
+
+func TestCheckWithAIRepairPassesJSDestructuringForOfLoops(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.osty")
+	source := "fn main() {\n    let entries = [(1, 2)]\n    for (const [k, v] of entries) {\n        println(k)\n    }\n}\n"
+	if err := os.WriteFile(path, []byte(source), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+
+	without := runOstyCLI(t, "check", path)
+	if without.exit == 0 {
+		t.Fatalf("check without airepair exit = %d, want non-zero parse failure", without.exit)
+	}
+
+	with := runOstyCLI(t, "check", "--airepair", "--airepair-mode=parse", path)
+	if with.exit != 0 {
+		t.Fatalf("check --airepair exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", with.exit, with.stdout, with.stderr)
+	}
+	if !strings.Contains(with.stderr, "osty check --airepair: applied 1 repair(s)") {
+		t.Fatalf("stderr = %q, want JS destructuring for-of airepair summary", with.stderr)
+	}
+}
+
+func TestCheckWithAIRepairPassesPythonRangeLoops(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.osty")
+	source := "fn main() {\n    for i in range(3):\n        println(i)\n}\n"
+	if err := os.WriteFile(path, []byte(source), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+
+	without := runOstyCLI(t, "check", path)
+	if without.exit == 0 {
+		t.Fatalf("check without airepair exit = %d, want non-zero parse failure", without.exit)
+	}
+
+	with := runOstyCLI(t, "check", "--airepair", "--airepair-mode=parse", path)
+	if with.exit != 0 {
+		t.Fatalf("check --airepair exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", with.exit, with.stdout, with.stderr)
+	}
+	if !strings.Contains(with.stderr, "osty check --airepair: applied 2 repair(s)") {
+		t.Fatalf("stderr = %q, want Python range airepair summary", with.stderr)
+	}
+}
+
+func TestResolveWithAIRepairPassesPythonEnumerateLoops(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.osty")
+	source := "fn main() {\n    let items = [1, 2]\n    for i, item in enumerate(items):\n        println(item)\n}\n"
+	if err := os.WriteFile(path, []byte(source), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+
+	without := runOstyCLI(t, "resolve", path)
+	if without.exit == 0 {
+		t.Fatalf("resolve without airepair exit = %d, want non-zero parse failure", without.exit)
+	}
+
+	with := runOstyCLI(t, "resolve", "--airepair", "--airepair-mode=parse", path)
+	if with.exit != 0 {
+		t.Fatalf("resolve --airepair exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", with.exit, with.stdout, with.stderr)
+	}
+	if !strings.Contains(with.stderr, "osty resolve --airepair: applied 2 repair(s)") {
+		t.Fatalf("stderr = %q, want Python enumerate airepair summary", with.stderr)
 	}
 }
 

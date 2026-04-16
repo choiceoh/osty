@@ -155,6 +155,153 @@ func TestAnalyzeFrontEndAssistRepairsPythonIfElseBlock(t *testing.T) {
 	}
 }
 
+func TestAnalyzeFrontEndAssistRepairsPythonElifBlock(t *testing.T) {
+	result := Analyze(Request{
+		Source:   []byte("fn main() {\n    if a:\n        println(1)\n    elif b:\n        println(2)\n    else:\n        println(0)\n}\n"),
+		Filename: "main.osty",
+		Mode:     ModeFrontEndAssist,
+	})
+
+	if !result.Changed {
+		t.Fatal("expected airepair to rewrite Python-style elif blocks")
+	}
+	if got, want := string(result.Repaired), "fn main() {\n    if a {\n        println(1)\n    } else if b {\n        println(2)\n    } else {\n        println(0)\n    }\n}\n"; got != want {
+		t.Fatalf("repaired source = %q, want %q", got, want)
+	}
+	if result.Before.Parse.Errors == 0 {
+		t.Fatalf("before.parse.errors = %d, want parse failures before repair", result.Before.Parse.Errors)
+	}
+	if result.After.Parse.Errors != 0 {
+		t.Fatalf("after.parse.errors = %d, want 0 after repair", result.After.Parse.Errors)
+	}
+}
+
+func TestAnalyzeFrontEndAssistRepairsBareTupleForLoopPattern(t *testing.T) {
+	result := Analyze(Request{
+		Source:   []byte("fn main() {\n    let items = [(1, 2)]\n    for k, v in items {\n        println(k)\n    }\n}\n"),
+		Filename: "main.osty",
+		Mode:     ModeFrontEndAssist,
+	})
+
+	if !result.Changed {
+		t.Fatal("expected airepair to rewrite a bare tuple for-loop pattern")
+	}
+	if got, want := string(result.Repaired), "fn main() {\n    let items = [(1, 2)]\n    for (k, v) in items {\n        println(k)\n    }\n}\n"; got != want {
+		t.Fatalf("repaired source = %q, want %q", got, want)
+	}
+	if result.Before.Parse.Errors == 0 {
+		t.Fatalf("before.parse.errors = %d, want parse failures before repair", result.Before.Parse.Errors)
+	}
+	if result.After.Parse.Errors != 0 {
+		t.Fatalf("after.parse.errors = %d, want 0 after repair", result.After.Parse.Errors)
+	}
+}
+
+func TestAnalyzeFrontEndAssistRewritesJSForOfLoop(t *testing.T) {
+	result := Analyze(Request{
+		Source:   []byte("fn main() {\n    let items = [1, 2]\n    for (const item of items) {\n        println(item)\n    }\n}\n"),
+		Filename: "main.osty",
+		Mode:     ModeFrontEndAssist,
+	})
+
+	if !result.Changed {
+		t.Fatal("expected airepair to rewrite a JS for-of loop")
+	}
+	if got, want := string(result.Repaired), "fn main() {\n    let items = [1, 2]\n    for item in items {\n        println(item)\n    }\n}\n"; got != want {
+		t.Fatalf("repaired source = %q, want %q", got, want)
+	}
+	if result.Before.Parse.Errors == 0 {
+		t.Fatalf("before.parse.errors = %d, want parse failures before repair", result.Before.Parse.Errors)
+	}
+	if result.After.Parse.Errors != 0 {
+		t.Fatalf("after.parse.errors = %d, want 0 after repair", result.After.Parse.Errors)
+	}
+}
+
+func TestAnalyzeFrontEndAssistRewritesJSDestructuringForOfLoop(t *testing.T) {
+	result := Analyze(Request{
+		Source:   []byte("fn main() {\n    let entries = [(1, 2)]\n    for (const [k, v] of entries) {\n        println(k)\n    }\n}\n"),
+		Filename: "main.osty",
+		Mode:     ModeFrontEndAssist,
+	})
+
+	if !result.Changed {
+		t.Fatal("expected airepair to rewrite a JS destructuring for-of loop")
+	}
+	if got, want := string(result.Repaired), "fn main() {\n    let entries = [(1, 2)]\n    for (k, v) in entries {\n        println(k)\n    }\n}\n"; got != want {
+		t.Fatalf("repaired source = %q, want %q", got, want)
+	}
+	if result.Before.Parse.Errors == 0 {
+		t.Fatalf("before.parse.errors = %d, want parse failures before repair", result.Before.Parse.Errors)
+	}
+	if result.After.Parse.Errors != 0 {
+		t.Fatalf("after.parse.errors = %d, want 0 after repair", result.After.Parse.Errors)
+	}
+}
+
+func TestAnalyzeFrontEndAssistRewritesPythonRangeLoop(t *testing.T) {
+	result := Analyze(Request{
+		Source:   []byte("fn main() {\n    for i in range(3):\n        println(i)\n}\n"),
+		Filename: "main.osty",
+		Mode:     ModeFrontEndAssist,
+	})
+
+	if !result.Changed {
+		t.Fatal("expected airepair to rewrite a Python range loop")
+	}
+	if got, want := string(result.Repaired), "fn main() {\n    for i in 0..3 {\n        println(i)\n    }\n}\n"; got != want {
+		t.Fatalf("repaired source = %q, want %q", got, want)
+	}
+	if result.Before.Parse.Errors == 0 {
+		t.Fatalf("before.parse.errors = %d, want parse failures before repair", result.Before.Parse.Errors)
+	}
+	if result.After.Parse.Errors != 0 {
+		t.Fatalf("after.parse.errors = %d, want 0 after repair", result.After.Parse.Errors)
+	}
+}
+
+func TestAnalyzeFrontEndAssistRewritesPythonRangeLoopWithStartAndUnitStep(t *testing.T) {
+	result := Analyze(Request{
+		Source:   []byte("fn main() {\n    for i in range(1, 4, 1):\n        println(i)\n}\n"),
+		Filename: "main.osty",
+		Mode:     ModeFrontEndAssist,
+	})
+
+	if !result.Changed {
+		t.Fatal("expected airepair to rewrite a Python range(start, end, 1) loop")
+	}
+	if got, want := string(result.Repaired), "fn main() {\n    for i in 1..4 {\n        println(i)\n    }\n}\n"; got != want {
+		t.Fatalf("repaired source = %q, want %q", got, want)
+	}
+	if result.Before.Parse.Errors == 0 {
+		t.Fatalf("before.parse.errors = %d, want parse failures before repair", result.Before.Parse.Errors)
+	}
+	if result.After.Parse.Errors != 0 {
+		t.Fatalf("after.parse.errors = %d, want 0 after repair", result.After.Parse.Errors)
+	}
+}
+
+func TestAnalyzeFrontEndAssistRewritesPythonEnumerateLoop(t *testing.T) {
+	result := Analyze(Request{
+		Source:   []byte("fn main() {\n    let items = [1, 2]\n    for i, item in enumerate(items):\n        println(item)\n}\n"),
+		Filename: "main.osty",
+		Mode:     ModeFrontEndAssist,
+	})
+
+	if !result.Changed {
+		t.Fatal("expected airepair to rewrite a Python enumerate loop")
+	}
+	if got, want := string(result.Repaired), "fn main() {\n    let items = [1, 2]\n    for (i, item) in items.enumerate() {\n        println(item)\n    }\n}\n"; got != want {
+		t.Fatalf("repaired source = %q, want %q", got, want)
+	}
+	if result.Before.Parse.Errors == 0 {
+		t.Fatalf("before.parse.errors = %d, want parse failures before repair", result.Before.Parse.Errors)
+	}
+	if result.After.Parse.Errors != 0 {
+		t.Fatalf("after.parse.errors = %d, want 0 after repair", result.After.Parse.Errors)
+	}
+}
+
 func TestAnalyzeFrontEndAssistCombinesWhileRewriteWithPythonBlockRepair(t *testing.T) {
 	result := Analyze(Request{
 		Source:   []byte("fn main() {\n    while true:\n        println(1)\n}\n"),

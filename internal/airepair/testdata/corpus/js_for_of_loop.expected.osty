@@ -1,0 +1,6 @@
+fn main() {
+    let items = [1, 2]
+    for item in items {
+        println(item)
+    }
+}
