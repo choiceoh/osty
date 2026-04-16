@@ -57,27 +57,31 @@ func (r *Result) LookupType(e ast.Expr) types.Type {
 // Opts bundles optional inputs to File / Package / Workspace.
 type Opts struct {
 	// UseSelfhost is retained for source compatibility after removing
-	// the generated selfhost checker. It is currently ignored.
+	// the generated checker. It is currently ignored.
 	UseSelfhost bool
+
+	// UseGolegacy is retained for callers that already switched names.
+	// It is currently ignored as well.
+	UseGolegacy bool
 
 	// Source is the raw source for File. Package and Workspace read
 	// sources from resolve.PackageFile.
 	Source []byte
 
-	// Stdlib supplies std.* package signatures to the selfhost checker
+	// Stdlib supplies std.* package signatures to the legacy checker
 	// when checking outside a Workspace that already has a Stdlib
 	// provider attached.
 	Stdlib resolve.StdlibProvider
 
 	// Primitives and ResultMethods are retained for callers that still
-	// build checker options from the stdlib registry. The selfhost
+	// build checker options from the stdlib registry. The legacy
 	// checker reads stdlib method surfaces from source instead.
 	Primitives    map[types.PrimitiveKind]map[string]*ast.FnDecl
 	ResultMethods map[string]*ast.FnDecl
 
 	// OnDecl, if non-nil, is invoked for every top-level declaration,
 	// once per compatibility phase ("collect" and "check"). The
-	// selfhost checker runs as one pass, so durations are reported as 0.
+	// checker runs as one pass, so durations are reported as 0.
 	OnDecl func(decl ast.Decl, phase string, dur time.Duration)
 }
 
@@ -201,7 +205,7 @@ func checkerUnavailableDiag(scope string) *diag.Diagnostic {
 	pos := token.Pos{Line: 1, Column: 1, Offset: 0}
 	return diag.New(diag.Error, fmt.Sprintf("type checking unavailable for %s", scope)).
 		Primary(diag.Span{Start: pos, End: pos}, "").
-		Note("the generated selfhost checker and its bridge were removed").
+		Note("the generated checker and its bridge were removed").
 		Build()
 }
 

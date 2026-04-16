@@ -58,8 +58,8 @@ jobs:
 
       - name: Verify generated selfhost front end
         run: |
-          go generate ./internal/selfhost
-          git diff --exit-code -- internal/selfhost/generated.go
+          go generate ./toolchain
+          git diff --exit-code -- toolchain/generated.go
 
       - name: Verify generated selfhost CI core
         run: |

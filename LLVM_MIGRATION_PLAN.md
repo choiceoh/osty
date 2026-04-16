@@ -22,7 +22,7 @@
 - Multi-file package, vendored dependency, workspace build의 실제 code emission은
   아직 제한이 있다. LLVM 전환 전에 package 단위 emit/link 모델을 분명히 해야
   한다.
-- 현재 Phase 45까지의 LLVM backend 의미는 `examples/selfhost-core/llvmgen.osty`
+- 현재 Phase 45까지의 LLVM backend 의미는 `toolchain/llvmgen.osty`
   쪽으로 옮겨지고 있다. 여기에는 smoke IR builder, skeleton renderer,
   toolchain command plan, executable parity corpus, go-only diagnostic, 그리고
   unsupported source-shape taxonomy가 포함된다. 성공 경로의 scalar instruction
@@ -32,7 +32,7 @@
   definitions, struct literals, field reads, struct function boundaries, and
   mutable struct locals, plus bare enum tag values across simple function and
   mutable-local paths와 그 다음 payload-free enum match-expression paths도 같은
-  selfhost-core에서 생성한다. `Float`는 현재 double-subset로만 `Float`-smoke
+  toolchain에서 생성한다. `Float`는 현재 double-subset로만 `Float`-smoke
   경로를 처리하며, `Float32`/`Float64` width/ABI 정책은 후속 단계로 미룬다.
 
 ## 이주 원칙
@@ -43,7 +43,7 @@
    artifact 단계 결정, toolchain command plan, backend diagnostics가 포함된다.
    Go 구현은 migration 기간의 bootstrap bridge/reference와 host file I/O/process
    실행 shim으로만 허용하고, 새 backend 의미는
-   `examples/selfhost-core/llvmgen.osty` 같은 Osty-authored backend core로 먼저
+   `toolchain/llvmgen.osty` 같은 Osty-authored backend core로 먼저
    포팅한다.
 4. Runtime ABI를 먼저 문서화하고, helper를 backend별로 흩뿌리지 않는다.
 5. CLI는 `--backend=go|llvm` 또는 동등한 선택지를 제공하고, 기본값 전환은
@@ -173,7 +173,7 @@ artifact/cache layout 정책은 [`LLVM_ARTIFACT_LAYOUT.md`](./LLVM_ARTIFACT_LAYO
 작업:
 
 - Osty-authored LLVM emitter core를 추가한다.
-  - 1차 위치: `examples/selfhost-core/llvmgen.osty`
+  - 1차 위치: `toolchain/llvmgen.osty`
   - Go `internal/llvmgen`은 CLI를 움직이는 bootstrap bridge/reference로 격하한다.
 - textual `.ll` emitter를 Osty로 작성한다.
   - deterministic name mangling
@@ -192,10 +192,10 @@ artifact/cache layout 정책은 [`LLVM_ARTIFACT_LAYOUT.md`](./LLVM_ARTIFACT_LAYO
 - `osty gen --backend=llvm --emit=llvm-ir`로 `.ll` 출력이 가능하게 한다.
 - Osty-authored IR golden tests와 small executable tests를 만든다.
   - Phase 19 기준으로 executable smoke case list와 expected stdout도
-    `examples/selfhost-core/llvmgen.osty`가 소유하고, Go test는 host execution
+    `toolchain/llvmgen.osty`가 소유하고, Go test는 host execution
     shim으로만 동작한다.
   - Phase 20 기준으로 unsupported/backend-capability diagnostic policy도
-    `examples/selfhost-core/llvmgen.osty`가 소유하고, Go는 source feature 감지와
+    `toolchain/llvmgen.osty`가 소유하고, Go는 source feature 감지와
     host artifact I/O만 담당한다.
 
 완료 조건:
@@ -349,7 +349,7 @@ return/parameter boundaries와 mutable local slots을 지나도 동일하게 동
 - `enum_match_return_print.osty`를 helper return 경계 smoke fixture로 추가한다.
 - `enum_match_param_print.osty`를 helper parameter 경계 smoke fixture로 추가한다.
 - `enum_match_mut_print.osty`를 mutable local slot smoke fixture로 추가한다.
-- 네 fixture 모두 `42\n`를 출력하도록 유지하고, selfhosted backend core의
+- 네 fixture 모두 `42\n`를 출력하도록 유지하고, toolchain-authored backend core의
   match lowering을 기준으로 문서화한다.
 
 완료 조건:
@@ -357,7 +357,7 @@ return/parameter boundaries와 mutable local slots을 지나도 동일하게 동
 - payload-free enum match expression lowering이 current LLVM smoke corpus에
   반영되어야 한다.
 - 각 smoke fixture의 expected stdout가 `42\n`로 문서화되어야 한다.
-- match lowering은 여전히 `examples/selfhost-core/llvmgen.osty`에서 소유되어야
+- match lowering은 여전히 `toolchain/llvmgen.osty`에서 소유되어야
   한다.
 
 ### Phase 42-45. Single-Int payload enum smoke subset
@@ -405,7 +405,7 @@ return/parameter boundaries와 mutable local slots을 지나도 동일하게 동
 
 완료 조건:
 
-- `Float` smoke fixture의 8개가 같은 산출물 체인으로 selfhosted LLVM 경로에
+- `Float` smoke fixture의 8개가 같은 산출물 체인으로 toolchain-authored LLVM 경로에
   포함되어야 한다.
 - `Float32`/`Float64` width 정책은 별도 단계에서 결정한다고 migration 문서에
   명시되어야 한다.
@@ -476,7 +476,7 @@ return/parameter boundaries와 mutable local slots을 지나도 동일하게 동
 
 - Unit:
   - `internal/ir` lowering/validation snapshot
-  - `examples/selfhost-core/llvmgen.osty` type lowering, block builder,
+  - `toolchain/llvmgen.osty` type lowering, block builder,
     name mangling, with `internal/llvmgen` only as bootstrap/reference
   - runtime ABI header/layout tests
 - Golden:
@@ -524,7 +524,7 @@ return/parameter boundaries와 mutable local slots을 지나도 동일하게 동
 1. `internal/backend` facade 추가, Go backend를 기존 동작 그대로 감싸기
 2. `--backend`/`--emit` CLI plumbing과 artifact layout 테스트 추가
 3. `internal/ir` metadata gap 목록을 테스트 기반으로 보강
-4. `examples/selfhost-core/llvmgen.osty` skeleton/IR builder와 `.ll` golden smoke
+4. `toolchain/llvmgen.osty` skeleton/IR builder와 `.ll` golden smoke
    test 추가. Go `internal/llvmgen`은 bootstrap/reference bridge로만 둔다.
 5. LLVM toolchain discovery와 missing-tool diagnostic 추가
 6. scalar/control-flow LLVM executable smoke test 추가

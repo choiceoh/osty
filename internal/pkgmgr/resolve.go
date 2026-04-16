@@ -209,7 +209,7 @@ func (r *resolver) resolveCandidates(ctx context.Context, src Source, d manifest
 }
 
 func (r *resolver) prioritizeLockedRegistryCandidate(rs *registrySource, d manifest.Dependency, candidates []registryCandidate) []registryCandidate {
-	if pinned, ok := r.selfhostLockedRegistryVersion(rs, d, candidates); ok {
+	if pinned, ok := r.golegacyLockedRegistryVersion(rs, d, candidates); ok {
 		return prioritizeRegistryCandidate(candidates, pinned)
 	}
 	pinned, ok := r.lockedRegistryVersion(rs, d)
@@ -232,20 +232,20 @@ func prioritizeRegistryCandidate(candidates []registryCandidate, pinned semver.V
 	return candidates
 }
 
-func (r *resolver) selfhostLockedRegistryVersion(rs *registrySource, d manifest.Dependency, candidates []registryCandidate) (semver.Version, bool) {
+func (r *resolver) golegacyLockedRegistryVersion(rs *registrySource, d manifest.Dependency, candidates []registryCandidate) (semver.Version, bool) {
 	if r.lock == nil {
 		return semver.Version{}, false
 	}
-	selfhostCandidates := make([]SelfhostRegistryCandidate, 0, len(candidates))
+	golegacyCandidates := make([]GolegacyRegistryCandidate, 0, len(candidates))
 	for _, c := range candidates {
-		selfhostCandidates = append(selfhostCandidates, SelfhostRegistryCandidate{
+		golegacyCandidates = append(golegacyCandidates, GolegacyRegistryCandidate{
 			PackageName: rs.packageName,
 			Version:     c.Version.String(),
 			Checksum:    c.Meta.Checksum,
 			Yanked:      c.Meta.Yanked,
 		})
 	}
-	decision, err := SelfhostSelectRegistryCandidate(d.Name, rs.packageName, rs.registryName, rs.versionReq, selfhostCandidates, r.lock)
+	decision, err := GolegacySelectRegistryCandidate(d.Name, rs.packageName, rs.registryName, rs.versionReq, golegacyCandidates, r.lock)
 	if err != nil || !decision.Found || !decision.FromLock {
 		return semver.Version{}, false
 	}
@@ -409,7 +409,7 @@ func (r *resolver) ensureCompatible(existing *ResolvedNode, candidate Source, d 
 // Deterministic: children are visited in alphabetical order so
 // repeated resolves produce identical Order slices.
 func (r *resolver) topoOrder() []string {
-	order := SelfhostTopoOrder(r.graph)
+	order := GolegacyTopoOrder(r.graph)
 	if len(order) > 0 || r.graph == nil || len(r.graph.Nodes) == 0 {
 		return order
 	}
@@ -451,7 +451,7 @@ func (r *resolver) topoOrderGo() []string {
 // The order + per-entry sort matches lockfile.Marshal's determinism
 // policy.
 func LockFromGraph(g *Graph) *lockfile.Lock {
-	lock, err := SelfhostLockFromGraph(g)
+	lock, err := GolegacyLockFromGraph(g)
 	if err == nil {
 		return lock
 	}
@@ -692,7 +692,7 @@ func (c LockfileChange) String() string {
 // package is removed". Order is sorted by package name for stable
 // reporting.
 func DiffLock(old, new *lockfile.Lock) []LockfileChange {
-	if changes, err := SelfhostDiffLock(old, new); err == nil {
+	if changes, err := GolegacyDiffLock(old, new); err == nil {
 		return changes
 	}
 	return diffLockGo(old, new)

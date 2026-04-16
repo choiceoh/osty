@@ -19,7 +19,7 @@ import (
 //
 // This function is intentionally a thin named entry point over Source so the
 // CLI can still expose --engine=osty while sharing one canonical formatting
-// contract. The pure Osty formatter in examples/selfhost-core is tested
+// contract. The pure Osty formatter in toolchain is tested
 // separately as a self-hosting exercise; the CLI engine should not diverge
 // from the production AST printer.
 func OstySource(src []byte) ([]byte, []*diag.Diagnostic, error) {

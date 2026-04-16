@@ -1,8 +1,6 @@
 use std.testing
 
-use runtime.strings as diagStrings {
-    fn Contains(s: String, substr: String) -> Bool
-}
+use std.strings as diagStrings
 
 fn assertDiagnosticSeverity(code: String, want: String) {
     testing.assertEq(diagnosticSeverityName(diagnosticSeverity(code)), want)
@@ -13,7 +11,7 @@ fn assertDiagnosticFamily(code: String, want: String) {
 }
 
 fn assertDiagnosticTextContains(output: String, text: String) {
-    if !(diagStrings.Contains(output, text)) {
+    if !(diagStrings.contains(output, text)) {
         testing.fail("missing {text} in {output}")
     }
 }

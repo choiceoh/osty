@@ -1,12 +1,9 @@
 use std.testing
 
-use runtime.strings as llvmTestStrings {
-    fn Contains(s: String, substr: String) -> Bool
-    fn Join(elems: List<String>, sep: String) -> String
-}
+use std.strings as llvmTestStrings
 
 fn assertLlvmContains(ir: String, text: String) {
-    testing.assert(llvmTestStrings.Contains(ir, text))
+    testing.assert(llvmTestStrings.contains(ir, text))
 }
 
 fn testLlvmSmokeMinimalPrintIsOstyOwned() {
@@ -21,7 +18,7 @@ fn testLlvmSmokeMinimalPrintIsOstyOwned() {
 }
 
 fn testLlvmGcRuntimeDeclarationsAreOstyOwned() {
-    let declarations = llvmTestStrings.Join(llvmGcRuntimeDeclarations(), "\n")
+    let declarations = llvmTestStrings.join(llvmGcRuntimeDeclarations(), "\n")
 
     assertLlvmContains(declarations, "declare ptr @osty.gc.alloc_v1(i64, i64, ptr)")
     assertLlvmContains(declarations, "declare void @osty.gc.post_write_v1(ptr, ptr, i64)")
@@ -89,7 +86,7 @@ fn testLlvmToolchainPlanIsOstyOwned() {
     testing.assert(llvmNeedsBinaryArtifact("binary"))
     testing.assert(!(llvmNeedsBinaryArtifact("object")))
 
-    let compile = llvmTestStrings.Join(
+    let compile = llvmTestStrings.join(
         llvmClangCompileObjectArgs("x86_64-unknown-linux-gnu", "/tmp/main.ll", "/tmp/main.o"),
         " ",
     )
@@ -97,13 +94,13 @@ fn testLlvmToolchainPlanIsOstyOwned() {
     assertLlvmContains(compile, "-c /tmp/main.ll")
     assertLlvmContains(compile, "-o /tmp/main.o")
 
-    let link = llvmTestStrings.Join(
+    let link = llvmTestStrings.join(
         llvmClangLinkBinaryArgs("", "/tmp/main.o", "/tmp/app"),
         " ",
     )
     assertLlvmContains(link, "/tmp/main.o")
     assertLlvmContains(link, "-o /tmp/app")
-    testing.assert(!(llvmTestStrings.Contains(link, "-target")))
+    testing.assert(!(llvmTestStrings.contains(link, "-target")))
     assertLlvmContains(llvmMissingClangMessage(), "clang not found")
     assertLlvmContains(
         llvmClangFailureMessage("link binary", "clang main.o -o app", "boom"),

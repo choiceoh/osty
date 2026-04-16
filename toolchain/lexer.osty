@@ -1,12 +1,4 @@
-use runtime.strings as strings {
-    fn Join(elems: List<String>, sep: String) -> String
-    fn Split(s: String, sep: String) -> List<String>
-    fn HasPrefix(s: String, prefix: String) -> Bool
-    fn HasSuffix(s: String, suffix: String) -> Bool
-    fn TrimPrefix(s: String, prefix: String) -> String
-    fn TrimSpace(s: String) -> String
-    fn ReplaceAll(s: String, old: String, new: String) -> String
-}
+use std.strings as strings
 
 // ===================================================================
 // OstyLexer — clean self-hosted lexer interface mirroring the Go
@@ -121,7 +113,7 @@ pub fn ostyLexSource(source: String) -> OstyLexedSource {
 ///   comments := l.Comments()
 pub fn ostyLex(source: String) -> OstyLexResult {
     let lexed = ostyLexSource(source)
-    let units = strings.Split(lexed.source, "")
+    let units = strings.split(lexed.source, "")
     let stream = lexed.stream
     let facts = ostyLexFactsFromStream(lexed.source, stream)
 
@@ -162,7 +154,7 @@ pub fn ostyLex(source: String) -> OstyLexResult {
 /// ostyLexFactsFromStream converts diagnostic/comment/string-part side tables
 /// into a compact shape the Go adapter can copy into public compiler structs.
 pub fn ostyLexFactsFromStream(source: String, stream: FrontLexStream) -> OstyLexFacts {
-    let units = strings.Split(source, "")
+    let units = strings.split(source, "")
 
     let mut errors: List<OstyLexError> = []
     let diagCount = frontLexDiagnosticCount(stream)
@@ -441,31 +433,31 @@ fn ostyStringContentRaw(units: List<String>, tok: FrontLexToken) -> String {
 }
 
 fn ostyNormalizeTripleSegment(text: String) -> String {
-    let trimIndent = strings.HasPrefix(text, "\n")
+    let trimIndent = strings.hasPrefix(text, "\n")
     let mut body = text
-    if strings.HasPrefix(body, "\n") {
+    if strings.hasPrefix(body, "\n") {
         body = ostyDropPrefixUnits(body, 1)
     }
-    if strings.HasSuffix(body, "\n") {
+    if strings.hasSuffix(body, "\n") {
         body = ostyDropSuffixUnits(body, 1)
     }
-    let mut lines = strings.Split(body, "\n")
+    let mut lines = strings.split(body, "\n")
     let indent = ostyFirstNonBlankIndent(lines)
     let mut normalized: List<String> = []
     for line in lines {
         if trimIndent && indent != "" {
-            normalized.push(strings.TrimPrefix(line, indent))
+            normalized.push(strings.trimPrefix(line, indent))
         } else {
             normalized.push(line)
         }
     }
-    strings.Join(ostyTrimBlankTail(normalized), "\n")
+    strings.join(ostyTrimBlankTail(normalized), "\n")
 }
 
 fn ostyFirstNonBlankIndent(lines: List<String>) -> String {
     for line in lines {
-        if strings.TrimSpace(line) != "" {
-            let units = strings.Split(line, "")
+        if strings.trimSpace(line) != "" {
+            let units = strings.split(line, "")
             let mut idx = 0
             let count = ostyStringListCount(units)
             for idx < count {
@@ -485,7 +477,7 @@ fn ostyTrimBlankTail(lines: List<String>) -> List<String> {
     let mut seen = 0
     let mut keep = 0
     for line in lines {
-        if strings.TrimSpace(line) != "" {
+        if strings.trimSpace(line) != "" {
             keep = seen + 1
         }
         seen = seen + 1
@@ -502,12 +494,12 @@ fn ostyTrimBlankTail(lines: List<String>) -> List<String> {
 }
 
 fn ostyDropPrefixUnits(text: String, count: Int) -> String {
-    let units = strings.Split(text, "")
+    let units = strings.split(text, "")
     frontLexemeFromUnits(units, count, ostyStringListCount(units) - count)
 }
 
 fn ostyDropSuffixUnits(text: String, count: Int) -> String {
-    let units = strings.Split(text, "")
+    let units = strings.split(text, "")
     frontLexemeFromUnits(units, 0, ostyStringListCount(units) - count)
 }
 
@@ -547,8 +539,8 @@ fn ostyStringAt(items: List<String>, target: Int) -> String {
 /// ostyNormalizeSource normalizes \r\n and lone \r to \n, matching
 /// the Go lexer's normalizeNewlines behavior.
 pub fn ostyNormalizeSource(source: String) -> String {
-    let step1 = strings.ReplaceAll(source, "\r\n", "\n")
-    strings.ReplaceAll(step1, "\r", "\n")
+    let step1 = strings.replaceAll(source, "\r\n", "\n")
+    strings.replaceAll(step1, "\r", "\n")
 }
 
 // ===================================================================
@@ -566,11 +558,11 @@ fn ostyJoinDocLines(units: List<String>, stream: FrontLexStream, tok: FrontLexTo
     for ci < commentCount {
         let c = frontCommentAt(stream, ci)
         if c.kind == FrontCommentDoc && c.end.line <= tok.start.line && c.end.line >= tok.start.line - docLines {
-            docParts.push(strings.TrimSpace(ostyCommentText(units, c)))
+            docParts.push(strings.trimSpace(ostyCommentText(units, c)))
         }
         ci = ci + 1
     }
-    strings.Join(docParts, "\n")
+    strings.join(docParts, "\n")
 }
 
 // ===================================================================
@@ -658,7 +650,7 @@ pub fn ostyFormatLexErrors(result: OstyLexResult) -> String {
     for e in result.errors {
         lines.push("lex error: {e.message} at line {e.startLine}")
     }
-    strings.Join(lines, "\n")
+    strings.join(lines, "\n")
 }
 
 /// ostyFormatTokens produces a debug dump of the token stream.
@@ -672,7 +664,7 @@ pub fn ostyFormatTokens(result: OstyLexResult) -> String {
             lines.push("{t.startLine}:{t.startCol} {kindName}")
         }
     }
-    strings.Join(lines, "\n")
+    strings.join(lines, "\n")
 }
 
 /// ostyTokenKindName returns the human-readable name for a token kind.

@@ -252,7 +252,7 @@ outline/workspace symbol kind selection and sorting, cursor/range checks,
 signature-label rendering, diagnostic payload projection, code-action
 filtering, URI/reference-location ordering, organize-import helper policy, and
 fix-all overlap resolution is authored in
-`examples/selfhost-core/lsp.osty` and exposed through `internal/selfhost`. Each
+`toolchain/lsp.osty` and exposed through the checked-in host boundary. Each
 document change re-runs the full front-end (`parser.ParseDiagnostics` →
 `resolve.File` → `check.File`); caching is by source identity, not incremental
 — the front-end is fast enough that re-analysis is cheaper than

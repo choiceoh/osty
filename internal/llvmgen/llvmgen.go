@@ -54,7 +54,7 @@ func (e *UnsupportedError) Unwrap() error {
 }
 
 // RenderSkeleton emits the inspectable unsupported-source LLVM placeholder.
-// The implementation is generated from examples/selfhost-core/llvmgen.osty so
+// The implementation is generated from toolchain/llvmgen.osty so
 // the skeleton shape remains owned by the Osty emitter core.
 func RenderSkeleton(packageName, sourcePath, emit, target string, reason error) []byte {
 	unsupported := ""
@@ -594,7 +594,7 @@ func isKnownRuntimeFFIPath(path string) bool {
 		return true
 	}
 	switch path {
-	case "runtime.strings", "runtime.path.filepath", "runtime.selfhost.astbridge":
+	case "runtime.strings", "runtime.path.filepath", "runtime.golegacy.astbridge":
 		return true
 	default:
 		return false
