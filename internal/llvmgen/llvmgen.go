@@ -1846,13 +1846,17 @@ func (g *generator) emitMatchExprValue(expr *ast.MatchExpr) (value, error) {
 	if err != nil {
 		return value{}, err
 	}
+	hasGuard := false
 	for _, arm := range expr.Arms {
 		if arm == nil {
 			return value{}, unsupported("expression", "nil match arm")
 		}
 		if arm.Guard != nil {
-			return value{}, unsupported("control-flow", "match guards are not supported")
+			hasGuard = true
 		}
+	}
+	if hasGuard {
+		return g.emitGuardedMatchExprValue(scrutinee, expr.Arms)
 	}
 	if scrutinee.typ == "i64" {
 		return g.emitTagEnumMatchExprValue(scrutinee, expr.Arms)
@@ -1924,6 +1928,118 @@ func (g *generator) emitTagEnumMatchExprValue(scrutinee value, arms []*ast.Match
 		return value{}, unsupported("expression", "match with no arms")
 	}
 	return current, nil
+}
+
+func (g *generator) emitGuardedMatchExprValue(scrutinee value, arms []*ast.MatchArm) (value, error) {
+	if len(arms) == 0 {
+		return value{}, unsupported("expression", "match with no arms")
+	}
+	arm := arms[0]
+	if arm == nil {
+		return value{}, unsupported("expression", "nil match arm")
+	}
+	if len(arms) == 1 {
+		return g.emitFinalMatchArmValue(scrutinee, arm)
+	}
+	if _, catchAll := arm.Pattern.(*ast.WildcardPat); catchAll && arm.Guard == nil {
+		return value{}, unsupported("expression", "wildcard match arm must be last")
+	}
+	cond, bind, err := g.ifLetCondition(arm.Pattern, scrutinee)
+	if err != nil {
+		return value{}, err
+	}
+	emitter := g.toOstyEmitter()
+	labels := llvmIfExprStart(emitter, cond)
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = labels.thenLabel
+
+	thenValue, err := g.emitGuardedMatchArmThenValue(scrutinee, arm, arms[1:], bind)
+	if err != nil {
+		return value{}, err
+	}
+	thenPred := g.currentBlock
+	emitter = g.toOstyEmitter()
+	llvmIfExprElse(emitter, labels)
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = labels.elseLabel
+
+	elseValue, err := g.emitGuardedMatchExprValue(scrutinee, arms[1:])
+	if err != nil {
+		return value{}, err
+	}
+	elsePred := g.currentBlock
+	if thenValue.typ != elseValue.typ {
+		return value{}, unsupportedf("type-system", "match arm types %s/%s", thenValue.typ, elseValue.typ)
+	}
+	return g.emitIfExprPhi(labels, thenPred, elsePred, thenValue, elseValue)
+}
+
+func (g *generator) emitGuardedMatchArmThenValue(scrutinee value, arm *ast.MatchArm, rest []*ast.MatchArm, bind func() error) (value, error) {
+	g.pushScope()
+	defer g.popScope()
+	if bind != nil {
+		if err := bind(); err != nil {
+			return value{}, err
+		}
+	}
+	if arm.Guard == nil {
+		return g.emitMatchArmBodyValue(arm.Body)
+	}
+	guard, err := g.emitExpr(arm.Guard)
+	if err != nil {
+		return value{}, err
+	}
+	if guard.typ != "i1" {
+		return value{}, unsupportedf("type-system", "match guard type %s, want i1", guard.typ)
+	}
+	if len(rest) == 0 {
+		return value{}, unsupported("control-flow", "final guarded match arm requires an unguarded fallback arm")
+	}
+	emitter := g.toOstyEmitter()
+	labels := llvmIfExprStart(emitter, toOstyValue(guard))
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = labels.thenLabel
+
+	thenValue, err := g.emitMatchArmBodyValue(arm.Body)
+	if err != nil {
+		return value{}, err
+	}
+	thenPred := g.currentBlock
+	emitter = g.toOstyEmitter()
+	llvmIfExprElse(emitter, labels)
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = labels.elseLabel
+
+	elseValue, err := g.emitGuardedMatchExprValue(scrutinee, rest)
+	if err != nil {
+		return value{}, err
+	}
+	elsePred := g.currentBlock
+	if thenValue.typ != elseValue.typ {
+		return value{}, unsupportedf("type-system", "match arm types %s/%s", thenValue.typ, elseValue.typ)
+	}
+	return g.emitIfExprPhi(labels, thenPred, elsePred, thenValue, elseValue)
+}
+
+func (g *generator) emitFinalMatchArmValue(scrutinee value, arm *ast.MatchArm) (value, error) {
+	if arm == nil {
+		return value{}, unsupported("expression", "nil match arm")
+	}
+	if arm.Guard != nil {
+		return value{}, unsupported("control-flow", "final guarded match arm requires an unguarded fallback arm")
+	}
+	_, bind, err := g.ifLetCondition(arm.Pattern, scrutinee)
+	if err != nil {
+		return value{}, err
+	}
+	g.pushScope()
+	defer g.popScope()
+	if bind != nil {
+		if err := bind(); err != nil {
+			return value{}, err
+		}
+	}
+	return g.emitMatchArmBodyValue(arm.Body)
 }
 
 func (g *generator) emitTagEnumMatchIfExprValue(scrutinee value, first, second *ast.MatchArm) (value, error) {
