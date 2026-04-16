@@ -6,119 +6,8 @@ package ci
 import (
 	host "github.com/osty/osty/internal/cihost"
 	"math"
-	"reflect"
 	ciStrings "strings"
 )
-
-func ostyEqual(a, b any) bool {
-	av := reflect.ValueOf(a)
-	bv := reflect.ValueOf(b)
-	if !av.IsValid() || !bv.IsValid() {
-		return ostyIsNilValue(av) && ostyIsNilValue(bv)
-	}
-	return ostyEqualValue(av, bv, map[ostyEqualVisit]bool{})
-}
-
-type ostyEqualVisit struct {
-	a, b uintptr
-	typ  reflect.Type
-}
-
-func ostyEqualValue(a, b reflect.Value, seen map[ostyEqualVisit]bool) bool {
-	if !a.IsValid() || !b.IsValid() {
-		return ostyIsNilValue(a) && ostyIsNilValue(b)
-	}
-	if a.Type() != b.Type() {
-		return ostyIsNilValue(a) && ostyIsNilValue(b)
-	}
-	switch a.Kind() {
-	case reflect.Interface:
-		if a.IsNil() || b.IsNil() {
-			return a.IsNil() == b.IsNil()
-		}
-		return ostyEqualValue(a.Elem(), b.Elem(), seen)
-	case reflect.Pointer:
-		if a.IsNil() || b.IsNil() {
-			return a.IsNil() == b.IsNil()
-		}
-		visit := ostyEqualVisit{a: a.Pointer(), b: b.Pointer(), typ: a.Type()}
-		if seen[visit] {
-			return true
-		}
-		seen[visit] = true
-		return ostyEqualValue(a.Elem(), b.Elem(), seen)
-	case reflect.Struct:
-		for i := 0; i < a.NumField(); i++ {
-			if a.Type().Field(i).Name == "ref" {
-				continue
-			}
-			if !ostyEqualValue(a.Field(i), b.Field(i), seen) {
-				return false
-			}
-		}
-		return true
-	case reflect.Array, reflect.Slice:
-		if a.Kind() == reflect.Slice && (a.IsNil() || b.IsNil()) {
-			return a.IsNil() == b.IsNil()
-		}
-		if a.Len() != b.Len() {
-			return false
-		}
-		for i := 0; i < a.Len(); i++ {
-			if !ostyEqualValue(a.Index(i), b.Index(i), seen) {
-				return false
-			}
-		}
-		return true
-	case reflect.Map:
-		if a.IsNil() || b.IsNil() {
-			return a.IsNil() == b.IsNil()
-		}
-		if a.Len() != b.Len() {
-			return false
-		}
-		for _, key := range a.MapKeys() {
-			bv := b.MapIndex(key)
-			if !bv.IsValid() || !ostyEqualValue(a.MapIndex(key), bv, seen) {
-				return false
-			}
-		}
-		return true
-	case reflect.String:
-		return a.String() == b.String()
-	case reflect.Bool:
-		return a.Bool() == b.Bool()
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return a.Int() == b.Int()
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-		return a.Uint() == b.Uint()
-	case reflect.Float32, reflect.Float64:
-		return a.Float() == b.Float()
-	case reflect.Complex64, reflect.Complex128:
-		return a.Complex() == b.Complex()
-	case reflect.Func:
-		return a.IsNil() && b.IsNil()
-	case reflect.Chan, reflect.UnsafePointer:
-		return a.Pointer() == b.Pointer()
-	default:
-		if a.CanInterface() && b.CanInterface() {
-			return reflect.DeepEqual(a.Interface(), b.Interface())
-		}
-		return false
-	}
-}
-
-func ostyIsNilValue(v reflect.Value) bool {
-	if !v.IsValid() {
-		return true
-	}
-	switch v.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return v.IsNil()
-	default:
-		return false
-	}
-}
 
 // Osty: examples/selfhost-core/ci.osty:113:5
 type CheckName = string
@@ -204,7 +93,7 @@ func (self *Runner) Load() string {
 	loaded := host.LoadRunnerState(self.Root, self.Manifest)
 	_ = loaded
 	// Osty: examples/selfhost-core/ci.osty:175:9
-	if !ostyEqual(loaded.Error, "") {
+	if loaded.Error != "" {
 		// Osty: examples/selfhost-core/ci.osty:176:13
 		return loaded.Error
 	}
@@ -371,7 +260,7 @@ func (self *Runner) checkSemver() *Check {
 	baseline := host.ReadSnapshotHost(self.Opts.Baseline)
 	_ = baseline
 	// Osty: examples/selfhost-core/ci.osty:306:9
-	if !ostyEqual(baseline.Error, "") {
+	if baseline.Error != "" {
 		// Osty: examples/selfhost-core/ci.osty:307:13
 		func() struct{} {
 			c.Diags = append(c.Diags, host.Synthetic("error", "CI402", ciJoin2("cannot read baseline snapshot: ", baseline.Error)))
@@ -948,7 +837,7 @@ func ciBreakingSeverity(breakingIsError bool) string {
 // Osty: examples/selfhost-core/ci.osty:818:1
 func qualifiedSymbol(ref host.SymbolRef) string {
 	return func() string {
-		if ostyEqual(ref.Pkg, "") {
+		if ref.Pkg == "" {
 			return ref.Symbol.Name
 		} else {
 			return ciJoin3(ref.Pkg, ".", ref.Symbol.Name)
