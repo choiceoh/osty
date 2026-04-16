@@ -14,16 +14,10 @@ the compiler evolves.
   cycle reclamation, compaction, pinning, and allocation telemetry.
 - `concurrency`: runnable example covering channels, `spawn`,
   `parallel`, and `taskGroup`.
-- `selfhost-core`: standalone package for the self-hosting algorithms,
-  including the
-  runnable lexer scanner, front-end seed models, and broad example-style
-  tests for SemVer, registry selection, manifest validation, diagnostics,
-  package archive classification, a pure Osty semantic IR bridge,
-  Osty-written linter and resolver cores, the shared self-hosted checker
-  through a thin package bridge, LSP editor policy (semantic tokens,
-  completion/code-action policy, references, URI/import helpers), pure Osty
-  formatter, and self-hosted doc generator.
 - `stdlib-tour`: front-end checked package that demonstrates Tier 1
   standard-library imports and Result-style error flow.
 - `workspace`: virtual workspace with two member packages and a
   cross-package call from `cli` to `core`.
+
+The canonical Osty-authored compiler/tooling sources now live in the
+top-level `toolchain/` directory, not under `examples/`.

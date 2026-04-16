@@ -594,7 +594,7 @@ func isKnownRuntimeFFIPath(path string) bool {
 		return true
 	}
 	switch path {
-	case "runtime.strings", "runtime.path.filepath", "runtime.selfhost.astbridge":
+	case "runtime.strings", "runtime.path.filepath", "runtime.golegacy.astbridge":
 		return true
 	default:
 		return false

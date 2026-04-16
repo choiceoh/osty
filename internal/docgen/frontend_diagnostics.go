@@ -1,8 +1,4 @@
-<<<<<<<< HEAD:internal/docgen/frontend_diagnostics.go
 package docgen
-========
-package golegacy
->>>>>>>> b3eba2c (Rename selfhost paths to toolchain and golegacy):internal/golegacy/diagnostics_adapter.go
 
 import (
 	"github.com/osty/osty/internal/diag"

@@ -10,6 +10,6 @@
 // values, payload-free and payload-enum match expressions, and
 // unsupported-source diagnostic categories, including `Float`/`String` payload
 // enum smoke generalization ownership and policy (Phase 54-63), is authored in
-// Osty selfhost-core. `Float32`/`Float64` policy is deferred. This package
+// Osty toolchain sources. `Float32`/`Float64` policy is deferred. This package
 // remains the host shim for file I/O and process execution.
 package backend
