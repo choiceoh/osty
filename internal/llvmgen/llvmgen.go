@@ -1854,6 +1854,7 @@ func (g *generator) emitTestingExpect(call *ast.CallExpr, wantErr bool) (value, 
 	payload := llvmExtractValue(emitter, toOstyValue(result), payloadType, payloadIndex)
 	g.takeOstyEmitter(emitter)
 	out := fromOstyValue(payload)
+	out.gcManaged = payloadType == "ptr"
 	out.rootPaths = g.rootPathsForType(out.typ)
 	return out, nil
 }
@@ -2339,7 +2340,7 @@ func (g *generator) emitFieldExpr(expr *ast.FieldExpr) (value, error) {
 	g.takeOstyEmitter(emitter)
 	loaded := fromOstyValue(out)
 	loaded.listElemTyp = field.listElemTyp
-	loaded.gcManaged = field.listElemTyp != ""
+	loaded.gcManaged = field.typ == "ptr" || field.listElemTyp != ""
 	loaded.rootPaths = g.rootPathsForType(field.typ)
 	return loaded, nil
 }
@@ -2685,8 +2686,8 @@ func (g *generator) emitIfExprPhi(labels *LlvmIfLabels, thenPred, elsePred strin
 	out := value{typ: thenValue.typ, ref: tmp}
 	if thenValue.listElemTyp != "" && thenValue.listElemTyp == elseValue.listElemTyp {
 		out.listElemTyp = thenValue.listElemTyp
-		out.gcManaged = thenValue.gcManaged || elseValue.gcManaged
 	}
+	out.gcManaged = out.typ == "ptr" || thenValue.gcManaged || elseValue.gcManaged
 	out.rootPaths = g.rootPathsForType(out.typ)
 	return out, nil
 }
@@ -3044,8 +3045,8 @@ func (g *generator) emitSelectValue(cond *LlvmValue, thenValue, elseValue value)
 	out := value{typ: thenValue.typ, ref: tmp}
 	if thenValue.listElemTyp != "" && thenValue.listElemTyp == elseValue.listElemTyp {
 		out.listElemTyp = thenValue.listElemTyp
-		out.gcManaged = thenValue.gcManaged || elseValue.gcManaged
 	}
+	out.gcManaged = out.typ == "ptr" || thenValue.gcManaged || elseValue.gcManaged
 	out.rootPaths = g.rootPathsForType(out.typ)
 	return out, nil
 }
@@ -3062,7 +3063,7 @@ func (g *generator) usesAggregateListABI(elemTyp string) bool {
 	case "", "i64", "i1", "double", "ptr":
 		return false
 	}
-	return len(g.rootPathsForType(elemTyp)) == 0
+	return true
 }
 
 func (g *generator) emitAggregateByteSize(emitter *LlvmEmitter, typ string) value {
@@ -3080,27 +3081,67 @@ func (g *generator) emitAggregateScratchSlot(emitter *LlvmEmitter, typ, initial 
 	return value{typ: typ, ref: slot, ptr: true}
 }
 
-func (g *generator) emitListAggregatePush(listValue, elem value) error {
-	if len(g.rootPathsForType(elem.typ)) != 0 {
-		return unsupportedf("type-system", "list element type %s with managed aggregate fields", elem.typ)
+func (g *generator) emitAggregateRootOffsets(emitter *LlvmEmitter, typ string) (value, int, error) {
+	paths := g.rootPathsForType(typ)
+	if len(paths) == 0 {
+		return value{typ: "ptr", ref: "null"}, 0, nil
 	}
-	g.declareRuntimeSymbol(listRuntimePushBytesSymbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "ptr"}, {typ: "i64"}})
+	arrayTyp := fmt.Sprintf("[%d x i64]", len(paths))
+	arrayPtr := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca %s", arrayPtr, arrayTyp))
+	for i, path := range paths {
+		offsetPtr := llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf(
+			"  %s = getelementptr inbounds %s, ptr null, %s",
+			offsetPtr,
+			typ,
+			llvmAggregatePathIndices(path),
+		))
+		offsetValue := llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = ptrtoint ptr %s to i64", offsetValue, offsetPtr))
+		slotPtr := llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = getelementptr inbounds %s, ptr %s, i32 0, i32 %d", slotPtr, arrayTyp, arrayPtr, i))
+		emitter.body = append(emitter.body, fmt.Sprintf("  store i64 %s, ptr %s", offsetValue, slotPtr))
+	}
+	firstPtr := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = getelementptr inbounds %s, ptr %s, i32 0, i32 0", firstPtr, arrayTyp, arrayPtr))
+	return value{typ: "ptr", ref: firstPtr}, len(paths), nil
+}
+
+func (g *generator) emitListAggregatePush(listValue, elem value) error {
 	emitter := g.toOstyEmitter()
 	slot := g.emitAggregateScratchSlot(emitter, elem.typ, elem.ref)
 	size := g.emitAggregateByteSize(emitter, elem.typ)
-	emitter.body = append(emitter.body, fmt.Sprintf(
-		"  call void @%s(%s)",
-		listRuntimePushBytesSymbol(),
-		llvmCallArgs([]*LlvmValue{toOstyValue(listValue), toOstyValue(value{typ: "ptr", ref: slot.ref}), toOstyValue(size)}),
-	))
+	offsetsPtr, offsetCount, err := g.emitAggregateRootOffsets(emitter, elem.typ)
+	if err != nil {
+		return err
+	}
+	if offsetCount == 0 {
+		g.declareRuntimeSymbol(listRuntimePushBytesSymbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "ptr"}, {typ: "i64"}})
+		emitter.body = append(emitter.body, fmt.Sprintf(
+			"  call void @%s(%s)",
+			listRuntimePushBytesSymbol(),
+			llvmCallArgs([]*LlvmValue{toOstyValue(listValue), toOstyValue(value{typ: "ptr", ref: slot.ref}), toOstyValue(size)}),
+		))
+	} else {
+		g.declareRuntimeSymbol(listRuntimePushBytesRootsSymbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}, {typ: "i64"}})
+		emitter.body = append(emitter.body, fmt.Sprintf(
+			"  call void @%s(%s)",
+			listRuntimePushBytesRootsSymbol(),
+			llvmCallArgs([]*LlvmValue{
+				toOstyValue(listValue),
+				toOstyValue(value{typ: "ptr", ref: slot.ref}),
+				toOstyValue(size),
+				toOstyValue(offsetsPtr),
+				toOstyValue(value{typ: "i64", ref: strconv.Itoa(offsetCount)}),
+			}),
+		))
+	}
 	g.takeOstyEmitter(emitter)
 	return nil
 }
 
 func (g *generator) emitListAggregateGet(listValue value, index value, elemTyp string) (value, error) {
-	if len(g.rootPathsForType(elemTyp)) != 0 {
-		return value{}, unsupportedf("type-system", "list element type %s with managed aggregate fields", elemTyp)
-	}
 	g.declareRuntimeSymbol(listRuntimeGetBytesSymbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}, {typ: "i64"}})
 	emitter := g.toOstyEmitter()
 	slot := g.emitAggregateScratchSlot(emitter, elemTyp, "zeroinitializer")
@@ -3142,9 +3183,6 @@ func (g *generator) emitListExprWithHint(expr *ast.ListExpr, hintedElemTyp strin
 		return value{}, unsupported("expression", "empty list literal requires an explicit List<T> type")
 	}
 	useAggregateABI := g.usesAggregateListABI(elemTyp)
-	if !useAggregateABI && elemTyp != "ptr" && elemTyp != "i64" && elemTyp != "i1" && elemTyp != "double" {
-		return value{}, unsupportedf("type-system", "list literal element type %s requires scalar tuples or primitive values", elemTyp)
-	}
 	g.declareRuntimeSymbol(listRuntimeNewSymbol(), "ptr", nil)
 	emitter := g.toOstyEmitter()
 	out := llvmCall(emitter, "ptr", listRuntimeNewSymbol(), nil)
@@ -3249,9 +3287,6 @@ func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
 	if g.usesAggregateListABI(elemTyp) {
 		return true, g.emitListAggregatePush(baseValue, argValue)
 	}
-	if elemTyp != "ptr" && elemTyp != "i64" && elemTyp != "i1" && elemTyp != "double" {
-		return true, unsupportedf("type-system", "list.push element type %s requires scalar tuples or primitive values", elemTyp)
-	}
 	pushSymbol := listRuntimePushSymbol(elemTyp)
 	g.declareRuntimeSymbol(pushSymbol, "void", []paramInfo{{typ: "ptr"}, {typ: elemTyp}})
 	emitter = g.toOstyEmitter()
@@ -3275,9 +3310,6 @@ func (g *generator) emitListFor(stmt *ast.ForStmt, iterName, elemTyp string) err
 		return unsupportedf("type-system", "for-in iterable type %s", iterable.typ)
 	}
 	useAggregateABI := g.usesAggregateListABI(elemTyp)
-	if !useAggregateABI && elemTyp != "ptr" && elemTyp != "i64" && elemTyp != "i1" && elemTyp != "double" {
-		return unsupportedf("type-system", "for-in element type %s requires scalar tuples or primitive values", elemTyp)
-	}
 	iterable = g.protectManagedTemporary("for.iter", iterable)
 	g.declareRuntimeSymbol(listRuntimeLenSymbol(), "i64", []paramInfo{{typ: "ptr"}})
 	iterableValue, err := g.loadIfPointer(iterable)
@@ -3455,7 +3487,8 @@ func (g *generator) bindPayloadEnumPattern(scrutinee value, pattern enumPatternI
 	g.takeOstyEmitter(emitter)
 	payloadValue := fromOstyValue(payload)
 	payloadValue.listElemTyp = pattern.payloadListElemTyp
-	payloadValue.gcManaged = pattern.payloadListElemTyp != ""
+	payloadValue.gcManaged = pattern.payloadType == "ptr" || pattern.payloadListElemTyp != ""
+	payloadValue.rootPaths = g.rootPathsForType(pattern.payloadType)
 	g.bindNamedLocal(pattern.payloadName, payloadValue, false)
 	return nil
 }
@@ -3610,7 +3643,7 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 	g.popScope()
 	ret := fromOstyValue(out)
 	ret.listElemTyp = sig.retListElemTyp
-	ret.gcManaged = sig.retListElemTyp != ""
+	ret.gcManaged = sig.ret == "ptr" || sig.retListElemTyp != ""
 	ret.rootPaths = g.rootPathsForType(sig.ret)
 	return ret, nil
 }
@@ -3717,7 +3750,7 @@ func (g *generator) emitRuntimeFFICall(call *ast.CallExpr) (value, bool, error) 
 	g.popScope()
 	ret := fromOstyValue(out)
 	ret.listElemTyp = fn.listElemTyp
-	ret.gcManaged = fn.listElemTyp != ""
+	ret.gcManaged = fn.ret == "ptr" || fn.listElemTyp != ""
 	ret.rootPaths = g.rootPathsForType(fn.ret)
 	return ret, true, nil
 }
@@ -4553,8 +4586,8 @@ func (g *generator) extractTupleElement(tuple value, info tupleTypeInfo, index i
 	elem := fromOstyValue(out)
 	if index < len(info.elemListElemTyps) && info.elemListElemTyps[index] != "" {
 		elem.listElemTyp = info.elemListElemTyps[index]
-		elem.gcManaged = true
 	}
+	elem.gcManaged = info.elems[index] == "ptr" || elem.listElemTyp != ""
 	elem.rootPaths = g.rootPathsForType(info.elems[index])
 	return elem, nil
 }
@@ -4700,6 +4733,10 @@ func listRuntimePushBytesSymbol() string {
 	return "osty_rt_list_push_bytes_v1"
 }
 
+func listRuntimePushBytesRootsSymbol() string {
+	return "osty_rt_list_push_bytes_roots_v1"
+}
+
 func listRuntimeGetBytesSymbol() string {
 	return "osty_rt_list_get_bytes_v1"
 }
@@ -4732,6 +4769,15 @@ func listRuntimeSymbolSuffix(typ string) string {
 		return "ptr"
 	}
 	return b.String()
+}
+
+func llvmAggregatePathIndices(path []int) string {
+	parts := make([]string, 0, len(path)+1)
+	parts = append(parts, "i32 0")
+	for _, index := range path {
+		parts = append(parts, fmt.Sprintf("i32 %d", index))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func llvmType(t ast.Type, structs map[string]*structInfo, enums map[string]*enumInfo) (string, error) {

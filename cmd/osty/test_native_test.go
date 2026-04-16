@@ -178,6 +178,51 @@ fn benchClampHotPath() {
 	}
 }
 
+func TestRunTestMainPassesNativeLLVMManagedAggregateListTests(t *testing.T) {
+	requireClangForNativeTest(t)
+
+	dir := t.TempDir()
+	writeNativeTestFile(t, dir, "lib.osty", `use runtime.strings as strings {
+    fn Split(s: String, sep: String) -> List<String>
+}
+
+pub struct Bucket {
+    items: List<String>,
+}
+
+pub fn bucketLen(bucket: Bucket) -> Int {
+    bucket.items.len()
+}
+`)
+	writeNativeTestFile(t, dir, "lib_test.osty", `use std.testing
+use runtime.strings as strings {
+    fn Split(s: String, sep: String) -> List<String>
+}
+
+fn testManagedAggregateList() {
+    let buckets = [
+        Bucket { items: strings.Split("gc,llvm", ",") },
+    ]
+    for bucket in buckets {
+        testing.assertEq(bucketLen(bucket), 2)
+    }
+}
+`)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := runTestMain([]string{dir}, cliFlags{}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("runTestMain() exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	}
+	if got := stdout.String(); !strings.Contains(got, "ok\ttestManagedAggregateList") || !strings.Contains(got, "ok\t1 tests passed") {
+		t.Fatalf("stdout = %q, want managed-aggregate passing test summary", got)
+	}
+	if got := stderr.String(); strings.TrimSpace(got) != "" {
+		t.Fatalf("stderr = %q, want empty stderr", got)
+	}
+}
+
 func requireClangForNativeTest(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("clang"); err != nil {
