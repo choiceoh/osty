@@ -2203,6 +2203,31 @@ fn testClosureDescriptorRejectsInvalidCaptures() {
     assertValid(heap)
 }
 
+fn testValidateHeapRejectsClosureCaptureRefMismatch() {
+    let mut heap = newGcHeap(testGcConfig())
+    let closure = heap.allocate(GcClosure, 24)
+    let first = heap.allocate(GcRecord, 16)
+    let second = heap.allocate(GcArray, 16)
+    let captures: List<GcClosureCapture> = [
+        gcValueCapture(0, "first", first),
+        gcValueCapture(1, "second", second),
+    ]
+    testing.assert(heap.installClosureEnvironment(closure, "brokenClosure", captures))
+    assertValid(heap)
+
+    if heap.objects.containsKey(closure) {
+        let entry = heap.objects[closure]
+        let brokenRefs: List<Int> = [first, first]
+        let mut next = entry
+        next.refs = brokenRefs
+        heap.objects.insert(closure, next)
+    } else {
+        testing.fail("missing closure object")
+    }
+
+    let _ = testing.expectError(heap.validateHeap())
+}
+
 fn testSuspendedAsyncFrameKeepsRootsUntilResume() {
     let mut heap = newGcHeap(testGcConfig())
     let frame = heap.allocate(GcRuntimeFrame, 32)
@@ -2273,6 +2298,26 @@ fn testValidateHeapRejectsSuspendedAsyncFrameWithInvalidSafepoint() {
         let mut next = entry
         next.safepointId = 0
         heap.asyncFrames.insert(82, next)
+    } else {
+        testing.fail("missing async frame")
+    }
+
+    let _ = testing.expectError(heap.validateHeap())
+}
+
+fn testValidateHeapRejectsSuspendedAsyncFrameMissingFrameObject() {
+    let mut heap = newGcHeap(testGcConfig())
+    let frame = heap.allocate(GcRuntimeFrame, 32)
+    let payload = heap.allocate(GcRecord, 16)
+    let roots: List<Int> = [payload]
+    testing.assert(heap.suspendAsyncFrame(83, "task.missing-frame", 9, frame, roots))
+    assertValid(heap)
+
+    if heap.asyncFrames.containsKey(83) {
+        let entry = heap.asyncFrames[83]
+        let mut next = entry
+        next.frameObjectId = -1
+        heap.asyncFrames.insert(83, next)
     } else {
         testing.fail("missing async frame")
     }
