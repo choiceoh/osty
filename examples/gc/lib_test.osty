@@ -2240,6 +2240,46 @@ fn testSuspendedAsyncFrameKeepsRootsUntilResume() {
     testing.assertEq(heap.asyncFrameRootCount(), 0)
 }
 
+fn testValidateHeapRejectsInactiveAsyncFrameRetainingRoots() {
+    let mut heap = newGcHeap(testGcConfig())
+    let frame = heap.allocate(GcRuntimeFrame, 32)
+    let payload = heap.allocate(GcRecord, 16)
+    let roots: List<Int> = [payload]
+    testing.assert(heap.suspendAsyncFrame(81, "task.inactive-corrupt", 6, frame, roots))
+    assertValid(heap)
+
+    if heap.asyncFrames.containsKey(81) {
+        let entry = heap.asyncFrames[81]
+        let mut next = entry
+        next.state = GcAsyncFrameRunning
+        heap.asyncFrames.insert(81, next)
+    } else {
+        testing.fail("missing async frame")
+    }
+
+    let _ = testing.expectError(heap.validateHeap())
+}
+
+fn testValidateHeapRejectsSuspendedAsyncFrameWithInvalidSafepoint() {
+    let mut heap = newGcHeap(testGcConfig())
+    let frame = heap.allocate(GcRuntimeFrame, 32)
+    let payload = heap.allocate(GcRecord, 16)
+    let roots: List<Int> = [payload]
+    testing.assert(heap.suspendAsyncFrame(82, "task.bad-safepoint", 7, frame, roots))
+    assertValid(heap)
+
+    if heap.asyncFrames.containsKey(82) {
+        let entry = heap.asyncFrames[82]
+        let mut next = entry
+        next.safepointId = 0
+        heap.asyncFrames.insert(82, next)
+    } else {
+        testing.fail("missing async frame")
+    }
+
+    let _ = testing.expectError(heap.validateHeap())
+}
+
 fn testAsyncFrameAddedDuringIncrementalMarkingIsShaded() {
     let mut heap = newGcHeap(testGcConfig())
     let root = heap.allocate(GcRecord, 16)
