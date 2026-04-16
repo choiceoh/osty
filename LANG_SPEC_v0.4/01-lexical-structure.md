@@ -104,12 +104,28 @@ tooling.
 0o777            // octal
 ```
 
+Base prefixes must be lowercase (`0x`, `0b`, `0o`). The uppercase forms
+`0X`, `0B`, `0O` are rejected as **E0002**.
+
+Underscores are permitted only **between two digits of the same base**.
+A numeric literal may not start with `_`, end with `_`, contain `__`, or
+place `_` immediately after a base prefix or adjacent to `.`, `e`/`E`,
+or the exponent sign. Violations are reported as **E0008**. Valid
+examples: `1_000`, `0xDEAD_BEEF`, `0b1010_1010`. Invalid: `1_`, `_1_000`
+(a leading `_` lexes as an identifier, not a number), `1__000`, `0x_FF`,
+`1_.5`, `1.5_e2`.
+
 #### 1.6.2 Float literals
 ```
 3.14
 1.0e10
 2.5e-3
 ```
+
+Both sides of the decimal point must be digits — neither `.5` nor `1.`
+is a float literal. The exponent marker (`e` or `E`) must be followed by
+at least one digit, optionally preceded by `+` or `-`. The same
+underscore-placement rule applies as for integers (§1.6.1).
 
 #### 1.6.3 String literals
 
@@ -167,6 +183,12 @@ Indentation handling for triple-quoted strings:
 '\u{1F600}'
 b'A'             // Byte (UInt8); ASCII only
 ```
+
+A char literal holds **exactly one** Unicode scalar value. A byte
+literal `b'X'` holds exactly one ASCII scalar (U+0000–U+007F). Empty
+literals (`''`, `b''`) are rejected by the lexer as **E0009**. Multiple
+scalars inside a char literal and non-ASCII scalars inside a byte
+literal are rejected during type checking (not at lex time).
 
 #### 1.6.5 Bool literals
 

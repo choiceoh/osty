@@ -116,6 +116,7 @@ pub enum FrontLexDiagnosticCode {
     FrontDiagUnknownEscape,
     FrontDiagEmptyChar,
     FrontDiagEmptyByte,
+    FrontDiagBadNumericSeparator,
 }
 
 pub enum FrontStringPartKind {
@@ -313,6 +314,7 @@ pub struct FrontScanResult {
     pub interpolations: Int,
     pub baseLiteral: Bool,
     pub uppercaseBasePrefix: Bool,
+    pub badNumericSeparator: Bool,
 }
 
 pub struct FrontBlockCommentScan {
@@ -932,6 +934,15 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
                             FrontDiagUppercaseBasePrefix,
                             start,
                             frontPositionAt(units, idx + 2),
+                        ),
+                    )
+                }
+                if scan.badNumericSeparator {
+                    diagnostics.push(
+                        frontLexDiagnostic(
+                            FrontDiagBadNumericSeparator,
+                            start,
+                            frontPositionAt(units, idx + scan.consumed),
                         ),
                     )
                 }
@@ -1608,6 +1619,15 @@ pub fn frontInterpolationScan(
                         ),
                     )
                 }
+                if tokenScan.badNumericSeparator {
+                    out.diagnostics.push(
+                        frontLexDiagnostic(
+                            FrontDiagBadNumericSeparator,
+                            frontPositionAt(units, idx),
+                            frontPositionAt(units, idx + tokenScan.consumed),
+                        ),
+                    )
+                }
                 out.consumed = idx - start + tokenScan.consumed
                 skip = tokenScan.consumed - 1
             }
@@ -2065,6 +2085,7 @@ pub fn frontScanResult(kind: FrontTokenKind, consumed: Int, ok: Bool) -> FrontSc
         interpolations: 0,
         baseLiteral: false,
         uppercaseBasePrefix: false,
+        badNumericSeparator: false,
     }
 }
 
@@ -2077,6 +2098,7 @@ pub fn frontDetailedScanResult(
     interpolations: Int,
     baseLiteral: Bool,
     uppercaseBasePrefix: Bool,
+    badNumericSeparator: Bool,
 ) -> FrontScanResult {
     FrontScanResult {
         kind,
@@ -2087,6 +2109,7 @@ pub fn frontDetailedScanResult(
         interpolations,
         baseLiteral,
         uppercaseBasePrefix,
+        badNumericSeparator,
     }
 }
 
@@ -2207,6 +2230,7 @@ pub fn frontStringLikeScan(
                 interpolations,
                 false,
                 false,
+                false,
             )
         }
         consumed = consumed + 1
@@ -2226,6 +2250,7 @@ pub fn frontStringLikeScan(
                 interpolations,
                 false,
                 false,
+                false,
             )
         } else if !(triple) && unit == close {
             return frontDetailedScanResult(
@@ -2237,10 +2262,11 @@ pub fn frontStringLikeScan(
                 interpolations,
                 false,
                 false,
+                false,
             )
         }
     }
-    frontDetailedScanResult(kind, consumed, true, errors + 1, triple, interpolations, false, false)
+    frontDetailedScanResult(kind, consumed, true, errors + 1, triple, interpolations, false, false, false)
 }
 
 pub fn frontIdentScan(units: List<String>, start: Int, unitCount: Int) -> FrontScanResult {
@@ -2330,15 +2356,19 @@ pub fn frontNumberScan(units: List<String>, start: Int, unitCount: Int) -> Front
                 break
             }
         }
+        let badSep = frontHasBadNumericSeparator(units, start + 2, start + consumed, 16)
+        let upError = frontUppercaseBaseError(prefix)
+        let errs = if badSep { upError + 1 } else { upError }
         return frontDetailedScanResult(
             FrontInt,
             consumed,
             true,
-            frontUppercaseBaseError(prefix),
+            errs,
             false,
             0,
             true,
             prefix == "X",
+            badSep,
         )
     }
     if first == "0" && (prefix == "b" || prefix == "B") {
@@ -2351,15 +2381,19 @@ pub fn frontNumberScan(units: List<String>, start: Int, unitCount: Int) -> Front
                 break
             }
         }
+        let badSep = frontHasBadNumericSeparator(units, start + 2, start + consumed, 2)
+        let upError = frontUppercaseBaseError(prefix)
+        let errs = if badSep { upError + 1 } else { upError }
         return frontDetailedScanResult(
             FrontInt,
             consumed,
             true,
-            frontUppercaseBaseError(prefix),
+            errs,
             false,
             0,
             true,
             prefix == "B",
+            badSep,
         )
     }
     if first == "0" && (prefix == "o" || prefix == "O") {
@@ -2372,15 +2406,19 @@ pub fn frontNumberScan(units: List<String>, start: Int, unitCount: Int) -> Front
                 break
             }
         }
+        let badSep = frontHasBadNumericSeparator(units, start + 2, start + consumed, 8)
+        let upError = frontUppercaseBaseError(prefix)
+        let errs = if badSep { upError + 1 } else { upError }
         return frontDetailedScanResult(
             FrontInt,
             consumed,
             true,
-            frontUppercaseBaseError(prefix),
+            errs,
             false,
             0,
             true,
             prefix == "O",
+            badSep,
         )
     }
 
@@ -2411,7 +2449,41 @@ pub fn frontNumberScan(units: List<String>, start: Int, unitCount: Int) -> Front
             break
         }
     }
-    frontScanResult(kind, consumed, true)
+    let badSep = frontHasBadNumericSeparator(units, start, start + consumed, 10)
+    let errs = if badSep { 1 } else { 0 }
+    frontDetailedScanResult(kind, consumed, true, errs, false, 0, false, false, badSep)
+}
+
+pub fn frontIsBaseDigit(unit: String, base: Int) -> Bool {
+    if base == 16 {
+        frontIsHexDigit(unit)
+    } else if base == 10 {
+        digitStringValue(unit) >= 0
+    } else if base == 8 {
+        unit >= "0" && unit <= "7"
+    } else if base == 2 {
+        unit == "0" || unit == "1"
+    } else {
+        false
+    }
+}
+
+pub fn frontHasBadNumericSeparator(
+    units: List<String>,
+    bodyStart: Int,
+    bodyEnd: Int,
+    base: Int,
+) -> Bool {
+    for idx in bodyStart..bodyEnd {
+        if frontUnitAt(units, idx) == "_" {
+            let prev = frontUnitAt(units, idx - 1)
+            let next = frontUnitAt(units, idx + 1)
+            if !(frontIsBaseDigit(prev, base) && frontIsBaseDigit(next, base)) {
+                return true
+            }
+        }
+    }
+    false
 }
 
 pub fn frontUppercaseBaseError(prefix: String) -> Int {
@@ -2989,6 +3061,7 @@ pub fn frontLexDiagnosticCodeName(code: FrontLexDiagnosticCode) -> String {
         FrontDiagUnknownEscape -> "E_LEX_UNKNOWN_ESCAPE",
         FrontDiagEmptyChar -> "E_LEX_EMPTY_CHAR",
         FrontDiagEmptyByte -> "E_LEX_EMPTY_BYTE",
+        FrontDiagBadNumericSeparator -> "E_LEX_BAD_NUMERIC_SEPARATOR",
     }
 }
 

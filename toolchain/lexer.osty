@@ -275,9 +275,10 @@ fn ostyLexDiagnosticCode(code: FrontLexDiagnosticCode) -> String {
         FrontDiagBadTripleIndent -> "E0006",
         FrontDiagUppercaseBasePrefix -> "E0002",
         FrontDiagUnknownEscape -> "E0003",
-        FrontDiagEmptyChar -> "E0001",
-        FrontDiagEmptyByte -> "E0001",
+        FrontDiagEmptyChar -> "E0009",
+        FrontDiagEmptyByte -> "E0009",
         FrontDiagIllegalCharacter -> "E0005",
+        FrontDiagBadNumericSeparator -> "E0008",
     }
 }
 
@@ -294,6 +295,7 @@ fn ostyLexDiagnosticMessage(units: List<String>, d: FrontLexDiagnostic) -> Strin
         FrontDiagEmptyChar -> ostyCharDiagnosticMessage(units, d.start.offset, false),
         FrontDiagEmptyByte -> ostyCharDiagnosticMessage(units, d.start.offset, true),
         FrontDiagIllegalCharacter -> "illegal character",
+        FrontDiagBadNumericSeparator -> "numeric separator `_` must appear between two digits",
     }
 }
 
@@ -329,6 +331,7 @@ fn ostyLexDiagnosticHint(code: FrontLexDiagnosticCode) -> String {
         FrontDiagUnknownEscape -> "",
         FrontDiagEmptyChar -> "",
         FrontDiagEmptyByte -> "",
+        FrontDiagBadNumericSeparator -> "place `_` only between two digits",
     }
 }
 

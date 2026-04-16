@@ -45,4 +45,16 @@ pub fn sink() {
     let em: Map<String, Int> = {:}
     let t = (1, "two", 3.0)
     let one = (42,)
+
+    // Underscore separators — every permitted placement (between digits).
+    let u1 = 1_000
+    let u2 = 0xDEAD_BEEF
+    let u3 = 0b1010_1010
+    let u4 = 0o7_7_7
+    let u5 = 1_000.5
+    let u6 = 1.5e1_0
+
+    // Multi-byte UTF-8 content — position/column sanity for downstream tools.
+    let utf = "길 \u{1F600} 끝"
+    let emoji = '🦀'
 }

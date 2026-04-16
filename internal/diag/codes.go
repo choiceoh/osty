@@ -69,6 +69,35 @@ const (
 	// Fix: replace `=>` with `->`.
 	CodeFatArrowRemoved = "E0007"
 
+	// A numeric literal places `_` outside the allowed between-digits position.
+	//
+	// `_` may only appear between two digits of the same base. Leading
+	// underscores after a base prefix, trailing underscores, consecutive
+	// underscores, and underscores adjacent to `.` or `e`/`E` are all rejected.
+	//
+	// Spec: v0.4 §1.6.1
+	// Example:
+	//   let a = 1_            // trailing
+	//   let b = 0x_FF         // after base prefix
+	//   let c = 1__000        // consecutive
+	// Fix: place `_` only between two digits.
+	CodeBadNumericSeparator = "E0008"
+
+	// A char or byte literal is empty, holds more than one Unicode scalar,
+	// or holds a non-ASCII scalar where only bytes are permitted.
+	//
+	// Char literals hold exactly one Unicode scalar; byte literals (`b'...'`)
+	// hold exactly one ASCII scalar.
+	//
+	// Spec: v0.4 §1.6.4
+	// Example:
+	//   let a = ''             // empty
+	//   let b = b'\u{1F600}'   // non-ASCII byte
+	//   let c = 'ab'           // multiple scalars
+	// Fix: put exactly one Unicode scalar between the quotes
+	//      (ASCII only for `b'...'`).
+	CodeBadCharLiteral = "E0009"
+
 	// Declarations & statements.
 
 	// A token that cannot begin a top-level declaration appeared where one was expected.
