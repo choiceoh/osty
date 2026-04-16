@@ -90,6 +90,14 @@ fn testDiagnosticFormatsResolveDiagnosticsWithLocations() {
     assertDiagnosticTextContains(output, "undefined name `missing`")
 }
 
+fn testDiagnosticFormatsResolveHints() {
+    let source = "fn main() \{\n    let value = 1\n    vaule\n\}\n"
+    let result = selfResolveSource(source)
+    let output = diagnosticFormatSelfResolveDiagnostics(source, result)
+
+    assertDiagnosticTextContains(output, "hint=\"did you mean `value`?\"")
+}
+
 fn testDiagnosticFormatsLintDiagnosticsWithLocations() {
     let source = "fn same(x: Int) -> Bool \{\n    x == (x)\n\}\n"
     let report = selfLintSource(source)
