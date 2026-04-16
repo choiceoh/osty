@@ -14,16 +14,12 @@ import (
 type Name string
 
 const (
-	// NameGo is retained only for selfhostgen bootstrap runs.
-	NameGo   Name = "go"
 	NameLLVM Name = "llvm"
 )
 
 // ParseName converts a CLI/config backend name into a Name.
 func ParseName(s string) (Name, error) {
 	switch Name(s) {
-	case NameGo:
-		return NameGo, nil
 	case NameLLVM:
 		return NameLLVM, nil
 	default:
@@ -36,7 +32,7 @@ func (n Name) String() string { return string(n) }
 // Valid reports whether n is a known backend name.
 func (n Name) Valid() bool {
 	switch n {
-	case NameGo, NameLLVM:
+	case NameLLVM:
 		return true
 	default:
 		return false
@@ -47,17 +43,14 @@ func (n Name) Valid() bool {
 type EmitMode string
 
 const (
-	EmitGoSource EmitMode = "go"
-	EmitLLVMIR   EmitMode = "llvm-ir"
-	EmitObject   EmitMode = "object"
-	EmitBinary   EmitMode = "binary"
+	EmitLLVMIR EmitMode = "llvm-ir"
+	EmitObject EmitMode = "object"
+	EmitBinary EmitMode = "binary"
 )
 
 // ParseEmitMode converts a CLI/config emit mode into an EmitMode.
 func ParseEmitMode(s string) (EmitMode, error) {
 	switch EmitMode(s) {
-	case EmitGoSource:
-		return EmitGoSource, nil
 	case EmitLLVMIR:
 		return EmitLLVMIR, nil
 	case EmitObject:
@@ -74,7 +67,7 @@ func (m EmitMode) String() string { return string(m) }
 // Valid reports whether m is a known emit mode.
 func (m EmitMode) Valid() bool {
 	switch m {
-	case EmitGoSource, EmitLLVMIR, EmitObject, EmitBinary:
+	case EmitLLVMIR, EmitObject, EmitBinary:
 		return true
 	default:
 		return false
@@ -84,8 +77,6 @@ func (m EmitMode) Valid() bool {
 // ValidFor reports whether backend n can produce emit mode m.
 func (m EmitMode) ValidFor(n Name) bool {
 	switch n {
-	case NameGo:
-		return m == EmitGoSource || m == EmitBinary
 	case NameLLVM:
 		return m == EmitLLVMIR || m == EmitObject || m == EmitBinary
 	default:
@@ -110,8 +101,7 @@ func ValidateEmit(n Name, m EmitMode) error {
 
 // Backend is implemented by concrete code-generation backends.
 //
-// The public compiler path is the self-hosted native backend. The Go backend
-// is available only in selfhostgen bootstrap builds.
+// The public compiler path is the self-hosted native backend.
 type Backend interface {
 	Name() Name
 	Emit(context.Context, Request) (*Result, error)

@@ -1,13 +1,9 @@
-//go:build !selfhostgen
-
 package main
 
 import (
 	"flag"
 	"fmt"
 	"os"
-
-	"github.com/osty/osty/internal/backend"
 )
 
 func runTest(args []string, flags cliFlags) {
@@ -32,11 +28,7 @@ func runTest(args []string, flags cliFlags) {
 	_ = frozen
 	_ = pf
 
-	backendID, emitMode := resolveBackendAndEmitFlags("test", backendName, emitName)
-	if backendID != backend.NameLLVM || emitMode != backend.EmitBinary {
-		fmt.Fprintf(os.Stderr, "osty test: backend %q cannot execute tests with emit mode %q\n", backendID, emitMode)
-		os.Exit(2)
-	}
+	_, _ = resolveBackendAndEmitFlags("test", backendName, emitName)
 	fmt.Fprintln(os.Stderr, "osty test: native backend test harness is not implemented yet")
 	os.Exit(2)
 }

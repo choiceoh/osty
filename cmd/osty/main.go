@@ -16,7 +16,7 @@
 //	                             Inspect build profiles, target presets, features, cache.
 //	osty parse/tokens/resolve/check/typecheck/lint/fmt/repair
 //	                             Single-file/package front-end and source tools.
-//	osty gen <file.osty>         Emit a single file through go or llvm backend.
+//	osty gen <file.osty>         Emit a single file through the llvm backend.
 //	osty lsp                     Run the Language Server Protocol server on stdio.
 //	osty explain [CODE]          Describe a diagnostic code; with no arg, list every code.
 //	osty pipeline <file|dir>     Run every front-end phase and print per-stage timing.
@@ -1340,8 +1340,8 @@ func runFmt(args []string) {
 //
 // Exit codes:
 //
-//	0   transpilation succeeded
-//	1   unrecoverable I/O error, or transpile returned an error even
+//	0   emission succeeded
+//	1   unrecoverable I/O error, or backend emission returned an error even
 //	    after partial output
 //	2   usage error (missing path, unknown flag), or parse/resolve/check
 //	    failures that would produce garbage backend output
@@ -1372,8 +1372,8 @@ func runGen(args []string, flags cliFlags) {
 		os.Exit(1)
 	}
 
-	// Emitting Go from a broken AST would cascade nonsense, so abort on
-	// any front-end error before calling into gen.
+	// Emitting LLVM IR from a broken AST would cascade nonsense, so
+	// abort on any front-end error before calling into the backend.
 	file, parseDiags := parser.ParseDiagnostics(src)
 	res := resolveFile(file)
 	chk := check.File(file, res, checkOptsForSource(src))
@@ -1456,14 +1456,10 @@ func adjustGenResultForUserOutput(result *backend.Result, name backend.Name, out
 	}
 	result.Artifacts.RuntimeDir = ""
 	if outPath == "" {
-		result.Artifacts.GoSource = ""
 		result.Artifacts.LLVMIR = ""
 		return
 	}
-	switch name {
-	case backend.NameGo:
-		result.Artifacts.GoSource = outPath
-	case backend.NameLLVM:
+	if name == backend.NameLLVM {
 		result.Artifacts.LLVMIR = outPath
 	}
 }

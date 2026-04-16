@@ -230,24 +230,19 @@ func configuredGenEmit(cfg Config, name backend.Name) backend.EmitMode {
 	if cfg.GenEmit != "" {
 		return cfg.GenEmit
 	}
-	if name == backend.NameLLVM {
-		return backend.EmitLLVMIR
-	}
-	return backend.EmitGoSource
+	_ = name
+	return backend.EmitLLVMIR
 }
 
 func genArtifactLabel(name backend.Name, mode backend.EmitMode) string {
-	if name == backend.NameLLVM || mode == backend.EmitLLVMIR {
-		return "LLVM IR"
-	}
-	return "Go"
+	_ = name
+	_ = mode
+	return "LLVM IR"
 }
 
 func genHeader(name backend.Name, path string) string {
-	if name == backend.NameLLVM {
-		return fmt.Sprintf("\n; ---- %s ----\n", path)
-	}
-	return fmt.Sprintf("\n// ---- %s ----\n", path)
+	_ = name
+	return fmt.Sprintf("\n; ---- %s ----\n", path)
 }
 
 func emitConfiguredGen(cfg Config, pkgName string, file *ast.File, res *resolve.Result, chk *check.Result, sourcePath string) ([]byte, error) {
@@ -441,9 +436,9 @@ func RunWithConfig(src []byte, stream io.Writer, cfg Config) Result {
 	})
 
 	// --- gen (optional) ---
-	// The transpiler is only meaningful on a clean front-end: a check
-	// error means the type info gen relies on is partial, and the Go
-	// it would emit is at best unhelpful. We still run gen if the user
+	// Backend emission is only meaningful on a clean front-end: a
+	// check error means the type info gen relies on is partial, and the
+	// IR/object it would emit is at best unhelpful. We still run gen if the user
 	// asked, but report the error in the stage stats so the table
 	// makes the situation obvious.
 	if cfg.RunGen {
@@ -609,7 +604,7 @@ func RunPackage(dir string, stream io.Writer, cfg Config) (Result, error) {
 		Counts:   map[string]int{"findings": len(lintDiags)},
 	})
 
-	// gen (optional, per-file aggregated). The transpiler is per-file;
+	// gen (optional, per-file aggregated). Backend emission is per-file;
 	// in package mode we run it once per file with that file's
 	// resolve view but the shared check.Result, then sum bytes-out
 	// and surface the first fatal error. Output bytes are concatenated

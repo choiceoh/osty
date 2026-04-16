@@ -27,14 +27,7 @@ func defaultEmitMode(tool string, name backend.Name) backend.EmitMode {
 }
 
 func parseCLIBackend(raw string) (backend.Name, error) {
-	name, err := backend.ParseName(raw)
-	if err != nil {
-		return "", err
-	}
-	if name == backend.NameGo && !allowGoBackend {
-		return "", fmt.Errorf("backend %q has been removed from the public compiler path; use %q", name, backend.NameLLVM)
-	}
-	return name, nil
+	return backend.ParseName(raw)
 }
 
 func parseCLIEmitMode(raw string) (backend.EmitMode, error) {
@@ -48,18 +41,8 @@ func parseCLIEmitMode(raw string) (backend.EmitMode, error) {
 func validateCLIEmit(tool string, name backend.Name, mode backend.EmitMode) error {
 	switch tool {
 	case "gen", "pipeline":
-		switch name {
-		case backend.NameGo:
-			if !allowGoBackend {
-				return fmt.Errorf("backend %q has been removed from the public compiler path; use %q", name, backend.NameLLVM)
-			}
-			if mode != backend.EmitGoSource {
-				return fmt.Errorf("%s with backend %q cannot emit %q (want %q)", tool, name, mode, backend.EmitGoSource)
-			}
-		case backend.NameLLVM:
-			if mode != backend.EmitLLVMIR {
-				return fmt.Errorf("%s with backend %q cannot emit %q (want %q)", tool, name, mode, backend.EmitLLVMIR)
-			}
+		if mode != backend.EmitLLVMIR {
+			return fmt.Errorf("%s with backend %q cannot emit %q (want %q)", tool, name, mode, backend.EmitLLVMIR)
 		}
 	case "run", "test":
 		if mode != backend.EmitBinary {

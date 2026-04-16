@@ -16,7 +16,7 @@ import (
 )
 
 // SymbolKind classifies a symbol so downstream phases (type checker,
-// transpiler) can branch on what was declared.
+// backend emitter) can branch on what was declared.
 type SymbolKind int
 
 const (
