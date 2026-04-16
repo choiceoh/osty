@@ -21,7 +21,7 @@ fn describe(value: Maybe) -> String {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "core",
 		SourcePath:  "/tmp/match_guard_payload.osty",
 	})
@@ -62,7 +62,7 @@ fn choose(flag: Bool, kind: Kind) -> Int {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "core",
 		SourcePath:  "/tmp/match_guard_tag.osty",
 	})

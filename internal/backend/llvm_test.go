@@ -236,6 +236,26 @@ func TestLLVMBackendEmitLLVMIRFromIRWithoutASTFallback(t *testing.T) {
 	}
 }
 
+// TestLLVMBackendRefusesNilIR confirms the dispatcher's IR-only
+// contract: without req.Entry.IR the backend must reject the request
+// rather than silently fall through to any AST-based path (no such
+// path exists any more).
+func TestLLVMBackendRefusesNilIR(t *testing.T) {
+	tc := &fakeLLVMToolchain{}
+	backend := LLVMBackend{toolchain: tc}
+	req := newBackendRequest(t, EmitLLVMIR, `fn main() { println(1) }`)
+	req.Entry.IR = nil
+	// File is still populated; if the dispatcher secretly consulted it
+	// the test would pass by accident — we want a hard reject instead.
+	_, err := backend.Emit(context.Background(), req)
+	if err == nil {
+		t.Fatal("expected error when IR is nil, got none")
+	}
+	if !strings.Contains(err.Error(), "missing lowered IR entry") {
+		t.Fatalf("expected IR-missing diagnostic, got: %v", err)
+	}
+}
+
 func TestLLVMBackendBinaryRunsBundledRuntime(t *testing.T) {
 	if _, err := exec.LookPath("clang"); err != nil {
 		t.Skip("clang not found on PATH")

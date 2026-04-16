@@ -21,7 +21,7 @@ fn main() {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "main",
 		SourcePath:  "/tmp/if_let_payload_stmt.osty",
 	})
@@ -57,7 +57,7 @@ fn score(value: Maybe) -> Int {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "core",
 		SourcePath:  "/tmp/if_let_payload_expr.osty",
 	})
@@ -93,7 +93,7 @@ fn main() {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "main",
 		SourcePath:  "/tmp/if_let_qualified_variant.osty",
 	})

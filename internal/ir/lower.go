@@ -121,17 +121,14 @@ func (l *lowerer) lowerFnDecl(fn *ast.FnDecl) *FnDecl {
 }
 
 func (l *lowerer) lowerParam(p *ast.Param) *Param {
-	name := p.Name
-	if name == "" && p.Pattern != nil {
-		// Pattern-destructured closure params aren't representable yet;
-		// record an issue and fall back to a placeholder.
-		l.note("pattern-destructured parameter at %v not yet supported", p.Pos())
-		name = "_"
-	}
 	out := &Param{
-		Name:  name,
 		Type:  l.lowerType(p.Type),
 		SpanV: nodeSpan(p),
+	}
+	if p.Name != "" {
+		out.Name = p.Name
+	} else if p.Pattern != nil {
+		out.Pattern = l.lowerPattern(p.Pattern)
 	}
 	if p.Default != nil {
 		out.Default = l.lowerExpr(p.Default)
@@ -255,12 +252,15 @@ func (l *lowerer) lowerType(t ast.Type) Type {
 // NamedType (with Builtin flag populated from the resolver when
 // available), or a TypeVar for generic parameter references.
 func (l *lowerer) lowerNamedType(nt *ast.NamedType) Type {
-	// Qualified paths (pkg.Type) are kept as a dotted string for now;
-	// the current IR has no first-class package concept.
 	name := nt.Path[len(nt.Path)-1]
+	pkg := ""
+	if len(nt.Path) > 1 {
+		pkg = joinDottedPath(nt.Path[:len(nt.Path)-1])
+	}
 
-	// Primitive scalars short-circuit.
-	if len(nt.Path) == 1 && len(nt.Args) == 0 {
+	// Primitive scalars short-circuit — only when bare (no qualifier, no
+	// type args).
+	if pkg == "" && len(nt.Args) == 0 {
 		if p := primitiveByName(name); p != nil {
 			return p
 		}
@@ -281,15 +281,30 @@ func (l *lowerer) lowerNamedType(nt *ast.NamedType) Type {
 					return p
 				}
 			}
-			return &NamedType{Name: sym.Name, Args: args, Builtin: true}
+			return &NamedType{Package: pkg, Name: sym.Name, Args: args, Builtin: true}
 		case resolve.SymGeneric:
 			return &TypeVar{Name: sym.Name, Owner: ""}
 		}
-		return &NamedType{Name: sym.Name, Args: args}
+		return &NamedType{Package: pkg, Name: sym.Name, Args: args}
 	}
 
 	// No resolver data available — best effort on the source name.
-	return &NamedType{Name: name, Args: args}
+	return &NamedType{Package: pkg, Name: name, Args: args}
+}
+
+// joinDottedPath joins a non-empty string slice with '.'.
+func joinDottedPath(parts []string) string {
+	switch len(parts) {
+	case 0:
+		return ""
+	case 1:
+		return parts[0]
+	}
+	out := parts[0]
+	for _, p := range parts[1:] {
+		out += "." + p
+	}
+	return out
 }
 
 func (l *lowerer) typeRef(nt *ast.NamedType) *resolve.Symbol {
@@ -376,15 +391,19 @@ func (l *lowerer) fromCheckerType(t types.Type) Type {
 	case *types.Named:
 		name := "?"
 		builtin := false
+		pkg := ""
 		if t.Sym != nil {
 			name = t.Sym.Name
 			builtin = t.Sym.Kind == resolve.SymBuiltin
+			if t.Sym.Package != nil {
+				pkg = t.Sym.Package.Name
+			}
 		}
 		args := make([]Type, len(t.Args))
 		for i, a := range t.Args {
 			args[i] = l.fromCheckerType(a)
 		}
-		return &NamedType{Name: name, Args: args, Builtin: builtin}
+		return &NamedType{Package: pkg, Name: name, Args: args, Builtin: builtin}
 	case *types.TypeVar:
 		name := "?"
 		if t.Sym != nil {
@@ -581,18 +600,19 @@ func (l *lowerer) lowerForStmt(s *ast.ForStmt) Stmt {
 	if s.Pattern == nil && s.Iter != nil {
 		return &ForStmt{Kind: ForWhile, Cond: l.lowerExpr(s.Iter), Body: body, SpanV: nodeSpan(s)}
 	}
-	name, _ := simpleBindName(s.Pattern)
-	// Non-ident patterns lower to a tuple-style ForIn with a
-	// destructuring binding in the body. For now we keep Var empty and
-	// annotate the issue; a follow-on can introduce ForDestructure.
-	if name == "" {
-		l.note("for with destructuring pattern at %v collapsed to ForIn with unnamed var", s.Pos())
+	var loopVar string
+	var loopPat Pattern
+	if name, ok := simpleBindName(s.Pattern); ok {
+		loopVar = name
+	} else {
+		loopPat = l.lowerPattern(s.Pattern)
 	}
 	// for x in a..b is a numeric range loop.
 	if r, ok := s.Iter.(*ast.RangeExpr); ok && r.Start != nil && r.Stop != nil {
 		return &ForStmt{
 			Kind:      ForRange,
-			Var:       name,
+			Var:       loopVar,
+			Pattern:   loopPat,
 			Start:     l.lowerExpr(r.Start),
 			End:       l.lowerExpr(r.Stop),
 			Inclusive: r.Inclusive,
@@ -600,7 +620,14 @@ func (l *lowerer) lowerForStmt(s *ast.ForStmt) Stmt {
 			SpanV:     nodeSpan(s),
 		}
 	}
-	return &ForStmt{Kind: ForIn, Var: name, Iter: l.lowerExpr(s.Iter), Body: body, SpanV: nodeSpan(s)}
+	return &ForStmt{
+		Kind:    ForIn,
+		Var:     loopVar,
+		Pattern: loopPat,
+		Iter:    l.lowerExpr(s.Iter),
+		Body:    body,
+		SpanV:   nodeSpan(s),
+	}
 }
 
 // assignOp maps a token kind to the IR AssignOp.
@@ -884,11 +911,7 @@ func (l *lowerer) lowerCall(e *ast.CallExpr) Expr {
 		if k, isIntrinsic := intrinsicByName(id.Name); isIntrinsic {
 			out := &IntrinsicCall{Kind: k, SpanV: nodeSpan(e)}
 			for _, a := range e.Args {
-				if a.Name != "" {
-					l.note("keyword arg to intrinsic %s at %v not supported", id.Name, a.Pos())
-					continue
-				}
-				out.Args = append(out.Args, l.lowerExpr(a.Value))
+				out.Args = append(out.Args, l.lowerArg(a))
 			}
 			return out
 		}
@@ -908,15 +931,9 @@ func (l *lowerer) lowerCall(e *ast.CallExpr) Expr {
 	}
 	// Method call: x.name(args).
 	if fx, ok := fn.(*ast.FieldExpr); ok {
-		// But `Enum.Variant(args)` is a qualified variant constructor,
-		// not a method call — detect via the resolved symbol.
 		if id, ok := fx.X.(*ast.Ident); ok {
 			if sym := l.symbol(id); sym != nil &&
 				(sym.Kind == resolve.SymEnum || sym.Kind == resolve.SymStruct) {
-				// Lookup whether fx.Name is a variant on this enum. We
-				// approximate: if the checker assigned the whole call
-				// a Named type whose Sym is an enum, treat it as a
-				// variant constructor.
 				if l.isVariantOfEnum(sym, fx.Name) {
 					return l.lowerVariantCall(e, sym.Name, fx.Name)
 				}
@@ -924,16 +941,47 @@ func (l *lowerer) lowerCall(e *ast.CallExpr) Expr {
 		}
 		return l.lowerMethodCall(e, fx, typeArgs)
 	}
+	// Fall back to the checker's monomorphisation record when no
+	// turbofish was written but the callee is generic.
+	if len(typeArgs) == 0 {
+		typeArgs = l.instantiationArgs(e)
+	}
 	out := &CallExpr{
-		Callee: l.lowerExpr(fn),
-		T:      l.exprType(e),
-		SpanV:  nodeSpan(e),
+		Callee:   l.lowerExpr(fn),
+		TypeArgs: typeArgs,
+		T:        l.exprType(e),
+		SpanV:    nodeSpan(e),
 	}
 	for _, a := range e.Args {
-		if a.Name != "" {
-			l.note("keyword arg at %v collapsed to positional in IR", a.Pos())
-		}
-		out.Args = append(out.Args, l.lowerExpr(a.Value))
+		out.Args = append(out.Args, l.lowerArg(a))
+	}
+	return out
+}
+
+// lowerArg lowers a single call argument, preserving its keyword name
+// when present.
+func (l *lowerer) lowerArg(a *ast.Arg) Arg {
+	return Arg{
+		Name:  a.Name,
+		Value: l.lowerExpr(a.Value),
+		SpanV: Span{Start: posFromToken(a.Pos()), End: posFromToken(a.End())},
+	}
+}
+
+// instantiationArgs returns the concrete type-argument list the
+// checker recorded for this call site (monomorphisation info), or nil
+// when the checker did not annotate it.
+func (l *lowerer) instantiationArgs(e *ast.CallExpr) []Type {
+	if l.chk == nil || l.chk.Instantiations == nil {
+		return nil
+	}
+	raw, ok := l.chk.Instantiations[e]
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	out := make([]Type, 0, len(raw))
+	for _, ta := range raw {
+		out = append(out, l.fromCheckerType(ta))
 	}
 	return out
 }
@@ -960,6 +1008,9 @@ func (l *lowerer) isVariantOfEnum(sym *resolve.Symbol, variantName string) bool 
 // lowerMethodCall lowers `receiver.name(args)` into an IR MethodCall,
 // preserving turbofish type arguments.
 func (l *lowerer) lowerMethodCall(e *ast.CallExpr, fx *ast.FieldExpr, typeArgs []Type) Expr {
+	if len(typeArgs) == 0 {
+		typeArgs = l.instantiationArgs(e)
+	}
 	out := &MethodCall{
 		Receiver: l.lowerExpr(fx.X),
 		Name:     fx.Name,
@@ -968,10 +1019,7 @@ func (l *lowerer) lowerMethodCall(e *ast.CallExpr, fx *ast.FieldExpr, typeArgs [
 		SpanV:    nodeSpan(e),
 	}
 	for _, a := range e.Args {
-		if a.Name != "" {
-			l.note("keyword arg at %v collapsed to positional in IR", a.Pos())
-		}
-		out.Args = append(out.Args, l.lowerExpr(a.Value))
+		out.Args = append(out.Args, l.lowerArg(a))
 	}
 	return out
 }
@@ -987,11 +1035,7 @@ func (l *lowerer) lowerVariantCall(e *ast.CallExpr, enum, variant string) Expr {
 		SpanV:   nodeSpan(e),
 	}
 	for _, a := range e.Args {
-		if a.Name != "" {
-			l.note("keyword arg to variant %s at %v not supported", variant, a.Pos())
-			continue
-		}
-		out.Args = append(out.Args, l.lowerExpr(a.Value))
+		out.Args = append(out.Args, l.lowerArg(a))
 	}
 	return out
 }
@@ -1262,16 +1306,26 @@ func (l *lowerer) lowerClosure(c *ast.ClosureExpr) Expr {
 		lowered := l.lowerExpr(c.Body)
 		out.Body = &Block{Result: lowered, SpanV: lowered.At()}
 	}
+	// Compute free-variable captures.
+	out.Captures = ComputeCaptures(out.Body, out.Params)
 	return out
 }
 
 func (l *lowerer) lowerTurbofish(tf *ast.TurbofishExpr) Expr {
-	// A bare turbofish without a call (`f::<Int>`) is rare but legal;
-	// most appearances are stripped by lowerCall. We retain the base
-	// expression and drop the type args when not consumed, since we
-	// can't currently represent "identifier with type args" cleanly.
-	l.note("bare turbofish at %v collapsed; type args dropped", tf.Pos())
-	return l.lowerExpr(tf.Base)
+	// A bare turbofish without a call (`f::<Int>`) — retain the type
+	// args on the underlying ident so backends that monomorphise off
+	// function references can observe them.
+	base := l.lowerExpr(tf.Base)
+	typeArgs := make([]Type, 0, len(tf.Args))
+	for _, a := range tf.Args {
+		typeArgs = append(typeArgs, l.lowerType(a))
+	}
+	if id, ok := base.(*Ident); ok {
+		id.TypeArgs = typeArgs
+		return id
+	}
+	l.note("bare turbofish at %v attached to non-ident base; type args dropped", tf.Pos())
+	return base
 }
 
 func (l *lowerer) lowerMatchExpr(m *ast.MatchExpr) Expr {
@@ -1291,6 +1345,8 @@ func (l *lowerer) lowerMatchExpr(m *ast.MatchExpr) Expr {
 		a.Body = l.lowerArmBody(arm.Body)
 		out.Arms = append(out.Arms, a)
 	}
+	// Compile a decision tree when the arm shapes are specialisable.
+	out.Tree = CompileDecisionTree(out.Scrutinee.Type(), out.Arms)
 	return out
 }
 

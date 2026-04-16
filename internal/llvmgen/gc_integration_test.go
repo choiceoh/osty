@@ -12,7 +12,7 @@ func TestGenerateVoidFunctionReleasesManagedRoots(t *testing.T) {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "core",
 		SourcePath:  "/tmp/void_gc_roots.osty",
 	})
@@ -64,7 +64,7 @@ fn main() {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "main",
 		SourcePath:  "/tmp/gc_safepoint_roots.osty",
 	})
@@ -106,7 +106,7 @@ fn main() {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "main",
 		SourcePath:  "/tmp/method_receivers.osty",
 	})
@@ -152,7 +152,7 @@ fn main() {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "main",
 		SourcePath:  "/tmp/enum_struct_field.osty",
 	})
@@ -191,7 +191,7 @@ fn main() {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "main",
 		SourcePath:  "/tmp/managed_aggregate_list_gc.osty",
 	})

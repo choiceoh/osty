@@ -15,7 +15,7 @@ fn maybeName(profile: Profile?) -> String? {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "core",
 		SourcePath:  "/tmp/optional_field.osty",
 	})
@@ -51,7 +51,7 @@ fn maybeDisplay(profile: Profile?) -> String? {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "core",
 		SourcePath:  "/tmp/optional_method.osty",
 	})
@@ -81,7 +81,7 @@ fn parts() -> List<String> {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "core",
 		SourcePath:  "/tmp/optional_runtime_ffi.osty",
 	})
@@ -111,7 +111,7 @@ fn requireName(profile: Profile?) -> String? {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "core",
 		SourcePath:  "/tmp/optional_question.osty",
 	})

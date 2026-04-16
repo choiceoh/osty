@@ -165,7 +165,13 @@ var (
 // distinguishes prelude-provided names (List, Map, Set, Option, Result)
 // from user declarations; backends commonly need that distinction to
 // choose between a runtime primitive and a user type.
+//
+// Package is the qualifier preceding the name (empty for bare names).
+// For multi-segment paths like `pkg.sub.Type`, the Package string
+// preserves the dotted prefix so backends can route to the right package
+// without ambiguity.
 type NamedType struct {
+	Package string
 	Name    string
 	Args    []Type
 	Builtin bool
@@ -174,20 +180,32 @@ type NamedType struct {
 func (*NamedType) typeNode() {}
 
 func (n *NamedType) String() string {
-	if len(n.Args) == 0 {
+	var b strings.Builder
+	if n.Package != "" {
+		b.WriteString(n.Package)
+		b.WriteByte('.')
+	}
+	b.WriteString(n.Name)
+	if len(n.Args) > 0 {
+		b.WriteByte('<')
+		for i, a := range n.Args {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			b.WriteString(typeString(a))
+		}
+		b.WriteByte('>')
+	}
+	return b.String()
+}
+
+// QualifiedName returns "pkg.Name" when Package is non-empty, otherwise
+// just Name. Useful for debug output and when comparing paths.
+func (n *NamedType) QualifiedName() string {
+	if n.Package == "" {
 		return n.Name
 	}
-	var b strings.Builder
-	b.WriteString(n.Name)
-	b.WriteByte('<')
-	for i, a := range n.Args {
-		if i > 0 {
-			b.WriteString(", ")
-		}
-		b.WriteString(typeString(a))
-	}
-	b.WriteByte('>')
-	return b.String()
+	return n.Package + "." + n.Name
 }
 
 // OptionalType is the surface form `T?`. Kept distinct from
@@ -303,14 +321,24 @@ func (f *FnDecl) DeclName() string { return f.Name }
 
 // Param is one function / method parameter. Default is an already
 // lowered expression or nil when absent.
+//
+// Pattern is non-nil for destructured parameters such as
+// `|(a, b)|` or `|User { name }|`. When Pattern is set, Name is empty
+// and backends destructure the incoming value against the pattern.
+// Simple name-bound params keep Pattern nil and Name populated.
 type Param struct {
 	Name    string
+	Pattern Pattern
 	Type    Type
 	Default Expr
 	SpanV   Span
 }
 
 func (p *Param) At() Span { return p.SpanV }
+
+// IsDestructured reports whether the parameter uses a destructuring
+// pattern rather than a bare name.
+func (p *Param) IsDestructured() bool { return p != nil && p.Pattern != nil }
 
 // TypeParam is a generic type parameter `T` with optional bounds. The
 // bounds are interface names (already-lowered NamedType).
@@ -515,15 +543,20 @@ const (
 //	In:       Var, Iter, Body
 type ForStmt struct {
 	Kind      ForKind
-	Var       string // loop variable (Range, In)
-	Cond      Expr   // While
-	Iter      Expr   // In
-	Start     Expr   // Range
-	End       Expr   // Range
-	Inclusive bool   // Range `..=`
+	Var       string  // loop variable for simple-name Range / In forms
+	Pattern   Pattern // destructuring pattern for In / Range heads
+	Cond      Expr    // While
+	Iter      Expr    // In
+	Start     Expr    // Range
+	End       Expr    // Range
+	Inclusive bool    // Range `..=`
 	Body      *Block
 	SpanV     Span
 }
+
+// IsDestructured reports whether the loop head uses a destructuring
+// pattern rather than a bare identifier.
+func (f *ForStmt) IsDestructured() bool { return f != nil && f.Pattern != nil }
 
 func (*ForStmt) stmtNode()  {}
 func (f *ForStmt) At() Span { return f.SpanV }
@@ -651,11 +684,17 @@ const (
 // Ident is a name reference. Kind distinguishes locals from calls on
 // top-level fn names so the backend can rewrite user calls without a
 // second resolution pass.
+//
+// TypeArgs carries turbofish type arguments written without a following
+// call (`f::<Int>` when used as a value — e.g. as a function pointer).
+// Most idents leave TypeArgs empty; lowerCall lifts the turbofish into
+// CallExpr.TypeArgs instead of leaving it on the callee ident.
 type Ident struct {
-	Name  string
-	Kind  IdentKind
-	T     Type
-	SpanV Span
+	Name     string
+	Kind     IdentKind
+	TypeArgs []Type
+	T        Type
+	SpanV    Span
 }
 
 func (*Ident) exprNode()    {}
@@ -726,12 +765,33 @@ func (*BinaryExpr) exprNode()    {}
 func (e *BinaryExpr) At() Span   { return e.SpanV }
 func (e *BinaryExpr) Type() Type { return e.T }
 
-// CallExpr is a user function / method / closure call.
+// Arg is one argument inside a call, method call, intrinsic call, or
+// variant constructor. Name is empty for positional arguments; for
+// keyword arguments it carries the parameter name written at the call
+// site (`greet(name: "Ada")` yields Arg{Name:"name", Value: StringLit}).
+type Arg struct {
+	Name  string
+	Value Expr
+	SpanV Span
+}
+
+// At returns the argument's source span.
+func (a Arg) At() Span { return a.SpanV }
+
+// IsKeyword reports whether the argument was written with a `name:`
+// prefix at the call site.
+func (a Arg) IsKeyword() bool { return a.Name != "" }
+
+// CallExpr is a user function / method / closure call. TypeArgs records
+// the concrete type arguments supplied at this call site (from
+// turbofish or propagated from the checker's monomorphisation info). It
+// is empty for non-generic calls.
 type CallExpr struct {
-	Callee Expr
-	Args   []Expr
-	T      Type
-	SpanV  Span
+	Callee   Expr
+	TypeArgs []Type
+	Args     []Arg
+	T        Type
+	SpanV    Span
 }
 
 func (*CallExpr) exprNode()    {}
@@ -755,7 +815,7 @@ const (
 // directly rather than string-matching on names.
 type IntrinsicCall struct {
 	Kind  IntrinsicKind
-	Args  []Expr
+	Args  []Arg
 	SpanV Span
 }
 
@@ -898,9 +958,15 @@ func (c *ChanSendStmt) At() Span { return c.SpanV }
 // equivalent expression form (MatchExpr) has a non-unit Type; when the
 // checker determined the match is used for side effects only, the
 // lowerer emits MatchStmt so backends don't synthesise a wasted value.
+//
+// Tree is an optional pre-compiled decision tree (see decision.go). It
+// is nil when the lowerer skipped compilation (disabled, or a pattern
+// shape the tree compiler does not yet handle) — backends should then
+// fall back to arm-by-arm evaluation using Arms.
 type MatchStmt struct {
 	Scrutinee Expr
 	Arms      []*MatchArm
+	Tree      DecisionNode
 	SpanV     Span
 }
 
@@ -942,7 +1008,7 @@ type MethodCall struct {
 	Receiver Expr
 	Name     string
 	TypeArgs []Type
-	Args     []Expr
+	Args     []Arg
 	T        Type
 	SpanV    Span
 }
@@ -1056,12 +1122,38 @@ func (c *CoalesceExpr) Type() Type { return c.T }
 // Closure is `|params| body` (short form) or `|params| -> T { body }`.
 // Body is always lowered as a *Block for uniformity; a single-
 // expression closure is wrapped with Result set and Stmts empty.
+// CaptureKind classifies how a name becomes available inside a closure
+// without being a parameter of that closure.
+type CaptureKind int
+
+const (
+	CaptureUnknown CaptureKind = iota
+	CaptureLocal               // outer `let` binding (stack local)
+	CaptureParam               // outer function / method parameter
+	CaptureGlobal              // top-level `let`
+	CaptureFn                  // top-level function reference
+	CaptureSelf                // enclosing method's receiver
+)
+
+// Capture is one free variable referenced by a closure.
+type Capture struct {
+	Name  string
+	Kind  CaptureKind
+	T     Type
+	Mut   bool
+	SpanV Span
+}
+
+// At returns the capture's source span (the first reference site).
+func (c *Capture) At() Span { return c.SpanV }
+
 type Closure struct {
-	Params []*Param
-	Return Type
-	Body   *Block
-	T      Type
-	SpanV  Span
+	Params   []*Param
+	Return   Type
+	Body     *Block
+	Captures []*Capture
+	T        Type
+	SpanV    Span
 }
 
 func (*Closure) exprNode()    {}
@@ -1074,7 +1166,7 @@ func (c *Closure) Type() Type { return c.T }
 type VariantLit struct {
 	Enum    string
 	Variant string
-	Args    []Expr
+	Args    []Arg
 	T       Type
 	SpanV   Span
 }
@@ -1083,10 +1175,13 @@ func (*VariantLit) exprNode()    {}
 func (v *VariantLit) At() Span   { return v.SpanV }
 func (v *VariantLit) Type() Type { return v.T }
 
-// MatchExpr is `match scrutinee { arm, ... }`.
+// MatchExpr is `match scrutinee { arm, ... }`. Tree is an optional
+// pre-compiled decision tree produced by CompileDecisionTree; it is
+// nil when the arm shapes are outside the compiler's current coverage.
 type MatchExpr struct {
 	Scrutinee Expr
 	Arms      []*MatchArm
+	Tree      DecisionNode
 	T         Type
 	SpanV     Span
 }

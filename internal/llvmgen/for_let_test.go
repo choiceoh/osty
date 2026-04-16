@@ -20,7 +20,7 @@ fn main() {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "main",
 		SourcePath:  "/tmp/for_let_payload_loop.osty",
 	})
@@ -58,7 +58,7 @@ fn main() {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "main",
 		SourcePath:  "/tmp/for_let_qualified_loop.osty",
 	})

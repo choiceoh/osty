@@ -1,6 +1,12 @@
 package ir
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
+
+func errDecision(s string) error            { return errors.New(s) }
+func errDecisionf(f string, a ...any) error { return fmt.Errorf(f, a...) }
 
 // Validate performs a light structural sanity check over an IR Module.
 // It does NOT re-run type checking — that's the front-end's job — but
@@ -129,6 +135,12 @@ func (v *validator) validateFnDecl(fn *FnDecl, allowNoBody bool) {
 		if p.Type == nil {
 			v.addf("fn %s: param %q nil Type", fn.Name, p.Name)
 		}
+		if p.Name == "" && p.Pattern == nil {
+			v.addf("fn %s: param[%d] has neither Name nor Pattern", fn.Name, i)
+		}
+		if p.Name != "" && p.Pattern != nil {
+			v.addf("fn %s: param %q has both Name and Pattern", fn.Name, p.Name)
+		}
 	}
 	if fn.Body == nil {
 		if !allowNoBody && !v.inInterface {
@@ -207,6 +219,9 @@ func (v *validator) validateStmt(s Stmt) {
 		} else {
 			v.validateBlock(s.Body)
 		}
+		if s.Var != "" && s.Pattern != nil {
+			v.addf("ForStmt: has both Var and Pattern")
+		}
 		switch s.Kind {
 		case ForWhile:
 			if s.Cond == nil {
@@ -219,6 +234,9 @@ func (v *validator) validateStmt(s Stmt) {
 				v.addf("ForStmt In: nil Iter")
 			} else {
 				v.validateExpr(s.Iter)
+			}
+			if s.Var == "" && s.Pattern == nil {
+				v.addf("ForStmt In: no loop binding")
 			}
 		case ForRange:
 			if s.Start == nil {
@@ -272,16 +290,16 @@ func (v *validator) validateExpr(e Expr) {
 	case *CallExpr:
 		v.validateExpr(e.Callee)
 		for _, a := range e.Args {
-			v.validateExpr(a)
+			v.validateArg(a)
 		}
 	case *IntrinsicCall:
 		for _, a := range e.Args {
-			v.validateExpr(a)
+			v.validateArg(a)
 		}
 	case *MethodCall:
 		v.validateExpr(e.Receiver)
 		for _, a := range e.Args {
-			v.validateExpr(a)
+			v.validateArg(a)
 		}
 	case *ListLit:
 		for _, el := range e.Elems {
@@ -326,9 +344,18 @@ func (v *validator) validateExpr(e Expr) {
 		v.validateExpr(e.Index)
 	case *Closure:
 		v.validateBlock(e.Body)
+		for i, c := range e.Captures {
+			if c == nil {
+				v.addf("Closure: capture[%d] nil", i)
+				continue
+			}
+			if c.Name == "" {
+				v.addf("Closure: capture[%d] empty Name", i)
+			}
+		}
 	case *VariantLit:
 		for _, a := range e.Args {
-			v.validateExpr(a)
+			v.validateArg(a)
 		}
 	case *BlockExpr:
 		v.validateBlock(e.Block)
@@ -376,5 +403,73 @@ func (v *validator) validateMatchArm(a *MatchArm) {
 		v.addf("MatchArm: nil Body")
 	} else {
 		v.validateBlock(a.Body)
+	}
+}
+
+// validateArg validates one call argument.
+func (v *validator) validateArg(a Arg) {
+	if a.Value == nil {
+		v.addf("Arg: nil Value")
+		return
+	}
+	v.validateExpr(a.Value)
+}
+
+// ValidateDecisionTree reports structural issues in a compiled
+// decision tree rooted at n. armCount bounds the valid arm indices.
+func ValidateDecisionTree(n DecisionNode, armCount int) []error {
+	if n == nil {
+		return nil
+	}
+	v := &decisionValidator{armCount: armCount}
+	v.walk(n)
+	return v.errs
+}
+
+type decisionValidator struct {
+	armCount int
+	errs     []error
+}
+
+func (v *decisionValidator) walk(n DecisionNode) {
+	switch n := n.(type) {
+	case nil:
+		v.errs = append(v.errs, errDecision("nil node"))
+	case *DecisionLeaf:
+		if n.ArmIndex < 0 || n.ArmIndex >= v.armCount {
+			v.errs = append(v.errs, errDecisionf("leaf: arm %d out of range [0,%d)", n.ArmIndex, v.armCount))
+		}
+	case *DecisionFail:
+		// terminal
+	case *DecisionBind:
+		if n.Next == nil {
+			v.errs = append(v.errs, errDecision("bind: nil Next"))
+		} else {
+			v.walk(n.Next)
+		}
+	case *DecisionGuard:
+		if n.Then == nil {
+			v.errs = append(v.errs, errDecision("guard: nil Then"))
+		} else {
+			v.walk(n.Then)
+		}
+		if n.Else == nil {
+			v.errs = append(v.errs, errDecision("guard: nil Else"))
+		} else {
+			v.walk(n.Else)
+		}
+	case *DecisionSwitch:
+		if n.Default == nil {
+			v.errs = append(v.errs, errDecision("switch: nil Default"))
+		} else {
+			v.walk(n.Default)
+		}
+		for i, c := range n.Cases {
+			if c.Body == nil {
+				v.errs = append(v.errs, errDecisionf("switch: case[%d] nil Body", i))
+				continue
+			}
+			v.walk(c.Body)
+		}
 	}
 }

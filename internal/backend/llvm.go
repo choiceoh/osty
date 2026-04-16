@@ -57,23 +57,15 @@ func (b LLVMBackend) Emit(ctx context.Context, req Request) (*Result, error) {
 		SourcePath:  req.Entry.SourcePath,
 		Target:      req.Layout.Target,
 	}
+	// IR is the sole input contract. The backend dispatcher never reaches
+	// for req.Entry.File — the AST is a front-end artifact that the LLVM
+	// backend does not consume directly any more.
 	irOut, genErr := llvmgen.GenerateModule(req.Entry.IR, opts)
-	var fallbackWarning error
-	if genErr != nil && req.Entry.File != nil && errors.Is(genErr, llvmgen.ErrUnsupported) {
-		bridgeErr := genErr
-		irOut, genErr = llvmgen.Generate(req.Entry.File, opts)
-		if genErr == nil {
-			fallbackWarning = fmt.Errorf("llvm backend: fell back to legacy AST bridge after IR lowering gap: %w", bridgeErr)
-		}
-	}
 	if genErr == nil {
 		if err := os.WriteFile(artifacts.LLVMIR, irOut, 0o644); err != nil {
 			return nil, err
 		}
 		warnings := append([]error(nil), req.Entry.IRIssues...)
-		if fallbackWarning != nil {
-			warnings = append(warnings, fallbackWarning)
-		}
 		out := &Result{
 			Backend:   NameLLVM,
 			Emit:      req.Emit,
