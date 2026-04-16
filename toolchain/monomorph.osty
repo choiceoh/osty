@@ -27,6 +27,17 @@ pub struct MonomorphMangled {
     pub symbol: String,
 }
 
+/// MonomorphTypeRequest is the struct/enum counterpart of MonomorphRequest.
+/// Go assembles the package name, the generic declaration's source name,
+/// and already-encoded type codes for each template argument; Osty only
+/// ever sees strings. Used by Phase 2 to mangle nominal type symbols
+/// separately from function symbols (Itanium `_ZTS` prefix).
+pub struct MonomorphTypeRequest {
+    pub pkg: String,
+    pub typeName: String,
+    pub typeArgCodes: List<String>,
+}
+
 /// monomorphPrimCode maps an Osty primitive source name to its Itanium
 /// ABI builtin-type code. Returns "" for non-primitives so callers can
 /// fall back to the nested / template encodings. The table mirrors
@@ -142,6 +153,20 @@ pub fn monomorphUserNested(pkg: String, name: String) -> String {
     "N{head}{tail}E"
 }
 
+/// monomorphUserTemplateNested produces the
+/// `N<pkg-len><pkg><name-len><name>I<argCodes>EE` encoding for
+/// user-declared generic nominal types referenced inside other type
+/// codes (e.g. `id::<Pair<Int, String>>` routes Pair through this so the
+/// enclosing function's symbol stays unique per type-argument tuple).
+/// `argCodes` is the already-encoded concatenation of template arg codes
+/// — callers that have an empty arg list should fall back to the
+/// non-template `monomorphUserNested` instead.
+pub fn monomorphUserTemplateNested(pkg: String, name: String, argCodes: String) -> String {
+    let head = monomorphLengthPrefix(pkg)
+    let tail = monomorphLengthPrefix(name)
+    "N{head}{tail}I{argCodes}EE"
+}
+
 /// monomorphTemplateArgs wraps a list of encoded type codes in the
 /// `I...E` template-argument bracket. Empty input returns "" — callers
 /// should therefore skip inserting template args when a function has no
@@ -199,12 +224,61 @@ pub fn monomorphMangleFnName(pkg: String, name: String) -> String {
     "N{pkgPart}{namePart}E"
 }
 
+/// monomorphMangleType assembles the final `_ZTS…` type-symbol for a
+/// generic struct or enum specialization. The `_ZTS` prefix is the
+/// Itanium ABI's "type-string" tag (§2.9.5): keeps nominal type symbols
+/// distinct from the `_Z` function-symbol namespace so tools that
+/// partition by prefix (profilers, demanglers, LLVM text-IR greps) can
+/// tell them apart at a glance.
+///
+/// An empty typeArgCodes list is treated as "caller should not have
+/// routed a non-generic nominal through the monomorphizer"; the function
+/// stays safe and emits a well-formed (if not particularly useful)
+/// symbol in that case.
+pub fn monomorphMangleType(req: MonomorphTypeRequest) -> MonomorphMangled {
+    let body = monomorphMangleTypeName(req.pkg, req.typeName, req.typeArgCodes)
+    MonomorphMangled { symbol: "_ZTS{body}" }
+}
+
+/// monomorphMangleTypeName produces the `<nested-template-name>` portion
+/// of a type symbol (`N<pkgL><pkg><nameL><name>I<args>EE`). Kept public so
+/// Go-side tests can assert the split between `_ZTS` prefix and nested
+/// template encoding without coupling to the final symbol layout.
+///
+/// Unlike function mangling, `main` is still length-prefixed here because
+/// `_ZTS` symbols are value-level identifiers, not callable entry
+/// points, and demanglers expect the package segment to be present.
+pub fn monomorphMangleTypeName(pkg: String, name: String, typeArgCodes: List<String>) -> String {
+    let scope = pkg
+    let actualPkg = if scope == "" { "main" } else { scope }
+    let pkgPart = monomorphLengthPrefix(actualPkg)
+    let namePart = monomorphLengthPrefix(name)
+    let mut args = ""
+    for c in typeArgCodes {
+        args = "{args}{c}"
+    }
+    "N{pkgPart}{namePart}I{args}EE"
+}
+
 /// monomorphDedupeKey returns a stable unique string for a specialization
 /// request. Used by the Go-side worklist to skip duplicate enqueues.
 /// The `\u{1f}` (Unit Separator) byte cannot appear in source identifiers
 /// so the concatenation stays injective.
 pub fn monomorphDedupeKey(fnName: String, pkg: String, typeArgCodes: List<String>) -> String {
     let mut key = "{pkg}\u{1f}{fnName}"
+    for c in typeArgCodes {
+        key = "{key}\u{1f}{c}"
+    }
+    key
+}
+
+/// monomorphTypeDedupeKey is the struct/enum counterpart of
+/// monomorphDedupeKey. The extra "type" tag segment ensures that a
+/// generic function and a generic struct sharing a source name (say,
+/// `Pair`) cannot collide in the engine's seen-map. Same injective
+/// separator contract as monomorphDedupeKey.
+pub fn monomorphTypeDedupeKey(typeName: String, pkg: String, typeArgCodes: List<String>) -> String {
+    let mut key = "{pkg}\u{1f}type\u{1f}{typeName}"
     for c in typeArgCodes {
         key = "{key}\u{1f}{c}"
     }

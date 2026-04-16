@@ -6,6 +6,10 @@
 // before the toolchain is itself re-translated.
 //
 // Keep this file in lockstep with toolchain/monomorph.osty.
+// Phase 2 additions: MonomorphTypeRequest, MonomorphMangleType,
+// MonomorphMangleTypeName, MonomorphUserTemplateNested, and
+// MonomorphTypeDedupeKey handle the nominal-type symbol track
+// (`_ZTS…`) used for generic struct/enum specializations.
 
 package ir
 
@@ -15,16 +19,23 @@ import (
 
 // Osty: toolchain/monomorph.osty:14:5
 type MonomorphRequest struct {
-	pkg             string
-	fnName          string
-	typeArgCodes    []string
-	paramTypeCodes  []string
-	returnTypeCode  string
+	pkg            string
+	fnName         string
+	typeArgCodes   []string
+	paramTypeCodes []string
+	returnTypeCode string
 }
 
 // Osty: toolchain/monomorph.osty:25:5
 type MonomorphMangled struct {
 	symbol string
+}
+
+// Osty: toolchain/monomorph.osty (Phase 2, MonomorphTypeRequest)
+type MonomorphTypeRequest struct {
+	pkg          string
+	typeName     string
+	typeArgCodes []string
 }
 
 // Symbol returns the mangled LLVM symbol string. Exposed so the IR
@@ -47,6 +58,17 @@ func NewMonomorphRequest(pkg, fnName string, typeArgCodes, paramTypeCodes []stri
 		typeArgCodes:   append([]string(nil), typeArgCodes...),
 		paramTypeCodes: append([]string(nil), paramTypeCodes...),
 		returnTypeCode: returnTypeCode,
+	}
+}
+
+// NewMonomorphTypeRequest is the struct/enum counterpart of
+// NewMonomorphRequest. Defensively copies typeArgCodes so callers can
+// reuse the caller's slice without worrying about aliasing.
+func NewMonomorphTypeRequest(pkg, typeName string, typeArgCodes []string) *MonomorphTypeRequest {
+	return &MonomorphTypeRequest{
+		pkg:          pkg,
+		typeName:     typeName,
+		typeArgCodes: append([]string(nil), typeArgCodes...),
 	}
 }
 
@@ -143,6 +165,13 @@ func MonomorphUserNested(pkg, name string) string {
 	return "N" + head + tail + "E"
 }
 
+// Osty: toolchain/monomorph.osty (Phase 2, monomorphUserTemplateNested)
+func MonomorphUserTemplateNested(pkg, name, argCodes string) string {
+	head := MonomorphLengthPrefix(pkg)
+	tail := MonomorphLengthPrefix(name)
+	return "N" + head + tail + "I" + argCodes + "EE"
+}
+
 // Osty: toolchain/monomorph.osty:133:5
 func MonomorphTemplateArgs(codes []string) string {
 	if len(codes) == 0 {
@@ -185,6 +214,33 @@ func MonomorphMangleFnName(pkg, name string) string {
 	return "N" + pkgPart + namePart + "E"
 }
 
+// Osty: toolchain/monomorph.osty (Phase 2, monomorphMangleType)
+func MonomorphMangleType(req *MonomorphTypeRequest) *MonomorphMangled {
+	if req == nil {
+		return &MonomorphMangled{}
+	}
+	body := MonomorphMangleTypeName(req.pkg, req.typeName, req.typeArgCodes)
+	return &MonomorphMangled{symbol: "_ZTS" + body}
+}
+
+// Osty: toolchain/monomorph.osty (Phase 2, monomorphMangleTypeName)
+func MonomorphMangleTypeName(pkg, name string, typeArgCodes []string) string {
+	// Type symbols always carry a package segment so demanglers can
+	// print a qualified name; fall back to "main" for script files that
+	// leave the package blank.
+	actualPkg := pkg
+	if actualPkg == "" {
+		actualPkg = "main"
+	}
+	pkgPart := MonomorphLengthPrefix(actualPkg)
+	namePart := MonomorphLengthPrefix(name)
+	args := ""
+	for _, c := range typeArgCodes {
+		args += c
+	}
+	return "N" + pkgPart + namePart + "I" + args + "EE"
+}
+
 // Osty: toolchain/monomorph.osty:182:5
 func MonomorphDedupeKey(fnName, pkg string, typeArgCodes []string) string {
 	// Using the ASCII Unit Separator (0x1f) as a delimiter — it cannot
@@ -192,6 +248,20 @@ func MonomorphDedupeKey(fnName, pkg string, typeArgCodes []string) string {
 	// injective over the inputs.
 	sep := "\x1f"
 	key := pkg + sep + fnName
+	for _, c := range typeArgCodes {
+		key += sep + c
+	}
+	return key
+}
+
+// Osty: toolchain/monomorph.osty (Phase 2, monomorphTypeDedupeKey)
+//
+// Separate namespace from MonomorphDedupeKey so a generic function and
+// a generic struct sharing a source name cannot collide in the engine's
+// seen-map.
+func MonomorphTypeDedupeKey(typeName, pkg string, typeArgCodes []string) string {
+	sep := "\x1f"
+	key := pkg + sep + "type" + sep + typeName
 	for _, c := range typeArgCodes {
 		key += sep + c
 	}
