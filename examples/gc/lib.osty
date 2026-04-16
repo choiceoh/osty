@@ -40,6 +40,15 @@ pub enum GcPolicyProfile {
     GcMemoryTightProfile,
 }
 
+pub enum GcStressMode {
+    GcStressOff,
+    GcStressEveryAllocationMinor,
+    GcStressFrequentFull,
+    GcStressIncrementalStep,
+    GcStressNoCompaction,
+    GcStressAlwaysCompact,
+}
+
 pub struct GcConfig {
     pub nurseryLimit: Int,
     pub survivorLimit: Int,
@@ -246,6 +255,119 @@ pub struct GcConcurrentMarkTrace {
     pub mutatorEpoch: Int,
     pub barrierShadesAtStart: Int,
     pub barrierShadesAtFinish: Int,
+}
+
+pub struct GcDiagnosticsSnapshot {
+    pub cycle: Int,
+    pub phase: TracePhase,
+    pub objectCount: Int,
+    pub rootCount: Int,
+    pub globalRootCount: Int,
+    pub asyncFrameRootCount: Int,
+    pub liveBytes: Int,
+    pub fragmentedBytes: Int,
+    pub nurseryBytes: Int,
+    pub oldBytes: Int,
+    pub humongousBytes: Int,
+    pub rememberedObjects: Int,
+    pub dirtyCards: Int,
+    pub forwardingEntries: Int,
+    pub loweredPointerSlots: Int,
+    pub minorCollections: Int,
+    pub majorCollections: Int,
+    pub barrierPostWriteCalls: Int,
+    pub barrierRememberedSetWrites: Int,
+    pub barrierIncrementalShades: Int,
+    pub schedulerSafepoints: Int,
+    pub schedulerAssistSteps: Int,
+    pub concurrentMarkSlices: Int,
+    pub lastKind: String,
+    pub lastTrigger: String,
+    pub lastPauseUnits: Int,
+    pub lastReclaimedObjects: Int,
+    pub heapValid: Bool,
+    pub validationMessage: String,
+}
+
+pub struct GcHeapDumpObject {
+    pub id: Int,
+    pub kind: ObjectKind,
+    pub size: Int,
+    pub address: Int,
+    pub generation: Int,
+    pub age: Int,
+    pub color: MarkColor,
+    pub region: GcRegionKind,
+    pub refCount: Int,
+    pub rooted: Bool,
+    pub remembered: Bool,
+    pub pinned: Bool,
+    pub large: Bool,
+}
+
+pub struct GcHeapDumpEdge {
+    pub fromId: Int,
+    pub toId: Int,
+}
+
+pub struct GcHeapDump {
+    pub cycle: Int,
+    pub phase: TracePhase,
+    pub objectCount: Int,
+    pub edgeCount: Int,
+    pub rootCount: Int,
+    pub liveBytes: Int,
+    pub fragmentedBytes: Int,
+    pub roots: List<Int>,
+    pub objects: List<GcHeapDumpObject>,
+    pub edges: List<GcHeapDumpEdge>,
+}
+
+pub struct GcRuntimeContract {
+    pub version: Int,
+    pub oomReturnsResult: Bool,
+    pub abortSkipsGc: Bool,
+    pub deferRootsRequireStackMap: Bool,
+    pub ffiPinsUsePinBit: Bool,
+    pub stableIdentityUsesObjectId: Bool,
+    pub movingCollectorRequiresRemap: Bool,
+    pub refSameUsesStableIdentity: Bool,
+}
+
+pub struct GcBarrierAudit {
+    pub loweredSlots: Int,
+    pub invalidObjectReferences: Int,
+    pub missingOwnerRefs: Int,
+    pub rememberedMismatches: Int,
+    pub passed: Bool,
+}
+
+pub struct GcPerformanceThresholds {
+    pub maxPauseUnits: Int,
+    pub maxFragmentedBytes: Int,
+    pub maxLiveBytes: Int,
+    pub maxRememberedObjects: Int,
+    pub maxDirtyCards: Int,
+}
+
+pub struct GcPerformanceReport {
+    pub pauseUnits: Int,
+    pub fragmentedBytes: Int,
+    pub liveBytes: Int,
+    pub rememberedObjects: Int,
+    pub dirtyCards: Int,
+    pub passed: Bool,
+}
+
+pub struct GcHardeningReport {
+    pub runtimeContractVersion: Int,
+    pub heapValid: Bool,
+    pub barrierAuditPassed: Bool,
+    pub performancePassed: Bool,
+    pub ffiPinnedObjects: Int,
+    pub loweredSlots: Int,
+    pub validationMessage: String,
+    pub passed: Bool,
 }
 
 pub enum GcLoweredStoreKind {
@@ -1485,6 +1607,254 @@ pub struct GcHeap {
         self.lastStats
     }
 
+    pub fn diagnosticsSnapshot(self) -> GcDiagnosticsSnapshot {
+        let mut lastKind = ""
+        let mut lastTrigger = ""
+        let mut lastPauseUnits = 0
+        let mut lastReclaimedObjects = 0
+        match self.lastStats {
+            Some(stats) -> {
+                lastKind = stats.kind
+                lastTrigger = stats.trigger
+                lastPauseUnits = stats.pauseUnits
+                lastReclaimedObjects = stats.reclaimedObjects
+            },
+            None -> {},
+        }
+
+        let mut heapValid = true
+        let mut validationMessage = "ok"
+        match self.validateHeap() {
+            Ok(_) -> {},
+            Err(e) -> {
+                heapValid = false
+                validationMessage = e
+            },
+        }
+
+        GcDiagnosticsSnapshot {
+            cycle: self.cycle,
+            phase: self.phase,
+            objectCount: self.objectCount(),
+            rootCount: self.rootCount(),
+            globalRootCount: self.globalRootCount(),
+            asyncFrameRootCount: self.asyncFrameRootCount(),
+            liveBytes: self.liveBytes,
+            fragmentedBytes: self.fragmentedBytes(),
+            nurseryBytes: self.nurseryBytes(),
+            oldBytes: self.oldBytes(),
+            humongousBytes: self.humongousBytes(),
+            rememberedObjects: self.rememberedCount(),
+            dirtyCards: self.dirtyCardCount(),
+            forwardingEntries: self.forwardingEntryCount(),
+            loweredPointerSlots: self.loweredPointerSlotCount(),
+            minorCollections: self.minorCollections,
+            majorCollections: self.majorCollections,
+            barrierPostWriteCalls: self.barriers.postWriteCalls,
+            barrierRememberedSetWrites: self.barriers.rememberedSetWrites,
+            barrierIncrementalShades: self.barriers.incrementalShades,
+            schedulerSafepoints: self.schedulerTrace.safepoints,
+            schedulerAssistSteps: self.schedulerTrace.mutatorAssistSteps,
+            concurrentMarkSlices: self.concurrentTrace.slices,
+            lastKind,
+            lastTrigger,
+            lastPauseUnits,
+            lastReclaimedObjects,
+            heapValid,
+            validationMessage,
+        }
+    }
+
+    pub fn diagnosticsLine(self) -> String {
+        let snapshot = self.diagnosticsSnapshot()
+        "gc cycle={snapshot.cycle} phase={tracePhaseName(snapshot.phase)} objects={snapshot.objectCount} live={snapshot.liveBytes} fragmented={snapshot.fragmentedBytes} last={snapshot.lastKind}/{snapshot.lastTrigger} valid={snapshot.heapValid}"
+    }
+
+    pub fn heapDump(self) -> GcHeapDump {
+        let mut objects: List<GcHeapDumpObject> = []
+        let mut edges: List<GcHeapDumpEdge> = []
+        let roots = self.roots.toList()
+
+        for id in self.objects.keys().sorted() {
+            let obj = self.objects[id]
+            objects.push(
+                GcHeapDumpObject {
+                    id,
+                    kind: obj.kind,
+                    size: obj.size,
+                    address: obj.address,
+                    generation: obj.generation,
+                    age: obj.age,
+                    color: obj.color,
+                    region: obj.region,
+                    refCount: intListLen(obj.refs),
+                    rooted: self.roots.contains(id),
+                    remembered: obj.remembered,
+                    pinned: obj.pinned,
+                    large: obj.large,
+                },
+            )
+            for childId in obj.refs {
+                edges.push(GcHeapDumpEdge { fromId: id, toId: childId })
+            }
+        }
+
+        GcHeapDump {
+            cycle: self.cycle,
+            phase: self.phase,
+            objectCount: objects.len(),
+            edgeCount: edges.len(),
+            rootCount: intListLen(roots),
+            liveBytes: self.liveBytes,
+            fragmentedBytes: self.fragmentedBytes(),
+            roots,
+            objects,
+            edges,
+        }
+    }
+
+    pub fn heapObjectDebugLine(self, id: Int) -> String? {
+        if !(self.objects.containsKey(id)) {
+            return None
+        }
+        let obj = self.objects[id]
+        let kind = objectKindName(obj.kind)
+        let region = gcRegionKindName(obj.region)
+        let refs = intListDebug(obj.refs)
+        let rooted = self.roots.contains(id)
+        Some(
+            "object id={id} kind={kind} region={region} gen={obj.generation} size={obj.size} addr={obj.address} refs=[{refs}] root={rooted} pinned={obj.pinned}",
+        )
+    }
+
+    pub fn objectGraphDebug(self) -> String {
+        let phase = tracePhaseName(self.phase)
+        let objects = self.objectCount()
+        let edges = self.edgeCount()
+        let roots = intListDebug(self.roots.toList())
+        let mut out = "gc graph cycle={self.cycle} phase={phase} objects={objects} edges={edges} roots=[{roots}]"
+        for id in self.objects.keys().sorted() {
+            match self.heapObjectDebugLine(id) {
+                Some(line) -> {
+                    out = "{out}\n\\\{line\}"
+                },
+                None -> {},
+            }
+        }
+        out
+    }
+
+    pub fn runStressMode(mut self, mode: GcStressMode) -> GcStats {
+        if self.phase != GcIdle && mode != GcStressIncrementalStep {
+            return emptyStats("stress-busy", self)
+        }
+        match mode {
+            GcStressOff -> emptyStats("stress-off", self),
+            GcStressEveryAllocationMinor -> self.minorCollectFor("stress.every-allocation-minor"),
+            GcStressFrequentFull -> self.majorCollectFor("stress.frequent-full"),
+            GcStressIncrementalStep -> self.stepIncrementalWithBudget(
+                "stress.incremental-step",
+                self.config.incrementalBudget,
+            ),
+            GcStressNoCompaction -> self.majorCollectWithoutCompactionFor("stress.no-compaction"),
+            GcStressAlwaysCompact -> self.majorCollectFor("stress.always-compact"),
+        }
+    }
+
+    pub fn runtimeContract(self) -> GcRuntimeContract {
+        let _ = self
+        gcRuntimeContractV1()
+    }
+
+    pub fn barrierAudit(self) -> GcBarrierAudit {
+        let mut invalidObjectReferences = 0
+        let mut missingOwnerRefs = 0
+        let mut rememberedMismatches = 0
+
+        for (key, slot) in self.loweredPointerSlots {
+            let _ = key
+            if !(self.objects.containsKey(slot.ownerId)) {
+                invalidObjectReferences = invalidObjectReferences + 1
+            } else if slot.objectId >= 0 {
+                if !(self.objects.containsKey(slot.objectId)) {
+                    invalidObjectReferences = invalidObjectReferences + 1
+                } else {
+                    let owner = self.objects[slot.ownerId]
+                    if !(owner.refs.contains(slot.objectId)) {
+                        missingOwnerRefs = missingOwnerRefs + 1
+                    }
+                }
+            }
+        }
+
+        for (id, obj) in self.objects {
+            let expectedRemembered = obj.generation > 0 && self.hasYoungRef(obj)
+            if obj.remembered != expectedRemembered {
+                rememberedMismatches = rememberedMismatches + 1
+            }
+            if expectedRemembered != self.remembered.contains(id) {
+                rememberedMismatches = rememberedMismatches + 1
+            }
+        }
+
+        GcBarrierAudit {
+            loweredSlots: self.loweredPointerSlotCount(),
+            invalidObjectReferences,
+            missingOwnerRefs,
+            rememberedMismatches,
+            passed: invalidObjectReferences == 0 && missingOwnerRefs == 0 && rememberedMismatches == 0,
+        }
+    }
+
+    pub fn performanceReport(self, thresholds: GcPerformanceThresholds) -> GcPerformanceReport {
+        let mut pauseUnits = 0
+        match self.lastStats {
+            Some(stats) -> {
+                pauseUnits = stats.pauseUnits
+            },
+            None -> {},
+        }
+        let fragmentedBytes = self.fragmentedBytes()
+        let liveBytes = self.liveBytes
+        let rememberedObjects = self.rememberedCount()
+        let dirtyCards = self.dirtyCardCount()
+        let passed = limitAllows(pauseUnits, thresholds.maxPauseUnits) && limitAllows(
+            fragmentedBytes,
+            thresholds.maxFragmentedBytes,
+        ) && limitAllows(liveBytes, thresholds.maxLiveBytes) && limitAllows(
+            rememberedObjects,
+            thresholds.maxRememberedObjects,
+        ) && limitAllows(dirtyCards, thresholds.maxDirtyCards)
+
+        GcPerformanceReport {
+            pauseUnits,
+            fragmentedBytes,
+            liveBytes,
+            rememberedObjects,
+            dirtyCards,
+            passed,
+        }
+    }
+
+    pub fn hardeningReport(self, thresholds: GcPerformanceThresholds) -> GcHardeningReport {
+        let snapshot = self.diagnosticsSnapshot()
+        let audit = self.barrierAudit()
+        let performance = self.performanceReport(thresholds)
+        let contract = self.runtimeContract()
+        let passed = snapshot.heapValid && audit.passed && performance.passed
+
+        GcHardeningReport {
+            runtimeContractVersion: contract.version,
+            heapValid: snapshot.heapValid,
+            barrierAuditPassed: audit.passed,
+            performancePassed: performance.passed,
+            ffiPinnedObjects: self.pinnedObjectCount(),
+            loweredSlots: audit.loweredSlots,
+            validationMessage: snapshot.validationMessage,
+            passed,
+        }
+    }
+
     fn minorCollectFor(mut self, trigger: String) -> GcStats {
         self.cycle = self.cycle + 1
         self.retireAllTlabs()
@@ -1618,6 +1988,74 @@ pub struct GcHeap {
         stats
     }
 
+    fn majorCollectWithoutCompactionFor(mut self, trigger: String) -> GcStats {
+        self.cycle = self.cycle + 1
+        self.retireAllTlabs()
+        let beforeObjects = self.objectCount()
+        let beforeBytes = self.liveBytes
+        let beforeFragmentedBytes = self.fragmentedBytes()
+        let allocationBytesSinceLastGC = self.allocatedSinceLastGC
+
+        self.phase = GcMarking
+        self.clearAllMarks()
+        let rootObjectsSeeded = self.roots.len()
+        let globalRootsSeeded = self.globalObjectRootCount()
+        let asyncFrameRootsSeeded = self.asyncFrameRootCount()
+        for id in self.roots.toList() {
+            self.shade(id)
+        }
+        self.shadeGlobalRoots()
+        self.shadeAsyncFrameRoots()
+        let queueSeeded = self.grey.len()
+        let markSteps = self.drainGrey(0, false)
+        let pointerSlotsScanned = self.markedPointerSlotCount()
+
+        self.phase = GcSweeping
+        let (reclaimedObjects, reclaimedBytes) = self.sweepAll()
+        self.forwarding.clear()
+        self.rebuildRemembered()
+        self.majorCollections = self.majorCollections + 1
+        self.phase = GcIdle
+        self.allocatedSinceLastGC = 0
+        self.lastFullMarkTrace = GcFullMarkTrace {
+            rootObjectsSeeded,
+            globalRootsSeeded,
+            asyncFrameRootsSeeded,
+            queueSeeded,
+            objectsScanned: markSteps,
+            pointerSlotsScanned,
+            regionObjectsVisited: beforeObjects,
+            sweptObjects: reclaimedObjects,
+        }
+        self.lastEvacuationTrace = emptyEvacuationTrace()
+        self.lastRemapTrace = emptyRemapTrace()
+
+        let stats = GcStats {
+            kind: "major-no-compact",
+            trigger,
+            cycle: self.cycle,
+            beforeObjects,
+            afterObjects: self.objectCount(),
+            reclaimedObjects,
+            beforeBytes,
+            afterBytes: self.liveBytes,
+            reclaimedBytes,
+            promotedObjects: 0,
+            compactedObjects: 0,
+            rememberedScanned: 0,
+            markSteps,
+            pauseUnits: telemetryPauseUnits(markSteps, reclaimedObjects, 0, 0, 0),
+            allocationBytesSinceLastGC,
+            beforeFragmentedBytes,
+            afterFragmentedBytes: self.fragmentedBytes(),
+            fragmentedBytes: self.fragmentedBytes(),
+            survivalPercent: percent(self.objectCount(), beforeObjects),
+            promotionPercent: 0,
+        }
+        self.lastStats = Some(stats)
+        stats
+    }
+
     pub fn contains(self, id: Int) -> Bool {
         self.objects.containsKey(id)
     }
@@ -1628,6 +2066,15 @@ pub struct GcHeap {
 
     pub fn rootCount(self) -> Int {
         self.roots.len()
+    }
+
+    pub fn edgeCount(self) -> Int {
+        let mut total = 0
+        for (id, obj) in self.objects {
+            let _ = id
+            total = total + intListLen(obj.refs)
+        }
+        total
     }
 
     pub fn globalRootCount(self) -> Int {
@@ -4077,6 +4524,92 @@ pub fn gcConfigForProfile(profile: GcPolicyProfile) -> GcConfig {
     }
 }
 
+pub fn gcStressModeName(mode: GcStressMode) -> String {
+    match mode {
+        GcStressOff -> "off",
+        GcStressEveryAllocationMinor -> "every-allocation-minor",
+        GcStressFrequentFull -> "frequent-full",
+        GcStressIncrementalStep -> "incremental-step",
+        GcStressNoCompaction -> "no-compaction",
+        GcStressAlwaysCompact -> "always-compact",
+    }
+}
+
+pub fn objectKindName(kind: ObjectKind) -> String {
+    match kind {
+        GcRecord -> "record",
+        GcArray -> "array",
+        GcClosure -> "closure",
+        GcBytes -> "bytes",
+        GcRuntimeFrame -> "runtime-frame",
+    }
+}
+
+pub fn markColorName(color: MarkColor) -> String {
+    match color {
+        GcWhite -> "white",
+        GcGrey -> "grey",
+        GcBlack -> "black",
+    }
+}
+
+pub fn gcRegionKindName(region: GcRegionKind) -> String {
+    match region {
+        GcEdenRegion -> "eden",
+        GcSurvivorRegion -> "survivor",
+        GcOldRegion -> "old",
+        GcHumongousRegion -> "humongous",
+        GcPinnedRegion -> "pinned",
+    }
+}
+
+pub fn tracePhaseName(phase: TracePhase) -> String {
+    match phase {
+        GcIdle -> "idle",
+        GcMarking -> "marking",
+        GcSweeping -> "sweeping",
+    }
+}
+
+pub fn gcRuntimeContractV1() -> GcRuntimeContract {
+    GcRuntimeContract {
+        version: 1,
+        oomReturnsResult: true,
+        abortSkipsGc: true,
+        deferRootsRequireStackMap: true,
+        ffiPinsUsePinBit: true,
+        stableIdentityUsesObjectId: true,
+        movingCollectorRequiresRemap: true,
+        refSameUsesStableIdentity: true,
+    }
+}
+
+pub fn gcPerformanceThresholdsForProfile(profile: GcPolicyProfile) -> GcPerformanceThresholds {
+    match profile {
+        GcLatencyFirstProfile -> GcPerformanceThresholds {
+            maxPauseUnits: 64,
+            maxFragmentedBytes: 1024,
+            maxLiveBytes: 4096,
+            maxRememberedObjects: 128,
+            maxDirtyCards: 128,
+        },
+        GcThroughputFirstProfile -> GcPerformanceThresholds {
+            maxPauseUnits: 512,
+            maxFragmentedBytes: 4096,
+            maxLiveBytes: 8192,
+            maxRememberedObjects: 512,
+            maxDirtyCards: 512,
+        },
+        GcMemoryTightProfile -> GcPerformanceThresholds {
+            maxPauseUnits: 128,
+            maxFragmentedBytes: 256,
+            maxLiveBytes: 2048,
+            maxRememberedObjects: 64,
+            maxDirtyCards: 64,
+        },
+    }
+}
+
 pub fn newGcHeap(config: GcConfig) -> GcHeap {
     let objects: Map<Int, GcObject> = {:}
     let globalRoots: Map<String, GcGlobalRoot> = {:}
@@ -4188,6 +4721,24 @@ fn intListContains(values: List<Int>, target: Int) -> Bool {
         }
     }
     false
+}
+
+fn intListDebug(values: List<Int>) -> String {
+    let mut out = ""
+    let mut first = true
+    for value in values {
+        if first {
+            out = "{value}"
+            first = false
+        } else {
+            out = "{out},{value}"
+        }
+    }
+    out
+}
+
+fn limitAllows(observed: Int, limit: Int) -> Bool {
+    limit <= 0 || observed <= limit
 }
 
 fn closureCaptureObjectIds(captures: List<GcClosureCapture>) -> List<Int> {

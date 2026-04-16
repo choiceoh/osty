@@ -1124,6 +1124,123 @@ fn testPolicyProfilesTuneMechanismKnobs() {
     testing.assert(!(heap.shouldEvacuateRegion(81)))
 }
 
+fn testDiagnosticsSnapshotAndHeapDumpExposeGraph() {
+    let mut heap = newGcHeap(testGcConfig())
+    let root = heap.allocate(GcRecord, 16)
+    let child = heap.allocate(GcArray, 16)
+    let dead = heap.allocate(GcBytes, 16)
+    testing.assert(heap.addRoot(root))
+    testing.assert(heap.link(root, child))
+    assertValid(heap)
+
+    let stats = heap.majorCollect()
+    assertValid(heap)
+    testing.assertEq(stats.kind, "major")
+    testing.assert(!(heap.contains(dead)))
+
+    let snapshot = heap.diagnosticsSnapshot()
+    testing.assert(snapshot.heapValid)
+    testing.assertEq(snapshot.objectCount, 2)
+    testing.assertEq(snapshot.rootCount, 1)
+    testing.assertEq(snapshot.liveBytes, 32)
+    testing.assertEq(snapshot.lastKind, "major")
+    testing.assertEq(snapshot.lastTrigger, "manual")
+    testing.assert(snapshot.lastPauseUnits > 0)
+    testing.assertEq(snapshot.lastReclaimedObjects, 1)
+    testing.assertEq(snapshot.validationMessage, "ok")
+
+    let dump = heap.heapDump()
+    testing.assertEq(dump.objectCount, 2)
+    testing.assertEq(dump.edgeCount, 1)
+    testing.assertEq(dump.rootCount, 1)
+    testing.assertEq(dump.roots[0], root)
+    testing.assertEq(dump.objects[0].id, root)
+    testing.assertEq(dump.objects[0].kind, GcRecord)
+    testing.assertEq(dump.objects[0].refCount, 1)
+    testing.assert(dump.objects[0].rooted)
+    testing.assertEq(dump.edges[0].fromId, root)
+    testing.assertEq(dump.edges[0].toId, child)
+
+    match heap.heapObjectDebugLine(root) {
+        Some(line) -> {
+            testing.assertEq(
+                line,
+                "object id={root} kind=record region=old gen=1 size=16 addr=0 refs=[{child}] root=true pinned=false",
+            )
+        },
+        None -> testing.fail("missing heap object debug line"),
+    }
+    let graph = heap.objectGraphDebug()
+    testing.assert(graph != "")
+    testing.assertEq(tracePhaseName(snapshot.phase), "idle")
+}
+
+fn testStressModesCanDisableAndForceCompaction() {
+    let mut heap = newGcHeap(testGcConfig())
+    let dead = heap.allocate(GcBytes, 20)
+    let live = heap.allocate(GcRecord, 20)
+    testing.assert(heap.addRoot(live))
+    assertValid(heap)
+
+    let noCompact = heap.runStressMode(GcStressNoCompaction)
+    assertValid(heap)
+    testing.assertEq(noCompact.kind, "major-no-compact")
+    testing.assertEq(noCompact.trigger, "stress.no-compaction")
+    testing.assertEq(noCompact.compactedObjects, 0)
+    testing.assert(!(heap.contains(dead)))
+    testing.assertEq(intOr(heap.addressOf(live), -1), 20)
+    testing.assert(heap.fragmentedBytes() > 0)
+    testing.assertEq(heap.forwardingEntryCount(), 0)
+
+    let compact = heap.runStressMode(GcStressAlwaysCompact)
+    assertValid(heap)
+    testing.assertEq(compact.kind, "major")
+    testing.assertEq(compact.trigger, "stress.always-compact")
+    testing.assertEq(compact.compactedObjects, 1)
+    testing.assertEq(intOr(heap.addressOf(live), -1), 0)
+    testing.assertEq(heap.fragmentedBytes(), 0)
+    testing.assertEq(gcStressModeName(GcStressEveryAllocationMinor), "every-allocation-minor")
+}
+
+fn testHardeningReportAuditsBarriersAndBudgets() {
+    let mut heap = newGcHeap(testGcConfig())
+    let parent = heap.allocate(GcRecord, 16)
+    let child = heap.allocate(GcArray, 16)
+    testing.assert(heap.addRoot(parent))
+    match heap.lowerStructFieldStore(parent, 0, "child", child) {
+        Some(_) -> {},
+        None -> testing.fail("lowered field store failed"),
+    }
+    let _ = heap.majorCollect()
+    assertValid(heap)
+
+    let audit = heap.barrierAudit()
+    testing.assert(audit.passed)
+    testing.assertEq(audit.loweredSlots, 1)
+    testing.assertEq(audit.invalidObjectReferences, 0)
+    testing.assertEq(audit.missingOwnerRefs, 0)
+
+    let thresholds = gcPerformanceThresholdsForProfile(GcThroughputFirstProfile)
+    let performance = heap.performanceReport(thresholds)
+    testing.assert(performance.passed)
+    testing.assert(performance.pauseUnits > 0)
+
+    let report = heap.hardeningReport(thresholds)
+    testing.assert(report.passed)
+    testing.assert(report.heapValid)
+    testing.assert(report.barrierAuditPassed)
+    testing.assert(report.performancePassed)
+    testing.assertEq(report.runtimeContractVersion, 1)
+    testing.assertEq(report.loweredSlots, 1)
+
+    let contract = heap.runtimeContract()
+    testing.assert(contract.oomReturnsResult)
+    testing.assert(contract.abortSkipsGc)
+    testing.assert(contract.deferRootsRequireStackMap)
+    testing.assert(contract.ffiPinsUsePinBit)
+    testing.assert(contract.refSameUsesStableIdentity)
+}
+
 fn testMajorCompactionClosesHoles() {
     let mut heap = newGcHeap(testGcConfig())
     let first = heap.allocate(GcRecord, 10)
