@@ -277,12 +277,24 @@ Legacy alias: `osty repair`
 - `--check` — exit 1 if the file contains repairable syntax slips
 - `--write` — rewrite the file in place instead of printing
 - `--json` — emit a structured report including before/after front-end diagnostics
-  and `change_details` metadata (`phase`, `source_habit`, `confidence`) for tooling
+  plus `status`/`summary` and `change_details` metadata (`phase`, `source_habit`, `confidence`) for tooling
+- `--capture-dir DIR` — write corpus-ready `.input.osty`, `.expected.osty`, and `.report.json` artifacts to `DIR`
+- `--capture-name NAME` — basename to use for captured airepair artifacts
+- `--capture-if residual|changed|always` — capture only residual cases by default, or widen to changed/all cases
+- `triage DIR` — summarize captured `.report.json` files by status, source habit, and residual diagnostic code
+- `promote CASE` — copy a captured case into `internal/airepair/testdata/corpus/` (override with `--dest DIR` or `--name NAME`)
 - `--stdin-name NAME` — filename to use in reports when reading from stdin via `-`
 - `--mode rewrite|parse|frontend` — choose whether airepair scores candidate output by rewrite activity, parse diagnostics, or full front-end diagnostics
 
 `osty airepair -` reads from stdin and writes the repaired source (or JSON report
 with `--json`) to stdout.
+
+For failure collection, `osty airepair --json --capture-dir tmp/airepair-cases --capture-if residual FILE`
+writes corpus-style artifacts only when airepair still leaves residual diagnostics.
+
+For quick triage, `osty airepair triage tmp/airepair-cases`
+
+To promote one captured case into the checked-in corpus, `osty airepair promote tmp/airepair-cases/python_enumerate_case`
 
 Single-file `osty check`, `osty resolve`, `osty typecheck`, and `osty lint`
 also accept in-memory adaptation flags after the subcommand:
@@ -550,6 +562,9 @@ The **airepair corpus** lives under `internal/airepair/testdata/corpus/`:
 - `TestAnalyzeCorpus` checks exact repaired output plus before/after
   diagnostic counts so new repair phases can grow without silently
   regressing older adaptation paths.
+- `osty airepair promote ...` copies captured `.input.osty` /
+  `.expected.osty` pairs into this directory so residual cases can move
+  from ad-hoc capture to checked-in regression coverage quickly.
 
 ### Golden snapshot updates
 

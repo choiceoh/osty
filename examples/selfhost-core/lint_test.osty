@@ -420,6 +420,87 @@ fn testSelfLintReportsParseRecoveryErrors() {
     testing.assert(report.parseErrors > 0)
 }
 
+fn testSelfLintFindsDeadStore() {
+    let report = selfLintSource(
+        r"""
+            fn work() -> Int {
+                let mut x = 1
+                x = 2
+                x
+            }
+            """,
+    )
+
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0008"), 1)
+}
+
+fn testSelfLintIgnoresDeadStoreWhenRhsReadsBinding() {
+    let report = selfLintSource(
+        r"""
+            fn work() -> Int {
+                let mut x = 1
+                x = x + 1
+                x
+            }
+            """,
+    )
+
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0008"), 0)
+}
+
+fn testSelfLintIgnoresDeadStoreAfterRead() {
+    let report = selfLintSource(
+        r"""
+            fn work() -> Int {
+                let mut x = 1
+                println(x)
+                x = 2
+                x
+            }
+            """,
+    )
+
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0008"), 0)
+}
+
+fn testSelfLintIgnoresDeadStoreOnFieldWrite() {
+    let report = selfLintSource(
+        r"""
+            struct Counter { value: Int }
+
+            fn bump(c: Counter) -> Int {
+                let mut x = c
+                x.value = 2
+                x.value
+            }
+            """,
+    )
+
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0008"), 0)
+}
+
+fn testSelfLintFindsDeadStoreAcrossNestedBlockReads() {
+    let report = selfLintSource(
+        r"""
+            fn work(flag: Bool) -> Int {
+                let mut x = 1
+                if flag {
+                    println(x)
+                }
+                x = 2
+                x
+            }
+            """,
+    )
+
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0008"), 0)
+}
+
 fn assertLintFirstFix(
     report: SelfLintReport,
     code: String,

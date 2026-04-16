@@ -68,9 +68,12 @@ func (v *validator) validateDecl(d Decl) {
 	case *FnDecl:
 		v.validateFnDecl(d, false)
 	case *StructDecl:
+		v.validateTypeParams("struct "+d.Name, d.Generics)
 		for _, f := range d.Fields {
 			if f.Type == nil {
 				v.addf("struct %s: field %s has nil Type", d.Name, f.Name)
+			} else {
+				v.validateType(f.Type, fmt.Sprintf("struct %s field %s", d.Name, f.Name))
 			}
 			if f.Default != nil {
 				v.validateExpr(f.Default)
@@ -89,11 +92,26 @@ func (v *validator) validateDecl(d Decl) {
 				v.addf("enum %s: duplicate variant %s", d.Name, vr.Name)
 			}
 			seen[vr.Name] = true
+			for i, p := range vr.Payload {
+				if p == nil {
+					v.addf("enum %s: variant %s payload[%d] nil Type", d.Name, vr.Name, i)
+					continue
+				}
+				v.validateType(p, fmt.Sprintf("enum %s variant %s payload[%d]", d.Name, vr.Name, i))
+			}
 		}
 		for _, m := range d.Methods {
 			v.validateFnDecl(m, false)
 		}
 	case *InterfaceDecl:
+		v.validateTypeParams("interface "+d.Name, d.Generics)
+		for i, ext := range d.Extends {
+			if ext == nil {
+				v.addf("interface %s: extends[%d] nil Type", d.Name, i)
+				continue
+			}
+			v.validateType(ext, fmt.Sprintf("interface %s extends[%d]", d.Name, i))
+		}
 		old := v.inInterface
 		v.inInterface = true
 		for _, m := range d.Methods {
@@ -103,10 +121,16 @@ func (v *validator) validateDecl(d Decl) {
 	case *TypeAliasDecl:
 		if d.Target == nil {
 			v.addf("alias %s: nil Target", d.Name)
+		} else {
+			v.validateTypeParams("alias "+d.Name, d.Generics)
+			v.validateType(d.Target, "alias "+d.Name)
 		}
 	case *LetDecl:
 		if d.Name == "" {
 			v.addf("top-level let: empty Name")
+		}
+		if d.Type != nil {
+			v.validateType(d.Type, "top-level let "+d.Name)
 		}
 		if d.Value == nil {
 			v.addf("top-level let %s: nil Value", d.Name)
@@ -126,7 +150,10 @@ func (v *validator) validateFnDecl(fn *FnDecl, allowNoBody bool) {
 	}
 	if fn.Return == nil {
 		v.addf("fn %s: nil Return", fn.Name)
+	} else {
+		v.validateType(fn.Return, "fn "+fn.Name+" return")
 	}
+	v.validateTypeParams("fn "+fn.Name, fn.Generics)
 	for i, p := range fn.Params {
 		if p == nil {
 			v.addf("fn %s: param[%d] nil", fn.Name, i)
@@ -134,6 +161,8 @@ func (v *validator) validateFnDecl(fn *FnDecl, allowNoBody bool) {
 		}
 		if p.Type == nil {
 			v.addf("fn %s: param %q nil Type", fn.Name, p.Name)
+		} else {
+			v.validateType(p.Type, fmt.Sprintf("fn %s param[%d]", fn.Name, i))
 		}
 		if p.Name == "" && p.Pattern == nil {
 			v.addf("fn %s: param[%d] has neither Name nor Pattern", fn.Name, i)
@@ -175,6 +204,9 @@ func (v *validator) validateStmt(s Stmt) {
 	case *LetStmt:
 		if s.Name == "" && s.Pattern == nil {
 			v.addf("let: both Name and Pattern empty")
+		}
+		if s.Type != nil {
+			v.validateType(s.Type, "let stmt")
 		}
 		if s.Value != nil {
 			v.validateExpr(s.Value)
@@ -268,6 +300,11 @@ func (v *validator) validateStmt(s Stmt) {
 			}
 			v.validateMatchArm(a)
 		}
+		if s.Tree != nil {
+			for _, err := range ValidateDecisionTree(s.Tree, len(s.Arms)) {
+				v.addf("MatchStmt tree: %v", err)
+			}
+		}
 	case *ErrorStmt:
 		// allowed by design
 	}
@@ -281,14 +318,30 @@ func (v *validator) validateExpr(e Expr) {
 	if e.Type() == nil {
 		v.addf("%T: nil Type()", e)
 	}
+	v.validateType(e.Type(), fmt.Sprintf("%T", e))
 	switch e := e.(type) {
 	case *UnaryExpr:
 		v.validateExpr(e.X)
 	case *BinaryExpr:
 		v.validateExpr(e.Left)
 		v.validateExpr(e.Right)
+	case *Ident:
+		for i, ta := range e.TypeArgs {
+			if ta == nil {
+				v.addf("Ident %s: TypeArgs[%d] nil", e.Name, i)
+				continue
+			}
+			v.validateType(ta, fmt.Sprintf("Ident %s TypeArgs[%d]", e.Name, i))
+		}
 	case *CallExpr:
 		v.validateExpr(e.Callee)
+		for i, ta := range e.TypeArgs {
+			if ta == nil {
+				v.addf("CallExpr: TypeArgs[%d] nil", i)
+				continue
+			}
+			v.validateType(ta, fmt.Sprintf("CallExpr TypeArgs[%d]", i))
+		}
 		for _, a := range e.Args {
 			v.validateArg(a)
 		}
@@ -298,14 +351,27 @@ func (v *validator) validateExpr(e Expr) {
 		}
 	case *MethodCall:
 		v.validateExpr(e.Receiver)
+		if e.Name == "" {
+			v.addf("MethodCall: empty Name")
+		}
+		for i, ta := range e.TypeArgs {
+			if ta == nil {
+				v.addf("MethodCall %s: TypeArgs[%d] nil", e.Name, i)
+				continue
+			}
+			v.validateType(ta, fmt.Sprintf("MethodCall %s TypeArgs[%d]", e.Name, i))
+		}
 		for _, a := range e.Args {
 			v.validateArg(a)
 		}
 	case *ListLit:
+		v.validateType(e.Elem, "ListLit Elem")
 		for _, el := range e.Elems {
 			v.validateExpr(el)
 		}
 	case *MapLit:
+		v.validateType(e.KeyT, "MapLit KeyT")
+		v.validateType(e.ValT, "MapLit ValT")
 		for _, en := range e.Entries {
 			v.validateExpr(en.Key)
 			v.validateExpr(en.Value)
@@ -315,6 +381,9 @@ func (v *validator) validateExpr(e Expr) {
 			v.validateExpr(el)
 		}
 	case *StructLit:
+		if e.TypeName == "" {
+			v.addf("StructLit: empty TypeName")
+		}
 		for _, f := range e.Fields {
 			if f.Value != nil {
 				v.validateExpr(f.Value)
@@ -343,6 +412,7 @@ func (v *validator) validateExpr(e Expr) {
 		v.validateExpr(e.X)
 		v.validateExpr(e.Index)
 	case *Closure:
+		v.validateType(e.Return, "Closure Return")
 		v.validateBlock(e.Body)
 		for i, c := range e.Captures {
 			if c == nil {
@@ -352,8 +422,23 @@ func (v *validator) validateExpr(e Expr) {
 			if c.Name == "" {
 				v.addf("Closure: capture[%d] empty Name", i)
 			}
+			v.validateType(c.T, fmt.Sprintf("Closure capture[%d]", i))
+		}
+		for i, p := range e.Params {
+			if p == nil {
+				v.addf("Closure: param[%d] nil", i)
+				continue
+			}
+			if p.Type == nil {
+				v.addf("Closure: param[%d] nil Type", i)
+				continue
+			}
+			v.validateType(p.Type, fmt.Sprintf("Closure param[%d]", i))
 		}
 	case *VariantLit:
+		if e.Variant == "" {
+			v.addf("VariantLit: empty Variant")
+		}
 		for _, a := range e.Args {
 			v.validateArg(a)
 		}
@@ -383,12 +468,100 @@ func (v *validator) validateExpr(e Expr) {
 			}
 			v.validateMatchArm(a)
 		}
+		if e.Tree != nil {
+			for _, err := range ValidateDecisionTree(e.Tree, len(e.Arms)) {
+				v.addf("MatchExpr tree: %v", err)
+			}
+		}
 	case *StringLit:
 		for _, p := range e.Parts {
 			if !p.IsLit && p.Expr != nil {
 				v.validateExpr(p.Expr)
 			}
 		}
+	}
+}
+
+func (v *validator) validateTypeParams(owner string, params []*TypeParam) {
+	if len(params) == 0 {
+		return
+	}
+	seen := map[string]bool{}
+	for i, p := range params {
+		if p == nil {
+			v.addf("%s: generic[%d] nil", owner, i)
+			continue
+		}
+		if p.Name == "" {
+			v.addf("%s: generic[%d] empty Name", owner, i)
+		} else if seen[p.Name] {
+			v.addf("%s: duplicate generic %s", owner, p.Name)
+		}
+		seen[p.Name] = true
+		for j, b := range p.Bounds {
+			if b == nil {
+				v.addf("%s: generic %s bound[%d] nil", owner, p.Name, j)
+				continue
+			}
+			v.validateType(b, fmt.Sprintf("%s generic %s bound[%d]", owner, p.Name, j))
+		}
+	}
+}
+
+func (v *validator) validateType(t Type, where string) {
+	if t == nil {
+		v.addf("%s: nil Type", where)
+		return
+	}
+	switch t := t.(type) {
+	case *PrimType:
+		if t.Kind == PrimInvalid {
+			v.addf("%s: invalid primitive type", where)
+		}
+	case *NamedType:
+		if t.Name == "" {
+			v.addf("%s: NamedType empty Name", where)
+		}
+		for i, a := range t.Args {
+			if a == nil {
+				v.addf("%s: NamedType arg[%d] nil", where, i)
+				continue
+			}
+			v.validateType(a, fmt.Sprintf("%s arg[%d]", where, i))
+		}
+	case *OptionalType:
+		if t.Inner == nil {
+			v.addf("%s: OptionalType nil Inner", where)
+			return
+		}
+		v.validateType(t.Inner, where+" inner")
+	case *TupleType:
+		for i, e := range t.Elems {
+			if e == nil {
+				v.addf("%s: TupleType elem[%d] nil", where, i)
+				continue
+			}
+			v.validateType(e, fmt.Sprintf("%s elem[%d]", where, i))
+		}
+	case *FnType:
+		for i, p := range t.Params {
+			if p == nil {
+				v.addf("%s: FnType param[%d] nil", where, i)
+				continue
+			}
+			v.validateType(p, fmt.Sprintf("%s param[%d]", where, i))
+		}
+		if t.Return != nil {
+			v.validateType(t.Return, where+" return")
+		}
+	case *TypeVar:
+		if t.Name == "" {
+			v.addf("%s: TypeVar empty Name", where)
+		}
+	case *ErrType:
+		// allowed
+	default:
+		v.addf("%s: unknown Type %T", where, t)
 	}
 }
 

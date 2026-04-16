@@ -38,7 +38,7 @@ func run() error {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	merged, err := bundle.MergeSelfhost(root)
+	merged, err := bundle.MergeSelfhostGenerated(root)
 	if err != nil {
 		return err
 	}
@@ -107,7 +107,7 @@ func generatedSelfhostUpToDate(root, outPath string) (bool, error) {
 	if err := checkPath(filepath.Join(root, "internal/selfhost/gen_selfhost.go")); err != nil {
 		return false, fmt.Errorf("stat selfhost generator: %w", err)
 	}
-	for _, rel := range bundle.SelfhostSourceFiles {
+	for _, rel := range bundle.GeneratedFiles() {
 		if err := checkPath(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
 			return false, fmt.Errorf("stat %s: %w", rel, err)
 		}

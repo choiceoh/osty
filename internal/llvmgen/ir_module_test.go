@@ -332,3 +332,37 @@ func TestGenerateModuleBuiltinResultFieldConstructors(t *testing.T) {
 		}
 	}
 }
+
+func TestGenerateModuleBuiltinResultConstructorsTrackLocalContext(t *testing.T) {
+	src := `struct Holder {
+    ok: Result<Int, String>
+    flag: Result<Bool, String>
+}
+
+fn wrap(value: Int) -> Result<Int, String> {
+    return Result.Ok(value)
+}
+
+fn consume(value: Result<Bool, String>) -> Int {
+    1
+}
+
+fn main() {
+    let ok: Result<Int, String> = Result.Ok(42)
+    let flag: Result<Bool, String> = Result.Ok(true)
+    let holder = Holder { ok: Result.Err("bad"), flag: Result.Ok(true) }
+    let wrapped = wrap(7)
+    println(consume(Result.Ok(true)))
+}
+`
+	got := runMonoLowerPipeline(t, src, "/tmp/phase2_result_context_ir.osty")
+	for _, want := range []string{
+		"%Result.i64.ptr",
+		"%Result.i1.ptr",
+		"@consume",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}

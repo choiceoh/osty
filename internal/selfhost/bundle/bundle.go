@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-var SelfhostSourceFiles = []string{
+var generatedFiles = []string{
 	"examples/selfhost-core/semver.osty",
 	"examples/selfhost-core/semver_parse.osty",
 	"examples/selfhost-core/frontend.osty",
@@ -21,7 +21,7 @@ var SelfhostSourceFiles = []string{
 	"internal/selfhost/ast_lower.osty",
 }
 
-var ToolchainCheckerSourceFiles = []string{
+var toolchainCheckerFiles = []string{
 	"examples/selfhost-core/semver.osty",
 	"examples/selfhost-core/semver_parse.osty",
 	"toolchain/frontend.osty",
@@ -42,7 +42,7 @@ var ToolchainCheckerSourceFiles = []string{
 	"internal/selfhost/ast_lower.osty",
 }
 
-const StringsPrelude = `use go "strings" as strings {
+const stringsPrelude = `use go "strings" as strings {
     fn Count(s: String, substr: String) -> Int
     fn Fields(s: String) -> List<String>
     fn HasPrefix(s: String, prefix: String) -> Bool
@@ -58,20 +58,28 @@ const StringsPrelude = `use go "strings" as strings {
 }
 `
 
-func MergeSelfhost(root string) ([]byte, error) {
-	return Merge(root, SelfhostSourceFiles)
+func GeneratedFiles() []string {
+	return append([]string(nil), generatedFiles...)
+}
+
+func ToolchainCheckerFiles() []string {
+	return append([]string(nil), toolchainCheckerFiles...)
+}
+
+func MergeSelfhostGenerated(root string) ([]byte, error) {
+	return MergeFiles(root, generatedFiles)
 }
 
 func MergeToolchainChecker(root string) ([]byte, error) {
-	return Merge(root, ToolchainCheckerSourceFiles)
+	return MergeFiles(root, toolchainCheckerFiles)
 }
 
-func Merge(root string, rels []string) ([]byte, error) {
+func MergeFiles(root string, files []string) ([]byte, error) {
 	var b strings.Builder
-	b.WriteString(StringsPrelude)
+	b.WriteString(stringsPrelude)
 	b.WriteByte('\n')
 
-	for _, rel := range rels {
+	for _, rel := range files {
 		path := filepath.Join(root, filepath.FromSlash(rel))
 		data, err := os.ReadFile(path)
 		if err != nil {

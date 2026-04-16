@@ -18,19 +18,35 @@ func runAIRepair(args []string) {
 }
 
 func runAIRepairMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(args) > 0 {
+		switch args[0] {
+		case "triage":
+			return runAIRepairTriageMain(args[1:], stdout, stderr)
+		case "promote":
+			return runAIRepairPromoteMain(args[1:], stdout, stderr)
+		}
+	}
 	fs := flag.NewFlagSet("airepair", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: osty airepair [--check] [--write] [--json] [--stdin-name NAME] [--mode rewrite|parse|frontend] FILE|-")
+		fmt.Fprintln(stderr, "usage: osty airepair [--check] [--write] [--json] [--capture-dir DIR] [--capture-name NAME] [--capture-if residual|changed|always] [--stdin-name NAME] [--mode rewrite|parse|frontend] FILE|-")
+		fmt.Fprintln(stderr, "       osty airepair triage [--top N] DIR")
+		fmt.Fprintln(stderr, "       osty airepair promote [--dest DIR] [--name NAME] CASE")
 	}
 	var checkMode, writeMode, jsonMode bool
 	stdinName := "<stdin>"
 	modeName := string(airepair.ModeFrontEndAssist)
+	captureDir := ""
+	captureName := ""
+	captureModeName := string(aiRepairCaptureResidual)
 	fs.BoolVar(&checkMode, "check", false, "exit 1 if FILE would be repaired")
 	fs.BoolVar(&checkMode, "c", false, "alias for --check")
 	fs.BoolVar(&writeMode, "write", false, "overwrite FILE in place")
 	fs.BoolVar(&writeMode, "w", false, "alias for --write")
 	fs.BoolVar(&jsonMode, "json", false, "emit a structured airepair report as JSON")
+	fs.StringVar(&captureDir, "capture-dir", captureDir, "write captured airepair artifacts to DIR")
+	fs.StringVar(&captureName, "capture-name", captureName, "basename for captured airepair artifacts")
+	fs.StringVar(&captureModeName, "capture-if", captureModeName, "capture when residual, changed, or always")
 	fs.StringVar(&stdinName, "stdin-name", stdinName, "filename to use in reports when reading from stdin")
 	fs.StringVar(&modeName, "mode", modeName, "acceptance mode (rewrite, parse, frontend)")
 	if err := fs.Parse(args); err != nil {
@@ -44,10 +60,25 @@ func runAIRepairMain(args []string, stdin io.Reader, stdout, stderr io.Writer) i
 		fmt.Fprintln(stderr, "osty airepair: --check and --write are mutually exclusive")
 		return 2
 	}
+	if captureDir == "" {
+		if captureName != "" {
+			fmt.Fprintln(stderr, "osty airepair: --capture-name requires --capture-dir")
+			return 2
+		}
+		if captureModeName != string(aiRepairCaptureResidual) {
+			fmt.Fprintln(stderr, "osty airepair: --capture-if requires --capture-dir")
+			return 2
+		}
+	}
 
 	mode, ok := parseAIRepairMode(modeName)
 	if !ok {
 		fmt.Fprintf(stderr, "osty airepair: unknown mode %q (want rewrite, parse, or frontend)\n", modeName)
+		return 2
+	}
+	captureMode, ok := parseAIRepairCaptureMode(captureModeName)
+	if !ok {
+		fmt.Fprintf(stderr, "osty airepair: unknown capture mode %q (want residual, changed, or always)\n", captureModeName)
 		return 2
 	}
 
@@ -66,6 +97,12 @@ func runAIRepairMain(args []string, stdin io.Reader, stdout, stderr io.Writer) i
 		Filename: displayName,
 		Mode:     mode,
 	})
+	if captureDir != "" && shouldCaptureAIRepairResult(res, captureMode) {
+		if err := captureAIRepairCase(captureDir, aiRepairCaptureBase(captureName, displayName), res); err != nil {
+			fmt.Fprintf(stderr, "osty airepair: %v\n", err)
+			return 1
+		}
+	}
 	changed := res.Changed
 
 	if checkMode {

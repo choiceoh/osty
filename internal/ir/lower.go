@@ -521,6 +521,14 @@ func (l *lowerer) lowerStmt(s ast.Stmt) Stmt {
 	case *ast.LetStmt:
 		return l.lowerLetStmt(s)
 	case *ast.ExprStmt:
+		switch x := s.X.(type) {
+		case *ast.IfExpr:
+			if !x.IsIfLet {
+				return l.lowerIfStmt(x)
+			}
+		case *ast.MatchExpr:
+			return l.lowerMatchStmt(x)
+		}
 		x := l.lowerExpr(s.X)
 		return &ExprStmt{X: x, SpanV: Span{Start: posFromToken(s.Pos()), End: posFromToken(s.End())}}
 	case *ast.ReturnStmt:
@@ -633,6 +641,40 @@ func (l *lowerer) lowerForStmt(s *ast.ForStmt) Stmt {
 		Iter:    l.lowerExpr(s.Iter),
 		Body:    body,
 		SpanV:   nodeSpan(s),
+	}
+}
+
+func (l *lowerer) lowerIfStmt(e *ast.IfExpr) Stmt {
+	return &IfStmt{
+		Cond:  l.lowerExpr(e.Cond),
+		Then:  l.lowerBlock(e.Then),
+		Else:  l.lowerElseStmt(e.Else),
+		SpanV: nodeSpan(e),
+	}
+}
+
+func (l *lowerer) lowerElseStmt(alt ast.Expr) *Block {
+	switch alt := alt.(type) {
+	case nil:
+		return nil
+	case *ast.Block:
+		return l.lowerBlock(alt)
+	case *ast.IfExpr:
+		if !alt.IsIfLet {
+			stmt := l.lowerIfStmt(alt)
+			return &Block{Stmts: []Stmt{stmt}, SpanV: nodeSpan(alt)}
+		}
+		lowered := l.lowerIfExpr(alt)
+		return &Block{
+			Stmts: []Stmt{&ExprStmt{X: lowered, SpanV: lowered.At()}},
+			SpanV: nodeSpan(alt),
+		}
+	default:
+		lowered := l.lowerExpr(alt)
+		return &Block{
+			Stmts: []Stmt{&ExprStmt{X: lowered, SpanV: lowered.At()}},
+			SpanV: lowered.At(),
+		}
 	}
 }
 
@@ -781,7 +823,7 @@ func (l *lowerer) lowerIdent(id *ast.Ident) Expr {
 	out := &Ident{Name: id.Name, SpanV: nodeSpan(id), T: ErrTypeVal}
 	if l.res != nil {
 		if sym := l.res.Refs[id]; sym != nil {
-			out.Kind = identKind(sym.Kind)
+			out.Kind = identKind(sym)
 		}
 	}
 	if l.chk != nil {
@@ -803,9 +845,15 @@ func (l *lowerer) symbol(id *ast.Ident) *resolve.Symbol {
 	return l.res.Refs[id]
 }
 
-func identKind(k resolve.SymbolKind) IdentKind {
-	switch k {
+func identKind(sym *resolve.Symbol) IdentKind {
+	if sym == nil {
+		return IdentUnknown
+	}
+	switch sym.Kind {
 	case resolve.SymLet:
+		if _, ok := sym.Decl.(*ast.LetDecl); ok {
+			return IdentGlobal
+		}
 		return IdentLocal
 	case resolve.SymParam:
 		return IdentParam
@@ -922,8 +970,13 @@ func (l *lowerer) lowerCall(e *ast.CallExpr) Expr {
 			return out
 		}
 		// Check if this is a variant constructor: e.g. Some(42), Ok(x).
-		if sym := l.symbol(id); sym != nil && sym.Kind == resolve.SymVariant {
-			return l.lowerVariantCall(e, "", id.Name)
+		if sym := l.symbol(id); sym != nil {
+			if sym.Kind == resolve.SymVariant {
+				return l.lowerVariantCall(e, "", sym.Name)
+			}
+			if sym.Kind == resolve.SymBuiltin && isPreludeVariantName(sym.Name) {
+				return l.lowerVariantCall(e, "", sym.Name)
+			}
 		}
 	}
 	// Strip a turbofish wrapper to retain its type arguments.
@@ -1058,6 +1111,14 @@ func intrinsicByName(name string) (IntrinsicKind, bool) {
 		return IntrinsicEprintln, true
 	}
 	return 0, false
+}
+
+func isPreludeVariantName(name string) bool {
+	switch name {
+	case "Some", "None", "Ok", "Err":
+		return true
+	}
+	return false
 }
 
 func (l *lowerer) lowerList(e *ast.ListExpr) Expr {
@@ -1334,13 +1395,31 @@ func (l *lowerer) lowerTurbofish(tf *ast.TurbofishExpr) Expr {
 	return base
 }
 
+func (l *lowerer) lowerMatchStmt(m *ast.MatchExpr) Stmt {
+	out := &MatchStmt{
+		Scrutinee: l.lowerExpr(m.Scrutinee),
+		Arms:      l.lowerMatchArms(m.Arms),
+		SpanV:     nodeSpan(m),
+	}
+	out.Tree = CompileDecisionTree(out.Scrutinee.Type(), out.Arms)
+	return out
+}
+
 func (l *lowerer) lowerMatchExpr(m *ast.MatchExpr) Expr {
 	out := &MatchExpr{
 		Scrutinee: l.lowerExpr(m.Scrutinee),
 		T:         l.exprType(m),
 		SpanV:     nodeSpan(m),
 	}
-	for _, arm := range m.Arms {
+	out.Arms = l.lowerMatchArms(m.Arms)
+	// Compile a decision tree when the arm shapes are specialisable.
+	out.Tree = CompileDecisionTree(out.Scrutinee.Type(), out.Arms)
+	return out
+}
+
+func (l *lowerer) lowerMatchArms(arms []*ast.MatchArm) []*MatchArm {
+	out := make([]*MatchArm, 0, len(arms))
+	for _, arm := range arms {
 		a := &MatchArm{
 			Pattern: l.lowerPattern(arm.Pattern),
 			SpanV:   Span{Start: posFromToken(arm.Pos()), End: posFromToken(arm.End())},
@@ -1349,10 +1428,8 @@ func (l *lowerer) lowerMatchExpr(m *ast.MatchExpr) Expr {
 			a.Guard = l.lowerExpr(arm.Guard)
 		}
 		a.Body = l.lowerArmBody(arm.Body)
-		out.Arms = append(out.Arms, a)
+		out = append(out, a)
 	}
-	// Compile a decision tree when the arm shapes are specialisable.
-	out.Tree = CompileDecisionTree(out.Scrutinee.Type(), out.Arms)
 	return out
 }
 

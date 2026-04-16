@@ -50,6 +50,31 @@ func TestAnalyzeRewriteModeAcceptsSafeLexicalRewrite(t *testing.T) {
 	}
 }
 
+func TestJSONReportSummarizesResidualOutcomes(t *testing.T) {
+	result := Analyze(Request{
+		Source:   []byte("fn main() {\n    let items = [1, 2]\n    for i, item in enumerate(items):\n        println(item)\n}\n"),
+		Filename: "main.osty",
+		Mode:     ModeFrontEndAssist,
+	})
+
+	report := result.JSONReport()
+	if report.Status != ReportStatusRepairedResidual {
+		t.Fatalf("status = %q, want %q", report.Status, ReportStatusRepairedResidual)
+	}
+	if report.Summary.ResidualErrors <= 0 {
+		t.Fatalf("summary.residual_errors = %d, want > 0", report.Summary.ResidualErrors)
+	}
+	if report.Summary.TotalErrorsReduced <= 0 {
+		t.Fatalf("summary.total_errors_reduced = %d, want > 0", report.Summary.TotalErrorsReduced)
+	}
+	if len(report.ChangeDetails) == 0 {
+		t.Fatal("expected report change_details metadata")
+	}
+	if report.ChangeDetails[len(report.ChangeDetails)-1].Phase != "loop" {
+		t.Fatalf("last change phase = %q, want loop", report.ChangeDetails[len(report.ChangeDetails)-1].Phase)
+	}
+}
+
 func TestAnalyzeFrontEndAssistRepairsJSStrictEquality(t *testing.T) {
 	result := Analyze(Request{
 		Source:   []byte("fn main() {\n    let ok = 1 === 1\n}\n"),

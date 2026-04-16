@@ -177,6 +177,26 @@ type builtinResultType struct {
 	errTyp string
 }
 
+func builtinResultTypeFromAST(t ast.Type, env typeEnv) (builtinResultType, bool) {
+	named, ok := t.(*ast.NamedType)
+	if !ok || len(named.Path) != 1 || named.Path[0] != "Result" || len(named.Args) != 2 {
+		return builtinResultType{}, false
+	}
+	okTyp, err := llvmType(named.Args[0], env)
+	if err != nil {
+		return builtinResultType{}, false
+	}
+	errTyp, err := llvmType(named.Args[1], env)
+	if err != nil {
+		return builtinResultType{}, false
+	}
+	return builtinResultType{
+		typ:    llvmResultTypeName(okTyp, errTyp),
+		okTyp:  okTyp,
+		errTyp: errTyp,
+	}, true
+}
+
 func collectDeclarations(file *ast.File) (*declarations, error) {
 	out := &declarations{
 		functionsByName:   map[string]*fnSig{},
@@ -612,19 +632,8 @@ func collectBuiltinResultTypeFromAST(out map[string]builtinResultType, t ast.Typ
 	}
 	switch tt := t.(type) {
 	case *ast.NamedType:
-		if len(tt.Path) == 1 && tt.Path[0] == "Result" && len(tt.Args) == 2 {
-			okTyp, err := llvmType(tt.Args[0], env)
-			if err == nil {
-				errTyp, err2 := llvmType(tt.Args[1], env)
-				if err2 == nil {
-					info := builtinResultType{
-						typ:    llvmResultTypeName(okTyp, errTyp),
-						okTyp:  okTyp,
-						errTyp: errTyp,
-					}
-					out[info.typ] = info
-				}
-			}
+		if info, ok := builtinResultTypeFromAST(tt, env); ok {
+			out[info.typ] = info
 		}
 		for _, arg := range tt.Args {
 			collectBuiltinResultTypeFromAST(out, arg, env)
@@ -946,6 +955,7 @@ func (g *generator) emitMainFunction(sig *fnSig) (string, error) {
 func (g *generator) emitUserFunction(sig *fnSig) (string, error) {
 	g.beginFunction()
 	g.returnType = sig.ret
+	g.returnSourceType = sig.returnSourceType
 	g.returnListElemTyp = sig.retListElemTyp
 	for _, p := range sig.params {
 		v := value{
@@ -981,7 +991,7 @@ func (g *generator) emitUserFunction(sig *fnSig) (string, error) {
 			g.takeOstyEmitter(emitter)
 		}
 	} else {
-		if err := g.emitReturningBlock(sig.decl.Body.Stmts, sig.ret, sig.retListElemTyp, sig.retMapKeyTyp, sig.retMapValueTyp, sig.retSetElemTyp); err != nil {
+		if err := g.emitReturningBlock(sig.decl.Body.Stmts, sig.ret, sig.returnSourceType, sig.retListElemTyp, sig.retMapKeyTyp, sig.retMapValueTyp, sig.retSetElemTyp); err != nil {
 			return "", err
 		}
 	}
