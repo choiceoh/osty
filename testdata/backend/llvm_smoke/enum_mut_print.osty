@@ -1,0 +1,14 @@
+enum Switch {
+    Off
+    On
+}
+
+fn main() {
+    let mut state: Switch = Off
+    state = On
+    if state == On {
+        println(42)
+    } else {
+        println(0)
+    }
+}

@@ -22,14 +22,16 @@
 - Multi-file package, vendored dependency, workspace build의 실제 code emission은
   아직 제한이 있다. LLVM 전환 전에 package 단위 emit/link 모델을 분명히 해야
   한다.
-- 현재 Phase 29까지의 LLVM backend 의미는 `examples/selfhost-core/llvmgen.osty`
+- 현재 Phase 37까지의 LLVM backend 의미는 `examples/selfhost-core/llvmgen.osty`
   쪽으로 옮겨지고 있다. 여기에는 smoke IR builder, skeleton renderer,
   toolchain command plan, executable parity corpus, go-only diagnostic, 그리고
   unsupported source-shape taxonomy가 포함된다. 성공 경로의 scalar instruction
   strings, temp/label naming, plain/escaped ASCII `String` `println` module
   constant/formatting shape, immutable/mutable local String value paths, and
-  simple String function return/parameter paths도 같은 selfhost-core에서
-  생성한다.
+  simple String function return/parameter paths, simple named struct type
+  definitions, struct literals, field reads, struct function boundaries, and
+  mutable struct locals, plus bare enum tag values across simple function and
+  mutable-local paths도 같은 selfhost-core에서 생성한다.
 
 ## 이주 원칙
 
@@ -326,8 +328,8 @@ artifact/cache layout 정책은 [`LLVM_ARTIFACT_LAYOUT.md`](./LLVM_ARTIFACT_LAYO
 | `List<T>` | `%osty.list` + element descriptor | monomorphized typed list와 erased list 중 선택 |
 | `Option<T>` | tagged payload | nullable pointer optimization은 후순위 |
 | `Result<T,E>` | tagged payload | Go backend의 `Value/Error/IsOk`와 semantic parity |
-| `struct` | named LLVM struct 또는 opaque handle | layout stability 필요 |
-| `enum` | tag + max payload storage | niche optimization은 후순위 |
+| `struct` | named LLVM struct | Phase 30-33 smoke subset uses value aggregates; full ABI/layout stability remains runtime work |
+| `enum` | `i64` tag for bare variants, tagged payload storage later | Phase 34-37 smoke subset covers payload-free variants; niche optimization is later |
 | closure | fn pointer + env pointer | capture lifetime/ownership 필요 |
 | interface | data pointer + vtable pointer | vtable generation은 Phase 5+ |
 

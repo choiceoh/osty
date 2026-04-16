@@ -203,13 +203,17 @@ func Generate(file *ast.File, opts Options) ([]byte, error) {
 		}
 		return g.render([]string{mainIR}), nil
 	}
-	decls, err := collectFunctions(file)
+	decls, err := collectDeclarations(file)
 	if err != nil {
 		return nil, err
 	}
-	g.functions = decls.byName
+	g.functions = decls.functionsByName
+	g.structs = decls.structsOrdered
+	g.structsByName = decls.structsByName
+	g.structsByType = decls.structsByType
+	g.enumsByName = decls.enumsByName
 	var defs []string
-	for _, sig := range decls.ordered {
+	for _, sig := range decls.functionsOrdered {
 		if sig.name == "main" {
 			continue
 		}
@@ -219,7 +223,7 @@ func Generate(file *ast.File, opts Options) ([]byte, error) {
 		}
 		defs = append(defs, def)
 	}
-	mainSig := decls.byName["main"]
+	mainSig := decls.functionsByName["main"]
 	if mainSig == nil {
 		return nil, unsupported("source-layout", "missing main function or script statements")
 	}
@@ -241,9 +245,13 @@ func fileUnsupportedDiagnostic(file *ast.File) (UnsupportedDiagnostic, bool) {
 }
 
 type generator struct {
-	sourcePath string
-	target     string
-	functions  map[string]*fnSig
+	sourcePath    string
+	target        string
+	functions     map[string]*fnSig
+	structs       []*structInfo
+	structsByName map[string]*structInfo
+	structsByType map[string]*structInfo
+	enumsByName   map[string]*enumInfo
 
 	temp       int
 	label      int
@@ -254,9 +262,14 @@ type generator struct {
 	returnType string
 }
 
-type fnDecls struct {
-	ordered []*fnSig
-	byName  map[string]*fnSig
+type declarations struct {
+	functionsOrdered []*fnSig
+	functionsByName  map[string]*fnSig
+	structsOrdered   []*structInfo
+	structsByName    map[string]*structInfo
+	structsByType    map[string]*structInfo
+	enumsOrdered     []*enumInfo
+	enumsByName      map[string]*enumInfo
 }
 
 type fnSig struct {
@@ -271,33 +284,186 @@ type paramInfo struct {
 	typ  string
 }
 
+type structInfo struct {
+	name   string
+	typ    string
+	decl   *ast.StructDecl
+	fields []fieldInfo
+	byName map[string]fieldInfo
+}
+
+type fieldInfo struct {
+	name  string
+	typ   string
+	index int
+}
+
+type enumInfo struct {
+	name     string
+	decl     *ast.EnumDecl
+	variants map[string]variantInfo
+}
+
+type variantInfo struct {
+	name string
+	tag  int
+}
+
 type value struct {
 	typ string
 	ref string
 	ptr bool
 }
 
-func collectFunctions(file *ast.File) (*fnDecls, error) {
-	out := &fnDecls{byName: map[string]*fnSig{}}
+func collectDeclarations(file *ast.File) (*declarations, error) {
+	out := &declarations{
+		functionsByName: map[string]*fnSig{},
+		structsByName:   map[string]*structInfo{},
+		structsByType:   map[string]*structInfo{},
+		enumsByName:     map[string]*enumInfo{},
+	}
+	for _, decl := range file.Decls {
+		switch d := decl.(type) {
+		case *ast.StructDecl:
+			info, err := collectStructShell(d)
+			if err != nil {
+				return nil, err
+			}
+			if _, exists := out.structsByName[info.name]; exists {
+				return nil, unsupportedf("source-layout", "duplicate struct %q", info.name)
+			}
+			out.structsOrdered = append(out.structsOrdered, info)
+			out.structsByName[info.name] = info
+			out.structsByType[info.typ] = info
+		case *ast.EnumDecl:
+			info, err := collectEnum(d)
+			if err != nil {
+				return nil, err
+			}
+			if _, exists := out.enumsByName[info.name]; exists {
+				return nil, unsupportedf("source-layout", "duplicate enum %q", info.name)
+			}
+			out.enumsOrdered = append(out.enumsOrdered, info)
+			out.enumsByName[info.name] = info
+		case *ast.FnDecl:
+			// Function signatures are collected after struct shells so named
+			// struct types can appear in parameters and returns.
+		default:
+			return nil, unsupportedf("source-layout", "top-level declaration %T", decl)
+		}
+	}
+	for _, info := range out.structsOrdered {
+		if err := collectStructFields(info, out.structsByName); err != nil {
+			return nil, err
+		}
+	}
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FnDecl)
 		if !ok {
-			return nil, unsupportedf("source-layout", "top-level declaration %T", decl)
+			continue
 		}
-		sig, err := signatureOf(fn)
+		sig, err := signatureOf(fn, out.structsByName, out.enumsByName)
 		if err != nil {
 			return nil, err
 		}
-		if _, exists := out.byName[sig.name]; exists {
+		if _, exists := out.functionsByName[sig.name]; exists {
 			return nil, unsupportedf("source-layout", "duplicate function %q", sig.name)
 		}
-		out.ordered = append(out.ordered, sig)
-		out.byName[sig.name] = sig
+		out.functionsOrdered = append(out.functionsOrdered, sig)
+		out.functionsByName[sig.name] = sig
 	}
 	return out, nil
 }
 
-func signatureOf(fn *ast.FnDecl) (*fnSig, error) {
+func collectStructShell(decl *ast.StructDecl) (*structInfo, error) {
+	if decl == nil {
+		return nil, unsupported("source-layout", "nil struct")
+	}
+	if !isLLVMIdent(decl.Name) {
+		return nil, unsupportedf("name", "struct name %q", decl.Name)
+	}
+	if len(decl.Generics) != 0 {
+		return nil, unsupportedf("type-system", "generic struct %q is not supported", decl.Name)
+	}
+	if len(decl.Methods) != 0 {
+		return nil, unsupportedf("function-signature", "struct %q methods are not supported", decl.Name)
+	}
+	return &structInfo{
+		name:   decl.Name,
+		typ:    "%" + decl.Name,
+		decl:   decl,
+		byName: map[string]fieldInfo{},
+	}, nil
+}
+
+func collectStructFields(info *structInfo, structs map[string]*structInfo) error {
+	if info == nil || info.decl == nil {
+		return unsupported("source-layout", "nil struct")
+	}
+	for i, field := range info.decl.Fields {
+		if field == nil {
+			return unsupportedf("source-layout", "struct %q has nil field", info.name)
+		}
+		if !isLLVMIdent(field.Name) {
+			return unsupportedf("name", "struct %q field name %q", info.name, field.Name)
+		}
+		if field.Default != nil {
+			return unsupportedf("type-system", "struct %q field %q has a default value", info.name, field.Name)
+		}
+		if _, exists := info.byName[field.Name]; exists {
+			return unsupportedf("source-layout", "struct %q duplicate field %q", info.name, field.Name)
+		}
+		typ, err := llvmType(field.Type, structs, nil)
+		if err != nil {
+			return unsupportedf("type-system", "struct %q field %q: %s", info.name, field.Name, unsupportedMessage(err))
+		}
+		if typ == info.typ {
+			return unsupportedf("type-system", "struct %q recursive field %q", info.name, field.Name)
+		}
+		fieldInfo := fieldInfo{name: field.Name, typ: typ, index: i}
+		info.fields = append(info.fields, fieldInfo)
+		info.byName[field.Name] = fieldInfo
+	}
+	return nil
+}
+
+func collectEnum(decl *ast.EnumDecl) (*enumInfo, error) {
+	if decl == nil {
+		return nil, unsupported("source-layout", "nil enum")
+	}
+	if !isLLVMIdent(decl.Name) {
+		return nil, unsupportedf("name", "enum name %q", decl.Name)
+	}
+	if len(decl.Generics) != 0 {
+		return nil, unsupportedf("type-system", "generic enum %q is not supported", decl.Name)
+	}
+	if len(decl.Methods) != 0 {
+		return nil, unsupportedf("function-signature", "enum %q methods are not supported", decl.Name)
+	}
+	info := &enumInfo{
+		name:     decl.Name,
+		decl:     decl,
+		variants: map[string]variantInfo{},
+	}
+	for i, variant := range decl.Variants {
+		if variant == nil {
+			return nil, unsupportedf("source-layout", "enum %q has nil variant", decl.Name)
+		}
+		if !isLLVMIdent(variant.Name) {
+			return nil, unsupportedf("name", "enum %q variant name %q", decl.Name, variant.Name)
+		}
+		if len(variant.Fields) != 0 {
+			return nil, unsupportedf("type-system", "enum %q variant %q payloads are not supported", decl.Name, variant.Name)
+		}
+		if _, exists := info.variants[variant.Name]; exists {
+			return nil, unsupportedf("source-layout", "enum %q duplicate variant %q", decl.Name, variant.Name)
+		}
+		info.variants[variant.Name] = variantInfo{name: variant.Name, tag: i}
+	}
+	return info, nil
+}
+
+func signatureOf(fn *ast.FnDecl, structs map[string]*structInfo, enums map[string]*enumInfo) (*fnSig, error) {
 	if fn == nil {
 		return nil, unsupported("source-layout", "nil function")
 	}
@@ -320,7 +486,7 @@ func signatureOf(fn *ast.FnDecl) (*fnSig, error) {
 		}
 		return sig, nil
 	}
-	ret, err := llvmType(fn.ReturnType)
+	ret, err := llvmType(fn.ReturnType, structs, enums)
 	if err != nil {
 		return nil, unsupportedf("type-system", "function %q return type: %s", fn.Name, unsupportedMessage(err))
 	}
@@ -335,7 +501,7 @@ func signatureOf(fn *ast.FnDecl) (*fnSig, error) {
 		if !isLLVMIdent(p.Name) {
 			return nil, unsupportedf("name", "parameter name %q", p.Name)
 		}
-		typ, err := llvmType(p.Type)
+		typ, err := llvmType(p.Type, structs, enums)
 		if err != nil {
 			return nil, unsupportedf("type-system", "function %q parameter %q: %s", fn.Name, p.Name, unsupportedMessage(err))
 		}
@@ -476,7 +642,7 @@ func (g *generator) emitLet(stmt *ast.LetStmt) error {
 		return err
 	}
 	if stmt.Type != nil {
-		typ, err := llvmType(stmt.Type)
+		typ, err := llvmType(stmt.Type, g.structsByName, g.enumsByName)
 		if err != nil {
 			return err
 		}
@@ -686,16 +852,7 @@ func (g *generator) emitExpr(expr ast.Expr) (value, error) {
 	case *ast.StringLit:
 		return g.emitStringLiteral(e)
 	case *ast.Ident:
-		if v, ok := g.lookupLocal(e.Name); ok {
-			if v.ptr {
-				emitter := g.toOstyEmitter()
-				out := llvmLoad(emitter, toOstyValue(v))
-				g.takeOstyEmitter(emitter)
-				return fromOstyValue(out), nil
-			}
-			return v, nil
-		}
-		return value{}, unsupportedf("name", "unknown identifier %q", e.Name)
+		return g.emitIdent(e.Name)
 	case *ast.ParenExpr:
 		return g.emitExpr(e.X)
 	case *ast.UnaryExpr:
@@ -704,11 +861,153 @@ func (g *generator) emitExpr(expr ast.Expr) (value, error) {
 		return g.emitBinary(e)
 	case *ast.CallExpr:
 		return g.emitCall(e)
+	case *ast.FieldExpr:
+		return g.emitFieldExpr(e)
+	case *ast.StructLit:
+		return g.emitStructLit(e)
 	case *ast.IfExpr:
 		return g.emitIfExprValue(e)
 	default:
 		return value{}, unsupportedf("expression", "expression %T", expr)
 	}
+}
+
+func (g *generator) emitIdent(name string) (value, error) {
+	if v, ok := g.lookupLocal(name); ok {
+		return g.loadIfPointer(v)
+	}
+	if v, found, err := g.enumVariantIdent(name); found || err != nil {
+		return v, err
+	}
+	return value{}, unsupportedf("name", "unknown identifier %q", name)
+}
+
+func (g *generator) loadIfPointer(v value) (value, error) {
+	if !v.ptr {
+		return v, nil
+	}
+	emitter := g.toOstyEmitter()
+	out := llvmLoad(emitter, toOstyValue(v))
+	g.takeOstyEmitter(emitter)
+	return fromOstyValue(out), nil
+}
+
+func (g *generator) emitStructLit(lit *ast.StructLit) (value, error) {
+	typeName, ok := structTypeExprName(lit.Type)
+	if !ok {
+		return value{}, unsupportedf("type-system", "struct literal type %T", lit.Type)
+	}
+	info := g.structsByName[typeName]
+	if info == nil {
+		return value{}, unsupportedf("type-system", "unknown struct %q", typeName)
+	}
+	if lit.Spread != nil {
+		return value{}, unsupportedf("expression", "struct %q spread literal", typeName)
+	}
+	fields := map[string]*ast.StructLitField{}
+	for _, field := range lit.Fields {
+		if field == nil {
+			return value{}, unsupportedf("expression", "struct %q has nil literal field", typeName)
+		}
+		if !isLLVMIdent(field.Name) {
+			return value{}, unsupportedf("name", "struct %q literal field name %q", typeName, field.Name)
+		}
+		if _, exists := fields[field.Name]; exists {
+			return value{}, unsupportedf("expression", "struct %q duplicate literal field %q", typeName, field.Name)
+		}
+		if _, exists := info.byName[field.Name]; !exists {
+			return value{}, unsupportedf("expression", "struct %q unknown literal field %q", typeName, field.Name)
+		}
+		fields[field.Name] = field
+	}
+	values := make([]*LlvmValue, 0, len(info.fields))
+	for _, field := range info.fields {
+		litField := fields[field.name]
+		if litField == nil {
+			return value{}, unsupportedf("expression", "struct %q missing literal field %q", typeName, field.name)
+		}
+		var v value
+		var err error
+		if litField.Value == nil {
+			v, err = g.emitIdent(litField.Name)
+		} else {
+			v, err = g.emitExpr(litField.Value)
+		}
+		if err != nil {
+			return value{}, err
+		}
+		if v.typ != field.typ {
+			return value{}, unsupportedf("type-system", "struct %q field %q type %s, value %s", typeName, field.name, field.typ, v.typ)
+		}
+		values = append(values, toOstyValue(v))
+	}
+	emitter := g.toOstyEmitter()
+	out := llvmStructLiteral(emitter, info.typ, values)
+	g.takeOstyEmitter(emitter)
+	return fromOstyValue(out), nil
+}
+
+func (g *generator) emitFieldExpr(expr *ast.FieldExpr) (value, error) {
+	if expr.IsOptional {
+		return value{}, unsupported("expression", "optional field access is not supported")
+	}
+	if v, ok := g.enumVariantValue(expr); ok {
+		return v, nil
+	}
+	base, err := g.emitExpr(expr.X)
+	if err != nil {
+		return value{}, err
+	}
+	info := g.structsByType[base.typ]
+	if info == nil {
+		return value{}, unsupportedf("type-system", "field access on %s", base.typ)
+	}
+	field, ok := info.byName[expr.Name]
+	if !ok {
+		return value{}, unsupportedf("expression", "struct %q has no field %q", info.name, expr.Name)
+	}
+	emitter := g.toOstyEmitter()
+	out := llvmExtractValue(emitter, toOstyValue(base), field.typ, field.index)
+	g.takeOstyEmitter(emitter)
+	return fromOstyValue(out), nil
+}
+
+func (g *generator) enumVariantValue(expr *ast.FieldExpr) (value, bool) {
+	base, ok := expr.X.(*ast.Ident)
+	if !ok {
+		return value{}, false
+	}
+	info := g.enumsByName[base.Name]
+	if info == nil {
+		return value{}, false
+	}
+	variant, ok := info.variants[expr.Name]
+	if !ok {
+		return value{}, false
+	}
+	out := llvmEnumVariant(info.name, variant.tag)
+	return fromOstyValue(out), true
+}
+
+func (g *generator) enumVariantIdent(name string) (value, bool, error) {
+	var foundEnum string
+	var found variantInfo
+	count := 0
+	for _, info := range g.enumsByName {
+		if variant, ok := info.variants[name]; ok {
+			foundEnum = info.name
+			found = variant
+			count++
+		}
+	}
+	if count == 0 {
+		return value{}, false, nil
+	}
+	if count > 1 {
+		return value{}, true, unsupportedf("name", "ambiguous enum variant %q", name)
+	}
+	out := llvmEnumVariant(foundEnum, found.tag)
+	return fromOstyValue(out), true, nil
 }
 
 func (g *generator) emitUnary(e *ast.UnaryExpr) (value, error) {
@@ -950,7 +1249,15 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 }
 
 func (g *generator) render(defs []string) []byte {
-	return []byte(llvmRenderModuleWithGlobals(g.sourcePath, g.target, g.stringDefs, defs))
+	typeDefs := make([]string, 0, len(g.structs))
+	for _, info := range g.structs {
+		fieldTypes := make([]string, 0, len(info.fields))
+		for _, field := range info.fields {
+			fieldTypes = append(fieldTypes, field.typ)
+		}
+		typeDefs = append(typeDefs, llvmStructTypeDef(info.name, fieldTypes))
+	}
+	return []byte(llvmRenderModuleWithGlobalsAndTypes(g.sourcePath, g.target, typeDefs, g.stringDefs, defs))
 }
 
 func (g *generator) renderFunction(ret, name string, params []paramInfo) string {
@@ -1003,6 +1310,14 @@ func plainStringLiteral(lit *ast.StringLit) (string, bool) {
 		b.WriteString(part.Lit)
 	}
 	return b.String(), true
+}
+
+func structTypeExprName(expr ast.Expr) (string, bool) {
+	id, ok := expr.(*ast.Ident)
+	if !ok || id.Name == "" {
+		return "", false
+	}
+	return id.Name, true
 }
 
 func isLLVMASCIIStringText(text string) bool {
@@ -1059,7 +1374,7 @@ func identPatternName(p ast.Pattern) (string, error) {
 	return id.Name, nil
 }
 
-func llvmType(t ast.Type) (string, error) {
+func llvmType(t ast.Type, structs map[string]*structInfo, enums map[string]*enumInfo) (string, error) {
 	named, ok := t.(*ast.NamedType)
 	if !ok {
 		return "", unsupportedf("type-system", "type %T", t)
@@ -1075,6 +1390,13 @@ func llvmType(t ast.Type) (string, error) {
 	case "String":
 		return "ptr", nil
 	default:
+		if info := structs[named.Path[0]]; info != nil {
+			return info.typ, nil
+		}
+		if info := enums[named.Path[0]]; info != nil {
+			_ = info
+			return "i64", nil
+		}
 		return "", unsupportedf("type-system", "type %q", strings.Join(named.Path, "."))
 	}
 }
