@@ -1308,6 +1308,70 @@ func llvmRuntimeFfiSymbol(path string, name string) string {
 	return out + "_" + name
 }
 
+// Osty: toolchain/llvmgen.osty:1092:1
+func llvmListRuntimeNewSymbol() string {
+	return "osty_rt_list_new"
+}
+
+// Osty: toolchain/llvmgen.osty:1096:1
+func llvmListRuntimeLenSymbol() string {
+	return "osty_rt_list_len"
+}
+
+// Osty: toolchain/llvmgen.osty:1100:1
+func llvmListRuntimeSortedI64Symbol() string {
+	return "osty_rt_list_sorted_i64"
+}
+
+// Osty: toolchain/llvmgen.osty:1104:1
+func llvmListRuntimeToSetI64Symbol() string {
+	return "osty_rt_list_to_set_i64"
+}
+
+// Osty: toolchain/llvmgen.osty:1108:1
+func llvmMapRuntimeNewSymbol() string {
+	return "osty_rt_map_new"
+}
+
+// Osty: toolchain/llvmgen.osty:1112:1
+func llvmMapRuntimeKeysSymbol() string {
+	return "osty_rt_map_keys"
+}
+
+// Osty: toolchain/llvmgen.osty:1116:1
+func llvmSetRuntimeNewSymbol() string {
+	return "osty_rt_set_new"
+}
+
+// Osty: toolchain/llvmgen.osty:1120:1
+func llvmSetRuntimeLenSymbol() string {
+	return "osty_rt_set_len"
+}
+
+// Osty: toolchain/llvmgen.osty:1124:1
+func llvmSetRuntimeToListSymbol() string {
+	return "osty_rt_set_to_list"
+}
+
+// Osty: toolchain/llvmgen.osty:1130:1
+func llvmContainerAbiKind(typ string, isString bool) int {
+	if isString {
+		return 5
+	}
+	switch typ {
+	case "i64":
+		return 1
+	case "i1":
+		return 2
+	case "double":
+		return 3
+	case "ptr":
+		return 4
+	default:
+		return 6
+	}
+}
+
 func llvmBuiltinType(name string) string {
 	switch name {
 	case "Int":

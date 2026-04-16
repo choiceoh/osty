@@ -279,7 +279,7 @@ func (g *generator) declareRuntimeSymbol(symbol, ret string, params []paramInfo)
 }
 
 func listRuntimeNewSymbol() string {
-	return "osty_rt_list_new"
+	return llvmListRuntimeNewSymbol()
 }
 
 func listRuntimePushBytesSymbol() string {
@@ -295,7 +295,7 @@ func listRuntimeSetBytesSymbol() string {
 }
 
 func listRuntimeLenSymbol() string {
-	return "osty_rt_list_len"
+	return llvmListRuntimeLenSymbol()
 }
 
 func listRuntimePushBytesV1Symbol() string {
@@ -323,15 +323,15 @@ func listRuntimeSetSymbol(elemTyp string) string {
 }
 
 func listRuntimeSortedI64Symbol() string {
-	return "osty_rt_list_sorted_i64"
+	return llvmListRuntimeSortedI64Symbol()
 }
 
 func listRuntimeToSetI64Symbol() string {
-	return "osty_rt_list_to_set_i64"
+	return llvmListRuntimeToSetI64Symbol()
 }
 
 func mapRuntimeNewSymbol() string {
-	return "osty_rt_map_new"
+	return llvmMapRuntimeNewSymbol()
 }
 
 func mapRuntimeContainsSymbol(keyTyp string, keyString bool) string {
@@ -351,15 +351,15 @@ func mapRuntimeGetOrAbortSymbol(keyTyp string, keyString bool) string {
 }
 
 func mapRuntimeKeysSymbol() string {
-	return "osty_rt_map_keys"
+	return llvmMapRuntimeKeysSymbol()
 }
 
 func setRuntimeNewSymbol() string {
-	return "osty_rt_set_new"
+	return llvmSetRuntimeNewSymbol()
 }
 
 func setRuntimeLenSymbol() string {
-	return "osty_rt_set_len"
+	return llvmSetRuntimeLenSymbol()
 }
 
 func setRuntimeContainsSymbol(elemTyp string, elemString bool) string {
@@ -375,25 +375,11 @@ func setRuntimeRemoveSymbol(elemTyp string, elemString bool) string {
 }
 
 func setRuntimeToListSymbol() string {
-	return "osty_rt_set_to_list"
+	return llvmSetRuntimeToListSymbol()
 }
 
 func containerAbiKind(typ string, isString bool) int {
-	if isString {
-		return 5
-	}
-	switch typ {
-	case "i64":
-		return 1
-	case "i1":
-		return 2
-	case "double":
-		return 3
-	case "ptr":
-		return 4
-	default:
-		return 6
-	}
+	return llvmContainerAbiKind(typ, isString)
 }
 
 func mapSetKeySuffix(typ string, isString bool) string {

@@ -1083,6 +1083,69 @@ pub fn llvmRuntimeFfiSymbol(path: String, name: String) -> String {
     "{out}_{name}"
 }
 
+/// Container runtime symbol tables for the Osty C runtime ABI. These
+/// return the canonical `osty_rt_*` symbol names the LLVM backend emits
+/// for list/map/set container operations. Phase B migration: policies
+/// owned here, Go mirrors in internal/llvmgen/support_snapshot.go and
+/// bridge wrappers in internal/llvmgen/runtime_ffi.go.
+
+pub fn llvmListRuntimeNewSymbol() -> String {
+    "osty_rt_list_new"
+}
+
+pub fn llvmListRuntimeLenSymbol() -> String {
+    "osty_rt_list_len"
+}
+
+pub fn llvmListRuntimeSortedI64Symbol() -> String {
+    "osty_rt_list_sorted_i64"
+}
+
+pub fn llvmListRuntimeToSetI64Symbol() -> String {
+    "osty_rt_list_to_set_i64"
+}
+
+pub fn llvmMapRuntimeNewSymbol() -> String {
+    "osty_rt_map_new"
+}
+
+pub fn llvmMapRuntimeKeysSymbol() -> String {
+    "osty_rt_map_keys"
+}
+
+pub fn llvmSetRuntimeNewSymbol() -> String {
+    "osty_rt_set_new"
+}
+
+pub fn llvmSetRuntimeLenSymbol() -> String {
+    "osty_rt_set_len"
+}
+
+pub fn llvmSetRuntimeToListSymbol() -> String {
+    "osty_rt_set_to_list"
+}
+
+/// Container ABI kind code used by the runtime to pick the right traversal
+/// policy for a value: 1=i64, 2=i1, 3=double, 4=ptr, 5=string, 6=other.
+pub fn llvmContainerAbiKind(typ: String, isString: Bool) -> Int {
+    if isString {
+        return 5
+    }
+    if typ == "i64" {
+        return 1
+    }
+    if typ == "i1" {
+        return 2
+    }
+    if typ == "double" {
+        return 3
+    }
+    if typ == "ptr" {
+        return 4
+    }
+    6
+}
+
 pub fn llvmBuiltinType(name: String) -> String {
     if name == "Int" {
         return "i64"
