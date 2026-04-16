@@ -278,20 +278,34 @@ type generator struct {
 	runtimeDecls     map[string]runtimeDecl
 	runtimeDeclOrder []string
 
-	temp         int
-	label        int
-	stringID     int
-	stringDefs   []*LlvmStringGlobal
-	body         []string
-	locals       []map[string]value
-	returnType   string
-	currentBlock string
+	temp             int
+	label            int
+	stringID         int
+	stringDefs       []*LlvmStringGlobal
+	body             []string
+	locals           []map[string]value
+	returnType       string
+	currentBlock     string
+	currentReachable bool
 
 	needsGCRuntime bool
 	gcRootSlots    []value
 	gcRootMarks    []int
 	nextSafepoint  int
 	hiddenLocalID  int
+	loopStack      []loopContext
+}
+
+type loopContext struct {
+	continueLabel string
+	breakLabel    string
+	scopeDepth    int
+}
+
+type scopeState struct {
+	locals      []map[string]value
+	gcRootSlots []value
+	gcRootMarks []int
 }
 
 type declarations struct {
@@ -885,6 +899,8 @@ func (g *generator) beginFunction() {
 	g.nextSafepoint = 1
 	g.hiddenLocalID = 0
 	g.currentBlock = "entry"
+	g.currentReachable = true
+	g.loopStack = nil
 }
 
 func (g *generator) bindGCRootIfManagedPointer(emitter *LlvmEmitter, slot value) {
@@ -996,22 +1012,30 @@ func (g *generator) emitBlock(stmts []ast.Stmt) error {
 		if err := g.emitStmt(stmt); err != nil {
 			return err
 		}
+		if !g.currentReachable {
+			break
+		}
 	}
 	return nil
 }
 
 func (g *generator) emitStmt(stmt ast.Stmt) error {
+	if !g.currentReachable {
+		return nil
+	}
 	switch s := stmt.(type) {
 	case *ast.Block:
-		g.pushScope()
-		defer g.popScope()
-		return g.emitBlock(s.Stmts)
+		return g.emitScopedStmtBlock(s.Stmts)
 	case *ast.LetStmt:
 		return g.emitLet(s)
 	case *ast.AssignStmt:
 		return g.emitAssign(s)
 	case *ast.ForStmt:
 		return g.emitFor(s)
+	case *ast.BreakStmt:
+		return g.emitBreak()
+	case *ast.ContinueStmt:
+		return g.emitContinue()
 	case *ast.ExprStmt:
 		if ifExpr, ok := s.X.(*ast.IfExpr); ok {
 			return g.emitIfStmt(ifExpr)
@@ -1094,6 +1118,9 @@ func (g *generator) emitFor(stmt *ast.ForStmt) error {
 	if stmt.Body == nil {
 		return unsupported("control-flow", "for has no body")
 	}
+	if stmt.Pattern == nil {
+		return g.emitWhileFor(stmt)
+	}
 	iterName, err := identPatternName(stmt.Pattern)
 	if err != nil {
 		return err
@@ -1122,17 +1149,107 @@ func (g *generator) emitFor(stmt *ast.ForStmt) error {
 	emitter := g.toOstyEmitter()
 	loop := llvmRangeStart(emitter, iterName, toOstyValue(start), toOstyValue(stop), rng.Inclusive)
 	g.takeOstyEmitter(emitter)
+	g.enterBlock(loop.bodyLabel)
+	continueLabel := g.nextNamedLabel("for.cont")
+	g.pushLoop(loopContext{
+		continueLabel: continueLabel,
+		breakLabel:    loop.endLabel,
+		scopeDepth:    len(g.locals),
+	})
+	scopeDepth := len(g.locals)
 	g.pushScope()
 	g.bindLocal(iterName, value{typ: "i64", ref: loop.current})
 	if err := g.emitBlock(stmt.Body.Stmts); err != nil {
-		g.popScope()
+		if len(g.locals) > scopeDepth {
+			g.popScope()
+		}
+		g.popLoop()
 		return err
 	}
-	g.popScope()
+	if len(g.locals) > scopeDepth {
+		g.popScope()
+	}
+	g.popLoop()
+	if g.currentReachable {
+		g.branchTo(continueLabel)
+	}
 	emitter = g.toOstyEmitter()
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", continueLabel))
 	g.emitGCSafepoint(emitter)
 	llvmRangeEnd(emitter, loop)
 	g.takeOstyEmitter(emitter)
+	g.enterBlock(loop.endLabel)
+	return nil
+}
+
+func (g *generator) emitWhileFor(stmt *ast.ForStmt) error {
+	emitter := g.toOstyEmitter()
+	condLabel := llvmNextLabel(emitter, "for.cond")
+	bodyLabel := llvmNextLabel(emitter, "for.body")
+	continueLabel := llvmNextLabel(emitter, "for.cont")
+	endLabel := llvmNextLabel(emitter, "for.end")
+	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", condLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", condLabel))
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(condLabel)
+
+	if stmt.Iter == nil {
+		emitter = g.toOstyEmitter()
+		emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", bodyLabel))
+		emitter.body = append(emitter.body, fmt.Sprintf("%s:", bodyLabel))
+		g.takeOstyEmitter(emitter)
+	} else {
+		cond, err := g.emitExpr(stmt.Iter)
+		if err != nil {
+			return err
+		}
+		if cond.typ != "i1" {
+			return unsupportedf("type-system", "for condition type %s, want i1", cond.typ)
+		}
+		emitter = g.toOstyEmitter()
+		emitter.body = append(emitter.body, fmt.Sprintf(
+			"  br i1 %s, label %%%s, label %%%s",
+			toOstyValue(cond).name,
+			bodyLabel,
+			endLabel,
+		))
+		emitter.body = append(emitter.body, fmt.Sprintf("%s:", bodyLabel))
+		g.takeOstyEmitter(emitter)
+	}
+	g.enterBlock(bodyLabel)
+
+	g.pushLoop(loopContext{
+		continueLabel: continueLabel,
+		breakLabel:    endLabel,
+		scopeDepth:    len(g.locals),
+	})
+	scopeDepth := len(g.locals)
+	g.pushScope()
+	if err := g.emitBlock(stmt.Body.Stmts); err != nil {
+		if len(g.locals) > scopeDepth {
+			g.popScope()
+		}
+		g.popLoop()
+		return err
+	}
+	if len(g.locals) > scopeDepth {
+		g.popScope()
+	}
+	g.popLoop()
+	if g.currentReachable {
+		g.branchTo(continueLabel)
+	}
+
+	emitter = g.toOstyEmitter()
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", continueLabel))
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(continueLabel)
+	emitter = g.toOstyEmitter()
+	g.emitGCSafepoint(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", condLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(endLabel)
 	return nil
 }
 
@@ -1149,6 +1266,7 @@ func (g *generator) emitForLet(stmt *ast.ForStmt) error {
 	emitter := g.toOstyEmitter()
 	condLabel := llvmNextLabel(emitter, "for.cond")
 	bodyLabel := llvmNextLabel(emitter, "for.body")
+	continueLabel := llvmNextLabel(emitter, "for.cont")
 	endLabel := llvmNextLabel(emitter, "for.end")
 	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", condLabel))
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", condLabel))
@@ -1166,26 +1284,49 @@ func (g *generator) emitForLet(stmt *ast.ForStmt) error {
 	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", cond.name, bodyLabel, endLabel))
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", bodyLabel))
 	g.takeOstyEmitter(emitter)
-	g.currentBlock = bodyLabel
+	g.enterBlock(bodyLabel)
 
+	g.pushLoop(loopContext{
+		continueLabel: continueLabel,
+		breakLabel:    endLabel,
+		scopeDepth:    len(g.locals),
+	})
+	scopeDepth := len(g.locals)
 	g.pushScope()
 	if bind != nil {
 		if err := bind(); err != nil {
-			g.popScope()
+			if len(g.locals) > scopeDepth {
+				g.popScope()
+			}
+			g.popLoop()
 			return err
 		}
 	}
 	if err := g.emitBlock(stmt.Body.Stmts); err != nil {
-		g.popScope()
+		if len(g.locals) > scopeDepth {
+			g.popScope()
+		}
+		g.popLoop()
 		return err
 	}
-	g.popScope()
+	if len(g.locals) > scopeDepth {
+		g.popScope()
+	}
+	g.popLoop()
+	if g.currentReachable {
+		g.branchTo(continueLabel)
+	}
 
 	emitter = g.toOstyEmitter()
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", continueLabel))
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(continueLabel)
+	emitter = g.toOstyEmitter()
+	g.emitGCSafepoint(emitter)
 	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", condLabel))
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
 	g.takeOstyEmitter(emitter)
-	g.currentBlock = endLabel
+	g.enterBlock(endLabel)
 	return nil
 }
 
@@ -1370,26 +1511,38 @@ func (g *generator) emitIfStmt(expr *ast.IfExpr) error {
 	emitter := g.toOstyEmitter()
 	labels := llvmIfStart(emitter, toOstyValue(cond))
 	g.takeOstyEmitter(emitter)
-	g.currentBlock = labels.thenLabel
-	g.pushScope()
-	if err := g.emitBlock(expr.Then.Stmts); err != nil {
-		g.popScope()
+	g.enterBlock(labels.thenLabel)
+	baseState := g.captureScopeState()
+	if err := g.emitScopedStmtBlock(expr.Then.Stmts); err != nil {
 		return err
 	}
-	g.popScope()
+	thenReachable := g.currentReachable
+	if thenReachable {
+		g.branchTo(labels.endLabel)
+	}
+	g.restoreScopeState(baseState)
 	emitter = g.toOstyEmitter()
-	llvmIfElse(emitter, labels)
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", labels.elseLabel))
 	g.takeOstyEmitter(emitter)
-	g.currentBlock = labels.elseLabel
+	g.enterBlock(labels.elseLabel)
 	if expr.Else != nil {
 		if err := g.emitElse(expr.Else); err != nil {
 			return err
 		}
 	}
-	emitter = g.toOstyEmitter()
-	llvmIfEnd(emitter, labels)
-	g.takeOstyEmitter(emitter)
-	g.currentBlock = labels.endLabel
+	elseReachable := g.currentReachable
+	if elseReachable {
+		g.branchTo(labels.endLabel)
+	}
+	g.restoreScopeState(baseState)
+	if thenReachable || elseReachable {
+		emitter = g.toOstyEmitter()
+		emitter.body = append(emitter.body, fmt.Sprintf("%s:", labels.endLabel))
+		g.takeOstyEmitter(emitter)
+		g.enterBlock(labels.endLabel)
+		return nil
+	}
+	g.leaveBlock()
 	return nil
 }
 
@@ -1408,32 +1561,54 @@ func (g *generator) emitIfLetStmt(expr *ast.IfExpr) error {
 	emitter := g.toOstyEmitter()
 	labels := llvmIfStart(emitter, cond)
 	g.takeOstyEmitter(emitter)
-	g.currentBlock = labels.thenLabel
+	g.enterBlock(labels.thenLabel)
+	baseState := g.captureScopeState()
+	scopeDepth := len(g.locals)
 	g.pushScope()
 	if bind != nil {
 		if err := bind(); err != nil {
-			g.popScope()
+			if len(g.locals) > scopeDepth {
+				g.popScope()
+			}
 			return err
 		}
 	}
 	if err := g.emitBlock(expr.Then.Stmts); err != nil {
-		g.popScope()
+		if len(g.locals) > scopeDepth {
+			g.popScope()
+		}
 		return err
 	}
-	g.popScope()
+	if len(g.locals) > scopeDepth {
+		g.popScope()
+	}
+	thenReachable := g.currentReachable
+	if thenReachable {
+		g.branchTo(labels.endLabel)
+	}
+	g.restoreScopeState(baseState)
 	emitter = g.toOstyEmitter()
-	llvmIfElse(emitter, labels)
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", labels.elseLabel))
 	g.takeOstyEmitter(emitter)
-	g.currentBlock = labels.elseLabel
+	g.enterBlock(labels.elseLabel)
 	if expr.Else != nil {
 		if err := g.emitElse(expr.Else); err != nil {
 			return err
 		}
 	}
-	emitter = g.toOstyEmitter()
-	llvmIfEnd(emitter, labels)
-	g.takeOstyEmitter(emitter)
-	g.currentBlock = labels.endLabel
+	elseReachable := g.currentReachable
+	if elseReachable {
+		g.branchTo(labels.endLabel)
+	}
+	g.restoreScopeState(baseState)
+	if thenReachable || elseReachable {
+		emitter = g.toOstyEmitter()
+		emitter.body = append(emitter.body, fmt.Sprintf("%s:", labels.endLabel))
+		g.takeOstyEmitter(emitter)
+		g.enterBlock(labels.endLabel)
+		return nil
+	}
+	g.leaveBlock()
 	return nil
 }
 
@@ -1476,9 +1651,7 @@ func (g *generator) ifLetCondition(pattern ast.Pattern, scrutinee value) (*LlvmV
 func (g *generator) emitElse(expr ast.Expr) error {
 	switch e := expr.(type) {
 	case *ast.Block:
-		g.pushScope()
-		defer g.popScope()
-		return g.emitBlock(e.Stmts)
+		return g.emitScopedStmtBlock(e.Stmts)
 	case *ast.IfExpr:
 		return g.emitIfStmt(e)
 	default:
@@ -2542,10 +2715,21 @@ func (g *generator) emitListFor(stmt *ast.ForStmt, iterName, elemTyp string) err
 	lenValue := llvmCall(emitter, "i64", listRuntimeLenSymbol(), []*LlvmValue{toOstyValue(iterableValue)})
 	loop := llvmRangeStart(emitter, iterName+"_idx", llvmIntLiteral(0), lenValue, false)
 	g.takeOstyEmitter(emitter)
+	g.enterBlock(loop.bodyLabel)
+	continueLabel := g.nextNamedLabel("for.cont")
+	g.pushLoop(loopContext{
+		continueLabel: continueLabel,
+		breakLabel:    loop.endLabel,
+		scopeDepth:    len(g.locals),
+	})
+	scopeDepth := len(g.locals)
 	g.pushScope()
 	iterableValue, err = g.loadIfPointer(iterable)
 	if err != nil {
-		g.popScope()
+		if len(g.locals) > scopeDepth {
+			g.popScope()
+		}
+		g.popLoop()
 		return err
 	}
 	emitter = g.toOstyEmitter()
@@ -2553,14 +2737,25 @@ func (g *generator) emitListFor(stmt *ast.ForStmt, iterName, elemTyp string) err
 	g.takeOstyEmitter(emitter)
 	g.bindLocal(iterName, fromOstyValue(item))
 	if err := g.emitBlock(stmt.Body.Stmts); err != nil {
-		g.popScope()
+		if len(g.locals) > scopeDepth {
+			g.popScope()
+		}
+		g.popLoop()
 		return err
 	}
-	g.popScope()
+	if len(g.locals) > scopeDepth {
+		g.popScope()
+	}
+	g.popLoop()
+	if g.currentReachable {
+		g.branchTo(continueLabel)
+	}
 	emitter = g.toOstyEmitter()
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", continueLabel))
 	g.emitGCSafepoint(emitter)
 	llvmRangeEnd(emitter, loop)
 	g.takeOstyEmitter(emitter)
+	g.enterBlock(loop.endLabel)
 	return nil
 }
 
@@ -3178,6 +3373,62 @@ func toLLVMParams(params []paramInfo) []*LlvmParam {
 	return out
 }
 
+func (g *generator) enterBlock(label string) {
+	g.currentBlock = label
+	g.currentReachable = true
+}
+
+func (g *generator) leaveBlock() {
+	g.currentBlock = ""
+	g.currentReachable = false
+}
+
+func (g *generator) branchTo(label string) {
+	emitter := g.toOstyEmitter()
+	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", label))
+	g.takeOstyEmitter(emitter)
+	g.leaveBlock()
+}
+
+func (g *generator) nextNamedLabel(prefix string) string {
+	emitter := g.toOstyEmitter()
+	label := llvmNextLabel(emitter, prefix)
+	g.takeOstyEmitter(emitter)
+	return label
+}
+
+func (g *generator) emitScopedStmtBlock(stmts []ast.Stmt) error {
+	scopeDepth := len(g.locals)
+	g.pushScope()
+	if err := g.emitBlock(stmts); err != nil {
+		if len(g.locals) > scopeDepth {
+			g.popScope()
+		}
+		return err
+	}
+	if len(g.locals) > scopeDepth {
+		g.popScope()
+	}
+	return nil
+}
+
+func (g *generator) captureScopeState() scopeState {
+	locals := append([]map[string]value(nil), g.locals...)
+	gcRootSlots := append([]value(nil), g.gcRootSlots...)
+	gcRootMarks := append([]int(nil), g.gcRootMarks...)
+	return scopeState{
+		locals:      locals,
+		gcRootSlots: gcRootSlots,
+		gcRootMarks: gcRootMarks,
+	}
+}
+
+func (g *generator) restoreScopeState(state scopeState) {
+	g.locals = append([]map[string]value(nil), state.locals...)
+	g.gcRootSlots = append([]value(nil), state.gcRootSlots...)
+	g.gcRootMarks = append([]int(nil), state.gcRootMarks...)
+}
+
 func (g *generator) pushScope() {
 	g.locals = append(g.locals, map[string]value{})
 	g.gcRootMarks = append(g.gcRootMarks, len(g.gcRootSlots))
@@ -3363,6 +3614,50 @@ func (g *generator) aggregateFieldType(typ string, index int) (string, bool) {
 
 func (g *generator) bindLocal(name string, v value) {
 	g.locals[len(g.locals)-1][name] = v
+}
+
+func (g *generator) pushLoop(loop loopContext) {
+	g.loopStack = append(g.loopStack, loop)
+}
+
+func (g *generator) popLoop() {
+	if len(g.loopStack) == 0 {
+		return
+	}
+	g.loopStack = g.loopStack[:len(g.loopStack)-1]
+}
+
+func (g *generator) currentLoop() (loopContext, bool) {
+	if len(g.loopStack) == 0 {
+		return loopContext{}, false
+	}
+	return g.loopStack[len(g.loopStack)-1], true
+}
+
+func (g *generator) unwindScopesTo(scopeDepth int) {
+	for len(g.locals) > scopeDepth {
+		g.popScope()
+	}
+}
+
+func (g *generator) emitBreak() error {
+	loop, ok := g.currentLoop()
+	if !ok {
+		return unsupported("control-flow", "break outside of loop")
+	}
+	g.unwindScopesTo(loop.scopeDepth)
+	g.branchTo(loop.breakLabel)
+	return nil
+}
+
+func (g *generator) emitContinue() error {
+	loop, ok := g.currentLoop()
+	if !ok {
+		return unsupported("control-flow", "continue outside of loop")
+	}
+	g.unwindScopesTo(loop.scopeDepth)
+	g.branchTo(loop.continueLabel)
+	return nil
 }
 
 func (g *generator) nextHiddenLocalName(prefix string) string {
