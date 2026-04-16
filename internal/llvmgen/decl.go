@@ -902,6 +902,7 @@ func (g *generator) emitMainFunction(sig *fnSig) (string, error) {
 func (g *generator) emitUserFunction(sig *fnSig) (string, error) {
 	g.beginFunction()
 	g.returnType = sig.ret
+	g.returnSourceType = sig.returnSourceType
 	g.returnListElemTyp = sig.retListElemTyp
 	for _, p := range sig.params {
 		v := value{
