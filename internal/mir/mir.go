@@ -374,6 +374,132 @@ const (
 	IntrinsicYield
 	// IntrinsicSleep sleeps for a Duration. Args: [duration].
 	IntrinsicSleep
+
+	// ---- stdlib collections: List<T> ----
+	//
+	// Stage 2d surfaces the common prelude/stdlib methods so a MIR-
+	// consuming backend can dispatch directly to the runtime ABI
+	// without re-recognising user-visible method names. The element
+	// type flows through the receiver operand (and the return type
+	// of methods that produce a new value); backends pick the right
+	// specialised runtime symbol from the type string.
+
+	// IntrinsicListPush appends to a list. Args: [list, elem]. Dest nil.
+	IntrinsicListPush
+	// IntrinsicListLen returns the list length as Int. Args: [list].
+	IntrinsicListLen
+	// IntrinsicListGet indexes a list and aborts on out-of-bounds
+	// (matching the stdlib `list[i]` semantics). Args: [list, idx].
+	// Dest is T.
+	IntrinsicListGet
+	// IntrinsicListIsEmpty returns Bool. Args: [list].
+	IntrinsicListIsEmpty
+	// IntrinsicListFirst returns the first element as T?. Args: [list].
+	IntrinsicListFirst
+	// IntrinsicListLast returns the last element as T?. Args: [list].
+	IntrinsicListLast
+	// IntrinsicListSorted returns a sorted copy. Args: [list].
+	IntrinsicListSorted
+	// IntrinsicListContains returns Bool. Args: [list, elem].
+	IntrinsicListContains
+	// IntrinsicListIndexOf returns Int?. Args: [list, elem].
+	IntrinsicListIndexOf
+	// IntrinsicListToSet constructs a Set<T> from a List<T>. Args: [list].
+	IntrinsicListToSet
+
+	// ---- stdlib collections: Map<K, V> ----
+
+	// IntrinsicMapNew constructs an empty Map<K, V>. Args: []. The
+	// key/value types come from the destination local's type.
+	IntrinsicMapNew
+	// IntrinsicMapGet returns V? for a lookup. Args: [map, key].
+	IntrinsicMapGet
+	// IntrinsicMapSet inserts or overwrites. Args: [map, key, value].
+	// Dest nil.
+	IntrinsicMapSet
+	// IntrinsicMapContains returns Bool. Args: [map, key].
+	IntrinsicMapContains
+	// IntrinsicMapLen returns Int. Args: [map].
+	IntrinsicMapLen
+	// IntrinsicMapKeys returns List<K>. Args: [map].
+	IntrinsicMapKeys
+	// IntrinsicMapValues returns List<V>. Args: [map].
+	IntrinsicMapValues
+	// IntrinsicMapRemove deletes a key. Args: [map, key]. Dest nil.
+	IntrinsicMapRemove
+
+	// ---- stdlib collections: Set<T> ----
+
+	// IntrinsicSetNew constructs an empty Set<T>. Args: []. Element
+	// type flows through the destination's type.
+	IntrinsicSetNew
+	// IntrinsicSetInsert adds an element. Args: [set, elem]. Dest nil.
+	IntrinsicSetInsert
+	// IntrinsicSetContains returns Bool. Args: [set, elem].
+	IntrinsicSetContains
+	// IntrinsicSetLen returns Int. Args: [set].
+	IntrinsicSetLen
+	// IntrinsicSetToList materialises a List<T>. Args: [set].
+	IntrinsicSetToList
+
+	// ---- stdlib: String ----
+
+	// IntrinsicStringLen returns Int (byte count). Args: [string].
+	IntrinsicStringLen
+	// IntrinsicStringIsEmpty returns Bool. Args: [string].
+	IntrinsicStringIsEmpty
+	// IntrinsicStringContains returns Bool. Args: [string, needle].
+	IntrinsicStringContains
+	// IntrinsicStringStartsWith returns Bool. Args: [string, prefix].
+	IntrinsicStringStartsWith
+	// IntrinsicStringEndsWith returns Bool. Args: [string, suffix].
+	IntrinsicStringEndsWith
+	// IntrinsicStringIndexOf returns Int?. Args: [string, needle].
+	IntrinsicStringIndexOf
+	// IntrinsicStringSplit returns List<String>. Args: [string, sep].
+	IntrinsicStringSplit
+	// IntrinsicStringTrim returns String with surrounding whitespace
+	// stripped. Args: [string].
+	IntrinsicStringTrim
+	// IntrinsicStringToUpper returns uppercased String. Args: [string].
+	IntrinsicStringToUpper
+	// IntrinsicStringToLower returns lowercased String. Args: [string].
+	IntrinsicStringToLower
+	// IntrinsicStringReplace returns String with all occurrences of
+	// `old` replaced by `new`. Args: [string, old, new].
+	IntrinsicStringReplace
+	// IntrinsicStringChars returns List<Char>. Args: [string].
+	IntrinsicStringChars
+	// IntrinsicStringBytes returns List<Byte>. Args: [string].
+	IntrinsicStringBytes
+
+	// ---- stdlib: Bytes ----
+
+	// IntrinsicBytesLen returns Int. Args: [bytes].
+	IntrinsicBytesLen
+	// IntrinsicBytesIsEmpty returns Bool. Args: [bytes].
+	IntrinsicBytesIsEmpty
+	// IntrinsicBytesGet returns Byte?. Args: [bytes, idx].
+	IntrinsicBytesGet
+
+	// ---- stdlib: Option / Result ----
+
+	// IntrinsicOptionIsSome returns Bool. Args: [option].
+	IntrinsicOptionIsSome
+	// IntrinsicOptionIsNone returns Bool. Args: [option].
+	IntrinsicOptionIsNone
+	// IntrinsicOptionUnwrap returns T, aborting on None. Args: [option].
+	IntrinsicOptionUnwrap
+	// IntrinsicOptionUnwrapOr returns T. Args: [option, default].
+	IntrinsicOptionUnwrapOr
+	// IntrinsicResultIsOk returns Bool. Args: [result].
+	IntrinsicResultIsOk
+	// IntrinsicResultIsErr returns Bool. Args: [result].
+	IntrinsicResultIsErr
+	// IntrinsicResultUnwrap returns T, aborting on Err. Args: [result].
+	IntrinsicResultUnwrap
+	// IntrinsicResultUnwrapOr returns T. Args: [result, default].
+	IntrinsicResultUnwrapOr
 )
 
 // StorageLiveInstr marks a local as alive. Optional; backends that do
