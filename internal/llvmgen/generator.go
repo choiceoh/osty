@@ -360,10 +360,14 @@ func renderInterfaceShim(iface *interfaceInfo, impl interfaceImpl, m interfaceMe
 	if !receiver.byRef {
 		body.WriteString(fmt.Sprintf("  %%self.val = load %s, ptr %%self.ptr\n", receiver.typ))
 	}
-	body.WriteString(fmt.Sprintf("  %%ret.val = call %s @%s(%s)\n", ret, sig.irName, strings.Join(callArgs, ", ")))
 	if ret == "void" {
+		// Void call sites must NOT bind an SSA destination —
+		// `%x = call void @f()` is not valid LLVM IR. Emit the bare
+		// call + `ret void`.
+		body.WriteString(fmt.Sprintf("  call void @%s(%s)\n", sig.irName, strings.Join(callArgs, ", ")))
 		body.WriteString("  ret void\n")
 	} else {
+		body.WriteString(fmt.Sprintf("  %%ret.val = call %s @%s(%s)\n", ret, sig.irName, strings.Join(callArgs, ", ")))
 		body.WriteString(fmt.Sprintf("  ret %s %%ret.val\n", ret))
 	}
 	def := fmt.Sprintf("define internal %s %s(%s) {\n%s}",
