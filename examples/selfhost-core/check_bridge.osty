@@ -1,0 +1,21 @@
+/// OstyLexedSource is the parser/checker boundary retained by the shared
+/// dogfood checker API. selfhost-core keeps the lexer in frontend.osty, so the
+/// bridge stores that stream directly.
+pub struct OstyLexedSource {
+    pub source: String,
+    pub stream: FrontLexStream,
+}
+
+pub fn ostyLexSource(source: String) -> OstyLexedSource {
+    OstyLexedSource {
+        source,
+        stream: frontendLexStream(source),
+    }
+}
+
+pub fn astParseLexedSource(lexed: OstyLexedSource) -> AstFile {
+    let tokens = frontTokensFromSource(lexed.source, lexed.stream)
+    let mut p = newOstyParser(tokens)
+    opParseFile(p)
+    AstFile { arena: p.arena }
+}
