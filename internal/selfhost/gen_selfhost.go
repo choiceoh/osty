@@ -19,6 +19,7 @@ var sourceFiles = []string{
 	"examples/dogfood/lexer.osty",
 	"examples/dogfood/parser.osty",
 	"examples/dogfood/checker.osty",
+	"internal/selfhost/ast_lower.osty",
 }
 
 const mergedPath = "/tmp/selfhost_merged.osty"

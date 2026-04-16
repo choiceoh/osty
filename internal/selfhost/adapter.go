@@ -5,7 +5,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/token"
 )
@@ -28,7 +27,6 @@ type FrontendRun struct {
 	stream   *FrontLexStream
 	lexFacts *OstyLexFacts
 	parser   *OstyParser
-	file     *ast.File
 	toks     []token.Token
 	comments []token.Comment
 	lexDiags []*diag.Diagnostic
