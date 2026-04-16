@@ -306,13 +306,16 @@ type Decl interface {
 // owning type. The backend emits Methods lists inside StructDecl /
 // EnumDecl instead of threading receivers through here.
 type FnDecl struct {
-	Name     string
-	Params   []*Param
-	Return   Type
-	Body     *Block
-	Exported bool
-	Generics []*TypeParam
-	SpanV    Span
+	Name   string
+	Params []*Param
+	Return Type
+	Body   *Block
+	// ReceiverMut preserves whether an owning struct/enum method declared
+	// `mut self`; top-level functions leave this false.
+	ReceiverMut bool
+	Exported    bool
+	Generics    []*TypeParam
+	SpanV       Span
 }
 
 func (*FnDecl) declNode()          {}

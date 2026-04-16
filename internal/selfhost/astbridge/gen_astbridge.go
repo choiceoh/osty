@@ -464,7 +464,11 @@ func UseDeclNode(pos, end Pos, raw string, path []string, isGo bool, alias strin
 		u.GoPath = raw
 	} else if useDeclIsRuntimeFFI(u) {
 		u.IsRuntimeFFI = true
-		u.RuntimePath = raw
+		runtimePath := raw
+		if runtimePath == "" && len(path) != 0 {
+			runtimePath = strings.Join(path, ".")
+		}
+		u.RuntimePath = runtimePath
 	}
 	return u
 }

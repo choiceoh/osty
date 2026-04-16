@@ -215,11 +215,12 @@ func cloneFnDecl(fn *FnDecl) *FnDecl {
 		return nil
 	}
 	out := &FnDecl{
-		Name:     fn.Name,
-		Return:   CloneType(fn.Return),
-		Body:     cloneBlockOrNil(fn.Body),
-		Exported: fn.Exported,
-		SpanV:    fn.SpanV,
+		Name:        fn.Name,
+		Return:      CloneType(fn.Return),
+		Body:        cloneBlockOrNil(fn.Body),
+		ReceiverMut: fn.ReceiverMut,
+		Exported:    fn.Exported,
+		SpanV:       fn.SpanV,
 	}
 	if len(fn.Params) > 0 {
 		out.Params = make([]*Param, len(fn.Params))

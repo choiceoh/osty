@@ -614,3 +614,80 @@ fn main() {
 		t.Fatalf("binary stdout = %q, want %q", got, want)
 	}
 }
+
+func TestLLVMBackendBinaryExtendedListSortedAndToSet(t *testing.T) {
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
+
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitBinary, `fn main() {
+    let words: List<String> = ["pear", "apple", "banana", "apple"]
+    let wordSet = words.sorted().toSet()
+    println(wordSet.len())
+    println(wordSet.toList().sorted()[0])
+
+    let values: List<Float> = [3.5, 1.5, 2.5, 1.5]
+    let sortedValues = values.sorted()
+    println(sortedValues[0])
+    let uniqueValues = sortedValues.toSet()
+    println(uniqueValues.len())
+
+    let flags: List<Bool> = [true, false, true]
+    let sortedFlags = flags.sorted()
+    if sortedFlags[0] {
+        println(1)
+    } else {
+        println(0)
+    }
+    let uniqueFlags = flags.toSet()
+    println(uniqueFlags.len())
+}
+`)
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	output, err := exec.Command(result.Artifacts.Binary).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
+	}
+	if got, want := string(output), "3\napple\n1.500000\n3\n0\n2\n"; got != want {
+		t.Fatalf("binary stdout = %q, want %q", got, want)
+	}
+}
+
+func TestLLVMBackendBinaryPtrBackedListToSetAndBoolPrint(t *testing.T) {
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
+
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitBinary, `use runtime.strings as strings {
+    fn Split(s: String, sep: String) -> List<String>
+}
+
+fn main() {
+    let item = strings.Split("a,b", ",")
+    let items: List<List<String>> = [item, item]
+    let seen = items.toSet()
+
+    println(seen.len())
+    println(seen.contains(item))
+    println(seen.len() == 1)
+}
+`)
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	output, err := exec.Command(result.Artifacts.Binary).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
+	}
+	if got, want := string(output), "1\ntrue\ntrue\n"; got != want {
+		t.Fatalf("binary stdout = %q, want %q", got, want)
+	}
+}

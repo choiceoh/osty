@@ -190,6 +190,70 @@ fn main() {
 	}
 }
 
+func TestGenerateModuleExtendedListSortedAndToSet(t *testing.T) {
+	src := `fn main() {
+    let words: List<String> = ["pear", "apple", "banana", "apple"]
+    let wordSet = words.sorted().toSet()
+    let values: List<Float> = [3.5, 1.5, 2.5, 1.5]
+    let sortedValues = values.sorted()
+    let flags: List<Bool> = [true, false, true]
+    let flagSet = flags.toSet()
+
+    println(wordSet.toList().sorted()[0])
+    println(sortedValues[0])
+    if flagSet.contains(false) {
+        println(1)
+    } else {
+        println(0)
+    }
+}
+`
+	got := runMonoLowerPipeline(t, src, "/tmp/phase2_extended_list_methods_ir.osty")
+	for _, want := range []string{
+		"declare ptr @osty_rt_list_sorted_string(ptr)",
+		"declare ptr @osty_rt_list_to_set_string(ptr)",
+		"declare ptr @osty_rt_list_sorted_f64(ptr)",
+		"declare ptr @osty_rt_list_to_set_i1(ptr)",
+		"call ptr @osty_rt_list_sorted_string",
+		"call ptr @osty_rt_list_to_set_string",
+		"call ptr @osty_rt_list_sorted_f64",
+		"call ptr @osty_rt_list_to_set_i1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateModulePtrBackedListToSetAndBoolPrint(t *testing.T) {
+	src := `use runtime.strings as strings {
+    fn Split(s: String, sep: String) -> List<String>
+}
+
+fn main() {
+    let item = strings.Split("a,b", ",")
+    let items: List<List<String>> = [item, item]
+    let seen = items.toSet()
+
+    println(seen.contains(item))
+    println(seen.len() == 1)
+}
+`
+	got := runMonoLowerPipeline(t, src, "/tmp/phase2_ptr_list_toset_bool_print_ir.osty")
+	for _, want := range []string{
+		"declare ptr @osty_rt_list_to_set_ptr(ptr)",
+		"call ptr @osty_rt_list_to_set_ptr",
+		"call i1 @osty_rt_set_contains_ptr",
+		"@.bool_true = private unnamed_addr constant [5 x i8] c\"true\\00\"",
+		"@.bool_false = private unnamed_addr constant [6 x i8] c\"false\\00\"",
+		"select i1 ",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // TestGenerateModuleGenericEnumMaybeMonomorphized verifies that a
 // generic `enum Maybe<T>` lands as a concrete mangled nominal.
 //
