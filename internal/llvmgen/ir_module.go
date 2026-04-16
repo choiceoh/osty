@@ -360,7 +360,7 @@ func legacyLetDeclFromIR(ld *ostyir.LetDecl) (*ast.LetDecl, error) {
 		Pub:  ld.Exported,
 		Mut:  ld.Mut,
 		Name: ld.Name,
-		Type: legacyTypeFromIR(ld.Type),
+		Type: legacyBindingTypeFromIR(ld.Type, ld.Value != nil),
 	}
 	if ld.Value != nil {
 		value, err := legacyExprFromIR(ld.Value)
@@ -411,6 +411,20 @@ func legacyTypeFromIR(typ ostyir.Type) ast.Type {
 	default:
 		return nil
 	}
+}
+
+func legacyBindingTypeFromIR(typ ostyir.Type, hasValue bool) ast.Type {
+	// Lowering currently bakes inferred let types into IR. If the checker leaves
+	// an inferred value at ErrType, replaying that as an explicit `<error>` type
+	// in the bridge makes the legacy emitter fail even when the value path is
+	// otherwise compilable. Keep the annotation only when it carries useful type
+	// information.
+	if hasValue {
+		if _, ok := typ.(*ostyir.ErrType); ok {
+			return nil
+		}
+	}
+	return legacyTypeFromIR(typ)
 }
 
 func legacyPrimTypeName(kind ostyir.PrimKind) string {
@@ -542,7 +556,7 @@ func legacyLetStmtFromIR(stmt *ostyir.LetStmt) (ast.Stmt, error) {
 		PosV: start,
 		EndV: end,
 		Mut:  stmt.Mut,
-		Type: legacyTypeFromIR(stmt.Type),
+		Type: legacyBindingTypeFromIR(stmt.Type, stmt.Value != nil),
 	}
 	if stmt.Pattern != nil {
 		pat, err := legacyPatternFromIR(stmt.Pattern)

@@ -54,7 +54,7 @@ func TestParseGenEmitFileMergesPackageSources(t *testing.T) {
 	}
 }
 
-func TestParseGenEmitFilePreservesOriginalASTNodes(t *testing.T) {
+func TestParseGenEmitFileReparsesMergedSource(t *testing.T) {
 	dir := t.TempDir()
 	writeGenTestFile(t, dir, "a.osty", "pub fn helper() -> Int { 1 }\n")
 	target := writeGenTestFile(t, dir, "b.osty", "fn main() -> Int { helper() }\n")
@@ -73,11 +73,11 @@ func TestParseGenEmitFilePreservesOriginalASTNodes(t *testing.T) {
 	if got, want := len(file.Decls), 2; got != want {
 		t.Fatalf("merged decl count = %d, want %d", got, want)
 	}
-	if got, want := file.Decls[0], entry.pkg.Files[0].File.Decls[0]; got != want {
-		t.Fatalf("decl[0] was reparsed instead of reusing original AST node")
+	if got, want := file.Decls[0], entry.pkg.Files[0].File.Decls[0]; got == want {
+		t.Fatalf("decl[0] reused the original AST node; want a reparsed merged AST")
 	}
-	if got, want := file.Decls[1], entry.pkg.Files[1].File.Decls[0]; got != want {
-		t.Fatalf("decl[1] was reparsed instead of reusing original AST node")
+	if got, want := file.Decls[1], entry.pkg.Files[1].File.Decls[0]; got == want {
+		t.Fatalf("decl[1] reused the original AST node; want a reparsed merged AST")
 	}
 }
 
