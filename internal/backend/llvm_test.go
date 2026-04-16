@@ -691,7 +691,6 @@ fn main() {
 		t.Fatalf("binary stdout = %q, want %q", got, want)
 	}
 }
-
 func TestLLVMBackendBinaryGenericEnumVariantFromLetContext(t *testing.T) {
 	if _, err := exec.LookPath("clang"); err != nil {
 		t.Skip("clang not found on PATH")
