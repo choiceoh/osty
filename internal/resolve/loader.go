@@ -10,6 +10,10 @@ import (
 	"github.com/osty/osty/internal/parser"
 )
 
+// SourceTransform lets callers rewrite raw source bytes before the
+// parser sees them. nil preserves the on-disk bytes.
+type SourceTransform func(path string, src []byte) []byte
+
 // LoadPackage discovers and parses every `.osty` file directly under
 // dir (non-recursive) and returns them as a single Package ready for
 // ResolvePackage. Test files (`*_test.osty`) are excluded per v0.4 §11
@@ -18,6 +22,13 @@ import (
 // The returned Package has Files sorted lexicographically by path for
 // deterministic diagnostic ordering.
 func LoadPackage(dir string) (*Package, error) {
+	return LoadPackageWithTransform(dir, nil)
+}
+
+// LoadPackageWithTransform is LoadPackage plus an optional pre-parse
+// source transform. The callback can normalize foreign syntax or inject
+// generated source before diagnostics are computed.
+func LoadPackageWithTransform(dir string, transform SourceTransform) (*Package, error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, err
@@ -42,30 +53,18 @@ func LoadPackage(dir string) (*Package, error) {
 		paths = append(paths, filepath.Join(abs, name))
 	}
 	sort.Strings(paths)
-
-	pkg := &Package{
-		Dir:  abs,
-		Name: filepath.Base(abs),
-	}
-	for _, p := range paths {
-		src, err := os.ReadFile(p)
-		if err != nil {
-			return nil, fmt.Errorf("read %s: %w", p, err)
-		}
-		file, parseDiags := parser.ParseDiagnostics(src)
-		pkg.Files = append(pkg.Files, &PackageFile{
-			Path:       p,
-			Source:     src,
-			File:       file,
-			ParseDiags: parseDiags,
-		})
-	}
-	return pkg, nil
+	return loadPackagePaths(paths, abs, filepath.Base(abs), transform)
 }
 
 // LoadPackageWithTests is like LoadPackage but also includes every
 // `*_test.osty` file. Used by `osty test` and similar commands.
 func LoadPackageWithTests(dir string) (*Package, error) {
+	return LoadPackageWithTestsTransform(dir, nil)
+}
+
+// LoadPackageWithTestsTransform is LoadPackageWithTests plus an
+// optional pre-parse source transform.
+func LoadPackageWithTestsTransform(dir string, transform SourceTransform) (*Package, error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, err
@@ -85,12 +84,18 @@ func LoadPackageWithTests(dir string) (*Package, error) {
 		}
 	}
 	sort.Strings(paths)
+	return loadPackagePaths(paths, abs, filepath.Base(abs), transform)
+}
 
-	pkg := &Package{Dir: abs, Name: filepath.Base(abs)}
+func loadPackagePaths(paths []string, dir, name string, transform SourceTransform) (*Package, error) {
+	pkg := &Package{Dir: dir, Name: name}
 	for _, p := range paths {
 		src, err := os.ReadFile(p)
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", p, err)
+		}
+		if transform != nil {
+			src = transform(p, src)
 		}
 		file, parseDiags := parser.ParseDiagnostics(src)
 		pkg.Files = append(pkg.Files, &PackageFile{

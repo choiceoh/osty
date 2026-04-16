@@ -48,6 +48,13 @@ switches are not part of the public CLI contract. `run` requires a host
 binary and rejects cross-target execution. Native `osty test`
 execution is still pending.
 
+Front-end-bearing commands (`check`, `resolve`, `typecheck`, `lint`,
+`build`, `run`, `test`, and `gen`) apply the in-memory `airepair`
+adaptation pass by default before parsing so AI-authored foreign syntax
+is normalized without requiring an explicit opt-in flag. Debugging flags
+may narrow or disable that behavior, but the default user contract is
+best-effort automatic adaptation.
+
 ### 13.2 Manifest
 
 A project is described by `osty.toml` at its root. `osty.lock` records

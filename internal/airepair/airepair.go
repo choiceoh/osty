@@ -24,6 +24,10 @@ type phaseFunc func(src []byte, diags []*diag.Diagnostic) repair.Result
 type Mode string
 
 const (
+	// ModeAutoAssist prioritizes parser success first, then resolve/check
+	// quality. This is the default because AI-authored mixed syntax is most
+	// useful when the source becomes front-end-runnable at all.
+	ModeAutoAssist Mode = "auto"
 	// ModeRewriteOnly runs the lexical repair phase and reports its result
 	// without treating front-end metrics as the primary objective.
 	ModeRewriteOnly Mode = "rewrite"
@@ -109,7 +113,7 @@ type ReportChange struct {
 func Analyze(req Request) Result {
 	mode := req.Mode
 	if mode == "" {
-		mode = ModeFrontEndAssist
+		mode = ModeAutoAssist
 	}
 
 	original := append([]byte(nil), req.Source...)
@@ -238,8 +242,10 @@ func isImproved(mode Mode, before, after ProbeStats, repaired repair.Result) boo
 		return len(repaired.Changes) > 0
 	case ModeParseAssist:
 		return compareParseAssist(before, after) > 0
-	default:
+	case ModeFrontEndAssist:
 		return compareFrontEndAssist(before, after) > 0
+	default:
+		return compareAutoAssist(before, after) > 0
 	}
 }
 
@@ -252,8 +258,10 @@ func isAccepted(mode Mode, before, after ProbeStats, repaired repair.Result) boo
 		return true
 	case ModeParseAssist:
 		return compareParseAssist(before, after) >= 0
-	default:
+	case ModeFrontEndAssist:
 		return compareFrontEndAssist(before, after) >= 0
+	default:
+		return compareAutoAssist(before, after) >= 0
 	}
 }
 
@@ -271,6 +279,34 @@ func compareParseAssist(before, after ProbeStats) int {
 	}
 	if after.TotalErrors != before.TotalErrors {
 		if after.TotalErrors < before.TotalErrors {
+			return 1
+		}
+		return -1
+	}
+	if after.TotalWarnings != before.TotalWarnings {
+		if after.TotalWarnings < before.TotalWarnings {
+			return 1
+		}
+		return -1
+	}
+	return 0
+}
+
+func compareAutoAssist(before, after ProbeStats) int {
+	if after.Parse.Errors != before.Parse.Errors {
+		if after.Parse.Errors < before.Parse.Errors {
+			return 1
+		}
+		return -1
+	}
+	if after.Resolve.Errors != before.Resolve.Errors {
+		if after.Resolve.Errors < before.Resolve.Errors {
+			return 1
+		}
+		return -1
+	}
+	if after.Check.Errors != before.Check.Errors {
+		if after.Check.Errors < before.Check.Errors {
 			return 1
 		}
 		return -1

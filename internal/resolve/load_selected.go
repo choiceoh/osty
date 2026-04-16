@@ -2,17 +2,20 @@ package resolve
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
-
-	"github.com/osty/osty/internal/parser"
 )
 
 // LoadPackageFiles loads the provided Osty source files as one package while
 // preserving their original paths for diagnostics. Paths may span a synthetic
 // selection rather than a full on-disk directory listing.
 func LoadPackageFiles(paths []string, stdlib StdlibProvider) (*Package, error) {
+	return LoadPackageFilesWithTransform(paths, stdlib, nil)
+}
+
+// LoadPackageFilesWithTransform is LoadPackageFiles plus an optional
+// pre-parse source transform.
+func LoadPackageFilesWithTransform(paths []string, stdlib StdlibProvider, transform SourceTransform) (*Package, error) {
 	if len(paths) == 0 {
 		return nil, fmt.Errorf("load selected package: no files")
 	}
@@ -33,18 +36,10 @@ func LoadPackageFiles(paths []string, stdlib StdlibProvider) (*Package, error) {
 	if stdlib != nil {
 		pkg.workspace = newStdlibOnlyWorkspace(stdlib)
 	}
-	for _, p := range absPaths {
-		src, err := os.ReadFile(p)
-		if err != nil {
-			return nil, fmt.Errorf("read %s: %w", p, err)
-		}
-		file, parseDiags := parser.ParseDiagnostics(src)
-		pkg.Files = append(pkg.Files, &PackageFile{
-			Path:       p,
-			Source:     src,
-			File:       file,
-			ParseDiags: parseDiags,
-		})
+	loaded, err := loadPackagePaths(absPaths, dir, filepath.Base(dir), transform)
+	if err != nil {
+		return nil, err
 	}
+	pkg.Files = loaded.Files
 	return pkg, nil
 }

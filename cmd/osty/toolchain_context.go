@@ -21,6 +21,10 @@ type selectedPackageEntry struct {
 }
 
 func loadSelectedPackageEntry(path string) (*selectedPackageEntry, bool, error) {
+	return loadSelectedPackageEntryWithTransform(path, nil)
+}
+
+func loadSelectedPackageEntryWithTransform(path string, transform resolve.SourceTransform) (*selectedPackageEntry, bool, error) {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return nil, false, err
@@ -29,7 +33,7 @@ func loadSelectedPackageEntry(path string) (*selectedPackageEntry, bool, error) 
 	if len(files) == 0 {
 		return nil, false, nil
 	}
-	entry, err := loadSelectedPackageFiles(absPath, files)
+	entry, err := loadSelectedPackageFilesWithTransform(absPath, files, transform)
 	if err != nil {
 		return nil, true, err
 	}
@@ -37,7 +41,11 @@ func loadSelectedPackageEntry(path string) (*selectedPackageEntry, bool, error) 
 }
 
 func loadSelectedPackageFiles(sourcePath string, files []string) (*selectedPackageEntry, error) {
-	pkg, err := resolve.LoadPackageFiles(files, stdlib.LoadCached())
+	return loadSelectedPackageFilesWithTransform(sourcePath, files, nil)
+}
+
+func loadSelectedPackageFilesWithTransform(sourcePath string, files []string, transform resolve.SourceTransform) (*selectedPackageEntry, error) {
+	pkg, err := resolve.LoadPackageFilesWithTransform(files, stdlib.LoadCached(), transform)
 	if err != nil {
 		return nil, err
 	}

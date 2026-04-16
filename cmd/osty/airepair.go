@@ -29,13 +29,13 @@ func runAIRepairMain(args []string, stdin io.Reader, stdout, stderr io.Writer) i
 	fs := flag.NewFlagSet("airepair", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: osty airepair [--check] [--write] [--json] [--capture-dir DIR] [--capture-name NAME] [--capture-if residual|changed|always] [--stdin-name NAME] [--mode rewrite|parse|frontend] FILE|-")
+		fmt.Fprintln(stderr, "usage: osty airepair [--check] [--write] [--json] [--capture-dir DIR] [--capture-name NAME] [--capture-if residual|changed|always] [--stdin-name NAME] [--mode auto|rewrite|parse|frontend] FILE|-")
 		fmt.Fprintln(stderr, "       osty airepair triage [--top N] DIR")
 		fmt.Fprintln(stderr, "       osty airepair promote [--dest DIR] [--name NAME] CASE")
 	}
 	var checkMode, writeMode, jsonMode bool
 	stdinName := "<stdin>"
-	modeName := string(airepair.ModeFrontEndAssist)
+	modeName := string(airepair.ModeAutoAssist)
 	captureDir := ""
 	captureName := ""
 	captureModeName := string(aiRepairCaptureResidual)
@@ -48,7 +48,7 @@ func runAIRepairMain(args []string, stdin io.Reader, stdout, stderr io.Writer) i
 	fs.StringVar(&captureName, "capture-name", captureName, "basename for captured airepair artifacts")
 	fs.StringVar(&captureModeName, "capture-if", captureModeName, "capture when residual, changed, or always")
 	fs.StringVar(&stdinName, "stdin-name", stdinName, "filename to use in reports when reading from stdin")
-	fs.StringVar(&modeName, "mode", modeName, "acceptance mode (rewrite, parse, frontend)")
+	fs.StringVar(&modeName, "mode", modeName, "debug acceptance mode (auto, rewrite, parse, frontend)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -73,7 +73,7 @@ func runAIRepairMain(args []string, stdin io.Reader, stdout, stderr io.Writer) i
 
 	mode, ok := parseAIRepairMode(modeName)
 	if !ok {
-		fmt.Fprintf(stderr, "osty airepair: unknown mode %q (want rewrite, parse, or frontend)\n", modeName)
+		fmt.Fprintf(stderr, "osty airepair: unknown mode %q (want auto, rewrite, parse, or frontend)\n", modeName)
 		return 2
 	}
 	captureMode, ok := parseAIRepairCaptureMode(captureModeName)
@@ -174,11 +174,13 @@ func reportRepairSummary(w io.Writer, prefix, path string, res repair.Result) {
 
 func parseAIRepairMode(value string) (airepair.Mode, bool) {
 	switch value {
+	case "", string(airepair.ModeAutoAssist):
+		return airepair.ModeAutoAssist, true
 	case string(airepair.ModeRewriteOnly):
 		return airepair.ModeRewriteOnly, true
 	case string(airepair.ModeParseAssist):
 		return airepair.ModeParseAssist, true
-	case "", string(airepair.ModeFrontEndAssist):
+	case string(airepair.ModeFrontEndAssist):
 		return airepair.ModeFrontEndAssist, true
 	default:
 		return "", false
@@ -186,10 +188,10 @@ func parseAIRepairMode(value string) (airepair.Mode, bool) {
 }
 
 func registerAIRepairCommandFlags(fs *flag.FlagSet, enabled *bool, mode *string) {
-	fs.BoolVar(enabled, "airepair", false, "adapt common AI-authored foreign syntax in memory")
-	fs.BoolVar(enabled, "repair", false, "alias for --airepair")
-	fs.StringVar(mode, "airepair-mode", string(airepair.ModeFrontEndAssist), "acceptance mode (rewrite, parse, or frontend)")
-	fs.StringVar(mode, "repair-mode", string(airepair.ModeFrontEndAssist), "alias for --airepair-mode")
+	fs.BoolVar(enabled, "airepair", true, "adapt common AI-authored foreign syntax in memory (enabled by default)")
+	fs.BoolVar(enabled, "repair", true, "alias for --airepair")
+	fs.StringVar(mode, "airepair-mode", string(airepair.ModeAutoAssist), "debug acceptance mode (auto, rewrite, parse, or frontend)")
+	fs.StringVar(mode, "repair-mode", string(airepair.ModeAutoAssist), "alias for --airepair-mode")
 }
 
 func readAIRepairInput(path string, stdin io.Reader, stdinName string) (string, []byte, error) {

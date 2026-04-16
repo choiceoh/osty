@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sort"
 
 	"github.com/osty/osty/internal/backend"
 	"github.com/osty/osty/internal/check"
@@ -48,7 +47,7 @@ import (
 func runRun(args []string, cliF cliFlags) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: osty run [--offline | --locked | --frozen] [--profile NAME | --release] [--target TRIPLE] [--features LIST] [--no-default-features] [--backend NAME] [--emit MODE] [--airepair] [--airepair-mode MODE] [-- ARGS...]")
+		fmt.Fprintln(os.Stderr, "usage: osty run [--offline | --locked | --frozen] [--profile NAME | --release] [--target TRIPLE] [--features LIST] [--no-default-features] [--backend NAME] [--emit MODE] [--airepair=false] [--airepair-mode MODE] [-- ARGS...]")
 	}
 	var offline, locked, frozen bool
 	fs.BoolVar(&offline, "offline", false, "do not fetch dependencies; fail if caches are missing")
@@ -65,7 +64,7 @@ func runRun(args []string, cliF cliFlags) {
 	_ = fs.Parse(args)
 	mode, ok := parseAIRepairMode(aiRepairModeName)
 	if !ok {
-		fmt.Fprintf(os.Stderr, "osty run: unknown airepair mode %q (want rewrite, parse, or frontend)\n", aiRepairModeName)
+		fmt.Fprintf(os.Stderr, "osty run: unknown airepair mode %q (want auto, rewrite, parse, or frontend)\n", aiRepairModeName)
 		os.Exit(2)
 	}
 	cliF.aiMode = mode
@@ -131,22 +130,13 @@ func runRun(args []string, cliF cliFlags) {
 		fmt.Fprintf(os.Stderr, "osty run: %v\n", err)
 		os.Exit(1)
 	}
+	ws.SourceTransform = aiRepairSourceTransform("osty run --airepair", os.Stderr, cliF)
 	ws.Stdlib = stdlib.Load()
 	ws.Deps = deps
 	rootPkg, err := ws.LoadPackage("")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty run: %v\n", err)
 		os.Exit(1)
-	}
-	if cliF.aiRepair {
-		paths := make([]string, 0, len(ws.Packages))
-		for p := range ws.Packages {
-			paths = append(paths, p)
-		}
-		sort.Strings(paths)
-		for _, p := range paths {
-			applyAIRepairToPackage(ws.Packages[p], "osty run --airepair", os.Stderr, cliF)
-		}
 	}
 	results := ws.ResolveAll()
 	checks := check.Workspace(ws, results, checkOpts())

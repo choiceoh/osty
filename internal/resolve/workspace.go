@@ -126,6 +126,11 @@ type Workspace struct {
 	// error.
 	Deps DepProvider
 
+	// SourceTransform rewrites source bytes before parsing. The CLI uses
+	// this to adapt AI-authored foreign syntax before any parser or
+	// resolver work begins.
+	SourceTransform SourceTransform
+
 	// stdlibStub is set to true when the workspace should tolerate
 	// `std.*` imports even though no stdlib sources are present. Useful
 	// in tests and before the stdlib is bundled with the compiler.
@@ -220,7 +225,7 @@ func (w *Workspace) LoadPackage(dotPath string) (*Package, error) {
 	w.loading[dotPath] = true
 	defer delete(w.loading, dotPath)
 
-	pkg, err := LoadPackage(dir)
+	pkg, err := LoadPackageWithTransform(dir, w.SourceTransform)
 	if err != nil {
 		return nil, err
 	}
@@ -281,7 +286,7 @@ func (w *Workspace) loadFromExternalDir(key, dir string) (*Package, error) {
 	w.loading[key] = true
 	defer delete(w.loading, key)
 
-	pkg, err := LoadPackage(dir)
+	pkg, err := LoadPackageWithTransform(dir, w.SourceTransform)
 	if err != nil {
 		return nil, err
 	}
