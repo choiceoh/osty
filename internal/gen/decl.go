@@ -55,6 +55,10 @@ func (g *gen) emitFnDecl(fn *ast.FnDecl) {
 	}
 
 	if len(fn.Generics) > 0 {
+		if g.emitGenericFnDecls {
+			g.emitFnDeclBody(fn, g.renamedFnName(fn.Name))
+			return
+		}
 		// Demand-driven: generic fns never emit inline. A call site
 		// (possibly inside another generic body being specialized)
 		// requests an instantiation via requestInstance, and the
@@ -62,7 +66,7 @@ func (g *gen) emitFnDecl(fn *ast.FnDecl) {
 		return
 	}
 
-	g.emitFnDeclBody(fn, fn.Name)
+	g.emitFnDeclBody(fn, g.renamedFnName(fn.Name))
 }
 
 // emitFnDeclBody writes a single function definition under `name`. It
@@ -77,6 +81,9 @@ func (g *gen) emitFnDeclBody(fn *ast.FnDecl, name string) {
 	g.sourceMarker(fn)
 	g.body.write("func ")
 	g.body.write(name)
+	if g.emitGenericFnDecls && len(fn.Generics) > 0 {
+		g.emitGenericParamList(fn.Generics)
+	}
 
 	g.emitParamList(fn.Params)
 
@@ -138,7 +145,11 @@ func (g *gen) emitLetDecl(l *ast.LetDecl) {
 	g.body.nl()
 	g.sourceMarker(l)
 	g.body.write("var ")
-	g.body.write(mangleIdent(l.Name))
+	name := g.renamedFnName(l.Name)
+	if name == l.Name {
+		name = mangleIdent(l.Name)
+	}
+	g.body.write(name)
 	if l.Type != nil {
 		g.body.write(" ")
 		g.body.write(g.goTypeExpr(l.Type))
@@ -468,6 +479,12 @@ func (g *gen) emitUseDecl(u *ast.UseDecl) {
 		return
 	}
 	full := useFullPath(u)
+	if module, ok := stdlibOstyModulePath(u.Path); ok {
+		if g.aliasUsedAsSelector(alias) {
+			g.requestStdlibOsty(module)
+		}
+		return
+	}
 	if g.emitStdlibRuntimeBridge(alias, u.Path, full) {
 		return
 	}
@@ -695,8 +712,8 @@ func (g *gen) emitStdlibRuntimeBridge(alias string, path []string, full string) 
 		g.needBytesRuntime = true
 		g.needResult = true
 		g.emitUseStub(alias, `struct {
-			fromString  func(s string) []byte
 			from        func(items []byte) []byte
+			fromString  func(s string) []byte
 			toString    func(b []byte) Result[string, any]
 			len         func(b []byte) int
 			isEmpty     func(b []byte) bool
@@ -723,8 +740,8 @@ func (g *gen) emitStdlibRuntimeBridge(alias string, path []string, full string) 
 			toHex       func(b []byte) string
 			fromHex     func(s string) Result[[]byte, any]
 		}{
-			fromString:  bytesFromString,
 			from:        bytesFrom,
+			fromString:  bytesFromString,
 			toString:    bytesToString,
 			len:         bytesLen,
 			isEmpty:     bytesIsEmpty,
@@ -1008,16 +1025,6 @@ func (g *gen) fileIdentUsed(name string) bool {
 	return false
 }
 
-func useFullPath(u *ast.UseDecl) string {
-	if u == nil {
-		return ""
-	}
-	if u.RawPath != "" {
-		return u.RawPath
-	}
-	return strings.Join(u.Path, ".")
-}
-
 func (g *gen) emitUseStub(alias, stub, full string) {
 	g.body.writef("\nvar %s = %s // stub for `use %s`\n",
 		mangleIdent(alias), stub, full)
@@ -1201,8 +1208,6 @@ func stdlibBridge(path []string) string {
 		return "io"
 	case "time":
 		return "time"
-	case "strings":
-		return "strings"
 	case "math":
 		return "math"
 	case "errors":
@@ -1259,6 +1264,16 @@ func lastPathComponent(p string) string {
 		return p[i+1:]
 	}
 	return p
+}
+
+func useFullPath(u *ast.UseDecl) string {
+	if u == nil {
+		return ""
+	}
+	if u.RawPath != "" {
+		return u.RawPath
+	}
+	return strings.Join(u.Path, ".")
 }
 
 func useDeclAlias(u *ast.UseDecl) string {

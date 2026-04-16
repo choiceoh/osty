@@ -44,10 +44,7 @@ func (g *gen) emitExpr(e ast.Expr) {
 	case *ast.FieldExpr:
 		g.emitField(e)
 	case *ast.IndexExpr:
-		g.emitExpr(e.X)
-		g.body.write("[")
-		g.emitExpr(e.Index)
-		g.body.write("]")
+		g.emitIndex(e)
 	case *ast.RangeExpr:
 		g.emitRangeExpr(e)
 	case *ast.ListExpr:
@@ -101,6 +98,10 @@ func (g *gen) emitIdent(id *ast.Ident) {
 	// `v.(Enum_Variant)` type assertion).
 	if owner, ok := g.variantOwnerForIdent(id); ok {
 		g.body.writef("%s(&%s_%s{})", owner, owner, id.Name)
+		return
+	}
+	if renamed := g.renamedIdent(id); renamed != "" {
+		g.body.write(renamed)
 		return
 	}
 	g.body.write(mangleIdent(id.Name))
@@ -285,11 +286,39 @@ func (g *gen) emitStringLit(s *ast.StringLit) {
 	}
 	g.body.writef("fmt.Sprintf(%s", strconv.Quote(format.String()))
 	for _, a := range args {
-		g.body.write(", ostyToString(")
-		g.emitExpr(a)
-		g.body.write(")")
+		g.body.write(", ")
+		g.emitStringInterpArg(a)
 	}
 	g.body.write(")")
+}
+
+func (g *gen) emitStringInterpArg(e ast.Expr) {
+	if p, ok := g.typeOf(e).(*types.Primitive); ok && p.Kind == types.PChar {
+		g.body.write("string(")
+		g.emitExpr(e)
+		g.body.write(")")
+		return
+	}
+	g.body.write("ostyToString(")
+	g.emitExpr(e)
+	g.body.write(")")
+}
+
+func (g *gen) emitIndex(e *ast.IndexExpr) {
+	g.emitExpr(e.X)
+	g.body.write("[")
+	if r, ok := e.Index.(*ast.RangeExpr); ok {
+		if r.Start != nil {
+			g.emitExpr(r.Start)
+		}
+		g.body.write(":")
+		if r.Stop != nil {
+			g.emitExpr(r.Stop)
+		}
+	} else {
+		g.emitExpr(e.Index)
+	}
+	g.body.write("]")
 }
 
 // emitUnary writes `op X`.
@@ -598,6 +627,9 @@ func (g *gen) emitCall(c *ast.CallExpr) {
 	if g.emitStdlibJSONCall(c) {
 		return
 	}
+	if g.emitStdlibOstyCall(c) {
+		return
+	}
 	if g.emitStdlibIterCall(c) {
 		return
 	}
@@ -643,6 +675,9 @@ func (g *gen) emitCall(c *ast.CallExpr) {
 			return
 		}
 		if g.emitThreadCall(c, f) {
+			return
+		}
+		if g.emitPrimitiveMethodCall(c, f) {
 			return
 		}
 		if g.emitErrorMethodCall(c, f) {
@@ -3347,6 +3382,9 @@ func (g *gen) emitField(f *ast.FieldExpr) {
 			return
 		}
 		if g.emitQualifiedOptionField(f) {
+			return
+		}
+		if g.emitStdlibOstyField(f) {
 			return
 		}
 		if g.emitStdlibMathField(f) {

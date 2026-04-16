@@ -295,10 +295,7 @@ func (g *gen) emitStringMethod(c *ast.CallExpr, f *ast.FieldExpr) bool {
 		if len(c.Args) != 0 {
 			return false
 		}
-		g.needGraphemeRuntime = true
-		g.body.write("ostyGraphemes(")
-		g.emitExpr(f.X)
-		g.body.write(")")
+		g.emitStringGraphemes(f.X)
 	case "toString":
 		if len(c.Args) != 0 {
 			return false
@@ -330,6 +327,14 @@ func (g *gen) emitStringMethod(c *ast.CallExpr, f *ast.FieldExpr) bool {
 		return false
 	}
 	return true
+}
+
+func (g *gen) emitStringGraphemes(recv ast.Expr) {
+	g.requestStdlibOsty("strings")
+	g.body.write(stdlibOstyFuncName("strings", "graphemes"))
+	g.body.write("(")
+	g.emitExpr(recv)
+	g.body.write(")")
 }
 
 func (g *gen) emitBytesMethod(c *ast.CallExpr, f *ast.FieldExpr) bool {

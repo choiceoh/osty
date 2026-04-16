@@ -95,6 +95,21 @@ pub struct GcTlab {
     pub wasteBytes: Int,
 }
 
+pub struct GcFreeBlock {
+    pub address: Int,
+    pub size: Int,
+}
+
+pub struct GcTenuredAllocator {
+    pub cursor: Int,
+    pub freeList: List<GcFreeBlock>,
+    pub bumpAllocations: Int,
+    pub reuseAllocations: Int,
+    pub directAllocations: Int,
+    pub promotedAllocations: Int,
+    pub reusedBytes: Int,
+}
+
 pub enum GcSafepointKind {
     GcCallSafepoint,
     GcAllocationSafepoint,
@@ -260,6 +275,7 @@ pub struct GcHeap {
     closureEnvironments: Map<Int, GcClosureEnvironment>,
     asyncFrames: Map<Int, GcAsyncFrameRoot>,
     tlabs: Map<Int, GcTlab>,
+    tenured: GcTenuredAllocator,
     remembered: Set<Int>,
     grey: List<Int>,
     allocatedSinceLastGC: Int,
@@ -281,6 +297,20 @@ pub struct GcHeap {
             Err("gc heap exhausted: requested {normalized} bytes with {self.liveBytes} live bytes")
         } else {
             Ok(self.allocateRaw(kind, normalized))
+        }
+    }
+
+    pub fn tryAllocateTenured(mut self, kind: ObjectKind, size: Int) -> Result<Int, String> {
+        let normalized = normalizeSize(size)
+
+        if self.config.heapLimit > 0 && self.liveBytes + normalized > self.config.heapLimit {
+            let _ = self.majorCollectFor("tenured-heap-pressure")
+        }
+
+        if self.config.heapLimit > 0 && self.liveBytes + normalized > self.config.heapLimit {
+            Err("gc heap exhausted: requested {normalized} bytes with {self.liveBytes} live bytes")
+        } else {
+            Ok(self.allocateTenuredRaw(kind, normalized))
         }
     }
 
@@ -310,6 +340,10 @@ pub struct GcHeap {
 
     pub fn allocate(mut self, kind: ObjectKind, size: Int) -> Int {
         self.tryAllocate(kind, size).unwrap()
+    }
+
+    pub fn allocateTenured(mut self, kind: ObjectKind, size: Int) -> Int {
+        self.tryAllocateTenured(kind, size).unwrap()
     }
 
     pub fn allocateThread(mut self, ownerId: Int, kind: ObjectKind, size: Int) -> Int {
@@ -1053,6 +1087,42 @@ pub struct GcHeap {
         total
     }
 
+    pub fn tenuredFreeBlockCount(self) -> Int {
+        self.tenured.freeList.len()
+    }
+
+    pub fn tenuredFreeBytes(self) -> Int {
+        let mut total = 0
+        for block in self.tenured.freeList {
+            total = total + block.size
+        }
+        total
+    }
+
+    pub fn tenuredBumpAllocationCount(self) -> Int {
+        self.tenured.bumpAllocations
+    }
+
+    pub fn tenuredReuseAllocationCount(self) -> Int {
+        self.tenured.reuseAllocations
+    }
+
+    pub fn tenuredDirectAllocationCount(self) -> Int {
+        self.tenured.directAllocations
+    }
+
+    pub fn tenuredPromotedAllocationCount(self) -> Int {
+        self.tenured.promotedAllocations
+    }
+
+    pub fn tenuredReusedBytes(self) -> Int {
+        self.tenured.reusedBytes
+    }
+
+    pub fn tenuredCursor(self) -> Int {
+        self.tenured.cursor
+    }
+
     pub fn rememberedCount(self) -> Int {
         self.remembered.len()
     }
@@ -1118,6 +1188,17 @@ pub struct GcHeap {
             let _ = id
             if obj.generation == 1 {
                 total = total + 1
+            }
+        }
+        total
+    }
+
+    pub fn oldBytes(self) -> Int {
+        let mut total = 0
+        for (id, obj) in self.objects {
+            let _ = id
+            if obj.generation == 1 {
+                total = total + obj.size
             }
         }
         total
@@ -1338,11 +1419,48 @@ pub struct GcHeap {
         if self.allocatedSinceLastGC < 0 {
             return Err("allocatedSinceLastGC is negative: {self.allocatedSinceLastGC}")
         }
+        if self.tenured.cursor < 0 {
+            return Err("tenured allocator cursor is negative: {self.tenured.cursor}")
+        }
+        if self.tenured.cursor > self.nextAddress {
+            return Err(
+                "tenured allocator cursor {self.tenured.cursor} is beyond nextAddress {self.nextAddress}",
+            )
+        }
+        if self.tenured.bumpAllocations < 0 || self.tenured.reuseAllocations < 0 || self.tenured.directAllocations < 0 || self.tenured.promotedAllocations < 0 || self.tenured.reusedBytes < 0 {
+            return Err("tenured allocator has negative accounting")
+        }
         let survivorBytes = self.survivorBytes()
         if survivorBytes > self.config.survivorLimit {
             return Err(
                 "survivor space overflow: bytes={survivorBytes}, limit={self.config.survivorLimit}",
             )
+        }
+
+        for idx in 0..self.tenured.freeList.len() {
+            let block = self.tenured.freeList[idx]
+            if block.address < 0 {
+                return Err("tenured free block {idx} has negative address {block.address}")
+            }
+            if block.size <= 0 {
+                return Err("tenured free block {idx} has non-positive size {block.size}")
+            }
+            if block.address + block.size > self.nextAddress {
+                return Err("tenured free block {idx} is outside heap span")
+            }
+            for (id, obj) in self.objects {
+                if rangesOverlap(block.address, block.size, obj.address, obj.size) {
+                    return Err("tenured free block {idx} overlaps live object {id}")
+                }
+            }
+            for otherIdx in 0..self.tenured.freeList.len() {
+                if idx != otherIdx {
+                    let other = self.tenured.freeList[otherIdx]
+                    if rangesOverlap(block.address, block.size, other.address, other.size) {
+                        return Err("tenured free blocks {idx} and {otherIdx} overlap")
+                    }
+                }
+            }
         }
 
         for rootId in self.roots.toList() {
@@ -1505,6 +1623,25 @@ pub struct GcHeap {
         self.liveBytes = self.liveBytes + size
         self.allocatedSinceLastGC = self.allocatedSinceLastGC + size
         self.objects.insert(id, newGcObject(id, kind, size, address, self.cycle, large))
+        id
+    }
+
+    fn allocateTenuredRaw(mut self, kind: ObjectKind, size: Int) -> Int {
+        let id = self.nextId
+        let address = self.reserveTenuredAddress(size)
+        let mut object = newGcObject(id, kind, size, address, self.cycle, false)
+        object.generation = 1
+        if object.age < self.config.promotionAge {
+            object.age = self.config.promotionAge
+        }
+        object.region = regionForObject(object)
+        self.nextId = self.nextId + 1
+        self.liveBytes = self.liveBytes + size
+        self.allocatedSinceLastGC = self.allocatedSinceLastGC + size
+        let mut tenured = self.tenured
+        tenured.directAllocations = tenured.directAllocations + 1
+        self.tenured = tenured
+        self.objects.insert(id, object)
         id
     }
 
@@ -1789,7 +1926,7 @@ pub struct GcHeap {
                         let mut next = obj
                         next.age = next.age + 1
                         if self.shouldPromoteYoungSurvivor(next, survivorBytes) {
-                            next.generation = 1
+                            next = self.promoteYoungObject(next)
                             promotedObjects = promotedObjects + 1
                         } else {
                             survivorBytes = survivorBytes + next.size
@@ -1825,6 +1962,20 @@ pub struct GcHeap {
         survivorBytes + obj.size > self.config.survivorLimit
     }
 
+    fn promoteYoungObject(mut self, obj: GcObject) -> GcObject {
+        let mut next = obj
+        next.generation = 1
+        if !(next.pinned) && !(next.large) {
+            let sourceAddress = next.address
+            next.address = self.reserveTenuredAddress(next.size)
+            self.releaseTenuredBlock(sourceAddress, next.size)
+        }
+        let mut tenured = self.tenured
+        tenured.promotedAllocations = tenured.promotedAllocations + 1
+        self.tenured = tenured
+        next
+    }
+
     fn sweepAll(mut self) -> (Int, Int) {
         let mut reclaimedObjects = 0
         let mut reclaimedBytes = 0
@@ -1845,6 +1996,9 @@ pub struct GcHeap {
                     self.objects.insert(id, next)
                 } else {
                     self.dropObjectSideTables(id)
+                    if obj.generation == 1 && !(obj.large) && !(obj.pinned) {
+                        self.releaseTenuredBlock(obj.address, obj.size)
+                    }
                     let _ = self.objects.remove(id)
                     self.liveBytes = self.liveBytes - obj.size
                     reclaimedObjects = reclaimedObjects + 1
@@ -1858,6 +2012,7 @@ pub struct GcHeap {
 
     fn compactLive(mut self) -> Int {
         let ids = self.objects.keys().sorted()
+        let mut freeList: List<GcFreeBlock> = []
         let mut cursor = 0
         let mut moved = 0
 
@@ -1865,6 +2020,14 @@ pub struct GcHeap {
             if self.objects.containsKey(id) {
                 let mut next = self.objects[id]
                 if next.pinned || next.large {
+                    if next.address > cursor {
+                        freeList.push(
+                            GcFreeBlock {
+                                address: cursor,
+                                size: next.address - cursor,
+                            },
+                        )
+                    }
                     let end = next.address + next.size
                     if end > cursor {
                         cursor = end
@@ -1881,7 +2044,63 @@ pub struct GcHeap {
         }
 
         self.nextAddress = cursor
+        let mut tenured = self.tenured
+        tenured.cursor = cursor
+        tenured.freeList = freeList
+        self.tenured = tenured
         moved
+    }
+
+    fn reserveTenuredAddress(mut self, size: Int) -> Int {
+        let mut address = -1
+        let mut consumed = false
+        let mut nextFreeList: List<GcFreeBlock> = []
+
+        for block in self.tenured.freeList {
+            if !(consumed) && block.size >= size {
+                address = block.address
+                consumed = true
+                if block.size > size {
+                    nextFreeList.push(
+                        GcFreeBlock {
+                            address: block.address + size,
+                            size: block.size - size,
+                        },
+                    )
+                }
+            } else {
+                nextFreeList.push(block)
+            }
+        }
+
+        let mut tenured = self.tenured
+        if consumed {
+            tenured.freeList = nextFreeList
+            tenured.reuseAllocations = tenured.reuseAllocations + 1
+            tenured.reusedBytes = tenured.reusedBytes + size
+            self.tenured = tenured
+            return address
+        }
+
+        if tenured.cursor > self.nextAddress {
+            address = tenured.cursor
+        } else {
+            address = self.nextAddress
+        }
+        tenured.cursor = address + size
+        tenured.bumpAllocations = tenured.bumpAllocations + 1
+        self.nextAddress = tenured.cursor
+        self.tenured = tenured
+        address
+    }
+
+    fn releaseTenuredBlock(mut self, address: Int, size: Int) {
+        if size <= 0 {
+            return
+        }
+        let mut tenured = self.tenured
+        tenured.freeList.push(GcFreeBlock { address, size })
+        self.tenured = tenured
     }
 
     fn rebuildRemembered(mut self) {
@@ -2030,6 +2249,7 @@ pub fn newGcHeap(config: GcConfig) -> GcHeap {
     let closureEnvironments: Map<Int, GcClosureEnvironment> = {:}
     let asyncFrames: Map<Int, GcAsyncFrameRoot> = {:}
     let tlabs: Map<Int, GcTlab> = {:}
+    let tenured = emptyTenuredAllocator()
     let emptyRoots: List<Int> = []
     let emptyRemembered: List<Int> = []
     let grey: List<Int> = []
@@ -2049,6 +2269,7 @@ pub fn newGcHeap(config: GcConfig) -> GcHeap {
         closureEnvironments,
         asyncFrames,
         tlabs,
+        tenured,
         remembered: emptyRemembered.toSet(),
         grey,
         allocatedSinceLastGC: 0,
@@ -2080,6 +2301,19 @@ fn emptyTlab(ownerId: Int) -> GcTlab {
         fastAllocations: 0,
         slowAllocations: 0,
         wasteBytes: 0,
+    }
+}
+
+fn emptyTenuredAllocator() -> GcTenuredAllocator {
+    let freeList: List<GcFreeBlock> = []
+    GcTenuredAllocator {
+        cursor: 0,
+        freeList,
+        bumpAllocations: 0,
+        reuseAllocations: 0,
+        directAllocations: 0,
+        promotedAllocations: 0,
+        reusedBytes: 0,
     }
 }
 
@@ -2621,6 +2855,12 @@ fn normalizeSize(size: Int) -> Int {
     } else {
         size
     }
+}
+
+fn rangesOverlap(leftAddress: Int, leftSize: Int, rightAddress: Int, rightSize: Int) -> Bool {
+    let leftEnd = leftAddress + leftSize
+    let rightEnd = rightAddress + rightSize
+    leftAddress < rightEnd && rightAddress < leftEnd
 }
 
 fn regionForObject(obj: GcObject) -> GcRegionKind {

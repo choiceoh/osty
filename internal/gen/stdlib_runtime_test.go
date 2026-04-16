@@ -411,3 +411,252 @@ fn main() {
 		}
 	}
 }
+
+func TestStdStringsInlineOstyRuntime(t *testing.T) {
+	src := `use std.strings
+
+fn main() {
+    println(strings.join(strings.split("a,b,c", ","), "|"))
+    println(strings.join(strings.splitN("a,b,c", ",", 2), "|"))
+    println(strings.toLower(strings.trimSpace("  HI  ")))
+    println(strings.replaceAll("aaaa", "aa", "b"))
+    println("{strings.len("é")} {strings.charCount("é")}")
+}
+`
+	goSrc, err := transpileWithStdlib(t, src)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := strings.TrimSpace(runGo(t, goSrc))
+	want := strings.Join([]string{
+		"a|b|c",
+		"a|b,c",
+		"hi",
+		"bb",
+		"2 1",
+	}, "\n")
+	if out != want {
+		t.Errorf("got %q, want %q\n--- src ---\n%s", out, want, goSrc)
+	}
+	for _, want := range []string{"func _ostyStdStrings_split", "func _ostyStdStrings_replaceN"} {
+		if !strings.Contains(string(goSrc), want) {
+			t.Errorf("generated std.strings inline body missing %s:\n%s", want, goSrc)
+		}
+	}
+	for _, absent := range []string{"var strings =", "import \"strings\""} {
+		if strings.Contains(string(goSrc), absent) {
+			t.Errorf("std.strings should not lower through Go bridge/stub %q:\n%s", absent, goSrc)
+		}
+	}
+}
+
+func TestStdFmtInlineOstyRuntime(t *testing.T) {
+	src := `use std.fmt
+
+fn main() {
+    println(fmt.padLeft("7", 3, '0'))
+    println(fmt.hex(255))
+    println(fmt.hex(255, true))
+    println(fmt.truncate("abcdef", 4))
+    println(fmt.fixed(12.345, 2))
+    println(fmt.thousands(-1234567))
+    println(fmt.format(r"{0} + {1} = {2}", ["1", "2", "3"]))
+    println(fmt.join(["a", "b", "c"], ", ", " and "))
+}
+`
+	goSrc, err := transpileWithStdlib(t, src)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := strings.TrimSpace(runGo(t, goSrc))
+	want := strings.Join([]string{
+		"007",
+		"ff",
+		"FF",
+		"a...",
+		"12.35",
+		"-1,234,567",
+		"1 + 2 = 3",
+		"a, b and c",
+	}, "\n")
+	if out != want {
+		t.Errorf("got %q, want %q\n--- src ---\n%s", out, want, goSrc)
+	}
+	for _, want := range []string{"func _ostyStdFmt_padLeft", "func _ostyStdFmt_format", "func _ostyStdStrings_repeat"} {
+		if !strings.Contains(string(goSrc), want) {
+			t.Errorf("generated std.fmt inline body missing %s:\n%s", want, goSrc)
+		}
+	}
+	for _, absent := range []string{"var fmt =", "var strings =", "import \"strings\""} {
+		if strings.Contains(string(goSrc), absent) {
+			t.Errorf("std.fmt should not lower through Go bridge/stub %q:\n%s", absent, goSrc)
+		}
+	}
+}
+
+func TestStdStringsGraphemesRuntime(t *testing.T) {
+	src := `use std.strings
+
+fn main() {
+    println(strings.join(strings.graphemes("éo"), "|"))
+    println(strings.graphemes("👨‍👩‍👧‍👦").len())
+    println(strings.join(strings.graphemes("🇰🇷🇺🇸"), "|"))
+    println(strings.join(strings.graphemes("👍🏽!"), "|"))
+    println(strings.graphemes("a\r\nb").len())
+    println(strings.graphemes("각").len())
+    println(strings.graphemes("क्षि").len())
+    println("é".graphemes().len())
+}
+`
+	goSrc, err := transpileWithStdlib(t, src)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := strings.TrimSpace(runGo(t, goSrc))
+	want := strings.Join([]string{
+		"é|o",
+		"1",
+		"🇰🇷|🇺🇸",
+		"👍🏽|!",
+		"3",
+		"1",
+		"1",
+		"1",
+	}, "\n")
+	if out != want {
+		t.Errorf("got %q, want %q\n--- src ---\n%s", out, want, goSrc)
+	}
+	if !strings.Contains(string(goSrc), "func _ostyStdStrings_graphemes") {
+		t.Errorf("generated std.strings graphemes body missing:\n%s", goSrc)
+	}
+	if strings.Contains(string(goSrc), "func ostyStringGraphemes") {
+		t.Errorf("std.strings.graphemes should be emitted from Osty source, not Go runtime helper:\n%s", goSrc)
+	}
+}
+
+func TestStdStringsGraphemesUnicodeBreakTest(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Unicode GraphemeBreakTest generated-Go execution test (slow)")
+	}
+	cases := loadGraphemeBreakCases(t)
+	var src strings.Builder
+	src.WriteString(`use std.strings
+
+fn check(got: List<String>, want: List<String>, label: String) -> Int {
+    if got.len() != want.len() {
+        println(label)
+        return 1
+    }
+    for i in 0..got.len() {
+        if got[i] != want[i] {
+            println(label)
+            return 1
+        }
+    }
+    0
+}
+
+fn main() {
+    let mut fails = 0
+`)
+	for _, c := range cases {
+		src.WriteString("    fails = fails + check(strings.graphemes(")
+		src.WriteString(ostyRuneString(c.input))
+		src.WriteString("), ")
+		src.WriteString(ostyStringList(c.clusters))
+		src.WriteString(", ")
+		src.WriteString(strconv.Quote(c.label))
+		src.WriteString(")\n")
+	}
+	src.WriteString(`    println(fails)
+}
+`)
+	goSrc, err := transpileWithStdlib(t, src.String())
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := strings.TrimSpace(runGo(t, goSrc))
+	if out != "0" {
+		t.Fatalf("Unicode GraphemeBreakTest failures: %s\n--- osty src ---\n%s\n--- go src ---\n%s", out, src.String(), goSrc)
+	}
+}
+
+type graphemeBreakCase struct {
+	label    string
+	input    []rune
+	clusters [][]rune
+}
+
+func loadGraphemeBreakCases(t *testing.T) []graphemeBreakCase {
+	t.Helper()
+	path := filepath.Join("..", "stdlib", "unicode", "17.0.0", "GraphemeBreakTest.txt")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []graphemeBreakCase
+	for lineNo, line := range strings.Split(string(data), "\n") {
+		if i := strings.IndexByte(line, '#'); i >= 0 {
+			line = line[:i]
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var input []rune
+		var clusters [][]rune
+		var current []rune
+		for _, field := range strings.Fields(line) {
+			switch field {
+			case "÷":
+				if len(current) > 0 {
+					clusters = append(clusters, current)
+					current = nil
+				}
+			case "×":
+				continue
+			default:
+				v, err := strconv.ParseInt(field, 16, 32)
+				if err != nil {
+					t.Fatalf("line %d: parse %q: %v", lineNo+1, field, err)
+				}
+				r := rune(v)
+				input = append(input, r)
+				current = append(current, r)
+			}
+		}
+		if len(input) > 0 {
+			out = append(out, graphemeBreakCase{
+				label:    "GraphemeBreakTest.txt:" + strconv.Itoa(lineNo+1),
+				input:    input,
+				clusters: clusters,
+			})
+		}
+	}
+	return out
+}
+
+func ostyStringList(clusters [][]rune) string {
+	var b strings.Builder
+	b.WriteByte('[')
+	for i, cluster := range clusters {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(ostyRuneString(cluster))
+	}
+	b.WriteByte(']')
+	return b.String()
+}
+
+func ostyRuneString(rs []rune) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range rs {
+		b.WriteString(`\u{`)
+		b.WriteString(strings.ToUpper(strconv.FormatInt(int64(r), 16)))
+		b.WriteByte('}')
+	}
+	b.WriteByte('"')
+	return b.String()
+}

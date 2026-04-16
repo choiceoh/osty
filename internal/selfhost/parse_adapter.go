@@ -392,12 +392,12 @@ func (l astLowerer) param(idx int) *ast.Param {
 	}
 	p := &ast.Param{PosV: l.nodePos(n), EndV: l.nodeEnd(n), Name: n.text, Type: l.typ(n.right), Default: l.expr(n.left)}
 	if n.left >= 0 {
-		left := l.node(n.left)
-		if left != nil {
+		if left := l.node(n.left); left != nil {
 			if _, ok := left.kind.(*AstNodeKind_AstNPattern); ok {
-				pat := l.pattern(n.left)
-				p.Pattern = pat
-				p.Default = nil
+				if pat := l.pattern(n.left); pat != nil {
+					p.Pattern = pat
+					p.Default = nil
+				}
 			}
 		}
 	}
