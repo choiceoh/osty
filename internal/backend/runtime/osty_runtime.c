@@ -379,6 +379,13 @@ void osty_rt_list_push_ptr(void *raw_list, void *value) {
     osty_gc_post_write_v1(raw_list, value, OSTY_GC_KIND_LIST);
 }
 
+void osty_rt_list_push_bytes_v1(void *raw_list, const void *value, int64_t elem_size) {
+    if (elem_size < 0) {
+        osty_rt_abort("negative list element size");
+    }
+    osty_rt_list_push_bytes(raw_list, value, (size_t)elem_size, false);
+}
+
 int64_t osty_rt_list_get_i64(void *raw_list, int64_t index) {
     int64_t value;
     memcpy(&value, osty_rt_list_get_bytes(raw_list, index, sizeof(value), false), sizeof(value));
@@ -401,6 +408,16 @@ void *osty_rt_list_get_ptr(void *raw_list, int64_t index) {
     void *value;
     memcpy(&value, osty_rt_list_get_bytes(raw_list, index, sizeof(value), true), sizeof(value));
     return osty_gc_load_v1(value);
+}
+
+void osty_rt_list_get_bytes_v1(void *raw_list, int64_t index, void *out, int64_t elem_size) {
+    if (out == NULL) {
+        osty_rt_abort("list output buffer is null");
+    }
+    if (elem_size < 0) {
+        osty_rt_abort("negative list element size");
+    }
+    memcpy(out, osty_rt_list_get_bytes(raw_list, index, (size_t)elem_size, false), (size_t)elem_size);
 }
 
 bool osty_rt_strings_Equal(const char *left, const char *right) {

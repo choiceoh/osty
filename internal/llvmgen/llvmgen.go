@@ -196,6 +196,7 @@ func Generate(file *ast.File, opts Options) ([]byte, error) {
 		runtimeFFI:      map[string]map[string]*runtimeFFIFunction{},
 		runtimeFFIPaths: map[string]string{},
 		runtimeDecls:    map[string]runtimeDecl{},
+		tupleTypes:      map[string]tupleTypeInfo{},
 	}
 	if len(file.Stmts) > 0 {
 		if len(file.Decls) > 0 {
@@ -203,6 +204,7 @@ func Generate(file *ast.File, opts Options) ([]byte, error) {
 		}
 		g.runtimeFFI = collectRuntimeFFI(file, nil, nil)
 		g.runtimeFFIPaths = collectRuntimeFFIPaths(file)
+		g.resultTypes = collectBuiltinResultTypes(file, nil, nil)
 		g.testingAliases = collectStdTestingAliases(file)
 		mainIR, err := g.emitScriptMain(file.Stmts)
 		if err != nil {
@@ -221,6 +223,7 @@ func Generate(file *ast.File, opts Options) ([]byte, error) {
 	g.enums = decls.enumsOrdered
 	g.enumsByName = decls.enumsByName
 	g.enumsByType = decls.enumsByType
+	g.resultTypes = collectBuiltinResultTypes(file, decls.structsByName, decls.enumsByName)
 	g.runtimeFFI = collectRuntimeFFI(file, decls.structsByName, decls.enumsByName)
 	g.runtimeFFIPaths = collectRuntimeFFIPaths(file)
 	g.testingAliases = collectStdTestingAliases(file)
@@ -272,6 +275,8 @@ type generator struct {
 	enums            []*enumInfo
 	enumsByName      map[string]*enumInfo
 	enumsByType      map[string]*enumInfo
+	tupleTypes       map[string]tupleTypeInfo
+	resultTypes      map[string]builtinResultType
 	runtimeFFI       map[string]map[string]*runtimeFFIFunction
 	runtimeFFIPaths  map[string]string
 	testingAliases   map[string]bool
@@ -363,6 +368,12 @@ type enumPatternInfo struct {
 	hasPayloadBinding  bool
 }
 
+type tupleTypeInfo struct {
+	typ              string
+	elems            []string
+	elemListElemTyps []string
+}
+
 type value struct {
 	typ         string
 	ref         string
@@ -391,6 +402,12 @@ type runtimeDecl struct {
 	symbol string
 	ret    string
 	params []paramInfo
+}
+
+type builtinResultType struct {
+	typ    string
+	okTyp  string
+	errTyp string
 }
 
 func collectDeclarations(file *ast.File) (*declarations, error) {
@@ -520,6 +537,117 @@ func collectStdTestingAliases(file *ast.File) map[string]bool {
 		}
 	}
 	return out
+}
+
+func collectBuiltinResultTypes(file *ast.File, structs map[string]*structInfo, enums map[string]*enumInfo) map[string]builtinResultType {
+	out := map[string]builtinResultType{}
+	if file == nil {
+		return out
+	}
+	for _, decl := range file.Decls {
+		switch d := decl.(type) {
+		case *ast.FnDecl:
+			for _, param := range d.Params {
+				if param == nil {
+					continue
+				}
+				collectBuiltinResultTypeFromAST(out, param.Type, structs, enums)
+			}
+			collectBuiltinResultTypeFromAST(out, d.ReturnType, structs, enums)
+		case *ast.StructDecl:
+			for _, field := range d.Fields {
+				if field == nil {
+					continue
+				}
+				collectBuiltinResultTypeFromAST(out, field.Type, structs, enums)
+			}
+		case *ast.EnumDecl:
+			for _, variant := range d.Variants {
+				if variant == nil {
+					continue
+				}
+				for _, field := range variant.Fields {
+					collectBuiltinResultTypeFromAST(out, field, structs, enums)
+				}
+			}
+		case *ast.LetDecl:
+			collectBuiltinResultTypeFromAST(out, d.Type, structs, enums)
+		}
+	}
+	return out
+}
+
+func collectBuiltinResultTypeFromAST(out map[string]builtinResultType, t ast.Type, structs map[string]*structInfo, enums map[string]*enumInfo) {
+	if out == nil || t == nil {
+		return
+	}
+	switch tt := t.(type) {
+	case *ast.NamedType:
+		if len(tt.Path) == 1 && tt.Path[0] == "Result" && len(tt.Args) == 2 {
+			okTyp, err := llvmType(tt.Args[0], structs, enums)
+			if err == nil {
+				errTyp, err2 := llvmType(tt.Args[1], structs, enums)
+				if err2 == nil {
+					info := builtinResultType{
+						typ:    llvmResultTypeName(okTyp, errTyp),
+						okTyp:  okTyp,
+						errTyp: errTyp,
+					}
+					out[info.typ] = info
+				}
+			}
+		}
+		for _, arg := range tt.Args {
+			collectBuiltinResultTypeFromAST(out, arg, structs, enums)
+		}
+	case *ast.OptionalType:
+		collectBuiltinResultTypeFromAST(out, tt.Inner, structs, enums)
+	case *ast.TupleType:
+		for _, elem := range tt.Elems {
+			collectBuiltinResultTypeFromAST(out, elem, structs, enums)
+		}
+	case *ast.FnType:
+		for _, param := range tt.Params {
+			collectBuiltinResultTypeFromAST(out, param, structs, enums)
+		}
+		collectBuiltinResultTypeFromAST(out, tt.ReturnType, structs, enums)
+	}
+}
+
+func llvmBuiltinAggregateName(prefix string, parts ...string) string {
+	names := make([]string, 0, len(parts)+1)
+	names = append(names, prefix)
+	for _, part := range parts {
+		names = append(names, llvmBuiltinAggregatePart(part))
+	}
+	return "%" + strings.Join(names, ".")
+}
+
+func llvmBuiltinAggregatePart(part string) string {
+	if part == "" {
+		return "void"
+	}
+	var b strings.Builder
+	for i := 0; i < len(part); i++ {
+		c := part[i]
+		if c == '_' || ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || ('0' <= c && c <= '9') {
+			b.WriteByte(c)
+			continue
+		}
+		b.WriteByte('_')
+	}
+	if b.Len() == 0 {
+		return "value"
+	}
+	return b.String()
+}
+
+func llvmResultTypeName(okTyp, errTyp string) string {
+	return llvmBuiltinAggregateName("Result", okTyp, errTyp)
+}
+
+func llvmTupleTypeName(elemTypes []string) string {
+	return llvmBuiltinAggregateName("Tuple", elemTypes...)
 }
 
 func runtimeFFISignature(path string, fn *ast.FnDecl, structs map[string]*structInfo, enums map[string]*enumInfo) *runtimeFFIFunction {
@@ -1023,12 +1151,8 @@ func (g *generator) emitStmt(stmt ast.Stmt) error {
 }
 
 func (g *generator) emitLet(stmt *ast.LetStmt) error {
-	name, err := identPatternName(stmt.Pattern)
-	if err != nil {
-		return err
-	}
 	if stmt.Value == nil {
-		return unsupportedf("statement", "let %q has no value", name)
+		return unsupported("statement", "let has no value")
 	}
 	hintedListElemTyp := ""
 	if stmt.Type != nil {
@@ -1048,11 +1172,10 @@ func (g *generator) emitLet(stmt *ast.LetStmt) error {
 			return err
 		}
 		if typ != v.typ {
-			return unsupportedf("type-system", "let %q type %s, value %s", name, typ, v.typ)
+			return unsupportedf("type-system", "let pattern type %s, value %s", typ, v.typ)
 		}
 	}
-	g.bindNamedLocal(name, v, stmt.Mut)
-	return nil
+	return g.bindLetPattern(stmt.Pattern, v, stmt.Mut)
 }
 
 func (g *generator) emitAssign(stmt *ast.AssignStmt) error {
@@ -1236,6 +1359,12 @@ func (g *generator) emitTestingCallStmt(call *ast.CallExpr) (bool, error) {
 		return true, nil
 	case "context":
 		return true, g.emitTestingContextStmt(call)
+	case "expectOk":
+		_, err := g.emitTestingExpect(call, false)
+		return true, err
+	case "expectError":
+		_, err := g.emitTestingExpect(call, true)
+		return true, err
 	default:
 		return true, unsupportedf("call", "testing.%s is not supported by LLVM yet", method)
 	}
@@ -1278,6 +1407,45 @@ func (g *generator) emitTestingCompare(call *ast.CallExpr, op token.Kind, name s
 		return err
 	}
 	return g.emitTestingAssertion(cond, g.testingFailureMessage(call, name))
+}
+
+func (g *generator) emitTestingExpect(call *ast.CallExpr, wantErr bool) (value, error) {
+	method := "expectOk"
+	wantTag := "0"
+	payloadIndex := 1
+	if wantErr {
+		method = "expectError"
+		wantTag = "1"
+		payloadIndex = 2
+	}
+	if len(call.Args) != 1 || call.Args[0] == nil || call.Args[0].Name != "" || call.Args[0].Value == nil {
+		return value{}, unsupportedf("call", "testing.%s requires one positional argument", method)
+	}
+	result, err := g.emitExpr(call.Args[0].Value)
+	if err != nil {
+		return value{}, err
+	}
+	info, ok := g.resultTypes[result.typ]
+	if !ok {
+		return value{}, unsupportedf("type-system", "testing.%s requires a Result<T, E> value", method)
+	}
+	payloadType := info.okTyp
+	if wantErr {
+		payloadType = info.errTyp
+	}
+	emitter := g.toOstyEmitter()
+	tag := llvmExtractValue(emitter, toOstyValue(result), "i64", 0)
+	cond := llvmCompare(emitter, "eq", tag, toOstyValue(value{typ: "i64", ref: wantTag}))
+	okLabel := llvmNextLabel(emitter, "test.expect.ok")
+	failLabel := llvmNextLabel(emitter, "test.expect.fail")
+	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", cond.name, okLabel, failLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", failLabel))
+	g.emitTestingAbortWithEmitter(emitter, g.testingFailureMessage(call, method), okLabel)
+	payload := llvmExtractValue(emitter, toOstyValue(result), payloadType, payloadIndex)
+	g.takeOstyEmitter(emitter)
+	out := fromOstyValue(payload)
+	out.rootPaths = g.rootPathsForType(out.typ)
+	return out, nil
 }
 
 func (g *generator) emitTestingContextStmt(call *ast.CallExpr) error {
@@ -1564,6 +1732,8 @@ func (g *generator) emitExpr(expr ast.Expr) (value, error) {
 		return g.emitCall(e)
 	case *ast.FieldExpr:
 		return g.emitFieldExpr(e)
+	case *ast.TupleExpr:
+		return g.emitTupleExpr(e)
 	case *ast.ListExpr:
 		return g.emitListExprWithHint(e, "")
 	case *ast.StructLit:
@@ -1599,6 +1769,51 @@ func (g *generator) loadIfPointer(v value) (value, error) {
 	loaded.listElemTyp = v.listElemTyp
 	loaded.rootPaths = cloneRootPaths(v.rootPaths)
 	return loaded, nil
+}
+
+func (g *generator) registerTupleType(elemTypes []string, elemListElemTyps []string) tupleTypeInfo {
+	info := tupleTypeInfo{
+		typ:              llvmTupleTypeName(elemTypes),
+		elems:            append([]string(nil), elemTypes...),
+		elemListElemTyps: append([]string(nil), elemListElemTyps...),
+	}
+	if g.tupleTypes == nil {
+		g.tupleTypes = map[string]tupleTypeInfo{}
+	}
+	if existing, ok := g.tupleTypes[info.typ]; ok {
+		if len(existing.elemListElemTyps) == 0 && len(info.elemListElemTyps) != 0 {
+			existing.elemListElemTyps = append([]string(nil), info.elemListElemTyps...)
+			g.tupleTypes[info.typ] = existing
+		}
+		return existing
+	}
+	g.tupleTypes[info.typ] = info
+	return info
+}
+
+func (g *generator) emitTupleExpr(expr *ast.TupleExpr) (value, error) {
+	if expr == nil {
+		return value{}, unsupported("expression", "nil tuple literal")
+	}
+	fields := make([]*LlvmValue, 0, len(expr.Elems))
+	elemTypes := make([]string, 0, len(expr.Elems))
+	elemListElemTyps := make([]string, 0, len(expr.Elems))
+	for _, elem := range expr.Elems {
+		v, err := g.emitExpr(elem)
+		if err != nil {
+			return value{}, err
+		}
+		fields = append(fields, toOstyValue(v))
+		elemTypes = append(elemTypes, v.typ)
+		elemListElemTyps = append(elemListElemTyps, v.listElemTyp)
+	}
+	info := g.registerTupleType(elemTypes, elemListElemTyps)
+	emitter := g.toOstyEmitter()
+	out := llvmStructLiteral(emitter, info.typ, fields)
+	g.takeOstyEmitter(emitter)
+	tupleValue := fromOstyValue(out)
+	tupleValue.rootPaths = g.rootPathsForType(info.typ)
+	return tupleValue, nil
 }
 
 func (g *generator) emitStructLit(lit *ast.StructLit) (value, error) {
@@ -2392,6 +2607,66 @@ func (g *generator) emitExprWithListHint(expr ast.Expr, listElemTyp string) (val
 	return g.emitExpr(expr)
 }
 
+func (g *generator) usesAggregateListABI(elemTyp string) bool {
+	switch elemTyp {
+	case "", "i64", "i1", "double", "ptr":
+		return false
+	}
+	return len(g.rootPathsForType(elemTyp)) == 0
+}
+
+func (g *generator) emitAggregateByteSize(emitter *LlvmEmitter, typ string) value {
+	sizePtr := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = getelementptr %s, ptr null, i32 1", sizePtr, typ))
+	size := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = ptrtoint ptr %s to i64", size, sizePtr))
+	return value{typ: "i64", ref: size}
+}
+
+func (g *generator) emitAggregateScratchSlot(emitter *LlvmEmitter, typ, initial string) value {
+	slot := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca %s", slot, typ))
+	emitter.body = append(emitter.body, fmt.Sprintf("  store %s %s, ptr %s", typ, initial, slot))
+	return value{typ: typ, ref: slot, ptr: true}
+}
+
+func (g *generator) emitListAggregatePush(listValue, elem value) error {
+	if len(g.rootPathsForType(elem.typ)) != 0 {
+		return unsupportedf("type-system", "list element type %s with managed aggregate fields", elem.typ)
+	}
+	g.declareRuntimeSymbol(listRuntimePushBytesSymbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "ptr"}, {typ: "i64"}})
+	emitter := g.toOstyEmitter()
+	slot := g.emitAggregateScratchSlot(emitter, elem.typ, elem.ref)
+	size := g.emitAggregateByteSize(emitter, elem.typ)
+	emitter.body = append(emitter.body, fmt.Sprintf(
+		"  call void @%s(%s)",
+		listRuntimePushBytesSymbol(),
+		llvmCallArgs([]*LlvmValue{toOstyValue(listValue), toOstyValue(value{typ: "ptr", ref: slot.ref}), toOstyValue(size)}),
+	))
+	g.takeOstyEmitter(emitter)
+	return nil
+}
+
+func (g *generator) emitListAggregateGet(listValue value, index value, elemTyp string) (value, error) {
+	if len(g.rootPathsForType(elemTyp)) != 0 {
+		return value{}, unsupportedf("type-system", "list element type %s with managed aggregate fields", elemTyp)
+	}
+	g.declareRuntimeSymbol(listRuntimeGetBytesSymbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}, {typ: "i64"}})
+	emitter := g.toOstyEmitter()
+	slot := g.emitAggregateScratchSlot(emitter, elemTyp, "zeroinitializer")
+	size := g.emitAggregateByteSize(emitter, elemTyp)
+	emitter.body = append(emitter.body, fmt.Sprintf(
+		"  call void @%s(%s)",
+		listRuntimeGetBytesSymbol(),
+		llvmCallArgs([]*LlvmValue{toOstyValue(listValue), toOstyValue(index), toOstyValue(value{typ: "ptr", ref: slot.ref}), toOstyValue(size)}),
+	))
+	out := llvmLoad(emitter, toOstyValue(slot))
+	g.takeOstyEmitter(emitter)
+	loaded := fromOstyValue(out)
+	loaded.rootPaths = g.rootPathsForType(elemTyp)
+	return loaded, nil
+}
+
 func (g *generator) emitListExprWithHint(expr *ast.ListExpr, hintedElemTyp string) (value, error) {
 	if expr == nil {
 		return value{}, unsupported("expression", "nil list literal")
@@ -2416,6 +2691,10 @@ func (g *generator) emitListExprWithHint(expr *ast.ListExpr, hintedElemTyp strin
 	if elemTyp == "" {
 		return value{}, unsupported("expression", "empty list literal requires an explicit List<T> type")
 	}
+	useAggregateABI := g.usesAggregateListABI(elemTyp)
+	if !useAggregateABI && elemTyp != "ptr" && elemTyp != "i64" && elemTyp != "i1" && elemTyp != "double" {
+		return value{}, unsupportedf("type-system", "list literal element type %s requires scalar tuples or primitive values", elemTyp)
+	}
 	g.declareRuntimeSymbol(listRuntimeNewSymbol(), "ptr", nil)
 	emitter := g.toOstyEmitter()
 	out := llvmCall(emitter, "ptr", listRuntimeNewSymbol(), nil)
@@ -2426,12 +2705,21 @@ func (g *generator) emitListExprWithHint(expr *ast.ListExpr, hintedElemTyp strin
 	if len(emittedElems) == 0 {
 		return listValue, nil
 	}
-	pushSymbol := listRuntimePushSymbol(elemTyp)
-	g.declareRuntimeSymbol(pushSymbol, "void", []paramInfo{{typ: "ptr"}, {typ: elemTyp}})
+	pushSymbol := ""
+	if !useAggregateABI {
+		pushSymbol = listRuntimePushSymbol(elemTyp)
+		g.declareRuntimeSymbol(pushSymbol, "void", []paramInfo{{typ: "ptr"}, {typ: elemTyp}})
+	}
 	for _, elem := range emittedElems {
 		loaded, err := g.loadIfPointer(elem)
 		if err != nil {
 			return value{}, err
+		}
+		if useAggregateABI {
+			if err := g.emitListAggregatePush(listValue, loaded); err != nil {
+				return value{}, err
+			}
+			continue
 		}
 		emitter = g.toOstyEmitter()
 		emitter.body = append(emitter.body, fmt.Sprintf(
@@ -2500,8 +2788,6 @@ func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
 	if arg.typ != elemTyp {
 		return true, unsupportedf("type-system", "list.push arg type %s, want %s", arg.typ, elemTyp)
 	}
-	pushSymbol := listRuntimePushSymbol(elemTyp)
-	g.declareRuntimeSymbol(pushSymbol, "void", []paramInfo{{typ: "ptr"}, {typ: elemTyp}})
 	baseValue, err := g.loadIfPointer(base)
 	if err != nil {
 		return true, err
@@ -2510,6 +2796,14 @@ func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
 	if err != nil {
 		return true, err
 	}
+	if g.usesAggregateListABI(elemTyp) {
+		return true, g.emitListAggregatePush(baseValue, argValue)
+	}
+	if elemTyp != "ptr" && elemTyp != "i64" && elemTyp != "i1" && elemTyp != "double" {
+		return true, unsupportedf("type-system", "list.push element type %s requires scalar tuples or primitive values", elemTyp)
+	}
+	pushSymbol := listRuntimePushSymbol(elemTyp)
+	g.declareRuntimeSymbol(pushSymbol, "void", []paramInfo{{typ: "ptr"}, {typ: elemTyp}})
 	emitter = g.toOstyEmitter()
 	emitter.body = append(emitter.body, fmt.Sprintf(
 		"  call void @%s(%s)",
@@ -2530,10 +2824,12 @@ func (g *generator) emitListFor(stmt *ast.ForStmt, iterName, elemTyp string) err
 	if iterable.typ != "ptr" || elemTyp == "" {
 		return unsupportedf("type-system", "for-in iterable type %s", iterable.typ)
 	}
+	useAggregateABI := g.usesAggregateListABI(elemTyp)
+	if !useAggregateABI && elemTyp != "ptr" && elemTyp != "i64" && elemTyp != "i1" && elemTyp != "double" {
+		return unsupportedf("type-system", "for-in element type %s requires scalar tuples or primitive values", elemTyp)
+	}
 	iterable = g.protectManagedTemporary("for.iter", iterable)
 	g.declareRuntimeSymbol(listRuntimeLenSymbol(), "i64", []paramInfo{{typ: "ptr"}})
-	getSymbol := listRuntimeGetSymbol(elemTyp)
-	g.declareRuntimeSymbol(getSymbol, elemTyp, []paramInfo{{typ: "ptr"}, {typ: "i64"}})
 	iterableValue, err := g.loadIfPointer(iterable)
 	if err != nil {
 		return err
@@ -2548,10 +2844,24 @@ func (g *generator) emitListFor(stmt *ast.ForStmt, iterName, elemTyp string) err
 		g.popScope()
 		return err
 	}
-	emitter = g.toOstyEmitter()
-	item := llvmCall(emitter, elemTyp, getSymbol, []*LlvmValue{toOstyValue(iterableValue), llvmI64(loop.current)})
-	g.takeOstyEmitter(emitter)
-	g.bindLocal(iterName, fromOstyValue(item))
+	indexValue := value{typ: "i64", ref: loop.current}
+	if useAggregateABI {
+		item, err := g.emitListAggregateGet(iterableValue, indexValue, elemTyp)
+		if err != nil {
+			g.popScope()
+			return err
+		}
+		g.bindLocal(iterName, item)
+	} else {
+		getSymbol := listRuntimeGetSymbol(elemTyp)
+		g.declareRuntimeSymbol(getSymbol, elemTyp, []paramInfo{{typ: "ptr"}, {typ: "i64"}})
+		emitter = g.toOstyEmitter()
+		item := llvmCall(emitter, elemTyp, getSymbol, []*LlvmValue{toOstyValue(iterableValue), llvmI64(loop.current)})
+		g.takeOstyEmitter(emitter)
+		loaded := fromOstyValue(item)
+		loaded.rootPaths = g.rootPathsForType(elemTyp)
+		g.bindLocal(iterName, loaded)
+	}
 	if err := g.emitBlock(stmt.Body.Stmts); err != nil {
 		g.popScope()
 		return err
@@ -2782,6 +3092,12 @@ func (g *generator) matchEnumTag(pattern ast.Pattern) (int, bool, error) {
 }
 
 func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
+	if v, found, err := g.emitTestingValueCall(call); found || err != nil {
+		return v, err
+	}
+	if v, found, err := g.emitBuiltinResultConstructor(call); found || err != nil {
+		return v, err
+	}
 	if v, found, err := g.emitEnumVariantCall(call); found || err != nil {
 		return v, err
 	}
@@ -2826,6 +3142,84 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 	ret.gcManaged = sig.retListElemTyp != ""
 	ret.rootPaths = g.rootPathsForType(sig.ret)
 	return ret, nil
+}
+
+func (g *generator) emitTestingValueCall(call *ast.CallExpr) (value, bool, error) {
+	method, ok := g.testingCallMethod(call)
+	if !ok {
+		return value{}, false, nil
+	}
+	switch method {
+	case "expectOk":
+		v, err := g.emitTestingExpect(call, false)
+		return v, true, err
+	case "expectError":
+		v, err := g.emitTestingExpect(call, true)
+		return v, true, err
+	default:
+		return value{}, false, nil
+	}
+}
+
+func (g *generator) emitBuiltinResultConstructor(call *ast.CallExpr) (value, bool, error) {
+	id, ok := call.Fn.(*ast.Ident)
+	if !ok || (id.Name != "Ok" && id.Name != "Err") {
+		return value{}, false, nil
+	}
+	info, ok := g.currentBuiltinResultType()
+	if !ok {
+		return value{}, true, unsupportedf("call", "%s requires a concrete Result<T, E> context", id.Name)
+	}
+	if len(call.Args) != 1 || call.Args[0] == nil || call.Args[0].Name != "" || call.Args[0].Value == nil {
+		return value{}, true, unsupportedf("call", "%s requires one positional argument", id.Name)
+	}
+	payloadIndex := 1
+	payloadType := info.okTyp
+	tag := "0"
+	if id.Name == "Err" {
+		payloadIndex = 2
+		payloadType = info.errTyp
+		tag = "1"
+	}
+	payload, err := g.emitExpr(call.Args[0].Value)
+	if err != nil {
+		return value{}, true, err
+	}
+	if payload.typ != payloadType {
+		return value{}, true, unsupportedf("type-system", "%s payload type %s, want %s", id.Name, payload.typ, payloadType)
+	}
+	emitter := g.toOstyEmitter()
+	fields := []*LlvmValue{
+		toOstyValue(value{typ: "i64", ref: tag}),
+		toOstyValue(llvmZeroValue(info.okTyp)),
+		toOstyValue(llvmZeroValue(info.errTyp)),
+	}
+	fields[payloadIndex] = toOstyValue(payload)
+	out := llvmStructLiteral(emitter, info.typ, fields)
+	g.takeOstyEmitter(emitter)
+	result := fromOstyValue(out)
+	result.rootPaths = g.rootPathsForType(result.typ)
+	return result, true, nil
+}
+
+func (g *generator) currentBuiltinResultType() (builtinResultType, bool) {
+	if info, ok := g.resultTypes[g.returnType]; ok {
+		return info, true
+	}
+	if len(g.resultTypes) == 1 {
+		for _, info := range g.resultTypes {
+			return info, true
+		}
+	}
+	return builtinResultType{}, false
+}
+
+func llvmZeroValue(typ string) value {
+	ref := llvmZeroLiteral(typ)
+	if typ != "ptr" && typ != "i64" && typ != "i1" && typ != "double" {
+		ref = "zeroinitializer"
+	}
+	return value{typ: typ, ref: ref}
 }
 
 func (g *generator) emitRuntimeFFICall(call *ast.CallExpr) (value, bool, error) {
@@ -3068,7 +3462,7 @@ func (g *generator) enumVariantCallTarget(call *ast.CallExpr) (enumVariantRef, b
 }
 
 func (g *generator) render(defs []string) []byte {
-	typeDefs := make([]string, 0, len(g.structs)+len(g.enumsByType))
+	typeDefs := make([]string, 0, len(g.structs)+len(g.enumsByType)+len(g.tupleTypes)+len(g.resultTypes))
 	for _, info := range g.structs {
 		fieldTypes := make([]string, 0, len(info.fields))
 		for _, field := range info.fields {
@@ -3079,6 +3473,28 @@ func (g *generator) render(defs []string) []byte {
 	for _, info := range g.enums {
 		if info.hasPayload {
 			typeDefs = append(typeDefs, llvmStructTypeDef(info.name, []string{"i64", info.payloadTyp}))
+		}
+	}
+	if len(g.tupleTypes) != 0 {
+		names := make([]string, 0, len(g.tupleTypes))
+		for name := range g.tupleTypes {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			info := g.tupleTypes[name]
+			typeDefs = append(typeDefs, llvmStructTypeDef(strings.TrimPrefix(info.typ, "%"), info.elems))
+		}
+	}
+	if len(g.resultTypes) != 0 {
+		names := make([]string, 0, len(g.resultTypes))
+		for name := range g.resultTypes {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			info := g.resultTypes[name]
+			typeDefs = append(typeDefs, llvmStructTypeDef(strings.TrimPrefix(info.typ, "%"), []string{"i64", info.okTyp, info.errTyp}))
 		}
 	}
 	runtimeDecls := g.runtimeDeclarationIR()
@@ -3281,6 +3697,35 @@ func (g *generator) rootPathsForTypeSeen(typ string, seen map[string]bool) [][]i
 		}
 		return prependRootIndex(1, g.rootPathsForTypeSeen(info.payloadTyp, seen))
 	}
+	if info, ok := g.resultTypes[typ]; ok {
+		seen[typ] = true
+		defer delete(seen, typ)
+		var out [][]int
+		if info.okTyp == "ptr" {
+			out = append(out, []int{1})
+		} else {
+			out = append(out, prependRootIndex(1, g.rootPathsForTypeSeen(info.okTyp, seen))...)
+		}
+		if info.errTyp == "ptr" {
+			out = append(out, []int{2})
+		} else {
+			out = append(out, prependRootIndex(2, g.rootPathsForTypeSeen(info.errTyp, seen))...)
+		}
+		return out
+	}
+	if info, ok := g.tupleTypes[typ]; ok {
+		seen[typ] = true
+		defer delete(seen, typ)
+		var out [][]int
+		for i, elemTyp := range info.elems {
+			if i < len(info.elemListElemTyps) && info.elemListElemTyps[i] != "" {
+				out = append(out, []int{i})
+				continue
+			}
+			out = append(out, prependRootIndex(i, g.rootPathsForTypeSeen(elemTyp, seen))...)
+		}
+		return out
+	}
 	return nil
 }
 
@@ -3358,6 +3803,12 @@ func (g *generator) aggregateFieldType(typ string, index int) (string, bool) {
 			return info.payloadTyp, true
 		}
 	}
+	if info, ok := g.tupleTypes[typ]; ok {
+		if index < 0 || index >= len(info.elems) {
+			return "", false
+		}
+		return info.elems[index], true
+	}
 	return "", false
 }
 
@@ -3400,6 +3851,66 @@ func (g *generator) lookupLocal(name string) (value, bool) {
 	return value{}, false
 }
 
+func (g *generator) bindLetPattern(pattern ast.Pattern, v value, mutable bool) error {
+	switch p := pattern.(type) {
+	case nil:
+		return unsupported("statement", "let requires a pattern")
+	case *ast.WildcardPat:
+		if mutable {
+			return unsupported("statement", "wildcard let patterns cannot be mutable")
+		}
+		return nil
+	case *ast.IdentPat:
+		if p.Name == "" {
+			return unsupported("statement", "empty let binding name")
+		}
+		if !llvmIsIdent(p.Name) {
+			return unsupportedf("name", "let name %q", p.Name)
+		}
+		g.bindNamedLocal(p.Name, v, mutable)
+		return nil
+	case *ast.TuplePat:
+		if mutable {
+			return unsupported("statement", "tuple let patterns cannot be mutable yet")
+		}
+		info, ok := g.tupleTypes[v.typ]
+		if !ok {
+			return unsupportedf("type-system", "tuple pattern on %s", v.typ)
+		}
+		if len(p.Elems) != len(info.elems) {
+			return unsupportedf("statement", "tuple pattern arity %d, value %d", len(p.Elems), len(info.elems))
+		}
+		for i, elemPat := range p.Elems {
+			elemValue, err := g.extractTupleElement(v, info, i)
+			if err != nil {
+				return err
+			}
+			if err := g.bindLetPattern(elemPat, elemValue, false); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		return unsupported("statement", "only identifier, wildcard, and tuple let patterns are supported")
+	}
+}
+
+func (g *generator) extractTupleElement(tuple value, info tupleTypeInfo, index int) (value, error) {
+	if index < 0 || index >= len(info.elems) {
+		return value{}, unsupportedf("expression", "tuple index %d out of range", index)
+	}
+	emitter := g.toOstyEmitter()
+	out := llvmExtractValue(emitter, toOstyValue(tuple), info.elems[index], index)
+	g.takeOstyEmitter(emitter)
+	elem := fromOstyValue(out)
+	if index < len(info.elemListElemTyps) && info.elemListElemTyps[index] != "" {
+		elem.listElemTyp = info.elemListElemTyps[index]
+		elem.gcManaged = true
+	}
+	elem.rootPaths = g.rootPathsForType(info.elems[index])
+	return elem, nil
+}
+
 func identPatternName(p ast.Pattern) (string, error) {
 	id, ok := p.(*ast.IdentPat)
 	if !ok || id.Name == "" {
@@ -3427,6 +3938,16 @@ func (g *generator) staticExprType(expr ast.Expr) (string, string, bool) {
 		}
 	case *ast.ParenExpr:
 		return g.staticExprType(e.X)
+	case *ast.TupleExpr:
+		elemTypes := make([]string, 0, len(e.Elems))
+		for _, elem := range e.Elems {
+			typ, _, ok := g.staticExprType(elem)
+			if !ok {
+				return "", "", false
+			}
+			elemTypes = append(elemTypes, typ)
+		}
+		return llvmTupleTypeName(elemTypes), "", true
 	case *ast.ListExpr:
 		if elemTyp, ok := g.staticListLiteralElementType(e); ok {
 			return "ptr", elemTyp, true
@@ -3518,6 +4039,14 @@ func listRuntimeLenSymbol() string {
 	return "osty_rt_list_len"
 }
 
+func listRuntimePushBytesSymbol() string {
+	return "osty_rt_list_push_bytes_v1"
+}
+
+func listRuntimeGetBytesSymbol() string {
+	return "osty_rt_list_get_bytes_v1"
+}
+
 func listRuntimePushSymbol(elemTyp string) string {
 	return "osty_rt_list_push_" + listRuntimeSymbolSuffix(elemTyp)
 }
@@ -3551,6 +4080,17 @@ func listRuntimeSymbolSuffix(typ string) string {
 func llvmType(t ast.Type, structs map[string]*structInfo, enums map[string]*enumInfo) (string, error) {
 	switch tt := t.(type) {
 	case *ast.NamedType:
+		if len(tt.Path) == 1 && tt.Path[0] == "Result" && len(tt.Args) == 2 {
+			okTyp, err := llvmType(tt.Args[0], structs, enums)
+			if err != nil {
+				return "", err
+			}
+			errTyp, err := llvmType(tt.Args[1], structs, enums)
+			if err != nil {
+				return "", err
+			}
+			return llvmResultTypeName(okTyp, errTyp), nil
+		}
 		name := ""
 		structType := ""
 		enumType := ""
@@ -3567,8 +4107,18 @@ func llvmType(t ast.Type, structs map[string]*structInfo, enums map[string]*enum
 			return typ, nil
 		}
 		return "", unsupportedf("type-system", "type %q", strings.Join(tt.Path, "."))
-	case *ast.OptionalType, *ast.TupleType, *ast.FnType:
+	case *ast.OptionalType, *ast.FnType:
 		return "ptr", nil
+	case *ast.TupleType:
+		elemTypes := make([]string, 0, len(tt.Elems))
+		for _, elem := range tt.Elems {
+			elemTyp, err := llvmType(elem, structs, enums)
+			if err != nil {
+				return "", err
+			}
+			elemTypes = append(elemTypes, elemTyp)
+		}
+		return llvmTupleTypeName(elemTypes), nil
 	default:
 		return "", unsupportedf("type-system", "type %T", t)
 	}
