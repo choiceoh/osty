@@ -1,0 +1,855 @@
+#!/usr/bin/env osty
+// ai_demo_config.osty — Osty v0.4 종합 데모: 설정 파일 파서
+//
+// 이 파일은 Osty 언어의 주요 기능을 보여줍니다:
+//  1. struct 선언 (부분 선언, 메서드, Builder)
+//  2. enum 선언 (variant, 메서드)
+//  3. 패턴 매칭 (리터럴, 범위, or-pattern, guard, binding @, struct 분해)
+//  4. 에러 처리 (?, ??, defer)
+//  5. 옵셔널 체이닝 (?.)
+//  6. Expression 기반 제어 흐름 (if 식, match 식)
+//  7. 기본 인자, 키워드 인자
+//  8. 클로저 (패턴 파라미터 포함)
+//  9. 문자열 보간, triple-quoted string
+// 10. 리터럴 다형성
+
+// ═══════════════════════════════════════════════════════════════
+// §1. enum — 에러 타입, 로그 레벨, 토큰 종류
+// ═══════════════════════════════════════════════════════════════
+
+/// 설정 파일 파싱 중 발생 가능한 에러
+pub enum ParseError {
+    FileNotFound(String),
+    SyntaxError(Int, String),
+    TypeMismatch(String, String, String),
+    MissingField(String),
+    OutOfRange(String, Int),
+}
+
+/// ParseError 첫 번째 부분: 사람이 읽을 수 있는 메시지 반환
+pub struct ParseError {
+    /// 에러 메시지 생성 (리터럴 패턴 + variant 분해)
+    pub fn message(self) -> String {
+        match self {
+            ParseError.FileNotFound(path) ->
+                "파일을 찾을 수 없습니다: {path}",
+            ParseError.SyntaxError(line, msg) ->
+                "줄 {line}: 문법 오류 — {msg}",
+            ParseError.TypeMismatch(field, value, expected) ->
+                "필드 '{field}': 값 '{value}'은(는) {expected} 타입이 아닙니다",
+            ParseError.MissingField(field) ->
+                "필수 필드 '{field}'이(가) 누락되었습니다",
+            ParseError.OutOfRange(field, value) ->
+                "필드 '{field}': 값 {value}이(가) 허용 범위를 벗어났습니다",
+        }
+    }
+}
+
+/// ParseError 두 번째 부분 (부분 선언): 심각도 등급
+pub struct ParseError {
+    /// 심각도: 높을수록 위험 (3=치명, 2=오류, 1=경고)
+    pub fn severity(self) -> Int {
+        match self {
+            ParseError.FileNotFound(_)       -> 1,
+            ParseError.SyntaxError(_, _)     -> 3,
+            ParseError.TypeMismatch(_, _, _) -> 2,
+            ParseError.MissingField(_)       -> 2,
+            ParseError.OutOfRange(_, _)      -> 1,
+        }
+    }
+
+    /// 치명적 에러인지 확인
+    pub fn isCritical(self) -> Bool {
+        self.severity() >= 3
+    }
+}
+
+/// 로그 레벨
+pub enum LogLevel {
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+/// LogLevel 메서드
+pub struct LogLevel {
+    /// 태그 문자열 (match 식)
+    pub fn tag(self) -> String {
+        match self {
+            LogLevel.Debug -> "DBG",
+            LogLevel.Info  -> "INF",
+            LogLevel.Warn  -> "WRN",
+            LogLevel.Error -> "ERR",
+        }
+    }
+
+    /// 임계값 이상인지 확인 (match on tuple)
+    pub fn gte(self, threshold: LogLevel) -> Bool {
+        match (self, threshold) {
+            (LogLevel.Error, _)               -> true,
+            (LogLevel.Warn, LogLevel.Debug)   -> true,
+            (LogLevel.Warn, LogLevel.Info)    -> true,
+            (LogLevel.Warn, _)                -> false,
+            (LogLevel.Info, LogLevel.Debug)   -> true,
+            (LogLevel.Info, _)                -> false,
+            (LogLevel.Debug, LogLevel.Debug)  -> true,
+            (LogLevel.Debug, _)               -> false,
+        }
+    }
+
+    /// 이모지 반환
+    pub fn icon(self) -> String {
+        match self {
+            LogLevel.Debug -> "·",
+            LogLevel.Info  -> "ℹ",
+            LogLevel.Warn  -> "⚠",
+            LogLevel.Error -> "✖",
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// §2. struct — 설정 데이터 모델 (부분 선언 + 메서드 + spread)
+// ═══════════════════════════════════════════════════════════════
+
+/// 서버 엔드포인트 설정
+pub struct ServerConfig {
+    pub host: String,
+    pub port: Int,
+    pub timeout: Int,
+}
+
+/// ServerConfig 메서드 (부분 선언 #2)
+pub struct ServerConfig {
+    /// 유효성 검사: port 1–65535, timeout 1–300 (? 에러 전파)
+    pub fn validate(self) -> Result<ServerConfig, ParseError> {
+        match self.port {
+            p if p < 1     -> return Err(ParseError.OutOfRange("port", self.port)),
+            p if p > 65535 -> return Err(ParseError.OutOfRange("port", self.port)),
+            _              -> {},
+        }
+        if self.timeout < 1 || self.timeout > 300 {
+            return Err(ParseError.OutOfRange("timeout", self.timeout))
+        }
+        Ok(self)
+    }
+
+    /// 전체 URL (문자열 보간)
+    pub fn url(self) -> String {
+        "http://{self.host}:{self.port}"
+    }
+
+    /// 요약 정보
+    pub fn summary(self) -> String {
+        "{self.host}:{self.port} (timeout: {self.timeout}s)"
+    }
+}
+
+/// 데이터베이스 설정
+pub struct DatabaseConfig {
+    pub driver: String,
+    pub host: String,
+    pub port: Int,
+    pub name: String,
+    pub maxConnections: Int,
+    pub username: String?,
+}
+
+/// DatabaseConfig 메서드
+pub struct DatabaseConfig {
+    /// 유효성 검사 (? 로 에러 전파)
+    pub fn validate(self) -> Result<DatabaseConfig, ParseError> {
+        if self.port < 1 || self.port > 65535 {
+            return Err(ParseError.OutOfRange("db.port", self.port))
+        }
+        if self.maxConnections < 1 || self.maxConnections > 100 {
+            return Err(ParseError.OutOfRange(
+                "db.maxConnections",
+                self.maxConnections,
+            ))
+        }
+        Ok(self)
+    }
+
+    /// 접속 문자열 (옵셔널 체이닝 + nil-coalesce)
+    pub fn connectionString(self) -> String {
+        // ?? — None이면 "anonymous" 사용 (우결합, lazy)
+        let user = self.username ?? "anonymous"
+        "{self.driver}://{user}@{self.host}:{self.port}/{self.name}"
+    }
+
+    /// 안전한 정보 출력 (비밀번호 마스킹 등)
+    pub fn safeInfo(self) -> String {
+        let user = self.username ?? "익명"
+        "DB: {self.driver}://{user}@{self.host}:{self.port}/{self.name}"
+    }
+}
+
+/// 애플리케이션 전체 설정
+pub struct AppConfig {
+    pub name: String,
+    pub version: String,
+    pub server: ServerConfig,
+    pub database: DatabaseConfig,
+    pub logLevel: LogLevel,
+}
+
+/// AppConfig 메서드 (부분 선언)
+pub struct AppConfig {
+    /// 전체 유효성 검사 — ? 로 에러 전파
+    pub fn validate(self) -> Result<AppConfig, ParseError> {
+        let server = self.server.validate()?
+        let db = self.database.validate()?
+        // spread로 기존 필드 유지 + 검증된 값으로 교체
+        Ok(AppConfig { ..self, server, database: db })
+    }
+
+    /// 설정 리포트 — triple-quoted string + 공통 인덴트 제거
+    pub fn toReport(self) -> String {
+        let user = self.database.username ?? "anonymous"
+        """
+        ┌─────────────────────────────────────┐
+        │ 애플리케이션 설정 리포트              │
+        ├─────────────────────────────────────┤
+        │ 이름:       {self.name}
+        │ 버전:       {self.version}
+        │ 서버:       {self.server.summary()}
+        │ 데이터베이스: {self.database.safeInfo()}
+        │ 접속:       {self.database.connectionString()}
+        │ 로그레벨:   {self.logLevel.icon()} {self.logLevel.tag()}
+        │ 사용자:     {user}
+        └─────────────────────────────────────┘
+        """
+    }
+
+    /// 구버전 마이그레이션 필요 여부
+    pub fn needsMigration(self) -> Bool {
+        match self.version {
+            "0.1.0" -> false,
+            "0.2.0" -> false,
+            _       -> true,
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// §3. Builder — 명시적 빌더 패턴
+// ═══════════════════════════════════════════════════════════════
+
+/// AppConfig 빌더 (mut self + spread-update)
+pub struct AppConfigBuilder {
+    pub name: String,
+    pub version: String,
+    pub host: String,
+    pub port: Int,
+    pub dbDriver: String,
+    pub dbName: String,
+    pub logLevel: LogLevel,
+}
+
+/// AppConfigBuilder 메서드
+pub struct AppConfigBuilder {
+    /// 호스트 설정 (spread-update로 불변 업데이트)
+    pub fn host(mut self, h: String) -> AppConfigBuilder {
+        AppConfigBuilder { ..self, host: h }
+    }
+
+    /// 포트 설정
+    pub fn port(mut self, p: Int) -> AppConfigBuilder {
+        AppConfigBuilder { ..self, port: p }
+    }
+
+    /// DB 드라이버 설정
+    pub fn dbDriver(mut self, d: String) -> AppConfigBuilder {
+        AppConfigBuilder { ..self, dbDriver: d }
+    }
+
+    /// DB 이름 설정
+    pub fn dbName(mut self, n: String) -> AppConfigBuilder {
+        AppConfigBuilder { ..self, dbName: n }
+    }
+
+    /// 로그 레벨 설정
+    pub fn logLevel(mut self, level: LogLevel) -> AppConfigBuilder {
+        AppConfigBuilder { ..self, logLevel: level }
+    }
+
+    /// 최종 AppConfig 생성
+    pub fn build(self) -> Result<AppConfig, ParseError> {
+        let server = ServerConfig {
+            host: self.host,
+            port: self.port,
+            timeout: 30,
+        }
+        let db = DatabaseConfig {
+            driver: self.dbDriver,
+            host: "localhost",
+            port: 5432,
+            name: self.dbName,
+            maxConnections: 10,
+            username: None,
+        }
+        let cfg = AppConfig {
+            name: self.name,
+            version: self.version,
+            server,
+            database: db,
+            logLevel: self.logLevel,
+        }
+        cfg.validate()
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// §4. 팩토리 함수 + 에러 처리 (? 전파, ?? fallback, defer)
+// ═══════════════════════════════════════════════════════════════
+
+/// 기본 서버 설정값 생성
+pub fn defaultServerConfig() -> ServerConfig {
+    ServerConfig {
+        host: "localhost",
+        port: 8080,
+        timeout: 30,
+    }
+}
+
+/// 기본 DB 설정값 생성
+pub fn defaultDatabaseConfig() -> DatabaseConfig {
+    DatabaseConfig {
+        driver: "postgres",
+        host: "localhost",
+        port: 5432,
+        name: "appdb",
+        maxConnections: 10,
+        username: None,
+    }
+}
+
+/// 기본 설정으로 AppConfig 생성
+pub fn defaultAppConfig(name: String) -> AppConfig {
+    AppConfig {
+        name,
+        version: "0.1.0",
+        server: defaultServerConfig(),
+        database: defaultDatabaseConfig(),
+        logLevel: LogLevel.Info,
+    }
+}
+
+/// 파일 읽기 시뮬레이션 (에러 전파 ? 의 예시)
+fn readConfigFile(path: String) -> Result<String, ParseError> {
+    // 빈 경로면 에러
+    if path == "" {
+        return Err(ParseError.FileNotFound(path))
+    }
+    // 실제로는 fs.readToString(path)? 등
+    Ok("name=demo-app\nhost=localhost\nport=8080")
+}
+
+/// 리소스 정리 시뮬레이션
+fn releaseHandle() {
+    // 파일 핸들, DB 연결 등 정리
+}
+
+/// 설정 파일 로드 — defer + ? + 기본 인자 (리터럴만)
+pub fn loadConfig(
+    path: String,
+    maxRetries: Int = 3,
+    timeout: Int = 30,
+) -> Result<AppConfig, ParseError> {
+    // ① ? 로 에러 즉시 전파
+    let raw = readConfigFile(path)?
+    // ② defer — 함수 종료 시 (성공/에러/? 전파 모두) 반드시 실행
+    defer releaseHandle()
+    // ③ 임시 값 사용 시 ? 로 전파
+    let _max = if maxRetries > 0 { maxRetries } else { 1 }
+    // 파싱 (간이 구현)
+    let cfg = defaultAppConfig("loaded")
+    cfg.validate()
+}
+
+/// 여러 에러 중 가장 심각한 것 반환 (? 없이 수동 처리)
+pub fn mostSevere(errors: List<ParseError>) -> ParseError? {
+    if errors.isEmpty() {
+        return None
+    }
+    let mut worst = errors[0]
+    for err in errors {
+        if err.severity() > worst.severity() {
+            worst = err
+        }
+    }
+    Some(worst)
+}
+
+/// 에러 로깅 ( 부수효과만, 반환 없음)
+fn logError(err: ParseError) {
+    let level = if err.isCritical() { "CRITICAL" } else { "WARNING" }
+    println("[{level}] {err.message()}")
+}
+
+/// 에러 복구 — 실패 시 기본값으로 대체 (match 식)
+pub fn recoverOrDefault(result: Result<AppConfig, ParseError>) -> AppConfig {
+    match result {
+        Ok(cfg) -> cfg,
+        Err(ParseError.FileNotFound(_)) -> defaultAppConfig("recovered"),
+        Err(err) -> {
+            logError(err)
+            defaultAppConfig("fallback")
+        },
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// §5. 고급 패턴 매칭 — 범위, binding @, guard, or-pattern
+// ═══════════════════════════════════════════════════════════════
+
+/// 포트 번호 분류 (범위 패턴 + binding @)
+pub fn classifyPort(port: Int) -> String {
+    match port {
+        p @ 0             -> "잘못된 포트: {p}",
+        p @ 1..=1023      -> "특권 포트: {p} (시스템 권한 필요)",
+        p @ 1024..=49151  -> "등록 포트: {p}",
+        p @ 49152..=65535 -> "동적 포트: {p}",
+        _                 -> "범위 외",
+    }
+}
+
+/// 버전별 마이그레이션 계획 (or-pattern)
+pub fn migrationPlan(version: String) -> String {
+    match version {
+        "0.1.0" | "0.1.1" | "0.1.2" ->
+            "v0.1 계열: 호환 가능, 마이그레이션 불필요",
+        "0.2.0" | "0.2.1" ->
+            "v0.2 계열: 스키마 업데이트 필요",
+        "0.3.0" ->
+            "v0.3: 전체 마이그레이션 필요",
+        v ->
+            "알 수 없는 버전 '{v}', 수동 확인 필요",
+    }
+}
+
+/// 에러별 액션 결정 (guard + 분해 + 리터럴 패턴)
+pub fn errorAction(error: ParseError) -> String {
+    match error {
+        // guard: 특정 경로만 특별 처리
+        ParseError.FileNotFound(path) if path == "/etc/app.conf" ->
+            "시스템 기본 설정 누락 — 기본값으로 계속",
+        ParseError.FileNotFound(_) ->
+            "파일 없음 — 사용자에게 경고",
+        // guard: 줄 번호가 비정상
+        ParseError.SyntaxError(line, _) if line <= 0 ->
+            "줄 번호 오류 — 파서 버그 가능성",
+        ParseError.SyntaxError(line, msg) ->
+            "줄 {line}: {msg}",
+        // 구조 분해에서 일부 필드 무시 (_)
+        ParseError.TypeMismatch(field, _, expected) ->
+            "필드 '{field}': {expected} 타입 필요",
+        ParseError.MissingField(field) ->
+            "필수 필드 '{field}' 누락 — 기본값 사용 불가",
+        // guard: 음수 값 특별 처리
+        ParseError.OutOfRange(field, value) if value < 0 ->
+            "필드 '{field}': 음수 값 {value} — 최소값 확인",
+        ParseError.OutOfRange(field, _) ->
+            "필드 '{field}': 범위 초과 — 값 조정 필요",
+    }
+}
+
+/// 로그 레벨 + 메시지 → 포맷된 로그 (if 식 + match 식 중첩)
+pub fn formatLogEntry(level: LogLevel, message: String) -> String {
+    let tag = level.tag()
+    let icon = level.icon()
+    match level {
+        LogLevel.Error -> "[{tag}] {icon} !!! {message}",
+        LogLevel.Warn  -> "[{tag}] {icon} 경고: {message}",
+        LogLevel.Info  -> "[{tag}] {icon} {message}",
+        LogLevel.Debug -> "[{tag}] {icon} · {message}",
+    }
+}
+
+/// 설정에서 서버 정보 추출 (struct 분해 패턴 — let LHS)
+pub fn extractServerInfo(cfg: AppConfig) -> String {
+    // struct 분해: 필요한 필드만 추출, ..로 나머지 무시
+    let AppConfig { name, server, database, .. } = cfg
+    let ServerConfig { host, port, .. } = server
+    // 보간으로 조합
+    "앱={name}, 서버={host}:{port}, DB={database.host}:{database.port}"
+}
+
+/// 타임아웃 등급 (if-else if 식)
+pub fn timeoutGrade(timeout: Int) -> String {
+    if timeout <= 5 {
+        "초고속 ({timeout}s)"
+    } else if timeout <= 30 {
+        "표준 ({timeout}s)"
+    } else if timeout <= 120 {
+        "느림 ({timeout}s)"
+    } else {
+        "매우 느림 ({timeout}s)"
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// §6. 클로저, 고차 함수, 키워드 인자, 리터럴 다형성
+// ═══════════════════════════════════════════════════════════════
+
+/// 검증 규칙 타입 별칭
+type ValidateRule = fn(AppConfig) -> Result<AppConfig, ParseError>
+
+/// 여러 검증 규칙을 순차 적용 (고차 함수)
+pub fn validateAll(
+    cfg: AppConfig,
+    rules: List<ValidateRule>,
+) -> Result<AppConfig, ParseError> {
+    let mut current = cfg
+    for rule in rules {
+        current = rule(current)?
+    }
+    Ok(current)
+}
+
+/// 검증 규칙: 포트 범위
+pub fn portRangeRule(cfg: AppConfig) -> Result<AppConfig, ParseError> {
+    let p = cfg.server.port
+    if p < 1 || p > 65535 {
+        return Err(ParseError.OutOfRange("port", p))
+    }
+    Ok(cfg)
+}
+
+/// 검증 규칙: 이름 필수
+pub fn nameRequiredRule(cfg: AppConfig) -> Result<AppConfig, ParseError> {
+    if cfg.name == "" {
+        return Err(ParseError.MissingField("name"))
+    }
+    Ok(cfg)
+}
+
+/// 검증 규칙: 지원 DB 드라이버만 (or-pattern in match)
+pub fn validDriverRule(cfg: AppConfig) -> Result<AppConfig, ParseError> {
+    match cfg.database.driver {
+        "postgres" | "mysql" | "sqlite" -> Ok(cfg),
+        other -> Err(ParseError.TypeMismatch("db.driver", other, "지원 드라이버")),
+    }
+}
+
+/// 설정 병합 — 기본 위에 덮어쓰기 (키워드 인자, 기본 인자)
+pub fn mergeSettings(
+    base: AppConfig,
+    name: String = "",
+    host: String = "",
+    port: Int = -1,
+    logLevel: LogLevel = base.logLevel,
+) -> AppConfig {
+    let newName = if name == "" { base.name } else { name }
+    let newHost = if host == "" { base.server.host } else { host }
+    let newPort = if port < 0 { base.server.port } else { port }
+    AppConfig {
+        ..base,
+        name: newName,
+        logLevel,
+        server: ServerConfig { ..base.server, host: newHost, port: newPort },
+    }
+}
+
+/// 설정 비교 — 차이점 리스트 반환
+pub fn diffConfigs(a: AppConfig, b: AppConfig) -> List<String> {
+    let mut diffs: List<String> = []
+    // 클로저로 중복 제거 패턴
+    let addDiff = |label: String, old: String, new: String| {
+        if old != new {
+            diffs.push("{label}: {old} → {new}")
+        }
+    }
+    addDiff("name", a.name, b.name)
+    addDiff("version", a.version, b.version)
+    addDiff("host", a.server.host, b.server.host)
+    // 보간 안에서 비교
+    let portA = a.server.port
+    let portB = b.server.port
+    if portA != portB {
+        diffs.push("port: {portA} → {portB}")
+    }
+    addDiff("logLevel", a.logLevel.tag(), b.logLevel.tag())
+    diffs
+}
+
+/// 리터럴 다형성 데모 — 문맥에 따라 타입 결정
+pub fn demonstrateLiteralPolymorphism() -> String {
+    // Int 문맥에서 정수 리터럴
+    let port: Int = 8080
+    // Float64 문맥에서 정수 리터럴이 자동 변환
+    let ratio: Float64 = 0
+    // List<String> 문맥
+    let tags: List<String> = ["alpha", "beta", "rc1"]
+    // 결과를 보간으로 조합
+    "port={port} ratio={ratio} tags={tags.len()}"
+}
+
+/// 숫자 문자열을 Int로 변환 (match 리터럴 패턴)
+pub fn parseIntSafe(text: String) -> Result<Int, ParseError> {
+    match text {
+        "0"     -> Ok(0),
+        "80"    -> Ok(80),
+        "443"   -> Ok(443),
+        "5432"  -> Ok(5432),
+        "8080"  -> Ok(8080),
+        "300"   -> Ok(300),
+        "65535" -> Ok(65535),
+        _       -> Err(ParseError.TypeMismatch("int", text, "Int")),
+    }
+}
+
+/// 로그 레벨 문자열 파싱 (or-pattern)
+pub fn parseLogLevel(text: String) -> Result<LogLevel, ParseError> {
+    match text {
+        "debug" | "DBG" -> Ok(LogLevel.Debug),
+        "info"  | "INF" -> Ok(LogLevel.Info),
+        "warn"  | "WRN" -> Ok(LogLevel.Warn),
+        "error" | "ERR" -> Ok(LogLevel.Error),
+        _ -> Err(ParseError.TypeMismatch("logLevel", text, "LogLevel")),
+    }
+}
+
+/// KV 쌍을 AppConfig에 적용 (클로저 패턴 파라미터 + match)
+pub fn applyKV(
+    cfg: AppConfig,
+    key: String,
+    value: String,
+) -> Result<AppConfig, ParseError> {
+    match key {
+        "name" -> Ok(AppConfig { ..cfg, name: value }),
+        "version" -> Ok(AppConfig { ..cfg, version: value }),
+        "host" -> {
+            let s = ServerConfig { ..cfg.server, host: value }
+            Ok(AppConfig { ..cfg, server: s })
+        },
+        "port" -> {
+            let p = parseIntSafe(value)?
+            let s = ServerConfig { ..cfg.server, port: p }
+            Ok(AppConfig { ..cfg, server: s })
+        },
+        "logLevel" -> {
+            let level = parseLogLevel(value)?
+            Ok(AppConfig { ..cfg, logLevel: level })
+        },
+        _ -> Err(ParseError.TypeMismatch("key", key, "알려진 필드")),
+    }
+}
+
+/// KV 쌍 리스트를 한 번에 적용 (클로저 패턴 파라미터로 튜플 분해)
+pub fn applyAllKV(
+    cfg: AppConfig,
+    pairs: List<(String, String)>,
+) -> Result<AppConfig, ParseError> {
+    let mut current = cfg
+    // 클로저 패턴 파라미터: (k, v) 튜플 분해
+    for (k, v) in pairs {
+        current = applyKV(current, k, v)?
+    }
+    Ok(current)
+}
+
+// ═══════════════════════════════════════════════════════════════
+// §7. 옵셔널 체이닝 (?.) 데모용 래퍼
+// ═══════════════════════════════════════════════════════════════
+
+/// 옵셔널 설정 래퍼 (?. 체이닝 데모용)
+pub struct MaybeConfig {
+    pub inner: AppConfig?,
+}
+
+/// MaybeConfig에서 안전하게 이름 꺼내기 (옵셔널 체이닝 + nil-coalesce)
+pub fn safeName(self) -> String {
+    // ?. — inner가 None이면 즉시 None 반환
+    // ?? — 최종 None이면 기본값 사용
+    self.inner?.name ?? "이름 없음"
+}
+
+/// MaybeConfig에서 안전하게 서버 URL 꺼내기
+pub fn safeServerUrl(self) -> String {
+    self.inner?.server.url() ?? "http://localhost:8080"
+}
+
+/// MaybeConfig에서 안전하게 로그 레벨 꺼내기
+pub fn safeLogLevel(self) -> LogLevel {
+    // 옵셔널 값에 기본 제공
+    match self.inner {
+        Some(cfg) -> cfg.logLevel,
+        None      -> LogLevel.Info,
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// §8. main — 전체 기능 시연
+// ═══════════════════════════════════════════════════════════════
+
+pub fn main() {
+    println("╔════════════════════════════════════════════╗")
+    println("║  Osty v0.4 설정 파서 데모                   ║")
+    println("╚════════════════════════════════════════════╝")
+    println("")
+
+    // ── ① Builder로 설정 생성 ───────────────────────────────
+    println("── ① Builder 패턴 ──")
+    let builder = AppConfigBuilder {
+        name: "demo-app",
+        version: "0.2.0",
+        host: "localhost",
+        port: 8080,
+        dbDriver: "postgres",
+        dbName: "myapp",
+        logLevel: LogLevel.Info,
+    }
+    // 메서드 체인 (선행 . 만 허용, 후행 . 금지)
+    let built = builder
+        .host("api.example.com")
+        .port(443)
+        .logLevel(LogLevel.Warn)
+        .build()
+    let cfg = recoverOrDefault(built)
+    println("빌드 결과: {cfg.name} v{cfg.version}")
+    println("")
+
+    // ── ② 설정 리포트 (triple-quoted string + 보간) ─────────
+    println("── ② 설정 리포트 (triple-quoted string) ──")
+    println(cfg.toReport())
+    println("")
+
+    // ── ③ 포트 분류 (범위 패턴 + binding @) ────────────────
+    println("── ③ 포트 분류 (범위 패턴 + @ binding) ──")
+    let ports = [0, 80, 443, 5432, 8080, 65535]
+    for p in ports {
+        println("  {classifyPort(p)}")
+    }
+    println("")
+
+    // ── ④ 마이그레이션 계획 (or-pattern) ────────────────────
+    println("── ④ 버전별 마이그레이션 (or-pattern) ──")
+    let versions = ["0.1.0", "0.1.2", "0.2.0", "0.3.0", "1.0.0"]
+    for v in versions {
+        println("  {migrationPlan(v)}")
+    }
+    println("")
+
+    // ── ⑤ 에러별 액션 (guard + 분해) ────────────────────────
+    println("── ⑤ 에러 액션 (guard + struct 분해) ──")
+    let errors = [
+        ParseError.FileNotFound("/etc/app.conf"),
+        ParseError.FileNotFound("/tmp/test.conf"),
+        ParseError.SyntaxError(0, "unexpected token"),
+        ParseError.SyntaxError(42, "missing brace"),
+        ParseError.MissingField("name"),
+        ParseError.OutOfRange("port", -1),
+        ParseError.OutOfRange("timeout", 999),
+    ]
+    for err in errors {
+        println("  {errorAction(err)}")
+    }
+    println("")
+
+    // ── ⑥ 키워드 인자 + 기본 인자 ───────────────────────────
+    println("── ⑥ 키워드 인자 + 기본 인자 ──")
+    let base = defaultAppConfig("base-app")
+    // 키워드 인자로 일부만 오버라이드
+    let updated = mergeSettings(base, host: "prod.example.com", port: 443)
+    println("  기본: {base.server.summary()}")
+    println("  업데이트: {updated.server.summary()}")
+    println("")
+
+    // ── ⑦ 에러 처리 (? 와 ??) ──────────────────────────────
+    println("── ⑦ 에러 처리 (? 전파, ?? fallback) ──")
+    let loadResult = loadConfig("")
+    match loadResult {
+        Ok(c)  -> println("  로드 성공: {c.name}"),
+        Err(e) -> println("  로드 실패: {e.message()}"),
+    }
+    // ?? 로 옵셔널 기본값 제공
+    let safeUser: String = cfg.database.username ?? "guest"
+    println("  DB 사용자: {safeUser}")
+    println("")
+
+    // ── ⑧ 옵셔널 체이닝 (?.) ───────────────────────────────
+    println("── ⑧ 옵셔널 체이닝 (?.) ──")
+    let maybeEmpty = MaybeConfig { inner: None }
+    let maybeFull = MaybeConfig { inner: Some(cfg) }
+    println("  빈 설정 이름: {maybeEmpty.safeName()}")
+    println("  빈 설정 URL: {maybeEmpty.safeServerUrl()}")
+    println("  실제 설정 이름: {maybeFull.safeName()}")
+    println("  실제 설정 URL: {maybeFull.safeServerUrl()}")
+    println("")
+
+    // ── ⑨ 클로저 + 고차 함수 (검증 규칙 체인) ─────────────
+    println("── ⑨ 고차 함수 + 클로저 (검증 체인) ──")
+    let rules: List<ValidateRule> = [
+        portRangeRule,
+        nameRequiredRule,
+        validDriverRule,
+    ]
+    let validated = validateAll(updated, rules)
+    match validated {
+        Ok(c)  -> println("  검증 통과: {c.name} v{c.version}"),
+        Err(e) -> println("  검증 실패: {e.message()}"),
+    }
+    println("")
+
+    // ── ⑩ 리터럴 다형성 ────────────────────────────────────
+    println("── ⑩ 리터럴 다형성 ──")
+    let poly = demonstrateLiteralPolymorphism()
+    println("  {poly}")
+    println("")
+
+    // ── ⑪ 설정 비교 (클로저 활용) ──────────────────────────
+    println("── ⑪ 설정 비교 ──")
+    let other = defaultAppConfig("other-app")
+    let diffs = diffConfigs(cfg, other)
+    println("  차이점 {diffs.len()}개:")
+    for d in diffs {
+        println("    - {d}")
+    }
+    println("")
+
+    // ── ⑫ if 식 + match 식 중첩 (Expression 기반 제어 흐름) ─
+    println("── ⑫ if + match 중첩 식 ──")
+    let status = if cfg.logLevel.gte(LogLevel.Warn) {
+        match cfg.server.port {
+            443       -> "보안 모드 (HTTPS)",
+            80        -> "일반 모드 (HTTP)",
+            p @ 8080..=8090 -> "개발 모드 (포트 {p})",
+            _         -> "커스텀 모드",
+        }
+    } else {
+        "로깅 비활성 — 모드 확인 불가"
+    }
+    println("  상태: {status}")
+    println("")
+
+    // ── ⑬ KV 적용 + struct 분해 ────────────────────────────
+    println("── ⑬ KV 적용 + struct 분해 ──")
+    let kvPairs = [
+        ("name", "production-app"),
+        ("host", "prod.example.com"),
+        ("port", "8080"),
+        ("logLevel", "ERR"),
+    ]
+    let kvResult = applyAllKV(defaultAppConfig("kv-test"), kvPairs)
+    match kvResult {
+        Ok(c) -> {
+            let info = extractServerInfo(c)
+            println("  {info}")
+            println("  마이그레이션 필요: {c.needsMigration()}")
+        },
+        Err(e) -> println("  KV 파싱 실패: {e.message()}"),
+    }
+    println("")
+
+    // ── ⑭ 타임아웃 등급 (if-else if 식) ────────────────────
+    println("── ⑭ 타임아웃 등급 ──")
+    let timeouts = [3, 30, 60, 300]
+    for t in timeouts {
+        println("  {timeoutGrade(t)}")
+    }
+    println("")
+    println("── 데모 완료 ──")
+}
