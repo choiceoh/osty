@@ -1684,6 +1684,9 @@ func (e *genPackageEntry) fileResult() *resolve.Result {
 }
 
 func splitGenCheckDiags(diags []*diag.Diagnostic) (blocking, deferred []*diag.Diagnostic) {
+	if genAllowsDeferredCheckerErrors() {
+		return nil, append([]*diag.Diagnostic(nil), diags...)
+	}
 	for _, d := range diags {
 		if isDeferredGenCheckDiag(d) {
 			deferred = append(deferred, d)
@@ -1724,8 +1727,23 @@ func parseGenEmitFile(pkg *resolve.Package) (*ast.File, []byte, error) {
 		return nil, nil, fmt.Errorf("missing package input for gen")
 	}
 	var merged bytes.Buffer
+	mergedFile := &ast.File{}
+	first := true
 	for _, pf := range pkg.Files {
-		if pf == nil || len(pf.Source) == 0 {
+		if pf == nil {
+			continue
+		}
+		if pf.File != nil {
+			if first {
+				mergedFile.PosV = pf.File.Pos()
+				first = false
+			}
+			mergedFile.EndV = pf.File.End()
+			mergedFile.Uses = append(mergedFile.Uses, pf.File.Uses...)
+			mergedFile.Decls = append(mergedFile.Decls, pf.File.Decls...)
+			mergedFile.Stmts = append(mergedFile.Stmts, pf.File.Stmts...)
+		}
+		if len(pf.Source) == 0 {
 			continue
 		}
 		if merged.Len() > 0 {
@@ -1740,11 +1758,10 @@ func parseGenEmitFile(pkg *resolve.Package) (*ast.File, []byte, error) {
 	if len(src) == 0 {
 		return nil, nil, fmt.Errorf("%s: no source bytes were available for backend emission", pkg.Dir)
 	}
-	file, parseDiags := parser.ParseDiagnostics(src)
-	if hasError(parseDiags) {
-		return nil, nil, fmt.Errorf("%s: merged package source did not parse cleanly for backend emission", pkg.Dir)
+	if len(mergedFile.Uses) == 0 && len(mergedFile.Decls) == 0 && len(mergedFile.Stmts) == 0 {
+		return nil, nil, fmt.Errorf("%s: no parsed package files were available for backend emission", pkg.Dir)
 	}
-	return file, src, nil
+	return mergedFile, src, nil
 }
 
 // runNew implements the `osty new NAME` subcommand: scaffold a fresh
