@@ -62,6 +62,7 @@ func GenerateFromMIR(m *mir.Module, opts Options) ([]byte, error) {
 			return nil, err
 		}
 	}
+	g.emitTypeDefs()
 	g.emitStringPool()
 	g.emitRuntimeDeclarations()
 	return []byte(g.out.String()), nil
@@ -89,6 +90,14 @@ type mirGen struct {
 	declareOrder  []string            // insertion order, for stable output
 	strings       map[string]string   // literal value → global symbol
 	stringOrder   []string            // order-of-insertion
+
+	// Aggregate type pools. Struct defs come from the module's
+	// LayoutTable; tuple defs are discovered on-demand as the emitter
+	// walks the function bodies. Both are rendered once before the
+	// first function definition.
+	structOrder []string                // struct name in LayoutTable order (sorted by name)
+	tupleDefs   map[string][]mir.Type   // mangled tuple name → element types
+	tupleOrder  []string                // first-use order of tuple names
 }
 
 // mirFnSig caches a function's LLVM signature so call sites can render
@@ -107,6 +116,7 @@ func newMIRGen(m *mir.Module, opts Options) *mirGen {
 		functionTypes: map[string]mirFnSig{},
 		declares:      map[string]string{},
 		strings:       map[string]string{},
+		tupleDefs:     map[string][]mir.Type{},
 	}
 }
 
@@ -179,6 +189,24 @@ func (g *mirGen) typeSupported(t mir.Type) bool {
 			ir.PrimString, ir.PrimUnit, ir.PrimNever:
 			return true
 		}
+	case *ir.NamedType:
+		// User-declared struct (layout must exist in the module's
+		// LayoutTable). Enums, lists, maps, sets, optional-named
+		// forms are still refused by checkSupported above because
+		// they'd need discriminant / runtime handling the MVP doesn't
+		// carry yet.
+		if g.mod != nil && g.mod.Layouts != nil {
+			if _, ok := g.mod.Layouts.Structs[x.Name]; ok {
+				return true
+			}
+		}
+	case *ir.TupleType:
+		for _, e := range x.Elems {
+			if !g.typeSupported(e) {
+				return false
+			}
+		}
+		return true
 	}
 	return false
 }
@@ -186,13 +214,15 @@ func (g *mirGen) typeSupported(t mir.Type) bool {
 func (g *mirGen) checkInstrSupported(fn *mir.Function, inst mir.Instr) error {
 	switch x := inst.(type) {
 	case *mir.AssignInstr:
-		if x.Dest.HasProjections() {
-			return unsupported("mir-mvp", "projected assignment not yet supported in "+fn.Name)
+		if err := g.checkProjectionsSupported(fn, x.Dest, "AssignInstr.Dest"); err != nil {
+			return err
 		}
 		return g.checkRValueSupported(fn, x.Src)
 	case *mir.CallInstr:
-		if x.Dest != nil && x.Dest.HasProjections() {
-			return unsupported("mir-mvp", "projected call dest not yet supported in "+fn.Name)
+		if x.Dest != nil {
+			if err := g.checkProjectionsSupported(fn, *x.Dest, "CallInstr.Dest"); err != nil {
+				return err
+			}
 		}
 		if _, ok := x.Callee.(*mir.FnRef); !ok {
 			return unsupported("mir-mvp", "indirect call not yet supported in "+fn.Name)
@@ -209,10 +239,32 @@ func (g *mirGen) checkInstrSupported(fn *mir.Function, inst mir.Instr) error {
 	return nil
 }
 
+// checkProjectionsSupported walks a Place's projection chain and
+// refuses anything outside the aggregate MVP (FieldProj / TupleProj).
+// Variant / Index / Deref projections need enum dispatch or runtime
+// hooks and belong to a later Stage 3 expansion.
+func (g *mirGen) checkProjectionsSupported(fn *mir.Function, p mir.Place, ctx string) error {
+	for _, proj := range p.Projections {
+		switch proj.(type) {
+		case *mir.FieldProj, *mir.TupleProj:
+			// allowed
+		default:
+			return unsupported("mir-mvp", fmt.Sprintf("%s projection %T not yet supported in %s", ctx, proj, fn.Name))
+		}
+	}
+	return nil
+}
+
 func (g *mirGen) checkRValueSupported(fn *mir.Function, rv mir.RValue) error {
-	switch rv.(type) {
+	switch r := rv.(type) {
 	case *mir.UseRV, *mir.UnaryRV, *mir.BinaryRV:
 		return nil
+	case *mir.AggregateRV:
+		switch r.Kind {
+		case mir.AggStruct, mir.AggTuple:
+			return nil
+		}
+		return unsupported("mir-mvp", fmt.Sprintf("aggregate kind %d not yet supported in %s", r.Kind, fn.Name))
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("rvalue %T not yet supported in %s", rv, fn.Name))
 }
@@ -315,6 +367,67 @@ func (g *mirGen) emitRuntimeDeclarations() {
 	rewritten.WriteString(body[:idx])
 	rewritten.WriteString(header.String())
 	rewritten.WriteByte('\n')
+	rewritten.WriteString(body[idx:])
+	g.out.Reset()
+	g.out.WriteString(rewritten.String())
+}
+
+// emitTypeDefs writes aggregate type definitions (structs + tuples)
+// into the out buffer, injected before the first `define ` /
+// `declare ` line so LLVM can resolve type references during parse.
+func (g *mirGen) emitTypeDefs() {
+	// Structs from the module's LayoutTable, sorted for determinism.
+	if g.mod != nil && g.mod.Layouts != nil {
+		names := make([]string, 0, len(g.mod.Layouts.Structs))
+		for name := range g.mod.Layouts.Structs {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		g.structOrder = names
+	}
+	if len(g.structOrder) == 0 && len(g.tupleOrder) == 0 {
+		return
+	}
+
+	var block strings.Builder
+	for _, name := range g.structOrder {
+		sl := g.mod.Layouts.Structs[name]
+		if sl == nil {
+			continue
+		}
+		parts := make([]string, len(sl.Fields))
+		for i, f := range sl.Fields {
+			parts[i] = g.llvmType(f.Type)
+		}
+		block.WriteByte('%')
+		block.WriteString(name)
+		block.WriteString(" = type { ")
+		block.WriteString(strings.Join(parts, ", "))
+		block.WriteString(" }\n")
+	}
+	for _, name := range g.tupleOrder {
+		elems := g.tupleDefs[name]
+		parts := make([]string, len(elems))
+		for i, e := range elems {
+			parts[i] = g.llvmType(e)
+		}
+		block.WriteByte('%')
+		block.WriteString(name)
+		block.WriteString(" = type { ")
+		block.WriteString(strings.Join(parts, ", "))
+		block.WriteString(" }\n")
+	}
+	block.WriteByte('\n')
+
+	body := g.out.String()
+	idx := earliestAfter(body, []string{"define ", "declare "})
+	if idx < 0 {
+		g.out.WriteString(block.String())
+		return
+	}
+	var rewritten strings.Builder
+	rewritten.WriteString(body[:idx])
+	rewritten.WriteString(block.String())
 	rewritten.WriteString(body[idx:])
 	g.out.Reset()
 	g.out.WriteString(rewritten.String())
@@ -483,22 +596,122 @@ func (g *mirGen) emitAssign(a *mir.AssignInstr) error {
 	if destLoc == nil {
 		return fmt.Errorf("mir-mvp: assign into unknown local %d", a.Dest.Local)
 	}
-	destT := destLoc.Type
-	if isUnitType(destT) {
+	localT := destLoc.Type
+	if isUnitType(localT) && !a.Dest.HasProjections() {
 		// Discard: still evaluate the rvalue for side effects.
-		_, err := g.evalRValue(a.Src, destT)
+		_, err := g.evalRValue(a.Src, localT)
 		return err
 	}
-	val, err := g.evalRValue(a.Src, destT)
+	if !a.Dest.HasProjections() {
+		val, err := g.evalRValue(a.Src, localT)
+		if err != nil {
+			return err
+		}
+		g.fnBuf.WriteString("  store ")
+		g.fnBuf.WriteString(g.llvmType(localT))
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(val)
+		g.fnBuf.WriteString(", ptr ")
+		g.fnBuf.WriteString(g.localSlots[a.Dest.Local])
+		g.fnBuf.WriteByte('\n')
+		return nil
+	}
+	// Projected write: read-modify-write. Load the whole aggregate,
+	// insertvalue the new element, store back. For nested
+	// projections we recurse: insertvalue into the inner aggregate,
+	// then insertvalue that into the outer, etc.
+	projs := a.Dest.Projections
+	leafT := projectionType(projs[len(projs)-1])
+	if leafT == nil {
+		return unsupported("mir-mvp", "projected write with missing type")
+	}
+	newLeaf, err := g.evalRValue(a.Src, leafT)
 	if err != nil {
 		return err
 	}
-	g.fnBuf.WriteString("  store ")
-	g.fnBuf.WriteString(g.llvmType(destT))
-	g.fnBuf.WriteByte(' ')
-	g.fnBuf.WriteString(val)
+	// Load intermediate aggregates along the projection chain.
+	slot := g.localSlots[a.Dest.Local]
+	slotLLVM := g.llvmType(localT)
+	aggReg := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(aggReg)
+	g.fnBuf.WriteString(" = load ")
+	g.fnBuf.WriteString(slotLLVM)
 	g.fnBuf.WriteString(", ptr ")
-	g.fnBuf.WriteString(g.localSlots[a.Dest.Local])
+	g.fnBuf.WriteString(slot)
+	g.fnBuf.WriteByte('\n')
+
+	// Walk the chain collecting aggregate registers + indices so we
+	// can rebuild from the leaf upward.
+	type frame struct {
+		reg  string
+		llvm string
+		idx  int
+	}
+	frames := make([]frame, 0, len(projs))
+	curReg := aggReg
+	curLLVM := slotLLVM
+	curT := localT
+	for i, proj := range projs {
+		idx, ok := projectionIndex(proj)
+		if !ok {
+			return unsupported("mir-mvp", fmt.Sprintf("projection %T on write", proj))
+		}
+		nextT := projectionType(proj)
+		if nextT == nil {
+			return unsupported("mir-mvp", "projected write: missing projection type")
+		}
+		nextLLVM := g.llvmType(nextT)
+		frames = append(frames, frame{reg: curReg, llvm: curLLVM, idx: idx})
+		if i == len(projs)-1 {
+			_ = nextT
+			break
+		}
+		next := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(next)
+		g.fnBuf.WriteString(" = extractvalue ")
+		g.fnBuf.WriteString(curLLVM)
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(curReg)
+		g.fnBuf.WriteString(", ")
+		g.fnBuf.WriteString(strconv.Itoa(idx))
+		g.fnBuf.WriteByte('\n')
+		curReg = next
+		curLLVM = nextLLVM
+		curT = nextT
+	}
+	_ = curT
+
+	// Rebuild: start from newLeaf, walk frames in reverse.
+	inner := newLeaf
+	innerLLVM := g.llvmType(leafT)
+	for i := len(frames) - 1; i >= 0; i-- {
+		f := frames[i]
+		rebuilt := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(rebuilt)
+		g.fnBuf.WriteString(" = insertvalue ")
+		g.fnBuf.WriteString(f.llvm)
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(f.reg)
+		g.fnBuf.WriteString(", ")
+		g.fnBuf.WriteString(innerLLVM)
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(inner)
+		g.fnBuf.WriteString(", ")
+		g.fnBuf.WriteString(strconv.Itoa(f.idx))
+		g.fnBuf.WriteByte('\n')
+		inner = rebuilt
+		innerLLVM = f.llvm
+	}
+	// Store the rebuilt top-level aggregate back.
+	g.fnBuf.WriteString("  store ")
+	g.fnBuf.WriteString(slotLLVM)
+	g.fnBuf.WriteByte(' ')
+	g.fnBuf.WriteString(inner)
+	g.fnBuf.WriteString(", ptr ")
+	g.fnBuf.WriteString(slot)
 	g.fnBuf.WriteByte('\n')
 	return nil
 }
@@ -778,7 +991,9 @@ func (g *mirGen) emitTerm(t mir.Terminator) error {
 // evalRValue emits LLVM code for the given RValue and returns an LLVM
 // value expression of type `hintT` (the destination type). For
 // primitive rvalues the result is a register name (`%N`) or an
-// immediate literal.
+// immediate literal. For aggregate rvalues the result is an LLVM
+// SSA value of the aggregate type, built up via a chain of
+// `insertvalue` instructions.
 func (g *mirGen) evalRValue(rv mir.RValue, hintT mir.Type) (string, error) {
 	switch r := rv.(type) {
 	case *mir.UseRV:
@@ -799,8 +1014,88 @@ func (g *mirGen) evalRValue(rv mir.RValue, hintT mir.Type) (string, error) {
 			return "", err
 		}
 		return g.emitBinary(r.Op, left, right, r.Left.Type(), r.T)
+	case *mir.AggregateRV:
+		return g.emitAggregate(r, hintT)
 	}
 	return "", unsupported("mir-mvp", fmt.Sprintf("rvalue %T", rv))
+}
+
+// emitAggregate builds an LLVM aggregate value for a struct or tuple
+// via an `insertvalue` chain. Each iteration inserts one field into
+// the running aggregate. Starting from `undef` keeps the chain
+// dependency-free — LLVM's SROA + mem2reg collapses the undef chain
+// into direct reads during opt.
+func (g *mirGen) emitAggregate(rv *mir.AggregateRV, hintT mir.Type) (string, error) {
+	aggT := rv.T
+	if aggT == nil {
+		aggT = hintT
+	}
+	if aggT == nil {
+		return "", unsupported("mir-mvp", "aggregate with unknown type")
+	}
+	elems, err := g.aggregateElementTypes(aggT, rv)
+	if err != nil {
+		return "", err
+	}
+	if len(elems) != len(rv.Fields) {
+		return "", fmt.Errorf("mir-mvp: aggregate arity mismatch: %d fields, %d types", len(rv.Fields), len(elems))
+	}
+	aggLLVM := g.llvmType(aggT)
+	acc := "undef"
+	for i, op := range rv.Fields {
+		val, err := g.evalOperand(op, elems[i])
+		if err != nil {
+			return "", err
+		}
+		tmp := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(tmp)
+		g.fnBuf.WriteString(" = insertvalue ")
+		g.fnBuf.WriteString(aggLLVM)
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(acc)
+		g.fnBuf.WriteString(", ")
+		g.fnBuf.WriteString(g.llvmType(elems[i]))
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(val)
+		g.fnBuf.WriteString(", ")
+		g.fnBuf.WriteString(strconv.Itoa(i))
+		g.fnBuf.WriteByte('\n')
+		acc = tmp
+	}
+	return acc, nil
+}
+
+// aggregateElementTypes returns the element types an aggregate's
+// Fields should match. For structs this comes from the LayoutTable
+// so field order is authoritative; for tuples it's the type itself.
+func (g *mirGen) aggregateElementTypes(aggT mir.Type, rv *mir.AggregateRV) ([]mir.Type, error) {
+	switch rv.Kind {
+	case mir.AggStruct:
+		nt, ok := aggT.(*ir.NamedType)
+		if !ok {
+			return nil, fmt.Errorf("mir-mvp: struct aggregate type %s", mirTypeString(aggT))
+		}
+		if g.mod == nil || g.mod.Layouts == nil {
+			return nil, fmt.Errorf("mir-mvp: missing layout table for struct %s", nt.Name)
+		}
+		sl := g.mod.Layouts.Structs[nt.Name]
+		if sl == nil {
+			return nil, fmt.Errorf("mir-mvp: missing layout for struct %s", nt.Name)
+		}
+		out := make([]mir.Type, len(sl.Fields))
+		for i, f := range sl.Fields {
+			out[i] = f.Type
+		}
+		return out, nil
+	case mir.AggTuple:
+		tt, ok := aggT.(*ir.TupleType)
+		if !ok {
+			return nil, fmt.Errorf("mir-mvp: tuple aggregate type %s", mirTypeString(aggT))
+		}
+		return append([]mir.Type(nil), tt.Elems...), nil
+	}
+	return nil, fmt.Errorf("mir-mvp: unsupported aggregate kind %d", rv.Kind)
 }
 
 // evalOperand returns an LLVM value for the operand, reading loads
@@ -818,9 +1113,6 @@ func (g *mirGen) evalOperand(op mir.Operand, hintT mir.Type) (string, error) {
 }
 
 func (g *mirGen) emitLoad(place mir.Place, t mir.Type) (string, error) {
-	if place.HasProjections() {
-		return "", unsupported("mir-mvp", "place projection")
-	}
 	slot, ok := g.localSlots[place.Local]
 	if !ok {
 		return "", fmt.Errorf("mir-mvp: load from unknown local %d", place.Local)
@@ -828,15 +1120,96 @@ func (g *mirGen) emitLoad(place mir.Place, t mir.Type) (string, error) {
 	if isUnitType(t) {
 		return "undef", nil
 	}
-	tmp := g.fresh()
+	if !place.HasProjections() {
+		tmp := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(tmp)
+		g.fnBuf.WriteString(" = load ")
+		g.fnBuf.WriteString(g.llvmType(t))
+		g.fnBuf.WriteString(", ptr ")
+		g.fnBuf.WriteString(slot)
+		g.fnBuf.WriteByte('\n')
+		return tmp, nil
+	}
+	// Projected read: load the whole aggregate once, then chain
+	// extractvalue per projection. An alternative is to GEP into the
+	// slot and load the narrowed field; both map to the same IR after
+	// optimisation, and extractvalue keeps the emitter simpler
+	// because the LLVM type sequence is available without walking the
+	// slot's element type graph.
+	baseT := g.localType(place.Local)
+	baseLLVM := g.llvmType(baseT)
+	aggReg := g.fresh()
 	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(tmp)
+	g.fnBuf.WriteString(aggReg)
 	g.fnBuf.WriteString(" = load ")
-	g.fnBuf.WriteString(g.llvmType(t))
+	g.fnBuf.WriteString(baseLLVM)
 	g.fnBuf.WriteString(", ptr ")
 	g.fnBuf.WriteString(slot)
 	g.fnBuf.WriteByte('\n')
-	return tmp, nil
+
+	curLLVM := baseLLVM
+	curReg := aggReg
+	for i, proj := range place.Projections {
+		idx, ok := projectionIndex(proj)
+		if !ok {
+			return "", unsupported("mir-mvp", fmt.Sprintf("projection %T on read", proj))
+		}
+		elemT := projectionType(proj)
+		if elemT == nil {
+			// Fall back to the declared expression type for the
+			// terminal projection.
+			if i == len(place.Projections)-1 {
+				elemT = t
+			} else {
+				return "", unsupported("mir-mvp", "projection missing Type")
+			}
+		}
+		elemLLVM := g.llvmType(elemT)
+		next := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(next)
+		g.fnBuf.WriteString(" = extractvalue ")
+		g.fnBuf.WriteString(curLLVM)
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(curReg)
+		g.fnBuf.WriteString(", ")
+		g.fnBuf.WriteString(strconv.Itoa(idx))
+		g.fnBuf.WriteByte('\n')
+		curLLVM = elemLLVM
+		curReg = next
+	}
+	return curReg, nil
+}
+
+// projectionIndex returns the field index for a FieldProj / TupleProj.
+func projectionIndex(p mir.Projection) (int, bool) {
+	switch x := p.(type) {
+	case *mir.FieldProj:
+		return x.Index, true
+	case *mir.TupleProj:
+		return x.Index, true
+	}
+	return 0, false
+}
+
+// projectionType returns the result type of a FieldProj / TupleProj.
+func projectionType(p mir.Projection) mir.Type {
+	switch x := p.(type) {
+	case *mir.FieldProj:
+		return x.Type
+	case *mir.TupleProj:
+		return x.Type
+	}
+	return nil
+}
+
+// localType returns the MIR type of a local by id.
+func (g *mirGen) localType(id mir.LocalID) mir.Type {
+	if loc := g.fn.Local(id); loc != nil {
+		return loc.Type
+	}
+	return nil
 }
 
 // renderConst emits a literal as an LLVM immediate. The receiver is
@@ -1126,10 +1499,69 @@ func (g *mirGen) llvmType(t mir.Type) string {
 		case ir.PrimNever:
 			return "void"
 		}
+	case *ir.NamedType:
+		return "%" + x.Name
+	case *ir.TupleType:
+		return "%" + g.tupleName(x)
 	}
 	// Fallback: ptr works for anything we end up treating as opaque
 	// heap data.
 	return "ptr"
+}
+
+// tupleName returns the mangled LLVM type name for a tuple and
+// ensures its type definition is emitted at least once per module.
+// Keeping the naming scheme in sync with the legacy emitter
+// (`Tuple.<elem1>.<elem2>.…`) makes it easier to cross-check output.
+func (g *mirGen) tupleName(t *ir.TupleType) string {
+	var parts []string
+	for _, e := range t.Elems {
+		parts = append(parts, g.llvmTypeForTupleTag(e))
+	}
+	name := "Tuple." + strings.Join(parts, ".")
+	if _, ok := g.tupleDefs[name]; !ok {
+		// Defer the actual `%Tuple.* = type { ... }` line until the
+		// emitter flushes its type pool so the order is stable.
+		g.tupleDefs[name] = append([]mir.Type(nil), t.Elems...)
+		g.tupleOrder = append(g.tupleOrder, name)
+	}
+	return name
+}
+
+// llvmTypeForTupleTag renders a type in the compact mangled form used
+// inside a tuple type name (dots instead of LLVM keywords). Matches
+// the legacy naming (`i64.string.f64.Tuple.i64.i64`).
+func (g *mirGen) llvmTypeForTupleTag(t mir.Type) string {
+	switch x := t.(type) {
+	case *ir.PrimType:
+		switch x.Kind {
+		case ir.PrimInt, ir.PrimInt64, ir.PrimUInt64:
+			return "i64"
+		case ir.PrimInt32, ir.PrimUInt32, ir.PrimChar:
+			return "i32"
+		case ir.PrimInt16, ir.PrimUInt16:
+			return "i16"
+		case ir.PrimInt8, ir.PrimUInt8, ir.PrimByte:
+			return "i8"
+		case ir.PrimBool:
+			return "i1"
+		case ir.PrimFloat, ir.PrimFloat64:
+			return "f64"
+		case ir.PrimFloat32:
+			return "f32"
+		case ir.PrimString:
+			return "string"
+		case ir.PrimBytes:
+			return "bytes"
+		case ir.PrimUnit:
+			return "unit"
+		}
+	case *ir.NamedType:
+		return x.Name
+	case *ir.TupleType:
+		return g.tupleName(x)
+	}
+	return "opaque"
 }
 
 func (g *mirGen) fresh() string {

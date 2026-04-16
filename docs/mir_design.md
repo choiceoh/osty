@@ -709,9 +709,40 @@ MIR tests isolated from front-end churn.
     builds HIR modules by hand (independent of the parser), runs
     them through both emitters, and asserts both outputs contain the
     expected core instructions. A dedicated fallback test confirms
-    that a program using structs (outside the MVP) is rejected by
-    `GenerateFromMIR` with `ErrUnsupported` and accepted by the
-    legacy path.
+    that a program outside the MVP is rejected by `GenerateFromMIR`
+    with `ErrUnsupported` and accepted by the legacy path.
+
+- **Stage 3.1 (landed).** Aggregate types — structs and tuples.
+
+  - **Struct layouts** from `mir.Module.Layouts.Structs` are emitted
+    once per module as `%Name = type { T1, T2, ... }` (sorted
+    alphabetically for stable output) and injected before the first
+    `define`/`declare` line.
+  - **Tuple layouts** are discovered on demand while emitting
+    function bodies. The emitter interns each distinct tuple type
+    with a mangled name matching the legacy convention
+    (`Tuple.<elem1>.<elem2>...`) so cross-emitter comparisons stay
+    easy. Elements render in a compact tag form (`i64`, `string`,
+    `f64`, nested `Tuple.*`) rather than full LLVM type syntax so
+    the type name round-trips through LLVM's parser.
+  - **`AggregateRV{Struct|Tuple}`** compiles to a chain of
+    `insertvalue` instructions starting from `undef`. LLVM's SROA
+    pass folds the chain away during optimisation, so the cost is
+    purely a Stage-3 MVP one.
+  - **`FieldProj` / `TupleProj` reads** load the whole aggregate
+    once from its alloca slot then chain `extractvalue` per
+    projection. Indices come from the projection's `Index` field.
+  - **`FieldProj` / `TupleProj` writes** are read-modify-write:
+    load → extractvalue per intermediate projection → insertvalue
+    the new leaf → insertvalue back up the chain → store. Nested
+    projections fan out correctly (e.g. `outer.inner.v = x`
+    produces two-level insertvalue).
+  - `checkSupported` accepts `NamedType` receivers only when the
+    module's `LayoutTable` has a matching struct entry — enums
+    still fall through to fallback. `FieldProj` and `TupleProj` are
+    the only projection kinds accepted; `VariantProj`, `IndexProj`,
+    `DerefProj` remain in the unsupported set awaiting later
+    expansion stages.
 
 - **Stage 4 (partially landed — MIR-first IR emission).** The LLVM
   backend now prefers the MIR-direct emitter by default for raw
