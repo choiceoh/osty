@@ -130,9 +130,32 @@ type tupleTypeInfo struct {
 	elemListElemTyps []string
 }
 
+// interfaceInfo carries the collected shape of an `interface` declaration.
+// Phase 6a: `methods` preserves the source-order signature list so the
+// vtable emitter can lay out function-pointer slots in a deterministic
+// order that matches `impls` tables. `impls` lists every struct/enum
+// name whose method set structurally satisfies this interface, in
+// source-declaration order.
 type interfaceInfo struct {
+	name    string
+	decl    *ast.InterfaceDecl
+	methods []interfaceMethodSig
+	impls   []interfaceImpl
+}
+
+// interfaceMethodSig is the minimal surface the vtable emitter needs
+// from each interface method: its source name and an ordinal slot.
+type interfaceMethodSig struct {
 	name string
-	decl *ast.InterfaceDecl
+	slot int
+}
+
+// interfaceImpl records a concrete type that satisfies an interface,
+// together with the symbol its vtable emits.
+type interfaceImpl struct {
+	implName   string // source name of the struct/enum
+	kind       int    // 0 = struct, 1 = enum
+	vtableSym  string // `@osty.vtable.<impl>__<iface>`
 }
 
 type typeAliasInfo struct {
@@ -291,6 +314,10 @@ func collectDeclarations(file *ast.File) (*declarations, error) {
 			return nil, err
 		}
 	}
+	// Phase 6a: once every struct/enum method has been registered in
+	// methodsByType, scan for structural satisfaction so each interface
+	// knows which concrete types need a vtable emitted at render time.
+	discoverInterfaceImplementations(out)
 	return out, nil
 }
 
@@ -510,7 +537,76 @@ func collectInterfaceShell(decl *ast.InterfaceDecl) (*interfaceInfo, error) {
 	if diag := llvmNominalDeclHeaderDiagnostic("interface", decl.Name, llvmIsIdent(decl.Name), len(decl.Generics), len(decl.Methods)); diag.kind != "" {
 		return nil, unsupported(diag.kind, diag.message)
 	}
-	return &interfaceInfo{name: decl.Name, decl: decl}, nil
+	info := &interfaceInfo{name: decl.Name, decl: decl}
+	// Phase 6a: capture method names in source order so the vtable
+	// emitter can lay out function-pointer slots deterministically.
+	for i, m := range decl.Methods {
+		if m == nil || !llvmIsIdent(m.Name) {
+			continue
+		}
+		info.methods = append(info.methods, interfaceMethodSig{name: m.Name, slot: i})
+	}
+	return info, nil
+}
+
+// discoverInterfaceImplementations walks every struct and enum looking
+// for structural satisfaction of each collected interface: if all the
+// interface's source-name methods appear in the type's method set,
+// the type is registered as an implementer. The vtable symbol name
+// follows `osty.vtable.<impl>__<iface>` so multiple implementers of
+// the same interface never collide.
+//
+// Source-name matching is deliberate for Phase 6a: a more strict
+// signature-level match (argument / return types) will be layered on
+// once the dispatch path lands.
+func discoverInterfaceImplementations(decls *declarations) {
+	if decls == nil {
+		return
+	}
+	for _, iface := range decls.interfacesByName {
+		if iface == nil {
+			continue
+		}
+		for _, sd := range decls.structsOrdered {
+			if sd == nil {
+				continue
+			}
+			if interfaceSatisfiedByMethods(iface, decls.methodsByType[sd.typ]) {
+				iface.impls = append(iface.impls, interfaceImpl{
+					implName:  sd.name,
+					kind:      0,
+					vtableSym: "@osty.vtable." + sd.name + "__" + iface.name,
+				})
+			}
+		}
+		for _, ed := range decls.enumsOrdered {
+			if ed == nil {
+				continue
+			}
+			if interfaceSatisfiedByMethods(iface, decls.methodsByType[ed.typ]) {
+				iface.impls = append(iface.impls, interfaceImpl{
+					implName:  ed.name,
+					kind:      1,
+					vtableSym: "@osty.vtable." + ed.name + "__" + iface.name,
+				})
+			}
+		}
+	}
+}
+
+func interfaceSatisfiedByMethods(iface *interfaceInfo, methods map[string]*fnSig) bool {
+	if iface == nil || len(iface.methods) == 0 {
+		return false
+	}
+	if methods == nil {
+		return false
+	}
+	for _, need := range iface.methods {
+		if _, ok := methods[need.name]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func collectTypeAliasShell(decl *ast.TypeAliasDecl) (*typeAliasInfo, error) {
