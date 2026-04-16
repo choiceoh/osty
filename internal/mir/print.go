@@ -460,6 +460,14 @@ func intrinsicName(k IntrinsicKind) string {
 		return "collect_all"
 	case IntrinsicSelect:
 		return "select"
+	case IntrinsicSelectRecv:
+		return "select_recv"
+	case IntrinsicSelectSend:
+		return "select_send"
+	case IntrinsicSelectTimeout:
+		return "select_timeout"
+	case IntrinsicSelectDefault:
+		return "select_default"
 	case IntrinsicIsCancelled:
 		return "is_cancelled"
 	case IntrinsicCheckCancelled:
