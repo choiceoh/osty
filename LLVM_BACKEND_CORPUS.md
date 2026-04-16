@@ -52,14 +52,22 @@ Each fixture should be independently checkable as a single file and avoid:
 | `testdata/backend/llvm_smoke/string_return_print.osty` | `from function\n` | Phase 27 LLVM IR: `String` return type lowered to `ptr` and printed from a function call |
 | `testdata/backend/llvm_smoke/string_param_print.osty` | `param string\n` | Phase 28 LLVM IR: `String` parameter and argument passing through helper calls |
 | `testdata/backend/llvm_smoke/string_mut_print.osty` | `after\n` | Phase 29 LLVM IR: mutable local `String` slot, assignment, load, and print |
+| `testdata/backend/llvm_smoke/struct_field_print.osty` | `42\n` | Phase 30 LLVM IR: named struct type definition, aggregate literal via `insertvalue`, and field reads via `extractvalue` |
+| `testdata/backend/llvm_smoke/struct_return_print.osty` | `42\n` | Phase 31 LLVM IR: simple struct value returned from a helper function and read in `main` |
+| `testdata/backend/llvm_smoke/struct_param_print.osty` | `42\n` | Phase 32 LLVM IR: simple struct value passed as a function parameter |
+| `testdata/backend/llvm_smoke/struct_mut_print.osty` | `42\n` | Phase 33 LLVM IR: mutable struct local slot, whole-value assignment, load, and field read |
+| `testdata/backend/llvm_smoke/enum_variant_print.osty` | `42\n` | Phase 34 LLVM IR: payload-free enum variants lower to Osty-owned `i64` tag values and compare in an `if` |
+| `testdata/backend/llvm_smoke/enum_return_print.osty` | `42\n` | Phase 35 LLVM IR: payload-free enum tag values cross function return boundaries |
+| `testdata/backend/llvm_smoke/enum_param_print.osty` | `42\n` | Phase 36 LLVM IR: payload-free enum tag values cross function parameter boundaries |
+| `testdata/backend/llvm_smoke/enum_mut_print.osty` | `42\n` | Phase 37 LLVM IR: mutable enum local slot, whole-value assignment, load, and comparison |
 
-The Phase 10 skeleton behavior and the Phase 12-15 plus Phase 23-24 lowering
+The Phase 10 skeleton behavior and the Phase 12-15 plus Phase 23-37 lowering
 behavior are mirrored in
 `examples/selfhost-core/llvmgen.osty` so the LLVM backend logic is authored in
 Osty first. The Go `internal/llvmgen` package includes generated bridge code
 from that Osty source for module/function/skeleton rendering. A backend test
 transpiles the Osty emitter again and compares its
-minimal/scalar/control-flow/booleans/string and skeleton output byte-for-byte
+minimal/scalar/control-flow/booleans/string/struct/enum and skeleton output byte-for-byte
 against the production bridge.
 
 These fixtures are deliberately smaller than the current examples. They are
@@ -123,6 +131,20 @@ boundaries and mutable locals. The bridge now lowers the `String` type to
 `ptr`, so String-returning functions, String parameters, and mutable String
 slots can reuse the existing self-hosted call, return, load, store, and print
 builders.
+
+Phases 30-33 add the first value-aggregate struct path. Top-level non-generic
+struct declarations lower to named LLVM types, struct literals are assembled
+with the Osty-owned `insertvalue` builder, field reads use the Osty-owned
+`extractvalue` builder, and simple struct values can cross return/parameter
+boundaries or live in mutable local slots. The Go bridge still only collects
+declaration field order and source expression shape before calling generated
+self-hosted helpers.
+
+Phases 34-37 add the first payload-free enum path. Bare variants lower to
+Osty-owned `i64` tag values, so equality, if branches, function return/parameter
+boundaries, and mutable local slots can execute before the later tagged-payload
+ABI and match lowering work. The initial smoke fixtures use unqualified variant
+names because the self-hosted checker already supports that form.
 
 ## Promotion Rules
 

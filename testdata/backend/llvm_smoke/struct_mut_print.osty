@@ -1,0 +1,9 @@
+struct Box {
+    value: Int
+}
+
+fn main() {
+    let mut box = Box { value: 1 }
+    box = Box { value: 42 }
+    println(box.value)
+}

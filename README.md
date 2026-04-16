@@ -239,8 +239,9 @@ newline-separated `else`.
 - `--backend NAME` — code generation backend (`go` or `llvm`; default: `go`;
   `llvm` emits textual `.ll` for the early scalar/control-flow/plain/escaped
   string subset, including immutable/mutable string locals and simple String
-  function boundaries, and falls back to an inspectable skeleton for unsupported
-  shapes with Osty-authored instruction builders and category diagnostics)
+  function boundaries plus simple struct aggregate values and payload-free enum
+  tags, and falls back to an inspectable skeleton for unsupported shapes with
+  Osty-authored instruction builders and category diagnostics)
 - `--emit MODE` — requested text artifact. `go` emits Go source for the Go
   backend; `llvm-ir` is reserved for the LLVM backend.
 
@@ -304,8 +305,9 @@ creating a new one.
 - `--backend NAME` — code generation backend (`go` or `llvm`; default: `go`;
   `llvm` can write textual IR for the early scalar/control-flow/plain/escaped
   string subset, including immutable/mutable string locals and simple String
-  function boundaries, and when `clang` is available, drive object/binary
-  emission for supported programs; unsupported shapes still prepare skeleton
+  function boundaries plus simple struct aggregate values and payload-free enum
+  tags, and when `clang` is available, drive object/binary emission for
+  supported programs; unsupported shapes still prepare skeleton
   artifacts and report the missing lowering through categorized diagnostics
   generated from the Osty selfhost-core backend policy; supported scalar
   instruction strings are generated from that same backend core)

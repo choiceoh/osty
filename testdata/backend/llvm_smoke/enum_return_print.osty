@@ -1,0 +1,16 @@
+enum Switch {
+    Off
+    On
+}
+
+fn pick() -> Switch {
+    On
+}
+
+fn main() {
+    if pick() == On {
+        println(42)
+    } else {
+        println(0)
+    }
+}

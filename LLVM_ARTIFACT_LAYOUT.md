@@ -299,6 +299,27 @@ The initial helper package for this plan is `internal/backend`.
 30. Add mutable String locals. Done in Phase 29: mutable `String` slots use
     `alloca ptr`, `store ptr`, and `load ptr` through the existing Osty-owned
     mutable local helpers.
+31. Add named struct type definitions and field reads. Done in Phase 30:
+    non-generic struct declarations emit `%Name = type { ... }`, struct
+    literals use the Osty-owned `insertvalue` builder, and field reads use the
+    Osty-owned `extractvalue` builder.
+32. Add struct return values. Done in Phase 31: simple aggregate struct values
+    can be returned from helper functions and read in `main`.
+33. Add struct parameters. Done in Phase 32: simple aggregate struct values can
+    be passed to helper functions and field-read inside the callee.
+34. Add mutable struct locals. Done in Phase 33: mutable struct slots reuse the
+    generic Osty-owned alloca/store/load helpers for whole-value assignment and
+    later field extraction.
+35. Add payload-free enum variant values. Done in Phase 34: bare variants lower
+    to Osty-owned `i64` tag values and can participate in equality/if smoke
+    paths.
+36. Add enum return values. Done in Phase 35: payload-free enum tag values can
+    cross helper return boundaries.
+37. Add enum parameters. Done in Phase 36: payload-free enum tag values can
+    cross helper parameter boundaries.
+38. Add mutable enum locals. Done in Phase 37: enum tag values reuse the generic
+    Osty-owned alloca/store/load helpers for whole-value assignment and later
+    comparison.
 
 The backend subdirectory change should land before the LLVM backend writes any
 files, so LLVM never shares the old Go-only output location.

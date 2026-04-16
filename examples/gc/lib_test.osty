@@ -93,6 +93,10 @@ fn survivorSpaceGcConfig(survivorLimit: Int, promotionAge: Int) -> GcConfig {
         largeObjectThreshold: 512,
         tlabSize: 64,
         cardSize: 64,
+        schedulerSafepointInterval: 2,
+        mutatorAssistBytes: 32,
+        concurrentMarkBudget: 1,
+        evacuationThresholdPercent: 50,
     }
 }
 
@@ -106,6 +110,10 @@ fn humongousSpaceGcConfig() -> GcConfig {
         largeObjectThreshold: 32,
         tlabSize: 64,
         cardSize: 64,
+        schedulerSafepointInterval: 2,
+        mutatorAssistBytes: 32,
+        concurrentMarkBudget: 1,
+        evacuationThresholdPercent: 50,
     }
 }
 
@@ -279,6 +287,10 @@ fn testTelemetryRecordsNurseryPressureTrigger() {
             largeObjectThreshold: 512,
             tlabSize: 64,
             cardSize: 64,
+            schedulerSafepointInterval: 2,
+            mutatorAssistBytes: 32,
+            concurrentMarkBudget: 1,
+            evacuationThresholdPercent: 50,
         },
     )
     let first = heap.allocate(GcRecord, 16)
@@ -991,6 +1003,244 @@ fn testIncrementalWriteBarrierKeepsNewBlackToWhiteEdge() {
     testing.assertEq(heap.phaseNow(), GcIdle)
 }
 
+fn testIncrementalSchedulerRunsBudgetedSafepointSteps() {
+    let mut heap = newGcHeap(testGcConfig())
+    let root = heap.allocate(GcRecord, 16)
+    let child = heap.allocate(GcArray, 16)
+    let grandchild = heap.allocate(GcClosure, 16)
+    testing.assert(heap.addRoot(root))
+    testing.assert(heap.link(root, child))
+    testing.assert(heap.link(child, grandchild))
+    assertValid(heap)
+
+    let idle = heap.schedulerSafepoint("loop")
+    assertValid(heap)
+    testing.assertEq(idle.kind, "scheduler-idle")
+    testing.assertEq(heap.schedulerSafepointCount(), 1)
+    testing.assertEq(heap.schedulerCycleStartCount(), 0)
+
+    let mark = heap.schedulerSafepoint("loop")
+    assertValid(heap)
+    testing.assertEq(mark.kind, "incremental-mark")
+    testing.assertEq(mark.trigger, "scheduler.loop")
+    testing.assertEq(mark.markSteps, 1)
+    testing.assertEq(heap.phaseNow(), GcMarking)
+    testing.assertEq(heap.schedulerSafepointCount(), 2)
+    testing.assertEq(heap.schedulerStepCount(), 1)
+    testing.assertEq(heap.schedulerLastBudget(), 1)
+    testing.assertEq(heap.schedulerCycleStartCount(), 1)
+
+    let done = heap.finishIncremental()
+    assertValid(heap)
+    testing.assertEq(done.kind, "incremental-sweep")
+    testing.assertEq(heap.schedulerCycleCompleteCount(), 1)
+    testing.assert(heap.contains(root))
+    testing.assert(heap.contains(child))
+    testing.assert(heap.contains(grandchild))
+}
+
+fn testMutatorAssistStartsIncrementalCycleOnDebt() {
+    let mut heap = newGcHeap(testGcConfig())
+    let root = heap.allocate(GcRecord, 16)
+    let child = heap.allocate(GcArray, 16)
+    let grandchild = heap.allocate(GcClosure, 16)
+    testing.assert(heap.addRoot(root))
+    testing.assert(heap.link(root, child))
+    testing.assert(heap.link(child, grandchild))
+    assertValid(heap)
+
+    let idle = heap.mutatorAssist(16)
+    assertValid(heap)
+    testing.assertEq(idle.kind, "mutator-assist-idle")
+    testing.assertEq(heap.schedulerAllocationDebtBytes(), 16)
+    testing.assertEq(heap.schedulerMutatorAssistStepCount(), 0)
+
+    let mark = heap.mutatorAssist(16)
+    assertValid(heap)
+    testing.assertEq(mark.kind, "incremental-mark")
+    testing.assertEq(mark.markSteps, 1)
+    testing.assertEq(heap.schedulerAllocationDebtBytes(), 32)
+    testing.assertEq(heap.schedulerMutatorAssistStepCount(), 1)
+    testing.assertEq(heap.schedulerCycleStartCount(), 1)
+
+    let done = heap.finishIncremental()
+    assertValid(heap)
+    testing.assertEq(done.kind, "incremental-sweep")
+    testing.assertEq(heap.schedulerAllocationDebtBytes(), 0)
+    testing.assertEq(heap.schedulerCycleCompleteCount(), 1)
+}
+
+fn testMostlyConcurrentMarkKeepsLateMutationAlive() {
+    let mut heap = newGcHeap(testGcConfig())
+    let root = heap.allocate(GcRecord, 16)
+    let existing = heap.allocate(GcArray, 16)
+    let late = heap.allocate(GcClosure, 16)
+    testing.assert(heap.addRoot(root))
+    testing.assert(heap.link(root, existing))
+    assertValid(heap)
+
+    testing.assert(heap.startMostlyConcurrentMark())
+    assertValid(heap)
+    let slice = heap.stepMostlyConcurrentMark()
+    assertValid(heap)
+    testing.assertEq(slice.kind, "concurrent-mark")
+    testing.assertEq(slice.markSteps, 1)
+    testing.assertEq(heap.concurrentMarkActive(), true)
+    testing.assertEq(heap.concurrentMarkSliceCount(), 1)
+    testing.assertEq(heap.concurrentMarkStepCount(), 1)
+    testing.assertEq(heap.concurrentSnapshotRootCount(), 1)
+
+    testing.assert(heap.link(root, late))
+    assertValid(heap)
+    testing.assertEq(heap.barrierIncrementalShadeCount(), 1)
+
+    let done = heap.finishMostlyConcurrentMark()
+    assertValid(heap)
+    testing.assertEq(done.kind, "concurrent-sweep")
+    testing.assertEq(heap.concurrentMarkActive(), false)
+    testing.assertEq(heap.concurrentRemarkRootCount(), 1)
+    testing.assertEq(heap.concurrentBarrierShadeDelta(), 1)
+    testing.assertEq(heap.concurrentMutatorEpoch(), 1)
+    testing.assert(heap.concurrentFinalRemarkStepCount() > 0)
+    testing.assert(heap.contains(root))
+    testing.assert(heap.contains(existing))
+    testing.assert(heap.contains(late))
+}
+
+fn testPolicyProfilesTuneMechanismKnobs() {
+    let latency = gcConfigForProfile(GcLatencyFirstProfile)
+    let throughput = gcConfigForProfile(GcThroughputFirstProfile)
+    let memory = gcConfigForProfile(GcMemoryTightProfile)
+    let heap = newGcHeap(memory)
+    assertValid(heap)
+
+    testing.assertEq(gcPolicyProfileName(GcLatencyFirstProfile), "latency-first")
+    testing.assert(latency.incrementalBudget < throughput.incrementalBudget)
+    testing.assert(latency.schedulerSafepointInterval < throughput.schedulerSafepointInterval)
+    testing.assert(memory.nurseryLimit < throughput.nurseryLimit)
+    testing.assert(memory.evacuationThresholdPercent > latency.evacuationThresholdPercent)
+    testing.assertEq(heap.evacuationThresholdPercent(), 80)
+    testing.assert(heap.shouldEvacuateRegion(80))
+    testing.assert(!(heap.shouldEvacuateRegion(81)))
+}
+
+fn testDiagnosticsSnapshotAndHeapDumpExposeGraph() {
+    let mut heap = newGcHeap(testGcConfig())
+    let root = heap.allocate(GcRecord, 16)
+    let child = heap.allocate(GcArray, 16)
+    let dead = heap.allocate(GcBytes, 16)
+    testing.assert(heap.addRoot(root))
+    testing.assert(heap.link(root, child))
+    assertValid(heap)
+
+    let stats = heap.majorCollect()
+    assertValid(heap)
+    testing.assertEq(stats.kind, "major")
+    testing.assert(!(heap.contains(dead)))
+
+    let snapshot = heap.diagnosticsSnapshot()
+    testing.assert(snapshot.heapValid)
+    testing.assertEq(snapshot.objectCount, 2)
+    testing.assertEq(snapshot.rootCount, 1)
+    testing.assertEq(snapshot.liveBytes, 32)
+    testing.assertEq(snapshot.lastKind, "major")
+    testing.assertEq(snapshot.lastTrigger, "manual")
+    testing.assert(snapshot.lastPauseUnits > 0)
+    testing.assertEq(snapshot.lastReclaimedObjects, 1)
+    testing.assertEq(snapshot.validationMessage, "ok")
+
+    let dump = heap.heapDump()
+    testing.assertEq(dump.objectCount, 2)
+    testing.assertEq(dump.edgeCount, 1)
+    testing.assertEq(dump.rootCount, 1)
+    testing.assertEq(dump.roots[0], root)
+    testing.assertEq(dump.objects[0].id, root)
+    testing.assertEq(dump.objects[0].kind, GcRecord)
+    testing.assertEq(dump.objects[0].refCount, 1)
+    testing.assert(dump.objects[0].rooted)
+    testing.assertEq(dump.edges[0].fromId, root)
+    testing.assertEq(dump.edges[0].toId, child)
+
+    match heap.heapObjectDebugLine(root) {
+        Some(line) -> {
+            testing.assertEq(
+                line,
+                "object id={root} kind=record region=old gen=1 size=16 addr=0 refs=[{child}] root=true pinned=false",
+            )
+        },
+        None -> testing.fail("missing heap object debug line"),
+    }
+    let graph = heap.objectGraphDebug()
+    testing.assert(graph != "")
+    testing.assertEq(tracePhaseName(snapshot.phase), "idle")
+}
+
+fn testStressModesCanDisableAndForceCompaction() {
+    let mut heap = newGcHeap(testGcConfig())
+    let dead = heap.allocate(GcBytes, 20)
+    let live = heap.allocate(GcRecord, 20)
+    testing.assert(heap.addRoot(live))
+    assertValid(heap)
+
+    let noCompact = heap.runStressMode(GcStressNoCompaction)
+    assertValid(heap)
+    testing.assertEq(noCompact.kind, "major-no-compact")
+    testing.assertEq(noCompact.trigger, "stress.no-compaction")
+    testing.assertEq(noCompact.compactedObjects, 0)
+    testing.assert(!(heap.contains(dead)))
+    testing.assertEq(intOr(heap.addressOf(live), -1), 20)
+    testing.assert(heap.fragmentedBytes() > 0)
+    testing.assertEq(heap.forwardingEntryCount(), 0)
+
+    let compact = heap.runStressMode(GcStressAlwaysCompact)
+    assertValid(heap)
+    testing.assertEq(compact.kind, "major")
+    testing.assertEq(compact.trigger, "stress.always-compact")
+    testing.assertEq(compact.compactedObjects, 1)
+    testing.assertEq(intOr(heap.addressOf(live), -1), 0)
+    testing.assertEq(heap.fragmentedBytes(), 0)
+    testing.assertEq(gcStressModeName(GcStressEveryAllocationMinor), "every-allocation-minor")
+}
+
+fn testHardeningReportAuditsBarriersAndBudgets() {
+    let mut heap = newGcHeap(testGcConfig())
+    let parent = heap.allocate(GcRecord, 16)
+    let child = heap.allocate(GcArray, 16)
+    testing.assert(heap.addRoot(parent))
+    match heap.lowerStructFieldStore(parent, 0, "child", child) {
+        Some(_) -> {},
+        None -> testing.fail("lowered field store failed"),
+    }
+    let _ = heap.majorCollect()
+    assertValid(heap)
+
+    let audit = heap.barrierAudit()
+    testing.assert(audit.passed)
+    testing.assertEq(audit.loweredSlots, 1)
+    testing.assertEq(audit.invalidObjectReferences, 0)
+    testing.assertEq(audit.missingOwnerRefs, 0)
+
+    let thresholds = gcPerformanceThresholdsForProfile(GcThroughputFirstProfile)
+    let performance = heap.performanceReport(thresholds)
+    testing.assert(performance.passed)
+    testing.assert(performance.pauseUnits > 0)
+
+    let report = heap.hardeningReport(thresholds)
+    testing.assert(report.passed)
+    testing.assert(report.heapValid)
+    testing.assert(report.barrierAuditPassed)
+    testing.assert(report.performancePassed)
+    testing.assertEq(report.runtimeContractVersion, 1)
+    testing.assertEq(report.loweredSlots, 1)
+
+    let contract = heap.runtimeContract()
+    testing.assert(contract.oomReturnsResult)
+    testing.assert(contract.abortSkipsGc)
+    testing.assert(contract.deferRootsRequireStackMap)
+    testing.assert(contract.ffiPinsUsePinBit)
+    testing.assert(contract.refSameUsesStableIdentity)
+}
+
 fn testMajorCompactionClosesHoles() {
     let mut heap = newGcHeap(testGcConfig())
     let first = heap.allocate(GcRecord, 10)
@@ -1165,6 +1415,10 @@ fn testTryAllocateReportsOutOfMemoryAfterFullCollection() {
             largeObjectThreshold: 512,
             tlabSize: 64,
             cardSize: 64,
+            schedulerSafepointInterval: 2,
+            mutatorAssistBytes: 32,
+            concurrentMarkBudget: 1,
+            evacuationThresholdPercent: 50,
         },
     )
     let rooted = heap.allocate(GcRecord, 32)
@@ -1222,6 +1476,10 @@ fn testTlabRefillAccountsWasteWithoutCollecting() {
             largeObjectThreshold: 512,
             tlabSize: 64,
             cardSize: 64,
+            schedulerSafepointInterval: 2,
+            mutatorAssistBytes: 32,
+            concurrentMarkBudget: 1,
+            evacuationThresholdPercent: 50,
         },
     )
 
@@ -1260,6 +1518,10 @@ fn testTlabRefillCanTriggerNurseryCollection() {
             largeObjectThreshold: 512,
             tlabSize: 64,
             cardSize: 64,
+            schedulerSafepointInterval: 2,
+            mutatorAssistBytes: 32,
+            concurrentMarkBudget: 1,
+            evacuationThresholdPercent: 50,
         },
     )
 
@@ -1314,6 +1576,10 @@ fn testLargeThreadAllocationBypassesTlab() {
             largeObjectThreshold: 32,
             tlabSize: 64,
             cardSize: 64,
+            schedulerSafepointInterval: 2,
+            mutatorAssistBytes: 32,
+            concurrentMarkBudget: 1,
+            evacuationThresholdPercent: 50,
         },
     )
 
@@ -2042,6 +2308,10 @@ fn stressGcConfig() -> GcConfig {
         largeObjectThreshold: 80,
         tlabSize: 64,
         cardSize: 64,
+        schedulerSafepointInterval: 3,
+        mutatorAssistBytes: 64,
+        concurrentMarkBudget: 3,
+        evacuationThresholdPercent: 45,
     }
 }
 

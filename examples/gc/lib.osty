@@ -34,6 +34,21 @@ pub enum TracePhase {
     GcSweeping,
 }
 
+pub enum GcPolicyProfile {
+    GcLatencyFirstProfile,
+    GcThroughputFirstProfile,
+    GcMemoryTightProfile,
+}
+
+pub enum GcStressMode {
+    GcStressOff,
+    GcStressEveryAllocationMinor,
+    GcStressFrequentFull,
+    GcStressIncrementalStep,
+    GcStressNoCompaction,
+    GcStressAlwaysCompact,
+}
+
 pub struct GcConfig {
     pub nurseryLimit: Int,
     pub survivorLimit: Int,
@@ -43,6 +58,10 @@ pub struct GcConfig {
     pub largeObjectThreshold: Int,
     pub tlabSize: Int,
     pub cardSize: Int,
+    pub schedulerSafepointInterval: Int,
+    pub mutatorAssistBytes: Int,
+    pub concurrentMarkBudget: Int,
+    pub evacuationThresholdPercent: Int,
 }
 
 pub struct GcStats {
@@ -214,6 +233,141 @@ pub struct GcRemapTrace {
     pub loweredSlotsVisited: Int,
     pub loweredSlotsRemapped: Int,
     pub verified: Bool,
+}
+
+pub struct GcIncrementalSchedulerTrace {
+    pub safepoints: Int,
+    pub scheduledSteps: Int,
+    pub mutatorAssistSteps: Int,
+    pub cyclesStarted: Int,
+    pub cyclesCompleted: Int,
+    pub allocationDebtBytes: Int,
+    pub lastBudget: Int,
+}
+
+pub struct GcConcurrentMarkTrace {
+    pub active: Bool,
+    pub snapshotRoots: Int,
+    pub remarkRoots: Int,
+    pub slices: Int,
+    pub concurrentMarkSteps: Int,
+    pub finalRemarkSteps: Int,
+    pub mutatorEpoch: Int,
+    pub barrierShadesAtStart: Int,
+    pub barrierShadesAtFinish: Int,
+}
+
+pub struct GcDiagnosticsSnapshot {
+    pub cycle: Int,
+    pub phase: TracePhase,
+    pub objectCount: Int,
+    pub rootCount: Int,
+    pub globalRootCount: Int,
+    pub asyncFrameRootCount: Int,
+    pub liveBytes: Int,
+    pub fragmentedBytes: Int,
+    pub nurseryBytes: Int,
+    pub oldBytes: Int,
+    pub humongousBytes: Int,
+    pub rememberedObjects: Int,
+    pub dirtyCards: Int,
+    pub forwardingEntries: Int,
+    pub loweredPointerSlots: Int,
+    pub minorCollections: Int,
+    pub majorCollections: Int,
+    pub barrierPostWriteCalls: Int,
+    pub barrierRememberedSetWrites: Int,
+    pub barrierIncrementalShades: Int,
+    pub schedulerSafepoints: Int,
+    pub schedulerAssistSteps: Int,
+    pub concurrentMarkSlices: Int,
+    pub lastKind: String,
+    pub lastTrigger: String,
+    pub lastPauseUnits: Int,
+    pub lastReclaimedObjects: Int,
+    pub heapValid: Bool,
+    pub validationMessage: String,
+}
+
+pub struct GcHeapDumpObject {
+    pub id: Int,
+    pub kind: ObjectKind,
+    pub size: Int,
+    pub address: Int,
+    pub generation: Int,
+    pub age: Int,
+    pub color: MarkColor,
+    pub region: GcRegionKind,
+    pub refCount: Int,
+    pub rooted: Bool,
+    pub remembered: Bool,
+    pub pinned: Bool,
+    pub large: Bool,
+}
+
+pub struct GcHeapDumpEdge {
+    pub fromId: Int,
+    pub toId: Int,
+}
+
+pub struct GcHeapDump {
+    pub cycle: Int,
+    pub phase: TracePhase,
+    pub objectCount: Int,
+    pub edgeCount: Int,
+    pub rootCount: Int,
+    pub liveBytes: Int,
+    pub fragmentedBytes: Int,
+    pub roots: List<Int>,
+    pub objects: List<GcHeapDumpObject>,
+    pub edges: List<GcHeapDumpEdge>,
+}
+
+pub struct GcRuntimeContract {
+    pub version: Int,
+    pub oomReturnsResult: Bool,
+    pub abortSkipsGc: Bool,
+    pub deferRootsRequireStackMap: Bool,
+    pub ffiPinsUsePinBit: Bool,
+    pub stableIdentityUsesObjectId: Bool,
+    pub movingCollectorRequiresRemap: Bool,
+    pub refSameUsesStableIdentity: Bool,
+}
+
+pub struct GcBarrierAudit {
+    pub loweredSlots: Int,
+    pub invalidObjectReferences: Int,
+    pub missingOwnerRefs: Int,
+    pub rememberedMismatches: Int,
+    pub passed: Bool,
+}
+
+pub struct GcPerformanceThresholds {
+    pub maxPauseUnits: Int,
+    pub maxFragmentedBytes: Int,
+    pub maxLiveBytes: Int,
+    pub maxRememberedObjects: Int,
+    pub maxDirtyCards: Int,
+}
+
+pub struct GcPerformanceReport {
+    pub pauseUnits: Int,
+    pub fragmentedBytes: Int,
+    pub liveBytes: Int,
+    pub rememberedObjects: Int,
+    pub dirtyCards: Int,
+    pub passed: Bool,
+}
+
+pub struct GcHardeningReport {
+    pub runtimeContractVersion: Int,
+    pub heapValid: Bool,
+    pub barrierAuditPassed: Bool,
+    pub performancePassed: Bool,
+    pub ffiPinnedObjects: Int,
+    pub loweredSlots: Int,
+    pub validationMessage: String,
+    pub passed: Bool,
 }
 
 pub enum GcLoweredStoreKind {
@@ -429,6 +583,8 @@ pub struct GcHeap {
     lastFullMarkTrace: GcFullMarkTrace,
     lastEvacuationTrace: GcEvacuationTrace,
     lastRemapTrace: GcRemapTrace,
+    schedulerTrace: GcIncrementalSchedulerTrace,
+    concurrentTrace: GcConcurrentMarkTrace,
 
     pub fn tryAllocate(mut self, kind: ObjectKind, size: Int) -> Result<Int, String> {
         let normalized = normalizeSize(size)
@@ -1193,6 +1349,10 @@ pub struct GcHeap {
     }
 
     pub fn stepIncremental(mut self) -> GcStats {
+        self.stepIncrementalWithBudget("incremental-budget", self.config.incrementalBudget)
+    }
+
+    fn stepIncrementalWithBudget(mut self, trigger: String, budget: Int) -> GcStats {
         if self.phase == GcIdle {
             self.startIncrementalMajor()
         }
@@ -1203,11 +1363,11 @@ pub struct GcHeap {
         let allocationBytesSinceLastGC = self.allocatedSinceLastGC
 
         if self.phase == GcMarking {
-            let markSteps = self.drainGrey(self.config.incrementalBudget, false)
+            let markSteps = self.drainGrey(budget, false)
             if self.grey.len() > 0 {
                 let stats = GcStats {
                     kind: "incremental-mark",
-                    trigger: "incremental-budget",
+                    trigger,
                     cycle: self.cycle,
                     beforeObjects,
                     afterObjects: self.objectCount(),
@@ -1236,12 +1396,14 @@ pub struct GcHeap {
             let compactedObjects = self.compactLive()
             self.rebuildRemembered()
             self.majorCollections = self.majorCollections + 1
+            self.recordSchedulerCycleComplete()
             self.phase = GcIdle
             self.allocatedSinceLastGC = 0
+            self.clearSchedulerDebtIfIdle()
 
             let stats = GcStats {
                 kind: "incremental-sweep",
-                trigger: "incremental-budget",
+                trigger,
                 cycle: self.cycle,
                 beforeObjects,
                 afterObjects: self.objectCount(),
@@ -1276,8 +1438,421 @@ pub struct GcHeap {
         last
     }
 
+    pub fn schedulerSafepoint(mut self, reason: String) -> GcStats {
+        self.recordSchedulerSafepoint()
+        if self.phase == GcIdle && self.shouldStartIncrementalAtSafepoint() {
+            self.startIncrementalMajor()
+            self.recordSchedulerCycleStart()
+        }
+        if self.phase == GcMarking {
+            self.recordSchedulerStep(self.config.incrementalBudget, false)
+            return self.stepIncrementalWithBudget(
+                "scheduler.{reason}",
+                self.config.incrementalBudget,
+            )
+        }
+        emptyStats("scheduler-idle", self)
+    }
+
+    pub fn mutatorAssist(mut self, allocationBytes: Int) -> GcStats {
+        if allocationBytes > 0 {
+            self.addSchedulerAllocationDebt(allocationBytes)
+        }
+        if self.phase == GcIdle && self.shouldStartMutatorAssistCycle() {
+            self.startIncrementalMajor()
+            self.recordSchedulerCycleStart()
+        }
+        if self.phase == GcMarking {
+            self.recordSchedulerStep(self.config.incrementalBudget, true)
+            let stats = self.stepIncrementalWithBudget(
+                "mutator-assist",
+                self.config.incrementalBudget,
+            )
+            self.clearSchedulerDebtIfIdle()
+            return stats
+        }
+        emptyStats("mutator-assist-idle", self)
+    }
+
+    pub fn startMostlyConcurrentMark(mut self) -> Bool {
+        if self.phase != GcIdle {
+            return false
+        }
+        let mut trace = emptyConcurrentMarkTrace()
+        trace.active = true
+        trace.snapshotRoots = self.rootCount() + self.globalObjectRootCount() + self.asyncFrameRootCount()
+        trace.mutatorEpoch = self.concurrentTrace.mutatorEpoch + 1
+        trace.barrierShadesAtStart = self.barriers.incrementalShades
+        self.concurrentTrace = trace
+        self.startIncrementalMajor()
+        true
+    }
+
+    pub fn stepMostlyConcurrentMark(mut self) -> GcStats {
+        if self.phase == GcIdle {
+            if !(self.startMostlyConcurrentMark()) {
+                return emptyStats("concurrent-idle", self)
+            }
+        }
+        if !(self.concurrentTrace.active) {
+            return emptyStats("concurrent-idle", self)
+        }
+
+        let beforeObjects = self.objectCount()
+        let beforeBytes = self.liveBytes
+        let beforeFragmentedBytes = self.fragmentedBytes()
+        let allocationBytesSinceLastGC = self.allocatedSinceLastGC
+
+        if self.phase == GcMarking {
+            let markSteps = self.drainGrey(self.config.concurrentMarkBudget, false)
+            self.recordConcurrentMarkSlice(markSteps)
+            let mut kind = "concurrent-ready"
+            if self.grey.len() > 0 {
+                kind = "concurrent-mark"
+            }
+            let stats = GcStats {
+                kind,
+                trigger: "concurrent-budget",
+                cycle: self.cycle,
+                beforeObjects,
+                afterObjects: self.objectCount(),
+                reclaimedObjects: 0,
+                beforeBytes,
+                afterBytes: self.liveBytes,
+                reclaimedBytes: 0,
+                promotedObjects: 0,
+                compactedObjects: 0,
+                rememberedScanned: 0,
+                markSteps,
+                pauseUnits: telemetryPauseUnits(markSteps, 0, 0, 0, 0),
+                allocationBytesSinceLastGC,
+                beforeFragmentedBytes,
+                afterFragmentedBytes: self.fragmentedBytes(),
+                fragmentedBytes: self.fragmentedBytes(),
+                survivalPercent: percent(self.objectCount(), beforeObjects),
+                promotionPercent: 0,
+            }
+            self.lastStats = Some(stats)
+            return stats
+        }
+
+        emptyStats("concurrent-idle", self)
+    }
+
+    pub fn finishMostlyConcurrentMark(mut self) -> GcStats {
+        if self.phase == GcIdle {
+            return emptyStats("concurrent-idle", self)
+        }
+        if !(self.concurrentTrace.active) {
+            return emptyStats("concurrent-idle", self)
+        }
+
+        let beforeObjects = self.objectCount()
+        let beforeBytes = self.liveBytes
+        let beforeFragmentedBytes = self.fragmentedBytes()
+        let allocationBytesSinceLastGC = self.allocatedSinceLastGC
+        let remarkRoots = self.rootCount() + self.globalObjectRootCount() + self.asyncFrameRootCount()
+
+        if self.phase == GcMarking {
+            for id in self.roots.toList() {
+                self.shade(id)
+            }
+            self.shadeGlobalRoots()
+            self.shadeAsyncFrameRoots()
+        }
+        let finalRemarkSteps = self.drainGrey(0, false)
+
+        self.phase = GcSweeping
+        let (reclaimedObjects, reclaimedBytes) = self.sweepAll()
+        let compactedObjects = self.compactLive()
+        self.rebuildRemembered()
+        self.majorCollections = self.majorCollections + 1
+        self.phase = GcIdle
+        self.allocatedSinceLastGC = 0
+        self.finishConcurrentTrace(remarkRoots, finalRemarkSteps)
+
+        let stats = GcStats {
+            kind: "concurrent-sweep",
+            trigger: "concurrent-final-remark",
+            cycle: self.cycle,
+            beforeObjects,
+            afterObjects: self.objectCount(),
+            reclaimedObjects,
+            beforeBytes,
+            afterBytes: self.liveBytes,
+            reclaimedBytes,
+            promotedObjects: 0,
+            compactedObjects,
+            rememberedScanned: 0,
+            markSteps: finalRemarkSteps,
+            pauseUnits: telemetryPauseUnits(
+                finalRemarkSteps,
+                reclaimedObjects,
+                0,
+                compactedObjects,
+                0,
+            ),
+            allocationBytesSinceLastGC,
+            beforeFragmentedBytes,
+            afterFragmentedBytes: self.fragmentedBytes(),
+            fragmentedBytes: self.fragmentedBytes(),
+            survivalPercent: percent(self.objectCount(), beforeObjects),
+            promotionPercent: 0,
+        }
+        self.lastStats = Some(stats)
+        stats
+    }
+
     pub fn lastCollectionStats(self) -> GcStats? {
         self.lastStats
+    }
+
+    pub fn diagnosticsSnapshot(self) -> GcDiagnosticsSnapshot {
+        let mut lastKind = ""
+        let mut lastTrigger = ""
+        let mut lastPauseUnits = 0
+        let mut lastReclaimedObjects = 0
+        match self.lastStats {
+            Some(stats) -> {
+                lastKind = stats.kind
+                lastTrigger = stats.trigger
+                lastPauseUnits = stats.pauseUnits
+                lastReclaimedObjects = stats.reclaimedObjects
+            },
+            None -> {},
+        }
+
+        let mut heapValid = true
+        let mut validationMessage = "ok"
+        match self.validateHeap() {
+            Ok(_) -> {},
+            Err(e) -> {
+                heapValid = false
+                validationMessage = e
+            },
+        }
+
+        GcDiagnosticsSnapshot {
+            cycle: self.cycle,
+            phase: self.phase,
+            objectCount: self.objectCount(),
+            rootCount: self.rootCount(),
+            globalRootCount: self.globalRootCount(),
+            asyncFrameRootCount: self.asyncFrameRootCount(),
+            liveBytes: self.liveBytes,
+            fragmentedBytes: self.fragmentedBytes(),
+            nurseryBytes: self.nurseryBytes(),
+            oldBytes: self.oldBytes(),
+            humongousBytes: self.humongousBytes(),
+            rememberedObjects: self.rememberedCount(),
+            dirtyCards: self.dirtyCardCount(),
+            forwardingEntries: self.forwardingEntryCount(),
+            loweredPointerSlots: self.loweredPointerSlotCount(),
+            minorCollections: self.minorCollections,
+            majorCollections: self.majorCollections,
+            barrierPostWriteCalls: self.barriers.postWriteCalls,
+            barrierRememberedSetWrites: self.barriers.rememberedSetWrites,
+            barrierIncrementalShades: self.barriers.incrementalShades,
+            schedulerSafepoints: self.schedulerTrace.safepoints,
+            schedulerAssistSteps: self.schedulerTrace.mutatorAssistSteps,
+            concurrentMarkSlices: self.concurrentTrace.slices,
+            lastKind,
+            lastTrigger,
+            lastPauseUnits,
+            lastReclaimedObjects,
+            heapValid,
+            validationMessage,
+        }
+    }
+
+    pub fn diagnosticsLine(self) -> String {
+        let snapshot = self.diagnosticsSnapshot()
+        "gc cycle={snapshot.cycle} phase={tracePhaseName(snapshot.phase)} objects={snapshot.objectCount} live={snapshot.liveBytes} fragmented={snapshot.fragmentedBytes} last={snapshot.lastKind}/{snapshot.lastTrigger} valid={snapshot.heapValid}"
+    }
+
+    pub fn heapDump(self) -> GcHeapDump {
+        let mut objects: List<GcHeapDumpObject> = []
+        let mut edges: List<GcHeapDumpEdge> = []
+        let roots = self.roots.toList()
+
+        for id in self.objects.keys().sorted() {
+            let obj = self.objects[id]
+            objects.push(
+                GcHeapDumpObject {
+                    id,
+                    kind: obj.kind,
+                    size: obj.size,
+                    address: obj.address,
+                    generation: obj.generation,
+                    age: obj.age,
+                    color: obj.color,
+                    region: obj.region,
+                    refCount: intListLen(obj.refs),
+                    rooted: self.roots.contains(id),
+                    remembered: obj.remembered,
+                    pinned: obj.pinned,
+                    large: obj.large,
+                },
+            )
+            for childId in obj.refs {
+                edges.push(GcHeapDumpEdge { fromId: id, toId: childId })
+            }
+        }
+
+        GcHeapDump {
+            cycle: self.cycle,
+            phase: self.phase,
+            objectCount: objects.len(),
+            edgeCount: edges.len(),
+            rootCount: intListLen(roots),
+            liveBytes: self.liveBytes,
+            fragmentedBytes: self.fragmentedBytes(),
+            roots,
+            objects,
+            edges,
+        }
+    }
+
+    pub fn heapObjectDebugLine(self, id: Int) -> String? {
+        if !(self.objects.containsKey(id)) {
+            return None
+        }
+        let obj = self.objects[id]
+        let kind = objectKindName(obj.kind)
+        let region = gcRegionKindName(obj.region)
+        let refs = intListDebug(obj.refs)
+        let rooted = self.roots.contains(id)
+        Some(
+            "object id={id} kind={kind} region={region} gen={obj.generation} size={obj.size} addr={obj.address} refs=[{refs}] root={rooted} pinned={obj.pinned}",
+        )
+    }
+
+    pub fn objectGraphDebug(self) -> String {
+        let phase = tracePhaseName(self.phase)
+        let objects = self.objectCount()
+        let edges = self.edgeCount()
+        let roots = intListDebug(self.roots.toList())
+        let mut out = "gc graph cycle={self.cycle} phase={phase} objects={objects} edges={edges} roots=[{roots}]"
+        for id in self.objects.keys().sorted() {
+            match self.heapObjectDebugLine(id) {
+                Some(line) -> {
+                    out = "{out}\n\\\{line\}"
+                },
+                None -> {},
+            }
+        }
+        out
+    }
+
+    pub fn runStressMode(mut self, mode: GcStressMode) -> GcStats {
+        if self.phase != GcIdle && mode != GcStressIncrementalStep {
+            return emptyStats("stress-busy", self)
+        }
+        match mode {
+            GcStressOff -> emptyStats("stress-off", self),
+            GcStressEveryAllocationMinor -> self.minorCollectFor("stress.every-allocation-minor"),
+            GcStressFrequentFull -> self.majorCollectFor("stress.frequent-full"),
+            GcStressIncrementalStep -> self.stepIncrementalWithBudget(
+                "stress.incremental-step",
+                self.config.incrementalBudget,
+            ),
+            GcStressNoCompaction -> self.majorCollectWithoutCompactionFor("stress.no-compaction"),
+            GcStressAlwaysCompact -> self.majorCollectFor("stress.always-compact"),
+        }
+    }
+
+    pub fn runtimeContract(self) -> GcRuntimeContract {
+        let _ = self
+        gcRuntimeContractV1()
+    }
+
+    pub fn barrierAudit(self) -> GcBarrierAudit {
+        let mut invalidObjectReferences = 0
+        let mut missingOwnerRefs = 0
+        let mut rememberedMismatches = 0
+
+        for (key, slot) in self.loweredPointerSlots {
+            let _ = key
+            if !(self.objects.containsKey(slot.ownerId)) {
+                invalidObjectReferences = invalidObjectReferences + 1
+            } else if slot.objectId >= 0 {
+                if !(self.objects.containsKey(slot.objectId)) {
+                    invalidObjectReferences = invalidObjectReferences + 1
+                } else {
+                    let owner = self.objects[slot.ownerId]
+                    if !(owner.refs.contains(slot.objectId)) {
+                        missingOwnerRefs = missingOwnerRefs + 1
+                    }
+                }
+            }
+        }
+
+        for (id, obj) in self.objects {
+            let expectedRemembered = obj.generation > 0 && self.hasYoungRef(obj)
+            if obj.remembered != expectedRemembered {
+                rememberedMismatches = rememberedMismatches + 1
+            }
+            if expectedRemembered != self.remembered.contains(id) {
+                rememberedMismatches = rememberedMismatches + 1
+            }
+        }
+
+        GcBarrierAudit {
+            loweredSlots: self.loweredPointerSlotCount(),
+            invalidObjectReferences,
+            missingOwnerRefs,
+            rememberedMismatches,
+            passed: invalidObjectReferences == 0 && missingOwnerRefs == 0 && rememberedMismatches == 0,
+        }
+    }
+
+    pub fn performanceReport(self, thresholds: GcPerformanceThresholds) -> GcPerformanceReport {
+        let mut pauseUnits = 0
+        match self.lastStats {
+            Some(stats) -> {
+                pauseUnits = stats.pauseUnits
+            },
+            None -> {},
+        }
+        let fragmentedBytes = self.fragmentedBytes()
+        let liveBytes = self.liveBytes
+        let rememberedObjects = self.rememberedCount()
+        let dirtyCards = self.dirtyCardCount()
+        let passed = limitAllows(pauseUnits, thresholds.maxPauseUnits) && limitAllows(
+            fragmentedBytes,
+            thresholds.maxFragmentedBytes,
+        ) && limitAllows(liveBytes, thresholds.maxLiveBytes) && limitAllows(
+            rememberedObjects,
+            thresholds.maxRememberedObjects,
+        ) && limitAllows(dirtyCards, thresholds.maxDirtyCards)
+
+        GcPerformanceReport {
+            pauseUnits,
+            fragmentedBytes,
+            liveBytes,
+            rememberedObjects,
+            dirtyCards,
+            passed,
+        }
+    }
+
+    pub fn hardeningReport(self, thresholds: GcPerformanceThresholds) -> GcHardeningReport {
+        let snapshot = self.diagnosticsSnapshot()
+        let audit = self.barrierAudit()
+        let performance = self.performanceReport(thresholds)
+        let contract = self.runtimeContract()
+        let passed = snapshot.heapValid && audit.passed && performance.passed
+
+        GcHardeningReport {
+            runtimeContractVersion: contract.version,
+            heapValid: snapshot.heapValid,
+            barrierAuditPassed: audit.passed,
+            performancePassed: performance.passed,
+            ffiPinnedObjects: self.pinnedObjectCount(),
+            loweredSlots: audit.loweredSlots,
+            validationMessage: snapshot.validationMessage,
+            passed,
+        }
     }
 
     fn minorCollectFor(mut self, trigger: String) -> GcStats {
@@ -1413,6 +1988,74 @@ pub struct GcHeap {
         stats
     }
 
+    fn majorCollectWithoutCompactionFor(mut self, trigger: String) -> GcStats {
+        self.cycle = self.cycle + 1
+        self.retireAllTlabs()
+        let beforeObjects = self.objectCount()
+        let beforeBytes = self.liveBytes
+        let beforeFragmentedBytes = self.fragmentedBytes()
+        let allocationBytesSinceLastGC = self.allocatedSinceLastGC
+
+        self.phase = GcMarking
+        self.clearAllMarks()
+        let rootObjectsSeeded = self.roots.len()
+        let globalRootsSeeded = self.globalObjectRootCount()
+        let asyncFrameRootsSeeded = self.asyncFrameRootCount()
+        for id in self.roots.toList() {
+            self.shade(id)
+        }
+        self.shadeGlobalRoots()
+        self.shadeAsyncFrameRoots()
+        let queueSeeded = self.grey.len()
+        let markSteps = self.drainGrey(0, false)
+        let pointerSlotsScanned = self.markedPointerSlotCount()
+
+        self.phase = GcSweeping
+        let (reclaimedObjects, reclaimedBytes) = self.sweepAll()
+        self.forwarding.clear()
+        self.rebuildRemembered()
+        self.majorCollections = self.majorCollections + 1
+        self.phase = GcIdle
+        self.allocatedSinceLastGC = 0
+        self.lastFullMarkTrace = GcFullMarkTrace {
+            rootObjectsSeeded,
+            globalRootsSeeded,
+            asyncFrameRootsSeeded,
+            queueSeeded,
+            objectsScanned: markSteps,
+            pointerSlotsScanned,
+            regionObjectsVisited: beforeObjects,
+            sweptObjects: reclaimedObjects,
+        }
+        self.lastEvacuationTrace = emptyEvacuationTrace()
+        self.lastRemapTrace = emptyRemapTrace()
+
+        let stats = GcStats {
+            kind: "major-no-compact",
+            trigger,
+            cycle: self.cycle,
+            beforeObjects,
+            afterObjects: self.objectCount(),
+            reclaimedObjects,
+            beforeBytes,
+            afterBytes: self.liveBytes,
+            reclaimedBytes,
+            promotedObjects: 0,
+            compactedObjects: 0,
+            rememberedScanned: 0,
+            markSteps,
+            pauseUnits: telemetryPauseUnits(markSteps, reclaimedObjects, 0, 0, 0),
+            allocationBytesSinceLastGC,
+            beforeFragmentedBytes,
+            afterFragmentedBytes: self.fragmentedBytes(),
+            fragmentedBytes: self.fragmentedBytes(),
+            survivalPercent: percent(self.objectCount(), beforeObjects),
+            promotionPercent: 0,
+        }
+        self.lastStats = Some(stats)
+        stats
+    }
+
     pub fn contains(self, id: Int) -> Bool {
         self.objects.containsKey(id)
     }
@@ -1423,6 +2066,15 @@ pub struct GcHeap {
 
     pub fn rootCount(self) -> Int {
         self.roots.len()
+    }
+
+    pub fn edgeCount(self) -> Int {
+        let mut total = 0
+        for (id, obj) in self.objects {
+            let _ = id
+            total = total + intListLen(obj.refs)
+        }
+        total
     }
 
     pub fn globalRootCount(self) -> Int {
@@ -1726,6 +2378,78 @@ pub struct GcHeap {
 
     pub fn lastRemapVerified(self) -> Bool {
         self.lastRemapTrace.verified
+    }
+
+    pub fn schedulerSafepointCount(self) -> Int {
+        self.schedulerTrace.safepoints
+    }
+
+    pub fn schedulerStepCount(self) -> Int {
+        self.schedulerTrace.scheduledSteps
+    }
+
+    pub fn schedulerMutatorAssistStepCount(self) -> Int {
+        self.schedulerTrace.mutatorAssistSteps
+    }
+
+    pub fn schedulerCycleStartCount(self) -> Int {
+        self.schedulerTrace.cyclesStarted
+    }
+
+    pub fn schedulerCycleCompleteCount(self) -> Int {
+        self.schedulerTrace.cyclesCompleted
+    }
+
+    pub fn schedulerAllocationDebtBytes(self) -> Int {
+        self.schedulerTrace.allocationDebtBytes
+    }
+
+    pub fn schedulerLastBudget(self) -> Int {
+        self.schedulerTrace.lastBudget
+    }
+
+    pub fn concurrentMarkActive(self) -> Bool {
+        self.concurrentTrace.active
+    }
+
+    pub fn concurrentMarkSliceCount(self) -> Int {
+        self.concurrentTrace.slices
+    }
+
+    pub fn concurrentMarkStepCount(self) -> Int {
+        self.concurrentTrace.concurrentMarkSteps
+    }
+
+    pub fn concurrentFinalRemarkStepCount(self) -> Int {
+        self.concurrentTrace.finalRemarkSteps
+    }
+
+    pub fn concurrentSnapshotRootCount(self) -> Int {
+        self.concurrentTrace.snapshotRoots
+    }
+
+    pub fn concurrentRemarkRootCount(self) -> Int {
+        self.concurrentTrace.remarkRoots
+    }
+
+    pub fn concurrentBarrierShadeDelta(self) -> Int {
+        if self.concurrentTrace.barrierShadesAtFinish < self.concurrentTrace.barrierShadesAtStart {
+            0
+        } else {
+            self.concurrentTrace.barrierShadesAtFinish - self.concurrentTrace.barrierShadesAtStart
+        }
+    }
+
+    pub fn concurrentMutatorEpoch(self) -> Int {
+        self.concurrentTrace.mutatorEpoch
+    }
+
+    pub fn evacuationThresholdPercent(self) -> Int {
+        self.config.evacuationThresholdPercent
+    }
+
+    pub fn shouldEvacuateRegion(self, livePercent: Int) -> Bool {
+        livePercent >= 0 && livePercent <= self.config.evacuationThresholdPercent
     }
 
     pub fn nurseryBytes(self) -> Int {
@@ -2072,6 +2796,22 @@ pub struct GcHeap {
         if self.config.cardSize <= 0 {
             return Err("cardSize must be positive: {self.config.cardSize}")
         }
+        if self.config.schedulerSafepointInterval <= 0 {
+            return Err(
+                "schedulerSafepointInterval must be positive: {self.config.schedulerSafepointInterval}",
+            )
+        }
+        if self.config.mutatorAssistBytes < 0 {
+            return Err("mutatorAssistBytes is negative: {self.config.mutatorAssistBytes}")
+        }
+        if self.config.concurrentMarkBudget < 0 {
+            return Err("concurrentMarkBudget is negative: {self.config.concurrentMarkBudget}")
+        }
+        if self.config.evacuationThresholdPercent < 0 || self.config.evacuationThresholdPercent > 100 {
+            return Err(
+                "evacuationThresholdPercent must be in 0..100: {self.config.evacuationThresholdPercent}",
+            )
+        }
 
         for (id, obj) in self.objects {
             if obj.id != id {
@@ -2197,6 +2937,18 @@ pub struct GcHeap {
         }
         if self.lastRemapTrace.rootSlotsVisited < 0 || self.lastRemapTrace.rootSlotsRemapped < 0 || self.lastRemapTrace.objectRefsVisited < 0 || self.lastRemapTrace.objectRefsRemapped < 0 || self.lastRemapTrace.loweredSlotsVisited < 0 || self.lastRemapTrace.loweredSlotsRemapped < 0 {
             return Err("remap trace has negative accounting")
+        }
+        if self.schedulerTrace.safepoints < 0 || self.schedulerTrace.scheduledSteps < 0 || self.schedulerTrace.mutatorAssistSteps < 0 || self.schedulerTrace.cyclesStarted < 0 || self.schedulerTrace.cyclesCompleted < 0 || self.schedulerTrace.allocationDebtBytes < 0 || self.schedulerTrace.lastBudget < 0 {
+            return Err("incremental scheduler trace has negative accounting")
+        }
+        if self.schedulerTrace.cyclesCompleted > self.schedulerTrace.cyclesStarted {
+            return Err("incremental scheduler completed more cycles than it started")
+        }
+        if self.concurrentTrace.snapshotRoots < 0 || self.concurrentTrace.remarkRoots < 0 || self.concurrentTrace.slices < 0 || self.concurrentTrace.concurrentMarkSteps < 0 || self.concurrentTrace.finalRemarkSteps < 0 || self.concurrentTrace.mutatorEpoch < 0 || self.concurrentTrace.barrierShadesAtStart < 0 || self.concurrentTrace.barrierShadesAtFinish < 0 {
+            return Err("concurrent mark trace has negative accounting")
+        }
+        if self.concurrentTrace.active && self.phase == GcIdle {
+            return Err("concurrent mark trace is active while heap is idle")
         }
         if !(self.verifyForwardingTable()) {
             return Err("forwarding table is inconsistent")
@@ -3162,6 +3914,76 @@ pub struct GcHeap {
         self.barriers = barriers
     }
 
+    fn recordSchedulerSafepoint(mut self) {
+        let mut trace = self.schedulerTrace
+        trace.safepoints = trace.safepoints + 1
+        self.schedulerTrace = trace
+    }
+
+    fn recordSchedulerStep(mut self, budget: Int, assist: Bool) {
+        let mut trace = self.schedulerTrace
+        if assist {
+            trace.mutatorAssistSteps = trace.mutatorAssistSteps + 1
+        } else {
+            trace.scheduledSteps = trace.scheduledSteps + 1
+        }
+        trace.lastBudget = budget
+        self.schedulerTrace = trace
+    }
+
+    fn recordSchedulerCycleStart(mut self) {
+        let mut trace = self.schedulerTrace
+        trace.cyclesStarted = trace.cyclesStarted + 1
+        self.schedulerTrace = trace
+    }
+
+    fn recordSchedulerCycleComplete(mut self) {
+        let mut trace = self.schedulerTrace
+        if trace.cyclesCompleted < trace.cyclesStarted {
+            trace.cyclesCompleted = trace.cyclesCompleted + 1
+        }
+        self.schedulerTrace = trace
+    }
+
+    fn addSchedulerAllocationDebt(mut self, bytes: Int) {
+        let mut trace = self.schedulerTrace
+        trace.allocationDebtBytes = trace.allocationDebtBytes + bytes
+        self.schedulerTrace = trace
+    }
+
+    fn clearSchedulerDebtIfIdle(mut self) {
+        if self.phase == GcIdle {
+            let mut trace = self.schedulerTrace
+            trace.allocationDebtBytes = 0
+            self.schedulerTrace = trace
+        }
+    }
+
+    fn shouldStartIncrementalAtSafepoint(self) -> Bool {
+        self.objectCount() > 0 && self.config.schedulerSafepointInterval > 0 && self.schedulerTrace.safepoints % self.config.schedulerSafepointInterval == 0
+    }
+
+    fn shouldStartMutatorAssistCycle(self) -> Bool {
+        self.objectCount() > 0 && self.config.mutatorAssistBytes > 0 && self.schedulerTrace.allocationDebtBytes >= self.config.mutatorAssistBytes
+    }
+
+    fn recordConcurrentMarkSlice(mut self, markSteps: Int) {
+        let mut trace = self.concurrentTrace
+        trace.active = true
+        trace.slices = trace.slices + 1
+        trace.concurrentMarkSteps = trace.concurrentMarkSteps + markSteps
+        self.concurrentTrace = trace
+    }
+
+    fn finishConcurrentTrace(mut self, remarkRoots: Int, finalRemarkSteps: Int) {
+        let mut trace = self.concurrentTrace
+        trace.active = false
+        trace.remarkRoots = remarkRoots
+        trace.finalRemarkSteps = finalRemarkSteps
+        trace.barrierShadesAtFinish = self.barriers.incrementalShades
+        self.concurrentTrace = trace
+    }
+
     fn recordCardScan(mut self, count: Int) {
         if count <= 0 {
             return
@@ -3623,6 +4445,10 @@ pub fn productionGcConfig() -> GcConfig {
         largeObjectThreshold: 128 * 1024,
         tlabSize: 32 * 1024,
         cardSize: 512,
+        schedulerSafepointInterval: 8,
+        mutatorAssistBytes: 64 * 1024,
+        concurrentMarkBudget: 64,
+        evacuationThresholdPercent: 35,
     }
 }
 
@@ -3636,6 +4462,151 @@ pub fn testGcConfig() -> GcConfig {
         largeObjectThreshold: 512,
         tlabSize: 64,
         cardSize: 64,
+        schedulerSafepointInterval: 2,
+        mutatorAssistBytes: 32,
+        concurrentMarkBudget: 1,
+        evacuationThresholdPercent: 50,
+    }
+}
+
+pub fn gcPolicyProfileName(profile: GcPolicyProfile) -> String {
+    match profile {
+        GcLatencyFirstProfile -> "latency-first",
+        GcThroughputFirstProfile -> "throughput-first",
+        GcMemoryTightProfile -> "memory-tight",
+    }
+}
+
+pub fn gcConfigForProfile(profile: GcPolicyProfile) -> GcConfig {
+    match profile {
+        GcLatencyFirstProfile -> GcConfig {
+            nurseryLimit: 128,
+            survivorLimit: 64,
+            heapLimit: 4096,
+            promotionAge: 1,
+            incrementalBudget: 1,
+            largeObjectThreshold: 512,
+            tlabSize: 32,
+            cardSize: 64,
+            schedulerSafepointInterval: 1,
+            mutatorAssistBytes: 16,
+            concurrentMarkBudget: 1,
+            evacuationThresholdPercent: 30,
+        },
+        GcThroughputFirstProfile -> GcConfig {
+            nurseryLimit: 1024,
+            survivorLimit: 256,
+            heapLimit: 8192,
+            promotionAge: 3,
+            incrementalBudget: 8,
+            largeObjectThreshold: 1024,
+            tlabSize: 256,
+            cardSize: 128,
+            schedulerSafepointInterval: 8,
+            mutatorAssistBytes: 512,
+            concurrentMarkBudget: 8,
+            evacuationThresholdPercent: 60,
+        },
+        GcMemoryTightProfile -> GcConfig {
+            nurseryLimit: 96,
+            survivorLimit: 32,
+            heapLimit: 2048,
+            promotionAge: 1,
+            incrementalBudget: 2,
+            largeObjectThreshold: 256,
+            tlabSize: 32,
+            cardSize: 64,
+            schedulerSafepointInterval: 2,
+            mutatorAssistBytes: 32,
+            concurrentMarkBudget: 2,
+            evacuationThresholdPercent: 80,
+        },
+    }
+}
+
+pub fn gcStressModeName(mode: GcStressMode) -> String {
+    match mode {
+        GcStressOff -> "off",
+        GcStressEveryAllocationMinor -> "every-allocation-minor",
+        GcStressFrequentFull -> "frequent-full",
+        GcStressIncrementalStep -> "incremental-step",
+        GcStressNoCompaction -> "no-compaction",
+        GcStressAlwaysCompact -> "always-compact",
+    }
+}
+
+pub fn objectKindName(kind: ObjectKind) -> String {
+    match kind {
+        GcRecord -> "record",
+        GcArray -> "array",
+        GcClosure -> "closure",
+        GcBytes -> "bytes",
+        GcRuntimeFrame -> "runtime-frame",
+    }
+}
+
+pub fn markColorName(color: MarkColor) -> String {
+    match color {
+        GcWhite -> "white",
+        GcGrey -> "grey",
+        GcBlack -> "black",
+    }
+}
+
+pub fn gcRegionKindName(region: GcRegionKind) -> String {
+    match region {
+        GcEdenRegion -> "eden",
+        GcSurvivorRegion -> "survivor",
+        GcOldRegion -> "old",
+        GcHumongousRegion -> "humongous",
+        GcPinnedRegion -> "pinned",
+    }
+}
+
+pub fn tracePhaseName(phase: TracePhase) -> String {
+    match phase {
+        GcIdle -> "idle",
+        GcMarking -> "marking",
+        GcSweeping -> "sweeping",
+    }
+}
+
+pub fn gcRuntimeContractV1() -> GcRuntimeContract {
+    GcRuntimeContract {
+        version: 1,
+        oomReturnsResult: true,
+        abortSkipsGc: true,
+        deferRootsRequireStackMap: true,
+        ffiPinsUsePinBit: true,
+        stableIdentityUsesObjectId: true,
+        movingCollectorRequiresRemap: true,
+        refSameUsesStableIdentity: true,
+    }
+}
+
+pub fn gcPerformanceThresholdsForProfile(profile: GcPolicyProfile) -> GcPerformanceThresholds {
+    match profile {
+        GcLatencyFirstProfile -> GcPerformanceThresholds {
+            maxPauseUnits: 64,
+            maxFragmentedBytes: 1024,
+            maxLiveBytes: 4096,
+            maxRememberedObjects: 128,
+            maxDirtyCards: 128,
+        },
+        GcThroughputFirstProfile -> GcPerformanceThresholds {
+            maxPauseUnits: 512,
+            maxFragmentedBytes: 4096,
+            maxLiveBytes: 8192,
+            maxRememberedObjects: 512,
+            maxDirtyCards: 512,
+        },
+        GcMemoryTightProfile -> GcPerformanceThresholds {
+            maxPauseUnits: 128,
+            maxFragmentedBytes: 256,
+            maxLiveBytes: 2048,
+            maxRememberedObjects: 64,
+            maxDirtyCards: 64,
+        },
     }
 }
 
@@ -3691,6 +4662,8 @@ pub fn newGcHeap(config: GcConfig) -> GcHeap {
         lastFullMarkTrace: emptyFullMarkTrace(),
         lastEvacuationTrace: emptyEvacuationTrace(),
         lastRemapTrace: emptyRemapTrace(),
+        schedulerTrace: emptyIncrementalSchedulerTrace(),
+        concurrentTrace: emptyConcurrentMarkTrace(),
     }
 }
 
@@ -3748,6 +4721,24 @@ fn intListContains(values: List<Int>, target: Int) -> Bool {
         }
     }
     false
+}
+
+fn intListDebug(values: List<Int>) -> String {
+    let mut out = ""
+    let mut first = true
+    for value in values {
+        if first {
+            out = "{value}"
+            first = false
+        } else {
+            out = "{out},{value}"
+        }
+    }
+    out
+}
+
+fn limitAllows(observed: Int, limit: Int) -> Bool {
+    limit <= 0 || observed <= limit
 }
 
 fn closureCaptureObjectIds(captures: List<GcClosureCapture>) -> List<Int> {
@@ -3859,6 +4850,32 @@ fn emptyRemapTrace() -> GcRemapTrace {
         loweredSlotsVisited: 0,
         loweredSlotsRemapped: 0,
         verified: true,
+    }
+}
+
+fn emptyIncrementalSchedulerTrace() -> GcIncrementalSchedulerTrace {
+    GcIncrementalSchedulerTrace {
+        safepoints: 0,
+        scheduledSteps: 0,
+        mutatorAssistSteps: 0,
+        cyclesStarted: 0,
+        cyclesCompleted: 0,
+        allocationDebtBytes: 0,
+        lastBudget: 0,
+    }
+}
+
+fn emptyConcurrentMarkTrace() -> GcConcurrentMarkTrace {
+    GcConcurrentMarkTrace {
+        active: false,
+        snapshotRoots: 0,
+        remarkRoots: 0,
+        slices: 0,
+        concurrentMarkSteps: 0,
+        finalRemarkSteps: 0,
+        mutatorEpoch: 0,
+        barrierShadesAtStart: 0,
+        barrierShadesAtFinish: 0,
     }
 }
 
