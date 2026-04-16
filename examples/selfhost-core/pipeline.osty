@@ -25,10 +25,22 @@ pub struct SelfhostPipelineReport {
     pub checkedExpressions: Int,
     pub lintDiagnostics: Int,
     pub lintParseErrors: Int,
+    pub lintFixes: Int,
+    pub lintFixApplied: Int,
+    pub lintFixSkipped: Int,
+    pub fixedSource: String,
     pub diagnostics: String,
 }
 
 pub fn selfhostPipelineSource(packageName: String, source: String) -> SelfhostPipelineReport {
+    selfhostPipelineSourceWithFixes(packageName, source, false)
+}
+
+pub fn selfhostPipelineSourceWithFixes(
+    packageName: String,
+    source: String,
+    applyFixes: Bool,
+) -> SelfhostPipelineReport {
     let stream = frontendLexStream(source)
     let tree = frontendParseTree(source)
     let ast = astParse(source)
@@ -37,6 +49,10 @@ pub fn selfhostPipelineSource(packageName: String, source: String) -> SelfhostPi
     let resolved = selfResolveAstFile(ast)
     let checked = frontendCheckSource(source)
     let linted = selfLintResolvedAstSource(source, ast, resolved)
+    let mut fixed = SelfLintApplyResult { source: "", applied: 0, skipped: 0 }
+    if applyFixes {
+        fixed = selfLintApplyFixes(source, linted)
+    }
 
     SelfhostPipelineReport {
         tokens: frontLexTokenCount(stream),
@@ -61,6 +77,10 @@ pub fn selfhostPipelineSource(packageName: String, source: String) -> SelfhostPi
         checkedExpressions: checked.accepted,
         lintDiagnostics: selfLintDiagnosticCount(linted),
         lintParseErrors: linted.parseErrors,
+        lintFixes: selfLintMachineFixCount(linted),
+        lintFixApplied: fixed.applied,
+        lintFixSkipped: fixed.skipped,
+        fixedSource: fixed.source,
         diagnostics: selfhostPipelineDiagnosticOutput(source, resolved, linted),
     }
 }

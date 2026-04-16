@@ -21,6 +21,8 @@ var sourceFiles = []string{
 	"examples/selfhost-core/formatter_ast.osty",
 	"examples/selfhost-core/check_bridge.osty",
 	"examples/selfhost-core/check.osty",
+	"examples/selfhost-core/resolve.osty",
+	"examples/selfhost-core/lint.osty",
 	"internal/selfhost/ast_lower.osty",
 }
 
