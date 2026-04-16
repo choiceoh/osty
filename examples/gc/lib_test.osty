@@ -2064,6 +2064,63 @@ fn testGlobalRootLifecycleRejectsInvalidTransitions() {
     )
 }
 
+fn testValidateHeapRejectsGlobalRootStateObjectMismatch() {
+    let mut declaredHeap = newGcHeap(testGcConfig())
+    let declaredObject = declaredHeap.allocate(GcRecord, 16)
+    testing.assert(declaredHeap.declareGlobalRoot("pkg.config", "declared-bad", GcConstantRoot))
+    assertValid(declaredHeap)
+
+    let declaredKey = globalRootKey("pkg.config", "declared-bad")
+    if declaredHeap.globalRoots.containsKey(declaredKey) {
+        let entry = declaredHeap.globalRoots[declaredKey]
+        let mut next = entry
+        next.objectId = declaredObject
+        declaredHeap.globalRoots.insert(declaredKey, next)
+    } else {
+        testing.fail("missing declared global root")
+    }
+
+    let _ = testing.expectError(declaredHeap.validateHeap())
+
+    let mut readyHeap = newGcHeap(testGcConfig())
+    let readyObject = readyHeap.allocate(GcArray, 16)
+    testing.assert(readyHeap.beginGlobalInit("pkg.config", "ready-bad", GcTopLevelLetRoot))
+    testing.assert(readyHeap.setGlobalRootObject("pkg.config", "ready-bad", readyObject))
+    testing.assert(readyHeap.finishGlobalInit("pkg.config", "ready-bad"))
+    assertValid(readyHeap)
+
+    let readyKey = globalRootKey("pkg.config", "ready-bad")
+    if readyHeap.globalRoots.containsKey(readyKey) {
+        let entry = readyHeap.globalRoots[readyKey]
+        let mut next = entry
+        next.objectId = -1
+        readyHeap.globalRoots.insert(readyKey, next)
+    } else {
+        testing.fail("missing ready global root")
+    }
+
+    let _ = testing.expectError(readyHeap.validateHeap())
+}
+
+fn testValidateHeapRejectsGlobalRootKeyNameMismatch() {
+    let mut heap = newGcHeap(testGcConfig())
+    let object = heap.allocate(GcRecord, 16)
+    testing.assert(heap.installGlobalRoot("pkg.meta", "cache", GcPackageGlobalRoot, object))
+    assertValid(heap)
+
+    let key = globalRootKey("pkg.meta", "cache")
+    if heap.globalRoots.containsKey(key) {
+        let entry = heap.globalRoots[key]
+        let mut next = entry
+        next.name = "cache.v2"
+        heap.globalRoots.insert(key, next)
+    } else {
+        testing.fail("missing global root")
+    }
+
+    let _ = testing.expectError(heap.validateHeap())
+}
+
 fn testCrossPackageGlobalReferenceKeepsDependencyObject() {
     let mut heap = newGcHeap(testGcConfig())
     let appGlobal = heap.allocate(GcRecord, 16)
@@ -2389,6 +2446,28 @@ fn testRuntimeFrameSlotStoreLoweringUsesRuntimeFrameBarrier() {
     testing.assertEq(heap.barrierRememberedSetWriteCount(), 1)
 }
 
+fn testValidateHeapRejectsRuntimeFrameSlotOwnerKindMismatch() {
+    let mut heap = newGcHeap(testGcConfig())
+    let frame = heap.allocate(GcRuntimeFrame, 32)
+    let payload = heap.allocate(GcRecord, 16)
+    match heap.lowerRuntimeFrameSlotStore(frame, 0, "spill.payload", payload) {
+        Some(_) -> {},
+        None -> testing.fail("runtime frame slot store lowering failed"),
+    }
+    assertValid(heap)
+
+    if heap.objects.containsKey(frame) {
+        let entry = heap.objects[frame]
+        let mut next = entry
+        next.kind = GcRecord
+        heap.objects.insert(frame, next)
+    } else {
+        testing.fail("missing frame object")
+    }
+
+    let _ = testing.expectError(heap.validateHeap())
+}
+
 fn testAsyncFrameRootStoreLoweringShadesLateRoot() {
     let mut heap = newGcHeap(testGcConfig())
     let frame = heap.allocate(GcRuntimeFrame, 32)
@@ -2628,6 +2707,24 @@ fn testStackMapRejectsMissingOrScalarRootSlots() {
     let missingPlan = gcSafepointPlan("badMissing", 3, missingPoints)
     let missingLayout: List<GcFrameSlot> = [gcFrameSlot(0, GcFrameLocalSlot, "payload", 0, true)]
     let _ = testing.expectError(buildGcStackMap(missingPlan, missingLayout, 8))
+}
+
+fn testStackMapRejectsIncompatibleRootSlotKindAndDerivedBaseMismatch() {
+    let kindRoots: List<GcLiveRootSlot> = [gcRootSlot(0, GcClosureRootSlot, "payload")]
+    let kindPoints: List<GcSafepoint> = [gcSafepoint(1, GcCallSafepoint, 7, 24, kindRoots)]
+    let kindPlan = gcSafepointPlan("badKind", 2, kindPoints)
+    let kindLayout: List<GcFrameSlot> = [gcFrameSlot(0, GcFrameLocalSlot, "payload", 0, true)]
+    let _ = testing.expectError(buildGcStackMap(kindPlan, kindLayout, 8))
+
+    let baseRoots: List<GcLiveRootSlot> = [gcDerivedRootSlot(2, "payload.field", 1)]
+    let basePoints: List<GcSafepoint> = [gcSafepoint(1, GcCallSafepoint, 8, 28, baseRoots)]
+    let basePlan = gcSafepointPlan("badBase", 4, basePoints)
+    let baseLayout: List<GcFrameSlot> = [
+        gcFrameSlot(0, GcFrameLocalSlot, "payload", 0, true),
+        gcFrameSlot(1, GcFrameLocalSlot, "other", 8, true),
+        gcDerivedFrameSlot(2, GcFrameTupleFieldSlot, "payload.field", 16, 0),
+    ]
+    let _ = testing.expectError(buildGcStackMap(basePlan, baseLayout, 8))
 }
 
 fn testStackMapPreservesDeferQuestionAndEarlyReturnRoots() {
