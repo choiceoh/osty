@@ -445,3 +445,92 @@ fn main() {
 		}
 	}
 }
+
+func TestGenerateCollectionsUseManagedRuntimeABI(t *testing.T) {
+	file := parseLLVMGenFile(t, `struct Pair {
+    left: Int
+    right: Int
+}
+
+fn main() {
+    let mut pairs: Map<Int, Pair> = {:}
+    pairs.insert(1, Pair { left: 2, right: 3 })
+    let pair = pairs[1]
+    let keys = pairs.keys().sorted()
+
+    let mut values: List<Pair> = []
+    values.push(Pair { left: pair.left, right: pair.right })
+    let first = values[0]
+
+    let empty: List<Int> = []
+    let mut seen = empty.toSet()
+    seen.insert(keys[0])
+    let ids = seen.toList()
+
+    println(first.left + first.right + ids[0])
+}
+`)
+
+	ir, err := Generate(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/collections_runtime.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"call ptr @osty_rt_map_new",
+		"call void @osty_rt_map_insert_i64",
+		"call void @osty_rt_map_get_or_abort_i64",
+		"call ptr @osty_rt_map_keys",
+		"call ptr @osty_rt_list_sorted_i64",
+		"call void @osty_rt_list_push_bytes",
+		"call void @osty_rt_list_get_bytes",
+		"call ptr @osty_rt_list_to_set_i64",
+		"call i1 @osty_rt_set_insert_i64",
+		"call ptr @osty_rt_set_to_list",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateCollectionsEmitTraceHelpersForManagedAggregateValues(t *testing.T) {
+	file := parseLLVMGenFile(t, `struct Bucket {
+    ids: List<Int>
+}
+
+fn main() {
+    let ids: List<Int> = [7]
+    let mut buckets: Map<String, Bucket> = {:}
+    buckets.insert("root", Bucket { ids: ids })
+    let bucket = buckets["root"]
+    println(bucket.ids[0])
+}
+`)
+
+	ir, err := Generate(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/collections_trace_runtime.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"call ptr @osty_rt_map_new",
+		"call void @osty_rt_map_insert_string",
+		"call void @osty_rt_map_get_or_abort_string",
+		"ptr @osty_rt_trace_",
+		"define void @osty_rt_trace_",
+		"call i64 @osty_rt_list_get_i64",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}

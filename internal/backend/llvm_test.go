@@ -129,6 +129,8 @@ func TestLLVMBackendEmitBinaryBuildsBundledRuntime(t *testing.T) {
 	}
 	for _, want := range []string{
 		"osty_rt_list_new",
+		"osty_rt_map_new",
+		"osty_rt_set_new",
 		"osty_rt_strings_Equal",
 		"osty.gc.pre_write_v1",
 		"osty.gc.load_v1",
@@ -411,6 +413,104 @@ fn main() {
 		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
 	}
 	if got, want := string(output), "3\n3\n"; got != want {
+		t.Fatalf("binary stdout = %q, want %q", got, want)
+	}
+}
+
+func TestLLVMBackendBinaryCollectionsUseRuntimeContainers(t *testing.T) {
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
+
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitBinary, `struct Pair {
+    left: Int
+    right: Int
+}
+
+fn main() {
+    let mut pairs: Map<Int, Pair> = {:}
+    pairs.insert(1, Pair { left: 2, right: 3 })
+    if pairs.containsKey(1) {
+        println(1)
+    } else {
+        println(0)
+    }
+    let pair = pairs[1]
+    println(pair.left + pair.right)
+
+    let keys = pairs.keys().sorted()
+    println(keys[0])
+
+    let mut values: List<Pair> = []
+    values.push(Pair { left: 4, right: 6 })
+    let value = values[0]
+    println(value.left + value.right)
+
+    let mut nums: List<Int> = [1]
+    nums[0] = 9
+    println(nums[0])
+
+    let empty: List<Int> = []
+    let mut seen = empty.toSet()
+    seen.insert(7)
+    seen.insert(7)
+    println(seen.len())
+    let ids = seen.toList()
+    println(ids[0])
+}
+`)
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	cmd := exec.Command(result.Artifacts.Binary)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
+	}
+	if got, want := string(output), "1\n5\n1\n10\n9\n1\n7\n"; got != want {
+		t.Fatalf("binary stdout = %q, want %q", got, want)
+	}
+}
+
+func TestLLVMBackendBinaryManagedAggregateContainersSurvivePressureGC(t *testing.T) {
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
+
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitBinary, `struct Bucket {
+    ids: List<Int>
+}
+
+fn main() {
+    let ids: List<Int> = [7]
+    let mut buckets: Map<String, Bucket> = {:}
+    buckets.insert("root", Bucket { ids: ids })
+    let bucket = buckets["root"]
+
+    let empty: List<Int> = []
+    let mut seen = empty.toSet()
+    seen.insert(7)
+
+    println(bucket.ids[0])
+    println(seen.len())
+}
+`)
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	cmd := exec.Command(result.Artifacts.Binary)
+	cmd.Env = append(os.Environ(), "OSTY_GC_THRESHOLD_BYTES=1")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
+	}
+	if got, want := string(output), "7\n1\n"; got != want {
 		t.Fatalf("binary stdout = %q, want %q", got, want)
 	}
 }
