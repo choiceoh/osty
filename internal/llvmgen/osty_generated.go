@@ -5,6 +5,7 @@ package llvmgen
 
 import (
 	"fmt"
+	"math"
 	llvmStrings "strings"
 )
 
@@ -55,12 +56,17 @@ type LlvmStringGlobal struct {
 }
 
 // Osty: examples/selfhost-core/llvmgen.osty:36:5
+type LlvmStructField struct {
+	typ string
+}
+
+// Osty: examples/selfhost-core/llvmgen.osty:40:5
 type LlvmCString struct {
 	encoded string
 	byteLen int
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:41:5
+// Osty: examples/selfhost-core/llvmgen.osty:45:5
 type LlvmEmitter struct {
 	temp          int
 	label         int
@@ -70,14 +76,14 @@ type LlvmEmitter struct {
 	stringGlobals []*LlvmStringGlobal
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:50:5
+// Osty: examples/selfhost-core/llvmgen.osty:54:5
 type LlvmIfLabels struct {
 	thenLabel string
 	elseLabel string
 	endLabel  string
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:56:5
+// Osty: examples/selfhost-core/llvmgen.osty:60:5
 type LlvmRangeLoop struct {
 	condLabel string
 	bodyLabel string
@@ -86,14 +92,14 @@ type LlvmRangeLoop struct {
 	current   string
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:64:5
+// Osty: examples/selfhost-core/llvmgen.osty:68:5
 type LlvmSmokeExecutableCase struct {
 	name    string
 	fixture string
 	stdout  string
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:70:5
+// Osty: examples/selfhost-core/llvmgen.osty:74:5
 type LlvmUnsupportedDiagnostic struct {
 	code    string
 	kind    string
@@ -101,80 +107,87 @@ type LlvmUnsupportedDiagnostic struct {
 	hint    string
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:77:5
+// Osty: examples/selfhost-core/llvmgen.osty:81:5
 func llvmEmitter() *LlvmEmitter {
 	return &LlvmEmitter{temp: 0, label: 0, stringId: 0, body: make([]string, 0, 1), locals: make([]*LlvmBinding, 0, 1), stringGlobals: make([]*LlvmStringGlobal, 0, 1)}
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:88:5
+// Osty: examples/selfhost-core/llvmgen.osty:92:5
 func llvmI64(name string) *LlvmValue {
 	return &LlvmValue{typ: "i64", name: name, pointer: false}
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:92:5
+// Osty: examples/selfhost-core/llvmgen.osty:96:5
 func llvmI1(name string) *LlvmValue {
 	return &LlvmValue{typ: "i1", name: name, pointer: false}
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:96:5
+// Osty: examples/selfhost-core/llvmgen.osty:100:5
 func llvmIntLiteral(value int) *LlvmValue {
 	return llvmI64(fmt.Sprintf("%s", ostyToString(value)))
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:100:5
+// Osty: examples/selfhost-core/llvmgen.osty:104:5
+func llvmEnumVariant(enumName string, tag int) *LlvmValue {
+	// Osty: examples/selfhost-core/llvmgen.osty:105:5
+	_ = enumName
+	return llvmI64(fmt.Sprintf("%s", ostyToString(tag)))
+}
+
+// Osty: examples/selfhost-core/llvmgen.osty:109:5
 func llvmParam(name string, typ string) *LlvmParam {
 	return &LlvmParam{name: name, typ: typ}
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:104:5
+// Osty: examples/selfhost-core/llvmgen.osty:113:5
 func llvmBind(emitter *LlvmEmitter, name string, value *LlvmValue) {
-	// Osty: examples/selfhost-core/llvmgen.osty:105:5
+	// Osty: examples/selfhost-core/llvmgen.osty:114:5
 	func() struct{} {
 		emitter.locals = append(emitter.locals, &LlvmBinding{name: name, value: value})
 		return struct{}{}
 	}()
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:108:5
+// Osty: examples/selfhost-core/llvmgen.osty:117:5
 func llvmLookup(emitter *LlvmEmitter, name string) *LlvmLookup {
-	// Osty: examples/selfhost-core/llvmgen.osty:109:5
+	// Osty: examples/selfhost-core/llvmgen.osty:118:5
 	out := &LlvmLookup{found: false, value: llvmI64("0")}
 	_ = out
-	// Osty: examples/selfhost-core/llvmgen.osty:110:5
+	// Osty: examples/selfhost-core/llvmgen.osty:119:5
 	for _, binding := range emitter.locals {
-		// Osty: examples/selfhost-core/llvmgen.osty:111:9
+		// Osty: examples/selfhost-core/llvmgen.osty:120:9
 		if binding.name == name {
-			// Osty: examples/selfhost-core/llvmgen.osty:112:17
+			// Osty: examples/selfhost-core/llvmgen.osty:121:13
 			out = &LlvmLookup{found: true, value: binding.value}
 		}
 	}
 	return out
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:118:5
+// Osty: examples/selfhost-core/llvmgen.osty:127:5
 func llvmIdent(emitter *LlvmEmitter, name string) *LlvmValue {
-	// Osty: examples/selfhost-core/llvmgen.osty:119:5
+	// Osty: examples/selfhost-core/llvmgen.osty:128:5
 	lookup := llvmLookup(emitter, name)
 	_ = lookup
-	// Osty: examples/selfhost-core/llvmgen.osty:120:5
+	// Osty: examples/selfhost-core/llvmgen.osty:129:5
 	if !(lookup.found) {
-		// Osty: examples/selfhost-core/llvmgen.osty:121:9
+		// Osty: examples/selfhost-core/llvmgen.osty:130:9
 		return llvmI64("0")
 	}
-	// Osty: examples/selfhost-core/llvmgen.osty:123:5
+	// Osty: examples/selfhost-core/llvmgen.osty:132:5
 	if lookup.value.pointer {
-		// Osty: examples/selfhost-core/llvmgen.osty:124:9
+		// Osty: examples/selfhost-core/llvmgen.osty:133:9
 		return llvmLoad(emitter, lookup.value)
 	}
 	return lookup.value
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:129:5
+// Osty: examples/selfhost-core/llvmgen.osty:138:5
 func llvmLoad(emitter *LlvmEmitter, slot *LlvmValue) *LlvmValue {
-	// Osty: examples/selfhost-core/llvmgen.osty:130:5
+	// Osty: examples/selfhost-core/llvmgen.osty:139:5
 	tmp := llvmNextTemp(emitter)
 	_ = tmp
-	// Osty: examples/selfhost-core/llvmgen.osty:131:5
+	// Osty: examples/selfhost-core/llvmgen.osty:140:5
 	func() struct{} {
 		emitter.body = append(emitter.body, fmt.Sprintf("  %s = load %s, ptr %s", ostyToString(tmp), ostyToString(slot.typ), ostyToString(slot.name)))
 		return struct{}{}
@@ -182,72 +195,72 @@ func llvmLoad(emitter *LlvmEmitter, slot *LlvmValue) *LlvmValue {
 	return &LlvmValue{typ: slot.typ, name: tmp, pointer: false}
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:135:5
+// Osty: examples/selfhost-core/llvmgen.osty:144:5
 func llvmMutableLetSlot(emitter *LlvmEmitter, name string, initial *LlvmValue) *LlvmValue {
-	// Osty: examples/selfhost-core/llvmgen.osty:140:5
+	// Osty: examples/selfhost-core/llvmgen.osty:149:5
 	ptr := llvmNextTemp(emitter)
 	_ = ptr
-	// Osty: examples/selfhost-core/llvmgen.osty:141:5
+	// Osty: examples/selfhost-core/llvmgen.osty:150:5
 	func() struct{} {
 		emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca %s", ostyToString(ptr), ostyToString(initial.typ)))
 		return struct{}{}
 	}()
-	// Osty: examples/selfhost-core/llvmgen.osty:142:5
+	// Osty: examples/selfhost-core/llvmgen.osty:151:5
 	func() struct{} {
 		emitter.body = append(emitter.body, fmt.Sprintf("  store %s %s, ptr %s", ostyToString(initial.typ), ostyToString(initial.name), ostyToString(ptr)))
 		return struct{}{}
 	}()
-	// Osty: examples/selfhost-core/llvmgen.osty:143:5
+	// Osty: examples/selfhost-core/llvmgen.osty:152:5
 	slot := &LlvmValue{typ: initial.typ, name: ptr, pointer: true}
 	_ = slot
-	// Osty: examples/selfhost-core/llvmgen.osty:144:5
+	// Osty: examples/selfhost-core/llvmgen.osty:153:5
 	llvmBind(emitter, name, slot)
 	return slot
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:148:5
+// Osty: examples/selfhost-core/llvmgen.osty:157:5
 func llvmMutableLet(emitter *LlvmEmitter, name string, initial *LlvmValue) {
-	// Osty: examples/selfhost-core/llvmgen.osty:149:5
+	// Osty: examples/selfhost-core/llvmgen.osty:158:5
 	_slot := llvmMutableLetSlot(emitter, name, initial)
 	_ = _slot
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:152:5
+// Osty: examples/selfhost-core/llvmgen.osty:161:5
 func llvmStore(emitter *LlvmEmitter, slot *LlvmValue, value *LlvmValue) {
-	// Osty: examples/selfhost-core/llvmgen.osty:153:5
+	// Osty: examples/selfhost-core/llvmgen.osty:162:5
 	func() struct{} {
 		emitter.body = append(emitter.body, fmt.Sprintf("  store %s %s, ptr %s", ostyToString(value.typ), ostyToString(value.name), ostyToString(slot.name)))
 		return struct{}{}
 	}()
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:156:5
+// Osty: examples/selfhost-core/llvmgen.osty:165:5
 func llvmAssign(emitter *LlvmEmitter, name string, value *LlvmValue) bool {
-	// Osty: examples/selfhost-core/llvmgen.osty:157:5
+	// Osty: examples/selfhost-core/llvmgen.osty:166:5
 	lookup := llvmLookup(emitter, name)
 	_ = lookup
-	// Osty: examples/selfhost-core/llvmgen.osty:158:5
+	// Osty: examples/selfhost-core/llvmgen.osty:167:5
 	if !(lookup.found) || !(lookup.value.pointer) || lookup.value.typ != value.typ {
-		// Osty: examples/selfhost-core/llvmgen.osty:159:9
+		// Osty: examples/selfhost-core/llvmgen.osty:168:9
 		return false
 	}
-	// Osty: examples/selfhost-core/llvmgen.osty:161:5
+	// Osty: examples/selfhost-core/llvmgen.osty:170:5
 	llvmStore(emitter, lookup.value, value)
 	return true
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:165:5
+// Osty: examples/selfhost-core/llvmgen.osty:174:5
 func llvmImmutableLet(emitter *LlvmEmitter, name string, value *LlvmValue) {
-	// Osty: examples/selfhost-core/llvmgen.osty:166:5
+	// Osty: examples/selfhost-core/llvmgen.osty:175:5
 	llvmBind(emitter, name, value)
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:173:5
+// Osty: examples/selfhost-core/llvmgen.osty:182:5
 func llvmBinaryI64(emitter *LlvmEmitter, op string, left *LlvmValue, right *LlvmValue) *LlvmValue {
-	// Osty: examples/selfhost-core/llvmgen.osty:179:5
+	// Osty: examples/selfhost-core/llvmgen.osty:188:5
 	tmp := llvmNextTemp(emitter)
 	_ = tmp
-	// Osty: examples/selfhost-core/llvmgen.osty:180:5
+	// Osty: examples/selfhost-core/llvmgen.osty:189:5
 	func() struct{} {
 		emitter.body = append(emitter.body, fmt.Sprintf("  %s = %s i64 %s, %s", ostyToString(tmp), ostyToString(op), ostyToString(left.name), ostyToString(right.name)))
 		return struct{}{}
@@ -255,12 +268,12 @@ func llvmBinaryI64(emitter *LlvmEmitter, op string, left *LlvmValue, right *Llvm
 	return llvmI64(tmp)
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:184:5
+// Osty: examples/selfhost-core/llvmgen.osty:193:5
 func llvmCompare(emitter *LlvmEmitter, pred string, left *LlvmValue, right *LlvmValue) *LlvmValue {
-	// Osty: examples/selfhost-core/llvmgen.osty:190:5
+	// Osty: examples/selfhost-core/llvmgen.osty:199:5
 	tmp := llvmNextTemp(emitter)
 	_ = tmp
-	// Osty: examples/selfhost-core/llvmgen.osty:191:5
+	// Osty: examples/selfhost-core/llvmgen.osty:200:5
 	func() struct{} {
 		emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp %s %s %s, %s", ostyToString(tmp), ostyToString(pred), ostyToString(left.typ), ostyToString(left.name), ostyToString(right.name)))
 		return struct{}{}
@@ -268,12 +281,12 @@ func llvmCompare(emitter *LlvmEmitter, pred string, left *LlvmValue, right *Llvm
 	return llvmI1(tmp)
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:195:5
+// Osty: examples/selfhost-core/llvmgen.osty:204:5
 func llvmNotI1(emitter *LlvmEmitter, value *LlvmValue) *LlvmValue {
-	// Osty: examples/selfhost-core/llvmgen.osty:196:5
+	// Osty: examples/selfhost-core/llvmgen.osty:205:5
 	tmp := llvmNextTemp(emitter)
 	_ = tmp
-	// Osty: examples/selfhost-core/llvmgen.osty:197:5
+	// Osty: examples/selfhost-core/llvmgen.osty:206:5
 	func() struct{} {
 		emitter.body = append(emitter.body, fmt.Sprintf("  %s = xor i1 %s, true", ostyToString(tmp), ostyToString(value.name)))
 		return struct{}{}
@@ -281,12 +294,12 @@ func llvmNotI1(emitter *LlvmEmitter, value *LlvmValue) *LlvmValue {
 	return llvmI1(tmp)
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:201:5
+// Osty: examples/selfhost-core/llvmgen.osty:210:5
 func llvmLogicalI1(emitter *LlvmEmitter, op string, left *LlvmValue, right *LlvmValue) *LlvmValue {
-	// Osty: examples/selfhost-core/llvmgen.osty:207:5
+	// Osty: examples/selfhost-core/llvmgen.osty:216:5
 	tmp := llvmNextTemp(emitter)
 	_ = tmp
-	// Osty: examples/selfhost-core/llvmgen.osty:208:5
+	// Osty: examples/selfhost-core/llvmgen.osty:217:5
 	func() struct{} {
 		emitter.body = append(emitter.body, fmt.Sprintf("  %s = %s i1 %s, %s", ostyToString(tmp), ostyToString(op), ostyToString(left.name), ostyToString(right.name)))
 		return struct{}{}
@@ -294,12 +307,12 @@ func llvmLogicalI1(emitter *LlvmEmitter, op string, left *LlvmValue, right *Llvm
 	return llvmI1(tmp)
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:212:5
+// Osty: examples/selfhost-core/llvmgen.osty:221:5
 func llvmCall(emitter *LlvmEmitter, ret string, name string, args []*LlvmValue) *LlvmValue {
-	// Osty: examples/selfhost-core/llvmgen.osty:218:5
+	// Osty: examples/selfhost-core/llvmgen.osty:227:5
 	tmp := llvmNextTemp(emitter)
 	_ = tmp
-	// Osty: examples/selfhost-core/llvmgen.osty:219:5
+	// Osty: examples/selfhost-core/llvmgen.osty:228:5
 	func() struct{} {
 		emitter.body = append(emitter.body, fmt.Sprintf("  %s = call %s @%s(%s)", ostyToString(tmp), ostyToString(ret), ostyToString(name), ostyToString(llvmCallArgs(args))))
 		return struct{}{}
@@ -307,29 +320,96 @@ func llvmCall(emitter *LlvmEmitter, ret string, name string, args []*LlvmValue) 
 	return &LlvmValue{typ: ret, name: tmp, pointer: false}
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:223:5
-func llvmPrintlnI64(emitter *LlvmEmitter, value *LlvmValue) {
-	// Osty: examples/selfhost-core/llvmgen.osty:224:5
+// Osty: examples/selfhost-core/llvmgen.osty:232:5
+func llvmStructTypeDef(name string, fieldTypes []string) string {
+	// Osty: examples/selfhost-core/llvmgen.osty:233:5
+	fields := llvmStrings.Join(fieldTypes, ", ")
+	_ = fields
+	return fmt.Sprintf("%%%s = type { %s }", ostyToString(name), ostyToString(fields))
+}
+
+// Osty: examples/selfhost-core/llvmgen.osty:237:5
+func llvmStructLiteral(emitter *LlvmEmitter, typ string, fields []*LlvmValue) *LlvmValue {
+	// Osty: examples/selfhost-core/llvmgen.osty:242:5
+	current := "undef"
+	_ = current
+	// Osty: examples/selfhost-core/llvmgen.osty:243:5
+	fieldIndex := 0
+	_ = fieldIndex
+	// Osty: examples/selfhost-core/llvmgen.osty:244:5
+	for _, field := range fields {
+		// Osty: examples/selfhost-core/llvmgen.osty:245:9
+		tmp := llvmNextTemp(emitter)
+		_ = tmp
+		// Osty: examples/selfhost-core/llvmgen.osty:246:9
+		func() struct{} {
+			emitter.body = append(emitter.body, fmt.Sprintf("  %s = insertvalue %s %s, %s %s, %s", ostyToString(tmp), ostyToString(typ), ostyToString(current), ostyToString(field.typ), ostyToString(field.name), ostyToString(fieldIndex)))
+			return struct{}{}
+		}()
+		// Osty: examples/selfhost-core/llvmgen.osty:249:9
+		current = tmp
+		// Osty: examples/selfhost-core/llvmgen.osty:250:9
+		func() {
+			var _cur1 int = fieldIndex
+			var _rhs2 int = 1
+			if _rhs2 > 0 && _cur1 > math.MaxInt-_rhs2 {
+				panic("integer overflow")
+			}
+			if _rhs2 < 0 && _cur1 < math.MinInt-_rhs2 {
+				panic("integer overflow")
+			}
+			fieldIndex = _cur1 + _rhs2
+		}()
+	}
+	return &LlvmValue{typ: typ, name: current, pointer: false}
+}
+
+// Osty: examples/selfhost-core/llvmgen.osty:255:5
+func llvmExtractValue(emitter *LlvmEmitter, aggregate *LlvmValue, fieldType string, fieldIndex int) *LlvmValue {
+	// Osty: examples/selfhost-core/llvmgen.osty:261:5
 	tmp := llvmNextTemp(emitter)
 	_ = tmp
-	// Osty: examples/selfhost-core/llvmgen.osty:225:5
+	// Osty: examples/selfhost-core/llvmgen.osty:262:5
+	func() struct{} {
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = extractvalue %s %s, %s", ostyToString(tmp), ostyToString(aggregate.typ), ostyToString(aggregate.name), ostyToString(fieldIndex)))
+		return struct{}{}
+	}()
+	return &LlvmValue{typ: fieldType, name: tmp, pointer: false}
+}
+
+// Osty: examples/selfhost-core/llvmgen.osty:268:5
+func llvmPrintlnI64(emitter *LlvmEmitter, value *LlvmValue) {
+	// Osty: examples/selfhost-core/llvmgen.osty:269:5
+	tmp := llvmNextTemp(emitter)
+	_ = tmp
+	// Osty: examples/selfhost-core/llvmgen.osty:270:5
 	func() struct{} {
 		emitter.body = append(emitter.body, fmt.Sprintf("  %s = call i32 (ptr, ...) @printf(ptr @.fmt_i64, i64 %s)", ostyToString(tmp), ostyToString(value.name)))
 		return struct{}{}
 	}()
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:228:5
+// Osty: examples/selfhost-core/llvmgen.osty:273:5
 func llvmStringLiteral(emitter *LlvmEmitter, text string) *LlvmValue {
-	// Osty: examples/selfhost-core/llvmgen.osty:229:5
+	// Osty: examples/selfhost-core/llvmgen.osty:274:5
 	name := fmt.Sprintf("@.str%s", ostyToString(emitter.stringId))
 	_ = name
-	// Osty: examples/selfhost-core/llvmgen.osty:230:22
-	emitter.stringId = emitter.stringId + 1
-	// Osty: examples/selfhost-core/llvmgen.osty:231:5
+	// Osty: examples/selfhost-core/llvmgen.osty:275:12
+	emitter.stringId = func() int {
+		var _p3 int = emitter.stringId
+		var _rhs4 int = 1
+		if _rhs4 > 0 && _p3 > math.MaxInt-_rhs4 {
+			panic("integer overflow")
+		}
+		if _rhs4 < 0 && _p3 < math.MinInt-_rhs4 {
+			panic("integer overflow")
+		}
+		return _p3 + _rhs4
+	}()
+	// Osty: examples/selfhost-core/llvmgen.osty:276:5
 	cstring := llvmCString(text)
 	_ = cstring
-	// Osty: examples/selfhost-core/llvmgen.osty:232:5
+	// Osty: examples/selfhost-core/llvmgen.osty:277:5
 	func() struct{} {
 		emitter.stringGlobals = append(emitter.stringGlobals, &LlvmStringGlobal{name: name, encoded: cstring.encoded, byteLen: cstring.byteLen})
 		return struct{}{}
@@ -337,71 +417,71 @@ func llvmStringLiteral(emitter *LlvmEmitter, text string) *LlvmValue {
 	return &LlvmValue{typ: "ptr", name: name, pointer: false}
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:238:5
+// Osty: examples/selfhost-core/llvmgen.osty:283:5
 func llvmCString(text string) *LlvmCString {
-	// Osty: examples/selfhost-core/llvmgen.osty:239:5
+	// Osty: examples/selfhost-core/llvmgen.osty:284:5
 	encoded := fmt.Sprintf("%s\\00", ostyToString(llvmCStringEscape(text)))
 	_ = encoded
-	// Osty: examples/selfhost-core/llvmgen.osty:240:5
+	// Osty: examples/selfhost-core/llvmgen.osty:285:5
 	byteLen := len(llvmStrings.Split(text, "")) + 1
 	_ = byteLen
 	return &LlvmCString{encoded: encoded, byteLen: byteLen}
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:244:5
+// Osty: examples/selfhost-core/llvmgen.osty:289:5
 func llvmCStringEscape(text string) string {
-	// Osty: examples/selfhost-core/llvmgen.osty:245:5
+	// Osty: examples/selfhost-core/llvmgen.osty:290:5
 	encoded := ""
 	_ = encoded
-	// Osty: examples/selfhost-core/llvmgen.osty:246:5
+	// Osty: examples/selfhost-core/llvmgen.osty:291:5
 	for _, unit := range llvmStrings.Split(text, "") {
-		// Osty: examples/selfhost-core/llvmgen.osty:247:9
+		// Osty: examples/selfhost-core/llvmgen.osty:292:9
 		if unit == "\n" {
-			// Osty: examples/selfhost-core/llvmgen.osty:248:21
+			// Osty: examples/selfhost-core/llvmgen.osty:293:13
 			encoded = fmt.Sprintf("%s\\0A", ostyToString(encoded))
 		} else if unit == "\t" {
-			// Osty: examples/selfhost-core/llvmgen.osty:250:21
+			// Osty: examples/selfhost-core/llvmgen.osty:295:13
 			encoded = fmt.Sprintf("%s\\09", ostyToString(encoded))
 		} else if unit == "\r" {
-			// Osty: examples/selfhost-core/llvmgen.osty:252:21
+			// Osty: examples/selfhost-core/llvmgen.osty:297:13
 			encoded = fmt.Sprintf("%s\\0D", ostyToString(encoded))
 		} else if unit == "\"" {
-			// Osty: examples/selfhost-core/llvmgen.osty:254:21
+			// Osty: examples/selfhost-core/llvmgen.osty:299:13
 			encoded = fmt.Sprintf("%s\\22", ostyToString(encoded))
 		} else if unit == "\\" {
-			// Osty: examples/selfhost-core/llvmgen.osty:256:21
+			// Osty: examples/selfhost-core/llvmgen.osty:301:13
 			encoded = fmt.Sprintf("%s\\5C", ostyToString(encoded))
 		} else {
-			// Osty: examples/selfhost-core/llvmgen.osty:258:21
+			// Osty: examples/selfhost-core/llvmgen.osty:303:13
 			encoded = fmt.Sprintf("%s%s", ostyToString(encoded), ostyToString(unit))
 		}
 	}
 	return encoded
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:264:5
+// Osty: examples/selfhost-core/llvmgen.osty:309:5
 func llvmPrintlnString(emitter *LlvmEmitter, value *LlvmValue) {
-	// Osty: examples/selfhost-core/llvmgen.osty:265:5
+	// Osty: examples/selfhost-core/llvmgen.osty:310:5
 	tmp := llvmNextTemp(emitter)
 	_ = tmp
-	// Osty: examples/selfhost-core/llvmgen.osty:266:5
+	// Osty: examples/selfhost-core/llvmgen.osty:311:5
 	func() struct{} {
 		emitter.body = append(emitter.body, fmt.Sprintf("  %s = call i32 (ptr, ...) @printf(ptr @.fmt_str, ptr %s)", ostyToString(tmp), ostyToString(value.name)))
 		return struct{}{}
 	}()
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:269:5
+// Osty: examples/selfhost-core/llvmgen.osty:314:5
 func llvmIfStart(emitter *LlvmEmitter, cond *LlvmValue) *LlvmIfLabels {
-	// Osty: examples/selfhost-core/llvmgen.osty:270:5
+	// Osty: examples/selfhost-core/llvmgen.osty:315:5
 	labels := &LlvmIfLabels{thenLabel: llvmNextLabel(emitter, "if.then"), elseLabel: llvmNextLabel(emitter, "if.else"), endLabel: llvmNextLabel(emitter, "if.end")}
 	_ = labels
-	// Osty: examples/selfhost-core/llvmgen.osty:275:5
+	// Osty: examples/selfhost-core/llvmgen.osty:320:5
 	func() struct{} {
 		emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", ostyToString(cond.name), ostyToString(labels.thenLabel), ostyToString(labels.elseLabel)))
 		return struct{}{}
 	}()
-	// Osty: examples/selfhost-core/llvmgen.osty:276:5
+	// Osty: examples/selfhost-core/llvmgen.osty:321:5
 	func() struct{} {
 		emitter.body = append(emitter.body, fmt.Sprintf("%s:", ostyToString(labels.thenLabel)))
 		return struct{}{}
@@ -409,45 +489,45 @@ func llvmIfStart(emitter *LlvmEmitter, cond *LlvmValue) *LlvmIfLabels {
 	return labels
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:280:5
+// Osty: examples/selfhost-core/llvmgen.osty:325:5
 func llvmIfElse(emitter *LlvmEmitter, labels *LlvmIfLabels) {
-	// Osty: examples/selfhost-core/llvmgen.osty:281:5
+	// Osty: examples/selfhost-core/llvmgen.osty:326:5
 	func() struct{} {
 		emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", ostyToString(labels.endLabel)))
 		return struct{}{}
 	}()
-	// Osty: examples/selfhost-core/llvmgen.osty:282:5
+	// Osty: examples/selfhost-core/llvmgen.osty:327:5
 	func() struct{} {
 		emitter.body = append(emitter.body, fmt.Sprintf("%s:", ostyToString(labels.elseLabel)))
 		return struct{}{}
 	}()
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:285:5
+// Osty: examples/selfhost-core/llvmgen.osty:330:5
 func llvmIfEnd(emitter *LlvmEmitter, labels *LlvmIfLabels) {
-	// Osty: examples/selfhost-core/llvmgen.osty:286:5
+	// Osty: examples/selfhost-core/llvmgen.osty:331:5
 	func() struct{} {
 		emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", ostyToString(labels.endLabel)))
 		return struct{}{}
 	}()
-	// Osty: examples/selfhost-core/llvmgen.osty:287:5
+	// Osty: examples/selfhost-core/llvmgen.osty:332:5
 	func() struct{} {
 		emitter.body = append(emitter.body, fmt.Sprintf("%s:", ostyToString(labels.endLabel)))
 		return struct{}{}
 	}()
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:290:5
+// Osty: examples/selfhost-core/llvmgen.osty:335:5
 func llvmIfExprStart(emitter *LlvmEmitter, cond *LlvmValue) *LlvmIfLabels {
-	// Osty: examples/selfhost-core/llvmgen.osty:291:5
+	// Osty: examples/selfhost-core/llvmgen.osty:336:5
 	labels := &LlvmIfLabels{thenLabel: llvmNextLabel(emitter, "if.expr.then"), elseLabel: llvmNextLabel(emitter, "if.expr.else"), endLabel: llvmNextLabel(emitter, "if.expr.end")}
 	_ = labels
-	// Osty: examples/selfhost-core/llvmgen.osty:296:5
+	// Osty: examples/selfhost-core/llvmgen.osty:341:5
 	func() struct{} {
 		emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", ostyToString(cond.name), ostyToString(labels.thenLabel), ostyToString(labels.elseLabel)))
 		return struct{}{}
 	}()
-	// Osty: examples/selfhost-core/llvmgen.osty:297:5
+	// Osty: examples/selfhost-core/llvmgen.osty:342:5
 	func() struct{} {
 		emitter.body = append(emitter.body, fmt.Sprintf("%s:", ostyToString(labels.thenLabel)))
 		return struct{}{}
@@ -455,36 +535,36 @@ func llvmIfExprStart(emitter *LlvmEmitter, cond *LlvmValue) *LlvmIfLabels {
 	return labels
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:301:5
+// Osty: examples/selfhost-core/llvmgen.osty:346:5
 func llvmIfExprElse(emitter *LlvmEmitter, labels *LlvmIfLabels) {
-	// Osty: examples/selfhost-core/llvmgen.osty:302:5
+	// Osty: examples/selfhost-core/llvmgen.osty:347:5
 	func() struct{} {
 		emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", ostyToString(labels.endLabel)))
 		return struct{}{}
 	}()
-	// Osty: examples/selfhost-core/llvmgen.osty:303:5
+	// Osty: examples/selfhost-core/llvmgen.osty:348:5
 	func() struct{} {
 		emitter.body = append(emitter.body, fmt.Sprintf("%s:", ostyToString(labels.elseLabel)))
 		return struct{}{}
 	}()
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:306:5
+// Osty: examples/selfhost-core/llvmgen.osty:351:5
 func llvmIfExprEnd(emitter *LlvmEmitter, typ string, thenValue *LlvmValue, elseValue *LlvmValue, labels *LlvmIfLabels) *LlvmValue {
-	// Osty: examples/selfhost-core/llvmgen.osty:313:5
+	// Osty: examples/selfhost-core/llvmgen.osty:358:5
 	func() struct{} {
 		emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", ostyToString(labels.endLabel)))
 		return struct{}{}
 	}()
-	// Osty: examples/selfhost-core/llvmgen.osty:314:5
+	// Osty: examples/selfhost-core/llvmgen.osty:359:5
 	func() struct{} {
 		emitter.body = append(emitter.body, fmt.Sprintf("%s:", ostyToString(labels.endLabel)))
 		return struct{}{}
 	}()
-	// Osty: examples/selfhost-core/llvmgen.osty:315:5
+	// Osty: examples/selfhost-core/llvmgen.osty:360:5
 	tmp := llvmNextTemp(emitter)
 	_ = tmp
-	// Osty: examples/selfhost-core/llvmgen.osty:316:5
+	// Osty: examples/selfhost-core/llvmgen.osty:361:5
 	func() struct{} {
 		emitter.body = append(emitter.body, fmt.Sprintf("  %s = phi %s [ %s, %%%s ], [ %s, %%%s ]", ostyToString(tmp), ostyToString(typ), ostyToString(thenValue.name), ostyToString(labels.thenLabel), ostyToString(elseValue.name), ostyToString(labels.elseLabel)))
 		return struct{}{}
@@ -492,227 +572,242 @@ func llvmIfExprEnd(emitter *LlvmEmitter, typ string, thenValue *LlvmValue, elseV
 	return &LlvmValue{typ: typ, name: tmp, pointer: false}
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:322:5
+// Osty: examples/selfhost-core/llvmgen.osty:367:5
 func llvmInclusiveRangeStart(emitter *LlvmEmitter, iterName string, start *LlvmValue, stop *LlvmValue) *LlvmRangeLoop {
 	return llvmRangeStart(emitter, iterName, start, stop, true)
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:331:5
+// Osty: examples/selfhost-core/llvmgen.osty:376:5
 func llvmRangeStart(emitter *LlvmEmitter, iterName string, start *LlvmValue, stop *LlvmValue, inclusive bool) *LlvmRangeLoop {
-	// Osty: examples/selfhost-core/llvmgen.osty:338:5
+	// Osty: examples/selfhost-core/llvmgen.osty:383:5
 	iterPtr := llvmNextTemp(emitter)
 	_ = iterPtr
-	// Osty: examples/selfhost-core/llvmgen.osty:339:5
+	// Osty: examples/selfhost-core/llvmgen.osty:384:5
 	func() struct{} {
 		emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca i64", ostyToString(iterPtr)))
 		return struct{}{}
 	}()
-	// Osty: examples/selfhost-core/llvmgen.osty:340:5
+	// Osty: examples/selfhost-core/llvmgen.osty:385:5
 	func() struct{} {
 		emitter.body = append(emitter.body, fmt.Sprintf("  store i64 %s, ptr %s", ostyToString(start.name), ostyToString(iterPtr)))
 		return struct{}{}
 	}()
-	// Osty: examples/selfhost-core/llvmgen.osty:342:5
+	// Osty: examples/selfhost-core/llvmgen.osty:387:5
 	loop := &LlvmRangeLoop{condLabel: llvmNextLabel(emitter, "for.cond"), bodyLabel: llvmNextLabel(emitter, "for.body"), endLabel: llvmNextLabel(emitter, "for.end"), iterPtr: iterPtr, current: ""}
 	_ = loop
-	// Osty: examples/selfhost-core/llvmgen.osty:349:5
+	// Osty: examples/selfhost-core/llvmgen.osty:394:5
 	func() struct{} {
 		emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", ostyToString(loop.condLabel)))
 		return struct{}{}
 	}()
-	// Osty: examples/selfhost-core/llvmgen.osty:350:5
+	// Osty: examples/selfhost-core/llvmgen.osty:395:5
 	func() struct{} {
 		emitter.body = append(emitter.body, fmt.Sprintf("%s:", ostyToString(loop.condLabel)))
 		return struct{}{}
 	}()
-	// Osty: examples/selfhost-core/llvmgen.osty:352:5
+	// Osty: examples/selfhost-core/llvmgen.osty:397:5
 	current := llvmNextTemp(emitter)
 	_ = current
-	// Osty: examples/selfhost-core/llvmgen.osty:353:5
+	// Osty: examples/selfhost-core/llvmgen.osty:398:5
 	func() struct{} {
 		emitter.body = append(emitter.body, fmt.Sprintf("  %s = load i64, ptr %s", ostyToString(current), ostyToString(iterPtr)))
 		return struct{}{}
 	}()
-	// Osty: examples/selfhost-core/llvmgen.osty:354:5
+	// Osty: examples/selfhost-core/llvmgen.osty:399:5
 	cmp := llvmNextTemp(emitter)
 	_ = cmp
-	// Osty: examples/selfhost-core/llvmgen.osty:355:5
+	// Osty: examples/selfhost-core/llvmgen.osty:400:5
 	pred := "slt"
 	_ = pred
-	// Osty: examples/selfhost-core/llvmgen.osty:356:5
+	// Osty: examples/selfhost-core/llvmgen.osty:401:5
 	if inclusive {
-		// Osty: examples/selfhost-core/llvmgen.osty:357:14
+		// Osty: examples/selfhost-core/llvmgen.osty:402:9
 		pred = "sle"
 	}
-	// Osty: examples/selfhost-core/llvmgen.osty:359:5
+	// Osty: examples/selfhost-core/llvmgen.osty:404:5
 	func() struct{} {
 		emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp %s i64 %s, %s", ostyToString(cmp), ostyToString(pred), ostyToString(current), ostyToString(stop.name)))
 		return struct{}{}
 	}()
-	// Osty: examples/selfhost-core/llvmgen.osty:360:5
+	// Osty: examples/selfhost-core/llvmgen.osty:405:5
 	func() struct{} {
 		emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", ostyToString(cmp), ostyToString(loop.bodyLabel), ostyToString(loop.endLabel)))
 		return struct{}{}
 	}()
-	// Osty: examples/selfhost-core/llvmgen.osty:361:5
+	// Osty: examples/selfhost-core/llvmgen.osty:406:5
 	func() struct{} {
 		emitter.body = append(emitter.body, fmt.Sprintf("%s:", ostyToString(loop.bodyLabel)))
 		return struct{}{}
 	}()
-	// Osty: examples/selfhost-core/llvmgen.osty:362:5
+	// Osty: examples/selfhost-core/llvmgen.osty:407:5
 	llvmBind(emitter, iterName, llvmI64(current))
 	return &LlvmRangeLoop{condLabel: loop.condLabel, bodyLabel: loop.bodyLabel, endLabel: loop.endLabel, iterPtr: loop.iterPtr, current: current}
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:373:5
+// Osty: examples/selfhost-core/llvmgen.osty:418:5
 func llvmRangeEnd(emitter *LlvmEmitter, loop *LlvmRangeLoop) {
-	// Osty: examples/selfhost-core/llvmgen.osty:374:5
+	// Osty: examples/selfhost-core/llvmgen.osty:419:5
 	next := llvmNextTemp(emitter)
 	_ = next
-	// Osty: examples/selfhost-core/llvmgen.osty:375:5
+	// Osty: examples/selfhost-core/llvmgen.osty:420:5
 	func() struct{} {
 		emitter.body = append(emitter.body, fmt.Sprintf("  %s = add i64 %s, 1", ostyToString(next), ostyToString(loop.current)))
 		return struct{}{}
 	}()
-	// Osty: examples/selfhost-core/llvmgen.osty:376:5
+	// Osty: examples/selfhost-core/llvmgen.osty:421:5
 	func() struct{} {
 		emitter.body = append(emitter.body, fmt.Sprintf("  store i64 %s, ptr %s", ostyToString(next), ostyToString(loop.iterPtr)))
 		return struct{}{}
 	}()
-	// Osty: examples/selfhost-core/llvmgen.osty:377:5
+	// Osty: examples/selfhost-core/llvmgen.osty:422:5
 	func() struct{} {
 		emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", ostyToString(loop.condLabel)))
 		return struct{}{}
 	}()
-	// Osty: examples/selfhost-core/llvmgen.osty:378:5
+	// Osty: examples/selfhost-core/llvmgen.osty:423:5
 	func() struct{} {
 		emitter.body = append(emitter.body, fmt.Sprintf("%s:", ostyToString(loop.endLabel)))
 		return struct{}{}
 	}()
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:381:5
+// Osty: examples/selfhost-core/llvmgen.osty:426:5
 func llvmReturn(emitter *LlvmEmitter, value *LlvmValue) {
-	// Osty: examples/selfhost-core/llvmgen.osty:382:5
+	// Osty: examples/selfhost-core/llvmgen.osty:427:5
 	func() struct{} {
 		emitter.body = append(emitter.body, fmt.Sprintf("  ret %s %s", ostyToString(value.typ), ostyToString(value.name)))
 		return struct{}{}
 	}()
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:385:5
+// Osty: examples/selfhost-core/llvmgen.osty:430:5
 func llvmReturnI32Zero(emitter *LlvmEmitter) {
-	// Osty: examples/selfhost-core/llvmgen.osty:386:5
+	// Osty: examples/selfhost-core/llvmgen.osty:431:5
 	func() struct{} { emitter.body = append(emitter.body, "  ret i32 0"); return struct{}{} }()
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:389:5
+// Osty: examples/selfhost-core/llvmgen.osty:434:5
 func llvmRenderModule(sourcePath string, target string, definitions []string) string {
-	return llvmRenderModuleWithGlobals(sourcePath, target, make([]*LlvmStringGlobal, 0, 1), definitions)
+	return llvmRenderModuleWithGlobalsAndTypes(sourcePath, target, make([]string, 0, 1), make([]*LlvmStringGlobal, 0, 1), definitions)
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:393:5
+// Osty: examples/selfhost-core/llvmgen.osty:438:5
 func llvmRenderModuleWithGlobals(sourcePath string, target string, stringGlobals []*LlvmStringGlobal, definitions []string) string {
-	// Osty: examples/selfhost-core/llvmgen.osty:399:5
+	return llvmRenderModuleWithGlobalsAndTypes(sourcePath, target, make([]string, 0, 1), stringGlobals, definitions)
+}
+
+// Osty: examples/selfhost-core/llvmgen.osty:447:5
+func llvmRenderModuleWithGlobalsAndTypes(sourcePath string, target string, typeDefs []string, stringGlobals []*LlvmStringGlobal, definitions []string) string {
+	// Osty: examples/selfhost-core/llvmgen.osty:454:5
 	lines := []string{"; Code generated by osty LLVM backend. DO NOT EDIT.", fmt.Sprintf("; Osty: %s", ostyToString(sourcePath)), fmt.Sprintf("source_filename = \"%s\"", ostyToString(sourcePath))}
 	_ = lines
-	// Osty: examples/selfhost-core/llvmgen.osty:404:5
+	// Osty: examples/selfhost-core/llvmgen.osty:459:5
 	if target != "" {
-		// Osty: examples/selfhost-core/llvmgen.osty:405:9
+		// Osty: examples/selfhost-core/llvmgen.osty:460:9
 		func() struct{} {
 			lines = append(lines, fmt.Sprintf("target triple = \"%s\"", ostyToString(target)))
 			return struct{}{}
 		}()
 	}
-	// Osty: examples/selfhost-core/llvmgen.osty:407:5
+	// Osty: examples/selfhost-core/llvmgen.osty:462:5
 	func() struct{} { lines = append(lines, ""); return struct{}{} }()
-	// Osty: examples/selfhost-core/llvmgen.osty:408:5
+	// Osty: examples/selfhost-core/llvmgen.osty:463:5
+	for _, typeDef := range typeDefs {
+		// Osty: examples/selfhost-core/llvmgen.osty:464:9
+		func() struct{} { lines = append(lines, typeDef); return struct{}{} }()
+	}
+	// Osty: examples/selfhost-core/llvmgen.osty:466:5
+	if len(typeDefs) > 0 {
+		// Osty: examples/selfhost-core/llvmgen.osty:467:9
+		func() struct{} { lines = append(lines, ""); return struct{}{} }()
+	}
+	// Osty: examples/selfhost-core/llvmgen.osty:469:5
 	func() struct{} {
 		lines = append(lines, "@.fmt_i64 = private unnamed_addr constant [5 x i8] c\"%ld\\0A\\00\"")
 		return struct{}{}
 	}()
-	// Osty: examples/selfhost-core/llvmgen.osty:409:5
+	// Osty: examples/selfhost-core/llvmgen.osty:470:5
 	func() struct{} {
 		lines = append(lines, "@.fmt_str = private unnamed_addr constant [4 x i8] c\"%s\\0A\\00\"")
 		return struct{}{}
 	}()
-	// Osty: examples/selfhost-core/llvmgen.osty:410:5
+	// Osty: examples/selfhost-core/llvmgen.osty:471:5
 	for _, global := range stringGlobals {
-		// Osty: examples/selfhost-core/llvmgen.osty:411:9
+		// Osty: examples/selfhost-core/llvmgen.osty:472:9
 		func() struct{} {
 			lines = append(lines, fmt.Sprintf("%s = private unnamed_addr constant [%s x i8] c\"%s\"", ostyToString(global.name), ostyToString(global.byteLen), ostyToString(global.encoded)))
 			return struct{}{}
 		}()
 	}
-	// Osty: examples/selfhost-core/llvmgen.osty:413:5
+	// Osty: examples/selfhost-core/llvmgen.osty:474:5
 	func() struct{} { lines = append(lines, "declare i32 @printf(ptr, ...)"); return struct{}{} }()
-	// Osty: examples/selfhost-core/llvmgen.osty:414:5
+	// Osty: examples/selfhost-core/llvmgen.osty:475:5
 	firstDefinition := true
 	_ = firstDefinition
-	// Osty: examples/selfhost-core/llvmgen.osty:415:5
+	// Osty: examples/selfhost-core/llvmgen.osty:476:5
 	for _, definition := range definitions {
-		// Osty: examples/selfhost-core/llvmgen.osty:416:9
+		// Osty: examples/selfhost-core/llvmgen.osty:477:9
 		if firstDefinition {
-			// Osty: examples/selfhost-core/llvmgen.osty:417:13
+			// Osty: examples/selfhost-core/llvmgen.osty:478:13
 			func() struct{} { lines = append(lines, ""); return struct{}{} }()
-			// Osty: examples/selfhost-core/llvmgen.osty:418:29
+			// Osty: examples/selfhost-core/llvmgen.osty:479:13
 			firstDefinition = false
 		}
-		// Osty: examples/selfhost-core/llvmgen.osty:420:9
+		// Osty: examples/selfhost-core/llvmgen.osty:481:9
 		func() struct{} { lines = append(lines, definition); return struct{}{} }()
 	}
 	return llvmStrings.Join(lines, "\n")
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:425:5
+// Osty: examples/selfhost-core/llvmgen.osty:486:5
 func llvmRenderSkeleton(packageName string, sourcePath string, emit string, target string, unsupported string) string {
-	// Osty: examples/selfhost-core/llvmgen.osty:432:5
+	// Osty: examples/selfhost-core/llvmgen.osty:493:5
 	pkg := packageName
 	_ = pkg
-	// Osty: examples/selfhost-core/llvmgen.osty:433:5
+	// Osty: examples/selfhost-core/llvmgen.osty:494:5
 	if pkg == "" {
-		// Osty: examples/selfhost-core/llvmgen.osty:434:13
+		// Osty: examples/selfhost-core/llvmgen.osty:495:9
 		pkg = "main"
 	}
-	// Osty: examples/selfhost-core/llvmgen.osty:436:5
+	// Osty: examples/selfhost-core/llvmgen.osty:497:5
 	source := sourcePath
 	_ = source
-	// Osty: examples/selfhost-core/llvmgen.osty:437:5
+	// Osty: examples/selfhost-core/llvmgen.osty:498:5
 	if source == "" {
-		// Osty: examples/selfhost-core/llvmgen.osty:438:16
+		// Osty: examples/selfhost-core/llvmgen.osty:499:9
 		source = "<unknown>"
 	}
-	// Osty: examples/selfhost-core/llvmgen.osty:441:5
+	// Osty: examples/selfhost-core/llvmgen.osty:502:5
 	lines := []string{"; Osty LLVM backend skeleton", fmt.Sprintf("; package: %s", ostyToString(pkg)), fmt.Sprintf("; source: %s", ostyToString(source)), fmt.Sprintf("; emit: %s", ostyToString(emit))}
 	_ = lines
-	// Osty: examples/selfhost-core/llvmgen.osty:447:5
+	// Osty: examples/selfhost-core/llvmgen.osty:508:5
 	if target != "" {
-		// Osty: examples/selfhost-core/llvmgen.osty:448:9
+		// Osty: examples/selfhost-core/llvmgen.osty:509:9
 		func() struct{} {
 			lines = append(lines, fmt.Sprintf("; target: %s", ostyToString(target)))
 			return struct{}{}
 		}()
 	}
-	// Osty: examples/selfhost-core/llvmgen.osty:450:5
+	// Osty: examples/selfhost-core/llvmgen.osty:511:5
 	if unsupported != "" {
-		// Osty: examples/selfhost-core/llvmgen.osty:451:9
+		// Osty: examples/selfhost-core/llvmgen.osty:512:9
 		func() struct{} {
 			lines = append(lines, fmt.Sprintf("; unsupported: %s", ostyToString(unsupported)))
 			return struct{}{}
 		}()
 	}
-	// Osty: examples/selfhost-core/llvmgen.osty:453:5
+	// Osty: examples/selfhost-core/llvmgen.osty:514:5
 	func() struct{} { lines = append(lines, "; code generation is not implemented yet"); return struct{}{} }()
-	// Osty: examples/selfhost-core/llvmgen.osty:454:5
+	// Osty: examples/selfhost-core/llvmgen.osty:515:5
 	func() struct{} { lines = append(lines, ""); return struct{}{} }()
-	// Osty: examples/selfhost-core/llvmgen.osty:455:5
+	// Osty: examples/selfhost-core/llvmgen.osty:516:5
 	func() struct{} {
 		lines = append(lines, fmt.Sprintf("source_filename = \"%s\"", ostyToString(source)))
 		return struct{}{}
 	}()
-	// Osty: examples/selfhost-core/llvmgen.osty:456:5
+	// Osty: examples/selfhost-core/llvmgen.osty:517:5
 	if target != "" {
-		// Osty: examples/selfhost-core/llvmgen.osty:457:9
+		// Osty: examples/selfhost-core/llvmgen.osty:518:9
 		func() struct{} {
 			lines = append(lines, fmt.Sprintf("target triple = \"%s\"", ostyToString(target)))
 			return struct{}{}
@@ -721,434 +816,651 @@ func llvmRenderSkeleton(packageName string, sourcePath string, emit string, targ
 	return llvmStrings.Join([]string{llvmStrings.Join(lines, "\n"), "\n"}, "")
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:462:5
+// Osty: examples/selfhost-core/llvmgen.osty:523:5
 func llvmRenderFunction(ret string, name string, params []*LlvmParam, body []string) string {
-	// Osty: examples/selfhost-core/llvmgen.osty:468:5
+	// Osty: examples/selfhost-core/llvmgen.osty:529:5
 	lines := []string{fmt.Sprintf("define %s @%s(%s) {", ostyToString(ret), ostyToString(name), ostyToString(llvmParams(params))), "entry:"}
 	_ = lines
-	// Osty: examples/selfhost-core/llvmgen.osty:469:5
+	// Osty: examples/selfhost-core/llvmgen.osty:530:5
 	for _, line := range body {
-		// Osty: examples/selfhost-core/llvmgen.osty:470:9
+		// Osty: examples/selfhost-core/llvmgen.osty:531:9
 		func() struct{} { lines = append(lines, line); return struct{}{} }()
 	}
-	// Osty: examples/selfhost-core/llvmgen.osty:472:5
+	// Osty: examples/selfhost-core/llvmgen.osty:533:5
 	func() struct{} { lines = append(lines, "}"); return struct{}{} }()
 	return llvmStrings.Join([]string{llvmStrings.Join(lines, "\n"), "\n"}, "")
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:476:5
+// Osty: examples/selfhost-core/llvmgen.osty:537:5
 func llvmNeedsObjectArtifact(emit string) bool {
 	return emit == "object" || emit == "binary"
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:480:5
+// Osty: examples/selfhost-core/llvmgen.osty:541:5
 func llvmNeedsBinaryArtifact(emit string) bool {
 	return emit == "binary"
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:484:5
+// Osty: examples/selfhost-core/llvmgen.osty:545:5
 func llvmClangCompileObjectArgs(target string, irPath string, objectPath string) []string {
-	// Osty: examples/selfhost-core/llvmgen.osty:489:5
+	// Osty: examples/selfhost-core/llvmgen.osty:550:5
 	var args []string = make([]string, 0, 1)
 	_ = args
-	// Osty: examples/selfhost-core/llvmgen.osty:490:5
+	// Osty: examples/selfhost-core/llvmgen.osty:551:5
 	if target != "" {
-		// Osty: examples/selfhost-core/llvmgen.osty:491:9
+		// Osty: examples/selfhost-core/llvmgen.osty:552:9
 		func() struct{} { args = append(args, "-target"); return struct{}{} }()
-		// Osty: examples/selfhost-core/llvmgen.osty:492:9
+		// Osty: examples/selfhost-core/llvmgen.osty:553:9
 		func() struct{} { args = append(args, target); return struct{}{} }()
 	}
-	// Osty: examples/selfhost-core/llvmgen.osty:494:5
+	// Osty: examples/selfhost-core/llvmgen.osty:555:5
 	func() struct{} { args = append(args, "-c"); return struct{}{} }()
-	// Osty: examples/selfhost-core/llvmgen.osty:495:5
+	// Osty: examples/selfhost-core/llvmgen.osty:556:5
 	func() struct{} { args = append(args, irPath); return struct{}{} }()
-	// Osty: examples/selfhost-core/llvmgen.osty:496:5
+	// Osty: examples/selfhost-core/llvmgen.osty:557:5
 	func() struct{} { args = append(args, "-o"); return struct{}{} }()
-	// Osty: examples/selfhost-core/llvmgen.osty:497:5
+	// Osty: examples/selfhost-core/llvmgen.osty:558:5
 	func() struct{} { args = append(args, objectPath); return struct{}{} }()
 	return args
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:501:5
+// Osty: examples/selfhost-core/llvmgen.osty:562:5
 func llvmClangLinkBinaryArgs(target string, objectPath string, binaryPath string) []string {
-	// Osty: examples/selfhost-core/llvmgen.osty:506:5
+	// Osty: examples/selfhost-core/llvmgen.osty:567:5
 	var args []string = make([]string, 0, 1)
 	_ = args
-	// Osty: examples/selfhost-core/llvmgen.osty:507:5
+	// Osty: examples/selfhost-core/llvmgen.osty:568:5
 	if target != "" {
-		// Osty: examples/selfhost-core/llvmgen.osty:508:9
+		// Osty: examples/selfhost-core/llvmgen.osty:569:9
 		func() struct{} { args = append(args, "-target"); return struct{}{} }()
-		// Osty: examples/selfhost-core/llvmgen.osty:509:9
+		// Osty: examples/selfhost-core/llvmgen.osty:570:9
 		func() struct{} { args = append(args, target); return struct{}{} }()
 	}
-	// Osty: examples/selfhost-core/llvmgen.osty:511:5
+	// Osty: examples/selfhost-core/llvmgen.osty:572:5
 	func() struct{} { args = append(args, objectPath); return struct{}{} }()
-	// Osty: examples/selfhost-core/llvmgen.osty:512:5
+	// Osty: examples/selfhost-core/llvmgen.osty:573:5
 	func() struct{} { args = append(args, "-o"); return struct{}{} }()
-	// Osty: examples/selfhost-core/llvmgen.osty:513:5
+	// Osty: examples/selfhost-core/llvmgen.osty:574:5
 	func() struct{} { args = append(args, binaryPath); return struct{}{} }()
 	return args
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:517:5
+// Osty: examples/selfhost-core/llvmgen.osty:578:5
 func llvmMissingClangMessage() string {
 	return "llvm backend: clang not found on PATH; install clang or use --emit=llvm-ir"
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:521:5
+// Osty: examples/selfhost-core/llvmgen.osty:582:5
 func llvmMissingBinaryArtifactMessage() string {
 	return "llvm backend: missing binary artifact path"
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:525:5
+// Osty: examples/selfhost-core/llvmgen.osty:586:5
 func llvmClangFailureMessage(action string, command string, output string) string {
 	return fmt.Sprintf("llvm backend: clang %s failed\ncommand: %s\n%s", ostyToString(action), ostyToString(command), ostyToString(output))
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:529:5
+// Osty: examples/selfhost-core/llvmgen.osty:590:5
 func llvmUnsupportedBackendErrorMessage() string {
 	return "llvm backend: code generation is not implemented yet"
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:533:5
+// Osty: examples/selfhost-core/llvmgen.osty:594:5
 func llvmUnsupportedDiagnostic(kind string, detail string) *LlvmUnsupportedDiagnostic {
-	// Osty: examples/selfhost-core/llvmgen.osty:534:5
+	// Osty: examples/selfhost-core/llvmgen.osty:595:5
 	if kind == "go-ffi" {
-		// Osty: examples/selfhost-core/llvmgen.osty:535:9
+		// Osty: examples/selfhost-core/llvmgen.osty:596:9
 		target := detail
 		_ = target
-		// Osty: examples/selfhost-core/llvmgen.osty:536:9
+		// Osty: examples/selfhost-core/llvmgen.osty:597:9
 		if target == "" {
-			// Osty: examples/selfhost-core/llvmgen.osty:537:20
+			// Osty: examples/selfhost-core/llvmgen.osty:598:13
 			target = "<unknown>"
 		}
-		// Osty: examples/selfhost-core/llvmgen.osty:539:9
+		// Osty: examples/selfhost-core/llvmgen.osty:600:9
 		return &LlvmUnsupportedDiagnostic{code: "LLVM001", kind: "go-only", message: fmt.Sprintf("use go \"%s\" is only supported by the Go backend", ostyToString(target)), hint: "use --backend=go or replace it with a native/runtime binding before using --backend=llvm"}
 	}
-	// Osty: examples/selfhost-core/llvmgen.osty:547:5
+	// Osty: examples/selfhost-core/llvmgen.osty:608:5
 	if kind == "source-layout" {
-		// Osty: examples/selfhost-core/llvmgen.osty:548:9
+		// Osty: examples/selfhost-core/llvmgen.osty:609:9
 		return llvmUnsupportedDiagnosticWith("LLVM010", kind, detail, "reshape the file around the current LLVM subset: script statements or a simple main function")
 	}
-	// Osty: examples/selfhost-core/llvmgen.osty:555:5
+	// Osty: examples/selfhost-core/llvmgen.osty:616:5
 	if kind == "type-system" {
-		// Osty: examples/selfhost-core/llvmgen.osty:556:9
+		// Osty: examples/selfhost-core/llvmgen.osty:617:9
 		return llvmUnsupportedDiagnosticWith("LLVM011", kind, detail, "use Int or Bool values until the LLVM runtime type surface grows")
 	}
-	// Osty: examples/selfhost-core/llvmgen.osty:563:5
+	// Osty: examples/selfhost-core/llvmgen.osty:624:5
 	if kind == "statement" {
-		// Osty: examples/selfhost-core/llvmgen.osty:564:9
+		// Osty: examples/selfhost-core/llvmgen.osty:625:9
 		return llvmUnsupportedDiagnosticWith("LLVM012", kind, detail, "reduce the statement to let, assignment, if, range-for, return, or println")
 	}
-	// Osty: examples/selfhost-core/llvmgen.osty:571:5
+	// Osty: examples/selfhost-core/llvmgen.osty:632:5
 	if kind == "expression" {
-		// Osty: examples/selfhost-core/llvmgen.osty:572:9
+		// Osty: examples/selfhost-core/llvmgen.osty:633:9
 		return llvmUnsupportedDiagnosticWith("LLVM013", kind, detail, "reduce the expression to Int, Bool, arithmetic, comparison, call, or value-if forms")
 	}
-	// Osty: examples/selfhost-core/llvmgen.osty:579:5
+	// Osty: examples/selfhost-core/llvmgen.osty:640:5
 	if kind == "control-flow" {
-		// Osty: examples/selfhost-core/llvmgen.osty:580:9
+		// Osty: examples/selfhost-core/llvmgen.osty:641:9
 		return llvmUnsupportedDiagnosticWith("LLVM014", kind, detail, "use plain if/else or closed Int range loops for the current LLVM backend")
 	}
-	// Osty: examples/selfhost-core/llvmgen.osty:587:5
+	// Osty: examples/selfhost-core/llvmgen.osty:648:5
 	if kind == "call" {
-		// Osty: examples/selfhost-core/llvmgen.osty:588:9
+		// Osty: examples/selfhost-core/llvmgen.osty:649:9
 		return llvmUnsupportedDiagnosticWith("LLVM015", kind, detail, "call an Osty function with positional Int/Bool arguments or use println as a statement")
 	}
-	// Osty: examples/selfhost-core/llvmgen.osty:595:5
+	// Osty: examples/selfhost-core/llvmgen.osty:656:5
 	if kind == "name" {
-		// Osty: examples/selfhost-core/llvmgen.osty:596:9
+		// Osty: examples/selfhost-core/llvmgen.osty:657:9
 		return llvmUnsupportedDiagnosticWith("LLVM016", kind, detail, "use simple ASCII identifiers that the LLVM bridge can map directly")
 	}
-	// Osty: examples/selfhost-core/llvmgen.osty:603:5
+	// Osty: examples/selfhost-core/llvmgen.osty:664:5
 	if kind == "function-signature" {
-		// Osty: examples/selfhost-core/llvmgen.osty:604:9
+		// Osty: examples/selfhost-core/llvmgen.osty:665:9
 		return llvmUnsupportedDiagnosticWith("LLVM017", kind, detail, "use non-generic functions with identifier parameters and Int/Bool types")
 	}
-	// Osty: examples/selfhost-core/llvmgen.osty:612:5
+	// Osty: examples/selfhost-core/llvmgen.osty:673:5
 	reason := detail
 	_ = reason
-	// Osty: examples/selfhost-core/llvmgen.osty:613:5
+	// Osty: examples/selfhost-core/llvmgen.osty:674:5
 	if reason == "" {
-		// Osty: examples/selfhost-core/llvmgen.osty:614:16
+		// Osty: examples/selfhost-core/llvmgen.osty:675:9
 		reason = "source shape is not supported by the current LLVM backend"
 	}
 	return &LlvmUnsupportedDiagnostic{code: "LLVM000", kind: "unsupported-source", message: reason, hint: "reduce the program to the LLVM smoke subset or keep using --backend=go for this source"}
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:624:5
+// Osty: examples/selfhost-core/llvmgen.osty:685:5
 func llvmUnsupportedDiagnosticWith(code string, kind string, detail string, hint string) *LlvmUnsupportedDiagnostic {
-	// Osty: examples/selfhost-core/llvmgen.osty:630:5
+	// Osty: examples/selfhost-core/llvmgen.osty:691:5
 	reason := detail
 	_ = reason
-	// Osty: examples/selfhost-core/llvmgen.osty:631:5
+	// Osty: examples/selfhost-core/llvmgen.osty:692:5
 	if reason == "" {
-		// Osty: examples/selfhost-core/llvmgen.osty:632:16
+		// Osty: examples/selfhost-core/llvmgen.osty:693:9
 		reason = "source shape is not supported by the current LLVM backend"
 	}
 	return &LlvmUnsupportedDiagnostic{code: code, kind: kind, message: reason, hint: hint}
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:642:5
+// Osty: examples/selfhost-core/llvmgen.osty:703:5
 func llvmUnsupportedSummary(diag *LlvmUnsupportedDiagnostic) string {
 	return fmt.Sprintf("%s %s: %s; hint: %s", ostyToString(diag.code), ostyToString(diag.kind), ostyToString(diag.message), ostyToString(diag.hint))
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:646:5
+// Osty: examples/selfhost-core/llvmgen.osty:707:5
 func llvmSmokeExecutableCorpus() []*LlvmSmokeExecutableCase {
-	return []*LlvmSmokeExecutableCase{&LlvmSmokeExecutableCase{name: "minimal", fixture: "minimal_print.osty", stdout: "42\n"}, &LlvmSmokeExecutableCase{name: "scalar", fixture: "scalar_arithmetic.osty", stdout: "42\n"}, &LlvmSmokeExecutableCase{name: "control", fixture: "control_flow.osty", stdout: "15\n"}, &LlvmSmokeExecutableCase{name: "booleans", fixture: "booleans.osty", stdout: "7\n"}, &LlvmSmokeExecutableCase{name: "string", fixture: "string_print.osty", stdout: "hello, osty\n"}, &LlvmSmokeExecutableCase{name: "string-escape", fixture: "string_escape_print.osty", stdout: "line one\nquote \" slash \\\n"}, &LlvmSmokeExecutableCase{name: "string-let", fixture: "string_let_print.osty", stdout: "stored string\n"}, &LlvmSmokeExecutableCase{name: "string-return", fixture: "string_return_print.osty", stdout: "from function\n"}, &LlvmSmokeExecutableCase{name: "string-param", fixture: "string_param_print.osty", stdout: "param string\n"}, &LlvmSmokeExecutableCase{name: "string-mut", fixture: "string_mut_print.osty", stdout: "after\n"}}
+	return []*LlvmSmokeExecutableCase{&LlvmSmokeExecutableCase{name: "minimal", fixture: "minimal_print.osty", stdout: "42\n"}, &LlvmSmokeExecutableCase{name: "scalar", fixture: "scalar_arithmetic.osty", stdout: "42\n"}, &LlvmSmokeExecutableCase{name: "control", fixture: "control_flow.osty", stdout: "15\n"}, &LlvmSmokeExecutableCase{name: "booleans", fixture: "booleans.osty", stdout: "7\n"}, &LlvmSmokeExecutableCase{name: "string", fixture: "string_print.osty", stdout: "hello, osty\n"}, &LlvmSmokeExecutableCase{name: "string-escape", fixture: "string_escape_print.osty", stdout: "line one\nquote \" slash \\\n"}, &LlvmSmokeExecutableCase{name: "string-let", fixture: "string_let_print.osty", stdout: "stored string\n"}, &LlvmSmokeExecutableCase{name: "string-return", fixture: "string_return_print.osty", stdout: "from function\n"}, &LlvmSmokeExecutableCase{name: "string-param", fixture: "string_param_print.osty", stdout: "param string\n"}, &LlvmSmokeExecutableCase{name: "string-mut", fixture: "string_mut_print.osty", stdout: "after\n"}, &LlvmSmokeExecutableCase{name: "struct-field", fixture: "struct_field_print.osty", stdout: "42\n"}, &LlvmSmokeExecutableCase{name: "struct-return", fixture: "struct_return_print.osty", stdout: "42\n"}, &LlvmSmokeExecutableCase{name: "struct-param", fixture: "struct_param_print.osty", stdout: "42\n"}, &LlvmSmokeExecutableCase{name: "struct-mut", fixture: "struct_mut_print.osty", stdout: "42\n"}, &LlvmSmokeExecutableCase{name: "enum-variant", fixture: "enum_variant_print.osty", stdout: "42\n"}, &LlvmSmokeExecutableCase{name: "enum-return", fixture: "enum_return_print.osty", stdout: "42\n"}, &LlvmSmokeExecutableCase{name: "enum-param", fixture: "enum_param_print.osty", stdout: "42\n"}, &LlvmSmokeExecutableCase{name: "enum-mut", fixture: "enum_mut_print.osty", stdout: "42\n"}}
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:701:5
+// Osty: examples/selfhost-core/llvmgen.osty:802:5
 func llvmSmokeMinimalPrintIR(sourcePath string) string {
-	// Osty: examples/selfhost-core/llvmgen.osty:702:5
+	// Osty: examples/selfhost-core/llvmgen.osty:803:5
 	emitter := llvmEmitter()
 	_ = emitter
-	// Osty: examples/selfhost-core/llvmgen.osty:703:5
+	// Osty: examples/selfhost-core/llvmgen.osty:804:5
 	value := llvmBinaryI64(emitter, "add", llvmIntLiteral(40), llvmIntLiteral(2))
 	_ = value
-	// Osty: examples/selfhost-core/llvmgen.osty:704:5
+	// Osty: examples/selfhost-core/llvmgen.osty:805:5
 	llvmPrintlnI64(emitter, value)
-	// Osty: examples/selfhost-core/llvmgen.osty:705:5
+	// Osty: examples/selfhost-core/llvmgen.osty:806:5
 	llvmReturnI32Zero(emitter)
 	return llvmRenderModule(sourcePath, "", []string{llvmRenderFunction("i32", "main", make([]*LlvmParam, 0, 1), emitter.body)})
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:715:5
+// Osty: examples/selfhost-core/llvmgen.osty:816:5
 func llvmSmokeScalarArithmeticIR(sourcePath string) string {
-	// Osty: examples/selfhost-core/llvmgen.osty:716:5
+	// Osty: examples/selfhost-core/llvmgen.osty:817:5
 	add := llvmEmitter()
 	_ = add
-	// Osty: examples/selfhost-core/llvmgen.osty:717:5
+	// Osty: examples/selfhost-core/llvmgen.osty:818:5
 	llvmBind(add, "a", llvmI64("%a"))
-	// Osty: examples/selfhost-core/llvmgen.osty:718:5
+	// Osty: examples/selfhost-core/llvmgen.osty:819:5
 	llvmBind(add, "b", llvmI64("%b"))
-	// Osty: examples/selfhost-core/llvmgen.osty:719:5
+	// Osty: examples/selfhost-core/llvmgen.osty:820:5
 	sum := llvmBinaryI64(add, "add", llvmIdent(add, "a"), llvmIdent(add, "b"))
 	_ = sum
-	// Osty: examples/selfhost-core/llvmgen.osty:720:5
+	// Osty: examples/selfhost-core/llvmgen.osty:821:5
 	llvmReturn(add, sum)
-	// Osty: examples/selfhost-core/llvmgen.osty:722:5
+	// Osty: examples/selfhost-core/llvmgen.osty:823:5
 	main := llvmEmitter()
 	_ = main
-	// Osty: examples/selfhost-core/llvmgen.osty:723:5
+	// Osty: examples/selfhost-core/llvmgen.osty:824:5
 	value := llvmCall(main, "i64", "add", []*LlvmValue{llvmIntLiteral(40), llvmIntLiteral(2)})
 	_ = value
-	// Osty: examples/selfhost-core/llvmgen.osty:724:5
+	// Osty: examples/selfhost-core/llvmgen.osty:825:5
 	llvmImmutableLet(main, "value", value)
-	// Osty: examples/selfhost-core/llvmgen.osty:725:5
+	// Osty: examples/selfhost-core/llvmgen.osty:826:5
 	cond := llvmCompare(main, "eq", llvmIdent(main, "value"), llvmIntLiteral(42))
 	_ = cond
-	// Osty: examples/selfhost-core/llvmgen.osty:726:5
+	// Osty: examples/selfhost-core/llvmgen.osty:827:5
 	labels := llvmIfStart(main, cond)
 	_ = labels
-	// Osty: examples/selfhost-core/llvmgen.osty:727:5
+	// Osty: examples/selfhost-core/llvmgen.osty:828:5
 	llvmPrintlnI64(main, llvmIdent(main, "value"))
-	// Osty: examples/selfhost-core/llvmgen.osty:728:5
+	// Osty: examples/selfhost-core/llvmgen.osty:829:5
 	llvmIfElse(main, labels)
-	// Osty: examples/selfhost-core/llvmgen.osty:729:5
+	// Osty: examples/selfhost-core/llvmgen.osty:830:5
 	llvmPrintlnI64(main, llvmIntLiteral(0))
-	// Osty: examples/selfhost-core/llvmgen.osty:730:5
+	// Osty: examples/selfhost-core/llvmgen.osty:831:5
 	llvmIfEnd(main, labels)
-	// Osty: examples/selfhost-core/llvmgen.osty:731:5
+	// Osty: examples/selfhost-core/llvmgen.osty:832:5
 	llvmReturnI32Zero(main)
 	return llvmRenderModule(sourcePath, "", []string{llvmRenderFunction("i64", "add", []*LlvmParam{llvmParam("a", "i64"), llvmParam("b", "i64")}, add.body), llvmRenderFunction("i32", "main", make([]*LlvmParam, 0, 1), main.body)})
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:751:5
+// Osty: examples/selfhost-core/llvmgen.osty:852:5
 func llvmSmokeControlFlowIR(sourcePath string) string {
-	// Osty: examples/selfhost-core/llvmgen.osty:752:5
+	// Osty: examples/selfhost-core/llvmgen.osty:853:5
 	sumTo := llvmEmitter()
 	_ = sumTo
-	// Osty: examples/selfhost-core/llvmgen.osty:753:5
+	// Osty: examples/selfhost-core/llvmgen.osty:854:5
 	llvmBind(sumTo, "n", llvmI64("%n"))
-	// Osty: examples/selfhost-core/llvmgen.osty:754:5
+	// Osty: examples/selfhost-core/llvmgen.osty:855:5
 	llvmMutableLet(sumTo, "total", llvmIntLiteral(0))
-	// Osty: examples/selfhost-core/llvmgen.osty:755:5
+	// Osty: examples/selfhost-core/llvmgen.osty:856:5
 	loop := llvmInclusiveRangeStart(sumTo, "i", llvmIntLiteral(1), llvmIdent(sumTo, "n"))
 	_ = loop
-	// Osty: examples/selfhost-core/llvmgen.osty:756:5
+	// Osty: examples/selfhost-core/llvmgen.osty:857:5
 	nextTotal := llvmBinaryI64(sumTo, "add", llvmIdent(sumTo, "total"), llvmIdent(sumTo, "i"))
 	_ = nextTotal
-	// Osty: examples/selfhost-core/llvmgen.osty:757:5
+	// Osty: examples/selfhost-core/llvmgen.osty:858:5
 	_ = llvmAssign(sumTo, "total", nextTotal)
-	// Osty: examples/selfhost-core/llvmgen.osty:758:5
+	// Osty: examples/selfhost-core/llvmgen.osty:859:5
 	llvmRangeEnd(sumTo, loop)
-	// Osty: examples/selfhost-core/llvmgen.osty:759:5
+	// Osty: examples/selfhost-core/llvmgen.osty:860:5
 	llvmReturn(sumTo, llvmIdent(sumTo, "total"))
-	// Osty: examples/selfhost-core/llvmgen.osty:761:5
+	// Osty: examples/selfhost-core/llvmgen.osty:862:5
 	main := llvmEmitter()
 	_ = main
-	// Osty: examples/selfhost-core/llvmgen.osty:762:5
+	// Osty: examples/selfhost-core/llvmgen.osty:863:5
 	value := llvmCall(main, "i64", "sumTo", []*LlvmValue{llvmIntLiteral(5)})
 	_ = value
-	// Osty: examples/selfhost-core/llvmgen.osty:763:5
+	// Osty: examples/selfhost-core/llvmgen.osty:864:5
 	llvmPrintlnI64(main, value)
-	// Osty: examples/selfhost-core/llvmgen.osty:764:5
+	// Osty: examples/selfhost-core/llvmgen.osty:865:5
 	llvmReturnI32Zero(main)
 	return llvmRenderModule(sourcePath, "", []string{llvmRenderFunction("i64", "sumTo", []*LlvmParam{llvmParam("n", "i64")}, sumTo.body), llvmRenderFunction("i32", "main", make([]*LlvmParam, 0, 1), main.body)})
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:776:5
+// Osty: examples/selfhost-core/llvmgen.osty:877:5
 func llvmSmokeBooleansIR(sourcePath string) string {
-	// Osty: examples/selfhost-core/llvmgen.osty:777:5
+	// Osty: examples/selfhost-core/llvmgen.osty:878:5
 	choose := llvmEmitter()
 	_ = choose
-	// Osty: examples/selfhost-core/llvmgen.osty:778:5
+	// Osty: examples/selfhost-core/llvmgen.osty:879:5
 	llvmBind(choose, "a", llvmI64("%a"))
-	// Osty: examples/selfhost-core/llvmgen.osty:779:5
+	// Osty: examples/selfhost-core/llvmgen.osty:880:5
 	llvmBind(choose, "b", llvmI64("%b"))
-	// Osty: examples/selfhost-core/llvmgen.osty:780:5
+	// Osty: examples/selfhost-core/llvmgen.osty:881:5
 	lt := llvmCompare(choose, "slt", llvmIdent(choose, "a"), llvmIdent(choose, "b"))
 	_ = lt
-	// Osty: examples/selfhost-core/llvmgen.osty:781:5
+	// Osty: examples/selfhost-core/llvmgen.osty:882:5
 	eqZero := llvmCompare(choose, "eq", llvmIdent(choose, "a"), llvmIntLiteral(0))
 	_ = eqZero
-	// Osty: examples/selfhost-core/llvmgen.osty:782:5
+	// Osty: examples/selfhost-core/llvmgen.osty:883:5
 	nonZero := llvmNotI1(choose, eqZero)
 	_ = nonZero
-	// Osty: examples/selfhost-core/llvmgen.osty:783:5
+	// Osty: examples/selfhost-core/llvmgen.osty:884:5
 	cond := llvmLogicalI1(choose, "and", lt, nonZero)
 	_ = cond
-	// Osty: examples/selfhost-core/llvmgen.osty:784:5
+	// Osty: examples/selfhost-core/llvmgen.osty:885:5
 	labels := llvmIfExprStart(choose, cond)
 	_ = labels
-	// Osty: examples/selfhost-core/llvmgen.osty:785:5
+	// Osty: examples/selfhost-core/llvmgen.osty:886:5
 	thenValue := llvmBinaryI64(choose, "sub", llvmIdent(choose, "b"), llvmIdent(choose, "a"))
 	_ = thenValue
-	// Osty: examples/selfhost-core/llvmgen.osty:786:5
+	// Osty: examples/selfhost-core/llvmgen.osty:887:5
 	llvmIfExprElse(choose, labels)
-	// Osty: examples/selfhost-core/llvmgen.osty:787:5
+	// Osty: examples/selfhost-core/llvmgen.osty:888:5
 	elseValue := llvmBinaryI64(choose, "add", llvmIdent(choose, "a"), llvmIdent(choose, "b"))
 	_ = elseValue
-	// Osty: examples/selfhost-core/llvmgen.osty:788:5
+	// Osty: examples/selfhost-core/llvmgen.osty:889:5
 	result := llvmIfExprEnd(choose, "i64", thenValue, elseValue, labels)
 	_ = result
-	// Osty: examples/selfhost-core/llvmgen.osty:789:5
+	// Osty: examples/selfhost-core/llvmgen.osty:890:5
 	llvmReturn(choose, result)
-	// Osty: examples/selfhost-core/llvmgen.osty:791:5
+	// Osty: examples/selfhost-core/llvmgen.osty:892:5
 	main := llvmEmitter()
 	_ = main
-	// Osty: examples/selfhost-core/llvmgen.osty:792:5
+	// Osty: examples/selfhost-core/llvmgen.osty:893:5
 	value := llvmCall(main, "i64", "choose", []*LlvmValue{llvmIntLiteral(3), llvmIntLiteral(10)})
 	_ = value
-	// Osty: examples/selfhost-core/llvmgen.osty:793:5
+	// Osty: examples/selfhost-core/llvmgen.osty:894:5
 	llvmPrintlnI64(main, value)
-	// Osty: examples/selfhost-core/llvmgen.osty:794:5
+	// Osty: examples/selfhost-core/llvmgen.osty:895:5
 	llvmReturnI32Zero(main)
 	return llvmRenderModule(sourcePath, "", []string{llvmRenderFunction("i64", "choose", []*LlvmParam{llvmParam("a", "i64"), llvmParam("b", "i64")}, choose.body), llvmRenderFunction("i32", "main", make([]*LlvmParam, 0, 1), main.body)})
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:814:5
+// Osty: examples/selfhost-core/llvmgen.osty:915:5
 func llvmSmokeStringPrintIR(sourcePath string) string {
-	// Osty: examples/selfhost-core/llvmgen.osty:815:5
+	// Osty: examples/selfhost-core/llvmgen.osty:916:5
 	main := llvmEmitter()
 	_ = main
-	// Osty: examples/selfhost-core/llvmgen.osty:816:5
+	// Osty: examples/selfhost-core/llvmgen.osty:917:5
 	line := llvmStringLiteral(main, "hello, osty")
 	_ = line
-	// Osty: examples/selfhost-core/llvmgen.osty:817:5
+	// Osty: examples/selfhost-core/llvmgen.osty:918:5
 	llvmPrintlnString(main, line)
-	// Osty: examples/selfhost-core/llvmgen.osty:818:5
+	// Osty: examples/selfhost-core/llvmgen.osty:919:5
 	llvmReturnI32Zero(main)
 	return llvmRenderModuleWithGlobals(sourcePath, "", main.stringGlobals, []string{llvmRenderFunction("i32", "main", make([]*LlvmParam, 0, 1), main.body)})
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:830:5
+// Osty: examples/selfhost-core/llvmgen.osty:931:5
 func llvmSmokeStringEscapeIR(sourcePath string) string {
-	// Osty: examples/selfhost-core/llvmgen.osty:831:5
+	// Osty: examples/selfhost-core/llvmgen.osty:932:5
 	main := llvmEmitter()
 	_ = main
-	// Osty: examples/selfhost-core/llvmgen.osty:832:5
+	// Osty: examples/selfhost-core/llvmgen.osty:933:5
 	line := llvmStringLiteral(main, "line one\nquote \" slash \\")
 	_ = line
-	// Osty: examples/selfhost-core/llvmgen.osty:833:5
+	// Osty: examples/selfhost-core/llvmgen.osty:934:5
 	llvmPrintlnString(main, line)
-	// Osty: examples/selfhost-core/llvmgen.osty:834:5
+	// Osty: examples/selfhost-core/llvmgen.osty:935:5
 	llvmReturnI32Zero(main)
 	return llvmRenderModuleWithGlobals(sourcePath, "", main.stringGlobals, []string{llvmRenderFunction("i32", "main", make([]*LlvmParam, 0, 1), main.body)})
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:846:5
+// Osty: examples/selfhost-core/llvmgen.osty:947:5
 func llvmSmokeStringLetIR(sourcePath string) string {
-	// Osty: examples/selfhost-core/llvmgen.osty:847:5
+	// Osty: examples/selfhost-core/llvmgen.osty:948:5
 	main := llvmEmitter()
 	_ = main
-	// Osty: examples/selfhost-core/llvmgen.osty:848:5
+	// Osty: examples/selfhost-core/llvmgen.osty:949:5
 	msg := llvmStringLiteral(main, "stored string")
 	_ = msg
-	// Osty: examples/selfhost-core/llvmgen.osty:849:5
+	// Osty: examples/selfhost-core/llvmgen.osty:950:5
 	llvmImmutableLet(main, "msg", msg)
-	// Osty: examples/selfhost-core/llvmgen.osty:850:5
+	// Osty: examples/selfhost-core/llvmgen.osty:951:5
 	llvmPrintlnString(main, llvmIdent(main, "msg"))
-	// Osty: examples/selfhost-core/llvmgen.osty:851:5
+	// Osty: examples/selfhost-core/llvmgen.osty:952:5
 	llvmReturnI32Zero(main)
 	return llvmRenderModuleWithGlobals(sourcePath, "", main.stringGlobals, []string{llvmRenderFunction("i32", "main", make([]*LlvmParam, 0, 1), main.body)})
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:863:5
+// Osty: examples/selfhost-core/llvmgen.osty:964:5
 func llvmSmokeStringReturnIR(sourcePath string) string {
-	// Osty: examples/selfhost-core/llvmgen.osty:864:5
+	// Osty: examples/selfhost-core/llvmgen.osty:965:5
 	greet := llvmEmitter()
 	_ = greet
-	// Osty: examples/selfhost-core/llvmgen.osty:865:5
+	// Osty: examples/selfhost-core/llvmgen.osty:966:5
 	llvmReturn(greet, llvmStringLiteral(greet, "from function"))
-	// Osty: examples/selfhost-core/llvmgen.osty:867:5
+	// Osty: examples/selfhost-core/llvmgen.osty:968:5
 	main := llvmEmitter()
 	_ = main
-	// Osty: examples/selfhost-core/llvmgen.osty:868:5
+	// Osty: examples/selfhost-core/llvmgen.osty:969:5
 	llvmPrintlnString(main, llvmCall(main, "ptr", "greet", make([]*LlvmValue, 0, 1)))
-	// Osty: examples/selfhost-core/llvmgen.osty:869:5
+	// Osty: examples/selfhost-core/llvmgen.osty:970:5
 	llvmReturnI32Zero(main)
 	return llvmRenderModuleWithGlobals(sourcePath, "", greet.stringGlobals, []string{llvmRenderFunction("ptr", "greet", make([]*LlvmParam, 0, 1), greet.body), llvmRenderFunction("i32", "main", make([]*LlvmParam, 0, 1), main.body)})
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:882:5
+// Osty: examples/selfhost-core/llvmgen.osty:983:5
 func llvmSmokeStringParamIR(sourcePath string) string {
-	// Osty: examples/selfhost-core/llvmgen.osty:883:5
+	// Osty: examples/selfhost-core/llvmgen.osty:984:5
 	echo := llvmEmitter()
 	_ = echo
-	// Osty: examples/selfhost-core/llvmgen.osty:884:5
+	// Osty: examples/selfhost-core/llvmgen.osty:985:5
 	llvmBind(echo, "msg", &LlvmValue{typ: "ptr", name: "%msg", pointer: false})
-	// Osty: examples/selfhost-core/llvmgen.osty:885:5
+	// Osty: examples/selfhost-core/llvmgen.osty:986:5
 	llvmReturn(echo, llvmIdent(echo, "msg"))
-	// Osty: examples/selfhost-core/llvmgen.osty:887:5
+	// Osty: examples/selfhost-core/llvmgen.osty:988:5
 	main := llvmEmitter()
 	_ = main
-	// Osty: examples/selfhost-core/llvmgen.osty:888:5
+	// Osty: examples/selfhost-core/llvmgen.osty:989:5
 	value := llvmCall(main, "ptr", "echo", []*LlvmValue{llvmStringLiteral(main, "param string")})
 	_ = value
-	// Osty: examples/selfhost-core/llvmgen.osty:889:5
+	// Osty: examples/selfhost-core/llvmgen.osty:990:5
 	llvmPrintlnString(main, value)
-	// Osty: examples/selfhost-core/llvmgen.osty:890:5
+	// Osty: examples/selfhost-core/llvmgen.osty:991:5
 	llvmReturnI32Zero(main)
 	return llvmRenderModuleWithGlobals(sourcePath, "", main.stringGlobals, []string{llvmRenderFunction("ptr", "echo", []*LlvmParam{llvmParam("msg", "ptr")}, echo.body), llvmRenderFunction("i32", "main", make([]*LlvmParam, 0, 1), main.body)})
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:903:5
+// Osty: examples/selfhost-core/llvmgen.osty:1004:5
 func llvmSmokeStringMutableIR(sourcePath string) string {
-	// Osty: examples/selfhost-core/llvmgen.osty:904:5
+	// Osty: examples/selfhost-core/llvmgen.osty:1005:5
 	main := llvmEmitter()
 	_ = main
-	// Osty: examples/selfhost-core/llvmgen.osty:905:5
+	// Osty: examples/selfhost-core/llvmgen.osty:1006:5
 	llvmMutableLet(main, "msg", llvmStringLiteral(main, "before"))
-	// Osty: examples/selfhost-core/llvmgen.osty:906:5
+	// Osty: examples/selfhost-core/llvmgen.osty:1007:5
 	_ = llvmAssign(main, "msg", llvmStringLiteral(main, "after"))
-	// Osty: examples/selfhost-core/llvmgen.osty:907:5
+	// Osty: examples/selfhost-core/llvmgen.osty:1008:5
 	llvmPrintlnString(main, llvmIdent(main, "msg"))
-	// Osty: examples/selfhost-core/llvmgen.osty:908:5
+	// Osty: examples/selfhost-core/llvmgen.osty:1009:5
 	llvmReturnI32Zero(main)
 	return llvmRenderModuleWithGlobals(sourcePath, "", main.stringGlobals, []string{llvmRenderFunction("i32", "main", make([]*LlvmParam, 0, 1), main.body)})
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:920:1
+// Osty: examples/selfhost-core/llvmgen.osty:1021:5
+func llvmSmokeStructFieldIR(sourcePath string) string {
+	// Osty: examples/selfhost-core/llvmgen.osty:1022:5
+	main := llvmEmitter()
+	_ = main
+	// Osty: examples/selfhost-core/llvmgen.osty:1023:5
+	point := llvmStructLiteral(main, "%Point", []*LlvmValue{llvmIntLiteral(40), llvmIntLiteral(2)})
+	_ = point
+	// Osty: examples/selfhost-core/llvmgen.osty:1024:5
+	llvmImmutableLet(main, "point", point)
+	// Osty: examples/selfhost-core/llvmgen.osty:1025:5
+	sum := llvmBinaryI64(main, "add", llvmExtractValue(main, llvmIdent(main, "point"), "i64", 0), llvmExtractValue(main, llvmIdent(main, "point"), "i64", 1))
+	_ = sum
+	// Osty: examples/selfhost-core/llvmgen.osty:1031:5
+	llvmPrintlnI64(main, sum)
+	// Osty: examples/selfhost-core/llvmgen.osty:1032:5
+	llvmReturnI32Zero(main)
+	return llvmRenderModuleWithGlobalsAndTypes(sourcePath, "", []string{llvmStructTypeDef("Point", []string{"i64", "i64"})}, make([]*LlvmStringGlobal, 0, 1), []string{llvmRenderFunction("i32", "main", make([]*LlvmParam, 0, 1), main.body)})
+}
+
+// Osty: examples/selfhost-core/llvmgen.osty:1045:5
+func llvmSmokeStructReturnIR(sourcePath string) string {
+	// Osty: examples/selfhost-core/llvmgen.osty:1046:5
+	makePair := llvmEmitter()
+	_ = makePair
+	// Osty: examples/selfhost-core/llvmgen.osty:1047:5
+	pair := llvmStructLiteral(makePair, "%Pair", []*LlvmValue{llvmIntLiteral(10), llvmIntLiteral(32)})
+	_ = pair
+	// Osty: examples/selfhost-core/llvmgen.osty:1048:5
+	llvmReturn(makePair, pair)
+	// Osty: examples/selfhost-core/llvmgen.osty:1050:5
+	main := llvmEmitter()
+	_ = main
+	// Osty: examples/selfhost-core/llvmgen.osty:1051:5
+	returned := llvmCall(main, "%Pair", "makePair", make([]*LlvmValue, 0, 1))
+	_ = returned
+	// Osty: examples/selfhost-core/llvmgen.osty:1052:5
+	llvmImmutableLet(main, "pair", returned)
+	// Osty: examples/selfhost-core/llvmgen.osty:1053:5
+	sum := llvmBinaryI64(main, "add", llvmExtractValue(main, llvmIdent(main, "pair"), "i64", 0), llvmExtractValue(main, llvmIdent(main, "pair"), "i64", 1))
+	_ = sum
+	// Osty: examples/selfhost-core/llvmgen.osty:1059:5
+	llvmPrintlnI64(main, sum)
+	// Osty: examples/selfhost-core/llvmgen.osty:1060:5
+	llvmReturnI32Zero(main)
+	return llvmRenderModuleWithGlobalsAndTypes(sourcePath, "", []string{llvmStructTypeDef("Pair", []string{"i64", "i64"})}, make([]*LlvmStringGlobal, 0, 1), []string{llvmRenderFunction("%Pair", "makePair", make([]*LlvmParam, 0, 1), makePair.body), llvmRenderFunction("i32", "main", make([]*LlvmParam, 0, 1), main.body)})
+}
+
+// Osty: examples/selfhost-core/llvmgen.osty:1074:5
+func llvmSmokeStructParamIR(sourcePath string) string {
+	// Osty: examples/selfhost-core/llvmgen.osty:1075:5
+	total := llvmEmitter()
+	_ = total
+	// Osty: examples/selfhost-core/llvmgen.osty:1076:5
+	llvmBind(total, "score", &LlvmValue{typ: "%Score", name: "%score", pointer: false})
+	// Osty: examples/selfhost-core/llvmgen.osty:1077:5
+	sum := llvmBinaryI64(total, "add", llvmExtractValue(total, llvmIdent(total, "score"), "i64", 0), llvmExtractValue(total, llvmIdent(total, "score"), "i64", 1))
+	_ = sum
+	// Osty: examples/selfhost-core/llvmgen.osty:1083:5
+	llvmReturn(total, sum)
+	// Osty: examples/selfhost-core/llvmgen.osty:1085:5
+	main := llvmEmitter()
+	_ = main
+	// Osty: examples/selfhost-core/llvmgen.osty:1086:5
+	score := llvmStructLiteral(main, "%Score", []*LlvmValue{llvmIntLiteral(40), llvmIntLiteral(2)})
+	_ = score
+	// Osty: examples/selfhost-core/llvmgen.osty:1087:5
+	out := llvmCall(main, "i64", "total", []*LlvmValue{score})
+	_ = out
+	// Osty: examples/selfhost-core/llvmgen.osty:1088:5
+	llvmPrintlnI64(main, out)
+	// Osty: examples/selfhost-core/llvmgen.osty:1089:5
+	llvmReturnI32Zero(main)
+	return llvmRenderModuleWithGlobalsAndTypes(sourcePath, "", []string{llvmStructTypeDef("Score", []string{"i64", "i64"})}, make([]*LlvmStringGlobal, 0, 1), []string{llvmRenderFunction("i64", "total", []*LlvmParam{llvmParam("score", "%Score")}, total.body), llvmRenderFunction("i32", "main", make([]*LlvmParam, 0, 1), main.body)})
+}
+
+// Osty: examples/selfhost-core/llvmgen.osty:1103:5
+func llvmSmokeStructMutableIR(sourcePath string) string {
+	// Osty: examples/selfhost-core/llvmgen.osty:1104:5
+	main := llvmEmitter()
+	_ = main
+	// Osty: examples/selfhost-core/llvmgen.osty:1105:5
+	llvmMutableLet(main, "box", llvmStructLiteral(main, "%Box", []*LlvmValue{llvmIntLiteral(1)}))
+	// Osty: examples/selfhost-core/llvmgen.osty:1106:5
+	_ = llvmAssign(main, "box", llvmStructLiteral(main, "%Box", []*LlvmValue{llvmIntLiteral(42)}))
+	// Osty: examples/selfhost-core/llvmgen.osty:1107:5
+	llvmPrintlnI64(main, llvmExtractValue(main, llvmIdent(main, "box"), "i64", 0))
+	// Osty: examples/selfhost-core/llvmgen.osty:1108:5
+	llvmReturnI32Zero(main)
+	return llvmRenderModuleWithGlobalsAndTypes(sourcePath, "", []string{llvmStructTypeDef("Box", []string{"i64"})}, make([]*LlvmStringGlobal, 0, 1), []string{llvmRenderFunction("i32", "main", make([]*LlvmParam, 0, 1), main.body)})
+}
+
+// Osty: examples/selfhost-core/llvmgen.osty:1121:5
+func llvmSmokeEnumVariantIR(sourcePath string) string {
+	// Osty: examples/selfhost-core/llvmgen.osty:1122:5
+	main := llvmEmitter()
+	_ = main
+	// Osty: examples/selfhost-core/llvmgen.osty:1123:5
+	llvmImmutableLet(main, "light", llvmEnumVariant("Light", 1))
+	// Osty: examples/selfhost-core/llvmgen.osty:1124:5
+	cond := llvmCompare(main, "eq", llvmIdent(main, "light"), llvmEnumVariant("Light", 1))
+	_ = cond
+	// Osty: examples/selfhost-core/llvmgen.osty:1125:5
+	labels := llvmIfStart(main, cond)
+	_ = labels
+	// Osty: examples/selfhost-core/llvmgen.osty:1126:5
+	llvmPrintlnI64(main, llvmIntLiteral(42))
+	// Osty: examples/selfhost-core/llvmgen.osty:1127:5
+	llvmIfElse(main, labels)
+	// Osty: examples/selfhost-core/llvmgen.osty:1128:5
+	llvmPrintlnI64(main, llvmIntLiteral(0))
+	// Osty: examples/selfhost-core/llvmgen.osty:1129:5
+	llvmIfEnd(main, labels)
+	// Osty: examples/selfhost-core/llvmgen.osty:1130:5
+	llvmReturnI32Zero(main)
+	return llvmRenderModule(sourcePath, "", []string{llvmRenderFunction("i32", "main", make([]*LlvmParam, 0, 1), main.body)})
+}
+
+// Osty: examples/selfhost-core/llvmgen.osty:1141:5
+func llvmSmokeEnumReturnIR(sourcePath string) string {
+	// Osty: examples/selfhost-core/llvmgen.osty:1142:5
+	pick := llvmEmitter()
+	_ = pick
+	// Osty: examples/selfhost-core/llvmgen.osty:1143:5
+	llvmReturn(pick, llvmEnumVariant("Switch", 1))
+	// Osty: examples/selfhost-core/llvmgen.osty:1145:5
+	main := llvmEmitter()
+	_ = main
+	// Osty: examples/selfhost-core/llvmgen.osty:1146:5
+	state := llvmCall(main, "i64", "pick", make([]*LlvmValue, 0, 1))
+	_ = state
+	// Osty: examples/selfhost-core/llvmgen.osty:1147:5
+	cond := llvmCompare(main, "eq", state, llvmEnumVariant("Switch", 1))
+	_ = cond
+	// Osty: examples/selfhost-core/llvmgen.osty:1148:5
+	labels := llvmIfStart(main, cond)
+	_ = labels
+	// Osty: examples/selfhost-core/llvmgen.osty:1149:5
+	llvmPrintlnI64(main, llvmIntLiteral(42))
+	// Osty: examples/selfhost-core/llvmgen.osty:1150:5
+	llvmIfElse(main, labels)
+	// Osty: examples/selfhost-core/llvmgen.osty:1151:5
+	llvmPrintlnI64(main, llvmIntLiteral(0))
+	// Osty: examples/selfhost-core/llvmgen.osty:1152:5
+	llvmIfEnd(main, labels)
+	// Osty: examples/selfhost-core/llvmgen.osty:1153:5
+	llvmReturnI32Zero(main)
+	return llvmRenderModule(sourcePath, "", []string{llvmRenderFunction("i64", "pick", make([]*LlvmParam, 0, 1), pick.body), llvmRenderFunction("i32", "main", make([]*LlvmParam, 0, 1), main.body)})
+}
+
+// Osty: examples/selfhost-core/llvmgen.osty:1165:5
+func llvmSmokeEnumParamIR(sourcePath string) string {
+	// Osty: examples/selfhost-core/llvmgen.osty:1166:5
+	score := llvmEmitter()
+	_ = score
+	// Osty: examples/selfhost-core/llvmgen.osty:1167:5
+	llvmBind(score, "state", llvmI64("%state"))
+	// Osty: examples/selfhost-core/llvmgen.osty:1168:5
+	cond := llvmCompare(score, "eq", llvmIdent(score, "state"), llvmEnumVariant("Switch", 1))
+	_ = cond
+	// Osty: examples/selfhost-core/llvmgen.osty:1169:5
+	labels := llvmIfExprStart(score, cond)
+	_ = labels
+	// Osty: examples/selfhost-core/llvmgen.osty:1170:5
+	thenValue := llvmIntLiteral(42)
+	_ = thenValue
+	// Osty: examples/selfhost-core/llvmgen.osty:1171:5
+	llvmIfExprElse(score, labels)
+	// Osty: examples/selfhost-core/llvmgen.osty:1172:5
+	elseValue := llvmIntLiteral(0)
+	_ = elseValue
+	// Osty: examples/selfhost-core/llvmgen.osty:1173:5
+	out := llvmIfExprEnd(score, "i64", thenValue, elseValue, labels)
+	_ = out
+	// Osty: examples/selfhost-core/llvmgen.osty:1174:5
+	llvmReturn(score, out)
+	// Osty: examples/selfhost-core/llvmgen.osty:1176:5
+	main := llvmEmitter()
+	_ = main
+	// Osty: examples/selfhost-core/llvmgen.osty:1177:5
+	result := llvmCall(main, "i64", "score", []*LlvmValue{llvmEnumVariant("Switch", 1)})
+	_ = result
+	// Osty: examples/selfhost-core/llvmgen.osty:1178:5
+	llvmPrintlnI64(main, result)
+	// Osty: examples/selfhost-core/llvmgen.osty:1179:5
+	llvmReturnI32Zero(main)
+	return llvmRenderModule(sourcePath, "", []string{llvmRenderFunction("i64", "score", []*LlvmParam{llvmParam("state", "i64")}, score.body), llvmRenderFunction("i32", "main", make([]*LlvmParam, 0, 1), main.body)})
+}
+
+// Osty: examples/selfhost-core/llvmgen.osty:1191:5
+func llvmSmokeEnumMutableIR(sourcePath string) string {
+	// Osty: examples/selfhost-core/llvmgen.osty:1192:5
+	main := llvmEmitter()
+	_ = main
+	// Osty: examples/selfhost-core/llvmgen.osty:1193:5
+	llvmMutableLet(main, "state", llvmEnumVariant("Switch", 0))
+	// Osty: examples/selfhost-core/llvmgen.osty:1194:5
+	_ = llvmAssign(main, "state", llvmEnumVariant("Switch", 1))
+	// Osty: examples/selfhost-core/llvmgen.osty:1195:5
+	cond := llvmCompare(main, "eq", llvmIdent(main, "state"), llvmEnumVariant("Switch", 1))
+	_ = cond
+	// Osty: examples/selfhost-core/llvmgen.osty:1196:5
+	labels := llvmIfStart(main, cond)
+	_ = labels
+	// Osty: examples/selfhost-core/llvmgen.osty:1197:5
+	llvmPrintlnI64(main, llvmIntLiteral(42))
+	// Osty: examples/selfhost-core/llvmgen.osty:1198:5
+	llvmIfElse(main, labels)
+	// Osty: examples/selfhost-core/llvmgen.osty:1199:5
+	llvmPrintlnI64(main, llvmIntLiteral(0))
+	// Osty: examples/selfhost-core/llvmgen.osty:1200:5
+	llvmIfEnd(main, labels)
+	// Osty: examples/selfhost-core/llvmgen.osty:1201:5
+	llvmReturnI32Zero(main)
+	return llvmRenderModule(sourcePath, "", []string{llvmRenderFunction("i32", "main", make([]*LlvmParam, 0, 1), main.body)})
+}
+
+// Osty: examples/selfhost-core/llvmgen.osty:1212:1
 func llvmCallArgs(args []*LlvmValue) string {
-	// Osty: examples/selfhost-core/llvmgen.osty:921:5
+	// Osty: examples/selfhost-core/llvmgen.osty:1213:5
 	var parts []string = make([]string, 0, 1)
 	_ = parts
-	// Osty: examples/selfhost-core/llvmgen.osty:922:5
+	// Osty: examples/selfhost-core/llvmgen.osty:1214:5
 	for _, arg := range args {
-		// Osty: examples/selfhost-core/llvmgen.osty:923:9
+		// Osty: examples/selfhost-core/llvmgen.osty:1215:9
 		func() struct{} {
 			parts = append(parts, fmt.Sprintf("%s %s", ostyToString(arg.typ), ostyToString(arg.name)))
 			return struct{}{}
@@ -1157,14 +1469,14 @@ func llvmCallArgs(args []*LlvmValue) string {
 	return llvmStrings.Join(parts, ", ")
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:928:1
+// Osty: examples/selfhost-core/llvmgen.osty:1220:1
 func llvmParams(params []*LlvmParam) string {
-	// Osty: examples/selfhost-core/llvmgen.osty:929:5
+	// Osty: examples/selfhost-core/llvmgen.osty:1221:5
 	var parts []string = make([]string, 0, 1)
 	_ = parts
-	// Osty: examples/selfhost-core/llvmgen.osty:930:5
+	// Osty: examples/selfhost-core/llvmgen.osty:1222:5
 	for _, param := range params {
-		// Osty: examples/selfhost-core/llvmgen.osty:931:9
+		// Osty: examples/selfhost-core/llvmgen.osty:1223:9
 		func() struct{} {
 			parts = append(parts, fmt.Sprintf("%s %%%s", ostyToString(param.typ), ostyToString(param.name)))
 			return struct{}{}
@@ -1173,22 +1485,42 @@ func llvmParams(params []*LlvmParam) string {
 	return llvmStrings.Join(parts, ", ")
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:936:1
+// Osty: examples/selfhost-core/llvmgen.osty:1228:1
 func llvmNextTemp(emitter *LlvmEmitter) string {
-	// Osty: examples/selfhost-core/llvmgen.osty:937:5
+	// Osty: examples/selfhost-core/llvmgen.osty:1229:5
 	name := fmt.Sprintf("%%t%s", ostyToString(emitter.temp))
 	_ = name
-	// Osty: examples/selfhost-core/llvmgen.osty:938:18
-	emitter.temp = emitter.temp + 1
+	// Osty: examples/selfhost-core/llvmgen.osty:1230:12
+	emitter.temp = func() int {
+		var _p5 int = emitter.temp
+		var _rhs6 int = 1
+		if _rhs6 > 0 && _p5 > math.MaxInt-_rhs6 {
+			panic("integer overflow")
+		}
+		if _rhs6 < 0 && _p5 < math.MinInt-_rhs6 {
+			panic("integer overflow")
+		}
+		return _p5 + _rhs6
+	}()
 	return name
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:942:1
+// Osty: examples/selfhost-core/llvmgen.osty:1234:1
 func llvmNextLabel(emitter *LlvmEmitter, prefix string) string {
-	// Osty: examples/selfhost-core/llvmgen.osty:943:5
+	// Osty: examples/selfhost-core/llvmgen.osty:1235:5
 	name := fmt.Sprintf("%s%s", ostyToString(prefix), ostyToString(emitter.label))
 	_ = name
-	// Osty: examples/selfhost-core/llvmgen.osty:944:19
-	emitter.label = emitter.label + 1
+	// Osty: examples/selfhost-core/llvmgen.osty:1236:12
+	emitter.label = func() int {
+		var _p7 int = emitter.label
+		var _rhs8 int = 1
+		if _rhs8 > 0 && _p7 > math.MaxInt-_rhs8 {
+			panic("integer overflow")
+		}
+		if _rhs8 < 0 && _p7 < math.MinInt-_rhs8 {
+			panic("integer overflow")
+		}
+		return _p7 + _rhs8
+	}()
 	return name
 }

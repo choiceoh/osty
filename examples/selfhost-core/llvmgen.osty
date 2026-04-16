@@ -33,6 +33,10 @@ pub struct LlvmStringGlobal {
     pub byteLen: Int,
 }
 
+pub struct LlvmStructField {
+    pub typ: String,
+}
+
 pub struct LlvmCString {
     pub encoded: String,
     pub byteLen: Int,
@@ -95,6 +99,11 @@ pub fn llvmI1(name: String) -> LlvmValue {
 
 pub fn llvmIntLiteral(value: Int) -> LlvmValue {
     llvmI64("{value}")
+}
+
+pub fn llvmEnumVariant(enumName: String, tag: Int) -> LlvmValue {
+    let _ = enumName
+    llvmI64("{tag}")
 }
 
 pub fn llvmParam(name: String, typ: String) -> LlvmParam {
@@ -218,6 +227,42 @@ pub fn llvmCall(
     let tmp = llvmNextTemp(emitter)
     emitter.body.push("  {tmp} = call {ret} @{name}({llvmCallArgs(args)})")
     LlvmValue { typ: ret, name: tmp, pointer: false }
+}
+
+pub fn llvmStructTypeDef(name: String, fieldTypes: List<String>) -> String {
+    let fields = llvmStrings.Join(fieldTypes, ", ")
+    "%{name} = type \{ {fields} \}"
+}
+
+pub fn llvmStructLiteral(
+    emitter: LlvmEmitter,
+    typ: String,
+    fields: List<LlvmValue>,
+) -> LlvmValue {
+    let mut current = "undef"
+    let mut fieldIndex = 0
+    for field in fields {
+        let tmp = llvmNextTemp(emitter)
+        emitter.body.push(
+            "  {tmp} = insertvalue {typ} {current}, {field.typ} {field.name}, {fieldIndex}",
+        )
+        current = tmp
+        fieldIndex = fieldIndex + 1
+    }
+    LlvmValue { typ, name: current, pointer: false }
+}
+
+pub fn llvmExtractValue(
+    emitter: LlvmEmitter,
+    aggregate: LlvmValue,
+    fieldType: String,
+    fieldIndex: Int,
+) -> LlvmValue {
+    let tmp = llvmNextTemp(emitter)
+    emitter.body.push(
+        "  {tmp} = extractvalue {aggregate.typ} {aggregate.name}, {fieldIndex}",
+    )
+    LlvmValue { typ: fieldType, name: tmp, pointer: false }
 }
 
 pub fn llvmPrintlnI64(emitter: LlvmEmitter, value: LlvmValue) {
@@ -387,12 +432,22 @@ pub fn llvmReturnI32Zero(emitter: LlvmEmitter) {
 }
 
 pub fn llvmRenderModule(sourcePath: String, target: String, definitions: List<String>) -> String {
-    llvmRenderModuleWithGlobals(sourcePath, target, [], definitions)
+    llvmRenderModuleWithGlobalsAndTypes(sourcePath, target, [], [], definitions)
 }
 
 pub fn llvmRenderModuleWithGlobals(
     sourcePath: String,
     target: String,
+    stringGlobals: List<LlvmStringGlobal>,
+    definitions: List<String>,
+) -> String {
+    llvmRenderModuleWithGlobalsAndTypes(sourcePath, target, [], stringGlobals, definitions)
+}
+
+pub fn llvmRenderModuleWithGlobalsAndTypes(
+    sourcePath: String,
+    target: String,
+    typeDefs: List<String>,
     stringGlobals: List<LlvmStringGlobal>,
     definitions: List<String>,
 ) -> String {
@@ -405,6 +460,12 @@ pub fn llvmRenderModuleWithGlobals(
         lines.push("target triple = \"{target}\"")
     }
     lines.push("")
+    for typeDef in typeDefs {
+        lines.push(typeDef)
+    }
+    if typeDefs.len() > 0 {
+        lines.push("")
+    }
     lines.push("@.fmt_i64 = private unnamed_addr constant [5 x i8] c\"%ld\\0A\\00\"")
     lines.push("@.fmt_str = private unnamed_addr constant [4 x i8] c\"%s\\0A\\00\"")
     for global in stringGlobals {
@@ -695,6 +756,46 @@ pub fn llvmSmokeExecutableCorpus() -> List<LlvmSmokeExecutableCase> {
             fixture: "string_mut_print.osty",
             stdout: "after\n",
         },
+        LlvmSmokeExecutableCase {
+            name: "struct-field",
+            fixture: "struct_field_print.osty",
+            stdout: "42\n",
+        },
+        LlvmSmokeExecutableCase {
+            name: "struct-return",
+            fixture: "struct_return_print.osty",
+            stdout: "42\n",
+        },
+        LlvmSmokeExecutableCase {
+            name: "struct-param",
+            fixture: "struct_param_print.osty",
+            stdout: "42\n",
+        },
+        LlvmSmokeExecutableCase {
+            name: "struct-mut",
+            fixture: "struct_mut_print.osty",
+            stdout: "42\n",
+        },
+        LlvmSmokeExecutableCase {
+            name: "enum-variant",
+            fixture: "enum_variant_print.osty",
+            stdout: "42\n",
+        },
+        LlvmSmokeExecutableCase {
+            name: "enum-return",
+            fixture: "enum_return_print.osty",
+            stdout: "42\n",
+        },
+        LlvmSmokeExecutableCase {
+            name: "enum-param",
+            fixture: "enum_param_print.osty",
+            stdout: "42\n",
+        },
+        LlvmSmokeExecutableCase {
+            name: "enum-mut",
+            fixture: "enum_mut_print.osty",
+            stdout: "42\n",
+        },
     ]
 }
 
@@ -911,6 +1012,197 @@ pub fn llvmSmokeStringMutableIR(sourcePath: String) -> String {
         sourcePath,
         "",
         main.stringGlobals,
+        [
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+pub fn llvmSmokeStructFieldIR(sourcePath: String) -> String {
+    let main = llvmEmitter()
+    let point = llvmStructLiteral(main, "%Point", [llvmIntLiteral(40), llvmIntLiteral(2)])
+    llvmImmutableLet(main, "point", point)
+    let sum = llvmBinaryI64(
+        main,
+        "add",
+        llvmExtractValue(main, llvmIdent(main, "point"), "i64", 0),
+        llvmExtractValue(main, llvmIdent(main, "point"), "i64", 1),
+    )
+    llvmPrintlnI64(main, sum)
+    llvmReturnI32Zero(main)
+
+    llvmRenderModuleWithGlobalsAndTypes(
+        sourcePath,
+        "",
+        [llvmStructTypeDef("Point", ["i64", "i64"])],
+        [],
+        [
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+pub fn llvmSmokeStructReturnIR(sourcePath: String) -> String {
+    let makePair = llvmEmitter()
+    let pair = llvmStructLiteral(makePair, "%Pair", [llvmIntLiteral(10), llvmIntLiteral(32)])
+    llvmReturn(makePair, pair)
+
+    let main = llvmEmitter()
+    let returned = llvmCall(main, "%Pair", "makePair", [])
+    llvmImmutableLet(main, "pair", returned)
+    let sum = llvmBinaryI64(
+        main,
+        "add",
+        llvmExtractValue(main, llvmIdent(main, "pair"), "i64", 0),
+        llvmExtractValue(main, llvmIdent(main, "pair"), "i64", 1),
+    )
+    llvmPrintlnI64(main, sum)
+    llvmReturnI32Zero(main)
+
+    llvmRenderModuleWithGlobalsAndTypes(
+        sourcePath,
+        "",
+        [llvmStructTypeDef("Pair", ["i64", "i64"])],
+        [],
+        [
+            llvmRenderFunction("%Pair", "makePair", [], makePair.body),
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+pub fn llvmSmokeStructParamIR(sourcePath: String) -> String {
+    let total = llvmEmitter()
+    llvmBind(total, "score", LlvmValue { typ: "%Score", name: "%score", pointer: false })
+    let sum = llvmBinaryI64(
+        total,
+        "add",
+        llvmExtractValue(total, llvmIdent(total, "score"), "i64", 0),
+        llvmExtractValue(total, llvmIdent(total, "score"), "i64", 1),
+    )
+    llvmReturn(total, sum)
+
+    let main = llvmEmitter()
+    let score = llvmStructLiteral(main, "%Score", [llvmIntLiteral(40), llvmIntLiteral(2)])
+    let out = llvmCall(main, "i64", "total", [score])
+    llvmPrintlnI64(main, out)
+    llvmReturnI32Zero(main)
+
+    llvmRenderModuleWithGlobalsAndTypes(
+        sourcePath,
+        "",
+        [llvmStructTypeDef("Score", ["i64", "i64"])],
+        [],
+        [
+            llvmRenderFunction("i64", "total", [llvmParam("score", "%Score")], total.body),
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+pub fn llvmSmokeStructMutableIR(sourcePath: String) -> String {
+    let main = llvmEmitter()
+    llvmMutableLet(main, "box", llvmStructLiteral(main, "%Box", [llvmIntLiteral(1)]))
+    let _ = llvmAssign(main, "box", llvmStructLiteral(main, "%Box", [llvmIntLiteral(42)]))
+    llvmPrintlnI64(main, llvmExtractValue(main, llvmIdent(main, "box"), "i64", 0))
+    llvmReturnI32Zero(main)
+
+    llvmRenderModuleWithGlobalsAndTypes(
+        sourcePath,
+        "",
+        [llvmStructTypeDef("Box", ["i64"])],
+        [],
+        [
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+pub fn llvmSmokeEnumVariantIR(sourcePath: String) -> String {
+    let main = llvmEmitter()
+    llvmImmutableLet(main, "light", llvmEnumVariant("Light", 1))
+    let cond = llvmCompare(main, "eq", llvmIdent(main, "light"), llvmEnumVariant("Light", 1))
+    let labels = llvmIfStart(main, cond)
+    llvmPrintlnI64(main, llvmIntLiteral(42))
+    llvmIfElse(main, labels)
+    llvmPrintlnI64(main, llvmIntLiteral(0))
+    llvmIfEnd(main, labels)
+    llvmReturnI32Zero(main)
+
+    llvmRenderModule(
+        sourcePath,
+        "",
+        [
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+pub fn llvmSmokeEnumReturnIR(sourcePath: String) -> String {
+    let pick = llvmEmitter()
+    llvmReturn(pick, llvmEnumVariant("Switch", 1))
+
+    let main = llvmEmitter()
+    let state = llvmCall(main, "i64", "pick", [])
+    let cond = llvmCompare(main, "eq", state, llvmEnumVariant("Switch", 1))
+    let labels = llvmIfStart(main, cond)
+    llvmPrintlnI64(main, llvmIntLiteral(42))
+    llvmIfElse(main, labels)
+    llvmPrintlnI64(main, llvmIntLiteral(0))
+    llvmIfEnd(main, labels)
+    llvmReturnI32Zero(main)
+
+    llvmRenderModule(
+        sourcePath,
+        "",
+        [
+            llvmRenderFunction("i64", "pick", [], pick.body),
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+pub fn llvmSmokeEnumParamIR(sourcePath: String) -> String {
+    let score = llvmEmitter()
+    llvmBind(score, "state", llvmI64("%state"))
+    let cond = llvmCompare(score, "eq", llvmIdent(score, "state"), llvmEnumVariant("Switch", 1))
+    let labels = llvmIfExprStart(score, cond)
+    let thenValue = llvmIntLiteral(42)
+    llvmIfExprElse(score, labels)
+    let elseValue = llvmIntLiteral(0)
+    let out = llvmIfExprEnd(score, "i64", thenValue, elseValue, labels)
+    llvmReturn(score, out)
+
+    let main = llvmEmitter()
+    let result = llvmCall(main, "i64", "score", [llvmEnumVariant("Switch", 1)])
+    llvmPrintlnI64(main, result)
+    llvmReturnI32Zero(main)
+
+    llvmRenderModule(
+        sourcePath,
+        "",
+        [
+            llvmRenderFunction("i64", "score", [llvmParam("state", "i64")], score.body),
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+pub fn llvmSmokeEnumMutableIR(sourcePath: String) -> String {
+    let main = llvmEmitter()
+    llvmMutableLet(main, "state", llvmEnumVariant("Switch", 0))
+    let _ = llvmAssign(main, "state", llvmEnumVariant("Switch", 1))
+    let cond = llvmCompare(main, "eq", llvmIdent(main, "state"), llvmEnumVariant("Switch", 1))
+    let labels = llvmIfStart(main, cond)
+    llvmPrintlnI64(main, llvmIntLiteral(42))
+    llvmIfElse(main, labels)
+    llvmPrintlnI64(main, llvmIntLiteral(0))
+    llvmIfEnd(main, labels)
+    llvmReturnI32Zero(main)
+
+    llvmRenderModule(
+        sourcePath,
+        "",
         [
             llvmRenderFunction("i32", "main", [], main.body),
         ],

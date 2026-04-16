@@ -1,0 +1,13 @@
+enum Light {
+    Red
+    Green
+}
+
+fn main() {
+    let light: Light = Green
+    if light == Green {
+        println(42)
+    } else {
+        println(0)
+    }
+}
