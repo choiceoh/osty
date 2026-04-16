@@ -750,6 +750,18 @@ func (g *generator) bindLetPattern(pattern ast.Pattern, v value, mutable bool) e
 		}
 		g.bindNamedLocal(p.Name, v, mutable)
 		return nil
+	case *ast.BindingPat:
+		if mutable {
+			return unsupported("statement", "binding let patterns cannot be mutable yet")
+		}
+		if p.Name == "" {
+			return unsupported("statement", "empty let binding name")
+		}
+		if !llvmIsIdent(p.Name) {
+			return unsupportedf("name", "let name %q", p.Name)
+		}
+		g.bindNamedLocal(p.Name, v, false)
+		return g.bindLetPattern(p.Pattern, v, false)
 	case *ast.TuplePat:
 		if mutable {
 			return unsupported("statement", "tuple let patterns cannot be mutable yet")
@@ -771,8 +783,46 @@ func (g *generator) bindLetPattern(pattern ast.Pattern, v value, mutable bool) e
 			}
 		}
 		return nil
+	case *ast.StructPat:
+		if mutable {
+			return unsupported("statement", "struct let patterns cannot be mutable yet")
+		}
+		if err := g.validateStructLetPatternType(p, v.typ); err != nil {
+			return err
+		}
+		info := g.structsByType[v.typ]
+		if info == nil {
+			return unsupportedf("type-system", "struct pattern on %s", v.typ)
+		}
+		seen := map[string]bool{}
+		for _, fieldPat := range p.Fields {
+			if fieldPat == nil {
+				return unsupportedf("statement", "struct pattern %q has nil field", info.name)
+			}
+			if fieldPat.Name == "" {
+				return unsupportedf("statement", "struct pattern %q has unnamed field", info.name)
+			}
+			if seen[fieldPat.Name] {
+				return unsupportedf("statement", "struct pattern %q duplicate field %q", info.name, fieldPat.Name)
+			}
+			seen[fieldPat.Name] = true
+			fieldValue, err := g.extractStructField(v, info, fieldPat.Name)
+			if err != nil {
+				return err
+			}
+			fieldPattern := fieldPat.Pattern
+			if fieldPattern == nil {
+				fieldPattern = &ast.IdentPat{Name: fieldPat.Name}
+			}
+			if err := g.bindLetPattern(fieldPattern, fieldValue, false); err != nil {
+				return err
+			}
+		}
+		return nil
+	case *ast.VariantPat:
+		return unsupported("statement", "let patterns must be irrefutable; use if let or match for enum variants")
 	default:
-		return unsupported("statement", "only identifier, wildcard, and tuple let patterns are supported")
+		return unsupported("statement", "only identifier, wildcard, tuple, binding, and struct let patterns are supported")
 	}
 }
 
@@ -790,6 +840,57 @@ func (g *generator) extractTupleElement(tuple value, info tupleTypeInfo, index i
 	elem.gcManaged = info.elems[index] == "ptr" || elem.listElemTyp != ""
 	elem.rootPaths = g.rootPathsForType(info.elems[index])
 	return elem, nil
+}
+
+func (g *generator) validateStructLetPatternType(pattern *ast.StructPat, valueTyp string) error {
+	if pattern == nil || len(pattern.Type) == 0 {
+		return nil
+	}
+	name := pattern.Type[len(pattern.Type)-1]
+	if name == "" {
+		return nil
+	}
+	if info := g.structsByName[name]; info != nil {
+		if info.typ != valueTyp {
+			return unsupportedf("type-system", "struct pattern %q on %s", strings.Join(pattern.Type, "."), valueTyp)
+		}
+		return nil
+	}
+	resolved, ok, err := resolveAliasNamedTarget(name, g.typeEnv(), map[string]bool{})
+	if err != nil {
+		return err
+	}
+	if ok {
+		if info := g.structsByName[resolved]; info != nil && info.typ != valueTyp {
+			return unsupportedf("type-system", "struct pattern %q on %s", strings.Join(pattern.Type, "."), valueTyp)
+		}
+	}
+	return nil
+}
+
+func (g *generator) extractStructField(base value, info *structInfo, name string) (value, error) {
+	if info == nil {
+		return value{}, unsupported("type-system", "field extraction on nil struct info")
+	}
+	field, ok := info.byName[name]
+	if !ok {
+		return value{}, unsupportedf("expression", "struct %q has no field %q", info.name, name)
+	}
+	emitter := g.toOstyEmitter()
+	out := llvmExtractValue(emitter, toOstyValue(base), field.typ, field.index)
+	g.takeOstyEmitter(emitter)
+	loaded := fromOstyValue(out)
+	loaded.listElemTyp = field.listElemTyp
+	loaded.listElemString = field.listElemString
+	loaded.mapKeyTyp = field.mapKeyTyp
+	loaded.mapValueTyp = field.mapValueTyp
+	loaded.mapKeyString = field.mapKeyString
+	loaded.setElemTyp = field.setElemTyp
+	loaded.setElemString = field.setElemString
+	loaded.sourceType = field.sourceType
+	loaded.gcManaged = valueNeedsManagedRoot(loaded)
+	loaded.rootPaths = g.rootPathsForType(field.typ)
+	return loaded, nil
 }
 
 func identPatternName(p ast.Pattern) (string, error) {

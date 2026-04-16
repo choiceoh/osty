@@ -850,3 +850,51 @@ fn main() {
 		t.Fatalf("binary stdout = %q, want %q", got, want)
 	}
 }
+
+func TestLLVMBackendBinaryLetStructPatternDestructuring(t *testing.T) {
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
+
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitBinary, `use runtime.strings as strings {
+    fn Split(s: String, sep: String) -> List<String>
+}
+
+struct Pair {
+    first: Int
+    second: Int
+}
+
+struct Bucket {
+    pair: Pair
+    items: List<String>
+}
+
+fn main() {
+    let bucket @ Bucket {
+        pair: Pair { first, second },
+        items,
+    } = Bucket {
+        pair: Pair { first: 1, second: 2 },
+        items: strings.Split("pear,apple", ","),
+    }
+    println(first)
+    println(second)
+    println(items.sorted()[0])
+    println(bucket.pair.first)
+}
+`)
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	output, err := exec.Command(result.Artifacts.Binary).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
+	}
+	if got, want := string(output), "1\n2\napple\n1\n"; got != want {
+		t.Fatalf("binary stdout = %q, want %q", got, want)
+	}
+}
