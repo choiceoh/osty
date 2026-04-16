@@ -474,6 +474,18 @@ func (s *monoState) rewriteExprType(e Expr) {
 			}
 		}
 	case *VariantLit:
+		// Phase 3 heuristic: when the checker couldn't pin down the
+		// variant's surface type (`x.T` is ErrType or nil), try to
+		// recover `EnumName<concrete…>` from the owning generic enum
+		// declaration by matching each TypeVar-shaped payload against
+		// the concrete type of the corresponding argument value. This
+		// lets `Maybe.Some(42)` drive a `Maybe<Int>` specialization
+		// even when the front-end leaves the call untyped.
+		if needsVariantTypeRecovery(x.T) {
+			if inferred := s.inferVariantLitType(x); inferred != nil {
+				x.T = inferred
+			}
+		}
 		x.T = s.rewriteType(x.T)
 		if nt, ok := x.T.(*NamedType); ok && nt.Name != "" {
 			if x.Enum != "" && x.Enum != nt.Name {
@@ -518,6 +530,140 @@ func (s *monoState) rewriteExprType(e Expr) {
 	case *ErrorExpr:
 		x.T = s.rewriteType(x.T)
 	}
+}
+
+// needsVariantTypeRecovery reports whether a VariantLit's surface type
+// is too fuzzy for rewriteType to drive a specialization request — nil
+// or *ErrType means the front-end gave up typing the variant call and
+// the monomorphizer should try the payload-driven fallback below.
+func needsVariantTypeRecovery(t Type) bool {
+	if t == nil {
+		return true
+	}
+	_, ok := t.(*ErrType)
+	return ok
+}
+
+// inferVariantLitType recovers `EnumName<concrete…>` for a VariantLit
+// whose checker-provided type was missing. It looks up the enum's
+// generic declaration, finds the named variant, and unifies each
+// TypeVar-shaped payload slot against the concrete argument value's
+// type. Returns nil whenever any slot resists inference (non-TypeVar
+// payload, inconsistent bindings, arity mismatch, or a generic
+// parameter that never appears in the variant's payload).
+//
+// Phase 3 scope: simple positional TypeVar payloads only. Variants
+// without payload (e.g. `Maybe.None`) can't be inferred this way — the
+// user must supply a type annotation at the binding site.
+func (s *monoState) inferVariantLitType(v *VariantLit) Type {
+	if v == nil || v.Enum == "" {
+		return nil
+	}
+	decl, ok := s.genericEnumsByName[v.Enum]
+	if !ok {
+		return nil
+	}
+	var payloads []Type
+	for _, va := range decl.Variants {
+		if va != nil && va.Name == v.Variant {
+			payloads = va.Payload
+			break
+		}
+	}
+	if payloads == nil {
+		return nil
+	}
+	if len(payloads) != len(v.Args) {
+		return nil
+	}
+	env := make(SubstEnv)
+	for i := range payloads {
+		pd := payloads[i]
+		argVal := v.Args[i].Value
+		if argVal == nil {
+			return nil
+		}
+		at := recoverLiteralType(argVal)
+		if at == nil {
+			return nil
+		}
+		tv, ok := pd.(*TypeVar)
+		if !ok {
+			// Non-TypeVar payload means the payload type already fixes
+			// the slot; we can't extract a generic param binding from
+			// a position like that. Skip gracefully.
+			continue
+		}
+		if existing, has := env[tv.Name]; has && !typesLooselyEqual(existing, at) {
+			return nil
+		}
+		env[tv.Name] = at
+	}
+	if len(env) != len(decl.Generics) {
+		return nil
+	}
+	args := make([]Type, 0, len(decl.Generics))
+	for _, gp := range decl.Generics {
+		if gp == nil {
+			return nil
+		}
+		t, ok := env[gp.Name]
+		if !ok {
+			return nil
+		}
+		args = append(args, CloneType(t))
+	}
+	return &NamedType{Name: decl.Name, Args: args}
+}
+
+// recoverLiteralType returns the concrete Type for an argument value
+// whose checker-provided Type() is missing or poisoned (ErrType). It
+// covers the literal expression kinds — the cases the variant
+// type-inference heuristic actually has to handle, since those are the
+// only arg shapes where the checker might drop a type annotation.
+// Returns the expression's own type when it's usable; otherwise
+// derives a primitive singleton from the literal kind.
+func recoverLiteralType(e Expr) Type {
+	if e == nil {
+		return nil
+	}
+	if t := e.Type(); t != nil {
+		if _, isErr := t.(*ErrType); !isErr {
+			return t
+		}
+	}
+	switch e.(type) {
+	case *IntLit:
+		return TInt
+	case *FloatLit:
+		return TFloat
+	case *BoolLit:
+		return TBool
+	case *CharLit:
+		return TChar
+	case *StringLit:
+		return TString
+	case *ByteLit:
+		return TByte
+	}
+	return nil
+}
+
+// typesLooselyEqual is a conservative equality check used by variant
+// type inference: primitive singletons compare by pointer; other Types
+// fall back to structural string equality. Kept private — it deliberately
+// ignores niceties like type-alias resolution.
+func typesLooselyEqual(a, b Type) bool {
+	if a == b {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	if _, ok := a.(*PrimType); ok {
+		return false // singleton mismatch
+	}
+	return typeString(a) == typeString(b)
 }
 
 // keepNonGenericMethods filters a specialization's method list: methods
@@ -656,6 +802,16 @@ func (s *monoState) scanStmt(st Stmt) {
 		st.Type = s.rewriteType(st.Type)
 		if st.Value != nil {
 			s.scanExpr(st.Value)
+		}
+		// Phase 3: when the binding had no annotation and the checker
+		// didn't type the value (ErrType), adopt the value's
+		// post-rewrite type so downstream consumers still see a
+		// concrete nominal. Only overwrite a missing / error annotation
+		// to stay conservative about user-written annotations.
+		if st.Value != nil && needsVariantTypeRecovery(st.Type) {
+			if t := st.Value.Type(); t != nil && !needsVariantTypeRecovery(t) {
+				st.Type = t
+			}
 		}
 	case *ExprStmt:
 		s.scanExpr(st.X)

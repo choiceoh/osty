@@ -265,13 +265,21 @@ artifact/cache layout 정책은 [`LLVM_ARTIFACT_LAYOUT.md`](./LLVM_ARTIFACT_LAYO
     등 모든 NamedType slot을 재작성, dedupe 키는 fn 네임스페이스와
     분리 (`MonomorphTypeDedupeKey`). Struct LLVM smoke 통과:
     `TestGenerateModuleGenericStructPairMonomorphized`
-    (mangled nominal 타입이 aggregate로 emit). Enum variant-call E2E
-    smoke는 llvmgen의 legacy variant-lowering이 mangled enum 이름을
-    처리하도록 확장되기 전까지 skipped 상태로 두며 IR-level 테스트
-    `TestMonomorphizeGenericEnumSpecialization`이 행동을 잠근다.
+    (mangled nominal 타입이 aggregate로 emit).
+  - Phase 3(generic enum variant-call 경로)은
+    `inferVariantLitType` + `recoverLiteralType` 휴리스틱으로 채워진다:
+    checker가 `Maybe.Some(42)` 호출의 surface type을 ErrType으로 비워도
+    (generic variant constructor inference 미구현) Monomorphize가
+    variant의 payload 타입(TypeVar)과 실제 인자 값의 리터럴-유래
+    타입을 unify해서 `Maybe<Int>`를 복원하고 specialization을 몰아준다.
+    `TestGenerateModuleGenericEnumMaybeMonomorphized` 스모크가 이
+    경로를 증명한다. Payload-free variant(`Maybe.None`)처럼 인자로부터
+    T를 유추할 수 없는 경우에는 휴리스틱이 보수적으로 포기하고 기존
+    ErrType을 유지한다.
   - 남은 범위: generic interface 선언, method-local generic parameter,
     bare function-pointer turbofish (`let f = id::<Int>`),
-    llvmgen enum variant-call lowering의 mangled 이름 지원.
+    payload-free / 비-리터럴 인자를 가진 variant call의 타입 복원(궁극적으로는
+    checker 쪽 generic variant-constructor inference 보강).
 - workspace/dependency graph를 codegen/link order로 변환한다.
 - `use go` FFI는 LLVM backend에서 그대로 지원하기 어렵기 때문에 새 FFI 정책을
   정한다.

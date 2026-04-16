@@ -202,7 +202,6 @@ fn main() {
 // regression beacon and picked up by the llvmgen enum-lowering
 // follow-up (tracked alongside Phase 2 scope in LLVM_MIGRATION_PLAN.md).
 func TestGenerateModuleGenericEnumMaybeMonomorphized(t *testing.T) {
-	t.Skip("llvmgen variant-call lowering with mangled enum names is Phase 3+ scope")
 	src := `enum Maybe<T> { Some(T), None }
 
 fn main() {
