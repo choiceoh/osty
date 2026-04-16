@@ -3,11 +3,9 @@
 // These names are already auto-imported via the prelude, so user code
 // rarely writes `use std.collections`. The module-local structs provide
 // the canonical signature surface for the collection methods in spec
-// §10.6. Runtime lowering is intrinsic because these types map directly
-// to Go slices/maps in the current backend. Some pure bodies seed an
-// output collection from an intrinsic method before rebuilding it; that
-// keeps the placeholder `std.collections` types aligned with the prelude
-// builtin collection types until the prelude rebind lands.
+// §10.6. Runtime lowering still supplies the primitive storage
+// operations, while pure helpers construct and return the prelude-bound
+// collection types directly.
 
 pub struct List<T> {
     pub fn len(self) -> Int
@@ -36,16 +34,14 @@ pub struct List<T> {
     }
 
     pub fn map<R>(self, f: fn(T) -> R) -> List<R> {
-        let mut out = self.map(f)
-        out.clear()
+        let mut out: List<R> = []
         for item in self {
             out.push(f(item))
         }
         out
     }
     pub fn filter(self, pred: fn(T) -> Bool) -> List<T> {
-        let mut out = self.map(|item| item)
-        out.clear()
+        let mut out: List<T> = []
         for item in self {
             if pred(item) {
                 out.push(item)
@@ -62,8 +58,7 @@ pub struct List<T> {
     }
     pub fn sorted(self) -> List<T>
     pub fn sortedBy<K: Ordered>(self, key: fn(T) -> K) -> List<T> {
-        let mut out = self.map(|item| item)
-        out.clear()
+        let mut out: List<T> = []
         for item in self {
             out.push(item)
         }
@@ -88,8 +83,7 @@ pub struct List<T> {
         out
     }
     pub fn reversed(self) -> List<T> {
-        let mut out = self.map(|item| item)
-        out.clear()
+        let mut out: List<T> = []
         let mut i = self.len()
         for i > 0 {
             i = i - 1
@@ -98,13 +92,15 @@ pub struct List<T> {
         out
     }
     pub fn appended(self, item: T) -> List<T> {
-        let mut out = self.map(|value| value)
+        let mut out: List<T> = []
+        for value in self {
+            out.push(value)
+        }
         out.push(item)
         out
     }
     pub fn concat(self, other: List<T>) -> List<T> {
-        let mut out = self.map(|item| item)
-        out.clear()
+        let mut out: List<T> = []
         for item in self {
             out.push(item)
         }
@@ -114,8 +110,7 @@ pub struct List<T> {
         out
     }
     pub fn zip<U>(self, other: List<U>) -> List<(T, U)> {
-        let mut out = self.zip(other)
-        out.clear()
+        let mut out: List<(T, U)> = []
         let limit = if self.len() < other.len() { self.len() } else { other.len() }
         for i in 0..limit {
             out.push((self[i], other[i]))
@@ -123,8 +118,7 @@ pub struct List<T> {
         out
     }
     pub fn enumerate(self) -> List<(Int, T)> {
-        let mut out = self.enumerate()
-        out.clear()
+        let mut out: List<(Int, T)> = []
         let mut i = 0
         for item in self {
             out.push((i, item))
@@ -161,24 +155,21 @@ pub struct Map<K: Hashable, V> {
         self.get(key).isSome()
     }
     pub fn keys(self) -> List<K> {
-        let mut out = self.keys()
-        out.clear()
+        let mut out: List<K> = []
         for (key, unusedValue) in self {
             out.push(key)
         }
         out
     }
     pub fn values(self) -> List<V> {
-        let mut out = self.values()
-        out.clear()
+        let mut out: List<V> = []
         for (unusedKey, value) in self {
             out.push(value)
         }
         out
     }
     pub fn entries(self) -> List<(K, V)> {
-        let mut out = self.entries()
-        out.clear()
+        let mut out: List<(K, V)> = []
         for (key, value) in self {
             out.push((key, value))
         }
@@ -197,8 +188,8 @@ pub struct Set<T: Hashable> {
     }
     pub fn contains(self, item: T) -> Bool
     pub fn union(self, other: Set<T>) -> Set<T> {
-        let mut out = self.union(other)
-        out.clear()
+        let empty: List<T> = []
+        let mut out = empty.toSet()
         for item in self {
             out.insert(item)
         }
@@ -208,8 +199,8 @@ pub struct Set<T: Hashable> {
         out
     }
     pub fn intersect(self, other: Set<T>) -> Set<T> {
-        let mut out = self.union(other)
-        out.clear()
+        let empty: List<T> = []
+        let mut out = empty.toSet()
         for item in self {
             if other.contains(item) {
                 out.insert(item)
@@ -218,8 +209,8 @@ pub struct Set<T: Hashable> {
         out
     }
     pub fn difference(self, other: Set<T>) -> Set<T> {
-        let mut out = self.union(other)
-        out.clear()
+        let empty: List<T> = []
+        let mut out = empty.toSet()
         for item in self {
             if other.contains(item) == false {
                 out.insert(item)
