@@ -32,6 +32,73 @@ fn testElabLetWithMismatchTriggersDiagnostic() {
     testing.assert(elabDiagHasCode(checked.diagnostics, "E0701"))
 }
 
+fn testElabLetTuplePatternBindsDestructuredNames() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn main() {
+                let (count, label) = (1, "hi")
+            }
+            """,
+    )
+    testing.assertEq(checked.summary.errors, 0)
+    testing.assertEq(frontCheckResultBindingType(checked, "count"), "Int")
+    testing.assertEq(frontCheckResultBindingType(checked, "label"), "String")
+}
+
+fn testElabLetRefutablePatternTriggersDiagnostic() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn main() {
+                let Some(value) = Some(1)
+            }
+            """,
+    )
+    testing.assert(checked.summary.errors >= 1)
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0744"))
+    testing.assertEq(frontCheckResultBindingType(checked, "value"), "Int")
+}
+
+fn testElabAllowsParameterReassignment() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn bump(total: Int) -> Int {
+                total = total + 1
+                total
+            }
+            """,
+    )
+    testing.assertEq(checked.summary.errors, 0)
+}
+
+fn testElabAllowsFieldAssignmentThroughParameters() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            struct Counter { value: Int }
+
+            fn bump(counter: Counter) {
+                counter.value = counter.value + 1
+            }
+            """,
+    )
+    testing.assertEq(checked.summary.errors, 0)
+}
+
+fn testElabForInBindsLoopElementType() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn sum(xs: List<Int>) -> Int {
+                let mut total = 0
+                for x in xs {
+                    total = total + x
+                }
+                total
+            }
+            """,
+    )
+    testing.assertEq(checked.summary.errors, 0)
+    testing.assertEq(frontCheckResultBindingType(checked, "x"), "Int")
+}
+
 fn testElabIfElseJoinsBranches() {
     let checked = frontendCheckSource(
         r"""

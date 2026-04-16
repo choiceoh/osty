@@ -163,37 +163,23 @@ func mergedSource(root string) ([]byte, error) {
 }
 
 func stripLeadingStringsUse(src string) string {
-	trimmed := strings.TrimLeft(src, "\ufeff \t\r\n")
-
-	// Handle Go FFI form: use go "strings" as strings { ... }
 	const goPrefix = `use go "strings" as strings {`
-	if strings.HasPrefix(trimmed, goPrefix) {
-		lines := strings.SplitAfter(src, "\n")
-		started := false
-		for i, line := range lines {
-			t := strings.TrimSpace(line)
-			if !started {
-				if strings.HasPrefix(t, goPrefix) {
-					started = true
-				}
-				continue
-			}
-			if t == "}" {
-				return strings.Join(lines[i+1:], "")
-			}
-		}
-		return src
-	}
-
-	// Handle std.strings form: use std.strings as strings  (single line)
 	const stdPrefix = "use std.strings as strings"
-	if strings.HasPrefix(trimmed, stdPrefix) {
-		idx := strings.Index(src, stdPrefix)
-		end := strings.IndexByte(src[idx:], '\n')
-		if end >= 0 {
-			return src[:idx] + src[idx+end+1:]
+
+	lines := strings.SplitAfter(src, "\n")
+	for i := 0; i < len(lines); i++ {
+		trimmed := strings.TrimSpace(lines[i])
+		switch {
+		case strings.HasPrefix(trimmed, goPrefix):
+			for j := i + 1; j < len(lines); j++ {
+				if strings.TrimSpace(lines[j]) == "}" {
+					return strings.Join(lines[:i], "") + strings.Join(lines[j+1:], "")
+				}
+			}
+			return src
+		case trimmed == stdPrefix:
+			return strings.Join(lines[:i], "") + strings.Join(lines[i+1:], "")
 		}
-		return src[:idx]
 	}
 
 	return src

@@ -505,7 +505,11 @@ pub fn elabStmt(cx: ElabCx, idx: Int) -> Int {
     let node = astArenaNodeAt(cx.ast.arena, idx)
     match node.kind {
         AstNLet -> elabLetStmt(cx, node),
+        AstNAssign -> elabAssignStmt(cx, node),
         AstNReturn -> elabReturnStmt(cx, node),
+        AstNDefer -> elabDeferStmt(cx, node),
+        AstNFor -> elabForStmt(cx, node),
+        AstNChanSend -> elabChanSendStmt(cx, node),
         AstNExprStmt -> elabExprStmt(cx, node),
         AstNBreak -> coreBreakStmt(cx.core, node.start, node.end),
         AstNContinue -> coreContinueStmt(cx.core, node.start, node.end),
@@ -521,7 +525,11 @@ fn elabExprAsStmt(cx: ElabCx, idx: Int, node: AstNode) -> Int {
 
 fn elabLetStmt(cx: ElabCx, node: AstNode) -> Int {
     let patIdx = node.left
-    let typeAnnotIdx = node.extra       // legacy AST layout: extra holds annotation
+    let typeAnnotIdx = if checkIntListLenHelper(node.children) > 0 {
+        checkIntListAt(node.children, 0)
+    } else {
+        node.extra
+    }
     let valueIdx = node.right
     let mutable = node.flags == 1
     let declared = astTypeToTy(cx, typeAnnotIdx)
@@ -532,20 +540,47 @@ fn elabLetStmt(cx: ElabCx, node: AstNode) -> Int {
     }
     let effectiveTy = if declared >= 0 { declared } else { value.ty }
 
-    // For Phase 6 we only handle simple identifier patterns; compound
-    // patterns (tuple/struct destructuring) land in Phase 8.
-    let name = astPatternBindingName(cx.ast, patIdx)
-    if name != "" {
-        checkBindSpan(cx.env, name, effectiveTy, mutable, node.start, node.end)
-        checkRecordBinding(cx.env, patIdx, name, effectiveTy, mutable, node.start, node.end)
+    if !(patIsIrrefutable(cx, patIdx, effectiveTy)) {
+        cx.env.diagnostics.push(diagRefutablePattern("let binding", node.start, node.end))
     }
 
-    let patNode = if name != "" {
-        corePatIdent(cx.core, name, mutable, effectiveTy, node.start, node.end)
-    } else {
-        corePatErr(cx.core, node.start, node.end)
-    }
+    let patNode = elabBindPattern(cx, patIdx, effectiveTy, mutable)
     coreLetStmt(cx.core, patNode, value.node, mutable, effectiveTy, node.start, node.end)
+}
+
+fn elabAssignStmt(cx: ElabCx, node: AstNode) -> Int {
+    let target = elabAssignableTarget(cx, node.left)
+    let value = if node.op == FrontAssign {
+        elabCheck(cx, node.right, target.ty)
+    } else {
+        let rhs = elabCheck(cx, node.right, target.ty)
+        let op = assignTokenToBinOp(node.op)
+        let resultTy = binOpResultType(cx.env, op, target.ty, rhs.ty, node.start, node.end)
+        let valueNode = coreBinary(cx.core, op, target.node, rhs.node, resultTy, node.start, node.end)
+        ElabResult { node: valueNode, ty: resultTy }
+    }
+    coreAssignStmt(cx.core, [target.node], value.node, node.start, node.end)
+}
+
+fn elabAssignableTarget(cx: ElabCx, idx: Int) -> ElabResult {
+    if idx < 0 {
+        cx.env.diagnostics.push(diagInvalidAssignTarget(0, 0))
+        return elabErrResult(cx, 0, 0)
+    }
+    let node = astArenaNodeAt(cx.ast.arena, idx)
+    if node.kind != AstNIdent && node.kind != AstNField && node.kind != AstNIndex {
+        let target = elabInfer(cx, idx)
+        cx.env.diagnostics.push(diagInvalidAssignTarget(node.start, node.end))
+        return target
+    }
+    let target = elabInfer(cx, idx)
+    if node.kind == AstNIdent {
+        let name = node.text
+        if checkLookup(cx.env, name) >= 0 && !(checkLookupMutable(cx.env, name)) {
+            cx.env.diagnostics.push(diagImmutableAssign(name, node.start, node.end))
+        }
+    }
+    target
 }
 
 fn elabReturnStmt(cx: ElabCx, node: AstNode) -> Int {
@@ -565,6 +600,135 @@ fn elabReturnStmt(cx: ElabCx, node: AstNode) -> Int {
 fn elabExprStmt(cx: ElabCx, node: AstNode) -> Int {
     let r = elabInfer(cx, node.left)
     coreExprStmt(cx.core, r.node, node.start, node.end)
+}
+
+fn elabDeferStmt(cx: ElabCx, node: AstNode) -> Int {
+    let value = elabInfer(cx, node.left)
+    coreDeferStmt(cx.core, value.node, node.start, node.end)
+}
+
+fn elabChanSendStmt(cx: ElabCx, node: AstNode) -> Int {
+    let channel = elabInfer(cx, node.left)
+    let elemTy = elabChannelElemTy(cx, channel.ty, node.start, node.end)
+    let value = if tyIsErr(cx.env.tys, elemTy) {
+        elabInfer(cx, node.right)
+    } else {
+        elabCheck(cx, node.right, elemTy)
+    }
+    coreChanSendStmt(cx.core, channel.node, value.node, node.start, node.end)
+}
+
+fn elabForStmt(cx: ElabCx, node: AstNode) -> Int {
+    let patIdx = if checkIntListLenHelper(node.children) > 0 {
+        checkIntListAt(node.children, 0)
+    } else {
+        -1
+    }
+    let iterIdx = if checkIntListLenHelper(node.children) > 1 {
+        checkIntListAt(node.children, 1)
+    } else {
+        -1
+    }
+
+    if node.text == "infinite" {
+        let body = elabLoopBody(cx, node.right)
+        return coreForStmt(cx.core, -1, -1, body, 0, node.start, node.end)
+    }
+
+    if node.text == "cond" {
+        let cond = elabCheck(cx, node.left, tBool(cx.env.tys))
+        let body = elabLoopBody(cx, node.right)
+        return coreForStmt(cx.core, -1, cond.node, body, 1, node.start, node.end)
+    }
+
+    if node.text == "forlet" {
+        let scrutinee = elabInfer(cx, node.left)
+        let mark = checkScopeMark(cx.env)
+        let patNode = elabBindPattern(cx, patIdx, scrutinee.ty, false)
+        let body = elabLoopBody(cx, node.right)
+        checkScopeDrop(cx.env, mark)
+        return coreForStmt(cx.core, patNode, scrutinee.node, body, 1, node.start, node.end)
+    }
+
+    if node.text == "forin" {
+        let iter = elabInfer(cx, iterIdx)
+        let elemTy = elabForIterableElemTy(cx, iter.ty, node.start, node.end)
+        if !(patIsIrrefutable(cx, patIdx, elemTy)) {
+            cx.env.diagnostics.push(diagRefutablePattern("for-in binding", node.start, node.end))
+        }
+        let mark = checkScopeMark(cx.env)
+        let patNode = elabBindPattern(cx, patIdx, elemTy, false)
+        let body = elabLoopBody(cx, node.right)
+        checkScopeDrop(cx.env, mark)
+        return coreForStmt(cx.core, patNode, iter.node, body, 2, node.start, node.end)
+    }
+
+    let body = elabLoopBody(cx, node.right)
+    coreForStmt(cx.core, -1, -1, body, 0, node.start, node.end)
+}
+
+fn elabLoopBody(cx: ElabCx, bodyIdx: Int) -> Int {
+    if bodyIdx < 0 {
+        return coreStmtBlock(cx.core, [], 0, 0)
+    }
+    let prevInLoop = cx.env.inLoop
+    cx.env.inLoop = true
+    let node = astArenaNodeAt(cx.ast.arena, bodyIdx)
+    let body = if node.kind == AstNBlock {
+        elabInferBlock(cx, bodyIdx, node).node
+    } else {
+        let stmt = elabStmt(cx, bodyIdx)
+        coreStmtBlock(cx.core, [stmt], node.start, node.end)
+    }
+    cx.env.inLoop = prevInLoop
+    body
+}
+
+fn elabChannelElemTy(cx: ElabCx, ty: Int, start: Int, end: Int) -> Int {
+    let tys = cx.env.tys
+    let resolved = checkResolveAliasDeep(cx.env, ty)
+    if tyIsNamedHead(tys, resolved, "Chan") || tyIsNamedHead(tys, resolved, "Channel") {
+        let args = tyArgsAt(tys, resolved)
+        if checkIntListLenHelper(args) > 0 {
+            return checkIntListAt(args, 0)
+        }
+    }
+    if !(tyIsErr(tys, resolved)) {
+        cx.env.diagnostics.push(diagOperandType("<-", tyToString(tys, resolved), start, end))
+    }
+    tErr(tys)
+}
+
+fn elabForIterableElemTy(cx: ElabCx, ty: Int, start: Int, end: Int) -> Int {
+    let tys = cx.env.tys
+    let resolved = checkResolveAliasDeep(cx.env, ty)
+    if tyIsErr(tys, resolved) {
+        return tErr(tys)
+    }
+    if tyIsPrim(tys, resolved, PkString) {
+        return tChar(tys)
+    }
+    if tyIsPrim(tys, resolved, PkBytes) {
+        return tByte(tys)
+    }
+    if tyIsNamedHead(tys, resolved, "Map") {
+        let args = tyArgsAt(tys, resolved)
+        if checkIntListLenHelper(args) == 2 {
+            return tyTuple(tys, [checkIntListAt(args, 0), checkIntListAt(args, 1)])
+        }
+    }
+    if tyIsNamedHead(tys, resolved, "List")
+        || tyIsNamedHead(tys, resolved, "Range")
+        || tyIsNamedHead(tys, resolved, "Chan")
+        || tyIsNamedHead(tys, resolved, "Channel")
+        || tyIsNamedHead(tys, resolved, "Iter") {
+        let args = tyArgsAt(tys, resolved)
+        if checkIntListLenHelper(args) > 0 {
+            return checkIntListAt(args, 0)
+        }
+    }
+    cx.env.diagnostics.push(diagOperandType("in", tyToString(tys, resolved), start, end))
+    tErr(tys)
 }
 
 // ---------------------------------------------------------------------
@@ -642,21 +806,6 @@ fn astTypeRendered(ast: AstFile, node: AstNode) -> String {
     ""
 }
 
-/// astPatternBindingName extracts the identifier name from a simple
-/// pattern `AstNPattern` node. Returns the empty string when the
-/// pattern is compound — Phase 8 supersedes this with a full pattern
-/// lowerer.
-fn astPatternBindingName(ast: AstFile, idx: Int) -> String {
-    if idx < 0 {
-        return ""
-    }
-    let node = astArenaNodeAt(ast.arena, idx)
-    if node.kind != AstNPattern {
-        return ""
-    }
-    node.text
-}
-
 // ---------------------------------------------------------------------
 // Operator mapping from parser tokens to Core enums.
 // ---------------------------------------------------------------------
@@ -688,6 +837,20 @@ fn tokenToBinOp(tok: FrontTokenKind) -> BinOp {
     if tok == FrontBitXor { return BoBitXor }
     if tok == FrontShl { return BoShl }
     if tok == FrontShr { return BoShr }
+    BoInvalid
+}
+
+fn assignTokenToBinOp(tok: FrontTokenKind) -> BinOp {
+    if tok == FrontPlusEq { return BoAdd }
+    if tok == FrontMinusEq { return BoSub }
+    if tok == FrontStarEq { return BoMul }
+    if tok == FrontSlashEq { return BoDiv }
+    if tok == FrontPercentEq { return BoMod }
+    if tok == FrontBitAndEq { return BoBitAnd }
+    if tok == FrontBitOrEq { return BoBitOr }
+    if tok == FrontBitXorEq { return BoBitXor }
+    if tok == FrontShlEq { return BoShl }
+    if tok == FrontShrEq { return BoShr }
     BoInvalid
 }
 
@@ -1398,7 +1561,7 @@ fn elabInferClosure(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
         }
         let paramName = paramNode.text
         if paramName != "" {
-            checkBindSpan(cx.env, paramName, paramTy, false, paramNode.start, paramNode.end)
+            checkBindSpan(cx.env, paramName, paramTy, true, paramNode.start, paramNode.end)
         }
         paramTys.push(paramTy)
         coreParams.push(coreParam(cx.core, paramName, paramTy, -1, paramNode.start, paramNode.end))
@@ -1634,6 +1797,14 @@ fn elabInferQuestion(cx: ElabCx, node: AstNode) -> ElabResult {
 // ---------------------------------------------------------------------
 
 pub fn elabPattern(cx: ElabCx, idx: Int, scrutTy: Int) -> Int {
+    elabPatternMode(cx, idx, scrutTy, false, false)
+}
+
+fn elabBindPattern(cx: ElabCx, idx: Int, scrutTy: Int, mutable: Bool) -> Int {
+    elabPatternMode(cx, idx, scrutTy, mutable, true)
+}
+
+fn elabPatternMode(cx: ElabCx, idx: Int, scrutTy: Int, mutable: Bool, recordBinding: Bool) -> Int {
     if idx < 0 {
         return corePatErr(cx.core, 0, 0)
     }
@@ -1650,8 +1821,11 @@ pub fn elabPattern(cx: ElabCx, idx: Int, scrutTy: Int) -> Int {
 
     if kind == "ident" {
         let name = node.text
-        checkBindSpan(cx.env, name, scrutTy, false, node.start, node.end)
-        return corePatIdent(cx.core, name, false, scrutTy, node.start, node.end)
+        checkBindSpan(cx.env, name, scrutTy, mutable, node.start, node.end)
+        if recordBinding {
+            checkRecordBinding(cx.env, idx, name, scrutTy, mutable, node.start, node.end)
+        }
+        return corePatIdent(cx.core, name, mutable, scrutTy, node.start, node.end)
     }
 
     if kind == "lit" {
@@ -1664,27 +1838,30 @@ pub fn elabPattern(cx: ElabCx, idx: Int, scrutTy: Int) -> Int {
     }
 
     if kind == "variant" {
-        return elabVariantPattern(cx, node, scrutTy)
+        return elabVariantPattern(cx, node, scrutTy, mutable, recordBinding)
     }
 
     if kind == "tuple" {
-        return elabTuplePattern(cx, node, scrutTy)
+        return elabTuplePattern(cx, node, scrutTy, mutable, recordBinding)
     }
 
     if kind == "struct" {
-        return elabStructPattern(cx, node, scrutTy)
+        return elabStructPattern(cx, node, scrutTy, mutable, recordBinding)
     }
 
     if kind == "binding" {
         let innerIdx = node.left
-        let inner = elabPattern(cx, innerIdx, scrutTy)
+        let inner = elabPatternMode(cx, innerIdx, scrutTy, mutable, recordBinding)
         let name = node.text
-        checkBindSpan(cx.env, name, scrutTy, false, node.start, node.end)
-        return corePatBinding(cx.core, name, inner, false, scrutTy, node.start, node.end)
+        checkBindSpan(cx.env, name, scrutTy, mutable, node.start, node.end)
+        if recordBinding {
+            checkRecordBinding(cx.env, idx, name, scrutTy, mutable, node.start, node.end)
+        }
+        return corePatBinding(cx.core, name, inner, mutable, scrutTy, node.start, node.end)
     }
 
     if kind == "or" {
-        return elabOrPattern(cx, node, scrutTy)
+        return elabOrPattern(cx, node, scrutTy, mutable, recordBinding)
     }
 
     if kind == "range" {
@@ -1713,28 +1890,28 @@ fn patternClassification(cx: ElabCx, node: AstNode) -> String {
     "unsupported"
 }
 
-fn elabOrPattern(cx: ElabCx, node: AstNode, scrutTy: Int) -> Int {
+fn elabOrPattern(cx: ElabCx, node: AstNode, scrutTy: Int, mutable: Bool, recordBinding: Bool) -> Int {
     // Parser encodes or-pattern as a binary tree via `left` + `right`
     // (see `opParsePattern` in parser.osty). Walk both subtrees so we
     // flatten nested `A | B | C` into one alternative list for the
     // Core IR.
     let mut alts: List<Int> = []
-    orPatternFlatten(cx, node.left, scrutTy, alts)
-    orPatternFlatten(cx, node.right, scrutTy, alts)
+    orPatternFlatten(cx, node.left, scrutTy, mutable, recordBinding, alts)
+    orPatternFlatten(cx, node.right, scrutTy, mutable, recordBinding, alts)
     corePatOr(cx.core, alts, scrutTy, node.start, node.end)
 }
 
-fn orPatternFlatten(cx: ElabCx, idx: Int, scrutTy: Int, alts: List<Int>) {
+fn orPatternFlatten(cx: ElabCx, idx: Int, scrutTy: Int, mutable: Bool, recordBinding: Bool, alts: List<Int>) {
     if idx < 0 {
         return
     }
     let sub = astArenaNodeAt(cx.ast.arena, idx)
     if sub.kind == AstNPattern && sub.extra == astPatternOrKind() {
-        orPatternFlatten(cx, sub.left, scrutTy, alts)
-        orPatternFlatten(cx, sub.right, scrutTy, alts)
+        orPatternFlatten(cx, sub.left, scrutTy, mutable, recordBinding, alts)
+        orPatternFlatten(cx, sub.right, scrutTy, mutable, recordBinding, alts)
         return
     }
-    alts.push(elabPattern(cx, idx, scrutTy))
+    alts.push(elabPatternMode(cx, idx, scrutTy, mutable, recordBinding))
 }
 
 fn elabRangePattern(cx: ElabCx, node: AstNode, scrutTy: Int) -> Int {
@@ -1754,7 +1931,7 @@ fn elabRangePattern(cx: ElabCx, node: AstNode, scrutTy: Int) -> Int {
     corePatRange(cx.core, lo, hi, inclusive, scrutTy, node.start, node.end)
 }
 
-fn elabVariantPattern(cx: ElabCx, node: AstNode, scrutTy: Int) -> Int {
+fn elabVariantPattern(cx: ElabCx, node: AstNode, scrutTy: Int, mutable: Bool, recordBinding: Bool) -> Int {
     let tys = cx.env.tys
     let variantName = node.text
     let scrutHead = tyHeadAt(tys, scrutTy)
@@ -1786,13 +1963,13 @@ fn elabVariantPattern(cx: ElabCx, node: AstNode, scrutTy: Int) -> Int {
         } else {
             tErr(tys)
         }
-        subs.push(elabPattern(cx, subIdx, fieldTy))
+        subs.push(elabPatternMode(cx, subIdx, fieldTy, mutable, recordBinding))
         i = i + 1
     }
     corePatVariant(cx.core, resolved.owner, variantName, subs, scrutTy, node.start, node.end)
 }
 
-fn elabTuplePattern(cx: ElabCx, node: AstNode, scrutTy: Int) -> Int {
+fn elabTuplePattern(cx: ElabCx, node: AstNode, scrutTy: Int, mutable: Bool, recordBinding: Bool) -> Int {
     let tys = cx.env.tys
     let kind = tyKindAt(tys, scrutTy)
     if kind != TkTuple {
@@ -1807,13 +1984,13 @@ fn elabTuplePattern(cx: ElabCx, node: AstNode, scrutTy: Int) -> Int {
     let mut i = 0
     for subIdx in node.children {
         let elemTy = if i < checkIntListLenHelper(elems) { checkIntListAt(elems, i) } else { tErr(tys) }
-        subs.push(elabPattern(cx, subIdx, elemTy))
+        subs.push(elabPatternMode(cx, subIdx, elemTy, mutable, recordBinding))
         i = i + 1
     }
     corePatTuple(cx.core, subs, scrutTy, node.start, node.end)
 }
 
-fn elabStructPattern(cx: ElabCx, node: AstNode, scrutTy: Int) -> Int {
+fn elabStructPattern(cx: ElabCx, node: AstNode, scrutTy: Int, mutable: Bool, recordBinding: Bool) -> Int {
     let tys = cx.env.tys
     let owner = tyHeadAt(tys, scrutTy)
     let typeSig = checkLookupType(cx.env, owner)
@@ -1836,7 +2013,15 @@ fn elabStructPattern(cx: ElabCx, node: AstNode, scrutTy: Int) -> Int {
         } else {
             fieldSig.ty
         }
-        let inner = elabPattern(cx, child.left, substituted)
+        let inner = if child.left >= 0 {
+            elabPatternMode(cx, child.left, substituted, mutable, recordBinding)
+        } else {
+            checkBindSpan(cx.env, fieldName, substituted, mutable, child.start, child.end)
+            if recordBinding {
+                checkRecordBinding(cx.env, childIdx, fieldName, substituted, mutable, child.start, child.end)
+            }
+            corePatIdent(cx.core, fieldName, mutable, substituted, child.start, child.end)
+        }
         subs.push(corePatStructField(cx.core, fieldName, inner, child.start, child.end))
     }
     corePatStruct(cx.core, owner, subs, false, scrutTy, node.start, node.end)

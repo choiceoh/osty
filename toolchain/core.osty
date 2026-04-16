@@ -1571,7 +1571,7 @@ fn corePrintNodeBody(arena: CoreArena, tys: TyArena, node: CoreNode, depth: Int)
         CkIndex -> "{corePrintNode(arena, tys, node.left, depth + 1)} [{corePrintNode(arena, tys, node.right, depth + 1)}]",
         CkList -> corePrintList(arena, tys, node.children, depth),
         CkMap -> corePrintList(arena, tys, node.children, depth),
-        CkMapEntry -> "{corePrintNode(arena, tys, node.left, depth + 1)} => {corePrintNode(arena, tys, node.right, depth + 1)}",
+        CkMapEntry -> corePrintMapEntryBody(arena, tys, node, depth),
         CkTuple -> corePrintList(arena, tys, node.children, depth),
         CkStruct -> corePrintStructBody(arena, tys, node, depth),
         CkStructField -> "{node.name}: {corePrintNode(arena, tys, node.left, depth + 1)}",
@@ -1611,6 +1611,12 @@ fn corePrintCallBody(arena: CoreArena, tys: TyArena, node: CoreNode, depth: Int)
     let args = corePrintList(arena, tys, node.children, depth)
     let ta = corePrintTypeArgs(tys, node.typeArgs)
     "{callee}{ta} {args}"
+}
+
+fn corePrintMapEntryBody(arena: CoreArena, tys: TyArena, node: CoreNode, depth: Int) -> String {
+    let left = corePrintNode(arena, tys, node.left, depth + 1)
+    let right = corePrintNode(arena, tys, node.right, depth + 1)
+    strings.join([left, " =", ">", " ", right], "")
 }
 
 fn corePrintMethodCallBody(arena: CoreArena, tys: TyArena, node: CoreNode, depth: Int) -> String {
@@ -1731,22 +1737,24 @@ fn corePrintFnDeclBody(arena: CoreArena, tys: TyArena, node: CoreNode, depth: In
 }
 
 fn corePrintList(arena: CoreArena, tys: TyArena, items: List<Int>, depth: Int) -> String {
+    let sep = ", "
     let mut parts: List<String> = []
     for it in items {
         parts.push(corePrintNode(arena, tys, it, depth + 1))
     }
-    "[{strings.join(parts, \", \")}]"
+    "[{strings.join(parts, sep)}]"
 }
 
 fn corePrintTypeArgs(tys: TyArena, args: List<Int>) -> String {
     if coreIntLen(args) == 0 {
         return ""
     }
+    let sep = ", "
     let mut parts: List<String> = []
     for a in args {
         parts.push(tyToString(tys, a))
     }
-    "::<{strings.join(parts, \", \")}>"
+    "::<{strings.join(parts, sep)}>"
 }
 
 fn coreIntLen(xs: List<Int>) -> Int {
