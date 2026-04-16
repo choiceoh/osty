@@ -83,6 +83,21 @@ func TestGeneratedComparePoliciesAreOstyOwned(t *testing.T) {
 	if got, want := llvmIntBinaryInstruction("%"), "srem"; got != want {
 		t.Fatalf("llvmIntBinaryInstruction(%q) = %q, want %q", "%", got, want)
 	}
+	if got, want := llvmIntBinaryInstruction("&"), "and"; got != want {
+		t.Fatalf("llvmIntBinaryInstruction(%q) = %q, want %q", "&", got, want)
+	}
+	if got, want := llvmIntBinaryInstruction("|"), "or"; got != want {
+		t.Fatalf("llvmIntBinaryInstruction(%q) = %q, want %q", "|", got, want)
+	}
+	if got, want := llvmIntBinaryInstruction("^"), "xor"; got != want {
+		t.Fatalf("llvmIntBinaryInstruction(%q) = %q, want %q", "^", got, want)
+	}
+	if got, want := llvmIntBinaryInstruction("<<"), "shl"; got != want {
+		t.Fatalf("llvmIntBinaryInstruction(%q) = %q, want %q", "<<", got, want)
+	}
+	if got, want := llvmIntBinaryInstruction(">>"), "ashr"; got != want {
+		t.Fatalf("llvmIntBinaryInstruction(%q) = %q, want %q", ">>", got, want)
+	}
 	if got, want := llvmFloatBinaryInstruction("/"), "fdiv"; got != want {
 		t.Fatalf("llvmFloatBinaryInstruction(%q) = %q, want %q", "/", got, want)
 	}

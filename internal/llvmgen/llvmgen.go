@@ -1795,6 +1795,14 @@ func (g *generator) emitUnary(e *ast.UnaryExpr) (value, error) {
 		out := llvmNotI1(emitter, toOstyValue(v))
 		g.takeOstyEmitter(emitter)
 		return fromOstyValue(out), nil
+	case token.BITNOT:
+		if v.typ != "i64" {
+			return value{}, unsupportedf("type-system", "bitwise not on %s", v.typ)
+		}
+		emitter := g.toOstyEmitter()
+		out := llvmBinaryI64(emitter, "xor", toOstyValue(v), llvmIntLiteral(-1))
+		g.takeOstyEmitter(emitter)
+		return fromOstyValue(out), nil
 	default:
 		return value{}, unsupportedf("expression", "unary operator %q", e.Op)
 	}
