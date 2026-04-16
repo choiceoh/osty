@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
 )
 
@@ -52,14 +53,40 @@ func TestFrontendRunExposesSharedSurfaces(t *testing.T) {
 	if len(run.Tokens()) == 0 {
 		t.Fatal("Run returned no tokens")
 	}
-	if run.File() == nil {
-		t.Fatal("Run returned nil file")
-	}
 	if hasError(run.Diagnostics()) {
 		t.Fatalf("Run returned diagnostics:\n%s", diagnosticsText(run.Diagnostics()))
 	}
 	if len(run.LexDiagnostics()) != 0 {
 		t.Fatalf("Run returned lexer diagnostics:\n%s", diagnosticsText(run.LexDiagnostics()))
+	}
+}
+
+func TestFrontendRunLowersInterpolatedExprWithFullParser(t *testing.T) {
+	file, diags := Parse([]byte(`fn main() { let s = "value {items[0] + 1}" }`))
+	if hasError(diags) {
+		t.Fatalf("Parse returned diagnostics:\n%s", diagnosticsText(diags))
+	}
+	fn, ok := file.Decls[0].(*ast.FnDecl)
+	if !ok {
+		t.Fatalf("decl 0 = %T", file.Decls[0])
+	}
+	let, ok := fn.Body.Stmts[0].(*ast.LetStmt)
+	if !ok {
+		t.Fatalf("stmt 0 = %T", fn.Body.Stmts[0])
+	}
+	sl, ok := let.Value.(*ast.StringLit)
+	if !ok {
+		t.Fatalf("let value = %T", let.Value)
+	}
+	if len(sl.Parts) != 2 || sl.Parts[1].IsLit {
+		t.Fatalf("string parts = %+v", sl.Parts)
+	}
+	bin, ok := sl.Parts[1].Expr.(*ast.BinaryExpr)
+	if !ok {
+		t.Fatalf("interpolation expr = %T", sl.Parts[1].Expr)
+	}
+	if _, ok := bin.Left.(*ast.IndexExpr); !ok {
+		t.Fatalf("binary left = %T", bin.Left)
 	}
 }
 

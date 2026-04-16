@@ -18,6 +18,7 @@ var sourceFiles = []string{
 	"examples/dogfood/frontend.osty",
 	"examples/dogfood/lexer.osty",
 	"examples/dogfood/parser.osty",
+	"internal/selfhost/ast_lower.osty",
 }
 
 const mergedPath = "/tmp/selfhost_merged.osty"
@@ -33,6 +34,7 @@ const stringsPrelude = `use go "strings" as strings {
     fn Split(s: String, sep: String) -> List<String>
     fn SplitN(s: String, sep: String, n: Int) -> List<String>
     fn TrimPrefix(s: String, prefix: String) -> String
+    fn TrimSuffix(s: String, suffix: String) -> String
 }
 `
 

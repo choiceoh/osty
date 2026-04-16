@@ -1,0 +1,1647 @@
+use go "github.com/osty/osty/internal/selfhost/astbridge" as astbridge {
+    struct File {}
+    struct Decl {}
+    struct FnDecl {}
+    struct Stmt {}
+    struct Expr {}
+    struct Type {}
+    struct Pattern {}
+    struct Block {}
+    struct Annotation {}
+    struct AnnotationArg {}
+    struct GenericParam {}
+    struct Receiver {}
+    struct Param {}
+    struct Field {}
+    struct Variant {}
+    struct Arg {}
+    struct MapEntry {}
+    struct MatchArm {}
+    struct StructLitField {}
+    struct StructPatField {}
+    struct Pos {}
+    struct Token {}
+    struct Kind {}
+
+    fn NilDecl() -> Decl
+    fn NilFnDecl() -> FnDecl
+    fn NilStmt() -> Stmt
+    fn NilExpr() -> Expr
+    fn NilType() -> Type
+    fn NilPattern() -> Pattern
+    fn NilBlock() -> Block
+    fn NilReceiver() -> Receiver
+    fn NilParam() -> Param
+    fn NilField() -> Field
+    fn NilVariant() -> Variant
+    fn NilAnnotation() -> Annotation
+    fn NilAnnotationArg() -> AnnotationArg
+    fn NilGenericParam() -> GenericParam
+    fn NilArg() -> Arg
+    fn NilMatchArm() -> MatchArm
+    fn NilStructLitField() -> StructLitField
+    fn NilStructPatField() -> StructPatField
+
+    fn IsNilDecl(v: Decl) -> Bool
+    fn IsNilFnDecl(v: FnDecl) -> Bool
+    fn IsNilStmt(v: Stmt) -> Bool
+    fn IsNilExpr(v: Expr) -> Bool
+    fn IsNilType(v: Type) -> Bool
+    fn IsNilPattern(v: Pattern) -> Bool
+    fn IsNilBlock(v: Block) -> Bool
+    fn IsNilReceiver(v: Receiver) -> Bool
+    fn IsNilParam(v: Param) -> Bool
+    fn IsNilField(v: Field) -> Bool
+    fn IsNilVariant(v: Variant) -> Bool
+    fn IsNilAnnotation(v: Annotation) -> Bool
+    fn IsNilGenericParam(v: GenericParam) -> Bool
+    fn IsNilArg(v: Arg) -> Bool
+    fn IsNilMatchArm(v: MatchArm) -> Bool
+    fn IsNilStructLitField(v: StructLitField) -> Bool
+    fn IsNilStructPatField(v: StructPatField) -> Bool
+
+    fn EmptyDeclList() -> List<Decl>
+    fn EmptyFnDeclList() -> List<FnDecl>
+    fn EmptyStmtList() -> List<Stmt>
+    fn EmptyExprList() -> List<Expr>
+    fn EmptyTypeList() -> List<Type>
+    fn EmptyPatternList() -> List<Pattern>
+    fn EmptyAnnotationList() -> List<Annotation>
+    fn EmptyAnnotationArgList() -> List<AnnotationArg>
+    fn EmptyGenericParamList() -> List<GenericParam>
+    fn EmptyParamList() -> List<Param>
+    fn EmptyFieldList() -> List<Field>
+    fn EmptyVariantList() -> List<Variant>
+    fn EmptyArgList() -> List<Arg>
+    fn EmptyMapEntryList() -> List<MapEntry>
+    fn EmptyMatchArmList() -> List<MatchArm>
+    fn EmptyStructLitFieldList() -> List<StructLitField>
+    fn EmptyStructPatFieldList() -> List<StructPatField>
+
+    fn FileNode(pos: Pos, end: Pos, uses: List<Decl>, decls: List<Decl>, stmts: List<Stmt>) -> File
+    fn FnDeclNode(pos: Pos, end: Pos, isPub: Bool, name: String, generics: List<GenericParam>, recv: Receiver, params: List<Param>, ret: Type, body: Block, doc: String, anns: List<Annotation>) -> FnDecl
+    fn FnDeclAsDecl(fnDecl: FnDecl) -> Decl
+    fn ReceiverNode(pos: Pos, end: Pos, isMut: Bool, mutPos: Pos) -> Receiver
+    fn StructDeclNode(pos: Pos, end: Pos, isPub: Bool, name: String, generics: List<GenericParam>, fields: List<Field>, methods: List<FnDecl>, doc: String, anns: List<Annotation>) -> Decl
+    fn EnumDeclNode(pos: Pos, end: Pos, isPub: Bool, name: String, generics: List<GenericParam>, variants: List<Variant>, methods: List<FnDecl>, doc: String, anns: List<Annotation>) -> Decl
+    fn InterfaceDeclNode(pos: Pos, end: Pos, isPub: Bool, name: String, generics: List<GenericParam>, extends: List<Type>, methods: List<FnDecl>, doc: String, anns: List<Annotation>) -> Decl
+    fn TypeAliasDeclNode(pos: Pos, end: Pos, isPub: Bool, name: String, generics: List<GenericParam>, target: Type, doc: String, anns: List<Annotation>) -> Decl
+    fn UseDeclNode(pos: Pos, end: Pos, raw: String, path: List<String>, isGo: Bool, alias: String, body: List<Decl>) -> Decl
+    fn LetDeclNode(pos: Pos, end: Pos, isPub: Bool, isMut: Bool, name: String, typ: Type, value: Expr, doc: String, anns: List<Annotation>) -> Decl
+    fn FieldNode(pos: Pos, end: Pos, isPub: Bool, name: String, typ: Type, def: Expr, doc: String, anns: List<Annotation>) -> Field
+    fn VariantNode(pos: Pos, end: Pos, name: String, fields: List<Type>, anns: List<Annotation>, doc: String) -> Variant
+    fn ParamNode(pos: Pos, end: Pos, name: String, pat: Pattern, typ: Type, def: Expr) -> Param
+    fn GenericParamNode(pos: Pos, end: Pos, name: String, constraints: List<Type>) -> GenericParam
+    fn AnnotationNode(pos: Pos, end: Pos, name: String, args: List<AnnotationArg>) -> Annotation
+    fn AnnotationArgNode(pos: Pos, key: String, value: Expr) -> AnnotationArg
+
+    fn NamedTypeNode(pos: Pos, end: Pos, path: List<String>, args: List<Type>) -> Type
+    fn OptionalTypeNode(pos: Pos, end: Pos, inner: Type) -> Type
+    fn TupleTypeNode(pos: Pos, end: Pos, elems: List<Type>) -> Type
+    fn FnTypeNode(pos: Pos, end: Pos, params: List<Type>, ret: Type) -> Type
+
+    fn BlockNode(pos: Pos, end: Pos, stmts: List<Stmt>) -> Block
+    fn BlockAsStmt(b: Block) -> Stmt
+    fn BlockAsExpr(b: Block) -> Expr
+    fn LetStmtNode(pos: Pos, end: Pos, pat: Pattern, isMut: Bool, typ: Type, value: Expr) -> Stmt
+    fn ReturnStmtNode(pos: Pos, end: Pos, value: Expr) -> Stmt
+    fn BreakStmtNode(pos: Pos, end: Pos) -> Stmt
+    fn ContinueStmtNode(pos: Pos, end: Pos) -> Stmt
+    fn DeferStmtNode(pos: Pos, end: Pos, x: Expr) -> Stmt
+    fn ForStmtNode(pos: Pos, end: Pos, isForLet: Bool, pat: Pattern, iter: Expr, body: Block) -> Stmt
+    fn AssignStmtNode(pos: Pos, end: Pos, op: Kind, target: Expr, value: Expr) -> Stmt
+    fn ChanSendStmtNode(pos: Pos, end: Pos, channel: Expr, value: Expr) -> Stmt
+    fn ExprStmtNode(x: Expr) -> Stmt
+
+    fn IdentExpr(pos: Pos, end: Pos, name: String) -> Expr
+    fn IntLitExpr(pos: Pos, end: Pos, text: String) -> Expr
+    fn FloatLitExpr(pos: Pos, end: Pos, text: String) -> Expr
+    fn BoolLitExpr(pos: Pos, end: Pos, value: Bool) -> Expr
+    fn CharLitExpr(pos: Pos, end: Pos, value: String) -> Expr
+    fn ByteLitExpr(pos: Pos, end: Pos, value: String) -> Expr
+    fn StringLitFromToken(pos: Pos, end: Pos, tok: Token) -> Expr
+    fn StringLitExpr(pos: Pos, end: Pos, value: String) -> Expr
+    fn UnaryExprNode(pos: Pos, end: Pos, op: Kind, x: Expr) -> Expr
+    fn BinaryExprNode(pos: Pos, end: Pos, op: Kind, left: Expr, right: Expr) -> Expr
+    fn QuestionExprNode(pos: Pos, end: Pos, x: Expr) -> Expr
+    fn CallExprNode(pos: Pos, end: Pos, fnExpr: Expr, args: List<Arg>) -> Expr
+    fn FieldExprNode(pos: Pos, end: Pos, x: Expr, name: String, optional: Bool) -> Expr
+    fn IndexExprNode(pos: Pos, end: Pos, x: Expr, index: Expr) -> Expr
+    fn TurbofishExprNode(pos: Pos, end: Pos, base: Expr, args: List<Type>) -> Expr
+    fn RangeExprNode(pos: Pos, end: Pos, start: Expr, stop: Expr, inclusive: Bool) -> Expr
+    fn ParenExprNode(pos: Pos, end: Pos, x: Expr) -> Expr
+    fn TupleExprNode(pos: Pos, end: Pos, elems: List<Expr>) -> Expr
+    fn ListExprNode(pos: Pos, end: Pos, elems: List<Expr>) -> Expr
+    fn MapEntryNode(key: Expr, value: Expr) -> MapEntry
+    fn MapExprNode(pos: Pos, end: Pos, entries: List<MapEntry>, empty: Bool) -> Expr
+    fn StructLitFieldNode(pos: Pos, name: String, value: Expr) -> StructLitField
+    fn StructLitNode(pos: Pos, end: Pos, typ: Expr, fields: List<StructLitField>, spread: Expr) -> Expr
+    fn IfExprNode(pos: Pos, end: Pos, isIfLet: Bool, pat: Pattern, cond: Expr, thenBlock: Block, alt: Expr) -> Expr
+    fn MatchArmNode(pos: Pos, pat: Pattern, guard: Expr, body: Expr) -> MatchArm
+    fn MatchExprNode(pos: Pos, end: Pos, scrutinee: Expr, arms: List<MatchArm>) -> Expr
+    fn ClosureExprNode(pos: Pos, end: Pos, params: List<Param>, ret: Type, body: Expr) -> Expr
+    fn ArgNode(pos: Pos, name: String, value: Expr) -> Arg
+
+    fn IdentPatNode(pos: Pos, end: Pos, name: String) -> Pattern
+    fn WildcardPatNode(pos: Pos, end: Pos) -> Pattern
+    fn LiteralPatNode(pos: Pos, end: Pos, lit: Expr) -> Pattern
+    fn TuplePatNode(pos: Pos, end: Pos, elems: List<Pattern>) -> Pattern
+    fn VariantPatNode(pos: Pos, end: Pos, path: List<String>, args: List<Pattern>) -> Pattern
+    fn StructPatFieldNode(pos: Pos, name: String, pat: Pattern) -> StructPatField
+    fn StructPatNode(pos: Pos, end: Pos, typ: List<String>, fields: List<StructPatField>, rest: Bool) -> Pattern
+    fn BindingPatNode(pos: Pos, end: Pos, name: String, pat: Pattern) -> Pattern
+    fn RangePatNode(pos: Pos, end: Pos, start: Expr, stop: Expr, inclusive: Bool) -> Pattern
+    fn OrPatNode(pos: Pos, end: Pos, alts: List<Pattern>) -> Pattern
+    fn ExprPos(e: Expr, fallback: Pos) -> Pos
+    fn ExprEnd(e: Expr, fallback: Pos) -> Pos
+    fn TokenAt(toks: List<Token>, idx: Int) -> Token
+    fn TokenKind(tok: Token) -> Kind
+    fn TokenPos(tok: Token) -> Pos
+    fn TokenEnd(tok: Token) -> Pos
+    fn TokenValue(tok: Token) -> String
+    fn TokenLeadingDoc(tok: Token) -> String
+    fn TokenIsPub(tok: Token) -> Bool
+    fn TokenIsIdent(tok: Token) -> Bool
+    fn TokenIsString(tok: Token) -> Bool
+    fn TokenIsDot(tok: Token) -> Bool
+    fn TokenIsSlash(tok: Token) -> Bool
+    fn TokenIsColon(tok: Token) -> Bool
+    fn TokenIsLBrace(tok: Token) -> Bool
+    fn TokenIsNewline(tok: Token) -> Bool
+    fn TokenIsEOF(tok: Token) -> Bool
+    fn TokenKindString(tok: Token) -> String
+    fn RuneString(value: Int) -> String
+    fn KindEOF() -> Kind
+    fn KindIllegal() -> Kind
+    fn KindNewline() -> Kind
+    fn KindIdent() -> Kind
+    fn KindInt() -> Kind
+    fn KindFloat() -> Kind
+    fn KindChar() -> Kind
+    fn KindByte() -> Kind
+    fn KindString() -> Kind
+    fn KindRawString() -> Kind
+    fn KindFn() -> Kind
+    fn KindStruct() -> Kind
+    fn KindEnum() -> Kind
+    fn KindInterface() -> Kind
+    fn KindType() -> Kind
+    fn KindLet() -> Kind
+    fn KindMut() -> Kind
+    fn KindPub() -> Kind
+    fn KindIf() -> Kind
+    fn KindElse() -> Kind
+    fn KindMatch() -> Kind
+    fn KindFor() -> Kind
+    fn KindBreak() -> Kind
+    fn KindContinue() -> Kind
+    fn KindReturn() -> Kind
+    fn KindUse() -> Kind
+    fn KindDefer() -> Kind
+    fn KindLParen() -> Kind
+    fn KindRParen() -> Kind
+    fn KindLBrace() -> Kind
+    fn KindRBrace() -> Kind
+    fn KindLBracket() -> Kind
+    fn KindRBracket() -> Kind
+    fn KindComma() -> Kind
+    fn KindColon() -> Kind
+    fn KindSemicolon() -> Kind
+    fn KindDot() -> Kind
+    fn KindPlus() -> Kind
+    fn KindMinus() -> Kind
+    fn KindStar() -> Kind
+    fn KindSlash() -> Kind
+    fn KindPercent() -> Kind
+    fn KindEq() -> Kind
+    fn KindNeq() -> Kind
+    fn KindLt() -> Kind
+    fn KindGt() -> Kind
+    fn KindLeq() -> Kind
+    fn KindGeq() -> Kind
+    fn KindAnd() -> Kind
+    fn KindOr() -> Kind
+    fn KindNot() -> Kind
+    fn KindBitAnd() -> Kind
+    fn KindBitOr() -> Kind
+    fn KindBitXor() -> Kind
+    fn KindBitNot() -> Kind
+    fn KindShl() -> Kind
+    fn KindShr() -> Kind
+    fn KindAssign() -> Kind
+    fn KindPlusEq() -> Kind
+    fn KindMinusEq() -> Kind
+    fn KindStarEq() -> Kind
+    fn KindSlashEq() -> Kind
+    fn KindPercentEq() -> Kind
+    fn KindBitAndEq() -> Kind
+    fn KindBitOrEq() -> Kind
+    fn KindBitXorEq() -> Kind
+    fn KindShlEq() -> Kind
+    fn KindShrEq() -> Kind
+    fn KindQuestion() -> Kind
+    fn KindQDot() -> Kind
+    fn KindQQ() -> Kind
+    fn KindDotDot() -> Kind
+    fn KindDotDotEq() -> Kind
+    fn KindArrow() -> Kind
+    fn KindChanArrow() -> Kind
+    fn KindColonColon() -> Kind
+    fn KindUnderscore() -> Kind
+    fn KindAt() -> Kind
+    fn KindHash() -> Kind
+}
+
+fn astLowerPublicFile(arena: AstArena, toks: List<astbridge.Token>) -> astbridge.File {
+    let mut uses = astbridge.EmptyDeclList()
+    let mut decls = astbridge.EmptyDeclList()
+    let mut stmts = astbridge.EmptyStmtList()
+    for idx in arena.decls {
+        let n = astArenaNodeAt(arena, idx)
+        if n.kind == AstNLet && !(astbridge.TokenIsPub(astLowerTok(toks, n.start - 1))) {
+            let stmt = astLowerStmt(arena, toks, idx)
+            if !(astbridge.IsNilStmt(stmt)) {
+                stmts.push(stmt)
+            }
+        } else {
+            let decl = astLowerDecl(arena, toks, idx)
+            if !(astbridge.IsNilDecl(decl)) {
+                if n.kind == AstNUseDecl {
+                    uses.push(decl)
+                } else {
+                    decls.push(decl)
+                }
+            } else {
+                let stmt = astLowerStmt(arena, toks, idx)
+                if !(astbridge.IsNilStmt(stmt)) {
+                    stmts.push(stmt)
+                }
+            }
+        }
+    }
+    astbridge.FileNode(astLowerPos(toks, 0), astLowerEnd(toks, astLowerTokenCount(toks) - 1), uses, decls, stmts)
+}
+
+fn astLowerTokenCount(toks: List<astbridge.Token>) -> Int {
+    let mut count = 0
+    for tok in toks {
+        let _ = tok
+        count = count + 1
+    }
+    count
+}
+
+fn astLowerInterpolatedTokensToExpr(toks: List<astbridge.Token>) -> astbridge.Expr {
+    let count = astLowerTokenCount(toks)
+    astLowerInterpExpr(toks, 0, count)
+}
+
+fn astLowerInterpExpr(toks: List<astbridge.Token>, rawStart: Int, rawEnd: Int) -> astbridge.Expr {
+    let start = astLowerInterpTrimStart(toks, rawStart, rawEnd)
+    let end = astLowerInterpTrimEnd(toks, start, rawEnd)
+    if start >= end {
+        return astbridge.NilExpr()
+    }
+    let split = astLowerInterpSplitTopLevelBinary(toks, start, end)
+    if split > start {
+        let left = astLowerInterpExpr(toks, start, split)
+        let right = astLowerInterpExpr(toks, split + 1, end)
+        return astbridge.BinaryExprNode(
+            astLowerPos(toks, start),
+            astLowerEnd(toks, end),
+            astbridge.TokenKind(astLowerTok(toks, split)),
+            left,
+            right,
+        )
+    }
+    let first = astLowerTok(toks, start)
+    let firstKind = astbridge.TokenKindString(first)
+    if firstKind == "-" || firstKind == "!" || firstKind == "~" {
+        let x = astLowerInterpExpr(toks, start + 1, end)
+        return astbridge.UnaryExprNode(astLowerPos(toks, start), astLowerEnd(toks, end), astbridge.TokenKind(first), x)
+    }
+    if firstKind == "(" && astLowerInterpFindClose(toks, start, end, "(", ")") == end - 1 {
+        return astbridge.ParenExprNode(astLowerPos(toks, start), astLowerEnd(toks, end), astLowerInterpExpr(toks, start + 1, end - 1))
+    }
+    let mut expr = astLowerInterpPrimary(toks, start, end)
+    if astbridge.IsNilExpr(expr) {
+        return astbridge.IdentExpr(astLowerPos(toks, start), astLowerEnd(toks, end), "__interp")
+    }
+    let mut i = start + 1
+    for i < end {
+        let tok = astLowerTok(toks, i)
+        let kind = astbridge.TokenKindString(tok)
+        if kind == "(" {
+            let close = astLowerInterpFindClose(toks, i, end, "(", ")")
+            if close < 0 {
+                return astbridge.CallExprNode(astbridge.ExprPos(expr, astLowerPos(toks, start)), astLowerEnd(toks, end), expr, astLowerInterpArgs(toks, i + 1, end))
+            }
+            expr = astbridge.CallExprNode(astbridge.ExprPos(expr, astLowerPos(toks, start)), astLowerEnd(toks, close + 1), expr, astLowerInterpArgs(toks, i + 1, close))
+            i = close + 1
+        } else if (kind == "." || kind == "?.") && i + 1 < end && astbridge.TokenIsIdent(astLowerTok(toks, i + 1)) {
+            expr = astbridge.FieldExprNode(astbridge.ExprPos(expr, astLowerPos(toks, start)), astbridge.TokenEnd(astLowerTok(toks, i + 1)), expr, astbridge.TokenValue(astLowerTok(toks, i + 1)), kind == "?.")
+            i = i + 2
+        } else {
+            return expr
+        }
+    }
+    expr
+}
+
+fn astLowerInterpPrimary(toks: List<astbridge.Token>, start: Int, end: Int) -> astbridge.Expr {
+    let tok = astLowerTok(toks, start)
+    let kind = astbridge.TokenKindString(tok)
+    let value = astbridge.TokenValue(tok)
+    if kind == "IDENT" {
+        if value == "true" {
+            return astbridge.BoolLitExpr(astLowerPos(toks, start), astLowerEnd(toks, start + 1), true)
+        }
+        if value == "false" {
+            return astbridge.BoolLitExpr(astLowerPos(toks, start), astLowerEnd(toks, start + 1), false)
+        }
+        return astbridge.IdentExpr(astLowerPos(toks, start), astLowerEnd(toks, start + 1), value)
+    }
+    if kind == "INT" {
+        return astbridge.IntLitExpr(astLowerPos(toks, start), astLowerEnd(toks, start + 1), value)
+    }
+    if kind == "FLOAT" {
+        return astbridge.FloatLitExpr(astLowerPos(toks, start), astLowerEnd(toks, start + 1), value)
+    }
+    if astbridge.TokenIsString(tok) {
+        return astbridge.StringLitFromToken(astLowerPos(toks, start), astLowerEnd(toks, start + 1), tok)
+    }
+    if kind == "CHAR" {
+        return astbridge.CharLitExpr(astLowerPos(toks, start), astLowerEnd(toks, start + 1), astLowerDecodedLiteral(value))
+    }
+    if kind == "BYTE" {
+        return astbridge.ByteLitExpr(astLowerPos(toks, start), astLowerEnd(toks, start + 1), astLowerDecodedLiteral(value))
+    }
+    astbridge.NilExpr()
+}
+
+fn astLowerInterpTrimStart(toks: List<astbridge.Token>, start: Int, end: Int) -> Int {
+    let mut i = start
+    for i < end && (astbridge.TokenIsNewline(astLowerTok(toks, i)) || astbridge.TokenIsEOF(astLowerTok(toks, i))) {
+        i = i + 1
+    }
+    i
+}
+
+fn astLowerInterpTrimEnd(toks: List<astbridge.Token>, start: Int, end: Int) -> Int {
+    let mut i = end
+    for i > start && (astbridge.TokenIsNewline(astLowerTok(toks, i - 1)) || astbridge.TokenIsEOF(astLowerTok(toks, i - 1))) {
+        i = i - 1
+    }
+    i
+}
+
+fn astLowerInterpSplitTopLevelBinary(toks: List<astbridge.Token>, start: Int, end: Int) -> Int {
+    let mut best = -1
+    let mut bestPrec = 100
+    let mut depth = 0
+    for i in start..end {
+        let kind = astbridge.TokenKindString(astLowerTok(toks, i))
+        if kind == "(" || kind == "[" || kind == r"{" {
+            depth = depth + 1
+        } else if kind == ")" || kind == "]" || kind == r"}" {
+            if depth > 0 {
+                depth = depth - 1
+            }
+        } else if depth == 0 {
+            let prec = astLowerInterpPrecedence(kind)
+            if prec > 0 && prec <= bestPrec {
+                best = i
+                bestPrec = prec
+            }
+        }
+    }
+    best
+}
+
+fn astLowerInterpPrecedence(kind: String) -> Int {
+    if kind == "||" {
+        return 1
+    }
+    if kind == "&&" {
+        return 2
+    }
+    if kind == "==" || kind == "!=" || kind == "<" || kind == ">" || kind == "<=" || kind == ">=" {
+        return 3
+    }
+    if kind == "+" || kind == "-" {
+        return 4
+    }
+    if kind == "*" || kind == "/" || kind == "%" {
+        return 5
+    }
+    0
+}
+
+fn astLowerInterpFindClose(toks: List<astbridge.Token>, start: Int, end: Int, open: String, close: String) -> Int {
+    let mut depth = 0
+    for i in start..end {
+        let kind = astbridge.TokenKindString(astLowerTok(toks, i))
+        if kind == open {
+            depth = depth + 1
+        } else if kind == close {
+            depth = depth - 1
+            if depth == 0 {
+                return i
+            }
+        }
+    }
+    -1
+}
+
+fn astLowerInterpArgs(toks: List<astbridge.Token>, start: Int, end: Int) -> List<astbridge.Arg> {
+    let mut out = astbridge.EmptyArgList()
+    let mut depth = 0
+    let mut argStart = start
+    for i in start..end {
+        let kind = astbridge.TokenKindString(astLowerTok(toks, i))
+        if kind == "(" || kind == "[" || kind == r"{" {
+            depth = depth + 1
+        } else if kind == ")" || kind == "]" || kind == r"}" {
+            if depth > 0 {
+                depth = depth - 1
+            }
+        } else if kind == "," && depth == 0 {
+            out = astLowerInterpAppendArg(toks, out, argStart, i)
+            argStart = i + 1
+        }
+    }
+    astLowerInterpAppendArg(toks, out, argStart, end)
+}
+
+fn astLowerInterpAppendArg(toks: List<astbridge.Token>, args: List<astbridge.Arg>, rawStart: Int, rawEnd: Int) -> List<astbridge.Arg> {
+    let mut out = args
+    let start = astLowerInterpTrimStart(toks, rawStart, rawEnd)
+    let end = astLowerInterpTrimEnd(toks, start, rawEnd)
+    if start < end {
+        out.push(astbridge.ArgNode(astLowerPos(toks, start), "", astLowerInterpExpr(toks, start, end)))
+    }
+    out
+}
+
+fn astLowerTok(toks: List<astbridge.Token>, idx: Int) -> astbridge.Token {
+    astbridge.TokenAt(toks, idx)
+}
+
+fn astLowerPos(toks: List<astbridge.Token>, idx: Int) -> astbridge.Pos {
+    astbridge.TokenPos(astLowerTok(toks, idx))
+}
+
+fn astLowerEnd(toks: List<astbridge.Token>, idx: Int) -> astbridge.Pos {
+    if idx <= 0 {
+        return astbridge.TokenEnd(astLowerTok(toks, 0))
+    }
+    astbridge.TokenEnd(astLowerTok(toks, idx - 1))
+}
+
+fn astLowerNodePos(toks: List<astbridge.Token>, n: AstNode) -> astbridge.Pos {
+    astLowerPos(toks, n.start)
+}
+
+fn astLowerNodeEnd(toks: List<astbridge.Token>, n: AstNode) -> astbridge.Pos {
+    astLowerEnd(toks, n.end)
+}
+
+fn astLowerDoc(toks: List<astbridge.Token>, idx: Int) -> String {
+    let direct = astbridge.TokenLeadingDoc(astLowerTok(toks, idx))
+    if direct != "" {
+        return direct
+    }
+    if idx > 0 && astbridge.TokenIsPub(astLowerTok(toks, idx - 1)) {
+        return astbridge.TokenLeadingDoc(astLowerTok(toks, idx - 1))
+    }
+    ""
+}
+
+fn astLowerKind(kind: FrontTokenKind) -> astbridge.Kind {
+    if kind == FrontEOF { return astbridge.KindEOF() }
+    if kind == FrontIllegal { return astbridge.KindIllegal() }
+    if kind == FrontNewline { return astbridge.KindNewline() }
+    if kind == FrontIdent { return astbridge.KindIdent() }
+    if kind == FrontInt { return astbridge.KindInt() }
+    if kind == FrontFloat { return astbridge.KindFloat() }
+    if kind == FrontChar { return astbridge.KindChar() }
+    if kind == FrontByte { return astbridge.KindByte() }
+    if kind == FrontString { return astbridge.KindString() }
+    if kind == FrontRawString { return astbridge.KindRawString() }
+    if kind == FrontFn { return astbridge.KindFn() }
+    if kind == FrontStruct { return astbridge.KindStruct() }
+    if kind == FrontEnum { return astbridge.KindEnum() }
+    if kind == FrontInterface { return astbridge.KindInterface() }
+    if kind == FrontType { return astbridge.KindType() }
+    if kind == FrontLet { return astbridge.KindLet() }
+    if kind == FrontMut { return astbridge.KindMut() }
+    if kind == FrontPub { return astbridge.KindPub() }
+    if kind == FrontIf { return astbridge.KindIf() }
+    if kind == FrontElse { return astbridge.KindElse() }
+    if kind == FrontMatch { return astbridge.KindMatch() }
+    if kind == FrontFor { return astbridge.KindFor() }
+    if kind == FrontBreak { return astbridge.KindBreak() }
+    if kind == FrontContinue { return astbridge.KindContinue() }
+    if kind == FrontReturn { return astbridge.KindReturn() }
+    if kind == FrontUse { return astbridge.KindUse() }
+    if kind == FrontDefer { return astbridge.KindDefer() }
+    if kind == FrontLParen { return astbridge.KindLParen() }
+    if kind == FrontRParen { return astbridge.KindRParen() }
+    if kind == FrontLBrace { return astbridge.KindLBrace() }
+    if kind == FrontRBrace { return astbridge.KindRBrace() }
+    if kind == FrontLBracket { return astbridge.KindLBracket() }
+    if kind == FrontRBracket { return astbridge.KindRBracket() }
+    if kind == FrontComma { return astbridge.KindComma() }
+    if kind == FrontColon { return astbridge.KindColon() }
+    if kind == FrontSemicolon { return astbridge.KindSemicolon() }
+    if kind == FrontDot { return astbridge.KindDot() }
+    if kind == FrontPlus { return astbridge.KindPlus() }
+    if kind == FrontMinus { return astbridge.KindMinus() }
+    if kind == FrontStar { return astbridge.KindStar() }
+    if kind == FrontSlash { return astbridge.KindSlash() }
+    if kind == FrontPercent { return astbridge.KindPercent() }
+    if kind == FrontEq { return astbridge.KindEq() }
+    if kind == FrontNeq { return astbridge.KindNeq() }
+    if kind == FrontLt { return astbridge.KindLt() }
+    if kind == FrontGt { return astbridge.KindGt() }
+    if kind == FrontLeq { return astbridge.KindLeq() }
+    if kind == FrontGeq { return astbridge.KindGeq() }
+    if kind == FrontAnd { return astbridge.KindAnd() }
+    if kind == FrontOr { return astbridge.KindOr() }
+    if kind == FrontNot { return astbridge.KindNot() }
+    if kind == FrontBitAnd { return astbridge.KindBitAnd() }
+    if kind == FrontBitOr { return astbridge.KindBitOr() }
+    if kind == FrontBitXor { return astbridge.KindBitXor() }
+    if kind == FrontBitNot { return astbridge.KindBitNot() }
+    if kind == FrontShl { return astbridge.KindShl() }
+    if kind == FrontShr { return astbridge.KindShr() }
+    if kind == FrontAssign { return astbridge.KindAssign() }
+    if kind == FrontPlusEq { return astbridge.KindPlusEq() }
+    if kind == FrontMinusEq { return astbridge.KindMinusEq() }
+    if kind == FrontStarEq { return astbridge.KindStarEq() }
+    if kind == FrontSlashEq { return astbridge.KindSlashEq() }
+    if kind == FrontPercentEq { return astbridge.KindPercentEq() }
+    if kind == FrontBitAndEq { return astbridge.KindBitAndEq() }
+    if kind == FrontBitOrEq { return astbridge.KindBitOrEq() }
+    if kind == FrontBitXorEq { return astbridge.KindBitXorEq() }
+    if kind == FrontShlEq { return astbridge.KindShlEq() }
+    if kind == FrontShrEq { return astbridge.KindShrEq() }
+    if kind == FrontQuestion { return astbridge.KindQuestion() }
+    if kind == FrontQDot { return astbridge.KindQDot() }
+    if kind == FrontQQ { return astbridge.KindQQ() }
+    if kind == FrontDotDot { return astbridge.KindDotDot() }
+    if kind == FrontDotDotEq { return astbridge.KindDotDotEq() }
+    if kind == FrontArrow { return astbridge.KindArrow() }
+    if kind == FrontChanArrow { return astbridge.KindChanArrow() }
+    if kind == FrontColonColon { return astbridge.KindColonColon() }
+    if kind == FrontUnderscore { return astbridge.KindUnderscore() }
+    if kind == FrontAt { return astbridge.KindAt() }
+    if kind == FrontHash { return astbridge.KindHash() }
+    astbridge.KindIllegal()
+}
+
+fn astLowerSplitPath(raw: String) -> List<String> {
+    if raw == "" {
+        return []
+    }
+    if strings.Count(raw, "/") > 0 {
+        return [raw]
+    }
+    strings.Split(raw, ".")
+}
+
+fn astLowerUnquoteMaybe(s: String) -> String {
+    astLowerStringContent(s)
+}
+
+fn astLowerStringContent(s: String) -> String {
+    if strings.HasPrefix(s, "r\"\"\"") && strings.HasSuffix(s, "\"\"\"") {
+        return strings.TrimSuffix(strings.TrimPrefix(s, "r\"\"\""), "\"\"\"")
+    }
+    if strings.HasPrefix(s, "\"\"\"") && strings.HasSuffix(s, "\"\"\"") {
+        return astLowerDecodeEscapes(strings.TrimSuffix(strings.TrimPrefix(s, "\"\"\""), "\"\"\""))
+    }
+    if strings.HasPrefix(s, "r\"") && strings.HasSuffix(s, "\"") {
+        return strings.TrimSuffix(strings.TrimPrefix(s, "r\""), "\"")
+    }
+    if strings.HasPrefix(s, "\"") && strings.HasSuffix(s, "\"") {
+        return astLowerDecodeEscapes(strings.TrimSuffix(strings.TrimPrefix(s, "\""), "\""))
+    }
+    s
+}
+
+fn astLowerDecodedLiteral(s: String) -> String {
+    let mut raw = s
+    if strings.HasPrefix(raw, "b") {
+        raw = strings.TrimPrefix(raw, "b")
+    }
+    if strings.HasPrefix(raw, "'") && strings.HasSuffix(raw, "'") {
+        raw = strings.TrimSuffix(strings.TrimPrefix(raw, "'"), "'")
+    }
+    astLowerDecodeEscapes(raw)
+}
+
+fn astLowerDecodeEscapes(s: String) -> String {
+    let units = strings.Split(s, "")
+    let mut out = ""
+    let mut i = 0
+    for i < astLowerStringUnitCount(units) {
+        let unit = frontUnitAt(units, i)
+        if unit != "\\" {
+            out = "{out}{unit}"
+            i = i + 1
+        } else if i + 1 >= astLowerStringUnitCount(units) {
+            out = "{out}\\"
+            i = i + 1
+        } else {
+            let next = frontUnitAt(units, i + 1)
+            if next == "n" {
+                out = "{out}\n"
+                i = i + 2
+            } else if next == "r" {
+                out = "{out}\r"
+                i = i + 2
+            } else if next == "t" {
+                out = "{out}\t"
+                i = i + 2
+            } else if next == "0" {
+                out = "{out}{astbridge.RuneString(0)}"
+                i = i + 2
+            } else if next == "x" {
+                let high = frontHexValue(frontUnitAt(units, i + 2))
+                let low = frontHexValue(frontUnitAt(units, i + 3))
+                if i + 3 < astLowerStringUnitCount(units) && high >= 0 && low >= 0 {
+                    let value: Int = (high * 16) + low
+                    out = "{out}{astbridge.RuneString(value)}"
+                    i = i + 4
+                } else {
+                    out = "{out}{next}"
+                    i = i + 2
+                }
+            } else if next == "u" && frontUnitAt(units, i + 2) == r"{" {
+                let parsed = astLowerDecodeUnicodeEscape(units, i + 3)
+                if parsed.consumed > 0 {
+                    out = "{out}{astbridge.RuneString(parsed.value)}"
+                    i = i + 3 + parsed.consumed
+                } else {
+                    out = "{out}{next}"
+                    i = i + 2
+                }
+            } else {
+                out = "{out}{next}"
+                i = i + 2
+            }
+        }
+    }
+    out
+}
+
+struct AstLowerUnicodeEscape {
+    value: Int,
+    consumed: Int,
+}
+
+fn astLowerDecodeUnicodeEscape(units: List<String>, start: Int) -> AstLowerUnicodeEscape {
+    let mut value = 0
+    let mut consumed = 0
+    let total = astLowerStringUnitCount(units)
+    for i in start..total {
+        let unit = frontUnitAt(units, i)
+        if unit == r"}" {
+            if consumed == 0 {
+                return AstLowerUnicodeEscape { value: 0, consumed: 0 }
+            }
+            return AstLowerUnicodeEscape { value, consumed: consumed + 1 }
+        }
+        let digit = frontHexValue(unit)
+        if digit < 0 {
+            return AstLowerUnicodeEscape { value: 0, consumed: 0 }
+        }
+        value = (value * 16) + digit
+        consumed = consumed + 1
+    }
+    AstLowerUnicodeEscape { value: 0, consumed: 0 }
+}
+
+fn astLowerStringUnitCount(units: List<String>) -> Int {
+    let mut count = 0
+    for unit in units {
+        let _ = unit
+        count = count + 1
+    }
+    count
+}
+
+fn astLowerDecl(arena: AstArena, toks: List<astbridge.Token>, idx: Int) -> astbridge.Decl {
+    let n = astArenaNodeAt(arena, idx)
+    if n.kind == AstNFnDecl {
+        return astbridge.FnDeclAsDecl(astLowerFnDecl(arena, toks, n))
+    }
+    if n.kind == AstNStructDecl {
+        return astLowerStructDecl(arena, toks, n)
+    }
+    if n.kind == AstNEnumDecl {
+        return astLowerEnumDecl(arena, toks, n)
+    }
+    if n.kind == AstNInterfaceDecl {
+        return astLowerInterfaceDecl(arena, toks, n)
+    }
+    if n.kind == AstNTypeAlias {
+        return astLowerTypeAliasDecl(arena, toks, n)
+    }
+    if n.kind == AstNUseDecl {
+        return astLowerUseDecl(arena, toks, n)
+    }
+    if n.kind == AstNLet {
+        return astLowerLetDecl(arena, toks, n)
+    }
+    astbridge.NilDecl()
+}
+
+fn astLowerFnDecl(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.FnDecl {
+    let mut recv = astbridge.NilReceiver()
+    let mut params = astbridge.EmptyParamList()
+    let mut i = 0
+    for child in n.children {
+        let p = astLowerParam(arena, toks, child)
+        if !(astbridge.IsNilParam(p)) {
+            let cn = astArenaNodeAt(arena, child)
+            if i == 0 && cn.text == "self" {
+                recv = astbridge.ReceiverNode(astLowerNodePos(toks, cn), astLowerNodeEnd(toks, cn), cn.flags == 1, astLowerNodePos(toks, cn))
+            } else {
+                params.push(p)
+            }
+        }
+        i = i + 1
+    }
+    astbridge.FnDeclNode(
+        astLowerNodePos(toks, n),
+        astLowerNodeEnd(toks, n),
+        n.flags == 1,
+        n.text,
+        astLowerGenericParams(arena, toks, n.children2),
+        recv,
+        params,
+        astLowerType(arena, toks, n.left),
+        astLowerBlock(arena, toks, n.right),
+        astLowerDoc(toks, n.start),
+        astLowerAnnotations(arena, toks, n.extra),
+    )
+}
+
+fn astLowerStructDecl(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Decl {
+    let mut fields = astbridge.EmptyFieldList()
+    let mut methods = astbridge.EmptyFnDeclList()
+    for child in n.children {
+        let cn = astArenaNodeAt(arena, child)
+        match cn.kind {
+            AstNFnDecl -> {
+                let fnDecl = astLowerFnDecl(arena, toks, cn)
+                if !(astbridge.IsNilFnDecl(fnDecl)) {
+                    methods.push(fnDecl)
+                }
+            },
+            AstNField_ -> {
+                let field = astLowerField(arena, toks, cn)
+                if !(astbridge.IsNilField(field)) {
+                    fields.push(field)
+                }
+            },
+            _ -> {},
+        }
+    }
+    astbridge.StructDeclNode(
+        astLowerNodePos(toks, n),
+        astLowerNodeEnd(toks, n),
+        n.flags == 1,
+        n.text,
+        astLowerGenericParams(arena, toks, n.children2),
+        fields,
+        methods,
+        astLowerDoc(toks, n.start),
+        astLowerAnnotations(arena, toks, n.extra),
+    )
+}
+
+fn astLowerEnumDecl(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Decl {
+    let mut variants = astbridge.EmptyVariantList()
+    let mut methods = astbridge.EmptyFnDeclList()
+    for child in n.children {
+        let cn = astArenaNodeAt(arena, child)
+        match cn.kind {
+            AstNFnDecl -> {
+                let fnDecl = astLowerFnDecl(arena, toks, cn)
+                if !(astbridge.IsNilFnDecl(fnDecl)) {
+                    methods.push(fnDecl)
+                }
+            },
+            AstNVariant -> {
+                let mut fields = astbridge.EmptyTypeList()
+                for t in cn.children {
+                    let ty = astLowerType(arena, toks, t)
+                    if !(astbridge.IsNilType(ty)) {
+                        fields.push(ty)
+                    }
+                }
+                variants.push(astbridge.VariantNode(
+                    astLowerNodePos(toks, cn),
+                    astLowerNodeEnd(toks, cn),
+                    cn.text,
+                    fields,
+                    astLowerAnnotations(arena, toks, cn.extra),
+                    astLowerDoc(toks, cn.start),
+                ))
+            },
+            _ -> {},
+        }
+    }
+    astbridge.EnumDeclNode(
+        astLowerNodePos(toks, n),
+        astLowerNodeEnd(toks, n),
+        n.flags == 1,
+        n.text,
+        astLowerGenericParams(arena, toks, n.children2),
+        variants,
+        methods,
+        astLowerDoc(toks, n.start),
+        astLowerAnnotations(arena, toks, n.extra),
+    )
+}
+
+fn astLowerInterfaceDecl(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Decl {
+    let mut extends = astbridge.EmptyTypeList()
+    let mut methods = astbridge.EmptyFnDeclList()
+    for idx in n.children2 {
+        let ty = astLowerType(arena, toks, idx)
+        if !(astbridge.IsNilType(ty)) {
+            extends.push(ty)
+        }
+    }
+    for child in n.children {
+        let cn = astArenaNodeAt(arena, child)
+        if cn.kind == AstNFnDecl {
+            let fnDecl = astLowerFnDecl(arena, toks, cn)
+            if !(astbridge.IsNilFnDecl(fnDecl)) {
+                methods.push(fnDecl)
+            }
+        } else {
+            let ty = astLowerType(arena, toks, child)
+            if !(astbridge.IsNilType(ty)) {
+                extends.push(ty)
+            }
+        }
+    }
+    astbridge.InterfaceDeclNode(
+        astLowerNodePos(toks, n),
+        astLowerNodeEnd(toks, n),
+        n.flags == 1,
+        n.text,
+        astbridge.EmptyGenericParamList(),
+        extends,
+        methods,
+        astLowerDoc(toks, n.start),
+        astLowerAnnotations(arena, toks, n.extra),
+    )
+}
+
+fn astLowerTypeAliasDecl(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Decl {
+    astbridge.TypeAliasDeclNode(
+        astLowerNodePos(toks, n),
+        astLowerNodeEnd(toks, n),
+        n.flags == 1,
+        n.text,
+        astLowerGenericParams(arena, toks, n.children),
+        astLowerType(arena, toks, n.left),
+        astLowerDoc(toks, n.start),
+        astLowerAnnotations(arena, toks, n.extra),
+    )
+}
+
+fn astLowerUseDecl(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Decl {
+    let mut raw = astLowerUnquoteMaybe(n.text)
+    if n.flags == 1 {
+        let reconstructed = astLowerUseGoRawPath(toks, n)
+        if reconstructed != "" {
+            raw = reconstructed
+        }
+    } else {
+        let reconstructed = astLowerUseRawPath(toks, n)
+        if reconstructed != "" {
+            raw = reconstructed
+        }
+    }
+    let mut alias = ""
+    if astLowerIntListCount(n.children2) > 0 {
+        let aliasNode = astArenaNodeAt(arena, astLowerIntListAt(n.children2, 0))
+        alias = aliasNode.text
+    }
+    let mut body = astbridge.EmptyDeclList()
+    for child in n.children {
+        let d = astLowerDecl(arena, toks, child)
+        if !(astbridge.IsNilDecl(d)) {
+            body.push(d)
+        }
+    }
+    let mut path: List<String> = []
+    if !(n.flags == 1) {
+        path = astLowerSplitPath(raw)
+    }
+    astbridge.UseDeclNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), raw, path, n.flags == 1, alias, body)
+}
+
+fn astLowerUseRawPath(toks: List<astbridge.Token>, n: AstNode) -> String {
+    let mut out = ""
+    let mut i = n.start + 1
+    for i < n.end {
+        let tok = astLowerTok(toks, i)
+        if astbridge.TokenIsIdent(tok) {
+            if astbridge.TokenValue(tok) == "as" {
+                return out
+            }
+            out = "{out}{astbridge.TokenValue(tok)}"
+        } else if astbridge.TokenIsDot(tok) || astbridge.TokenIsSlash(tok) || astbridge.TokenIsColon(tok) {
+            out = "{out}{astbridge.TokenKindString(tok)}"
+        } else {
+            return out
+        }
+        i = i + 1
+    }
+    out
+}
+
+fn astLowerUseGoRawPath(toks: List<astbridge.Token>, n: AstNode) -> String {
+    let mut i = n.start + 1
+    for i < n.end {
+        let tok = astLowerTok(toks, i)
+        if astbridge.TokenIsString(tok) {
+            return astLowerUnquoteMaybe(astbridge.TokenValue(tok))
+        }
+        if astbridge.TokenIsLBrace(tok) || astbridge.TokenIsNewline(tok) || astbridge.TokenIsEOF(tok) {
+            return ""
+        }
+        i = i + 1
+    }
+    ""
+}
+
+fn astLowerLetDecl(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Decl {
+    let mut name = ""
+    let patNode = astArenaNodeAt(arena, n.left)
+    if patNode.kind == AstNIdent {
+        name = patNode.text
+    } else if strings.HasPrefix(patNode.text, "ident:") {
+        name = strings.TrimPrefix(patNode.text, "ident:")
+    }
+    astbridge.LetDeclNode(
+        astLowerNodePos(toks, n),
+        astLowerNodeEnd(toks, n),
+        astbridge.TokenIsPub(astLowerTok(toks, n.start - 1)),
+        n.flags == 1,
+        name,
+        astLowerChildType(arena, toks, n, 0),
+        astLowerExpr(arena, toks, n.right),
+        astLowerDoc(toks, n.start),
+        astLowerAnnotations(arena, toks, n.extra),
+    )
+}
+
+fn astLowerField(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Field {
+    astbridge.FieldNode(
+        astLowerNodePos(toks, n),
+        astLowerNodeEnd(toks, n),
+        n.flags == 1,
+        n.text,
+        astLowerType(arena, toks, n.right),
+        astLowerExpr(arena, toks, n.left),
+        astLowerDoc(toks, n.start),
+        astLowerAnnotations(arena, toks, n.extra),
+    )
+}
+
+fn astLowerParam(arena: AstArena, toks: List<astbridge.Token>, idx: Int) -> astbridge.Param {
+    if idx < 0 {
+        return astbridge.NilParam()
+    }
+    let n = astArenaNodeAt(arena, idx)
+    let mut pat = astbridge.NilPattern()
+    let mut def = astbridge.NilExpr()
+    if n.left >= 0 {
+        if n.text == "" {
+            let parsedPat = astLowerPattern(arena, toks, n.left)
+            if !(astbridge.IsNilPattern(parsedPat)) {
+                pat = parsedPat
+            }
+        } else {
+            def = astLowerExpr(arena, toks, n.left)
+        }
+    }
+    astbridge.ParamNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), n.text, pat, astLowerType(arena, toks, n.right), def)
+}
+
+fn astLowerGenericParams(arena: AstArena, toks: List<astbridge.Token>, ids: List<Int>) -> List<astbridge.GenericParam> {
+    let mut out = astbridge.EmptyGenericParamList()
+    for idx in ids {
+        let n = astArenaNodeAt(arena, idx)
+        let mut constraints = astbridge.EmptyTypeList()
+        for child in n.children {
+            let ty = astLowerType(arena, toks, child)
+            if !(astbridge.IsNilType(ty)) {
+                constraints.push(ty)
+            }
+        }
+        out.push(astbridge.GenericParamNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), n.text, constraints))
+    }
+    out
+}
+
+fn astLowerAnnotations(arena: AstArena, toks: List<astbridge.Token>, idx: Int) -> List<astbridge.Annotation> {
+    let mut out = astbridge.EmptyAnnotationList()
+    if idx < 0 {
+        return out
+    }
+    let n = astArenaNodeAt(arena, idx)
+    if n.text == "__group" {
+        for child in n.children {
+            let ann = astLowerAnnotation(arena, toks, child)
+            if !(astbridge.IsNilAnnotation(ann)) {
+                out.push(ann)
+            }
+        }
+        return out
+    }
+    let ann = astLowerAnnotation(arena, toks, idx)
+    if !(astbridge.IsNilAnnotation(ann)) {
+        out.push(ann)
+    }
+    out
+}
+
+fn astLowerAnnotation(arena: AstArena, toks: List<astbridge.Token>, idx: Int) -> astbridge.Annotation {
+    if idx < 0 {
+        return astbridge.NilAnnotation()
+    }
+    let n = astArenaNodeAt(arena, idx)
+    let mut args = astbridge.EmptyAnnotationArgList()
+    for child in n.children {
+        let cn = astArenaNodeAt(arena, child)
+        if cn.kind == AstNField_ {
+            args.push(astbridge.AnnotationArgNode(astLowerNodePos(toks, cn), cn.text, astLowerExpr(arena, toks, cn.left)))
+        } else if cn.kind == AstNIdent {
+            args.push(astbridge.AnnotationArgNode(astLowerNodePos(toks, cn), cn.text, astbridge.NilExpr()))
+        } else {
+            args.push(astbridge.AnnotationArgNode(astLowerNodePos(toks, cn), "", astLowerExpr(arena, toks, child)))
+        }
+    }
+    astbridge.AnnotationNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), n.text, args)
+}
+
+fn astLowerType(arena: AstArena, toks: List<astbridge.Token>, idx: Int) -> astbridge.Type {
+    if idx < 0 {
+        return astbridge.NilType()
+    }
+    let n = astArenaNodeAt(arena, idx)
+    if n.kind == AstNError {
+        return astbridge.NilType()
+    }
+    if n.text == "optional" {
+        return astbridge.OptionalTypeNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerType(arena, toks, n.left))
+    }
+    if n.text == "tuple" {
+        let mut elems = astbridge.EmptyTypeList()
+        for child in n.children {
+            let ty = astLowerType(arena, toks, child)
+            if !(astbridge.IsNilType(ty)) {
+                elems.push(ty)
+            }
+        }
+        return astbridge.TupleTypeNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), elems)
+    }
+    if n.text == "fn" {
+        let mut params = astbridge.EmptyTypeList()
+        for child in n.children {
+            let ty = astLowerType(arena, toks, child)
+            if !(astbridge.IsNilType(ty)) {
+                params.push(ty)
+            }
+        }
+        return astbridge.FnTypeNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), params, astLowerType(arena, toks, n.right))
+    }
+    let mut args = astbridge.EmptyTypeList()
+    for child in n.children {
+        let ty = astLowerType(arena, toks, child)
+        if !(astbridge.IsNilType(ty)) {
+            args.push(ty)
+        }
+    }
+    astbridge.NamedTypeNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerSplitPath(n.text), args)
+}
+
+fn astLowerChildType(arena: AstArena, toks: List<astbridge.Token>, n: AstNode, at: Int) -> astbridge.Type {
+    if at < 0 || at >= astLowerIntListCount(n.children) {
+        return astbridge.NilType()
+    }
+    astLowerType(arena, toks, astLowerIntListAt(n.children, at))
+}
+
+fn astLowerStmt(arena: AstArena, toks: List<astbridge.Token>, idx: Int) -> astbridge.Stmt {
+    if idx < 0 {
+        return astbridge.NilStmt()
+    }
+    let n = astArenaNodeAt(arena, idx)
+    if n.kind == AstNLet {
+        return astbridge.LetStmtNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerPattern(arena, toks, n.left), n.flags == 1, astLowerChildType(arena, toks, n, 0), astLowerExpr(arena, toks, n.right))
+    }
+    if n.kind == AstNReturn {
+        return astbridge.ReturnStmtNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerExpr(arena, toks, n.left))
+    }
+    if n.kind == AstNBreak {
+        return astbridge.BreakStmtNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n))
+    }
+    if n.kind == AstNContinue {
+        return astbridge.ContinueStmtNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n))
+    }
+    if n.kind == AstNDefer {
+        return astbridge.DeferStmtNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerExpr(arena, toks, n.left))
+    }
+    if n.kind == AstNFor {
+        return astLowerForStmt(arena, toks, n)
+    }
+    if n.kind == AstNAssign {
+        return astbridge.AssignStmtNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerKind(n.op), astLowerExpr(arena, toks, n.left), astLowerExpr(arena, toks, n.right))
+    }
+    if n.kind == AstNChanSend {
+        return astbridge.ChanSendStmtNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerExpr(arena, toks, n.left), astLowerExpr(arena, toks, n.right))
+    }
+    if n.kind == AstNExprStmt {
+        return astbridge.ExprStmtNode(astLowerExpr(arena, toks, n.left))
+    }
+    let e = astLowerExpr(arena, toks, idx)
+    if !(astbridge.IsNilExpr(e)) {
+        return astbridge.ExprStmtNode(e)
+    }
+    astbridge.NilStmt()
+}
+
+fn astLowerForStmt(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Stmt {
+    if n.text == "forlet" {
+        return astbridge.ForStmtNode(
+            astLowerNodePos(toks, n),
+            astLowerNodeEnd(toks, n),
+            true,
+            astLowerChildPattern(arena, toks, n, 0),
+            astLowerExpr(arena, toks, n.left),
+            astLowerBlock(arena, toks, n.right),
+        )
+    }
+    if n.text == "forin" {
+        return astbridge.ForStmtNode(
+            astLowerNodePos(toks, n),
+            astLowerNodeEnd(toks, n),
+            false,
+            astLowerChildPattern(arena, toks, n, 0),
+            astLowerChildExpr(arena, toks, n, 1),
+            astLowerBlock(arena, toks, n.right),
+        )
+    }
+    astbridge.ForStmtNode(
+        astLowerNodePos(toks, n),
+        astLowerNodeEnd(toks, n),
+        false,
+        astbridge.NilPattern(),
+        astLowerExpr(arena, toks, n.left),
+        astLowerBlock(arena, toks, n.right),
+    )
+}
+
+fn astLowerBlock(arena: AstArena, toks: List<astbridge.Token>, idx: Int) -> astbridge.Block {
+    if idx < 0 {
+        return astbridge.NilBlock()
+    }
+    let n = astArenaNodeAt(arena, idx)
+    let mut stmts = astbridge.EmptyStmtList()
+    for child in n.children {
+        let stmt = astLowerStmt(arena, toks, child)
+        if !(astbridge.IsNilStmt(stmt)) {
+            stmts.push(stmt)
+        }
+    }
+    astbridge.BlockNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), stmts)
+}
+
+fn astLowerExpr(arena: AstArena, toks: List<astbridge.Token>, idx: Int) -> astbridge.Expr {
+    if idx < 0 {
+        return astbridge.NilExpr()
+    }
+    let n = astArenaNodeAt(arena, idx)
+    if n.kind == AstNIdent {
+        return astbridge.IdentExpr(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), n.text)
+    }
+    if n.kind == AstNIntLit {
+        return astbridge.IntLitExpr(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), n.text)
+    }
+    if n.kind == AstNFloatLit {
+        return astbridge.FloatLitExpr(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), n.text)
+    }
+    if n.kind == AstNBoolLit {
+        return astbridge.BoolLitExpr(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), n.flags == 1)
+    }
+    if n.kind == AstNCharLit {
+        return astbridge.CharLitExpr(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerDecodedLiteral(astbridge.TokenValue(astLowerTok(toks, n.start))))
+    }
+    if n.kind == AstNByteLit {
+        return astbridge.ByteLitExpr(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerDecodedLiteral(astbridge.TokenValue(astLowerTok(toks, n.start))))
+    }
+    if n.kind == AstNStringLit {
+        return astbridge.StringLitFromToken(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerTok(toks, n.start))
+    }
+    if n.kind == AstNUnary {
+        return astLowerUnaryExpr(arena, toks, n)
+    }
+    if n.kind == AstNBinary {
+        return astLowerBinaryExpr(arena, toks, n)
+    }
+    if n.kind == AstNQuestion {
+        return astLowerQuestionExpr(arena, toks, n)
+    }
+    if n.kind == AstNCall {
+        return astLowerCallExpr(arena, toks, n)
+    }
+    if n.kind == AstNField {
+        return astLowerFieldExpr(arena, toks, n)
+    }
+    if n.kind == AstNIndex {
+        return astLowerIndexExpr(arena, toks, n)
+    }
+    if n.kind == AstNTurbofish {
+        return astLowerTurbofishExpr(arena, toks, n)
+    }
+    if n.kind == AstNRange {
+        return astLowerRangeExpr(arena, toks, n)
+    }
+    if n.kind == AstNParen {
+        return astbridge.ParenExprNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerExpr(arena, toks, n.left))
+    }
+    if n.kind == AstNTuple {
+        return astLowerTupleExpr(arena, toks, n)
+    }
+    if n.kind == AstNList {
+        return astLowerListExpr(arena, toks, n)
+    }
+    if n.kind == AstNMap {
+        return astLowerMapExpr(arena, toks, n)
+    }
+    if n.kind == AstNStructLit {
+        return astLowerStructLitExpr(arena, toks, n)
+    }
+    if n.kind == AstNBlock {
+        return astbridge.BlockAsExpr(astLowerBlock(arena, toks, idx))
+    }
+    if n.kind == AstNIf {
+        return astLowerIfExpr(arena, toks, n)
+    }
+    if n.kind == AstNMatch {
+        return astLowerMatchExpr(arena, toks, n)
+    }
+    if n.kind == AstNClosure {
+        return astLowerClosureExpr(arena, toks, n)
+    }
+    astbridge.NilExpr()
+}
+
+fn astLowerUnaryExpr(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Expr {
+    let x = astLowerExpr(arena, toks, n.left)
+    astbridge.UnaryExprNode(astLowerNodePos(toks, n), astbridge.ExprEnd(x, astLowerNodeEnd(toks, n)), astLowerKind(n.op), x)
+}
+
+fn astLowerBinaryExpr(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Expr {
+    let left = astLowerExpr(arena, toks, n.left)
+    let right = astLowerExpr(arena, toks, n.right)
+    astbridge.BinaryExprNode(astbridge.ExprPos(left, astLowerNodePos(toks, n)), astbridge.ExprEnd(right, astLowerNodeEnd(toks, n)), astLowerKind(n.op), left, right)
+}
+
+fn astLowerQuestionExpr(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Expr {
+    let x = astLowerExpr(arena, toks, n.left)
+    astbridge.QuestionExprNode(astbridge.ExprPos(x, astLowerNodePos(toks, n)), astLowerNodeEnd(toks, n), x)
+}
+
+fn astLowerCallExpr(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Expr {
+    let fnExpr = astLowerExpr(arena, toks, n.left)
+    let mut args = astbridge.EmptyArgList()
+    for child in n.children {
+        let arg = astLowerArg(arena, toks, child)
+        if !(astbridge.IsNilArg(arg)) {
+            args.push(arg)
+        }
+    }
+    astbridge.CallExprNode(astbridge.ExprPos(fnExpr, astLowerNodePos(toks, n)), astLowerNodeEnd(toks, n), fnExpr, args)
+}
+
+fn astLowerFieldExpr(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Expr {
+    let x = astLowerExpr(arena, toks, n.left)
+    astbridge.FieldExprNode(astbridge.ExprPos(x, astLowerNodePos(toks, n)), astLowerNodeEnd(toks, n), x, n.text, n.flags == 1)
+}
+
+fn astLowerIndexExpr(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Expr {
+    let x = astLowerExpr(arena, toks, n.left)
+    astbridge.IndexExprNode(astbridge.ExprPos(x, astLowerNodePos(toks, n)), astLowerNodeEnd(toks, n), x, astLowerExpr(arena, toks, n.right))
+}
+
+fn astLowerTurbofishExpr(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Expr {
+    let base = astLowerExpr(arena, toks, n.left)
+    let mut args = astbridge.EmptyTypeList()
+    for child in n.children {
+        let ty = astLowerType(arena, toks, child)
+        if !(astbridge.IsNilType(ty)) {
+            args.push(ty)
+        }
+    }
+    astbridge.TurbofishExprNode(astbridge.ExprPos(base, astLowerNodePos(toks, n)), astLowerNodeEnd(toks, n), base, args)
+}
+
+fn astLowerRangeExpr(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Expr {
+    let start = astLowerExpr(arena, toks, n.left)
+    let stop = astLowerExpr(arena, toks, n.right)
+    astbridge.RangeExprNode(astbridge.ExprPos(start, astLowerNodePos(toks, n)), astbridge.ExprEnd(stop, astLowerNodeEnd(toks, n)), start, stop, n.flags == 1)
+}
+
+fn astLowerTupleExpr(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Expr {
+    let mut elems = astbridge.EmptyExprList()
+    for child in n.children {
+        let e = astLowerExpr(arena, toks, child)
+        if !(astbridge.IsNilExpr(e)) {
+            elems.push(e)
+        }
+    }
+    astbridge.TupleExprNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), elems)
+}
+
+fn astLowerListExpr(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Expr {
+    let mut elems = astbridge.EmptyExprList()
+    for child in n.children {
+        let e = astLowerExpr(arena, toks, child)
+        if !(astbridge.IsNilExpr(e)) {
+            elems.push(e)
+        }
+    }
+    astbridge.ListExprNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), elems)
+}
+
+fn astLowerMapExpr(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Expr {
+    let mut entries = astbridge.EmptyMapEntryList()
+    let mut i = 0
+    for keyIdx in n.children {
+        let mut value = astbridge.NilExpr()
+        if i < astLowerIntListCount(n.children2) {
+            value = astLowerExpr(arena, toks, astLowerIntListAt(n.children2, i))
+        }
+        entries.push(astbridge.MapEntryNode(astLowerExpr(arena, toks, keyIdx), value))
+        i = i + 1
+    }
+    astbridge.MapExprNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), entries, n.flags == 1)
+}
+
+fn astLowerStructLitExpr(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Expr {
+    let typ = astLowerExpr(arena, toks, n.left)
+    let mut fields = astbridge.EmptyStructLitFieldList()
+    for child in n.children {
+        let cn = astArenaNodeAt(arena, child)
+        fields.push(astbridge.StructLitFieldNode(astLowerNodePos(toks, cn), cn.text, astLowerExpr(arena, toks, cn.left)))
+    }
+    astbridge.StructLitNode(astbridge.ExprPos(typ, astLowerNodePos(toks, n)), astLowerNodeEnd(toks, n), typ, fields, astLowerExpr(arena, toks, n.right))
+}
+
+fn astLowerIfExpr(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Expr {
+    let mut alt = astbridge.NilExpr()
+    let mut pat = astbridge.NilPattern()
+    if astLowerIntListCount(n.children) > 0 {
+        alt = astLowerExpr(arena, toks, astLowerIntListAt(n.children, 0))
+    }
+    if astLowerIntListCount(n.children) > 1 {
+        pat = astLowerPattern(arena, toks, astLowerIntListAt(n.children, 1))
+    }
+    astbridge.IfExprNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), n.flags == 1, pat, astLowerExpr(arena, toks, n.left), astLowerBlock(arena, toks, n.right), alt)
+}
+
+fn astLowerMatchExpr(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Expr {
+    let mut arms = astbridge.EmptyMatchArmList()
+    for child in n.children {
+        let arm = astLowerMatchArm(arena, toks, child)
+        if !(astbridge.IsNilMatchArm(arm)) {
+            arms.push(arm)
+        }
+    }
+    astbridge.MatchExprNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerExpr(arena, toks, n.left), arms)
+}
+
+fn astLowerClosureExpr(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Expr {
+    let mut params = astbridge.EmptyParamList()
+    for child in n.children {
+        let p = astLowerParam(arena, toks, child)
+        if !(astbridge.IsNilParam(p)) {
+            params.push(p)
+        }
+    }
+    astbridge.ClosureExprNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), params, astLowerType(arena, toks, n.right), astLowerExpr(arena, toks, n.left))
+}
+
+fn astLowerArg(arena: AstArena, toks: List<astbridge.Token>, idx: Int) -> astbridge.Arg {
+    if idx < 0 {
+        return astbridge.NilArg()
+    }
+    let n = astArenaNodeAt(arena, idx)
+    if n.kind == AstNField_ {
+        return astbridge.ArgNode(astLowerNodePos(toks, n), n.text, astLowerExpr(arena, toks, n.left))
+    }
+    astbridge.ArgNode(astLowerNodePos(toks, n), "", astLowerExpr(arena, toks, idx))
+}
+
+fn astLowerMatchArm(arena: AstArena, toks: List<astbridge.Token>, idx: Int) -> astbridge.MatchArm {
+    if idx < 0 {
+        return astbridge.NilMatchArm()
+    }
+    let n = astArenaNodeAt(arena, idx)
+    let mut guard = astbridge.NilExpr()
+    if astLowerIntListCount(n.children) > 0 {
+        guard = astLowerExpr(arena, toks, astLowerIntListAt(n.children, 0))
+    }
+    astbridge.MatchArmNode(astLowerNodePos(toks, n), astLowerPattern(arena, toks, n.left), guard, astLowerExpr(arena, toks, n.right))
+}
+
+fn astLowerChildPattern(arena: AstArena, toks: List<astbridge.Token>, n: AstNode, at: Int) -> astbridge.Pattern {
+    if at < 0 || at >= astLowerIntListCount(n.children) {
+        return astbridge.NilPattern()
+    }
+    astLowerPattern(arena, toks, astLowerIntListAt(n.children, at))
+}
+
+fn astLowerChildExpr(arena: AstArena, toks: List<astbridge.Token>, n: AstNode, at: Int) -> astbridge.Expr {
+    if at < 0 || at >= astLowerIntListCount(n.children) {
+        return astbridge.NilExpr()
+    }
+    astLowerExpr(arena, toks, astLowerIntListAt(n.children, at))
+}
+
+fn astLowerPattern(arena: AstArena, toks: List<astbridge.Token>, idx: Int) -> astbridge.Pattern {
+    if idx < 0 {
+        return astbridge.NilPattern()
+    }
+    let n = astArenaNodeAt(arena, idx)
+    if n.kind == AstNIdent {
+        return astbridge.IdentPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), n.text)
+    }
+    if n.kind == AstNTuple {
+        return astLowerTuplePat(arena, toks, n)
+    }
+    if n.kind == AstNIntLit || n.kind == AstNFloatLit || n.kind == AstNStringLit || n.kind == AstNCharLit || n.kind == AstNByteLit || n.kind == AstNBoolLit {
+        return astbridge.LiteralPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerExpr(arena, toks, idx))
+    }
+    astLowerTextPattern(arena, toks, n)
+}
+
+fn astLowerTuplePat(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Pattern {
+    let mut elems = astbridge.EmptyPatternList()
+    for child in n.children {
+        let p = astLowerPattern(arena, toks, child)
+        if !(astbridge.IsNilPattern(p)) {
+            elems.push(p)
+        }
+    }
+    astbridge.TuplePatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), elems)
+}
+
+fn astLowerTextPattern(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Pattern {
+    if strings.HasPrefix(n.text, "ident:") {
+        return astbridge.IdentPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), strings.TrimPrefix(n.text, "ident:"))
+    }
+    if n.text == "wildcard" {
+        return astbridge.WildcardPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n))
+    }
+    if strings.HasPrefix(n.text, "literal:") {
+        return astbridge.LiteralPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerLiteralPatternExpr(toks, n))
+    }
+    if n.text == "negLiteral" {
+        return astbridge.LiteralPatNode(
+            astLowerNodePos(toks, n),
+            astLowerNodeEnd(toks, n),
+            astbridge.UnaryExprNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerKind(FrontMinus), astLowerLiteralPatternExpr(toks, astArenaNodeAt(arena, n.left))),
+        )
+    }
+    if n.text == "tuple" {
+        return astLowerTuplePat(arena, toks, n)
+    }
+    if strings.HasPrefix(n.text, "variant:") {
+        let mut args = astbridge.EmptyPatternList()
+        for child in n.children {
+            let p = astLowerPattern(arena, toks, child)
+            if !(astbridge.IsNilPattern(p)) {
+                args.push(p)
+            }
+        }
+        return astbridge.VariantPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerSplitPath(strings.TrimPrefix(n.text, "variant:")), args)
+    }
+    if strings.HasPrefix(n.text, "struct:") {
+        let mut fields = astbridge.EmptyStructPatFieldList()
+        for child in n.children {
+            let cn = astArenaNodeAt(arena, child)
+            if cn.text != "" && cn.left >= 0 {
+                fields.push(astbridge.StructPatFieldNode(astLowerNodePos(toks, cn), cn.text, astLowerPattern(arena, toks, cn.left)))
+            } else {
+                let pat = astLowerPattern(arena, toks, child)
+                let childNode = astArenaNodeAt(arena, child)
+                if childNode.kind == AstNIdent {
+                    fields.push(astbridge.StructPatFieldNode(astLowerNodePos(toks, childNode), childNode.text, astbridge.NilPattern()))
+                } else if strings.HasPrefix(childNode.text, "ident:") {
+                    fields.push(astbridge.StructPatFieldNode(astLowerNodePos(toks, childNode), strings.TrimPrefix(childNode.text, "ident:"), astbridge.NilPattern()))
+                } else if !(astbridge.IsNilPattern(pat)) {
+                    fields.push(astbridge.StructPatFieldNode(astLowerNodePos(toks, childNode), "", pat))
+                }
+            }
+        }
+        return astbridge.StructPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerSplitPath(strings.TrimPrefix(n.text, "struct:")), fields, n.flags == 1)
+    }
+    if strings.HasPrefix(n.text, "binding:") {
+        return astbridge.BindingPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), strings.TrimPrefix(n.text, "binding:"), astLowerPattern(arena, toks, n.left))
+    }
+    if n.text == "range" {
+        return astbridge.RangePatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerPatternLiteralExpr(arena, toks, n.left), astLowerPatternLiteralExpr(arena, toks, n.right), n.flags == 1)
+    }
+    if n.text == "or" {
+        return astbridge.OrPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerOrAlts(arena, toks, n))
+    }
+    astbridge.WildcardPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n))
+}
+
+fn astLowerOrAlts(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> List<astbridge.Pattern> {
+    let mut out = astbridge.EmptyPatternList()
+    out = astLowerCollectOrAlt(arena, toks, n.left, out)
+    astLowerCollectOrAlt(arena, toks, n.right, out)
+}
+
+fn astLowerCollectOrAlt(arena: AstArena, toks: List<astbridge.Token>, idx: Int, out: List<astbridge.Pattern>) -> List<astbridge.Pattern> {
+    if idx < 0 {
+        return out
+    }
+    let n = astArenaNodeAt(arena, idx)
+    if n.text == "or" {
+        let left = astLowerCollectOrAlt(arena, toks, n.left, out)
+        return astLowerCollectOrAlt(arena, toks, n.right, left)
+    }
+    let p = astLowerPattern(arena, toks, idx)
+    if !(astbridge.IsNilPattern(p)) {
+        out.push(p)
+    }
+    out
+}
+
+fn astLowerPatternLiteralExpr(arena: AstArena, toks: List<astbridge.Token>, idx: Int) -> astbridge.Expr {
+    if idx < 0 {
+        return astbridge.NilExpr()
+    }
+    let n = astArenaNodeAt(arena, idx)
+    if n.text == "negLiteral" {
+        return astbridge.UnaryExprNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerKind(FrontMinus), astLowerLiteralPatternExpr(toks, astArenaNodeAt(arena, n.left)))
+    }
+    astLowerLiteralPatternExpr(toks, n)
+}
+
+fn astLowerLiteralPatternExpr(toks: List<astbridge.Token>, n: AstNode) -> astbridge.Expr {
+    let pos = astLowerNodePos(toks, n)
+    let end = astLowerNodeEnd(toks, n)
+    let text = strings.TrimPrefix(n.text, "literal:")
+    if n.op == FrontInt {
+        return astbridge.IntLitExpr(pos, end, text)
+    }
+    if n.op == FrontFloat {
+        return astbridge.FloatLitExpr(pos, end, text)
+    }
+    if n.op == FrontString || n.op == FrontRawString {
+        return astbridge.StringLitExpr(pos, end, astLowerStringContent(text))
+    }
+    if n.op == FrontChar {
+        return astbridge.CharLitExpr(pos, end, astLowerDecodedLiteral(text))
+    }
+    if n.op == FrontByte {
+        return astbridge.ByteLitExpr(pos, end, astLowerDecodedLiteral(text))
+    }
+    astbridge.BoolLitExpr(pos, end, text == "true")
+}
+
+fn astLowerIntListCount(xs: List<Int>) -> Int {
+    let mut count = 0
+    for x in xs {
+        let _ = x
+        count = count + 1
+    }
+    count
+}
+
+fn astLowerIntListAt(xs: List<Int>, target: Int) -> Int {
+    let mut i = 0
+    for x in xs {
+        if i == target {
+            return x
+        }
+        i = i + 1
+    }
+    -1
+}

@@ -10,6 +10,7 @@ The source of truth is:
 - `examples/dogfood/frontend.osty`
 - `examples/dogfood/lexer.osty`
 - `examples/dogfood/parser.osty`
+- `internal/selfhost/ast_lower.osty`
 
 Regenerate the Go bridge with:
 
@@ -18,7 +19,8 @@ go generate ./internal/selfhost
 ```
 
 The generator merges the dogfood sources, emits `generated.go` through
-`cmd/osty gen`, and reapplies the small Go hot-path overrides that keep lexing
+`cmd/osty gen`, regenerates `internal/selfhost/astbridge/generated.go` from
+`internal/ast`, and reapplies the small Go hot-path overrides that keep lexing
 position lookups linear. Public compiler packages should call
 `internal/lexer` and `internal/parser`; this package is the adaptation boundary
 for bootstrapped code.
