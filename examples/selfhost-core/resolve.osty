@@ -513,7 +513,7 @@ fn srAstResolveTypeDecl(
         result,
         selfSymbolAtNode("Self", "type", node.text, 0, typeScope.depth, node.start, node.end, true, idx),
     )
-    if node.kind == AstNStructDecl || node.kind == AstNEnumDecl {
+    if node.kind == AstNStructDecl || node.kind == AstNEnumDecl || node.kind == AstNInterfaceDecl {
         out = srAstDeclareGenerics(file, node.children2, typeScope, out)
     }
     if node.kind == AstNStructDecl {
@@ -538,9 +538,6 @@ fn srAstResolveTypeDecl(
             }
         }
     } else if node.kind == AstNInterfaceDecl {
-        for superIdx in node.children2 {
-            out = srAstResolveType(file, superIdx, typeScope, node.text, out)
-        }
         for memberIdx in node.children {
             let member = srAstNode(file, memberIdx)
             if member.kind == AstNFnDecl {

@@ -58,6 +58,12 @@ pub interface ReadWriter {
     Writer
 }
 
+/// Generic interface with type parameters.
+pub interface Cache<K, V> {
+    fn get(self, key: K) -> V?
+    fn put(mut self, key: K, value: V)
+}
+
 /// Type aliases.
 type UserMap = Map<String, List<User>>
 type Handler = fn(Int) -> Result<Int, Error>
