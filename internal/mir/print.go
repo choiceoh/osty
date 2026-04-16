@@ -432,6 +432,42 @@ func intrinsicName(k IntrinsicKind) string {
 		return "abort"
 	case IntrinsicStringConcat:
 		return "string_concat"
+	case IntrinsicChanMake:
+		return "chan_make"
+	case IntrinsicChanSend:
+		return "chan_send"
+	case IntrinsicChanRecv:
+		return "chan_recv"
+	case IntrinsicChanClose:
+		return "chan_close"
+	case IntrinsicChanIsClosed:
+		return "chan_is_closed"
+	case IntrinsicTaskGroup:
+		return "task_group"
+	case IntrinsicSpawn:
+		return "spawn"
+	case IntrinsicHandleJoin:
+		return "handle_join"
+	case IntrinsicGroupCancel:
+		return "group_cancel"
+	case IntrinsicGroupIsCancelled:
+		return "group_is_cancelled"
+	case IntrinsicParallel:
+		return "parallel"
+	case IntrinsicRace:
+		return "race"
+	case IntrinsicCollectAll:
+		return "collect_all"
+	case IntrinsicSelect:
+		return "select"
+	case IntrinsicIsCancelled:
+		return "is_cancelled"
+	case IntrinsicCheckCancelled:
+		return "check_cancelled"
+	case IntrinsicYield:
+		return "yield"
+	case IntrinsicSleep:
+		return "sleep"
 	}
 	return "invalid"
 }

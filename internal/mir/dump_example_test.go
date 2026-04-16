@@ -88,3 +88,60 @@ func TestMIRDumpClosure(t *testing.T) {
 	}
 	t.Logf("MIR:\n%s", Print(out))
 }
+
+// TestMIRDumpConcurrency prints MIR for a program exercising the
+// Stage 2b concurrency intrinsics: thread.chan, chan_send, chan_close,
+// and for-in over a channel.
+func TestMIRDumpConcurrency(t *testing.T) {
+	chanInt := &ir.NamedType{Name: "Channel", Args: []ir.Type{ir.TInt}}
+	use := &ir.UseDecl{
+		Path: []string{"std", "thread"}, RawPath: "std.thread", Alias: "thread",
+	}
+	fn := &ir.FnDecl{
+		Name:   "pump",
+		Return: ir.TUnit,
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.LetStmt{
+					Name: "ch",
+					Type: chanInt,
+					Value: &ir.MethodCall{
+						Receiver: &ir.Ident{Name: "thread"},
+						Name:     "chan",
+						TypeArgs: []ir.Type{ir.TInt},
+						Args:     []ir.Arg{{Value: &ir.IntLit{Text: "4", T: ir.TInt}}},
+						T:        chanInt,
+					},
+				},
+				&ir.ChanSendStmt{
+					Channel: &ir.Ident{Name: "ch", Kind: ir.IdentLocal, T: chanInt},
+					Value:   &ir.IntLit{Text: "42", T: ir.TInt},
+				},
+				&ir.ExprStmt{X: &ir.MethodCall{
+					Receiver: &ir.Ident{Name: "ch", Kind: ir.IdentLocal, T: chanInt},
+					Name:     "close",
+					T:        ir.TUnit,
+				}},
+				&ir.ForStmt{
+					Kind: ir.ForIn,
+					Var:  "x",
+					Iter: &ir.Ident{Name: "ch", Kind: ir.IdentLocal, T: chanInt},
+					Body: &ir.Block{
+						Stmts: []ir.Stmt{
+							&ir.ExprStmt{X: &ir.IntrinsicCall{
+								Kind: ir.IntrinsicPrintln,
+								Args: []ir.Arg{{Value: &ir.Ident{Name: "x", Kind: ir.IdentLocal, T: ir.TInt}}},
+							}},
+						},
+					},
+				},
+			},
+		},
+	}
+	mod := &ir.Module{Package: "main", Decls: []ir.Decl{use, fn}}
+	out := Lower(mod)
+	if errs := Validate(out); len(errs) > 0 {
+		t.Fatalf("validate: %v", errs)
+	}
+	t.Logf("MIR:\n%s", Print(out))
+}

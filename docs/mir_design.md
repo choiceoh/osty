@@ -91,7 +91,7 @@ reason about generics.
 | Decision-tree pre-compilation    | yes                 | consumed by lowerer  |
 | Closure captures                 | yes (`Closure.Captures`) | lifted to top-level fn + `AggClosure` (Stage 2a) |
 | `defer` bodies                   | yes                 | function-scoped, replayed at every return edge (Stage 2a; inner-block scoping is Stage 2c) |
-| Concurrency primitives           | yes                 | not yet (Stage 2b)   |
+| Concurrency primitives           | yes                 | `IntrinsicInstr` set (Stage 2b)                      |
 | Compound & multi-target assign   | yes                 | expanded to `BinaryRV` / tuple destructure (Stage 2a) |
 | Top-level global read            | yes (`IdentGlobal`) | `GlobalRefRV` (Stage 2a)                              |
 
@@ -188,10 +188,30 @@ function values. Keyword arguments are gone by the time we enter MIR:
 `mir.Lower` reorders and fills defaults against the callee's declared
 signature.
 
-`IntrinsicInstr` covers backend-neutral built-ins (the `print` family)
-without forcing backends to match on name strings. Additional
-intrinsics (`list-push`, `string-concat`, …) can be added as runtime
-ABI ossifies.
+`IntrinsicInstr` covers backend-neutral built-ins. The `Kind` value
+is the stable ABI contract — backends map each kind to whatever
+runtime symbol their target exposes. Kinds group into families:
+
+- **Print family**: `IntrinsicPrint`, `IntrinsicPrintln`,
+  `IntrinsicEprint`, `IntrinsicEprintln`.
+- **Runtime builders**: `IntrinsicStringConcat` (interpolated string
+  assembly), `IntrinsicAbort` (trap).
+- **Concurrency — channels**: `IntrinsicChanMake`,
+  `IntrinsicChanSend`, `IntrinsicChanRecv` (returns `Option<T>`),
+  `IntrinsicChanClose`, `IntrinsicChanIsClosed`.
+- **Concurrency — structured tasks**: `IntrinsicTaskGroup`,
+  `IntrinsicSpawn` (detached: `[closure]`; scoped: `[group, closure]`),
+  `IntrinsicHandleJoin`, `IntrinsicGroupCancel`,
+  `IntrinsicGroupIsCancelled`.
+- **Concurrency — helpers**: `IntrinsicParallel`, `IntrinsicRace`,
+  `IntrinsicCollectAll`, `IntrinsicSelect`.
+- **Concurrency — cancellation**: `IntrinsicIsCancelled`,
+  `IntrinsicCheckCancelled`, `IntrinsicYield`, `IntrinsicSleep`.
+
+Intrinsics whose runtime ABI is "fire and forget" (`chan_send`,
+`chan_close`, `group_cancel`, `yield`) always carry a nil `Dest` —
+the lowerer drops the destination even when the call site was
+written in expression position.
 
 `StorageLive` / `StorageDead` mark the live range of a local. Backends
 that do not care may ignore them; they exist so that future lifetime
@@ -357,10 +377,28 @@ assigned into.
 - `UnaryExpr`, `BinaryExpr`: recursive lowering, result in a
   `UnaryRV` / `BinaryRV` assigned into a fresh temp.
 - `CallExpr`: map keyword args to positional per the callee's
-  signature; fill defaults; emit `CallInstr`.
+  signature; fill defaults; emit `CallInstr`. Two pre-dispatch
+  fast-paths run first: (a) bare `Ident` callees matching a prelude-
+  visible concurrency name (`taskGroup`, `parallel`, `race`,
+  `collectAll`) emit an `IntrinsicInstr`; (b) `FieldExpr` callees
+  whose `X` names a `use` alias matching a `thread`-namespaced
+  concurrency name (`thread.spawn`, `thread.chan`, `thread.select`,
+  …) do the same.
 - `IntrinsicCall`: `IntrinsicInstr`.
-- `MethodCall`: resolved to a direct function whose first parameter is
-  the receiver; emitted as `CallInstr`.
+- `MethodCall`: first checks for an aliased qualifier (Stage 2a) and
+  a runtime-type concurrency method (Stage 2b — `Channel.recv`,
+  `Channel.close`, `Channel.isClosed`, `Handle.join`, `Group.spawn`,
+  `Group.cancel`, `Group.isCancelled`). Concurrency matches emit an
+  `IntrinsicInstr` with the receiver as the first operand. Otherwise
+  resolves to a direct function whose first parameter is the
+  receiver and emits a `CallInstr`.
+- `ChanSendStmt`: `IntrinsicChanSend{[channel, value]}` with `Dest`
+  always nil.
+- `for x in ch` (channel iterable): receive-loop header → body →
+  step cycle. The header calls `IntrinsicChanRecv` into an
+  `Option<T>` local, reads its discriminant, and dispatches via
+  `SwitchInt` — `Some` unwraps the payload into the loop binding and
+  runs the body; `None` exits the loop.
 - `VariantLit`: `AggregateRV{Kind: EnumVariant}`.
 - `StructLit`: `AggregateRV{Kind: Struct}`. Spread (`..rest`) lowers to
   per-field copies from the spread expression plus per-explicit
@@ -485,10 +523,40 @@ MIR tests isolated from front-end churn.
     (first-class fn-typed fields) fall back to an `IndirectCall`
     through the projected field value.
 
-- **Stage 2b.** Concurrency primitives — `spawn`, channel send / recv,
-  `taskGroup`, `thread.select`, runtime cancel. These are the largest
-  remaining HIR-only shapes; they ship after the runtime ABI is
-  settled so the lowering can target a stable set of intrinsics.
+- **Stage 2b (landed).** Concurrency primitives — `spawn`, channel
+  send / recv / make / close / isClosed, `taskGroup`, `g.spawn`,
+  `h.join`, `thread.select`, `parallel`, `race`, `collectAll`,
+  `thread.isCancelled` / `checkCancelled` / `yield` / `sleep`, and
+  `for x in ch` loops — lower to MIR `IntrinsicInstr`s. Design notes:
+
+  - The MIR intrinsic name is the stable ABI contract. Backends map
+    each kind to whatever runtime symbol their target exposes; the
+    runtime itself is not contract-frozen yet, so we deliberately
+    keep the vocabulary at the semantic layer rather than baking in a
+    specific C ABI.
+  - Channel / Handle / Group / Select method calls (`ch.recv()`,
+    `h.join()`, `g.spawn(f)`, …) are recognised by **receiver type
+    name** (`Channel`, `Handle`, `Group`, `TaskGroup`) and route to
+    the matching intrinsic with the receiver as the first operand,
+    followed by user args in source order. This runs after the
+    Stage 2a use-alias / package-qualifier check, so an aliased
+    `thread.spawn(f)` is spotted as a concurrency call *before* it
+    falls through to the ordinary qualified-call emitter.
+  - Prelude-visible calls (`taskGroup`, `parallel`, `race`,
+    `collectAll`) are recognised from the bare `Ident` callee. No
+    `use` is required for them; they match only when the qualifier
+    is empty.
+  - `ChanSendStmt` (the only dedicated HIR concurrency node) lowers
+    directly to `IntrinsicChanSend` with `[channel, value]` operands.
+  - `for x in channel` compiles to a receive loop: a header block
+    that calls `IntrinsicChanRecv`, loads the result's discriminant,
+    and dispatches `Some` → body / `None` → exit via a `SwitchInt`.
+    The body unwraps the payload into a named local (or destructures
+    via the loop pattern) before running the user statements.
+  - `IntrinsicInstr.Dest` is nil for the no-value kinds (`chan_send`,
+    `chan_close`, `group_cancel`, `yield`). The lowerer drops the
+    destination for those even when the call site was written in
+    expression position.
 
 - **Stage 2c.** Inner-block defer scoping, closure-to-SSA captures
   (upgrade `AggClosure` when borrow rules land), and the stdlib
