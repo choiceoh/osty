@@ -1014,6 +1014,79 @@ fn testMajorCompactionClosesHoles() {
     testing.assertEq(heap.fragmentedBytes(), 0)
 }
 
+fn testFullMarkCollectorRecordsWorkQueueAndTypeScans() {
+    let mut heap = newGcHeap(testGcConfig())
+    let root = heap.allocate(GcRecord, 24)
+    let child = heap.allocate(GcArray, 16)
+    let grandchild = heap.allocate(GcClosure, 16)
+    let dead = heap.allocate(GcBytes, 16)
+    testing.assert(heap.addRoot(root))
+    testing.assert(heap.link(root, child))
+    testing.assert(heap.link(child, grandchild))
+    assertValid(heap)
+
+    let stats = heap.majorCollect()
+    assertValid(heap)
+
+    testing.assert(heap.contains(root))
+    testing.assert(heap.contains(child))
+    testing.assert(heap.contains(grandchild))
+    testing.assert(!(heap.contains(dead)))
+    testing.assertEq(stats.markSteps, 3)
+    testing.assertEq(stats.reclaimedObjects, 1)
+    testing.assertEq(heap.lastFullMarkObjectsScanned(), 3)
+    testing.assertEq(heap.lastFullMarkPointerSlotsScanned(), 2)
+    testing.assertEq(heap.lastFullMarkSweptObjects(), 1)
+    testing.assertEq(intOr(heap.objectPointerSlotCount(root), -1), 1)
+    testing.assertEq(intOr(heap.objectScalarBytes(root), -1), 16)
+}
+
+fn testEvacuationRecordsForwardingForMovedObjects() {
+    let mut heap = newGcHeap(testGcConfig())
+    let dead = heap.allocate(GcBytes, 16)
+    let first = heap.allocate(GcRecord, 20)
+    let second = heap.allocate(GcArray, 12)
+    testing.assert(heap.addRoot(first))
+    testing.assert(heap.addRoot(second))
+    assertValid(heap)
+
+    let stats = heap.majorCollect()
+    assertValid(heap)
+
+    testing.assert(!(heap.contains(dead)))
+    testing.assertEq(stats.compactedObjects, 2)
+    testing.assertEq(heap.forwardingEntryCount(), 2)
+    testing.assertEq(intOr(heap.forwardedFromAddress(first), -1), 16)
+    testing.assertEq(intOr(heap.forwardedToAddress(first), -1), 0)
+    testing.assertEq(intOr(heap.forwardedFromAddress(second), -1), 36)
+    testing.assertEq(intOr(heap.forwardedToAddress(second), -1), 20)
+    testing.assertEq(heap.lastEvacuationForwardedObjects(), 2)
+    testing.assertEq(heap.lastEvacuationBytesCopied(), 32)
+    testing.assert(heap.lastRemapVerified())
+}
+
+fn testRootAndObjectRemapTraceCoversForwardedHandles() {
+    let mut heap = newGcHeap(testGcConfig())
+    let dead = heap.allocate(GcBytes, 16)
+    let root = heap.allocate(GcRecord, 20)
+    let child = heap.allocate(GcArray, 12)
+    testing.assert(heap.addRoot(root))
+    testing.assert(heap.link(root, child))
+    assertValid(heap)
+
+    let stats = heap.majorCollect()
+    assertValid(heap)
+
+    testing.assert(!(heap.contains(dead)))
+    testing.assertEq(stats.compactedObjects, 2)
+    testing.assertEq(heap.lastRemapRootSlotsRemapped(), 1)
+    testing.assertEq(heap.lastRemapObjectRefsRemapped(), 1)
+    testing.assertEq(heap.lastRemapLoweredSlotsRemapped(), 0)
+    testing.assert(heap.lastRemapVerified())
+    testing.assertEq(intOr(heap.refCount(root), -1), 1)
+    testing.assert(heap.contains(child))
+}
+
 fn testPinnedObjectLeavesCompactionHoleUntilUnpinned() {
     let mut heap = newGcHeap(testGcConfig())
     let dead = heap.allocate(GcBytes, 20)
@@ -1037,6 +1110,7 @@ fn testPinnedObjectLeavesCompactionHoleUntilUnpinned() {
     testing.assertEq(first.afterFragmentedBytes, 20)
     testing.assertEq(heap.fragmentedBytes(), 20)
     testing.assertEq(heap.tenuredFreeBytes(), 20)
+    testing.assertEq(heap.lastEvacuationPinnedSkipped(), 1)
 
     testing.assert(heap.unpin(pinned))
     assertValid(heap)
