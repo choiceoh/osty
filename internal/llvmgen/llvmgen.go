@@ -15,7 +15,7 @@
 //   - runtime_ffi.go     — Osty runtime C ABI surface + symbol tables
 //   - ir_module.go       — IR → AST bridge (transitional; see doc.go)
 //   - support_snapshot.go — Osty-authored `llvm*` helpers (hand-maintained
-//                          snapshot of toolchain/llvmgen.osty)
+//     snapshot of toolchain/llvmgen.osty)
 //
 // Keep this file small: it is the contract with external callers.
 package llvmgen
@@ -36,12 +36,11 @@ var ErrUnsupported = errors.New("llvmgen: unsupported source shape")
 
 // Options configures textual LLVM IR emission.
 //
-// UseMIR opts into the Stage 3 MIR-direct emitter. When true,
-// GenerateModule dispatches to GenerateFromMIR (using the caller-
-// prepared MIR module on the Entry); when false, the legacy HIR→AST
-// bridge path is taken. The flag is false by default so existing
-// callers stay on the proven path while the MIR emitter grows to
-// parity.
+// UseMIR selects the MIR-direct emitter. The LLVM backend now enables
+// it by default and falls back automatically on ErrUnsupported; direct
+// callers can still leave the zero value to stay on the legacy
+// HIR→AST bridge or set it explicitly when running dual-emission
+// tests.
 type Options struct {
 	PackageName string
 	SourcePath  string

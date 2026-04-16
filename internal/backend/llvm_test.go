@@ -229,10 +229,33 @@ func TestLLVMBackendEmitLLVMIRFromIRWithoutASTFallback(t *testing.T) {
 	if readErr != nil {
 		t.Fatalf("ReadFile(%q): %v", result.Artifacts.LLVMIR, readErr)
 	}
-	for _, want := range []string{"for.cond", "@printf"} {
-		if !strings.Contains(string(data), want) {
-			t.Fatalf("IR-only backend output missing %q:\n%s", want, data)
-		}
+	got := string(data)
+	if !strings.Contains(got, "@printf") {
+		t.Fatalf("IR-only backend output missing %q:\n%s", "@printf", got)
+	}
+	if !strings.Contains(got, "for.cond") && !strings.Contains(got, "bb1:") {
+		t.Fatalf("IR-only backend output missing loop label from either legacy or MIR path:\n%s", got)
+	}
+}
+
+func TestUseMIRBackendDefaultsEnabled(t *testing.T) {
+	if !useMIRBackend(nil, EmitLLVMIR) {
+		t.Fatal("useMIRBackend(nil, EmitLLVMIR) = false, want true")
+	}
+	if useMIRBackend(nil, EmitBinary) {
+		t.Fatal("useMIRBackend(nil, EmitBinary) = true, want false")
+	}
+	if !useMIRBackend([]string{"mir-backend"}, EmitBinary) {
+		t.Fatal("useMIRBackend(mir-backend, EmitBinary) = false, want true")
+	}
+}
+
+func TestUseMIRBackendLegacyFeatureDisables(t *testing.T) {
+	if useMIRBackend([]string{"legacy-llvmgen"}, EmitLLVMIR) {
+		t.Fatal("useMIRBackend(legacy-llvmgen, EmitLLVMIR) = true, want false")
+	}
+	if useMIRBackend([]string{"mir-backend", "legacy-llvmgen"}, EmitBinary) {
+		t.Fatal("legacy-llvmgen should win when both features are present")
 	}
 }
 
