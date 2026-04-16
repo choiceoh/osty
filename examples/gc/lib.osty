@@ -122,6 +122,40 @@ pub struct GcHumongousAllocator {
     pub reusedBytes: Int,
 }
 
+pub enum GcBarrierKind {
+    GcBarrierPreWrite,
+    GcBarrierPostWrite,
+    GcBarrierLoad,
+}
+
+pub enum GcBarrierSlotKind {
+    GcBarrierObjectField,
+    GcBarrierArrayElement,
+    GcBarrierClosureCapture,
+    GcBarrierGlobalRoot,
+    GcBarrierAsyncFrameRoot,
+    GcBarrierRuntimeFrame,
+}
+
+pub struct GcBarrierAbi {
+    pub version: Int,
+    pub preWriteSymbol: String,
+    pub postWriteSymbol: String,
+    pub loadSymbol: String,
+    pub preWriteRequired: Bool,
+    pub postWriteRequired: Bool,
+    pub loadRequired: Bool,
+}
+
+pub struct GcBarrierCounters {
+    pub preWriteCalls: Int,
+    pub postWriteCalls: Int,
+    pub loadCalls: Int,
+    pub rememberedSetWrites: Int,
+    pub incrementalShades: Int,
+    pub loadForwards: Int,
+}
+
 pub enum GcSafepointKind {
     GcCallSafepoint,
     GcAllocationSafepoint,
@@ -289,6 +323,7 @@ pub struct GcHeap {
     tlabs: Map<Int, GcTlab>,
     tenured: GcTenuredAllocator,
     humongous: GcHumongousAllocator,
+    barriers: GcBarrierCounters,
     remembered: Set<Int>,
     grey: List<Int>,
     allocatedSinceLastGC: Int,
@@ -361,6 +396,63 @@ pub struct GcHeap {
 
     pub fn allocateThread(mut self, ownerId: Int, kind: ObjectKind, size: Int) -> Int {
         self.tryAllocateThread(ownerId, kind, size).unwrap()
+    }
+
+    pub fn barrierAbi(self) -> GcBarrierAbi {
+        let _ = self
+        gcBarrierAbiV1()
+    }
+
+    pub fn gcPreWriteBarrier(mut self, slotKind: GcBarrierSlotKind, ownerId: Int, oldValue: Int) -> Bool {
+        let _ = slotKind
+        if !(self.objects.containsKey(ownerId)) {
+            return false
+        }
+        if oldValue >= 0 && !(self.objects.containsKey(oldValue)) {
+            return false
+        }
+        self.recordPreWriteBarrier()
+        true
+    }
+
+    pub fn gcPostWriteBarrier(mut self, slotKind: GcBarrierSlotKind, ownerId: Int, newValue: Int) -> Bool {
+        let _ = slotKind
+        if !(self.objects.containsKey(ownerId)) {
+            return false
+        }
+        if newValue >= 0 && !(self.objects.containsKey(newValue)) {
+            return false
+        }
+        self.recordPostWriteBarrier()
+        if newValue < 0 {
+            return true
+        }
+
+        let owner = self.objects[ownerId]
+        let child = self.objects[newValue]
+        if owner.generation > child.generation {
+            let mut next = owner
+            next.remembered = true
+            self.objects.insert(ownerId, next)
+            self.remembered.insert(ownerId)
+            self.recordRememberedSetBarrier()
+        }
+
+        let current = self.objects[ownerId]
+        if self.phase == GcMarking && current.color == GcBlack && child.color == GcWhite {
+            self.shade(newValue)
+            self.recordIncrementalBarrierShade()
+        }
+        true
+    }
+
+    pub fn gcLoadBarrier(mut self, value: Int) -> Int? {
+        self.recordLoadBarrier()
+        if value >= 0 && self.objects.containsKey(value) {
+            Some(value)
+        } else {
+            None
+        }
     }
 
     pub fn addRoot(mut self, id: Int) -> Bool {
@@ -739,19 +831,12 @@ pub struct GcHeap {
             return false
         }
 
-        let child = self.objects[to]
         let mut next = self.objects[from]
         if !(next.refs.contains(to)) {
             next.refs.push(to)
         }
-        if next.generation > child.generation {
-            next.remembered = true
-            self.remembered.insert(from)
-        }
         self.objects.insert(from, next)
-        if self.phase == GcMarking && next.color == GcBlack && child.color == GcWhite {
-            self.shade(to)
-        }
+        let _ = self.gcPostWriteBarrier(GcBarrierObjectField, from, to)
         true
     }
 
@@ -760,6 +845,9 @@ pub struct GcHeap {
             return false
         }
         let mut next = self.objects[from]
+        if next.refs.contains(to) {
+            let _ = self.gcPreWriteBarrier(GcBarrierObjectField, from, to)
+        }
         let before = next.refs.len()
         next.refs = next.refs.filter(|id| id != to)
         self.objects.insert(from, next)
@@ -1375,6 +1463,30 @@ pub struct GcHeap {
         self.humongous.cursor
     }
 
+    pub fn barrierPreWriteCallCount(self) -> Int {
+        self.barriers.preWriteCalls
+    }
+
+    pub fn barrierPostWriteCallCount(self) -> Int {
+        self.barriers.postWriteCalls
+    }
+
+    pub fn barrierLoadCallCount(self) -> Int {
+        self.barriers.loadCalls
+    }
+
+    pub fn barrierRememberedSetWriteCount(self) -> Int {
+        self.barriers.rememberedSetWrites
+    }
+
+    pub fn barrierIncrementalShadeCount(self) -> Int {
+        self.barriers.incrementalShades
+    }
+
+    pub fn barrierLoadForwardCount(self) -> Int {
+        self.barriers.loadForwards
+    }
+
     pub fn pinnedObjectCount(self) -> Int {
         let mut total = 0
         for (id, obj) in self.objects {
@@ -1504,6 +1616,9 @@ pub struct GcHeap {
         }
         if self.humongous.bumpAllocations < 0 || self.humongous.reuseAllocations < 0 || self.humongous.allocatedObjects < 0 || self.humongous.reclaimedObjects < 0 || self.humongous.allocatedBytes < 0 || self.humongous.reclaimedBytes < 0 || self.humongous.reusedBytes < 0 {
             return Err("humongous allocator has negative accounting")
+        }
+        if self.barriers.preWriteCalls < 0 || self.barriers.postWriteCalls < 0 || self.barriers.loadCalls < 0 || self.barriers.rememberedSetWrites < 0 || self.barriers.incrementalShades < 0 || self.barriers.loadForwards < 0 {
+            return Err("barrier counters have negative accounting")
         }
         let survivorBytes = self.survivorBytes()
         if survivorBytes > self.config.survivorLimit {
@@ -2346,6 +2461,36 @@ pub struct GcHeap {
         end
     }
 
+    fn recordPreWriteBarrier(mut self) {
+        let mut barriers = self.barriers
+        barriers.preWriteCalls = barriers.preWriteCalls + 1
+        self.barriers = barriers
+    }
+
+    fn recordPostWriteBarrier(mut self) {
+        let mut barriers = self.barriers
+        barriers.postWriteCalls = barriers.postWriteCalls + 1
+        self.barriers = barriers
+    }
+
+    fn recordLoadBarrier(mut self) {
+        let mut barriers = self.barriers
+        barriers.loadCalls = barriers.loadCalls + 1
+        self.barriers = barriers
+    }
+
+    fn recordRememberedSetBarrier(mut self) {
+        let mut barriers = self.barriers
+        barriers.rememberedSetWrites = barriers.rememberedSetWrites + 1
+        self.barriers = barriers
+    }
+
+    fn recordIncrementalBarrierShade(mut self) {
+        let mut barriers = self.barriers
+        barriers.incrementalShades = barriers.incrementalShades + 1
+        self.barriers = barriers
+    }
+
     fn rebuildRemembered(mut self) {
         self.remembered.clear()
         let ids = self.objects.keys()
@@ -2420,19 +2565,19 @@ pub struct GcHeap {
     fn rewriteClosureCaptureRefs(mut self, closureId: Int, captures: List<GcClosureCapture>) {
         if self.objects.containsKey(closureId) {
             let mut obj = self.objects[closureId]
-            obj.refs = closureCaptureObjectIds(captures)
-            obj.remembered = obj.generation > 0 && self.hasYoungRef(obj)
-            if obj.remembered {
-                self.remembered.insert(closureId)
-            } else {
-                let _ = self.remembered.remove(closureId)
-            }
-            self.objects.insert(closureId, obj)
-
-            if self.phase == GcMarking && obj.color == GcBlack {
-                for childId in obj.refs {
-                    self.shade(childId)
+            let oldRefs = obj.refs
+            let newRefs = closureCaptureObjectIds(captures)
+            for oldId in oldRefs {
+                if !(newRefs.contains(oldId)) {
+                    let _ = self.gcPreWriteBarrier(GcBarrierClosureCapture, closureId, oldId)
                 }
+            }
+            obj.refs = newRefs
+            obj.remembered = false
+            let _ = self.remembered.remove(closureId)
+            self.objects.insert(closureId, obj)
+            for childId in newRefs {
+                let _ = self.gcPostWriteBarrier(GcBarrierClosureCapture, closureId, childId)
             }
         }
     }
@@ -2494,6 +2639,7 @@ pub fn newGcHeap(config: GcConfig) -> GcHeap {
     let tlabs: Map<Int, GcTlab> = {:}
     let tenured = emptyTenuredAllocator()
     let humongous = emptyHumongousAllocator()
+    let barriers = emptyBarrierCounters()
     let emptyRoots: List<Int> = []
     let emptyRemembered: List<Int> = []
     let grey: List<Int> = []
@@ -2515,6 +2661,7 @@ pub fn newGcHeap(config: GcConfig) -> GcHeap {
         tlabs,
         tenured,
         humongous,
+        barriers,
         remembered: emptyRemembered.toSet(),
         grey,
         allocatedSinceLastGC: 0,
@@ -2574,6 +2721,29 @@ fn emptyHumongousAllocator() -> GcHumongousAllocator {
         allocatedBytes: 0,
         reclaimedBytes: 0,
         reusedBytes: 0,
+    }
+}
+
+fn emptyBarrierCounters() -> GcBarrierCounters {
+    GcBarrierCounters {
+        preWriteCalls: 0,
+        postWriteCalls: 0,
+        loadCalls: 0,
+        rememberedSetWrites: 0,
+        incrementalShades: 0,
+        loadForwards: 0,
+    }
+}
+
+pub fn gcBarrierAbiV1() -> GcBarrierAbi {
+    GcBarrierAbi {
+        version: 1,
+        preWriteSymbol: "osty.gc.pre_write_v1",
+        postWriteSymbol: "osty.gc.post_write_v1",
+        loadSymbol: "osty.gc.load_v1",
+        preWriteRequired: false,
+        postWriteRequired: true,
+        loadRequired: false,
     }
 }
 

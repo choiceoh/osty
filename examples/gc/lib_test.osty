@@ -88,6 +88,7 @@ fn testValidateHeapRejectsLiveByteMismatch() {
     let tlabs: Map<Int, GcTlab> = {:}
     let tenured = emptyTenuredAllocator()
     let humongous = emptyHumongousAllocator()
+    let barriers = emptyBarrierCounters()
     let heap = GcHeap {
         config: testGcConfig(),
         nextId: 2,
@@ -105,6 +106,7 @@ fn testValidateHeapRejectsLiveByteMismatch() {
         tlabs,
         tenured,
         humongous,
+        barriers,
         remembered: empty.toSet(),
         grey: [],
         allocatedSinceLastGC: 16,
@@ -162,6 +164,7 @@ fn testValidateHeapRejectsMissingRememberedEdge() {
     let tlabs: Map<Int, GcTlab> = {:}
     let tenured = emptyTenuredAllocator()
     let humongous = emptyHumongousAllocator()
+    let barriers = emptyBarrierCounters()
     let heap = GcHeap {
         config: testGcConfig(),
         nextId: 3,
@@ -179,6 +182,7 @@ fn testValidateHeapRejectsMissingRememberedEdge() {
         tlabs,
         tenured,
         humongous,
+        barriers,
         remembered: empty.toSet(),
         grey: [],
         allocatedSinceLastGC: 32,
@@ -396,6 +400,30 @@ fn testMajorCollectionReclaimsCycles() {
     testing.assertEq(stats.reclaimedBytes, 48)
 }
 
+fn testBarrierAbiV1SymbolsAreStable() {
+    let heap = newGcHeap(testGcConfig())
+    let abi = heap.barrierAbi()
+
+    testing.assertEq(abi.version, 1)
+    testing.assertEq(abi.preWriteSymbol, "osty.gc.pre_write_v1")
+    testing.assertEq(abi.postWriteSymbol, "osty.gc.post_write_v1")
+    testing.assertEq(abi.loadSymbol, "osty.gc.load_v1")
+    testing.assert(!(abi.preWriteRequired))
+    testing.assert(abi.postWriteRequired)
+    testing.assert(!(abi.loadRequired))
+}
+
+fn testLoadBarrierReturnsStableIdentityWithoutForwarding() {
+    let mut heap = newGcHeap(testGcConfig())
+    let object = heap.allocate(GcRecord, 16)
+    assertValid(heap)
+
+    testing.assertEq(heap.gcLoadBarrier(object) ?? -1, object)
+    testing.assertEq(heap.gcLoadBarrier(999) ?? -1, -1)
+    testing.assertEq(heap.barrierLoadCallCount(), 2)
+    testing.assertEq(heap.barrierLoadForwardCount(), 0)
+}
+
 fn testMinorCollectionUsesRememberedSetAndPromotes() {
     let mut heap = newGcHeap(testGcConfig())
     let parent = heap.allocate(GcRecord, 16)
@@ -410,6 +438,8 @@ fn testMinorCollectionUsesRememberedSetAndPromotes() {
     testing.assert(heap.link(parent, child))
     assertValid(heap)
     testing.assertEq(heap.rememberedCount(), 1)
+    testing.assertEq(heap.barrierPostWriteCallCount(), 1)
+    testing.assertEq(heap.barrierRememberedSetWriteCount(), 1)
 
     let stats = heap.minorCollect()
     assertValid(heap)
@@ -418,6 +448,20 @@ fn testMinorCollectionUsesRememberedSetAndPromotes() {
     testing.assertEq(stats.promotedObjects, 1)
     testing.assertEq(stats.rememberedScanned, 1)
     testing.assertEq(heap.rememberedCount(), 0)
+}
+
+fn testUnlinkRunsPreWriteBarrierHook() {
+    let mut heap = newGcHeap(testGcConfig())
+    let parent = heap.allocate(GcRecord, 16)
+    let child = heap.allocate(GcArray, 16)
+    testing.assert(heap.link(parent, child))
+    assertValid(heap)
+
+    testing.assert(heap.unlink(parent, child))
+    assertValid(heap)
+
+    testing.assertEq(heap.barrierPreWriteCallCount(), 1)
+    testing.assertEq(heap.refCount(parent) ?? -1, 0)
 }
 
 fn testMinorCollectionMovesEdenObjectToSurvivorSpace() {
@@ -602,6 +646,8 @@ fn testIncrementalWriteBarrierKeepsNewBlackToWhiteEdge() {
 
     testing.assert(heap.link(root, late))
     assertValid(heap)
+    testing.assertEq(heap.barrierPostWriteCallCount(), 2)
+    testing.assertEq(heap.barrierIncrementalShadeCount(), 1)
     let done = heap.finishIncremental()
     assertValid(heap)
 
@@ -1060,8 +1106,11 @@ fn testClosureCaptureUpdateDropsOldCapture() {
     let captures: List<GcClosureCapture> = [gcValueCapture(0, "item", firstCapture)]
     testing.assert(heap.installClosureEnvironment(closure, "replaceCapture", captures))
     assertValid(heap)
+    testing.assertEq(heap.barrierPostWriteCallCount(), 1)
 
     testing.assert(heap.updateClosureCapture(closure, 0, secondCapture))
+    testing.assertEq(heap.barrierPreWriteCallCount(), 1)
+    testing.assertEq(heap.barrierPostWriteCallCount(), 2)
     let stats = heap.majorCollect()
     assertValid(heap)
 
