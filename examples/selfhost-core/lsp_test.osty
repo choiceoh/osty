@@ -1,0 +1,334 @@
+use std.testing
+
+fn testLspSemanticClassifiesTokenKinds() {
+    testing.assertEq(lspSemanticTypeForTokenKind("fn", ""), lspSemanticTypeKeyword())
+    testing.assertEq(lspSemanticTypeForTokenKind("+=", ""), lspSemanticTypeOperator())
+    testing.assertEq(lspSemanticTypeForTokenKind("INT", ""), lspSemanticTypeNumber())
+    testing.assertEq(lspSemanticTypeForTokenKind("RAWSTRING", ""), lspSemanticTypeString())
+    testing.assertEq(lspSemanticTypeForTokenKind("IDENT", "function"), lspSemanticTypeFunction())
+    testing.assertEq(lspSemanticTypeForTokenKind("IDENT", "parameter"), lspSemanticTypeParameter())
+    testing.assertEq(lspSemanticTypeForTokenKind("IDENT", "variant"), lspSemanticTypeEnumMember())
+    testing.assertEq(lspSemanticTypeForTokenKind("IDENT", "package"), lspSemanticTypeNamespace())
+    testing.assertEq(lspSemanticTypeForTokenKind("IDENT", ""), lspSemanticTypeVariable())
+    testing.assertEq(lspSemanticTypeForTokenKind("(", ""), -1)
+}
+
+fn testLspSemanticClassifiesTypeSymbols() {
+    testing.assertEq(lspSemanticTypeForSymbolKind("struct"), lspSemanticTypeType())
+    testing.assertEq(lspSemanticTypeForSymbolKind("enum"), lspSemanticTypeType())
+    testing.assertEq(lspSemanticTypeForSymbolKind("interface"), lspSemanticTypeType())
+    testing.assertEq(lspSemanticTypeForSymbolKind("type alias"), lspSemanticTypeType())
+    testing.assertEq(lspSemanticTypeForSymbolKind("builtin"), lspSemanticTypeType())
+    testing.assertEq(lspSemanticTypeForSymbolKind("type parameter"), lspSemanticTypeType())
+}
+
+fn testLspSemanticTokenEncoding() {
+    let tokens: List<LspSemanticToken> = [
+        LspSemanticToken {
+            line: 0,
+            column: 2,
+            length: 3,
+            tokenType: lspSemanticTypeFunction(),
+            modifiers: 0,
+        },
+        LspSemanticToken {
+            line: 0,
+            column: 8,
+            length: 1,
+            tokenType: lspSemanticTypeVariable(),
+            modifiers: 0,
+        },
+        LspSemanticToken {
+            line: 2,
+            column: 4,
+            length: 6,
+            tokenType: lspSemanticTypeKeyword(),
+            modifiers: 0,
+        },
+    ]
+
+    let data = lspEncodeSemanticTokens(tokens)
+
+    testing.assertEq(data[0], 0)
+    testing.assertEq(data[1], 2)
+    testing.assertEq(data[2], 3)
+    testing.assertEq(data[3], lspSemanticTypeFunction())
+    testing.assertEq(data[4], 0)
+    testing.assertEq(data[5], 0)
+    testing.assertEq(data[6], 6)
+    testing.assertEq(data[7], 1)
+    testing.assertEq(data[8], lspSemanticTypeVariable())
+    testing.assertEq(data[9], 0)
+    testing.assertEq(data[10], 2)
+    testing.assertEq(data[11], 4)
+    testing.assertEq(data[12], 6)
+    testing.assertEq(data[13], lspSemanticTypeKeyword())
+    testing.assertEq(data[14], 0)
+
+    let sortedData = lspEncodeSortedSemanticTokens([
+        LspSemanticToken {
+            line: 2,
+            column: 4,
+            length: 6,
+            tokenType: lspSemanticTypeKeyword(),
+            modifiers: 0,
+        },
+        LspSemanticToken {
+            line: 0,
+            column: 2,
+            length: 3,
+            tokenType: lspSemanticTypeFunction(),
+            modifiers: 0,
+        },
+    ])
+    testing.assertEq(sortedData[0], 0)
+    testing.assertEq(sortedData[1], 2)
+    testing.assertEq(sortedData[3], lspSemanticTypeFunction())
+    testing.assertEq(sortedData[5], 2)
+    testing.assertEq(sortedData[6], 4)
+}
+
+fn testLspCompletionAndCodeActionPolicy() {
+    testing.assertEq(lspCompletionKindForSymbolKind("function"), lspCompletionKindFunction())
+    testing.assertEq(lspCompletionKindForSymbolKind("parameter"), lspCompletionKindVariable())
+    testing.assertEq(lspCompletionKindForSymbolKind("type alias"), lspCompletionKindStruct())
+    testing.assertEq(lspCompletionKindForSymbolKind("variant"), lspCompletionKindEnumMember())
+    testing.assertEq(lspCompletionKindForSymbolKind("package"), lspCompletionKindModule())
+    testing.assertEq(lspCompletionKindForSymbolKind("builtin"), lspCompletionKindKeyword())
+    testing.assertEq(lspCompletionSortTextForSymbolKind("package", "std"), "0_std")
+    testing.assertEq(lspCompletionSortTextForSymbolKind("binding", "value"), "1_value")
+    testing.assertEq(lspCompletionSortTextForSymbolKind("function", "main"), "2_main")
+    testing.assertEq(lspCompletionSortTextForSymbolKind("struct", "User"), "3_User")
+    testing.assertEq(lspCompletionDetail("function", "map", "fn(Int) -> String"), "fn map(Int) -> String")
+    testing.assertEq(lspCompletionDetail("binding", "value", "Int"), "Int")
+
+    testing.assert(lspWantsCodeActionKind([], lspCodeActionSourceOrganizeImports()))
+    testing.assert(lspWantsCodeActionKind([lspCodeActionSource()], lspCodeActionSourceFixAllOsty()))
+    testing.assert(!(lspWantsCodeActionKind([lspCodeActionQuickFix()], lspCodeActionSourceFixAll())))
+    testing.assertEq(lspPrefixUnderscoreName("value"), "_value")
+    testing.assertEq(lspPrefixUnderscoreName(""), "_")
+    testing.assertEq(lspPrefixUnderscoreTitle("value"), "Prefix `value` with `_` to silence")
+}
+
+fn testLspSymbolKindPolicy() {
+    testing.assertEq(lspSymbolKindForDecl("fn", false), lspSymbolKindFunction())
+    testing.assertEq(lspSymbolKindForDecl("struct", false), lspSymbolKindStruct())
+    testing.assertEq(lspSymbolKindForDecl("enum", false), lspSymbolKindEnum())
+    testing.assertEq(lspSymbolKindForDecl("interface", false), lspSymbolKindInterface())
+    testing.assertEq(lspSymbolKindForDecl("typeAlias", false), lspSymbolKindClass())
+    testing.assertEq(lspSymbolKindForDecl("let", false), lspSymbolKindConstant())
+    testing.assertEq(lspSymbolKindForDecl("let", true), lspSymbolKindVariable())
+    testing.assertEq(lspSymbolKindForMember("field"), lspSymbolKindField())
+    testing.assertEq(lspSymbolKindForMember("variant"), lspSymbolKindEnumMember())
+    testing.assertEq(lspSymbolKindForMember("method"), lspSymbolKindMethod())
+}
+
+fn testLspSignatureTextPolicy() {
+    testing.assertEq(lspHoverSignatureLine("function", "map", "fn(Int) -> String"), "fn map(Int) -> String")
+    testing.assertEq(lspHoverSignatureLine("binding", "value", "Int"), "let value: Int")
+    testing.assertEq(lspHoverSignatureLine("type alias", "Name", ""), "type Name")
+
+    let sig = lspBuildSignatureText(
+        "map",
+        [
+            LspSignatureParam { name: "items", typeName: "List<Int>" },
+            LspSignatureParam { name: "f", typeName: "fn(Int) -> String" },
+        ],
+        "List<String>",
+    )
+
+    testing.assertEq(sig.label, "fn map(items: List<Int>, f: fn(Int) -> String) -> List<String>")
+    testing.assertEq(sig.parameterLabels[0], "items: List<Int>")
+    testing.assertEq(sig.parameterLabels[1], "f: fn(Int) -> String")
+}
+
+fn testLspFindsNameOffsetInsideDeclarationSpan() {
+    let source = "/// docs\npub fn greet(name: String) -> String"
+    let offset = lspFindNameOffset(source, 9, source.chars().len(), "greet")
+
+    testing.assertEq(offset, 16)
+    testing.assertEq(lspFindNameOffset(source, 9, source.chars().len(), "missing"), -1)
+}
+
+fn testLspPrecedingCompletionContext() {
+    let plain = lspPrecedingCompletionContext("let answer = value", 18)
+    testing.assertEq(plain.prefix, "value")
+    testing.assertEq(plain.afterDot, "")
+
+    let member = lspPrecedingCompletionContext("std.fmt.pr", 10)
+    testing.assertEq(member.prefix, "pr")
+    testing.assertEq(member.afterDot, "fmt")
+
+    let unicode = lspPrecedingCompletionContext("값.필", 4)
+    testing.assertEq(unicode.prefix, "필")
+    testing.assertEq(unicode.afterDot, "값")
+}
+
+fn testLspIdentifierAt() {
+    testing.assertEq(lspIdentifierAt("let value = 1", 4), "value")
+    testing.assertEq(lspIdentifierAt("let value = 1", 3), "")
+    testing.assertEq(lspIdentifierAt("값 = 1", 0), "값")
+}
+
+fn testLspPositionAndParameterPolicy() {
+    testing.assert(lspContainsPosition(1, 2, 1, 8, 1, 8))
+    testing.assert(!(lspContainsPosition(1, 2, 1, 8, 1, 9)))
+    testing.assert(lspSpanOverlaps(10, 20, 20, 30))
+    testing.assert(!(lspSpanOverlaps(10, 19, 20, 30)))
+    testing.assertEq(lspActiveParameter([12, 20, 32], 20), 1)
+    testing.assertEq(lspActiveParameter([12, 20, 32], 33), 3)
+}
+
+fn testLspUtf16PositionConversionPolicy() {
+    let source = "a😀\r\n값\nend"
+    let lines = lspLineStarts(source)
+    testing.assertEq(lines[0], 0)
+    testing.assertEq(lines[1], 4)
+    testing.assertEq(lines[2], 6)
+    testing.assertEq(lspUtf16UnitsInByteRange(source, 0, 2), 3)
+
+    let fromOsty = lspOstyPositionToLSP(source, lines, 1, 2)
+    testing.assertEq(fromOsty.line, 0)
+    testing.assertEq(fromOsty.character, 3)
+
+    let toOsty = lspPositionToOsty(source, lines, 0, 3)
+    testing.assertEq(toOsty.offset, 2)
+    testing.assertEq(toOsty.line, 1)
+    testing.assertEq(toOsty.column, 3)
+
+    let insideSurrogate = lspPositionToOsty(source, lines, 0, 2)
+    testing.assertEq(insideSurrogate.offset, 1)
+    testing.assertEq(insideSurrogate.column, 2)
+
+    let fromOffset = lspOffsetToPosition(source, lines, 5)
+    testing.assertEq(fromOffset.line, 1)
+    testing.assertEq(fromOffset.character, 1)
+
+    let visible = lspRangeFromOstySpan(source, lines, 2, 4, 0, 0)
+    testing.assertEq(visible.startLine, 1)
+    testing.assertEq(visible.startCharacter, 0)
+    testing.assertEq(visible.endLine, 1)
+    testing.assertEq(visible.endCharacter, 1)
+}
+
+fn testLspUriLocationAndImportPolicy() {
+    testing.assertEq(lspPathToUri("/tmp/main.osty"), "file:///tmp/main.osty")
+    testing.assertEq(lspPathToUri("C:/tmp/main.osty"), "file:///C:/tmp/main.osty")
+    testing.assertEq(lspPathToUri(""), "file://")
+
+    let locs = [
+        LspLocation {
+            uri: "file:///b.osty",
+            startLine: 2,
+            startCharacter: 0,
+            endLine: 2,
+            endCharacter: 4,
+        },
+        LspLocation {
+            uri: "file:///a.osty",
+            startLine: 4,
+            startCharacter: 1,
+            endLine: 4,
+            endCharacter: 5,
+        },
+        LspLocation {
+            uri: "file:///a.osty",
+            startLine: 4,
+            startCharacter: 1,
+            endLine: 4,
+            endCharacter: 5,
+        },
+    ]
+    let resolved = lspSortDedupLocations(locs)
+    testing.assertEq(resolved.len(), 2)
+    testing.assertEq(resolved[0].uri, "file:///a.osty")
+    testing.assertEq(resolved[1].uri, "file:///b.osty")
+
+    let symbolOrder = lspSortSymbolIndexes([
+        LspSymbolSortKey { name: "Zoo", uri: "file:///b.osty" },
+        LspSymbolSortKey { name: "App", uri: "file:///z.osty" },
+        LspSymbolSortKey { name: "App", uri: "file:///a.osty" },
+    ])
+    testing.assertEq(symbolOrder[0], 2)
+    testing.assertEq(symbolOrder[1], 1)
+    testing.assertEq(symbolOrder[2], 0)
+
+    let importOrder = lspSortImportIndexes([
+        LspImportSortKey { group: 1, key: "zeta", alias: "" },
+        LspImportSortKey { group: 0, key: "fmt", alias: "" },
+        LspImportSortKey { group: 1, key: "alpha", alias: "b" },
+        LspImportSortKey { group: 1, key: "alpha", alias: "a" },
+    ])
+    testing.assertEq(importOrder[0], 1)
+    testing.assertEq(importOrder[1], 3)
+    testing.assertEq(importOrder[2], 2)
+    testing.assertEq(importOrder[3], 0)
+
+    testing.assertEq(lspUseGroup(false, ["std", "fmt"]), 0)
+    testing.assertEq(lspUseGroup(false, ["pkg"]), 1)
+    testing.assertEq(lspUseGroup(true, ["fmt"]), 2)
+    testing.assertEq(lspUseKey(false, "", "", ["std", "fmt"]), "std.fmt")
+    testing.assertEq(lspUseKey(false, "", "github.com/acme/pkg", []), "github.com/acme/pkg")
+    testing.assertEq(lspUseKey(true, "net/http", "", []), "net/http")
+    testing.assertEq(lspKeyWithAlias(1, "pkg", "alias"), "1|pkg|alias")
+    testing.assertEq(lspUseSourceText("use std.fmt  \n", 0, 14), "use std.fmt")
+    testing.assertEq(lspEndOfLineOffset("use a  \r\nnext", 5), 9)
+    testing.assert(!(lspHasTriviaBetweenOffsets("use a\n\nuse b", 5, 7)))
+    testing.assert(lspHasTriviaBetweenOffsets("use a\n// note\nuse b", 5, 13))
+}
+
+fn testLspDiagnosticPayloadPolicy() {
+    let payload = lspDiagnosticPayload("warning", "unused value", "prefix it", ["declared here"])
+
+    testing.assertEq(payload.severity, lspDiagnosticSeverityWarning())
+    testing.assertEq(payload.message, "unused value\nhelp: prefix it\nnote: declared here")
+    testing.assertEq(lspDiagnosticPayload("note", "FYI", "", []).severity, lspDiagnosticSeverityInformation())
+    testing.assertEq(lspDiagnosticPayload("unknown", "bad", "", []).severity, lspDiagnosticSeverityError())
+}
+
+fn testLspResolveOverlappingTextEdits() {
+    let edits = [
+        LspTextEdit {
+            startLine: 2,
+            startCharacter: 0,
+            endLine: 2,
+            endCharacter: 4,
+            newText: "third",
+        },
+        LspTextEdit {
+            startLine: 0,
+            startCharacter: 1,
+            endLine: 0,
+            endCharacter: 3,
+            newText: "first",
+        },
+        LspTextEdit {
+            startLine: 0,
+            startCharacter: 2,
+            endLine: 0,
+            endCharacter: 5,
+            newText: "overlap",
+        },
+        LspTextEdit {
+            startLine: 0,
+            startCharacter: 3,
+            endLine: 0,
+            endCharacter: 3,
+            newText: "adjacent insert",
+        },
+        LspTextEdit {
+            startLine: 0,
+            startCharacter: 3,
+            endLine: 0,
+            endCharacter: 3,
+            newText: "duplicate insert",
+        },
+    ]
+
+    let resolved = lspResolveOverlappingTextEdits(edits)
+
+    testing.assertEq(resolved.len(), 3)
+    testing.assertEq(resolved[0].newText, "first")
+    testing.assertEq(resolved[1].newText, "adjacent insert")
+    testing.assertEq(resolved[2].newText, "third")
+}

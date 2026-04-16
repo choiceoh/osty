@@ -1,11 +1,11 @@
 package lsp
 
 import (
-	"sort"
 	"strings"
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
+	"github.com/osty/osty/internal/selfhost"
 )
 
 // handleWorkspaceSymbol answers `workspace/symbol`. The search scope
@@ -60,13 +60,30 @@ func (s *Server) handleWorkspaceSymbol(req *rpcRequest) {
 	}
 	s.docs.mu.Unlock()
 
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Name != out[j].Name {
-			return out[i].Name < out[j].Name
-		}
-		return out[i].Location.URI < out[j].Location.URI
-	})
+	out = sortSymbolInformation(out)
 	replyJSON(s.conn, req.ID, out)
+}
+
+func sortSymbolInformation(in []SymbolInformation) []SymbolInformation {
+	if len(in) <= 1 {
+		return in
+	}
+	keys := make([]selfhost.LSPSymbolSortKey, 0, len(in))
+	for _, sym := range in {
+		keys = append(keys, selfhost.LSPSymbolSortKey{
+			Name: sym.Name,
+			URI:  sym.Location.URI,
+		})
+	}
+	indexes := selfhost.SortLSPSymbolIndexes(keys)
+	out := make([]SymbolInformation, 0, len(indexes))
+	for _, idx := range indexes {
+		if idx < 0 || idx >= len(in) {
+			continue
+		}
+		out = append(out, in[idx])
+	}
+	return out
 }
 
 // collectFileSymbols enumerates top-level decls from a single-file
@@ -155,39 +172,43 @@ func walkFileDecls(file *ast.File) []declEntry {
 func declEntryFor(d ast.Decl) (declEntry, bool) {
 	switch n := d.(type) {
 	case *ast.FnDecl:
-		return declEntry{name: n.Name, kind: SymKindFunction, node: n}, true
+		return declEntry{name: n.Name, kind: lspSymbolKindForDecl("fn", false), node: n}, true
 	case *ast.StructDecl:
 		nested := make([]declEntry, 0, len(n.Fields)+len(n.Methods))
 		for _, f := range n.Fields {
-			nested = append(nested, declEntry{name: f.Name, container: n.Name, kind: SymKindField, node: f})
+			nested = append(nested, declEntry{name: f.Name, container: n.Name, kind: lspSymbolKindForMember("field"), node: f})
 		}
 		for _, m := range n.Methods {
-			nested = append(nested, declEntry{name: m.Name, container: n.Name, kind: SymKindMethod, node: m})
+			nested = append(nested, declEntry{name: m.Name, container: n.Name, kind: lspSymbolKindForMember("method"), node: m})
 		}
-		return declEntry{name: n.Name, kind: SymKindStruct, node: n, nested: nested}, true
+		return declEntry{name: n.Name, kind: lspSymbolKindForDecl("struct", false), node: n, nested: nested}, true
 	case *ast.EnumDecl:
 		nested := make([]declEntry, 0, len(n.Variants)+len(n.Methods))
 		for _, v := range n.Variants {
-			nested = append(nested, declEntry{name: v.Name, container: n.Name, kind: SymKindEnumMember, node: v})
+			nested = append(nested, declEntry{name: v.Name, container: n.Name, kind: lspSymbolKindForMember("variant"), node: v})
 		}
 		for _, m := range n.Methods {
-			nested = append(nested, declEntry{name: m.Name, container: n.Name, kind: SymKindMethod, node: m})
+			nested = append(nested, declEntry{name: m.Name, container: n.Name, kind: lspSymbolKindForMember("method"), node: m})
 		}
-		return declEntry{name: n.Name, kind: SymKindEnum, node: n, nested: nested}, true
+		return declEntry{name: n.Name, kind: lspSymbolKindForDecl("enum", false), node: n, nested: nested}, true
 	case *ast.InterfaceDecl:
 		nested := make([]declEntry, 0, len(n.Methods))
 		for _, m := range n.Methods {
-			nested = append(nested, declEntry{name: m.Name, container: n.Name, kind: SymKindMethod, node: m})
+			nested = append(nested, declEntry{name: m.Name, container: n.Name, kind: lspSymbolKindForMember("method"), node: m})
 		}
-		return declEntry{name: n.Name, kind: SymKindInterface, node: n, nested: nested}, true
+		return declEntry{name: n.Name, kind: lspSymbolKindForDecl("interface", false), node: n, nested: nested}, true
 	case *ast.TypeAliasDecl:
-		return declEntry{name: n.Name, kind: SymKindClass, node: n}, true
+		return declEntry{name: n.Name, kind: lspSymbolKindForDecl("typeAlias", false), node: n}, true
 	case *ast.LetDecl:
-		kind := SymKindConstant
-		if n.Mut {
-			kind = SymKindVariable
-		}
-		return declEntry{name: n.Name, kind: kind, node: n}, true
+		return declEntry{name: n.Name, kind: lspSymbolKindForDecl("let", n.Mut), node: n}, true
 	}
 	return declEntry{}, false
+}
+
+func lspSymbolKindForDecl(kind string, mutable bool) SymbolKind {
+	return SymbolKind(selfhost.LSPSymbolKindForDecl(kind, mutable))
+}
+
+func lspSymbolKindForMember(kind string) SymbolKind {
+	return SymbolKind(selfhost.LSPSymbolKindForMember(kind))
 }

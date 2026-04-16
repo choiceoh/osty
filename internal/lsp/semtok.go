@@ -1,10 +1,9 @@
 package lsp
 
 import (
-	"sort"
-
 	"github.com/osty/osty/internal/lexer"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/token"
 )
 
@@ -98,96 +97,25 @@ func (s *Server) handleSemanticTokens(req *rpcRequest) {
 		sems = append(sems, commentSemToken(li, c))
 	}
 
-	sort.Slice(sems, func(i, j int) bool {
-		if sems[i].line != sems[j].line {
-			return sems[i].line < sems[j].line
-		}
-		return sems[i].col < sems[j].col
-	})
 	replyJSON(s.conn, req.ID, &SemanticTokens{Data: encodeSemTokens(sems)})
 }
 
-// classifyToken maps one token.Token to its (type, modifiers) pair.
-// For identifiers we consult the prebuilt offset→Symbol index so
-// function call sites color differently from plain variable reads;
-// the lookup is O(1) per token.
+// classifyToken maps one token.Token to its (type, modifiers) pair through
+// the self-hosted LSP policy. For identifiers we consult the prebuilt
+// offset→Symbol index so function call sites color differently from plain
+// variable reads; the lookup is O(1) per token.
 func classifyToken(t token.Token, identIndex map[int]*resolve.Symbol) (semToken, bool) {
-	switch t.Kind {
-	case token.IDENT:
+	symbolKind := ""
+	if t.Kind == token.IDENT {
 		if sym, ok := identIndex[t.Pos.Offset]; ok && sym != nil {
-			return semToken{ttype: semTypeFromKind(sym.Kind)}, true
+			symbolKind = sym.Kind.String()
 		}
-		return semToken{ttype: semTypeVariable}, true
-	case token.INT, token.FLOAT, token.CHAR, token.BYTE:
-		return semToken{ttype: semTypeNumber}, true
-	case token.STRING, token.RAWSTRING:
-		return semToken{ttype: semTypeString}, true
 	}
-	if isKeywordKind(t.Kind) {
-		return semToken{ttype: semTypeKeyword}, true
+	tokenType, ok := selfhost.LSPSemanticTypeForTokenKind(t.Kind.String(), symbolKind)
+	if !ok {
+		return semToken{}, false
 	}
-	if isOperatorKind(t.Kind) {
-		return semToken{ttype: semTypeOperator}, true
-	}
-	return semToken{}, false
-}
-
-// semTypeFromKind maps resolver SymbolKind to a tokenType index.
-func semTypeFromKind(k resolve.SymbolKind) uint32 {
-	switch k {
-	case resolve.SymFn:
-		return semTypeFunction
-	case resolve.SymStruct, resolve.SymEnum, resolve.SymInterface, resolve.SymTypeAlias:
-		return semTypeType
-	case resolve.SymBuiltin:
-		return semTypeType
-	case resolve.SymLet:
-		return semTypeVariable
-	case resolve.SymParam:
-		return semTypeParameter
-	case resolve.SymVariant:
-		return semTypeEnumMember
-	case resolve.SymGeneric:
-		return semTypeType
-	case resolve.SymPackage:
-		return semTypeNamespace
-	}
-	return semTypeVariable
-}
-
-// isKeywordKind reports whether the token kind is one of Osty's
-// reserved keywords.
-func isKeywordKind(k token.Kind) bool {
-	switch k {
-	case token.FN, token.STRUCT, token.ENUM, token.INTERFACE,
-		token.TYPE, token.LET, token.MUT, token.PUB,
-		token.IF, token.ELSE, token.MATCH, token.FOR,
-		token.BREAK, token.CONTINUE, token.RETURN, token.USE,
-		token.DEFER:
-		return true
-	}
-	return false
-}
-
-// isOperatorKind covers the punctuation and operator families. We
-// deliberately keep parens/braces/brackets/commas/colons out of
-// "operator" because most themes don't color them and the extra
-// tokens bloat the data array.
-func isOperatorKind(k token.Kind) bool {
-	switch k {
-	case token.PLUS, token.MINUS, token.STAR, token.SLASH, token.PERCENT,
-		token.EQ, token.NEQ, token.LT, token.GT, token.LEQ, token.GEQ,
-		token.AND, token.OR, token.NOT,
-		token.BITAND, token.BITOR, token.BITXOR, token.BITNOT, token.SHL, token.SHR,
-		token.ASSIGN, token.PLUSEQ, token.MINUSEQ, token.STAREQ, token.SLASHEQ,
-		token.PERCENTEQ, token.BITANDEQ, token.BITOREQ, token.BITXOREQ,
-		token.SHLEQ, token.SHREQ,
-		token.QUESTION, token.QDOT, token.QQ,
-		token.DOTDOT, token.DOTDOTEQ,
-		token.ARROW, token.CHANARROW:
-		return true
-	}
-	return false
+	return semToken{ttype: tokenType}, true
 }
 
 // fillPosition completes a semToken with line/col/length based on
@@ -218,26 +146,22 @@ func commentSemToken(li *lineIndex, c token.Comment) semToken {
 		line:   lspStart.Line,
 		col:    lspStart.Character,
 		length: length,
-		ttype:  semTypeComment,
+		ttype:  selfhost.LSPSemanticTypeForComment(),
 	}
 }
 
-// encodeSemTokens turns absolute tokens into the delta-encoded form
-// LSP expects. Tokens must be sorted by (line, col) before calling.
+// encodeSemTokens turns absolute tokens into the sorted, delta-encoded form
+// LSP expects.
 func encodeSemTokens(sems []semToken) []uint32 {
-	data := make([]uint32, 0, 5*len(sems))
-	var prevLine, prevCol uint32
-	for i, t := range sems {
-		deltaLine := t.line - prevLine
-		var deltaCol uint32
-		if i == 0 || deltaLine != 0 {
-			deltaCol = t.col
-		} else {
-			deltaCol = t.col - prevCol
-		}
-		data = append(data, deltaLine, deltaCol, t.length, t.ttype, t.mods)
-		prevLine = t.line
-		prevCol = t.col
+	tokens := make([]selfhost.LSPSemanticToken, 0, len(sems))
+	for _, t := range sems {
+		tokens = append(tokens, selfhost.LSPSemanticToken{
+			Line:      t.line,
+			Column:    t.col,
+			Length:    t.length,
+			TokenType: t.ttype,
+			Modifiers: t.mods,
+		})
 	}
-	return data
+	return selfhost.EncodeLSPSemanticTokens(tokens)
 }

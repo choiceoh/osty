@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/osty/osty/internal/diag"
-	"github.com/osty/osty/internal/lexer"
+	"github.com/osty/osty/internal/selfhost"
 )
 
 // handleCodeAction answers `textDocument/codeAction`. It produces two
@@ -117,17 +117,13 @@ func undefinedNameFixes(doc *document, d LSPDiagnostic) []CodeAction {
 func prefixUnderscoreFix(doc *document, d LSPDiagnostic) CodeAction {
 	start := doc.analysis.lines.lspToOsty(d.Range.Start)
 	name := identifierAt(doc.src, start.Offset)
-	newName := "_" + name
-	if name == "" {
-		newName = "_"
-	}
 	return CodeAction{
-		Title:       fmt.Sprintf("Prefix `%s` with `_` to silence", name),
+		Title:       selfhost.LSPPrefixUnderscoreTitle(name),
 		Kind:        CodeActionQuickFix,
 		Diagnostics: []LSPDiagnostic{d},
 		Edit: &WorkspaceEdit{
 			Changes: map[string][]TextEdit{
-				doc.uri: {{Range: d.Range, NewText: newName}},
+				doc.uri: {{Range: d.Range, NewText: selfhost.LSPPrefixUnderscoreName(name)}},
 			},
 		},
 		IsPreferred: true,
@@ -160,12 +156,5 @@ func removeLineFix(doc *document, d LSPDiagnostic) CodeAction {
 // Returns "" when the cursor isn't on an ident — common with
 // synthesized diagnostics that don't have real source text.
 func identifierAt(src []byte, off int) string {
-	if off < 0 || off >= len(src) {
-		return ""
-	}
-	end := off
-	for end < len(src) && lexer.IsIdentCont(src[end]) {
-		end++
-	}
-	return string(src[off:end])
+	return selfhost.LSPIdentifierAt(src, off)
 }

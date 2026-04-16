@@ -35,7 +35,7 @@ coverage rather than language-decision churn.
 | Type checker (`internal/check`) | done for v0.4 front-end core — generic instantiation, structural interface checks, exhaustiveness, builder protocol, function-value arity, closure pattern params |
 | Linter (`internal/lint`, L0001–L0042, `--fix` / `--fix-dry-run`) | done |
 | Multi-file packages (`resolve` loader/package/workspace) | done |
-| LSP (`internal/lsp`, wired as `osty lsp`) | done — hover, definition, formatting, documentSymbol, lint diagnostics |
+| LSP (`internal/lsp`, wired as `osty lsp`) | done — hover, definition, formatting, documentSymbol, lint diagnostics, editor policy backed by selfhost-core |
 | Go transpiler (`internal/gen`, wired as `osty gen`) | Phases 1–6 wired end-to-end (primitives, structs/enums/match, generics/closures, Option/Result/`?`, `use`/FFI, channels/concurrency) |
 | Independent IR (`internal/ir`) | done — patterns, match, closures, struct/field/method |
 | Project scaffolding (`internal/scaffold`, `osty new` / `osty init`) | done — `--bin`, `--lib`, `--workspace`, `--cli`, `--service` |

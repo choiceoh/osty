@@ -2,6 +2,7 @@ package lsp
 
 import (
 	"github.com/osty/osty/internal/ast"
+	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/token"
 	"github.com/osty/osty/internal/types"
 )
@@ -110,10 +111,7 @@ func inlayTypeString(t types.Type) string {
 func nodeInRange(n ast.Node, start, end token.Pos) bool {
 	p := n.Pos()
 	e := n.End()
-	if e.Offset < start.Offset || p.Offset > end.Offset {
-		return false
-	}
-	return true
+	return selfhost.LSPSpanOverlaps(p.Offset, e.Offset, start.Offset, end.Offset)
 }
 
 // walkLets descends into every statement-carrying construct and

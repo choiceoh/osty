@@ -1,12 +1,11 @@
 package lsp
 
 import (
-	"sort"
 	"strings"
 
 	"github.com/osty/osty/internal/check"
-	"github.com/osty/osty/internal/lexer"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/selfhost"
 )
 
 // handleCompletion answers `textDocument/completion`. Behavior splits
@@ -62,24 +61,8 @@ func (s *Server) handleCompletion(req *rpcRequest) {
 // to suppress completion inside literals should gate on the parsed
 // AST before invoking this.
 func precedingContext(src []byte, offset int) (prefix, afterDot string) {
-	if offset > len(src) {
-		offset = len(src)
-	}
-	start := offset
-	for start > 0 && lexer.IsIdentCont(src[start-1]) {
-		start--
-	}
-	prefix = string(src[start:offset])
-
-	if start > 0 && src[start-1] == '.' {
-		recvEnd := start - 1
-		recvStart := recvEnd
-		for recvStart > 0 && lexer.IsIdentCont(src[recvStart-1]) {
-			recvStart--
-		}
-		afterDot = string(src[recvStart:recvEnd])
-	}
-	return prefix, afterDot
+	ctx := selfhost.LSPPrecedingCompletionContext(src, offset)
+	return ctx.Prefix, ctx.AfterDot
 }
 
 // completionAfterDot resolves `recvName` against the document's file
@@ -112,10 +95,7 @@ func (s *Server) completionAfterDot(doc *document, recvName, prefix string) []Co
 		}
 		items = append(items, completionItemFromSym(name, member, a.check))
 	}
-	sort.Slice(items, func(i, j int) bool {
-		return items[i].Label < items[j].Label
-	})
-	return items
+	return sortCompletionItems(items)
 }
 
 // completionInScope emits one item per name visible from the scope
@@ -141,10 +121,26 @@ func (s *Server) completionInScope(doc *document, prefix string) []CompletionIte
 			items = append(items, completionItemFromSym(name, sym, a.check))
 		}
 	}
-	sort.Slice(items, func(i, j int) bool {
-		return items[i].Label < items[j].Label
-	})
-	return items
+	return sortCompletionItems(items)
+}
+
+func sortCompletionItems(in []CompletionItem) []CompletionItem {
+	if len(in) <= 1 {
+		return in
+	}
+	labels := make([]string, 0, len(in))
+	for _, item := range in {
+		labels = append(labels, item.Label)
+	}
+	indexes := selfhost.SortLSPCompletionIndexes(labels)
+	out := make([]CompletionItem, 0, len(indexes))
+	for _, idx := range indexes {
+		if idx < 0 || idx >= len(in) {
+			continue
+		}
+		out = append(out, in[idx])
+	}
+	return out
 }
 
 // completionItemFromSym maps a resolver Symbol to a user-facing
@@ -153,15 +149,11 @@ func (s *Server) completionInScope(doc *document, prefix string) []CompletionIte
 func completionItemFromSym(label string, sym *resolve.Symbol, r *check.Result) CompletionItem {
 	item := CompletionItem{
 		Label: label,
-		Kind:  completionKindFor(sym.Kind),
+		Kind:  CompletionItemKind(selfhost.LSPCompletionKindForSymbolKind(sym.Kind.String())),
 	}
 	if r != nil {
 		if t := r.LookupSymType(sym); t != nil {
-			if sym.Kind == resolve.SymFn {
-				item.Detail = "fn " + label + fnTypeTail(t)
-			} else {
-				item.Detail = t.String()
-			}
+			item.Detail = selfhost.LSPCompletionDetail(sym.Kind.String(), label, t.String())
 		}
 	}
 	if doc := symbolDoc(sym); doc != "" {
@@ -170,46 +162,6 @@ func completionItemFromSym(label string, sym *resolve.Symbol, r *check.Result) C
 			Value: doc,
 		}
 	}
-	// Packages sort first in the list because they're the most common
-	// "I'm about to type `pkg.`" target. Locals get default order.
-	switch sym.Kind {
-	case resolve.SymPackage:
-		item.SortText = "0_" + label
-	case resolve.SymLet, resolve.SymParam:
-		item.SortText = "1_" + label
-	case resolve.SymFn, resolve.SymVariant:
-		item.SortText = "2_" + label
-	default:
-		item.SortText = "3_" + label
-	}
+	item.SortText = selfhost.LSPCompletionSortTextForSymbolKind(sym.Kind.String(), label)
 	return item
-}
-
-// completionKindFor maps a resolver SymbolKind to the LSP enum.
-func completionKindFor(k resolve.SymbolKind) CompletionItemKind {
-	switch k {
-	case resolve.SymFn:
-		return CompletionItemFunction
-	case resolve.SymLet:
-		return CompletionItemVariable
-	case resolve.SymParam:
-		return CompletionItemVariable
-	case resolve.SymStruct:
-		return CompletionItemStruct
-	case resolve.SymEnum:
-		return CompletionItemEnum
-	case resolve.SymInterface:
-		return CompletionItemInterface
-	case resolve.SymTypeAlias:
-		return CompletionItemStruct
-	case resolve.SymVariant:
-		return CompletionItemEnumMember
-	case resolve.SymGeneric:
-		return CompletionItemTypeParameter
-	case resolve.SymPackage:
-		return CompletionItemModule
-	case resolve.SymBuiltin:
-		return CompletionItemKeyword
-	}
-	return CompletionItemValue
 }
