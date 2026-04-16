@@ -1914,12 +1914,7 @@ func (g *generator) emitMatchExprValue(expr *ast.MatchExpr) (value, error) {
 		return g.emitTagEnumMatchExprValue(scrutinee, expr.Arms)
 	}
 	if info := g.enumsByType[scrutinee.typ]; info != nil && info.hasPayload {
-		if len(expr.Arms) != 2 {
-			return value{}, unsupportedf("expression", "payload enum match with %d arms", len(expr.Arms))
-		}
-		first := expr.Arms[0]
-		second := expr.Arms[1]
-		return g.emitPayloadEnumMatchExprValue(scrutinee, info, first, second)
+		return g.emitPayloadEnumMatchExprValue(scrutinee, info, expr.Arms)
 	}
 	return value{}, unsupportedf("type-system", "match scrutinee type %s, want enum tag", scrutinee.typ)
 }
@@ -2382,7 +2377,11 @@ func matchArmBodyIsSelectSafe(expr ast.Expr) bool {
 	}
 }
 
-func (g *generator) emitPayloadEnumMatchExprValue(scrutinee value, info *enumInfo, first, second *ast.MatchArm) (value, error) {
+func (g *generator) emitPayloadEnumMatchExprValue(scrutinee value, info *enumInfo, arms []*ast.MatchArm) (value, error) {
+	if len(arms) == 0 {
+		return value{}, unsupported("expression", "match with no arms")
+	}
+	first := arms[0]
 	firstPattern, ok, err := g.matchPayloadEnumPattern(info, first.Pattern)
 	if err != nil {
 		return value{}, err
@@ -2390,6 +2389,17 @@ func (g *generator) emitPayloadEnumMatchExprValue(scrutinee value, info *enumInf
 	if !ok {
 		return value{}, unsupportedf("expression", "first match arm must be an enum %q variant", info.name)
 	}
+	if len(arms) == 1 {
+		g.pushScope()
+		defer g.popScope()
+		if err := g.bindPayloadEnumPattern(scrutinee, firstPattern); err != nil {
+			return value{}, err
+		}
+		return g.emitMatchArmBodyValue(first.Body)
+	}
+	second := arms[1]
+	var elseValue value
+	var elsePred string
 	var secondPattern enumPatternInfo
 	secondHasPattern := false
 	if _, catchAll := second.Pattern.(*ast.WildcardPat); !catchAll {
@@ -2425,19 +2435,27 @@ func (g *generator) emitPayloadEnumMatchExprValue(scrutinee value, info *enumInf
 	g.takeOstyEmitter(emitter)
 	g.currentBlock = labels.elseLabel
 
-	g.pushScope()
-	if secondHasPattern {
-		if err := g.bindPayloadEnumPattern(scrutinee, secondPattern); err != nil {
-			g.popScope()
+	if len(arms) > 2 {
+		elseValue, err = g.emitPayloadEnumMatchExprValue(scrutinee, info, arms[1:])
+		if err != nil {
 			return value{}, err
 		}
+		elsePred = g.currentBlock
+	} else {
+		g.pushScope()
+		if secondHasPattern {
+			if err := g.bindPayloadEnumPattern(scrutinee, secondPattern); err != nil {
+				g.popScope()
+				return value{}, err
+			}
+		}
+		elseValue, err = g.emitMatchArmBodyValue(second.Body)
+		g.popScope()
+		if err != nil {
+			return value{}, err
+		}
+		elsePred = g.currentBlock
 	}
-	elseValue, err := g.emitMatchArmBodyValue(second.Body)
-	g.popScope()
-	if err != nil {
-		return value{}, err
-	}
-	elsePred := g.currentBlock
 	if thenValue.typ != elseValue.typ {
 		return value{}, unsupportedf("type-system", "match arm types %s/%s", thenValue.typ, elseValue.typ)
 	}

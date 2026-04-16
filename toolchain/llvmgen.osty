@@ -272,7 +272,9 @@ pub fn llvmCallVoid(emitter: LlvmEmitter, name: String, args: List<LlvmValue>) {
 pub fn llvmGcRuntimeDeclarations() -> List<String> {
     [
         "declare ptr @osty.gc.alloc_v1(i64, i64, ptr)",
+        "declare void @osty.gc.pre_write_v1(ptr, ptr, i64)",
         "declare void @osty.gc.post_write_v1(ptr, ptr, i64)",
+        "declare ptr @osty.gc.load_v1(ptr)",
         "declare void @osty.gc.root_bind_v1(ptr)",
         "declare void @osty.gc.root_release_v1(ptr)",
     ]
@@ -313,6 +315,27 @@ pub fn llvmGcPostWrite(
     )
 }
 
+pub fn llvmGcPreWrite(
+    emitter: LlvmEmitter,
+    owner: LlvmValue,
+    value: LlvmValue,
+    slotKind: Int,
+) {
+    llvmCallVoid(
+        emitter,
+        "osty.gc.pre_write_v1",
+        [
+            owner,
+            value,
+            llvmIntLiteral(slotKind),
+        ],
+    )
+}
+
+pub fn llvmGcLoad(emitter: LlvmEmitter, value: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "ptr", "osty.gc.load_v1", [value])
+}
+
 pub fn llvmGcRootBind(emitter: LlvmEmitter, value: LlvmValue) {
     llvmCallVoid(emitter, "osty.gc.root_bind_v1", [value])
 }
@@ -351,9 +374,7 @@ pub fn llvmExtractValue(
     fieldIndex: Int,
 ) -> LlvmValue {
     let tmp = llvmNextTemp(emitter)
-    emitter.body.push(
-        "  {tmp} = extractvalue {aggregate.typ} {aggregate.name}, {fieldIndex}",
-    )
+    emitter.body.push("  {tmp} = extractvalue {aggregate.typ} {aggregate.name}, {fieldIndex}")
     LlvmValue { typ: fieldType, name: tmp, pointer: false }
 }
 
@@ -735,7 +756,14 @@ pub fn llvmMissingBinaryArtifactMessage() -> String {
 
 pub fn llvmClangFailureMessage(action: String, command: String, output: String) -> String {
     llvmStrings.join(
-        ["llvm backend: clang ", action, " failed\ncommand: ", command, "\n", output],
+        [
+            "llvm backend: clang ",
+            action,
+            " failed\ncommand: ",
+            command,
+            "\n",
+            output,
+        ],
         "",
     )
 }
@@ -1165,10 +1193,16 @@ pub fn llvmNominalDeclHeaderDiagnostic(
         return llvmUnsupportedDiagnostic("name", "{kind} name \"{name}\"")
     }
     if genericCount != 0 {
-        return llvmUnsupportedDiagnostic("type-system", "generic {kind} \"{name}\" is not supported")
+        return llvmUnsupportedDiagnostic(
+            "type-system",
+            "generic {kind} \"{name}\" is not supported",
+        )
     }
     if methodCount != 0 {
-        return llvmUnsupportedDiagnostic("function-signature", "{kind} \"{name}\" methods are not supported")
+        return llvmUnsupportedDiagnostic(
+            "function-signature",
+            "{kind} \"{name}\" methods are not supported",
+        )
     }
     llvmUnsupportedDiagnosticWith("", "", "", "")
 }
@@ -1190,13 +1224,19 @@ pub fn llvmFunctionHeaderDiagnostic(
         return llvmUnsupportedDiagnostic("function-signature", "methods are not supported")
     }
     if genericCount != 0 {
-        return llvmUnsupportedDiagnostic("function-signature", "generic functions are not supported")
+        return llvmUnsupportedDiagnostic(
+            "function-signature",
+            "generic functions are not supported",
+        )
     }
     if !(hasBody) {
         return llvmUnsupportedDiagnostic("source-layout", "function \"{name}\" has no body")
     }
     if isMain && !(llvmAllowsMainSignature(paramCount, hasReturnType)) {
-        return llvmUnsupportedDiagnostic("function-signature", "LLVM main must have no params and no return type")
+        return llvmUnsupportedDiagnostic(
+            "function-signature",
+            "LLVM main must have no params and no return type",
+        )
     }
     llvmUnsupportedDiagnosticWith("", "", "", "")
 }
@@ -1215,19 +1255,34 @@ pub fn llvmStructFieldDiagnostic(
     detail: String,
 ) -> LlvmUnsupportedDiagnostic {
     if !(identOk) {
-        return llvmUnsupportedDiagnostic("name", "struct \"{structName}\" field name \"{fieldName}\"")
+        return llvmUnsupportedDiagnostic(
+            "name",
+            "struct \"{structName}\" field name \"{fieldName}\"",
+        )
     }
     if hasDefault {
-        return llvmUnsupportedDiagnostic("type-system", "struct \"{structName}\" field \"{fieldName}\" has a default value")
+        return llvmUnsupportedDiagnostic(
+            "type-system",
+            "struct \"{structName}\" field \"{fieldName}\" has a default value",
+        )
     }
     if duplicate {
-        return llvmUnsupportedDiagnostic("source-layout", "struct \"{structName}\" duplicate field \"{fieldName}\"")
+        return llvmUnsupportedDiagnostic(
+            "source-layout",
+            "struct \"{structName}\" duplicate field \"{fieldName}\"",
+        )
     }
     if detail != "" {
-        return llvmUnsupportedDiagnostic("type-system", "struct \"{structName}\" field \"{fieldName}\": {detail}")
+        return llvmUnsupportedDiagnostic(
+            "type-system",
+            "struct \"{structName}\" field \"{fieldName}\": {detail}",
+        )
     }
     if recursive {
-        return llvmUnsupportedDiagnostic("type-system", "struct \"{structName}\" recursive field \"{fieldName}\"")
+        return llvmUnsupportedDiagnostic(
+            "type-system",
+            "struct \"{structName}\" recursive field \"{fieldName}\"",
+        )
     }
     llvmUnsupportedDiagnosticWith("", "", "", "")
 }
@@ -1240,7 +1295,10 @@ pub fn llvmEnumVariantHeaderDiagnostic(
     duplicate: Bool,
 ) -> LlvmUnsupportedDiagnostic {
     if !(identOk) {
-        return llvmUnsupportedDiagnostic("name", "enum \"{enumName}\" variant name \"{variantName}\"")
+        return llvmUnsupportedDiagnostic(
+            "name",
+            "enum \"{enumName}\" variant name \"{variantName}\"",
+        )
     }
     if payloadCount > 1 {
         return llvmUnsupportedDiagnostic(
@@ -1249,7 +1307,10 @@ pub fn llvmEnumVariantHeaderDiagnostic(
         )
     }
     if duplicate {
-        return llvmUnsupportedDiagnostic("source-layout", "enum \"{enumName}\" duplicate variant \"{variantName}\"")
+        return llvmUnsupportedDiagnostic(
+            "source-layout",
+            "enum \"{enumName}\" duplicate variant \"{variantName}\"",
+        )
     }
     llvmUnsupportedDiagnosticWith("", "", "", "")
 }
@@ -1262,10 +1323,16 @@ pub fn llvmEnumPayloadDiagnostic(
     actualType: String,
 ) -> LlvmUnsupportedDiagnostic {
     if detail != "" {
-        return llvmUnsupportedDiagnostic("type-system", "enum \"{enumName}\" variant \"{variantName}\" payload: {detail}")
+        return llvmUnsupportedDiagnostic(
+            "type-system",
+            "enum \"{enumName}\" variant \"{variantName}\" payload: {detail}",
+        )
     }
     if expectedType != "" && actualType != "" && expectedType != actualType {
-        return llvmUnsupportedDiagnostic("type-system", "enum \"{enumName}\" mixes payload types {expectedType} and {actualType}")
+        return llvmUnsupportedDiagnostic(
+            "type-system",
+            "enum \"{enumName}\" mixes payload types {expectedType} and {actualType}",
+        )
     }
     llvmUnsupportedDiagnosticWith("", "", "", "")
 }
@@ -1321,16 +1388,25 @@ pub fn llvmFunctionParamDiagnostic(
     detail: String,
 ) -> LlvmUnsupportedDiagnostic {
     if missingOrPattern {
-        return llvmUnsupportedDiagnostic("function-signature", "function \"{fnName}\" has non-identifier parameter")
+        return llvmUnsupportedDiagnostic(
+            "function-signature",
+            "function \"{fnName}\" has non-identifier parameter",
+        )
     }
     if hasDefault {
-        return llvmUnsupportedDiagnostic("function-signature", "function \"{fnName}\" has default parameter values")
+        return llvmUnsupportedDiagnostic(
+            "function-signature",
+            "function \"{fnName}\" has default parameter values",
+        )
     }
     if !(identOk) {
         return llvmUnsupportedDiagnostic("name", "parameter name \"{paramName}\"")
     }
     if detail != "" {
-        return llvmUnsupportedDiagnostic("type-system", "function \"{fnName}\" parameter \"{paramName}\": {detail}")
+        return llvmUnsupportedDiagnostic(
+            "type-system",
+            "function \"{fnName}\" parameter \"{paramName}\": {detail}",
+        )
     }
     llvmUnsupportedDiagnosticWith("", "", "", "")
 }
@@ -1629,7 +1705,9 @@ pub fn llvmSmokeGcRuntimeAbiIR(sourcePath: String) -> String {
     let object = llvmGcAlloc(main, 1, 32, "llvm.gc.object")
     llvmGcRootBind(main, object)
     let child = llvmGcAlloc(main, 2, 16, "llvm.gc.child")
-    llvmGcPostWrite(main, object, child, 0)
+    llvmGcPreWrite(main, object, child, 0)
+    let loaded = llvmGcLoad(main, child)
+    llvmGcPostWrite(main, object, loaded, 0)
     llvmGcRootRelease(main, object)
     llvmReturnI32Zero(main)
 
@@ -1865,7 +1943,9 @@ pub fn llvmSmokeStructFieldIR(sourcePath: String) -> String {
     llvmRenderModuleWithGlobalsAndTypes(
         sourcePath,
         "",
-        [llvmStructTypeDef("Point", ["i64", "i64"])],
+        [
+            llvmStructTypeDef("Point", ["i64", "i64"]),
+        ],
         [],
         [
             llvmRenderFunction("i32", "main", [], main.body),
@@ -1893,7 +1973,9 @@ pub fn llvmSmokeStructReturnIR(sourcePath: String) -> String {
     llvmRenderModuleWithGlobalsAndTypes(
         sourcePath,
         "",
-        [llvmStructTypeDef("Pair", ["i64", "i64"])],
+        [
+            llvmStructTypeDef("Pair", ["i64", "i64"]),
+        ],
         [],
         [
             llvmRenderFunction("%Pair", "makePair", [], makePair.body),
@@ -1922,7 +2004,9 @@ pub fn llvmSmokeStructParamIR(sourcePath: String) -> String {
     llvmRenderModuleWithGlobalsAndTypes(
         sourcePath,
         "",
-        [llvmStructTypeDef("Score", ["i64", "i64"])],
+        [
+            llvmStructTypeDef("Score", ["i64", "i64"]),
+        ],
         [],
         [
             llvmRenderFunction("i64", "total", [llvmParam("score", "%Score")], total.body),
@@ -1941,7 +2025,9 @@ pub fn llvmSmokeStructMutableIR(sourcePath: String) -> String {
     llvmRenderModuleWithGlobalsAndTypes(
         sourcePath,
         "",
-        [llvmStructTypeDef("Box", ["i64"])],
+        [
+            llvmStructTypeDef("Box", ["i64"]),
+        ],
         [],
         [
             llvmRenderFunction("i32", "main", [], main.body),
@@ -2156,7 +2242,9 @@ pub fn llvmSmokeEnumPayloadIR(sourcePath: String) -> String {
     llvmRenderModuleWithGlobalsAndTypes(
         sourcePath,
         "",
-        [llvmStructTypeDef("Maybe", ["i64", "i64"])],
+        [
+            llvmStructTypeDef("Maybe", ["i64", "i64"]),
+        ],
         [],
         [
             llvmRenderFunction("i32", "main", [], main.body),
@@ -2187,7 +2275,9 @@ pub fn llvmSmokeEnumPayloadReturnIR(sourcePath: String) -> String {
     llvmRenderModuleWithGlobalsAndTypes(
         sourcePath,
         "",
-        [llvmStructTypeDef("Maybe", ["i64", "i64"])],
+        [
+            llvmStructTypeDef("Maybe", ["i64", "i64"]),
+        ],
         [],
         [
             llvmRenderFunction("%Maybe", "pick", [], pick.body),
@@ -2219,7 +2309,9 @@ pub fn llvmSmokeEnumPayloadParamIR(sourcePath: String) -> String {
     llvmRenderModuleWithGlobalsAndTypes(
         sourcePath,
         "",
-        [llvmStructTypeDef("Maybe", ["i64", "i64"])],
+        [
+            llvmStructTypeDef("Maybe", ["i64", "i64"]),
+        ],
         [],
         [
             llvmRenderFunction("i64", "score", [llvmParam("value", "%Maybe")], score.body),
@@ -2246,7 +2338,9 @@ pub fn llvmSmokeEnumPayloadMutableIR(sourcePath: String) -> String {
     llvmRenderModuleWithGlobalsAndTypes(
         sourcePath,
         "",
-        [llvmStructTypeDef("Maybe", ["i64", "i64"])],
+        [
+            llvmStructTypeDef("Maybe", ["i64", "i64"]),
+        ],
         [],
         [
             llvmRenderFunction("i32", "main", [], main.body),
@@ -2262,7 +2356,9 @@ pub fn llvmSmokeFloatPrintIR(sourcePath: String) -> String {
     llvmRenderModule(
         sourcePath,
         "",
-        [llvmRenderFunction("i32", "main", [], main.body)],
+        [
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
     )
 }
 
@@ -2278,7 +2374,9 @@ pub fn llvmSmokeFloatArithmeticIR(sourcePath: String) -> String {
     llvmRenderModule(
         sourcePath,
         "",
-        [llvmRenderFunction("i32", "main", [], main.body)],
+        [
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
     )
 }
 
@@ -2349,7 +2447,12 @@ pub fn llvmSmokeFloatCompareIR(sourcePath: String) -> String {
     let cond = llvmLogicalI1(
         main,
         "and",
-        llvmLogicalI1(main, "and", llvmLogicalI1(main, "and", eq, ne), llvmLogicalI1(main, "and", lt, gt)),
+        llvmLogicalI1(
+            main,
+            "and",
+            llvmLogicalI1(main, "and", eq, ne),
+            llvmLogicalI1(main, "and", lt, gt),
+        ),
         llvmLogicalI1(main, "and", le, ge),
     )
     let labels = llvmIfStart(main, cond)
@@ -2362,7 +2465,9 @@ pub fn llvmSmokeFloatCompareIR(sourcePath: String) -> String {
     llvmRenderModule(
         sourcePath,
         "",
-        [llvmRenderFunction("i32", "main", [], main.body)],
+        [
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
     )
 }
 
@@ -2376,7 +2481,9 @@ pub fn llvmSmokeFloatStructIR(sourcePath: String) -> String {
     llvmRenderModuleWithGlobalsAndTypes(
         sourcePath,
         "",
-        [llvmStructTypeDef("MaybeF", ["i64", "double"])],
+        [
+            llvmStructTypeDef("MaybeF", ["i64", "double"]),
+        ],
         [],
         [
             llvmRenderFunction("i32", "main", [], main.body),
@@ -2402,7 +2509,9 @@ pub fn llvmSmokeFloatEnumPayloadIR(sourcePath: String) -> String {
     llvmRenderModuleWithGlobalsAndTypes(
         sourcePath,
         "",
-        [llvmStructTypeDef("MaybeF", ["i64", "double"])],
+        [
+            llvmStructTypeDef("MaybeF", ["i64", "double"]),
+        ],
         [],
         [
             llvmRenderFunction("i32", "main", [], main.body),
@@ -2433,7 +2542,9 @@ pub fn llvmSmokeFloatPayloadReturnIR(sourcePath: String) -> String {
     llvmRenderModuleWithGlobalsAndTypes(
         sourcePath,
         "",
-        [llvmStructTypeDef("FloatMaybe", ["i64", "double"])],
+        [
+            llvmStructTypeDef("FloatMaybe", ["i64", "double"]),
+        ],
         [],
         [
             llvmRenderFunction("%FloatMaybe", "pick", [], pick.body),
@@ -2465,7 +2576,9 @@ pub fn llvmSmokeFloatPayloadParamIR(sourcePath: String) -> String {
     llvmRenderModuleWithGlobalsAndTypes(
         sourcePath,
         "",
-        [llvmStructTypeDef("FloatMaybe", ["i64", "double"])],
+        [
+            llvmStructTypeDef("FloatMaybe", ["i64", "double"]),
+        ],
         [],
         [
             llvmRenderFunction("double", "score", [llvmParam("value", "%FloatMaybe")], score.body),
@@ -2476,8 +2589,16 @@ pub fn llvmSmokeFloatPayloadParamIR(sourcePath: String) -> String {
 
 pub fn llvmSmokeFloatPayloadMutableIR(sourcePath: String) -> String {
     let main = llvmEmitter()
-    llvmMutableLet(main, "value", llvmEnumPayloadVariant(main, "%FloatMaybe", 1, llvmFloatLiteral("0.0")))
-    let _ = llvmAssign(main, "value", llvmEnumPayloadVariant(main, "%FloatMaybe", 0, llvmFloatLiteral("42.0")))
+    llvmMutableLet(
+        main,
+        "value",
+        llvmEnumPayloadVariant(main, "%FloatMaybe", 1, llvmFloatLiteral("0.0")),
+    )
+    let _ = llvmAssign(
+        main,
+        "value",
+        llvmEnumPayloadVariant(main, "%FloatMaybe", 0, llvmFloatLiteral("42.0")),
+    )
     let valueRef = llvmIdent(main, "value")
     let tag = llvmExtractValue(main, valueRef, "i64", 0)
     let cond = llvmCompare(main, "eq", tag, llvmEnumVariant("FloatMaybe", 0))
@@ -2492,7 +2613,9 @@ pub fn llvmSmokeFloatPayloadMutableIR(sourcePath: String) -> String {
     llvmRenderModuleWithGlobalsAndTypes(
         sourcePath,
         "",
-        [llvmStructTypeDef("FloatMaybe", ["i64", "double"])],
+        [
+            llvmStructTypeDef("FloatMaybe", ["i64", "double"]),
+        ],
         [],
         [
             llvmRenderFunction("i32", "main", [], main.body),
@@ -2518,7 +2641,9 @@ pub fn llvmSmokeFloatPayloadReversedMatchIR(sourcePath: String) -> String {
     llvmRenderModuleWithGlobalsAndTypes(
         sourcePath,
         "",
-        [llvmStructTypeDef("FloatMaybe", ["i64", "double"])],
+        [
+            llvmStructTypeDef("FloatMaybe", ["i64", "double"]),
+        ],
         [],
         [
             llvmRenderFunction("i32", "main", [], main.body),
@@ -2544,7 +2669,9 @@ pub fn llvmSmokeFloatPayloadWildcardIR(sourcePath: String) -> String {
     llvmRenderModuleWithGlobalsAndTypes(
         sourcePath,
         "",
-        [llvmStructTypeDef("FloatMaybe", ["i64", "double"])],
+        [
+            llvmStructTypeDef("FloatMaybe", ["i64", "double"]),
+        ],
         [],
         [
             llvmRenderFunction("i32", "main", [], main.body),
@@ -2554,7 +2681,10 @@ pub fn llvmSmokeFloatPayloadWildcardIR(sourcePath: String) -> String {
 
 pub fn llvmSmokeStringPayloadReturnIR(sourcePath: String) -> String {
     let pick = llvmEmitter()
-    llvmReturn(pick, llvmEnumPayloadVariant(pick, "%Label", 0, llvmStringLiteral(pick, "payload string")))
+    llvmReturn(
+        pick,
+        llvmEnumPayloadVariant(pick, "%Label", 0, llvmStringLiteral(pick, "payload string")),
+    )
 
     let score = llvmEmitter()
     let valueRef = llvmCall(score, "%Label", "pick", [])
@@ -2575,7 +2705,9 @@ pub fn llvmSmokeStringPayloadReturnIR(sourcePath: String) -> String {
     llvmRenderModuleWithGlobalsAndTypes(
         sourcePath,
         "",
-        [llvmStructTypeDef("Label", ["i64", "ptr"])],
+        [
+            llvmStructTypeDef("Label", ["i64", "ptr"]),
+        ],
         [],
         [
             llvmRenderFunction("%Label", "pick", [], pick.body),
@@ -2607,7 +2739,9 @@ pub fn llvmSmokeStringPayloadParamIR(sourcePath: String) -> String {
     llvmRenderModuleWithGlobalsAndTypes(
         sourcePath,
         "",
-        [llvmStructTypeDef("Label", ["i64", "ptr"])],
+        [
+            llvmStructTypeDef("Label", ["i64", "ptr"]),
+        ],
         [],
         [
             llvmRenderFunction("ptr", "score", [llvmParam("value", "%Label")], score.body),
@@ -2618,8 +2752,16 @@ pub fn llvmSmokeStringPayloadParamIR(sourcePath: String) -> String {
 
 pub fn llvmSmokeStringPayloadMutableIR(sourcePath: String) -> String {
     let main = llvmEmitter()
-    llvmMutableLet(main, "value", llvmEnumPayloadVariant(main, "%Label", 1, llvmStringLiteral(main, "no payload")))
-    let _ = llvmAssign(main, "value", llvmEnumPayloadVariant(main, "%Label", 0, llvmStringLiteral(main, "payload string")))
+    llvmMutableLet(
+        main,
+        "value",
+        llvmEnumPayloadVariant(main, "%Label", 1, llvmStringLiteral(main, "no payload")),
+    )
+    let _ = llvmAssign(
+        main,
+        "value",
+        llvmEnumPayloadVariant(main, "%Label", 0, llvmStringLiteral(main, "payload string")),
+    )
     let valueRef = llvmIdent(main, "value")
     let tag = llvmExtractValue(main, valueRef, "i64", 0)
     let cond = llvmCompare(main, "eq", tag, llvmEnumVariant("Label", 0))
@@ -2634,7 +2776,9 @@ pub fn llvmSmokeStringPayloadMutableIR(sourcePath: String) -> String {
     llvmRenderModuleWithGlobalsAndTypes(
         sourcePath,
         "",
-        [llvmStructTypeDef("Label", ["i64", "ptr"])],
+        [
+            llvmStructTypeDef("Label", ["i64", "ptr"]),
+        ],
         [],
         [
             llvmRenderFunction("i32", "main", [], main.body),
@@ -2660,7 +2804,9 @@ pub fn llvmSmokeStringPayloadReversedMatchIR(sourcePath: String) -> String {
     llvmRenderModuleWithGlobalsAndTypes(
         sourcePath,
         "",
-        [llvmStructTypeDef("Label", ["i64", "ptr"])],
+        [
+            llvmStructTypeDef("Label", ["i64", "ptr"]),
+        ],
         [],
         [
             llvmRenderFunction("i32", "main", [], main.body),
@@ -2686,7 +2832,9 @@ pub fn llvmSmokeStringPayloadWildcardIR(sourcePath: String) -> String {
     llvmRenderModuleWithGlobalsAndTypes(
         sourcePath,
         "",
-        [llvmStructTypeDef("Label", ["i64", "ptr"])],
+        [
+            llvmStructTypeDef("Label", ["i64", "ptr"]),
+        ],
         [],
         [
             llvmRenderFunction("i32", "main", [], main.body),
@@ -2843,7 +2991,9 @@ pub fn llvmSmokeStructStringFieldIR(sourcePath: String) -> String {
     llvmRenderModuleWithGlobalsAndTypes(
         sourcePath,
         "",
-        [llvmStructTypeDef("Message", ["ptr"])],
+        [
+            llvmStructTypeDef("Message", ["ptr"]),
+        ],
         main.stringGlobals,
         [
             llvmRenderFunction("i32", "main", [], main.body),
@@ -2866,7 +3016,9 @@ pub fn llvmSmokeStructBoolFieldIR(sourcePath: String) -> String {
     llvmRenderModuleWithGlobalsAndTypes(
         sourcePath,
         "",
-        [llvmStructTypeDef("Gate", ["i1"])],
+        [
+            llvmStructTypeDef("Gate", ["i1"]),
+        ],
         [],
         [
             llvmRenderFunction("i32", "main", [], main.body),

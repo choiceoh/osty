@@ -373,7 +373,7 @@ func llvmCallVoid(emitter *LlvmEmitter, name string, args []*LlvmValue) {
 
 // Osty: examples/selfhost-core/llvmgen.osty:275:5
 func llvmGcRuntimeDeclarations() []string {
-	return []string{"declare ptr @osty.gc.alloc_v1(i64, i64, ptr)", "declare void @osty.gc.post_write_v1(ptr, ptr, i64)", "declare void @osty.gc.root_bind_v1(ptr)", "declare void @osty.gc.root_release_v1(ptr)"}
+	return []string{"declare ptr @osty.gc.alloc_v1(i64, i64, ptr)", "declare void @osty.gc.pre_write_v1(ptr, ptr, i64)", "declare void @osty.gc.post_write_v1(ptr, ptr, i64)", "declare ptr @osty.gc.load_v1(ptr)", "declare void @osty.gc.root_bind_v1(ptr)", "declare void @osty.gc.root_release_v1(ptr)"}
 }
 
 // Osty: examples/selfhost-core/llvmgen.osty:284:5
@@ -388,14 +388,25 @@ func llvmGcPostWrite(emitter *LlvmEmitter, owner *LlvmValue, value *LlvmValue, s
 }
 
 // Osty: examples/selfhost-core/llvmgen.osty:319:5
+func llvmGcPreWrite(emitter *LlvmEmitter, owner *LlvmValue, value *LlvmValue, slotKind int) {
+	// Osty: examples/selfhost-core/llvmgen.osty:325:5
+	llvmCallVoid(emitter, "osty.gc.pre_write_v1", []*LlvmValue{owner, value, llvmIntLiteral(slotKind)})
+}
+
+// Osty: examples/selfhost-core/llvmgen.osty:336:5
+func llvmGcLoad(emitter *LlvmEmitter, value *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "ptr", "osty.gc.load_v1", []*LlvmValue{value})
+}
+
+// Osty: examples/selfhost-core/llvmgen.osty:340:5
 func llvmGcRootBind(emitter *LlvmEmitter, value *LlvmValue) {
-	// Osty: examples/selfhost-core/llvmgen.osty:320:5
+	// Osty: examples/selfhost-core/llvmgen.osty:341:5
 	llvmCallVoid(emitter, "osty.gc.root_bind_v1", []*LlvmValue{value})
 }
 
-// Osty: examples/selfhost-core/llvmgen.osty:323:5
+// Osty: examples/selfhost-core/llvmgen.osty:344:5
 func llvmGcRootRelease(emitter *LlvmEmitter, value *LlvmValue) {
-	// Osty: examples/selfhost-core/llvmgen.osty:324:5
+	// Osty: examples/selfhost-core/llvmgen.osty:345:5
 	llvmCallVoid(emitter, "osty.gc.root_release_v1", []*LlvmValue{value})
 }
 
@@ -1556,10 +1567,15 @@ func llvmSmokeGcRuntimeAbiIR(sourcePath string) string {
 	child := llvmGcAlloc(main, 2, 16, "llvm.gc.child")
 	_ = child
 	// Osty: examples/selfhost-core/llvmgen.osty:1169:5
-	llvmGcPostWrite(main, object, child, 0)
+	llvmGcPreWrite(main, object, child, 0)
 	// Osty: examples/selfhost-core/llvmgen.osty:1170:5
-	llvmGcRootRelease(main, object)
+	loaded := llvmGcLoad(main, child)
+	_ = loaded
 	// Osty: examples/selfhost-core/llvmgen.osty:1171:5
+	llvmGcPostWrite(main, object, loaded, 0)
+	// Osty: examples/selfhost-core/llvmgen.osty:1172:5
+	llvmGcRootRelease(main, object)
+	// Osty: examples/selfhost-core/llvmgen.osty:1173:5
 	llvmReturnI32Zero(main)
 	return llvmRenderModuleWithGcRuntime(sourcePath, "", make([]string, 0, 1), main.stringGlobals, []string{llvmRenderFunction("i32", "main", make([]*LlvmParam, 0, 1), main.body)})
 }
