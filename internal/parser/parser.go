@@ -4,7 +4,7 @@ package parser
 import (
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
-	"github.com/osty/osty/internal/selfhost"
+	"github.com/osty/osty/internal/docgen"
 )
 
 // Error is retained as an alias for back-compat. New code should use
@@ -24,5 +24,5 @@ func Parse(src []byte) (*ast.File, []error) {
 // ParseDiagnostics is the structured form of Parse. It returns the rich
 // diagnostic objects so callers can render snippets, hints, and codes.
 func ParseDiagnostics(src []byte) (*ast.File, []*diag.Diagnostic) {
-	return selfhost.Parse(src)
+	return docgen.Parse(src)
 }
