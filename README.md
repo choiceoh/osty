@@ -29,7 +29,7 @@ coverage. The public compiler path is now native-only through the LLVM backend.
 | Diagnostics (`error[E0002]:` with caret, hints, notes) | done |
 | Name resolution (single + multi-file, workspace, typo suggestions) | done |
 | Formatter (`internal/format`) | done |
-| Type checker (`internal/check`) | done for v0.4 front-end core — generic instantiation, structural interface checks, exhaustiveness, builder protocol, function-value arity, closure pattern params |
+| Type checker (`internal/check`) | done for v0.4 front-end core — generic instantiation, structural interface checks, exhaustiveness, builder protocol, function-value arity, closure pattern params. Algorithm: bidirectional + local unification, spec in [`LANG_SPEC_v0.4/02a-type-inference.md`](./LANG_SPEC_v0.4/02a-type-inference.md); `osty check --inspect` observes it at runtime |
 | Linter (`internal/lint`, L0001–L0042, `--fix` / `--fix-dry-run`) | done |
 | Multi-file packages (`resolve` loader/package/workspace) | done |
 | LSP (`internal/lsp`, wired as `osty lsp`) | done — hover, definition, formatting, documentSymbol, lint diagnostics, editor policy backed by toolchain sources |
@@ -217,6 +217,8 @@ osty tokens FILE       # print the token stream (debugging)
 osty parse FILE        # parse to AST, emit JSON
 osty resolve FILE|DIR  # name resolution; directory = package mode (--scopes for tree)
 osty check FILE|DIR    # lex + parse + resolve + type-check (diagnostics only)
+                       # --inspect prints one record per expression with the
+                       # inference rule applied (see LANG_SPEC_v0.4/02a-type-inference.md)
 osty typecheck FILE    # same as check, plus a per-expression type dump
 osty lint FILE|DIR     # style + correctness warnings (L0xxx codes)
 osty fmt FILE          # repair + format to canonical style (see --check, --write, --engine)
@@ -249,6 +251,9 @@ Global flags (precede the subcommand):
   applies to `tokens`, `parse`, `resolve`, `check`, `typecheck`, `lint`
 - `--explain` — after diagnostics, append the `osty explain CODE` text for each
   unique code; applies to `check`, `typecheck`, `resolve`, `lint`, `parse`, `tokens`
+- `--inspect` — `check`-only: emit one record per expression naming the
+  inference rule and the type/hint the checker used. Pairs with `--json` for
+  NDJSON output. See [`LANG_SPEC_v0.4/02a-type-inference.md`](./LANG_SPEC_v0.4/02a-type-inference.md).
 
 `fmt`-specific flags (after the subcommand):
 
