@@ -41,8 +41,15 @@ func parseCLIEmitMode(raw string) (backend.EmitMode, error) {
 func validateCLIEmit(tool string, name backend.Name, mode backend.EmitMode) error {
 	switch tool {
 	case "gen", "pipeline":
-		if mode != backend.EmitLLVMIR {
-			return fmt.Errorf("%s with backend %q cannot emit %q (want %q)", tool, name, mode, backend.EmitLLVMIR)
+		switch name {
+		case backend.NameGo:
+			if mode != backend.EmitGoSource {
+				return fmt.Errorf("%s with backend %q cannot emit %q (want %q)", tool, name, mode, backend.EmitGoSource)
+			}
+		case backend.NameLLVM:
+			if mode != backend.EmitLLVMIR {
+				return fmt.Errorf("%s with backend %q cannot emit %q (want %q)", tool, name, mode, backend.EmitLLVMIR)
+			}
 		}
 	case "run", "test":
 		if mode != backend.EmitBinary {

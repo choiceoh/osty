@@ -26,8 +26,6 @@ var sourceFiles = []string{
 	"internal/selfhost/ast_lower.osty",
 }
 
-const mergedPath = "/tmp/selfhost_merged.osty"
-
 const stringsPrelude = `use go "strings" as strings {
     fn Count(s: String, substr: String) -> Int
     fn Fields(s: String) -> List<String>
@@ -56,23 +54,71 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	outPath := filepath.Join(root, "internal/selfhost/generated.go")
+	if upToDate, err := generatedSelfhostUpToDate(root, outPath); err == nil && upToDate {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	tmpDir, err := os.MkdirTemp("", "osty-selfhostgen-*")
+	if err != nil {
+		return fmt.Errorf("create selfhost temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
 	merged, err := mergedSource(root)
 	if err != nil {
 		return err
 	}
+	mergedPath := filepath.Join(tmpDir, "selfhost_merged.osty")
 	if err := os.WriteFile(mergedPath, merged, 0o644); err != nil {
 		return fmt.Errorf("write merged selfhost source: %w", err)
 	}
-	defer os.Remove(mergedPath)
 
-	outPath := filepath.Join(root, "internal/selfhost/generated.go")
-	cmd := exec.Command("go", "run", "-tags", "selfhostgen", "./cmd/osty", "gen", "--package", "selfhost", "-o", outPath, mergedPath)
+	cmd := exec.Command(
+		"go", "run", "-tags", "selfhostgen", "./cmd/osty", "gen",
+		"--backend", "go",
+		"--emit", "go",
+		"--package", "selfhost",
+		"-o", outPath,
+		mergedPath,
+	)
 	cmd.Dir = root
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("generate selfhost parser: %w\n%s", err, bytes.TrimSpace(output))
 	}
 	return patchGenerated(outPath)
+}
+
+func generatedSelfhostUpToDate(root, outPath string) (bool, error) {
+	outInfo, err := os.Stat(outPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("stat generated selfhost code: %w", err)
+	}
+	newest := outInfo.ModTime()
+	checkPath := func(path string) error {
+		info, err := os.Stat(path)
+		if err != nil {
+			return err
+		}
+		if info.ModTime().After(newest) {
+			newest = info.ModTime()
+		}
+		return nil
+	}
+	if err := checkPath(filepath.Join(root, "internal/selfhost/gen_selfhost.go")); err != nil {
+		return false, fmt.Errorf("stat selfhost generator: %w", err)
+	}
+	for _, rel := range sourceFiles {
+		if err := checkPath(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
+			return false, fmt.Errorf("stat %s: %w", rel, err)
+		}
+	}
+	return !outInfo.ModTime().Before(newest), nil
 }
 
 func findRepoRoot() (string, error) {
@@ -143,6 +189,7 @@ func patchGenerated(path string) error {
 		return fmt.Errorf("read generated selfhost code: %w", err)
 	}
 	src := string(data)
+	src = normalizeGeneratedSourceComment(src)
 	for _, fn := range []struct {
 		name string
 		body string
@@ -167,6 +214,18 @@ func patchGenerated(path string) error {
 		return fmt.Errorf("write generated selfhost code: %w", err)
 	}
 	return nil
+}
+
+func normalizeGeneratedSourceComment(src string) string {
+	const prefix = "// Osty source: "
+	lines := strings.Split(src, "\n")
+	for i, line := range lines {
+		if strings.HasPrefix(line, prefix) && strings.HasSuffix(line, "selfhost_merged.osty") {
+			lines[i] = prefix + "/tmp/selfhost_merged.osty"
+			break
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func replaceGeneratedFunction(src, name, replacement string) (string, error) {
