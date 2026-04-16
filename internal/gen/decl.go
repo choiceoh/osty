@@ -444,9 +444,10 @@ func (g *gen) emitUseDecl(u *ast.UseDecl) {
 		if u.IsRuntimeFFI {
 			importPath = runtimeFFIGoImport(u.RuntimePath)
 		}
-		// FFI declarations carry signatures in Osty source. The bootstrap Go
-		// emitter maps runtime FFI paths onto temporary host imports until the
-		// native runtime owns those calls.
+		// FFI declarations carry signatures in Osty source. The remaining Go
+		// emitter only preserves generic runtime FFI import text; bootstrap-only
+		// selfhost bridges are intentionally removed so native/runtime-backed
+		// lowering owns that path.
 		//
 		// Emit a real Go import. When the Osty alias matches the Go
 		// package's default name (last path component), a bare import
@@ -1283,8 +1284,6 @@ func runtimeFFIGoImport(path string) string {
 		return "path/filepath"
 	case "runtime.net.http":
 		return "net/http"
-	case "runtime.selfhost.astbridge":
-		return "github.com/osty/osty/internal/selfhost/astbridge"
 	default:
 		return path
 	}
