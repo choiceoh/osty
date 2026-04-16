@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -285,6 +286,8 @@ type generator struct {
 
 	needsGCRuntime bool
 	gcRootSlots    []value
+	gcRootMarks    []int
+	nextSafepoint  int
 }
 
 type declarations struct {
@@ -337,9 +340,10 @@ type enumInfo struct {
 }
 
 type variantInfo struct {
-	name     string
-	tag      int
-	payloads []string
+	name               string
+	tag                int
+	payloads           []string
+	payloadListElemTyp string
 }
 
 type enumVariantRef struct {
@@ -348,18 +352,21 @@ type enumVariantRef struct {
 }
 
 type enumPatternInfo struct {
-	variant           variantInfo
-	payloadName       string
-	payloadType       string
-	hasPayloadBinding bool
+	variant            variantInfo
+	payloadName        string
+	payloadType        string
+	payloadListElemTyp string
+	hasPayloadBinding  bool
 }
 
 type value struct {
 	typ         string
 	ref         string
 	ptr         bool
+	mutable     bool
 	gcManaged   bool
 	listElemTyp string
+	rootPaths   [][]int
 }
 
 const (
@@ -404,7 +411,7 @@ func collectDeclarations(file *ast.File) (*declarations, error) {
 			out.structsByName[info.name] = info
 			out.structsByType[info.typ] = info
 		case *ast.EnumDecl:
-			info, err := collectEnum(d)
+			info, err := collectEnum(d, out.structsByName)
 			if err != nil {
 				return nil, err
 			}
@@ -655,7 +662,7 @@ func collectStructFields(info *structInfo, structs map[string]*structInfo) error
 	return nil
 }
 
-func collectEnum(decl *ast.EnumDecl) (*enumInfo, error) {
+func collectEnum(decl *ast.EnumDecl, structs map[string]*structInfo) (*enumInfo, error) {
 	if decl == nil {
 		return nil, unsupported("source-layout", "nil enum")
 	}
@@ -676,6 +683,7 @@ func collectEnum(decl *ast.EnumDecl) (*enumInfo, error) {
 			return nil, unsupported(diag.kind, diag.message)
 		}
 		payloads := make([]string, 0, len(variant.Fields))
+		payloadListElemTyp := ""
 		if len(variant.Fields) == 1 {
 			typ, err := llvmEnumPayloadType(variant.Fields[0])
 			if err != nil {
@@ -689,13 +697,24 @@ func collectEnum(decl *ast.EnumDecl) (*enumInfo, error) {
 				return nil, unsupported(diag.kind, diag.message)
 			}
 			payloads = append(payloads, typ)
+			if listElemTyp, ok, err := llvmListElementType(variant.Fields[0], structs, nil); err != nil {
+				diag := llvmEnumPayloadDiagnostic(decl.Name, variant.Name, unsupportedMessage(err), "", "")
+				return nil, unsupported(diag.kind, diag.message)
+			} else if ok {
+				payloadListElemTyp = listElemTyp
+			}
 			info.hasPayload = true
 		}
 		if _, exists := info.variants[variant.Name]; exists {
 			diag := llvmEnumVariantHeaderDiagnostic(decl.Name, variant.Name, true, len(variant.Fields), true)
 			return nil, unsupported(diag.kind, diag.message)
 		}
-		info.variants[variant.Name] = variantInfo{name: variant.Name, tag: i, payloads: payloads}
+		info.variants[variant.Name] = variantInfo{
+			name:               variant.Name,
+			tag:                i,
+			payloads:           payloads,
+			payloadListElemTyp: payloadListElemTyp,
+		}
 	}
 	info.typ = llvmEnumStorageType(info.name, info.hasPayload)
 	return info, nil
@@ -812,7 +831,8 @@ func (g *generator) emitUserFunction(sig *fnSig) (string, error) {
 		if p.listElemTyp != "" {
 			v.gcManaged = true
 		}
-		g.bindLocal(p.name, v)
+		v.rootPaths = g.rootPathsForType(p.typ)
+		g.bindNamedLocal(p.name, v, false)
 	}
 	if sig.ret == "void" {
 		if err := g.emitBlock(sig.decl.Body.Stmts); err != nil {
@@ -837,6 +857,8 @@ func (g *generator) beginFunction() {
 	g.locals = []map[string]value{{}}
 	g.returnType = ""
 	g.gcRootSlots = nil
+	g.gcRootMarks = []int{0}
+	g.nextSafepoint = 1
 	g.currentBlock = "entry"
 }
 
@@ -861,6 +883,39 @@ func (g *generator) releaseGCRoots(emitter *LlvmEmitter) {
 	for i := len(g.gcRootSlots) - 1; i >= 0; i-- {
 		llvmGcRootRelease(emitter, toOstyValue(g.gcRootSlots[i]))
 	}
+}
+
+func (g *generator) emitGCSafepoint(emitter *LlvmEmitter) {
+	g.declareRuntimeSymbol("osty.gc.safepoint_v1", "void", []paramInfo{
+		{typ: "i64"},
+		{typ: "ptr"},
+		{typ: "i64"},
+	})
+	id := g.nextSafepoint
+	g.nextSafepoint++
+	roots := g.visibleSafepointRoots()
+	if len(roots) == 0 {
+		emitter.body = append(emitter.body, fmt.Sprintf(
+			"  call void @osty.gc.safepoint_v1(i64 %d, ptr null, i64 0)",
+			id,
+		))
+		g.needsGCRuntime = true
+		return
+	}
+	slotsPtr := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca ptr, i64 %d", slotsPtr, len(roots)))
+	for i, root := range roots {
+		slotPtr := llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = getelementptr ptr, ptr %s, i64 %d", slotPtr, slotsPtr, i))
+		emitter.body = append(emitter.body, fmt.Sprintf("  store ptr %s, ptr %s", g.safepointRootAddress(emitter, root), slotPtr))
+	}
+	emitter.body = append(emitter.body, fmt.Sprintf(
+		"  call void @osty.gc.safepoint_v1(i64 %d, ptr %s, i64 %d)",
+		id,
+		slotsPtr,
+		len(roots),
+	))
+	g.needsGCRuntime = true
 }
 
 func (g *generator) emitReturningBlock(stmts []ast.Stmt, retType, retListElemTyp string) error {
@@ -971,18 +1026,7 @@ func (g *generator) emitLet(stmt *ast.LetStmt) error {
 			return unsupportedf("type-system", "let %q type %s, value %s", name, typ, v.typ)
 		}
 	}
-	if stmt.Mut {
-		emitter := g.toOstyEmitter()
-		slot := llvmMutableLetSlot(emitter, name, toOstyValue(v))
-		slotValue := fromOstyValue(slot)
-		slotValue.gcManaged = v.gcManaged
-		slotValue.listElemTyp = v.listElemTyp
-		g.bindGCRootIfManagedPointer(emitter, slotValue)
-		g.takeOstyEmitter(emitter)
-		g.bindLocal(name, slotValue)
-		return nil
-	}
-	g.bindLocal(name, v)
+	g.bindNamedLocal(name, v, stmt.Mut)
 	return nil
 }
 
@@ -1001,7 +1045,7 @@ func (g *generator) emitAssign(stmt *ast.AssignStmt) error {
 	if !ok {
 		return unsupportedf("name", "assignment to unknown identifier %q", target.Name)
 	}
-	if !slot.ptr {
+	if !slot.mutable {
 		return unsupportedf("statement", "assignment to immutable identifier %q", target.Name)
 	}
 	v, err := g.emitExprWithListHint(stmt.Value, slot.listElemTyp)
@@ -1061,6 +1105,7 @@ func (g *generator) emitFor(stmt *ast.ForStmt) error {
 	}
 	g.popScope()
 	emitter = g.toOstyEmitter()
+	g.emitGCSafepoint(emitter)
 	llvmRangeEnd(emitter, loop)
 	g.takeOstyEmitter(emitter)
 	return nil
@@ -1380,6 +1425,7 @@ func (g *generator) loadIfPointer(v value) (value, error) {
 	loaded := fromOstyValue(out)
 	loaded.gcManaged = v.gcManaged
 	loaded.listElemTyp = v.listElemTyp
+	loaded.rootPaths = cloneRootPaths(v.rootPaths)
 	return loaded, nil
 }
 
@@ -1435,7 +1481,9 @@ func (g *generator) emitStructLit(lit *ast.StructLit) (value, error) {
 	emitter := g.toOstyEmitter()
 	out := llvmStructLiteral(emitter, info.typ, values)
 	g.takeOstyEmitter(emitter)
-	return fromOstyValue(out), nil
+	litValue := fromOstyValue(out)
+	litValue.rootPaths = g.rootPathsForType(info.typ)
+	return litValue, nil
 }
 
 func (g *generator) emitFieldExpr(expr *ast.FieldExpr) (value, error) {
@@ -1463,6 +1511,7 @@ func (g *generator) emitFieldExpr(expr *ast.FieldExpr) (value, error) {
 	loaded := fromOstyValue(out)
 	loaded.listElemTyp = field.listElemTyp
 	loaded.gcManaged = field.listElemTyp != ""
+	loaded.rootPaths = g.rootPathsForType(field.typ)
 	return loaded, nil
 }
 
@@ -1536,7 +1585,9 @@ func (g *generator) emitEnumPayloadVariant(info *enumInfo, variant variantInfo, 
 	emitter := g.toOstyEmitter()
 	out := llvmEnumPayloadVariant(emitter, info.typ, variant.tag, toOstyValue(payload))
 	g.takeOstyEmitter(emitter)
-	return fromOstyValue(out), nil
+	enumValue := fromOstyValue(out)
+	enumValue.rootPaths = g.rootPathsForType(info.typ)
+	return enumValue, nil
 }
 
 func (g *generator) emitUnary(e *ast.UnaryExpr) (value, error) {
@@ -1799,6 +1850,7 @@ func (g *generator) emitIfExprPhi(labels *LlvmIfLabels, thenPred, elsePred strin
 		out.listElemTyp = thenValue.listElemTyp
 		out.gcManaged = thenValue.gcManaged || elseValue.gcManaged
 	}
+	out.rootPaths = g.rootPathsForType(out.typ)
 	return out, nil
 }
 
@@ -2306,6 +2358,7 @@ func (g *generator) emitListFor(stmt *ast.ForStmt, iterName, elemTyp string) err
 	}
 	g.popScope()
 	emitter = g.toOstyEmitter()
+	g.emitGCSafepoint(emitter)
 	llvmRangeEnd(emitter, loop)
 	g.takeOstyEmitter(emitter)
 	return nil
@@ -2395,7 +2448,10 @@ func (g *generator) bindPayloadEnumPattern(scrutinee value, pattern enumPatternI
 	emitter := g.toOstyEmitter()
 	payload := llvmExtractValue(emitter, toOstyValue(scrutinee), pattern.payloadType, 1)
 	g.takeOstyEmitter(emitter)
-	g.bindLocal(pattern.payloadName, fromOstyValue(payload))
+	payloadValue := fromOstyValue(payload)
+	payloadValue.listElemTyp = pattern.payloadListElemTyp
+	payloadValue.gcManaged = pattern.payloadListElemTyp != ""
+	g.bindNamedLocal(pattern.payloadName, payloadValue, false)
 	return nil
 }
 
@@ -2430,6 +2486,7 @@ func (g *generator) matchPayloadEnumPattern(info *enumInfo, pattern ast.Pattern)
 			return out, true, nil
 		}
 		out.payloadType = variant.payloads[0]
+		out.payloadListElemTyp = variant.payloadListElemTyp
 		switch arg := p.Args[0].(type) {
 		case *ast.IdentPat:
 			if !llvmIsIdent(arg.Name) {
@@ -2528,16 +2585,20 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 	if sig.ret == "void" {
 		return value{}, unsupportedf("call", "function %q has no return value", id.Name)
 	}
+	emitter := g.toOstyEmitter()
+	g.emitGCSafepoint(emitter)
+	g.takeOstyEmitter(emitter)
 	args, err := g.userCallArgs(sig, call)
 	if err != nil {
 		return value{}, err
 	}
-	emitter := g.toOstyEmitter()
+	emitter = g.toOstyEmitter()
 	out := llvmCall(emitter, sig.ret, sig.name, args)
 	g.takeOstyEmitter(emitter)
 	ret := fromOstyValue(out)
 	ret.listElemTyp = sig.retListElemTyp
 	ret.gcManaged = sig.retListElemTyp != ""
+	ret.rootPaths = g.rootPathsForType(sig.ret)
 	return ret, nil
 }
 
@@ -2549,17 +2610,21 @@ func (g *generator) emitRuntimeFFICall(call *ast.CallExpr) (value, bool, error) 
 	if fn.ret == "void" {
 		return value{}, true, unsupportedf("call", "runtime FFI %s.%s has no return value", fn.path, fn.sourceName)
 	}
+	emitter := g.toOstyEmitter()
+	g.emitGCSafepoint(emitter)
+	g.takeOstyEmitter(emitter)
 	args, err := g.runtimeFFICallArgs(fn, call.Args)
 	if err != nil {
 		return value{}, true, err
 	}
 	g.declareRuntimeFFI(fn)
-	emitter := g.toOstyEmitter()
+	emitter = g.toOstyEmitter()
 	out := llvmCall(emitter, fn.ret, fn.symbol, args)
 	g.takeOstyEmitter(emitter)
 	ret := fromOstyValue(out)
 	ret.listElemTyp = fn.listElemTyp
 	ret.gcManaged = fn.listElemTyp != ""
+	ret.rootPaths = g.rootPathsForType(fn.ret)
 	return ret, true, nil
 }
 
@@ -2568,6 +2633,9 @@ func (g *generator) emitRuntimeFFICallStmt(call *ast.CallExpr) (bool, error) {
 	if !found || err != nil {
 		return found, err
 	}
+	emitter := g.toOstyEmitter()
+	g.emitGCSafepoint(emitter)
+	g.takeOstyEmitter(emitter)
 	args, err := g.runtimeFFICallArgs(fn, call.Args)
 	if err != nil {
 		return true, err
@@ -2577,7 +2645,7 @@ func (g *generator) emitRuntimeFFICallStmt(call *ast.CallExpr) (bool, error) {
 		g.body = append(g.body, fmt.Sprintf("  call void @%s(%s)", fn.symbol, llvmCallArgs(args)))
 		return true, nil
 	}
-	emitter := g.toOstyEmitter()
+	emitter = g.toOstyEmitter()
 	llvmCall(emitter, fn.ret, fn.symbol, args)
 	g.takeOstyEmitter(emitter)
 	return true, nil
@@ -2592,11 +2660,14 @@ func (g *generator) emitUserCallStmt(call *ast.CallExpr) (bool, error) {
 	if sig == nil {
 		return false, nil
 	}
+	emitter := g.toOstyEmitter()
+	g.emitGCSafepoint(emitter)
+	g.takeOstyEmitter(emitter)
 	args, err := g.userCallArgs(sig, call)
 	if err != nil {
 		return true, err
 	}
-	emitter := g.toOstyEmitter()
+	emitter = g.toOstyEmitter()
 	if sig.ret == "void" {
 		emitter.body = append(emitter.body, fmt.Sprintf("  call void @%s(%s)", sig.name, llvmCallArgs(args)))
 	} else {
@@ -2857,10 +2928,185 @@ func toLLVMParams(params []paramInfo) []*LlvmParam {
 
 func (g *generator) pushScope() {
 	g.locals = append(g.locals, map[string]value{})
+	g.gcRootMarks = append(g.gcRootMarks, len(g.gcRootSlots))
 }
 
 func (g *generator) popScope() {
+	mark := 0
+	if len(g.gcRootMarks) != 0 {
+		mark = g.gcRootMarks[len(g.gcRootMarks)-1]
+		g.gcRootMarks = g.gcRootMarks[:len(g.gcRootMarks)-1]
+	}
+	if mark < len(g.gcRootSlots) {
+		emitter := g.toOstyEmitter()
+		for i := len(g.gcRootSlots) - 1; i >= mark; i-- {
+			llvmGcRootRelease(emitter, toOstyValue(g.gcRootSlots[i]))
+		}
+		g.takeOstyEmitter(emitter)
+		g.gcRootSlots = g.gcRootSlots[:mark]
+	}
 	g.locals = g.locals[:len(g.locals)-1]
+}
+
+func (g *generator) bindNamedLocal(name string, v value, mutable bool) {
+	if mutable || (v.typ == "ptr" && v.gcManaged) || len(v.rootPaths) != 0 {
+		emitter := g.toOstyEmitter()
+		slot := llvmMutableLetSlot(emitter, name, toOstyValue(v))
+		slotValue := fromOstyValue(slot)
+		slotValue.gcManaged = v.gcManaged
+		slotValue.listElemTyp = v.listElemTyp
+		slotValue.mutable = mutable
+		slotValue.rootPaths = cloneRootPaths(v.rootPaths)
+		g.bindGCRootIfManagedPointer(emitter, slotValue)
+		g.takeOstyEmitter(emitter)
+		g.bindLocal(name, slotValue)
+		return
+	}
+	v.mutable = false
+	g.bindLocal(name, v)
+}
+
+type gcSafepointRoot struct {
+	slot value
+	path []int
+}
+
+func cloneRootPaths(paths [][]int) [][]int {
+	if len(paths) == 0 {
+		return nil
+	}
+	out := make([][]int, 0, len(paths))
+	for _, path := range paths {
+		next := append([]int(nil), path...)
+		out = append(out, next)
+	}
+	return out
+}
+
+func prependRootIndex(index int, paths [][]int) [][]int {
+	if len(paths) == 0 {
+		return nil
+	}
+	out := make([][]int, 0, len(paths))
+	for _, path := range paths {
+		next := make([]int, 0, len(path)+1)
+		next = append(next, index)
+		next = append(next, path...)
+		out = append(out, next)
+	}
+	return out
+}
+
+func (g *generator) rootPathsForType(typ string) [][]int {
+	return g.rootPathsForTypeSeen(typ, map[string]bool{})
+}
+
+func (g *generator) rootPathsForTypeSeen(typ string, seen map[string]bool) [][]int {
+	if typ == "" || typ == "ptr" || typ == "i64" || typ == "i1" || typ == "double" {
+		return nil
+	}
+	if seen[typ] {
+		return nil
+	}
+	if info := g.structsByType[typ]; info != nil {
+		seen[typ] = true
+		var out [][]int
+		for _, field := range info.fields {
+			if field.listElemTyp != "" {
+				out = append(out, []int{field.index})
+				continue
+			}
+			out = append(out, prependRootIndex(field.index, g.rootPathsForTypeSeen(field.typ, seen))...)
+		}
+		delete(seen, typ)
+		return out
+	}
+	if info := g.enumsByType[typ]; info != nil && info.hasPayload {
+		seen[typ] = true
+		defer delete(seen, typ)
+		if info.payloadTyp == "ptr" {
+			return [][]int{{1}}
+		}
+		return prependRootIndex(1, g.rootPathsForTypeSeen(info.payloadTyp, seen))
+	}
+	return nil
+}
+
+func (g *generator) visibleSafepointRoots() []gcSafepointRoot {
+	seen := map[string]struct{}{}
+	out := []gcSafepointRoot{}
+	for i := len(g.locals) - 1; i >= 0; i-- {
+		names := make([]string, 0, len(g.locals[i]))
+		for name := range g.locals[i] {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			if _, exists := seen[name]; exists {
+				continue
+			}
+			seen[name] = struct{}{}
+			slot := g.locals[i][name]
+			if !slot.ptr {
+				continue
+			}
+			if slot.typ == "ptr" && slot.gcManaged {
+				out = append(out, gcSafepointRoot{slot: slot})
+			}
+			for _, path := range slot.rootPaths {
+				out = append(out, gcSafepointRoot{
+					slot: slot,
+					path: append([]int(nil), path...),
+				})
+			}
+		}
+	}
+	return out
+}
+
+func (g *generator) safepointRootAddress(emitter *LlvmEmitter, root gcSafepointRoot) string {
+	if len(root.path) == 0 {
+		return root.slot.ref
+	}
+	addr := root.slot.ref
+	currentType := root.slot.typ
+	for _, index := range root.path {
+		fieldPtr := llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf(
+			"  %s = getelementptr inbounds %s, ptr %s, i32 0, i32 %d",
+			fieldPtr,
+			currentType,
+			addr,
+			index,
+		))
+		nextType, ok := g.aggregateFieldType(currentType, index)
+		if !ok {
+			return addr
+		}
+		addr = fieldPtr
+		currentType = nextType
+	}
+	return addr
+}
+
+func (g *generator) aggregateFieldType(typ string, index int) (string, bool) {
+	if info := g.structsByType[typ]; info != nil {
+		for _, field := range info.fields {
+			if field.index == index {
+				return field.typ, true
+			}
+		}
+		return "", false
+	}
+	if info := g.enumsByType[typ]; info != nil && info.hasPayload {
+		switch index {
+		case 0:
+			return "i64", true
+		case 1:
+			return info.payloadTyp, true
+		}
+	}
+	return "", false
 }
 
 func (g *generator) bindLocal(name string, v value) {
