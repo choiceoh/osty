@@ -1,0 +1,11 @@
+fn pick(flag: Bool) -> String {
+    if flag {
+        "chosen string"
+    } else {
+        "fallback"
+    }
+}
+
+fn main() {
+    println(pick(true))
+}

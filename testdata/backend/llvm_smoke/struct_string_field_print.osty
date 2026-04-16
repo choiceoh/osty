@@ -1,0 +1,8 @@
+struct Message {
+    text: String
+}
+
+fn main() {
+    let msg = Message { text: "struct string" }
+    println(msg.text)
+}

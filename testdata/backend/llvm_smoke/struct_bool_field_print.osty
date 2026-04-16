@@ -1,0 +1,12 @@
+struct Gate {
+    open: Bool
+}
+
+fn main() {
+    let gate = Gate { open: true }
+    if gate.open {
+        println(42)
+    } else {
+        println(0)
+    }
+}

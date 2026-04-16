@@ -1,0 +1,11 @@
+fn ok(a: Int, b: Int) -> Bool {
+    a <= b
+}
+
+fn main() {
+    if ok(40, 42) {
+        println(42)
+    } else {
+        println(0)
+    }
+}

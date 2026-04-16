@@ -82,6 +82,16 @@ Each fixture should be independently checkable as a single file and avoid:
 | `testdata/backend/llvm_smoke/string_payload_mut_print.osty` | `payload string\n` | Phase 61 LLVM IR: String payload enum mutable local and `match` |
 | `testdata/backend/llvm_smoke/string_payload_reversed_match_print.osty` | `payload string\n` | Phase 62 LLVM IR: String payload enum reversed two-arm `match` |
 | `testdata/backend/llvm_smoke/string_payload_wildcard_print.osty` | `payload string\n` | Phase 63 LLVM IR: String payload enum wildcard arm (`_`) in `match` |
+| `testdata/backend/llvm_smoke/int_if_expr_print.osty` | `42\n` | Phase 64 LLVM IR: value-position `if` expression over `Int` |
+| `testdata/backend/llvm_smoke/string_if_expr_print.osty` | `chosen string\n` | Phase 65 LLVM IR: value-position `if` expression over `String` |
+| `testdata/backend/llvm_smoke/float_if_expr_print.osty` | `42.000000\n` | Phase 66 LLVM IR: value-position `if` expression over `Float` |
+| `testdata/backend/llvm_smoke/bool_param_return_print.osty` | `42\n` | Phase 67 LLVM IR: `Bool` parameter and return boundary |
+| `testdata/backend/llvm_smoke/int_range_exclusive_print.osty` | `21\n` | Phase 68 LLVM IR: exclusive `Int` range loop |
+| `testdata/backend/llvm_smoke/int_unary_print.osty` | `42\n` | Phase 69 LLVM IR: unary `Int` expression lowering |
+| `testdata/backend/llvm_smoke/int_modulo_print.osty` | `42\n` | Phase 70 LLVM IR: `Int` modulo lowering |
+| `testdata/backend/llvm_smoke/struct_string_field_print.osty` | `struct string\n` | Phase 71 LLVM IR: `String` field read from simple struct aggregate |
+| `testdata/backend/llvm_smoke/struct_bool_field_print.osty` | `42\n` | Phase 72 LLVM IR: `Bool` field read from simple struct aggregate |
+| `testdata/backend/llvm_smoke/bool_mut_print.osty` | `42\n` | Phase 73 LLVM IR: mutable `Bool` local slot and assignment |
 
 The Phase 10 skeleton behavior and the Phase 12-15 plus Phase 23-63 lowering
 behavior are mirrored in

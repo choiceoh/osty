@@ -18,7 +18,7 @@ var ErrLLVMNotImplemented = errors.New(llvmgen.UnsupportedBackendErrorMessage())
 
 type llvmToolchain interface {
 	CompileObject(ctx context.Context, irPath, objectPath, target string) error
-	LinkBinary(ctx context.Context, objectPath, binaryPath, target string) error
+	LinkBinary(ctx context.Context, objectPaths []string, binaryPath, target string) error
 }
 
 // LLVMBackend emits textual LLVM IR and can drive a host LLVM-compatible
@@ -75,7 +75,15 @@ func (b LLVMBackend) Emit(ctx context.Context, req Request) (*Result, error) {
 		if artifacts.Binary == "" {
 			return out, fmt.Errorf("%s", llvmgen.MissingBinaryArtifactMessage())
 		}
-		if err := tc.LinkBinary(ctx, artifacts.Object, artifacts.Binary, req.Layout.Target); err != nil {
+		runtimeObject, err := ensureLocalGCRuntimeObject(ctx, tc, artifacts, req.Layout.Target)
+		if err != nil {
+			return out, err
+		}
+		linkObjects := []string{artifacts.Object}
+		if runtimeObject != "" {
+			linkObjects = append(linkObjects, runtimeObject)
+		}
+		if err := tc.LinkBinary(ctx, linkObjects, artifacts.Binary, req.Layout.Target); err != nil {
 			return out, err
 		}
 		return out, nil
@@ -114,8 +122,8 @@ func (clangToolchain) CompileObject(ctx context.Context, irPath, objectPath, tar
 	return runClang(ctx, "compile object", args)
 }
 
-func (clangToolchain) LinkBinary(ctx context.Context, objectPath, binaryPath, target string) error {
-	args := llvmgen.ClangLinkBinaryArgs(target, objectPath, binaryPath)
+func (clangToolchain) LinkBinary(ctx context.Context, objectPaths []string, binaryPath, target string) error {
+	args := llvmgen.ClangLinkBinaryArgs(target, objectPaths, binaryPath)
 	return runClang(ctx, "link binary", args)
 }
 

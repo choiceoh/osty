@@ -33,7 +33,8 @@ coverage. The public compiler path is now native-only through the LLVM backend.
 | Linter (`internal/lint`, L0001–L0042, `--fix` / `--fix-dry-run`) | done |
 | Multi-file packages (`resolve` loader/package/workspace) | done |
 | LSP (`internal/lsp`, wired as `osty lsp`) | done — hover, definition, formatting, documentSymbol, lint diagnostics, editor policy backed by selfhost-core |
-| Native LLVM backend (`internal/backend`, `internal/llvmgen`) | public backend path; scalar/control-flow/string smoke subset emits LLVM IR/object/binary, unsupported shapes report Osty-authored LLVM diagnostics |
+| Native LLVM backend (`internal/backend`, `internal/llvmgen`) | public backend path; scalar/control-flow/string smoke subset emits LLVM IR/object/binary, later phase 64-73 value/control-flow smoke expansion is documented, unsupported shapes report Osty-authored LLVM diagnostics |
+| Go transpiler (`internal/gen`) | bootstrap-only seed path compiled with `selfhostgen`; no longer exposed as a public backend |
 | Independent IR (`internal/ir`) | done — patterns, match, closures, struct/field/method |
 | Project scaffolding (`internal/scaffold`, `osty new` / `osty init`) | done — `--bin`, `--lib`, `--workspace`, `--cli`, `--service` |
 | Manifest + lockfile + SemVer (`internal/manifest`, `lockfile`, `pkgmgr/semver`) | done (parse + validate + resolve) |
@@ -43,7 +44,7 @@ coverage. The public compiler path is now native-only through the LLVM backend.
 | CI quality tooling (`internal/ci`, `osty ci`) | done — Osty-authored generated CI core, signature-aware snapshots, workspace coverage, JSON reports |
 | Pipeline visualizer (`osty pipeline`) | done — per-stage timing, workspace mode, backend-aware gen, baseline diff, LSP trace, `--explain` |
 | Profiles / targets / features / cache (`internal/profile`, `osty profiles` / `targets` / `features` / `cache`) | done — built-in and manifest profiles, cross-target env, feature closure + file pragmas, backend-aware fingerprints |
-| LLVM backend (`internal/backend`, `internal/llvmgen`, `--backend llvm`) | early executable slice — textual IR/object/binary for scalar/control-flow/Bool/String and `Float`/String payload enum smoke programs, plus simple struct aggregates and enum matches (payload-free + single-`Int` and phase-54-63 payload generalization), host `clang` driver, inspectable skeleton + categorized diagnostics for unsupported source shapes |
+| LLVM backend (`internal/backend`, `internal/llvmgen`, `--backend llvm`) | early executable slice — textual IR/object/binary for scalar/control-flow/Bool/String and `Float`/String payload enum smoke programs, plus simple struct aggregates and enum matches (payload-free + single-`Int` and phase-54-63 payload generalization), then phase 64-73 value/control-flow smoke expansion, host `clang` driver, inspectable skeleton + categorized diagnostics for unsupported source shapes |
 | Package registry backend / `osty registry serve` | done — file-backed HTTP server for index/search/download/publish/yank, with ETag index responses and bearer-token write auth |
 | Package registry / `osty add` / `osty update` / `osty run` | done (resolve + vendor + lockfile-honoring re-resolves, ETag-cached registry index, copy fallback for symlink-less filesystems; CLI: `add`, `remove`/`rm`, `update`, `run`, `fetch`, `publish`, `search`, `info`, `yank`/`unyank`, `login`/`logout`; `--locked` / `--frozen` CI guards) |
 | Package manager (`osty add` / `osty update`, path + git + registry sources, SemVer resolver, deterministic lockfile) | wired — `add` mutates `osty.toml` and re-vendors; `update` re-resolves selectively or in full |
@@ -79,6 +80,11 @@ surface area. The resolved decisions are archived in
 
 `osty gen FILE` uses the native LLVM backend and writes LLVM IR unless another
 native artifact mode is requested by a build/run command.
+
+LLVM binary emission links a local backend runtime ABI object from the backend
+runtime directory at native link time for the `osty.gc.*` surface. That is the
+native runtime bridge for the executable binary, not a claim of full Go GC
+parity.
 
 ## Layout
 

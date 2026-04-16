@@ -712,7 +712,7 @@ pub fn llvmClangCompileObjectArgs(
 
 pub fn llvmClangLinkBinaryArgs(
     target: String,
-    objectPath: String,
+    objectPaths: List<String>,
     binaryPath: String,
 ) -> List<String> {
     let mut args: List<String> = []
@@ -720,7 +720,9 @@ pub fn llvmClangLinkBinaryArgs(
         args.push("-target")
         args.push(target)
     }
-    args.push(objectPath)
+    for objectPath in objectPaths {
+        args.push(objectPath)
+    }
     args.push("-o")
     args.push(binaryPath)
     args
@@ -868,6 +870,472 @@ pub fn llvmUnsupportedDiagnosticWith(
 
 pub fn llvmUnsupportedSummary(diag: LlvmUnsupportedDiagnostic) -> String {
     "{diag.code} {diag.kind}: {diag.message}; hint: {diag.hint}"
+}
+
+pub fn llvmIsCompareOp(op: String) -> Bool {
+    op == "==" || op == "!=" || op == "<" || op == ">" || op == "<=" || op == ">="
+}
+
+pub fn llvmIntComparePredicate(op: String) -> String {
+    if op == "==" {
+        return "eq"
+    }
+    if op == "!=" {
+        return "ne"
+    }
+    if op == "<" {
+        return "slt"
+    }
+    if op == ">" {
+        return "sgt"
+    }
+    if op == "<=" {
+        return "sle"
+    }
+    if op == ">=" {
+        return "sge"
+    }
+    ""
+}
+
+pub fn llvmFloatComparePredicate(op: String) -> String {
+    if op == "==" {
+        return "oeq"
+    }
+    if op == "!=" {
+        return "one"
+    }
+    if op == "<" {
+        return "olt"
+    }
+    if op == ">" {
+        return "ogt"
+    }
+    if op == "<=" {
+        return "ole"
+    }
+    if op == ">=" {
+        return "oge"
+    }
+    ""
+}
+
+pub fn llvmIntBinaryInstruction(op: String) -> String {
+    if op == "+" {
+        return "add"
+    }
+    if op == "-" {
+        return "sub"
+    }
+    if op == "*" {
+        return "mul"
+    }
+    if op == "/" {
+        return "sdiv"
+    }
+    if op == "%" {
+        return "srem"
+    }
+    ""
+}
+
+pub fn llvmFloatBinaryInstruction(op: String) -> String {
+    if op == "+" {
+        return "fadd"
+    }
+    if op == "-" {
+        return "fsub"
+    }
+    if op == "*" {
+        return "fmul"
+    }
+    if op == "/" {
+        return "fdiv"
+    }
+    ""
+}
+
+pub fn llvmLogicalInstruction(op: String) -> String {
+    if op == "&&" {
+        return "and"
+    }
+    if op == "||" {
+        return "or"
+    }
+    ""
+}
+
+pub fn llvmIsAsciiStringText(text: String) -> Bool {
+    for c in text.chars() {
+        if c == '\n' || c == '\t' || c == '\r' {
+            continue
+        }
+        if c < ' ' || c > '~' {
+            return false
+        }
+    }
+    true
+}
+
+pub fn llvmIsIdent(name: String) -> Bool {
+    if name == "" {
+        return false
+    }
+    let chars = name.chars()
+    for i in 0..chars.len() {
+        let c = chars[i]
+        if c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') {
+            continue
+        }
+        if i > 0 && c >= '0' && c <= '9' {
+            continue
+        }
+        return false
+    }
+    true
+}
+
+pub fn llvmFirstNonEmpty(a: String, b: String) -> String {
+    if a != "" {
+        return a
+    }
+    b
+}
+
+pub fn llvmIsKnownRuntimeFfiPath(path: String) -> Bool {
+    if path.startsWith("runtime.package.") {
+        return true
+    }
+    path == "runtime.strings" || path == "runtime.path.filepath"
+}
+
+pub fn llvmRuntimeFfiAlias(explicitAlias: String, lastPath: String, runtimePath: String) -> String {
+    if explicitAlias != "" {
+        return explicitAlias
+    }
+    if lastPath != "" {
+        return lastPath
+    }
+    let parts = llvmStrings.Split(runtimePath, ".")
+    if parts.len() == 0 {
+        return ""
+    }
+    parts[parts.len() - 1]
+}
+
+pub fn llvmRuntimeFfiSymbol(path: String, name: String) -> String {
+    let mut trimmed = path
+    if trimmed.startsWith("runtime.") {
+        trimmed = trimmed.trimPrefix("runtime.")
+    }
+    let mut out = "osty_rt_"
+    for c in trimmed.chars() {
+        if c == '.' || c == '/' || c == '-' {
+            out = "{out}_"
+            continue
+        }
+        if c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
+            out = "{out}{c}"
+            continue
+        }
+        out = "{out}_"
+    }
+    "{out}_{name}"
+}
+
+pub fn llvmBuiltinType(name: String) -> String {
+    if name == "Int" {
+        return "i64"
+    }
+    if name == "Float" {
+        return "double"
+    }
+    if name == "Bool" {
+        return "i1"
+    }
+    if name == "String" || name == "Bytes" || name == "Error" {
+        return "ptr"
+    }
+    ""
+}
+
+pub fn llvmRuntimeAbiBuiltinType(name: String) -> String {
+    if name == "Int" || name == "Float" || name == "Bool" || name == "String" {
+        return llvmBuiltinType(name)
+    }
+    ""
+}
+
+pub fn llvmEnumPayloadBuiltinType(name: String) -> String {
+    if name == "Int" || name == "Float" || name == "String" {
+        return llvmBuiltinType(name)
+    }
+    ""
+}
+
+pub fn llvmZeroLiteral(typ: String) -> String {
+    if typ == "double" {
+        return "0.0"
+    }
+    if typ == "ptr" {
+        return "null"
+    }
+    "0"
+}
+
+pub fn llvmStructTypeName(name: String) -> String {
+    "%{name}"
+}
+
+pub fn llvmEnumStorageType(name: String, hasPayload: Bool) -> String {
+    if hasPayload {
+        return llvmStructTypeName(name)
+    }
+    "i64"
+}
+
+pub fn llvmSignatureParamName(name: String, index: Int) -> String {
+    if name != "" {
+        return name
+    }
+    "arg{index}"
+}
+
+pub fn llvmAllowsMainSignature(paramCount: Int, hasReturnType: Bool) -> Bool {
+    paramCount == 0 && !(hasReturnType)
+}
+
+pub fn llvmNamedType(
+    name: String,
+    pathLen: Int,
+    argLen: Int,
+    structType: String,
+    enumType: String,
+) -> String {
+    if pathLen != 1 || argLen != 0 {
+        return "ptr"
+    }
+    let builtin = llvmBuiltinType(name)
+    if builtin != "" {
+        return builtin
+    }
+    if structType != "" {
+        return structType
+    }
+    if enumType != "" {
+        return enumType
+    }
+    ""
+}
+
+pub fn llvmRuntimeAbiNamedType(
+    name: String,
+    pathLen: Int,
+    argLen: Int,
+    structType: String,
+    enumType: String,
+) -> String {
+    if pathLen == 1 && argLen == 0 {
+        let builtin = llvmRuntimeAbiBuiltinType(name)
+        if builtin != "" {
+            return builtin
+        }
+        if structType != "" {
+            return structType
+        }
+        if enumType != "" {
+            return enumType
+        }
+    }
+    "ptr"
+}
+
+pub fn llvmEnumPayloadNamedType(name: String, pathLen: Int, argLen: Int) -> String {
+    if pathLen != 1 || argLen != 0 {
+        return ""
+    }
+    llvmEnumPayloadBuiltinType(name)
+}
+
+pub fn llvmNominalDeclHeaderDiagnostic(
+    kind: String,
+    name: String,
+    identOk: Bool,
+    genericCount: Int,
+    methodCount: Int,
+) -> LlvmUnsupportedDiagnostic {
+    if !(identOk) {
+        return llvmUnsupportedDiagnostic("name", "{kind} name \"{name}\"")
+    }
+    if genericCount != 0 {
+        return llvmUnsupportedDiagnostic("type-system", "generic {kind} \"{name}\" is not supported")
+    }
+    if methodCount != 0 {
+        return llvmUnsupportedDiagnostic("function-signature", "{kind} \"{name}\" methods are not supported")
+    }
+    llvmUnsupportedDiagnosticWith("", "", "", "")
+}
+
+pub fn llvmFunctionHeaderDiagnostic(
+    name: String,
+    identOk: Bool,
+    hasRecv: Bool,
+    genericCount: Int,
+    hasBody: Bool,
+    isMain: Bool,
+    paramCount: Int,
+    hasReturnType: Bool,
+) -> LlvmUnsupportedDiagnostic {
+    if !(identOk) {
+        return llvmUnsupportedDiagnostic("name", "function name \"{name}\"")
+    }
+    if hasRecv {
+        return llvmUnsupportedDiagnostic("function-signature", "methods are not supported")
+    }
+    if genericCount != 0 {
+        return llvmUnsupportedDiagnostic("function-signature", "generic functions are not supported")
+    }
+    if !(hasBody) {
+        return llvmUnsupportedDiagnostic("source-layout", "function \"{name}\" has no body")
+    }
+    if isMain && !(llvmAllowsMainSignature(paramCount, hasReturnType)) {
+        return llvmUnsupportedDiagnostic("function-signature", "LLVM main must have no params and no return type")
+    }
+    llvmUnsupportedDiagnosticWith("", "", "", "")
+}
+
+pub fn llvmIsRuntimeAbiListType(name: String, pathLen: Int, argLen: Int) -> Bool {
+    name == "List" && pathLen == 1 && argLen == 1
+}
+
+pub fn llvmStructFieldDiagnostic(
+    structName: String,
+    fieldName: String,
+    identOk: Bool,
+    hasDefault: Bool,
+    duplicate: Bool,
+    recursive: Bool,
+    detail: String,
+) -> LlvmUnsupportedDiagnostic {
+    if !(identOk) {
+        return llvmUnsupportedDiagnostic("name", "struct \"{structName}\" field name \"{fieldName}\"")
+    }
+    if hasDefault {
+        return llvmUnsupportedDiagnostic("type-system", "struct \"{structName}\" field \"{fieldName}\" has a default value")
+    }
+    if duplicate {
+        return llvmUnsupportedDiagnostic("source-layout", "struct \"{structName}\" duplicate field \"{fieldName}\"")
+    }
+    if detail != "" {
+        return llvmUnsupportedDiagnostic("type-system", "struct \"{structName}\" field \"{fieldName}\": {detail}")
+    }
+    if recursive {
+        return llvmUnsupportedDiagnostic("type-system", "struct \"{structName}\" recursive field \"{fieldName}\"")
+    }
+    llvmUnsupportedDiagnosticWith("", "", "", "")
+}
+
+pub fn llvmEnumVariantHeaderDiagnostic(
+    enumName: String,
+    variantName: String,
+    identOk: Bool,
+    payloadCount: Int,
+    duplicate: Bool,
+) -> LlvmUnsupportedDiagnostic {
+    if !(identOk) {
+        return llvmUnsupportedDiagnostic("name", "enum \"{enumName}\" variant name \"{variantName}\"")
+    }
+    if payloadCount > 1 {
+        return llvmUnsupportedDiagnostic(
+            "type-system",
+            "enum \"{enumName}\" variant \"{variantName}\" has {payloadCount} payload fields; only one scalar payload is supported",
+        )
+    }
+    if duplicate {
+        return llvmUnsupportedDiagnostic("source-layout", "enum \"{enumName}\" duplicate variant \"{variantName}\"")
+    }
+    llvmUnsupportedDiagnosticWith("", "", "", "")
+}
+
+pub fn llvmEnumPayloadDiagnostic(
+    enumName: String,
+    variantName: String,
+    detail: String,
+    expectedType: String,
+    actualType: String,
+) -> LlvmUnsupportedDiagnostic {
+    if detail != "" {
+        return llvmUnsupportedDiagnostic("type-system", "enum \"{enumName}\" variant \"{variantName}\" payload: {detail}")
+    }
+    if expectedType != "" && actualType != "" && expectedType != actualType {
+        return llvmUnsupportedDiagnostic("type-system", "enum \"{enumName}\" mixes payload types {expectedType} and {actualType}")
+    }
+    llvmUnsupportedDiagnosticWith("", "", "", "")
+}
+
+pub fn llvmRuntimeFfiHeaderUnsupported(hasRecv: Bool, genericCount: Int) -> String {
+    if hasRecv {
+        return "methods are not supported"
+    }
+    if genericCount != 0 {
+        return "generic functions are not supported"
+    }
+    ""
+}
+
+pub fn llvmRuntimeFfiReturnUnsupported(detail: String) -> String {
+    if detail != "" {
+        return "return type: {detail}"
+    }
+    ""
+}
+
+pub fn llvmRuntimeFfiParamUnsupported(
+    name: String,
+    nilParam: Bool,
+    hasPatternOrDefault: Bool,
+    detail: String,
+) -> String {
+    if nilParam {
+        return "nil parameter"
+    }
+    if hasPatternOrDefault {
+        return "pattern/default parameters are not supported"
+    }
+    if detail != "" {
+        return "parameter \"{name}\": {detail}"
+    }
+    ""
+}
+
+pub fn llvmFunctionReturnDiagnostic(name: String, detail: String) -> LlvmUnsupportedDiagnostic {
+    if detail != "" {
+        return llvmUnsupportedDiagnostic("type-system", "function \"{name}\" return type: {detail}")
+    }
+    llvmUnsupportedDiagnosticWith("", "", "", "")
+}
+
+pub fn llvmFunctionParamDiagnostic(
+    fnName: String,
+    paramName: String,
+    missingOrPattern: Bool,
+    hasDefault: Bool,
+    identOk: Bool,
+    detail: String,
+) -> LlvmUnsupportedDiagnostic {
+    if missingOrPattern {
+        return llvmUnsupportedDiagnostic("function-signature", "function \"{fnName}\" has non-identifier parameter")
+    }
+    if hasDefault {
+        return llvmUnsupportedDiagnostic("function-signature", "function \"{fnName}\" has default parameter values")
+    }
+    if !(identOk) {
+        return llvmUnsupportedDiagnostic("name", "parameter name \"{paramName}\"")
+    }
+    if detail != "" {
+        return llvmUnsupportedDiagnostic("type-system", "function \"{fnName}\" parameter \"{paramName}\": {detail}")
+    }
+    llvmUnsupportedDiagnosticWith("", "", "", "")
 }
 
 pub fn llvmSmokeExecutableCorpus() -> List<LlvmSmokeExecutableCase> {
@@ -1091,6 +1559,56 @@ pub fn llvmSmokeExecutableCorpus() -> List<LlvmSmokeExecutableCase> {
             name: "string-payload-wildcard",
             fixture: "string_payload_wildcard_print.osty",
             stdout: "payload string\n",
+        },
+        LlvmSmokeExecutableCase {
+            name: "int-if-expr",
+            fixture: "int_if_expr_print.osty",
+            stdout: "42\n",
+        },
+        LlvmSmokeExecutableCase {
+            name: "string-if-expr",
+            fixture: "string_if_expr_print.osty",
+            stdout: "chosen string\n",
+        },
+        LlvmSmokeExecutableCase {
+            name: "float-if-expr",
+            fixture: "float_if_expr_print.osty",
+            stdout: "42.000000\n",
+        },
+        LlvmSmokeExecutableCase {
+            name: "bool-param-return",
+            fixture: "bool_param_return_print.osty",
+            stdout: "42\n",
+        },
+        LlvmSmokeExecutableCase {
+            name: "int-range-exclusive",
+            fixture: "int_range_exclusive_print.osty",
+            stdout: "21\n",
+        },
+        LlvmSmokeExecutableCase {
+            name: "int-unary",
+            fixture: "int_unary_print.osty",
+            stdout: "42\n",
+        },
+        LlvmSmokeExecutableCase {
+            name: "int-modulo",
+            fixture: "int_modulo_print.osty",
+            stdout: "42\n",
+        },
+        LlvmSmokeExecutableCase {
+            name: "struct-string-field",
+            fixture: "struct_string_field_print.osty",
+            stdout: "struct string\n",
+        },
+        LlvmSmokeExecutableCase {
+            name: "struct-bool-field",
+            fixture: "struct_bool_field_print.osty",
+            stdout: "42\n",
+        },
+        LlvmSmokeExecutableCase {
+            name: "bool-mut",
+            fixture: "bool_mut_print.osty",
+            stdout: "42\n",
         },
     ]
 }
@@ -2173,6 +2691,207 @@ pub fn llvmSmokeStringPayloadWildcardIR(sourcePath: String) -> String {
         "",
         [llvmStructTypeDef("Label", ["i64", "ptr"])],
         [],
+        [
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+pub fn llvmSmokeIntIfExprIR(sourcePath: String) -> String {
+    let main = llvmEmitter()
+    let labels = llvmIfExprStart(main, llvmI1("true"))
+    let thenValue = llvmIntLiteral(42)
+    llvmIfExprElse(main, labels)
+    let elseValue = llvmIntLiteral(0)
+    let out = llvmIfExprEnd(main, "i64", thenValue, elseValue, labels)
+    llvmPrintlnI64(main, out)
+    llvmReturnI32Zero(main)
+
+    llvmRenderModule(
+        sourcePath,
+        "",
+        [
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+pub fn llvmSmokeStringIfExprIR(sourcePath: String) -> String {
+    let main = llvmEmitter()
+    let labels = llvmIfExprStart(main, llvmI1("true"))
+    let thenValue = llvmStringLiteral(main, "chosen string")
+    llvmIfExprElse(main, labels)
+    let elseValue = llvmStringLiteral(main, "fallback")
+    let out = llvmIfExprEnd(main, "ptr", thenValue, elseValue, labels)
+    llvmPrintlnString(main, out)
+    llvmReturnI32Zero(main)
+
+    llvmRenderModuleWithGlobals(
+        sourcePath,
+        "",
+        main.stringGlobals,
+        [
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+pub fn llvmSmokeFloatIfExprIR(sourcePath: String) -> String {
+    let main = llvmEmitter()
+    let labels = llvmIfExprStart(main, llvmI1("true"))
+    let thenValue = llvmFloatLiteral("42.0")
+    llvmIfExprElse(main, labels)
+    let elseValue = llvmFloatLiteral("0.0")
+    let out = llvmIfExprEnd(main, "double", thenValue, elseValue, labels)
+    llvmPrintlnF64(main, out)
+    llvmReturnI32Zero(main)
+
+    llvmRenderModule(
+        sourcePath,
+        "",
+        [
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+pub fn llvmSmokeBoolParamReturnIR(sourcePath: String) -> String {
+    let pick = llvmEmitter()
+    llvmBind(pick, "flag", llvmI1("%flag"))
+    let labels = llvmIfExprStart(pick, llvmIdent(pick, "flag"))
+    let thenValue = llvmIntLiteral(42)
+    llvmIfExprElse(pick, labels)
+    let elseValue = llvmIntLiteral(0)
+    let out = llvmIfExprEnd(pick, "i64", thenValue, elseValue, labels)
+    llvmReturn(pick, out)
+
+    let main = llvmEmitter()
+    let value = llvmCall(main, "i64", "pick", [llvmI1("true")])
+    llvmPrintlnI64(main, value)
+    llvmReturnI32Zero(main)
+
+    llvmRenderModule(
+        sourcePath,
+        "",
+        [
+            llvmRenderFunction("i64", "pick", [llvmParam("flag", "i1")], pick.body),
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+pub fn llvmSmokeIntRangeExclusiveIR(sourcePath: String) -> String {
+    let sumTo = llvmEmitter()
+    llvmBind(sumTo, "n", llvmI64("%n"))
+    llvmMutableLet(sumTo, "total", llvmIntLiteral(0))
+    let loop = llvmRangeStart(sumTo, "i", llvmIntLiteral(0), llvmIdent(sumTo, "n"), false)
+    let nextTotal = llvmBinaryI64(sumTo, "add", llvmIdent(sumTo, "total"), llvmIdent(sumTo, "i"))
+    let _ = llvmAssign(sumTo, "total", nextTotal)
+    llvmRangeEnd(sumTo, loop)
+    llvmReturn(sumTo, llvmIdent(sumTo, "total"))
+
+    let main = llvmEmitter()
+    let value = llvmCall(main, "i64", "sumTo", [llvmIntLiteral(7)])
+    llvmPrintlnI64(main, value)
+    llvmReturnI32Zero(main)
+
+    llvmRenderModule(
+        sourcePath,
+        "",
+        [
+            llvmRenderFunction("i64", "sumTo", [llvmParam("n", "i64")], sumTo.body),
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+pub fn llvmSmokeIntUnaryIR(sourcePath: String) -> String {
+    let main = llvmEmitter()
+    let diff = llvmBinaryI64(main, "sub", llvmIntLiteral(40), llvmIntLiteral(82))
+    let value = llvmBinaryI64(main, "sub", llvmIntLiteral(0), diff)
+    llvmPrintlnI64(main, value)
+    llvmReturnI32Zero(main)
+
+    llvmRenderModule(
+        sourcePath,
+        "",
+        [
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+pub fn llvmSmokeIntModuloIR(sourcePath: String) -> String {
+    let main = llvmEmitter()
+    let value = llvmBinaryI64(main, "srem", llvmIntLiteral(85), llvmIntLiteral(43))
+    llvmPrintlnI64(main, value)
+    llvmReturnI32Zero(main)
+
+    llvmRenderModule(
+        sourcePath,
+        "",
+        [
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+pub fn llvmSmokeStructStringFieldIR(sourcePath: String) -> String {
+    let main = llvmEmitter()
+    let msg = llvmStructLiteral(main, "%Message", [llvmStringLiteral(main, "struct string")])
+    llvmImmutableLet(main, "msg", msg)
+    llvmPrintlnString(main, llvmExtractValue(main, llvmIdent(main, "msg"), "ptr", 0))
+    llvmReturnI32Zero(main)
+
+    llvmRenderModuleWithGlobalsAndTypes(
+        sourcePath,
+        "",
+        [llvmStructTypeDef("Message", ["ptr"])],
+        main.stringGlobals,
+        [
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+pub fn llvmSmokeStructBoolFieldIR(sourcePath: String) -> String {
+    let main = llvmEmitter()
+    let gate = llvmStructLiteral(main, "%Gate", [llvmI1("true")])
+    llvmImmutableLet(main, "gate", gate)
+    let cond = llvmExtractValue(main, llvmIdent(main, "gate"), "i1", 0)
+    let labels = llvmIfStart(main, cond)
+    llvmPrintlnI64(main, llvmIntLiteral(42))
+    llvmIfElse(main, labels)
+    llvmPrintlnI64(main, llvmIntLiteral(0))
+    llvmIfEnd(main, labels)
+    llvmReturnI32Zero(main)
+
+    llvmRenderModuleWithGlobalsAndTypes(
+        sourcePath,
+        "",
+        [llvmStructTypeDef("Gate", ["i1"])],
+        [],
+        [
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+pub fn llvmSmokeBoolMutableIR(sourcePath: String) -> String {
+    let main = llvmEmitter()
+    llvmMutableLet(main, "flag", llvmI1("false"))
+    let _ = llvmAssign(main, "flag", llvmI1("true"))
+    let cond = llvmIdent(main, "flag")
+    let labels = llvmIfStart(main, cond)
+    llvmPrintlnI64(main, llvmIntLiteral(42))
+    llvmIfElse(main, labels)
+    llvmPrintlnI64(main, llvmIntLiteral(0))
+    llvmIfEnd(main, labels)
+    llvmReturnI32Zero(main)
+
+    llvmRenderModule(
+        sourcePath,
+        "",
         [
             llvmRenderFunction("i32", "main", [], main.body),
         ],
