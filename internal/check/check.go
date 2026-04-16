@@ -104,7 +104,7 @@ func File(f *ast.File, rr *resolve.Result, opts ...Opts) *Result {
 		result.Diags = append(result.Diags, missingSourceDiag("file"))
 		return result
 	}
-	applySelfhostFileResult(result, f, rr, opt.Source, opt.Stdlib)
+	result.Diags = append(result.Diags, checkerUnavailableDiag("file"))
 	recordSelfhostDeclPass(opt.OnDecl, f, "collect")
 	recordSelfhostDeclPass(opt.OnDecl, f, "check")
 	return result
@@ -122,7 +122,7 @@ func Package(pkg *resolve.Package, pr *resolve.PackageResult, opts ...Opts) *Res
 		result.Diags = append(result.Diags, missingSourceDiag("package "+missing))
 		return result
 	}
-	applySelfhostPackageResult(result, pkg, pr, nil, opt.Stdlib)
+	result.Diags = append(result.Diags, checkerUnavailableDiag("package"))
 	for _, pf := range pkg.Files {
 		if pf == nil {
 			continue
@@ -179,7 +179,7 @@ func Workspace(
 			result.Diags = append(result.Diags, missingSourceDiag("package "+missing))
 			continue
 		}
-		applySelfhostPackageResult(result, e.pkg, e.pr, ws, opt.Stdlib)
+		result.Diags = append(result.Diags, checkerUnavailableDiag("workspace package"))
 	}
 	for _, e := range walk {
 		for _, pf := range e.pkg.Files {
@@ -234,6 +234,14 @@ func missingSourceDiag(scope string) *diag.Diagnostic {
 	return diag.New(diag.Error, fmt.Sprintf("self-hosted checker requires source bytes for %s checking", scope)).
 		Primary(diag.Span{Start: pos, End: pos}, "").
 		Note("the legacy Go checker has been removed; pass check.Opts.Source or populate resolve.PackageFile.Source").
+		Build()
+}
+
+func checkerUnavailableDiag(scope string) *diag.Diagnostic {
+	pos := token.Pos{Line: 1, Column: 1, Offset: 0}
+	return diag.New(diag.Error, fmt.Sprintf("type checker is currently unavailable for %s", scope)).
+		Primary(diag.Span{Start: pos, End: pos}, "").
+		Note("the generated Go selfhost checker bridge was removed; wire a replacement checker entrypoint").
 		Build()
 }
 
