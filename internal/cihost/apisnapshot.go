@@ -20,7 +20,7 @@
 //     are part of Sig too — adding a constraint is a breaking
 //     change for downstream callers.
 
-package ci
+package cihost
 
 import (
 	"encoding/json"

@@ -44,7 +44,7 @@ coverage rather than language-decision churn.
 | Test runner harness (`internal/testgen`) | done — merges per-file gen output, injects a real std.testing runtime + main(), runs via `go run` |
 | `osty test` (discovery + front-end + execution) | done — validates and **runs** discovered `test*` / `bench*` fns; failures and pass/fail totals report inline |
 | API doc generator (`internal/docgen`, `osty doc`) | done — HTML + markdown, field docs, cross-refs, workspace mode |
-| CI quality tooling (`internal/ci`, `osty ci`) | done — signature-aware snapshots, workspace coverage, JSON reports |
+| CI quality tooling (`internal/ci`, `osty ci`) | done — Osty-authored generated CI core, signature-aware snapshots, workspace coverage, JSON reports |
 | Pipeline visualizer (`osty pipeline`) | done — per-stage timing, workspace mode, backend-aware gen, baseline diff, LSP trace, `--explain` |
 | Package registry backend / `osty registry serve` | done — file-backed HTTP server for index/search/download/publish/yank, with ETag index responses and bearer-token write auth |
 | Package registry / `osty add` / `osty update` / `osty run` | done (resolve + vendor + lockfile-honoring re-resolves, ETag-cached registry index, copy fallback for symlink-less filesystems; CLI: `add`, `remove`/`rm`, `update`, `run`, `fetch`, `publish`, `search`, `info`, `yank`/`unyank`, `login`/`logout`; `--locked` / `--frozen` CI guards) |
@@ -125,7 +125,8 @@ osty/
 │   ├── gen/                 # Go transpiler (Phases 1–6; `osty gen FILE`)
 │   ├── testgen/             # Test runner harness (drives `osty test`)
 │   ├── docgen/              # API doc generator (HTML + markdown; `osty doc`)
-│   ├── ci/                  # CI quality tooling (`osty ci`)
+│   ├── ci/                  # CI quality tooling (`osty ci`, generated core)
+│   ├── cihost/              # Go host bridge for generated CI core
 │   ├── profile/             # Build profiles / targets / features
 │   ├── lsp/                 # Language server (stdio JSON-RPC)
 │   ├── scaffold/            # `osty new` / `osty init` project templates
@@ -135,7 +136,7 @@ osty/
 │   ├── registry/            # Package registry client + file-backed HTTP server
 │   └── pkgmgr/semver/       # SemVer parse, compare, constraint match
 ├── examples/
-│   └── selfhost-core/       # Osty-authored compiler/self-hosting cores, incl. LLVM emitter prototype
+│   └── selfhost-core/       # Osty-authored compiler/self-hosting cores, CI policy core, LLVM emitter prototype
 └── testdata/                # .osty fixtures used by tests and backend corpus
 ```
 
