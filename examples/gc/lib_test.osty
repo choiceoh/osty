@@ -441,6 +441,21 @@ fn testLargeTenuredAllocationRoutesToHumongousSpace() {
     testing.assertEq(heap.humongousBytes(), 64)
 }
 
+fn testValidateHeapRejectsTenuredFreeBlockOverlappingLiveObject() {
+    let mut heap = newGcHeap(testGcConfig())
+    let old = heap.allocateTenured(GcRecord, 16)
+    assertValid(heap)
+
+    heap.tenured.freeList.push(
+        GcFreeBlock {
+            address: intOr(heap.addressOf(old), -1),
+            size: 8,
+        },
+    )
+
+    let _ = testing.expectError(heap.validateHeap())
+}
+
 fn testMajorCollectionReclaimsCycles() {
     let mut heap = newGcHeap(testGcConfig())
     assertValid(heap)
@@ -1279,6 +1294,44 @@ fn testHardeningReportFailsOnLoweredSlotMismatch() {
     testing.assert(report.validationMessage != "")
 }
 
+fn testHardeningReportFailsOnInvalidLoweredObjectReference() {
+    let mut heap = newGcHeap(testGcConfig())
+    let parent = heap.allocate(GcRecord, 16)
+    let child = heap.allocate(GcArray, 16)
+    testing.assert(heap.addRoot(parent))
+    match heap.lowerStructFieldStore(parent, 0, "child", child) {
+        Some(_) -> {},
+        None -> testing.fail("lowered field store failed"),
+    }
+    assertValid(heap)
+
+    let key = "struct.field:{parent}:0"
+    if heap.loweredPointerSlots.containsKey(key) {
+        let entry = heap.loweredPointerSlots[key]
+        let mut next = entry
+        next.objectId = 999
+        heap.loweredPointerSlots.insert(key, next)
+    } else {
+        testing.fail("missing lowered pointer slot")
+    }
+
+    let audit = heap.barrierAudit()
+    testing.assertEq(audit.loweredSlots, 1)
+    testing.assertEq(audit.invalidObjectReferences, 1)
+    testing.assertEq(audit.missingOwnerRefs, 0)
+    testing.assertEq(audit.rememberedMismatches, 0)
+    testing.assert(!(audit.passed))
+
+    let thresholds = gcPerformanceThresholdsForProfile(GcThroughputFirstProfile)
+    let report = heap.hardeningReport(thresholds)
+    testing.assert(!(report.passed))
+    testing.assert(!(report.heapValid))
+    testing.assert(!(report.barrierAuditPassed))
+    testing.assert(report.performancePassed)
+    testing.assertEq(report.loweredSlots, 1)
+    testing.assert(report.validationMessage != "")
+}
+
 fn testBarrierAuditDetectsRememberedMismatch() {
     let mut heap = newGcHeap(testGcConfig())
     let old = heap.allocateTenured(GcRecord, 16)
@@ -1310,6 +1363,38 @@ fn testBarrierAuditDetectsRememberedMismatch() {
     testing.assert(report.performancePassed)
 }
 
+fn testHardeningReportFailsPerformanceThresholds() {
+    let mut heap = newGcHeap(testGcConfig())
+    let parent = heap.allocate(GcRecord, 16)
+    let child = heap.allocate(GcArray, 16)
+    testing.assert(heap.addRoot(parent))
+    match heap.lowerStructFieldStore(parent, 0, "child", child) {
+        Some(_) -> {},
+        None -> testing.fail("lowered field store failed"),
+    }
+    let _ = heap.majorCollect()
+    assertValid(heap)
+
+    let baseline = heap.performanceReport(gcPerformanceThresholdsForProfile(GcThroughputFirstProfile))
+    testing.assert(baseline.liveBytes > 0)
+    let thresholds = GcPerformanceThresholds {
+        maxPauseUnits: baseline.pauseUnits,
+        maxFragmentedBytes: 1024,
+        maxLiveBytes: baseline.liveBytes - 1,
+        maxRememberedObjects: 64,
+        maxDirtyCards: 64,
+    }
+
+    let performance = heap.performanceReport(thresholds)
+    testing.assertEq(performance.pauseUnits, baseline.pauseUnits)
+    testing.assert(!(performance.passed))
+
+    let report = heap.hardeningReport(thresholds)
+    testing.assert(!(report.passed))
+    testing.assert(report.heapValid)
+    testing.assert(report.barrierAuditPassed)
+    testing.assert(!(report.performancePassed))
+}
 fn testLlvmHandleTablePreservesIdentityAcrossCompaction() {
     let mut heap = newGcHeap(testGcConfig())
     let dead = heap.allocate(GcBytes, 16)
