@@ -2603,6 +2603,32 @@ func (bs *bodyState) lowerMethodCallInto(mc *ir.MethodCall, dest Place, destT Ty
 		return
 	}
 
+	// Stdlib-intrinsic fast path: List / Map / Set / String / Bytes /
+	// Option / Result methods. Matches the concurrency path above but
+	// for the primitive types whose method bodies in stdlib just
+	// return default values — the runtime handles the real work.
+	if kind := stdlibIntrinsicForMethod(mc.Receiver.Type(), mc.Name); kind != IntrinsicInvalid {
+		recv := bs.lowerExprAsOperand(mc.Receiver)
+		args := []Operand{recv}
+		for _, a := range mc.Args {
+			args = append(args, bs.lowerExprAsOperand(a.Value))
+		}
+		destPtr := &dest
+		if isUnit(destT) {
+			destPtr = nil
+		}
+		if isVoidStdlibIntrinsic(kind) {
+			destPtr = nil
+		}
+		bs.emit(&IntrinsicInstr{
+			Dest:  destPtr,
+			Kind:  kind,
+			Args:  args,
+			SpanV: mc.SpanV,
+		})
+		return
+	}
+
 	recv := bs.lowerExprAsOperand(mc.Receiver)
 	typeName := typeNameOf(mc.Receiver.Type())
 	sig := bs.l.signatureForMethod(typeName, mc.Name)
@@ -2850,6 +2876,183 @@ func concurrencyIntrinsicForMethod(receiverType Type, name string) IntrinsicKind
 		case "default":
 			return IntrinsicSelectDefault
 		}
+	}
+	return IntrinsicInvalid
+}
+
+// stdlibIntrinsicForMethod maps a (receiverType, methodName) pair on
+// the built-in primitive types (List, Map, Set, String, Bytes,
+// Option, Result) to its MIR intrinsic kind. Returns
+// IntrinsicInvalid when the call is not a recognised stdlib method.
+//
+// The recogniser runs *after* the concurrency recogniser in the
+// method-call path so concurrency receivers (Channel, Handle, Group,
+// Select) never accidentally shadow the primitive names.
+func stdlibIntrinsicForMethod(receiverType Type, name string) IntrinsicKind {
+	// Option<T> has two surface forms — NamedType{"Option"} and
+	// OptionalType (surface `T?`) — handle OptionalType first so the
+	// ordinary typeNameOf branch below doesn't need a special case.
+	if _, ok := receiverType.(*ir.OptionalType); ok {
+		switch name {
+		case "isSome":
+			return IntrinsicOptionIsSome
+		case "isNone":
+			return IntrinsicOptionIsNone
+		case "unwrap":
+			return IntrinsicOptionUnwrap
+		case "unwrapOr":
+			return IntrinsicOptionUnwrapOr
+		}
+		return IntrinsicInvalid
+	}
+	// String and Bytes are primitive types, not named types, so a
+	// plain typeNameOf() lookup misses them. Dispatch by PrimKind
+	// first, then fall through to the named-type table for List /
+	// Map / Set / Option / Result / Maybe.
+	if pt, ok := receiverType.(*ir.PrimType); ok {
+		switch pt.Kind {
+		case ir.PrimString:
+			return stringIntrinsicForMethod(name)
+		case ir.PrimBytes:
+			return bytesIntrinsicForMethod(name)
+		}
+		return IntrinsicInvalid
+	}
+	switch typeNameOf(receiverType) {
+	case "List":
+		switch name {
+		case "push":
+			return IntrinsicListPush
+		case "len":
+			return IntrinsicListLen
+		case "get":
+			return IntrinsicListGet
+		case "isEmpty":
+			return IntrinsicListIsEmpty
+		case "first":
+			return IntrinsicListFirst
+		case "last":
+			return IntrinsicListLast
+		case "sorted":
+			return IntrinsicListSorted
+		case "contains":
+			return IntrinsicListContains
+		case "indexOf":
+			return IntrinsicListIndexOf
+		case "toSet":
+			return IntrinsicListToSet
+		}
+	case "Map":
+		switch name {
+		case "get":
+			return IntrinsicMapGet
+		case "set":
+			return IntrinsicMapSet
+		case "contains":
+			return IntrinsicMapContains
+		case "len":
+			return IntrinsicMapLen
+		case "keys":
+			return IntrinsicMapKeys
+		case "values":
+			return IntrinsicMapValues
+		case "remove":
+			return IntrinsicMapRemove
+		}
+	case "Set":
+		switch name {
+		case "insert":
+			return IntrinsicSetInsert
+		case "contains":
+			return IntrinsicSetContains
+		case "len":
+			return IntrinsicSetLen
+		case "toList":
+			return IntrinsicSetToList
+		}
+	case "Option", "Maybe":
+		switch name {
+		case "isSome":
+			return IntrinsicOptionIsSome
+		case "isNone":
+			return IntrinsicOptionIsNone
+		case "unwrap":
+			return IntrinsicOptionUnwrap
+		case "unwrapOr":
+			return IntrinsicOptionUnwrapOr
+		}
+	case "Result":
+		switch name {
+		case "isOk":
+			return IntrinsicResultIsOk
+		case "isErr":
+			return IntrinsicResultIsErr
+		case "unwrap":
+			return IntrinsicResultUnwrap
+		case "unwrapOr":
+			return IntrinsicResultUnwrapOr
+		}
+	}
+	return IntrinsicInvalid
+}
+
+// isVoidStdlibIntrinsic reports whether a stdlib intrinsic produces
+// no MIR-visible value. Used so that `list.push(x)` called in
+// expression position doesn't carry a stale dest.
+func isVoidStdlibIntrinsic(kind IntrinsicKind) bool {
+	switch kind {
+	case IntrinsicListPush, IntrinsicMapSet, IntrinsicMapRemove,
+		IntrinsicSetInsert:
+		return true
+	}
+	return false
+}
+
+// stringIntrinsicForMethod looks up a method name against the String
+// primitive. Split out from stdlibIntrinsicForMethod because String
+// has no NamedType form.
+func stringIntrinsicForMethod(name string) IntrinsicKind {
+	switch name {
+	case "len":
+		return IntrinsicStringLen
+	case "isEmpty":
+		return IntrinsicStringIsEmpty
+	case "contains":
+		return IntrinsicStringContains
+	case "startsWith":
+		return IntrinsicStringStartsWith
+	case "endsWith":
+		return IntrinsicStringEndsWith
+	case "indexOf":
+		return IntrinsicStringIndexOf
+	case "split":
+		return IntrinsicStringSplit
+	case "trim":
+		return IntrinsicStringTrim
+	case "toUpper":
+		return IntrinsicStringToUpper
+	case "toLower":
+		return IntrinsicStringToLower
+	case "replace":
+		return IntrinsicStringReplace
+	case "chars":
+		return IntrinsicStringChars
+	case "bytes":
+		return IntrinsicStringBytes
+	}
+	return IntrinsicInvalid
+}
+
+// bytesIntrinsicForMethod looks up a method name against the Bytes
+// primitive.
+func bytesIntrinsicForMethod(name string) IntrinsicKind {
+	switch name {
+	case "len":
+		return IntrinsicBytesLen
+	case "isEmpty":
+		return IntrinsicBytesIsEmpty
+	case "get":
+		return IntrinsicBytesGet
 	}
 	return IntrinsicInvalid
 }

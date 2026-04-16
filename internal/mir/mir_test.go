@@ -1797,3 +1797,352 @@ func TestLowerSelectTimeoutAndDefaultArms(t *testing.T) {
 		t.Fatalf("expected select_default intrinsic, got:\n%s", text)
 	}
 }
+
+// ==== Stage 2d: stdlib method intrinsics ====
+
+// stdlibMethodTest is a tiny driver: build a method call on receiverT,
+// lower it, and assert the rendered output contains want.
+type stdlibMethodTest struct {
+	name       string
+	receiverT  ir.Type
+	method     string
+	args       []ir.Arg
+	retT       ir.Type
+	want       string // substring the printer output must contain
+}
+
+func runStdlibMethodTest(t *testing.T, tc stdlibMethodTest) {
+	t.Helper()
+	fnRet := tc.retT
+	if fnRet == nil {
+		fnRet = ir.TUnit
+	}
+	fn := &ir.FnDecl{
+		Name:   "call",
+		Return: fnRet,
+		Params: []*ir.Param{{Name: "r", Type: tc.receiverT}},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "r", Kind: ir.IdentParam, T: tc.receiverT},
+				Name:     tc.method,
+				Args:     tc.args,
+				T:        fnRet,
+			},
+		},
+	}
+	mod := lowerHIR(t, fn)
+	text := Print(mod)
+	if !strings.Contains(text, tc.want) {
+		t.Fatalf("[%s] expected %q in:\n%s", tc.name, tc.want, text)
+	}
+}
+
+func TestLowerStdlibListMethods(t *testing.T) {
+	listInt := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TInt}, Builtin: true}
+	optInt := &ir.OptionalType{Inner: ir.TInt}
+	setInt := &ir.NamedType{Name: "Set", Args: []ir.Type{ir.TInt}, Builtin: true}
+	cases := []stdlibMethodTest{
+		{
+			name: "len", receiverT: listInt, method: "len", retT: ir.TInt,
+			want: "intrinsic list_len(_1)",
+		},
+		{
+			name: "push", receiverT: listInt, method: "push", retT: ir.TUnit,
+			args: []ir.Arg{{Value: &ir.IntLit{Text: "42", T: ir.TInt}}},
+			want: "intrinsic list_push(_1, const 42 Int)",
+		},
+		{
+			name: "get", receiverT: listInt, method: "get", retT: ir.TInt,
+			args: []ir.Arg{{Value: &ir.IntLit{Text: "0", T: ir.TInt}}},
+			want: "intrinsic list_get(_1, const 0 Int)",
+		},
+		{
+			name: "isEmpty", receiverT: listInt, method: "isEmpty", retT: ir.TBool,
+			want: "intrinsic list_is_empty(_1)",
+		},
+		{
+			name: "first", receiverT: listInt, method: "first", retT: optInt,
+			want: "intrinsic list_first(_1)",
+		},
+		{
+			name: "sorted", receiverT: listInt, method: "sorted", retT: listInt,
+			want: "intrinsic list_sorted(_1)",
+		},
+		{
+			name: "contains", receiverT: listInt, method: "contains", retT: ir.TBool,
+			args: []ir.Arg{{Value: &ir.IntLit{Text: "1", T: ir.TInt}}},
+			want: "intrinsic list_contains(_1, const 1 Int)",
+		},
+		{
+			name: "indexOf", receiverT: listInt, method: "indexOf", retT: optInt,
+			args: []ir.Arg{{Value: &ir.IntLit{Text: "5", T: ir.TInt}}},
+			want: "intrinsic list_index_of(_1, const 5 Int)",
+		},
+		{
+			name: "toSet", receiverT: listInt, method: "toSet", retT: setInt,
+			want: "intrinsic list_to_set(_1)",
+		},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) { runStdlibMethodTest(t, c) })
+	}
+}
+
+func TestLowerStdlibMapMethods(t *testing.T) {
+	mapType := &ir.NamedType{Name: "Map", Args: []ir.Type{ir.TString, ir.TInt}, Builtin: true}
+	optInt := &ir.OptionalType{Inner: ir.TInt}
+	listKey := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TString}, Builtin: true}
+	cases := []stdlibMethodTest{
+		{
+			name: "get", receiverT: mapType, method: "get", retT: optInt,
+			args: []ir.Arg{{Value: &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: "k"}}}}},
+			want: `intrinsic map_get(_1, const "k")`,
+		},
+		{
+			name: "set", receiverT: mapType, method: "set", retT: ir.TUnit,
+			args: []ir.Arg{
+				{Value: &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: "k"}}}},
+				{Value: &ir.IntLit{Text: "1", T: ir.TInt}},
+			},
+			want: `intrinsic map_set(_1, const "k", const 1 Int)`,
+		},
+		{
+			name: "contains", receiverT: mapType, method: "contains", retT: ir.TBool,
+			args: []ir.Arg{{Value: &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: "k"}}}}},
+			want: `intrinsic map_contains(_1, const "k")`,
+		},
+		{
+			name: "len", receiverT: mapType, method: "len", retT: ir.TInt,
+			want: "intrinsic map_len(_1)",
+		},
+		{
+			name: "keys", receiverT: mapType, method: "keys", retT: listKey,
+			want: "intrinsic map_keys(_1)",
+		},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) { runStdlibMethodTest(t, c) })
+	}
+}
+
+func TestLowerStdlibSetMethods(t *testing.T) {
+	setInt := &ir.NamedType{Name: "Set", Args: []ir.Type{ir.TInt}, Builtin: true}
+	listInt := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TInt}, Builtin: true}
+	cases := []stdlibMethodTest{
+		{
+			name: "insert", receiverT: setInt, method: "insert", retT: ir.TUnit,
+			args: []ir.Arg{{Value: &ir.IntLit{Text: "1", T: ir.TInt}}},
+			want: "intrinsic set_insert(_1, const 1 Int)",
+		},
+		{
+			name: "contains", receiverT: setInt, method: "contains", retT: ir.TBool,
+			args: []ir.Arg{{Value: &ir.IntLit{Text: "2", T: ir.TInt}}},
+			want: "intrinsic set_contains(_1, const 2 Int)",
+		},
+		{
+			name: "len", receiverT: setInt, method: "len", retT: ir.TInt,
+			want: "intrinsic set_len(_1)",
+		},
+		{
+			name: "toList", receiverT: setInt, method: "toList", retT: listInt,
+			want: "intrinsic set_to_list(_1)",
+		},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) { runStdlibMethodTest(t, c) })
+	}
+}
+
+func TestLowerStdlibStringMethods(t *testing.T) {
+	listStr := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TString}, Builtin: true}
+	listChar := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TChar}, Builtin: true}
+	listByte := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TByte}, Builtin: true}
+	optInt := &ir.OptionalType{Inner: ir.TInt}
+	sep := &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: ","}}}
+	cases := []stdlibMethodTest{
+		{
+			name: "len", receiverT: ir.TString, method: "len", retT: ir.TInt,
+			want: "intrinsic string_len(_1)",
+		},
+		{
+			name: "contains", receiverT: ir.TString, method: "contains", retT: ir.TBool,
+			args: []ir.Arg{{Value: sep}},
+			want: `intrinsic string_contains(_1, const ",")`,
+		},
+		{
+			name: "startsWith", receiverT: ir.TString, method: "startsWith", retT: ir.TBool,
+			args: []ir.Arg{{Value: sep}},
+			want: `intrinsic string_starts_with(_1, const ",")`,
+		},
+		{
+			name: "endsWith", receiverT: ir.TString, method: "endsWith", retT: ir.TBool,
+			args: []ir.Arg{{Value: sep}},
+			want: `intrinsic string_ends_with(_1, const ",")`,
+		},
+		{
+			name: "indexOf", receiverT: ir.TString, method: "indexOf", retT: optInt,
+			args: []ir.Arg{{Value: sep}},
+			want: `intrinsic string_index_of(_1, const ",")`,
+		},
+		{
+			name: "split", receiverT: ir.TString, method: "split", retT: listStr,
+			args: []ir.Arg{{Value: sep}},
+			want: `intrinsic string_split(_1, const ",")`,
+		},
+		{
+			name: "trim", receiverT: ir.TString, method: "trim", retT: ir.TString,
+			want: "intrinsic string_trim(_1)",
+		},
+		{
+			name: "toUpper", receiverT: ir.TString, method: "toUpper", retT: ir.TString,
+			want: "intrinsic string_to_upper(_1)",
+		},
+		{
+			name: "chars", receiverT: ir.TString, method: "chars", retT: listChar,
+			want: "intrinsic string_chars(_1)",
+		},
+		{
+			name: "bytes", receiverT: ir.TString, method: "bytes", retT: listByte,
+			want: "intrinsic string_bytes(_1)",
+		},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) { runStdlibMethodTest(t, c) })
+	}
+}
+
+func TestLowerStdlibOptionMethods(t *testing.T) {
+	// Test both surface forms: Option<T> named and T? optional.
+	optInt := &ir.OptionalType{Inner: ir.TInt}
+	namedOpt := &ir.NamedType{Name: "Option", Args: []ir.Type{ir.TInt}}
+	cases := []stdlibMethodTest{
+		{
+			name: "isSome_optional", receiverT: optInt, method: "isSome", retT: ir.TBool,
+			want: "intrinsic option_is_some(_1)",
+		},
+		{
+			name: "isNone_optional", receiverT: optInt, method: "isNone", retT: ir.TBool,
+			want: "intrinsic option_is_none(_1)",
+		},
+		{
+			name: "unwrap_optional", receiverT: optInt, method: "unwrap", retT: ir.TInt,
+			want: "intrinsic option_unwrap(_1)",
+		},
+		{
+			name: "unwrapOr_optional", receiverT: optInt, method: "unwrapOr", retT: ir.TInt,
+			args: []ir.Arg{{Value: &ir.IntLit{Text: "0", T: ir.TInt}}},
+			want: "intrinsic option_unwrap_or(_1, const 0 Int)",
+		},
+		{
+			name: "isSome_named", receiverT: namedOpt, method: "isSome", retT: ir.TBool,
+			want: "intrinsic option_is_some(_1)",
+		},
+		{
+			name: "unwrap_named", receiverT: namedOpt, method: "unwrap", retT: ir.TInt,
+			want: "intrinsic option_unwrap(_1)",
+		},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) { runStdlibMethodTest(t, c) })
+	}
+}
+
+func TestLowerStdlibResultMethods(t *testing.T) {
+	resT := &ir.NamedType{Name: "Result", Args: []ir.Type{ir.TInt, ir.TString}}
+	cases := []stdlibMethodTest{
+		{
+			name: "isOk", receiverT: resT, method: "isOk", retT: ir.TBool,
+			want: "intrinsic result_is_ok(_1)",
+		},
+		{
+			name: "isErr", receiverT: resT, method: "isErr", retT: ir.TBool,
+			want: "intrinsic result_is_err(_1)",
+		},
+		{
+			name: "unwrap", receiverT: resT, method: "unwrap", retT: ir.TInt,
+			want: "intrinsic result_unwrap(_1)",
+		},
+		{
+			name: "unwrapOr", receiverT: resT, method: "unwrapOr", retT: ir.TInt,
+			args: []ir.Arg{{Value: &ir.IntLit{Text: "0", T: ir.TInt}}},
+			want: "intrinsic result_unwrap_or(_1, const 0 Int)",
+		},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) { runStdlibMethodTest(t, c) })
+	}
+}
+
+// Regression: user-defined struct methods must NOT get swallowed by
+// the stdlib recogniser. `Point.sorted()` for a user Point struct
+// should route through the regular method call path, not emit a
+// `list_sorted` intrinsic.
+func TestLowerStdlibRecognizerDoesNotShadowUserMethods(t *testing.T) {
+	pointT := &ir.NamedType{Name: "Point"}
+	pointDecl := &ir.StructDecl{
+		Name:   "Point",
+		Fields: []*ir.Field{{Name: "x", Type: ir.TInt, Exported: true}},
+		Methods: []*ir.FnDecl{{
+			Name:   "len",
+			Return: ir.TInt,
+			Params: []*ir.Param{{Name: "self", Type: pointT}},
+			Body:   &ir.Block{Result: &ir.IntLit{Text: "0", T: ir.TInt}},
+		}},
+	}
+	caller := &ir.FnDecl{
+		Name:   "caller",
+		Return: ir.TInt,
+		Params: []*ir.Param{{Name: "p", Type: pointT}},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "p", Kind: ir.IdentParam, T: pointT},
+				Name:     "len",
+				T:        ir.TInt,
+			},
+		},
+	}
+	mod := &ir.Module{Package: "main", Decls: []ir.Decl{pointDecl, caller}}
+	out := Lower(mod)
+	if errs := Validate(out); len(errs) > 0 {
+		t.Fatalf("validate: %v\n\n%s", errs, Print(out))
+	}
+	text := Print(out)
+	if strings.Contains(text, "intrinsic list_len") || strings.Contains(text, "intrinsic string_len") {
+		t.Fatalf("user Point.len() must not become a stdlib intrinsic:\n%s", text)
+	}
+	if !strings.Contains(text, "call Point__len(") {
+		t.Fatalf("expected regular method call Point__len, got:\n%s", text)
+	}
+}
+
+// Regression: the stdlib recogniser must not fire on concurrency
+// receivers. `ch.contains(x)` isn't a real Channel method but a
+// receiver-type match on Channel must still beat the stdlib check.
+// (This also guards against a hypothetical name collision.)
+func TestLowerStdlibRecognizerDoesNotShadowConcurrencyMethods(t *testing.T) {
+	chInt := &ir.NamedType{Name: "Channel", Args: []ir.Type{ir.TInt}}
+	optInt := &ir.OptionalType{Inner: ir.TInt}
+	fn := &ir.FnDecl{
+		Name:   "pop",
+		Return: optInt,
+		Params: []*ir.Param{{Name: "ch", Type: chInt}},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "ch", Kind: ir.IdentParam, T: chInt},
+				Name:     "recv",
+				T:        optInt,
+			},
+		},
+	}
+	mod := lowerHIR(t, fn)
+	text := Print(mod)
+	if !strings.Contains(text, "intrinsic chan_recv(") {
+		t.Fatalf("expected chan_recv, got:\n%s", text)
+	}
+}

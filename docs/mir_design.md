@@ -211,12 +211,18 @@ runtime symbol their target exposes. Kinds group into families:
   inside the select closure.
 - **Concurrency — cancellation**: `IntrinsicIsCancelled`,
   `IntrinsicCheckCancelled`, `IntrinsicYield`, `IntrinsicSleep`.
+- **Stdlib collections / primitives** (Stage 2d): the `list_*`,
+  `map_*`, `set_*`, `string_*`, `bytes_*`, `option_*`, `result_*`
+  intrinsic families cover method calls on the built-in primitive
+  types. See the Stage 2d migration note below for the full list.
 
 Intrinsics whose runtime ABI is "fire and forget" (`chan_send`,
-`chan_close`, `group_cancel`, `yield`, and all four
-`select_recv`/`send`/`timeout`/`default` arm registrations) always
-carry a nil `Dest` — the lowerer drops the destination even when the
-call site was written in expression position.
+`chan_close`, `group_cancel`, `yield`, the four
+`select_recv`/`send`/`timeout`/`default` arm registrations, and the
+mutating stdlib pair — `list_push`, `map_set`, `map_remove`,
+`set_insert`) always carry a nil `Dest` — the lowerer drops the
+destination even when the call site was written in expression
+position.
 
 `StorageLive` / `StorageDead` mark the live range of a local. Backends
 that do not care may ignore them; they exist so that future lifetime
@@ -396,13 +402,17 @@ assigned into.
   concurrency name (`thread.spawn`, `thread.chan`, `thread.select`,
   …) do the same.
 - `IntrinsicCall`: `IntrinsicInstr`.
-- `MethodCall`: first checks for an aliased qualifier (Stage 2a) and
-  a runtime-type concurrency method (Stage 2b — `Channel.recv`,
-  `Channel.close`, `Channel.isClosed`, `Handle.join`, `Group.spawn`,
-  `Group.cancel`, `Group.isCancelled`). Concurrency matches emit an
-  `IntrinsicInstr` with the receiver as the first operand. Otherwise
-  resolves to a direct function whose first parameter is the
-  receiver and emits a `CallInstr`.
+- `MethodCall`: recogniser cascade, in order — (a) aliased
+  qualifier (Stage 2a: `thread.spawn`, `runtime.strings.Split`,
+  …), (b) runtime-type concurrency method (Stage 2b:
+  `Channel.recv`, `Channel.close`, `Channel.isClosed`,
+  `Handle.join`, `Group.spawn`/`cancel`/`isCancelled`, `Select.recv`
+  /`send`/`timeout`/`default`), (c) stdlib primitive method
+  (Stage 2d: `List<T>`, `Map<K,V>`, `Set<T>`, `String`, `Bytes`,
+  `Option<T>` / `T?`, `Result<T,E>`). A match emits an
+  `IntrinsicInstr` with the receiver as the first operand. If no
+  recogniser fires the lowerer resolves to a direct function whose
+  first parameter is the receiver and emits a `CallInstr`.
 - `ChanSendStmt`: `IntrinsicChanSend{[channel, value]}` with `Dest`
   always nil.
 - `for x in ch` (channel iterable): receive-loop header → body →
@@ -603,10 +613,58 @@ MIR tests isolated from front-end churn.
 
   Closure-to-SSA captures are still deferred until the borrow rules
   land in the language spec — `AggClosure` stays as-is for now and
-  will be upgraded once the spec stabilises. The stdlib intrinsic
-  surface beyond concurrency (list / string / map runtime entry
-  points) is also deferred; it needs its own table-driven design and
-  a separate review.
+  will be upgraded once the spec stabilises.
+
+- **Stage 2d (landed).** Stdlib method surface. Primitive-type
+  method calls on `List<T>`, `Map<K, V>`, `Set<T>`, `String`,
+  `Bytes`, `Option<T>` (both `T?` and `NamedType{"Option"}`) and
+  `Result<T, E>` lower to dedicated intrinsics instead of generic
+  `CallInstr{FnRef{"Type__method"}}` calls. Concrete intrinsic set:
+
+  - List: `list_push`, `list_len`, `list_get`, `list_is_empty`,
+    `list_first`, `list_last`, `list_sorted`, `list_contains`,
+    `list_index_of`, `list_to_set`.
+  - Map: `map_new`, `map_get`, `map_set`, `map_contains`, `map_len`,
+    `map_keys`, `map_values`, `map_remove`.
+  - Set: `set_new`, `set_insert`, `set_contains`, `set_len`,
+    `set_to_list`.
+  - String: `string_len`, `string_is_empty`, `string_contains`,
+    `string_starts_with`, `string_ends_with`, `string_index_of`,
+    `string_split`, `string_trim`, `string_to_upper`,
+    `string_to_lower`, `string_replace`, `string_chars`,
+    `string_bytes`.
+  - Bytes: `bytes_len`, `bytes_is_empty`, `bytes_get`.
+  - Option: `option_is_some`, `option_is_none`, `option_unwrap`,
+    `option_unwrap_or`.
+  - Result: `result_is_ok`, `result_is_err`, `result_unwrap`,
+    `result_unwrap_or`.
+
+  All stdlib intrinsics keep the receiver as their first operand;
+  element / key / value types flow through the receiver's type, so
+  backends read those directly when selecting the specialised
+  runtime symbol (`osty_rt_list_sorted_i64` vs `_string`, etc.).
+  The void list (`isVoidStdlibIntrinsic`) drops the destination for
+  `list_push`, `map_set`, `map_remove`, `set_insert` — those
+  mutate in place.
+
+  The recogniser (`stdlibIntrinsicForMethod`) runs in
+  `lowerMethodCallInto` **after** the use-alias / concurrency
+  checks, so neither a package-qualified call (`strings.Split`) nor
+  a concurrency receiver (`Channel`, `Handle`, `Group`, `Select`)
+  shadows a stdlib primitive name. Two regression tests pin that
+  ordering: `TestLowerStdlibRecognizerDoesNotShadowUserMethods`
+  confirms a user-defined `Point.len()` still reaches the regular
+  method-call path, and `…DoesNotShadowConcurrencyMethods` confirms
+  `Channel.recv()` still emits `chan_recv` rather than falling
+  through. String / Bytes receivers are dispatched from their
+  `PrimType` kind so the NamedType lookup path isn't needed for
+  them.
+
+  Closure-taking methods (`list.map`, `list.filter`,
+  `list.reduce`, `option.map`, `result.andThen`, etc.) remain
+  unrecognised in Stage 2d — they need closure-value ABI work that
+  overlaps with the deferred closure-to-SSA story. They fall
+  through to the ordinary `CallInstr` path for now.
 
 - **Stage 3.** Introduce a new llvmgen entry point —
   `GenerateFromMIR(m *mir.Module, opts)` — that consumes MIR directly.
