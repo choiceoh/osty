@@ -322,6 +322,32 @@ func TestGenerateListPushStmtUsesRuntimeABI(t *testing.T) {
 	}
 }
 
+func TestGenerateManagedListPushStmtUsesSafepoint(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn append(mut values: List<String>, item: String) {
+    values.push(item)
+}
+`)
+
+	ir, err := Generate(file, Options{
+		PackageName: "core",
+		SourcePath:  "/tmp/list_push_managed.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"declare void @osty.gc.safepoint_v1(i64, ptr, i64)",
+		"call void @osty.gc.safepoint_v1(",
+		"call void @osty_rt_list_push_ptr(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestGenerateForInOverListStringUsesRuntimeABI(t *testing.T) {
 	file := parseLLVMGenFile(t, `fn visit(items: List<String>) {
     for item in items {
