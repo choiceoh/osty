@@ -283,11 +283,17 @@ artifact/cache layout 정책은 [`LLVM_ARTIFACT_LAYOUT.md`](./LLVM_ARTIFACT_LAYO
   - Phase 6a(interface vtable scaffold)는 llvmgen 렌더러에서 구조만
     갖춘다: `%osty.iface = type { ptr, ptr }` fat-pointer 타입과
     structural match 기반으로 발견된 (impl, interface) 쌍마다
-    `@osty.vtable.<impl>__<iface>` 상수 global을 emit. Boxing과
-    method dispatch 경로는 Phase 6b+로 보류
+    `@osty.vtable.<impl>__<iface>` 상수 global을 emit
     (smoke: `TestGenerateModuleInterfaceVtableEmitted`).
+  - Phase 6b(interface boxing + vtable dispatch) 추가: `llvmType`이
+    interface를 `%osty.iface`로 반환, `emitLet`의 concrete→interface
+    경로에서 boxing (alloca + insertvalue 2회), `emitInterfaceMethodCall`
+    이 수신자가 `%osty.iface`인 call을 vtable extractvalue + getelementptr
+    + indirect call로 낮춘다. 현 Phase 6b 한계: 메서드는 non-self
+    인자 0개만 (추가 인자는 `LLVM0xx unsupported`로 바운드).
+    smoke: `TestGenerateModuleInterfaceBoxingDispatch`.
   - 남은 범위: bare function-pointer turbofish (`let f = id::<Int>`),
-    interface value의 boxing + vtable dispatch (Phase 6b+),
+    interface method의 non-self 인자 지원 (Phase 6c),
     payload-free / 비-리터럴 인자를 가진 variant call의 타입
     복원(궁극적으로는 checker 쪽 generic variant-constructor inference
     보강).
