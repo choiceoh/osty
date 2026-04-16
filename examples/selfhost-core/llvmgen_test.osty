@@ -81,7 +81,7 @@ fn testLlvmToolchainPlanIsOstyOwned() {
 fn testLlvmExecutableCorpusPlanIsOstyOwned() {
     let cases = llvmSmokeExecutableCorpus()
 
-    testing.assert(cases.len() == 18)
+    testing.assert(cases.len() == 22)
     testing.assert(cases[0].name == "minimal")
     testing.assert(cases[0].fixture == "minimal_print.osty")
     testing.assert(cases[0].stdout == "42\n")
@@ -136,6 +136,18 @@ fn testLlvmExecutableCorpusPlanIsOstyOwned() {
     testing.assert(cases[17].name == "enum-mut")
     testing.assert(cases[17].fixture == "enum_mut_print.osty")
     testing.assert(cases[17].stdout == "42\n")
+    testing.assert(cases[18].name == "enum-match")
+    testing.assert(cases[18].fixture == "enum_match_print.osty")
+    testing.assert(cases[18].stdout == "42\n")
+    testing.assert(cases[19].name == "enum-match-return")
+    testing.assert(cases[19].fixture == "enum_match_return_print.osty")
+    testing.assert(cases[19].stdout == "42\n")
+    testing.assert(cases[20].name == "enum-match-param")
+    testing.assert(cases[20].fixture == "enum_match_param_print.osty")
+    testing.assert(cases[20].stdout == "42\n")
+    testing.assert(cases[21].name == "enum-match-mut")
+    testing.assert(cases[21].fixture == "enum_match_mut_print.osty")
+    testing.assert(cases[21].stdout == "42\n")
 }
 
 fn testLlvmUnsupportedDiagnosticPolicyIsOstyOwned() {
@@ -372,4 +384,40 @@ fn testLlvmSmokeEnumMutableIsOstyOwned() {
     assertLlvmContains(ir, "store i64 1")
     assertLlvmContains(ir, "load i64")
     assertLlvmContains(ir, "icmp eq i64")
+}
+
+fn testLlvmSmokeEnumMatchIsOstyOwned() {
+    let ir = llvmSmokeEnumMatchIR("/tmp/enum_match_print.osty")
+
+    assertLlvmContains(ir, "icmp eq i64 1, 1")
+    assertLlvmContains(ir, "if.expr.then")
+    assertLlvmContains(ir, "phi i64 [ 42")
+    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_i64")
+}
+
+fn testLlvmSmokeEnumMatchReturnIsOstyOwned() {
+    let ir = llvmSmokeEnumMatchReturnIR("/tmp/enum_match_return_print.osty")
+
+    assertLlvmContains(ir, "define i64 @pick() \{")
+    assertLlvmContains(ir, "define i64 @score() \{")
+    assertLlvmContains(ir, "call i64 @pick()")
+    assertLlvmContains(ir, "phi i64")
+}
+
+fn testLlvmSmokeEnumMatchParamIsOstyOwned() {
+    let ir = llvmSmokeEnumMatchParamIR("/tmp/enum_match_param_print.osty")
+
+    assertLlvmContains(ir, "define i64 @score(i64 %state) \{")
+    assertLlvmContains(ir, "icmp eq i64 %state, 1")
+    assertLlvmContains(ir, "phi i64")
+    assertLlvmContains(ir, "call i64 @score(i64 1)")
+}
+
+fn testLlvmSmokeEnumMatchMutableIsOstyOwned() {
+    let ir = llvmSmokeEnumMatchMutableIR("/tmp/enum_match_mut_print.osty")
+
+    assertLlvmContains(ir, "alloca i64")
+    assertLlvmContains(ir, "store i64 1")
+    assertLlvmContains(ir, "load i64")
+    assertLlvmContains(ir, "phi i64")
 }

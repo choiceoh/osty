@@ -1,0 +1,19 @@
+enum Switch {
+    Off
+    On
+}
+
+fn pick() -> Switch {
+    On
+}
+
+fn score() -> Int {
+    match pick() {
+        On -> 42,
+        Off -> 0,
+    }
+}
+
+fn main() {
+    println(score())
+}

@@ -1,0 +1,12 @@
+enum Switch {
+    Off
+    On
+}
+
+fn main() {
+    let state: Switch = On
+    println(match state {
+        On -> 42,
+        Off -> 0,
+    })
+}

@@ -6,8 +6,9 @@
 // can produce textual IR and drive a host clang toolchain for supported
 // object/binary artifacts. LLVM backend meaning, including scalar instruction
 // builders, plain/escaped ASCII string constants/local values/function values,
-// simple struct aggregate values, payload-free enum tag values, and
-// unsupported-source diagnostic categories, is authored in Osty
+// simple struct aggregate values, payload-free enum tag values, payload-free
+// enum match expressions, and unsupported-source diagnostic categories, is
+// authored in Osty
 // selfhost-core; this package remains the bootstrap host shim for file I/O and
 // process execution.
 package backend

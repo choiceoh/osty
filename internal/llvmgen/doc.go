@@ -4,9 +4,10 @@
 // functions or script files, integer println expressions, plain ASCII string
 // println literals, local string values with simple escapes, simple String
 // returns/parameters, simple value-aggregate structs, payload-free enum tags,
-// immutable scalar lets, mutable scalar locals, simple Int/Bool helper
-// functions, statement-position if/else, value-position if/else, simple Bool
-// logical operators, and inclusive/exclusive Int range loops.
+// payload-free enum match expressions, immutable scalar lets, mutable scalar
+// locals, simple Int/Bool helper functions, statement-position if/else,
+// value-position if/else, simple Bool logical operators, and inclusive/
+// exclusive Int range loops.
 // Unsupported shapes return ErrUnsupported so callers can fall back to
 // inspectable skeleton IR while the backend grows. The module/function/skeleton
 // renderers, scalar/string/struct/enum instruction builders, LLVM toolchain
