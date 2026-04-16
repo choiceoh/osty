@@ -254,6 +254,45 @@ fn main() {
 	}
 }
 
+// TestGenerateModuleInterfaceVtableEmitted covers the Phase 6a scaffold:
+// when a non-generic struct's method set structurally satisfies a
+// non-generic interface, the LLVM IR must gain
+//   - the `%osty.iface = type { ptr, ptr }` fat-pointer type, and
+//   - a `@osty.vtable.<impl>__<iface>` constant global whose function
+//     pointers reference the concrete methods in interface-declaration
+//     order.
+// Boxing and method-dispatch paths stay out of scope for this phase —
+// the smoke only verifies that the vtable *exists*.
+func TestGenerateModuleInterfaceVtableEmitted(t *testing.T) {
+	src := `interface Sized {
+    fn size(self) -> Int
+}
+
+struct Vec {
+    count: Int,
+
+    fn size(self) -> Int {
+        self.count
+    }
+}
+
+fn main() {
+    let v = Vec { count: 3 }
+    println(v.size())
+}
+`
+	got := runMonoLowerPipeline(t, src, "/tmp/phase6a_iface_vtable_ir.osty")
+	for _, want := range []string{
+		"%osty.iface = type { ptr, ptr }",
+		"@osty.vtable.Vec__Sized",
+		"ptr @Vec__size",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // TestGenerateModuleMethodLocalGenericGetMonomorphized verifies the
 // Phase 4 path: a non-generic struct with a generic method
 // (`fn get<U>(self, u: U) -> U`) gets specialized per turbofish call
