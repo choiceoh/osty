@@ -16,8 +16,8 @@ var sourceFiles = []string{
 	"examples/selfhost-core/semver.osty",
 	"examples/selfhost-core/semver_parse.osty",
 	"examples/selfhost-core/frontend.osty",
-	"examples/selfhost-core/lexer.osty",
-	"examples/selfhost-core/parser.osty",
+	"toolchain/lexer.osty",
+	"toolchain/parser.osty",
 	"examples/selfhost-core/formatter_ast.osty",
 	"examples/selfhost-core/check_bridge.osty",
 	"examples/selfhost-core/check.osty",
@@ -152,6 +152,7 @@ func mergedSource(root string) ([]byte, error) {
 		b.WriteString(rel)
 		b.WriteString(" ----\n")
 		trimmed := stripLeadingStringsUse(string(data))
+		trimmed = normalizeStdStringsCalls(trimmed)
 		b.WriteString(trimmed)
 		if !strings.HasSuffix(trimmed, "\n") {
 			b.WriteByte('\n')
@@ -162,23 +163,63 @@ func mergedSource(root string) ([]byte, error) {
 }
 
 func stripLeadingStringsUse(src string) string {
-	const prefix = `use go "strings" as strings {`
-	if !strings.HasPrefix(strings.TrimLeft(src, "\ufeff \t\r\n"), prefix) {
+	trimmed := strings.TrimLeft(src, "\ufeff \t\r\n")
+
+	// Handle Go FFI form: use go "strings" as strings { ... }
+	const goPrefix = `use go "strings" as strings {`
+	if strings.HasPrefix(trimmed, goPrefix) {
+		lines := strings.SplitAfter(src, "\n")
+		started := false
+		for i, line := range lines {
+			t := strings.TrimSpace(line)
+			if !started {
+				if strings.HasPrefix(t, goPrefix) {
+					started = true
+				}
+				continue
+			}
+			if t == "}" {
+				return strings.Join(lines[i+1:], "")
+			}
+		}
 		return src
 	}
-	lines := strings.SplitAfter(src, "\n")
-	started := false
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if !started {
-			if strings.HasPrefix(trimmed, prefix) {
-				started = true
-			}
-			continue
+
+	// Handle std.strings form: use std.strings as strings  (single line)
+	const stdPrefix = "use std.strings as strings"
+	if strings.HasPrefix(trimmed, stdPrefix) {
+		idx := strings.Index(src, stdPrefix)
+		end := strings.IndexByte(src[idx:], '\n')
+		if end >= 0 {
+			return src[:idx] + src[idx+end+1:]
 		}
-		if trimmed == "}" {
-			return strings.Join(lines[i+1:], "")
-		}
+		return src[:idx]
+	}
+
+	return src
+}
+
+// normalizeStdStringsCalls rewrites camelCase strings.xxx() calls (from
+// std.strings) to PascalCase so they match the Go FFI declarations in
+// stringsPrelude. Only applies to files that originally used std.strings.
+func normalizeStdStringsCalls(src string) string {
+	// Only touch files that had the std.strings import (now stripped).
+	// We detect this by checking whether any camelCase strings.* call appears.
+	for _, pair := range [][2]string{
+		{"strings.split(", "strings.Split("},
+		{"strings.join(", "strings.Join("},
+		{"strings.hasPrefix(", "strings.HasPrefix("},
+		{"strings.hasSuffix(", "strings.HasSuffix("},
+		{"strings.trimSpace(", "strings.TrimSpace("},
+		{"strings.replaceAll(", "strings.ReplaceAll("},
+		{"strings.trimPrefix(", "strings.TrimPrefix("},
+		{"strings.trimSuffix(", "strings.TrimSuffix("},
+		{"strings.repeat(", "strings.Repeat("},
+		{"strings.count(", "strings.Count("},
+		{"strings.fields(", "strings.Fields("},
+		{"strings.splitN(", "strings.SplitN("},
+	} {
+		src = strings.ReplaceAll(src, pair[0], pair[1])
 	}
 	return src
 }
