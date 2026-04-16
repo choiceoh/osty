@@ -61,6 +61,11 @@ jobs:
           go generate ./internal/selfhost
           git diff --exit-code -- internal/selfhost/generated.go
 
+      - name: Verify generated selfhost CI core
+        run: |
+          go generate ./internal/ci
+          git diff --exit-code -- internal/ci/osty_generated.go
+
       - name: Vet
         run: go vet ./...
 

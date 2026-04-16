@@ -1,0 +1,1073 @@
+use go "github.com/osty/osty/internal/cihost" as host {
+    fn KeepAlive() -> Bool
+    fn NowUTC() -> Time
+    fn DiagnosticSeverity(d: Diagnostic?) -> String
+    fn Synthetic(severity: String, code: String, msg: String) -> Diagnostic?
+    fn EmptyDiagnostics() -> List<Diagnostic?>
+    fn EmptyPackages() -> List<ResolvePackage?>
+    fn EmptyPackageResults() -> List<PackageResult?>
+
+    fn LoadRunnerState(root: String, manifest: Manifest?) -> LoadResult
+    fn OstyFiles(root: String, packages: List<ResolvePackage?>) -> List<String>
+    fn CheckFormat(root: String, files: List<String>) -> CheckResult
+    fn CheckLint(
+        manifest: Manifest?,
+        packages: List<ResolvePackage?>,
+        results: List<PackageResult?>,
+    ) -> CheckResult
+    fn ManifestCoreOf(manifest: Manifest?) -> ManifestCore
+    fn HasManifest(manifest: Manifest?) -> Bool
+    fn HasWorkspace(manifest: Manifest?) -> Bool
+    fn WorkspaceMembers(manifest: Manifest?) -> List<String>
+    fn DependencyCoreRows(manifest: Manifest?) -> List<String>
+    fn HasDependencies(manifest: Manifest?) -> Bool
+    fn CheckWorkspaceMemberPaths(root: String, members: List<String>) -> List<Diagnostic?>
+    fn CheckPolicyFileSizes(
+        root: String,
+        files: List<String>,
+        maxFileBytes: Int,
+    ) -> List<Diagnostic?>
+    fn CheckLockfile(root: String, manifest: Manifest?) -> CheckResult
+    fn CheckReleaseLockfile(root: String, manifest: Manifest?) -> List<Diagnostic?>
+
+    fn ReadSnapshotHost(path: String) -> SnapshotReadResult
+    fn WriteSnapshotHost(path: String, snapshot: Snapshot) -> String
+    fn NewSingleSnapshotHost(pkg: ResolvePackage?, version: String, edition: String) -> Snapshot
+    fn NewWorkspaceSnapshotHost(
+        packages: List<ResolvePackage?>,
+        version: String,
+        edition: String,
+    ) -> Snapshot
+    fn CapturePackageHost(pkg: ResolvePackage?) -> List<Symbol>
+    fn CompareSnapshots(baseline: Snapshot, current: Snapshot) -> Diff
+
+    struct Time {}
+    struct Diagnostic {}
+    struct Manifest {}
+    struct ResolveWorkspace {}
+    struct ResolvePackage {}
+    struct PackageResult {}
+
+    struct LoadResult {
+        Root: String,
+        Manifest: Manifest?,
+        Workspace: ResolveWorkspace?,
+        Packages: List<ResolvePackage?>,
+        Results: List<PackageResult?>,
+        Error: String,
+    }
+
+    struct CheckResult {
+        Note: String,
+        Diagnostics: List<Diagnostic?>,
+    }
+
+    struct ManifestCore {
+        HasPackage: Bool,
+        Name: String,
+        Version: String,
+        Edition: String,
+        License: String,
+        Description: String,
+    }
+
+    struct Snapshot {
+        Schema: Int,
+        Package: String,
+        Version: String,
+        Edition: String,
+        Symbols: List<Symbol>,
+        Packages: Map<String, List<Symbol>>,
+    }
+
+    struct Symbol {
+        Name: String,
+        Kind: String,
+        Sig: String,
+    }
+
+    struct Diff {
+        Removed: List<SymbolRef>,
+        Added: List<SymbolRef>,
+        Changed: List<SymbolRef>,
+    }
+
+    struct SymbolRef {
+        Pkg: String,
+        Symbol: Symbol,
+    }
+
+    struct SnapshotReadResult {
+        Snapshot: Snapshot,
+        Error: String,
+    }
+}
+use go "strings" as ciStrings {
+    fn HasPrefix(s: String, prefix: String) -> Bool
+    fn Join(elems: List<String>, sep: String) -> String
+    fn Split(s: String, sep: String) -> List<String>
+    fn SplitN(s: String, sep: String, n: Int) -> List<String>
+    fn TrimPrefix(s: String, prefix: String) -> String
+}
+
+pub type CheckName = String
+
+pub let CheckFormat: CheckName = "format"
+pub let CheckLint: CheckName = "lint"
+pub let CheckPolicy: CheckName = "policy"
+pub let CheckLockfile: CheckName = "lockfile"
+pub let CheckRelease: CheckName = "release"
+pub let CheckSemver: CheckName = "semver"
+
+/// Options controls which checks Runner.Run executes.
+pub struct Options {
+    pub Format: Bool,
+    pub Lint: Bool,
+    pub Policy: Bool,
+    pub Lockfile: Bool,
+    pub Release: Bool,
+    pub Semver: Bool,
+    pub SemverWarnOnly: Bool,
+    pub Strict: Bool,
+    pub Baseline: String,
+    pub MaxFileBytes: Int,
+}
+
+/// Check is the outcome of one individual CI check.
+pub struct Check {
+    pub Name: CheckName,
+    pub Passed: Bool,
+    pub Skipped: Bool,
+    pub Note: String,
+    pub Diags: List<host.Diagnostic?>,
+}
+
+/// Report is the aggregated outcome of one `osty ci` run.
+pub struct Report {
+    pub ProjectRoot: String,
+    pub StartedAt: host.Time,
+    pub FinishedAt: host.Time,
+    pub Checks: List<Check>,
+
+    pub fn AllPassed(self) -> Bool {
+        for c in self.Checks {
+            if c.Skipped {
+                let _ = c
+            } else if !(c.Passed) {
+                return false
+            }
+        }
+        true
+    }
+}
+
+/// Runner carries the pre-loaded shared state every check consumes.
+pub struct Runner {
+    pub Root: String,
+    pub Opts: Options,
+    pub Manifest: host.Manifest?,
+    pub Workspace: host.ResolveWorkspace?,
+    pub Packages: List<host.ResolvePackage?>,
+    pub Results: List<host.PackageResult?>,
+
+    pub fn Load(mut self) -> String {
+        let loaded = host.LoadRunnerState(self.Root, self.Manifest)
+        if loaded.Error != "" {
+            return loaded.Error
+        }
+        self.Root = loaded.Root
+        self.Manifest = loaded.Manifest
+        self.Workspace = loaded.Workspace
+        self.Packages = loaded.Packages
+        self.Results = loaded.Results
+        ""
+    }
+
+    pub fn Run(self) -> Report {
+        let mut rep = Report {
+            ProjectRoot: self.Root,
+            StartedAt: host.NowUTC(),
+            FinishedAt: host.NowUTC(),
+            Checks: [],
+        }
+
+        if self.Opts.Format {
+            rep.Checks.push(self.checkFormat())
+        } else {
+            rep.Checks.push(skipped(CheckFormat))
+        }
+        if self.Opts.Policy {
+            rep.Checks.push(self.checkPolicy())
+        } else {
+            rep.Checks.push(skipped(CheckPolicy))
+        }
+        if self.Opts.Lockfile {
+            rep.Checks.push(self.checkLockfile())
+        } else {
+            rep.Checks.push(skipped(CheckLockfile))
+        }
+        if self.Opts.Lint {
+            rep.Checks.push(self.checkLint())
+        } else {
+            rep.Checks.push(skipped(CheckLint))
+        }
+        if self.Opts.Release {
+            rep.Checks.push(self.checkRelease())
+        } else {
+            rep.Checks.push(skipped(CheckRelease))
+        }
+        if self.Opts.Semver {
+            rep.Checks.push(self.checkSemver())
+        } else {
+            rep.Checks.push(skipped(CheckSemver))
+        }
+
+        for c in rep.Checks {
+            if c.Skipped {
+                let _ = c
+            } else {
+                c.Passed = ciCheckHostPassed(c.Diags, self.Opts.Strict)
+            }
+        }
+        rep.FinishedAt = host.NowUTC()
+        rep
+    }
+
+    fn checkFormat(self) -> Check {
+        checkFromHostResult(CheckFormat, host.CheckFormat(self.Root, self.ostyFiles()))
+    }
+
+    fn checkPolicy(self) -> Check {
+        let mut c = Check {
+            Name: CheckPolicy,
+            Passed: false,
+            Skipped: false,
+            Note: "",
+            Diags: host.EmptyDiagnostics(),
+        }
+        if !(host.HasManifest(self.Manifest)) {
+            c.Note = "no osty.toml found; policy checks skipped"
+            return c
+        }
+
+        let core = host.ManifestCoreOf(self.Manifest)
+        pushCoreDiagnostics(c, ciPolicyManifestFieldsCore(coreToCiManifest(core)))
+        if host.HasWorkspace(self.Manifest) {
+            let members = host.WorkspaceMembers(self.Manifest)
+            pushCoreDiagnostics(c, ciPolicyWorkspaceMembersCore(members))
+            pushHostDiagnostics(c, host.CheckWorkspaceMemberPaths(self.Root, members))
+        }
+        pushHostDiagnostics(
+            c,
+            host.CheckPolicyFileSizes(self.Root, self.ostyFiles(), self.Opts.MaxFileBytes),
+        )
+        c
+    }
+
+    fn checkLockfile(self) -> Check {
+        checkFromHostResult(CheckLockfile, host.CheckLockfile(self.Root, self.Manifest))
+    }
+
+    fn checkLint(self) -> Check {
+        checkFromHostResult(CheckLint, host.CheckLint(self.Manifest, self.Packages, self.Results))
+    }
+
+    fn checkRelease(self) -> Check {
+        let mut c = Check {
+            Name: CheckRelease,
+            Passed: false,
+            Skipped: false,
+            Note: "",
+            Diags: host.EmptyDiagnostics(),
+        }
+        pushCoreDiagnostics(c, ciReleaseManifestCore(releaseCore(self.Manifest)))
+        if host.HasManifest(self.Manifest) && host.ManifestCoreOf(self.Manifest).HasPackage {
+            pushHostDiagnostics(c, host.CheckReleaseLockfile(self.Root, self.Manifest))
+        }
+        c
+    }
+
+    fn checkSemver(self) -> Check {
+        let mut c = Check {
+            Name: CheckSemver,
+            Passed: false,
+            Skipped: false,
+            Note: "",
+            Diags: host.EmptyDiagnostics(),
+        }
+        if self.Opts.Baseline == "" {
+            c.Diags.push(
+                host.Synthetic("error", "CI401", "semver check enabled but --baseline was not set"),
+            )
+            return c
+        }
+
+        let baseline = host.ReadSnapshotHost(self.Opts.Baseline)
+        if baseline.Error != "" {
+            c.Diags.push(
+                host.Synthetic(
+                    "error",
+                    "CI402",
+                    ciJoin2("cannot read baseline snapshot: ", baseline.Error),
+                ),
+            )
+            return c
+        }
+        if packageCount(self.Packages) == 0 {
+            c.Diags.push(
+                host.Synthetic("error", "CI403", "no package loaded; cannot capture current API"),
+            )
+            return c
+        }
+
+        let manifestCore = host.ManifestCoreOf(self.Manifest)
+        let current = host.NewWorkspaceSnapshotHost(
+            self.Packages,
+            manifestCore.Version,
+            manifestCore.Edition,
+        )
+        let mut breakingIsError = !(ciMajorBumped(baseline.Snapshot.Version, current.Version))
+        if self.Opts.SemverWarnOnly {
+            breakingIsError = false
+        }
+
+        let diff = host.CompareSnapshots(baseline.Snapshot, current)
+        for s in diff.Removed {
+            let sev = ciBreakingSeverity(breakingIsError)
+            c.Diags.push(
+                host.Synthetic(
+                    sev,
+                    "CI410",
+                    ciJoin5(
+                        "breaking: exported ",
+                        s.Symbol.Kind,
+                        " \"",
+                        qualifiedSymbol(s),
+                        "\" was removed",
+                    ),
+                ),
+            )
+        }
+        for s in diff.Changed {
+            let sev = ciBreakingSeverity(breakingIsError)
+            c.Diags.push(
+                host.Synthetic(
+                    sev,
+                    "CI411",
+                    ciJoin7(
+                        "breaking: exported ",
+                        s.Symbol.Kind,
+                        " \"",
+                        qualifiedSymbol(s),
+                        "\" signature changed (now: ",
+                        s.Symbol.Sig,
+                        ")",
+                    ),
+                ),
+            )
+        }
+        for s in diff.Added {
+            c.Diags.push(
+                host.Synthetic(
+                    "warning",
+                    "CI420",
+                    ciJoin5(
+                        "additive: exported ",
+                        s.Symbol.Kind,
+                        " \"",
+                        qualifiedSymbol(s),
+                        "\" is new",
+                    ),
+                ),
+            )
+        }
+        c
+    }
+
+    fn ostyFiles(self) -> List<String> {
+        host.OstyFiles(self.Root, self.Packages)
+    }
+}
+
+/// DefaultOptions returns the quick bundle every `osty ci` invocation runs.
+pub fn DefaultOptions() -> Options {
+    Options {
+        Format: true,
+        Lint: true,
+        Policy: true,
+        Lockfile: true,
+        Release: false,
+        Semver: false,
+        SemverWarnOnly: false,
+        Strict: false,
+        Baseline: "",
+        MaxFileBytes: 0,
+    }
+}
+
+pub fn NewRunner(root: String, opts: Options) -> Runner {
+    let next = Options {
+        Format: opts.Format,
+        Lint: opts.Lint,
+        Policy: opts.Policy,
+        Lockfile: opts.Lockfile,
+        Release: opts.Release,
+        Semver: opts.Semver,
+        SemverWarnOnly: opts.SemverWarnOnly,
+        Strict: opts.Strict,
+        Baseline: opts.Baseline,
+        MaxFileBytes: ciPolicyMaxFileBytes(opts.Policy, opts.MaxFileBytes),
+    }
+    Runner {
+        Root: root,
+        Opts: next,
+        Manifest: None,
+        Workspace: None,
+        Packages: host.EmptyPackages(),
+        Results: host.EmptyPackageResults(),
+    }
+}
+
+pub fn CapturePackage(pkg: host.ResolvePackage?) -> List<host.Symbol> {
+    host.CapturePackageHost(pkg)
+}
+
+pub fn NewSingleSnapshot(pkg: host.ResolvePackage?, version: String, edition: String) -> host.Snapshot {
+    host.NewSingleSnapshotHost(pkg, version, edition)
+}
+
+pub fn NewWorkspaceSnapshot(
+    packages: List<host.ResolvePackage?>,
+    version: String,
+    edition: String,
+) -> host.Snapshot {
+    host.NewWorkspaceSnapshotHost(packages, version, edition)
+}
+
+pub fn WriteSnapshot(path: String, snap: host.Snapshot) -> String {
+    host.WriteSnapshotHost(path, snap)
+}
+
+pub fn ReadSnapshot(path: String) -> host.SnapshotReadResult {
+    host.ReadSnapshotHost(path)
+}
+
+pub fn Compare(baseline: host.Snapshot, current: host.Snapshot) -> host.Diff {
+    host.CompareSnapshots(baseline, current)
+}
+
+/// CiDiagCore is the pure self-hosted diagnostic shape used by `osty ci`.
+pub struct CiDiagCore {
+    pub severity: String,
+    pub code: String,
+    pub message: String,
+}
+
+pub struct CiManifestCore {
+    pub hasPackage: Bool,
+    pub name: String,
+    pub version: String,
+    pub edition: String,
+    pub license: String,
+    pub description: String,
+}
+
+pub struct CiDependencyCore {
+    pub name: String,
+    pub path: String,
+    pub hasGit: Bool,
+    pub gitTag: String,
+    pub gitRev: String,
+}
+
+pub struct CiReleaseCore {
+    pub hasManifest: Bool,
+    pub hasPackage: Bool,
+    pub version: String,
+    pub license: String,
+    pub dependencies: List<CiDependencyCore>,
+}
+
+pub struct CiSplit {
+    pub count: Int,
+    pub first: String,
+    pub second: String,
+    pub third: String,
+}
+
+pub struct CiSplitFive {
+    pub count: Int,
+    pub first: String,
+    pub second: String,
+    pub third: String,
+    pub fourth: String,
+    pub fifth: String,
+}
+
+pub fn ciPolicyMaxFileBytes(policy: Bool, maxFileBytes: Int) -> Int {
+    if policy && maxFileBytes == 0 {
+        1048576
+    } else {
+        maxFileBytes
+    }
+}
+
+pub fn ciCheckPassed(diags: List<CiDiagCore>, strict: Bool) -> Bool {
+    for d in diags {
+        if d.severity == "error" {
+            return false
+        }
+        if strict && d.severity == "warning" {
+            return false
+        }
+    }
+    true
+}
+
+pub fn ciDiagCount(diags: List<CiDiagCore>) -> Int {
+    let mut count = 0
+    for d in diags {
+        let _ = d
+        count = count + 1
+    }
+    count
+}
+
+pub fn ciSkippedNote() -> String {
+    "not enabled"
+}
+
+pub fn ciPolicyManifestFieldsCore(m: CiManifestCore) -> List<CiDiagCore> {
+    let mut out: List<CiDiagCore> = []
+    if !(m.hasPackage) {
+        return out
+    }
+
+    if m.name == "" {
+        out.push(ciError("CI101", "package.name is missing in osty.toml"))
+    } else if !(ciPackageNameValid(m.name)) {
+        out.push(
+            ciError(
+                "CI102",
+                ciJoin3("package.name \"", m.name, "\": expected [a-z][a-z0-9_-]*"),
+            ),
+        )
+    }
+
+    if m.version == "" {
+        out.push(ciError("CI103", "package.version is missing in osty.toml"))
+    }
+    if m.edition == "" {
+        out.push(
+            ciWarning(
+                "CI104",
+                "package.edition is not set - pin an edition (e.g. \"0.4\") to avoid drift",
+            ),
+        )
+    }
+    if m.license == "" {
+        out.push(
+            ciWarning(
+                "CI105",
+                "package.license is not set - set an SPDX identifier or leave the key empty if truly unlicensed",
+            ),
+        )
+    }
+    if m.description == "" {
+        out.push(
+            ciWarning("CI106", "package.description is empty - registry listings will be unhelpful"),
+        )
+    }
+
+    out
+}
+
+pub fn ciPolicyWorkspaceMembersCore(members: List<String>) -> List<CiDiagCore> {
+    let mut out: List<CiDiagCore> = []
+    if ciStringListEmpty(members) {
+        out.push(ciError("CI110", "[workspace] declared but members is empty"))
+        return out
+    }
+
+    for mem in members {
+        if ciWorkspaceMemberEscapes(mem) {
+            out.push(
+                ciError(
+                    "CI111",
+                    ciJoin3("workspace member \"", mem, "\" escapes the project root"),
+                ),
+            )
+        }
+    }
+    out
+}
+
+pub fn ciWorkspaceMemberEscapes(mem: String) -> Bool {
+    mem == "" || ciStrings.HasPrefix(mem, "..") || ciStrings.HasPrefix(mem, "/")
+}
+
+pub fn ciReleaseManifestCore(input: CiReleaseCore) -> List<CiDiagCore> {
+    let mut out: List<CiDiagCore> = []
+    if !(input.hasManifest) {
+        out.push(ciError("CI301", "no osty.toml found; nothing to release"))
+        return out
+    }
+    if !(input.hasPackage) {
+        out.push(
+            ciError(
+                "CI302",
+                "only package projects can be released (virtual workspaces have nothing to publish)",
+            ),
+        )
+        return out
+    }
+
+    if input.version == "" {
+        out.push(ciError("CI303", "package.version is missing"))
+    } else if !(ciIsStrictSemver(input.version)) {
+        out.push(
+            ciError(
+                "CI304",
+                ciJoin3("package.version \"", input.version, "\" is not strict SemVer"),
+            ),
+        )
+    }
+    if input.license == "" {
+        out.push(ciError("CI305", "package.license is required for release"))
+    }
+
+    for dep in input.dependencies {
+        if dep.path != "" {
+            out.push(
+                ciError(
+                    "CI306",
+                    ciJoin5(
+                        "dependency \"",
+                        dep.name,
+                        "\" uses path=\"",
+                        dep.path,
+                        "\"; path deps cannot be published",
+                    ),
+                ),
+            )
+        }
+        if dep.hasGit && dep.gitTag == "" && dep.gitRev == "" {
+            out.push(
+                ciWarning(
+                    "CI307",
+                    ciJoin3(
+                        "dependency \"",
+                        dep.name,
+                        "\" is tracked by branch; pin to a tag or rev before release",
+                    ),
+                ),
+            )
+        }
+    }
+
+    out
+}
+
+pub fn ciLockHasCore(packages: List<String>, name: String) -> Bool {
+    for pkg in packages {
+        if pkg == name {
+            return true
+        }
+    }
+    false
+}
+
+pub fn ciMajorBumped(base: String, cur: String) -> Bool {
+    let baseMajor = ciSemverMajor(base)
+    let curMajor = ciSemverMajor(cur)
+    baseMajor >= 0 && curMajor > baseMajor
+}
+
+pub fn ciIsStrictSemver(raw: String) -> Bool {
+    if raw == "" {
+        return false
+    }
+    let text = ciStrings.TrimPrefix(raw, "v")
+    if text == "" {
+        return false
+    }
+
+    let plus = ciSplitSummary(ciStrings.SplitN(text, "+", 2))
+    if plus.count == 2 && !(ciBuildIdentifiersValid(plus.second)) {
+        return false
+    }
+
+    let dash = ciSplitSummary(ciStrings.SplitN(plus.first, "-", 2))
+    if !(ciSemCoreValid(dash.first)) {
+        return false
+    }
+    if dash.count == 2 && !(ciPreIdentifiersValid(dash.second)) {
+        return false
+    }
+    true
+}
+
+fn skipped(name: CheckName) -> Check {
+    Check {
+        Name: name,
+        Passed: false,
+        Skipped: true,
+        Note: ciSkippedNote(),
+        Diags: host.EmptyDiagnostics(),
+    }
+}
+
+fn checkFromHostResult(name: CheckName, result: host.CheckResult) -> Check {
+    Check {
+        Name: name,
+        Passed: false,
+        Skipped: false,
+        Note: result.Note,
+        Diags: result.Diagnostics,
+    }
+}
+
+fn pushHostDiagnostics(c: Check, diags: List<host.Diagnostic?>) {
+    for d in diags {
+        c.Diags.push(d)
+    }
+}
+
+fn pushCoreDiagnostics(c: Check, diags: List<CiDiagCore>) {
+    for d in diags {
+        c.Diags.push(host.Synthetic(d.severity, d.code, d.message))
+    }
+}
+
+fn ciCheckHostPassed(diags: List<host.Diagnostic?>, strict: Bool) -> Bool {
+    for d in diags {
+        let severity = host.DiagnosticSeverity(d)
+        if severity == "error" {
+            return false
+        }
+        if strict && severity == "warning" {
+            return false
+        }
+    }
+    true
+}
+
+fn coreToCiManifest(m: host.ManifestCore) -> CiManifestCore {
+    CiManifestCore {
+        hasPackage: m.HasPackage,
+        name: m.Name,
+        version: m.Version,
+        edition: m.Edition,
+        license: m.License,
+        description: m.Description,
+    }
+}
+
+fn releaseCore(manifest: host.Manifest?) -> CiReleaseCore {
+    let m = host.ManifestCoreOf(manifest)
+    let mut deps: List<CiDependencyCore> = []
+    for row in host.DependencyCoreRows(manifest) {
+        let d = dependencyCoreFromRow(row)
+        deps.push(
+            CiDependencyCore {
+                name: d.name,
+                path: d.path,
+                hasGit: d.hasGit,
+                gitTag: d.gitTag,
+                gitRev: d.gitRev,
+            },
+        )
+    }
+    CiReleaseCore {
+        hasManifest: host.HasManifest(manifest),
+        hasPackage: m.HasPackage,
+        version: m.Version,
+        license: m.License,
+        dependencies: deps,
+    }
+}
+
+fn dependencyCoreFromRow(row: String) -> CiDependencyCore {
+    let parts = ciSplitFive(ciStrings.Split(row, "\t"))
+    CiDependencyCore {
+        name: parts.first,
+        path: parts.second,
+        hasGit: parts.third == "true",
+        gitTag: parts.fourth,
+        gitRev: parts.fifth,
+    }
+}
+
+fn packageCount(packages: List<host.ResolvePackage?>) -> Int {
+    let mut count = 0
+    for pkg in packages {
+        let _ = pkg
+        count = count + 1
+    }
+    count
+}
+
+fn ciBreakingSeverity(breakingIsError: Bool) -> String {
+    if breakingIsError {
+        "error"
+    } else {
+        "warning"
+    }
+}
+
+fn qualifiedSymbol(ref: host.SymbolRef) -> String {
+    if ref.Pkg == "" {
+        ref.Symbol.Name
+    } else {
+        ciJoin3(ref.Pkg, ".", ref.Symbol.Name)
+    }
+}
+
+fn ciError(code: String, message: String) -> CiDiagCore {
+    CiDiagCore { severity: "error", code, message }
+}
+
+fn ciWarning(code: String, message: String) -> CiDiagCore {
+    CiDiagCore { severity: "warning", code, message }
+}
+
+fn ciJoin2(a: String, b: String) -> String {
+    let mut parts: List<String> = []
+    parts.push(a)
+    parts.push(b)
+    ciStrings.Join(parts, "")
+}
+
+fn ciJoin3(a: String, b: String, c: String) -> String {
+    let mut parts: List<String> = []
+    parts.push(a)
+    parts.push(b)
+    parts.push(c)
+    ciStrings.Join(parts, "")
+}
+
+fn ciJoin5(a: String, b: String, c: String, d: String, e: String) -> String {
+    let mut parts: List<String> = []
+    parts.push(a)
+    parts.push(b)
+    parts.push(c)
+    parts.push(d)
+    parts.push(e)
+    ciStrings.Join(parts, "")
+}
+
+fn ciJoin7(a: String, b: String, c: String, d: String, e: String, f: String, g: String) -> String {
+    let mut parts: List<String> = []
+    parts.push(a)
+    parts.push(b)
+    parts.push(c)
+    parts.push(d)
+    parts.push(e)
+    parts.push(f)
+    parts.push(g)
+    ciStrings.Join(parts, "")
+}
+
+fn ciStringListEmpty(xs: List<String>) -> Bool {
+    for x in xs {
+        let _ = x
+        return false
+    }
+    true
+}
+
+fn ciPackageNameValid(name: String) -> Bool {
+    if name == "" {
+        return false
+    }
+    let mut first = true
+    for unit in ciStrings.Split(name, "") {
+        if first {
+            if !(unit >= "a" && unit <= "z") {
+                return false
+            }
+            first = false
+        } else if !((unit >= "a" && unit <= "z") || (unit >= "0" && unit <= "9") || unit == "_" || unit == "-") {
+            return false
+        }
+    }
+    true
+}
+
+fn ciSplitSummary(parts: List<String>) -> CiSplit {
+    let mut count = 0
+    let mut first = ""
+    let mut second = ""
+    let mut third = ""
+    for part in parts {
+        if count == 0 {
+            first = part
+        } else if count == 1 {
+            second = part
+        } else if count == 2 {
+            third = part
+        }
+        count = count + 1
+    }
+    CiSplit { count, first, second, third }
+}
+
+fn ciSplitFive(parts: List<String>) -> CiSplitFive {
+    let mut count = 0
+    let mut first = ""
+    let mut second = ""
+    let mut third = ""
+    let mut fourth = ""
+    let mut fifth = ""
+    for part in parts {
+        if count == 0 {
+            first = part
+        } else if count == 1 {
+            second = part
+        } else if count == 2 {
+            third = part
+        } else if count == 3 {
+            fourth = part
+        } else if count == 4 {
+            fifth = part
+        }
+        count = count + 1
+    }
+    CiSplitFive { count, first, second, third, fourth, fifth }
+}
+
+fn ciSemverMajor(raw: String) -> Int {
+    if !(ciIsStrictSemver(raw)) {
+        return -1
+    }
+    let text = ciStrings.TrimPrefix(raw, "v")
+    let plus = ciSplitSummary(ciStrings.SplitN(text, "+", 2))
+    let dash = ciSplitSummary(ciStrings.SplitN(plus.first, "-", 2))
+    let core = ciSplitSummary(ciStrings.Split(dash.first, "."))
+    ciParseSemNumber(core.first)
+}
+
+fn ciSemCoreValid(text: String) -> Bool {
+    let parts = ciSplitSummary(ciStrings.Split(text, "."))
+    if parts.count != 3 {
+        return false
+    }
+    ciParseSemNumber(parts.first) >= 0 && ciParseSemNumber(parts.second) >= 0 && ciParseSemNumber(
+        parts.third,
+    ) >= 0
+}
+
+fn ciPreIdentifiersValid(text: String) -> Bool {
+    if text == "" {
+        return false
+    }
+    for part in ciStrings.Split(text, ".") {
+        if !(ciPreIdentValid(part)) {
+            return false
+        }
+    }
+    true
+}
+
+fn ciBuildIdentifiersValid(text: String) -> Bool {
+    if text == "" {
+        return false
+    }
+    for part in ciStrings.Split(text, ".") {
+        if !(ciIdentifierTextValid(part)) {
+            return false
+        }
+    }
+    true
+}
+
+fn ciPreIdentValid(text: String) -> Bool {
+    if text == "" {
+        return false
+    }
+    if ciAllAsciiDigits(text) {
+        return ciStringUnitCount(text) == 1 || !(ciStrings.HasPrefix(text, "0"))
+    }
+    ciIdentifierTextValid(text)
+}
+
+fn ciIdentifierTextValid(text: String) -> Bool {
+    if text == "" {
+        return false
+    }
+    for unit in ciStrings.Split(text, "") {
+        if !(ciIsSemIdentUnit(unit)) {
+            return false
+        }
+    }
+    true
+}
+
+fn ciAllAsciiDigits(text: String) -> Bool {
+    if text == "" {
+        return false
+    }
+    for unit in ciStrings.Split(text, "") {
+        if ciDigitStringValue(unit) < 0 {
+            return false
+        }
+    }
+    true
+}
+
+fn ciStringUnitCount(text: String) -> Int {
+    let mut count = 0
+    for unit in ciStrings.Split(text, "") {
+        let _ = unit
+        count = count + 1
+    }
+    count
+}
+
+fn ciParseSemNumber(text: String) -> Int {
+    if text == "" {
+        return -1
+    }
+    if ciStringUnitCount(text) > 1 && ciStrings.HasPrefix(text, "0") {
+        return -1
+    }
+    let mut out = 0
+    for unit in ciStrings.Split(text, "") {
+        let digit = ciDigitStringValue(unit)
+        if digit < 0 {
+            return -1
+        }
+        out = out * 10 + digit
+    }
+    out
+}
+
+fn ciIsSemIdentUnit(unit: String) -> Bool {
+    (unit >= "0" && unit <= "9") || (unit >= "A" && unit <= "Z") || (unit >= "a" && unit <= "z") || unit == "-"
+}
+
+fn ciDigitStringValue(unit: String) -> Int {
+    if unit == "0" {
+        0
+    } else if unit == "1" {
+        1
+    } else if unit == "2" {
+        2
+    } else if unit == "3" {
+        3
+    } else if unit == "4" {
+        4
+    } else if unit == "5" {
+        5
+    } else if unit == "6" {
+        6
+    } else if unit == "7" {
+        7
+    } else if unit == "8" {
+        8
+    } else if unit == "9" {
+        9
+    } else {
+        -1
+    }
+}

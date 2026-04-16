@@ -1,0 +1,99 @@
+use std.testing
+
+fn testCiDefaultBundleIsQuickChecks() {
+    let opts = DefaultOptions()
+
+    testing.assert(opts.Format)
+    testing.assert(opts.Lint)
+    testing.assert(opts.Policy)
+    testing.assert(opts.Lockfile)
+    testing.assert(!(opts.Release))
+    testing.assert(!(opts.Semver))
+    testing.assertEq(ciPolicyMaxFileBytes(true, 0), 1048576)
+    testing.assertEq(ciPolicyMaxFileBytes(true, 42), 42)
+}
+
+fn testCiPolicyManifestFields() {
+    let missing = ciPolicyManifestFieldsCore(
+        CiManifestCore {
+            hasPackage: true,
+            name: "Osty",
+            version: "",
+            edition: "",
+            license: "",
+            description: "",
+        },
+    )
+
+    testing.assertEq(ciDiagCount(missing), 5)
+    testing.assertEq(missing[0].code, "CI102")
+    testing.assertEq(missing[1].code, "CI103")
+    testing.assertEq(missing[2].severity, "warning")
+
+    let virtual = ciPolicyManifestFieldsCore(
+        CiManifestCore {
+            hasPackage: false,
+            name: "",
+            version: "",
+            edition: "",
+            license: "",
+            description: "",
+        },
+    )
+    testing.assertEq(ciDiagCount(virtual), 0)
+}
+
+fn testCiReleasePolicyFindsPublishBlockers() {
+    let out = ciReleaseManifestCore(
+        CiReleaseCore {
+            hasManifest: true,
+            hasPackage: true,
+            version: "1.02.0",
+            license: "",
+            dependencies: [
+                CiDependencyCore {
+                    name: "local",
+                    path: "../local",
+                    hasGit: false,
+                    gitTag: "",
+                    gitRev: "",
+                },
+                CiDependencyCore {
+                    name: "branchy",
+                    path: "",
+                    hasGit: true,
+                    gitTag: "",
+                    gitRev: "",
+                },
+            ],
+        },
+    )
+
+    testing.assertEq(ciDiagCount(out), 4)
+    testing.assertEq(out[0].code, "CI304")
+    testing.assertEq(out[1].code, "CI305")
+    testing.assertEq(out[2].code, "CI306")
+    testing.assertEq(out[3].code, "CI307")
+    testing.assertEq(out[3].severity, "warning")
+}
+
+fn testCiSemverMajorBumpAndSyntax() {
+    testing.assert(ciIsStrictSemver("1.2.3"))
+    testing.assert(ciIsStrictSemver("v1.2.3-alpha.1+build.09"))
+    testing.assert(!(ciIsStrictSemver("1.02.3")))
+    testing.assert(!(ciIsStrictSemver("1.2")))
+    testing.assert(!(ciIsStrictSemver("1.2.3-01")))
+
+    testing.assert(ciMajorBumped("1.2.3", "2.0.0"))
+    testing.assert(!(ciMajorBumped("1.2.3", "1.9.0")))
+    testing.assert(!(ciMajorBumped("", "2.0.0")))
+}
+
+fn testCiCheckPassedHonorsStrictWarnings() {
+    let warnings = [CiDiagCore { severity: "warning", code: "W", message: "warn" }]
+    let errors = [CiDiagCore { severity: "error", code: "E", message: "err" }]
+
+    testing.assert(ciCheckPassed(warnings, false))
+    testing.assert(!(ciCheckPassed(warnings, true)))
+    testing.assert(!(ciCheckPassed(errors, false)))
+}
