@@ -190,20 +190,19 @@ func runRun(args []string, cliF cliFlags) {
 		binName += ".exe"
 	}
 	selectedBackend := backendFromCLI("run", backendID)
+	backendEntry, err := backend.PrepareEntry("main", entryAbs, file, res, chk)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "osty run: %v\n", err)
+		os.Exit(1)
+	}
 	emitResult, err := selectedBackend.Emit(context.Background(), backend.Request{
 		Layout: backend.Layout{
 			Root:    root,
 			Profile: resolved.Profile.Name,
 			Target:  triple,
 		},
-		Emit: emitMode,
-		Entry: backend.Entry{
-			PackageName: "main",
-			SourcePath:  entryAbs,
-			File:        file,
-			Resolve:     res,
-			Check:       chk,
-		},
+		Emit:       emitMode,
+		Entry:      backendEntry,
 		BinaryName: binName,
 		Features:   resolved.Features,
 	})

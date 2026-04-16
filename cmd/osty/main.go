@@ -1466,20 +1466,18 @@ func emitGenArtifact(name backend.Name, mode backend.EmitMode, pkgName, sourcePa
 		return nil, nil, err
 	}
 	defer os.RemoveAll(tmpRoot)
+	entry, err := backend.PrepareEntry(pkgName, sourcePath, file, res, chk)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	result, emitErr := b.Emit(context.Background(), backend.Request{
 		Layout: backend.Layout{
 			Root:    tmpRoot,
 			Profile: "gen",
 		},
-		Emit: mode,
-		Entry: backend.Entry{
-			PackageName: pkgName,
-			SourcePath:  sourcePath,
-			File:        file,
-			Resolve:     res,
-			Check:       chk,
-		},
+		Emit:  mode,
+		Entry: entry,
 	})
 	if result == nil {
 		return nil, nil, emitErr
