@@ -44,10 +44,7 @@ func (g *gen) emitExpr(e ast.Expr) {
 	case *ast.FieldExpr:
 		g.emitField(e)
 	case *ast.IndexExpr:
-		g.emitExpr(e.X)
-		g.body.write("[")
-		g.emitExpr(e.Index)
-		g.body.write("]")
+		g.emitIndex(e)
 	case *ast.RangeExpr:
 		g.emitRangeExpr(e)
 	case *ast.ListExpr:
@@ -101,6 +98,10 @@ func (g *gen) emitIdent(id *ast.Ident) {
 	// `v.(Enum_Variant)` type assertion).
 	if owner, ok := g.variantOwnerForIdent(id); ok {
 		g.body.writef("%s(&%s_%s{})", owner, owner, id.Name)
+		return
+	}
+	if renamed := g.renamedIdent(id); renamed != "" {
+		g.body.write(renamed)
 		return
 	}
 	g.body.write(mangleIdent(id.Name))
@@ -285,15 +286,51 @@ func (g *gen) emitStringLit(s *ast.StringLit) {
 	}
 	g.body.writef("fmt.Sprintf(%s", strconv.Quote(format.String()))
 	for _, a := range args {
-		g.body.write(", ostyToString(")
-		g.emitExpr(a)
-		g.body.write(")")
+		g.body.write(", ")
+		g.emitStringInterpArg(a)
 	}
 	g.body.write(")")
 }
 
+func (g *gen) emitStringInterpArg(e ast.Expr) {
+	if p, ok := g.typeOf(e).(*types.Primitive); ok && p.Kind == types.PChar {
+		g.body.write("string(")
+		g.emitExpr(e)
+		g.body.write(")")
+		return
+	}
+	g.body.write("ostyToString(")
+	g.emitExpr(e)
+	g.body.write(")")
+}
+
+func (g *gen) emitIndex(e *ast.IndexExpr) {
+	g.emitExpr(e.X)
+	g.body.write("[")
+	if r, ok := e.Index.(*ast.RangeExpr); ok {
+		if r.Start != nil {
+			g.emitExpr(r.Start)
+		}
+		g.body.write(":")
+		if r.Stop != nil {
+			g.emitExpr(r.Stop)
+		}
+	} else {
+		g.emitExpr(e.Index)
+	}
+	g.body.write("]")
+}
+
 // emitUnary writes `op X`.
 func (g *gen) emitUnary(u *ast.UnaryExpr) {
+	if u.Op == token.MINUS {
+		if _, literal := u.X.(*ast.IntLit); !literal {
+			if k, ok := integerKindOf(g.typeOf(u)); ok {
+				g.emitCheckedIntegerNeg(u.X, k)
+				return
+			}
+		}
+	}
 	g.body.write(unaryOp(u.Op))
 	g.emitExpr(u.X)
 }
@@ -337,10 +374,132 @@ func (g *gen) emitBinary(b *ast.BinaryExpr) {
 		g.body.write(")")
 		return
 	}
+	if g.emitCheckedIntegerBinary(b.Op, b.Left, b.Right, g.typeOf(b), g.typeOf(b.Right)) {
+		return
+	}
 	op := binaryOp(b.Op)
 	g.emitExpr(b.Left)
 	g.body.writef(" %s ", op)
 	g.emitExpr(b.Right)
+}
+
+func (g *gen) emitCheckedIntegerBinary(op token.Kind, left, right ast.Expr, resultT, rightT types.Type) bool {
+	switch op {
+	case token.PLUS, token.MINUS, token.STAR, token.SLASH, token.PERCENT:
+		k, ok := integerKindOf(resultT)
+		if !ok {
+			return false
+		}
+		g.emitCheckedIntegerArithmetic(op, left, right, k)
+		return true
+	case token.SHL, token.SHR:
+		leftK, ok := integerKindOf(resultT)
+		if !ok {
+			return false
+		}
+		rightK, ok := integerKindOf(rightT)
+		if !ok {
+			rightK = leftK
+		}
+		g.emitCheckedIntegerShift(op, left, right, leftK, rightK)
+		return true
+	default:
+		return false
+	}
+}
+
+func integerKindOf(t types.Type) (types.PrimitiveKind, bool) {
+	switch t := t.(type) {
+	case *types.Primitive:
+		if t.Kind.IsInteger() {
+			return t.Kind, true
+		}
+	case *types.Untyped:
+		if p, ok := t.Default().(*types.Primitive); ok && p.Kind.IsInteger() {
+			return p.Kind, true
+		}
+	}
+	return types.PInvalid, false
+}
+
+func (g *gen) emitCheckedIntegerNeg(x ast.Expr, k types.PrimitiveKind) {
+	goT := goPrimitive(k)
+	info := runtimeIntInfo(k)
+	if info.signed {
+		g.use("math")
+	}
+	g.emitPrimitiveTypedIIFE(goT, goT, x, func(v string) {
+		if info.signed {
+			g.body.writef("if %s == %s { panic(%q) }\n", v, info.min, "integer overflow")
+			g.body.writef("return -%s\n", v)
+			return
+		}
+		g.body.writef("if %s != 0 { panic(%q) }\n", v, "integer overflow")
+		g.body.writef("return %s(0)\n", goT)
+	})
+}
+
+func (g *gen) emitCheckedIntegerArithmetic(op token.Kind, left, right ast.Expr, k types.PrimitiveKind) {
+	goT := goPrimitive(k)
+	info := runtimeIntInfo(k)
+	if op == token.PLUS || op == token.MINUS || op == token.STAR || info.signed {
+		g.use("math")
+	}
+	g.emitPrimitiveTypedIIFE(goT, goT, left, func(v string) {
+		rhs := g.freshVar("_rhs")
+		g.body.writef("var %s %s = ", rhs, goT)
+		g.emitExpr(right)
+		g.body.nl()
+		switch op {
+		case token.PLUS:
+			g.emitIntAddOverflowGuard(info, v, rhs, "panic(\"integer overflow\")", "panic(\"integer overflow\")")
+			g.body.writef("return %s + %s\n", v, rhs)
+		case token.MINUS:
+			g.emitIntSubOverflowGuard(info, v, rhs, "panic(\"integer overflow\")", "panic(\"integer overflow\")")
+			g.body.writef("return %s - %s\n", v, rhs)
+		case token.STAR:
+			g.emitIntMulOverflowGuard(info, goT, v, rhs, "panic(\"integer overflow\")", "panic(\"integer overflow\")")
+			g.body.writef("return %s * %s\n", v, rhs)
+		case token.SLASH:
+			g.body.writef("if %s == 0 { panic(%q) }\n", rhs, "integer division by zero")
+			if info.signed {
+				g.body.writef("if %s == %s && %s == %s(-1) { panic(%q) }\n", v, info.min, rhs, goT, "integer overflow")
+			}
+			g.body.writef("return %s / %s\n", v, rhs)
+		case token.PERCENT:
+			g.body.writef("if %s == 0 { panic(%q) }\n", rhs, "integer modulo by zero")
+			if info.signed {
+				g.body.writef("if %s == %s && %s == %s(-1) { panic(%q) }\n", v, info.min, rhs, goT, "integer overflow")
+			}
+			g.body.writef("return %s %% %s\n", v, rhs)
+		}
+	})
+}
+
+func (g *gen) emitCheckedIntegerShift(op token.Kind, left, right ast.Expr, leftK, rightK types.PrimitiveKind) {
+	leftGo := goPrimitive(leftK)
+	rightGo := goPrimitive(rightK)
+	info := runtimeIntInfo(leftK)
+	rightInfo := runtimeIntInfo(rightK)
+	if leftK == types.PInt {
+		g.use("strconv")
+	}
+	shiftOp := "<<"
+	if op == token.SHR {
+		shiftOp = ">>"
+	}
+	g.emitPrimitiveTypedIIFE(leftGo, leftGo, left, func(v string) {
+		rhs := g.freshVar("_rhs")
+		g.body.writef("var %s %s = ", rhs, rightGo)
+		g.emitExpr(right)
+		g.body.nl()
+		if rightInfo.signed {
+			g.body.writef("if %s < 0 || %s >= %s(%s) { panic(%q) }\n", rhs, rhs, rightGo, info.bits, "invalid shift count")
+		} else {
+			g.body.writef("if %s >= %s(%s) { panic(%q) }\n", rhs, rightGo, info.bits, "invalid shift count")
+		}
+		g.body.writef("return %s %s uint(%s)\n", v, shiftOp, rhs)
+	})
 }
 
 func (g *gen) needsOstyEqual(left, right ast.Expr) bool {
@@ -468,6 +627,9 @@ func (g *gen) emitCall(c *ast.CallExpr) {
 	if g.emitStdlibJSONCall(c) {
 		return
 	}
+	if g.emitStdlibOstyCall(c) {
+		return
+	}
 	if g.emitStdlibIterCall(c) {
 		return
 	}
@@ -515,6 +677,9 @@ func (g *gen) emitCall(c *ast.CallExpr) {
 		if g.emitThreadCall(c, f) {
 			return
 		}
+		if g.emitPrimitiveMethodCall(c, f) {
+			return
+		}
 		if g.emitErrorMethodCall(c, f) {
 			return
 		}
@@ -522,6 +687,9 @@ func (g *gen) emitCall(c *ast.CallExpr) {
 			return
 		}
 		if g.emitOptionalMethodCall(c, f) {
+			return
+		}
+		if g.emitPrimitiveMethodCall(c, f) {
 			return
 		}
 		if g.emitConcurrencyMethod(c, f) {
@@ -1800,6 +1968,21 @@ func (g *gen) emitListMethod(c *ast.CallExpr, f *ast.FieldExpr, n *types.Named) 
 			g.body.writef("out = append(out, %s...)\n", other)
 			g.body.writeln("return out")
 		})
+	case "chain":
+		if len(c.Args) != 1 {
+			return false
+		}
+		retGo := g.callReturnGo(c, listGo)
+		g.emitCollectionIIFE(retGo, f.X, func(xs string) {
+			other := g.freshVar("_other")
+			g.body.writef("%s := ", other)
+			g.emitExpr(c.Args[0].Value)
+			g.body.nl()
+			g.body.writef("out := make(%s, 0, len(%s)+len(%s))\n", retGo, xs, other)
+			g.body.writef("out = append(out, %s...)\n", xs)
+			g.body.writef("out = append(out, %s...)\n", other)
+			g.body.writeln("return out")
+		})
 	case "zip":
 		if len(c.Args) != 1 {
 			return false
@@ -1856,6 +2039,22 @@ func (g *gen) emitListMethod(c *ast.CallExpr, f *ast.FieldExpr, n *types.Named) 
 			g.body.nl()
 			g.body.writef("out := make(%s, 0, len(%s))\n", retGo, xs)
 			g.body.writef("for _, v := range %s { if !%s(v) { break }; out = append(out, v) }\n", xs, pred)
+			g.body.writeln("return out")
+		})
+	case "skip":
+		if len(c.Args) != 1 {
+			return false
+		}
+		retGo := g.callReturnGo(c, listGo)
+		g.emitCollectionIIFE(retGo, f.X, func(xs string) {
+			start := g.freshVar("_n")
+			g.body.writef("%s := ", start)
+			g.emitExpr(c.Args[0].Value)
+			g.body.nl()
+			g.body.writef("if %s < 0 { %s = 0 }\n", start, start)
+			g.body.writef("if %s > len(%s) { %s = len(%s) }\n", start, xs, start, xs)
+			g.body.writef("out := make(%s, len(%s)-%s)\n", retGo, xs, start)
+			g.body.writef("copy(out, %s[%s:])\n", xs, start)
 			g.body.writeln("return out")
 		})
 	case "forEach":
@@ -3183,6 +3382,9 @@ func (g *gen) emitField(f *ast.FieldExpr) {
 			return
 		}
 		if g.emitQualifiedOptionField(f) {
+			return
+		}
+		if g.emitStdlibOstyField(f) {
 			return
 		}
 		if g.emitStdlibMathField(f) {

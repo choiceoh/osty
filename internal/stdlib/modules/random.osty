@@ -9,7 +9,13 @@ pub struct Rng {
     pub fn float(self) -> Float { 0.0 }
     pub fn bool(self) -> Bool { false }
     pub fn bytes(self, n: Int) -> Bytes { self.bytes(n) }
-    pub fn choice<T>(self, items: List<T>) -> T? { None }
+    pub fn choice<T>(self, items: List<T>) -> T? {
+        if items.isEmpty() {
+            None
+        } else {
+            Some(items[self.int(0, items.len())])
+        }
+    }
     pub fn shuffle<T>(self, items: List<T>) {}
 }
 

@@ -1,6 +1,8 @@
 package lint
 
 import (
+	"strings"
+
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/resolve"
@@ -350,6 +352,9 @@ func useAlias(u *ast.UseDecl) string {
 	}
 	if u.IsGoFFI {
 		return lastSegment(u.GoPath, '/')
+	}
+	if u.RawPath != "" && strings.ContainsAny(u.RawPath, "/") {
+		return lastSegment(u.RawPath, '/')
 	}
 	if len(u.Path) > 0 {
 		return u.Path[len(u.Path)-1]

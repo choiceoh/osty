@@ -18,6 +18,7 @@ var sourceFiles = []string{
 	"examples/dogfood/frontend.osty",
 	"examples/dogfood/lexer.osty",
 	"examples/dogfood/parser.osty",
+	"examples/dogfood/checker.osty",
 	"internal/selfhost/ast_lower.osty",
 }
 
@@ -34,6 +35,7 @@ const stringsPrelude = `use go "strings" as strings {
     fn Split(s: String, sep: String) -> List<String>
     fn SplitN(s: String, sep: String, n: Int) -> List<String>
     fn TrimPrefix(s: String, prefix: String) -> String
+    fn TrimSpace(s: String) -> String
     fn TrimSuffix(s: String, suffix: String) -> String
 }
 `
@@ -57,9 +59,10 @@ func run() error {
 	if err := os.WriteFile(mergedPath, merged, 0o644); err != nil {
 		return fmt.Errorf("write merged selfhost source: %w", err)
 	}
+	defer os.Remove(mergedPath)
 
 	outPath := filepath.Join(root, "internal/selfhost/generated.go")
-	cmd := exec.Command("go", "run", "./cmd/osty", "gen", "--package", "selfhost", "-o", outPath, mergedPath)
+	cmd := exec.Command("go", "run", "-tags", "selfhostgen", "./cmd/osty", "gen", "--package", "selfhost", "-o", outPath, mergedPath)
 	cmd.Dir = root
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -149,6 +152,9 @@ func patchGenerated(path string) error {
 			return err
 		}
 	}
+	if strings.Contains(src, "sync.Mutex") && !strings.Contains(src, "\n\t\"sync\"\n") {
+		src = strings.Replace(src, "\n\t\"strings\"\n", "\n\t\"strings\"\n\t\"sync\"\n", 1)
+	}
 	formatted, err := format.Source([]byte(src))
 	if err != nil {
 		return fmt.Errorf("format generated selfhost code: %w", err)
@@ -184,18 +190,55 @@ func replaceGeneratedFunction(src, name, replacement string) (string, error) {
 	return "", fmt.Errorf("generated function %s body is unterminated", name)
 }
 
-const frontPositionAtReplacement = `func frontPositionAt(units []string, target int) *FrontPos {
+const frontPositionAtReplacement = `type frontPositionCacheState struct {
+	units  []string
+	target int
+	offset int
+	line   int
+	column int
+	skipLf bool
+}
+
+var frontPositionCacheMu sync.Mutex
+var frontPositionCache frontPositionCacheState
+
+func frontSameUnits(a []string, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	if len(a) == 0 {
+		return true
+	}
+	return &a[0] == &b[0]
+}
+
+func frontPositionAt(units []string, target int) *FrontPos {
 	if target < 0 {
 		target = 0
 	}
 	if target > len(units) {
 		target = len(units)
 	}
-	offset := 0
-	line := 1
-	column := 1
-	skipLf := false
-	for idx := 0; idx < target; idx++ {
+
+	frontPositionCacheMu.Lock()
+	defer frontPositionCacheMu.Unlock()
+
+	if !frontSameUnits(frontPositionCache.units, units) || target < frontPositionCache.target {
+		frontPositionCache = frontPositionCacheState{
+			units:  units,
+			target: 0,
+			offset: 0,
+			line:   1,
+			column: 1,
+			skipLf: false,
+		}
+	}
+
+	offset := frontPositionCache.offset
+	line := frontPositionCache.line
+	column := frontPositionCache.column
+	skipLf := frontPositionCache.skipLf
+	for idx := frontPositionCache.target; idx < target; idx++ {
 		unit := units[idx]
 		next := ""
 		if idx+1 < len(units) {
@@ -220,6 +263,11 @@ const frontPositionAtReplacement = `func frontPositionAt(units []string, target 
 			offset = offset + 1
 		}
 	}
+	frontPositionCache.target = target
+	frontPositionCache.offset = offset
+	frontPositionCache.line = line
+	frontPositionCache.column = column
+	frontPositionCache.skipLf = skipLf
 	return frontPos(offset, line, column)
 }
 `

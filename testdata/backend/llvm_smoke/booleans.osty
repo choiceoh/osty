@@ -1,0 +1,11 @@
+fn choose(a: Int, b: Int) -> Int {
+    if a < b && !(a == 0) {
+        b - a
+    } else {
+        a + b
+    }
+}
+
+fn main() {
+    println(choose(3, 10))
+}

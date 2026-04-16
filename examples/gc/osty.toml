@@ -1,0 +1,13 @@
+# gc - independent garbage-collector core written in Osty.
+#
+# Run from this directory:
+#
+#     osty test
+#     osty check
+
+[package]
+name = "gc"
+version = "0.1.0"
+edition = "0.4"
+
+[dependencies]

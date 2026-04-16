@@ -1,0 +1,152 @@
+//go:build !selfhostgen
+
+package selfhost
+
+// CheckSummary is the exported Go shape for the bootstrapped Osty checker.
+//
+// The self-hosted checker is authoritative for mainstream checker diagnostics.
+// It still uses the Osty-written AST and string-encoded type names; the Go
+// checker currently supplies structural maps for downstream codegen/LSP users.
+type CheckSummary struct {
+	Assignments int
+	Accepted    int
+	Errors      int
+}
+
+// CheckedNode records a checked expression node and its inferred type name.
+type CheckedNode struct {
+	Node     int
+	Kind     string
+	TypeName string
+	Start    int
+	End      int
+}
+
+// CheckedBinding records a local binding that the bootstrapped checker typed.
+type CheckedBinding struct {
+	Node     int
+	Name     string
+	TypeName string
+	Mutable  bool
+	Start    int
+	End      int
+}
+
+// CheckedSymbol records a declaration collected by the bootstrapped checker.
+type CheckedSymbol struct {
+	Node     int
+	Kind     string
+	Name     string
+	Owner    string
+	TypeName string
+	Start    int
+	End      int
+}
+
+// CheckInstantiation records a generic function or method instantiation.
+type CheckInstantiation struct {
+	Node       int
+	Callee     string
+	TypeArgs   []string
+	ResultType string
+	Start      int
+	End        int
+}
+
+// CheckResult is the structured Go-facing surface for the bootstrapped checker.
+type CheckResult struct {
+	Summary        CheckSummary
+	TypedNodes     []CheckedNode
+	Bindings       []CheckedBinding
+	Symbols        []CheckedSymbol
+	Instantiations []CheckInstantiation
+}
+
+// CheckSource runs the bootstrapped Osty checker over one source string.
+func CheckSource(src []byte) CheckSummary {
+	return CheckSourceStructured(src).Summary
+}
+
+// CheckSourceStructured runs the bootstrapped Osty checker and returns the
+// structured seed result that can be compared with the canonical Go checker.
+func CheckSourceStructured(src []byte) CheckResult {
+	checked := frontendCheckSourceStructured(string(src))
+	if checked == nil {
+		return CheckResult{}
+	}
+	return adaptCheckResult(checked)
+}
+
+func adaptCheckSummary(checked *FrontCheckSummary) CheckSummary {
+	if checked == nil {
+		return CheckSummary{}
+	}
+	return CheckSummary{
+		Assignments: checked.assignments,
+		Accepted:    checked.accepted,
+		Errors:      checked.errors,
+	}
+}
+
+func adaptCheckResult(checked *FrontCheckResult) CheckResult {
+	result := CheckResult{
+		Summary:        adaptCheckSummary(checked.summary),
+		TypedNodes:     make([]CheckedNode, 0, len(checked.typedNodes)),
+		Bindings:       make([]CheckedBinding, 0, len(checked.bindings)),
+		Symbols:        make([]CheckedSymbol, 0, len(checked.symbols)),
+		Instantiations: make([]CheckInstantiation, 0, len(checked.instantiations)),
+	}
+	for _, node := range checked.typedNodes {
+		if node == nil {
+			continue
+		}
+		result.TypedNodes = append(result.TypedNodes, CheckedNode{
+			Node:     node.node,
+			Kind:     node.kind,
+			TypeName: node.typeName,
+			Start:    node.start,
+			End:      node.end,
+		})
+	}
+	for _, binding := range checked.bindings {
+		if binding == nil {
+			continue
+		}
+		result.Bindings = append(result.Bindings, CheckedBinding{
+			Node:     binding.node,
+			Name:     binding.name,
+			TypeName: binding.typeName,
+			Mutable:  binding.mutable,
+			Start:    binding.start,
+			End:      binding.end,
+		})
+	}
+	for _, symbol := range checked.symbols {
+		if symbol == nil {
+			continue
+		}
+		result.Symbols = append(result.Symbols, CheckedSymbol{
+			Node:     symbol.node,
+			Kind:     symbol.kind,
+			Name:     symbol.name,
+			Owner:    symbol.owner,
+			TypeName: symbol.typeName,
+			Start:    symbol.start,
+			End:      symbol.end,
+		})
+	}
+	for _, inst := range checked.instantiations {
+		if inst == nil {
+			continue
+		}
+		result.Instantiations = append(result.Instantiations, CheckInstantiation{
+			Node:       inst.node,
+			Callee:     inst.callee,
+			TypeArgs:   append([]string(nil), inst.typeArgs...),
+			ResultType: inst.resultType,
+			Start:      inst.start,
+			End:        inst.end,
+		})
+	}
+	return result
+}

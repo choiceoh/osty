@@ -55,6 +55,10 @@ func (g *gen) emitFnDecl(fn *ast.FnDecl) {
 	}
 
 	if len(fn.Generics) > 0 {
+		if g.emitGenericFnDecls {
+			g.emitFnDeclBody(fn, g.renamedFnName(fn.Name))
+			return
+		}
 		// Demand-driven: generic fns never emit inline. A call site
 		// (possibly inside another generic body being specialized)
 		// requests an instantiation via requestInstance, and the
@@ -62,7 +66,7 @@ func (g *gen) emitFnDecl(fn *ast.FnDecl) {
 		return
 	}
 
-	g.emitFnDeclBody(fn, fn.Name)
+	g.emitFnDeclBody(fn, g.renamedFnName(fn.Name))
 }
 
 // emitFnDeclBody writes a single function definition under `name`. It
@@ -77,6 +81,9 @@ func (g *gen) emitFnDeclBody(fn *ast.FnDecl, name string) {
 	g.sourceMarker(fn)
 	g.body.write("func ")
 	g.body.write(name)
+	if g.emitGenericFnDecls && len(fn.Generics) > 0 {
+		g.emitGenericParamList(fn.Generics)
+	}
 
 	g.emitParamList(fn.Params)
 
@@ -138,7 +145,11 @@ func (g *gen) emitLetDecl(l *ast.LetDecl) {
 	g.body.nl()
 	g.sourceMarker(l)
 	g.body.write("var ")
-	g.body.write(mangleIdent(l.Name))
+	name := g.renamedFnName(l.Name)
+	if name == l.Name {
+		name = mangleIdent(l.Name)
+	}
+	g.body.write(name)
 	if l.Type != nil {
 		g.body.write(" ")
 		g.body.write(g.goTypeExpr(l.Type))
@@ -463,14 +474,17 @@ func (g *gen) emitUseDecl(u *ast.UseDecl) {
 	// compatibility; well-known shims (std.testing, std.thread) get
 	// mock structs when they need a callable shape. The test harness
 	// separately replaces the std.testing stub with a real runtime.
-	alias := u.Alias
-	if alias == "" && len(u.Path) > 0 {
-		alias = u.Path[len(u.Path)-1]
-	}
+	alias := useDeclAlias(u)
 	if alias == "" {
 		return
 	}
-	full := strings.Join(u.Path, ".")
+	full := useFullPath(u)
+	if module, ok := stdlibOstyModulePath(u.Path); ok {
+		if g.aliasUsedAsSelector(alias) {
+			g.requestStdlibOsty(module)
+		}
+		return
+	}
 	if g.emitStdlibRuntimeBridge(alias, u.Path, full) {
 		return
 	}
@@ -633,6 +647,64 @@ func (g *gen) emitStdlibRuntimeBridge(alias string, path []string, full string) 
 			join:  urlJoin,
 		}`, full)
 		return true
+	case "encoding":
+		if !g.aliasUsedAsSelector(alias) {
+			return false
+		}
+		g.needEncoding = true
+		g.needResult = true
+		g.emitUseStub(alias, `struct {
+			base64 struct {
+				encode func(data []byte) string
+				decode func(text string) Result[[]byte, any]
+				url    struct {
+					encode func(data []byte) string
+					decode func(text string) Result[[]byte, any]
+				}
+			}
+			hex struct {
+				encode func(data []byte) string
+				decode func(text string) Result[[]byte, any]
+			}
+			url struct {
+				encode func(text string) string
+				decode func(text string) Result[string, any]
+			}
+		}{
+			base64: struct {
+				encode func(data []byte) string
+				decode func(text string) Result[[]byte, any]
+				url    struct {
+					encode func(data []byte) string
+					decode func(text string) Result[[]byte, any]
+				}
+			}{
+				encode: encodingBase64Encode,
+				decode: encodingBase64Decode,
+				url: struct {
+					encode func(data []byte) string
+					decode func(text string) Result[[]byte, any]
+				}{
+					encode: encodingBase64URLEncode,
+					decode: encodingBase64URLDecode,
+				},
+			},
+			hex: struct {
+				encode func(data []byte) string
+				decode func(text string) Result[[]byte, any]
+			}{
+				encode: encodingHexEncode,
+				decode: encodingHexDecode,
+			},
+			url: struct {
+				encode func(text string) string
+				decode func(text string) Result[string, any]
+			}{
+				encode: encodingURLEncode,
+				decode: encodingURLDecode,
+			},
+		}`, full)
+		return true
 	case "bytes":
 		if !g.aliasUsedAsSelector(alias) {
 			return false
@@ -640,11 +712,13 @@ func (g *gen) emitStdlibRuntimeBridge(alias string, path []string, full string) 
 		g.needBytesRuntime = true
 		g.needResult = true
 		g.emitUseStub(alias, `struct {
+			from        func(items []byte) []byte
 			fromString  func(s string) []byte
 			toString    func(b []byte) Result[string, any]
 			len         func(b []byte) int
 			isEmpty     func(b []byte) bool
 			get         func(b []byte, i int) *byte
+			slice       func(b []byte, start int, end int) []byte
 			equal       func(a []byte, b []byte) bool
 			contains    func(b []byte, sub []byte) bool
 			startsWith  func(b []byte, prefix []byte) bool
@@ -666,11 +740,13 @@ func (g *gen) emitStdlibRuntimeBridge(alias string, path []string, full string) 
 			toHex       func(b []byte) string
 			fromHex     func(s string) Result[[]byte, any]
 		}{
+			from:        bytesFrom,
 			fromString:  bytesFromString,
 			toString:    bytesToString,
 			len:         bytesLen,
 			isEmpty:     bytesIsEmpty,
 			get:         bytesGet,
+			slice:       bytesSlice,
 			equal:       bytesEqual,
 			contains:    bytesContains,
 			startsWith:  bytesStartsWith,
@@ -797,11 +873,14 @@ func _ostyCsvDecodeWith(text string, options _ostyCsvOptions) Result[[][]string,
 			i++
 			continue
 		}
+		if quoted && c != options.delimiter && c != '\r' && c != '\n' {
+			return resultErr[[][]string, any](fmt.Errorf("csv: data after closing quote"))
+		}
 		if c == options.quote {
 			if field.Len() == 0 {
 				inQuote = true
 			} else {
-				field.WriteRune(c)
+				return resultErr[[][]string, any](fmt.Errorf("csv: bare quote in unquoted field"))
 			}
 			endedRecord = false
 		} else if c == options.delimiter {
@@ -910,14 +989,7 @@ func (g *gen) fileIdentUsed(name string) bool {
 		}
 	}
 	for _, u := range g.file.Uses {
-		alias := u.Alias
-		if alias == "" {
-			if u.IsGoFFI {
-				alias = lastPathComponent(u.GoPath)
-			} else if len(u.Path) > 0 {
-				alias = u.Path[len(u.Path)-1]
-			}
-		}
+		alias := useDeclAlias(u)
 		if mangleIdent(alias) == name {
 			return true
 		}
@@ -1136,8 +1208,6 @@ func stdlibBridge(path []string) string {
 		return "io"
 	case "time":
 		return "time"
-	case "strings":
-		return "strings"
 	case "math":
 		return "math"
 	case "errors":
@@ -1194,6 +1264,35 @@ func lastPathComponent(p string) string {
 		return p[i+1:]
 	}
 	return p
+}
+
+func useFullPath(u *ast.UseDecl) string {
+	if u == nil {
+		return ""
+	}
+	if u.RawPath != "" {
+		return u.RawPath
+	}
+	return strings.Join(u.Path, ".")
+}
+
+func useDeclAlias(u *ast.UseDecl) string {
+	if u == nil {
+		return ""
+	}
+	if u.Alias != "" {
+		return u.Alias
+	}
+	if u.IsGoFFI {
+		return lastPathComponent(u.GoPath)
+	}
+	if u.RawPath != "" && strings.Contains(u.RawPath, "/") {
+		return lastPathComponent(u.RawPath)
+	}
+	if len(u.Path) > 0 {
+		return lastPathComponent(u.Path[len(u.Path)-1])
+	}
+	return ""
 }
 
 // goConstraint maps a list of Osty generic bounds to a single Go

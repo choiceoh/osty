@@ -29,7 +29,7 @@ pub fn selfhostPipelineSource(packageName: String, source: String) -> SelfhostPi
     let module = irLowerSource(packageName, source)
     let ir = irSummarize(module)
     let resolved = selfResolveSource(source)
-    let checked = selfCheckSource(source)
+    let checked = frontendCheckSource(source)
     let linted = selfLintSource(source)
 
     SelfhostPipelineReport {
@@ -51,8 +51,8 @@ pub fn selfhostPipelineSource(packageName: String, source: String) -> SelfhostPi
         irInvalidScopes: ir.invalidScopes,
         resolveSymbols: selfhostPipelineSymbolCount(resolved),
         resolveDiagnostics: selfResolveDiagnosticCount(resolved),
-        checkDiagnostics: selfCheckDiagnosticCount(checked),
-        checkedExpressions: checked.checkedExpressions,
+        checkDiagnostics: checked.errors,
+        checkedExpressions: checked.accepted,
         lintDiagnostics: selfLintDiagnosticCount(linted),
         lintParseErrors: linted.parseErrors,
     }

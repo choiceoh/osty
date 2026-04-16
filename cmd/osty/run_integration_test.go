@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/osty/osty/internal/backend"
 	"github.com/osty/osty/internal/profile"
 )
 
@@ -72,7 +73,10 @@ func TestBuildStdFSBinary(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		exeName += ".exe"
 	}
-	exe := filepath.Join(profile.OutputDir(dir, profile.NameDebug, ""), exeName)
+	exe := backend.Layout{
+		Root:    dir,
+		Profile: profile.NameDebug,
+	}.Artifacts(backend.NameGo, exeName).Binary
 	cmd := exec.Command(exe)
 	cmd.Dir = dir
 	var buf bytes.Buffer

@@ -833,6 +833,32 @@ func TestParseDefaultExprAccepted(t *testing.T) {
 	parseOrFatal(t, src)
 }
 
+func TestParseFunctionParamDefaultsRetained(t *testing.T) {
+	src := `fn f(flag: Bool = false, suffix: String = "...", fill: Char = ' ', count: Int = -1) {}`
+	f := parseOrFatal(t, src)
+	fn := f.Decls[0].(*ast.FnDecl)
+	if len(fn.Params) != 4 {
+		t.Fatalf("params = %d", len(fn.Params))
+	}
+	if _, ok := fn.Params[0].Default.(*ast.BoolLit); !ok {
+		t.Fatalf("flag default = %T, want *ast.BoolLit", fn.Params[0].Default)
+	}
+	if _, ok := fn.Params[1].Default.(*ast.StringLit); !ok {
+		t.Fatalf("suffix default = %T, want *ast.StringLit", fn.Params[1].Default)
+	}
+	if _, ok := fn.Params[2].Default.(*ast.CharLit); !ok {
+		t.Fatalf("fill default = %T, want *ast.CharLit", fn.Params[2].Default)
+	}
+	if u, ok := fn.Params[3].Default.(*ast.UnaryExpr); !ok || u.Op != token.MINUS {
+		t.Fatalf("count default = %T (%+v), want unary minus", fn.Params[3].Default, fn.Params[3].Default)
+	}
+	for _, p := range fn.Params {
+		if p.Pattern != nil {
+			t.Fatalf("param %s pattern = %T, want nil", p.Name, p.Pattern)
+		}
+	}
+}
+
 // TestParseClosureRetTypeRequiresBlock verifies v0.2 R25: a closure with
 // an explicit return type must have a block body.
 func TestParseClosureRetTypeRequiresBlock(t *testing.T) {

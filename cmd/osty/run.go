@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -10,9 +11,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/osty/osty/internal/backend"
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/diag"
-	"github.com/osty/osty/internal/gen"
 	"github.com/osty/osty/internal/manifest"
 	"github.com/osty/osty/internal/pkgmgr"
 	"github.com/osty/osty/internal/profile"
@@ -28,7 +29,7 @@ import (
 //  2. Resolve the project as a package; confirm we have an entry
 //     point (manifest Bin target or default main.osty with fn main).
 //  3. Run the front-end (parse + resolve + type check).
-//  4. Transpile the entry file via internal/gen into a temp directory.
+//  4. Transpile the entry file via internal/backend into .osty/out.
 //  5. `go run` the generated Go source, passing through the
 //     user-supplied arguments after `--`.
 //
@@ -48,15 +49,20 @@ import (
 func runRun(args []string, cliF cliFlags) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: osty run [--offline | --locked | --frozen] [--profile NAME | --release] [--target TRIPLE] [--features LIST] [--no-default-features] [-- ARGS...]")
+		fmt.Fprintln(os.Stderr, "usage: osty run [--offline | --locked | --frozen] [--profile NAME | --release] [--target TRIPLE] [--features LIST] [--no-default-features] [--backend NAME] [--emit MODE] [-- ARGS...]")
 	}
 	var offline, locked, frozen bool
 	fs.BoolVar(&offline, "offline", false, "do not fetch dependencies; fail if caches are missing")
 	fs.BoolVar(&locked, "locked", false, "fail if osty.lock would change")
 	fs.BoolVar(&frozen, "frozen", false, "imply --locked --offline; require an existing osty.lock")
+	var backendName string
+	var emitName string
+	fs.StringVar(&backendName, "backend", defaultBackendName(), "code generation backend (go or llvm)")
+	fs.StringVar(&emitName, "emit", "", "artifact mode to execute (binary)")
 	var pf profileFlags
 	pf.register(fs)
 	_ = fs.Parse(args)
+	_, emitMode := resolveBackendAndEmitFlags("run", backendName, emitName)
 	runArgs := fs.Args()
 
 	runDir, err := os.Getwd()
@@ -126,7 +132,7 @@ func runRun(args []string, cliF cliFlags) {
 		os.Exit(1)
 	}
 	results := ws.ResolveAll()
-	checks := check.Workspace(ws, results)
+	checks := check.Workspace(ws, results, checkOpts())
 	// Aggregate diagnostics across every loaded package so front-end
 	// errors in a vendored dep also surface.
 	var all []*diag.Diagnostic
@@ -173,27 +179,37 @@ func runRun(args []string, cliF cliFlags) {
 		chk = &check.Result{}
 	}
 
-	// Step 4: transpile to Go. Per-profile/target subdirectories keep
-	// debug / release / cross-built artifacts from clobbering each
-	// other.
+	// Step 4: transpile to Go. Per-profile/target/backend
+	// subdirectories keep debug / release / cross-built artifacts from
+	// clobbering each other.
 	triple := ""
 	if resolved.Target != nil {
 		triple = resolved.Target.Triple
 	}
-	outDir := profile.OutputDir(root, resolved.Profile.Name, triple)
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		fmt.Fprintf(os.Stderr, "osty run: %v\n", err)
-		os.Exit(1)
-	}
-	goSrc, gerr := gen.GenerateMapped("main", file, res, chk, entryAbs)
-	goPath := filepath.Join(outDir, "main.go")
-	if err := os.WriteFile(goPath, goSrc, 0o644); err != nil {
+	goResult, err := backend.GoBackend{}.Emit(context.Background(), backend.Request{
+		Layout: backend.Layout{
+			Root:    root,
+			Profile: resolved.Profile.Name,
+			Target:  triple,
+		},
+		Emit: emitMode,
+		Entry: backend.Entry{
+			PackageName: "main",
+			SourcePath:  entryAbs,
+			File:        file,
+			Resolve:     res,
+			Check:       chk,
+		},
+		Features: resolved.Features,
+	})
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty run: %v\n", err)
 		os.Exit(1)
 	}
 	// Gen returns warnings for unsupported lowering shapes; we still
 	// try to run the output because the clean portion may compile.
-	reportTranspileWarning("osty run", entryAbs, goPath, gerr)
+	goPath := goResult.Artifacts.GoSource
+	reportTranspileWarning("osty run", entryAbs, goPath, firstBackendWarning(goResult))
 
 	// Step 5: go run. Profile-derived flags (e.g. `-gcflags=-N -l`
 	// for debug, `-ldflags=-s -w` for release) precede the source
