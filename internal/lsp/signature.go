@@ -2,10 +2,10 @@ package lsp
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/token"
 	"github.com/osty/osty/internal/types"
 )
@@ -113,26 +113,25 @@ func buildSignatureInfo(call *ast.CallExpr, a *docAnalysis) (SignatureInformatio
 	// it; otherwise fall back to `argN` placeholders so the shape is
 	// still useful.
 	paramNames := parameterNames(fnDecl, len(fnType.Params))
-
-	var label strings.Builder
-	fmt.Fprintf(&label, "fn %s(", sym.Name)
-	params := make([]ParameterInformation, 0, len(fnType.Params))
+	params := make([]selfhost.LSPSignatureParam, 0, len(fnType.Params))
 	for i, pt := range fnType.Params {
-		if i > 0 {
-			label.WriteString(", ")
-		}
-		paramLabel := fmt.Sprintf("%s: %s", paramNames[i], pt.String())
-		label.WriteString(paramLabel)
-		params = append(params, ParameterInformation{Label: paramLabel})
+		params = append(params, selfhost.LSPSignatureParam{
+			Name:     paramNames[i],
+			TypeName: pt.String(),
+		})
 	}
-	label.WriteByte(')')
+	returnType := ""
 	if fnType.Return != nil && !types.IsUnit(fnType.Return) {
-		label.WriteString(" -> ")
-		label.WriteString(fnType.Return.String())
+		returnType = fnType.Return.String()
+	}
+	rendered := selfhost.LSPBuildSignatureText(sym.Name, params, returnType)
+	paramInfo := make([]ParameterInformation, 0, len(rendered.ParameterLabels))
+	for _, paramLabel := range rendered.ParameterLabels {
+		paramInfo = append(paramInfo, ParameterInformation{Label: paramLabel})
 	}
 	info := SignatureInformation{
-		Label:      label.String(),
-		Parameters: params,
+		Label:      rendered.Label,
+		Parameters: paramInfo,
 	}
 	if doc := symbolDoc(sym); doc != "" {
 		info.Documentation = &MarkupContent{Kind: MarkupKindMarkdown, Value: doc}
@@ -189,14 +188,11 @@ func parameterNames(fd *ast.FnDecl, count int) []string {
 // up pointing at "the next slot" which is still the right index to
 // highlight in the popup.
 func activeParamFor(call *ast.CallExpr, pos token.Pos) uint32 {
-	var active uint32
+	argEnds := make([]int, 0, len(call.Args))
 	for _, arg := range call.Args {
-		if pos.Offset <= arg.End().Offset {
-			return active
-		}
-		active++
+		argEnds = append(argEnds, arg.End().Offset)
 	}
-	return active
+	return selfhost.LSPActiveParameter(argEnds, pos.Offset)
 }
 
 // forEachChild is a tiny AST walker that visits the children of

@@ -1,9 +1,8 @@
 package lsp
 
 import (
-	"github.com/osty/osty/internal/lexer"
 	"github.com/osty/osty/internal/resolve"
-	"github.com/osty/osty/internal/token"
+	"github.com/osty/osty/internal/selfhost"
 )
 
 // findNameOffset returns the byte offset of the name identifier
@@ -17,19 +16,7 @@ import (
 // drift into surrounding declarations even for packages where the
 // same name appears in multiple files.
 func findNameOffset(src []byte, declPos, declEnd int, name string) int {
-	if name == "" || declPos < 0 || declEnd > len(src) || declEnd <= declPos {
-		return -1
-	}
-	l := lexer.New(src[declPos:declEnd])
-	for _, t := range l.Lex() {
-		if t.Kind == token.EOF {
-			break
-		}
-		if t.Kind == token.IDENT && t.Value == name {
-			return declPos + t.Pos.Offset
-		}
-	}
-	return -1
+	return selfhost.LSPFindNameOffset(src, declPos, declEnd, name)
 }
 
 // nameRangeForSymbol resolves a resolver Symbol to the byte range of

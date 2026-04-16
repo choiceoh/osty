@@ -34,7 +34,7 @@ self-hosted compiler without that seed.
 | Type checker (`internal/check`) | done for v0.4 front-end core — generic instantiation, structural interface checks, exhaustiveness, builder protocol, function-value arity, closure pattern params |
 | Linter (`internal/lint`, L0001–L0042, `--fix` / `--fix-dry-run`) | done |
 | Multi-file packages (`resolve` loader/package/workspace) | done |
-| LSP (`internal/lsp`, wired as `osty lsp`) | done — hover, definition, formatting, documentSymbol, lint diagnostics |
+| LSP (`internal/lsp`, wired as `osty lsp`) | done — hover, definition, formatting, documentSymbol, lint diagnostics, editor policy backed by selfhost-core |
 | Native LLVM backend (`internal/backend`, `internal/llvmgen`) | public backend path; scalar/control-flow/string smoke subset emits LLVM IR/object/binary, unsupported shapes report Osty-authored LLVM diagnostics |
 | Go transpiler (`internal/gen`) | bootstrap-only seed path compiled with `selfhostgen`; no longer exposed as a public backend |
 | Independent IR (`internal/ir`) | done — patterns, match, closures, struct/field/method |

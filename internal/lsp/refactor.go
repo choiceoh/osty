@@ -1,11 +1,11 @@
 package lsp
 
 import (
-	"sort"
 	"strings"
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
+	"github.com/osty/osty/internal/selfhost"
 )
 
 // LSP code-action kind strings (LSP 3.17 §codeActionKind). Only the
@@ -20,25 +20,20 @@ const (
 	CodeActionSourceFixAllOsty      = "source.fixAll.osty"
 )
 
+type keyedUse struct {
+	u     *ast.UseDecl
+	group int
+	key   string
+	text  string
+}
+
 // wantsKind reports whether the client's `context.only` filter (if
 // any) admits the given action kind. An empty filter means "everything
 // is admissible". A filter entry is treated as a prefix match so that
 // a client asking for `"source"` gets every `source.*` subtype back —
 // this matches how LSP 3.17 defines `CodeActionKind` inheritance.
 func wantsKind(only []string, kind string) bool {
-	if len(only) == 0 {
-		return true
-	}
-	for _, k := range only {
-		if k == kind {
-			return true
-		}
-		// Prefix match (e.g. "source" matches "source.organizeImports").
-		if strings.HasPrefix(kind, k+".") {
-			return true
-		}
-	}
-	return false
+	return selfhost.LSPWantsCodeActionKind(only, kind)
 }
 
 // organizeImportsAction builds a `source.organizeImports` action when
@@ -74,13 +69,7 @@ func organizeImportsAction(doc *document) *CodeAction {
 	}
 	unused := unusedUseSet(doc)
 
-	type keyed struct {
-		u     *ast.UseDecl
-		group int
-		key   string
-		text  string
-	}
-	kept := make([]keyed, 0, len(uses))
+	kept := make([]keyedUse, 0, len(uses))
 	seen := make(map[string]bool, len(uses))
 	for _, u := range uses {
 		if u == nil {
@@ -102,17 +91,9 @@ func organizeImportsAction(doc *document) *CodeAction {
 			continue
 		}
 		seen[dedupKey] = true
-		kept = append(kept, keyed{u: u, group: group, key: key, text: text})
+		kept = append(kept, keyedUse{u: u, group: group, key: key, text: text})
 	}
-	sort.SliceStable(kept, func(i, j int) bool {
-		if kept[i].group != kept[j].group {
-			return kept[i].group < kept[j].group
-		}
-		if kept[i].key != kept[j].key {
-			return kept[i].key < kept[j].key
-		}
-		return kept[i].u.Alias < kept[j].u.Alias
-	})
+	kept = sortImportEntries(kept)
 
 	// Build the replacement block. Separate groups with a blank line so
 	// the output matches what `osty fmt` would emit after the reorder.
@@ -151,47 +132,53 @@ func organizeImportsAction(doc *document) *CodeAction {
 	}
 }
 
+func sortImportEntries(in []keyedUse) []keyedUse {
+	if len(in) <= 1 {
+		return in
+	}
+	keys := make([]selfhost.LSPImportSortKey, 0, len(in))
+	for _, item := range in {
+		keys = append(keys, selfhost.LSPImportSortKey{
+			Group: item.group,
+			Key:   item.key,
+			Alias: item.u.Alias,
+		})
+	}
+	indexes := selfhost.SortLSPImportIndexes(keys)
+	out := make([]keyedUse, 0, len(indexes))
+	for _, idx := range indexes {
+		if idx < 0 || idx >= len(in) {
+			continue
+		}
+		out = append(out, in[idx])
+	}
+	return out
+}
+
 // useGroup classifies a use decl into the canonical group ordering.
 // Kept in sync with format.useGroupOrder — duplicating instead of
 // importing to avoid pulling the formatter into the lsp package just
 // for a three-way switch.
 func useGroup(u *ast.UseDecl) int {
-	if u.IsFFI() {
-		return 2
-	}
-	if len(u.Path) > 0 && u.Path[0] == "std" {
-		return 0
-	}
-	return 1
+	return selfhost.LSPUseGroup(u.IsFFI(), u.Path)
 }
 
 // useKey is the intra-group sort key.
 func useKey(u *ast.UseDecl) string {
-	if u.IsFFI() {
-		return u.FFIPath()
-	}
-	if u.RawPath != "" {
-		return u.RawPath
-	}
-	return strings.Join(u.Path, ".")
+	return selfhost.LSPUseKey(u.IsFFI(), u.FFIPath(), u.RawPath, u.Path)
 }
 
 // keyWithAlias combines the sort key with the alias so `use foo` and
 // `use foo as bar` don't dedupe into one entry.
 func keyWithAlias(group int, key, alias string) string {
-	return string(rune('0'+group)) + "|" + key + "|" + alias
+	return selfhost.LSPKeyWithAlias(group, key, alias)
 }
 
 // useSourceText extracts the exact source text of a single-line use
 // decl. Multi-line FFI blocks (whose body spans several lines) are
 // returned verbatim including the `{ ... }` block.
 func useSourceText(src []byte, u *ast.UseDecl) string {
-	start := u.PosV.Offset
-	end := u.EndV.Offset
-	if start < 0 || end > len(src) || start >= end {
-		return ""
-	}
-	return strings.TrimRight(string(src[start:end]), " \t\r\n")
+	return selfhost.LSPUseSourceText(src, u.PosV.Offset, u.EndV.Offset)
 }
 
 // endOfLineOffset advances from `off` over any trailing whitespace
@@ -200,16 +187,7 @@ func useSourceText(src []byte, u *ast.UseDecl) string {
 // blank lines the user inserted between the last `use` and the next
 // decl are preserved — we stop after consuming the first newline.
 func endOfLineOffset(src []byte, off int) int {
-	for off < len(src) && (src[off] == ' ' || src[off] == '\t') {
-		off++
-	}
-	if off < len(src) && src[off] == '\r' {
-		off++
-	}
-	if off < len(src) && src[off] == '\n' {
-		off++
-	}
-	return off
+	return selfhost.LSPEndOfLineOffset(src, off)
 }
 
 // hasTriviaBetweenUses reports whether non-whitespace bytes appear
@@ -233,13 +211,7 @@ func hasTriviaBetweenUses(src []byte, uses []*ast.UseDecl) bool {
 		if gapStart < 0 || gapEnd > len(src) || gapStart >= gapEnd {
 			continue
 		}
-		for off := gapStart; off < gapEnd; off++ {
-			b := src[off]
-			if b == ' ' || b == '\t' || b == '\n' || b == '\r' {
-				continue
-			}
-			// Any other byte (comment start `/`, `#` annotation,
-			// stray text) means we can't safely rewrite.
+		if selfhost.LSPHasTriviaBetweenOffsets(src, gapStart, gapEnd) {
 			return true
 		}
 	}
@@ -358,71 +330,26 @@ func collectMachineApplicable(doc *document) []TextEdit {
 // result is in document order, which LSP clients prefer even though
 // the spec doesn't strictly require it.
 func resolveOverlaps(in []TextEdit) []TextEdit {
-	if len(in) <= 1 {
-		return in
+	converted := make([]selfhost.LSPTextEdit, 0, len(in))
+	for _, edit := range in {
+		converted = append(converted, selfhost.LSPTextEdit{
+			StartLine:      edit.Range.Start.Line,
+			StartCharacter: edit.Range.Start.Character,
+			EndLine:        edit.Range.End.Line,
+			EndCharacter:   edit.Range.End.Character,
+			NewText:        edit.NewText,
+		})
 	}
-	// Remember original index so the stable-sort preserves source
-	// priority for equal-range edits.
-	type indexed struct {
-		e   TextEdit
-		idx int
-	}
-	tagged := make([]indexed, len(in))
-	for i, e := range in {
-		tagged[i] = indexed{e: e, idx: i}
-	}
-	sort.SliceStable(tagged, func(i, j int) bool {
-		a, b := tagged[i].e.Range, tagged[j].e.Range
-		if a.Start.Line != b.Start.Line {
-			return a.Start.Line < b.Start.Line
-		}
-		if a.Start.Character != b.Start.Character {
-			return a.Start.Character < b.Start.Character
-		}
-		// Same start: the earlier-sourced edit wins the tie so the
-		// stable order puts it first.
-		return tagged[i].idx < tagged[j].idx
-	})
-	out := make([]TextEdit, 0, len(tagged))
-	var lastStart, lastEnd Position
-	var have bool
-	for _, t := range tagged {
-		start := t.e.Range.Start
-		end := t.e.Range.End
-		if have {
-			// Strict overlap: this edit begins before the previous
-			// edit ended. Drop it.
-			if posBefore(start, lastEnd) {
-				continue
-			}
-			// Edge-on case: start == lastEnd. This is a valid
-			// adjacency for replacements, but two inserts at the
-			// exact same point (start == end == lastStart ==
-			// lastEnd) would both rewrite "at the caret" and the
-			// client has no way to pick an order. Collapse to the
-			// first.
-			if posEqual(start, lastEnd) && posEqual(start, end) &&
-				posEqual(lastStart, lastEnd) {
-				continue
-			}
-		}
-		out = append(out, t.e)
-		lastStart = start
-		lastEnd = end
-		have = true
+	resolved := selfhost.ResolveOverlappingLSPTextEdits(converted)
+	out := make([]TextEdit, 0, len(resolved))
+	for _, edit := range resolved {
+		out = append(out, TextEdit{
+			Range: Range{
+				Start: Position{Line: edit.StartLine, Character: edit.StartCharacter},
+				End:   Position{Line: edit.EndLine, Character: edit.EndCharacter},
+			},
+			NewText: edit.NewText,
+		})
 	}
 	return out
-}
-
-// posBefore reports whether a is strictly before b.
-func posBefore(a, b Position) bool {
-	if a.Line != b.Line {
-		return a.Line < b.Line
-	}
-	return a.Character < b.Character
-}
-
-// posEqual reports whether two LSP positions are identical.
-func posEqual(a, b Position) bool {
-	return a.Line == b.Line && a.Character == b.Character
 }

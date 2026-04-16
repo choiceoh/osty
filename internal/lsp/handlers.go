@@ -12,8 +12,8 @@ import (
 	"github.com/osty/osty/internal/format"
 	"github.com/osty/osty/internal/repair"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/token"
-	"github.com/osty/osty/internal/types"
 )
 
 // ---- Lifecycle ----
@@ -181,17 +181,6 @@ func diagsEqual(a, b []LSPDiagnostic) bool {
 // toLSPDiag is the severity + range mapping between our internal
 // Diagnostic and the LSP wire form.
 func toLSPDiag(li *lineIndex, d *diag.Diagnostic) LSPDiagnostic {
-	var sev DiagnosticSeverity
-	switch d.Severity {
-	case diag.Error:
-		sev = SevError
-	case diag.Warning:
-		sev = SevWarning
-	case diag.Note:
-		sev = SevInformation
-	default:
-		sev = SevError
-	}
 	// Prefer the primary span for the range. Fall back to the first
 	// span, then to a zero range — clients tolerate the last case by
 	// showing the diagnostic at the top of the file.
@@ -201,24 +190,13 @@ func toLSPDiag(li *lineIndex, d *diag.Diagnostic) LSPDiagnostic {
 	} else if len(d.Spans) > 0 {
 		rng = li.ostyRange(d.Spans[0].Span)
 	}
-	// Pack the hint/notes into the message so they appear in the
-	// editor's problem panel. Keep the headline as the first line.
-	var msg strings.Builder
-	msg.WriteString(d.Message)
-	if d.Hint != "" {
-		msg.WriteString("\nhelp: ")
-		msg.WriteString(d.Hint)
-	}
-	for _, note := range d.Notes {
-		msg.WriteString("\nnote: ")
-		msg.WriteString(note)
-	}
+	payload := selfhost.LSPDiagnosticPayloadFor(d.Severity.String(), d.Message, d.Hint, d.Notes)
 	return LSPDiagnostic{
 		Range:    rng,
-		Severity: sev,
+		Severity: DiagnosticSeverity(payload.Severity),
 		Code:     d.Code,
 		Source:   ServerName,
-		Message:  msg.String(),
+		Message:  payload.Message,
 	}
 }
 
@@ -299,56 +277,14 @@ func hoverForSymbol(sym *resolve.Symbol, nameFallback string, r *check.Result) *
 // a symbol. For values (let/param/fn) the checker's type is shown;
 // for types (struct/enum/interface) we lead with the keyword.
 func writeSymSignature(b *strings.Builder, sym *resolve.Symbol, r *check.Result) {
-	switch sym.Kind {
-	case resolve.SymFn:
+	typeText := ""
+	if r != nil {
 		if t := r.LookupSymType(sym); t != nil {
-			fmt.Fprintf(b, "fn %s%s\n", sym.Name, fnTypeTail(t))
-		} else {
-			fmt.Fprintf(b, "fn %s\n", sym.Name)
+			typeText = t.String()
 		}
-	case resolve.SymLet:
-		if t := r.LookupSymType(sym); t != nil {
-			fmt.Fprintf(b, "let %s: %s\n", sym.Name, t)
-		} else {
-			fmt.Fprintf(b, "let %s\n", sym.Name)
-		}
-	case resolve.SymParam:
-		if t := r.LookupSymType(sym); t != nil {
-			fmt.Fprintf(b, "(parameter) %s: %s\n", sym.Name, t)
-		} else {
-			fmt.Fprintf(b, "(parameter) %s\n", sym.Name)
-		}
-	case resolve.SymStruct:
-		fmt.Fprintf(b, "struct %s\n", sym.Name)
-	case resolve.SymEnum:
-		fmt.Fprintf(b, "enum %s\n", sym.Name)
-	case resolve.SymInterface:
-		fmt.Fprintf(b, "interface %s\n", sym.Name)
-	case resolve.SymTypeAlias:
-		fmt.Fprintf(b, "type %s\n", sym.Name)
-	case resolve.SymVariant:
-		fmt.Fprintf(b, "variant %s\n", sym.Name)
-	case resolve.SymGeneric:
-		fmt.Fprintf(b, "type parameter %s\n", sym.Name)
-	case resolve.SymBuiltin:
-		fmt.Fprintf(b, "builtin %s\n", sym.Name)
-	case resolve.SymPackage:
-		fmt.Fprintf(b, "use %s\n", sym.Name)
-	default:
-		fmt.Fprintf(b, "%s (%s)\n", sym.Name, sym.Kind)
 	}
-}
-
-// fnTypeTail renders the parenthesized parameter/return portion of a
-// function type, e.g. `(Int, String) -> Bool`. types.FnType.String
-// already emits `fn(...) -> ...`; we just strip the leading keyword
-// so the caller can splice in a custom name.
-func fnTypeTail(t types.Type) string {
-	f, ok := t.(*types.FnType)
-	if !ok {
-		return ""
-	}
-	return strings.TrimPrefix(f.String(), "fn")
+	b.WriteString(selfhost.LSPHoverSignatureLine(sym.Kind.String(), sym.Name, typeText))
+	b.WriteByte('\n')
 }
 
 // symbolDoc extracts the leading `///` comment from a symbol's
@@ -568,16 +504,7 @@ func findNamedTypeAt(a *docAnalysis, pos token.Pos) (*ast.NamedType, *resolve.Sy
 // clients routinely point at the first character *after* the token
 // when the cursor is "just past" it, so we also accept pos == end.
 func containsPos(start, end, pos token.Pos) bool {
-	if pos.Line < start.Line || pos.Line > end.Line {
-		return false
-	}
-	if pos.Line == start.Line && pos.Column < start.Column {
-		return false
-	}
-	if pos.Line == end.Line && pos.Column > end.Column {
-		return false
-	}
-	return true
+	return selfhost.LSPContainsPosition(start.Line, start.Column, end.Line, end.Column, pos.Line, pos.Column)
 }
 
 // spanWidth is a rough size metric: bytes from Pos to End. Used to

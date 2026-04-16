@@ -251,11 +251,21 @@ JSON-RPC language server on stdio. Lifecycle (`initialize` / `shutdown`
 / `exit`) and the document store live in `server.go`; per-method
 handlers live in `handlers.go`. Implemented: `textDocument/hover`,
 `textDocument/definition`, `textDocument/formatting`,
-`textDocument/documentSymbol`. Each document change re-runs the full
-front-end (`parser.ParseDiagnostics` → `resolve.File` → `check.File`);
-caching is by source identity, not incremental — the front-end is
-fast enough that re-analysis is cheaper than change-tracking at this
-stage. Wired as `osty lsp`.
+`textDocument/documentSymbol`, completion, references, rename, signature
+help, inlay hints, code actions, workspace symbols, and semantic tokens.
+The server keeps JSON-RPC, workspace indexing, AST traversal, and byte/rune
+adapter glue in Go, while pure editor policy such as UTF-16 position/range
+conversion, semantic-token legend classification/delta encoding, completion
+kind/sort buckets, completion prefix/dot context, declaration-name lookup,
+outline/workspace symbol kind selection and sorting, cursor/range checks,
+signature-label rendering, diagnostic payload projection, code-action
+filtering, URI/reference-location ordering, organize-import helper policy, and
+fix-all overlap resolution is authored in
+`examples/selfhost-core/lsp.osty` and exposed through `internal/selfhost`. Each
+document change re-runs the full front-end (`parser.ParseDiagnostics` →
+`resolve.File` → `check.File`); caching is by source identity, not incremental
+— the front-end is fast enough that re-analysis is cheaper than
+change-tracking at this stage. Wired as `osty lsp`.
 
 ### `internal/manifest`
 Project manifest (`osty.toml`) reader, validator, and writer (spec

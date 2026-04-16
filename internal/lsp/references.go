@@ -1,11 +1,10 @@
 package lsp
 
 import (
-	"sort"
-
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/selfhost"
 )
 
 // handleReferences answers `textDocument/references`. We locate the
@@ -146,29 +145,36 @@ func (s *Server) findReferences(doc *document, target *resolve.Symbol, includeDe
 		}
 	}
 
-	sortLocations(out)
-	return dedupLocations(out)
+	return sortDedupLocations(out)
 }
 
-// dedupLocations drops entries whose (URI, start position) coincide.
+// sortDedupLocations orders locations by URI/start position, then drops exact
+// duplicates using the self-hosted reference result policy.
 // Two things can produce duplicates: (a) declaration-include adding
 // an entry that also appears in Refs for symbols whose decl site is
 // itself a reference (enum variants bound via their type body); (b)
-// parser fragments where an ident is recorded in both Refs and
-// TypeRefs. The input must already be sorted.
-func dedupLocations(locs []Location) []Location {
-	if len(locs) < 2 {
-		return locs
+// parser fragments where an ident is recorded in both Refs and TypeRefs.
+func sortDedupLocations(locs []Location) []Location {
+	converted := make([]selfhost.LSPLocation, 0, len(locs))
+	for _, loc := range locs {
+		converted = append(converted, selfhost.LSPLocation{
+			URI:            loc.URI,
+			StartLine:      loc.Range.Start.Line,
+			StartCharacter: loc.Range.Start.Character,
+			EndLine:        loc.Range.End.Line,
+			EndCharacter:   loc.Range.End.Character,
+		})
 	}
-	out := locs[:1]
-	for _, loc := range locs[1:] {
-		prev := out[len(out)-1]
-		if loc.URI == prev.URI &&
-			loc.Range.Start == prev.Range.Start &&
-			loc.Range.End == prev.Range.End {
-			continue
-		}
-		out = append(out, loc)
+	resolved := selfhost.SortDedupLSPLocations(converted)
+	out := make([]Location, 0, len(resolved))
+	for _, loc := range resolved {
+		out = append(out, Location{
+			URI: loc.URI,
+			Range: Range{
+				Start: Position{Line: loc.StartLine, Character: loc.StartCharacter},
+				End:   Position{Line: loc.EndLine, Character: loc.EndCharacter},
+			},
+		})
 	}
 	return out
 }
@@ -280,20 +286,4 @@ func containsNode(file *ast.File, decl ast.Node) bool {
 		}
 	}
 	return false
-}
-
-// sortLocations yields a deterministic order (URI, then line, then
-// column). Clients often render the list in order, and stable order
-// also makes test assertions simpler.
-func sortLocations(locs []Location) {
-	sort.Slice(locs, func(i, j int) bool {
-		if locs[i].URI != locs[j].URI {
-			return locs[i].URI < locs[j].URI
-		}
-		a, b := locs[i].Range.Start, locs[j].Range.Start
-		if a.Line != b.Line {
-			return a.Line < b.Line
-		}
-		return a.Character < b.Character
-	})
 }
