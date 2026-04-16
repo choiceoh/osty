@@ -109,7 +109,11 @@ func llvmListElementType(t ast.Type, env typeEnv) (string, bool, error) {
 	if !llvmIsRuntimeAbiListType(name, len(named.Path), len(named.Args)) {
 		return "", false, nil
 	}
-	elemTyp, err := llvmRuntimeABIType(named.Args[0], env)
+	// Lists store the backend's concrete element representation, not the
+	// runtime-call ABI form. That keeps aggregate elements such as tuples,
+	// structs, and Result payloads on the aggregate-bytes path instead of
+	// collapsing them to ptr during IR->AST bridge emission.
+	elemTyp, err := llvmType(named.Args[0], env)
 	if err != nil {
 		return "", true, err
 	}

@@ -366,3 +366,62 @@ fn main() {
 		}
 	}
 }
+
+func TestGenerateModuleStdTestingExpectOkCompat(t *testing.T) {
+	src := `use std.testing
+
+enum CalcError {
+    DivideByZero,
+}
+
+fn div(a: Int, b: Int) -> Result<Int, CalcError> {
+    if b == 0 { Err(DivideByZero) } else { Ok(a / b) }
+}
+
+fn main() {
+    let q = testing.expectOk(div(10, 2))
+    testing.assertEq(q, 5)
+    testing.expectError(div(1, 0))
+}
+`
+	got := runMonoLowerPipeline(t, src, "/tmp/phase2_testing_expect_ok_ir.osty")
+	for _, want := range []string{
+		"%Result.i64.i64 = type { i64, i64, i64 }",
+		"extractvalue %Result.i64.i64",
+		"call %Result.i64.i64 @div(i64 10, i64 2)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateModuleTupleTableDrivenLoopCompat(t *testing.T) {
+	src := `fn clamp(v: Int, lo: Int, hi: Int) -> Int {
+    if v < lo { lo } else if v > hi { hi } else { v }
+}
+
+fn main() {
+    let cases = [
+        (5, 0, 10, 5),
+        (-1, 0, 10, 0),
+        (99, 0, 10, 10),
+    ]
+    for c in cases {
+        let (v, lo, hi, expected) = c
+        println(clamp(v, lo, hi) - expected)
+    }
+}
+`
+	got := runMonoLowerPipeline(t, src, "/tmp/phase2_tuple_table_ir.osty")
+	for _, want := range []string{
+		"%Tuple.i64.i64.i64.i64 = type { i64, i64, i64, i64 }",
+		"call void @osty_rt_list_push_bytes_v1(",
+		"call void @osty_rt_list_get_bytes_v1(",
+		"extractvalue %Tuple.i64.i64.i64.i64",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}

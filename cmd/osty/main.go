@@ -1899,21 +1899,9 @@ func parseGenEmitFile(pkg *resolve.Package) (*ast.File, []byte, error) {
 		return nil, nil, fmt.Errorf("missing package input for gen")
 	}
 	var merged bytes.Buffer
-	mergedFile := &ast.File{}
-	first := true
 	for _, pf := range pkg.Files {
 		if pf == nil {
 			continue
-		}
-		if pf.File != nil {
-			if first {
-				mergedFile.PosV = pf.File.Pos()
-				first = false
-			}
-			mergedFile.EndV = pf.File.End()
-			mergedFile.Uses = append(mergedFile.Uses, pf.File.Uses...)
-			mergedFile.Decls = append(mergedFile.Decls, pf.File.Decls...)
-			mergedFile.Stmts = append(mergedFile.Stmts, pf.File.Stmts...)
 		}
 		if len(pf.Source) == 0 {
 			continue
@@ -1930,10 +1918,15 @@ func parseGenEmitFile(pkg *resolve.Package) (*ast.File, []byte, error) {
 	if len(src) == 0 {
 		return nil, nil, fmt.Errorf("%s: no source bytes were available for backend emission", pkg.Dir)
 	}
-	if len(mergedFile.Uses) == 0 && len(mergedFile.Decls) == 0 && len(mergedFile.Stmts) == 0 {
-		return nil, nil, fmt.Errorf("%s: no parsed package files were available for backend emission", pkg.Dir)
+	// Reparse the synthetic single-file source we hand to the backend. Merely
+	// stitching together per-file AST fragments leaves source positions and some
+	// checker inference paths out of sync with the merged byte stream, which in
+	// turn can poison the backend bridge with `<error>` types for otherwise valid
+	// native-test programs.
+	if reparsed, diags := parser.ParseDiagnostics(src); reparsed != nil && !hasError(diags) {
+		return reparsed, src, nil
 	}
-	return mergedFile, src, nil
+	return nil, nil, fmt.Errorf("%s: merged package source could not be reparsed for backend emission", pkg.Dir)
 }
 
 // runNew implements the `osty new NAME` subcommand: scaffold a fresh
