@@ -118,6 +118,14 @@ func main() {
 		}
 		os.Exit(server.ExitCode())
 	}
+	// query-check runs a single file through the incremental query
+	// engine and optionally prints cache metrics. Primarily a demo /
+	// measurement tool; LSP and future long-lived tooling are the
+	// main engine consumers.
+	if cmd == "query-check" {
+		runQueryCheck(args[1:])
+		return
+	}
 	// new takes a project name and optional --lib/--bin flags — not a
 	// file path — so it has its own flag parser and dispatch.
 	if cmd == "new" {

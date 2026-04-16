@@ -15,6 +15,7 @@ import (
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/lint"
 	"github.com/osty/osty/internal/parser"
+	ostyquery "github.com/osty/osty/internal/query/osty"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/stdlib"
 )
@@ -64,6 +65,14 @@ type Server struct {
 	// invalidated whenever any document changes — subsequent
 	// queries rebuild from disk.
 	wsIndex workspaceIndex
+
+	// engine is the Salsa-style incremental query engine. For file-
+	// mode analysis (scratch buffers / files without .osty siblings)
+	// it backs the analyze path and persists cached parse / resolve
+	// / check results across document edits. Package and workspace
+	// modes retain their legacy eager paths pending a follow-up
+	// migration.
+	engine *ostyquery.Engine
 }
 
 // workspaceIndex stores every package loaded from a single workspace
@@ -95,13 +104,16 @@ func NewServer(in io.Reader, out io.Writer, logOut io.Writer) *Server {
 	if logOut == nil {
 		logOut = io.Discard
 	}
+	prelude := resolve.NewPrelude()
+	reg := stdlib.LoadCached()
 	return &Server{
 		conn:    newConn(in, out),
 		log:     log.New(logOut, "osty-lsp: ", log.LstdFlags),
-		prelude: resolve.NewPrelude(),
+		prelude: prelude,
 		docs:    docStore{m: map[string]*document{}},
 		exit:    make(chan struct{}),
 		trace:   os.Getenv("OSTY_LSP_TRACE") != "",
+		engine:  ostyquery.NewEngineForTest(prelude, reg),
 	}
 }
 
@@ -375,7 +387,7 @@ func (s *Server) analyze(uri string, src []byte) *docAnalysis {
 			return a
 		}
 	}
-	return s.analyzeSingleFile(src)
+	return s.analyzeSingleFileViaEngine(uri, src)
 }
 
 // analyzePackageContaining walks the on-disk context of `path` and runs
@@ -642,8 +654,11 @@ func diagBelongsToFile(d *diag.Diagnostic, pf *resolve.PackageFile) bool {
 	return pos.Offset <= len(pf.Source)
 }
 
-// analyzeSingleFile is the original file-only analysis used for
-// scratch buffers and files without .osty siblings.
+// analyzeSingleFile is the legacy eager analysis path — retained for
+// call sites that still need it while the engine-backed path is
+// promoted. New callers should prefer analyzeSingleFileViaEngine so
+// repeated edits of the same buffer benefit from the incremental
+// cache and early cutoff.
 func (s *Server) analyzeSingleFile(src []byte) *docAnalysis {
 	file, parseDiags := parser.ParseDiagnostics(src)
 	res := resolve.File(file, s.prelude)
@@ -664,6 +679,55 @@ func (s *Server) analyzeSingleFile(src []byte) *docAnalysis {
 		diags:      all,
 		identIndex: buildIdentIndex(res),
 	}
+}
+
+// analyzeSingleFileViaEngine uses the Salsa-style incremental query
+// engine for file-mode analysis. The URI serves as the engine key
+// (normalized for `file://` URIs, verbatim for scratch buffers) so
+// successive edits of the same buffer share a cache lineage.
+//
+// When the new source hashes identical to the cached input the engine
+// skips the entire Parse/Resolve/Check cascade; when the source
+// differs but the resolver's semantic output doesn't (e.g. whitespace
+// or comment-only edits), the early-cutoff path spares the checker
+// and linter re-runs. The result mirrors analyzeSingleFile's docAnalysis
+// shape so existing handlers need no changes.
+func (s *Server) analyzeSingleFileViaEngine(uri string, src []byte) *docAnalysis {
+	key := engineKeyForURI(uri)
+	s.engine.Inputs.SourceText.Set(s.engine.DB, key, src)
+	// PackageFiles must be seeded for BuildPackage to succeed. A
+	// scratch buffer is treated as a one-file package keyed by its
+	// directory (or by the URI itself when we have no path).
+	dir := ostyquery.PackageDirOf(key)
+	// Build the list deterministically from what the engine already
+	// knows about — i.e., just this one file. Multi-file scratch
+	// scenarios are rare in single-file mode.
+	s.engine.Inputs.PackageFiles.Set(s.engine.DB, dir, []string{key})
+
+	pr := s.engine.Queries.Parse.Get(s.engine.DB, key)
+	rr := s.engine.Queries.ResolveFile.Get(s.engine.DB, key)
+	chk := s.engine.Queries.CheckFile.Get(s.engine.DB, key)
+	lr := s.engine.Queries.LintFile.Get(s.engine.DB, key)
+	idx := s.engine.Queries.IdentIndex.Get(s.engine.DB, key)
+	all := s.engine.Queries.FileDiagnostics.Get(s.engine.DB, key)
+	return &docAnalysis{
+		lines:      newLineIndex(src),
+		file:       pr.File,
+		resolve:    rr,
+		check:      chk,
+		lint:       lr,
+		diags:      all,
+		identIndex: idx,
+	}
+}
+
+// engineKeyForURI converts an LSP URI to the engine's canonical key.
+// Defers to ostyquery.FromURI for file:// URIs; returns the URI
+// verbatim for other schemes so scratch-buffer identity is preserved
+// across edits.
+func engineKeyForURI(uri string) string {
+	key, _ := ostyquery.FromURI(uri)
+	return key
 }
 
 func lspCheckOpts(src []byte) check.Opts {
