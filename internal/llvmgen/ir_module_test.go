@@ -467,6 +467,45 @@ fn main() {
 	}
 }
 
+// TestRenderInterfaceShimVoidReturn locks the bug fix for
+// `renderInterfaceShim`'s void-return path: when a method's return
+// is `void`, the shim must emit a bare `call void @impl(...)` rather
+// than binding the result to an SSA register (`%x = call void ...`),
+// which is not valid LLVM IR.
+//
+// Unit-level rather than end-to-end because statement-position
+// interface method calls (`c.clear()` as a stmt) are a separate
+// llvmgen gap; exercising `renderInterfaceShim` directly keeps this
+// regression lock narrowly focused on the fix itself.
+func TestRenderInterfaceShimVoidReturn(t *testing.T) {
+	iface := &interfaceInfo{name: "Clear"}
+	impl := interfaceImpl{
+		implName:  "Bin",
+		kind:      0,
+		vtableSym: "@osty.vtable.Bin__Clear",
+	}
+	m := interfaceMethodSig{name: "clear", slot: 0}
+	sig := &fnSig{
+		name:    "clear",
+		irName:  "Bin__clear",
+		ret:     "void",
+		params:  []paramInfo{{name: "self", typ: "%Bin"}},
+	}
+	sym, def := renderInterfaceShim(iface, impl, m, sig, "%Bin")
+	if sym == "" || def == "" {
+		t.Fatal("expected renderInterfaceShim to produce a shim for a void method")
+	}
+	if strings.Contains(def, "%ret.val = call void") {
+		t.Fatalf("invalid LLVM IR: bound SSA register to void call:\n%s", def)
+	}
+	if !strings.Contains(def, "call void @Bin__clear") {
+		t.Fatalf("expected bare `call void @Bin__clear` in shim body:\n%s", def)
+	}
+	if !strings.Contains(def, "  ret void") {
+		t.Fatalf("expected `ret void` terminator in shim body:\n%s", def)
+	}
+}
+
 // TestGenerateModuleMethodLocalGenericGetMonomorphized verifies the
 // Phase 4 path: a non-generic struct with a generic method
 // (`fn get<U>(self, u: U) -> U`) gets specialized per turbofish call
