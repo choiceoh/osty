@@ -357,35 +357,37 @@ type declarations struct {
 }
 
 type fnSig struct {
-	name           string
-	irName         string
-	receiverType   string
-	receiverMut    bool
-	ret            string
-	retListElemTyp string
-	retListString  bool
-	retMapKeyTyp   string
-	retMapValueTyp string
-	retMapKeyString bool
-	retSetElemTyp  string
+	name             string
+	irName           string
+	receiverType     string
+	receiverMut      bool
+	ret              string
+	retListElemTyp   string
+	retListString    bool
+	retMapKeyTyp     string
+	retMapValueTyp   string
+	retMapKeyString  bool
+	retSetElemTyp    string
 	retSetElemString bool
-	params         []paramInfo
-	decl           *ast.FnDecl
+	returnSourceType ast.Type
+	params           []paramInfo
+	decl             *ast.FnDecl
 }
 
 type paramInfo struct {
-	name        string
-	typ         string
-	irTyp       string
-	listElemTyp string
+	name           string
+	typ            string
+	irTyp          string
+	listElemTyp    string
 	listElemString bool
-	mapKeyTyp   string
-	mapValueTyp string
-	mapKeyString bool
-	setElemTyp  string
-	setElemString bool
-	mutable     bool
-	byRef       bool
+	mapKeyTyp      string
+	mapValueTyp    string
+	mapKeyString   bool
+	setElemTyp     string
+	setElemString  bool
+	sourceType     ast.Type
+	mutable        bool
+	byRef          bool
 }
 
 type structInfo struct {
@@ -397,16 +399,17 @@ type structInfo struct {
 }
 
 type fieldInfo struct {
-	name        string
-	typ         string
-	index       int
-	listElemTyp string
+	name           string
+	typ            string
+	index          int
+	listElemTyp    string
 	listElemString bool
-	mapKeyTyp   string
-	mapValueTyp string
-	mapKeyString bool
-	setElemTyp  string
-	setElemString bool
+	mapKeyTyp      string
+	mapValueTyp    string
+	mapKeyString   bool
+	setElemTyp     string
+	setElemString  bool
+	sourceType     ast.Type
 }
 
 type enumInfo struct {
@@ -445,19 +448,20 @@ type tupleTypeInfo struct {
 }
 
 type value struct {
-	typ         string
-	ref         string
-	ptr         bool
-	mutable     bool
-	gcManaged   bool
-	listElemTyp string
+	typ            string
+	ref            string
+	ptr            bool
+	mutable        bool
+	gcManaged      bool
+	listElemTyp    string
 	listElemString bool
-	mapKeyTyp   string
-	mapValueTyp string
-	mapKeyString bool
-	setElemTyp  string
-	setElemString bool
-	rootPaths   [][]int
+	mapKeyTyp      string
+	mapValueTyp    string
+	mapKeyString   bool
+	setElemTyp     string
+	setElemString  bool
+	sourceType     ast.Type
+	rootPaths      [][]int
 }
 
 const (
@@ -465,13 +469,14 @@ const (
 )
 
 type runtimeFFIFunction struct {
-	path        string
-	sourceName  string
-	symbol      string
-	ret         string
-	listElemTyp string
-	params      []paramInfo
-	unsupported string
+	path             string
+	sourceName       string
+	symbol           string
+	ret              string
+	listElemTyp      string
+	returnSourceType ast.Type
+	params           []paramInfo
+	unsupported      string
 }
 
 type runtimeDecl struct {
@@ -982,7 +987,7 @@ func runtimeFFISignature(path string, fn *ast.FnDecl, env typeEnv) *runtimeFFIFu
 			out.unsupported = llvmRuntimeFfiParamUnsupported(name, false, false, unsupportedMessage(err))
 			return out
 		}
-		info := paramInfo{name: name, typ: typ}
+		info := paramInfo{name: name, typ: typ, sourceType: p.Type}
 		if listElemTyp, ok, err := llvmListElementType(p.Type, env); err != nil {
 			out.unsupported = llvmRuntimeFfiParamUnsupported(name, false, false, unsupportedMessage(err))
 			return out
@@ -991,6 +996,7 @@ func runtimeFFISignature(path string, fn *ast.FnDecl, env typeEnv) *runtimeFFIFu
 		}
 		out.params = append(out.params, info)
 	}
+	out.returnSourceType = fn.ReturnType
 	return out
 }
 
@@ -1187,7 +1193,7 @@ func collectStructFields(info *structInfo, env typeEnv) error {
 			diag := llvmStructFieldDiagnostic(info.name, field.Name, true, false, false, true, "")
 			return unsupported(diag.kind, diag.message)
 		}
-		fieldInfo := fieldInfo{name: field.Name, typ: typ, index: i}
+		fieldInfo := fieldInfo{name: field.Name, typ: typ, index: i, sourceType: field.Type}
 		if listElemTyp, listElemString, ok, err := llvmListElementInfo(field.Type, env); err != nil {
 			diag := llvmStructFieldDiagnostic(info.name, field.Name, true, false, false, false, unsupportedMessage(err))
 			return unsupported(diag.kind, diag.message)
@@ -1360,7 +1366,7 @@ func signatureOf(fn *ast.FnDecl, ownerName string, env typeEnv) (*fnSig, error) 
 			diag := llvmFunctionParamDiagnostic(fn.Name, p.Name, false, false, true, unsupportedMessage(err))
 			return nil, unsupported(diag.kind, diag.message)
 		}
-		info := paramInfo{name: p.Name, typ: typ}
+		info := paramInfo{name: p.Name, typ: typ, sourceType: p.Type}
 		if listElemTyp, listElemString, ok, err := llvmListElementInfo(p.Type, env); err != nil {
 			diag := llvmFunctionParamDiagnostic(fn.Name, p.Name, false, false, true, unsupportedMessage(err))
 			return nil, unsupported(diag.kind, diag.message)
@@ -1385,6 +1391,7 @@ func signatureOf(fn *ast.FnDecl, ownerName string, env typeEnv) (*fnSig, error) 
 		}
 		sig.params = append(sig.params, info)
 	}
+	sig.returnSourceType = fn.ReturnType
 	if listElemTyp, listElemString, ok, err := llvmListElementInfo(fn.ReturnType, env); err != nil {
 		return nil, unsupportedf("type-system", "function %q return type: %s", fn.Name, unsupportedMessage(err))
 	} else if ok {
@@ -1441,15 +1448,16 @@ func (g *generator) emitUserFunction(sig *fnSig) (string, error) {
 	g.returnListElemTyp = sig.retListElemTyp
 	for _, p := range sig.params {
 		v := value{
-			typ:           p.typ,
-			ref:           "%" + p.name,
-			listElemTyp:   p.listElemTyp,
+			typ:            p.typ,
+			ref:            "%" + p.name,
+			listElemTyp:    p.listElemTyp,
 			listElemString: p.listElemString,
-			mapKeyTyp:     p.mapKeyTyp,
-			mapValueTyp:   p.mapValueTyp,
-			mapKeyString:  p.mapKeyString,
-			setElemTyp:    p.setElemTyp,
-			setElemString: p.setElemString,
+			mapKeyTyp:      p.mapKeyTyp,
+			mapValueTyp:    p.mapValueTyp,
+			mapKeyString:   p.mapKeyString,
+			setElemTyp:     p.setElemTyp,
+			setElemString:  p.setElemString,
+			sourceType:     p.sourceType,
 		}
 		v.gcManaged = valueNeedsManagedRoot(v)
 		v.rootPaths = g.rootPathsForType(p.typ)
@@ -1834,7 +1842,7 @@ func (g *generator) emitIndexAssign(target *ast.IndexExpr, rhs ast.Expr) error {
 		emitter.body = append(emitter.body, fmt.Sprintf(
 			"  call void @%s(%s)",
 			listRuntimeSetBytesSymbol(),
-				llvmCallArgs([]*LlvmValue{toOstyValue(base), toOstyValue(index), {typ: "ptr", name: addr}, sizeValue, {typ: "ptr", name: llvmPointerOperand(traceSymbol)}}),
+			llvmCallArgs([]*LlvmValue{toOstyValue(base), toOstyValue(index), {typ: "ptr", name: addr}, sizeValue, {typ: "ptr", name: llvmPointerOperand(traceSymbol)}}),
 		))
 	}
 	g.takeOstyEmitter(emitter)
@@ -2115,6 +2123,9 @@ func (g *generator) emitExprStmt(expr ast.Expr) error {
 		return err
 	}
 	if emitted, err := g.emitRuntimeFFICallStmt(call); emitted || err != nil {
+		return err
+	}
+	if emitted, err := g.emitOptionalUserCallStmt(call); emitted || err != nil {
 		return err
 	}
 	if emitted, err := g.emitUserCallStmt(call); emitted || err != nil {
@@ -2548,6 +2559,8 @@ func (g *generator) emitExpr(expr ast.Expr) (value, error) {
 		return g.emitIdent(e.Name)
 	case *ast.ParenExpr:
 		return g.emitExpr(e.X)
+	case *ast.QuestionExpr:
+		return g.emitQuestionExpr(e)
 	case *ast.UnaryExpr:
 		return g.emitUnary(e)
 	case *ast.BinaryExpr:
@@ -2596,6 +2609,89 @@ func (g *generator) loadIfPointer(v value) (value, error) {
 	copyContainerMetadata(&loaded, v)
 	loaded.rootPaths = cloneRootPaths(v.rootPaths)
 	return loaded, nil
+}
+
+func (g *generator) loadTypedPointerValue(addr value, typ string) (value, error) {
+	if addr.typ != "ptr" {
+		return value{}, unsupportedf("type-system", "typed load from %s, want ptr", addr.typ)
+	}
+	emitter := g.toOstyEmitter()
+	tmp := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = load %s, ptr %s", tmp, typ, addr.ref))
+	g.takeOstyEmitter(emitter)
+	out := value{typ: typ, ref: tmp}
+	out.rootPaths = g.rootPathsForType(typ)
+	return out, nil
+}
+
+func (g *generator) emitOptionalPtrExpr(base value, then func() (value, error)) (value, error) {
+	if base.typ != "ptr" {
+		return value{}, unsupportedf("type-system", "optional receiver type %s, want ptr", base.typ)
+	}
+	emitter := g.toOstyEmitter()
+	isNil := llvmCompare(emitter, "eq", toOstyValue(base), toOstyValue(value{typ: "ptr", ref: "null"}))
+	thenLabel := llvmNextLabel(emitter, "optional.then")
+	nilLabel := llvmNextLabel(emitter, "optional.nil")
+	endLabel := llvmNextLabel(emitter, "optional.end")
+	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", isNil.name, nilLabel, thenLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", thenLabel))
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(thenLabel)
+
+	thenValue, err := then()
+	if err != nil {
+		return value{}, err
+	}
+	if thenValue.typ != "ptr" {
+		return value{}, unsupportedf("type-system", "optional branch type %s, want ptr", thenValue.typ)
+	}
+	thenPred := g.currentBlock
+	if g.currentReachable {
+		g.branchTo(endLabel)
+	}
+
+	emitter = g.toOstyEmitter()
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", nilLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", endLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
+	tmp := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = phi ptr [ %s, %%%s ], [ null, %%%s ]", tmp, thenValue.ref, thenPred, nilLabel))
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(endLabel)
+
+	out := thenValue
+	out.ref = tmp
+	out.ptr = false
+	out.mutable = false
+	return out, nil
+}
+
+func (g *generator) emitOptionalPtrStmt(base value, then func() error) error {
+	if base.typ != "ptr" {
+		return unsupportedf("type-system", "optional receiver type %s, want ptr", base.typ)
+	}
+	emitter := g.toOstyEmitter()
+	isNil := llvmCompare(emitter, "eq", toOstyValue(base), toOstyValue(value{typ: "ptr", ref: "null"}))
+	thenLabel := llvmNextLabel(emitter, "optional.then")
+	nilLabel := llvmNextLabel(emitter, "optional.nil")
+	endLabel := llvmNextLabel(emitter, "optional.end")
+	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", isNil.name, nilLabel, thenLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", thenLabel))
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(thenLabel)
+	if err := then(); err != nil {
+		return err
+	}
+	if g.currentReachable {
+		g.branchTo(endLabel)
+	}
+	emitter = g.toOstyEmitter()
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", nilLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", endLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(endLabel)
+	return nil
 }
 
 func (g *generator) registerTupleType(elemTypes []string, elemListElemTyps []string) tupleTypeInfo {
@@ -2697,7 +2793,7 @@ func (g *generator) emitStructLit(lit *ast.StructLit) (value, error) {
 
 func (g *generator) emitFieldExpr(expr *ast.FieldExpr) (value, error) {
 	if expr.IsOptional {
-		return value{}, unsupported("expression", "optional field access is not supported")
+		return g.emitOptionalFieldExpr(expr)
 	}
 	if v, found, err := g.enumVariantValue(expr); found || err != nil {
 		return v, err
@@ -2725,9 +2821,76 @@ func (g *generator) emitFieldExpr(expr *ast.FieldExpr) (value, error) {
 	loaded.mapKeyString = field.mapKeyString
 	loaded.setElemTyp = field.setElemTyp
 	loaded.setElemString = field.setElemString
+	loaded.sourceType = field.sourceType
 	loaded.gcManaged = valueNeedsManagedRoot(loaded)
 	loaded.rootPaths = g.rootPathsForType(field.typ)
 	return loaded, nil
+}
+
+func (g *generator) emitOptionalFieldExpr(expr *ast.FieldExpr) (value, error) {
+	if expr == nil {
+		return value{}, unsupported("expression", "nil optional field access")
+	}
+	baseSource, ok := g.staticExprSourceType(expr.X)
+	if !ok {
+		return value{}, unsupported("type-system", "optional field receiver type is unknown")
+	}
+	innerSource, ok := unwrapOptionalSourceType(baseSource)
+	if !ok {
+		return value{}, unsupported("type-system", "optional field receiver must have type T?")
+	}
+	innerTyp, err := llvmType(innerSource, g.typeEnv())
+	if err != nil {
+		return value{}, err
+	}
+	info := g.structsByType[innerTyp]
+	if info == nil {
+		return value{}, unsupportedf("type-system", "optional field access on %s", innerTyp)
+	}
+	field, ok := info.byName[expr.Name]
+	if !ok {
+		return value{}, unsupportedf("expression", "struct %q has no field %q", info.name, expr.Name)
+	}
+	if field.typ != "ptr" {
+		return value{}, unsupportedf("type-system", "optional field %q.%s currently requires a ptr-backed field", info.name, field.name)
+	}
+	base, err := g.emitExpr(expr.X)
+	if err != nil {
+		return value{}, err
+	}
+	out, err := g.emitOptionalPtrExpr(base, func() (value, error) {
+		loadedBase, err := g.loadTypedPointerValue(base, innerTyp)
+		if err != nil {
+			return value{}, err
+		}
+		emitter := g.toOstyEmitter()
+		next := llvmExtractValue(emitter, toOstyValue(loadedBase), field.typ, field.index)
+		g.takeOstyEmitter(emitter)
+		v := fromOstyValue(next)
+		v.listElemTyp = field.listElemTyp
+		v.listElemString = field.listElemString
+		v.mapKeyTyp = field.mapKeyTyp
+		v.mapValueTyp = field.mapValueTyp
+		v.mapKeyString = field.mapKeyString
+		v.setElemTyp = field.setElemTyp
+		v.setElemString = field.setElemString
+		v.sourceType = wrapOptionalSourceType(field.sourceType)
+		v.gcManaged = valueNeedsManagedRoot(v)
+		return v, nil
+	})
+	if err != nil {
+		return value{}, err
+	}
+	out.listElemTyp = field.listElemTyp
+	out.listElemString = field.listElemString
+	out.mapKeyTyp = field.mapKeyTyp
+	out.mapValueTyp = field.mapValueTyp
+	out.mapKeyString = field.mapKeyString
+	out.setElemTyp = field.setElemTyp
+	out.setElemString = field.setElemString
+	out.sourceType = wrapOptionalSourceType(field.sourceType)
+	out.gcManaged = valueNeedsManagedRoot(out)
+	return out, nil
 }
 
 func (g *generator) emitIndexExpr(expr *ast.IndexExpr) (value, error) {
@@ -3004,6 +3167,56 @@ func (g *generator) emitCompare(op token.Kind, left, right value) (value, error)
 	}
 	g.takeOstyEmitter(emitter)
 	return fromOstyValue(out), nil
+}
+
+func (g *generator) emitQuestionExpr(expr *ast.QuestionExpr) (value, error) {
+	if expr == nil || expr.X == nil {
+		return value{}, unsupported("expression", "nil optional propagation")
+	}
+	sourceType, ok := g.staticExprSourceType(expr.X)
+	if !ok {
+		return value{}, unsupported("type-system", "optional propagation source type is unknown")
+	}
+	innerSource, ok := unwrapOptionalSourceType(sourceType)
+	if !ok {
+		return value{}, unsupported("type-system", "optional propagation requires a T? value")
+	}
+	innerTyp, err := llvmType(innerSource, g.typeEnv())
+	if err != nil {
+		return value{}, err
+	}
+	if g.returnType != "ptr" {
+		return value{}, unsupportedf("control-flow", "optional propagation currently requires a ptr-backed return type, got %s", g.returnType)
+	}
+	base, err := g.emitExpr(expr.X)
+	if err != nil {
+		return value{}, err
+	}
+	if base.typ != "ptr" {
+		return value{}, unsupportedf("type-system", "optional propagation source type %s, want ptr", base.typ)
+	}
+	emitter := g.toOstyEmitter()
+	isNil := llvmCompare(emitter, "eq", toOstyValue(base), toOstyValue(value{typ: "ptr", ref: "null"}))
+	nilLabel := llvmNextLabel(emitter, "optional.return")
+	contLabel := llvmNextLabel(emitter, "optional.cont")
+	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", isNil.name, nilLabel, contLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", nilLabel))
+	g.releaseGCRoots(emitter)
+	emitter.body = append(emitter.body, "  ret ptr null")
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", contLabel))
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(contLabel)
+	if innerTyp == "ptr" {
+		base.sourceType = innerSource
+		base.gcManaged = valueNeedsManagedRoot(base)
+		return base, nil
+	}
+	out, err := g.loadTypedPointerValue(base, innerTyp)
+	if err != nil {
+		return value{}, err
+	}
+	out.sourceType = innerSource
+	return out, nil
 }
 
 func (g *generator) emitRuntimeStringCompare(op token.Kind, left, right value) (value, error) {
@@ -4455,6 +4668,9 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 	if v, found, err := g.emitRuntimeFFICall(call); found || err != nil {
 		return v, err
 	}
+	if v, found, err := g.emitOptionalUserCall(call); found || err != nil {
+		return v, err
+	}
 	sig, receiverExpr, found, err := g.userCallTarget(call)
 	if err != nil {
 		return value{}, err
@@ -4492,6 +4708,7 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 	ret.mapKeyString = sig.retMapKeyString
 	ret.setElemTyp = sig.retSetElemTyp
 	ret.setElemString = sig.retSetElemString
+	ret.sourceType = sig.returnSourceType
 	ret.gcManaged = valueNeedsManagedRoot(ret)
 	ret.rootPaths = g.rootPathsForType(sig.ret)
 	return ret, nil
@@ -4599,6 +4816,7 @@ func (g *generator) emitRuntimeFFICall(call *ast.CallExpr) (value, bool, error) 
 	g.popScope()
 	ret := fromOstyValue(out)
 	ret.listElemTyp = fn.listElemTyp
+	ret.sourceType = fn.returnSourceType
 	ret.gcManaged = fn.ret == "ptr" || fn.listElemTyp != ""
 	ret.rootPaths = g.rootPathsForType(fn.ret)
 	return ret, true, nil
@@ -4628,6 +4846,209 @@ func (g *generator) emitRuntimeFFICallStmt(call *ast.CallExpr) (bool, error) {
 	llvmCall(emitter, fn.ret, fn.symbol, args)
 	g.takeOstyEmitter(emitter)
 	g.popScope()
+	return true, nil
+}
+
+func (g *generator) optionalUserCallTarget(call *ast.CallExpr) (*fnSig, ast.Type, bool, error) {
+	if call == nil {
+		return nil, nil, false, nil
+	}
+	field, ok := call.Fn.(*ast.FieldExpr)
+	if !ok || !field.IsOptional {
+		return nil, nil, false, nil
+	}
+	baseSource, ok := g.staticExprSourceType(field.X)
+	if !ok {
+		return nil, nil, true, unsupported("type-system", "optional method receiver type is unknown")
+	}
+	innerSource, ok := unwrapOptionalSourceType(baseSource)
+	if !ok {
+		return nil, nil, true, unsupported("type-system", "optional method receiver must have type T?")
+	}
+	innerTyp, err := llvmType(innerSource, g.typeEnv())
+	if err != nil {
+		return nil, nil, true, err
+	}
+	methods := g.methods[innerTyp]
+	if methods == nil {
+		return nil, nil, false, nil
+	}
+	sig := methods[field.Name]
+	if sig == nil {
+		return nil, nil, false, nil
+	}
+	return sig, innerSource, true, nil
+}
+
+func (g *generator) optionalUserReceiverArg(sig *fnSig, innerSource ast.Type, base value) (*LlvmValue, error) {
+	if sig == nil || len(sig.params) == 0 {
+		return nil, unsupported("call", "optional method receiver signature is invalid")
+	}
+	innerTyp, err := llvmType(innerSource, g.typeEnv())
+	if err != nil {
+		return nil, err
+	}
+	param := sig.params[0]
+	if param.byRef {
+		if innerTyp == "ptr" {
+			return nil, unsupportedf("call", "optional mut receiver for %q is not supported when the inner value is ptr-backed", sig.name)
+		}
+		if innerTyp != param.typ {
+			return nil, unsupportedf("type-system", "receiver for %q type %s, want %s", sig.name, innerTyp, param.typ)
+		}
+		return &LlvmValue{typ: "ptr", name: base.ref}, nil
+	}
+	if innerTyp == "ptr" {
+		if param.typ != "ptr" {
+			return nil, unsupportedf("type-system", "receiver for %q type ptr, want %s", sig.name, param.typ)
+		}
+		return toOstyValue(base), nil
+	}
+	if innerTyp != param.typ {
+		return nil, unsupportedf("type-system", "receiver for %q type %s, want %s", sig.name, innerTyp, param.typ)
+	}
+	loaded, err := g.loadTypedPointerValue(base, innerTyp)
+	if err != nil {
+		return nil, err
+	}
+	return toOstyValue(loaded), nil
+}
+
+func (g *generator) optionalUserCallArgs(sig *fnSig, innerSource ast.Type, base value, call *ast.CallExpr) ([]*LlvmValue, error) {
+	if len(sig.params) == 0 {
+		return nil, unsupportedf("call", "function %q receiver metadata is missing", sig.name)
+	}
+	if len(call.Args) != len(sig.params)-1 {
+		return nil, unsupportedf("call", "function %q argument count", sig.name)
+	}
+	receiver, err := g.optionalUserReceiverArg(sig, innerSource, base)
+	if err != nil {
+		return nil, err
+	}
+	args := []*LlvmValue{receiver}
+	values := make([]value, 0, len(call.Args))
+	for i, arg := range call.Args {
+		if arg == nil || arg.Name != "" || arg.Value == nil {
+			return nil, unsupportedf("call", "function %q requires positional arguments", sig.name)
+		}
+		param := sig.params[i+1]
+		v, err := g.emitExprWithHint(arg.Value, param.listElemTyp, param.listElemString, param.mapKeyTyp, param.mapValueTyp, param.mapKeyString, param.setElemTyp, param.setElemString)
+		if err != nil {
+			return nil, err
+		}
+		if v.typ != param.typ {
+			return nil, unsupportedf("type-system", "function %q arg %d type %s, want %s", sig.name, i+1, v.typ, param.typ)
+		}
+		values = append(values, g.protectManagedTemporary(sig.name+".arg", v))
+	}
+	for _, v := range values {
+		loaded, err := g.loadIfPointer(v)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, toOstyValue(loaded))
+	}
+	return args, nil
+}
+
+func (g *generator) emitOptionalUserCall(call *ast.CallExpr) (value, bool, error) {
+	sig, innerSource, found, err := g.optionalUserCallTarget(call)
+	if !found || err != nil {
+		return value{}, found, err
+	}
+	if sig.ret == "" || sig.ret == "void" {
+		return value{}, true, unsupportedf("call", "function %q has no return value", sig.name)
+	}
+	if sig.ret != "ptr" {
+		return value{}, true, unsupportedf("type-system", "optional method %q currently requires a ptr-backed return type", sig.name)
+	}
+	field := call.Fn.(*ast.FieldExpr)
+	g.pushScope()
+	defer g.popScope()
+	base, err := g.emitExpr(field.X)
+	if err != nil {
+		return value{}, true, err
+	}
+	base = g.protectManagedTemporary(sig.name+".optional.self", base)
+	baseValue, err := g.loadIfPointer(base)
+	if err != nil {
+		return value{}, true, err
+	}
+	out, err := g.emitOptionalPtrExpr(baseValue, func() (value, error) {
+		emitter := g.toOstyEmitter()
+		g.emitGCSafepoint(emitter)
+		g.takeOstyEmitter(emitter)
+		args, err := g.optionalUserCallArgs(sig, innerSource, baseValue, call)
+		if err != nil {
+			return value{}, err
+		}
+		emitter = g.toOstyEmitter()
+		next := llvmCall(emitter, sig.ret, sig.irName, args)
+		g.takeOstyEmitter(emitter)
+		v := fromOstyValue(next)
+		v.listElemTyp = sig.retListElemTyp
+		v.listElemString = sig.retListString
+		v.mapKeyTyp = sig.retMapKeyTyp
+		v.mapValueTyp = sig.retMapValueTyp
+		v.mapKeyString = sig.retMapKeyString
+		v.setElemTyp = sig.retSetElemTyp
+		v.setElemString = sig.retSetElemString
+		v.sourceType = wrapOptionalSourceType(sig.returnSourceType)
+		v.gcManaged = valueNeedsManagedRoot(v)
+		return v, nil
+	})
+	if err != nil {
+		return value{}, true, err
+	}
+	out.listElemTyp = sig.retListElemTyp
+	out.listElemString = sig.retListString
+	out.mapKeyTyp = sig.retMapKeyTyp
+	out.mapValueTyp = sig.retMapValueTyp
+	out.mapKeyString = sig.retMapKeyString
+	out.setElemTyp = sig.retSetElemTyp
+	out.setElemString = sig.retSetElemString
+	out.sourceType = wrapOptionalSourceType(sig.returnSourceType)
+	out.gcManaged = valueNeedsManagedRoot(out)
+	out.rootPaths = g.rootPathsForType(sig.ret)
+	return out, true, nil
+}
+
+func (g *generator) emitOptionalUserCallStmt(call *ast.CallExpr) (bool, error) {
+	sig, innerSource, found, err := g.optionalUserCallTarget(call)
+	if !found || err != nil {
+		return found, err
+	}
+	field := call.Fn.(*ast.FieldExpr)
+	g.pushScope()
+	defer g.popScope()
+	base, err := g.emitExpr(field.X)
+	if err != nil {
+		return true, err
+	}
+	base = g.protectManagedTemporary(sig.name+".optional.self", base)
+	baseValue, err := g.loadIfPointer(base)
+	if err != nil {
+		return true, err
+	}
+	if err := g.emitOptionalPtrStmt(baseValue, func() error {
+		emitter := g.toOstyEmitter()
+		g.emitGCSafepoint(emitter)
+		g.takeOstyEmitter(emitter)
+		args, err := g.optionalUserCallArgs(sig, innerSource, baseValue, call)
+		if err != nil {
+			return err
+		}
+		emitter = g.toOstyEmitter()
+		if sig.ret == "void" {
+			emitter.body = append(emitter.body, fmt.Sprintf("  call void @%s(%s)", sig.irName, llvmCallArgs(args)))
+		} else {
+			llvmCall(emitter, sig.ret, sig.irName, args)
+		}
+		g.takeOstyEmitter(emitter)
+		return nil
+	}); err != nil {
+		return true, err
+	}
 	return true, nil
 }
 
@@ -4745,7 +5166,7 @@ func (g *generator) userCallTarget(call *ast.CallExpr) (*fnSig, ast.Expr, bool, 
 		return sig, nil, true, nil
 	case *ast.FieldExpr:
 		if fn.IsOptional {
-			return nil, nil, false, unsupported("call", "optional method calls are not supported")
+			return nil, nil, false, nil
 		}
 		baseInfo, ok := g.staticExprInfo(fn.X)
 		if !ok {
@@ -4772,9 +5193,6 @@ func (g *generator) runtimeFFICallTarget(call *ast.CallExpr) (*runtimeFFIFunctio
 	field, ok := call.Fn.(*ast.FieldExpr)
 	if !ok {
 		return nil, false, nil
-	}
-	if field.IsOptional {
-		return nil, true, unsupported("runtime-ffi", "optional runtime FFI calls are not supported")
 	}
 	alias, ok := field.X.(*ast.Ident)
 	if !ok {
@@ -5635,6 +6053,7 @@ func copyContainerMetadata(dst *value, src value) {
 	dst.mapKeyString = src.mapKeyString
 	dst.setElemTyp = src.setElemTyp
 	dst.setElemString = src.setElemString
+	dst.sourceType = src.sourceType
 	dst.gcManaged = valueNeedsManagedRoot(*dst)
 }
 
@@ -5653,6 +6072,24 @@ func mergeContainerMetadata(dst *value, left, right value) {
 		dst.setElemString = left.setElemString && right.setElemString
 	}
 	dst.gcManaged = valueNeedsManagedRoot(*dst)
+}
+
+func unwrapOptionalSourceType(t ast.Type) (ast.Type, bool) {
+	opt, ok := t.(*ast.OptionalType)
+	if !ok || opt == nil || opt.Inner == nil {
+		return nil, false
+	}
+	return opt.Inner, true
+}
+
+func wrapOptionalSourceType(t ast.Type) ast.Type {
+	if t == nil {
+		return nil
+	}
+	if _, ok := t.(*ast.OptionalType); ok {
+		return t
+	}
+	return &ast.OptionalType{Inner: t}
 }
 
 type gcSafepointRoot struct {
@@ -6070,6 +6507,89 @@ func identPatternName(p ast.Pattern) (string, error) {
 		return "", unsupportedf("name", "let name %q", id.Name)
 	}
 	return id.Name, nil
+}
+
+func (g *generator) staticExprSourceType(expr ast.Expr) (ast.Type, bool) {
+	switch e := expr.(type) {
+	case *ast.IntLit:
+		return &ast.NamedType{Path: []string{"Int"}}, true
+	case *ast.FloatLit:
+		return &ast.NamedType{Path: []string{"Float"}}, true
+	case *ast.BoolLit:
+		return &ast.NamedType{Path: []string{"Bool"}}, true
+	case *ast.StringLit:
+		return &ast.NamedType{Path: []string{"String"}}, true
+	case *ast.Ident:
+		if v, ok := g.lookupBinding(e.Name); ok && v.sourceType != nil {
+			return v.sourceType, true
+		}
+	case *ast.ParenExpr:
+		return g.staticExprSourceType(e.X)
+	case *ast.QuestionExpr:
+		src, ok := g.staticExprSourceType(e.X)
+		if !ok {
+			return nil, false
+		}
+		return unwrapOptionalSourceType(src)
+	case *ast.CallExpr:
+		if id, ok := e.Fn.(*ast.Ident); ok {
+			if sig := g.functions[id.Name]; sig != nil && sig.returnSourceType != nil {
+				return sig.returnSourceType, true
+			}
+		}
+		if field, ok := e.Fn.(*ast.FieldExpr); ok {
+			baseSource, ok := g.staticExprSourceType(field.X)
+			if ok {
+				ownerSource := baseSource
+				if field.IsOptional {
+					var hasInner bool
+					ownerSource, hasInner = unwrapOptionalSourceType(baseSource)
+					if !hasInner {
+						return nil, false
+					}
+				}
+				if ownerTyp, err := llvmType(ownerSource, g.typeEnv()); err == nil {
+					if methods := g.methods[ownerTyp]; methods != nil {
+						if sig := methods[field.Name]; sig != nil && sig.returnSourceType != nil {
+							if field.IsOptional {
+								return wrapOptionalSourceType(sig.returnSourceType), true
+							}
+							return sig.returnSourceType, true
+						}
+					}
+				}
+			}
+		}
+		if fn, found, err := g.runtimeFFICallTarget(e); found && err == nil && fn.returnSourceType != nil {
+			return fn.returnSourceType, true
+		}
+	case *ast.FieldExpr:
+		baseSource, ok := g.staticExprSourceType(e.X)
+		if !ok {
+			return nil, false
+		}
+		ownerSource := baseSource
+		if e.IsOptional {
+			var hasInner bool
+			ownerSource, hasInner = unwrapOptionalSourceType(baseSource)
+			if !hasInner {
+				return nil, false
+			}
+		}
+		ownerTyp, err := llvmType(ownerSource, g.typeEnv())
+		if err != nil {
+			return nil, false
+		}
+		if info := g.structsByType[ownerTyp]; info != nil {
+			if field, ok := info.byName[e.Name]; ok && field.sourceType != nil {
+				if e.IsOptional {
+					return wrapOptionalSourceType(field.sourceType), true
+				}
+				return field.sourceType, true
+			}
+		}
+	}
+	return nil, false
 }
 
 func (g *generator) staticExprInfo(expr ast.Expr) (value, bool) {
