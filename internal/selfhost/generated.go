@@ -212,7 +212,7 @@ func ostyIsNilValue(v reflect.Value) bool {
 	}
 }
 
-// Osty: /tmp/selfhost_merged.osty:16:5
+// Osty: /tmp/selfhost_merged.osty:18:5
 type SemPreIdent interface{ _isSemPreIdent() }
 type SemPreIdent_PreNone struct{ _ref byte }
 
@@ -230,7 +230,7 @@ type SemPreIdent_PreText struct {
 
 func (SemPreIdent_PreText) _isSemPreIdent() {}
 
-// Osty: /tmp/selfhost_merged.osty:28:5
+// Osty: /tmp/selfhost_merged.osty:30:5
 type SemVersion struct {
 	major int
 	minor int
@@ -241,47 +241,47 @@ type SemVersion struct {
 	build string
 }
 
-// Osty: /tmp/selfhost_merged.osty:39:5
+// Osty: /tmp/selfhost_merged.osty:41:5
 func preNone() SemPreIdent {
 	return SemPreIdent(&SemPreIdent_PreNone{})
 }
 
-// Osty: /tmp/selfhost_merged.osty:44:5
+// Osty: /tmp/selfhost_merged.osty:46:5
 func preNumber(n int) SemPreIdent {
 	return SemPreIdent(&SemPreIdent_PreNumber{F0: n})
 }
 
-// Osty: /tmp/selfhost_merged.osty:49:5
+// Osty: /tmp/selfhost_merged.osty:51:5
 func preText(s string) SemPreIdent {
 	return SemPreIdent(&SemPreIdent_PreText{F0: s})
 }
 
-// Osty: /tmp/selfhost_merged.osty:54:5
+// Osty: /tmp/selfhost_merged.osty:56:5
 func semVersion(major int, minor int, patch int, pre1 SemPreIdent, pre2 SemPreIdent, pre3 SemPreIdent, build string) *SemVersion {
 	return &SemVersion{major: major, minor: minor, patch: patch, pre1: pre1, pre2: pre2, pre3: pre3, build: build}
 }
 
-// Osty: /tmp/selfhost_merged.osty:67:5
+// Osty: /tmp/selfhost_merged.osty:69:5
 func stableVersion(major int, minor int, patch int) *SemVersion {
 	return semVersion(major, minor, patch, preNone(), preNone(), preNone(), "")
 }
 
-// Osty: /tmp/selfhost_merged.osty:72:5
+// Osty: /tmp/selfhost_merged.osty:74:5
 func prerelease1(major int, minor int, patch int, pre1 SemPreIdent) *SemVersion {
 	return semVersion(major, minor, patch, pre1, preNone(), preNone(), "")
 }
 
-// Osty: /tmp/selfhost_merged.osty:77:5
+// Osty: /tmp/selfhost_merged.osty:79:5
 func prerelease2(major int, minor int, patch int, pre1 SemPreIdent, pre2 SemPreIdent) *SemVersion {
 	return semVersion(major, minor, patch, pre1, pre2, preNone(), "")
 }
 
-// Osty: /tmp/selfhost_merged.osty:88:5
+// Osty: /tmp/selfhost_merged.osty:90:5
 func versionWithBuild(major int, minor int, patch int, build string) *SemVersion {
 	return semVersion(major, minor, patch, preNone(), preNone(), preNone(), build)
 }
 
-// Osty: /tmp/selfhost_merged.osty:93:5
+// Osty: /tmp/selfhost_merged.osty:95:5
 func isSemPrerelease(v *SemVersion) bool {
 	return func() bool {
 		_m1 := v.pre1
@@ -295,73 +295,73 @@ func isSemPrerelease(v *SemVersion) bool {
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:101:5
+// Osty: /tmp/selfhost_merged.osty:103:5
 func compareSemVersion(a *SemVersion, b *SemVersion) int {
-	// Osty: /tmp/selfhost_merged.osty:102:5
+	// Osty: /tmp/selfhost_merged.osty:104:5
 	major := signInt(a.major, b.major)
 	_ = major
-	// Osty: /tmp/selfhost_merged.osty:103:5
+	// Osty: /tmp/selfhost_merged.osty:105:5
 	if major != 0 {
-		// Osty: /tmp/selfhost_merged.osty:104:9
+		// Osty: /tmp/selfhost_merged.osty:106:9
 		return major
 	}
-	// Osty: /tmp/selfhost_merged.osty:107:5
+	// Osty: /tmp/selfhost_merged.osty:109:5
 	minor := signInt(a.minor, b.minor)
 	_ = minor
-	// Osty: /tmp/selfhost_merged.osty:108:5
+	// Osty: /tmp/selfhost_merged.osty:110:5
 	if minor != 0 {
-		// Osty: /tmp/selfhost_merged.osty:109:9
+		// Osty: /tmp/selfhost_merged.osty:111:9
 		return minor
 	}
-	// Osty: /tmp/selfhost_merged.osty:112:5
+	// Osty: /tmp/selfhost_merged.osty:114:5
 	patch := signInt(a.patch, b.patch)
 	_ = patch
-	// Osty: /tmp/selfhost_merged.osty:113:5
+	// Osty: /tmp/selfhost_merged.osty:115:5
 	if patch != 0 {
-		// Osty: /tmp/selfhost_merged.osty:114:9
+		// Osty: /tmp/selfhost_merged.osty:116:9
 		return patch
 	}
-	// Osty: /tmp/selfhost_merged.osty:117:5
+	// Osty: /tmp/selfhost_merged.osty:119:5
 	aPre := isSemPrerelease(a)
 	_ = aPre
-	// Osty: /tmp/selfhost_merged.osty:118:5
+	// Osty: /tmp/selfhost_merged.osty:120:5
 	bPre := isSemPrerelease(b)
 	_ = bPre
-	// Osty: /tmp/selfhost_merged.osty:119:5
+	// Osty: /tmp/selfhost_merged.osty:121:5
 	if !(aPre) && !(bPre) {
-		// Osty: /tmp/selfhost_merged.osty:120:9
+		// Osty: /tmp/selfhost_merged.osty:122:9
 		return 0
 	}
-	// Osty: /tmp/selfhost_merged.osty:122:5
+	// Osty: /tmp/selfhost_merged.osty:124:5
 	if !(aPre) {
-		// Osty: /tmp/selfhost_merged.osty:123:9
+		// Osty: /tmp/selfhost_merged.osty:125:9
 		return 1
 	}
-	// Osty: /tmp/selfhost_merged.osty:125:5
+	// Osty: /tmp/selfhost_merged.osty:127:5
 	if !(bPre) {
-		// Osty: /tmp/selfhost_merged.osty:126:9
+		// Osty: /tmp/selfhost_merged.osty:128:9
 		return -1
 	}
-	// Osty: /tmp/selfhost_merged.osty:129:5
+	// Osty: /tmp/selfhost_merged.osty:131:5
 	p1 := comparePreIdent(a.pre1, b.pre1)
 	_ = p1
-	// Osty: /tmp/selfhost_merged.osty:130:5
+	// Osty: /tmp/selfhost_merged.osty:132:5
 	if p1 != 0 {
-		// Osty: /tmp/selfhost_merged.osty:131:9
+		// Osty: /tmp/selfhost_merged.osty:133:9
 		return p1
 	}
-	// Osty: /tmp/selfhost_merged.osty:133:5
+	// Osty: /tmp/selfhost_merged.osty:135:5
 	p2 := comparePreIdent(a.pre2, b.pre2)
 	_ = p2
-	// Osty: /tmp/selfhost_merged.osty:134:5
+	// Osty: /tmp/selfhost_merged.osty:136:5
 	if p2 != 0 {
-		// Osty: /tmp/selfhost_merged.osty:135:9
+		// Osty: /tmp/selfhost_merged.osty:137:9
 		return p2
 	}
 	return comparePreIdent(a.pre3, b.pre3)
 }
 
-// Osty: /tmp/selfhost_merged.osty:141:5
+// Osty: /tmp/selfhost_merged.osty:143:5
 func comparePreIdent(a SemPreIdent, b SemPreIdent) int {
 	return func() int {
 		_m2 := a
@@ -434,7 +434,7 @@ func comparePreIdent(a SemPreIdent, b SemPreIdent) int {
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:161:5
+// Osty: /tmp/selfhost_merged.osty:163:5
 func signInt(a int, b int) int {
 	return func() int {
 		if a < b {
@@ -447,7 +447,7 @@ func signInt(a int, b int) int {
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:172:5
+// Osty: /tmp/selfhost_merged.osty:174:5
 func signString(a string, b string) int {
 	return func() int {
 		if a < b {
@@ -460,7 +460,7 @@ func signString(a string, b string) int {
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:185:5
+// Osty: /tmp/selfhost_merged.osty:187:5
 type SemSplit struct {
 	count  int
 	first  string
@@ -468,123 +468,123 @@ type SemSplit struct {
 	third  string
 }
 
-// Osty: /tmp/selfhost_merged.osty:193:5
+// Osty: /tmp/selfhost_merged.osty:195:5
 func splitSummary(parts []string) *SemSplit {
-	// Osty: /tmp/selfhost_merged.osty:194:5
+	// Osty: /tmp/selfhost_merged.osty:196:5
 	count := 0
 	_ = count
-	// Osty: /tmp/selfhost_merged.osty:195:5
+	// Osty: /tmp/selfhost_merged.osty:197:5
 	first := ""
 	_ = first
-	// Osty: /tmp/selfhost_merged.osty:196:5
+	// Osty: /tmp/selfhost_merged.osty:198:5
 	second := ""
 	_ = second
-	// Osty: /tmp/selfhost_merged.osty:197:5
+	// Osty: /tmp/selfhost_merged.osty:199:5
 	third := ""
 	_ = third
-	// Osty: /tmp/selfhost_merged.osty:198:5
+	// Osty: /tmp/selfhost_merged.osty:200:5
 	for _, part := range parts {
-		// Osty: /tmp/selfhost_merged.osty:199:9
+		// Osty: /tmp/selfhost_merged.osty:201:9
 		if count == 0 {
-			// Osty: /tmp/selfhost_merged.osty:200:19
+			// Osty: /tmp/selfhost_merged.osty:202:19
 			first = part
 		} else if count == 1 {
-			// Osty: /tmp/selfhost_merged.osty:202:20
+			// Osty: /tmp/selfhost_merged.osty:204:20
 			second = part
 		} else if count == 2 {
-			// Osty: /tmp/selfhost_merged.osty:204:19
+			// Osty: /tmp/selfhost_merged.osty:206:19
 			third = part
 		}
-		// Osty: /tmp/selfhost_merged.osty:206:15
+		// Osty: /tmp/selfhost_merged.osty:208:15
 		count = count + 1
 	}
 	return &SemSplit{count: count, first: first, second: second, third: third}
 }
 
-// Osty: /tmp/selfhost_merged.osty:212:5
+// Osty: /tmp/selfhost_merged.osty:214:5
 func parseSemVersionText(raw string) Result[*SemVersion, string] {
-	// Osty: /tmp/selfhost_merged.osty:213:5
+	// Osty: /tmp/selfhost_merged.osty:215:5
 	if raw == "" {
-		// Osty: /tmp/selfhost_merged.osty:214:9
+		// Osty: /tmp/selfhost_merged.osty:216:9
 		return resultErr[*SemVersion, string]("empty version")
 	}
-	// Osty: /tmp/selfhost_merged.osty:216:5
+	// Osty: /tmp/selfhost_merged.osty:218:5
 	text := strings.TrimPrefix(raw, "v")
 	_ = text
-	// Osty: /tmp/selfhost_merged.osty:217:5
+	// Osty: /tmp/selfhost_merged.osty:219:5
 	if text == "" {
-		// Osty: /tmp/selfhost_merged.osty:218:9
+		// Osty: /tmp/selfhost_merged.osty:220:9
 		return resultErr[*SemVersion, string]("empty version")
 	}
-	// Osty: /tmp/selfhost_merged.osty:221:5
+	// Osty: /tmp/selfhost_merged.osty:223:5
 	plus := splitSummary(strings.SplitN(text, "+", 2))
 	_ = plus
-	// Osty: /tmp/selfhost_merged.osty:222:5
+	// Osty: /tmp/selfhost_merged.osty:224:5
 	build := plus.second
 	_ = build
-	// Osty: /tmp/selfhost_merged.osty:223:5
+	// Osty: /tmp/selfhost_merged.osty:225:5
 	if plus.count == 2 && !(buildIdentifiersValid(build)) {
-		// Osty: /tmp/selfhost_merged.osty:224:9
+		// Osty: /tmp/selfhost_merged.osty:226:9
 		return resultErr[*SemVersion, string]("invalid build metadata")
 	}
-	// Osty: /tmp/selfhost_merged.osty:227:5
+	// Osty: /tmp/selfhost_merged.osty:229:5
 	dash := splitSummary(strings.SplitN(plus.first, "-", 2))
 	_ = dash
-	// Osty: /tmp/selfhost_merged.osty:228:5
+	// Osty: /tmp/selfhost_merged.osty:230:5
 	_q12 := parseSemCore(dash.first)
 	if !_q12.IsOk {
 		return Result[*SemVersion, string]{Error: _q12.Error, ref: resultRef()}
 	}
 	base := _q12.Value
 	_ = base
-	// Osty: /tmp/selfhost_merged.osty:229:5
+	// Osty: /tmp/selfhost_merged.osty:231:5
 	if dash.count == 1 {
-		// Osty: /tmp/selfhost_merged.osty:230:9
+		// Osty: /tmp/selfhost_merged.osty:232:9
 		return resultOk[*SemVersion, string](semVersion(base.major, base.minor, base.patch, preNone(), preNone(), preNone(), build))
 	}
-	// Osty: /tmp/selfhost_merged.osty:242:5
+	// Osty: /tmp/selfhost_merged.osty:244:5
 	if dash.second == "" {
-		// Osty: /tmp/selfhost_merged.osty:243:9
+		// Osty: /tmp/selfhost_merged.osty:245:9
 		return resultErr[*SemVersion, string]("empty pre-release")
 	}
-	// Osty: /tmp/selfhost_merged.osty:246:5
+	// Osty: /tmp/selfhost_merged.osty:248:5
 	pre := splitSummary(strings.Split(dash.second, "."))
 	_ = pre
-	// Osty: /tmp/selfhost_merged.osty:247:5
+	// Osty: /tmp/selfhost_merged.osty:249:5
 	if pre.count > 3 {
-		// Osty: /tmp/selfhost_merged.osty:248:9
+		// Osty: /tmp/selfhost_merged.osty:250:9
 		return resultErr[*SemVersion, string]("too many pre-release identifiers")
 	}
-	// Osty: /tmp/selfhost_merged.osty:250:5
+	// Osty: /tmp/selfhost_merged.osty:252:5
 	pre1 := preNone()
 	_ = pre1
-	// Osty: /tmp/selfhost_merged.osty:251:5
+	// Osty: /tmp/selfhost_merged.osty:253:5
 	pre2 := preNone()
 	_ = pre2
-	// Osty: /tmp/selfhost_merged.osty:252:5
+	// Osty: /tmp/selfhost_merged.osty:254:5
 	pre3 := preNone()
 	_ = pre3
-	// Osty: /tmp/selfhost_merged.osty:253:5
+	// Osty: /tmp/selfhost_merged.osty:255:5
 	if pre.count >= 1 {
-		// Osty: /tmp/selfhost_merged.osty:254:14
+		// Osty: /tmp/selfhost_merged.osty:256:14
 		_q13 := parseSemPreIdent(pre.first)
 		if !_q13.IsOk {
 			return Result[*SemVersion, string]{Error: _q13.Error, ref: resultRef()}
 		}
 		pre1 = _q13.Value
 	}
-	// Osty: /tmp/selfhost_merged.osty:256:5
+	// Osty: /tmp/selfhost_merged.osty:258:5
 	if pre.count >= 2 {
-		// Osty: /tmp/selfhost_merged.osty:257:14
+		// Osty: /tmp/selfhost_merged.osty:259:14
 		_q14 := parseSemPreIdent(pre.second)
 		if !_q14.IsOk {
 			return Result[*SemVersion, string]{Error: _q14.Error, ref: resultRef()}
 		}
 		pre2 = _q14.Value
 	}
-	// Osty: /tmp/selfhost_merged.osty:259:5
+	// Osty: /tmp/selfhost_merged.osty:261:5
 	if pre.count >= 3 {
-		// Osty: /tmp/selfhost_merged.osty:260:14
+		// Osty: /tmp/selfhost_merged.osty:262:14
 		_q15 := parseSemPreIdent(pre.third)
 		if !_q15.IsOk {
 			return Result[*SemVersion, string]{Error: _q15.Error, ref: resultRef()}
@@ -594,31 +594,31 @@ func parseSemVersionText(raw string) Result[*SemVersion, string] {
 	return resultOk[*SemVersion, string](semVersion(base.major, base.minor, base.patch, pre1, pre2, pre3, build))
 }
 
-// Osty: /tmp/selfhost_merged.osty:267:5
+// Osty: /tmp/selfhost_merged.osty:269:5
 func parseSemCore(text string) Result[*SemVersion, string] {
-	// Osty: /tmp/selfhost_merged.osty:268:5
+	// Osty: /tmp/selfhost_merged.osty:270:5
 	parts := splitSummary(strings.Split(text, "."))
 	_ = parts
-	// Osty: /tmp/selfhost_merged.osty:269:5
+	// Osty: /tmp/selfhost_merged.osty:271:5
 	if parts.count != 3 {
-		// Osty: /tmp/selfhost_merged.osty:270:9
+		// Osty: /tmp/selfhost_merged.osty:272:9
 		return resultErr[*SemVersion, string]("version must have major.minor.patch")
 	}
-	// Osty: /tmp/selfhost_merged.osty:272:5
+	// Osty: /tmp/selfhost_merged.osty:274:5
 	_q16 := parseSemNumber(parts.first)
 	if !_q16.IsOk {
 		return Result[*SemVersion, string]{Error: _q16.Error, ref: resultRef()}
 	}
 	major := _q16.Value
 	_ = major
-	// Osty: /tmp/selfhost_merged.osty:273:5
+	// Osty: /tmp/selfhost_merged.osty:275:5
 	_q17 := parseSemNumber(parts.second)
 	if !_q17.IsOk {
 		return Result[*SemVersion, string]{Error: _q17.Error, ref: resultRef()}
 	}
 	minor := _q17.Value
 	_ = minor
-	// Osty: /tmp/selfhost_merged.osty:274:5
+	// Osty: /tmp/selfhost_merged.osty:276:5
 	_q18 := parseSemNumber(parts.third)
 	if !_q18.IsOk {
 		return Result[*SemVersion, string]{Error: _q18.Error, ref: resultRef()}
@@ -628,139 +628,139 @@ func parseSemCore(text string) Result[*SemVersion, string] {
 	return resultOk[*SemVersion, string](stableVersion(major, minor, patch))
 }
 
-// Osty: /tmp/selfhost_merged.osty:279:5
+// Osty: /tmp/selfhost_merged.osty:281:5
 func parseSemPreIdent(text string) Result[SemPreIdent, string] {
-	// Osty: /tmp/selfhost_merged.osty:280:5
+	// Osty: /tmp/selfhost_merged.osty:282:5
 	if text == "" {
-		// Osty: /tmp/selfhost_merged.osty:281:9
+		// Osty: /tmp/selfhost_merged.osty:283:9
 		return resultErr[SemPreIdent, string]("empty pre-release identifier")
 	}
-	// Osty: /tmp/selfhost_merged.osty:283:5
+	// Osty: /tmp/selfhost_merged.osty:285:5
 	if allAsciiDigits(text) {
-		// Osty: /tmp/selfhost_merged.osty:284:9
+		// Osty: /tmp/selfhost_merged.osty:286:9
 		_q19 := parseSemNumber(text)
 		if !_q19.IsOk {
 			return Result[SemPreIdent, string]{Error: _q19.Error, ref: resultRef()}
 		}
 		n := _q19.Value
 		_ = n
-		// Osty: /tmp/selfhost_merged.osty:285:9
+		// Osty: /tmp/selfhost_merged.osty:287:9
 		return resultOk[SemPreIdent, string](preNumber(n))
 	}
-	// Osty: /tmp/selfhost_merged.osty:287:5
+	// Osty: /tmp/selfhost_merged.osty:289:5
 	if !(identifierTextValid(text)) {
-		// Osty: /tmp/selfhost_merged.osty:288:9
+		// Osty: /tmp/selfhost_merged.osty:290:9
 		return resultErr[SemPreIdent, string]("invalid pre-release identifier")
 	}
 	return resultOk[SemPreIdent, string](preText(text))
 }
 
-// Osty: /tmp/selfhost_merged.osty:294:5
+// Osty: /tmp/selfhost_merged.osty:296:5
 func parseSemNumber(text string) Result[int, string] {
-	// Osty: /tmp/selfhost_merged.osty:295:5
+	// Osty: /tmp/selfhost_merged.osty:297:5
 	if text == "" {
-		// Osty: /tmp/selfhost_merged.osty:296:9
+		// Osty: /tmp/selfhost_merged.osty:298:9
 		return resultErr[int, string]("empty number")
 	}
-	// Osty: /tmp/selfhost_merged.osty:298:5
+	// Osty: /tmp/selfhost_merged.osty:300:5
 	if stringUnitCount(text) > 1 && strings.HasPrefix(text, "0") {
-		// Osty: /tmp/selfhost_merged.osty:299:9
+		// Osty: /tmp/selfhost_merged.osty:301:9
 		return resultErr[int, string]("number has leading zero")
 	}
-	// Osty: /tmp/selfhost_merged.osty:301:5
+	// Osty: /tmp/selfhost_merged.osty:303:5
 	out := 0
 	_ = out
-	// Osty: /tmp/selfhost_merged.osty:302:5
+	// Osty: /tmp/selfhost_merged.osty:304:5
 	for _, unit := range strings.Split(text, "") {
-		// Osty: /tmp/selfhost_merged.osty:303:9
+		// Osty: /tmp/selfhost_merged.osty:305:9
 		digit := digitStringValue(unit)
 		_ = digit
-		// Osty: /tmp/selfhost_merged.osty:304:9
+		// Osty: /tmp/selfhost_merged.osty:306:9
 		if digit < 0 {
-			// Osty: /tmp/selfhost_merged.osty:305:13
+			// Osty: /tmp/selfhost_merged.osty:307:13
 			return resultErr[int, string]("invalid decimal digit")
 		}
-		// Osty: /tmp/selfhost_merged.osty:307:13
+		// Osty: /tmp/selfhost_merged.osty:309:13
 		out = out*10 + digit
 	}
 	return resultOk[int, string](out)
 }
 
-// Osty: /tmp/selfhost_merged.osty:313:5
+// Osty: /tmp/selfhost_merged.osty:315:5
 func buildIdentifiersValid(text string) bool {
-	// Osty: /tmp/selfhost_merged.osty:314:5
+	// Osty: /tmp/selfhost_merged.osty:316:5
 	if text == "" {
-		// Osty: /tmp/selfhost_merged.osty:315:9
+		// Osty: /tmp/selfhost_merged.osty:317:9
 		return false
 	}
-	// Osty: /tmp/selfhost_merged.osty:317:5
+	// Osty: /tmp/selfhost_merged.osty:319:5
 	for _, part := range strings.Split(text, ".") {
-		// Osty: /tmp/selfhost_merged.osty:318:9
+		// Osty: /tmp/selfhost_merged.osty:320:9
 		if !(identifierTextValid(part)) {
-			// Osty: /tmp/selfhost_merged.osty:319:13
+			// Osty: /tmp/selfhost_merged.osty:321:13
 			return false
 		}
 	}
 	return true
 }
 
-// Osty: /tmp/selfhost_merged.osty:326:5
+// Osty: /tmp/selfhost_merged.osty:328:5
 func identifierTextValid(text string) bool {
-	// Osty: /tmp/selfhost_merged.osty:327:5
+	// Osty: /tmp/selfhost_merged.osty:329:5
 	if text == "" {
-		// Osty: /tmp/selfhost_merged.osty:328:9
+		// Osty: /tmp/selfhost_merged.osty:330:9
 		return false
 	}
-	// Osty: /tmp/selfhost_merged.osty:330:5
+	// Osty: /tmp/selfhost_merged.osty:332:5
 	for _, unit := range strings.Split(text, "") {
-		// Osty: /tmp/selfhost_merged.osty:331:9
+		// Osty: /tmp/selfhost_merged.osty:333:9
 		if !(isSemIdentUnit(unit)) {
-			// Osty: /tmp/selfhost_merged.osty:332:13
+			// Osty: /tmp/selfhost_merged.osty:334:13
 			return false
 		}
 	}
 	return true
 }
 
-// Osty: /tmp/selfhost_merged.osty:339:5
+// Osty: /tmp/selfhost_merged.osty:341:5
 func allAsciiDigits(text string) bool {
-	// Osty: /tmp/selfhost_merged.osty:340:5
+	// Osty: /tmp/selfhost_merged.osty:342:5
 	if text == "" {
-		// Osty: /tmp/selfhost_merged.osty:341:9
+		// Osty: /tmp/selfhost_merged.osty:343:9
 		return false
 	}
-	// Osty: /tmp/selfhost_merged.osty:343:5
+	// Osty: /tmp/selfhost_merged.osty:345:5
 	for _, unit := range strings.Split(text, "") {
-		// Osty: /tmp/selfhost_merged.osty:344:9
+		// Osty: /tmp/selfhost_merged.osty:346:9
 		if digitStringValue(unit) < 0 {
-			// Osty: /tmp/selfhost_merged.osty:345:13
+			// Osty: /tmp/selfhost_merged.osty:347:13
 			return false
 		}
 	}
 	return true
 }
 
-// Osty: /tmp/selfhost_merged.osty:352:5
+// Osty: /tmp/selfhost_merged.osty:354:5
 func stringUnitCount(text string) int {
-	// Osty: /tmp/selfhost_merged.osty:353:5
+	// Osty: /tmp/selfhost_merged.osty:355:5
 	count := 0
 	_ = count
-	// Osty: /tmp/selfhost_merged.osty:354:5
+	// Osty: /tmp/selfhost_merged.osty:356:5
 	for _, unit := range strings.Split(text, "") {
-		// Osty: /tmp/selfhost_merged.osty:355:9
+		// Osty: /tmp/selfhost_merged.osty:357:9
 		_ = unit
-		// Osty: /tmp/selfhost_merged.osty:356:15
+		// Osty: /tmp/selfhost_merged.osty:358:15
 		count = count + 1
 	}
 	return count
 }
 
-// Osty: /tmp/selfhost_merged.osty:362:5
+// Osty: /tmp/selfhost_merged.osty:364:5
 func isSemIdentUnit(unit string) bool {
 	return (unit >= "0" && unit <= "9") || (unit >= "A" && unit <= "Z") || (unit >= "a" && unit <= "z") || unit == "-"
 }
 
-// Osty: /tmp/selfhost_merged.osty:367:5
+// Osty: /tmp/selfhost_merged.osty:369:5
 func digitStringValue(unit string) int {
 	return func() int {
 		if unit == "0" {
@@ -789,7 +789,7 @@ func digitStringValue(unit string) int {
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:397:5
+// Osty: /tmp/selfhost_merged.osty:399:5
 type FrontTokenKind interface{ _isFrontTokenKind() }
 type FrontTokenKind_FrontEOF struct{ _ref byte }
 
@@ -1107,13 +1107,13 @@ type FrontTokenKind_FrontHash struct{ _ref byte }
 
 func (FrontTokenKind_FrontHash) _isFrontTokenKind() {}
 
-// Osty: /tmp/selfhost_merged.osty:480:5
+// Osty: /tmp/selfhost_merged.osty:482:5
 type FrontToken struct {
 	kind FrontTokenKind
 	text string
 }
 
-// Osty: /tmp/selfhost_merged.osty:485:5
+// Osty: /tmp/selfhost_merged.osty:487:5
 type FrontCommentKind interface{ _isFrontCommentKind() }
 type FrontCommentKind_FrontCommentLine struct{ _ref byte }
 
@@ -1127,7 +1127,7 @@ type FrontCommentKind_FrontCommentDoc struct{ _ref byte }
 
 func (FrontCommentKind_FrontCommentDoc) _isFrontCommentKind() {}
 
-// Osty: /tmp/selfhost_merged.osty:491:5
+// Osty: /tmp/selfhost_merged.osty:493:5
 type FrontLexDiagnosticCode interface{ _isFrontLexDiagnosticCode() }
 type FrontLexDiagnosticCode_FrontDiagIllegalCharacter struct{ _ref byte }
 
@@ -1173,7 +1173,7 @@ type FrontLexDiagnosticCode_FrontDiagEmptyByte struct{ _ref byte }
 
 func (FrontLexDiagnosticCode_FrontDiagEmptyByte) _isFrontLexDiagnosticCode() {}
 
-// Osty: /tmp/selfhost_merged.osty:505:5
+// Osty: /tmp/selfhost_merged.osty:507:5
 type FrontStringPartKind interface{ _isFrontStringPartKind() }
 type FrontStringPartKind_FrontStringText struct{ _ref byte }
 
@@ -1183,14 +1183,14 @@ type FrontStringPartKind_FrontStringInterpolation struct{ _ref byte }
 
 func (FrontStringPartKind_FrontStringInterpolation) _isFrontStringPartKind() {}
 
-// Osty: /tmp/selfhost_merged.osty:510:5
+// Osty: /tmp/selfhost_merged.osty:512:5
 type FrontPos struct {
 	offset int
 	line   int
 	column int
 }
 
-// Osty: /tmp/selfhost_merged.osty:518:5
+// Osty: /tmp/selfhost_merged.osty:520:5
 type FrontLexToken struct {
 	kind            FrontTokenKind
 	start           *FrontPos
@@ -1202,14 +1202,14 @@ type FrontLexToken struct {
 	baseLiteral     bool
 }
 
-// Osty: /tmp/selfhost_merged.osty:529:5
+// Osty: /tmp/selfhost_merged.osty:531:5
 type FrontLexDiagnostic struct {
 	code  FrontLexDiagnosticCode
 	start *FrontPos
 	end   *FrontPos
 }
 
-// Osty: /tmp/selfhost_merged.osty:535:5
+// Osty: /tmp/selfhost_merged.osty:537:5
 type FrontComment struct {
 	kind  FrontCommentKind
 	start *FrontPos
@@ -1217,7 +1217,7 @@ type FrontComment struct {
 	lines int
 }
 
-// Osty: /tmp/selfhost_merged.osty:542:5
+// Osty: /tmp/selfhost_merged.osty:544:5
 type FrontStringPart struct {
 	ownerToken       int
 	kind             FrontStringPartKind
@@ -1229,13 +1229,13 @@ type FrontStringPart struct {
 	exprTokenCount   int
 }
 
-// Osty: /tmp/selfhost_merged.osty:553:5
+// Osty: /tmp/selfhost_merged.osty:555:5
 type FrontInterpolationToken struct {
 	ownerPart int
 	token     *FrontLexToken
 }
 
-// Osty: /tmp/selfhost_merged.osty:558:5
+// Osty: /tmp/selfhost_merged.osty:560:5
 type FrontLexStream struct {
 	tokens                []*FrontLexToken
 	diagnostics           []*FrontLexDiagnostic
@@ -1250,7 +1250,7 @@ type FrontLexStream struct {
 	escapeErrors          int
 }
 
-// Osty: /tmp/selfhost_merged.osty:574:5
+// Osty: /tmp/selfhost_merged.osty:576:5
 type FrontLexSummary struct {
 	tokens                int
 	keywords              int
@@ -1271,7 +1271,7 @@ type FrontLexSummary struct {
 	third                 string
 }
 
-// Osty: /tmp/selfhost_merged.osty:596:5
+// Osty: /tmp/selfhost_merged.osty:598:5
 type FrontParseSummary struct {
 	decls            int
 	funcs            int
@@ -1342,7 +1342,7 @@ type FrontParseSummary struct {
 	wildcardPatterns int
 }
 
-// Osty: /tmp/selfhost_merged.osty:666:5
+// Osty: /tmp/selfhost_merged.osty:668:5
 type FrontTypeKind interface{ _isFrontTypeKind() }
 type FrontTypeKind_FrontTypeInvalid struct{ _ref byte }
 
@@ -1388,20 +1388,20 @@ type FrontTypeKind_FrontTypeUntypedFloat struct{ _ref byte }
 
 func (FrontTypeKind_FrontTypeUntypedFloat) _isFrontTypeKind() {}
 
-// Osty: /tmp/selfhost_merged.osty:680:5
+// Osty: /tmp/selfhost_merged.osty:682:5
 type FrontAssignment struct {
 	dst string
 	src string
 }
 
-// Osty: /tmp/selfhost_merged.osty:685:5
+// Osty: /tmp/selfhost_merged.osty:687:5
 type FrontCheckSummary struct {
 	assignments int
 	accepted    int
 	errors      int
 }
 
-// Osty: /tmp/selfhost_merged.osty:691:5
+// Osty: /tmp/selfhost_merged.osty:693:5
 type FrontScanResult struct {
 	kind                FrontTokenKind
 	consumed            int
@@ -1413,13 +1413,13 @@ type FrontScanResult struct {
 	uppercaseBasePrefix bool
 }
 
-// Osty: /tmp/selfhost_merged.osty:702:5
+// Osty: /tmp/selfhost_merged.osty:704:5
 type FrontBlockCommentScan struct {
 	consumed int
 	ok       bool
 }
 
-// Osty: /tmp/selfhost_merged.osty:707:5
+// Osty: /tmp/selfhost_merged.osty:709:5
 type FrontStringStructureScan struct {
 	parts                   []*FrontStringPart
 	interpolationTokens     []*FrontInterpolationToken
@@ -1431,7 +1431,7 @@ type FrontStringStructureScan struct {
 	escapeErrors            int
 }
 
-// Osty: /tmp/selfhost_merged.osty:718:5
+// Osty: /tmp/selfhost_merged.osty:720:5
 type FrontInterpolationScan struct {
 	consumed    int
 	ok          bool
@@ -1440,32 +1440,32 @@ type FrontInterpolationScan struct {
 	tokenCount  int
 }
 
-// Osty: /tmp/selfhost_merged.osty:726:5
+// Osty: /tmp/selfhost_merged.osty:728:5
 type FrontEscapeScan struct {
 	consumed int
 	ok       bool
 }
 
-// Osty: /tmp/selfhost_merged.osty:731:5
+// Osty: /tmp/selfhost_merged.osty:733:5
 type FrontTripleNormalization struct {
 	normalizedUnits int
 	badIndentLines  int
 	indentUnits     int
 }
 
-// Osty: /tmp/selfhost_merged.osty:737:5
+// Osty: /tmp/selfhost_merged.osty:739:5
 type FrontTripleLineStats struct {
 	normalizedUnits int
 	badIndent       bool
 }
 
-// Osty: /tmp/selfhost_merged.osty:742:5
+// Osty: /tmp/selfhost_merged.osty:744:5
 type FrontParseResult struct {
 	summary  *FrontParseSummary
 	consumed int
 }
 
-// Osty: /tmp/selfhost_merged.osty:747:5
+// Osty: /tmp/selfhost_merged.osty:749:5
 type FrontNodeKind interface{ _isFrontNodeKind() }
 type FrontNodeKind_FrontNodeFile struct{ _ref byte }
 
@@ -1639,7 +1639,7 @@ type FrontNodeKind_FrontNodeRecovery struct{ _ref byte }
 
 func (FrontNodeKind_FrontNodeRecovery) _isFrontNodeKind() {}
 
-// Osty: /tmp/selfhost_merged.osty:793:5
+// Osty: /tmp/selfhost_merged.osty:795:5
 type FrontParseDiagnosticKind interface{ _isFrontParseDiagnosticKind() }
 type FrontParseDiagnosticKind_FrontParseDiagUnexpectedToken struct{ _ref byte }
 
@@ -1669,7 +1669,7 @@ type FrontParseDiagnosticKind_FrontParseDiagLexerError struct{ _ref byte }
 
 func (FrontParseDiagnosticKind_FrontParseDiagLexerError) _isFrontParseDiagnosticKind() {}
 
-// Osty: /tmp/selfhost_merged.osty:803:5
+// Osty: /tmp/selfhost_merged.osty:805:5
 type FrontParseNode struct {
 	kind  FrontNodeKind
 	start int
@@ -1678,7 +1678,7 @@ type FrontParseNode struct {
 	flags int
 }
 
-// Osty: /tmp/selfhost_merged.osty:811:5
+// Osty: /tmp/selfhost_merged.osty:813:5
 type FrontParseDiagnostic struct {
 	kind     FrontParseDiagnosticKind
 	start    int
@@ -1687,7 +1687,7 @@ type FrontParseDiagnostic struct {
 	found    FrontTokenKind
 }
 
-// Osty: /tmp/selfhost_merged.osty:819:5
+// Osty: /tmp/selfhost_merged.osty:821:5
 type FrontParseTree struct {
 	nodes                 []*FrontParseNode
 	diagnostics           []*FrontParseDiagnostic
@@ -1699,641 +1699,641 @@ type FrontParseTree struct {
 	precedenceDiagnostics int
 }
 
-// Osty: /tmp/selfhost_merged.osty:830:5
+// Osty: /tmp/selfhost_merged.osty:832:5
 func frontToken(kindName string, text string) *FrontToken {
 	return &FrontToken{kind: frontTokenKindByName(kindName), text: text}
 }
 
-// Osty: /tmp/selfhost_merged.osty:834:5
+// Osty: /tmp/selfhost_merged.osty:836:5
 func frontEOF() *FrontToken {
 	return &FrontToken{kind: FrontTokenKind(&FrontTokenKind_FrontEOF{}), text: ""}
 }
 
-// Osty: /tmp/selfhost_merged.osty:838:5
+// Osty: /tmp/selfhost_merged.osty:840:5
 func frontPos(offset int, line int, column int) *FrontPos {
 	return &FrontPos{offset: offset, line: line, column: column}
 }
 
-// Osty: /tmp/selfhost_merged.osty:842:5
+// Osty: /tmp/selfhost_merged.osty:844:5
 func emptyFrontPos() *FrontPos {
 	return frontPos(0, 1, 1)
 }
 
-// Osty: /tmp/selfhost_merged.osty:846:5
+// Osty: /tmp/selfhost_merged.osty:848:5
 func frontLexToken(kind FrontTokenKind, start *FrontPos, end *FrontPos, length int, leadingDocLines int, triple bool, interpolations int, baseLiteral bool) *FrontLexToken {
 	return &FrontLexToken{kind: kind, start: start, end: end, length: length, leadingDocLines: leadingDocLines, triple: triple, interpolations: interpolations, baseLiteral: baseLiteral}
 }
 
-// Osty: /tmp/selfhost_merged.osty:868:5
+// Osty: /tmp/selfhost_merged.osty:870:5
 func emptyFrontLexToken() *FrontLexToken {
 	return frontLexToken(FrontTokenKind(&FrontTokenKind_FrontEOF{}), emptyFrontPos(), emptyFrontPos(), 0, 0, false, 0, false)
 }
 
-// Osty: /tmp/selfhost_merged.osty:872:5
+// Osty: /tmp/selfhost_merged.osty:874:5
 func frontLexDiagnostic(code FrontLexDiagnosticCode, start *FrontPos, end *FrontPos) *FrontLexDiagnostic {
 	return &FrontLexDiagnostic{code: code, start: start, end: end}
 }
 
-// Osty: /tmp/selfhost_merged.osty:880:5
+// Osty: /tmp/selfhost_merged.osty:882:5
 func emptyFrontLexDiagnostic() *FrontLexDiagnostic {
 	return frontLexDiagnostic(FrontLexDiagnosticCode(&FrontLexDiagnosticCode_FrontDiagIllegalCharacter{}), emptyFrontPos(), emptyFrontPos())
 }
 
-// Osty: /tmp/selfhost_merged.osty:884:5
+// Osty: /tmp/selfhost_merged.osty:886:5
 func frontComment(kind FrontCommentKind, start *FrontPos, end *FrontPos, lines int) *FrontComment {
 	return &FrontComment{kind: kind, start: start, end: end, lines: lines}
 }
 
-// Osty: /tmp/selfhost_merged.osty:893:5
+// Osty: /tmp/selfhost_merged.osty:895:5
 func emptyFrontComment() *FrontComment {
 	return frontComment(FrontCommentKind(&FrontCommentKind_FrontCommentLine{}), emptyFrontPos(), emptyFrontPos(), 0)
 }
 
-// Osty: /tmp/selfhost_merged.osty:897:5
+// Osty: /tmp/selfhost_merged.osty:899:5
 func frontStringPart(ownerToken int, kind FrontStringPartKind, start *FrontPos, end *FrontPos, length int, normalizedLength int, exprTokenStart int, exprTokenCount int) *FrontStringPart {
 	return &FrontStringPart{ownerToken: ownerToken, kind: kind, start: start, end: end, length: length, normalizedLength: normalizedLength, exprTokenStart: exprTokenStart, exprTokenCount: exprTokenCount}
 }
 
-// Osty: /tmp/selfhost_merged.osty:919:5
+// Osty: /tmp/selfhost_merged.osty:921:5
 func emptyFrontStringPart() *FrontStringPart {
 	return frontStringPart(0, FrontStringPartKind(&FrontStringPartKind_FrontStringText{}), emptyFrontPos(), emptyFrontPos(), 0, 0, 0, 0)
 }
 
-// Osty: /tmp/selfhost_merged.osty:923:5
+// Osty: /tmp/selfhost_merged.osty:925:5
 func frontInterpolationToken(ownerPart int, token *FrontLexToken) *FrontInterpolationToken {
 	return &FrontInterpolationToken{ownerPart: ownerPart, token: token}
 }
 
-// Osty: /tmp/selfhost_merged.osty:927:5
+// Osty: /tmp/selfhost_merged.osty:929:5
 func emptyFrontInterpolationToken() *FrontInterpolationToken {
 	return frontInterpolationToken(0, emptyFrontLexToken())
 }
 
-// Osty: /tmp/selfhost_merged.osty:931:5
+// Osty: /tmp/selfhost_merged.osty:933:5
 func frontAssignment(dst string, src string) *FrontAssignment {
 	return &FrontAssignment{dst: dst, src: src}
 }
 
-// Osty: /tmp/selfhost_merged.osty:935:5
+// Osty: /tmp/selfhost_merged.osty:937:5
 func emptyFrontLexSummary() *FrontLexSummary {
 	return &FrontLexSummary{tokens: 0, keywords: 0, identifiers: 0, literals: 0, punctuation: 0, docs: 0, newlines: 0, errors: 0, shebangs: 0, bomStripped: 0, tripleStrings: 0, interpolations: 0, baseLiterals: 0, uppercaseBasePrefixes: 0, first: "", second: "", third: ""}
 }
 
-// Osty: /tmp/selfhost_merged.osty:961:5
+// Osty: /tmp/selfhost_merged.osty:963:5
 func frontendLexStream(source string) *FrontLexStream {
-	// Osty: /tmp/selfhost_merged.osty:962:5
+	// Osty: /tmp/selfhost_merged.osty:964:5
 	units := strings.Split(source, "")
 	_ = units
-	// Osty: /tmp/selfhost_merged.osty:963:5
+	// Osty: /tmp/selfhost_merged.osty:965:5
 	unitCount := stringUnitCount(source)
 	_ = unitCount
-	// Osty: /tmp/selfhost_merged.osty:964:5
+	// Osty: /tmp/selfhost_merged.osty:966:5
 	var tokens []*FrontLexToken = make([]*FrontLexToken, 0, 1)
 	_ = tokens
-	// Osty: /tmp/selfhost_merged.osty:965:5
+	// Osty: /tmp/selfhost_merged.osty:967:5
 	var diagnostics []*FrontLexDiagnostic = make([]*FrontLexDiagnostic, 0, 1)
 	_ = diagnostics
-	// Osty: /tmp/selfhost_merged.osty:966:5
+	// Osty: /tmp/selfhost_merged.osty:968:5
 	var comments []*FrontComment = make([]*FrontComment, 0, 1)
 	_ = comments
-	// Osty: /tmp/selfhost_merged.osty:967:5
+	// Osty: /tmp/selfhost_merged.osty:969:5
 	var stringParts []*FrontStringPart = make([]*FrontStringPart, 0, 1)
 	_ = stringParts
-	// Osty: /tmp/selfhost_merged.osty:968:5
+	// Osty: /tmp/selfhost_merged.osty:970:5
 	var interpolationTokens []*FrontInterpolationToken = make([]*FrontInterpolationToken, 0, 1)
 	_ = interpolationTokens
-	// Osty: /tmp/selfhost_merged.osty:969:5
+	// Osty: /tmp/selfhost_merged.osty:971:5
 	insertTerm := false
 	_ = insertTerm
-	// Osty: /tmp/selfhost_merged.osty:970:5
+	// Osty: /tmp/selfhost_merged.osty:972:5
 	parenDepth := 0
 	_ = parenDepth
-	// Osty: /tmp/selfhost_merged.osty:971:5
+	// Osty: /tmp/selfhost_merged.osty:973:5
 	skip := 0
 	_ = skip
-	// Osty: /tmp/selfhost_merged.osty:972:5
+	// Osty: /tmp/selfhost_merged.osty:974:5
 	atFileStart := true
 	_ = atFileStart
-	// Osty: /tmp/selfhost_merged.osty:973:5
+	// Osty: /tmp/selfhost_merged.osty:975:5
 	pendingDocLines := 0
 	_ = pendingDocLines
-	// Osty: /tmp/selfhost_merged.osty:974:5
+	// Osty: /tmp/selfhost_merged.osty:976:5
 	docLastLine := 0
 	_ = docLastLine
-	// Osty: /tmp/selfhost_merged.osty:975:5
+	// Osty: /tmp/selfhost_merged.osty:977:5
 	shebangs := 0
 	_ = shebangs
-	// Osty: /tmp/selfhost_merged.osty:976:5
+	// Osty: /tmp/selfhost_merged.osty:978:5
 	bomStripped := 0
 	_ = bomStripped
-	// Osty: /tmp/selfhost_merged.osty:977:5
+	// Osty: /tmp/selfhost_merged.osty:979:5
 	tokenIndex := 0
 	_ = tokenIndex
-	// Osty: /tmp/selfhost_merged.osty:978:5
+	// Osty: /tmp/selfhost_merged.osty:980:5
 	stringPartIndex := 0
 	_ = stringPartIndex
-	// Osty: /tmp/selfhost_merged.osty:979:5
+	// Osty: /tmp/selfhost_merged.osty:981:5
 	interpolationTokenIndex := 0
 	_ = interpolationTokenIndex
-	// Osty: /tmp/selfhost_merged.osty:980:5
+	// Osty: /tmp/selfhost_merged.osty:982:5
 	normalizedTripleUnits := 0
 	_ = normalizedTripleUnits
-	// Osty: /tmp/selfhost_merged.osty:981:5
+	// Osty: /tmp/selfhost_merged.osty:983:5
 	tripleIndentErrors := 0
 	_ = tripleIndentErrors
-	// Osty: /tmp/selfhost_merged.osty:982:5
+	// Osty: /tmp/selfhost_merged.osty:984:5
 	escapeErrors := 0
 	_ = escapeErrors
-	// Osty: /tmp/selfhost_merged.osty:984:5
+	// Osty: /tmp/selfhost_merged.osty:986:5
 	for idx := 0; idx < unitCount; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:985:9
+		// Osty: /tmp/selfhost_merged.osty:987:9
 		if skip > 0 {
-			// Osty: /tmp/selfhost_merged.osty:986:18
+			// Osty: /tmp/selfhost_merged.osty:988:18
 			skip = skip - 1
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:988:13
+			// Osty: /tmp/selfhost_merged.osty:990:13
 			unit := frontUnitAt(units, idx)
 			_ = unit
-			// Osty: /tmp/selfhost_merged.osty:989:13
+			// Osty: /tmp/selfhost_merged.osty:991:13
 			next := frontUnitAt(units, idx+1)
 			_ = next
-			// Osty: /tmp/selfhost_merged.osty:990:13
+			// Osty: /tmp/selfhost_merged.osty:992:13
 			third := frontUnitAt(units, idx+2)
 			_ = third
-			// Osty: /tmp/selfhost_merged.osty:991:13
+			// Osty: /tmp/selfhost_merged.osty:993:13
 			start := frontPositionAt(units, idx)
 			_ = start
-			// Osty: /tmp/selfhost_merged.osty:992:13
+			// Osty: /tmp/selfhost_merged.osty:994:13
 			if atFileStart && unit == "\ufeff" {
-				// Osty: /tmp/selfhost_merged.osty:993:29
+				// Osty: /tmp/selfhost_merged.osty:995:29
 				bomStripped = bomStripped + 1
 			} else if atFileStart && unit == "#" && next == "!" {
-				// Osty: /tmp/selfhost_merged.osty:995:17
+				// Osty: /tmp/selfhost_merged.osty:997:17
 				consumed := frontLineCommentSkip(units, idx+2, unitCount) + 1
 				_ = consumed
-				// Osty: /tmp/selfhost_merged.osty:996:26
+				// Osty: /tmp/selfhost_merged.osty:998:26
 				shebangs = shebangs + 1
-				// Osty: /tmp/selfhost_merged.osty:997:22
+				// Osty: /tmp/selfhost_merged.osty:999:22
 				skip = consumed - 1
-				// Osty: /tmp/selfhost_merged.osty:998:29
-				atFileStart = false
-			} else if frontIsSpaceNoNewline(unit) {
 				// Osty: /tmp/selfhost_merged.osty:1000:29
 				atFileStart = false
+			} else if frontIsSpaceNoNewline(unit) {
+				// Osty: /tmp/selfhost_merged.osty:1002:29
+				atFileStart = false
 			} else if frontIsNewlineUnit(unit) {
-				// Osty: /tmp/selfhost_merged.osty:1002:17
+				// Osty: /tmp/selfhost_merged.osty:1004:17
 				consumed := frontNewlineConsumed(unit, next)
 				_ = consumed
-				// Osty: /tmp/selfhost_merged.osty:1003:29
+				// Osty: /tmp/selfhost_merged.osty:1005:29
 				atFileStart = false
-				// Osty: /tmp/selfhost_merged.osty:1004:17
+				// Osty: /tmp/selfhost_merged.osty:1006:17
 				if insertTerm && parenDepth == 0 && !(frontNextSuppressesTerm(units, idx+consumed, unitCount)) {
-					// Osty: /tmp/selfhost_merged.osty:1009:21
+					// Osty: /tmp/selfhost_merged.osty:1011:21
 					func() struct{} {
 						tokens = append(tokens, frontLexTokenFromScan(units, idx, consumed, FrontTokenKind(&FrontTokenKind_FrontNewline{}), 0, false, 0, false))
 						return struct{}{}
 					}()
-					// Osty: /tmp/selfhost_merged.osty:1021:32
+					// Osty: /tmp/selfhost_merged.osty:1023:32
 					tokenIndex = tokenIndex + 1
-					// Osty: /tmp/selfhost_merged.osty:1022:32
+					// Osty: /tmp/selfhost_merged.osty:1024:32
 					insertTerm = false
 				}
-				// Osty: /tmp/selfhost_merged.osty:1024:22
+				// Osty: /tmp/selfhost_merged.osty:1026:22
 				skip = consumed - 1
 			} else if unit == "/" && next == "/" {
-				// Osty: /tmp/selfhost_merged.osty:1026:17
+				// Osty: /tmp/selfhost_merged.osty:1028:17
 				consumed := frontLineCommentSkip(units, idx+2, unitCount) + 1
 				_ = consumed
-				// Osty: /tmp/selfhost_merged.osty:1027:17
+				// Osty: /tmp/selfhost_merged.osty:1029:17
 				end := frontPositionAt(units, idx+consumed)
 				_ = end
-				// Osty: /tmp/selfhost_merged.osty:1028:29
+				// Osty: /tmp/selfhost_merged.osty:1030:29
 				atFileStart = false
-				// Osty: /tmp/selfhost_merged.osty:1029:17
+				// Osty: /tmp/selfhost_merged.osty:1031:17
 				if third == "/" && frontUnitAt(units, idx+3) != "/" {
-					// Osty: /tmp/selfhost_merged.osty:1030:21
+					// Osty: /tmp/selfhost_merged.osty:1032:21
 					func() struct{} {
 						comments = append(comments, frontComment(FrontCommentKind(&FrontCommentKind_FrontCommentDoc{}), start, end, 1))
 						return struct{}{}
 					}()
-					// Osty: /tmp/selfhost_merged.osty:1031:37
+					// Osty: /tmp/selfhost_merged.osty:1033:37
 					pendingDocLines = pendingDocLines + 1
-					// Osty: /tmp/selfhost_merged.osty:1032:33
+					// Osty: /tmp/selfhost_merged.osty:1034:33
 					docLastLine = start.line
 				} else {
-					// Osty: /tmp/selfhost_merged.osty:1034:21
+					// Osty: /tmp/selfhost_merged.osty:1036:21
 					func() struct{} {
 						comments = append(comments, frontComment(FrontCommentKind(&FrontCommentKind_FrontCommentLine{}), start, end, 1))
 						return struct{}{}
 					}()
-					// Osty: /tmp/selfhost_merged.osty:1035:37
+					// Osty: /tmp/selfhost_merged.osty:1037:37
 					pendingDocLines = 0
 				}
-				// Osty: /tmp/selfhost_merged.osty:1037:22
+				// Osty: /tmp/selfhost_merged.osty:1039:22
 				skip = consumed - 1
 			} else if unit == "/" && next == "*" {
-				// Osty: /tmp/selfhost_merged.osty:1039:17
+				// Osty: /tmp/selfhost_merged.osty:1041:17
 				block := frontBlockCommentSkip(units, idx, unitCount)
 				_ = block
-				// Osty: /tmp/selfhost_merged.osty:1040:17
+				// Osty: /tmp/selfhost_merged.osty:1042:17
 				end := frontPositionAt(units, idx+block.consumed)
 				_ = end
-				// Osty: /tmp/selfhost_merged.osty:1041:29
+				// Osty: /tmp/selfhost_merged.osty:1043:29
 				atFileStart = false
-				// Osty: /tmp/selfhost_merged.osty:1042:17
+				// Osty: /tmp/selfhost_merged.osty:1044:17
 				func() struct{} {
 					comments = append(comments, frontComment(FrontCommentKind(&FrontCommentKind_FrontCommentBlock{}), start, end, frontCommentLineCount(start, end)))
 					return struct{}{}
 				}()
-				// Osty: /tmp/selfhost_merged.osty:1050:17
+				// Osty: /tmp/selfhost_merged.osty:1052:17
 				if !(block.ok) {
-					// Osty: /tmp/selfhost_merged.osty:1051:21
+					// Osty: /tmp/selfhost_merged.osty:1053:21
 					func() struct{} {
 						diagnostics = append(diagnostics, frontLexDiagnostic(FrontLexDiagnosticCode(&FrontLexDiagnosticCode_FrontDiagUnterminatedBlockComment{}), start, end))
 						return struct{}{}
 					}()
 				}
-				// Osty: /tmp/selfhost_merged.osty:1059:22
+				// Osty: /tmp/selfhost_merged.osty:1061:22
 				skip = block.consumed - 1
 			} else if unit == "r" && next == "\"" {
-				// Osty: /tmp/selfhost_merged.osty:1061:17
+				// Osty: /tmp/selfhost_merged.osty:1063:17
 				scan := frontStringLikeScan(units, idx, unitCount, FrontTokenKind(&FrontTokenKind_FrontRawString{}))
 				_ = scan
-				// Osty: /tmp/selfhost_merged.osty:1062:17
+				// Osty: /tmp/selfhost_merged.osty:1064:17
 				leadingDocLines := frontAttachedDocLines(pendingDocLines, docLastLine, start.line)
 				_ = leadingDocLines
-				// Osty: /tmp/selfhost_merged.osty:1067:29
+				// Osty: /tmp/selfhost_merged.osty:1069:29
 				atFileStart = false
-				// Osty: /tmp/selfhost_merged.osty:1068:17
+				// Osty: /tmp/selfhost_merged.osty:1070:17
 				ownerToken := tokenIndex
 				_ = ownerToken
-				// Osty: /tmp/selfhost_merged.osty:1069:17
+				// Osty: /tmp/selfhost_merged.osty:1071:17
 				func() struct{} {
 					tokens = append(tokens, frontLexTokenFromScan(units, idx, scan.consumed, scan.kind, leadingDocLines, scan.triple, scan.interpolations, false))
 					return struct{}{}
 				}()
-				// Osty: /tmp/selfhost_merged.osty:1081:28
+				// Osty: /tmp/selfhost_merged.osty:1083:28
 				tokenIndex = tokenIndex + 1
-				// Osty: /tmp/selfhost_merged.osty:1082:17
+				// Osty: /tmp/selfhost_merged.osty:1084:17
 				facts := frontStringStructureScan(units, idx, unitCount, scan.kind, ownerToken, stringPartIndex, interpolationTokenIndex, scan)
 				_ = facts
-				// Osty: /tmp/selfhost_merged.osty:1092:17
+				// Osty: /tmp/selfhost_merged.osty:1094:17
 				for _, part := range facts.parts {
-					// Osty: /tmp/selfhost_merged.osty:1093:21
+					// Osty: /tmp/selfhost_merged.osty:1095:21
 					func() struct{} { stringParts = append(stringParts, part); return struct{}{} }()
 				}
-				// Osty: /tmp/selfhost_merged.osty:1095:17
+				// Osty: /tmp/selfhost_merged.osty:1097:17
 				for _, interp := range facts.interpolationTokens {
-					// Osty: /tmp/selfhost_merged.osty:1096:21
+					// Osty: /tmp/selfhost_merged.osty:1098:21
 					func() struct{} { interpolationTokens = append(interpolationTokens, interp); return struct{}{} }()
 				}
-				// Osty: /tmp/selfhost_merged.osty:1098:17
+				// Osty: /tmp/selfhost_merged.osty:1100:17
 				for _, diag := range facts.diagnostics {
-					// Osty: /tmp/selfhost_merged.osty:1099:21
+					// Osty: /tmp/selfhost_merged.osty:1101:21
 					func() struct{} { diagnostics = append(diagnostics, diag); return struct{}{} }()
 				}
-				// Osty: /tmp/selfhost_merged.osty:1101:33
+				// Osty: /tmp/selfhost_merged.osty:1103:33
 				stringPartIndex = stringPartIndex + facts.partCount
-				// Osty: /tmp/selfhost_merged.osty:1102:41
+				// Osty: /tmp/selfhost_merged.osty:1104:41
 				interpolationTokenIndex = interpolationTokenIndex + facts.interpolationTokenCount
-				// Osty: /tmp/selfhost_merged.osty:1103:39
+				// Osty: /tmp/selfhost_merged.osty:1105:39
 				normalizedTripleUnits = normalizedTripleUnits + facts.normalizedTripleUnits
-				// Osty: /tmp/selfhost_merged.osty:1104:36
+				// Osty: /tmp/selfhost_merged.osty:1106:36
 				tripleIndentErrors = tripleIndentErrors + facts.tripleIndentErrors
-				// Osty: /tmp/selfhost_merged.osty:1105:30
+				// Osty: /tmp/selfhost_merged.osty:1107:30
 				escapeErrors = escapeErrors + facts.escapeErrors
-				// Osty: /tmp/selfhost_merged.osty:1106:17
+				// Osty: /tmp/selfhost_merged.osty:1108:17
 				if scan.errors > 0 {
-					// Osty: /tmp/selfhost_merged.osty:1107:21
+					// Osty: /tmp/selfhost_merged.osty:1109:21
 					func() struct{} {
 						diagnostics = append(diagnostics, frontLexDiagnostic(frontStringDiagnosticCode(units, idx, unitCount, FrontTokenKind(&FrontTokenKind_FrontRawString{}), scan), start, frontPositionAt(units, idx+scan.consumed)))
 						return struct{}{}
 					}()
 				}
-				// Osty: /tmp/selfhost_merged.osty:1115:33
+				// Osty: /tmp/selfhost_merged.osty:1117:33
 				pendingDocLines = 0
-				// Osty: /tmp/selfhost_merged.osty:1116:28
+				// Osty: /tmp/selfhost_merged.osty:1118:28
 				insertTerm = frontKindInsertsTerm(scan.kind)
-				// Osty: /tmp/selfhost_merged.osty:1117:22
+				// Osty: /tmp/selfhost_merged.osty:1119:22
 				skip = scan.consumed - 1
 			} else if unit == "b" && next == "'" {
-				// Osty: /tmp/selfhost_merged.osty:1119:17
+				// Osty: /tmp/selfhost_merged.osty:1121:17
 				scan := frontStringLikeScan(units, idx, unitCount, FrontTokenKind(&FrontTokenKind_FrontByte{}))
 				_ = scan
-				// Osty: /tmp/selfhost_merged.osty:1120:17
+				// Osty: /tmp/selfhost_merged.osty:1122:17
 				leadingDocLines := frontAttachedDocLines(pendingDocLines, docLastLine, start.line)
 				_ = leadingDocLines
-				// Osty: /tmp/selfhost_merged.osty:1125:29
+				// Osty: /tmp/selfhost_merged.osty:1127:29
 				atFileStart = false
-				// Osty: /tmp/selfhost_merged.osty:1126:17
+				// Osty: /tmp/selfhost_merged.osty:1128:17
 				ownerToken := tokenIndex
 				_ = ownerToken
-				// Osty: /tmp/selfhost_merged.osty:1127:17
+				// Osty: /tmp/selfhost_merged.osty:1129:17
 				func() struct{} {
 					tokens = append(tokens, frontLexTokenFromScan(units, idx, scan.consumed, scan.kind, leadingDocLines, scan.triple, scan.interpolations, false))
 					return struct{}{}
 				}()
-				// Osty: /tmp/selfhost_merged.osty:1139:28
+				// Osty: /tmp/selfhost_merged.osty:1141:28
 				tokenIndex = tokenIndex + 1
-				// Osty: /tmp/selfhost_merged.osty:1140:17
+				// Osty: /tmp/selfhost_merged.osty:1142:17
 				facts := frontStringStructureScan(units, idx, unitCount, scan.kind, ownerToken, stringPartIndex, interpolationTokenIndex, scan)
 				_ = facts
-				// Osty: /tmp/selfhost_merged.osty:1150:17
+				// Osty: /tmp/selfhost_merged.osty:1152:17
 				for _, part := range facts.parts {
-					// Osty: /tmp/selfhost_merged.osty:1151:21
+					// Osty: /tmp/selfhost_merged.osty:1153:21
 					func() struct{} { stringParts = append(stringParts, part); return struct{}{} }()
 				}
-				// Osty: /tmp/selfhost_merged.osty:1153:17
+				// Osty: /tmp/selfhost_merged.osty:1155:17
 				for _, interp := range facts.interpolationTokens {
-					// Osty: /tmp/selfhost_merged.osty:1154:21
+					// Osty: /tmp/selfhost_merged.osty:1156:21
 					func() struct{} { interpolationTokens = append(interpolationTokens, interp); return struct{}{} }()
 				}
-				// Osty: /tmp/selfhost_merged.osty:1156:17
+				// Osty: /tmp/selfhost_merged.osty:1158:17
 				for _, diag := range facts.diagnostics {
-					// Osty: /tmp/selfhost_merged.osty:1157:21
+					// Osty: /tmp/selfhost_merged.osty:1159:21
 					func() struct{} { diagnostics = append(diagnostics, diag); return struct{}{} }()
 				}
-				// Osty: /tmp/selfhost_merged.osty:1159:33
+				// Osty: /tmp/selfhost_merged.osty:1161:33
 				stringPartIndex = stringPartIndex + facts.partCount
-				// Osty: /tmp/selfhost_merged.osty:1160:41
+				// Osty: /tmp/selfhost_merged.osty:1162:41
 				interpolationTokenIndex = interpolationTokenIndex + facts.interpolationTokenCount
-				// Osty: /tmp/selfhost_merged.osty:1161:39
+				// Osty: /tmp/selfhost_merged.osty:1163:39
 				normalizedTripleUnits = normalizedTripleUnits + facts.normalizedTripleUnits
-				// Osty: /tmp/selfhost_merged.osty:1162:36
+				// Osty: /tmp/selfhost_merged.osty:1164:36
 				tripleIndentErrors = tripleIndentErrors + facts.tripleIndentErrors
-				// Osty: /tmp/selfhost_merged.osty:1163:30
+				// Osty: /tmp/selfhost_merged.osty:1165:30
 				escapeErrors = escapeErrors + facts.escapeErrors
-				// Osty: /tmp/selfhost_merged.osty:1164:17
+				// Osty: /tmp/selfhost_merged.osty:1166:17
 				if scan.errors > 0 {
-					// Osty: /tmp/selfhost_merged.osty:1165:21
+					// Osty: /tmp/selfhost_merged.osty:1167:21
 					func() struct{} {
 						diagnostics = append(diagnostics, frontLexDiagnostic(frontStringDiagnosticCode(units, idx, unitCount, FrontTokenKind(&FrontTokenKind_FrontByte{}), scan), start, frontPositionAt(units, idx+scan.consumed)))
 						return struct{}{}
 					}()
 				}
-				// Osty: /tmp/selfhost_merged.osty:1173:33
+				// Osty: /tmp/selfhost_merged.osty:1175:33
 				pendingDocLines = 0
-				// Osty: /tmp/selfhost_merged.osty:1174:28
+				// Osty: /tmp/selfhost_merged.osty:1176:28
 				insertTerm = frontKindInsertsTerm(scan.kind)
-				// Osty: /tmp/selfhost_merged.osty:1175:22
+				// Osty: /tmp/selfhost_merged.osty:1177:22
 				skip = scan.consumed - 1
 			} else if unit == "\"" {
-				// Osty: /tmp/selfhost_merged.osty:1177:17
+				// Osty: /tmp/selfhost_merged.osty:1179:17
 				scan := frontStringLikeScan(units, idx, unitCount, FrontTokenKind(&FrontTokenKind_FrontString{}))
 				_ = scan
-				// Osty: /tmp/selfhost_merged.osty:1178:17
+				// Osty: /tmp/selfhost_merged.osty:1180:17
 				leadingDocLines := frontAttachedDocLines(pendingDocLines, docLastLine, start.line)
 				_ = leadingDocLines
-				// Osty: /tmp/selfhost_merged.osty:1183:29
+				// Osty: /tmp/selfhost_merged.osty:1185:29
 				atFileStart = false
-				// Osty: /tmp/selfhost_merged.osty:1184:17
+				// Osty: /tmp/selfhost_merged.osty:1186:17
 				ownerToken := tokenIndex
 				_ = ownerToken
-				// Osty: /tmp/selfhost_merged.osty:1185:17
+				// Osty: /tmp/selfhost_merged.osty:1187:17
 				func() struct{} {
 					tokens = append(tokens, frontLexTokenFromScan(units, idx, scan.consumed, scan.kind, leadingDocLines, scan.triple, scan.interpolations, false))
 					return struct{}{}
 				}()
-				// Osty: /tmp/selfhost_merged.osty:1197:28
+				// Osty: /tmp/selfhost_merged.osty:1199:28
 				tokenIndex = tokenIndex + 1
-				// Osty: /tmp/selfhost_merged.osty:1198:17
+				// Osty: /tmp/selfhost_merged.osty:1200:17
 				facts := frontStringStructureScan(units, idx, unitCount, scan.kind, ownerToken, stringPartIndex, interpolationTokenIndex, scan)
 				_ = facts
-				// Osty: /tmp/selfhost_merged.osty:1208:17
+				// Osty: /tmp/selfhost_merged.osty:1210:17
 				for _, part := range facts.parts {
-					// Osty: /tmp/selfhost_merged.osty:1209:21
+					// Osty: /tmp/selfhost_merged.osty:1211:21
 					func() struct{} { stringParts = append(stringParts, part); return struct{}{} }()
 				}
-				// Osty: /tmp/selfhost_merged.osty:1211:17
+				// Osty: /tmp/selfhost_merged.osty:1213:17
 				for _, interp := range facts.interpolationTokens {
-					// Osty: /tmp/selfhost_merged.osty:1212:21
+					// Osty: /tmp/selfhost_merged.osty:1214:21
 					func() struct{} { interpolationTokens = append(interpolationTokens, interp); return struct{}{} }()
 				}
-				// Osty: /tmp/selfhost_merged.osty:1214:17
+				// Osty: /tmp/selfhost_merged.osty:1216:17
 				for _, diag := range facts.diagnostics {
-					// Osty: /tmp/selfhost_merged.osty:1215:21
+					// Osty: /tmp/selfhost_merged.osty:1217:21
 					func() struct{} { diagnostics = append(diagnostics, diag); return struct{}{} }()
 				}
-				// Osty: /tmp/selfhost_merged.osty:1217:33
+				// Osty: /tmp/selfhost_merged.osty:1219:33
 				stringPartIndex = stringPartIndex + facts.partCount
-				// Osty: /tmp/selfhost_merged.osty:1218:41
+				// Osty: /tmp/selfhost_merged.osty:1220:41
 				interpolationTokenIndex = interpolationTokenIndex + facts.interpolationTokenCount
-				// Osty: /tmp/selfhost_merged.osty:1219:39
+				// Osty: /tmp/selfhost_merged.osty:1221:39
 				normalizedTripleUnits = normalizedTripleUnits + facts.normalizedTripleUnits
-				// Osty: /tmp/selfhost_merged.osty:1220:36
+				// Osty: /tmp/selfhost_merged.osty:1222:36
 				tripleIndentErrors = tripleIndentErrors + facts.tripleIndentErrors
-				// Osty: /tmp/selfhost_merged.osty:1221:30
+				// Osty: /tmp/selfhost_merged.osty:1223:30
 				escapeErrors = escapeErrors + facts.escapeErrors
-				// Osty: /tmp/selfhost_merged.osty:1222:17
+				// Osty: /tmp/selfhost_merged.osty:1224:17
 				if scan.errors > 0 {
-					// Osty: /tmp/selfhost_merged.osty:1223:21
+					// Osty: /tmp/selfhost_merged.osty:1225:21
 					func() struct{} {
 						diagnostics = append(diagnostics, frontLexDiagnostic(frontStringDiagnosticCode(units, idx, unitCount, FrontTokenKind(&FrontTokenKind_FrontString{}), scan), start, frontPositionAt(units, idx+scan.consumed)))
 						return struct{}{}
 					}()
 				}
-				// Osty: /tmp/selfhost_merged.osty:1231:33
+				// Osty: /tmp/selfhost_merged.osty:1233:33
 				pendingDocLines = 0
-				// Osty: /tmp/selfhost_merged.osty:1232:28
+				// Osty: /tmp/selfhost_merged.osty:1234:28
 				insertTerm = frontKindInsertsTerm(scan.kind)
-				// Osty: /tmp/selfhost_merged.osty:1233:22
+				// Osty: /tmp/selfhost_merged.osty:1235:22
 				skip = scan.consumed - 1
 			} else if unit == "'" {
-				// Osty: /tmp/selfhost_merged.osty:1235:17
+				// Osty: /tmp/selfhost_merged.osty:1237:17
 				scan := frontStringLikeScan(units, idx, unitCount, FrontTokenKind(&FrontTokenKind_FrontChar{}))
 				_ = scan
-				// Osty: /tmp/selfhost_merged.osty:1236:17
+				// Osty: /tmp/selfhost_merged.osty:1238:17
 				leadingDocLines := frontAttachedDocLines(pendingDocLines, docLastLine, start.line)
 				_ = leadingDocLines
-				// Osty: /tmp/selfhost_merged.osty:1241:29
+				// Osty: /tmp/selfhost_merged.osty:1243:29
 				atFileStart = false
-				// Osty: /tmp/selfhost_merged.osty:1242:17
+				// Osty: /tmp/selfhost_merged.osty:1244:17
 				ownerToken := tokenIndex
 				_ = ownerToken
-				// Osty: /tmp/selfhost_merged.osty:1243:17
+				// Osty: /tmp/selfhost_merged.osty:1245:17
 				func() struct{} {
 					tokens = append(tokens, frontLexTokenFromScan(units, idx, scan.consumed, scan.kind, leadingDocLines, scan.triple, scan.interpolations, false))
 					return struct{}{}
 				}()
-				// Osty: /tmp/selfhost_merged.osty:1255:28
+				// Osty: /tmp/selfhost_merged.osty:1257:28
 				tokenIndex = tokenIndex + 1
-				// Osty: /tmp/selfhost_merged.osty:1256:17
+				// Osty: /tmp/selfhost_merged.osty:1258:17
 				facts := frontStringStructureScan(units, idx, unitCount, scan.kind, ownerToken, stringPartIndex, interpolationTokenIndex, scan)
 				_ = facts
-				// Osty: /tmp/selfhost_merged.osty:1266:17
+				// Osty: /tmp/selfhost_merged.osty:1268:17
 				for _, part := range facts.parts {
-					// Osty: /tmp/selfhost_merged.osty:1267:21
+					// Osty: /tmp/selfhost_merged.osty:1269:21
 					func() struct{} { stringParts = append(stringParts, part); return struct{}{} }()
 				}
-				// Osty: /tmp/selfhost_merged.osty:1269:17
+				// Osty: /tmp/selfhost_merged.osty:1271:17
 				for _, interp := range facts.interpolationTokens {
-					// Osty: /tmp/selfhost_merged.osty:1270:21
+					// Osty: /tmp/selfhost_merged.osty:1272:21
 					func() struct{} { interpolationTokens = append(interpolationTokens, interp); return struct{}{} }()
 				}
-				// Osty: /tmp/selfhost_merged.osty:1272:17
+				// Osty: /tmp/selfhost_merged.osty:1274:17
 				for _, diag := range facts.diagnostics {
-					// Osty: /tmp/selfhost_merged.osty:1273:21
+					// Osty: /tmp/selfhost_merged.osty:1275:21
 					func() struct{} { diagnostics = append(diagnostics, diag); return struct{}{} }()
 				}
-				// Osty: /tmp/selfhost_merged.osty:1275:33
+				// Osty: /tmp/selfhost_merged.osty:1277:33
 				stringPartIndex = stringPartIndex + facts.partCount
-				// Osty: /tmp/selfhost_merged.osty:1276:41
+				// Osty: /tmp/selfhost_merged.osty:1278:41
 				interpolationTokenIndex = interpolationTokenIndex + facts.interpolationTokenCount
-				// Osty: /tmp/selfhost_merged.osty:1277:39
+				// Osty: /tmp/selfhost_merged.osty:1279:39
 				normalizedTripleUnits = normalizedTripleUnits + facts.normalizedTripleUnits
-				// Osty: /tmp/selfhost_merged.osty:1278:36
+				// Osty: /tmp/selfhost_merged.osty:1280:36
 				tripleIndentErrors = tripleIndentErrors + facts.tripleIndentErrors
-				// Osty: /tmp/selfhost_merged.osty:1279:30
+				// Osty: /tmp/selfhost_merged.osty:1281:30
 				escapeErrors = escapeErrors + facts.escapeErrors
-				// Osty: /tmp/selfhost_merged.osty:1280:17
+				// Osty: /tmp/selfhost_merged.osty:1282:17
 				if scan.errors > 0 {
-					// Osty: /tmp/selfhost_merged.osty:1281:21
+					// Osty: /tmp/selfhost_merged.osty:1283:21
 					func() struct{} {
 						diagnostics = append(diagnostics, frontLexDiagnostic(frontStringDiagnosticCode(units, idx, unitCount, FrontTokenKind(&FrontTokenKind_FrontChar{}), scan), start, frontPositionAt(units, idx+scan.consumed)))
 						return struct{}{}
 					}()
 				}
-				// Osty: /tmp/selfhost_merged.osty:1289:33
+				// Osty: /tmp/selfhost_merged.osty:1291:33
 				pendingDocLines = 0
-				// Osty: /tmp/selfhost_merged.osty:1290:28
+				// Osty: /tmp/selfhost_merged.osty:1292:28
 				insertTerm = frontKindInsertsTerm(scan.kind)
-				// Osty: /tmp/selfhost_merged.osty:1291:22
+				// Osty: /tmp/selfhost_merged.osty:1293:22
 				skip = scan.consumed - 1
 			} else if digitStringValue(unit) >= 0 {
-				// Osty: /tmp/selfhost_merged.osty:1293:17
+				// Osty: /tmp/selfhost_merged.osty:1295:17
 				scan := frontNumberScan(units, idx, unitCount)
 				_ = scan
-				// Osty: /tmp/selfhost_merged.osty:1294:17
+				// Osty: /tmp/selfhost_merged.osty:1296:17
 				leadingDocLines := frontAttachedDocLines(pendingDocLines, docLastLine, start.line)
 				_ = leadingDocLines
-				// Osty: /tmp/selfhost_merged.osty:1299:29
+				// Osty: /tmp/selfhost_merged.osty:1301:29
 				atFileStart = false
-				// Osty: /tmp/selfhost_merged.osty:1300:17
+				// Osty: /tmp/selfhost_merged.osty:1302:17
 				func() struct{} {
 					tokens = append(tokens, frontLexTokenFromScan(units, idx, scan.consumed, scan.kind, leadingDocLines, scan.triple, scan.interpolations, scan.baseLiteral))
 					return struct{}{}
 				}()
-				// Osty: /tmp/selfhost_merged.osty:1312:28
+				// Osty: /tmp/selfhost_merged.osty:1314:28
 				tokenIndex = tokenIndex + 1
-				// Osty: /tmp/selfhost_merged.osty:1313:17
+				// Osty: /tmp/selfhost_merged.osty:1315:17
 				if scan.uppercaseBasePrefix {
-					// Osty: /tmp/selfhost_merged.osty:1314:21
+					// Osty: /tmp/selfhost_merged.osty:1316:21
 					func() struct{} {
 						diagnostics = append(diagnostics, frontLexDiagnostic(FrontLexDiagnosticCode(&FrontLexDiagnosticCode_FrontDiagUppercaseBasePrefix{}), start, frontPositionAt(units, idx+2)))
 						return struct{}{}
 					}()
 				}
-				// Osty: /tmp/selfhost_merged.osty:1322:33
+				// Osty: /tmp/selfhost_merged.osty:1324:33
 				pendingDocLines = 0
-				// Osty: /tmp/selfhost_merged.osty:1323:28
+				// Osty: /tmp/selfhost_merged.osty:1325:28
 				insertTerm = frontKindInsertsTerm(scan.kind)
-				// Osty: /tmp/selfhost_merged.osty:1324:22
+				// Osty: /tmp/selfhost_merged.osty:1326:22
 				skip = scan.consumed - 1
 			} else if isFrontIdentStart(unit) {
-				// Osty: /tmp/selfhost_merged.osty:1326:17
+				// Osty: /tmp/selfhost_merged.osty:1328:17
 				scan := frontIdentScan(units, idx, unitCount)
 				_ = scan
-				// Osty: /tmp/selfhost_merged.osty:1327:17
+				// Osty: /tmp/selfhost_merged.osty:1329:17
 				leadingDocLines := frontAttachedDocLines(pendingDocLines, docLastLine, start.line)
 				_ = leadingDocLines
-				// Osty: /tmp/selfhost_merged.osty:1332:29
+				// Osty: /tmp/selfhost_merged.osty:1334:29
 				atFileStart = false
-				// Osty: /tmp/selfhost_merged.osty:1333:17
+				// Osty: /tmp/selfhost_merged.osty:1335:17
 				func() struct{} {
 					tokens = append(tokens, frontLexTokenFromScan(units, idx, scan.consumed, scan.kind, leadingDocLines, false, 0, false))
 					return struct{}{}
 				}()
-				// Osty: /tmp/selfhost_merged.osty:1345:28
-				tokenIndex = tokenIndex + 1
-				// Osty: /tmp/selfhost_merged.osty:1346:33
-				pendingDocLines = 0
 				// Osty: /tmp/selfhost_merged.osty:1347:28
+				tokenIndex = tokenIndex + 1
+				// Osty: /tmp/selfhost_merged.osty:1348:33
+				pendingDocLines = 0
+				// Osty: /tmp/selfhost_merged.osty:1349:28
 				insertTerm = frontKindInsertsTerm(scan.kind)
-				// Osty: /tmp/selfhost_merged.osty:1348:22
+				// Osty: /tmp/selfhost_merged.osty:1350:22
 				skip = scan.consumed - 1
 			} else {
-				// Osty: /tmp/selfhost_merged.osty:1350:17
+				// Osty: /tmp/selfhost_merged.osty:1352:17
 				scan := frontPunctuationScan(units, idx, unitCount)
 				_ = scan
-				// Osty: /tmp/selfhost_merged.osty:1351:17
+				// Osty: /tmp/selfhost_merged.osty:1353:17
 				leadingDocLines := frontAttachedDocLines(pendingDocLines, docLastLine, start.line)
 				_ = leadingDocLines
-				// Osty: /tmp/selfhost_merged.osty:1356:29
+				// Osty: /tmp/selfhost_merged.osty:1358:29
 				atFileStart = false
-				// Osty: /tmp/selfhost_merged.osty:1357:17
+				// Osty: /tmp/selfhost_merged.osty:1359:17
 				if scan.ok {
-					// Osty: /tmp/selfhost_merged.osty:1358:21
+					// Osty: /tmp/selfhost_merged.osty:1360:21
 					func() struct{} {
 						tokens = append(tokens, frontLexTokenFromScan(units, idx, scan.consumed, scan.kind, leadingDocLines, false, 0, false))
 						return struct{}{}
 					}()
-					// Osty: /tmp/selfhost_merged.osty:1370:32
+					// Osty: /tmp/selfhost_merged.osty:1372:32
 					tokenIndex = tokenIndex + 1
-					// Osty: /tmp/selfhost_merged.osty:1371:21
+					// Osty: /tmp/selfhost_merged.osty:1373:21
 					if ostyEqual(scan.kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) || ostyEqual(scan.kind, FrontTokenKind(&FrontTokenKind_FrontLBracket{})) {
-						// Osty: /tmp/selfhost_merged.osty:1372:36
+						// Osty: /tmp/selfhost_merged.osty:1374:36
 						parenDepth = parenDepth + 1
 					} else if ostyEqual(scan.kind, FrontTokenKind(&FrontTokenKind_FrontRParen{})) || ostyEqual(scan.kind, FrontTokenKind(&FrontTokenKind_FrontRBracket{})) {
-						// Osty: /tmp/selfhost_merged.osty:1374:25
+						// Osty: /tmp/selfhost_merged.osty:1376:25
 						if parenDepth > 0 {
-							// Osty: /tmp/selfhost_merged.osty:1375:40
+							// Osty: /tmp/selfhost_merged.osty:1377:40
 							parenDepth = parenDepth - 1
 						}
 					}
-					// Osty: /tmp/selfhost_merged.osty:1378:32
+					// Osty: /tmp/selfhost_merged.osty:1380:32
 					insertTerm = frontKindInsertsTerm(scan.kind)
 				} else {
-					// Osty: /tmp/selfhost_merged.osty:1380:21
+					// Osty: /tmp/selfhost_merged.osty:1382:21
 					func() struct{} {
 						tokens = append(tokens, frontLexTokenFromScan(units, idx, scan.consumed, FrontTokenKind(&FrontTokenKind_FrontIllegal{}), leadingDocLines, false, 0, false))
 						return struct{}{}
 					}()
-					// Osty: /tmp/selfhost_merged.osty:1392:32
+					// Osty: /tmp/selfhost_merged.osty:1394:32
 					tokenIndex = tokenIndex + 1
-					// Osty: /tmp/selfhost_merged.osty:1393:21
+					// Osty: /tmp/selfhost_merged.osty:1395:21
 					func() struct{} {
 						diagnostics = append(diagnostics, frontLexDiagnostic(FrontLexDiagnosticCode(&FrontLexDiagnosticCode_FrontDiagIllegalCharacter{}), start, frontPositionAt(units, idx+scan.consumed)))
 						return struct{}{}
 					}()
-					// Osty: /tmp/selfhost_merged.osty:1400:32
+					// Osty: /tmp/selfhost_merged.osty:1402:32
 					insertTerm = false
 				}
-				// Osty: /tmp/selfhost_merged.osty:1402:33
+				// Osty: /tmp/selfhost_merged.osty:1404:33
 				pendingDocLines = 0
-				// Osty: /tmp/selfhost_merged.osty:1403:22
+				// Osty: /tmp/selfhost_merged.osty:1405:22
 				skip = scan.consumed - 1
 			}
 		}
 	}
-	// Osty: /tmp/selfhost_merged.osty:1408:5
+	// Osty: /tmp/selfhost_merged.osty:1410:5
 	eofPos := frontPositionAt(units, unitCount)
 	_ = eofPos
-	// Osty: /tmp/selfhost_merged.osty:1409:5
+	// Osty: /tmp/selfhost_merged.osty:1411:5
 	if insertTerm {
-		// Osty: /tmp/selfhost_merged.osty:1410:9
+		// Osty: /tmp/selfhost_merged.osty:1412:9
 		func() struct{} {
 			tokens = append(tokens, frontLexToken(FrontTokenKind(&FrontTokenKind_FrontNewline{}), eofPos, eofPos, 0, 0, false, 0, false))
 			return struct{}{}
 		}()
-		// Osty: /tmp/selfhost_merged.osty:1411:20
+		// Osty: /tmp/selfhost_merged.osty:1413:20
 		tokenIndex = tokenIndex + 1
 	}
-	// Osty: /tmp/selfhost_merged.osty:1413:5
+	// Osty: /tmp/selfhost_merged.osty:1415:5
 	func() struct{} {
 		tokens = append(tokens, frontLexToken(FrontTokenKind(&FrontTokenKind_FrontEOF{}), eofPos, eofPos, 0, 0, false, 0, false))
 		return struct{}{}
 	}()
-	// Osty: /tmp/selfhost_merged.osty:1414:16
+	// Osty: /tmp/selfhost_merged.osty:1416:16
 	tokenIndex = tokenIndex + 1
 	return &FrontLexStream{tokens: tokens, diagnostics: diagnostics, comments: comments, stringParts: stringParts, interpolationTokens: interpolationTokens, shebangs: shebangs, bomStripped: bomStripped, sourceUnits: unitCount, normalizedTripleUnits: normalizedTripleUnits, tripleIndentErrors: tripleIndentErrors, escapeErrors: escapeErrors}
 }
 
-// Osty: /tmp/selfhost_merged.osty:1430:5
+// Osty: /tmp/selfhost_merged.osty:1432:5
 func frontLexTokenFromScan(units []string, start int, consumed int, kind FrontTokenKind, leadingDocLines int, triple bool, interpolations int, baseLiteral bool) *FrontLexToken {
 	return frontLexToken(kind, frontPositionAt(units, start), frontPositionAt(units, start+consumed), consumed, leadingDocLines, triple, interpolations, baseLiteral)
 }
 
-// Osty: /tmp/selfhost_merged.osty:1452:5
+// Osty: /tmp/selfhost_merged.osty:1454:5
 func frontPositionAt(units []string, target int) *FrontPos {
 	if target < 0 {
 		target = 0
@@ -2373,7 +2373,7 @@ func frontPositionAt(units []string, target int) *FrontPos {
 	return frontPos(offset, line, column)
 }
 
-// Osty: /tmp/selfhost_merged.osty:1482:5
+// Osty: /tmp/selfhost_merged.osty:1484:5
 func frontNewlineConsumed(unit string, next string) int {
 	return func() int {
 		if unit == "\r" && next == "\n" {
@@ -2384,7 +2384,7 @@ func frontNewlineConsumed(unit string, next string) int {
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:1490:5
+// Osty: /tmp/selfhost_merged.osty:1492:5
 func frontAttachedDocLines(pendingDocLines int, docLastLine int, tokenLine int) int {
 	return func() int {
 		if pendingDocLines > 0 && tokenLine == docLastLine+1 {
@@ -2395,9 +2395,9 @@ func frontAttachedDocLines(pendingDocLines int, docLastLine int, tokenLine int) 
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:1498:5
+// Osty: /tmp/selfhost_merged.osty:1500:5
 func frontCommentLineCount(start *FrontPos, end *FrontPos) int {
-	// Osty: /tmp/selfhost_merged.osty:1499:5
+	// Osty: /tmp/selfhost_merged.osty:1501:5
 	lines := end.line - start.line + 1
 	_ = lines
 	return func() int {
@@ -2409,266 +2409,266 @@ func frontCommentLineCount(start *FrontPos, end *FrontPos) int {
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:1507:5
+// Osty: /tmp/selfhost_merged.osty:1509:5
 func frontStringDiagnosticCode(units []string, start int, unitCount int, kind FrontTokenKind, scan *FrontScanResult) FrontLexDiagnosticCode {
-	// Osty: /tmp/selfhost_merged.osty:1514:5
+	// Osty: /tmp/selfhost_merged.osty:1516:5
 	if scan.triple && frontStringMissingTripleLeadingNewline(units, start, kind) {
-		// Osty: /tmp/selfhost_merged.osty:1515:9
+		// Osty: /tmp/selfhost_merged.osty:1517:9
 		return FrontLexDiagnosticCode(&FrontLexDiagnosticCode_FrontDiagTripleMissingLeadingNewline{})
 	}
-	// Osty: /tmp/selfhost_merged.osty:1517:5
+	// Osty: /tmp/selfhost_merged.osty:1519:5
 	if !(scan.triple) && frontStringScanHitNewline(units, start, unitCount, kind) {
-		// Osty: /tmp/selfhost_merged.osty:1518:9
+		// Osty: /tmp/selfhost_merged.osty:1520:9
 		return FrontLexDiagnosticCode(&FrontLexDiagnosticCode_FrontDiagNewlineInString{})
 	}
 	return FrontLexDiagnosticCode(&FrontLexDiagnosticCode_FrontDiagUnterminatedString{})
 }
 
-// Osty: /tmp/selfhost_merged.osty:1523:5
+// Osty: /tmp/selfhost_merged.osty:1525:5
 func frontStringMissingTripleLeadingNewline(units []string, start int, kind FrontTokenKind) bool {
-	// Osty: /tmp/selfhost_merged.osty:1528:5
+	// Osty: /tmp/selfhost_merged.osty:1530:5
 	contentStart := start + 3
 	_ = contentStart
-	// Osty: /tmp/selfhost_merged.osty:1529:5
+	// Osty: /tmp/selfhost_merged.osty:1531:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRawString{})) {
-		// Osty: /tmp/selfhost_merged.osty:1530:22
+		// Osty: /tmp/selfhost_merged.osty:1532:22
 		contentStart = start + 4
 	}
 	return frontUnitAt(units, contentStart) != "\n"
 }
 
-// Osty: /tmp/selfhost_merged.osty:1535:5
+// Osty: /tmp/selfhost_merged.osty:1537:5
 func frontStringScanHitNewline(units []string, start int, unitCount int, kind FrontTokenKind) bool {
-	// Osty: /tmp/selfhost_merged.osty:1541:5
+	// Osty: /tmp/selfhost_merged.osty:1543:5
 	contentStart := start + 1
 	_ = contentStart
-	// Osty: /tmp/selfhost_merged.osty:1542:5
+	// Osty: /tmp/selfhost_merged.osty:1544:5
 	close := "\""
 	_ = close
-	// Osty: /tmp/selfhost_merged.osty:1543:5
+	// Osty: /tmp/selfhost_merged.osty:1545:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRawString{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontByte{})) {
-		// Osty: /tmp/selfhost_merged.osty:1544:22
+		// Osty: /tmp/selfhost_merged.osty:1546:22
 		contentStart = start + 2
 	}
-	// Osty: /tmp/selfhost_merged.osty:1546:5
+	// Osty: /tmp/selfhost_merged.osty:1548:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontByte{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontChar{})) {
-		// Osty: /tmp/selfhost_merged.osty:1547:15
+		// Osty: /tmp/selfhost_merged.osty:1549:15
 		close = "'"
 	}
-	// Osty: /tmp/selfhost_merged.osty:1549:5
+	// Osty: /tmp/selfhost_merged.osty:1551:5
 	for idx := contentStart; idx < unitCount; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:1550:9
+		// Osty: /tmp/selfhost_merged.osty:1552:9
 		unit := frontUnitAt(units, idx)
 		_ = unit
-		// Osty: /tmp/selfhost_merged.osty:1551:9
+		// Osty: /tmp/selfhost_merged.osty:1553:9
 		if frontIsNewlineUnit(unit) {
-			// Osty: /tmp/selfhost_merged.osty:1552:13
+			// Osty: /tmp/selfhost_merged.osty:1554:13
 			return true
 		}
-		// Osty: /tmp/selfhost_merged.osty:1554:9
+		// Osty: /tmp/selfhost_merged.osty:1556:9
 		if unit == close {
-			// Osty: /tmp/selfhost_merged.osty:1555:13
+			// Osty: /tmp/selfhost_merged.osty:1557:13
 			return false
 		}
 	}
 	return false
 }
 
-// Osty: /tmp/selfhost_merged.osty:1561:5
+// Osty: /tmp/selfhost_merged.osty:1563:5
 func emptyFrontStringStructureScan() *FrontStringStructureScan {
 	return &FrontStringStructureScan{parts: make([]*FrontStringPart, 0, 1), interpolationTokens: make([]*FrontInterpolationToken, 0, 1), diagnostics: make([]*FrontLexDiagnostic, 0, 1), partCount: 0, interpolationTokenCount: 0, normalizedTripleUnits: 0, tripleIndentErrors: 0, escapeErrors: 0}
 }
 
-// Osty: /tmp/selfhost_merged.osty:1574:5
+// Osty: /tmp/selfhost_merged.osty:1576:5
 func frontStringStructureScan(units []string, start int, unitCount int, kind FrontTokenKind, ownerToken int, firstPartIndex int, firstInterpolationTokenIndex int, scan *FrontScanResult) *FrontStringStructureScan {
-	// Osty: /tmp/selfhost_merged.osty:1584:5
+	// Osty: /tmp/selfhost_merged.osty:1586:5
 	out := emptyFrontStringStructureScan()
 	_ = out
-	// Osty: /tmp/selfhost_merged.osty:1585:5
+	// Osty: /tmp/selfhost_merged.osty:1587:5
 	partIndex := firstPartIndex
 	_ = partIndex
-	// Osty: /tmp/selfhost_merged.osty:1586:5
+	// Osty: /tmp/selfhost_merged.osty:1588:5
 	interpolationTokenIndex := firstInterpolationTokenIndex
 	_ = interpolationTokenIndex
-	// Osty: /tmp/selfhost_merged.osty:1587:5
+	// Osty: /tmp/selfhost_merged.osty:1589:5
 	contentStart := frontStringContentStart(units, start, kind, scan.triple)
 	_ = contentStart
-	// Osty: /tmp/selfhost_merged.osty:1588:5
+	// Osty: /tmp/selfhost_merged.osty:1590:5
 	contentEnd := frontStringContentEnd(units, start, unitCount, kind, scan)
 	_ = contentEnd
-	// Osty: /tmp/selfhost_merged.osty:1589:5
+	// Osty: /tmp/selfhost_merged.osty:1591:5
 	normalized := frontTripleNormalization(units, start, scan, kind)
 	_ = normalized
-	// Osty: /tmp/selfhost_merged.osty:1590:31
+	// Osty: /tmp/selfhost_merged.osty:1592:31
 	out.normalizedTripleUnits = normalized.normalizedUnits
-	// Osty: /tmp/selfhost_merged.osty:1591:28
+	// Osty: /tmp/selfhost_merged.osty:1593:28
 	out.tripleIndentErrors = normalized.badIndentLines
-	// Osty: /tmp/selfhost_merged.osty:1592:5
+	// Osty: /tmp/selfhost_merged.osty:1594:5
 	if normalized.badIndentLines > 0 {
-		// Osty: /tmp/selfhost_merged.osty:1593:9
+		// Osty: /tmp/selfhost_merged.osty:1595:9
 		func() struct{} {
 			out.diagnostics = append(out.diagnostics, frontLexDiagnostic(FrontLexDiagnosticCode(&FrontLexDiagnosticCode_FrontDiagBadTripleIndent{}), frontPositionAt(units, start), frontPositionAt(units, start+scan.consumed)))
 			return struct{}{}
 		}()
 	}
-	// Osty: /tmp/selfhost_merged.osty:1602:5
+	// Osty: /tmp/selfhost_merged.osty:1604:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontChar{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontByte{})) {
-		// Osty: /tmp/selfhost_merged.osty:1603:9
+		// Osty: /tmp/selfhost_merged.osty:1605:9
 		if contentEnd <= contentStart {
-			// Osty: /tmp/selfhost_merged.osty:1604:13
+			// Osty: /tmp/selfhost_merged.osty:1606:13
 			if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontChar{})) {
-				// Osty: /tmp/selfhost_merged.osty:1605:17
+				// Osty: /tmp/selfhost_merged.osty:1607:17
 				func() struct{} {
 					out.diagnostics = append(out.diagnostics, frontLexDiagnostic(FrontLexDiagnosticCode(&FrontLexDiagnosticCode_FrontDiagEmptyChar{}), frontPositionAt(units, start), frontPositionAt(units, start+scan.consumed)))
 					return struct{}{}
 				}()
 			} else {
-				// Osty: /tmp/selfhost_merged.osty:1613:17
+				// Osty: /tmp/selfhost_merged.osty:1615:17
 				func() struct{} {
 					out.diagnostics = append(out.diagnostics, frontLexDiagnostic(FrontLexDiagnosticCode(&FrontLexDiagnosticCode_FrontDiagEmptyByte{}), frontPositionAt(units, start), frontPositionAt(units, start+scan.consumed)))
 					return struct{}{}
 				}()
 			}
 		}
-		// Osty: /tmp/selfhost_merged.osty:1622:9
+		// Osty: /tmp/selfhost_merged.osty:1624:9
 		escapes := frontEscapeDiagnostics(units, contentStart, contentEnd)
 		_ = escapes
-		// Osty: /tmp/selfhost_merged.osty:1623:9
+		// Osty: /tmp/selfhost_merged.osty:1625:9
 		for _, diag := range escapes.diagnostics {
-			// Osty: /tmp/selfhost_merged.osty:1624:13
+			// Osty: /tmp/selfhost_merged.osty:1626:13
 			func() struct{} { out.diagnostics = append(out.diagnostics, diag); return struct{}{} }()
 		}
-		// Osty: /tmp/selfhost_merged.osty:1626:26
+		// Osty: /tmp/selfhost_merged.osty:1628:26
 		out.escapeErrors = out.escapeErrors + escapes.escapeErrors
-		// Osty: /tmp/selfhost_merged.osty:1627:9
+		// Osty: /tmp/selfhost_merged.osty:1629:9
 		return out
 	}
-	// Osty: /tmp/selfhost_merged.osty:1630:5
+	// Osty: /tmp/selfhost_merged.osty:1632:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRawString{})) {
-		// Osty: /tmp/selfhost_merged.osty:1631:9
+		// Osty: /tmp/selfhost_merged.osty:1633:9
 		length := contentEnd - contentStart
 		_ = length
-		// Osty: /tmp/selfhost_merged.osty:1632:9
+		// Osty: /tmp/selfhost_merged.osty:1634:9
 		if length > 0 || scan.triple {
-			// Osty: /tmp/selfhost_merged.osty:1633:13
+			// Osty: /tmp/selfhost_merged.osty:1635:13
 			func() struct{} {
 				out.parts = append(out.parts, frontStringPart(ownerToken, FrontStringPartKind(&FrontStringPartKind_FrontStringText{}), frontPositionAt(units, contentStart), frontPositionAt(units, contentEnd), length, frontStringNormalizedLength(length, scan.triple, normalized.normalizedUnits), 0, 0))
 				return struct{}{}
 			}()
-			// Osty: /tmp/selfhost_merged.osty:1645:27
+			// Osty: /tmp/selfhost_merged.osty:1647:27
 			out.partCount = out.partCount + 1
 		}
-		// Osty: /tmp/selfhost_merged.osty:1647:9
+		// Osty: /tmp/selfhost_merged.osty:1649:9
 		return out
 	}
-	// Osty: /tmp/selfhost_merged.osty:1650:5
+	// Osty: /tmp/selfhost_merged.osty:1652:5
 	segmentStart := contentStart
 	_ = segmentStart
-	// Osty: /tmp/selfhost_merged.osty:1651:5
+	// Osty: /tmp/selfhost_merged.osty:1653:5
 	skip := 0
 	_ = skip
-	// Osty: /tmp/selfhost_merged.osty:1652:5
+	// Osty: /tmp/selfhost_merged.osty:1654:5
 	escaped := false
 	_ = escaped
-	// Osty: /tmp/selfhost_merged.osty:1653:5
+	// Osty: /tmp/selfhost_merged.osty:1655:5
 	for idx := contentStart; idx < contentEnd; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:1654:9
+		// Osty: /tmp/selfhost_merged.osty:1656:9
 		if skip > 0 {
-			// Osty: /tmp/selfhost_merged.osty:1655:18
+			// Osty: /tmp/selfhost_merged.osty:1657:18
 			skip = skip - 1
-			// Osty: /tmp/selfhost_merged.osty:1656:21
+			// Osty: /tmp/selfhost_merged.osty:1658:21
 			escaped = false
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:1658:13
+			// Osty: /tmp/selfhost_merged.osty:1660:13
 			unit := frontUnitAt(units, idx)
 			_ = unit
-			// Osty: /tmp/selfhost_merged.osty:1659:13
+			// Osty: /tmp/selfhost_merged.osty:1661:13
 			if escaped {
-				// Osty: /tmp/selfhost_merged.osty:1660:25
+				// Osty: /tmp/selfhost_merged.osty:1662:25
 				escaped = false
 			} else if unit == "\\" {
-				// Osty: /tmp/selfhost_merged.osty:1662:17
+				// Osty: /tmp/selfhost_merged.osty:1664:17
 				escape := frontEscapeScan(units, idx+1, contentEnd)
 				_ = escape
-				// Osty: /tmp/selfhost_merged.osty:1663:17
+				// Osty: /tmp/selfhost_merged.osty:1665:17
 				if !(escape.ok) {
-					// Osty: /tmp/selfhost_merged.osty:1664:21
+					// Osty: /tmp/selfhost_merged.osty:1666:21
 					func() struct{} {
 						out.diagnostics = append(out.diagnostics, frontLexDiagnostic(FrontLexDiagnosticCode(&FrontLexDiagnosticCode_FrontDiagUnknownEscape{}), frontPositionAt(units, idx), frontPositionAt(units, idx+1+escape.consumed)))
 						return struct{}{}
 					}()
-					// Osty: /tmp/selfhost_merged.osty:1671:38
+					// Osty: /tmp/selfhost_merged.osty:1673:38
 					out.escapeErrors = out.escapeErrors + 1
 				}
-				// Osty: /tmp/selfhost_merged.osty:1673:25
+				// Osty: /tmp/selfhost_merged.osty:1675:25
 				escaped = true
-				// Osty: /tmp/selfhost_merged.osty:1674:22
+				// Osty: /tmp/selfhost_merged.osty:1676:22
 				skip = escape.consumed
 			} else if unit == "{" {
-				// Osty: /tmp/selfhost_merged.osty:1676:17
+				// Osty: /tmp/selfhost_merged.osty:1678:17
 				if idx > segmentStart {
-					// Osty: /tmp/selfhost_merged.osty:1677:21
+					// Osty: /tmp/selfhost_merged.osty:1679:21
 					func() struct{} {
 						out.parts = append(out.parts, frontStringPart(ownerToken, FrontStringPartKind(&FrontStringPartKind_FrontStringText{}), frontPositionAt(units, segmentStart), frontPositionAt(units, idx), idx-segmentStart, idx-segmentStart, 0, 0))
 						return struct{}{}
 					}()
-					// Osty: /tmp/selfhost_merged.osty:1689:35
+					// Osty: /tmp/selfhost_merged.osty:1691:35
 					out.partCount = out.partCount + 1
-					// Osty: /tmp/selfhost_merged.osty:1690:31
+					// Osty: /tmp/selfhost_merged.osty:1692:31
 					partIndex = partIndex + 1
 				}
-				// Osty: /tmp/selfhost_merged.osty:1692:17
+				// Osty: /tmp/selfhost_merged.osty:1694:17
 				interpPartIndex := partIndex
 				_ = interpPartIndex
-				// Osty: /tmp/selfhost_merged.osty:1693:17
+				// Osty: /tmp/selfhost_merged.osty:1695:17
 				interp := frontInterpolationScan(units, idx, contentEnd, interpPartIndex)
 				_ = interp
-				// Osty: /tmp/selfhost_merged.osty:1694:17
+				// Osty: /tmp/selfhost_merged.osty:1696:17
 				func() struct{} {
 					out.parts = append(out.parts, frontStringPart(ownerToken, FrontStringPartKind(&FrontStringPartKind_FrontStringInterpolation{}), frontPositionAt(units, idx), frontPositionAt(units, idx+interp.consumed), interp.consumed, 0, interpolationTokenIndex, interp.tokenCount))
 					return struct{}{}
 				}()
-				// Osty: /tmp/selfhost_merged.osty:1706:31
+				// Osty: /tmp/selfhost_merged.osty:1708:31
 				out.partCount = out.partCount + 1
-				// Osty: /tmp/selfhost_merged.osty:1707:27
+				// Osty: /tmp/selfhost_merged.osty:1709:27
 				partIndex = partIndex + 1
-				// Osty: /tmp/selfhost_merged.osty:1708:17
+				// Osty: /tmp/selfhost_merged.osty:1710:17
 				for _, token := range interp.tokens {
-					// Osty: /tmp/selfhost_merged.osty:1709:21
+					// Osty: /tmp/selfhost_merged.osty:1711:21
 					func() struct{} { out.interpolationTokens = append(out.interpolationTokens, token); return struct{}{} }()
 				}
-				// Osty: /tmp/selfhost_merged.osty:1711:17
+				// Osty: /tmp/selfhost_merged.osty:1713:17
 				for _, diag := range interp.diagnostics {
-					// Osty: /tmp/selfhost_merged.osty:1712:21
+					// Osty: /tmp/selfhost_merged.osty:1714:21
 					func() struct{} { out.diagnostics = append(out.diagnostics, diag); return struct{}{} }()
 				}
-				// Osty: /tmp/selfhost_merged.osty:1714:45
+				// Osty: /tmp/selfhost_merged.osty:1716:45
 				out.interpolationTokenCount = out.interpolationTokenCount + interp.tokenCount
-				// Osty: /tmp/selfhost_merged.osty:1715:41
+				// Osty: /tmp/selfhost_merged.osty:1717:41
 				interpolationTokenIndex = interpolationTokenIndex + interp.tokenCount
-				// Osty: /tmp/selfhost_merged.osty:1716:30
+				// Osty: /tmp/selfhost_merged.osty:1718:30
 				segmentStart = idx + interp.consumed
-				// Osty: /tmp/selfhost_merged.osty:1717:22
+				// Osty: /tmp/selfhost_merged.osty:1719:22
 				skip = interp.consumed - 1
 			}
 		}
 	}
-	// Osty: /tmp/selfhost_merged.osty:1721:5
+	// Osty: /tmp/selfhost_merged.osty:1723:5
 	if contentEnd > segmentStart {
-		// Osty: /tmp/selfhost_merged.osty:1722:9
+		// Osty: /tmp/selfhost_merged.osty:1724:9
 		func() struct{} {
 			out.parts = append(out.parts, frontStringPart(ownerToken, FrontStringPartKind(&FrontStringPartKind_FrontStringText{}), frontPositionAt(units, segmentStart), frontPositionAt(units, contentEnd), contentEnd-segmentStart, frontStringNormalizedLength(contentEnd-segmentStart, scan.triple, normalized.normalizedUnits), 0, 0))
 			return struct{}{}
 		}()
-		// Osty: /tmp/selfhost_merged.osty:1738:23
+		// Osty: /tmp/selfhost_merged.osty:1740:23
 		out.partCount = out.partCount + 1
 	}
 	return out
 }
 
-// Osty: /tmp/selfhost_merged.osty:1743:5
+// Osty: /tmp/selfhost_merged.osty:1745:5
 func frontStringContentStart(units []string, start int, kind FrontTokenKind, triple bool) int {
-	// Osty: /tmp/selfhost_merged.osty:1749:5
+	// Osty: /tmp/selfhost_merged.osty:1751:5
 	_ = units
 	return func() int {
 		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRawString{})) {
@@ -2689,9 +2689,9 @@ func frontStringContentStart(units []string, start int, kind FrontTokenKind, tri
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:1765:5
+// Osty: /tmp/selfhost_merged.osty:1767:5
 func frontStringContentEnd(units []string, start int, unitCount int, kind FrontTokenKind, scan *FrontScanResult) int {
-	// Osty: /tmp/selfhost_merged.osty:1772:5
+	// Osty: /tmp/selfhost_merged.osty:1774:5
 	_ = unitCount
 	return func() int {
 		if scan.triple && scan.consumed >= 3 && frontUnitsMatchAt(units, start+scan.consumed-3, "\"\"\"") {
@@ -2704,7 +2704,7 @@ func frontStringContentEnd(units []string, start int, unitCount int, kind FrontT
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:1788:5
+// Osty: /tmp/selfhost_merged.osty:1790:5
 func frontStringClose(kind FrontTokenKind) string {
 	return func() string {
 		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontChar{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontByte{})) {
@@ -2715,7 +2715,7 @@ func frontStringClose(kind FrontTokenKind) string {
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:1796:5
+// Osty: /tmp/selfhost_merged.osty:1798:5
 func frontStringNormalizedLength(length int, triple bool, normalizedTripleUnits int) int {
 	return func() int {
 		if triple {
@@ -2726,129 +2726,129 @@ func frontStringNormalizedLength(length int, triple bool, normalizedTripleUnits 
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:1804:5
+// Osty: /tmp/selfhost_merged.osty:1806:5
 func frontUnitsMatchAt(units []string, start int, text string) bool {
-	// Osty: /tmp/selfhost_merged.osty:1805:5
+	// Osty: /tmp/selfhost_merged.osty:1807:5
 	offset := 0
 	_ = offset
-	// Osty: /tmp/selfhost_merged.osty:1806:5
+	// Osty: /tmp/selfhost_merged.osty:1808:5
 	for _, unit := range strings.Split(text, "") {
-		// Osty: /tmp/selfhost_merged.osty:1807:9
+		// Osty: /tmp/selfhost_merged.osty:1809:9
 		if frontUnitAt(units, start+offset) != unit {
-			// Osty: /tmp/selfhost_merged.osty:1808:13
+			// Osty: /tmp/selfhost_merged.osty:1810:13
 			return false
 		}
-		// Osty: /tmp/selfhost_merged.osty:1810:16
+		// Osty: /tmp/selfhost_merged.osty:1812:16
 		offset = offset + 1
 	}
 	return true
 }
 
-// Osty: /tmp/selfhost_merged.osty:1815:5
+// Osty: /tmp/selfhost_merged.osty:1817:5
 func frontEscapeDiagnostics(units []string, start int, end int) *FrontStringStructureScan {
-	// Osty: /tmp/selfhost_merged.osty:1820:5
+	// Osty: /tmp/selfhost_merged.osty:1822:5
 	out := emptyFrontStringStructureScan()
 	_ = out
-	// Osty: /tmp/selfhost_merged.osty:1821:5
+	// Osty: /tmp/selfhost_merged.osty:1823:5
 	skip := 0
 	_ = skip
-	// Osty: /tmp/selfhost_merged.osty:1822:5
+	// Osty: /tmp/selfhost_merged.osty:1824:5
 	for idx := start; idx < end; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:1823:9
+		// Osty: /tmp/selfhost_merged.osty:1825:9
 		if skip > 0 {
-			// Osty: /tmp/selfhost_merged.osty:1824:18
+			// Osty: /tmp/selfhost_merged.osty:1826:18
 			skip = skip - 1
 		} else if frontUnitAt(units, idx) == "\\" {
-			// Osty: /tmp/selfhost_merged.osty:1826:13
+			// Osty: /tmp/selfhost_merged.osty:1828:13
 			escape := frontEscapeScan(units, idx+1, end)
 			_ = escape
-			// Osty: /tmp/selfhost_merged.osty:1827:13
+			// Osty: /tmp/selfhost_merged.osty:1829:13
 			if !(escape.ok) {
-				// Osty: /tmp/selfhost_merged.osty:1828:17
+				// Osty: /tmp/selfhost_merged.osty:1830:17
 				func() struct{} {
 					out.diagnostics = append(out.diagnostics, frontLexDiagnostic(FrontLexDiagnosticCode(&FrontLexDiagnosticCode_FrontDiagUnknownEscape{}), frontPositionAt(units, idx), frontPositionAt(units, idx+1+escape.consumed)))
 					return struct{}{}
 				}()
-				// Osty: /tmp/selfhost_merged.osty:1835:34
+				// Osty: /tmp/selfhost_merged.osty:1837:34
 				out.escapeErrors = out.escapeErrors + 1
 			}
-			// Osty: /tmp/selfhost_merged.osty:1837:18
+			// Osty: /tmp/selfhost_merged.osty:1839:18
 			skip = escape.consumed
 		}
 	}
 	return out
 }
 
-// Osty: /tmp/selfhost_merged.osty:1843:5
+// Osty: /tmp/selfhost_merged.osty:1845:5
 func frontEscapeScan(units []string, start int, limit int) *FrontEscapeScan {
-	// Osty: /tmp/selfhost_merged.osty:1844:5
+	// Osty: /tmp/selfhost_merged.osty:1846:5
 	if start >= limit {
-		// Osty: /tmp/selfhost_merged.osty:1845:9
+		// Osty: /tmp/selfhost_merged.osty:1847:9
 		return &FrontEscapeScan{consumed: 0, ok: false}
 	}
-	// Osty: /tmp/selfhost_merged.osty:1847:5
+	// Osty: /tmp/selfhost_merged.osty:1849:5
 	unit := frontUnitAt(units, start)
 	_ = unit
-	// Osty: /tmp/selfhost_merged.osty:1848:5
+	// Osty: /tmp/selfhost_merged.osty:1850:5
 	if unit == "n" || unit == "t" || unit == "r" || unit == "0" || unit == "\\" || unit == "'" || unit == "\"" || unit == "{" || unit == "}" {
-		// Osty: /tmp/selfhost_merged.osty:1849:9
+		// Osty: /tmp/selfhost_merged.osty:1851:9
 		return &FrontEscapeScan{consumed: 1, ok: true}
 	}
-	// Osty: /tmp/selfhost_merged.osty:1851:5
+	// Osty: /tmp/selfhost_merged.osty:1853:5
 	if unit == "u" {
-		// Osty: /tmp/selfhost_merged.osty:1852:9
+		// Osty: /tmp/selfhost_merged.osty:1854:9
 		if frontUnitAt(units, start+1) != "{" {
-			// Osty: /tmp/selfhost_merged.osty:1853:13
+			// Osty: /tmp/selfhost_merged.osty:1855:13
 			return &FrontEscapeScan{consumed: 1, ok: false}
 		}
-		// Osty: /tmp/selfhost_merged.osty:1855:9
+		// Osty: /tmp/selfhost_merged.osty:1857:9
 		consumed := 2
 		_ = consumed
-		// Osty: /tmp/selfhost_merged.osty:1856:9
+		// Osty: /tmp/selfhost_merged.osty:1858:9
 		digits := 0
 		_ = digits
-		// Osty: /tmp/selfhost_merged.osty:1857:9
+		// Osty: /tmp/selfhost_merged.osty:1859:9
 		value := 0
 		_ = value
-		// Osty: /tmp/selfhost_merged.osty:1858:9
+		// Osty: /tmp/selfhost_merged.osty:1860:9
 		for idx := start + 2; idx < limit; idx++ {
-			// Osty: /tmp/selfhost_merged.osty:1859:13
+			// Osty: /tmp/selfhost_merged.osty:1861:13
 			at := frontUnitAt(units, idx)
 			_ = at
-			// Osty: /tmp/selfhost_merged.osty:1860:13
+			// Osty: /tmp/selfhost_merged.osty:1862:13
 			if at == "}" {
-				// Osty: /tmp/selfhost_merged.osty:1861:17
+				// Osty: /tmp/selfhost_merged.osty:1863:17
 				return &FrontEscapeScan{consumed: consumed + 1, ok: digits > 0 && !(value >= 55296 && value <= 57343) && value <= 1114111}
 			}
-			// Osty: /tmp/selfhost_merged.osty:1866:13
+			// Osty: /tmp/selfhost_merged.osty:1868:13
 			hex := frontHexValue(at)
 			_ = hex
-			// Osty: /tmp/selfhost_merged.osty:1867:13
+			// Osty: /tmp/selfhost_merged.osty:1869:13
 			if hex < 0 {
-				// Osty: /tmp/selfhost_merged.osty:1868:17
+				// Osty: /tmp/selfhost_merged.osty:1870:17
 				return &FrontEscapeScan{consumed: consumed, ok: false}
 			}
-			// Osty: /tmp/selfhost_merged.osty:1870:19
+			// Osty: /tmp/selfhost_merged.osty:1872:19
 			value = value*16 + hex
-			// Osty: /tmp/selfhost_merged.osty:1871:20
+			// Osty: /tmp/selfhost_merged.osty:1873:20
 			digits = digits + 1
-			// Osty: /tmp/selfhost_merged.osty:1872:22
+			// Osty: /tmp/selfhost_merged.osty:1874:22
 			consumed = consumed + 1
 		}
-		// Osty: /tmp/selfhost_merged.osty:1874:9
+		// Osty: /tmp/selfhost_merged.osty:1876:9
 		return &FrontEscapeScan{consumed: consumed, ok: false}
 	}
 	return &FrontEscapeScan{consumed: 1, ok: false}
 }
 
-// Osty: /tmp/selfhost_merged.osty:1879:5
+// Osty: /tmp/selfhost_merged.osty:1881:5
 func frontHexValue(unit string) int {
-	// Osty: /tmp/selfhost_merged.osty:1880:5
+	// Osty: /tmp/selfhost_merged.osty:1882:5
 	digit := digitStringValue(unit)
 	_ = digit
-	// Osty: /tmp/selfhost_merged.osty:1881:5
+	// Osty: /tmp/selfhost_merged.osty:1883:5
 	if digit >= 0 {
-		// Osty: /tmp/selfhost_merged.osty:1882:9
+		// Osty: /tmp/selfhost_merged.osty:1884:9
 		return digit
 	}
 	return func() int {
@@ -2870,125 +2870,125 @@ func frontHexValue(unit string) int {
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:1901:5
+// Osty: /tmp/selfhost_merged.osty:1903:5
 func emptyFrontInterpolationScan() *FrontInterpolationScan {
 	return &FrontInterpolationScan{consumed: 0, ok: true, tokens: make([]*FrontInterpolationToken, 0, 1), diagnostics: make([]*FrontLexDiagnostic, 0, 1), tokenCount: 0}
 }
 
-// Osty: /tmp/selfhost_merged.osty:1911:5
+// Osty: /tmp/selfhost_merged.osty:1913:5
 func frontInterpolationScan(units []string, start int, limit int, ownerPart int) *FrontInterpolationScan {
-	// Osty: /tmp/selfhost_merged.osty:1917:5
+	// Osty: /tmp/selfhost_merged.osty:1919:5
 	out := emptyFrontInterpolationScan()
 	_ = out
-	// Osty: /tmp/selfhost_merged.osty:1918:5
+	// Osty: /tmp/selfhost_merged.osty:1920:5
 	depth := 1
 	_ = depth
-	// Osty: /tmp/selfhost_merged.osty:1919:5
+	// Osty: /tmp/selfhost_merged.osty:1921:5
 	skip := 0
 	_ = skip
-	// Osty: /tmp/selfhost_merged.osty:1920:5
+	// Osty: /tmp/selfhost_merged.osty:1922:5
 	for idx := start + 1; idx < limit; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:1921:9
+		// Osty: /tmp/selfhost_merged.osty:1923:9
 		if skip > 0 {
-			// Osty: /tmp/selfhost_merged.osty:1922:18
+			// Osty: /tmp/selfhost_merged.osty:1924:18
 			skip = skip - 1
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:1924:13
+			// Osty: /tmp/selfhost_merged.osty:1926:13
 			unit := frontUnitAt(units, idx)
 			_ = unit
-			// Osty: /tmp/selfhost_merged.osty:1925:13
+			// Osty: /tmp/selfhost_merged.osty:1927:13
 			next := frontUnitAt(units, idx+1)
 			_ = next
-			// Osty: /tmp/selfhost_merged.osty:1926:13
+			// Osty: /tmp/selfhost_merged.osty:1928:13
 			if frontIsSpaceNoNewline(unit) || frontIsNewlineUnit(unit) {
-				// Osty: /tmp/selfhost_merged.osty:1927:30
+				// Osty: /tmp/selfhost_merged.osty:1929:30
 				out.consumed = idx - start + 1
 			} else if unit == "/" && next == "/" {
-				// Osty: /tmp/selfhost_merged.osty:1929:17
+				// Osty: /tmp/selfhost_merged.osty:1931:17
 				consumed := frontLineCommentSkip(units, idx+2, limit) + 1
 				_ = consumed
-				// Osty: /tmp/selfhost_merged.osty:1930:30
+				// Osty: /tmp/selfhost_merged.osty:1932:30
 				out.consumed = idx - start + consumed
-				// Osty: /tmp/selfhost_merged.osty:1931:22
+				// Osty: /tmp/selfhost_merged.osty:1933:22
 				skip = consumed - 1
 			} else if unit == "/" && next == "*" {
-				// Osty: /tmp/selfhost_merged.osty:1933:17
+				// Osty: /tmp/selfhost_merged.osty:1935:17
 				block := frontBlockCommentSkip(units, idx, limit)
 				_ = block
-				// Osty: /tmp/selfhost_merged.osty:1934:30
+				// Osty: /tmp/selfhost_merged.osty:1936:30
 				out.consumed = idx - start + block.consumed
-				// Osty: /tmp/selfhost_merged.osty:1935:17
+				// Osty: /tmp/selfhost_merged.osty:1937:17
 				if !(block.ok) {
-					// Osty: /tmp/selfhost_merged.osty:1936:21
+					// Osty: /tmp/selfhost_merged.osty:1938:21
 					func() struct{} {
 						out.diagnostics = append(out.diagnostics, frontLexDiagnostic(FrontLexDiagnosticCode(&FrontLexDiagnosticCode_FrontDiagUnterminatedBlockComment{}), frontPositionAt(units, idx), frontPositionAt(units, idx+block.consumed)))
 						return struct{}{}
 					}()
 				}
-				// Osty: /tmp/selfhost_merged.osty:1944:22
+				// Osty: /tmp/selfhost_merged.osty:1946:22
 				skip = block.consumed - 1
 			} else if unit == "}" {
-				// Osty: /tmp/selfhost_merged.osty:1946:23
+				// Osty: /tmp/selfhost_merged.osty:1948:23
 				depth = depth - 1
-				// Osty: /tmp/selfhost_merged.osty:1947:17
+				// Osty: /tmp/selfhost_merged.osty:1949:17
 				if depth == 0 {
-					// Osty: /tmp/selfhost_merged.osty:1948:34
+					// Osty: /tmp/selfhost_merged.osty:1950:34
 					out.consumed = idx - start + 1
-					// Osty: /tmp/selfhost_merged.osty:1949:21
+					// Osty: /tmp/selfhost_merged.osty:1951:21
 					return out
 				}
-				// Osty: /tmp/selfhost_merged.osty:1951:17
+				// Osty: /tmp/selfhost_merged.osty:1953:17
 				func() struct{} {
 					out.tokens = append(out.tokens, frontInterpolationToken(ownerPart, frontLexTokenFromScan(units, idx, 1, FrontTokenKind(&FrontTokenKind_FrontRBrace{}), 0, false, 0, false)))
 					return struct{}{}
 				}()
-				// Osty: /tmp/selfhost_merged.osty:1957:32
+				// Osty: /tmp/selfhost_merged.osty:1959:32
 				out.tokenCount = out.tokenCount + 1
-				// Osty: /tmp/selfhost_merged.osty:1958:30
+				// Osty: /tmp/selfhost_merged.osty:1960:30
 				out.consumed = idx - start + 1
 			} else if unit == "{" {
-				// Osty: /tmp/selfhost_merged.osty:1960:23
+				// Osty: /tmp/selfhost_merged.osty:1962:23
 				depth = depth + 1
-				// Osty: /tmp/selfhost_merged.osty:1961:17
+				// Osty: /tmp/selfhost_merged.osty:1963:17
 				func() struct{} {
 					out.tokens = append(out.tokens, frontInterpolationToken(ownerPart, frontLexTokenFromScan(units, idx, 1, FrontTokenKind(&FrontTokenKind_FrontLBrace{}), 0, false, 0, false)))
 					return struct{}{}
 				}()
-				// Osty: /tmp/selfhost_merged.osty:1967:32
+				// Osty: /tmp/selfhost_merged.osty:1969:32
 				out.tokenCount = out.tokenCount + 1
-				// Osty: /tmp/selfhost_merged.osty:1968:30
+				// Osty: /tmp/selfhost_merged.osty:1970:30
 				out.consumed = idx - start + 1
 			} else {
-				// Osty: /tmp/selfhost_merged.osty:1970:17
+				// Osty: /tmp/selfhost_merged.osty:1972:17
 				tokenScan := frontInterpolationTokenScan(units, idx, limit)
 				_ = tokenScan
-				// Osty: /tmp/selfhost_merged.osty:1971:17
+				// Osty: /tmp/selfhost_merged.osty:1973:17
 				func() struct{} {
 					out.tokens = append(out.tokens, frontInterpolationToken(ownerPart, frontLexTokenFromScan(units, idx, tokenScan.consumed, tokenScan.kind, 0, tokenScan.triple, tokenScan.interpolations, tokenScan.baseLiteral)))
 					return struct{}{}
 				}()
-				// Osty: /tmp/selfhost_merged.osty:1986:32
+				// Osty: /tmp/selfhost_merged.osty:1988:32
 				out.tokenCount = out.tokenCount + 1
-				// Osty: /tmp/selfhost_merged.osty:1987:17
+				// Osty: /tmp/selfhost_merged.osty:1989:17
 				if tokenScan.uppercaseBasePrefix {
-					// Osty: /tmp/selfhost_merged.osty:1988:21
+					// Osty: /tmp/selfhost_merged.osty:1990:21
 					func() struct{} {
 						out.diagnostics = append(out.diagnostics, frontLexDiagnostic(FrontLexDiagnosticCode(&FrontLexDiagnosticCode_FrontDiagUppercaseBasePrefix{}), frontPositionAt(units, idx), frontPositionAt(units, idx+2)))
 						return struct{}{}
 					}()
 				}
-				// Osty: /tmp/selfhost_merged.osty:1996:30
+				// Osty: /tmp/selfhost_merged.osty:1998:30
 				out.consumed = idx - start + tokenScan.consumed
-				// Osty: /tmp/selfhost_merged.osty:1997:22
+				// Osty: /tmp/selfhost_merged.osty:1999:22
 				skip = tokenScan.consumed - 1
 			}
 		}
 	}
-	// Osty: /tmp/selfhost_merged.osty:2001:12
+	// Osty: /tmp/selfhost_merged.osty:2003:12
 	out.ok = false
-	// Osty: /tmp/selfhost_merged.osty:2002:18
+	// Osty: /tmp/selfhost_merged.osty:2004:18
 	out.consumed = limit - start
-	// Osty: /tmp/selfhost_merged.osty:2003:5
+	// Osty: /tmp/selfhost_merged.osty:2005:5
 	func() struct{} {
 		out.diagnostics = append(out.diagnostics, frontLexDiagnostic(FrontLexDiagnosticCode(&FrontLexDiagnosticCode_FrontDiagUnterminatedInterpolation{}), frontPositionAt(units, start), frontPositionAt(units, limit)))
 		return struct{}{}
@@ -2996,12 +2996,12 @@ func frontInterpolationScan(units []string, start int, limit int, ownerPart int)
 	return out
 }
 
-// Osty: /tmp/selfhost_merged.osty:2013:5
+// Osty: /tmp/selfhost_merged.osty:2015:5
 func frontInterpolationTokenScan(units []string, start int, limit int) *FrontScanResult {
-	// Osty: /tmp/selfhost_merged.osty:2014:5
+	// Osty: /tmp/selfhost_merged.osty:2016:5
 	unit := frontUnitAt(units, start)
 	_ = unit
-	// Osty: /tmp/selfhost_merged.osty:2015:5
+	// Osty: /tmp/selfhost_merged.osty:2017:5
 	next := frontUnitAt(units, start+1)
 	_ = next
 	return func() *FrontScanResult {
@@ -3023,133 +3023,133 @@ func frontInterpolationTokenScan(units []string, start int, limit int) *FrontSca
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:2033:5
+// Osty: /tmp/selfhost_merged.osty:2035:5
 func frontTripleNormalization(units []string, start int, scan *FrontScanResult, kind FrontTokenKind) *FrontTripleNormalization {
-	// Osty: /tmp/selfhost_merged.osty:2039:5
+	// Osty: /tmp/selfhost_merged.osty:2041:5
 	if !(scan.triple) {
-		// Osty: /tmp/selfhost_merged.osty:2040:9
+		// Osty: /tmp/selfhost_merged.osty:2042:9
 		return &FrontTripleNormalization{normalizedUnits: 0, badIndentLines: 0, indentUnits: 0}
 	}
-	// Osty: /tmp/selfhost_merged.osty:2042:5
+	// Osty: /tmp/selfhost_merged.osty:2044:5
 	contentStartRaw := frontStringContentStart(units, start, kind, true)
 	_ = contentStartRaw
-	// Osty: /tmp/selfhost_merged.osty:2043:5
+	// Osty: /tmp/selfhost_merged.osty:2045:5
 	contentStart := contentStartRaw
 	_ = contentStart
-	// Osty: /tmp/selfhost_merged.osty:2044:5
+	// Osty: /tmp/selfhost_merged.osty:2046:5
 	if frontUnitAt(units, contentStart) == "\n" {
-		// Osty: /tmp/selfhost_merged.osty:2045:22
+		// Osty: /tmp/selfhost_merged.osty:2047:22
 		contentStart = contentStart + 1
 	}
-	// Osty: /tmp/selfhost_merged.osty:2047:5
+	// Osty: /tmp/selfhost_merged.osty:2049:5
 	closeStart := start + scan.consumed - 3
 	_ = closeStart
-	// Osty: /tmp/selfhost_merged.osty:2048:5
+	// Osty: /tmp/selfhost_merged.osty:2050:5
 	closeLineStart := frontLineStartBefore(units, closeStart)
 	_ = closeLineStart
-	// Osty: /tmp/selfhost_merged.osty:2049:5
+	// Osty: /tmp/selfhost_merged.osty:2051:5
 	indent := frontTripleClosingIndent(units, closeStart)
 	_ = indent
-	// Osty: /tmp/selfhost_merged.osty:2050:5
+	// Osty: /tmp/selfhost_merged.osty:2052:5
 	normalizedUnits := 0
 	_ = normalizedUnits
-	// Osty: /tmp/selfhost_merged.osty:2051:5
+	// Osty: /tmp/selfhost_merged.osty:2053:5
 	badIndentLines := 0
 	_ = badIndentLines
-	// Osty: /tmp/selfhost_merged.osty:2052:5
+	// Osty: /tmp/selfhost_merged.osty:2054:5
 	lineStart := contentStart
 	_ = lineStart
-	// Osty: /tmp/selfhost_merged.osty:2053:5
+	// Osty: /tmp/selfhost_merged.osty:2055:5
 	lines := 0
 	_ = lines
-	// Osty: /tmp/selfhost_merged.osty:2054:5
+	// Osty: /tmp/selfhost_merged.osty:2056:5
 	scanEnd := closeLineStart
 	_ = scanEnd
-	// Osty: /tmp/selfhost_merged.osty:2055:5
+	// Osty: /tmp/selfhost_merged.osty:2057:5
 	for idx := contentStart; idx < scanEnd; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:2056:9
+		// Osty: /tmp/selfhost_merged.osty:2058:9
 		if frontIsNewlineUnit(frontUnitAt(units, idx)) {
-			// Osty: /tmp/selfhost_merged.osty:2057:13
+			// Osty: /tmp/selfhost_merged.osty:2059:13
 			stats := frontTripleLineStats(units, lineStart, idx, indent)
 			_ = stats
-			// Osty: /tmp/selfhost_merged.osty:2058:13
+			// Osty: /tmp/selfhost_merged.osty:2060:13
 			if lines > 0 {
-				// Osty: /tmp/selfhost_merged.osty:2059:33
+				// Osty: /tmp/selfhost_merged.osty:2061:33
 				normalizedUnits = normalizedUnits + 1
 			}
-			// Osty: /tmp/selfhost_merged.osty:2061:29
+			// Osty: /tmp/selfhost_merged.osty:2063:29
 			normalizedUnits = normalizedUnits + stats.normalizedUnits
-			// Osty: /tmp/selfhost_merged.osty:2062:13
+			// Osty: /tmp/selfhost_merged.osty:2064:13
 			if stats.badIndent {
-				// Osty: /tmp/selfhost_merged.osty:2063:32
+				// Osty: /tmp/selfhost_merged.osty:2065:32
 				badIndentLines = badIndentLines + 1
 			}
-			// Osty: /tmp/selfhost_merged.osty:2065:19
+			// Osty: /tmp/selfhost_merged.osty:2067:19
 			lines = lines + 1
-			// Osty: /tmp/selfhost_merged.osty:2066:23
+			// Osty: /tmp/selfhost_merged.osty:2068:23
 			lineStart = idx + 1
 		}
 	}
 	return &FrontTripleNormalization{normalizedUnits: normalizedUnits, badIndentLines: badIndentLines, indentUnits: indent}
 }
 
-// Osty: /tmp/selfhost_merged.osty:2076:5
+// Osty: /tmp/selfhost_merged.osty:2078:5
 func frontLineStartBefore(units []string, target int) int {
-	// Osty: /tmp/selfhost_merged.osty:2077:5
+	// Osty: /tmp/selfhost_merged.osty:2079:5
 	lineStart := 0
 	_ = lineStart
-	// Osty: /tmp/selfhost_merged.osty:2078:5
+	// Osty: /tmp/selfhost_merged.osty:2080:5
 	for idx := 0; idx < target; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:2079:9
+		// Osty: /tmp/selfhost_merged.osty:2081:9
 		if frontIsNewlineUnit(frontUnitAt(units, idx)) {
-			// Osty: /tmp/selfhost_merged.osty:2080:23
+			// Osty: /tmp/selfhost_merged.osty:2082:23
 			lineStart = idx + 1
 		}
 	}
 	return lineStart
 }
 
-// Osty: /tmp/selfhost_merged.osty:2086:5
+// Osty: /tmp/selfhost_merged.osty:2088:5
 func frontTripleClosingIndent(units []string, closeStart int) int {
-	// Osty: /tmp/selfhost_merged.osty:2087:5
+	// Osty: /tmp/selfhost_merged.osty:2089:5
 	lineStart := 0
 	_ = lineStart
-	// Osty: /tmp/selfhost_merged.osty:2088:5
+	// Osty: /tmp/selfhost_merged.osty:2090:5
 	for idx := 0; idx < closeStart; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:2089:9
+		// Osty: /tmp/selfhost_merged.osty:2091:9
 		if frontIsNewlineUnit(frontUnitAt(units, idx)) {
-			// Osty: /tmp/selfhost_merged.osty:2090:23
+			// Osty: /tmp/selfhost_merged.osty:2092:23
 			lineStart = idx + 1
 		}
 	}
-	// Osty: /tmp/selfhost_merged.osty:2093:5
+	// Osty: /tmp/selfhost_merged.osty:2095:5
 	indent := 0
 	_ = indent
-	// Osty: /tmp/selfhost_merged.osty:2094:5
+	// Osty: /tmp/selfhost_merged.osty:2096:5
 	for idx := lineStart; idx < closeStart; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:2095:9
+		// Osty: /tmp/selfhost_merged.osty:2097:9
 		unit := frontUnitAt(units, idx)
 		_ = unit
-		// Osty: /tmp/selfhost_merged.osty:2096:9
+		// Osty: /tmp/selfhost_merged.osty:2098:9
 		if unit == " " || unit == "\t" {
-			// Osty: /tmp/selfhost_merged.osty:2097:20
+			// Osty: /tmp/selfhost_merged.osty:2099:20
 			indent = indent + 1
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:2099:13
+			// Osty: /tmp/selfhost_merged.osty:2101:13
 			return 0
 		}
 	}
 	return indent
 }
 
-// Osty: /tmp/selfhost_merged.osty:2105:5
+// Osty: /tmp/selfhost_merged.osty:2107:5
 func frontTripleLineStats(units []string, start int, end int, indent int) *FrontTripleLineStats {
-	// Osty: /tmp/selfhost_merged.osty:2111:5
+	// Osty: /tmp/selfhost_merged.osty:2113:5
 	length := end - start
 	_ = length
-	// Osty: /tmp/selfhost_merged.osty:2112:5
+	// Osty: /tmp/selfhost_merged.osty:2114:5
 	if length <= 0 || frontLineBlank(units, start, end) {
-		// Osty: /tmp/selfhost_merged.osty:2113:9
+		// Osty: /tmp/selfhost_merged.osty:2115:9
 		return &FrontTripleLineStats{normalizedUnits: 0, badIndent: false}
 	}
 	return func() *FrontTripleLineStats {
@@ -3161,227 +3161,227 @@ func frontTripleLineStats(units []string, start int, end int, indent int) *Front
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:2122:5
+// Osty: /tmp/selfhost_merged.osty:2124:5
 func frontLineBlank(units []string, start int, end int) bool {
-	// Osty: /tmp/selfhost_merged.osty:2123:5
+	// Osty: /tmp/selfhost_merged.osty:2125:5
 	for idx := start; idx < end; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:2124:9
+		// Osty: /tmp/selfhost_merged.osty:2126:9
 		unit := frontUnitAt(units, idx)
 		_ = unit
-		// Osty: /tmp/selfhost_merged.osty:2125:9
+		// Osty: /tmp/selfhost_merged.osty:2127:9
 		if unit != " " && unit != "\t" {
-			// Osty: /tmp/selfhost_merged.osty:2126:13
+			// Osty: /tmp/selfhost_merged.osty:2128:13
 			return false
 		}
 	}
 	return true
 }
 
-// Osty: /tmp/selfhost_merged.osty:2132:5
+// Osty: /tmp/selfhost_merged.osty:2134:5
 func frontLineHasIndent(units []string, start int, end int, indent int) bool {
-	// Osty: /tmp/selfhost_merged.osty:2133:5
+	// Osty: /tmp/selfhost_merged.osty:2135:5
 	if end-start < indent {
-		// Osty: /tmp/selfhost_merged.osty:2134:9
+		// Osty: /tmp/selfhost_merged.osty:2136:9
 		return false
 	}
-	// Osty: /tmp/selfhost_merged.osty:2136:5
+	// Osty: /tmp/selfhost_merged.osty:2138:5
 	limit := start + indent
 	_ = limit
-	// Osty: /tmp/selfhost_merged.osty:2137:5
+	// Osty: /tmp/selfhost_merged.osty:2139:5
 	for idx := start; idx < limit; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:2138:9
+		// Osty: /tmp/selfhost_merged.osty:2140:9
 		unit := frontUnitAt(units, idx)
 		_ = unit
-		// Osty: /tmp/selfhost_merged.osty:2139:9
+		// Osty: /tmp/selfhost_merged.osty:2141:9
 		if unit != " " && unit != "\t" {
-			// Osty: /tmp/selfhost_merged.osty:2140:13
+			// Osty: /tmp/selfhost_merged.osty:2142:13
 			return false
 		}
 	}
 	return true
 }
 
-// Osty: /tmp/selfhost_merged.osty:2146:5
+// Osty: /tmp/selfhost_merged.osty:2148:5
 func frontLexTokenCount(stream *FrontLexStream) int {
-	// Osty: /tmp/selfhost_merged.osty:2147:5
+	// Osty: /tmp/selfhost_merged.osty:2149:5
 	count := 0
 	_ = count
-	// Osty: /tmp/selfhost_merged.osty:2148:5
+	// Osty: /tmp/selfhost_merged.osty:2150:5
 	for _, tok := range stream.tokens {
-		// Osty: /tmp/selfhost_merged.osty:2149:9
+		// Osty: /tmp/selfhost_merged.osty:2151:9
 		_ = tok
-		// Osty: /tmp/selfhost_merged.osty:2150:15
+		// Osty: /tmp/selfhost_merged.osty:2152:15
 		count = count + 1
 	}
 	return count
 }
 
-// Osty: /tmp/selfhost_merged.osty:2155:5
+// Osty: /tmp/selfhost_merged.osty:2157:5
 func frontLexDiagnosticCount(stream *FrontLexStream) int {
-	// Osty: /tmp/selfhost_merged.osty:2156:5
+	// Osty: /tmp/selfhost_merged.osty:2158:5
 	count := 0
 	_ = count
-	// Osty: /tmp/selfhost_merged.osty:2157:5
+	// Osty: /tmp/selfhost_merged.osty:2159:5
 	for _, diag := range stream.diagnostics {
-		// Osty: /tmp/selfhost_merged.osty:2158:9
+		// Osty: /tmp/selfhost_merged.osty:2160:9
 		_ = diag
-		// Osty: /tmp/selfhost_merged.osty:2159:15
+		// Osty: /tmp/selfhost_merged.osty:2161:15
 		count = count + 1
 	}
 	return count
 }
 
-// Osty: /tmp/selfhost_merged.osty:2164:5
+// Osty: /tmp/selfhost_merged.osty:2166:5
 func frontCommentCount(stream *FrontLexStream) int {
-	// Osty: /tmp/selfhost_merged.osty:2165:5
+	// Osty: /tmp/selfhost_merged.osty:2167:5
 	count := 0
 	_ = count
-	// Osty: /tmp/selfhost_merged.osty:2166:5
+	// Osty: /tmp/selfhost_merged.osty:2168:5
 	for _, comment := range stream.comments {
-		// Osty: /tmp/selfhost_merged.osty:2167:9
+		// Osty: /tmp/selfhost_merged.osty:2169:9
 		_ = comment
-		// Osty: /tmp/selfhost_merged.osty:2168:15
+		// Osty: /tmp/selfhost_merged.osty:2170:15
 		count = count + 1
 	}
 	return count
 }
 
-// Osty: /tmp/selfhost_merged.osty:2173:5
+// Osty: /tmp/selfhost_merged.osty:2175:5
 func frontStringPartCount(stream *FrontLexStream) int {
-	// Osty: /tmp/selfhost_merged.osty:2174:5
+	// Osty: /tmp/selfhost_merged.osty:2176:5
 	count := 0
 	_ = count
-	// Osty: /tmp/selfhost_merged.osty:2175:5
+	// Osty: /tmp/selfhost_merged.osty:2177:5
 	for _, part := range stream.stringParts {
-		// Osty: /tmp/selfhost_merged.osty:2176:9
+		// Osty: /tmp/selfhost_merged.osty:2178:9
 		_ = part
-		// Osty: /tmp/selfhost_merged.osty:2177:15
+		// Osty: /tmp/selfhost_merged.osty:2179:15
 		count = count + 1
 	}
 	return count
 }
 
-// Osty: /tmp/selfhost_merged.osty:2182:5
+// Osty: /tmp/selfhost_merged.osty:2184:5
 func frontInterpolationTokenCount(stream *FrontLexStream) int {
-	// Osty: /tmp/selfhost_merged.osty:2183:5
+	// Osty: /tmp/selfhost_merged.osty:2185:5
 	count := 0
 	_ = count
-	// Osty: /tmp/selfhost_merged.osty:2184:5
+	// Osty: /tmp/selfhost_merged.osty:2186:5
 	for _, token := range stream.interpolationTokens {
-		// Osty: /tmp/selfhost_merged.osty:2185:9
+		// Osty: /tmp/selfhost_merged.osty:2187:9
 		_ = token
-		// Osty: /tmp/selfhost_merged.osty:2186:15
+		// Osty: /tmp/selfhost_merged.osty:2188:15
 		count = count + 1
 	}
 	return count
 }
 
-// Osty: /tmp/selfhost_merged.osty:2191:5
+// Osty: /tmp/selfhost_merged.osty:2193:5
 func frontLexTokenAt(stream *FrontLexStream, target int) *FrontLexToken {
-	// Osty: /tmp/selfhost_merged.osty:2192:5
+	// Osty: /tmp/selfhost_merged.osty:2194:5
 	idx := 0
 	_ = idx
-	// Osty: /tmp/selfhost_merged.osty:2193:5
+	// Osty: /tmp/selfhost_merged.osty:2195:5
 	for _, tok := range stream.tokens {
-		// Osty: /tmp/selfhost_merged.osty:2194:9
+		// Osty: /tmp/selfhost_merged.osty:2196:9
 		if idx == target {
-			// Osty: /tmp/selfhost_merged.osty:2195:13
+			// Osty: /tmp/selfhost_merged.osty:2197:13
 			return tok
 		}
-		// Osty: /tmp/selfhost_merged.osty:2197:13
+		// Osty: /tmp/selfhost_merged.osty:2199:13
 		idx = idx + 1
 	}
 	return emptyFrontLexToken()
 }
 
-// Osty: /tmp/selfhost_merged.osty:2202:5
+// Osty: /tmp/selfhost_merged.osty:2204:5
 func frontLexDiagnosticAt(stream *FrontLexStream, target int) *FrontLexDiagnostic {
-	// Osty: /tmp/selfhost_merged.osty:2203:5
+	// Osty: /tmp/selfhost_merged.osty:2205:5
 	idx := 0
 	_ = idx
-	// Osty: /tmp/selfhost_merged.osty:2204:5
+	// Osty: /tmp/selfhost_merged.osty:2206:5
 	for _, diag := range stream.diagnostics {
-		// Osty: /tmp/selfhost_merged.osty:2205:9
+		// Osty: /tmp/selfhost_merged.osty:2207:9
 		if idx == target {
-			// Osty: /tmp/selfhost_merged.osty:2206:13
+			// Osty: /tmp/selfhost_merged.osty:2208:13
 			return diag
 		}
-		// Osty: /tmp/selfhost_merged.osty:2208:13
+		// Osty: /tmp/selfhost_merged.osty:2210:13
 		idx = idx + 1
 	}
 	return emptyFrontLexDiagnostic()
 }
 
-// Osty: /tmp/selfhost_merged.osty:2213:5
+// Osty: /tmp/selfhost_merged.osty:2215:5
 func frontCommentAt(stream *FrontLexStream, target int) *FrontComment {
-	// Osty: /tmp/selfhost_merged.osty:2214:5
+	// Osty: /tmp/selfhost_merged.osty:2216:5
 	idx := 0
 	_ = idx
-	// Osty: /tmp/selfhost_merged.osty:2215:5
+	// Osty: /tmp/selfhost_merged.osty:2217:5
 	for _, comment := range stream.comments {
-		// Osty: /tmp/selfhost_merged.osty:2216:9
+		// Osty: /tmp/selfhost_merged.osty:2218:9
 		if idx == target {
-			// Osty: /tmp/selfhost_merged.osty:2217:13
+			// Osty: /tmp/selfhost_merged.osty:2219:13
 			return comment
 		}
-		// Osty: /tmp/selfhost_merged.osty:2219:13
+		// Osty: /tmp/selfhost_merged.osty:2221:13
 		idx = idx + 1
 	}
 	return emptyFrontComment()
 }
 
-// Osty: /tmp/selfhost_merged.osty:2224:5
+// Osty: /tmp/selfhost_merged.osty:2226:5
 func frontStringPartAt(stream *FrontLexStream, target int) *FrontStringPart {
-	// Osty: /tmp/selfhost_merged.osty:2225:5
+	// Osty: /tmp/selfhost_merged.osty:2227:5
 	idx := 0
 	_ = idx
-	// Osty: /tmp/selfhost_merged.osty:2226:5
+	// Osty: /tmp/selfhost_merged.osty:2228:5
 	for _, part := range stream.stringParts {
-		// Osty: /tmp/selfhost_merged.osty:2227:9
+		// Osty: /tmp/selfhost_merged.osty:2229:9
 		if idx == target {
-			// Osty: /tmp/selfhost_merged.osty:2228:13
+			// Osty: /tmp/selfhost_merged.osty:2230:13
 			return part
 		}
-		// Osty: /tmp/selfhost_merged.osty:2230:13
+		// Osty: /tmp/selfhost_merged.osty:2232:13
 		idx = idx + 1
 	}
 	return emptyFrontStringPart()
 }
 
-// Osty: /tmp/selfhost_merged.osty:2235:5
+// Osty: /tmp/selfhost_merged.osty:2237:5
 func frontInterpolationTokenAt(stream *FrontLexStream, target int) *FrontInterpolationToken {
-	// Osty: /tmp/selfhost_merged.osty:2236:5
+	// Osty: /tmp/selfhost_merged.osty:2238:5
 	idx := 0
 	_ = idx
-	// Osty: /tmp/selfhost_merged.osty:2237:5
+	// Osty: /tmp/selfhost_merged.osty:2239:5
 	for _, token := range stream.interpolationTokens {
-		// Osty: /tmp/selfhost_merged.osty:2238:9
+		// Osty: /tmp/selfhost_merged.osty:2240:9
 		if idx == target {
-			// Osty: /tmp/selfhost_merged.osty:2239:13
+			// Osty: /tmp/selfhost_merged.osty:2241:13
 			return token
 		}
-		// Osty: /tmp/selfhost_merged.osty:2241:13
+		// Osty: /tmp/selfhost_merged.osty:2243:13
 		idx = idx + 1
 	}
 	return emptyFrontInterpolationToken()
 }
 
-// Osty: /tmp/selfhost_merged.osty:2246:5
+// Osty: /tmp/selfhost_merged.osty:2248:5
 func frontendParseLexedSummary(source string) *FrontParseSummary {
-	// Osty: /tmp/selfhost_merged.osty:2247:5
+	// Osty: /tmp/selfhost_merged.osty:2249:5
 	stream := frontendLexStream(source)
 	_ = stream
 	return frontendParseSummary(frontTokensFromStream(stream))
 }
 
-// Osty: /tmp/selfhost_merged.osty:2251:5
+// Osty: /tmp/selfhost_merged.osty:2253:5
 func frontTokensFromStream(stream *FrontLexStream) []*FrontToken {
-	// Osty: /tmp/selfhost_merged.osty:2252:5
+	// Osty: /tmp/selfhost_merged.osty:2254:5
 	var parseTokens []*FrontToken = make([]*FrontToken, 0, 1)
 	_ = parseTokens
-	// Osty: /tmp/selfhost_merged.osty:2253:5
+	// Osty: /tmp/selfhost_merged.osty:2255:5
 	for _, tok := range stream.tokens {
-		// Osty: /tmp/selfhost_merged.osty:2254:9
+		// Osty: /tmp/selfhost_merged.osty:2256:9
 		func() struct{} {
 			parseTokens = append(parseTokens, &FrontToken{kind: tok.kind, text: frontTokenKindName(tok.kind)})
 			return struct{}{}
@@ -3390,17 +3390,17 @@ func frontTokensFromStream(stream *FrontLexStream) []*FrontToken {
 	return parseTokens
 }
 
-// Osty: /tmp/selfhost_merged.osty:2259:5
+// Osty: /tmp/selfhost_merged.osty:2261:5
 func frontTokensFromSource(source string, stream *FrontLexStream) []*FrontToken {
-	// Osty: /tmp/selfhost_merged.osty:2260:5
+	// Osty: /tmp/selfhost_merged.osty:2262:5
 	units := strings.Split(source, "")
 	_ = units
-	// Osty: /tmp/selfhost_merged.osty:2261:5
+	// Osty: /tmp/selfhost_merged.osty:2263:5
 	var parseTokens []*FrontToken = make([]*FrontToken, 0, 1)
 	_ = parseTokens
-	// Osty: /tmp/selfhost_merged.osty:2262:5
+	// Osty: /tmp/selfhost_merged.osty:2264:5
 	for _, tok := range stream.tokens {
-		// Osty: /tmp/selfhost_merged.osty:2263:9
+		// Osty: /tmp/selfhost_merged.osty:2265:9
 		func() struct{} {
 			parseTokens = append(parseTokens, &FrontToken{kind: tok.kind, text: frontLexemeFromUnits(units, tok.start.offset, tok.length)})
 			return struct{}{}
@@ -3409,340 +3409,340 @@ func frontTokensFromSource(source string, stream *FrontLexStream) []*FrontToken 
 	return parseTokens
 }
 
-// Osty: /tmp/selfhost_merged.osty:2273:5
+// Osty: /tmp/selfhost_merged.osty:2275:5
 func frontLexemeFromUnits(units []string, start int, length int) string {
-	// Osty: /tmp/selfhost_merged.osty:2274:5
+	// Osty: /tmp/selfhost_merged.osty:2276:5
 	var parts []string = make([]string, 0, 1)
 	_ = parts
-	// Osty: /tmp/selfhost_merged.osty:2275:5
+	// Osty: /tmp/selfhost_merged.osty:2277:5
 	end := start + length
 	_ = end
-	// Osty: /tmp/selfhost_merged.osty:2276:5
+	// Osty: /tmp/selfhost_merged.osty:2278:5
 	for idx := start; idx < end; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:2277:9
+		// Osty: /tmp/selfhost_merged.osty:2279:9
 		func() struct{} { parts = append(parts, frontUnitAt(units, idx)); return struct{}{} }()
 	}
 	return strings.Join(parts, "")
 }
 
-// Osty: /tmp/selfhost_merged.osty:2285:5
+// Osty: /tmp/selfhost_merged.osty:2287:5
 func frontendLexSummary(source string) *FrontLexSummary {
-	// Osty: /tmp/selfhost_merged.osty:2286:5
+	// Osty: /tmp/selfhost_merged.osty:2288:5
 	units := strings.Split(source, "")
 	_ = units
-	// Osty: /tmp/selfhost_merged.osty:2287:5
+	// Osty: /tmp/selfhost_merged.osty:2289:5
 	unitCount := stringUnitCount(source)
 	_ = unitCount
-	// Osty: /tmp/selfhost_merged.osty:2288:5
+	// Osty: /tmp/selfhost_merged.osty:2290:5
 	summary := emptyFrontLexSummary()
 	_ = summary
-	// Osty: /tmp/selfhost_merged.osty:2289:5
+	// Osty: /tmp/selfhost_merged.osty:2291:5
 	insertTerm := false
 	_ = insertTerm
-	// Osty: /tmp/selfhost_merged.osty:2290:5
+	// Osty: /tmp/selfhost_merged.osty:2292:5
 	parenDepth := 0
 	_ = parenDepth
-	// Osty: /tmp/selfhost_merged.osty:2291:5
+	// Osty: /tmp/selfhost_merged.osty:2293:5
 	skip := 0
 	_ = skip
-	// Osty: /tmp/selfhost_merged.osty:2292:5
+	// Osty: /tmp/selfhost_merged.osty:2294:5
 	atFileStart := true
 	_ = atFileStart
-	// Osty: /tmp/selfhost_merged.osty:2294:5
+	// Osty: /tmp/selfhost_merged.osty:2296:5
 	for idx := 0; idx < unitCount; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:2295:9
+		// Osty: /tmp/selfhost_merged.osty:2297:9
 		if skip > 0 {
-			// Osty: /tmp/selfhost_merged.osty:2296:18
+			// Osty: /tmp/selfhost_merged.osty:2298:18
 			skip = skip - 1
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:2298:13
+			// Osty: /tmp/selfhost_merged.osty:2300:13
 			unit := frontUnitAt(units, idx)
 			_ = unit
-			// Osty: /tmp/selfhost_merged.osty:2299:13
+			// Osty: /tmp/selfhost_merged.osty:2301:13
 			next := frontUnitAt(units, idx+1)
 			_ = next
-			// Osty: /tmp/selfhost_merged.osty:2300:13
+			// Osty: /tmp/selfhost_merged.osty:2302:13
 			third := frontUnitAt(units, idx+2)
 			_ = third
-			// Osty: /tmp/selfhost_merged.osty:2301:13
+			// Osty: /tmp/selfhost_merged.osty:2303:13
 			if atFileStart && unit == "\ufeff" {
-				// Osty: /tmp/selfhost_merged.osty:2302:37
+				// Osty: /tmp/selfhost_merged.osty:2304:37
 				summary.bomStripped = summary.bomStripped + 1
 			} else if atFileStart && unit == "#" && next == "!" {
-				// Osty: /tmp/selfhost_merged.osty:2304:34
+				// Osty: /tmp/selfhost_merged.osty:2306:34
 				summary.shebangs = summary.shebangs + 1
-				// Osty: /tmp/selfhost_merged.osty:2305:22
+				// Osty: /tmp/selfhost_merged.osty:2307:22
 				skip = frontLineCommentSkip(units, idx+2, unitCount)
-				// Osty: /tmp/selfhost_merged.osty:2306:29
-				atFileStart = false
-			} else if frontIsSpaceNoNewline(unit) {
 				// Osty: /tmp/selfhost_merged.osty:2308:29
 				atFileStart = false
-			} else if frontIsNewlineUnit(unit) {
+			} else if frontIsSpaceNoNewline(unit) {
 				// Osty: /tmp/selfhost_merged.osty:2310:29
 				atFileStart = false
-				// Osty: /tmp/selfhost_merged.osty:2311:17
+			} else if frontIsNewlineUnit(unit) {
+				// Osty: /tmp/selfhost_merged.osty:2312:29
+				atFileStart = false
+				// Osty: /tmp/selfhost_merged.osty:2313:17
 				if insertTerm && parenDepth == 0 && !(frontNextSuppressesTerm(units, idx+1, unitCount)) {
-					// Osty: /tmp/selfhost_merged.osty:2316:29
+					// Osty: /tmp/selfhost_merged.osty:2318:29
 					summary = frontRecordLexeme(FrontTokenKind(&FrontTokenKind_FrontNewline{}), summary)
-					// Osty: /tmp/selfhost_merged.osty:2317:32
+					// Osty: /tmp/selfhost_merged.osty:2319:32
 					insertTerm = false
 				}
-				// Osty: /tmp/selfhost_merged.osty:2319:17
+				// Osty: /tmp/selfhost_merged.osty:2321:17
 				if unit == "\r" && next == "\n" {
-					// Osty: /tmp/selfhost_merged.osty:2320:26
+					// Osty: /tmp/selfhost_merged.osty:2322:26
 					skip = 1
 				}
 			} else if unit == "/" && next == "/" {
-				// Osty: /tmp/selfhost_merged.osty:2323:29
+				// Osty: /tmp/selfhost_merged.osty:2325:29
 				atFileStart = false
-				// Osty: /tmp/selfhost_merged.osty:2324:17
+				// Osty: /tmp/selfhost_merged.osty:2326:17
 				if third == "/" && frontUnitAt(units, idx+3) != "/" {
-					// Osty: /tmp/selfhost_merged.osty:2325:34
+					// Osty: /tmp/selfhost_merged.osty:2327:34
 					summary.docs = summary.docs + 1
 				}
-				// Osty: /tmp/selfhost_merged.osty:2327:22
+				// Osty: /tmp/selfhost_merged.osty:2329:22
 				skip = frontLineCommentSkip(units, idx+2, unitCount)
 			} else if unit == "/" && next == "*" {
-				// Osty: /tmp/selfhost_merged.osty:2329:29
+				// Osty: /tmp/selfhost_merged.osty:2331:29
 				atFileStart = false
-				// Osty: /tmp/selfhost_merged.osty:2330:17
+				// Osty: /tmp/selfhost_merged.osty:2332:17
 				block := frontBlockCommentSkip(units, idx, unitCount)
 				_ = block
-				// Osty: /tmp/selfhost_merged.osty:2331:17
+				// Osty: /tmp/selfhost_merged.osty:2333:17
 				if !(block.ok) {
-					// Osty: /tmp/selfhost_merged.osty:2332:36
+					// Osty: /tmp/selfhost_merged.osty:2334:36
 					summary.errors = summary.errors + 1
 				}
-				// Osty: /tmp/selfhost_merged.osty:2334:22
+				// Osty: /tmp/selfhost_merged.osty:2336:22
 				skip = block.consumed - 1
 			} else if unit == "r" && next == "\"" {
-				// Osty: /tmp/selfhost_merged.osty:2336:29
+				// Osty: /tmp/selfhost_merged.osty:2338:29
 				atFileStart = false
-				// Osty: /tmp/selfhost_merged.osty:2337:17
+				// Osty: /tmp/selfhost_merged.osty:2339:17
 				raw := frontStringLikeScan(units, idx, unitCount, FrontTokenKind(&FrontTokenKind_FrontRawString{}))
 				_ = raw
-				// Osty: /tmp/selfhost_merged.osty:2338:17
+				// Osty: /tmp/selfhost_merged.osty:2340:17
 				if raw.ok {
-					// Osty: /tmp/selfhost_merged.osty:2339:29
+					// Osty: /tmp/selfhost_merged.osty:2341:29
 					summary = frontRecordScan(raw, summary)
-					// Osty: /tmp/selfhost_merged.osty:2340:32
+					// Osty: /tmp/selfhost_merged.osty:2342:32
 					insertTerm = frontKindInsertsTerm(raw.kind)
 				} else {
-					// Osty: /tmp/selfhost_merged.osty:2342:36
+					// Osty: /tmp/selfhost_merged.osty:2344:36
 					summary.errors = summary.errors + 1
 				}
-				// Osty: /tmp/selfhost_merged.osty:2344:22
+				// Osty: /tmp/selfhost_merged.osty:2346:22
 				skip = raw.consumed - 1
 			} else if unit == "b" && next == "'" {
-				// Osty: /tmp/selfhost_merged.osty:2346:29
+				// Osty: /tmp/selfhost_merged.osty:2348:29
 				atFileStart = false
-				// Osty: /tmp/selfhost_merged.osty:2347:17
+				// Osty: /tmp/selfhost_merged.osty:2349:17
 				byteLit := frontStringLikeScan(units, idx, unitCount, FrontTokenKind(&FrontTokenKind_FrontByte{}))
 				_ = byteLit
-				// Osty: /tmp/selfhost_merged.osty:2348:17
+				// Osty: /tmp/selfhost_merged.osty:2350:17
 				if byteLit.ok {
-					// Osty: /tmp/selfhost_merged.osty:2349:29
+					// Osty: /tmp/selfhost_merged.osty:2351:29
 					summary = frontRecordScan(byteLit, summary)
-					// Osty: /tmp/selfhost_merged.osty:2350:32
+					// Osty: /tmp/selfhost_merged.osty:2352:32
 					insertTerm = frontKindInsertsTerm(byteLit.kind)
 				} else {
-					// Osty: /tmp/selfhost_merged.osty:2352:36
+					// Osty: /tmp/selfhost_merged.osty:2354:36
 					summary.errors = summary.errors + 1
 				}
-				// Osty: /tmp/selfhost_merged.osty:2354:22
+				// Osty: /tmp/selfhost_merged.osty:2356:22
 				skip = byteLit.consumed - 1
 			} else if unit == "\"" {
-				// Osty: /tmp/selfhost_merged.osty:2356:29
+				// Osty: /tmp/selfhost_merged.osty:2358:29
 				atFileStart = false
-				// Osty: /tmp/selfhost_merged.osty:2357:17
+				// Osty: /tmp/selfhost_merged.osty:2359:17
 				stringLit := frontStringLikeScan(units, idx, unitCount, FrontTokenKind(&FrontTokenKind_FrontString{}))
 				_ = stringLit
-				// Osty: /tmp/selfhost_merged.osty:2358:17
+				// Osty: /tmp/selfhost_merged.osty:2360:17
 				if stringLit.ok {
-					// Osty: /tmp/selfhost_merged.osty:2359:29
+					// Osty: /tmp/selfhost_merged.osty:2361:29
 					summary = frontRecordScan(stringLit, summary)
-					// Osty: /tmp/selfhost_merged.osty:2360:32
+					// Osty: /tmp/selfhost_merged.osty:2362:32
 					insertTerm = frontKindInsertsTerm(stringLit.kind)
 				} else {
-					// Osty: /tmp/selfhost_merged.osty:2362:36
+					// Osty: /tmp/selfhost_merged.osty:2364:36
 					summary.errors = summary.errors + 1
 				}
-				// Osty: /tmp/selfhost_merged.osty:2364:22
+				// Osty: /tmp/selfhost_merged.osty:2366:22
 				skip = stringLit.consumed - 1
 			} else if unit == "'" {
-				// Osty: /tmp/selfhost_merged.osty:2366:29
+				// Osty: /tmp/selfhost_merged.osty:2368:29
 				atFileStart = false
-				// Osty: /tmp/selfhost_merged.osty:2367:17
+				// Osty: /tmp/selfhost_merged.osty:2369:17
 				charLit := frontStringLikeScan(units, idx, unitCount, FrontTokenKind(&FrontTokenKind_FrontChar{}))
 				_ = charLit
-				// Osty: /tmp/selfhost_merged.osty:2368:17
+				// Osty: /tmp/selfhost_merged.osty:2370:17
 				if charLit.ok {
-					// Osty: /tmp/selfhost_merged.osty:2369:29
+					// Osty: /tmp/selfhost_merged.osty:2371:29
 					summary = frontRecordScan(charLit, summary)
-					// Osty: /tmp/selfhost_merged.osty:2370:32
+					// Osty: /tmp/selfhost_merged.osty:2372:32
 					insertTerm = frontKindInsertsTerm(charLit.kind)
 				} else {
-					// Osty: /tmp/selfhost_merged.osty:2372:36
+					// Osty: /tmp/selfhost_merged.osty:2374:36
 					summary.errors = summary.errors + 1
 				}
-				// Osty: /tmp/selfhost_merged.osty:2374:22
+				// Osty: /tmp/selfhost_merged.osty:2376:22
 				skip = charLit.consumed - 1
 			} else if digitStringValue(unit) >= 0 {
-				// Osty: /tmp/selfhost_merged.osty:2376:29
+				// Osty: /tmp/selfhost_merged.osty:2378:29
 				atFileStart = false
-				// Osty: /tmp/selfhost_merged.osty:2377:17
+				// Osty: /tmp/selfhost_merged.osty:2379:17
 				number := frontNumberScan(units, idx, unitCount)
 				_ = number
-				// Osty: /tmp/selfhost_merged.osty:2378:25
+				// Osty: /tmp/selfhost_merged.osty:2380:25
 				summary = frontRecordScan(number, summary)
-				// Osty: /tmp/selfhost_merged.osty:2379:28
+				// Osty: /tmp/selfhost_merged.osty:2381:28
 				insertTerm = frontKindInsertsTerm(number.kind)
-				// Osty: /tmp/selfhost_merged.osty:2380:22
+				// Osty: /tmp/selfhost_merged.osty:2382:22
 				skip = number.consumed - 1
 			} else if isFrontIdentStart(unit) {
-				// Osty: /tmp/selfhost_merged.osty:2382:29
+				// Osty: /tmp/selfhost_merged.osty:2384:29
 				atFileStart = false
-				// Osty: /tmp/selfhost_merged.osty:2383:17
+				// Osty: /tmp/selfhost_merged.osty:2385:17
 				ident := frontIdentScan(units, idx, unitCount)
 				_ = ident
-				// Osty: /tmp/selfhost_merged.osty:2384:25
+				// Osty: /tmp/selfhost_merged.osty:2386:25
 				summary = frontRecordLexeme(ident.kind, summary)
-				// Osty: /tmp/selfhost_merged.osty:2385:28
+				// Osty: /tmp/selfhost_merged.osty:2387:28
 				insertTerm = frontKindInsertsTerm(ident.kind)
-				// Osty: /tmp/selfhost_merged.osty:2386:22
+				// Osty: /tmp/selfhost_merged.osty:2388:22
 				skip = ident.consumed - 1
 			} else {
-				// Osty: /tmp/selfhost_merged.osty:2388:29
+				// Osty: /tmp/selfhost_merged.osty:2390:29
 				atFileStart = false
-				// Osty: /tmp/selfhost_merged.osty:2389:17
+				// Osty: /tmp/selfhost_merged.osty:2391:17
 				punct := frontPunctuationScan(units, idx, unitCount)
 				_ = punct
-				// Osty: /tmp/selfhost_merged.osty:2390:17
+				// Osty: /tmp/selfhost_merged.osty:2392:17
 				if punct.ok {
-					// Osty: /tmp/selfhost_merged.osty:2391:29
+					// Osty: /tmp/selfhost_merged.osty:2393:29
 					summary = frontRecordLexeme(punct.kind, summary)
-					// Osty: /tmp/selfhost_merged.osty:2392:21
+					// Osty: /tmp/selfhost_merged.osty:2394:21
 					if ostyEqual(punct.kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) || ostyEqual(punct.kind, FrontTokenKind(&FrontTokenKind_FrontLBracket{})) {
-						// Osty: /tmp/selfhost_merged.osty:2393:36
+						// Osty: /tmp/selfhost_merged.osty:2395:36
 						parenDepth = parenDepth + 1
 					} else if ostyEqual(punct.kind, FrontTokenKind(&FrontTokenKind_FrontRParen{})) || ostyEqual(punct.kind, FrontTokenKind(&FrontTokenKind_FrontRBracket{})) {
-						// Osty: /tmp/selfhost_merged.osty:2395:25
+						// Osty: /tmp/selfhost_merged.osty:2397:25
 						if parenDepth > 0 {
-							// Osty: /tmp/selfhost_merged.osty:2396:40
+							// Osty: /tmp/selfhost_merged.osty:2398:40
 							parenDepth = parenDepth - 1
 						}
 					}
-					// Osty: /tmp/selfhost_merged.osty:2399:32
+					// Osty: /tmp/selfhost_merged.osty:2401:32
 					insertTerm = frontKindInsertsTerm(punct.kind)
 				} else {
-					// Osty: /tmp/selfhost_merged.osty:2401:29
+					// Osty: /tmp/selfhost_merged.osty:2403:29
 					summary = frontRecordLexeme(FrontTokenKind(&FrontTokenKind_FrontIllegal{}), summary)
-					// Osty: /tmp/selfhost_merged.osty:2402:32
+					// Osty: /tmp/selfhost_merged.osty:2404:32
 					insertTerm = false
 				}
-				// Osty: /tmp/selfhost_merged.osty:2404:22
+				// Osty: /tmp/selfhost_merged.osty:2406:22
 				skip = punct.consumed - 1
 			}
 		}
 	}
-	// Osty: /tmp/selfhost_merged.osty:2408:5
+	// Osty: /tmp/selfhost_merged.osty:2410:5
 	if insertTerm {
-		// Osty: /tmp/selfhost_merged.osty:2409:9
+		// Osty: /tmp/selfhost_merged.osty:2411:9
 		_ = insertTerm
 	}
-	// Osty: /tmp/selfhost_merged.osty:2411:13
+	// Osty: /tmp/selfhost_merged.osty:2413:13
 	summary = frontRecordLexeme(FrontTokenKind(&FrontTokenKind_FrontEOF{}), summary)
 	return summary
 }
 
-// Osty: /tmp/selfhost_merged.osty:2415:5
+// Osty: /tmp/selfhost_merged.osty:2417:5
 func frontRecordLexeme(kind FrontTokenKind, summary *FrontLexSummary) *FrontLexSummary {
-	// Osty: /tmp/selfhost_merged.osty:2416:5
+	// Osty: /tmp/selfhost_merged.osty:2418:5
 	out := summary
 	_ = out
-	// Osty: /tmp/selfhost_merged.osty:2417:5
+	// Osty: /tmp/selfhost_merged.osty:2419:5
 	name := frontTokenKindName(kind)
 	_ = name
-	// Osty: /tmp/selfhost_merged.osty:2418:5
+	// Osty: /tmp/selfhost_merged.osty:2420:5
 	if out.tokens == 0 {
-		// Osty: /tmp/selfhost_merged.osty:2419:19
+		// Osty: /tmp/selfhost_merged.osty:2421:19
 		out.first = name
 	} else if out.tokens == 1 {
-		// Osty: /tmp/selfhost_merged.osty:2421:20
+		// Osty: /tmp/selfhost_merged.osty:2423:20
 		out.second = name
 	} else if out.tokens == 2 {
-		// Osty: /tmp/selfhost_merged.osty:2423:19
+		// Osty: /tmp/selfhost_merged.osty:2425:19
 		out.third = name
 	}
-	// Osty: /tmp/selfhost_merged.osty:2426:5
+	// Osty: /tmp/selfhost_merged.osty:2428:5
 	if isFrontKeywordKind(kind) {
-		// Osty: /tmp/selfhost_merged.osty:2427:22
+		// Osty: /tmp/selfhost_merged.osty:2429:22
 		out.keywords = out.keywords + 1
 	} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) {
-		// Osty: /tmp/selfhost_merged.osty:2429:25
+		// Osty: /tmp/selfhost_merged.osty:2431:25
 		out.identifiers = out.identifiers + 1
 	} else if isFrontLiteralKind(kind) {
-		// Osty: /tmp/selfhost_merged.osty:2431:22
+		// Osty: /tmp/selfhost_merged.osty:2433:22
 		out.literals = out.literals + 1
 	} else if isFrontPunctuationKind(kind) {
-		// Osty: /tmp/selfhost_merged.osty:2433:25
+		// Osty: /tmp/selfhost_merged.osty:2435:25
 		out.punctuation = out.punctuation + 1
 	} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontNewline{})) {
-		// Osty: /tmp/selfhost_merged.osty:2435:22
+		// Osty: /tmp/selfhost_merged.osty:2437:22
 		out.newlines = out.newlines + 1
 	} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontIllegal{})) {
-		// Osty: /tmp/selfhost_merged.osty:2437:20
+		// Osty: /tmp/selfhost_merged.osty:2439:20
 		out.errors = out.errors + 1
 	}
-	// Osty: /tmp/selfhost_merged.osty:2439:16
+	// Osty: /tmp/selfhost_merged.osty:2441:16
 	out.tokens = out.tokens + 1
 	return out
 }
 
-// Osty: /tmp/selfhost_merged.osty:2443:5
+// Osty: /tmp/selfhost_merged.osty:2445:5
 func frontScanResult(kind FrontTokenKind, consumed int, ok bool) *FrontScanResult {
 	return &FrontScanResult{kind: kind, consumed: consumed, ok: ok, errors: 0, triple: false, interpolations: 0, baseLiteral: false, uppercaseBasePrefix: false}
 }
 
-// Osty: /tmp/selfhost_merged.osty:2456:5
+// Osty: /tmp/selfhost_merged.osty:2458:5
 func frontDetailedScanResult(kind FrontTokenKind, consumed int, ok bool, errors int, triple bool, interpolations int, baseLiteral bool, uppercaseBasePrefix bool) *FrontScanResult {
 	return &FrontScanResult{kind: kind, consumed: consumed, ok: ok, errors: errors, triple: triple, interpolations: interpolations, baseLiteral: baseLiteral, uppercaseBasePrefix: uppercaseBasePrefix}
 }
 
-// Osty: /tmp/selfhost_merged.osty:2478:5
+// Osty: /tmp/selfhost_merged.osty:2480:5
 func frontRecordScan(scan *FrontScanResult, summary *FrontLexSummary) *FrontLexSummary {
-	// Osty: /tmp/selfhost_merged.osty:2479:5
+	// Osty: /tmp/selfhost_merged.osty:2481:5
 	out := frontRecordLexeme(scan.kind, summary)
 	_ = out
-	// Osty: /tmp/selfhost_merged.osty:2480:16
+	// Osty: /tmp/selfhost_merged.osty:2482:16
 	out.errors = out.errors + scan.errors
-	// Osty: /tmp/selfhost_merged.osty:2481:24
+	// Osty: /tmp/selfhost_merged.osty:2483:24
 	out.interpolations = out.interpolations + scan.interpolations
-	// Osty: /tmp/selfhost_merged.osty:2482:5
+	// Osty: /tmp/selfhost_merged.osty:2484:5
 	if scan.triple {
-		// Osty: /tmp/selfhost_merged.osty:2483:27
+		// Osty: /tmp/selfhost_merged.osty:2485:27
 		out.tripleStrings = out.tripleStrings + 1
 	}
-	// Osty: /tmp/selfhost_merged.osty:2485:5
+	// Osty: /tmp/selfhost_merged.osty:2487:5
 	if scan.baseLiteral {
-		// Osty: /tmp/selfhost_merged.osty:2486:26
+		// Osty: /tmp/selfhost_merged.osty:2488:26
 		out.baseLiterals = out.baseLiterals + 1
 	}
-	// Osty: /tmp/selfhost_merged.osty:2488:5
+	// Osty: /tmp/selfhost_merged.osty:2490:5
 	if scan.uppercaseBasePrefix {
-		// Osty: /tmp/selfhost_merged.osty:2489:35
+		// Osty: /tmp/selfhost_merged.osty:2491:35
 		out.uppercaseBasePrefixes = out.uppercaseBasePrefixes + 1
 	}
 	return out
 }
 
-// Osty: /tmp/selfhost_merged.osty:2494:5
+// Osty: /tmp/selfhost_merged.osty:2496:5
 func frontBlockCommentScan(consumed int, ok bool) *FrontBlockCommentScan {
 	return &FrontBlockCommentScan{consumed: consumed, ok: ok}
 }
 
-// Osty: /tmp/selfhost_merged.osty:2498:5
+// Osty: /tmp/selfhost_merged.osty:2500:5
 func frontUnitAt(units []string, target int) string {
 	if target < 0 || target >= len(units) {
 		return ""
@@ -3750,223 +3750,223 @@ func frontUnitAt(units []string, target int) string {
 	return units[target]
 }
 
-// Osty: /tmp/selfhost_merged.osty:2509:5
+// Osty: /tmp/selfhost_merged.osty:2511:5
 func frontIsSpaceNoNewline(unit string) bool {
 	return unit == " " || unit == "\t"
 }
 
-// Osty: /tmp/selfhost_merged.osty:2513:5
+// Osty: /tmp/selfhost_merged.osty:2515:5
 func frontIsNewlineUnit(unit string) bool {
 	return unit == "\n" || unit == "\r"
 }
 
-// Osty: /tmp/selfhost_merged.osty:2517:5
+// Osty: /tmp/selfhost_merged.osty:2519:5
 func frontLineCommentSkip(units []string, bodyStart int, unitCount int) int {
-	// Osty: /tmp/selfhost_merged.osty:2518:5
+	// Osty: /tmp/selfhost_merged.osty:2520:5
 	skipped := 1
 	_ = skipped
-	// Osty: /tmp/selfhost_merged.osty:2519:5
+	// Osty: /tmp/selfhost_merged.osty:2521:5
 	for idx := bodyStart; idx < unitCount; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:2520:9
+		// Osty: /tmp/selfhost_merged.osty:2522:9
 		if frontIsNewlineUnit(frontUnitAt(units, idx)) {
-			// Osty: /tmp/selfhost_merged.osty:2521:13
+			// Osty: /tmp/selfhost_merged.osty:2523:13
 			return skipped
 		}
-		// Osty: /tmp/selfhost_merged.osty:2523:17
+		// Osty: /tmp/selfhost_merged.osty:2525:17
 		skipped = skipped + 1
 	}
 	return skipped
 }
 
-// Osty: /tmp/selfhost_merged.osty:2528:5
+// Osty: /tmp/selfhost_merged.osty:2530:5
 func frontBlockCommentSkip(units []string, start int, unitCount int) *FrontBlockCommentScan {
-	// Osty: /tmp/selfhost_merged.osty:2529:5
+	// Osty: /tmp/selfhost_merged.osty:2531:5
 	consumed := 2
 	_ = consumed
-	// Osty: /tmp/selfhost_merged.osty:2530:5
+	// Osty: /tmp/selfhost_merged.osty:2532:5
 	previous := ""
 	_ = previous
-	// Osty: /tmp/selfhost_merged.osty:2531:5
+	// Osty: /tmp/selfhost_merged.osty:2533:5
 	for idx := start + 2; idx < unitCount; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:2532:9
+		// Osty: /tmp/selfhost_merged.osty:2534:9
 		unit := frontUnitAt(units, idx)
 		_ = unit
-		// Osty: /tmp/selfhost_merged.osty:2533:18
+		// Osty: /tmp/selfhost_merged.osty:2535:18
 		consumed = consumed + 1
-		// Osty: /tmp/selfhost_merged.osty:2534:9
+		// Osty: /tmp/selfhost_merged.osty:2536:9
 		if previous == "*" && unit == "/" {
-			// Osty: /tmp/selfhost_merged.osty:2535:13
+			// Osty: /tmp/selfhost_merged.osty:2537:13
 			return frontBlockCommentScan(consumed, true)
 		}
-		// Osty: /tmp/selfhost_merged.osty:2537:18
+		// Osty: /tmp/selfhost_merged.osty:2539:18
 		previous = unit
 	}
 	return frontBlockCommentScan(unitCount-start, false)
 }
 
-// Osty: /tmp/selfhost_merged.osty:2542:5
+// Osty: /tmp/selfhost_merged.osty:2544:5
 func frontStringLikeScan(units []string, start int, unitCount int, kind FrontTokenKind) *FrontScanResult {
-	// Osty: /tmp/selfhost_merged.osty:2548:5
+	// Osty: /tmp/selfhost_merged.osty:2550:5
 	consumed := 1
 	_ = consumed
-	// Osty: /tmp/selfhost_merged.osty:2549:5
+	// Osty: /tmp/selfhost_merged.osty:2551:5
 	escaped := false
 	_ = escaped
-	// Osty: /tmp/selfhost_merged.osty:2550:5
+	// Osty: /tmp/selfhost_merged.osty:2552:5
 	errors := 0
 	_ = errors
-	// Osty: /tmp/selfhost_merged.osty:2551:5
+	// Osty: /tmp/selfhost_merged.osty:2553:5
 	triple := false
 	_ = triple
-	// Osty: /tmp/selfhost_merged.osty:2552:5
+	// Osty: /tmp/selfhost_merged.osty:2554:5
 	interpolations := 0
 	_ = interpolations
-	// Osty: /tmp/selfhost_merged.osty:2553:5
+	// Osty: /tmp/selfhost_merged.osty:2555:5
 	skip := 0
 	_ = skip
-	// Osty: /tmp/selfhost_merged.osty:2554:5
+	// Osty: /tmp/selfhost_merged.osty:2556:5
 	close := "\""
 	_ = close
-	// Osty: /tmp/selfhost_merged.osty:2555:5
+	// Osty: /tmp/selfhost_merged.osty:2557:5
 	contentStart := start + 1
 	_ = contentStart
-	// Osty: /tmp/selfhost_merged.osty:2556:5
+	// Osty: /tmp/selfhost_merged.osty:2558:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRawString{})) {
-		// Osty: /tmp/selfhost_merged.osty:2557:18
+		// Osty: /tmp/selfhost_merged.osty:2559:18
 		consumed = 2
-		// Osty: /tmp/selfhost_merged.osty:2558:22
+		// Osty: /tmp/selfhost_merged.osty:2560:22
 		contentStart = start + 2
-		// Osty: /tmp/selfhost_merged.osty:2559:9
+		// Osty: /tmp/selfhost_merged.osty:2561:9
 		if frontUnitAt(units, start+2) == "\"" && frontUnitAt(units, start+3) == "\"" {
-			// Osty: /tmp/selfhost_merged.osty:2560:20
+			// Osty: /tmp/selfhost_merged.osty:2562:20
 			triple = true
-			// Osty: /tmp/selfhost_merged.osty:2561:22
+			// Osty: /tmp/selfhost_merged.osty:2563:22
 			consumed = 4
-			// Osty: /tmp/selfhost_merged.osty:2562:26
+			// Osty: /tmp/selfhost_merged.osty:2564:26
 			contentStart = start + 4
-			// Osty: /tmp/selfhost_merged.osty:2563:13
+			// Osty: /tmp/selfhost_merged.osty:2565:13
 			if frontUnitAt(units, contentStart) != "\n" {
-				// Osty: /tmp/selfhost_merged.osty:2564:24
+				// Osty: /tmp/selfhost_merged.osty:2566:24
 				errors = errors + 1
 			}
 		}
 	} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontByte{})) {
-		// Osty: /tmp/selfhost_merged.osty:2568:18
+		// Osty: /tmp/selfhost_merged.osty:2570:18
 		consumed = 2
-		// Osty: /tmp/selfhost_merged.osty:2569:22
+		// Osty: /tmp/selfhost_merged.osty:2571:22
 		contentStart = start + 2
-		// Osty: /tmp/selfhost_merged.osty:2570:15
-		close = "'"
-	} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontChar{})) {
 		// Osty: /tmp/selfhost_merged.osty:2572:15
 		close = "'"
+	} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontChar{})) {
+		// Osty: /tmp/selfhost_merged.osty:2574:15
+		close = "'"
 	} else if frontUnitAt(units, start+1) == "\"" && frontUnitAt(units, start+2) == "\"" {
-		// Osty: /tmp/selfhost_merged.osty:2574:16
+		// Osty: /tmp/selfhost_merged.osty:2576:16
 		triple = true
-		// Osty: /tmp/selfhost_merged.osty:2575:18
+		// Osty: /tmp/selfhost_merged.osty:2577:18
 		consumed = 3
-		// Osty: /tmp/selfhost_merged.osty:2576:22
+		// Osty: /tmp/selfhost_merged.osty:2578:22
 		contentStart = start + 3
-		// Osty: /tmp/selfhost_merged.osty:2577:9
+		// Osty: /tmp/selfhost_merged.osty:2579:9
 		if frontUnitAt(units, contentStart) != "\n" {
-			// Osty: /tmp/selfhost_merged.osty:2578:20
+			// Osty: /tmp/selfhost_merged.osty:2580:20
 			errors = errors + 1
 		}
 	}
-	// Osty: /tmp/selfhost_merged.osty:2581:5
+	// Osty: /tmp/selfhost_merged.osty:2583:5
 	for idx := contentStart; idx < unitCount; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:2582:9
+		// Osty: /tmp/selfhost_merged.osty:2584:9
 		unit := frontUnitAt(units, idx)
 		_ = unit
-		// Osty: /tmp/selfhost_merged.osty:2583:9
+		// Osty: /tmp/selfhost_merged.osty:2585:9
 		next := frontUnitAt(units, idx+1)
 		_ = next
-		// Osty: /tmp/selfhost_merged.osty:2584:9
+		// Osty: /tmp/selfhost_merged.osty:2586:9
 		third := frontUnitAt(units, idx+2)
 		_ = third
-		// Osty: /tmp/selfhost_merged.osty:2585:9
+		// Osty: /tmp/selfhost_merged.osty:2587:9
 		if skip > 0 {
-			// Osty: /tmp/selfhost_merged.osty:2586:22
+			// Osty: /tmp/selfhost_merged.osty:2588:22
 			consumed = consumed + 1
-			// Osty: /tmp/selfhost_merged.osty:2587:18
+			// Osty: /tmp/selfhost_merged.osty:2589:18
 			skip = skip - 1
-			// Osty: /tmp/selfhost_merged.osty:2588:13
+			// Osty: /tmp/selfhost_merged.osty:2590:13
 			continue
 		}
-		// Osty: /tmp/selfhost_merged.osty:2590:9
+		// Osty: /tmp/selfhost_merged.osty:2592:9
 		if !(triple) && frontIsNewlineUnit(unit) {
-			// Osty: /tmp/selfhost_merged.osty:2591:20
+			// Osty: /tmp/selfhost_merged.osty:2593:20
 			errors = errors + 1
-			// Osty: /tmp/selfhost_merged.osty:2592:13
+			// Osty: /tmp/selfhost_merged.osty:2594:13
 			return frontDetailedScanResult(kind, consumed, true, errors, triple, interpolations, false, false)
 		}
-		// Osty: /tmp/selfhost_merged.osty:2603:18
+		// Osty: /tmp/selfhost_merged.osty:2605:18
 		consumed = consumed + 1
-		// Osty: /tmp/selfhost_merged.osty:2604:9
+		// Osty: /tmp/selfhost_merged.osty:2606:9
 		if !ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRawString{})) && escaped {
-			// Osty: /tmp/selfhost_merged.osty:2605:21
+			// Osty: /tmp/selfhost_merged.osty:2607:21
 			escaped = false
 		} else if !ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRawString{})) && unit == "\\" {
-			// Osty: /tmp/selfhost_merged.osty:2607:21
+			// Osty: /tmp/selfhost_merged.osty:2609:21
 			escaped = true
 		} else if !ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRawString{})) && unit == "{" {
-			// Osty: /tmp/selfhost_merged.osty:2609:13
+			// Osty: /tmp/selfhost_merged.osty:2611:13
 			interp := frontInterpolationScan(units, idx, unitCount, 0)
 			_ = interp
-			// Osty: /tmp/selfhost_merged.osty:2610:28
+			// Osty: /tmp/selfhost_merged.osty:2612:28
 			interpolations = interpolations + 1
-			// Osty: /tmp/selfhost_merged.osty:2611:13
+			// Osty: /tmp/selfhost_merged.osty:2613:13
 			if interp.ok {
-				// Osty: /tmp/selfhost_merged.osty:2612:22
+				// Osty: /tmp/selfhost_merged.osty:2614:22
 				skip = interp.consumed - 1
 			}
 		} else if triple && unit == close && next == close && third == close {
-			// Osty: /tmp/selfhost_merged.osty:2615:13
+			// Osty: /tmp/selfhost_merged.osty:2617:13
 			return frontDetailedScanResult(kind, consumed+2, true, errors, triple, interpolations, false, false)
 		} else if !(triple) && unit == close {
-			// Osty: /tmp/selfhost_merged.osty:2626:13
+			// Osty: /tmp/selfhost_merged.osty:2628:13
 			return frontDetailedScanResult(kind, consumed, true, errors, triple, interpolations, false, false)
 		}
 	}
 	return frontDetailedScanResult(kind, consumed, true, errors+1, triple, interpolations, false, false)
 }
 
-// Osty: /tmp/selfhost_merged.osty:2641:5
+// Osty: /tmp/selfhost_merged.osty:2643:5
 func frontIdentScan(units []string, start int, unitCount int) *FrontScanResult {
-	// Osty: /tmp/selfhost_merged.osty:2642:5
+	// Osty: /tmp/selfhost_merged.osty:2644:5
 	consumed := 0
 	_ = consumed
-	// Osty: /tmp/selfhost_merged.osty:2643:5
+	// Osty: /tmp/selfhost_merged.osty:2645:5
 	for idx := start; idx < unitCount; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:2644:9
+		// Osty: /tmp/selfhost_merged.osty:2646:9
 		unit := frontUnitAt(units, idx)
 		_ = unit
-		// Osty: /tmp/selfhost_merged.osty:2645:9
+		// Osty: /tmp/selfhost_merged.osty:2647:9
 		if isFrontIdentContinue(unit) {
-			// Osty: /tmp/selfhost_merged.osty:2646:22
+			// Osty: /tmp/selfhost_merged.osty:2648:22
 			consumed = consumed + 1
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:2648:13
+			// Osty: /tmp/selfhost_merged.osty:2650:13
 			break
 		}
 	}
-	// Osty: /tmp/selfhost_merged.osty:2651:5
+	// Osty: /tmp/selfhost_merged.osty:2653:5
 	if consumed == 1 && frontUnitAt(units, start) == "_" {
-		// Osty: /tmp/selfhost_merged.osty:2652:9
+		// Osty: /tmp/selfhost_merged.osty:2654:9
 		return frontScanResult(FrontTokenKind(&FrontTokenKind_FrontUnderscore{}), consumed, true)
 	}
-	// Osty: /tmp/selfhost_merged.osty:2654:5
+	// Osty: /tmp/selfhost_merged.osty:2656:5
 	keyword := frontKeywordKindAt(units, start, consumed)
 	_ = keyword
-	// Osty: /tmp/selfhost_merged.osty:2655:5
+	// Osty: /tmp/selfhost_merged.osty:2657:5
 	if !ostyEqual(keyword, FrontTokenKind(&FrontTokenKind_FrontIdent{})) {
-		// Osty: /tmp/selfhost_merged.osty:2656:9
+		// Osty: /tmp/selfhost_merged.osty:2658:9
 		return frontScanResult(keyword, consumed, true)
 	}
 	return frontScanResult(FrontTokenKind(&FrontTokenKind_FrontIdent{}), consumed, true)
 }
 
-// Osty: /tmp/selfhost_merged.osty:2661:5
+// Osty: /tmp/selfhost_merged.osty:2663:5
 func frontKeywordKindAt(units []string, start int, consumed int) FrontTokenKind {
 	return func() FrontTokenKind {
 		if frontUnitsMatch(units, start, consumed, "fn") {
@@ -4009,162 +4009,162 @@ func frontKeywordKindAt(units []string, start int, consumed int) FrontTokenKind 
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:2701:5
+// Osty: /tmp/selfhost_merged.osty:2703:5
 func frontUnitsMatch(units []string, start int, consumed int, text string) bool {
-	// Osty: /tmp/selfhost_merged.osty:2702:5
+	// Osty: /tmp/selfhost_merged.osty:2704:5
 	if consumed != stringUnitCount(text) {
-		// Osty: /tmp/selfhost_merged.osty:2703:9
+		// Osty: /tmp/selfhost_merged.osty:2705:9
 		return false
 	}
-	// Osty: /tmp/selfhost_merged.osty:2705:5
+	// Osty: /tmp/selfhost_merged.osty:2707:5
 	offset := 0
 	_ = offset
-	// Osty: /tmp/selfhost_merged.osty:2706:5
+	// Osty: /tmp/selfhost_merged.osty:2708:5
 	for _, unit := range strings.Split(text, "") {
-		// Osty: /tmp/selfhost_merged.osty:2707:9
+		// Osty: /tmp/selfhost_merged.osty:2709:9
 		if frontUnitAt(units, start+offset) != unit {
-			// Osty: /tmp/selfhost_merged.osty:2708:13
+			// Osty: /tmp/selfhost_merged.osty:2710:13
 			return false
 		}
-		// Osty: /tmp/selfhost_merged.osty:2710:16
+		// Osty: /tmp/selfhost_merged.osty:2712:16
 		offset = offset + 1
 	}
 	return true
 }
 
-// Osty: /tmp/selfhost_merged.osty:2715:5
+// Osty: /tmp/selfhost_merged.osty:2717:5
 func frontNumberScan(units []string, start int, unitCount int) *FrontScanResult {
-	// Osty: /tmp/selfhost_merged.osty:2716:5
+	// Osty: /tmp/selfhost_merged.osty:2718:5
 	first := frontUnitAt(units, start)
 	_ = first
-	// Osty: /tmp/selfhost_merged.osty:2717:5
+	// Osty: /tmp/selfhost_merged.osty:2719:5
 	prefix := frontUnitAt(units, start+1)
 	_ = prefix
-	// Osty: /tmp/selfhost_merged.osty:2718:5
+	// Osty: /tmp/selfhost_merged.osty:2720:5
 	if first == "0" && (prefix == "x" || prefix == "X") {
-		// Osty: /tmp/selfhost_merged.osty:2719:9
+		// Osty: /tmp/selfhost_merged.osty:2721:9
 		consumed := 2
 		_ = consumed
-		// Osty: /tmp/selfhost_merged.osty:2720:9
+		// Osty: /tmp/selfhost_merged.osty:2722:9
 		for idx := start + 2; idx < unitCount; idx++ {
-			// Osty: /tmp/selfhost_merged.osty:2721:13
+			// Osty: /tmp/selfhost_merged.osty:2723:13
 			unit := frontUnitAt(units, idx)
 			_ = unit
-			// Osty: /tmp/selfhost_merged.osty:2722:13
+			// Osty: /tmp/selfhost_merged.osty:2724:13
 			if frontIsHexDigit(unit) || unit == "_" {
-				// Osty: /tmp/selfhost_merged.osty:2723:26
+				// Osty: /tmp/selfhost_merged.osty:2725:26
 				consumed = consumed + 1
 			} else {
-				// Osty: /tmp/selfhost_merged.osty:2725:17
+				// Osty: /tmp/selfhost_merged.osty:2727:17
 				break
 			}
 		}
-		// Osty: /tmp/selfhost_merged.osty:2728:9
+		// Osty: /tmp/selfhost_merged.osty:2730:9
 		return frontDetailedScanResult(FrontTokenKind(&FrontTokenKind_FrontInt{}), consumed, true, frontUppercaseBaseError(prefix), false, 0, true, prefix == "X")
 	}
-	// Osty: /tmp/selfhost_merged.osty:2739:5
+	// Osty: /tmp/selfhost_merged.osty:2741:5
 	if first == "0" && (prefix == "b" || prefix == "B") {
-		// Osty: /tmp/selfhost_merged.osty:2740:9
+		// Osty: /tmp/selfhost_merged.osty:2742:9
 		consumed := 2
 		_ = consumed
-		// Osty: /tmp/selfhost_merged.osty:2741:9
+		// Osty: /tmp/selfhost_merged.osty:2743:9
 		for idx := start + 2; idx < unitCount; idx++ {
-			// Osty: /tmp/selfhost_merged.osty:2742:13
+			// Osty: /tmp/selfhost_merged.osty:2744:13
 			unit := frontUnitAt(units, idx)
 			_ = unit
-			// Osty: /tmp/selfhost_merged.osty:2743:13
+			// Osty: /tmp/selfhost_merged.osty:2745:13
 			if unit == "0" || unit == "1" || unit == "_" {
-				// Osty: /tmp/selfhost_merged.osty:2744:26
+				// Osty: /tmp/selfhost_merged.osty:2746:26
 				consumed = consumed + 1
 			} else {
-				// Osty: /tmp/selfhost_merged.osty:2746:17
+				// Osty: /tmp/selfhost_merged.osty:2748:17
 				break
 			}
 		}
-		// Osty: /tmp/selfhost_merged.osty:2749:9
+		// Osty: /tmp/selfhost_merged.osty:2751:9
 		return frontDetailedScanResult(FrontTokenKind(&FrontTokenKind_FrontInt{}), consumed, true, frontUppercaseBaseError(prefix), false, 0, true, prefix == "B")
 	}
-	// Osty: /tmp/selfhost_merged.osty:2760:5
+	// Osty: /tmp/selfhost_merged.osty:2762:5
 	if first == "0" && (prefix == "o" || prefix == "O") {
-		// Osty: /tmp/selfhost_merged.osty:2761:9
+		// Osty: /tmp/selfhost_merged.osty:2763:9
 		consumed := 2
 		_ = consumed
-		// Osty: /tmp/selfhost_merged.osty:2762:9
+		// Osty: /tmp/selfhost_merged.osty:2764:9
 		for idx := start + 2; idx < unitCount; idx++ {
-			// Osty: /tmp/selfhost_merged.osty:2763:13
+			// Osty: /tmp/selfhost_merged.osty:2765:13
 			unit := frontUnitAt(units, idx)
 			_ = unit
-			// Osty: /tmp/selfhost_merged.osty:2764:13
+			// Osty: /tmp/selfhost_merged.osty:2766:13
 			if (unit >= "0" && unit <= "7") || unit == "_" {
-				// Osty: /tmp/selfhost_merged.osty:2765:26
+				// Osty: /tmp/selfhost_merged.osty:2767:26
 				consumed = consumed + 1
 			} else {
-				// Osty: /tmp/selfhost_merged.osty:2767:17
+				// Osty: /tmp/selfhost_merged.osty:2769:17
 				break
 			}
 		}
-		// Osty: /tmp/selfhost_merged.osty:2770:9
+		// Osty: /tmp/selfhost_merged.osty:2772:9
 		return frontDetailedScanResult(FrontTokenKind(&FrontTokenKind_FrontInt{}), consumed, true, frontUppercaseBaseError(prefix), false, 0, true, prefix == "O")
 	}
-	// Osty: /tmp/selfhost_merged.osty:2782:5
+	// Osty: /tmp/selfhost_merged.osty:2784:5
 	consumed := 0
 	_ = consumed
-	// Osty: /tmp/selfhost_merged.osty:2783:5
+	// Osty: /tmp/selfhost_merged.osty:2785:5
 	kind := FrontTokenKind(&FrontTokenKind_FrontInt{})
 	_ = kind
-	// Osty: /tmp/selfhost_merged.osty:2784:5
+	// Osty: /tmp/selfhost_merged.osty:2786:5
 	seenDot := false
 	_ = seenDot
-	// Osty: /tmp/selfhost_merged.osty:2785:5
+	// Osty: /tmp/selfhost_merged.osty:2787:5
 	seenExp := false
 	_ = seenExp
-	// Osty: /tmp/selfhost_merged.osty:2786:5
+	// Osty: /tmp/selfhost_merged.osty:2788:5
 	expCanSign := false
 	_ = expCanSign
-	// Osty: /tmp/selfhost_merged.osty:2787:5
+	// Osty: /tmp/selfhost_merged.osty:2789:5
 	for idx := start; idx < unitCount; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:2788:9
+		// Osty: /tmp/selfhost_merged.osty:2790:9
 		unit := frontUnitAt(units, idx)
 		_ = unit
-		// Osty: /tmp/selfhost_merged.osty:2789:9
+		// Osty: /tmp/selfhost_merged.osty:2791:9
 		next := frontUnitAt(units, idx+1)
 		_ = next
-		// Osty: /tmp/selfhost_merged.osty:2790:9
+		// Osty: /tmp/selfhost_merged.osty:2792:9
 		if digitStringValue(unit) >= 0 || unit == "_" {
-			// Osty: /tmp/selfhost_merged.osty:2791:22
+			// Osty: /tmp/selfhost_merged.osty:2793:22
 			consumed = consumed + 1
-			// Osty: /tmp/selfhost_merged.osty:2792:24
+			// Osty: /tmp/selfhost_merged.osty:2794:24
 			expCanSign = false
 		} else if unit == "." && !(seenDot) && !(seenExp) && digitStringValue(next) >= 0 {
-			// Osty: /tmp/selfhost_merged.osty:2794:18
+			// Osty: /tmp/selfhost_merged.osty:2796:18
 			kind = FrontTokenKind(&FrontTokenKind_FrontFloat{})
-			// Osty: /tmp/selfhost_merged.osty:2795:21
+			// Osty: /tmp/selfhost_merged.osty:2797:21
 			seenDot = true
-			// Osty: /tmp/selfhost_merged.osty:2796:22
+			// Osty: /tmp/selfhost_merged.osty:2798:22
 			consumed = consumed + 1
 		} else if (unit == "e" || unit == "E") && !(seenExp) && (digitStringValue(next) >= 0 || next == "+" || next == "-") {
-			// Osty: /tmp/selfhost_merged.osty:2798:18
+			// Osty: /tmp/selfhost_merged.osty:2800:18
 			kind = FrontTokenKind(&FrontTokenKind_FrontFloat{})
-			// Osty: /tmp/selfhost_merged.osty:2799:21
+			// Osty: /tmp/selfhost_merged.osty:2801:21
 			seenExp = true
-			// Osty: /tmp/selfhost_merged.osty:2800:24
+			// Osty: /tmp/selfhost_merged.osty:2802:24
 			expCanSign = true
-			// Osty: /tmp/selfhost_merged.osty:2801:22
+			// Osty: /tmp/selfhost_merged.osty:2803:22
 			consumed = consumed + 1
 		} else if (unit == "+" || unit == "-") && expCanSign {
-			// Osty: /tmp/selfhost_merged.osty:2803:24
+			// Osty: /tmp/selfhost_merged.osty:2805:24
 			expCanSign = false
-			// Osty: /tmp/selfhost_merged.osty:2804:22
+			// Osty: /tmp/selfhost_merged.osty:2806:22
 			consumed = consumed + 1
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:2806:13
+			// Osty: /tmp/selfhost_merged.osty:2808:13
 			break
 		}
 	}
 	return frontScanResult(kind, consumed, true)
 }
 
-// Osty: /tmp/selfhost_merged.osty:2812:5
+// Osty: /tmp/selfhost_merged.osty:2814:5
 func frontUppercaseBaseError(prefix string) int {
 	return func() int {
 		if prefix == "X" || prefix == "B" || prefix == "O" {
@@ -4175,57 +4175,57 @@ func frontUppercaseBaseError(prefix string) int {
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:2820:5
+// Osty: /tmp/selfhost_merged.osty:2822:5
 func frontIsHexDigit(unit string) bool {
 	return digitStringValue(unit) >= 0 || (unit >= "a" && unit <= "f") || (unit >= "A" && unit <= "F")
 }
 
-// Osty: /tmp/selfhost_merged.osty:2824:5
+// Osty: /tmp/selfhost_merged.osty:2826:5
 func frontPunctuationScan(units []string, start int, unitCount int) *FrontScanResult {
-	// Osty: /tmp/selfhost_merged.osty:2825:5
+	// Osty: /tmp/selfhost_merged.osty:2827:5
 	one := frontUnitAt(units, start)
 	_ = one
-	// Osty: /tmp/selfhost_merged.osty:2826:5
+	// Osty: /tmp/selfhost_merged.osty:2828:5
 	two := frontUnitAt(units, start+1)
 	_ = two
-	// Osty: /tmp/selfhost_merged.osty:2827:5
+	// Osty: /tmp/selfhost_merged.osty:2829:5
 	three := frontUnitAt(units, start+2)
 	_ = three
-	// Osty: /tmp/selfhost_merged.osty:2828:5
+	// Osty: /tmp/selfhost_merged.osty:2830:5
 	if one == "." && two == "." && three == "=" {
-		// Osty: /tmp/selfhost_merged.osty:2829:9
+		// Osty: /tmp/selfhost_merged.osty:2831:9
 		return frontScanResult(FrontTokenKind(&FrontTokenKind_FrontDotDotEq{}), 3, true)
 	}
-	// Osty: /tmp/selfhost_merged.osty:2831:5
+	// Osty: /tmp/selfhost_merged.osty:2833:5
 	if one == "<" && two == "<" && three == "=" {
-		// Osty: /tmp/selfhost_merged.osty:2832:9
+		// Osty: /tmp/selfhost_merged.osty:2834:9
 		return frontScanResult(FrontTokenKind(&FrontTokenKind_FrontShlEq{}), 3, true)
 	}
-	// Osty: /tmp/selfhost_merged.osty:2834:5
+	// Osty: /tmp/selfhost_merged.osty:2836:5
 	if one == ">" && two == ">" && three == "=" {
-		// Osty: /tmp/selfhost_merged.osty:2835:9
+		// Osty: /tmp/selfhost_merged.osty:2837:9
 		return frontScanResult(FrontTokenKind(&FrontTokenKind_FrontShrEq{}), 3, true)
 	}
-	// Osty: /tmp/selfhost_merged.osty:2837:5
+	// Osty: /tmp/selfhost_merged.osty:2839:5
 	twoKind := frontPunctuationPairKind(one, two)
 	_ = twoKind
-	// Osty: /tmp/selfhost_merged.osty:2838:5
+	// Osty: /tmp/selfhost_merged.osty:2840:5
 	if !ostyEqual(twoKind, FrontTokenKind(&FrontTokenKind_FrontIllegal{})) {
-		// Osty: /tmp/selfhost_merged.osty:2839:9
+		// Osty: /tmp/selfhost_merged.osty:2841:9
 		return frontScanResult(twoKind, 2, true)
 	}
-	// Osty: /tmp/selfhost_merged.osty:2841:5
+	// Osty: /tmp/selfhost_merged.osty:2843:5
 	oneKind := frontPunctuationKind(one)
 	_ = oneKind
-	// Osty: /tmp/selfhost_merged.osty:2842:5
+	// Osty: /tmp/selfhost_merged.osty:2844:5
 	if !ostyEqual(oneKind, FrontTokenKind(&FrontTokenKind_FrontIllegal{})) {
-		// Osty: /tmp/selfhost_merged.osty:2843:9
+		// Osty: /tmp/selfhost_merged.osty:2845:9
 		return frontScanResult(oneKind, 1, true)
 	}
 	return frontScanResult(FrontTokenKind(&FrontTokenKind_FrontIllegal{}), 1, false)
 }
 
-// Osty: /tmp/selfhost_merged.osty:2848:5
+// Osty: /tmp/selfhost_merged.osty:2850:5
 func frontPunctuationPairKind(one string, two string) FrontTokenKind {
 	return func() FrontTokenKind {
 		if one == "=" && two == "=" {
@@ -4278,37 +4278,37 @@ func frontPunctuationPairKind(one string, two string) FrontTokenKind {
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:2898:5
+// Osty: /tmp/selfhost_merged.osty:2900:5
 func frontNextSuppressesTerm(units []string, start int, unitCount int) bool {
-	// Osty: /tmp/selfhost_merged.osty:2899:5
+	// Osty: /tmp/selfhost_merged.osty:2901:5
 	skip := 0
 	_ = skip
-	// Osty: /tmp/selfhost_merged.osty:2900:5
+	// Osty: /tmp/selfhost_merged.osty:2902:5
 	for idx := start; idx < unitCount; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:2901:9
+		// Osty: /tmp/selfhost_merged.osty:2903:9
 		if skip > 0 {
-			// Osty: /tmp/selfhost_merged.osty:2902:18
+			// Osty: /tmp/selfhost_merged.osty:2904:18
 			skip = skip - 1
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:2904:13
+			// Osty: /tmp/selfhost_merged.osty:2906:13
 			unit := frontUnitAt(units, idx)
 			_ = unit
-			// Osty: /tmp/selfhost_merged.osty:2905:13
+			// Osty: /tmp/selfhost_merged.osty:2907:13
 			next := frontUnitAt(units, idx+1)
 			_ = next
-			// Osty: /tmp/selfhost_merged.osty:2906:13
+			// Osty: /tmp/selfhost_merged.osty:2908:13
 			if frontIsSpaceNoNewline(unit) || frontIsNewlineUnit(unit) {
 			} else if unit == "/" && next == "/" {
-				// Osty: /tmp/selfhost_merged.osty:2907:22
+				// Osty: /tmp/selfhost_merged.osty:2909:22
 				skip = frontLineCommentSkip(units, idx+2, unitCount)
 			} else if unit == "/" && next == "*" {
-				// Osty: /tmp/selfhost_merged.osty:2909:17
+				// Osty: /tmp/selfhost_merged.osty:2911:17
 				block := frontBlockCommentSkip(units, idx, unitCount)
 				_ = block
-				// Osty: /tmp/selfhost_merged.osty:2910:22
+				// Osty: /tmp/selfhost_merged.osty:2912:22
 				skip = block.consumed - 1
 			} else {
-				// Osty: /tmp/selfhost_merged.osty:2912:17
+				// Osty: /tmp/selfhost_merged.osty:2914:17
 				return frontSuppressingStart(unit, next)
 			}
 		}
@@ -4316,12 +4316,12 @@ func frontNextSuppressesTerm(units []string, start int, unitCount int) bool {
 	return false
 }
 
-// Osty: /tmp/selfhost_merged.osty:2919:5
+// Osty: /tmp/selfhost_merged.osty:2921:5
 func frontSuppressingStart(unit string, next string) bool {
 	return unit == "." || unit == "," || unit == ")" || unit == "]" || unit == "}" || unit == "+" || unit == "-" || unit == "*" || unit == "/" || unit == "%" || unit == "=" || unit == "!" || unit == "<" || unit == ">" || unit == "&" || unit == "|" || unit == "^" || (unit == "?" && next == ".") || (unit == "?" && next == "?")
 }
 
-// Osty: /tmp/selfhost_merged.osty:2923:5
+// Osty: /tmp/selfhost_merged.osty:2925:5
 func frontKindInsertsTerm(kind FrontTokenKind) bool {
 	return func() bool {
 		_m20 := kind
@@ -4383,125 +4383,125 @@ func frontKindInsertsTerm(kind FrontTokenKind) bool {
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:2946:5
+// Osty: /tmp/selfhost_merged.osty:2948:5
 func classifyFrontLexeme(text string) FrontTokenKind {
-	// Osty: /tmp/selfhost_merged.osty:2947:5
+	// Osty: /tmp/selfhost_merged.osty:2949:5
 	if text == "" {
-		// Osty: /tmp/selfhost_merged.osty:2948:9
+		// Osty: /tmp/selfhost_merged.osty:2950:9
 		return FrontTokenKind(&FrontTokenKind_FrontIllegal{})
 	}
-	// Osty: /tmp/selfhost_merged.osty:2950:5
+	// Osty: /tmp/selfhost_merged.osty:2952:5
 	if strings.HasPrefix(text, "r\"") {
-		// Osty: /tmp/selfhost_merged.osty:2951:9
+		// Osty: /tmp/selfhost_merged.osty:2953:9
 		return FrontTokenKind(&FrontTokenKind_FrontRawString{})
 	}
-	// Osty: /tmp/selfhost_merged.osty:2953:5
+	// Osty: /tmp/selfhost_merged.osty:2955:5
 	if strings.HasPrefix(text, "b'") {
-		// Osty: /tmp/selfhost_merged.osty:2954:9
+		// Osty: /tmp/selfhost_merged.osty:2956:9
 		return FrontTokenKind(&FrontTokenKind_FrontByte{})
 	}
-	// Osty: /tmp/selfhost_merged.osty:2956:5
+	// Osty: /tmp/selfhost_merged.osty:2958:5
 	if strings.HasPrefix(text, "\"") {
-		// Osty: /tmp/selfhost_merged.osty:2957:9
+		// Osty: /tmp/selfhost_merged.osty:2959:9
 		return FrontTokenKind(&FrontTokenKind_FrontString{})
 	}
-	// Osty: /tmp/selfhost_merged.osty:2959:5
+	// Osty: /tmp/selfhost_merged.osty:2961:5
 	if strings.HasPrefix(text, "'") {
-		// Osty: /tmp/selfhost_merged.osty:2960:9
+		// Osty: /tmp/selfhost_merged.osty:2962:9
 		return FrontTokenKind(&FrontTokenKind_FrontChar{})
 	}
-	// Osty: /tmp/selfhost_merged.osty:2962:5
+	// Osty: /tmp/selfhost_merged.osty:2964:5
 	if allAsciiDigits(text) {
-		// Osty: /tmp/selfhost_merged.osty:2963:9
+		// Osty: /tmp/selfhost_merged.osty:2965:9
 		return FrontTokenKind(&FrontTokenKind_FrontInt{})
 	}
-	// Osty: /tmp/selfhost_merged.osty:2965:5
+	// Osty: /tmp/selfhost_merged.osty:2967:5
 	if isFrontFloatLexeme(text) {
-		// Osty: /tmp/selfhost_merged.osty:2966:9
+		// Osty: /tmp/selfhost_merged.osty:2968:9
 		return FrontTokenKind(&FrontTokenKind_FrontFloat{})
 	}
-	// Osty: /tmp/selfhost_merged.osty:2968:5
+	// Osty: /tmp/selfhost_merged.osty:2970:5
 	keyword := frontKeywordKind(text)
 	_ = keyword
-	// Osty: /tmp/selfhost_merged.osty:2969:5
+	// Osty: /tmp/selfhost_merged.osty:2971:5
 	if !ostyEqual(keyword, FrontTokenKind(&FrontTokenKind_FrontIdent{})) {
-		// Osty: /tmp/selfhost_merged.osty:2970:9
+		// Osty: /tmp/selfhost_merged.osty:2972:9
 		return keyword
 	}
-	// Osty: /tmp/selfhost_merged.osty:2972:5
+	// Osty: /tmp/selfhost_merged.osty:2974:5
 	punct := frontPunctuationKind(text)
 	_ = punct
-	// Osty: /tmp/selfhost_merged.osty:2973:5
+	// Osty: /tmp/selfhost_merged.osty:2975:5
 	if !ostyEqual(punct, FrontTokenKind(&FrontTokenKind_FrontIllegal{})) {
-		// Osty: /tmp/selfhost_merged.osty:2974:9
+		// Osty: /tmp/selfhost_merged.osty:2976:9
 		return punct
 	}
-	// Osty: /tmp/selfhost_merged.osty:2976:5
+	// Osty: /tmp/selfhost_merged.osty:2978:5
 	if text == "_" {
-		// Osty: /tmp/selfhost_merged.osty:2977:9
+		// Osty: /tmp/selfhost_merged.osty:2979:9
 		return FrontTokenKind(&FrontTokenKind_FrontUnderscore{})
 	}
-	// Osty: /tmp/selfhost_merged.osty:2979:5
+	// Osty: /tmp/selfhost_merged.osty:2981:5
 	if isFrontIdentText(text) {
-		// Osty: /tmp/selfhost_merged.osty:2980:9
+		// Osty: /tmp/selfhost_merged.osty:2982:9
 		return FrontTokenKind(&FrontTokenKind_FrontIdent{})
 	}
 	return FrontTokenKind(&FrontTokenKind_FrontIllegal{})
 }
 
-// Osty: /tmp/selfhost_merged.osty:2985:5
+// Osty: /tmp/selfhost_merged.osty:2987:5
 func isFrontFloatLexeme(text string) bool {
-	// Osty: /tmp/selfhost_merged.osty:2986:5
+	// Osty: /tmp/selfhost_merged.osty:2988:5
 	if strings.Count(text, ".") != 1 {
-		// Osty: /tmp/selfhost_merged.osty:2987:9
+		// Osty: /tmp/selfhost_merged.osty:2989:9
 		return false
 	}
-	// Osty: /tmp/selfhost_merged.osty:2989:5
+	// Osty: /tmp/selfhost_merged.osty:2991:5
 	if strings.HasPrefix(text, ".") || strings.HasSuffix(text, ".") {
-		// Osty: /tmp/selfhost_merged.osty:2990:9
+		// Osty: /tmp/selfhost_merged.osty:2992:9
 		return false
 	}
-	// Osty: /tmp/selfhost_merged.osty:2992:5
+	// Osty: /tmp/selfhost_merged.osty:2994:5
 	parts := splitSummary(strings.SplitN(text, ".", 2))
 	_ = parts
 	return parts.count == 2 && allAsciiDigits(parts.first) && allAsciiDigits(parts.second)
 }
 
-// Osty: /tmp/selfhost_merged.osty:2996:5
+// Osty: /tmp/selfhost_merged.osty:2998:5
 func isFrontIdentText(text string) bool {
-	// Osty: /tmp/selfhost_merged.osty:2997:5
+	// Osty: /tmp/selfhost_merged.osty:2999:5
 	count := 0
 	_ = count
-	// Osty: /tmp/selfhost_merged.osty:2998:5
+	// Osty: /tmp/selfhost_merged.osty:3000:5
 	for _, unit := range strings.Split(text, "") {
-		// Osty: /tmp/selfhost_merged.osty:2999:9
+		// Osty: /tmp/selfhost_merged.osty:3001:9
 		if count == 0 {
-			// Osty: /tmp/selfhost_merged.osty:3000:13
+			// Osty: /tmp/selfhost_merged.osty:3002:13
 			if !(isFrontIdentStart(unit)) {
-				// Osty: /tmp/selfhost_merged.osty:3001:17
+				// Osty: /tmp/selfhost_merged.osty:3003:17
 				return false
 			}
 		} else if !(isFrontIdentContinue(unit)) {
-			// Osty: /tmp/selfhost_merged.osty:3004:13
+			// Osty: /tmp/selfhost_merged.osty:3006:13
 			return false
 		}
-		// Osty: /tmp/selfhost_merged.osty:3006:15
+		// Osty: /tmp/selfhost_merged.osty:3008:15
 		count = count + 1
 	}
 	return count > 0
 }
 
-// Osty: /tmp/selfhost_merged.osty:3011:5
+// Osty: /tmp/selfhost_merged.osty:3013:5
 func isFrontIdentStart(unit string) bool {
 	return (unit >= "a" && unit <= "z") || (unit >= "A" && unit <= "Z") || unit == "_"
 }
 
-// Osty: /tmp/selfhost_merged.osty:3015:5
+// Osty: /tmp/selfhost_merged.osty:3017:5
 func isFrontIdentContinue(unit string) bool {
 	return isFrontIdentStart(unit) || (unit >= "0" && unit <= "9")
 }
 
-// Osty: /tmp/selfhost_merged.osty:3019:5
+// Osty: /tmp/selfhost_merged.osty:3021:5
 func frontKeywordKind(text string) FrontTokenKind {
 	return func() FrontTokenKind {
 		if text == "fn" {
@@ -4544,7 +4544,7 @@ func frontKeywordKind(text string) FrontTokenKind {
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:3059:5
+// Osty: /tmp/selfhost_merged.osty:3061:5
 func frontPunctuationKind(text string) FrontTokenKind {
 	return func() FrontTokenKind {
 		if text == "(" {
@@ -4657,7 +4657,7 @@ func frontPunctuationKind(text string) FrontTokenKind {
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:3169:5
+// Osty: /tmp/selfhost_merged.osty:3171:5
 func isFrontKeywordKind(kind FrontTokenKind) bool {
 	return func() bool {
 		_m21 := kind
@@ -4719,7 +4719,7 @@ func isFrontKeywordKind(kind FrontTokenKind) bool {
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:3192:5
+// Osty: /tmp/selfhost_merged.osty:3194:5
 func isFrontLiteralKind(kind FrontTokenKind) bool {
 	return func() bool {
 		_m22 := kind
@@ -4748,7 +4748,7 @@ func isFrontLiteralKind(kind FrontTokenKind) bool {
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:3204:5
+// Osty: /tmp/selfhost_merged.osty:3206:5
 func isFrontPunctuationKind(kind FrontTokenKind) bool {
 	return func() bool {
 		_m23 := kind
@@ -4915,7 +4915,7 @@ func isFrontPunctuationKind(kind FrontTokenKind) bool {
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:3262:5
+// Osty: /tmp/selfhost_merged.osty:3264:5
 func frontTokenKindByName(name string) FrontTokenKind {
 	return func() FrontTokenKind {
 		if name == "EOF" {
@@ -4937,12 +4937,12 @@ func frontTokenKindByName(name string) FrontTokenKind {
 		} else if name == "RAWSTRING" {
 			return FrontTokenKind(&FrontTokenKind_FrontRawString{})
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:3282:9
+			// Osty: /tmp/selfhost_merged.osty:3284:9
 			keyword := frontKeywordKind(name)
 			_ = keyword
-			// Osty: /tmp/selfhost_merged.osty:3283:9
+			// Osty: /tmp/selfhost_merged.osty:3285:9
 			if !ostyEqual(keyword, FrontTokenKind(&FrontTokenKind_FrontIdent{})) {
-				// Osty: /tmp/selfhost_merged.osty:3284:13
+				// Osty: /tmp/selfhost_merged.osty:3286:13
 				return keyword
 			}
 			return frontPunctuationKind(name)
@@ -4950,7 +4950,7 @@ func frontTokenKindByName(name string) FrontTokenKind {
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:3290:5
+// Osty: /tmp/selfhost_merged.osty:3292:5
 func frontTokenKindName(kind FrontTokenKind) string {
 	return func() string {
 		_m24 := kind
@@ -5196,7 +5196,7 @@ func frontTokenKindName(kind FrontTokenKind) string {
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:3374:5
+// Osty: /tmp/selfhost_merged.osty:3376:5
 func frontLexDiagnosticCodeName(code FrontLexDiagnosticCode) string {
 	return func() string {
 		_m25 := code
@@ -5238,7 +5238,7 @@ func frontLexDiagnosticCodeName(code FrontLexDiagnosticCode) string {
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:3390:5
+// Osty: /tmp/selfhost_merged.osty:3392:5
 func frontCommentKindName(kind FrontCommentKind) string {
 	return func() string {
 		_m26 := kind
@@ -5256,7 +5256,7 @@ func frontCommentKindName(kind FrontCommentKind) string {
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:3398:5
+// Osty: /tmp/selfhost_merged.osty:3400:5
 func frontStringPartKindName(kind FrontStringPartKind) string {
 	return func() string {
 		_m27 := kind
@@ -5271,469 +5271,469 @@ func frontStringPartKindName(kind FrontStringPartKind) string {
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:3405:5
+// Osty: /tmp/selfhost_merged.osty:3407:5
 func emptyFrontParseSummary() *FrontParseSummary {
 	return &FrontParseSummary{decls: 0, funcs: 0, structs: 0, enums: 0, interfaces: 0, aliases: 0, uses: 0, publicDecls: 0, maxBlockDepth: 0, errors: 0, genericParams: 0, params: 0, fields: 0, methods: 0, variants: 0, variantFields: 0, typeRefs: 0, blocks: 0, statements: 0, lets: 0, returns: 0, breaks: 0, continues: 0, fors: 0, defers: 0, ifs: 0, matches: 0, calls: 0, indexes: 0, selectors: 0, literals: 0, binaryOps: 0, unaryOps: 0, assignments: 0, annotations: 0, docComments: 0, goUses: 0, useAliases: 0, useGoItems: 0, mutableBindings: 0, defaultValues: 0, ifLets: 0, elseBranches: 0, matchArms: 0, matchGuards: 0, closures: 0, closureParams: 0, keywordArgs: 0, turbofish: 0, listLits: 0, mapLits: 0, tupleLits: 0, structLits: 0, structLitFields: 0, spreads: 0, ranges: 0, channelSends: 0, questionOps: 0, optionalTypes: 0, fnTypes: 0, tupleTypes: 0, tuplePatterns: 0, structPatterns: 0, variantPatterns: 0, orPatterns: 0, rangePatterns: 0, wildcardPatterns: 0}
 }
 
-// Osty: /tmp/selfhost_merged.osty:3477:5
+// Osty: /tmp/selfhost_merged.osty:3479:5
 func frontParseResult(summary *FrontParseSummary, consumed int) *FrontParseResult {
 	return &FrontParseResult{summary: summary, consumed: consumed}
 }
 
-// Osty: /tmp/selfhost_merged.osty:3481:5
+// Osty: /tmp/selfhost_merged.osty:3483:5
 func frontParseNode(kind FrontNodeKind, start int, end int, depth int, flags int) *FrontParseNode {
 	return &FrontParseNode{kind: kind, start: start, end: end, depth: depth, flags: flags}
 }
 
-// Osty: /tmp/selfhost_merged.osty:3485:5
+// Osty: /tmp/selfhost_merged.osty:3487:5
 func frontParseDiagnostic(kind FrontParseDiagnosticKind, start int, end int, expected FrontTokenKind, found FrontTokenKind) *FrontParseDiagnostic {
 	return &FrontParseDiagnostic{kind: kind, start: start, end: end, expected: expected, found: found}
 }
 
-// Osty: /tmp/selfhost_merged.osty:3495:5
+// Osty: /tmp/selfhost_merged.osty:3497:5
 func emptyFrontParseTree(summary *FrontParseSummary, tokens int) *FrontParseTree {
 	return &FrontParseTree{nodes: make([]*FrontParseNode, 0, 1), diagnostics: make([]*FrontParseDiagnostic, 0, 1), summary: summary, tokens: tokens, coveredTokens: 0, maxDepth: 0, recovered: 0, precedenceDiagnostics: 0}
 }
 
-// Osty: /tmp/selfhost_merged.osty:3508:5
+// Osty: /tmp/selfhost_merged.osty:3510:5
 func frontTreePushNode(tree *FrontParseTree, node *FrontParseNode) *FrontParseTree {
-	// Osty: /tmp/selfhost_merged.osty:3509:5
+	// Osty: /tmp/selfhost_merged.osty:3511:5
 	out := tree
 	_ = out
-	// Osty: /tmp/selfhost_merged.osty:3510:5
+	// Osty: /tmp/selfhost_merged.osty:3512:5
 	func() struct{} { out.nodes = append(out.nodes, node); return struct{}{} }()
-	// Osty: /tmp/selfhost_merged.osty:3511:5
+	// Osty: /tmp/selfhost_merged.osty:3513:5
 	if node.depth > out.maxDepth {
-		// Osty: /tmp/selfhost_merged.osty:3512:22
+		// Osty: /tmp/selfhost_merged.osty:3514:22
 		out.maxDepth = node.depth
 	}
 	return out
 }
 
-// Osty: /tmp/selfhost_merged.osty:3517:5
+// Osty: /tmp/selfhost_merged.osty:3519:5
 func frontTreePushDiagnostic(tree *FrontParseTree, diag *FrontParseDiagnostic) *FrontParseTree {
-	// Osty: /tmp/selfhost_merged.osty:3521:5
+	// Osty: /tmp/selfhost_merged.osty:3523:5
 	out := tree
 	_ = out
-	// Osty: /tmp/selfhost_merged.osty:3522:5
-	func() struct{} { out.diagnostics = append(out.diagnostics, diag); return struct{}{} }()
-	// Osty: /tmp/selfhost_merged.osty:3523:19
-	out.recovered = out.recovered + 1
 	// Osty: /tmp/selfhost_merged.osty:3524:5
+	func() struct{} { out.diagnostics = append(out.diagnostics, diag); return struct{}{} }()
+	// Osty: /tmp/selfhost_merged.osty:3525:19
+	out.recovered = out.recovered + 1
+	// Osty: /tmp/selfhost_merged.osty:3526:5
 	if ostyEqual(diag.kind, FrontParseDiagnosticKind(&FrontParseDiagnosticKind_FrontParseDiagNonAssociativeOperator{})) {
-		// Osty: /tmp/selfhost_merged.osty:3525:35
+		// Osty: /tmp/selfhost_merged.osty:3527:35
 		out.precedenceDiagnostics = out.precedenceDiagnostics + 1
 	}
 	return out
 }
 
-// Osty: /tmp/selfhost_merged.osty:3530:5
+// Osty: /tmp/selfhost_merged.osty:3532:5
 func frontendParseTree(source string) *FrontParseTree {
-	// Osty: /tmp/selfhost_merged.osty:3531:5
+	// Osty: /tmp/selfhost_merged.osty:3533:5
 	stream := frontendLexStream(source)
 	_ = stream
-	// Osty: /tmp/selfhost_merged.osty:3532:5
+	// Osty: /tmp/selfhost_merged.osty:3534:5
 	tokens := frontTokensFromSource(source, stream)
 	_ = tokens
-	// Osty: /tmp/selfhost_merged.osty:3533:5
+	// Osty: /tmp/selfhost_merged.osty:3535:5
 	count := frontTokenListCount(tokens)
 	_ = count
-	// Osty: /tmp/selfhost_merged.osty:3534:5
+	// Osty: /tmp/selfhost_merged.osty:3536:5
 	summary := frontendParseRichSummary(source)
 	_ = summary
-	// Osty: /tmp/selfhost_merged.osty:3535:5
+	// Osty: /tmp/selfhost_merged.osty:3537:5
 	tree := frontBuildParseTree(tokens, count, summary)
 	_ = tree
-	// Osty: /tmp/selfhost_merged.osty:3536:5
+	// Osty: /tmp/selfhost_merged.osty:3538:5
 	lexErrors := frontLexDiagnosticCount(stream)
 	_ = lexErrors
-	// Osty: /tmp/selfhost_merged.osty:3537:5
+	// Osty: /tmp/selfhost_merged.osty:3539:5
 	for idx := 0; idx < lexErrors; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:3538:14
+		// Osty: /tmp/selfhost_merged.osty:3540:14
 		tree = frontTreePushDiagnostic(tree, frontParseDiagnostic(FrontParseDiagnosticKind(&FrontParseDiagnosticKind_FrontParseDiagLexerError{}), idx, idx+1, FrontTokenKind(&FrontTokenKind_FrontEOF{}), FrontTokenKind(&FrontTokenKind_FrontIllegal{})))
 	}
 	return tree
 }
 
-// Osty: /tmp/selfhost_merged.osty:3555:5
+// Osty: /tmp/selfhost_merged.osty:3557:5
 func frontendParseRichSummary(source string) *FrontParseSummary {
-	// Osty: /tmp/selfhost_merged.osty:3556:5
+	// Osty: /tmp/selfhost_merged.osty:3558:5
 	stream := frontendLexStream(source)
 	_ = stream
-	// Osty: /tmp/selfhost_merged.osty:3557:5
+	// Osty: /tmp/selfhost_merged.osty:3559:5
 	tokens := frontTokensFromSource(source, stream)
 	_ = tokens
-	// Osty: /tmp/selfhost_merged.osty:3558:5
+	// Osty: /tmp/selfhost_merged.osty:3560:5
 	count := frontTokenListCount(tokens)
 	_ = count
-	// Osty: /tmp/selfhost_merged.osty:3559:5
+	// Osty: /tmp/selfhost_merged.osty:3561:5
 	summary := emptyFrontParseSummary()
 	_ = summary
-	// Osty: /tmp/selfhost_merged.osty:3560:20
+	// Osty: /tmp/selfhost_merged.osty:3562:20
 	summary.errors = frontLexDiagnosticCount(stream)
-	// Osty: /tmp/selfhost_merged.osty:3561:25
+	// Osty: /tmp/selfhost_merged.osty:3563:25
 	summary.docComments = frontLeadingDocAttachmentCount(stream)
-	// Osty: /tmp/selfhost_merged.osty:3562:5
+	// Osty: /tmp/selfhost_merged.osty:3564:5
 	skip := 0
 	_ = skip
-	// Osty: /tmp/selfhost_merged.osty:3563:5
+	// Osty: /tmp/selfhost_merged.osty:3565:5
 	pendingPub := false
 	_ = pendingPub
-	// Osty: /tmp/selfhost_merged.osty:3565:5
+	// Osty: /tmp/selfhost_merged.osty:3567:5
 	for idx := 0; idx < count; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:3566:9
+		// Osty: /tmp/selfhost_merged.osty:3568:9
 		if skip > 0 {
-			// Osty: /tmp/selfhost_merged.osty:3567:18
+			// Osty: /tmp/selfhost_merged.osty:3569:18
 			skip = skip - 1
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:3569:13
+			// Osty: /tmp/selfhost_merged.osty:3571:13
 			kind := frontTokenAtList(tokens, idx).kind
 			_ = kind
-			// Osty: /tmp/selfhost_merged.osty:3570:13
+			// Osty: /tmp/selfhost_merged.osty:3572:13
 			if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontHash{})) && ostyEqual(frontTokenAtList(tokens, idx+1).kind, FrontTokenKind(&FrontTokenKind_FrontLBracket{})) {
-				// Osty: /tmp/selfhost_merged.osty:3571:17
+				// Osty: /tmp/selfhost_merged.osty:3573:17
 				close := frontFindMatching(tokens, idx+1, count, FrontTokenKind(&FrontTokenKind_FrontLBracket{}), FrontTokenKind(&FrontTokenKind_FrontRBracket{}))
 				_ = close
-				// Osty: /tmp/selfhost_merged.osty:3572:37
+				// Osty: /tmp/selfhost_merged.osty:3574:37
 				summary.annotations = summary.annotations + 1
-				// Osty: /tmp/selfhost_merged.osty:3573:22
+				// Osty: /tmp/selfhost_merged.osty:3575:22
 				skip = close - idx
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontPub{})) {
-				// Osty: /tmp/selfhost_merged.osty:3575:28
+				// Osty: /tmp/selfhost_merged.osty:3577:28
 				pendingPub = true
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontUse{})) {
-				// Osty: /tmp/selfhost_merged.osty:3577:31
+				// Osty: /tmp/selfhost_merged.osty:3579:31
 				summary.decls = summary.decls + 1
-				// Osty: /tmp/selfhost_merged.osty:3578:30
+				// Osty: /tmp/selfhost_merged.osty:3580:30
 				summary.uses = summary.uses + 1
-				// Osty: /tmp/selfhost_merged.osty:3579:17
+				// Osty: /tmp/selfhost_merged.osty:3581:17
 				parsed := frontParseUseShape(tokens, idx, count, summary)
 				_ = parsed
-				// Osty: /tmp/selfhost_merged.osty:3580:25
+				// Osty: /tmp/selfhost_merged.osty:3582:25
 				summary = parsed.summary
-				// Osty: /tmp/selfhost_merged.osty:3581:22
+				// Osty: /tmp/selfhost_merged.osty:3583:22
 				skip = parsed.consumed - 1
-				// Osty: /tmp/selfhost_merged.osty:3582:28
+				// Osty: /tmp/selfhost_merged.osty:3584:28
 				pendingPub = false
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontFn{})) {
-				// Osty: /tmp/selfhost_merged.osty:3584:31
+				// Osty: /tmp/selfhost_merged.osty:3586:31
 				summary.decls = summary.decls + 1
-				// Osty: /tmp/selfhost_merged.osty:3585:31
+				// Osty: /tmp/selfhost_merged.osty:3587:31
 				summary.funcs = summary.funcs + 1
-				// Osty: /tmp/selfhost_merged.osty:3586:17
+				// Osty: /tmp/selfhost_merged.osty:3588:17
 				if pendingPub {
-					// Osty: /tmp/selfhost_merged.osty:3587:41
+					// Osty: /tmp/selfhost_merged.osty:3589:41
 					summary.publicDecls = summary.publicDecls + 1
 				}
-				// Osty: /tmp/selfhost_merged.osty:3589:17
+				// Osty: /tmp/selfhost_merged.osty:3591:17
 				parsed := frontParseFnShape(tokens, idx, count, summary)
 				_ = parsed
-				// Osty: /tmp/selfhost_merged.osty:3590:25
+				// Osty: /tmp/selfhost_merged.osty:3592:25
 				summary = parsed.summary
-				// Osty: /tmp/selfhost_merged.osty:3591:22
+				// Osty: /tmp/selfhost_merged.osty:3593:22
 				skip = parsed.consumed - 1
-				// Osty: /tmp/selfhost_merged.osty:3592:28
+				// Osty: /tmp/selfhost_merged.osty:3594:28
 				pendingPub = false
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontStruct{})) {
-				// Osty: /tmp/selfhost_merged.osty:3594:31
+				// Osty: /tmp/selfhost_merged.osty:3596:31
 				summary.decls = summary.decls + 1
-				// Osty: /tmp/selfhost_merged.osty:3595:33
+				// Osty: /tmp/selfhost_merged.osty:3597:33
 				summary.structs = summary.structs + 1
-				// Osty: /tmp/selfhost_merged.osty:3596:17
+				// Osty: /tmp/selfhost_merged.osty:3598:17
 				if pendingPub {
-					// Osty: /tmp/selfhost_merged.osty:3597:41
+					// Osty: /tmp/selfhost_merged.osty:3599:41
 					summary.publicDecls = summary.publicDecls + 1
 				}
-				// Osty: /tmp/selfhost_merged.osty:3599:17
+				// Osty: /tmp/selfhost_merged.osty:3601:17
 				parsed := frontParseStructShape(tokens, idx, count, summary)
 				_ = parsed
-				// Osty: /tmp/selfhost_merged.osty:3600:25
+				// Osty: /tmp/selfhost_merged.osty:3602:25
 				summary = parsed.summary
-				// Osty: /tmp/selfhost_merged.osty:3601:22
+				// Osty: /tmp/selfhost_merged.osty:3603:22
 				skip = parsed.consumed - 1
-				// Osty: /tmp/selfhost_merged.osty:3602:28
+				// Osty: /tmp/selfhost_merged.osty:3604:28
 				pendingPub = false
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontEnum{})) {
-				// Osty: /tmp/selfhost_merged.osty:3604:31
+				// Osty: /tmp/selfhost_merged.osty:3606:31
 				summary.decls = summary.decls + 1
-				// Osty: /tmp/selfhost_merged.osty:3605:31
+				// Osty: /tmp/selfhost_merged.osty:3607:31
 				summary.enums = summary.enums + 1
-				// Osty: /tmp/selfhost_merged.osty:3606:17
+				// Osty: /tmp/selfhost_merged.osty:3608:17
 				if pendingPub {
-					// Osty: /tmp/selfhost_merged.osty:3607:41
+					// Osty: /tmp/selfhost_merged.osty:3609:41
 					summary.publicDecls = summary.publicDecls + 1
 				}
-				// Osty: /tmp/selfhost_merged.osty:3609:17
+				// Osty: /tmp/selfhost_merged.osty:3611:17
 				parsed := frontParseEnumShape(tokens, idx, count, summary)
 				_ = parsed
-				// Osty: /tmp/selfhost_merged.osty:3610:25
+				// Osty: /tmp/selfhost_merged.osty:3612:25
 				summary = parsed.summary
-				// Osty: /tmp/selfhost_merged.osty:3611:22
+				// Osty: /tmp/selfhost_merged.osty:3613:22
 				skip = parsed.consumed - 1
-				// Osty: /tmp/selfhost_merged.osty:3612:28
+				// Osty: /tmp/selfhost_merged.osty:3614:28
 				pendingPub = false
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontInterface{})) {
-				// Osty: /tmp/selfhost_merged.osty:3614:31
+				// Osty: /tmp/selfhost_merged.osty:3616:31
 				summary.decls = summary.decls + 1
-				// Osty: /tmp/selfhost_merged.osty:3615:36
+				// Osty: /tmp/selfhost_merged.osty:3617:36
 				summary.interfaces = summary.interfaces + 1
-				// Osty: /tmp/selfhost_merged.osty:3616:17
+				// Osty: /tmp/selfhost_merged.osty:3618:17
 				if pendingPub {
-					// Osty: /tmp/selfhost_merged.osty:3617:41
+					// Osty: /tmp/selfhost_merged.osty:3619:41
 					summary.publicDecls = summary.publicDecls + 1
 				}
-				// Osty: /tmp/selfhost_merged.osty:3619:17
+				// Osty: /tmp/selfhost_merged.osty:3621:17
 				parsed := frontParseInterfaceShape(tokens, idx, count, summary)
 				_ = parsed
-				// Osty: /tmp/selfhost_merged.osty:3620:25
+				// Osty: /tmp/selfhost_merged.osty:3622:25
 				summary = parsed.summary
-				// Osty: /tmp/selfhost_merged.osty:3621:22
+				// Osty: /tmp/selfhost_merged.osty:3623:22
 				skip = parsed.consumed - 1
-				// Osty: /tmp/selfhost_merged.osty:3622:28
+				// Osty: /tmp/selfhost_merged.osty:3624:28
 				pendingPub = false
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontType{})) {
-				// Osty: /tmp/selfhost_merged.osty:3624:31
+				// Osty: /tmp/selfhost_merged.osty:3626:31
 				summary.decls = summary.decls + 1
-				// Osty: /tmp/selfhost_merged.osty:3625:33
+				// Osty: /tmp/selfhost_merged.osty:3627:33
 				summary.aliases = summary.aliases + 1
-				// Osty: /tmp/selfhost_merged.osty:3626:17
+				// Osty: /tmp/selfhost_merged.osty:3628:17
 				if pendingPub {
-					// Osty: /tmp/selfhost_merged.osty:3627:41
+					// Osty: /tmp/selfhost_merged.osty:3629:41
 					summary.publicDecls = summary.publicDecls + 1
 				}
-				// Osty: /tmp/selfhost_merged.osty:3629:17
+				// Osty: /tmp/selfhost_merged.osty:3631:17
 				parsed := frontParseTypeAliasShape(tokens, idx, count, summary)
 				_ = parsed
-				// Osty: /tmp/selfhost_merged.osty:3630:25
+				// Osty: /tmp/selfhost_merged.osty:3632:25
 				summary = parsed.summary
-				// Osty: /tmp/selfhost_merged.osty:3631:22
+				// Osty: /tmp/selfhost_merged.osty:3633:22
 				skip = parsed.consumed - 1
-				// Osty: /tmp/selfhost_merged.osty:3632:28
+				// Osty: /tmp/selfhost_merged.osty:3634:28
 				pendingPub = false
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLet{})) {
-				// Osty: /tmp/selfhost_merged.osty:3634:31
+				// Osty: /tmp/selfhost_merged.osty:3636:31
 				summary.decls = summary.decls + 1
-				// Osty: /tmp/selfhost_merged.osty:3635:30
+				// Osty: /tmp/selfhost_merged.osty:3637:30
 				summary.lets = summary.lets + 1
-				// Osty: /tmp/selfhost_merged.osty:3636:17
+				// Osty: /tmp/selfhost_merged.osty:3638:17
 				parsed := frontParseLetShape(tokens, idx, count, summary)
 				_ = parsed
-				// Osty: /tmp/selfhost_merged.osty:3637:25
+				// Osty: /tmp/selfhost_merged.osty:3639:25
 				summary = parsed.summary
-				// Osty: /tmp/selfhost_merged.osty:3638:22
+				// Osty: /tmp/selfhost_merged.osty:3640:22
 				skip = parsed.consumed - 1
-				// Osty: /tmp/selfhost_merged.osty:3639:28
+				// Osty: /tmp/selfhost_merged.osty:3641:28
 				pendingPub = false
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontNewline{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontEOF{})) {
-				// Osty: /tmp/selfhost_merged.osty:3641:17
+				// Osty: /tmp/selfhost_merged.osty:3643:17
 				_ = kind
 			} else {
-				// Osty: /tmp/selfhost_merged.osty:3643:17
+				// Osty: /tmp/selfhost_merged.osty:3645:17
 				if !ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontIllegal{})) {
-					// Osty: /tmp/selfhost_merged.osty:3644:36
+					// Osty: /tmp/selfhost_merged.osty:3646:36
 					summary.errors = summary.errors + 1
 				}
-				// Osty: /tmp/selfhost_merged.osty:3646:28
+				// Osty: /tmp/selfhost_merged.osty:3648:28
 				pendingPub = false
 			}
 		}
 	}
-	// Osty: /tmp/selfhost_merged.osty:3651:27
+	// Osty: /tmp/selfhost_merged.osty:3653:27
 	summary.maxBlockDepth = frontMaxBraceDepth(tokens)
-	// Osty: /tmp/selfhost_merged.osty:3652:20
+	// Osty: /tmp/selfhost_merged.osty:3654:20
 	summary.errors = summary.errors + frontBraceBalanceErrors(tokens)
-	// Osty: /tmp/selfhost_merged.osty:3653:13
+	// Osty: /tmp/selfhost_merged.osty:3655:13
 	summary = frontScanProgramExtras(tokens, count, summary)
 	return summary
 }
 
-// Osty: /tmp/selfhost_merged.osty:3657:5
+// Osty: /tmp/selfhost_merged.osty:3659:5
 func frontTokenListCount(tokens []*FrontToken) int {
-	// Osty: /tmp/selfhost_merged.osty:3658:5
+	// Osty: /tmp/selfhost_merged.osty:3660:5
 	count := 0
 	_ = count
-	// Osty: /tmp/selfhost_merged.osty:3659:5
+	// Osty: /tmp/selfhost_merged.osty:3661:5
 	for _, tok := range tokens {
-		// Osty: /tmp/selfhost_merged.osty:3660:9
+		// Osty: /tmp/selfhost_merged.osty:3662:9
 		_ = tok
-		// Osty: /tmp/selfhost_merged.osty:3661:15
+		// Osty: /tmp/selfhost_merged.osty:3663:15
 		count = count + 1
 	}
 	return count
 }
 
-// Osty: /tmp/selfhost_merged.osty:3666:5
+// Osty: /tmp/selfhost_merged.osty:3668:5
 func frontTokenAtList(tokens []*FrontToken, target int) *FrontToken {
-	// Osty: /tmp/selfhost_merged.osty:3667:5
+	// Osty: /tmp/selfhost_merged.osty:3669:5
 	idx := 0
 	_ = idx
-	// Osty: /tmp/selfhost_merged.osty:3668:5
+	// Osty: /tmp/selfhost_merged.osty:3670:5
 	for _, tok := range tokens {
-		// Osty: /tmp/selfhost_merged.osty:3669:9
+		// Osty: /tmp/selfhost_merged.osty:3671:9
 		if idx == target {
-			// Osty: /tmp/selfhost_merged.osty:3670:13
+			// Osty: /tmp/selfhost_merged.osty:3672:13
 			return tok
 		}
-		// Osty: /tmp/selfhost_merged.osty:3672:13
+		// Osty: /tmp/selfhost_merged.osty:3674:13
 		idx = idx + 1
 	}
 	return frontEOF()
 }
 
-// Osty: /tmp/selfhost_merged.osty:3677:5
+// Osty: /tmp/selfhost_merged.osty:3679:5
 func frontLeadingDocAttachmentCount(stream *FrontLexStream) int {
-	// Osty: /tmp/selfhost_merged.osty:3678:5
+	// Osty: /tmp/selfhost_merged.osty:3680:5
 	count := 0
 	_ = count
-	// Osty: /tmp/selfhost_merged.osty:3679:5
+	// Osty: /tmp/selfhost_merged.osty:3681:5
 	for _, tok := range stream.tokens {
-		// Osty: /tmp/selfhost_merged.osty:3680:9
+		// Osty: /tmp/selfhost_merged.osty:3682:9
 		if tok.leadingDocLines > 0 {
-			// Osty: /tmp/selfhost_merged.osty:3681:19
+			// Osty: /tmp/selfhost_merged.osty:3683:19
 			count = count + 1
 		}
 	}
 	return count
 }
 
-// Osty: /tmp/selfhost_merged.osty:3687:5
+// Osty: /tmp/selfhost_merged.osty:3689:5
 func frontTokenTextAt(tokens []*FrontToken, target int) string {
 	return frontTokenAtList(tokens, target).text
 }
 
-// Osty: /tmp/selfhost_merged.osty:3691:5
+// Osty: /tmp/selfhost_merged.osty:3693:5
 func frontBuildParseTree(tokens []*FrontToken, count int, summary *FrontParseSummary) *FrontParseTree {
-	// Osty: /tmp/selfhost_merged.osty:3696:5
+	// Osty: /tmp/selfhost_merged.osty:3698:5
 	tree := emptyFrontParseTree(summary, count)
 	_ = tree
-	// Osty: /tmp/selfhost_merged.osty:3697:10
+	// Osty: /tmp/selfhost_merged.osty:3699:10
 	tree = frontTreePushNode(tree, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeFile{}), 0, count, 0, 0))
-	// Osty: /tmp/selfhost_merged.osty:3698:24
+	// Osty: /tmp/selfhost_merged.osty:3700:24
 	tree.coveredTokens = count
-	// Osty: /tmp/selfhost_merged.osty:3699:5
+	// Osty: /tmp/selfhost_merged.osty:3701:5
 	skip := 0
 	_ = skip
-	// Osty: /tmp/selfhost_merged.osty:3700:5
+	// Osty: /tmp/selfhost_merged.osty:3702:5
 	for idx := 0; idx < count; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:3701:9
+		// Osty: /tmp/selfhost_merged.osty:3703:9
 		if skip > 0 {
-			// Osty: /tmp/selfhost_merged.osty:3702:18
+			// Osty: /tmp/selfhost_merged.osty:3704:18
 			skip = skip - 1
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:3704:13
+			// Osty: /tmp/selfhost_merged.osty:3706:13
 			kind := frontTokenAtList(tokens, idx).kind
 			_ = kind
-			// Osty: /tmp/selfhost_merged.osty:3705:13
+			// Osty: /tmp/selfhost_merged.osty:3707:13
 			if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontEOF{})) {
-				// Osty: /tmp/selfhost_merged.osty:3706:17
+				// Osty: /tmp/selfhost_merged.osty:3708:17
 				_ = kind
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontHash{})) && ostyEqual(frontTokenAtList(tokens, idx+1).kind, FrontTokenKind(&FrontTokenKind_FrontLBracket{})) {
-				// Osty: /tmp/selfhost_merged.osty:3708:17
+				// Osty: /tmp/selfhost_merged.osty:3710:17
 				close := frontFindMatching(tokens, idx+1, count, FrontTokenKind(&FrontTokenKind_FrontLBracket{}), FrontTokenKind(&FrontTokenKind_FrontRBracket{}))
 				_ = close
-				// Osty: /tmp/selfhost_merged.osty:3709:22
+				// Osty: /tmp/selfhost_merged.osty:3711:22
 				tree = frontTreePushNode(tree, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeAnnotation{}), idx, close+1, 1, 0))
-				// Osty: /tmp/selfhost_merged.osty:3713:22
+				// Osty: /tmp/selfhost_merged.osty:3715:22
 				skip = close - idx
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontUse{})) {
-				// Osty: /tmp/selfhost_merged.osty:3715:17
+				// Osty: /tmp/selfhost_merged.osty:3717:17
 				consumed := frontParseUseConsumed(tokens, idx, count)
 				_ = consumed
-				// Osty: /tmp/selfhost_merged.osty:3716:17
+				// Osty: /tmp/selfhost_merged.osty:3718:17
 				end := idx + consumed
 				_ = end
-				// Osty: /tmp/selfhost_merged.osty:3717:17
+				// Osty: /tmp/selfhost_merged.osty:3719:17
 				if frontUseIsGo(tokens, idx, end) {
-					// Osty: /tmp/selfhost_merged.osty:3718:26
+					// Osty: /tmp/selfhost_merged.osty:3720:26
 					tree = frontTreePushNode(tree, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeGoUseDecl{}), idx, end, 1, 0))
 				} else {
-					// Osty: /tmp/selfhost_merged.osty:3723:26
+					// Osty: /tmp/selfhost_merged.osty:3725:26
 					tree = frontTreePushNode(tree, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeUseDecl{}), idx, end, 1, 0))
 				}
-				// Osty: /tmp/selfhost_merged.osty:3728:22
+				// Osty: /tmp/selfhost_merged.osty:3730:22
 				tree = frontCollectTreeSpan(tokens, idx, end, 2, tree)
-				// Osty: /tmp/selfhost_merged.osty:3729:22
+				// Osty: /tmp/selfhost_merged.osty:3731:22
 				skip = consumed - 1
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontFn{})) {
-				// Osty: /tmp/selfhost_merged.osty:3731:17
+				// Osty: /tmp/selfhost_merged.osty:3733:17
 				end := frontDeclEnd(tokens, idx, count)
 				_ = end
-				// Osty: /tmp/selfhost_merged.osty:3732:22
-				tree = frontTreePushNode(tree, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeFnDecl{}), idx, end, 1, 0))
-				// Osty: /tmp/selfhost_merged.osty:3733:22
-				tree = frontCollectFnTree(tokens, idx, end, 2, tree)
 				// Osty: /tmp/selfhost_merged.osty:3734:22
+				tree = frontTreePushNode(tree, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeFnDecl{}), idx, end, 1, 0))
+				// Osty: /tmp/selfhost_merged.osty:3735:22
+				tree = frontCollectFnTree(tokens, idx, end, 2, tree)
+				// Osty: /tmp/selfhost_merged.osty:3736:22
 				skip = end - idx - 1
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontStruct{})) {
-				// Osty: /tmp/selfhost_merged.osty:3736:17
+				// Osty: /tmp/selfhost_merged.osty:3738:17
 				end := frontDeclEnd(tokens, idx, count)
 				_ = end
-				// Osty: /tmp/selfhost_merged.osty:3737:22
+				// Osty: /tmp/selfhost_merged.osty:3739:22
 				tree = frontTreePushNode(tree, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeStructDecl{}), idx, end, 1, 0))
-				// Osty: /tmp/selfhost_merged.osty:3741:22
+				// Osty: /tmp/selfhost_merged.osty:3743:22
 				tree = frontCollectAggregateTree(tokens, idx, end, 2, tree)
-				// Osty: /tmp/selfhost_merged.osty:3742:22
+				// Osty: /tmp/selfhost_merged.osty:3744:22
 				skip = end - idx - 1
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontEnum{})) {
-				// Osty: /tmp/selfhost_merged.osty:3744:17
+				// Osty: /tmp/selfhost_merged.osty:3746:17
 				end := frontDeclEnd(tokens, idx, count)
 				_ = end
-				// Osty: /tmp/selfhost_merged.osty:3745:22
-				tree = frontTreePushNode(tree, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeEnumDecl{}), idx, end, 1, 0))
-				// Osty: /tmp/selfhost_merged.osty:3746:22
-				tree = frontCollectAggregateTree(tokens, idx, end, 2, tree)
 				// Osty: /tmp/selfhost_merged.osty:3747:22
+				tree = frontTreePushNode(tree, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeEnumDecl{}), idx, end, 1, 0))
+				// Osty: /tmp/selfhost_merged.osty:3748:22
+				tree = frontCollectAggregateTree(tokens, idx, end, 2, tree)
+				// Osty: /tmp/selfhost_merged.osty:3749:22
 				skip = end - idx - 1
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontInterface{})) {
-				// Osty: /tmp/selfhost_merged.osty:3749:17
+				// Osty: /tmp/selfhost_merged.osty:3751:17
 				end := frontDeclEnd(tokens, idx, count)
 				_ = end
-				// Osty: /tmp/selfhost_merged.osty:3750:22
+				// Osty: /tmp/selfhost_merged.osty:3752:22
 				tree = frontTreePushNode(tree, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeInterfaceDecl{}), idx, end, 1, 0))
-				// Osty: /tmp/selfhost_merged.osty:3754:22
+				// Osty: /tmp/selfhost_merged.osty:3756:22
 				tree = frontCollectAggregateTree(tokens, idx, end, 2, tree)
-				// Osty: /tmp/selfhost_merged.osty:3755:22
+				// Osty: /tmp/selfhost_merged.osty:3757:22
 				skip = end - idx - 1
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontType{})) {
-				// Osty: /tmp/selfhost_merged.osty:3757:17
+				// Osty: /tmp/selfhost_merged.osty:3759:17
 				end := frontDeclEnd(tokens, idx, count)
 				_ = end
-				// Osty: /tmp/selfhost_merged.osty:3758:22
+				// Osty: /tmp/selfhost_merged.osty:3760:22
 				tree = frontTreePushNode(tree, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeTypeAliasDecl{}), idx, end, 1, 0))
-				// Osty: /tmp/selfhost_merged.osty:3762:22
+				// Osty: /tmp/selfhost_merged.osty:3764:22
 				tree = frontCollectTypeTree(tokens, idx, end, 2, tree)
-				// Osty: /tmp/selfhost_merged.osty:3763:22
+				// Osty: /tmp/selfhost_merged.osty:3765:22
 				skip = end - idx - 1
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLet{})) {
-				// Osty: /tmp/selfhost_merged.osty:3765:17
+				// Osty: /tmp/selfhost_merged.osty:3767:17
 				end := frontDeclEnd(tokens, idx, count)
 				_ = end
-				// Osty: /tmp/selfhost_merged.osty:3766:22
-				tree = frontTreePushNode(tree, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeLetDecl{}), idx, end, 1, 0))
-				// Osty: /tmp/selfhost_merged.osty:3767:22
-				tree = frontCollectTreeSpan(tokens, idx, end, 2, tree)
 				// Osty: /tmp/selfhost_merged.osty:3768:22
+				tree = frontTreePushNode(tree, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeLetDecl{}), idx, end, 1, 0))
+				// Osty: /tmp/selfhost_merged.osty:3769:22
+				tree = frontCollectTreeSpan(tokens, idx, end, 2, tree)
+				// Osty: /tmp/selfhost_merged.osty:3770:22
 				skip = end - idx - 1
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontPub{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontNewline{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontSemicolon{})) {
-				// Osty: /tmp/selfhost_merged.osty:3770:17
+				// Osty: /tmp/selfhost_merged.osty:3772:17
 				_ = kind
 			} else {
-				// Osty: /tmp/selfhost_merged.osty:3772:22
+				// Osty: /tmp/selfhost_merged.osty:3774:22
 				tree = frontTreePushNode(tree, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeRecovery{}), idx, idx+1, 1, 0))
-				// Osty: /tmp/selfhost_merged.osty:3776:22
+				// Osty: /tmp/selfhost_merged.osty:3778:22
 				tree = frontTreePushDiagnostic(tree, frontParseDiagnostic(FrontParseDiagnosticKind(&FrontParseDiagnosticKind_FrontParseDiagUnexpectedToken{}), idx, idx+1, FrontTokenKind(&FrontTokenKind_FrontEOF{}), kind))
 			}
 		}
 	}
-	// Osty: /tmp/selfhost_merged.osty:3789:10
+	// Osty: /tmp/selfhost_merged.osty:3791:10
 	tree = frontAddDelimiterDiagnostics(tokens, count, tree)
 	return tree
 }
 
-// Osty: /tmp/selfhost_merged.osty:3793:5
+// Osty: /tmp/selfhost_merged.osty:3795:5
 func frontDeclEnd(tokens []*FrontToken, start int, count int) int {
-	// Osty: /tmp/selfhost_merged.osty:3794:5
+	// Osty: /tmp/selfhost_merged.osty:3796:5
 	kind := frontTokenAtList(tokens, start).kind
 	_ = kind
 	return func() int {
@@ -5755,171 +5755,171 @@ func frontDeclEnd(tokens []*FrontToken, start int, count int) int {
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:3812:5
+// Osty: /tmp/selfhost_merged.osty:3814:5
 func frontUseIsGo(tokens []*FrontToken, start int, end int) bool {
-	// Osty: /tmp/selfhost_merged.osty:3813:5
+	// Osty: /tmp/selfhost_merged.osty:3815:5
 	for idx := start + 1; idx < end; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:3814:9
+		// Osty: /tmp/selfhost_merged.osty:3816:9
 		tok := frontTokenAtList(tokens, idx)
 		_ = tok
-		// Osty: /tmp/selfhost_merged.osty:3815:9
+		// Osty: /tmp/selfhost_merged.osty:3817:9
 		if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) && tok.text == "go" {
-			// Osty: /tmp/selfhost_merged.osty:3816:13
+			// Osty: /tmp/selfhost_merged.osty:3818:13
 			return true
 		}
 	}
 	return false
 }
 
-// Osty: /tmp/selfhost_merged.osty:3822:5
+// Osty: /tmp/selfhost_merged.osty:3824:5
 func frontCollectFnTree(tokens []*FrontToken, start int, end int, depth int, tree *FrontParseTree) *FrontParseTree {
-	// Osty: /tmp/selfhost_merged.osty:3829:5
+	// Osty: /tmp/selfhost_merged.osty:3831:5
 	out := tree
 	_ = out
-	// Osty: /tmp/selfhost_merged.osty:3830:5
+	// Osty: /tmp/selfhost_merged.osty:3832:5
 	for idx := start; idx < end; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:3831:9
+		// Osty: /tmp/selfhost_merged.osty:3833:9
 		kind := frontTokenAtList(tokens, idx).kind
 		_ = kind
-		// Osty: /tmp/selfhost_merged.osty:3832:9
+		// Osty: /tmp/selfhost_merged.osty:3834:9
 		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLt{})) {
-			// Osty: /tmp/selfhost_merged.osty:3833:13
+			// Osty: /tmp/selfhost_merged.osty:3835:13
 			close := frontFindMatching(tokens, idx, end, FrontTokenKind(&FrontTokenKind_FrontLt{}), FrontTokenKind(&FrontTokenKind_FrontGt{}))
 			_ = close
-			// Osty: /tmp/selfhost_merged.osty:3834:17
+			// Osty: /tmp/selfhost_merged.osty:3836:17
 			out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeGenericParams{}), idx, close+1, depth, 0))
-			// Osty: /tmp/selfhost_merged.osty:3838:17
+			// Osty: /tmp/selfhost_merged.osty:3840:17
 			out = frontCollectTypeTree(tokens, idx+1, close, depth+1, out)
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) {
-			// Osty: /tmp/selfhost_merged.osty:3840:13
+			// Osty: /tmp/selfhost_merged.osty:3842:13
 			close := frontFindMatching(tokens, idx, end, FrontTokenKind(&FrontTokenKind_FrontLParen{}), FrontTokenKind(&FrontTokenKind_FrontRParen{}))
 			_ = close
-			// Osty: /tmp/selfhost_merged.osty:3841:17
+			// Osty: /tmp/selfhost_merged.osty:3843:17
 			out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeParamList{}), idx, close+1, depth, 0))
-			// Osty: /tmp/selfhost_merged.osty:3845:17
+			// Osty: /tmp/selfhost_merged.osty:3847:17
 			out = frontCollectParamNodes(tokens, idx, close, depth+1, out)
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontArrow{})) {
-			// Osty: /tmp/selfhost_merged.osty:3847:13
+			// Osty: /tmp/selfhost_merged.osty:3849:13
 			typeEnd := frontFindTypeEnd(tokens, idx+1, end)
 			_ = typeEnd
-			// Osty: /tmp/selfhost_merged.osty:3848:17
+			// Osty: /tmp/selfhost_merged.osty:3850:17
 			out = frontCollectTypeTree(tokens, idx+1, typeEnd, depth, out)
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:3850:13
+			// Osty: /tmp/selfhost_merged.osty:3852:13
 			close := frontFindMatching(tokens, idx, end, FrontTokenKind(&FrontTokenKind_FrontLBrace{}), FrontTokenKind(&FrontTokenKind_FrontRBrace{}))
 			_ = close
-			// Osty: /tmp/selfhost_merged.osty:3851:17
+			// Osty: /tmp/selfhost_merged.osty:3853:17
 			out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeBlock{}), idx, close+1, depth, 0))
-			// Osty: /tmp/selfhost_merged.osty:3852:17
+			// Osty: /tmp/selfhost_merged.osty:3854:17
 			out = frontCollectTreeSpan(tokens, idx+1, close, depth+1, out)
 		}
 	}
 	return out
 }
 
-// Osty: /tmp/selfhost_merged.osty:3858:5
+// Osty: /tmp/selfhost_merged.osty:3860:5
 func frontCollectAggregateTree(tokens []*FrontToken, start int, end int, depth int, tree *FrontParseTree) *FrontParseTree {
-	// Osty: /tmp/selfhost_merged.osty:3865:5
+	// Osty: /tmp/selfhost_merged.osty:3867:5
 	out := tree
 	_ = out
-	// Osty: /tmp/selfhost_merged.osty:3866:5
+	// Osty: /tmp/selfhost_merged.osty:3868:5
 	for idx := start; idx < end; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:3867:9
+		// Osty: /tmp/selfhost_merged.osty:3869:9
 		kind := frontTokenAtList(tokens, idx).kind
 		_ = kind
-		// Osty: /tmp/selfhost_merged.osty:3868:9
+		// Osty: /tmp/selfhost_merged.osty:3870:9
 		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontHash{})) && ostyEqual(frontTokenAtList(tokens, idx+1).kind, FrontTokenKind(&FrontTokenKind_FrontLBracket{})) {
-			// Osty: /tmp/selfhost_merged.osty:3869:13
+			// Osty: /tmp/selfhost_merged.osty:3871:13
 			close := frontFindMatching(tokens, idx+1, end, FrontTokenKind(&FrontTokenKind_FrontLBracket{}), FrontTokenKind(&FrontTokenKind_FrontRBracket{}))
 			_ = close
-			// Osty: /tmp/selfhost_merged.osty:3870:17
+			// Osty: /tmp/selfhost_merged.osty:3872:17
 			out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeAnnotation{}), idx, close+1, depth, 0))
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:3875:13
+			// Osty: /tmp/selfhost_merged.osty:3877:13
 			close := frontFindMatching(tokens, idx, end, FrontTokenKind(&FrontTokenKind_FrontLBrace{}), FrontTokenKind(&FrontTokenKind_FrontRBrace{}))
 			_ = close
-			// Osty: /tmp/selfhost_merged.osty:3876:17
+			// Osty: /tmp/selfhost_merged.osty:3878:17
 			out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeBlock{}), idx, close+1, depth, 0))
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontFn{})) {
-			// Osty: /tmp/selfhost_merged.osty:3878:13
+			// Osty: /tmp/selfhost_merged.osty:3880:13
 			fnEnd := frontDeclEnd(tokens, idx, end)
 			_ = fnEnd
-			// Osty: /tmp/selfhost_merged.osty:3879:17
+			// Osty: /tmp/selfhost_merged.osty:3881:17
 			out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeFnDecl{}), idx, fnEnd, depth, 1))
-			// Osty: /tmp/selfhost_merged.osty:3880:17
+			// Osty: /tmp/selfhost_merged.osty:3882:17
 			out = frontCollectFnTree(tokens, idx, fnEnd, depth+1, out)
 		} else if frontIsFieldStart(tokens, idx) {
-			// Osty: /tmp/selfhost_merged.osty:3882:13
+			// Osty: /tmp/selfhost_merged.osty:3884:13
 			fieldEnd := frontFindMemberEnd(tokens, idx, end)
 			_ = fieldEnd
-			// Osty: /tmp/selfhost_merged.osty:3883:17
+			// Osty: /tmp/selfhost_merged.osty:3885:17
 			out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeField{}), idx, fieldEnd, depth, 0))
-			// Osty: /tmp/selfhost_merged.osty:3884:17
+			// Osty: /tmp/selfhost_merged.osty:3886:17
 			out = frontCollectTypeTree(tokens, idx, fieldEnd, depth+1, out)
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) && !ostyEqual(frontTokenAtList(tokens, idx+1).kind, FrontTokenKind(&FrontTokenKind_FrontColon{})) {
-			// Osty: /tmp/selfhost_merged.osty:3886:13
+			// Osty: /tmp/selfhost_merged.osty:3888:13
 			variantEnd := frontVariantConsumed(tokens, idx, end)
 			_ = variantEnd
-			// Osty: /tmp/selfhost_merged.osty:3887:17
+			// Osty: /tmp/selfhost_merged.osty:3889:17
 			out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeVariant{}), idx, idx+variantEnd, depth, 0))
 		}
 	}
 	return out
 }
 
-// Osty: /tmp/selfhost_merged.osty:3896:5
+// Osty: /tmp/selfhost_merged.osty:3898:5
 func frontCollectParamNodes(tokens []*FrontToken, open int, close int, depth int, tree *FrontParseTree) *FrontParseTree {
-	// Osty: /tmp/selfhost_merged.osty:3903:5
+	// Osty: /tmp/selfhost_merged.osty:3905:5
 	out := tree
 	_ = out
-	// Osty: /tmp/selfhost_merged.osty:3904:5
+	// Osty: /tmp/selfhost_merged.osty:3906:5
 	skip := 0
 	_ = skip
-	// Osty: /tmp/selfhost_merged.osty:3905:5
+	// Osty: /tmp/selfhost_merged.osty:3907:5
 	for idx := open + 1; idx < close; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:3906:9
+		// Osty: /tmp/selfhost_merged.osty:3908:9
 		if skip > 0 {
-			// Osty: /tmp/selfhost_merged.osty:3907:18
+			// Osty: /tmp/selfhost_merged.osty:3909:18
 			skip = skip - 1
 		} else if (ostyEqual(frontTokenAtList(tokens, idx).kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) || ostyEqual(frontTokenAtList(tokens, idx).kind, FrontTokenKind(&FrontTokenKind_FrontUnderscore{}))) && ostyEqual(frontTokenAtList(tokens, idx+1).kind, FrontTokenKind(&FrontTokenKind_FrontColon{})) {
-			// Osty: /tmp/selfhost_merged.osty:3912:13
+			// Osty: /tmp/selfhost_merged.osty:3914:13
 			typeEnd := frontFindTypeEnd(tokens, idx+2, close)
 			_ = typeEnd
-			// Osty: /tmp/selfhost_merged.osty:3913:17
+			// Osty: /tmp/selfhost_merged.osty:3915:17
 			out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeParam{}), idx, typeEnd, depth, 0))
-			// Osty: /tmp/selfhost_merged.osty:3914:17
+			// Osty: /tmp/selfhost_merged.osty:3916:17
 			out = frontCollectTypeTree(tokens, idx+2, typeEnd, depth+1, out)
-			// Osty: /tmp/selfhost_merged.osty:3915:18
+			// Osty: /tmp/selfhost_merged.osty:3917:18
 			skip = typeEnd - idx - 1
 		}
 	}
 	return out
 }
 
-// Osty: /tmp/selfhost_merged.osty:3921:5
+// Osty: /tmp/selfhost_merged.osty:3923:5
 func frontCollectTypeTree(tokens []*FrontToken, start int, end int, depth int, tree *FrontParseTree) *FrontParseTree {
-	// Osty: /tmp/selfhost_merged.osty:3928:5
+	// Osty: /tmp/selfhost_merged.osty:3930:5
 	out := tree
 	_ = out
-	// Osty: /tmp/selfhost_merged.osty:3929:5
+	// Osty: /tmp/selfhost_merged.osty:3931:5
 	for idx := start; idx < end; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:3930:9
+		// Osty: /tmp/selfhost_merged.osty:3932:9
 		kind := frontTokenAtList(tokens, idx).kind
 		_ = kind
-		// Osty: /tmp/selfhost_merged.osty:3931:9
+		// Osty: /tmp/selfhost_merged.osty:3933:9
 		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontFn{})) {
-			// Osty: /tmp/selfhost_merged.osty:3932:17
+			// Osty: /tmp/selfhost_merged.osty:3934:17
 			out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeType{}), idx, idx+1, depth, 0))
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontQuestion{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontQQ{})) {
-			// Osty: /tmp/selfhost_merged.osty:3934:17
+			// Osty: /tmp/selfhost_merged.osty:3936:17
 			out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeType{}), idx, idx+1, depth, 1))
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) {
-			// Osty: /tmp/selfhost_merged.osty:3936:13
+			// Osty: /tmp/selfhost_merged.osty:3938:13
 			close := frontFindMatching(tokens, idx, end, FrontTokenKind(&FrontTokenKind_FrontLParen{}), FrontTokenKind(&FrontTokenKind_FrontRParen{}))
 			_ = close
-			// Osty: /tmp/selfhost_merged.osty:3937:13
+			// Osty: /tmp/selfhost_merged.osty:3939:13
 			if close == idx+1 || frontContainsTopLevelKind(tokens, idx+1, close, FrontTokenKind(&FrontTokenKind_FrontComma{})) {
-				// Osty: /tmp/selfhost_merged.osty:3938:21
+				// Osty: /tmp/selfhost_merged.osty:3940:21
 				out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeType{}), idx, close+1, depth, 2))
 			}
 		}
@@ -5927,166 +5927,166 @@ func frontCollectTypeTree(tokens []*FrontToken, start int, end int, depth int, t
 	return out
 }
 
-// Osty: /tmp/selfhost_merged.osty:3948:5
+// Osty: /tmp/selfhost_merged.osty:3950:5
 func frontCollectTreeSpan(tokens []*FrontToken, start int, end int, depth int, tree *FrontParseTree) *FrontParseTree {
-	// Osty: /tmp/selfhost_merged.osty:3955:5
+	// Osty: /tmp/selfhost_merged.osty:3957:5
 	out := tree
 	_ = out
-	// Osty: /tmp/selfhost_merged.osty:3956:5
+	// Osty: /tmp/selfhost_merged.osty:3958:5
 	skip := 0
 	_ = skip
-	// Osty: /tmp/selfhost_merged.osty:3957:5
+	// Osty: /tmp/selfhost_merged.osty:3959:5
 	for idx := start; idx < end; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:3958:9
+		// Osty: /tmp/selfhost_merged.osty:3960:9
 		if skip > 0 {
-			// Osty: /tmp/selfhost_merged.osty:3959:18
+			// Osty: /tmp/selfhost_merged.osty:3961:18
 			skip = skip - 1
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:3961:13
+			// Osty: /tmp/selfhost_merged.osty:3963:13
 			kind := frontTokenAtList(tokens, idx).kind
 			_ = kind
-			// Osty: /tmp/selfhost_merged.osty:3962:13
+			// Osty: /tmp/selfhost_merged.osty:3964:13
 			if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLet{})) {
-				// Osty: /tmp/selfhost_merged.osty:3963:17
+				// Osty: /tmp/selfhost_merged.osty:3965:17
 				stmtEnd := frontFindStatementEnd(tokens, idx, end)
 				_ = stmtEnd
-				// Osty: /tmp/selfhost_merged.osty:3964:21
+				// Osty: /tmp/selfhost_merged.osty:3966:21
 				out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeLetStmt{}), idx, stmtEnd, depth, 0))
-				// Osty: /tmp/selfhost_merged.osty:3968:17
+				// Osty: /tmp/selfhost_merged.osty:3970:17
 				patternEnd := frontFindLetPatternEnd(tokens, idx+1, stmtEnd)
 				_ = patternEnd
-				// Osty: /tmp/selfhost_merged.osty:3969:21
+				// Osty: /tmp/selfhost_merged.osty:3971:21
 				out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodePattern{}), idx+1, patternEnd, depth+1, 0))
-				// Osty: /tmp/selfhost_merged.osty:3973:17
+				// Osty: /tmp/selfhost_merged.osty:3975:17
 				for exprStart := patternEnd; exprStart < stmtEnd; exprStart++ {
-					// Osty: /tmp/selfhost_merged.osty:3974:21
+					// Osty: /tmp/selfhost_merged.osty:3976:21
 					if ostyEqual(frontTokenAtList(tokens, exprStart).kind, FrontTokenKind(&FrontTokenKind_FrontAssign{})) {
-						// Osty: /tmp/selfhost_merged.osty:3975:29
+						// Osty: /tmp/selfhost_merged.osty:3977:29
 						out = frontCollectTreeSpan(tokens, exprStart+1, stmtEnd, depth+1, out)
 					}
 				}
-				// Osty: /tmp/selfhost_merged.osty:3978:22
+				// Osty: /tmp/selfhost_merged.osty:3980:22
 				skip = stmtEnd - idx - 1
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontReturn{})) {
-				// Osty: /tmp/selfhost_merged.osty:3980:21
+				// Osty: /tmp/selfhost_merged.osty:3982:21
 				out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeReturnStmt{}), idx, frontFindStatementEnd(tokens, idx, end), depth, 0))
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBreak{})) {
-				// Osty: /tmp/selfhost_merged.osty:3991:21
+				// Osty: /tmp/selfhost_merged.osty:3993:21
 				out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeBreakStmt{}), idx, idx+1, depth, 0))
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontContinue{})) {
-				// Osty: /tmp/selfhost_merged.osty:3996:21
+				// Osty: /tmp/selfhost_merged.osty:3998:21
 				out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeContinueStmt{}), idx, idx+1, depth, 0))
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontFor{})) {
-				// Osty: /tmp/selfhost_merged.osty:4001:17
+				// Osty: /tmp/selfhost_merged.osty:4003:17
 				bodyClose := frontFindFollowingBlockClose(tokens, idx, end)
 				_ = bodyClose
-				// Osty: /tmp/selfhost_merged.osty:4002:21
+				// Osty: /tmp/selfhost_merged.osty:4004:21
 				out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeForStmt{}), idx, bodyClose+1, depth, 0))
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontDefer{})) {
-				// Osty: /tmp/selfhost_merged.osty:4007:21
+				// Osty: /tmp/selfhost_merged.osty:4009:21
 				out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeDeferStmt{}), idx, frontFindStatementEnd(tokens, idx, end), depth, 0))
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontIf{})) {
-				// Osty: /tmp/selfhost_merged.osty:4018:17
+				// Osty: /tmp/selfhost_merged.osty:4020:17
 				bodyClose := frontFindFollowingBlockClose(tokens, idx, end)
 				_ = bodyClose
-				// Osty: /tmp/selfhost_merged.osty:4019:21
+				// Osty: /tmp/selfhost_merged.osty:4021:21
 				out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeIfExpr{}), idx, bodyClose+1, depth, 0))
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontMatch{})) {
-				// Osty: /tmp/selfhost_merged.osty:4024:17
+				// Osty: /tmp/selfhost_merged.osty:4026:17
 				bodyClose := frontFindFollowingBlockClose(tokens, idx, end)
 				_ = bodyClose
-				// Osty: /tmp/selfhost_merged.osty:4025:21
+				// Osty: /tmp/selfhost_merged.osty:4027:21
 				out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeMatchExpr{}), idx, bodyClose+1, depth, 0))
-				// Osty: /tmp/selfhost_merged.osty:4029:21
+				// Osty: /tmp/selfhost_merged.osty:4031:21
 				out = frontCollectMatchArmNodes(tokens, idx, bodyClose, depth+1, out)
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) && frontIsCallOpen(tokens, idx, start) {
-				// Osty: /tmp/selfhost_merged.osty:4031:17
+				// Osty: /tmp/selfhost_merged.osty:4033:17
 				close := frontFindMatching(tokens, idx, end, FrontTokenKind(&FrontTokenKind_FrontLParen{}), FrontTokenKind(&FrontTokenKind_FrontRParen{}))
 				_ = close
-				// Osty: /tmp/selfhost_merged.osty:4032:21
+				// Osty: /tmp/selfhost_merged.osty:4034:21
 				out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeCallExpr{}), idx-1, close+1, depth, 0))
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBracket{})) {
-				// Osty: /tmp/selfhost_merged.osty:4037:17
+				// Osty: /tmp/selfhost_merged.osty:4039:17
 				close := frontFindMatching(tokens, idx, end, FrontTokenKind(&FrontTokenKind_FrontLBracket{}), FrontTokenKind(&FrontTokenKind_FrontRBracket{}))
 				_ = close
-				// Osty: /tmp/selfhost_merged.osty:4038:17
+				// Osty: /tmp/selfhost_merged.osty:4040:17
 				if frontIsIndexOpen(tokens, idx, start) {
-					// Osty: /tmp/selfhost_merged.osty:4039:25
+					// Osty: /tmp/selfhost_merged.osty:4041:25
 					out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeIndexExpr{}), idx-1, close+1, depth, 0))
 				} else {
-					// Osty: /tmp/selfhost_merged.osty:4044:25
+					// Osty: /tmp/selfhost_merged.osty:4046:25
 					out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeListExpr{}), idx, close+1, depth, 0))
 				}
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) {
-				// Osty: /tmp/selfhost_merged.osty:4050:17
+				// Osty: /tmp/selfhost_merged.osty:4052:17
 				close := frontFindMatching(tokens, idx, end, FrontTokenKind(&FrontTokenKind_FrontLParen{}), FrontTokenKind(&FrontTokenKind_FrontRParen{}))
 				_ = close
-				// Osty: /tmp/selfhost_merged.osty:4051:17
+				// Osty: /tmp/selfhost_merged.osty:4053:17
 				if close == idx+1 || frontContainsTopLevelKind(tokens, idx+1, close, FrontTokenKind(&FrontTokenKind_FrontComma{})) {
-					// Osty: /tmp/selfhost_merged.osty:4052:25
+					// Osty: /tmp/selfhost_merged.osty:4054:25
 					out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeTupleExpr{}), idx, close+1, depth, 0))
 				}
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
-				// Osty: /tmp/selfhost_merged.osty:4058:17
+				// Osty: /tmp/selfhost_merged.osty:4060:17
 				close := frontFindMatching(tokens, idx, end, FrontTokenKind(&FrontTokenKind_FrontLBrace{}), FrontTokenKind(&FrontTokenKind_FrontRBrace{}))
 				_ = close
-				// Osty: /tmp/selfhost_merged.osty:4059:17
+				// Osty: /tmp/selfhost_merged.osty:4061:17
 				if frontIsStructLiteralOpen(tokens, idx, start) {
-					// Osty: /tmp/selfhost_merged.osty:4060:25
+					// Osty: /tmp/selfhost_merged.osty:4062:25
 					out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeStructExpr{}), idx-1, close+1, depth, 0))
 				} else if frontIsMapLiteralOpen(tokens, idx, end) {
-					// Osty: /tmp/selfhost_merged.osty:4065:25
+					// Osty: /tmp/selfhost_merged.osty:4067:25
 					out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeMapExpr{}), idx, close+1, depth, 0))
 				} else {
-					// Osty: /tmp/selfhost_merged.osty:4070:25
+					// Osty: /tmp/selfhost_merged.osty:4072:25
 					out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeBlock{}), idx, close+1, depth, 0))
 				}
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontColonColon{})) && ostyEqual(frontTokenAtList(tokens, idx+1).kind, FrontTokenKind(&FrontTokenKind_FrontLt{})) {
-				// Osty: /tmp/selfhost_merged.osty:4076:17
+				// Osty: /tmp/selfhost_merged.osty:4078:17
 				close := frontFindMatching(tokens, idx+1, end, FrontTokenKind(&FrontTokenKind_FrontLt{}), FrontTokenKind(&FrontTokenKind_FrontGt{}))
 				_ = close
-				// Osty: /tmp/selfhost_merged.osty:4077:21
+				// Osty: /tmp/selfhost_merged.osty:4079:21
 				out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeTurbofishExpr{}), idx, close+1, depth, 0))
-				// Osty: /tmp/selfhost_merged.osty:4081:22
+				// Osty: /tmp/selfhost_merged.osty:4083:22
 				skip = close - idx
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBitOr{})) && frontIsClosurePipe(tokens, idx, start, end) {
-				// Osty: /tmp/selfhost_merged.osty:4083:17
+				// Osty: /tmp/selfhost_merged.osty:4085:17
 				close := frontFindNextTokenKind(tokens, idx+1, end, FrontTokenKind(&FrontTokenKind_FrontBitOr{}))
 				_ = close
-				// Osty: /tmp/selfhost_merged.osty:4084:21
+				// Osty: /tmp/selfhost_merged.osty:4086:21
 				out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeClosureExpr{}), idx, close+1, depth, 0))
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontOr{})) && frontIsClosureZeroPipe(tokens, idx, start) {
-				// Osty: /tmp/selfhost_merged.osty:4089:21
+				// Osty: /tmp/selfhost_merged.osty:4091:21
 				out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeClosureExpr{}), idx, idx+1, depth, 1))
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontDot{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontQDot{})) {
-				// Osty: /tmp/selfhost_merged.osty:4094:21
+				// Osty: /tmp/selfhost_merged.osty:4096:21
 				out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeSelectorExpr{}), idx, idx+1, depth, 0))
-				// Osty: /tmp/selfhost_merged.osty:4098:17
+				// Osty: /tmp/selfhost_merged.osty:4100:17
 				if ostyEqual(frontTokenAtList(tokens, idx+1).kind, FrontTokenKind(&FrontTokenKind_FrontNewline{})) || ostyEqual(frontTokenAtList(tokens, idx+1).kind, FrontTokenKind(&FrontTokenKind_FrontEOF{})) {
-					// Osty: /tmp/selfhost_merged.osty:4102:25
+					// Osty: /tmp/selfhost_merged.osty:4104:25
 					out = frontTreePushDiagnostic(out, frontParseDiagnostic(FrontParseDiagnosticKind(&FrontParseDiagnosticKind_FrontParseDiagTrailingSelector{}), idx, idx+1, FrontTokenKind(&FrontTokenKind_FrontIdent{}), frontTokenAtList(tokens, idx+1).kind))
 				}
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontChanArrow{})) {
-				// Osty: /tmp/selfhost_merged.osty:4114:21
+				// Osty: /tmp/selfhost_merged.osty:4116:21
 				out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeChannelSendStmt{}), idx-1, idx+2, depth, 0))
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontQuestion{})) {
-				// Osty: /tmp/selfhost_merged.osty:4119:21
+				// Osty: /tmp/selfhost_merged.osty:4121:21
 				out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeQuestionExpr{}), idx, idx+1, depth, 0))
 			} else if (ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontDotDot{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontDotDotEq{}))) && !(frontIsSpreadToken(tokens, idx, start)) {
-				// Osty: /tmp/selfhost_merged.osty:4128:21
+				// Osty: /tmp/selfhost_merged.osty:4130:21
 				out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeRangeExpr{}), idx, idx+1, depth, 0))
-				// Osty: /tmp/selfhost_merged.osty:4132:21
+				// Osty: /tmp/selfhost_merged.osty:4134:21
 				out = frontMaybeNonAssocDiagnostic(tokens, idx, end, out)
 			} else if frontIsAssignOp(kind) {
-				// Osty: /tmp/selfhost_merged.osty:4134:21
+				// Osty: /tmp/selfhost_merged.osty:4136:21
 				out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeAssignStmt{}), idx-1, idx+2, depth, 0))
 			} else if frontIsBinaryOp(kind) {
-				// Osty: /tmp/selfhost_merged.osty:4139:21
+				// Osty: /tmp/selfhost_merged.osty:4141:21
 				out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeBinaryExpr{}), idx, idx+1, depth, 0))
-				// Osty: /tmp/selfhost_merged.osty:4143:21
+				// Osty: /tmp/selfhost_merged.osty:4145:21
 				out = frontMaybeNonAssocDiagnostic(tokens, idx, end, out)
 			} else if frontIsUnaryOp(kind) {
-				// Osty: /tmp/selfhost_merged.osty:4145:21
+				// Osty: /tmp/selfhost_merged.osty:4147:21
 				out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeUnaryExpr{}), idx, idx+1, depth, 0))
 			}
 		}
@@ -6094,61 +6094,61 @@ func frontCollectTreeSpan(tokens []*FrontToken, start int, end int, depth int, t
 	return out
 }
 
-// Osty: /tmp/selfhost_merged.osty:4155:5
+// Osty: /tmp/selfhost_merged.osty:4157:5
 func frontCollectMatchArmNodes(tokens []*FrontToken, matchIdx int, close int, depth int, tree *FrontParseTree) *FrontParseTree {
-	// Osty: /tmp/selfhost_merged.osty:4162:5
+	// Osty: /tmp/selfhost_merged.osty:4164:5
 	out := tree
 	_ = out
-	// Osty: /tmp/selfhost_merged.osty:4163:5
+	// Osty: /tmp/selfhost_merged.osty:4165:5
 	armStart := matchIdx + 1
 	_ = armStart
-	// Osty: /tmp/selfhost_merged.osty:4164:5
+	// Osty: /tmp/selfhost_merged.osty:4166:5
 	braceDepth := 0
 	_ = braceDepth
-	// Osty: /tmp/selfhost_merged.osty:4165:5
+	// Osty: /tmp/selfhost_merged.osty:4167:5
 	for idx := matchIdx + 1; idx < close; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:4166:9
+		// Osty: /tmp/selfhost_merged.osty:4168:9
 		kind := frontTokenAtList(tokens, idx).kind
 		_ = kind
-		// Osty: /tmp/selfhost_merged.osty:4167:9
+		// Osty: /tmp/selfhost_merged.osty:4169:9
 		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:4168:24
+			// Osty: /tmp/selfhost_merged.osty:4170:24
 			braceDepth = braceDepth + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:4170:13
+			// Osty: /tmp/selfhost_merged.osty:4172:13
 			if braceDepth > 0 {
-				// Osty: /tmp/selfhost_merged.osty:4171:28
+				// Osty: /tmp/selfhost_merged.osty:4173:28
 				braceDepth = braceDepth - 1
 			}
 		} else if braceDepth == 1 && ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontArrow{})) {
-			// Osty: /tmp/selfhost_merged.osty:4174:17
+			// Osty: /tmp/selfhost_merged.osty:4176:17
 			out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodeMatchArm{}), armStart, idx+1, depth, 0))
-			// Osty: /tmp/selfhost_merged.osty:4178:17
+			// Osty: /tmp/selfhost_merged.osty:4180:17
 			out = frontTreePushNode(out, frontParseNode(FrontNodeKind(&FrontNodeKind_FrontNodePattern{}), armStart, idx, depth+1, 0))
-			// Osty: /tmp/selfhost_merged.osty:4182:22
+			// Osty: /tmp/selfhost_merged.osty:4184:22
 			armStart = idx + 1
 		} else if braceDepth == 1 && ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontComma{})) {
-			// Osty: /tmp/selfhost_merged.osty:4184:22
+			// Osty: /tmp/selfhost_merged.osty:4186:22
 			armStart = idx + 1
 		}
 	}
 	return out
 }
 
-// Osty: /tmp/selfhost_merged.osty:4190:5
+// Osty: /tmp/selfhost_merged.osty:4192:5
 func frontMaybeNonAssocDiagnostic(tokens []*FrontToken, idx int, end int, tree *FrontParseTree) *FrontParseTree {
-	// Osty: /tmp/selfhost_merged.osty:4196:5
+	// Osty: /tmp/selfhost_merged.osty:4198:5
 	op := frontTokenAtList(tokens, idx).kind
 	_ = op
-	// Osty: /tmp/selfhost_merged.osty:4197:5
+	// Osty: /tmp/selfhost_merged.osty:4199:5
 	if !(frontIsNonAssocOp(op)) {
-		// Osty: /tmp/selfhost_merged.osty:4198:9
+		// Osty: /tmp/selfhost_merged.osty:4200:9
 		return tree
 	}
-	// Osty: /tmp/selfhost_merged.osty:4200:5
+	// Osty: /tmp/selfhost_merged.osty:4202:5
 	next := frontFindNextTopLevelOperator(tokens, idx+1, end)
 	_ = next
-	// Osty: /tmp/selfhost_merged.osty:4201:5
+	// Osty: /tmp/selfhost_merged.osty:4203:5
 	nextKind := frontTokenAtList(tokens, next).kind
 	_ = nextKind
 	return func() *FrontParseTree {
@@ -6160,227 +6160,227 @@ func frontMaybeNonAssocDiagnostic(tokens []*FrontToken, idx int, end int, tree *
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:4218:5
+// Osty: /tmp/selfhost_merged.osty:4220:5
 func frontFindNextTopLevelOperator(tokens []*FrontToken, start int, end int) int {
-	// Osty: /tmp/selfhost_merged.osty:4219:5
+	// Osty: /tmp/selfhost_merged.osty:4221:5
 	parenDepth := 0
 	_ = parenDepth
-	// Osty: /tmp/selfhost_merged.osty:4220:5
+	// Osty: /tmp/selfhost_merged.osty:4222:5
 	bracketDepth := 0
 	_ = bracketDepth
-	// Osty: /tmp/selfhost_merged.osty:4221:5
+	// Osty: /tmp/selfhost_merged.osty:4223:5
 	braceDepth := 0
 	_ = braceDepth
-	// Osty: /tmp/selfhost_merged.osty:4222:5
+	// Osty: /tmp/selfhost_merged.osty:4224:5
 	for idx := start; idx < end; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:4223:9
+		// Osty: /tmp/selfhost_merged.osty:4225:9
 		kind := frontTokenAtList(tokens, idx).kind
 		_ = kind
-		// Osty: /tmp/selfhost_merged.osty:4224:9
+		// Osty: /tmp/selfhost_merged.osty:4226:9
 		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) {
-			// Osty: /tmp/selfhost_merged.osty:4225:24
+			// Osty: /tmp/selfhost_merged.osty:4227:24
 			parenDepth = parenDepth + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRParen{})) {
-			// Osty: /tmp/selfhost_merged.osty:4227:13
+			// Osty: /tmp/selfhost_merged.osty:4229:13
 			if parenDepth > 0 {
-				// Osty: /tmp/selfhost_merged.osty:4228:28
+				// Osty: /tmp/selfhost_merged.osty:4230:28
 				parenDepth = parenDepth - 1
 			}
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBracket{})) {
-			// Osty: /tmp/selfhost_merged.osty:4231:26
+			// Osty: /tmp/selfhost_merged.osty:4233:26
 			bracketDepth = bracketDepth + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBracket{})) {
-			// Osty: /tmp/selfhost_merged.osty:4233:13
+			// Osty: /tmp/selfhost_merged.osty:4235:13
 			if bracketDepth > 0 {
-				// Osty: /tmp/selfhost_merged.osty:4234:30
+				// Osty: /tmp/selfhost_merged.osty:4236:30
 				bracketDepth = bracketDepth - 1
 			}
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:4237:24
+			// Osty: /tmp/selfhost_merged.osty:4239:24
 			braceDepth = braceDepth + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:4239:13
+			// Osty: /tmp/selfhost_merged.osty:4241:13
 			if braceDepth > 0 {
-				// Osty: /tmp/selfhost_merged.osty:4240:28
+				// Osty: /tmp/selfhost_merged.osty:4242:28
 				braceDepth = braceDepth - 1
 			}
 		} else if parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && frontIsBinaryOp(kind) {
-			// Osty: /tmp/selfhost_merged.osty:4243:13
+			// Osty: /tmp/selfhost_merged.osty:4245:13
 			return idx
 		}
 	}
 	return end
 }
 
-// Osty: /tmp/selfhost_merged.osty:4249:5
+// Osty: /tmp/selfhost_merged.osty:4251:5
 func frontIsNonAssocOp(kind FrontTokenKind) bool {
 	return ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontEq{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontNeq{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLt{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontGt{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLeq{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontGeq{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontDotDot{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontDotDotEq{}))
 }
 
-// Osty: /tmp/selfhost_merged.osty:4253:5
+// Osty: /tmp/selfhost_merged.osty:4255:5
 func frontSameNonAssocLevel(left FrontTokenKind, right FrontTokenKind) bool {
-	// Osty: /tmp/selfhost_merged.osty:4254:5
+	// Osty: /tmp/selfhost_merged.osty:4256:5
 	if (ostyEqual(left, FrontTokenKind(&FrontTokenKind_FrontDotDot{})) || ostyEqual(left, FrontTokenKind(&FrontTokenKind_FrontDotDotEq{}))) && (ostyEqual(right, FrontTokenKind(&FrontTokenKind_FrontDotDot{})) || ostyEqual(right, FrontTokenKind(&FrontTokenKind_FrontDotDotEq{}))) {
-		// Osty: /tmp/selfhost_merged.osty:4255:9
+		// Osty: /tmp/selfhost_merged.osty:4257:9
 		return true
 	}
 	return frontIsComparisonOp(left) && frontIsComparisonOp(right)
 }
 
-// Osty: /tmp/selfhost_merged.osty:4260:5
+// Osty: /tmp/selfhost_merged.osty:4262:5
 func frontIsComparisonOp(kind FrontTokenKind) bool {
 	return ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontEq{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontNeq{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLt{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontGt{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLeq{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontGeq{}))
 }
 
-// Osty: /tmp/selfhost_merged.osty:4264:5
+// Osty: /tmp/selfhost_merged.osty:4266:5
 func frontAddDelimiterDiagnostics(tokens []*FrontToken, count int, tree *FrontParseTree) *FrontParseTree {
-	// Osty: /tmp/selfhost_merged.osty:4269:5
+	// Osty: /tmp/selfhost_merged.osty:4271:5
 	out := tree
 	_ = out
-	// Osty: /tmp/selfhost_merged.osty:4270:5
+	// Osty: /tmp/selfhost_merged.osty:4272:5
 	parenDepth := 0
 	_ = parenDepth
-	// Osty: /tmp/selfhost_merged.osty:4271:5
+	// Osty: /tmp/selfhost_merged.osty:4273:5
 	braceDepth := 0
 	_ = braceDepth
-	// Osty: /tmp/selfhost_merged.osty:4272:5
+	// Osty: /tmp/selfhost_merged.osty:4274:5
 	bracketDepth := 0
 	_ = bracketDepth
-	// Osty: /tmp/selfhost_merged.osty:4273:5
+	// Osty: /tmp/selfhost_merged.osty:4275:5
 	for idx := 0; idx < count; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:4274:9
+		// Osty: /tmp/selfhost_merged.osty:4276:9
 		kind := frontTokenAtList(tokens, idx).kind
 		_ = kind
-		// Osty: /tmp/selfhost_merged.osty:4275:9
+		// Osty: /tmp/selfhost_merged.osty:4277:9
 		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) {
-			// Osty: /tmp/selfhost_merged.osty:4276:24
+			// Osty: /tmp/selfhost_merged.osty:4278:24
 			parenDepth = parenDepth + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRParen{})) {
-			// Osty: /tmp/selfhost_merged.osty:4278:13
+			// Osty: /tmp/selfhost_merged.osty:4280:13
 			if parenDepth == 0 {
-				// Osty: /tmp/selfhost_merged.osty:4279:21
+				// Osty: /tmp/selfhost_merged.osty:4281:21
 				out = frontTreePushDiagnostic(out, frontParseDiagnostic(FrontParseDiagnosticKind(&FrontParseDiagnosticKind_FrontParseDiagUnmatchedDelimiter{}), idx, idx+1, FrontTokenKind(&FrontTokenKind_FrontLParen{}), kind))
 			} else {
-				// Osty: /tmp/selfhost_merged.osty:4290:28
+				// Osty: /tmp/selfhost_merged.osty:4292:28
 				parenDepth = parenDepth - 1
 			}
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:4293:24
+			// Osty: /tmp/selfhost_merged.osty:4295:24
 			braceDepth = braceDepth + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:4295:13
+			// Osty: /tmp/selfhost_merged.osty:4297:13
 			if braceDepth == 0 {
-				// Osty: /tmp/selfhost_merged.osty:4296:21
+				// Osty: /tmp/selfhost_merged.osty:4298:21
 				out = frontTreePushDiagnostic(out, frontParseDiagnostic(FrontParseDiagnosticKind(&FrontParseDiagnosticKind_FrontParseDiagUnmatchedDelimiter{}), idx, idx+1, FrontTokenKind(&FrontTokenKind_FrontLBrace{}), kind))
 			} else {
-				// Osty: /tmp/selfhost_merged.osty:4307:28
+				// Osty: /tmp/selfhost_merged.osty:4309:28
 				braceDepth = braceDepth - 1
 			}
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBracket{})) {
-			// Osty: /tmp/selfhost_merged.osty:4310:26
+			// Osty: /tmp/selfhost_merged.osty:4312:26
 			bracketDepth = bracketDepth + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBracket{})) {
-			// Osty: /tmp/selfhost_merged.osty:4312:13
+			// Osty: /tmp/selfhost_merged.osty:4314:13
 			if bracketDepth == 0 {
-				// Osty: /tmp/selfhost_merged.osty:4313:21
+				// Osty: /tmp/selfhost_merged.osty:4315:21
 				out = frontTreePushDiagnostic(out, frontParseDiagnostic(FrontParseDiagnosticKind(&FrontParseDiagnosticKind_FrontParseDiagUnmatchedDelimiter{}), idx, idx+1, FrontTokenKind(&FrontTokenKind_FrontLBracket{}), kind))
 			} else {
-				// Osty: /tmp/selfhost_merged.osty:4324:30
+				// Osty: /tmp/selfhost_merged.osty:4326:30
 				bracketDepth = bracketDepth - 1
 			}
 		}
 	}
-	// Osty: /tmp/selfhost_merged.osty:4328:5
+	// Osty: /tmp/selfhost_merged.osty:4330:5
 	if parenDepth > 0 {
-		// Osty: /tmp/selfhost_merged.osty:4329:13
+		// Osty: /tmp/selfhost_merged.osty:4331:13
 		out = frontTreePushDiagnostic(out, frontParseDiagnostic(FrontParseDiagnosticKind(&FrontParseDiagnosticKind_FrontParseDiagMissingDelimiter{}), count-1, count, FrontTokenKind(&FrontTokenKind_FrontRParen{}), FrontTokenKind(&FrontTokenKind_FrontEOF{})))
 	}
-	// Osty: /tmp/selfhost_merged.osty:4340:5
+	// Osty: /tmp/selfhost_merged.osty:4342:5
 	if braceDepth > 0 {
-		// Osty: /tmp/selfhost_merged.osty:4341:13
+		// Osty: /tmp/selfhost_merged.osty:4343:13
 		out = frontTreePushDiagnostic(out, frontParseDiagnostic(FrontParseDiagnosticKind(&FrontParseDiagnosticKind_FrontParseDiagMissingDelimiter{}), count-1, count, FrontTokenKind(&FrontTokenKind_FrontRBrace{}), FrontTokenKind(&FrontTokenKind_FrontEOF{})))
 	}
-	// Osty: /tmp/selfhost_merged.osty:4352:5
+	// Osty: /tmp/selfhost_merged.osty:4354:5
 	if bracketDepth > 0 {
-		// Osty: /tmp/selfhost_merged.osty:4353:13
+		// Osty: /tmp/selfhost_merged.osty:4355:13
 		out = frontTreePushDiagnostic(out, frontParseDiagnostic(FrontParseDiagnosticKind(&FrontParseDiagnosticKind_FrontParseDiagMissingDelimiter{}), count-1, count, FrontTokenKind(&FrontTokenKind_FrontRBracket{}), FrontTokenKind(&FrontTokenKind_FrontEOF{})))
 	}
 	return out
 }
 
-// Osty: /tmp/selfhost_merged.osty:4367:5
+// Osty: /tmp/selfhost_merged.osty:4369:5
 func frontParseTreeNodeCount(tree *FrontParseTree) int {
-	// Osty: /tmp/selfhost_merged.osty:4368:5
+	// Osty: /tmp/selfhost_merged.osty:4370:5
 	count := 0
 	_ = count
-	// Osty: /tmp/selfhost_merged.osty:4369:5
+	// Osty: /tmp/selfhost_merged.osty:4371:5
 	for _, node := range tree.nodes {
-		// Osty: /tmp/selfhost_merged.osty:4370:9
+		// Osty: /tmp/selfhost_merged.osty:4372:9
 		_ = node
-		// Osty: /tmp/selfhost_merged.osty:4371:15
+		// Osty: /tmp/selfhost_merged.osty:4373:15
 		count = count + 1
 	}
 	return count
 }
 
-// Osty: /tmp/selfhost_merged.osty:4376:5
+// Osty: /tmp/selfhost_merged.osty:4378:5
 func frontParseTreeDiagnosticCount(tree *FrontParseTree) int {
-	// Osty: /tmp/selfhost_merged.osty:4377:5
+	// Osty: /tmp/selfhost_merged.osty:4379:5
 	count := 0
 	_ = count
-	// Osty: /tmp/selfhost_merged.osty:4378:5
+	// Osty: /tmp/selfhost_merged.osty:4380:5
 	for _, diag := range tree.diagnostics {
-		// Osty: /tmp/selfhost_merged.osty:4379:9
+		// Osty: /tmp/selfhost_merged.osty:4381:9
 		_ = diag
-		// Osty: /tmp/selfhost_merged.osty:4380:15
+		// Osty: /tmp/selfhost_merged.osty:4382:15
 		count = count + 1
 	}
 	return count
 }
 
-// Osty: /tmp/selfhost_merged.osty:4385:5
+// Osty: /tmp/selfhost_merged.osty:4387:5
 func frontParseTreeNodeKindCount(tree *FrontParseTree, kind FrontNodeKind) int {
-	// Osty: /tmp/selfhost_merged.osty:4386:5
+	// Osty: /tmp/selfhost_merged.osty:4388:5
 	count := 0
 	_ = count
-	// Osty: /tmp/selfhost_merged.osty:4387:5
+	// Osty: /tmp/selfhost_merged.osty:4389:5
 	for _, node := range tree.nodes {
-		// Osty: /tmp/selfhost_merged.osty:4388:9
+		// Osty: /tmp/selfhost_merged.osty:4390:9
 		if ostyEqual(node.kind, kind) {
-			// Osty: /tmp/selfhost_merged.osty:4389:19
+			// Osty: /tmp/selfhost_merged.osty:4391:19
 			count = count + 1
 		}
 	}
 	return count
 }
 
-// Osty: /tmp/selfhost_merged.osty:4395:5
+// Osty: /tmp/selfhost_merged.osty:4397:5
 func frontParseTreeDiagnosticKindCount(tree *FrontParseTree, kind FrontParseDiagnosticKind) int {
-	// Osty: /tmp/selfhost_merged.osty:4399:5
+	// Osty: /tmp/selfhost_merged.osty:4401:5
 	count := 0
 	_ = count
-	// Osty: /tmp/selfhost_merged.osty:4400:5
+	// Osty: /tmp/selfhost_merged.osty:4402:5
 	for _, diag := range tree.diagnostics {
-		// Osty: /tmp/selfhost_merged.osty:4401:9
+		// Osty: /tmp/selfhost_merged.osty:4403:9
 		if ostyEqual(diag.kind, kind) {
-			// Osty: /tmp/selfhost_merged.osty:4402:19
+			// Osty: /tmp/selfhost_merged.osty:4404:19
 			count = count + 1
 		}
 	}
 	return count
 }
 
-// Osty: /tmp/selfhost_merged.osty:4408:5
+// Osty: /tmp/selfhost_merged.osty:4410:5
 func frontParseTreeNodeNameCount(tree *FrontParseTree, name string) int {
 	return frontParseTreeNodeKindCount(tree, frontNodeKindByName(name))
 }
 
-// Osty: /tmp/selfhost_merged.osty:4412:5
+// Osty: /tmp/selfhost_merged.osty:4414:5
 func frontParseTreeDiagnosticNameCount(tree *FrontParseTree, name string) int {
 	return frontParseTreeDiagnosticKindCount(tree, frontParseDiagnosticKindByName(name))
 }
 
-// Osty: /tmp/selfhost_merged.osty:4416:5
+// Osty: /tmp/selfhost_merged.osty:4418:5
 func frontNodeKindByName(name string) FrontNodeKind {
 	return func() FrontNodeKind {
 		if name == "file" {
@@ -6473,7 +6473,7 @@ func frontNodeKindByName(name string) FrontNodeKind {
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:4506:5
+// Osty: /tmp/selfhost_merged.osty:4508:5
 func frontParseDiagnosticKindByName(name string) FrontParseDiagnosticKind {
 	return func() FrontParseDiagnosticKind {
 		if name == "unexpected" {
@@ -6494,264 +6494,264 @@ func frontParseDiagnosticKindByName(name string) FrontParseDiagnosticKind {
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:4524:5
+// Osty: /tmp/selfhost_merged.osty:4526:5
 func frontParseTreeInvalidSpanCount(tree *FrontParseTree) int {
-	// Osty: /tmp/selfhost_merged.osty:4525:5
+	// Osty: /tmp/selfhost_merged.osty:4527:5
 	invalid := 0
 	_ = invalid
-	// Osty: /tmp/selfhost_merged.osty:4526:5
+	// Osty: /tmp/selfhost_merged.osty:4528:5
 	for _, node := range tree.nodes {
-		// Osty: /tmp/selfhost_merged.osty:4527:9
+		// Osty: /tmp/selfhost_merged.osty:4529:9
 		if node.start < 0 || node.end < node.start || node.end > tree.tokens {
-			// Osty: /tmp/selfhost_merged.osty:4528:21
+			// Osty: /tmp/selfhost_merged.osty:4530:21
 			invalid = invalid + 1
 		}
 	}
-	// Osty: /tmp/selfhost_merged.osty:4531:5
+	// Osty: /tmp/selfhost_merged.osty:4533:5
 	for _, diag := range tree.diagnostics {
-		// Osty: /tmp/selfhost_merged.osty:4532:9
+		// Osty: /tmp/selfhost_merged.osty:4534:9
 		if diag.start < 0 || diag.end < diag.start || diag.end > tree.tokens {
-			// Osty: /tmp/selfhost_merged.osty:4533:21
+			// Osty: /tmp/selfhost_merged.osty:4535:21
 			invalid = invalid + 1
 		}
 	}
 	return invalid
 }
 
-// Osty: /tmp/selfhost_merged.osty:4539:5
+// Osty: /tmp/selfhost_merged.osty:4541:5
 func frontParseUseConsumed(tokens []*FrontToken, start int, count int) int {
-	// Osty: /tmp/selfhost_merged.osty:4540:5
+	// Osty: /tmp/selfhost_merged.osty:4542:5
 	consumed := 1
 	_ = consumed
-	// Osty: /tmp/selfhost_merged.osty:4541:5
+	// Osty: /tmp/selfhost_merged.osty:4543:5
 	for idx := start + 1; idx < count; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:4542:9
+		// Osty: /tmp/selfhost_merged.osty:4544:9
 		kind := frontTokenAtList(tokens, idx).kind
 		_ = kind
-		// Osty: /tmp/selfhost_merged.osty:4543:9
+		// Osty: /tmp/selfhost_merged.osty:4545:9
 		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:4544:13
+			// Osty: /tmp/selfhost_merged.osty:4546:13
 			close := frontFindMatching(tokens, idx, count, FrontTokenKind(&FrontTokenKind_FrontLBrace{}), FrontTokenKind(&FrontTokenKind_FrontRBrace{}))
 			_ = close
-			// Osty: /tmp/selfhost_merged.osty:4545:13
+			// Osty: /tmp/selfhost_merged.osty:4547:13
 			return close - start + 1
 		}
-		// Osty: /tmp/selfhost_merged.osty:4547:9
+		// Osty: /tmp/selfhost_merged.osty:4549:9
 		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontNewline{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontEOF{})) {
-			// Osty: /tmp/selfhost_merged.osty:4548:13
+			// Osty: /tmp/selfhost_merged.osty:4550:13
 			return consumed
 		}
-		// Osty: /tmp/selfhost_merged.osty:4550:18
+		// Osty: /tmp/selfhost_merged.osty:4552:18
 		consumed = consumed + 1
 	}
 	return consumed
 }
 
-// Osty: /tmp/selfhost_merged.osty:4555:5
+// Osty: /tmp/selfhost_merged.osty:4557:5
 func frontParseUseShape(tokens []*FrontToken, start int, count int, summary *FrontParseSummary) *FrontParseResult {
-	// Osty: /tmp/selfhost_merged.osty:4561:5
+	// Osty: /tmp/selfhost_merged.osty:4563:5
 	out := summary
 	_ = out
-	// Osty: /tmp/selfhost_merged.osty:4562:5
+	// Osty: /tmp/selfhost_merged.osty:4564:5
 	consumed := frontParseUseConsumed(tokens, start, count)
 	_ = consumed
-	// Osty: /tmp/selfhost_merged.osty:4563:5
+	// Osty: /tmp/selfhost_merged.osty:4565:5
 	end := start + consumed
 	_ = end
-	// Osty: /tmp/selfhost_merged.osty:4564:5
+	// Osty: /tmp/selfhost_merged.osty:4566:5
 	isGo := false
 	_ = isGo
-	// Osty: /tmp/selfhost_merged.osty:4565:5
+	// Osty: /tmp/selfhost_merged.osty:4567:5
 	for idx := start + 1; idx < end; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:4566:9
+		// Osty: /tmp/selfhost_merged.osty:4568:9
 		tok := frontTokenAtList(tokens, idx)
 		_ = tok
-		// Osty: /tmp/selfhost_merged.osty:4567:9
+		// Osty: /tmp/selfhost_merged.osty:4569:9
 		if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) && tok.text == "go" {
-			// Osty: /tmp/selfhost_merged.osty:4568:18
+			// Osty: /tmp/selfhost_merged.osty:4570:18
 			isGo = true
-			// Osty: /tmp/selfhost_merged.osty:4569:24
+			// Osty: /tmp/selfhost_merged.osty:4571:24
 			out.goUses = out.goUses + 1
 		} else if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) && tok.text == "as" {
-			// Osty: /tmp/selfhost_merged.osty:4571:28
+			// Osty: /tmp/selfhost_merged.osty:4573:28
 			out.useAliases = out.useAliases + 1
 		} else if isGo && (ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontFn{})) || ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontStruct{}))) {
-			// Osty: /tmp/selfhost_merged.osty:4573:28
+			// Osty: /tmp/selfhost_merged.osty:4575:28
 			out.useGoItems = out.useGoItems + 1
 		}
 	}
 	return frontParseResult(out, consumed)
 }
 
-// Osty: /tmp/selfhost_merged.osty:4579:5
+// Osty: /tmp/selfhost_merged.osty:4581:5
 func frontParseFnShape(tokens []*FrontToken, start int, count int, summary *FrontParseSummary) *FrontParseResult {
-	// Osty: /tmp/selfhost_merged.osty:4585:5
+	// Osty: /tmp/selfhost_merged.osty:4587:5
 	out := summary
 	_ = out
-	// Osty: /tmp/selfhost_merged.osty:4586:5
+	// Osty: /tmp/selfhost_merged.osty:4588:5
 	idx := start + 1
 	_ = idx
-	// Osty: /tmp/selfhost_merged.osty:4587:5
+	// Osty: /tmp/selfhost_merged.osty:4589:5
 	if ostyEqual(frontTokenAtList(tokens, idx).kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) {
-		// Osty: /tmp/selfhost_merged.osty:4588:13
+		// Osty: /tmp/selfhost_merged.osty:4590:13
 		idx = idx + 1
 	} else {
-		// Osty: /tmp/selfhost_merged.osty:4590:20
+		// Osty: /tmp/selfhost_merged.osty:4592:20
 		out.errors = out.errors + 1
 	}
-	// Osty: /tmp/selfhost_merged.osty:4593:5
+	// Osty: /tmp/selfhost_merged.osty:4595:5
 	if ostyEqual(frontTokenAtList(tokens, idx).kind, FrontTokenKind(&FrontTokenKind_FrontLt{})) {
-		// Osty: /tmp/selfhost_merged.osty:4594:9
+		// Osty: /tmp/selfhost_merged.osty:4596:9
 		close := frontFindMatching(tokens, idx, count, FrontTokenKind(&FrontTokenKind_FrontLt{}), FrontTokenKind(&FrontTokenKind_FrontGt{}))
 		_ = close
-		// Osty: /tmp/selfhost_merged.osty:4595:27
+		// Osty: /tmp/selfhost_merged.osty:4597:27
 		out.genericParams = out.genericParams + frontCountGenericParams(tokens, idx+1, close)
-		// Osty: /tmp/selfhost_merged.osty:4596:13
+		// Osty: /tmp/selfhost_merged.osty:4598:13
 		out = frontScanTypeShape(tokens, idx+1, close, out)
-		// Osty: /tmp/selfhost_merged.osty:4597:13
+		// Osty: /tmp/selfhost_merged.osty:4599:13
 		idx = close + 1
 	}
-	// Osty: /tmp/selfhost_merged.osty:4600:5
+	// Osty: /tmp/selfhost_merged.osty:4602:5
 	if ostyEqual(frontTokenAtList(tokens, idx).kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) {
-		// Osty: /tmp/selfhost_merged.osty:4601:9
+		// Osty: /tmp/selfhost_merged.osty:4603:9
 		close := frontFindMatching(tokens, idx, count, FrontTokenKind(&FrontTokenKind_FrontLParen{}), FrontTokenKind(&FrontTokenKind_FrontRParen{}))
 		_ = close
-		// Osty: /tmp/selfhost_merged.osty:4602:20
+		// Osty: /tmp/selfhost_merged.osty:4604:20
 		out.params = out.params + frontCountParams(tokens, idx, close)
-		// Osty: /tmp/selfhost_merged.osty:4603:13
+		// Osty: /tmp/selfhost_merged.osty:4605:13
 		out = frontScanParamListShape(tokens, idx, close, out)
-		// Osty: /tmp/selfhost_merged.osty:4604:13
+		// Osty: /tmp/selfhost_merged.osty:4606:13
 		idx = close + 1
 	} else {
-		// Osty: /tmp/selfhost_merged.osty:4606:20
+		// Osty: /tmp/selfhost_merged.osty:4608:20
 		out.errors = out.errors + 1
 	}
-	// Osty: /tmp/selfhost_merged.osty:4609:5
+	// Osty: /tmp/selfhost_merged.osty:4611:5
 	if ostyEqual(frontTokenAtList(tokens, idx).kind, FrontTokenKind(&FrontTokenKind_FrontArrow{})) {
-		// Osty: /tmp/selfhost_merged.osty:4610:9
+		// Osty: /tmp/selfhost_merged.osty:4612:9
 		typeEnd := frontFindTypeEnd(tokens, idx+1, count)
 		_ = typeEnd
-		// Osty: /tmp/selfhost_merged.osty:4611:13
+		// Osty: /tmp/selfhost_merged.osty:4613:13
 		out = frontScanTypeShape(tokens, idx+1, typeEnd, out)
-		// Osty: /tmp/selfhost_merged.osty:4612:13
+		// Osty: /tmp/selfhost_merged.osty:4614:13
 		idx = typeEnd
 	}
-	// Osty: /tmp/selfhost_merged.osty:4615:5
+	// Osty: /tmp/selfhost_merged.osty:4617:5
 	if ostyEqual(frontTokenAtList(tokens, idx).kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
-		// Osty: /tmp/selfhost_merged.osty:4616:9
+		// Osty: /tmp/selfhost_merged.osty:4618:9
 		parsed := frontParseBlockShape(tokens, idx, count, out)
 		_ = parsed
-		// Osty: /tmp/selfhost_merged.osty:4617:13
+		// Osty: /tmp/selfhost_merged.osty:4619:13
 		out = parsed.summary
-		// Osty: /tmp/selfhost_merged.osty:4618:13
+		// Osty: /tmp/selfhost_merged.osty:4620:13
 		idx = idx + parsed.consumed
 	} else if !ostyEqual(frontTokenAtList(tokens, idx).kind, FrontTokenKind(&FrontTokenKind_FrontNewline{})) && !ostyEqual(frontTokenAtList(tokens, idx).kind, FrontTokenKind(&FrontTokenKind_FrontEOF{})) && !ostyEqual(frontTokenAtList(tokens, idx).kind, FrontTokenKind(&FrontTokenKind_FrontComma{})) && !ostyEqual(frontTokenAtList(tokens, idx).kind, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) {
-		// Osty: /tmp/selfhost_merged.osty:4623:20
+		// Osty: /tmp/selfhost_merged.osty:4625:20
 		out.errors = out.errors + 1
 	}
 	return frontParseResult(out, idx-start)
 }
 
-// Osty: /tmp/selfhost_merged.osty:4628:5
+// Osty: /tmp/selfhost_merged.osty:4630:5
 func frontParseStructShape(tokens []*FrontToken, start int, count int, summary *FrontParseSummary) *FrontParseResult {
-	// Osty: /tmp/selfhost_merged.osty:4634:5
+	// Osty: /tmp/selfhost_merged.osty:4636:5
 	out := summary
 	_ = out
-	// Osty: /tmp/selfhost_merged.osty:4635:5
+	// Osty: /tmp/selfhost_merged.osty:4637:5
 	idx := start + 1
 	_ = idx
-	// Osty: /tmp/selfhost_merged.osty:4636:5
+	// Osty: /tmp/selfhost_merged.osty:4638:5
 	if ostyEqual(frontTokenAtList(tokens, idx).kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) {
-		// Osty: /tmp/selfhost_merged.osty:4637:13
+		// Osty: /tmp/selfhost_merged.osty:4639:13
 		idx = idx + 1
 	} else {
-		// Osty: /tmp/selfhost_merged.osty:4639:20
+		// Osty: /tmp/selfhost_merged.osty:4641:20
 		out.errors = out.errors + 1
 	}
-	// Osty: /tmp/selfhost_merged.osty:4641:5
+	// Osty: /tmp/selfhost_merged.osty:4643:5
 	if ostyEqual(frontTokenAtList(tokens, idx).kind, FrontTokenKind(&FrontTokenKind_FrontLt{})) {
-		// Osty: /tmp/selfhost_merged.osty:4642:9
+		// Osty: /tmp/selfhost_merged.osty:4644:9
 		close := frontFindMatching(tokens, idx, count, FrontTokenKind(&FrontTokenKind_FrontLt{}), FrontTokenKind(&FrontTokenKind_FrontGt{}))
 		_ = close
-		// Osty: /tmp/selfhost_merged.osty:4643:27
+		// Osty: /tmp/selfhost_merged.osty:4645:27
 		out.genericParams = out.genericParams + frontCountGenericParams(tokens, idx+1, close)
-		// Osty: /tmp/selfhost_merged.osty:4644:13
+		// Osty: /tmp/selfhost_merged.osty:4646:13
 		out = frontScanTypeShape(tokens, idx+1, close, out)
-		// Osty: /tmp/selfhost_merged.osty:4645:13
+		// Osty: /tmp/selfhost_merged.osty:4647:13
 		idx = close + 1
 	}
-	// Osty: /tmp/selfhost_merged.osty:4647:5
+	// Osty: /tmp/selfhost_merged.osty:4649:5
 	if !ostyEqual(frontTokenAtList(tokens, idx).kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
-		// Osty: /tmp/selfhost_merged.osty:4648:20
+		// Osty: /tmp/selfhost_merged.osty:4650:20
 		out.errors = out.errors + 1
-		// Osty: /tmp/selfhost_merged.osty:4649:9
+		// Osty: /tmp/selfhost_merged.osty:4651:9
 		return frontParseResult(out, frontLineConsumed(tokens, start, count))
 	}
-	// Osty: /tmp/selfhost_merged.osty:4651:5
+	// Osty: /tmp/selfhost_merged.osty:4653:5
 	close := frontFindMatching(tokens, idx, count, FrontTokenKind(&FrontTokenKind_FrontLBrace{}), FrontTokenKind(&FrontTokenKind_FrontRBrace{}))
 	_ = close
-	// Osty: /tmp/selfhost_merged.osty:4652:5
+	// Osty: /tmp/selfhost_merged.osty:4654:5
 	skip := 0
 	_ = skip
-	// Osty: /tmp/selfhost_merged.osty:4653:5
+	// Osty: /tmp/selfhost_merged.osty:4655:5
 	for at := idx + 1; at < close; at++ {
-		// Osty: /tmp/selfhost_merged.osty:4654:9
+		// Osty: /tmp/selfhost_merged.osty:4656:9
 		if skip > 0 {
-			// Osty: /tmp/selfhost_merged.osty:4655:18
+			// Osty: /tmp/selfhost_merged.osty:4657:18
 			skip = skip - 1
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:4657:13
+			// Osty: /tmp/selfhost_merged.osty:4659:13
 			kind := frontTokenAtList(tokens, at).kind
 			_ = kind
-			// Osty: /tmp/selfhost_merged.osty:4658:13
+			// Osty: /tmp/selfhost_merged.osty:4660:13
 			if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontHash{})) && ostyEqual(frontTokenAtList(tokens, at+1).kind, FrontTokenKind(&FrontTokenKind_FrontLBracket{})) {
-				// Osty: /tmp/selfhost_merged.osty:4659:33
+				// Osty: /tmp/selfhost_merged.osty:4661:33
 				out.annotations = out.annotations + 1
-				// Osty: /tmp/selfhost_merged.osty:4660:17
+				// Osty: /tmp/selfhost_merged.osty:4662:17
 				annClose := frontFindMatching(tokens, at+1, close, FrontTokenKind(&FrontTokenKind_FrontLBracket{}), FrontTokenKind(&FrontTokenKind_FrontRBracket{}))
 				_ = annClose
-				// Osty: /tmp/selfhost_merged.osty:4667:22
+				// Osty: /tmp/selfhost_merged.osty:4669:22
 				skip = annClose - at
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontFn{})) || (ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontPub{})) && ostyEqual(frontTokenAtList(tokens, at+1).kind, FrontTokenKind(&FrontTokenKind_FrontFn{}))) {
-				// Osty: /tmp/selfhost_merged.osty:4669:29
+				// Osty: /tmp/selfhost_merged.osty:4671:29
 				out.methods = out.methods + 1
-				// Osty: /tmp/selfhost_merged.osty:4670:17
+				// Osty: /tmp/selfhost_merged.osty:4672:17
 				fnStart := frontFnStartAt(tokens, at)
 				_ = fnStart
-				// Osty: /tmp/selfhost_merged.osty:4671:17
+				// Osty: /tmp/selfhost_merged.osty:4673:17
 				parsed := frontParseFnShape(tokens, fnStart, close, out)
 				_ = parsed
-				// Osty: /tmp/selfhost_merged.osty:4672:21
+				// Osty: /tmp/selfhost_merged.osty:4674:21
 				out = parsed.summary
-				// Osty: /tmp/selfhost_merged.osty:4673:22
+				// Osty: /tmp/selfhost_merged.osty:4675:22
 				skip = fnStart - at + parsed.consumed - 1
 			} else if frontIsFieldStart(tokens, at) {
-				// Osty: /tmp/selfhost_merged.osty:4675:28
+				// Osty: /tmp/selfhost_merged.osty:4677:28
 				out.fields = out.fields + 1
-				// Osty: /tmp/selfhost_merged.osty:4676:17
+				// Osty: /tmp/selfhost_merged.osty:4678:17
 				nameIdx := frontFieldNameIndex(tokens, at)
 				_ = nameIdx
-				// Osty: /tmp/selfhost_merged.osty:4677:17
+				// Osty: /tmp/selfhost_merged.osty:4679:17
 				typeEnd := frontFindTypeEnd(tokens, nameIdx+2, close)
 				_ = typeEnd
-				// Osty: /tmp/selfhost_merged.osty:4678:21
+				// Osty: /tmp/selfhost_merged.osty:4680:21
 				out = frontScanTypeShape(tokens, nameIdx+2, typeEnd, out)
-				// Osty: /tmp/selfhost_merged.osty:4679:17
+				// Osty: /tmp/selfhost_merged.osty:4681:17
 				stmtEnd := frontFindMemberEnd(tokens, at, close)
 				_ = stmtEnd
-				// Osty: /tmp/selfhost_merged.osty:4680:17
+				// Osty: /tmp/selfhost_merged.osty:4682:17
 				consumedEnd := typeEnd
 				_ = consumedEnd
-				// Osty: /tmp/selfhost_merged.osty:4681:17
+				// Osty: /tmp/selfhost_merged.osty:4683:17
 				if frontContainsTopLevelKind(tokens, typeEnd, stmtEnd, FrontTokenKind(&FrontTokenKind_FrontAssign{})) {
-					// Osty: /tmp/selfhost_merged.osty:4682:39
+					// Osty: /tmp/selfhost_merged.osty:4684:39
 					out.defaultValues = out.defaultValues + 1
-					// Osty: /tmp/selfhost_merged.osty:4683:25
+					// Osty: /tmp/selfhost_merged.osty:4685:25
 					out = frontScanExprShape(tokens, typeEnd+1, stmtEnd, out)
-					// Osty: /tmp/selfhost_merged.osty:4684:33
+					// Osty: /tmp/selfhost_merged.osty:4686:33
 					consumedEnd = stmtEnd
 				}
-				// Osty: /tmp/selfhost_merged.osty:4686:22
+				// Osty: /tmp/selfhost_merged.osty:4688:22
 				skip = consumedEnd - at - 1
 			}
 		}
@@ -6759,98 +6759,98 @@ func frontParseStructShape(tokens []*FrontToken, start int, count int, summary *
 	return frontParseResult(out, close-start+1)
 }
 
-// Osty: /tmp/selfhost_merged.osty:4693:5
+// Osty: /tmp/selfhost_merged.osty:4695:5
 func frontParseEnumShape(tokens []*FrontToken, start int, count int, summary *FrontParseSummary) *FrontParseResult {
-	// Osty: /tmp/selfhost_merged.osty:4699:5
+	// Osty: /tmp/selfhost_merged.osty:4701:5
 	out := summary
 	_ = out
-	// Osty: /tmp/selfhost_merged.osty:4700:5
+	// Osty: /tmp/selfhost_merged.osty:4702:5
 	idx := start + 1
 	_ = idx
-	// Osty: /tmp/selfhost_merged.osty:4701:5
+	// Osty: /tmp/selfhost_merged.osty:4703:5
 	if ostyEqual(frontTokenAtList(tokens, idx).kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) {
-		// Osty: /tmp/selfhost_merged.osty:4702:13
+		// Osty: /tmp/selfhost_merged.osty:4704:13
 		idx = idx + 1
 	} else {
-		// Osty: /tmp/selfhost_merged.osty:4704:20
+		// Osty: /tmp/selfhost_merged.osty:4706:20
 		out.errors = out.errors + 1
 	}
-	// Osty: /tmp/selfhost_merged.osty:4706:5
+	// Osty: /tmp/selfhost_merged.osty:4708:5
 	if ostyEqual(frontTokenAtList(tokens, idx).kind, FrontTokenKind(&FrontTokenKind_FrontLt{})) {
-		// Osty: /tmp/selfhost_merged.osty:4707:9
+		// Osty: /tmp/selfhost_merged.osty:4709:9
 		close := frontFindMatching(tokens, idx, count, FrontTokenKind(&FrontTokenKind_FrontLt{}), FrontTokenKind(&FrontTokenKind_FrontGt{}))
 		_ = close
-		// Osty: /tmp/selfhost_merged.osty:4708:27
+		// Osty: /tmp/selfhost_merged.osty:4710:27
 		out.genericParams = out.genericParams + frontCountGenericParams(tokens, idx+1, close)
-		// Osty: /tmp/selfhost_merged.osty:4709:13
+		// Osty: /tmp/selfhost_merged.osty:4711:13
 		out = frontScanTypeShape(tokens, idx+1, close, out)
-		// Osty: /tmp/selfhost_merged.osty:4710:13
+		// Osty: /tmp/selfhost_merged.osty:4712:13
 		idx = close + 1
 	}
-	// Osty: /tmp/selfhost_merged.osty:4712:5
+	// Osty: /tmp/selfhost_merged.osty:4714:5
 	if !ostyEqual(frontTokenAtList(tokens, idx).kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
-		// Osty: /tmp/selfhost_merged.osty:4713:20
+		// Osty: /tmp/selfhost_merged.osty:4715:20
 		out.errors = out.errors + 1
-		// Osty: /tmp/selfhost_merged.osty:4714:9
+		// Osty: /tmp/selfhost_merged.osty:4716:9
 		return frontParseResult(out, frontLineConsumed(tokens, start, count))
 	}
-	// Osty: /tmp/selfhost_merged.osty:4716:5
+	// Osty: /tmp/selfhost_merged.osty:4718:5
 	close := frontFindMatching(tokens, idx, count, FrontTokenKind(&FrontTokenKind_FrontLBrace{}), FrontTokenKind(&FrontTokenKind_FrontRBrace{}))
 	_ = close
-	// Osty: /tmp/selfhost_merged.osty:4717:5
+	// Osty: /tmp/selfhost_merged.osty:4719:5
 	skip := 0
 	_ = skip
-	// Osty: /tmp/selfhost_merged.osty:4718:5
+	// Osty: /tmp/selfhost_merged.osty:4720:5
 	for at := idx + 1; at < close; at++ {
-		// Osty: /tmp/selfhost_merged.osty:4719:9
+		// Osty: /tmp/selfhost_merged.osty:4721:9
 		if skip > 0 {
-			// Osty: /tmp/selfhost_merged.osty:4720:18
+			// Osty: /tmp/selfhost_merged.osty:4722:18
 			skip = skip - 1
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:4722:13
+			// Osty: /tmp/selfhost_merged.osty:4724:13
 			kind := frontTokenAtList(tokens, at).kind
 			_ = kind
-			// Osty: /tmp/selfhost_merged.osty:4723:13
+			// Osty: /tmp/selfhost_merged.osty:4725:13
 			if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontHash{})) && ostyEqual(frontTokenAtList(tokens, at+1).kind, FrontTokenKind(&FrontTokenKind_FrontLBracket{})) {
-				// Osty: /tmp/selfhost_merged.osty:4724:33
+				// Osty: /tmp/selfhost_merged.osty:4726:33
 				out.annotations = out.annotations + 1
-				// Osty: /tmp/selfhost_merged.osty:4725:17
+				// Osty: /tmp/selfhost_merged.osty:4727:17
 				annClose := frontFindMatching(tokens, at+1, close, FrontTokenKind(&FrontTokenKind_FrontLBracket{}), FrontTokenKind(&FrontTokenKind_FrontRBracket{}))
 				_ = annClose
-				// Osty: /tmp/selfhost_merged.osty:4732:22
+				// Osty: /tmp/selfhost_merged.osty:4734:22
 				skip = annClose - at
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontFn{})) || (ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontPub{})) && ostyEqual(frontTokenAtList(tokens, at+1).kind, FrontTokenKind(&FrontTokenKind_FrontFn{}))) {
-				// Osty: /tmp/selfhost_merged.osty:4734:29
+				// Osty: /tmp/selfhost_merged.osty:4736:29
 				out.methods = out.methods + 1
-				// Osty: /tmp/selfhost_merged.osty:4735:17
+				// Osty: /tmp/selfhost_merged.osty:4737:17
 				fnStart := frontFnStartAt(tokens, at)
 				_ = fnStart
-				// Osty: /tmp/selfhost_merged.osty:4736:17
+				// Osty: /tmp/selfhost_merged.osty:4738:17
 				parsed := frontParseFnShape(tokens, fnStart, close, out)
 				_ = parsed
-				// Osty: /tmp/selfhost_merged.osty:4737:21
+				// Osty: /tmp/selfhost_merged.osty:4739:21
 				out = parsed.summary
-				// Osty: /tmp/selfhost_merged.osty:4738:22
+				// Osty: /tmp/selfhost_merged.osty:4740:22
 				skip = fnStart - at + parsed.consumed - 1
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) {
-				// Osty: /tmp/selfhost_merged.osty:4740:30
+				// Osty: /tmp/selfhost_merged.osty:4742:30
 				out.variants = out.variants + 1
-				// Osty: /tmp/selfhost_merged.osty:4741:17
+				// Osty: /tmp/selfhost_merged.osty:4743:17
 				if ostyEqual(frontTokenAtList(tokens, at+1).kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) {
-					// Osty: /tmp/selfhost_merged.osty:4742:21
+					// Osty: /tmp/selfhost_merged.osty:4744:21
 					parenClose := frontFindMatching(tokens, at+1, close, FrontTokenKind(&FrontTokenKind_FrontLParen{}), FrontTokenKind(&FrontTokenKind_FrontRParen{}))
 					_ = parenClose
-					// Osty: /tmp/selfhost_merged.osty:4749:21
+					// Osty: /tmp/selfhost_merged.osty:4751:21
 					fields := frontCountTopLevelCommaItems(tokens, at+2, parenClose)
 					_ = fields
-					// Osty: /tmp/selfhost_merged.osty:4750:39
+					// Osty: /tmp/selfhost_merged.osty:4752:39
 					out.variantFields = out.variantFields + fields
-					// Osty: /tmp/selfhost_merged.osty:4751:25
+					// Osty: /tmp/selfhost_merged.osty:4753:25
 					out = frontScanTypeShape(tokens, at+2, parenClose, out)
-					// Osty: /tmp/selfhost_merged.osty:4752:26
+					// Osty: /tmp/selfhost_merged.osty:4754:26
 					skip = parenClose - at
 				} else {
-					// Osty: /tmp/selfhost_merged.osty:4754:26
+					// Osty: /tmp/selfhost_merged.osty:4756:26
 					skip = frontVariantConsumed(tokens, at, close) - 1
 				}
 			}
@@ -6859,938 +6859,938 @@ func frontParseEnumShape(tokens []*FrontToken, start int, count int, summary *Fr
 	return frontParseResult(out, close-start+1)
 }
 
-// Osty: /tmp/selfhost_merged.osty:4762:5
+// Osty: /tmp/selfhost_merged.osty:4764:5
 func frontParseInterfaceShape(tokens []*FrontToken, start int, count int, summary *FrontParseSummary) *FrontParseResult {
-	// Osty: /tmp/selfhost_merged.osty:4768:5
+	// Osty: /tmp/selfhost_merged.osty:4770:5
 	out := summary
 	_ = out
-	// Osty: /tmp/selfhost_merged.osty:4769:5
+	// Osty: /tmp/selfhost_merged.osty:4771:5
 	idx := start + 1
 	_ = idx
-	// Osty: /tmp/selfhost_merged.osty:4770:5
+	// Osty: /tmp/selfhost_merged.osty:4772:5
 	if ostyEqual(frontTokenAtList(tokens, idx).kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) {
-		// Osty: /tmp/selfhost_merged.osty:4771:13
+		// Osty: /tmp/selfhost_merged.osty:4773:13
 		idx = idx + 1
 	} else {
-		// Osty: /tmp/selfhost_merged.osty:4773:20
+		// Osty: /tmp/selfhost_merged.osty:4775:20
 		out.errors = out.errors + 1
 	}
-	// Osty: /tmp/selfhost_merged.osty:4775:5
+	// Osty: /tmp/selfhost_merged.osty:4777:5
 	if ostyEqual(frontTokenAtList(tokens, idx).kind, FrontTokenKind(&FrontTokenKind_FrontLt{})) {
-		// Osty: /tmp/selfhost_merged.osty:4776:9
+		// Osty: /tmp/selfhost_merged.osty:4778:9
 		close := frontFindMatching(tokens, idx, count, FrontTokenKind(&FrontTokenKind_FrontLt{}), FrontTokenKind(&FrontTokenKind_FrontGt{}))
 		_ = close
-		// Osty: /tmp/selfhost_merged.osty:4777:27
+		// Osty: /tmp/selfhost_merged.osty:4779:27
 		out.genericParams = out.genericParams + frontCountGenericParams(tokens, idx+1, close)
-		// Osty: /tmp/selfhost_merged.osty:4778:13
+		// Osty: /tmp/selfhost_merged.osty:4780:13
 		out = frontScanTypeShape(tokens, idx+1, close, out)
-		// Osty: /tmp/selfhost_merged.osty:4779:13
+		// Osty: /tmp/selfhost_merged.osty:4781:13
 		idx = close + 1
 	}
-	// Osty: /tmp/selfhost_merged.osty:4781:5
+	// Osty: /tmp/selfhost_merged.osty:4783:5
 	if ostyEqual(frontTokenAtList(tokens, idx).kind, FrontTokenKind(&FrontTokenKind_FrontColon{})) {
-		// Osty: /tmp/selfhost_merged.osty:4782:9
+		// Osty: /tmp/selfhost_merged.osty:4784:9
 		extendsEnd := frontFindTypeEnd(tokens, idx+1, count)
 		_ = extendsEnd
-		// Osty: /tmp/selfhost_merged.osty:4783:13
+		// Osty: /tmp/selfhost_merged.osty:4785:13
 		out = frontScanTypeShape(tokens, idx+1, extendsEnd, out)
-		// Osty: /tmp/selfhost_merged.osty:4784:13
+		// Osty: /tmp/selfhost_merged.osty:4786:13
 		idx = extendsEnd
 	}
-	// Osty: /tmp/selfhost_merged.osty:4786:5
+	// Osty: /tmp/selfhost_merged.osty:4788:5
 	if !ostyEqual(frontTokenAtList(tokens, idx).kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
-		// Osty: /tmp/selfhost_merged.osty:4787:20
+		// Osty: /tmp/selfhost_merged.osty:4789:20
 		out.errors = out.errors + 1
-		// Osty: /tmp/selfhost_merged.osty:4788:9
+		// Osty: /tmp/selfhost_merged.osty:4790:9
 		return frontParseResult(out, frontLineConsumed(tokens, start, count))
 	}
-	// Osty: /tmp/selfhost_merged.osty:4790:5
+	// Osty: /tmp/selfhost_merged.osty:4792:5
 	close := frontFindMatching(tokens, idx, count, FrontTokenKind(&FrontTokenKind_FrontLBrace{}), FrontTokenKind(&FrontTokenKind_FrontRBrace{}))
 	_ = close
-	// Osty: /tmp/selfhost_merged.osty:4791:5
+	// Osty: /tmp/selfhost_merged.osty:4793:5
 	skip := 0
 	_ = skip
-	// Osty: /tmp/selfhost_merged.osty:4792:5
+	// Osty: /tmp/selfhost_merged.osty:4794:5
 	for at := idx + 1; at < close; at++ {
-		// Osty: /tmp/selfhost_merged.osty:4793:9
+		// Osty: /tmp/selfhost_merged.osty:4795:9
 		if skip > 0 {
-			// Osty: /tmp/selfhost_merged.osty:4794:18
+			// Osty: /tmp/selfhost_merged.osty:4796:18
 			skip = skip - 1
 		} else if ostyEqual(frontTokenAtList(tokens, at).kind, FrontTokenKind(&FrontTokenKind_FrontHash{})) && ostyEqual(frontTokenAtList(tokens, at+1).kind, FrontTokenKind(&FrontTokenKind_FrontLBracket{})) {
-			// Osty: /tmp/selfhost_merged.osty:4796:29
+			// Osty: /tmp/selfhost_merged.osty:4798:29
 			out.annotations = out.annotations + 1
-			// Osty: /tmp/selfhost_merged.osty:4797:13
+			// Osty: /tmp/selfhost_merged.osty:4799:13
 			annClose := frontFindMatching(tokens, at+1, close, FrontTokenKind(&FrontTokenKind_FrontLBracket{}), FrontTokenKind(&FrontTokenKind_FrontRBracket{}))
 			_ = annClose
-			// Osty: /tmp/selfhost_merged.osty:4798:18
+			// Osty: /tmp/selfhost_merged.osty:4800:18
 			skip = annClose - at
 		} else if ostyEqual(frontTokenAtList(tokens, at).kind, FrontTokenKind(&FrontTokenKind_FrontFn{})) || (ostyEqual(frontTokenAtList(tokens, at).kind, FrontTokenKind(&FrontTokenKind_FrontPub{})) && ostyEqual(frontTokenAtList(tokens, at+1).kind, FrontTokenKind(&FrontTokenKind_FrontFn{}))) {
-			// Osty: /tmp/selfhost_merged.osty:4803:25
+			// Osty: /tmp/selfhost_merged.osty:4805:25
 			out.methods = out.methods + 1
-			// Osty: /tmp/selfhost_merged.osty:4804:13
+			// Osty: /tmp/selfhost_merged.osty:4806:13
 			fnStart := frontFnStartAt(tokens, at)
 			_ = fnStart
-			// Osty: /tmp/selfhost_merged.osty:4805:13
+			// Osty: /tmp/selfhost_merged.osty:4807:13
 			parsed := frontParseFnShape(tokens, fnStart, close, out)
 			_ = parsed
-			// Osty: /tmp/selfhost_merged.osty:4806:17
+			// Osty: /tmp/selfhost_merged.osty:4808:17
 			out = parsed.summary
-			// Osty: /tmp/selfhost_merged.osty:4807:18
+			// Osty: /tmp/selfhost_merged.osty:4809:18
 			skip = fnStart - at + parsed.consumed - 1
 		} else if ostyEqual(frontTokenAtList(tokens, at).kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) {
-			// Osty: /tmp/selfhost_merged.osty:4809:13
+			// Osty: /tmp/selfhost_merged.osty:4811:13
 			typeEnd := frontFindTypeEnd(tokens, at, close)
 			_ = typeEnd
-			// Osty: /tmp/selfhost_merged.osty:4810:17
+			// Osty: /tmp/selfhost_merged.osty:4812:17
 			out = frontScanTypeShape(tokens, at, typeEnd, out)
-			// Osty: /tmp/selfhost_merged.osty:4811:18
+			// Osty: /tmp/selfhost_merged.osty:4813:18
 			skip = typeEnd - at - 1
 		}
 	}
 	return frontParseResult(out, close-start+1)
 }
 
-// Osty: /tmp/selfhost_merged.osty:4817:5
+// Osty: /tmp/selfhost_merged.osty:4819:5
 func frontParseTypeAliasShape(tokens []*FrontToken, start int, count int, summary *FrontParseSummary) *FrontParseResult {
-	// Osty: /tmp/selfhost_merged.osty:4823:5
+	// Osty: /tmp/selfhost_merged.osty:4825:5
 	out := summary
 	_ = out
-	// Osty: /tmp/selfhost_merged.osty:4824:5
+	// Osty: /tmp/selfhost_merged.osty:4826:5
 	idx := start + 1
 	_ = idx
-	// Osty: /tmp/selfhost_merged.osty:4825:5
+	// Osty: /tmp/selfhost_merged.osty:4827:5
 	if ostyEqual(frontTokenAtList(tokens, idx).kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) {
-		// Osty: /tmp/selfhost_merged.osty:4826:13
+		// Osty: /tmp/selfhost_merged.osty:4828:13
 		idx = idx + 1
 	} else {
-		// Osty: /tmp/selfhost_merged.osty:4828:20
+		// Osty: /tmp/selfhost_merged.osty:4830:20
 		out.errors = out.errors + 1
 	}
-	// Osty: /tmp/selfhost_merged.osty:4830:5
+	// Osty: /tmp/selfhost_merged.osty:4832:5
 	if ostyEqual(frontTokenAtList(tokens, idx).kind, FrontTokenKind(&FrontTokenKind_FrontLt{})) {
-		// Osty: /tmp/selfhost_merged.osty:4831:9
+		// Osty: /tmp/selfhost_merged.osty:4833:9
 		close := frontFindMatching(tokens, idx, count, FrontTokenKind(&FrontTokenKind_FrontLt{}), FrontTokenKind(&FrontTokenKind_FrontGt{}))
 		_ = close
-		// Osty: /tmp/selfhost_merged.osty:4832:27
+		// Osty: /tmp/selfhost_merged.osty:4834:27
 		out.genericParams = out.genericParams + frontCountGenericParams(tokens, idx+1, close)
-		// Osty: /tmp/selfhost_merged.osty:4833:13
+		// Osty: /tmp/selfhost_merged.osty:4835:13
 		out = frontScanTypeShape(tokens, idx+1, close, out)
-		// Osty: /tmp/selfhost_merged.osty:4834:13
+		// Osty: /tmp/selfhost_merged.osty:4836:13
 		idx = close + 1
 	}
-	// Osty: /tmp/selfhost_merged.osty:4836:5
+	// Osty: /tmp/selfhost_merged.osty:4838:5
 	if ostyEqual(frontTokenAtList(tokens, idx).kind, FrontTokenKind(&FrontTokenKind_FrontAssign{})) {
-		// Osty: /tmp/selfhost_merged.osty:4837:9
+		// Osty: /tmp/selfhost_merged.osty:4839:9
 		typeEnd := frontFindTypeEnd(tokens, idx+1, count)
 		_ = typeEnd
-		// Osty: /tmp/selfhost_merged.osty:4838:13
+		// Osty: /tmp/selfhost_merged.osty:4840:13
 		out = frontScanTypeShape(tokens, idx+1, typeEnd, out)
-		// Osty: /tmp/selfhost_merged.osty:4839:13
+		// Osty: /tmp/selfhost_merged.osty:4841:13
 		idx = typeEnd
 	} else {
-		// Osty: /tmp/selfhost_merged.osty:4841:20
+		// Osty: /tmp/selfhost_merged.osty:4843:20
 		out.errors = out.errors + 1
 	}
 	return frontParseResult(out, idx-start)
 }
 
-// Osty: /tmp/selfhost_merged.osty:4846:5
+// Osty: /tmp/selfhost_merged.osty:4848:5
 func frontParseLetShape(tokens []*FrontToken, start int, count int, summary *FrontParseSummary) *FrontParseResult {
-	// Osty: /tmp/selfhost_merged.osty:4852:5
+	// Osty: /tmp/selfhost_merged.osty:4854:5
 	out := summary
 	_ = out
-	// Osty: /tmp/selfhost_merged.osty:4853:5
+	// Osty: /tmp/selfhost_merged.osty:4855:5
 	end := frontFindStatementEnd(tokens, start, count)
 	_ = end
-	// Osty: /tmp/selfhost_merged.osty:4854:20
+	// Osty: /tmp/selfhost_merged.osty:4856:20
 	out.statements = out.statements + 1
-	// Osty: /tmp/selfhost_merged.osty:4855:5
+	// Osty: /tmp/selfhost_merged.osty:4857:5
 	patternStart := start + 1
 	_ = patternStart
-	// Osty: /tmp/selfhost_merged.osty:4856:5
+	// Osty: /tmp/selfhost_merged.osty:4858:5
 	if ostyEqual(frontTokenAtList(tokens, patternStart).kind, FrontTokenKind(&FrontTokenKind_FrontMut{})) {
-		// Osty: /tmp/selfhost_merged.osty:4857:29
+		// Osty: /tmp/selfhost_merged.osty:4859:29
 		out.mutableBindings = out.mutableBindings + 1
-		// Osty: /tmp/selfhost_merged.osty:4858:22
+		// Osty: /tmp/selfhost_merged.osty:4860:22
 		patternStart = patternStart + 1
 	}
-	// Osty: /tmp/selfhost_merged.osty:4860:5
+	// Osty: /tmp/selfhost_merged.osty:4862:5
 	patternEnd := frontFindLetPatternEnd(tokens, patternStart, end)
 	_ = patternEnd
-	// Osty: /tmp/selfhost_merged.osty:4861:9
+	// Osty: /tmp/selfhost_merged.osty:4863:9
 	out = frontScanPatternShape(tokens, patternStart, patternEnd, out)
-	// Osty: /tmp/selfhost_merged.osty:4862:5
+	// Osty: /tmp/selfhost_merged.osty:4864:5
 	for idx := start; idx < end; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:4863:9
+		// Osty: /tmp/selfhost_merged.osty:4865:9
 		kind := frontTokenAtList(tokens, idx).kind
 		_ = kind
-		// Osty: /tmp/selfhost_merged.osty:4864:9
+		// Osty: /tmp/selfhost_merged.osty:4866:9
 		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontColon{})) {
-			// Osty: /tmp/selfhost_merged.osty:4865:13
+			// Osty: /tmp/selfhost_merged.osty:4867:13
 			typeEnd := frontFindTypeEnd(tokens, idx+1, end)
 			_ = typeEnd
-			// Osty: /tmp/selfhost_merged.osty:4866:17
+			// Osty: /tmp/selfhost_merged.osty:4868:17
 			out = frontScanTypeShape(tokens, idx+1, typeEnd, out)
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontAssign{})) {
-			// Osty: /tmp/selfhost_merged.osty:4868:29
+			// Osty: /tmp/selfhost_merged.osty:4870:29
 			out.assignments = out.assignments + 1
-			// Osty: /tmp/selfhost_merged.osty:4869:17
+			// Osty: /tmp/selfhost_merged.osty:4871:17
 			out = frontScanExprShape(tokens, idx+1, end, out)
 		}
 	}
 	return frontParseResult(out, end-start)
 }
 
-// Osty: /tmp/selfhost_merged.osty:4875:5
+// Osty: /tmp/selfhost_merged.osty:4877:5
 func frontParseBlockShape(tokens []*FrontToken, open int, count int, summary *FrontParseSummary) *FrontParseResult {
-	// Osty: /tmp/selfhost_merged.osty:4881:5
+	// Osty: /tmp/selfhost_merged.osty:4883:5
 	out := summary
 	_ = out
-	// Osty: /tmp/selfhost_merged.osty:4882:16
+	// Osty: /tmp/selfhost_merged.osty:4884:16
 	out.blocks = out.blocks + 1
-	// Osty: /tmp/selfhost_merged.osty:4883:5
+	// Osty: /tmp/selfhost_merged.osty:4885:5
 	close := frontFindMatching(tokens, open, count, FrontTokenKind(&FrontTokenKind_FrontLBrace{}), FrontTokenKind(&FrontTokenKind_FrontRBrace{}))
 	_ = close
-	// Osty: /tmp/selfhost_merged.osty:4884:9
+	// Osty: /tmp/selfhost_merged.osty:4886:9
 	out = frontScanExprShape(tokens, open+1, close, out)
-	// Osty: /tmp/selfhost_merged.osty:4885:5
+	// Osty: /tmp/selfhost_merged.osty:4887:5
 	for idx := open + 1; idx < close; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:4886:9
+		// Osty: /tmp/selfhost_merged.osty:4888:9
 		kind := frontTokenAtList(tokens, idx).kind
 		_ = kind
-		// Osty: /tmp/selfhost_merged.osty:4887:9
+		// Osty: /tmp/selfhost_merged.osty:4889:9
 		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLet{})) {
-			// Osty: /tmp/selfhost_merged.osty:4888:28
+			// Osty: /tmp/selfhost_merged.osty:4890:28
 			out.statements = out.statements + 1
-			// Osty: /tmp/selfhost_merged.osty:4889:22
+			// Osty: /tmp/selfhost_merged.osty:4891:22
 			out.lets = out.lets + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontReturn{})) {
-			// Osty: /tmp/selfhost_merged.osty:4891:28
+			// Osty: /tmp/selfhost_merged.osty:4893:28
 			out.statements = out.statements + 1
-			// Osty: /tmp/selfhost_merged.osty:4892:25
+			// Osty: /tmp/selfhost_merged.osty:4894:25
 			out.returns = out.returns + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBreak{})) {
-			// Osty: /tmp/selfhost_merged.osty:4894:28
+			// Osty: /tmp/selfhost_merged.osty:4896:28
 			out.statements = out.statements + 1
-			// Osty: /tmp/selfhost_merged.osty:4895:24
+			// Osty: /tmp/selfhost_merged.osty:4897:24
 			out.breaks = out.breaks + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontContinue{})) {
-			// Osty: /tmp/selfhost_merged.osty:4897:28
+			// Osty: /tmp/selfhost_merged.osty:4899:28
 			out.statements = out.statements + 1
-			// Osty: /tmp/selfhost_merged.osty:4898:27
+			// Osty: /tmp/selfhost_merged.osty:4900:27
 			out.continues = out.continues + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontFor{})) {
-			// Osty: /tmp/selfhost_merged.osty:4900:28
+			// Osty: /tmp/selfhost_merged.osty:4902:28
 			out.statements = out.statements + 1
-			// Osty: /tmp/selfhost_merged.osty:4901:22
+			// Osty: /tmp/selfhost_merged.osty:4903:22
 			out.fors = out.fors + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontDefer{})) {
-			// Osty: /tmp/selfhost_merged.osty:4903:28
+			// Osty: /tmp/selfhost_merged.osty:4905:28
 			out.statements = out.statements + 1
-			// Osty: /tmp/selfhost_merged.osty:4904:24
+			// Osty: /tmp/selfhost_merged.osty:4906:24
 			out.defers = out.defers + 1
 		}
 	}
 	return frontParseResult(out, close-open+1)
 }
 
-// Osty: /tmp/selfhost_merged.osty:4910:5
+// Osty: /tmp/selfhost_merged.osty:4912:5
 func frontScanExprShape(tokens []*FrontToken, start int, end int, summary *FrontParseSummary) *FrontParseSummary {
-	// Osty: /tmp/selfhost_merged.osty:4916:5
+	// Osty: /tmp/selfhost_merged.osty:4918:5
 	out := summary
 	_ = out
-	// Osty: /tmp/selfhost_merged.osty:4917:5
+	// Osty: /tmp/selfhost_merged.osty:4919:5
 	for idx := start; idx < end; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:4918:9
+		// Osty: /tmp/selfhost_merged.osty:4920:9
 		kind := frontTokenAtList(tokens, idx).kind
 		_ = kind
-		// Osty: /tmp/selfhost_merged.osty:4919:9
+		// Osty: /tmp/selfhost_merged.osty:4921:9
 		next := frontTokenAtList(tokens, idx+1).kind
 		_ = next
-		// Osty: /tmp/selfhost_merged.osty:4920:9
+		// Osty: /tmp/selfhost_merged.osty:4922:9
 		if isFrontLiteralKind(kind) {
-			// Osty: /tmp/selfhost_merged.osty:4921:26
+			// Osty: /tmp/selfhost_merged.osty:4923:26
 			out.literals = out.literals + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontIf{})) {
-			// Osty: /tmp/selfhost_merged.osty:4923:21
+			// Osty: /tmp/selfhost_merged.osty:4925:21
 			out.ifs = out.ifs + 1
-			// Osty: /tmp/selfhost_merged.osty:4924:13
+			// Osty: /tmp/selfhost_merged.osty:4926:13
 			if ostyEqual(next, FrontTokenKind(&FrontTokenKind_FrontLet{})) {
-				// Osty: /tmp/selfhost_merged.osty:4925:28
+				// Osty: /tmp/selfhost_merged.osty:4927:28
 				out.ifLets = out.ifLets + 1
 			}
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontElse{})) {
-			// Osty: /tmp/selfhost_merged.osty:4928:30
+			// Osty: /tmp/selfhost_merged.osty:4930:30
 			out.elseBranches = out.elseBranches + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontMatch{})) {
-			// Osty: /tmp/selfhost_merged.osty:4930:25
+			// Osty: /tmp/selfhost_merged.osty:4932:25
 			out.matches = out.matches + 1
-			// Osty: /tmp/selfhost_merged.osty:4931:13
+			// Osty: /tmp/selfhost_merged.osty:4933:13
 			close := frontFindFollowingBlockClose(tokens, idx, end)
 			_ = close
-			// Osty: /tmp/selfhost_merged.osty:4932:13
+			// Osty: /tmp/selfhost_merged.osty:4934:13
 			if close > idx {
-				// Osty: /tmp/selfhost_merged.osty:4933:31
+				// Osty: /tmp/selfhost_merged.osty:4935:31
 				out.matchArms = out.matchArms + frontCountMatchArms(tokens, idx, close)
-				// Osty: /tmp/selfhost_merged.osty:4934:33
+				// Osty: /tmp/selfhost_merged.osty:4936:33
 				out.matchGuards = out.matchGuards + frontCountMatchGuards(tokens, idx, close)
 			}
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) && frontIsCallOpen(tokens, idx, start) {
-			// Osty: /tmp/selfhost_merged.osty:4937:23
+			// Osty: /tmp/selfhost_merged.osty:4939:23
 			out.calls = out.calls + 1
-			// Osty: /tmp/selfhost_merged.osty:4938:13
+			// Osty: /tmp/selfhost_merged.osty:4940:13
 			close := frontFindMatching(tokens, idx, end, FrontTokenKind(&FrontTokenKind_FrontLParen{}), FrontTokenKind(&FrontTokenKind_FrontRParen{}))
 			_ = close
-			// Osty: /tmp/selfhost_merged.osty:4939:29
+			// Osty: /tmp/selfhost_merged.osty:4941:29
 			out.keywordArgs = out.keywordArgs + frontCountKeywordArgs(tokens, idx+1, close)
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBracket{})) {
-			// Osty: /tmp/selfhost_merged.osty:4941:13
+			// Osty: /tmp/selfhost_merged.osty:4943:13
 			if frontIsIndexOpen(tokens, idx, start) {
-				// Osty: /tmp/selfhost_merged.osty:4942:29
+				// Osty: /tmp/selfhost_merged.osty:4944:29
 				out.indexes = out.indexes + 1
 			} else {
-				// Osty: /tmp/selfhost_merged.osty:4944:30
+				// Osty: /tmp/selfhost_merged.osty:4946:30
 				out.listLits = out.listLits + 1
 			}
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) {
-			// Osty: /tmp/selfhost_merged.osty:4947:13
+			// Osty: /tmp/selfhost_merged.osty:4949:13
 			close := frontFindMatching(tokens, idx, end, FrontTokenKind(&FrontTokenKind_FrontLParen{}), FrontTokenKind(&FrontTokenKind_FrontRParen{}))
 			_ = close
-			// Osty: /tmp/selfhost_merged.osty:4948:13
+			// Osty: /tmp/selfhost_merged.osty:4950:13
 			if close == idx+1 || frontContainsTopLevelKind(tokens, idx+1, close, FrontTokenKind(&FrontTokenKind_FrontComma{})) {
-				// Osty: /tmp/selfhost_merged.osty:4949:31
+				// Osty: /tmp/selfhost_merged.osty:4951:31
 				out.tupleLits = out.tupleLits + 1
 			}
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:4952:13
+			// Osty: /tmp/selfhost_merged.osty:4954:13
 			if frontIsStructLiteralOpen(tokens, idx, start) {
-				// Osty: /tmp/selfhost_merged.osty:4953:17
+				// Osty: /tmp/selfhost_merged.osty:4955:17
 				close := frontFindMatching(tokens, idx, end, FrontTokenKind(&FrontTokenKind_FrontLBrace{}), FrontTokenKind(&FrontTokenKind_FrontRBrace{}))
 				_ = close
-				// Osty: /tmp/selfhost_merged.osty:4954:32
+				// Osty: /tmp/selfhost_merged.osty:4956:32
 				out.structLits = out.structLits + 1
-				// Osty: /tmp/selfhost_merged.osty:4955:37
+				// Osty: /tmp/selfhost_merged.osty:4957:37
 				out.structLitFields = out.structLitFields + frontCountStructLiteralFields(tokens, idx+1, close)
-				// Osty: /tmp/selfhost_merged.osty:4960:29
+				// Osty: /tmp/selfhost_merged.osty:4962:29
 				out.spreads = out.spreads + frontCountSpreads(tokens, idx+1, close)
 			} else if frontIsMapLiteralOpen(tokens, idx, end) {
-				// Osty: /tmp/selfhost_merged.osty:4962:29
+				// Osty: /tmp/selfhost_merged.osty:4964:29
 				out.mapLits = out.mapLits + 1
 			}
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontColonColon{})) && ostyEqual(next, FrontTokenKind(&FrontTokenKind_FrontLt{})) {
-			// Osty: /tmp/selfhost_merged.osty:4965:27
+			// Osty: /tmp/selfhost_merged.osty:4967:27
 			out.turbofish = out.turbofish + 1
-			// Osty: /tmp/selfhost_merged.osty:4966:13
+			// Osty: /tmp/selfhost_merged.osty:4968:13
 			close := frontFindMatching(tokens, idx+1, end, FrontTokenKind(&FrontTokenKind_FrontLt{}), FrontTokenKind(&FrontTokenKind_FrontGt{}))
 			_ = close
-			// Osty: /tmp/selfhost_merged.osty:4967:17
+			// Osty: /tmp/selfhost_merged.osty:4969:17
 			out = frontScanTypeShape(tokens, idx+2, close, out)
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBitOr{})) && frontIsClosurePipe(tokens, idx, start, end) {
-			// Osty: /tmp/selfhost_merged.osty:4969:13
+			// Osty: /tmp/selfhost_merged.osty:4971:13
 			close := frontFindNextTokenKind(tokens, idx+1, end, FrontTokenKind(&FrontTokenKind_FrontBitOr{}))
 			_ = close
-			// Osty: /tmp/selfhost_merged.osty:4970:26
+			// Osty: /tmp/selfhost_merged.osty:4972:26
 			out.closures = out.closures + 1
-			// Osty: /tmp/selfhost_merged.osty:4971:31
+			// Osty: /tmp/selfhost_merged.osty:4973:31
 			out.closureParams = out.closureParams + frontCountTopLevelCommaItems(tokens, idx+1, close)
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontOr{})) && frontIsClosureZeroPipe(tokens, idx, start) {
-			// Osty: /tmp/selfhost_merged.osty:4977:26
+			// Osty: /tmp/selfhost_merged.osty:4979:26
 			out.closures = out.closures + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontDot{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontQDot{})) {
-			// Osty: /tmp/selfhost_merged.osty:4979:27
+			// Osty: /tmp/selfhost_merged.osty:4981:27
 			out.selectors = out.selectors + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontChanArrow{})) {
-			// Osty: /tmp/selfhost_merged.osty:4981:30
+			// Osty: /tmp/selfhost_merged.osty:4983:30
 			out.channelSends = out.channelSends + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontQuestion{})) {
-			// Osty: /tmp/selfhost_merged.osty:4983:29
+			// Osty: /tmp/selfhost_merged.osty:4985:29
 			out.questionOps = out.questionOps + 1
 		} else if (ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontDotDot{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontDotDotEq{}))) && !(frontIsSpreadToken(tokens, idx, start)) {
-			// Osty: /tmp/selfhost_merged.osty:4989:24
+			// Osty: /tmp/selfhost_merged.osty:4991:24
 			out.ranges = out.ranges + 1
-			// Osty: /tmp/selfhost_merged.osty:4990:27
+			// Osty: /tmp/selfhost_merged.osty:4992:27
 			out.binaryOps = out.binaryOps + 1
 		} else if frontIsAssignOp(kind) {
-			// Osty: /tmp/selfhost_merged.osty:4992:29
+			// Osty: /tmp/selfhost_merged.osty:4994:29
 			out.assignments = out.assignments + 1
 		} else if frontIsBinaryOp(kind) {
-			// Osty: /tmp/selfhost_merged.osty:4994:27
+			// Osty: /tmp/selfhost_merged.osty:4996:27
 			out.binaryOps = out.binaryOps + 1
 		} else if frontIsUnaryOp(kind) {
-			// Osty: /tmp/selfhost_merged.osty:4996:26
+			// Osty: /tmp/selfhost_merged.osty:4998:26
 			out.unaryOps = out.unaryOps + 1
 		}
 	}
 	return out
 }
 
-// Osty: /tmp/selfhost_merged.osty:5002:5
+// Osty: /tmp/selfhost_merged.osty:5004:5
 func frontIsCallOpen(tokens []*FrontToken, open int, start int) bool {
-	// Osty: /tmp/selfhost_merged.osty:5003:5
+	// Osty: /tmp/selfhost_merged.osty:5005:5
 	if open <= start {
-		// Osty: /tmp/selfhost_merged.osty:5004:9
+		// Osty: /tmp/selfhost_merged.osty:5006:9
 		return false
 	}
-	// Osty: /tmp/selfhost_merged.osty:5006:5
+	// Osty: /tmp/selfhost_merged.osty:5008:5
 	prev := frontTokenAtList(tokens, open-1).kind
 	_ = prev
 	return ostyEqual(prev, FrontTokenKind(&FrontTokenKind_FrontIdent{})) || ostyEqual(prev, FrontTokenKind(&FrontTokenKind_FrontRParen{})) || ostyEqual(prev, FrontTokenKind(&FrontTokenKind_FrontRBracket{})) || ostyEqual(prev, FrontTokenKind(&FrontTokenKind_FrontQuestion{})) || ostyEqual(prev, FrontTokenKind(&FrontTokenKind_FrontGt{}))
 }
 
-// Osty: /tmp/selfhost_merged.osty:5010:5
+// Osty: /tmp/selfhost_merged.osty:5012:5
 func frontIsIndexOpen(tokens []*FrontToken, open int, start int) bool {
-	// Osty: /tmp/selfhost_merged.osty:5011:5
+	// Osty: /tmp/selfhost_merged.osty:5013:5
 	if open <= start {
-		// Osty: /tmp/selfhost_merged.osty:5012:9
+		// Osty: /tmp/selfhost_merged.osty:5014:9
 		return false
 	}
-	// Osty: /tmp/selfhost_merged.osty:5014:5
+	// Osty: /tmp/selfhost_merged.osty:5016:5
 	prev := frontTokenAtList(tokens, open-1).kind
 	_ = prev
 	return ostyEqual(prev, FrontTokenKind(&FrontTokenKind_FrontIdent{})) || ostyEqual(prev, FrontTokenKind(&FrontTokenKind_FrontRParen{})) || ostyEqual(prev, FrontTokenKind(&FrontTokenKind_FrontRBracket{})) || ostyEqual(prev, FrontTokenKind(&FrontTokenKind_FrontQuestion{}))
 }
 
-// Osty: /tmp/selfhost_merged.osty:5018:5
+// Osty: /tmp/selfhost_merged.osty:5020:5
 func frontIsStructLiteralOpen(tokens []*FrontToken, open int, start int) bool {
-	// Osty: /tmp/selfhost_merged.osty:5019:5
+	// Osty: /tmp/selfhost_merged.osty:5021:5
 	if open <= start {
-		// Osty: /tmp/selfhost_merged.osty:5020:9
+		// Osty: /tmp/selfhost_merged.osty:5022:9
 		return false
 	}
-	// Osty: /tmp/selfhost_merged.osty:5022:5
+	// Osty: /tmp/selfhost_merged.osty:5024:5
 	prev := frontTokenAtList(tokens, open-1).kind
 	_ = prev
-	// Osty: /tmp/selfhost_merged.osty:5023:5
+	// Osty: /tmp/selfhost_merged.osty:5025:5
 	if !ostyEqual(prev, FrontTokenKind(&FrontTokenKind_FrontIdent{})) && !ostyEqual(prev, FrontTokenKind(&FrontTokenKind_FrontRParen{})) && !ostyEqual(prev, FrontTokenKind(&FrontTokenKind_FrontRBracket{})) {
-		// Osty: /tmp/selfhost_merged.osty:5024:9
+		// Osty: /tmp/selfhost_merged.osty:5026:9
 		return false
 	}
 	return !(frontLineHasControlBefore(tokens, open, start))
 }
 
-// Osty: /tmp/selfhost_merged.osty:5029:5
+// Osty: /tmp/selfhost_merged.osty:5031:5
 func frontIsMapLiteralOpen(tokens []*FrontToken, open int, end int) bool {
-	// Osty: /tmp/selfhost_merged.osty:5030:5
+	// Osty: /tmp/selfhost_merged.osty:5032:5
 	if ostyEqual(frontTokenAtList(tokens, open+1).kind, FrontTokenKind(&FrontTokenKind_FrontColon{})) {
-		// Osty: /tmp/selfhost_merged.osty:5031:9
+		// Osty: /tmp/selfhost_merged.osty:5033:9
 		return true
 	}
-	// Osty: /tmp/selfhost_merged.osty:5033:5
+	// Osty: /tmp/selfhost_merged.osty:5035:5
 	close := frontFindMatching(tokens, open, end, FrontTokenKind(&FrontTokenKind_FrontLBrace{}), FrontTokenKind(&FrontTokenKind_FrontRBrace{}))
 	_ = close
 	return frontContainsTopLevelKind(tokens, open+1, close, FrontTokenKind(&FrontTokenKind_FrontColon{}))
 }
 
-// Osty: /tmp/selfhost_merged.osty:5037:5
+// Osty: /tmp/selfhost_merged.osty:5039:5
 func frontLineHasControlBefore(tokens []*FrontToken, at int, start int) bool {
-	// Osty: /tmp/selfhost_merged.osty:5038:5
+	// Osty: /tmp/selfhost_merged.osty:5040:5
 	sawControl := false
 	_ = sawControl
-	// Osty: /tmp/selfhost_merged.osty:5039:5
+	// Osty: /tmp/selfhost_merged.osty:5041:5
 	for idx := start; idx < at; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:5040:9
+		// Osty: /tmp/selfhost_merged.osty:5042:9
 		kind := frontTokenAtList(tokens, idx).kind
 		_ = kind
-		// Osty: /tmp/selfhost_merged.osty:5041:9
+		// Osty: /tmp/selfhost_merged.osty:5043:9
 		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontNewline{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontSemicolon{})) {
-			// Osty: /tmp/selfhost_merged.osty:5042:24
+			// Osty: /tmp/selfhost_merged.osty:5044:24
 			sawControl = false
 		}
-		// Osty: /tmp/selfhost_merged.osty:5044:9
+		// Osty: /tmp/selfhost_merged.osty:5046:9
 		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontIf{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontFor{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontMatch{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontElse{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontFn{})) {
-			// Osty: /tmp/selfhost_merged.osty:5045:24
+			// Osty: /tmp/selfhost_merged.osty:5047:24
 			sawControl = true
 		}
 	}
 	return sawControl
 }
 
-// Osty: /tmp/selfhost_merged.osty:5051:5
+// Osty: /tmp/selfhost_merged.osty:5053:5
 func frontCountStructLiteralFields(tokens []*FrontToken, start int, end int) int {
-	// Osty: /tmp/selfhost_merged.osty:5052:5
+	// Osty: /tmp/selfhost_merged.osty:5054:5
 	fields := 0
 	_ = fields
-	// Osty: /tmp/selfhost_merged.osty:5053:5
+	// Osty: /tmp/selfhost_merged.osty:5055:5
 	depth := 0
 	_ = depth
-	// Osty: /tmp/selfhost_merged.osty:5054:5
+	// Osty: /tmp/selfhost_merged.osty:5056:5
 	itemHasField := false
 	_ = itemHasField
-	// Osty: /tmp/selfhost_merged.osty:5055:5
+	// Osty: /tmp/selfhost_merged.osty:5057:5
 	itemIsSpread := false
 	_ = itemIsSpread
-	// Osty: /tmp/selfhost_merged.osty:5056:5
+	// Osty: /tmp/selfhost_merged.osty:5058:5
 	for idx := start; idx < end; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:5057:9
+		// Osty: /tmp/selfhost_merged.osty:5059:9
 		kind := frontTokenAtList(tokens, idx).kind
 		_ = kind
-		// Osty: /tmp/selfhost_merged.osty:5058:9
+		// Osty: /tmp/selfhost_merged.osty:5060:9
 		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBracket{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLt{})) {
-			// Osty: /tmp/selfhost_merged.osty:5059:19
+			// Osty: /tmp/selfhost_merged.osty:5061:19
 			depth = depth + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRParen{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBracket{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontGt{})) {
-			// Osty: /tmp/selfhost_merged.osty:5061:13
+			// Osty: /tmp/selfhost_merged.osty:5063:13
 			if depth > 0 {
-				// Osty: /tmp/selfhost_merged.osty:5062:23
+				// Osty: /tmp/selfhost_merged.osty:5064:23
 				depth = depth - 1
 			}
 		} else if depth == 0 && ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontDotDot{})) {
-			// Osty: /tmp/selfhost_merged.osty:5065:26
+			// Osty: /tmp/selfhost_merged.osty:5067:26
 			itemHasField = false
-			// Osty: /tmp/selfhost_merged.osty:5066:26
+			// Osty: /tmp/selfhost_merged.osty:5068:26
 			itemIsSpread = true
 		} else if depth == 0 && ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) && !(itemIsSpread) {
-			// Osty: /tmp/selfhost_merged.osty:5068:26
+			// Osty: /tmp/selfhost_merged.osty:5070:26
 			itemHasField = true
 		} else if depth == 0 && ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontComma{})) {
-			// Osty: /tmp/selfhost_merged.osty:5070:13
+			// Osty: /tmp/selfhost_merged.osty:5072:13
 			if itemHasField {
-				// Osty: /tmp/selfhost_merged.osty:5071:24
+				// Osty: /tmp/selfhost_merged.osty:5073:24
 				fields = fields + 1
 			}
-			// Osty: /tmp/selfhost_merged.osty:5073:26
+			// Osty: /tmp/selfhost_merged.osty:5075:26
 			itemHasField = false
-			// Osty: /tmp/selfhost_merged.osty:5074:26
+			// Osty: /tmp/selfhost_merged.osty:5076:26
 			itemIsSpread = false
 		}
 	}
-	// Osty: /tmp/selfhost_merged.osty:5077:5
+	// Osty: /tmp/selfhost_merged.osty:5079:5
 	if itemHasField {
-		// Osty: /tmp/selfhost_merged.osty:5078:16
+		// Osty: /tmp/selfhost_merged.osty:5080:16
 		fields = fields + 1
 	}
 	return fields
 }
 
-// Osty: /tmp/selfhost_merged.osty:5083:5
+// Osty: /tmp/selfhost_merged.osty:5085:5
 func frontCountSpreads(tokens []*FrontToken, start int, end int) int {
-	// Osty: /tmp/selfhost_merged.osty:5084:5
+	// Osty: /tmp/selfhost_merged.osty:5086:5
 	spreads := 0
 	_ = spreads
-	// Osty: /tmp/selfhost_merged.osty:5085:5
+	// Osty: /tmp/selfhost_merged.osty:5087:5
 	depth := 0
 	_ = depth
-	// Osty: /tmp/selfhost_merged.osty:5086:5
+	// Osty: /tmp/selfhost_merged.osty:5088:5
 	for idx := start; idx < end; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:5087:9
+		// Osty: /tmp/selfhost_merged.osty:5089:9
 		kind := frontTokenAtList(tokens, idx).kind
 		_ = kind
-		// Osty: /tmp/selfhost_merged.osty:5088:9
+		// Osty: /tmp/selfhost_merged.osty:5090:9
 		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBracket{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:5089:19
+			// Osty: /tmp/selfhost_merged.osty:5091:19
 			depth = depth + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRParen{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBracket{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:5091:13
+			// Osty: /tmp/selfhost_merged.osty:5093:13
 			if depth > 0 {
-				// Osty: /tmp/selfhost_merged.osty:5092:23
+				// Osty: /tmp/selfhost_merged.osty:5094:23
 				depth = depth - 1
 			}
 		} else if depth == 0 && ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontDotDot{})) {
-			// Osty: /tmp/selfhost_merged.osty:5095:21
+			// Osty: /tmp/selfhost_merged.osty:5097:21
 			spreads = spreads + 1
 		}
 	}
 	return spreads
 }
 
-// Osty: /tmp/selfhost_merged.osty:5101:5
+// Osty: /tmp/selfhost_merged.osty:5103:5
 func frontIsSpreadToken(tokens []*FrontToken, at int, start int) bool {
-	// Osty: /tmp/selfhost_merged.osty:5102:5
+	// Osty: /tmp/selfhost_merged.osty:5104:5
 	if !ostyEqual(frontTokenAtList(tokens, at).kind, FrontTokenKind(&FrontTokenKind_FrontDotDot{})) {
-		// Osty: /tmp/selfhost_merged.osty:5103:9
+		// Osty: /tmp/selfhost_merged.osty:5105:9
 		return false
 	}
-	// Osty: /tmp/selfhost_merged.osty:5105:5
+	// Osty: /tmp/selfhost_merged.osty:5107:5
 	if at <= start {
-		// Osty: /tmp/selfhost_merged.osty:5106:9
+		// Osty: /tmp/selfhost_merged.osty:5108:9
 		return false
 	}
-	// Osty: /tmp/selfhost_merged.osty:5108:5
+	// Osty: /tmp/selfhost_merged.osty:5110:5
 	prev := frontTokenAtList(tokens, at-1).kind
 	_ = prev
 	return ostyEqual(prev, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) || ostyEqual(prev, FrontTokenKind(&FrontTokenKind_FrontComma{}))
 }
 
-// Osty: /tmp/selfhost_merged.osty:5112:5
+// Osty: /tmp/selfhost_merged.osty:5114:5
 func frontIsClosurePipe(tokens []*FrontToken, pipe int, start int, end int) bool {
 	return frontIsExprPrefixContext(tokens, pipe, start) && frontFindNextTokenKind(tokens, pipe+1, end, FrontTokenKind(&FrontTokenKind_FrontBitOr{})) < end
 }
 
-// Osty: /tmp/selfhost_merged.osty:5121:5
+// Osty: /tmp/selfhost_merged.osty:5123:5
 func frontIsClosureZeroPipe(tokens []*FrontToken, pipe int, start int) bool {
 	return frontIsExprPrefixContext(tokens, pipe, start)
 }
 
-// Osty: /tmp/selfhost_merged.osty:5125:5
+// Osty: /tmp/selfhost_merged.osty:5127:5
 func frontIsExprPrefixContext(tokens []*FrontToken, at int, start int) bool {
-	// Osty: /tmp/selfhost_merged.osty:5126:5
+	// Osty: /tmp/selfhost_merged.osty:5128:5
 	if at <= start {
-		// Osty: /tmp/selfhost_merged.osty:5127:9
+		// Osty: /tmp/selfhost_merged.osty:5129:9
 		return true
 	}
-	// Osty: /tmp/selfhost_merged.osty:5129:5
+	// Osty: /tmp/selfhost_merged.osty:5131:5
 	prev := frontTokenAtList(tokens, at-1).kind
 	_ = prev
 	return ostyEqual(prev, FrontTokenKind(&FrontTokenKind_FrontLParen{})) || ostyEqual(prev, FrontTokenKind(&FrontTokenKind_FrontLBracket{})) || ostyEqual(prev, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) || ostyEqual(prev, FrontTokenKind(&FrontTokenKind_FrontComma{})) || ostyEqual(prev, FrontTokenKind(&FrontTokenKind_FrontAssign{})) || ostyEqual(prev, FrontTokenKind(&FrontTokenKind_FrontReturn{})) || ostyEqual(prev, FrontTokenKind(&FrontTokenKind_FrontArrow{})) || ostyEqual(prev, FrontTokenKind(&FrontTokenKind_FrontNewline{})) || ostyEqual(prev, FrontTokenKind(&FrontTokenKind_FrontColon{}))
 }
 
-// Osty: /tmp/selfhost_merged.osty:5133:5
+// Osty: /tmp/selfhost_merged.osty:5135:5
 func frontFindNextTokenKind(tokens []*FrontToken, start int, end int, target FrontTokenKind) int {
-	// Osty: /tmp/selfhost_merged.osty:5139:5
+	// Osty: /tmp/selfhost_merged.osty:5141:5
 	for idx := start; idx < end; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:5140:9
+		// Osty: /tmp/selfhost_merged.osty:5142:9
 		if ostyEqual(frontTokenAtList(tokens, idx).kind, target) {
-			// Osty: /tmp/selfhost_merged.osty:5141:13
+			// Osty: /tmp/selfhost_merged.osty:5143:13
 			return idx
 		}
 	}
 	return end
 }
 
-// Osty: /tmp/selfhost_merged.osty:5147:5
+// Osty: /tmp/selfhost_merged.osty:5149:5
 func frontFindFollowingBlockClose(tokens []*FrontToken, start int, end int) int {
-	// Osty: /tmp/selfhost_merged.osty:5148:5
+	// Osty: /tmp/selfhost_merged.osty:5150:5
 	for idx := start; idx < end; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:5149:9
+		// Osty: /tmp/selfhost_merged.osty:5151:9
 		if ostyEqual(frontTokenAtList(tokens, idx).kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:5150:13
+			// Osty: /tmp/selfhost_merged.osty:5152:13
 			return frontFindMatching(tokens, idx, end, FrontTokenKind(&FrontTokenKind_FrontLBrace{}), FrontTokenKind(&FrontTokenKind_FrontRBrace{}))
 		}
 	}
 	return start
 }
 
-// Osty: /tmp/selfhost_merged.osty:5156:5
+// Osty: /tmp/selfhost_merged.osty:5158:5
 func frontCountKeywordArgs(tokens []*FrontToken, start int, end int) int {
-	// Osty: /tmp/selfhost_merged.osty:5157:5
+	// Osty: /tmp/selfhost_merged.osty:5159:5
 	args := 0
 	_ = args
-	// Osty: /tmp/selfhost_merged.osty:5158:5
+	// Osty: /tmp/selfhost_merged.osty:5160:5
 	depth := 0
 	_ = depth
-	// Osty: /tmp/selfhost_merged.osty:5159:5
+	// Osty: /tmp/selfhost_merged.osty:5161:5
 	for idx := start; idx < end; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:5160:9
+		// Osty: /tmp/selfhost_merged.osty:5162:9
 		kind := frontTokenAtList(tokens, idx).kind
 		_ = kind
-		// Osty: /tmp/selfhost_merged.osty:5161:9
+		// Osty: /tmp/selfhost_merged.osty:5163:9
 		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBracket{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:5162:19
+			// Osty: /tmp/selfhost_merged.osty:5164:19
 			depth = depth + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRParen{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBracket{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:5164:13
+			// Osty: /tmp/selfhost_merged.osty:5166:13
 			if depth > 0 {
-				// Osty: /tmp/selfhost_merged.osty:5165:23
+				// Osty: /tmp/selfhost_merged.osty:5167:23
 				depth = depth - 1
 			}
 		} else if depth == 0 && ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) && ostyEqual(frontTokenAtList(tokens, idx+1).kind, FrontTokenKind(&FrontTokenKind_FrontColon{})) {
-			// Osty: /tmp/selfhost_merged.osty:5168:18
+			// Osty: /tmp/selfhost_merged.osty:5170:18
 			args = args + 1
 		}
 	}
 	return args
 }
 
-// Osty: /tmp/selfhost_merged.osty:5174:5
+// Osty: /tmp/selfhost_merged.osty:5176:5
 func frontCountMatchArms(tokens []*FrontToken, matchIdx int, close int) int {
-	// Osty: /tmp/selfhost_merged.osty:5175:5
+	// Osty: /tmp/selfhost_merged.osty:5177:5
 	arms := 0
 	_ = arms
-	// Osty: /tmp/selfhost_merged.osty:5176:5
+	// Osty: /tmp/selfhost_merged.osty:5178:5
 	depth := 0
 	_ = depth
-	// Osty: /tmp/selfhost_merged.osty:5177:5
+	// Osty: /tmp/selfhost_merged.osty:5179:5
 	for idx := matchIdx; idx < close; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:5178:9
+		// Osty: /tmp/selfhost_merged.osty:5180:9
 		kind := frontTokenAtList(tokens, idx).kind
 		_ = kind
-		// Osty: /tmp/selfhost_merged.osty:5179:9
+		// Osty: /tmp/selfhost_merged.osty:5181:9
 		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBracket{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:5180:19
+			// Osty: /tmp/selfhost_merged.osty:5182:19
 			depth = depth + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRParen{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBracket{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:5182:13
+			// Osty: /tmp/selfhost_merged.osty:5184:13
 			if depth > 0 {
-				// Osty: /tmp/selfhost_merged.osty:5183:23
+				// Osty: /tmp/selfhost_merged.osty:5185:23
 				depth = depth - 1
 			}
 		} else if depth == 1 && ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontArrow{})) {
-			// Osty: /tmp/selfhost_merged.osty:5186:18
+			// Osty: /tmp/selfhost_merged.osty:5188:18
 			arms = arms + 1
 		}
 	}
 	return arms
 }
 
-// Osty: /tmp/selfhost_merged.osty:5192:5
+// Osty: /tmp/selfhost_merged.osty:5194:5
 func frontCountMatchGuards(tokens []*FrontToken, matchIdx int, close int) int {
-	// Osty: /tmp/selfhost_merged.osty:5193:5
+	// Osty: /tmp/selfhost_merged.osty:5195:5
 	guards := 0
 	_ = guards
-	// Osty: /tmp/selfhost_merged.osty:5194:5
+	// Osty: /tmp/selfhost_merged.osty:5196:5
 	depth := 0
 	_ = depth
-	// Osty: /tmp/selfhost_merged.osty:5195:5
+	// Osty: /tmp/selfhost_merged.osty:5197:5
 	for idx := matchIdx; idx < close; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:5196:9
+		// Osty: /tmp/selfhost_merged.osty:5198:9
 		kind := frontTokenAtList(tokens, idx).kind
 		_ = kind
-		// Osty: /tmp/selfhost_merged.osty:5197:9
+		// Osty: /tmp/selfhost_merged.osty:5199:9
 		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBracket{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:5198:19
+			// Osty: /tmp/selfhost_merged.osty:5200:19
 			depth = depth + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRParen{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBracket{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:5200:13
+			// Osty: /tmp/selfhost_merged.osty:5202:13
 			if depth > 0 {
-				// Osty: /tmp/selfhost_merged.osty:5201:23
+				// Osty: /tmp/selfhost_merged.osty:5203:23
 				depth = depth - 1
 			}
 		} else if depth == 1 && ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontIf{})) {
-			// Osty: /tmp/selfhost_merged.osty:5204:20
+			// Osty: /tmp/selfhost_merged.osty:5206:20
 			guards = guards + 1
 		}
 	}
 	return guards
 }
 
-// Osty: /tmp/selfhost_merged.osty:5210:5
+// Osty: /tmp/selfhost_merged.osty:5212:5
 func frontFindMatching(tokens []*FrontToken, open int, count int, openKind FrontTokenKind, closeKind FrontTokenKind) int {
-	// Osty: /tmp/selfhost_merged.osty:5217:5
+	// Osty: /tmp/selfhost_merged.osty:5219:5
 	depth := 0
 	_ = depth
-	// Osty: /tmp/selfhost_merged.osty:5218:5
+	// Osty: /tmp/selfhost_merged.osty:5220:5
 	for idx := open; idx < count; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:5219:9
+		// Osty: /tmp/selfhost_merged.osty:5221:9
 		kind := frontTokenAtList(tokens, idx).kind
 		_ = kind
-		// Osty: /tmp/selfhost_merged.osty:5220:9
+		// Osty: /tmp/selfhost_merged.osty:5222:9
 		if ostyEqual(kind, openKind) {
-			// Osty: /tmp/selfhost_merged.osty:5221:19
+			// Osty: /tmp/selfhost_merged.osty:5223:19
 			depth = depth + 1
 		} else if ostyEqual(kind, closeKind) {
-			// Osty: /tmp/selfhost_merged.osty:5223:19
+			// Osty: /tmp/selfhost_merged.osty:5225:19
 			depth = depth - 1
-			// Osty: /tmp/selfhost_merged.osty:5224:13
+			// Osty: /tmp/selfhost_merged.osty:5226:13
 			if depth == 0 {
-				// Osty: /tmp/selfhost_merged.osty:5225:17
+				// Osty: /tmp/selfhost_merged.osty:5227:17
 				return idx
 			}
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontEOF{})) {
-			// Osty: /tmp/selfhost_merged.osty:5228:13
+			// Osty: /tmp/selfhost_merged.osty:5230:13
 			return idx
 		}
 	}
 	return count - 1
 }
 
-// Osty: /tmp/selfhost_merged.osty:5234:5
+// Osty: /tmp/selfhost_merged.osty:5236:5
 func frontFindTypeEnd(tokens []*FrontToken, start int, count int) int {
-	// Osty: /tmp/selfhost_merged.osty:5235:5
+	// Osty: /tmp/selfhost_merged.osty:5237:5
 	parenDepth := 0
 	_ = parenDepth
-	// Osty: /tmp/selfhost_merged.osty:5236:5
+	// Osty: /tmp/selfhost_merged.osty:5238:5
 	bracketDepth := 0
 	_ = bracketDepth
-	// Osty: /tmp/selfhost_merged.osty:5237:5
+	// Osty: /tmp/selfhost_merged.osty:5239:5
 	angleDepth := 0
 	_ = angleDepth
-	// Osty: /tmp/selfhost_merged.osty:5238:5
+	// Osty: /tmp/selfhost_merged.osty:5240:5
 	for idx := start; idx < count; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:5239:9
+		// Osty: /tmp/selfhost_merged.osty:5241:9
 		kind := frontTokenAtList(tokens, idx).kind
 		_ = kind
-		// Osty: /tmp/selfhost_merged.osty:5240:9
+		// Osty: /tmp/selfhost_merged.osty:5242:9
 		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) {
-			// Osty: /tmp/selfhost_merged.osty:5241:24
+			// Osty: /tmp/selfhost_merged.osty:5243:24
 			parenDepth = parenDepth + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRParen{})) {
-			// Osty: /tmp/selfhost_merged.osty:5243:13
+			// Osty: /tmp/selfhost_merged.osty:5245:13
 			if parenDepth == 0 && bracketDepth == 0 && angleDepth == 0 {
-				// Osty: /tmp/selfhost_merged.osty:5244:17
+				// Osty: /tmp/selfhost_merged.osty:5246:17
 				return idx
 			}
-			// Osty: /tmp/selfhost_merged.osty:5246:13
+			// Osty: /tmp/selfhost_merged.osty:5248:13
 			if parenDepth > 0 {
-				// Osty: /tmp/selfhost_merged.osty:5247:28
+				// Osty: /tmp/selfhost_merged.osty:5249:28
 				parenDepth = parenDepth - 1
 			}
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBracket{})) {
-			// Osty: /tmp/selfhost_merged.osty:5250:26
+			// Osty: /tmp/selfhost_merged.osty:5252:26
 			bracketDepth = bracketDepth + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBracket{})) {
-			// Osty: /tmp/selfhost_merged.osty:5252:13
+			// Osty: /tmp/selfhost_merged.osty:5254:13
 			if bracketDepth > 0 {
-				// Osty: /tmp/selfhost_merged.osty:5253:30
+				// Osty: /tmp/selfhost_merged.osty:5255:30
 				bracketDepth = bracketDepth - 1
 			}
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLt{})) {
-			// Osty: /tmp/selfhost_merged.osty:5256:24
+			// Osty: /tmp/selfhost_merged.osty:5258:24
 			angleDepth = angleDepth + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontGt{})) {
-			// Osty: /tmp/selfhost_merged.osty:5258:13
+			// Osty: /tmp/selfhost_merged.osty:5260:13
 			if angleDepth > 0 {
-				// Osty: /tmp/selfhost_merged.osty:5259:28
+				// Osty: /tmp/selfhost_merged.osty:5261:28
 				angleDepth = angleDepth - 1
 			} else if parenDepth == 0 && bracketDepth == 0 {
-				// Osty: /tmp/selfhost_merged.osty:5261:17
+				// Osty: /tmp/selfhost_merged.osty:5263:17
 				return idx
 			}
 		} else if parenDepth == 0 && bracketDepth == 0 && angleDepth == 0 && ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontFn{})) && idx > start {
-			// Osty: /tmp/selfhost_merged.osty:5264:13
-			return idx
-		} else if parenDepth == 0 && bracketDepth == 0 && angleDepth == 0 && (ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontComma{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontNewline{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontAssign{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
 			// Osty: /tmp/selfhost_merged.osty:5266:13
 			return idx
-		}
-	}
-	return count
-}
-
-// Osty: /tmp/selfhost_merged.osty:5272:5
-func frontFindStatementEnd(tokens []*FrontToken, start int, count int) int {
-	// Osty: /tmp/selfhost_merged.osty:5273:5
-	parenDepth := 0
-	_ = parenDepth
-	// Osty: /tmp/selfhost_merged.osty:5274:5
-	bracketDepth := 0
-	_ = bracketDepth
-	// Osty: /tmp/selfhost_merged.osty:5275:5
-	braceDepth := 0
-	_ = braceDepth
-	// Osty: /tmp/selfhost_merged.osty:5276:5
-	for idx := start; idx < count; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:5277:9
-		kind := frontTokenAtList(tokens, idx).kind
-		_ = kind
-		// Osty: /tmp/selfhost_merged.osty:5278:9
-		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) {
-			// Osty: /tmp/selfhost_merged.osty:5279:24
-			parenDepth = parenDepth + 1
-		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRParen{})) {
-			// Osty: /tmp/selfhost_merged.osty:5281:13
-			if parenDepth > 0 {
-				// Osty: /tmp/selfhost_merged.osty:5282:28
-				parenDepth = parenDepth - 1
-			}
-		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBracket{})) {
-			// Osty: /tmp/selfhost_merged.osty:5285:26
-			bracketDepth = bracketDepth + 1
-		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBracket{})) {
-			// Osty: /tmp/selfhost_merged.osty:5287:13
-			if bracketDepth > 0 {
-				// Osty: /tmp/selfhost_merged.osty:5288:30
-				bracketDepth = bracketDepth - 1
-			}
-		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:5291:24
-			braceDepth = braceDepth + 1
-		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:5293:13
-			if braceDepth == 0 {
-				// Osty: /tmp/selfhost_merged.osty:5294:17
-				return idx
-			}
-			// Osty: /tmp/selfhost_merged.osty:5296:24
-			braceDepth = braceDepth - 1
-		} else if parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && (ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontNewline{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontSemicolon{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-			// Osty: /tmp/selfhost_merged.osty:5298:13
+		} else if parenDepth == 0 && bracketDepth == 0 && angleDepth == 0 && (ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontComma{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontNewline{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontAssign{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
+			// Osty: /tmp/selfhost_merged.osty:5268:13
 			return idx
 		}
 	}
 	return count
 }
 
-// Osty: /tmp/selfhost_merged.osty:5304:5
-func frontFindMemberEnd(tokens []*FrontToken, start int, count int) int {
-	// Osty: /tmp/selfhost_merged.osty:5305:5
+// Osty: /tmp/selfhost_merged.osty:5274:5
+func frontFindStatementEnd(tokens []*FrontToken, start int, count int) int {
+	// Osty: /tmp/selfhost_merged.osty:5275:5
 	parenDepth := 0
 	_ = parenDepth
-	// Osty: /tmp/selfhost_merged.osty:5306:5
+	// Osty: /tmp/selfhost_merged.osty:5276:5
 	bracketDepth := 0
 	_ = bracketDepth
-	// Osty: /tmp/selfhost_merged.osty:5307:5
+	// Osty: /tmp/selfhost_merged.osty:5277:5
 	braceDepth := 0
 	_ = braceDepth
-	// Osty: /tmp/selfhost_merged.osty:5308:5
-	angleDepth := 0
-	_ = angleDepth
-	// Osty: /tmp/selfhost_merged.osty:5309:5
+	// Osty: /tmp/selfhost_merged.osty:5278:5
 	for idx := start; idx < count; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:5310:9
+		// Osty: /tmp/selfhost_merged.osty:5279:9
 		kind := frontTokenAtList(tokens, idx).kind
 		_ = kind
-		// Osty: /tmp/selfhost_merged.osty:5311:9
+		// Osty: /tmp/selfhost_merged.osty:5280:9
 		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) {
-			// Osty: /tmp/selfhost_merged.osty:5312:24
+			// Osty: /tmp/selfhost_merged.osty:5281:24
 			parenDepth = parenDepth + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRParen{})) {
-			// Osty: /tmp/selfhost_merged.osty:5314:13
+			// Osty: /tmp/selfhost_merged.osty:5283:13
 			if parenDepth > 0 {
-				// Osty: /tmp/selfhost_merged.osty:5315:28
+				// Osty: /tmp/selfhost_merged.osty:5284:28
 				parenDepth = parenDepth - 1
 			}
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBracket{})) {
-			// Osty: /tmp/selfhost_merged.osty:5318:26
+			// Osty: /tmp/selfhost_merged.osty:5287:26
 			bracketDepth = bracketDepth + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBracket{})) {
-			// Osty: /tmp/selfhost_merged.osty:5320:13
+			// Osty: /tmp/selfhost_merged.osty:5289:13
 			if bracketDepth > 0 {
-				// Osty: /tmp/selfhost_merged.osty:5321:30
+				// Osty: /tmp/selfhost_merged.osty:5290:30
 				bracketDepth = bracketDepth - 1
 			}
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:5324:24
+			// Osty: /tmp/selfhost_merged.osty:5293:24
 			braceDepth = braceDepth + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:5326:13
+			// Osty: /tmp/selfhost_merged.osty:5295:13
 			if braceDepth == 0 {
-				// Osty: /tmp/selfhost_merged.osty:5327:17
+				// Osty: /tmp/selfhost_merged.osty:5296:17
 				return idx
 			}
-			// Osty: /tmp/selfhost_merged.osty:5329:24
+			// Osty: /tmp/selfhost_merged.osty:5298:24
+			braceDepth = braceDepth - 1
+		} else if parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && (ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontNewline{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontSemicolon{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
+			// Osty: /tmp/selfhost_merged.osty:5300:13
+			return idx
+		}
+	}
+	return count
+}
+
+// Osty: /tmp/selfhost_merged.osty:5306:5
+func frontFindMemberEnd(tokens []*FrontToken, start int, count int) int {
+	// Osty: /tmp/selfhost_merged.osty:5307:5
+	parenDepth := 0
+	_ = parenDepth
+	// Osty: /tmp/selfhost_merged.osty:5308:5
+	bracketDepth := 0
+	_ = bracketDepth
+	// Osty: /tmp/selfhost_merged.osty:5309:5
+	braceDepth := 0
+	_ = braceDepth
+	// Osty: /tmp/selfhost_merged.osty:5310:5
+	angleDepth := 0
+	_ = angleDepth
+	// Osty: /tmp/selfhost_merged.osty:5311:5
+	for idx := start; idx < count; idx++ {
+		// Osty: /tmp/selfhost_merged.osty:5312:9
+		kind := frontTokenAtList(tokens, idx).kind
+		_ = kind
+		// Osty: /tmp/selfhost_merged.osty:5313:9
+		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) {
+			// Osty: /tmp/selfhost_merged.osty:5314:24
+			parenDepth = parenDepth + 1
+		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRParen{})) {
+			// Osty: /tmp/selfhost_merged.osty:5316:13
+			if parenDepth > 0 {
+				// Osty: /tmp/selfhost_merged.osty:5317:28
+				parenDepth = parenDepth - 1
+			}
+		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBracket{})) {
+			// Osty: /tmp/selfhost_merged.osty:5320:26
+			bracketDepth = bracketDepth + 1
+		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBracket{})) {
+			// Osty: /tmp/selfhost_merged.osty:5322:13
+			if bracketDepth > 0 {
+				// Osty: /tmp/selfhost_merged.osty:5323:30
+				bracketDepth = bracketDepth - 1
+			}
+		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
+			// Osty: /tmp/selfhost_merged.osty:5326:24
+			braceDepth = braceDepth + 1
+		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) {
+			// Osty: /tmp/selfhost_merged.osty:5328:13
+			if braceDepth == 0 {
+				// Osty: /tmp/selfhost_merged.osty:5329:17
+				return idx
+			}
+			// Osty: /tmp/selfhost_merged.osty:5331:24
 			braceDepth = braceDepth - 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLt{})) {
-			// Osty: /tmp/selfhost_merged.osty:5331:24
+			// Osty: /tmp/selfhost_merged.osty:5333:24
 			angleDepth = angleDepth + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontGt{})) {
-			// Osty: /tmp/selfhost_merged.osty:5333:13
+			// Osty: /tmp/selfhost_merged.osty:5335:13
 			if angleDepth > 0 {
-				// Osty: /tmp/selfhost_merged.osty:5334:28
+				// Osty: /tmp/selfhost_merged.osty:5336:28
 				angleDepth = angleDepth - 1
 			}
 		} else if parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0 && (ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontComma{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontNewline{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontFn{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-			// Osty: /tmp/selfhost_merged.osty:5337:13
+			// Osty: /tmp/selfhost_merged.osty:5339:13
 			return idx
 		} else if parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0 && ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontPub{})) && ostyEqual(frontTokenAtList(tokens, idx+1).kind, FrontTokenKind(&FrontTokenKind_FrontFn{})) {
-			// Osty: /tmp/selfhost_merged.osty:5342:13
+			// Osty: /tmp/selfhost_merged.osty:5344:13
 			return idx
 		}
 	}
 	return count
 }
 
-// Osty: /tmp/selfhost_merged.osty:5348:5
+// Osty: /tmp/selfhost_merged.osty:5350:5
 func frontLineConsumed(tokens []*FrontToken, start int, count int) int {
 	return frontFindStatementEnd(tokens, start, count) - start
 }
 
-// Osty: /tmp/selfhost_merged.osty:5352:5
+// Osty: /tmp/selfhost_merged.osty:5354:5
 func frontVariantConsumed(tokens []*FrontToken, start int, count int) int {
-	// Osty: /tmp/selfhost_merged.osty:5353:5
+	// Osty: /tmp/selfhost_merged.osty:5355:5
 	for idx := start; idx < count; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:5354:9
+		// Osty: /tmp/selfhost_merged.osty:5356:9
 		kind := frontTokenAtList(tokens, idx).kind
 		_ = kind
-		// Osty: /tmp/selfhost_merged.osty:5355:9
+		// Osty: /tmp/selfhost_merged.osty:5357:9
 		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontComma{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontNewline{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontEOF{})) {
-			// Osty: /tmp/selfhost_merged.osty:5356:13
+			// Osty: /tmp/selfhost_merged.osty:5358:13
 			return idx - start + 1
 		}
 	}
 	return count - start
 }
 
-// Osty: /tmp/selfhost_merged.osty:5362:5
+// Osty: /tmp/selfhost_merged.osty:5364:5
 func frontFnStartAt(tokens []*FrontToken, at int) int {
 	return func() int {
 		if ostyEqual(frontTokenAtList(tokens, at).kind, FrontTokenKind(&FrontTokenKind_FrontPub{})) && ostyEqual(frontTokenAtList(tokens, at+1).kind, FrontTokenKind(&FrontTokenKind_FrontFn{})) {
@@ -7801,12 +7801,12 @@ func frontFnStartAt(tokens []*FrontToken, at int) int {
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:5370:5
+// Osty: /tmp/selfhost_merged.osty:5372:5
 func frontIsFieldStart(tokens []*FrontToken, at int) bool {
 	return ostyEqual(frontTokenAtList(tokens, at).kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) && ostyEqual(frontTokenAtList(tokens, at+1).kind, FrontTokenKind(&FrontTokenKind_FrontColon{})) || ostyEqual(frontTokenAtList(tokens, at).kind, FrontTokenKind(&FrontTokenKind_FrontPub{})) && ostyEqual(frontTokenAtList(tokens, at+1).kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) && ostyEqual(frontTokenAtList(tokens, at+2).kind, FrontTokenKind(&FrontTokenKind_FrontColon{}))
 }
 
-// Osty: /tmp/selfhost_merged.osty:5380:5
+// Osty: /tmp/selfhost_merged.osty:5382:5
 func frontFieldNameIndex(tokens []*FrontToken, at int) int {
 	return func() int {
 		if ostyEqual(frontTokenAtList(tokens, at).kind, FrontTokenKind(&FrontTokenKind_FrontPub{})) {
@@ -7817,58 +7817,58 @@ func frontFieldNameIndex(tokens []*FrontToken, at int) int {
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:5388:5
+// Osty: /tmp/selfhost_merged.osty:5390:5
 func frontScanParamListShape(tokens []*FrontToken, open int, close int, summary *FrontParseSummary) *FrontParseSummary {
-	// Osty: /tmp/selfhost_merged.osty:5394:5
+	// Osty: /tmp/selfhost_merged.osty:5396:5
 	out := summary
 	_ = out
-	// Osty: /tmp/selfhost_merged.osty:5395:5
+	// Osty: /tmp/selfhost_merged.osty:5397:5
 	skip := 0
 	_ = skip
-	// Osty: /tmp/selfhost_merged.osty:5396:5
+	// Osty: /tmp/selfhost_merged.osty:5398:5
 	for idx := open + 1; idx < close; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:5397:9
+		// Osty: /tmp/selfhost_merged.osty:5399:9
 		if skip > 0 {
-			// Osty: /tmp/selfhost_merged.osty:5398:18
+			// Osty: /tmp/selfhost_merged.osty:5400:18
 			skip = skip - 1
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:5400:13
+			// Osty: /tmp/selfhost_merged.osty:5402:13
 			kind := frontTokenAtList(tokens, idx).kind
 			_ = kind
-			// Osty: /tmp/selfhost_merged.osty:5401:13
+			// Osty: /tmp/selfhost_merged.osty:5403:13
 			if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontColon{})) {
-				// Osty: /tmp/selfhost_merged.osty:5402:17
+				// Osty: /tmp/selfhost_merged.osty:5404:17
 				typeEnd := frontFindTypeEnd(tokens, idx+1, close)
 				_ = typeEnd
-				// Osty: /tmp/selfhost_merged.osty:5403:21
+				// Osty: /tmp/selfhost_merged.osty:5405:21
 				out = frontScanTypeShape(tokens, idx+1, typeEnd, out)
-				// Osty: /tmp/selfhost_merged.osty:5404:17
+				// Osty: /tmp/selfhost_merged.osty:5406:17
 				if ostyEqual(frontTokenAtList(tokens, typeEnd).kind, FrontTokenKind(&FrontTokenKind_FrontAssign{})) {
-					// Osty: /tmp/selfhost_merged.osty:5405:21
+					// Osty: /tmp/selfhost_merged.osty:5407:21
 					exprEnd := frontFindParamDefaultEnd(tokens, typeEnd+1, close)
 					_ = exprEnd
-					// Osty: /tmp/selfhost_merged.osty:5406:39
+					// Osty: /tmp/selfhost_merged.osty:5408:39
 					out.defaultValues = out.defaultValues + 1
-					// Osty: /tmp/selfhost_merged.osty:5407:25
+					// Osty: /tmp/selfhost_merged.osty:5409:25
 					out = frontScanExprShape(tokens, typeEnd+1, exprEnd, out)
-					// Osty: /tmp/selfhost_merged.osty:5408:26
+					// Osty: /tmp/selfhost_merged.osty:5410:26
 					skip = exprEnd - idx
 				} else {
-					// Osty: /tmp/selfhost_merged.osty:5410:26
+					// Osty: /tmp/selfhost_merged.osty:5412:26
 					skip = typeEnd - idx
 				}
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontAssign{})) {
-				// Osty: /tmp/selfhost_merged.osty:5413:17
+				// Osty: /tmp/selfhost_merged.osty:5415:17
 				exprEnd := frontFindParamDefaultEnd(tokens, idx+1, close)
 				_ = exprEnd
-				// Osty: /tmp/selfhost_merged.osty:5414:35
+				// Osty: /tmp/selfhost_merged.osty:5416:35
 				out.defaultValues = out.defaultValues + 1
-				// Osty: /tmp/selfhost_merged.osty:5415:21
+				// Osty: /tmp/selfhost_merged.osty:5417:21
 				out = frontScanExprShape(tokens, idx+1, exprEnd, out)
-				// Osty: /tmp/selfhost_merged.osty:5416:22
+				// Osty: /tmp/selfhost_merged.osty:5418:22
 				skip = exprEnd - idx
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontMut{})) {
-				// Osty: /tmp/selfhost_merged.osty:5418:37
+				// Osty: /tmp/selfhost_merged.osty:5420:37
 				out.mutableBindings = out.mutableBindings + 1
 			}
 		}
@@ -7876,46 +7876,46 @@ func frontScanParamListShape(tokens []*FrontToken, open int, close int, summary 
 	return out
 }
 
-// Osty: /tmp/selfhost_merged.osty:5425:5
+// Osty: /tmp/selfhost_merged.osty:5427:5
 func frontScanTypeShape(tokens []*FrontToken, start int, end int, summary *FrontParseSummary) *FrontParseSummary {
-	// Osty: /tmp/selfhost_merged.osty:5431:5
+	// Osty: /tmp/selfhost_merged.osty:5433:5
 	out := summary
 	_ = out
-	// Osty: /tmp/selfhost_merged.osty:5432:5
+	// Osty: /tmp/selfhost_merged.osty:5434:5
 	skip := 0
 	_ = skip
-	// Osty: /tmp/selfhost_merged.osty:5433:5
+	// Osty: /tmp/selfhost_merged.osty:5435:5
 	for idx := start; idx < end; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:5434:9
+		// Osty: /tmp/selfhost_merged.osty:5436:9
 		if skip > 0 {
-			// Osty: /tmp/selfhost_merged.osty:5435:18
+			// Osty: /tmp/selfhost_merged.osty:5437:18
 			skip = skip - 1
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:5437:13
+			// Osty: /tmp/selfhost_merged.osty:5439:13
 			kind := frontTokenAtList(tokens, idx).kind
 			_ = kind
-			// Osty: /tmp/selfhost_merged.osty:5438:13
+			// Osty: /tmp/selfhost_merged.osty:5440:13
 			if frontIsTypeRefToken(kind) {
-				// Osty: /tmp/selfhost_merged.osty:5439:30
+				// Osty: /tmp/selfhost_merged.osty:5441:30
 				out.typeRefs = out.typeRefs + 1
-				// Osty: /tmp/selfhost_merged.osty:5440:17
+				// Osty: /tmp/selfhost_merged.osty:5442:17
 				if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontFn{})) {
-					// Osty: /tmp/selfhost_merged.osty:5441:33
+					// Osty: /tmp/selfhost_merged.osty:5443:33
 					out.fnTypes = out.fnTypes + 1
 				}
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontQuestion{})) {
-				// Osty: /tmp/selfhost_merged.osty:5444:35
+				// Osty: /tmp/selfhost_merged.osty:5446:35
 				out.optionalTypes = out.optionalTypes + 1
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontQQ{})) {
-				// Osty: /tmp/selfhost_merged.osty:5446:35
+				// Osty: /tmp/selfhost_merged.osty:5448:35
 				out.optionalTypes = out.optionalTypes + 2
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) {
-				// Osty: /tmp/selfhost_merged.osty:5448:17
+				// Osty: /tmp/selfhost_merged.osty:5450:17
 				close := frontFindMatching(tokens, idx, end, FrontTokenKind(&FrontTokenKind_FrontLParen{}), FrontTokenKind(&FrontTokenKind_FrontRParen{}))
 				_ = close
-				// Osty: /tmp/selfhost_merged.osty:5449:17
+				// Osty: /tmp/selfhost_merged.osty:5451:17
 				if !ostyEqual(frontTokenAtList(tokens, idx-1).kind, FrontTokenKind(&FrontTokenKind_FrontFn{})) && (close == idx+1 || frontContainsTopLevelKind(tokens, idx+1, close, FrontTokenKind(&FrontTokenKind_FrontComma{}))) {
-					// Osty: /tmp/selfhost_merged.osty:5455:36
+					// Osty: /tmp/selfhost_merged.osty:5457:36
 					out.tupleTypes = out.tupleTypes + 1
 				}
 			}
@@ -7924,265 +7924,265 @@ func frontScanTypeShape(tokens []*FrontToken, start int, end int, summary *Front
 	return out
 }
 
-// Osty: /tmp/selfhost_merged.osty:5463:5
+// Osty: /tmp/selfhost_merged.osty:5465:5
 func frontFindParamDefaultEnd(tokens []*FrontToken, start int, close int) int {
-	// Osty: /tmp/selfhost_merged.osty:5464:5
+	// Osty: /tmp/selfhost_merged.osty:5466:5
 	parenDepth := 0
 	_ = parenDepth
-	// Osty: /tmp/selfhost_merged.osty:5465:5
+	// Osty: /tmp/selfhost_merged.osty:5467:5
 	bracketDepth := 0
 	_ = bracketDepth
-	// Osty: /tmp/selfhost_merged.osty:5466:5
+	// Osty: /tmp/selfhost_merged.osty:5468:5
 	braceDepth := 0
 	_ = braceDepth
-	// Osty: /tmp/selfhost_merged.osty:5467:5
+	// Osty: /tmp/selfhost_merged.osty:5469:5
 	for idx := start; idx < close; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:5468:9
+		// Osty: /tmp/selfhost_merged.osty:5470:9
 		kind := frontTokenAtList(tokens, idx).kind
 		_ = kind
-		// Osty: /tmp/selfhost_merged.osty:5469:9
+		// Osty: /tmp/selfhost_merged.osty:5471:9
 		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) {
-			// Osty: /tmp/selfhost_merged.osty:5470:24
+			// Osty: /tmp/selfhost_merged.osty:5472:24
 			parenDepth = parenDepth + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRParen{})) {
-			// Osty: /tmp/selfhost_merged.osty:5472:13
+			// Osty: /tmp/selfhost_merged.osty:5474:13
 			if parenDepth > 0 {
-				// Osty: /tmp/selfhost_merged.osty:5473:28
+				// Osty: /tmp/selfhost_merged.osty:5475:28
 				parenDepth = parenDepth - 1
 			}
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBracket{})) {
-			// Osty: /tmp/selfhost_merged.osty:5476:26
+			// Osty: /tmp/selfhost_merged.osty:5478:26
 			bracketDepth = bracketDepth + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBracket{})) {
-			// Osty: /tmp/selfhost_merged.osty:5478:13
+			// Osty: /tmp/selfhost_merged.osty:5480:13
 			if bracketDepth > 0 {
-				// Osty: /tmp/selfhost_merged.osty:5479:30
+				// Osty: /tmp/selfhost_merged.osty:5481:30
 				bracketDepth = bracketDepth - 1
 			}
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:5482:24
+			// Osty: /tmp/selfhost_merged.osty:5484:24
 			braceDepth = braceDepth + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:5484:13
+			// Osty: /tmp/selfhost_merged.osty:5486:13
 			if braceDepth > 0 {
-				// Osty: /tmp/selfhost_merged.osty:5485:28
+				// Osty: /tmp/selfhost_merged.osty:5487:28
 				braceDepth = braceDepth - 1
 			}
 		} else if parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontComma{})) {
-			// Osty: /tmp/selfhost_merged.osty:5488:13
+			// Osty: /tmp/selfhost_merged.osty:5490:13
 			return idx
 		}
 	}
 	return close
 }
 
-// Osty: /tmp/selfhost_merged.osty:5494:5
+// Osty: /tmp/selfhost_merged.osty:5496:5
 func frontFindLetPatternEnd(tokens []*FrontToken, start int, end int) int {
-	// Osty: /tmp/selfhost_merged.osty:5495:5
+	// Osty: /tmp/selfhost_merged.osty:5497:5
 	parenDepth := 0
 	_ = parenDepth
-	// Osty: /tmp/selfhost_merged.osty:5496:5
+	// Osty: /tmp/selfhost_merged.osty:5498:5
 	braceDepth := 0
 	_ = braceDepth
-	// Osty: /tmp/selfhost_merged.osty:5497:5
+	// Osty: /tmp/selfhost_merged.osty:5499:5
 	for idx := start; idx < end; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:5498:9
+		// Osty: /tmp/selfhost_merged.osty:5500:9
 		kind := frontTokenAtList(tokens, idx).kind
 		_ = kind
-		// Osty: /tmp/selfhost_merged.osty:5499:9
+		// Osty: /tmp/selfhost_merged.osty:5501:9
 		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) {
-			// Osty: /tmp/selfhost_merged.osty:5500:24
+			// Osty: /tmp/selfhost_merged.osty:5502:24
 			parenDepth = parenDepth + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRParen{})) {
-			// Osty: /tmp/selfhost_merged.osty:5502:13
+			// Osty: /tmp/selfhost_merged.osty:5504:13
 			if parenDepth > 0 {
-				// Osty: /tmp/selfhost_merged.osty:5503:28
+				// Osty: /tmp/selfhost_merged.osty:5505:28
 				parenDepth = parenDepth - 1
 			}
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:5506:24
+			// Osty: /tmp/selfhost_merged.osty:5508:24
 			braceDepth = braceDepth + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:5508:13
+			// Osty: /tmp/selfhost_merged.osty:5510:13
 			if braceDepth > 0 {
-				// Osty: /tmp/selfhost_merged.osty:5509:28
+				// Osty: /tmp/selfhost_merged.osty:5511:28
 				braceDepth = braceDepth - 1
 			}
 		} else if parenDepth == 0 && braceDepth == 0 && (ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontColon{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontAssign{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontNewline{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-			// Osty: /tmp/selfhost_merged.osty:5512:13
+			// Osty: /tmp/selfhost_merged.osty:5514:13
 			return idx
 		}
 	}
 	return end
 }
 
-// Osty: /tmp/selfhost_merged.osty:5518:5
+// Osty: /tmp/selfhost_merged.osty:5520:5
 func frontScanPatternShape(tokens []*FrontToken, start int, end int, summary *FrontParseSummary) *FrontParseSummary {
-	// Osty: /tmp/selfhost_merged.osty:5524:5
+	// Osty: /tmp/selfhost_merged.osty:5526:5
 	out := summary
 	_ = out
-	// Osty: /tmp/selfhost_merged.osty:5525:5
+	// Osty: /tmp/selfhost_merged.osty:5527:5
 	for idx := start; idx < end; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:5526:9
+		// Osty: /tmp/selfhost_merged.osty:5528:9
 		kind := frontTokenAtList(tokens, idx).kind
 		_ = kind
-		// Osty: /tmp/selfhost_merged.osty:5527:9
+		// Osty: /tmp/selfhost_merged.osty:5529:9
 		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontUnderscore{})) {
-			// Osty: /tmp/selfhost_merged.osty:5528:34
+			// Osty: /tmp/selfhost_merged.osty:5530:34
 			out.wildcardPatterns = out.wildcardPatterns + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) {
-			// Osty: /tmp/selfhost_merged.osty:5530:31
+			// Osty: /tmp/selfhost_merged.osty:5532:31
 			out.tuplePatterns = out.tuplePatterns + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:5532:32
+			// Osty: /tmp/selfhost_merged.osty:5534:32
 			out.structPatterns = out.structPatterns + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) && ostyEqual(frontTokenAtList(tokens, idx+1).kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) {
-			// Osty: /tmp/selfhost_merged.osty:5534:33
+			// Osty: /tmp/selfhost_merged.osty:5536:33
 			out.variantPatterns = out.variantPatterns + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBitOr{})) {
-			// Osty: /tmp/selfhost_merged.osty:5536:28
+			// Osty: /tmp/selfhost_merged.osty:5538:28
 			out.orPatterns = out.orPatterns + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontDotDot{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontDotDotEq{})) {
-			// Osty: /tmp/selfhost_merged.osty:5538:31
+			// Osty: /tmp/selfhost_merged.osty:5540:31
 			out.rangePatterns = out.rangePatterns + 1
 		}
 	}
 	return out
 }
 
-// Osty: /tmp/selfhost_merged.osty:5544:5
+// Osty: /tmp/selfhost_merged.osty:5546:5
 func frontContainsTopLevelKind(tokens []*FrontToken, start int, end int, target FrontTokenKind) bool {
-	// Osty: /tmp/selfhost_merged.osty:5550:5
+	// Osty: /tmp/selfhost_merged.osty:5552:5
 	parenDepth := 0
 	_ = parenDepth
-	// Osty: /tmp/selfhost_merged.osty:5551:5
+	// Osty: /tmp/selfhost_merged.osty:5553:5
 	bracketDepth := 0
 	_ = bracketDepth
-	// Osty: /tmp/selfhost_merged.osty:5552:5
+	// Osty: /tmp/selfhost_merged.osty:5554:5
 	braceDepth := 0
 	_ = braceDepth
-	// Osty: /tmp/selfhost_merged.osty:5553:5
+	// Osty: /tmp/selfhost_merged.osty:5555:5
 	angleDepth := 0
 	_ = angleDepth
-	// Osty: /tmp/selfhost_merged.osty:5554:5
+	// Osty: /tmp/selfhost_merged.osty:5556:5
 	for idx := start; idx < end; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:5555:9
+		// Osty: /tmp/selfhost_merged.osty:5557:9
 		kind := frontTokenAtList(tokens, idx).kind
 		_ = kind
-		// Osty: /tmp/selfhost_merged.osty:5556:9
+		// Osty: /tmp/selfhost_merged.osty:5558:9
 		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) {
-			// Osty: /tmp/selfhost_merged.osty:5557:24
+			// Osty: /tmp/selfhost_merged.osty:5559:24
 			parenDepth = parenDepth + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRParen{})) {
-			// Osty: /tmp/selfhost_merged.osty:5559:13
+			// Osty: /tmp/selfhost_merged.osty:5561:13
 			if parenDepth > 0 {
-				// Osty: /tmp/selfhost_merged.osty:5560:28
+				// Osty: /tmp/selfhost_merged.osty:5562:28
 				parenDepth = parenDepth - 1
 			}
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBracket{})) {
-			// Osty: /tmp/selfhost_merged.osty:5563:26
+			// Osty: /tmp/selfhost_merged.osty:5565:26
 			bracketDepth = bracketDepth + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBracket{})) {
-			// Osty: /tmp/selfhost_merged.osty:5565:13
+			// Osty: /tmp/selfhost_merged.osty:5567:13
 			if bracketDepth > 0 {
-				// Osty: /tmp/selfhost_merged.osty:5566:30
+				// Osty: /tmp/selfhost_merged.osty:5568:30
 				bracketDepth = bracketDepth - 1
 			}
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:5569:24
+			// Osty: /tmp/selfhost_merged.osty:5571:24
 			braceDepth = braceDepth + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:5571:13
+			// Osty: /tmp/selfhost_merged.osty:5573:13
 			if braceDepth > 0 {
-				// Osty: /tmp/selfhost_merged.osty:5572:28
+				// Osty: /tmp/selfhost_merged.osty:5574:28
 				braceDepth = braceDepth - 1
 			}
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLt{})) {
-			// Osty: /tmp/selfhost_merged.osty:5575:24
+			// Osty: /tmp/selfhost_merged.osty:5577:24
 			angleDepth = angleDepth + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontGt{})) {
-			// Osty: /tmp/selfhost_merged.osty:5577:13
+			// Osty: /tmp/selfhost_merged.osty:5579:13
 			if angleDepth > 0 {
-				// Osty: /tmp/selfhost_merged.osty:5578:28
+				// Osty: /tmp/selfhost_merged.osty:5580:28
 				angleDepth = angleDepth - 1
 			}
 		} else if ostyEqual(kind, target) && parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0 {
-			// Osty: /tmp/selfhost_merged.osty:5581:13
+			// Osty: /tmp/selfhost_merged.osty:5583:13
 			return true
 		}
 	}
 	return false
 }
 
-// Osty: /tmp/selfhost_merged.osty:5587:5
+// Osty: /tmp/selfhost_merged.osty:5589:5
 func frontCountParams(tokens []*FrontToken, open int, close int) int {
-	// Osty: /tmp/selfhost_merged.osty:5588:5
+	// Osty: /tmp/selfhost_merged.osty:5590:5
 	count := 0
 	_ = count
-	// Osty: /tmp/selfhost_merged.osty:5589:5
+	// Osty: /tmp/selfhost_merged.osty:5591:5
 	skip := 0
 	_ = skip
-	// Osty: /tmp/selfhost_merged.osty:5590:5
+	// Osty: /tmp/selfhost_merged.osty:5592:5
 	for idx := open + 1; idx < close; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:5591:9
+		// Osty: /tmp/selfhost_merged.osty:5593:9
 		if skip > 0 {
-			// Osty: /tmp/selfhost_merged.osty:5592:18
+			// Osty: /tmp/selfhost_merged.osty:5594:18
 			skip = skip - 1
 		} else if (ostyEqual(frontTokenAtList(tokens, idx).kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) || ostyEqual(frontTokenAtList(tokens, idx).kind, FrontTokenKind(&FrontTokenKind_FrontUnderscore{}))) && ostyEqual(frontTokenAtList(tokens, idx+1).kind, FrontTokenKind(&FrontTokenKind_FrontColon{})) {
-			// Osty: /tmp/selfhost_merged.osty:5597:19
+			// Osty: /tmp/selfhost_merged.osty:5599:19
 			count = count + 1
-			// Osty: /tmp/selfhost_merged.osty:5598:13
+			// Osty: /tmp/selfhost_merged.osty:5600:13
 			typeEnd := frontFindTypeEnd(tokens, idx+2, close)
 			_ = typeEnd
-			// Osty: /tmp/selfhost_merged.osty:5599:18
+			// Osty: /tmp/selfhost_merged.osty:5601:18
 			skip = typeEnd - idx - 1
 		}
 	}
 	return count
 }
 
-// Osty: /tmp/selfhost_merged.osty:5605:5
+// Osty: /tmp/selfhost_merged.osty:5607:5
 func frontCountParamTypeRefs(tokens []*FrontToken, open int, close int) int {
-	// Osty: /tmp/selfhost_merged.osty:5606:5
+	// Osty: /tmp/selfhost_merged.osty:5608:5
 	refs := 0
 	_ = refs
-	// Osty: /tmp/selfhost_merged.osty:5607:5
+	// Osty: /tmp/selfhost_merged.osty:5609:5
 	skip := 0
 	_ = skip
-	// Osty: /tmp/selfhost_merged.osty:5608:5
+	// Osty: /tmp/selfhost_merged.osty:5610:5
 	for idx := open + 1; idx < close; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:5609:9
+		// Osty: /tmp/selfhost_merged.osty:5611:9
 		if skip > 0 {
-			// Osty: /tmp/selfhost_merged.osty:5610:18
+			// Osty: /tmp/selfhost_merged.osty:5612:18
 			skip = skip - 1
 		} else if ostyEqual(frontTokenAtList(tokens, idx).kind, FrontTokenKind(&FrontTokenKind_FrontColon{})) {
-			// Osty: /tmp/selfhost_merged.osty:5612:13
+			// Osty: /tmp/selfhost_merged.osty:5614:13
 			typeEnd := frontFindTypeEnd(tokens, idx+1, close)
 			_ = typeEnd
-			// Osty: /tmp/selfhost_merged.osty:5613:18
+			// Osty: /tmp/selfhost_merged.osty:5615:18
 			refs = refs + frontCountTypeRefs(tokens, idx+1, typeEnd)
-			// Osty: /tmp/selfhost_merged.osty:5614:18
+			// Osty: /tmp/selfhost_merged.osty:5616:18
 			skip = typeEnd - idx
 		}
 	}
 	return refs
 }
 
-// Osty: /tmp/selfhost_merged.osty:5620:5
+// Osty: /tmp/selfhost_merged.osty:5622:5
 func frontCountGenericParams(tokens []*FrontToken, start int, end int) int {
-	// Osty: /tmp/selfhost_merged.osty:5621:5
+	// Osty: /tmp/selfhost_merged.osty:5623:5
 	count := 0
 	_ = count
-	// Osty: /tmp/selfhost_merged.osty:5622:5
+	// Osty: /tmp/selfhost_merged.osty:5624:5
 	for idx := start; idx < end; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:5623:9
+		// Osty: /tmp/selfhost_merged.osty:5625:9
 		if ostyEqual(frontTokenAtList(tokens, idx).kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) {
-			// Osty: /tmp/selfhost_merged.osty:5624:13
+			// Osty: /tmp/selfhost_merged.osty:5626:13
 			prev := frontTokenAtList(tokens, idx-1).kind
 			_ = prev
-			// Osty: /tmp/selfhost_merged.osty:5625:13
+			// Osty: /tmp/selfhost_merged.osty:5627:13
 			if ostyEqual(prev, FrontTokenKind(&FrontTokenKind_FrontLt{})) || ostyEqual(prev, FrontTokenKind(&FrontTokenKind_FrontComma{})) {
-				// Osty: /tmp/selfhost_merged.osty:5626:23
+				// Osty: /tmp/selfhost_merged.osty:5628:23
 				count = count + 1
 			}
 		}
@@ -8190,129 +8190,129 @@ func frontCountGenericParams(tokens []*FrontToken, start int, end int) int {
 	return count
 }
 
-// Osty: /tmp/selfhost_merged.osty:5633:5
+// Osty: /tmp/selfhost_merged.osty:5635:5
 func frontCountTopLevelCommaItems(tokens []*FrontToken, start int, end int) int {
-	// Osty: /tmp/selfhost_merged.osty:5634:5
+	// Osty: /tmp/selfhost_merged.osty:5636:5
 	if start >= end {
-		// Osty: /tmp/selfhost_merged.osty:5635:9
+		// Osty: /tmp/selfhost_merged.osty:5637:9
 		return 0
 	}
-	// Osty: /tmp/selfhost_merged.osty:5637:5
+	// Osty: /tmp/selfhost_merged.osty:5639:5
 	count := 1
 	_ = count
-	// Osty: /tmp/selfhost_merged.osty:5638:5
+	// Osty: /tmp/selfhost_merged.osty:5640:5
 	depth := 0
 	_ = depth
-	// Osty: /tmp/selfhost_merged.osty:5639:5
+	// Osty: /tmp/selfhost_merged.osty:5641:5
 	for idx := start; idx < end; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:5640:9
+		// Osty: /tmp/selfhost_merged.osty:5642:9
 		kind := frontTokenAtList(tokens, idx).kind
 		_ = kind
-		// Osty: /tmp/selfhost_merged.osty:5641:9
+		// Osty: /tmp/selfhost_merged.osty:5643:9
 		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBracket{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLt{})) {
-			// Osty: /tmp/selfhost_merged.osty:5642:19
+			// Osty: /tmp/selfhost_merged.osty:5644:19
 			depth = depth + 1
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRParen{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBracket{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontGt{})) {
-			// Osty: /tmp/selfhost_merged.osty:5644:13
+			// Osty: /tmp/selfhost_merged.osty:5646:13
 			if depth > 0 {
-				// Osty: /tmp/selfhost_merged.osty:5645:23
+				// Osty: /tmp/selfhost_merged.osty:5647:23
 				depth = depth - 1
 			}
 		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontComma{})) && depth == 0 {
-			// Osty: /tmp/selfhost_merged.osty:5648:19
+			// Osty: /tmp/selfhost_merged.osty:5650:19
 			count = count + 1
 		}
 	}
 	return count
 }
 
-// Osty: /tmp/selfhost_merged.osty:5654:5
+// Osty: /tmp/selfhost_merged.osty:5656:5
 func frontCountTypeRefs(tokens []*FrontToken, start int, end int) int {
-	// Osty: /tmp/selfhost_merged.osty:5655:5
+	// Osty: /tmp/selfhost_merged.osty:5657:5
 	count := 0
 	_ = count
-	// Osty: /tmp/selfhost_merged.osty:5656:5
+	// Osty: /tmp/selfhost_merged.osty:5658:5
 	for idx := start; idx < end; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:5657:9
+		// Osty: /tmp/selfhost_merged.osty:5659:9
 		kind := frontTokenAtList(tokens, idx).kind
 		_ = kind
-		// Osty: /tmp/selfhost_merged.osty:5658:9
+		// Osty: /tmp/selfhost_merged.osty:5660:9
 		if frontIsTypeRefToken(kind) {
-			// Osty: /tmp/selfhost_merged.osty:5659:19
+			// Osty: /tmp/selfhost_merged.osty:5661:19
 			count = count + 1
 		}
 	}
 	return count
 }
 
-// Osty: /tmp/selfhost_merged.osty:5665:5
+// Osty: /tmp/selfhost_merged.osty:5667:5
 func frontIsTypeRefToken(kind FrontTokenKind) bool {
 	return ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontFn{}))
 }
 
-// Osty: /tmp/selfhost_merged.osty:5669:5
+// Osty: /tmp/selfhost_merged.osty:5671:5
 func frontScanProgramExtras(tokens []*FrontToken, count int, summary *FrontParseSummary) *FrontParseSummary {
-	// Osty: /tmp/selfhost_merged.osty:5674:5
+	// Osty: /tmp/selfhost_merged.osty:5676:5
 	out := summary
 	_ = out
-	// Osty: /tmp/selfhost_merged.osty:5675:5
+	// Osty: /tmp/selfhost_merged.osty:5677:5
 	skip := 0
 	_ = skip
-	// Osty: /tmp/selfhost_merged.osty:5676:5
+	// Osty: /tmp/selfhost_merged.osty:5678:5
 	for idx := 0; idx < count; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:5677:9
+		// Osty: /tmp/selfhost_merged.osty:5679:9
 		if skip > 0 {
-			// Osty: /tmp/selfhost_merged.osty:5678:18
+			// Osty: /tmp/selfhost_merged.osty:5680:18
 			skip = skip - 1
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:5680:13
+			// Osty: /tmp/selfhost_merged.osty:5682:13
 			kind := frontTokenAtList(tokens, idx).kind
 			_ = kind
-			// Osty: /tmp/selfhost_merged.osty:5681:13
+			// Osty: /tmp/selfhost_merged.osty:5683:13
 			if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLet{})) {
-				// Osty: /tmp/selfhost_merged.osty:5682:17
+				// Osty: /tmp/selfhost_merged.osty:5684:17
 				patternStart := idx + 1
 				_ = patternStart
-				// Osty: /tmp/selfhost_merged.osty:5683:17
+				// Osty: /tmp/selfhost_merged.osty:5685:17
 				end := frontFindStatementEnd(tokens, idx, count)
 				_ = end
-				// Osty: /tmp/selfhost_merged.osty:5684:17
+				// Osty: /tmp/selfhost_merged.osty:5686:17
 				if ostyEqual(frontTokenAtList(tokens, patternStart).kind, FrontTokenKind(&FrontTokenKind_FrontMut{})) {
-					// Osty: /tmp/selfhost_merged.osty:5685:41
+					// Osty: /tmp/selfhost_merged.osty:5687:41
 					out.mutableBindings = out.mutableBindings + 1
-					// Osty: /tmp/selfhost_merged.osty:5686:34
+					// Osty: /tmp/selfhost_merged.osty:5688:34
 					patternStart = patternStart + 1
 				}
-				// Osty: /tmp/selfhost_merged.osty:5688:17
+				// Osty: /tmp/selfhost_merged.osty:5690:17
 				patternEnd := frontFindLetPatternEnd(tokens, patternStart, end)
 				_ = patternEnd
-				// Osty: /tmp/selfhost_merged.osty:5689:21
+				// Osty: /tmp/selfhost_merged.osty:5691:21
 				out = frontScanPatternShape(tokens, patternStart, patternEnd, out)
-				// Osty: /tmp/selfhost_merged.osty:5690:22
+				// Osty: /tmp/selfhost_merged.osty:5692:22
 				skip = end - idx
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontFor{})) && ostyEqual(frontTokenAtList(tokens, idx+1).kind, FrontTokenKind(&FrontTokenKind_FrontLet{})) {
-				// Osty: /tmp/selfhost_merged.osty:5692:17
+				// Osty: /tmp/selfhost_merged.osty:5694:17
 				end := frontFindStatementEnd(tokens, idx, count)
 				_ = end
-				// Osty: /tmp/selfhost_merged.osty:5693:17
+				// Osty: /tmp/selfhost_merged.osty:5695:17
 				patternStart := idx + 2
 				_ = patternStart
-				// Osty: /tmp/selfhost_merged.osty:5694:17
+				// Osty: /tmp/selfhost_merged.osty:5696:17
 				patternEnd := frontFindLetPatternEnd(tokens, patternStart, end)
 				_ = patternEnd
-				// Osty: /tmp/selfhost_merged.osty:5695:21
+				// Osty: /tmp/selfhost_merged.osty:5697:21
 				out = frontScanPatternShape(tokens, patternStart, patternEnd, out)
 			} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontIf{})) && ostyEqual(frontTokenAtList(tokens, idx+1).kind, FrontTokenKind(&FrontTokenKind_FrontLet{})) {
-				// Osty: /tmp/selfhost_merged.osty:5697:17
+				// Osty: /tmp/selfhost_merged.osty:5699:17
 				end := frontFindStatementEnd(tokens, idx, count)
 				_ = end
-				// Osty: /tmp/selfhost_merged.osty:5698:17
+				// Osty: /tmp/selfhost_merged.osty:5700:17
 				patternStart := idx + 2
 				_ = patternStart
-				// Osty: /tmp/selfhost_merged.osty:5699:17
+				// Osty: /tmp/selfhost_merged.osty:5701:17
 				patternEnd := frontFindLetPatternEnd(tokens, patternStart, end)
 				_ = patternEnd
-				// Osty: /tmp/selfhost_merged.osty:5700:21
+				// Osty: /tmp/selfhost_merged.osty:5702:21
 				out = frontScanPatternShape(tokens, patternStart, patternEnd, out)
 			}
 		}
@@ -8320,44 +8320,44 @@ func frontScanProgramExtras(tokens []*FrontToken, count int, summary *FrontParse
 	return out
 }
 
-// Osty: /tmp/selfhost_merged.osty:5707:5
+// Osty: /tmp/selfhost_merged.osty:5709:5
 func frontIsAssignOp(kind FrontTokenKind) bool {
 	return ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontAssign{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontPlusEq{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontMinusEq{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontStarEq{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontSlashEq{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontPercentEq{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBitAndEq{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBitOrEq{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBitXorEq{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontShlEq{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontShrEq{}))
 }
 
-// Osty: /tmp/selfhost_merged.osty:5711:5
+// Osty: /tmp/selfhost_merged.osty:5713:5
 func frontIsBinaryOp(kind FrontTokenKind) bool {
 	return ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontPlus{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontMinus{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontStar{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontSlash{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontPercent{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontEq{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontNeq{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLt{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontGt{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLeq{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontGeq{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontAnd{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontOr{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBitAnd{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBitOr{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBitXor{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontShl{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontShr{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontQQ{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontDotDot{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontDotDotEq{}))
 }
 
-// Osty: /tmp/selfhost_merged.osty:5715:5
+// Osty: /tmp/selfhost_merged.osty:5717:5
 func frontIsUnaryOp(kind FrontTokenKind) bool {
 	return ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontNot{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBitNot{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontQuestion{}))
 }
 
-// Osty: /tmp/selfhost_merged.osty:5719:5
+// Osty: /tmp/selfhost_merged.osty:5721:5
 func frontMaxBraceDepth(tokens []*FrontToken) int {
-	// Osty: /tmp/selfhost_merged.osty:5720:5
+	// Osty: /tmp/selfhost_merged.osty:5722:5
 	depth := 0
 	_ = depth
-	// Osty: /tmp/selfhost_merged.osty:5721:5
+	// Osty: /tmp/selfhost_merged.osty:5723:5
 	maxDepth := 0
 	_ = maxDepth
-	// Osty: /tmp/selfhost_merged.osty:5722:5
+	// Osty: /tmp/selfhost_merged.osty:5724:5
 	for _, tok := range tokens {
-		// Osty: /tmp/selfhost_merged.osty:5723:9
+		// Osty: /tmp/selfhost_merged.osty:5725:9
 		if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:5724:19
+			// Osty: /tmp/selfhost_merged.osty:5726:19
 			depth = depth + 1
-			// Osty: /tmp/selfhost_merged.osty:5725:13
+			// Osty: /tmp/selfhost_merged.osty:5727:13
 			if depth > maxDepth {
-				// Osty: /tmp/selfhost_merged.osty:5726:26
+				// Osty: /tmp/selfhost_merged.osty:5728:26
 				maxDepth = depth
 			}
 		} else if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:5729:13
+			// Osty: /tmp/selfhost_merged.osty:5731:13
 			if depth > 0 {
-				// Osty: /tmp/selfhost_merged.osty:5730:23
+				// Osty: /tmp/selfhost_merged.osty:5732:23
 				depth = depth - 1
 			}
 		}
@@ -8365,155 +8365,155 @@ func frontMaxBraceDepth(tokens []*FrontToken) int {
 	return maxDepth
 }
 
-// Osty: /tmp/selfhost_merged.osty:5737:5
+// Osty: /tmp/selfhost_merged.osty:5739:5
 func frontBraceBalanceErrors(tokens []*FrontToken) int {
-	// Osty: /tmp/selfhost_merged.osty:5738:5
+	// Osty: /tmp/selfhost_merged.osty:5740:5
 	depth := 0
 	_ = depth
-	// Osty: /tmp/selfhost_merged.osty:5739:5
+	// Osty: /tmp/selfhost_merged.osty:5741:5
 	errors := 0
 	_ = errors
-	// Osty: /tmp/selfhost_merged.osty:5740:5
+	// Osty: /tmp/selfhost_merged.osty:5742:5
 	for _, tok := range tokens {
-		// Osty: /tmp/selfhost_merged.osty:5741:9
+		// Osty: /tmp/selfhost_merged.osty:5743:9
 		if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:5742:19
+			// Osty: /tmp/selfhost_merged.osty:5744:19
 			depth = depth + 1
 		} else if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:5744:13
+			// Osty: /tmp/selfhost_merged.osty:5746:13
 			if depth == 0 {
-				// Osty: /tmp/selfhost_merged.osty:5745:24
+				// Osty: /tmp/selfhost_merged.osty:5747:24
 				errors = errors + 1
 			} else {
-				// Osty: /tmp/selfhost_merged.osty:5747:23
+				// Osty: /tmp/selfhost_merged.osty:5749:23
 				depth = depth - 1
 			}
 		}
 	}
-	// Osty: /tmp/selfhost_merged.osty:5751:5
+	// Osty: /tmp/selfhost_merged.osty:5753:5
 	if depth > 0 {
-		// Osty: /tmp/selfhost_merged.osty:5752:16
+		// Osty: /tmp/selfhost_merged.osty:5754:16
 		errors = errors + 1
 	}
 	return errors
 }
 
-// Osty: /tmp/selfhost_merged.osty:5759:5
+// Osty: /tmp/selfhost_merged.osty:5761:5
 func frontendParseSummary(tokens []*FrontToken) *FrontParseSummary {
-	// Osty: /tmp/selfhost_merged.osty:5760:5
+	// Osty: /tmp/selfhost_merged.osty:5762:5
 	summary := emptyFrontParseSummary()
 	_ = summary
-	// Osty: /tmp/selfhost_merged.osty:5761:5
+	// Osty: /tmp/selfhost_merged.osty:5763:5
 	pendingPub := false
 	_ = pendingPub
-	// Osty: /tmp/selfhost_merged.osty:5762:5
+	// Osty: /tmp/selfhost_merged.osty:5764:5
 	depth := 0
 	_ = depth
-	// Osty: /tmp/selfhost_merged.osty:5763:5
+	// Osty: /tmp/selfhost_merged.osty:5765:5
 	for _, tok := range tokens {
-		// Osty: /tmp/selfhost_merged.osty:5764:9
+		// Osty: /tmp/selfhost_merged.osty:5766:9
 		if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontPub{})) {
-			// Osty: /tmp/selfhost_merged.osty:5765:24
+			// Osty: /tmp/selfhost_merged.osty:5767:24
 			pendingPub = true
 		} else if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontFn{})) {
-			// Osty: /tmp/selfhost_merged.osty:5767:27
+			// Osty: /tmp/selfhost_merged.osty:5769:27
 			summary.decls = summary.decls + 1
-			// Osty: /tmp/selfhost_merged.osty:5768:27
+			// Osty: /tmp/selfhost_merged.osty:5770:27
 			summary.funcs = summary.funcs + 1
-			// Osty: /tmp/selfhost_merged.osty:5769:13
+			// Osty: /tmp/selfhost_merged.osty:5771:13
 			if pendingPub {
-				// Osty: /tmp/selfhost_merged.osty:5770:37
+				// Osty: /tmp/selfhost_merged.osty:5772:37
 				summary.publicDecls = summary.publicDecls + 1
 			}
-			// Osty: /tmp/selfhost_merged.osty:5772:24
+			// Osty: /tmp/selfhost_merged.osty:5774:24
 			pendingPub = false
 		} else if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontStruct{})) {
-			// Osty: /tmp/selfhost_merged.osty:5774:27
+			// Osty: /tmp/selfhost_merged.osty:5776:27
 			summary.decls = summary.decls + 1
-			// Osty: /tmp/selfhost_merged.osty:5775:29
+			// Osty: /tmp/selfhost_merged.osty:5777:29
 			summary.structs = summary.structs + 1
-			// Osty: /tmp/selfhost_merged.osty:5776:13
+			// Osty: /tmp/selfhost_merged.osty:5778:13
 			if pendingPub {
-				// Osty: /tmp/selfhost_merged.osty:5777:37
+				// Osty: /tmp/selfhost_merged.osty:5779:37
 				summary.publicDecls = summary.publicDecls + 1
 			}
-			// Osty: /tmp/selfhost_merged.osty:5779:24
+			// Osty: /tmp/selfhost_merged.osty:5781:24
 			pendingPub = false
 		} else if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontEnum{})) {
-			// Osty: /tmp/selfhost_merged.osty:5781:27
+			// Osty: /tmp/selfhost_merged.osty:5783:27
 			summary.decls = summary.decls + 1
-			// Osty: /tmp/selfhost_merged.osty:5782:27
+			// Osty: /tmp/selfhost_merged.osty:5784:27
 			summary.enums = summary.enums + 1
-			// Osty: /tmp/selfhost_merged.osty:5783:13
+			// Osty: /tmp/selfhost_merged.osty:5785:13
 			if pendingPub {
-				// Osty: /tmp/selfhost_merged.osty:5784:37
+				// Osty: /tmp/selfhost_merged.osty:5786:37
 				summary.publicDecls = summary.publicDecls + 1
 			}
-			// Osty: /tmp/selfhost_merged.osty:5786:24
+			// Osty: /tmp/selfhost_merged.osty:5788:24
 			pendingPub = false
 		} else if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontInterface{})) {
-			// Osty: /tmp/selfhost_merged.osty:5788:27
+			// Osty: /tmp/selfhost_merged.osty:5790:27
 			summary.decls = summary.decls + 1
-			// Osty: /tmp/selfhost_merged.osty:5789:32
+			// Osty: /tmp/selfhost_merged.osty:5791:32
 			summary.interfaces = summary.interfaces + 1
-			// Osty: /tmp/selfhost_merged.osty:5790:13
+			// Osty: /tmp/selfhost_merged.osty:5792:13
 			if pendingPub {
-				// Osty: /tmp/selfhost_merged.osty:5791:37
+				// Osty: /tmp/selfhost_merged.osty:5793:37
 				summary.publicDecls = summary.publicDecls + 1
 			}
-			// Osty: /tmp/selfhost_merged.osty:5793:24
+			// Osty: /tmp/selfhost_merged.osty:5795:24
 			pendingPub = false
 		} else if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontType{})) {
-			// Osty: /tmp/selfhost_merged.osty:5795:27
+			// Osty: /tmp/selfhost_merged.osty:5797:27
 			summary.decls = summary.decls + 1
-			// Osty: /tmp/selfhost_merged.osty:5796:29
+			// Osty: /tmp/selfhost_merged.osty:5798:29
 			summary.aliases = summary.aliases + 1
-			// Osty: /tmp/selfhost_merged.osty:5797:13
+			// Osty: /tmp/selfhost_merged.osty:5799:13
 			if pendingPub {
-				// Osty: /tmp/selfhost_merged.osty:5798:37
+				// Osty: /tmp/selfhost_merged.osty:5800:37
 				summary.publicDecls = summary.publicDecls + 1
 			}
-			// Osty: /tmp/selfhost_merged.osty:5800:24
+			// Osty: /tmp/selfhost_merged.osty:5802:24
 			pendingPub = false
 		} else if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontUse{})) {
-			// Osty: /tmp/selfhost_merged.osty:5802:27
+			// Osty: /tmp/selfhost_merged.osty:5804:27
 			summary.decls = summary.decls + 1
-			// Osty: /tmp/selfhost_merged.osty:5803:26
+			// Osty: /tmp/selfhost_merged.osty:5805:26
 			summary.uses = summary.uses + 1
-			// Osty: /tmp/selfhost_merged.osty:5804:24
+			// Osty: /tmp/selfhost_merged.osty:5806:24
 			pendingPub = false
 		} else if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:5806:19
+			// Osty: /tmp/selfhost_merged.osty:5808:19
 			depth = depth + 1
-			// Osty: /tmp/selfhost_merged.osty:5807:13
+			// Osty: /tmp/selfhost_merged.osty:5809:13
 			if depth > summary.maxBlockDepth {
-				// Osty: /tmp/selfhost_merged.osty:5808:39
+				// Osty: /tmp/selfhost_merged.osty:5810:39
 				summary.maxBlockDepth = depth
 			}
 		} else if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:5811:13
+			// Osty: /tmp/selfhost_merged.osty:5813:13
 			if depth == 0 {
-				// Osty: /tmp/selfhost_merged.osty:5812:32
+				// Osty: /tmp/selfhost_merged.osty:5814:32
 				summary.errors = summary.errors + 1
 			} else {
-				// Osty: /tmp/selfhost_merged.osty:5814:23
+				// Osty: /tmp/selfhost_merged.osty:5816:23
 				depth = depth - 1
 			}
 		} else if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontNewline{})) || ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontEOF{})) {
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:5817:24
+			// Osty: /tmp/selfhost_merged.osty:5819:24
 			pendingPub = false
 		}
 	}
-	// Osty: /tmp/selfhost_merged.osty:5820:5
+	// Osty: /tmp/selfhost_merged.osty:5822:5
 	if depth != 0 {
-		// Osty: /tmp/selfhost_merged.osty:5821:24
+		// Osty: /tmp/selfhost_merged.osty:5823:24
 		summary.errors = summary.errors + 1
 	}
 	return summary
 }
 
-// Osty: /tmp/selfhost_merged.osty:5826:5
+// Osty: /tmp/selfhost_merged.osty:5828:5
 func frontTypeByName(name string) FrontTypeKind {
 	return func() FrontTypeKind {
 		if name == "Int" {
@@ -8542,7 +8542,7 @@ func frontTypeByName(name string) FrontTypeKind {
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:5852:5
+// Osty: /tmp/selfhost_merged.osty:5854:5
 func frontTypeName(kind FrontTypeKind) string {
 	return func() string {
 		_m28 := kind
@@ -8584,158 +8584,158 @@ func frontTypeName(kind FrontTypeKind) string {
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:5868:5
+// Osty: /tmp/selfhost_merged.osty:5870:5
 func frontTypeIsInteger(kind FrontTypeKind) bool {
 	return ostyEqual(kind, FrontTypeKind(&FrontTypeKind_FrontTypeInt{})) || ostyEqual(kind, FrontTypeKind(&FrontTypeKind_FrontTypeUntypedInt{}))
 }
 
-// Osty: /tmp/selfhost_merged.osty:5872:5
+// Osty: /tmp/selfhost_merged.osty:5874:5
 func frontTypeIsFloat(kind FrontTypeKind) bool {
 	return ostyEqual(kind, FrontTypeKind(&FrontTypeKind_FrontTypeFloat{})) || ostyEqual(kind, FrontTypeKind(&FrontTypeKind_FrontTypeUntypedFloat{}))
 }
 
-// Osty: /tmp/selfhost_merged.osty:5876:5
+// Osty: /tmp/selfhost_merged.osty:5878:5
 func frontTypeIsNumeric(kind FrontTypeKind) bool {
 	return frontTypeIsInteger(kind) || frontTypeIsFloat(kind)
 }
 
-// Osty: /tmp/selfhost_merged.osty:5880:5
+// Osty: /tmp/selfhost_merged.osty:5882:5
 func frontAssignable(dst FrontTypeKind, src FrontTypeKind) bool {
-	// Osty: /tmp/selfhost_merged.osty:5881:5
+	// Osty: /tmp/selfhost_merged.osty:5883:5
 	if ostyEqual(dst, FrontTypeKind(&FrontTypeKind_FrontTypeInvalid{})) || ostyEqual(src, FrontTypeKind(&FrontTypeKind_FrontTypeInvalid{})) {
-		// Osty: /tmp/selfhost_merged.osty:5882:9
+		// Osty: /tmp/selfhost_merged.osty:5884:9
 		return false
 	}
-	// Osty: /tmp/selfhost_merged.osty:5884:5
+	// Osty: /tmp/selfhost_merged.osty:5886:5
 	if ostyEqual(src, FrontTypeKind(&FrontTypeKind_FrontTypeNever{})) {
-		// Osty: /tmp/selfhost_merged.osty:5885:9
+		// Osty: /tmp/selfhost_merged.osty:5887:9
 		return true
 	}
-	// Osty: /tmp/selfhost_merged.osty:5887:5
+	// Osty: /tmp/selfhost_merged.osty:5889:5
 	if ostyEqual(dst, src) {
-		// Osty: /tmp/selfhost_merged.osty:5888:9
+		// Osty: /tmp/selfhost_merged.osty:5890:9
 		return true
 	}
-	// Osty: /tmp/selfhost_merged.osty:5890:5
+	// Osty: /tmp/selfhost_merged.osty:5892:5
 	if ostyEqual(src, FrontTypeKind(&FrontTypeKind_FrontTypeUntypedInt{})) {
-		// Osty: /tmp/selfhost_merged.osty:5891:9
+		// Osty: /tmp/selfhost_merged.osty:5893:9
 		return ostyEqual(dst, FrontTypeKind(&FrontTypeKind_FrontTypeInt{})) || ostyEqual(dst, FrontTypeKind(&FrontTypeKind_FrontTypeFloat{}))
 	}
-	// Osty: /tmp/selfhost_merged.osty:5893:5
+	// Osty: /tmp/selfhost_merged.osty:5895:5
 	if ostyEqual(src, FrontTypeKind(&FrontTypeKind_FrontTypeUntypedFloat{})) {
-		// Osty: /tmp/selfhost_merged.osty:5894:9
+		// Osty: /tmp/selfhost_merged.osty:5896:9
 		return ostyEqual(dst, FrontTypeKind(&FrontTypeKind_FrontTypeFloat{}))
 	}
 	return false
 }
 
-// Osty: /tmp/selfhost_merged.osty:5899:5
+// Osty: /tmp/selfhost_merged.osty:5901:5
 func frontAssignableName(dst string, src string) bool {
 	return frontAssignable(frontTypeByName(dst), frontTypeByName(src))
 }
 
-// Osty: /tmp/selfhost_merged.osty:5903:5
+// Osty: /tmp/selfhost_merged.osty:5905:5
 func frontInferLiteralKind(text string) FrontTypeKind {
-	// Osty: /tmp/selfhost_merged.osty:5904:5
+	// Osty: /tmp/selfhost_merged.osty:5906:5
 	if strings.HasPrefix(text, "\"") {
-		// Osty: /tmp/selfhost_merged.osty:5905:9
+		// Osty: /tmp/selfhost_merged.osty:5907:9
 		return FrontTypeKind(&FrontTypeKind_FrontTypeString{})
 	}
-	// Osty: /tmp/selfhost_merged.osty:5907:5
+	// Osty: /tmp/selfhost_merged.osty:5909:5
 	if text == "true" || text == "false" {
-		// Osty: /tmp/selfhost_merged.osty:5908:9
+		// Osty: /tmp/selfhost_merged.osty:5910:9
 		return FrontTypeKind(&FrontTypeKind_FrontTypeBool{})
 	}
-	// Osty: /tmp/selfhost_merged.osty:5910:5
+	// Osty: /tmp/selfhost_merged.osty:5912:5
 	if allAsciiDigits(text) {
-		// Osty: /tmp/selfhost_merged.osty:5911:9
+		// Osty: /tmp/selfhost_merged.osty:5913:9
 		return FrontTypeKind(&FrontTypeKind_FrontTypeUntypedInt{})
 	}
-	// Osty: /tmp/selfhost_merged.osty:5913:5
+	// Osty: /tmp/selfhost_merged.osty:5915:5
 	if isFrontFloatLexeme(text) {
-		// Osty: /tmp/selfhost_merged.osty:5914:9
+		// Osty: /tmp/selfhost_merged.osty:5916:9
 		return FrontTypeKind(&FrontTypeKind_FrontTypeUntypedFloat{})
 	}
 	return FrontTypeKind(&FrontTypeKind_FrontTypeInvalid{})
 }
 
-// Osty: /tmp/selfhost_merged.osty:5919:5
+// Osty: /tmp/selfhost_merged.osty:5921:5
 func frontInferLiteralName(text string) string {
 	return frontTypeName(frontInferLiteralKind(text))
 }
 
-// Osty: /tmp/selfhost_merged.osty:5923:5
+// Osty: /tmp/selfhost_merged.osty:5925:5
 func frontBinaryResult(op string, left FrontTypeKind, right FrontTypeKind) FrontTypeKind {
-	// Osty: /tmp/selfhost_merged.osty:5924:5
+	// Osty: /tmp/selfhost_merged.osty:5926:5
 	if op == "==" || op == "!=" {
-		// Osty: /tmp/selfhost_merged.osty:5925:9
+		// Osty: /tmp/selfhost_merged.osty:5927:9
 		if frontAssignable(left, right) || frontAssignable(right, left) {
-			// Osty: /tmp/selfhost_merged.osty:5926:13
+			// Osty: /tmp/selfhost_merged.osty:5928:13
 			return FrontTypeKind(&FrontTypeKind_FrontTypeBool{})
 		}
-		// Osty: /tmp/selfhost_merged.osty:5928:9
+		// Osty: /tmp/selfhost_merged.osty:5930:9
 		return FrontTypeKind(&FrontTypeKind_FrontTypeInvalid{})
 	}
-	// Osty: /tmp/selfhost_merged.osty:5930:5
+	// Osty: /tmp/selfhost_merged.osty:5932:5
 	if op == "&&" || op == "||" {
-		// Osty: /tmp/selfhost_merged.osty:5931:9
+		// Osty: /tmp/selfhost_merged.osty:5933:9
 		if ostyEqual(left, FrontTypeKind(&FrontTypeKind_FrontTypeBool{})) && ostyEqual(right, FrontTypeKind(&FrontTypeKind_FrontTypeBool{})) {
-			// Osty: /tmp/selfhost_merged.osty:5932:13
+			// Osty: /tmp/selfhost_merged.osty:5934:13
 			return FrontTypeKind(&FrontTypeKind_FrontTypeBool{})
 		}
-		// Osty: /tmp/selfhost_merged.osty:5934:9
+		// Osty: /tmp/selfhost_merged.osty:5936:9
 		return FrontTypeKind(&FrontTypeKind_FrontTypeInvalid{})
 	}
-	// Osty: /tmp/selfhost_merged.osty:5936:5
+	// Osty: /tmp/selfhost_merged.osty:5938:5
 	if op == "+" || op == "-" || op == "*" || op == "/" || op == "%" {
-		// Osty: /tmp/selfhost_merged.osty:5937:9
+		// Osty: /tmp/selfhost_merged.osty:5939:9
 		if !(frontTypeIsNumeric(left)) || !(frontTypeIsNumeric(right)) {
-			// Osty: /tmp/selfhost_merged.osty:5938:13
+			// Osty: /tmp/selfhost_merged.osty:5940:13
 			return FrontTypeKind(&FrontTypeKind_FrontTypeInvalid{})
 		}
-		// Osty: /tmp/selfhost_merged.osty:5940:9
+		// Osty: /tmp/selfhost_merged.osty:5942:9
 		if ostyEqual(left, FrontTypeKind(&FrontTypeKind_FrontTypeFloat{})) || ostyEqual(right, FrontTypeKind(&FrontTypeKind_FrontTypeFloat{})) || ostyEqual(left, FrontTypeKind(&FrontTypeKind_FrontTypeUntypedFloat{})) || ostyEqual(right, FrontTypeKind(&FrontTypeKind_FrontTypeUntypedFloat{})) {
-			// Osty: /tmp/selfhost_merged.osty:5941:13
+			// Osty: /tmp/selfhost_merged.osty:5943:13
 			return FrontTypeKind(&FrontTypeKind_FrontTypeFloat{})
 		}
-		// Osty: /tmp/selfhost_merged.osty:5943:9
+		// Osty: /tmp/selfhost_merged.osty:5945:9
 		if ostyEqual(left, FrontTypeKind(&FrontTypeKind_FrontTypeInt{})) || ostyEqual(right, FrontTypeKind(&FrontTypeKind_FrontTypeInt{})) {
-			// Osty: /tmp/selfhost_merged.osty:5944:13
+			// Osty: /tmp/selfhost_merged.osty:5946:13
 			return FrontTypeKind(&FrontTypeKind_FrontTypeInt{})
 		}
-		// Osty: /tmp/selfhost_merged.osty:5946:9
+		// Osty: /tmp/selfhost_merged.osty:5948:9
 		return FrontTypeKind(&FrontTypeKind_FrontTypeUntypedInt{})
 	}
 	return FrontTypeKind(&FrontTypeKind_FrontTypeInvalid{})
 }
 
-// Osty: /tmp/selfhost_merged.osty:5951:5
+// Osty: /tmp/selfhost_merged.osty:5953:5
 func frontBinaryResultName(op string, left string, right string) string {
 	return frontTypeName(frontBinaryResult(op, frontTypeByName(left), frontTypeByName(right)))
 }
 
-// Osty: /tmp/selfhost_merged.osty:5955:5
+// Osty: /tmp/selfhost_merged.osty:5957:5
 func frontendCheckAssignments(assignments []*FrontAssignment) *FrontCheckSummary {
-	// Osty: /tmp/selfhost_merged.osty:5956:5
+	// Osty: /tmp/selfhost_merged.osty:5958:5
 	summary := &FrontCheckSummary{assignments: 0, accepted: 0, errors: 0}
 	_ = summary
-	// Osty: /tmp/selfhost_merged.osty:5957:5
+	// Osty: /tmp/selfhost_merged.osty:5959:5
 	for _, assignment := range assignments {
-		// Osty: /tmp/selfhost_merged.osty:5958:29
+		// Osty: /tmp/selfhost_merged.osty:5960:29
 		summary.assignments = summary.assignments + 1
-		// Osty: /tmp/selfhost_merged.osty:5959:9
+		// Osty: /tmp/selfhost_merged.osty:5961:9
 		if frontAssignableName(assignment.dst, assignment.src) {
-			// Osty: /tmp/selfhost_merged.osty:5960:30
+			// Osty: /tmp/selfhost_merged.osty:5962:30
 			summary.accepted = summary.accepted + 1
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:5962:28
+			// Osty: /tmp/selfhost_merged.osty:5964:28
 			summary.errors = summary.errors + 1
 		}
 	}
 	return summary
 }
 
-// Osty: /tmp/selfhost_merged.osty:5982:5
+// Osty: /tmp/selfhost_merged.osty:5984:5
 type OstyRichToken struct {
 	kind        FrontTokenKind
 	text        string
@@ -8750,7 +8750,7 @@ type OstyRichToken struct {
 	partCount   int
 }
 
-// Osty: /tmp/selfhost_merged.osty:5997:5
+// Osty: /tmp/selfhost_merged.osty:5999:5
 type OstyLexError struct {
 	code        FrontLexDiagnosticCode
 	message     string
@@ -8760,7 +8760,7 @@ type OstyLexError struct {
 	endLine     int
 }
 
-// Osty: /tmp/selfhost_merged.osty:6007:5
+// Osty: /tmp/selfhost_merged.osty:6009:5
 type OstyLexComment struct {
 	kind      FrontCommentKind
 	startLine int
@@ -8768,7 +8768,7 @@ type OstyLexComment struct {
 	lines     int
 }
 
-// Osty: /tmp/selfhost_merged.osty:6016:5
+// Osty: /tmp/selfhost_merged.osty:6018:5
 type OstyLexResult struct {
 	tokens     []*OstyRichToken
 	errors     []*OstyLexError
@@ -8777,269 +8777,269 @@ type OstyLexResult struct {
 	hasShebang bool
 }
 
-// Osty: /tmp/selfhost_merged.osty:6028:5
+// Osty: /tmp/selfhost_merged.osty:6030:5
 type OstyLexedSource struct {
 	source string
 	stream *FrontLexStream
 }
 
-// Osty: /tmp/selfhost_merged.osty:6039:5
+// Osty: /tmp/selfhost_merged.osty:6041:5
 func ostyLexSource(source string) *OstyLexedSource {
-	// Osty: /tmp/selfhost_merged.osty:6040:5
+	// Osty: /tmp/selfhost_merged.osty:6042:5
 	normalized := ostyNormalizeSource(source)
 	_ = normalized
 	return &OstyLexedSource{source: normalized, stream: frontendLexStream(normalized)}
 }
 
-// Osty: /tmp/selfhost_merged.osty:6053:5
+// Osty: /tmp/selfhost_merged.osty:6055:5
 func ostyLex(source string) *OstyLexResult {
-	// Osty: /tmp/selfhost_merged.osty:6054:5
+	// Osty: /tmp/selfhost_merged.osty:6056:5
 	lexed := ostyLexSource(source)
 	_ = lexed
-	// Osty: /tmp/selfhost_merged.osty:6055:5
+	// Osty: /tmp/selfhost_merged.osty:6057:5
 	units := strings.Split(lexed.source, "")
 	_ = units
-	// Osty: /tmp/selfhost_merged.osty:6056:5
+	// Osty: /tmp/selfhost_merged.osty:6058:5
 	stream := lexed.stream
 	_ = stream
-	// Osty: /tmp/selfhost_merged.osty:6058:5
+	// Osty: /tmp/selfhost_merged.osty:6060:5
 	var tokens []*OstyRichToken = make([]*OstyRichToken, 0, 1)
 	_ = tokens
-	// Osty: /tmp/selfhost_merged.osty:6059:5
+	// Osty: /tmp/selfhost_merged.osty:6061:5
 	tokenIdx := 0
 	_ = tokenIdx
-	// Osty: /tmp/selfhost_merged.osty:6060:5
+	// Osty: /tmp/selfhost_merged.osty:6062:5
 	tokenCount := frontLexTokenCount(stream)
 	_ = tokenCount
-	// Osty: /tmp/selfhost_merged.osty:6062:5
+	// Osty: /tmp/selfhost_merged.osty:6064:5
 	var pendingDoc []string = make([]string, 0, 1)
 	_ = pendingDoc
-	// Osty: /tmp/selfhost_merged.osty:6063:5
+	// Osty: /tmp/selfhost_merged.osty:6065:5
 	docLastLine := -1
 	_ = docLastLine
-	// Osty: /tmp/selfhost_merged.osty:6065:5
+	// Osty: /tmp/selfhost_merged.osty:6067:5
 	for tokenIdx < tokenCount {
-		// Osty: /tmp/selfhost_merged.osty:6066:9
+		// Osty: /tmp/selfhost_merged.osty:6068:9
 		lexTok := frontLexTokenAt(stream, tokenIdx)
 		_ = lexTok
-		// Osty: /tmp/selfhost_merged.osty:6067:9
+		// Osty: /tmp/selfhost_merged.osty:6069:9
 		text := frontLexemeFromUnits(units, lexTok.start.offset, lexTok.length)
 		_ = text
-		// Osty: /tmp/selfhost_merged.osty:6069:9
+		// Osty: /tmp/selfhost_merged.osty:6071:9
 		leadingDoc := ""
 		_ = leadingDoc
-		// Osty: /tmp/selfhost_merged.osty:6070:9
+		// Osty: /tmp/selfhost_merged.osty:6072:9
 		if lexTok.leadingDocLines > 0 {
-			// Osty: /tmp/selfhost_merged.osty:6071:24
+			// Osty: /tmp/selfhost_merged.osty:6073:24
 			leadingDoc = ostyJoinDocLines(stream, lexTok, tokenIdx)
 		}
-		// Osty: /tmp/selfhost_merged.osty:6074:9
+		// Osty: /tmp/selfhost_merged.osty:6076:9
 		rt := &OstyRichToken{kind: lexTok.kind, text: text, startOffset: lexTok.start.offset, startLine: lexTok.start.line, startCol: lexTok.start.column, endOffset: lexTok.end.offset, endLine: lexTok.end.line, endCol: lexTok.end.column, leadingDoc: leadingDoc, triple: lexTok.triple, partCount: lexTok.interpolations}
 		_ = rt
-		// Osty: /tmp/selfhost_merged.osty:6087:9
+		// Osty: /tmp/selfhost_merged.osty:6089:9
 		func() struct{} { tokens = append(tokens, rt); return struct{}{} }()
-		// Osty: /tmp/selfhost_merged.osty:6088:18
+		// Osty: /tmp/selfhost_merged.osty:6090:18
 		tokenIdx = tokenIdx + 1
 	}
-	// Osty: /tmp/selfhost_merged.osty:6091:5
+	// Osty: /tmp/selfhost_merged.osty:6093:5
 	var errors []*OstyLexError = make([]*OstyLexError, 0, 1)
 	_ = errors
-	// Osty: /tmp/selfhost_merged.osty:6092:5
+	// Osty: /tmp/selfhost_merged.osty:6094:5
 	diagCount := frontLexDiagnosticCount(stream)
 	_ = diagCount
-	// Osty: /tmp/selfhost_merged.osty:6093:5
+	// Osty: /tmp/selfhost_merged.osty:6095:5
 	di := 0
 	_ = di
-	// Osty: /tmp/selfhost_merged.osty:6094:5
+	// Osty: /tmp/selfhost_merged.osty:6096:5
 	for di < diagCount {
-		// Osty: /tmp/selfhost_merged.osty:6095:9
+		// Osty: /tmp/selfhost_merged.osty:6097:9
 		d := frontLexDiagnosticAt(stream, di)
 		_ = d
-		// Osty: /tmp/selfhost_merged.osty:6096:9
+		// Osty: /tmp/selfhost_merged.osty:6098:9
 		func() struct{} {
 			errors = append(errors, &OstyLexError{code: d.code, message: frontLexDiagnosticCodeName(d.code), startOffset: d.start.offset, startLine: d.start.line, endOffset: d.end.offset, endLine: d.end.line})
 			return struct{}{}
 		}()
-		// Osty: /tmp/selfhost_merged.osty:6104:12
+		// Osty: /tmp/selfhost_merged.osty:6106:12
 		di = di + 1
 	}
-	// Osty: /tmp/selfhost_merged.osty:6107:5
+	// Osty: /tmp/selfhost_merged.osty:6109:5
 	var comments []*OstyLexComment = make([]*OstyLexComment, 0, 1)
 	_ = comments
-	// Osty: /tmp/selfhost_merged.osty:6108:5
+	// Osty: /tmp/selfhost_merged.osty:6110:5
 	commentCount := frontCommentCount(stream)
 	_ = commentCount
-	// Osty: /tmp/selfhost_merged.osty:6109:5
+	// Osty: /tmp/selfhost_merged.osty:6111:5
 	ci := 0
 	_ = ci
-	// Osty: /tmp/selfhost_merged.osty:6110:5
+	// Osty: /tmp/selfhost_merged.osty:6112:5
 	for ci < commentCount {
-		// Osty: /tmp/selfhost_merged.osty:6111:9
+		// Osty: /tmp/selfhost_merged.osty:6113:9
 		c := frontCommentAt(stream, ci)
 		_ = c
-		// Osty: /tmp/selfhost_merged.osty:6112:9
+		// Osty: /tmp/selfhost_merged.osty:6114:9
 		func() struct{} {
 			comments = append(comments, &OstyLexComment{kind: c.kind, startLine: c.start.line, endLine: c.end.line, lines: c.lines})
 			return struct{}{}
 		}()
-		// Osty: /tmp/selfhost_merged.osty:6118:12
+		// Osty: /tmp/selfhost_merged.osty:6120:12
 		ci = ci + 1
 	}
 	return &OstyLexResult{tokens: tokens, errors: errors, comments: comments, hasBom: stream.bomStripped > 0, hasShebang: stream.shebangs > 0}
 }
 
-// Osty: /tmp/selfhost_merged.osty:6134:5
+// Osty: /tmp/selfhost_merged.osty:6136:5
 func ostyLexTokens(source string) []*FrontToken {
-	// Osty: /tmp/selfhost_merged.osty:6135:5
+	// Osty: /tmp/selfhost_merged.osty:6137:5
 	lexed := ostyLexSource(source)
 	_ = lexed
 	return frontTokensFromSource(lexed.source, lexed.stream)
 }
 
-// Osty: /tmp/selfhost_merged.osty:6145:5
+// Osty: /tmp/selfhost_merged.osty:6147:5
 func ostyNormalizeSource(source string) string {
-	// Osty: /tmp/selfhost_merged.osty:6146:5
+	// Osty: /tmp/selfhost_merged.osty:6148:5
 	step1 := strings.ReplaceAll(source, "\r\n", "\n")
 	_ = step1
 	return strings.ReplaceAll(step1, "\r", "\n")
 }
 
-// Osty: /tmp/selfhost_merged.osty:6154:1
+// Osty: /tmp/selfhost_merged.osty:6156:1
 func ostyJoinDocLines(stream *FrontLexStream, tok *FrontLexToken, tokenIdx int) string {
-	// Osty: /tmp/selfhost_merged.osty:6155:5
+	// Osty: /tmp/selfhost_merged.osty:6157:5
 	docLines := tok.leadingDocLines
 	_ = docLines
-	// Osty: /tmp/selfhost_merged.osty:6156:5
+	// Osty: /tmp/selfhost_merged.osty:6158:5
 	if docLines <= 0 {
-		// Osty: /tmp/selfhost_merged.osty:6157:9
+		// Osty: /tmp/selfhost_merged.osty:6159:9
 		return ""
 	}
-	// Osty: /tmp/selfhost_merged.osty:6159:5
+	// Osty: /tmp/selfhost_merged.osty:6161:5
 	commentCount := frontCommentCount(stream)
 	_ = commentCount
-	// Osty: /tmp/selfhost_merged.osty:6160:5
+	// Osty: /tmp/selfhost_merged.osty:6162:5
 	var docParts []string = make([]string, 0, 1)
 	_ = docParts
-	// Osty: /tmp/selfhost_merged.osty:6161:5
+	// Osty: /tmp/selfhost_merged.osty:6163:5
 	ci := 0
 	_ = ci
-	// Osty: /tmp/selfhost_merged.osty:6162:5
+	// Osty: /tmp/selfhost_merged.osty:6164:5
 	for ci < commentCount {
-		// Osty: /tmp/selfhost_merged.osty:6163:9
+		// Osty: /tmp/selfhost_merged.osty:6165:9
 		c := frontCommentAt(stream, ci)
 		_ = c
-		// Osty: /tmp/selfhost_merged.osty:6164:9
+		// Osty: /tmp/selfhost_merged.osty:6166:9
 		if ostyEqual(c.kind, FrontCommentKind(&FrontCommentKind_FrontCommentDoc{})) && c.end.line <= tok.start.line && c.end.line >= tok.start.line-docLines {
-			// Osty: /tmp/selfhost_merged.osty:6165:13
+			// Osty: /tmp/selfhost_merged.osty:6167:13
 			func() struct{} { docParts = append(docParts, "doc"); return struct{}{} }()
 		}
-		// Osty: /tmp/selfhost_merged.osty:6167:12
+		// Osty: /tmp/selfhost_merged.osty:6169:12
 		ci = ci + 1
 	}
-	// Osty: /tmp/selfhost_merged.osty:6169:5
+	// Osty: /tmp/selfhost_merged.osty:6171:5
 	if len(docParts) > 0 {
-		// Osty: /tmp/selfhost_merged.osty:6170:9
+		// Osty: /tmp/selfhost_merged.osty:6172:9
 		return fmt.Sprintf("(doc lines: %s)", ostyToString(docLines))
 	}
 	return ""
 }
 
-// Osty: /tmp/selfhost_merged.osty:6179:5
+// Osty: /tmp/selfhost_merged.osty:6181:5
 func ostyLexResultTokenCount(result *OstyLexResult) int {
-	// Osty: /tmp/selfhost_merged.osty:6180:5
+	// Osty: /tmp/selfhost_merged.osty:6182:5
 	c := 0
 	_ = c
-	// Osty: /tmp/selfhost_merged.osty:6181:5
+	// Osty: /tmp/selfhost_merged.osty:6183:5
 	for _, t := range result.tokens {
-		// Osty: /tmp/selfhost_merged.osty:6182:9
+		// Osty: /tmp/selfhost_merged.osty:6184:9
 		_ = t
-		// Osty: /tmp/selfhost_merged.osty:6183:11
+		// Osty: /tmp/selfhost_merged.osty:6185:11
 		c = c + 1
 	}
 	return c
 }
 
-// Osty: /tmp/selfhost_merged.osty:6188:5
+// Osty: /tmp/selfhost_merged.osty:6190:5
 func ostyLexResultErrorCount(result *OstyLexResult) int {
-	// Osty: /tmp/selfhost_merged.osty:6189:5
+	// Osty: /tmp/selfhost_merged.osty:6191:5
 	c := 0
 	_ = c
-	// Osty: /tmp/selfhost_merged.osty:6190:5
+	// Osty: /tmp/selfhost_merged.osty:6192:5
 	for _, e := range result.errors {
-		// Osty: /tmp/selfhost_merged.osty:6191:9
+		// Osty: /tmp/selfhost_merged.osty:6193:9
 		_ = e
-		// Osty: /tmp/selfhost_merged.osty:6192:11
+		// Osty: /tmp/selfhost_merged.osty:6194:11
 		c = c + 1
 	}
 	return c
 }
 
-// Osty: /tmp/selfhost_merged.osty:6197:5
+// Osty: /tmp/selfhost_merged.osty:6199:5
 func ostyLexResultCommentCount(result *OstyLexResult) int {
-	// Osty: /tmp/selfhost_merged.osty:6198:5
+	// Osty: /tmp/selfhost_merged.osty:6200:5
 	c := 0
 	_ = c
-	// Osty: /tmp/selfhost_merged.osty:6199:5
+	// Osty: /tmp/selfhost_merged.osty:6201:5
 	for _, co := range result.comments {
-		// Osty: /tmp/selfhost_merged.osty:6200:9
+		// Osty: /tmp/selfhost_merged.osty:6202:9
 		_ = co
-		// Osty: /tmp/selfhost_merged.osty:6201:11
+		// Osty: /tmp/selfhost_merged.osty:6203:11
 		c = c + 1
 	}
 	return c
 }
 
-// Osty: /tmp/selfhost_merged.osty:6206:5
+// Osty: /tmp/selfhost_merged.osty:6208:5
 func ostyLexResultTokenAt(result *OstyLexResult, idx int) *OstyRichToken {
-	// Osty: /tmp/selfhost_merged.osty:6207:5
+	// Osty: /tmp/selfhost_merged.osty:6209:5
 	i := 0
 	_ = i
-	// Osty: /tmp/selfhost_merged.osty:6208:5
+	// Osty: /tmp/selfhost_merged.osty:6210:5
 	for _, t := range result.tokens {
-		// Osty: /tmp/selfhost_merged.osty:6209:9
+		// Osty: /tmp/selfhost_merged.osty:6211:9
 		if i == idx {
-			// Osty: /tmp/selfhost_merged.osty:6210:13
+			// Osty: /tmp/selfhost_merged.osty:6212:13
 			return t
 		}
-		// Osty: /tmp/selfhost_merged.osty:6212:11
+		// Osty: /tmp/selfhost_merged.osty:6214:11
 		i = i + 1
 	}
 	return &OstyRichToken{kind: FrontTokenKind(&FrontTokenKind_FrontEOF{}), text: "", startOffset: 0, startLine: 0, startCol: 0, endOffset: 0, endLine: 0, endCol: 0, leadingDoc: "", triple: false, partCount: 0}
 }
 
-// Osty: /tmp/selfhost_merged.osty:6224:5
+// Osty: /tmp/selfhost_merged.osty:6226:5
 func ostyIsKeyword(kind FrontTokenKind) bool {
 	return isFrontKeywordKind(kind)
 }
 
-// Osty: /tmp/selfhost_merged.osty:6228:5
+// Osty: /tmp/selfhost_merged.osty:6230:5
 func ostyIsLiteral(kind FrontTokenKind) bool {
 	return isFrontLiteralKind(kind)
 }
 
-// Osty: /tmp/selfhost_merged.osty:6232:5
+// Osty: /tmp/selfhost_merged.osty:6234:5
 func ostyIsPunctuation(kind FrontTokenKind) bool {
 	return isFrontPunctuationKind(kind)
 }
 
-// Osty: /tmp/selfhost_merged.osty:6236:5
+// Osty: /tmp/selfhost_merged.osty:6238:5
 func ostyIsAssignOp(kind FrontTokenKind) bool {
 	return frontIsAssignOp(kind)
 }
 
-// Osty: /tmp/selfhost_merged.osty:6246:5
+// Osty: /tmp/selfhost_merged.osty:6248:5
 func ostyLexSummary(source string) *FrontLexSummary {
 	return frontendLexSummary(source)
 }
 
-// Osty: /tmp/selfhost_merged.osty:6255:5
+// Osty: /tmp/selfhost_merged.osty:6257:5
 func ostyFormatLexErrors(result *OstyLexResult) string {
-	// Osty: /tmp/selfhost_merged.osty:6256:5
+	// Osty: /tmp/selfhost_merged.osty:6258:5
 	var lines []string = make([]string, 0, 1)
 	_ = lines
-	// Osty: /tmp/selfhost_merged.osty:6257:5
+	// Osty: /tmp/selfhost_merged.osty:6259:5
 	for _, e := range result.errors {
-		// Osty: /tmp/selfhost_merged.osty:6258:9
+		// Osty: /tmp/selfhost_merged.osty:6260:9
 		func() struct{} {
 			lines = append(lines, fmt.Sprintf("lex error: %s at line %s", ostyToString(e.message), ostyToString(e.startLine)))
 			return struct{}{}
@@ -9048,25 +9048,25 @@ func ostyFormatLexErrors(result *OstyLexResult) string {
 	return strings.Join(lines, "\n")
 }
 
-// Osty: /tmp/selfhost_merged.osty:6264:5
+// Osty: /tmp/selfhost_merged.osty:6266:5
 func ostyFormatTokens(result *OstyLexResult) string {
-	// Osty: /tmp/selfhost_merged.osty:6265:5
+	// Osty: /tmp/selfhost_merged.osty:6267:5
 	var lines []string = make([]string, 0, 1)
 	_ = lines
-	// Osty: /tmp/selfhost_merged.osty:6266:5
+	// Osty: /tmp/selfhost_merged.osty:6268:5
 	for _, t := range result.tokens {
-		// Osty: /tmp/selfhost_merged.osty:6267:9
+		// Osty: /tmp/selfhost_merged.osty:6269:9
 		kindName := frontTokenKindName(t.kind)
 		_ = kindName
-		// Osty: /tmp/selfhost_merged.osty:6268:9
+		// Osty: /tmp/selfhost_merged.osty:6270:9
 		if t.text != "" && t.text != kindName {
-			// Osty: /tmp/selfhost_merged.osty:6269:13
+			// Osty: /tmp/selfhost_merged.osty:6271:13
 			func() struct{} {
 				lines = append(lines, fmt.Sprintf("%s:%s %s \"%s\"", ostyToString(t.startLine), ostyToString(t.startCol), ostyToString(kindName), ostyToString(t.text)))
 				return struct{}{}
 			}()
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:6271:13
+			// Osty: /tmp/selfhost_merged.osty:6273:13
 			func() struct{} {
 				lines = append(lines, fmt.Sprintf("%s:%s %s", ostyToString(t.startLine), ostyToString(t.startCol), ostyToString(kindName)))
 				return struct{}{}
@@ -9076,12 +9076,12 @@ func ostyFormatTokens(result *OstyLexResult) string {
 	return strings.Join(lines, "\n")
 }
 
-// Osty: /tmp/selfhost_merged.osty:6278:5
+// Osty: /tmp/selfhost_merged.osty:6280:5
 func ostyTokenKindName(kind FrontTokenKind) string {
 	return frontTokenKindName(kind)
 }
 
-// Osty: /tmp/selfhost_merged.osty:6288:5
+// Osty: /tmp/selfhost_merged.osty:6290:5
 type AstNodeKind interface{ _isAstNodeKind() }
 type AstNodeKind_AstNIdent struct{ _ref byte }
 
@@ -9283,7 +9283,7 @@ type AstNodeKind_AstNError struct{ _ref byte }
 
 func (AstNodeKind_AstNError) _isAstNodeKind() {}
 
-// Osty: /tmp/selfhost_merged.osty:6345:5
+// Osty: /tmp/selfhost_merged.osty:6347:5
 type AstNode struct {
 	kind      AstNodeKind
 	start     int
@@ -9298,7 +9298,7 @@ type AstNode struct {
 	flags     int
 }
 
-// Osty: /tmp/selfhost_merged.osty:6359:5
+// Osty: /tmp/selfhost_merged.osty:6361:5
 type AstParseError struct {
 	message    string
 	tokenIndex int
@@ -9307,67 +9307,67 @@ type AstParseError struct {
 	code       string
 }
 
-// Osty: /tmp/selfhost_merged.osty:6367:5
+// Osty: /tmp/selfhost_merged.osty:6369:5
 type AstArena struct {
 	nodes  []*AstNode
 	decls  []int
 	errors []*AstParseError
 }
 
-// Osty: /tmp/selfhost_merged.osty:6373:5
+// Osty: /tmp/selfhost_merged.osty:6375:5
 func emptyAstNode(kind AstNodeKind) *AstNode {
 	return &AstNode{kind: kind, start: 0, end: 0, text: "", op: FrontTokenKind(&FrontTokenKind_FrontEOF{}), left: -1, right: -1, extra: -1, children: make([]int, 0, 1), children2: make([]int, 0, 1), flags: 0}
 }
 
-// Osty: /tmp/selfhost_merged.osty:6381:5
+// Osty: /tmp/selfhost_merged.osty:6383:5
 func emptyAstArena() *AstArena {
 	return &AstArena{nodes: make([]*AstNode, 0, 1), decls: make([]int, 0, 1), errors: make([]*AstParseError, 0, 1)}
 }
 
-// Osty: /tmp/selfhost_merged.osty:6385:5
+// Osty: /tmp/selfhost_merged.osty:6387:5
 func astArenaAdd(arena *AstArena, node *AstNode) int {
-	// Osty: /tmp/selfhost_merged.osty:6386:5
+	// Osty: /tmp/selfhost_merged.osty:6388:5
 	idx := astArenaNodeCount(arena)
 	_ = idx
-	// Osty: /tmp/selfhost_merged.osty:6387:5
+	// Osty: /tmp/selfhost_merged.osty:6389:5
 	func() struct{} { arena.nodes = append(arena.nodes, node); return struct{}{} }()
 	return idx
 }
 
-// Osty: /tmp/selfhost_merged.osty:6391:5
+// Osty: /tmp/selfhost_merged.osty:6393:5
 func astArenaNodeCount(arena *AstArena) int {
-	// Osty: /tmp/selfhost_merged.osty:6392:5
+	// Osty: /tmp/selfhost_merged.osty:6394:5
 	count := 0
 	_ = count
-	// Osty: /tmp/selfhost_merged.osty:6393:5
+	// Osty: /tmp/selfhost_merged.osty:6395:5
 	for _, n := range arena.nodes {
-		// Osty: /tmp/selfhost_merged.osty:6394:9
+		// Osty: /tmp/selfhost_merged.osty:6396:9
 		_ = n
-		// Osty: /tmp/selfhost_merged.osty:6395:15
+		// Osty: /tmp/selfhost_merged.osty:6397:15
 		count = count + 1
 	}
 	return count
 }
 
-// Osty: /tmp/selfhost_merged.osty:6400:5
+// Osty: /tmp/selfhost_merged.osty:6402:5
 func astArenaNodeAt(arena *AstArena, idx int) *AstNode {
-	// Osty: /tmp/selfhost_merged.osty:6401:5
+	// Osty: /tmp/selfhost_merged.osty:6403:5
 	i := 0
 	_ = i
-	// Osty: /tmp/selfhost_merged.osty:6402:5
+	// Osty: /tmp/selfhost_merged.osty:6404:5
 	for _, n := range arena.nodes {
-		// Osty: /tmp/selfhost_merged.osty:6403:9
+		// Osty: /tmp/selfhost_merged.osty:6405:9
 		if i == idx {
-			// Osty: /tmp/selfhost_merged.osty:6404:13
+			// Osty: /tmp/selfhost_merged.osty:6406:13
 			return n
 		}
-		// Osty: /tmp/selfhost_merged.osty:6406:11
+		// Osty: /tmp/selfhost_merged.osty:6408:11
 		i = i + 1
 	}
 	return emptyAstNode(AstNodeKind(&AstNodeKind_AstNError{}))
 }
 
-// Osty: /tmp/selfhost_merged.osty:6415:5
+// Osty: /tmp/selfhost_merged.osty:6417:5
 type OstyParser struct {
 	tokens        []*FrontToken
 	count         int
@@ -9379,327 +9379,327 @@ type OstyParser struct {
 	inLoop        bool
 }
 
-// Osty: /tmp/selfhost_merged.osty:6426:5
+// Osty: /tmp/selfhost_merged.osty:6428:5
 func newOstyParser(tokens []*FrontToken) *OstyParser {
 	return &OstyParser{tokens: tokens, count: frontTokenListCount(tokens), pos: 0, pendingGt: 0, pendingAssign: false, arena: emptyAstArena(), noStructLit: false, inLoop: false}
 }
 
-// Osty: /tmp/selfhost_merged.osty:6437:1
+// Osty: /tmp/selfhost_merged.osty:6439:1
 func opPeek(p *OstyParser) *FrontToken {
-	// Osty: /tmp/selfhost_merged.osty:6438:5
+	// Osty: /tmp/selfhost_merged.osty:6440:5
 	if p.pendingGt > 0 {
-		// Osty: /tmp/selfhost_merged.osty:6438:26
+		// Osty: /tmp/selfhost_merged.osty:6440:26
 		return &FrontToken{kind: FrontTokenKind(&FrontTokenKind_FrontGt{}), text: ">"}
 	}
-	// Osty: /tmp/selfhost_merged.osty:6439:5
+	// Osty: /tmp/selfhost_merged.osty:6441:5
 	if p.pendingAssign {
-		// Osty: /tmp/selfhost_merged.osty:6439:26
+		// Osty: /tmp/selfhost_merged.osty:6441:26
 		return &FrontToken{kind: FrontTokenKind(&FrontTokenKind_FrontAssign{}), text: "="}
 	}
-	// Osty: /tmp/selfhost_merged.osty:6440:5
+	// Osty: /tmp/selfhost_merged.osty:6442:5
 	if p.pos >= p.count {
-		// Osty: /tmp/selfhost_merged.osty:6440:27
+		// Osty: /tmp/selfhost_merged.osty:6442:27
 		return frontEOF()
 	}
 	return frontTokenAtList(p.tokens, p.pos)
 }
 
-// Osty: /tmp/selfhost_merged.osty:6444:1
+// Osty: /tmp/selfhost_merged.osty:6446:1
 func opPeekAt(p *OstyParser, n int) *FrontToken {
-	// Osty: /tmp/selfhost_merged.osty:6445:5
+	// Osty: /tmp/selfhost_merged.osty:6447:5
 	idx := p.pos + n
 	_ = idx
-	// Osty: /tmp/selfhost_merged.osty:6446:5
+	// Osty: /tmp/selfhost_merged.osty:6448:5
 	if idx >= p.count {
-		// Osty: /tmp/selfhost_merged.osty:6446:25
+		// Osty: /tmp/selfhost_merged.osty:6448:25
 		return frontEOF()
 	}
 	return frontTokenAtList(p.tokens, idx)
 }
 
-// Osty: /tmp/selfhost_merged.osty:6450:1
+// Osty: /tmp/selfhost_merged.osty:6452:1
 func opPeekPastNewlines(p *OstyParser) *FrontToken {
-	// Osty: /tmp/selfhost_merged.osty:6451:5
+	// Osty: /tmp/selfhost_merged.osty:6453:5
 	i := p.pos
 	_ = i
-	// Osty: /tmp/selfhost_merged.osty:6452:5
+	// Osty: /tmp/selfhost_merged.osty:6454:5
 	for i < p.count {
-		// Osty: /tmp/selfhost_merged.osty:6453:9
+		// Osty: /tmp/selfhost_merged.osty:6455:9
 		tok := frontTokenAtList(p.tokens, i)
 		_ = tok
-		// Osty: /tmp/selfhost_merged.osty:6454:9
+		// Osty: /tmp/selfhost_merged.osty:6456:9
 		if !ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontNewline{})) {
-			// Osty: /tmp/selfhost_merged.osty:6454:39
+			// Osty: /tmp/selfhost_merged.osty:6456:39
 			return tok
 		}
-		// Osty: /tmp/selfhost_merged.osty:6455:11
+		// Osty: /tmp/selfhost_merged.osty:6457:11
 		i = i + 1
 	}
 	return frontEOF()
 }
 
-// Osty: /tmp/selfhost_merged.osty:6460:1
+// Osty: /tmp/selfhost_merged.osty:6462:1
 func opAt(p *OstyParser, kind FrontTokenKind) bool {
 	return ostyEqual(opPeek(p).kind, kind)
 }
 
-// Osty: /tmp/selfhost_merged.osty:6462:1
+// Osty: /tmp/selfhost_merged.osty:6464:1
 func opAdvance(p *OstyParser) *FrontToken {
-	// Osty: /tmp/selfhost_merged.osty:6463:5
+	// Osty: /tmp/selfhost_merged.osty:6465:5
 	tok := opPeek(p)
 	_ = tok
-	// Osty: /tmp/selfhost_merged.osty:6464:5
-	if p.pendingGt > 0 {
-		// Osty: /tmp/selfhost_merged.osty:6464:38
-		p.pendingGt = p.pendingGt - 1
-		// Osty: /tmp/selfhost_merged.osty:6465:5
-		return tok
-	}
 	// Osty: /tmp/selfhost_merged.osty:6466:5
-	if p.pendingAssign {
-		// Osty: /tmp/selfhost_merged.osty:6466:42
-		p.pendingAssign = false
+	if p.pendingGt > 0 {
+		// Osty: /tmp/selfhost_merged.osty:6466:38
+		p.pendingGt = p.pendingGt - 1
 		// Osty: /tmp/selfhost_merged.osty:6467:5
 		return tok
 	}
 	// Osty: /tmp/selfhost_merged.osty:6468:5
+	if p.pendingAssign {
+		// Osty: /tmp/selfhost_merged.osty:6468:42
+		p.pendingAssign = false
+		// Osty: /tmp/selfhost_merged.osty:6469:5
+		return tok
+	}
+	// Osty: /tmp/selfhost_merged.osty:6470:5
 	if !ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontEOF{})) {
-		// Osty: /tmp/selfhost_merged.osty:6468:37
+		// Osty: /tmp/selfhost_merged.osty:6470:37
 		p.pos = p.pos + 1
 	}
 	return tok
 }
 
-// Osty: /tmp/selfhost_merged.osty:6472:1
+// Osty: /tmp/selfhost_merged.osty:6474:1
 func opEat(p *OstyParser, kind FrontTokenKind) bool {
-	// Osty: /tmp/selfhost_merged.osty:6473:5
+	// Osty: /tmp/selfhost_merged.osty:6475:5
 	if opAt(p, kind) {
-		// Osty: /tmp/selfhost_merged.osty:6474:9
+		// Osty: /tmp/selfhost_merged.osty:6476:9
 		_ = opAdvance(p)
-		// Osty: /tmp/selfhost_merged.osty:6475:9
+		// Osty: /tmp/selfhost_merged.osty:6477:9
 		return true
 	}
 	return false
 }
 
-// Osty: /tmp/selfhost_merged.osty:6480:1
+// Osty: /tmp/selfhost_merged.osty:6482:1
 func opExpect(p *OstyParser, kind FrontTokenKind) *FrontToken {
-	// Osty: /tmp/selfhost_merged.osty:6481:5
+	// Osty: /tmp/selfhost_merged.osty:6483:5
 	if opAt(p, kind) {
-		// Osty: /tmp/selfhost_merged.osty:6481:24
+		// Osty: /tmp/selfhost_merged.osty:6483:24
 		return opAdvance(p)
 	}
-	// Osty: /tmp/selfhost_merged.osty:6482:5
+	// Osty: /tmp/selfhost_merged.osty:6484:5
 	tok := opPeek(p)
 	_ = tok
-	// Osty: /tmp/selfhost_merged.osty:6483:5
+	// Osty: /tmp/selfhost_merged.osty:6485:5
 	expectedName := frontTokenKindName(kind)
 	_ = expectedName
-	// Osty: /tmp/selfhost_merged.osty:6484:5
+	// Osty: /tmp/selfhost_merged.osty:6486:5
 	gotName := frontTokenKindName(tok.kind)
 	_ = gotName
-	// Osty: /tmp/selfhost_merged.osty:6485:5
+	// Osty: /tmp/selfhost_merged.osty:6487:5
 	opErrorFull(p, fmt.Sprintf("expected %s, got %s", ostyToString(expectedName), ostyToString(gotName)), "", "", "E0001")
 	return tok
 }
 
-// Osty: /tmp/selfhost_merged.osty:6489:1
+// Osty: /tmp/selfhost_merged.osty:6491:1
 func opSkipNewlines(p *OstyParser) {
-	// Osty: /tmp/selfhost_merged.osty:6490:5
+	// Osty: /tmp/selfhost_merged.osty:6492:5
 	for opAt(p, FrontTokenKind(&FrontTokenKind_FrontNewline{})) {
-		// Osty: /tmp/selfhost_merged.osty:6491:9
+		// Osty: /tmp/selfhost_merged.osty:6493:9
 		_ = opAdvance(p)
 	}
 }
 
-// Osty: /tmp/selfhost_merged.osty:6499:1
+// Osty: /tmp/selfhost_merged.osty:6501:1
 func opErrorFull(p *OstyParser, msg string, hint string, note string, code string) {
-	// Osty: /tmp/selfhost_merged.osty:6500:5
+	// Osty: /tmp/selfhost_merged.osty:6502:5
 	func() struct{} {
 		p.arena.errors = append(p.arena.errors, &AstParseError{message: msg, tokenIndex: p.pos, hint: hint, note: note, code: code})
 		return struct{}{}
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:6503:1
+// Osty: /tmp/selfhost_merged.osty:6505:1
 func opError(p *OstyParser, msg string) {
-	// Osty: /tmp/selfhost_merged.osty:6503:42
+	// Osty: /tmp/selfhost_merged.osty:6505:42
 	opErrorFull(p, msg, "", "", "")
 }
 
-// Osty: /tmp/selfhost_merged.osty:6505:1
+// Osty: /tmp/selfhost_merged.osty:6507:1
 func opAddNode(p *OstyParser, node *AstNode) int {
 	return astArenaAdd(p.arena, node)
 }
 
-// Osty: /tmp/selfhost_merged.osty:6511:1
+// Osty: /tmp/selfhost_merged.osty:6513:1
 func opSyncDecl(p *OstyParser) {
-	// Osty: /tmp/selfhost_merged.osty:6512:5
+	// Osty: /tmp/selfhost_merged.osty:6514:5
 	for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-		// Osty: /tmp/selfhost_merged.osty:6513:9
+		// Osty: /tmp/selfhost_merged.osty:6515:9
 		if opIsDeclSyncStart(p) {
-			// Osty: /tmp/selfhost_merged.osty:6513:35
+			// Osty: /tmp/selfhost_merged.osty:6515:35
 			return
 		}
-		// Osty: /tmp/selfhost_merged.osty:6514:9
+		// Osty: /tmp/selfhost_merged.osty:6516:9
 		_ = opAdvance(p)
 	}
 }
 
-// Osty: /tmp/selfhost_merged.osty:6518:1
+// Osty: /tmp/selfhost_merged.osty:6520:1
 func opSyncStmt(p *OstyParser) {
-	// Osty: /tmp/selfhost_merged.osty:6519:5
+	// Osty: /tmp/selfhost_merged.osty:6521:5
 	for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-		// Osty: /tmp/selfhost_merged.osty:6520:9
+		// Osty: /tmp/selfhost_merged.osty:6522:9
 		kind := opPeek(p).kind
 		_ = kind
-		// Osty: /tmp/selfhost_merged.osty:6521:9
+		// Osty: /tmp/selfhost_merged.osty:6523:9
 		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontNewline{})) {
-			// Osty: /tmp/selfhost_merged.osty:6522:13
+			// Osty: /tmp/selfhost_merged.osty:6524:13
 			_ = opAdvance(p)
-			// Osty: /tmp/selfhost_merged.osty:6523:13
+			// Osty: /tmp/selfhost_merged.osty:6525:13
 			return
 		}
-		// Osty: /tmp/selfhost_merged.osty:6525:9
+		// Osty: /tmp/selfhost_merged.osty:6527:9
 		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontSemicolon{})) {
-			// Osty: /tmp/selfhost_merged.osty:6526:13
+			// Osty: /tmp/selfhost_merged.osty:6528:13
 			_ = opAdvance(p)
-			// Osty: /tmp/selfhost_merged.osty:6527:13
-			return
-		}
-		// Osty: /tmp/selfhost_merged.osty:6529:9
-		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:6529:34
-			return
-		}
-		// Osty: /tmp/selfhost_merged.osty:6530:9
-		if opIsDeclSyncStart(p) || astStartsStmt(kind) {
-			// Osty: /tmp/selfhost_merged.osty:6530:58
+			// Osty: /tmp/selfhost_merged.osty:6529:13
 			return
 		}
 		// Osty: /tmp/selfhost_merged.osty:6531:9
-		_ = opAdvance(p)
-	}
-}
-
-// Osty: /tmp/selfhost_merged.osty:6535:1
-func opSyncParam(p *OstyParser) {
-	// Osty: /tmp/selfhost_merged.osty:6536:5
-	for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-		// Osty: /tmp/selfhost_merged.osty:6537:9
-		kind := opPeek(p).kind
-		_ = kind
-		// Osty: /tmp/selfhost_merged.osty:6538:9
-		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontComma{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRParen{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontArrow{})) {
-			// Osty: /tmp/selfhost_merged.osty:6538:101
-			return
-		}
-		// Osty: /tmp/selfhost_merged.osty:6539:9
-		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontNewline{})) {
-			// Osty: /tmp/selfhost_merged.osty:6540:13
-			_ = opAdvance(p)
-			// Osty: /tmp/selfhost_merged.osty:6541:13
-			return
-		}
-		// Osty: /tmp/selfhost_merged.osty:6543:9
-		_ = opAdvance(p)
-	}
-}
-
-// Osty: /tmp/selfhost_merged.osty:6547:1
-func opSyncMember(p *OstyParser) {
-	// Osty: /tmp/selfhost_merged.osty:6548:5
-	for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-		// Osty: /tmp/selfhost_merged.osty:6549:9
-		kind := opPeek(p).kind
-		_ = kind
-		// Osty: /tmp/selfhost_merged.osty:6550:9
 		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:6550:34
+			// Osty: /tmp/selfhost_merged.osty:6531:34
 			return
 		}
-		// Osty: /tmp/selfhost_merged.osty:6551:9
-		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontNewline{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontComma{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontSemicolon{})) {
-			// Osty: /tmp/selfhost_merged.osty:6552:13
-			_ = opAdvance(p)
-			// Osty: /tmp/selfhost_merged.osty:6553:13
+		// Osty: /tmp/selfhost_merged.osty:6532:9
+		if opIsDeclSyncStart(p) || astStartsStmt(kind) {
+			// Osty: /tmp/selfhost_merged.osty:6532:58
 			return
 		}
-		// Osty: /tmp/selfhost_merged.osty:6555:9
-		if opIsMemberSyncStart(p) {
-			// Osty: /tmp/selfhost_merged.osty:6555:37
-			return
-		}
-		// Osty: /tmp/selfhost_merged.osty:6556:9
+		// Osty: /tmp/selfhost_merged.osty:6533:9
 		_ = opAdvance(p)
 	}
 }
 
-// Osty: /tmp/selfhost_merged.osty:6560:1
+// Osty: /tmp/selfhost_merged.osty:6537:1
+func opSyncParam(p *OstyParser) {
+	// Osty: /tmp/selfhost_merged.osty:6538:5
+	for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
+		// Osty: /tmp/selfhost_merged.osty:6539:9
+		kind := opPeek(p).kind
+		_ = kind
+		// Osty: /tmp/selfhost_merged.osty:6540:9
+		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontComma{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRParen{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontArrow{})) {
+			// Osty: /tmp/selfhost_merged.osty:6540:101
+			return
+		}
+		// Osty: /tmp/selfhost_merged.osty:6541:9
+		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontNewline{})) {
+			// Osty: /tmp/selfhost_merged.osty:6542:13
+			_ = opAdvance(p)
+			// Osty: /tmp/selfhost_merged.osty:6543:13
+			return
+		}
+		// Osty: /tmp/selfhost_merged.osty:6545:9
+		_ = opAdvance(p)
+	}
+}
+
+// Osty: /tmp/selfhost_merged.osty:6549:1
+func opSyncMember(p *OstyParser) {
+	// Osty: /tmp/selfhost_merged.osty:6550:5
+	for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
+		// Osty: /tmp/selfhost_merged.osty:6551:9
+		kind := opPeek(p).kind
+		_ = kind
+		// Osty: /tmp/selfhost_merged.osty:6552:9
+		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) {
+			// Osty: /tmp/selfhost_merged.osty:6552:34
+			return
+		}
+		// Osty: /tmp/selfhost_merged.osty:6553:9
+		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontNewline{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontComma{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontSemicolon{})) {
+			// Osty: /tmp/selfhost_merged.osty:6554:13
+			_ = opAdvance(p)
+			// Osty: /tmp/selfhost_merged.osty:6555:13
+			return
+		}
+		// Osty: /tmp/selfhost_merged.osty:6557:9
+		if opIsMemberSyncStart(p) {
+			// Osty: /tmp/selfhost_merged.osty:6557:37
+			return
+		}
+		// Osty: /tmp/selfhost_merged.osty:6558:9
+		_ = opAdvance(p)
+	}
+}
+
+// Osty: /tmp/selfhost_merged.osty:6562:1
 func opIsDeclSyncStart(p *OstyParser) bool {
-	// Osty: /tmp/selfhost_merged.osty:6561:5
+	// Osty: /tmp/selfhost_merged.osty:6563:5
 	kind := opPeek(p).kind
 	_ = kind
-	// Osty: /tmp/selfhost_merged.osty:6562:5
+	// Osty: /tmp/selfhost_merged.osty:6564:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontFn{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontStruct{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontEnum{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontInterface{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontType{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontUse{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLet{})) {
-		// Osty: /tmp/selfhost_merged.osty:6562:157
+		// Osty: /tmp/selfhost_merged.osty:6564:157
 		return true
 	}
-	// Osty: /tmp/selfhost_merged.osty:6563:5
+	// Osty: /tmp/selfhost_merged.osty:6565:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontPub{})) {
-		// Osty: /tmp/selfhost_merged.osty:6564:9
+		// Osty: /tmp/selfhost_merged.osty:6566:9
 		next := opPeekAt(p, 1).kind
 		_ = next
-		// Osty: /tmp/selfhost_merged.osty:6565:9
+		// Osty: /tmp/selfhost_merged.osty:6567:9
 		return ostyEqual(next, FrontTokenKind(&FrontTokenKind_FrontFn{})) || ostyEqual(next, FrontTokenKind(&FrontTokenKind_FrontStruct{})) || ostyEqual(next, FrontTokenKind(&FrontTokenKind_FrontEnum{})) || ostyEqual(next, FrontTokenKind(&FrontTokenKind_FrontInterface{})) || ostyEqual(next, FrontTokenKind(&FrontTokenKind_FrontType{})) || ostyEqual(next, FrontTokenKind(&FrontTokenKind_FrontLet{})) || ostyEqual(next, FrontTokenKind(&FrontTokenKind_FrontHash{}))
 	}
 	return ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontHash{})) && ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontLBracket{}))
 }
 
-// Osty: /tmp/selfhost_merged.osty:6570:1
+// Osty: /tmp/selfhost_merged.osty:6572:1
 func opIsMemberSyncStart(p *OstyParser) bool {
-	// Osty: /tmp/selfhost_merged.osty:6571:5
+	// Osty: /tmp/selfhost_merged.osty:6573:5
 	kind := opPeek(p).kind
 	_ = kind
-	// Osty: /tmp/selfhost_merged.osty:6572:5
+	// Osty: /tmp/selfhost_merged.osty:6574:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontFn{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontHash{})) {
-		// Osty: /tmp/selfhost_merged.osty:6572:69
+		// Osty: /tmp/selfhost_merged.osty:6574:69
 		return true
 	}
-	// Osty: /tmp/selfhost_merged.osty:6573:5
+	// Osty: /tmp/selfhost_merged.osty:6575:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontPub{})) {
-		// Osty: /tmp/selfhost_merged.osty:6574:9
+		// Osty: /tmp/selfhost_merged.osty:6576:9
 		next := opPeekAt(p, 1).kind
 		_ = next
-		// Osty: /tmp/selfhost_merged.osty:6575:9
+		// Osty: /tmp/selfhost_merged.osty:6577:9
 		return ostyEqual(next, FrontTokenKind(&FrontTokenKind_FrontFn{})) || ostyEqual(next, FrontTokenKind(&FrontTokenKind_FrontIdent{})) || ostyEqual(next, FrontTokenKind(&FrontTokenKind_FrontHash{}))
 	}
 	return false
 }
 
-// Osty: /tmp/selfhost_merged.osty:6580:1
+// Osty: /tmp/selfhost_merged.osty:6582:1
 func opErrorCount(p *OstyParser) int {
-	// Osty: /tmp/selfhost_merged.osty:6581:5
+	// Osty: /tmp/selfhost_merged.osty:6583:5
 	c := 0
 	_ = c
-	// Osty: /tmp/selfhost_merged.osty:6582:5
+	// Osty: /tmp/selfhost_merged.osty:6584:5
 	for _, e := range p.arena.errors {
-		// Osty: /tmp/selfhost_merged.osty:6582:31
+		// Osty: /tmp/selfhost_merged.osty:6584:31
 		_ = e
-		// Osty: /tmp/selfhost_merged.osty:6583:7
+		// Osty: /tmp/selfhost_merged.osty:6585:7
 		c = c + 1
 	}
 	return c
 }
 
-// Osty: /tmp/selfhost_merged.osty:6587:1
+// Osty: /tmp/selfhost_merged.osty:6589:1
 func opTruncateErrors(p *OstyParser, target int) {
-	// Osty: /tmp/selfhost_merged.osty:6588:5
+	// Osty: /tmp/selfhost_merged.osty:6590:5
 	cur := opErrorCount(p)
 	_ = cur
-	// Osty: /tmp/selfhost_merged.osty:6589:5
+	// Osty: /tmp/selfhost_merged.osty:6591:5
 	for cur > target {
-		// Osty: /tmp/selfhost_merged.osty:6590:9
+		// Osty: /tmp/selfhost_merged.osty:6592:9
 		_ = func() **AstParseError {
 			if len(p.arena.errors) == 0 {
 				return nil
@@ -9710,317 +9710,317 @@ func opTruncateErrors(p *OstyParser, target int) {
 			p.arena.errors = p.arena.errors[:len(p.arena.errors)-1]
 			return &v
 		}()
-		// Osty: /tmp/selfhost_merged.osty:6591:13
+		// Osty: /tmp/selfhost_merged.osty:6593:13
 		cur = cur - 1
 	}
 }
 
-// Osty: /tmp/selfhost_merged.osty:6599:1
+// Osty: /tmp/selfhost_merged.osty:6601:1
 func astIsNonAssocOp(kind FrontTokenKind) bool {
 	return ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontEq{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontNeq{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLt{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontGt{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLeq{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontGeq{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontDotDot{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontDotDotEq{}))
 }
 
-// Osty: /tmp/selfhost_merged.osty:6603:1
+// Osty: /tmp/selfhost_merged.osty:6605:1
 func astSameLevel(a FrontTokenKind, b FrontTokenKind) bool {
-	// Osty: /tmp/selfhost_merged.osty:6604:5
+	// Osty: /tmp/selfhost_merged.osty:6606:5
 	ac := ostyEqual(a, FrontTokenKind(&FrontTokenKind_FrontEq{})) || ostyEqual(a, FrontTokenKind(&FrontTokenKind_FrontNeq{})) || ostyEqual(a, FrontTokenKind(&FrontTokenKind_FrontLt{})) || ostyEqual(a, FrontTokenKind(&FrontTokenKind_FrontGt{})) || ostyEqual(a, FrontTokenKind(&FrontTokenKind_FrontLeq{})) || ostyEqual(a, FrontTokenKind(&FrontTokenKind_FrontGeq{}))
 	_ = ac
-	// Osty: /tmp/selfhost_merged.osty:6605:5
+	// Osty: /tmp/selfhost_merged.osty:6607:5
 	bc := ostyEqual(b, FrontTokenKind(&FrontTokenKind_FrontEq{})) || ostyEqual(b, FrontTokenKind(&FrontTokenKind_FrontNeq{})) || ostyEqual(b, FrontTokenKind(&FrontTokenKind_FrontLt{})) || ostyEqual(b, FrontTokenKind(&FrontTokenKind_FrontGt{})) || ostyEqual(b, FrontTokenKind(&FrontTokenKind_FrontLeq{})) || ostyEqual(b, FrontTokenKind(&FrontTokenKind_FrontGeq{}))
 	_ = bc
-	// Osty: /tmp/selfhost_merged.osty:6606:5
+	// Osty: /tmp/selfhost_merged.osty:6608:5
 	ar := ostyEqual(a, FrontTokenKind(&FrontTokenKind_FrontDotDot{})) || ostyEqual(a, FrontTokenKind(&FrontTokenKind_FrontDotDotEq{}))
 	_ = ar
-	// Osty: /tmp/selfhost_merged.osty:6607:5
+	// Osty: /tmp/selfhost_merged.osty:6609:5
 	br := ostyEqual(b, FrontTokenKind(&FrontTokenKind_FrontDotDot{})) || ostyEqual(b, FrontTokenKind(&FrontTokenKind_FrontDotDotEq{}))
 	_ = br
 	return (ac && bc) || (ar && br)
 }
 
-// Osty: /tmp/selfhost_merged.osty:6611:5
+// Osty: /tmp/selfhost_merged.osty:6613:5
 func astInfixLBP(kind FrontTokenKind) int {
-	// Osty: /tmp/selfhost_merged.osty:6612:5
+	// Osty: /tmp/selfhost_merged.osty:6614:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontQQ{})) {
-		// Osty: /tmp/selfhost_merged.osty:6612:26
+		// Osty: /tmp/selfhost_merged.osty:6614:26
 		return 2
 	}
-	// Osty: /tmp/selfhost_merged.osty:6613:5
+	// Osty: /tmp/selfhost_merged.osty:6615:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontOr{})) {
-		// Osty: /tmp/selfhost_merged.osty:6613:26
+		// Osty: /tmp/selfhost_merged.osty:6615:26
 		return 3
 	}
-	// Osty: /tmp/selfhost_merged.osty:6614:5
+	// Osty: /tmp/selfhost_merged.osty:6616:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontAnd{})) {
-		// Osty: /tmp/selfhost_merged.osty:6614:27
+		// Osty: /tmp/selfhost_merged.osty:6616:27
 		return 4
 	}
-	// Osty: /tmp/selfhost_merged.osty:6615:5
+	// Osty: /tmp/selfhost_merged.osty:6617:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontEq{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontNeq{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLt{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontGt{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLeq{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontGeq{})) {
-		// Osty: /tmp/selfhost_merged.osty:6615:124
+		// Osty: /tmp/selfhost_merged.osty:6617:124
 		return 5
 	}
-	// Osty: /tmp/selfhost_merged.osty:6616:5
+	// Osty: /tmp/selfhost_merged.osty:6618:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontDotDot{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontDotDotEq{})) {
-		// Osty: /tmp/selfhost_merged.osty:6616:55
+		// Osty: /tmp/selfhost_merged.osty:6618:55
 		return 6
 	}
-	// Osty: /tmp/selfhost_merged.osty:6617:5
+	// Osty: /tmp/selfhost_merged.osty:6619:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBitOr{})) {
-		// Osty: /tmp/selfhost_merged.osty:6617:29
+		// Osty: /tmp/selfhost_merged.osty:6619:29
 		return 7
 	}
-	// Osty: /tmp/selfhost_merged.osty:6618:5
+	// Osty: /tmp/selfhost_merged.osty:6620:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBitXor{})) {
-		// Osty: /tmp/selfhost_merged.osty:6618:30
+		// Osty: /tmp/selfhost_merged.osty:6620:30
 		return 8
 	}
-	// Osty: /tmp/selfhost_merged.osty:6619:5
+	// Osty: /tmp/selfhost_merged.osty:6621:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBitAnd{})) {
-		// Osty: /tmp/selfhost_merged.osty:6619:30
+		// Osty: /tmp/selfhost_merged.osty:6621:30
 		return 9
 	}
-	// Osty: /tmp/selfhost_merged.osty:6620:5
+	// Osty: /tmp/selfhost_merged.osty:6622:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontShl{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontShr{})) {
-		// Osty: /tmp/selfhost_merged.osty:6620:47
+		// Osty: /tmp/selfhost_merged.osty:6622:47
 		return 10
 	}
-	// Osty: /tmp/selfhost_merged.osty:6621:5
+	// Osty: /tmp/selfhost_merged.osty:6623:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontPlus{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontMinus{})) {
-		// Osty: /tmp/selfhost_merged.osty:6621:50
+		// Osty: /tmp/selfhost_merged.osty:6623:50
 		return 11
 	}
-	// Osty: /tmp/selfhost_merged.osty:6622:5
+	// Osty: /tmp/selfhost_merged.osty:6624:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontStar{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontSlash{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontPercent{})) {
-		// Osty: /tmp/selfhost_merged.osty:6622:74
+		// Osty: /tmp/selfhost_merged.osty:6624:74
 		return 12
 	}
 	return 0
 }
 
-// Osty: /tmp/selfhost_merged.osty:6626:5
+// Osty: /tmp/selfhost_merged.osty:6628:5
 func astInfixRBP(kind FrontTokenKind) int {
-	// Osty: /tmp/selfhost_merged.osty:6627:5
+	// Osty: /tmp/selfhost_merged.osty:6629:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontQQ{})) {
-		// Osty: /tmp/selfhost_merged.osty:6627:26
+		// Osty: /tmp/selfhost_merged.osty:6629:26
 		return 2
 	}
-	// Osty: /tmp/selfhost_merged.osty:6628:5
+	// Osty: /tmp/selfhost_merged.osty:6630:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontOr{})) {
-		// Osty: /tmp/selfhost_merged.osty:6628:26
+		// Osty: /tmp/selfhost_merged.osty:6630:26
 		return 4
 	}
-	// Osty: /tmp/selfhost_merged.osty:6629:5
+	// Osty: /tmp/selfhost_merged.osty:6631:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontAnd{})) {
-		// Osty: /tmp/selfhost_merged.osty:6629:27
+		// Osty: /tmp/selfhost_merged.osty:6631:27
 		return 5
 	}
-	// Osty: /tmp/selfhost_merged.osty:6630:5
+	// Osty: /tmp/selfhost_merged.osty:6632:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontEq{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontNeq{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLt{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontGt{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLeq{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontGeq{})) {
-		// Osty: /tmp/selfhost_merged.osty:6630:124
+		// Osty: /tmp/selfhost_merged.osty:6632:124
 		return 6
 	}
-	// Osty: /tmp/selfhost_merged.osty:6631:5
+	// Osty: /tmp/selfhost_merged.osty:6633:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontDotDot{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontDotDotEq{})) {
-		// Osty: /tmp/selfhost_merged.osty:6631:55
+		// Osty: /tmp/selfhost_merged.osty:6633:55
 		return 7
 	}
-	// Osty: /tmp/selfhost_merged.osty:6632:5
+	// Osty: /tmp/selfhost_merged.osty:6634:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBitOr{})) {
-		// Osty: /tmp/selfhost_merged.osty:6632:29
+		// Osty: /tmp/selfhost_merged.osty:6634:29
 		return 8
 	}
-	// Osty: /tmp/selfhost_merged.osty:6633:5
+	// Osty: /tmp/selfhost_merged.osty:6635:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBitXor{})) {
-		// Osty: /tmp/selfhost_merged.osty:6633:30
+		// Osty: /tmp/selfhost_merged.osty:6635:30
 		return 9
 	}
-	// Osty: /tmp/selfhost_merged.osty:6634:5
+	// Osty: /tmp/selfhost_merged.osty:6636:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBitAnd{})) {
-		// Osty: /tmp/selfhost_merged.osty:6634:30
+		// Osty: /tmp/selfhost_merged.osty:6636:30
 		return 10
 	}
-	// Osty: /tmp/selfhost_merged.osty:6635:5
+	// Osty: /tmp/selfhost_merged.osty:6637:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontShl{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontShr{})) {
-		// Osty: /tmp/selfhost_merged.osty:6635:47
+		// Osty: /tmp/selfhost_merged.osty:6637:47
 		return 11
 	}
-	// Osty: /tmp/selfhost_merged.osty:6636:5
+	// Osty: /tmp/selfhost_merged.osty:6638:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontPlus{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontMinus{})) {
-		// Osty: /tmp/selfhost_merged.osty:6636:50
+		// Osty: /tmp/selfhost_merged.osty:6638:50
 		return 12
 	}
-	// Osty: /tmp/selfhost_merged.osty:6637:5
+	// Osty: /tmp/selfhost_merged.osty:6639:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontStar{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontSlash{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontPercent{})) {
-		// Osty: /tmp/selfhost_merged.osty:6637:74
+		// Osty: /tmp/selfhost_merged.osty:6639:74
 		return 13
 	}
 	return 0
 }
 
-// Osty: /tmp/selfhost_merged.osty:6641:1
+// Osty: /tmp/selfhost_merged.osty:6643:1
 func astStartsExpr(kind FrontTokenKind) bool {
 	return ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontInt{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontFloat{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontString{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRawString{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontChar{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontByte{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBracket{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontMinus{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontNot{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBitNot{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontIf{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontMatch{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBitOr{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontOr{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontUnderscore{}))
 }
 
-// Osty: /tmp/selfhost_merged.osty:6645:1
+// Osty: /tmp/selfhost_merged.osty:6647:1
 func astStartsDecl(kind FrontTokenKind) bool {
 	return ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontFn{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontStruct{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontEnum{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontInterface{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontType{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontUse{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontPub{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontHash{}))
 }
 
-// Osty: /tmp/selfhost_merged.osty:6649:1
+// Osty: /tmp/selfhost_merged.osty:6651:1
 func astStartsStmt(kind FrontTokenKind) bool {
 	return ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLet{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontReturn{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBreak{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontContinue{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontDefer{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontFor{})) || astStartsExpr(kind)
 }
 
-// Osty: /tmp/selfhost_merged.osty:6657:1
+// Osty: /tmp/selfhost_merged.osty:6659:1
 func opParseGenericParams(p *OstyParser) []int {
-	// Osty: /tmp/selfhost_merged.osty:6658:5
+	// Osty: /tmp/selfhost_merged.osty:6660:5
 	var params []int = make([]int, 0, 1)
 	_ = params
-	// Osty: /tmp/selfhost_merged.osty:6659:5
+	// Osty: /tmp/selfhost_merged.osty:6661:5
 	if opEat(p, FrontTokenKind(&FrontTokenKind_FrontLt{})) {
-		// Osty: /tmp/selfhost_merged.osty:6660:9
+		// Osty: /tmp/selfhost_merged.osty:6662:9
 		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontGt{})) || opAt(p, FrontTokenKind(&FrontTokenKind_FrontShr{})) || opAt(p, FrontTokenKind(&FrontTokenKind_FrontGeq{})) || opAt(p, FrontTokenKind(&FrontTokenKind_FrontShrEq{})) {
-			// Osty: /tmp/selfhost_merged.osty:6661:13
+			// Osty: /tmp/selfhost_merged.osty:6663:13
 			opErrorFull(p, "generic parameter list requires at least one parameter", "remove `<>` or declare a parameter, e.g. `<T>`", "", "E0204")
 		}
-		// Osty: /tmp/selfhost_merged.osty:6663:9
+		// Osty: /tmp/selfhost_merged.osty:6665:9
 		for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontGt{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontShr{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontGeq{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontShrEq{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-			// Osty: /tmp/selfhost_merged.osty:6664:13
+			// Osty: /tmp/selfhost_merged.osty:6666:13
 			start := p.pos
 			_ = start
-			// Osty: /tmp/selfhost_merged.osty:6665:13
+			// Osty: /tmp/selfhost_merged.osty:6667:13
 			gName := opExpect(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})).text
 			_ = gName
-			// Osty: /tmp/selfhost_merged.osty:6666:13
+			// Osty: /tmp/selfhost_merged.osty:6668:13
 			var bounds []int = make([]int, 0, 1)
 			_ = bounds
-			// Osty: /tmp/selfhost_merged.osty:6667:13
+			// Osty: /tmp/selfhost_merged.osty:6669:13
 			if opEat(p, FrontTokenKind(&FrontTokenKind_FrontColon{})) {
-				// Osty: /tmp/selfhost_merged.osty:6668:17
+				// Osty: /tmp/selfhost_merged.osty:6670:17
 				func() struct{} { bounds = append(bounds, opParseType(p)); return struct{}{} }()
-				// Osty: /tmp/selfhost_merged.osty:6669:17
+				// Osty: /tmp/selfhost_merged.osty:6671:17
 				for opEat(p, FrontTokenKind(&FrontTokenKind_FrontPlus{})) {
-					// Osty: /tmp/selfhost_merged.osty:6669:43
+					// Osty: /tmp/selfhost_merged.osty:6671:43
 					func() struct{} { bounds = append(bounds, opParseType(p)); return struct{}{} }()
 				}
 			}
-			// Osty: /tmp/selfhost_merged.osty:6671:13
+			// Osty: /tmp/selfhost_merged.osty:6673:13
 			gNode := emptyAstNode(AstNodeKind(&AstNodeKind_AstNGenericParam{}))
 			_ = gNode
-			// Osty: /tmp/selfhost_merged.osty:6672:24
+			// Osty: /tmp/selfhost_merged.osty:6674:24
 			gNode.text = gName
-			// Osty: /tmp/selfhost_merged.osty:6673:28
+			// Osty: /tmp/selfhost_merged.osty:6675:28
 			gNode.children = bounds
-			// Osty: /tmp/selfhost_merged.osty:6674:25
+			// Osty: /tmp/selfhost_merged.osty:6676:25
 			gNode.start = start
-			// Osty: /tmp/selfhost_merged.osty:6675:23
+			// Osty: /tmp/selfhost_merged.osty:6677:23
 			gNode.end = p.pos
-			// Osty: /tmp/selfhost_merged.osty:6676:13
+			// Osty: /tmp/selfhost_merged.osty:6678:13
 			func() struct{} { params = append(params, opAddNode(p, gNode)); return struct{}{} }()
-			// Osty: /tmp/selfhost_merged.osty:6677:13
+			// Osty: /tmp/selfhost_merged.osty:6679:13
 			if !(opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))) {
-				// Osty: /tmp/selfhost_merged.osty:6677:42
+				// Osty: /tmp/selfhost_merged.osty:6679:42
 				break
 			}
 		}
-		// Osty: /tmp/selfhost_merged.osty:6679:9
+		// Osty: /tmp/selfhost_merged.osty:6681:9
 		opExpectTypeGT(p)
 	}
 	return params
 }
 
-// Osty: /tmp/selfhost_merged.osty:6688:1
+// Osty: /tmp/selfhost_merged.osty:6690:1
 func opParseExpr(p *OstyParser) int {
 	return opParseExprBP(p, 0)
 }
 
-// Osty: /tmp/selfhost_merged.osty:6690:1
+// Osty: /tmp/selfhost_merged.osty:6692:1
 func opParseExprBP(p *OstyParser, minBP int) int {
-	// Osty: /tmp/selfhost_merged.osty:6691:5
+	// Osty: /tmp/selfhost_merged.osty:6693:5
 	left := opParsePrefix(p)
 	_ = left
-	// Osty: /tmp/selfhost_merged.osty:6692:5
+	// Osty: /tmp/selfhost_merged.osty:6694:5
 	for {
-		// Osty: /tmp/selfhost_merged.osty:6693:9
+		// Osty: /tmp/selfhost_merged.osty:6695:9
 		postfix := opTryParsePostfix(p, left)
 		_ = postfix
-		// Osty: /tmp/selfhost_merged.osty:6694:9
+		// Osty: /tmp/selfhost_merged.osty:6696:9
 		if postfix >= 0 {
-			// Osty: /tmp/selfhost_merged.osty:6695:18
+			// Osty: /tmp/selfhost_merged.osty:6697:18
 			left = postfix
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:6697:13
+			// Osty: /tmp/selfhost_merged.osty:6699:13
 			op := opPeek(p)
 			_ = op
-			// Osty: /tmp/selfhost_merged.osty:6698:13
+			// Osty: /tmp/selfhost_merged.osty:6700:13
 			lbp := astInfixLBP(op.kind)
 			_ = lbp
-			// Osty: /tmp/selfhost_merged.osty:6699:13
+			// Osty: /tmp/selfhost_merged.osty:6701:13
 			if lbp == 0 || lbp < minBP {
-				// Osty: /tmp/selfhost_merged.osty:6699:42
+				// Osty: /tmp/selfhost_merged.osty:6701:42
 				break
 			}
-			// Osty: /tmp/selfhost_merged.osty:6700:13
+			// Osty: /tmp/selfhost_merged.osty:6702:13
 			opAdvance(p)
-			// Osty: /tmp/selfhost_merged.osty:6701:13
+			// Osty: /tmp/selfhost_merged.osty:6703:13
 			rbp := astInfixRBP(op.kind)
 			_ = rbp
-			// Osty: /tmp/selfhost_merged.osty:6702:13
+			// Osty: /tmp/selfhost_merged.osty:6704:13
 			if ostyEqual(op.kind, FrontTokenKind(&FrontTokenKind_FrontDotDot{})) || ostyEqual(op.kind, FrontTokenKind(&FrontTokenKind_FrontDotDotEq{})) {
-				// Osty: /tmp/selfhost_merged.osty:6703:17
+				// Osty: /tmp/selfhost_merged.osty:6705:17
 				rhsIdx := -1
 				_ = rhsIdx
-				// Osty: /tmp/selfhost_merged.osty:6704:17
+				// Osty: /tmp/selfhost_merged.osty:6706:17
 				if astStartsExpr(opPeek(p).kind) {
-					// Osty: /tmp/selfhost_merged.osty:6704:59
+					// Osty: /tmp/selfhost_merged.osty:6706:59
 					rhsIdx = opParseExprBP(p, rbp)
 				}
-				// Osty: /tmp/selfhost_merged.osty:6705:17
+				// Osty: /tmp/selfhost_merged.osty:6707:17
 				rangeNode := emptyAstNode(AstNodeKind(&AstNodeKind_AstNRange{}))
 				_ = rangeNode
-				// Osty: /tmp/selfhost_merged.osty:6706:32
+				// Osty: /tmp/selfhost_merged.osty:6708:32
 				rangeNode.left = left
-				// Osty: /tmp/selfhost_merged.osty:6707:33
+				// Osty: /tmp/selfhost_merged.osty:6709:33
 				rangeNode.right = rhsIdx
-				// Osty: /tmp/selfhost_merged.osty:6708:33
+				// Osty: /tmp/selfhost_merged.osty:6710:33
 				rangeNode.start = p.pos
-				// Osty: /tmp/selfhost_merged.osty:6709:17
+				// Osty: /tmp/selfhost_merged.osty:6711:17
 				if ostyEqual(op.kind, FrontTokenKind(&FrontTokenKind_FrontDotDotEq{})) {
-					// Osty: /tmp/selfhost_merged.osty:6709:63
+					// Osty: /tmp/selfhost_merged.osty:6711:63
 					rangeNode.flags = 1
 				}
-				// Osty: /tmp/selfhost_merged.osty:6710:22
+				// Osty: /tmp/selfhost_merged.osty:6712:22
 				left = opAddNode(p, rangeNode)
-				// Osty: /tmp/selfhost_merged.osty:6711:17
+				// Osty: /tmp/selfhost_merged.osty:6713:17
 				if astIsNonAssocOp(opPeek(p).kind) && astSameLevel(op.kind, opPeek(p).kind) {
-					// Osty: /tmp/selfhost_merged.osty:6712:21
+					// Osty: /tmp/selfhost_merged.osty:6714:21
 					opErrorFull(p, "chained range operators require parentheses", "", "v0.2 R1: range operators are non-associative", "E0200")
-					// Osty: /tmp/selfhost_merged.osty:6713:21
+					// Osty: /tmp/selfhost_merged.osty:6715:21
 					break
 				}
 			} else {
-				// Osty: /tmp/selfhost_merged.osty:6716:17
+				// Osty: /tmp/selfhost_merged.osty:6718:17
 				rhs := opParseExprBP(p, rbp)
 				_ = rhs
-				// Osty: /tmp/selfhost_merged.osty:6717:17
+				// Osty: /tmp/selfhost_merged.osty:6719:17
 				binNode := emptyAstNode(AstNodeKind(&AstNodeKind_AstNBinary{}))
 				_ = binNode
-				// Osty: /tmp/selfhost_merged.osty:6718:28
+				// Osty: /tmp/selfhost_merged.osty:6720:28
 				binNode.op = op.kind
-				// Osty: /tmp/selfhost_merged.osty:6719:30
+				// Osty: /tmp/selfhost_merged.osty:6721:30
 				binNode.left = left
-				// Osty: /tmp/selfhost_merged.osty:6720:31
+				// Osty: /tmp/selfhost_merged.osty:6722:31
 				binNode.right = rhs
-				// Osty: /tmp/selfhost_merged.osty:6721:31
+				// Osty: /tmp/selfhost_merged.osty:6723:31
 				binNode.start = p.pos
-				// Osty: /tmp/selfhost_merged.osty:6722:22
+				// Osty: /tmp/selfhost_merged.osty:6724:22
 				left = opAddNode(p, binNode)
-				// Osty: /tmp/selfhost_merged.osty:6723:17
+				// Osty: /tmp/selfhost_merged.osty:6725:17
 				if astIsNonAssocOp(op.kind) && astIsNonAssocOp(opPeek(p).kind) && astSameLevel(op.kind, opPeek(p).kind) {
-					// Osty: /tmp/selfhost_merged.osty:6724:21
+					// Osty: /tmp/selfhost_merged.osty:6726:21
 					opErrorFull(p, "chained comparison operators require parentheses", "", "v0.2 R1: comparison operators are non-associative", "E0200")
-					// Osty: /tmp/selfhost_merged.osty:6725:21
+					// Osty: /tmp/selfhost_merged.osty:6727:21
 					break
 				}
 			}
@@ -10029,3412 +10029,3412 @@ func opParseExprBP(p *OstyParser, minBP int) int {
 	return left
 }
 
-// Osty: /tmp/selfhost_merged.osty:6733:1
+// Osty: /tmp/selfhost_merged.osty:6735:1
 func opParsePrefix(p *OstyParser) int {
-	// Osty: /tmp/selfhost_merged.osty:6734:5
+	// Osty: /tmp/selfhost_merged.osty:6736:5
 	tok := opPeek(p)
 	_ = tok
-	// Osty: /tmp/selfhost_merged.osty:6735:5
+	// Osty: /tmp/selfhost_merged.osty:6737:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontMinus{})) || ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontNot{})) || ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontBitNot{})) {
-		// Osty: /tmp/selfhost_merged.osty:6736:9
+		// Osty: /tmp/selfhost_merged.osty:6738:9
 		start := p.pos
 		_ = start
-		// Osty: /tmp/selfhost_merged.osty:6737:9
+		// Osty: /tmp/selfhost_merged.osty:6739:9
 		opAdvance(p)
-		// Osty: /tmp/selfhost_merged.osty:6738:9
+		// Osty: /tmp/selfhost_merged.osty:6740:9
 		x := opParsePrefix(p)
 		_ = x
-		// Osty: /tmp/selfhost_merged.osty:6739:9
+		// Osty: /tmp/selfhost_merged.osty:6741:9
 		node := emptyAstNode(AstNodeKind(&AstNodeKind_AstNUnary{}))
 		_ = node
-		// Osty: /tmp/selfhost_merged.osty:6740:17
+		// Osty: /tmp/selfhost_merged.osty:6742:17
 		node.op = tok.kind
-		// Osty: /tmp/selfhost_merged.osty:6741:19
+		// Osty: /tmp/selfhost_merged.osty:6743:19
 		node.left = x
-		// Osty: /tmp/selfhost_merged.osty:6742:20
+		// Osty: /tmp/selfhost_merged.osty:6744:20
 		node.start = start
-		// Osty: /tmp/selfhost_merged.osty:6743:18
+		// Osty: /tmp/selfhost_merged.osty:6745:18
 		node.end = p.pos
-		// Osty: /tmp/selfhost_merged.osty:6744:9
+		// Osty: /tmp/selfhost_merged.osty:6746:9
 		return opAddNode(p, node)
 	}
-	// Osty: /tmp/selfhost_merged.osty:6746:5
+	// Osty: /tmp/selfhost_merged.osty:6748:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontDotDot{})) || ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontDotDotEq{})) {
-		// Osty: /tmp/selfhost_merged.osty:6747:9
+		// Osty: /tmp/selfhost_merged.osty:6749:9
 		start := p.pos
 		_ = start
-		// Osty: /tmp/selfhost_merged.osty:6748:9
+		// Osty: /tmp/selfhost_merged.osty:6750:9
 		opAdvance(p)
-		// Osty: /tmp/selfhost_merged.osty:6749:9
+		// Osty: /tmp/selfhost_merged.osty:6751:9
 		rhsIdx := -1
 		_ = rhsIdx
-		// Osty: /tmp/selfhost_merged.osty:6750:9
+		// Osty: /tmp/selfhost_merged.osty:6752:9
 		if astStartsExpr(opPeek(p).kind) {
-			// Osty: /tmp/selfhost_merged.osty:6750:51
+			// Osty: /tmp/selfhost_merged.osty:6752:51
 			rhsIdx = opParseExprBP(p, 100)
 		}
-		// Osty: /tmp/selfhost_merged.osty:6751:9
+		// Osty: /tmp/selfhost_merged.osty:6753:9
 		rangeNode := emptyAstNode(AstNodeKind(&AstNodeKind_AstNRange{}))
 		_ = rangeNode
-		// Osty: /tmp/selfhost_merged.osty:6752:24
+		// Osty: /tmp/selfhost_merged.osty:6754:24
 		rangeNode.left = -1
-		// Osty: /tmp/selfhost_merged.osty:6753:25
+		// Osty: /tmp/selfhost_merged.osty:6755:25
 		rangeNode.right = rhsIdx
-		// Osty: /tmp/selfhost_merged.osty:6754:25
+		// Osty: /tmp/selfhost_merged.osty:6756:25
 		rangeNode.start = start
-		// Osty: /tmp/selfhost_merged.osty:6755:23
+		// Osty: /tmp/selfhost_merged.osty:6757:23
 		rangeNode.end = p.pos
-		// Osty: /tmp/selfhost_merged.osty:6756:9
+		// Osty: /tmp/selfhost_merged.osty:6758:9
 		if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontDotDotEq{})) {
-			// Osty: /tmp/selfhost_merged.osty:6756:56
+			// Osty: /tmp/selfhost_merged.osty:6758:56
 			rangeNode.flags = 1
 		}
-		// Osty: /tmp/selfhost_merged.osty:6757:9
+		// Osty: /tmp/selfhost_merged.osty:6759:9
 		return opAddNode(p, rangeNode)
 	}
 	return opParsePrimary(p)
 }
 
-// Osty: /tmp/selfhost_merged.osty:6762:1
+// Osty: /tmp/selfhost_merged.osty:6764:1
 func opParsePrimary(p *OstyParser) int {
-	// Osty: /tmp/selfhost_merged.osty:6763:5
+	// Osty: /tmp/selfhost_merged.osty:6765:5
 	tok := opPeek(p)
 	_ = tok
-	// Osty: /tmp/selfhost_merged.osty:6764:5
+	// Osty: /tmp/selfhost_merged.osty:6766:5
 	start := p.pos
 	_ = start
-	// Osty: /tmp/selfhost_merged.osty:6765:5
+	// Osty: /tmp/selfhost_merged.osty:6767:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontInt{})) {
-		// Osty: /tmp/selfhost_merged.osty:6765:31
+		// Osty: /tmp/selfhost_merged.osty:6767:31
 		opAdvance(p)
-		// Osty: /tmp/selfhost_merged.osty:6766:5
+		// Osty: /tmp/selfhost_merged.osty:6768:5
 		n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNIntLit{}))
 		_ = n
-		// Osty: /tmp/selfhost_merged.osty:6767:12
+		// Osty: /tmp/selfhost_merged.osty:6769:12
 		n.text = tok.text
-		// Osty: /tmp/selfhost_merged.osty:6768:13
+		// Osty: /tmp/selfhost_merged.osty:6770:13
 		n.start = start
-		// Osty: /tmp/selfhost_merged.osty:6769:11
+		// Osty: /tmp/selfhost_merged.osty:6771:11
 		n.end = p.pos
-		// Osty: /tmp/selfhost_merged.osty:6770:5
+		// Osty: /tmp/selfhost_merged.osty:6772:5
 		return opAddNode(p, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:6771:5
+	// Osty: /tmp/selfhost_merged.osty:6773:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontFloat{})) {
-		// Osty: /tmp/selfhost_merged.osty:6771:33
+		// Osty: /tmp/selfhost_merged.osty:6773:33
 		opAdvance(p)
-		// Osty: /tmp/selfhost_merged.osty:6772:5
+		// Osty: /tmp/selfhost_merged.osty:6774:5
 		n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNFloatLit{}))
 		_ = n
-		// Osty: /tmp/selfhost_merged.osty:6773:12
+		// Osty: /tmp/selfhost_merged.osty:6775:12
 		n.text = tok.text
-		// Osty: /tmp/selfhost_merged.osty:6774:13
+		// Osty: /tmp/selfhost_merged.osty:6776:13
 		n.start = start
-		// Osty: /tmp/selfhost_merged.osty:6775:11
+		// Osty: /tmp/selfhost_merged.osty:6777:11
 		n.end = p.pos
-		// Osty: /tmp/selfhost_merged.osty:6776:5
+		// Osty: /tmp/selfhost_merged.osty:6778:5
 		return opAddNode(p, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:6777:5
+	// Osty: /tmp/selfhost_merged.osty:6779:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontString{})) || ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontRawString{})) {
-		// Osty: /tmp/selfhost_merged.osty:6777:64
+		// Osty: /tmp/selfhost_merged.osty:6779:64
 		opAdvance(p)
-		// Osty: /tmp/selfhost_merged.osty:6778:5
+		// Osty: /tmp/selfhost_merged.osty:6780:5
 		n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNStringLit{}))
 		_ = n
-		// Osty: /tmp/selfhost_merged.osty:6779:12
+		// Osty: /tmp/selfhost_merged.osty:6781:12
 		n.text = tok.text
-		// Osty: /tmp/selfhost_merged.osty:6780:13
+		// Osty: /tmp/selfhost_merged.osty:6782:13
 		n.start = start
-		// Osty: /tmp/selfhost_merged.osty:6781:11
+		// Osty: /tmp/selfhost_merged.osty:6783:11
 		n.end = p.pos
-		// Osty: /tmp/selfhost_merged.osty:6782:5
+		// Osty: /tmp/selfhost_merged.osty:6784:5
 		return opAddNode(p, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:6783:5
+	// Osty: /tmp/selfhost_merged.osty:6785:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontChar{})) {
-		// Osty: /tmp/selfhost_merged.osty:6783:32
+		// Osty: /tmp/selfhost_merged.osty:6785:32
 		opAdvance(p)
-		// Osty: /tmp/selfhost_merged.osty:6784:5
+		// Osty: /tmp/selfhost_merged.osty:6786:5
 		n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNCharLit{}))
 		_ = n
-		// Osty: /tmp/selfhost_merged.osty:6785:12
+		// Osty: /tmp/selfhost_merged.osty:6787:12
 		n.text = tok.text
-		// Osty: /tmp/selfhost_merged.osty:6786:13
+		// Osty: /tmp/selfhost_merged.osty:6788:13
 		n.start = start
-		// Osty: /tmp/selfhost_merged.osty:6787:11
+		// Osty: /tmp/selfhost_merged.osty:6789:11
 		n.end = p.pos
-		// Osty: /tmp/selfhost_merged.osty:6788:5
+		// Osty: /tmp/selfhost_merged.osty:6790:5
 		return opAddNode(p, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:6789:5
+	// Osty: /tmp/selfhost_merged.osty:6791:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontByte{})) {
-		// Osty: /tmp/selfhost_merged.osty:6789:32
+		// Osty: /tmp/selfhost_merged.osty:6791:32
 		opAdvance(p)
-		// Osty: /tmp/selfhost_merged.osty:6790:5
+		// Osty: /tmp/selfhost_merged.osty:6792:5
 		n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNByteLit{}))
 		_ = n
-		// Osty: /tmp/selfhost_merged.osty:6791:12
+		// Osty: /tmp/selfhost_merged.osty:6793:12
 		n.text = tok.text
-		// Osty: /tmp/selfhost_merged.osty:6792:13
+		// Osty: /tmp/selfhost_merged.osty:6794:13
 		n.start = start
-		// Osty: /tmp/selfhost_merged.osty:6793:11
+		// Osty: /tmp/selfhost_merged.osty:6795:11
 		n.end = p.pos
-		// Osty: /tmp/selfhost_merged.osty:6794:5
+		// Osty: /tmp/selfhost_merged.osty:6796:5
 		return opAddNode(p, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:6795:5
+	// Osty: /tmp/selfhost_merged.osty:6797:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) {
-		// Osty: /tmp/selfhost_merged.osty:6796:9
+		// Osty: /tmp/selfhost_merged.osty:6798:9
 		opAdvance(p)
-		// Osty: /tmp/selfhost_merged.osty:6797:9
+		// Osty: /tmp/selfhost_merged.osty:6799:9
 		if tok.text == "true" || tok.text == "false" {
-			// Osty: /tmp/selfhost_merged.osty:6798:13
+			// Osty: /tmp/selfhost_merged.osty:6800:13
 			n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNBoolLit{}))
 			_ = n
-			// Osty: /tmp/selfhost_merged.osty:6799:20
+			// Osty: /tmp/selfhost_merged.osty:6801:20
 			n.text = tok.text
-			// Osty: /tmp/selfhost_merged.osty:6800:13
+			// Osty: /tmp/selfhost_merged.osty:6802:13
 			if tok.text == "true" {
-				// Osty: /tmp/selfhost_merged.osty:6800:45
+				// Osty: /tmp/selfhost_merged.osty:6802:45
 				n.flags = 1
 			}
-			// Osty: /tmp/selfhost_merged.osty:6801:21
+			// Osty: /tmp/selfhost_merged.osty:6803:21
 			n.start = start
-			// Osty: /tmp/selfhost_merged.osty:6802:19
+			// Osty: /tmp/selfhost_merged.osty:6804:19
 			n.end = p.pos
-			// Osty: /tmp/selfhost_merged.osty:6803:13
+			// Osty: /tmp/selfhost_merged.osty:6805:13
 			return opAddNode(p, n)
 		}
-		// Osty: /tmp/selfhost_merged.osty:6805:9
+		// Osty: /tmp/selfhost_merged.osty:6807:9
 		n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNIdent{}))
 		_ = n
-		// Osty: /tmp/selfhost_merged.osty:6806:16
+		// Osty: /tmp/selfhost_merged.osty:6808:16
 		n.text = tok.text
-		// Osty: /tmp/selfhost_merged.osty:6807:17
+		// Osty: /tmp/selfhost_merged.osty:6809:17
 		n.start = start
-		// Osty: /tmp/selfhost_merged.osty:6808:15
+		// Osty: /tmp/selfhost_merged.osty:6810:15
 		n.end = p.pos
-		// Osty: /tmp/selfhost_merged.osty:6809:9
+		// Osty: /tmp/selfhost_merged.osty:6811:9
 		return opAddNode(p, n)
-	}
-	// Osty: /tmp/selfhost_merged.osty:6811:5
-	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) {
-		// Osty: /tmp/selfhost_merged.osty:6811:34
-		return opParseParenOrTuple(p)
-	}
-	// Osty: /tmp/selfhost_merged.osty:6812:5
-	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontLBracket{})) {
-		// Osty: /tmp/selfhost_merged.osty:6812:36
-		return opParseListLit(p)
 	}
 	// Osty: /tmp/selfhost_merged.osty:6813:5
-	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
+	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) {
 		// Osty: /tmp/selfhost_merged.osty:6813:34
-		return opParseBlockOrMap(p)
+		return opParseParenOrTuple(p)
 	}
 	// Osty: /tmp/selfhost_merged.osty:6814:5
-	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontIf{})) {
-		// Osty: /tmp/selfhost_merged.osty:6814:30
-		return opParseIfExpr(p)
+	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontLBracket{})) {
+		// Osty: /tmp/selfhost_merged.osty:6814:36
+		return opParseListLit(p)
 	}
 	// Osty: /tmp/selfhost_merged.osty:6815:5
-	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontMatch{})) {
-		// Osty: /tmp/selfhost_merged.osty:6815:33
-		return opParseMatchExpr(p)
+	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
+		// Osty: /tmp/selfhost_merged.osty:6815:34
+		return opParseBlockOrMap(p)
 	}
 	// Osty: /tmp/selfhost_merged.osty:6816:5
-	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontBitOr{})) || ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontOr{})) {
-		// Osty: /tmp/selfhost_merged.osty:6816:56
-		return opParseClosure(p)
+	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontIf{})) {
+		// Osty: /tmp/selfhost_merged.osty:6816:30
+		return opParseIfExpr(p)
 	}
 	// Osty: /tmp/selfhost_merged.osty:6817:5
+	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontMatch{})) {
+		// Osty: /tmp/selfhost_merged.osty:6817:33
+		return opParseMatchExpr(p)
+	}
+	// Osty: /tmp/selfhost_merged.osty:6818:5
+	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontBitOr{})) || ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontOr{})) {
+		// Osty: /tmp/selfhost_merged.osty:6818:56
+		return opParseClosure(p)
+	}
+	// Osty: /tmp/selfhost_merged.osty:6819:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontUnderscore{})) {
-		// Osty: /tmp/selfhost_merged.osty:6817:38
+		// Osty: /tmp/selfhost_merged.osty:6819:38
 		opAdvance(p)
-		// Osty: /tmp/selfhost_merged.osty:6818:5
+		// Osty: /tmp/selfhost_merged.osty:6820:5
 		n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNIdent{}))
 		_ = n
-		// Osty: /tmp/selfhost_merged.osty:6819:12
+		// Osty: /tmp/selfhost_merged.osty:6821:12
 		n.text = "_"
-		// Osty: /tmp/selfhost_merged.osty:6820:13
+		// Osty: /tmp/selfhost_merged.osty:6822:13
 		n.start = start
-		// Osty: /tmp/selfhost_merged.osty:6821:11
+		// Osty: /tmp/selfhost_merged.osty:6823:11
 		n.end = p.pos
-		// Osty: /tmp/selfhost_merged.osty:6822:5
+		// Osty: /tmp/selfhost_merged.osty:6824:5
 		return opAddNode(p, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:6823:5
+	// Osty: /tmp/selfhost_merged.osty:6825:5
 	errKindName := frontTokenKindName(tok.kind)
 	_ = errKindName
-	// Osty: /tmp/selfhost_merged.osty:6824:5
-	opErrorFull(p, fmt.Sprintf("unexpected %s in expression", ostyToString(errKindName)), "an expression starts with a literal, identifier, `(`, `[`, `if`, `match`, or a closure", "", "E0010")
-	// Osty: /tmp/selfhost_merged.osty:6825:5
-	opAdvance(p)
 	// Osty: /tmp/selfhost_merged.osty:6826:5
+	opErrorFull(p, fmt.Sprintf("unexpected %s in expression", ostyToString(errKindName)), "an expression starts with a literal, identifier, `(`, `[`, `if`, `match`, or a closure", "", "E0010")
+	// Osty: /tmp/selfhost_merged.osty:6827:5
+	opAdvance(p)
+	// Osty: /tmp/selfhost_merged.osty:6828:5
 	errNode := emptyAstNode(AstNodeKind(&AstNodeKind_AstNError{}))
 	_ = errNode
-	// Osty: /tmp/selfhost_merged.osty:6827:19
+	// Osty: /tmp/selfhost_merged.osty:6829:19
 	errNode.start = p.pos - 1
-	// Osty: /tmp/selfhost_merged.osty:6828:17
+	// Osty: /tmp/selfhost_merged.osty:6830:17
 	errNode.end = p.pos
 	return opAddNode(p, errNode)
 }
 
-// Osty: /tmp/selfhost_merged.osty:6832:1
+// Osty: /tmp/selfhost_merged.osty:6834:1
 func opParseParenOrTuple(p *OstyParser) int {
-	// Osty: /tmp/selfhost_merged.osty:6833:5
+	// Osty: /tmp/selfhost_merged.osty:6835:5
 	start := p.pos
 	_ = start
-	// Osty: /tmp/selfhost_merged.osty:6834:5
+	// Osty: /tmp/selfhost_merged.osty:6836:5
 	opAdvance(p)
-	// Osty: /tmp/selfhost_merged.osty:6835:5
+	// Osty: /tmp/selfhost_merged.osty:6837:5
 	prevNoSL := p.noStructLit
 	_ = prevNoSL
-	// Osty: /tmp/selfhost_merged.osty:6836:19
+	// Osty: /tmp/selfhost_merged.osty:6838:19
 	p.noStructLit = false
-	// Osty: /tmp/selfhost_merged.osty:6837:5
+	// Osty: /tmp/selfhost_merged.osty:6839:5
 	opSkipNewlines(p)
-	// Osty: /tmp/selfhost_merged.osty:6838:5
+	// Osty: /tmp/selfhost_merged.osty:6840:5
 	if opEat(p, FrontTokenKind(&FrontTokenKind_FrontRParen{})) {
-		// Osty: /tmp/selfhost_merged.osty:6838:46
+		// Osty: /tmp/selfhost_merged.osty:6840:46
 		p.noStructLit = prevNoSL
-		// Osty: /tmp/selfhost_merged.osty:6839:5
+		// Osty: /tmp/selfhost_merged.osty:6841:5
 		n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNTuple{}))
 		_ = n
-		// Osty: /tmp/selfhost_merged.osty:6840:13
+		// Osty: /tmp/selfhost_merged.osty:6842:13
 		n.start = start
-		// Osty: /tmp/selfhost_merged.osty:6841:11
+		// Osty: /tmp/selfhost_merged.osty:6843:11
 		n.end = p.pos
-		// Osty: /tmp/selfhost_merged.osty:6842:5
+		// Osty: /tmp/selfhost_merged.osty:6844:5
 		return opAddNode(p, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:6843:5
+	// Osty: /tmp/selfhost_merged.osty:6845:5
 	first := opParseExpr(p)
 	_ = first
-	// Osty: /tmp/selfhost_merged.osty:6844:5
+	// Osty: /tmp/selfhost_merged.osty:6846:5
 	opSkipNewlines(p)
-	// Osty: /tmp/selfhost_merged.osty:6845:5
+	// Osty: /tmp/selfhost_merged.osty:6847:5
 	if opAt(p, FrontTokenKind(&FrontTokenKind_FrontRParen{})) {
-		// Osty: /tmp/selfhost_merged.osty:6845:31
+		// Osty: /tmp/selfhost_merged.osty:6847:31
 		opAdvance(p)
-		// Osty: /tmp/selfhost_merged.osty:6846:19
+		// Osty: /tmp/selfhost_merged.osty:6848:19
 		p.noStructLit = prevNoSL
-		// Osty: /tmp/selfhost_merged.osty:6847:5
+		// Osty: /tmp/selfhost_merged.osty:6849:5
 		n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNParen{}))
 		_ = n
-		// Osty: /tmp/selfhost_merged.osty:6848:12
+		// Osty: /tmp/selfhost_merged.osty:6850:12
 		n.left = first
-		// Osty: /tmp/selfhost_merged.osty:6849:13
+		// Osty: /tmp/selfhost_merged.osty:6851:13
 		n.start = start
-		// Osty: /tmp/selfhost_merged.osty:6850:11
+		// Osty: /tmp/selfhost_merged.osty:6852:11
 		n.end = p.pos
-		// Osty: /tmp/selfhost_merged.osty:6851:5
+		// Osty: /tmp/selfhost_merged.osty:6853:5
 		return opAddNode(p, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:6852:5
+	// Osty: /tmp/selfhost_merged.osty:6854:5
 	var elems []int = []int{first}
 	_ = elems
-	// Osty: /tmp/selfhost_merged.osty:6853:5
+	// Osty: /tmp/selfhost_merged.osty:6855:5
 	for opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{})) {
-		// Osty: /tmp/selfhost_merged.osty:6853:32
+		// Osty: /tmp/selfhost_merged.osty:6855:32
 		opSkipNewlines(p)
-		// Osty: /tmp/selfhost_merged.osty:6854:5
+		// Osty: /tmp/selfhost_merged.osty:6856:5
 		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontRParen{})) {
-			// Osty: /tmp/selfhost_merged.osty:6854:31
+			// Osty: /tmp/selfhost_merged.osty:6856:31
 			break
 		}
-		// Osty: /tmp/selfhost_merged.osty:6855:5
+		// Osty: /tmp/selfhost_merged.osty:6857:5
 		func() struct{} { elems = append(elems, opParseExpr(p)); return struct{}{} }()
-		// Osty: /tmp/selfhost_merged.osty:6856:5
+		// Osty: /tmp/selfhost_merged.osty:6858:5
 		opSkipNewlines(p)
 	}
-	// Osty: /tmp/selfhost_merged.osty:6857:5
-	opExpect(p, FrontTokenKind(&FrontTokenKind_FrontRParen{}))
-	// Osty: /tmp/selfhost_merged.osty:6858:19
-	p.noStructLit = prevNoSL
 	// Osty: /tmp/selfhost_merged.osty:6859:5
+	opExpect(p, FrontTokenKind(&FrontTokenKind_FrontRParen{}))
+	// Osty: /tmp/selfhost_merged.osty:6860:19
+	p.noStructLit = prevNoSL
+	// Osty: /tmp/selfhost_merged.osty:6861:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNTuple{}))
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:6860:16
+	// Osty: /tmp/selfhost_merged.osty:6862:16
 	n.children = elems
-	// Osty: /tmp/selfhost_merged.osty:6861:13
+	// Osty: /tmp/selfhost_merged.osty:6863:13
 	n.start = start
-	// Osty: /tmp/selfhost_merged.osty:6862:11
+	// Osty: /tmp/selfhost_merged.osty:6864:11
 	n.end = p.pos
 	return opAddNode(p, n)
 }
 
-// Osty: /tmp/selfhost_merged.osty:6866:1
+// Osty: /tmp/selfhost_merged.osty:6868:1
 func opParseListLit(p *OstyParser) int {
-	// Osty: /tmp/selfhost_merged.osty:6867:5
+	// Osty: /tmp/selfhost_merged.osty:6869:5
 	start := p.pos
 	_ = start
-	// Osty: /tmp/selfhost_merged.osty:6868:5
+	// Osty: /tmp/selfhost_merged.osty:6870:5
 	opAdvance(p)
-	// Osty: /tmp/selfhost_merged.osty:6869:5
+	// Osty: /tmp/selfhost_merged.osty:6871:5
 	var elems []int = make([]int, 0, 1)
 	_ = elems
-	// Osty: /tmp/selfhost_merged.osty:6870:5
+	// Osty: /tmp/selfhost_merged.osty:6872:5
 	opSkipNewlines(p)
-	// Osty: /tmp/selfhost_merged.osty:6871:5
+	// Osty: /tmp/selfhost_merged.osty:6873:5
 	for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontRBracket{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-		// Osty: /tmp/selfhost_merged.osty:6871:61
+		// Osty: /tmp/selfhost_merged.osty:6873:61
 		func() struct{} { elems = append(elems, opParseExpr(p)); return struct{}{} }()
-		// Osty: /tmp/selfhost_merged.osty:6872:5
-		opSkipNewlines(p)
-		// Osty: /tmp/selfhost_merged.osty:6873:5
-		if !(opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))) {
-			// Osty: /tmp/selfhost_merged.osty:6873:34
-			break
-		}
 		// Osty: /tmp/selfhost_merged.osty:6874:5
 		opSkipNewlines(p)
+		// Osty: /tmp/selfhost_merged.osty:6875:5
+		if !(opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))) {
+			// Osty: /tmp/selfhost_merged.osty:6875:34
+			break
+		}
+		// Osty: /tmp/selfhost_merged.osty:6876:5
+		opSkipNewlines(p)
 	}
-	// Osty: /tmp/selfhost_merged.osty:6875:5
+	// Osty: /tmp/selfhost_merged.osty:6877:5
 	opExpect(p, FrontTokenKind(&FrontTokenKind_FrontRBracket{}))
-	// Osty: /tmp/selfhost_merged.osty:6876:5
+	// Osty: /tmp/selfhost_merged.osty:6878:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNList{}))
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:6877:16
+	// Osty: /tmp/selfhost_merged.osty:6879:16
 	n.children = elems
-	// Osty: /tmp/selfhost_merged.osty:6878:13
+	// Osty: /tmp/selfhost_merged.osty:6880:13
 	n.start = start
-	// Osty: /tmp/selfhost_merged.osty:6879:11
+	// Osty: /tmp/selfhost_merged.osty:6881:11
 	n.end = p.pos
 	return opAddNode(p, n)
 }
 
-// Osty: /tmp/selfhost_merged.osty:6883:1
+// Osty: /tmp/selfhost_merged.osty:6885:1
 func opParseBlockOrMap(p *OstyParser) int {
-	// Osty: /tmp/selfhost_merged.osty:6884:5
+	// Osty: /tmp/selfhost_merged.osty:6886:5
 	if ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontColon{})) && ostyEqual(opPeekAt(p, 2).kind, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) {
-		// Osty: /tmp/selfhost_merged.osty:6885:9
+		// Osty: /tmp/selfhost_merged.osty:6887:9
 		start := p.pos
 		_ = start
-		// Osty: /tmp/selfhost_merged.osty:6886:9
-		opAdvance(p)
-		// Osty: /tmp/selfhost_merged.osty:6887:9
-		opAdvance(p)
 		// Osty: /tmp/selfhost_merged.osty:6888:9
 		opAdvance(p)
 		// Osty: /tmp/selfhost_merged.osty:6889:9
+		opAdvance(p)
+		// Osty: /tmp/selfhost_merged.osty:6890:9
+		opAdvance(p)
+		// Osty: /tmp/selfhost_merged.osty:6891:9
 		n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNMap{}))
 		_ = n
-		// Osty: /tmp/selfhost_merged.osty:6890:17
-		n.start = start
-		// Osty: /tmp/selfhost_merged.osty:6891:15
-		n.end = p.pos
 		// Osty: /tmp/selfhost_merged.osty:6892:17
+		n.start = start
+		// Osty: /tmp/selfhost_merged.osty:6893:15
+		n.end = p.pos
+		// Osty: /tmp/selfhost_merged.osty:6894:17
 		n.flags = 1
-		// Osty: /tmp/selfhost_merged.osty:6893:9
+		// Osty: /tmp/selfhost_merged.osty:6895:9
 		return opAddNode(p, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:6895:5
+	// Osty: /tmp/selfhost_merged.osty:6897:5
 	if opLooksLikeMap(p) {
-		// Osty: /tmp/selfhost_merged.osty:6895:28
+		// Osty: /tmp/selfhost_merged.osty:6897:28
 		return opParseMapLit(p)
 	}
 	return opParseBlock(p)
 }
 
-// Osty: /tmp/selfhost_merged.osty:6899:1
+// Osty: /tmp/selfhost_merged.osty:6901:1
 func opLooksLikeMap(p *OstyParser) bool {
-	// Osty: /tmp/selfhost_merged.osty:6900:5
+	// Osty: /tmp/selfhost_merged.osty:6902:5
 	save := p.pos
 	_ = save
-	// Osty: /tmp/selfhost_merged.osty:6901:5
+	// Osty: /tmp/selfhost_merged.osty:6903:5
 	saveErr := opErrorCount(p)
 	_ = saveErr
-	// Osty: /tmp/selfhost_merged.osty:6902:5
-	opAdvance(p)
-	// Osty: /tmp/selfhost_merged.osty:6903:5
-	opSkipNewlines(p)
 	// Osty: /tmp/selfhost_merged.osty:6904:5
+	opAdvance(p)
+	// Osty: /tmp/selfhost_merged.osty:6905:5
+	opSkipNewlines(p)
+	// Osty: /tmp/selfhost_merged.osty:6906:5
 	if opAt(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) {
-		// Osty: /tmp/selfhost_merged.osty:6904:37
+		// Osty: /tmp/selfhost_merged.osty:6906:37
 		p.pos = save
-		// Osty: /tmp/selfhost_merged.osty:6905:5
+		// Osty: /tmp/selfhost_merged.osty:6907:5
 		return false
 	}
-	// Osty: /tmp/selfhost_merged.osty:6906:5
+	// Osty: /tmp/selfhost_merged.osty:6908:5
 	kind := opPeek(p).kind
 	_ = kind
-	// Osty: /tmp/selfhost_merged.osty:6907:5
+	// Osty: /tmp/selfhost_merged.osty:6909:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLet{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontReturn{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBreak{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontContinue{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontDefer{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontFor{})) {
-		// Osty: /tmp/selfhost_merged.osty:6907:145
+		// Osty: /tmp/selfhost_merged.osty:6909:145
 		p.pos = save
-		// Osty: /tmp/selfhost_merged.osty:6908:5
+		// Osty: /tmp/selfhost_merged.osty:6910:5
 		return false
 	}
-	// Osty: /tmp/selfhost_merged.osty:6909:5
+	// Osty: /tmp/selfhost_merged.osty:6911:5
 	opParseExpr(p)
-	// Osty: /tmp/selfhost_merged.osty:6910:5
+	// Osty: /tmp/selfhost_merged.osty:6912:5
 	result := opAt(p, FrontTokenKind(&FrontTokenKind_FrontColon{})) && !ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontColon{}))
 	_ = result
-	// Osty: /tmp/selfhost_merged.osty:6911:11
+	// Osty: /tmp/selfhost_merged.osty:6913:11
 	p.pos = save
-	// Osty: /tmp/selfhost_merged.osty:6912:5
+	// Osty: /tmp/selfhost_merged.osty:6914:5
 	opTruncateErrors(p, saveErr)
 	return result
 }
 
-// Osty: /tmp/selfhost_merged.osty:6916:1
+// Osty: /tmp/selfhost_merged.osty:6918:1
 func opParseMapLit(p *OstyParser) int {
-	// Osty: /tmp/selfhost_merged.osty:6917:5
+	// Osty: /tmp/selfhost_merged.osty:6919:5
 	start := p.pos
 	_ = start
-	// Osty: /tmp/selfhost_merged.osty:6918:5
+	// Osty: /tmp/selfhost_merged.osty:6920:5
 	opAdvance(p)
-	// Osty: /tmp/selfhost_merged.osty:6919:5
+	// Osty: /tmp/selfhost_merged.osty:6921:5
 	var keys []int = make([]int, 0, 1)
 	_ = keys
-	// Osty: /tmp/selfhost_merged.osty:6920:5
+	// Osty: /tmp/selfhost_merged.osty:6922:5
 	var vals []int = make([]int, 0, 1)
 	_ = vals
-	// Osty: /tmp/selfhost_merged.osty:6921:5
+	// Osty: /tmp/selfhost_merged.osty:6923:5
 	opSkipNewlines(p)
-	// Osty: /tmp/selfhost_merged.osty:6922:5
+	// Osty: /tmp/selfhost_merged.osty:6924:5
 	for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-		// Osty: /tmp/selfhost_merged.osty:6923:9
-		func() struct{} { keys = append(keys, opParseExpr(p)); return struct{}{} }()
-		// Osty: /tmp/selfhost_merged.osty:6924:9
-		opExpect(p, FrontTokenKind(&FrontTokenKind_FrontColon{}))
 		// Osty: /tmp/selfhost_merged.osty:6925:9
-		func() struct{} { vals = append(vals, opParseExpr(p)); return struct{}{} }()
+		func() struct{} { keys = append(keys, opParseExpr(p)); return struct{}{} }()
 		// Osty: /tmp/selfhost_merged.osty:6926:9
-		opSkipNewlines(p)
+		opExpect(p, FrontTokenKind(&FrontTokenKind_FrontColon{}))
 		// Osty: /tmp/selfhost_merged.osty:6927:9
-		if !(opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))) {
-			// Osty: /tmp/selfhost_merged.osty:6927:38
-			break
-		}
+		func() struct{} { vals = append(vals, opParseExpr(p)); return struct{}{} }()
 		// Osty: /tmp/selfhost_merged.osty:6928:9
 		opSkipNewlines(p)
-	}
-	// Osty: /tmp/selfhost_merged.osty:6930:5
-	opExpect(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))
-	// Osty: /tmp/selfhost_merged.osty:6931:5
-	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNMap{}))
-	_ = n
-	// Osty: /tmp/selfhost_merged.osty:6932:16
-	n.children = keys
-	// Osty: /tmp/selfhost_merged.osty:6933:17
-	n.children2 = vals
-	// Osty: /tmp/selfhost_merged.osty:6934:13
-	n.start = start
-	// Osty: /tmp/selfhost_merged.osty:6935:11
-	n.end = p.pos
-	return opAddNode(p, n)
-}
-
-// Osty: /tmp/selfhost_merged.osty:6939:1
-func opParseBlock(p *OstyParser) int {
-	// Osty: /tmp/selfhost_merged.osty:6940:5
-	start := p.pos
-	_ = start
-	// Osty: /tmp/selfhost_merged.osty:6941:5
-	opExpect(p, FrontTokenKind(&FrontTokenKind_FrontLBrace{}))
-	// Osty: /tmp/selfhost_merged.osty:6942:5
-	var stmts []int = make([]int, 0, 1)
-	_ = stmts
-	// Osty: /tmp/selfhost_merged.osty:6943:5
-	opSkipNewlines(p)
-	// Osty: /tmp/selfhost_merged.osty:6944:5
-	errsBefore := opErrorCount(p)
-	_ = errsBefore
-	// Osty: /tmp/selfhost_merged.osty:6945:5
-	for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-		// Osty: /tmp/selfhost_merged.osty:6946:9
-		func() struct{} { stmts = append(stmts, opParseStmt(p)); return struct{}{} }()
-		// Osty: /tmp/selfhost_merged.osty:6947:9
-		if opErrorCount(p) > errsBefore {
-			// Osty: /tmp/selfhost_merged.osty:6947:43
-			opSyncStmt(p)
+		// Osty: /tmp/selfhost_merged.osty:6929:9
+		if !(opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))) {
+			// Osty: /tmp/selfhost_merged.osty:6929:38
+			break
 		}
-		// Osty: /tmp/selfhost_merged.osty:6948:9
+		// Osty: /tmp/selfhost_merged.osty:6930:9
 		opSkipNewlines(p)
 	}
-	// Osty: /tmp/selfhost_merged.osty:6950:5
+	// Osty: /tmp/selfhost_merged.osty:6932:5
 	opExpect(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))
-	// Osty: /tmp/selfhost_merged.osty:6951:5
-	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNBlock{}))
+	// Osty: /tmp/selfhost_merged.osty:6933:5
+	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNMap{}))
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:6952:16
-	n.children = stmts
-	// Osty: /tmp/selfhost_merged.osty:6953:13
+	// Osty: /tmp/selfhost_merged.osty:6934:16
+	n.children = keys
+	// Osty: /tmp/selfhost_merged.osty:6935:17
+	n.children2 = vals
+	// Osty: /tmp/selfhost_merged.osty:6936:13
 	n.start = start
-	// Osty: /tmp/selfhost_merged.osty:6954:11
+	// Osty: /tmp/selfhost_merged.osty:6937:11
 	n.end = p.pos
 	return opAddNode(p, n)
 }
 
-// Osty: /tmp/selfhost_merged.osty:6958:1
-func opParseIfExpr(p *OstyParser) int {
-	// Osty: /tmp/selfhost_merged.osty:6959:5
+// Osty: /tmp/selfhost_merged.osty:6941:1
+func opParseBlock(p *OstyParser) int {
+	// Osty: /tmp/selfhost_merged.osty:6942:5
 	start := p.pos
 	_ = start
-	// Osty: /tmp/selfhost_merged.osty:6960:5
-	_ = opAdvance(p)
+	// Osty: /tmp/selfhost_merged.osty:6943:5
+	opExpect(p, FrontTokenKind(&FrontTokenKind_FrontLBrace{}))
+	// Osty: /tmp/selfhost_merged.osty:6944:5
+	var stmts []int = make([]int, 0, 1)
+	_ = stmts
+	// Osty: /tmp/selfhost_merged.osty:6945:5
+	opSkipNewlines(p)
+	// Osty: /tmp/selfhost_merged.osty:6946:5
+	errsBefore := opErrorCount(p)
+	_ = errsBefore
+	// Osty: /tmp/selfhost_merged.osty:6947:5
+	for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
+		// Osty: /tmp/selfhost_merged.osty:6948:9
+		func() struct{} { stmts = append(stmts, opParseStmt(p)); return struct{}{} }()
+		// Osty: /tmp/selfhost_merged.osty:6949:9
+		if opErrorCount(p) > errsBefore {
+			// Osty: /tmp/selfhost_merged.osty:6949:43
+			opSyncStmt(p)
+		}
+		// Osty: /tmp/selfhost_merged.osty:6950:9
+		opSkipNewlines(p)
+	}
+	// Osty: /tmp/selfhost_merged.osty:6952:5
+	opExpect(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))
+	// Osty: /tmp/selfhost_merged.osty:6953:5
+	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNBlock{}))
+	_ = n
+	// Osty: /tmp/selfhost_merged.osty:6954:16
+	n.children = stmts
+	// Osty: /tmp/selfhost_merged.osty:6955:13
+	n.start = start
+	// Osty: /tmp/selfhost_merged.osty:6956:11
+	n.end = p.pos
+	return opAddNode(p, n)
+}
+
+// Osty: /tmp/selfhost_merged.osty:6960:1
+func opParseIfExpr(p *OstyParser) int {
 	// Osty: /tmp/selfhost_merged.osty:6961:5
+	start := p.pos
+	_ = start
+	// Osty: /tmp/selfhost_merged.osty:6962:5
+	_ = opAdvance(p)
+	// Osty: /tmp/selfhost_merged.osty:6963:5
 	patIdx := -1
 	_ = patIdx
-	// Osty: /tmp/selfhost_merged.osty:6962:5
+	// Osty: /tmp/selfhost_merged.osty:6964:5
 	isIfLet := false
 	_ = isIfLet
-	// Osty: /tmp/selfhost_merged.osty:6963:5
+	// Osty: /tmp/selfhost_merged.osty:6965:5
 	if opAt(p, FrontTokenKind(&FrontTokenKind_FrontLet{})) {
-		// Osty: /tmp/selfhost_merged.osty:6963:28
+		// Osty: /tmp/selfhost_merged.osty:6965:28
 		_ = opAdvance(p)
-		// Osty: /tmp/selfhost_merged.osty:6964:13
+		// Osty: /tmp/selfhost_merged.osty:6966:13
 		isIfLet = true
-		// Osty: /tmp/selfhost_merged.osty:6965:12
+		// Osty: /tmp/selfhost_merged.osty:6967:12
 		patIdx = opParsePattern(p)
-		// Osty: /tmp/selfhost_merged.osty:6966:5
+		// Osty: /tmp/selfhost_merged.osty:6968:5
 		_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontAssign{}))
 	}
-	// Osty: /tmp/selfhost_merged.osty:6967:5
+	// Osty: /tmp/selfhost_merged.osty:6969:5
 	prevNoSL := p.noStructLit
 	_ = prevNoSL
-	// Osty: /tmp/selfhost_merged.osty:6968:19
+	// Osty: /tmp/selfhost_merged.osty:6970:19
 	p.noStructLit = true
-	// Osty: /tmp/selfhost_merged.osty:6969:5
+	// Osty: /tmp/selfhost_merged.osty:6971:5
 	cond := opParseExpr(p)
 	_ = cond
-	// Osty: /tmp/selfhost_merged.osty:6970:19
+	// Osty: /tmp/selfhost_merged.osty:6972:19
 	p.noStructLit = prevNoSL
-	// Osty: /tmp/selfhost_merged.osty:6971:5
+	// Osty: /tmp/selfhost_merged.osty:6973:5
 	thenBlock := opParseBlock(p)
 	_ = thenBlock
-	// Osty: /tmp/selfhost_merged.osty:6972:5
+	// Osty: /tmp/selfhost_merged.osty:6974:5
 	elseIdx := -1
 	_ = elseIdx
-	// Osty: /tmp/selfhost_merged.osty:6973:5
+	// Osty: /tmp/selfhost_merged.osty:6975:5
 	if opEat(p, FrontTokenKind(&FrontTokenKind_FrontElse{})) {
-		// Osty: /tmp/selfhost_merged.osty:6974:9
+		// Osty: /tmp/selfhost_merged.osty:6976:9
 		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontIf{})) {
-			// Osty: /tmp/selfhost_merged.osty:6975:21
+			// Osty: /tmp/selfhost_merged.osty:6977:21
 			elseIdx = opParseIfExpr(p)
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:6977:21
+			// Osty: /tmp/selfhost_merged.osty:6979:21
 			elseIdx = opParseBlock(p)
 		}
 	} else if ostyEqual(opPeekPastNewlines(p).kind, FrontTokenKind(&FrontTokenKind_FrontElse{})) {
-		// Osty: /tmp/selfhost_merged.osty:6980:9
+		// Osty: /tmp/selfhost_merged.osty:6982:9
 		opErrorFull(p, "`else` must be on the same line as `}`", "move `else` to the same line: `} else {`", "v0.2 O2: `} else` must sit on the same line", "E0105")
 	}
-	// Osty: /tmp/selfhost_merged.osty:6982:5
+	// Osty: /tmp/selfhost_merged.osty:6984:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNIf{}))
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:6983:12
+	// Osty: /tmp/selfhost_merged.osty:6985:12
 	n.left = cond
-	// Osty: /tmp/selfhost_merged.osty:6984:13
-	n.right = thenBlock
-	// Osty: /tmp/selfhost_merged.osty:6985:16
-	n.children = []int{elseIdx, patIdx}
 	// Osty: /tmp/selfhost_merged.osty:6986:13
+	n.right = thenBlock
+	// Osty: /tmp/selfhost_merged.osty:6987:16
+	n.children = []int{elseIdx, patIdx}
+	// Osty: /tmp/selfhost_merged.osty:6988:13
 	n.start = start
-	// Osty: /tmp/selfhost_merged.osty:6987:11
+	// Osty: /tmp/selfhost_merged.osty:6989:11
 	n.end = p.pos
-	// Osty: /tmp/selfhost_merged.osty:6988:5
+	// Osty: /tmp/selfhost_merged.osty:6990:5
 	if isIfLet {
-		// Osty: /tmp/selfhost_merged.osty:6988:26
+		// Osty: /tmp/selfhost_merged.osty:6990:26
 		n.flags = 1
 	}
 	return opAddNode(p, n)
 }
 
-// Osty: /tmp/selfhost_merged.osty:6992:1
+// Osty: /tmp/selfhost_merged.osty:6994:1
 func opParseMatchExpr(p *OstyParser) int {
-	// Osty: /tmp/selfhost_merged.osty:6993:5
+	// Osty: /tmp/selfhost_merged.osty:6995:5
 	start := p.pos
 	_ = start
-	// Osty: /tmp/selfhost_merged.osty:6994:5
+	// Osty: /tmp/selfhost_merged.osty:6996:5
 	_ = opAdvance(p)
-	// Osty: /tmp/selfhost_merged.osty:6995:5
+	// Osty: /tmp/selfhost_merged.osty:6997:5
 	prevNoSL := p.noStructLit
 	_ = prevNoSL
-	// Osty: /tmp/selfhost_merged.osty:6996:19
+	// Osty: /tmp/selfhost_merged.osty:6998:19
 	p.noStructLit = true
-	// Osty: /tmp/selfhost_merged.osty:6997:5
+	// Osty: /tmp/selfhost_merged.osty:6999:5
 	scrutinee := opParseExpr(p)
 	_ = scrutinee
-	// Osty: /tmp/selfhost_merged.osty:6998:19
+	// Osty: /tmp/selfhost_merged.osty:7000:19
 	p.noStructLit = prevNoSL
-	// Osty: /tmp/selfhost_merged.osty:6999:5
+	// Osty: /tmp/selfhost_merged.osty:7001:5
 	opExpect(p, FrontTokenKind(&FrontTokenKind_FrontLBrace{}))
-	// Osty: /tmp/selfhost_merged.osty:7000:5
+	// Osty: /tmp/selfhost_merged.osty:7002:5
 	var arms []int = make([]int, 0, 1)
 	_ = arms
-	// Osty: /tmp/selfhost_merged.osty:7001:5
+	// Osty: /tmp/selfhost_merged.osty:7003:5
 	opSkipNewlines(p)
-	// Osty: /tmp/selfhost_merged.osty:7002:5
+	// Osty: /tmp/selfhost_merged.osty:7004:5
 	for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-		// Osty: /tmp/selfhost_merged.osty:7003:9
+		// Osty: /tmp/selfhost_merged.osty:7005:9
 		armStart := p.pos
 		_ = armStart
-		// Osty: /tmp/selfhost_merged.osty:7004:9
+		// Osty: /tmp/selfhost_merged.osty:7006:9
 		pat := opParsePattern(p)
 		_ = pat
-		// Osty: /tmp/selfhost_merged.osty:7005:9
+		// Osty: /tmp/selfhost_merged.osty:7007:9
 		guard := -1
 		_ = guard
-		// Osty: /tmp/selfhost_merged.osty:7006:9
+		// Osty: /tmp/selfhost_merged.osty:7008:9
 		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontIf{})) {
-			// Osty: /tmp/selfhost_merged.osty:7007:13
+			// Osty: /tmp/selfhost_merged.osty:7009:13
 			_ = opAdvance(p)
-			// Osty: /tmp/selfhost_merged.osty:7008:13
+			// Osty: /tmp/selfhost_merged.osty:7010:13
 			pv := p.noStructLit
 			_ = pv
-			// Osty: /tmp/selfhost_merged.osty:7009:27
-			p.noStructLit = true
-			// Osty: /tmp/selfhost_merged.osty:7010:19
-			guard = opParseExpr(p)
 			// Osty: /tmp/selfhost_merged.osty:7011:27
+			p.noStructLit = true
+			// Osty: /tmp/selfhost_merged.osty:7012:19
+			guard = opParseExpr(p)
+			// Osty: /tmp/selfhost_merged.osty:7013:27
 			p.noStructLit = pv
 		}
-		// Osty: /tmp/selfhost_merged.osty:7013:9
+		// Osty: /tmp/selfhost_merged.osty:7015:9
 		_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontArrow{}))
-		// Osty: /tmp/selfhost_merged.osty:7014:9
+		// Osty: /tmp/selfhost_merged.osty:7016:9
 		body := opParseExpr(p)
 		_ = body
-		// Osty: /tmp/selfhost_merged.osty:7015:9
+		// Osty: /tmp/selfhost_merged.osty:7017:9
 		armNode := emptyAstNode(AstNodeKind(&AstNodeKind_AstNMatchArm{}))
 		_ = armNode
-		// Osty: /tmp/selfhost_merged.osty:7016:22
+		// Osty: /tmp/selfhost_merged.osty:7018:22
 		armNode.left = pat
-		// Osty: /tmp/selfhost_merged.osty:7017:23
-		armNode.right = body
-		// Osty: /tmp/selfhost_merged.osty:7018:26
-		armNode.children = []int{guard}
 		// Osty: /tmp/selfhost_merged.osty:7019:23
+		armNode.right = body
+		// Osty: /tmp/selfhost_merged.osty:7020:26
+		armNode.children = []int{guard}
+		// Osty: /tmp/selfhost_merged.osty:7021:23
 		armNode.start = armStart
-		// Osty: /tmp/selfhost_merged.osty:7020:21
+		// Osty: /tmp/selfhost_merged.osty:7022:21
 		armNode.end = p.pos
-		// Osty: /tmp/selfhost_merged.osty:7021:9
-		func() struct{} { arms = append(arms, opAddNode(p, armNode)); return struct{}{} }()
-		// Osty: /tmp/selfhost_merged.osty:7022:9
-		opSkipNewlines(p)
 		// Osty: /tmp/selfhost_merged.osty:7023:9
-		if !(opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))) {
-			// Osty: /tmp/selfhost_merged.osty:7023:38
-			break
-		}
+		func() struct{} { arms = append(arms, opAddNode(p, armNode)); return struct{}{} }()
 		// Osty: /tmp/selfhost_merged.osty:7024:9
 		opSkipNewlines(p)
+		// Osty: /tmp/selfhost_merged.osty:7025:9
+		if !(opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))) {
+			// Osty: /tmp/selfhost_merged.osty:7025:38
+			break
+		}
+		// Osty: /tmp/selfhost_merged.osty:7026:9
+		opSkipNewlines(p)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7026:5
+	// Osty: /tmp/selfhost_merged.osty:7028:5
 	opExpect(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))
-	// Osty: /tmp/selfhost_merged.osty:7027:5
+	// Osty: /tmp/selfhost_merged.osty:7029:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNMatch{}))
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:7028:12
+	// Osty: /tmp/selfhost_merged.osty:7030:12
 	n.left = scrutinee
-	// Osty: /tmp/selfhost_merged.osty:7029:16
+	// Osty: /tmp/selfhost_merged.osty:7031:16
 	n.children = arms
-	// Osty: /tmp/selfhost_merged.osty:7030:13
+	// Osty: /tmp/selfhost_merged.osty:7032:13
 	n.start = start
-	// Osty: /tmp/selfhost_merged.osty:7031:11
+	// Osty: /tmp/selfhost_merged.osty:7033:11
 	n.end = p.pos
 	return opAddNode(p, n)
 }
 
-// Osty: /tmp/selfhost_merged.osty:7035:1
+// Osty: /tmp/selfhost_merged.osty:7037:1
 func opParseClosure(p *OstyParser) int {
-	// Osty: /tmp/selfhost_merged.osty:7036:5
+	// Osty: /tmp/selfhost_merged.osty:7038:5
 	start := p.pos
 	_ = start
-	// Osty: /tmp/selfhost_merged.osty:7037:5
+	// Osty: /tmp/selfhost_merged.osty:7039:5
 	if opEat(p, FrontTokenKind(&FrontTokenKind_FrontOr{})) {
-		// Osty: /tmp/selfhost_merged.osty:7038:9
+		// Osty: /tmp/selfhost_merged.osty:7040:9
 		body := opParseClosureBody(p, false)
 		_ = body
-		// Osty: /tmp/selfhost_merged.osty:7039:9
+		// Osty: /tmp/selfhost_merged.osty:7041:9
 		n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNClosure{}))
 		_ = n
-		// Osty: /tmp/selfhost_merged.osty:7040:16
+		// Osty: /tmp/selfhost_merged.osty:7042:16
 		n.left = body
-		// Osty: /tmp/selfhost_merged.osty:7041:17
+		// Osty: /tmp/selfhost_merged.osty:7043:17
 		n.start = start
-		// Osty: /tmp/selfhost_merged.osty:7042:15
+		// Osty: /tmp/selfhost_merged.osty:7044:15
 		n.end = p.pos
-		// Osty: /tmp/selfhost_merged.osty:7043:9
+		// Osty: /tmp/selfhost_merged.osty:7045:9
 		return opAddNode(p, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7045:5
+	// Osty: /tmp/selfhost_merged.osty:7047:5
 	_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontBitOr{}))
-	// Osty: /tmp/selfhost_merged.osty:7046:5
+	// Osty: /tmp/selfhost_merged.osty:7048:5
 	var params []int = make([]int, 0, 1)
 	_ = params
-	// Osty: /tmp/selfhost_merged.osty:7047:5
+	// Osty: /tmp/selfhost_merged.osty:7049:5
 	for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontBitOr{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-		// Osty: /tmp/selfhost_merged.osty:7048:9
+		// Osty: /tmp/selfhost_merged.osty:7050:9
 		paramStart := p.pos
 		_ = paramStart
-		// Osty: /tmp/selfhost_merged.osty:7049:9
+		// Osty: /tmp/selfhost_merged.osty:7051:9
 		paramNode := emptyAstNode(AstNodeKind(&AstNodeKind_AstNParam{}))
 		_ = paramNode
-		// Osty: /tmp/selfhost_merged.osty:7050:9
+		// Osty: /tmp/selfhost_merged.osty:7052:9
 		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontLParen{})) || opAt(p, FrontTokenKind(&FrontTokenKind_FrontUnderscore{})) {
-			// Osty: /tmp/selfhost_merged.osty:7050:78
+			// Osty: /tmp/selfhost_merged.osty:7052:78
 			paramNode.left = opParsePatternOneAlt(p)
 		} else if opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})) {
-			// Osty: /tmp/selfhost_merged.osty:7051:13
+			// Osty: /tmp/selfhost_merged.osty:7053:13
 			if astIsUpperName(opPeek(p).text) && (ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) || ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) || ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontDot{}))) {
-				// Osty: /tmp/selfhost_merged.osty:7052:32
+				// Osty: /tmp/selfhost_merged.osty:7054:32
 				paramNode.left = opParsePatternOneAlt(p)
 			} else {
-				// Osty: /tmp/selfhost_merged.osty:7054:32
+				// Osty: /tmp/selfhost_merged.osty:7056:32
 				paramNode.text = opAdvance(p).text
 			}
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:7056:18
+			// Osty: /tmp/selfhost_merged.osty:7058:18
 			opError(p, "expected closure parameter")
-			// Osty: /tmp/selfhost_merged.osty:7057:9
+			// Osty: /tmp/selfhost_merged.osty:7059:9
 			_ = opAdvance(p)
 		}
-		// Osty: /tmp/selfhost_merged.osty:7058:9
+		// Osty: /tmp/selfhost_merged.osty:7060:9
 		if opEat(p, FrontTokenKind(&FrontTokenKind_FrontColon{})) {
-			// Osty: /tmp/selfhost_merged.osty:7058:51
+			// Osty: /tmp/selfhost_merged.osty:7060:51
 			paramNode.right = opParseType(p)
 		}
-		// Osty: /tmp/selfhost_merged.osty:7059:25
+		// Osty: /tmp/selfhost_merged.osty:7061:25
 		paramNode.start = paramStart
-		// Osty: /tmp/selfhost_merged.osty:7060:23
+		// Osty: /tmp/selfhost_merged.osty:7062:23
 		paramNode.end = p.pos
-		// Osty: /tmp/selfhost_merged.osty:7061:9
+		// Osty: /tmp/selfhost_merged.osty:7063:9
 		func() struct{} { params = append(params, opAddNode(p, paramNode)); return struct{}{} }()
-		// Osty: /tmp/selfhost_merged.osty:7062:9
+		// Osty: /tmp/selfhost_merged.osty:7064:9
 		if !(opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))) {
-			// Osty: /tmp/selfhost_merged.osty:7062:38
+			// Osty: /tmp/selfhost_merged.osty:7064:38
 			break
 		}
 	}
-	// Osty: /tmp/selfhost_merged.osty:7064:5
+	// Osty: /tmp/selfhost_merged.osty:7066:5
 	_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontBitOr{}))
-	// Osty: /tmp/selfhost_merged.osty:7065:5
+	// Osty: /tmp/selfhost_merged.osty:7067:5
 	retTypeIdx := -1
 	_ = retTypeIdx
-	// Osty: /tmp/selfhost_merged.osty:7066:5
+	// Osty: /tmp/selfhost_merged.osty:7068:5
 	if opEat(p, FrontTokenKind(&FrontTokenKind_FrontArrow{})) {
-		// Osty: /tmp/selfhost_merged.osty:7066:42
+		// Osty: /tmp/selfhost_merged.osty:7068:42
 		retTypeIdx = opParseType(p)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7067:5
+	// Osty: /tmp/selfhost_merged.osty:7069:5
 	body := opParseClosureBody(p, retTypeIdx >= 0)
 	_ = body
-	// Osty: /tmp/selfhost_merged.osty:7068:5
+	// Osty: /tmp/selfhost_merged.osty:7070:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNClosure{}))
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:7069:12
+	// Osty: /tmp/selfhost_merged.osty:7071:12
 	n.left = body
-	// Osty: /tmp/selfhost_merged.osty:7070:13
-	n.right = retTypeIdx
-	// Osty: /tmp/selfhost_merged.osty:7071:16
-	n.children = params
 	// Osty: /tmp/selfhost_merged.osty:7072:13
+	n.right = retTypeIdx
+	// Osty: /tmp/selfhost_merged.osty:7073:16
+	n.children = params
+	// Osty: /tmp/selfhost_merged.osty:7074:13
 	n.start = start
-	// Osty: /tmp/selfhost_merged.osty:7073:11
+	// Osty: /tmp/selfhost_merged.osty:7075:11
 	n.end = p.pos
 	return opAddNode(p, n)
 }
 
-// Osty: /tmp/selfhost_merged.osty:7077:1
+// Osty: /tmp/selfhost_merged.osty:7079:1
 func opParseClosureBody(p *OstyParser, requireBlock bool) int {
-	// Osty: /tmp/selfhost_merged.osty:7078:5
+	// Osty: /tmp/selfhost_merged.osty:7080:5
 	if opAt(p, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
-		// Osty: /tmp/selfhost_merged.osty:7078:31
+		// Osty: /tmp/selfhost_merged.osty:7080:31
 		return opParseBlock(p)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7079:5
+	// Osty: /tmp/selfhost_merged.osty:7081:5
 	if requireBlock {
-		// Osty: /tmp/selfhost_merged.osty:7079:23
+		// Osty: /tmp/selfhost_merged.osty:7081:23
 		opErrorFull(p, "closure with return type requires block body", "add `{ ... }`", "", "E0203")
 	}
 	return opParseExpr(p)
 }
 
-// Osty: /tmp/selfhost_merged.osty:7087:1
+// Osty: /tmp/selfhost_merged.osty:7089:1
 func opTryParsePostfix(p *OstyParser, lhs int) int {
-	// Osty: /tmp/selfhost_merged.osty:7088:5
+	// Osty: /tmp/selfhost_merged.osty:7090:5
 	tok := opPeek(p)
 	_ = tok
-	// Osty: /tmp/selfhost_merged.osty:7089:5
+	// Osty: /tmp/selfhost_merged.osty:7091:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontDot{})) {
-		// Osty: /tmp/selfhost_merged.osty:7090:9
-		s := p.pos
-		_ = s
-		// Osty: /tmp/selfhost_merged.osty:7091:9
-		_ = opAdvance(p)
 		// Osty: /tmp/selfhost_merged.osty:7092:9
-		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontInt{})) || opAt(p, FrontTokenKind(&FrontTokenKind_FrontFloat{})) {
-			// Osty: /tmp/selfhost_merged.osty:7093:13
-			gotName := frontTokenKindName(opPeek(p).kind)
-			_ = gotName
-			// Osty: /tmp/selfhost_merged.osty:7094:13
-			opErrorFull(p, fmt.Sprintf("expected field name after `.`, got %s", ostyToString(gotName)), "", "", "")
-		} else if !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{}))) {
-			// Osty: /tmp/selfhost_merged.osty:7096:13
-			gotName := frontTokenKindName(opPeek(p).kind)
-			_ = gotName
-			// Osty: /tmp/selfhost_merged.osty:7097:13
-			opErrorFull(p, fmt.Sprintf("expected field name after `.`, got %s", ostyToString(gotName)), "continue the chain with a leading `.` on the next line", "v0.2 O3: trailing `.` before a newline is not a continuation", "E0202")
-			// Osty: /tmp/selfhost_merged.osty:7098:13
-			return lhs
-		}
-		// Osty: /tmp/selfhost_merged.osty:7100:9
-		nm := opAdvance(p).text
-		_ = nm
-		// Osty: /tmp/selfhost_merged.osty:7101:9
-		n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNField{}))
-		_ = n
-		// Osty: /tmp/selfhost_merged.osty:7102:16
-		n.left = lhs
-		// Osty: /tmp/selfhost_merged.osty:7103:16
-		n.text = nm
-		// Osty: /tmp/selfhost_merged.osty:7104:17
-		n.start = s
-		// Osty: /tmp/selfhost_merged.osty:7105:15
-		n.end = p.pos
-		// Osty: /tmp/selfhost_merged.osty:7106:9
-		return opAddNode(p, n)
-	}
-	// Osty: /tmp/selfhost_merged.osty:7108:5
-	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontQDot{})) {
-		// Osty: /tmp/selfhost_merged.osty:7109:9
 		s := p.pos
 		_ = s
-		// Osty: /tmp/selfhost_merged.osty:7110:9
+		// Osty: /tmp/selfhost_merged.osty:7093:9
 		_ = opAdvance(p)
-		// Osty: /tmp/selfhost_merged.osty:7111:9
+		// Osty: /tmp/selfhost_merged.osty:7094:9
 		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontInt{})) || opAt(p, FrontTokenKind(&FrontTokenKind_FrontFloat{})) {
-			// Osty: /tmp/selfhost_merged.osty:7112:13
+			// Osty: /tmp/selfhost_merged.osty:7095:13
 			gotName := frontTokenKindName(opPeek(p).kind)
 			_ = gotName
-			// Osty: /tmp/selfhost_merged.osty:7113:13
+			// Osty: /tmp/selfhost_merged.osty:7096:13
 			opErrorFull(p, fmt.Sprintf("expected field name after `.`, got %s", ostyToString(gotName)), "", "", "")
 		} else if !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{}))) {
-			// Osty: /tmp/selfhost_merged.osty:7115:13
+			// Osty: /tmp/selfhost_merged.osty:7098:13
 			gotName := frontTokenKindName(opPeek(p).kind)
 			_ = gotName
-			// Osty: /tmp/selfhost_merged.osty:7116:13
-			opErrorFull(p, fmt.Sprintf("expected field name after `.`, got %s", ostyToString(gotName)), "continue the chain with a leading `?.` on the next line", "v0.2 O3: trailing `?.` before a newline is not a continuation", "E0202")
-			// Osty: /tmp/selfhost_merged.osty:7117:13
+			// Osty: /tmp/selfhost_merged.osty:7099:13
+			opErrorFull(p, fmt.Sprintf("expected field name after `.`, got %s", ostyToString(gotName)), "continue the chain with a leading `.` on the next line", "v0.2 O3: trailing `.` before a newline is not a continuation", "E0202")
+			// Osty: /tmp/selfhost_merged.osty:7100:13
 			return lhs
 		}
-		// Osty: /tmp/selfhost_merged.osty:7119:9
+		// Osty: /tmp/selfhost_merged.osty:7102:9
 		nm := opAdvance(p).text
 		_ = nm
-		// Osty: /tmp/selfhost_merged.osty:7120:9
+		// Osty: /tmp/selfhost_merged.osty:7103:9
 		n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNField{}))
 		_ = n
-		// Osty: /tmp/selfhost_merged.osty:7121:16
+		// Osty: /tmp/selfhost_merged.osty:7104:16
 		n.left = lhs
-		// Osty: /tmp/selfhost_merged.osty:7122:16
+		// Osty: /tmp/selfhost_merged.osty:7105:16
 		n.text = nm
-		// Osty: /tmp/selfhost_merged.osty:7123:17
-		n.flags = 1
-		// Osty: /tmp/selfhost_merged.osty:7124:17
+		// Osty: /tmp/selfhost_merged.osty:7106:17
 		n.start = s
-		// Osty: /tmp/selfhost_merged.osty:7125:15
+		// Osty: /tmp/selfhost_merged.osty:7107:15
 		n.end = p.pos
-		// Osty: /tmp/selfhost_merged.osty:7126:9
+		// Osty: /tmp/selfhost_merged.osty:7108:9
 		return opAddNode(p, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7128:5
-	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) {
-		// Osty: /tmp/selfhost_merged.osty:7128:34
-		return opParseCallArgs(p, lhs)
-	}
-	// Osty: /tmp/selfhost_merged.osty:7129:5
-	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontLBracket{})) {
-		// Osty: /tmp/selfhost_merged.osty:7129:36
-		return opParseIndex(p, lhs)
+	// Osty: /tmp/selfhost_merged.osty:7110:5
+	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontQDot{})) {
+		// Osty: /tmp/selfhost_merged.osty:7111:9
+		s := p.pos
+		_ = s
+		// Osty: /tmp/selfhost_merged.osty:7112:9
+		_ = opAdvance(p)
+		// Osty: /tmp/selfhost_merged.osty:7113:9
+		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontInt{})) || opAt(p, FrontTokenKind(&FrontTokenKind_FrontFloat{})) {
+			// Osty: /tmp/selfhost_merged.osty:7114:13
+			gotName := frontTokenKindName(opPeek(p).kind)
+			_ = gotName
+			// Osty: /tmp/selfhost_merged.osty:7115:13
+			opErrorFull(p, fmt.Sprintf("expected field name after `.`, got %s", ostyToString(gotName)), "", "", "")
+		} else if !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{}))) {
+			// Osty: /tmp/selfhost_merged.osty:7117:13
+			gotName := frontTokenKindName(opPeek(p).kind)
+			_ = gotName
+			// Osty: /tmp/selfhost_merged.osty:7118:13
+			opErrorFull(p, fmt.Sprintf("expected field name after `.`, got %s", ostyToString(gotName)), "continue the chain with a leading `?.` on the next line", "v0.2 O3: trailing `?.` before a newline is not a continuation", "E0202")
+			// Osty: /tmp/selfhost_merged.osty:7119:13
+			return lhs
+		}
+		// Osty: /tmp/selfhost_merged.osty:7121:9
+		nm := opAdvance(p).text
+		_ = nm
+		// Osty: /tmp/selfhost_merged.osty:7122:9
+		n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNField{}))
+		_ = n
+		// Osty: /tmp/selfhost_merged.osty:7123:16
+		n.left = lhs
+		// Osty: /tmp/selfhost_merged.osty:7124:16
+		n.text = nm
+		// Osty: /tmp/selfhost_merged.osty:7125:17
+		n.flags = 1
+		// Osty: /tmp/selfhost_merged.osty:7126:17
+		n.start = s
+		// Osty: /tmp/selfhost_merged.osty:7127:15
+		n.end = p.pos
+		// Osty: /tmp/selfhost_merged.osty:7128:9
+		return opAddNode(p, n)
 	}
 	// Osty: /tmp/selfhost_merged.osty:7130:5
+	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) {
+		// Osty: /tmp/selfhost_merged.osty:7130:34
+		return opParseCallArgs(p, lhs)
+	}
+	// Osty: /tmp/selfhost_merged.osty:7131:5
+	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontLBracket{})) {
+		// Osty: /tmp/selfhost_merged.osty:7131:36
+		return opParseIndex(p, lhs)
+	}
+	// Osty: /tmp/selfhost_merged.osty:7132:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontQuestion{})) {
-		// Osty: /tmp/selfhost_merged.osty:7131:9
+		// Osty: /tmp/selfhost_merged.osty:7133:9
 		s := p.pos
 		_ = s
-		// Osty: /tmp/selfhost_merged.osty:7132:9
+		// Osty: /tmp/selfhost_merged.osty:7134:9
 		_ = opAdvance(p)
-		// Osty: /tmp/selfhost_merged.osty:7133:9
+		// Osty: /tmp/selfhost_merged.osty:7135:9
 		n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNQuestion{}))
 		_ = n
-		// Osty: /tmp/selfhost_merged.osty:7134:16
+		// Osty: /tmp/selfhost_merged.osty:7136:16
 		n.left = lhs
-		// Osty: /tmp/selfhost_merged.osty:7135:17
+		// Osty: /tmp/selfhost_merged.osty:7137:17
 		n.start = s
-		// Osty: /tmp/selfhost_merged.osty:7136:15
+		// Osty: /tmp/selfhost_merged.osty:7138:15
 		n.end = p.pos
-		// Osty: /tmp/selfhost_merged.osty:7137:9
+		// Osty: /tmp/selfhost_merged.osty:7139:9
 		return opAddNode(p, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7139:5
+	// Osty: /tmp/selfhost_merged.osty:7141:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontColonColon{})) {
-		// Osty: /tmp/selfhost_merged.osty:7139:38
+		// Osty: /tmp/selfhost_merged.osty:7141:38
 		return opParseTurbofish(p, lhs)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7140:5
+	// Osty: /tmp/selfhost_merged.osty:7142:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) && !(p.noStructLit) && lhs >= 0 {
-		// Osty: /tmp/selfhost_merged.osty:7141:9
+		// Osty: /tmp/selfhost_merged.osty:7143:9
 		leftNode := astArenaNodeAt(p.arena, lhs)
 		_ = leftNode
-		// Osty: /tmp/selfhost_merged.osty:7142:9
+		// Osty: /tmp/selfhost_merged.osty:7144:9
 		if ostyEqual(leftNode.kind, AstNodeKind(&AstNodeKind_AstNIdent{})) && astIsUpperName(leftNode.text) {
-			// Osty: /tmp/selfhost_merged.osty:7142:74
+			// Osty: /tmp/selfhost_merged.osty:7144:74
 			return opParseStructLit(p, lhs)
 		}
-		// Osty: /tmp/selfhost_merged.osty:7143:9
+		// Osty: /tmp/selfhost_merged.osty:7145:9
 		if ostyEqual(leftNode.kind, AstNodeKind(&AstNodeKind_AstNField{})) && astIsUpperName(leftNode.text) {
-			// Osty: /tmp/selfhost_merged.osty:7143:74
+			// Osty: /tmp/selfhost_merged.osty:7145:74
 			return opParseStructLit(p, lhs)
 		}
 	}
-	// Osty: /tmp/selfhost_merged.osty:7145:5
+	// Osty: /tmp/selfhost_merged.osty:7147:5
 	return -1
 }
 
-// Osty: /tmp/selfhost_merged.osty:7148:1
+// Osty: /tmp/selfhost_merged.osty:7150:1
 func opParseCallArgs(p *OstyParser, callee int) int {
-	// Osty: /tmp/selfhost_merged.osty:7149:5
+	// Osty: /tmp/selfhost_merged.osty:7151:5
 	start := p.pos
 	_ = start
-	// Osty: /tmp/selfhost_merged.osty:7150:5
+	// Osty: /tmp/selfhost_merged.osty:7152:5
 	_ = opAdvance(p)
-	// Osty: /tmp/selfhost_merged.osty:7151:5
+	// Osty: /tmp/selfhost_merged.osty:7153:5
 	var args []int = make([]int, 0, 1)
 	_ = args
-	// Osty: /tmp/selfhost_merged.osty:7152:5
+	// Osty: /tmp/selfhost_merged.osty:7154:5
 	opSkipNewlines(p)
-	// Osty: /tmp/selfhost_merged.osty:7153:5
+	// Osty: /tmp/selfhost_merged.osty:7155:5
 	for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontRParen{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-		// Osty: /tmp/selfhost_merged.osty:7154:9
+		// Osty: /tmp/selfhost_merged.osty:7156:9
 		argName := ""
 		_ = argName
-		// Osty: /tmp/selfhost_merged.osty:7155:9
+		// Osty: /tmp/selfhost_merged.osty:7157:9
 		argStart := p.pos
 		_ = argStart
-		// Osty: /tmp/selfhost_merged.osty:7156:9
+		// Osty: /tmp/selfhost_merged.osty:7158:9
 		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})) && ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontColon{})) {
-			// Osty: /tmp/selfhost_merged.osty:7156:79
+			// Osty: /tmp/selfhost_merged.osty:7158:79
 			argName = opAdvance(p).text
-			// Osty: /tmp/selfhost_merged.osty:7157:9
+			// Osty: /tmp/selfhost_merged.osty:7159:9
 			_ = opAdvance(p)
 		}
-		// Osty: /tmp/selfhost_merged.osty:7158:9
+		// Osty: /tmp/selfhost_merged.osty:7160:9
 		value := opParseExpr(p)
 		_ = value
-		// Osty: /tmp/selfhost_merged.osty:7159:9
+		// Osty: /tmp/selfhost_merged.osty:7161:9
 		if argName != "" {
-			// Osty: /tmp/selfhost_merged.osty:7160:13
+			// Osty: /tmp/selfhost_merged.osty:7162:13
 			argNode := emptyAstNode(AstNodeKind(&AstNodeKind_AstNField_{}))
 			_ = argNode
-			// Osty: /tmp/selfhost_merged.osty:7161:26
+			// Osty: /tmp/selfhost_merged.osty:7163:26
 			argNode.text = argName
-			// Osty: /tmp/selfhost_merged.osty:7162:26
+			// Osty: /tmp/selfhost_merged.osty:7164:26
 			argNode.left = value
-			// Osty: /tmp/selfhost_merged.osty:7163:27
+			// Osty: /tmp/selfhost_merged.osty:7165:27
 			argNode.start = argStart
-			// Osty: /tmp/selfhost_merged.osty:7164:25
+			// Osty: /tmp/selfhost_merged.osty:7166:25
 			argNode.end = p.pos
-			// Osty: /tmp/selfhost_merged.osty:7165:13
+			// Osty: /tmp/selfhost_merged.osty:7167:13
 			func() struct{} { args = append(args, opAddNode(p, argNode)); return struct{}{} }()
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:7166:18
+			// Osty: /tmp/selfhost_merged.osty:7168:18
 			func() struct{} { args = append(args, value); return struct{}{} }()
-		}
-		// Osty: /tmp/selfhost_merged.osty:7167:9
-		opSkipNewlines(p)
-		// Osty: /tmp/selfhost_merged.osty:7168:9
-		if !(opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))) {
-			// Osty: /tmp/selfhost_merged.osty:7168:38
-			break
 		}
 		// Osty: /tmp/selfhost_merged.osty:7169:9
 		opSkipNewlines(p)
+		// Osty: /tmp/selfhost_merged.osty:7170:9
+		if !(opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))) {
+			// Osty: /tmp/selfhost_merged.osty:7170:38
+			break
+		}
+		// Osty: /tmp/selfhost_merged.osty:7171:9
+		opSkipNewlines(p)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7171:5
+	// Osty: /tmp/selfhost_merged.osty:7173:5
 	opExpect(p, FrontTokenKind(&FrontTokenKind_FrontRParen{}))
-	// Osty: /tmp/selfhost_merged.osty:7172:5
+	// Osty: /tmp/selfhost_merged.osty:7174:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNCall{}))
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:7173:12
+	// Osty: /tmp/selfhost_merged.osty:7175:12
 	n.left = callee
-	// Osty: /tmp/selfhost_merged.osty:7174:16
+	// Osty: /tmp/selfhost_merged.osty:7176:16
 	n.children = args
-	// Osty: /tmp/selfhost_merged.osty:7175:13
+	// Osty: /tmp/selfhost_merged.osty:7177:13
 	n.start = start
-	// Osty: /tmp/selfhost_merged.osty:7176:11
+	// Osty: /tmp/selfhost_merged.osty:7178:11
 	n.end = p.pos
 	return opAddNode(p, n)
 }
 
-// Osty: /tmp/selfhost_merged.osty:7180:1
+// Osty: /tmp/selfhost_merged.osty:7182:1
 func opParseIndex(p *OstyParser, object int) int {
-	// Osty: /tmp/selfhost_merged.osty:7181:5
+	// Osty: /tmp/selfhost_merged.osty:7183:5
 	start := p.pos
 	_ = start
-	// Osty: /tmp/selfhost_merged.osty:7182:5
+	// Osty: /tmp/selfhost_merged.osty:7184:5
 	_ = opAdvance(p)
-	// Osty: /tmp/selfhost_merged.osty:7183:5
+	// Osty: /tmp/selfhost_merged.osty:7185:5
 	index := opParseExpr(p)
 	_ = index
-	// Osty: /tmp/selfhost_merged.osty:7184:5
+	// Osty: /tmp/selfhost_merged.osty:7186:5
 	_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontRBracket{}))
-	// Osty: /tmp/selfhost_merged.osty:7185:5
+	// Osty: /tmp/selfhost_merged.osty:7187:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNIndex{}))
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:7186:12
+	// Osty: /tmp/selfhost_merged.osty:7188:12
 	n.left = object
-	// Osty: /tmp/selfhost_merged.osty:7187:13
+	// Osty: /tmp/selfhost_merged.osty:7189:13
 	n.right = index
-	// Osty: /tmp/selfhost_merged.osty:7188:13
+	// Osty: /tmp/selfhost_merged.osty:7190:13
 	n.start = start
-	// Osty: /tmp/selfhost_merged.osty:7189:11
+	// Osty: /tmp/selfhost_merged.osty:7191:11
 	n.end = p.pos
 	return opAddNode(p, n)
 }
 
-// Osty: /tmp/selfhost_merged.osty:7193:1
+// Osty: /tmp/selfhost_merged.osty:7195:1
 func opParseTurbofish(p *OstyParser, callee int) int {
-	// Osty: /tmp/selfhost_merged.osty:7194:5
+	// Osty: /tmp/selfhost_merged.osty:7196:5
 	start := p.pos
 	_ = start
-	// Osty: /tmp/selfhost_merged.osty:7195:5
+	// Osty: /tmp/selfhost_merged.osty:7197:5
 	_ = opAdvance(p)
-	// Osty: /tmp/selfhost_merged.osty:7196:5
+	// Osty: /tmp/selfhost_merged.osty:7198:5
 	if !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontLt{}))) {
-		// Osty: /tmp/selfhost_merged.osty:7197:9
+		// Osty: /tmp/selfhost_merged.osty:7199:9
 		gotName := frontTokenKindName(opPeek(p).kind)
 		_ = gotName
-		// Osty: /tmp/selfhost_merged.osty:7198:9
+		// Osty: /tmp/selfhost_merged.osty:7200:9
 		opErrorFull(p, fmt.Sprintf("expected `<` after `::`, got %s", ostyToString(gotName)), "did you mean `.`? Member access uses `.`, not `::`.", "`::` is reserved for turbofish, e.g. `parse::<Config>(text)`", "E0201")
-		// Osty: /tmp/selfhost_merged.osty:7199:9
+		// Osty: /tmp/selfhost_merged.osty:7201:9
 		return callee
 	}
-	// Osty: /tmp/selfhost_merged.osty:7201:5
+	// Osty: /tmp/selfhost_merged.osty:7203:5
 	_ = opAdvance(p)
-	// Osty: /tmp/selfhost_merged.osty:7202:5
+	// Osty: /tmp/selfhost_merged.osty:7204:5
 	var typeArgs []int = make([]int, 0, 1)
 	_ = typeArgs
-	// Osty: /tmp/selfhost_merged.osty:7203:5
+	// Osty: /tmp/selfhost_merged.osty:7205:5
 	if opAt(p, FrontTokenKind(&FrontTokenKind_FrontGt{})) || opAt(p, FrontTokenKind(&FrontTokenKind_FrontShr{})) || opAt(p, FrontTokenKind(&FrontTokenKind_FrontGeq{})) || opAt(p, FrontTokenKind(&FrontTokenKind_FrontShrEq{})) {
-		// Osty: /tmp/selfhost_merged.osty:7204:9
+		// Osty: /tmp/selfhost_merged.osty:7206:9
 		opErrorFull(p, "turbofish requires at least one type argument", "remove `::<>` or provide a type, e.g. `::<Int>`", "", "E0300")
 	}
-	// Osty: /tmp/selfhost_merged.osty:7206:5
+	// Osty: /tmp/selfhost_merged.osty:7208:5
 	for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontGt{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontShr{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontGeq{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontShrEq{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-		// Osty: /tmp/selfhost_merged.osty:7206:129
+		// Osty: /tmp/selfhost_merged.osty:7208:129
 		func() struct{} { typeArgs = append(typeArgs, opParseType(p)); return struct{}{} }()
-		// Osty: /tmp/selfhost_merged.osty:7207:5
+		// Osty: /tmp/selfhost_merged.osty:7209:5
 		if !(opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))) {
-			// Osty: /tmp/selfhost_merged.osty:7207:34
+			// Osty: /tmp/selfhost_merged.osty:7209:34
 			break
 		}
 	}
-	// Osty: /tmp/selfhost_merged.osty:7208:5
+	// Osty: /tmp/selfhost_merged.osty:7210:5
 	opExpectTypeGT(p)
-	// Osty: /tmp/selfhost_merged.osty:7209:5
+	// Osty: /tmp/selfhost_merged.osty:7211:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNTurbofish{}))
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:7210:12
+	// Osty: /tmp/selfhost_merged.osty:7212:12
 	n.left = callee
-	// Osty: /tmp/selfhost_merged.osty:7211:16
+	// Osty: /tmp/selfhost_merged.osty:7213:16
 	n.children = typeArgs
-	// Osty: /tmp/selfhost_merged.osty:7212:13
+	// Osty: /tmp/selfhost_merged.osty:7214:13
 	n.start = start
-	// Osty: /tmp/selfhost_merged.osty:7213:11
+	// Osty: /tmp/selfhost_merged.osty:7215:11
 	n.end = p.pos
 	return opAddNode(p, n)
 }
 
-// Osty: /tmp/selfhost_merged.osty:7217:1
+// Osty: /tmp/selfhost_merged.osty:7219:1
 func opParseStructLit(p *OstyParser, name int) int {
-	// Osty: /tmp/selfhost_merged.osty:7218:5
+	// Osty: /tmp/selfhost_merged.osty:7220:5
 	start := p.pos
 	_ = start
-	// Osty: /tmp/selfhost_merged.osty:7219:5
+	// Osty: /tmp/selfhost_merged.osty:7221:5
 	_ = opAdvance(p)
-	// Osty: /tmp/selfhost_merged.osty:7220:5
+	// Osty: /tmp/selfhost_merged.osty:7222:5
 	var fields []int = make([]int, 0, 1)
 	_ = fields
-	// Osty: /tmp/selfhost_merged.osty:7221:5
+	// Osty: /tmp/selfhost_merged.osty:7223:5
 	spreadIdx := -1
 	_ = spreadIdx
-	// Osty: /tmp/selfhost_merged.osty:7222:5
+	// Osty: /tmp/selfhost_merged.osty:7224:5
 	opSkipNewlines(p)
-	// Osty: /tmp/selfhost_merged.osty:7223:5
+	// Osty: /tmp/selfhost_merged.osty:7225:5
 	for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-		// Osty: /tmp/selfhost_merged.osty:7224:9
+		// Osty: /tmp/selfhost_merged.osty:7226:9
 		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontDotDot{})) {
-			// Osty: /tmp/selfhost_merged.osty:7225:13
-			_ = opAdvance(p)
-			// Osty: /tmp/selfhost_merged.osty:7226:23
-			spreadIdx = opParseExpr(p)
 			// Osty: /tmp/selfhost_merged.osty:7227:13
-			opSkipNewlines(p)
-			// Osty: /tmp/selfhost_merged.osty:7228:13
-			_ = opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))
+			_ = opAdvance(p)
+			// Osty: /tmp/selfhost_merged.osty:7228:23
+			spreadIdx = opParseExpr(p)
 			// Osty: /tmp/selfhost_merged.osty:7229:13
 			opSkipNewlines(p)
 			// Osty: /tmp/selfhost_merged.osty:7230:13
+			_ = opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))
+			// Osty: /tmp/selfhost_merged.osty:7231:13
+			opSkipNewlines(p)
+			// Osty: /tmp/selfhost_merged.osty:7232:13
 			continue
 		}
-		// Osty: /tmp/selfhost_merged.osty:7232:9
+		// Osty: /tmp/selfhost_merged.osty:7234:9
 		fs := p.pos
 		_ = fs
-		// Osty: /tmp/selfhost_merged.osty:7233:9
+		// Osty: /tmp/selfhost_merged.osty:7235:9
 		fn_ := opAdvance(p).text
 		_ = fn_
-		// Osty: /tmp/selfhost_merged.osty:7234:9
+		// Osty: /tmp/selfhost_merged.osty:7236:9
 		valIdx := -1
 		_ = valIdx
-		// Osty: /tmp/selfhost_merged.osty:7235:9
+		// Osty: /tmp/selfhost_merged.osty:7237:9
 		if opEat(p, FrontTokenKind(&FrontTokenKind_FrontColon{})) {
-			// Osty: /tmp/selfhost_merged.osty:7235:42
+			// Osty: /tmp/selfhost_merged.osty:7237:42
 			valIdx = opParseExpr(p)
 		}
-		// Osty: /tmp/selfhost_merged.osty:7236:9
+		// Osty: /tmp/selfhost_merged.osty:7238:9
 		fNode := emptyAstNode(AstNodeKind(&AstNodeKind_AstNField_{}))
 		_ = fNode
-		// Osty: /tmp/selfhost_merged.osty:7237:20
+		// Osty: /tmp/selfhost_merged.osty:7239:20
 		fNode.text = fn_
-		// Osty: /tmp/selfhost_merged.osty:7238:20
+		// Osty: /tmp/selfhost_merged.osty:7240:20
 		fNode.left = valIdx
-		// Osty: /tmp/selfhost_merged.osty:7239:21
+		// Osty: /tmp/selfhost_merged.osty:7241:21
 		fNode.start = fs
-		// Osty: /tmp/selfhost_merged.osty:7240:19
+		// Osty: /tmp/selfhost_merged.osty:7242:19
 		fNode.end = p.pos
-		// Osty: /tmp/selfhost_merged.osty:7241:9
-		func() struct{} { fields = append(fields, opAddNode(p, fNode)); return struct{}{} }()
-		// Osty: /tmp/selfhost_merged.osty:7242:9
-		opSkipNewlines(p)
 		// Osty: /tmp/selfhost_merged.osty:7243:9
-		if !(opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))) {
-			// Osty: /tmp/selfhost_merged.osty:7243:38
-			break
-		}
+		func() struct{} { fields = append(fields, opAddNode(p, fNode)); return struct{}{} }()
 		// Osty: /tmp/selfhost_merged.osty:7244:9
 		opSkipNewlines(p)
+		// Osty: /tmp/selfhost_merged.osty:7245:9
+		if !(opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))) {
+			// Osty: /tmp/selfhost_merged.osty:7245:38
+			break
+		}
+		// Osty: /tmp/selfhost_merged.osty:7246:9
+		opSkipNewlines(p)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7246:5
+	// Osty: /tmp/selfhost_merged.osty:7248:5
 	_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))
-	// Osty: /tmp/selfhost_merged.osty:7247:5
+	// Osty: /tmp/selfhost_merged.osty:7249:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNStructLit{}))
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:7248:12
+	// Osty: /tmp/selfhost_merged.osty:7250:12
 	n.left = name
-	// Osty: /tmp/selfhost_merged.osty:7249:13
-	n.right = spreadIdx
-	// Osty: /tmp/selfhost_merged.osty:7250:16
-	n.children = fields
 	// Osty: /tmp/selfhost_merged.osty:7251:13
+	n.right = spreadIdx
+	// Osty: /tmp/selfhost_merged.osty:7252:16
+	n.children = fields
+	// Osty: /tmp/selfhost_merged.osty:7253:13
 	n.start = start
-	// Osty: /tmp/selfhost_merged.osty:7252:11
+	// Osty: /tmp/selfhost_merged.osty:7254:11
 	n.end = p.pos
 	return opAddNode(p, n)
 }
 
-// Osty: /tmp/selfhost_merged.osty:7256:1
+// Osty: /tmp/selfhost_merged.osty:7258:1
 func astIsUpperName(text string) bool {
-	// Osty: /tmp/selfhost_merged.osty:7257:5
+	// Osty: /tmp/selfhost_merged.osty:7259:5
 	units := strings.Split(text, "")
 	_ = units
-	// Osty: /tmp/selfhost_merged.osty:7258:5
+	// Osty: /tmp/selfhost_merged.osty:7260:5
 	first := frontUnitAt(units, 0)
 	_ = first
 	return first >= "A" && first <= "Z"
 }
 
-// Osty: /tmp/selfhost_merged.osty:7266:1
+// Osty: /tmp/selfhost_merged.osty:7268:1
 func opParseStmt(p *OstyParser) int {
-	// Osty: /tmp/selfhost_merged.osty:7267:5
+	// Osty: /tmp/selfhost_merged.osty:7269:5
 	tok := opPeek(p)
 	_ = tok
-	// Osty: /tmp/selfhost_merged.osty:7268:5
+	// Osty: /tmp/selfhost_merged.osty:7270:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontLet{})) {
-		// Osty: /tmp/selfhost_merged.osty:7268:31
+		// Osty: /tmp/selfhost_merged.osty:7270:31
 		return opParseLetStmt(p)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7269:5
+	// Osty: /tmp/selfhost_merged.osty:7271:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontReturn{})) {
-		// Osty: /tmp/selfhost_merged.osty:7269:34
+		// Osty: /tmp/selfhost_merged.osty:7271:34
 		return opParseReturnStmt(p)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7270:5
+	// Osty: /tmp/selfhost_merged.osty:7272:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontBreak{})) {
-		// Osty: /tmp/selfhost_merged.osty:7271:9
+		// Osty: /tmp/selfhost_merged.osty:7273:9
 		s := p.pos
 		_ = s
-		// Osty: /tmp/selfhost_merged.osty:7272:9
+		// Osty: /tmp/selfhost_merged.osty:7274:9
 		_ = opAdvance(p)
-		// Osty: /tmp/selfhost_merged.osty:7273:9
+		// Osty: /tmp/selfhost_merged.osty:7275:9
 		if !(p.inLoop) {
-			// Osty: /tmp/selfhost_merged.osty:7273:26
+			// Osty: /tmp/selfhost_merged.osty:7275:26
 			opErrorFull(p, "`break` outside of loop", "move inside a `for` loop", "", "E0100")
 		}
-		// Osty: /tmp/selfhost_merged.osty:7274:9
+		// Osty: /tmp/selfhost_merged.osty:7276:9
 		n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNBreak{}))
 		_ = n
-		// Osty: /tmp/selfhost_merged.osty:7275:17
+		// Osty: /tmp/selfhost_merged.osty:7277:17
 		n.start = s
-		// Osty: /tmp/selfhost_merged.osty:7276:15
+		// Osty: /tmp/selfhost_merged.osty:7278:15
 		n.end = p.pos
-		// Osty: /tmp/selfhost_merged.osty:7277:9
+		// Osty: /tmp/selfhost_merged.osty:7279:9
 		return opAddNode(p, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7279:5
+	// Osty: /tmp/selfhost_merged.osty:7281:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontContinue{})) {
-		// Osty: /tmp/selfhost_merged.osty:7280:9
+		// Osty: /tmp/selfhost_merged.osty:7282:9
 		s := p.pos
 		_ = s
-		// Osty: /tmp/selfhost_merged.osty:7281:9
+		// Osty: /tmp/selfhost_merged.osty:7283:9
 		_ = opAdvance(p)
-		// Osty: /tmp/selfhost_merged.osty:7282:9
+		// Osty: /tmp/selfhost_merged.osty:7284:9
 		if !(p.inLoop) {
-			// Osty: /tmp/selfhost_merged.osty:7282:26
+			// Osty: /tmp/selfhost_merged.osty:7284:26
 			opErrorFull(p, "`continue` outside of loop", "move inside a `for` loop", "", "E0101")
 		}
-		// Osty: /tmp/selfhost_merged.osty:7283:9
+		// Osty: /tmp/selfhost_merged.osty:7285:9
 		n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNContinue{}))
 		_ = n
-		// Osty: /tmp/selfhost_merged.osty:7284:17
+		// Osty: /tmp/selfhost_merged.osty:7286:17
 		n.start = s
-		// Osty: /tmp/selfhost_merged.osty:7285:15
+		// Osty: /tmp/selfhost_merged.osty:7287:15
 		n.end = p.pos
-		// Osty: /tmp/selfhost_merged.osty:7286:9
+		// Osty: /tmp/selfhost_merged.osty:7288:9
 		return opAddNode(p, n)
-	}
-	// Osty: /tmp/selfhost_merged.osty:7288:5
-	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontDefer{})) {
-		// Osty: /tmp/selfhost_merged.osty:7288:33
-		return opParseDeferStmt(p)
-	}
-	// Osty: /tmp/selfhost_merged.osty:7289:5
-	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontFor{})) {
-		// Osty: /tmp/selfhost_merged.osty:7289:31
-		return opParseForStmt(p)
 	}
 	// Osty: /tmp/selfhost_merged.osty:7290:5
+	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontDefer{})) {
+		// Osty: /tmp/selfhost_merged.osty:7290:33
+		return opParseDeferStmt(p)
+	}
+	// Osty: /tmp/selfhost_merged.osty:7291:5
+	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontFor{})) {
+		// Osty: /tmp/selfhost_merged.osty:7291:31
+		return opParseForStmt(p)
+	}
+	// Osty: /tmp/selfhost_merged.osty:7292:5
 	expr := opParseExpr(p)
 	_ = expr
-	// Osty: /tmp/selfhost_merged.osty:7291:5
+	// Osty: /tmp/selfhost_merged.osty:7293:5
 	next := opPeek(p)
 	_ = next
-	// Osty: /tmp/selfhost_merged.osty:7292:5
+	// Osty: /tmp/selfhost_merged.osty:7294:5
 	if ostyEqual(next.kind, FrontTokenKind(&FrontTokenKind_FrontChanArrow{})) {
-		// Osty: /tmp/selfhost_merged.osty:7292:38
+		// Osty: /tmp/selfhost_merged.osty:7294:38
 		s := p.pos
 		_ = s
-		// Osty: /tmp/selfhost_merged.osty:7293:5
+		// Osty: /tmp/selfhost_merged.osty:7295:5
 		_ = opAdvance(p)
-		// Osty: /tmp/selfhost_merged.osty:7294:5
+		// Osty: /tmp/selfhost_merged.osty:7296:5
 		v := opParseExpr(p)
 		_ = v
-		// Osty: /tmp/selfhost_merged.osty:7295:5
+		// Osty: /tmp/selfhost_merged.osty:7297:5
 		n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNChanSend{}))
 		_ = n
-		// Osty: /tmp/selfhost_merged.osty:7296:12
+		// Osty: /tmp/selfhost_merged.osty:7298:12
 		n.left = expr
-		// Osty: /tmp/selfhost_merged.osty:7297:13
+		// Osty: /tmp/selfhost_merged.osty:7299:13
 		n.right = v
-		// Osty: /tmp/selfhost_merged.osty:7298:13
+		// Osty: /tmp/selfhost_merged.osty:7300:13
 		n.start = s
-		// Osty: /tmp/selfhost_merged.osty:7299:11
+		// Osty: /tmp/selfhost_merged.osty:7301:11
 		n.end = p.pos
-		// Osty: /tmp/selfhost_merged.osty:7300:5
+		// Osty: /tmp/selfhost_merged.osty:7302:5
 		return opAddNode(p, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7301:5
+	// Osty: /tmp/selfhost_merged.osty:7303:5
 	if frontIsAssignOp(next.kind) {
-		// Osty: /tmp/selfhost_merged.osty:7301:37
+		// Osty: /tmp/selfhost_merged.osty:7303:37
 		s := p.pos
 		_ = s
-		// Osty: /tmp/selfhost_merged.osty:7302:5
+		// Osty: /tmp/selfhost_merged.osty:7304:5
 		_ = opAdvance(p)
-		// Osty: /tmp/selfhost_merged.osty:7303:5
+		// Osty: /tmp/selfhost_merged.osty:7305:5
 		v := opParseExpr(p)
 		_ = v
-		// Osty: /tmp/selfhost_merged.osty:7304:5
+		// Osty: /tmp/selfhost_merged.osty:7306:5
 		n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNAssign{}))
 		_ = n
-		// Osty: /tmp/selfhost_merged.osty:7305:12
+		// Osty: /tmp/selfhost_merged.osty:7307:12
 		n.left = expr
-		// Osty: /tmp/selfhost_merged.osty:7306:13
-		n.right = v
-		// Osty: /tmp/selfhost_merged.osty:7307:10
-		n.op = next.kind
 		// Osty: /tmp/selfhost_merged.osty:7308:13
+		n.right = v
+		// Osty: /tmp/selfhost_merged.osty:7309:10
+		n.op = next.kind
+		// Osty: /tmp/selfhost_merged.osty:7310:13
 		n.start = s
-		// Osty: /tmp/selfhost_merged.osty:7309:11
+		// Osty: /tmp/selfhost_merged.osty:7311:11
 		n.end = p.pos
-		// Osty: /tmp/selfhost_merged.osty:7310:5
+		// Osty: /tmp/selfhost_merged.osty:7312:5
 		return opAddNode(p, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7311:5
+	// Osty: /tmp/selfhost_merged.osty:7313:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNExprStmt{}))
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:7312:12
+	// Osty: /tmp/selfhost_merged.osty:7314:12
 	n.left = expr
-	// Osty: /tmp/selfhost_merged.osty:7313:13
+	// Osty: /tmp/selfhost_merged.osty:7315:13
 	n.start = p.pos
-	// Osty: /tmp/selfhost_merged.osty:7314:11
+	// Osty: /tmp/selfhost_merged.osty:7316:11
 	n.end = p.pos
 	return opAddNode(p, n)
 }
 
-// Osty: /tmp/selfhost_merged.osty:7318:1
+// Osty: /tmp/selfhost_merged.osty:7320:1
 func opParseLetStmt(p *OstyParser) int {
-	// Osty: /tmp/selfhost_merged.osty:7319:5
+	// Osty: /tmp/selfhost_merged.osty:7321:5
 	start := p.pos
 	_ = start
-	// Osty: /tmp/selfhost_merged.osty:7320:5
+	// Osty: /tmp/selfhost_merged.osty:7322:5
 	_ = opAdvance(p)
-	// Osty: /tmp/selfhost_merged.osty:7321:5
+	// Osty: /tmp/selfhost_merged.osty:7323:5
 	isMut := false
 	_ = isMut
-	// Osty: /tmp/selfhost_merged.osty:7322:5
+	// Osty: /tmp/selfhost_merged.osty:7324:5
 	if opEat(p, FrontTokenKind(&FrontTokenKind_FrontMut{})) {
-		// Osty: /tmp/selfhost_merged.osty:7322:35
+		// Osty: /tmp/selfhost_merged.osty:7324:35
 		isMut = true
 	}
-	// Osty: /tmp/selfhost_merged.osty:7323:5
+	// Osty: /tmp/selfhost_merged.osty:7325:5
 	pat := opParsePattern(p)
 	_ = pat
-	// Osty: /tmp/selfhost_merged.osty:7324:5
+	// Osty: /tmp/selfhost_merged.osty:7326:5
 	typeIdx := -1
 	_ = typeIdx
-	// Osty: /tmp/selfhost_merged.osty:7325:5
+	// Osty: /tmp/selfhost_merged.osty:7327:5
 	if opEat(p, FrontTokenKind(&FrontTokenKind_FrontColon{})) {
-		// Osty: /tmp/selfhost_merged.osty:7325:39
+		// Osty: /tmp/selfhost_merged.osty:7327:39
 		typeIdx = opParseType(p)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7326:5
+	// Osty: /tmp/selfhost_merged.osty:7328:5
 	valueIdx := -1
 	_ = valueIdx
-	// Osty: /tmp/selfhost_merged.osty:7327:5
+	// Osty: /tmp/selfhost_merged.osty:7329:5
 	if opEat(p, FrontTokenKind(&FrontTokenKind_FrontAssign{})) {
-		// Osty: /tmp/selfhost_merged.osty:7327:41
+		// Osty: /tmp/selfhost_merged.osty:7329:41
 		valueIdx = opParseExpr(p)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7328:5
+	// Osty: /tmp/selfhost_merged.osty:7330:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNLet{}))
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:7329:12
+	// Osty: /tmp/selfhost_merged.osty:7331:12
 	n.left = pat
-	// Osty: /tmp/selfhost_merged.osty:7330:13
-	n.right = valueIdx
-	// Osty: /tmp/selfhost_merged.osty:7331:16
-	n.children = []int{typeIdx}
 	// Osty: /tmp/selfhost_merged.osty:7332:13
+	n.right = valueIdx
+	// Osty: /tmp/selfhost_merged.osty:7333:16
+	n.children = []int{typeIdx}
+	// Osty: /tmp/selfhost_merged.osty:7334:13
 	n.start = start
-	// Osty: /tmp/selfhost_merged.osty:7333:11
+	// Osty: /tmp/selfhost_merged.osty:7335:11
 	n.end = p.pos
-	// Osty: /tmp/selfhost_merged.osty:7334:5
+	// Osty: /tmp/selfhost_merged.osty:7336:5
 	if isMut {
-		// Osty: /tmp/selfhost_merged.osty:7334:24
+		// Osty: /tmp/selfhost_merged.osty:7336:24
 		n.flags = 1
 	}
 	return opAddNode(p, n)
 }
 
-// Osty: /tmp/selfhost_merged.osty:7338:1
+// Osty: /tmp/selfhost_merged.osty:7340:1
 func opParseReturnStmt(p *OstyParser) int {
-	// Osty: /tmp/selfhost_merged.osty:7339:5
+	// Osty: /tmp/selfhost_merged.osty:7341:5
 	start := p.pos
 	_ = start
-	// Osty: /tmp/selfhost_merged.osty:7340:5
+	// Osty: /tmp/selfhost_merged.osty:7342:5
 	_ = opAdvance(p)
-	// Osty: /tmp/selfhost_merged.osty:7341:5
+	// Osty: /tmp/selfhost_merged.osty:7343:5
 	valueIdx := -1
 	_ = valueIdx
-	// Osty: /tmp/selfhost_merged.osty:7342:5
+	// Osty: /tmp/selfhost_merged.osty:7344:5
 	if !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontNewline{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))) {
-		// Osty: /tmp/selfhost_merged.osty:7342:95
+		// Osty: /tmp/selfhost_merged.osty:7344:95
 		valueIdx = opParseExpr(p)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7343:5
+	// Osty: /tmp/selfhost_merged.osty:7345:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNReturn{}))
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:7344:12
+	// Osty: /tmp/selfhost_merged.osty:7346:12
 	n.left = valueIdx
-	// Osty: /tmp/selfhost_merged.osty:7345:13
+	// Osty: /tmp/selfhost_merged.osty:7347:13
 	n.start = start
-	// Osty: /tmp/selfhost_merged.osty:7346:11
+	// Osty: /tmp/selfhost_merged.osty:7348:11
 	n.end = p.pos
 	return opAddNode(p, n)
 }
 
-// Osty: /tmp/selfhost_merged.osty:7350:1
+// Osty: /tmp/selfhost_merged.osty:7352:1
 func opParseDeferStmt(p *OstyParser) int {
-	// Osty: /tmp/selfhost_merged.osty:7351:5
+	// Osty: /tmp/selfhost_merged.osty:7353:5
 	start := p.pos
 	_ = start
-	// Osty: /tmp/selfhost_merged.osty:7352:5
+	// Osty: /tmp/selfhost_merged.osty:7354:5
 	_ = opAdvance(p)
-	// Osty: /tmp/selfhost_merged.osty:7353:5
+	// Osty: /tmp/selfhost_merged.osty:7355:5
 	expr := opParseExpr(p)
 	_ = expr
-	// Osty: /tmp/selfhost_merged.osty:7354:5
+	// Osty: /tmp/selfhost_merged.osty:7356:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNDefer{}))
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:7355:12
+	// Osty: /tmp/selfhost_merged.osty:7357:12
 	n.left = expr
-	// Osty: /tmp/selfhost_merged.osty:7356:13
+	// Osty: /tmp/selfhost_merged.osty:7358:13
 	n.start = start
-	// Osty: /tmp/selfhost_merged.osty:7357:11
+	// Osty: /tmp/selfhost_merged.osty:7359:11
 	n.end = p.pos
 	return opAddNode(p, n)
 }
 
-// Osty: /tmp/selfhost_merged.osty:7361:1
+// Osty: /tmp/selfhost_merged.osty:7363:1
 func opParseForStmt(p *OstyParser) int {
-	// Osty: /tmp/selfhost_merged.osty:7362:5
+	// Osty: /tmp/selfhost_merged.osty:7364:5
 	start := p.pos
 	_ = start
-	// Osty: /tmp/selfhost_merged.osty:7363:5
+	// Osty: /tmp/selfhost_merged.osty:7365:5
 	_ = opAdvance(p)
-	// Osty: /tmp/selfhost_merged.osty:7364:5
+	// Osty: /tmp/selfhost_merged.osty:7366:5
 	prevInLoop := p.inLoop
 	_ = prevInLoop
-	// Osty: /tmp/selfhost_merged.osty:7365:14
+	// Osty: /tmp/selfhost_merged.osty:7367:14
 	p.inLoop = true
-	// Osty: /tmp/selfhost_merged.osty:7366:5
+	// Osty: /tmp/selfhost_merged.osty:7368:5
 	kind := "infinite"
 	_ = kind
-	// Osty: /tmp/selfhost_merged.osty:7367:5
+	// Osty: /tmp/selfhost_merged.osty:7369:5
 	patIdx := -1
 	_ = patIdx
-	// Osty: /tmp/selfhost_merged.osty:7368:5
+	// Osty: /tmp/selfhost_merged.osty:7370:5
 	condIdx := -1
 	_ = condIdx
-	// Osty: /tmp/selfhost_merged.osty:7369:5
+	// Osty: /tmp/selfhost_merged.osty:7371:5
 	iterIdx := -1
 	_ = iterIdx
-	// Osty: /tmp/selfhost_merged.osty:7370:5
+	// Osty: /tmp/selfhost_merged.osty:7372:5
 	if opAt(p, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
-		// Osty: /tmp/selfhost_merged.osty:7370:36
+		// Osty: /tmp/selfhost_merged.osty:7372:36
 		kind = "infinite"
 	} else if opAt(p, FrontTokenKind(&FrontTokenKind_FrontLet{})) {
-		// Osty: /tmp/selfhost_merged.osty:7371:14
+		// Osty: /tmp/selfhost_merged.osty:7373:14
 		kind = "forlet"
-		// Osty: /tmp/selfhost_merged.osty:7372:9
-		_ = opAdvance(p)
-		// Osty: /tmp/selfhost_merged.osty:7373:16
-		patIdx = opParsePattern(p)
 		// Osty: /tmp/selfhost_merged.osty:7374:9
+		_ = opAdvance(p)
+		// Osty: /tmp/selfhost_merged.osty:7375:16
+		patIdx = opParsePattern(p)
+		// Osty: /tmp/selfhost_merged.osty:7376:9
 		_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontAssign{}))
-		// Osty: /tmp/selfhost_merged.osty:7375:9
+		// Osty: /tmp/selfhost_merged.osty:7377:9
 		pv := p.noStructLit
 		_ = pv
-		// Osty: /tmp/selfhost_merged.osty:7376:23
-		p.noStructLit = true
-		// Osty: /tmp/selfhost_merged.osty:7377:17
-		condIdx = opParseExpr(p)
 		// Osty: /tmp/selfhost_merged.osty:7378:23
+		p.noStructLit = true
+		// Osty: /tmp/selfhost_merged.osty:7379:17
+		condIdx = opParseExpr(p)
+		// Osty: /tmp/selfhost_merged.osty:7380:23
 		p.noStructLit = pv
 	} else if opLooksLikeForInPattern(p) {
-		// Osty: /tmp/selfhost_merged.osty:7380:14
+		// Osty: /tmp/selfhost_merged.osty:7382:14
 		kind = "forin"
-		// Osty: /tmp/selfhost_merged.osty:7381:16
+		// Osty: /tmp/selfhost_merged.osty:7383:16
 		patIdx = opParsePattern(p)
-		// Osty: /tmp/selfhost_merged.osty:7382:9
+		// Osty: /tmp/selfhost_merged.osty:7384:9
 		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})) && opPeek(p).text == "in" {
-			// Osty: /tmp/selfhost_merged.osty:7382:60
+			// Osty: /tmp/selfhost_merged.osty:7384:60
 			_ = opAdvance(p)
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:7383:13
+			// Osty: /tmp/selfhost_merged.osty:7385:13
 			opErrorFull(p, "expected `in` after for pattern", "write `for pattern in iterable { ... }`", "", "E0001")
 		}
-		// Osty: /tmp/selfhost_merged.osty:7385:9
+		// Osty: /tmp/selfhost_merged.osty:7387:9
 		pv2 := p.noStructLit
 		_ = pv2
-		// Osty: /tmp/selfhost_merged.osty:7386:23
-		p.noStructLit = true
-		// Osty: /tmp/selfhost_merged.osty:7387:17
-		iterIdx = opParseExpr(p)
 		// Osty: /tmp/selfhost_merged.osty:7388:23
+		p.noStructLit = true
+		// Osty: /tmp/selfhost_merged.osty:7389:17
+		iterIdx = opParseExpr(p)
+		// Osty: /tmp/selfhost_merged.osty:7390:23
 		p.noStructLit = pv2
 	} else {
-		// Osty: /tmp/selfhost_merged.osty:7390:9
+		// Osty: /tmp/selfhost_merged.osty:7392:9
 		pv := p.noStructLit
 		_ = pv
-		// Osty: /tmp/selfhost_merged.osty:7391:23
+		// Osty: /tmp/selfhost_merged.osty:7393:23
 		p.noStructLit = true
-		// Osty: /tmp/selfhost_merged.osty:7392:9
+		// Osty: /tmp/selfhost_merged.osty:7394:9
 		expr := opParseExpr(p)
 		_ = expr
-		// Osty: /tmp/selfhost_merged.osty:7393:23
+		// Osty: /tmp/selfhost_merged.osty:7395:23
 		p.noStructLit = pv
-		// Osty: /tmp/selfhost_merged.osty:7394:9
+		// Osty: /tmp/selfhost_merged.osty:7396:9
 		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})) && opPeek(p).text == "in" {
-			// Osty: /tmp/selfhost_merged.osty:7395:13
+			// Osty: /tmp/selfhost_merged.osty:7397:13
 			_ = opAdvance(p)
-			// Osty: /tmp/selfhost_merged.osty:7396:18
+			// Osty: /tmp/selfhost_merged.osty:7398:18
 			kind = "forin"
-			// Osty: /tmp/selfhost_merged.osty:7397:20
+			// Osty: /tmp/selfhost_merged.osty:7399:20
 			patIdx = expr
-			// Osty: /tmp/selfhost_merged.osty:7398:13
+			// Osty: /tmp/selfhost_merged.osty:7400:13
 			pv2 := p.noStructLit
 			_ = pv2
-			// Osty: /tmp/selfhost_merged.osty:7399:27
-			p.noStructLit = true
-			// Osty: /tmp/selfhost_merged.osty:7400:21
-			iterIdx = opParseExpr(p)
 			// Osty: /tmp/selfhost_merged.osty:7401:27
+			p.noStructLit = true
+			// Osty: /tmp/selfhost_merged.osty:7402:21
+			iterIdx = opParseExpr(p)
+			// Osty: /tmp/selfhost_merged.osty:7403:27
 			p.noStructLit = pv2
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:7402:23
+			// Osty: /tmp/selfhost_merged.osty:7404:23
 			kind = "cond"
-			// Osty: /tmp/selfhost_merged.osty:7403:17
+			// Osty: /tmp/selfhost_merged.osty:7405:17
 			condIdx = expr
 		}
 	}
-	// Osty: /tmp/selfhost_merged.osty:7405:5
+	// Osty: /tmp/selfhost_merged.osty:7407:5
 	body := opParseBlock(p)
 	_ = body
-	// Osty: /tmp/selfhost_merged.osty:7406:14
+	// Osty: /tmp/selfhost_merged.osty:7408:14
 	p.inLoop = prevInLoop
-	// Osty: /tmp/selfhost_merged.osty:7407:5
+	// Osty: /tmp/selfhost_merged.osty:7409:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNFor{}))
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:7408:12
+	// Osty: /tmp/selfhost_merged.osty:7410:12
 	n.text = kind
-	// Osty: /tmp/selfhost_merged.osty:7409:12
+	// Osty: /tmp/selfhost_merged.osty:7411:12
 	n.left = condIdx
-	// Osty: /tmp/selfhost_merged.osty:7410:13
-	n.right = body
-	// Osty: /tmp/selfhost_merged.osty:7411:16
-	n.children = []int{patIdx, iterIdx}
 	// Osty: /tmp/selfhost_merged.osty:7412:13
+	n.right = body
+	// Osty: /tmp/selfhost_merged.osty:7413:16
+	n.children = []int{patIdx, iterIdx}
+	// Osty: /tmp/selfhost_merged.osty:7414:13
 	n.start = start
-	// Osty: /tmp/selfhost_merged.osty:7413:11
+	// Osty: /tmp/selfhost_merged.osty:7415:11
 	n.end = p.pos
 	return opAddNode(p, n)
 }
 
-// Osty: /tmp/selfhost_merged.osty:7417:1
+// Osty: /tmp/selfhost_merged.osty:7419:1
 func opLooksLikeForInPattern(p *OstyParser) bool {
 	return opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})) && astIsUpperName(opPeek(p).text) && (ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) || ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) || ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontDot{})))
 }
 
-// Osty: /tmp/selfhost_merged.osty:7425:1
+// Osty: /tmp/selfhost_merged.osty:7427:1
 func opParsePattern(p *OstyParser) int {
-	// Osty: /tmp/selfhost_merged.osty:7426:5
+	// Osty: /tmp/selfhost_merged.osty:7428:5
 	left := opParsePatternOneAlt(p)
 	_ = left
-	// Osty: /tmp/selfhost_merged.osty:7427:5
+	// Osty: /tmp/selfhost_merged.osty:7429:5
 	for opAt(p, FrontTokenKind(&FrontTokenKind_FrontBitOr{})) {
-		// Osty: /tmp/selfhost_merged.osty:7427:31
+		// Osty: /tmp/selfhost_merged.osty:7429:31
 		opAdvance(p)
-		// Osty: /tmp/selfhost_merged.osty:7428:5
+		// Osty: /tmp/selfhost_merged.osty:7430:5
 		right := opParsePatternOneAlt(p)
 		_ = right
-		// Osty: /tmp/selfhost_merged.osty:7429:5
+		// Osty: /tmp/selfhost_merged.osty:7431:5
 		n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNPattern{}))
 		_ = n
-		// Osty: /tmp/selfhost_merged.osty:7430:12
+		// Osty: /tmp/selfhost_merged.osty:7432:12
 		n.text = "or"
-		// Osty: /tmp/selfhost_merged.osty:7431:12
+		// Osty: /tmp/selfhost_merged.osty:7433:12
 		n.left = left
-		// Osty: /tmp/selfhost_merged.osty:7432:13
+		// Osty: /tmp/selfhost_merged.osty:7434:13
 		n.right = right
-		// Osty: /tmp/selfhost_merged.osty:7433:13
+		// Osty: /tmp/selfhost_merged.osty:7435:13
 		n.start = p.pos
-		// Osty: /tmp/selfhost_merged.osty:7434:10
+		// Osty: /tmp/selfhost_merged.osty:7436:10
 		left = opAddNode(p, n)
 	}
 	return left
 }
 
-// Osty: /tmp/selfhost_merged.osty:7438:1
+// Osty: /tmp/selfhost_merged.osty:7440:1
 func opParsePatternOneAlt(p *OstyParser) int {
-	// Osty: /tmp/selfhost_merged.osty:7439:5
+	// Osty: /tmp/selfhost_merged.osty:7441:5
 	tok := opPeek(p)
 	_ = tok
-	// Osty: /tmp/selfhost_merged.osty:7440:5
+	// Osty: /tmp/selfhost_merged.osty:7442:5
 	start := p.pos
 	_ = start
-	// Osty: /tmp/selfhost_merged.osty:7441:5
+	// Osty: /tmp/selfhost_merged.osty:7443:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontUnderscore{})) {
-		// Osty: /tmp/selfhost_merged.osty:7441:38
+		// Osty: /tmp/selfhost_merged.osty:7443:38
 		opAdvance(p)
-		// Osty: /tmp/selfhost_merged.osty:7442:5
+		// Osty: /tmp/selfhost_merged.osty:7444:5
 		n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNPattern{}))
 		_ = n
-		// Osty: /tmp/selfhost_merged.osty:7443:12
+		// Osty: /tmp/selfhost_merged.osty:7445:12
 		n.text = "wildcard"
-		// Osty: /tmp/selfhost_merged.osty:7444:13
+		// Osty: /tmp/selfhost_merged.osty:7446:13
 		n.start = start
-		// Osty: /tmp/selfhost_merged.osty:7445:11
+		// Osty: /tmp/selfhost_merged.osty:7447:11
 		n.end = p.pos
-		// Osty: /tmp/selfhost_merged.osty:7446:5
+		// Osty: /tmp/selfhost_merged.osty:7448:5
 		return opAddNode(p, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7447:5
+	// Osty: /tmp/selfhost_merged.osty:7449:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontInt{})) || ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontFloat{})) || ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontString{})) || ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontRawString{})) || ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontChar{})) || ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontByte{})) {
-		// Osty: /tmp/selfhost_merged.osty:7448:9
+		// Osty: /tmp/selfhost_merged.osty:7450:9
 		opAdvance(p)
-		// Osty: /tmp/selfhost_merged.osty:7449:9
+		// Osty: /tmp/selfhost_merged.osty:7451:9
 		n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNPattern{}))
 		_ = n
-		// Osty: /tmp/selfhost_merged.osty:7450:16
+		// Osty: /tmp/selfhost_merged.osty:7452:16
 		n.text = fmt.Sprintf("literal:%s", ostyToString(tok.text))
-		// Osty: /tmp/selfhost_merged.osty:7451:14
+		// Osty: /tmp/selfhost_merged.osty:7453:14
 		n.op = tok.kind
-		// Osty: /tmp/selfhost_merged.osty:7452:17
+		// Osty: /tmp/selfhost_merged.osty:7454:17
 		n.start = start
-		// Osty: /tmp/selfhost_merged.osty:7453:15
+		// Osty: /tmp/selfhost_merged.osty:7455:15
 		n.end = p.pos
-		// Osty: /tmp/selfhost_merged.osty:7454:9
+		// Osty: /tmp/selfhost_merged.osty:7456:9
 		patIdx := opAddNode(p, n)
 		_ = patIdx
-		// Osty: /tmp/selfhost_merged.osty:7455:9
+		// Osty: /tmp/selfhost_merged.osty:7457:9
 		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontDotDot{})) || opAt(p, FrontTokenKind(&FrontTokenKind_FrontDotDotEq{})) {
-			// Osty: /tmp/selfhost_merged.osty:7456:13
+			// Osty: /tmp/selfhost_merged.osty:7458:13
 			inclusive := opAt(p, FrontTokenKind(&FrontTokenKind_FrontDotDotEq{}))
 			_ = inclusive
-			// Osty: /tmp/selfhost_merged.osty:7457:13
+			// Osty: /tmp/selfhost_merged.osty:7459:13
 			opAdvance(p)
-			// Osty: /tmp/selfhost_merged.osty:7458:13
+			// Osty: /tmp/selfhost_merged.osty:7460:13
 			rhsIdx := -1
 			_ = rhsIdx
-			// Osty: /tmp/selfhost_merged.osty:7459:13
+			// Osty: /tmp/selfhost_merged.osty:7461:13
 			if !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontArrow{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontBitOr{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontIf{}))) {
-				// Osty: /tmp/selfhost_merged.osty:7459:150
+				// Osty: /tmp/selfhost_merged.osty:7461:150
 				rhsIdx = opParsePatternOneAlt(p)
 			}
-			// Osty: /tmp/selfhost_merged.osty:7460:13
+			// Osty: /tmp/selfhost_merged.osty:7462:13
 			rn := emptyAstNode(AstNodeKind(&AstNodeKind_AstNPattern{}))
 			_ = rn
-			// Osty: /tmp/selfhost_merged.osty:7461:21
+			// Osty: /tmp/selfhost_merged.osty:7463:21
 			rn.text = "range"
-			// Osty: /tmp/selfhost_merged.osty:7462:21
+			// Osty: /tmp/selfhost_merged.osty:7464:21
 			rn.left = patIdx
-			// Osty: /tmp/selfhost_merged.osty:7463:22
+			// Osty: /tmp/selfhost_merged.osty:7465:22
 			rn.right = rhsIdx
-			// Osty: /tmp/selfhost_merged.osty:7464:22
+			// Osty: /tmp/selfhost_merged.osty:7466:22
 			rn.start = start
-			// Osty: /tmp/selfhost_merged.osty:7465:20
+			// Osty: /tmp/selfhost_merged.osty:7467:20
 			rn.end = p.pos
-			// Osty: /tmp/selfhost_merged.osty:7466:13
+			// Osty: /tmp/selfhost_merged.osty:7468:13
 			if inclusive {
-				// Osty: /tmp/selfhost_merged.osty:7466:37
+				// Osty: /tmp/selfhost_merged.osty:7468:37
 				rn.flags = 1
 			}
-			// Osty: /tmp/selfhost_merged.osty:7467:13
+			// Osty: /tmp/selfhost_merged.osty:7469:13
 			return opAddNode(p, rn)
 		}
-		// Osty: /tmp/selfhost_merged.osty:7469:9
+		// Osty: /tmp/selfhost_merged.osty:7471:9
 		return patIdx
 	}
-	// Osty: /tmp/selfhost_merged.osty:7471:5
+	// Osty: /tmp/selfhost_merged.osty:7473:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontDotDot{})) || ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontDotDotEq{})) {
-		// Osty: /tmp/selfhost_merged.osty:7472:9
+		// Osty: /tmp/selfhost_merged.osty:7474:9
 		inclusive := ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontDotDotEq{}))
 		_ = inclusive
-		// Osty: /tmp/selfhost_merged.osty:7473:9
+		// Osty: /tmp/selfhost_merged.osty:7475:9
 		opAdvance(p)
-		// Osty: /tmp/selfhost_merged.osty:7474:9
+		// Osty: /tmp/selfhost_merged.osty:7476:9
 		rhsIdx := -1
 		_ = rhsIdx
-		// Osty: /tmp/selfhost_merged.osty:7475:9
+		// Osty: /tmp/selfhost_merged.osty:7477:9
 		if !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontArrow{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontBitOr{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontIf{}))) {
-			// Osty: /tmp/selfhost_merged.osty:7475:146
+			// Osty: /tmp/selfhost_merged.osty:7477:146
 			rhsIdx = opParsePatternOneAlt(p)
 		}
-		// Osty: /tmp/selfhost_merged.osty:7476:9
+		// Osty: /tmp/selfhost_merged.osty:7478:9
 		rn := emptyAstNode(AstNodeKind(&AstNodeKind_AstNPattern{}))
 		_ = rn
-		// Osty: /tmp/selfhost_merged.osty:7477:17
+		// Osty: /tmp/selfhost_merged.osty:7479:17
 		rn.text = "range"
-		// Osty: /tmp/selfhost_merged.osty:7478:17
+		// Osty: /tmp/selfhost_merged.osty:7480:17
 		rn.left = -1
-		// Osty: /tmp/selfhost_merged.osty:7479:18
+		// Osty: /tmp/selfhost_merged.osty:7481:18
 		rn.right = rhsIdx
-		// Osty: /tmp/selfhost_merged.osty:7480:18
+		// Osty: /tmp/selfhost_merged.osty:7482:18
 		rn.start = start
-		// Osty: /tmp/selfhost_merged.osty:7481:16
+		// Osty: /tmp/selfhost_merged.osty:7483:16
 		rn.end = p.pos
-		// Osty: /tmp/selfhost_merged.osty:7482:9
+		// Osty: /tmp/selfhost_merged.osty:7484:9
 		if inclusive {
-			// Osty: /tmp/selfhost_merged.osty:7482:33
+			// Osty: /tmp/selfhost_merged.osty:7484:33
 			rn.flags = 1
 		}
-		// Osty: /tmp/selfhost_merged.osty:7483:9
+		// Osty: /tmp/selfhost_merged.osty:7485:9
 		return opAddNode(p, rn)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7485:5
+	// Osty: /tmp/selfhost_merged.osty:7487:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontMinus{})) {
-		// Osty: /tmp/selfhost_merged.osty:7485:33
+		// Osty: /tmp/selfhost_merged.osty:7487:33
 		opAdvance(p)
-		// Osty: /tmp/selfhost_merged.osty:7486:5
+		// Osty: /tmp/selfhost_merged.osty:7488:5
 		inner := opParsePatternOneAlt(p)
 		_ = inner
-		// Osty: /tmp/selfhost_merged.osty:7487:5
+		// Osty: /tmp/selfhost_merged.osty:7489:5
 		n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNPattern{}))
 		_ = n
-		// Osty: /tmp/selfhost_merged.osty:7488:12
+		// Osty: /tmp/selfhost_merged.osty:7490:12
 		n.text = "negLiteral"
-		// Osty: /tmp/selfhost_merged.osty:7489:12
+		// Osty: /tmp/selfhost_merged.osty:7491:12
 		n.left = inner
-		// Osty: /tmp/selfhost_merged.osty:7490:13
+		// Osty: /tmp/selfhost_merged.osty:7492:13
 		n.start = start
-		// Osty: /tmp/selfhost_merged.osty:7491:11
+		// Osty: /tmp/selfhost_merged.osty:7493:11
 		n.end = p.pos
-		// Osty: /tmp/selfhost_merged.osty:7492:5
+		// Osty: /tmp/selfhost_merged.osty:7494:5
 		return opAddNode(p, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7493:5
+	// Osty: /tmp/selfhost_merged.osty:7495:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) {
-		// Osty: /tmp/selfhost_merged.osty:7494:9
+		// Osty: /tmp/selfhost_merged.osty:7496:9
 		opAdvance(p)
-		// Osty: /tmp/selfhost_merged.osty:7495:9
+		// Osty: /tmp/selfhost_merged.osty:7497:9
 		var elems []int = make([]int, 0, 1)
 		_ = elems
-		// Osty: /tmp/selfhost_merged.osty:7496:9
+		// Osty: /tmp/selfhost_merged.osty:7498:9
 		opSkipNewlines(p)
-		// Osty: /tmp/selfhost_merged.osty:7497:9
+		// Osty: /tmp/selfhost_merged.osty:7499:9
 		for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontRParen{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-			// Osty: /tmp/selfhost_merged.osty:7497:63
+			// Osty: /tmp/selfhost_merged.osty:7499:63
 			func() struct{} { elems = append(elems, opParsePattern(p)); return struct{}{} }()
-			// Osty: /tmp/selfhost_merged.osty:7498:9
+			// Osty: /tmp/selfhost_merged.osty:7500:9
 			if !(opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))) {
-				// Osty: /tmp/selfhost_merged.osty:7498:38
+				// Osty: /tmp/selfhost_merged.osty:7500:38
 				break
 			}
-			// Osty: /tmp/selfhost_merged.osty:7499:9
+			// Osty: /tmp/selfhost_merged.osty:7501:9
 			opSkipNewlines(p)
 		}
-		// Osty: /tmp/selfhost_merged.osty:7500:9
+		// Osty: /tmp/selfhost_merged.osty:7502:9
 		opExpect(p, FrontTokenKind(&FrontTokenKind_FrontRParen{}))
-		// Osty: /tmp/selfhost_merged.osty:7501:9
+		// Osty: /tmp/selfhost_merged.osty:7503:9
 		n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNPattern{}))
 		_ = n
-		// Osty: /tmp/selfhost_merged.osty:7502:16
+		// Osty: /tmp/selfhost_merged.osty:7504:16
 		n.text = "tuple"
-		// Osty: /tmp/selfhost_merged.osty:7503:20
+		// Osty: /tmp/selfhost_merged.osty:7505:20
 		n.children = elems
-		// Osty: /tmp/selfhost_merged.osty:7504:17
+		// Osty: /tmp/selfhost_merged.osty:7506:17
 		n.start = start
-		// Osty: /tmp/selfhost_merged.osty:7505:15
+		// Osty: /tmp/selfhost_merged.osty:7507:15
 		n.end = p.pos
-		// Osty: /tmp/selfhost_merged.osty:7506:9
+		// Osty: /tmp/selfhost_merged.osty:7508:9
 		return opAddNode(p, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7508:5
+	// Osty: /tmp/selfhost_merged.osty:7510:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) {
-		// Osty: /tmp/selfhost_merged.osty:7509:9
+		// Osty: /tmp/selfhost_merged.osty:7511:9
 		name := tok.text
 		_ = name
-		// Osty: /tmp/selfhost_merged.osty:7510:9
+		// Osty: /tmp/selfhost_merged.osty:7512:9
 		opAdvance(p)
-		// Osty: /tmp/selfhost_merged.osty:7511:9
+		// Osty: /tmp/selfhost_merged.osty:7513:9
 		qualifiedName := name
 		_ = qualifiedName
-		// Osty: /tmp/selfhost_merged.osty:7512:9
+		// Osty: /tmp/selfhost_merged.osty:7514:9
 		for opAt(p, FrontTokenKind(&FrontTokenKind_FrontDot{})) && ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) {
-			// Osty: /tmp/selfhost_merged.osty:7513:13
+			// Osty: /tmp/selfhost_merged.osty:7515:13
 			_ = opAdvance(p)
-			// Osty: /tmp/selfhost_merged.osty:7514:27
+			// Osty: /tmp/selfhost_merged.osty:7516:27
 			qualifiedName = fmt.Sprintf("%s.%s", ostyToString(qualifiedName), ostyToString(opAdvance(p).text))
 		}
-		// Osty: /tmp/selfhost_merged.osty:7516:9
+		// Osty: /tmp/selfhost_merged.osty:7518:9
 		if name == "true" || name == "false" {
-			// Osty: /tmp/selfhost_merged.osty:7516:48
+			// Osty: /tmp/selfhost_merged.osty:7518:48
 			n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNPattern{}))
 			_ = n
-			// Osty: /tmp/selfhost_merged.osty:7517:16
+			// Osty: /tmp/selfhost_merged.osty:7519:16
 			n.text = fmt.Sprintf("literal:%s", ostyToString(name))
-			// Osty: /tmp/selfhost_merged.osty:7518:9
+			// Osty: /tmp/selfhost_merged.osty:7520:9
 			if name == "true" {
-				// Osty: /tmp/selfhost_merged.osty:7518:37
+				// Osty: /tmp/selfhost_merged.osty:7520:37
 				n.flags = 1
 			} else {
-				// Osty: /tmp/selfhost_merged.osty:7518:58
+				// Osty: /tmp/selfhost_merged.osty:7520:58
 				n.flags = 2
 			}
-			// Osty: /tmp/selfhost_merged.osty:7519:17
+			// Osty: /tmp/selfhost_merged.osty:7521:17
 			n.start = start
-			// Osty: /tmp/selfhost_merged.osty:7520:15
+			// Osty: /tmp/selfhost_merged.osty:7522:15
 			n.end = p.pos
-			// Osty: /tmp/selfhost_merged.osty:7521:9
+			// Osty: /tmp/selfhost_merged.osty:7523:9
 			return opAddNode(p, n)
 		}
-		// Osty: /tmp/selfhost_merged.osty:7522:9
+		// Osty: /tmp/selfhost_merged.osty:7524:9
 		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontLParen{})) && astIsUpperName(name) {
-			// Osty: /tmp/selfhost_merged.osty:7523:13
+			// Osty: /tmp/selfhost_merged.osty:7525:13
 			opAdvance(p)
-			// Osty: /tmp/selfhost_merged.osty:7524:13
+			// Osty: /tmp/selfhost_merged.osty:7526:13
 			var fields []int = make([]int, 0, 1)
 			_ = fields
-			// Osty: /tmp/selfhost_merged.osty:7525:13
+			// Osty: /tmp/selfhost_merged.osty:7527:13
 			for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontRParen{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-				// Osty: /tmp/selfhost_merged.osty:7525:67
+				// Osty: /tmp/selfhost_merged.osty:7527:67
 				func() struct{} { fields = append(fields, opParsePattern(p)); return struct{}{} }()
-				// Osty: /tmp/selfhost_merged.osty:7526:13
+				// Osty: /tmp/selfhost_merged.osty:7528:13
 				if !(opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))) {
-					// Osty: /tmp/selfhost_merged.osty:7526:42
+					// Osty: /tmp/selfhost_merged.osty:7528:42
 					break
 				}
 			}
-			// Osty: /tmp/selfhost_merged.osty:7527:13
+			// Osty: /tmp/selfhost_merged.osty:7529:13
 			_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontRParen{}))
-			// Osty: /tmp/selfhost_merged.osty:7528:13
+			// Osty: /tmp/selfhost_merged.osty:7530:13
 			n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNPattern{}))
 			_ = n
-			// Osty: /tmp/selfhost_merged.osty:7529:20
+			// Osty: /tmp/selfhost_merged.osty:7531:20
 			n.text = fmt.Sprintf("variant:%s", ostyToString(qualifiedName))
-			// Osty: /tmp/selfhost_merged.osty:7530:18
+			// Osty: /tmp/selfhost_merged.osty:7532:18
 			n.op = FrontTokenKind(&FrontTokenKind_FrontIdent{})
-			// Osty: /tmp/selfhost_merged.osty:7531:24
+			// Osty: /tmp/selfhost_merged.osty:7533:24
 			n.children = fields
-			// Osty: /tmp/selfhost_merged.osty:7532:21
+			// Osty: /tmp/selfhost_merged.osty:7534:21
 			n.start = start
-			// Osty: /tmp/selfhost_merged.osty:7533:19
+			// Osty: /tmp/selfhost_merged.osty:7535:19
 			n.end = p.pos
-			// Osty: /tmp/selfhost_merged.osty:7534:13
+			// Osty: /tmp/selfhost_merged.osty:7536:13
 			return opAddNode(p, n)
 		}
-		// Osty: /tmp/selfhost_merged.osty:7536:9
+		// Osty: /tmp/selfhost_merged.osty:7538:9
 		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) && astIsUpperName(name) {
-			// Osty: /tmp/selfhost_merged.osty:7537:13
+			// Osty: /tmp/selfhost_merged.osty:7539:13
 			opAdvance(p)
-			// Osty: /tmp/selfhost_merged.osty:7538:13
+			// Osty: /tmp/selfhost_merged.osty:7540:13
 			var fields []int = make([]int, 0, 1)
 			_ = fields
-			// Osty: /tmp/selfhost_merged.osty:7539:13
+			// Osty: /tmp/selfhost_merged.osty:7541:13
 			hasRest := false
 			_ = hasRest
-			// Osty: /tmp/selfhost_merged.osty:7540:13
+			// Osty: /tmp/selfhost_merged.osty:7542:13
 			opSkipNewlines(p)
-			// Osty: /tmp/selfhost_merged.osty:7541:13
+			// Osty: /tmp/selfhost_merged.osty:7543:13
 			for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-				// Osty: /tmp/selfhost_merged.osty:7542:17
+				// Osty: /tmp/selfhost_merged.osty:7544:17
 				if opAt(p, FrontTokenKind(&FrontTokenKind_FrontDotDot{})) {
-					// Osty: /tmp/selfhost_merged.osty:7542:43
+					// Osty: /tmp/selfhost_merged.osty:7544:43
 					opAdvance(p)
-					// Osty: /tmp/selfhost_merged.osty:7543:25
+					// Osty: /tmp/selfhost_merged.osty:7545:25
 					hasRest = true
-					// Osty: /tmp/selfhost_merged.osty:7544:17
+					// Osty: /tmp/selfhost_merged.osty:7546:17
 					break
 				}
-				// Osty: /tmp/selfhost_merged.osty:7545:17
+				// Osty: /tmp/selfhost_merged.osty:7547:17
 				if opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})) && ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontColon{})) {
-					// Osty: /tmp/selfhost_merged.osty:7546:21
+					// Osty: /tmp/selfhost_merged.osty:7548:21
 					fs := p.pos
 					_ = fs
-					// Osty: /tmp/selfhost_merged.osty:7547:21
+					// Osty: /tmp/selfhost_merged.osty:7549:21
 					fn_ := opAdvance(p).text
 					_ = fn_
-					// Osty: /tmp/selfhost_merged.osty:7548:21
+					// Osty: /tmp/selfhost_merged.osty:7550:21
 					opAdvance(p)
-					// Osty: /tmp/selfhost_merged.osty:7549:21
+					// Osty: /tmp/selfhost_merged.osty:7551:21
 					fp := opParsePattern(p)
 					_ = fp
-					// Osty: /tmp/selfhost_merged.osty:7550:21
+					// Osty: /tmp/selfhost_merged.osty:7552:21
 					fNode := emptyAstNode(AstNodeKind(&AstNodeKind_AstNPattern{}))
 					_ = fNode
-					// Osty: /tmp/selfhost_merged.osty:7551:32
+					// Osty: /tmp/selfhost_merged.osty:7553:32
 					fNode.text = fn_
-					// Osty: /tmp/selfhost_merged.osty:7552:32
+					// Osty: /tmp/selfhost_merged.osty:7554:32
 					fNode.left = fp
-					// Osty: /tmp/selfhost_merged.osty:7553:33
+					// Osty: /tmp/selfhost_merged.osty:7555:33
 					fNode.start = fs
-					// Osty: /tmp/selfhost_merged.osty:7554:31
+					// Osty: /tmp/selfhost_merged.osty:7556:31
 					fNode.end = p.pos
-					// Osty: /tmp/selfhost_merged.osty:7555:21
+					// Osty: /tmp/selfhost_merged.osty:7557:21
 					func() struct{} { fields = append(fields, opAddNode(p, fNode)); return struct{}{} }()
 				} else {
-					// Osty: /tmp/selfhost_merged.osty:7556:26
+					// Osty: /tmp/selfhost_merged.osty:7558:26
 					func() struct{} { fields = append(fields, opParsePattern(p)); return struct{}{} }()
 				}
-				// Osty: /tmp/selfhost_merged.osty:7557:17
+				// Osty: /tmp/selfhost_merged.osty:7559:17
 				if !(opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))) {
-					// Osty: /tmp/selfhost_merged.osty:7557:46
+					// Osty: /tmp/selfhost_merged.osty:7559:46
 					break
 				}
-				// Osty: /tmp/selfhost_merged.osty:7558:17
+				// Osty: /tmp/selfhost_merged.osty:7560:17
 				opSkipNewlines(p)
 			}
-			// Osty: /tmp/selfhost_merged.osty:7560:13
+			// Osty: /tmp/selfhost_merged.osty:7562:13
 			opExpect(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))
-			// Osty: /tmp/selfhost_merged.osty:7561:13
+			// Osty: /tmp/selfhost_merged.osty:7563:13
 			n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNPattern{}))
 			_ = n
-			// Osty: /tmp/selfhost_merged.osty:7562:20
+			// Osty: /tmp/selfhost_merged.osty:7564:20
 			n.text = fmt.Sprintf("struct:%s", ostyToString(qualifiedName))
-			// Osty: /tmp/selfhost_merged.osty:7563:18
+			// Osty: /tmp/selfhost_merged.osty:7565:18
 			n.op = FrontTokenKind(&FrontTokenKind_FrontLBrace{})
-			// Osty: /tmp/selfhost_merged.osty:7564:24
+			// Osty: /tmp/selfhost_merged.osty:7566:24
 			n.children = fields
-			// Osty: /tmp/selfhost_merged.osty:7565:21
+			// Osty: /tmp/selfhost_merged.osty:7567:21
 			n.start = start
-			// Osty: /tmp/selfhost_merged.osty:7566:19
+			// Osty: /tmp/selfhost_merged.osty:7568:19
 			n.end = p.pos
-			// Osty: /tmp/selfhost_merged.osty:7567:13
+			// Osty: /tmp/selfhost_merged.osty:7569:13
 			if hasRest {
-				// Osty: /tmp/selfhost_merged.osty:7567:34
+				// Osty: /tmp/selfhost_merged.osty:7569:34
 				n.flags = 1
 			}
-			// Osty: /tmp/selfhost_merged.osty:7568:13
+			// Osty: /tmp/selfhost_merged.osty:7570:13
 			return opAddNode(p, n)
 		}
-		// Osty: /tmp/selfhost_merged.osty:7570:9
+		// Osty: /tmp/selfhost_merged.osty:7572:9
 		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontAt{})) {
-			// Osty: /tmp/selfhost_merged.osty:7570:31
+			// Osty: /tmp/selfhost_merged.osty:7572:31
 			opAdvance(p)
-			// Osty: /tmp/selfhost_merged.osty:7571:9
+			// Osty: /tmp/selfhost_merged.osty:7573:9
 			inner := opParsePatternOneAlt(p)
 			_ = inner
-			// Osty: /tmp/selfhost_merged.osty:7572:9
+			// Osty: /tmp/selfhost_merged.osty:7574:9
 			n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNPattern{}))
 			_ = n
-			// Osty: /tmp/selfhost_merged.osty:7573:16
-			n.text = fmt.Sprintf("binding:%s", ostyToString(name))
-			// Osty: /tmp/selfhost_merged.osty:7574:14
-			n.op = FrontTokenKind(&FrontTokenKind_FrontAt{})
 			// Osty: /tmp/selfhost_merged.osty:7575:16
+			n.text = fmt.Sprintf("binding:%s", ostyToString(name))
+			// Osty: /tmp/selfhost_merged.osty:7576:14
+			n.op = FrontTokenKind(&FrontTokenKind_FrontAt{})
+			// Osty: /tmp/selfhost_merged.osty:7577:16
 			n.left = inner
-			// Osty: /tmp/selfhost_merged.osty:7576:17
+			// Osty: /tmp/selfhost_merged.osty:7578:17
 			n.start = start
-			// Osty: /tmp/selfhost_merged.osty:7577:15
+			// Osty: /tmp/selfhost_merged.osty:7579:15
 			n.end = p.pos
-			// Osty: /tmp/selfhost_merged.osty:7578:9
+			// Osty: /tmp/selfhost_merged.osty:7580:9
 			return opAddNode(p, n)
 		}
-		// Osty: /tmp/selfhost_merged.osty:7579:9
+		// Osty: /tmp/selfhost_merged.osty:7581:9
 		n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNPattern{}))
 		_ = n
-		// Osty: /tmp/selfhost_merged.osty:7580:9
+		// Osty: /tmp/selfhost_merged.osty:7582:9
 		if strings.Count(qualifiedName, ".") > 0 {
-			// Osty: /tmp/selfhost_merged.osty:7581:13
+			// Osty: /tmp/selfhost_merged.osty:7583:13
 			n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNPattern{}))
 			_ = n
-			// Osty: /tmp/selfhost_merged.osty:7582:20
+			// Osty: /tmp/selfhost_merged.osty:7584:20
 			n.text = fmt.Sprintf("variant:%s", ostyToString(qualifiedName))
-			// Osty: /tmp/selfhost_merged.osty:7583:21
+			// Osty: /tmp/selfhost_merged.osty:7585:21
 			n.start = start
-			// Osty: /tmp/selfhost_merged.osty:7584:19
+			// Osty: /tmp/selfhost_merged.osty:7586:19
 			n.end = p.pos
-			// Osty: /tmp/selfhost_merged.osty:7585:13
+			// Osty: /tmp/selfhost_merged.osty:7587:13
 			return opAddNode(p, n)
 		}
-		// Osty: /tmp/selfhost_merged.osty:7587:16
+		// Osty: /tmp/selfhost_merged.osty:7589:16
 		n.text = fmt.Sprintf("ident:%s", ostyToString(name))
-		// Osty: /tmp/selfhost_merged.osty:7588:14
+		// Osty: /tmp/selfhost_merged.osty:7590:14
 		n.op = FrontTokenKind(&FrontTokenKind_FrontIdent{})
-		// Osty: /tmp/selfhost_merged.osty:7589:17
+		// Osty: /tmp/selfhost_merged.osty:7591:17
 		n.start = start
-		// Osty: /tmp/selfhost_merged.osty:7590:15
+		// Osty: /tmp/selfhost_merged.osty:7592:15
 		n.end = p.pos
-		// Osty: /tmp/selfhost_merged.osty:7591:9
+		// Osty: /tmp/selfhost_merged.osty:7593:9
 		return opAddNode(p, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7593:5
-	opError(p, "expected pattern")
-	// Osty: /tmp/selfhost_merged.osty:7594:5
-	opAdvance(p)
 	// Osty: /tmp/selfhost_merged.osty:7595:5
+	opError(p, "expected pattern")
+	// Osty: /tmp/selfhost_merged.osty:7596:5
+	opAdvance(p)
+	// Osty: /tmp/selfhost_merged.osty:7597:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNPattern{}))
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:7596:12
+	// Osty: /tmp/selfhost_merged.osty:7598:12
 	n.text = "error"
-	// Osty: /tmp/selfhost_merged.osty:7597:13
+	// Osty: /tmp/selfhost_merged.osty:7599:13
 	n.start = p.pos
 	return opAddNode(p, n)
 }
 
-// Osty: /tmp/selfhost_merged.osty:7605:1
+// Osty: /tmp/selfhost_merged.osty:7607:1
 func opParseType(p *OstyParser) int {
-	// Osty: /tmp/selfhost_merged.osty:7606:5
+	// Osty: /tmp/selfhost_merged.osty:7608:5
 	ty := opParseTypeAtom(p)
 	_ = ty
-	// Osty: /tmp/selfhost_merged.osty:7607:5
+	// Osty: /tmp/selfhost_merged.osty:7609:5
 	for opAt(p, FrontTokenKind(&FrontTokenKind_FrontQuestion{})) || opAt(p, FrontTokenKind(&FrontTokenKind_FrontQQ{})) {
-		// Osty: /tmp/selfhost_merged.osty:7607:54
+		// Osty: /tmp/selfhost_merged.osty:7609:54
 		s := p.pos
 		_ = s
-		// Osty: /tmp/selfhost_merged.osty:7608:5
+		// Osty: /tmp/selfhost_merged.osty:7610:5
 		isDouble := opAt(p, FrontTokenKind(&FrontTokenKind_FrontQQ{}))
 		_ = isDouble
-		// Osty: /tmp/selfhost_merged.osty:7609:5
+		// Osty: /tmp/selfhost_merged.osty:7611:5
 		_ = opAdvance(p)
-		// Osty: /tmp/selfhost_merged.osty:7610:5
+		// Osty: /tmp/selfhost_merged.osty:7612:5
 		n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNType{}))
 		_ = n
-		// Osty: /tmp/selfhost_merged.osty:7611:12
+		// Osty: /tmp/selfhost_merged.osty:7613:12
 		n.text = "optional"
-		// Osty: /tmp/selfhost_merged.osty:7612:12
+		// Osty: /tmp/selfhost_merged.osty:7614:12
 		n.left = ty
-		// Osty: /tmp/selfhost_merged.osty:7613:13
+		// Osty: /tmp/selfhost_merged.osty:7615:13
 		n.start = s
-		// Osty: /tmp/selfhost_merged.osty:7614:11
+		// Osty: /tmp/selfhost_merged.osty:7616:11
 		n.end = p.pos
-		// Osty: /tmp/selfhost_merged.osty:7615:8
+		// Osty: /tmp/selfhost_merged.osty:7617:8
 		ty = opAddNode(p, n)
-		// Osty: /tmp/selfhost_merged.osty:7616:5
+		// Osty: /tmp/selfhost_merged.osty:7618:5
 		if isDouble {
-			// Osty: /tmp/selfhost_merged.osty:7617:9
+			// Osty: /tmp/selfhost_merged.osty:7619:9
 			n2 := emptyAstNode(AstNodeKind(&AstNodeKind_AstNType{}))
 			_ = n2
-			// Osty: /tmp/selfhost_merged.osty:7618:17
+			// Osty: /tmp/selfhost_merged.osty:7620:17
 			n2.text = "optional"
-			// Osty: /tmp/selfhost_merged.osty:7619:17
+			// Osty: /tmp/selfhost_merged.osty:7621:17
 			n2.left = ty
-			// Osty: /tmp/selfhost_merged.osty:7620:18
+			// Osty: /tmp/selfhost_merged.osty:7622:18
 			n2.start = s
-			// Osty: /tmp/selfhost_merged.osty:7621:16
+			// Osty: /tmp/selfhost_merged.osty:7623:16
 			n2.end = p.pos
-			// Osty: /tmp/selfhost_merged.osty:7622:12
+			// Osty: /tmp/selfhost_merged.osty:7624:12
 			ty = opAddNode(p, n2)
 		}
 	}
 	return ty
 }
 
-// Osty: /tmp/selfhost_merged.osty:7627:1
+// Osty: /tmp/selfhost_merged.osty:7629:1
 func opParseTypeAtom(p *OstyParser) int {
-	// Osty: /tmp/selfhost_merged.osty:7628:5
+	// Osty: /tmp/selfhost_merged.osty:7630:5
 	tok := opPeek(p)
 	_ = tok
-	// Osty: /tmp/selfhost_merged.osty:7629:5
+	// Osty: /tmp/selfhost_merged.osty:7631:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontFn{})) {
-		// Osty: /tmp/selfhost_merged.osty:7629:30
+		// Osty: /tmp/selfhost_merged.osty:7631:30
 		return opParseFnType(p)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7630:5
+	// Osty: /tmp/selfhost_merged.osty:7632:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) {
-		// Osty: /tmp/selfhost_merged.osty:7630:34
+		// Osty: /tmp/selfhost_merged.osty:7632:34
 		return opParseTupleType(p)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7631:5
+	// Osty: /tmp/selfhost_merged.osty:7633:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) {
-		// Osty: /tmp/selfhost_merged.osty:7632:9
+		// Osty: /tmp/selfhost_merged.osty:7634:9
 		start := p.pos
 		_ = start
-		// Osty: /tmp/selfhost_merged.osty:7633:9
+		// Osty: /tmp/selfhost_merged.osty:7635:9
 		name := tok.text
 		_ = name
-		// Osty: /tmp/selfhost_merged.osty:7634:9
+		// Osty: /tmp/selfhost_merged.osty:7636:9
 		opAdvance(p)
-		// Osty: /tmp/selfhost_merged.osty:7635:9
+		// Osty: /tmp/selfhost_merged.osty:7637:9
 		for opAt(p, FrontTokenKind(&FrontTokenKind_FrontDot{})) && ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) {
-			// Osty: /tmp/selfhost_merged.osty:7636:13
-			opAdvance(p)
-			// Osty: /tmp/selfhost_merged.osty:7637:18
-			name = fmt.Sprintf("%s.%s", ostyToString(name), ostyToString(opPeek(p).text))
 			// Osty: /tmp/selfhost_merged.osty:7638:13
 			opAdvance(p)
+			// Osty: /tmp/selfhost_merged.osty:7639:18
+			name = fmt.Sprintf("%s.%s", ostyToString(name), ostyToString(opPeek(p).text))
+			// Osty: /tmp/selfhost_merged.osty:7640:13
+			opAdvance(p)
 		}
-		// Osty: /tmp/selfhost_merged.osty:7640:9
+		// Osty: /tmp/selfhost_merged.osty:7642:9
 		var typeArgs []int = make([]int, 0, 1)
 		_ = typeArgs
-		// Osty: /tmp/selfhost_merged.osty:7641:9
+		// Osty: /tmp/selfhost_merged.osty:7643:9
 		if opEat(p, FrontTokenKind(&FrontTokenKind_FrontLt{})) {
-			// Osty: /tmp/selfhost_merged.osty:7642:13
+			// Osty: /tmp/selfhost_merged.osty:7644:13
 			if opAt(p, FrontTokenKind(&FrontTokenKind_FrontGt{})) || opAt(p, FrontTokenKind(&FrontTokenKind_FrontShr{})) || opAt(p, FrontTokenKind(&FrontTokenKind_FrontGeq{})) || opAt(p, FrontTokenKind(&FrontTokenKind_FrontShrEq{})) {
-				// Osty: /tmp/selfhost_merged.osty:7643:17
+				// Osty: /tmp/selfhost_merged.osty:7645:17
 				opErrorFull(p, "type argument list requires at least one type", "remove `<>` or provide a type, e.g. `<Int>`", "", "E0300")
 			}
-			// Osty: /tmp/selfhost_merged.osty:7645:13
+			// Osty: /tmp/selfhost_merged.osty:7647:13
 			for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontGt{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontShr{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontGeq{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontShrEq{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-				// Osty: /tmp/selfhost_merged.osty:7645:137
+				// Osty: /tmp/selfhost_merged.osty:7647:137
 				func() struct{} { typeArgs = append(typeArgs, opParseType(p)); return struct{}{} }()
-				// Osty: /tmp/selfhost_merged.osty:7646:13
+				// Osty: /tmp/selfhost_merged.osty:7648:13
 				if !(opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))) {
-					// Osty: /tmp/selfhost_merged.osty:7646:42
+					// Osty: /tmp/selfhost_merged.osty:7648:42
 					break
 				}
 			}
-			// Osty: /tmp/selfhost_merged.osty:7647:13
+			// Osty: /tmp/selfhost_merged.osty:7649:13
 			opExpectTypeGT(p)
 		}
-		// Osty: /tmp/selfhost_merged.osty:7649:9
+		// Osty: /tmp/selfhost_merged.osty:7651:9
 		n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNType{}))
 		_ = n
-		// Osty: /tmp/selfhost_merged.osty:7650:16
+		// Osty: /tmp/selfhost_merged.osty:7652:16
 		n.text = name
-		// Osty: /tmp/selfhost_merged.osty:7651:20
+		// Osty: /tmp/selfhost_merged.osty:7653:20
 		n.children = typeArgs
-		// Osty: /tmp/selfhost_merged.osty:7652:17
+		// Osty: /tmp/selfhost_merged.osty:7654:17
 		n.start = start
-		// Osty: /tmp/selfhost_merged.osty:7653:15
+		// Osty: /tmp/selfhost_merged.osty:7655:15
 		n.end = p.pos
-		// Osty: /tmp/selfhost_merged.osty:7654:9
+		// Osty: /tmp/selfhost_merged.osty:7656:9
 		return opAddNode(p, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7656:5
-	opErrorFull(p, "expected type", "a type is `Int`, `String`, `List<T>`, `fn(T) -> R`, or `(T, U)`", "", "E0300")
-	// Osty: /tmp/selfhost_merged.osty:7657:5
-	opAdvance(p)
 	// Osty: /tmp/selfhost_merged.osty:7658:5
+	opErrorFull(p, "expected type", "a type is `Int`, `String`, `List<T>`, `fn(T) -> R`, or `(T, U)`", "", "E0300")
+	// Osty: /tmp/selfhost_merged.osty:7659:5
+	opAdvance(p)
+	// Osty: /tmp/selfhost_merged.osty:7660:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNType{}))
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:7659:12
+	// Osty: /tmp/selfhost_merged.osty:7661:12
 	n.text = "error"
-	// Osty: /tmp/selfhost_merged.osty:7660:13
+	// Osty: /tmp/selfhost_merged.osty:7662:13
 	n.start = p.pos
 	return opAddNode(p, n)
 }
 
-// Osty: /tmp/selfhost_merged.osty:7664:1
+// Osty: /tmp/selfhost_merged.osty:7666:1
 func opExpectTypeGT(p *OstyParser) {
-	// Osty: /tmp/selfhost_merged.osty:7665:5
-	if opAt(p, FrontTokenKind(&FrontTokenKind_FrontGt{})) {
-		// Osty: /tmp/selfhost_merged.osty:7665:27
-		opAdvance(p)
-		// Osty: /tmp/selfhost_merged.osty:7666:5
-		return
-	}
 	// Osty: /tmp/selfhost_merged.osty:7667:5
+	if opAt(p, FrontTokenKind(&FrontTokenKind_FrontGt{})) {
+		// Osty: /tmp/selfhost_merged.osty:7667:27
+		opAdvance(p)
+		// Osty: /tmp/selfhost_merged.osty:7668:5
+		return
+	}
+	// Osty: /tmp/selfhost_merged.osty:7669:5
 	if opAt(p, FrontTokenKind(&FrontTokenKind_FrontShr{})) {
-		// Osty: /tmp/selfhost_merged.osty:7668:15
+		// Osty: /tmp/selfhost_merged.osty:7670:15
 		p.pos = p.pos + 1
-		// Osty: /tmp/selfhost_merged.osty:7669:21
+		// Osty: /tmp/selfhost_merged.osty:7671:21
 		p.pendingGt = p.pendingGt + 1
-		// Osty: /tmp/selfhost_merged.osty:7670:9
+		// Osty: /tmp/selfhost_merged.osty:7672:9
 		return
 	}
-	// Osty: /tmp/selfhost_merged.osty:7672:5
+	// Osty: /tmp/selfhost_merged.osty:7674:5
 	if opAt(p, FrontTokenKind(&FrontTokenKind_FrontGeq{})) {
-		// Osty: /tmp/selfhost_merged.osty:7673:15
+		// Osty: /tmp/selfhost_merged.osty:7675:15
 		p.pos = p.pos + 1
-		// Osty: /tmp/selfhost_merged.osty:7674:25
+		// Osty: /tmp/selfhost_merged.osty:7676:25
 		p.pendingAssign = true
-		// Osty: /tmp/selfhost_merged.osty:7675:9
+		// Osty: /tmp/selfhost_merged.osty:7677:9
 		return
 	}
-	// Osty: /tmp/selfhost_merged.osty:7677:5
+	// Osty: /tmp/selfhost_merged.osty:7679:5
 	if opAt(p, FrontTokenKind(&FrontTokenKind_FrontShrEq{})) {
-		// Osty: /tmp/selfhost_merged.osty:7678:15
+		// Osty: /tmp/selfhost_merged.osty:7680:15
 		p.pos = p.pos + 1
-		// Osty: /tmp/selfhost_merged.osty:7679:21
+		// Osty: /tmp/selfhost_merged.osty:7681:21
 		p.pendingGt = p.pendingGt + 1
-		// Osty: /tmp/selfhost_merged.osty:7680:25
+		// Osty: /tmp/selfhost_merged.osty:7682:25
 		p.pendingAssign = true
-		// Osty: /tmp/selfhost_merged.osty:7681:9
+		// Osty: /tmp/selfhost_merged.osty:7683:9
 		return
 	}
-	// Osty: /tmp/selfhost_merged.osty:7683:5
+	// Osty: /tmp/selfhost_merged.osty:7685:5
 	opExpect(p, FrontTokenKind(&FrontTokenKind_FrontGt{}))
 }
 
-// Osty: /tmp/selfhost_merged.osty:7686:1
+// Osty: /tmp/selfhost_merged.osty:7688:1
 func opIsAnnotationArgNameToken(kind FrontTokenKind) bool {
 	return ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontUse{}))
 }
 
-// Osty: /tmp/selfhost_merged.osty:7690:1
+// Osty: /tmp/selfhost_merged.osty:7692:1
 func opParseFnType(p *OstyParser) int {
-	// Osty: /tmp/selfhost_merged.osty:7691:5
+	// Osty: /tmp/selfhost_merged.osty:7693:5
 	start := p.pos
 	_ = start
-	// Osty: /tmp/selfhost_merged.osty:7692:5
-	opAdvance(p)
-	// Osty: /tmp/selfhost_merged.osty:7693:5
-	opExpect(p, FrontTokenKind(&FrontTokenKind_FrontLParen{}))
 	// Osty: /tmp/selfhost_merged.osty:7694:5
+	opAdvance(p)
+	// Osty: /tmp/selfhost_merged.osty:7695:5
+	opExpect(p, FrontTokenKind(&FrontTokenKind_FrontLParen{}))
+	// Osty: /tmp/selfhost_merged.osty:7696:5
 	var params []int = make([]int, 0, 1)
 	_ = params
-	// Osty: /tmp/selfhost_merged.osty:7695:5
+	// Osty: /tmp/selfhost_merged.osty:7697:5
 	for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontRParen{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-		// Osty: /tmp/selfhost_merged.osty:7695:59
+		// Osty: /tmp/selfhost_merged.osty:7697:59
 		func() struct{} { params = append(params, opParseType(p)); return struct{}{} }()
-		// Osty: /tmp/selfhost_merged.osty:7696:5
+		// Osty: /tmp/selfhost_merged.osty:7698:5
 		if !(opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))) {
-			// Osty: /tmp/selfhost_merged.osty:7696:34
+			// Osty: /tmp/selfhost_merged.osty:7698:34
 			break
 		}
 	}
-	// Osty: /tmp/selfhost_merged.osty:7697:5
+	// Osty: /tmp/selfhost_merged.osty:7699:5
 	opExpect(p, FrontTokenKind(&FrontTokenKind_FrontRParen{}))
-	// Osty: /tmp/selfhost_merged.osty:7698:5
+	// Osty: /tmp/selfhost_merged.osty:7700:5
 	retIdx := -1
 	_ = retIdx
-	// Osty: /tmp/selfhost_merged.osty:7699:5
+	// Osty: /tmp/selfhost_merged.osty:7701:5
 	if opEat(p, FrontTokenKind(&FrontTokenKind_FrontArrow{})) {
-		// Osty: /tmp/selfhost_merged.osty:7699:38
+		// Osty: /tmp/selfhost_merged.osty:7701:38
 		retIdx = opParseType(p)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7700:5
+	// Osty: /tmp/selfhost_merged.osty:7702:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNType{}))
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:7701:12
+	// Osty: /tmp/selfhost_merged.osty:7703:12
 	n.text = "fn"
-	// Osty: /tmp/selfhost_merged.osty:7702:16
+	// Osty: /tmp/selfhost_merged.osty:7704:16
 	n.children = params
-	// Osty: /tmp/selfhost_merged.osty:7703:13
+	// Osty: /tmp/selfhost_merged.osty:7705:13
 	n.right = retIdx
-	// Osty: /tmp/selfhost_merged.osty:7704:13
+	// Osty: /tmp/selfhost_merged.osty:7706:13
 	n.start = start
-	// Osty: /tmp/selfhost_merged.osty:7705:11
+	// Osty: /tmp/selfhost_merged.osty:7707:11
 	n.end = p.pos
 	return opAddNode(p, n)
 }
 
-// Osty: /tmp/selfhost_merged.osty:7709:1
+// Osty: /tmp/selfhost_merged.osty:7711:1
 func opParseTupleType(p *OstyParser) int {
-	// Osty: /tmp/selfhost_merged.osty:7710:5
+	// Osty: /tmp/selfhost_merged.osty:7712:5
 	start := p.pos
 	_ = start
-	// Osty: /tmp/selfhost_merged.osty:7711:5
+	// Osty: /tmp/selfhost_merged.osty:7713:5
 	opAdvance(p)
-	// Osty: /tmp/selfhost_merged.osty:7712:5
+	// Osty: /tmp/selfhost_merged.osty:7714:5
 	var elems []int = make([]int, 0, 1)
 	_ = elems
-	// Osty: /tmp/selfhost_merged.osty:7713:5
+	// Osty: /tmp/selfhost_merged.osty:7715:5
 	for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontRParen{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-		// Osty: /tmp/selfhost_merged.osty:7713:59
+		// Osty: /tmp/selfhost_merged.osty:7715:59
 		func() struct{} { elems = append(elems, opParseType(p)); return struct{}{} }()
-		// Osty: /tmp/selfhost_merged.osty:7714:5
+		// Osty: /tmp/selfhost_merged.osty:7716:5
 		if !(opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))) {
-			// Osty: /tmp/selfhost_merged.osty:7714:34
+			// Osty: /tmp/selfhost_merged.osty:7716:34
 			break
 		}
 	}
-	// Osty: /tmp/selfhost_merged.osty:7715:5
+	// Osty: /tmp/selfhost_merged.osty:7717:5
 	opExpect(p, FrontTokenKind(&FrontTokenKind_FrontRParen{}))
-	// Osty: /tmp/selfhost_merged.osty:7716:5
+	// Osty: /tmp/selfhost_merged.osty:7718:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNType{}))
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:7717:12
+	// Osty: /tmp/selfhost_merged.osty:7719:12
 	n.text = "tuple"
-	// Osty: /tmp/selfhost_merged.osty:7718:16
+	// Osty: /tmp/selfhost_merged.osty:7720:16
 	n.children = elems
-	// Osty: /tmp/selfhost_merged.osty:7719:13
+	// Osty: /tmp/selfhost_merged.osty:7721:13
 	n.start = start
-	// Osty: /tmp/selfhost_merged.osty:7720:11
+	// Osty: /tmp/selfhost_merged.osty:7722:11
 	n.end = p.pos
 	return opAddNode(p, n)
 }
 
-// Osty: /tmp/selfhost_merged.osty:7728:1
+// Osty: /tmp/selfhost_merged.osty:7730:1
 func opParseAnnotations(p *OstyParser) []int {
-	// Osty: /tmp/selfhost_merged.osty:7729:5
+	// Osty: /tmp/selfhost_merged.osty:7731:5
 	var anns []int = make([]int, 0, 1)
 	_ = anns
-	// Osty: /tmp/selfhost_merged.osty:7730:5
+	// Osty: /tmp/selfhost_merged.osty:7732:5
 	for opAt(p, FrontTokenKind(&FrontTokenKind_FrontHash{})) && ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontLBracket{})) {
-		// Osty: /tmp/selfhost_merged.osty:7731:9
+		// Osty: /tmp/selfhost_merged.osty:7733:9
 		start := p.pos
 		_ = start
-		// Osty: /tmp/selfhost_merged.osty:7732:9
-		_ = opAdvance(p)
-		// Osty: /tmp/selfhost_merged.osty:7733:9
-		_ = opAdvance(p)
 		// Osty: /tmp/selfhost_merged.osty:7734:9
+		_ = opAdvance(p)
+		// Osty: /tmp/selfhost_merged.osty:7735:9
+		_ = opAdvance(p)
+		// Osty: /tmp/selfhost_merged.osty:7736:9
 		annName := ""
 		_ = annName
-		// Osty: /tmp/selfhost_merged.osty:7735:9
+		// Osty: /tmp/selfhost_merged.osty:7737:9
 		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})) {
-			// Osty: /tmp/selfhost_merged.osty:7735:42
+			// Osty: /tmp/selfhost_merged.osty:7737:42
 			annName = opAdvance(p).text
 		}
-		// Osty: /tmp/selfhost_merged.osty:7736:9
+		// Osty: /tmp/selfhost_merged.osty:7738:9
 		var annArgs []int = make([]int, 0, 1)
 		_ = annArgs
-		// Osty: /tmp/selfhost_merged.osty:7737:9
+		// Osty: /tmp/selfhost_merged.osty:7739:9
 		if opEat(p, FrontTokenKind(&FrontTokenKind_FrontLParen{})) {
-			// Osty: /tmp/selfhost_merged.osty:7738:13
+			// Osty: /tmp/selfhost_merged.osty:7740:13
 			for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontRParen{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-				// Osty: /tmp/selfhost_merged.osty:7739:13
+				// Osty: /tmp/selfhost_merged.osty:7741:13
 				argName := ""
 				_ = argName
-				// Osty: /tmp/selfhost_merged.osty:7740:13
+				// Osty: /tmp/selfhost_merged.osty:7742:13
 				argStart := p.pos
 				_ = argStart
-				// Osty: /tmp/selfhost_merged.osty:7741:13
-				if opIsAnnotationArgNameToken(opPeek(p).kind) && ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontAssign{})) {
-					// Osty: /tmp/selfhost_merged.osty:7741:107
-					argName = opAdvance(p).text
-					// Osty: /tmp/selfhost_merged.osty:7742:13
-					_ = opAdvance(p)
-				}
 				// Osty: /tmp/selfhost_merged.osty:7743:13
-				if !(astStartsExpr(opPeek(p).kind)) {
-					// Osty: /tmp/selfhost_merged.osty:7743:51
-					opError(p, "expected annotation arg name")
+				if opIsAnnotationArgNameToken(opPeek(p).kind) && ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontAssign{})) {
+					// Osty: /tmp/selfhost_merged.osty:7743:107
+					argName = opAdvance(p).text
 					// Osty: /tmp/selfhost_merged.osty:7744:13
 					_ = opAdvance(p)
-					// Osty: /tmp/selfhost_merged.osty:7745:13
+				}
+				// Osty: /tmp/selfhost_merged.osty:7745:13
+				if !(astStartsExpr(opPeek(p).kind)) {
+					// Osty: /tmp/selfhost_merged.osty:7745:51
+					opError(p, "expected annotation arg name")
+					// Osty: /tmp/selfhost_merged.osty:7746:13
+					_ = opAdvance(p)
+					// Osty: /tmp/selfhost_merged.osty:7747:13
 					if !(opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))) {
-						// Osty: /tmp/selfhost_merged.osty:7745:42
+						// Osty: /tmp/selfhost_merged.osty:7747:42
 						break
 					}
-					// Osty: /tmp/selfhost_merged.osty:7746:13
+					// Osty: /tmp/selfhost_merged.osty:7748:13
 					continue
 				}
-				// Osty: /tmp/selfhost_merged.osty:7747:13
+				// Osty: /tmp/selfhost_merged.osty:7749:13
 				argValue := opParseExpr(p)
 				_ = argValue
-				// Osty: /tmp/selfhost_merged.osty:7748:13
+				// Osty: /tmp/selfhost_merged.osty:7750:13
 				if argName != "" {
-					// Osty: /tmp/selfhost_merged.osty:7749:17
+					// Osty: /tmp/selfhost_merged.osty:7751:17
 					argNode := emptyAstNode(AstNodeKind(&AstNodeKind_AstNField_{}))
 					_ = argNode
-					// Osty: /tmp/selfhost_merged.osty:7750:30
+					// Osty: /tmp/selfhost_merged.osty:7752:30
 					argNode.text = argName
-					// Osty: /tmp/selfhost_merged.osty:7751:30
+					// Osty: /tmp/selfhost_merged.osty:7753:30
 					argNode.left = argValue
-					// Osty: /tmp/selfhost_merged.osty:7752:31
+					// Osty: /tmp/selfhost_merged.osty:7754:31
 					argNode.start = argStart
-					// Osty: /tmp/selfhost_merged.osty:7753:29
+					// Osty: /tmp/selfhost_merged.osty:7755:29
 					argNode.end = p.pos
-					// Osty: /tmp/selfhost_merged.osty:7754:17
+					// Osty: /tmp/selfhost_merged.osty:7756:17
 					func() struct{} { annArgs = append(annArgs, opAddNode(p, argNode)); return struct{}{} }()
 				} else {
-					// Osty: /tmp/selfhost_merged.osty:7755:22
+					// Osty: /tmp/selfhost_merged.osty:7757:22
 					func() struct{} { annArgs = append(annArgs, argValue); return struct{}{} }()
 				}
-				// Osty: /tmp/selfhost_merged.osty:7756:13
+				// Osty: /tmp/selfhost_merged.osty:7758:13
 				if !(opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))) {
-					// Osty: /tmp/selfhost_merged.osty:7756:42
+					// Osty: /tmp/selfhost_merged.osty:7758:42
 					break
 				}
 			}
-			// Osty: /tmp/selfhost_merged.osty:7757:13
+			// Osty: /tmp/selfhost_merged.osty:7759:13
 			_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontRParen{}))
 		}
-		// Osty: /tmp/selfhost_merged.osty:7759:9
+		// Osty: /tmp/selfhost_merged.osty:7761:9
 		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontAssign{})) {
-			// Osty: /tmp/selfhost_merged.osty:7759:35
+			// Osty: /tmp/selfhost_merged.osty:7761:35
 			_ = opAdvance(p)
-			// Osty: /tmp/selfhost_merged.osty:7760:9
+			// Osty: /tmp/selfhost_merged.osty:7762:9
 			func() struct{} { annArgs = append(annArgs, opParseExpr(p)); return struct{}{} }()
 		}
-		// Osty: /tmp/selfhost_merged.osty:7761:9
+		// Osty: /tmp/selfhost_merged.osty:7763:9
 		_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontRBracket{}))
-		// Osty: /tmp/selfhost_merged.osty:7762:9
+		// Osty: /tmp/selfhost_merged.osty:7764:9
 		if annName != "" && !(opAnnotationNameAllowed(annName)) {
-			// Osty: /tmp/selfhost_merged.osty:7763:13
+			// Osty: /tmp/selfhost_merged.osty:7765:13
 			opErrorFull(p, fmt.Sprintf("unknown annotation `#[%s]`", ostyToString(annName)), "remove the annotation or use an allowed one", "v0.2 R26 fixes the built-in set: `#[json(...)]`, `#[deprecated(...)]`, `#[allow(...)]`, `#[intrinsic_methods]`, and `#[requires(...)]`", "E0400")
 		}
-		// Osty: /tmp/selfhost_merged.osty:7765:9
+		// Osty: /tmp/selfhost_merged.osty:7767:9
 		n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNAnnotation{}))
 		_ = n
-		// Osty: /tmp/selfhost_merged.osty:7766:16
+		// Osty: /tmp/selfhost_merged.osty:7768:16
 		n.text = annName
-		// Osty: /tmp/selfhost_merged.osty:7767:20
+		// Osty: /tmp/selfhost_merged.osty:7769:20
 		n.children = annArgs
-		// Osty: /tmp/selfhost_merged.osty:7768:17
+		// Osty: /tmp/selfhost_merged.osty:7770:17
 		n.start = start
-		// Osty: /tmp/selfhost_merged.osty:7769:15
+		// Osty: /tmp/selfhost_merged.osty:7771:15
 		n.end = p.pos
-		// Osty: /tmp/selfhost_merged.osty:7770:9
+		// Osty: /tmp/selfhost_merged.osty:7772:9
 		func() struct{} { anns = append(anns, opAddNode(p, n)); return struct{}{} }()
-		// Osty: /tmp/selfhost_merged.osty:7771:9
+		// Osty: /tmp/selfhost_merged.osty:7773:9
 		opSkipNewlines(p)
 	}
 	return anns
 }
 
-// Osty: /tmp/selfhost_merged.osty:7780:1
+// Osty: /tmp/selfhost_merged.osty:7782:1
 func opParseDecl(p *OstyParser) int {
-	// Osty: /tmp/selfhost_merged.osty:7781:5
+	// Osty: /tmp/selfhost_merged.osty:7783:5
 	opSkipNewlines(p)
-	// Osty: /tmp/selfhost_merged.osty:7782:5
+	// Osty: /tmp/selfhost_merged.osty:7784:5
 	anns := opParseAnnotations(p)
 	_ = anns
-	// Osty: /tmp/selfhost_merged.osty:7783:5
+	// Osty: /tmp/selfhost_merged.osty:7785:5
 	isPub := false
 	_ = isPub
-	// Osty: /tmp/selfhost_merged.osty:7784:5
+	// Osty: /tmp/selfhost_merged.osty:7786:5
 	if opEat(p, FrontTokenKind(&FrontTokenKind_FrontPub{})) {
-		// Osty: /tmp/selfhost_merged.osty:7784:35
+		// Osty: /tmp/selfhost_merged.osty:7786:35
 		isPub = true
 	}
-	// Osty: /tmp/selfhost_merged.osty:7785:5
+	// Osty: /tmp/selfhost_merged.osty:7787:5
 	tok := opPeek(p)
 	_ = tok
-	// Osty: /tmp/selfhost_merged.osty:7786:5
+	// Osty: /tmp/selfhost_merged.osty:7788:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontFn{})) {
-		// Osty: /tmp/selfhost_merged.osty:7786:30
+		// Osty: /tmp/selfhost_merged.osty:7788:30
 		return opParseFnDecl(p, isPub, anns)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7787:5
+	// Osty: /tmp/selfhost_merged.osty:7789:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontStruct{})) {
-		// Osty: /tmp/selfhost_merged.osty:7787:34
+		// Osty: /tmp/selfhost_merged.osty:7789:34
 		return opParseStructDecl(p, isPub, anns)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7788:5
+	// Osty: /tmp/selfhost_merged.osty:7790:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontEnum{})) {
-		// Osty: /tmp/selfhost_merged.osty:7788:32
+		// Osty: /tmp/selfhost_merged.osty:7790:32
 		return opParseEnumDecl(p, isPub, anns)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7789:5
+	// Osty: /tmp/selfhost_merged.osty:7791:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontInterface{})) {
-		// Osty: /tmp/selfhost_merged.osty:7789:37
+		// Osty: /tmp/selfhost_merged.osty:7791:37
 		return opParseInterfaceDecl(p, isPub, anns)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7790:5
+	// Osty: /tmp/selfhost_merged.osty:7792:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontType{})) {
-		// Osty: /tmp/selfhost_merged.osty:7790:32
+		// Osty: /tmp/selfhost_merged.osty:7792:32
 		return opParseTypeAliasDecl(p, isPub, anns)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7791:5
+	// Osty: /tmp/selfhost_merged.osty:7793:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontUse{})) {
-		// Osty: /tmp/selfhost_merged.osty:7792:9
+		// Osty: /tmp/selfhost_merged.osty:7794:9
 		if opIntListCount(anns) > 0 {
-			// Osty: /tmp/selfhost_merged.osty:7792:39
+			// Osty: /tmp/selfhost_merged.osty:7794:39
 			opErrorFull(p, "annotations cannot be attached to use declarations", "", "", "E0607")
 		}
-		// Osty: /tmp/selfhost_merged.osty:7793:9
+		// Osty: /tmp/selfhost_merged.osty:7795:9
 		return opParseUseDecl(p)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7795:5
+	// Osty: /tmp/selfhost_merged.osty:7797:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontLet{})) {
-		// Osty: /tmp/selfhost_merged.osty:7795:31
+		// Osty: /tmp/selfhost_merged.osty:7797:31
 		return opParseLetStmt(p)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7796:5
+	// Osty: /tmp/selfhost_merged.osty:7798:5
 	errKindName := frontTokenKindName(tok.kind)
 	_ = errKindName
-	// Osty: /tmp/selfhost_merged.osty:7797:5
-	opErrorFull(p, fmt.Sprintf("expected declaration, got %s", ostyToString(errKindName)), "a declaration starts with `fn`, `struct`, `enum`, `interface`, `type`, `use`, or `let`", "", "E0030")
-	// Osty: /tmp/selfhost_merged.osty:7798:5
-	opSyncDecl(p)
 	// Osty: /tmp/selfhost_merged.osty:7799:5
+	opErrorFull(p, fmt.Sprintf("expected declaration, got %s", ostyToString(errKindName)), "a declaration starts with `fn`, `struct`, `enum`, `interface`, `type`, `use`, or `let`", "", "E0030")
+	// Osty: /tmp/selfhost_merged.osty:7800:5
+	opSyncDecl(p)
+	// Osty: /tmp/selfhost_merged.osty:7801:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNError{}))
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:7800:13
+	// Osty: /tmp/selfhost_merged.osty:7802:13
 	n.start = p.pos
 	return opAddNode(p, n)
 }
 
-// Osty: /tmp/selfhost_merged.osty:7804:1
+// Osty: /tmp/selfhost_merged.osty:7806:1
 func opIntListCount(items []int) int {
-	// Osty: /tmp/selfhost_merged.osty:7805:5
+	// Osty: /tmp/selfhost_merged.osty:7807:5
 	count := 0
 	_ = count
-	// Osty: /tmp/selfhost_merged.osty:7806:5
+	// Osty: /tmp/selfhost_merged.osty:7808:5
 	for _, item := range items {
-		// Osty: /tmp/selfhost_merged.osty:7807:9
+		// Osty: /tmp/selfhost_merged.osty:7809:9
 		_ = item
-		// Osty: /tmp/selfhost_merged.osty:7808:15
+		// Osty: /tmp/selfhost_merged.osty:7810:15
 		count = count + 1
 	}
 	return count
 }
 
-// Osty: /tmp/selfhost_merged.osty:7813:1
+// Osty: /tmp/selfhost_merged.osty:7815:1
 func opDefaultExprError(p *OstyParser, tok *FrontToken) {
-	// Osty: /tmp/selfhost_merged.osty:7814:5
+	// Osty: /tmp/selfhost_merged.osty:7816:5
 	gotName := frontTokenKindName(tok.kind)
 	_ = gotName
-	// Osty: /tmp/selfhost_merged.osty:7815:5
+	// Osty: /tmp/selfhost_merged.osty:7817:5
 	opErrorFull(p, fmt.Sprintf("default value must be a literal, got %s", ostyToString(gotName)), "if you need a computed default, build the value at the call site instead", "v0.2 R18: parameter and field defaults are restricted to literals, `None`, `Ok(lit)`, `Err(lit)`, `[]`, `{:}`, or `()`", "E0106")
 }
 
-// Osty: /tmp/selfhost_merged.osty:7818:1
+// Osty: /tmp/selfhost_merged.osty:7820:1
 func opParseDefaultIdentCall(p *OstyParser, name string, start int) int {
-	// Osty: /tmp/selfhost_merged.osty:7819:5
+	// Osty: /tmp/selfhost_merged.osty:7821:5
 	callee := emptyAstNode(AstNodeKind(&AstNodeKind_AstNIdent{}))
 	_ = callee
-	// Osty: /tmp/selfhost_merged.osty:7820:17
+	// Osty: /tmp/selfhost_merged.osty:7822:17
 	callee.text = name
-	// Osty: /tmp/selfhost_merged.osty:7821:18
+	// Osty: /tmp/selfhost_merged.osty:7823:18
 	callee.start = start
-	// Osty: /tmp/selfhost_merged.osty:7822:16
+	// Osty: /tmp/selfhost_merged.osty:7824:16
 	callee.end = p.pos
-	// Osty: /tmp/selfhost_merged.osty:7823:5
+	// Osty: /tmp/selfhost_merged.osty:7825:5
 	calleeIdx := opAddNode(p, callee)
 	_ = calleeIdx
-	// Osty: /tmp/selfhost_merged.osty:7824:5
+	// Osty: /tmp/selfhost_merged.osty:7826:5
 	if !(opEat(p, FrontTokenKind(&FrontTokenKind_FrontLParen{}))) {
-		// Osty: /tmp/selfhost_merged.osty:7825:9
+		// Osty: /tmp/selfhost_merged.osty:7827:9
 		opErrorFull(p, fmt.Sprintf("expected `(` after `%s` in default value", ostyToString(name)), "", "", "")
-		// Osty: /tmp/selfhost_merged.osty:7826:9
+		// Osty: /tmp/selfhost_merged.osty:7828:9
 		return calleeIdx
 	}
-	// Osty: /tmp/selfhost_merged.osty:7828:5
+	// Osty: /tmp/selfhost_merged.osty:7830:5
 	value := opParseDefaultExpr(p)
 	_ = value
-	// Osty: /tmp/selfhost_merged.osty:7829:5
+	// Osty: /tmp/selfhost_merged.osty:7831:5
 	opExpect(p, FrontTokenKind(&FrontTokenKind_FrontRParen{}))
-	// Osty: /tmp/selfhost_merged.osty:7830:5
+	// Osty: /tmp/selfhost_merged.osty:7832:5
 	callNode := emptyAstNode(AstNodeKind(&AstNodeKind_AstNCall{}))
 	_ = callNode
-	// Osty: /tmp/selfhost_merged.osty:7831:19
+	// Osty: /tmp/selfhost_merged.osty:7833:19
 	callNode.left = calleeIdx
-	// Osty: /tmp/selfhost_merged.osty:7832:23
+	// Osty: /tmp/selfhost_merged.osty:7834:23
 	callNode.children = []int{value}
-	// Osty: /tmp/selfhost_merged.osty:7833:20
+	// Osty: /tmp/selfhost_merged.osty:7835:20
 	callNode.start = start
-	// Osty: /tmp/selfhost_merged.osty:7834:18
+	// Osty: /tmp/selfhost_merged.osty:7836:18
 	callNode.end = p.pos
 	return opAddNode(p, callNode)
 }
 
-// Osty: /tmp/selfhost_merged.osty:7838:1
+// Osty: /tmp/selfhost_merged.osty:7840:1
 func opParseDefaultExpr(p *OstyParser) int {
-	// Osty: /tmp/selfhost_merged.osty:7839:5
+	// Osty: /tmp/selfhost_merged.osty:7841:5
 	tok := opPeek(p)
 	_ = tok
-	// Osty: /tmp/selfhost_merged.osty:7840:5
+	// Osty: /tmp/selfhost_merged.osty:7842:5
 	start := p.pos
 	_ = start
-	// Osty: /tmp/selfhost_merged.osty:7841:5
+	// Osty: /tmp/selfhost_merged.osty:7843:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontInt{})) || ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontFloat{})) || ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontString{})) || ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontRawString{})) || ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontChar{})) || ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontByte{})) {
-		// Osty: /tmp/selfhost_merged.osty:7842:9
+		// Osty: /tmp/selfhost_merged.osty:7844:9
 		return opParsePrimary(p)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7844:5
+	// Osty: /tmp/selfhost_merged.osty:7846:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontMinus{})) {
-		// Osty: /tmp/selfhost_merged.osty:7845:9
+		// Osty: /tmp/selfhost_merged.osty:7847:9
 		if ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontInt{})) || ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontFloat{})) {
-			// Osty: /tmp/selfhost_merged.osty:7846:13
+			// Osty: /tmp/selfhost_merged.osty:7848:13
 			opAdvance(p)
-			// Osty: /tmp/selfhost_merged.osty:7847:13
+			// Osty: /tmp/selfhost_merged.osty:7849:13
 			inner := opParsePrimary(p)
 			_ = inner
-			// Osty: /tmp/selfhost_merged.osty:7848:13
+			// Osty: /tmp/selfhost_merged.osty:7850:13
 			n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNUnary{}))
 			_ = n
-			// Osty: /tmp/selfhost_merged.osty:7849:18
+			// Osty: /tmp/selfhost_merged.osty:7851:18
 			n.op = FrontTokenKind(&FrontTokenKind_FrontMinus{})
-			// Osty: /tmp/selfhost_merged.osty:7850:20
+			// Osty: /tmp/selfhost_merged.osty:7852:20
 			n.left = inner
-			// Osty: /tmp/selfhost_merged.osty:7851:21
+			// Osty: /tmp/selfhost_merged.osty:7853:21
 			n.start = start
-			// Osty: /tmp/selfhost_merged.osty:7852:19
+			// Osty: /tmp/selfhost_merged.osty:7854:19
 			n.end = p.pos
-			// Osty: /tmp/selfhost_merged.osty:7853:13
+			// Osty: /tmp/selfhost_merged.osty:7855:13
 			return opAddNode(p, n)
 		}
-		// Osty: /tmp/selfhost_merged.osty:7855:9
+		// Osty: /tmp/selfhost_merged.osty:7857:9
 		opDefaultExprError(p, tok)
-		// Osty: /tmp/selfhost_merged.osty:7856:9
+		// Osty: /tmp/selfhost_merged.osty:7858:9
 		return opParseExpr(p)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7858:5
+	// Osty: /tmp/selfhost_merged.osty:7860:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) {
-		// Osty: /tmp/selfhost_merged.osty:7859:9
+		// Osty: /tmp/selfhost_merged.osty:7861:9
 		if tok.text == "true" || tok.text == "false" || tok.text == "None" {
-			// Osty: /tmp/selfhost_merged.osty:7860:13
+			// Osty: /tmp/selfhost_merged.osty:7862:13
 			return opParsePrimary(p)
 		}
-		// Osty: /tmp/selfhost_merged.osty:7862:9
+		// Osty: /tmp/selfhost_merged.osty:7864:9
 		if tok.text == "Ok" || tok.text == "Err" || tok.text == "Some" {
-			// Osty: /tmp/selfhost_merged.osty:7863:13
+			// Osty: /tmp/selfhost_merged.osty:7865:13
 			name := opAdvance(p).text
 			_ = name
-			// Osty: /tmp/selfhost_merged.osty:7864:13
+			// Osty: /tmp/selfhost_merged.osty:7866:13
 			return opParseDefaultIdentCall(p, name, start)
 		}
-		// Osty: /tmp/selfhost_merged.osty:7866:9
+		// Osty: /tmp/selfhost_merged.osty:7868:9
 		opDefaultExprError(p, tok)
-		// Osty: /tmp/selfhost_merged.osty:7867:9
+		// Osty: /tmp/selfhost_merged.osty:7869:9
 		return opParseExpr(p)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7869:5
+	// Osty: /tmp/selfhost_merged.osty:7871:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontLBracket{})) {
-		// Osty: /tmp/selfhost_merged.osty:7870:9
+		// Osty: /tmp/selfhost_merged.osty:7872:9
 		if ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontRBracket{})) {
-			// Osty: /tmp/selfhost_merged.osty:7870:51
+			// Osty: /tmp/selfhost_merged.osty:7872:51
 			return opParseListLit(p)
 		}
-		// Osty: /tmp/selfhost_merged.osty:7871:9
+		// Osty: /tmp/selfhost_merged.osty:7873:9
 		opDefaultExprError(p, tok)
-		// Osty: /tmp/selfhost_merged.osty:7872:9
+		// Osty: /tmp/selfhost_merged.osty:7874:9
 		return opParseExpr(p)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7874:5
+	// Osty: /tmp/selfhost_merged.osty:7876:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
-		// Osty: /tmp/selfhost_merged.osty:7875:9
+		// Osty: /tmp/selfhost_merged.osty:7877:9
 		if ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontColon{})) && ostyEqual(opPeekAt(p, 2).kind, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:7875:86
+			// Osty: /tmp/selfhost_merged.osty:7877:86
 			return opParseBlockOrMap(p)
 		}
-		// Osty: /tmp/selfhost_merged.osty:7876:9
+		// Osty: /tmp/selfhost_merged.osty:7878:9
 		opDefaultExprError(p, tok)
-		// Osty: /tmp/selfhost_merged.osty:7877:9
+		// Osty: /tmp/selfhost_merged.osty:7879:9
 		return opParseExpr(p)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7879:5
+	// Osty: /tmp/selfhost_merged.osty:7881:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) {
-		// Osty: /tmp/selfhost_merged.osty:7880:9
+		// Osty: /tmp/selfhost_merged.osty:7882:9
 		if ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontRParen{})) {
-			// Osty: /tmp/selfhost_merged.osty:7880:49
+			// Osty: /tmp/selfhost_merged.osty:7882:49
 			return opParseParenOrTuple(p)
 		}
-		// Osty: /tmp/selfhost_merged.osty:7881:9
+		// Osty: /tmp/selfhost_merged.osty:7883:9
 		opDefaultExprError(p, tok)
-		// Osty: /tmp/selfhost_merged.osty:7882:9
+		// Osty: /tmp/selfhost_merged.osty:7884:9
 		return opParseExpr(p)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7884:5
+	// Osty: /tmp/selfhost_merged.osty:7886:5
 	opDefaultExprError(p, tok)
 	return opParseExpr(p)
 }
 
-// Osty: /tmp/selfhost_merged.osty:7888:1
+// Osty: /tmp/selfhost_merged.osty:7890:1
 func opAnnotationNameAllowed(name string) bool {
 	return name == "json" || name == "deprecated" || name == "allow" || name == "intrinsic_methods" || name == "requires"
 }
 
-// Osty: /tmp/selfhost_merged.osty:7892:1
+// Osty: /tmp/selfhost_merged.osty:7894:1
 func opAddAnnotationGroup(p *OstyParser, anns []int) int {
-	// Osty: /tmp/selfhost_merged.osty:7893:5
+	// Osty: /tmp/selfhost_merged.osty:7895:5
 	if opIntListCount(anns) == 0 {
-		// Osty: /tmp/selfhost_merged.osty:7893:36
+		// Osty: /tmp/selfhost_merged.osty:7895:36
 		return -1
 	}
-	// Osty: /tmp/selfhost_merged.osty:7894:5
+	// Osty: /tmp/selfhost_merged.osty:7896:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNAnnotation{}))
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:7895:12
+	// Osty: /tmp/selfhost_merged.osty:7897:12
 	n.text = "__group"
-	// Osty: /tmp/selfhost_merged.osty:7896:16
+	// Osty: /tmp/selfhost_merged.osty:7898:16
 	n.children = anns
 	return opAddNode(p, n)
 }
 
-// Osty: /tmp/selfhost_merged.osty:7900:1
+// Osty: /tmp/selfhost_merged.osty:7902:1
 func opParseFnDecl(p *OstyParser, isPub bool, anns []int) int {
-	// Osty: /tmp/selfhost_merged.osty:7901:5
+	// Osty: /tmp/selfhost_merged.osty:7903:5
 	start := p.pos
 	_ = start
-	// Osty: /tmp/selfhost_merged.osty:7902:5
+	// Osty: /tmp/selfhost_merged.osty:7904:5
 	opAdvance(p)
-	// Osty: /tmp/selfhost_merged.osty:7903:5
+	// Osty: /tmp/selfhost_merged.osty:7905:5
 	name := opExpect(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})).text
 	_ = name
-	// Osty: /tmp/selfhost_merged.osty:7904:5
+	// Osty: /tmp/selfhost_merged.osty:7906:5
 	genericParams := opParseGenericParams(p)
 	_ = genericParams
-	// Osty: /tmp/selfhost_merged.osty:7905:5
+	// Osty: /tmp/selfhost_merged.osty:7907:5
 	opExpect(p, FrontTokenKind(&FrontTokenKind_FrontLParen{}))
-	// Osty: /tmp/selfhost_merged.osty:7906:5
+	// Osty: /tmp/selfhost_merged.osty:7908:5
 	var params []int = make([]int, 0, 1)
 	_ = params
-	// Osty: /tmp/selfhost_merged.osty:7907:5
+	// Osty: /tmp/selfhost_merged.osty:7909:5
 	for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontRParen{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-		// Osty: /tmp/selfhost_merged.osty:7908:9
+		// Osty: /tmp/selfhost_merged.osty:7910:9
 		paramErrs := opErrorCount(p)
 		_ = paramErrs
-		// Osty: /tmp/selfhost_merged.osty:7909:9
+		// Osty: /tmp/selfhost_merged.osty:7911:9
 		ps := p.pos
 		_ = ps
-		// Osty: /tmp/selfhost_merged.osty:7910:9
+		// Osty: /tmp/selfhost_merged.osty:7912:9
 		paramNode := emptyAstNode(AstNodeKind(&AstNodeKind_AstNParam{}))
 		_ = paramNode
-		// Osty: /tmp/selfhost_merged.osty:7911:9
+		// Osty: /tmp/selfhost_merged.osty:7913:9
 		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontMut{})) {
-			// Osty: /tmp/selfhost_merged.osty:7911:32
+			// Osty: /tmp/selfhost_merged.osty:7913:32
 			opAdvance(p)
-			// Osty: /tmp/selfhost_merged.osty:7912:25
+			// Osty: /tmp/selfhost_merged.osty:7914:25
 			paramNode.flags = 1
 		}
-		// Osty: /tmp/selfhost_merged.osty:7913:9
+		// Osty: /tmp/selfhost_merged.osty:7915:9
 		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})) && opPeek(p).text == "self" {
-			// Osty: /tmp/selfhost_merged.osty:7913:77
+			// Osty: /tmp/selfhost_merged.osty:7915:77
 			paramNode.text = opAdvance(p).text
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:7914:28
+			// Osty: /tmp/selfhost_merged.osty:7916:28
 			paramNode.text = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})).text
-			// Osty: /tmp/selfhost_merged.osty:7915:13
+			// Osty: /tmp/selfhost_merged.osty:7917:13
 			if opEat(p, FrontTokenKind(&FrontTokenKind_FrontColon{})) {
-				// Osty: /tmp/selfhost_merged.osty:7915:55
+				// Osty: /tmp/selfhost_merged.osty:7917:55
 				paramNode.right = opParseType(p)
 			}
-			// Osty: /tmp/selfhost_merged.osty:7916:13
+			// Osty: /tmp/selfhost_merged.osty:7918:13
 			if opEat(p, FrontTokenKind(&FrontTokenKind_FrontAssign{})) {
-				// Osty: /tmp/selfhost_merged.osty:7916:55
+				// Osty: /tmp/selfhost_merged.osty:7918:55
 				paramNode.left = opParseDefaultExpr(p)
 			}
 		}
-		// Osty: /tmp/selfhost_merged.osty:7918:25
+		// Osty: /tmp/selfhost_merged.osty:7920:25
 		paramNode.start = ps
-		// Osty: /tmp/selfhost_merged.osty:7919:23
+		// Osty: /tmp/selfhost_merged.osty:7921:23
 		paramNode.end = p.pos
-		// Osty: /tmp/selfhost_merged.osty:7920:9
+		// Osty: /tmp/selfhost_merged.osty:7922:9
 		func() struct{} { params = append(params, opAddNode(p, paramNode)); return struct{}{} }()
-		// Osty: /tmp/selfhost_merged.osty:7921:9
+		// Osty: /tmp/selfhost_merged.osty:7923:9
 		if opErrorCount(p) > paramErrs {
-			// Osty: /tmp/selfhost_merged.osty:7921:42
+			// Osty: /tmp/selfhost_merged.osty:7923:42
 			opSyncParam(p)
 		}
-		// Osty: /tmp/selfhost_merged.osty:7922:9
+		// Osty: /tmp/selfhost_merged.osty:7924:9
 		if !(opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))) {
-			// Osty: /tmp/selfhost_merged.osty:7922:38
+			// Osty: /tmp/selfhost_merged.osty:7924:38
 			break
 		}
-		// Osty: /tmp/selfhost_merged.osty:7923:9
+		// Osty: /tmp/selfhost_merged.osty:7925:9
 		opSkipNewlines(p)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7925:5
+	// Osty: /tmp/selfhost_merged.osty:7927:5
 	opExpect(p, FrontTokenKind(&FrontTokenKind_FrontRParen{}))
-	// Osty: /tmp/selfhost_merged.osty:7926:5
+	// Osty: /tmp/selfhost_merged.osty:7928:5
 	retTypeIdx := -1
 	_ = retTypeIdx
-	// Osty: /tmp/selfhost_merged.osty:7927:5
+	// Osty: /tmp/selfhost_merged.osty:7929:5
 	if opEat(p, FrontTokenKind(&FrontTokenKind_FrontArrow{})) {
-		// Osty: /tmp/selfhost_merged.osty:7927:42
+		// Osty: /tmp/selfhost_merged.osty:7929:42
 		retTypeIdx = opParseType(p)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7928:5
+	// Osty: /tmp/selfhost_merged.osty:7930:5
 	bodyIdx := -1
 	_ = bodyIdx
-	// Osty: /tmp/selfhost_merged.osty:7929:5
+	// Osty: /tmp/selfhost_merged.osty:7931:5
 	if opAt(p, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
-		// Osty: /tmp/selfhost_merged.osty:7929:39
+		// Osty: /tmp/selfhost_merged.osty:7931:39
 		bodyIdx = opParseBlock(p)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7930:5
+	// Osty: /tmp/selfhost_merged.osty:7932:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNFnDecl{}))
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:7931:12
+	// Osty: /tmp/selfhost_merged.osty:7933:12
 	n.text = name
-	// Osty: /tmp/selfhost_merged.osty:7932:12
+	// Osty: /tmp/selfhost_merged.osty:7934:12
 	n.left = retTypeIdx
-	// Osty: /tmp/selfhost_merged.osty:7933:13
+	// Osty: /tmp/selfhost_merged.osty:7935:13
 	n.right = bodyIdx
-	// Osty: /tmp/selfhost_merged.osty:7934:16
+	// Osty: /tmp/selfhost_merged.osty:7936:16
 	n.children = params
-	// Osty: /tmp/selfhost_merged.osty:7935:17
+	// Osty: /tmp/selfhost_merged.osty:7937:17
 	n.children2 = genericParams
-	// Osty: /tmp/selfhost_merged.osty:7936:13
+	// Osty: /tmp/selfhost_merged.osty:7938:13
 	n.extra = opAddAnnotationGroup(p, anns)
-	// Osty: /tmp/selfhost_merged.osty:7937:13
+	// Osty: /tmp/selfhost_merged.osty:7939:13
 	n.start = start
-	// Osty: /tmp/selfhost_merged.osty:7938:11
+	// Osty: /tmp/selfhost_merged.osty:7940:11
 	n.end = p.pos
-	// Osty: /tmp/selfhost_merged.osty:7939:5
+	// Osty: /tmp/selfhost_merged.osty:7941:5
 	if isPub {
-		// Osty: /tmp/selfhost_merged.osty:7939:24
+		// Osty: /tmp/selfhost_merged.osty:7941:24
 		n.flags = 1
 	}
 	return opAddNode(p, n)
 }
 
-// Osty: /tmp/selfhost_merged.osty:7943:1
+// Osty: /tmp/selfhost_merged.osty:7945:1
 func opParseStructDecl(p *OstyParser, isPub bool, anns []int) int {
-	// Osty: /tmp/selfhost_merged.osty:7944:5
+	// Osty: /tmp/selfhost_merged.osty:7946:5
 	start := p.pos
 	_ = start
-	// Osty: /tmp/selfhost_merged.osty:7945:5
+	// Osty: /tmp/selfhost_merged.osty:7947:5
 	_ = opAdvance(p)
-	// Osty: /tmp/selfhost_merged.osty:7946:5
+	// Osty: /tmp/selfhost_merged.osty:7948:5
 	name := opExpect(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})).text
 	_ = name
-	// Osty: /tmp/selfhost_merged.osty:7947:5
+	// Osty: /tmp/selfhost_merged.osty:7949:5
 	genericParams := opParseGenericParams(p)
 	_ = genericParams
-	// Osty: /tmp/selfhost_merged.osty:7948:5
+	// Osty: /tmp/selfhost_merged.osty:7950:5
 	_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontLBrace{}))
-	// Osty: /tmp/selfhost_merged.osty:7949:5
+	// Osty: /tmp/selfhost_merged.osty:7951:5
 	var members []int = make([]int, 0, 1)
 	_ = members
-	// Osty: /tmp/selfhost_merged.osty:7950:5
+	// Osty: /tmp/selfhost_merged.osty:7952:5
 	opSkipNewlines(p)
-	// Osty: /tmp/selfhost_merged.osty:7951:5
+	// Osty: /tmp/selfhost_merged.osty:7953:5
 	for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-		// Osty: /tmp/selfhost_merged.osty:7952:9
+		// Osty: /tmp/selfhost_merged.osty:7954:9
 		memberErrs := opErrorCount(p)
 		_ = memberErrs
-		// Osty: /tmp/selfhost_merged.osty:7953:9
+		// Osty: /tmp/selfhost_merged.osty:7955:9
 		memberAnns := opParseAnnotations(p)
 		_ = memberAnns
-		// Osty: /tmp/selfhost_merged.osty:7954:9
+		// Osty: /tmp/selfhost_merged.osty:7956:9
 		_ = memberAnns
-		// Osty: /tmp/selfhost_merged.osty:7955:9
+		// Osty: /tmp/selfhost_merged.osty:7957:9
 		memberPub := false
 		_ = memberPub
-		// Osty: /tmp/selfhost_merged.osty:7956:9
+		// Osty: /tmp/selfhost_merged.osty:7958:9
 		if opEat(p, FrontTokenKind(&FrontTokenKind_FrontPub{})) {
-			// Osty: /tmp/selfhost_merged.osty:7956:43
+			// Osty: /tmp/selfhost_merged.osty:7958:43
 			memberPub = true
 		}
-		// Osty: /tmp/selfhost_merged.osty:7957:9
+		// Osty: /tmp/selfhost_merged.osty:7959:9
 		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontFn{})) {
-			// Osty: /tmp/selfhost_merged.osty:7957:31
+			// Osty: /tmp/selfhost_merged.osty:7959:31
 			func() struct{} { members = append(members, opParseFnDecl(p, memberPub, memberAnns)); return struct{}{} }()
 		} else if opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})) {
-			// Osty: /tmp/selfhost_merged.osty:7958:13
+			// Osty: /tmp/selfhost_merged.osty:7960:13
 			fs := p.pos
 			_ = fs
-			// Osty: /tmp/selfhost_merged.osty:7959:13
+			// Osty: /tmp/selfhost_merged.osty:7961:13
 			fn_ := opAdvance(p).text
 			_ = fn_
-			// Osty: /tmp/selfhost_merged.osty:7960:13
+			// Osty: /tmp/selfhost_merged.osty:7962:13
 			_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontColon{}))
-			// Osty: /tmp/selfhost_merged.osty:7961:13
+			// Osty: /tmp/selfhost_merged.osty:7963:13
 			ft := opParseType(p)
 			_ = ft
-			// Osty: /tmp/selfhost_merged.osty:7962:13
+			// Osty: /tmp/selfhost_merged.osty:7964:13
 			defIdx := -1
 			_ = defIdx
-			// Osty: /tmp/selfhost_merged.osty:7963:13
+			// Osty: /tmp/selfhost_merged.osty:7965:13
 			if opEat(p, FrontTokenKind(&FrontTokenKind_FrontAssign{})) {
-				// Osty: /tmp/selfhost_merged.osty:7963:47
+				// Osty: /tmp/selfhost_merged.osty:7965:47
 				defIdx = opParseDefaultExpr(p)
 			}
-			// Osty: /tmp/selfhost_merged.osty:7964:13
+			// Osty: /tmp/selfhost_merged.osty:7966:13
 			fNode := emptyAstNode(AstNodeKind(&AstNodeKind_AstNField_{}))
 			_ = fNode
-			// Osty: /tmp/selfhost_merged.osty:7965:24
-			fNode.text = fn_
-			// Osty: /tmp/selfhost_merged.osty:7966:25
-			fNode.right = ft
 			// Osty: /tmp/selfhost_merged.osty:7967:24
-			fNode.left = defIdx
+			fNode.text = fn_
 			// Osty: /tmp/selfhost_merged.osty:7968:25
-			fNode.start = fs
-			// Osty: /tmp/selfhost_merged.osty:7969:23
-			fNode.end = p.pos
+			fNode.right = ft
+			// Osty: /tmp/selfhost_merged.osty:7969:24
+			fNode.left = defIdx
 			// Osty: /tmp/selfhost_merged.osty:7970:25
+			fNode.start = fs
+			// Osty: /tmp/selfhost_merged.osty:7971:23
+			fNode.end = p.pos
+			// Osty: /tmp/selfhost_merged.osty:7972:25
 			fNode.extra = opAddAnnotationGroup(p, memberAnns)
-			// Osty: /tmp/selfhost_merged.osty:7971:13
+			// Osty: /tmp/selfhost_merged.osty:7973:13
 			if memberPub {
-				// Osty: /tmp/selfhost_merged.osty:7971:40
+				// Osty: /tmp/selfhost_merged.osty:7973:40
 				fNode.flags = 1
 			}
-			// Osty: /tmp/selfhost_merged.osty:7972:13
+			// Osty: /tmp/selfhost_merged.osty:7974:13
 			func() struct{} { members = append(members, opAddNode(p, fNode)); return struct{}{} }()
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:7973:18
+			// Osty: /tmp/selfhost_merged.osty:7975:18
 			opError(p, "expected field or method in struct")
-			// Osty: /tmp/selfhost_merged.osty:7974:9
+			// Osty: /tmp/selfhost_merged.osty:7976:9
 			opSyncMember(p)
 		}
-		// Osty: /tmp/selfhost_merged.osty:7975:9
-		if opErrorCount(p) > memberErrs {
-			// Osty: /tmp/selfhost_merged.osty:7975:43
-			opSyncMember(p)
-		}
-		// Osty: /tmp/selfhost_merged.osty:7976:9
-		opSkipNewlines(p)
 		// Osty: /tmp/selfhost_merged.osty:7977:9
-		_ = opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))
+		if opErrorCount(p) > memberErrs {
+			// Osty: /tmp/selfhost_merged.osty:7977:43
+			opSyncMember(p)
+		}
 		// Osty: /tmp/selfhost_merged.osty:7978:9
 		opSkipNewlines(p)
+		// Osty: /tmp/selfhost_merged.osty:7979:9
+		_ = opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))
+		// Osty: /tmp/selfhost_merged.osty:7980:9
+		opSkipNewlines(p)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7980:5
+	// Osty: /tmp/selfhost_merged.osty:7982:5
 	_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))
-	// Osty: /tmp/selfhost_merged.osty:7981:5
+	// Osty: /tmp/selfhost_merged.osty:7983:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNStructDecl{}))
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:7982:12
+	// Osty: /tmp/selfhost_merged.osty:7984:12
 	n.text = name
-	// Osty: /tmp/selfhost_merged.osty:7983:16
+	// Osty: /tmp/selfhost_merged.osty:7985:16
 	n.children = members
-	// Osty: /tmp/selfhost_merged.osty:7984:17
+	// Osty: /tmp/selfhost_merged.osty:7986:17
 	n.children2 = genericParams
-	// Osty: /tmp/selfhost_merged.osty:7985:13
+	// Osty: /tmp/selfhost_merged.osty:7987:13
 	n.extra = opAddAnnotationGroup(p, anns)
-	// Osty: /tmp/selfhost_merged.osty:7986:13
+	// Osty: /tmp/selfhost_merged.osty:7988:13
 	n.start = start
-	// Osty: /tmp/selfhost_merged.osty:7987:11
+	// Osty: /tmp/selfhost_merged.osty:7989:11
 	n.end = p.pos
-	// Osty: /tmp/selfhost_merged.osty:7988:5
+	// Osty: /tmp/selfhost_merged.osty:7990:5
 	if isPub {
-		// Osty: /tmp/selfhost_merged.osty:7988:24
+		// Osty: /tmp/selfhost_merged.osty:7990:24
 		n.flags = 1
 	}
 	return opAddNode(p, n)
 }
 
-// Osty: /tmp/selfhost_merged.osty:7992:1
+// Osty: /tmp/selfhost_merged.osty:7994:1
 func opParseEnumDecl(p *OstyParser, isPub bool, anns []int) int {
-	// Osty: /tmp/selfhost_merged.osty:7993:5
+	// Osty: /tmp/selfhost_merged.osty:7995:5
 	start := p.pos
 	_ = start
-	// Osty: /tmp/selfhost_merged.osty:7994:5
+	// Osty: /tmp/selfhost_merged.osty:7996:5
 	_ = opAdvance(p)
-	// Osty: /tmp/selfhost_merged.osty:7995:5
+	// Osty: /tmp/selfhost_merged.osty:7997:5
 	name := opExpect(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})).text
 	_ = name
-	// Osty: /tmp/selfhost_merged.osty:7996:5
+	// Osty: /tmp/selfhost_merged.osty:7998:5
 	genericParams := opParseGenericParams(p)
 	_ = genericParams
-	// Osty: /tmp/selfhost_merged.osty:7997:5
+	// Osty: /tmp/selfhost_merged.osty:7999:5
 	_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontLBrace{}))
-	// Osty: /tmp/selfhost_merged.osty:7998:5
+	// Osty: /tmp/selfhost_merged.osty:8000:5
 	var members []int = make([]int, 0, 1)
 	_ = members
-	// Osty: /tmp/selfhost_merged.osty:7999:5
+	// Osty: /tmp/selfhost_merged.osty:8001:5
 	opSkipNewlines(p)
-	// Osty: /tmp/selfhost_merged.osty:8000:5
+	// Osty: /tmp/selfhost_merged.osty:8002:5
 	for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-		// Osty: /tmp/selfhost_merged.osty:8001:9
+		// Osty: /tmp/selfhost_merged.osty:8003:9
 		memberErrs := opErrorCount(p)
 		_ = memberErrs
-		// Osty: /tmp/selfhost_merged.osty:8002:9
+		// Osty: /tmp/selfhost_merged.osty:8004:9
 		memberAnns := opParseAnnotations(p)
 		_ = memberAnns
-		// Osty: /tmp/selfhost_merged.osty:8003:9
+		// Osty: /tmp/selfhost_merged.osty:8005:9
 		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontFn{})) || (opAt(p, FrontTokenKind(&FrontTokenKind_FrontPub{})) && ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontFn{}))) {
-			// Osty: /tmp/selfhost_merged.osty:8004:13
+			// Osty: /tmp/selfhost_merged.osty:8006:13
 			fnPub := opEat(p, FrontTokenKind(&FrontTokenKind_FrontPub{}))
 			_ = fnPub
-			// Osty: /tmp/selfhost_merged.osty:8005:13
+			// Osty: /tmp/selfhost_merged.osty:8007:13
 			func() struct{} { members = append(members, opParseFnDecl(p, fnPub, memberAnns)); return struct{}{} }()
 		} else if opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})) {
-			// Osty: /tmp/selfhost_merged.osty:8007:13
+			// Osty: /tmp/selfhost_merged.osty:8009:13
 			vs := p.pos
 			_ = vs
-			// Osty: /tmp/selfhost_merged.osty:8008:13
+			// Osty: /tmp/selfhost_merged.osty:8010:13
 			vn := opAdvance(p).text
 			_ = vn
-			// Osty: /tmp/selfhost_merged.osty:8009:13
+			// Osty: /tmp/selfhost_merged.osty:8011:13
 			var vFields []int = make([]int, 0, 1)
 			_ = vFields
-			// Osty: /tmp/selfhost_merged.osty:8010:13
+			// Osty: /tmp/selfhost_merged.osty:8012:13
 			if opEat(p, FrontTokenKind(&FrontTokenKind_FrontLParen{})) {
-				// Osty: /tmp/selfhost_merged.osty:8011:17
+				// Osty: /tmp/selfhost_merged.osty:8013:17
 				for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontRParen{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-					// Osty: /tmp/selfhost_merged.osty:8011:71
+					// Osty: /tmp/selfhost_merged.osty:8013:71
 					func() struct{} { vFields = append(vFields, opParseType(p)); return struct{}{} }()
-					// Osty: /tmp/selfhost_merged.osty:8012:17
+					// Osty: /tmp/selfhost_merged.osty:8014:17
 					if !(opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))) {
-						// Osty: /tmp/selfhost_merged.osty:8012:46
+						// Osty: /tmp/selfhost_merged.osty:8014:46
 						break
 					}
 				}
-				// Osty: /tmp/selfhost_merged.osty:8013:17
+				// Osty: /tmp/selfhost_merged.osty:8015:17
 				_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontRParen{}))
 			}
-			// Osty: /tmp/selfhost_merged.osty:8015:13
+			// Osty: /tmp/selfhost_merged.osty:8017:13
 			vNode := emptyAstNode(AstNodeKind(&AstNodeKind_AstNVariant{}))
 			_ = vNode
-			// Osty: /tmp/selfhost_merged.osty:8016:24
+			// Osty: /tmp/selfhost_merged.osty:8018:24
 			vNode.text = vn
-			// Osty: /tmp/selfhost_merged.osty:8017:28
+			// Osty: /tmp/selfhost_merged.osty:8019:28
 			vNode.children = vFields
-			// Osty: /tmp/selfhost_merged.osty:8018:25
-			vNode.start = vs
-			// Osty: /tmp/selfhost_merged.osty:8019:23
-			vNode.end = p.pos
 			// Osty: /tmp/selfhost_merged.osty:8020:25
+			vNode.start = vs
+			// Osty: /tmp/selfhost_merged.osty:8021:23
+			vNode.end = p.pos
+			// Osty: /tmp/selfhost_merged.osty:8022:25
 			vNode.extra = opAddAnnotationGroup(p, memberAnns)
-			// Osty: /tmp/selfhost_merged.osty:8021:13
+			// Osty: /tmp/selfhost_merged.osty:8023:13
 			func() struct{} { members = append(members, opAddNode(p, vNode)); return struct{}{} }()
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:8022:18
+			// Osty: /tmp/selfhost_merged.osty:8024:18
 			opError(p, "expected variant or method in enum")
-			// Osty: /tmp/selfhost_merged.osty:8023:9
+			// Osty: /tmp/selfhost_merged.osty:8025:9
 			opSyncMember(p)
 		}
-		// Osty: /tmp/selfhost_merged.osty:8024:9
-		if opErrorCount(p) > memberErrs {
-			// Osty: /tmp/selfhost_merged.osty:8024:43
-			opSyncMember(p)
-		}
-		// Osty: /tmp/selfhost_merged.osty:8025:9
-		opSkipNewlines(p)
 		// Osty: /tmp/selfhost_merged.osty:8026:9
-		_ = opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))
+		if opErrorCount(p) > memberErrs {
+			// Osty: /tmp/selfhost_merged.osty:8026:43
+			opSyncMember(p)
+		}
 		// Osty: /tmp/selfhost_merged.osty:8027:9
 		opSkipNewlines(p)
+		// Osty: /tmp/selfhost_merged.osty:8028:9
+		_ = opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))
+		// Osty: /tmp/selfhost_merged.osty:8029:9
+		opSkipNewlines(p)
 	}
-	// Osty: /tmp/selfhost_merged.osty:8029:5
+	// Osty: /tmp/selfhost_merged.osty:8031:5
 	_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))
-	// Osty: /tmp/selfhost_merged.osty:8030:5
+	// Osty: /tmp/selfhost_merged.osty:8032:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNEnumDecl{}))
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:8031:12
+	// Osty: /tmp/selfhost_merged.osty:8033:12
 	n.text = name
-	// Osty: /tmp/selfhost_merged.osty:8032:16
+	// Osty: /tmp/selfhost_merged.osty:8034:16
 	n.children = members
-	// Osty: /tmp/selfhost_merged.osty:8033:17
+	// Osty: /tmp/selfhost_merged.osty:8035:17
 	n.children2 = genericParams
-	// Osty: /tmp/selfhost_merged.osty:8034:13
+	// Osty: /tmp/selfhost_merged.osty:8036:13
 	n.extra = opAddAnnotationGroup(p, anns)
-	// Osty: /tmp/selfhost_merged.osty:8035:13
+	// Osty: /tmp/selfhost_merged.osty:8037:13
 	n.start = start
-	// Osty: /tmp/selfhost_merged.osty:8036:11
+	// Osty: /tmp/selfhost_merged.osty:8038:11
 	n.end = p.pos
-	// Osty: /tmp/selfhost_merged.osty:8037:5
+	// Osty: /tmp/selfhost_merged.osty:8039:5
 	if isPub {
-		// Osty: /tmp/selfhost_merged.osty:8037:24
+		// Osty: /tmp/selfhost_merged.osty:8039:24
 		n.flags = 1
 	}
 	return opAddNode(p, n)
 }
 
-// Osty: /tmp/selfhost_merged.osty:8041:1
+// Osty: /tmp/selfhost_merged.osty:8043:1
 func opParseInterfaceDecl(p *OstyParser, isPub bool, anns []int) int {
-	// Osty: /tmp/selfhost_merged.osty:8042:5
+	// Osty: /tmp/selfhost_merged.osty:8044:5
 	start := p.pos
 	_ = start
-	// Osty: /tmp/selfhost_merged.osty:8043:5
+	// Osty: /tmp/selfhost_merged.osty:8045:5
 	_ = opAdvance(p)
-	// Osty: /tmp/selfhost_merged.osty:8044:5
+	// Osty: /tmp/selfhost_merged.osty:8046:5
 	name := opExpect(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})).text
 	_ = name
-	// Osty: /tmp/selfhost_merged.osty:8045:5
+	// Osty: /tmp/selfhost_merged.osty:8047:5
 	var supers []int = make([]int, 0, 1)
 	_ = supers
-	// Osty: /tmp/selfhost_merged.osty:8046:5
+	// Osty: /tmp/selfhost_merged.osty:8048:5
 	if opEat(p, FrontTokenKind(&FrontTokenKind_FrontColon{})) {
-		// Osty: /tmp/selfhost_merged.osty:8046:31
+		// Osty: /tmp/selfhost_merged.osty:8048:31
 		for {
-			// Osty: /tmp/selfhost_merged.osty:8046:37
+			// Osty: /tmp/selfhost_merged.osty:8048:37
 			func() struct{} { supers = append(supers, opParseType(p)); return struct{}{} }()
-			// Osty: /tmp/selfhost_merged.osty:8047:5
+			// Osty: /tmp/selfhost_merged.osty:8049:5
 			if !(opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))) && !(opEat(p, FrontTokenKind(&FrontTokenKind_FrontPlus{}))) {
-				// Osty: /tmp/selfhost_merged.osty:8047:60
+				// Osty: /tmp/selfhost_merged.osty:8049:60
 				break
 			}
 		}
 	}
-	// Osty: /tmp/selfhost_merged.osty:8048:5
+	// Osty: /tmp/selfhost_merged.osty:8050:5
 	_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontLBrace{}))
-	// Osty: /tmp/selfhost_merged.osty:8049:5
+	// Osty: /tmp/selfhost_merged.osty:8051:5
 	var members []int = make([]int, 0, 1)
 	_ = members
-	// Osty: /tmp/selfhost_merged.osty:8050:5
+	// Osty: /tmp/selfhost_merged.osty:8052:5
 	opSkipNewlines(p)
-	// Osty: /tmp/selfhost_merged.osty:8051:5
+	// Osty: /tmp/selfhost_merged.osty:8053:5
 	for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-		// Osty: /tmp/selfhost_merged.osty:8052:9
+		// Osty: /tmp/selfhost_merged.osty:8054:9
 		memberErrs := opErrorCount(p)
 		_ = memberErrs
-		// Osty: /tmp/selfhost_merged.osty:8053:9
+		// Osty: /tmp/selfhost_merged.osty:8055:9
 		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontFn{})) || (opAt(p, FrontTokenKind(&FrontTokenKind_FrontPub{})) && ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontFn{}))) {
-			// Osty: /tmp/selfhost_merged.osty:8053:88
+			// Osty: /tmp/selfhost_merged.osty:8055:88
 			fnPub := opEat(p, FrontTokenKind(&FrontTokenKind_FrontPub{}))
 			_ = fnPub
-			// Osty: /tmp/selfhost_merged.osty:8054:9
+			// Osty: /tmp/selfhost_merged.osty:8056:9
 			func() struct{} {
 				members = append(members, opParseFnDecl(p, fnPub, make([]int, 0, 1)))
 				return struct{}{}
 			}()
 		} else if opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})) {
-			// Osty: /tmp/selfhost_merged.osty:8054:83
+			// Osty: /tmp/selfhost_merged.osty:8056:83
 			func() struct{} { members = append(members, opParseType(p)); return struct{}{} }()
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:8054:121
+			// Osty: /tmp/selfhost_merged.osty:8056:121
 			opError(p, "expected method or type in interface")
-			// Osty: /tmp/selfhost_merged.osty:8055:9
+			// Osty: /tmp/selfhost_merged.osty:8057:9
 			opSyncMember(p)
 		}
-		// Osty: /tmp/selfhost_merged.osty:8056:9
+		// Osty: /tmp/selfhost_merged.osty:8058:9
 		if opErrorCount(p) > memberErrs {
-			// Osty: /tmp/selfhost_merged.osty:8056:43
+			// Osty: /tmp/selfhost_merged.osty:8058:43
 			opSyncMember(p)
 		}
-		// Osty: /tmp/selfhost_merged.osty:8057:9
+		// Osty: /tmp/selfhost_merged.osty:8059:9
 		opSkipNewlines(p)
 	}
-	// Osty: /tmp/selfhost_merged.osty:8059:5
+	// Osty: /tmp/selfhost_merged.osty:8061:5
 	_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))
-	// Osty: /tmp/selfhost_merged.osty:8060:5
+	// Osty: /tmp/selfhost_merged.osty:8062:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNInterfaceDecl{}))
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:8061:12
+	// Osty: /tmp/selfhost_merged.osty:8063:12
 	n.text = name
-	// Osty: /tmp/selfhost_merged.osty:8062:16
+	// Osty: /tmp/selfhost_merged.osty:8064:16
 	n.children = members
-	// Osty: /tmp/selfhost_merged.osty:8063:17
+	// Osty: /tmp/selfhost_merged.osty:8065:17
 	n.children2 = supers
-	// Osty: /tmp/selfhost_merged.osty:8064:13
+	// Osty: /tmp/selfhost_merged.osty:8066:13
 	n.extra = opAddAnnotationGroup(p, anns)
-	// Osty: /tmp/selfhost_merged.osty:8065:13
+	// Osty: /tmp/selfhost_merged.osty:8067:13
 	n.start = start
-	// Osty: /tmp/selfhost_merged.osty:8066:11
+	// Osty: /tmp/selfhost_merged.osty:8068:11
 	n.end = p.pos
-	// Osty: /tmp/selfhost_merged.osty:8067:5
+	// Osty: /tmp/selfhost_merged.osty:8069:5
 	if isPub {
-		// Osty: /tmp/selfhost_merged.osty:8067:24
+		// Osty: /tmp/selfhost_merged.osty:8069:24
 		n.flags = 1
 	}
 	return opAddNode(p, n)
 }
 
-// Osty: /tmp/selfhost_merged.osty:8071:1
+// Osty: /tmp/selfhost_merged.osty:8073:1
 func opParseTypeAliasDecl(p *OstyParser, isPub bool, anns []int) int {
-	// Osty: /tmp/selfhost_merged.osty:8072:5
+	// Osty: /tmp/selfhost_merged.osty:8074:5
 	start := p.pos
 	_ = start
-	// Osty: /tmp/selfhost_merged.osty:8073:5
+	// Osty: /tmp/selfhost_merged.osty:8075:5
 	_ = opAdvance(p)
-	// Osty: /tmp/selfhost_merged.osty:8074:5
+	// Osty: /tmp/selfhost_merged.osty:8076:5
 	name := opExpect(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})).text
 	_ = name
-	// Osty: /tmp/selfhost_merged.osty:8075:5
+	// Osty: /tmp/selfhost_merged.osty:8077:5
 	genericParams := opParseGenericParams(p)
 	_ = genericParams
-	// Osty: /tmp/selfhost_merged.osty:8076:5
+	// Osty: /tmp/selfhost_merged.osty:8078:5
 	_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontAssign{}))
-	// Osty: /tmp/selfhost_merged.osty:8077:5
+	// Osty: /tmp/selfhost_merged.osty:8079:5
 	typeIdx := opParseType(p)
 	_ = typeIdx
-	// Osty: /tmp/selfhost_merged.osty:8078:5
+	// Osty: /tmp/selfhost_merged.osty:8080:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNTypeAlias{}))
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:8079:12
+	// Osty: /tmp/selfhost_merged.osty:8081:12
 	n.text = name
-	// Osty: /tmp/selfhost_merged.osty:8080:12
+	// Osty: /tmp/selfhost_merged.osty:8082:12
 	n.left = typeIdx
-	// Osty: /tmp/selfhost_merged.osty:8081:16
+	// Osty: /tmp/selfhost_merged.osty:8083:16
 	n.children = genericParams
-	// Osty: /tmp/selfhost_merged.osty:8082:13
+	// Osty: /tmp/selfhost_merged.osty:8084:13
 	n.extra = opAddAnnotationGroup(p, anns)
-	// Osty: /tmp/selfhost_merged.osty:8083:13
+	// Osty: /tmp/selfhost_merged.osty:8085:13
 	n.start = start
-	// Osty: /tmp/selfhost_merged.osty:8084:11
+	// Osty: /tmp/selfhost_merged.osty:8086:11
 	n.end = p.pos
-	// Osty: /tmp/selfhost_merged.osty:8085:5
+	// Osty: /tmp/selfhost_merged.osty:8087:5
 	if isPub {
-		// Osty: /tmp/selfhost_merged.osty:8085:24
+		// Osty: /tmp/selfhost_merged.osty:8087:24
 		n.flags = 1
 	}
 	return opAddNode(p, n)
 }
 
-// Osty: /tmp/selfhost_merged.osty:8089:1
+// Osty: /tmp/selfhost_merged.osty:8091:1
 func opParseUseDecl(p *OstyParser) int {
-	// Osty: /tmp/selfhost_merged.osty:8090:5
+	// Osty: /tmp/selfhost_merged.osty:8092:5
 	start := p.pos
 	_ = start
-	// Osty: /tmp/selfhost_merged.osty:8091:5
+	// Osty: /tmp/selfhost_merged.osty:8093:5
 	_ = opAdvance(p)
-	// Osty: /tmp/selfhost_merged.osty:8092:5
+	// Osty: /tmp/selfhost_merged.osty:8094:5
 	var path []string = make([]string, 0, 1)
 	_ = path
-	// Osty: /tmp/selfhost_merged.osty:8093:5
+	// Osty: /tmp/selfhost_merged.osty:8095:5
 	isGo := false
 	_ = isGo
-	// Osty: /tmp/selfhost_merged.osty:8094:5
+	// Osty: /tmp/selfhost_merged.osty:8096:5
 	alias := ""
 	_ = alias
-	// Osty: /tmp/selfhost_merged.osty:8095:5
+	// Osty: /tmp/selfhost_merged.osty:8097:5
 	if opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})) && opPeek(p).text == "go" {
-		// Osty: /tmp/selfhost_merged.osty:8096:14
+		// Osty: /tmp/selfhost_merged.osty:8098:14
 		isGo = true
-		// Osty: /tmp/selfhost_merged.osty:8097:9
+		// Osty: /tmp/selfhost_merged.osty:8099:9
 		_ = opAdvance(p)
-		// Osty: /tmp/selfhost_merged.osty:8098:9
+		// Osty: /tmp/selfhost_merged.osty:8100:9
 		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontString{})) || opAt(p, FrontTokenKind(&FrontTokenKind_FrontRawString{})) {
-			// Osty: /tmp/selfhost_merged.osty:8098:62
+			// Osty: /tmp/selfhost_merged.osty:8100:62
 			func() struct{} { path = append(path, opAdvance(p).text); return struct{}{} }()
 		}
 	} else {
-		// Osty: /tmp/selfhost_merged.osty:8099:14
+		// Osty: /tmp/selfhost_merged.osty:8101:14
 		sawDot := false
 		_ = sawDot
-		// Osty: /tmp/selfhost_merged.osty:8100:5
+		// Osty: /tmp/selfhost_merged.osty:8102:5
 		sawSlash := false
 		_ = sawSlash
-		// Osty: /tmp/selfhost_merged.osty:8101:5
+		// Osty: /tmp/selfhost_merged.osty:8103:5
 		for opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})) {
-			// Osty: /tmp/selfhost_merged.osty:8102:9
+			// Osty: /tmp/selfhost_merged.osty:8104:9
 			func() struct{} { path = append(path, opAdvance(p).text); return struct{}{} }()
-			// Osty: /tmp/selfhost_merged.osty:8103:9
+			// Osty: /tmp/selfhost_merged.osty:8105:9
 			if opEat(p, FrontTokenKind(&FrontTokenKind_FrontDot{})) {
-				// Osty: /tmp/selfhost_merged.osty:8103:40
+				// Osty: /tmp/selfhost_merged.osty:8105:40
 				sawDot = true
 			} else if opEat(p, FrontTokenKind(&FrontTokenKind_FrontSlash{})) {
-				// Osty: /tmp/selfhost_merged.osty:8103:89
+				// Osty: /tmp/selfhost_merged.osty:8105:89
 				sawSlash = true
 			} else {
-				// Osty: /tmp/selfhost_merged.osty:8103:105
+				// Osty: /tmp/selfhost_merged.osty:8105:105
 				break
 			}
 		}
-		// Osty: /tmp/selfhost_merged.osty:8105:5
+		// Osty: /tmp/selfhost_merged.osty:8107:5
 		if sawDot && sawSlash && frontTokenAtList(p.tokens, start+1).text != "github" {
-			// Osty: /tmp/selfhost_merged.osty:8106:9
+			// Osty: /tmp/selfhost_merged.osty:8108:9
 			opErrorFull(p, "mixed `/` and `.` in use path", "use either dotted package paths or URL-style paths consistently", "", "E0104")
 		}
 	}
-	// Osty: /tmp/selfhost_merged.osty:8108:5
+	// Osty: /tmp/selfhost_merged.osty:8110:5
 	if opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})) && opPeek(p).text == "as" {
-		// Osty: /tmp/selfhost_merged.osty:8108:56
+		// Osty: /tmp/selfhost_merged.osty:8110:56
 		opAdvance(p)
-		// Osty: /tmp/selfhost_merged.osty:8109:11
+		// Osty: /tmp/selfhost_merged.osty:8111:11
 		alias = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})).text
 	}
-	// Osty: /tmp/selfhost_merged.osty:8110:5
+	// Osty: /tmp/selfhost_merged.osty:8112:5
 	var goItems []int = make([]int, 0, 1)
 	_ = goItems
-	// Osty: /tmp/selfhost_merged.osty:8111:5
+	// Osty: /tmp/selfhost_merged.osty:8113:5
 	if opEat(p, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
-		// Osty: /tmp/selfhost_merged.osty:8112:9
+		// Osty: /tmp/selfhost_merged.osty:8114:9
 		opSkipNewlines(p)
-		// Osty: /tmp/selfhost_merged.osty:8113:9
+		// Osty: /tmp/selfhost_merged.osty:8115:9
 		for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-			// Osty: /tmp/selfhost_merged.osty:8114:13
+			// Osty: /tmp/selfhost_merged.osty:8116:13
 			if opAt(p, FrontTokenKind(&FrontTokenKind_FrontFn{})) {
-				// Osty: /tmp/selfhost_merged.osty:8115:17
+				// Osty: /tmp/selfhost_merged.osty:8117:17
 				opCheckUseGoFnSignature(p)
-				// Osty: /tmp/selfhost_merged.osty:8116:17
+				// Osty: /tmp/selfhost_merged.osty:8118:17
 				func() struct{} {
 					goItems = append(goItems, opParseFnDecl(p, false, make([]int, 0, 1)))
 					return struct{}{}
 				}()
 			} else if opAt(p, FrontTokenKind(&FrontTokenKind_FrontStruct{})) {
-				// Osty: /tmp/selfhost_merged.osty:8118:17
+				// Osty: /tmp/selfhost_merged.osty:8120:17
 				opCheckUseGoStructBody(p)
-				// Osty: /tmp/selfhost_merged.osty:8119:17
+				// Osty: /tmp/selfhost_merged.osty:8121:17
 				func() struct{} {
 					goItems = append(goItems, opParseStructDecl(p, false, make([]int, 0, 1)))
 					return struct{}{}
 				}()
 			} else if opAt(p, FrontTokenKind(&FrontTokenKind_FrontType{})) {
-				// Osty: /tmp/selfhost_merged.osty:8121:17
+				// Osty: /tmp/selfhost_merged.osty:8123:17
 				func() struct{} {
 					goItems = append(goItems, opParseTypeAliasDecl(p, false, make([]int, 0, 1)))
 					return struct{}{}
 				}()
 			} else {
-				// Osty: /tmp/selfhost_merged.osty:8122:22
+				// Osty: /tmp/selfhost_merged.osty:8124:22
 				_ = opAdvance(p)
 			}
-			// Osty: /tmp/selfhost_merged.osty:8123:13
+			// Osty: /tmp/selfhost_merged.osty:8125:13
 			opSkipNewlines(p)
 		}
-		// Osty: /tmp/selfhost_merged.osty:8125:9
+		// Osty: /tmp/selfhost_merged.osty:8127:9
 		_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))
 	}
-	// Osty: /tmp/selfhost_merged.osty:8127:5
+	// Osty: /tmp/selfhost_merged.osty:8129:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNUseDecl{}))
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:8128:12
+	// Osty: /tmp/selfhost_merged.osty:8130:12
 	n.text = strings.Join(path, ".")
-	// Osty: /tmp/selfhost_merged.osty:8129:5
+	// Osty: /tmp/selfhost_merged.osty:8131:5
 	if alias != "" {
-		// Osty: /tmp/selfhost_merged.osty:8129:29
+		// Osty: /tmp/selfhost_merged.osty:8131:29
 		n.text = alias
 	}
-	// Osty: /tmp/selfhost_merged.osty:8130:16
+	// Osty: /tmp/selfhost_merged.osty:8132:16
 	n.children = goItems
-	// Osty: /tmp/selfhost_merged.osty:8131:13
+	// Osty: /tmp/selfhost_merged.osty:8133:13
 	n.start = start
-	// Osty: /tmp/selfhost_merged.osty:8132:11
+	// Osty: /tmp/selfhost_merged.osty:8134:11
 	n.end = p.pos
-	// Osty: /tmp/selfhost_merged.osty:8133:5
+	// Osty: /tmp/selfhost_merged.osty:8135:5
 	if isGo {
-		// Osty: /tmp/selfhost_merged.osty:8133:23
+		// Osty: /tmp/selfhost_merged.osty:8135:23
 		n.flags = 1
 	}
-	// Osty: /tmp/selfhost_merged.osty:8134:5
+	// Osty: /tmp/selfhost_merged.osty:8136:5
 	if alias != "" {
-		// Osty: /tmp/selfhost_merged.osty:8134:27
+		// Osty: /tmp/selfhost_merged.osty:8136:27
 		n.op = FrontTokenKind(&FrontTokenKind_FrontIdent{})
-		// Osty: /tmp/selfhost_merged.osty:8135:5
+		// Osty: /tmp/selfhost_merged.osty:8137:5
 		aliasNode := emptyAstNode(AstNodeKind(&AstNodeKind_AstNIdent{}))
 		_ = aliasNode
-		// Osty: /tmp/selfhost_merged.osty:8136:20
+		// Osty: /tmp/selfhost_merged.osty:8138:20
 		aliasNode.text = alias
-		// Osty: /tmp/selfhost_merged.osty:8137:21
+		// Osty: /tmp/selfhost_merged.osty:8139:21
 		aliasNode.start = start
-		// Osty: /tmp/selfhost_merged.osty:8138:19
+		// Osty: /tmp/selfhost_merged.osty:8140:19
 		aliasNode.end = p.pos
-		// Osty: /tmp/selfhost_merged.osty:8139:17
+		// Osty: /tmp/selfhost_merged.osty:8141:17
 		n.children2 = []int{opAddNode(p, aliasNode)}
 	}
 	return opAddNode(p, n)
 }
 
-// Osty: /tmp/selfhost_merged.osty:8143:1
+// Osty: /tmp/selfhost_merged.osty:8145:1
 func opCheckUseGoFnSignature(p *OstyParser) {
-	// Osty: /tmp/selfhost_merged.osty:8144:5
+	// Osty: /tmp/selfhost_merged.osty:8146:5
 	i := p.pos
 	_ = i
-	// Osty: /tmp/selfhost_merged.osty:8145:5
+	// Osty: /tmp/selfhost_merged.osty:8147:5
 	depth := 0
 	_ = depth
-	// Osty: /tmp/selfhost_merged.osty:8146:5
+	// Osty: /tmp/selfhost_merged.osty:8148:5
 	sawParams := false
 	_ = sawParams
-	// Osty: /tmp/selfhost_merged.osty:8147:5
+	// Osty: /tmp/selfhost_merged.osty:8149:5
 	for i < p.count {
-		// Osty: /tmp/selfhost_merged.osty:8148:9
+		// Osty: /tmp/selfhost_merged.osty:8150:9
 		tok := frontTokenAtList(p.tokens, i)
 		_ = tok
-		// Osty: /tmp/selfhost_merged.osty:8149:9
-		if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontNewline{})) || ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:8149:66
-			break
-		}
-		// Osty: /tmp/selfhost_merged.osty:8150:9
-		if i > p.pos && depth == 0 && (ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontFn{})) || ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontStruct{})) || ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontType{}))) {
-			// Osty: /tmp/selfhost_merged.osty:8150:115
-			break
-		}
 		// Osty: /tmp/selfhost_merged.osty:8151:9
-		if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) {
-			// Osty: /tmp/selfhost_merged.osty:8151:44
-			depth = depth + 1
-			// Osty: /tmp/selfhost_merged.osty:8152:19
-			sawParams = true
-		} else if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontRParen{})) && depth > 0 {
-			// Osty: /tmp/selfhost_merged.osty:8152:81
-			depth = depth - 1
+		if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontNewline{})) || ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) {
+			// Osty: /tmp/selfhost_merged.osty:8151:66
+			break
+		}
+		// Osty: /tmp/selfhost_merged.osty:8152:9
+		if i > p.pos && depth == 0 && (ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontFn{})) || ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontStruct{})) || ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontType{}))) {
+			// Osty: /tmp/selfhost_merged.osty:8152:115
+			break
 		}
 		// Osty: /tmp/selfhost_merged.osty:8153:9
-		if !(sawParams) && ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontLt{})) {
-			// Osty: /tmp/selfhost_merged.osty:8153:50
-			opErrorFull(p, "use go function signatures do not support generics", "", "", "E0103")
-			// Osty: /tmp/selfhost_merged.osty:8154:9
-			return
+		if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) {
+			// Osty: /tmp/selfhost_merged.osty:8153:44
+			depth = depth + 1
+			// Osty: /tmp/selfhost_merged.osty:8154:19
+			sawParams = true
+		} else if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontRParen{})) && depth > 0 {
+			// Osty: /tmp/selfhost_merged.osty:8154:81
+			depth = depth - 1
 		}
 		// Osty: /tmp/selfhost_merged.osty:8155:9
-		if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontAssign{})) {
-			// Osty: /tmp/selfhost_merged.osty:8155:38
-			opErrorFull(p, "use go function signatures do not support defaults", "", "", "E0103")
+		if !(sawParams) && ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontLt{})) {
+			// Osty: /tmp/selfhost_merged.osty:8155:50
+			opErrorFull(p, "use go function signatures do not support generics", "", "", "E0103")
 			// Osty: /tmp/selfhost_merged.osty:8156:9
 			return
 		}
 		// Osty: /tmp/selfhost_merged.osty:8157:9
-		if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) && depth == 0 && !ostyEqual(frontTokenAtList(p.tokens, i+1).kind, FrontTokenKind(&FrontTokenKind_FrontNewline{})) {
-			// Osty: /tmp/selfhost_merged.osty:8157:110
-			opErrorFull(p, "use go function declarations cannot have bodies", "", "", "E0101")
+		if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontAssign{})) {
+			// Osty: /tmp/selfhost_merged.osty:8157:38
+			opErrorFull(p, "use go function signatures do not support defaults", "", "", "E0103")
 			// Osty: /tmp/selfhost_merged.osty:8158:9
 			return
 		}
-		// Osty: /tmp/selfhost_merged.osty:8159:11
+		// Osty: /tmp/selfhost_merged.osty:8159:9
+		if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) && depth == 0 && !ostyEqual(frontTokenAtList(p.tokens, i+1).kind, FrontTokenKind(&FrontTokenKind_FrontNewline{})) {
+			// Osty: /tmp/selfhost_merged.osty:8159:110
+			opErrorFull(p, "use go function declarations cannot have bodies", "", "", "E0101")
+			// Osty: /tmp/selfhost_merged.osty:8160:9
+			return
+		}
+		// Osty: /tmp/selfhost_merged.osty:8161:11
 		i = i + 1
 	}
 }
 
-// Osty: /tmp/selfhost_merged.osty:8163:1
+// Osty: /tmp/selfhost_merged.osty:8165:1
 func opCheckUseGoStructBody(p *OstyParser) {
-	// Osty: /tmp/selfhost_merged.osty:8164:5
+	// Osty: /tmp/selfhost_merged.osty:8166:5
 	i := p.pos
 	_ = i
-	// Osty: /tmp/selfhost_merged.osty:8165:5
+	// Osty: /tmp/selfhost_merged.osty:8167:5
 	depth := 0
 	_ = depth
-	// Osty: /tmp/selfhost_merged.osty:8166:5
+	// Osty: /tmp/selfhost_merged.osty:8168:5
 	for i < p.count {
-		// Osty: /tmp/selfhost_merged.osty:8167:9
+		// Osty: /tmp/selfhost_merged.osty:8169:9
 		tok := frontTokenAtList(p.tokens, i)
 		_ = tok
-		// Osty: /tmp/selfhost_merged.osty:8168:9
+		// Osty: /tmp/selfhost_merged.osty:8170:9
 		if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:8168:44
+			// Osty: /tmp/selfhost_merged.osty:8170:44
 			depth = depth + 1
 		} else if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) {
-			// Osty: /tmp/selfhost_merged.osty:8169:19
+			// Osty: /tmp/selfhost_merged.osty:8171:19
 			depth = depth - 1
-			// Osty: /tmp/selfhost_merged.osty:8170:13
+			// Osty: /tmp/selfhost_merged.osty:8172:13
 			if depth <= 0 {
-				// Osty: /tmp/selfhost_merged.osty:8170:29
+				// Osty: /tmp/selfhost_merged.osty:8172:29
 				return
 			}
 		} else if depth > 0 && ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontFn{})) {
-			// Osty: /tmp/selfhost_merged.osty:8172:13
+			// Osty: /tmp/selfhost_merged.osty:8174:13
 			opErrorFull(p, "use go structs cannot contain methods", "", "", "E0102")
-			// Osty: /tmp/selfhost_merged.osty:8173:13
+			// Osty: /tmp/selfhost_merged.osty:8175:13
 			return
 		}
-		// Osty: /tmp/selfhost_merged.osty:8175:11
+		// Osty: /tmp/selfhost_merged.osty:8177:11
 		i = i + 1
 	}
 }
 
-// Osty: /tmp/selfhost_merged.osty:8183:1
+// Osty: /tmp/selfhost_merged.osty:8185:1
 func opParseFile(p *OstyParser) {
-	// Osty: /tmp/selfhost_merged.osty:8184:5
+	// Osty: /tmp/selfhost_merged.osty:8186:5
 	opSkipNewlines(p)
-	// Osty: /tmp/selfhost_merged.osty:8185:5
+	// Osty: /tmp/selfhost_merged.osty:8187:5
 	for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-		// Osty: /tmp/selfhost_merged.osty:8185:32
+		// Osty: /tmp/selfhost_merged.osty:8187:32
 		declIdx := func() int {
 			if astStartsDecl(opPeek(p).kind) {
 				return opParseDecl(p)
@@ -13443,80 +13443,80 @@ func opParseFile(p *OstyParser) {
 			}
 		}()
 		_ = declIdx
-		// Osty: /tmp/selfhost_merged.osty:8186:5
+		// Osty: /tmp/selfhost_merged.osty:8188:5
 		func() struct{} { p.arena.decls = append(p.arena.decls, declIdx); return struct{}{} }()
-		// Osty: /tmp/selfhost_merged.osty:8187:5
+		// Osty: /tmp/selfhost_merged.osty:8189:5
 		opSkipNewlines(p)
 	}
 }
 
-// Osty: /tmp/selfhost_merged.osty:8194:5
+// Osty: /tmp/selfhost_merged.osty:8196:5
 func astPrettyPrint(file *AstFile) string {
-	// Osty: /tmp/selfhost_merged.osty:8195:5
+	// Osty: /tmp/selfhost_merged.osty:8197:5
 	var lines []string = make([]string, 0, 1)
 	_ = lines
-	// Osty: /tmp/selfhost_merged.osty:8196:5
+	// Osty: /tmp/selfhost_merged.osty:8198:5
 	for _, d := range file.arena.decls {
-		// Osty: /tmp/selfhost_merged.osty:8196:39
+		// Osty: /tmp/selfhost_merged.osty:8198:39
 		lines = astPPNode(file.arena, d, 0, lines)
 	}
 	return strings.Join(lines, "\n")
 }
 
-// Osty: /tmp/selfhost_merged.osty:8200:1
+// Osty: /tmp/selfhost_merged.osty:8202:1
 func astPPNode(arena *AstArena, idx int, depth int, lines []string) []string {
-	// Osty: /tmp/selfhost_merged.osty:8201:5
+	// Osty: /tmp/selfhost_merged.osty:8203:5
 	if idx < 0 {
-		// Osty: /tmp/selfhost_merged.osty:8201:18
+		// Osty: /tmp/selfhost_merged.osty:8203:18
 		return lines
 	}
-	// Osty: /tmp/selfhost_merged.osty:8202:5
+	// Osty: /tmp/selfhost_merged.osty:8204:5
 	node := astArenaNodeAt(arena, idx)
 	_ = node
-	// Osty: /tmp/selfhost_merged.osty:8203:5
+	// Osty: /tmp/selfhost_merged.osty:8205:5
 	indent := strings.Repeat("  ", depth)
 	_ = indent
-	// Osty: /tmp/selfhost_merged.osty:8204:5
+	// Osty: /tmp/selfhost_merged.osty:8206:5
 	kindName := astNodeKindName(node.kind)
 	_ = kindName
-	// Osty: /tmp/selfhost_merged.osty:8205:5
+	// Osty: /tmp/selfhost_merged.osty:8207:5
 	if node.text != "" {
-		// Osty: /tmp/selfhost_merged.osty:8205:26
+		// Osty: /tmp/selfhost_merged.osty:8207:26
 		func() struct{} {
 			lines = append(lines, fmt.Sprintf("%s%s \"%s\"", ostyToString(indent), ostyToString(kindName), ostyToString(node.text)))
 			return struct{}{}
 		}()
 	} else {
-		// Osty: /tmp/selfhost_merged.osty:8205:84
+		// Osty: /tmp/selfhost_merged.osty:8207:84
 		func() struct{} {
 			lines = append(lines, fmt.Sprintf("%s%s", ostyToString(indent), ostyToString(kindName)))
 			return struct{}{}
 		}()
 	}
-	// Osty: /tmp/selfhost_merged.osty:8206:5
+	// Osty: /tmp/selfhost_merged.osty:8208:5
 	if node.left >= 0 {
-		// Osty: /tmp/selfhost_merged.osty:8206:31
+		// Osty: /tmp/selfhost_merged.osty:8208:31
 		lines = astPPNode(arena, node.left, depth+1, lines)
 	}
-	// Osty: /tmp/selfhost_merged.osty:8207:5
+	// Osty: /tmp/selfhost_merged.osty:8209:5
 	if node.right >= 0 {
-		// Osty: /tmp/selfhost_merged.osty:8207:32
+		// Osty: /tmp/selfhost_merged.osty:8209:32
 		lines = astPPNode(arena, node.right, depth+1, lines)
 	}
-	// Osty: /tmp/selfhost_merged.osty:8208:5
+	// Osty: /tmp/selfhost_merged.osty:8210:5
 	for _, child := range node.children {
-		// Osty: /tmp/selfhost_merged.osty:8208:40
+		// Osty: /tmp/selfhost_merged.osty:8210:40
 		lines = astPPNode(arena, child, depth+1, lines)
 	}
-	// Osty: /tmp/selfhost_merged.osty:8209:5
+	// Osty: /tmp/selfhost_merged.osty:8211:5
 	for _, child := range node.children2 {
-		// Osty: /tmp/selfhost_merged.osty:8209:41
+		// Osty: /tmp/selfhost_merged.osty:8211:41
 		lines = astPPNode(arena, child, depth+1, lines)
 	}
 	return lines
 }
 
-// Osty: /tmp/selfhost_merged.osty:8213:5
+// Osty: /tmp/selfhost_merged.osty:8215:5
 func astNodeKindName(kind AstNodeKind) string {
 	return func() string {
 		_m29 := kind
@@ -13675,38 +13675,38 @@ func astNodeKindName(kind AstNodeKind) string {
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:8231:5
+// Osty: /tmp/selfhost_merged.osty:8233:5
 func astFormatErrors(file *AstFile) string {
-	// Osty: /tmp/selfhost_merged.osty:8232:5
+	// Osty: /tmp/selfhost_merged.osty:8234:5
 	var lines []string = make([]string, 0, 1)
 	_ = lines
-	// Osty: /tmp/selfhost_merged.osty:8233:5
+	// Osty: /tmp/selfhost_merged.osty:8235:5
 	for _, e := range file.arena.errors {
-		// Osty: /tmp/selfhost_merged.osty:8234:9
+		// Osty: /tmp/selfhost_merged.osty:8236:9
 		if e.code != "" {
-			// Osty: /tmp/selfhost_merged.osty:8234:27
+			// Osty: /tmp/selfhost_merged.osty:8236:27
 			func() struct{} {
 				lines = append(lines, fmt.Sprintf("error[%s]: %s (at token %s)", ostyToString(e.code), ostyToString(e.message), ostyToString(e.tokenIndex)))
 				return struct{}{}
 			}()
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:8234:105
+			// Osty: /tmp/selfhost_merged.osty:8236:105
 			func() struct{} {
 				lines = append(lines, fmt.Sprintf("error: %s (at token %s)", ostyToString(e.message), ostyToString(e.tokenIndex)))
 				return struct{}{}
 			}()
 		}
-		// Osty: /tmp/selfhost_merged.osty:8235:9
+		// Osty: /tmp/selfhost_merged.osty:8237:9
 		if e.note != "" {
-			// Osty: /tmp/selfhost_merged.osty:8235:27
+			// Osty: /tmp/selfhost_merged.osty:8237:27
 			func() struct{} {
 				lines = append(lines, fmt.Sprintf("  = note: %s", ostyToString(e.note)))
 				return struct{}{}
 			}()
 		}
-		// Osty: /tmp/selfhost_merged.osty:8236:9
+		// Osty: /tmp/selfhost_merged.osty:8238:9
 		if e.hint != "" {
-			// Osty: /tmp/selfhost_merged.osty:8236:27
+			// Osty: /tmp/selfhost_merged.osty:8238:27
 			func() struct{} {
 				lines = append(lines, fmt.Sprintf("  = hint: %s", ostyToString(e.hint)))
 				return struct{}{}
@@ -13716,25 +13716,25 @@ func astFormatErrors(file *AstFile) string {
 	return strings.Join(lines, "\n")
 }
 
-// Osty: /tmp/selfhost_merged.osty:8245:5
+// Osty: /tmp/selfhost_merged.osty:8247:5
 type AstFile struct {
 	arena *AstArena
 }
 
-// Osty: /tmp/selfhost_merged.osty:8247:1
+// Osty: /tmp/selfhost_merged.osty:8249:1
 func astRecordLexDiagnostics(p *OstyParser, stream *FrontLexStream) {
-	// Osty: /tmp/selfhost_merged.osty:8248:5
+	// Osty: /tmp/selfhost_merged.osty:8250:5
 	count := frontLexDiagnosticCount(stream)
 	_ = count
-	// Osty: /tmp/selfhost_merged.osty:8249:5
+	// Osty: /tmp/selfhost_merged.osty:8251:5
 	for idx := 0; idx < count; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:8250:9
+		// Osty: /tmp/selfhost_merged.osty:8252:9
 		diag := frontLexDiagnosticAt(stream, idx)
 		_ = diag
-		// Osty: /tmp/selfhost_merged.osty:8251:9
+		// Osty: /tmp/selfhost_merged.osty:8253:9
 		code := frontLexDiagnosticCodeName(diag.code)
 		_ = code
-		// Osty: /tmp/selfhost_merged.osty:8252:9
+		// Osty: /tmp/selfhost_merged.osty:8254:9
 		func() struct{} {
 			p.arena.errors = append(p.arena.errors, &AstParseError{message: fmt.Sprintf("lexer error: %s", ostyToString(code)), tokenIndex: idx, hint: "", note: "", code: code})
 			return struct{}{}
@@ -13742,362 +13742,7020 @@ func astRecordLexDiagnostics(p *OstyParser, stream *FrontLexStream) {
 	}
 }
 
-// Osty: /tmp/selfhost_merged.osty:8264:5
+// Osty: /tmp/selfhost_merged.osty:8266:5
 func astParseTokens(tokens []*FrontToken) *AstFile {
-	// Osty: /tmp/selfhost_merged.osty:8265:5
+	// Osty: /tmp/selfhost_merged.osty:8267:5
 	p := newOstyParser(tokens)
 	_ = p
-	// Osty: /tmp/selfhost_merged.osty:8266:5
+	// Osty: /tmp/selfhost_merged.osty:8268:5
 	opParseFile(p)
 	return &AstFile{arena: p.arena}
 }
 
-// Osty: /tmp/selfhost_merged.osty:8270:5
+// Osty: /tmp/selfhost_merged.osty:8272:5
 func astParseLexed(source string, stream *FrontLexStream) *AstFile {
-	// Osty: /tmp/selfhost_merged.osty:8271:5
+	// Osty: /tmp/selfhost_merged.osty:8273:5
 	tokens := frontTokensFromSource(source, stream)
 	_ = tokens
-	// Osty: /tmp/selfhost_merged.osty:8272:5
+	// Osty: /tmp/selfhost_merged.osty:8274:5
 	p := newOstyParser(tokens)
 	_ = p
-	// Osty: /tmp/selfhost_merged.osty:8273:5
+	// Osty: /tmp/selfhost_merged.osty:8275:5
 	astRecordLexDiagnostics(p, stream)
-	// Osty: /tmp/selfhost_merged.osty:8274:5
+	// Osty: /tmp/selfhost_merged.osty:8276:5
 	opParseFile(p)
 	return &AstFile{arena: p.arena}
 }
 
-// Osty: /tmp/selfhost_merged.osty:8278:5
+// Osty: /tmp/selfhost_merged.osty:8280:5
 func astParseLexedSource(lexed *OstyLexedSource) *AstFile {
 	return astParseLexed(lexed.source, lexed.stream)
 }
 
-// Osty: /tmp/selfhost_merged.osty:8282:5
+// Osty: /tmp/selfhost_merged.osty:8284:5
 func astParse(source string) *AstFile {
 	return astParseLexedSource(ostyLexSource(source))
 }
 
-// Osty: /tmp/selfhost_merged.osty:8286:5
+// Osty: /tmp/selfhost_merged.osty:8288:5
 func astParseSummary(source string) *FrontParseSummary {
-	// Osty: /tmp/selfhost_merged.osty:8286:63
+	// Osty: /tmp/selfhost_merged.osty:8288:63
 	file := astParse(source)
 	_ = file
 	return astCountSummary(file)
 }
 
-// Osty: /tmp/selfhost_merged.osty:8289:5
+// Osty: /tmp/selfhost_merged.osty:8291:5
 func astFileDeclCount(file *AstFile) int {
-	// Osty: /tmp/selfhost_merged.osty:8289:49
+	// Osty: /tmp/selfhost_merged.osty:8291:49
 	c := 0
 	_ = c
-	// Osty: /tmp/selfhost_merged.osty:8290:1
+	// Osty: /tmp/selfhost_merged.osty:8292:1
 	for _, d := range file.arena.decls {
-		// Osty: /tmp/selfhost_merged.osty:8290:29
+		// Osty: /tmp/selfhost_merged.osty:8292:29
 		_ = d
-		// Osty: /tmp/selfhost_merged.osty:8291:3
+		// Osty: /tmp/selfhost_merged.osty:8293:3
 		c = c + 1
 	}
 	return c
 }
 
-// Osty: /tmp/selfhost_merged.osty:8293:5
+// Osty: /tmp/selfhost_merged.osty:8295:5
 func astFileNodeCount(file *AstFile) int {
 	return astArenaNodeCount(file.arena)
 }
 
-// Osty: /tmp/selfhost_merged.osty:8294:5
+// Osty: /tmp/selfhost_merged.osty:8296:5
 func astFileErrorCount(file *AstFile) int {
-	// Osty: /tmp/selfhost_merged.osty:8294:50
+	// Osty: /tmp/selfhost_merged.osty:8296:50
 	c := 0
 	_ = c
-	// Osty: /tmp/selfhost_merged.osty:8295:1
+	// Osty: /tmp/selfhost_merged.osty:8297:1
 	for _, e := range file.arena.errors {
-		// Osty: /tmp/selfhost_merged.osty:8295:30
+		// Osty: /tmp/selfhost_merged.osty:8297:30
 		_ = e
-		// Osty: /tmp/selfhost_merged.osty:8296:3
+		// Osty: /tmp/selfhost_merged.osty:8298:3
 		c = c + 1
 	}
 	return c
 }
 
-// Osty: /tmp/selfhost_merged.osty:8299:5
+// Osty: /tmp/selfhost_merged.osty:8301:5
 func astFileDeclAt(file *AstFile, idx int) *AstNode {
-	// Osty: /tmp/selfhost_merged.osty:8300:5
+	// Osty: /tmp/selfhost_merged.osty:8302:5
 	i := 0
 	_ = i
-	// Osty: /tmp/selfhost_merged.osty:8301:5
+	// Osty: /tmp/selfhost_merged.osty:8303:5
 	for _, d := range file.arena.decls {
-		// Osty: /tmp/selfhost_merged.osty:8301:33
+		// Osty: /tmp/selfhost_merged.osty:8303:33
 		if i == idx {
-			// Osty: /tmp/selfhost_merged.osty:8301:47
+			// Osty: /tmp/selfhost_merged.osty:8303:47
 			return astArenaNodeAt(file.arena, d)
 		}
-		// Osty: /tmp/selfhost_merged.osty:8302:7
+		// Osty: /tmp/selfhost_merged.osty:8304:7
 		i = i + 1
 	}
 	return emptyAstNode(AstNodeKind(&AstNodeKind_AstNError{}))
 }
 
-// Osty: /tmp/selfhost_merged.osty:8306:5
+// Osty: /tmp/selfhost_merged.osty:8308:5
 func astFileErrorAt(file *AstFile, idx int) *AstParseError {
-	// Osty: /tmp/selfhost_merged.osty:8307:5
+	// Osty: /tmp/selfhost_merged.osty:8309:5
 	i := 0
 	_ = i
-	// Osty: /tmp/selfhost_merged.osty:8308:5
+	// Osty: /tmp/selfhost_merged.osty:8310:5
 	for _, e := range file.arena.errors {
-		// Osty: /tmp/selfhost_merged.osty:8308:34
+		// Osty: /tmp/selfhost_merged.osty:8310:34
 		if i == idx {
-			// Osty: /tmp/selfhost_merged.osty:8308:48
+			// Osty: /tmp/selfhost_merged.osty:8310:48
 			return e
 		}
-		// Osty: /tmp/selfhost_merged.osty:8309:7
+		// Osty: /tmp/selfhost_merged.osty:8311:7
 		i = i + 1
 	}
 	return &AstParseError{message: "", tokenIndex: 0, hint: "", note: "", code: ""}
 }
 
-// Osty: /tmp/selfhost_merged.osty:8313:5
+// Osty: /tmp/selfhost_merged.osty:8315:5
 func astCountNodeKind(file *AstFile, kind AstNodeKind) int {
-	// Osty: /tmp/selfhost_merged.osty:8313:68
+	// Osty: /tmp/selfhost_merged.osty:8315:68
 	c := 0
 	_ = c
-	// Osty: /tmp/selfhost_merged.osty:8314:1
+	// Osty: /tmp/selfhost_merged.osty:8316:1
 	for _, n := range file.arena.nodes {
-		// Osty: /tmp/selfhost_merged.osty:8314:29
+		// Osty: /tmp/selfhost_merged.osty:8316:29
 		if ostyEqual(n.kind, kind) {
-			// Osty: /tmp/selfhost_merged.osty:8314:51
+			// Osty: /tmp/selfhost_merged.osty:8316:51
 			c = c + 1
 		}
 	}
 	return c
 }
 
-// Osty: /tmp/selfhost_merged.osty:8321:5
+// Osty: /tmp/selfhost_merged.osty:8323:5
 func astCountSummary(file *AstFile) *FrontParseSummary {
-	// Osty: /tmp/selfhost_merged.osty:8322:5
+	// Osty: /tmp/selfhost_merged.osty:8324:5
 	s := emptyFrontParseSummary()
 	_ = s
-	// Osty: /tmp/selfhost_merged.osty:8323:5
+	// Osty: /tmp/selfhost_merged.osty:8325:5
 	for _, n := range file.arena.nodes {
-		// Osty: /tmp/selfhost_merged.osty:8324:9
+		// Osty: /tmp/selfhost_merged.osty:8326:9
 		{
 			_m30 := n.kind
 			_ = _m30
 			if func() bool { _, ok := _m30.(*AstNodeKind_AstNFnDecl); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:8325:37
+				// Osty: /tmp/selfhost_merged.osty:8327:37
 				s.funcs = s.funcs + 1
-				// Osty: /tmp/selfhost_merged.osty:8326:13
-				if n.flags == 1 {
-					// Osty: /tmp/selfhost_merged.osty:8326:45
-					s.publicDecls = s.publicDecls + 1
-				}
-			}
-			if func() bool { _, ok := _m30.(*AstNodeKind_AstNStructDecl); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:8327:43
-				s.structs = s.structs + 1
 				// Osty: /tmp/selfhost_merged.osty:8328:13
 				if n.flags == 1 {
 					// Osty: /tmp/selfhost_merged.osty:8328:45
 					s.publicDecls = s.publicDecls + 1
 				}
 			}
-			if func() bool { _, ok := _m30.(*AstNodeKind_AstNEnumDecl); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:8329:39
-				s.enums = s.enums + 1
+			if func() bool { _, ok := _m30.(*AstNodeKind_AstNStructDecl); return ok }() {
+				// Osty: /tmp/selfhost_merged.osty:8329:43
+				s.structs = s.structs + 1
 				// Osty: /tmp/selfhost_merged.osty:8330:13
 				if n.flags == 1 {
 					// Osty: /tmp/selfhost_merged.osty:8330:45
 					s.publicDecls = s.publicDecls + 1
 				}
 			}
-			if func() bool { _, ok := _m30.(*AstNodeKind_AstNInterfaceDecl); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:8331:49
-				s.interfaces = s.interfaces + 1
+			if func() bool { _, ok := _m30.(*AstNodeKind_AstNEnumDecl); return ok }() {
+				// Osty: /tmp/selfhost_merged.osty:8331:39
+				s.enums = s.enums + 1
 				// Osty: /tmp/selfhost_merged.osty:8332:13
 				if n.flags == 1 {
 					// Osty: /tmp/selfhost_merged.osty:8332:45
 					s.publicDecls = s.publicDecls + 1
 				}
 			}
-			if func() bool { _, ok := _m30.(*AstNodeKind_AstNTypeAlias); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:8333:42
-				s.aliases = s.aliases + 1
+			if func() bool { _, ok := _m30.(*AstNodeKind_AstNInterfaceDecl); return ok }() {
+				// Osty: /tmp/selfhost_merged.osty:8333:49
+				s.interfaces = s.interfaces + 1
 				// Osty: /tmp/selfhost_merged.osty:8334:13
 				if n.flags == 1 {
 					// Osty: /tmp/selfhost_merged.osty:8334:45
 					s.publicDecls = s.publicDecls + 1
 				}
 			}
-			if func() bool { _, ok := _m30.(*AstNodeKind_AstNUseDecl); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:8335:37
-				s.uses = s.uses + 1
+			if func() bool { _, ok := _m30.(*AstNodeKind_AstNTypeAlias); return ok }() {
+				// Osty: /tmp/selfhost_merged.osty:8335:42
+				s.aliases = s.aliases + 1
 				// Osty: /tmp/selfhost_merged.osty:8336:13
 				if n.flags == 1 {
-					// Osty: /tmp/selfhost_merged.osty:8336:40
+					// Osty: /tmp/selfhost_merged.osty:8336:45
+					s.publicDecls = s.publicDecls + 1
+				}
+			}
+			if func() bool { _, ok := _m30.(*AstNodeKind_AstNUseDecl); return ok }() {
+				// Osty: /tmp/selfhost_merged.osty:8337:37
+				s.uses = s.uses + 1
+				// Osty: /tmp/selfhost_merged.osty:8338:13
+				if n.flags == 1 {
+					// Osty: /tmp/selfhost_merged.osty:8338:40
 					s.goUses = s.goUses + 1
 				}
 			}
 			if func() bool { _, ok := _m30.(*AstNodeKind_AstNBlock); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:8337:37
+				// Osty: /tmp/selfhost_merged.osty:8339:37
 				s.blocks = s.blocks + 1
 			}
 			if func() bool { _, ok := _m30.(*AstNodeKind_AstNLet); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:8338:33
+				// Osty: /tmp/selfhost_merged.osty:8340:33
 				s.lets = s.lets + 1
-				// Osty: /tmp/selfhost_merged.osty:8339:26
+				// Osty: /tmp/selfhost_merged.osty:8341:26
 				s.statements = s.statements + 1
-				// Osty: /tmp/selfhost_merged.osty:8340:13
+				// Osty: /tmp/selfhost_merged.osty:8342:13
 				if n.flags == 1 {
-					// Osty: /tmp/selfhost_merged.osty:8340:49
+					// Osty: /tmp/selfhost_merged.osty:8342:49
 					s.mutableBindings = s.mutableBindings + 1
 				}
 			}
 			if func() bool { _, ok := _m30.(*AstNodeKind_AstNReturn); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:8341:39
+				// Osty: /tmp/selfhost_merged.osty:8343:39
 				s.returns = s.returns + 1
-				// Osty: /tmp/selfhost_merged.osty:8342:26
-				s.statements = s.statements + 1
-			}
-			if func() bool { _, ok := _m30.(*AstNodeKind_AstNBreak); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:8343:37
-				s.breaks = s.breaks + 1
 				// Osty: /tmp/selfhost_merged.osty:8344:26
 				s.statements = s.statements + 1
 			}
-			if func() bool { _, ok := _m30.(*AstNodeKind_AstNContinue); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:8345:43
-				s.continues = s.continues + 1
+			if func() bool { _, ok := _m30.(*AstNodeKind_AstNBreak); return ok }() {
+				// Osty: /tmp/selfhost_merged.osty:8345:37
+				s.breaks = s.breaks + 1
 				// Osty: /tmp/selfhost_merged.osty:8346:26
 				s.statements = s.statements + 1
 			}
-			if func() bool { _, ok := _m30.(*AstNodeKind_AstNFor); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:8347:33
-				s.fors = s.fors + 1
+			if func() bool { _, ok := _m30.(*AstNodeKind_AstNContinue); return ok }() {
+				// Osty: /tmp/selfhost_merged.osty:8347:43
+				s.continues = s.continues + 1
 				// Osty: /tmp/selfhost_merged.osty:8348:26
 				s.statements = s.statements + 1
 			}
-			if func() bool { _, ok := _m30.(*AstNodeKind_AstNDefer); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:8349:37
-				s.defers = s.defers + 1
+			if func() bool { _, ok := _m30.(*AstNodeKind_AstNFor); return ok }() {
+				// Osty: /tmp/selfhost_merged.osty:8349:33
+				s.fors = s.fors + 1
 				// Osty: /tmp/selfhost_merged.osty:8350:26
 				s.statements = s.statements + 1
 			}
+			if func() bool { _, ok := _m30.(*AstNodeKind_AstNDefer); return ok }() {
+				// Osty: /tmp/selfhost_merged.osty:8351:37
+				s.defers = s.defers + 1
+				// Osty: /tmp/selfhost_merged.osty:8352:26
+				s.statements = s.statements + 1
+			}
 			if func() bool { _, ok := _m30.(*AstNodeKind_AstNIf); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:8351:31
+				// Osty: /tmp/selfhost_merged.osty:8353:31
 				s.ifs = s.ifs + 1
-				// Osty: /tmp/selfhost_merged.osty:8352:13
+				// Osty: /tmp/selfhost_merged.osty:8354:13
 				if n.flags == 1 {
-					// Osty: /tmp/selfhost_merged.osty:8352:40
+					// Osty: /tmp/selfhost_merged.osty:8354:40
 					s.ifLets = s.ifLets + 1
 				}
 			}
 			if func() bool { _, ok := _m30.(*AstNodeKind_AstNMatch); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:8353:38
+				// Osty: /tmp/selfhost_merged.osty:8355:38
 				s.matches = s.matches + 1
 			}
 			if func() bool { _, ok := _m30.(*AstNodeKind_AstNMatchArm); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:8354:43
+				// Osty: /tmp/selfhost_merged.osty:8356:43
 				s.matchArms = s.matchArms + 1
 			}
 			if func() bool { _, ok := _m30.(*AstNodeKind_AstNCall); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:8355:35
+				// Osty: /tmp/selfhost_merged.osty:8357:35
 				s.calls = s.calls + 1
 			}
 			if func() bool { _, ok := _m30.(*AstNodeKind_AstNIndex); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:8356:38
+				// Osty: /tmp/selfhost_merged.osty:8358:38
 				s.indexes = s.indexes + 1
 			}
 			if func() bool { _, ok := _m30.(*AstNodeKind_AstNField); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:8357:40
+				// Osty: /tmp/selfhost_merged.osty:8359:40
 				s.selectors = s.selectors + 1
 			}
 			if func() bool { _, ok := _m30.(*AstNodeKind_AstNBinary); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:8358:41
+				// Osty: /tmp/selfhost_merged.osty:8360:41
 				s.binaryOps = s.binaryOps + 1
 			}
 			if func() bool { _, ok := _m30.(*AstNodeKind_AstNUnary); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:8359:39
+				// Osty: /tmp/selfhost_merged.osty:8361:39
 				s.unaryOps = s.unaryOps + 1
 			}
 			if func() bool { _, ok := _m30.(*AstNodeKind_AstNAssign); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:8360:43
+				// Osty: /tmp/selfhost_merged.osty:8362:43
 				s.assignments = s.assignments + 1
 			}
 			if func() bool { _, ok := _m30.(*AstNodeKind_AstNClosure); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:8361:41
+				// Osty: /tmp/selfhost_merged.osty:8363:41
 				s.closures = s.closures + 1
 			}
 			if func() bool { _, ok := _m30.(*AstNodeKind_AstNTurbofish); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:8362:44
+				// Osty: /tmp/selfhost_merged.osty:8364:44
 				s.turbofish = s.turbofish + 1
 			}
 			if func() bool { _, ok := _m30.(*AstNodeKind_AstNList); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:8363:38
+				// Osty: /tmp/selfhost_merged.osty:8365:38
 				s.listLits = s.listLits + 1
 			}
 			if func() bool { _, ok := _m30.(*AstNodeKind_AstNTuple); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:8364:40
+				// Osty: /tmp/selfhost_merged.osty:8366:40
 				s.tupleLits = s.tupleLits + 1
 			}
 			if func() bool { _, ok := _m30.(*AstNodeKind_AstNMap); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:8365:36
+				// Osty: /tmp/selfhost_merged.osty:8367:36
 				s.mapLits = s.mapLits + 1
 			}
 			if func() bool { _, ok := _m30.(*AstNodeKind_AstNStructLit); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:8366:45
+				// Osty: /tmp/selfhost_merged.osty:8368:45
 				s.structLits = s.structLits + 1
 			}
 			if func() bool { _, ok := _m30.(*AstNodeKind_AstNRange); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:8367:37
+				// Osty: /tmp/selfhost_merged.osty:8369:37
 				s.ranges = s.ranges + 1
 			}
 			if func() bool { _, ok := _m30.(*AstNodeKind_AstNChanSend); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:8368:46
+				// Osty: /tmp/selfhost_merged.osty:8370:46
 				s.channelSends = s.channelSends + 1
 			}
 			if func() bool { _, ok := _m30.(*AstNodeKind_AstNQuestion); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:8369:45
+				// Osty: /tmp/selfhost_merged.osty:8371:45
 				s.questionOps = s.questionOps + 1
 			}
 			if func() bool { _, ok := _m30.(*AstNodeKind_AstNParam); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:8370:37
+				// Osty: /tmp/selfhost_merged.osty:8372:37
 				s.params = s.params + 1
 			}
 			if func() bool { _, ok := _m30.(*AstNodeKind_AstNIntLit); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:8371:40
+				// Osty: /tmp/selfhost_merged.osty:8373:40
 				s.literals = s.literals + 1
 			}
 			if func() bool { _, ok := _m30.(*AstNodeKind_AstNFloatLit); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:8372:42
+				// Osty: /tmp/selfhost_merged.osty:8374:42
 				s.literals = s.literals + 1
 			}
 			if func() bool { _, ok := _m30.(*AstNodeKind_AstNStringLit); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:8373:43
+				// Osty: /tmp/selfhost_merged.osty:8375:43
 				s.literals = s.literals + 1
 			}
 			if func() bool { _, ok := _m30.(*AstNodeKind_AstNBoolLit); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:8374:41
-				s.literals = s.literals + 1
-			}
-			if func() bool { _, ok := _m30.(*AstNodeKind_AstNCharLit); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:8375:41
-				s.literals = s.literals + 1
-			}
-			if func() bool { _, ok := _m30.(*AstNodeKind_AstNByteLit); return ok }() {
 				// Osty: /tmp/selfhost_merged.osty:8376:41
 				s.literals = s.literals + 1
 			}
+			if func() bool { _, ok := _m30.(*AstNodeKind_AstNCharLit); return ok }() {
+				// Osty: /tmp/selfhost_merged.osty:8377:41
+				s.literals = s.literals + 1
+			}
+			if func() bool { _, ok := _m30.(*AstNodeKind_AstNByteLit); return ok }() {
+				// Osty: /tmp/selfhost_merged.osty:8378:41
+				s.literals = s.literals + 1
+			}
 			if func() bool { _, ok := _m30.(*AstNodeKind_AstNError); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:8377:37
+				// Osty: /tmp/selfhost_merged.osty:8379:37
 				s.errors = s.errors + 1
 			}
 			{
-				// Osty: /tmp/selfhost_merged.osty:8378:20
+				// Osty: /tmp/selfhost_merged.osty:8380:20
 				_ = n
 			}
 		}
 	}
-	// Osty: /tmp/selfhost_merged.osty:8381:13
+	// Osty: /tmp/selfhost_merged.osty:8383:13
 	s.decls = astFileDeclCount(file)
 	return s
+}
+
+// Osty: /tmp/selfhost_merged.osty:8389:5
+type FrontCheckBinding struct {
+	name     string
+	typeName string
+	mutable  bool
+}
+
+// Osty: /tmp/selfhost_merged.osty:8395:5
+type FrontFnSig struct {
+	name          string
+	receiverType  string
+	returnType    string
+	paramNames    []string
+	paramTypes    []string
+	generics      []string
+	genericBounds []*FrontTypeSubst
+}
+
+// Osty: /tmp/selfhost_merged.osty:8405:5
+type FrontFieldSig struct {
+	owner      string
+	name       string
+	typeName   string
+	hasDefault bool
+}
+
+// Osty: /tmp/selfhost_merged.osty:8412:5
+type FrontVariantSig struct {
+	owner      string
+	name       string
+	fieldTypes []string
+	generics   []string
+}
+
+// Osty: /tmp/selfhost_merged.osty:8419:5
+type FrontAliasSig struct {
+	name     string
+	typeName string
+	generics []string
+}
+
+// Osty: /tmp/selfhost_merged.osty:8425:5
+type FrontTypeSig struct {
+	name     string
+	generics []string
+}
+
+// Osty: /tmp/selfhost_merged.osty:8430:5
+type FrontTypeSubst struct {
+	name     string
+	typeName string
+}
+
+// Osty: /tmp/selfhost_merged.osty:8435:5
+type FrontTypeView struct {
+	kind   string
+	head   string
+	args   []string
+	params []string
+	ret    string
+}
+
+// Osty: /tmp/selfhost_merged.osty:8443:5
+type FrontInterfaceExtSig struct {
+	owner    string
+	typeName string
+}
+
+// Osty: /tmp/selfhost_merged.osty:8448:5
+type FrontCheckedNode struct {
+	node     int
+	kind     string
+	typeName string
+	start    int
+	end      int
+}
+
+// Osty: /tmp/selfhost_merged.osty:8456:5
+type FrontCheckedBinding struct {
+	node     int
+	name     string
+	typeName string
+	mutable  bool
+	start    int
+	end      int
+}
+
+// Osty: /tmp/selfhost_merged.osty:8465:5
+type FrontCheckedSymbol struct {
+	node     int
+	kind     string
+	name     string
+	owner    string
+	typeName string
+	start    int
+	end      int
+}
+
+// Osty: /tmp/selfhost_merged.osty:8475:5
+type FrontCheckInstantiation struct {
+	node       int
+	callee     string
+	typeArgs   []string
+	resultType string
+	start      int
+	end        int
+}
+
+// Osty: /tmp/selfhost_merged.osty:8484:5
+type FrontCheckEnv struct {
+	bindings         []*FrontCheckBinding
+	fns              []*FrontFnSig
+	fields           []*FrontFieldSig
+	variants         []*FrontVariantSig
+	aliases          []*FrontAliasSig
+	types            []*FrontTypeSig
+	interfaces       []string
+	interfaceExtends []*FrontInterfaceExtSig
+	genericBounds    []*FrontTypeSubst
+	returnType       string
+	assignments      int
+	accepted         int
+	errors           int
+	typedNodes       []*FrontCheckedNode
+	checkedBindings  []*FrontCheckedBinding
+	checkedSymbols   []*FrontCheckedSymbol
+	instantiations   []*FrontCheckInstantiation
+}
+
+// Osty: /tmp/selfhost_merged.osty:8504:5
+type FrontCheckResult struct {
+	summary        *FrontCheckSummary
+	typedNodes     []*FrontCheckedNode
+	bindings       []*FrontCheckedBinding
+	symbols        []*FrontCheckedSymbol
+	instantiations []*FrontCheckInstantiation
+}
+
+// Osty: /tmp/selfhost_merged.osty:8512:5
+func frontendCheckSource(source string) *FrontCheckSummary {
+	return frontendCheckSourceStructured(source).summary
+}
+
+// Osty: /tmp/selfhost_merged.osty:8516:5
+func frontendCheckSourceStructured(source string) *FrontCheckResult {
+	return frontendCheckLexedSourceStructured(ostyLexSource(source))
+}
+
+// Osty: /tmp/selfhost_merged.osty:8520:5
+func frontendCheckLexedSource(lexed *OstyLexedSource) *FrontCheckSummary {
+	return frontendCheckLexedSourceStructured(lexed).summary
+}
+
+// Osty: /tmp/selfhost_merged.osty:8524:5
+func frontendCheckLexedSourceStructured(lexed *OstyLexedSource) *FrontCheckResult {
+	return frontendCheckAstStructured(astParseLexedSource(lexed))
+}
+
+// Osty: /tmp/selfhost_merged.osty:8528:5
+func frontendCheckAst(file *AstFile) *FrontCheckSummary {
+	return frontendCheckAstStructured(file).summary
+}
+
+// Osty: /tmp/selfhost_merged.osty:8532:5
+func frontendCheckAstStructured(file *AstFile) *FrontCheckResult {
+	// Osty: /tmp/selfhost_merged.osty:8533:5
+	env := frontCheckEnv("()")
+	_ = env
+	// Osty: /tmp/selfhost_merged.osty:8534:16
+	env.errors = astFileErrorCount(file)
+	// Osty: /tmp/selfhost_merged.osty:8535:5
+	frontCheckCollectDecls(file, env)
+	// Osty: /tmp/selfhost_merged.osty:8536:5
+	for _, declIdx := range file.arena.decls {
+		// Osty: /tmp/selfhost_merged.osty:8537:9
+		frontCheckDecl(file, env, declIdx)
+	}
+	return frontCheckResultFromEnv(env)
+}
+
+// Osty: /tmp/selfhost_merged.osty:8542:1
+func frontCheckSummaryFromEnv(env *FrontCheckEnv) *FrontCheckSummary {
+	return &FrontCheckSummary{assignments: env.assignments, accepted: env.accepted, errors: env.errors}
+}
+
+// Osty: /tmp/selfhost_merged.osty:8550:1
+func frontCheckResultFromEnv(env *FrontCheckEnv) *FrontCheckResult {
+	return &FrontCheckResult{summary: frontCheckSummaryFromEnv(env), typedNodes: env.typedNodes, bindings: env.checkedBindings, symbols: env.checkedSymbols, instantiations: env.instantiations}
+}
+
+// Osty: /tmp/selfhost_merged.osty:8560:1
+func frontCheckEnv(returnType string) *FrontCheckEnv {
+	// Osty: /tmp/selfhost_merged.osty:8561:5
+	env := &FrontCheckEnv{bindings: make([]*FrontCheckBinding, 0, 1), fns: make([]*FrontFnSig, 0, 1), fields: make([]*FrontFieldSig, 0, 1), variants: make([]*FrontVariantSig, 0, 1), aliases: make([]*FrontAliasSig, 0, 1), types: make([]*FrontTypeSig, 0, 1), interfaces: make([]string, 0, 1), interfaceExtends: make([]*FrontInterfaceExtSig, 0, 1), genericBounds: make([]*FrontTypeSubst, 0, 1), returnType: returnType, assignments: 0, accepted: 0, errors: 0, typedNodes: make([]*FrontCheckedNode, 0, 1), checkedBindings: make([]*FrontCheckedBinding, 0, 1), checkedSymbols: make([]*FrontCheckedSymbol, 0, 1), instantiations: make([]*FrontCheckInstantiation, 0, 1)}
+	_ = env
+	// Osty: /tmp/selfhost_merged.osty:8580:5
+	frontCheckInstallBuiltins(env)
+	return env
+}
+
+// Osty: /tmp/selfhost_merged.osty:8584:1
+func frontCheckChildEnv(parent *FrontCheckEnv, returnType string) *FrontCheckEnv {
+	return &FrontCheckEnv{bindings: parent.bindings, fns: parent.fns, fields: parent.fields, variants: parent.variants, aliases: parent.aliases, types: parent.types, interfaces: parent.interfaces, interfaceExtends: parent.interfaceExtends, genericBounds: parent.genericBounds, returnType: returnType, assignments: 0, accepted: 0, errors: 0, typedNodes: make([]*FrontCheckedNode, 0, 1), checkedBindings: make([]*FrontCheckedBinding, 0, 1), checkedSymbols: parent.checkedSymbols, instantiations: make([]*FrontCheckInstantiation, 0, 1)}
+}
+
+// Osty: /tmp/selfhost_merged.osty:8606:1
+func frontCheckInstallBuiltins(env *FrontCheckEnv) {
+	// Osty: /tmp/selfhost_merged.osty:8607:5
+	func() struct{} {
+		env.types = append(env.types, &FrontTypeSig{name: "Option", generics: []string{"T"}})
+		return struct{}{}
+	}()
+	// Osty: /tmp/selfhost_merged.osty:8608:5
+	func() struct{} {
+		env.variants = append(env.variants, &FrontVariantSig{owner: "Option", name: "Some", fieldTypes: []string{"T"}, generics: []string{"T"}})
+		return struct{}{}
+	}()
+	// Osty: /tmp/selfhost_merged.osty:8609:5
+	func() struct{} {
+		env.variants = append(env.variants, &FrontVariantSig{owner: "Option", name: "None", fieldTypes: make([]string, 0, 1), generics: []string{"T"}})
+		return struct{}{}
+	}()
+	// Osty: /tmp/selfhost_merged.osty:8610:5
+	func() struct{} {
+		env.types = append(env.types, &FrontTypeSig{name: "Result", generics: []string{"T", "E"}})
+		return struct{}{}
+	}()
+	// Osty: /tmp/selfhost_merged.osty:8611:5
+	func() struct{} {
+		env.variants = append(env.variants, &FrontVariantSig{owner: "Result", name: "Ok", fieldTypes: []string{"T"}, generics: []string{"T", "E"}})
+		return struct{}{}
+	}()
+	// Osty: /tmp/selfhost_merged.osty:8612:5
+	func() struct{} {
+		env.variants = append(env.variants, &FrontVariantSig{owner: "Result", name: "Err", fieldTypes: []string{"E"}, generics: []string{"T", "E"}})
+		return struct{}{}
+	}()
+}
+
+// Osty: /tmp/selfhost_merged.osty:8615:1
+func frontCheckMerge(parent *FrontCheckEnv, child *FrontCheckEnv) {
+	// Osty: /tmp/selfhost_merged.osty:8616:24
+	parent.assignments = parent.assignments + child.assignments
+	// Osty: /tmp/selfhost_merged.osty:8617:21
+	parent.accepted = parent.accepted + child.accepted
+	// Osty: /tmp/selfhost_merged.osty:8618:19
+	parent.errors = parent.errors + child.errors
+	// Osty: /tmp/selfhost_merged.osty:8619:5
+	for _, typed := range child.typedNodes {
+		// Osty: /tmp/selfhost_merged.osty:8620:9
+		func() struct{} { parent.typedNodes = append(parent.typedNodes, typed); return struct{}{} }()
+	}
+	// Osty: /tmp/selfhost_merged.osty:8622:5
+	for _, binding := range child.checkedBindings {
+		// Osty: /tmp/selfhost_merged.osty:8623:9
+		func() struct{} { parent.checkedBindings = append(parent.checkedBindings, binding); return struct{}{} }()
+	}
+	// Osty: /tmp/selfhost_merged.osty:8625:5
+	for _, inst := range child.instantiations {
+		// Osty: /tmp/selfhost_merged.osty:8626:9
+		func() struct{} { parent.instantiations = append(parent.instantiations, inst); return struct{}{} }()
+	}
+}
+
+// Osty: /tmp/selfhost_merged.osty:8630:5
+func frontCheckResultTypedNodeCount(result *FrontCheckResult) int {
+	// Osty: /tmp/selfhost_merged.osty:8631:5
+	count := 0
+	_ = count
+	// Osty: /tmp/selfhost_merged.osty:8632:5
+	for _, typed := range result.typedNodes {
+		// Osty: /tmp/selfhost_merged.osty:8633:9
+		_ = typed
+		// Osty: /tmp/selfhost_merged.osty:8634:15
+		count = count + 1
+	}
+	return count
+}
+
+// Osty: /tmp/selfhost_merged.osty:8639:5
+func frontCheckResultBindingType(result *FrontCheckResult, name string) string {
+	// Osty: /tmp/selfhost_merged.osty:8640:5
+	found := ""
+	_ = found
+	// Osty: /tmp/selfhost_merged.osty:8641:5
+	for _, binding := range result.bindings {
+		// Osty: /tmp/selfhost_merged.osty:8642:9
+		if binding.name == name {
+			// Osty: /tmp/selfhost_merged.osty:8643:19
+			found = binding.typeName
+		}
+	}
+	return found
+}
+
+// Osty: /tmp/selfhost_merged.osty:8649:5
+func frontCheckResultSymbolCount(result *FrontCheckResult, kind string) int {
+	// Osty: /tmp/selfhost_merged.osty:8650:5
+	count := 0
+	_ = count
+	// Osty: /tmp/selfhost_merged.osty:8651:5
+	for _, symbol := range result.symbols {
+		// Osty: /tmp/selfhost_merged.osty:8652:9
+		if kind == "" || symbol.kind == kind {
+			// Osty: /tmp/selfhost_merged.osty:8653:19
+			count = count + 1
+		}
+	}
+	return count
+}
+
+// Osty: /tmp/selfhost_merged.osty:8659:5
+func frontCheckResultInstantiationCount(result *FrontCheckResult) int {
+	// Osty: /tmp/selfhost_merged.osty:8660:5
+	count := 0
+	_ = count
+	// Osty: /tmp/selfhost_merged.osty:8661:5
+	for _, inst := range result.instantiations {
+		// Osty: /tmp/selfhost_merged.osty:8662:9
+		_ = inst
+		// Osty: /tmp/selfhost_merged.osty:8663:15
+		count = count + 1
+	}
+	return count
+}
+
+// Osty: /tmp/selfhost_merged.osty:8668:1
+func frontCheckHasTypedNode(env *FrontCheckEnv, node int) bool {
+	// Osty: /tmp/selfhost_merged.osty:8669:5
+	for _, typed := range env.typedNodes {
+		// Osty: /tmp/selfhost_merged.osty:8670:9
+		if typed.node == node {
+			// Osty: /tmp/selfhost_merged.osty:8671:13
+			return true
+		}
+	}
+	return false
+}
+
+// Osty: /tmp/selfhost_merged.osty:8677:1
+func frontCheckRecordTypedNode(file *AstFile, env *FrontCheckEnv, nodeIdx int, typeName string) {
+	// Osty: /tmp/selfhost_merged.osty:8678:5
+	if nodeIdx < 0 || typeName == "" || typeName == "Invalid" {
+		// Osty: /tmp/selfhost_merged.osty:8679:9
+		return
+	}
+	// Osty: /tmp/selfhost_merged.osty:8681:5
+	if frontCheckHasTypedNode(env, nodeIdx) {
+		// Osty: /tmp/selfhost_merged.osty:8682:9
+		return
+	}
+	// Osty: /tmp/selfhost_merged.osty:8684:5
+	node := astArenaNodeAt(file.arena, nodeIdx)
+	_ = node
+	// Osty: /tmp/selfhost_merged.osty:8685:5
+	func() struct{} {
+		env.typedNodes = append(env.typedNodes, &FrontCheckedNode{node: nodeIdx, kind: astNodeKindName(node.kind), typeName: typeName, start: node.start, end: node.end})
+		return struct{}{}
+	}()
+}
+
+// Osty: /tmp/selfhost_merged.osty:8696:1
+func frontCheckTypedExpr(file *AstFile, env *FrontCheckEnv, nodeIdx int, typeName string) string {
+	// Osty: /tmp/selfhost_merged.osty:8697:5
+	frontCheckRecordTypedNode(file, env, nodeIdx, typeName)
+	return typeName
+}
+
+// Osty: /tmp/selfhost_merged.osty:8701:1
+func frontCheckRecordBinding(env *FrontCheckEnv, node int, name string, typeName string, mutable bool, start int, end int) {
+	// Osty: /tmp/selfhost_merged.osty:8702:5
+	if name != "" && name != "_" {
+		// Osty: /tmp/selfhost_merged.osty:8703:9
+		func() struct{} {
+			env.checkedBindings = append(env.checkedBindings, &FrontCheckedBinding{node: node, name: name, typeName: typeName, mutable: mutable, start: start, end: end})
+			return struct{}{}
+		}()
+	}
+}
+
+// Osty: /tmp/selfhost_merged.osty:8707:1
+func frontCheckRecordSymbol(env *FrontCheckEnv, nodeIdx int, node *AstNode, kind string, name string, owner string, typeName string) {
+	// Osty: /tmp/selfhost_merged.osty:8708:5
+	func() struct{} {
+		env.checkedSymbols = append(env.checkedSymbols, &FrontCheckedSymbol{node: nodeIdx, kind: kind, name: name, owner: owner, typeName: typeName, start: node.start, end: node.end})
+		return struct{}{}
+	}()
+}
+
+// Osty: /tmp/selfhost_merged.osty:8721:1
+func frontCheckConcreteTypeArgs(generics []string, substs []*FrontTypeSubst) []string {
+	// Osty: /tmp/selfhost_merged.osty:8722:5
+	var out []string = make([]string, 0, 1)
+	_ = out
+	// Osty: /tmp/selfhost_merged.osty:8723:5
+	for _, generic := range generics {
+		// Osty: /tmp/selfhost_merged.osty:8724:9
+		value := frontCheckSubstLookup(substs, generic)
+		_ = value
+		// Osty: /tmp/selfhost_merged.osty:8725:9
+		if value != "" {
+			// Osty: /tmp/selfhost_merged.osty:8726:13
+			func() struct{} { out = append(out, value); return struct{}{} }()
+		}
+	}
+	return out
+}
+
+// Osty: /tmp/selfhost_merged.osty:8732:1
+func frontCheckRecordInstantiation(file *AstFile, env *FrontCheckEnv, nodeIdx int, callee string, generics []string, substs []*FrontTypeSubst, resultType string) {
+	// Osty: /tmp/selfhost_merged.osty:8733:5
+	if nodeIdx < 0 {
+		// Osty: /tmp/selfhost_merged.osty:8734:9
+		return
+	}
+	// Osty: /tmp/selfhost_merged.osty:8736:5
+	typeArgs := frontCheckConcreteTypeArgs(generics, substs)
+	_ = typeArgs
+	// Osty: /tmp/selfhost_merged.osty:8737:5
+	if frontCheckStringCount(typeArgs) == 0 {
+		// Osty: /tmp/selfhost_merged.osty:8738:9
+		return
+	}
+	// Osty: /tmp/selfhost_merged.osty:8740:5
+	node := astArenaNodeAt(file.arena, nodeIdx)
+	_ = node
+	// Osty: /tmp/selfhost_merged.osty:8741:5
+	func() struct{} {
+		env.instantiations = append(env.instantiations, &FrontCheckInstantiation{node: nodeIdx, callee: callee, typeArgs: typeArgs, resultType: resultType, start: node.start, end: node.end})
+		return struct{}{}
+	}()
+}
+
+// Osty: /tmp/selfhost_merged.osty:8753:1
+func frontCheckCollectDecls(file *AstFile, env *FrontCheckEnv) {
+	// Osty: /tmp/selfhost_merged.osty:8754:5
+	for _, declIdx := range file.arena.decls {
+		// Osty: /tmp/selfhost_merged.osty:8755:9
+		decl := astArenaNodeAt(file.arena, declIdx)
+		_ = decl
+		// Osty: /tmp/selfhost_merged.osty:8756:9
+		frontCheckCollectDecl(file, env, declIdx, decl, "", make([]string, 0, 1))
+	}
+}
+
+// Osty: /tmp/selfhost_merged.osty:8760:1
+func frontCheckCollectDecl(file *AstFile, env *FrontCheckEnv, declIdx int, decl *AstNode, owner string, ownerGenerics []string) {
+	// Osty: /tmp/selfhost_merged.osty:8761:5
+	if ostyEqual(decl.kind, AstNodeKind(&AstNodeKind_AstNFnDecl{})) {
+		// Osty: /tmp/selfhost_merged.osty:8762:9
+		if frontCheckFnExists(env, decl.text, owner) {
+			// Osty: /tmp/selfhost_merged.osty:8763:24
+			env.errors = env.errors + 1
+		}
+		// Osty: /tmp/selfhost_merged.osty:8765:9
+		frontCheckCheckGenericParams(file, env, decl.children2)
+		// Osty: /tmp/selfhost_merged.osty:8766:9
+		sig := frontFnSigFromDecl(file, decl, owner, ownerGenerics)
+		_ = sig
+		// Osty: /tmp/selfhost_merged.osty:8767:9
+		func() struct{} { env.fns = append(env.fns, sig); return struct{}{} }()
+		// Osty: /tmp/selfhost_merged.osty:8768:9
+		frontCheckRecordSymbol(env, declIdx, decl, "fn", decl.text, owner, frontCheckFnType(sig.paramTypes, sig.returnType))
+		// Osty: /tmp/selfhost_merged.osty:8769:9
+		return
+	}
+	// Osty: /tmp/selfhost_merged.osty:8771:5
+	if ostyEqual(decl.kind, AstNodeKind(&AstNodeKind_AstNStructDecl{})) {
+		// Osty: /tmp/selfhost_merged.osty:8772:9
+		frontCheckCheckGenericParams(file, env, decl.children2)
+		// Osty: /tmp/selfhost_merged.osty:8773:9
+		generics := frontCheckGenericNames(file, decl.children2)
+		_ = generics
+		// Osty: /tmp/selfhost_merged.osty:8774:9
+		if frontCheckDeclaredTypeExists(env, decl.text) {
+			// Osty: /tmp/selfhost_merged.osty:8775:24
+			env.errors = env.errors + 1
+		}
+		// Osty: /tmp/selfhost_merged.osty:8777:9
+		func() struct{} {
+			env.types = append(env.types, &FrontTypeSig{name: decl.text, generics: generics})
+			return struct{}{}
+		}()
+		// Osty: /tmp/selfhost_merged.osty:8778:9
+		frontCheckRecordSymbol(env, declIdx, decl, "struct", decl.text, owner, frontCheckGenericOwnerType(decl.text, generics, make([]*FrontTypeSubst, 0, 1)))
+		// Osty: /tmp/selfhost_merged.osty:8779:9
+		for _, memberIdx := range decl.children {
+			// Osty: /tmp/selfhost_merged.osty:8780:13
+			member := astArenaNodeAt(file.arena, memberIdx)
+			_ = member
+			// Osty: /tmp/selfhost_merged.osty:8781:13
+			if ostyEqual(member.kind, AstNodeKind(&AstNodeKind_AstNField_{})) {
+				// Osty: /tmp/selfhost_merged.osty:8782:17
+				if frontCheckFieldLookup(env, decl.text, member.text).name != "" {
+					// Osty: /tmp/selfhost_merged.osty:8783:32
+					env.errors = env.errors + 1
+				}
+				// Osty: /tmp/selfhost_merged.osty:8785:17
+				field := &FrontFieldSig{owner: decl.text, name: member.text, typeName: frontCheckTypeName(file, member.right), hasDefault: member.left >= 0}
+				_ = field
+				// Osty: /tmp/selfhost_merged.osty:8791:17
+				func() struct{} { env.fields = append(env.fields, field); return struct{}{} }()
+				// Osty: /tmp/selfhost_merged.osty:8792:17
+				frontCheckRecordSymbol(env, memberIdx, member, "field", member.text, decl.text, field.typeName)
+			} else if ostyEqual(member.kind, AstNodeKind(&AstNodeKind_AstNFnDecl{})) {
+				// Osty: /tmp/selfhost_merged.osty:8794:17
+				frontCheckCollectDecl(file, env, memberIdx, member, decl.text, generics)
+			}
+		}
+		// Osty: /tmp/selfhost_merged.osty:8797:9
+		return
+	}
+	// Osty: /tmp/selfhost_merged.osty:8799:5
+	if ostyEqual(decl.kind, AstNodeKind(&AstNodeKind_AstNEnumDecl{})) {
+		// Osty: /tmp/selfhost_merged.osty:8800:9
+		frontCheckCheckGenericParams(file, env, decl.children2)
+		// Osty: /tmp/selfhost_merged.osty:8801:9
+		generics := frontCheckGenericNames(file, decl.children2)
+		_ = generics
+		// Osty: /tmp/selfhost_merged.osty:8802:9
+		if frontCheckDeclaredTypeExists(env, decl.text) {
+			// Osty: /tmp/selfhost_merged.osty:8803:24
+			env.errors = env.errors + 1
+		}
+		// Osty: /tmp/selfhost_merged.osty:8805:9
+		func() struct{} {
+			env.types = append(env.types, &FrontTypeSig{name: decl.text, generics: generics})
+			return struct{}{}
+		}()
+		// Osty: /tmp/selfhost_merged.osty:8806:9
+		frontCheckRecordSymbol(env, declIdx, decl, "enum", decl.text, owner, frontCheckGenericOwnerType(decl.text, generics, make([]*FrontTypeSubst, 0, 1)))
+		// Osty: /tmp/selfhost_merged.osty:8807:9
+		for _, memberIdx := range decl.children {
+			// Osty: /tmp/selfhost_merged.osty:8808:13
+			member := astArenaNodeAt(file.arena, memberIdx)
+			_ = member
+			// Osty: /tmp/selfhost_merged.osty:8809:13
+			if ostyEqual(member.kind, AstNodeKind(&AstNodeKind_AstNVariant{})) {
+				// Osty: /tmp/selfhost_merged.osty:8810:17
+				if frontCheckVariantLookupForOwner(env, member.text, decl.text).name != "" {
+					// Osty: /tmp/selfhost_merged.osty:8811:32
+					env.errors = env.errors + 1
+				}
+				// Osty: /tmp/selfhost_merged.osty:8813:17
+				var fieldTypes []string = make([]string, 0, 1)
+				_ = fieldTypes
+				// Osty: /tmp/selfhost_merged.osty:8814:17
+				for _, fieldIdx := range member.children {
+					// Osty: /tmp/selfhost_merged.osty:8815:21
+					func() struct{} {
+						fieldTypes = append(fieldTypes, frontCheckTypeName(file, fieldIdx))
+						return struct{}{}
+					}()
+				}
+				// Osty: /tmp/selfhost_merged.osty:8817:17
+				func() struct{} {
+					env.variants = append(env.variants, &FrontVariantSig{owner: decl.text, name: member.text, fieldTypes: fieldTypes, generics: generics})
+					return struct{}{}
+				}()
+				// Osty: /tmp/selfhost_merged.osty:8818:17
+				frontCheckRecordSymbol(env, memberIdx, member, "variant", member.text, decl.text, frontCheckGenericOwnerType(decl.text, generics, make([]*FrontTypeSubst, 0, 1)))
+			} else if ostyEqual(member.kind, AstNodeKind(&AstNodeKind_AstNFnDecl{})) {
+				// Osty: /tmp/selfhost_merged.osty:8820:17
+				frontCheckCollectDecl(file, env, memberIdx, member, decl.text, generics)
+			}
+		}
+		// Osty: /tmp/selfhost_merged.osty:8823:9
+		return
+	}
+	// Osty: /tmp/selfhost_merged.osty:8825:5
+	if ostyEqual(decl.kind, AstNodeKind(&AstNodeKind_AstNInterfaceDecl{})) {
+		// Osty: /tmp/selfhost_merged.osty:8826:9
+		if frontCheckDeclaredTypeExists(env, decl.text) {
+			// Osty: /tmp/selfhost_merged.osty:8827:24
+			env.errors = env.errors + 1
+		}
+		// Osty: /tmp/selfhost_merged.osty:8829:9
+		func() struct{} {
+			env.types = append(env.types, &FrontTypeSig{name: decl.text, generics: make([]string, 0, 1)})
+			return struct{}{}
+		}()
+		// Osty: /tmp/selfhost_merged.osty:8830:9
+		func() struct{} { env.interfaces = append(env.interfaces, decl.text); return struct{}{} }()
+		// Osty: /tmp/selfhost_merged.osty:8831:9
+		frontCheckRecordSymbol(env, declIdx, decl, "interface", decl.text, owner, decl.text)
+		// Osty: /tmp/selfhost_merged.osty:8832:9
+		for _, superIdx := range decl.children2 {
+			// Osty: /tmp/selfhost_merged.osty:8833:13
+			func() struct{} {
+				env.interfaceExtends = append(env.interfaceExtends, &FrontInterfaceExtSig{owner: decl.text, typeName: frontCheckTypeName(file, superIdx)})
+				return struct{}{}
+			}()
+		}
+		// Osty: /tmp/selfhost_merged.osty:8835:9
+		for _, memberIdx := range decl.children {
+			// Osty: /tmp/selfhost_merged.osty:8836:13
+			member := astArenaNodeAt(file.arena, memberIdx)
+			_ = member
+			// Osty: /tmp/selfhost_merged.osty:8837:13
+			if ostyEqual(member.kind, AstNodeKind(&AstNodeKind_AstNFnDecl{})) {
+				// Osty: /tmp/selfhost_merged.osty:8838:17
+				if frontCheckFnExists(env, member.text, decl.text) {
+					// Osty: /tmp/selfhost_merged.osty:8839:32
+					env.errors = env.errors + 1
+				}
+				// Osty: /tmp/selfhost_merged.osty:8841:17
+				frontCheckCheckGenericParams(file, env, member.children2)
+				// Osty: /tmp/selfhost_merged.osty:8842:17
+				func() struct{} {
+					env.fns = append(env.fns, frontFnSigFromInterfaceDecl(file, member, decl.text))
+					return struct{}{}
+				}()
+				// Osty: /tmp/selfhost_merged.osty:8843:17
+				sig := frontFnSigFromInterfaceDecl(file, member, decl.text)
+				_ = sig
+				// Osty: /tmp/selfhost_merged.osty:8844:17
+				frontCheckRecordSymbol(env, memberIdx, member, "fn", member.text, decl.text, frontCheckFnType(sig.paramTypes, sig.returnType))
+			} else if ostyEqual(member.kind, AstNodeKind(&AstNodeKind_AstNType{})) {
+				// Osty: /tmp/selfhost_merged.osty:8846:17
+				func() struct{} {
+					env.interfaceExtends = append(env.interfaceExtends, &FrontInterfaceExtSig{owner: decl.text, typeName: frontCheckTypeName(file, memberIdx)})
+					return struct{}{}
+				}()
+			}
+		}
+		// Osty: /tmp/selfhost_merged.osty:8849:9
+		return
+	}
+	// Osty: /tmp/selfhost_merged.osty:8851:5
+	if ostyEqual(decl.kind, AstNodeKind(&AstNodeKind_AstNTypeAlias{})) {
+		// Osty: /tmp/selfhost_merged.osty:8852:9
+		frontCheckCheckGenericParams(file, env, decl.children)
+		// Osty: /tmp/selfhost_merged.osty:8853:9
+		if frontCheckDeclaredTypeExists(env, decl.text) {
+			// Osty: /tmp/selfhost_merged.osty:8854:24
+			env.errors = env.errors + 1
+		}
+		// Osty: /tmp/selfhost_merged.osty:8856:9
+		func() struct{} {
+			env.aliases = append(env.aliases, &FrontAliasSig{name: decl.text, typeName: frontCheckTypeName(file, decl.left), generics: frontCheckGenericNames(file, decl.children)})
+			return struct{}{}
+		}()
+		// Osty: /tmp/selfhost_merged.osty:8857:9
+		frontCheckRecordSymbol(env, declIdx, decl, "alias", decl.text, owner, frontCheckTypeName(file, decl.left))
+		// Osty: /tmp/selfhost_merged.osty:8858:9
+		return
+	}
+	// Osty: /tmp/selfhost_merged.osty:8860:5
+	if ostyEqual(decl.kind, AstNodeKind(&AstNodeKind_AstNLet{})) {
+		// Osty: /tmp/selfhost_merged.osty:8861:9
+		declared := frontCheckTypeName(file, frontCheckFirstChild(decl))
+		_ = declared
+		// Osty: /tmp/selfhost_merged.osty:8862:9
+		if declared != "()" && declared != "Invalid" {
+			// Osty: /tmp/selfhost_merged.osty:8863:13
+			frontCheckBindPattern(file, env, decl.left, declared, decl.flags == 1)
+		}
+		// Osty: /tmp/selfhost_merged.osty:8865:9
+		return
+	}
+	// Osty: /tmp/selfhost_merged.osty:8867:5
+	if ostyEqual(decl.kind, AstNodeKind(&AstNodeKind_AstNUseDecl{})) {
+		// Osty: /tmp/selfhost_merged.osty:8868:9
+		alias := frontCheckLastPathSegment(decl.text)
+		_ = alias
+		// Osty: /tmp/selfhost_merged.osty:8869:9
+		for _, itemIdx := range decl.children {
+			// Osty: /tmp/selfhost_merged.osty:8870:13
+			item := astArenaNodeAt(file.arena, itemIdx)
+			_ = item
+			// Osty: /tmp/selfhost_merged.osty:8871:13
+			if ostyEqual(item.kind, AstNodeKind(&AstNodeKind_AstNFnDecl{})) {
+				// Osty: /tmp/selfhost_merged.osty:8872:17
+				sig := frontFnSigFromDecl(file, item, "", make([]string, 0, 1))
+				_ = sig
+				// Osty: /tmp/selfhost_merged.osty:8873:26
+				sig.name = fmt.Sprintf("%s.%s", ostyToString(alias), ostyToString(sig.name))
+				// Osty: /tmp/selfhost_merged.osty:8874:17
+				func() struct{} { env.fns = append(env.fns, sig); return struct{}{} }()
+				// Osty: /tmp/selfhost_merged.osty:8875:17
+				frontCheckRecordSymbol(env, itemIdx, item, "fn", sig.name, alias, frontCheckFnType(sig.paramTypes, sig.returnType))
+			}
+		}
+	}
+}
+
+// Osty: /tmp/selfhost_merged.osty:8881:1
+func frontFnSigFromDecl(file *AstFile, decl *AstNode, owner string, ownerGenerics []string) *FrontFnSig {
+	return frontFnSigFromDeclMode(file, decl, owner, ownerGenerics, false)
+}
+
+// Osty: /tmp/selfhost_merged.osty:8885:1
+func frontFnSigFromInterfaceDecl(file *AstFile, decl *AstNode, owner string) *FrontFnSig {
+	return frontFnSigFromDeclMode(file, decl, owner, make([]string, 0, 1), true)
+}
+
+// Osty: /tmp/selfhost_merged.osty:8889:1
+func frontFnSigFromDeclMode(file *AstFile, decl *AstNode, owner string, ownerGenerics []string, preserveSelf bool) *FrontFnSig {
+	// Osty: /tmp/selfhost_merged.osty:8890:5
+	var paramNames []string = make([]string, 0, 1)
+	_ = paramNames
+	// Osty: /tmp/selfhost_merged.osty:8891:5
+	var paramTypes []string = make([]string, 0, 1)
+	_ = paramTypes
+	// Osty: /tmp/selfhost_merged.osty:8892:5
+	generics := ownerGenerics
+	_ = generics
+	// Osty: /tmp/selfhost_merged.osty:8893:5
+	genericBounds := frontCheckGenericBounds(file, decl.children2)
+	_ = genericBounds
+	// Osty: /tmp/selfhost_merged.osty:8894:5
+	for _, genericIdx := range decl.children2 {
+		// Osty: /tmp/selfhost_merged.osty:8895:9
+		generic := astArenaNodeAt(file.arena, genericIdx)
+		_ = generic
+		// Osty: /tmp/selfhost_merged.osty:8896:9
+		func() struct{} { generics = append(generics, generic.text); return struct{}{} }()
+	}
+	// Osty: /tmp/selfhost_merged.osty:8898:5
+	selfType := frontCheckSelfType(owner, ownerGenerics)
+	_ = selfType
+	// Osty: /tmp/selfhost_merged.osty:8899:5
+	for _, paramIdx := range decl.children {
+		// Osty: /tmp/selfhost_merged.osty:8900:9
+		param := astArenaNodeAt(file.arena, paramIdx)
+		_ = param
+		// Osty: /tmp/selfhost_merged.osty:8901:9
+		paramType := frontCheckTypeName(file, param.right)
+		_ = paramType
+		// Osty: /tmp/selfhost_merged.osty:8902:9
+		if param.text == "self" && owner != "" && param.right < 0 {
+			// Osty: /tmp/selfhost_merged.osty:8903:23
+			paramType = selfType
+		}
+		// Osty: /tmp/selfhost_merged.osty:8905:9
+		func() struct{} { paramNames = append(paramNames, param.text); return struct{}{} }()
+		// Osty: /tmp/selfhost_merged.osty:8906:9
+		func() struct{} {
+			paramTypes = append(paramTypes, frontCheckReplaceSelfMode(paramType, selfType, preserveSelf))
+			return struct{}{}
+		}()
+	}
+	return &FrontFnSig{name: decl.text, receiverType: owner, returnType: frontCheckReplaceSelfMode(frontCheckTypeName(file, decl.left), selfType, preserveSelf), paramNames: paramNames, paramTypes: paramTypes, generics: generics, genericBounds: genericBounds}
+}
+
+// Osty: /tmp/selfhost_merged.osty:8919:1
+func frontCheckGenericNames(file *AstFile, idxs []int) []string {
+	// Osty: /tmp/selfhost_merged.osty:8920:5
+	var names []string = make([]string, 0, 1)
+	_ = names
+	// Osty: /tmp/selfhost_merged.osty:8921:5
+	for _, idx := range idxs {
+		// Osty: /tmp/selfhost_merged.osty:8922:9
+		n := astArenaNodeAt(file.arena, idx)
+		_ = n
+		// Osty: /tmp/selfhost_merged.osty:8923:9
+		func() struct{} { names = append(names, n.text); return struct{}{} }()
+	}
+	return names
+}
+
+// Osty: /tmp/selfhost_merged.osty:8928:1
+func frontCheckCheckGenericParams(file *AstFile, env *FrontCheckEnv, idxs []int) {
+	// Osty: /tmp/selfhost_merged.osty:8929:5
+	var seen []string = make([]string, 0, 1)
+	_ = seen
+	// Osty: /tmp/selfhost_merged.osty:8930:5
+	for _, idx := range idxs {
+		// Osty: /tmp/selfhost_merged.osty:8931:9
+		n := astArenaNodeAt(file.arena, idx)
+		_ = n
+		// Osty: /tmp/selfhost_merged.osty:8932:9
+		if frontCheckStringContains(seen, n.text) {
+			// Osty: /tmp/selfhost_merged.osty:8933:24
+			env.errors = env.errors + 1
+		}
+		// Osty: /tmp/selfhost_merged.osty:8935:9
+		func() struct{} { seen = append(seen, n.text); return struct{}{} }()
+	}
+}
+
+// Osty: /tmp/selfhost_merged.osty:8939:1
+func frontCheckStringContains(xs []string, needle string) bool {
+	// Osty: /tmp/selfhost_merged.osty:8940:5
+	for _, x := range xs {
+		// Osty: /tmp/selfhost_merged.osty:8941:9
+		if x == needle {
+			// Osty: /tmp/selfhost_merged.osty:8942:13
+			return true
+		}
+	}
+	return false
+}
+
+// Osty: /tmp/selfhost_merged.osty:8948:1
+func frontCheckGenericBounds(file *AstFile, idxs []int) []*FrontTypeSubst {
+	// Osty: /tmp/selfhost_merged.osty:8949:5
+	var bounds []*FrontTypeSubst = make([]*FrontTypeSubst, 0, 1)
+	_ = bounds
+	// Osty: /tmp/selfhost_merged.osty:8950:5
+	for _, idx := range idxs {
+		// Osty: /tmp/selfhost_merged.osty:8951:9
+		generic := astArenaNodeAt(file.arena, idx)
+		_ = generic
+		// Osty: /tmp/selfhost_merged.osty:8952:9
+		for _, boundIdx := range generic.children {
+			// Osty: /tmp/selfhost_merged.osty:8953:13
+			func() struct{} {
+				bounds = append(bounds, &FrontTypeSubst{name: generic.text, typeName: frontCheckTypeName(file, boundIdx)})
+				return struct{}{}
+			}()
+		}
+	}
+	return bounds
+}
+
+// Osty: /tmp/selfhost_merged.osty:8959:1
+func frontCheckSelfType(owner string, generics []string) string {
+	// Osty: /tmp/selfhost_merged.osty:8960:5
+	if owner == "" {
+		// Osty: /tmp/selfhost_merged.osty:8961:9
+		return "Invalid"
+	}
+	// Osty: /tmp/selfhost_merged.osty:8963:5
+	if frontCheckStringCount(generics) == 0 {
+		// Osty: /tmp/selfhost_merged.osty:8964:9
+		return owner
+	}
+	// Osty: /tmp/selfhost_merged.osty:8966:5
+	joined := frontCheckJoinTypes(generics)
+	_ = joined
+	return fmt.Sprintf("%s<%s>", ostyToString(owner), ostyToString(joined))
+}
+
+// Osty: /tmp/selfhost_merged.osty:8970:1
+func frontCheckReplaceSelf(typeName string, selfType string) string {
+	return frontCheckReplaceSelfMode(typeName, selfType, false)
+}
+
+// Osty: /tmp/selfhost_merged.osty:8974:1
+func frontCheckReplaceSelfMode(typeName string, selfType string, preserveSelf bool) string {
+	// Osty: /tmp/selfhost_merged.osty:8975:5
+	if typeName == "Self" {
+		// Osty: /tmp/selfhost_merged.osty:8976:9
+		if preserveSelf {
+			// Osty: /tmp/selfhost_merged.osty:8977:13
+			return "Self"
+		}
+		// Osty: /tmp/selfhost_merged.osty:8979:9
+		return selfType
+	}
+	// Osty: /tmp/selfhost_merged.osty:8981:5
+	view := frontCheckParseType(typeName)
+	_ = view
+	// Osty: /tmp/selfhost_merged.osty:8982:5
+	if view.kind == "tuple" {
+		// Osty: /tmp/selfhost_merged.osty:8983:9
+		var elems []string = make([]string, 0, 1)
+		_ = elems
+		// Osty: /tmp/selfhost_merged.osty:8984:9
+		for _, elem := range view.args {
+			// Osty: /tmp/selfhost_merged.osty:8985:13
+			func() struct{} {
+				elems = append(elems, frontCheckReplaceSelfMode(elem, selfType, preserveSelf))
+				return struct{}{}
+			}()
+		}
+		// Osty: /tmp/selfhost_merged.osty:8987:9
+		return frontCheckTupleType(elems)
+	}
+	// Osty: /tmp/selfhost_merged.osty:8989:5
+	if view.kind == "fn" {
+		// Osty: /tmp/selfhost_merged.osty:8990:9
+		var params []string = make([]string, 0, 1)
+		_ = params
+		// Osty: /tmp/selfhost_merged.osty:8991:9
+		for _, param := range view.params {
+			// Osty: /tmp/selfhost_merged.osty:8992:13
+			func() struct{} {
+				params = append(params, frontCheckReplaceSelfMode(param, selfType, preserveSelf))
+				return struct{}{}
+			}()
+		}
+		// Osty: /tmp/selfhost_merged.osty:8994:9
+		return frontCheckFnType(params, frontCheckReplaceSelfMode(view.ret, selfType, preserveSelf))
+	}
+	// Osty: /tmp/selfhost_merged.osty:8996:5
+	if view.kind == "named" && frontCheckStringCount(view.args) > 0 {
+		// Osty: /tmp/selfhost_merged.osty:8997:9
+		var args []string = make([]string, 0, 1)
+		_ = args
+		// Osty: /tmp/selfhost_merged.osty:8998:9
+		for _, arg := range view.args {
+			// Osty: /tmp/selfhost_merged.osty:8999:13
+			func() struct{} {
+				args = append(args, frontCheckReplaceSelfMode(arg, selfType, preserveSelf))
+				return struct{}{}
+			}()
+		}
+		// Osty: /tmp/selfhost_merged.osty:9001:9
+		return frontCheckNamedType(view.head, args)
+	}
+	return typeName
+}
+
+// Osty: /tmp/selfhost_merged.osty:9006:1
+func frontCheckDecl(file *AstFile, env *FrontCheckEnv, idx int) {
+	// Osty: /tmp/selfhost_merged.osty:9007:5
+	decl := astArenaNodeAt(file.arena, idx)
+	_ = decl
+	// Osty: /tmp/selfhost_merged.osty:9008:5
+	if ostyEqual(decl.kind, AstNodeKind(&AstNodeKind_AstNFnDecl{})) {
+		// Osty: /tmp/selfhost_merged.osty:9009:9
+		frontCheckFnDecl(file, env, decl, "", make([]string, 0, 1))
+		// Osty: /tmp/selfhost_merged.osty:9010:9
+		return
+	}
+	// Osty: /tmp/selfhost_merged.osty:9012:5
+	if ostyEqual(decl.kind, AstNodeKind(&AstNodeKind_AstNStructDecl{})) {
+		// Osty: /tmp/selfhost_merged.osty:9013:9
+		generics := frontCheckGenericNames(file, decl.children2)
+		_ = generics
+		// Osty: /tmp/selfhost_merged.osty:9014:9
+		for _, memberIdx := range decl.children {
+			// Osty: /tmp/selfhost_merged.osty:9015:13
+			member := astArenaNodeAt(file.arena, memberIdx)
+			_ = member
+			// Osty: /tmp/selfhost_merged.osty:9016:13
+			if ostyEqual(member.kind, AstNodeKind(&AstNodeKind_AstNField_{})) && member.left >= 0 {
+				// Osty: /tmp/selfhost_merged.osty:9017:17
+				got := frontCheckExpr(file, env, member.left)
+				_ = got
+				// Osty: /tmp/selfhost_merged.osty:9018:17
+				frontCheckExpectAssignable(env, frontCheckTypeName(file, member.right), got)
+			} else if ostyEqual(member.kind, AstNodeKind(&AstNodeKind_AstNFnDecl{})) {
+				// Osty: /tmp/selfhost_merged.osty:9020:17
+				frontCheckFnDecl(file, env, member, decl.text, generics)
+			}
+		}
+		// Osty: /tmp/selfhost_merged.osty:9023:9
+		return
+	}
+	// Osty: /tmp/selfhost_merged.osty:9025:5
+	if ostyEqual(decl.kind, AstNodeKind(&AstNodeKind_AstNEnumDecl{})) {
+		// Osty: /tmp/selfhost_merged.osty:9026:9
+		generics := frontCheckGenericNames(file, decl.children2)
+		_ = generics
+		// Osty: /tmp/selfhost_merged.osty:9027:9
+		for _, memberIdx := range decl.children {
+			// Osty: /tmp/selfhost_merged.osty:9028:13
+			member := astArenaNodeAt(file.arena, memberIdx)
+			_ = member
+			// Osty: /tmp/selfhost_merged.osty:9029:13
+			if ostyEqual(member.kind, AstNodeKind(&AstNodeKind_AstNFnDecl{})) {
+				// Osty: /tmp/selfhost_merged.osty:9030:17
+				frontCheckFnDecl(file, env, member, decl.text, generics)
+			}
+		}
+		// Osty: /tmp/selfhost_merged.osty:9033:9
+		return
+	}
+	// Osty: /tmp/selfhost_merged.osty:9035:5
+	if ostyEqual(decl.kind, AstNodeKind(&AstNodeKind_AstNLet{})) {
+		// Osty: /tmp/selfhost_merged.osty:9036:9
+		_ = frontCheckStmt(file, env, idx)
+	}
+}
+
+// Osty: /tmp/selfhost_merged.osty:9040:1
+func frontCheckFnDecl(file *AstFile, parent *FrontCheckEnv, decl *AstNode, owner string, ownerGenerics []string) {
+	// Osty: /tmp/selfhost_merged.osty:9041:5
+	sig := frontFnSigFromDecl(file, decl, owner, ownerGenerics)
+	_ = sig
+	// Osty: /tmp/selfhost_merged.osty:9042:5
+	env := frontCheckChildEnv(parent, sig.returnType)
+	_ = env
+	// Osty: /tmp/selfhost_merged.osty:9043:23
+	env.genericBounds = sig.genericBounds
+	// Osty: /tmp/selfhost_merged.osty:9044:5
+	idx := 0
+	_ = idx
+	// Osty: /tmp/selfhost_merged.osty:9045:5
+	for _, paramName := range sig.paramNames {
+		// Osty: /tmp/selfhost_merged.osty:9046:9
+		paramType := frontCheckStringAt(sig.paramTypes, idx)
+		_ = paramType
+		// Osty: /tmp/selfhost_merged.osty:9047:9
+		if paramName != "" {
+			// Osty: /tmp/selfhost_merged.osty:9048:13
+			paramIdx := frontCheckIntAt(decl.children, idx)
+			_ = paramIdx
+			// Osty: /tmp/selfhost_merged.osty:9049:13
+			param := astArenaNodeAt(file.arena, paramIdx)
+			_ = param
+			// Osty: /tmp/selfhost_merged.osty:9050:13
+			frontCheckBindNode(env, paramName, paramType, false, paramIdx, param.start, param.end)
+		}
+		// Osty: /tmp/selfhost_merged.osty:9052:13
+		idx = idx + 1
+	}
+	// Osty: /tmp/selfhost_merged.osty:9054:5
+	if decl.right >= 0 {
+		// Osty: /tmp/selfhost_merged.osty:9055:9
+		bodyType := frontCheckBlockHint(file, env, decl.right, true, sig.returnType)
+		_ = bodyType
+		// Osty: /tmp/selfhost_merged.osty:9056:9
+		if sig.returnType != "()" && bodyType != "Never" {
+			// Osty: /tmp/selfhost_merged.osty:9057:13
+			frontCheckExpectAssignable(env, sig.returnType, bodyType)
+		}
+	}
+	// Osty: /tmp/selfhost_merged.osty:9060:5
+	frontCheckMerge(parent, env)
+}
+
+// Osty: /tmp/selfhost_merged.osty:9063:1
+func frontCheckBind(env *FrontCheckEnv, name string, typeName string, mutable bool) {
+	// Osty: /tmp/selfhost_merged.osty:9064:5
+	frontCheckBindNode(env, name, typeName, mutable, -1, 0, 0)
+}
+
+// Osty: /tmp/selfhost_merged.osty:9067:1
+func frontCheckBindNode(env *FrontCheckEnv, name string, typeName string, mutable bool, node int, start int, end int) {
+	// Osty: /tmp/selfhost_merged.osty:9068:5
+	if name != "" && name != "_" {
+		// Osty: /tmp/selfhost_merged.osty:9069:9
+		func() struct{} {
+			env.bindings = append(env.bindings, &FrontCheckBinding{name: name, typeName: typeName, mutable: mutable})
+			return struct{}{}
+		}()
+		// Osty: /tmp/selfhost_merged.osty:9070:9
+		frontCheckRecordBinding(env, node, name, typeName, mutable, start, end)
+	}
+}
+
+// Osty: /tmp/selfhost_merged.osty:9074:1
+func frontCheckBindingCount(xs []*FrontCheckBinding) int {
+	// Osty: /tmp/selfhost_merged.osty:9075:5
+	count := 0
+	_ = count
+	// Osty: /tmp/selfhost_merged.osty:9076:5
+	for _, x := range xs {
+		// Osty: /tmp/selfhost_merged.osty:9077:9
+		_ = x
+		// Osty: /tmp/selfhost_merged.osty:9078:15
+		count = count + 1
+	}
+	return count
+}
+
+// Osty: /tmp/selfhost_merged.osty:9083:1
+func frontCheckBindingAt(xs []*FrontCheckBinding, idx int) *FrontCheckBinding {
+	// Osty: /tmp/selfhost_merged.osty:9084:5
+	i := 0
+	_ = i
+	// Osty: /tmp/selfhost_merged.osty:9085:5
+	for _, x := range xs {
+		// Osty: /tmp/selfhost_merged.osty:9086:9
+		if i == idx {
+			// Osty: /tmp/selfhost_merged.osty:9087:13
+			return x
+		}
+		// Osty: /tmp/selfhost_merged.osty:9089:11
+		i = i + 1
+	}
+	return &FrontCheckBinding{name: "", typeName: "Invalid", mutable: false}
+}
+
+// Osty: /tmp/selfhost_merged.osty:9094:1
+func frontCheckBindingsFrom(env *FrontCheckEnv, start int) []*FrontCheckBinding {
+	// Osty: /tmp/selfhost_merged.osty:9095:5
+	var out []*FrontCheckBinding = make([]*FrontCheckBinding, 0, 1)
+	_ = out
+	// Osty: /tmp/selfhost_merged.osty:9096:5
+	i := 0
+	_ = i
+	// Osty: /tmp/selfhost_merged.osty:9097:5
+	for _, binding := range env.bindings {
+		// Osty: /tmp/selfhost_merged.osty:9098:9
+		if i >= start {
+			// Osty: /tmp/selfhost_merged.osty:9099:13
+			func() struct{} { out = append(out, binding); return struct{}{} }()
+		}
+		// Osty: /tmp/selfhost_merged.osty:9101:11
+		i = i + 1
+	}
+	return out
+}
+
+// Osty: /tmp/selfhost_merged.osty:9106:1
+func frontCheckBindingsAgree(env *FrontCheckEnv, left []*FrontCheckBinding, right []*FrontCheckBinding) bool {
+	// Osty: /tmp/selfhost_merged.osty:9107:5
+	if frontCheckBindingCount(left) != frontCheckBindingCount(right) {
+		// Osty: /tmp/selfhost_merged.osty:9108:9
+		return false
+	}
+	// Osty: /tmp/selfhost_merged.osty:9110:5
+	i := 0
+	_ = i
+	// Osty: /tmp/selfhost_merged.osty:9111:5
+	for _, l := range left {
+		// Osty: /tmp/selfhost_merged.osty:9112:9
+		r := frontCheckBindingAt(right, i)
+		_ = r
+		// Osty: /tmp/selfhost_merged.osty:9113:9
+		if l.name != r.name {
+			// Osty: /tmp/selfhost_merged.osty:9114:13
+			return false
+		}
+		// Osty: /tmp/selfhost_merged.osty:9116:9
+		if !(frontCheckIsAssignable(env, l.typeName, r.typeName)) || !(frontCheckIsAssignable(env, r.typeName, l.typeName)) {
+			// Osty: /tmp/selfhost_merged.osty:9117:13
+			return false
+		}
+		// Osty: /tmp/selfhost_merged.osty:9119:11
+		i = i + 1
+	}
+	return true
+}
+
+// Osty: /tmp/selfhost_merged.osty:9124:1
+func frontCheckPopBindings(env *FrontCheckEnv, target int) {
+	// Osty: /tmp/selfhost_merged.osty:9125:5
+	count := frontCheckBindingCount(env.bindings)
+	_ = count
+	// Osty: /tmp/selfhost_merged.osty:9126:5
+	for count > target {
+		// Osty: /tmp/selfhost_merged.osty:9127:9
+		func() **FrontCheckBinding {
+			if len(env.bindings) == 0 {
+				return nil
+			}
+			v := env.bindings[len(env.bindings)-1]
+			var zero *FrontCheckBinding
+			env.bindings[len(env.bindings)-1] = zero
+			env.bindings = env.bindings[:len(env.bindings)-1]
+			return &v
+		}()
+		// Osty: /tmp/selfhost_merged.osty:9128:15
+		count = count - 1
+	}
+}
+
+// Osty: /tmp/selfhost_merged.osty:9132:1
+func frontCheckLookup(env *FrontCheckEnv, name string) string {
+	// Osty: /tmp/selfhost_merged.osty:9133:5
+	found := "Invalid"
+	_ = found
+	// Osty: /tmp/selfhost_merged.osty:9134:5
+	for _, b := range env.bindings {
+		// Osty: /tmp/selfhost_merged.osty:9135:9
+		if b.name == name {
+			// Osty: /tmp/selfhost_merged.osty:9136:19
+			found = b.typeName
+		}
+	}
+	return found
+}
+
+// Osty: /tmp/selfhost_merged.osty:9142:1
+func frontCheckLookupMutable(env *FrontCheckEnv, name string) bool {
+	// Osty: /tmp/selfhost_merged.osty:9143:5
+	found := false
+	_ = found
+	// Osty: /tmp/selfhost_merged.osty:9144:5
+	for _, b := range env.bindings {
+		// Osty: /tmp/selfhost_merged.osty:9145:9
+		if b.name == name {
+			// Osty: /tmp/selfhost_merged.osty:9146:19
+			found = b.mutable
+		}
+	}
+	return found
+}
+
+// Osty: /tmp/selfhost_merged.osty:9152:1
+func frontCheckSigLookup(env *FrontCheckEnv, name string) *FrontFnSig {
+	// Osty: /tmp/selfhost_merged.osty:9153:5
+	for _, sig := range env.fns {
+		// Osty: /tmp/selfhost_merged.osty:9154:9
+		if sig.name == name && sig.receiverType == "" {
+			// Osty: /tmp/selfhost_merged.osty:9155:13
+			return sig
+		}
+	}
+	return &FrontFnSig{name: "", receiverType: "", returnType: "Invalid", paramNames: make([]string, 0, 1), paramTypes: make([]string, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*FrontTypeSubst, 0, 1)}
+}
+
+// Osty: /tmp/selfhost_merged.osty:9161:1
+func frontCheckFnExists(env *FrontCheckEnv, name string, owner string) bool {
+	// Osty: /tmp/selfhost_merged.osty:9162:5
+	for _, sig := range env.fns {
+		// Osty: /tmp/selfhost_merged.osty:9163:9
+		if sig.name == name && sig.receiverType == owner {
+			// Osty: /tmp/selfhost_merged.osty:9164:13
+			return true
+		}
+	}
+	return false
+}
+
+// Osty: /tmp/selfhost_merged.osty:9170:1
+func frontCheckMethodLookup(env *FrontCheckEnv, owner string, name string) *FrontFnSig {
+	return frontCheckMethodLookupAt(env, owner, name, 0)
+}
+
+// Osty: /tmp/selfhost_merged.osty:9174:1
+func frontCheckMethodLookupAt(env *FrontCheckEnv, owner string, name string, depth int) *FrontFnSig {
+	// Osty: /tmp/selfhost_merged.osty:9175:5
+	for _, sig := range env.fns {
+		// Osty: /tmp/selfhost_merged.osty:9176:9
+		if sig.name == name && sig.receiverType == owner {
+			// Osty: /tmp/selfhost_merged.osty:9177:13
+			return sig
+		}
+	}
+	// Osty: /tmp/selfhost_merged.osty:9180:5
+	if depth < 8 && frontCheckIsInterface(env, owner) {
+		// Osty: /tmp/selfhost_merged.osty:9181:9
+		for _, ext := range env.interfaceExtends {
+			// Osty: /tmp/selfhost_merged.osty:9182:13
+			if ext.owner == owner {
+				// Osty: /tmp/selfhost_merged.osty:9183:17
+				sig := frontCheckMethodLookupAt(env, frontCheckTypeHead(frontCheckResolveAliasesDeep(env, ext.typeName)), name, depth+1)
+				_ = sig
+				// Osty: /tmp/selfhost_merged.osty:9184:17
+				if sig.name != "" {
+					// Osty: /tmp/selfhost_merged.osty:9185:21
+					return sig
+				}
+			}
+		}
+	}
+	return &FrontFnSig{name: "", receiverType: "", returnType: "Invalid", paramNames: make([]string, 0, 1), paramTypes: make([]string, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*FrontTypeSubst, 0, 1)}
+}
+
+// Osty: /tmp/selfhost_merged.osty:9193:1
+func frontCheckBoundMethodLookup(env *FrontCheckEnv, owner string, name string) *FrontFnSig {
+	// Osty: /tmp/selfhost_merged.osty:9194:5
+	for _, bound := range env.genericBounds {
+		// Osty: /tmp/selfhost_merged.osty:9195:9
+		if bound.name == owner {
+			// Osty: /tmp/selfhost_merged.osty:9196:13
+			iface := frontCheckTypeHead(frontCheckResolveAliasesDeep(env, bound.typeName))
+			_ = iface
+			// Osty: /tmp/selfhost_merged.osty:9197:13
+			sig := frontCheckMethodLookup(env, iface, name)
+			_ = sig
+			// Osty: /tmp/selfhost_merged.osty:9198:13
+			if sig.name != "" {
+				// Osty: /tmp/selfhost_merged.osty:9199:17
+				return sig
+			}
+		}
+	}
+	return &FrontFnSig{name: "", receiverType: "", returnType: "Invalid", paramNames: make([]string, 0, 1), paramTypes: make([]string, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*FrontTypeSubst, 0, 1)}
+}
+
+// Osty: /tmp/selfhost_merged.osty:9206:1
+func frontCheckFieldLookup(env *FrontCheckEnv, owner string, name string) *FrontFieldSig {
+	// Osty: /tmp/selfhost_merged.osty:9207:5
+	for _, field := range env.fields {
+		// Osty: /tmp/selfhost_merged.osty:9208:9
+		if field.owner == owner && field.name == name {
+			// Osty: /tmp/selfhost_merged.osty:9209:13
+			return field
+		}
+	}
+	return &FrontFieldSig{owner: "", name: "", typeName: "Invalid", hasDefault: false}
+}
+
+// Osty: /tmp/selfhost_merged.osty:9215:1
+func frontCheckVariantLookup(env *FrontCheckEnv, name string) *FrontVariantSig {
+	// Osty: /tmp/selfhost_merged.osty:9216:5
+	found := &FrontVariantSig{owner: "", name: "", fieldTypes: make([]string, 0, 1), generics: make([]string, 0, 1)}
+	_ = found
+	// Osty: /tmp/selfhost_merged.osty:9217:5
+	for _, variant := range env.variants {
+		// Osty: /tmp/selfhost_merged.osty:9218:9
+		if variant.name == name {
+			// Osty: /tmp/selfhost_merged.osty:9219:19
+			found = variant
+		}
+	}
+	return found
+}
+
+// Osty: /tmp/selfhost_merged.osty:9225:1
+func frontCheckVariantLookupForOwner(env *FrontCheckEnv, name string, owner string) *FrontVariantSig {
+	// Osty: /tmp/selfhost_merged.osty:9226:5
+	found := &FrontVariantSig{owner: "", name: "", fieldTypes: make([]string, 0, 1), generics: make([]string, 0, 1)}
+	_ = found
+	// Osty: /tmp/selfhost_merged.osty:9227:5
+	for _, variant := range env.variants {
+		// Osty: /tmp/selfhost_merged.osty:9228:9
+		if variant.name == name && variant.owner == owner {
+			// Osty: /tmp/selfhost_merged.osty:9229:19
+			found = variant
+		}
+	}
+	return found
+}
+
+// Osty: /tmp/selfhost_merged.osty:9235:1
+func frontCheckTypeSigLookup(env *FrontCheckEnv, name string) *FrontTypeSig {
+	// Osty: /tmp/selfhost_merged.osty:9236:5
+	found := &FrontTypeSig{name: "", generics: make([]string, 0, 1)}
+	_ = found
+	// Osty: /tmp/selfhost_merged.osty:9237:5
+	for _, sig := range env.types {
+		// Osty: /tmp/selfhost_merged.osty:9238:9
+		if sig.name == name {
+			// Osty: /tmp/selfhost_merged.osty:9239:19
+			found = sig
+		}
+	}
+	return found
+}
+
+// Osty: /tmp/selfhost_merged.osty:9245:1
+func frontCheckIsInterface(env *FrontCheckEnv, name string) bool {
+	// Osty: /tmp/selfhost_merged.osty:9246:5
+	for _, iface := range env.interfaces {
+		// Osty: /tmp/selfhost_merged.osty:9247:9
+		if iface == name {
+			// Osty: /tmp/selfhost_merged.osty:9248:13
+			return true
+		}
+	}
+	return false
+}
+
+// Osty: /tmp/selfhost_merged.osty:9254:1
+func frontCheckDeclaredTypeExists(env *FrontCheckEnv, name string) bool {
+	// Osty: /tmp/selfhost_merged.osty:9255:5
+	if frontCheckTypeSigLookup(env, name).name != "" {
+		// Osty: /tmp/selfhost_merged.osty:9256:9
+		return true
+	}
+	// Osty: /tmp/selfhost_merged.osty:9258:5
+	if frontCheckAliasLookup(env, name).name != "" {
+		// Osty: /tmp/selfhost_merged.osty:9259:9
+		return true
+	}
+	return false
+}
+
+// Osty: /tmp/selfhost_merged.osty:9264:1
+func frontCheckAliasTarget(env *FrontCheckEnv, name string) string {
+	// Osty: /tmp/selfhost_merged.osty:9265:5
+	for _, alias := range env.aliases {
+		// Osty: /tmp/selfhost_merged.osty:9266:9
+		if alias.name == name && frontCheckStringCount(alias.generics) == 0 {
+			// Osty: /tmp/selfhost_merged.osty:9267:13
+			return alias.typeName
+		}
+	}
+	return ""
+}
+
+// Osty: /tmp/selfhost_merged.osty:9273:1
+func frontCheckAliasLookup(env *FrontCheckEnv, name string) *FrontAliasSig {
+	// Osty: /tmp/selfhost_merged.osty:9274:5
+	for _, alias := range env.aliases {
+		// Osty: /tmp/selfhost_merged.osty:9275:9
+		if alias.name == name {
+			// Osty: /tmp/selfhost_merged.osty:9276:13
+			return alias
+		}
+	}
+	return &FrontAliasSig{name: "", typeName: "", generics: make([]string, 0, 1)}
+}
+
+// Osty: /tmp/selfhost_merged.osty:9282:1
+func frontCheckResolveAliasOnce(env *FrontCheckEnv, typeName string) string {
+	// Osty: /tmp/selfhost_merged.osty:9283:5
+	target := frontCheckAliasTarget(env, typeName)
+	_ = target
+	// Osty: /tmp/selfhost_merged.osty:9284:5
+	if target != "" {
+		// Osty: /tmp/selfhost_merged.osty:9285:9
+		return target
+	}
+	// Osty: /tmp/selfhost_merged.osty:9287:5
+	view := frontCheckParseType(typeName)
+	_ = view
+	// Osty: /tmp/selfhost_merged.osty:9288:5
+	if view.kind == "named" && frontCheckStringCount(view.args) > 0 {
+		// Osty: /tmp/selfhost_merged.osty:9289:9
+		alias := frontCheckAliasLookup(env, view.head)
+		_ = alias
+		// Osty: /tmp/selfhost_merged.osty:9290:9
+		if alias.name != "" && frontCheckStringCount(alias.generics) > 0 {
+			// Osty: /tmp/selfhost_merged.osty:9291:13
+			var substs []*FrontTypeSubst = make([]*FrontTypeSubst, 0, 1)
+			_ = substs
+			// Osty: /tmp/selfhost_merged.osty:9292:13
+			i := 0
+			_ = i
+			// Osty: /tmp/selfhost_merged.osty:9293:13
+			for _, generic := range alias.generics {
+				// Osty: /tmp/selfhost_merged.osty:9294:17
+				func() struct{} {
+					substs = append(substs, &FrontTypeSubst{name: generic, typeName: frontCheckStringAt(view.args, i)})
+					return struct{}{}
+				}()
+				// Osty: /tmp/selfhost_merged.osty:9295:19
+				i = i + 1
+			}
+			// Osty: /tmp/selfhost_merged.osty:9297:13
+			return frontCheckSubstitute(alias.typeName, substs)
+		}
+	}
+	return ""
+}
+
+// Osty: /tmp/selfhost_merged.osty:9303:1
+func frontCheckResolveAlias(env *FrontCheckEnv, typeName string) string {
+	// Osty: /tmp/selfhost_merged.osty:9304:5
+	current := typeName
+	_ = current
+	// Osty: /tmp/selfhost_merged.osty:9305:5
+	depth := 0
+	_ = depth
+	// Osty: /tmp/selfhost_merged.osty:9306:5
+	for depth < 8 {
+		// Osty: /tmp/selfhost_merged.osty:9307:9
+		target := frontCheckResolveAliasOnce(env, current)
+		_ = target
+		// Osty: /tmp/selfhost_merged.osty:9308:9
+		if target == "" {
+			// Osty: /tmp/selfhost_merged.osty:9309:13
+			return current
+		}
+		// Osty: /tmp/selfhost_merged.osty:9311:17
+		current = target
+		// Osty: /tmp/selfhost_merged.osty:9312:15
+		depth = depth + 1
+	}
+	return current
+}
+
+// Osty: /tmp/selfhost_merged.osty:9317:1
+func frontCheckResolveAliasesDeep(env *FrontCheckEnv, typeName string) string {
+	return frontCheckResolveAliasesDeepAt(env, typeName, 0)
+}
+
+// Osty: /tmp/selfhost_merged.osty:9321:1
+func frontCheckResolveAliasesDeepAt(env *FrontCheckEnv, typeName string, depth int) string {
+	// Osty: /tmp/selfhost_merged.osty:9322:5
+	if depth > 8 {
+		// Osty: /tmp/selfhost_merged.osty:9323:9
+		return typeName
+	}
+	// Osty: /tmp/selfhost_merged.osty:9325:5
+	direct := frontCheckResolveAlias(env, typeName)
+	_ = direct
+	// Osty: /tmp/selfhost_merged.osty:9326:5
+	if direct != typeName {
+		// Osty: /tmp/selfhost_merged.osty:9327:9
+		return frontCheckResolveAliasesDeepAt(env, direct, depth+1)
+	}
+	// Osty: /tmp/selfhost_merged.osty:9329:5
+	view := frontCheckParseType(typeName)
+	_ = view
+	// Osty: /tmp/selfhost_merged.osty:9330:5
+	if view.kind == "tuple" {
+		// Osty: /tmp/selfhost_merged.osty:9331:9
+		var elems []string = make([]string, 0, 1)
+		_ = elems
+		// Osty: /tmp/selfhost_merged.osty:9332:9
+		for _, elem := range view.args {
+			// Osty: /tmp/selfhost_merged.osty:9333:13
+			func() struct{} {
+				elems = append(elems, frontCheckResolveAliasesDeepAt(env, elem, depth+1))
+				return struct{}{}
+			}()
+		}
+		// Osty: /tmp/selfhost_merged.osty:9335:9
+		return frontCheckTupleType(elems)
+	}
+	// Osty: /tmp/selfhost_merged.osty:9337:5
+	if view.kind == "fn" {
+		// Osty: /tmp/selfhost_merged.osty:9338:9
+		var params []string = make([]string, 0, 1)
+		_ = params
+		// Osty: /tmp/selfhost_merged.osty:9339:9
+		for _, param := range view.params {
+			// Osty: /tmp/selfhost_merged.osty:9340:13
+			func() struct{} {
+				params = append(params, frontCheckResolveAliasesDeepAt(env, param, depth+1))
+				return struct{}{}
+			}()
+		}
+		// Osty: /tmp/selfhost_merged.osty:9342:9
+		return frontCheckFnType(params, frontCheckResolveAliasesDeepAt(env, view.ret, depth+1))
+	}
+	// Osty: /tmp/selfhost_merged.osty:9344:5
+	if view.kind == "named" && frontCheckStringCount(view.args) > 0 {
+		// Osty: /tmp/selfhost_merged.osty:9345:9
+		var args []string = make([]string, 0, 1)
+		_ = args
+		// Osty: /tmp/selfhost_merged.osty:9346:9
+		for _, arg := range view.args {
+			// Osty: /tmp/selfhost_merged.osty:9347:13
+			func() struct{} {
+				args = append(args, frontCheckResolveAliasesDeepAt(env, arg, depth+1))
+				return struct{}{}
+			}()
+		}
+		// Osty: /tmp/selfhost_merged.osty:9349:9
+		return frontCheckNamedType(view.head, args)
+	}
+	return typeName
+}
+
+// Osty: /tmp/selfhost_merged.osty:9354:1
+func frontCheckTypeName(file *AstFile, idx int) string {
+	// Osty: /tmp/selfhost_merged.osty:9355:5
+	if idx < 0 {
+		// Osty: /tmp/selfhost_merged.osty:9356:9
+		return "()"
+	}
+	// Osty: /tmp/selfhost_merged.osty:9358:5
+	node := astArenaNodeAt(file.arena, idx)
+	_ = node
+	// Osty: /tmp/selfhost_merged.osty:9359:5
+	if !ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNType{})) {
+		// Osty: /tmp/selfhost_merged.osty:9360:9
+		return "Invalid"
+	}
+	// Osty: /tmp/selfhost_merged.osty:9362:5
+	if node.text == "optional" {
+		// Osty: /tmp/selfhost_merged.osty:9363:9
+		return frontCheckOneArgType("Option", frontCheckTypeName(file, node.left))
+	}
+	// Osty: /tmp/selfhost_merged.osty:9365:5
+	if node.text == "fn" {
+		// Osty: /tmp/selfhost_merged.osty:9366:9
+		var params []string = make([]string, 0, 1)
+		_ = params
+		// Osty: /tmp/selfhost_merged.osty:9367:9
+		for _, paramIdx := range node.children {
+			// Osty: /tmp/selfhost_merged.osty:9368:13
+			func() struct{} { params = append(params, frontCheckTypeName(file, paramIdx)); return struct{}{} }()
+		}
+		// Osty: /tmp/selfhost_merged.osty:9370:9
+		return frontCheckFnType(params, frontCheckTypeName(file, node.right))
+	}
+	// Osty: /tmp/selfhost_merged.osty:9372:5
+	if node.text == "tuple" {
+		// Osty: /tmp/selfhost_merged.osty:9373:9
+		var elems []string = make([]string, 0, 1)
+		_ = elems
+		// Osty: /tmp/selfhost_merged.osty:9374:9
+		for _, elemIdx := range node.children {
+			// Osty: /tmp/selfhost_merged.osty:9375:13
+			func() struct{} { elems = append(elems, frontCheckTypeName(file, elemIdx)); return struct{}{} }()
+		}
+		// Osty: /tmp/selfhost_merged.osty:9377:9
+		if frontCheckStringCount(elems) == 0 {
+			// Osty: /tmp/selfhost_merged.osty:9378:13
+			return "()"
+		}
+		// Osty: /tmp/selfhost_merged.osty:9380:9
+		return fmt.Sprintf("(%s)", ostyToString(frontCheckJoinTypes(elems)))
+	}
+	// Osty: /tmp/selfhost_merged.osty:9382:5
+	if frontCheckIntCount(node.children) > 0 {
+		// Osty: /tmp/selfhost_merged.osty:9383:9
+		var args []string = make([]string, 0, 1)
+		_ = args
+		// Osty: /tmp/selfhost_merged.osty:9384:9
+		for _, argIdx := range node.children {
+			// Osty: /tmp/selfhost_merged.osty:9385:13
+			func() struct{} { args = append(args, frontCheckTypeName(file, argIdx)); return struct{}{} }()
+		}
+		// Osty: /tmp/selfhost_merged.osty:9387:9
+		return fmt.Sprintf("%s<%s>", ostyToString(node.text), ostyToString(frontCheckJoinTypes(args)))
+	}
+	// Osty: /tmp/selfhost_merged.osty:9389:5
+	if node.text == "Unit" {
+		// Osty: /tmp/selfhost_merged.osty:9390:9
+		return "()"
+	}
+	// Osty: /tmp/selfhost_merged.osty:9392:5
+	if node.text == "error" {
+		// Osty: /tmp/selfhost_merged.osty:9393:9
+		return "Invalid"
+	}
+	return node.text
+}
+
+// Osty: /tmp/selfhost_merged.osty:9398:1
+func frontCheckFnType(params []string, ret string) string {
+	return fmt.Sprintf("fn(%s) -> %s", ostyToString(frontCheckJoinTypes(params)), ostyToString(ret))
+}
+
+// Osty: /tmp/selfhost_merged.osty:9402:1
+func frontCheckJoinTypes(xs []string) string {
+	return strings.Join(xs, ", ")
+}
+
+// Osty: /tmp/selfhost_merged.osty:9406:1
+func frontCheckOneArgType(head string, arg string) string {
+	return fmt.Sprintf("%s<%s>", ostyToString(head), ostyToString(arg))
+}
+
+// Osty: /tmp/selfhost_merged.osty:9410:1
+func frontCheckTwoArgType(head string, left string, right string) string {
+	return fmt.Sprintf("%s<%s, %s>", ostyToString(head), ostyToString(left), ostyToString(right))
+}
+
+// Osty: /tmp/selfhost_merged.osty:9414:1
+func frontCheckStringCount(xs []string) int {
+	// Osty: /tmp/selfhost_merged.osty:9415:5
+	count := 0
+	_ = count
+	// Osty: /tmp/selfhost_merged.osty:9416:5
+	for _, x := range xs {
+		// Osty: /tmp/selfhost_merged.osty:9417:9
+		_ = x
+		// Osty: /tmp/selfhost_merged.osty:9418:15
+		count = count + 1
+	}
+	return count
+}
+
+// Osty: /tmp/selfhost_merged.osty:9423:1
+func frontCheckIntCount(xs []int) int {
+	// Osty: /tmp/selfhost_merged.osty:9424:5
+	count := 0
+	_ = count
+	// Osty: /tmp/selfhost_merged.osty:9425:5
+	for _, x := range xs {
+		// Osty: /tmp/selfhost_merged.osty:9426:9
+		_ = x
+		// Osty: /tmp/selfhost_merged.osty:9427:15
+		count = count + 1
+	}
+	return count
+}
+
+// Osty: /tmp/selfhost_merged.osty:9432:1
+func frontCheckStringAt(xs []string, idx int) string {
+	// Osty: /tmp/selfhost_merged.osty:9433:5
+	i := 0
+	_ = i
+	// Osty: /tmp/selfhost_merged.osty:9434:5
+	for _, x := range xs {
+		// Osty: /tmp/selfhost_merged.osty:9435:9
+		if i == idx {
+			// Osty: /tmp/selfhost_merged.osty:9436:13
+			return x
+		}
+		// Osty: /tmp/selfhost_merged.osty:9438:11
+		i = i + 1
+	}
+	return "Invalid"
+}
+
+// Osty: /tmp/selfhost_merged.osty:9443:1
+func frontCheckStringDrop(xs []string, start int) []string {
+	// Osty: /tmp/selfhost_merged.osty:9444:5
+	var out []string = make([]string, 0, 1)
+	_ = out
+	// Osty: /tmp/selfhost_merged.osty:9445:5
+	i := 0
+	_ = i
+	// Osty: /tmp/selfhost_merged.osty:9446:5
+	for _, x := range xs {
+		// Osty: /tmp/selfhost_merged.osty:9447:9
+		if i >= start {
+			// Osty: /tmp/selfhost_merged.osty:9448:13
+			func() struct{} { out = append(out, x); return struct{}{} }()
+		}
+		// Osty: /tmp/selfhost_merged.osty:9450:11
+		i = i + 1
+	}
+	return out
+}
+
+// Osty: /tmp/selfhost_merged.osty:9455:1
+func frontCheckIntAt(xs []int, idx int) int {
+	// Osty: /tmp/selfhost_merged.osty:9456:5
+	i := 0
+	_ = i
+	// Osty: /tmp/selfhost_merged.osty:9457:5
+	for _, x := range xs {
+		// Osty: /tmp/selfhost_merged.osty:9458:9
+		if i == idx {
+			// Osty: /tmp/selfhost_merged.osty:9459:13
+			return x
+		}
+		// Osty: /tmp/selfhost_merged.osty:9461:11
+		i = i + 1
+	}
+	return -1
+}
+
+// Osty: /tmp/selfhost_merged.osty:9466:1
+func frontCheckLastPathSegment(path string) string {
+	// Osty: /tmp/selfhost_merged.osty:9467:5
+	parts := strings.Split(path, ".")
+	_ = parts
+	// Osty: /tmp/selfhost_merged.osty:9468:5
+	last := path
+	_ = last
+	// Osty: /tmp/selfhost_merged.osty:9469:5
+	for _, part := range parts {
+		// Osty: /tmp/selfhost_merged.osty:9470:14
+		last = part
+	}
+	return last
+}
+
+// Osty: /tmp/selfhost_merged.osty:9475:1
+func frontCheckTypeHead(typeName string) string {
+	return frontCheckParseType(typeName).head
+}
+
+// Osty: /tmp/selfhost_merged.osty:9479:1
+func frontCheckParseType(typeName string) *FrontTypeView {
+	// Osty: /tmp/selfhost_merged.osty:9480:5
+	text := strings.TrimSpace(typeName)
+	_ = text
+	// Osty: /tmp/selfhost_merged.osty:9481:5
+	if text == "" {
+		// Osty: /tmp/selfhost_merged.osty:9482:9
+		return &FrontTypeView{kind: "invalid", head: "Invalid", args: make([]string, 0, 1), params: make([]string, 0, 1), ret: ""}
+	}
+	// Osty: /tmp/selfhost_merged.osty:9484:5
+	if strings.HasPrefix(text, "(") && strings.HasSuffix(text, ")") {
+		// Osty: /tmp/selfhost_merged.osty:9485:9
+		inner := strings.TrimSuffix(strings.TrimPrefix(text, "("), ")")
+		_ = inner
+		// Osty: /tmp/selfhost_merged.osty:9486:9
+		var elems []string = make([]string, 0, 1)
+		_ = elems
+		// Osty: /tmp/selfhost_merged.osty:9487:9
+		if strings.TrimSpace(inner) != "" {
+			// Osty: /tmp/selfhost_merged.osty:9488:19
+			elems = frontCheckSplitTopLevel(inner)
+		}
+		// Osty: /tmp/selfhost_merged.osty:9490:9
+		return &FrontTypeView{kind: "tuple", head: "Tuple", args: elems, params: make([]string, 0, 1), ret: ""}
+	}
+	// Osty: /tmp/selfhost_merged.osty:9492:5
+	if strings.HasPrefix(text, "fn(") {
+		// Osty: /tmp/selfhost_merged.osty:9493:9
+		paramsText := frontCheckFnParamsTextRaw(text)
+		_ = paramsText
+		// Osty: /tmp/selfhost_merged.osty:9494:9
+		var params []string = make([]string, 0, 1)
+		_ = params
+		// Osty: /tmp/selfhost_merged.osty:9495:9
+		if strings.TrimSpace(paramsText) != "" {
+			// Osty: /tmp/selfhost_merged.osty:9496:20
+			params = frontCheckSplitTopLevel(paramsText)
+		}
+		// Osty: /tmp/selfhost_merged.osty:9498:9
+		ret := frontCheckFnReturnRaw(text)
+		_ = ret
+		// Osty: /tmp/selfhost_merged.osty:9499:9
+		return &FrontTypeView{kind: "fn", head: "fn", args: make([]string, 0, 1), params: params, ret: ret}
+	}
+	// Osty: /tmp/selfhost_merged.osty:9501:5
+	head := frontCheckRawTypeHead(text)
+	_ = head
+	// Osty: /tmp/selfhost_merged.osty:9502:5
+	argsText := frontCheckGenericArgsTextRaw(text, head)
+	_ = argsText
+	// Osty: /tmp/selfhost_merged.osty:9503:5
+	var args []string = make([]string, 0, 1)
+	_ = args
+	// Osty: /tmp/selfhost_merged.osty:9504:5
+	if strings.TrimSpace(argsText) != "" {
+		// Osty: /tmp/selfhost_merged.osty:9505:14
+		args = frontCheckSplitTopLevel(argsText)
+	}
+	return &FrontTypeView{kind: "named", head: head, args: args, params: make([]string, 0, 1), ret: ""}
+}
+
+// Osty: /tmp/selfhost_merged.osty:9510:1
+func frontCheckRawTypeHead(typeName string) string {
+	// Osty: /tmp/selfhost_merged.osty:9511:5
+	head := ""
+	_ = head
+	// Osty: /tmp/selfhost_merged.osty:9512:5
+	for _, unit := range strings.Split(typeName, "") {
+		// Osty: /tmp/selfhost_merged.osty:9513:9
+		if unit == "<" {
+			// Osty: /tmp/selfhost_merged.osty:9514:13
+			return head
+		}
+		// Osty: /tmp/selfhost_merged.osty:9516:14
+		head = fmt.Sprintf("%s%s", ostyToString(head), ostyToString(unit))
+	}
+	return head
+}
+
+// Osty: /tmp/selfhost_merged.osty:9521:1
+func frontCheckGenericArgsText(typeName string) string {
+	return frontCheckJoinTypes(frontCheckGenericArgs(typeName))
+}
+
+// Osty: /tmp/selfhost_merged.osty:9525:1
+func frontCheckGenericArgsTextRaw(typeName string, head string) string {
+	// Osty: /tmp/selfhost_merged.osty:9526:5
+	if !(strings.HasPrefix(typeName, fmt.Sprintf("%s<", ostyToString(head)))) || !(strings.HasSuffix(typeName, ">")) {
+		// Osty: /tmp/selfhost_merged.osty:9527:9
+		return ""
+	}
+	return strings.TrimSuffix(strings.TrimPrefix(typeName, fmt.Sprintf("%s<", ostyToString(head))), ">")
+}
+
+// Osty: /tmp/selfhost_merged.osty:9532:1
+func frontCheckGenericArgs(typeName string) []string {
+	return frontCheckParseType(typeName).args
+}
+
+// Osty: /tmp/selfhost_merged.osty:9536:1
+func frontCheckNamedType(head string, args []string) string {
+	// Osty: /tmp/selfhost_merged.osty:9537:5
+	if frontCheckStringCount(args) == 0 {
+		// Osty: /tmp/selfhost_merged.osty:9538:9
+		return head
+	}
+	return fmt.Sprintf("%s<%s>", ostyToString(head), ostyToString(frontCheckJoinTypes(args)))
+}
+
+// Osty: /tmp/selfhost_merged.osty:9543:1
+func frontCheckTupleType(elems []string) string {
+	// Osty: /tmp/selfhost_merged.osty:9544:5
+	if frontCheckStringCount(elems) == 0 {
+		// Osty: /tmp/selfhost_merged.osty:9545:9
+		return "()"
+	}
+	return fmt.Sprintf("(%s)", ostyToString(frontCheckJoinTypes(elems)))
+}
+
+// Osty: /tmp/selfhost_merged.osty:9550:1
+func frontCheckSplitTopLevel(text string) []string {
+	// Osty: /tmp/selfhost_merged.osty:9551:5
+	var out []string = make([]string, 0, 1)
+	_ = out
+	// Osty: /tmp/selfhost_merged.osty:9552:5
+	cur := ""
+	_ = cur
+	// Osty: /tmp/selfhost_merged.osty:9553:5
+	angle := 0
+	_ = angle
+	// Osty: /tmp/selfhost_merged.osty:9554:5
+	paren := 0
+	_ = paren
+	// Osty: /tmp/selfhost_merged.osty:9555:5
+	for _, unit := range strings.Split(text, "") {
+		// Osty: /tmp/selfhost_merged.osty:9556:9
+		if unit == "<" {
+			// Osty: /tmp/selfhost_merged.osty:9557:19
+			angle = angle + 1
+			// Osty: /tmp/selfhost_merged.osty:9558:17
+			cur = fmt.Sprintf("%s%s", ostyToString(cur), ostyToString(unit))
+		} else if unit == ">" {
+			// Osty: /tmp/selfhost_merged.osty:9560:19
+			angle = angle - 1
+			// Osty: /tmp/selfhost_merged.osty:9561:17
+			cur = fmt.Sprintf("%s%s", ostyToString(cur), ostyToString(unit))
+		} else if unit == "(" {
+			// Osty: /tmp/selfhost_merged.osty:9563:19
+			paren = paren + 1
+			// Osty: /tmp/selfhost_merged.osty:9564:17
+			cur = fmt.Sprintf("%s%s", ostyToString(cur), ostyToString(unit))
+		} else if unit == ")" {
+			// Osty: /tmp/selfhost_merged.osty:9566:19
+			paren = paren - 1
+			// Osty: /tmp/selfhost_merged.osty:9567:17
+			cur = fmt.Sprintf("%s%s", ostyToString(cur), ostyToString(unit))
+		} else if unit == "," && angle == 0 && paren == 0 {
+			// Osty: /tmp/selfhost_merged.osty:9569:13
+			func() struct{} { out = append(out, strings.TrimSpace(cur)); return struct{}{} }()
+			// Osty: /tmp/selfhost_merged.osty:9570:17
+			cur = ""
+		} else {
+			// Osty: /tmp/selfhost_merged.osty:9572:17
+			cur = fmt.Sprintf("%s%s", ostyToString(cur), ostyToString(unit))
+		}
+	}
+	// Osty: /tmp/selfhost_merged.osty:9575:5
+	if strings.TrimSpace(cur) != "" {
+		// Osty: /tmp/selfhost_merged.osty:9576:9
+		func() struct{} { out = append(out, strings.TrimSpace(cur)); return struct{}{} }()
+	}
+	return out
+}
+
+// Osty: /tmp/selfhost_merged.osty:9581:1
+func frontCheckGenericArgAt(typeName string, idx int) string {
+	return frontCheckStringAt(frontCheckGenericArgs(typeName), idx)
+}
+
+// Osty: /tmp/selfhost_merged.osty:9585:1
+func frontCheckIsInvalid(typeName string) bool {
+	return typeName == "Invalid"
+}
+
+// Osty: /tmp/selfhost_merged.osty:9589:1
+func frontCheckIsNever(typeName string) bool {
+	return typeName == "Never"
+}
+
+// Osty: /tmp/selfhost_merged.osty:9593:1
+func frontCheckIsNumeric(typeName string) bool {
+	return typeName == "Int" || typeName == "Float" || typeName == "UntypedInt" || typeName == "UntypedFloat" || typeName == "Byte" || typeName == "Char"
+}
+
+// Osty: /tmp/selfhost_merged.osty:9597:1
+func frontCheckIsInteger(typeName string) bool {
+	return typeName == "Int" || typeName == "UntypedInt" || typeName == "Byte" || typeName == "Char"
+}
+
+// Osty: /tmp/selfhost_merged.osty:9601:1
+func frontCheckIsOrdered(typeName string) bool {
+	return frontCheckIsNumeric(typeName) || typeName == "String" || typeName == "Bool"
+}
+
+// Osty: /tmp/selfhost_merged.osty:9605:1
+func frontCheckIsAssignable(env *FrontCheckEnv, dstRaw string, srcRaw string) bool {
+	// Osty: /tmp/selfhost_merged.osty:9606:5
+	dst := frontCheckResolveAliasesDeep(env, dstRaw)
+	_ = dst
+	// Osty: /tmp/selfhost_merged.osty:9607:5
+	src := frontCheckResolveAliasesDeep(env, srcRaw)
+	_ = src
+	// Osty: /tmp/selfhost_merged.osty:9608:5
+	if dst == "Any" || src == "Any" || frontCheckIsInvalid(dst) || frontCheckIsInvalid(src) {
+		// Osty: /tmp/selfhost_merged.osty:9609:9
+		return true
+	}
+	// Osty: /tmp/selfhost_merged.osty:9611:5
+	if src == "Never" || dst == src {
+		// Osty: /tmp/selfhost_merged.osty:9612:9
+		return true
+	}
+	// Osty: /tmp/selfhost_merged.osty:9614:5
+	if src == "UntypedInt" {
+		// Osty: /tmp/selfhost_merged.osty:9615:9
+		return dst == "Int" || dst == "Float" || dst == "Byte" || dst == "Char"
+	}
+	// Osty: /tmp/selfhost_merged.osty:9617:5
+	if src == "UntypedFloat" {
+		// Osty: /tmp/selfhost_merged.osty:9618:9
+		return dst == "Float"
+	}
+	// Osty: /tmp/selfhost_merged.osty:9620:5
+	dstHead := frontCheckTypeHead(dst)
+	_ = dstHead
+	// Osty: /tmp/selfhost_merged.osty:9621:5
+	srcHead := frontCheckTypeHead(src)
+	_ = srcHead
+	// Osty: /tmp/selfhost_merged.osty:9622:5
+	if frontCheckIsInterface(env, dstHead) {
+		// Osty: /tmp/selfhost_merged.osty:9623:9
+		return frontCheckSatisfiesInterface(env, src, dst)
+	}
+	// Osty: /tmp/selfhost_merged.osty:9625:5
+	if dstHead == "Tuple" && srcHead == "Tuple" {
+		// Osty: /tmp/selfhost_merged.osty:9626:9
+		dstElems := frontCheckTupleElems(dst)
+		_ = dstElems
+		// Osty: /tmp/selfhost_merged.osty:9627:9
+		srcElems := frontCheckTupleElems(src)
+		_ = srcElems
+		// Osty: /tmp/selfhost_merged.osty:9628:9
+		if frontCheckStringCount(dstElems) != frontCheckStringCount(srcElems) {
+			// Osty: /tmp/selfhost_merged.osty:9629:13
+			return false
+		}
+		// Osty: /tmp/selfhost_merged.osty:9631:9
+		i := 0
+		_ = i
+		// Osty: /tmp/selfhost_merged.osty:9632:9
+		for _, dstElem := range dstElems {
+			// Osty: /tmp/selfhost_merged.osty:9633:13
+			if !(frontCheckIsAssignable(env, dstElem, frontCheckStringAt(srcElems, i))) {
+				// Osty: /tmp/selfhost_merged.osty:9634:17
+				return false
+			}
+			// Osty: /tmp/selfhost_merged.osty:9636:15
+			i = i + 1
+		}
+		// Osty: /tmp/selfhost_merged.osty:9638:9
+		return true
+	}
+	// Osty: /tmp/selfhost_merged.osty:9640:5
+	if dstHead == "fn" && srcHead == "fn" {
+		// Osty: /tmp/selfhost_merged.osty:9641:9
+		dstParams := frontCheckFnParams(dst)
+		_ = dstParams
+		// Osty: /tmp/selfhost_merged.osty:9642:9
+		srcParams := frontCheckFnParams(src)
+		_ = srcParams
+		// Osty: /tmp/selfhost_merged.osty:9643:9
+		if frontCheckStringCount(dstParams) != frontCheckStringCount(srcParams) {
+			// Osty: /tmp/selfhost_merged.osty:9644:13
+			return false
+		}
+		// Osty: /tmp/selfhost_merged.osty:9646:9
+		i := 0
+		_ = i
+		// Osty: /tmp/selfhost_merged.osty:9647:9
+		for _, dstParam := range dstParams {
+			// Osty: /tmp/selfhost_merged.osty:9648:13
+			if !(frontCheckIsAssignable(env, dstParam, frontCheckStringAt(srcParams, i))) || !(frontCheckIsAssignable(env, frontCheckStringAt(srcParams, i), dstParam)) {
+				// Osty: /tmp/selfhost_merged.osty:9650:17
+				return false
+			}
+			// Osty: /tmp/selfhost_merged.osty:9652:15
+			i = i + 1
+		}
+		// Osty: /tmp/selfhost_merged.osty:9654:9
+		return frontCheckIsAssignable(env, frontCheckFnReturn(dst), frontCheckFnReturn(src))
+	}
+	// Osty: /tmp/selfhost_merged.osty:9656:5
+	if dstHead == srcHead && strings.HasSuffix(dst, ">") && strings.HasSuffix(src, ">") {
+		// Osty: /tmp/selfhost_merged.osty:9657:9
+		dstArgs := frontCheckSplitTopLevel(frontCheckGenericArgsText(dst))
+		_ = dstArgs
+		// Osty: /tmp/selfhost_merged.osty:9658:9
+		srcArgs := frontCheckSplitTopLevel(frontCheckGenericArgsText(src))
+		_ = srcArgs
+		// Osty: /tmp/selfhost_merged.osty:9659:9
+		if frontCheckStringCount(dstArgs) != frontCheckStringCount(srcArgs) {
+			// Osty: /tmp/selfhost_merged.osty:9660:13
+			return false
+		}
+		// Osty: /tmp/selfhost_merged.osty:9662:9
+		i := 0
+		_ = i
+		// Osty: /tmp/selfhost_merged.osty:9663:9
+		for _, dstArg := range dstArgs {
+			// Osty: /tmp/selfhost_merged.osty:9664:13
+			if !(frontCheckIsAssignable(env, dstArg, frontCheckStringAt(srcArgs, i))) {
+				// Osty: /tmp/selfhost_merged.osty:9665:17
+				return false
+			}
+			// Osty: /tmp/selfhost_merged.osty:9667:15
+			i = i + 1
+		}
+		// Osty: /tmp/selfhost_merged.osty:9669:9
+		return true
+	}
+	return false
+}
+
+// Osty: /tmp/selfhost_merged.osty:9674:1
+func frontCheckExpectAssignable(env *FrontCheckEnv, dst string, src string) {
+	// Osty: /tmp/selfhost_merged.osty:9675:21
+	env.assignments = env.assignments + 1
+	// Osty: /tmp/selfhost_merged.osty:9676:5
+	if frontCheckIsAssignable(env, dst, src) {
+		// Osty: /tmp/selfhost_merged.osty:9677:22
+		env.accepted = env.accepted + 1
+	} else {
+		// Osty: /tmp/selfhost_merged.osty:9679:20
+		env.errors = env.errors + 1
+	}
+}
+
+// Osty: /tmp/selfhost_merged.osty:9683:1
+func frontCheckSatisfiesInterface(env *FrontCheckEnv, concreteRaw string, ifaceRaw string) bool {
+	return frontCheckSatisfiesInterfaceAt(env, concreteRaw, ifaceRaw, 0)
+}
+
+// Osty: /tmp/selfhost_merged.osty:9687:1
+func frontCheckSatisfiesInterfaceAt(env *FrontCheckEnv, concreteRaw string, ifaceRaw string, depth int) bool {
+	// Osty: /tmp/selfhost_merged.osty:9688:5
+	if depth > 8 {
+		// Osty: /tmp/selfhost_merged.osty:9689:9
+		return true
+	}
+	// Osty: /tmp/selfhost_merged.osty:9691:5
+	concrete := frontCheckResolveAliasesDeep(env, concreteRaw)
+	_ = concrete
+	// Osty: /tmp/selfhost_merged.osty:9692:5
+	iface := frontCheckResolveAliasesDeep(env, ifaceRaw)
+	_ = iface
+	// Osty: /tmp/selfhost_merged.osty:9693:5
+	concreteHead := frontCheckTypeHead(concrete)
+	_ = concreteHead
+	// Osty: /tmp/selfhost_merged.osty:9694:5
+	ifaceHead := frontCheckTypeHead(iface)
+	_ = ifaceHead
+	// Osty: /tmp/selfhost_merged.osty:9695:5
+	if !(frontCheckIsInterface(env, ifaceHead)) {
+		// Osty: /tmp/selfhost_merged.osty:9696:9
+		return false
+	}
+	// Osty: /tmp/selfhost_merged.osty:9698:5
+	if concreteHead == ifaceHead {
+		// Osty: /tmp/selfhost_merged.osty:9699:9
+		return true
+	}
+	// Osty: /tmp/selfhost_merged.osty:9701:5
+	if frontCheckGenericBoundSatisfies(env, concreteHead, iface, depth+1) {
+		// Osty: /tmp/selfhost_merged.osty:9702:9
+		return true
+	}
+	// Osty: /tmp/selfhost_merged.osty:9704:5
+	if frontCheckIsInterface(env, concreteHead) {
+		// Osty: /tmp/selfhost_merged.osty:9705:9
+		for _, ext := range env.interfaceExtends {
+			// Osty: /tmp/selfhost_merged.osty:9706:13
+			if ext.owner == concreteHead && frontCheckSatisfiesInterfaceAt(env, ext.typeName, iface, depth+1) {
+				// Osty: /tmp/selfhost_merged.osty:9707:17
+				return true
+			}
+		}
+	}
+	// Osty: /tmp/selfhost_merged.osty:9711:5
+	for _, ext := range env.interfaceExtends {
+		// Osty: /tmp/selfhost_merged.osty:9712:9
+		if ext.owner == ifaceHead && !(frontCheckSatisfiesInterfaceAt(env, concrete, ext.typeName, depth+1)) {
+			// Osty: /tmp/selfhost_merged.osty:9713:13
+			return false
+		}
+	}
+	// Osty: /tmp/selfhost_merged.osty:9716:5
+	for _, want := range env.fns {
+		// Osty: /tmp/selfhost_merged.osty:9717:9
+		if want.receiverType == ifaceHead {
+			// Osty: /tmp/selfhost_merged.osty:9718:13
+			got := frontCheckMethodLookup(env, concreteHead, want.name)
+			_ = got
+			// Osty: /tmp/selfhost_merged.osty:9719:13
+			if got.name == "" {
+				// Osty: /tmp/selfhost_merged.osty:9720:17
+				return false
+			}
+			// Osty: /tmp/selfhost_merged.osty:9722:13
+			if !(frontCheckInterfaceMethodMatches(env, concrete, iface, got, want)) {
+				// Osty: /tmp/selfhost_merged.osty:9723:17
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// Osty: /tmp/selfhost_merged.osty:9730:1
+func frontCheckGenericBoundSatisfies(env *FrontCheckEnv, genericName string, iface string, depth int) bool {
+	// Osty: /tmp/selfhost_merged.osty:9731:5
+	for _, bound := range env.genericBounds {
+		// Osty: /tmp/selfhost_merged.osty:9732:9
+		if bound.name == genericName && frontCheckSatisfiesInterfaceAt(env, bound.typeName, iface, depth+1) {
+			// Osty: /tmp/selfhost_merged.osty:9733:13
+			return true
+		}
+	}
+	return false
+}
+
+// Osty: /tmp/selfhost_merged.osty:9739:1
+func frontCheckInterfaceMethodMatches(env *FrontCheckEnv, concrete string, iface string, got *FrontFnSig, want *FrontFnSig) bool {
+	// Osty: /tmp/selfhost_merged.osty:9740:5
+	if frontCheckStringCount(got.paramTypes) != frontCheckStringCount(want.paramTypes) {
+		// Osty: /tmp/selfhost_merged.osty:9741:9
+		return false
+	}
+	// Osty: /tmp/selfhost_merged.osty:9743:5
+	concreteHead := frontCheckTypeHead(concrete)
+	_ = concreteHead
+	// Osty: /tmp/selfhost_merged.osty:9744:5
+	ifaceHead := frontCheckTypeHead(iface)
+	_ = ifaceHead
+	// Osty: /tmp/selfhost_merged.osty:9745:5
+	concreteSubsts := frontCheckReceiverSubsts(env, concreteHead, concrete)
+	_ = concreteSubsts
+	// Osty: /tmp/selfhost_merged.osty:9746:5
+	i := 0
+	_ = i
+	// Osty: /tmp/selfhost_merged.osty:9747:5
+	for _, wantParamRaw := range want.paramTypes {
+		// Osty: /tmp/selfhost_merged.osty:9748:9
+		gotParamRaw := frontCheckStringAt(got.paramTypes, i)
+		_ = gotParamRaw
+		// Osty: /tmp/selfhost_merged.osty:9749:9
+		if i > 0 {
+			// Osty: /tmp/selfhost_merged.osty:9750:13
+			wantParam := frontCheckInterfaceSelfType(wantParamRaw, ifaceHead, concrete)
+			_ = wantParam
+			// Osty: /tmp/selfhost_merged.osty:9751:13
+			gotParam := frontCheckSubstitute(gotParamRaw, concreteSubsts)
+			_ = gotParam
+			// Osty: /tmp/selfhost_merged.osty:9752:13
+			if !(frontCheckSameInterfaceSlot(env, wantParam, gotParam, ifaceHead, concrete)) && (!(frontCheckIsAssignable(env, wantParam, gotParam)) || !(frontCheckIsAssignable(env, gotParam, wantParam))) {
+				// Osty: /tmp/selfhost_merged.osty:9754:17
+				return false
+			}
+		}
+		// Osty: /tmp/selfhost_merged.osty:9757:11
+		i = i + 1
+	}
+	// Osty: /tmp/selfhost_merged.osty:9759:5
+	wantReturn := frontCheckInterfaceSelfType(want.returnType, ifaceHead, concrete)
+	_ = wantReturn
+	// Osty: /tmp/selfhost_merged.osty:9760:5
+	gotReturn := frontCheckSubstitute(got.returnType, concreteSubsts)
+	_ = gotReturn
+	return frontCheckSameInterfaceSlot(env, wantReturn, gotReturn, ifaceHead, concrete) || frontCheckIsAssignable(env, wantReturn, gotReturn)
+}
+
+// Osty: /tmp/selfhost_merged.osty:9764:1
+func frontCheckInterfaceSelfType(typeName string, ifaceHead string, concreteType string) string {
+	// Osty: /tmp/selfhost_merged.osty:9765:5
+	_ = ifaceHead
+	// Osty: /tmp/selfhost_merged.osty:9766:5
+	if typeName == "Self" {
+		// Osty: /tmp/selfhost_merged.osty:9767:9
+		return concreteType
+	}
+	// Osty: /tmp/selfhost_merged.osty:9769:5
+	view := frontCheckParseType(typeName)
+	_ = view
+	// Osty: /tmp/selfhost_merged.osty:9770:5
+	if view.kind == "tuple" {
+		// Osty: /tmp/selfhost_merged.osty:9771:9
+		var elems []string = make([]string, 0, 1)
+		_ = elems
+		// Osty: /tmp/selfhost_merged.osty:9772:9
+		for _, elem := range view.args {
+			// Osty: /tmp/selfhost_merged.osty:9773:13
+			func() struct{} {
+				elems = append(elems, frontCheckInterfaceSelfType(elem, ifaceHead, concreteType))
+				return struct{}{}
+			}()
+		}
+		// Osty: /tmp/selfhost_merged.osty:9775:9
+		return frontCheckTupleType(elems)
+	}
+	// Osty: /tmp/selfhost_merged.osty:9777:5
+	if view.kind == "fn" {
+		// Osty: /tmp/selfhost_merged.osty:9778:9
+		var params []string = make([]string, 0, 1)
+		_ = params
+		// Osty: /tmp/selfhost_merged.osty:9779:9
+		for _, param := range view.params {
+			// Osty: /tmp/selfhost_merged.osty:9780:13
+			func() struct{} {
+				params = append(params, frontCheckInterfaceSelfType(param, ifaceHead, concreteType))
+				return struct{}{}
+			}()
+		}
+		// Osty: /tmp/selfhost_merged.osty:9782:9
+		return frontCheckFnType(params, frontCheckInterfaceSelfType(view.ret, ifaceHead, concreteType))
+	}
+	// Osty: /tmp/selfhost_merged.osty:9784:5
+	if view.kind == "named" && frontCheckStringCount(view.args) > 0 {
+		// Osty: /tmp/selfhost_merged.osty:9785:9
+		var args []string = make([]string, 0, 1)
+		_ = args
+		// Osty: /tmp/selfhost_merged.osty:9786:9
+		for _, arg := range view.args {
+			// Osty: /tmp/selfhost_merged.osty:9787:13
+			func() struct{} {
+				args = append(args, frontCheckInterfaceSelfType(arg, ifaceHead, concreteType))
+				return struct{}{}
+			}()
+		}
+		// Osty: /tmp/selfhost_merged.osty:9789:9
+		return frontCheckNamedType(view.head, args)
+	}
+	return typeName
+}
+
+// Osty: /tmp/selfhost_merged.osty:9794:1
+func frontCheckSameInterfaceSlot(env *FrontCheckEnv, want string, got string, ifaceHead string, concreteHead string) bool {
+	// Osty: /tmp/selfhost_merged.osty:9795:5
+	_ = env
+	return want == got || (want == concreteHead && got == concreteHead) || (want == ifaceHead && got == concreteHead)
+}
+
+// Osty: /tmp/selfhost_merged.osty:9799:1
+func frontCheckUnify(env *FrontCheckEnv, left string, right string) string {
+	// Osty: /tmp/selfhost_merged.osty:9800:5
+	if frontCheckIsInvalid(left) {
+		// Osty: /tmp/selfhost_merged.osty:9801:9
+		return right
+	}
+	// Osty: /tmp/selfhost_merged.osty:9803:5
+	if frontCheckIsInvalid(right) {
+		// Osty: /tmp/selfhost_merged.osty:9804:9
+		return left
+	}
+	// Osty: /tmp/selfhost_merged.osty:9806:5
+	if left == right {
+		// Osty: /tmp/selfhost_merged.osty:9807:9
+		return left
+	}
+	// Osty: /tmp/selfhost_merged.osty:9809:5
+	if left == "Never" {
+		// Osty: /tmp/selfhost_merged.osty:9810:9
+		return right
+	}
+	// Osty: /tmp/selfhost_merged.osty:9812:5
+	if right == "Never" {
+		// Osty: /tmp/selfhost_merged.osty:9813:9
+		return left
+	}
+	// Osty: /tmp/selfhost_merged.osty:9815:5
+	if frontCheckIsAssignable(env, left, right) {
+		// Osty: /tmp/selfhost_merged.osty:9816:9
+		return left
+	}
+	// Osty: /tmp/selfhost_merged.osty:9818:5
+	if frontCheckIsAssignable(env, right, left) {
+		// Osty: /tmp/selfhost_merged.osty:9819:9
+		return right
+	}
+	// Osty: /tmp/selfhost_merged.osty:9821:16
+	env.errors = env.errors + 1
+	return "Invalid"
+}
+
+// Osty: /tmp/selfhost_merged.osty:9825:1
+func frontCheckBlock(file *AstFile, env *FrontCheckEnv, blockIdx int, asExpr bool) string {
+	return frontCheckBlockHint(file, env, blockIdx, asExpr, "")
+}
+
+// Osty: /tmp/selfhost_merged.osty:9829:1
+func frontCheckBlockHint(file *AstFile, env *FrontCheckEnv, blockIdx int, asExpr bool, hint string) string {
+	// Osty: /tmp/selfhost_merged.osty:9830:5
+	if blockIdx < 0 {
+		// Osty: /tmp/selfhost_merged.osty:9831:9
+		return "()"
+	}
+	// Osty: /tmp/selfhost_merged.osty:9833:5
+	block := astArenaNodeAt(file.arena, blockIdx)
+	_ = block
+	// Osty: /tmp/selfhost_merged.osty:9834:5
+	if !ostyEqual(block.kind, AstNodeKind(&AstNodeKind_AstNBlock{})) {
+		// Osty: /tmp/selfhost_merged.osty:9835:9
+		return frontCheckExprHint(file, env, blockIdx, hint)
+	}
+	// Osty: /tmp/selfhost_merged.osty:9837:5
+	mark := frontCheckBindingCount(env.bindings)
+	_ = mark
+	// Osty: /tmp/selfhost_merged.osty:9838:5
+	result := "()"
+	_ = result
+	// Osty: /tmp/selfhost_merged.osty:9839:5
+	seen := 0
+	_ = seen
+	// Osty: /tmp/selfhost_merged.osty:9840:5
+	total := 0
+	_ = total
+	// Osty: /tmp/selfhost_merged.osty:9841:5
+	for _, stmt := range block.children {
+		// Osty: /tmp/selfhost_merged.osty:9842:9
+		_ = stmt
+		// Osty: /tmp/selfhost_merged.osty:9843:15
+		total = total + 1
+	}
+	// Osty: /tmp/selfhost_merged.osty:9845:5
+	for _, stmtIdx := range block.children {
+		// Osty: /tmp/selfhost_merged.osty:9846:14
+		seen = seen + 1
+		// Osty: /tmp/selfhost_merged.osty:9847:9
+		if asExpr && seen == total {
+			// Osty: /tmp/selfhost_merged.osty:9848:20
+			result = frontCheckStmtAsExprHint(file, env, stmtIdx, hint)
+		} else {
+			// Osty: /tmp/selfhost_merged.osty:9850:13
+			_ = frontCheckStmt(file, env, stmtIdx)
+		}
+	}
+	// Osty: /tmp/selfhost_merged.osty:9853:5
+	frontCheckPopBindings(env, mark)
+	return result
+}
+
+// Osty: /tmp/selfhost_merged.osty:9857:1
+func frontCheckStmtAsExpr(file *AstFile, env *FrontCheckEnv, idx int) string {
+	return frontCheckStmtAsExprHint(file, env, idx, "")
+}
+
+// Osty: /tmp/selfhost_merged.osty:9861:1
+func frontCheckStmtAsExprHint(file *AstFile, env *FrontCheckEnv, idx int, hint string) string {
+	// Osty: /tmp/selfhost_merged.osty:9862:5
+	if idx < 0 {
+		// Osty: /tmp/selfhost_merged.osty:9863:9
+		return "()"
+	}
+	// Osty: /tmp/selfhost_merged.osty:9865:5
+	node := astArenaNodeAt(file.arena, idx)
+	_ = node
+	// Osty: /tmp/selfhost_merged.osty:9866:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNExprStmt{})) {
+		// Osty: /tmp/selfhost_merged.osty:9867:9
+		return frontCheckExprHint(file, env, node.left, hint)
+	}
+	return frontCheckStmt(file, env, idx)
+}
+
+// Osty: /tmp/selfhost_merged.osty:9872:1
+func frontCheckStmt(file *AstFile, env *FrontCheckEnv, idx int) string {
+	// Osty: /tmp/selfhost_merged.osty:9873:5
+	if idx < 0 {
+		// Osty: /tmp/selfhost_merged.osty:9874:9
+		return "()"
+	}
+	// Osty: /tmp/selfhost_merged.osty:9876:5
+	node := astArenaNodeAt(file.arena, idx)
+	_ = node
+	// Osty: /tmp/selfhost_merged.osty:9877:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNLet{})) {
+		// Osty: /tmp/selfhost_merged.osty:9878:9
+		declared := frontCheckTypeName(file, frontCheckFirstChild(node))
+		_ = declared
+		// Osty: /tmp/selfhost_merged.osty:9879:9
+		valueType := frontCheckExprHint(file, env, node.right, declared)
+		_ = valueType
+		// Osty: /tmp/selfhost_merged.osty:9880:9
+		if !(frontCheckPatternIrrefutable(file, node.left)) {
+			// Osty: /tmp/selfhost_merged.osty:9881:24
+			env.errors = env.errors + 1
+		}
+		// Osty: /tmp/selfhost_merged.osty:9883:9
+		finalType := valueType
+		_ = finalType
+		// Osty: /tmp/selfhost_merged.osty:9884:9
+		if declared != "()" && declared != "Invalid" {
+			// Osty: /tmp/selfhost_merged.osty:9885:13
+			frontCheckExpectAssignable(env, declared, valueType)
+			// Osty: /tmp/selfhost_merged.osty:9886:23
+			finalType = declared
+		}
+		// Osty: /tmp/selfhost_merged.osty:9888:9
+		frontCheckBindPattern(file, env, node.left, finalType, node.flags == 1)
+		// Osty: /tmp/selfhost_merged.osty:9889:9
+		return "()"
+	}
+	// Osty: /tmp/selfhost_merged.osty:9891:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNAssign{})) {
+		// Osty: /tmp/selfhost_merged.osty:9892:9
+		targetType := frontCheckExpr(file, env, node.left)
+		_ = targetType
+		// Osty: /tmp/selfhost_merged.osty:9893:9
+		valueType := frontCheckExprHint(file, env, node.right, targetType)
+		_ = valueType
+		// Osty: /tmp/selfhost_merged.osty:9894:9
+		if frontCheckAssignTargetMutable(file, env, node.left) {
+			// Osty: /tmp/selfhost_merged.osty:9895:13
+			frontCheckExpectAssignable(env, targetType, valueType)
+		} else {
+			// Osty: /tmp/selfhost_merged.osty:9897:29
+			env.assignments = env.assignments + 1
+			// Osty: /tmp/selfhost_merged.osty:9898:24
+			env.errors = env.errors + 1
+		}
+		// Osty: /tmp/selfhost_merged.osty:9900:9
+		return "()"
+	}
+	// Osty: /tmp/selfhost_merged.osty:9902:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNReturn{})) {
+		// Osty: /tmp/selfhost_merged.osty:9903:9
+		valueType := frontCheckExprHint(file, env, node.left, env.returnType)
+		_ = valueType
+		// Osty: /tmp/selfhost_merged.osty:9904:9
+		frontCheckExpectAssignable(env, env.returnType, valueType)
+		// Osty: /tmp/selfhost_merged.osty:9905:9
+		return "Never"
+	}
+	// Osty: /tmp/selfhost_merged.osty:9907:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNExprStmt{})) {
+		// Osty: /tmp/selfhost_merged.osty:9908:9
+		_ = frontCheckExpr(file, env, node.left)
+		// Osty: /tmp/selfhost_merged.osty:9909:9
+		return "()"
+	}
+	// Osty: /tmp/selfhost_merged.osty:9911:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNFor{})) {
+		// Osty: /tmp/selfhost_merged.osty:9912:9
+		return frontCheckFor(file, env, node)
+	}
+	// Osty: /tmp/selfhost_merged.osty:9914:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNDefer{})) {
+		// Osty: /tmp/selfhost_merged.osty:9915:9
+		_ = frontCheckExpr(file, env, node.left)
+		// Osty: /tmp/selfhost_merged.osty:9916:9
+		return "()"
+	}
+	// Osty: /tmp/selfhost_merged.osty:9918:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNBreak{})) || ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNContinue{})) {
+		// Osty: /tmp/selfhost_merged.osty:9919:9
+		return "Never"
+	}
+	return frontCheckExpr(file, env, idx)
+}
+
+// Osty: /tmp/selfhost_merged.osty:9924:1
+func frontCheckFor(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
+	// Osty: /tmp/selfhost_merged.osty:9925:5
+	mark := frontCheckBindingCount(env.bindings)
+	_ = mark
+	// Osty: /tmp/selfhost_merged.osty:9926:5
+	if node.text == "cond" {
+		// Osty: /tmp/selfhost_merged.osty:9927:9
+		condType := frontCheckExpr(file, env, node.left)
+		_ = condType
+		// Osty: /tmp/selfhost_merged.osty:9928:9
+		if condType != "Bool" && !(frontCheckIsInvalid(condType)) {
+			// Osty: /tmp/selfhost_merged.osty:9929:24
+			env.errors = env.errors + 1
+		}
+	} else if node.text == "forlet" {
+		// Osty: /tmp/selfhost_merged.osty:9932:9
+		valueType := frontCheckExpr(file, env, node.left)
+		_ = valueType
+		// Osty: /tmp/selfhost_merged.osty:9933:9
+		frontCheckBindPattern(file, env, frontCheckIntAt(node.children, 0), valueType, false)
+	} else if node.text == "forin" {
+		// Osty: /tmp/selfhost_merged.osty:9935:9
+		iterType := frontCheckResolveAliasesDeep(env, frontCheckExpr(file, env, frontCheckIntAt(node.children, 1)))
+		_ = iterType
+		// Osty: /tmp/selfhost_merged.osty:9936:9
+		elemType := frontCheckIterableElement(iterType)
+		_ = elemType
+		// Osty: /tmp/selfhost_merged.osty:9937:9
+		if elemType == "Invalid" {
+			// Osty: /tmp/selfhost_merged.osty:9938:24
+			env.errors = env.errors + 1
+		}
+		// Osty: /tmp/selfhost_merged.osty:9940:9
+		frontCheckBindPattern(file, env, frontCheckIntAt(node.children, 0), elemType, false)
+	}
+	// Osty: /tmp/selfhost_merged.osty:9942:5
+	_ = frontCheckBlock(file, env, node.right, false)
+	// Osty: /tmp/selfhost_merged.osty:9943:5
+	frontCheckPopBindings(env, mark)
+	return "()"
+}
+
+// Osty: /tmp/selfhost_merged.osty:9947:1
+func frontCheckIterableElement(typeName string) string {
+	// Osty: /tmp/selfhost_merged.osty:9948:5
+	head := frontCheckTypeHead(typeName)
+	_ = head
+	// Osty: /tmp/selfhost_merged.osty:9949:5
+	if head == "List" || head == "Range" || head == "Option" {
+		// Osty: /tmp/selfhost_merged.osty:9950:9
+		return frontCheckGenericArgAt(typeName, 0)
+	}
+	// Osty: /tmp/selfhost_merged.osty:9952:5
+	if head == "Map" {
+		// Osty: /tmp/selfhost_merged.osty:9953:9
+		return fmt.Sprintf("(%s, %s)", ostyToString(frontCheckGenericArgAt(typeName, 0)), ostyToString(frontCheckGenericArgAt(typeName, 1)))
+	}
+	return "Invalid"
+}
+
+// Osty: /tmp/selfhost_merged.osty:9958:1
+func frontCheckFirstChild(node *AstNode) int {
+	// Osty: /tmp/selfhost_merged.osty:9959:5
+	for _, child := range node.children {
+		// Osty: /tmp/selfhost_merged.osty:9960:9
+		return child
+	}
+	return -1
+}
+
+// Osty: /tmp/selfhost_merged.osty:9965:1
+func frontCheckSecondChild(node *AstNode) int {
+	// Osty: /tmp/selfhost_merged.osty:9966:5
+	i := 0
+	_ = i
+	// Osty: /tmp/selfhost_merged.osty:9967:5
+	for _, child := range node.children {
+		// Osty: /tmp/selfhost_merged.osty:9968:9
+		if i == 1 {
+			// Osty: /tmp/selfhost_merged.osty:9969:13
+			return child
+		}
+		// Osty: /tmp/selfhost_merged.osty:9971:11
+		i = i + 1
+	}
+	return -1
+}
+
+// Osty: /tmp/selfhost_merged.osty:9976:1
+func frontCheckAssignTargetMutable(file *AstFile, env *FrontCheckEnv, idx int) bool {
+	// Osty: /tmp/selfhost_merged.osty:9977:5
+	node := astArenaNodeAt(file.arena, idx)
+	_ = node
+	// Osty: /tmp/selfhost_merged.osty:9978:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNIdent{})) {
+		// Osty: /tmp/selfhost_merged.osty:9979:9
+		return frontCheckLookupMutable(env, node.text)
+	}
+	// Osty: /tmp/selfhost_merged.osty:9981:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNField{})) || ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNIndex{})) {
+		// Osty: /tmp/selfhost_merged.osty:9982:9
+		return frontCheckAssignTargetMutable(file, env, node.left)
+	}
+	return true
+}
+
+// Osty: /tmp/selfhost_merged.osty:9987:1
+func frontCheckExpr(file *AstFile, env *FrontCheckEnv, idx int) string {
+	return frontCheckExprHint(file, env, idx, "")
+}
+
+// Osty: /tmp/selfhost_merged.osty:9991:1
+func frontCheckExprHint(file *AstFile, env *FrontCheckEnv, idx int, hint string) string {
+	// Osty: /tmp/selfhost_merged.osty:9992:5
+	if idx < 0 {
+		// Osty: /tmp/selfhost_merged.osty:9993:9
+		return "()"
+	}
+	// Osty: /tmp/selfhost_merged.osty:9995:5
+	node := astArenaNodeAt(file.arena, idx)
+	_ = node
+	// Osty: /tmp/selfhost_merged.osty:9996:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNIntLit{})) {
+		// Osty: /tmp/selfhost_merged.osty:9997:9
+		if hint == "Float" {
+			// Osty: /tmp/selfhost_merged.osty:9998:13
+			return frontCheckTypedExpr(file, env, idx, "Float")
+		}
+		// Osty: /tmp/selfhost_merged.osty:10000:9
+		return frontCheckTypedExpr(file, env, idx, "UntypedInt")
+	}
+	// Osty: /tmp/selfhost_merged.osty:10002:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNFloatLit{})) {
+		// Osty: /tmp/selfhost_merged.osty:10003:9
+		if hint == "Float" {
+			// Osty: /tmp/selfhost_merged.osty:10004:13
+			return frontCheckTypedExpr(file, env, idx, "Float")
+		}
+		// Osty: /tmp/selfhost_merged.osty:10006:9
+		return frontCheckTypedExpr(file, env, idx, "UntypedFloat")
+	}
+	// Osty: /tmp/selfhost_merged.osty:10008:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNStringLit{})) {
+		// Osty: /tmp/selfhost_merged.osty:10009:9
+		return frontCheckTypedExpr(file, env, idx, "String")
+	}
+	// Osty: /tmp/selfhost_merged.osty:10011:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNBoolLit{})) {
+		// Osty: /tmp/selfhost_merged.osty:10012:9
+		return frontCheckTypedExpr(file, env, idx, "Bool")
+	}
+	// Osty: /tmp/selfhost_merged.osty:10014:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNCharLit{})) {
+		// Osty: /tmp/selfhost_merged.osty:10015:9
+		return frontCheckTypedExpr(file, env, idx, "Char")
+	}
+	// Osty: /tmp/selfhost_merged.osty:10017:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNByteLit{})) {
+		// Osty: /tmp/selfhost_merged.osty:10018:9
+		return frontCheckTypedExpr(file, env, idx, "Byte")
+	}
+	// Osty: /tmp/selfhost_merged.osty:10020:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNIdent{})) {
+		// Osty: /tmp/selfhost_merged.osty:10021:9
+		return frontCheckTypedExpr(file, env, idx, frontCheckIdentHint(env, node.text, hint))
+	}
+	// Osty: /tmp/selfhost_merged.osty:10023:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNParen{})) {
+		// Osty: /tmp/selfhost_merged.osty:10024:9
+		return frontCheckTypedExpr(file, env, idx, frontCheckExprHint(file, env, node.left, hint))
+	}
+	// Osty: /tmp/selfhost_merged.osty:10026:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNBlock{})) {
+		// Osty: /tmp/selfhost_merged.osty:10027:9
+		return frontCheckTypedExpr(file, env, idx, frontCheckBlockHint(file, env, idx, true, hint))
+	}
+	// Osty: /tmp/selfhost_merged.osty:10029:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNUnary{})) {
+		// Osty: /tmp/selfhost_merged.osty:10030:9
+		return frontCheckTypedExpr(file, env, idx, frontCheckUnary(file, env, node))
+	}
+	// Osty: /tmp/selfhost_merged.osty:10032:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNBinary{})) {
+		// Osty: /tmp/selfhost_merged.osty:10033:9
+		return frontCheckTypedExpr(file, env, idx, frontCheckBinary(file, env, node))
+	}
+	// Osty: /tmp/selfhost_merged.osty:10035:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNIf{})) {
+		// Osty: /tmp/selfhost_merged.osty:10036:9
+		return frontCheckTypedExpr(file, env, idx, frontCheckIfHint(file, env, node, hint))
+	}
+	// Osty: /tmp/selfhost_merged.osty:10038:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNCall{})) {
+		// Osty: /tmp/selfhost_merged.osty:10039:9
+		return frontCheckTypedExpr(file, env, idx, frontCheckCallHint(file, env, idx, node, hint))
+	}
+	// Osty: /tmp/selfhost_merged.osty:10041:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNList{})) {
+		// Osty: /tmp/selfhost_merged.osty:10042:9
+		return frontCheckTypedExpr(file, env, idx, frontCheckList(file, env, node, hint))
+	}
+	// Osty: /tmp/selfhost_merged.osty:10044:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNTuple{})) {
+		// Osty: /tmp/selfhost_merged.osty:10045:9
+		return frontCheckTypedExpr(file, env, idx, frontCheckTuple(file, env, node, hint))
+	}
+	// Osty: /tmp/selfhost_merged.osty:10047:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNMap{})) {
+		// Osty: /tmp/selfhost_merged.osty:10048:9
+		return frontCheckTypedExpr(file, env, idx, frontCheckMap(file, env, node, hint))
+	}
+	// Osty: /tmp/selfhost_merged.osty:10050:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNRange{})) {
+		// Osty: /tmp/selfhost_merged.osty:10051:9
+		return frontCheckTypedExpr(file, env, idx, frontCheckRange(file, env, node))
+	}
+	// Osty: /tmp/selfhost_merged.osty:10053:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNField{})) {
+		// Osty: /tmp/selfhost_merged.osty:10054:9
+		return frontCheckTypedExpr(file, env, idx, frontCheckField(file, env, node))
+	}
+	// Osty: /tmp/selfhost_merged.osty:10056:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNIndex{})) {
+		// Osty: /tmp/selfhost_merged.osty:10057:9
+		return frontCheckTypedExpr(file, env, idx, frontCheckIndex(file, env, node))
+	}
+	// Osty: /tmp/selfhost_merged.osty:10059:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNMatch{})) {
+		// Osty: /tmp/selfhost_merged.osty:10060:9
+		return frontCheckTypedExpr(file, env, idx, frontCheckMatchHint(file, env, node, hint))
+	}
+	// Osty: /tmp/selfhost_merged.osty:10062:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNStructLit{})) {
+		// Osty: /tmp/selfhost_merged.osty:10063:9
+		return frontCheckTypedExpr(file, env, idx, frontCheckStructLitHint(file, env, node, hint))
+	}
+	// Osty: /tmp/selfhost_merged.osty:10065:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNClosure{})) {
+		// Osty: /tmp/selfhost_merged.osty:10066:9
+		return frontCheckTypedExpr(file, env, idx, frontCheckClosure(file, env, node, frontCheckFnParams(hint), frontCheckFnReturn(hint)))
+	}
+	// Osty: /tmp/selfhost_merged.osty:10068:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNQuestion{})) {
+		// Osty: /tmp/selfhost_merged.osty:10069:9
+		return frontCheckTypedExpr(file, env, idx, frontCheckQuestion(file, env, node))
+	}
+	// Osty: /tmp/selfhost_merged.osty:10071:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNTurbofish{})) {
+		// Osty: /tmp/selfhost_merged.osty:10072:9
+		return frontCheckTypedExpr(file, env, idx, frontCheckExpr(file, env, node.left))
+	}
+	return frontCheckTypedExpr(file, env, idx, "Invalid")
+}
+
+// Osty: /tmp/selfhost_merged.osty:10077:1
+func frontCheckIdent(env *FrontCheckEnv, name string) string {
+	return frontCheckIdentHint(env, name, "")
+}
+
+// Osty: /tmp/selfhost_merged.osty:10081:1
+func frontCheckIdentHint(env *FrontCheckEnv, name string, hint string) string {
+	// Osty: /tmp/selfhost_merged.osty:10082:5
+	found := frontCheckLookup(env, name)
+	_ = found
+	// Osty: /tmp/selfhost_merged.osty:10083:5
+	if found != "Invalid" {
+		// Osty: /tmp/selfhost_merged.osty:10084:9
+		return found
+	}
+	// Osty: /tmp/selfhost_merged.osty:10086:5
+	variant := frontCheckVariantLookup(env, name)
+	_ = variant
+	// Osty: /tmp/selfhost_merged.osty:10087:5
+	if hint != "" {
+		// Osty: /tmp/selfhost_merged.osty:10088:9
+		hinted := frontCheckVariantLookupForOwner(env, name, frontCheckTypeHead(frontCheckResolveAliasesDeep(env, hint)))
+		_ = hinted
+		// Osty: /tmp/selfhost_merged.osty:10089:9
+		if hinted.name != "" {
+			// Osty: /tmp/selfhost_merged.osty:10090:21
+			variant = hinted
+		}
+	}
+	// Osty: /tmp/selfhost_merged.osty:10093:5
+	if variant.name != "" && frontCheckStringCount(variant.fieldTypes) == 0 {
+		// Osty: /tmp/selfhost_merged.osty:10094:9
+		resolvedHint := frontCheckResolveAliasesDeep(env, hint)
+		_ = resolvedHint
+		// Osty: /tmp/selfhost_merged.osty:10095:9
+		if resolvedHint != "" && frontCheckTypeHead(resolvedHint) == variant.owner {
+			// Osty: /tmp/selfhost_merged.osty:10096:13
+			return resolvedHint
+		}
+		// Osty: /tmp/selfhost_merged.osty:10098:9
+		return frontCheckGenericOwnerType(variant.owner, variant.generics, make([]*FrontTypeSubst, 0, 1))
+	}
+	// Osty: /tmp/selfhost_merged.osty:10100:5
+	if frontCheckSigLookup(env, name).name != "" {
+		// Osty: /tmp/selfhost_merged.osty:10101:9
+		if frontCheckTypeHead(hint) == "fn" {
+			// Osty: /tmp/selfhost_merged.osty:10102:13
+			return hint
+		}
+		// Osty: /tmp/selfhost_merged.osty:10104:9
+		return "fn"
+	}
+	// Osty: /tmp/selfhost_merged.osty:10106:5
+	if name != "_" {
+		// Osty: /tmp/selfhost_merged.osty:10107:20
+		env.errors = env.errors + 1
+	}
+	return "Invalid"
+}
+
+// Osty: /tmp/selfhost_merged.osty:10112:1
+func frontCheckUnary(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
+	// Osty: /tmp/selfhost_merged.osty:10113:5
+	inner := frontCheckResolveAliasesDeep(env, frontCheckExpr(file, env, node.left))
+	_ = inner
+	// Osty: /tmp/selfhost_merged.osty:10114:5
+	if ostyEqual(node.op, FrontTokenKind(&FrontTokenKind_FrontNot{})) {
+		// Osty: /tmp/selfhost_merged.osty:10115:9
+		if inner != "Bool" && !(frontCheckIsInvalid(inner)) {
+			// Osty: /tmp/selfhost_merged.osty:10116:24
+			env.errors = env.errors + 1
+			// Osty: /tmp/selfhost_merged.osty:10117:13
+			return "Invalid"
+		}
+		// Osty: /tmp/selfhost_merged.osty:10119:9
+		return "Bool"
+	}
+	// Osty: /tmp/selfhost_merged.osty:10121:5
+	if ostyEqual(node.op, FrontTokenKind(&FrontTokenKind_FrontMinus{})) {
+		// Osty: /tmp/selfhost_merged.osty:10122:9
+		if frontCheckIsNumeric(inner) {
+			// Osty: /tmp/selfhost_merged.osty:10123:13
+			return inner
+		}
+		// Osty: /tmp/selfhost_merged.osty:10125:9
+		if !(frontCheckIsInvalid(inner)) {
+			// Osty: /tmp/selfhost_merged.osty:10126:24
+			env.errors = env.errors + 1
+		}
+		// Osty: /tmp/selfhost_merged.osty:10128:9
+		return "Invalid"
+	}
+	// Osty: /tmp/selfhost_merged.osty:10130:5
+	if ostyEqual(node.op, FrontTokenKind(&FrontTokenKind_FrontBitNot{})) {
+		// Osty: /tmp/selfhost_merged.osty:10131:9
+		if frontCheckIsInteger(inner) {
+			// Osty: /tmp/selfhost_merged.osty:10132:13
+			return inner
+		}
+		// Osty: /tmp/selfhost_merged.osty:10134:9
+		if !(frontCheckIsInvalid(inner)) {
+			// Osty: /tmp/selfhost_merged.osty:10135:24
+			env.errors = env.errors + 1
+		}
+	}
+	return "Invalid"
+}
+
+// Osty: /tmp/selfhost_merged.osty:10141:1
+func frontCheckBinary(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
+	// Osty: /tmp/selfhost_merged.osty:10142:5
+	left := frontCheckResolveAliasesDeep(env, frontCheckExpr(file, env, node.left))
+	_ = left
+	// Osty: /tmp/selfhost_merged.osty:10143:5
+	right := frontCheckResolveAliasesDeep(env, frontCheckExpr(file, env, node.right))
+	_ = right
+	// Osty: /tmp/selfhost_merged.osty:10144:5
+	if ostyEqual(node.op, FrontTokenKind(&FrontTokenKind_FrontEq{})) || ostyEqual(node.op, FrontTokenKind(&FrontTokenKind_FrontNeq{})) {
+		// Osty: /tmp/selfhost_merged.osty:10145:9
+		if frontCheckIsAssignable(env, left, right) || frontCheckIsAssignable(env, right, left) {
+			// Osty: /tmp/selfhost_merged.osty:10146:13
+			return "Bool"
+		}
+		// Osty: /tmp/selfhost_merged.osty:10148:20
+		env.errors = env.errors + 1
+		// Osty: /tmp/selfhost_merged.osty:10149:9
+		return "Invalid"
+	}
+	// Osty: /tmp/selfhost_merged.osty:10151:5
+	if ostyEqual(node.op, FrontTokenKind(&FrontTokenKind_FrontLt{})) || ostyEqual(node.op, FrontTokenKind(&FrontTokenKind_FrontGt{})) || ostyEqual(node.op, FrontTokenKind(&FrontTokenKind_FrontLeq{})) || ostyEqual(node.op, FrontTokenKind(&FrontTokenKind_FrontGeq{})) {
+		// Osty: /tmp/selfhost_merged.osty:10152:9
+		if frontCheckIsOrdered(left) && (frontCheckIsAssignable(env, left, right) || frontCheckIsAssignable(env, right, left)) {
+			// Osty: /tmp/selfhost_merged.osty:10153:13
+			return "Bool"
+		}
+		// Osty: /tmp/selfhost_merged.osty:10155:20
+		env.errors = env.errors + 1
+		// Osty: /tmp/selfhost_merged.osty:10156:9
+		return "Invalid"
+	}
+	// Osty: /tmp/selfhost_merged.osty:10158:5
+	if ostyEqual(node.op, FrontTokenKind(&FrontTokenKind_FrontAnd{})) || ostyEqual(node.op, FrontTokenKind(&FrontTokenKind_FrontOr{})) {
+		// Osty: /tmp/selfhost_merged.osty:10159:9
+		if left == "Bool" && right == "Bool" {
+			// Osty: /tmp/selfhost_merged.osty:10160:13
+			return "Bool"
+		}
+		// Osty: /tmp/selfhost_merged.osty:10162:20
+		env.errors = env.errors + 1
+		// Osty: /tmp/selfhost_merged.osty:10163:9
+		return "Invalid"
+	}
+	// Osty: /tmp/selfhost_merged.osty:10165:5
+	if ostyEqual(node.op, FrontTokenKind(&FrontTokenKind_FrontQQ{})) {
+		// Osty: /tmp/selfhost_merged.osty:10166:9
+		if frontCheckTypeHead(left) != "Option" {
+			// Osty: /tmp/selfhost_merged.osty:10167:24
+			env.errors = env.errors + 1
+			// Osty: /tmp/selfhost_merged.osty:10168:13
+			return "Invalid"
+		}
+		// Osty: /tmp/selfhost_merged.osty:10170:9
+		inner := frontCheckGenericArgAt(left, 0)
+		_ = inner
+		// Osty: /tmp/selfhost_merged.osty:10171:9
+		frontCheckExpectAssignable(env, inner, right)
+		// Osty: /tmp/selfhost_merged.osty:10172:9
+		return inner
+	}
+	// Osty: /tmp/selfhost_merged.osty:10174:5
+	if ostyEqual(node.op, FrontTokenKind(&FrontTokenKind_FrontBitAnd{})) || ostyEqual(node.op, FrontTokenKind(&FrontTokenKind_FrontBitOr{})) || ostyEqual(node.op, FrontTokenKind(&FrontTokenKind_FrontBitXor{})) || ostyEqual(node.op, FrontTokenKind(&FrontTokenKind_FrontShl{})) || ostyEqual(node.op, FrontTokenKind(&FrontTokenKind_FrontShr{})) {
+		// Osty: /tmp/selfhost_merged.osty:10175:9
+		if frontCheckIsInteger(left) && frontCheckIsInteger(right) {
+			// Osty: /tmp/selfhost_merged.osty:10176:13
+			if left == "UntypedInt" {
+				// Osty: /tmp/selfhost_merged.osty:10177:17
+				return right
+			}
+			// Osty: /tmp/selfhost_merged.osty:10179:13
+			return left
+		}
+		// Osty: /tmp/selfhost_merged.osty:10181:20
+		env.errors = env.errors + 1
+		// Osty: /tmp/selfhost_merged.osty:10182:9
+		return "Invalid"
+	}
+	// Osty: /tmp/selfhost_merged.osty:10184:5
+	if ostyEqual(node.op, FrontTokenKind(&FrontTokenKind_FrontPlus{})) || ostyEqual(node.op, FrontTokenKind(&FrontTokenKind_FrontMinus{})) || ostyEqual(node.op, FrontTokenKind(&FrontTokenKind_FrontStar{})) || ostyEqual(node.op, FrontTokenKind(&FrontTokenKind_FrontSlash{})) || ostyEqual(node.op, FrontTokenKind(&FrontTokenKind_FrontPercent{})) {
+		// Osty: /tmp/selfhost_merged.osty:10185:9
+		if !(frontCheckIsNumeric(left)) || !(frontCheckIsNumeric(right)) {
+			// Osty: /tmp/selfhost_merged.osty:10186:24
+			env.errors = env.errors + 1
+			// Osty: /tmp/selfhost_merged.osty:10187:13
+			return "Invalid"
+		}
+		// Osty: /tmp/selfhost_merged.osty:10189:9
+		if left == "Float" || right == "Float" || left == "UntypedFloat" || right == "UntypedFloat" {
+			// Osty: /tmp/selfhost_merged.osty:10190:13
+			if left == "UntypedFloat" && right == "UntypedFloat" {
+				// Osty: /tmp/selfhost_merged.osty:10191:17
+				return "UntypedFloat"
+			}
+			// Osty: /tmp/selfhost_merged.osty:10193:13
+			return "Float"
+		}
+		// Osty: /tmp/selfhost_merged.osty:10195:9
+		if left == "Int" || right == "Int" {
+			// Osty: /tmp/selfhost_merged.osty:10196:13
+			return "Int"
+		}
+		// Osty: /tmp/selfhost_merged.osty:10198:9
+		return "UntypedInt"
+	}
+	return "Invalid"
+}
+
+// Osty: /tmp/selfhost_merged.osty:10203:1
+func frontCheckList(file *AstFile, env *FrontCheckEnv, node *AstNode, hint string) string {
+	// Osty: /tmp/selfhost_merged.osty:10204:5
+	elem := "Invalid"
+	_ = elem
+	// Osty: /tmp/selfhost_merged.osty:10205:5
+	if frontCheckTypeHead(hint) == "List" {
+		// Osty: /tmp/selfhost_merged.osty:10206:14
+		elem = frontCheckGenericArgAt(hint, 0)
+	}
+	// Osty: /tmp/selfhost_merged.osty:10208:5
+	seen := 0
+	_ = seen
+	// Osty: /tmp/selfhost_merged.osty:10209:5
+	for _, child := range node.children {
+		// Osty: /tmp/selfhost_merged.osty:10210:9
+		got := frontCheckExprHint(file, env, child, elem)
+		_ = got
+		// Osty: /tmp/selfhost_merged.osty:10211:9
+		if seen == 0 && elem == "Invalid" {
+			// Osty: /tmp/selfhost_merged.osty:10212:18
+			elem = got
+		} else {
+			// Osty: /tmp/selfhost_merged.osty:10214:18
+			elem = frontCheckUnify(env, elem, got)
+		}
+		// Osty: /tmp/selfhost_merged.osty:10216:14
+		seen = seen + 1
+	}
+	return frontCheckOneArgType("List", elem)
+}
+
+// Osty: /tmp/selfhost_merged.osty:10221:1
+func frontCheckMap(file *AstFile, env *FrontCheckEnv, node *AstNode, hint string) string {
+	// Osty: /tmp/selfhost_merged.osty:10222:5
+	keyType := "Invalid"
+	_ = keyType
+	// Osty: /tmp/selfhost_merged.osty:10223:5
+	valType := "Invalid"
+	_ = valType
+	// Osty: /tmp/selfhost_merged.osty:10224:5
+	if frontCheckTypeHead(hint) == "Map" {
+		// Osty: /tmp/selfhost_merged.osty:10225:17
+		keyType = frontCheckGenericArgAt(hint, 0)
+		// Osty: /tmp/selfhost_merged.osty:10226:17
+		valType = frontCheckGenericArgAt(hint, 1)
+	}
+	// Osty: /tmp/selfhost_merged.osty:10228:5
+	i := 0
+	_ = i
+	// Osty: /tmp/selfhost_merged.osty:10229:5
+	for _, keyIdx := range node.children {
+		// Osty: /tmp/selfhost_merged.osty:10230:9
+		valIdx := frontCheckIntAt(node.children2, i)
+		_ = valIdx
+		// Osty: /tmp/selfhost_merged.osty:10231:9
+		gotKey := frontCheckExprHint(file, env, keyIdx, keyType)
+		_ = gotKey
+		// Osty: /tmp/selfhost_merged.osty:10232:9
+		gotVal := frontCheckExprHint(file, env, valIdx, valType)
+		_ = gotVal
+		// Osty: /tmp/selfhost_merged.osty:10233:9
+		if i == 0 && keyType == "Invalid" && valType == "Invalid" {
+			// Osty: /tmp/selfhost_merged.osty:10234:21
+			keyType = gotKey
+			// Osty: /tmp/selfhost_merged.osty:10235:21
+			valType = gotVal
+		} else {
+			// Osty: /tmp/selfhost_merged.osty:10237:21
+			keyType = frontCheckUnify(env, keyType, gotKey)
+			// Osty: /tmp/selfhost_merged.osty:10238:21
+			valType = frontCheckUnify(env, valType, gotVal)
+		}
+		// Osty: /tmp/selfhost_merged.osty:10240:11
+		i = i + 1
+	}
+	return frontCheckTwoArgType("Map", keyType, valType)
+}
+
+// Osty: /tmp/selfhost_merged.osty:10245:1
+func frontCheckTuple(file *AstFile, env *FrontCheckEnv, node *AstNode, hint string) string {
+	// Osty: /tmp/selfhost_merged.osty:10246:5
+	hints := frontCheckTupleElems(hint)
+	_ = hints
+	// Osty: /tmp/selfhost_merged.osty:10247:5
+	var elems []string = make([]string, 0, 1)
+	_ = elems
+	// Osty: /tmp/selfhost_merged.osty:10248:5
+	i := 0
+	_ = i
+	// Osty: /tmp/selfhost_merged.osty:10249:5
+	for _, child := range node.children {
+		// Osty: /tmp/selfhost_merged.osty:10250:9
+		func() struct{} {
+			elems = append(elems, frontCheckExprHint(file, env, child, frontCheckStringAt(hints, i)))
+			return struct{}{}
+		}()
+		// Osty: /tmp/selfhost_merged.osty:10251:11
+		i = i + 1
+	}
+	// Osty: /tmp/selfhost_merged.osty:10253:5
+	if frontCheckStringCount(elems) == 0 {
+		// Osty: /tmp/selfhost_merged.osty:10254:9
+		return "()"
+	}
+	return fmt.Sprintf("(%s)", ostyToString(frontCheckJoinTypes(elems)))
+}
+
+// Osty: /tmp/selfhost_merged.osty:10259:1
+func frontCheckRange(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
+	// Osty: /tmp/selfhost_merged.osty:10260:5
+	elem := "Int"
+	_ = elem
+	// Osty: /tmp/selfhost_merged.osty:10261:5
+	if node.left >= 0 {
+		// Osty: /tmp/selfhost_merged.osty:10262:9
+		left := frontCheckResolveAliasesDeep(env, frontCheckExpr(file, env, node.left))
+		_ = left
+		// Osty: /tmp/selfhost_merged.osty:10263:9
+		if !(frontCheckIsInteger(left)) {
+			// Osty: /tmp/selfhost_merged.osty:10264:24
+			env.errors = env.errors + 1
+		}
+		// Osty: /tmp/selfhost_merged.osty:10266:14
+		elem = left
+	}
+	// Osty: /tmp/selfhost_merged.osty:10268:5
+	if node.right >= 0 {
+		// Osty: /tmp/selfhost_merged.osty:10269:9
+		right := frontCheckResolveAliasesDeep(env, frontCheckExpr(file, env, node.right))
+		_ = right
+		// Osty: /tmp/selfhost_merged.osty:10270:9
+		if !(frontCheckIsInteger(right)) {
+			// Osty: /tmp/selfhost_merged.osty:10271:24
+			env.errors = env.errors + 1
+		}
+		// Osty: /tmp/selfhost_merged.osty:10273:14
+		elem = frontCheckUnify(env, elem, right)
+	}
+	return frontCheckOneArgType("Range", elem)
+}
+
+// Osty: /tmp/selfhost_merged.osty:10278:1
+func frontCheckIf(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
+	return frontCheckIfHint(file, env, node, "")
+}
+
+// Osty: /tmp/selfhost_merged.osty:10282:1
+func frontCheckIfHint(file *AstFile, env *FrontCheckEnv, node *AstNode, hint string) string {
+	// Osty: /tmp/selfhost_merged.osty:10283:5
+	mark := frontCheckBindingCount(env.bindings)
+	_ = mark
+	// Osty: /tmp/selfhost_merged.osty:10284:5
+	if node.flags == 1 {
+		// Osty: /tmp/selfhost_merged.osty:10285:9
+		valueType := frontCheckExpr(file, env, node.left)
+		_ = valueType
+		// Osty: /tmp/selfhost_merged.osty:10286:9
+		frontCheckBindPattern(file, env, frontCheckSecondChild(node), valueType, false)
+	} else {
+		// Osty: /tmp/selfhost_merged.osty:10288:9
+		cond := frontCheckExpr(file, env, node.left)
+		_ = cond
+		// Osty: /tmp/selfhost_merged.osty:10289:9
+		if cond != "Bool" && !(frontCheckIsInvalid(cond)) {
+			// Osty: /tmp/selfhost_merged.osty:10290:24
+			env.errors = env.errors + 1
+		}
+	}
+	// Osty: /tmp/selfhost_merged.osty:10293:5
+	thenType := frontCheckBlockHint(file, env, node.right, true, hint)
+	_ = thenType
+	// Osty: /tmp/selfhost_merged.osty:10294:5
+	frontCheckPopBindings(env, mark)
+	// Osty: /tmp/selfhost_merged.osty:10295:5
+	elseIdx := frontCheckFirstChild(node)
+	_ = elseIdx
+	// Osty: /tmp/selfhost_merged.osty:10296:5
+	if elseIdx < 0 {
+		// Osty: /tmp/selfhost_merged.osty:10297:9
+		return "()"
+	}
+	// Osty: /tmp/selfhost_merged.osty:10299:5
+	elseMark := frontCheckBindingCount(env.bindings)
+	_ = elseMark
+	// Osty: /tmp/selfhost_merged.osty:10300:5
+	elseNode := astArenaNodeAt(file.arena, elseIdx)
+	_ = elseNode
+	// Osty: /tmp/selfhost_merged.osty:10301:5
+	elseType := "()"
+	_ = elseType
+	// Osty: /tmp/selfhost_merged.osty:10302:5
+	if ostyEqual(elseNode.kind, AstNodeKind(&AstNodeKind_AstNBlock{})) {
+		// Osty: /tmp/selfhost_merged.osty:10303:18
+		elseType = frontCheckBlockHint(file, env, elseIdx, true, hint)
+	} else {
+		// Osty: /tmp/selfhost_merged.osty:10305:18
+		elseType = frontCheckExprHint(file, env, elseIdx, hint)
+	}
+	// Osty: /tmp/selfhost_merged.osty:10307:5
+	frontCheckPopBindings(env, elseMark)
+	return frontCheckUnify(env, thenType, elseType)
+}
+
+// Osty: /tmp/selfhost_merged.osty:10311:1
+func frontCheckCall(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
+	return frontCheckCallHint(file, env, -1, node, "")
+}
+
+// Osty: /tmp/selfhost_merged.osty:10315:1
+func frontCheckCallHint(file *AstFile, env *FrontCheckEnv, callIdx int, node *AstNode, hint string) string {
+	// Osty: /tmp/selfhost_merged.osty:10316:5
+	callee := astArenaNodeAt(file.arena, node.left)
+	_ = callee
+	// Osty: /tmp/selfhost_merged.osty:10317:5
+	if ostyEqual(callee.kind, AstNodeKind(&AstNodeKind_AstNTurbofish{})) {
+		// Osty: /tmp/selfhost_merged.osty:10318:9
+		return frontCheckTurbofishCall(file, env, callIdx, callee, node.children)
+	}
+	// Osty: /tmp/selfhost_merged.osty:10320:5
+	if ostyEqual(callee.kind, AstNodeKind(&AstNodeKind_AstNIdent{})) {
+		// Osty: /tmp/selfhost_merged.osty:10321:9
+		bindingType := frontCheckResolveAliasesDeep(env, frontCheckLookup(env, callee.text))
+		_ = bindingType
+		// Osty: /tmp/selfhost_merged.osty:10322:9
+		if frontCheckTypeHead(bindingType) == "fn" {
+			// Osty: /tmp/selfhost_merged.osty:10323:13
+			return frontCheckCallFnType(file, env, bindingType, node.children)
+		}
+		// Osty: /tmp/selfhost_merged.osty:10325:9
+		variant := frontCheckVariantLookup(env, callee.text)
+		_ = variant
+		// Osty: /tmp/selfhost_merged.osty:10326:9
+		if variant.name != "" {
+			// Osty: /tmp/selfhost_merged.osty:10327:13
+			return frontCheckVariantCallWithSubsts(file, env, variant, node.children, frontCheckVariantHintSubsts(env, variant, hint))
+		}
+		// Osty: /tmp/selfhost_merged.osty:10329:9
+		sig := frontCheckSigLookup(env, callee.text)
+		_ = sig
+		// Osty: /tmp/selfhost_merged.osty:10330:9
+		if sig.name != "" {
+			// Osty: /tmp/selfhost_merged.osty:10331:13
+			return frontCheckCallSig(file, env, callIdx, sig, node.children, 0, make([]*FrontTypeSubst, 0, 1))
+		}
+		// Osty: /tmp/selfhost_merged.osty:10333:9
+		if frontCheckIsBuiltinCallName(callee.text) {
+			// Osty: /tmp/selfhost_merged.osty:10334:13
+			return frontCheckBuiltinCall(file, env, callee.text, node.children)
+		}
+		// Osty: /tmp/selfhost_merged.osty:10336:20
+		env.errors = env.errors + 1
+		// Osty: /tmp/selfhost_merged.osty:10337:9
+		return "Invalid"
+	}
+	// Osty: /tmp/selfhost_merged.osty:10339:5
+	if ostyEqual(callee.kind, AstNodeKind(&AstNodeKind_AstNField{})) {
+		// Osty: /tmp/selfhost_merged.osty:10340:9
+		packageName := frontCheckPackageFnNameEnv(file, env, callee)
+		_ = packageName
+		// Osty: /tmp/selfhost_merged.osty:10341:9
+		if packageName != "" {
+			// Osty: /tmp/selfhost_merged.osty:10342:13
+			sig := frontCheckSigLookup(env, packageName)
+			_ = sig
+			// Osty: /tmp/selfhost_merged.osty:10343:13
+			if sig.name != "" {
+				// Osty: /tmp/selfhost_merged.osty:10344:17
+				return frontCheckCallSig(file, env, callIdx, sig, node.children, 0, make([]*FrontTypeSubst, 0, 1))
+			}
+		}
+		// Osty: /tmp/selfhost_merged.osty:10347:9
+		recvType := frontCheckResolveAliasesDeep(env, frontCheckExpr(file, env, callee.left))
+		_ = recvType
+		// Osty: /tmp/selfhost_merged.osty:10348:9
+		methodResult := frontCheckStdMethodCall(file, env, callee, recvType, node.children)
+		_ = methodResult
+		// Osty: /tmp/selfhost_merged.osty:10349:9
+		if methodResult != "Invalid" {
+			// Osty: /tmp/selfhost_merged.osty:10350:13
+			return methodResult
+		}
+		// Osty: /tmp/selfhost_merged.osty:10352:9
+		owner := frontCheckTypeHead(recvType)
+		_ = owner
+		// Osty: /tmp/selfhost_merged.osty:10353:9
+		sig := frontCheckMethodLookup(env, owner, callee.text)
+		_ = sig
+		// Osty: /tmp/selfhost_merged.osty:10354:9
+		if sig.name != "" {
+			// Osty: /tmp/selfhost_merged.osty:10355:13
+			substs := frontCheckReceiverSubsts(env, owner, recvType)
+			_ = substs
+			// Osty: /tmp/selfhost_merged.osty:10356:13
+			return frontCheckCallSig(file, env, callIdx, sig, node.children, 1, substs)
+		}
+		// Osty: /tmp/selfhost_merged.osty:10358:9
+		boundSig := frontCheckBoundMethodLookup(env, owner, callee.text)
+		_ = boundSig
+		// Osty: /tmp/selfhost_merged.osty:10359:9
+		if boundSig.name != "" {
+			// Osty: /tmp/selfhost_merged.osty:10360:13
+			return frontCheckCallSig(file, env, callIdx, boundSig, node.children, 1, []*FrontTypeSubst{&FrontTypeSubst{name: "Self", typeName: recvType}})
+		}
+		// Osty: /tmp/selfhost_merged.osty:10362:9
+		if !(frontCheckIsInvalid(recvType)) {
+			// Osty: /tmp/selfhost_merged.osty:10363:24
+			env.errors = env.errors + 1
+		}
+		// Osty: /tmp/selfhost_merged.osty:10365:9
+		return "Invalid"
+	}
+	// Osty: /tmp/selfhost_merged.osty:10367:5
+	fnType := frontCheckExpr(file, env, node.left)
+	_ = fnType
+	// Osty: /tmp/selfhost_merged.osty:10368:5
+	if frontCheckTypeHead(fnType) == "fn" {
+		// Osty: /tmp/selfhost_merged.osty:10369:9
+		return frontCheckCallFnType(file, env, fnType, node.children)
+	}
+	// Osty: /tmp/selfhost_merged.osty:10371:16
+	env.errors = env.errors + 1
+	return "Invalid"
+}
+
+// Osty: /tmp/selfhost_merged.osty:10375:1
+func frontCheckPackageFnName(file *AstFile, field *AstNode) string {
+	// Osty: /tmp/selfhost_merged.osty:10376:5
+	left := astArenaNodeAt(file.arena, field.left)
+	_ = left
+	// Osty: /tmp/selfhost_merged.osty:10377:5
+	if ostyEqual(left.kind, AstNodeKind(&AstNodeKind_AstNIdent{})) {
+		// Osty: /tmp/selfhost_merged.osty:10378:9
+		return fmt.Sprintf("%s.%s", ostyToString(left.text), ostyToString(field.text))
+	}
+	return ""
+}
+
+// Osty: /tmp/selfhost_merged.osty:10383:1
+func frontCheckPackageFnNameEnv(file *AstFile, env *FrontCheckEnv, field *AstNode) string {
+	// Osty: /tmp/selfhost_merged.osty:10384:5
+	left := astArenaNodeAt(file.arena, field.left)
+	_ = left
+	// Osty: /tmp/selfhost_merged.osty:10385:5
+	if ostyEqual(left.kind, AstNodeKind(&AstNodeKind_AstNIdent{})) && frontCheckLookup(env, left.text) == "Invalid" {
+		// Osty: /tmp/selfhost_merged.osty:10386:9
+		return fmt.Sprintf("%s.%s", ostyToString(left.text), ostyToString(field.text))
+	}
+	return ""
+}
+
+// Osty: /tmp/selfhost_merged.osty:10391:1
+func frontCheckBuiltinCall(file *AstFile, env *FrontCheckEnv, name string, args []int) string {
+	// Osty: /tmp/selfhost_merged.osty:10392:5
+	if name == "print" || name == "println" {
+		// Osty: /tmp/selfhost_merged.osty:10393:9
+		for _, argIdx := range args {
+			// Osty: /tmp/selfhost_merged.osty:10394:13
+			_ = frontCheckExpr(file, env, argIdx)
+		}
+		// Osty: /tmp/selfhost_merged.osty:10396:9
+		return "()"
+	}
+	// Osty: /tmp/selfhost_merged.osty:10398:5
+	if name == "panic" {
+		// Osty: /tmp/selfhost_merged.osty:10399:9
+		for _, argIdx := range args {
+			// Osty: /tmp/selfhost_merged.osty:10400:13
+			_ = frontCheckExpr(file, env, argIdx)
+		}
+		// Osty: /tmp/selfhost_merged.osty:10402:9
+		return "Never"
+	}
+	// Osty: /tmp/selfhost_merged.osty:10404:5
+	if name == "len" {
+		// Osty: /tmp/selfhost_merged.osty:10405:9
+		frontCheckExpectArgCount(env, args, 1)
+		// Osty: /tmp/selfhost_merged.osty:10406:9
+		valueType := frontCheckResolveAliasesDeep(env, frontCheckExpr(file, env, frontCheckIntAt(args, 0)))
+		_ = valueType
+		// Osty: /tmp/selfhost_merged.osty:10407:9
+		head := frontCheckTypeHead(valueType)
+		_ = head
+		// Osty: /tmp/selfhost_merged.osty:10408:9
+		if head == "List" || head == "Map" || valueType == "String" || valueType == "Bytes" {
+			// Osty: /tmp/selfhost_merged.osty:10409:13
+			return "Int"
+		}
+		// Osty: /tmp/selfhost_merged.osty:10411:9
+		if !(frontCheckIsInvalid(valueType)) {
+			// Osty: /tmp/selfhost_merged.osty:10412:24
+			env.errors = env.errors + 1
+		}
+	}
+	return "Invalid"
+}
+
+// Osty: /tmp/selfhost_merged.osty:10418:1
+func frontCheckIsBuiltinCallName(name string) bool {
+	return name == "print" || name == "println" || name == "panic" || name == "len"
+}
+
+// Osty: /tmp/selfhost_merged.osty:10422:1
+func frontCheckTurbofishCall(file *AstFile, env *FrontCheckEnv, callIdx int, callee *AstNode, args []int) string {
+	// Osty: /tmp/selfhost_merged.osty:10423:5
+	target := astArenaNodeAt(file.arena, callee.left)
+	_ = target
+	// Osty: /tmp/selfhost_merged.osty:10424:5
+	typeArgs := frontCheckTypeArgs(file, callee.children)
+	_ = typeArgs
+	// Osty: /tmp/selfhost_merged.osty:10425:5
+	if ostyEqual(target.kind, AstNodeKind(&AstNodeKind_AstNIdent{})) {
+		// Osty: /tmp/selfhost_merged.osty:10426:9
+		variant := frontCheckVariantLookup(env, target.text)
+		_ = variant
+		// Osty: /tmp/selfhost_merged.osty:10427:9
+		if variant.name != "" {
+			// Osty: /tmp/selfhost_merged.osty:10428:13
+			substs := frontCheckExplicitSubsts(env, variant.generics, typeArgs)
+			_ = substs
+			// Osty: /tmp/selfhost_merged.osty:10429:13
+			return frontCheckVariantCallWithSubsts(file, env, variant, args, substs)
+		}
+		// Osty: /tmp/selfhost_merged.osty:10431:9
+		sig := frontCheckSigLookup(env, target.text)
+		_ = sig
+		// Osty: /tmp/selfhost_merged.osty:10432:9
+		if sig.name != "" {
+			// Osty: /tmp/selfhost_merged.osty:10433:13
+			substs := frontCheckExplicitSubsts(env, sig.generics, typeArgs)
+			_ = substs
+			// Osty: /tmp/selfhost_merged.osty:10434:13
+			return frontCheckCallSig(file, env, callIdx, sig, args, 0, substs)
+		}
+	}
+	// Osty: /tmp/selfhost_merged.osty:10437:5
+	if ostyEqual(target.kind, AstNodeKind(&AstNodeKind_AstNField{})) {
+		// Osty: /tmp/selfhost_merged.osty:10438:9
+		recvType := frontCheckResolveAliasesDeep(env, frontCheckExpr(file, env, target.left))
+		_ = recvType
+		// Osty: /tmp/selfhost_merged.osty:10439:9
+		owner := frontCheckTypeHead(recvType)
+		_ = owner
+		// Osty: /tmp/selfhost_merged.osty:10440:9
+		sig := frontCheckMethodLookup(env, owner, target.text)
+		_ = sig
+		// Osty: /tmp/selfhost_merged.osty:10441:9
+		if sig.name != "" {
+			// Osty: /tmp/selfhost_merged.osty:10442:13
+			substs := frontCheckReceiverSubsts(env, owner, recvType)
+			_ = substs
+			// Osty: /tmp/selfhost_merged.osty:10443:13
+			ownerGenericCount := frontCheckStringCount(frontCheckTypeSigLookup(env, owner).generics)
+			_ = ownerGenericCount
+			// Osty: /tmp/selfhost_merged.osty:10444:13
+			methodGenerics := frontCheckStringDrop(sig.generics, ownerGenericCount)
+			_ = methodGenerics
+			// Osty: /tmp/selfhost_merged.osty:10445:13
+			explicit := frontCheckExplicitSubsts(env, methodGenerics, typeArgs)
+			_ = explicit
+			// Osty: /tmp/selfhost_merged.osty:10446:13
+			for _, item := range explicit {
+				// Osty: /tmp/selfhost_merged.osty:10447:17
+				func() struct{} { substs = append(substs, item); return struct{}{} }()
+			}
+			// Osty: /tmp/selfhost_merged.osty:10449:13
+			return frontCheckCallSig(file, env, callIdx, sig, args, 1, substs)
+		}
+	}
+	// Osty: /tmp/selfhost_merged.osty:10452:16
+	env.errors = env.errors + 1
+	return "Invalid"
+}
+
+// Osty: /tmp/selfhost_merged.osty:10456:1
+func frontCheckTypeArgs(file *AstFile, idxs []int) []string {
+	// Osty: /tmp/selfhost_merged.osty:10457:5
+	var out []string = make([]string, 0, 1)
+	_ = out
+	// Osty: /tmp/selfhost_merged.osty:10458:5
+	for _, idx := range idxs {
+		// Osty: /tmp/selfhost_merged.osty:10459:9
+		func() struct{} { out = append(out, frontCheckTypeName(file, idx)); return struct{}{} }()
+	}
+	return out
+}
+
+// Osty: /tmp/selfhost_merged.osty:10464:1
+func frontCheckExplicitSubsts(env *FrontCheckEnv, generics []string, typeArgs []string) []*FrontTypeSubst {
+	// Osty: /tmp/selfhost_merged.osty:10465:5
+	var out []*FrontTypeSubst = make([]*FrontTypeSubst, 0, 1)
+	_ = out
+	// Osty: /tmp/selfhost_merged.osty:10466:5
+	if frontCheckStringCount(generics) != frontCheckStringCount(typeArgs) {
+		// Osty: /tmp/selfhost_merged.osty:10467:20
+		env.errors = env.errors + 1
+	}
+	// Osty: /tmp/selfhost_merged.osty:10469:5
+	i := 0
+	_ = i
+	// Osty: /tmp/selfhost_merged.osty:10470:5
+	for _, generic := range generics {
+		// Osty: /tmp/selfhost_merged.osty:10471:9
+		arg := frontCheckStringAt(typeArgs, i)
+		_ = arg
+		// Osty: /tmp/selfhost_merged.osty:10472:9
+		if arg != "Invalid" {
+			// Osty: /tmp/selfhost_merged.osty:10473:13
+			func() struct{} { out = append(out, &FrontTypeSubst{name: generic, typeName: arg}); return struct{}{} }()
+		}
+		// Osty: /tmp/selfhost_merged.osty:10475:11
+		i = i + 1
+	}
+	return out
+}
+
+// Osty: /tmp/selfhost_merged.osty:10480:1
+func frontCheckVariantHintSubsts(env *FrontCheckEnv, variant *FrontVariantSig, hint string) []*FrontTypeSubst {
+	// Osty: /tmp/selfhost_merged.osty:10481:5
+	var out []*FrontTypeSubst = make([]*FrontTypeSubst, 0, 1)
+	_ = out
+	// Osty: /tmp/selfhost_merged.osty:10482:5
+	resolved := frontCheckResolveAliasesDeep(env, hint)
+	_ = resolved
+	// Osty: /tmp/selfhost_merged.osty:10483:5
+	if resolved == "" || frontCheckTypeHead(resolved) != variant.owner {
+		// Osty: /tmp/selfhost_merged.osty:10484:9
+		return out
+	}
+	// Osty: /tmp/selfhost_merged.osty:10486:5
+	i := 0
+	_ = i
+	// Osty: /tmp/selfhost_merged.osty:10487:5
+	for _, generic := range variant.generics {
+		// Osty: /tmp/selfhost_merged.osty:10488:9
+		arg := frontCheckGenericArgAt(resolved, i)
+		_ = arg
+		// Osty: /tmp/selfhost_merged.osty:10489:9
+		if arg != "Invalid" {
+			// Osty: /tmp/selfhost_merged.osty:10490:13
+			func() struct{} { out = append(out, &FrontTypeSubst{name: generic, typeName: arg}); return struct{}{} }()
+		}
+		// Osty: /tmp/selfhost_merged.osty:10492:11
+		i = i + 1
+	}
+	return out
+}
+
+// Osty: /tmp/selfhost_merged.osty:10497:1
+func frontCheckVariantCall(file *AstFile, env *FrontCheckEnv, variant *FrontVariantSig, args []int) string {
+	return frontCheckVariantCallWithSubsts(file, env, variant, args, make([]*FrontTypeSubst, 0, 1))
+}
+
+// Osty: /tmp/selfhost_merged.osty:10501:1
+func frontCheckVariantCallWithSubsts(file *AstFile, env *FrontCheckEnv, variant *FrontVariantSig, args []int, initialSubsts []*FrontTypeSubst) string {
+	// Osty: /tmp/selfhost_merged.osty:10502:5
+	substs := initialSubsts
+	_ = substs
+	// Osty: /tmp/selfhost_merged.osty:10503:5
+	if frontCheckIntCount(args) != frontCheckStringCount(variant.fieldTypes) {
+		// Osty: /tmp/selfhost_merged.osty:10504:20
+		env.errors = env.errors + 1
+		// Osty: /tmp/selfhost_merged.osty:10505:9
+		return frontCheckGenericOwnerType(variant.owner, variant.generics, substs)
+	}
+	// Osty: /tmp/selfhost_merged.osty:10507:5
+	i := 0
+	_ = i
+	// Osty: /tmp/selfhost_merged.osty:10508:5
+	for _, argIdx := range args {
+		// Osty: /tmp/selfhost_merged.osty:10509:9
+		want := frontCheckStringAt(variant.fieldTypes, i)
+		_ = want
+		// Osty: /tmp/selfhost_merged.osty:10510:9
+		got := frontCheckExprHint(file, env, argIdx, frontCheckSubstitute(want, substs))
+		_ = got
+		// Osty: /tmp/selfhost_merged.osty:10511:16
+		substs = frontCheckBindGenerics(env, want, got, variant.generics, substs)
+		// Osty: /tmp/selfhost_merged.osty:10512:9
+		frontCheckExpectAssignable(env, frontCheckSubstitute(want, substs), got)
+		// Osty: /tmp/selfhost_merged.osty:10513:11
+		i = i + 1
+	}
+	return frontCheckGenericOwnerType(variant.owner, variant.generics, substs)
+}
+
+// Osty: /tmp/selfhost_merged.osty:10518:1
+func frontCheckGenericOwnerType(owner string, generics []string, substs []*FrontTypeSubst) string {
+	// Osty: /tmp/selfhost_merged.osty:10519:5
+	if frontCheckStringCount(generics) == 0 {
+		// Osty: /tmp/selfhost_merged.osty:10520:9
+		return owner
+	}
+	// Osty: /tmp/selfhost_merged.osty:10522:5
+	var args []string = make([]string, 0, 1)
+	_ = args
+	// Osty: /tmp/selfhost_merged.osty:10523:5
+	for _, generic := range generics {
+		// Osty: /tmp/selfhost_merged.osty:10524:9
+		value := frontCheckSubstLookup(substs, generic)
+		_ = value
+		// Osty: /tmp/selfhost_merged.osty:10525:9
+		if value == "" {
+			// Osty: /tmp/selfhost_merged.osty:10526:13
+			func() struct{} { args = append(args, generic); return struct{}{} }()
+		} else {
+			// Osty: /tmp/selfhost_merged.osty:10528:13
+			func() struct{} { args = append(args, value); return struct{}{} }()
+		}
+	}
+	return fmt.Sprintf("%s<%s>", ostyToString(owner), ostyToString(frontCheckJoinTypes(args)))
+}
+
+// Osty: /tmp/selfhost_merged.osty:10534:1
+func frontCheckCallSig(file *AstFile, env *FrontCheckEnv, callIdx int, sig *FrontFnSig, args []int, skip int, initialSubsts []*FrontTypeSubst) string {
+	// Osty: /tmp/selfhost_merged.osty:10535:5
+	substs := initialSubsts
+	_ = substs
+	// Osty: /tmp/selfhost_merged.osty:10536:5
+	wantCount := frontCheckStringCount(sig.paramTypes) - skip
+	_ = wantCount
+	// Osty: /tmp/selfhost_merged.osty:10537:5
+	gotCount := frontCheckIntCount(args)
+	_ = gotCount
+	// Osty: /tmp/selfhost_merged.osty:10538:5
+	if gotCount != wantCount {
+		// Osty: /tmp/selfhost_merged.osty:10539:20
+		env.errors = env.errors + 1
+	}
+	// Osty: /tmp/selfhost_merged.osty:10541:5
+	i := 0
+	_ = i
+	// Osty: /tmp/selfhost_merged.osty:10542:5
+	for _, argIdx := range args {
+		// Osty: /tmp/selfhost_merged.osty:10543:9
+		rawWant := frontCheckStringAt(sig.paramTypes, i+skip)
+		_ = rawWant
+		// Osty: /tmp/selfhost_merged.osty:10544:9
+		want := frontCheckSubstitute(rawWant, substs)
+		_ = want
+		// Osty: /tmp/selfhost_merged.osty:10545:9
+		hint := frontCheckEraseGenericHints(want, sig.generics)
+		_ = hint
+		// Osty: /tmp/selfhost_merged.osty:10546:9
+		got := frontCheckExprHint(file, env, argIdx, hint)
+		_ = got
+		// Osty: /tmp/selfhost_merged.osty:10547:16
+		substs = frontCheckBindGenerics(env, rawWant, got, sig.generics, substs)
+		// Osty: /tmp/selfhost_merged.osty:10548:9
+		frontCheckExpectAssignable(env, frontCheckSubstitute(rawWant, substs), got)
+		// Osty: /tmp/selfhost_merged.osty:10549:11
+		i = i + 1
+	}
+	// Osty: /tmp/selfhost_merged.osty:10551:5
+	frontCheckCheckGenericBounds(env, sig.genericBounds, substs)
+	// Osty: /tmp/selfhost_merged.osty:10552:5
+	resultType := frontCheckSubstitute(sig.returnType, substs)
+	_ = resultType
+	// Osty: /tmp/selfhost_merged.osty:10553:5
+	frontCheckRecordInstantiation(file, env, callIdx, sig.name, sig.generics, substs, resultType)
+	return resultType
+}
+
+// Osty: /tmp/selfhost_merged.osty:10557:1
+func frontCheckCheckGenericBounds(env *FrontCheckEnv, bounds []*FrontTypeSubst, substs []*FrontTypeSubst) {
+	// Osty: /tmp/selfhost_merged.osty:10558:5
+	for _, bound := range bounds {
+		// Osty: /tmp/selfhost_merged.osty:10559:9
+		actual := frontCheckSubstLookup(substs, bound.name)
+		_ = actual
+		// Osty: /tmp/selfhost_merged.osty:10560:9
+		if actual != "" {
+			// Osty: /tmp/selfhost_merged.osty:10561:13
+			frontCheckExpectAssignable(env, bound.typeName, actual)
+		}
+	}
+}
+
+// Osty: /tmp/selfhost_merged.osty:10566:1
+func frontCheckCallFnType(file *AstFile, env *FrontCheckEnv, fnType string, args []int) string {
+	// Osty: /tmp/selfhost_merged.osty:10567:5
+	params := frontCheckFnParams(fnType)
+	_ = params
+	// Osty: /tmp/selfhost_merged.osty:10568:5
+	if frontCheckStringCount(params) != frontCheckIntCount(args) {
+		// Osty: /tmp/selfhost_merged.osty:10569:20
+		env.errors = env.errors + 1
+	}
+	// Osty: /tmp/selfhost_merged.osty:10571:5
+	i := 0
+	_ = i
+	// Osty: /tmp/selfhost_merged.osty:10572:5
+	for _, argIdx := range args {
+		// Osty: /tmp/selfhost_merged.osty:10573:9
+		want := frontCheckStringAt(params, i)
+		_ = want
+		// Osty: /tmp/selfhost_merged.osty:10574:9
+		got := frontCheckExprHint(file, env, argIdx, want)
+		_ = got
+		// Osty: /tmp/selfhost_merged.osty:10575:9
+		frontCheckExpectAssignable(env, want, got)
+		// Osty: /tmp/selfhost_merged.osty:10576:11
+		i = i + 1
+	}
+	return frontCheckFnReturn(fnType)
+}
+
+// Osty: /tmp/selfhost_merged.osty:10581:1
+func frontCheckReceiverSubsts(env *FrontCheckEnv, owner string, recvType string) []*FrontTypeSubst {
+	// Osty: /tmp/selfhost_merged.osty:10582:5
+	var out []*FrontTypeSubst = []*FrontTypeSubst{&FrontTypeSubst{name: "Self", typeName: recvType}}
+	_ = out
+	// Osty: /tmp/selfhost_merged.osty:10583:5
+	sig := frontCheckTypeSigLookup(env, owner)
+	_ = sig
+	// Osty: /tmp/selfhost_merged.osty:10584:5
+	i := 0
+	_ = i
+	// Osty: /tmp/selfhost_merged.osty:10585:5
+	for _, generic := range sig.generics {
+		// Osty: /tmp/selfhost_merged.osty:10586:9
+		func() struct{} {
+			out = append(out, &FrontTypeSubst{name: generic, typeName: frontCheckGenericArgAt(recvType, i)})
+			return struct{}{}
+		}()
+		// Osty: /tmp/selfhost_merged.osty:10587:11
+		i = i + 1
+	}
+	return out
+}
+
+// Osty: /tmp/selfhost_merged.osty:10592:1
+func frontCheckBindGenerics(env *FrontCheckEnv, want string, got string, generics []string, substs []*FrontTypeSubst) []*FrontTypeSubst {
+	// Osty: /tmp/selfhost_merged.osty:10593:5
+	out := substs
+	_ = out
+	// Osty: /tmp/selfhost_merged.osty:10594:5
+	if frontCheckIsGenericName(want, generics) {
+		// Osty: /tmp/selfhost_merged.osty:10595:9
+		return frontCheckAddSubst(env, out, want, got)
+	}
+	// Osty: /tmp/selfhost_merged.osty:10597:5
+	wantView := frontCheckParseType(want)
+	_ = wantView
+	// Osty: /tmp/selfhost_merged.osty:10598:5
+	gotView := frontCheckParseType(got)
+	_ = gotView
+	// Osty: /tmp/selfhost_merged.osty:10599:5
+	if wantView.kind == "tuple" && gotView.kind == "tuple" && frontCheckStringCount(wantView.args) == frontCheckStringCount(gotView.args) {
+		// Osty: /tmp/selfhost_merged.osty:10600:9
+		i := 0
+		_ = i
+		// Osty: /tmp/selfhost_merged.osty:10601:9
+		for _, wantArg := range wantView.args {
+			// Osty: /tmp/selfhost_merged.osty:10602:17
+			out = frontCheckBindGenerics(env, wantArg, frontCheckStringAt(gotView.args, i), generics, out)
+			// Osty: /tmp/selfhost_merged.osty:10603:15
+			i = i + 1
+		}
+		// Osty: /tmp/selfhost_merged.osty:10605:9
+		return out
+	}
+	// Osty: /tmp/selfhost_merged.osty:10607:5
+	if wantView.kind == "fn" && gotView.kind == "fn" && frontCheckStringCount(wantView.params) == frontCheckStringCount(gotView.params) {
+		// Osty: /tmp/selfhost_merged.osty:10608:9
+		i := 0
+		_ = i
+		// Osty: /tmp/selfhost_merged.osty:10609:9
+		for _, wantParam := range wantView.params {
+			// Osty: /tmp/selfhost_merged.osty:10610:17
+			out = frontCheckBindGenerics(env, wantParam, frontCheckStringAt(gotView.params, i), generics, out)
+			// Osty: /tmp/selfhost_merged.osty:10611:15
+			i = i + 1
+		}
+		// Osty: /tmp/selfhost_merged.osty:10613:9
+		return frontCheckBindGenerics(env, wantView.ret, gotView.ret, generics, out)
+	}
+	// Osty: /tmp/selfhost_merged.osty:10615:5
+	if wantView.kind == "named" && gotView.kind == "named" && wantView.head == gotView.head && frontCheckStringCount(wantView.args) == frontCheckStringCount(gotView.args) && frontCheckStringCount(wantView.args) > 0 {
+		// Osty: /tmp/selfhost_merged.osty:10617:9
+		i := 0
+		_ = i
+		// Osty: /tmp/selfhost_merged.osty:10618:9
+		for _, wantArg := range wantView.args {
+			// Osty: /tmp/selfhost_merged.osty:10619:17
+			out = frontCheckBindGenerics(env, wantArg, frontCheckStringAt(gotView.args, i), generics, out)
+			// Osty: /tmp/selfhost_merged.osty:10620:15
+			i = i + 1
+		}
+	}
+	return out
+}
+
+// Osty: /tmp/selfhost_merged.osty:10626:1
+func frontCheckIsGenericName(name string, generics []string) bool {
+	// Osty: /tmp/selfhost_merged.osty:10627:5
+	for _, generic := range generics {
+		// Osty: /tmp/selfhost_merged.osty:10628:9
+		if generic == name {
+			// Osty: /tmp/selfhost_merged.osty:10629:13
+			return true
+		}
+	}
+	return false
+}
+
+// Osty: /tmp/selfhost_merged.osty:10635:1
+func frontCheckAddSubst(env *FrontCheckEnv, substs []*FrontTypeSubst, name string, typeName string) []*FrontTypeSubst {
+	// Osty: /tmp/selfhost_merged.osty:10636:5
+	out := substs
+	_ = out
+	// Osty: /tmp/selfhost_merged.osty:10637:5
+	existing := frontCheckSubstLookup(substs, name)
+	_ = existing
+	// Osty: /tmp/selfhost_merged.osty:10638:5
+	if existing == "" || existing == "Invalid" {
+		// Osty: /tmp/selfhost_merged.osty:10639:9
+		func() struct{} { out = append(out, &FrontTypeSubst{name: name, typeName: typeName}); return struct{}{} }()
+		// Osty: /tmp/selfhost_merged.osty:10640:9
+		return out
+	}
+	// Osty: /tmp/selfhost_merged.osty:10642:5
+	if !(frontCheckIsAssignable(env, existing, typeName)) && !(frontCheckIsAssignable(env, typeName, existing)) {
+		// Osty: /tmp/selfhost_merged.osty:10643:20
+		env.errors = env.errors + 1
+	}
+	return out
+}
+
+// Osty: /tmp/selfhost_merged.osty:10648:1
+func frontCheckSubstLookup(substs []*FrontTypeSubst, name string) string {
+	// Osty: /tmp/selfhost_merged.osty:10649:5
+	found := ""
+	_ = found
+	// Osty: /tmp/selfhost_merged.osty:10650:5
+	for _, subst := range substs {
+		// Osty: /tmp/selfhost_merged.osty:10651:9
+		if subst.name == name {
+			// Osty: /tmp/selfhost_merged.osty:10652:19
+			found = subst.typeName
+		}
+	}
+	return found
+}
+
+// Osty: /tmp/selfhost_merged.osty:10658:1
+func frontCheckSubstitute(typeName string, substs []*FrontTypeSubst) string {
+	// Osty: /tmp/selfhost_merged.osty:10659:5
+	direct := frontCheckSubstLookup(substs, typeName)
+	_ = direct
+	// Osty: /tmp/selfhost_merged.osty:10660:5
+	if direct != "" {
+		// Osty: /tmp/selfhost_merged.osty:10661:9
+		return direct
+	}
+	// Osty: /tmp/selfhost_merged.osty:10663:5
+	view := frontCheckParseType(typeName)
+	_ = view
+	// Osty: /tmp/selfhost_merged.osty:10664:5
+	if view.kind == "tuple" {
+		// Osty: /tmp/selfhost_merged.osty:10665:9
+		var elems []string = make([]string, 0, 1)
+		_ = elems
+		// Osty: /tmp/selfhost_merged.osty:10666:9
+		for _, elem := range view.args {
+			// Osty: /tmp/selfhost_merged.osty:10667:13
+			func() struct{} { elems = append(elems, frontCheckSubstitute(elem, substs)); return struct{}{} }()
+		}
+		// Osty: /tmp/selfhost_merged.osty:10669:9
+		return frontCheckTupleType(elems)
+	}
+	// Osty: /tmp/selfhost_merged.osty:10671:5
+	if view.kind == "fn" {
+		// Osty: /tmp/selfhost_merged.osty:10672:9
+		var params []string = make([]string, 0, 1)
+		_ = params
+		// Osty: /tmp/selfhost_merged.osty:10673:9
+		for _, param := range view.params {
+			// Osty: /tmp/selfhost_merged.osty:10674:13
+			func() struct{} { params = append(params, frontCheckSubstitute(param, substs)); return struct{}{} }()
+		}
+		// Osty: /tmp/selfhost_merged.osty:10676:9
+		return frontCheckFnType(params, frontCheckSubstitute(view.ret, substs))
+	}
+	// Osty: /tmp/selfhost_merged.osty:10678:5
+	if view.kind == "named" && frontCheckStringCount(view.args) > 0 {
+		// Osty: /tmp/selfhost_merged.osty:10679:9
+		var args []string = make([]string, 0, 1)
+		_ = args
+		// Osty: /tmp/selfhost_merged.osty:10680:9
+		for _, arg := range view.args {
+			// Osty: /tmp/selfhost_merged.osty:10681:13
+			func() struct{} { args = append(args, frontCheckSubstitute(arg, substs)); return struct{}{} }()
+		}
+		// Osty: /tmp/selfhost_merged.osty:10683:9
+		return frontCheckNamedType(view.head, args)
+	}
+	return typeName
+}
+
+// Osty: /tmp/selfhost_merged.osty:10688:1
+func frontCheckEraseGenericHints(typeName string, generics []string) string {
+	// Osty: /tmp/selfhost_merged.osty:10689:5
+	if frontCheckIsGenericName(typeName, generics) {
+		// Osty: /tmp/selfhost_merged.osty:10690:9
+		return "Invalid"
+	}
+	// Osty: /tmp/selfhost_merged.osty:10692:5
+	view := frontCheckParseType(typeName)
+	_ = view
+	// Osty: /tmp/selfhost_merged.osty:10693:5
+	if view.kind == "tuple" {
+		// Osty: /tmp/selfhost_merged.osty:10694:9
+		var elems []string = make([]string, 0, 1)
+		_ = elems
+		// Osty: /tmp/selfhost_merged.osty:10695:9
+		for _, elem := range view.args {
+			// Osty: /tmp/selfhost_merged.osty:10696:13
+			func() struct{} { elems = append(elems, frontCheckEraseGenericHints(elem, generics)); return struct{}{} }()
+		}
+		// Osty: /tmp/selfhost_merged.osty:10698:9
+		return frontCheckTupleType(elems)
+	}
+	// Osty: /tmp/selfhost_merged.osty:10700:5
+	if view.kind == "fn" {
+		// Osty: /tmp/selfhost_merged.osty:10701:9
+		var params []string = make([]string, 0, 1)
+		_ = params
+		// Osty: /tmp/selfhost_merged.osty:10702:9
+		for _, param := range view.params {
+			// Osty: /tmp/selfhost_merged.osty:10703:13
+			func() struct{} {
+				params = append(params, frontCheckEraseGenericHints(param, generics))
+				return struct{}{}
+			}()
+		}
+		// Osty: /tmp/selfhost_merged.osty:10705:9
+		return frontCheckFnType(params, frontCheckEraseGenericHints(view.ret, generics))
+	}
+	// Osty: /tmp/selfhost_merged.osty:10707:5
+	if view.kind == "named" && frontCheckStringCount(view.args) > 0 {
+		// Osty: /tmp/selfhost_merged.osty:10708:9
+		var args []string = make([]string, 0, 1)
+		_ = args
+		// Osty: /tmp/selfhost_merged.osty:10709:9
+		for _, arg := range view.args {
+			// Osty: /tmp/selfhost_merged.osty:10710:13
+			func() struct{} { args = append(args, frontCheckEraseGenericHints(arg, generics)); return struct{}{} }()
+		}
+		// Osty: /tmp/selfhost_merged.osty:10712:9
+		return frontCheckNamedType(view.head, args)
+	}
+	return typeName
+}
+
+// Osty: /tmp/selfhost_merged.osty:10717:1
+func frontCheckField(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
+	// Osty: /tmp/selfhost_merged.osty:10718:5
+	packageName := frontCheckPackageFnNameEnv(file, env, node)
+	_ = packageName
+	// Osty: /tmp/selfhost_merged.osty:10719:5
+	if packageName != "" && frontCheckSigLookup(env, packageName).name != "" {
+		// Osty: /tmp/selfhost_merged.osty:10720:9
+		return "fn"
+	}
+	// Osty: /tmp/selfhost_merged.osty:10722:5
+	recvType := frontCheckResolveAliasesDeep(env, frontCheckExpr(file, env, node.left))
+	_ = recvType
+	// Osty: /tmp/selfhost_merged.osty:10723:5
+	owner := frontCheckTypeHead(recvType)
+	_ = owner
+	// Osty: /tmp/selfhost_merged.osty:10724:5
+	field := frontCheckFieldLookup(env, owner, node.text)
+	_ = field
+	// Osty: /tmp/selfhost_merged.osty:10725:5
+	if field.name != "" {
+		// Osty: /tmp/selfhost_merged.osty:10726:9
+		substs := frontCheckReceiverSubsts(env, owner, recvType)
+		_ = substs
+		// Osty: /tmp/selfhost_merged.osty:10727:9
+		fieldType := frontCheckSubstitute(field.typeName, substs)
+		_ = fieldType
+		// Osty: /tmp/selfhost_merged.osty:10728:9
+		if node.flags == 1 {
+			// Osty: /tmp/selfhost_merged.osty:10729:13
+			return frontCheckOneArgType("Option", fieldType)
+		}
+		// Osty: /tmp/selfhost_merged.osty:10731:9
+		return fieldType
+	}
+	// Osty: /tmp/selfhost_merged.osty:10733:5
+	if frontCheckMethodLookup(env, owner, node.text).name != "" {
+		// Osty: /tmp/selfhost_merged.osty:10734:9
+		return "fn"
+	}
+	// Osty: /tmp/selfhost_merged.osty:10736:5
+	if frontCheckBoundMethodLookup(env, owner, node.text).name != "" {
+		// Osty: /tmp/selfhost_merged.osty:10737:9
+		return "fn"
+	}
+	// Osty: /tmp/selfhost_merged.osty:10739:5
+	if !(frontCheckIsInvalid(recvType)) {
+		// Osty: /tmp/selfhost_merged.osty:10740:20
+		env.errors = env.errors + 1
+	}
+	return "Invalid"
+}
+
+// Osty: /tmp/selfhost_merged.osty:10745:1
+func frontCheckIndex(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
+	// Osty: /tmp/selfhost_merged.osty:10746:5
+	objectType := frontCheckResolveAliasesDeep(env, frontCheckExpr(file, env, node.left))
+	_ = objectType
+	// Osty: /tmp/selfhost_merged.osty:10747:5
+	indexType := frontCheckExpr(file, env, node.right)
+	_ = indexType
+	// Osty: /tmp/selfhost_merged.osty:10748:5
+	head := frontCheckTypeHead(objectType)
+	_ = head
+	// Osty: /tmp/selfhost_merged.osty:10749:5
+	if head == "List" || head == "Range" {
+		// Osty: /tmp/selfhost_merged.osty:10750:9
+		frontCheckExpectAssignable(env, "Int", indexType)
+		// Osty: /tmp/selfhost_merged.osty:10751:9
+		return frontCheckGenericArgAt(objectType, 0)
+	}
+	// Osty: /tmp/selfhost_merged.osty:10753:5
+	if head == "Map" {
+		// Osty: /tmp/selfhost_merged.osty:10754:9
+		frontCheckExpectAssignable(env, frontCheckGenericArgAt(objectType, 0), indexType)
+		// Osty: /tmp/selfhost_merged.osty:10755:9
+		return frontCheckGenericArgAt(objectType, 1)
+	}
+	// Osty: /tmp/selfhost_merged.osty:10757:5
+	if objectType == "String" {
+		// Osty: /tmp/selfhost_merged.osty:10758:9
+		frontCheckExpectAssignable(env, "Int", indexType)
+		// Osty: /tmp/selfhost_merged.osty:10759:9
+		return "Char"
+	}
+	// Osty: /tmp/selfhost_merged.osty:10761:5
+	if objectType == "Bytes" {
+		// Osty: /tmp/selfhost_merged.osty:10762:9
+		frontCheckExpectAssignable(env, "Int", indexType)
+		// Osty: /tmp/selfhost_merged.osty:10763:9
+		return "Byte"
+	}
+	// Osty: /tmp/selfhost_merged.osty:10765:5
+	if !(frontCheckIsInvalid(objectType)) {
+		// Osty: /tmp/selfhost_merged.osty:10766:20
+		env.errors = env.errors + 1
+	}
+	return "Invalid"
+}
+
+// Osty: /tmp/selfhost_merged.osty:10771:1
+func frontCheckStructLit(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
+	return frontCheckStructLitHint(file, env, node, "")
+}
+
+// Osty: /tmp/selfhost_merged.osty:10775:1
+func frontCheckStructLitHint(file *AstFile, env *FrontCheckEnv, node *AstNode, hint string) string {
+	// Osty: /tmp/selfhost_merged.osty:10776:5
+	nameNode := astArenaNodeAt(file.arena, node.left)
+	_ = nameNode
+	// Osty: /tmp/selfhost_merged.osty:10777:5
+	typeName := nameNode.text
+	_ = typeName
+	// Osty: /tmp/selfhost_merged.osty:10778:5
+	typeSig := frontCheckTypeSigLookup(env, typeName)
+	_ = typeSig
+	// Osty: /tmp/selfhost_merged.osty:10779:5
+	if typeSig.name == "" {
+		// Osty: /tmp/selfhost_merged.osty:10780:20
+		env.errors = env.errors + 1
+		// Osty: /tmp/selfhost_merged.osty:10781:9
+		return "Invalid"
+	}
+	// Osty: /tmp/selfhost_merged.osty:10783:5
+	hintType := frontCheckResolveAliasesDeep(env, hint)
+	_ = hintType
+	// Osty: /tmp/selfhost_merged.osty:10784:5
+	var substs []*FrontTypeSubst = make([]*FrontTypeSubst, 0, 1)
+	_ = substs
+	// Osty: /tmp/selfhost_merged.osty:10785:5
+	if frontCheckTypeHead(hintType) == typeName {
+		// Osty: /tmp/selfhost_merged.osty:10786:16
+		substs = frontCheckReceiverSubsts(env, typeName, hintType)
+	}
+	// Osty: /tmp/selfhost_merged.osty:10788:5
+	if node.right >= 0 {
+		// Osty: /tmp/selfhost_merged.osty:10789:9
+		spread := frontCheckResolveAliasesDeep(env, frontCheckExprHint(file, env, node.right, hintType))
+		_ = spread
+		// Osty: /tmp/selfhost_merged.osty:10790:9
+		if frontCheckTypeHead(spread) == typeName {
+			// Osty: /tmp/selfhost_merged.osty:10791:20
+			substs = frontCheckReceiverSubsts(env, typeName, spread)
+		}
+		// Osty: /tmp/selfhost_merged.osty:10793:9
+		frontCheckExpectAssignable(env, frontCheckGenericOwnerType(typeName, typeSig.generics, substs), spread)
+	}
+	// Osty: /tmp/selfhost_merged.osty:10795:5
+	for _, fieldIdx := range node.children {
+		// Osty: /tmp/selfhost_merged.osty:10796:9
+		fieldNode := astArenaNodeAt(file.arena, fieldIdx)
+		_ = fieldNode
+		// Osty: /tmp/selfhost_merged.osty:10797:9
+		if frontCheckStructLitFieldCount(file, node, fieldNode.text) > 1 {
+			// Osty: /tmp/selfhost_merged.osty:10798:24
+			env.errors = env.errors + 1
+		}
+		// Osty: /tmp/selfhost_merged.osty:10800:9
+		field := frontCheckFieldLookup(env, typeName, fieldNode.text)
+		_ = field
+		// Osty: /tmp/selfhost_merged.osty:10801:9
+		if field.name == "" {
+			// Osty: /tmp/selfhost_merged.osty:10802:24
+			env.errors = env.errors + 1
+		} else {
+			// Osty: /tmp/selfhost_merged.osty:10804:13
+			valueType := "Invalid"
+			_ = valueType
+			// Osty: /tmp/selfhost_merged.osty:10805:13
+			want := frontCheckSubstitute(field.typeName, substs)
+			_ = want
+			// Osty: /tmp/selfhost_merged.osty:10806:13
+			if fieldNode.left >= 0 {
+				// Osty: /tmp/selfhost_merged.osty:10807:27
+				valueType = frontCheckExprHint(file, env, fieldNode.left, want)
+			} else {
+				// Osty: /tmp/selfhost_merged.osty:10809:27
+				valueType = frontCheckLookup(env, fieldNode.text)
+			}
+			// Osty: /tmp/selfhost_merged.osty:10811:20
+			substs = frontCheckBindGenerics(env, field.typeName, valueType, typeSig.generics, substs)
+			// Osty: /tmp/selfhost_merged.osty:10812:13
+			frontCheckExpectAssignable(env, frontCheckSubstitute(field.typeName, substs), valueType)
+		}
+	}
+	// Osty: /tmp/selfhost_merged.osty:10815:5
+	for _, field := range env.fields {
+		// Osty: /tmp/selfhost_merged.osty:10816:9
+		if field.owner == typeName && !(field.hasDefault) && !(frontCheckStructLitHasField(file, node, field.name)) && node.right < 0 {
+			// Osty: /tmp/selfhost_merged.osty:10817:24
+			env.errors = env.errors + 1
+		}
+	}
+	return frontCheckGenericOwnerType(typeName, typeSig.generics, substs)
+}
+
+// Osty: /tmp/selfhost_merged.osty:10823:1
+func frontCheckStructLitHasField(file *AstFile, node *AstNode, name string) bool {
+	// Osty: /tmp/selfhost_merged.osty:10824:5
+	for _, fieldIdx := range node.children {
+		// Osty: /tmp/selfhost_merged.osty:10825:9
+		field := astArenaNodeAt(file.arena, fieldIdx)
+		_ = field
+		// Osty: /tmp/selfhost_merged.osty:10826:9
+		if field.text == name {
+			// Osty: /tmp/selfhost_merged.osty:10827:13
+			return true
+		}
+	}
+	return false
+}
+
+// Osty: /tmp/selfhost_merged.osty:10833:1
+func frontCheckStructLitFieldCount(file *AstFile, node *AstNode, name string) int {
+	// Osty: /tmp/selfhost_merged.osty:10834:5
+	count := 0
+	_ = count
+	// Osty: /tmp/selfhost_merged.osty:10835:5
+	for _, fieldIdx := range node.children {
+		// Osty: /tmp/selfhost_merged.osty:10836:9
+		field := astArenaNodeAt(file.arena, fieldIdx)
+		_ = field
+		// Osty: /tmp/selfhost_merged.osty:10837:9
+		if field.text == name {
+			// Osty: /tmp/selfhost_merged.osty:10838:19
+			count = count + 1
+		}
+	}
+	return count
+}
+
+// Osty: /tmp/selfhost_merged.osty:10844:1
+func frontCheckMatch(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
+	return frontCheckMatchHint(file, env, node, "")
+}
+
+// Osty: /tmp/selfhost_merged.osty:10848:1
+func frontCheckMatchHint(file *AstFile, env *FrontCheckEnv, node *AstNode, hint string) string {
+	// Osty: /tmp/selfhost_merged.osty:10849:5
+	scrutinee := frontCheckExpr(file, env, node.left)
+	_ = scrutinee
+	// Osty: /tmp/selfhost_merged.osty:10850:5
+	result := "Invalid"
+	_ = result
+	// Osty: /tmp/selfhost_merged.osty:10851:5
+	seen := 0
+	_ = seen
+	// Osty: /tmp/selfhost_merged.osty:10852:5
+	for _, armIdx := range node.children {
+		// Osty: /tmp/selfhost_merged.osty:10853:9
+		mark := frontCheckBindingCount(env.bindings)
+		_ = mark
+		// Osty: /tmp/selfhost_merged.osty:10854:9
+		arm := astArenaNodeAt(file.arena, armIdx)
+		_ = arm
+		// Osty: /tmp/selfhost_merged.osty:10855:9
+		frontCheckPatternCompatible(file, env, arm.left, scrutinee)
+		// Osty: /tmp/selfhost_merged.osty:10856:9
+		guardIdx := frontCheckFirstChild(arm)
+		_ = guardIdx
+		// Osty: /tmp/selfhost_merged.osty:10857:9
+		if guardIdx >= 0 {
+			// Osty: /tmp/selfhost_merged.osty:10858:13
+			guard := frontCheckExpr(file, env, guardIdx)
+			_ = guard
+			// Osty: /tmp/selfhost_merged.osty:10859:13
+			if guard != "Bool" && !(frontCheckIsInvalid(guard)) {
+				// Osty: /tmp/selfhost_merged.osty:10860:28
+				env.errors = env.errors + 1
+			}
+		}
+		// Osty: /tmp/selfhost_merged.osty:10863:9
+		bodyType := frontCheckExprHint(file, env, arm.right, hint)
+		_ = bodyType
+		// Osty: /tmp/selfhost_merged.osty:10864:9
+		if seen == 0 {
+			// Osty: /tmp/selfhost_merged.osty:10865:20
+			result = bodyType
+		} else {
+			// Osty: /tmp/selfhost_merged.osty:10867:20
+			result = frontCheckUnify(env, result, bodyType)
+		}
+		// Osty: /tmp/selfhost_merged.osty:10869:9
+		frontCheckPopBindings(env, mark)
+		// Osty: /tmp/selfhost_merged.osty:10870:14
+		seen = seen + 1
+	}
+	// Osty: /tmp/selfhost_merged.osty:10872:5
+	frontCheckCheckMatchExhaustive(file, env, node, scrutinee, seen)
+	return result
+}
+
+// Osty: /tmp/selfhost_merged.osty:10876:1
+func frontCheckCheckMatchExhaustive(file *AstFile, env *FrontCheckEnv, node *AstNode, scrutineeType string, arms int) {
+	// Osty: /tmp/selfhost_merged.osty:10877:5
+	if arms == 0 {
+		// Osty: /tmp/selfhost_merged.osty:10878:20
+		env.errors = env.errors + 1
+		// Osty: /tmp/selfhost_merged.osty:10879:9
+		return
+	}
+	// Osty: /tmp/selfhost_merged.osty:10881:5
+	scrutinee := frontCheckResolveAliasesDeep(env, scrutineeType)
+	_ = scrutinee
+	// Osty: /tmp/selfhost_merged.osty:10882:5
+	frontCheckCheckMatchReachability(file, env, node, scrutinee)
+	// Osty: /tmp/selfhost_merged.osty:10883:5
+	if frontCheckIsInvalid(scrutinee) || frontCheckMatchHasCatchAll(file, node) {
+		// Osty: /tmp/selfhost_merged.osty:10884:9
+		return
+	}
+	// Osty: /tmp/selfhost_merged.osty:10886:5
+	owner := frontCheckTypeHead(scrutinee)
+	_ = owner
+	// Osty: /tmp/selfhost_merged.osty:10887:5
+	if owner == "Bool" {
+		// Osty: /tmp/selfhost_merged.osty:10888:9
+		if !(frontCheckMatchCoversBool(file, node, true)) || !(frontCheckMatchCoversBool(file, node, false)) {
+			// Osty: /tmp/selfhost_merged.osty:10889:24
+			env.errors = env.errors + 1
+		}
+		// Osty: /tmp/selfhost_merged.osty:10891:9
+		return
+	}
+	// Osty: /tmp/selfhost_merged.osty:10893:5
+	if owner == "Tuple" && frontCheckTupleAllBool(scrutinee) {
+		// Osty: /tmp/selfhost_merged.osty:10894:9
+		if !(frontCheckMatchCoversBoolTuple(file, node, scrutinee)) {
+			// Osty: /tmp/selfhost_merged.osty:10895:24
+			env.errors = env.errors + 1
+		}
+		// Osty: /tmp/selfhost_merged.osty:10897:9
+		return
+	}
+	// Osty: /tmp/selfhost_merged.osty:10899:5
+	if frontCheckStructFieldCount(env, owner) > 0 {
+		// Osty: /tmp/selfhost_merged.osty:10900:9
+		if !(frontCheckMatchCoversStruct(file, env, node, owner)) {
+			// Osty: /tmp/selfhost_merged.osty:10901:24
+			env.errors = env.errors + 1
+		}
+		// Osty: /tmp/selfhost_merged.osty:10903:9
+		return
+	}
+	// Osty: /tmp/selfhost_merged.osty:10905:5
+	variantCount := 0
+	_ = variantCount
+	// Osty: /tmp/selfhost_merged.osty:10906:5
+	missing := false
+	_ = missing
+	// Osty: /tmp/selfhost_merged.osty:10907:5
+	for _, variant := range env.variants {
+		// Osty: /tmp/selfhost_merged.osty:10908:9
+		if variant.owner == owner {
+			// Osty: /tmp/selfhost_merged.osty:10909:26
+			variantCount = variantCount + 1
+			// Osty: /tmp/selfhost_merged.osty:10910:13
+			if !(frontCheckMatchCoversVariantComplete(file, node, variant)) {
+				// Osty: /tmp/selfhost_merged.osty:10911:25
+				missing = true
+			}
+		}
+	}
+	// Osty: /tmp/selfhost_merged.osty:10915:5
+	if variantCount > 0 && missing {
+		// Osty: /tmp/selfhost_merged.osty:10916:20
+		env.errors = env.errors + 1
+	}
+}
+
+// Osty: /tmp/selfhost_merged.osty:10920:1
+func frontCheckCheckMatchReachability(file *AstFile, env *FrontCheckEnv, node *AstNode, scrutineeType string) {
+	// Osty: /tmp/selfhost_merged.osty:10921:5
+	current := 0
+	_ = current
+	// Osty: /tmp/selfhost_merged.osty:10922:5
+	for _, armIdx := range node.children {
+		// Osty: /tmp/selfhost_merged.osty:10923:9
+		arm := astArenaNodeAt(file.arena, armIdx)
+		_ = arm
+		// Osty: /tmp/selfhost_merged.osty:10924:9
+		prevIndex := 0
+		_ = prevIndex
+		// Osty: /tmp/selfhost_merged.osty:10925:9
+		for _, prevArmIdx := range node.children {
+			// Osty: /tmp/selfhost_merged.osty:10926:13
+			if prevIndex >= current {
+				// Osty: /tmp/selfhost_merged.osty:10927:17
+				break
+			}
+			// Osty: /tmp/selfhost_merged.osty:10929:13
+			prevArm := astArenaNodeAt(file.arena, prevArmIdx)
+			_ = prevArm
+			// Osty: /tmp/selfhost_merged.osty:10930:13
+			if frontCheckFirstChild(prevArm) < 0 && frontCheckPatternCoversPattern(file, env, prevArm.left, arm.left, scrutineeType) {
+				// Osty: /tmp/selfhost_merged.osty:10931:28
+				env.errors = env.errors + 1
+				// Osty: /tmp/selfhost_merged.osty:10932:17
+				break
+			}
+			// Osty: /tmp/selfhost_merged.osty:10934:23
+			prevIndex = prevIndex + 1
+		}
+		// Osty: /tmp/selfhost_merged.osty:10936:17
+		current = current + 1
+	}
+}
+
+// Osty: /tmp/selfhost_merged.osty:10940:1
+func frontCheckPatternCoversPattern(file *AstFile, env *FrontCheckEnv, prevIdx int, curIdx int, scrutineeType string) bool {
+	// Osty: /tmp/selfhost_merged.osty:10941:5
+	if frontCheckPatternCoversAny(file, prevIdx) {
+		// Osty: /tmp/selfhost_merged.osty:10942:9
+		return true
+	}
+	// Osty: /tmp/selfhost_merged.osty:10944:5
+	owner := frontCheckTypeHead(scrutineeType)
+	_ = owner
+	// Osty: /tmp/selfhost_merged.osty:10945:5
+	if owner == "Bool" {
+		// Osty: /tmp/selfhost_merged.osty:10946:9
+		cur := astArenaNodeAt(file.arena, curIdx)
+		_ = cur
+		// Osty: /tmp/selfhost_merged.osty:10947:9
+		if ostyEqual(cur.kind, AstNodeKind(&AstNodeKind_AstNPattern{})) && frontCheckPatternKind(cur) == "literal" {
+			// Osty: /tmp/selfhost_merged.osty:10948:13
+			lit := frontCheckPatternPayload(cur)
+			_ = lit
+			// Osty: /tmp/selfhost_merged.osty:10949:13
+			if lit == "true" || lit == "false" || cur.flags == 1 || cur.flags == 2 {
+				// Osty: /tmp/selfhost_merged.osty:10950:17
+				return frontCheckPatternCoversBool(file, prevIdx, lit == "true" || cur.flags == 1)
+			}
+		}
+	}
+	// Osty: /tmp/selfhost_merged.osty:10954:5
+	curPat := astArenaNodeAt(file.arena, curIdx)
+	_ = curPat
+	// Osty: /tmp/selfhost_merged.osty:10955:5
+	if ostyEqual(curPat.kind, AstNodeKind(&AstNodeKind_AstNPattern{})) && frontCheckPatternIsVariant(curPat) {
+		// Osty: /tmp/selfhost_merged.osty:10956:9
+		variant := frontCheckVariantLookupForOwner(env, frontCheckPatternName(curPat), owner)
+		_ = variant
+		// Osty: /tmp/selfhost_merged.osty:10957:9
+		if variant.name != "" {
+			// Osty: /tmp/selfhost_merged.osty:10958:13
+			return frontCheckPatternCoversVariantCompleteSingle(file, prevIdx, variant)
+		}
+	}
+	return false
+}
+
+// Osty: /tmp/selfhost_merged.osty:10964:1
+func frontCheckMatchHasCatchAll(file *AstFile, node *AstNode) bool {
+	// Osty: /tmp/selfhost_merged.osty:10965:5
+	for _, armIdx := range node.children {
+		// Osty: /tmp/selfhost_merged.osty:10966:9
+		arm := astArenaNodeAt(file.arena, armIdx)
+		_ = arm
+		// Osty: /tmp/selfhost_merged.osty:10967:9
+		if frontCheckFirstChild(arm) < 0 && frontCheckPatternCoversAny(file, arm.left) {
+			// Osty: /tmp/selfhost_merged.osty:10968:13
+			return true
+		}
+	}
+	return false
+}
+
+// Osty: /tmp/selfhost_merged.osty:10974:1
+func frontCheckMatchCoversVariant(file *AstFile, node *AstNode, name string) bool {
+	// Osty: /tmp/selfhost_merged.osty:10975:5
+	for _, armIdx := range node.children {
+		// Osty: /tmp/selfhost_merged.osty:10976:9
+		arm := astArenaNodeAt(file.arena, armIdx)
+		_ = arm
+		// Osty: /tmp/selfhost_merged.osty:10977:9
+		if frontCheckFirstChild(arm) < 0 && frontCheckPatternCoversVariant(file, arm.left, name) {
+			// Osty: /tmp/selfhost_merged.osty:10978:13
+			return true
+		}
+	}
+	return false
+}
+
+// Osty: /tmp/selfhost_merged.osty:10984:1
+func frontCheckMatchCoversVariantComplete(file *AstFile, node *AstNode, variant *FrontVariantSig) bool {
+	// Osty: /tmp/selfhost_merged.osty:10985:5
+	fieldCases := frontCheckVariantFiniteFieldCases(file, variant)
+	_ = fieldCases
+	// Osty: /tmp/selfhost_merged.osty:10986:5
+	if frontCheckStringCount(fieldCases) > 0 {
+		// Osty: /tmp/selfhost_merged.osty:10987:9
+		for _, fieldCase := range fieldCases {
+			// Osty: /tmp/selfhost_merged.osty:10988:13
+			if !(frontCheckMatchCoversVariantCase(file, node, variant, fieldCase)) {
+				// Osty: /tmp/selfhost_merged.osty:10989:17
+				return false
+			}
+		}
+		// Osty: /tmp/selfhost_merged.osty:10992:9
+		return true
+	}
+	// Osty: /tmp/selfhost_merged.osty:10994:5
+	for _, armIdx := range node.children {
+		// Osty: /tmp/selfhost_merged.osty:10995:9
+		arm := astArenaNodeAt(file.arena, armIdx)
+		_ = arm
+		// Osty: /tmp/selfhost_merged.osty:10996:9
+		if frontCheckFirstChild(arm) < 0 && frontCheckPatternCoversVariantCompleteSingle(file, arm.left, variant) {
+			// Osty: /tmp/selfhost_merged.osty:10997:13
+			return true
+		}
+	}
+	return false
+}
+
+// Osty: /tmp/selfhost_merged.osty:11003:1
+func frontCheckMatchCoversVariantCase(file *AstFile, node *AstNode, variant *FrontVariantSig, fieldCase string) bool {
+	// Osty: /tmp/selfhost_merged.osty:11004:5
+	for _, armIdx := range node.children {
+		// Osty: /tmp/selfhost_merged.osty:11005:9
+		arm := astArenaNodeAt(file.arena, armIdx)
+		_ = arm
+		// Osty: /tmp/selfhost_merged.osty:11006:9
+		if frontCheckFirstChild(arm) < 0 && frontCheckPatternCoversVariantCase(file, arm.left, variant, fieldCase) {
+			// Osty: /tmp/selfhost_merged.osty:11007:13
+			return true
+		}
+	}
+	return false
+}
+
+// Osty: /tmp/selfhost_merged.osty:11013:1
+func frontCheckVariantFiniteFieldCases(file *AstFile, variant *FrontVariantSig) []string {
+	// Osty: /tmp/selfhost_merged.osty:11014:5
+	if frontCheckStringCount(variant.fieldTypes) == 0 {
+		// Osty: /tmp/selfhost_merged.osty:11015:9
+		return make([]string, 0, 1)
+	}
+	// Osty: /tmp/selfhost_merged.osty:11017:5
+	var out []string = []string{""}
+	_ = out
+	// Osty: /tmp/selfhost_merged.osty:11018:5
+	for _, fieldType := range variant.fieldTypes {
+		// Osty: /tmp/selfhost_merged.osty:11019:9
+		fieldCases := frontCheckFiniteCases(file, fieldType, 0)
+		_ = fieldCases
+		// Osty: /tmp/selfhost_merged.osty:11020:9
+		if frontCheckStringCount(fieldCases) == 0 {
+			// Osty: /tmp/selfhost_merged.osty:11021:13
+			return make([]string, 0, 1)
+		}
+		// Osty: /tmp/selfhost_merged.osty:11023:13
+		out = frontCheckCombineCases(out, fieldCases)
+		// Osty: /tmp/selfhost_merged.osty:11024:9
+		if frontCheckStringCount(out) > 32 {
+			// Osty: /tmp/selfhost_merged.osty:11025:13
+			return make([]string, 0, 1)
+		}
+	}
+	return out
+}
+
+// Osty: /tmp/selfhost_merged.osty:11031:1
+func frontCheckFiniteCases(file *AstFile, typeName string, depth int) []string {
+	// Osty: /tmp/selfhost_merged.osty:11032:5
+	if depth > 4 {
+		// Osty: /tmp/selfhost_merged.osty:11033:9
+		return make([]string, 0, 1)
+	}
+	// Osty: /tmp/selfhost_merged.osty:11035:5
+	head := frontCheckTypeHead(typeName)
+	_ = head
+	// Osty: /tmp/selfhost_merged.osty:11036:5
+	if typeName == "Bool" {
+		// Osty: /tmp/selfhost_merged.osty:11037:9
+		return []string{"true", "false"}
+	}
+	// Osty: /tmp/selfhost_merged.osty:11039:5
+	if head == "Tuple" {
+		// Osty: /tmp/selfhost_merged.osty:11040:9
+		var out []string = []string{""}
+		_ = out
+		// Osty: /tmp/selfhost_merged.osty:11041:9
+		for _, elem := range frontCheckTupleElems(typeName) {
+			// Osty: /tmp/selfhost_merged.osty:11042:13
+			elemCases := frontCheckFiniteCases(file, elem, depth+1)
+			_ = elemCases
+			// Osty: /tmp/selfhost_merged.osty:11043:13
+			if frontCheckStringCount(elemCases) == 0 {
+				// Osty: /tmp/selfhost_merged.osty:11044:17
+				return make([]string, 0, 1)
+			}
+			// Osty: /tmp/selfhost_merged.osty:11046:17
+			out = frontCheckCombineCases(out, elemCases)
+			// Osty: /tmp/selfhost_merged.osty:11047:13
+			if frontCheckStringCount(out) > 32 {
+				// Osty: /tmp/selfhost_merged.osty:11048:17
+				return make([]string, 0, 1)
+			}
+		}
+		// Osty: /tmp/selfhost_merged.osty:11051:9
+		var wrapped []string = make([]string, 0, 1)
+		_ = wrapped
+		// Osty: /tmp/selfhost_merged.osty:11052:9
+		for _, value := range out {
+			// Osty: /tmp/selfhost_merged.osty:11053:13
+			func() struct{} {
+				wrapped = append(wrapped, fmt.Sprintf("(%s)", ostyToString(value)))
+				return struct{}{}
+			}()
+		}
+		// Osty: /tmp/selfhost_merged.osty:11055:9
+		return wrapped
+	}
+	// Osty: /tmp/selfhost_merged.osty:11057:5
+	var out []string = make([]string, 0, 1)
+	_ = out
+	// Osty: /tmp/selfhost_merged.osty:11058:5
+	variants := 0
+	_ = variants
+	// Osty: /tmp/selfhost_merged.osty:11059:5
+	for _, variant := range fileCheckVariantsByOwner(file, head) {
+		// Osty: /tmp/selfhost_merged.osty:11060:18
+		variants = variants + 1
+		// Osty: /tmp/selfhost_merged.osty:11061:9
+		if frontCheckStringCount(variant.fieldTypes) == 0 {
+			// Osty: /tmp/selfhost_merged.osty:11062:13
+			func() struct{} { out = append(out, variant.name); return struct{}{} }()
+		} else {
+			// Osty: /tmp/selfhost_merged.osty:11064:13
+			fieldCases := frontCheckVariantFiniteFieldCases(file, variant)
+			_ = fieldCases
+			// Osty: /tmp/selfhost_merged.osty:11065:13
+			if frontCheckStringCount(fieldCases) == 0 {
+				// Osty: /tmp/selfhost_merged.osty:11066:17
+				return make([]string, 0, 1)
+			}
+			// Osty: /tmp/selfhost_merged.osty:11068:13
+			for _, fieldCase := range fieldCases {
+				// Osty: /tmp/selfhost_merged.osty:11069:17
+				func() struct{} {
+					out = append(out, fmt.Sprintf("%s(%s)", ostyToString(variant.name), ostyToString(fieldCase)))
+					return struct{}{}
+				}()
+			}
+		}
+		// Osty: /tmp/selfhost_merged.osty:11072:9
+		if frontCheckStringCount(out) > 32 {
+			// Osty: /tmp/selfhost_merged.osty:11073:13
+			return make([]string, 0, 1)
+		}
+	}
+	// Osty: /tmp/selfhost_merged.osty:11076:5
+	if variants == 0 {
+		// Osty: /tmp/selfhost_merged.osty:11077:9
+		return make([]string, 0, 1)
+	}
+	return out
+}
+
+// Osty: /tmp/selfhost_merged.osty:11082:1
+func fileCheckVariantsByOwner(file *AstFile, owner string) []*FrontVariantSig {
+	// Osty: /tmp/selfhost_merged.osty:11083:5
+	var out []*FrontVariantSig = make([]*FrontVariantSig, 0, 1)
+	_ = out
+	// Osty: /tmp/selfhost_merged.osty:11084:5
+	for _, declIdx := range file.arena.decls {
+		// Osty: /tmp/selfhost_merged.osty:11085:9
+		decl := astArenaNodeAt(file.arena, declIdx)
+		_ = decl
+		// Osty: /tmp/selfhost_merged.osty:11086:9
+		if ostyEqual(decl.kind, AstNodeKind(&AstNodeKind_AstNEnumDecl{})) && decl.text == owner {
+			// Osty: /tmp/selfhost_merged.osty:11087:13
+			generics := frontCheckGenericNames(file, decl.children2)
+			_ = generics
+			// Osty: /tmp/selfhost_merged.osty:11088:13
+			for _, memberIdx := range decl.children {
+				// Osty: /tmp/selfhost_merged.osty:11089:17
+				member := astArenaNodeAt(file.arena, memberIdx)
+				_ = member
+				// Osty: /tmp/selfhost_merged.osty:11090:17
+				if ostyEqual(member.kind, AstNodeKind(&AstNodeKind_AstNVariant{})) {
+					// Osty: /tmp/selfhost_merged.osty:11091:21
+					var fieldTypes []string = make([]string, 0, 1)
+					_ = fieldTypes
+					// Osty: /tmp/selfhost_merged.osty:11092:21
+					for _, fieldIdx := range member.children {
+						// Osty: /tmp/selfhost_merged.osty:11093:25
+						func() struct{} {
+							fieldTypes = append(fieldTypes, frontCheckTypeName(file, fieldIdx))
+							return struct{}{}
+						}()
+					}
+					// Osty: /tmp/selfhost_merged.osty:11095:21
+					func() struct{} {
+						out = append(out, &FrontVariantSig{owner: decl.text, name: member.text, fieldTypes: fieldTypes, generics: generics})
+						return struct{}{}
+					}()
+				}
+			}
+		}
+	}
+	return out
+}
+
+// Osty: /tmp/selfhost_merged.osty:11103:1
+func frontCheckCombineCases(prefixes []string, suffixes []string) []string {
+	// Osty: /tmp/selfhost_merged.osty:11104:5
+	var out []string = make([]string, 0, 1)
+	_ = out
+	// Osty: /tmp/selfhost_merged.osty:11105:5
+	for _, prefix := range prefixes {
+		// Osty: /tmp/selfhost_merged.osty:11106:9
+		for _, suffix := range suffixes {
+			// Osty: /tmp/selfhost_merged.osty:11107:13
+			if prefix == "" {
+				// Osty: /tmp/selfhost_merged.osty:11108:17
+				func() struct{} { out = append(out, suffix); return struct{}{} }()
+			} else {
+				// Osty: /tmp/selfhost_merged.osty:11110:17
+				func() struct{} {
+					out = append(out, fmt.Sprintf("%s|%s", ostyToString(prefix), ostyToString(suffix)))
+					return struct{}{}
+				}()
+			}
+		}
+	}
+	return out
+}
+
+// Osty: /tmp/selfhost_merged.osty:11117:1
+func frontCheckMatchCoversBool(file *AstFile, node *AstNode, value bool) bool {
+	// Osty: /tmp/selfhost_merged.osty:11118:5
+	for _, armIdx := range node.children {
+		// Osty: /tmp/selfhost_merged.osty:11119:9
+		arm := astArenaNodeAt(file.arena, armIdx)
+		_ = arm
+		// Osty: /tmp/selfhost_merged.osty:11120:9
+		if frontCheckFirstChild(arm) < 0 && frontCheckPatternCoversBool(file, arm.left, value) {
+			// Osty: /tmp/selfhost_merged.osty:11121:13
+			return true
+		}
+	}
+	return false
+}
+
+// Osty: /tmp/selfhost_merged.osty:11127:1
+func frontCheckMatchCoversBoolTuple(file *AstFile, node *AstNode, tupleType string) bool {
+	// Osty: /tmp/selfhost_merged.osty:11128:5
+	arity := frontCheckStringCount(frontCheckTupleElems(tupleType))
+	_ = arity
+	// Osty: /tmp/selfhost_merged.osty:11129:5
+	limit := frontCheckPow2(arity)
+	_ = limit
+	// Osty: /tmp/selfhost_merged.osty:11130:5
+	mask := 0
+	_ = mask
+	// Osty: /tmp/selfhost_merged.osty:11131:5
+	for mask < limit {
+		// Osty: /tmp/selfhost_merged.osty:11132:9
+		if !(frontCheckMatchCoversBoolTupleMask(file, node, arity, mask)) {
+			// Osty: /tmp/selfhost_merged.osty:11133:13
+			return false
+		}
+		// Osty: /tmp/selfhost_merged.osty:11135:14
+		mask = mask + 1
+	}
+	return true
+}
+
+// Osty: /tmp/selfhost_merged.osty:11140:1
+func frontCheckMatchCoversBoolTupleMask(file *AstFile, node *AstNode, arity int, mask int) bool {
+	// Osty: /tmp/selfhost_merged.osty:11141:5
+	for _, armIdx := range node.children {
+		// Osty: /tmp/selfhost_merged.osty:11142:9
+		arm := astArenaNodeAt(file.arena, armIdx)
+		_ = arm
+		// Osty: /tmp/selfhost_merged.osty:11143:9
+		if frontCheckFirstChild(arm) < 0 && frontCheckPatternCoversBoolTupleMask(file, arm.left, arity, mask) {
+			// Osty: /tmp/selfhost_merged.osty:11144:13
+			return true
+		}
+	}
+	return false
+}
+
+// Osty: /tmp/selfhost_merged.osty:11150:1
+func frontCheckMatchCoversStruct(file *AstFile, env *FrontCheckEnv, node *AstNode, owner string) bool {
+	// Osty: /tmp/selfhost_merged.osty:11151:5
+	for _, armIdx := range node.children {
+		// Osty: /tmp/selfhost_merged.osty:11152:9
+		arm := astArenaNodeAt(file.arena, armIdx)
+		_ = arm
+		// Osty: /tmp/selfhost_merged.osty:11153:9
+		if frontCheckFirstChild(arm) < 0 && frontCheckPatternCoversStruct(file, env, arm.left, owner) {
+			// Osty: /tmp/selfhost_merged.osty:11154:13
+			return true
+		}
+	}
+	return false
+}
+
+// Osty: /tmp/selfhost_merged.osty:11160:1
+func frontCheckPow2(n int) int {
+	// Osty: /tmp/selfhost_merged.osty:11161:5
+	out := 1
+	_ = out
+	// Osty: /tmp/selfhost_merged.osty:11162:5
+	i := 0
+	_ = i
+	// Osty: /tmp/selfhost_merged.osty:11163:5
+	for i < n {
+		// Osty: /tmp/selfhost_merged.osty:11164:13
+		out = out * 2
+		// Osty: /tmp/selfhost_merged.osty:11165:11
+		i = i + 1
+	}
+	return out
+}
+
+// Osty: /tmp/selfhost_merged.osty:11170:1
+func frontCheckTupleAllBool(tupleType string) bool {
+	// Osty: /tmp/selfhost_merged.osty:11171:5
+	elems := frontCheckTupleElems(tupleType)
+	_ = elems
+	// Osty: /tmp/selfhost_merged.osty:11172:5
+	count := frontCheckStringCount(elems)
+	_ = count
+	// Osty: /tmp/selfhost_merged.osty:11173:5
+	if count == 0 || count > 4 {
+		// Osty: /tmp/selfhost_merged.osty:11174:9
+		return false
+	}
+	// Osty: /tmp/selfhost_merged.osty:11176:5
+	for _, elem := range elems {
+		// Osty: /tmp/selfhost_merged.osty:11177:9
+		if elem != "Bool" {
+			// Osty: /tmp/selfhost_merged.osty:11178:13
+			return false
+		}
+	}
+	return true
+}
+
+// Osty: /tmp/selfhost_merged.osty:11184:1
+func frontCheckStructFieldCount(env *FrontCheckEnv, owner string) int {
+	// Osty: /tmp/selfhost_merged.osty:11185:5
+	count := 0
+	_ = count
+	// Osty: /tmp/selfhost_merged.osty:11186:5
+	for _, field := range env.fields {
+		// Osty: /tmp/selfhost_merged.osty:11187:9
+		if field.owner == owner {
+			// Osty: /tmp/selfhost_merged.osty:11188:19
+			count = count + 1
+		}
+	}
+	return count
+}
+
+// Osty: /tmp/selfhost_merged.osty:11194:1
+func frontCheckPatternKind(pat *AstNode) string {
+	// Osty: /tmp/selfhost_merged.osty:11195:5
+	if strings.HasPrefix(pat.text, "ident:") {
+		// Osty: /tmp/selfhost_merged.osty:11196:9
+		return "ident"
+	}
+	// Osty: /tmp/selfhost_merged.osty:11198:5
+	if strings.HasPrefix(pat.text, "variant:") {
+		// Osty: /tmp/selfhost_merged.osty:11199:9
+		return "variant"
+	}
+	// Osty: /tmp/selfhost_merged.osty:11201:5
+	if strings.HasPrefix(pat.text, "struct:") {
+		// Osty: /tmp/selfhost_merged.osty:11202:9
+		return "struct"
+	}
+	// Osty: /tmp/selfhost_merged.osty:11204:5
+	if strings.HasPrefix(pat.text, "binding:") {
+		// Osty: /tmp/selfhost_merged.osty:11205:9
+		return "binding"
+	}
+	// Osty: /tmp/selfhost_merged.osty:11207:5
+	if strings.HasPrefix(pat.text, "literal:") {
+		// Osty: /tmp/selfhost_merged.osty:11208:9
+		return "literal"
+	}
+	// Osty: /tmp/selfhost_merged.osty:11210:5
+	if ostyEqual(pat.op, FrontTokenKind(&FrontTokenKind_FrontAt{})) {
+		// Osty: /tmp/selfhost_merged.osty:11211:9
+		return "binding"
+	}
+	// Osty: /tmp/selfhost_merged.osty:11213:5
+	if ostyEqual(pat.op, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) && astIsUpperName(pat.text) {
+		// Osty: /tmp/selfhost_merged.osty:11214:9
+		return "struct"
+	}
+	// Osty: /tmp/selfhost_merged.osty:11216:5
+	if ostyEqual(pat.op, FrontTokenKind(&FrontTokenKind_FrontIdent{})) && astIsUpperName(pat.text) {
+		// Osty: /tmp/selfhost_merged.osty:11217:9
+		return "variant"
+	}
+	// Osty: /tmp/selfhost_merged.osty:11219:5
+	if ostyEqual(pat.op, FrontTokenKind(&FrontTokenKind_FrontIdent{})) && pat.text != "" {
+		// Osty: /tmp/selfhost_merged.osty:11220:9
+		return "ident"
+	}
+	return pat.text
+}
+
+// Osty: /tmp/selfhost_merged.osty:11225:1
+func frontCheckPatternPayload(pat *AstNode) string {
+	// Osty: /tmp/selfhost_merged.osty:11226:5
+	if strings.HasPrefix(pat.text, "ident:") {
+		// Osty: /tmp/selfhost_merged.osty:11227:9
+		return strings.TrimPrefix(pat.text, "ident:")
+	}
+	// Osty: /tmp/selfhost_merged.osty:11229:5
+	if strings.HasPrefix(pat.text, "variant:") {
+		// Osty: /tmp/selfhost_merged.osty:11230:9
+		return strings.TrimPrefix(pat.text, "variant:")
+	}
+	// Osty: /tmp/selfhost_merged.osty:11232:5
+	if strings.HasPrefix(pat.text, "struct:") {
+		// Osty: /tmp/selfhost_merged.osty:11233:9
+		return strings.TrimPrefix(pat.text, "struct:")
+	}
+	// Osty: /tmp/selfhost_merged.osty:11235:5
+	if strings.HasPrefix(pat.text, "binding:") {
+		// Osty: /tmp/selfhost_merged.osty:11236:9
+		return strings.TrimPrefix(pat.text, "binding:")
+	}
+	// Osty: /tmp/selfhost_merged.osty:11238:5
+	if strings.HasPrefix(pat.text, "literal:") {
+		// Osty: /tmp/selfhost_merged.osty:11239:9
+		return strings.TrimPrefix(pat.text, "literal:")
+	}
+	return pat.text
+}
+
+// Osty: /tmp/selfhost_merged.osty:11244:1
+func frontCheckPatternName(pat *AstNode) string {
+	return frontCheckLastPathSegment(frontCheckPatternPayload(pat))
+}
+
+// Osty: /tmp/selfhost_merged.osty:11248:1
+func frontCheckPatternIsBindingIdent(pat *AstNode) bool {
+	// Osty: /tmp/selfhost_merged.osty:11249:5
+	name := frontCheckPatternName(pat)
+	_ = name
+	return frontCheckPatternKind(pat) == "ident" && name != "" && !(astIsUpperName(name))
+}
+
+// Osty: /tmp/selfhost_merged.osty:11253:1
+func frontCheckPatternIsVariant(pat *AstNode) bool {
+	// Osty: /tmp/selfhost_merged.osty:11254:5
+	kind := frontCheckPatternKind(pat)
+	_ = kind
+	return kind == "variant" || (kind == "ident" && astIsUpperName(frontCheckPatternName(pat)))
+}
+
+// Osty: /tmp/selfhost_merged.osty:11258:1
+func frontCheckPatternIsVariantNamed(pat *AstNode, name string) bool {
+	return frontCheckPatternIsVariant(pat) && frontCheckPatternName(pat) == name
+}
+
+// Osty: /tmp/selfhost_merged.osty:11262:1
+func frontCheckPatternIsStructNamed(pat *AstNode, name string) bool {
+	return frontCheckPatternKind(pat) == "struct" && frontCheckPatternName(pat) == name
+}
+
+// Osty: /tmp/selfhost_merged.osty:11266:1
+func frontCheckPatternIsBindingAt(pat *AstNode) bool {
+	return frontCheckPatternKind(pat) == "binding"
+}
+
+// Osty: /tmp/selfhost_merged.osty:11270:1
+func frontCheckPatternBoolValue(pat *AstNode, value bool) bool {
+	// Osty: /tmp/selfhost_merged.osty:11271:5
+	lit := frontCheckPatternPayload(pat)
+	_ = lit
+	// Osty: /tmp/selfhost_merged.osty:11272:5
+	if lit == "true" {
+		// Osty: /tmp/selfhost_merged.osty:11273:9
+		return value
+	}
+	// Osty: /tmp/selfhost_merged.osty:11275:5
+	if lit == "false" {
+		// Osty: /tmp/selfhost_merged.osty:11276:9
+		return !(value)
+	}
+	return (value && pat.flags == 1) || (!(value) && pat.flags == 2)
+}
+
+// Osty: /tmp/selfhost_merged.osty:11281:1
+func frontCheckPatternCoversAny(file *AstFile, patIdx int) bool {
+	// Osty: /tmp/selfhost_merged.osty:11282:5
+	if patIdx < 0 {
+		// Osty: /tmp/selfhost_merged.osty:11283:9
+		return false
+	}
+	// Osty: /tmp/selfhost_merged.osty:11285:5
+	pat := astArenaNodeAt(file.arena, patIdx)
+	_ = pat
+	// Osty: /tmp/selfhost_merged.osty:11286:5
+	if !ostyEqual(pat.kind, AstNodeKind(&AstNodeKind_AstNPattern{})) {
+		// Osty: /tmp/selfhost_merged.osty:11287:9
+		return false
+	}
+	// Osty: /tmp/selfhost_merged.osty:11289:5
+	if pat.text == "wildcard" {
+		// Osty: /tmp/selfhost_merged.osty:11290:9
+		return true
+	}
+	// Osty: /tmp/selfhost_merged.osty:11292:5
+	if frontCheckPatternIsBindingIdent(pat) {
+		// Osty: /tmp/selfhost_merged.osty:11293:9
+		return true
+	}
+	// Osty: /tmp/selfhost_merged.osty:11295:5
+	if frontCheckPatternIsBindingAt(pat) {
+		// Osty: /tmp/selfhost_merged.osty:11296:9
+		return frontCheckPatternCoversAny(file, pat.left)
+	}
+	// Osty: /tmp/selfhost_merged.osty:11298:5
+	if pat.text == "or" {
+		// Osty: /tmp/selfhost_merged.osty:11299:9
+		return frontCheckPatternCoversAny(file, pat.left) || frontCheckPatternCoversAny(file, pat.right)
+	}
+	return false
+}
+
+// Osty: /tmp/selfhost_merged.osty:11304:1
+func frontCheckPatternCoversStruct(file *AstFile, env *FrontCheckEnv, patIdx int, owner string) bool {
+	// Osty: /tmp/selfhost_merged.osty:11305:5
+	if patIdx < 0 {
+		// Osty: /tmp/selfhost_merged.osty:11306:9
+		return false
+	}
+	// Osty: /tmp/selfhost_merged.osty:11308:5
+	pat := astArenaNodeAt(file.arena, patIdx)
+	_ = pat
+	// Osty: /tmp/selfhost_merged.osty:11309:5
+	if !ostyEqual(pat.kind, AstNodeKind(&AstNodeKind_AstNPattern{})) {
+		// Osty: /tmp/selfhost_merged.osty:11310:9
+		return false
+	}
+	// Osty: /tmp/selfhost_merged.osty:11312:5
+	if frontCheckPatternCoversAny(file, patIdx) {
+		// Osty: /tmp/selfhost_merged.osty:11313:9
+		return true
+	}
+	// Osty: /tmp/selfhost_merged.osty:11315:5
+	if frontCheckPatternIsStructNamed(pat, owner) {
+		// Osty: /tmp/selfhost_merged.osty:11316:9
+		for _, field := range env.fields {
+			// Osty: /tmp/selfhost_merged.osty:11317:13
+			if field.owner == owner {
+				// Osty: /tmp/selfhost_merged.osty:11318:17
+				fieldPatIdx := frontCheckStructPatternField(file, pat, field.name)
+				_ = fieldPatIdx
+				// Osty: /tmp/selfhost_merged.osty:11319:17
+				if fieldPatIdx < 0 {
+					// Osty: /tmp/selfhost_merged.osty:11320:21
+					if !(pat.flags == 1) {
+						// Osty: /tmp/selfhost_merged.osty:11321:25
+						return false
+					}
+				} else if !(frontCheckPatternCoversAny(file, fieldPatIdx)) {
+					// Osty: /tmp/selfhost_merged.osty:11324:21
+					return false
+				}
+			}
+		}
+		// Osty: /tmp/selfhost_merged.osty:11328:9
+		return true
+	}
+	// Osty: /tmp/selfhost_merged.osty:11330:5
+	if frontCheckPatternIsBindingAt(pat) {
+		// Osty: /tmp/selfhost_merged.osty:11331:9
+		return frontCheckPatternCoversStruct(file, env, pat.left, owner)
+	}
+	// Osty: /tmp/selfhost_merged.osty:11333:5
+	if pat.text == "or" {
+		// Osty: /tmp/selfhost_merged.osty:11334:9
+		return frontCheckPatternCoversStruct(file, env, pat.left, owner) || frontCheckPatternCoversStruct(file, env, pat.right, owner)
+	}
+	return false
+}
+
+// Osty: /tmp/selfhost_merged.osty:11339:1
+func frontCheckStructPatternField(file *AstFile, pat *AstNode, name string) int {
+	// Osty: /tmp/selfhost_merged.osty:11340:5
+	for _, fieldIdx := range pat.children {
+		// Osty: /tmp/selfhost_merged.osty:11341:9
+		fieldPat := astArenaNodeAt(file.arena, fieldIdx)
+		_ = fieldPat
+		// Osty: /tmp/selfhost_merged.osty:11342:9
+		if fieldPat.text == name {
+			// Osty: /tmp/selfhost_merged.osty:11343:13
+			return fieldPat.left
+		}
+	}
+	return -1
+}
+
+// Osty: /tmp/selfhost_merged.osty:11349:1
+func frontCheckPatternCoversBoolTupleMask(file *AstFile, patIdx int, arity int, mask int) bool {
+	// Osty: /tmp/selfhost_merged.osty:11350:5
+	if patIdx < 0 {
+		// Osty: /tmp/selfhost_merged.osty:11351:9
+		return false
+	}
+	// Osty: /tmp/selfhost_merged.osty:11353:5
+	pat := astArenaNodeAt(file.arena, patIdx)
+	_ = pat
+	// Osty: /tmp/selfhost_merged.osty:11354:5
+	if !ostyEqual(pat.kind, AstNodeKind(&AstNodeKind_AstNPattern{})) {
+		// Osty: /tmp/selfhost_merged.osty:11355:9
+		return false
+	}
+	// Osty: /tmp/selfhost_merged.osty:11357:5
+	if frontCheckPatternCoversAny(file, patIdx) {
+		// Osty: /tmp/selfhost_merged.osty:11358:9
+		return true
+	}
+	// Osty: /tmp/selfhost_merged.osty:11360:5
+	if pat.text == "tuple" {
+		// Osty: /tmp/selfhost_merged.osty:11361:9
+		if frontCheckIntCount(pat.children) != arity {
+			// Osty: /tmp/selfhost_merged.osty:11362:13
+			return false
+		}
+		// Osty: /tmp/selfhost_merged.osty:11364:9
+		i := 0
+		_ = i
+		// Osty: /tmp/selfhost_merged.osty:11365:9
+		for _, child := range pat.children {
+			// Osty: /tmp/selfhost_merged.osty:11366:13
+			if !(frontCheckPatternCoversBool(file, child, frontCheckBoolMaskAt(mask, i))) {
+				// Osty: /tmp/selfhost_merged.osty:11367:17
+				return false
+			}
+			// Osty: /tmp/selfhost_merged.osty:11369:15
+			i = i + 1
+		}
+		// Osty: /tmp/selfhost_merged.osty:11371:9
+		return true
+	}
+	// Osty: /tmp/selfhost_merged.osty:11373:5
+	if frontCheckPatternIsBindingAt(pat) {
+		// Osty: /tmp/selfhost_merged.osty:11374:9
+		return frontCheckPatternCoversBoolTupleMask(file, pat.left, arity, mask)
+	}
+	// Osty: /tmp/selfhost_merged.osty:11376:5
+	if pat.text == "or" {
+		// Osty: /tmp/selfhost_merged.osty:11377:9
+		return frontCheckPatternCoversBoolTupleMask(file, pat.left, arity, mask) || frontCheckPatternCoversBoolTupleMask(file, pat.right, arity, mask)
+	}
+	return false
+}
+
+// Osty: /tmp/selfhost_merged.osty:11382:1
+func frontCheckBoolMaskAt(mask int, idx int) bool {
+	// Osty: /tmp/selfhost_merged.osty:11383:5
+	div := frontCheckPow2(idx)
+	_ = div
+	return ((mask / div) % 2) == 1
+}
+
+// Osty: /tmp/selfhost_merged.osty:11387:1
+func frontCheckPatternCoversBool(file *AstFile, patIdx int, value bool) bool {
+	// Osty: /tmp/selfhost_merged.osty:11388:5
+	if patIdx < 0 {
+		// Osty: /tmp/selfhost_merged.osty:11389:9
+		return false
+	}
+	// Osty: /tmp/selfhost_merged.osty:11391:5
+	pat := astArenaNodeAt(file.arena, patIdx)
+	_ = pat
+	// Osty: /tmp/selfhost_merged.osty:11392:5
+	if !ostyEqual(pat.kind, AstNodeKind(&AstNodeKind_AstNPattern{})) {
+		// Osty: /tmp/selfhost_merged.osty:11393:9
+		return false
+	}
+	// Osty: /tmp/selfhost_merged.osty:11395:5
+	if frontCheckPatternCoversAny(file, patIdx) {
+		// Osty: /tmp/selfhost_merged.osty:11396:9
+		return true
+	}
+	// Osty: /tmp/selfhost_merged.osty:11398:5
+	if frontCheckPatternKind(pat) == "literal" {
+		// Osty: /tmp/selfhost_merged.osty:11399:9
+		return frontCheckPatternBoolValue(pat, value)
+	}
+	// Osty: /tmp/selfhost_merged.osty:11401:5
+	if frontCheckPatternIsBindingAt(pat) {
+		// Osty: /tmp/selfhost_merged.osty:11402:9
+		return frontCheckPatternCoversBool(file, pat.left, value)
+	}
+	// Osty: /tmp/selfhost_merged.osty:11404:5
+	if pat.text == "or" {
+		// Osty: /tmp/selfhost_merged.osty:11405:9
+		return frontCheckPatternCoversBool(file, pat.left, value) || frontCheckPatternCoversBool(file, pat.right, value)
+	}
+	return false
+}
+
+// Osty: /tmp/selfhost_merged.osty:11410:1
+func frontCheckPatternCoversVariant(file *AstFile, patIdx int, name string) bool {
+	// Osty: /tmp/selfhost_merged.osty:11411:5
+	if patIdx < 0 {
+		// Osty: /tmp/selfhost_merged.osty:11412:9
+		return false
+	}
+	// Osty: /tmp/selfhost_merged.osty:11414:5
+	pat := astArenaNodeAt(file.arena, patIdx)
+	_ = pat
+	// Osty: /tmp/selfhost_merged.osty:11415:5
+	if !ostyEqual(pat.kind, AstNodeKind(&AstNodeKind_AstNPattern{})) {
+		// Osty: /tmp/selfhost_merged.osty:11416:9
+		return false
+	}
+	// Osty: /tmp/selfhost_merged.osty:11418:5
+	if frontCheckPatternCoversAny(file, patIdx) {
+		// Osty: /tmp/selfhost_merged.osty:11419:9
+		return true
+	}
+	// Osty: /tmp/selfhost_merged.osty:11421:5
+	if frontCheckPatternIsVariant(pat) {
+		// Osty: /tmp/selfhost_merged.osty:11422:9
+		return frontCheckPatternName(pat) == name
+	}
+	// Osty: /tmp/selfhost_merged.osty:11424:5
+	if frontCheckPatternIsBindingAt(pat) {
+		// Osty: /tmp/selfhost_merged.osty:11425:9
+		return frontCheckPatternCoversVariant(file, pat.left, name)
+	}
+	// Osty: /tmp/selfhost_merged.osty:11427:5
+	if pat.text == "or" {
+		// Osty: /tmp/selfhost_merged.osty:11428:9
+		return frontCheckPatternCoversVariant(file, pat.left, name) || frontCheckPatternCoversVariant(file, pat.right, name)
+	}
+	return false
+}
+
+// Osty: /tmp/selfhost_merged.osty:11433:1
+func frontCheckPatternCoversVariantCase(file *AstFile, patIdx int, variant *FrontVariantSig, fieldCase string) bool {
+	// Osty: /tmp/selfhost_merged.osty:11434:5
+	if patIdx < 0 {
+		// Osty: /tmp/selfhost_merged.osty:11435:9
+		return false
+	}
+	// Osty: /tmp/selfhost_merged.osty:11437:5
+	pat := astArenaNodeAt(file.arena, patIdx)
+	_ = pat
+	// Osty: /tmp/selfhost_merged.osty:11438:5
+	if !ostyEqual(pat.kind, AstNodeKind(&AstNodeKind_AstNPattern{})) {
+		// Osty: /tmp/selfhost_merged.osty:11439:9
+		return false
+	}
+	// Osty: /tmp/selfhost_merged.osty:11441:5
+	if frontCheckPatternCoversAny(file, patIdx) {
+		// Osty: /tmp/selfhost_merged.osty:11442:9
+		return true
+	}
+	// Osty: /tmp/selfhost_merged.osty:11444:5
+	if frontCheckPatternIsVariantNamed(pat, variant.name) {
+		// Osty: /tmp/selfhost_merged.osty:11445:9
+		caseFields := frontCheckSplitCaseFields(fieldCase)
+		_ = caseFields
+		// Osty: /tmp/selfhost_merged.osty:11446:9
+		if frontCheckIntCount(pat.children) != frontCheckStringCount(caseFields) {
+			// Osty: /tmp/selfhost_merged.osty:11447:13
+			return false
+		}
+		// Osty: /tmp/selfhost_merged.osty:11449:9
+		i := 0
+		_ = i
+		// Osty: /tmp/selfhost_merged.osty:11450:9
+		for _, child := range pat.children {
+			// Osty: /tmp/selfhost_merged.osty:11451:13
+			fieldType := frontCheckStringAt(variant.fieldTypes, i)
+			_ = fieldType
+			// Osty: /tmp/selfhost_merged.osty:11452:13
+			value := frontCheckStringAt(caseFields, i)
+			_ = value
+			// Osty: /tmp/selfhost_merged.osty:11453:13
+			if !(frontCheckPatternCoversFiniteCase(file, child, fieldType, value)) {
+				// Osty: /tmp/selfhost_merged.osty:11454:17
+				return false
+			}
+			// Osty: /tmp/selfhost_merged.osty:11456:15
+			i = i + 1
+		}
+		// Osty: /tmp/selfhost_merged.osty:11458:9
+		return true
+	}
+	// Osty: /tmp/selfhost_merged.osty:11460:5
+	if frontCheckPatternIsBindingAt(pat) {
+		// Osty: /tmp/selfhost_merged.osty:11461:9
+		return frontCheckPatternCoversVariantCase(file, pat.left, variant, fieldCase)
+	}
+	// Osty: /tmp/selfhost_merged.osty:11463:5
+	if pat.text == "or" {
+		// Osty: /tmp/selfhost_merged.osty:11464:9
+		return frontCheckPatternCoversVariantCase(file, pat.left, variant, fieldCase) || frontCheckPatternCoversVariantCase(file, pat.right, variant, fieldCase)
+	}
+	return false
+}
+
+// Osty: /tmp/selfhost_merged.osty:11469:1
+func frontCheckPatternCoversFiniteCase(file *AstFile, patIdx int, typeName string, value string) bool {
+	// Osty: /tmp/selfhost_merged.osty:11470:5
+	if patIdx < 0 {
+		// Osty: /tmp/selfhost_merged.osty:11471:9
+		return false
+	}
+	// Osty: /tmp/selfhost_merged.osty:11473:5
+	pat := astArenaNodeAt(file.arena, patIdx)
+	_ = pat
+	// Osty: /tmp/selfhost_merged.osty:11474:5
+	if !ostyEqual(pat.kind, AstNodeKind(&AstNodeKind_AstNPattern{})) {
+		// Osty: /tmp/selfhost_merged.osty:11475:9
+		return false
+	}
+	// Osty: /tmp/selfhost_merged.osty:11477:5
+	if frontCheckPatternCoversAny(file, patIdx) {
+		// Osty: /tmp/selfhost_merged.osty:11478:9
+		return true
+	}
+	// Osty: /tmp/selfhost_merged.osty:11480:5
+	head := frontCheckTypeHead(typeName)
+	_ = head
+	// Osty: /tmp/selfhost_merged.osty:11481:5
+	if typeName == "Bool" {
+		// Osty: /tmp/selfhost_merged.osty:11482:9
+		return frontCheckPatternCoversBool(file, patIdx, value == "true")
+	}
+	// Osty: /tmp/selfhost_merged.osty:11484:5
+	if head == "Tuple" {
+		// Osty: /tmp/selfhost_merged.osty:11485:9
+		if pat.text == "tuple" {
+			// Osty: /tmp/selfhost_merged.osty:11486:13
+			elems := frontCheckTupleElems(typeName)
+			_ = elems
+			// Osty: /tmp/selfhost_merged.osty:11487:13
+			tupleText := value
+			_ = tupleText
+			// Osty: /tmp/selfhost_merged.osty:11488:13
+			if strings.HasPrefix(tupleText, "(") && strings.HasSuffix(tupleText, ")") {
+				// Osty: /tmp/selfhost_merged.osty:11489:27
+				tupleText = strings.TrimSuffix(strings.TrimPrefix(tupleText, "("), ")")
+			}
+			// Osty: /tmp/selfhost_merged.osty:11491:13
+			values := frontCheckSplitCaseFields(tupleText)
+			_ = values
+			// Osty: /tmp/selfhost_merged.osty:11492:13
+			if frontCheckIntCount(pat.children) != frontCheckStringCount(values) || frontCheckStringCount(elems) != frontCheckStringCount(values) {
+				// Osty: /tmp/selfhost_merged.osty:11493:17
+				return false
+			}
+			// Osty: /tmp/selfhost_merged.osty:11495:13
+			i := 0
+			_ = i
+			// Osty: /tmp/selfhost_merged.osty:11496:13
+			for _, child := range pat.children {
+				// Osty: /tmp/selfhost_merged.osty:11497:17
+				if !(frontCheckPatternCoversFiniteCase(file, child, frontCheckStringAt(elems, i), frontCheckStringAt(values, i))) {
+					// Osty: /tmp/selfhost_merged.osty:11498:21
+					return false
+				}
+				// Osty: /tmp/selfhost_merged.osty:11500:19
+				i = i + 1
+			}
+			// Osty: /tmp/selfhost_merged.osty:11502:13
+			return true
+		}
+		// Osty: /tmp/selfhost_merged.osty:11504:9
+		if frontCheckPatternIsBindingAt(pat) {
+			// Osty: /tmp/selfhost_merged.osty:11505:13
+			return frontCheckPatternCoversFiniteCase(file, pat.left, typeName, value)
+		}
+		// Osty: /tmp/selfhost_merged.osty:11507:9
+		if pat.text == "or" {
+			// Osty: /tmp/selfhost_merged.osty:11508:13
+			return frontCheckPatternCoversFiniteCase(file, pat.left, typeName, value) || frontCheckPatternCoversFiniteCase(file, pat.right, typeName, value)
+		}
+		// Osty: /tmp/selfhost_merged.osty:11510:9
+		return false
+	}
+	// Osty: /tmp/selfhost_merged.osty:11512:5
+	caseHead := frontCheckCaseHead(value)
+	_ = caseHead
+	// Osty: /tmp/selfhost_merged.osty:11513:5
+	caseVariant := frontCheckVariantLookupInFile(file, head, caseHead)
+	_ = caseVariant
+	// Osty: /tmp/selfhost_merged.osty:11514:5
+	if caseVariant.name != "" {
+		// Osty: /tmp/selfhost_merged.osty:11515:9
+		if frontCheckPatternIsVariantNamed(pat, caseVariant.name) {
+			// Osty: /tmp/selfhost_merged.osty:11516:13
+			argsText := frontCheckCaseArgsText(value)
+			_ = argsText
+			// Osty: /tmp/selfhost_merged.osty:11517:13
+			caseArgs := frontCheckSplitCaseFields(argsText)
+			_ = caseArgs
+			// Osty: /tmp/selfhost_merged.osty:11518:13
+			if frontCheckIntCount(pat.children) != frontCheckStringCount(caseArgs) || frontCheckStringCount(caseVariant.fieldTypes) != frontCheckStringCount(caseArgs) {
+				// Osty: /tmp/selfhost_merged.osty:11519:17
+				return false
+			}
+			// Osty: /tmp/selfhost_merged.osty:11521:13
+			i := 0
+			_ = i
+			// Osty: /tmp/selfhost_merged.osty:11522:13
+			for _, child := range pat.children {
+				// Osty: /tmp/selfhost_merged.osty:11523:17
+				if !(frontCheckPatternCoversFiniteCase(file, child, frontCheckStringAt(caseVariant.fieldTypes, i), frontCheckStringAt(caseArgs, i))) {
+					// Osty: /tmp/selfhost_merged.osty:11524:21
+					return false
+				}
+				// Osty: /tmp/selfhost_merged.osty:11526:19
+				i = i + 1
+			}
+			// Osty: /tmp/selfhost_merged.osty:11528:13
+			return true
+		}
+		// Osty: /tmp/selfhost_merged.osty:11530:9
+		if frontCheckPatternIsBindingAt(pat) {
+			// Osty: /tmp/selfhost_merged.osty:11531:13
+			return frontCheckPatternCoversFiniteCase(file, pat.left, typeName, value)
+		}
+		// Osty: /tmp/selfhost_merged.osty:11533:9
+		if pat.text == "or" {
+			// Osty: /tmp/selfhost_merged.osty:11534:13
+			return frontCheckPatternCoversFiniteCase(file, pat.left, typeName, value) || frontCheckPatternCoversFiniteCase(file, pat.right, typeName, value)
+		}
+	}
+	return false
+}
+
+// Osty: /tmp/selfhost_merged.osty:11540:1
+func frontCheckVariantLookupInFile(file *AstFile, owner string, name string) *FrontVariantSig {
+	// Osty: /tmp/selfhost_merged.osty:11541:5
+	for _, variant := range fileCheckVariantsByOwner(file, owner) {
+		// Osty: /tmp/selfhost_merged.osty:11542:9
+		if variant.name == name {
+			// Osty: /tmp/selfhost_merged.osty:11543:13
+			return variant
+		}
+	}
+	return &FrontVariantSig{owner: "", name: "", fieldTypes: make([]string, 0, 1), generics: make([]string, 0, 1)}
+}
+
+// Osty: /tmp/selfhost_merged.osty:11549:1
+func frontCheckCaseHead(value string) string {
+	// Osty: /tmp/selfhost_merged.osty:11550:5
+	head := ""
+	_ = head
+	// Osty: /tmp/selfhost_merged.osty:11551:5
+	for _, unit := range strings.Split(value, "") {
+		// Osty: /tmp/selfhost_merged.osty:11552:9
+		if unit == "(" {
+			// Osty: /tmp/selfhost_merged.osty:11553:13
+			return strings.TrimSpace(head)
+		}
+		// Osty: /tmp/selfhost_merged.osty:11555:14
+		head = fmt.Sprintf("%s%s", ostyToString(head), ostyToString(unit))
+	}
+	return strings.TrimSpace(head)
+}
+
+// Osty: /tmp/selfhost_merged.osty:11560:1
+func frontCheckCaseArgsText(value string) string {
+	// Osty: /tmp/selfhost_merged.osty:11561:5
+	out := ""
+	_ = out
+	// Osty: /tmp/selfhost_merged.osty:11562:5
+	found := false
+	_ = found
+	// Osty: /tmp/selfhost_merged.osty:11563:5
+	depth := 0
+	_ = depth
+	// Osty: /tmp/selfhost_merged.osty:11564:5
+	for _, unit := range strings.Split(value, "") {
+		// Osty: /tmp/selfhost_merged.osty:11565:9
+		if found {
+			// Osty: /tmp/selfhost_merged.osty:11566:13
+			if unit == "(" {
+				// Osty: /tmp/selfhost_merged.osty:11567:23
+				depth = depth + 1
+				// Osty: /tmp/selfhost_merged.osty:11568:21
+				out = fmt.Sprintf("%s%s", ostyToString(out), ostyToString(unit))
+			} else if unit == ")" {
+				// Osty: /tmp/selfhost_merged.osty:11570:17
+				if depth == 0 {
+					// Osty: /tmp/selfhost_merged.osty:11571:21
+					return out
+				}
+				// Osty: /tmp/selfhost_merged.osty:11573:23
+				depth = depth - 1
+				// Osty: /tmp/selfhost_merged.osty:11574:21
+				out = fmt.Sprintf("%s%s", ostyToString(out), ostyToString(unit))
+			} else {
+				// Osty: /tmp/selfhost_merged.osty:11576:21
+				out = fmt.Sprintf("%s%s", ostyToString(out), ostyToString(unit))
+			}
+		} else if unit == "(" {
+			// Osty: /tmp/selfhost_merged.osty:11579:19
+			found = true
+		}
+	}
+	return ""
+}
+
+// Osty: /tmp/selfhost_merged.osty:11585:1
+func frontCheckSplitCaseFields(text string) []string {
+	// Osty: /tmp/selfhost_merged.osty:11586:5
+	var out []string = make([]string, 0, 1)
+	_ = out
+	// Osty: /tmp/selfhost_merged.osty:11587:5
+	if strings.TrimSpace(text) == "" {
+		// Osty: /tmp/selfhost_merged.osty:11588:9
+		return out
+	}
+	// Osty: /tmp/selfhost_merged.osty:11590:5
+	cur := ""
+	_ = cur
+	// Osty: /tmp/selfhost_merged.osty:11591:5
+	paren := 0
+	_ = paren
+	// Osty: /tmp/selfhost_merged.osty:11592:5
+	for _, unit := range strings.Split(text, "") {
+		// Osty: /tmp/selfhost_merged.osty:11593:9
+		if unit == "(" {
+			// Osty: /tmp/selfhost_merged.osty:11594:19
+			paren = paren + 1
+			// Osty: /tmp/selfhost_merged.osty:11595:17
+			cur = fmt.Sprintf("%s%s", ostyToString(cur), ostyToString(unit))
+		} else if unit == ")" {
+			// Osty: /tmp/selfhost_merged.osty:11597:19
+			paren = paren - 1
+			// Osty: /tmp/selfhost_merged.osty:11598:17
+			cur = fmt.Sprintf("%s%s", ostyToString(cur), ostyToString(unit))
+		} else if unit == "|" && paren == 0 {
+			// Osty: /tmp/selfhost_merged.osty:11600:13
+			func() struct{} { out = append(out, strings.TrimSpace(cur)); return struct{}{} }()
+			// Osty: /tmp/selfhost_merged.osty:11601:17
+			cur = ""
+		} else {
+			// Osty: /tmp/selfhost_merged.osty:11603:17
+			cur = fmt.Sprintf("%s%s", ostyToString(cur), ostyToString(unit))
+		}
+	}
+	// Osty: /tmp/selfhost_merged.osty:11606:5
+	if strings.TrimSpace(cur) != "" {
+		// Osty: /tmp/selfhost_merged.osty:11607:9
+		func() struct{} { out = append(out, strings.TrimSpace(cur)); return struct{}{} }()
+	}
+	return out
+}
+
+// Osty: /tmp/selfhost_merged.osty:11612:1
+func frontCheckPatternCoversVariantCompleteSingle(file *AstFile, patIdx int, variant *FrontVariantSig) bool {
+	// Osty: /tmp/selfhost_merged.osty:11613:5
+	if patIdx < 0 {
+		// Osty: /tmp/selfhost_merged.osty:11614:9
+		return false
+	}
+	// Osty: /tmp/selfhost_merged.osty:11616:5
+	pat := astArenaNodeAt(file.arena, patIdx)
+	_ = pat
+	// Osty: /tmp/selfhost_merged.osty:11617:5
+	if !ostyEqual(pat.kind, AstNodeKind(&AstNodeKind_AstNPattern{})) {
+		// Osty: /tmp/selfhost_merged.osty:11618:9
+		return false
+	}
+	// Osty: /tmp/selfhost_merged.osty:11620:5
+	if frontCheckPatternCoversAny(file, patIdx) {
+		// Osty: /tmp/selfhost_merged.osty:11621:9
+		return true
+	}
+	// Osty: /tmp/selfhost_merged.osty:11623:5
+	if frontCheckPatternIsVariantNamed(pat, variant.name) {
+		// Osty: /tmp/selfhost_merged.osty:11624:9
+		if frontCheckIntCount(pat.children) != frontCheckStringCount(variant.fieldTypes) {
+			// Osty: /tmp/selfhost_merged.osty:11625:13
+			return false
+		}
+		// Osty: /tmp/selfhost_merged.osty:11627:9
+		for _, child := range pat.children {
+			// Osty: /tmp/selfhost_merged.osty:11628:13
+			if !(frontCheckPatternCoversAny(file, child)) {
+				// Osty: /tmp/selfhost_merged.osty:11629:17
+				return false
+			}
+		}
+		// Osty: /tmp/selfhost_merged.osty:11632:9
+		return true
+	}
+	// Osty: /tmp/selfhost_merged.osty:11634:5
+	if frontCheckPatternIsBindingAt(pat) {
+		// Osty: /tmp/selfhost_merged.osty:11635:9
+		return frontCheckPatternCoversVariantCompleteSingle(file, pat.left, variant)
+	}
+	// Osty: /tmp/selfhost_merged.osty:11637:5
+	if pat.text == "or" {
+		// Osty: /tmp/selfhost_merged.osty:11638:9
+		return frontCheckPatternCoversVariantCompleteSingle(file, pat.left, variant) || frontCheckPatternCoversVariantCompleteSingle(file, pat.right, variant)
+	}
+	return false
+}
+
+// Osty: /tmp/selfhost_merged.osty:11643:1
+func frontCheckPatternCoversVariantBoolMask(file *AstFile, patIdx int, variant *FrontVariantSig, mask int) bool {
+	// Osty: /tmp/selfhost_merged.osty:11644:5
+	if patIdx < 0 {
+		// Osty: /tmp/selfhost_merged.osty:11645:9
+		return false
+	}
+	// Osty: /tmp/selfhost_merged.osty:11647:5
+	pat := astArenaNodeAt(file.arena, patIdx)
+	_ = pat
+	// Osty: /tmp/selfhost_merged.osty:11648:5
+	if !ostyEqual(pat.kind, AstNodeKind(&AstNodeKind_AstNPattern{})) {
+		// Osty: /tmp/selfhost_merged.osty:11649:9
+		return false
+	}
+	// Osty: /tmp/selfhost_merged.osty:11651:5
+	if frontCheckPatternCoversAny(file, patIdx) {
+		// Osty: /tmp/selfhost_merged.osty:11652:9
+		return true
+	}
+	// Osty: /tmp/selfhost_merged.osty:11654:5
+	if frontCheckPatternIsVariantNamed(pat, variant.name) {
+		// Osty: /tmp/selfhost_merged.osty:11655:9
+		arity := frontCheckStringCount(variant.fieldTypes)
+		_ = arity
+		// Osty: /tmp/selfhost_merged.osty:11656:9
+		if frontCheckIntCount(pat.children) != arity {
+			// Osty: /tmp/selfhost_merged.osty:11657:13
+			return false
+		}
+		// Osty: /tmp/selfhost_merged.osty:11659:9
+		i := 0
+		_ = i
+		// Osty: /tmp/selfhost_merged.osty:11660:9
+		for _, child := range pat.children {
+			// Osty: /tmp/selfhost_merged.osty:11661:13
+			if !(frontCheckPatternCoversBool(file, child, frontCheckBoolMaskAt(mask, i))) {
+				// Osty: /tmp/selfhost_merged.osty:11662:17
+				return false
+			}
+			// Osty: /tmp/selfhost_merged.osty:11664:15
+			i = i + 1
+		}
+		// Osty: /tmp/selfhost_merged.osty:11666:9
+		return true
+	}
+	// Osty: /tmp/selfhost_merged.osty:11668:5
+	if frontCheckPatternIsBindingAt(pat) {
+		// Osty: /tmp/selfhost_merged.osty:11669:9
+		return frontCheckPatternCoversVariantBoolMask(file, pat.left, variant, mask)
+	}
+	// Osty: /tmp/selfhost_merged.osty:11671:5
+	if pat.text == "or" {
+		// Osty: /tmp/selfhost_merged.osty:11672:9
+		return frontCheckPatternCoversVariantBoolMask(file, pat.left, variant, mask) || frontCheckPatternCoversVariantBoolMask(file, pat.right, variant, mask)
+	}
+	return false
+}
+
+// Osty: /tmp/selfhost_merged.osty:11677:1
+func frontCheckPatternIrrefutable(file *AstFile, patIdx int) bool {
+	// Osty: /tmp/selfhost_merged.osty:11678:5
+	if patIdx < 0 {
+		// Osty: /tmp/selfhost_merged.osty:11679:9
+		return true
+	}
+	// Osty: /tmp/selfhost_merged.osty:11681:5
+	pat := astArenaNodeAt(file.arena, patIdx)
+	_ = pat
+	// Osty: /tmp/selfhost_merged.osty:11682:5
+	if !ostyEqual(pat.kind, AstNodeKind(&AstNodeKind_AstNPattern{})) {
+		// Osty: /tmp/selfhost_merged.osty:11683:9
+		return true
+	}
+	// Osty: /tmp/selfhost_merged.osty:11685:5
+	if pat.text == "wildcard" {
+		// Osty: /tmp/selfhost_merged.osty:11686:9
+		return true
+	}
+	// Osty: /tmp/selfhost_merged.osty:11688:5
+	if frontCheckPatternIsBindingIdent(pat) {
+		// Osty: /tmp/selfhost_merged.osty:11689:9
+		return true
+	}
+	// Osty: /tmp/selfhost_merged.osty:11691:5
+	if pat.text == "tuple" {
+		// Osty: /tmp/selfhost_merged.osty:11692:9
+		for _, child := range pat.children {
+			// Osty: /tmp/selfhost_merged.osty:11693:13
+			if !(frontCheckPatternIrrefutable(file, child)) {
+				// Osty: /tmp/selfhost_merged.osty:11694:17
+				return false
+			}
+		}
+		// Osty: /tmp/selfhost_merged.osty:11697:9
+		return true
+	}
+	// Osty: /tmp/selfhost_merged.osty:11699:5
+	if frontCheckPatternKind(pat) == "struct" {
+		// Osty: /tmp/selfhost_merged.osty:11700:9
+		for _, fieldIdx := range pat.children {
+			// Osty: /tmp/selfhost_merged.osty:11701:13
+			fieldPat := astArenaNodeAt(file.arena, fieldIdx)
+			_ = fieldPat
+			// Osty: /tmp/selfhost_merged.osty:11702:13
+			if !(frontCheckPatternIrrefutable(file, fieldPat.left)) {
+				// Osty: /tmp/selfhost_merged.osty:11703:17
+				return false
+			}
+		}
+		// Osty: /tmp/selfhost_merged.osty:11706:9
+		return true
+	}
+	// Osty: /tmp/selfhost_merged.osty:11708:5
+	if frontCheckPatternIsBindingAt(pat) {
+		// Osty: /tmp/selfhost_merged.osty:11709:9
+		return frontCheckPatternIrrefutable(file, pat.left)
+	}
+	return false
+}
+
+// Osty: /tmp/selfhost_merged.osty:11714:1
+func frontCheckBindPattern(file *AstFile, env *FrontCheckEnv, patIdx int, typeName string, mutable bool) {
+	// Osty: /tmp/selfhost_merged.osty:11715:5
+	if patIdx < 0 {
+		// Osty: /tmp/selfhost_merged.osty:11716:9
+		return
+	}
+	// Osty: /tmp/selfhost_merged.osty:11718:5
+	pat := astArenaNodeAt(file.arena, patIdx)
+	_ = pat
+	// Osty: /tmp/selfhost_merged.osty:11719:5
+	if !ostyEqual(pat.kind, AstNodeKind(&AstNodeKind_AstNPattern{})) {
+		// Osty: /tmp/selfhost_merged.osty:11720:9
+		return
+	}
+	// Osty: /tmp/selfhost_merged.osty:11722:5
+	if frontCheckPatternIsBindingIdent(pat) {
+		// Osty: /tmp/selfhost_merged.osty:11723:9
+		frontCheckBindNode(env, frontCheckPatternName(pat), typeName, mutable, patIdx, pat.start, pat.end)
+		// Osty: /tmp/selfhost_merged.osty:11724:9
+		return
+	}
+	// Osty: /tmp/selfhost_merged.osty:11726:5
+	if pat.text == "tuple" {
+		// Osty: /tmp/selfhost_merged.osty:11727:9
+		elems := frontCheckTupleElems(typeName)
+		_ = elems
+		// Osty: /tmp/selfhost_merged.osty:11728:9
+		i := 0
+		_ = i
+		// Osty: /tmp/selfhost_merged.osty:11729:9
+		for _, child := range pat.children {
+			// Osty: /tmp/selfhost_merged.osty:11730:13
+			frontCheckBindPattern(file, env, child, frontCheckStringAt(elems, i), mutable)
+			// Osty: /tmp/selfhost_merged.osty:11731:15
+			i = i + 1
+		}
+		// Osty: /tmp/selfhost_merged.osty:11733:9
+		return
+	}
+	// Osty: /tmp/selfhost_merged.osty:11735:5
+	if frontCheckPatternIsVariant(pat) {
+		// Osty: /tmp/selfhost_merged.osty:11736:9
+		variant := frontCheckVariantLookup(env, frontCheckPatternName(pat))
+		_ = variant
+		// Osty: /tmp/selfhost_merged.osty:11737:9
+		i := 0
+		_ = i
+		// Osty: /tmp/selfhost_merged.osty:11738:9
+		for _, child := range pat.children {
+			// Osty: /tmp/selfhost_merged.osty:11739:13
+			frontCheckBindPattern(file, env, child, frontCheckStringAt(variant.fieldTypes, i), mutable)
+			// Osty: /tmp/selfhost_merged.osty:11740:15
+			i = i + 1
+		}
+		// Osty: /tmp/selfhost_merged.osty:11742:9
+		return
+	}
+	// Osty: /tmp/selfhost_merged.osty:11744:5
+	if frontCheckPatternIsBindingAt(pat) {
+		// Osty: /tmp/selfhost_merged.osty:11745:9
+		frontCheckBind(env, frontCheckPatternName(pat), typeName, mutable)
+		// Osty: /tmp/selfhost_merged.osty:11746:9
+		frontCheckBindPattern(file, env, pat.left, typeName, mutable)
+	}
+}
+
+// Osty: /tmp/selfhost_merged.osty:11750:1
+func frontCheckPatternCompatible(file *AstFile, env *FrontCheckEnv, patIdx int, scrutineeType string) {
+	// Osty: /tmp/selfhost_merged.osty:11751:5
+	if patIdx < 0 {
+		// Osty: /tmp/selfhost_merged.osty:11752:9
+		return
+	}
+	// Osty: /tmp/selfhost_merged.osty:11754:5
+	pat := astArenaNodeAt(file.arena, patIdx)
+	_ = pat
+	// Osty: /tmp/selfhost_merged.osty:11755:5
+	if !ostyEqual(pat.kind, AstNodeKind(&AstNodeKind_AstNPattern{})) {
+		// Osty: /tmp/selfhost_merged.osty:11756:9
+		return
+	}
+	// Osty: /tmp/selfhost_merged.osty:11758:5
+	scrutineeResolved := frontCheckResolveAliasesDeep(env, scrutineeType)
+	_ = scrutineeResolved
+	// Osty: /tmp/selfhost_merged.osty:11759:5
+	if pat.text == "wildcard" {
+		// Osty: /tmp/selfhost_merged.osty:11760:9
+		return
+	}
+	// Osty: /tmp/selfhost_merged.osty:11762:5
+	if frontCheckPatternIsBindingIdent(pat) {
+		// Osty: /tmp/selfhost_merged.osty:11763:9
+		frontCheckBind(env, frontCheckPatternName(pat), scrutineeResolved, false)
+		// Osty: /tmp/selfhost_merged.osty:11764:9
+		return
+	}
+	// Osty: /tmp/selfhost_merged.osty:11766:5
+	if frontCheckPatternKind(pat) == "literal" {
+		// Osty: /tmp/selfhost_merged.osty:11767:9
+		litType := frontCheckPatternLiteralType(pat)
+		_ = litType
+		// Osty: /tmp/selfhost_merged.osty:11768:9
+		if !(frontCheckIsAssignable(env, scrutineeResolved, litType)) && !(frontCheckIsAssignable(env, litType, scrutineeResolved)) {
+			// Osty: /tmp/selfhost_merged.osty:11769:24
+			env.errors = env.errors + 1
+		}
+		// Osty: /tmp/selfhost_merged.osty:11771:9
+		return
+	}
+	// Osty: /tmp/selfhost_merged.osty:11773:5
+	if pat.text == "negLiteral" {
+		// Osty: /tmp/selfhost_merged.osty:11774:9
+		inner := astArenaNodeAt(file.arena, pat.left)
+		_ = inner
+		// Osty: /tmp/selfhost_merged.osty:11775:9
+		litType := frontCheckPatternLiteralType(inner)
+		_ = litType
+		// Osty: /tmp/selfhost_merged.osty:11776:9
+		if !(frontCheckIsNumeric(litType)) {
+			// Osty: /tmp/selfhost_merged.osty:11777:24
+			env.errors = env.errors + 1
+			// Osty: /tmp/selfhost_merged.osty:11778:13
+			return
+		}
+		// Osty: /tmp/selfhost_merged.osty:11780:9
+		if !(frontCheckIsAssignable(env, scrutineeResolved, litType)) && !(frontCheckIsAssignable(env, litType, scrutineeResolved)) {
+			// Osty: /tmp/selfhost_merged.osty:11781:24
+			env.errors = env.errors + 1
+		}
+		// Osty: /tmp/selfhost_merged.osty:11783:9
+		return
+	}
+	// Osty: /tmp/selfhost_merged.osty:11785:5
+	if pat.text == "range" {
+		// Osty: /tmp/selfhost_merged.osty:11786:9
+		if !(frontCheckIsOrdered(scrutineeResolved)) {
+			// Osty: /tmp/selfhost_merged.osty:11787:24
+			env.errors = env.errors + 1
+			// Osty: /tmp/selfhost_merged.osty:11788:13
+			return
+		}
+		// Osty: /tmp/selfhost_merged.osty:11790:9
+		frontCheckPatternCompatible(file, env, pat.left, scrutineeResolved)
+		// Osty: /tmp/selfhost_merged.osty:11791:9
+		if pat.right >= 0 {
+			// Osty: /tmp/selfhost_merged.osty:11792:13
+			frontCheckPatternCompatible(file, env, pat.right, scrutineeResolved)
+		}
+		// Osty: /tmp/selfhost_merged.osty:11794:9
+		return
+	}
+	// Osty: /tmp/selfhost_merged.osty:11796:5
+	if pat.text == "tuple" {
+		// Osty: /tmp/selfhost_merged.osty:11797:9
+		elems := frontCheckTupleElems(scrutineeResolved)
+		_ = elems
+		// Osty: /tmp/selfhost_merged.osty:11798:9
+		if frontCheckStringCount(elems) != frontCheckIntCount(pat.children) {
+			// Osty: /tmp/selfhost_merged.osty:11799:24
+			env.errors = env.errors + 1
+		}
+		// Osty: /tmp/selfhost_merged.osty:11801:9
+		i := 0
+		_ = i
+		// Osty: /tmp/selfhost_merged.osty:11802:9
+		for _, child := range pat.children {
+			// Osty: /tmp/selfhost_merged.osty:11803:13
+			frontCheckPatternCompatible(file, env, child, frontCheckStringAt(elems, i))
+			// Osty: /tmp/selfhost_merged.osty:11804:15
+			i = i + 1
+		}
+		// Osty: /tmp/selfhost_merged.osty:11806:9
+		return
+	}
+	// Osty: /tmp/selfhost_merged.osty:11808:5
+	if frontCheckPatternIsVariant(pat) {
+		// Osty: /tmp/selfhost_merged.osty:11809:9
+		variant := frontCheckVariantLookupForOwner(env, frontCheckPatternName(pat), frontCheckTypeHead(scrutineeResolved))
+		_ = variant
+		// Osty: /tmp/selfhost_merged.osty:11810:9
+		if variant.name == "" || frontCheckTypeHead(scrutineeResolved) != variant.owner {
+			// Osty: /tmp/selfhost_merged.osty:11811:24
+			env.errors = env.errors + 1
+			// Osty: /tmp/selfhost_merged.osty:11812:13
+			return
+		}
+		// Osty: /tmp/selfhost_merged.osty:11814:9
+		substs := frontCheckVariantPatternSubsts(scrutineeResolved, variant)
+		_ = substs
+		// Osty: /tmp/selfhost_merged.osty:11815:9
+		i := 0
+		_ = i
+		// Osty: /tmp/selfhost_merged.osty:11816:9
+		for _, child := range pat.children {
+			// Osty: /tmp/selfhost_merged.osty:11817:13
+			frontCheckPatternCompatible(file, env, child, frontCheckSubstitute(frontCheckStringAt(variant.fieldTypes, i), substs))
+			// Osty: /tmp/selfhost_merged.osty:11818:15
+			i = i + 1
+		}
+		// Osty: /tmp/selfhost_merged.osty:11820:9
+		return
+	}
+	// Osty: /tmp/selfhost_merged.osty:11822:5
+	if frontCheckPatternKind(pat) == "struct" {
+		// Osty: /tmp/selfhost_merged.osty:11823:9
+		structName := frontCheckPatternName(pat)
+		_ = structName
+		// Osty: /tmp/selfhost_merged.osty:11824:9
+		if frontCheckTypeHead(scrutineeResolved) != structName {
+			// Osty: /tmp/selfhost_merged.osty:11825:24
+			env.errors = env.errors + 1
+			// Osty: /tmp/selfhost_merged.osty:11826:13
+			return
+		}
+		// Osty: /tmp/selfhost_merged.osty:11828:9
+		substs := frontCheckReceiverSubsts(env, structName, scrutineeResolved)
+		_ = substs
+		// Osty: /tmp/selfhost_merged.osty:11829:9
+		for _, fieldIdx := range pat.children {
+			// Osty: /tmp/selfhost_merged.osty:11830:13
+			fieldPat := astArenaNodeAt(file.arena, fieldIdx)
+			_ = fieldPat
+			// Osty: /tmp/selfhost_merged.osty:11831:13
+			field := frontCheckFieldLookup(env, structName, fieldPat.text)
+			_ = field
+			// Osty: /tmp/selfhost_merged.osty:11832:13
+			if field.name == "" {
+				// Osty: /tmp/selfhost_merged.osty:11833:28
+				env.errors = env.errors + 1
+			} else {
+				// Osty: /tmp/selfhost_merged.osty:11835:17
+				frontCheckPatternCompatible(file, env, fieldPat.left, frontCheckSubstitute(field.typeName, substs))
+			}
+		}
+		// Osty: /tmp/selfhost_merged.osty:11838:9
+		return
+	}
+	// Osty: /tmp/selfhost_merged.osty:11840:5
+	if frontCheckPatternIsBindingAt(pat) {
+		// Osty: /tmp/selfhost_merged.osty:11841:9
+		frontCheckBind(env, frontCheckPatternName(pat), scrutineeResolved, false)
+		// Osty: /tmp/selfhost_merged.osty:11842:9
+		frontCheckPatternCompatible(file, env, pat.left, scrutineeResolved)
+		// Osty: /tmp/selfhost_merged.osty:11843:9
+		return
+	}
+	// Osty: /tmp/selfhost_merged.osty:11845:5
+	if pat.text == "or" {
+		// Osty: /tmp/selfhost_merged.osty:11846:9
+		mark := frontCheckBindingCount(env.bindings)
+		_ = mark
+		// Osty: /tmp/selfhost_merged.osty:11847:9
+		frontCheckPatternCompatible(file, env, pat.left, scrutineeResolved)
+		// Osty: /tmp/selfhost_merged.osty:11848:9
+		leftBindings := frontCheckBindingsFrom(env, mark)
+		_ = leftBindings
+		// Osty: /tmp/selfhost_merged.osty:11849:9
+		frontCheckPopBindings(env, mark)
+		// Osty: /tmp/selfhost_merged.osty:11850:9
+		frontCheckPatternCompatible(file, env, pat.right, scrutineeResolved)
+		// Osty: /tmp/selfhost_merged.osty:11851:9
+		rightBindings := frontCheckBindingsFrom(env, mark)
+		_ = rightBindings
+		// Osty: /tmp/selfhost_merged.osty:11852:9
+		frontCheckPopBindings(env, mark)
+		// Osty: /tmp/selfhost_merged.osty:11853:9
+		if !(frontCheckBindingsAgree(env, leftBindings, rightBindings)) {
+			// Osty: /tmp/selfhost_merged.osty:11854:24
+			env.errors = env.errors + 1
+			// Osty: /tmp/selfhost_merged.osty:11855:13
+			return
+		}
+		// Osty: /tmp/selfhost_merged.osty:11857:9
+		for _, binding := range leftBindings {
+			// Osty: /tmp/selfhost_merged.osty:11858:13
+			frontCheckBind(env, binding.name, binding.typeName, binding.mutable)
+		}
+		// Osty: /tmp/selfhost_merged.osty:11860:9
+		return
+	}
+}
+
+// Osty: /tmp/selfhost_merged.osty:11864:1
+func frontCheckVariantPatternSubsts(scrutineeType string, variant *FrontVariantSig) []*FrontTypeSubst {
+	// Osty: /tmp/selfhost_merged.osty:11865:5
+	var substs []*FrontTypeSubst = make([]*FrontTypeSubst, 0, 1)
+	_ = substs
+	// Osty: /tmp/selfhost_merged.osty:11866:5
+	if frontCheckTypeHead(scrutineeType) != variant.owner {
+		// Osty: /tmp/selfhost_merged.osty:11867:9
+		return substs
+	}
+	// Osty: /tmp/selfhost_merged.osty:11869:5
+	i := 0
+	_ = i
+	// Osty: /tmp/selfhost_merged.osty:11870:5
+	for _, generic := range variant.generics {
+		// Osty: /tmp/selfhost_merged.osty:11871:9
+		func() struct{} {
+			substs = append(substs, &FrontTypeSubst{name: generic, typeName: frontCheckGenericArgAt(scrutineeType, i)})
+			return struct{}{}
+		}()
+		// Osty: /tmp/selfhost_merged.osty:11872:11
+		i = i + 1
+	}
+	return substs
+}
+
+// Osty: /tmp/selfhost_merged.osty:11877:1
+func frontCheckPatternLiteralType(pat *AstNode) string {
+	// Osty: /tmp/selfhost_merged.osty:11878:5
+	if ostyEqual(pat.op, FrontTokenKind(&FrontTokenKind_FrontInt{})) {
+		// Osty: /tmp/selfhost_merged.osty:11879:9
+		return "UntypedInt"
+	}
+	// Osty: /tmp/selfhost_merged.osty:11881:5
+	if ostyEqual(pat.op, FrontTokenKind(&FrontTokenKind_FrontFloat{})) {
+		// Osty: /tmp/selfhost_merged.osty:11882:9
+		return "UntypedFloat"
+	}
+	// Osty: /tmp/selfhost_merged.osty:11884:5
+	if ostyEqual(pat.op, FrontTokenKind(&FrontTokenKind_FrontString{})) || ostyEqual(pat.op, FrontTokenKind(&FrontTokenKind_FrontRawString{})) {
+		// Osty: /tmp/selfhost_merged.osty:11885:9
+		return "String"
+	}
+	// Osty: /tmp/selfhost_merged.osty:11887:5
+	if ostyEqual(pat.op, FrontTokenKind(&FrontTokenKind_FrontChar{})) {
+		// Osty: /tmp/selfhost_merged.osty:11888:9
+		return "Char"
+	}
+	// Osty: /tmp/selfhost_merged.osty:11890:5
+	if ostyEqual(pat.op, FrontTokenKind(&FrontTokenKind_FrontByte{})) {
+		// Osty: /tmp/selfhost_merged.osty:11891:9
+		return "Byte"
+	}
+	// Osty: /tmp/selfhost_merged.osty:11893:5
+	if frontCheckPatternKind(pat) == "literal" {
+		// Osty: /tmp/selfhost_merged.osty:11894:9
+		return "Bool"
+	}
+	return "Invalid"
+}
+
+// Osty: /tmp/selfhost_merged.osty:11899:1
+func frontCheckTupleElems(typeName string) []string {
+	// Osty: /tmp/selfhost_merged.osty:11900:5
+	view := frontCheckParseType(typeName)
+	_ = view
+	// Osty: /tmp/selfhost_merged.osty:11901:5
+	if view.kind == "tuple" {
+		// Osty: /tmp/selfhost_merged.osty:11902:9
+		return view.args
+	}
+	return make([]string, 0, 1)
+}
+
+// Osty: /tmp/selfhost_merged.osty:11907:1
+func frontCheckClosure(file *AstFile, env *FrontCheckEnv, node *AstNode, paramHints []string, retHint string) string {
+	// Osty: /tmp/selfhost_merged.osty:11908:5
+	mark := frontCheckBindingCount(env.bindings)
+	_ = mark
+	// Osty: /tmp/selfhost_merged.osty:11909:5
+	var params []string = make([]string, 0, 1)
+	_ = params
+	// Osty: /tmp/selfhost_merged.osty:11910:5
+	i := 0
+	_ = i
+	// Osty: /tmp/selfhost_merged.osty:11911:5
+	for _, paramIdx := range node.children {
+		// Osty: /tmp/selfhost_merged.osty:11912:9
+		param := astArenaNodeAt(file.arena, paramIdx)
+		_ = param
+		// Osty: /tmp/selfhost_merged.osty:11913:9
+		paramType := frontCheckTypeName(file, param.right)
+		_ = paramType
+		// Osty: /tmp/selfhost_merged.osty:11914:9
+		if paramType == "()" || paramType == "Invalid" {
+			// Osty: /tmp/selfhost_merged.osty:11915:23
+			paramType = frontCheckStringAt(paramHints, i)
+		}
+		// Osty: /tmp/selfhost_merged.osty:11917:9
+		if param.left >= 0 {
+			// Osty: /tmp/selfhost_merged.osty:11918:13
+			if !(frontCheckPatternIrrefutable(file, param.left)) {
+				// Osty: /tmp/selfhost_merged.osty:11919:28
+				env.errors = env.errors + 1
+			}
+			// Osty: /tmp/selfhost_merged.osty:11921:13
+			frontCheckBindPattern(file, env, param.left, paramType, false)
+		} else {
+			// Osty: /tmp/selfhost_merged.osty:11923:13
+			frontCheckBind(env, param.text, paramType, false)
+		}
+		// Osty: /tmp/selfhost_merged.osty:11925:9
+		func() struct{} { params = append(params, paramType); return struct{}{} }()
+		// Osty: /tmp/selfhost_merged.osty:11926:11
+		i = i + 1
+	}
+	// Osty: /tmp/selfhost_merged.osty:11928:5
+	bodyType := frontCheckExprHint(file, env, node.left, retHint)
+	_ = bodyType
+	// Osty: /tmp/selfhost_merged.osty:11929:5
+	ret := bodyType
+	_ = ret
+	// Osty: /tmp/selfhost_merged.osty:11930:5
+	if node.right >= 0 {
+		// Osty: /tmp/selfhost_merged.osty:11931:13
+		ret = frontCheckTypeName(file, node.right)
+		// Osty: /tmp/selfhost_merged.osty:11932:9
+		frontCheckExpectAssignable(env, ret, bodyType)
+	} else if retHint != "" && retHint != "Invalid" {
+		// Osty: /tmp/selfhost_merged.osty:11934:9
+		frontCheckExpectAssignable(env, retHint, bodyType)
+		// Osty: /tmp/selfhost_merged.osty:11935:13
+		ret = retHint
+	}
+	// Osty: /tmp/selfhost_merged.osty:11937:5
+	frontCheckPopBindings(env, mark)
+	return frontCheckFnType(params, ret)
+}
+
+// Osty: /tmp/selfhost_merged.osty:11941:1
+func frontCheckFnParams(typeName string) []string {
+	// Osty: /tmp/selfhost_merged.osty:11942:5
+	view := frontCheckParseType(typeName)
+	_ = view
+	// Osty: /tmp/selfhost_merged.osty:11943:5
+	if view.kind == "fn" {
+		// Osty: /tmp/selfhost_merged.osty:11944:9
+		return view.params
+	}
+	return make([]string, 0, 1)
+}
+
+// Osty: /tmp/selfhost_merged.osty:11949:1
+func frontCheckFnReturn(typeName string) string {
+	// Osty: /tmp/selfhost_merged.osty:11950:5
+	view := frontCheckParseType(typeName)
+	_ = view
+	// Osty: /tmp/selfhost_merged.osty:11951:5
+	if view.kind == "fn" {
+		// Osty: /tmp/selfhost_merged.osty:11952:9
+		return view.ret
+	}
+	return ""
+}
+
+// Osty: /tmp/selfhost_merged.osty:11957:1
+func frontCheckFnParamsText(typeName string) string {
+	return frontCheckFnParamsTextRaw(typeName)
+}
+
+// Osty: /tmp/selfhost_merged.osty:11961:1
+func frontCheckFnParamsTextRaw(typeName string) string {
+	// Osty: /tmp/selfhost_merged.osty:11962:5
+	params := ""
+	_ = params
+	// Osty: /tmp/selfhost_merged.osty:11963:5
+	depth := 0
+	_ = depth
+	// Osty: /tmp/selfhost_merged.osty:11964:5
+	i := 0
+	_ = i
+	// Osty: /tmp/selfhost_merged.osty:11965:5
+	for _, unit := range strings.Split(typeName, "") {
+		// Osty: /tmp/selfhost_merged.osty:11966:9
+		if i >= 3 {
+			// Osty: /tmp/selfhost_merged.osty:11967:13
+			if unit == "(" {
+				// Osty: /tmp/selfhost_merged.osty:11968:23
+				depth = depth + 1
+				// Osty: /tmp/selfhost_merged.osty:11969:24
+				params = fmt.Sprintf("%s%s", ostyToString(params), ostyToString(unit))
+			} else if unit == ")" {
+				// Osty: /tmp/selfhost_merged.osty:11971:17
+				if depth == 0 {
+					// Osty: /tmp/selfhost_merged.osty:11972:21
+					return params
+				}
+				// Osty: /tmp/selfhost_merged.osty:11974:23
+				depth = depth - 1
+				// Osty: /tmp/selfhost_merged.osty:11975:24
+				params = fmt.Sprintf("%s%s", ostyToString(params), ostyToString(unit))
+			} else {
+				// Osty: /tmp/selfhost_merged.osty:11977:24
+				params = fmt.Sprintf("%s%s", ostyToString(params), ostyToString(unit))
+			}
+		}
+		// Osty: /tmp/selfhost_merged.osty:11980:11
+		i = i + 1
+	}
+	return params
+}
+
+// Osty: /tmp/selfhost_merged.osty:11985:1
+func frontCheckFnReturnText(typeName string) string {
+	return frontCheckFnReturnTextRaw(typeName)
+}
+
+// Osty: /tmp/selfhost_merged.osty:11989:1
+func frontCheckFnReturnRaw(typeName string) string {
+	// Osty: /tmp/selfhost_merged.osty:11990:5
+	ret := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(frontCheckFnReturnTextRaw(typeName)), "->"))
+	_ = ret
+	// Osty: /tmp/selfhost_merged.osty:11991:5
+	if ret == "" {
+		// Osty: /tmp/selfhost_merged.osty:11992:9
+		return "()"
+	}
+	return ret
+}
+
+// Osty: /tmp/selfhost_merged.osty:11997:1
+func frontCheckFnReturnTextRaw(typeName string) string {
+	// Osty: /tmp/selfhost_merged.osty:11998:5
+	rest := ""
+	_ = rest
+	// Osty: /tmp/selfhost_merged.osty:11999:5
+	depth := 0
+	_ = depth
+	// Osty: /tmp/selfhost_merged.osty:12000:5
+	i := 0
+	_ = i
+	// Osty: /tmp/selfhost_merged.osty:12001:5
+	found := false
+	_ = found
+	// Osty: /tmp/selfhost_merged.osty:12002:5
+	for _, unit := range strings.Split(typeName, "") {
+		// Osty: /tmp/selfhost_merged.osty:12003:9
+		if i >= 3 {
+			// Osty: /tmp/selfhost_merged.osty:12004:13
+			if found {
+				// Osty: /tmp/selfhost_merged.osty:12005:22
+				rest = fmt.Sprintf("%s%s", ostyToString(rest), ostyToString(unit))
+			} else if unit == "(" {
+				// Osty: /tmp/selfhost_merged.osty:12007:23
+				depth = depth + 1
+			} else if unit == ")" {
+				// Osty: /tmp/selfhost_merged.osty:12009:17
+				if depth == 0 {
+					// Osty: /tmp/selfhost_merged.osty:12010:27
+					found = true
+				} else {
+					// Osty: /tmp/selfhost_merged.osty:12012:27
+					depth = depth - 1
+				}
+			}
+		}
+		// Osty: /tmp/selfhost_merged.osty:12016:11
+		i = i + 1
+	}
+	return rest
+}
+
+// Osty: /tmp/selfhost_merged.osty:12021:1
+func frontCheckQuestion(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
+	// Osty: /tmp/selfhost_merged.osty:12022:5
+	inner := frontCheckResolveAliasesDeep(env, frontCheckExpr(file, env, node.left))
+	_ = inner
+	// Osty: /tmp/selfhost_merged.osty:12023:5
+	head := frontCheckTypeHead(inner)
+	_ = head
+	// Osty: /tmp/selfhost_merged.osty:12024:5
+	returnType := frontCheckResolveAliasesDeep(env, env.returnType)
+	_ = returnType
+	// Osty: /tmp/selfhost_merged.osty:12025:5
+	returnHead := frontCheckTypeHead(returnType)
+	_ = returnHead
+	// Osty: /tmp/selfhost_merged.osty:12026:5
+	if head == "Option" {
+		// Osty: /tmp/selfhost_merged.osty:12027:9
+		if returnHead != "Option" && !(frontCheckIsInvalid(env.returnType)) {
+			// Osty: /tmp/selfhost_merged.osty:12028:24
+			env.errors = env.errors + 1
+		}
+		// Osty: /tmp/selfhost_merged.osty:12030:9
+		return frontCheckGenericArgAt(inner, 0)
+	}
+	// Osty: /tmp/selfhost_merged.osty:12032:5
+	if head == "Result" {
+		// Osty: /tmp/selfhost_merged.osty:12033:9
+		if returnHead != "Result" && !(frontCheckIsInvalid(env.returnType)) {
+			// Osty: /tmp/selfhost_merged.osty:12034:24
+			env.errors = env.errors + 1
+		} else if returnHead == "Result" {
+			// Osty: /tmp/selfhost_merged.osty:12036:13
+			frontCheckExpectAssignable(env, frontCheckGenericArgAt(returnType, 1), frontCheckGenericArgAt(inner, 1))
+		}
+		// Osty: /tmp/selfhost_merged.osty:12038:9
+		return frontCheckGenericArgAt(inner, 0)
+	}
+	// Osty: /tmp/selfhost_merged.osty:12040:5
+	if !(frontCheckIsInvalid(inner)) {
+		// Osty: /tmp/selfhost_merged.osty:12041:20
+		env.errors = env.errors + 1
+	}
+	return "Invalid"
+}
+
+// Osty: /tmp/selfhost_merged.osty:12046:1
+func frontCheckStdMethodCall(file *AstFile, env *FrontCheckEnv, callee *AstNode, recvType string, args []int) string {
+	// Osty: /tmp/selfhost_merged.osty:12047:5
+	receiver := frontCheckResolveAliasesDeep(env, recvType)
+	_ = receiver
+	// Osty: /tmp/selfhost_merged.osty:12048:5
+	head := frontCheckTypeHead(receiver)
+	_ = head
+	// Osty: /tmp/selfhost_merged.osty:12049:5
+	name := callee.text
+	_ = name
+	// Osty: /tmp/selfhost_merged.osty:12050:5
+	if head == "List" {
+		// Osty: /tmp/selfhost_merged.osty:12051:9
+		return frontCheckListMethod(file, env, callee, receiver, args)
+	}
+	// Osty: /tmp/selfhost_merged.osty:12053:5
+	if head == "Map" {
+		// Osty: /tmp/selfhost_merged.osty:12054:9
+		return frontCheckMapMethod(file, env, receiver, name, args)
+	}
+	// Osty: /tmp/selfhost_merged.osty:12056:5
+	if head == "Option" {
+		// Osty: /tmp/selfhost_merged.osty:12057:9
+		return frontCheckOptionMethod(file, env, receiver, name, args)
+	}
+	// Osty: /tmp/selfhost_merged.osty:12059:5
+	if head == "Result" {
+		// Osty: /tmp/selfhost_merged.osty:12060:9
+		return frontCheckResultMethod(file, env, receiver, name, args)
+	}
+	// Osty: /tmp/selfhost_merged.osty:12062:5
+	if receiver == "String" {
+		// Osty: /tmp/selfhost_merged.osty:12063:9
+		return frontCheckStringMethod(file, env, name, args)
+	}
+	// Osty: /tmp/selfhost_merged.osty:12065:5
+	if receiver == "Bytes" {
+		// Osty: /tmp/selfhost_merged.osty:12066:9
+		return frontCheckBytesMethod(file, env, name, args)
+	}
+	return "Invalid"
+}
+
+// Osty: /tmp/selfhost_merged.osty:12071:1
+func frontCheckListMethod(file *AstFile, env *FrontCheckEnv, callee *AstNode, recvType string, args []int) string {
+	// Osty: /tmp/selfhost_merged.osty:12072:5
+	elem := frontCheckGenericArgAt(recvType, 0)
+	_ = elem
+	// Osty: /tmp/selfhost_merged.osty:12073:5
+	name := callee.text
+	_ = name
+	// Osty: /tmp/selfhost_merged.osty:12074:5
+	if name == "push" {
+		// Osty: /tmp/selfhost_merged.osty:12075:9
+		frontCheckRequireMutableReceiver(file, env, callee)
+		// Osty: /tmp/selfhost_merged.osty:12076:9
+		frontCheckExpectArgCount(env, args, 1)
+		// Osty: /tmp/selfhost_merged.osty:12077:9
+		frontCheckExpectAssignable(env, elem, frontCheckExprHint(file, env, frontCheckIntAt(args, 0), elem))
+		// Osty: /tmp/selfhost_merged.osty:12078:9
+		return "()"
+	}
+	// Osty: /tmp/selfhost_merged.osty:12080:5
+	if name == "pop" {
+		// Osty: /tmp/selfhost_merged.osty:12081:9
+		frontCheckRequireMutableReceiver(file, env, callee)
+		// Osty: /tmp/selfhost_merged.osty:12082:9
+		frontCheckExpectArgCount(env, args, 0)
+		// Osty: /tmp/selfhost_merged.osty:12083:9
+		return frontCheckOneArgType("Option", elem)
+	}
+	// Osty: /tmp/selfhost_merged.osty:12085:5
+	if name == "len" {
+		// Osty: /tmp/selfhost_merged.osty:12086:9
+		frontCheckExpectArgCount(env, args, 0)
+		// Osty: /tmp/selfhost_merged.osty:12087:9
+		return "Int"
+	}
+	// Osty: /tmp/selfhost_merged.osty:12089:5
+	if name == "isEmpty" {
+		// Osty: /tmp/selfhost_merged.osty:12090:9
+		frontCheckExpectArgCount(env, args, 0)
+		// Osty: /tmp/selfhost_merged.osty:12091:9
+		return "Bool"
+	}
+	// Osty: /tmp/selfhost_merged.osty:12093:5
+	if name == "contains" {
+		// Osty: /tmp/selfhost_merged.osty:12094:9
+		frontCheckExpectArgCount(env, args, 1)
+		// Osty: /tmp/selfhost_merged.osty:12095:9
+		frontCheckExpectAssignable(env, elem, frontCheckExprHint(file, env, frontCheckIntAt(args, 0), elem))
+		// Osty: /tmp/selfhost_merged.osty:12096:9
+		return "Bool"
+	}
+	// Osty: /tmp/selfhost_merged.osty:12098:5
+	if name == "map" {
+		// Osty: /tmp/selfhost_merged.osty:12099:9
+		frontCheckExpectArgCount(env, args, 1)
+		// Osty: /tmp/selfhost_merged.osty:12100:9
+		fnType := frontCheckClosureArg(file, env, frontCheckIntAt(args, 0), []string{elem}, "Invalid")
+		_ = fnType
+		// Osty: /tmp/selfhost_merged.osty:12101:9
+		return frontCheckOneArgType("List", frontCheckFnReturn(fnType))
+	}
+	// Osty: /tmp/selfhost_merged.osty:12103:5
+	if name == "filter" {
+		// Osty: /tmp/selfhost_merged.osty:12104:9
+		frontCheckExpectArgCount(env, args, 1)
+		// Osty: /tmp/selfhost_merged.osty:12105:9
+		_ = frontCheckClosureArg(file, env, frontCheckIntAt(args, 0), []string{elem}, "Bool")
+		// Osty: /tmp/selfhost_merged.osty:12106:9
+		return recvType
+	}
+	// Osty: /tmp/selfhost_merged.osty:12108:5
+	if name == "fold" {
+		// Osty: /tmp/selfhost_merged.osty:12109:9
+		frontCheckExpectArgCount(env, args, 2)
+		// Osty: /tmp/selfhost_merged.osty:12110:9
+		acc := frontCheckExpr(file, env, frontCheckIntAt(args, 0))
+		_ = acc
+		// Osty: /tmp/selfhost_merged.osty:12111:9
+		if acc == "UntypedInt" {
+			// Osty: /tmp/selfhost_merged.osty:12112:17
+			acc = "Int"
+		} else if acc == "UntypedFloat" {
+			// Osty: /tmp/selfhost_merged.osty:12114:17
+			acc = "Float"
+		}
+		// Osty: /tmp/selfhost_merged.osty:12116:9
+		_ = frontCheckClosureArg(file, env, frontCheckIntAt(args, 1), []string{acc, elem}, acc)
+		// Osty: /tmp/selfhost_merged.osty:12117:9
+		return acc
+	}
+	return "Invalid"
+}
+
+// Osty: /tmp/selfhost_merged.osty:12122:1
+func frontCheckMapMethod(file *AstFile, env *FrontCheckEnv, recvType string, name string, args []int) string {
+	// Osty: /tmp/selfhost_merged.osty:12123:5
+	key := frontCheckGenericArgAt(recvType, 0)
+	_ = key
+	// Osty: /tmp/selfhost_merged.osty:12124:5
+	val := frontCheckGenericArgAt(recvType, 1)
+	_ = val
+	// Osty: /tmp/selfhost_merged.osty:12125:5
+	if name == "len" {
+		// Osty: /tmp/selfhost_merged.osty:12126:9
+		frontCheckExpectArgCount(env, args, 0)
+		// Osty: /tmp/selfhost_merged.osty:12127:9
+		return "Int"
+	}
+	// Osty: /tmp/selfhost_merged.osty:12129:5
+	if name == "isEmpty" {
+		// Osty: /tmp/selfhost_merged.osty:12130:9
+		frontCheckExpectArgCount(env, args, 0)
+		// Osty: /tmp/selfhost_merged.osty:12131:9
+		return "Bool"
+	}
+	// Osty: /tmp/selfhost_merged.osty:12133:5
+	if name == "containsKey" {
+		// Osty: /tmp/selfhost_merged.osty:12134:9
+		frontCheckExpectArgCount(env, args, 1)
+		// Osty: /tmp/selfhost_merged.osty:12135:9
+		frontCheckExpectAssignable(env, key, frontCheckExprHint(file, env, frontCheckIntAt(args, 0), key))
+		// Osty: /tmp/selfhost_merged.osty:12136:9
+		return "Bool"
+	}
+	// Osty: /tmp/selfhost_merged.osty:12138:5
+	if name == "insert" {
+		// Osty: /tmp/selfhost_merged.osty:12139:9
+		frontCheckExpectArgCount(env, args, 2)
+		// Osty: /tmp/selfhost_merged.osty:12140:9
+		frontCheckExpectAssignable(env, key, frontCheckExprHint(file, env, frontCheckIntAt(args, 0), key))
+		// Osty: /tmp/selfhost_merged.osty:12141:9
+		frontCheckExpectAssignable(env, val, frontCheckExprHint(file, env, frontCheckIntAt(args, 1), val))
+		// Osty: /tmp/selfhost_merged.osty:12142:9
+		return "()"
+	}
+	// Osty: /tmp/selfhost_merged.osty:12144:5
+	if name == "remove" {
+		// Osty: /tmp/selfhost_merged.osty:12145:9
+		frontCheckExpectArgCount(env, args, 1)
+		// Osty: /tmp/selfhost_merged.osty:12146:9
+		frontCheckExpectAssignable(env, key, frontCheckExprHint(file, env, frontCheckIntAt(args, 0), key))
+		// Osty: /tmp/selfhost_merged.osty:12147:9
+		return frontCheckOneArgType("Option", val)
+	}
+	// Osty: /tmp/selfhost_merged.osty:12149:5
+	if name == "keys" {
+		// Osty: /tmp/selfhost_merged.osty:12150:9
+		frontCheckExpectArgCount(env, args, 0)
+		// Osty: /tmp/selfhost_merged.osty:12151:9
+		return frontCheckOneArgType("List", key)
+	}
+	// Osty: /tmp/selfhost_merged.osty:12153:5
+	if name == "values" {
+		// Osty: /tmp/selfhost_merged.osty:12154:9
+		frontCheckExpectArgCount(env, args, 0)
+		// Osty: /tmp/selfhost_merged.osty:12155:9
+		return frontCheckOneArgType("List", val)
+	}
+	return "Invalid"
+}
+
+// Osty: /tmp/selfhost_merged.osty:12160:1
+func frontCheckOptionMethod(file *AstFile, env *FrontCheckEnv, recvType string, name string, args []int) string {
+	// Osty: /tmp/selfhost_merged.osty:12161:5
+	elem := frontCheckGenericArgAt(recvType, 0)
+	_ = elem
+	// Osty: /tmp/selfhost_merged.osty:12162:5
+	if name == "unwrap" {
+		// Osty: /tmp/selfhost_merged.osty:12163:9
+		frontCheckExpectArgCount(env, args, 0)
+		// Osty: /tmp/selfhost_merged.osty:12164:9
+		return elem
+	}
+	// Osty: /tmp/selfhost_merged.osty:12166:5
+	if name == "isSome" || name == "isNone" {
+		// Osty: /tmp/selfhost_merged.osty:12167:9
+		frontCheckExpectArgCount(env, args, 0)
+		// Osty: /tmp/selfhost_merged.osty:12168:9
+		return "Bool"
+	}
+	// Osty: /tmp/selfhost_merged.osty:12170:5
+	if name == "unwrapOr" {
+		// Osty: /tmp/selfhost_merged.osty:12171:9
+		frontCheckExpectArgCount(env, args, 1)
+		// Osty: /tmp/selfhost_merged.osty:12172:9
+		frontCheckExpectAssignable(env, elem, frontCheckExprHint(file, env, frontCheckIntAt(args, 0), elem))
+		// Osty: /tmp/selfhost_merged.osty:12173:9
+		return elem
+	}
+	return "Invalid"
+}
+
+// Osty: /tmp/selfhost_merged.osty:12178:1
+func frontCheckResultMethod(file *AstFile, env *FrontCheckEnv, recvType string, name string, args []int) string {
+	// Osty: /tmp/selfhost_merged.osty:12179:5
+	ok := frontCheckGenericArgAt(recvType, 0)
+	_ = ok
+	// Osty: /tmp/selfhost_merged.osty:12180:5
+	err := frontCheckGenericArgAt(recvType, 1)
+	_ = err
+	// Osty: /tmp/selfhost_merged.osty:12181:5
+	if name == "unwrap" {
+		// Osty: /tmp/selfhost_merged.osty:12182:9
+		frontCheckExpectArgCount(env, args, 0)
+		// Osty: /tmp/selfhost_merged.osty:12183:9
+		return ok
+	}
+	// Osty: /tmp/selfhost_merged.osty:12185:5
+	if name == "unwrapErr" {
+		// Osty: /tmp/selfhost_merged.osty:12186:9
+		frontCheckExpectArgCount(env, args, 0)
+		// Osty: /tmp/selfhost_merged.osty:12187:9
+		return err
+	}
+	// Osty: /tmp/selfhost_merged.osty:12189:5
+	if name == "isOk" || name == "isErr" {
+		// Osty: /tmp/selfhost_merged.osty:12190:9
+		frontCheckExpectArgCount(env, args, 0)
+		// Osty: /tmp/selfhost_merged.osty:12191:9
+		return "Bool"
+	}
+	// Osty: /tmp/selfhost_merged.osty:12193:5
+	if name == "ok" {
+		// Osty: /tmp/selfhost_merged.osty:12194:9
+		frontCheckExpectArgCount(env, args, 0)
+		// Osty: /tmp/selfhost_merged.osty:12195:9
+		return frontCheckOneArgType("Option", ok)
+	}
+	// Osty: /tmp/selfhost_merged.osty:12197:5
+	if name == "err" {
+		// Osty: /tmp/selfhost_merged.osty:12198:9
+		frontCheckExpectArgCount(env, args, 0)
+		// Osty: /tmp/selfhost_merged.osty:12199:9
+		return frontCheckOneArgType("Option", err)
+	}
+	// Osty: /tmp/selfhost_merged.osty:12201:5
+	if name == "unwrapOr" {
+		// Osty: /tmp/selfhost_merged.osty:12202:9
+		frontCheckExpectArgCount(env, args, 1)
+		// Osty: /tmp/selfhost_merged.osty:12203:9
+		frontCheckExpectAssignable(env, ok, frontCheckExprHint(file, env, frontCheckIntAt(args, 0), ok))
+		// Osty: /tmp/selfhost_merged.osty:12204:9
+		return ok
+	}
+	return "Invalid"
+}
+
+// Osty: /tmp/selfhost_merged.osty:12209:1
+func frontCheckStringMethod(file *AstFile, env *FrontCheckEnv, name string, args []int) string {
+	// Osty: /tmp/selfhost_merged.osty:12210:5
+	if name == "len" {
+		// Osty: /tmp/selfhost_merged.osty:12211:9
+		frontCheckExpectArgCount(env, args, 0)
+		// Osty: /tmp/selfhost_merged.osty:12212:9
+		return "Int"
+	}
+	// Osty: /tmp/selfhost_merged.osty:12214:5
+	if name == "isEmpty" {
+		// Osty: /tmp/selfhost_merged.osty:12215:9
+		frontCheckExpectArgCount(env, args, 0)
+		// Osty: /tmp/selfhost_merged.osty:12216:9
+		return "Bool"
+	}
+	// Osty: /tmp/selfhost_merged.osty:12218:5
+	if name == "contains" || name == "startsWith" || name == "endsWith" {
+		// Osty: /tmp/selfhost_merged.osty:12219:9
+		frontCheckExpectArgCount(env, args, 1)
+		// Osty: /tmp/selfhost_merged.osty:12220:9
+		frontCheckExpectAssignable(env, "String", frontCheckExprHint(file, env, frontCheckIntAt(args, 0), "String"))
+		// Osty: /tmp/selfhost_merged.osty:12221:9
+		return "Bool"
+	}
+	// Osty: /tmp/selfhost_merged.osty:12223:5
+	if name == "split" {
+		// Osty: /tmp/selfhost_merged.osty:12224:9
+		frontCheckExpectArgCount(env, args, 1)
+		// Osty: /tmp/selfhost_merged.osty:12225:9
+		frontCheckExpectAssignable(env, "String", frontCheckExprHint(file, env, frontCheckIntAt(args, 0), "String"))
+		// Osty: /tmp/selfhost_merged.osty:12226:9
+		return frontCheckOneArgType("List", "String")
+	}
+	return "Invalid"
+}
+
+// Osty: /tmp/selfhost_merged.osty:12231:1
+func frontCheckBytesMethod(file *AstFile, env *FrontCheckEnv, name string, args []int) string {
+	// Osty: /tmp/selfhost_merged.osty:12232:5
+	if name == "len" {
+		// Osty: /tmp/selfhost_merged.osty:12233:9
+		frontCheckExpectArgCount(env, args, 0)
+		// Osty: /tmp/selfhost_merged.osty:12234:9
+		return "Int"
+	}
+	// Osty: /tmp/selfhost_merged.osty:12236:5
+	if name == "isEmpty" {
+		// Osty: /tmp/selfhost_merged.osty:12237:9
+		frontCheckExpectArgCount(env, args, 0)
+		// Osty: /tmp/selfhost_merged.osty:12238:9
+		return "Bool"
+	}
+	// Osty: /tmp/selfhost_merged.osty:12240:5
+	if name == "toString" {
+		// Osty: /tmp/selfhost_merged.osty:12241:9
+		frontCheckExpectArgCount(env, args, 0)
+		// Osty: /tmp/selfhost_merged.osty:12242:9
+		return "String"
+	}
+	return "Invalid"
+}
+
+// Osty: /tmp/selfhost_merged.osty:12247:1
+func frontCheckClosureArg(file *AstFile, env *FrontCheckEnv, idx int, params []string, ret string) string {
+	// Osty: /tmp/selfhost_merged.osty:12248:5
+	node := astArenaNodeAt(file.arena, idx)
+	_ = node
+	// Osty: /tmp/selfhost_merged.osty:12249:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNClosure{})) {
+		// Osty: /tmp/selfhost_merged.osty:12250:9
+		return frontCheckClosure(file, env, node, params, ret)
+	}
+	// Osty: /tmp/selfhost_merged.osty:12252:5
+	want := frontCheckFnType(params, ret)
+	_ = want
+	// Osty: /tmp/selfhost_merged.osty:12253:5
+	got := frontCheckExprHint(file, env, idx, want)
+	_ = got
+	// Osty: /tmp/selfhost_merged.osty:12254:5
+	frontCheckExpectAssignable(env, want, got)
+	return got
+}
+
+// Osty: /tmp/selfhost_merged.osty:12258:1
+func frontCheckExpectArgCount(env *FrontCheckEnv, args []int, want int) {
+	// Osty: /tmp/selfhost_merged.osty:12259:5
+	if frontCheckIntCount(args) != want {
+		// Osty: /tmp/selfhost_merged.osty:12260:20
+		env.errors = env.errors + 1
+	}
+}
+
+// Osty: /tmp/selfhost_merged.osty:12264:1
+func frontCheckRequireMutableReceiver(file *AstFile, env *FrontCheckEnv, callee *AstNode) {
+	// Osty: /tmp/selfhost_merged.osty:12265:5
+	left := astArenaNodeAt(file.arena, callee.left)
+	_ = left
+	// Osty: /tmp/selfhost_merged.osty:12266:5
+	if ostyEqual(left.kind, AstNodeKind(&AstNodeKind_AstNIdent{})) && !(frontCheckLookupMutable(env, left.text)) {
+		// Osty: /tmp/selfhost_merged.osty:12267:20
+		env.errors = env.errors + 1
+	}
 }

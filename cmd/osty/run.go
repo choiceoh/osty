@@ -126,7 +126,7 @@ func runRun(args []string, cliF cliFlags) {
 		os.Exit(1)
 	}
 	results := ws.ResolveAll()
-	checks := check.Workspace(ws, results)
+	checks := check.Workspace(ws, results, checkOpts())
 	// Aggregate diagnostics across every loaded package so front-end
 	// errors in a vendored dep also surface.
 	var all []*diag.Diagnostic

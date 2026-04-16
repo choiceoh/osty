@@ -63,10 +63,85 @@ func TestFrontendRunExposesSharedSurfaces(t *testing.T) {
 	}
 }
 
+func TestCheckSourceUsesBootstrappedChecker(t *testing.T) {
+	good := CheckSourceStructured([]byte(`
+struct Box<T> { value: T }
+
+fn id<T>(value: T) -> T { value }
+
+fn main() {
+    let boxed: Box<Int> = Box { value: id::<Int>(1) }
+}
+`))
+	if good.Summary.Errors != 0 {
+		t.Fatalf("CheckSourceStructured returned %d errors for valid generic source", good.Summary.Errors)
+	}
+	if good.Summary.Assignments == 0 || good.Summary.Accepted == 0 {
+		t.Fatalf("CheckSourceStructured did not report assignment checks: %+v", good.Summary)
+	}
+	if len(good.TypedNodes) == 0 {
+		t.Fatal("CheckSourceStructured returned no typed nodes")
+	}
+	if !hasCheckedBinding(good.Bindings, "boxed", "Box<Int>") {
+		t.Fatalf("CheckSourceStructured missed boxed binding: %+v", good.Bindings)
+	}
+	if !hasCheckedSymbol(good.Symbols, "struct", "Box") || !hasCheckedSymbol(good.Symbols, "fn", "id") {
+		t.Fatalf("CheckSourceStructured missed declaration symbols: %+v", good.Symbols)
+	}
+	if !hasCheckInstantiation(good.Instantiations, "id", "Int") {
+		t.Fatalf("CheckSourceStructured missed generic instantiation: %+v", good.Instantiations)
+	}
+
+	bad := CheckSource([]byte(`
+enum Color { Red, Green }
+
+fn code(color: Color) -> Int {
+    match color {
+        Red -> 1,
+    }
+}
+`))
+	if bad.Errors == 0 {
+		t.Fatalf("CheckSource missed a non-exhaustive match: %+v", bad)
+	}
+}
+
 func hasError(diags []*diag.Diagnostic) bool {
 	for _, d := range diags {
 		if d.Severity == diag.Error {
 			return true
+		}
+	}
+	return false
+}
+
+func hasCheckedBinding(bindings []CheckedBinding, name, typeName string) bool {
+	for _, binding := range bindings {
+		if binding.Name == name && binding.TypeName == typeName {
+			return true
+		}
+	}
+	return false
+}
+
+func hasCheckedSymbol(symbols []CheckedSymbol, kind, name string) bool {
+	for _, symbol := range symbols {
+		if symbol.Kind == kind && symbol.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func hasCheckInstantiation(instantiations []CheckInstantiation, callee, typeArg string) bool {
+	for _, inst := range instantiations {
+		if inst.Callee != callee {
+			continue
+		}
+		for _, arg := range inst.TypeArgs {
+			if arg == typeArg {
+				return true
+			}
 		}
 	}
 	return false

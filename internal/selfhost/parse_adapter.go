@@ -374,7 +374,7 @@ func (l astLowerer) param(idx int) *ast.Param {
 		return nil
 	}
 	p := &ast.Param{PosV: l.nodePos(n), EndV: l.nodeEnd(n), Name: n.text, Type: l.typ(n.right), Default: l.expr(n.left)}
-	if n.left >= 0 {
+	if n.left >= 0 && n.text == "" {
 		if pat := l.pattern(n.left); pat != nil {
 			p.Pattern = pat
 			p.Default = nil

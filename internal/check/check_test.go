@@ -32,6 +32,22 @@ func runCheck(t *testing.T, src string) []*diag.Diagnostic {
 	return errs
 }
 
+func TestCheck_OptInSelfhostDiagnostics(t *testing.T) {
+	src := []byte(`fn main() { let x: Int = "nope" }`)
+	file, parseDiags := parser.ParseDiagnostics(src)
+	if len(parseDiags) != 0 {
+		t.Fatalf("parse diagnostics: %v", parseDiags)
+	}
+	res := resolve.File(file, resolve.NewPrelude())
+	chk := check.File(file, res, check.Opts{UseSelfhost: true, Source: src})
+	if len(chk.Diags) != 1 {
+		t.Fatalf("selfhost diagnostic count = %d, want 1: %#v", len(chk.Diags), chk.Diags)
+	}
+	if !strings.Contains(chk.Diags[0].Message, "self-hosted checker") {
+		t.Fatalf("diagnostic does not come from selfhost checker: %q", chk.Diags[0].Message)
+	}
+}
+
 // assertCodes asserts that the observed set of diagnostic codes matches
 // `want` exactly (set equality, order-independent). Useful because
 // parser + resolver + checker diagnostics can interleave and we only

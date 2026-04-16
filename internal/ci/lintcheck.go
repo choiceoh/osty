@@ -58,7 +58,7 @@ func (r *Runner) checkLint() *Check {
 // lookup works during the CI lint pass.
 func checkOpts() check.Opts {
 	reg := stdlib.LoadCached()
-	return check.Opts{Primitives: reg.Primitives, ResultMethods: reg.ResultMethods}
+	return check.Opts{UseSelfhost: true, Stdlib: reg, Primitives: reg.Primitives, ResultMethods: reg.ResultMethods}
 }
 
 // lintConfigFromManifest extracts the [lint] section from the

@@ -16,6 +16,7 @@ import (
 	"github.com/osty/osty/internal/lint"
 	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/stdlib"
 )
 
 // ServerName is advertised in Initialize and used as the `source`
@@ -446,7 +447,7 @@ func (s *Server) analyzePackage(pkgDir, path string, src []byte) *docAnalysis {
 	}
 	substituteFileSource(pkg, path, src)
 	pr := resolve.ResolvePackage(pkg, s.prelude)
-	chk := check.Package(pkg, pr)
+	chk := check.Package(pkg, pr, lspCheckOpts(nil))
 	lr := lint.Package(pkg, pr, chk)
 	a := analysisForFileInPackage(pkg, pr, chk, lr, path, src)
 	if a != nil {
@@ -475,7 +476,7 @@ func (s *Server) analyzeWorkspace(root, path string, src []byte) *docAnalysis {
 		}
 	}
 	resolved := ws.ResolveAll()
-	checks := check.Workspace(ws, resolved)
+	checks := check.Workspace(ws, resolved, lspCheckOpts(nil))
 	// Collect every loaded package for cross-file handlers.
 	allPkgs := make([]*resolve.Package, 0, len(ws.Packages))
 	for _, pkg := range ws.Packages {
@@ -635,7 +636,7 @@ func diagBelongsToFile(d *diag.Diagnostic, pf *resolve.PackageFile) bool {
 func (s *Server) analyzeSingleFile(src []byte) *docAnalysis {
 	file, parseDiags := parser.ParseDiagnostics(src)
 	res := resolve.File(file, s.prelude)
-	chk := check.File(file, res)
+	chk := check.File(file, res, lspCheckOpts(src))
 	lr := lint.File(file, res, chk)
 	all := make([]*diag.Diagnostic, 0,
 		len(parseDiags)+len(res.Diags)+len(chk.Diags)+len(lr.Diags))
@@ -651,6 +652,17 @@ func (s *Server) analyzeSingleFile(src []byte) *docAnalysis {
 		lint:       lr,
 		diags:      all,
 		identIndex: buildIdentIndex(res),
+	}
+}
+
+func lspCheckOpts(src []byte) check.Opts {
+	reg := stdlib.LoadCached()
+	return check.Opts{
+		UseSelfhost:   true,
+		Source:        src,
+		Stdlib:        reg,
+		Primitives:    reg.Primitives,
+		ResultMethods: reg.ResultMethods,
 	}
 }
 

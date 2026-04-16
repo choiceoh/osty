@@ -356,7 +356,7 @@ func main() {
 	case "check":
 		file, diags := parser.ParseDiagnostics(src)
 		res := resolveFile(file)
-		chk := check.File(file, res, checkOpts())
+		chk := check.File(file, res, checkOptsForSource(src))
 		all := append(append(append([]*diag.Diagnostic{}, diags...), res.Diags...), chk.Diags...)
 		printDiags(formatter, all, flags)
 		if hasError(all) {
@@ -365,7 +365,7 @@ func main() {
 	case "typecheck":
 		file, diags := parser.ParseDiagnostics(src)
 		res := resolveFile(file)
-		chk := check.File(file, res, checkOpts())
+		chk := check.File(file, res, checkOptsForSource(src))
 		all := append(append(append([]*diag.Diagnostic{}, diags...), res.Diags...), chk.Diags...)
 		printDiags(formatter, all, flags)
 		printTypes(chk)
@@ -402,7 +402,7 @@ func main() {
 		}
 		file, parseDiags := parser.ParseDiagnostics(src)
 		res := resolveFile(file)
-		chk := check.File(file, res, checkOpts())
+		chk := check.File(file, res, checkOptsForSource(src))
 		lr := lint.File(file, res, chk)
 		if cfg, ok := loadLintConfigNear(path); ok {
 			lr = cfg.Apply(lr)
@@ -906,7 +906,13 @@ func resolveFile(file *ast.File) *resolve.Result {
 // cost paid once per process.
 func checkOpts() check.Opts {
 	reg := stdlib.LoadCached()
-	return check.Opts{Primitives: reg.Primitives, ResultMethods: reg.ResultMethods}
+	return check.Opts{UseSelfhost: true, Stdlib: reg, Primitives: reg.Primitives, ResultMethods: reg.ResultMethods}
+}
+
+func checkOptsForSource(src []byte) check.Opts {
+	opts := checkOpts()
+	opts.Source = src
+	return opts
 }
 
 func hasError(diags []*diag.Diagnostic) bool {
@@ -1330,7 +1336,7 @@ func runGen(args []string, flags cliFlags) {
 	// any front-end error before calling into gen.
 	file, parseDiags := parser.ParseDiagnostics(src)
 	res := resolveFile(file)
-	chk := check.File(file, res, checkOpts())
+	chk := check.File(file, res, checkOptsForSource(src))
 	allDiags := append(append(append([]*diag.Diagnostic{}, parseDiags...), res.Diags...), chk.Diags...)
 	if hasError(allDiags) {
 		printDiags(newFormatter(path, src, flags), allDiags, flags)

@@ -232,7 +232,7 @@ func buildWorkspace(dir string, m *manifest.Manifest, flags cliFlags, deps resol
 		}
 	}
 	results := ws.ResolveAll()
-	checks := check.Workspace(ws, results)
+	checks := check.Workspace(ws, results, checkOpts())
 	paths := make([]string, 0, len(ws.Packages))
 	for p := range ws.Packages {
 		paths = append(paths, p)
@@ -289,7 +289,7 @@ func buildPackage(dir string, m *manifest.Manifest, flags cliFlags, deps resolve
 			os.Exit(1)
 		}
 		results := ws.ResolveAll()
-		checks := check.Workspace(ws, results)
+		checks := check.Workspace(ws, results, checkOpts())
 		for key, pkg := range ws.Packages {
 			r := results[key]
 			if r == nil || pkg == nil {
@@ -316,7 +316,7 @@ func buildPackage(dir string, m *manifest.Manifest, flags cliFlags, deps resolve
 		os.Exit(1)
 	}
 	res := resolve.ResolvePackage(pkg, resolve.NewPrelude())
-	chk := check.Package(pkg, res)
+	chk := check.Package(pkg, res, checkOpts())
 	ds := append(append([]*diag.Diagnostic{}, res.Diags...), chk.Diags...)
 	printPackageDiags(pkg, ds, flags)
 	if hasError(ds) {
