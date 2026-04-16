@@ -1,11 +1,13 @@
 package main
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/osty/osty/internal/airepair"
 	"github.com/osty/osty/internal/diag"
 )
 
@@ -100,6 +102,26 @@ func TestSplitGenCheckDiagsDefersUnavailableChecker(t *testing.T) {
 	}
 	if len(deferredDiags) != 1 || deferredDiags[0] != unavailable {
 		t.Fatalf("deferred diags = %#v, want only the unavailable checker diag", deferredDiags)
+	}
+}
+
+func TestLoadGenPackageEntryWithTransformRepairsForeignSyntax(t *testing.T) {
+	dir := t.TempDir()
+	target := writeGenTestFile(t, dir, "main.osty", "func main() -> Int { 1 }\n")
+
+	flags := cliFlags{aiRepair: true, aiMode: airepair.ModeAutoAssist}
+	entry, err := loadGenPackageEntryWithTransform(target, aiRepairSourceTransform("osty gen --airepair", io.Discard, flags))
+	if err != nil {
+		t.Fatalf("loadGenPackageEntryWithTransform() error = %v", err)
+	}
+	if entry == nil || entry.file == nil {
+		t.Fatal("expected a loaded gen package entry")
+	}
+	if got, want := string(entry.file.Source), "fn main() -> Int { 1 }\n"; got != want {
+		t.Fatalf("entry source = %q, want %q", got, want)
+	}
+	if hasError(entry.res.Diags) {
+		t.Fatalf("resolve diags = %#v, want no blocking front-end errors after airepair", entry.res.Diags)
 	}
 }
 

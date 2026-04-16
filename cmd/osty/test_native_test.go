@@ -230,21 +230,21 @@ func TestRunTestMainAIRepairAllowsForeignSyntaxBeforeDiscovery(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	code := runTestMain([]string{dir}, cliFlags{}, &stdout, &stderr)
-	if code == 0 {
-		t.Fatalf("runTestMain() without airepair exit = %d, want parse failure\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
-	}
-
-	stdout.Reset()
-	stderr.Reset()
-	code = runTestMain([]string{"--airepair", "--airepair-mode=parse", dir}, cliFlags{}, &stdout, &stderr)
 	if code != 0 {
-		t.Fatalf("runTestMain() with airepair exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+		t.Fatalf("runTestMain() auto airepair exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
 	}
 	if got := stdout.String(); !strings.Contains(got, "running 0 tests") {
 		t.Fatalf("stdout = %q, want zero-test summary", got)
 	}
 	if got := stderr.String(); !strings.Contains(got, "osty test --airepair: applied 1 repair(s)") {
 		t.Fatalf("stderr = %q, want in-memory airepair summary", got)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = runTestMain([]string{"--airepair=false", dir}, cliFlags{}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatalf("runTestMain() --airepair=false exit = %d, want parse failure\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
 	}
 }
 

@@ -284,7 +284,7 @@ Legacy alias: `osty repair`
 - `triage DIR` — summarize captured `.report.json` files by status, source habit, and residual diagnostic code
 - `promote CASE` — copy a captured case into `internal/airepair/testdata/corpus/` (override with `--dest DIR` or `--name NAME`)
 - `--stdin-name NAME` — filename to use in reports when reading from stdin via `-`
-- `--mode rewrite|parse|frontend` — choose whether airepair scores candidate output by rewrite activity, parse diagnostics, or full front-end diagnostics
+- `--mode auto|rewrite|parse|frontend` — debug acceptance mode; `auto` is the default best-effort mode and should usually be left alone
 
 `osty airepair -` reads from stdin and writes the repaired source (or JSON report
 with `--json`) to stdout.
@@ -297,14 +297,18 @@ For quick triage, `osty airepair triage tmp/airepair-cases`
 To promote one captured case into the checked-in corpus, `osty airepair promote tmp/airepair-cases/python_enumerate_case`
 
 Single-file `osty check`, `osty resolve`, `osty typecheck`, and `osty lint`
-also accept in-memory adaptation flags after the subcommand:
+run airepair in memory by default before parsing. You can still tune or disable it
+after the subcommand:
 
-- `--airepair` — run airepair before the front-end pipeline without rewriting the file
-- `--airepair-mode rewrite|parse|frontend` — choose the acceptance heuristic for the adapted source
+- `--airepair` — keep the default automatic in-memory airepair enabled
+- `--no-airepair` — disable automatic in-memory airepair for debugging/raw parser behavior
+- `--airepair-mode auto|rewrite|parse|frontend` — debug acceptance mode; `auto` is the default
 
 The manifest-driven `osty build`, `osty run`, and `osty test` commands also
-accept `--airepair` and `--airepair-mode ...`; those rewrites stay in memory
-unless you explicitly run `osty airepair --write`.
+run airepair in memory by default before any parser / resolver / checker work.
+Use `--airepair=false` to disable it or `--airepair-mode auto|rewrite|parse|frontend`
+to debug the acceptance heuristic. `osty gen` now uses the same automatic
+best-effort in-memory airepair path before loading package sources.
 
 Repairs include common foreign-language carryovers such as `func`/`def`,
 `var`/`const`, `while`, `switch`/`case`, `nil`/`null`, Python word

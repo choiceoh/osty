@@ -350,17 +350,12 @@ func main() {
 	}
 
 	if cmd == "check" || cmd == "typecheck" || cmd == "resolve" {
-		selected, handled, err := loadSelectedPackageEntry(path)
+		selected, handled, err := loadSelectedPackageEntryWithTransform(path, aiRepairSourceTransform(aiRepairPrefix(cmd), os.Stderr, flags))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "osty: %v\n", err)
 			os.Exit(1)
 		}
 		if handled {
-			if flags.aiRepair {
-				applyAIRepairToPackage(selected.pkg, aiRepairPrefix(cmd), os.Stderr, flags)
-				selected.res = resolve.ResolvePackage(selected.pkg, resolve.NewPrelude())
-				selected.chk = check.Package(selected.pkg, selected.res, checkOpts())
-			}
 			if flags.trace {
 				pipeline.RunLoadedPackage(selected.pkg, os.Stderr, pipeline.Config{})
 			}
@@ -592,12 +587,11 @@ func runCheckPackage(dir string, flags cliFlags) {
 		runCheckWorkspace(dir, flags)
 		return
 	}
-	pkg, err := resolve.LoadPackage(dir)
+	pkg, err := resolve.LoadPackageWithTransform(dir, aiRepairSourceTransform(aiRepairPrefix("check"), os.Stderr, flags))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
 		os.Exit(1)
 	}
-	applyAIRepairToPackage(pkg, aiRepairPrefix("check"), os.Stderr, flags)
 	res := resolve.ResolvePackage(pkg, resolve.NewPrelude())
 	chk := check.Package(pkg, res, checkOpts())
 	diags := append(append([]*diag.Diagnostic{}, res.Diags...), chk.Diags...)
@@ -641,6 +635,7 @@ func runCheckWorkspace(dir string, flags cliFlags) {
 		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
 		os.Exit(1)
 	}
+	ws.SourceTransform = aiRepairSourceTransform(aiRepairPrefix("check"), os.Stderr, flags)
 	ws.Stdlib = stdlib.LoadCached()
 	// Seed the loader with the root package (if any) plus every
 	// immediate subdirectory that contains .osty files. LoadPackage
@@ -648,16 +643,6 @@ func runCheckWorkspace(dir string, flags cliFlags) {
 	// pulled in lazily.
 	for _, p := range resolve.WorkspacePackagePaths(dir) {
 		_, _ = ws.LoadPackage(p)
-	}
-	if flags.aiRepair {
-		paths := make([]string, 0, len(ws.Packages))
-		for p := range ws.Packages {
-			paths = append(paths, p)
-		}
-		sort.Strings(paths)
-		for _, p := range paths {
-			applyAIRepairToPackage(ws.Packages[p], aiRepairPrefix("check"), os.Stderr, flags)
-		}
 	}
 	results := ws.ResolveAll()
 	// Run the type checker over every package, producing one Result per
@@ -705,12 +690,11 @@ func runLintPackage(dir string, flags cliFlags) {
 		runLintWorkspace(dir, flags)
 		return
 	}
-	pkg, err := resolve.LoadPackage(dir)
+	pkg, err := resolve.LoadPackageWithTransform(dir, aiRepairSourceTransform(aiRepairPrefix("lint"), os.Stderr, flags))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
 		os.Exit(1)
 	}
-	applyAIRepairToPackage(pkg, aiRepairPrefix("lint"), os.Stderr, flags)
 	res := resolve.ResolvePackage(pkg, resolve.NewPrelude())
 	chk := check.Package(pkg, res, checkOpts())
 	cfg, cfgBase, hasCfg := loadLintConfigWithBase(dir)
@@ -728,6 +712,7 @@ func runLintWorkspace(dir string, flags cliFlags) {
 		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
 		os.Exit(1)
 	}
+	ws.SourceTransform = aiRepairSourceTransform(aiRepairPrefix("lint"), os.Stderr, flags)
 	ws.Stdlib = stdlib.LoadCached()
 	anyErr, anyWarn := false, false
 	runOne := func(path string) {
@@ -737,7 +722,6 @@ func runLintWorkspace(dir string, flags cliFlags) {
 			anyErr = true
 			return
 		}
-		applyAIRepairToPackage(pkg, aiRepairPrefix("lint"), os.Stderr, flags)
 		res := resolve.ResolvePackage(pkg, resolve.NewPrelude())
 		chk := check.Package(pkg, res, checkOpts())
 		cfg, cfgBase, hasCfg := loadLintConfigWithBase(pkg.Dir)
@@ -782,12 +766,11 @@ func runLintLoadedPackage(
 
 // runResolvePackage is runCheckPackage plus a resolution dump per file.
 func runResolvePackage(dir string, flags cliFlags) {
-	pkg, err := resolve.LoadPackage(dir)
+	pkg, err := resolve.LoadPackageWithTransform(dir, aiRepairSourceTransform(aiRepairPrefix("resolve"), os.Stderr, flags))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
 		os.Exit(1)
 	}
-	applyAIRepairToPackage(pkg, aiRepairPrefix("resolve"), os.Stderr, flags)
 	res := resolve.ResolvePackage(pkg, resolve.NewPrelude())
 	printPackageDiags(pkg, res.Diags, flags)
 	for _, f := range pkg.Files {
@@ -1082,8 +1065,9 @@ func usesFrontEndAIRepair(cmd string) bool {
 
 func consumeFrontEndAIRepairFlags(args []string, flags cliFlags) ([]string, cliFlags, error) {
 	rest := make([]string, 0, len(args))
+	flags.aiRepair = true
 	if flags.aiMode == "" {
-		flags.aiMode = airepair.ModeFrontEndAssist
+		flags.aiMode = airepair.ModeAutoAssist
 	}
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -1112,7 +1096,7 @@ func consumeFrontEndAIRepairFlags(args []string, flags cliFlags) ([]string, cliF
 			}
 			mode, ok := parseAIRepairMode(args[i+1])
 			if !ok {
-				return nil, flags, fmt.Errorf("unknown airepair mode %q (want rewrite, parse, or frontend)", args[i+1])
+				return nil, flags, fmt.Errorf("unknown airepair mode %q (want auto, rewrite, parse, or frontend)", args[i+1])
 			}
 			flags.aiMode = mode
 			i++
@@ -1120,14 +1104,14 @@ func consumeFrontEndAIRepairFlags(args []string, flags cliFlags) ([]string, cliF
 			value := strings.TrimPrefix(arg, "--airepair-mode=")
 			mode, ok := parseAIRepairMode(value)
 			if !ok {
-				return nil, flags, fmt.Errorf("unknown airepair mode %q (want rewrite, parse, or frontend)", value)
+				return nil, flags, fmt.Errorf("unknown airepair mode %q (want auto, rewrite, parse, or frontend)", value)
 			}
 			flags.aiMode = mode
 		case strings.HasPrefix(arg, "--repair-mode="):
 			value := strings.TrimPrefix(arg, "--repair-mode=")
 			mode, ok := parseAIRepairMode(value)
 			if !ok {
-				return nil, flags, fmt.Errorf("unknown airepair mode %q (want rewrite, parse, or frontend)", value)
+				return nil, flags, fmt.Errorf("unknown airepair mode %q (want auto, rewrite, parse, or frontend)", value)
 			}
 			flags.aiMode = mode
 		default:
@@ -1139,6 +1123,15 @@ func consumeFrontEndAIRepairFlags(args []string, flags cliFlags) ([]string, cliF
 
 func aiRepairPrefix(cmd string) string {
 	return fmt.Sprintf("osty %s --airepair", cmd)
+}
+
+func aiRepairSourceTransform(prefix string, summary io.Writer, flags cliFlags) resolve.SourceTransform {
+	if !flags.aiRepair {
+		return nil
+	}
+	return func(path string, src []byte) []byte {
+		return maybeAIRepairSource(path, src, prefix, summary, flags)
+	}
 }
 
 func maybeAIRepairSource(path string, src []byte, prefix string, summary io.Writer, flags cliFlags) []byte {
@@ -1157,35 +1150,6 @@ func maybeAIRepairSource(path string, src []byte, prefix string, summary io.Writ
 		return result.Repaired
 	}
 	return src
-}
-
-func applyAIRepairToPackage(pkg *resolve.Package, prefix string, summary io.Writer, flags cliFlags) {
-	if !flags.aiRepair || pkg == nil {
-		return
-	}
-	for _, pf := range pkg.Files {
-		if pf == nil {
-			continue
-		}
-		result := airepair.Analyze(airepair.Request{
-			Source:   pf.Source,
-			Filename: pf.Path,
-			Mode:     flags.aiMode,
-		})
-		if !flags.jsonOutput && result.Accepted && (len(result.Repair.Changes) > 0 || result.Repair.Skipped > 0) {
-			reportRepairSummary(summary, prefix, pf.Path, result.Repair)
-		}
-		if !result.Accepted || !result.Changed {
-			continue
-		}
-		file, parseDiags := parser.ParseDiagnostics(result.Repaired)
-		pf.Source = result.Repaired
-		pf.File = file
-		pf.ParseDiags = parseDiags
-		pf.FileScope = nil
-		pf.Refs = nil
-		pf.TypeRefs = nil
-	}
 }
 
 // loadLintConfigWithBase is loadLintConfigNear that also returns the
@@ -1408,10 +1372,11 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  --dest DIR         promote: destination corpus directory")
 	fmt.Fprintln(os.Stderr, "  --name NAME        promote: basename for promoted corpus files")
 	fmt.Fprintln(os.Stderr, "  --stdin-name NAME  filename to use in reports when FILE is -")
-	fmt.Fprintln(os.Stderr, "  --mode MODE        acceptance mode: rewrite, parse, or frontend")
+	fmt.Fprintln(os.Stderr, "  --mode MODE        debug acceptance mode: auto, rewrite, parse, or frontend")
 	fmt.Fprintln(os.Stderr, "front-end airepair flags (after check/resolve/typecheck/lint):")
-	fmt.Fprintln(os.Stderr, "  --airepair         adapt common AI-authored foreign syntax in memory")
-	fmt.Fprintln(os.Stderr, "  --airepair-mode    acceptance mode: rewrite, parse, or frontend")
+	fmt.Fprintln(os.Stderr, "  --airepair         keep automatic AI repair enabled (default)")
+	fmt.Fprintln(os.Stderr, "  --no-airepair      disable automatic AI repair")
+	fmt.Fprintln(os.Stderr, "  --airepair-mode    debug acceptance mode: auto, rewrite, parse, or frontend")
 	fmt.Fprintln(os.Stderr, "gen-specific flags (after the subcommand):")
 	fmt.Fprintln(os.Stderr, "  -o PATH            write generated artifact to PATH instead of stdout")
 	fmt.Fprintln(os.Stderr, "  --package NAME     backend package/module name (default: main)")
@@ -1613,7 +1578,11 @@ func runGen(args []string, flags cliFlags) {
 		os.Exit(2)
 	}
 	path := fs.Arg(0)
-	entry, err := loadGenPackageEntry(path)
+	flags.aiRepair = true
+	if flags.aiMode == "" {
+		flags.aiMode = airepair.ModeAutoAssist
+	}
+	entry, err := loadGenPackageEntryWithTransform(path, aiRepairSourceTransform("osty gen --airepair", os.Stderr, flags))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty gen: %v\n", err)
 		os.Exit(1)
@@ -1721,17 +1690,22 @@ type genPackageEntry struct {
 }
 
 func loadGenPackageEntry(path string) (*genPackageEntry, error) {
+	return loadGenPackageEntryWithTransform(path, nil)
+}
+
+func loadGenPackageEntryWithTransform(path string, transform resolve.SourceTransform) (*genPackageEntry, error) {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return nil, err
 	}
 	if files := toolchainGenInputFiles(absPath); len(files) > 0 {
-		return loadSelectedGenFiles(absPath, files)
+		return loadSelectedGenFilesWithTransform(absPath, files, transform)
 	}
 	ws, err := resolve.NewWorkspace(filepath.Dir(absPath))
 	if err != nil {
 		return nil, err
 	}
+	ws.SourceTransform = transform
 	ws.Stdlib = stdlib.LoadCached()
 	if _, err := ws.LoadPackage(""); err != nil {
 		return nil, err
@@ -1777,6 +1751,10 @@ func loadGenPackageEntry(path string) (*genPackageEntry, error) {
 }
 
 func loadSelectedGenFiles(sourcePath string, files []string) (*genPackageEntry, error) {
+	return loadSelectedGenFilesWithTransform(sourcePath, files, nil)
+}
+
+func loadSelectedGenFilesWithTransform(sourcePath string, files []string, transform resolve.SourceTransform) (*genPackageEntry, error) {
 	pkgDir := filepath.Dir(sourcePath)
 	pkg := &resolve.Package{
 		Dir:  pkgDir,
@@ -1789,6 +1767,9 @@ func loadSelectedGenFiles(sourcePath string, files []string) (*genPackageEntry, 
 		src, err := os.ReadFile(path)
 		if err != nil {
 			return nil, err
+		}
+		if transform != nil {
+			src = transform(path, src)
 		}
 		file, parseDiags := parser.ParseDiagnostics(src)
 		pf := &resolve.PackageFile{
