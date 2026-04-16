@@ -1,6 +1,8 @@
 package lsp
 
 import (
+	"bytes"
+	"io"
 	"reflect"
 	"strings"
 	"testing"
@@ -180,6 +182,75 @@ func TestResolveOverlapsUsesSelfHostedPolicy(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("resolved edits = %#v, want %#v", got, want)
+	}
+}
+
+func TestFixAllActionUsesAIRepairForForeignSyntax(t *testing.T) {
+	src := []byte("import std.testing as t\nfunc main() {}\n")
+	s := NewServer(bytes.NewReader(nil), io.Discard, io.Discard)
+	doc := &document{
+		uri:      "file:///tmp/main.osty",
+		src:      src,
+		analysis: s.analyzeSingleFile(src),
+	}
+
+	action := fixAllAction(doc)
+	if action == nil {
+		t.Fatal("fixAllAction() = nil, want airepair-backed action")
+	}
+	if action.Kind != CodeActionSourceFixAllOsty {
+		t.Fatalf("kind = %q, want %q", action.Kind, CodeActionSourceFixAllOsty)
+	}
+	edits := action.Edit.Changes[doc.uri]
+	if len(edits) != 1 {
+		t.Fatalf("len(edits) = %d, want 1", len(edits))
+	}
+	if got, want := edits[0].NewText, "use std.testing as t\nfn main() {}\n"; got != want {
+		t.Fatalf("newText = %q, want %q", got, want)
+	}
+}
+
+func TestFixAllActionUsesAIRepairForPythonBlocks(t *testing.T) {
+	src := []byte("fn main():\n    println(1)\n")
+	s := NewServer(bytes.NewReader(nil), io.Discard, io.Discard)
+	doc := &document{
+		uri:      "file:///tmp/main.osty",
+		src:      src,
+		analysis: s.analyzeSingleFile(src),
+	}
+
+	action := fixAllAction(doc)
+	if action == nil {
+		t.Fatal("fixAllAction() = nil, want airepair-backed action")
+	}
+	edits := action.Edit.Changes[doc.uri]
+	if len(edits) != 1 {
+		t.Fatalf("len(edits) = %d, want 1", len(edits))
+	}
+	if got, want := edits[0].NewText, "fn main() {\n    println(1)\n}\n"; got != want {
+		t.Fatalf("newText = %q, want %q", got, want)
+	}
+}
+
+func TestFixAllActionUsesAIRepairForPythonMatchCase(t *testing.T) {
+	src := []byte("fn main() {\n    let value = 0\n    match value:\n        case 0:\n            println(0)\n        default:\n            println(1)\n}\n")
+	s := NewServer(bytes.NewReader(nil), io.Discard, io.Discard)
+	doc := &document{
+		uri:      "file:///tmp/main.osty",
+		src:      src,
+		analysis: s.analyzeSingleFile(src),
+	}
+
+	action := fixAllAction(doc)
+	if action == nil {
+		t.Fatal("fixAllAction() = nil, want airepair-backed action")
+	}
+	edits := action.Edit.Changes[doc.uri]
+	if len(edits) != 1 {
+		t.Fatalf("len(edits) = %d, want 1", len(edits))
+	}
+	if got, want := edits[0].NewText, "fn main() {\n    let value = 0\n    match value {\n        0 -> {\n            println(0)\n        },\n        _ -> {\n            println(1)\n        },\n    }\n}\n"; got != want {
+		t.Fatalf("newText = %q, want %q", got, want)
 	}
 }
 

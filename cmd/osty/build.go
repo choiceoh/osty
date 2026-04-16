@@ -45,13 +45,15 @@ import (
 func runBuild(args []string, flags cliFlags) {
 	fs := flag.NewFlagSet("build", flag.ExitOnError)
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: osty build [--offline | --locked | --frozen] [--profile NAME | --release] [--target TRIPLE] [--features LIST] [--no-default-features] [--backend NAME] [--emit MODE] [--force] [PATH]")
+		fmt.Fprintln(os.Stderr, "usage: osty build [--offline | --locked | --frozen] [--profile NAME | --release] [--target TRIPLE] [--features LIST] [--no-default-features] [--backend NAME] [--emit MODE] [--force] [--airepair] [--airepair-mode MODE] [PATH]")
 	}
 	var offline, force, locked, frozen bool
 	fs.BoolVar(&offline, "offline", false, "do not fetch dependencies; fail if caches are missing")
 	fs.BoolVar(&locked, "locked", false, "fail if osty.lock would change")
 	fs.BoolVar(&frozen, "frozen", false, "imply --locked --offline; require an existing osty.lock")
 	fs.BoolVar(&force, "force", false, "ignore the build cache; rebuild every input")
+	var aiRepairModeName string
+	registerAIRepairCommandFlags(fs, &flags.aiRepair, &aiRepairModeName)
 	var backendName string
 	var emitName string
 	fs.StringVar(&backendName, "backend", defaultBackendName(), "code generation backend (llvm)")
@@ -59,6 +61,12 @@ func runBuild(args []string, flags cliFlags) {
 	var pf profileFlags
 	pf.register(fs)
 	_ = fs.Parse(args)
+	mode, ok := parseAIRepairMode(aiRepairModeName)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "osty build: unknown airepair mode %q (want rewrite, parse, or frontend)\n", aiRepairModeName)
+		os.Exit(2)
+	}
+	flags.aiMode = mode
 	backendID, emitMode := resolveBackendAndEmitFlags("build", backendName, emitName)
 	start := "."
 	if fs.NArg() == 1 {
@@ -290,6 +298,16 @@ func buildWorkspace(dir string, m *manifest.Manifest, flags cliFlags, deps resol
 			os.Exit(1)
 		}
 	}
+	if flags.aiRepair {
+		paths := make([]string, 0, len(ws.Packages))
+		for p := range ws.Packages {
+			paths = append(paths, p)
+		}
+		sort.Strings(paths)
+		for _, p := range paths {
+			applyAIRepairToPackage(ws.Packages[p], "osty build --airepair", os.Stderr, flags)
+		}
+	}
 	results := ws.ResolveAll()
 	checks := check.Workspace(ws, results, checkOpts())
 	paths := make([]string, 0, len(ws.Packages))
@@ -348,6 +366,16 @@ func buildPackage(dir string, m *manifest.Manifest, flags cliFlags, deps resolve
 			fmt.Fprintf(os.Stderr, "osty build: %v\n", err)
 			os.Exit(1)
 		}
+		if flags.aiRepair {
+			paths := make([]string, 0, len(ws.Packages))
+			for p := range ws.Packages {
+				paths = append(paths, p)
+			}
+			sort.Strings(paths)
+			for _, p := range paths {
+				applyAIRepairToPackage(ws.Packages[p], "osty build --airepair", os.Stderr, flags)
+			}
+		}
 		results := ws.ResolveAll()
 		checks := check.Workspace(ws, results, checkOpts())
 		for key, pkg := range ws.Packages {
@@ -375,6 +403,7 @@ func buildPackage(dir string, m *manifest.Manifest, flags cliFlags, deps resolve
 		fmt.Fprintf(os.Stderr, "osty build: %v\n", err)
 		os.Exit(1)
 	}
+	applyAIRepairToPackage(pkg, "osty build --airepair", os.Stderr, flags)
 	res := resolve.ResolvePackage(pkg, resolve.NewPrelude())
 	chk := check.Package(pkg, res, checkOpts())
 	ds := append(append([]*diag.Diagnostic{}, res.Diags...), chk.Diags...)
