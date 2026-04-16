@@ -34,6 +34,7 @@ void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_re
 
 void osty_gc_debug_collect(void);
 int64_t osty_gc_debug_live_count(void);
+int64_t osty_gc_debug_collection_count(void);
 void *osty_rt_list_new(void);
 void osty_rt_list_push_ptr(void *list, void *value);
 int64_t osty_rt_list_len(void *list);
@@ -156,5 +157,140 @@ int main(void) {
 	}
 	if got, want := string(runOutput), "1\n0\n2\n1\n0\n"; got != want {
 		t.Fatalf("runtime safepoint harness stdout = %q, want %q", got, want)
+	}
+}
+
+func TestBundledRuntimeAutoCollectsAtPressureSafepoints(t *testing.T) {
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_gc_pressure_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_gc_pressure_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+void osty_gc_safepoint_v1(int64_t safepoint_id, void *const *root_slots, int64_t root_slot_count) __asm__(OSTY_GC_SYMBOL("osty.gc.safepoint_v1"));
+
+int64_t osty_gc_debug_live_count(void);
+int64_t osty_gc_debug_collection_count(void);
+
+int main(void) {
+    void *root = osty_gc_alloc_v1(7, 32, "root");
+    void *leaf = osty_gc_alloc_v1(8, 16, "leaf");
+    (void)leaf;
+    osty_gc_root_bind_v1(root);
+    osty_gc_safepoint_v1(1, NULL, 0);
+    printf("%lld\n", (long long)osty_gc_debug_collection_count());
+    printf("%lld\n", (long long)osty_gc_debug_live_count());
+    osty_gc_root_release_v1(root);
+    leaf = osty_gc_alloc_v1(9, 8, "late");
+    (void)leaf;
+    osty_gc_safepoint_v1(2, NULL, 0);
+    printf("%lld\n", (long long)osty_gc_debug_collection_count());
+    printf("%lld\n", (long long)osty_gc_debug_live_count());
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	buildOutput, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runCmd := exec.Command(binaryPath)
+	runCmd.Env = append(os.Environ(), "OSTY_GC_THRESHOLD_BYTES=1")
+	runOutput, err := runCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	if got, want := string(runOutput), "1\n1\n2\n0\n"; got != want {
+		t.Fatalf("runtime pressure harness stdout = %q, want %q", got, want)
+	}
+}
+
+func TestBundledRuntimePressureKeepsRootedListChildrenAlive(t *testing.T) {
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_gc_pressure_list_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_gc_pressure_list_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+void osty_gc_safepoint_v1(int64_t safepoint_id, void *const *root_slots, int64_t root_slot_count) __asm__(OSTY_GC_SYMBOL("osty.gc.safepoint_v1"));
+
+int64_t osty_gc_debug_live_count(void);
+int64_t osty_gc_debug_collection_count(void);
+void *osty_rt_list_new(void);
+void osty_rt_list_push_ptr(void *list, void *value);
+void *osty_rt_list_get_ptr(void *list, int64_t index);
+
+int main(void) {
+    void *list = osty_rt_list_new();
+    void *child = osty_gc_alloc_v1(8, 16, "child");
+    void *saved_child = child;
+    osty_rt_list_push_ptr(list, child);
+    osty_gc_root_bind_v1(list);
+    child = osty_gc_alloc_v1(9, 8, "garbage");
+    (void)child;
+    osty_gc_safepoint_v1(1, NULL, 0);
+    printf("%lld\n", (long long)osty_gc_debug_collection_count());
+    printf("%lld\n", (long long)osty_gc_debug_live_count());
+    printf("%d\n", osty_rt_list_get_ptr(list, 0) == saved_child);
+    osty_gc_root_release_v1(list);
+    child = osty_gc_alloc_v1(10, 8, "late");
+    (void)child;
+    osty_gc_safepoint_v1(2, NULL, 0);
+    printf("%lld\n", (long long)osty_gc_debug_collection_count());
+    printf("%lld\n", (long long)osty_gc_debug_live_count());
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	buildOutput, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runCmd := exec.Command(binaryPath)
+	runCmd.Env = append(os.Environ(), "OSTY_GC_THRESHOLD_BYTES=1")
+	runOutput, err := runCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	if got, want := string(runOutput), "1\n2\n1\n2\n0\n"; got != want {
+		t.Fatalf("runtime pressure list harness stdout = %q, want %q", got, want)
 	}
 }

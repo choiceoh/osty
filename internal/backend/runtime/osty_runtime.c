@@ -42,9 +42,16 @@ enum {
 
 static osty_gc_header *osty_gc_objects = NULL;
 static int64_t osty_gc_live_count = 0;
+static int64_t osty_gc_live_bytes = 0;
 static int64_t osty_gc_collection_count = 0;
+static int64_t osty_gc_allocated_since_collect = 0;
 static bool osty_gc_safepoint_stress_loaded = false;
 static bool osty_gc_safepoint_stress_enabled = false;
+static bool osty_gc_pressure_limit_loaded = false;
+static int64_t osty_gc_pressure_limit_bytes = 32768;
+static bool osty_gc_collection_requested = false;
+
+void osty_gc_post_write_v1(void *owner, void *value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.post_write_v1"));
 
 static void osty_rt_abort(const char *message) {
     fprintf(stderr, "osty llvm runtime: %s\n", message);
@@ -59,6 +66,7 @@ static void osty_gc_link(osty_gc_header *header) {
     }
     osty_gc_objects = header;
     osty_gc_live_count += 1;
+    osty_gc_live_bytes += header->byte_size;
 }
 
 static void osty_gc_unlink(osty_gc_header *header) {
@@ -71,6 +79,43 @@ static void osty_gc_unlink(osty_gc_header *header) {
         header->next->prev = header->prev;
     }
     osty_gc_live_count -= 1;
+    osty_gc_live_bytes -= header->byte_size;
+}
+
+static int64_t osty_gc_pressure_limit_now(void) {
+    const char *value;
+    char *end = NULL;
+    long long parsed;
+
+    if (osty_gc_pressure_limit_loaded) {
+        return osty_gc_pressure_limit_bytes;
+    }
+    osty_gc_pressure_limit_loaded = true;
+    value = getenv("OSTY_GC_THRESHOLD_BYTES");
+    if (value == NULL || value[0] == '\0') {
+        return osty_gc_pressure_limit_bytes;
+    }
+    parsed = strtoll(value, &end, 10);
+    if (end == value || (end != NULL && *end != '\0') || parsed < 0) {
+        osty_rt_abort("invalid OSTY_GC_THRESHOLD_BYTES");
+    }
+    osty_gc_pressure_limit_bytes = (int64_t)parsed;
+    return osty_gc_pressure_limit_bytes;
+}
+
+static void osty_gc_note_allocation(size_t payload_size) {
+    int64_t pressure_limit = osty_gc_pressure_limit_now();
+
+    if (payload_size > (size_t)INT64_MAX) {
+        osty_rt_abort("GC payload size overflow");
+    }
+    osty_gc_allocated_since_collect += (int64_t)payload_size;
+    if (pressure_limit <= 0) {
+        return;
+    }
+    if (osty_gc_live_bytes >= pressure_limit || osty_gc_allocated_since_collect >= pressure_limit) {
+        osty_gc_collection_requested = true;
+    }
 }
 
 static osty_gc_header *osty_gc_find_header(void *payload) {
@@ -107,6 +152,7 @@ static void *osty_gc_allocate_managed(size_t byte_size, int64_t object_kind, con
     header->site = site;
     header->payload = (void *)(header + 1);
     osty_gc_link(header);
+    osty_gc_note_allocation(payload_size);
     return header->payload;
 }
 
@@ -194,6 +240,8 @@ static void osty_gc_collect_now_with_stack_roots(void *const *root_slots, int64_
         header = next;
     }
     osty_gc_collection_count += 1;
+    osty_gc_allocated_since_collect = 0;
+    osty_gc_collection_requested = false;
 }
 
 static void osty_gc_collect_now(void) {
@@ -319,6 +367,7 @@ void osty_rt_list_push_f64(void *raw_list, double value) {
 
 void osty_rt_list_push_ptr(void *raw_list, void *value) {
     osty_rt_list_push_bytes(raw_list, &value, sizeof(value), true);
+    osty_gc_post_write_v1(raw_list, value, OSTY_GC_KIND_LIST);
 }
 
 int64_t osty_rt_list_get_i64(void *raw_list, int64_t index) {
@@ -390,7 +439,6 @@ void *osty_rt_strings_Split(const char *value, const char *sep) {
 }
 
 void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
-void osty_gc_post_write_v1(void *owner, void *value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.post_write_v1"));
 void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
 void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
 void osty_gc_safepoint_v1(int64_t safepoint_id, void *const *root_slots, int64_t root_slot_count) __asm__(OSTY_GC_SYMBOL("osty.gc.safepoint_v1"));
@@ -403,9 +451,22 @@ void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site)
 }
 
 void osty_gc_post_write_v1(void *owner, void *value, int64_t slot_kind) {
-    (void)owner;
-    (void)value;
+    osty_gc_header *owner_header;
+
     (void)slot_kind;
+    if (owner == NULL || value == NULL) {
+        return;
+    }
+    owner_header = osty_gc_find_header(owner);
+    if (owner_header == NULL) {
+        return;
+    }
+    if (osty_gc_find_header(value) == NULL) {
+        return;
+    }
+    if (owner_header->root_count > 0) {
+        osty_gc_collection_requested = true;
+    }
 }
 
 void osty_gc_root_bind_v1(void *root) {
@@ -435,7 +496,7 @@ void osty_gc_safepoint_v1(int64_t safepoint_id, void *const *root_slots, int64_t
     if (root_slot_count < 0) {
         osty_rt_abort("negative safepoint root slot count");
     }
-    if (!osty_gc_safepoint_stress_enabled_now()) {
+    if (!osty_gc_safepoint_stress_enabled_now() && !osty_gc_collection_requested) {
         return;
     }
     osty_gc_collect_now_with_stack_roots(root_slots, root_slot_count);
@@ -451,4 +512,8 @@ int64_t osty_gc_debug_live_count(void) {
 
 int64_t osty_gc_debug_collection_count(void) {
     return osty_gc_collection_count;
+}
+
+int64_t osty_gc_debug_live_bytes(void) {
+    return osty_gc_live_bytes;
 }

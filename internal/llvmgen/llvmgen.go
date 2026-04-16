@@ -2306,6 +2306,9 @@ func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
 	if len(call.Args) != 1 || call.Args[0].Name != "" || call.Args[0].Value == nil {
 		return true, unsupported("call", "list.push requires one positional argument")
 	}
+	emitter := g.toOstyEmitter()
+	g.emitGCSafepoint(emitter)
+	g.takeOstyEmitter(emitter)
 	base, err := g.emitExpr(field.X)
 	if err != nil {
 		return true, err
@@ -2322,7 +2325,7 @@ func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
 	}
 	pushSymbol := listRuntimePushSymbol(elemTyp)
 	g.declareRuntimeSymbol(pushSymbol, "void", []paramInfo{{typ: "ptr"}, {typ: elemTyp}})
-	emitter := g.toOstyEmitter()
+	emitter = g.toOstyEmitter()
 	emitter.body = append(emitter.body, fmt.Sprintf(
 		"  call void @%s(%s)",
 		pushSymbol,
