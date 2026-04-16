@@ -221,7 +221,12 @@ fn main() {
 	for _, want := range []string{
 		"%osty.iface = type { ptr, ptr }",
 		"@osty.vtable.Vec__Sized",
-		"ptr @Vec__size",
+		// Phase 6f follow-up: the vtable slot points at a shim that
+		// adapts the interface dispatch ABI to the underlying method's
+		// calling convention; the shim's body in turn calls the real
+		// `Vec__size` symbol.
+		"@osty.shim.Vec__Sized__size",
+		"@Vec__size",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("generated IR missing %q:\n%s", want, got)
@@ -285,7 +290,8 @@ fn main() {
 	for _, want := range []string{
 		"%osty.iface",
 		"@osty.vtable.Thing__Combine",
-		"ptr @Thing__combine",
+		"@osty.shim.Thing__Combine__combine",
+		"@Thing__combine",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("generated IR missing %q:\n%s", want, got)
@@ -452,7 +458,8 @@ fn main() {
 		"%osty.iface",
 		mangled,
 		"@osty.vtable.IntBox__" + mangled,
-		"ptr @IntBox__get",
+		"@osty.shim.IntBox__" + mangled + "__get",
+		"@IntBox__get",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("generated IR missing %q:\n%s", want, got)
