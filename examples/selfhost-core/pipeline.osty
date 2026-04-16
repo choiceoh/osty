@@ -1,6 +1,4 @@
-use runtime.strings as strings {
-    fn Join(elems: List<String>, sep: String) -> String
-}
+use std.strings as strings
 
 pub struct SelfhostPipelineReport {
     pub tokens: Int,
@@ -112,5 +110,5 @@ fn selfhostPipelineDiagnosticOutput(
     if lintText != "" {
         lines.push(lintText)
     }
-    strings.Join(lines, "\n")
+    strings.join(lines, "\n")
 }

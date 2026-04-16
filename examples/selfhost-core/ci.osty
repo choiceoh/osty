@@ -102,13 +102,7 @@ use go "github.com/osty/osty/internal/cihost" as host {
         Error: String,
     }
 }
-use go "strings" as ciStrings {
-    fn HasPrefix(s: String, prefix: String) -> Bool
-    fn Join(elems: List<String>, sep: String) -> String
-    fn Split(s: String, sep: String) -> List<String>
-    fn SplitN(s: String, sep: String, n: Int) -> List<String>
-    fn TrimPrefix(s: String, prefix: String) -> String
-}
+use std.strings as ciStrings
 
 pub type CheckName = String
 
@@ -603,7 +597,7 @@ pub fn ciPolicyWorkspaceMembersCore(members: List<String>) -> List<CiDiagCore> {
 }
 
 pub fn ciWorkspaceMemberEscapes(mem: String) -> Bool {
-    mem == "" || ciStrings.HasPrefix(mem, "..") || ciStrings.HasPrefix(mem, "/")
+    mem == "" || ciStrings.hasPrefix(mem, "..") || ciStrings.hasPrefix(mem, "/")
 }
 
 pub fn ciReleaseManifestCore(input: CiReleaseCore) -> List<CiDiagCore> {
@@ -687,17 +681,17 @@ pub fn ciIsStrictSemver(raw: String) -> Bool {
     if raw == "" {
         return false
     }
-    let text = ciStrings.TrimPrefix(raw, "v")
+    let text = ciStrings.trimPrefix(raw, "v")
     if text == "" {
         return false
     }
 
-    let plus = ciSplitSummary(ciStrings.SplitN(text, "+", 2))
+    let plus = ciSplitSummary(ciStrings.splitN(text, "+", 2))
     if plus.count == 2 && !(ciBuildIdentifiersValid(plus.second)) {
         return false
     }
 
-    let dash = ciSplitSummary(ciStrings.SplitN(plus.first, "-", 2))
+    let dash = ciSplitSummary(ciStrings.splitN(plus.first, "-", 2))
     if !(ciSemCoreValid(dash.first)) {
         return false
     }
@@ -788,7 +782,7 @@ fn releaseCore(manifest: host.Manifest?) -> CiReleaseCore {
 }
 
 fn dependencyCoreFromRow(row: String) -> CiDependencyCore {
-    let parts = ciSplitFive(ciStrings.Split(row, "\t"))
+    let parts = ciSplitFive(ciStrings.split(row, "\t"))
     CiDependencyCore {
         name: parts.first,
         path: parts.second,
@@ -835,7 +829,7 @@ fn ciJoin2(a: String, b: String) -> String {
     let mut parts: List<String> = []
     parts.push(a)
     parts.push(b)
-    ciStrings.Join(parts, "")
+    ciStrings.join(parts, "")
 }
 
 fn ciJoin3(a: String, b: String, c: String) -> String {
@@ -843,7 +837,7 @@ fn ciJoin3(a: String, b: String, c: String) -> String {
     parts.push(a)
     parts.push(b)
     parts.push(c)
-    ciStrings.Join(parts, "")
+    ciStrings.join(parts, "")
 }
 
 fn ciJoin5(a: String, b: String, c: String, d: String, e: String) -> String {
@@ -853,7 +847,7 @@ fn ciJoin5(a: String, b: String, c: String, d: String, e: String) -> String {
     parts.push(c)
     parts.push(d)
     parts.push(e)
-    ciStrings.Join(parts, "")
+    ciStrings.join(parts, "")
 }
 
 fn ciJoin7(a: String, b: String, c: String, d: String, e: String, f: String, g: String) -> String {
@@ -865,7 +859,7 @@ fn ciJoin7(a: String, b: String, c: String, d: String, e: String, f: String, g: 
     parts.push(e)
     parts.push(f)
     parts.push(g)
-    ciStrings.Join(parts, "")
+    ciStrings.join(parts, "")
 }
 
 fn ciStringListEmpty(xs: List<String>) -> Bool {
@@ -881,7 +875,7 @@ fn ciPackageNameValid(name: String) -> Bool {
         return false
     }
     let mut first = true
-    for unit in ciStrings.Split(name, "") {
+    for unit in ciStrings.split(name, "") {
         if first {
             if !(unit >= "a" && unit <= "z") {
                 return false
@@ -940,15 +934,15 @@ fn ciSemverMajor(raw: String) -> Int {
     if !(ciIsStrictSemver(raw)) {
         return -1
     }
-    let text = ciStrings.TrimPrefix(raw, "v")
-    let plus = ciSplitSummary(ciStrings.SplitN(text, "+", 2))
-    let dash = ciSplitSummary(ciStrings.SplitN(plus.first, "-", 2))
-    let core = ciSplitSummary(ciStrings.Split(dash.first, "."))
+    let text = ciStrings.trimPrefix(raw, "v")
+    let plus = ciSplitSummary(ciStrings.splitN(text, "+", 2))
+    let dash = ciSplitSummary(ciStrings.splitN(plus.first, "-", 2))
+    let core = ciSplitSummary(ciStrings.split(dash.first, "."))
     ciParseSemNumber(core.first)
 }
 
 fn ciSemCoreValid(text: String) -> Bool {
-    let parts = ciSplitSummary(ciStrings.Split(text, "."))
+    let parts = ciSplitSummary(ciStrings.split(text, "."))
     if parts.count != 3 {
         return false
     }
@@ -961,7 +955,7 @@ fn ciPreIdentifiersValid(text: String) -> Bool {
     if text == "" {
         return false
     }
-    for part in ciStrings.Split(text, ".") {
+    for part in ciStrings.split(text, ".") {
         if !(ciPreIdentValid(part)) {
             return false
         }
@@ -973,7 +967,7 @@ fn ciBuildIdentifiersValid(text: String) -> Bool {
     if text == "" {
         return false
     }
-    for part in ciStrings.Split(text, ".") {
+    for part in ciStrings.split(text, ".") {
         if !(ciIdentifierTextValid(part)) {
             return false
         }
@@ -986,7 +980,7 @@ fn ciPreIdentValid(text: String) -> Bool {
         return false
     }
     if ciAllAsciiDigits(text) {
-        return ciStringUnitCount(text) == 1 || !(ciStrings.HasPrefix(text, "0"))
+        return ciStringUnitCount(text) == 1 || !(ciStrings.hasPrefix(text, "0"))
     }
     ciIdentifierTextValid(text)
 }
@@ -995,7 +989,7 @@ fn ciIdentifierTextValid(text: String) -> Bool {
     if text == "" {
         return false
     }
-    for unit in ciStrings.Split(text, "") {
+    for unit in ciStrings.split(text, "") {
         if !(ciIsSemIdentUnit(unit)) {
             return false
         }
@@ -1007,7 +1001,7 @@ fn ciAllAsciiDigits(text: String) -> Bool {
     if text == "" {
         return false
     }
-    for unit in ciStrings.Split(text, "") {
+    for unit in ciStrings.split(text, "") {
         if ciDigitStringValue(unit) < 0 {
             return false
         }
@@ -1017,7 +1011,7 @@ fn ciAllAsciiDigits(text: String) -> Bool {
 
 fn ciStringUnitCount(text: String) -> Int {
     let mut count = 0
-    for unit in ciStrings.Split(text, "") {
+    for unit in ciStrings.split(text, "") {
         let _ = unit
         count = count + 1
     }
@@ -1028,11 +1022,11 @@ fn ciParseSemNumber(text: String) -> Int {
     if text == "" {
         return -1
     }
-    if ciStringUnitCount(text) > 1 && ciStrings.HasPrefix(text, "0") {
+    if ciStringUnitCount(text) > 1 && ciStrings.hasPrefix(text, "0") {
         return -1
     }
     let mut out = 0
-    for unit in ciStrings.Split(text, "") {
+    for unit in ciStrings.split(text, "") {
         let digit = ciDigitStringValue(unit)
         if digit < 0 {
             return -1

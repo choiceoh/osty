@@ -1,13 +1,4 @@
-use runtime.strings as strings {
-    fn HasPrefix(s: String, prefix: String) -> Bool
-    fn HasSuffix(s: String, suffix: String) -> Bool
-    fn Join(elems: List<String>, sep: String) -> String
-    fn Split(s: String, sep: String) -> List<String>
-    fn SplitN(s: String, sep: String, n: Int) -> List<String>
-    fn TrimPrefix(s: String, prefix: String) -> String
-    fn TrimSpace(s: String) -> String
-    fn TrimSuffix(s: String, suffix: String) -> String
-}
+use std.strings as strings
 
 pub struct FrontCheckBinding {
     pub name: String,
@@ -1223,7 +1214,7 @@ fn frontCheckFnType(params: List<String>, ret: String) -> String {
 }
 
 fn frontCheckJoinTypes(xs: List<String>) -> String {
-    strings.Join(xs, ", ")
+    strings.join(xs, ", ")
 }
 
 fn frontCheckOneArgType(head: String, arg: String) -> String {
@@ -1287,7 +1278,7 @@ fn frontCheckIntAt(xs: List<Int>, idx: Int) -> Int {
 }
 
 fn frontCheckLastPathSegment(path: String) -> String {
-    let parts = strings.Split(path, ".")
+    let parts = strings.split(path, ".")
     let mut last = path
     for part in parts {
         last = part
@@ -1300,22 +1291,22 @@ fn frontCheckTypeHead(typeName: String) -> String {
 }
 
 fn frontCheckParseType(typeName: String) -> FrontTypeView {
-    let text = strings.TrimSpace(typeName)
+    let text = strings.trimSpace(typeName)
     if text == "" {
         return FrontTypeView { kind: "invalid", head: "Invalid", args: [], params: [], ret: "" }
     }
-    if strings.HasPrefix(text, "(") && strings.HasSuffix(text, ")") {
-        let inner = strings.TrimSuffix(strings.TrimPrefix(text, "("), ")")
+    if strings.hasPrefix(text, "(") && strings.hasSuffix(text, ")") {
+        let inner = strings.trimSuffix(strings.trimPrefix(text, "("), ")")
         let mut elems: List<String> = []
-        if strings.TrimSpace(inner) != "" {
+        if strings.trimSpace(inner) != "" {
             elems = frontCheckSplitTopLevel(inner)
         }
         return FrontTypeView { kind: "tuple", head: "Tuple", args: elems, params: [], ret: "" }
     }
-    if strings.HasPrefix(text, "fn(") {
+    if strings.hasPrefix(text, "fn(") {
         let paramsText = frontCheckFnParamsTextRaw(text)
         let mut params: List<String> = []
-        if strings.TrimSpace(paramsText) != "" {
+        if strings.trimSpace(paramsText) != "" {
             params = frontCheckSplitTopLevel(paramsText)
         }
         let ret = frontCheckFnReturnRaw(text)
@@ -1324,7 +1315,7 @@ fn frontCheckParseType(typeName: String) -> FrontTypeView {
     let head = frontCheckRawTypeHead(text)
     let argsText = frontCheckGenericArgsTextRaw(text, head)
     let mut args: List<String> = []
-    if strings.TrimSpace(argsText) != "" {
+    if strings.trimSpace(argsText) != "" {
         args = frontCheckSplitTopLevel(argsText)
     }
     FrontTypeView { kind: "named", head, args, params: [], ret: "" }
@@ -1332,7 +1323,7 @@ fn frontCheckParseType(typeName: String) -> FrontTypeView {
 
 fn frontCheckRawTypeHead(typeName: String) -> String {
     let mut head = ""
-    for unit in strings.Split(typeName, "") {
+    for unit in strings.split(typeName, "") {
         if unit == "<" {
             return head
         }
@@ -1346,10 +1337,10 @@ fn frontCheckGenericArgsText(typeName: String) -> String {
 }
 
 fn frontCheckGenericArgsTextRaw(typeName: String, head: String) -> String {
-    if !(strings.HasPrefix(typeName, "{head}<")) || !(strings.HasSuffix(typeName, ">")) {
+    if !(strings.hasPrefix(typeName, "{head}<")) || !(strings.hasSuffix(typeName, ">")) {
         return ""
     }
-    strings.TrimSuffix(strings.TrimPrefix(typeName, "{head}<"), ">")
+    strings.trimSuffix(strings.trimPrefix(typeName, "{head}<"), ">")
 }
 
 fn frontCheckGenericArgs(typeName: String) -> List<String> {
@@ -1375,7 +1366,7 @@ fn frontCheckSplitTopLevel(text: String) -> List<String> {
     let mut cur = ""
     let mut angle = 0
     let mut paren = 0
-    for unit in strings.Split(text, "") {
+    for unit in strings.split(text, "") {
         if unit == "<" {
             angle = angle + 1
             cur = "{cur}{unit}"
@@ -1389,14 +1380,14 @@ fn frontCheckSplitTopLevel(text: String) -> List<String> {
             paren = paren - 1
             cur = "{cur}{unit}"
         } else if unit == "," && angle == 0 && paren == 0 {
-            out.push(strings.TrimSpace(cur))
+            out.push(strings.trimSpace(cur))
             cur = ""
         } else {
             cur = "{cur}{unit}"
         }
     }
-    if strings.TrimSpace(cur) != "" {
-        out.push(strings.TrimSpace(cur))
+    if strings.trimSpace(cur) != "" {
+        out.push(strings.trimSpace(cur))
     }
     out
 }
@@ -1485,7 +1476,7 @@ fn frontCheckIsAssignable(env: FrontCheckEnv, dstRaw: String, srcRaw: String) ->
         }
         return frontCheckIsAssignable(env, frontCheckFnReturn(dst), frontCheckFnReturn(src))
     }
-    if dstHead == srcHead && strings.HasSuffix(dst, ">") && strings.HasSuffix(src, ">") {
+    if dstHead == srcHead && strings.hasSuffix(dst, ">") && strings.hasSuffix(src, ">") {
         let dstArgs = frontCheckSplitTopLevel(frontCheckGenericArgsText(dst))
         let srcArgs = frontCheckSplitTopLevel(frontCheckGenericArgsText(src))
         if frontCheckStringCount(dstArgs) != frontCheckStringCount(srcArgs) {
@@ -3120,19 +3111,19 @@ fn frontCheckPatternKind(pat: AstNode) -> String {
     if pat.extra == astPatternFieldKind() {
         return "field"
     }
-    if strings.HasPrefix(pat.text, "ident:") {
+    if strings.hasPrefix(pat.text, "ident:") {
         return "ident"
     }
-    if strings.HasPrefix(pat.text, "variant:") {
+    if strings.hasPrefix(pat.text, "variant:") {
         return "variant"
     }
-    if strings.HasPrefix(pat.text, "struct:") {
+    if strings.hasPrefix(pat.text, "struct:") {
         return "struct"
     }
-    if strings.HasPrefix(pat.text, "binding:") {
+    if strings.hasPrefix(pat.text, "binding:") {
         return "binding"
     }
-    if strings.HasPrefix(pat.text, "literal:") {
+    if strings.hasPrefix(pat.text, "literal:") {
         return "literal"
     }
     if pat.op == FrontAt {
@@ -3155,20 +3146,20 @@ fn frontCheckPatternPayload(pat: AstNode) -> String {
     if pat.extra > 0 && (kind == "ident" || kind == "variant" || kind == "struct" || kind == "binding" || kind == "literal" || kind == "field") {
         return pat.text
     }
-    if strings.HasPrefix(pat.text, "ident:") {
-        return strings.TrimPrefix(pat.text, "ident:")
+    if strings.hasPrefix(pat.text, "ident:") {
+        return strings.trimPrefix(pat.text, "ident:")
     }
-    if strings.HasPrefix(pat.text, "variant:") {
-        return strings.TrimPrefix(pat.text, "variant:")
+    if strings.hasPrefix(pat.text, "variant:") {
+        return strings.trimPrefix(pat.text, "variant:")
     }
-    if strings.HasPrefix(pat.text, "struct:") {
-        return strings.TrimPrefix(pat.text, "struct:")
+    if strings.hasPrefix(pat.text, "struct:") {
+        return strings.trimPrefix(pat.text, "struct:")
     }
-    if strings.HasPrefix(pat.text, "binding:") {
-        return strings.TrimPrefix(pat.text, "binding:")
+    if strings.hasPrefix(pat.text, "binding:") {
+        return strings.trimPrefix(pat.text, "binding:")
     }
-    if strings.HasPrefix(pat.text, "literal:") {
-        return strings.TrimPrefix(pat.text, "literal:")
+    if strings.hasPrefix(pat.text, "literal:") {
+        return strings.trimPrefix(pat.text, "literal:")
     }
     pat.text
 }
@@ -3417,8 +3408,8 @@ fn frontCheckPatternCoversFiniteCase(file: AstFile, patIdx: Int, typeName: Strin
         if frontCheckPatternKind(pat) == "tuple" {
             let elems = frontCheckTupleElems(typeName)
             let mut tupleText = value
-            if strings.HasPrefix(tupleText, "(") && strings.HasSuffix(tupleText, ")") {
-                tupleText = strings.TrimSuffix(strings.TrimPrefix(tupleText, "("), ")")
+            if strings.hasPrefix(tupleText, "(") && strings.hasSuffix(tupleText, ")") {
+                tupleText = strings.trimSuffix(strings.trimPrefix(tupleText, "("), ")")
             }
             let values = frontCheckSplitCaseFields(tupleText)
             if frontCheckIntCount(pat.children) != frontCheckStringCount(values) || frontCheckStringCount(elems) != frontCheckStringCount(values) {
@@ -3480,20 +3471,20 @@ fn frontCheckVariantLookupInFile(file: AstFile, owner: String, name: String) -> 
 
 fn frontCheckCaseHead(value: String) -> String {
     let mut head = ""
-    for unit in strings.Split(value, "") {
+    for unit in strings.split(value, "") {
         if unit == "(" {
-            return strings.TrimSpace(head)
+            return strings.trimSpace(head)
         }
         head = "{head}{unit}"
     }
-    strings.TrimSpace(head)
+    strings.trimSpace(head)
 }
 
 fn frontCheckCaseArgsText(value: String) -> String {
     let mut out = ""
     let mut found = false
     let mut depth = 0
-    for unit in strings.Split(value, "") {
+    for unit in strings.split(value, "") {
         if found {
             if unit == "(" {
                 depth = depth + 1
@@ -3516,12 +3507,12 @@ fn frontCheckCaseArgsText(value: String) -> String {
 
 fn frontCheckSplitCaseFields(text: String) -> List<String> {
     let mut out: List<String> = []
-    if strings.TrimSpace(text) == "" {
+    if strings.trimSpace(text) == "" {
         return out
     }
     let mut cur = ""
     let mut paren = 0
-    for unit in strings.Split(text, "") {
+    for unit in strings.split(text, "") {
         if unit == "(" {
             paren = paren + 1
             cur = "{cur}{unit}"
@@ -3529,14 +3520,14 @@ fn frontCheckSplitCaseFields(text: String) -> List<String> {
             paren = paren - 1
             cur = "{cur}{unit}"
         } else if unit == "|" && paren == 0 {
-            out.push(strings.TrimSpace(cur))
+            out.push(strings.trimSpace(cur))
             cur = ""
         } else {
             cur = "{cur}{unit}"
         }
     }
-    if strings.TrimSpace(cur) != "" {
-        out.push(strings.TrimSpace(cur))
+    if strings.trimSpace(cur) != "" {
+        out.push(strings.trimSpace(cur))
     }
     out
 }
@@ -3932,7 +3923,7 @@ fn frontCheckFnParamsTextRaw(typeName: String) -> String {
     let mut params = ""
     let mut depth = 0
     let mut i = 0
-    for unit in strings.Split(typeName, "") {
+    for unit in strings.split(typeName, "") {
         if i >= 3 {
             if unit == "(" {
                 depth = depth + 1
@@ -3957,7 +3948,7 @@ fn frontCheckFnReturnText(typeName: String) -> String {
 }
 
 fn frontCheckFnReturnRaw(typeName: String) -> String {
-    let ret = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(frontCheckFnReturnTextRaw(typeName)), "->"))
+    let ret = strings.trimSpace(strings.trimPrefix(strings.trimSpace(frontCheckFnReturnTextRaw(typeName)), "->"))
     if ret == "" {
         return "()"
     }
@@ -3969,7 +3960,7 @@ fn frontCheckFnReturnTextRaw(typeName: String) -> String {
     let mut depth = 0
     let mut i = 0
     let mut found = false
-    for unit in strings.Split(typeName, "") {
+    for unit in strings.split(typeName, "") {
         if i >= 3 {
             if found {
                 rest = "{rest}{unit}"

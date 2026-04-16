@@ -1,8 +1,6 @@
 use std.testing
 
-use runtime.strings as strings {
-    fn Contains(s: String, substr: String) -> Bool
-}
+use std.strings as strings
 
 fn testSemverRequirementMatching() {
     let req = caretReq(stableVersion(1, 2, 3))
@@ -202,10 +200,10 @@ fn testSelfhostExamplePipelineRendersAnalyzerDiagnostics() {
     testing.assert(report.lintDiagnostics > 0)
     testing.assert(report.diagnostics != "")
     testing.assert(selfhostPipelineBlockingErrorCount(report) >= report.resolveDiagnostics)
-    testing.assert(strings.Contains(report.diagnostics, "error[E0500]"))
-    testing.assert(strings.Contains(report.diagnostics, "resolution"))
-    testing.assert(strings.Contains(report.diagnostics, "undefined name `missing`"))
-    testing.assert(strings.Contains(report.diagnostics, "lint[L0001]"))
+    testing.assert(strings.contains(report.diagnostics, "error[E0500]"))
+    testing.assert(strings.contains(report.diagnostics, "resolution"))
+    testing.assert(strings.contains(report.diagnostics, "undefined name `missing`"))
+    testing.assert(strings.contains(report.diagnostics, "lint[L0001]"))
 }
 
 fn testSelfhostExamplePipelinePreparesLintFixes() {
@@ -216,8 +214,8 @@ fn testSelfhostExamplePipelinePreparesLintFixes() {
     testing.assert(report.lintFixes >= 4)
     testing.assertEq(report.lintFixSkipped, 0)
     testing.assert(report.lintFixApplied >= 4)
-    testing.assert(strings.Contains(report.fixedSource, "_unused"))
-    testing.assert(strings.Contains(report.fixedSource, "_unusedValue"))
-    testing.assert(strings.Contains(report.fixedSource, "let neverChanged = 2"))
-    testing.assert(!(strings.Contains(report.fixedSource, "return neverChanged")))
+    testing.assert(strings.contains(report.fixedSource, "_unused"))
+    testing.assert(strings.contains(report.fixedSource, "_unusedValue"))
+    testing.assert(strings.contains(report.fixedSource, "let neverChanged = 2"))
+    testing.assert(!(strings.contains(report.fixedSource, "return neverChanged")))
 }

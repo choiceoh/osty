@@ -1,13 +1,4 @@
-use go "strings" as pkgStrings {
-    fn HasPrefix(s: String, prefix: String) -> Bool
-    fn Join(elems: List<String>, sep: String) -> String
-    fn Split(s: String, sep: String) -> List<String>
-    fn SplitN(s: String, sep: String, n: Int) -> List<String>
-    fn TrimPrefix(s: String, prefix: String) -> String
-    fn TrimRight(s: String, cutset: String) -> String
-    fn TrimSpace(s: String) -> String
-    fn TrimSuffix(s: String, suffix: String) -> String
-}
+use std.strings as pkgStrings
 
 /// SelfPkgSourceKind is the dependency-source shape the self-hosted package
 /// manager core can reason about without touching disk or network.
@@ -292,7 +283,7 @@ pub fn selfPkgGitURI(source: SelfPkgGitRef) -> String {
     if params.len() == 0 {
         return base
     }
-    let joined = pkgStrings.Join(params, "&")
+    let joined = pkgStrings.join(params, "&")
     "{base}?{joined}"
 }
 
@@ -312,7 +303,7 @@ pub fn selfPkgGitCheckoutRef(source: SelfPkgGitRef) -> String {
 /// selfPkgSanitizeURL maps arbitrary registry/git URLs to cache-safe path text.
 pub fn selfPkgSanitizeURL(url: String) -> String {
     let mut out = ""
-    for unit in pkgStrings.Split(url, "") {
+    for unit in pkgStrings.split(url, "") {
         if selfPkgURLUnitSafe(unit) {
             out = "{out}{unit}"
         } else {
@@ -341,7 +332,7 @@ pub fn selfPkgTomlQuote(text: String) -> String {
     let slash = r"\"
     let quote = "\""
     let mut out = quote
-    for unit in pkgStrings.Split(text, "") {
+    for unit in pkgStrings.split(text, "") {
         if unit == "\\" {
             out = "{out}{slash}{slash}"
         } else if unit == "\"" {
@@ -625,7 +616,7 @@ pub fn selfPkgVerifyChecksum(want: String, got: String) -> SelfPkgChecksumCheck 
     }
     let prefix = selfPkgChecksumPrefix()
     let quote = "\""
-    if !(pkgStrings.HasPrefix(want, prefix)) || !(pkgStrings.HasPrefix(got, prefix)) {
+    if !(pkgStrings.hasPrefix(want, prefix)) || !(pkgStrings.hasPrefix(got, prefix)) {
         return SelfPkgChecksumCheck {
             ok: false,
             message: "checksum mismatch: want {quote}{want}{quote}, got {quote}{got}{quote} (unsupported algorithm)",
@@ -711,7 +702,7 @@ pub fn selfPkgDiffLocks(
 
 fn selfPkgShortChecksum(checksum: String) -> String {
     let prefix = selfPkgChecksumPrefix()
-    let text = pkgStrings.TrimPrefix(checksum, prefix)
+    let text = pkgStrings.trimPrefix(checksum, prefix)
     if selfPkgStringUnitCount(text) > 12 {
         return "{prefix}{selfPkgFirstUnits(text, 12)}"
     }
@@ -721,7 +712,7 @@ fn selfPkgShortChecksum(checksum: String) -> String {
 fn selfPkgFirstUnits(text: String, limit: Int) -> String {
     let mut out = ""
     let mut count = 0
-    for unit in pkgStrings.Split(text, "") {
+    for unit in pkgStrings.split(text, "") {
         if count < limit {
             out = "{out}{unit}"
         }
@@ -732,7 +723,7 @@ fn selfPkgFirstUnits(text: String, limit: Int) -> String {
 
 fn selfPkgStringUnitCount(text: String) -> Int {
     let mut count = 0
-    for unit in pkgStrings.Split(text, "") {
+    for unit in pkgStrings.split(text, "") {
         let _ = unit
         count = count + 1
     }
@@ -796,7 +787,7 @@ pub fn selfPkgRegistryEndpoint(baseURL: String, segments: List<String>) -> Strin
     for segment in segments {
         parts.push(segment)
     }
-    pkgStrings.Join(parts, "/")
+    pkgStrings.join(parts, "/")
 }
 
 /// selfPkgRegistryVersionsRequest builds the index-fetch request.
@@ -907,7 +898,7 @@ pub fn selfPkgRegistryStatusOK(
             return SelfPkgStatusCheck { ok: true, message: "" }
         }
     }
-    let trimmed = pkgStrings.TrimSpace(body)
+    let trimmed = pkgStrings.trimSpace(body)
     let mut msg = trimmed
     if msg == "" {
         msg = "HTTP {statusCode}"
@@ -1216,15 +1207,15 @@ fn selfPkgFindLookupItemByGitURL(
 
 /// selfPkgNormalizeGitURL compares git dependencies across import spellings.
 pub fn selfPkgNormalizeGitURL(url: String) -> String {
-    let mut text = pkgStrings.TrimSuffix(url, "/")
-    text = pkgStrings.TrimSuffix(text, ".git")
-    let scheme = pkgStrings.SplitN(text, "://", 2)
+    let mut text = pkgStrings.trimSuffix(url, "/")
+    text = pkgStrings.trimSuffix(text, ".git")
+    let scheme = pkgStrings.splitN(text, "://", 2)
     if selfPkgStringListCount(scheme) == 2 {
         text = scheme[1]
     }
-    if pkgStrings.HasPrefix(text, "git@") {
-        text = pkgStrings.TrimPrefix(text, "git@")
-        let scp = pkgStrings.SplitN(text, ":", 2)
+    if pkgStrings.hasPrefix(text, "git@") {
+        text = pkgStrings.trimPrefix(text, "git@")
+        let scp = pkgStrings.splitN(text, ":", 2)
         if selfPkgStringListCount(scp) == 2 {
             let host = scp[0]
             let repo = scp[1]
@@ -1235,13 +1226,13 @@ pub fn selfPkgNormalizeGitURL(url: String) -> String {
 }
 
 fn selfPkgPathHasSlash(path: String) -> Bool {
-    let parts = pkgStrings.Split(path, "/")
+    let parts = pkgStrings.split(path, "/")
     selfPkgStringListCount(parts) > 1
 }
 
 fn selfPkgLastPathSegment(path: String) -> String {
     let mut last = path
-    for part in pkgStrings.Split(path, "/") {
+    for part in pkgStrings.split(path, "/") {
         last = part
     }
     last

@@ -1,9 +1,6 @@
 use std.testing
 
-use go "strings" as pkgTestStrings {
-    fn Contains(s: String, substr: String) -> Bool
-    fn Index(s: String, substr: String) -> Int
-}
+use std.strings as pkgTestStrings
 
 fn assertSelfPkgVersion(got: SemVersion, want: SemVersion) {
     testing.assertEq(compareSemVersion(got, want), 0)
@@ -180,9 +177,9 @@ fn testSelfPkgMarshalLockSortsAndEscapesCanonicalOutput() {
     testing.assert(
         pkgStringsIndexBefore(text, "\"alpha 0.1.0 (registry+default)\"", "\"beta 0.2.0\""),
     )
-    testing.assert(pkgTestStrings.Contains(text, "version = 1"))
+    testing.assert(pkgTestStrings.contains(text, "version = 1"))
     testing.assertEq(selfPkgTomlQuote("plain"), "\"plain\"")
-    testing.assert(pkgTestStrings.Contains(selfPkgTomlQuote("line\nnext"), r"\n"))
+    testing.assert(pkgTestStrings.contains(selfPkgTomlQuote("line\nnext"), r"\n"))
 }
 
 fn pkgStringsIndexBefore(text: String, left: String, right: String) -> Bool {
@@ -227,8 +224,8 @@ fn testSelfPkgRegistryProtocolRequestsAndStatusChecks() {
     )
     testing.assertEq(yank.method, "DELETE")
     testing.assertEq(unyank.method, "PUT")
-    testing.assert(pkgTestStrings.Contains(yank.url, "/yank"))
-    testing.assert(pkgTestStrings.Contains(unyank.url, "/unyank"))
+    testing.assert(pkgTestStrings.contains(yank.url, "/yank"))
+    testing.assert(pkgTestStrings.contains(unyank.url, "/unyank"))
 
     let okStatuses: List<Int> = [200, 201]
     testing.assert(selfPkgRegistryStatusOK("u", 200, "", okStatuses).ok)

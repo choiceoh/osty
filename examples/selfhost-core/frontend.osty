@@ -1,12 +1,4 @@
-use runtime.strings as strings {
-    fn Count(s: String, substr: String) -> Int
-    fn Fields(s: String) -> List<String>
-    fn HasPrefix(s: String, prefix: String) -> Bool
-    fn HasSuffix(s: String, suffix: String) -> Bool
-    fn Join(elems: List<String>, sep: String) -> String
-    fn Split(s: String, sep: String) -> List<String>
-    fn SplitN(s: String, sep: String, n: Int) -> List<String>
-}
+use std.strings as strings
 
 /// FrontTokenKind mirrors the compiler token categories needed by the
 /// self-hosting front end.
@@ -575,7 +567,7 @@ pub fn emptyFrontLexSummary() -> FrontLexSummary {
 /// Go lexer's compact Token surface: token text can be recovered from
 /// source+span, while diagnostics and comments remain independently iterable.
 pub fn frontendLexStream(source: String) -> FrontLexStream {
-    let units = strings.Split(source, "")
+    let units = strings.split(source, "")
     let unitCount = stringUnitCount(source)
     let mut tokens: List<FrontLexToken> = []
     let mut diagnostics: List<FrontLexDiagnostic> = []
@@ -1414,7 +1406,7 @@ pub fn frontStringNormalizedLength(length: Int, triple: Bool, normalizedTripleUn
 
 pub fn frontUnitsMatchAt(units: List<String>, start: Int, text: String) -> Bool {
     let mut offset = 0
-    for unit in strings.Split(text, "") {
+    for unit in strings.split(text, "") {
         if frontUnitAt(units, start + offset) != unit {
             return false
         }
@@ -1868,7 +1860,7 @@ pub fn frontTokensFromStream(stream: FrontLexStream) -> List<FrontToken> {
 }
 
 pub fn frontTokensFromSource(source: String, stream: FrontLexStream) -> List<FrontToken> {
-    let units = strings.Split(source, "")
+    let units = strings.split(source, "")
     let mut parseTokens: List<FrontToken> = []
     for tok in stream.tokens {
         parseTokens.push(
@@ -1887,14 +1879,14 @@ pub fn frontLexemeFromUnits(units: List<String>, start: Int, length: Int) -> Str
     for idx in start..end {
         parts.push(frontUnitAt(units, idx))
     }
-    strings.Join(parts, "")
+    strings.join(parts, "")
 }
 
 /// frontendLexSummary scans Osty source at character granularity. It mirrors
 /// the Go lexer surface needed by self-hosting: identifiers/keywords,
 /// literals, comments, implicit newlines, and multi-character punctuation.
 pub fn frontendLexSummary(source: String) -> FrontLexSummary {
-    let units = strings.Split(source, "")
+    let units = strings.split(source, "")
     let unitCount = stringUnitCount(source)
     let mut summary = emptyFrontLexSummary()
     let mut insertTerm = false
@@ -2304,7 +2296,7 @@ pub fn frontUnitsMatch(units: List<String>, start: Int, consumed: Int, text: Str
         return false
     }
     let mut offset = 0
-    for unit in strings.Split(text, "") {
+    for unit in strings.split(text, "") {
         if frontUnitAt(units, start + offset) != unit {
             return false
         }
@@ -2548,16 +2540,16 @@ pub fn classifyFrontLexeme(text: String) -> FrontTokenKind {
     if text == "" {
         return FrontIllegal
     }
-    if strings.HasPrefix(text, "r\"") {
+    if strings.hasPrefix(text, "r\"") {
         return FrontRawString
     }
-    if strings.HasPrefix(text, "b'") {
+    if strings.hasPrefix(text, "b'") {
         return FrontByte
     }
-    if strings.HasPrefix(text, "\"") {
+    if strings.hasPrefix(text, "\"") {
         return FrontString
     }
-    if strings.HasPrefix(text, "'") {
+    if strings.hasPrefix(text, "'") {
         return FrontChar
     }
     if allAsciiDigits(text) {
@@ -2584,19 +2576,19 @@ pub fn classifyFrontLexeme(text: String) -> FrontTokenKind {
 }
 
 pub fn isFrontFloatLexeme(text: String) -> Bool {
-    if strings.Count(text, ".") != 1 {
+    if strings.count(text, ".") != 1 {
         return false
     }
-    if strings.HasPrefix(text, ".") || strings.HasSuffix(text, ".") {
+    if strings.hasPrefix(text, ".") || strings.hasSuffix(text, ".") {
         return false
     }
-    let parts = splitSummary(strings.SplitN(text, ".", 2))
+    let parts = splitSummary(strings.splitN(text, ".", 2))
     parts.count == 2 && allAsciiDigits(parts.first) && allAsciiDigits(parts.second)
 }
 
 pub fn isFrontIdentText(text: String) -> Bool {
     let mut count = 0
-    for unit in strings.Split(text, "") {
+    for unit in strings.split(text, "") {
         if count == 0 {
             if !(isFrontIdentStart(unit)) {
                 return false
@@ -5502,7 +5494,7 @@ pub fn frontAssignableName(dst: String, src: String) -> Bool {
 }
 
 pub fn frontInferLiteralKind(text: String) -> FrontTypeKind {
-    if strings.HasPrefix(text, "\"") {
+    if strings.hasPrefix(text, "\"") {
         return FrontTypeString
     }
     if text == "true" || text == "false" {
