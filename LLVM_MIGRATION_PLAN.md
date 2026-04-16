@@ -307,12 +307,16 @@ artifact/cache layout 정책은 [`LLVM_ARTIFACT_LAYOUT.md`](./LLVM_ARTIFACT_LAYO
     필드 추가로 AST 레벨 return 타입을 추적. smokes:
     `TestGenerateModuleInterfaceBoxingFromReturn`,
     `TestGenerateModuleInterfaceBoxingFromCallArg`.
+  - Phase 6e(assign-statement 자동 boxing): `let mut s: Iface = concrete`
+    로 bound된 slot에 concrete값을 `s = w`로 재할당하면 자동 boxing.
+    `boxInterfaceValue`가 반환 value에 `sourceType: ifaceType`을 태그
+    해 slot이 자신의 선언 interface identity를 기억한다. smoke:
+    `TestGenerateModuleInterfaceBoxingFromAssign`.
   - 남은 범위: bare function-pointer turbofish (`let f = id::<Int>`),
     generic interface specialization의 vtable 연결 (Phase 5 `_ZTSN…E` +
-    Phase 6a scaffold), 암묵 타입 변환, assign-statement 레벨의 자동
-    boxing (현재 let/return/call 세 경로), payload-free / 비-리터럴
-    인자를 가진 variant call의 타입 복원(궁극적으로는 checker 쪽
-    generic variant-constructor inference 보강).
+    Phase 6a scaffold), 암묵 타입 변환, payload-free / 비-리터럴 인자를
+    가진 variant call의 타입 복원(궁극적으로는 checker 쪽 generic
+    variant-constructor inference 보강).
 - workspace/dependency graph를 codegen/link order로 변환한다.
 - `use go` FFI는 LLVM backend에서 그대로 지원하기 어렵기 때문에 새 FFI 정책을
   정한다.
