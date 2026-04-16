@@ -1,6 +1,7 @@
 use go "strings" as strings {
     fn HasPrefix(s: String, prefix: String) -> Bool
     fn Split(s: String, sep: String) -> List<String>
+    fn TrimPrefix(s: String, prefix: String) -> String
 }
 
 /// SelfSymbol is the self-hosting resolver's compact symbol record.
@@ -35,6 +36,9 @@ pub struct SelfResolveResult {
     pub refs: Int,
     pub refNames: List<String>,
     pub refNodes: List<Int>,
+    pub refTargets: List<Int>,
+    pub refTargetStarts: List<Int>,
+    pub refTargetEnds: List<Int>,
     pub unresolved: Int,
     pub duplicates: Int,
 }
@@ -94,6 +98,9 @@ pub fn emptySelfResolveResult() -> SelfResolveResult {
         refs: 0,
         refNames: [],
         refNodes: [],
+        refTargets: [],
+        refTargetStarts: [],
+        refTargetEnds: [],
         unresolved: 0,
         duplicates: 0,
     }
@@ -166,6 +173,104 @@ pub fn selfResolveHasRefNode(result: SelfResolveResult, node: Int) -> Bool {
         }
     }
     false
+}
+
+pub fn selfResolveHasRefTarget(
+    result: SelfResolveResult,
+    name: String,
+    start: Int,
+    end: Int,
+    node: Int,
+) -> Bool {
+    let mut idx = 0
+    for refName in result.refNames {
+        if refName == name {
+            let target = srIntListAt(result.refTargets, idx)
+            let targetStart = srIntListAt(result.refTargetStarts, idx)
+            let targetEnd = srIntListAt(result.refTargetEnds, idx)
+            if node >= 0 && target >= 0 && target == node {
+                return true
+            }
+            if targetStart == start && targetEnd == end {
+                return true
+            }
+        }
+        idx = idx + 1
+    }
+    false
+}
+
+pub fn selfResolveRefNodeTargets(
+    result: SelfResolveResult,
+    refNode: Int,
+    name: String,
+    start: Int,
+    end: Int,
+    targetNode: Int,
+) -> Bool {
+    let mut idx = 0
+    for node in result.refNodes {
+        if node == refNode {
+            let refName = srStringListAt(result.refNames, idx)
+            let target = srIntListAt(result.refTargets, idx)
+            let targetStart = srIntListAt(result.refTargetStarts, idx)
+            let targetEnd = srIntListAt(result.refTargetEnds, idx)
+            if refName == name {
+                if targetNode >= 0 && target >= 0 && target == targetNode {
+                    return true
+                }
+                if targetStart == start && targetEnd == end {
+                    return true
+                }
+            }
+        }
+        idx = idx + 1
+    }
+    false
+}
+
+pub fn selfResolveRefNodesSameTarget(
+    result: SelfResolveResult,
+    leftNode: Int,
+    rightNode: Int,
+) -> Bool {
+    let mut leftFound = false
+    let mut leftTarget = -1
+    let mut leftStart = -1
+    let mut leftEnd = -1
+    let mut idx = 0
+    for node in result.refNodes {
+        if node == leftNode {
+            leftFound = true
+            leftTarget = srIntListAt(result.refTargets, idx)
+            leftStart = srIntListAt(result.refTargetStarts, idx)
+            leftEnd = srIntListAt(result.refTargetEnds, idx)
+        }
+        idx = idx + 1
+    }
+
+    let mut rightFound = false
+    let mut rightTarget = -1
+    let mut rightStart = -1
+    let mut rightEnd = -1
+    idx = 0
+    for node in result.refNodes {
+        if node == rightNode {
+            rightFound = true
+            rightTarget = srIntListAt(result.refTargets, idx)
+            rightStart = srIntListAt(result.refTargetStarts, idx)
+            rightEnd = srIntListAt(result.refTargetEnds, idx)
+        }
+        idx = idx + 1
+    }
+
+    if !(leftFound) || !(rightFound) {
+        return false
+    }
+    if leftTarget >= 0 || rightTarget >= 0 {
+        return leftTarget == rightTarget
+    }
+    leftStart >= 0 && leftStart == rightStart && leftEnd == rightEnd
 }
 
 struct SelfResolveName {
@@ -612,14 +717,32 @@ fn srResolveOneAstIdent(
     if srIsBuiltinName(name) {
         return out
     }
-    if srLocalExists(locals, name) || srTopLevelExists(out.symbols, name) {
-        out.refs = out.refs + 1
-        out.refNames.push(name)
-        out.refNodes.push(node)
-        return out
+    let local = srFindLocalSymbol(locals, name)
+    if srSymbolFound(local) {
+        return srRecordRef(out, name, node, local)
+    }
+    let top = srFindTopLevelSymbol(out.symbols, name)
+    if srSymbolFound(top) {
+        return srRecordRef(out, name, node, top)
     }
     out.unresolved = out.unresolved + 1
     out.diagnostics.push(selfResolveDiagnosticAtNode("E0500", "undefined name", name, start, end, node))
+    out
+}
+
+fn srRecordRef(
+    result: SelfResolveResult,
+    name: String,
+    refNode: Int,
+    target: SelfSymbol,
+) -> SelfResolveResult {
+    let mut out = result
+    out.refs = out.refs + 1
+    out.refNames.push(name)
+    out.refNodes.push(refNode)
+    out.refTargets.push(target.node)
+    out.refTargetStarts.push(target.start)
+    out.refTargetEnds.push(target.end)
     out
 }
 
@@ -649,12 +772,12 @@ fn srAstPatternNames(
     if node.kind != AstNPattern {
         return out
     }
-    if node.extra == astPatternIdentKind() {
-        out.push(selfResolveName(node.text, node.start, node.end, idx))
-    } else if node.extra == astPatternBindingKind() {
-        out.push(selfResolveName(node.text, node.start, node.start + 1, idx))
+    if node.extra == srPatternIdentKind() || strings.HasPrefix(node.text, "ident:") {
+        out.push(selfResolveName(srPatternName(node.text, "ident:"), node.start, node.end, idx))
+    } else if node.extra == srPatternBindingKind() || strings.HasPrefix(node.text, "binding:") {
+        out.push(selfResolveName(srPatternName(node.text, "binding:"), node.start, node.start + 1, idx))
         out = srAstPatternNames(file, node.left, out)
-    } else if node.extra == astPatternFieldKind() {
+    } else if node.extra == srPatternFieldKind() || (node.extra == 0 && node.text != "" && node.left >= 0) {
         if node.left >= 0 {
             out = srAstPatternNames(file, node.left, out)
         } else {
@@ -668,6 +791,19 @@ fn srAstPatternNames(
         }
     }
     out
+}
+
+fn srPatternIdentKind() -> Int { 3 }
+
+fn srPatternBindingKind() -> Int { 9 }
+
+fn srPatternFieldKind() -> Int { 10 }
+
+fn srPatternName(text: String, prefix: String) -> String {
+    if strings.HasPrefix(text, prefix) {
+        return strings.TrimPrefix(text, prefix)
+    }
+    text
 }
 
 fn srAstLetTypeName(file: AstFile, node: AstNode) -> String {
@@ -738,6 +874,28 @@ fn srAstListCount(items: List<Int>) -> Int {
     count
 }
 
+fn srIntListAt(items: List<Int>, target: Int) -> Int {
+    let mut idx = 0
+    for item in items {
+        if idx == target {
+            return item
+        }
+        idx = idx + 1
+    }
+    -1
+}
+
+fn srStringListAt(items: List<String>, target: Int) -> String {
+    let mut idx = 0
+    for item in items {
+        if idx == target {
+            return item
+        }
+        idx = idx + 1
+    }
+    ""
+}
+
 fn srSymbolListCopy(items: List<SelfSymbol>) -> List<SelfSymbol> {
     let mut out: List<SelfSymbol> = []
     for item in items {
@@ -784,13 +942,23 @@ fn srLocalExists(symbols: List<SelfSymbol>, name: String) -> Bool {
     false
 }
 
-fn srTopLevelExists(symbols: List<SelfSymbol>, name: String) -> Bool {
+fn srFindLocalSymbol(symbols: List<SelfSymbol>, name: String) -> SelfSymbol {
+    let mut found = srEmptySymbol()
     for sym in symbols {
-        if sym.name == name && sym.depth == 0 {
-            return true
+        if sym.name == name {
+            found = sym
         }
     }
-    false
+    found
+}
+
+fn srFindTopLevelSymbol(symbols: List<SelfSymbol>, name: String) -> SelfSymbol {
+    for sym in symbols {
+        if sym.name == name && sym.depth == 0 {
+            return sym
+        }
+    }
+    srEmptySymbol()
 }
 
 fn srSymbolExistsAtDepth(symbols: List<SelfSymbol>, name: String, depth: Int) -> Bool {
@@ -800,6 +968,14 @@ fn srSymbolExistsAtDepth(symbols: List<SelfSymbol>, name: String, depth: Int) ->
         }
     }
     false
+}
+
+fn srEmptySymbol() -> SelfSymbol {
+    selfSymbolAtNode("", "", "", 0, -1, -1, -1, false, -1)
+}
+
+fn srSymbolFound(sym: SelfSymbol) -> Bool {
+    sym.name != ""
 }
 
 fn srIsBuiltinName(name: String) -> Bool {
