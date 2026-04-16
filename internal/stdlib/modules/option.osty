@@ -78,5 +78,5 @@ fn __optionAbort(msg: String) -> Never {
 }
 
 fn __optionError<T>(msg: String) -> Result<T, Error> {
-    __optionError::<T>(msg)
+    Err(Error.new(msg))
 }

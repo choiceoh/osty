@@ -220,14 +220,9 @@ func TestResultModuleMethods(t *testing.T) {
 			t.Errorf("Registry.ResultMethods missing method %q", name)
 		}
 	}
-	for _, name := range []string{"isOk", "isErr", "unwrapOr", "ok", "err", "map", "mapErr", "toString"} {
+	for _, name := range []string{"isOk", "isErr", "unwrap", "unwrapErr", "unwrapOr", "ok", "err", "map", "mapErr", "toString"} {
 		if !hasBody[name] {
 			t.Errorf("Result.%s should have an Osty body", name)
-		}
-	}
-	for _, name := range []string{"unwrap", "unwrapErr"} {
-		if hasBody[name] {
-			t.Errorf("Result.%s should stay runtime-intrinsic", name)
 		}
 	}
 }
@@ -245,6 +240,29 @@ func TestResultModuleBodiesTypeCheck(t *testing.T) {
 	for _, d := range all {
 		if d.Severity == diag.Error {
 			t.Fatalf("std.result should type-check: [%s] %s", d.Code, d.Message)
+		}
+	}
+}
+
+func TestPureOstyModuleBodiesTypeCheck(t *testing.T) {
+	reg := Load()
+	for _, name := range []string{"option", "result", "strings", "collections", "bytes", "process", "random"} {
+		mod := reg.Modules[name]
+		if mod == nil {
+			t.Fatalf("std.%s not loaded", name)
+		}
+		file, parseDiags := parser.ParseDiagnostics(mod.Source)
+		res := resolve.FileWithStdlib(file, resolve.NewPrelude(), reg)
+		chk := check.File(file, res, check.Opts{
+			Primitives:    reg.Primitives,
+			ResultMethods: reg.ResultMethods,
+		})
+		all := append(append([]*diag.Diagnostic{}, parseDiags...), res.Diags...)
+		all = append(all, chk.Diags...)
+		for _, d := range all {
+			if d.Severity == diag.Error {
+				t.Fatalf("std.%s should type-check: [%s] %s", name, d.Code, d.Message)
+			}
 		}
 	}
 }

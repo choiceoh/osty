@@ -10872,6 +10872,8 @@ func opParsePrimary(p *OstyParser) int {
 	// Osty: /tmp/selfhost_merged.osty:7178:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontUnderscore{})) {
 		// Osty: /tmp/selfhost_merged.osty:7178:38
+		opErrorFull(p, "`_` can only be used as a pattern", "for ignored bindings, write `let _ = expr`", "", "E0604")
+		// Osty: /tmp/selfhost_merged.osty:7178:38
 		opAdvance(p)
 		// Osty: /tmp/selfhost_merged.osty:7179:5
 		n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNIdent{}))

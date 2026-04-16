@@ -179,9 +179,14 @@ func (l astLowerer) mutPos(n *AstNode) token.Pos {
 	if n == nil || n.flags != 1 {
 		return token.Pos{}
 	}
-	for i := n.start + 1; i < n.end; i++ {
-		if l.tok(i).Kind == token.MUT {
-			return l.pos(i)
+	end := n.end
+	if pat := l.node(n.left); pat != nil {
+		end = pat.start
+	}
+	for i := n.start; i < end; i++ {
+		tok := l.tok(i)
+		if tok.Kind == token.MUT {
+			return tok.Pos
 		}
 	}
 	return token.Pos{}

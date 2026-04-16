@@ -122,6 +122,11 @@ type gen struct {
 	// toString implementations.
 	needStringRuntime bool
 
+	// needGraphemeRuntime is set when String.graphemes() is lowered.
+	// The helper covers the common extended grapheme cluster cases used
+	// by source programs without repeating scanner code at every call.
+	needGraphemeRuntime bool
+
 	// needRange is set when a standalone range literal is emitted, so
 	// the runtime Range struct can be injected at the top of the file.
 	needRange bool
@@ -463,6 +468,10 @@ func (g *gen) run() ([]byte, error) {
 		g.useAs("encoding/hex", "_ostybyteshex")
 		g.useAs("unicode/utf8", "_ostybytesutf8")
 	}
+	if g.needGraphemeRuntime {
+		g.use("unicode")
+		g.useAs("unicode/utf8", "_ostybytesutf8")
+	}
 	if g.needCompress {
 		g.needResult = true
 		if !g.needBytesRuntime {
@@ -745,6 +754,105 @@ func bytesFromHex(s string) Result[[]byte, any] {
 		return resultErr[[]byte, any](err)
 	}
 	return resultOk[[]byte, any](b)
+}
+`)
+	}
+	if g.needGraphemeRuntime {
+		out.WriteString(`
+func ostyGraphemes(s string) []string {
+	if s == "" {
+		return []string{}
+	}
+	out := make([]string, 0, _ostybytesutf8.RuneCountInString(s))
+	clusterStart := 0
+	var prev rune
+	riCount := 0
+	first := true
+	for i, r := range s {
+		if first {
+			first = false
+			prev = r
+			if ostyIsRegionalIndicator(r) {
+				riCount = 1
+			}
+			continue
+		}
+		if ostyGraphemeBreak(prev, r, riCount) {
+			out = append(out, s[clusterStart:i])
+			clusterStart = i
+			riCount = 0
+		}
+		if ostyIsRegionalIndicator(r) {
+			riCount++
+		} else {
+			riCount = 0
+		}
+		prev = r
+	}
+	out = append(out, s[clusterStart:])
+	return out
+}
+
+func ostyGraphemeBreak(prev, cur rune, riCount int) bool {
+	if prev == '\r' && cur == '\n' {
+		return false
+	}
+	if unicode.IsControl(prev) || unicode.IsControl(cur) {
+		return true
+	}
+	if ostyIsExtend(cur) || cur == '\u200d' {
+		return false
+	}
+	if prev == '\u200d' {
+		return false
+	}
+	if ostyHangulNoBreak(prev, cur) {
+		return false
+	}
+	if ostyIsRegionalIndicator(prev) && ostyIsRegionalIndicator(cur) && riCount%2 == 1 {
+		return false
+	}
+	return true
+}
+
+func ostyIsExtend(r rune) bool {
+	return unicode.Is(unicode.Mn, r) ||
+		unicode.Is(unicode.Mc, r) ||
+		unicode.Is(unicode.Me, r) ||
+		(r >= 0xfe00 && r <= 0xfe0f) ||
+		(r >= 0xe0100 && r <= 0xe01ef) ||
+		(r >= 0x1f3fb && r <= 0x1f3ff) ||
+		r == 0x20e3
+}
+
+func ostyIsRegionalIndicator(r rune) bool {
+	return r >= 0x1f1e6 && r <= 0x1f1ff
+}
+
+func ostyHangulNoBreak(prev, cur rune) bool {
+	p := ostyHangulKind(prev)
+	c := ostyHangulKind(cur)
+	return (p == 1 && (c == 1 || c == 2 || c == 4 || c == 5)) ||
+		((p == 2 || p == 4) && (c == 2 || c == 3)) ||
+		((p == 3 || p == 5) && c == 3)
+}
+
+func ostyHangulKind(r rune) int {
+	switch {
+	case (r >= 0x1100 && r <= 0x115f) || (r >= 0xa960 && r <= 0xa97c):
+		return 1
+	case (r >= 0x1160 && r <= 0x11a7) || (r >= 0xd7b0 && r <= 0xd7c6):
+		return 2
+	case (r >= 0x11a8 && r <= 0x11ff) || (r >= 0xd7cb && r <= 0xd7fb):
+		return 3
+	case r >= 0xac00 && r <= 0xd7a3:
+		if (r-0xac00)%28 == 0 {
+			return 4
+		}
+		return 5
+	default:
+		return 0
+	}
 }
 `)
 	}

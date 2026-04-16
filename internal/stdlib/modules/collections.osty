@@ -8,18 +8,39 @@
 
 pub struct List<T> {
     pub fn len(self) -> Int
-    pub fn isEmpty(self) -> Bool
-    pub fn first(self) -> T?
-    pub fn last(self) -> T?
+    pub fn isEmpty(self) -> Bool {
+        self.len() == 0
+    }
+    pub fn first(self) -> T? {
+        self.get(0)
+    }
+    pub fn last(self) -> T? {
+        self.get(self.len() - 1)
+    }
     pub fn get(self, index: Int) -> T?
 
-    pub fn contains(self, item: T) -> Bool
+    pub fn contains(self, item: T) -> Bool {
+        self.indexOf(item).isSome()
+    }
     pub fn indexOf(self, item: T) -> Int?
-    pub fn find(self, pred: fn(T) -> Bool) -> T?
+    pub fn find(self, pred: fn(T) -> Bool) -> T? {
+        for item in self {
+            if pred(item) {
+                return Some(item)
+            }
+        }
+        None
+    }
 
     pub fn map<R>(self, f: fn(T) -> R) -> List<R>
     pub fn filter(self, pred: fn(T) -> Bool) -> List<T>
-    pub fn fold<A>(self, init: A, f: fn(A, T) -> A) -> A
+    pub fn fold<A>(self, init: A, f: fn(A, T) -> A) -> A {
+        let mut acc = init
+        for item in self {
+            acc = f(acc, item)
+        }
+        acc
+    }
     pub fn sorted(self) -> List<T>
     pub fn sortedBy<K>(self, key: fn(T) -> K) -> List<T>
     pub fn reversed(self) -> List<T>
@@ -39,9 +60,13 @@ pub struct List<T> {
 
 pub struct Map<K: Hashable, V> {
     pub fn len(self) -> Int
-    pub fn isEmpty(self) -> Bool
+    pub fn isEmpty(self) -> Bool {
+        self.len() == 0
+    }
     pub fn get(self, key: K) -> V?
-    pub fn containsKey(self, key: K) -> Bool
+    pub fn containsKey(self, key: K) -> Bool {
+        self.get(key).isSome()
+    }
     pub fn keys(self) -> List<K>
     pub fn values(self) -> List<V>
     pub fn entries(self) -> List<(K, V)>
@@ -53,7 +78,9 @@ pub struct Map<K: Hashable, V> {
 
 pub struct Set<T: Hashable> {
     pub fn len(self) -> Int
-    pub fn isEmpty(self) -> Bool
+    pub fn isEmpty(self) -> Bool {
+        self.len() == 0
+    }
     pub fn contains(self, item: T) -> Bool
     pub fn union(self, other: Set<T>) -> Set<T>
     pub fn intersect(self, other: Set<T>) -> Set<T>

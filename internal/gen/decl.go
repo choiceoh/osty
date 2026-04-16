@@ -467,7 +467,7 @@ func (g *gen) emitUseDecl(u *ast.UseDecl) {
 	if alias == "" {
 		return
 	}
-	full := strings.Join(u.Path, ".")
+	full := useFullPath(u)
 	if g.emitStdlibRuntimeBridge(alias, u.Path, full) {
 		return
 	}
@@ -695,8 +695,8 @@ func (g *gen) emitStdlibRuntimeBridge(alias string, path []string, full string) 
 		g.needBytesRuntime = true
 		g.needResult = true
 		g.emitUseStub(alias, `struct {
-			from        func(items []byte) []byte
 			fromString  func(s string) []byte
+			from        func(items []byte) []byte
 			toString    func(b []byte) Result[string, any]
 			len         func(b []byte) int
 			isEmpty     func(b []byte) bool
@@ -723,8 +723,8 @@ func (g *gen) emitStdlibRuntimeBridge(alias string, path []string, full string) 
 			toHex       func(b []byte) string
 			fromHex     func(s string) Result[[]byte, any]
 		}{
-			from:        bytesFrom,
 			fromString:  bytesFromString,
+			from:        bytesFrom,
 			toString:    bytesToString,
 			len:         bytesLen,
 			isEmpty:     bytesIsEmpty,
@@ -1006,6 +1006,16 @@ func (g *gen) fileIdentUsed(name string) bool {
 		}
 	}
 	return false
+}
+
+func useFullPath(u *ast.UseDecl) string {
+	if u == nil {
+		return ""
+	}
+	if u.RawPath != "" {
+		return u.RawPath
+	}
+	return strings.Join(u.Path, ".")
 }
 
 func (g *gen) emitUseStub(alias, stub, full string) {
