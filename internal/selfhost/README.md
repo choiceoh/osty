@@ -8,8 +8,8 @@ The source of truth is:
 - `examples/selfhost-core/semver.osty`
 - `examples/selfhost-core/semver_parse.osty`
 - `examples/selfhost-core/frontend.osty`
-- `examples/selfhost-core/lexer.osty`
-- `examples/selfhost-core/parser.osty`
+- `toolchain/lexer.osty`
+- `toolchain/parser.osty`
 - `examples/selfhost-core/formatter_ast.osty`
 - `examples/selfhost-core/check_bridge.osty`
 - `examples/selfhost-core/check.osty`
