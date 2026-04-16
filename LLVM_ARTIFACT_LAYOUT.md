@@ -284,6 +284,10 @@ The initial helper package for this plan is `internal/backend`.
     Phase 24: `examples/selfhost-core/llvmgen.osty` owns newline, tab,
     carriage-return, quote, and backslash encoding for LLVM C strings, and the
     smoke corpus now includes `string_escape_print.osty`.
+26. Add the first local String value path. Done in Phase 25: String literals
+    lower to self-hosted `ptr` values that can be bound with immutable `let`
+    and later printed through identifiers, with `string_let_print.osty`
+    covering the executable smoke case.
 
 The backend subdirectory change should land before the LLVM backend writes any
 files, so LLVM never shares the old Go-only output location.

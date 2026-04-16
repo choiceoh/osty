@@ -1,0 +1,4 @@
+fn main() {
+    let msg = "stored string"
+    println(msg)
+}

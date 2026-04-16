@@ -228,8 +228,9 @@ newline-separated `else`.
 - `--package NAME` — Go package clause for the emitted file (default: `main`)
 - `--backend NAME` — code generation backend (`go` or `llvm`; default: `go`;
   `llvm` emits textual `.ll` for the early scalar/control-flow/plain/escaped-string
-  subset and falls back to an inspectable skeleton for unsupported shapes with
-  Osty-authored instruction builders and category diagnostics)
+  subset, including immutable string locals, and falls back to an inspectable
+  skeleton for unsupported shapes with Osty-authored instruction builders and
+  category diagnostics)
 - `--emit MODE` — requested text artifact. `go` emits Go source for the Go
   backend; `llvm-ir` is reserved for the LLVM backend.
 
@@ -292,8 +293,8 @@ creating a new one.
 
 - `--backend NAME` — code generation backend (`go` or `llvm`; default: `go`;
   `llvm` can write textual IR for the early scalar/control-flow/plain/escaped-string
-  subset and, when `clang` is available, drive object/binary emission for
-  supported programs; unsupported shapes still prepare skeleton artifacts and report the
+  subset, including immutable string locals, and when `clang` is available,
+  drive object/binary emission for supported programs; unsupported shapes still prepare skeleton artifacts and report the
   missing lowering through categorized diagnostics generated from the Osty
   selfhost-core backend policy; supported scalar instruction strings are
   generated from that same backend core)
