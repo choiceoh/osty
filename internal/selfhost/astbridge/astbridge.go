@@ -24,6 +24,7 @@ func TokenAt(toks []Token, idx int) Token {
 func TokenKind(tok Token) Kind         { return tok.Kind }
 func TokenPos(tok Token) Pos           { return tok.Pos }
 func TokenEnd(tok Token) Pos           { return tok.End }
+func ZeroPos() Pos                     { return token.Pos{} }
 func TokenValue(tok Token) string      { return tok.Value }
 func TokenLeadingDoc(tok Token) string { return tok.LeadingDoc }
 func TokenIsPub(tok Token) bool        { return tok.Kind == token.PUB }

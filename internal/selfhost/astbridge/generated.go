@@ -269,12 +269,13 @@ func UseDeclNode(pos, end Pos, raw string, path []string, isGo bool, alias strin
 	return u
 }
 
-func LetDeclNode(pos, end Pos, pub, mut bool, name string, typ Type, value Expr, doc string, anns []Annotation) Decl {
+func LetDeclNode(pos, end Pos, pub, mut bool, mutPos Pos, name string, typ Type, value Expr, doc string, anns []Annotation) Decl {
 	return &ast.LetDecl{
 		PosV:        pos,
 		EndV:        end,
 		Pub:         pub,
 		Mut:         mut,
+		MutPos:      mutPos,
 		Name:        name,
 		Type:        typ,
 		Value:       value,
@@ -341,8 +342,8 @@ func BlockAsExpr(b Block) Expr {
 	return b
 }
 
-func LetStmtNode(pos, end Pos, pat Pattern, mut bool, typ Type, value Expr) Stmt {
-	return &ast.LetStmt{PosV: pos, EndV: end, Pattern: pat, Mut: mut, Type: typ, Value: value}
+func LetStmtNode(pos, end Pos, pat Pattern, mut bool, mutPos Pos, typ Type, value Expr) Stmt {
+	return &ast.LetStmt{PosV: pos, EndV: end, Pattern: pat, Mut: mut, MutPos: mutPos, Type: typ, Value: value}
 }
 
 func ReturnStmtNode(pos, end Pos, value Expr) Stmt {

@@ -32296,23 +32296,23 @@ func frontCheckRequireMutableReceiver(file *AstFile, env *FrontCheckEnv, callee 
 	}
 }
 
-// Osty: /tmp/selfhost_merged.osty:12888:1
+// Osty: /tmp/selfhost_merged.osty:12889:1
 func astLowerPublicFile(arena *AstArena, toks []astbridge.Token) astbridge.File {
-	// Osty: /tmp/selfhost_merged.osty:12889:5
+	// Osty: /tmp/selfhost_merged.osty:12890:5
 	uses := astbridge.EmptyDeclList()
 	_ = uses
-	// Osty: /tmp/selfhost_merged.osty:12890:5
+	// Osty: /tmp/selfhost_merged.osty:12891:5
 	decls := astbridge.EmptyDeclList()
 	_ = decls
-	// Osty: /tmp/selfhost_merged.osty:12891:5
+	// Osty: /tmp/selfhost_merged.osty:12892:5
 	stmts := astbridge.EmptyStmtList()
 	_ = stmts
-	// Osty: /tmp/selfhost_merged.osty:12892:5
+	// Osty: /tmp/selfhost_merged.osty:12893:5
 	for _, idx := range arena.decls {
-		// Osty: /tmp/selfhost_merged.osty:12893:9
+		// Osty: /tmp/selfhost_merged.osty:12894:9
 		n := astArenaNodeAt(arena, idx)
 		_ = n
-		// Osty: /tmp/selfhost_merged.osty:12894:9
+		// Osty: /tmp/selfhost_merged.osty:12895:9
 		if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNLet{})) && !(astbridge.TokenIsPub(astLowerTok(toks, func() int {
 			var _p2225 int = n.start
 			var _rhs2226 int = 1
@@ -32324,35 +32324,35 @@ func astLowerPublicFile(arena *AstArena, toks []astbridge.Token) astbridge.File 
 			}
 			return _p2225 - _rhs2226
 		}()))) {
-			// Osty: /tmp/selfhost_merged.osty:12895:13
+			// Osty: /tmp/selfhost_merged.osty:12896:13
 			stmt := astLowerStmt(arena, toks, idx)
 			_ = stmt
-			// Osty: /tmp/selfhost_merged.osty:12896:13
+			// Osty: /tmp/selfhost_merged.osty:12897:13
 			if !(astbridge.IsNilStmt(stmt)) {
-				// Osty: /tmp/selfhost_merged.osty:12897:17
+				// Osty: /tmp/selfhost_merged.osty:12898:17
 				func() struct{} { stmts = append(stmts, stmt); return struct{}{} }()
 			}
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:12900:13
+			// Osty: /tmp/selfhost_merged.osty:12901:13
 			decl := astLowerDecl(arena, toks, idx)
 			_ = decl
-			// Osty: /tmp/selfhost_merged.osty:12901:13
+			// Osty: /tmp/selfhost_merged.osty:12902:13
 			if !(astbridge.IsNilDecl(decl)) {
-				// Osty: /tmp/selfhost_merged.osty:12902:17
+				// Osty: /tmp/selfhost_merged.osty:12903:17
 				if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNUseDecl{})) {
-					// Osty: /tmp/selfhost_merged.osty:12903:21
+					// Osty: /tmp/selfhost_merged.osty:12904:21
 					func() struct{} { uses = append(uses, decl); return struct{}{} }()
 				} else {
-					// Osty: /tmp/selfhost_merged.osty:12905:21
+					// Osty: /tmp/selfhost_merged.osty:12906:21
 					func() struct{} { decls = append(decls, decl); return struct{}{} }()
 				}
 			} else {
-				// Osty: /tmp/selfhost_merged.osty:12908:17
+				// Osty: /tmp/selfhost_merged.osty:12909:17
 				stmt := astLowerStmt(arena, toks, idx)
 				_ = stmt
-				// Osty: /tmp/selfhost_merged.osty:12909:17
+				// Osty: /tmp/selfhost_merged.osty:12910:17
 				if !(astbridge.IsNilStmt(stmt)) {
-					// Osty: /tmp/selfhost_merged.osty:12910:21
+					// Osty: /tmp/selfhost_merged.osty:12911:21
 					func() struct{} { stmts = append(stmts, stmt); return struct{}{} }()
 				}
 			}
@@ -32371,16 +32371,16 @@ func astLowerPublicFile(arena *AstArena, toks []astbridge.Token) astbridge.File 
 	}()), uses, decls, stmts)
 }
 
-// Osty: /tmp/selfhost_merged.osty:12918:1
+// Osty: /tmp/selfhost_merged.osty:12919:1
 func astLowerTokenCount(toks []astbridge.Token) int {
-	// Osty: /tmp/selfhost_merged.osty:12919:5
+	// Osty: /tmp/selfhost_merged.osty:12920:5
 	count := 0
 	_ = count
-	// Osty: /tmp/selfhost_merged.osty:12920:5
+	// Osty: /tmp/selfhost_merged.osty:12921:5
 	for _, tok := range toks {
-		// Osty: /tmp/selfhost_merged.osty:12921:9
+		// Osty: /tmp/selfhost_merged.osty:12922:9
 		_ = tok
-		// Osty: /tmp/selfhost_merged.osty:12922:15
+		// Osty: /tmp/selfhost_merged.osty:12923:15
 		func() {
 			var _cur2229 int = count
 			var _rhs2230 int = 1
@@ -32396,36 +32396,36 @@ func astLowerTokenCount(toks []astbridge.Token) int {
 	return count
 }
 
-// Osty: /tmp/selfhost_merged.osty:12927:1
+// Osty: /tmp/selfhost_merged.osty:12928:1
 func astLowerInterpolatedTokensToExpr(toks []astbridge.Token) astbridge.Expr {
-	// Osty: /tmp/selfhost_merged.osty:12928:5
+	// Osty: /tmp/selfhost_merged.osty:12929:5
 	count := astLowerTokenCount(toks)
 	_ = count
 	return astLowerInterpExpr(toks, 0, count)
 }
 
-// Osty: /tmp/selfhost_merged.osty:12932:1
+// Osty: /tmp/selfhost_merged.osty:12933:1
 func astLowerInterpExpr(toks []astbridge.Token, rawStart int, rawEnd int) astbridge.Expr {
-	// Osty: /tmp/selfhost_merged.osty:12933:5
+	// Osty: /tmp/selfhost_merged.osty:12934:5
 	start := astLowerInterpTrimStart(toks, rawStart, rawEnd)
 	_ = start
-	// Osty: /tmp/selfhost_merged.osty:12934:5
+	// Osty: /tmp/selfhost_merged.osty:12935:5
 	end := astLowerInterpTrimEnd(toks, start, rawEnd)
 	_ = end
-	// Osty: /tmp/selfhost_merged.osty:12935:5
+	// Osty: /tmp/selfhost_merged.osty:12936:5
 	if start >= end {
-		// Osty: /tmp/selfhost_merged.osty:12936:9
+		// Osty: /tmp/selfhost_merged.osty:12937:9
 		return astbridge.NilExpr()
 	}
-	// Osty: /tmp/selfhost_merged.osty:12938:5
+	// Osty: /tmp/selfhost_merged.osty:12939:5
 	split := astLowerInterpSplitTopLevelBinary(toks, start, end)
 	_ = split
-	// Osty: /tmp/selfhost_merged.osty:12939:5
+	// Osty: /tmp/selfhost_merged.osty:12940:5
 	if split > start {
-		// Osty: /tmp/selfhost_merged.osty:12940:9
+		// Osty: /tmp/selfhost_merged.osty:12941:9
 		left := astLowerInterpExpr(toks, start, split)
 		_ = left
-		// Osty: /tmp/selfhost_merged.osty:12941:9
+		// Osty: /tmp/selfhost_merged.osty:12942:9
 		right := astLowerInterpExpr(toks, func() int {
 			var _p2231 int = split
 			var _rhs2232 int = 1
@@ -32438,18 +32438,18 @@ func astLowerInterpExpr(toks []astbridge.Token, rawStart int, rawEnd int) astbri
 			return _p2231 + _rhs2232
 		}(), end)
 		_ = right
-		// Osty: /tmp/selfhost_merged.osty:12942:9
+		// Osty: /tmp/selfhost_merged.osty:12943:9
 		return astbridge.BinaryExprNode(astLowerPos(toks, start), astLowerEnd(toks, end), astbridge.TokenKind(astLowerTok(toks, split)), left, right)
 	}
-	// Osty: /tmp/selfhost_merged.osty:12950:5
+	// Osty: /tmp/selfhost_merged.osty:12951:5
 	first := astLowerTok(toks, start)
 	_ = first
-	// Osty: /tmp/selfhost_merged.osty:12951:5
+	// Osty: /tmp/selfhost_merged.osty:12952:5
 	firstKind := astbridge.TokenKindString(first)
 	_ = firstKind
-	// Osty: /tmp/selfhost_merged.osty:12952:5
+	// Osty: /tmp/selfhost_merged.osty:12953:5
 	if firstKind == "-" || firstKind == "!" || firstKind == "~" {
-		// Osty: /tmp/selfhost_merged.osty:12953:9
+		// Osty: /tmp/selfhost_merged.osty:12954:9
 		x := astLowerInterpExpr(toks, func() int {
 			var _p2233 int = start
 			var _rhs2234 int = 1
@@ -32462,10 +32462,10 @@ func astLowerInterpExpr(toks []astbridge.Token, rawStart int, rawEnd int) astbri
 			return _p2233 + _rhs2234
 		}(), end)
 		_ = x
-		// Osty: /tmp/selfhost_merged.osty:12954:9
+		// Osty: /tmp/selfhost_merged.osty:12955:9
 		return astbridge.UnaryExprNode(astLowerPos(toks, start), astLowerEnd(toks, end), astbridge.TokenKind(first), x)
 	}
-	// Osty: /tmp/selfhost_merged.osty:12956:5
+	// Osty: /tmp/selfhost_merged.osty:12957:5
 	if firstKind == "(" && astLowerInterpFindClose(toks, start, end, "(", ")") == func() int {
 		var _p2235 int = end
 		var _rhs2236 int = 1
@@ -32477,7 +32477,7 @@ func astLowerInterpExpr(toks []astbridge.Token, rawStart int, rawEnd int) astbri
 		}
 		return _p2235 - _rhs2236
 	}() {
-		// Osty: /tmp/selfhost_merged.osty:12957:9
+		// Osty: /tmp/selfhost_merged.osty:12958:9
 		return astbridge.ParenExprNode(astLowerPos(toks, start), astLowerEnd(toks, end), astLowerInterpExpr(toks, func() int {
 			var _p2237 int = start
 			var _rhs2238 int = 1
@@ -32500,15 +32500,15 @@ func astLowerInterpExpr(toks []astbridge.Token, rawStart int, rawEnd int) astbri
 			return _p2239 - _rhs2240
 		}()))
 	}
-	// Osty: /tmp/selfhost_merged.osty:12959:5
+	// Osty: /tmp/selfhost_merged.osty:12960:5
 	expr := astLowerInterpPrimary(toks, start, end)
 	_ = expr
-	// Osty: /tmp/selfhost_merged.osty:12960:5
+	// Osty: /tmp/selfhost_merged.osty:12961:5
 	if astbridge.IsNilExpr(expr) {
-		// Osty: /tmp/selfhost_merged.osty:12961:9
+		// Osty: /tmp/selfhost_merged.osty:12962:9
 		return astbridge.IdentExpr(astLowerPos(toks, start), astLowerEnd(toks, end), "__interp")
 	}
-	// Osty: /tmp/selfhost_merged.osty:12963:5
+	// Osty: /tmp/selfhost_merged.osty:12964:5
 	i := func() int {
 		var _p2241 int = start
 		var _rhs2242 int = 1
@@ -32521,22 +32521,22 @@ func astLowerInterpExpr(toks []astbridge.Token, rawStart int, rawEnd int) astbri
 		return _p2241 + _rhs2242
 	}()
 	_ = i
-	// Osty: /tmp/selfhost_merged.osty:12964:5
+	// Osty: /tmp/selfhost_merged.osty:12965:5
 	for i < end {
-		// Osty: /tmp/selfhost_merged.osty:12965:9
+		// Osty: /tmp/selfhost_merged.osty:12966:9
 		tok := astLowerTok(toks, i)
 		_ = tok
-		// Osty: /tmp/selfhost_merged.osty:12966:9
+		// Osty: /tmp/selfhost_merged.osty:12967:9
 		kind := astbridge.TokenKindString(tok)
 		_ = kind
-		// Osty: /tmp/selfhost_merged.osty:12967:9
+		// Osty: /tmp/selfhost_merged.osty:12968:9
 		if kind == "(" {
-			// Osty: /tmp/selfhost_merged.osty:12968:13
+			// Osty: /tmp/selfhost_merged.osty:12969:13
 			close := astLowerInterpFindClose(toks, i, end, "(", ")")
 			_ = close
-			// Osty: /tmp/selfhost_merged.osty:12969:13
+			// Osty: /tmp/selfhost_merged.osty:12970:13
 			if close < 0 {
-				// Osty: /tmp/selfhost_merged.osty:12970:17
+				// Osty: /tmp/selfhost_merged.osty:12971:17
 				return astbridge.CallExprNode(astbridge.ExprPos(expr, astLowerPos(toks, start)), astLowerEnd(toks, end), expr, astLowerInterpArgs(toks, func() int {
 					var _p2243 int = i
 					var _rhs2244 int = 1
@@ -32549,7 +32549,7 @@ func astLowerInterpExpr(toks []astbridge.Token, rawStart int, rawEnd int) astbri
 					return _p2243 + _rhs2244
 				}(), end))
 			}
-			// Osty: /tmp/selfhost_merged.osty:12972:18
+			// Osty: /tmp/selfhost_merged.osty:12973:18
 			expr = astbridge.CallExprNode(astbridge.ExprPos(expr, astLowerPos(toks, start)), astLowerEnd(toks, func() int {
 				var _p2245 int = close
 				var _rhs2246 int = 1
@@ -32571,7 +32571,7 @@ func astLowerInterpExpr(toks []astbridge.Token, rawStart int, rawEnd int) astbri
 				}
 				return _p2247 + _rhs2248
 			}(), close))
-			// Osty: /tmp/selfhost_merged.osty:12973:15
+			// Osty: /tmp/selfhost_merged.osty:12974:15
 			func() {
 				var _cur2249 int = close
 				var _rhs2250 int = 1
@@ -32604,7 +32604,7 @@ func astLowerInterpExpr(toks []astbridge.Token, rawStart int, rawEnd int) astbri
 			}
 			return _p2253 + _rhs2254
 		}())) {
-			// Osty: /tmp/selfhost_merged.osty:12975:18
+			// Osty: /tmp/selfhost_merged.osty:12976:18
 			expr = astbridge.FieldExprNode(astbridge.ExprPos(expr, astLowerPos(toks, start)), astbridge.TokenEnd(astLowerTok(toks, func() int {
 				var _p2255 int = i
 				var _rhs2256 int = 1
@@ -32626,7 +32626,7 @@ func astLowerInterpExpr(toks []astbridge.Token, rawStart int, rawEnd int) astbri
 				}
 				return _p2257 + _rhs2258
 			}())), kind == "?.")
-			// Osty: /tmp/selfhost_merged.osty:12976:15
+			// Osty: /tmp/selfhost_merged.osty:12977:15
 			func() {
 				var _cur2259 int = i
 				var _rhs2260 int = 2
@@ -32639,29 +32639,29 @@ func astLowerInterpExpr(toks []astbridge.Token, rawStart int, rawEnd int) astbri
 				i = _cur2259 + _rhs2260
 			}()
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:12978:13
+			// Osty: /tmp/selfhost_merged.osty:12979:13
 			return expr
 		}
 	}
 	return expr
 }
 
-// Osty: /tmp/selfhost_merged.osty:12984:1
+// Osty: /tmp/selfhost_merged.osty:12985:1
 func astLowerInterpPrimary(toks []astbridge.Token, start int, end int) astbridge.Expr {
-	// Osty: /tmp/selfhost_merged.osty:12985:5
+	// Osty: /tmp/selfhost_merged.osty:12986:5
 	tok := astLowerTok(toks, start)
 	_ = tok
-	// Osty: /tmp/selfhost_merged.osty:12986:5
+	// Osty: /tmp/selfhost_merged.osty:12987:5
 	kind := astbridge.TokenKindString(tok)
 	_ = kind
-	// Osty: /tmp/selfhost_merged.osty:12987:5
+	// Osty: /tmp/selfhost_merged.osty:12988:5
 	value := astbridge.TokenValue(tok)
 	_ = value
-	// Osty: /tmp/selfhost_merged.osty:12988:5
+	// Osty: /tmp/selfhost_merged.osty:12989:5
 	if kind == "IDENT" {
-		// Osty: /tmp/selfhost_merged.osty:12989:9
+		// Osty: /tmp/selfhost_merged.osty:12990:9
 		if value == "true" {
-			// Osty: /tmp/selfhost_merged.osty:12990:13
+			// Osty: /tmp/selfhost_merged.osty:12991:13
 			return astbridge.BoolLitExpr(astLowerPos(toks, start), astLowerEnd(toks, func() int {
 				var _p2261 int = start
 				var _rhs2262 int = 1
@@ -32674,9 +32674,9 @@ func astLowerInterpPrimary(toks []astbridge.Token, start int, end int) astbridge
 				return _p2261 + _rhs2262
 			}()), true)
 		}
-		// Osty: /tmp/selfhost_merged.osty:12992:9
+		// Osty: /tmp/selfhost_merged.osty:12993:9
 		if value == "false" {
-			// Osty: /tmp/selfhost_merged.osty:12993:13
+			// Osty: /tmp/selfhost_merged.osty:12994:13
 			return astbridge.BoolLitExpr(astLowerPos(toks, start), astLowerEnd(toks, func() int {
 				var _p2263 int = start
 				var _rhs2264 int = 1
@@ -32689,7 +32689,7 @@ func astLowerInterpPrimary(toks []astbridge.Token, start int, end int) astbridge
 				return _p2263 + _rhs2264
 			}()), false)
 		}
-		// Osty: /tmp/selfhost_merged.osty:12995:9
+		// Osty: /tmp/selfhost_merged.osty:12996:9
 		return astbridge.IdentExpr(astLowerPos(toks, start), astLowerEnd(toks, func() int {
 			var _p2265 int = start
 			var _rhs2266 int = 1
@@ -32702,9 +32702,9 @@ func astLowerInterpPrimary(toks []astbridge.Token, start int, end int) astbridge
 			return _p2265 + _rhs2266
 		}()), value)
 	}
-	// Osty: /tmp/selfhost_merged.osty:12997:5
+	// Osty: /tmp/selfhost_merged.osty:12998:5
 	if kind == "INT" {
-		// Osty: /tmp/selfhost_merged.osty:12998:9
+		// Osty: /tmp/selfhost_merged.osty:12999:9
 		return astbridge.IntLitExpr(astLowerPos(toks, start), astLowerEnd(toks, func() int {
 			var _p2267 int = start
 			var _rhs2268 int = 1
@@ -32717,9 +32717,9 @@ func astLowerInterpPrimary(toks []astbridge.Token, start int, end int) astbridge
 			return _p2267 + _rhs2268
 		}()), value)
 	}
-	// Osty: /tmp/selfhost_merged.osty:13000:5
+	// Osty: /tmp/selfhost_merged.osty:13001:5
 	if kind == "FLOAT" {
-		// Osty: /tmp/selfhost_merged.osty:13001:9
+		// Osty: /tmp/selfhost_merged.osty:13002:9
 		return astbridge.FloatLitExpr(astLowerPos(toks, start), astLowerEnd(toks, func() int {
 			var _p2269 int = start
 			var _rhs2270 int = 1
@@ -32732,9 +32732,9 @@ func astLowerInterpPrimary(toks []astbridge.Token, start int, end int) astbridge
 			return _p2269 + _rhs2270
 		}()), value)
 	}
-	// Osty: /tmp/selfhost_merged.osty:13003:5
+	// Osty: /tmp/selfhost_merged.osty:13004:5
 	if astbridge.TokenIsString(tok) {
-		// Osty: /tmp/selfhost_merged.osty:13004:9
+		// Osty: /tmp/selfhost_merged.osty:13005:9
 		return astbridge.StringLitFromToken(astLowerPos(toks, start), astLowerEnd(toks, func() int {
 			var _p2271 int = start
 			var _rhs2272 int = 1
@@ -32747,9 +32747,9 @@ func astLowerInterpPrimary(toks []astbridge.Token, start int, end int) astbridge
 			return _p2271 + _rhs2272
 		}()), tok)
 	}
-	// Osty: /tmp/selfhost_merged.osty:13006:5
+	// Osty: /tmp/selfhost_merged.osty:13007:5
 	if kind == "CHAR" {
-		// Osty: /tmp/selfhost_merged.osty:13007:9
+		// Osty: /tmp/selfhost_merged.osty:13008:9
 		return astbridge.CharLitExpr(astLowerPos(toks, start), astLowerEnd(toks, func() int {
 			var _p2273 int = start
 			var _rhs2274 int = 1
@@ -32762,9 +32762,9 @@ func astLowerInterpPrimary(toks []astbridge.Token, start int, end int) astbridge
 			return _p2273 + _rhs2274
 		}()), astLowerDecodedLiteral(value))
 	}
-	// Osty: /tmp/selfhost_merged.osty:13009:5
+	// Osty: /tmp/selfhost_merged.osty:13010:5
 	if kind == "BYTE" {
-		// Osty: /tmp/selfhost_merged.osty:13010:9
+		// Osty: /tmp/selfhost_merged.osty:13011:9
 		return astbridge.ByteLitExpr(astLowerPos(toks, start), astLowerEnd(toks, func() int {
 			var _p2275 int = start
 			var _rhs2276 int = 1
@@ -32780,14 +32780,14 @@ func astLowerInterpPrimary(toks []astbridge.Token, start int, end int) astbridge
 	return astbridge.NilExpr()
 }
 
-// Osty: /tmp/selfhost_merged.osty:13015:1
+// Osty: /tmp/selfhost_merged.osty:13016:1
 func astLowerInterpTrimStart(toks []astbridge.Token, start int, end int) int {
-	// Osty: /tmp/selfhost_merged.osty:13016:5
+	// Osty: /tmp/selfhost_merged.osty:13017:5
 	i := start
 	_ = i
-	// Osty: /tmp/selfhost_merged.osty:13017:5
+	// Osty: /tmp/selfhost_merged.osty:13018:5
 	for i < end && (astbridge.TokenIsNewline(astLowerTok(toks, i)) || astbridge.TokenIsEOF(astLowerTok(toks, i))) {
-		// Osty: /tmp/selfhost_merged.osty:13018:11
+		// Osty: /tmp/selfhost_merged.osty:13019:11
 		func() {
 			var _cur2277 int = i
 			var _rhs2278 int = 1
@@ -32803,12 +32803,12 @@ func astLowerInterpTrimStart(toks []astbridge.Token, start int, end int) int {
 	return i
 }
 
-// Osty: /tmp/selfhost_merged.osty:13023:1
+// Osty: /tmp/selfhost_merged.osty:13024:1
 func astLowerInterpTrimEnd(toks []astbridge.Token, start int, end int) int {
-	// Osty: /tmp/selfhost_merged.osty:13024:5
+	// Osty: /tmp/selfhost_merged.osty:13025:5
 	i := end
 	_ = i
-	// Osty: /tmp/selfhost_merged.osty:13025:5
+	// Osty: /tmp/selfhost_merged.osty:13026:5
 	for i > start && (astbridge.TokenIsNewline(astLowerTok(toks, func() int {
 		var _p2279 int = i
 		var _rhs2280 int = 1
@@ -32830,7 +32830,7 @@ func astLowerInterpTrimEnd(toks []astbridge.Token, start int, end int) int {
 		}
 		return _p2281 - _rhs2282
 	}()))) {
-		// Osty: /tmp/selfhost_merged.osty:13026:11
+		// Osty: /tmp/selfhost_merged.osty:13027:11
 		func() {
 			var _cur2283 int = i
 			var _rhs2284 int = 1
@@ -32846,25 +32846,25 @@ func astLowerInterpTrimEnd(toks []astbridge.Token, start int, end int) int {
 	return i
 }
 
-// Osty: /tmp/selfhost_merged.osty:13031:1
+// Osty: /tmp/selfhost_merged.osty:13032:1
 func astLowerInterpSplitTopLevelBinary(toks []astbridge.Token, start int, end int) int {
-	// Osty: /tmp/selfhost_merged.osty:13032:5
+	// Osty: /tmp/selfhost_merged.osty:13033:5
 	best := -1
 	_ = best
-	// Osty: /tmp/selfhost_merged.osty:13033:5
+	// Osty: /tmp/selfhost_merged.osty:13034:5
 	bestPrec := 100
 	_ = bestPrec
-	// Osty: /tmp/selfhost_merged.osty:13034:5
+	// Osty: /tmp/selfhost_merged.osty:13035:5
 	depth := 0
 	_ = depth
-	// Osty: /tmp/selfhost_merged.osty:13035:5
+	// Osty: /tmp/selfhost_merged.osty:13036:5
 	for i := start; i < end; i++ {
-		// Osty: /tmp/selfhost_merged.osty:13036:9
+		// Osty: /tmp/selfhost_merged.osty:13037:9
 		kind := astbridge.TokenKindString(astLowerTok(toks, i))
 		_ = kind
-		// Osty: /tmp/selfhost_merged.osty:13037:9
+		// Osty: /tmp/selfhost_merged.osty:13038:9
 		if kind == "(" || kind == "[" || kind == "{" {
-			// Osty: /tmp/selfhost_merged.osty:13038:19
+			// Osty: /tmp/selfhost_merged.osty:13039:19
 			func() {
 				var _cur2285 int = depth
 				var _rhs2286 int = 1
@@ -32877,9 +32877,9 @@ func astLowerInterpSplitTopLevelBinary(toks []astbridge.Token, start int, end in
 				depth = _cur2285 + _rhs2286
 			}()
 		} else if kind == ")" || kind == "]" || kind == "}" {
-			// Osty: /tmp/selfhost_merged.osty:13040:13
+			// Osty: /tmp/selfhost_merged.osty:13041:13
 			if depth > 0 {
-				// Osty: /tmp/selfhost_merged.osty:13041:23
+				// Osty: /tmp/selfhost_merged.osty:13042:23
 				func() {
 					var _cur2287 int = depth
 					var _rhs2288 int = 1
@@ -32893,14 +32893,14 @@ func astLowerInterpSplitTopLevelBinary(toks []astbridge.Token, start int, end in
 				}()
 			}
 		} else if depth == 0 {
-			// Osty: /tmp/selfhost_merged.osty:13044:13
+			// Osty: /tmp/selfhost_merged.osty:13045:13
 			prec := astLowerInterpPrecedence(kind)
 			_ = prec
-			// Osty: /tmp/selfhost_merged.osty:13045:13
+			// Osty: /tmp/selfhost_merged.osty:13046:13
 			if prec > 0 && prec <= bestPrec {
-				// Osty: /tmp/selfhost_merged.osty:13046:22
+				// Osty: /tmp/selfhost_merged.osty:13047:22
 				best = i
-				// Osty: /tmp/selfhost_merged.osty:13047:26
+				// Osty: /tmp/selfhost_merged.osty:13048:26
 				bestPrec = prec
 			}
 		}
@@ -32908,49 +32908,49 @@ func astLowerInterpSplitTopLevelBinary(toks []astbridge.Token, start int, end in
 	return best
 }
 
-// Osty: /tmp/selfhost_merged.osty:13054:1
+// Osty: /tmp/selfhost_merged.osty:13055:1
 func astLowerInterpPrecedence(kind string) int {
-	// Osty: /tmp/selfhost_merged.osty:13055:5
+	// Osty: /tmp/selfhost_merged.osty:13056:5
 	if kind == "||" {
-		// Osty: /tmp/selfhost_merged.osty:13056:9
+		// Osty: /tmp/selfhost_merged.osty:13057:9
 		return 1
 	}
-	// Osty: /tmp/selfhost_merged.osty:13058:5
+	// Osty: /tmp/selfhost_merged.osty:13059:5
 	if kind == "&&" {
-		// Osty: /tmp/selfhost_merged.osty:13059:9
+		// Osty: /tmp/selfhost_merged.osty:13060:9
 		return 2
 	}
-	// Osty: /tmp/selfhost_merged.osty:13061:5
+	// Osty: /tmp/selfhost_merged.osty:13062:5
 	if kind == "==" || kind == "!=" || kind == "<" || kind == ">" || kind == "<=" || kind == ">=" {
-		// Osty: /tmp/selfhost_merged.osty:13062:9
+		// Osty: /tmp/selfhost_merged.osty:13063:9
 		return 3
 	}
-	// Osty: /tmp/selfhost_merged.osty:13064:5
+	// Osty: /tmp/selfhost_merged.osty:13065:5
 	if kind == "+" || kind == "-" {
-		// Osty: /tmp/selfhost_merged.osty:13065:9
+		// Osty: /tmp/selfhost_merged.osty:13066:9
 		return 4
 	}
-	// Osty: /tmp/selfhost_merged.osty:13067:5
+	// Osty: /tmp/selfhost_merged.osty:13068:5
 	if kind == "*" || kind == "/" || kind == "%" {
-		// Osty: /tmp/selfhost_merged.osty:13068:9
+		// Osty: /tmp/selfhost_merged.osty:13069:9
 		return 5
 	}
 	return 0
 }
 
-// Osty: /tmp/selfhost_merged.osty:13073:1
+// Osty: /tmp/selfhost_merged.osty:13074:1
 func astLowerInterpFindClose(toks []astbridge.Token, start int, end int, open string, close string) int {
-	// Osty: /tmp/selfhost_merged.osty:13074:5
+	// Osty: /tmp/selfhost_merged.osty:13075:5
 	depth := 0
 	_ = depth
-	// Osty: /tmp/selfhost_merged.osty:13075:5
+	// Osty: /tmp/selfhost_merged.osty:13076:5
 	for i := start; i < end; i++ {
-		// Osty: /tmp/selfhost_merged.osty:13076:9
+		// Osty: /tmp/selfhost_merged.osty:13077:9
 		kind := astbridge.TokenKindString(astLowerTok(toks, i))
 		_ = kind
-		// Osty: /tmp/selfhost_merged.osty:13077:9
+		// Osty: /tmp/selfhost_merged.osty:13078:9
 		if kind == open {
-			// Osty: /tmp/selfhost_merged.osty:13078:19
+			// Osty: /tmp/selfhost_merged.osty:13079:19
 			func() {
 				var _cur2289 int = depth
 				var _rhs2290 int = 1
@@ -32963,7 +32963,7 @@ func astLowerInterpFindClose(toks []astbridge.Token, start int, end int, open st
 				depth = _cur2289 + _rhs2290
 			}()
 		} else if kind == close {
-			// Osty: /tmp/selfhost_merged.osty:13080:19
+			// Osty: /tmp/selfhost_merged.osty:13081:19
 			func() {
 				var _cur2291 int = depth
 				var _rhs2292 int = 1
@@ -32975,9 +32975,9 @@ func astLowerInterpFindClose(toks []astbridge.Token, start int, end int, open st
 				}
 				depth = _cur2291 - _rhs2292
 			}()
-			// Osty: /tmp/selfhost_merged.osty:13081:13
+			// Osty: /tmp/selfhost_merged.osty:13082:13
 			if depth == 0 {
-				// Osty: /tmp/selfhost_merged.osty:13082:17
+				// Osty: /tmp/selfhost_merged.osty:13083:17
 				return i
 			}
 		}
@@ -32985,25 +32985,25 @@ func astLowerInterpFindClose(toks []astbridge.Token, start int, end int, open st
 	return -1
 }
 
-// Osty: /tmp/selfhost_merged.osty:13089:1
+// Osty: /tmp/selfhost_merged.osty:13090:1
 func astLowerInterpArgs(toks []astbridge.Token, start int, end int) []astbridge.Arg {
-	// Osty: /tmp/selfhost_merged.osty:13090:5
+	// Osty: /tmp/selfhost_merged.osty:13091:5
 	out := astbridge.EmptyArgList()
 	_ = out
-	// Osty: /tmp/selfhost_merged.osty:13091:5
+	// Osty: /tmp/selfhost_merged.osty:13092:5
 	depth := 0
 	_ = depth
-	// Osty: /tmp/selfhost_merged.osty:13092:5
+	// Osty: /tmp/selfhost_merged.osty:13093:5
 	argStart := start
 	_ = argStart
-	// Osty: /tmp/selfhost_merged.osty:13093:5
+	// Osty: /tmp/selfhost_merged.osty:13094:5
 	for i := start; i < end; i++ {
-		// Osty: /tmp/selfhost_merged.osty:13094:9
+		// Osty: /tmp/selfhost_merged.osty:13095:9
 		kind := astbridge.TokenKindString(astLowerTok(toks, i))
 		_ = kind
-		// Osty: /tmp/selfhost_merged.osty:13095:9
+		// Osty: /tmp/selfhost_merged.osty:13096:9
 		if kind == "(" || kind == "[" || kind == "{" {
-			// Osty: /tmp/selfhost_merged.osty:13096:19
+			// Osty: /tmp/selfhost_merged.osty:13097:19
 			func() {
 				var _cur2293 int = depth
 				var _rhs2294 int = 1
@@ -33016,9 +33016,9 @@ func astLowerInterpArgs(toks []astbridge.Token, start int, end int) []astbridge.
 				depth = _cur2293 + _rhs2294
 			}()
 		} else if kind == ")" || kind == "]" || kind == "}" {
-			// Osty: /tmp/selfhost_merged.osty:13098:13
+			// Osty: /tmp/selfhost_merged.osty:13099:13
 			if depth > 0 {
-				// Osty: /tmp/selfhost_merged.osty:13099:23
+				// Osty: /tmp/selfhost_merged.osty:13100:23
 				func() {
 					var _cur2295 int = depth
 					var _rhs2296 int = 1
@@ -33032,9 +33032,9 @@ func astLowerInterpArgs(toks []astbridge.Token, start int, end int) []astbridge.
 				}()
 			}
 		} else if kind == "," && depth == 0 {
-			// Osty: /tmp/selfhost_merged.osty:13102:17
+			// Osty: /tmp/selfhost_merged.osty:13103:17
 			out = astLowerInterpAppendArg(toks, out, argStart, i)
-			// Osty: /tmp/selfhost_merged.osty:13103:22
+			// Osty: /tmp/selfhost_merged.osty:13104:22
 			func() {
 				var _cur2297 int = i
 				var _rhs2298 int = 1
@@ -33051,20 +33051,20 @@ func astLowerInterpArgs(toks []astbridge.Token, start int, end int) []astbridge.
 	return astLowerInterpAppendArg(toks, out, argStart, end)
 }
 
-// Osty: /tmp/selfhost_merged.osty:13109:1
+// Osty: /tmp/selfhost_merged.osty:13110:1
 func astLowerInterpAppendArg(toks []astbridge.Token, args []astbridge.Arg, rawStart int, rawEnd int) []astbridge.Arg {
-	// Osty: /tmp/selfhost_merged.osty:13110:5
+	// Osty: /tmp/selfhost_merged.osty:13111:5
 	out := args
 	_ = out
-	// Osty: /tmp/selfhost_merged.osty:13111:5
+	// Osty: /tmp/selfhost_merged.osty:13112:5
 	start := astLowerInterpTrimStart(toks, rawStart, rawEnd)
 	_ = start
-	// Osty: /tmp/selfhost_merged.osty:13112:5
+	// Osty: /tmp/selfhost_merged.osty:13113:5
 	end := astLowerInterpTrimEnd(toks, start, rawEnd)
 	_ = end
-	// Osty: /tmp/selfhost_merged.osty:13113:5
+	// Osty: /tmp/selfhost_merged.osty:13114:5
 	if start < end {
-		// Osty: /tmp/selfhost_merged.osty:13114:9
+		// Osty: /tmp/selfhost_merged.osty:13115:9
 		func() struct{} {
 			out = append(out, astbridge.ArgNode(astLowerPos(toks, start), "", astLowerInterpExpr(toks, start, end)))
 			return struct{}{}
@@ -33073,21 +33073,21 @@ func astLowerInterpAppendArg(toks []astbridge.Token, args []astbridge.Arg, rawSt
 	return out
 }
 
-// Osty: /tmp/selfhost_merged.osty:13119:1
+// Osty: /tmp/selfhost_merged.osty:13120:1
 func astLowerTok(toks []astbridge.Token, idx int) astbridge.Token {
 	return astbridge.TokenAt(toks, idx)
 }
 
-// Osty: /tmp/selfhost_merged.osty:13123:1
+// Osty: /tmp/selfhost_merged.osty:13124:1
 func astLowerPos(toks []astbridge.Token, idx int) astbridge.Pos {
 	return astbridge.TokenPos(astLowerTok(toks, idx))
 }
 
-// Osty: /tmp/selfhost_merged.osty:13127:1
+// Osty: /tmp/selfhost_merged.osty:13128:1
 func astLowerEnd(toks []astbridge.Token, idx int) astbridge.Pos {
-	// Osty: /tmp/selfhost_merged.osty:13128:5
+	// Osty: /tmp/selfhost_merged.osty:13129:5
 	if idx <= 0 {
-		// Osty: /tmp/selfhost_merged.osty:13129:9
+		// Osty: /tmp/selfhost_merged.osty:13130:9
 		return astbridge.TokenEnd(astLowerTok(toks, 0))
 	}
 	return astbridge.TokenEnd(astLowerTok(toks, func() int {
@@ -33103,27 +33103,45 @@ func astLowerEnd(toks []astbridge.Token, idx int) astbridge.Pos {
 	}()))
 }
 
-// Osty: /tmp/selfhost_merged.osty:13134:1
+// Osty: /tmp/selfhost_merged.osty:13135:1
 func astLowerNodePos(toks []astbridge.Token, n *AstNode) astbridge.Pos {
 	return astLowerPos(toks, n.start)
 }
 
-// Osty: /tmp/selfhost_merged.osty:13138:1
+// Osty: /tmp/selfhost_merged.osty:13139:1
 func astLowerNodeEnd(toks []astbridge.Token, n *AstNode) astbridge.Pos {
 	return astLowerEnd(toks, n.end)
 }
 
-// Osty: /tmp/selfhost_merged.osty:13142:1
-func astLowerDoc(toks []astbridge.Token, idx int) string {
-	// Osty: /tmp/selfhost_merged.osty:13143:5
-	direct := astbridge.TokenLeadingDoc(astLowerTok(toks, idx))
-	_ = direct
+// Osty: /tmp/selfhost_merged.osty:13143:1
+func astLowerMutPos(toks []astbridge.Token, n *AstNode) astbridge.Pos {
 	// Osty: /tmp/selfhost_merged.osty:13144:5
-	if direct != "" {
+	if !(n.flags == 1) {
 		// Osty: /tmp/selfhost_merged.osty:13145:9
-		return direct
+		return astbridge.ZeroPos()
 	}
 	// Osty: /tmp/selfhost_merged.osty:13147:5
+	for i := n.start; i < n.end; i++ {
+		// Osty: /tmp/selfhost_merged.osty:13148:9
+		if astbridge.TokenKindString(astLowerTok(toks, i)) == "mut" {
+			// Osty: /tmp/selfhost_merged.osty:13149:13
+			return astbridge.TokenPos(astLowerTok(toks, i))
+		}
+	}
+	return astbridge.ZeroPos()
+}
+
+// Osty: /tmp/selfhost_merged.osty:13155:1
+func astLowerDoc(toks []astbridge.Token, idx int) string {
+	// Osty: /tmp/selfhost_merged.osty:13156:5
+	direct := astbridge.TokenLeadingDoc(astLowerTok(toks, idx))
+	_ = direct
+	// Osty: /tmp/selfhost_merged.osty:13157:5
+	if direct != "" {
+		// Osty: /tmp/selfhost_merged.osty:13158:9
+		return direct
+	}
+	// Osty: /tmp/selfhost_merged.osty:13160:5
 	if idx > 0 && astbridge.TokenIsPub(astLowerTok(toks, func() int {
 		var _p2301 int = idx
 		var _rhs2302 int = 1
@@ -33135,7 +33153,7 @@ func astLowerDoc(toks []astbridge.Token, idx int) string {
 		}
 		return _p2301 - _rhs2302
 	}())) {
-		// Osty: /tmp/selfhost_merged.osty:13148:9
+		// Osty: /tmp/selfhost_merged.osty:13161:9
 		return astbridge.TokenLeadingDoc(astLowerTok(toks, func() int {
 			var _p2303 int = idx
 			var _rhs2304 int = 1
@@ -33151,490 +33169,490 @@ func astLowerDoc(toks []astbridge.Token, idx int) string {
 	return ""
 }
 
-// Osty: /tmp/selfhost_merged.osty:13153:1
+// Osty: /tmp/selfhost_merged.osty:13166:1
 func astLowerKind(kind FrontTokenKind) astbridge.Kind {
-	// Osty: /tmp/selfhost_merged.osty:13154:5
+	// Osty: /tmp/selfhost_merged.osty:13167:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontEOF{})) {
-		// Osty: /tmp/selfhost_merged.osty:13154:27
+		// Osty: /tmp/selfhost_merged.osty:13167:27
 		return astbridge.KindEOF()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13155:5
+	// Osty: /tmp/selfhost_merged.osty:13168:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontIllegal{})) {
-		// Osty: /tmp/selfhost_merged.osty:13155:31
+		// Osty: /tmp/selfhost_merged.osty:13168:31
 		return astbridge.KindIllegal()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13156:5
+	// Osty: /tmp/selfhost_merged.osty:13169:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontNewline{})) {
-		// Osty: /tmp/selfhost_merged.osty:13156:31
+		// Osty: /tmp/selfhost_merged.osty:13169:31
 		return astbridge.KindNewline()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13157:5
+	// Osty: /tmp/selfhost_merged.osty:13170:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) {
-		// Osty: /tmp/selfhost_merged.osty:13157:29
+		// Osty: /tmp/selfhost_merged.osty:13170:29
 		return astbridge.KindIdent()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13158:5
+	// Osty: /tmp/selfhost_merged.osty:13171:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontInt{})) {
-		// Osty: /tmp/selfhost_merged.osty:13158:27
+		// Osty: /tmp/selfhost_merged.osty:13171:27
 		return astbridge.KindInt()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13159:5
+	// Osty: /tmp/selfhost_merged.osty:13172:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontFloat{})) {
-		// Osty: /tmp/selfhost_merged.osty:13159:29
+		// Osty: /tmp/selfhost_merged.osty:13172:29
 		return astbridge.KindFloat()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13160:5
+	// Osty: /tmp/selfhost_merged.osty:13173:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontChar{})) {
-		// Osty: /tmp/selfhost_merged.osty:13160:28
+		// Osty: /tmp/selfhost_merged.osty:13173:28
 		return astbridge.KindChar()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13161:5
+	// Osty: /tmp/selfhost_merged.osty:13174:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontByte{})) {
-		// Osty: /tmp/selfhost_merged.osty:13161:28
+		// Osty: /tmp/selfhost_merged.osty:13174:28
 		return astbridge.KindByte()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13162:5
+	// Osty: /tmp/selfhost_merged.osty:13175:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontString{})) {
-		// Osty: /tmp/selfhost_merged.osty:13162:30
+		// Osty: /tmp/selfhost_merged.osty:13175:30
 		return astbridge.KindString()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13163:5
+	// Osty: /tmp/selfhost_merged.osty:13176:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRawString{})) {
-		// Osty: /tmp/selfhost_merged.osty:13163:33
+		// Osty: /tmp/selfhost_merged.osty:13176:33
 		return astbridge.KindRawString()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13164:5
+	// Osty: /tmp/selfhost_merged.osty:13177:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontFn{})) {
-		// Osty: /tmp/selfhost_merged.osty:13164:26
+		// Osty: /tmp/selfhost_merged.osty:13177:26
 		return astbridge.KindFn()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13165:5
+	// Osty: /tmp/selfhost_merged.osty:13178:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontStruct{})) {
-		// Osty: /tmp/selfhost_merged.osty:13165:30
+		// Osty: /tmp/selfhost_merged.osty:13178:30
 		return astbridge.KindStruct()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13166:5
+	// Osty: /tmp/selfhost_merged.osty:13179:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontEnum{})) {
-		// Osty: /tmp/selfhost_merged.osty:13166:28
+		// Osty: /tmp/selfhost_merged.osty:13179:28
 		return astbridge.KindEnum()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13167:5
+	// Osty: /tmp/selfhost_merged.osty:13180:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontInterface{})) {
-		// Osty: /tmp/selfhost_merged.osty:13167:33
+		// Osty: /tmp/selfhost_merged.osty:13180:33
 		return astbridge.KindInterface()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13168:5
+	// Osty: /tmp/selfhost_merged.osty:13181:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontType{})) {
-		// Osty: /tmp/selfhost_merged.osty:13168:28
+		// Osty: /tmp/selfhost_merged.osty:13181:28
 		return astbridge.KindType()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13169:5
+	// Osty: /tmp/selfhost_merged.osty:13182:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLet{})) {
-		// Osty: /tmp/selfhost_merged.osty:13169:27
+		// Osty: /tmp/selfhost_merged.osty:13182:27
 		return astbridge.KindLet()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13170:5
+	// Osty: /tmp/selfhost_merged.osty:13183:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontMut{})) {
-		// Osty: /tmp/selfhost_merged.osty:13170:27
+		// Osty: /tmp/selfhost_merged.osty:13183:27
 		return astbridge.KindMut()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13171:5
+	// Osty: /tmp/selfhost_merged.osty:13184:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontPub{})) {
-		// Osty: /tmp/selfhost_merged.osty:13171:27
+		// Osty: /tmp/selfhost_merged.osty:13184:27
 		return astbridge.KindPub()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13172:5
+	// Osty: /tmp/selfhost_merged.osty:13185:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontIf{})) {
-		// Osty: /tmp/selfhost_merged.osty:13172:26
+		// Osty: /tmp/selfhost_merged.osty:13185:26
 		return astbridge.KindIf()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13173:5
+	// Osty: /tmp/selfhost_merged.osty:13186:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontElse{})) {
-		// Osty: /tmp/selfhost_merged.osty:13173:28
+		// Osty: /tmp/selfhost_merged.osty:13186:28
 		return astbridge.KindElse()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13174:5
+	// Osty: /tmp/selfhost_merged.osty:13187:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontMatch{})) {
-		// Osty: /tmp/selfhost_merged.osty:13174:29
+		// Osty: /tmp/selfhost_merged.osty:13187:29
 		return astbridge.KindMatch()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13175:5
+	// Osty: /tmp/selfhost_merged.osty:13188:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontFor{})) {
-		// Osty: /tmp/selfhost_merged.osty:13175:27
+		// Osty: /tmp/selfhost_merged.osty:13188:27
 		return astbridge.KindFor()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13176:5
+	// Osty: /tmp/selfhost_merged.osty:13189:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBreak{})) {
-		// Osty: /tmp/selfhost_merged.osty:13176:29
+		// Osty: /tmp/selfhost_merged.osty:13189:29
 		return astbridge.KindBreak()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13177:5
+	// Osty: /tmp/selfhost_merged.osty:13190:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontContinue{})) {
-		// Osty: /tmp/selfhost_merged.osty:13177:32
+		// Osty: /tmp/selfhost_merged.osty:13190:32
 		return astbridge.KindContinue()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13178:5
+	// Osty: /tmp/selfhost_merged.osty:13191:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontReturn{})) {
-		// Osty: /tmp/selfhost_merged.osty:13178:30
+		// Osty: /tmp/selfhost_merged.osty:13191:30
 		return astbridge.KindReturn()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13179:5
+	// Osty: /tmp/selfhost_merged.osty:13192:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontUse{})) {
-		// Osty: /tmp/selfhost_merged.osty:13179:27
+		// Osty: /tmp/selfhost_merged.osty:13192:27
 		return astbridge.KindUse()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13180:5
+	// Osty: /tmp/selfhost_merged.osty:13193:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontDefer{})) {
-		// Osty: /tmp/selfhost_merged.osty:13180:29
+		// Osty: /tmp/selfhost_merged.osty:13193:29
 		return astbridge.KindDefer()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13181:5
+	// Osty: /tmp/selfhost_merged.osty:13194:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) {
-		// Osty: /tmp/selfhost_merged.osty:13181:30
+		// Osty: /tmp/selfhost_merged.osty:13194:30
 		return astbridge.KindLParen()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13182:5
+	// Osty: /tmp/selfhost_merged.osty:13195:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRParen{})) {
-		// Osty: /tmp/selfhost_merged.osty:13182:30
+		// Osty: /tmp/selfhost_merged.osty:13195:30
 		return astbridge.KindRParen()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13183:5
+	// Osty: /tmp/selfhost_merged.osty:13196:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
-		// Osty: /tmp/selfhost_merged.osty:13183:30
+		// Osty: /tmp/selfhost_merged.osty:13196:30
 		return astbridge.KindLBrace()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13184:5
+	// Osty: /tmp/selfhost_merged.osty:13197:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) {
-		// Osty: /tmp/selfhost_merged.osty:13184:30
+		// Osty: /tmp/selfhost_merged.osty:13197:30
 		return astbridge.KindRBrace()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13185:5
+	// Osty: /tmp/selfhost_merged.osty:13198:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBracket{})) {
-		// Osty: /tmp/selfhost_merged.osty:13185:32
+		// Osty: /tmp/selfhost_merged.osty:13198:32
 		return astbridge.KindLBracket()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13186:5
+	// Osty: /tmp/selfhost_merged.osty:13199:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRBracket{})) {
-		// Osty: /tmp/selfhost_merged.osty:13186:32
+		// Osty: /tmp/selfhost_merged.osty:13199:32
 		return astbridge.KindRBracket()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13187:5
+	// Osty: /tmp/selfhost_merged.osty:13200:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontComma{})) {
-		// Osty: /tmp/selfhost_merged.osty:13187:29
+		// Osty: /tmp/selfhost_merged.osty:13200:29
 		return astbridge.KindComma()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13188:5
+	// Osty: /tmp/selfhost_merged.osty:13201:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontColon{})) {
-		// Osty: /tmp/selfhost_merged.osty:13188:29
+		// Osty: /tmp/selfhost_merged.osty:13201:29
 		return astbridge.KindColon()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13189:5
+	// Osty: /tmp/selfhost_merged.osty:13202:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontSemicolon{})) {
-		// Osty: /tmp/selfhost_merged.osty:13189:33
+		// Osty: /tmp/selfhost_merged.osty:13202:33
 		return astbridge.KindSemicolon()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13190:5
+	// Osty: /tmp/selfhost_merged.osty:13203:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontDot{})) {
-		// Osty: /tmp/selfhost_merged.osty:13190:27
+		// Osty: /tmp/selfhost_merged.osty:13203:27
 		return astbridge.KindDot()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13191:5
+	// Osty: /tmp/selfhost_merged.osty:13204:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontPlus{})) {
-		// Osty: /tmp/selfhost_merged.osty:13191:28
+		// Osty: /tmp/selfhost_merged.osty:13204:28
 		return astbridge.KindPlus()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13192:5
+	// Osty: /tmp/selfhost_merged.osty:13205:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontMinus{})) {
-		// Osty: /tmp/selfhost_merged.osty:13192:29
+		// Osty: /tmp/selfhost_merged.osty:13205:29
 		return astbridge.KindMinus()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13193:5
+	// Osty: /tmp/selfhost_merged.osty:13206:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontStar{})) {
-		// Osty: /tmp/selfhost_merged.osty:13193:28
+		// Osty: /tmp/selfhost_merged.osty:13206:28
 		return astbridge.KindStar()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13194:5
+	// Osty: /tmp/selfhost_merged.osty:13207:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontSlash{})) {
-		// Osty: /tmp/selfhost_merged.osty:13194:29
+		// Osty: /tmp/selfhost_merged.osty:13207:29
 		return astbridge.KindSlash()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13195:5
+	// Osty: /tmp/selfhost_merged.osty:13208:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontPercent{})) {
-		// Osty: /tmp/selfhost_merged.osty:13195:31
+		// Osty: /tmp/selfhost_merged.osty:13208:31
 		return astbridge.KindPercent()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13196:5
+	// Osty: /tmp/selfhost_merged.osty:13209:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontEq{})) {
-		// Osty: /tmp/selfhost_merged.osty:13196:26
+		// Osty: /tmp/selfhost_merged.osty:13209:26
 		return astbridge.KindEq()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13197:5
+	// Osty: /tmp/selfhost_merged.osty:13210:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontNeq{})) {
-		// Osty: /tmp/selfhost_merged.osty:13197:27
+		// Osty: /tmp/selfhost_merged.osty:13210:27
 		return astbridge.KindNeq()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13198:5
+	// Osty: /tmp/selfhost_merged.osty:13211:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLt{})) {
-		// Osty: /tmp/selfhost_merged.osty:13198:26
+		// Osty: /tmp/selfhost_merged.osty:13211:26
 		return astbridge.KindLt()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13199:5
+	// Osty: /tmp/selfhost_merged.osty:13212:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontGt{})) {
-		// Osty: /tmp/selfhost_merged.osty:13199:26
+		// Osty: /tmp/selfhost_merged.osty:13212:26
 		return astbridge.KindGt()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13200:5
+	// Osty: /tmp/selfhost_merged.osty:13213:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLeq{})) {
-		// Osty: /tmp/selfhost_merged.osty:13200:27
+		// Osty: /tmp/selfhost_merged.osty:13213:27
 		return astbridge.KindLeq()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13201:5
+	// Osty: /tmp/selfhost_merged.osty:13214:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontGeq{})) {
-		// Osty: /tmp/selfhost_merged.osty:13201:27
+		// Osty: /tmp/selfhost_merged.osty:13214:27
 		return astbridge.KindGeq()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13202:5
+	// Osty: /tmp/selfhost_merged.osty:13215:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontAnd{})) {
-		// Osty: /tmp/selfhost_merged.osty:13202:27
+		// Osty: /tmp/selfhost_merged.osty:13215:27
 		return astbridge.KindAnd()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13203:5
+	// Osty: /tmp/selfhost_merged.osty:13216:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontOr{})) {
-		// Osty: /tmp/selfhost_merged.osty:13203:26
+		// Osty: /tmp/selfhost_merged.osty:13216:26
 		return astbridge.KindOr()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13204:5
+	// Osty: /tmp/selfhost_merged.osty:13217:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontNot{})) {
-		// Osty: /tmp/selfhost_merged.osty:13204:27
+		// Osty: /tmp/selfhost_merged.osty:13217:27
 		return astbridge.KindNot()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13205:5
+	// Osty: /tmp/selfhost_merged.osty:13218:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBitAnd{})) {
-		// Osty: /tmp/selfhost_merged.osty:13205:30
+		// Osty: /tmp/selfhost_merged.osty:13218:30
 		return astbridge.KindBitAnd()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13206:5
+	// Osty: /tmp/selfhost_merged.osty:13219:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBitOr{})) {
-		// Osty: /tmp/selfhost_merged.osty:13206:29
+		// Osty: /tmp/selfhost_merged.osty:13219:29
 		return astbridge.KindBitOr()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13207:5
+	// Osty: /tmp/selfhost_merged.osty:13220:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBitXor{})) {
-		// Osty: /tmp/selfhost_merged.osty:13207:30
+		// Osty: /tmp/selfhost_merged.osty:13220:30
 		return astbridge.KindBitXor()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13208:5
+	// Osty: /tmp/selfhost_merged.osty:13221:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBitNot{})) {
-		// Osty: /tmp/selfhost_merged.osty:13208:30
+		// Osty: /tmp/selfhost_merged.osty:13221:30
 		return astbridge.KindBitNot()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13209:5
+	// Osty: /tmp/selfhost_merged.osty:13222:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontShl{})) {
-		// Osty: /tmp/selfhost_merged.osty:13209:27
+		// Osty: /tmp/selfhost_merged.osty:13222:27
 		return astbridge.KindShl()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13210:5
+	// Osty: /tmp/selfhost_merged.osty:13223:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontShr{})) {
-		// Osty: /tmp/selfhost_merged.osty:13210:27
+		// Osty: /tmp/selfhost_merged.osty:13223:27
 		return astbridge.KindShr()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13211:5
+	// Osty: /tmp/selfhost_merged.osty:13224:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontAssign{})) {
-		// Osty: /tmp/selfhost_merged.osty:13211:30
+		// Osty: /tmp/selfhost_merged.osty:13224:30
 		return astbridge.KindAssign()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13212:5
+	// Osty: /tmp/selfhost_merged.osty:13225:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontPlusEq{})) {
-		// Osty: /tmp/selfhost_merged.osty:13212:30
+		// Osty: /tmp/selfhost_merged.osty:13225:30
 		return astbridge.KindPlusEq()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13213:5
+	// Osty: /tmp/selfhost_merged.osty:13226:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontMinusEq{})) {
-		// Osty: /tmp/selfhost_merged.osty:13213:31
+		// Osty: /tmp/selfhost_merged.osty:13226:31
 		return astbridge.KindMinusEq()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13214:5
+	// Osty: /tmp/selfhost_merged.osty:13227:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontStarEq{})) {
-		// Osty: /tmp/selfhost_merged.osty:13214:30
+		// Osty: /tmp/selfhost_merged.osty:13227:30
 		return astbridge.KindStarEq()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13215:5
+	// Osty: /tmp/selfhost_merged.osty:13228:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontSlashEq{})) {
-		// Osty: /tmp/selfhost_merged.osty:13215:31
+		// Osty: /tmp/selfhost_merged.osty:13228:31
 		return astbridge.KindSlashEq()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13216:5
+	// Osty: /tmp/selfhost_merged.osty:13229:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontPercentEq{})) {
-		// Osty: /tmp/selfhost_merged.osty:13216:33
+		// Osty: /tmp/selfhost_merged.osty:13229:33
 		return astbridge.KindPercentEq()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13217:5
+	// Osty: /tmp/selfhost_merged.osty:13230:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBitAndEq{})) {
-		// Osty: /tmp/selfhost_merged.osty:13217:32
+		// Osty: /tmp/selfhost_merged.osty:13230:32
 		return astbridge.KindBitAndEq()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13218:5
+	// Osty: /tmp/selfhost_merged.osty:13231:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBitOrEq{})) {
-		// Osty: /tmp/selfhost_merged.osty:13218:31
+		// Osty: /tmp/selfhost_merged.osty:13231:31
 		return astbridge.KindBitOrEq()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13219:5
+	// Osty: /tmp/selfhost_merged.osty:13232:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBitXorEq{})) {
-		// Osty: /tmp/selfhost_merged.osty:13219:32
+		// Osty: /tmp/selfhost_merged.osty:13232:32
 		return astbridge.KindBitXorEq()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13220:5
+	// Osty: /tmp/selfhost_merged.osty:13233:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontShlEq{})) {
-		// Osty: /tmp/selfhost_merged.osty:13220:29
+		// Osty: /tmp/selfhost_merged.osty:13233:29
 		return astbridge.KindShlEq()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13221:5
+	// Osty: /tmp/selfhost_merged.osty:13234:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontShrEq{})) {
-		// Osty: /tmp/selfhost_merged.osty:13221:29
+		// Osty: /tmp/selfhost_merged.osty:13234:29
 		return astbridge.KindShrEq()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13222:5
+	// Osty: /tmp/selfhost_merged.osty:13235:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontQuestion{})) {
-		// Osty: /tmp/selfhost_merged.osty:13222:32
+		// Osty: /tmp/selfhost_merged.osty:13235:32
 		return astbridge.KindQuestion()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13223:5
+	// Osty: /tmp/selfhost_merged.osty:13236:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontQDot{})) {
-		// Osty: /tmp/selfhost_merged.osty:13223:28
+		// Osty: /tmp/selfhost_merged.osty:13236:28
 		return astbridge.KindQDot()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13224:5
+	// Osty: /tmp/selfhost_merged.osty:13237:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontQQ{})) {
-		// Osty: /tmp/selfhost_merged.osty:13224:26
+		// Osty: /tmp/selfhost_merged.osty:13237:26
 		return astbridge.KindQQ()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13225:5
+	// Osty: /tmp/selfhost_merged.osty:13238:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontDotDot{})) {
-		// Osty: /tmp/selfhost_merged.osty:13225:30
+		// Osty: /tmp/selfhost_merged.osty:13238:30
 		return astbridge.KindDotDot()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13226:5
+	// Osty: /tmp/selfhost_merged.osty:13239:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontDotDotEq{})) {
-		// Osty: /tmp/selfhost_merged.osty:13226:32
+		// Osty: /tmp/selfhost_merged.osty:13239:32
 		return astbridge.KindDotDotEq()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13227:5
+	// Osty: /tmp/selfhost_merged.osty:13240:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontArrow{})) {
-		// Osty: /tmp/selfhost_merged.osty:13227:29
+		// Osty: /tmp/selfhost_merged.osty:13240:29
 		return astbridge.KindArrow()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13228:5
+	// Osty: /tmp/selfhost_merged.osty:13241:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontChanArrow{})) {
-		// Osty: /tmp/selfhost_merged.osty:13228:33
+		// Osty: /tmp/selfhost_merged.osty:13241:33
 		return astbridge.KindChanArrow()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13229:5
+	// Osty: /tmp/selfhost_merged.osty:13242:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontColonColon{})) {
-		// Osty: /tmp/selfhost_merged.osty:13229:34
+		// Osty: /tmp/selfhost_merged.osty:13242:34
 		return astbridge.KindColonColon()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13230:5
+	// Osty: /tmp/selfhost_merged.osty:13243:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontUnderscore{})) {
-		// Osty: /tmp/selfhost_merged.osty:13230:34
+		// Osty: /tmp/selfhost_merged.osty:13243:34
 		return astbridge.KindUnderscore()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13231:5
+	// Osty: /tmp/selfhost_merged.osty:13244:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontAt{})) {
-		// Osty: /tmp/selfhost_merged.osty:13231:26
+		// Osty: /tmp/selfhost_merged.osty:13244:26
 		return astbridge.KindAt()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13232:5
+	// Osty: /tmp/selfhost_merged.osty:13245:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontHash{})) {
-		// Osty: /tmp/selfhost_merged.osty:13232:28
+		// Osty: /tmp/selfhost_merged.osty:13245:28
 		return astbridge.KindHash()
 	}
 	return astbridge.KindIllegal()
 }
 
-// Osty: /tmp/selfhost_merged.osty:13236:1
+// Osty: /tmp/selfhost_merged.osty:13249:1
 func astLowerSplitPath(raw string) []string {
-	// Osty: /tmp/selfhost_merged.osty:13237:5
+	// Osty: /tmp/selfhost_merged.osty:13250:5
 	if raw == "" {
-		// Osty: /tmp/selfhost_merged.osty:13238:9
+		// Osty: /tmp/selfhost_merged.osty:13251:9
 		return make([]string, 0, 1)
 	}
-	// Osty: /tmp/selfhost_merged.osty:13240:5
+	// Osty: /tmp/selfhost_merged.osty:13253:5
 	if strings.Count(raw, "/") > 0 {
-		// Osty: /tmp/selfhost_merged.osty:13241:9
+		// Osty: /tmp/selfhost_merged.osty:13254:9
 		return []string{raw}
 	}
 	return strings.Split(raw, ".")
 }
 
-// Osty: /tmp/selfhost_merged.osty:13246:1
+// Osty: /tmp/selfhost_merged.osty:13259:1
 func astLowerUnquoteMaybe(s string) string {
 	return astLowerStringContent(s)
 }
 
-// Osty: /tmp/selfhost_merged.osty:13250:1
+// Osty: /tmp/selfhost_merged.osty:13263:1
 func astLowerStringContent(s string) string {
-	// Osty: /tmp/selfhost_merged.osty:13251:5
+	// Osty: /tmp/selfhost_merged.osty:13264:5
 	if strings.HasPrefix(s, "r\"\"\"") && strings.HasSuffix(s, "\"\"\"") {
-		// Osty: /tmp/selfhost_merged.osty:13252:9
+		// Osty: /tmp/selfhost_merged.osty:13265:9
 		return strings.TrimSuffix(strings.TrimPrefix(s, "r\"\"\""), "\"\"\"")
 	}
-	// Osty: /tmp/selfhost_merged.osty:13254:5
+	// Osty: /tmp/selfhost_merged.osty:13267:5
 	if strings.HasPrefix(s, "\"\"\"") && strings.HasSuffix(s, "\"\"\"") {
-		// Osty: /tmp/selfhost_merged.osty:13255:9
+		// Osty: /tmp/selfhost_merged.osty:13268:9
 		return astLowerDecodeEscapes(strings.TrimSuffix(strings.TrimPrefix(s, "\"\"\""), "\"\"\""))
 	}
-	// Osty: /tmp/selfhost_merged.osty:13257:5
+	// Osty: /tmp/selfhost_merged.osty:13270:5
 	if strings.HasPrefix(s, "r\"") && strings.HasSuffix(s, "\"") {
-		// Osty: /tmp/selfhost_merged.osty:13258:9
+		// Osty: /tmp/selfhost_merged.osty:13271:9
 		return strings.TrimSuffix(strings.TrimPrefix(s, "r\""), "\"")
 	}
-	// Osty: /tmp/selfhost_merged.osty:13260:5
+	// Osty: /tmp/selfhost_merged.osty:13273:5
 	if strings.HasPrefix(s, "\"") && strings.HasSuffix(s, "\"") {
-		// Osty: /tmp/selfhost_merged.osty:13261:9
+		// Osty: /tmp/selfhost_merged.osty:13274:9
 		return astLowerDecodeEscapes(strings.TrimSuffix(strings.TrimPrefix(s, "\""), "\""))
 	}
 	return s
 }
 
-// Osty: /tmp/selfhost_merged.osty:13266:1
+// Osty: /tmp/selfhost_merged.osty:13279:1
 func astLowerDecodedLiteral(s string) string {
-	// Osty: /tmp/selfhost_merged.osty:13267:5
+	// Osty: /tmp/selfhost_merged.osty:13280:5
 	raw := s
 	_ = raw
-	// Osty: /tmp/selfhost_merged.osty:13268:5
+	// Osty: /tmp/selfhost_merged.osty:13281:5
 	if strings.HasPrefix(raw, "b") {
-		// Osty: /tmp/selfhost_merged.osty:13269:13
+		// Osty: /tmp/selfhost_merged.osty:13282:13
 		raw = strings.TrimPrefix(raw, "b")
 	}
-	// Osty: /tmp/selfhost_merged.osty:13271:5
+	// Osty: /tmp/selfhost_merged.osty:13284:5
 	if strings.HasPrefix(raw, "'") && strings.HasSuffix(raw, "'") {
-		// Osty: /tmp/selfhost_merged.osty:13272:13
+		// Osty: /tmp/selfhost_merged.osty:13285:13
 		raw = strings.TrimSuffix(strings.TrimPrefix(raw, "'"), "'")
 	}
 	return astLowerDecodeEscapes(raw)
 }
 
-// Osty: /tmp/selfhost_merged.osty:13277:1
+// Osty: /tmp/selfhost_merged.osty:13290:1
 func astLowerDecodeEscapes(s string) string {
-	// Osty: /tmp/selfhost_merged.osty:13278:5
+	// Osty: /tmp/selfhost_merged.osty:13291:5
 	units := strings.Split(s, "")
 	_ = units
-	// Osty: /tmp/selfhost_merged.osty:13279:5
+	// Osty: /tmp/selfhost_merged.osty:13292:5
 	out := ""
 	_ = out
-	// Osty: /tmp/selfhost_merged.osty:13280:5
+	// Osty: /tmp/selfhost_merged.osty:13293:5
 	i := 0
 	_ = i
-	// Osty: /tmp/selfhost_merged.osty:13281:5
+	// Osty: /tmp/selfhost_merged.osty:13294:5
 	for i < astLowerStringUnitCount(units) {
-		// Osty: /tmp/selfhost_merged.osty:13282:9
+		// Osty: /tmp/selfhost_merged.osty:13295:9
 		unit := frontUnitAt(units, i)
 		_ = unit
-		// Osty: /tmp/selfhost_merged.osty:13283:9
+		// Osty: /tmp/selfhost_merged.osty:13296:9
 		if unit != "\\" {
-			// Osty: /tmp/selfhost_merged.osty:13284:17
+			// Osty: /tmp/selfhost_merged.osty:13297:17
 			out = fmt.Sprintf("%s%s", ostyToString(out), ostyToString(unit))
-			// Osty: /tmp/selfhost_merged.osty:13285:15
+			// Osty: /tmp/selfhost_merged.osty:13298:15
 			func() {
 				var _cur2305 int = i
 				var _rhs2306 int = 1
@@ -33657,9 +33675,9 @@ func astLowerDecodeEscapes(s string) string {
 			}
 			return _p2307 + _rhs2308
 		}() >= astLowerStringUnitCount(units) {
-			// Osty: /tmp/selfhost_merged.osty:13287:17
+			// Osty: /tmp/selfhost_merged.osty:13300:17
 			out = fmt.Sprintf("%s\\", ostyToString(out))
-			// Osty: /tmp/selfhost_merged.osty:13288:15
+			// Osty: /tmp/selfhost_merged.osty:13301:15
 			func() {
 				var _cur2309 int = i
 				var _rhs2310 int = 1
@@ -33672,7 +33690,7 @@ func astLowerDecodeEscapes(s string) string {
 				i = _cur2309 + _rhs2310
 			}()
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:13290:13
+			// Osty: /tmp/selfhost_merged.osty:13303:13
 			next := frontUnitAt(units, func() int {
 				var _p2311 int = i
 				var _rhs2312 int = 1
@@ -33685,11 +33703,11 @@ func astLowerDecodeEscapes(s string) string {
 				return _p2311 + _rhs2312
 			}())
 			_ = next
-			// Osty: /tmp/selfhost_merged.osty:13291:13
+			// Osty: /tmp/selfhost_merged.osty:13304:13
 			if next == "n" {
-				// Osty: /tmp/selfhost_merged.osty:13292:21
+				// Osty: /tmp/selfhost_merged.osty:13305:21
 				out = fmt.Sprintf("%s\n", ostyToString(out))
-				// Osty: /tmp/selfhost_merged.osty:13293:19
+				// Osty: /tmp/selfhost_merged.osty:13306:19
 				func() {
 					var _cur2313 int = i
 					var _rhs2314 int = 2
@@ -33702,9 +33720,9 @@ func astLowerDecodeEscapes(s string) string {
 					i = _cur2313 + _rhs2314
 				}()
 			} else if next == "r" {
-				// Osty: /tmp/selfhost_merged.osty:13295:21
+				// Osty: /tmp/selfhost_merged.osty:13308:21
 				out = fmt.Sprintf("%s\r", ostyToString(out))
-				// Osty: /tmp/selfhost_merged.osty:13296:19
+				// Osty: /tmp/selfhost_merged.osty:13309:19
 				func() {
 					var _cur2315 int = i
 					var _rhs2316 int = 2
@@ -33717,9 +33735,9 @@ func astLowerDecodeEscapes(s string) string {
 					i = _cur2315 + _rhs2316
 				}()
 			} else if next == "t" {
-				// Osty: /tmp/selfhost_merged.osty:13298:21
+				// Osty: /tmp/selfhost_merged.osty:13311:21
 				out = fmt.Sprintf("%s\t", ostyToString(out))
-				// Osty: /tmp/selfhost_merged.osty:13299:19
+				// Osty: /tmp/selfhost_merged.osty:13312:19
 				func() {
 					var _cur2317 int = i
 					var _rhs2318 int = 2
@@ -33732,9 +33750,9 @@ func astLowerDecodeEscapes(s string) string {
 					i = _cur2317 + _rhs2318
 				}()
 			} else if next == "0" {
-				// Osty: /tmp/selfhost_merged.osty:13301:21
+				// Osty: /tmp/selfhost_merged.osty:13314:21
 				out = fmt.Sprintf("%s%s", ostyToString(out), ostyToString(astbridge.RuneString(0)))
-				// Osty: /tmp/selfhost_merged.osty:13302:19
+				// Osty: /tmp/selfhost_merged.osty:13315:19
 				func() {
 					var _cur2319 int = i
 					var _rhs2320 int = 2
@@ -33747,7 +33765,7 @@ func astLowerDecodeEscapes(s string) string {
 					i = _cur2319 + _rhs2320
 				}()
 			} else if next == "x" {
-				// Osty: /tmp/selfhost_merged.osty:13304:17
+				// Osty: /tmp/selfhost_merged.osty:13317:17
 				high := frontHexValue(frontUnitAt(units, func() int {
 					var _p2321 int = i
 					var _rhs2322 int = 2
@@ -33760,7 +33778,7 @@ func astLowerDecodeEscapes(s string) string {
 					return _p2321 + _rhs2322
 				}()))
 				_ = high
-				// Osty: /tmp/selfhost_merged.osty:13305:17
+				// Osty: /tmp/selfhost_merged.osty:13318:17
 				low := frontHexValue(frontUnitAt(units, func() int {
 					var _p2323 int = i
 					var _rhs2324 int = 3
@@ -33773,7 +33791,7 @@ func astLowerDecodeEscapes(s string) string {
 					return _p2323 + _rhs2324
 				}()))
 				_ = low
-				// Osty: /tmp/selfhost_merged.osty:13306:17
+				// Osty: /tmp/selfhost_merged.osty:13319:17
 				if func() int {
 					var _p2325 int = i
 					var _rhs2326 int = 3
@@ -33785,7 +33803,7 @@ func astLowerDecodeEscapes(s string) string {
 					}
 					return _p2325 + _rhs2326
 				}() < astLowerStringUnitCount(units) && high >= 0 && low >= 0 {
-					// Osty: /tmp/selfhost_merged.osty:13307:21
+					// Osty: /tmp/selfhost_merged.osty:13320:21
 					var value int = func() int {
 						var _p2327 int = (func() int {
 							var _p2328 int = high
@@ -33825,9 +33843,9 @@ func astLowerDecodeEscapes(s string) string {
 						return _p2327 + _rhs2330
 					}()
 					_ = value
-					// Osty: /tmp/selfhost_merged.osty:13308:25
+					// Osty: /tmp/selfhost_merged.osty:13321:25
 					out = fmt.Sprintf("%s%s", ostyToString(out), ostyToString(astbridge.RuneString(value)))
-					// Osty: /tmp/selfhost_merged.osty:13309:23
+					// Osty: /tmp/selfhost_merged.osty:13322:23
 					func() {
 						var _cur2331 int = i
 						var _rhs2332 int = 4
@@ -33840,9 +33858,9 @@ func astLowerDecodeEscapes(s string) string {
 						i = _cur2331 + _rhs2332
 					}()
 				} else {
-					// Osty: /tmp/selfhost_merged.osty:13311:25
+					// Osty: /tmp/selfhost_merged.osty:13324:25
 					out = fmt.Sprintf("%s%s", ostyToString(out), ostyToString(next))
-					// Osty: /tmp/selfhost_merged.osty:13312:23
+					// Osty: /tmp/selfhost_merged.osty:13325:23
 					func() {
 						var _cur2333 int = i
 						var _rhs2334 int = 2
@@ -33866,7 +33884,7 @@ func astLowerDecodeEscapes(s string) string {
 				}
 				return _p2335 + _rhs2336
 			}()) == "{" {
-				// Osty: /tmp/selfhost_merged.osty:13315:17
+				// Osty: /tmp/selfhost_merged.osty:13328:17
 				parsed := astLowerDecodeUnicodeEscape(units, func() int {
 					var _p2337 int = i
 					var _rhs2338 int = 3
@@ -33879,11 +33897,11 @@ func astLowerDecodeEscapes(s string) string {
 					return _p2337 + _rhs2338
 				}())
 				_ = parsed
-				// Osty: /tmp/selfhost_merged.osty:13316:17
+				// Osty: /tmp/selfhost_merged.osty:13329:17
 				if parsed.consumed > 0 {
-					// Osty: /tmp/selfhost_merged.osty:13317:25
+					// Osty: /tmp/selfhost_merged.osty:13330:25
 					out = fmt.Sprintf("%s%s", ostyToString(out), ostyToString(astbridge.RuneString(parsed.value)))
-					// Osty: /tmp/selfhost_merged.osty:13318:23
+					// Osty: /tmp/selfhost_merged.osty:13331:23
 					func() {
 						var _cur2339 int = func() int {
 							var _p2341 int = i
@@ -33906,9 +33924,9 @@ func astLowerDecodeEscapes(s string) string {
 						i = _cur2339 + _rhs2340
 					}()
 				} else {
-					// Osty: /tmp/selfhost_merged.osty:13320:25
+					// Osty: /tmp/selfhost_merged.osty:13333:25
 					out = fmt.Sprintf("%s%s", ostyToString(out), ostyToString(next))
-					// Osty: /tmp/selfhost_merged.osty:13321:23
+					// Osty: /tmp/selfhost_merged.osty:13334:23
 					func() {
 						var _cur2343 int = i
 						var _rhs2344 int = 2
@@ -33922,9 +33940,9 @@ func astLowerDecodeEscapes(s string) string {
 					}()
 				}
 			} else {
-				// Osty: /tmp/selfhost_merged.osty:13324:21
+				// Osty: /tmp/selfhost_merged.osty:13337:21
 				out = fmt.Sprintf("%s%s", ostyToString(out), ostyToString(next))
-				// Osty: /tmp/selfhost_merged.osty:13325:19
+				// Osty: /tmp/selfhost_merged.osty:13338:19
 				func() {
 					var _cur2345 int = i
 					var _rhs2346 int = 2
@@ -33942,36 +33960,36 @@ func astLowerDecodeEscapes(s string) string {
 	return out
 }
 
-// Osty: /tmp/selfhost_merged.osty:13332:1
+// Osty: /tmp/selfhost_merged.osty:13345:1
 type AstLowerUnicodeEscape struct {
 	value    int
 	consumed int
 }
 
-// Osty: /tmp/selfhost_merged.osty:13337:1
+// Osty: /tmp/selfhost_merged.osty:13350:1
 func astLowerDecodeUnicodeEscape(units []string, start int) *AstLowerUnicodeEscape {
-	// Osty: /tmp/selfhost_merged.osty:13338:5
+	// Osty: /tmp/selfhost_merged.osty:13351:5
 	value := 0
 	_ = value
-	// Osty: /tmp/selfhost_merged.osty:13339:5
+	// Osty: /tmp/selfhost_merged.osty:13352:5
 	consumed := 0
 	_ = consumed
-	// Osty: /tmp/selfhost_merged.osty:13340:5
+	// Osty: /tmp/selfhost_merged.osty:13353:5
 	total := astLowerStringUnitCount(units)
 	_ = total
-	// Osty: /tmp/selfhost_merged.osty:13341:5
+	// Osty: /tmp/selfhost_merged.osty:13354:5
 	for i := start; i < total; i++ {
-		// Osty: /tmp/selfhost_merged.osty:13342:9
+		// Osty: /tmp/selfhost_merged.osty:13355:9
 		unit := frontUnitAt(units, i)
 		_ = unit
-		// Osty: /tmp/selfhost_merged.osty:13343:9
+		// Osty: /tmp/selfhost_merged.osty:13356:9
 		if unit == "}" {
-			// Osty: /tmp/selfhost_merged.osty:13344:13
+			// Osty: /tmp/selfhost_merged.osty:13357:13
 			if consumed == 0 {
-				// Osty: /tmp/selfhost_merged.osty:13345:17
+				// Osty: /tmp/selfhost_merged.osty:13358:17
 				return &AstLowerUnicodeEscape{value: 0, consumed: 0}
 			}
-			// Osty: /tmp/selfhost_merged.osty:13347:13
+			// Osty: /tmp/selfhost_merged.osty:13360:13
 			return &AstLowerUnicodeEscape{value: value, consumed: func() int {
 				var _p2347 int = consumed
 				var _rhs2348 int = 1
@@ -33984,15 +34002,15 @@ func astLowerDecodeUnicodeEscape(units []string, start int) *AstLowerUnicodeEsca
 				return _p2347 + _rhs2348
 			}()}
 		}
-		// Osty: /tmp/selfhost_merged.osty:13349:9
+		// Osty: /tmp/selfhost_merged.osty:13362:9
 		digit := frontHexValue(unit)
 		_ = digit
-		// Osty: /tmp/selfhost_merged.osty:13350:9
+		// Osty: /tmp/selfhost_merged.osty:13363:9
 		if digit < 0 {
-			// Osty: /tmp/selfhost_merged.osty:13351:13
+			// Osty: /tmp/selfhost_merged.osty:13364:13
 			return &AstLowerUnicodeEscape{value: 0, consumed: 0}
 		}
-		// Osty: /tmp/selfhost_merged.osty:13353:15
+		// Osty: /tmp/selfhost_merged.osty:13366:15
 		func() {
 			var _cur2349 int = (func() int {
 				var _p2351 int = value
@@ -34031,7 +34049,7 @@ func astLowerDecodeUnicodeEscape(units []string, start int) *AstLowerUnicodeEsca
 			}
 			value = _cur2349 + _rhs2350
 		}()
-		// Osty: /tmp/selfhost_merged.osty:13354:18
+		// Osty: /tmp/selfhost_merged.osty:13367:18
 		func() {
 			var _cur2353 int = consumed
 			var _rhs2354 int = 1
@@ -34047,16 +34065,16 @@ func astLowerDecodeUnicodeEscape(units []string, start int) *AstLowerUnicodeEsca
 	return &AstLowerUnicodeEscape{value: 0, consumed: 0}
 }
 
-// Osty: /tmp/selfhost_merged.osty:13359:1
+// Osty: /tmp/selfhost_merged.osty:13372:1
 func astLowerStringUnitCount(units []string) int {
-	// Osty: /tmp/selfhost_merged.osty:13360:5
+	// Osty: /tmp/selfhost_merged.osty:13373:5
 	count := 0
 	_ = count
-	// Osty: /tmp/selfhost_merged.osty:13361:5
+	// Osty: /tmp/selfhost_merged.osty:13374:5
 	for _, unit := range units {
-		// Osty: /tmp/selfhost_merged.osty:13362:9
+		// Osty: /tmp/selfhost_merged.osty:13375:9
 		_ = unit
-		// Osty: /tmp/selfhost_merged.osty:13363:15
+		// Osty: /tmp/selfhost_merged.osty:13376:15
 		func() {
 			var _cur2355 int = count
 			var _rhs2356 int = 1
@@ -34072,80 +34090,80 @@ func astLowerStringUnitCount(units []string) int {
 	return count
 }
 
-// Osty: /tmp/selfhost_merged.osty:13368:1
+// Osty: /tmp/selfhost_merged.osty:13381:1
 func astLowerDecl(arena *AstArena, toks []astbridge.Token, idx int) astbridge.Decl {
-	// Osty: /tmp/selfhost_merged.osty:13369:5
+	// Osty: /tmp/selfhost_merged.osty:13382:5
 	n := astArenaNodeAt(arena, idx)
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:13370:5
+	// Osty: /tmp/selfhost_merged.osty:13383:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNFnDecl{})) {
-		// Osty: /tmp/selfhost_merged.osty:13371:9
+		// Osty: /tmp/selfhost_merged.osty:13384:9
 		return astbridge.FnDeclAsDecl(astLowerFnDecl(arena, toks, n))
 	}
-	// Osty: /tmp/selfhost_merged.osty:13373:5
+	// Osty: /tmp/selfhost_merged.osty:13386:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNStructDecl{})) {
-		// Osty: /tmp/selfhost_merged.osty:13374:9
+		// Osty: /tmp/selfhost_merged.osty:13387:9
 		return astLowerStructDecl(arena, toks, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:13376:5
+	// Osty: /tmp/selfhost_merged.osty:13389:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNEnumDecl{})) {
-		// Osty: /tmp/selfhost_merged.osty:13377:9
+		// Osty: /tmp/selfhost_merged.osty:13390:9
 		return astLowerEnumDecl(arena, toks, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:13379:5
+	// Osty: /tmp/selfhost_merged.osty:13392:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNInterfaceDecl{})) {
-		// Osty: /tmp/selfhost_merged.osty:13380:9
+		// Osty: /tmp/selfhost_merged.osty:13393:9
 		return astLowerInterfaceDecl(arena, toks, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:13382:5
+	// Osty: /tmp/selfhost_merged.osty:13395:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNTypeAlias{})) {
-		// Osty: /tmp/selfhost_merged.osty:13383:9
+		// Osty: /tmp/selfhost_merged.osty:13396:9
 		return astLowerTypeAliasDecl(arena, toks, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:13385:5
+	// Osty: /tmp/selfhost_merged.osty:13398:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNUseDecl{})) {
-		// Osty: /tmp/selfhost_merged.osty:13386:9
+		// Osty: /tmp/selfhost_merged.osty:13399:9
 		return astLowerUseDecl(arena, toks, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:13388:5
+	// Osty: /tmp/selfhost_merged.osty:13401:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNLet{})) {
-		// Osty: /tmp/selfhost_merged.osty:13389:9
+		// Osty: /tmp/selfhost_merged.osty:13402:9
 		return astLowerLetDecl(arena, toks, n)
 	}
 	return astbridge.NilDecl()
 }
 
-// Osty: /tmp/selfhost_merged.osty:13394:1
+// Osty: /tmp/selfhost_merged.osty:13407:1
 func astLowerFnDecl(arena *AstArena, toks []astbridge.Token, n *AstNode) astbridge.FnDecl {
-	// Osty: /tmp/selfhost_merged.osty:13395:5
+	// Osty: /tmp/selfhost_merged.osty:13408:5
 	recv := astbridge.NilReceiver()
 	_ = recv
-	// Osty: /tmp/selfhost_merged.osty:13396:5
+	// Osty: /tmp/selfhost_merged.osty:13409:5
 	params := astbridge.EmptyParamList()
 	_ = params
-	// Osty: /tmp/selfhost_merged.osty:13397:5
+	// Osty: /tmp/selfhost_merged.osty:13410:5
 	i := 0
 	_ = i
-	// Osty: /tmp/selfhost_merged.osty:13398:5
+	// Osty: /tmp/selfhost_merged.osty:13411:5
 	for _, child := range n.children {
-		// Osty: /tmp/selfhost_merged.osty:13399:9
+		// Osty: /tmp/selfhost_merged.osty:13412:9
 		p := astLowerParam(arena, toks, child)
 		_ = p
-		// Osty: /tmp/selfhost_merged.osty:13400:9
+		// Osty: /tmp/selfhost_merged.osty:13413:9
 		if !(astbridge.IsNilParam(p)) {
-			// Osty: /tmp/selfhost_merged.osty:13401:13
+			// Osty: /tmp/selfhost_merged.osty:13414:13
 			cn := astArenaNodeAt(arena, child)
 			_ = cn
-			// Osty: /tmp/selfhost_merged.osty:13402:13
+			// Osty: /tmp/selfhost_merged.osty:13415:13
 			if i == 0 && cn.text == "self" {
-				// Osty: /tmp/selfhost_merged.osty:13403:22
+				// Osty: /tmp/selfhost_merged.osty:13416:22
 				recv = astbridge.ReceiverNode(astLowerNodePos(toks, cn), astLowerNodeEnd(toks, cn), cn.flags == 1, astLowerNodePos(toks, cn))
 			} else {
-				// Osty: /tmp/selfhost_merged.osty:13405:17
+				// Osty: /tmp/selfhost_merged.osty:13418:17
 				func() struct{} { params = append(params, p); return struct{}{} }()
 			}
 		}
-		// Osty: /tmp/selfhost_merged.osty:13408:11
+		// Osty: /tmp/selfhost_merged.osty:13421:11
 		func() {
 			var _cur2357 int = i
 			var _rhs2358 int = 1
@@ -34161,40 +34179,40 @@ func astLowerFnDecl(arena *AstArena, toks []astbridge.Token, n *AstNode) astbrid
 	return astbridge.FnDeclNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), n.flags == 1, n.text, astLowerGenericParams(arena, toks, n.children2), recv, params, astLowerType(arena, toks, n.left), astLowerBlock(arena, toks, n.right), astLowerDoc(toks, n.start), astLowerAnnotations(arena, toks, n.extra))
 }
 
-// Osty: /tmp/selfhost_merged.osty:13425:1
+// Osty: /tmp/selfhost_merged.osty:13438:1
 func astLowerStructDecl(arena *AstArena, toks []astbridge.Token, n *AstNode) astbridge.Decl {
-	// Osty: /tmp/selfhost_merged.osty:13426:5
+	// Osty: /tmp/selfhost_merged.osty:13439:5
 	fields := astbridge.EmptyFieldList()
 	_ = fields
-	// Osty: /tmp/selfhost_merged.osty:13427:5
+	// Osty: /tmp/selfhost_merged.osty:13440:5
 	methods := astbridge.EmptyFnDeclList()
 	_ = methods
-	// Osty: /tmp/selfhost_merged.osty:13428:5
+	// Osty: /tmp/selfhost_merged.osty:13441:5
 	for _, child := range n.children {
-		// Osty: /tmp/selfhost_merged.osty:13429:9
+		// Osty: /tmp/selfhost_merged.osty:13442:9
 		cn := astArenaNodeAt(arena, child)
 		_ = cn
-		// Osty: /tmp/selfhost_merged.osty:13430:9
+		// Osty: /tmp/selfhost_merged.osty:13443:9
 		{
 			_m2359 := cn.kind
 			_ = _m2359
 			if func() bool { _, ok := _m2359.(*AstNodeKind_AstNFnDecl); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:13432:17
+				// Osty: /tmp/selfhost_merged.osty:13445:17
 				fnDecl := astLowerFnDecl(arena, toks, cn)
 				_ = fnDecl
-				// Osty: /tmp/selfhost_merged.osty:13433:17
+				// Osty: /tmp/selfhost_merged.osty:13446:17
 				if !(astbridge.IsNilFnDecl(fnDecl)) {
-					// Osty: /tmp/selfhost_merged.osty:13434:21
+					// Osty: /tmp/selfhost_merged.osty:13447:21
 					func() struct{} { methods = append(methods, fnDecl); return struct{}{} }()
 				}
 			}
 			if func() bool { _, ok := _m2359.(*AstNodeKind_AstNField_); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:13438:17
+				// Osty: /tmp/selfhost_merged.osty:13451:17
 				field := astLowerField(arena, toks, cn)
 				_ = field
-				// Osty: /tmp/selfhost_merged.osty:13439:17
+				// Osty: /tmp/selfhost_merged.osty:13452:17
 				if !(astbridge.IsNilField(field)) {
-					// Osty: /tmp/selfhost_merged.osty:13440:21
+					// Osty: /tmp/selfhost_merged.osty:13453:21
 					func() struct{} { fields = append(fields, field); return struct{}{} }()
 				}
 			}
@@ -34205,49 +34223,49 @@ func astLowerStructDecl(arena *AstArena, toks []astbridge.Token, n *AstNode) ast
 	return astbridge.StructDeclNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), n.flags == 1, n.text, astLowerGenericParams(arena, toks, n.children2), fields, methods, astLowerDoc(toks, n.start), astLowerAnnotations(arena, toks, n.extra))
 }
 
-// Osty: /tmp/selfhost_merged.osty:13459:1
+// Osty: /tmp/selfhost_merged.osty:13472:1
 func astLowerEnumDecl(arena *AstArena, toks []astbridge.Token, n *AstNode) astbridge.Decl {
-	// Osty: /tmp/selfhost_merged.osty:13460:5
+	// Osty: /tmp/selfhost_merged.osty:13473:5
 	variants := astbridge.EmptyVariantList()
 	_ = variants
-	// Osty: /tmp/selfhost_merged.osty:13461:5
+	// Osty: /tmp/selfhost_merged.osty:13474:5
 	methods := astbridge.EmptyFnDeclList()
 	_ = methods
-	// Osty: /tmp/selfhost_merged.osty:13462:5
+	// Osty: /tmp/selfhost_merged.osty:13475:5
 	for _, child := range n.children {
-		// Osty: /tmp/selfhost_merged.osty:13463:9
+		// Osty: /tmp/selfhost_merged.osty:13476:9
 		cn := astArenaNodeAt(arena, child)
 		_ = cn
-		// Osty: /tmp/selfhost_merged.osty:13464:9
+		// Osty: /tmp/selfhost_merged.osty:13477:9
 		{
 			_m2360 := cn.kind
 			_ = _m2360
 			if func() bool { _, ok := _m2360.(*AstNodeKind_AstNFnDecl); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:13466:17
+				// Osty: /tmp/selfhost_merged.osty:13479:17
 				fnDecl := astLowerFnDecl(arena, toks, cn)
 				_ = fnDecl
-				// Osty: /tmp/selfhost_merged.osty:13467:17
+				// Osty: /tmp/selfhost_merged.osty:13480:17
 				if !(astbridge.IsNilFnDecl(fnDecl)) {
-					// Osty: /tmp/selfhost_merged.osty:13468:21
+					// Osty: /tmp/selfhost_merged.osty:13481:21
 					func() struct{} { methods = append(methods, fnDecl); return struct{}{} }()
 				}
 			}
 			if func() bool { _, ok := _m2360.(*AstNodeKind_AstNVariant); return ok }() {
-				// Osty: /tmp/selfhost_merged.osty:13472:17
+				// Osty: /tmp/selfhost_merged.osty:13485:17
 				fields := astbridge.EmptyTypeList()
 				_ = fields
-				// Osty: /tmp/selfhost_merged.osty:13473:17
+				// Osty: /tmp/selfhost_merged.osty:13486:17
 				for _, t := range cn.children {
-					// Osty: /tmp/selfhost_merged.osty:13474:21
+					// Osty: /tmp/selfhost_merged.osty:13487:21
 					ty := astLowerType(arena, toks, t)
 					_ = ty
-					// Osty: /tmp/selfhost_merged.osty:13475:21
+					// Osty: /tmp/selfhost_merged.osty:13488:21
 					if !(astbridge.IsNilType(ty)) {
-						// Osty: /tmp/selfhost_merged.osty:13476:25
+						// Osty: /tmp/selfhost_merged.osty:13489:25
 						func() struct{} { fields = append(fields, ty); return struct{}{} }()
 					}
 				}
-				// Osty: /tmp/selfhost_merged.osty:13479:17
+				// Osty: /tmp/selfhost_merged.osty:13492:17
 				func() struct{} {
 					variants = append(variants, astbridge.VariantNode(astLowerNodePos(toks, cn), astLowerNodeEnd(toks, cn), cn.text, fields, astLowerAnnotations(arena, toks, cn.extra), astLowerDoc(toks, cn.start)))
 					return struct{}{}
@@ -34260,47 +34278,47 @@ func astLowerEnumDecl(arena *AstArena, toks []astbridge.Token, n *AstNode) astbr
 	return astbridge.EnumDeclNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), n.flags == 1, n.text, astLowerGenericParams(arena, toks, n.children2), variants, methods, astLowerDoc(toks, n.start), astLowerAnnotations(arena, toks, n.extra))
 }
 
-// Osty: /tmp/selfhost_merged.osty:13504:1
+// Osty: /tmp/selfhost_merged.osty:13517:1
 func astLowerInterfaceDecl(arena *AstArena, toks []astbridge.Token, n *AstNode) astbridge.Decl {
-	// Osty: /tmp/selfhost_merged.osty:13505:5
+	// Osty: /tmp/selfhost_merged.osty:13518:5
 	extends := astbridge.EmptyTypeList()
 	_ = extends
-	// Osty: /tmp/selfhost_merged.osty:13506:5
+	// Osty: /tmp/selfhost_merged.osty:13519:5
 	methods := astbridge.EmptyFnDeclList()
 	_ = methods
-	// Osty: /tmp/selfhost_merged.osty:13507:5
+	// Osty: /tmp/selfhost_merged.osty:13520:5
 	for _, idx := range n.children2 {
-		// Osty: /tmp/selfhost_merged.osty:13508:9
+		// Osty: /tmp/selfhost_merged.osty:13521:9
 		ty := astLowerType(arena, toks, idx)
 		_ = ty
-		// Osty: /tmp/selfhost_merged.osty:13509:9
+		// Osty: /tmp/selfhost_merged.osty:13522:9
 		if !(astbridge.IsNilType(ty)) {
-			// Osty: /tmp/selfhost_merged.osty:13510:13
+			// Osty: /tmp/selfhost_merged.osty:13523:13
 			func() struct{} { extends = append(extends, ty); return struct{}{} }()
 		}
 	}
-	// Osty: /tmp/selfhost_merged.osty:13513:5
+	// Osty: /tmp/selfhost_merged.osty:13526:5
 	for _, child := range n.children {
-		// Osty: /tmp/selfhost_merged.osty:13514:9
+		// Osty: /tmp/selfhost_merged.osty:13527:9
 		cn := astArenaNodeAt(arena, child)
 		_ = cn
-		// Osty: /tmp/selfhost_merged.osty:13515:9
+		// Osty: /tmp/selfhost_merged.osty:13528:9
 		if ostyEqual(cn.kind, AstNodeKind(&AstNodeKind_AstNFnDecl{})) {
-			// Osty: /tmp/selfhost_merged.osty:13516:13
+			// Osty: /tmp/selfhost_merged.osty:13529:13
 			fnDecl := astLowerFnDecl(arena, toks, cn)
 			_ = fnDecl
-			// Osty: /tmp/selfhost_merged.osty:13517:13
+			// Osty: /tmp/selfhost_merged.osty:13530:13
 			if !(astbridge.IsNilFnDecl(fnDecl)) {
-				// Osty: /tmp/selfhost_merged.osty:13518:17
+				// Osty: /tmp/selfhost_merged.osty:13531:17
 				func() struct{} { methods = append(methods, fnDecl); return struct{}{} }()
 			}
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:13521:13
+			// Osty: /tmp/selfhost_merged.osty:13534:13
 			ty := astLowerType(arena, toks, child)
 			_ = ty
-			// Osty: /tmp/selfhost_merged.osty:13522:13
+			// Osty: /tmp/selfhost_merged.osty:13535:13
 			if !(astbridge.IsNilType(ty)) {
-				// Osty: /tmp/selfhost_merged.osty:13523:17
+				// Osty: /tmp/selfhost_merged.osty:13536:17
 				func() struct{} { extends = append(extends, ty); return struct{}{} }()
 			}
 		}
@@ -34308,78 +34326,78 @@ func astLowerInterfaceDecl(arena *AstArena, toks []astbridge.Token, n *AstNode) 
 	return astbridge.InterfaceDeclNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), n.flags == 1, n.text, astbridge.EmptyGenericParamList(), extends, methods, astLowerDoc(toks, n.start), astLowerAnnotations(arena, toks, n.extra))
 }
 
-// Osty: /tmp/selfhost_merged.osty:13540:1
+// Osty: /tmp/selfhost_merged.osty:13553:1
 func astLowerTypeAliasDecl(arena *AstArena, toks []astbridge.Token, n *AstNode) astbridge.Decl {
 	return astbridge.TypeAliasDeclNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), n.flags == 1, n.text, astLowerGenericParams(arena, toks, n.children), astLowerType(arena, toks, n.left), astLowerDoc(toks, n.start), astLowerAnnotations(arena, toks, n.extra))
 }
 
-// Osty: /tmp/selfhost_merged.osty:13553:1
+// Osty: /tmp/selfhost_merged.osty:13566:1
 func astLowerUseDecl(arena *AstArena, toks []astbridge.Token, n *AstNode) astbridge.Decl {
-	// Osty: /tmp/selfhost_merged.osty:13554:5
+	// Osty: /tmp/selfhost_merged.osty:13567:5
 	raw := astLowerUnquoteMaybe(n.text)
 	_ = raw
-	// Osty: /tmp/selfhost_merged.osty:13555:5
+	// Osty: /tmp/selfhost_merged.osty:13568:5
 	if n.flags == 1 {
-		// Osty: /tmp/selfhost_merged.osty:13556:9
+		// Osty: /tmp/selfhost_merged.osty:13569:9
 		reconstructed := astLowerUseGoRawPath(toks, n)
 		_ = reconstructed
-		// Osty: /tmp/selfhost_merged.osty:13557:9
+		// Osty: /tmp/selfhost_merged.osty:13570:9
 		if reconstructed != "" {
-			// Osty: /tmp/selfhost_merged.osty:13558:17
+			// Osty: /tmp/selfhost_merged.osty:13571:17
 			raw = reconstructed
 		}
 	} else {
-		// Osty: /tmp/selfhost_merged.osty:13561:9
+		// Osty: /tmp/selfhost_merged.osty:13574:9
 		reconstructed := astLowerUseRawPath(toks, n)
 		_ = reconstructed
-		// Osty: /tmp/selfhost_merged.osty:13562:9
+		// Osty: /tmp/selfhost_merged.osty:13575:9
 		if reconstructed != "" {
-			// Osty: /tmp/selfhost_merged.osty:13563:17
+			// Osty: /tmp/selfhost_merged.osty:13576:17
 			raw = reconstructed
 		}
 	}
-	// Osty: /tmp/selfhost_merged.osty:13566:5
+	// Osty: /tmp/selfhost_merged.osty:13579:5
 	alias := ""
 	_ = alias
-	// Osty: /tmp/selfhost_merged.osty:13567:5
+	// Osty: /tmp/selfhost_merged.osty:13580:5
 	if astLowerIntListCount(n.children2) > 0 {
-		// Osty: /tmp/selfhost_merged.osty:13568:9
+		// Osty: /tmp/selfhost_merged.osty:13581:9
 		aliasNode := astArenaNodeAt(arena, astLowerIntListAt(n.children2, 0))
 		_ = aliasNode
-		// Osty: /tmp/selfhost_merged.osty:13569:15
+		// Osty: /tmp/selfhost_merged.osty:13582:15
 		alias = aliasNode.text
 	}
-	// Osty: /tmp/selfhost_merged.osty:13571:5
+	// Osty: /tmp/selfhost_merged.osty:13584:5
 	body := astbridge.EmptyDeclList()
 	_ = body
-	// Osty: /tmp/selfhost_merged.osty:13572:5
+	// Osty: /tmp/selfhost_merged.osty:13585:5
 	for _, child := range n.children {
-		// Osty: /tmp/selfhost_merged.osty:13573:9
+		// Osty: /tmp/selfhost_merged.osty:13586:9
 		d := astLowerDecl(arena, toks, child)
 		_ = d
-		// Osty: /tmp/selfhost_merged.osty:13574:9
+		// Osty: /tmp/selfhost_merged.osty:13587:9
 		if !(astbridge.IsNilDecl(d)) {
-			// Osty: /tmp/selfhost_merged.osty:13575:13
+			// Osty: /tmp/selfhost_merged.osty:13588:13
 			func() struct{} { body = append(body, d); return struct{}{} }()
 		}
 	}
-	// Osty: /tmp/selfhost_merged.osty:13578:5
+	// Osty: /tmp/selfhost_merged.osty:13591:5
 	var path []string = make([]string, 0, 1)
 	_ = path
-	// Osty: /tmp/selfhost_merged.osty:13579:5
+	// Osty: /tmp/selfhost_merged.osty:13592:5
 	if !(n.flags == 1) {
-		// Osty: /tmp/selfhost_merged.osty:13580:14
+		// Osty: /tmp/selfhost_merged.osty:13593:14
 		path = astLowerSplitPath(raw)
 	}
 	return astbridge.UseDeclNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), raw, path, n.flags == 1, alias, body)
 }
 
-// Osty: /tmp/selfhost_merged.osty:13585:1
+// Osty: /tmp/selfhost_merged.osty:13598:1
 func astLowerUseRawPath(toks []astbridge.Token, n *AstNode) string {
-	// Osty: /tmp/selfhost_merged.osty:13586:5
+	// Osty: /tmp/selfhost_merged.osty:13599:5
 	out := ""
 	_ = out
-	// Osty: /tmp/selfhost_merged.osty:13587:5
+	// Osty: /tmp/selfhost_merged.osty:13600:5
 	i := func() int {
 		var _p2361 int = n.start
 		var _rhs2362 int = 1
@@ -34392,28 +34410,28 @@ func astLowerUseRawPath(toks []astbridge.Token, n *AstNode) string {
 		return _p2361 + _rhs2362
 	}()
 	_ = i
-	// Osty: /tmp/selfhost_merged.osty:13588:5
+	// Osty: /tmp/selfhost_merged.osty:13601:5
 	for i < n.end {
-		// Osty: /tmp/selfhost_merged.osty:13589:9
+		// Osty: /tmp/selfhost_merged.osty:13602:9
 		tok := astLowerTok(toks, i)
 		_ = tok
-		// Osty: /tmp/selfhost_merged.osty:13590:9
+		// Osty: /tmp/selfhost_merged.osty:13603:9
 		if astbridge.TokenIsIdent(tok) {
-			// Osty: /tmp/selfhost_merged.osty:13591:13
+			// Osty: /tmp/selfhost_merged.osty:13604:13
 			if astbridge.TokenValue(tok) == "as" {
-				// Osty: /tmp/selfhost_merged.osty:13592:17
+				// Osty: /tmp/selfhost_merged.osty:13605:17
 				return out
 			}
-			// Osty: /tmp/selfhost_merged.osty:13594:17
+			// Osty: /tmp/selfhost_merged.osty:13607:17
 			out = fmt.Sprintf("%s%s", ostyToString(out), ostyToString(astbridge.TokenValue(tok)))
 		} else if astbridge.TokenIsDot(tok) || astbridge.TokenIsSlash(tok) || astbridge.TokenIsColon(tok) {
-			// Osty: /tmp/selfhost_merged.osty:13596:17
+			// Osty: /tmp/selfhost_merged.osty:13609:17
 			out = fmt.Sprintf("%s%s", ostyToString(out), ostyToString(astbridge.TokenKindString(tok)))
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:13598:13
+			// Osty: /tmp/selfhost_merged.osty:13611:13
 			return out
 		}
-		// Osty: /tmp/selfhost_merged.osty:13600:11
+		// Osty: /tmp/selfhost_merged.osty:13613:11
 		func() {
 			var _cur2363 int = i
 			var _rhs2364 int = 1
@@ -34429,9 +34447,9 @@ func astLowerUseRawPath(toks []astbridge.Token, n *AstNode) string {
 	return out
 }
 
-// Osty: /tmp/selfhost_merged.osty:13605:1
+// Osty: /tmp/selfhost_merged.osty:13618:1
 func astLowerUseGoRawPath(toks []astbridge.Token, n *AstNode) string {
-	// Osty: /tmp/selfhost_merged.osty:13606:5
+	// Osty: /tmp/selfhost_merged.osty:13619:5
 	i := func() int {
 		var _p2365 int = n.start
 		var _rhs2366 int = 1
@@ -34444,22 +34462,22 @@ func astLowerUseGoRawPath(toks []astbridge.Token, n *AstNode) string {
 		return _p2365 + _rhs2366
 	}()
 	_ = i
-	// Osty: /tmp/selfhost_merged.osty:13607:5
+	// Osty: /tmp/selfhost_merged.osty:13620:5
 	for i < n.end {
-		// Osty: /tmp/selfhost_merged.osty:13608:9
+		// Osty: /tmp/selfhost_merged.osty:13621:9
 		tok := astLowerTok(toks, i)
 		_ = tok
-		// Osty: /tmp/selfhost_merged.osty:13609:9
+		// Osty: /tmp/selfhost_merged.osty:13622:9
 		if astbridge.TokenIsString(tok) {
-			// Osty: /tmp/selfhost_merged.osty:13610:13
+			// Osty: /tmp/selfhost_merged.osty:13623:13
 			return astLowerUnquoteMaybe(astbridge.TokenValue(tok))
 		}
-		// Osty: /tmp/selfhost_merged.osty:13612:9
+		// Osty: /tmp/selfhost_merged.osty:13625:9
 		if astbridge.TokenIsLBrace(tok) || astbridge.TokenIsNewline(tok) || astbridge.TokenIsEOF(tok) {
-			// Osty: /tmp/selfhost_merged.osty:13613:13
+			// Osty: /tmp/selfhost_merged.osty:13626:13
 			return ""
 		}
-		// Osty: /tmp/selfhost_merged.osty:13615:11
+		// Osty: /tmp/selfhost_merged.osty:13628:11
 		func() {
 			var _cur2367 int = i
 			var _rhs2368 int = 1
@@ -34475,20 +34493,20 @@ func astLowerUseGoRawPath(toks []astbridge.Token, n *AstNode) string {
 	return ""
 }
 
-// Osty: /tmp/selfhost_merged.osty:13620:1
+// Osty: /tmp/selfhost_merged.osty:13633:1
 func astLowerLetDecl(arena *AstArena, toks []astbridge.Token, n *AstNode) astbridge.Decl {
-	// Osty: /tmp/selfhost_merged.osty:13621:5
+	// Osty: /tmp/selfhost_merged.osty:13634:5
 	name := ""
 	_ = name
-	// Osty: /tmp/selfhost_merged.osty:13622:5
+	// Osty: /tmp/selfhost_merged.osty:13635:5
 	patNode := astArenaNodeAt(arena, n.left)
 	_ = patNode
-	// Osty: /tmp/selfhost_merged.osty:13623:5
+	// Osty: /tmp/selfhost_merged.osty:13636:5
 	if ostyEqual(patNode.kind, AstNodeKind(&AstNodeKind_AstNIdent{})) {
-		// Osty: /tmp/selfhost_merged.osty:13624:14
+		// Osty: /tmp/selfhost_merged.osty:13637:14
 		name = patNode.text
 	} else if strings.HasPrefix(patNode.text, "ident:") {
-		// Osty: /tmp/selfhost_merged.osty:13626:14
+		// Osty: /tmp/selfhost_merged.osty:13639:14
 		name = strings.TrimPrefix(patNode.text, "ident:")
 	}
 	return astbridge.LetDeclNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astbridge.TokenIsPub(astLowerTok(toks, func() int {
@@ -34501,75 +34519,75 @@ func astLowerLetDecl(arena *AstArena, toks []astbridge.Token, n *AstNode) astbri
 			panic("integer overflow")
 		}
 		return _p2369 - _rhs2370
-	}())), n.flags == 1, name, astLowerChildType(arena, toks, n, 0), astLowerExpr(arena, toks, n.right), astLowerDoc(toks, n.start), astLowerAnnotations(arena, toks, n.extra))
+	}())), n.flags == 1, astLowerMutPos(toks, n), name, astLowerChildType(arena, toks, n, 0), astLowerExpr(arena, toks, n.right), astLowerDoc(toks, n.start), astLowerAnnotations(arena, toks, n.extra))
 }
 
-// Osty: /tmp/selfhost_merged.osty:13641:1
+// Osty: /tmp/selfhost_merged.osty:13655:1
 func astLowerField(arena *AstArena, toks []astbridge.Token, n *AstNode) astbridge.Field {
 	return astbridge.FieldNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), n.flags == 1, n.text, astLowerType(arena, toks, n.right), astLowerExpr(arena, toks, n.left), astLowerDoc(toks, n.start), astLowerAnnotations(arena, toks, n.extra))
 }
 
-// Osty: /tmp/selfhost_merged.osty:13654:1
+// Osty: /tmp/selfhost_merged.osty:13668:1
 func astLowerParam(arena *AstArena, toks []astbridge.Token, idx int) astbridge.Param {
-	// Osty: /tmp/selfhost_merged.osty:13655:5
+	// Osty: /tmp/selfhost_merged.osty:13669:5
 	if idx < 0 {
-		// Osty: /tmp/selfhost_merged.osty:13656:9
+		// Osty: /tmp/selfhost_merged.osty:13670:9
 		return astbridge.NilParam()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13658:5
+	// Osty: /tmp/selfhost_merged.osty:13672:5
 	n := astArenaNodeAt(arena, idx)
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:13659:5
+	// Osty: /tmp/selfhost_merged.osty:13673:5
 	pat := astbridge.NilPattern()
 	_ = pat
-	// Osty: /tmp/selfhost_merged.osty:13660:5
+	// Osty: /tmp/selfhost_merged.osty:13674:5
 	def := astbridge.NilExpr()
 	_ = def
-	// Osty: /tmp/selfhost_merged.osty:13661:5
+	// Osty: /tmp/selfhost_merged.osty:13675:5
 	if n.left >= 0 {
-		// Osty: /tmp/selfhost_merged.osty:13662:9
+		// Osty: /tmp/selfhost_merged.osty:13676:9
 		if n.text == "" {
-			// Osty: /tmp/selfhost_merged.osty:13663:13
+			// Osty: /tmp/selfhost_merged.osty:13677:13
 			parsedPat := astLowerPattern(arena, toks, n.left)
 			_ = parsedPat
-			// Osty: /tmp/selfhost_merged.osty:13664:13
+			// Osty: /tmp/selfhost_merged.osty:13678:13
 			if !(astbridge.IsNilPattern(parsedPat)) {
-				// Osty: /tmp/selfhost_merged.osty:13665:21
+				// Osty: /tmp/selfhost_merged.osty:13679:21
 				pat = parsedPat
 			}
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:13668:17
+			// Osty: /tmp/selfhost_merged.osty:13682:17
 			def = astLowerExpr(arena, toks, n.left)
 		}
 	}
 	return astbridge.ParamNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), n.text, pat, astLowerType(arena, toks, n.right), def)
 }
 
-// Osty: /tmp/selfhost_merged.osty:13674:1
+// Osty: /tmp/selfhost_merged.osty:13688:1
 func astLowerGenericParams(arena *AstArena, toks []astbridge.Token, ids []int) []astbridge.GenericParam {
-	// Osty: /tmp/selfhost_merged.osty:13675:5
+	// Osty: /tmp/selfhost_merged.osty:13689:5
 	out := astbridge.EmptyGenericParamList()
 	_ = out
-	// Osty: /tmp/selfhost_merged.osty:13676:5
+	// Osty: /tmp/selfhost_merged.osty:13690:5
 	for _, idx := range ids {
-		// Osty: /tmp/selfhost_merged.osty:13677:9
+		// Osty: /tmp/selfhost_merged.osty:13691:9
 		n := astArenaNodeAt(arena, idx)
 		_ = n
-		// Osty: /tmp/selfhost_merged.osty:13678:9
+		// Osty: /tmp/selfhost_merged.osty:13692:9
 		constraints := astbridge.EmptyTypeList()
 		_ = constraints
-		// Osty: /tmp/selfhost_merged.osty:13679:9
+		// Osty: /tmp/selfhost_merged.osty:13693:9
 		for _, child := range n.children {
-			// Osty: /tmp/selfhost_merged.osty:13680:13
+			// Osty: /tmp/selfhost_merged.osty:13694:13
 			ty := astLowerType(arena, toks, child)
 			_ = ty
-			// Osty: /tmp/selfhost_merged.osty:13681:13
+			// Osty: /tmp/selfhost_merged.osty:13695:13
 			if !(astbridge.IsNilType(ty)) {
-				// Osty: /tmp/selfhost_merged.osty:13682:17
+				// Osty: /tmp/selfhost_merged.osty:13696:17
 				func() struct{} { constraints = append(constraints, ty); return struct{}{} }()
 			}
 		}
-		// Osty: /tmp/selfhost_merged.osty:13685:9
+		// Osty: /tmp/selfhost_merged.osty:13699:9
 		func() struct{} {
 			out = append(out, astbridge.GenericParamNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), n.text, constraints))
 			return struct{}{}
@@ -34578,79 +34596,79 @@ func astLowerGenericParams(arena *AstArena, toks []astbridge.Token, ids []int) [
 	return out
 }
 
-// Osty: /tmp/selfhost_merged.osty:13690:1
+// Osty: /tmp/selfhost_merged.osty:13704:1
 func astLowerAnnotations(arena *AstArena, toks []astbridge.Token, idx int) []astbridge.Annotation {
-	// Osty: /tmp/selfhost_merged.osty:13691:5
+	// Osty: /tmp/selfhost_merged.osty:13705:5
 	out := astbridge.EmptyAnnotationList()
 	_ = out
-	// Osty: /tmp/selfhost_merged.osty:13692:5
+	// Osty: /tmp/selfhost_merged.osty:13706:5
 	if idx < 0 {
-		// Osty: /tmp/selfhost_merged.osty:13693:9
+		// Osty: /tmp/selfhost_merged.osty:13707:9
 		return out
 	}
-	// Osty: /tmp/selfhost_merged.osty:13695:5
+	// Osty: /tmp/selfhost_merged.osty:13709:5
 	n := astArenaNodeAt(arena, idx)
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:13696:5
+	// Osty: /tmp/selfhost_merged.osty:13710:5
 	if n.text == "__group" {
-		// Osty: /tmp/selfhost_merged.osty:13697:9
+		// Osty: /tmp/selfhost_merged.osty:13711:9
 		for _, child := range n.children {
-			// Osty: /tmp/selfhost_merged.osty:13698:13
+			// Osty: /tmp/selfhost_merged.osty:13712:13
 			ann := astLowerAnnotation(arena, toks, child)
 			_ = ann
-			// Osty: /tmp/selfhost_merged.osty:13699:13
+			// Osty: /tmp/selfhost_merged.osty:13713:13
 			if !(astbridge.IsNilAnnotation(ann)) {
-				// Osty: /tmp/selfhost_merged.osty:13700:17
+				// Osty: /tmp/selfhost_merged.osty:13714:17
 				func() struct{} { out = append(out, ann); return struct{}{} }()
 			}
 		}
-		// Osty: /tmp/selfhost_merged.osty:13703:9
+		// Osty: /tmp/selfhost_merged.osty:13717:9
 		return out
 	}
-	// Osty: /tmp/selfhost_merged.osty:13705:5
+	// Osty: /tmp/selfhost_merged.osty:13719:5
 	ann := astLowerAnnotation(arena, toks, idx)
 	_ = ann
-	// Osty: /tmp/selfhost_merged.osty:13706:5
+	// Osty: /tmp/selfhost_merged.osty:13720:5
 	if !(astbridge.IsNilAnnotation(ann)) {
-		// Osty: /tmp/selfhost_merged.osty:13707:9
+		// Osty: /tmp/selfhost_merged.osty:13721:9
 		func() struct{} { out = append(out, ann); return struct{}{} }()
 	}
 	return out
 }
 
-// Osty: /tmp/selfhost_merged.osty:13712:1
+// Osty: /tmp/selfhost_merged.osty:13726:1
 func astLowerAnnotation(arena *AstArena, toks []astbridge.Token, idx int) astbridge.Annotation {
-	// Osty: /tmp/selfhost_merged.osty:13713:5
+	// Osty: /tmp/selfhost_merged.osty:13727:5
 	if idx < 0 {
-		// Osty: /tmp/selfhost_merged.osty:13714:9
+		// Osty: /tmp/selfhost_merged.osty:13728:9
 		return astbridge.NilAnnotation()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13716:5
+	// Osty: /tmp/selfhost_merged.osty:13730:5
 	n := astArenaNodeAt(arena, idx)
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:13717:5
+	// Osty: /tmp/selfhost_merged.osty:13731:5
 	args := astbridge.EmptyAnnotationArgList()
 	_ = args
-	// Osty: /tmp/selfhost_merged.osty:13718:5
+	// Osty: /tmp/selfhost_merged.osty:13732:5
 	for _, child := range n.children {
-		// Osty: /tmp/selfhost_merged.osty:13719:9
+		// Osty: /tmp/selfhost_merged.osty:13733:9
 		cn := astArenaNodeAt(arena, child)
 		_ = cn
-		// Osty: /tmp/selfhost_merged.osty:13720:9
+		// Osty: /tmp/selfhost_merged.osty:13734:9
 		if ostyEqual(cn.kind, AstNodeKind(&AstNodeKind_AstNField_{})) {
-			// Osty: /tmp/selfhost_merged.osty:13721:13
+			// Osty: /tmp/selfhost_merged.osty:13735:13
 			func() struct{} {
 				args = append(args, astbridge.AnnotationArgNode(astLowerNodePos(toks, cn), cn.text, astLowerExpr(arena, toks, cn.left)))
 				return struct{}{}
 			}()
 		} else if ostyEqual(cn.kind, AstNodeKind(&AstNodeKind_AstNIdent{})) {
-			// Osty: /tmp/selfhost_merged.osty:13723:13
+			// Osty: /tmp/selfhost_merged.osty:13737:13
 			func() struct{} {
 				args = append(args, astbridge.AnnotationArgNode(astLowerNodePos(toks, cn), cn.text, astbridge.NilExpr()))
 				return struct{}{}
 			}()
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:13725:13
+			// Osty: /tmp/selfhost_merged.osty:13739:13
 			func() struct{} {
 				args = append(args, astbridge.AnnotationArgNode(astLowerNodePos(toks, cn), "", astLowerExpr(arena, toks, child)))
 				return struct{}{}
@@ -34660,492 +34678,492 @@ func astLowerAnnotation(arena *AstArena, toks []astbridge.Token, idx int) astbri
 	return astbridge.AnnotationNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), n.text, args)
 }
 
-// Osty: /tmp/selfhost_merged.osty:13731:1
+// Osty: /tmp/selfhost_merged.osty:13745:1
 func astLowerType(arena *AstArena, toks []astbridge.Token, idx int) astbridge.Type {
-	// Osty: /tmp/selfhost_merged.osty:13732:5
+	// Osty: /tmp/selfhost_merged.osty:13746:5
 	if idx < 0 {
-		// Osty: /tmp/selfhost_merged.osty:13733:9
+		// Osty: /tmp/selfhost_merged.osty:13747:9
 		return astbridge.NilType()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13735:5
+	// Osty: /tmp/selfhost_merged.osty:13749:5
 	n := astArenaNodeAt(arena, idx)
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:13736:5
+	// Osty: /tmp/selfhost_merged.osty:13750:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNError{})) {
-		// Osty: /tmp/selfhost_merged.osty:13737:9
+		// Osty: /tmp/selfhost_merged.osty:13751:9
 		return astbridge.NilType()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13739:5
+	// Osty: /tmp/selfhost_merged.osty:13753:5
 	if n.text == "optional" {
-		// Osty: /tmp/selfhost_merged.osty:13740:9
+		// Osty: /tmp/selfhost_merged.osty:13754:9
 		return astbridge.OptionalTypeNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerType(arena, toks, n.left))
 	}
-	// Osty: /tmp/selfhost_merged.osty:13742:5
+	// Osty: /tmp/selfhost_merged.osty:13756:5
 	if n.text == "tuple" {
-		// Osty: /tmp/selfhost_merged.osty:13743:9
+		// Osty: /tmp/selfhost_merged.osty:13757:9
 		elems := astbridge.EmptyTypeList()
 		_ = elems
-		// Osty: /tmp/selfhost_merged.osty:13744:9
+		// Osty: /tmp/selfhost_merged.osty:13758:9
 		for _, child := range n.children {
-			// Osty: /tmp/selfhost_merged.osty:13745:13
+			// Osty: /tmp/selfhost_merged.osty:13759:13
 			ty := astLowerType(arena, toks, child)
 			_ = ty
-			// Osty: /tmp/selfhost_merged.osty:13746:13
+			// Osty: /tmp/selfhost_merged.osty:13760:13
 			if !(astbridge.IsNilType(ty)) {
-				// Osty: /tmp/selfhost_merged.osty:13747:17
+				// Osty: /tmp/selfhost_merged.osty:13761:17
 				func() struct{} { elems = append(elems, ty); return struct{}{} }()
 			}
 		}
-		// Osty: /tmp/selfhost_merged.osty:13750:9
+		// Osty: /tmp/selfhost_merged.osty:13764:9
 		return astbridge.TupleTypeNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), elems)
 	}
-	// Osty: /tmp/selfhost_merged.osty:13752:5
+	// Osty: /tmp/selfhost_merged.osty:13766:5
 	if n.text == "fn" {
-		// Osty: /tmp/selfhost_merged.osty:13753:9
+		// Osty: /tmp/selfhost_merged.osty:13767:9
 		params := astbridge.EmptyTypeList()
 		_ = params
-		// Osty: /tmp/selfhost_merged.osty:13754:9
+		// Osty: /tmp/selfhost_merged.osty:13768:9
 		for _, child := range n.children {
-			// Osty: /tmp/selfhost_merged.osty:13755:13
+			// Osty: /tmp/selfhost_merged.osty:13769:13
 			ty := astLowerType(arena, toks, child)
 			_ = ty
-			// Osty: /tmp/selfhost_merged.osty:13756:13
+			// Osty: /tmp/selfhost_merged.osty:13770:13
 			if !(astbridge.IsNilType(ty)) {
-				// Osty: /tmp/selfhost_merged.osty:13757:17
+				// Osty: /tmp/selfhost_merged.osty:13771:17
 				func() struct{} { params = append(params, ty); return struct{}{} }()
 			}
 		}
-		// Osty: /tmp/selfhost_merged.osty:13760:9
+		// Osty: /tmp/selfhost_merged.osty:13774:9
 		return astbridge.FnTypeNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), params, astLowerType(arena, toks, n.right))
 	}
-	// Osty: /tmp/selfhost_merged.osty:13762:5
+	// Osty: /tmp/selfhost_merged.osty:13776:5
 	args := astbridge.EmptyTypeList()
 	_ = args
-	// Osty: /tmp/selfhost_merged.osty:13763:5
+	// Osty: /tmp/selfhost_merged.osty:13777:5
 	for _, child := range n.children {
-		// Osty: /tmp/selfhost_merged.osty:13764:9
+		// Osty: /tmp/selfhost_merged.osty:13778:9
 		ty := astLowerType(arena, toks, child)
 		_ = ty
-		// Osty: /tmp/selfhost_merged.osty:13765:9
+		// Osty: /tmp/selfhost_merged.osty:13779:9
 		if !(astbridge.IsNilType(ty)) {
-			// Osty: /tmp/selfhost_merged.osty:13766:13
+			// Osty: /tmp/selfhost_merged.osty:13780:13
 			func() struct{} { args = append(args, ty); return struct{}{} }()
 		}
 	}
 	return astbridge.NamedTypeNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerSplitPath(n.text), args)
 }
 
-// Osty: /tmp/selfhost_merged.osty:13772:1
+// Osty: /tmp/selfhost_merged.osty:13786:1
 func astLowerChildType(arena *AstArena, toks []astbridge.Token, n *AstNode, at int) astbridge.Type {
-	// Osty: /tmp/selfhost_merged.osty:13773:5
+	// Osty: /tmp/selfhost_merged.osty:13787:5
 	if at < 0 || at >= astLowerIntListCount(n.children) {
-		// Osty: /tmp/selfhost_merged.osty:13774:9
+		// Osty: /tmp/selfhost_merged.osty:13788:9
 		return astbridge.NilType()
 	}
 	return astLowerType(arena, toks, astLowerIntListAt(n.children, at))
 }
 
-// Osty: /tmp/selfhost_merged.osty:13779:1
+// Osty: /tmp/selfhost_merged.osty:13793:1
 func astLowerStmt(arena *AstArena, toks []astbridge.Token, idx int) astbridge.Stmt {
-	// Osty: /tmp/selfhost_merged.osty:13780:5
+	// Osty: /tmp/selfhost_merged.osty:13794:5
 	if idx < 0 {
-		// Osty: /tmp/selfhost_merged.osty:13781:9
+		// Osty: /tmp/selfhost_merged.osty:13795:9
 		return astbridge.NilStmt()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13783:5
+	// Osty: /tmp/selfhost_merged.osty:13797:5
 	n := astArenaNodeAt(arena, idx)
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:13784:5
+	// Osty: /tmp/selfhost_merged.osty:13798:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNLet{})) {
-		// Osty: /tmp/selfhost_merged.osty:13785:9
-		return astbridge.LetStmtNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerPattern(arena, toks, n.left), n.flags == 1, astLowerChildType(arena, toks, n, 0), astLowerExpr(arena, toks, n.right))
+		// Osty: /tmp/selfhost_merged.osty:13799:9
+		return astbridge.LetStmtNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerPattern(arena, toks, n.left), n.flags == 1, astLowerMutPos(toks, n), astLowerChildType(arena, toks, n, 0), astLowerExpr(arena, toks, n.right))
 	}
-	// Osty: /tmp/selfhost_merged.osty:13787:5
+	// Osty: /tmp/selfhost_merged.osty:13801:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNReturn{})) {
-		// Osty: /tmp/selfhost_merged.osty:13788:9
+		// Osty: /tmp/selfhost_merged.osty:13802:9
 		return astbridge.ReturnStmtNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerExpr(arena, toks, n.left))
 	}
-	// Osty: /tmp/selfhost_merged.osty:13790:5
+	// Osty: /tmp/selfhost_merged.osty:13804:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNBreak{})) {
-		// Osty: /tmp/selfhost_merged.osty:13791:9
+		// Osty: /tmp/selfhost_merged.osty:13805:9
 		return astbridge.BreakStmtNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n))
 	}
-	// Osty: /tmp/selfhost_merged.osty:13793:5
+	// Osty: /tmp/selfhost_merged.osty:13807:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNContinue{})) {
-		// Osty: /tmp/selfhost_merged.osty:13794:9
+		// Osty: /tmp/selfhost_merged.osty:13808:9
 		return astbridge.ContinueStmtNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n))
 	}
-	// Osty: /tmp/selfhost_merged.osty:13796:5
+	// Osty: /tmp/selfhost_merged.osty:13810:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNDefer{})) {
-		// Osty: /tmp/selfhost_merged.osty:13797:9
+		// Osty: /tmp/selfhost_merged.osty:13811:9
 		return astbridge.DeferStmtNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerExpr(arena, toks, n.left))
 	}
-	// Osty: /tmp/selfhost_merged.osty:13799:5
+	// Osty: /tmp/selfhost_merged.osty:13813:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNFor{})) {
-		// Osty: /tmp/selfhost_merged.osty:13800:9
+		// Osty: /tmp/selfhost_merged.osty:13814:9
 		return astLowerForStmt(arena, toks, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:13802:5
+	// Osty: /tmp/selfhost_merged.osty:13816:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNAssign{})) {
-		// Osty: /tmp/selfhost_merged.osty:13803:9
+		// Osty: /tmp/selfhost_merged.osty:13817:9
 		return astbridge.AssignStmtNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerKind(n.op), astLowerExpr(arena, toks, n.left), astLowerExpr(arena, toks, n.right))
 	}
-	// Osty: /tmp/selfhost_merged.osty:13805:5
+	// Osty: /tmp/selfhost_merged.osty:13819:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNChanSend{})) {
-		// Osty: /tmp/selfhost_merged.osty:13806:9
+		// Osty: /tmp/selfhost_merged.osty:13820:9
 		return astbridge.ChanSendStmtNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerExpr(arena, toks, n.left), astLowerExpr(arena, toks, n.right))
 	}
-	// Osty: /tmp/selfhost_merged.osty:13808:5
+	// Osty: /tmp/selfhost_merged.osty:13822:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNExprStmt{})) {
-		// Osty: /tmp/selfhost_merged.osty:13809:9
+		// Osty: /tmp/selfhost_merged.osty:13823:9
 		return astbridge.ExprStmtNode(astLowerExpr(arena, toks, n.left))
 	}
-	// Osty: /tmp/selfhost_merged.osty:13811:5
+	// Osty: /tmp/selfhost_merged.osty:13825:5
 	e := astLowerExpr(arena, toks, idx)
 	_ = e
-	// Osty: /tmp/selfhost_merged.osty:13812:5
+	// Osty: /tmp/selfhost_merged.osty:13826:5
 	if !(astbridge.IsNilExpr(e)) {
-		// Osty: /tmp/selfhost_merged.osty:13813:9
+		// Osty: /tmp/selfhost_merged.osty:13827:9
 		return astbridge.ExprStmtNode(e)
 	}
 	return astbridge.NilStmt()
 }
 
-// Osty: /tmp/selfhost_merged.osty:13818:1
+// Osty: /tmp/selfhost_merged.osty:13832:1
 func astLowerForStmt(arena *AstArena, toks []astbridge.Token, n *AstNode) astbridge.Stmt {
-	// Osty: /tmp/selfhost_merged.osty:13819:5
+	// Osty: /tmp/selfhost_merged.osty:13833:5
 	if n.text == "forlet" {
-		// Osty: /tmp/selfhost_merged.osty:13820:9
+		// Osty: /tmp/selfhost_merged.osty:13834:9
 		return astbridge.ForStmtNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), true, astLowerChildPattern(arena, toks, n, 0), astLowerExpr(arena, toks, n.left), astLowerBlock(arena, toks, n.right))
 	}
-	// Osty: /tmp/selfhost_merged.osty:13829:5
+	// Osty: /tmp/selfhost_merged.osty:13843:5
 	if n.text == "forin" {
-		// Osty: /tmp/selfhost_merged.osty:13830:9
+		// Osty: /tmp/selfhost_merged.osty:13844:9
 		return astbridge.ForStmtNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), false, astLowerChildPattern(arena, toks, n, 0), astLowerChildExpr(arena, toks, n, 1), astLowerBlock(arena, toks, n.right))
 	}
 	return astbridge.ForStmtNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), false, astbridge.NilPattern(), astLowerExpr(arena, toks, n.left), astLowerBlock(arena, toks, n.right))
 }
 
-// Osty: /tmp/selfhost_merged.osty:13849:1
+// Osty: /tmp/selfhost_merged.osty:13863:1
 func astLowerBlock(arena *AstArena, toks []astbridge.Token, idx int) astbridge.Block {
-	// Osty: /tmp/selfhost_merged.osty:13850:5
+	// Osty: /tmp/selfhost_merged.osty:13864:5
 	if idx < 0 {
-		// Osty: /tmp/selfhost_merged.osty:13851:9
+		// Osty: /tmp/selfhost_merged.osty:13865:9
 		return astbridge.NilBlock()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13853:5
+	// Osty: /tmp/selfhost_merged.osty:13867:5
 	n := astArenaNodeAt(arena, idx)
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:13854:5
+	// Osty: /tmp/selfhost_merged.osty:13868:5
 	stmts := astbridge.EmptyStmtList()
 	_ = stmts
-	// Osty: /tmp/selfhost_merged.osty:13855:5
+	// Osty: /tmp/selfhost_merged.osty:13869:5
 	for _, child := range n.children {
-		// Osty: /tmp/selfhost_merged.osty:13856:9
+		// Osty: /tmp/selfhost_merged.osty:13870:9
 		stmt := astLowerStmt(arena, toks, child)
 		_ = stmt
-		// Osty: /tmp/selfhost_merged.osty:13857:9
+		// Osty: /tmp/selfhost_merged.osty:13871:9
 		if !(astbridge.IsNilStmt(stmt)) {
-			// Osty: /tmp/selfhost_merged.osty:13858:13
+			// Osty: /tmp/selfhost_merged.osty:13872:13
 			func() struct{} { stmts = append(stmts, stmt); return struct{}{} }()
 		}
 	}
 	return astbridge.BlockNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), stmts)
 }
 
-// Osty: /tmp/selfhost_merged.osty:13864:1
+// Osty: /tmp/selfhost_merged.osty:13878:1
 func astLowerExpr(arena *AstArena, toks []astbridge.Token, idx int) astbridge.Expr {
-	// Osty: /tmp/selfhost_merged.osty:13865:5
+	// Osty: /tmp/selfhost_merged.osty:13879:5
 	if idx < 0 {
-		// Osty: /tmp/selfhost_merged.osty:13866:9
+		// Osty: /tmp/selfhost_merged.osty:13880:9
 		return astbridge.NilExpr()
 	}
-	// Osty: /tmp/selfhost_merged.osty:13868:5
+	// Osty: /tmp/selfhost_merged.osty:13882:5
 	n := astArenaNodeAt(arena, idx)
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:13869:5
+	// Osty: /tmp/selfhost_merged.osty:13883:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNIdent{})) {
-		// Osty: /tmp/selfhost_merged.osty:13870:9
+		// Osty: /tmp/selfhost_merged.osty:13884:9
 		return astbridge.IdentExpr(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), n.text)
 	}
-	// Osty: /tmp/selfhost_merged.osty:13872:5
+	// Osty: /tmp/selfhost_merged.osty:13886:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNIntLit{})) {
-		// Osty: /tmp/selfhost_merged.osty:13873:9
+		// Osty: /tmp/selfhost_merged.osty:13887:9
 		return astbridge.IntLitExpr(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), n.text)
 	}
-	// Osty: /tmp/selfhost_merged.osty:13875:5
+	// Osty: /tmp/selfhost_merged.osty:13889:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNFloatLit{})) {
-		// Osty: /tmp/selfhost_merged.osty:13876:9
+		// Osty: /tmp/selfhost_merged.osty:13890:9
 		return astbridge.FloatLitExpr(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), n.text)
 	}
-	// Osty: /tmp/selfhost_merged.osty:13878:5
+	// Osty: /tmp/selfhost_merged.osty:13892:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNBoolLit{})) {
-		// Osty: /tmp/selfhost_merged.osty:13879:9
+		// Osty: /tmp/selfhost_merged.osty:13893:9
 		return astbridge.BoolLitExpr(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), n.flags == 1)
 	}
-	// Osty: /tmp/selfhost_merged.osty:13881:5
+	// Osty: /tmp/selfhost_merged.osty:13895:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNCharLit{})) {
-		// Osty: /tmp/selfhost_merged.osty:13882:9
+		// Osty: /tmp/selfhost_merged.osty:13896:9
 		return astbridge.CharLitExpr(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerDecodedLiteral(astbridge.TokenValue(astLowerTok(toks, n.start))))
 	}
-	// Osty: /tmp/selfhost_merged.osty:13884:5
+	// Osty: /tmp/selfhost_merged.osty:13898:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNByteLit{})) {
-		// Osty: /tmp/selfhost_merged.osty:13885:9
+		// Osty: /tmp/selfhost_merged.osty:13899:9
 		return astbridge.ByteLitExpr(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerDecodedLiteral(astbridge.TokenValue(astLowerTok(toks, n.start))))
 	}
-	// Osty: /tmp/selfhost_merged.osty:13887:5
+	// Osty: /tmp/selfhost_merged.osty:13901:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNStringLit{})) {
-		// Osty: /tmp/selfhost_merged.osty:13888:9
+		// Osty: /tmp/selfhost_merged.osty:13902:9
 		return astbridge.StringLitFromToken(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerTok(toks, n.start))
 	}
-	// Osty: /tmp/selfhost_merged.osty:13890:5
+	// Osty: /tmp/selfhost_merged.osty:13904:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNUnary{})) {
-		// Osty: /tmp/selfhost_merged.osty:13891:9
+		// Osty: /tmp/selfhost_merged.osty:13905:9
 		return astLowerUnaryExpr(arena, toks, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:13893:5
+	// Osty: /tmp/selfhost_merged.osty:13907:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNBinary{})) {
-		// Osty: /tmp/selfhost_merged.osty:13894:9
+		// Osty: /tmp/selfhost_merged.osty:13908:9
 		return astLowerBinaryExpr(arena, toks, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:13896:5
+	// Osty: /tmp/selfhost_merged.osty:13910:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNQuestion{})) {
-		// Osty: /tmp/selfhost_merged.osty:13897:9
+		// Osty: /tmp/selfhost_merged.osty:13911:9
 		return astLowerQuestionExpr(arena, toks, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:13899:5
+	// Osty: /tmp/selfhost_merged.osty:13913:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNCall{})) {
-		// Osty: /tmp/selfhost_merged.osty:13900:9
+		// Osty: /tmp/selfhost_merged.osty:13914:9
 		return astLowerCallExpr(arena, toks, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:13902:5
+	// Osty: /tmp/selfhost_merged.osty:13916:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNField{})) {
-		// Osty: /tmp/selfhost_merged.osty:13903:9
+		// Osty: /tmp/selfhost_merged.osty:13917:9
 		return astLowerFieldExpr(arena, toks, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:13905:5
+	// Osty: /tmp/selfhost_merged.osty:13919:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNIndex{})) {
-		// Osty: /tmp/selfhost_merged.osty:13906:9
+		// Osty: /tmp/selfhost_merged.osty:13920:9
 		return astLowerIndexExpr(arena, toks, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:13908:5
+	// Osty: /tmp/selfhost_merged.osty:13922:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNTurbofish{})) {
-		// Osty: /tmp/selfhost_merged.osty:13909:9
+		// Osty: /tmp/selfhost_merged.osty:13923:9
 		return astLowerTurbofishExpr(arena, toks, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:13911:5
+	// Osty: /tmp/selfhost_merged.osty:13925:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNRange{})) {
-		// Osty: /tmp/selfhost_merged.osty:13912:9
+		// Osty: /tmp/selfhost_merged.osty:13926:9
 		return astLowerRangeExpr(arena, toks, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:13914:5
+	// Osty: /tmp/selfhost_merged.osty:13928:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNParen{})) {
-		// Osty: /tmp/selfhost_merged.osty:13915:9
+		// Osty: /tmp/selfhost_merged.osty:13929:9
 		return astbridge.ParenExprNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerExpr(arena, toks, n.left))
 	}
-	// Osty: /tmp/selfhost_merged.osty:13917:5
+	// Osty: /tmp/selfhost_merged.osty:13931:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNTuple{})) {
-		// Osty: /tmp/selfhost_merged.osty:13918:9
+		// Osty: /tmp/selfhost_merged.osty:13932:9
 		return astLowerTupleExpr(arena, toks, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:13920:5
+	// Osty: /tmp/selfhost_merged.osty:13934:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNList{})) {
-		// Osty: /tmp/selfhost_merged.osty:13921:9
+		// Osty: /tmp/selfhost_merged.osty:13935:9
 		return astLowerListExpr(arena, toks, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:13923:5
+	// Osty: /tmp/selfhost_merged.osty:13937:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNMap{})) {
-		// Osty: /tmp/selfhost_merged.osty:13924:9
+		// Osty: /tmp/selfhost_merged.osty:13938:9
 		return astLowerMapExpr(arena, toks, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:13926:5
+	// Osty: /tmp/selfhost_merged.osty:13940:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNStructLit{})) {
-		// Osty: /tmp/selfhost_merged.osty:13927:9
+		// Osty: /tmp/selfhost_merged.osty:13941:9
 		return astLowerStructLitExpr(arena, toks, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:13929:5
+	// Osty: /tmp/selfhost_merged.osty:13943:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNBlock{})) {
-		// Osty: /tmp/selfhost_merged.osty:13930:9
+		// Osty: /tmp/selfhost_merged.osty:13944:9
 		return astbridge.BlockAsExpr(astLowerBlock(arena, toks, idx))
 	}
-	// Osty: /tmp/selfhost_merged.osty:13932:5
+	// Osty: /tmp/selfhost_merged.osty:13946:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNIf{})) {
-		// Osty: /tmp/selfhost_merged.osty:13933:9
+		// Osty: /tmp/selfhost_merged.osty:13947:9
 		return astLowerIfExpr(arena, toks, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:13935:5
+	// Osty: /tmp/selfhost_merged.osty:13949:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNMatch{})) {
-		// Osty: /tmp/selfhost_merged.osty:13936:9
+		// Osty: /tmp/selfhost_merged.osty:13950:9
 		return astLowerMatchExpr(arena, toks, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:13938:5
+	// Osty: /tmp/selfhost_merged.osty:13952:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNClosure{})) {
-		// Osty: /tmp/selfhost_merged.osty:13939:9
+		// Osty: /tmp/selfhost_merged.osty:13953:9
 		return astLowerClosureExpr(arena, toks, n)
 	}
 	return astbridge.NilExpr()
 }
 
-// Osty: /tmp/selfhost_merged.osty:13944:1
+// Osty: /tmp/selfhost_merged.osty:13958:1
 func astLowerUnaryExpr(arena *AstArena, toks []astbridge.Token, n *AstNode) astbridge.Expr {
-	// Osty: /tmp/selfhost_merged.osty:13945:5
+	// Osty: /tmp/selfhost_merged.osty:13959:5
 	x := astLowerExpr(arena, toks, n.left)
 	_ = x
 	return astbridge.UnaryExprNode(astLowerNodePos(toks, n), astbridge.ExprEnd(x, astLowerNodeEnd(toks, n)), astLowerKind(n.op), x)
 }
 
-// Osty: /tmp/selfhost_merged.osty:13949:1
+// Osty: /tmp/selfhost_merged.osty:13963:1
 func astLowerBinaryExpr(arena *AstArena, toks []astbridge.Token, n *AstNode) astbridge.Expr {
-	// Osty: /tmp/selfhost_merged.osty:13950:5
+	// Osty: /tmp/selfhost_merged.osty:13964:5
 	left := astLowerExpr(arena, toks, n.left)
 	_ = left
-	// Osty: /tmp/selfhost_merged.osty:13951:5
+	// Osty: /tmp/selfhost_merged.osty:13965:5
 	right := astLowerExpr(arena, toks, n.right)
 	_ = right
 	return astbridge.BinaryExprNode(astbridge.ExprPos(left, astLowerNodePos(toks, n)), astbridge.ExprEnd(right, astLowerNodeEnd(toks, n)), astLowerKind(n.op), left, right)
 }
 
-// Osty: /tmp/selfhost_merged.osty:13955:1
+// Osty: /tmp/selfhost_merged.osty:13969:1
 func astLowerQuestionExpr(arena *AstArena, toks []astbridge.Token, n *AstNode) astbridge.Expr {
-	// Osty: /tmp/selfhost_merged.osty:13956:5
+	// Osty: /tmp/selfhost_merged.osty:13970:5
 	x := astLowerExpr(arena, toks, n.left)
 	_ = x
 	return astbridge.QuestionExprNode(astbridge.ExprPos(x, astLowerNodePos(toks, n)), astLowerNodeEnd(toks, n), x)
 }
 
-// Osty: /tmp/selfhost_merged.osty:13960:1
+// Osty: /tmp/selfhost_merged.osty:13974:1
 func astLowerCallExpr(arena *AstArena, toks []astbridge.Token, n *AstNode) astbridge.Expr {
-	// Osty: /tmp/selfhost_merged.osty:13961:5
+	// Osty: /tmp/selfhost_merged.osty:13975:5
 	fnExpr := astLowerExpr(arena, toks, n.left)
 	_ = fnExpr
-	// Osty: /tmp/selfhost_merged.osty:13962:5
+	// Osty: /tmp/selfhost_merged.osty:13976:5
 	args := astbridge.EmptyArgList()
 	_ = args
-	// Osty: /tmp/selfhost_merged.osty:13963:5
+	// Osty: /tmp/selfhost_merged.osty:13977:5
 	for _, child := range n.children {
-		// Osty: /tmp/selfhost_merged.osty:13964:9
+		// Osty: /tmp/selfhost_merged.osty:13978:9
 		arg := astLowerArg(arena, toks, child)
 		_ = arg
-		// Osty: /tmp/selfhost_merged.osty:13965:9
+		// Osty: /tmp/selfhost_merged.osty:13979:9
 		if !(astbridge.IsNilArg(arg)) {
-			// Osty: /tmp/selfhost_merged.osty:13966:13
+			// Osty: /tmp/selfhost_merged.osty:13980:13
 			func() struct{} { args = append(args, arg); return struct{}{} }()
 		}
 	}
 	return astbridge.CallExprNode(astbridge.ExprPos(fnExpr, astLowerNodePos(toks, n)), astLowerNodeEnd(toks, n), fnExpr, args)
 }
 
-// Osty: /tmp/selfhost_merged.osty:13972:1
+// Osty: /tmp/selfhost_merged.osty:13986:1
 func astLowerFieldExpr(arena *AstArena, toks []astbridge.Token, n *AstNode) astbridge.Expr {
-	// Osty: /tmp/selfhost_merged.osty:13973:5
+	// Osty: /tmp/selfhost_merged.osty:13987:5
 	x := astLowerExpr(arena, toks, n.left)
 	_ = x
 	return astbridge.FieldExprNode(astbridge.ExprPos(x, astLowerNodePos(toks, n)), astLowerNodeEnd(toks, n), x, n.text, n.flags == 1)
 }
 
-// Osty: /tmp/selfhost_merged.osty:13977:1
+// Osty: /tmp/selfhost_merged.osty:13991:1
 func astLowerIndexExpr(arena *AstArena, toks []astbridge.Token, n *AstNode) astbridge.Expr {
-	// Osty: /tmp/selfhost_merged.osty:13978:5
+	// Osty: /tmp/selfhost_merged.osty:13992:5
 	x := astLowerExpr(arena, toks, n.left)
 	_ = x
 	return astbridge.IndexExprNode(astbridge.ExprPos(x, astLowerNodePos(toks, n)), astLowerNodeEnd(toks, n), x, astLowerExpr(arena, toks, n.right))
 }
 
-// Osty: /tmp/selfhost_merged.osty:13982:1
+// Osty: /tmp/selfhost_merged.osty:13996:1
 func astLowerTurbofishExpr(arena *AstArena, toks []astbridge.Token, n *AstNode) astbridge.Expr {
-	// Osty: /tmp/selfhost_merged.osty:13983:5
+	// Osty: /tmp/selfhost_merged.osty:13997:5
 	base := astLowerExpr(arena, toks, n.left)
 	_ = base
-	// Osty: /tmp/selfhost_merged.osty:13984:5
+	// Osty: /tmp/selfhost_merged.osty:13998:5
 	args := astbridge.EmptyTypeList()
 	_ = args
-	// Osty: /tmp/selfhost_merged.osty:13985:5
+	// Osty: /tmp/selfhost_merged.osty:13999:5
 	for _, child := range n.children {
-		// Osty: /tmp/selfhost_merged.osty:13986:9
+		// Osty: /tmp/selfhost_merged.osty:14000:9
 		ty := astLowerType(arena, toks, child)
 		_ = ty
-		// Osty: /tmp/selfhost_merged.osty:13987:9
+		// Osty: /tmp/selfhost_merged.osty:14001:9
 		if !(astbridge.IsNilType(ty)) {
-			// Osty: /tmp/selfhost_merged.osty:13988:13
+			// Osty: /tmp/selfhost_merged.osty:14002:13
 			func() struct{} { args = append(args, ty); return struct{}{} }()
 		}
 	}
 	return astbridge.TurbofishExprNode(astbridge.ExprPos(base, astLowerNodePos(toks, n)), astLowerNodeEnd(toks, n), base, args)
 }
 
-// Osty: /tmp/selfhost_merged.osty:13994:1
+// Osty: /tmp/selfhost_merged.osty:14008:1
 func astLowerRangeExpr(arena *AstArena, toks []astbridge.Token, n *AstNode) astbridge.Expr {
-	// Osty: /tmp/selfhost_merged.osty:13995:5
+	// Osty: /tmp/selfhost_merged.osty:14009:5
 	start := astLowerExpr(arena, toks, n.left)
 	_ = start
-	// Osty: /tmp/selfhost_merged.osty:13996:5
+	// Osty: /tmp/selfhost_merged.osty:14010:5
 	stop := astLowerExpr(arena, toks, n.right)
 	_ = stop
 	return astbridge.RangeExprNode(astbridge.ExprPos(start, astLowerNodePos(toks, n)), astbridge.ExprEnd(stop, astLowerNodeEnd(toks, n)), start, stop, n.flags == 1)
 }
 
-// Osty: /tmp/selfhost_merged.osty:14000:1
+// Osty: /tmp/selfhost_merged.osty:14014:1
 func astLowerTupleExpr(arena *AstArena, toks []astbridge.Token, n *AstNode) astbridge.Expr {
-	// Osty: /tmp/selfhost_merged.osty:14001:5
+	// Osty: /tmp/selfhost_merged.osty:14015:5
 	elems := astbridge.EmptyExprList()
 	_ = elems
-	// Osty: /tmp/selfhost_merged.osty:14002:5
+	// Osty: /tmp/selfhost_merged.osty:14016:5
 	for _, child := range n.children {
-		// Osty: /tmp/selfhost_merged.osty:14003:9
+		// Osty: /tmp/selfhost_merged.osty:14017:9
 		e := astLowerExpr(arena, toks, child)
 		_ = e
-		// Osty: /tmp/selfhost_merged.osty:14004:9
+		// Osty: /tmp/selfhost_merged.osty:14018:9
 		if !(astbridge.IsNilExpr(e)) {
-			// Osty: /tmp/selfhost_merged.osty:14005:13
+			// Osty: /tmp/selfhost_merged.osty:14019:13
 			func() struct{} { elems = append(elems, e); return struct{}{} }()
 		}
 	}
 	return astbridge.TupleExprNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), elems)
 }
 
-// Osty: /tmp/selfhost_merged.osty:14011:1
+// Osty: /tmp/selfhost_merged.osty:14025:1
 func astLowerListExpr(arena *AstArena, toks []astbridge.Token, n *AstNode) astbridge.Expr {
-	// Osty: /tmp/selfhost_merged.osty:14012:5
+	// Osty: /tmp/selfhost_merged.osty:14026:5
 	elems := astbridge.EmptyExprList()
 	_ = elems
-	// Osty: /tmp/selfhost_merged.osty:14013:5
+	// Osty: /tmp/selfhost_merged.osty:14027:5
 	for _, child := range n.children {
-		// Osty: /tmp/selfhost_merged.osty:14014:9
+		// Osty: /tmp/selfhost_merged.osty:14028:9
 		e := astLowerExpr(arena, toks, child)
 		_ = e
-		// Osty: /tmp/selfhost_merged.osty:14015:9
+		// Osty: /tmp/selfhost_merged.osty:14029:9
 		if !(astbridge.IsNilExpr(e)) {
-			// Osty: /tmp/selfhost_merged.osty:14016:13
+			// Osty: /tmp/selfhost_merged.osty:14030:13
 			func() struct{} { elems = append(elems, e); return struct{}{} }()
 		}
 	}
 	return astbridge.ListExprNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), elems)
 }
 
-// Osty: /tmp/selfhost_merged.osty:14022:1
+// Osty: /tmp/selfhost_merged.osty:14036:1
 func astLowerMapExpr(arena *AstArena, toks []astbridge.Token, n *AstNode) astbridge.Expr {
-	// Osty: /tmp/selfhost_merged.osty:14023:5
+	// Osty: /tmp/selfhost_merged.osty:14037:5
 	entries := astbridge.EmptyMapEntryList()
 	_ = entries
-	// Osty: /tmp/selfhost_merged.osty:14024:5
+	// Osty: /tmp/selfhost_merged.osty:14038:5
 	i := 0
 	_ = i
-	// Osty: /tmp/selfhost_merged.osty:14025:5
+	// Osty: /tmp/selfhost_merged.osty:14039:5
 	for _, keyIdx := range n.children {
-		// Osty: /tmp/selfhost_merged.osty:14026:9
+		// Osty: /tmp/selfhost_merged.osty:14040:9
 		value := astbridge.NilExpr()
 		_ = value
-		// Osty: /tmp/selfhost_merged.osty:14027:9
+		// Osty: /tmp/selfhost_merged.osty:14041:9
 		if i < astLowerIntListCount(n.children2) {
-			// Osty: /tmp/selfhost_merged.osty:14028:19
+			// Osty: /tmp/selfhost_merged.osty:14042:19
 			value = astLowerExpr(arena, toks, astLowerIntListAt(n.children2, i))
 		}
-		// Osty: /tmp/selfhost_merged.osty:14030:9
+		// Osty: /tmp/selfhost_merged.osty:14044:9
 		func() struct{} {
 			entries = append(entries, astbridge.MapEntryNode(astLowerExpr(arena, toks, keyIdx), value))
 			return struct{}{}
 		}()
-		// Osty: /tmp/selfhost_merged.osty:14031:11
+		// Osty: /tmp/selfhost_merged.osty:14045:11
 		func() {
 			var _cur2371 int = i
 			var _rhs2372 int = 1
@@ -35161,20 +35179,20 @@ func astLowerMapExpr(arena *AstArena, toks []astbridge.Token, n *AstNode) astbri
 	return astbridge.MapExprNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), entries, n.flags == 1)
 }
 
-// Osty: /tmp/selfhost_merged.osty:14036:1
+// Osty: /tmp/selfhost_merged.osty:14050:1
 func astLowerStructLitExpr(arena *AstArena, toks []astbridge.Token, n *AstNode) astbridge.Expr {
-	// Osty: /tmp/selfhost_merged.osty:14037:5
+	// Osty: /tmp/selfhost_merged.osty:14051:5
 	typ := astLowerExpr(arena, toks, n.left)
 	_ = typ
-	// Osty: /tmp/selfhost_merged.osty:14038:5
+	// Osty: /tmp/selfhost_merged.osty:14052:5
 	fields := astbridge.EmptyStructLitFieldList()
 	_ = fields
-	// Osty: /tmp/selfhost_merged.osty:14039:5
+	// Osty: /tmp/selfhost_merged.osty:14053:5
 	for _, child := range n.children {
-		// Osty: /tmp/selfhost_merged.osty:14040:9
+		// Osty: /tmp/selfhost_merged.osty:14054:9
 		cn := astArenaNodeAt(arena, child)
 		_ = cn
-		// Osty: /tmp/selfhost_merged.osty:14041:9
+		// Osty: /tmp/selfhost_merged.osty:14055:9
 		func() struct{} {
 			fields = append(fields, astbridge.StructLitFieldNode(astLowerNodePos(toks, cn), cn.text, astLowerExpr(arena, toks, cn.left)))
 			return struct{}{}
@@ -35183,256 +35201,256 @@ func astLowerStructLitExpr(arena *AstArena, toks []astbridge.Token, n *AstNode) 
 	return astbridge.StructLitNode(astbridge.ExprPos(typ, astLowerNodePos(toks, n)), astLowerNodeEnd(toks, n), typ, fields, astLowerExpr(arena, toks, n.right))
 }
 
-// Osty: /tmp/selfhost_merged.osty:14046:1
+// Osty: /tmp/selfhost_merged.osty:14060:1
 func astLowerIfExpr(arena *AstArena, toks []astbridge.Token, n *AstNode) astbridge.Expr {
-	// Osty: /tmp/selfhost_merged.osty:14047:5
+	// Osty: /tmp/selfhost_merged.osty:14061:5
 	alt := astbridge.NilExpr()
 	_ = alt
-	// Osty: /tmp/selfhost_merged.osty:14048:5
+	// Osty: /tmp/selfhost_merged.osty:14062:5
 	pat := astbridge.NilPattern()
 	_ = pat
-	// Osty: /tmp/selfhost_merged.osty:14049:5
+	// Osty: /tmp/selfhost_merged.osty:14063:5
 	if astLowerIntListCount(n.children) > 0 {
-		// Osty: /tmp/selfhost_merged.osty:14050:13
+		// Osty: /tmp/selfhost_merged.osty:14064:13
 		alt = astLowerExpr(arena, toks, astLowerIntListAt(n.children, 0))
 	}
-	// Osty: /tmp/selfhost_merged.osty:14052:5
+	// Osty: /tmp/selfhost_merged.osty:14066:5
 	if astLowerIntListCount(n.children) > 1 {
-		// Osty: /tmp/selfhost_merged.osty:14053:13
+		// Osty: /tmp/selfhost_merged.osty:14067:13
 		pat = astLowerPattern(arena, toks, astLowerIntListAt(n.children, 1))
 	}
 	return astbridge.IfExprNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), n.flags == 1, pat, astLowerExpr(arena, toks, n.left), astLowerBlock(arena, toks, n.right), alt)
 }
 
-// Osty: /tmp/selfhost_merged.osty:14058:1
+// Osty: /tmp/selfhost_merged.osty:14072:1
 func astLowerMatchExpr(arena *AstArena, toks []astbridge.Token, n *AstNode) astbridge.Expr {
-	// Osty: /tmp/selfhost_merged.osty:14059:5
+	// Osty: /tmp/selfhost_merged.osty:14073:5
 	arms := astbridge.EmptyMatchArmList()
 	_ = arms
-	// Osty: /tmp/selfhost_merged.osty:14060:5
+	// Osty: /tmp/selfhost_merged.osty:14074:5
 	for _, child := range n.children {
-		// Osty: /tmp/selfhost_merged.osty:14061:9
+		// Osty: /tmp/selfhost_merged.osty:14075:9
 		arm := astLowerMatchArm(arena, toks, child)
 		_ = arm
-		// Osty: /tmp/selfhost_merged.osty:14062:9
+		// Osty: /tmp/selfhost_merged.osty:14076:9
 		if !(astbridge.IsNilMatchArm(arm)) {
-			// Osty: /tmp/selfhost_merged.osty:14063:13
+			// Osty: /tmp/selfhost_merged.osty:14077:13
 			func() struct{} { arms = append(arms, arm); return struct{}{} }()
 		}
 	}
 	return astbridge.MatchExprNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerExpr(arena, toks, n.left), arms)
 }
 
-// Osty: /tmp/selfhost_merged.osty:14069:1
+// Osty: /tmp/selfhost_merged.osty:14083:1
 func astLowerClosureExpr(arena *AstArena, toks []astbridge.Token, n *AstNode) astbridge.Expr {
-	// Osty: /tmp/selfhost_merged.osty:14070:5
+	// Osty: /tmp/selfhost_merged.osty:14084:5
 	params := astbridge.EmptyParamList()
 	_ = params
-	// Osty: /tmp/selfhost_merged.osty:14071:5
+	// Osty: /tmp/selfhost_merged.osty:14085:5
 	for _, child := range n.children {
-		// Osty: /tmp/selfhost_merged.osty:14072:9
+		// Osty: /tmp/selfhost_merged.osty:14086:9
 		p := astLowerParam(arena, toks, child)
 		_ = p
-		// Osty: /tmp/selfhost_merged.osty:14073:9
+		// Osty: /tmp/selfhost_merged.osty:14087:9
 		if !(astbridge.IsNilParam(p)) {
-			// Osty: /tmp/selfhost_merged.osty:14074:13
+			// Osty: /tmp/selfhost_merged.osty:14088:13
 			func() struct{} { params = append(params, p); return struct{}{} }()
 		}
 	}
 	return astbridge.ClosureExprNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), params, astLowerType(arena, toks, n.right), astLowerExpr(arena, toks, n.left))
 }
 
-// Osty: /tmp/selfhost_merged.osty:14080:1
+// Osty: /tmp/selfhost_merged.osty:14094:1
 func astLowerArg(arena *AstArena, toks []astbridge.Token, idx int) astbridge.Arg {
-	// Osty: /tmp/selfhost_merged.osty:14081:5
+	// Osty: /tmp/selfhost_merged.osty:14095:5
 	if idx < 0 {
-		// Osty: /tmp/selfhost_merged.osty:14082:9
+		// Osty: /tmp/selfhost_merged.osty:14096:9
 		return astbridge.NilArg()
 	}
-	// Osty: /tmp/selfhost_merged.osty:14084:5
+	// Osty: /tmp/selfhost_merged.osty:14098:5
 	n := astArenaNodeAt(arena, idx)
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:14085:5
+	// Osty: /tmp/selfhost_merged.osty:14099:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNField_{})) {
-		// Osty: /tmp/selfhost_merged.osty:14086:9
+		// Osty: /tmp/selfhost_merged.osty:14100:9
 		return astbridge.ArgNode(astLowerNodePos(toks, n), n.text, astLowerExpr(arena, toks, n.left))
 	}
 	return astbridge.ArgNode(astLowerNodePos(toks, n), "", astLowerExpr(arena, toks, idx))
 }
 
-// Osty: /tmp/selfhost_merged.osty:14091:1
+// Osty: /tmp/selfhost_merged.osty:14105:1
 func astLowerMatchArm(arena *AstArena, toks []astbridge.Token, idx int) astbridge.MatchArm {
-	// Osty: /tmp/selfhost_merged.osty:14092:5
+	// Osty: /tmp/selfhost_merged.osty:14106:5
 	if idx < 0 {
-		// Osty: /tmp/selfhost_merged.osty:14093:9
+		// Osty: /tmp/selfhost_merged.osty:14107:9
 		return astbridge.NilMatchArm()
 	}
-	// Osty: /tmp/selfhost_merged.osty:14095:5
+	// Osty: /tmp/selfhost_merged.osty:14109:5
 	n := astArenaNodeAt(arena, idx)
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:14096:5
+	// Osty: /tmp/selfhost_merged.osty:14110:5
 	guard := astbridge.NilExpr()
 	_ = guard
-	// Osty: /tmp/selfhost_merged.osty:14097:5
+	// Osty: /tmp/selfhost_merged.osty:14111:5
 	if astLowerIntListCount(n.children) > 0 {
-		// Osty: /tmp/selfhost_merged.osty:14098:15
+		// Osty: /tmp/selfhost_merged.osty:14112:15
 		guard = astLowerExpr(arena, toks, astLowerIntListAt(n.children, 0))
 	}
 	return astbridge.MatchArmNode(astLowerNodePos(toks, n), astLowerPattern(arena, toks, n.left), guard, astLowerExpr(arena, toks, n.right))
 }
 
-// Osty: /tmp/selfhost_merged.osty:14103:1
+// Osty: /tmp/selfhost_merged.osty:14117:1
 func astLowerChildPattern(arena *AstArena, toks []astbridge.Token, n *AstNode, at int) astbridge.Pattern {
-	// Osty: /tmp/selfhost_merged.osty:14104:5
+	// Osty: /tmp/selfhost_merged.osty:14118:5
 	if at < 0 || at >= astLowerIntListCount(n.children) {
-		// Osty: /tmp/selfhost_merged.osty:14105:9
+		// Osty: /tmp/selfhost_merged.osty:14119:9
 		return astbridge.NilPattern()
 	}
 	return astLowerPattern(arena, toks, astLowerIntListAt(n.children, at))
 }
 
-// Osty: /tmp/selfhost_merged.osty:14110:1
+// Osty: /tmp/selfhost_merged.osty:14124:1
 func astLowerChildExpr(arena *AstArena, toks []astbridge.Token, n *AstNode, at int) astbridge.Expr {
-	// Osty: /tmp/selfhost_merged.osty:14111:5
+	// Osty: /tmp/selfhost_merged.osty:14125:5
 	if at < 0 || at >= astLowerIntListCount(n.children) {
-		// Osty: /tmp/selfhost_merged.osty:14112:9
+		// Osty: /tmp/selfhost_merged.osty:14126:9
 		return astbridge.NilExpr()
 	}
 	return astLowerExpr(arena, toks, astLowerIntListAt(n.children, at))
 }
 
-// Osty: /tmp/selfhost_merged.osty:14117:1
+// Osty: /tmp/selfhost_merged.osty:14131:1
 func astLowerPattern(arena *AstArena, toks []astbridge.Token, idx int) astbridge.Pattern {
-	// Osty: /tmp/selfhost_merged.osty:14118:5
+	// Osty: /tmp/selfhost_merged.osty:14132:5
 	if idx < 0 {
-		// Osty: /tmp/selfhost_merged.osty:14119:9
+		// Osty: /tmp/selfhost_merged.osty:14133:9
 		return astbridge.NilPattern()
 	}
-	// Osty: /tmp/selfhost_merged.osty:14121:5
+	// Osty: /tmp/selfhost_merged.osty:14135:5
 	n := astArenaNodeAt(arena, idx)
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:14122:5
+	// Osty: /tmp/selfhost_merged.osty:14136:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNIdent{})) {
-		// Osty: /tmp/selfhost_merged.osty:14123:9
+		// Osty: /tmp/selfhost_merged.osty:14137:9
 		return astbridge.IdentPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), n.text)
 	}
-	// Osty: /tmp/selfhost_merged.osty:14125:5
+	// Osty: /tmp/selfhost_merged.osty:14139:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNTuple{})) {
-		// Osty: /tmp/selfhost_merged.osty:14126:9
+		// Osty: /tmp/selfhost_merged.osty:14140:9
 		return astLowerTuplePat(arena, toks, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:14128:5
+	// Osty: /tmp/selfhost_merged.osty:14142:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNIntLit{})) || ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNFloatLit{})) || ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNStringLit{})) || ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNCharLit{})) || ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNByteLit{})) || ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNBoolLit{})) {
-		// Osty: /tmp/selfhost_merged.osty:14129:9
+		// Osty: /tmp/selfhost_merged.osty:14143:9
 		return astbridge.LiteralPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerExpr(arena, toks, idx))
 	}
 	return astLowerTextPattern(arena, toks, n)
 }
 
-// Osty: /tmp/selfhost_merged.osty:14134:1
+// Osty: /tmp/selfhost_merged.osty:14148:1
 func astLowerTuplePat(arena *AstArena, toks []astbridge.Token, n *AstNode) astbridge.Pattern {
-	// Osty: /tmp/selfhost_merged.osty:14135:5
+	// Osty: /tmp/selfhost_merged.osty:14149:5
 	elems := astbridge.EmptyPatternList()
 	_ = elems
-	// Osty: /tmp/selfhost_merged.osty:14136:5
+	// Osty: /tmp/selfhost_merged.osty:14150:5
 	for _, child := range n.children {
-		// Osty: /tmp/selfhost_merged.osty:14137:9
+		// Osty: /tmp/selfhost_merged.osty:14151:9
 		p := astLowerPattern(arena, toks, child)
 		_ = p
-		// Osty: /tmp/selfhost_merged.osty:14138:9
+		// Osty: /tmp/selfhost_merged.osty:14152:9
 		if !(astbridge.IsNilPattern(p)) {
-			// Osty: /tmp/selfhost_merged.osty:14139:13
+			// Osty: /tmp/selfhost_merged.osty:14153:13
 			func() struct{} { elems = append(elems, p); return struct{}{} }()
 		}
 	}
 	return astbridge.TuplePatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), elems)
 }
 
-// Osty: /tmp/selfhost_merged.osty:14145:1
+// Osty: /tmp/selfhost_merged.osty:14159:1
 func astLowerTextPattern(arena *AstArena, toks []astbridge.Token, n *AstNode) astbridge.Pattern {
-	// Osty: /tmp/selfhost_merged.osty:14146:5
+	// Osty: /tmp/selfhost_merged.osty:14160:5
 	if strings.HasPrefix(n.text, "ident:") {
-		// Osty: /tmp/selfhost_merged.osty:14147:9
+		// Osty: /tmp/selfhost_merged.osty:14161:9
 		return astbridge.IdentPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), strings.TrimPrefix(n.text, "ident:"))
 	}
-	// Osty: /tmp/selfhost_merged.osty:14149:5
+	// Osty: /tmp/selfhost_merged.osty:14163:5
 	if n.text == "wildcard" {
-		// Osty: /tmp/selfhost_merged.osty:14150:9
+		// Osty: /tmp/selfhost_merged.osty:14164:9
 		return astbridge.WildcardPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n))
 	}
-	// Osty: /tmp/selfhost_merged.osty:14152:5
+	// Osty: /tmp/selfhost_merged.osty:14166:5
 	if strings.HasPrefix(n.text, "literal:") {
-		// Osty: /tmp/selfhost_merged.osty:14153:9
+		// Osty: /tmp/selfhost_merged.osty:14167:9
 		return astbridge.LiteralPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerLiteralPatternExpr(toks, n))
 	}
-	// Osty: /tmp/selfhost_merged.osty:14155:5
+	// Osty: /tmp/selfhost_merged.osty:14169:5
 	if n.text == "negLiteral" {
-		// Osty: /tmp/selfhost_merged.osty:14156:9
+		// Osty: /tmp/selfhost_merged.osty:14170:9
 		return astbridge.LiteralPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astbridge.UnaryExprNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerKind(FrontTokenKind(&FrontTokenKind_FrontMinus{})), astLowerLiteralPatternExpr(toks, astArenaNodeAt(arena, n.left))))
 	}
-	// Osty: /tmp/selfhost_merged.osty:14162:5
+	// Osty: /tmp/selfhost_merged.osty:14176:5
 	if n.text == "tuple" {
-		// Osty: /tmp/selfhost_merged.osty:14163:9
+		// Osty: /tmp/selfhost_merged.osty:14177:9
 		return astLowerTuplePat(arena, toks, n)
 	}
-	// Osty: /tmp/selfhost_merged.osty:14165:5
+	// Osty: /tmp/selfhost_merged.osty:14179:5
 	if strings.HasPrefix(n.text, "variant:") {
-		// Osty: /tmp/selfhost_merged.osty:14166:9
+		// Osty: /tmp/selfhost_merged.osty:14180:9
 		args := astbridge.EmptyPatternList()
 		_ = args
-		// Osty: /tmp/selfhost_merged.osty:14167:9
+		// Osty: /tmp/selfhost_merged.osty:14181:9
 		for _, child := range n.children {
-			// Osty: /tmp/selfhost_merged.osty:14168:13
+			// Osty: /tmp/selfhost_merged.osty:14182:13
 			p := astLowerPattern(arena, toks, child)
 			_ = p
-			// Osty: /tmp/selfhost_merged.osty:14169:13
+			// Osty: /tmp/selfhost_merged.osty:14183:13
 			if !(astbridge.IsNilPattern(p)) {
-				// Osty: /tmp/selfhost_merged.osty:14170:17
+				// Osty: /tmp/selfhost_merged.osty:14184:17
 				func() struct{} { args = append(args, p); return struct{}{} }()
 			}
 		}
-		// Osty: /tmp/selfhost_merged.osty:14173:9
+		// Osty: /tmp/selfhost_merged.osty:14187:9
 		return astbridge.VariantPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerSplitPath(strings.TrimPrefix(n.text, "variant:")), args)
 	}
-	// Osty: /tmp/selfhost_merged.osty:14175:5
+	// Osty: /tmp/selfhost_merged.osty:14189:5
 	if strings.HasPrefix(n.text, "struct:") {
-		// Osty: /tmp/selfhost_merged.osty:14176:9
+		// Osty: /tmp/selfhost_merged.osty:14190:9
 		fields := astbridge.EmptyStructPatFieldList()
 		_ = fields
-		// Osty: /tmp/selfhost_merged.osty:14177:9
+		// Osty: /tmp/selfhost_merged.osty:14191:9
 		for _, child := range n.children {
-			// Osty: /tmp/selfhost_merged.osty:14178:13
+			// Osty: /tmp/selfhost_merged.osty:14192:13
 			cn := astArenaNodeAt(arena, child)
 			_ = cn
-			// Osty: /tmp/selfhost_merged.osty:14179:13
+			// Osty: /tmp/selfhost_merged.osty:14193:13
 			if cn.text != "" && cn.left >= 0 {
-				// Osty: /tmp/selfhost_merged.osty:14180:17
+				// Osty: /tmp/selfhost_merged.osty:14194:17
 				func() struct{} {
 					fields = append(fields, astbridge.StructPatFieldNode(astLowerNodePos(toks, cn), cn.text, astLowerPattern(arena, toks, cn.left)))
 					return struct{}{}
 				}()
 			} else {
-				// Osty: /tmp/selfhost_merged.osty:14182:17
+				// Osty: /tmp/selfhost_merged.osty:14196:17
 				pat := astLowerPattern(arena, toks, child)
 				_ = pat
-				// Osty: /tmp/selfhost_merged.osty:14183:17
+				// Osty: /tmp/selfhost_merged.osty:14197:17
 				childNode := astArenaNodeAt(arena, child)
 				_ = childNode
-				// Osty: /tmp/selfhost_merged.osty:14184:17
+				// Osty: /tmp/selfhost_merged.osty:14198:17
 				if ostyEqual(childNode.kind, AstNodeKind(&AstNodeKind_AstNIdent{})) {
-					// Osty: /tmp/selfhost_merged.osty:14185:21
+					// Osty: /tmp/selfhost_merged.osty:14199:21
 					func() struct{} {
 						fields = append(fields, astbridge.StructPatFieldNode(astLowerNodePos(toks, childNode), childNode.text, astbridge.NilPattern()))
 						return struct{}{}
 					}()
 				} else if strings.HasPrefix(childNode.text, "ident:") {
-					// Osty: /tmp/selfhost_merged.osty:14187:21
+					// Osty: /tmp/selfhost_merged.osty:14201:21
 					func() struct{} {
 						fields = append(fields, astbridge.StructPatFieldNode(astLowerNodePos(toks, childNode), strings.TrimPrefix(childNode.text, "ident:"), astbridge.NilPattern()))
 						return struct{}{}
 					}()
 				} else if !(astbridge.IsNilPattern(pat)) {
-					// Osty: /tmp/selfhost_merged.osty:14189:21
+					// Osty: /tmp/selfhost_merged.osty:14203:21
 					func() struct{} {
 						fields = append(fields, astbridge.StructPatFieldNode(astLowerNodePos(toks, childNode), "", pat))
 						return struct{}{}
@@ -35440,133 +35458,133 @@ func astLowerTextPattern(arena *AstArena, toks []astbridge.Token, n *AstNode) as
 				}
 			}
 		}
-		// Osty: /tmp/selfhost_merged.osty:14193:9
+		// Osty: /tmp/selfhost_merged.osty:14207:9
 		return astbridge.StructPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerSplitPath(strings.TrimPrefix(n.text, "struct:")), fields, n.flags == 1)
 	}
-	// Osty: /tmp/selfhost_merged.osty:14195:5
+	// Osty: /tmp/selfhost_merged.osty:14209:5
 	if strings.HasPrefix(n.text, "binding:") {
-		// Osty: /tmp/selfhost_merged.osty:14196:9
+		// Osty: /tmp/selfhost_merged.osty:14210:9
 		return astbridge.BindingPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), strings.TrimPrefix(n.text, "binding:"), astLowerPattern(arena, toks, n.left))
 	}
-	// Osty: /tmp/selfhost_merged.osty:14198:5
+	// Osty: /tmp/selfhost_merged.osty:14212:5
 	if n.text == "range" {
-		// Osty: /tmp/selfhost_merged.osty:14199:9
+		// Osty: /tmp/selfhost_merged.osty:14213:9
 		return astbridge.RangePatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerPatternLiteralExpr(arena, toks, n.left), astLowerPatternLiteralExpr(arena, toks, n.right), n.flags == 1)
 	}
-	// Osty: /tmp/selfhost_merged.osty:14201:5
+	// Osty: /tmp/selfhost_merged.osty:14215:5
 	if n.text == "or" {
-		// Osty: /tmp/selfhost_merged.osty:14202:9
+		// Osty: /tmp/selfhost_merged.osty:14216:9
 		return astbridge.OrPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerOrAlts(arena, toks, n))
 	}
 	return astbridge.WildcardPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n))
 }
 
-// Osty: /tmp/selfhost_merged.osty:14207:1
+// Osty: /tmp/selfhost_merged.osty:14221:1
 func astLowerOrAlts(arena *AstArena, toks []astbridge.Token, n *AstNode) []astbridge.Pattern {
-	// Osty: /tmp/selfhost_merged.osty:14208:5
+	// Osty: /tmp/selfhost_merged.osty:14222:5
 	out := astbridge.EmptyPatternList()
 	_ = out
-	// Osty: /tmp/selfhost_merged.osty:14209:9
+	// Osty: /tmp/selfhost_merged.osty:14223:9
 	out = astLowerCollectOrAlt(arena, toks, n.left, out)
 	return astLowerCollectOrAlt(arena, toks, n.right, out)
 }
 
-// Osty: /tmp/selfhost_merged.osty:14213:1
+// Osty: /tmp/selfhost_merged.osty:14227:1
 func astLowerCollectOrAlt(arena *AstArena, toks []astbridge.Token, idx int, out []astbridge.Pattern) []astbridge.Pattern {
-	// Osty: /tmp/selfhost_merged.osty:14214:5
+	// Osty: /tmp/selfhost_merged.osty:14228:5
 	if idx < 0 {
-		// Osty: /tmp/selfhost_merged.osty:14215:9
+		// Osty: /tmp/selfhost_merged.osty:14229:9
 		return out
 	}
-	// Osty: /tmp/selfhost_merged.osty:14217:5
+	// Osty: /tmp/selfhost_merged.osty:14231:5
 	n := astArenaNodeAt(arena, idx)
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:14218:5
+	// Osty: /tmp/selfhost_merged.osty:14232:5
 	if n.text == "or" {
-		// Osty: /tmp/selfhost_merged.osty:14219:9
+		// Osty: /tmp/selfhost_merged.osty:14233:9
 		left := astLowerCollectOrAlt(arena, toks, n.left, out)
 		_ = left
-		// Osty: /tmp/selfhost_merged.osty:14220:9
+		// Osty: /tmp/selfhost_merged.osty:14234:9
 		return astLowerCollectOrAlt(arena, toks, n.right, left)
 	}
-	// Osty: /tmp/selfhost_merged.osty:14222:5
+	// Osty: /tmp/selfhost_merged.osty:14236:5
 	p := astLowerPattern(arena, toks, idx)
 	_ = p
-	// Osty: /tmp/selfhost_merged.osty:14223:5
+	// Osty: /tmp/selfhost_merged.osty:14237:5
 	if !(astbridge.IsNilPattern(p)) {
-		// Osty: /tmp/selfhost_merged.osty:14224:9
+		// Osty: /tmp/selfhost_merged.osty:14238:9
 		func() struct{} { out = append(out, p); return struct{}{} }()
 	}
 	return out
 }
 
-// Osty: /tmp/selfhost_merged.osty:14229:1
+// Osty: /tmp/selfhost_merged.osty:14243:1
 func astLowerPatternLiteralExpr(arena *AstArena, toks []astbridge.Token, idx int) astbridge.Expr {
-	// Osty: /tmp/selfhost_merged.osty:14230:5
+	// Osty: /tmp/selfhost_merged.osty:14244:5
 	if idx < 0 {
-		// Osty: /tmp/selfhost_merged.osty:14231:9
+		// Osty: /tmp/selfhost_merged.osty:14245:9
 		return astbridge.NilExpr()
 	}
-	// Osty: /tmp/selfhost_merged.osty:14233:5
+	// Osty: /tmp/selfhost_merged.osty:14247:5
 	n := astArenaNodeAt(arena, idx)
 	_ = n
-	// Osty: /tmp/selfhost_merged.osty:14234:5
+	// Osty: /tmp/selfhost_merged.osty:14248:5
 	if n.text == "negLiteral" {
-		// Osty: /tmp/selfhost_merged.osty:14235:9
+		// Osty: /tmp/selfhost_merged.osty:14249:9
 		return astbridge.UnaryExprNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerKind(FrontTokenKind(&FrontTokenKind_FrontMinus{})), astLowerLiteralPatternExpr(toks, astArenaNodeAt(arena, n.left)))
 	}
 	return astLowerLiteralPatternExpr(toks, n)
 }
 
-// Osty: /tmp/selfhost_merged.osty:14240:1
+// Osty: /tmp/selfhost_merged.osty:14254:1
 func astLowerLiteralPatternExpr(toks []astbridge.Token, n *AstNode) astbridge.Expr {
-	// Osty: /tmp/selfhost_merged.osty:14241:5
+	// Osty: /tmp/selfhost_merged.osty:14255:5
 	pos := astLowerNodePos(toks, n)
 	_ = pos
-	// Osty: /tmp/selfhost_merged.osty:14242:5
+	// Osty: /tmp/selfhost_merged.osty:14256:5
 	end := astLowerNodeEnd(toks, n)
 	_ = end
-	// Osty: /tmp/selfhost_merged.osty:14243:5
+	// Osty: /tmp/selfhost_merged.osty:14257:5
 	text := strings.TrimPrefix(n.text, "literal:")
 	_ = text
-	// Osty: /tmp/selfhost_merged.osty:14244:5
+	// Osty: /tmp/selfhost_merged.osty:14258:5
 	if ostyEqual(n.op, FrontTokenKind(&FrontTokenKind_FrontInt{})) {
-		// Osty: /tmp/selfhost_merged.osty:14245:9
+		// Osty: /tmp/selfhost_merged.osty:14259:9
 		return astbridge.IntLitExpr(pos, end, text)
 	}
-	// Osty: /tmp/selfhost_merged.osty:14247:5
+	// Osty: /tmp/selfhost_merged.osty:14261:5
 	if ostyEqual(n.op, FrontTokenKind(&FrontTokenKind_FrontFloat{})) {
-		// Osty: /tmp/selfhost_merged.osty:14248:9
+		// Osty: /tmp/selfhost_merged.osty:14262:9
 		return astbridge.FloatLitExpr(pos, end, text)
 	}
-	// Osty: /tmp/selfhost_merged.osty:14250:5
+	// Osty: /tmp/selfhost_merged.osty:14264:5
 	if ostyEqual(n.op, FrontTokenKind(&FrontTokenKind_FrontString{})) || ostyEqual(n.op, FrontTokenKind(&FrontTokenKind_FrontRawString{})) {
-		// Osty: /tmp/selfhost_merged.osty:14251:9
+		// Osty: /tmp/selfhost_merged.osty:14265:9
 		return astbridge.StringLitExpr(pos, end, astLowerStringContent(text))
 	}
-	// Osty: /tmp/selfhost_merged.osty:14253:5
+	// Osty: /tmp/selfhost_merged.osty:14267:5
 	if ostyEqual(n.op, FrontTokenKind(&FrontTokenKind_FrontChar{})) {
-		// Osty: /tmp/selfhost_merged.osty:14254:9
+		// Osty: /tmp/selfhost_merged.osty:14268:9
 		return astbridge.CharLitExpr(pos, end, astLowerDecodedLiteral(text))
 	}
-	// Osty: /tmp/selfhost_merged.osty:14256:5
+	// Osty: /tmp/selfhost_merged.osty:14270:5
 	if ostyEqual(n.op, FrontTokenKind(&FrontTokenKind_FrontByte{})) {
-		// Osty: /tmp/selfhost_merged.osty:14257:9
+		// Osty: /tmp/selfhost_merged.osty:14271:9
 		return astbridge.ByteLitExpr(pos, end, astLowerDecodedLiteral(text))
 	}
 	return astbridge.BoolLitExpr(pos, end, text == "true")
 }
 
-// Osty: /tmp/selfhost_merged.osty:14262:1
+// Osty: /tmp/selfhost_merged.osty:14276:1
 func astLowerIntListCount(xs []int) int {
-	// Osty: /tmp/selfhost_merged.osty:14263:5
+	// Osty: /tmp/selfhost_merged.osty:14277:5
 	count := 0
 	_ = count
-	// Osty: /tmp/selfhost_merged.osty:14264:5
+	// Osty: /tmp/selfhost_merged.osty:14278:5
 	for _, x := range xs {
-		// Osty: /tmp/selfhost_merged.osty:14265:9
+		// Osty: /tmp/selfhost_merged.osty:14279:9
 		_ = x
-		// Osty: /tmp/selfhost_merged.osty:14266:15
+		// Osty: /tmp/selfhost_merged.osty:14280:15
 		func() {
 			var _cur2373 int = count
 			var _rhs2374 int = 1
@@ -35582,19 +35600,19 @@ func astLowerIntListCount(xs []int) int {
 	return count
 }
 
-// Osty: /tmp/selfhost_merged.osty:14271:1
+// Osty: /tmp/selfhost_merged.osty:14285:1
 func astLowerIntListAt(xs []int, target int) int {
-	// Osty: /tmp/selfhost_merged.osty:14272:5
+	// Osty: /tmp/selfhost_merged.osty:14286:5
 	i := 0
 	_ = i
-	// Osty: /tmp/selfhost_merged.osty:14273:5
+	// Osty: /tmp/selfhost_merged.osty:14287:5
 	for _, x := range xs {
-		// Osty: /tmp/selfhost_merged.osty:14274:9
+		// Osty: /tmp/selfhost_merged.osty:14288:9
 		if i == target {
-			// Osty: /tmp/selfhost_merged.osty:14275:13
+			// Osty: /tmp/selfhost_merged.osty:14289:13
 			return x
 		}
-		// Osty: /tmp/selfhost_merged.osty:14277:11
+		// Osty: /tmp/selfhost_merged.osty:14291:11
 		func() {
 			var _cur2375 int = i
 			var _rhs2376 int = 1
