@@ -9,6 +9,7 @@ package airepair
 import (
 	"bytes"
 
+	"github.com/osty/osty/internal/canonical"
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/parser"
@@ -139,6 +140,7 @@ func Analyze(req Request) Result {
 		diagnosticForeignLoopSource,
 		diagnosticTupleLoopSource,
 		diagnosticSemanticSource,
+		func(src []byte, _ []*diag.Diagnostic) repair.Result { return parserCanonicalSource(src) },
 	}
 	if req.MaxPasses <= 0 || req.MaxPasses > len(phases) {
 		req.MaxPasses = len(phases)
@@ -314,9 +316,10 @@ func (r Result) ResidualPrimaryHabit() string {
 }
 
 func probe(src []byte) (ProbeStats, []*diag.Diagnostic) {
-	file, parseDiags := parser.ParseDiagnostics(src)
+	parsed := parser.ParseDetailed(src)
+	file, parseDiags := parsed.File, parsed.Diagnostics
 	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
-	chk := check.File(file, res, checkOptsForSource(src))
+	chk := check.File(file, res, checkOptsForSource(canonical.Source(src, file)))
 
 	stats := ProbeStats{
 		Parse:   count(parseDiags),

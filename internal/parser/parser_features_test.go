@@ -129,3 +129,92 @@ func stringLiteralValue(expr ast.Expr) (string, bool) {
 	}
 	return lit.Parts[0].Lit, true
 }
+
+func TestParseAcceptsStableAliases(t *testing.T) {
+	src := []byte("import std.testing as t\nfunc main() {\n    while false {\n        break\n    }\n}\n")
+
+	result := ParseDetailed(src)
+	if len(result.Diagnostics) > 0 {
+		t.Fatalf("ParseDetailed returned %d diagnostics: %v", len(result.Diagnostics), result.Diagnostics[0])
+	}
+	if result.File == nil || len(result.File.Uses) != 1 || len(result.File.Decls) != 1 {
+		t.Fatalf("parsed file = %#v, want one use and one decl", result.File)
+	}
+	fn, ok := result.File.Decls[0].(*ast.FnDecl)
+	if !ok {
+		t.Fatalf("decl[0] type = %T, want *ast.FnDecl", result.File.Decls[0])
+	}
+	if fn.Body == nil || len(fn.Body.Stmts) != 1 {
+		t.Fatalf("fn body stmt count = %d, want 1", len(fn.Body.Stmts))
+	}
+	if _, ok := fn.Body.Stmts[0].(*ast.ForStmt); !ok {
+		t.Fatalf("body stmt type = %T, want *ast.ForStmt from stable `while` alias", fn.Body.Stmts[0])
+	}
+	if result.Provenance == nil || len(result.Provenance.Aliases) != 3 {
+		t.Fatalf("alias provenance = %#v, want 3 stable alias entries", result.Provenance)
+	}
+}
+
+func TestParseDetailedLowersEnumerateLoop(t *testing.T) {
+	src := []byte("fn main() {\n    let items = [1, 2]\n    for (i, item) in enumerate(items) {\n        println(item)\n    }\n}\n")
+
+	result := ParseDetailed(src)
+	if len(result.Diagnostics) > 0 {
+		t.Fatalf("ParseDetailed returned %d diagnostics: %v", len(result.Diagnostics), result.Diagnostics[0])
+	}
+	fn := result.File.Decls[0].(*ast.FnDecl)
+	if got, want := len(fn.Body.Stmts), 3; got != want {
+		t.Fatalf("body stmt count = %d, want %d", got, want)
+	}
+	if _, ok := fn.Body.Stmts[1].(*ast.LetStmt); !ok {
+		t.Fatalf("stmt[1] type = %T, want enumerate temp *ast.LetStmt", fn.Body.Stmts[1])
+	}
+	if _, ok := fn.Body.Stmts[2].(*ast.ForStmt); !ok {
+		t.Fatalf("stmt[2] type = %T, want lowered *ast.ForStmt", fn.Body.Stmts[2])
+	}
+	loweredLoop := fn.Body.Stmts[2].(*ast.ForStmt)
+	rangeIter, ok := loweredLoop.Iter.(*ast.RangeExpr)
+	if !ok {
+		t.Fatalf("loop iter type = %T, want *ast.RangeExpr", loweredLoop.Iter)
+	}
+	if _, ok := rangeIter.Stop.(*ast.CallExpr); !ok {
+		t.Fatalf("loop stop type = %T, want len() call", rangeIter.Stop)
+	}
+	prelude, ok := loweredLoop.Body.Stmts[0].(*ast.LetStmt)
+	if !ok {
+		t.Fatalf("loop prelude type = %T, want *ast.LetStmt", loweredLoop.Body.Stmts[0])
+	}
+	if _, ok := prelude.Value.(*ast.IndexExpr); !ok {
+		t.Fatalf("loop prelude value type = %T, want *ast.IndexExpr", prelude.Value)
+	}
+	if result.Provenance == nil || len(result.Provenance.Lowerings) == 0 {
+		t.Fatalf("lowering provenance = %#v, want enumerate lowering", result.Provenance)
+	}
+}
+
+func TestParseDetailedLowersSemanticHelpers(t *testing.T) {
+	src := []byte("fn main() {\n    let mut items = [1, 2]\n    let count = len(items)\n    let size = items.length\n    items = append(items, count + size)\n}\n")
+
+	result := ParseDetailed(src)
+	if len(result.Diagnostics) > 0 {
+		t.Fatalf("ParseDetailed returned %d diagnostics: %v", len(result.Diagnostics), result.Diagnostics[0])
+	}
+	fn := result.File.Decls[0].(*ast.FnDecl)
+	if got, want := len(fn.Body.Stmts), 4; got != want {
+		t.Fatalf("body stmt count = %d, want %d", got, want)
+	}
+	countLet := fn.Body.Stmts[1].(*ast.LetStmt)
+	if _, ok := countLet.Value.(*ast.CallExpr); !ok {
+		t.Fatalf("count value type = %T, want *ast.CallExpr", countLet.Value)
+	}
+	sizeLet := fn.Body.Stmts[2].(*ast.LetStmt)
+	if _, ok := sizeLet.Value.(*ast.CallExpr); !ok {
+		t.Fatalf("size value type = %T, want *ast.CallExpr", sizeLet.Value)
+	}
+	if _, ok := fn.Body.Stmts[3].(*ast.ExprStmt); !ok {
+		t.Fatalf("stmt[3] type = %T, want append lowered to *ast.ExprStmt", fn.Body.Stmts[3])
+	}
+	if result.Provenance == nil || len(result.Provenance.Lowerings) < 3 {
+		t.Fatalf("lowering provenance = %#v, want helper lowerings", result.Provenance)
+	}
+}

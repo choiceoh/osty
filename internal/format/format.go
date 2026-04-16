@@ -6,6 +6,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/lexer"
 	"github.com/osty/osty/internal/parser"
@@ -58,6 +59,17 @@ func Source(src []byte) ([]byte, []*diag.Diagnostic, error) {
 	p.buf.Grow(len(src))
 	p.printFile(file)
 	return p.bytes(), diags, nil
+}
+
+// File prints an already-parsed AST using the canonical Osty printer without
+// reparsing or preserving source comments/trivia.
+func File(file *ast.File) []byte {
+	if file == nil {
+		return nil
+	}
+	p := newPrinter(nil)
+	p.printFile(file)
+	return p.bytes()
 }
 
 // printer is the mutable state carried through one formatting pass.

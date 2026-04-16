@@ -1204,15 +1204,16 @@ func selfhostPackageSource(pkg *resolve.Package, ws *resolve.Workspace, stdlib r
 	writeSelfhostPackageImports(&b, pkg, ws, stdlib)
 	var files []selfhostFileSegment
 	for _, pf := range pkg.Files {
-		if len(pf.Source) == 0 {
+		src := pf.CheckerSource()
+		if len(src) == 0 {
 			continue
 		}
 		if b.Len() > 0 {
 			b.WriteByte('\n')
 		}
 		base := b.Len()
-		b.Write(pf.Source)
-		if !bytes.HasSuffix(pf.Source, []byte("\n")) {
+		b.Write(src)
+		if !bytes.HasSuffix(src, []byte("\n")) {
 			b.WriteByte('\n')
 		}
 		files = append(files, selfhostFileSegment{

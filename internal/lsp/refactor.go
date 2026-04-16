@@ -1,11 +1,14 @@
 package lsp
 
 import (
+	"bytes"
 	"strings"
 
 	"github.com/osty/osty/internal/airepair"
 	"github.com/osty/osty/internal/ast"
+	"github.com/osty/osty/internal/canonical"
 	"github.com/osty/osty/internal/diag"
+	"github.com/osty/osty/internal/parser"
 )
 
 // LSP code-action kind strings (LSP 3.17 §codeActionKind). Only the
@@ -267,6 +270,17 @@ func fixAllAction(doc *document) *CodeAction {
 	if a == nil || a.file == nil {
 		return nil
 	}
+	if edit := parserCanonicalFixAllEdit(doc); edit != nil {
+		return &CodeAction{
+			Title: "Fix all auto-fixable problems",
+			Kind:  CodeActionSourceFixAllOsty,
+			Edit: &WorkspaceEdit{
+				Changes: map[string][]TextEdit{
+					doc.uri: []TextEdit{*edit},
+				},
+			},
+		}
+	}
 	if edit := airepairFixAllEdit(doc); edit != nil {
 		return &CodeAction{
 			Title: "Fix all auto-fixable problems",
@@ -300,6 +314,30 @@ func fixAllAction(doc *document) *CodeAction {
 	}
 }
 
+func parserCanonicalFixAllEdit(doc *document) *TextEdit {
+	if doc == nil || doc.analysis == nil || doc.analysis.file == nil {
+		return nil
+	}
+	parsed := parser.ParseDetailed(doc.src)
+	for _, d := range parsed.Diagnostics {
+		if d != nil && d.Severity == diag.Error {
+			return nil
+		}
+	}
+	if parsed.Provenance == nil || parsed.Provenance.Empty() {
+		return nil
+	}
+	canonicalSrc := canonical.Source(doc.src, parsed.File)
+	if len(canonicalSrc) == 0 || bytes.Equal(canonicalSrc, doc.src) {
+		return nil
+	}
+	rng := doc.analysis.lines.rangeFromOffsets(0, len(doc.src))
+	return &TextEdit{
+		Range:   rng,
+		NewText: string(canonicalSrc),
+	}
+}
+
 func airepairFixAllEdit(doc *document) *TextEdit {
 	if doc == nil || doc.analysis == nil {
 		return nil
@@ -312,10 +350,16 @@ func airepairFixAllEdit(doc *document) *TextEdit {
 	if !result.Accepted || !result.Changed {
 		return nil
 	}
+	repaired := result.Repaired
+	if parsed := parser.ParseDetailed(repaired); parsed.File != nil {
+		if canonicalRepaired := canonical.Source(repaired, parsed.File); len(canonicalRepaired) > 0 {
+			repaired = canonicalRepaired
+		}
+	}
 	rng := doc.analysis.lines.rangeFromOffsets(0, len(doc.src))
 	return &TextEdit{
 		Range:   rng,
-		NewText: string(result.Repaired),
+		NewText: string(repaired),
 	}
 }
 
