@@ -291,7 +291,8 @@ creating a new one.
   expressions (payload-free + single-`Int` with `{ i64, i64 }` payload), plus
   the Phase 54-63 payload enum generalization (`Float` return/param/mut/reversed/wildcard,
   String payload return/param/mut/reversed/wildcard) path. `clang`-driven
-  object/binary emission and generated-source diagnostics are available for
+  object/binary emission now bundles the LLVM native runtime shim for
+  String/List/GC ABI symbols, and generated-source diagnostics are available for
   supported programs;
   unsupported shapes still prepare skeleton artifacts and report missing lowering
   through structured diagnostics from the toolchain backend policy.

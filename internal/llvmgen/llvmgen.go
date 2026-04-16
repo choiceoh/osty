@@ -818,7 +818,10 @@ func (g *generator) emitUserFunction(sig *fnSig) (string, error) {
 		if err := g.emitBlock(sig.decl.Body.Stmts); err != nil {
 			return "", err
 		}
-		g.body = append(g.body, "  ret void")
+		emitter := g.toOstyEmitter()
+		g.releaseGCRoots(emitter)
+		emitter.body = append(emitter.body, "  ret void")
+		g.takeOstyEmitter(emitter)
 	} else {
 		if err := g.emitReturningBlock(sig.decl.Body.Stmts, sig.ret, sig.retListElemTyp); err != nil {
 			return "", err

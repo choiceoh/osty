@@ -18,6 +18,7 @@ var ErrLLVMNotImplemented = errors.New(llvmgen.UnsupportedBackendErrorMessage())
 
 type llvmToolchain interface {
 	CompileObject(ctx context.Context, irPath, objectPath, target string) error
+	CompileCObject(ctx context.Context, sourcePath, objectPath, target string) error
 	LinkBinary(ctx context.Context, objectPaths []string, binaryPath, target string) error
 }
 
@@ -122,9 +123,23 @@ func (clangToolchain) CompileObject(ctx context.Context, irPath, objectPath, tar
 	return runClang(ctx, "compile object", args)
 }
 
+func (clangToolchain) CompileCObject(ctx context.Context, sourcePath, objectPath, target string) error {
+	args := clangCompileCObjectArgs(target, sourcePath, objectPath)
+	return runClang(ctx, "compile runtime", args)
+}
+
 func (clangToolchain) LinkBinary(ctx context.Context, objectPaths []string, binaryPath, target string) error {
 	args := llvmgen.ClangLinkBinaryArgs(target, objectPaths, binaryPath)
 	return runClang(ctx, "link binary", args)
+}
+
+func clangCompileCObjectArgs(target, sourcePath, objectPath string) []string {
+	args := []string{}
+	if target != "" {
+		args = append(args, "-target", target)
+	}
+	args = append(args, "-std=c11", "-c", sourcePath, "-o", objectPath)
+	return args
 }
 
 func runClang(ctx context.Context, action string, args []string) error {
