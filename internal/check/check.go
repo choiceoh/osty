@@ -69,8 +69,9 @@ func (r *Result) LookupType(e ast.Expr) types.Type {
 // Opts matches the legacy no-stdlib behavior.
 type Opts struct {
 	// UseSelfhost makes the bootstrapped Osty checker authoritative for
-	// checker diagnostics. The legacy Go checker still runs to populate
-	// structural Result maps consumed by gen, lint, and LSP features.
+	// checker diagnostics and expression/binding instantiation facts. The
+	// Go side only collects declaration shapes still consumed by gen, lint,
+	// and LSP features.
 	UseSelfhost bool
 
 	// Source is the raw source for File when UseSelfhost is enabled.
@@ -124,6 +125,9 @@ func firstOpt(opts []Opts) Opts {
 // intrinsic-method table.
 func File(f *ast.File, rr *resolve.Result, opts ...Opts) *Result {
 	opt := firstOpt(opts)
+	if opt.UseSelfhost && selfhostRuntimeAvailable() && len(opt.Source) > 0 {
+		return selfhostFile(f, rr, opt)
+	}
 	c := newChecker()
 	c.file = f
 	c.resolved = rr
@@ -133,9 +137,23 @@ func File(f *ast.File, rr *resolve.Result, opts ...Opts) *Result {
 	c.resultMethods = opt.ResultMethods
 	c.indexSymbolsFrom(rr)
 	c.run()
-	if opt.UseSelfhost {
-		applySelfhostFileResult(c.result, f, opt.Source, opt.Stdlib)
+	return c.result
+}
+
+func selfhostFile(f *ast.File, rr *resolve.Result, opt Opts) *Result {
+	c := newChecker()
+	c.file = f
+	c.resolved = rr
+	c.onDecl = opt.OnDecl
+	c.initBuiltins()
+	c.indexPrimitiveMethods(opt.Primitives)
+	c.resultMethods = opt.ResultMethods
+	c.indexSymbolsFrom(rr)
+	for _, d := range f.Decls {
+		c.timedCollect(d)
 	}
+	applySelfhostFileResult(c.result, f, rr, opt.Source, opt.Stdlib)
+	c.recordSelfhostCheckPass(f)
 	return c.result
 }
 
@@ -154,6 +172,9 @@ func File(f *ast.File, rr *resolve.Result, opts ...Opts) *Result {
 //     last, with an implicit `fn main()` env.
 func Package(pkg *resolve.Package, pr *resolve.PackageResult, opts ...Opts) *Result {
 	opt := firstOpt(opts)
+	if opt.UseSelfhost && selfhostRuntimeAvailable() && packageSelfhostSourceAvailable(pkg) {
+		return selfhostPackage(pkg, pr, opt)
+	}
 	c := newChecker()
 	if len(pkg.Files) == 0 {
 		return c.result
@@ -205,8 +226,32 @@ func Package(pkg *resolve.Package, pr *resolve.PackageResult, opts ...Opts) *Res
 		e := &env{retType: types.Unit}
 		c.checkStmts(pf.File.Stmts, e)
 	}
-	if opt.UseSelfhost {
-		applySelfhostPackageResult(c.result, pkg, nil, opt.Stdlib)
+	return c.result
+}
+
+func selfhostPackage(pkg *resolve.Package, pr *resolve.PackageResult, opt Opts) *Result {
+	c := newChecker()
+	if len(pkg.Files) == 0 {
+		return c.result
+	}
+	c.resolved = fileResult(pkg.Files[0])
+	c.onDecl = opt.OnDecl
+	c.initBuiltins()
+	c.indexPrimitiveMethods(opt.Primitives)
+	c.resultMethods = opt.ResultMethods
+	for _, pf := range pkg.Files {
+		c.indexSymbolsFrom(fileResult(pf))
+	}
+	for _, pf := range pkg.Files {
+		c.file = pf.File
+		c.resolved = fileResult(pf)
+		for _, d := range pf.File.Decls {
+			c.timedCollect(d)
+		}
+	}
+	applySelfhostPackageResult(c.result, pkg, pr, nil, opt.Stdlib)
+	for _, pf := range pkg.Files {
+		c.recordSelfhostCheckPass(pf.File)
 	}
 	return c.result
 }
@@ -227,6 +272,9 @@ func Workspace(
 	opts ...Opts,
 ) map[string]*Result {
 	opt := firstOpt(opts)
+	if opt.UseSelfhost && selfhostRuntimeAvailable() && workspaceSelfhostSourceAvailable(ws, resolved) {
+		return selfhostWorkspace(ws, resolved, opt)
+	}
 	type pkgEntry struct {
 		path string
 		pkg  *resolve.Package
@@ -246,6 +294,7 @@ func Workspace(
 	}
 
 	c := newChecker()
+	c.onDecl = opt.OnDecl
 	c.indexPrimitiveMethods(opt.Primitives)
 	c.resultMethods = opt.ResultMethods
 	// Seed c.resolved with any file's view so initBuiltins can walk up
@@ -275,7 +324,7 @@ func Workspace(
 			c.file = pf.File
 			c.resolved = fileResult(pf)
 			for _, d := range pf.File.Decls {
-				c.collect(d)
+				c.timedCollect(d)
 			}
 		}
 	}
@@ -300,7 +349,7 @@ func Workspace(
 			c.file = pf.File
 			c.resolved = fileResult(pf)
 			for _, d := range pf.File.Decls {
-				c.checkDecl(d)
+				c.timedCheckDecl(d)
 			}
 			if len(pf.File.Stmts) > 0 {
 				env := &env{retType: types.Unit}
@@ -317,8 +366,106 @@ func Workspace(
 			Diags:          pkgDiags,
 		}
 	}
-	if opt.UseSelfhost {
-		applySelfhostWorkspaceResults(ws, out, opt.Stdlib)
+	return out
+}
+
+func packageSelfhostSourceAvailable(pkg *resolve.Package) bool {
+	if pkg == nil {
+		return false
+	}
+	for _, pf := range pkg.Files {
+		if pf == nil || pf.File == nil {
+			continue
+		}
+		if len(pf.Source) == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func workspaceSelfhostSourceAvailable(ws *resolve.Workspace, resolved map[string]*resolve.PackageResult) bool {
+	if ws == nil {
+		return false
+	}
+	for path, pkg := range ws.Packages {
+		if pkg == nil || pkg.PkgScope == nil {
+			continue
+		}
+		if _, ok := resolved[path]; !ok {
+			continue
+		}
+		if !packageSelfhostSourceAvailable(pkg) {
+			return false
+		}
+	}
+	return true
+}
+
+func selfhostWorkspace(
+	ws *resolve.Workspace,
+	resolved map[string]*resolve.PackageResult,
+	opt Opts,
+) map[string]*Result {
+	type pkgEntry struct {
+		path string
+		pkg  *resolve.Package
+	}
+	var walk []pkgEntry
+	for path, pkg := range ws.Packages {
+		if pkg == nil || pkg.PkgScope == nil {
+			continue
+		}
+		if _, ok := resolved[path]; !ok {
+			continue
+		}
+		walk = append(walk, pkgEntry{path: path, pkg: pkg})
+	}
+	if len(walk) == 0 {
+		return map[string]*Result{}
+	}
+
+	c := newChecker()
+	c.onDecl = opt.OnDecl
+	c.indexPrimitiveMethods(opt.Primitives)
+	c.resultMethods = opt.ResultMethods
+	for _, e := range walk {
+		if len(e.pkg.Files) > 0 {
+			c.resolved = fileResult(e.pkg.Files[0])
+			break
+		}
+	}
+	c.initBuiltins()
+	for _, e := range walk {
+		for _, pf := range e.pkg.Files {
+			c.indexSymbolsFrom(fileResult(pf))
+		}
+	}
+	for _, e := range walk {
+		for _, pf := range e.pkg.Files {
+			c.file = pf.File
+			c.resolved = fileResult(pf)
+			for _, d := range pf.File.Decls {
+				c.timedCollect(d)
+			}
+		}
+	}
+
+	out := map[string]*Result{}
+	for _, e := range walk {
+		out[e.path] = &Result{
+			Types:          c.result.Types,
+			LetTypes:       c.result.LetTypes,
+			SymTypes:       c.result.SymTypes,
+			Descs:          c.result.Descs,
+			Instantiations: c.result.Instantiations,
+		}
+	}
+	applySelfhostWorkspaceResults(ws, resolved, out, opt.Stdlib)
+	for _, e := range walk {
+		for _, pf := range e.pkg.Files {
+			c.recordSelfhostCheckPass(pf.File)
+		}
 	}
 	return out
 }
@@ -818,6 +965,15 @@ func (c *checker) timedCheckDecl(d ast.Decl) {
 	t0 := time.Now()
 	c.checkDecl(d)
 	c.onDecl(d, "check", time.Since(t0))
+}
+
+func (c *checker) recordSelfhostCheckPass(file *ast.File) {
+	if c.onDecl == nil || file == nil {
+		return
+	}
+	for _, d := range file.Decls {
+		c.onDecl(d, "check", 0)
+	}
 }
 
 // symbol returns the resolver's symbol for an Ident, or nil if the
