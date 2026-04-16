@@ -19,9 +19,6 @@ short:
 full:
     go test ./...
 
-gen test=".":
-    go test -count=1 ./internal/gen -run '{{test}}' -v
-
 lsp test=".":
     go test -count=1 ./internal/lsp -run '{{test}}' -v
 
@@ -43,9 +40,6 @@ profile target:
 
 watch-front:
     watchexec -e go,osty,md -- just front
-
-watch-gen test=".":
-    watchexec -e go,osty -- just gen '{{test}}'
 
 watch-pipe target:
     watchexec -e go,osty -- just pipe {{target}}

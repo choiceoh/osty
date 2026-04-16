@@ -1,8 +1,9 @@
 # Osty Independent GC Design
 
 이 문서는 `examples/gc` 패키지의 설계 기준이다. 목표는 Osty 언어로
-작성된 독립 GC 코어를 만드는 것이다. 현재 Go transpiler 위에서 실행되지만,
-구조는 미래의 native Osty 런타임이 그대로 가져갈 수 있는 형태를 지향한다.
+작성된 독립 GC 코어를 만드는 것이다. 현재 구현 세부는 과도기적일 수
+있지만, 구조는 미래의 native Osty 런타임이 그대로 가져갈 수 있는 형태를
+지향한다.
 
 ## 큰 그림
 

@@ -169,8 +169,10 @@ per-symbol types in `Result.SymTypes`. Entry points mirror
 
 The main v0.4 front-end static guarantee hooks are wired here:
 
-- generic call sites are recorded in `Result.Instantiations` for
-  demand-driven monomorphization in `internal/gen`,
+- generic call sites are recorded in `Result.Instantiations`; this
+  originally fed demand-driven monomorphization in `internal/gen` and
+  remains available as front-end metadata while that legacy path is
+  retired,
 - structural interface satisfaction checks composed interfaces,
   `Self`-typed signatures, generic receiver substitution, params, and
   generic bounds,
@@ -228,23 +230,12 @@ Wired as `osty lint` with `--strict` (CI mode: exit 1 on any
 warning).
 
 ### `internal/gen`
-Go transpiler. Pure read-side consumer of the front-end: takes
-`*ast.File` + `*resolve.Result` + `*check.Result` and emits
-gofmt-formatted Go source. Phases 1–6 are wired end-to-end:
-primitive/control-flow code, structs/enums/match, generics/closures,
-Option/Result/`?`, `use`/FFI, and channels/concurrency. Phases are
-enumerated in the package doc comment at `doc.go`.
-
-Wired as `osty gen FILE` (with `-o OUT.go` / `--package NAME`): runs
-the front-end, aborts on errors, then transpiles to gofmt-formatted Go
-on stdout or at the given path.
-
-CLI-facing generation uses `GenerateMapped`, which emits `// Osty:
-path:line:column` comments before generated declarations and
-statements. `osty build`, `osty run`, and `osty test` use those markers
-when Go compilation or runtime execution fails so users can move from a
-generated `main.go:line` or panic stack frame back to the closest Osty
-source construct.
+Legacy Go transpiler retained only as migration residue while its
+removal lands. Historically it consumed `*ast.File` +
+`*resolve.Result` + `*check.Result` and emitted mapped Go source for
+early bootstrap flows. New backend work should target
+`internal/backend` / `internal/llvmgen` instead of extending this
+path.
 
 ### `internal/lsp`
 JSON-RPC language server on stdio. Lifecycle (`initialize` / `shutdown`

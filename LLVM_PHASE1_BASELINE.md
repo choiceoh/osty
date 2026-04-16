@@ -2,9 +2,10 @@
 
 기준일: 2026-04-16 Asia/Seoul
 기준 commit: `0eb6ea1`
-목적: LLVM backend 이주 전에 현재 Go backend와 관련 CLI 경로의 실제 동작을
-고정한다. 이 문서는 이후 LLVM parity 작업에서 "현재 구현이 이미 하던 것"과
-"현재 구현도 아직 못 하던 것"을 구분하기 위한 기준선이다.
+목적: LLVM backend 이주 초기에 기록한 historical baseline 이다. 당시 Go
+backend와 관련 CLI 경로의 실제 동작을 고정해 두었고, 이후 LLVM parity 작업에서
+"그 시점 구현이 이미 하던 것"과 "그 시점 구현도 아직 못 하던 것"을 구분하기 위한
+기준선으로 사용했다.
 
 ## Scope
 

@@ -7,7 +7,7 @@
 // 사용:  osty run word_freq.osty -- <file1> <file2> ...
 //
 // Grammar v0.2 / LANG_SPEC v0.9 준수 확인됨.
-// osty:ci-skip -- future stdlib sample; see internal/gen realworld probe.
+// osty:ci-skip -- future stdlib sample; see the historical internal/gen realworld probe.
 //
 
 use std.fs

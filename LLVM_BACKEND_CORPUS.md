@@ -237,5 +237,5 @@ backend features are available.
 - Later backend work can refer to this document instead of guessing which
   examples are parity gates.
 
-The follow-up Go transpiler TODO audit is tracked in
+The historical Go transpiler TODO audit is tracked in
 [`LLVM_GEN_TODO_AUDIT.md`](./LLVM_GEN_TODO_AUDIT.md).
