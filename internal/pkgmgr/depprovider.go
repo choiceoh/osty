@@ -49,24 +49,24 @@ func (p *depProvider) LookupDep(rawPath string) (string, bool) {
 	if p == nil || p.m == nil || p.env == nil {
 		return "", false
 	}
-	decision := SelfhostLookupDependency(rawPath, p.graphLookupItems(), manifestLookupItems(p.m))
+	decision := GolegacyLookupDependency(rawPath, p.graphLookupItems(), manifestLookupItems(p.m))
 	if decision.Found {
 		return filepath.Join(p.env.VendorDir, decision.Name), true
 	}
 	return "", false
 }
 
-func (p *depProvider) graphLookupItems() []SelfhostDepLookupItem {
+func (p *depProvider) graphLookupItems() []GolegacyDepLookupItem {
 	if p == nil || p.graph == nil {
 		return nil
 	}
-	out := make([]SelfhostDepLookupItem, 0, len(p.graph.Nodes))
+	out := make([]GolegacyDepLookupItem, 0, len(p.graph.Nodes))
 	for _, name := range p.graphNodeNames() {
 		n := p.graph.Nodes[name]
 		if n == nil {
 			continue
 		}
-		item := SelfhostDepLookupItem{Name: name}
+		item := GolegacyDepLookupItem{Name: name}
 		gs, ok := n.Source.(*gitSource)
 		if ok {
 			item.GitURL = gs.url
@@ -91,11 +91,11 @@ func (p *depProvider) graphNodeNames() []string {
 	return names
 }
 
-func manifestLookupItems(m *manifest.Manifest) []SelfhostDepLookupItem {
+func manifestLookupItems(m *manifest.Manifest) []GolegacyDepLookupItem {
 	if m == nil {
 		return nil
 	}
-	out := make([]SelfhostDepLookupItem, 0, len(m.Dependencies)+len(m.DevDependencies))
+	out := make([]GolegacyDepLookupItem, 0, len(m.Dependencies)+len(m.DevDependencies))
 	for _, d := range m.Dependencies {
 		out = append(out, dependencyLookupItem(d))
 	}
@@ -105,8 +105,8 @@ func manifestLookupItems(m *manifest.Manifest) []SelfhostDepLookupItem {
 	return out
 }
 
-func dependencyLookupItem(d manifest.Dependency) SelfhostDepLookupItem {
-	item := SelfhostDepLookupItem{Name: d.Name}
+func dependencyLookupItem(d manifest.Dependency) GolegacyDepLookupItem {
+	item := GolegacyDepLookupItem{Name: d.Name}
 	if d.Git != nil {
 		item.GitURL = d.Git.URL
 	}

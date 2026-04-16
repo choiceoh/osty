@@ -669,7 +669,7 @@ func (s *Server) analyzeSingleFile(src []byte) *docAnalysis {
 func lspCheckOpts(src []byte) check.Opts {
 	reg := stdlib.LoadCached()
 	return check.Opts{
-		UseSelfhost:   true,
+		UseGolegacy:   true,
 		Source:        src,
 		Stdlib:        reg,
 		Primitives:    reg.Primitives,

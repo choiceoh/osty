@@ -1,6 +1,6 @@
 use std.strings as strings
 
-pub struct SelfhostPipelineReport {
+pub struct ToolchainPipelineReport {
     pub tokens: Int,
     pub parseNodes: Int,
     pub parseDiagnostics: Int,
@@ -30,15 +30,15 @@ pub struct SelfhostPipelineReport {
     pub diagnostics: String,
 }
 
-pub fn selfhostPipelineSource(packageName: String, source: String) -> SelfhostPipelineReport {
-    selfhostPipelineSourceWithFixes(packageName, source, false)
+pub fn toolchainPipelineSource(packageName: String, source: String) -> ToolchainPipelineReport {
+    toolchainPipelineSourceWithFixes(packageName, source, false)
 }
 
-pub fn selfhostPipelineSourceWithFixes(
+pub fn toolchainPipelineSourceWithFixes(
     packageName: String,
     source: String,
     applyFixes: Bool,
-) -> SelfhostPipelineReport {
+) -> ToolchainPipelineReport {
     let stream = frontendLexStream(source)
     let tree = frontendParseTree(source)
     let ast = astParse(source)
@@ -52,7 +52,7 @@ pub fn selfhostPipelineSourceWithFixes(
         fixed = selfLintApplyFixes(source, linted)
     }
 
-    SelfhostPipelineReport {
+    ToolchainPipelineReport {
         tokens: frontLexTokenCount(stream),
         parseNodes: frontParseTreeNodeCount(tree),
         parseDiagnostics: frontParseTreeDiagnosticCount(tree),
@@ -69,7 +69,7 @@ pub fn selfhostPipelineSourceWithFixes(
         irEffectfulNodes: ir.effectfulNodes,
         irTerminalNodes: ir.terminalNodes,
         irInvalidScopes: ir.invalidScopes,
-        resolveSymbols: selfhostPipelineSymbolCount(resolved),
+        resolveSymbols: toolchainPipelineSymbolCount(resolved),
         resolveDiagnostics: selfResolveDiagnosticCount(resolved),
         checkDiagnostics: checked.errors,
         checkedExpressions: checked.accepted,
@@ -79,15 +79,15 @@ pub fn selfhostPipelineSourceWithFixes(
         lintFixApplied: fixed.applied,
         lintFixSkipped: fixed.skipped,
         fixedSource: fixed.source,
-        diagnostics: selfhostPipelineDiagnosticOutput(source, resolved, linted),
+        diagnostics: toolchainPipelineDiagnosticOutput(source, resolved, linted),
     }
 }
 
-pub fn selfhostPipelineBlockingErrorCount(report: SelfhostPipelineReport) -> Int {
+pub fn toolchainPipelineBlockingErrorCount(report: ToolchainPipelineReport) -> Int {
     report.parseDiagnostics + report.irDiagnostics + report.irInvalidParents + report.irInvalidScopes + report.resolveDiagnostics + report.checkDiagnostics + report.lintParseErrors
 }
 
-fn selfhostPipelineSymbolCount(result: SelfResolveResult) -> Int {
+fn toolchainPipelineSymbolCount(result: SelfResolveResult) -> Int {
     let mut count = 0
     for symbol in result.symbols {
         let _ = symbol
@@ -96,7 +96,7 @@ fn selfhostPipelineSymbolCount(result: SelfResolveResult) -> Int {
     count
 }
 
-fn selfhostPipelineDiagnosticOutput(
+fn toolchainPipelineDiagnosticOutput(
     source: String,
     resolved: SelfResolveResult,
     linted: SelfLintReport,

@@ -23,7 +23,7 @@ fixture를 명시적으로 분류해서, Go backend의 현재 동작과 LLVM bac
 | `examples/calc` | `front-end-only` | `check` pass, `test` fail | Package front-end baseline으로만 사용한다. 현재 `osty test`는 `expectError` error type mismatch로 실패한다. |
 | `examples/workspace` | `front-end-only` | `check` pass, root `build` pass | Workspace resolution/orchestration baseline이다. Root binary는 없다. |
 | `examples/stdlib-tour` | `future-runtime` | Not sampled in Phase 1 | stdlib runtime coverage가 늘어난 뒤 module별로 승격한다. |
-| `examples/selfhost-core` | `front-end-only` | Not sampled in Phase 1 | Self-hosting front-end baseline. LLVM 초기 executable gate에서 제외한다. |
+| `toolchain` | `front-end-only` | Not sampled in Phase 1 | Self-hosting front-end baseline. LLVM 초기 executable gate에서 제외한다. |
 | `word_freq.osty` | `future-runtime` | Not sampled in Phase 1 | Real-world candidate. Regex/fs/json/parallel 등 runtime dependency가 크다. |
 | `testdata/spec/positive/*.osty` | `front-end-only` | Existing spec corpus | Spec coverage용이다. 일부 파일은 library-shaped라 실행 gate로 쓰지 않는다. |
 | `testdata/spec/negative/reject.osty` | `front-end-only` | Existing reject corpus | Diagnostic reject 기준이다. Backend gate로 쓰지 않는다. |
@@ -85,7 +85,7 @@ Each fixture should be independently checkable as a single file and avoid:
 
 The Phase 10 skeleton behavior and the Phase 12-15 plus Phase 23-63 lowering
 behavior are mirrored in
-`examples/selfhost-core/llvmgen.osty` so the LLVM backend logic is authored in
+`toolchain/llvmgen.osty` so the LLVM backend logic is authored in
 Osty first. The Go `internal/llvmgen` package includes generated bridge code
 from that Osty source for module/function/skeleton rendering. A backend test
 transpiles the Osty emitter again and compares its
@@ -103,7 +103,7 @@ Phase 18 adds the first host toolchain driver for this path: supported smoke
 fixtures can now go through `clang` from textual `.ll` to object/binary on
 hosts with that toolchain installed. Phase 19 adds the first executable parity
 gate for the table above. The case list and expected stdout are owned by
-`examples/selfhost-core/llvmgen.osty` via `llvmSmokeExecutableCorpus`; the Go
+`toolchain/llvmgen.osty` via `llvmSmokeExecutableCorpus`; the Go
 test is only the host shim that runs the generated native binaries. The corpus
 still stays in `llvm-smoke` until CI policy promotes these gates to required
 jobs.
@@ -116,23 +116,23 @@ of Go-owned wording.
 Phase 21 extends that policy into a taxonomy for unsupported LLVM source
 shapes. The category codes and hints for source layout, type-system, statement,
 expression, control-flow, call, name, and function-signature failures are owned
-by `examples/selfhost-core/llvmgen.osty`; the Go bridge only detects the
+by `toolchain/llvmgen.osty`; the Go bridge only detects the
 current AST situation and asks the generated policy for the diagnostic summary.
 
 Phase 22 routes the successful scalar instruction builders through that same
 self-hosted core. The Go bootstrap bridge still walks the existing AST while the
 LLVM strings for return, println, arithmetic, comparison, calls, if branches,
 loads, stores, mutable locals, and range loops are emitted by generated
-functions from `examples/selfhost-core/llvmgen.osty`.
+functions from `toolchain/llvmgen.osty`.
 
 Phase 23 adds the first `String` vertical path without moving string semantics
-back into Go. `examples/selfhost-core/llvmgen.osty` owns the module-level string
+back into Go. `toolchain/llvmgen.osty` owns the module-level string
 constant shape, `printf` call, and the string smoke fixture entry. The Go
 bridge only classifies the AST literal as the current conservative subset:
 non-raw, non-triple, non-interpolated ASCII.
 
 Phase 24 expands that path to escaped ASCII strings while keeping the LLVM
-constant encoding self-hosted. `examples/selfhost-core/llvmgen.osty` now maps
+constant encoding self-hosted. `toolchain/llvmgen.osty` now maps
 newline, tab, carriage return, quote, and backslash into LLVM C-string escapes
 before appending the NUL terminator. The Go bridge still only rejects source
 outside the currently supported ASCII subset.

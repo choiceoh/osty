@@ -1,4 +1,8 @@
+<<<<<<<< HEAD:internal/docgen/frontend_adapter.go
 package docgen
+========
+package golegacy
+>>>>>>>> b3eba2c (Rename selfhost paths to toolchain and golegacy):internal/golegacy/adapter.go
 
 import (
 	"strconv"

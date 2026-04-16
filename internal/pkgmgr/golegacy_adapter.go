@@ -10,29 +10,29 @@ import (
 	hostsemver "github.com/osty/osty/internal/pkgmgr/semver"
 )
 
-// SelfhostRegistryCandidate is the Go-facing view of one registry index row
+// GolegacyRegistryCandidate is the Go-facing view of one registry index row
 // consumed by the Osty-authored package-manager core.
-type SelfhostRegistryCandidate struct {
+type GolegacyRegistryCandidate struct {
 	PackageName string
 	Version     string
 	Checksum    string
 	Yanked      bool
 }
 
-// SelfhostDepLookupItem is a host-facing import lookup row.
-type SelfhostDepLookupItem struct {
+// GolegacyDepLookupItem is a host-facing import lookup row.
+type GolegacyDepLookupItem struct {
 	Name   string
 	GitURL string
 }
 
-// SelfhostDepLookupDecision is the selected dependency alias for an import.
-type SelfhostDepLookupDecision struct {
+// GolegacyDepLookupDecision is the selected dependency alias for an import.
+type GolegacyDepLookupDecision struct {
 	Found bool
 	Name  string
 }
 
-// SelfhostResolveDecision is the adapter result for registry version choice.
-type SelfhostResolveDecision struct {
+// GolegacyResolveDecision is the adapter result for registry version choice.
+type GolegacyResolveDecision struct {
 	Found       bool
 	Name        string
 	PackageName string
@@ -43,10 +43,10 @@ type SelfhostResolveDecision struct {
 	Message     string
 }
 
-// SelfhostRegistryRequest is the transport-agnostic request metadata produced
+// GolegacyRegistryRequest is the transport-agnostic request metadata produced
 // by the Osty-authored registry protocol core. The host shim still performs
 // actual HTTP I/O.
-type SelfhostRegistryRequest struct {
+type GolegacyRegistryRequest struct {
 	Method        string
 	URL           string
 	Accept        string
@@ -56,97 +56,97 @@ type SelfhostRegistryRequest struct {
 	Metadata      string
 }
 
-// SelfhostMarshalLock renders l through the Osty-authored lockfile writer.
-func SelfhostMarshalLock(l *lockfile.Lock) ([]byte, error) {
-	pkgs, err := selfhostLockPackages(l)
+// GolegacyMarshalLock renders l through the Osty-authored lockfile writer.
+func GolegacyMarshalLock(l *lockfile.Lock) ([]byte, error) {
+	pkgs, err := golegacyLockPackages(l)
 	if err != nil {
 		return nil, err
 	}
 	return []byte(selfPkgMarshalLock(pkgs)), nil
 }
 
-// SelfhostDiffLock diffs two lockfiles through the Osty-authored diff core.
-func SelfhostDiffLock(old, new *lockfile.Lock) ([]LockfileChange, error) {
-	oldPkgs, err := selfhostLockPackages(old)
+// GolegacyDiffLock diffs two lockfiles through the Osty-authored diff core.
+func GolegacyDiffLock(old, new *lockfile.Lock) ([]LockfileChange, error) {
+	oldPkgs, err := golegacyLockPackages(old)
 	if err != nil {
 		return nil, err
 	}
-	newPkgs, err := selfhostLockPackages(new)
+	newPkgs, err := golegacyLockPackages(new)
 	if err != nil {
 		return nil, err
 	}
 	changes := selfPkgDiffLocks(selfPkgSortLockPackages(oldPkgs), selfPkgSortLockPackages(newPkgs))
 	out := make([]LockfileChange, 0, len(changes))
 	for _, c := range changes {
-		out = append(out, selfhostLockChange(c))
+		out = append(out, golegacyLockChange(c))
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }
 
-// SelfhostSelectRegistryCandidate chooses a registry dependency version using
+// GolegacySelectRegistryCandidate chooses a registry dependency version using
 // the Osty-authored resolver core.
-func SelfhostSelectRegistryCandidate(name, packageName, registryName, versionReq string, candidates []SelfhostRegistryCandidate, locked *lockfile.Lock) (SelfhostResolveDecision, error) {
-	req, err := selfhostReqFromString(versionReq)
+func GolegacySelectRegistryCandidate(name, packageName, registryName, versionReq string, candidates []GolegacyRegistryCandidate, locked *lockfile.Lock) (GolegacyResolveDecision, error) {
+	req, err := golegacyReqFromString(versionReq)
 	if err != nil {
-		return SelfhostResolveDecision{}, err
+		return GolegacyResolveDecision{}, err
 	}
-	lockPkgs, err := selfhostLockPackages(locked)
+	lockPkgs, err := golegacyLockPackages(locked)
 	if err != nil {
-		return SelfhostResolveDecision{}, err
+		return GolegacyResolveDecision{}, err
 	}
 	dep := selfPkgRegistryDependencyAs(name, packageName, registryName, req)
-	selfhostCandidates := make([]*SelfPkgCandidate, 0, len(candidates))
+	golegacyCandidates := make([]*SelfPkgCandidate, 0, len(candidates))
 	for _, c := range candidates {
-		v, err := selfhostVersionFromString(c.Version)
+		v, err := golegacyVersionFromString(c.Version)
 		if err != nil {
-			return SelfhostResolveDecision{}, fmt.Errorf("candidate %s@%s: %w", c.PackageName, c.Version, err)
+			return GolegacyResolveDecision{}, fmt.Errorf("candidate %s@%s: %w", c.PackageName, c.Version, err)
 		}
-		selfhostCandidates = append(selfhostCandidates, selfPkgCandidate(c.PackageName, v, c.Checksum, c.Yanked))
+		golegacyCandidates = append(golegacyCandidates, selfPkgCandidate(c.PackageName, v, c.Checksum, c.Yanked))
 	}
-	return selfhostResolveDecision(selfPkgSelectRegistryCandidate(dep, selfhostCandidates, lockPkgs)), nil
+	return golegacyResolveDecision(selfPkgSelectRegistryCandidate(dep, golegacyCandidates, lockPkgs)), nil
 }
 
-// SelfhostRegistryVersionsRequest builds the registry index request metadata.
-func SelfhostRegistryVersionsRequest(baseURL, name, token string) SelfhostRegistryRequest {
-	return selfhostRegistryRequest(selfPkgRegistryVersionsRequest(baseURL, name, token))
+// GolegacyRegistryVersionsRequest builds the registry index request metadata.
+func GolegacyRegistryVersionsRequest(baseURL, name, token string) GolegacyRegistryRequest {
+	return golegacyRegistryRequest(selfPkgRegistryVersionsRequest(baseURL, name, token))
 }
 
-// SelfhostRegistryTarballRequest builds the registry tarball request metadata.
-func SelfhostRegistryTarballRequest(baseURL, name, version, token string) SelfhostRegistryRequest {
-	return selfhostRegistryRequest(selfPkgRegistryTarballRequest(baseURL, name, version, token))
+// GolegacyRegistryTarballRequest builds the registry tarball request metadata.
+func GolegacyRegistryTarballRequest(baseURL, name, version, token string) GolegacyRegistryRequest {
+	return golegacyRegistryRequest(selfPkgRegistryTarballRequest(baseURL, name, version, token))
 }
 
-// SelfhostRegistryPublishRequest builds the registry publish request metadata.
-func SelfhostRegistryPublishRequest(baseURL, name, version, token, checksum, metadata string) SelfhostRegistryRequest {
-	return selfhostRegistryRequest(selfPkgRegistryPublishRequest(baseURL, name, version, token, checksum, metadata))
+// GolegacyRegistryPublishRequest builds the registry publish request metadata.
+func GolegacyRegistryPublishRequest(baseURL, name, version, token, checksum, metadata string) GolegacyRegistryRequest {
+	return golegacyRegistryRequest(selfPkgRegistryPublishRequest(baseURL, name, version, token, checksum, metadata))
 }
 
-// SelfhostRegistryYankRequest builds the yank / unyank request metadata.
-func SelfhostRegistryYankRequest(baseURL, name, version, token string, yanked bool) SelfhostRegistryRequest {
-	return selfhostRegistryRequest(selfPkgRegistryYankRequest(baseURL, name, version, token, yanked))
+// GolegacyRegistryYankRequest builds the yank / unyank request metadata.
+func GolegacyRegistryYankRequest(baseURL, name, version, token string, yanked bool) GolegacyRegistryRequest {
+	return golegacyRegistryRequest(selfPkgRegistryYankRequest(baseURL, name, version, token, yanked))
 }
 
-// SelfhostRankRegistryCandidates filters and sorts registry candidates through
+// GolegacyRankRegistryCandidates filters and sorts registry candidates through
 // the Osty-authored semver selection core.
-func SelfhostRankRegistryCandidates(name, packageName, registryName, versionReq string, candidates []SelfhostRegistryCandidate) ([]SelfhostRegistryCandidate, error) {
-	req, err := selfhostReqFromString(versionReq)
+func GolegacyRankRegistryCandidates(name, packageName, registryName, versionReq string, candidates []GolegacyRegistryCandidate) ([]GolegacyRegistryCandidate, error) {
+	req, err := golegacyReqFromString(versionReq)
 	if err != nil {
 		return nil, err
 	}
 	dep := selfPkgRegistryDependencyAs(name, packageName, registryName, req)
 	type ranked struct {
-		candidate SelfhostRegistryCandidate
+		candidate GolegacyRegistryCandidate
 		version   *SemVersion
 	}
 	out := make([]ranked, 0, len(candidates))
 	for _, c := range candidates {
-		v, err := selfhostVersionFromString(c.Version)
+		v, err := golegacyVersionFromString(c.Version)
 		if err != nil {
 			return nil, fmt.Errorf("candidate %s@%s: %w", c.PackageName, c.Version, err)
 		}
-		selfhostCandidate := selfPkgCandidate(c.PackageName, v, c.Checksum, c.Yanked)
-		if !selfPkgCandidateMatches(dep, selfhostCandidate) {
+		golegacyCandidate := selfPkgCandidate(c.PackageName, v, c.Checksum, c.Yanked)
+		if !selfPkgCandidateMatches(dep, golegacyCandidate) {
 			continue
 		}
 		out = append(out, ranked{candidate: c, version: v})
@@ -154,16 +154,16 @@ func SelfhostRankRegistryCandidates(name, packageName, registryName, versionReq 
 	sort.SliceStable(out, func(i, j int) bool {
 		return compareSemVersion(out[i].version, out[j].version) > 0
 	})
-	result := make([]SelfhostRegistryCandidate, 0, len(out))
+	result := make([]GolegacyRegistryCandidate, 0, len(out))
 	for _, r := range out {
 		result = append(result, r.candidate)
 	}
 	return result, nil
 }
 
-// SelfhostVerifyChecksum validates an already-computed checksum through the
+// GolegacyVerifyChecksum validates an already-computed checksum through the
 // Osty-authored package-manager policy.
-func SelfhostVerifyChecksum(want, got string) error {
+func GolegacyVerifyChecksum(want, got string) error {
 	check := selfPkgVerifyChecksum(want, got)
 	if check.ok {
 		return nil
@@ -171,39 +171,39 @@ func SelfhostVerifyChecksum(want, got string) error {
 	return fmt.Errorf("%s", check.message)
 }
 
-// SelfhostPathSourceURI renders the lockfile URI for a path dependency.
-func SelfhostPathSourceURI(path string) string {
+// GolegacyPathSourceURI renders the lockfile URI for a path dependency.
+func GolegacyPathSourceURI(path string) string {
 	return selfPkgSourceURI(selfPkgPathDependency("", path))
 }
 
-// SelfhostRegistrySourceURI renders the lockfile URI for a registry dependency.
-func SelfhostRegistrySourceURI(registryName string) string {
+// GolegacyRegistrySourceURI renders the lockfile URI for a registry dependency.
+func GolegacyRegistrySourceURI(registryName string) string {
 	return selfPkgSourceURI(selfPkgRegistryDependencyAs("", "", registryName, anySemReq()))
 }
 
-// SelfhostGitSourceURI renders the lockfile URI for a git dependency.
-func SelfhostGitSourceURI(url, tag, branch, rev string) string {
+// GolegacyGitSourceURI renders the lockfile URI for a git dependency.
+func GolegacyGitSourceURI(url, tag, branch, rev string) string {
 	return selfPkgGitURI(selfPkgGitRef(url, tag, branch, rev))
 }
 
-// SelfhostGitCheckoutRef returns the concrete git ref expression for a source.
-func SelfhostGitCheckoutRef(url, tag, branch, rev string) string {
+// GolegacyGitCheckoutRef returns the concrete git ref expression for a source.
+func GolegacyGitCheckoutRef(url, tag, branch, rev string) string {
 	return selfPkgGitCheckoutRef(selfPkgGitRef(url, tag, branch, rev))
 }
 
-// SelfhostSanitizeURL returns the cache-key-safe form of a URL.
-func SelfhostSanitizeURL(url string) string {
+// GolegacySanitizeURL returns the cache-key-safe form of a URL.
+func GolegacySanitizeURL(url string) string {
 	return selfPkgSanitizeURL(url)
 }
 
-// SelfhostNormalizeGitURL normalizes git URLs for import matching.
-func SelfhostNormalizeGitURL(url string) string {
+// GolegacyNormalizeGitURL normalizes git URLs for import matching.
+func GolegacyNormalizeGitURL(url string) string {
 	return selfPkgNormalizeGitURL(url)
 }
 
-// SelfhostLookupDependency maps an import path to a dependency alias through
+// GolegacyLookupDependency maps an import path to a dependency alias through
 // the Osty-authored dep-provider policy.
-func SelfhostLookupDependency(rawPath string, graphNodes, manifestDeps []SelfhostDepLookupItem) SelfhostDepLookupDecision {
+func GolegacyLookupDependency(rawPath string, graphNodes, manifestDeps []GolegacyDepLookupItem) GolegacyDepLookupDecision {
 	graph := make([]*SelfPkgDepLookupItem, 0, len(graphNodes))
 	for _, item := range graphNodes {
 		graph = append(graph, selfPkgDepLookupItem(item.Name, item.GitURL))
@@ -213,32 +213,32 @@ func SelfhostLookupDependency(rawPath string, graphNodes, manifestDeps []Selfhos
 		manifest = append(manifest, selfPkgDepLookupItem(item.Name, item.GitURL))
 	}
 	result := selfPkgLookupDependency(rawPath, graph, manifest)
-	return SelfhostDepLookupDecision{Found: result.found, Name: result.name}
+	return GolegacyDepLookupDecision{Found: result.found, Name: result.name}
 }
 
-// SelfhostTopoOrder returns a deterministic leaves-first graph order.
-func SelfhostTopoOrder(g *Graph) []string {
-	nodes := selfhostGraphNodes(g)
+// GolegacyTopoOrder returns a deterministic leaves-first graph order.
+func GolegacyTopoOrder(g *Graph) []string {
+	nodes := golegacyGraphNodes(g)
 	if len(nodes) == 0 {
 		return nil
 	}
 	return selfPkgTopoOrder(nodes)
 }
 
-// SelfhostLockFromGraph projects a resolved graph into an osty.lock through
+// GolegacyLockFromGraph projects a resolved graph into an osty.lock through
 // Osty-authored graph ordering and lock package data.
-func SelfhostLockFromGraph(g *Graph) (*lockfile.Lock, error) {
+func GolegacyLockFromGraph(g *Graph) (*lockfile.Lock, error) {
 	if g == nil {
 		return &lockfile.Lock{Version: lockfile.SchemaVersion}, nil
 	}
-	order := SelfhostTopoOrder(g)
+	order := GolegacyTopoOrder(g)
 	out := &lockfile.Lock{Version: lockfile.SchemaVersion}
 	for _, name := range order {
 		n := g.Nodes[name]
 		if n == nil || n.Fetched == nil {
 			continue
 		}
-		pkg, err := selfhostGraphLockPackage(g, n)
+		pkg, err := golegacyGraphLockPackage(g, n)
 		if err != nil {
 			return nil, err
 		}
@@ -247,7 +247,7 @@ func SelfhostLockFromGraph(g *Graph) (*lockfile.Lock, error) {
 	return out, nil
 }
 
-func selfhostGraphNodes(g *Graph) []*SelfPkgGraphNode {
+func golegacyGraphNodes(g *Graph) []*SelfPkgGraphNode {
 	if g == nil || len(g.Nodes) == 0 {
 		return nil
 	}
@@ -270,8 +270,8 @@ func selfhostGraphNodes(g *Graph) []*SelfPkgGraphNode {
 	return nodes
 }
 
-func selfhostGraphLockPackage(g *Graph, n *ResolvedNode) (lockfile.Package, error) {
-	v, err := selfhostVersionFromString(n.Fetched.Version)
+func golegacyGraphLockPackage(g *Graph, n *ResolvedNode) (lockfile.Package, error) {
+	v, err := golegacyVersionFromString(n.Fetched.Version)
 	if err != nil {
 		return lockfile.Package{}, fmt.Errorf("graph package %s version %q: %w", n.Name, n.Fetched.Version, err)
 	}
@@ -281,7 +281,7 @@ func selfhostGraphLockPackage(g *Graph, n *ResolvedNode) (lockfile.Package, erro
 		if child == nil || child.Fetched == nil {
 			continue
 		}
-		dv, err := selfhostVersionFromString(child.Fetched.Version)
+		dv, err := golegacyVersionFromString(child.Fetched.Version)
 		if err != nil {
 			return lockfile.Package{}, fmt.Errorf("graph dependency %s version %q: %w", name, child.Fetched.Version, err)
 		}
@@ -292,10 +292,10 @@ func selfhostGraphLockPackage(g *Graph, n *ResolvedNode) (lockfile.Package, erro
 		source = n.Source.URI()
 	}
 	pkg := selfPkgLockPackage(n.Name, v, source, n.Fetched.Checksum, deps)
-	return selfhostLockfilePackage(pkg), nil
+	return golegacyLockfilePackage(pkg), nil
 }
 
-func selfhostLockfilePackage(pkg *SelfPkgLockPackage) lockfile.Package {
+func golegacyLockfilePackage(pkg *SelfPkgLockPackage) lockfile.Package {
 	out := lockfile.Package{
 		Name:     pkg.name,
 		Version:  semVersionText(pkg.version),
@@ -312,19 +312,19 @@ func selfhostLockfilePackage(pkg *SelfPkgLockPackage) lockfile.Package {
 	return out
 }
 
-func selfhostLockPackages(l *lockfile.Lock) ([]*SelfPkgLockPackage, error) {
+func golegacyLockPackages(l *lockfile.Lock) ([]*SelfPkgLockPackage, error) {
 	if l == nil {
 		return nil, nil
 	}
 	out := make([]*SelfPkgLockPackage, 0, len(l.Packages))
 	for _, p := range l.Packages {
-		v, err := selfhostVersionFromString(p.Version)
+		v, err := golegacyVersionFromString(p.Version)
 		if err != nil {
 			return nil, fmt.Errorf("lock package %s version %q: %w", p.Name, p.Version, err)
 		}
 		deps := make([]*SelfPkgLockDependency, 0, len(p.Dependencies))
 		for _, d := range p.Dependencies {
-			dv, err := selfhostVersionFromString(d.Version)
+			dv, err := golegacyVersionFromString(d.Version)
 			if err != nil {
 				return nil, fmt.Errorf("lock dependency %s version %q: %w", d.Name, d.Version, err)
 			}
@@ -335,24 +335,24 @@ func selfhostLockPackages(l *lockfile.Lock) ([]*SelfPkgLockPackage, error) {
 	return out, nil
 }
 
-func selfhostVersionFromString(s string) (*SemVersion, error) {
+func golegacyVersionFromString(s string) (*SemVersion, error) {
 	v, err := hostsemver.ParseVersion(s)
 	if err != nil {
 		return nil, err
 	}
-	return selfhostVersion(v)
+	return golegacyVersion(v)
 }
 
-func selfhostVersion(v hostsemver.Version) (*SemVersion, error) {
+func golegacyVersion(v hostsemver.Version) (*SemVersion, error) {
 	if v.Major > math.MaxInt || v.Minor > math.MaxInt || v.Patch > math.MaxInt {
 		return nil, fmt.Errorf("version component exceeds Osty Int range")
 	}
 	if len(v.Pre) > 3 {
-		return nil, fmt.Errorf("selfhost SemVersion supports at most 3 pre-release identifiers")
+		return nil, fmt.Errorf("golegacy SemVersion supports at most 3 pre-release identifiers")
 	}
 	pre := []SemPreIdent{preNone(), preNone(), preNone()}
 	for i, item := range v.Pre {
-		ident, err := selfhostPreIdent(item)
+		ident, err := golegacyPreIdent(item)
 		if err != nil {
 			return nil, err
 		}
@@ -368,7 +368,7 @@ func selfhostVersion(v hostsemver.Version) (*SemVersion, error) {
 	return semVersion(int(v.Major), int(v.Minor), int(v.Patch), pre[0], pre[1], pre[2], build), nil
 }
 
-func selfhostPreIdent(s string) (SemPreIdent, error) {
+func golegacyPreIdent(s string) (SemPreIdent, error) {
 	n, err := strconv.ParseInt(s, 10, 0)
 	if err == nil {
 		return preNumber(int(n)), nil
@@ -376,7 +376,7 @@ func selfhostPreIdent(s string) (SemPreIdent, error) {
 	return preText(s), nil
 }
 
-func selfhostReqFromString(raw string) (*SemReq, error) {
+func golegacyReqFromString(raw string) (*SemReq, error) {
 	req, err := hostsemver.ParseReq(raw)
 	if err != nil {
 		return nil, err
@@ -387,16 +387,16 @@ func selfhostReqFromString(raw string) (*SemReq, error) {
 		if c.V.IsPrerelease() {
 			allowPre = true
 		}
-		v, err := selfhostVersion(c.V)
+		v, err := golegacyVersion(c.V)
 		if err != nil {
 			return nil, err
 		}
-		clauses = append(clauses, reqClause(selfhostReqOp(int(c.Op)), v))
+		clauses = append(clauses, reqClause(golegacyReqOp(int(c.Op)), v))
 	}
 	return semReq(allowPre, clauses), nil
 }
 
-func selfhostReqOp(op int) SemReqOp {
+func golegacyReqOp(op int) SemReqOp {
 	switch op {
 	case 0:
 		return SemReqOp(&SemReqOp_ReqEQ{})
@@ -413,7 +413,7 @@ func selfhostReqOp(op int) SemReqOp {
 	}
 }
 
-func selfhostLockChange(c *SelfPkgLockChange) LockfileChange {
+func golegacyLockChange(c *SelfPkgLockChange) LockfileChange {
 	out := LockfileChange{
 		Name:       c.name,
 		OldVersion: semVersionText(c.oldVersion),
@@ -442,8 +442,8 @@ func selfhostLockChange(c *SelfPkgLockChange) LockfileChange {
 	return out
 }
 
-func selfhostResolveDecision(d *SelfPkgResolveDecision) SelfhostResolveDecision {
-	return SelfhostResolveDecision{
+func golegacyResolveDecision(d *SelfPkgResolveDecision) GolegacyResolveDecision {
+	return GolegacyResolveDecision{
 		Found:       d.found,
 		Name:        d.name,
 		PackageName: d.packageName,
@@ -455,8 +455,8 @@ func selfhostResolveDecision(d *SelfPkgResolveDecision) SelfhostResolveDecision 
 	}
 }
 
-func selfhostRegistryRequest(r *SelfPkgRegistryRequest) SelfhostRegistryRequest {
-	return SelfhostRegistryRequest{
+func golegacyRegistryRequest(r *SelfPkgRegistryRequest) GolegacyRegistryRequest {
+	return GolegacyRegistryRequest{
 		Method:        r.method,
 		URL:           r.url,
 		Accept:        r.accept,

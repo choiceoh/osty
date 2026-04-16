@@ -31,7 +31,7 @@ func ParseDiagnostics(src []byte, path string) (*Manifest, []*diag.Diagnostic) {
 
 // Validate runs semantic checks over a parsed Manifest and returns
 // diagnostic-encoded violations. The semantic decisions are generated
-// from examples/selfhost-core/manifest_validation.osty; this Go layer
+// from toolchain/manifest_validation.osty; this Go layer
 // only maps the host Manifest shape into the self-hosted data model and
 // wraps self-hosted diagnostic specs in the toolchain diagnostic type.
 func Validate(m *Manifest) []*diag.Diagnostic {
