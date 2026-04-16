@@ -658,8 +658,8 @@ func (g *generator) emitPrintlnString(lit *ast.StringLit) error {
 	if !ok {
 		return unsupported("expression", "interpolated String literals are not supported by LLVM println")
 	}
-	if !isLLVMPlainCStringText(text) {
-		return unsupported("type-system", "plain String literals currently require printable ASCII without quotes, backslashes, or control characters")
+	if !isLLVMASCIIStringText(text) {
+		return unsupported("type-system", "plain String literals currently require ASCII text with printable bytes or newline, tab, and carriage-return escapes")
 	}
 	emitter := g.toOstyEmitter()
 	line := llvmStringLiteralLine(emitter, text)
@@ -1002,10 +1002,14 @@ func plainStringLiteral(lit *ast.StringLit) (string, bool) {
 	return b.String(), true
 }
 
-func isLLVMPlainCStringText(text string) bool {
+func isLLVMASCIIStringText(text string) bool {
 	for i := 0; i < len(text); i++ {
 		ch := text[i]
-		if ch < 0x20 || ch > 0x7e || ch == '"' || ch == '\\' {
+		switch ch {
+		case '\n', '\t', '\r':
+			continue
+		}
+		if ch < 0x20 || ch > 0x7e {
 			return false
 		}
 	}
