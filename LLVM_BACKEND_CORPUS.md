@@ -48,9 +48,10 @@ Each fixture should be independently checkable as a single file and avoid:
 | `testdata/backend/llvm_smoke/control_flow.osty` | `15\n` | Phase 14 LLVM IR: mutable local, inclusive range loop, accumulator update |
 | `testdata/backend/llvm_smoke/booleans.osty` | `7\n` | Phase 15 LLVM IR: Bool comparison, logical not/and, value-position if/else, phi |
 | `testdata/backend/llvm_smoke/string_print.osty` | `hello, osty\n` | Phase 23 LLVM IR: plain printable-ASCII `String` literal through `println` and module string constants |
+| `testdata/backend/llvm_smoke/string_escape_print.osty` | `line one\nquote " slash \\\n` | Phase 24 LLVM IR: escaped ASCII `String` literal through Osty-owned LLVM C-string encoding |
 
-The Phase 10 skeleton behavior and the Phase 12-15 plus Phase 23 lowering behavior are
-mirrored in
+The Phase 10 skeleton behavior and the Phase 12-15 plus Phase 23-24 lowering
+behavior are mirrored in
 `examples/selfhost-core/llvmgen.osty` so the LLVM backend logic is authored in
 Osty first. The Go `internal/llvmgen` package includes generated bridge code
 from that Osty source for module/function/skeleton rendering. A backend test
@@ -97,6 +98,12 @@ constant shape, newline terminator, `printf(ptr @.strN)` call, and the string
 smoke fixture entry. The Go bridge only classifies the AST literal as the
 current conservative subset: non-raw, non-triple, non-interpolated printable
 ASCII without quotes, backslashes, or control characters.
+
+Phase 24 expands that path to escaped ASCII strings while keeping the LLVM
+constant encoding self-hosted. `examples/selfhost-core/llvmgen.osty` now maps
+newline, tab, carriage return, quote, and backslash into LLVM C-string escapes
+before appending the `println` newline and NUL terminator. The Go bridge still
+only rejects source outside the currently supported ASCII subset.
 
 ## Promotion Rules
 

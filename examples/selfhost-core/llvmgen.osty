@@ -33,6 +33,11 @@ pub struct LlvmStringGlobal {
     pub byteLen: Int,
 }
 
+pub struct LlvmCString {
+    pub encoded: String,
+    pub byteLen: Int,
+}
+
 pub struct LlvmEmitter {
     pub temp: Int,
     pub label: Int,
@@ -223,10 +228,37 @@ pub fn llvmPrintlnI64(emitter: LlvmEmitter, value: LlvmValue) {
 pub fn llvmStringLiteralLine(emitter: LlvmEmitter, text: String) -> LlvmValue {
     let name = "@.str{emitter.stringId}"
     emitter.stringId = emitter.stringId + 1
-    let encoded = "{text}\\0A\\00"
-    let byteLen = llvmStrings.Split(text, "").len() + 2
-    emitter.stringGlobals.push(LlvmStringGlobal { name, encoded, byteLen })
+    let cstring = llvmCStringLine(text)
+    emitter.stringGlobals.push(
+        LlvmStringGlobal { name, encoded: cstring.encoded, byteLen: cstring.byteLen },
+    )
     LlvmValue { typ: "ptr", name, pointer: false }
+}
+
+pub fn llvmCStringLine(text: String) -> LlvmCString {
+    let encoded = "{llvmCStringEscape(text)}\\0A\\00"
+    let byteLen = llvmStrings.Split(text, "").len() + 2
+    LlvmCString { encoded, byteLen }
+}
+
+pub fn llvmCStringEscape(text: String) -> String {
+    let mut encoded = ""
+    for unit in llvmStrings.Split(text, "") {
+        if unit == "\n" {
+            encoded = "{encoded}\\0A"
+        } else if unit == "\t" {
+            encoded = "{encoded}\\09"
+        } else if unit == "\r" {
+            encoded = "{encoded}\\0D"
+        } else if unit == "\"" {
+            encoded = "{encoded}\\22"
+        } else if unit == "\\" {
+            encoded = "{encoded}\\5C"
+        } else {
+            encoded = "{encoded}{unit}"
+        }
+    }
+    encoded
 }
 
 pub fn llvmPrintlnString(emitter: LlvmEmitter, value: LlvmValue) {
@@ -637,6 +669,11 @@ pub fn llvmSmokeExecutableCorpus() -> List<LlvmSmokeExecutableCase> {
             fixture: "string_print.osty",
             stdout: "hello, osty\n",
         },
+        LlvmSmokeExecutableCase {
+            name: "string-escape",
+            fixture: "string_escape_print.osty",
+            stdout: "line one\nquote \" slash \\\n",
+        },
     ]
 }
 
@@ -756,6 +793,22 @@ pub fn llvmSmokeBooleansIR(sourcePath: String) -> String {
 pub fn llvmSmokeStringPrintIR(sourcePath: String) -> String {
     let main = llvmEmitter()
     let line = llvmStringLiteralLine(main, "hello, osty")
+    llvmPrintlnString(main, line)
+    llvmReturnI32Zero(main)
+
+    llvmRenderModuleWithGlobals(
+        sourcePath,
+        "",
+        main.stringGlobals,
+        [
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+pub fn llvmSmokeStringEscapeIR(sourcePath: String) -> String {
+    let main = llvmEmitter()
+    let line = llvmStringLiteralLine(main, "line one\nquote \" slash \\")
     llvmPrintlnString(main, line)
     llvmReturnI32Zero(main)
 

@@ -227,7 +227,7 @@ newline-separated `else`.
 - `-o PATH` / `--out PATH` — write Go source to `PATH` instead of stdout
 - `--package NAME` — Go package clause for the emitted file (default: `main`)
 - `--backend NAME` — code generation backend (`go` or `llvm`; default: `go`;
-  `llvm` emits textual `.ll` for the early scalar/control-flow/plain-string
+  `llvm` emits textual `.ll` for the early scalar/control-flow/plain/escaped-string
   subset and falls back to an inspectable skeleton for unsupported shapes with
   Osty-authored instruction builders and category diagnostics)
 - `--emit MODE` — requested text artifact. `go` emits Go source for the Go
@@ -291,7 +291,7 @@ creating a new one.
 `build` / `run` / `test` backend flags (after the subcommand):
 
 - `--backend NAME` — code generation backend (`go` or `llvm`; default: `go`;
-  `llvm` can write textual IR for the early scalar/control-flow/plain-string
+  `llvm` can write textual IR for the early scalar/control-flow/plain/escaped-string
   subset and, when `clang` is available, drive object/binary emission for
   supported programs; unsupported shapes still prepare skeleton artifacts and report the
   missing lowering through categorized diagnostics generated from the Osty

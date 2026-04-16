@@ -280,6 +280,10 @@ The initial helper package for this plan is `internal/backend`.
     constant and `printf(ptr @.strN)` call, and the executable smoke corpus now
     includes `string_print.osty`. The Go bridge only filters literals to the
     current conservative subset before calling generated Osty helpers.
+25. Add escaped ASCII String constants through the self-hosted core. Done in
+    Phase 24: `examples/selfhost-core/llvmgen.osty` owns newline, tab,
+    carriage-return, quote, and backslash encoding for LLVM C strings, and the
+    smoke corpus now includes `string_escape_print.osty`.
 
 The backend subdirectory change should land before the LLVM backend writes any
 files, so LLVM never shares the old Go-only output location.
