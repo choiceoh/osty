@@ -171,3 +171,43 @@ fn main() {
 		}
 	}
 }
+
+func TestGenerateManagedAggregateListsTraceNestedRoots(t *testing.T) {
+	file := parseLLVMGenFile(t, `use runtime.strings as strings {
+    fn Split(s: String, sep: String) -> List<String>
+}
+
+struct Bucket {
+    items: List<String>
+}
+
+fn main() {
+    let buckets = [
+        Bucket { items: strings.Split("gc,llvm", ",") },
+    ]
+    for bucket in buckets {
+        println(bucket.items.len())
+    }
+}
+`)
+
+	ir, err := Generate(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/managed_aggregate_list_gc.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"declare void @osty_rt_list_push_bytes_roots_v1(ptr, ptr, i64, ptr, i64)",
+		"call void @osty_rt_list_push_bytes_roots_v1(",
+		"getelementptr inbounds %Bucket, ptr null, i32 0, i32 0",
+		"call void @osty_rt_list_get_bytes_v1(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}

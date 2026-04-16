@@ -9,7 +9,10 @@ import (
 	"testing"
 
 	"github.com/osty/osty/internal/ast"
+	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/parser"
+	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/stdlib"
 )
 
 type compileCall struct {
@@ -57,7 +60,7 @@ func (f *fakeLLVMToolchain) LinkBinary(_ context.Context, objectPaths []string, 
 	return nil
 }
 
-func parseBackendFile(t *testing.T, src string) *ast.File {
+func parseBackendFile(t *testing.T, src string) (*ast.File, *resolve.Result, *check.Result) {
 	t.Helper()
 
 	file, diags := parser.ParseDiagnostics([]byte(src))
@@ -67,24 +70,40 @@ func parseBackendFile(t *testing.T, src string) *ast.File {
 	if file == nil {
 		t.Fatal("ParseDiagnostics returned nil file")
 	}
-	return file
+	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
+	reg := stdlib.LoadCached()
+	chk := check.File(file, res, check.Opts{
+		UseGolegacy:   true,
+		Stdlib:        reg,
+		Primitives:    reg.Primitives,
+		ResultMethods: reg.ResultMethods,
+		Source:        []byte(src),
+	})
+	return file, res, chk
 }
 
 func newBackendRequest(t *testing.T, emit EmitMode, src string) Request {
 	t.Helper()
 
 	root := t.TempDir()
+	file, res, chk := parseBackendFile(t, src)
+	entry, err := PrepareEntry(
+		"main",
+		filepath.Join(root, "main.osty"),
+		file,
+		res,
+		chk,
+	)
+	if err != nil {
+		t.Fatalf("PrepareEntry returned error: %v", err)
+	}
 	return Request{
 		Layout: Layout{
 			Root:    root,
 			Profile: "debug",
 		},
-		Emit: emit,
-		Entry: Entry{
-			PackageName: "main",
-			SourcePath:  filepath.Join(root, "main.osty"),
-			File:        parseBackendFile(t, src),
-		},
+		Emit:       emit,
+		Entry:      entry,
 		BinaryName: "app",
 	}
 }
@@ -131,6 +150,9 @@ func TestLLVMBackendEmitBinaryBuildsBundledRuntime(t *testing.T) {
 		"osty_rt_list_new",
 		"osty_rt_map_new",
 		"osty_rt_set_new",
+		"osty_rt_list_push_bytes_v1",
+		"osty_rt_list_push_bytes_roots_v1",
+		"osty_rt_list_get_bytes_v1",
 		"osty_rt_strings_Equal",
 		"osty.gc.pre_write_v1",
 		"osty.gc.load_v1",
@@ -180,6 +202,37 @@ func TestLLVMBackendEmitLLVMIRSkipsToolchain(t *testing.T) {
 	}
 	if _, err := os.Stat(result.Artifacts.RuntimeDir); err != nil {
 		t.Fatalf("runtime dir %q missing: %v", result.Artifacts.RuntimeDir, err)
+	}
+}
+
+func TestLLVMBackendEmitLLVMIRFromIRWithoutASTFallback(t *testing.T) {
+	tc := &fakeLLVMToolchain{}
+	backend := LLVMBackend{toolchain: tc}
+	req := newBackendRequest(t, EmitLLVMIR, `fn main() {
+    let mut i = 0
+    for i < 2 {
+        println(i)
+        i = i + 1
+    }
+}
+`)
+	req.Entry.File = nil
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error with IR-only entry: %v", err)
+	}
+	if result == nil {
+		t.Fatal("Emit returned nil result")
+	}
+	data, readErr := os.ReadFile(result.Artifacts.LLVMIR)
+	if readErr != nil {
+		t.Fatalf("ReadFile(%q): %v", result.Artifacts.LLVMIR, readErr)
+	}
+	for _, want := range []string{"for.cond", "@printf"} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("IR-only backend output missing %q:\n%s", want, data)
+		}
 	}
 }
 
@@ -373,6 +426,33 @@ fn main() {
 		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
 	}
 	if got, want := string(output), "3\n"; got != want {
+		t.Fatalf("binary stdout = %q, want %q", got, want)
+	}
+}
+
+func TestLLVMBackendBinaryRunsBitwiseIntOps(t *testing.T) {
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
+
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitBinary, `fn main() {
+    println(~-43)
+    println((1 << 5) | (1 << 3) | 2)
+    println((255 >> 2) ^ 21)
+    println(58 & 43)
+}
+`)
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	output, err := exec.Command(result.Artifacts.Binary).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
+	}
+	if got, want := string(output), "42\n42\n42\n42\n"; got != want {
 		t.Fatalf("binary stdout = %q, want %q", got, want)
 	}
 }

@@ -49,19 +49,36 @@ func (b LLVMBackend) Emit(ctx context.Context, req Request) (*Result, error) {
 	if artifacts.LLVMIR == "" {
 		return nil, fmt.Errorf("llvm backend: missing LLVM IR artifact path")
 	}
-	ir, genErr := llvmgen.Generate(req.Entry.File, llvmgen.Options{
+	if req.Entry.IR == nil {
+		return nil, fmt.Errorf("llvm backend: missing lowered IR entry")
+	}
+	opts := llvmgen.Options{
 		PackageName: req.Entry.PackageName,
 		SourcePath:  req.Entry.SourcePath,
 		Target:      req.Layout.Target,
-	})
+	}
+	irOut, genErr := llvmgen.GenerateModule(req.Entry.IR, opts)
+	var fallbackWarning error
+	if genErr != nil && req.Entry.File != nil && errors.Is(genErr, llvmgen.ErrUnsupported) {
+		bridgeErr := genErr
+		irOut, genErr = llvmgen.Generate(req.Entry.File, opts)
+		if genErr == nil {
+			fallbackWarning = fmt.Errorf("llvm backend: fell back to legacy AST bridge after IR lowering gap: %w", bridgeErr)
+		}
+	}
 	if genErr == nil {
-		if err := os.WriteFile(artifacts.LLVMIR, ir, 0o644); err != nil {
+		if err := os.WriteFile(artifacts.LLVMIR, irOut, 0o644); err != nil {
 			return nil, err
+		}
+		warnings := append([]error(nil), req.Entry.IRIssues...)
+		if fallbackWarning != nil {
+			warnings = append(warnings, fallbackWarning)
 		}
 		out := &Result{
 			Backend:   NameLLVM,
 			Emit:      req.Emit,
 			Artifacts: artifacts,
+			Warnings:  warnings,
 		}
 		if !llvmgen.NeedsObjectArtifact(req.Emit.String()) {
 			return out, nil
@@ -105,7 +122,11 @@ func (b LLVMBackend) Emit(ctx context.Context, req Request) (*Result, error) {
 		Backend:   NameLLVM,
 		Emit:      req.Emit,
 		Artifacts: artifacts,
-		Warnings:  []error{errors.New(llvmgen.UnsupportedSummary(diag)), ErrLLVMNotImplemented},
+		Warnings: append(
+			append([]error(nil), req.Entry.IRIssues...),
+			errors.New(llvmgen.UnsupportedSummary(diag)),
+			ErrLLVMNotImplemented,
+		),
 	}, ErrLLVMNotImplemented
 }
 

@@ -8,6 +8,7 @@ import (
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/check"
+	"github.com/osty/osty/internal/ir"
 	"github.com/osty/osty/internal/resolve"
 )
 
@@ -117,6 +118,8 @@ type Entry struct {
 	File        *ast.File
 	Resolve     *resolve.Result
 	Check       *check.Result
+	IR          *ir.Module
+	IRIssues    []error
 }
 
 // Request is the backend-neutral build request shared by gen/build/run/test

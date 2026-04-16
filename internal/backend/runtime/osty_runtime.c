@@ -28,6 +28,9 @@ typedef struct osty_rt_list {
     int64_t cap;
     size_t elem_size;
     osty_rt_trace_slot_fn trace_elem;
+    bool pointer_elems;
+    int64_t gc_offset_count;
+    int64_t *gc_offsets;
     unsigned char *data;
 } osty_rt_list;
 
@@ -203,18 +206,46 @@ bool osty_rt_set_insert_i64(void *raw_set, int64_t item);
 static void osty_rt_list_trace(void *payload) {
     osty_rt_list *list = (osty_rt_list *)payload;
     int64_t i;
+    int64_t j;
 
-    if (list == NULL || list->trace_elem == NULL || list->data == NULL) {
+    if (list == NULL || list->data == NULL) {
+        return;
+    }
+    if (list->trace_elem != NULL) {
+        for (i = 0; i < list->len; i++) {
+            list->trace_elem((void *)(list->data + ((size_t)i * list->elem_size)));
+        }
+        return;
+    }
+    if (list->pointer_elems) {
+        for (i = 0; i < list->len; i++) {
+            void *child = NULL;
+            memcpy(&child, list->data + ((size_t)i * list->elem_size), sizeof(child));
+            if (child != NULL) {
+                osty_gc_mark_payload(child);
+            }
+        }
+        return;
+    }
+    if (list->gc_offset_count <= 0 || list->gc_offsets == NULL) {
         return;
     }
     for (i = 0; i < list->len; i++) {
-        list->trace_elem((void *)(list->data + ((size_t)i * list->elem_size)));
+        unsigned char *elem = list->data + ((size_t)i * list->elem_size);
+        for (j = 0; j < list->gc_offset_count; j++) {
+            void *child = NULL;
+            memcpy(&child, elem + (size_t)list->gc_offsets[j], sizeof(child));
+            if (child != NULL) {
+                osty_gc_mark_payload(child);
+            }
+        }
     }
 }
 
 static void osty_rt_list_destroy(void *payload) {
     osty_rt_list *list = (osty_rt_list *)payload;
     if (list != NULL) {
+        free(list->gc_offsets);
         free(list->data);
     }
 }
@@ -400,6 +431,51 @@ static void osty_rt_list_ensure_layout(osty_rt_list *list, size_t elem_size, ost
     }
 }
 
+static void osty_rt_list_ensure_gc_offsets(osty_rt_list *list, const int64_t *gc_offsets, int64_t gc_offset_count) {
+    int64_t i;
+
+    if (gc_offset_count < 0) {
+        osty_rt_abort("negative list GC offset count");
+    }
+    if (gc_offset_count == 0) {
+        if (list->gc_offset_count != 0) {
+            osty_rt_abort("list GC offset count mismatch");
+        }
+        return;
+    }
+    if (gc_offsets == NULL) {
+        osty_rt_abort("list GC offsets pointer is null");
+    }
+    if (list->pointer_elems) {
+        osty_rt_abort("list pointer elements cannot also use GC offsets");
+    }
+    if (list->elem_size < sizeof(void *)) {
+        osty_rt_abort("list element size too small for GC offsets");
+    }
+    if (list->gc_offset_count == 0) {
+        list->gc_offsets = (int64_t *)malloc((size_t)gc_offset_count * sizeof(int64_t));
+        if (list->gc_offsets == NULL) {
+            osty_rt_abort("out of memory");
+        }
+        for (i = 0; i < gc_offset_count; i++) {
+            if (gc_offsets[i] < 0 || (size_t)gc_offsets[i] > list->elem_size - sizeof(void *)) {
+                osty_rt_abort("list GC offset out of range");
+            }
+            list->gc_offsets[i] = gc_offsets[i];
+        }
+        list->gc_offset_count = gc_offset_count;
+        return;
+    }
+    if (list->gc_offset_count != gc_offset_count) {
+        osty_rt_abort("list GC offset count mismatch");
+    }
+    for (i = 0; i < gc_offset_count; i++) {
+        if (list->gc_offsets[i] != gc_offsets[i]) {
+            osty_rt_abort("list GC offsets mismatch");
+        }
+    }
+}
+
 static void osty_rt_list_reserve(osty_rt_list *list, int64_t min_cap) {
     int64_t next_cap = list->cap;
     void *next_data;
@@ -497,6 +573,38 @@ void osty_rt_list_push_bytes(void *raw_list, const void *value, int64_t elem_siz
     osty_rt_list_push_raw(raw_list, value, (size_t)elem_size, trace_elem);
 }
 
+void osty_rt_list_push_bytes_v1(void *raw_list, const void *value, int64_t elem_size) {
+    osty_rt_list *list;
+
+    if (elem_size < 0) {
+        osty_rt_abort("negative list element size");
+    }
+    list = osty_rt_list_cast(raw_list);
+    osty_rt_list_ensure_layout(list, (size_t)elem_size, NULL);
+    osty_rt_list_ensure_gc_offsets(list, NULL, 0);
+    osty_rt_list_push_bytes(raw_list, value, (size_t)elem_size, NULL);
+}
+
+void osty_rt_list_push_bytes_roots_v1(void *raw_list, const void *value, int64_t elem_size, const int64_t *gc_offsets, int64_t gc_offset_count) {
+    osty_rt_list *list;
+    int64_t i;
+
+    if (elem_size < 0) {
+        osty_rt_abort("negative list element size");
+    }
+    list = osty_rt_list_cast(raw_list);
+    osty_rt_list_ensure_layout(list, (size_t)elem_size, NULL);
+    osty_rt_list_ensure_gc_offsets(list, gc_offsets, gc_offset_count);
+    osty_rt_list_push_bytes(raw_list, value, (size_t)elem_size, NULL);
+    for (i = 0; i < gc_offset_count; i++) {
+        void *child = NULL;
+        memcpy(&child, ((const unsigned char *)value) + (size_t)gc_offsets[i], sizeof(child));
+        if (child != NULL) {
+            osty_gc_post_write_v1(raw_list, child, OSTY_GC_KIND_LIST);
+        }
+    }
+}
+
 int64_t osty_rt_list_get_i64(void *raw_list, int64_t index) {
     int64_t value;
     memcpy(&value, osty_rt_list_get_raw(raw_list, index, sizeof(value), NULL), sizeof(value));
@@ -526,6 +634,16 @@ void osty_rt_list_get_bytes(void *raw_list, int64_t index, void *out_value, int6
         osty_rt_abort("invalid list get_bytes call");
     }
     memcpy(out_value, osty_rt_list_get_raw(raw_list, index, (size_t)elem_size, trace_elem), (size_t)elem_size);
+}
+
+void osty_rt_list_get_bytes_v1(void *raw_list, int64_t index, void *out, int64_t elem_size) {
+    if (out == NULL) {
+        osty_rt_abort("list output buffer is null");
+    }
+    if (elem_size < 0) {
+        osty_rt_abort("negative list element size");
+    }
+    osty_rt_list_get_bytes(raw_list, index, out, elem_size, NULL);
 }
 
 void osty_rt_list_set_i64(void *raw_list, int64_t index, int64_t value) {

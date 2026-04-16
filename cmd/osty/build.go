@@ -455,20 +455,19 @@ func emitAndBuild(root string, m *manifest.Manifest, pkg *resolve.Package, pr *r
 		}
 	}
 	selectedBackend := backendFromCLI("build", backendID)
+	entry, err := backend.PrepareEntry("main", entryAbs, entryFile.File, res, chk)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "osty build: %v\n", err)
+		os.Exit(1)
+	}
 	emitResult, err := selectedBackend.Emit(context.Background(), backend.Request{
 		Layout: backend.Layout{
 			Root:    root,
 			Profile: profileName,
 			Target:  triple,
 		},
-		Emit: emitMode,
-		Entry: backend.Entry{
-			PackageName: "main",
-			SourcePath:  entryAbs,
-			File:        entryFile.File,
-			Resolve:     res,
-			Check:       chk,
-		},
+		Emit:       emitMode,
+		Entry:      entry,
 		BinaryName: binName,
 		Features:   resolved.Features,
 	})
