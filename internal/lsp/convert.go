@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/osty/osty/internal/diag"
-	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/token"
 )
 
@@ -22,7 +21,7 @@ type lineIndex struct {
 // Accepts LF, CRLF, and CR line terminators for robustness, though
 // Osty sources are expected to be LF-only.
 func newLineIndex(src []byte) *lineIndex {
-	return &lineIndex{src: src, lines: selfhost.LSPLineStarts(src)}
+	return &lineIndex{src: src, lines: LSPLineStarts(src)}
 }
 
 // ostyToLSP converts an Osty position (1-based line, 1-based rune
@@ -30,7 +29,7 @@ func newLineIndex(src []byte) *lineIndex {
 // code-unit character). Positions past EOF clamp to EOF; positions
 // inside invalid UTF-8 degrade to the best-effort character count.
 func (li *lineIndex) ostyToLSP(p token.Pos) Position {
-	pos := selfhost.LSPOstyPositionToLSP(li.src, li.lines, p.Line, p.Offset)
+	pos := LSPOstyPositionToLSP(li.src, li.lines, p.Line, p.Offset)
 	return Position{Line: pos.Line, Character: pos.Character}
 }
 
@@ -38,7 +37,7 @@ func (li *lineIndex) ostyToLSP(p token.Pos) Position {
 // returned Offset/Line/Column are consistent with what the lexer
 // would have assigned when reading at that point in the source.
 func (li *lineIndex) lspToOsty(p Position) token.Pos {
-	pos := selfhost.LSPLSPPositionToOsty(li.src, li.lines, p.Line, p.Character)
+	pos := LSPLSPPositionToOsty(li.src, li.lines, p.Line, p.Character)
 	return token.Pos{Offset: pos.Offset, Line: pos.Line, Column: pos.Column}
 }
 
@@ -46,13 +45,13 @@ func (li *lineIndex) lspToOsty(p Position) token.Pos {
 // Runs a binary search on the cached line starts then walks the
 // line prefix in runes to count UTF-16 code units.
 func (li *lineIndex) offsetToLSP(off int) Position {
-	pos := selfhost.LSPOffsetToPosition(li.src, li.lines, off)
+	pos := LSPOffsetToPosition(li.src, li.lines, off)
 	return Position{Line: pos.Line, Character: pos.Character}
 }
 
 // rangeFromOffsets builds an LSP Range from two byte offsets.
 func (li *lineIndex) rangeFromOffsets(start, end int) Range {
-	rng := selfhost.LSPRangeFromOffsets(li.src, li.lines, start, end)
+	rng := LSPRangeFromOffsets(li.src, li.lines, start, end)
 	return Range{
 		Start: Position{Line: rng.Start.Line, Character: rng.Start.Character},
 		End:   Position{Line: rng.End.Line, Character: rng.End.Character},
@@ -86,7 +85,7 @@ func fileURIPath(uri string) (string, bool) {
 // percent-encoding because every major LSP client tolerates raw
 // UTF-8 in file URIs.
 func pathToURI(path string) string {
-	return selfhost.LSPPathToURI(path)
+	return LSPPathToURI(path)
 }
 
 // ostyRange converts a diagnostic span into an LSP Range. If the end
@@ -94,7 +93,7 @@ func pathToURI(path string) string {
 // explicit End) we fall back to a single-rune range starting at
 // Start, which renders nicely in most editors.
 func (li *lineIndex) ostyRange(s diag.Span) Range {
-	rng := selfhost.LSPRangeFromOstySpan(li.src, li.lines, s.Start.Line, s.Start.Offset, s.End.Line, s.End.Offset)
+	rng := LSPRangeFromOstySpan(li.src, li.lines, s.Start.Line, s.Start.Offset, s.End.Line, s.End.Offset)
 	return Range{
 		Start: Position{Line: rng.Start.Line, Character: rng.Start.Character},
 		End:   Position{Line: rng.End.Line, Character: rng.End.Character},
@@ -107,5 +106,5 @@ func (li *lineIndex) ostyRange(s diag.Span) Range {
 // two (a surrogate pair). Invalid UTF-8 bytes are counted as one
 // unit each so a corrupted source still yields a finite answer.
 func utf16UnitsInPrefix(p []byte) uint32 {
-	return selfhost.LSPUTF16UnitsInPrefix(p)
+	return LSPUTF16UnitsInPrefix(p)
 }

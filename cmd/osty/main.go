@@ -75,7 +75,6 @@ type cliFlags struct {
 	strict     bool // lint: exit 1 on any warning
 	fix        bool // lint: apply machine-applicable suggestions in place
 	fixDryRun  bool // lint: compute fixes but print diff instead of writing
-	selfhost   bool // lint: legacy alias retained during the host-boundary transition
 	showScopes bool // resolve: also print the nested scope tree
 	trace      bool // global: stream per-phase timing to stderr
 	explain    bool // global: append `osty explain CODE` text per unique code
@@ -158,7 +157,7 @@ func main() {
 			return
 		}
 		// Allow lint-only flags after the subcommand, e.g.
-		// `osty lint --selfhost --fix FILE`
+		// `osty lint --fix FILE`
 		// (subcommand-local flag placement). Strip them from args so
 		// downstream dispatch keeps seeing positional-only input.
 		if rest, present := takeBoolFlag(args[1:], "--fix"); present {
@@ -167,10 +166,6 @@ func main() {
 		}
 		if rest, present := takeBoolFlag(args[1:], "--fix-dry-run"); present {
 			flags.fixDryRun = true
-			args = append([]string{"lint"}, rest...)
-		}
-		if rest, present := takeBoolFlag(args[1:], "--selfhost"); present {
-			flags.selfhost = true
 			args = append([]string{"lint"}, rest...)
 		}
 		if rest, present := takeBoolFlag(args[1:], "--strict"); present {
@@ -424,9 +419,6 @@ func main() {
 		if flags.fix || flags.fixDryRun {
 			newSrc, applied, skipped := lint.ApplyFixes(src, lr.Diags)
 			mode := "osty lint"
-			if flags.selfhost {
-				mode = "osty lint --selfhost"
-			}
 			switch {
 			case flags.fixDryRun:
 				// Write the would-be-applied source to stdout so users
@@ -468,7 +460,6 @@ func parseFlags() cliFlags {
 	flag.BoolVar(&f.strict, "strict", false, "exit non-zero on lint warnings (lint subcommand only)")
 	flag.BoolVar(&f.fix, "fix", false, "apply machine-applicable lint suggestions in place (lint subcommand only)")
 	flag.BoolVar(&f.fixDryRun, "fix-dry-run", false, "show the result of --fix on stdout without modifying files (lint subcommand only)")
-	flag.BoolVar(&f.selfhost, "selfhost", false, "lint: use the removed selfhost linter compatibility path")
 	flag.BoolVar(&f.showScopes, "scopes", false, "resolve: also dump the nested scope tree")
 	flag.BoolVar(&f.trace, "trace", false, "stream per-phase timing to stderr (single-file front-end commands)")
 	flag.BoolVar(&f.explain, "explain", false, "after diagnostics, print the `osty explain CODE` text for each unique code")
@@ -614,9 +605,6 @@ func runLintPackage(dir string, flags cliFlags) {
 	chk := check.Package(pkg, res, checkOpts())
 	cfg, cfgBase, hasCfg := loadLintConfigWithBase(dir)
 	outcome := runLintLoadedPackage(pkg, res, chk, flags, cfg, cfgBase, hasCfg)
-	if flags.selfhost {
-		emitSelfhostPackageFixes(outcome.fixFiles, flags)
-	}
 	if outcome.anyErr || (flags.strict && outcome.anyWarn) {
 		os.Exit(1)
 	}
@@ -632,7 +620,6 @@ func runLintWorkspace(dir string, flags cliFlags) {
 	}
 	ws.Stdlib = stdlib.LoadCached()
 	anyErr, anyWarn := false, false
-	var fixFiles []selfhostLintFileResult
 	runOne := func(path string) {
 		pkg, err := ws.LoadPackage(path)
 		if err != nil {
@@ -650,13 +637,9 @@ func runLintWorkspace(dir string, flags cliFlags) {
 		if outcome.anyWarn {
 			anyWarn = true
 		}
-		fixFiles = append(fixFiles, outcome.fixFiles...)
 	}
 	for _, p := range resolve.WorkspacePackagePaths(dir) {
 		runOne(p)
-	}
-	if flags.selfhost {
-		emitSelfhostPackageFixes(fixFiles, flags)
 	}
 	if anyErr || (flags.strict && anyWarn) {
 		os.Exit(1)
@@ -664,17 +647,8 @@ func runLintWorkspace(dir string, flags cliFlags) {
 }
 
 type lintPackageOutcome struct {
-	anyErr   bool
-	anyWarn  bool
-	fixFiles []selfhostLintFileResult
-}
-
-type selfhostLintFileResult struct {
-	file    *resolve.PackageFile
-	diags   []*diag.Diagnostic
-	fixed   []byte
-	applied int
-	skipped int
+	anyErr  bool
+	anyWarn bool
 }
 
 func runLintLoadedPackage(
@@ -686,9 +660,6 @@ func runLintLoadedPackage(
 	cfgBase string,
 	hasCfg bool,
 ) lintPackageOutcome {
-	if flags.selfhost {
-		return runLegacySelfhostLintLoadedPackage(pkg, res, chk, flags, cfg, cfgBase, hasCfg)
-	}
 	lr := lint.Package(pkg, res, chk)
 	if hasCfg {
 		lr = cfg.Apply(lr)
@@ -696,69 +667,6 @@ func runLintLoadedPackage(
 	all := append(append(append([]*diag.Diagnostic{}, res.Diags...), chk.Diags...), lr.Diags...)
 	printPackageDiags(pkg, all, flags)
 	return lintPackageOutcome{anyErr: hasError(all), anyWarn: hasWarning(all)}
-}
-
-func runLegacySelfhostLintLoadedPackage(
-	pkg *resolve.Package,
-	res *resolve.PackageResult,
-	chk *check.Result,
-	flags cliFlags,
-	cfg lint.Config,
-	cfgBase string,
-	hasCfg bool,
-) lintPackageOutcome {
-	return runLintLoadedPackage(pkg, res, chk, cliFlags{
-		noColor:    flags.noColor,
-		forceColor: flags.forceColor,
-		maxErrors:  flags.maxErrors,
-		jsonOutput: flags.jsonOutput,
-		strict:     flags.strict,
-		fix:        flags.fix,
-		fixDryRun:  flags.fixDryRun,
-		selfhost:   false,
-		showScopes: flags.showScopes,
-		trace:      flags.trace,
-		explain:    flags.explain,
-	}, cfg, cfgBase, hasCfg)
-}
-
-func emitSelfhostPackageFixes(files []selfhostLintFileResult, flags cliFlags) {
-	if !(flags.fix || flags.fixDryRun) {
-		return
-	}
-	applied, skipped := 0, 0
-	for _, file := range files {
-		applied += file.applied
-		skipped += file.skipped
-	}
-	mode := "osty lint --selfhost"
-	if flags.fixDryRun {
-		for _, file := range files {
-			if file.applied == 0 {
-				continue
-			}
-			fmt.Fprintf(os.Stdout, "==> %s <==\n", file.file.Path)
-			if _, err := os.Stdout.Write(file.fixed); err != nil {
-				fmt.Fprintf(os.Stderr, "%s --fix-dry-run: %v\n", mode, err)
-				os.Exit(1)
-			}
-			if len(file.fixed) == 0 || file.fixed[len(file.fixed)-1] != '\n' {
-				fmt.Fprintln(os.Stdout)
-			}
-		}
-		fmt.Fprintf(os.Stderr, "%s --fix-dry-run: %d fix(es) would apply, %d overlap(s) would be skipped\n", mode, applied, skipped)
-		return
-	}
-	for _, file := range files {
-		if file.applied == 0 {
-			continue
-		}
-		if err := os.WriteFile(file.file.Path, file.fixed, 0o644); err != nil {
-			fmt.Fprintf(os.Stderr, "%s --fix: %v\n", mode, err)
-			os.Exit(1)
-		}
-	}
-	fmt.Fprintf(os.Stderr, "%s --fix: applied %d fix(es), skipped %d overlap(s)\n", mode, applied, skipped)
 }
 
 // runResolvePackage is runCheckPackage plus a resolution dump per file.
@@ -1022,9 +930,6 @@ func runLintEngine(
 	chk *check.Result,
 	flags cliFlags,
 ) *lint.Result {
-	if flags.selfhost {
-		return lint.File(file, res, chk)
-	}
 	return lint.File(file, res, chk)
 }
 
@@ -1255,7 +1160,6 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  --strict           lint: exit 1 on warnings (CI mode)")
 	fmt.Fprintln(os.Stderr, "  --fix              lint: apply machine-applicable suggestions")
 	fmt.Fprintln(os.Stderr, "  --fix-dry-run      lint: print fixed source without writing")
-	fmt.Fprintln(os.Stderr, "  --selfhost         lint: use the removed selfhost linter compatibility path")
 	fmt.Fprintln(os.Stderr, "  --scopes           resolve: also print the nested scope tree")
 	fmt.Fprintln(os.Stderr, "  --trace            stream per-phase timing to stderr (front-end commands)")
 	fmt.Fprintln(os.Stderr, "  --explain          append `osty explain CODE` text after each diagnostic block")

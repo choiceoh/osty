@@ -2,7 +2,6 @@ package lsp
 
 import (
 	"github.com/osty/osty/internal/resolve"
-	"github.com/osty/osty/internal/selfhost"
 )
 
 // findNameOffset returns the byte offset of the name identifier
@@ -16,7 +15,7 @@ import (
 // drift into surrounding declarations even for packages where the
 // same name appears in multiple files.
 func findNameOffset(src []byte, declPos, declEnd int, name string) int {
-	return selfhost.LSPFindNameOffset(src, declPos, declEnd, name)
+	return LSPFindNameOffset(src, declPos, declEnd, name)
 }
 
 // nameRangeForSymbol resolves a resolver Symbol to the byte range of

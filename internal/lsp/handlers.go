@@ -12,7 +12,6 @@ import (
 	"github.com/osty/osty/internal/format"
 	"github.com/osty/osty/internal/repair"
 	"github.com/osty/osty/internal/resolve"
-	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/token"
 )
 
@@ -190,7 +189,7 @@ func toLSPDiag(li *lineIndex, d *diag.Diagnostic) LSPDiagnostic {
 	} else if len(d.Spans) > 0 {
 		rng = li.ostyRange(d.Spans[0].Span)
 	}
-	payload := selfhost.LSPDiagnosticPayloadFor(d.Severity.String(), d.Message, d.Hint, d.Notes)
+	payload := LSPDiagnosticPayloadFor(d.Severity.String(), d.Message, d.Hint, d.Notes)
 	return LSPDiagnostic{
 		Range:    rng,
 		Severity: DiagnosticSeverity(payload.Severity),
@@ -283,7 +282,7 @@ func writeSymSignature(b *strings.Builder, sym *resolve.Symbol, r *check.Result)
 			typeText = t.String()
 		}
 	}
-	b.WriteString(selfhost.LSPHoverSignatureLine(sym.Kind.String(), sym.Name, typeText))
+	b.WriteString(LSPHoverSignatureLine(sym.Kind.String(), sym.Name, typeText))
 	b.WriteByte('\n')
 }
 
@@ -504,7 +503,7 @@ func findNamedTypeAt(a *docAnalysis, pos token.Pos) (*ast.NamedType, *resolve.Sy
 // clients routinely point at the first character *after* the token
 // when the cursor is "just past" it, so we also accept pos == end.
 func containsPos(start, end, pos token.Pos) bool {
-	return selfhost.LSPContainsPosition(start.Line, start.Column, end.Line, end.Column, pos.Line, pos.Column)
+	return LSPContainsPosition(start.Line, start.Column, end.Line, end.Column, pos.Line, pos.Column)
 }
 
 // spanWidth is a rough size metric: bytes from Pos to End. Used to

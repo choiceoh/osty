@@ -1,4 +1,4 @@
-package selfhost
+package lsp
 
 import "unicode/utf8"
 
