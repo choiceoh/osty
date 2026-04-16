@@ -1,0 +1,228 @@
+/// Generic monomorphization policy (Itanium ABI-compatible mangling +
+/// dedup key formatting). Pure functions consumed by the native LLVM
+/// backend; no emitter state or IR references escape this module. The
+/// Go-side walker pre-encodes IR types into short Itanium code strings
+/// by recursing on Type and feeding the results back into these
+/// assembly helpers.
+///
+/// Osty is the owner of the encoding table and of the symbol-assembly
+/// format; when either needs to change, change it here first and then
+/// refresh the Go-side snapshot in internal/llvmgen/monomorph_snapshot.go.
+
+/// MonomorphRequest is the Osty-side projection of a single specialization
+/// request. Go assembles the type codes and package path; Osty only ever
+/// sees strings.
+pub struct MonomorphRequest {
+    pub pkg: String,
+    pub fnName: String,
+    pub typeArgCodes: List<String>,
+    pub paramTypeCodes: List<String>,
+    pub returnTypeCode: String,
+}
+
+/// MonomorphMangled carries the final symbol string emitted into LLVM
+/// IR. Wrapped in a struct so the Go-side snapshot can add fields later
+/// (e.g. demangled hint) without changing the bridge signature.
+pub struct MonomorphMangled {
+    pub symbol: String,
+}
+
+/// monomorphPrimCode maps an Osty primitive source name to its Itanium
+/// ABI builtin-type code. Returns "" for non-primitives so callers can
+/// fall back to the nested / template encodings. The table mirrors
+/// LANG_SPEC_v0.4/02-type-system.md §2.2 plus the relevant C++ ABI
+/// encodings; Osty's canonical `Int` is platform-independent i64 and
+/// maps to `l` (C `long`) to distinguish it from explicit `Int64` (`x`).
+pub fn monomorphPrimCode(name: String) -> String {
+    if name == "Int" {
+        return "l"
+    }
+    if name == "Int8" {
+        return "a"
+    }
+    if name == "Int16" {
+        return "s"
+    }
+    if name == "Int32" {
+        return "i"
+    }
+    if name == "Int64" {
+        return "x"
+    }
+    if name == "UInt8" {
+        return "h"
+    }
+    if name == "UInt16" {
+        return "t"
+    }
+    if name == "UInt32" {
+        return "j"
+    }
+    if name == "UInt64" {
+        return "y"
+    }
+    if name == "Byte" {
+        return "h"
+    }
+    if name == "Float" {
+        return "d"
+    }
+    if name == "Float32" {
+        return "f"
+    }
+    if name == "Float64" {
+        return "d"
+    }
+    if name == "Bool" {
+        return "b"
+    }
+    if name == "Char" {
+        return "w"
+    }
+    if name == "Unit" {
+        return "v"
+    }
+    ""
+}
+
+/// monomorphIsPrim reports whether the given Osty source type name is
+/// in the primitive table and therefore encoded directly as a single
+/// letter code.
+pub fn monomorphIsPrim(name: String) -> Bool {
+    monomorphPrimCode(name) != ""
+}
+
+/// monomorphLengthPrefix emits a `<len><text>` Itanium source-name
+/// component. Length is measured in UTF-8 bytes to match the ABI
+/// specification.
+pub fn monomorphLengthPrefix(text: String) -> String {
+    let byteLen = stringByteLength(text)
+    "{byteLen}{text}"
+}
+
+/// monomorphNestedName wraps one or more `<len><name>` components in
+/// Itanium's `N...E` nested-name construct. The `components` list has
+/// already been assembled by the caller (Osty for simple cases, Go for
+/// the full package path when routed through the bridge).
+pub fn monomorphNestedName(components: List<String>) -> String {
+    let mut body = ""
+    for c in components {
+        body = "{body}{c}"
+    }
+    "N{body}E"
+}
+
+/// monomorphBuiltinNested produces the `N4osty<len><name>E` encoding
+/// used for Osty prelude aggregates (String, List, Option, Result,
+/// Map, Set, Bytes, Tuple). Used as a nested qualifier only; template
+/// args (if any) are appended by monomorphBuiltinTemplate.
+pub fn monomorphBuiltinNested(name: String) -> String {
+    let head = monomorphLengthPrefix("osty")
+    let tail = monomorphLengthPrefix(name)
+    "N{head}{tail}E"
+}
+
+/// monomorphBuiltinTemplate produces `N4osty<len><name>I<argCodes>E`
+/// for Osty prelude generic aggregates (List<T>, Option<T>, Tuple<...>
+/// etc.). `argCodes` is the comma-less concatenation of already-encoded
+/// type codes for the template arguments.
+pub fn monomorphBuiltinTemplate(name: String, argCodes: String) -> String {
+    let head = monomorphLengthPrefix("osty")
+    let tail = monomorphLengthPrefix(name)
+    "N{head}{tail}I{argCodes}EE"
+}
+
+/// monomorphUserNested produces the `N<pkg-len><pkg><name-len><name>E`
+/// encoding used for user-declared struct / enum / alias types in the
+/// module's package. Callers pass the already-lowered package name
+/// (typically "main" for script files).
+pub fn monomorphUserNested(pkg: String, name: String) -> String {
+    let head = monomorphLengthPrefix(pkg)
+    let tail = monomorphLengthPrefix(name)
+    "N{head}{tail}E"
+}
+
+/// monomorphTemplateArgs wraps a list of encoded type codes in the
+/// `I...E` template-argument bracket. Empty input returns "" — callers
+/// should therefore skip inserting template args when a function has no
+/// generics.
+pub fn monomorphTemplateArgs(codes: List<String>) -> String {
+    if codes.len() == 0 {
+        return ""
+    }
+    let mut body = ""
+    for c in codes {
+        body = "{body}{c}"
+    }
+    "I{body}E"
+}
+
+/// monomorphParamList concatenates encoded parameter type codes without
+/// separator (Itanium's `<param-types>`). Empty input returns "".
+pub fn monomorphParamList(codes: List<String>) -> String {
+    let mut body = ""
+    for c in codes {
+        body = "{body}{c}"
+    }
+    body
+}
+
+/// monomorphMangleFn assembles the final `_Z…` symbol from its parts.
+/// Template arguments appear between the unqualified name and the
+/// parameter list, matching the Itanium C++ ABI
+/// (https://itanium-cxx-abi.github.io/cxx-abi/abi.html#mangling-type).
+/// When a function has no template args the template bracket is
+/// omitted — such calls should not be routed through this function in
+/// the first place, but the code stays safe.
+///
+/// Packages other than "main" are wrapped in an Itanium nested name
+/// `N<pkg><name>E`; bare "main" falls back to the unscoped
+/// `<name-len><name>` form so test fixtures stay readable in
+/// demanglers (`c++filt` prints `foo` instead of `main::foo`).
+pub fn monomorphMangleFn(req: MonomorphRequest) -> MonomorphMangled {
+    let nameEncoded = monomorphMangleFnName(req.pkg, req.fnName)
+    let targs = monomorphTemplateArgs(req.typeArgCodes)
+    let params = monomorphParamList(req.paramTypeCodes)
+    let symbol = "_Z{nameEncoded}{targs}{params}"
+    MonomorphMangled { symbol }
+}
+
+/// monomorphMangleFnName produces the `<name-encoded>` portion of a
+/// mangled function symbol. Kept public so Go-side monomorph tests can
+/// assert the split between name encoding and template-arg wrapping.
+pub fn monomorphMangleFnName(pkg: String, name: String) -> String {
+    if pkg == "" || pkg == "main" {
+        return monomorphLengthPrefix(name)
+    }
+    let pkgPart = monomorphLengthPrefix(pkg)
+    let namePart = monomorphLengthPrefix(name)
+    "N{pkgPart}{namePart}E"
+}
+
+/// monomorphDedupeKey returns a stable unique string for a specialization
+/// request. Used by the Go-side worklist to skip duplicate enqueues.
+/// The `\u{1f}` (Unit Separator) byte cannot appear in source identifiers
+/// so the concatenation stays injective.
+pub fn monomorphDedupeKey(fnName: String, pkg: String, typeArgCodes: List<String>) -> String {
+    let mut key = "{pkg}\u{1f}{fnName}"
+    for c in typeArgCodes {
+        key = "{key}\u{1f}{c}"
+    }
+    key
+}
+
+/// monomorphShouldInstantiate answers "should this call site be routed
+/// through the monomorph queue?". Returns false when the call has no
+/// type arguments (non-generic) or when the arg count mismatches the
+/// declared generic count (malformed checker output — let the backend's
+/// usual paths handle it).
+pub fn monomorphShouldInstantiate(typeArgsLen: Int, fnGenericsLen: Int) -> Bool {
+    typeArgsLen > 0 && typeArgsLen == fnGenericsLen
+}
+
+/// stringByteLength returns the UTF-8 byte length of a string. Matches
+/// std.strings.len's implementation so the Itanium length prefix agrees
+/// with what a demangler expects.
+fn stringByteLength(s: String) -> Int {
+    s.bytes().len()
+}
