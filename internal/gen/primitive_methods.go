@@ -651,13 +651,12 @@ func (g *gen) emitWrappingIntShift(name string, f *ast.FieldExpr, arg ast.Expr, 
 	}
 	g.emitPrimitiveIIFE(goT, f.X, func(v string) {
 		rhs := g.freshVar("_rhs")
-		g.body.writef("var %s %s = ", rhs, goT)
+		g.body.writef("var %s int = ", rhs)
 		g.emitExpr(arg)
 		g.body.nl()
-		g.body.writef("shift := int(%s %% %s(%s))\n", rhs, goT, info.bits)
-		if recv.IsSignedInt() {
-			g.body.writef("if shift < 0 { shift += %s }\n", info.bits)
-		}
+		g.body.writef("bitWidth := int(%s)\n", info.bits)
+		g.body.writef("shift := %s %% bitWidth\n", rhs)
+		g.body.writeln("if shift < 0 { shift += bitWidth }")
 		g.body.writef("return %s %s uint(shift)\n", v, op)
 	})
 }
@@ -708,14 +707,11 @@ func (g *gen) emitCheckedIntShift(name string, f *ast.FieldExpr, arg ast.Expr, r
 	}
 	g.emitPrimitiveIIFE("*"+goT, f.X, func(v string) {
 		rhs := g.freshVar("_rhs")
-		g.body.writef("var %s %s = ", rhs, goT)
+		g.body.writef("var %s int = ", rhs)
 		g.emitExpr(arg)
 		g.body.nl()
-		if info.signed {
-			g.body.writef("if %s < 0 || %s >= %s(%s) { return nil }\n", rhs, rhs, goT, info.bits)
-		} else {
-			g.body.writef("if %s >= %s(%s) { return nil }\n", rhs, goT, info.bits)
-		}
+		g.body.writef("bitWidth := int(%s)\n", info.bits)
+		g.body.writef("if %s < 0 || %s >= bitWidth { return nil }\n", rhs, rhs)
 		g.body.writef("out := %s %s uint(%s)\n", v, op, rhs)
 		g.body.writeln("return &out")
 	})
@@ -863,7 +859,7 @@ func (g *gen) emitFloatMethod(c *ast.CallExpr, f *ast.FieldExpr, recv types.Prim
 			"abs":   "Abs",
 			"floor": "Floor",
 			"ceil":  "Ceil",
-			"round": "Round",
+			"round": "RoundToEven",
 			"trunc": "Trunc",
 			"sqrt":  "Sqrt",
 			"cbrt":  "Cbrt",
@@ -985,6 +981,24 @@ func (g *gen) emitFloatMethod(c *ast.CallExpr, f *ast.FieldExpr, recv types.Prim
 			g.emitExpr(f.X)
 			g.body.write("))")
 		}
+	case "toFixed":
+		if len(c.Args) != 1 {
+			return false
+		}
+		g.use("strconv")
+		g.emitPrimitiveIIFE("string", f.X, func(v string) {
+			precision := g.freshVar("_precision")
+			g.body.writef("var %s int = ", precision)
+			g.emitExpr(c.Args[0].Value)
+			g.body.nl()
+			g.body.writef("if %s < 0 { %s = 0 }\n", precision, precision)
+			g.body.writef("return strconv.FormatFloat(float64(%s), 'f', %s, %s)\n", v, precision, bits)
+		})
+	case "toIntTrunc", "toIntRound", "toIntFloor", "toIntCeil":
+		if len(c.Args) != 0 {
+			return false
+		}
+		g.emitFloatToIntResult(f)
 	case "toInt", "toInt32", "toInt64", "toFloat", "toFloat32", "toFloat64":
 		if len(c.Args) != 0 {
 			return false
@@ -1015,6 +1029,28 @@ func (g *gen) emitFloatMethod(c *ast.CallExpr, f *ast.FieldExpr, recv types.Prim
 		return false
 	}
 	return true
+}
+
+func (g *gen) emitFloatToIntResult(f *ast.FieldExpr) {
+	g.needResult = true
+	g.use("math")
+	g.use("strconv")
+	fn := map[string]string{
+		"toIntTrunc": "Trunc",
+		"toIntRound": "RoundToEven",
+		"toIntFloor": "Floor",
+		"toIntCeil":  "Ceil",
+	}[f.Name]
+	g.emitPrimitiveIIFE("Result[int, any]", f.X, func(v string) {
+		rounded := g.freshVar("_rounded")
+		g.body.writef("%s := math.%s(float64(%s))\n", rounded, fn, v)
+		g.body.writeln("lo := -9223372036854775808.0")
+		g.body.writeln("hi := 9223372036854775808.0")
+		g.body.writeln("if strconv.IntSize == 32 { lo = -2147483648.0; hi = 2147483648.0 }")
+		g.body.writef("if math.IsNaN(%s) || math.IsInf(%s, 0) || %s < lo || %s >= hi { return resultErr[int, any](%q) }\n",
+			rounded, rounded, rounded, rounded, f.Name+" out of Int range")
+		g.body.writef("return resultOk[int, any](int(%s))\n", rounded)
+	})
 }
 
 func (g *gen) emitIntConversionResult(f *ast.FieldExpr, recv types.PrimitiveKind) bool {

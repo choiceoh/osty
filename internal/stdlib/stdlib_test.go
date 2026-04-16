@@ -211,8 +211,8 @@ func TestResultModuleMethods(t *testing.T) {
 		hasBody[method.Name] = method.Body != nil
 	}
 	for _, name := range []string{
-		"isOk", "isErr", "unwrap", "unwrapErr", "unwrapOr",
-		"ok", "err", "map", "mapErr", "toString",
+		"isOk", "isErr", "unwrap", "expect", "unwrapErr", "expectErr", "unwrapOr", "unwrapOrElse",
+		"ok", "err", "and", "andThen", "or", "orElse", "inspect", "inspectErr", "map", "mapErr", "toString",
 	} {
 		if !got[name] {
 			t.Errorf("Result missing method %q", name)
@@ -221,7 +221,10 @@ func TestResultModuleMethods(t *testing.T) {
 			t.Errorf("Registry.ResultMethods missing method %q", name)
 		}
 	}
-	for _, name := range []string{"isOk", "isErr", "unwrap", "unwrapErr", "unwrapOr", "ok", "err", "map", "mapErr", "toString"} {
+	for _, name := range []string{
+		"isOk", "isErr", "unwrap", "expect", "unwrapErr", "expectErr", "unwrapOr", "unwrapOrElse",
+		"ok", "err", "and", "andThen", "or", "orElse", "inspect", "inspectErr", "map", "mapErr", "toString",
+	} {
 		if !hasBody[name] {
 			t.Errorf("Result.%s should have an Osty body", name)
 		}
@@ -534,13 +537,13 @@ func TestOptionModuleMethodsResolves(t *testing.T) {
 	if mod == nil || mod.File == nil {
 		t.Fatal("std.option not loaded")
 	}
-	var methods map[string]bool
+	var methods map[string]*ast.FnDecl
 	for _, d := range mod.File.Decls {
 		if ed, ok := d.(*ast.EnumDecl); ok && ed.Name == "Option" {
-			methods = map[string]bool{}
+			methods = map[string]*ast.FnDecl{}
 			for _, m := range ed.Methods {
 				if m.Pub {
-					methods[m.Name] = true
+					methods[m.Name] = m
 				}
 			}
 			break
@@ -549,9 +552,17 @@ func TestOptionModuleMethodsResolves(t *testing.T) {
 	if methods == nil {
 		t.Fatal("std.option missing Option enum declaration")
 	}
-	for _, name := range []string{"isSome", "isNone", "unwrap", "unwrapOr", "orElse", "map", "orError", "toString"} {
-		if !methods[name] {
+	for _, name := range []string{
+		"isSome", "isNone", "unwrap", "expect", "unwrapOr", "unwrapOrElse",
+		"and", "andThen", "or", "orElse", "xor", "filter", "inspect", "map", "orError", "okOr", "toString",
+	} {
+		method := methods[name]
+		if method == nil {
 			t.Errorf("std.option Option missing pub method %q", name)
+			continue
+		}
+		if method.Body == nil {
+			t.Errorf("std.option Option.%s should have an Osty body", name)
 		}
 	}
 }
@@ -645,6 +656,44 @@ func TestCollectionsModuleResolves(t *testing.T) {
 		for _, name := range methods {
 			if !have[name] {
 				t.Errorf("std.collections %s missing method %q", typ, name)
+			}
+		}
+	}
+}
+
+func TestCollectionsPureOstyBodies(t *testing.T) {
+	mod := Load().Modules["collections"]
+	if mod == nil {
+		t.Fatal("std.collections not loaded")
+	}
+	decls := map[string]*ast.StructDecl{}
+	for _, d := range mod.File.Decls {
+		if sd, ok := d.(*ast.StructDecl); ok {
+			decls[sd.Name] = sd
+		}
+	}
+	wantBodies := map[string][]string{
+		"List": {"isEmpty", "first", "last", "contains", "find", "map", "filter", "fold", "sortedBy", "reversed", "appended", "concat", "zip", "enumerate", "pop", "clear"},
+		"Map":  {"isEmpty", "containsKey", "keys", "values", "entries"},
+		"Set":  {"isEmpty", "union", "intersect", "difference"},
+	}
+	for typ, names := range wantBodies {
+		sd := decls[typ]
+		if sd == nil {
+			t.Fatalf("std.collections missing struct %s", typ)
+		}
+		methods := map[string]*ast.FnDecl{}
+		for _, m := range sd.Methods {
+			methods[m.Name] = m
+		}
+		for _, name := range names {
+			method := methods[name]
+			if method == nil {
+				t.Errorf("std.collections %s missing method %q", typ, name)
+				continue
+			}
+			if method.Body == nil {
+				t.Errorf("std.collections %s.%s should have an Osty body", typ, name)
 			}
 		}
 	}
@@ -1385,7 +1434,7 @@ func TestPrimitivesIntMethods(t *testing.T) {
 			t.Errorf("primitive kind %v has no method table", k)
 			continue
 		}
-		for _, m := range []string{"abs", "min", "max"} {
+		for _, m := range []string{"abs", "min", "max", "wrappingShl", "checkedShl", "pow", "toInt32"} {
 			if _, ok := methods[m]; !ok {
 				t.Errorf("primitive kind %v missing method %q", k, m)
 			}
@@ -1481,7 +1530,7 @@ func TestPrimitivesFloatMethods(t *testing.T) {
 			t.Errorf("primitive kind %v has no method table", k)
 			continue
 		}
-		for _, m := range []string{"abs", "sqrt", "isNaN"} {
+		for _, m := range []string{"abs", "sqrt", "isNaN", "toFixed", "toIntTrunc", "toIntRound", "toIntFloor", "toIntCeil"} {
 			if _, ok := methods[m]; !ok {
 				t.Errorf("primitive kind %v missing method %q", k, m)
 			}

@@ -29,6 +29,13 @@ pub enum Option<T> {
         }
     }
 
+    pub fn expect(self, msg: String) -> T {
+        match self {
+            Some(value) -> value,
+            None -> __optionAbort(msg),
+        }
+    }
+
     pub fn unwrapOr(self, fallback: T) -> T {
         match self {
             Some(value) -> value,
@@ -36,10 +43,65 @@ pub enum Option<T> {
         }
     }
 
+    pub fn unwrapOrElse(self, fallback: fn() -> T) -> T {
+        match self {
+            Some(value) -> value,
+            None -> fallback(),
+        }
+    }
+
+    pub fn and<U>(self, other: U?) -> U? {
+        match self {
+            Some(_) -> other,
+            None -> None,
+        }
+    }
+
+    pub fn andThen<U>(self, f: fn(T) -> U?) -> U? {
+        match self {
+            Some(value) -> f(value),
+            None -> None,
+        }
+    }
+
+    pub fn or(self, other: T?) -> T? {
+        match self {
+            Some(value) -> Some(value),
+            None -> other,
+        }
+    }
+
     pub fn orElse(self, fallback: fn() -> T?) -> T? {
         match self {
             Some(value) -> Some(value),
             None -> fallback(),
+        }
+    }
+
+    pub fn xor(self, other: T?) -> T? {
+        match self {
+            Some(value) -> match other {
+                Some(_) -> None,
+                None -> Some(value),
+            },
+            None -> other,
+        }
+    }
+
+    pub fn filter(self, pred: fn(T) -> Bool) -> T? {
+        match self {
+            Some(value) -> if pred(value) { Some(value) } else { None },
+            None -> None,
+        }
+    }
+
+    pub fn inspect(self, f: fn(T) -> ()) -> T? {
+        match self {
+            Some(value) -> {
+                f(value)
+                Some(value)
+            },
+            None -> None,
         }
     }
 
@@ -55,6 +117,10 @@ pub enum Option<T> {
             Some(value) -> Ok(value),
             None -> __optionError::<T>(msg),
         }
+    }
+
+    pub fn okOr(self, msg: String) -> Result<T, Error> {
+        self.orError(msg)
     }
 
     pub fn toString(self) -> String {

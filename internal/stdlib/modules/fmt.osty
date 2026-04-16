@@ -180,7 +180,7 @@ pub fn fixed(f: Float, decimals: Int) -> String {
     }
     let negative = f < 0.0 || isNegZero(f)
     if decimals <= 0 {
-        let s = f.abs().round().toInt().toString()
+        let s = f.abs().toIntRound().unwrap().toString()
         if negative {
             return "-{s}"
         }
@@ -196,9 +196,10 @@ pub fn fixed(f: Float, decimals: Int) -> String {
         i = i + 1
     }
 
-    let shifted = (abs * power + 0.5).floor().toInt()
-    let intPart = shifted / power.toInt()
-    let fracPart = shifted % power.toInt()
+    let shifted = (abs * power + 0.5).floor().toIntTrunc().unwrap()
+    let powerInt = power.toIntTrunc().unwrap()
+    let intPart = shifted / powerInt
+    let fracPart = shifted % powerInt
 
     let fracStr = fracPart.toString()
     let padded = padLeft(fracStr, clampedDec, '0')

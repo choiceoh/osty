@@ -1836,10 +1836,40 @@ func (c *checker) optionalMethod(o *types.Optional, name string) *methodDesc {
 		return simpleMethod(name, nil, types.Bool)
 	case "unwrap":
 		return simpleMethod(name, nil, t)
+	case "expect":
+		return simpleMethod(name, []types.Type{types.String}, t)
 	case "unwrapOr":
 		return simpleMethod(name, []types.Type{t}, t)
+	case "unwrapOrElse":
+		fn := &types.FnType{Params: nil, Return: t}
+		return simpleMethod(name, []types.Type{fn}, t)
+	case "and":
+		uSym := &resolve.Symbol{Name: "U", Kind: resolve.SymGeneric}
+		u := &types.TypeVar{Sym: uSym}
+		return &methodDesc{
+			Name:     name,
+			Fn:       &types.FnType{Params: []types.Type{&types.Optional{Inner: u}}, Return: &types.Optional{Inner: u}},
+			Generics: []*types.TypeVar{u},
+		}
+	case "andThen":
+		uSym := &resolve.Symbol{Name: "U", Kind: resolve.SymGeneric}
+		u := &types.TypeVar{Sym: uSym}
+		fn := &types.FnType{Params: []types.Type{t}, Return: &types.Optional{Inner: u}}
+		return &methodDesc{
+			Name:     name,
+			Fn:       &types.FnType{Params: []types.Type{fn}, Return: &types.Optional{Inner: u}},
+			Generics: []*types.TypeVar{u},
+		}
+	case "or", "xor":
+		return simpleMethod(name, []types.Type{opt}, opt)
 	case "orElse":
 		fn := &types.FnType{Params: nil, Return: opt}
+		return simpleMethod(name, []types.Type{fn}, opt)
+	case "filter":
+		fn := &types.FnType{Params: []types.Type{t}, Return: types.Bool}
+		return simpleMethod(name, []types.Type{fn}, opt)
+	case "inspect":
+		fn := &types.FnType{Params: []types.Type{t}, Return: types.Unit}
 		return simpleMethod(name, []types.Type{fn}, opt)
 	case "map":
 		uSym := &resolve.Symbol{Name: "U", Kind: resolve.SymGeneric}
@@ -1851,6 +1881,9 @@ func (c *checker) optionalMethod(o *types.Optional, name string) *methodDesc {
 			Generics: []*types.TypeVar{u},
 		}
 	case "orError":
+		return simpleMethod(name, []types.Type{types.String},
+			c.resultOf(t, c.namedOf("Error", nil)))
+	case "okOr":
 		return simpleMethod(name, []types.Type{types.String},
 			c.resultOf(t, c.namedOf("Error", nil)))
 	case "toString":
@@ -1932,14 +1965,45 @@ func resultMethod(n *types.Named, name string) *methodDesc {
 		return simpleMethod(name, nil, types.Bool)
 	case "unwrap":
 		return simpleMethod(name, nil, t)
+	case "expect":
+		return simpleMethod(name, []types.Type{types.String}, t)
 	case "unwrapErr":
 		return simpleMethod(name, nil, e)
+	case "expectErr":
+		return simpleMethod(name, []types.Type{types.String}, e)
 	case "unwrapOr":
 		return simpleMethod(name, []types.Type{t}, t)
+	case "unwrapOrElse":
+		fn := &types.FnType{Params: []types.Type{e}, Return: t}
+		return simpleMethod(name, []types.Type{fn}, t)
 	case "ok":
 		return simpleMethod(name, nil, &types.Optional{Inner: t})
 	case "err":
 		return simpleMethod(name, nil, &types.Optional{Inner: e})
+	case "and":
+		u := resultMethodTypeVar("U")
+		return genericMethod(name, []types.Type{&types.Named{Sym: n.Sym, Args: []types.Type{u, e}}},
+			&types.Named{Sym: n.Sym, Args: []types.Type{u, e}}, u)
+	case "andThen":
+		u := resultMethodTypeVar("U")
+		fn := &types.FnType{Params: []types.Type{t}, Return: &types.Named{Sym: n.Sym, Args: []types.Type{u, e}}}
+		return genericMethod(name, []types.Type{fn},
+			&types.Named{Sym: n.Sym, Args: []types.Type{u, e}}, u)
+	case "or":
+		f := resultMethodTypeVar("F")
+		return genericMethod(name, []types.Type{&types.Named{Sym: n.Sym, Args: []types.Type{t, f}}},
+			&types.Named{Sym: n.Sym, Args: []types.Type{t, f}}, f)
+	case "orElse":
+		f := resultMethodTypeVar("F")
+		fn := &types.FnType{Params: []types.Type{e}, Return: &types.Named{Sym: n.Sym, Args: []types.Type{t, f}}}
+		return genericMethod(name, []types.Type{fn},
+			&types.Named{Sym: n.Sym, Args: []types.Type{t, f}}, f)
+	case "inspect":
+		fn := &types.FnType{Params: []types.Type{t}, Return: types.Unit}
+		return simpleMethod(name, []types.Type{fn}, n)
+	case "inspectErr":
+		fn := &types.FnType{Params: []types.Type{e}, Return: types.Unit}
+		return simpleMethod(name, []types.Type{fn}, n)
 	case "map":
 		u := resultMethodTypeVar("U")
 		fn := &types.FnType{Params: []types.Type{t}, Return: u}
@@ -2395,7 +2459,8 @@ func (c *checker) tryVariantCall(id *ast.Ident, e *ast.CallExpr, hint types.Type
 				errHint = types.ErrorType
 			}
 			okOut := at
-			if okHint != nil && !types.IsError(okHint) && c.accepts(okHint, at, e.Args[0].Value) {
+			_, okHintIsTypeVar := okHint.(*types.TypeVar)
+			if okHint != nil && !okHintIsTypeVar && !types.IsError(okHint) && c.accepts(okHint, at, e.Args[0].Value) {
 				okOut = okHint
 			}
 			return &types.Named{Sym: resSym, Args: []types.Type{okOut, errHint}}
@@ -2419,7 +2484,8 @@ func (c *checker) tryVariantCall(id *ast.Ident, e *ast.CallExpr, hint types.Type
 				okHint = types.ErrorType
 			}
 			errOut := at
-			if errHint != nil && !types.IsError(errHint) && c.accepts(errHint, at, e.Args[0].Value) {
+			_, errHintIsTypeVar := errHint.(*types.TypeVar)
+			if errHint != nil && !errHintIsTypeVar && !types.IsError(errHint) && c.accepts(errHint, at, e.Args[0].Value) {
 				errOut = errHint
 			}
 			return &types.Named{Sym: resSym, Args: []types.Type{okHint, errOut}}
