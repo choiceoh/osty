@@ -1,0 +1,129 @@
+// elab_test.osty — bidirectional elaborator integration tests.
+//
+// Drives the full pipeline (lex → parse → elab → serialize) and
+// asserts that the resulting `FrontCheckResult` matches expectations
+// previously encoded in the legacy `check_test.osty`. Orphan until the
+// toolchain native harness lands (see plan §V.a).
+
+use std.testing
+
+fn testElabLiteralLet() {
+    let checked = frontendCheckSource(
+        r"""
+            fn main() {
+                let answer: Int = 42
+            }
+            """,
+    )
+    testing.assertEq(checked.errors, 0)
+    testing.assert(checked.assignments >= 1)
+    testing.assert(checked.accepted >= 1)
+}
+
+fn testElabLetWithMismatchTriggersDiagnostic() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn main() {
+                let answer: Int = "nope"
+            }
+            """,
+    )
+    testing.assert(checked.summary.errors >= 1)
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0701"))
+}
+
+fn testElabIfElseJoinsBranches() {
+    let checked = frontendCheckSource(
+        r"""
+            fn main() {
+                let x: Int = if true { 1 } else { 2 }
+            }
+            """,
+    )
+    testing.assertEq(checked.errors, 0)
+}
+
+fn testElabGenericCallInstantiates() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn id<T>(value: T) -> T {
+                value
+            }
+
+            fn main() {
+                let answer: Int = id::<Int>(1)
+            }
+            """,
+    )
+    testing.assertEq(checked.summary.errors, 0)
+    testing.assert(frontCheckResultInstantiationCount(checked) >= 1)
+    testing.assertEq(frontCheckResultBindingType(checked, "answer"), "Int")
+}
+
+fn testElabStructLiteralSeedsFromExpected() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            struct Box<T> {
+                value: T
+            }
+
+            fn main() {
+                let boxed: Box<Int> = Box { value: 1 }
+            }
+            """,
+    )
+    testing.assertEq(checked.summary.errors, 0)
+    testing.assertEq(frontCheckResultBindingType(checked, "boxed"), "Box<Int>")
+}
+
+fn testElabClosureChecksAgainstExpectedFn() {
+    let checked = frontendCheckSource(
+        r"""
+            fn apply(f: fn(Int) -> Int, x: Int) -> Int {
+                f(x)
+            }
+
+            fn main() {
+                let y: Int = apply(|n| n + 1, 3)
+            }
+            """,
+    )
+    testing.assertEq(checked.errors, 0)
+}
+
+fn testElabMatchExhaustivenessFailsWithoutCatchAll() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            enum Color { Red, Green }
+
+            fn code(c: Color) -> Int {
+                match c {
+                    Red -> 1,
+                }
+            }
+            """,
+    )
+    testing.assert(checked.summary.errors >= 1)
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0706"))
+}
+
+fn testElabQuestionOperatorRequiresOption() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn bad(x: Int) -> Int {
+                x?
+            }
+            """,
+    )
+    testing.assert(checked.summary.errors >= 1)
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0730"))
+}
+
+fn elabDiagHasCode(diags: List<CheckDiagnostic>, code: String) -> Bool {
+    for d in diags {
+        if d.code == code {
+            return true
+        }
+    }
+    false
+}

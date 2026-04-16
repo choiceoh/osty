@@ -1,0 +1,78 @@
+// check_diag_test.osty — verifies diagnostic builders stamp stable
+// codes and messages. Orphan file until the toolchain native harness
+// lands (see plan Verification §(a)).
+
+use std.testing
+use std.strings as strings
+
+fn testCheckDiagMismatchStampsCodeAndSeverity() {
+    let d = diagMismatch("Int", "String", 12, 20)
+    testing.assertEq(d.code, "E0701")
+    testing.assertEq(d.start, 12)
+    testing.assertEq(d.end, 20)
+    match d.severity {
+        SeverityError -> testing.assert(true),
+        _ -> testing.assert(false),
+    }
+    testing.assert(stringsContains(d.message, "expected `Int`"))
+    testing.assert(stringsContains(d.message, "found `String`"))
+}
+
+fn testCheckDiagArgCountIncludesCalleeWhenProvided() {
+    let withName = diagArgCount("takesTwo", 2, 3, 0, 10)
+    testing.assertEq(withName.code, "E0702")
+    testing.assert(stringsContains(withName.message, "`takesTwo`"))
+    testing.assert(stringsContains(withName.message, "2"))
+    testing.assert(stringsContains(withName.message, "3"))
+
+    let anon = diagArgCount("", 1, 0, 0, 10)
+    testing.assert(stringsContains(anon.message, "this call"))
+}
+
+fn testCheckDiagNonExhaustiveWitness() {
+    let withWitness = diagNonExhaustiveMatch("None", 0, 0)
+    testing.assertEq(withWitness.code, "E0706")
+    testing.assert(stringsContains(withWitness.message, "None"))
+
+    let noWitness = diagNonExhaustiveMatch("", 0, 0)
+    testing.assertEq(noWitness.code, "E0706")
+    testing.assert(stringsContains(noWitness.message, "not exhaustive"))
+}
+
+fn testCheckDiagQuestionNotOptional() {
+    let d = diagQuestionNotOptional("Int", 5, 7)
+    testing.assertEq(d.code, "E0730")
+    testing.assert(stringsContains(d.message, "Option"))
+    testing.assert(stringsContains(d.message, "Result"))
+    testing.assert(stringsContains(d.message, "`Int`"))
+}
+
+fn testCheckDiagCountErrorsDistinguishesSeverities() {
+    let mut xs: List<CheckDiagnostic> = []
+    xs = checkDiagPush(xs, diagMismatch("Int", "String", 0, 0))
+    xs = checkDiagPush(xs, diagUnknownName("foo", 0, 0))
+    xs = checkDiagPush(xs, CheckDiagnostic {
+        code: "L0001",
+        severity: SeverityLint,
+        message: "style note",
+        start: 0,
+        end: 0,
+        notes: [],
+    })
+
+    testing.assertEq(checkDiagCount(xs), 3)
+    testing.assertEq(checkDiagCountErrors(xs), 2)
+}
+
+fn testCheckDiagRenderIncludesCode() {
+    let d = diagMismatch("Int", "Bool", 0, 0)
+    let rendered = checkDiagRender(d)
+    testing.assert(stringsContains(rendered, "[E0701]"))
+    testing.assert(stringsContains(rendered, "error"))
+}
+
+// Substring helper — thin wrapper on `std.strings.contains` so the
+// assertions above read like plain boolean checks.
+fn stringsContains(haystack: String, needle: String) -> Bool {
+    strings.contains(haystack, needle)
+}

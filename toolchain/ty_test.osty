@@ -1,0 +1,127 @@
+// ty_test.osty — unit tests for the typed type arena introduced in
+// Phase 1 of the bidirectional-elaborator migration. Runs standalone
+// under the future native-backend harness; the file is orphan today
+// because `toolchain/*.osty` is not wired into `just front`.
+
+use std.testing
+
+fn testTyArenaCanonicalPrimitives() {
+    let arena = emptyTyArena()
+
+    testing.assertEq(tyKindAt(arena, tInt(arena)), TkPrim)
+    testing.assertEq(tyPrimAt(arena, tInt(arena)), PkInt)
+    testing.assertEq(tyToString(arena, tInt(arena)), "Int")
+
+    testing.assertEq(tyToString(arena, tBool(arena)), "Bool")
+    testing.assertEq(tyToString(arena, tUnit(arena)), "()")
+    testing.assertEq(tyToString(arena, tNever(arena)), "Never")
+    testing.assertEq(tyToString(arena, tUntypedInt(arena)), "UntypedInt")
+    testing.assertEq(tyToString(arena, tErr(arena)), "Invalid")
+
+    // Canonical indices are stable across lookups, which is what the
+    // elaborator relies on when comparing primitive types by index.
+    testing.assertEq(tInt(arena), tyPrim(arena, PkInt))
+    testing.assertEq(tString(arena), tyPrim(arena, PkString))
+}
+
+fn testTyArenaNamedTypeRoundTrip() {
+    let arena = emptyTyArena()
+    let listOfInt = tyNamed(arena, "List", [tInt(arena)])
+    let mapStrList = tyNamed(arena, "Map", [tString(arena), listOfInt])
+
+    testing.assertEq(tyToString(arena, listOfInt), "List<Int>")
+    testing.assertEq(tyToString(arena, mapStrList), "Map<String, List<Int>>")
+
+    let parsed = tyFromString(arena, "Map<String, List<Int>>")
+    testing.assertEq(tyToString(arena, parsed), "Map<String, List<Int>>")
+    testing.assert(tyEq(arena, parsed, mapStrList))
+}
+
+fn testTyArenaFnTypeRoundTrip() {
+    let arena = emptyTyArena()
+    let f = tyFn(arena, [tInt(arena), tString(arena)], tBool(arena))
+    testing.assertEq(tyToString(arena, f), "fn(Int, String) -> Bool")
+
+    let parsed = tyFromString(arena, "fn(Int, String) -> Bool")
+    testing.assert(tyEq(arena, parsed, f))
+
+    let nullary = tyFn(arena, [], tUnit(arena))
+    testing.assertEq(tyToString(arena, nullary), "fn() -> ()")
+    testing.assert(tyEq(arena, tyFromString(arena, "fn() -> ()"), nullary))
+}
+
+fn testTyArenaTupleRoundTrip() {
+    let arena = emptyTyArena()
+    let pair = tyTuple(arena, [tInt(arena), tString(arena)])
+    testing.assertEq(tyToString(arena, pair), "(Int, String)")
+
+    let parsed = tyFromString(arena, "(Int, String)")
+    testing.assert(tyEq(arena, parsed, pair))
+}
+
+fn testTyArenaOptionalRoundTrip() {
+    let arena = emptyTyArena()
+    let maybeInt = tyOptional(arena, tInt(arena))
+    testing.assertEq(tyToString(arena, maybeInt), "Int?")
+
+    let parsed = tyFromString(arena, "Int?")
+    testing.assert(tyEq(arena, parsed, maybeInt))
+}
+
+fn testTyArenaVarsHaveDistinctIds() {
+    let arena = emptyTyArena()
+    let a = tyVarFresh(arena, "id", "T")
+    let b = tyVarFresh(arena, "id", "T")
+    testing.assert(!(tyEq(arena, a, b)))
+    testing.assertEq(tyVarNameAt(arena, a), "T")
+    testing.assertEq(tyVarOwnerAt(arena, a), "id")
+    testing.assert(tyVarIdAt(arena, a) != tyVarIdAt(arena, b))
+}
+
+fn testTyArenaClassificationPredicates() {
+    let arena = emptyTyArena()
+    testing.assert(tyIsInteger(arena, tInt(arena)))
+    testing.assert(tyIsInteger(arena, tByte(arena)))
+    testing.assert(tyIsInteger(arena, tUntypedInt(arena)))
+    testing.assert(!(tyIsInteger(arena, tFloat(arena))))
+
+    testing.assert(tyIsFloat(arena, tFloat(arena)))
+    testing.assert(tyIsFloat(arena, tUntypedFloat(arena)))
+
+    testing.assert(tyIsNumeric(arena, tInt(arena)))
+    testing.assert(tyIsNumeric(arena, tFloat(arena)))
+    testing.assert(!(tyIsNumeric(arena, tString(arena))))
+
+    testing.assert(tyIsOrdered(arena, tString(arena)))
+    testing.assert(tyIsOrdered(arena, tInt(arena)))
+    testing.assert(!(tyIsOrdered(arena, tBytes(arena))))
+
+    testing.assert(tyIsUntyped(arena, tUntypedInt(arena)))
+    testing.assert(!(tyIsUntyped(arena, tInt(arena))))
+}
+
+fn testTyEqStructural() {
+    let arena = emptyTyArena()
+
+    let a = tyNamed(arena, "Pair", [tInt(arena), tString(arena)])
+    let b = tyNamed(arena, "Pair", [tInt(arena), tString(arena)])
+    testing.assert(tyEq(arena, a, b))
+
+    let c = tyNamed(arena, "Pair", [tString(arena), tInt(arena)])
+    testing.assert(!(tyEq(arena, a, c)))
+
+    let f1 = tyFn(arena, [tInt(arena)], tBool(arena))
+    let f2 = tyFn(arena, [tInt(arena)], tBool(arena))
+    testing.assert(tyEq(arena, f1, f2))
+
+    let f3 = tyFn(arena, [tInt(arena)], tString(arena))
+    testing.assert(!(tyEq(arena, f1, f3)))
+}
+
+fn testTyFromStringUnknownYieldsErr() {
+    let arena = emptyTyArena()
+    testing.assertEq(tyToString(arena, tyFromString(arena, "")), "Invalid")
+    // Heads containing parens without a matching closing form land in
+    // the named-type branch, which rejects malformed "<" suffixes.
+    testing.assertEq(tyToString(arena, tyFromString(arena, "List<")), "Invalid")
+}

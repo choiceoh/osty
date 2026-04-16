@@ -1,0 +1,110 @@
+// solve_test.osty — constraint solver edge cases.
+//
+// Orphan until the toolchain native harness lands (see plan §V.a).
+
+use std.testing
+
+fn testSolveUnifyPrimitivesEqual() {
+    let tys = emptyTyArena()
+    let env = emptyCheckEnv(tys)
+    let solver = newSolver()
+    testing.assert(unify(env, solver, tInt(tys), tInt(tys)))
+}
+
+fn testSolveUnifyBindsVarToConcrete() {
+    let tys = emptyTyArena()
+    let env = emptyCheckEnv(tys)
+    let solver = newSolver()
+    let t = freshTyVar(tys, "id", "T")
+    testing.assert(unify(env, solver, t, tInt(tys)))
+    testing.assertEq(solverLookup(solver, tyVarIdAt(tys, t)), tInt(tys))
+    testing.assertEq(zonk(env, solver, t), tInt(tys))
+}
+
+fn testSolveUnifySymmetricBind() {
+    let tys = emptyTyArena()
+    let env = emptyCheckEnv(tys)
+    let solver = newSolver()
+    let t = freshTyVar(tys, "f", "T")
+    // Concrete on the left should still bind the variable.
+    testing.assert(unify(env, solver, tString(tys), t))
+    testing.assertEq(zonk(env, solver, t), tString(tys))
+}
+
+fn testSolveUnifyNamedStructurally() {
+    let tys = emptyTyArena()
+    let env = emptyCheckEnv(tys)
+    let solver = newSolver()
+    let t = freshTyVar(tys, "g", "T")
+
+    let expected = tyNamed(tys, "List", [t])
+    let got = tyNamed(tys, "List", [tInt(tys)])
+
+    testing.assert(unify(env, solver, expected, got))
+    testing.assertEq(zonk(env, solver, t), tInt(tys))
+    testing.assertEq(tyToString(tys, zonk(env, solver, expected)), "List<Int>")
+}
+
+fn testSolveUnifyFnTypes() {
+    let tys = emptyTyArena()
+    let env = emptyCheckEnv(tys)
+    let solver = newSolver()
+    let t = freshTyVar(tys, "h", "T")
+    let u = freshTyVar(tys, "h", "U")
+
+    let expected = tyFn(tys, [t], u)
+    let got = tyFn(tys, [tInt(tys)], tString(tys))
+
+    testing.assert(unify(env, solver, expected, got))
+    testing.assertEq(zonk(env, solver, t), tInt(tys))
+    testing.assertEq(zonk(env, solver, u), tString(tys))
+}
+
+fn testSolveUnifyOccursCheckRejectsCycle() {
+    let tys = emptyTyArena()
+    let env = emptyCheckEnv(tys)
+    let solver = newSolver()
+    let t = freshTyVar(tys, "cyc", "T")
+    let cyclic = tyNamed(tys, "List", [t])
+    testing.assert(!(unify(env, solver, t, cyclic)))
+}
+
+fn testSolveZonkList() {
+    let tys = emptyTyArena()
+    let env = emptyCheckEnv(tys)
+    let solver = newSolver()
+    let t = freshTyVar(tys, "z", "T")
+    let u = freshTyVar(tys, "z", "U")
+
+    let _ = unify(env, solver, t, tBool(tys))
+    let _ = unify(env, solver, u, tString(tys))
+
+    let list = zonkList(env, solver, [t, u])
+    testing.assertEq(tyToString(tys, list[0]), "Bool")
+    testing.assertEq(tyToString(tys, list[1]), "String")
+}
+
+fn testSolveIsFullyResolved() {
+    let tys = emptyTyArena()
+    let env = emptyCheckEnv(tys)
+    let solver = newSolver()
+    let t = freshTyVar(tys, "x", "T")
+    testing.assert(!(isFullyResolved(env, solver, t)))
+    let _ = unify(env, solver, t, tInt(tys))
+    testing.assert(isFullyResolved(env, solver, t))
+}
+
+fn testSolveUnifyUntypedIntWithConcrete() {
+    let tys = emptyTyArena()
+    let env = emptyCheckEnv(tys)
+    let solver = newSolver()
+    testing.assert(unify(env, solver, tInt(tys), tUntypedInt(tys)))
+    testing.assert(unify(env, solver, tFloat(tys), tUntypedInt(tys)))
+}
+
+fn testSolveUnifyMismatchFails() {
+    let tys = emptyTyArena()
+    let env = emptyCheckEnv(tys)
+    let solver = newSolver()
+    testing.assert(!(unify(env, solver, tInt(tys), tString(tys))))
+}

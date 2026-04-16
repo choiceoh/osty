@@ -1,0 +1,803 @@
+// ty.osty — typed representation of Osty semantic types.
+//
+// Replaces the string-based type plumbing in the legacy `check.osty`
+// (`"Map<String, List<Int>>"` etc. parsed on every access via
+// `frontCheckParseType`). Types live in a `TyArena`; all references are
+// `Int` indices into the arena, so structural sharing is cheap and the
+// bidirectional elaborator can compare types by index when they are
+// interned.
+//
+// Design notes:
+//
+// - Arena + tagged node follows `toolchain/ir.osty` precedent. Recursive
+//   enum payloads (`TyNamed(String, List<Ty>)`) are not used because
+//   toolchain code paths routinely need constant-time indexed access
+//   and Osty's self-host codegen is validated against the arena shape.
+//
+// - Primitives are interned once at arena-creation time and returned as
+//   canonical indices (`tInt(arena)`, `tBool(arena)`, ...). Named /
+//   tuple / fn / var / optional types allocate fresh nodes.
+//
+// - `tyFromString` is a transitional bridge: it parses the legacy
+//   `"Head<Arg, ...>"` / `"fn(A) -> R"` / `"(A, B)"` serializations used
+//   by the old checker so phase-by-phase migration is possible. Once
+//   all callers are moved to `tyNamed`/`tyFn`/... builders this function
+//   becomes dead and can be removed.
+
+use std.strings as strings
+
+/// PrimKind enumerates Osty's built-in scalar types plus the literal
+/// defaulting markers (`PkUntypedInt`, `PkUntypedFloat`) and a poison
+/// value (`PkInvalid`) used when parsing hits an unrecognised prim.
+pub enum PrimKind {
+    PkInvalid,
+    PkInt,
+    PkInt8,
+    PkInt16,
+    PkInt32,
+    PkInt64,
+    PkUInt8,
+    PkUInt16,
+    PkUInt32,
+    PkUInt64,
+    PkByte,
+    PkFloat,
+    PkFloat32,
+    PkFloat64,
+    PkBool,
+    PkChar,
+    PkString,
+    PkBytes,
+    PkUnit,
+    PkNever,
+    PkUntypedInt,
+    PkUntypedFloat,
+}
+
+/// TyKind discriminates the shape stored in a `TyNode`.
+pub enum TyKind {
+    TkErr,              // poisoned / unresolved
+    TkPrim,             // TyNode.prim is meaningful
+    TkNamed,            // TyNode.head + TyNode.args
+    TkOptional,         // TyNode.ret holds the inner index
+    TkTuple,            // TyNode.args holds elem indices
+    TkFn,               // TyNode.args holds param indices, TyNode.ret the return
+    TkVar,              // TyNode.varId / varName / varOwner
+    TkSelf,             // TyNode.head carries the owner name (interface context)
+}
+
+/// TyNode is the discriminated union stored in a `TyArena`. Only the
+/// fields relevant to the node's `kind` are used; the rest sit at
+/// zero-values. Callers must not read a field without first checking
+/// the kind via `tyKindAt`.
+pub struct TyNode {
+    pub kind: TyKind,
+    pub prim: PrimKind,
+    pub head: String,
+    pub args: List<Int>,
+    pub ret: Int,
+    pub varId: Int,
+    pub varName: String,
+    pub varOwner: String,
+}
+
+/// TyArena owns every `TyNode` produced during elaboration. Canonical
+/// primitive indices are pre-populated by `emptyTyArena` so callers
+/// never allocate a fresh node for `Int`, `Bool`, ...
+pub struct TyArena {
+    pub nodes: List<TyNode>,
+    pub nextVarId: Int,
+
+    pub idxErr: Int,
+    pub idxInt: Int,
+    pub idxInt8: Int,
+    pub idxInt16: Int,
+    pub idxInt32: Int,
+    pub idxInt64: Int,
+    pub idxUInt8: Int,
+    pub idxUInt16: Int,
+    pub idxUInt32: Int,
+    pub idxUInt64: Int,
+    pub idxByte: Int,
+    pub idxFloat: Int,
+    pub idxFloat32: Int,
+    pub idxFloat64: Int,
+    pub idxBool: Int,
+    pub idxChar: Int,
+    pub idxString: Int,
+    pub idxBytes: Int,
+    pub idxUnit: Int,
+    pub idxNever: Int,
+    pub idxUntypedInt: Int,
+    pub idxUntypedFloat: Int,
+}
+
+/// emptyTyNode returns the zero-value node used when the arena's index
+/// is out of range. Callers should not observe this unless a bug is
+/// passing a bogus handle.
+pub fn emptyTyNode() -> TyNode {
+    TyNode {
+        kind: TkErr,
+        prim: PkInvalid,
+        head: "",
+        args: [],
+        ret: -1,
+        varId: 0,
+        varName: "",
+        varOwner: "",
+    }
+}
+
+/// emptyTyArena builds an arena pre-populated with canonical primitive
+/// nodes. Every primitive is allocated exactly once so callers can
+/// compare prim-valued types by index equality.
+pub fn emptyTyArena() -> TyArena {
+    let mut arena = TyArena {
+        nodes: [],
+        nextVarId: 1,
+        idxErr: -1,
+        idxInt: -1, idxInt8: -1, idxInt16: -1, idxInt32: -1, idxInt64: -1,
+        idxUInt8: -1, idxUInt16: -1, idxUInt32: -1, idxUInt64: -1,
+        idxByte: -1, idxFloat: -1, idxFloat32: -1, idxFloat64: -1,
+        idxBool: -1, idxChar: -1, idxString: -1, idxBytes: -1,
+        idxUnit: -1, idxNever: -1,
+        idxUntypedInt: -1, idxUntypedFloat: -1,
+    }
+    arena.idxErr = tyAllocErr(arena)
+    arena.idxInt = tyAllocPrim(arena, PkInt)
+    arena.idxInt8 = tyAllocPrim(arena, PkInt8)
+    arena.idxInt16 = tyAllocPrim(arena, PkInt16)
+    arena.idxInt32 = tyAllocPrim(arena, PkInt32)
+    arena.idxInt64 = tyAllocPrim(arena, PkInt64)
+    arena.idxUInt8 = tyAllocPrim(arena, PkUInt8)
+    arena.idxUInt16 = tyAllocPrim(arena, PkUInt16)
+    arena.idxUInt32 = tyAllocPrim(arena, PkUInt32)
+    arena.idxUInt64 = tyAllocPrim(arena, PkUInt64)
+    arena.idxByte = tyAllocPrim(arena, PkByte)
+    arena.idxFloat = tyAllocPrim(arena, PkFloat)
+    arena.idxFloat32 = tyAllocPrim(arena, PkFloat32)
+    arena.idxFloat64 = tyAllocPrim(arena, PkFloat64)
+    arena.idxBool = tyAllocPrim(arena, PkBool)
+    arena.idxChar = tyAllocPrim(arena, PkChar)
+    arena.idxString = tyAllocPrim(arena, PkString)
+    arena.idxBytes = tyAllocPrim(arena, PkBytes)
+    arena.idxUnit = tyAllocPrim(arena, PkUnit)
+    arena.idxNever = tyAllocPrim(arena, PkNever)
+    arena.idxUntypedInt = tyAllocPrim(arena, PkUntypedInt)
+    arena.idxUntypedFloat = tyAllocPrim(arena, PkUntypedFloat)
+    arena
+}
+
+fn tyAllocErr(arena: TyArena) -> Int {
+    let idx = tyNodeCount(arena)
+    let node = TyNode {
+        kind: TkErr, prim: PkInvalid, head: "", args: [], ret: -1,
+        varId: 0, varName: "", varOwner: "",
+    }
+    arena.nodes.push(node)
+    idx
+}
+
+fn tyAllocPrim(arena: TyArena, prim: PrimKind) -> Int {
+    let idx = tyNodeCount(arena)
+    let node = TyNode {
+        kind: TkPrim, prim, head: "", args: [], ret: -1,
+        varId: 0, varName: "", varOwner: "",
+    }
+    arena.nodes.push(node)
+    idx
+}
+
+/// tyNodeCount returns the arena node count. Used as an O(n) pre-push
+/// allocation index; callers inside hot loops should hoist this.
+pub fn tyNodeCount(arena: TyArena) -> Int {
+    let mut count = 0
+    for n in arena.nodes {
+        let _ = n
+        count = count + 1
+    }
+    count
+}
+
+// ---------------------------------------------------------------------
+// Canonical primitive accessors. Returning by field rather than by
+// kind-name keeps the elaborator's hot path index-sized.
+// ---------------------------------------------------------------------
+
+pub fn tErr(arena: TyArena) -> Int { arena.idxErr }
+pub fn tInt(arena: TyArena) -> Int { arena.idxInt }
+pub fn tInt8(arena: TyArena) -> Int { arena.idxInt8 }
+pub fn tInt16(arena: TyArena) -> Int { arena.idxInt16 }
+pub fn tInt32(arena: TyArena) -> Int { arena.idxInt32 }
+pub fn tInt64(arena: TyArena) -> Int { arena.idxInt64 }
+pub fn tUInt8(arena: TyArena) -> Int { arena.idxUInt8 }
+pub fn tUInt16(arena: TyArena) -> Int { arena.idxUInt16 }
+pub fn tUInt32(arena: TyArena) -> Int { arena.idxUInt32 }
+pub fn tUInt64(arena: TyArena) -> Int { arena.idxUInt64 }
+pub fn tByte(arena: TyArena) -> Int { arena.idxByte }
+pub fn tFloat(arena: TyArena) -> Int { arena.idxFloat }
+pub fn tFloat32(arena: TyArena) -> Int { arena.idxFloat32 }
+pub fn tFloat64(arena: TyArena) -> Int { arena.idxFloat64 }
+pub fn tBool(arena: TyArena) -> Int { arena.idxBool }
+pub fn tChar(arena: TyArena) -> Int { arena.idxChar }
+pub fn tString(arena: TyArena) -> Int { arena.idxString }
+pub fn tBytes(arena: TyArena) -> Int { arena.idxBytes }
+pub fn tUnit(arena: TyArena) -> Int { arena.idxUnit }
+pub fn tNever(arena: TyArena) -> Int { arena.idxNever }
+pub fn tUntypedInt(arena: TyArena) -> Int { arena.idxUntypedInt }
+pub fn tUntypedFloat(arena: TyArena) -> Int { arena.idxUntypedFloat }
+
+// ---------------------------------------------------------------------
+// Builders — always allocate a fresh node. No interning beyond prims.
+// ---------------------------------------------------------------------
+
+/// tyPrim returns the canonical index for a primitive kind. Prefer the
+/// dedicated helpers (`tInt`, `tBool`, ...) when the kind is statically
+/// known.
+pub fn tyPrim(arena: TyArena, prim: PrimKind) -> Int {
+    match prim {
+        PkInvalid -> arena.idxErr,
+        PkInt -> arena.idxInt,
+        PkInt8 -> arena.idxInt8,
+        PkInt16 -> arena.idxInt16,
+        PkInt32 -> arena.idxInt32,
+        PkInt64 -> arena.idxInt64,
+        PkUInt8 -> arena.idxUInt8,
+        PkUInt16 -> arena.idxUInt16,
+        PkUInt32 -> arena.idxUInt32,
+        PkUInt64 -> arena.idxUInt64,
+        PkByte -> arena.idxByte,
+        PkFloat -> arena.idxFloat,
+        PkFloat32 -> arena.idxFloat32,
+        PkFloat64 -> arena.idxFloat64,
+        PkBool -> arena.idxBool,
+        PkChar -> arena.idxChar,
+        PkString -> arena.idxString,
+        PkBytes -> arena.idxBytes,
+        PkUnit -> arena.idxUnit,
+        PkNever -> arena.idxNever,
+        PkUntypedInt -> arena.idxUntypedInt,
+        PkUntypedFloat -> arena.idxUntypedFloat,
+    }
+}
+
+/// tyNamed allocates a named type `head<args...>` node. `args` may be
+/// empty, meaning a plain type like `String` used in type position.
+pub fn tyNamed(arena: TyArena, head: String, args: List<Int>) -> Int {
+    let idx = tyNodeCount(arena)
+    let node = TyNode {
+        kind: TkNamed, prim: PkInvalid, head, args, ret: -1,
+        varId: 0, varName: "", varOwner: "",
+    }
+    arena.nodes.push(node)
+    idx
+}
+
+/// tyTuple allocates a tuple-type node. `()` is represented by an empty
+/// elems list; callers that want the canonical unit type should use
+/// `tUnit` instead.
+pub fn tyTuple(arena: TyArena, elems: List<Int>) -> Int {
+    let idx = tyNodeCount(arena)
+    let node = TyNode {
+        kind: TkTuple, prim: PkInvalid, head: "", args: elems, ret: -1,
+        varId: 0, varName: "", varOwner: "",
+    }
+    arena.nodes.push(node)
+    idx
+}
+
+/// tyFn allocates an `fn(params...) -> ret` node. `ret` may be
+/// `tUnit(arena)` for Unit-returning functions and `tNever(arena)` for
+/// diverging ones; callers must pre-canonicalise.
+pub fn tyFn(arena: TyArena, params: List<Int>, ret: Int) -> Int {
+    let idx = tyNodeCount(arena)
+    let node = TyNode {
+        kind: TkFn, prim: PkInvalid, head: "", args: params, ret,
+        varId: 0, varName: "", varOwner: "",
+    }
+    arena.nodes.push(node)
+    idx
+}
+
+/// tyOptional allocates a `T?` node with `inner` as the wrapped index.
+pub fn tyOptional(arena: TyArena, inner: Int) -> Int {
+    let idx = tyNodeCount(arena)
+    let node = TyNode {
+        kind: TkOptional, prim: PkInvalid, head: "", args: [], ret: inner,
+        varId: 0, varName: "", varOwner: "",
+    }
+    arena.nodes.push(node)
+    idx
+}
+
+/// tyVarFresh allocates a fresh unification variable. `owner` is the
+/// declaring fn/method name so two `T`s on different generics never
+/// collide during diagnostics.
+pub fn tyVarFresh(arena: TyArena, owner: String, name: String) -> Int {
+    let id = arena.nextVarId
+    arena.nextVarId = id + 1
+    let idx = tyNodeCount(arena)
+    let node = TyNode {
+        kind: TkVar, prim: PkInvalid, head: "", args: [], ret: -1,
+        varId: id, varName: name, varOwner: owner,
+    }
+    arena.nodes.push(node)
+    idx
+}
+
+/// tySelf allocates a `Self` marker tied to an `owner` (interface or
+/// impl). The elaborator substitutes it away once the receiver type is
+/// known.
+pub fn tySelf(arena: TyArena, owner: String) -> Int {
+    let idx = tyNodeCount(arena)
+    let node = TyNode {
+        kind: TkSelf, prim: PkInvalid, head: owner, args: [], ret: -1,
+        varId: 0, varName: "", varOwner: "",
+    }
+    arena.nodes.push(node)
+    idx
+}
+
+// ---------------------------------------------------------------------
+// Accessors.
+// ---------------------------------------------------------------------
+
+/// tyGet returns the node at `idx`, or an `emptyTyNode()` if the index
+/// is out of range. Prefer the kind-specific helpers below for hot
+/// paths.
+pub fn tyGet(arena: TyArena, idx: Int) -> TyNode {
+    if idx < 0 {
+        return emptyTyNode()
+    }
+    let mut i = 0
+    for n in arena.nodes {
+        if i == idx {
+            return n
+        }
+        i = i + 1
+    }
+    emptyTyNode()
+}
+
+pub fn tyKindAt(arena: TyArena, idx: Int) -> TyKind {
+    tyGet(arena, idx).kind
+}
+
+pub fn tyPrimAt(arena: TyArena, idx: Int) -> PrimKind {
+    tyGet(arena, idx).prim
+}
+
+pub fn tyHeadAt(arena: TyArena, idx: Int) -> String {
+    tyGet(arena, idx).head
+}
+
+pub fn tyArgsAt(arena: TyArena, idx: Int) -> List<Int> {
+    tyGet(arena, idx).args
+}
+
+pub fn tyRetAt(arena: TyArena, idx: Int) -> Int {
+    tyGet(arena, idx).ret
+}
+
+pub fn tyInnerAt(arena: TyArena, idx: Int) -> Int {
+    let node = tyGet(arena, idx)
+    if node.kind == TkOptional {
+        return node.ret
+    }
+    -1
+}
+
+pub fn tyVarIdAt(arena: TyArena, idx: Int) -> Int {
+    tyGet(arena, idx).varId
+}
+
+pub fn tyVarNameAt(arena: TyArena, idx: Int) -> String {
+    tyGet(arena, idx).varName
+}
+
+pub fn tyVarOwnerAt(arena: TyArena, idx: Int) -> String {
+    tyGet(arena, idx).varOwner
+}
+
+// ---------------------------------------------------------------------
+// Classification predicates (moved out of the string-based checker).
+// ---------------------------------------------------------------------
+
+pub fn tyIsErr(arena: TyArena, idx: Int) -> Bool {
+    tyKindAt(arena, idx) == TkErr
+}
+
+pub fn tyIsNever(arena: TyArena, idx: Int) -> Bool {
+    let k = tyPrimAt(arena, idx)
+    tyKindAt(arena, idx) == TkPrim && k == PkNever
+}
+
+pub fn tyIsUnit(arena: TyArena, idx: Int) -> Bool {
+    let k = tyPrimAt(arena, idx)
+    tyKindAt(arena, idx) == TkPrim && k == PkUnit
+}
+
+pub fn tyIsPrim(arena: TyArena, idx: Int, prim: PrimKind) -> Bool {
+    tyKindAt(arena, idx) == TkPrim && tyPrimAt(arena, idx) == prim
+}
+
+pub fn tyIsInteger(arena: TyArena, idx: Int) -> Bool {
+    if tyKindAt(arena, idx) != TkPrim {
+        return false
+    }
+    let p = tyPrimAt(arena, idx)
+    p == PkInt || p == PkInt8 || p == PkInt16 || p == PkInt32 || p == PkInt64 ||
+        p == PkUInt8 || p == PkUInt16 || p == PkUInt32 || p == PkUInt64 ||
+        p == PkByte || p == PkChar || p == PkUntypedInt
+}
+
+pub fn tyIsFloat(arena: TyArena, idx: Int) -> Bool {
+    if tyKindAt(arena, idx) != TkPrim {
+        return false
+    }
+    let p = tyPrimAt(arena, idx)
+    p == PkFloat || p == PkFloat32 || p == PkFloat64 || p == PkUntypedFloat
+}
+
+pub fn tyIsNumeric(arena: TyArena, idx: Int) -> Bool {
+    tyIsInteger(arena, idx) || tyIsFloat(arena, idx)
+}
+
+pub fn tyIsOrdered(arena: TyArena, idx: Int) -> Bool {
+    if tyIsNumeric(arena, idx) {
+        return true
+    }
+    tyIsPrim(arena, idx, PkString) || tyIsPrim(arena, idx, PkBool) || tyIsPrim(arena, idx, PkChar)
+}
+
+pub fn tyIsUntyped(arena: TyArena, idx: Int) -> Bool {
+    let p = tyPrimAt(arena, idx)
+    tyKindAt(arena, idx) == TkPrim && (p == PkUntypedInt || p == PkUntypedFloat)
+}
+
+pub fn tyIsNamedHead(arena: TyArena, idx: Int, head: String) -> Bool {
+    tyKindAt(arena, idx) == TkNamed && tyHeadAt(arena, idx) == head
+}
+
+// ---------------------------------------------------------------------
+// Structural equality.
+// ---------------------------------------------------------------------
+
+/// tyEq is structural (not identity). Two primitive types compare equal
+/// iff their `PrimKind` matches; named types match head + pointwise
+/// args; `TyVar`s match on `varId`; `TyErr` is equal to itself and
+/// propagates silently.
+pub fn tyEq(arena: TyArena, a: Int, b: Int) -> Bool {
+    if a == b {
+        return true
+    }
+    let na = tyGet(arena, a)
+    let nb = tyGet(arena, b)
+    if na.kind != nb.kind {
+        return false
+    }
+    match na.kind {
+        TkErr -> true,
+        TkPrim -> na.prim == nb.prim,
+        TkNamed -> {
+            if na.head != nb.head {
+                return false
+            }
+            tyEqList(arena, na.args, nb.args)
+        },
+        TkOptional -> tyEq(arena, na.ret, nb.ret),
+        TkTuple -> tyEqList(arena, na.args, nb.args),
+        TkFn -> {
+            if !(tyEqList(arena, na.args, nb.args)) {
+                return false
+            }
+            tyEq(arena, na.ret, nb.ret)
+        },
+        TkVar -> na.varId == nb.varId,
+        TkSelf -> na.head == nb.head,
+    }
+}
+
+fn tyEqList(arena: TyArena, xs: List<Int>, ys: List<Int>) -> Bool {
+    if tyIntListLen(xs) != tyIntListLen(ys) {
+        return false
+    }
+    let mut i = 0
+    for x in xs {
+        if !(tyEq(arena, x, tyIntAt(ys, i))) {
+            return false
+        }
+        i = i + 1
+    }
+    true
+}
+
+fn tyIntListLen(xs: List<Int>) -> Int {
+    let mut count = 0
+    for x in xs {
+        let _ = x
+        count = count + 1
+    }
+    count
+}
+
+fn tyIntAt(xs: List<Int>, idx: Int) -> Int {
+    let mut i = 0
+    for x in xs {
+        if i == idx {
+            return x
+        }
+        i = i + 1
+    }
+    -1
+}
+
+// ---------------------------------------------------------------------
+// Pretty-printer. Output is stable and round-trippable via
+// `tyFromString`. Used for diagnostics + the `FrontCheckedNode.typeName`
+// serialization contract at the host-bridge seam.
+// ---------------------------------------------------------------------
+
+pub fn tyToString(arena: TyArena, idx: Int) -> String {
+    if idx < 0 {
+        return "Invalid"
+    }
+    let node = tyGet(arena, idx)
+    match node.kind {
+        TkErr -> "Invalid",
+        TkPrim -> primKindName(node.prim),
+        TkNamed -> tyNamedToString(arena, node),
+        TkOptional -> "{tyToString(arena, node.ret)}?",
+        TkTuple -> tyTupleToString(arena, node.args),
+        TkFn -> tyFnToString(arena, node.args, node.ret),
+        TkVar -> {
+            if node.varName == "" {
+                "?{node.varId}"
+            } else {
+                node.varName
+            }
+        },
+        TkSelf -> "Self",
+    }
+}
+
+fn tyNamedToString(arena: TyArena, node: TyNode) -> String {
+    if tyIntListLen(node.args) == 0 {
+        return node.head
+    }
+    let mut parts: List<String> = []
+    for arg in node.args {
+        parts.push(tyToString(arena, arg))
+    }
+    "{node.head}<{strings.join(parts, \", \")}>"
+}
+
+fn tyTupleToString(arena: TyArena, elems: List<Int>) -> String {
+    let mut parts: List<String> = []
+    for e in elems {
+        parts.push(tyToString(arena, e))
+    }
+    "({strings.join(parts, \", \")})"
+}
+
+fn tyFnToString(arena: TyArena, params: List<Int>, ret: Int) -> String {
+    let mut parts: List<String> = []
+    for p in params {
+        parts.push(tyToString(arena, p))
+    }
+    "fn({strings.join(parts, \", \")}) -> {tyToString(arena, ret)}"
+}
+
+fn primKindName(prim: PrimKind) -> String {
+    match prim {
+        PkInvalid -> "Invalid",
+        PkInt -> "Int",
+        PkInt8 -> "Int8",
+        PkInt16 -> "Int16",
+        PkInt32 -> "Int32",
+        PkInt64 -> "Int64",
+        PkUInt8 -> "UInt8",
+        PkUInt16 -> "UInt16",
+        PkUInt32 -> "UInt32",
+        PkUInt64 -> "UInt64",
+        PkByte -> "Byte",
+        PkFloat -> "Float",
+        PkFloat32 -> "Float32",
+        PkFloat64 -> "Float64",
+        PkBool -> "Bool",
+        PkChar -> "Char",
+        PkString -> "String",
+        PkBytes -> "Bytes",
+        PkUnit -> "()",
+        PkNever -> "Never",
+        PkUntypedInt -> "UntypedInt",
+        PkUntypedFloat -> "UntypedFloat",
+    }
+}
+
+// ---------------------------------------------------------------------
+// Transitional bridge from the legacy string representation. Only
+// parses the exact dialect emitted by the old `frontCheckParseType`
+// (see `toolchain/check.osty:1293`); anything outside that grammar
+// lands in `TkErr`.
+// ---------------------------------------------------------------------
+
+/// tyFromString parses a legacy serialized type and interns it into the
+/// arena. Supported shapes: primitive names, `Head<Arg, ...>` (including
+/// nested generics), `fn(Args, ...) -> Ret` (Unit return when the tail
+/// is `()`), `(A, B)` tuples, trailing `?` optionality, and `Self`.
+/// Unknown input returns `tErr(arena)`.
+pub fn tyFromString(arena: TyArena, source: String) -> Int {
+    let trimmed = strings.trimSpace(source)
+    if trimmed == "" {
+        return tErr(arena)
+    }
+    // Unwrap trailing `?` optionality first so the inner parse does not
+    // have to treat it as a type-head continuation.
+    if strings.hasSuffix(trimmed, "?") && !(strings.hasSuffix(trimmed, "??")) {
+        let inner = tyFromString(arena, strings.trimSuffix(trimmed, "?"))
+        return tyOptional(arena, inner)
+    }
+    if trimmed == "Self" {
+        return tySelf(arena, "")
+    }
+    let prim = primKindFromName(trimmed)
+    if prim != PkInvalid {
+        return tyPrim(arena, prim)
+    }
+    if strings.hasPrefix(trimmed, "(") && strings.hasSuffix(trimmed, ")") {
+        return tyTupleFromString(arena, trimmed)
+    }
+    if strings.hasPrefix(trimmed, "fn(") {
+        return tyFnFromString(arena, trimmed)
+    }
+    // Named type, possibly with generic arguments.
+    let head = typeHeadRaw(trimmed)
+    if head == "" {
+        return tErr(arena)
+    }
+    let rest = strings.trimPrefix(trimmed, head)
+    if rest == "" {
+        return tyNamed(arena, head, [])
+    }
+    if !(strings.hasPrefix(rest, "<")) || !(strings.hasSuffix(rest, ">")) {
+        return tErr(arena)
+    }
+    let argsText = strings.trimSuffix(strings.trimPrefix(rest, "<"), ">")
+    let args = tyArgsFromString(arena, argsText)
+    tyNamed(arena, head, args)
+}
+
+fn primKindFromName(text: String) -> PrimKind {
+    if text == "Int" { return PkInt }
+    if text == "Int8" { return PkInt8 }
+    if text == "Int16" { return PkInt16 }
+    if text == "Int32" { return PkInt32 }
+    if text == "Int64" { return PkInt64 }
+    if text == "UInt8" { return PkUInt8 }
+    if text == "UInt16" { return PkUInt16 }
+    if text == "UInt32" { return PkUInt32 }
+    if text == "UInt64" { return PkUInt64 }
+    if text == "Byte" { return PkByte }
+    if text == "Float" { return PkFloat }
+    if text == "Float32" { return PkFloat32 }
+    if text == "Float64" { return PkFloat64 }
+    if text == "Bool" { return PkBool }
+    if text == "Char" { return PkChar }
+    if text == "String" { return PkString }
+    if text == "Bytes" { return PkBytes }
+    if text == "()" { return PkUnit }
+    if text == "Never" { return PkNever }
+    if text == "UntypedInt" { return PkUntypedInt }
+    if text == "UntypedFloat" { return PkUntypedFloat }
+    if text == "Invalid" { return PkInvalid }
+    PkInvalid
+}
+
+fn typeHeadRaw(text: String) -> String {
+    let mut head = ""
+    for unit in strings.split(text, "") {
+        if unit == "<" {
+            return head
+        }
+        if unit == "(" || unit == ")" || unit == "," || unit == " " {
+            return head
+        }
+        head = "{head}{unit}"
+    }
+    head
+}
+
+fn tyTupleFromString(arena: TyArena, text: String) -> Int {
+    let inner = strings.trimSuffix(strings.trimPrefix(text, "("), ")")
+    if strings.trimSpace(inner) == "" {
+        return tUnit(arena)
+    }
+    let elems = tyArgsFromString(arena, inner)
+    tyTuple(arena, elems)
+}
+
+fn tyFnFromString(arena: TyArena, text: String) -> Int {
+    // Expect "fn(<params>) -> <ret>".
+    let afterFn = strings.trimPrefix(text, "fn")
+    if !(strings.hasPrefix(afterFn, "(")) {
+        return tErr(arena)
+    }
+    let paramsText = splitFnParamsText(afterFn)
+    if paramsText == "" {
+        return tErr(arena)
+    }
+    let paramsInner = strings.trimSuffix(strings.trimPrefix(paramsText, "("), ")")
+    let mut params: List<Int> = []
+    if strings.trimSpace(paramsInner) != "" {
+        params = tyArgsFromString(arena, paramsInner)
+    }
+    let tail = strings.trimSpace(strings.trimPrefix(afterFn, paramsText))
+    let retText = strings.trimSpace(strings.trimPrefix(tail, "->"))
+    let ret = if retText == "" { tUnit(arena) } else { tyFromString(arena, retText) }
+    tyFn(arena, params, ret)
+}
+
+fn splitFnParamsText(text: String) -> String {
+    // Collect the balanced `(...)` starting at position 0. Depth tracks
+    // only parens; angles/tuples inside the list belong to the params.
+    let mut depth = 0
+    let mut out = ""
+    let mut started = false
+    for unit in strings.split(text, "") {
+        out = "{out}{unit}"
+        if unit == "(" {
+            depth = depth + 1
+            started = true
+        } else if unit == ")" {
+            depth = depth - 1
+            if started && depth == 0 {
+                return out
+            }
+        }
+    }
+    out
+}
+
+fn tyArgsFromString(arena: TyArena, text: String) -> List<Int> {
+    let parts = splitTopLevel(text)
+    let mut out: List<Int> = []
+    for part in parts {
+        out.push(tyFromString(arena, strings.trimSpace(part)))
+    }
+    out
+}
+
+/// splitTopLevel splits a comma-separated type-argument text at the top
+/// nesting level. Mirrors `frontCheckSplitTopLevel` so the bridge stays
+/// format-compatible during migration.
+fn splitTopLevel(text: String) -> List<String> {
+    let mut out: List<String> = []
+    let mut cur = ""
+    let mut angle = 0
+    let mut paren = 0
+    for unit in strings.split(text, "") {
+        if unit == "<" {
+            angle = angle + 1
+            cur = "{cur}{unit}"
+        } else if unit == ">" {
+            angle = angle - 1
+            cur = "{cur}{unit}"
+        } else if unit == "(" {
+            paren = paren + 1
+            cur = "{cur}{unit}"
+        } else if unit == ")" {
+            paren = paren - 1
+            cur = "{cur}{unit}"
+        } else if unit == "," && angle == 0 && paren == 0 {
+            out.push(strings.trimSpace(cur))
+            cur = ""
+        } else {
+            cur = "{cur}{unit}"
+        }
+    }
+    if strings.trimSpace(cur) != "" {
+        out.push(strings.trimSpace(cur))
+    }
+    out
+}
