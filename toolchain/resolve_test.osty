@@ -213,6 +213,54 @@ fn testSelfResolverReportsTypePositionErrors() {
     testing.assertEq(selfResolveCodeCount(result, "E0502"), 1)
 }
 
+fn testSelfResolverResolvesQualifiedTypeReferences() {
+    let result = selfResolveSource(
+        r"""
+            use std.error as error
+
+            fn wrap(err: error.Error) -> Result<String, error.Error> {
+                Err(err)
+            }
+            """,
+    )
+
+    testing.assertEq(selfResolveDiagnosticCount(result), 0)
+    testing.assert(selfResolveHasTypeRef(result, "error.Error"))
+}
+
+fn testSelfResolverReportsMissingGoPackageMembers() {
+    let result = selfResolveSource(
+        r"""
+            use go "net/http" as http {
+                fn Get(url: String) -> String
+                type Client = String
+            }
+
+            fn bad() -> http.MissingType {
+                http.Missing()
+            }
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0508"), 2)
+}
+
+fn testSelfResolverReportsWrongKindForQualifiedGoType() {
+    let result = selfResolveSource(
+        r"""
+            use go "net/http" as http {
+                fn Get(url: String) -> String
+            }
+
+            fn bad(value: http.Get) -> Int {
+                0
+            }
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0502"), 1)
+}
+
 fn testSelfResolverReportsSelfOutsideMethodAndSelfTypeOutsideType() {
     let result = selfResolveSource(
         r"""
@@ -224,6 +272,21 @@ fn testSelfResolverReportsSelfOutsideMethodAndSelfTypeOutsideType() {
 
     testing.assertEq(selfResolveCodeCount(result, "E0503"), 1)
     testing.assertEq(selfResolveCodeCount(result, "E0504"), 2)
+}
+
+fn testSelfResolverReportsInterfaceDefaultFieldAccess() {
+    let result = selfResolveSource(
+        r"""
+            interface Labeler {
+                fn label(self) -> String {
+                    self.name
+                }
+            }
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0606"), 1)
+    testing.assertEq(result.diagnostics[0].hint, "expose the value through an interface method and call that instead")
 }
 
 fn testSelfResolverAllowsSelfTypeInsideTypeBody() {
@@ -317,4 +380,18 @@ fn testSelfResolverAllowsSameMethodNamesAcrossTypes() {
     )
 
     testing.assertEq(selfResolveDiagnosticCount(result), 0)
+}
+
+fn testSelfResolverSuggestsNearbyNames() {
+    let result = selfResolveSource(
+        r"""
+            fn main() {
+                let value = 1
+                vaule
+            }
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0500"), 1)
+    testing.assertEq(result.diagnostics[0].hint, "did you mean `value`?")
 }

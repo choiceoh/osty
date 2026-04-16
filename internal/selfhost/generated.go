@@ -33513,6 +33513,7 @@ type SelfResolveDiagnostic struct {
 	start   int
 	end     int
 	node    int
+	hint    string
 }
 
 // Osty: /tmp/selfhost_merged.osty:13371:5
@@ -33549,7 +33550,11 @@ func selfResolveDiagnostic(code string, message string, name string, start int, 
 
 // Osty: /tmp/selfhost_merged.osty:13424:1
 func selfResolveDiagnosticAtNode(code string, message string, name string, start int, end int, node int) *SelfResolveDiagnostic {
-	return &SelfResolveDiagnostic{code: code, message: message, name: name, start: start, end: end, node: node}
+	return selfResolveDiagnosticHintAtNode(code, message, name, start, end, node, "")
+}
+
+func selfResolveDiagnosticHintAtNode(code string, message string, name string, start int, end int, node int, hint string) *SelfResolveDiagnostic {
+	return &SelfResolveDiagnostic{code: code, message: message, name: name, start: start, end: end, node: node, hint: hint}
 }
 
 // Osty: /tmp/selfhost_merged.osty:13435:5
@@ -33913,28 +33918,31 @@ func selfResolveName(name string, start int, end int, node int) *SelfResolveName
 
 // Osty: /tmp/selfhost_merged.osty:13644:1
 type SelfResolveScope struct {
-	symbols []*SelfSymbol
-	depth   int
+	symbols      []*SelfSymbol
+	depth        int
+	ifaceDefault bool
 }
 
 // Osty: /tmp/selfhost_merged.osty:13649:1
 func srRootScope(result *SelfResolveResult) *SelfResolveScope {
-	return &SelfResolveScope{symbols: srSymbolListCopy(result.symbols), depth: 0}
+	return &SelfResolveScope{symbols: srSymbolListCopy(result.symbols), depth: 0, ifaceDefault: false}
 }
 
 // Osty: /tmp/selfhost_merged.osty:13653:1
 func srChildScope(parent *SelfResolveScope) *SelfResolveScope {
-	return &SelfResolveScope{symbols: srSymbolListCopy(parent.symbols), depth: func() int {
-		var _p2264 int = parent.depth
-		var _rhs2265 int = 1
-		if _rhs2265 > 0 && _p2264 > math.MaxInt-_rhs2265 {
-			panic("integer overflow")
-		}
-		if _rhs2265 < 0 && _p2264 < math.MinInt-_rhs2265 {
-			panic("integer overflow")
-		}
-		return _p2264 + _rhs2265
-	}()}
+	return &SelfResolveScope{
+		symbols:      srSymbolListCopy(parent.symbols),
+		depth:        parent.depth + 1,
+		ifaceDefault: parent.ifaceDefault,
+	}
+}
+
+func srChildScopeWithIfaceDefault(parent *SelfResolveScope, ifaceDefault bool) *SelfResolveScope {
+	return &SelfResolveScope{
+		symbols:      srSymbolListCopy(parent.symbols),
+		depth:        parent.depth + 1,
+		ifaceDefault: ifaceDefault,
+	}
 }
 
 // Osty: /tmp/selfhost_merged.osty:13657:1
@@ -34075,37 +34083,22 @@ func selfResolveAstScanFunctions(file *AstFile, scope *SelfResolveScope, result 
 
 // Osty: /tmp/selfhost_merged.osty:13788:1
 func srAstScanFunctionsInDecl(file *AstFile, idx int, scope *SelfResolveScope, result *SelfResolveResult) *SelfResolveResult {
-	// Osty: /tmp/selfhost_merged.osty:13794:5
 	if idx < 0 {
-		// Osty: /tmp/selfhost_merged.osty:13795:9
 		return result
 	}
-	// Osty: /tmp/selfhost_merged.osty:13797:5
 	node := srAstNode(file, idx)
-	_ = node
-	// Osty: /tmp/selfhost_merged.osty:13798:5
 	out := result
-	_ = out
-	// Osty: /tmp/selfhost_merged.osty:13799:5
 	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNFnDecl{})) {
-		// Osty: /tmp/selfhost_merged.osty:13800:9
-		return srAstResolveFunction(file, idx, scope, "", out)
+		return srAstResolveFunction(file, idx, scope, "", false, out)
 	}
-	// Osty: /tmp/selfhost_merged.osty:13802:5
 	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNStructDecl{})) || ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNEnumDecl{})) || ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNInterfaceDecl{})) {
-		// Osty: /tmp/selfhost_merged.osty:13803:9
 		return srAstResolveTypeDecl(file, idx, scope, out)
 	}
-	// Osty: /tmp/selfhost_merged.osty:13805:5
 	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNTypeAlias{})) {
-		// Osty: /tmp/selfhost_merged.osty:13806:9
 		return srAstResolveTypeAlias(file, node, scope, out)
 	}
-	// Osty: /tmp/selfhost_merged.osty:13808:5
 	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNLet{})) {
-		// Osty: /tmp/selfhost_merged.osty:13809:9
 		out = srAstResolveType(file, srAstChildAt(node.children, 0), scope, "", out)
-		// Osty: /tmp/selfhost_merged.osty:13810:9
 		return srAstResolveExpr(file, node.right, scope, out)
 	}
 	return out
@@ -34113,73 +34106,42 @@ func srAstScanFunctionsInDecl(file *AstFile, idx int, scope *SelfResolveScope, r
 
 // Osty: /tmp/selfhost_merged.osty:13815:1
 func srAstResolveTypeDecl(file *AstFile, idx int, scope *SelfResolveScope, result *SelfResolveResult) *SelfResolveResult {
-	// Osty: /tmp/selfhost_merged.osty:13821:5
 	node := srAstNode(file, idx)
-	_ = node
-	// Osty: /tmp/selfhost_merged.osty:13822:5
 	typeScope := srChildScope(scope)
-	_ = typeScope
-	// Osty: /tmp/selfhost_merged.osty:13823:5
 	out := srScopeDefine(typeScope, result, selfSymbolAtNode("Self", "type", node.text, 0, typeScope.depth, node.start, node.end, true, idx))
-	_ = out
-	// Osty: /tmp/selfhost_merged.osty:13828:5
 	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNStructDecl{})) || ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNEnumDecl{})) {
-		// Osty: /tmp/selfhost_merged.osty:13829:9
 		out = srAstDeclareGenerics(file, node.children2, typeScope, out)
 	}
-	// Osty: /tmp/selfhost_merged.osty:13831:5
 	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNStructDecl{})) {
-		// Osty: /tmp/selfhost_merged.osty:13832:9
 		for _, memberIdx := range node.children {
-			// Osty: /tmp/selfhost_merged.osty:13833:13
 			member := srAstNode(file, memberIdx)
-			_ = member
-			// Osty: /tmp/selfhost_merged.osty:13834:13
 			if ostyEqual(member.kind, AstNodeKind(&AstNodeKind_AstNField_{})) {
-				// Osty: /tmp/selfhost_merged.osty:13835:17
 				out = srAstResolveType(file, member.right, typeScope, node.text, out)
-				// Osty: /tmp/selfhost_merged.osty:13836:17
 				out = srAstResolveExpr(file, member.left, typeScope, out)
 			} else if ostyEqual(member.kind, AstNodeKind(&AstNodeKind_AstNFnDecl{})) {
-				// Osty: /tmp/selfhost_merged.osty:13838:17
-				out = srAstResolveFunction(file, memberIdx, typeScope, node.text, out)
+				out = srAstResolveFunction(file, memberIdx, typeScope, node.text, false, out)
 			}
 		}
 	} else if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNEnumDecl{})) {
-		// Osty: /tmp/selfhost_merged.osty:13842:9
 		for _, memberIdx := range node.children {
-			// Osty: /tmp/selfhost_merged.osty:13843:13
 			member := srAstNode(file, memberIdx)
-			_ = member
-			// Osty: /tmp/selfhost_merged.osty:13844:13
 			if ostyEqual(member.kind, AstNodeKind(&AstNodeKind_AstNVariant{})) {
-				// Osty: /tmp/selfhost_merged.osty:13845:17
 				for _, ty := range member.children {
-					// Osty: /tmp/selfhost_merged.osty:13846:21
 					out = srAstResolveType(file, ty, typeScope, node.text, out)
 				}
 			} else if ostyEqual(member.kind, AstNodeKind(&AstNodeKind_AstNFnDecl{})) {
-				// Osty: /tmp/selfhost_merged.osty:13849:17
-				out = srAstResolveFunction(file, memberIdx, typeScope, node.text, out)
+				out = srAstResolveFunction(file, memberIdx, typeScope, node.text, false, out)
 			}
 		}
 	} else if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNInterfaceDecl{})) {
-		// Osty: /tmp/selfhost_merged.osty:13853:9
 		for _, superIdx := range node.children2 {
-			// Osty: /tmp/selfhost_merged.osty:13854:13
 			out = srAstResolveType(file, superIdx, typeScope, node.text, out)
 		}
-		// Osty: /tmp/selfhost_merged.osty:13856:9
 		for _, memberIdx := range node.children {
-			// Osty: /tmp/selfhost_merged.osty:13857:13
 			member := srAstNode(file, memberIdx)
-			_ = member
-			// Osty: /tmp/selfhost_merged.osty:13858:13
 			if ostyEqual(member.kind, AstNodeKind(&AstNodeKind_AstNFnDecl{})) {
-				// Osty: /tmp/selfhost_merged.osty:13859:17
-				out = srAstResolveFunction(file, memberIdx, typeScope, node.text, out)
+				out = srAstResolveFunction(file, memberIdx, typeScope, node.text, member.right >= 0, out)
 			} else if ostyEqual(member.kind, AstNodeKind(&AstNodeKind_AstNType{})) {
-				// Osty: /tmp/selfhost_merged.osty:13861:17
 				out = srAstResolveType(file, memberIdx, typeScope, node.text, out)
 			}
 		}
@@ -34226,38 +34188,21 @@ func srAstDeclareGenerics(file *AstFile, generics []int, scope *SelfResolveScope
 }
 
 // Osty: /tmp/selfhost_merged.osty:13903:1
-func srAstResolveFunction(file *AstFile, idx int, scope *SelfResolveScope, owner string, result *SelfResolveResult) *SelfResolveResult {
-	// Osty: /tmp/selfhost_merged.osty:13910:5
+func srAstResolveFunction(file *AstFile, idx int, scope *SelfResolveScope, owner string, ifaceDefault bool, result *SelfResolveResult) *SelfResolveResult {
 	node := srAstNode(file, idx)
-	_ = node
-	// Osty: /tmp/selfhost_merged.osty:13911:5
 	out := result
-	_ = out
-	// Osty: /tmp/selfhost_merged.osty:13912:5
 	fnScope := srChildScope(scope)
-	_ = fnScope
-	// Osty: /tmp/selfhost_merged.osty:13913:5
 	out = srAstDeclareGenerics(file, node.children2, fnScope, out)
-	// Osty: /tmp/selfhost_merged.osty:13914:5
 	for _, paramIdx := range node.children {
-		// Osty: /tmp/selfhost_merged.osty:13915:9
 		param := srAstNode(file, paramIdx)
-		_ = param
-		// Osty: /tmp/selfhost_merged.osty:13916:9
 		if param.left >= 0 && param.text != "" {
-			// Osty: /tmp/selfhost_merged.osty:13917:13
 			out = srAstResolveExpr(file, param.left, fnScope, out)
 		}
-		// Osty: /tmp/selfhost_merged.osty:13919:9
 		out = srAstResolveType(file, param.right, fnScope, owner, out)
-		// Osty: /tmp/selfhost_merged.osty:13920:9
 		out = srAstResolveParamBindings(file, paramIdx, fnScope, owner, out)
 	}
-	// Osty: /tmp/selfhost_merged.osty:13922:5
 	out = srAstResolveType(file, node.left, fnScope, owner, out)
-	// Osty: /tmp/selfhost_merged.osty:13923:5
-	bodyScope := srChildScope(fnScope)
-	_ = bodyScope
+	bodyScope := srChildScopeWithIfaceDefault(fnScope, ifaceDefault)
 	return srAstResolveBlock(file, node.right, bodyScope, out)
 }
 
@@ -34364,51 +34309,37 @@ func srAstResolveFor(file *AstFile, node *AstNode, scope *SelfResolveScope, resu
 
 // Osty: /tmp/selfhost_merged.osty:13997:1
 func srAstResolveType(file *AstFile, idx int, scope *SelfResolveScope, owner string, result *SelfResolveResult) *SelfResolveResult {
-	// Osty: /tmp/selfhost_merged.osty:14004:5
 	if idx < 0 {
-		// Osty: /tmp/selfhost_merged.osty:14005:9
 		return result
 	}
-	// Osty: /tmp/selfhost_merged.osty:14007:5
 	node := srAstNode(file, idx)
-	_ = node
-	// Osty: /tmp/selfhost_merged.osty:14008:5
 	if !ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNType{})) {
-		// Osty: /tmp/selfhost_merged.osty:14009:9
 		return result
 	}
-	// Osty: /tmp/selfhost_merged.osty:14011:5
 	out := result
-	_ = out
-	// Osty: /tmp/selfhost_merged.osty:14012:5
 	if node.text == "error" {
-		// Osty: /tmp/selfhost_merged.osty:14013:9
 		return out
 	}
-	// Osty: /tmp/selfhost_merged.osty:14015:5
 	if node.text == "optional" {
-		// Osty: /tmp/selfhost_merged.osty:14016:9
 		out = srAstResolveType(file, node.left, scope, owner, out)
 	} else if node.text == "tuple" {
-		// Osty: /tmp/selfhost_merged.osty:14018:9
 		for _, child := range node.children {
-			// Osty: /tmp/selfhost_merged.osty:14019:13
 			out = srAstResolveType(file, child, scope, owner, out)
 		}
 	} else if node.text == "fn" {
-		// Osty: /tmp/selfhost_merged.osty:14022:9
 		for _, child := range node.children {
-			// Osty: /tmp/selfhost_merged.osty:14023:13
 			out = srAstResolveType(file, child, scope, owner, out)
 		}
-		// Osty: /tmp/selfhost_merged.osty:14025:9
 		out = srAstResolveType(file, node.right, scope, owner, out)
 	} else {
-		// Osty: /tmp/selfhost_merged.osty:14027:9
 		out = srResolveOneAstType(node.text, node.start, node.end, idx, scope, owner, out)
-		// Osty: /tmp/selfhost_merged.osty:14028:9
+		head := srPathHead(node.text)
+		tail := srPathLastSegment(node.text)
+		sym := srScopeLookup(scope, head)
+		if head != "" && tail != head && sym.kind == "package" {
+			out = srResolvePackageMember(file, sym, tail, node.start, node.end, idx, true, out)
+		}
 		for _, child := range node.children {
-			// Osty: /tmp/selfhost_merged.osty:14029:13
 			out = srAstResolveType(file, child, scope, owner, out)
 		}
 	}
@@ -34417,79 +34348,49 @@ func srAstResolveType(file *AstFile, idx int, scope *SelfResolveScope, owner str
 
 // Osty: /tmp/selfhost_merged.osty:14035:1
 func srAstResolveExpr(file *AstFile, idx int, scope *SelfResolveScope, result *SelfResolveResult) *SelfResolveResult {
-	// Osty: /tmp/selfhost_merged.osty:14041:5
 	if idx < 0 {
-		// Osty: /tmp/selfhost_merged.osty:14042:9
 		return result
 	}
-	// Osty: /tmp/selfhost_merged.osty:14044:5
 	node := srAstNode(file, idx)
-	_ = node
-	// Osty: /tmp/selfhost_merged.osty:14045:5
 	out := result
-	_ = out
-	// Osty: /tmp/selfhost_merged.osty:14046:5
 	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNIdent{})) {
-		// Osty: /tmp/selfhost_merged.osty:14047:9
 		return srResolveOneAstIdent(node.text, node.start, node.end, idx, scope, out)
 	}
-	// Osty: /tmp/selfhost_merged.osty:14049:5
 	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNField{})) {
-		// Osty: /tmp/selfhost_merged.osty:14050:9
-		return srAstResolveExpr(file, node.left, scope, out)
+		return srAstResolveField(file, idx, node, scope, out)
 	}
-	// Osty: /tmp/selfhost_merged.osty:14052:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNCall{})) {
+		return srAstResolveCall(file, node, scope, out)
+	}
 	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNStructLit{})) {
-		// Osty: /tmp/selfhost_merged.osty:14053:9
 		out = srAstResolveExpr(file, node.left, scope, out)
-		// Osty: /tmp/selfhost_merged.osty:14054:9
 		for _, fieldIdx := range node.children {
-			// Osty: /tmp/selfhost_merged.osty:14055:13
 			out = srAstResolveStructField(file, fieldIdx, scope, out)
 		}
-		// Osty: /tmp/selfhost_merged.osty:14057:9
 		return srAstResolveExpr(file, node.right, scope, out)
 	}
-	// Osty: /tmp/selfhost_merged.osty:14059:5
 	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNIf{})) {
-		// Osty: /tmp/selfhost_merged.osty:14060:9
 		return srAstResolveIf(file, node, scope, out)
 	}
-	// Osty: /tmp/selfhost_merged.osty:14062:5
 	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNMatch{})) {
-		// Osty: /tmp/selfhost_merged.osty:14063:9
 		return srAstResolveMatch(file, node, scope, out)
 	}
-	// Osty: /tmp/selfhost_merged.osty:14065:5
 	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNClosure{})) {
-		// Osty: /tmp/selfhost_merged.osty:14066:9
 		return srAstResolveClosure(file, node, scope, out)
 	}
-	// Osty: /tmp/selfhost_merged.osty:14068:5
 	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNBlock{})) {
-		// Osty: /tmp/selfhost_merged.osty:14069:9
 		blockScope := srChildScope(scope)
-		_ = blockScope
-		// Osty: /tmp/selfhost_merged.osty:14070:9
 		return srAstResolveBlock(file, idx, blockScope, out)
 	}
-	// Osty: /tmp/selfhost_merged.osty:14072:5
 	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNType{})) || ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNPattern{})) || ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNParam{})) || ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNGenericParam{})) {
-		// Osty: /tmp/selfhost_merged.osty:14073:9
 		return out
 	}
-	// Osty: /tmp/selfhost_merged.osty:14075:5
 	out = srAstResolveExpr(file, node.left, scope, out)
-	// Osty: /tmp/selfhost_merged.osty:14076:5
 	out = srAstResolveExpr(file, node.right, scope, out)
-	// Osty: /tmp/selfhost_merged.osty:14077:5
 	for _, child := range node.children {
-		// Osty: /tmp/selfhost_merged.osty:14078:9
 		out = srAstResolveExpr(file, child, scope, out)
 	}
-	// Osty: /tmp/selfhost_merged.osty:14080:5
 	for _, child := range node.children2 {
-		// Osty: /tmp/selfhost_merged.osty:14081:9
 		out = srAstResolveExpr(file, child, scope, out)
 	}
 	return out
@@ -34497,25 +34398,58 @@ func srAstResolveExpr(file *AstFile, idx int, scope *SelfResolveScope, result *S
 
 // Osty: /tmp/selfhost_merged.osty:14086:1
 func srAstResolveStructField(file *AstFile, idx int, scope *SelfResolveScope, result *SelfResolveResult) *SelfResolveResult {
-	// Osty: /tmp/selfhost_merged.osty:14092:5
 	if idx < 0 {
-		// Osty: /tmp/selfhost_merged.osty:14093:9
 		return result
 	}
-	// Osty: /tmp/selfhost_merged.osty:14095:5
 	node := srAstNode(file, idx)
-	_ = node
-	// Osty: /tmp/selfhost_merged.osty:14096:5
 	if !ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNField_{})) {
-		// Osty: /tmp/selfhost_merged.osty:14097:9
 		return srAstResolveExpr(file, idx, scope, result)
 	}
-	// Osty: /tmp/selfhost_merged.osty:14099:5
 	if node.left >= 0 {
-		// Osty: /tmp/selfhost_merged.osty:14100:9
 		return srAstResolveExpr(file, node.left, scope, result)
 	}
 	return srResolveOneAstIdent(node.text, node.start, node.end, idx, scope, result)
+}
+
+func srAstResolveField(file *AstFile, idx int, node *AstNode, scope *SelfResolveScope, result *SelfResolveResult) *SelfResolveResult {
+	out := srAstResolveExpr(file, node.left, scope, result)
+	base := srAstNode(file, node.left)
+	if ostyEqual(base.kind, AstNodeKind(&AstNodeKind_AstNIdent{})) {
+		sym := srScopeLookup(scope, base.text)
+		if sym.kind == "package" {
+			return srResolvePackageMember(file, sym, node.text, node.start, node.end, idx, false, out)
+		}
+		if scope.ifaceDefault && node.flags != 1 && base.text == "self" {
+			return srInterfaceDefaultFieldAtNode(out, node.start, node.end, idx)
+		}
+	}
+	return out
+}
+
+func srAstResolveCall(file *AstFile, node *AstNode, scope *SelfResolveScope, result *SelfResolveResult) *SelfResolveResult {
+	out := result
+	callee := srAstNode(file, node.left)
+	if ostyEqual(callee.kind, AstNodeKind(&AstNodeKind_AstNField{})) {
+		out = srAstResolveCallField(file, callee, scope, out)
+	} else {
+		out = srAstResolveExpr(file, node.left, scope, out)
+	}
+	for _, child := range node.children {
+		out = srAstResolveExpr(file, child, scope, out)
+	}
+	return out
+}
+
+func srAstResolveCallField(file *AstFile, node *AstNode, scope *SelfResolveScope, result *SelfResolveResult) *SelfResolveResult {
+	out := srAstResolveExpr(file, node.left, scope, result)
+	base := srAstNode(file, node.left)
+	if ostyEqual(base.kind, AstNodeKind(&AstNodeKind_AstNIdent{})) {
+		sym := srScopeLookup(scope, base.text)
+		if sym.kind == "package" {
+			out = srResolvePackageMember(file, sym, node.text, node.start, node.end, node.left, false, out)
+		}
+	}
+	return out
 }
 
 // Osty: /tmp/selfhost_merged.osty:14105:1
@@ -34573,23 +34507,13 @@ func srAstResolveMatch(file *AstFile, node *AstNode, scope *SelfResolveScope, re
 
 // Osty: /tmp/selfhost_merged.osty:14141:1
 func srAstResolveClosure(file *AstFile, node *AstNode, scope *SelfResolveScope, result *SelfResolveResult) *SelfResolveResult {
-	// Osty: /tmp/selfhost_merged.osty:14147:5
 	out := result
-	_ = out
-	// Osty: /tmp/selfhost_merged.osty:14148:5
-	closureScope := srChildScope(scope)
-	_ = closureScope
-	// Osty: /tmp/selfhost_merged.osty:14149:5
+	closureScope := srChildScopeWithIfaceDefault(scope, false)
 	for _, paramIdx := range node.children {
-		// Osty: /tmp/selfhost_merged.osty:14150:9
 		param := srAstNode(file, paramIdx)
-		_ = param
-		// Osty: /tmp/selfhost_merged.osty:14151:9
 		out = srAstResolveType(file, param.right, closureScope, "", out)
-		// Osty: /tmp/selfhost_merged.osty:14152:9
 		out = srAstResolveParamBindings(file, paramIdx, closureScope, "", out)
 	}
-	// Osty: /tmp/selfhost_merged.osty:14154:5
 	out = srAstResolveType(file, node.right, closureScope, "", out)
 	return srAstResolveExpr(file, node.left, closureScope, out)
 }
@@ -34651,10 +34575,22 @@ func srResolveOneAstIdent(name string, start int, end int, node int, scope *Self
 		return _p2266 + _rhs2267
 	}()
 	// Osty: /tmp/selfhost_merged.osty:14189:5
-	func() struct{} {
-		out.diagnostics = append(out.diagnostics, selfResolveDiagnosticAtNode("E0500", "undefined name", name, start, end, node))
-		return struct{}{}
-	}()
+	hint := srUndefinedHint(scope, name)
+	_ = hint
+	// Osty: /tmp/selfhost_merged.osty:14190:5
+	if hint == "" {
+		// Osty: /tmp/selfhost_merged.osty:14191:9
+		func() struct{} {
+			out.diagnostics = append(out.diagnostics, selfResolveDiagnosticAtNode("E0500", "undefined name", name, start, end, node))
+			return struct{}{}
+		}()
+	} else {
+		// Osty: /tmp/selfhost_merged.osty:14193:9
+		func() struct{} {
+			out.diagnostics = append(out.diagnostics, selfResolveDiagnosticHintAtNode("E0500", "undefined name", name, start, end, node, hint))
+			return struct{}{}
+		}()
+	}
 	return out
 }
 
@@ -34664,26 +34600,34 @@ func srResolveOneAstType(name string, start int, end int, node int, scope *SelfR
 	out := result
 	_ = out
 	// Osty: /tmp/selfhost_merged.osty:14203:5
-	if name == "Self" {
-		// Osty: /tmp/selfhost_merged.osty:14204:9
+	head := srPathHead(name)
+	_ = head
+	// Osty: /tmp/selfhost_merged.osty:14204:5
+	if head == "" {
+		// Osty: /tmp/selfhost_merged.osty:14205:9
+		return out
+	}
+	// Osty: /tmp/selfhost_merged.osty:14207:5
+	if head == "Self" {
+		// Osty: /tmp/selfhost_merged.osty:14208:9
 		if owner == "" {
-			// Osty: /tmp/selfhost_merged.osty:14205:13
+			// Osty: /tmp/selfhost_merged.osty:14209:13
 			return srSelfTypeOutsideAtNode(out, start, end, node)
 		}
-		// Osty: /tmp/selfhost_merged.osty:14207:9
+		// Osty: /tmp/selfhost_merged.osty:14211:9
 		return srRecordTypeRef(out, name, node)
 	}
-	// Osty: /tmp/selfhost_merged.osty:14209:5
-	if srIsBuiltinTypeName(name) {
-		// Osty: /tmp/selfhost_merged.osty:14210:9
-		return srRecordTypeRef(out, name, node)
-	}
-	// Osty: /tmp/selfhost_merged.osty:14212:5
-	sym := srScopeLookup(scope, name)
-	_ = sym
 	// Osty: /tmp/selfhost_merged.osty:14213:5
+	if srIsBuiltinTypeName(head) {
+		// Osty: /tmp/selfhost_merged.osty:14214:9
+		return srRecordTypeRef(out, name, node)
+	}
+	// Osty: /tmp/selfhost_merged.osty:14216:5
+	sym := srScopeLookup(scope, head)
+	_ = sym
+	// Osty: /tmp/selfhost_merged.osty:14217:5
 	if sym.name == "" {
-		// Osty: /tmp/selfhost_merged.osty:14214:12
+		// Osty: /tmp/selfhost_merged.osty:14218:12
 		out.unresolved = func() int {
 			var _p2268 int = out.unresolved
 			var _rhs2269 int = 1
@@ -34695,22 +34639,22 @@ func srResolveOneAstType(name string, start int, end int, node int, scope *SelfR
 			}
 			return _p2268 + _rhs2269
 		}()
-		// Osty: /tmp/selfhost_merged.osty:14215:9
-		func() struct{} {
-			out.diagnostics = append(out.diagnostics, selfResolveDiagnosticAtNode("E0500", "undefined type", name, start, end, node))
-			return struct{}{}
-		}()
-		// Osty: /tmp/selfhost_merged.osty:14216:9
-		return out
-	}
-	// Osty: /tmp/selfhost_merged.osty:14218:5
-	if !(srSymbolCanBeType(sym)) {
 		// Osty: /tmp/selfhost_merged.osty:14219:9
 		func() struct{} {
-			out.diagnostics = append(out.diagnostics, selfResolveDiagnosticAtNode("E0502", "name is not a type", name, start, end, node))
+			out.diagnostics = append(out.diagnostics, selfResolveDiagnosticAtNode("E0500", "undefined type", head, start, end, node))
 			return struct{}{}
 		}()
 		// Osty: /tmp/selfhost_merged.osty:14220:9
+		return out
+	}
+	// Osty: /tmp/selfhost_merged.osty:14222:5
+	if !(srSymbolCanBeType(sym)) {
+		// Osty: /tmp/selfhost_merged.osty:14223:9
+		func() struct{} {
+			out.diagnostics = append(out.diagnostics, selfResolveDiagnosticAtNode("E0502", "name is not a type", head, start, end, node))
+			return struct{}{}
+		}()
+		// Osty: /tmp/selfhost_merged.osty:14224:9
 		return out
 	}
 	return srRecordTypeRef(out, name, node)
@@ -34796,6 +34740,19 @@ func srSelfTypeOutsideAtNode(result *SelfResolveResult, start int, end int, node
 	// Osty: /tmp/selfhost_merged.osty:14261:5
 	func() struct{} {
 		out.diagnostics = append(out.diagnostics, selfResolveDiagnosticAtNode("E0504", "`Self` outside type body", "Self", start, end, node))
+		return struct{}{}
+	}()
+	return out
+}
+
+// Osty: /tmp/selfhost_merged.osty:14264:1
+func srInterfaceDefaultFieldAtNode(result *SelfResolveResult, start int, end int, node int) *SelfResolveResult {
+	// Osty: /tmp/selfhost_merged.osty:14269:5
+	out := result
+	_ = out
+	// Osty: /tmp/selfhost_merged.osty:14270:5
+	func() struct{} {
+		out.diagnostics = append(out.diagnostics, selfResolveDiagnosticHintAtNode("E0606", "interface default method bodies may not access fields on `self`", "", start, end, node, "expose the value through an interface method and call that instead"))
 		return struct{}{}
 	}()
 	return out
@@ -35761,6 +35718,372 @@ func srStringListIndex(items []string, target string) int {
 		}()
 	}
 	return -1
+}
+
+// Osty: /tmp/selfhost_merged.osty:14806:1
+func srUndefinedHint(scope *SelfResolveScope, name string) string {
+	// Osty: /tmp/selfhost_merged.osty:14807:5
+	suggestion := srSuggestSimilar(scope, name)
+	_ = suggestion
+	// Osty: /tmp/selfhost_merged.osty:14808:5
+	if suggestion == "" {
+		// Osty: /tmp/selfhost_merged.osty:14809:9
+		return ""
+	}
+	return "did you mean `" + suggestion + "`?"
+}
+
+// Osty: /tmp/selfhost_merged.osty:14813:1
+func srSuggestSimilar(scope *SelfResolveScope, name string) string {
+	// Osty: /tmp/selfhost_merged.osty:14814:5
+	best := ""
+	_ = best
+	// Osty: /tmp/selfhost_merged.osty:14815:5
+	bestDist := 3
+	_ = bestDist
+	// Osty: /tmp/selfhost_merged.osty:14816:5
+	nameLen := srStringUnitCount(name)
+	_ = nameLen
+	// Osty: /tmp/selfhost_merged.osty:14817:5
+	for _, sym := range scope.symbols {
+		// Osty: /tmp/selfhost_merged.osty:14818:9
+		diff := func() int {
+			var _p2302 int = srStringUnitCount(sym.name)
+			var _rhs2303 int = nameLen
+			if _rhs2303 > 0 && _p2302 < math.MinInt+_rhs2303 {
+				panic("integer overflow")
+			}
+			if _rhs2303 < 0 && _p2302 > math.MaxInt+_rhs2303 {
+				panic("integer overflow")
+			}
+			return _p2302 - _rhs2303
+		}()
+		_ = diff
+		// Osty: /tmp/selfhost_merged.osty:14819:9
+		if diff > bestDist-1 || 0-diff > bestDist-1 {
+			// Osty: /tmp/selfhost_merged.osty:14820:13
+			continue
+		}
+		// Osty: /tmp/selfhost_merged.osty:14822:9
+		dist := srLevenshteinBounded(name, sym.name, bestDist)
+		_ = dist
+		// Osty: /tmp/selfhost_merged.osty:14823:9
+		if dist < bestDist {
+			// Osty: /tmp/selfhost_merged.osty:14824:13
+			best = sym.name
+			// Osty: /tmp/selfhost_merged.osty:14825:13
+			bestDist = dist
+			// Osty: /tmp/selfhost_merged.osty:14826:13
+			if bestDist == 1 {
+				// Osty: /tmp/selfhost_merged.osty:14827:17
+				return best
+			}
+		}
+	}
+	return best
+}
+
+// Osty: /tmp/selfhost_merged.osty:14832:1
+func srLevenshteinBounded(left string, right string, limit int) int {
+	// Osty: /tmp/selfhost_merged.osty:14833:5
+	if left == right {
+		// Osty: /tmp/selfhost_merged.osty:14834:9
+		return 0
+	}
+	// Osty: /tmp/selfhost_merged.osty:14836:5
+	leftUnits := strings.Split(left, "")
+	_ = leftUnits
+	// Osty: /tmp/selfhost_merged.osty:14837:5
+	rightUnits := strings.Split(right, "")
+	_ = rightUnits
+	// Osty: /tmp/selfhost_merged.osty:14838:5
+	leftLen := srStringUnitCount(left)
+	_ = leftLen
+	// Osty: /tmp/selfhost_merged.osty:14839:5
+	rightLen := srStringUnitCount(right)
+	_ = rightLen
+	// Osty: /tmp/selfhost_merged.osty:14840:5
+	diff := func() int {
+		var _p2304 int = leftLen
+		var _rhs2305 int = rightLen
+		if _rhs2305 > 0 && _p2304 < math.MinInt+_rhs2305 {
+			panic("integer overflow")
+		}
+		if _rhs2305 < 0 && _p2304 > math.MaxInt+_rhs2305 {
+			panic("integer overflow")
+		}
+		return _p2304 - _rhs2305
+	}()
+	_ = diff
+	// Osty: /tmp/selfhost_merged.osty:14841:5
+	if diff >= limit || 0-diff >= limit {
+		// Osty: /tmp/selfhost_merged.osty:14842:9
+		return limit
+	}
+	// Osty: /tmp/selfhost_merged.osty:14844:5
+	prev := make([]int, 0, 1)
+	_ = prev
+	// Osty: /tmp/selfhost_merged.osty:14845:5
+	cur := make([]int, 0, 1)
+	_ = cur
+	// Osty: /tmp/selfhost_merged.osty:14846:5
+	j := 0
+	_ = j
+	// Osty: /tmp/selfhost_merged.osty:14847:5
+	for j <= rightLen {
+		// Osty: /tmp/selfhost_merged.osty:14848:9
+		func() struct{} { prev = append(prev, j); return struct{}{} }()
+		// Osty: /tmp/selfhost_merged.osty:14849:9
+		func() struct{} { cur = append(cur, 0); return struct{}{} }()
+		// Osty: /tmp/selfhost_merged.osty:14850:9
+		func() {
+			var _cur2306 int = j
+			var _rhs2307 int = 1
+			if _rhs2307 > 0 && _cur2306 > math.MaxInt-_rhs2307 {
+				panic("integer overflow")
+			}
+			if _rhs2307 < 0 && _cur2306 < math.MinInt-_rhs2307 {
+				panic("integer overflow")
+			}
+			j = _cur2306 + _rhs2307
+		}()
+	}
+	// Osty: /tmp/selfhost_merged.osty:14852:5
+	i := 1
+	_ = i
+	// Osty: /tmp/selfhost_merged.osty:14853:5
+	for i <= leftLen {
+		// Osty: /tmp/selfhost_merged.osty:14854:9
+		cur[0] = i
+		// Osty: /tmp/selfhost_merged.osty:14855:9
+		rowMin := cur[0]
+		_ = rowMin
+		// Osty: /tmp/selfhost_merged.osty:14856:9
+		j = 1
+		// Osty: /tmp/selfhost_merged.osty:14857:9
+		for j <= rightLen {
+			// Osty: /tmp/selfhost_merged.osty:14858:13
+			leftUnit := srStringListAt(leftUnits, i-1)
+			_ = leftUnit
+			// Osty: /tmp/selfhost_merged.osty:14859:13
+			rightUnit := srStringListAt(rightUnits, j-1)
+			_ = rightUnit
+			// Osty: /tmp/selfhost_merged.osty:14860:13
+			cost := 0
+			_ = cost
+			// Osty: /tmp/selfhost_merged.osty:14861:13
+			if leftUnit == rightUnit {
+				// Osty: /tmp/selfhost_merged.osty:14862:17
+				cost = 0
+			} else {
+				// Osty: /tmp/selfhost_merged.osty:14864:17
+				cost = 1
+			}
+			// Osty: /tmp/selfhost_merged.osty:14866:13
+			dist := func() int {
+				var _p2308 int = srIntListAt(prev, j)
+				var _rhs2309 int = 1
+				if _rhs2309 > 0 && _p2308 > math.MaxInt-_rhs2309 {
+					panic("integer overflow")
+				}
+				if _rhs2309 < 0 && _p2308 < math.MinInt-_rhs2309 {
+					panic("integer overflow")
+				}
+				return _p2308 + _rhs2309
+			}()
+			_ = dist
+			// Osty: /tmp/selfhost_merged.osty:14867:13
+			if srIntListAt(cur, j-1)+1 < dist {
+				// Osty: /tmp/selfhost_merged.osty:14868:17
+				dist = srIntListAt(cur, j-1) + 1
+			}
+			// Osty: /tmp/selfhost_merged.osty:14870:13
+			if srIntListAt(prev, j-1)+cost < dist {
+				// Osty: /tmp/selfhost_merged.osty:14871:17
+				dist = srIntListAt(prev, j-1) + cost
+			}
+			// Osty: /tmp/selfhost_merged.osty:14873:13
+			cur[j] = dist
+			// Osty: /tmp/selfhost_merged.osty:14874:13
+			if dist < rowMin {
+				// Osty: /tmp/selfhost_merged.osty:14875:17
+				rowMin = dist
+			}
+			// Osty: /tmp/selfhost_merged.osty:14877:13
+			func() {
+				var _cur2310 int = j
+				var _rhs2311 int = 1
+				if _rhs2311 > 0 && _cur2310 > math.MaxInt-_rhs2311 {
+					panic("integer overflow")
+				}
+				if _rhs2311 < 0 && _cur2310 < math.MinInt-_rhs2311 {
+					panic("integer overflow")
+				}
+				j = _cur2310 + _rhs2311
+			}()
+		}
+		// Osty: /tmp/selfhost_merged.osty:14879:9
+		if rowMin >= limit {
+			// Osty: /tmp/selfhost_merged.osty:14880:13
+			return limit
+		}
+		// Osty: /tmp/selfhost_merged.osty:14882:9
+		j = 0
+		// Osty: /tmp/selfhost_merged.osty:14883:9
+		for j <= rightLen {
+			// Osty: /tmp/selfhost_merged.osty:14884:13
+			prev[j] = cur[j]
+			// Osty: /tmp/selfhost_merged.osty:14885:13
+			cur[j] = 0
+			// Osty: /tmp/selfhost_merged.osty:14886:13
+			func() {
+				var _cur2312 int = j
+				var _rhs2313 int = 1
+				if _rhs2313 > 0 && _cur2312 > math.MaxInt-_rhs2313 {
+					panic("integer overflow")
+				}
+				if _rhs2313 < 0 && _cur2312 < math.MinInt-_rhs2313 {
+					panic("integer overflow")
+				}
+				j = _cur2312 + _rhs2313
+			}()
+		}
+		// Osty: /tmp/selfhost_merged.osty:14888:9
+		func() {
+			var _cur2314 int = i
+			var _rhs2315 int = 1
+			if _rhs2315 > 0 && _cur2314 > math.MaxInt-_rhs2315 {
+				panic("integer overflow")
+			}
+			if _rhs2315 < 0 && _cur2314 < math.MinInt-_rhs2315 {
+				panic("integer overflow")
+			}
+			i = _cur2314 + _rhs2315
+		}()
+	}
+	return prev[rightLen]
+}
+
+// Osty: /tmp/selfhost_merged.osty:14893:1
+func srStringUnitCount(text string) int {
+	// Osty: /tmp/selfhost_merged.osty:14894:5
+	count := 0
+	_ = count
+	// Osty: /tmp/selfhost_merged.osty:14895:5
+	for _, unit := range strings.Split(text, "") {
+		// Osty: /tmp/selfhost_merged.osty:14896:9
+		if unit != "" {
+			// Osty: /tmp/selfhost_merged.osty:14897:13
+			func() {
+				var _cur2316 int = count
+				var _rhs2317 int = 1
+				if _rhs2317 > 0 && _cur2316 > math.MaxInt-_rhs2317 {
+					panic("integer overflow")
+				}
+				if _rhs2317 < 0 && _cur2316 < math.MinInt-_rhs2317 {
+					panic("integer overflow")
+				}
+				count = _cur2316 + _rhs2317
+			}()
+		}
+	}
+	return count
+}
+
+// Osty: /tmp/selfhost_merged.osty:14901:1
+func srAstUseNode(file *AstFile, pkgSym *SelfSymbol) *AstNode {
+	// Osty: /tmp/selfhost_merged.osty:14902:5
+	if pkgSym.node < 0 {
+		// Osty: /tmp/selfhost_merged.osty:14903:9
+		return emptyAstNode(AstNodeKind(&AstNodeKind_AstNFile{}))
+	}
+	return srAstNode(file, pkgSym.node)
+}
+
+// Osty: /tmp/selfhost_merged.osty:14907:1
+func srAstLookupPackageMember(file *AstFile, useNode *AstNode, member string) *SelfSymbol {
+	// Osty: /tmp/selfhost_merged.osty:14908:5
+	for _, childIdx := range useNode.children {
+		// Osty: /tmp/selfhost_merged.osty:14909:9
+		child := srAstNode(file, childIdx)
+		_ = child
+		// Osty: /tmp/selfhost_merged.osty:14910:9
+		if child.text == member {
+			// Osty: /tmp/selfhost_merged.osty:14911:13
+			return selfSymbolAtNode(member, srAstPackageMemberKind(child), "", 0, 0, child.start, child.end, true, childIdx)
+		}
+	}
+	return srEmptySymbol()
+}
+
+// Osty: /tmp/selfhost_merged.osty:14915:1
+func srAstPackageMemberKind(node *AstNode) string {
+	// Osty: /tmp/selfhost_merged.osty:14916:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNFnDecl{})) {
+		// Osty: /tmp/selfhost_merged.osty:14917:9
+		return "fn"
+	}
+	// Osty: /tmp/selfhost_merged.osty:14919:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNStructDecl{})) || ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNEnumDecl{})) || ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNInterfaceDecl{})) || ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNTypeAlias{})) {
+		// Osty: /tmp/selfhost_merged.osty:14920:9
+		return "type"
+	}
+	// Osty: /tmp/selfhost_merged.osty:14922:5
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNLet{})) {
+		// Osty: /tmp/selfhost_merged.osty:14923:9
+		return "value"
+	}
+	return ""
+}
+
+// Osty: /tmp/selfhost_merged.osty:14927:1
+func srResolvePackageMember(file *AstFile, pkgSym *SelfSymbol, member string, start int, end int, node int, typePos bool, result *SelfResolveResult) *SelfResolveResult {
+	// Osty: /tmp/selfhost_merged.osty:14936:5
+	out := result
+	_ = out
+	// Osty: /tmp/selfhost_merged.osty:14937:5
+	useNode := srAstUseNode(file, pkgSym)
+	_ = useNode
+	// Osty: /tmp/selfhost_merged.osty:14938:5
+	if !ostyEqual(useNode.kind, AstNodeKind(&AstNodeKind_AstNUseDecl{})) {
+		// Osty: /tmp/selfhost_merged.osty:14939:9
+		return out
+	}
+	// Osty: /tmp/selfhost_merged.osty:14941:5
+	if srAstListCount(useNode.children) == 0 {
+		// Osty: /tmp/selfhost_merged.osty:14942:9
+		return out
+	}
+	// Osty: /tmp/selfhost_merged.osty:14944:5
+	sym := srAstLookupPackageMember(file, useNode, member)
+	_ = sym
+	// Osty: /tmp/selfhost_merged.osty:14945:5
+	if sym.name == "" {
+		// Osty: /tmp/selfhost_merged.osty:14946:9
+		noun := "name"
+		_ = noun
+		// Osty: /tmp/selfhost_merged.osty:14947:9
+		if typePos {
+			// Osty: /tmp/selfhost_merged.osty:14948:13
+			noun = "type"
+		}
+		// Osty: /tmp/selfhost_merged.osty:14950:9
+		func() struct{} {
+			out.diagnostics = append(out.diagnostics, selfResolveDiagnosticAtNode("E0508", "package `"+pkgSym.name+"` has no exported "+noun, member, start, end, node))
+			return struct{}{}
+		}()
+		// Osty: /tmp/selfhost_merged.osty:14958:9
+		return out
+	}
+	// Osty: /tmp/selfhost_merged.osty:14960:5
+	if typePos && !(srSymbolCanBeType(sym)) {
+		// Osty: /tmp/selfhost_merged.osty:14961:9
+		func() struct{} {
+			out.diagnostics = append(out.diagnostics, selfResolveDiagnosticAtNode("E0502", "name is not a type", member, start, end, node))
+			return struct{}{}
+		}()
+	}
+	return out
 }
 
 // Osty: /tmp/selfhost_merged.osty:14806:1

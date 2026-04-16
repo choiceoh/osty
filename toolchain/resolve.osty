@@ -22,6 +22,7 @@ pub struct SelfResolveDiagnostic {
     pub start: Int,
     pub end: Int,
     pub node: Int,
+    pub hint: String,
 }
 
 /// SelfResolveResult contains package symbols plus resolver diagnostics and
@@ -87,7 +88,19 @@ fn selfResolveDiagnosticAtNode(
     end: Int,
     node: Int,
 ) -> SelfResolveDiagnostic {
-    SelfResolveDiagnostic { code, message, name, start, end, node }
+    selfResolveDiagnosticHintAtNode(code, message, name, start, end, node, "")
+}
+
+fn selfResolveDiagnosticHintAtNode(
+    code: String,
+    message: String,
+    name: String,
+    start: Int,
+    end: Int,
+    node: Int,
+    hint: String,
+) -> SelfResolveDiagnostic {
+    SelfResolveDiagnostic { code, message, name, start, end, node, hint }
 }
 
 pub fn emptySelfResolveResult() -> SelfResolveResult {
@@ -302,14 +315,27 @@ fn selfResolveName(name: String, start: Int, end: Int, node: Int) -> SelfResolve
 struct SelfResolveScope {
     symbols: List<SelfSymbol>,
     depth: Int,
+    ifaceDefault: Bool,
 }
 
 fn srRootScope(result: SelfResolveResult) -> SelfResolveScope {
-    SelfResolveScope { symbols: srSymbolListCopy(result.symbols), depth: 0 }
+    SelfResolveScope { symbols: srSymbolListCopy(result.symbols), depth: 0, ifaceDefault: false }
 }
 
 fn srChildScope(parent: SelfResolveScope) -> SelfResolveScope {
-    SelfResolveScope { symbols: srSymbolListCopy(parent.symbols), depth: parent.depth + 1 }
+    SelfResolveScope {
+        symbols: srSymbolListCopy(parent.symbols),
+        depth: parent.depth + 1,
+        ifaceDefault: parent.ifaceDefault,
+    }
+}
+
+fn srChildScopeWithIfaceDefault(parent: SelfResolveScope, ifaceDefault: Bool) -> SelfResolveScope {
+    SelfResolveScope {
+        symbols: srSymbolListCopy(parent.symbols),
+        depth: parent.depth + 1,
+        ifaceDefault,
+    }
 }
 
 fn srScopeDefine(
@@ -455,7 +481,7 @@ fn srAstScanFunctionsInDecl(
     let node = srAstNode(file, idx)
     let mut out = result
     if node.kind == AstNFnDecl {
-        return srAstResolveFunction(file, idx, scope, "", out)
+        return srAstResolveFunction(file, idx, scope, "", false, out)
     }
     if node.kind == AstNStructDecl || node.kind == AstNEnumDecl || node.kind == AstNInterfaceDecl {
         return srAstResolveTypeDecl(file, idx, scope, out)
@@ -493,7 +519,7 @@ fn srAstResolveTypeDecl(
                 out = srAstResolveType(file, member.right, typeScope, node.text, out)
                 out = srAstResolveExpr(file, member.left, typeScope, out)
             } else if member.kind == AstNFnDecl {
-                out = srAstResolveFunction(file, memberIdx, typeScope, node.text, out)
+                out = srAstResolveFunction(file, memberIdx, typeScope, node.text, false, out)
             }
         }
     } else if node.kind == AstNEnumDecl {
@@ -504,7 +530,7 @@ fn srAstResolveTypeDecl(
                     out = srAstResolveType(file, ty, typeScope, node.text, out)
                 }
             } else if member.kind == AstNFnDecl {
-                out = srAstResolveFunction(file, memberIdx, typeScope, node.text, out)
+                out = srAstResolveFunction(file, memberIdx, typeScope, node.text, false, out)
             }
         }
     } else if node.kind == AstNInterfaceDecl {
@@ -514,7 +540,7 @@ fn srAstResolveTypeDecl(
         for memberIdx in node.children {
             let member = srAstNode(file, memberIdx)
             if member.kind == AstNFnDecl {
-                out = srAstResolveFunction(file, memberIdx, typeScope, node.text, out)
+                out = srAstResolveFunction(file, memberIdx, typeScope, node.text, member.right >= 0, out)
             } else if member.kind == AstNType {
                 out = srAstResolveType(file, memberIdx, typeScope, node.text, out)
             }
@@ -563,6 +589,7 @@ fn srAstResolveFunction(
     idx: Int,
     scope: SelfResolveScope,
     owner: String,
+    ifaceDefault: Bool,
     result: SelfResolveResult,
 ) -> SelfResolveResult {
     let node = srAstNode(file, idx)
@@ -578,7 +605,7 @@ fn srAstResolveFunction(
         out = srAstResolveParamBindings(file, paramIdx, fnScope, owner, out)
     }
     out = srAstResolveType(file, node.left, fnScope, owner, out)
-    let bodyScope = srChildScope(fnScope)
+    let bodyScope = srChildScopeWithIfaceDefault(fnScope, ifaceDefault)
     srAstResolveBlock(file, node.right, bodyScope, out)
 }
 
@@ -683,6 +710,12 @@ fn srAstResolveType(
         out = srAstResolveType(file, node.right, scope, owner, out)
     } else {
         out = srResolveOneAstType(node.text, node.start, node.end, idx, scope, owner, out)
+        let head = srPathHead(node.text)
+        let tail = srPathLastSegment(node.text)
+        let sym = srScopeLookup(scope, head)
+        if head != "" && tail != head && sym.kind == "package" {
+            out = srResolvePackageMember(file, sym, tail, node.start, node.end, idx, true, out)
+        }
         for child in node.children {
             out = srAstResolveType(file, child, scope, owner, out)
         }
@@ -705,7 +738,10 @@ fn srAstResolveExpr(
         return srResolveOneAstIdent(node.text, node.start, node.end, idx, scope, out)
     }
     if node.kind == AstNField {
-        return srAstResolveExpr(file, node.left, scope, out)
+        return srAstResolveField(file, idx, node, scope, out)
+    }
+    if node.kind == AstNCall {
+        return srAstResolveCall(file, node, scope, out)
     }
     if node.kind == AstNStructLit {
         out = srAstResolveExpr(file, node.left, scope, out)
@@ -760,6 +796,63 @@ fn srAstResolveStructField(
     srResolveOneAstIdent(node.text, node.start, node.end, idx, scope, result)
 }
 
+fn srAstResolveField(
+    file: AstFile,
+    idx: Int,
+    node: AstNode,
+    scope: SelfResolveScope,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let mut out = srAstResolveExpr(file, node.left, scope, result)
+    let base = srAstNode(file, node.left)
+    if base.kind == AstNIdent {
+        let sym = srScopeLookup(scope, base.text)
+        if sym.kind == "package" {
+            return srResolvePackageMember(file, sym, node.text, node.start, node.end, idx, false, out)
+        }
+        if scope.ifaceDefault && node.flags != 1 && base.text == "self" {
+            return srInterfaceDefaultFieldAtNode(out, node.start, node.end, idx)
+        }
+    }
+    out
+}
+
+fn srAstResolveCall(
+    file: AstFile,
+    node: AstNode,
+    scope: SelfResolveScope,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let mut out = result
+    let callee = srAstNode(file, node.left)
+    if callee.kind == AstNField {
+        out = srAstResolveCallField(file, callee, scope, out)
+    } else {
+        out = srAstResolveExpr(file, node.left, scope, out)
+    }
+    for child in node.children {
+        out = srAstResolveExpr(file, child, scope, out)
+    }
+    out
+}
+
+fn srAstResolveCallField(
+    file: AstFile,
+    node: AstNode,
+    scope: SelfResolveScope,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let mut out = srAstResolveExpr(file, node.left, scope, result)
+    let base = srAstNode(file, node.left)
+    if base.kind == AstNIdent {
+        let sym = srScopeLookup(scope, base.text)
+        if sym.kind == "package" {
+            out = srResolvePackageMember(file, sym, node.text, node.start, node.end, node.left, false, out)
+        }
+    }
+    out
+}
+
 fn srAstResolveIf(
     file: AstFile,
     node: AstNode,
@@ -803,7 +896,7 @@ fn srAstResolveClosure(
     result: SelfResolveResult,
 ) -> SelfResolveResult {
     let mut out = result
-    let closureScope = srChildScope(scope)
+    let closureScope = srChildScopeWithIfaceDefault(scope, false)
     for paramIdx in node.children {
         let param = srAstNode(file, paramIdx)
         out = srAstResolveType(file, param.right, closureScope, "", out)
@@ -844,7 +937,14 @@ fn srResolveOneAstIdent(
         return srRecordRef(out, name, node, sym)
     }
     out.unresolved = out.unresolved + 1
-    out.diagnostics.push(selfResolveDiagnosticAtNode("E0500", "undefined name", name, start, end, node))
+    let hint = srUndefinedHint(scope, name)
+    if hint == "" {
+        out.diagnostics.push(selfResolveDiagnosticAtNode("E0500", "undefined name", name, start, end, node))
+    } else {
+        out.diagnostics.push(
+            selfResolveDiagnosticHintAtNode("E0500", "undefined name", name, start, end, node, hint),
+        )
+    }
     out
 }
 
@@ -858,26 +958,73 @@ fn srResolveOneAstType(
     result: SelfResolveResult,
 ) -> SelfResolveResult {
     let mut out = result
-    if name == "Self" {
+    let head = srPathHead(name)
+    if head == "" {
+        return out
+    }
+    if head == "Self" {
         if owner == "" {
             return srSelfTypeOutsideAtNode(out, start, end, node)
         }
         return srRecordTypeRef(out, name, node)
     }
-    if srIsBuiltinTypeName(name) {
+    if srIsBuiltinTypeName(head) {
         return srRecordTypeRef(out, name, node)
     }
-    let sym = srScopeLookup(scope, name)
+    let sym = srScopeLookup(scope, head)
     if sym.name == "" {
         out.unresolved = out.unresolved + 1
-        out.diagnostics.push(selfResolveDiagnosticAtNode("E0500", "undefined type", name, start, end, node))
+        out.diagnostics.push(selfResolveDiagnosticAtNode("E0500", "undefined type", head, start, end, node))
         return out
     }
     if !(srSymbolCanBeType(sym)) {
-        out.diagnostics.push(selfResolveDiagnosticAtNode("E0502", "name is not a type", name, start, end, node))
+        out.diagnostics.push(selfResolveDiagnosticAtNode("E0502", "name is not a type", head, start, end, node))
         return out
     }
     srRecordTypeRef(out, name, node)
+}
+
+fn srResolvePackageMember(
+    file: AstFile,
+    pkgSym: SelfSymbol,
+    member: String,
+    start: Int,
+    end: Int,
+    node: Int,
+    typePos: Bool,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let mut out = result
+    let useNode = srAstUseNode(file, pkgSym)
+    if useNode.kind != AstNUseDecl {
+        return out
+    }
+    if srAstListCount(useNode.children) == 0 {
+        return out
+    }
+    let sym = srAstLookupPackageMember(file, useNode, member)
+    if sym.name == "" {
+        let noun = if typePos {
+            "type"
+        } else {
+            "name"
+        }
+        out.diagnostics.push(
+            selfResolveDiagnosticAtNode(
+                "E0508",
+                "package `{pkgSym.name}` has no exported {noun}",
+                member,
+                start,
+                end,
+                node,
+            ),
+        )
+        return out
+    }
+    if typePos && !(srSymbolCanBeType(sym)) {
+        out.diagnostics.push(selfResolveDiagnosticAtNode("E0502", "name is not a type", member, start, end, node))
+    }
+    out
 }
 
 fn srRecordRef(
@@ -917,6 +1064,27 @@ fn srSelfOutsideAtNode(result: SelfResolveResult, start: Int, end: Int, node: In
 fn srSelfTypeOutsideAtNode(result: SelfResolveResult, start: Int, end: Int, node: Int) -> SelfResolveResult {
     let mut out = result
     out.diagnostics.push(selfResolveDiagnosticAtNode("E0504", "`Self` outside type body", "Self", start, end, node))
+    out
+}
+
+fn srInterfaceDefaultFieldAtNode(
+    result: SelfResolveResult,
+    start: Int,
+    end: Int,
+    node: Int,
+) -> SelfResolveResult {
+    let mut out = result
+    out.diagnostics.push(
+        selfResolveDiagnosticHintAtNode(
+            "E0606",
+            "interface default method bodies may not access fields on `self`",
+            "",
+            start,
+            end,
+            node,
+            "expose the value through an interface method and call that instead",
+        ),
+    )
     out
 }
 
@@ -1461,8 +1629,147 @@ fn srStringListIndex(items: List<String>, target: String) -> Int {
     -1
 }
 
+fn srUndefinedHint(scope: SelfResolveScope, name: String) -> String {
+    let suggestion = srSuggestSimilar(scope, name)
+    if suggestion == "" {
+        return ""
+    }
+    "did you mean `{suggestion}`?"
+}
+
+fn srSuggestSimilar(scope: SelfResolveScope, name: String) -> String {
+    let mut best = ""
+    let mut bestDist = 3
+    let nameLen = srStringUnitCount(name)
+    for sym in scope.symbols {
+        let diff = srStringUnitCount(sym.name) - nameLen
+        if diff > bestDist - 1 || 0 - diff > bestDist - 1 {
+            continue
+        }
+        let dist = srLevenshteinBounded(name, sym.name, bestDist)
+        if dist < bestDist {
+            best = sym.name
+            bestDist = dist
+            if bestDist == 1 {
+                return best
+            }
+        }
+    }
+    best
+}
+
+fn srLevenshteinBounded(left: String, right: String, limit: Int) -> Int {
+    if left == right {
+        return 0
+    }
+    let leftUnits = strings.split(left, "")
+    let rightUnits = strings.split(right, "")
+    let leftLen = srStringUnitCount(left)
+    let rightLen = srStringUnitCount(right)
+    let diff = leftLen - rightLen
+    if diff >= limit || 0 - diff >= limit {
+        return limit
+    }
+    let mut prev: List<Int> = []
+    let mut cur: List<Int> = []
+    let mut j = 0
+    while j <= rightLen {
+        prev.push(j)
+        cur.push(0)
+        j = j + 1
+    }
+    let mut i = 1
+    while i <= leftLen {
+        cur[0] = i
+        let mut rowMin = cur[0]
+        j = 1
+        while j <= rightLen {
+            let leftUnit = srStringListAt(leftUnits, i - 1)
+            let rightUnit = srStringListAt(rightUnits, j - 1)
+            let cost = if leftUnit == rightUnit {
+                0
+            } else {
+                1
+            }
+            let mut dist = prev[j] + 1
+            if cur[j - 1] + 1 < dist {
+                dist = cur[j - 1] + 1
+            }
+            if prev[j - 1] + cost < dist {
+                dist = prev[j - 1] + cost
+            }
+            cur[j] = dist
+            if dist < rowMin {
+                rowMin = dist
+            }
+            j = j + 1
+        }
+        if rowMin >= limit {
+            return limit
+        }
+        j = 0
+        while j <= rightLen {
+            prev[j] = cur[j]
+            cur[j] = 0
+            j = j + 1
+        }
+        i = i + 1
+    }
+    prev[rightLen]
+}
+
+fn srStringUnitCount(text: String) -> Int {
+    let mut count = 0
+    for unit in strings.split(text, "") {
+        if unit != "" {
+            count = count + 1
+        }
+    }
+    count
+}
+
 fn srSymbolCanBeType(sym: SelfSymbol) -> Bool {
     sym.kind == "type" || sym.kind == "generic" || sym.kind == "package"
+}
+
+fn srAstUseNode(file: AstFile, pkgSym: SelfSymbol) -> AstNode {
+    if pkgSym.node < 0 {
+        return emptyAstNode(AstNFile)
+    }
+    srAstNode(file, pkgSym.node)
+}
+
+fn srAstLookupPackageMember(file: AstFile, useNode: AstNode, member: String) -> SelfSymbol {
+    for childIdx in useNode.children {
+        let child = srAstNode(file, childIdx)
+        if child.text == member {
+            return selfSymbolAtNode(
+                member,
+                srAstPackageMemberKind(child),
+                "",
+                0,
+                0,
+                child.start,
+                child.end,
+                true,
+                childIdx,
+            )
+        }
+    }
+    srEmptySymbol()
+}
+
+fn srAstPackageMemberKind(node: AstNode) -> String {
+    if node.kind == AstNFnDecl {
+        return "fn"
+    }
+    if node.kind == AstNStructDecl || node.kind == AstNEnumDecl || node.kind == AstNInterfaceDecl || node.kind == AstNTypeAlias {
+        return "type"
+    }
+    if node.kind == AstNLet {
+        return "value"
+    }
+    ""
 }
 
 fn srEmptySymbol() -> SelfSymbol {
