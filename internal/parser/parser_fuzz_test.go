@@ -96,6 +96,9 @@ func BenchmarkParseBaseline(b *testing.B) {
 var fuzzSeeds = []string{
 	"",
 	"\n",
+	"#",
+	"#[",
+	"#[]\n",
 	"pub fn main() {}\n",
 	"let x = 1\n",
 	"let y: Int = 0 + 1 * 2\n",
@@ -167,6 +170,8 @@ func TestParseTerminatesOnMinimalInputs(t *testing.T) {
 	inputs := [][]byte{
 		{},
 		[]byte("\n"),
+		[]byte("#"),
+		[]byte("#["),
 		[]byte("a"),
 		[]byte("fn"),
 		[]byte("fn f() {}\n"),
@@ -174,7 +179,9 @@ func TestParseTerminatesOnMinimalInputs(t *testing.T) {
 	for _, src := range inputs {
 		src := src
 		t.Run(truncate(src), func(t *testing.T) {
-			parseWithTimeout(t, src)
+			if !parseWithTimeout(t, src) {
+				t.Fatalf("ParseDiagnostics did not terminate within %s on %q", parseTimeout, truncate(src))
+			}
 		})
 	}
 }
