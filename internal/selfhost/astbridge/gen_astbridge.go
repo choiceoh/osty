@@ -462,6 +462,15 @@ func UseDeclNode(pos, end Pos, raw string, path []string, isGo bool, alias strin
 	u := &ast.UseDecl{PosV: pos, EndV: end, Path: compactStrings(path), RawPath: raw, Alias: alias, IsGoFFI: isGo, GoBody: compactDecls(body)}
 	if isGo {
 		u.GoPath = raw
+		return u
+	}
+	runtimePath := raw
+	if runtimePath == "" && len(path) != 0 {
+		runtimePath = strings.Join(path, ".")
+	}
+	if strings.HasPrefix(runtimePath, "runtime.") {
+		u.IsRuntimeFFI = true
+		u.RuntimePath = runtimePath
 	}
 	return u
 }

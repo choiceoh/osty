@@ -931,18 +931,20 @@ func (g *generator) emitPrintln(call *ast.CallExpr) error {
 		llvmPrintlnI64(emitter, toOstyValue(v))
 	case "double":
 		llvmPrintlnF64(emitter, toOstyValue(v))
+	case "i1":
+		llvmPrintlnBool(emitter, toOstyValue(v))
 	case "ptr":
 		llvmPrintlnString(emitter, toOstyValue(v))
 	default:
 		g.takeOstyEmitter(emitter)
-		return unsupported("type-system", "println currently supports Int, Float, and plain String values only")
+		return unsupported("type-system", "println currently supports Int, Float, Bool, and plain String values only")
 	}
 	g.takeOstyEmitter(emitter)
 	return nil
 }
 
 func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
-	field, elemTyp, found := g.listMethodInfo(call)
+	field, elemTyp, _, found := g.listMethodInfo(call)
 	if !found {
 		return false, nil
 	}

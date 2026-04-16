@@ -491,6 +491,26 @@ func llvmPrintlnF64(emitter *LlvmEmitter, value *LlvmValue) {
 	}()
 }
 
+// Osty: examples/selfhost-core/llvmgen.osty:372:5
+func llvmPrintlnBool(emitter *LlvmEmitter, value *LlvmValue) {
+	// Osty: examples/selfhost-core/llvmgen.osty:373:5
+	text := llvmNextTemp(emitter)
+	_ = text
+	// Osty: examples/selfhost-core/llvmgen.osty:374:5
+	func() struct{} {
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = select i1 %s, ptr @.bool_true, ptr @.bool_false", ostyToString(text), ostyToString(value.name)))
+		return struct{}{}
+	}()
+	// Osty: examples/selfhost-core/llvmgen.osty:375:5
+	tmp := llvmNextTemp(emitter)
+	_ = tmp
+	// Osty: examples/selfhost-core/llvmgen.osty:376:5
+	func() struct{} {
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = call i32 (ptr, ...) @printf(ptr @.fmt_str, ptr %s)", ostyToString(tmp), ostyToString(text)))
+		return struct{}{}
+	}()
+}
+
 // Osty: examples/selfhost-core/llvmgen.osty:373:5
 func llvmStringLiteral(emitter *LlvmEmitter, text string) *LlvmValue {
 	// Osty: examples/selfhost-core/llvmgen.osty:374:5
@@ -856,6 +876,16 @@ func llvmRenderModuleWithRuntimeDeclarations(sourcePath string, target string, t
 	// Osty: examples/selfhost-core/llvmgen.osty:606:5
 	func() struct{} {
 		lines = append(lines, "@.fmt_str = private unnamed_addr constant [4 x i8] c\"%s\\0A\\00\"")
+		return struct{}{}
+	}()
+	// Osty: examples/selfhost-core/llvmgen.osty:607:5
+	func() struct{} {
+		lines = append(lines, "@.bool_true = private unnamed_addr constant [5 x i8] c\"true\\00\"")
+		return struct{}{}
+	}()
+	// Osty: examples/selfhost-core/llvmgen.osty:608:5
+	func() struct{} {
+		lines = append(lines, "@.bool_false = private unnamed_addr constant [6 x i8] c\"false\\00\"")
 		return struct{}{}
 	}()
 	// Osty: examples/selfhost-core/llvmgen.osty:607:5

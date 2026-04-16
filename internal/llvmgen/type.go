@@ -163,6 +163,11 @@ func llvmNamedTypeIsString(t ast.Type) bool {
 	return ok && len(named.Path) == 1 && named.Path[0] == "String" && len(named.Args) == 0
 }
 
+func llvmNamedTypeIsBytes(t ast.Type) bool {
+	named, ok := t.(*ast.NamedType)
+	return ok && len(named.Path) == 1 && named.Path[0] == "Bytes" && len(named.Args) == 0
+}
+
 func llvmEnumPayloadType(t ast.Type, env typeEnv) (string, error) {
 	resolved, err := llvmResolveAliasType(t, env, map[string]bool{})
 	if err != nil {
@@ -438,8 +443,8 @@ func (g *generator) staticExprInfo(expr ast.Expr) (value, bool) {
 		}
 		return value{typ: llvmTupleTypeName(elemTypes)}, true
 	case *ast.ListExpr:
-		if elemTyp, ok := g.staticListLiteralElementType(e); ok {
-			return value{typ: "ptr", gcManaged: true, listElemTyp: elemTyp}, true
+		if elemTyp, elemString, ok := g.staticListLiteralElementInfo(e); ok {
+			return value{typ: "ptr", gcManaged: true, listElemTyp: elemTyp, listElemString: elemString}, true
 		}
 	case *ast.MapExpr:
 		return value{}, false
@@ -520,33 +525,69 @@ func (g *generator) staticExprInfo(expr ast.Expr) (value, bool) {
 	return value{}, false
 }
 
-func (g *generator) staticListLiteralElementType(expr *ast.ListExpr) (string, bool) {
+func (g *generator) staticListLiteralElementInfo(expr *ast.ListExpr) (string, bool, bool) {
 	if expr == nil || len(expr.Elems) == 0 {
-		return "", false
+		return "", false, false
 	}
 	elemInfo, ok := g.staticExprInfo(expr.Elems[0])
 	if !ok {
-		return "", false
+		return "", false, false
 	}
 	elemTyp := elemInfo.typ
+	elemString := g.staticExprIsString(expr.Elems[0])
 	for _, elem := range expr.Elems[1:] {
 		info, ok := g.staticExprInfo(elem)
 		if !ok || info.typ != elemTyp {
-			return "", false
+			return "", false, false
+		}
+		if g.staticExprIsString(elem) != elemString {
+			return "", false, false
 		}
 	}
-	return elemTyp, true
+	return elemTyp, elemString, true
+}
+
+func (g *generator) staticExprIsString(expr ast.Expr) bool {
+	sourceType, ok := g.staticExprSourceType(expr)
+	if !ok {
+		return false
+	}
+	resolved, err := llvmResolveAliasType(sourceType, g.typeEnv(), map[string]bool{})
+	if err != nil {
+		return false
+	}
+	return llvmNamedTypeIsString(resolved)
+}
+
+func (g *generator) staticExprListElemIsBytes(expr ast.Expr) bool {
+	sourceType, ok := g.staticExprSourceType(expr)
+	if !ok {
+		return false
+	}
+	resolved, err := llvmResolveAliasType(sourceType, g.typeEnv(), map[string]bool{})
+	if err != nil {
+		return false
+	}
+	named, ok := resolved.(*ast.NamedType)
+	if !ok || len(named.Path) != 1 || named.Path[0] != "List" || len(named.Args) != 1 {
+		return false
+	}
+	elemResolved, err := llvmResolveAliasType(named.Args[0], g.typeEnv(), map[string]bool{})
+	if err != nil {
+		return false
+	}
+	return llvmNamedTypeIsBytes(elemResolved)
 }
 
 func (g *generator) staticCollectionMethodResult(call *ast.CallExpr) (value, bool, bool) {
-	if field, elemTyp, found := g.listMethodInfo(call); found {
+	if field, elemTyp, elemString, found := g.listMethodInfo(call); found {
 		switch field.Name {
 		case "len":
 			return value{typ: "i64"}, true, true
 		case "sorted":
-			return value{typ: "ptr", gcManaged: true, listElemTyp: elemTyp}, true, true
+			return value{typ: "ptr", gcManaged: true, listElemTyp: elemTyp, listElemString: elemString}, true, true
 		case "toSet":
-			return value{typ: "ptr", gcManaged: true, setElemTyp: elemTyp}, true, true
+			return value{typ: "ptr", gcManaged: true, setElemTyp: elemTyp, setElemString: elemString}, true, true
 		default:
 			return value{}, true, false
 		}
@@ -578,24 +619,24 @@ func (g *generator) staticCollectionMethodResult(call *ast.CallExpr) (value, boo
 	return value{}, false, false
 }
 
-func (g *generator) listMethodInfo(call *ast.CallExpr) (*ast.FieldExpr, string, bool) {
+func (g *generator) listMethodInfo(call *ast.CallExpr) (*ast.FieldExpr, string, bool, bool) {
 	if call == nil {
-		return nil, "", false
+		return nil, "", false, false
 	}
 	field, ok := call.Fn.(*ast.FieldExpr)
 	if !ok || field.IsOptional {
-		return nil, "", false
+		return nil, "", false, false
 	}
 	switch field.Name {
 	case "len", "push", "sorted", "toSet":
 	default:
-		return nil, "", false
+		return nil, "", false, false
 	}
 	baseInfo, ok := g.staticExprInfo(field.X)
 	if !ok || baseInfo.typ != "ptr" || baseInfo.listElemTyp == "" {
-		return nil, "", false
+		return nil, "", false, false
 	}
-	return field, baseInfo.listElemTyp, true
+	return field, baseInfo.listElemTyp, baseInfo.listElemString, true
 }
 
 func (g *generator) mapMethodInfo(call *ast.CallExpr) (*ast.FieldExpr, string, string, bool, bool) {
