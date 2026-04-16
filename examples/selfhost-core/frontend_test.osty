@@ -277,7 +277,7 @@ fn testFrontendParserPortsFunctionShape() {
 }
 
 fn testFrontendParserPortsAggregateDeclarations() {
-    let source = "use std.testing\npub struct Box<T> \{ value: T fn get(value: T) -> T \{ return value \} \}\nenum Maybe<T> \{ Some(T), None, fn has(flag: Bool) -> Bool \{ return flag \} \}\ninterface Reader: Closeable \{ fn read(buf: Bytes) -> Int \}\ntype Names = List<String>\n"
+    let source = "use std.testing\npub struct Box<T> \{ value: T fn get(value: T) -> T \{ return value \} \}\nenum Maybe<T> \{ Some(T), None, fn has(flag: Bool) -> Bool \{ return flag \} \}\ninterface Reader \{ Closeable\n fn read(buf: Bytes) -> Int \}\ntype Names = List<String>\n"
     let parsed = frontendParseRichSummary(source)
 
     testing.assertEq(parsed.decls, 5)

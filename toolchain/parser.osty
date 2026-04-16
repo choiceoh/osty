@@ -1699,9 +1699,7 @@ fn opParseInterfaceDecl(p: OstyParser, isPub: Bool, anns: List<Int>) -> Int {
     let start = p.pos
     let _ = opAdvance(p)
     let name = opExpect(p, FrontIdent).text
-    let mut supers: List<Int> = []
-    if opEat(p, FrontColon) { for { supers.push(opParseType(p))
-    if !(opEat(p, FrontComma)) && !(opEat(p, FrontPlus)) { break } } }
+    let genericParams = opParseGenericParams(p)
     let _ = opExpect(p, FrontLBrace)
     let mut members: List<Int> = []
     opSkipNewlines(p)
@@ -1722,7 +1720,7 @@ fn opParseInterfaceDecl(p: OstyParser, isPub: Bool, anns: List<Int>) -> Int {
     let mut n = emptyAstNode(AstNInterfaceDecl)
     n.text = name
     n.children = members
-    n.children2 = supers
+    n.children2 = genericParams
     n.start = start
     n.end = p.pos
     if isPub { n.flags = 1 }

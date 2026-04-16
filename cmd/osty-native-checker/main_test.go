@@ -44,7 +44,7 @@ func TestRunRejectsInvalidJSON(t *testing.T) {
 
 func TestRunChecksGenericBoundsAndInterfaceExtends(t *testing.T) {
 	var goodOut bytes.Buffer
-	goodIn := strings.NewReader(`{"source":"interface Named { fn name(self) -> String }\ninterface Tagged: Named { fn tag(self) -> String }\nstruct User { name: String fn name(self) -> String { self.name } fn tag(self) -> String { \"user\" } }\nfn display<T: Tagged>(value: T) -> String { value.name() }\nfn main() { let user: User = User { name: \"Ada\" } let label: String = display(user) }\n"}`)
+	goodIn := strings.NewReader(`{"source":"interface Named { fn name(self) -> String }\ninterface Tagged { Named\n fn tag(self) -> String }\nstruct User { name: String fn name(self) -> String { self.name } fn tag(self) -> String { \"user\" } }\nfn display<T: Tagged>(value: T) -> String { value.name() }\nfn main() { let user: User = User { name: \"Ada\" } let label: String = display(user) }\n"}`)
 	if err := run(goodIn, &goodOut); err != nil {
 		t.Fatalf("run good error: %v", err)
 	}

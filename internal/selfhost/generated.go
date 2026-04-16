@@ -12327,36 +12327,6 @@ func frontParseInterfaceShape(tokens []*FrontToken, start int, count int, summar
 			idx = _cur1108 + _rhs1109
 		}()
 	}
-	// Osty: /tmp/selfhost_merged.osty:4772:5
-	if ostyEqual(frontTokenAtList(tokens, idx).kind, FrontTokenKind(&FrontTokenKind_FrontColon{})) {
-		// Osty: /tmp/selfhost_merged.osty:4773:9
-		extendsEnd := frontFindTypeEnd(tokens, func() int {
-			var _p1110 int = idx
-			var _rhs1111 int = 1
-			if _rhs1111 > 0 && _p1110 > math.MaxInt-_rhs1111 {
-				panic("integer overflow")
-			}
-			if _rhs1111 < 0 && _p1110 < math.MinInt-_rhs1111 {
-				panic("integer overflow")
-			}
-			return _p1110 + _rhs1111
-		}(), count)
-		_ = extendsEnd
-		// Osty: /tmp/selfhost_merged.osty:4774:9
-		out = frontScanTypeShape(tokens, func() int {
-			var _p1112 int = idx
-			var _rhs1113 int = 1
-			if _rhs1113 > 0 && _p1112 > math.MaxInt-_rhs1113 {
-				panic("integer overflow")
-			}
-			if _rhs1113 < 0 && _p1112 < math.MinInt-_rhs1113 {
-				panic("integer overflow")
-			}
-			return _p1112 + _rhs1113
-		}(), extendsEnd, out)
-		// Osty: /tmp/selfhost_merged.osty:4775:9
-		idx = extendsEnd
-	}
 	// Osty: /tmp/selfhost_merged.osty:4777:5
 	if !ostyEqual(frontTokenAtList(tokens, idx).kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
 		// Osty: /tmp/selfhost_merged.osty:4778:12
@@ -21886,15 +21856,7 @@ func opParseInterfaceDeclWithAnnotations(p *OstyParser, isPub bool, anns []int) 
 	start := p.pos
 	_ = opAdvance(p)
 	name := opExpect(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})).text
-	var supers []int
-	if opEat(p, FrontTokenKind(&FrontTokenKind_FrontColon{})) {
-		for {
-			supers = append(supers, opParseType(p))
-			if !opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{})) && !opEat(p, FrontTokenKind(&FrontTokenKind_FrontPlus{})) {
-				break
-			}
-		}
-	}
+	genericParams := opParseGenericParams(p)
 	_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontLBrace{}))
 	var members []int
 	opSkipNewlines(p)
@@ -21915,7 +21877,7 @@ func opParseInterfaceDeclWithAnnotations(p *OstyParser, isPub bool, anns []int) 
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNInterfaceDecl{}))
 	n.text = name
 	n.children = members
-	n.children2 = supers
+	n.children2 = genericParams
 	n.start = start
 	n.end = p.pos
 	if isPub {
@@ -23814,15 +23776,10 @@ func ostyAstVariant(f *OstyAstFormatter, node *AstNode) string {
 // Osty: /tmp/selfhost_merged.osty:8886:1
 func ostyAstInterfaceDecl(f *OstyAstFormatter, node *AstNode) string {
 	// Osty: /tmp/selfhost_merged.osty:8887:5
-	head := strings.Join([]string{ostyAstVisibility(node), "interface ", node.text}, "")
+	head := strings.Join([]string{ostyAstVisibility(node), "interface ", node.text, ostyAstGenericParams(f, node.children2), " ", "{"}, "")
 	_ = head
-	// Osty: /tmp/selfhost_merged.osty:8888:5
-	if len(node.children2) > 0 {
-		// Osty: /tmp/selfhost_merged.osty:8889:9
-		head = strings.Join([]string{head, ": ", ostyAstTypeList(f, node.children2, " + ")}, "")
-	}
 	// Osty: /tmp/selfhost_merged.osty:8891:5
-	var lines []string = []string{strings.Join([]string{head, " ", "{"}, "")}
+	var lines []string = []string{head}
 	_ = lines
 	// Osty: /tmp/selfhost_merged.osty:8892:5
 	saved := f.indent
@@ -25355,23 +25312,20 @@ func frontCheckCollectDecl(file *AstFile, env *FrontCheckEnv, declIdx int, decl 
 				return _p1948 + _rhs1949
 			}()
 		}
+		// Osty: /tmp/selfhost_merged.osty:9789:9
+		frontCheckCheckGenericParams(file, env, decl.children2)
+		// Osty: /tmp/selfhost_merged.osty:9789b:9
+		ifaceGenerics := frontCheckGenericNames(file, decl.children2)
+		_ = ifaceGenerics
 		// Osty: /tmp/selfhost_merged.osty:9790:9
 		func() struct{} {
-			env.types = append(env.types, &FrontTypeSig{name: decl.text, generics: make([]string, 0, 1)})
+			env.types = append(env.types, &FrontTypeSig{name: decl.text, generics: ifaceGenerics})
 			return struct{}{}
 		}()
 		// Osty: /tmp/selfhost_merged.osty:9791:9
 		func() struct{} { env.interfaces = append(env.interfaces, decl.text); return struct{}{} }()
 		// Osty: /tmp/selfhost_merged.osty:9792:9
 		frontCheckRecordSymbol(env, declIdx, decl, "interface", decl.text, owner, decl.text)
-		// Osty: /tmp/selfhost_merged.osty:9793:9
-		for _, superIdx := range decl.children2 {
-			// Osty: /tmp/selfhost_merged.osty:9794:13
-			func() struct{} {
-				env.interfaceExtends = append(env.interfaceExtends, &FrontInterfaceExtSig{owner: decl.text, typeName: frontCheckTypeName(file, superIdx)})
-				return struct{}{}
-			}()
-		}
 		// Osty: /tmp/selfhost_merged.osty:9796:9
 		for _, memberIdx := range decl.children {
 			// Osty: /tmp/selfhost_merged.osty:9797:13
@@ -33929,7 +33883,7 @@ func srAstResolveTypeDecl(file *AstFile, idx int, scope *SelfResolveScope, resul
 	node := srAstNode(file, idx)
 	typeScope := srChildScope(scope)
 	out := srScopeDefine(typeScope, result, selfSymbolAtNode("Self", "type", node.text, 0, typeScope.depth, node.start, node.end, true, idx))
-	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNStructDecl{})) || ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNEnumDecl{})) {
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNStructDecl{})) || ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNEnumDecl{})) || ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNInterfaceDecl{})) {
 		out = srAstDeclareGenerics(file, node.children2, typeScope, out)
 	}
 	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNStructDecl{})) {
@@ -33954,9 +33908,6 @@ func srAstResolveTypeDecl(file *AstFile, idx int, scope *SelfResolveScope, resul
 			}
 		}
 	} else if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNInterfaceDecl{})) {
-		for _, superIdx := range node.children2 {
-			out = srAstResolveType(file, superIdx, typeScope, node.text, out)
-		}
 		for _, memberIdx := range node.children {
 			member := srAstNode(file, memberIdx)
 			if ostyEqual(member.kind, AstNodeKind(&AstNodeKind_AstNFnDecl{})) {
@@ -41152,17 +41103,6 @@ func astLowerInterfaceDecl(arena *AstArena, toks []astbridge.Token, n *AstNode) 
 	// Osty: /tmp/selfhost_merged.osty:17856:5
 	methods := astbridge.EmptyFnDeclList()
 	_ = methods
-	// Osty: /tmp/selfhost_merged.osty:17857:5
-	for _, idx := range n.children2 {
-		// Osty: /tmp/selfhost_merged.osty:17858:9
-		ty := astLowerType(arena, toks, idx)
-		_ = ty
-		// Osty: /tmp/selfhost_merged.osty:17859:9
-		if !(astbridge.IsNilType(ty)) {
-			// Osty: /tmp/selfhost_merged.osty:17860:13
-			func() struct{} { extends = append(extends, ty); return struct{}{} }()
-		}
-	}
 	// Osty: /tmp/selfhost_merged.osty:17863:5
 	for _, child := range n.children {
 		// Osty: /tmp/selfhost_merged.osty:17864:9
@@ -41189,7 +41129,7 @@ func astLowerInterfaceDecl(arena *AstArena, toks []astbridge.Token, n *AstNode) 
 			}
 		}
 	}
-	return astbridge.InterfaceDeclNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), n.flags == 1, n.text, astbridge.EmptyGenericParamList(), extends, methods, astLowerDoc(toks, n.start), astLowerAnnotations(arena, toks, n.extra))
+	return astbridge.InterfaceDeclNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), n.flags == 1, n.text, astLowerGenericParams(arena, toks, n.children2), extends, methods, astLowerDoc(toks, n.start), astLowerAnnotations(arena, toks, n.extra))
 }
 
 // Osty: /tmp/selfhost_merged.osty:17890:1

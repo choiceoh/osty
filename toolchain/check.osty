@@ -258,19 +258,21 @@ fn collectEnumDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
 
 fn collectInterfaceDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
     let name = node.text
+    let generics = collectGenericNames(cx, node.children2)
+    let genericBounds = collectGenericBounds(cx, node.children2)
     checkRegisterInterface(cx.env, name)
-    checkRegisterType(cx.env, CheckTypeSig { name, generics: [], genericBounds: [], kind: "interface" })
-    checkRecordSymbol(cx.env, declIdx, "interface", name, "", tyNamed(cx.env.tys, name, []), node.start, node.end)
-    for superIdx in node.children2 {
-        let ifaceTy = astTypeToTyInCollect(cx, superIdx)
-        if ifaceTy >= 0 {
-            checkRegisterInterfaceExtends(cx.env, CheckInterfaceExt { owner: name, ifaceTy })
-        }
-    }
+    checkRegisterType(cx.env, CheckTypeSig { name, generics, genericBounds, kind: "interface" })
+    let ownerTy = tyNamed(cx.env.tys, name, genericListToTyArgs(cx, generics))
+    checkRecordSymbol(cx.env, declIdx, "interface", name, "", ownerTy, node.start, node.end)
     for memberIdx in node.children {
         let member = astArenaNodeAt(cx.ast.arena, memberIdx)
         if member.kind == AstNFnDecl {
-            collectFnDecl(cx, memberIdx, member, name, [], [])
+            collectFnDecl(cx, memberIdx, member, name, generics, genericBounds)
+        } else {
+            let ifaceTy = astTypeToTyInCollect(cx, memberIdx)
+            if ifaceTy >= 0 {
+                checkRegisterInterfaceExtends(cx.env, CheckInterfaceExt { owner: name, ifaceTy })
+            }
         }
     }
 }

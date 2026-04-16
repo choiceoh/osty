@@ -300,11 +300,18 @@ fn ostyAstVariant(f: OstyAstFormatter, node: AstNode) -> String {
 }
 
 fn ostyAstInterfaceDecl(f: OstyAstFormatter, node: AstNode) -> String {
-    let mut head = strings.Join([ostyAstVisibility(node), "interface ", node.text], "")
-    if node.children2.len() > 0 {
-        head = strings.Join([head, ": ", ostyAstTypeList(f, node.children2, " + ")], "")
-    }
-    let mut lines: List<String> = [strings.Join([head, " ", r"{"], "")]
+    let head = strings.Join(
+        [
+            ostyAstVisibility(node),
+            "interface ",
+            node.text,
+            ostyAstGenericParams(f, node.children2),
+            " ",
+            r"{",
+        ],
+        "",
+    )
+    let mut lines: List<String> = [head]
     let saved = f.indent
     f.indent = 1
     for memberIdx in node.children {

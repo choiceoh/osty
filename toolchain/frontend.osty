@@ -4371,11 +4371,6 @@ pub fn frontParseInterfaceShape(
         out = frontScanTypeShape(tokens, idx + 1, close, out)
         idx = close + 1
     }
-    if frontTokenAtList(tokens, idx).kind == FrontColon {
-        let extendsEnd = frontFindTypeEnd(tokens, idx + 1, count)
-        out = frontScanTypeShape(tokens, idx + 1, extendsEnd, out)
-        idx = extendsEnd
-    }
     if frontTokenAtList(tokens, idx).kind != FrontLBrace {
         out.errors = out.errors + 1
         return frontParseResult(out, frontLineConsumed(tokens, start, count))

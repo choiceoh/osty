@@ -158,7 +158,8 @@ fn testElabRespectsInterfaceExtendsWhenCheckingBounds() {
                 fn name(self) -> String
             }
 
-            interface Tagged: Named {
+            interface Tagged {
+                Named
                 fn tag(self) -> String
             }
 

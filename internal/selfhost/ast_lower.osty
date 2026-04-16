@@ -884,12 +884,6 @@ fn astLowerEnumDecl(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) ->
 fn astLowerInterfaceDecl(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Decl {
     let mut extends = astbridge.EmptyTypeList()
     let mut methods = astbridge.EmptyFnDeclList()
-    for idx in n.children2 {
-        let ty = astLowerType(arena, toks, idx)
-        if !(astbridge.IsNilType(ty)) {
-            extends.push(ty)
-        }
-    }
     for child in n.children {
         let cn = astArenaNodeAt(arena, child)
         if cn.kind == AstNFnDecl {
@@ -909,7 +903,7 @@ fn astLowerInterfaceDecl(arena: AstArena, toks: List<astbridge.Token>, n: AstNod
         astLowerNodeEnd(toks, n),
         n.flags == 1,
         n.text,
-        astbridge.EmptyGenericParamList(),
+        astLowerGenericParams(arena, toks, n.children2),
         extends,
         methods,
         astLowerDoc(toks, n.start),
