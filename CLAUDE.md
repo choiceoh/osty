@@ -157,3 +157,660 @@ refactor: legacy gen 경로 제거
 ```
 
 prefix는 `feat` / `fix` / `chore` / `docs` / `refactor` / `test` / `perf` 중 하나.
+
+---
+
+# 부록 A. 언어 핵심 문법·의미론 + canonical 예시 (v0.4)
+
+> **이 부록은 에이전트가 실제로 Osty 코드를 작성할 때 참조하는 작업 레퍼런스다.** 모든 권위는 `LANG_SPEC_v0.4/`와 `OSTY_GRAMMAR_v0.4.md`에 있으나, 아래 예시들은 Osty다운 스타일의 baseline — 그대로 따라 쓸 수 있는 기준이다. 예시 코드는 스펙 내에서 확실한 구문만 사용한다.
+
+## A.1 프로그램 구조 / 렉시컬
+
+- 확장자 `.osty`, UTF-8. **디렉토리 = 패키지**
+- Shebang `#!/usr/bin/env osty`는 렉서가 무시
+- 주석: `//` 라인, `/* */` 블록, `///` 문서(다음 선언에 귀속)
+- **ASI** (newline = 문 종결자) 억제 규칙:
+  - 직전 토큰이 이항 연산자, `,`, `->`, `<-`, `::`, `@`, `|`, 여는 괄호
+  - 다음 토큰이 `)`, `]`, `}`, `.`, `?.`, `,`, `..`, `..=`, 이항 연산자
+  - 메서드 체인의 `.`은 **선행 위치**만 (후행 `.`는 문법 에러)
+  - `} else`는 반드시 같은 줄
+- 숫자: `1_000_000`, `0xFF_FF`, `0b1010`, `0o777` — 접미사 없음
+- 문자열: `"..."`, `"""..."""` (공통 인덴트 제거), `r"..."` raw, `b"..."` bytes, `b'A'` byte
+- 보간 `"{expr}"`, 이스케이프 `\{` / `\}`
+
+```osty
+#!/usr/bin/env osty
+use std.fs
+
+/// 사용자 리포트를 문자열로 렌더한다.
+pub fn renderReport(user: User) -> String {
+    let lines = [
+        "user: {user.name}",
+        "age:  {user.age}",
+    ]
+    let body = """
+        {lines.join("\n")}
+        generated: {now()}
+        """
+    let hint = r"C:\Users\{user.name}\report.txt"
+    body + "\npath: " + hint
+}
+```
+
+## A.2 선언
+
+- `pub`로 export. enum variant 가시성은 enum 가시성 상속(초과 불가)
+- `let x` 불변, `let mut x` 가변
+- struct/enum은 **부분 선언** 가능 (필드는 한 곳, 메서드는 분산)
+- 기본 인자는 리터럴만, 후행 연속. 키워드 호출 `f(x, timeout: 60)`
+- receiver: `self` 공유, `mut self` 가변 접근
+
+```osty
+pub struct User {
+    pub name: String,
+    pub age: Int,
+    email: String?,
+
+    pub fn greet(self) -> String {
+        "hi, {self.name}"
+    }
+
+    pub fn olderBy(self, years: Int = 1) -> User {
+        User { ..self, age: self.age + years }
+    }
+
+    fn setEmail(mut self, e: String) {
+        self.email = Some(e)
+    }
+}
+
+pub enum Event {
+    Click(Int, Int),
+    Key(String),
+    Close,
+
+    pub fn label(self) -> String {
+        match self {
+            Event.Click(_, _) -> "click",
+            Event.Key(k)      -> "key:{k}",
+            Event.Close       -> "close",
+        }
+    }
+}
+
+pub interface Reader {
+    fn read(self, buf: Bytes) -> Result<Int, Error>
+    fn close(self) -> Result<(), Error> { Ok(()) }   // 기본 구현
+}
+```
+
+## A.3 타입 시스템
+
+- 구조적 인터페이스. 수치 암묵 변환 없음
+- 양방향 타입 추론(synth↔check, 국소 단일화)
+- 숫자 리터럴 다형성 — 문맥이 타입 결정
+- 제네릭 monomorphization, 제약 `<T: Ordered + Hashable>`
+- Turbofish `::<T>`로 타입 인자 명시
+- 제네릭 메서드/함수는 값으로 참조 금지 — wrapper closure 필요 (G14)
+- 함수값으로 저장하면 default/keyword 메타데이터 **소거** (G15, positional/exact arity)
+
+```osty
+fn first<T>(xs: List<T>) -> T? {
+    if xs.isEmpty() { None } else { Some(xs[0]) }
+}
+
+fn maxOf<T: Ordered>(a: T, b: T) -> T {
+    if a.gt(b) { a } else { b }
+}
+
+// turbofish — 추론 실패/명시 필요 시
+let cfg = json.parse::<Config>(text)?
+
+// 리터럴 다형성
+let pi: Float64 = 3
+let buf: List<Int> = [1, 2, 3]
+
+// 함수값 arity erasure — positional/exact
+fn connect(host: String, port: Int = 80) -> Result<Conn, Error> { ... }
+let f: fn(String, Int) -> Result<Conn, Error> = connect
+f("api.com", 443)     // OK
+// f("api.com")        // ERROR: 인자 수 부족 (함수값은 키워드/기본 불가)
+```
+
+## A.4 식 / 제어 흐름
+
+- if / match / 블록이 **식** (값 반환)
+- `if let ...`, `for let ...` 단축
+- `for x in iterable { ... }` — `Iterable<T>` 프로토콜
+- `defer` LIFO, `?` 전파·취소에도 실행
+
+```osty
+let label = if user.age >= 18 { "adult" } else { "minor" }
+
+for user in users.filter(|u| u.active) {
+    notify(user)
+}
+
+for let Some(job) = queue.pop() {
+    process(job)
+}
+
+fn copyFile(src: String, dst: String) -> Result<(), Error> {
+    let from = fs.open(src)?
+    defer from.close()
+
+    let to = fs.create(dst)?
+    defer to.close()
+
+    // 어느 ?에서 실패해도 두 파일 모두 close
+    let buf = from.readAll()?
+    to.writeAll(buf)?
+    Ok(())
+}
+```
+
+## A.5 패턴 매칭
+
+- 와일드카드 `_`, 리터럴, 식별자(바인딩), 튜플 `(a, b)`
+- struct `User { name, age }` / `User { name, .. }` / `User { name: n }`
+- variant `Some(x)`, `Rect(w, h)`
+- 범위 `0..=9`, `10..20`, `..=0`, `100..`
+- or `A | B | C` (모든 대안이 같은 바인딩)
+- binding `name @ pattern`
+- guard `pat if cond ->` (coverage 기여 안 함)
+- `let` LHS, 클로저 파라미터, `for` 변수는 **irrefutable** 패턴만
+
+```osty
+fn describe(event: Event) -> String {
+    match event {
+        Event.Click(x, y) if x >= 0 && y >= 0 -> "hit at ({x}, {y})",
+        Event.Click(_, _)                     -> "out of bounds",
+        Event.Key("q") | Event.Key("esc")     -> "quit",
+        Event.Key(k)                          -> "key:{k}",
+        Event.Close                           -> "closed",
+    }
+}
+
+fn bucket(n: Int) -> String {
+    match n {
+        0            -> "zero",
+        x @ 1..=9    -> "digit {x}",
+        x @ 10..=99  -> "two digits {x}",
+        x if x < 0   -> "negative {x}",
+        _            -> "large",
+    }
+}
+
+// destructuring (irrefutable)
+let User { name, age, .. } = loadCurrentUser()?
+let (lo, hi) = range.bounds()
+```
+
+## A.6 에러 처리
+
+- `expr?` — Result/Option 전파 (혼용 금지)
+- `expr?.field` — Option 단락 연쇄
+- `expr ?? default` — Option fallback (우결합, 우측 lazy)
+- `Error` 인터페이스 + `err.downcast::<T>()` 복구
+- `panic`/`unreachable`/`todo`/`abort`는 defer **skip**
+
+```osty
+fn loadConfig(path: String) -> Result<Config, Error> {
+    let text = fs.readToString(path)?
+    let cfg: Config = json.parse(text)?
+    Ok(cfg)
+}
+
+fn cityOf(user: User?) -> String {
+    user?.address?.city ?? "unknown"
+}
+
+fn handle(err: Error) -> Result<(), Error> {
+    match err.downcast::<FsError>() {
+        Some(FsError.NotFound(p)) -> {
+            log.warn("missing file: {p}")
+            Ok(())
+        },
+        Some(other) -> Err(other),
+        None        -> Err(err),
+    }
+}
+
+fn withLock<T>(m: Mutex, body: fn() -> Result<T, Error>) -> Result<T, Error> {
+    m.lock()?
+    defer m.unlock()
+    body()
+}
+```
+
+## A.7 동시성 (구조적)
+
+- `taskGroup(|g| { ... })` 스코프 필수
+- `Handle<T>` / `TaskGroup`은 **스코프 탈출 금지** (E0743, G13)
+- 채널: `thread.chan::<T>(buf)`, `ch <- v`(문), `ch.recv()`, `for x in ch`, `ch.close()`
+- select: `recv` / `send` / `timeout` / `default`
+- 취소는 cause 포함, defer는 취소 시에도 실행 (uninterruptible)
+
+```osty
+fn fetchAll(urls: List<String>) -> Result<List<Bytes>, Error> {
+    taskGroup(|g| {
+        let handles = urls.map(|u| g.spawn(|| http.get(u)))
+        let mut results: List<Bytes> = []
+        for h in handles {
+            results.push(h.join()?)          // 반드시 스코프 내에서 join
+        }
+        Ok(results)
+    })
+}
+
+fn pipeline(jobs: List<Job>) -> Result<(), Error> {
+    let ch = thread.chan::<Job>(64)
+
+    taskGroup(|g| {
+        // 생산자
+        g.spawn(|| {
+            for j in jobs { ch <- j }
+            ch.close()
+        })
+
+        // 소비자 (메인)
+        for j in ch {
+            process(j)?
+        }
+        Ok(())
+    })
+}
+
+// select
+let ch = thread.chan::<Int>(4)
+let out = thread.select(|s| {
+    s.recv(ch,     |x| "value: {x}")
+    s.timeout(5.s, || "timeout")
+    s.default(     || "empty")
+})
+```
+
+## A.8 모듈 / 가시성 / FFI
+
+- `use std.fs`, `use pkg as alias`, 순환 import 금지
+- `pub` top-level/field/method/variant
+- Prelude 자동: `Option/Some/None`, `Result/Ok/Err`, `println`, 기본 타입
+- `use go "..." { ... }` — Osty↔Go 타입 매핑: `T?↔*T`, `Result<T,Error>↔(T, error)`, `List<T>↔[]T`
+
+```osty
+use std.fs
+use std.json
+use github.com/x/retry as retry
+use go "net/http" {
+    fn Get(url: String) -> Result<Response, Error>
+    struct Response {
+        StatusCode: Int,
+        Body: Reader,
+    }
+}
+
+// 외부 노출 최소화
+pub fn fetchJson<T>(url: String) -> Result<T, Error> {
+    let resp = Get(url)?
+    let body = resp.Body.readAll()?
+    json.parse::<T>(body.toString()?)
+}
+
+// 모듈 내부용 — pub 없음
+fn normalizeUrl(u: String) -> String { ... }
+```
+
+## A.9 메타 / 어노테이션
+
+- `#[json(...)]` — struct field / enum variant
+- `#[deprecated(...)]` — 모든 선언, W0750 경고
+- 값은 **리터럴만** (key=literal 또는 bare flag), 표현식 불가
+
+```osty
+pub struct ApiUser {
+    #[json(key = "user_id")]
+    pub id: Int,
+    #[json(key = "full_name")]
+    pub name: String,
+    #[json(skip)]
+    cache: LocalCache,
+}
+
+#[deprecated(since = "0.5", use = "loginV2")]
+pub fn login(u: String, p: String) -> Result<Session, Error> { ... }
+```
+
+## A.10 특수 컴파일러 기능
+
+- Builder 자동 파생 — 필수 `pub` 필드 미설정 시 `.build()` **컴파일 타임 거부** (G9)
+- `ToString` 자동 구현 (override 가능)
+- `_test.osty` + `fn test_*()` 자동 발견, 기본 병렬 + 난수 순서
+
+```osty
+// builder — url 빠지면 컴파일 에러
+let req = HttpRequest.builder()
+    .url("https://api.example.com/x")
+    .method("POST")
+    .timeout(60)
+    .build()
+
+// _test.osty 파일
+use std.testing
+
+fn testParseHandlesBlank() {
+    let r = parse("")
+    testing.assertEq(r, Err(ParseError.Empty))
+}
+
+fn benchJsonDecode() {
+    testing.benchmark(1000, || {
+        let _: Config = json.parse(sample)?
+        Ok(())
+    })
+}
+```
+
+## A.11 명시적 배제 — 요청받아도 거부
+
+`null`/`nil` (→ `Option`), 암묵 수치 변환, 사용자 정의 연산자 오버로딩, 제네릭 타입 매개변수 기본값, variadic generics, 상속, 암묵 인터페이스 구현.
+
+이들을 요구하는 설계는 Osty다운 대안(`Option` 명시, 명시적 변환 함수, 새 함수명, 팩토리 함수, 헬퍼 trait, composition + 구조적 interface)으로 재구성한다.
+
+---
+
+# 부록 B. 생산성 기법 카탈로그 + 전형 패턴
+
+> 각 카테고리는 **색인 테이블 + 선호 사용 패턴**으로 구성. 테이블은 "기법이 있다"의 체크리스트, 스니펫은 "이렇게 쓰는 게 Osty다움"의 기준.
+
+## B.1 문법 설탕
+
+| # | 기법 | 스펙 |
+|---|---|---|
+| 1 | `T?` = `Option<T>` | §2.5 |
+| 2 | 문자열 보간 `"{expr}"` | §1.6.3 |
+| 3 | Triple-quoted + 공통 인덴트 제거 | §1.6.3 |
+| 4 | Raw `r"..."` | §1.6.3 |
+| 5 | 숫자 분리자 `_` | §1.6.1 |
+| 6 | 필드 쇼트핸드 `{ name }` | §3.4 |
+| 7 | struct 스프레드 `{ ..x, ... }` | §3.4 |
+| 8 | ASI | §1.8 |
+| 9 | Shebang | §1.1 |
+| 10 | 리터럴 다형성 | §2.2 |
+| 11 | `///` doc → API 문서 | §1.5 |
+
+**전형 패턴** — 보간 + 쇼트핸드 + 스프레드 묶음:
+
+```osty
+let User { name, age, .. } = current
+let summary = "user {name} ({age})"
+let nextYear = User { ..current, age: age + 1 }
+```
+
+## B.2 타입 시스템
+
+| # | 기법 | 비고 |
+|---|---|---|
+| 12 | 제네릭 + monomorphization | `fn<T: Ordered>` |
+| 13 | Turbofish `::<T>` | 추론 실패 시 명시 |
+| 14 | 구조적 인터페이스 | impl 블록 불필요 |
+| 15 | 인터페이스 기본 메서드 | default body |
+| 16 | 내장 Equal/Ordered/Hashable/ToString | 자동 파생 조건부 |
+| 17 | 컬렉션 자동 derive | `List<T: Hashable>: Hashable` |
+| 18 | 양방향 타입 추론 | 국소 단일화 |
+| 19 | Union/Sum enum + 메서드 | payload 지원 |
+| 20 | Prelude Option/Result | 임포트 불필요 |
+| 21 | struct/enum 부분 선언 | 같은 패키지 다중 파일 |
+| 22 | `type` 별칭 | |
+
+**전형 패턴** — 제네릭 + 구조적 인터페이스:
+
+```osty
+pub interface Cache<K, V> {
+    fn get(self, key: K) -> V?
+    fn set(mut self, key: K, value: V)
+}
+
+fn memoize<K: Hashable, V>(cache: Cache<K, V>, k: K, compute: fn() -> V) -> V {
+    match cache.get(k) {
+        Some(v) -> v,
+        None    -> {
+            let v = compute()
+            cache.set(k, v)
+            v
+        },
+    }
+}
+```
+
+## B.3 에러 처리
+
+| # | 기법 | 비고 |
+|---|---|---|
+| 23 | `?` 전파 | Result / Option 각각 |
+| 24 | `?.` optional chain | 첫 None 단락 |
+| 25 | `??` nil-coalesce | 우결합, lazy 기본값 |
+| 26 | `Error` + downcast | nominal tag 복구 |
+| 27 | `defer` LIFO | `?`·취소에도 실행 |
+| 28 | `panic`/`unreachable`/`todo`/`abort` | defer skip |
+
+**전형 패턴** — `?` 체인 + defer 페어링:
+
+```osty
+fn compressFile(src: String, dst: String) -> Result<(), Error> {
+    let r = fs.open(src)?
+    defer r.close()
+    let w = fs.create(dst)?
+    defer w.close()
+    let enc = gzip.writer(w)?
+    defer enc.close()
+
+    io.copy(r, enc)?
+    Ok(())
+}
+
+let title: String = user?.profile?.title ?? "Untitled"
+```
+
+## B.4 제어 흐름 / 패턴
+
+| # | 기법 | 비고 |
+|---|---|---|
+| 29 | `if let Some(x) = e` | 단일 분기 |
+| 30 | `for let Some(x) = q.pop()` | Some/Ok 동안 반복 |
+| 31 | `match` 식 | 값 반환 |
+| 32 | Exhaustiveness + witness | 누락 지점 명시 (G17) |
+| 33 | Guard `if cond ->` | coverage 기여 안 함 |
+| 34 | 범위 패턴 `0..=9` | 생략형 `..=N`, `N..` |
+| 35 | struct destructuring | rename `name: n` |
+| 36 | or-pattern `A \| B` | 같은 바인딩 |
+| 37 | binding `name @ pat` | 부분+전체 동시 |
+| 38 | 블록 = 식 | 마지막 식이 값 |
+
+**전형 패턴** — match 식으로 분기 + guard:
+
+```osty
+fn tierOf(user: User) -> Tier {
+    match user.plan {
+        Plan.Free                              -> Tier.Basic,
+        Plan.Paid(n) if n >= 10                -> Tier.Enterprise,
+        Plan.Paid(_)                           -> Tier.Standard,
+        Plan.Trial(expires) if expires > now() -> Tier.Standard,
+        Plan.Trial(_)                          -> Tier.Basic,
+    }
+}
+```
+
+## B.5 함수 / 클로저
+
+| # | 기법 | 비고 |
+|---|---|---|
+| 39 | 기본 인자 (리터럴) | 후행 연속 |
+| 40 | 키워드 인자 | `f(x, timeout: 60)` |
+| 41 | 클로저 `\|x\| ...` | 참조 캡처 |
+| 42 | 클로저 패턴 파라미터 | `\|(k, v)\| ...` (G16) |
+| 43 | 메서드 문법 self/mut self | 점 호출 |
+| 44 | 메서드 참조 (비제네릭) | `let f = obj.m` |
+| 45 | 고차 함수 타입 | `fn(T) -> R` |
+| 46 | 함수값 arity erasure (G15) | positional/exact |
+| 47 | Unit 반환 shorthand | `fn()` |
+
+**전형 패턴** — 기본 인자 + 클로저 패턴 파라미터:
+
+```osty
+pub fn fetch(url: String, timeout: Int = 30, retries: Int = 3) -> Result<Bytes, Error> {
+    ...
+}
+
+// 호출자
+fetch("https://api/x")
+fetch("https://api/x", timeout: 60)
+
+// 클로저 패턴 파라미터 — 튜플/struct 분해
+counts.entries()
+    .filter(|(_, v)| v > 0)
+    .map(|(k, v)| "{k} = {v}")
+```
+
+## B.6 동시성
+
+| # | 기법 | 비고 |
+|---|---|---|
+| 48 | `taskGroup` 스코프 | 구조적 |
+| 49 | Non-escaping capability | E0743 (G13) |
+| 50 | `parallel(items, n, f)` | bounded 병렬 |
+| 51 | 채널 `thread.chan::<T>(n)` | `<-`, `recv()` |
+| 52 | `for x in channel` | close 시 종료 |
+| 53 | `thread.select` | recv/send/timeout/default |
+| 54 | 취소 전파 (cause) | `isCancelled`/`checkCancelled` |
+| 55 | Defer × 취소 | uninterruptible |
+
+**전형 패턴** — 구조적 동시성 (자식 실패 → 형제 자동 취소):
+
+```osty
+fn mirrorDirs(srcs: List<String>, dst: String) -> Result<(), Error> {
+    taskGroup(|g| {
+        for src in srcs {
+            g.spawn(|| syncDir(src, dst))
+        }
+        // 종료 시점에 모든 자식 join. 하나라도 실패하면 나머지 자동 취소.
+        Ok(())
+    })
+}
+
+// 함정: Handle을 스코프 밖으로 반환하면 E0743
+// fn bad() -> Handle<Int> {
+//     taskGroup(|g| { g.spawn(|| 1) })   // 타입 에러
+// }
+```
+
+## B.7 모듈 / 가시성
+
+| # | 기법 | 비고 |
+|---|---|---|
+| 56 | 디렉토리 = 패키지 | 암묵 |
+| 57 | `use … as alias` | rename |
+| 58 | `pub` 가시성 | field/method/variant |
+| 59 | 순환 import 금지 | DAG |
+| 60 | Prelude | 자동 심볼 |
+
+**전형 패턴** — export 최소화, 내부 헬퍼는 비-pub:
+
+```osty
+pub fn parse(text: String) -> Result<Config, Error> {
+    let toks = tokenize(text)?
+    parseTokens(toks)
+}
+
+// 내부 전용 — pub 없음
+fn tokenize(text: String) -> Result<List<Token>, Error> { ... }
+fn parseTokens(tokens: List<Token>) -> Result<Config, Error> { ... }
+```
+
+## B.8 메타 / 어노테이션
+
+| # | 기법 | 비고 |
+|---|---|---|
+| 61 | `#[json(...)]` | struct field / variant |
+| 62 | `#[deprecated(...)]` | W0750 |
+| 63 | 값 = 리터럴 전용 | 검증 용이 |
+
+**전형 패턴** — 직렬화 키 매핑 + 내부 필드 숨김:
+
+```osty
+pub struct ApiUser {
+    #[json(key = "user_id")]
+    pub id: Int,
+    #[json(key = "full_name")]
+    pub name: String,
+    #[json(skip)]
+    internal: CacheHandle,
+}
+```
+
+## B.9 FFI
+
+| # | 기법 | 비고 |
+|---|---|---|
+| 64 | `use go "..." { ... }` | Go 패키지 |
+| 65 | 타입 매핑 | `T?↔*T`, `Result↔(T,error)` |
+
+**전형 패턴** — Go 타입을 Osty 경계로 격리:
+
+```osty
+use go "net/http" {
+    fn Get(url: String) -> Result<Response, Error>
+    struct Response { StatusCode: Int, Body: Reader }
+}
+
+// Go 타입이 외부로 새지 않도록 pub API는 Osty 타입만
+pub fn fetchBytes(url: String) -> Result<Bytes, Error> {
+    let resp = Get(url)?
+    if resp.StatusCode != 200 {
+        return Err(HttpError.Status(resp.StatusCode))
+    }
+    resp.Body.readAll()
+}
+```
+
+## B.10 특수 / 테스트
+
+| # | 기법 | 비고 |
+|---|---|---|
+| 66 | Builder 자동 파생 | 필수 필드 컴파일 타임 검증 (G9) |
+| 67 | `value.toBuilder()` | 기존 값 변형 |
+| 68 | `ToString` 자동 구현 | override 가능 |
+| 69 | `_test.osty` + `test_*` 자동 발견 | 병렬 + 난수 |
+| 70 | `testing.assertEq` | 구조적 diff |
+| 71 | `testing.benchmark` | 반복 측정 |
+| 72 | `testing.snapshot` | golden file |
+| 73 | `dbg(expr)` | 위치 + 식 텍스트 + 값 |
+
+**전형 패턴** — builder 기반 객체 생성 + 포커스 테스트:
+
+```osty
+fn testUserBuilderDefaults() {
+    let u = User.builder()
+        .name("alice")
+        .age(30)
+        .build()
+    testing.assertEq(u.name, "alice")
+    testing.assertEq(u.age, 30)
+}
+
+fn benchParseConfig() {
+    testing.benchmark(1000, || {
+        let _: Config = json.parse(sampleText)?
+        Ok(())
+    })
+}
+```
+
+---
+
+## 이 부록들의 사용 규칙
+
+- 새 Osty 코드·예시·진단 메시지 작성 **전에** 부록 A의 해당 소섹션을 확인하고 예시 스타일을 따른다.
+- 새 기능·린트 추가 전에 부록 B에 이미 있는 기법과 중복되는지 검사.
+- `LANG_SPEC_v0.4/`가 확장되면 같은 커밋에서 부록 A/B도 갱신.
+- 부록 예시는 반드시 스펙 내 확실한 문법만. 불확실하면 서술로 대체하거나 생략.
+- 부록 A에 없는 구문을 예시·코드에 쓰려 한다면 먼저 스펙을 확인하고, 있다면 부록 A에 추가.
