@@ -157,14 +157,18 @@ func runCacheLs(_ []string, flags cliFlags) {
 		return
 	}
 	w := tabular(os.Stdout)
-	fmt.Fprintln(w, "PROFILE\tTARGET\tSOURCES\tSIZE\tBUILT")
+	fmt.Fprintln(w, "PROFILE\tTARGET\tBACKEND\tEMIT\tSOURCES\tSIZE\tBUILT")
 	for _, e := range entries {
 		target := e.Target
 		if target == "" {
 			target = "(host)"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\n",
-			e.Profile, target, e.Sources, humanBytes(e.Size),
+		emit := e.Emit
+		if emit == "" {
+			emit = "(unknown)"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\t%s\t%s\n",
+			e.Profile, target, e.Backend, emit, e.Sources, humanBytes(e.Size),
 			e.BuiltAt.Local().Format("2006-01-02 15:04"))
 	}
 	flushTabular(w)
@@ -183,23 +187,39 @@ func runCacheClean(_ []string, flags cliFlags) {
 
 func runCacheInfo(args []string, flags cliFlags) {
 	fs := flag.NewFlagSet("cache info", flag.ExitOnError)
-	var profileName, triple string
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: osty cache info [--profile NAME] [--target TRIPLE] [--backend NAME]")
+	}
+	var profileName, triple, backendName string
 	fs.StringVar(&profileName, "profile", profile.NameDebug, "profile name")
 	fs.StringVar(&triple, "target", "", "target triple (empty = host)")
+	fs.StringVar(&backendName, "backend", defaultBackendName(), "backend name")
 	_ = fs.Parse(args)
+	backendID, err := parseCLIBackend(backendName)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "osty cache info: %v\n", err)
+		os.Exit(2)
+	}
 	root := projectRootOrExit(flags)
-	fp, err := profile.ReadFingerprint(root, profileName, triple)
+	fp, err := profile.ReadFingerprintForBackend(root, profileName, triple, backendID.String())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty cache info: %v\n", err)
 		os.Exit(1)
 	}
 	if fp == nil {
-		fmt.Printf("no cache entry for profile=%s target=%q\n", profileName, triple)
+		fmt.Printf("no cache entry for profile=%s target=%q backend=%s\n",
+			profileName, triple, backendID)
 		os.Exit(1)
 	}
 	fmt.Printf("profile:      %s\n", fp.Profile)
 	if fp.Target != "" {
 		fmt.Printf("target:       %s\n", fp.Target)
+	}
+	if fp.Backend != "" {
+		fmt.Printf("backend:      %s\n", fp.Backend)
+	}
+	if fp.Emit != "" {
+		fmt.Printf("emit:         %s\n", fp.Emit)
 	}
 	fmt.Printf("tool version: %s\n", fp.ToolVersion)
 	fmt.Printf("built at:     %s\n", fp.BuiltAt.Local().Format(time.RFC3339))

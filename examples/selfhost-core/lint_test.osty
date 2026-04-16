@@ -64,6 +64,140 @@ fn testSelfLintFindsSimplifiableSelfOperations() {
     testing.assertEq(nodeBackedSimplifications, 2)
 }
 
+fn testSelfLintCarriesMachineFixesForFixableRules() {
+    let report = selfLintSource(
+        r"""
+            use std.fmt
+
+            fn simplify(unusedParam: Bool, flag: Bool) -> Bool {
+                let unusedValue = 1
+                let mut neverChanged = 2
+                println(neverChanged)
+                let mut y = 1
+                y = y
+                println(y)
+                let result = if flag { true } else { false }
+                return result
+            }
+            """,
+    )
+
+    testing.assertEq(report.parseErrors, 0)
+    assertLintFirstFix(report, "L0001", "_", true)
+    assertLintFirstFix(report, "L0002", "_", true)
+    assertLintFirstFix(report, "L0003", "", true)
+    assertLintFirstFix(report, "L0004", "neverChanged", true)
+    assertLintFirstFix(report, "L0040", "", true)
+    assertLintFirstFix(report, "L0042", "", true)
+    assertLintFirstFix(report, "L0024", "", true)
+}
+
+fn testSelfLintApplyFixesRewritesUnusedFixes() {
+    let source = "use std.fmt\n\nfn f(unused: Bool) \{\n    let unusedValue = 1\n    let mut neverChanged = 2\n    println(neverChanged)\n\}\n"
+    let report = selfLintSource(source)
+    let fixed = selfLintApplyFixes(source, report)
+
+    testing.assertEq(fixed.skipped, 0)
+    testing.assertEq(fixed.applied, 4)
+    testing.assertEq(
+        fixed.source,
+        "\n\nfn f(_unused: Bool) \{\n    let _unusedValue = 1\n    let neverChanged = 2\n    println(neverChanged)\n\}\n",
+    )
+}
+
+fn testSelfLintApplyFixesCopiesExpressionText() {
+    let source = "fn f(flag: Bool) -> Bool \{ !!flag \}\n"
+    let report = selfLintSource(source)
+    let fixed = selfLintApplyFixes(source, report)
+
+    testing.assertEq(fixed.skipped, 0)
+    testing.assertEq(fixed.applied, 1)
+    testing.assertEq(fixed.source, "fn f(flag: Bool) -> Bool \{ flag \}\n")
+}
+
+fn testSelfLintApplyFixesWrapsCopiedExpressionText() {
+    let source = r"fn f(flag: Bool) -> Bool { if flag { false } else { true } }"
+    let report = selfLintSource(source)
+    let fixed = selfLintApplyFixes(source, report)
+
+    testing.assertEq(fixed.skipped, 0)
+    testing.assertEq(fixed.applied, 1)
+    testing.assertEq(fixed.source, r"fn f(flag: Bool) -> Bool { !(flag) }")
+}
+
+fn testSelfLintUsesResolverTargetsForShadowedUnusedBindings() {
+    let report = selfLintSource(
+        r"""
+            fn work() {
+                let value = 1
+                {
+                    let value = 2
+                    println(value)
+                }
+            }
+            """,
+    )
+
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0001"), 1)
+}
+
+fn testSelfLintUsesResolverTargetsForShadowedUnusedMut() {
+    let report = selfLintSource(
+        r"""
+            fn work() {
+                let mut value = 1
+                {
+                    let mut value = 2
+                    value = 3
+                    println(value)
+                }
+                println(value)
+            }
+            """,
+    )
+
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0004"), 1)
+}
+
+fn testSelfLintCountsStructShorthandAsRead() {
+    let report = selfLintSource(
+        r"""
+            struct User { name: String }
+
+            fn build() -> User {
+                let name = "Ada"
+                let user = User { name }
+                user
+            }
+            """,
+    )
+
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0001"), 0)
+}
+
+fn testSelfLintFindsUnusedClosureAndMatchBindings() {
+    let report = selfLintSource(
+        r"""
+            enum Maybe { Some(Int), None }
+
+            fn work(value: Maybe) -> Int {
+                let f = |unused| 1
+                match value {
+                    Maybe.Some(inner) -> f(0),
+                    Maybe.None -> 0,
+                }
+            }
+            """,
+    )
+
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0002"), 1)
+    testing.assertEq(selfLintCodeCount(report, "L0001"), 1)
+}
+
 fn testSelfLintAstDoesNotCountFieldNamesAsReads() {
     let report = selfLintSource(
         r"""
@@ -173,6 +307,100 @@ fn testSelfLintFindsControlFlowAndBoolSimplifications() {
     testing.assertEq(selfLintCodeCount(report, "L0045"), 1)
 }
 
+fn testSelfLintFindsRedundantElseAfterReturn() {
+    let report = selfLintSource(
+        r"""
+            fn flow(flag: Bool) -> Int {
+                if flag {
+                    return 1
+                } else {
+                    return 2
+                }
+            }
+            """,
+    )
+
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0021"), 1)
+}
+
+fn testSelfLintFindsDeadCodeAfterDivergingIfMatchAndLoop() {
+    let report = selfLintSource(
+        r"""
+            fn viaIf(flag: Bool) -> Int {
+                if flag {
+                    return 1
+                } else {
+                    return 2
+                }
+                let dead = 3
+                dead
+            }
+
+            fn viaMatch(x: Int) -> Int {
+                match x {
+                    0 -> { return 0 },
+                    _ -> { return 1 },
+                }
+                let dead = 2
+                dead
+            }
+
+            fn viaLoop() -> Int {
+                for {
+                    continue
+                }
+                let dead = 1
+                dead
+            }
+            """,
+    )
+
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0020"), 3)
+}
+
+fn testSelfLintKeepsCodeAfterInfiniteLoopWithBreakEscapeLive() {
+    let report = selfLintSource(
+        r"""
+            fn loopWithBreak(flag: Bool) {
+                for {
+                    if flag {
+                        break
+                    }
+                }
+                let live = 1
+                println(live)
+            }
+            """,
+    )
+
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0020"), 0)
+}
+
+fn testSelfLintFindsIdenticalBranches() {
+    let report = selfLintSource(r"fn flow(flag: Bool) -> Int { if flag { 1 } else { 1 } }")
+
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0025"), 1)
+}
+
+fn testSelfLintDoesNotTreatCallsAsIdenticalBranches() {
+    let report = selfLintSource(
+        r"""
+            fn next() -> Int { 1 }
+
+            fn flow(flag: Bool) -> Int {
+                if flag { next() } else { next() }
+            }
+            """,
+    )
+
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0025"), 0)
+}
+
 fn testSelfLintFindsParameterComplexity() {
     let report = selfLintSource(
         r"""
@@ -190,4 +418,22 @@ fn testSelfLintReportsParseRecoveryErrors() {
     let report = selfLintSource(r"fn broken() { let x = 1")
 
     testing.assert(report.parseErrors > 0)
+}
+
+fn assertLintFirstFix(
+    report: SelfLintReport,
+    code: String,
+    replacement: String,
+    machineApplicable: Bool,
+) {
+    for diag in report.diagnostics {
+        if diag.code == code {
+            testing.assert(selfLintFixCount(diag) > 0)
+            let fix = selfLintFirstFix(diag)
+            testing.assertEq(fix.replacement, replacement)
+            testing.assertEq(fix.machineApplicable, machineApplicable)
+            return
+        }
+    }
+    testing.fail("expected lint fix for {code}")
 }

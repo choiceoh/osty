@@ -165,10 +165,6 @@ func (c *checker) floatLitType(_ *ast.FloatLit, hint types.Type) types.Type {
 
 // ---- Unary / binary ----
 
-func (c *checker) unaryType(e *ast.UnaryExpr, env *env) types.Type {
-	return c.unaryTypeHinted(e, nil, env)
-}
-
 // unaryTypeHinted propagates a surrounding type hint through a prefix
 // operator so literal-range checking sees the sign. For `-lit` the
 // inner literal bypasses its own positive-range check (the literal
@@ -239,7 +235,7 @@ func (c *checker) binaryType(e *ast.BinaryExpr, env *env) types.Type {
 }
 
 // binaryOpResult validates an operator against its operands and returns
-// the result type. The error messages try to match v0.3 §2.2 phrasing.
+// the result type. The error messages try to match v0.4 §2.2 phrasing.
 func (c *checker) binaryOpResult(e *ast.BinaryExpr, op token.Kind, lt, rt types.Type) types.Type {
 	switch op {
 	// Arithmetic
@@ -579,19 +575,10 @@ func interfaceNamed(c *checker, t types.Type) (*types.Named, bool) {
 	return nil, false
 }
 
-// applyGenericCall is the monomorphizing call path. Given the fn type
-// and its generic type-parameter list, it infers concrete type arguments
-// from (a) the surrounding hint for the return type, and (b) each
-// positional argument, then substitutes into the param / return types
-// and rechecks with the concrete types. The instantiation is recorded
-// on Result.Instantiations so the Go transpiler can emit one
-// specialized copy per distinct argument list (§2.7.3).
-func (c *checker) applyGenericCall(e *ast.CallExpr, fn *types.FnType, generics []*types.TypeVar, hint types.Type, env *env) types.Type {
-	return c.applyGenericCallWithArgs(e, fn, generics, nil, hint, env)
-}
-
-// applyGenericCallWithArgs is applyGenericCall with an optional explicit
-// type-argument list from a turbofish.
+// applyGenericCallWithArgs is the monomorphizing call path. Given the fn
+// type and its generic type-parameter list, it infers concrete type
+// arguments from the surrounding hint, positional arguments, and an optional
+// explicit type-argument list from a turbofish.
 func (c *checker) applyGenericCallWithArgs(e *ast.CallExpr, fn *types.FnType, generics []*types.TypeVar, explicit []types.Type, hint types.Type, env *env) types.Type {
 	c.checkExplicitGenericArity(e, len(generics), explicit)
 	if len(generics) == 0 {
@@ -1836,10 +1823,40 @@ func (c *checker) optionalMethod(o *types.Optional, name string) *methodDesc {
 		return simpleMethod(name, nil, types.Bool)
 	case "unwrap":
 		return simpleMethod(name, nil, t)
+	case "expect":
+		return simpleMethod(name, []types.Type{types.String}, t)
 	case "unwrapOr":
 		return simpleMethod(name, []types.Type{t}, t)
+	case "unwrapOrElse":
+		fn := &types.FnType{Params: nil, Return: t}
+		return simpleMethod(name, []types.Type{fn}, t)
+	case "and":
+		uSym := &resolve.Symbol{Name: "U", Kind: resolve.SymGeneric}
+		u := &types.TypeVar{Sym: uSym}
+		return &methodDesc{
+			Name:     name,
+			Fn:       &types.FnType{Params: []types.Type{&types.Optional{Inner: u}}, Return: &types.Optional{Inner: u}},
+			Generics: []*types.TypeVar{u},
+		}
+	case "andThen":
+		uSym := &resolve.Symbol{Name: "U", Kind: resolve.SymGeneric}
+		u := &types.TypeVar{Sym: uSym}
+		fn := &types.FnType{Params: []types.Type{t}, Return: &types.Optional{Inner: u}}
+		return &methodDesc{
+			Name:     name,
+			Fn:       &types.FnType{Params: []types.Type{fn}, Return: &types.Optional{Inner: u}},
+			Generics: []*types.TypeVar{u},
+		}
+	case "or", "xor":
+		return simpleMethod(name, []types.Type{opt}, opt)
 	case "orElse":
 		fn := &types.FnType{Params: nil, Return: opt}
+		return simpleMethod(name, []types.Type{fn}, opt)
+	case "filter":
+		fn := &types.FnType{Params: []types.Type{t}, Return: types.Bool}
+		return simpleMethod(name, []types.Type{fn}, opt)
+	case "inspect":
+		fn := &types.FnType{Params: []types.Type{t}, Return: types.Unit}
 		return simpleMethod(name, []types.Type{fn}, opt)
 	case "map":
 		uSym := &resolve.Symbol{Name: "U", Kind: resolve.SymGeneric}
@@ -1851,6 +1868,9 @@ func (c *checker) optionalMethod(o *types.Optional, name string) *methodDesc {
 			Generics: []*types.TypeVar{u},
 		}
 	case "orError":
+		return simpleMethod(name, []types.Type{types.String},
+			c.resultOf(t, c.namedOf("Error", nil)))
+	case "okOr":
 		return simpleMethod(name, []types.Type{types.String},
 			c.resultOf(t, c.namedOf("Error", nil)))
 	case "toString":
@@ -1932,14 +1952,45 @@ func resultMethod(n *types.Named, name string) *methodDesc {
 		return simpleMethod(name, nil, types.Bool)
 	case "unwrap":
 		return simpleMethod(name, nil, t)
+	case "expect":
+		return simpleMethod(name, []types.Type{types.String}, t)
 	case "unwrapErr":
 		return simpleMethod(name, nil, e)
+	case "expectErr":
+		return simpleMethod(name, []types.Type{types.String}, e)
 	case "unwrapOr":
 		return simpleMethod(name, []types.Type{t}, t)
+	case "unwrapOrElse":
+		fn := &types.FnType{Params: []types.Type{e}, Return: t}
+		return simpleMethod(name, []types.Type{fn}, t)
 	case "ok":
 		return simpleMethod(name, nil, &types.Optional{Inner: t})
 	case "err":
 		return simpleMethod(name, nil, &types.Optional{Inner: e})
+	case "and":
+		u := resultMethodTypeVar("U")
+		return genericMethod(name, []types.Type{&types.Named{Sym: n.Sym, Args: []types.Type{u, e}}},
+			&types.Named{Sym: n.Sym, Args: []types.Type{u, e}}, u)
+	case "andThen":
+		u := resultMethodTypeVar("U")
+		fn := &types.FnType{Params: []types.Type{t}, Return: &types.Named{Sym: n.Sym, Args: []types.Type{u, e}}}
+		return genericMethod(name, []types.Type{fn},
+			&types.Named{Sym: n.Sym, Args: []types.Type{u, e}}, u)
+	case "or":
+		f := resultMethodTypeVar("F")
+		return genericMethod(name, []types.Type{&types.Named{Sym: n.Sym, Args: []types.Type{t, f}}},
+			&types.Named{Sym: n.Sym, Args: []types.Type{t, f}}, f)
+	case "orElse":
+		f := resultMethodTypeVar("F")
+		fn := &types.FnType{Params: []types.Type{e}, Return: &types.Named{Sym: n.Sym, Args: []types.Type{t, f}}}
+		return genericMethod(name, []types.Type{fn},
+			&types.Named{Sym: n.Sym, Args: []types.Type{t, f}}, f)
+	case "inspect":
+		fn := &types.FnType{Params: []types.Type{t}, Return: types.Unit}
+		return simpleMethod(name, []types.Type{fn}, n)
+	case "inspectErr":
+		fn := &types.FnType{Params: []types.Type{e}, Return: types.Unit}
+		return simpleMethod(name, []types.Type{fn}, n)
 	case "map":
 		u := resultMethodTypeVar("U")
 		fn := &types.FnType{Params: []types.Type{t}, Return: u}
@@ -2217,14 +2268,6 @@ func (c *checker) tryFFICall(u *ast.UseDecl, fx *ast.FieldExpr, e *ast.CallExpr,
 	return c.applyFnTo(e, e.Args, ft, env)
 }
 
-// ffiType resolves an FFI body AST type reference via name-based prelude
-// lookup. Mirrors c.typeOf but doesn't require the resolver's TypeRefs
-// table — the FFI body isn't walked by the resolver, so type refs there
-// have no recorded symbol.
-func (c *checker) ffiType(n ast.Type) types.Type {
-	return c.externalType(n, nil)
-}
-
 func (c *checker) externalType(n ast.Type, pkg *resolve.Package) types.Type {
 	if n == nil {
 		return types.Unit
@@ -2395,7 +2438,8 @@ func (c *checker) tryVariantCall(id *ast.Ident, e *ast.CallExpr, hint types.Type
 				errHint = types.ErrorType
 			}
 			okOut := at
-			if okHint != nil && !types.IsError(okHint) && c.accepts(okHint, at, e.Args[0].Value) {
+			_, okHintIsTypeVar := okHint.(*types.TypeVar)
+			if okHint != nil && !okHintIsTypeVar && !types.IsError(okHint) && c.accepts(okHint, at, e.Args[0].Value) {
 				okOut = okHint
 			}
 			return &types.Named{Sym: resSym, Args: []types.Type{okOut, errHint}}
@@ -2419,7 +2463,8 @@ func (c *checker) tryVariantCall(id *ast.Ident, e *ast.CallExpr, hint types.Type
 				okHint = types.ErrorType
 			}
 			errOut := at
-			if errHint != nil && !types.IsError(errHint) && c.accepts(errHint, at, e.Args[0].Value) {
+			_, errHintIsTypeVar := errHint.(*types.TypeVar)
+			if errHint != nil && !errHintIsTypeVar && !types.IsError(errHint) && c.accepts(errHint, at, e.Args[0].Value) {
 				errOut = errHint
 			}
 			return &types.Named{Sym: resSym, Args: []types.Type{okHint, errOut}}

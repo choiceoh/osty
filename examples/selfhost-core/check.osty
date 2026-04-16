@@ -9,28 +9,6 @@ use go "strings" as strings {
     fn TrimSuffix(s: String, suffix: String) -> String
 }
 
-/// OstyLexedSource is the parser/checker boundary retained from the
-/// dogfood checker API. selfhost-core keeps the lexer in frontend.osty, so the
-/// wrapper stores that stream directly.
-pub struct OstyLexedSource {
-    pub source: String,
-    pub stream: FrontLexStream,
-}
-
-pub fn ostyLexSource(source: String) -> OstyLexedSource {
-    OstyLexedSource {
-        source,
-        stream: frontendLexStream(source),
-    }
-}
-
-pub fn astParseLexedSource(lexed: OstyLexedSource) -> AstFile {
-    let tokens = frontTokensFromSource(lexed.source, lexed.stream)
-    let mut p = newOstyParser(tokens)
-    opParseFile(p)
-    AstFile { arena: p.arena }
-}
-
 pub struct FrontCheckBinding {
     pub name: String,
     pub typeName: String,
@@ -2896,6 +2874,39 @@ fn frontCheckStructFieldCount(env: FrontCheckEnv, owner: String) -> Int {
 }
 
 fn frontCheckPatternKind(pat: AstNode) -> String {
+    if pat.extra == astPatternIdentKind() {
+        return "ident"
+    }
+    if pat.extra == astPatternVariantKind() {
+        return "variant"
+    }
+    if pat.extra == astPatternStructKind() {
+        return "struct"
+    }
+    if pat.extra == astPatternBindingKind() {
+        return "binding"
+    }
+    if pat.extra == astPatternLiteralKind() {
+        if pat.text == "-" && pat.left >= 0 {
+            return "negLiteral"
+        }
+        return "literal"
+    }
+    if pat.extra == astPatternWildcardKind() {
+        return "wildcard"
+    }
+    if pat.extra == astPatternTupleKind() {
+        return "tuple"
+    }
+    if pat.extra == astPatternRangeKind() {
+        return "range"
+    }
+    if pat.extra == astPatternOrKind() {
+        return "or"
+    }
+    if pat.extra == astPatternFieldKind() {
+        return "field"
+    }
     if strings.HasPrefix(pat.text, "ident:") {
         return "ident"
     }
@@ -2927,6 +2938,10 @@ fn frontCheckPatternKind(pat: AstNode) -> String {
 }
 
 fn frontCheckPatternPayload(pat: AstNode) -> String {
+    let kind = frontCheckPatternKind(pat)
+    if pat.extra > 0 && (kind == "ident" || kind == "variant" || kind == "struct" || kind == "binding" || kind == "literal" || kind == "field") {
+        return pat.text
+    }
     if strings.HasPrefix(pat.text, "ident:") {
         return strings.TrimPrefix(pat.text, "ident:")
     }
@@ -2990,7 +3005,7 @@ fn frontCheckPatternCoversAny(file: AstFile, patIdx: Int) -> Bool {
     if pat.kind != AstNPattern {
         return false
     }
-    if pat.text == "wildcard" {
+    if frontCheckPatternKind(pat) == "wildcard" {
         return true
     }
     if frontCheckPatternIsBindingIdent(pat) {
@@ -2999,7 +3014,7 @@ fn frontCheckPatternCoversAny(file: AstFile, patIdx: Int) -> Bool {
     if frontCheckPatternIsBindingAt(pat) {
         return frontCheckPatternCoversAny(file, pat.left)
     }
-    if pat.text == "or" {
+    if frontCheckPatternKind(pat) == "or" {
         return frontCheckPatternCoversAny(file, pat.left) || frontCheckPatternCoversAny(file, pat.right)
     }
     false
@@ -3034,7 +3049,7 @@ fn frontCheckPatternCoversStruct(file: AstFile, env: FrontCheckEnv, patIdx: Int,
     if frontCheckPatternIsBindingAt(pat) {
         return frontCheckPatternCoversStruct(file, env, pat.left, owner)
     }
-    if pat.text == "or" {
+    if frontCheckPatternKind(pat) == "or" {
         return frontCheckPatternCoversStruct(file, env, pat.left, owner) || frontCheckPatternCoversStruct(file, env, pat.right, owner)
     }
     false
@@ -3061,7 +3076,7 @@ fn frontCheckPatternCoversBoolTupleMask(file: AstFile, patIdx: Int, arity: Int, 
     if frontCheckPatternCoversAny(file, patIdx) {
         return true
     }
-    if pat.text == "tuple" {
+    if frontCheckPatternKind(pat) == "tuple" {
         if frontCheckIntCount(pat.children) != arity {
             return false
         }
@@ -3077,7 +3092,7 @@ fn frontCheckPatternCoversBoolTupleMask(file: AstFile, patIdx: Int, arity: Int, 
     if frontCheckPatternIsBindingAt(pat) {
         return frontCheckPatternCoversBoolTupleMask(file, pat.left, arity, mask)
     }
-    if pat.text == "or" {
+    if frontCheckPatternKind(pat) == "or" {
         return frontCheckPatternCoversBoolTupleMask(file, pat.left, arity, mask) || frontCheckPatternCoversBoolTupleMask(file, pat.right, arity, mask)
     }
     false
@@ -3105,7 +3120,7 @@ fn frontCheckPatternCoversBool(file: AstFile, patIdx: Int, value: Bool) -> Bool 
     if frontCheckPatternIsBindingAt(pat) {
         return frontCheckPatternCoversBool(file, pat.left, value)
     }
-    if pat.text == "or" {
+    if frontCheckPatternKind(pat) == "or" {
         return frontCheckPatternCoversBool(file, pat.left, value) || frontCheckPatternCoversBool(file, pat.right, value)
     }
     false
@@ -3128,7 +3143,7 @@ fn frontCheckPatternCoversVariant(file: AstFile, patIdx: Int, name: String) -> B
     if frontCheckPatternIsBindingAt(pat) {
         return frontCheckPatternCoversVariant(file, pat.left, name)
     }
-    if pat.text == "or" {
+    if frontCheckPatternKind(pat) == "or" {
         return frontCheckPatternCoversVariant(file, pat.left, name) || frontCheckPatternCoversVariant(file, pat.right, name)
     }
     false
@@ -3164,7 +3179,7 @@ fn frontCheckPatternCoversVariantCase(file: AstFile, patIdx: Int, variant: Front
     if frontCheckPatternIsBindingAt(pat) {
         return frontCheckPatternCoversVariantCase(file, pat.left, variant, fieldCase)
     }
-    if pat.text == "or" {
+    if frontCheckPatternKind(pat) == "or" {
         return frontCheckPatternCoversVariantCase(file, pat.left, variant, fieldCase) || frontCheckPatternCoversVariantCase(file, pat.right, variant, fieldCase)
     }
     false
@@ -3186,7 +3201,7 @@ fn frontCheckPatternCoversFiniteCase(file: AstFile, patIdx: Int, typeName: Strin
         return frontCheckPatternCoversBool(file, patIdx, value == "true")
     }
     if head == "Tuple" {
-        if pat.text == "tuple" {
+        if frontCheckPatternKind(pat) == "tuple" {
             let elems = frontCheckTupleElems(typeName)
             let mut tupleText = value
             if strings.HasPrefix(tupleText, "(") && strings.HasSuffix(tupleText, ")") {
@@ -3208,7 +3223,7 @@ fn frontCheckPatternCoversFiniteCase(file: AstFile, patIdx: Int, typeName: Strin
         if frontCheckPatternIsBindingAt(pat) {
             return frontCheckPatternCoversFiniteCase(file, pat.left, typeName, value)
         }
-        if pat.text == "or" {
+        if frontCheckPatternKind(pat) == "or" {
             return frontCheckPatternCoversFiniteCase(file, pat.left, typeName, value) || frontCheckPatternCoversFiniteCase(file, pat.right, typeName, value)
         }
         return false
@@ -3234,7 +3249,7 @@ fn frontCheckPatternCoversFiniteCase(file: AstFile, patIdx: Int, typeName: Strin
         if frontCheckPatternIsBindingAt(pat) {
             return frontCheckPatternCoversFiniteCase(file, pat.left, typeName, value)
         }
-        if pat.text == "or" {
+        if frontCheckPatternKind(pat) == "or" {
             return frontCheckPatternCoversFiniteCase(file, pat.left, typeName, value) || frontCheckPatternCoversFiniteCase(file, pat.right, typeName, value)
         }
     }
@@ -3338,7 +3353,7 @@ fn frontCheckPatternCoversVariantCompleteSingle(file: AstFile, patIdx: Int, vari
     if frontCheckPatternIsBindingAt(pat) {
         return frontCheckPatternCoversVariantCompleteSingle(file, pat.left, variant)
     }
-    if pat.text == "or" {
+    if frontCheckPatternKind(pat) == "or" {
         return frontCheckPatternCoversVariantCompleteSingle(file, pat.left, variant) || frontCheckPatternCoversVariantCompleteSingle(file, pat.right, variant)
     }
     false
@@ -3372,7 +3387,7 @@ fn frontCheckPatternCoversVariantBoolMask(file: AstFile, patIdx: Int, variant: F
     if frontCheckPatternIsBindingAt(pat) {
         return frontCheckPatternCoversVariantBoolMask(file, pat.left, variant, mask)
     }
-    if pat.text == "or" {
+    if frontCheckPatternKind(pat) == "or" {
         return frontCheckPatternCoversVariantBoolMask(file, pat.left, variant, mask) || frontCheckPatternCoversVariantBoolMask(file, pat.right, variant, mask)
     }
     false
@@ -3386,13 +3401,13 @@ fn frontCheckPatternIrrefutable(file: AstFile, patIdx: Int) -> Bool {
     if pat.kind != AstNPattern {
         return true
     }
-    if pat.text == "wildcard" {
+    if frontCheckPatternKind(pat) == "wildcard" {
         return true
     }
     if frontCheckPatternIsBindingIdent(pat) {
         return true
     }
-    if pat.text == "tuple" {
+    if frontCheckPatternKind(pat) == "tuple" {
         for child in pat.children {
             if !(frontCheckPatternIrrefutable(file, child)) {
                 return false
@@ -3433,7 +3448,7 @@ fn frontCheckBindPattern(file: AstFile, env: FrontCheckEnv, patIdx: Int, typeNam
         frontCheckBindNode(env, frontCheckPatternName(pat), typeName, mutable, patIdx, pat.start, pat.end)
         return
     }
-    if pat.text == "tuple" {
+    if frontCheckPatternKind(pat) == "tuple" {
         let elems = frontCheckTupleElems(typeName)
         let mut i = 0
         for child in pat.children {
@@ -3466,7 +3481,7 @@ fn frontCheckPatternCompatible(file: AstFile, env: FrontCheckEnv, patIdx: Int, s
         return
     }
     let scrutineeResolved = frontCheckResolveAliasesDeep(env, scrutineeType)
-    if pat.text == "wildcard" {
+    if frontCheckPatternKind(pat) == "wildcard" {
         return
     }
     if frontCheckPatternIsBindingIdent(pat) {
@@ -3480,7 +3495,7 @@ fn frontCheckPatternCompatible(file: AstFile, env: FrontCheckEnv, patIdx: Int, s
         }
         return
     }
-    if pat.text == "negLiteral" {
+    if frontCheckPatternKind(pat) == "negLiteral" {
         let inner = astArenaNodeAt(file.arena, pat.left)
         let litType = frontCheckPatternLiteralType(inner)
         if !(frontCheckIsNumeric(litType)) {
@@ -3492,7 +3507,7 @@ fn frontCheckPatternCompatible(file: AstFile, env: FrontCheckEnv, patIdx: Int, s
         }
         return
     }
-    if pat.text == "range" {
+    if frontCheckPatternKind(pat) == "range" {
         if !(frontCheckIsOrdered(scrutineeResolved)) {
             env.errors = env.errors + 1
             return
@@ -3503,7 +3518,7 @@ fn frontCheckPatternCompatible(file: AstFile, env: FrontCheckEnv, patIdx: Int, s
         }
         return
     }
-    if pat.text == "tuple" {
+    if frontCheckPatternKind(pat) == "tuple" {
         let elems = frontCheckTupleElems(scrutineeResolved)
         if frontCheckStringCount(elems) != frontCheckIntCount(pat.children) {
             env.errors = env.errors + 1
@@ -3552,7 +3567,7 @@ fn frontCheckPatternCompatible(file: AstFile, env: FrontCheckEnv, patIdx: Int, s
         frontCheckPatternCompatible(file, env, pat.left, scrutineeResolved)
         return
     }
-    if pat.text == "or" {
+    if frontCheckPatternKind(pat) == "or" {
         let mark = frontCheckBindingCount(env.bindings)
         frontCheckPatternCompatible(file, env, pat.left, scrutineeResolved)
         let leftBindings = frontCheckBindingsFrom(env, mark)

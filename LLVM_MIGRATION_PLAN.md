@@ -22,13 +22,25 @@
 - Multi-file package, vendored dependency, workspace build의 실제 code emission은
   아직 제한이 있다. LLVM 전환 전에 package 단위 emit/link 모델을 분명히 해야
   한다.
+- 현재 Phase 29까지의 LLVM backend 의미는 `examples/selfhost-core/llvmgen.osty`
+  쪽으로 옮겨지고 있다. 여기에는 smoke IR builder, skeleton renderer,
+  toolchain command plan, executable parity corpus, go-only diagnostic, 그리고
+  unsupported source-shape taxonomy가 포함된다. 성공 경로의 scalar instruction
+  strings, temp/label naming, plain/escaped ASCII `String` `println` module
+  constant/formatting shape, immutable/mutable local String value paths, and
+  simple String function return/parameter paths도 같은 selfhost-core에서
+  생성한다.
 
 ## 이주 원칙
 
 1. Go 백엔드는 migration 기간 동안 안정 백엔드로 유지한다.
 2. LLVM 백엔드는 AST가 아니라 `internal/ir`를 입력으로 삼는다.
-3. 초기 LLVM 출력은 pure Go textual LLVM IR emitter로 시작한다. C API/cgo
-   binding은 toolchain coupling이 커서 1차 목표에서 제외한다.
+3. LLVM backend 의미의 소유권은 Osty 소스에 둔다. 여기에는 IR lowering,
+   artifact 단계 결정, toolchain command plan, backend diagnostics가 포함된다.
+   Go 구현은 migration 기간의 bootstrap bridge/reference와 host file I/O/process
+   실행 shim으로만 허용하고, 새 backend 의미는
+   `examples/selfhost-core/llvmgen.osty` 같은 Osty-authored backend core로 먼저
+   포팅한다.
 4. Runtime ABI를 먼저 문서화하고, helper를 backend별로 흩뿌리지 않는다.
 5. CLI는 `--backend=go|llvm` 또는 동등한 선택지를 제공하고, 기본값 전환은
    parity gate를 통과한 뒤 별도 릴리스에서 한다.
@@ -156,24 +168,41 @@ artifact/cache layout 정책은 [`LLVM_ARTIFACT_LAYOUT.md`](./LLVM_ARTIFACT_LAYO
 
 작업:
 
-- `internal/llvmgen` 패키지를 추가한다.
-- textual `.ll` emitter를 작성한다.
+- Osty-authored LLVM emitter core를 추가한다.
+  - 1차 위치: `examples/selfhost-core/llvmgen.osty`
+  - Go `internal/llvmgen`은 CLI를 움직이는 bootstrap bridge/reference로 격하한다.
+- textual `.ll` emitter를 Osty로 작성한다.
   - deterministic name mangling
   - explicit basic block builder
   - SSA temp allocator
   - type lowering table
   - source comment 또는 metadata anchor
+- Go bridge가 Osty-authored emitter를 호출하거나, self-hosting bridge가 닫히기
+  전까지 동일 golden을 비교해 drift를 막는다.
 - host compile driver를 추가한다.
   - `.ll -> .o -> binary`
   - 초기는 external `clang`/`llc`를 사용하고, tool discovery/error를 친절하게
     보고한다.
+  - Phase 18 기준으로 `clang` driver가 연결되어 supported smoke program은
+    object/binary emit과 host `run --backend=llvm`까지 가능하다.
 - `osty gen --backend=llvm --emit=llvm-ir`로 `.ll` 출력이 가능하게 한다.
-- generated IR golden tests와 small executable tests를 만든다.
+- Osty-authored IR golden tests와 small executable tests를 만든다.
+  - Phase 19 기준으로 executable smoke case list와 expected stdout도
+    `examples/selfhost-core/llvmgen.osty`가 소유하고, Go test는 host execution
+    shim으로만 동작한다.
+  - Phase 20 기준으로 unsupported/backend-capability diagnostic policy도
+    `examples/selfhost-core/llvmgen.osty`가 소유하고, Go는 source feature 감지와
+    host artifact I/O만 담당한다.
 
 완료 조건:
 
 - `fn main() { println(1 + 2) }` 수준의 프로그램이 LLVM backend로 실행된다.
-- scalar/control-flow fixture가 Go backend와 같은 stdout/exit code를 낸다.
+- scalar/control-flow/boolean/plain-string fixture가 Go backend와 같은
+  stdout/exit code를 낸다.
+- 새 LLVM lowering 로직은 Go가 아니라 Osty 소스에 먼저 존재한다.
+- Go bridge가 Osty-authored emitter에서 생성된 renderers를 호출한다.
+- production bridge와 Osty-authored emitter가 byte-for-byte drift guard로 묶여
+  있다.
 - LLVM toolchain이 없을 때 test는 명확히 skip되거나 actionable error를 낸다.
 
 ### Phase 4. Runtime ABI와 heap values
@@ -324,7 +353,8 @@ artifact/cache layout 정책은 [`LLVM_ARTIFACT_LAYOUT.md`](./LLVM_ARTIFACT_LAYO
 
 - Unit:
   - `internal/ir` lowering/validation snapshot
-  - `internal/llvmgen` type lowering, block builder, name mangling
+  - `examples/selfhost-core/llvmgen.osty` type lowering, block builder,
+    name mangling, with `internal/llvmgen` only as bootstrap/reference
   - runtime ABI header/layout tests
 - Golden:
   - `.osty -> .ll` deterministic output
@@ -371,7 +401,8 @@ artifact/cache layout 정책은 [`LLVM_ARTIFACT_LAYOUT.md`](./LLVM_ARTIFACT_LAYO
 1. `internal/backend` facade 추가, Go backend를 기존 동작 그대로 감싸기
 2. `--backend`/`--emit` CLI plumbing과 artifact layout 테스트 추가
 3. `internal/ir` metadata gap 목록을 테스트 기반으로 보강
-4. `internal/llvmgen` skeleton과 `.ll` golden smoke test 추가
+4. `examples/selfhost-core/llvmgen.osty` skeleton/IR builder와 `.ll` golden smoke
+   test 추가. Go `internal/llvmgen`은 bootstrap/reference bridge로만 둔다.
 5. LLVM toolchain discovery와 missing-tool diagnostic 추가
 6. scalar/control-flow LLVM executable smoke test 추가
 

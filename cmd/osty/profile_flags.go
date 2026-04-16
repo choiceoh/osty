@@ -16,8 +16,8 @@ import (
 const profileTestFallback = profile.NameTest
 
 // profileFlags captures the `--profile / --release / --target /
-// --features / --no-default-features` flag set shared by `osty build`
-// and `osty run`. register() attaches them to a caller-owned
+// --features / --no-default-features` flag set shared by `osty build`,
+// `osty run`, and `osty test`. register() attaches them to a caller-owned
 // FlagSet; resolve() turns the captured state into a *profile.Resolved
 // or a usage error.
 type profileFlags struct {

@@ -56,7 +56,10 @@ func (c *checker) methodCandidates(t types.Type) []string {
 						add(name)
 					}
 				} else {
-					for _, name := range []string{"isOk", "isErr", "unwrap", "unwrapErr", "unwrapOr", "ok", "err", "map", "mapErr", "toString"} {
+					for _, name := range []string{
+						"isOk", "isErr", "unwrap", "expect", "unwrapErr", "expectErr", "unwrapOr", "unwrapOrElse",
+						"ok", "err", "and", "andThen", "or", "orElse", "inspect", "inspectErr", "map", "mapErr", "toString",
+					} {
 						add(name)
 					}
 				}
@@ -77,7 +80,10 @@ func (c *checker) methodCandidates(t types.Type) []string {
 			add(name)
 		}
 	case *types.Optional:
-		for _, name := range []string{"isSome", "isNone", "unwrap", "unwrapOr", "orElse", "map", "orError", "toString"} {
+		for _, name := range []string{
+			"isSome", "isNone", "unwrap", "expect", "unwrapOr", "unwrapOrElse",
+			"and", "andThen", "or", "orElse", "xor", "filter", "inspect", "map", "orError", "okOr", "toString",
+		} {
 			add(name)
 		}
 	case *types.TypeVar:

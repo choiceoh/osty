@@ -349,6 +349,117 @@ pub fn irLowerParseTree(packageName: String, tree: FrontParseTree) -> IrModule {
     module
 }
 
+pub fn irLowerAstFile(packageName: String, file: AstFile) -> IrModule {
+    let mut module = emptyIrModule(packageName)
+    let mut root = emptyIrNode(IrNodeModule)
+    root.start = 0
+    root.end = astFileNodeCount(file)
+    module.root = irArenaAdd(module.arena, root)
+    module.sourceTokens = astFileNodeCount(file)
+    module.coveredTokens = astFileNodeCount(file)
+
+    for decl in file.arena.decls {
+        let _ = irLowerAstNodeInto(module, file.arena, decl, module.root, 1)
+    }
+    for err in file.arena.errors {
+        module.diagnostics.push(
+            IrDiagnostic {
+                kind: IrDiagUnexpectedToken,
+                start: err.tokenIndex,
+                end: err.tokenIndex + 1,
+                expected: "",
+                found: err.code,
+            },
+        )
+    }
+
+    let emptyTokens: List<FrontToken> = []
+    irFinalizeSemanticGraph(module, emptyTokens)
+    irFinalizeAstSemanticNames(module, file.arena)
+    module
+}
+
+fn irLowerAstNodeInto(
+    module: IrModule,
+    arena: AstArena,
+    astIdx: Int,
+    parent: Int,
+    depth: Int,
+) -> Int {
+    if astIdx < 0 {
+        return -1
+    }
+    let astNode = astArenaNodeAt(arena, astIdx)
+    let mut node = emptyIrNode(irKindFromAst(astNode.kind, depth))
+    node.start = astNode.start
+    node.end = astNode.end
+    node.depth = depth
+    node.flags = astNode.flags
+    node.parent = parent
+
+    let idx = irArenaAdd(module.arena, node)
+    irAttachChild(module.arena, parent, idx)
+    if depth == 1 && irKindIsDecl(node.kind) {
+        module.decls.push(idx)
+    }
+    if depth == 1 && !(irKindIsDecl(node.kind)) && node.kind != IrNodeRecovery {
+        module.script.push(idx)
+    }
+    if depth > module.maxDepth {
+        module.maxDepth = depth
+    }
+
+    irLowerAstChildList(module, arena, idx, depth + 1, astNode.children2)
+    irLowerAstChildList(module, arena, idx, depth + 1, astNode.children)
+    irLowerAstChild(module, arena, idx, depth + 1, astNode.left)
+    irLowerAstChild(module, arena, idx, depth + 1, astNode.right)
+
+    idx
+}
+
+fn irLowerAstChild(module: IrModule, arena: AstArena, parent: Int, depth: Int, child: Int) {
+    if child >= 0 {
+        let _ = irLowerAstNodeInto(module, arena, child, parent, depth)
+    }
+}
+
+fn irLowerAstChildList(
+    module: IrModule,
+    arena: AstArena,
+    parent: Int,
+    depth: Int,
+    children: List<Int>,
+) {
+    for child in children {
+        let _ = irLowerAstNodeInto(module, arena, child, parent, depth)
+    }
+}
+
+fn irFinalizeAstSemanticNames(module: IrModule, arena: AstArena) {
+    let mut idx = 0
+    for symbol in module.semantic.symbols {
+        let node = irArenaNodeAt(module.arena, symbol.node)
+        let name = irAstNameForIrNode(arena, node)
+        if name != "" {
+            let mut updated = symbol
+            updated.name = name
+            module.semantic.symbols[idx] = updated
+        }
+        idx = idx + 1
+    }
+}
+
+fn irAstNameForIrNode(arena: AstArena, node: IrNode) -> String {
+    for astNode in arena.nodes {
+        if astNode.start == node.start && astNode.end == node.end && irKindFromAst(astNode.kind, node.depth) == node.kind {
+            if astNode.text != "" {
+                return astNode.text
+            }
+        }
+    }
+    ""
+}
+
 pub fn irFinalizeSemanticGraph(module: IrModule, tokens: List<FrontToken>) {
     module.semantic = emptyIrSemantic()
     let rootScope = irSemanticAddScope(module.semantic, -1, module.root, 0)
@@ -969,6 +1080,59 @@ pub fn irDiagnosticKindFromFront(kind: FrontParseDiagnosticKind) -> IrDiagnostic
         IrDiagTrailingSelector
     } else {
         IrDiagLexerError
+    }
+}
+
+pub fn irKindFromAst(kind: AstNodeKind, depth: Int) -> IrNodeKind {
+    match kind {
+        AstNBinary -> IrNodeBinaryExpr,
+        AstNUnary -> IrNodeUnaryExpr,
+        AstNCall -> IrNodeCallExpr,
+        AstNField -> IrNodeSelectorExpr,
+        AstNIndex -> IrNodeIndexExpr,
+        AstNRange -> IrNodeRangeExpr,
+        AstNIf -> IrNodeIfExpr,
+        AstNMatch -> IrNodeMatchExpr,
+        AstNClosure -> IrNodeClosureExpr,
+        AstNList -> IrNodeListExpr,
+        AstNTuple -> IrNodeTupleExpr,
+        AstNMap -> IrNodeMapExpr,
+        AstNStructLit -> IrNodeStructExpr,
+        AstNBlock -> IrNodeBlock,
+        AstNQuestion -> IrNodeQuestionExpr,
+        AstNTurbofish -> IrNodeTurbofishExpr,
+        AstNLet -> {
+            if depth == 1 {
+                IrNodeLetDecl
+            } else {
+                IrNodeLetStmt
+            }
+        },
+        AstNReturn -> IrNodeReturnStmt,
+        AstNBreak -> IrNodeBreakStmt,
+        AstNContinue -> IrNodeContinueStmt,
+        AstNDefer -> IrNodeDeferStmt,
+        AstNFor -> IrNodeForStmt,
+        AstNAssign -> IrNodeAssignStmt,
+        AstNChanSend -> IrNodeChannelSendStmt,
+        AstNFnDecl -> IrNodeFnDecl,
+        AstNStructDecl -> IrNodeStructDecl,
+        AstNEnumDecl -> IrNodeEnumDecl,
+        AstNInterfaceDecl -> IrNodeInterfaceDecl,
+        AstNTypeAlias -> IrNodeTypeAliasDecl,
+        AstNUseDecl -> IrNodeUseDecl,
+        AstNLetDecl -> IrNodeLetDecl,
+        AstNFile -> IrNodeModule,
+        AstNParam -> IrNodeParam,
+        AstNField_ -> IrNodeField,
+        AstNVariant -> IrNodeVariant,
+        AstNMatchArm -> IrNodeMatchArm,
+        AstNType -> IrNodeType,
+        AstNPattern -> IrNodePattern,
+        AstNAnnotation -> IrNodeAnnotation,
+        AstNGenericParam -> IrNodeGenericParams,
+        AstNError -> IrNodeError,
+        _ -> IrNodeRecovery,
     }
 }
 

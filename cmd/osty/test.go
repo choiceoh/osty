@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/osty/osty/internal/ast"
+	"github.com/osty/osty/internal/backend"
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/manifest"
@@ -23,7 +24,7 @@ import (
 )
 
 // runTest implements `osty test [--offline] [PATH|FILTER...]` per
-// LANG_SPEC_v0.3 §11.
+// LANG_SPEC_v0.4 §11.
 //
 // Two invocation shapes are supported:
 //
@@ -31,8 +32,8 @@ import (
 //     project tree for `*_test.osty` files, groups them by containing
 //     directory, runs the full front-end pipeline per package (with
 //     test files included so they can reference sibling non-test
-//     declarations, per §11), and reports discovered `test*` /
-//     `bench*` functions per file.
+//     declarations, per §11), emits a Go harness, and executes the
+//     discovered `test*` / `bench*` functions per file.
 //
 //   - `osty test PATH` where PATH is a single `.osty` file or a bare
 //     directory (no manifest required): runs the same pipeline but
@@ -79,7 +80,11 @@ func runTest(args []string, flags cliFlags) {
 	var pf profileFlags
 	pf.register(fs)
 	_ = fs.Parse(args)
-	_, _ = resolveBackendAndEmitFlags("test", backendName, emitName)
+	backendID, _ := resolveBackendAndEmitFlags("test", backendName, emitName)
+	if backendID != backend.NameGo {
+		fmt.Fprintf(os.Stderr, "osty test: backend %q test harness is not implemented yet\n", backendID)
+		os.Exit(2)
+	}
 	positional := fs.Args()
 
 	// Split positional args into path targets (existing on disk) and

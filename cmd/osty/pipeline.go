@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"runtime/pprof"
 
+	"github.com/osty/osty/internal/backend"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/pipeline"
 	"github.com/osty/osty/internal/resolve"
@@ -15,6 +16,7 @@ import (
 // runPipeline implements
 //
 //	osty pipeline [--json] [--trace] [--per-decl] [--gen]
+//	              [--backend NAME] [--emit MODE]
 //	              [--diagnostics]
 //	              [--cpuprofile PATH] [--memprofile PATH]
 //	              FILE-OR-DIR
@@ -39,7 +41,7 @@ func runPipeline(args []string) {
 	fs := flag.NewFlagSet("pipeline", flag.ExitOnError)
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr,
-			"usage: osty pipeline [--json] [--trace] [--per-decl] [--gen] [--diagnostics]")
+			"usage: osty pipeline [--json] [--trace] [--per-decl] [--gen] [--backend NAME] [--emit MODE] [--diagnostics]")
 		fmt.Fprintln(os.Stderr,
 			"                     [--cpuprofile PATH] [--memprofile PATH] FILE-OR-DIR")
 	}
@@ -48,6 +50,8 @@ func runPipeline(args []string) {
 		trace           bool
 		perDecl         bool
 		runGen          bool
+		backendName     string
+		emitName        string
 		showDiagnostics bool
 		cpuProfile      string
 		memProfile      string
@@ -56,7 +60,9 @@ func runPipeline(args []string) {
 	fs.BoolVar(&jsonOut, "json", false, "emit machine-readable JSON instead of the text table")
 	fs.BoolVar(&trace, "trace", false, "stream a trace line to stderr as each phase completes")
 	fs.BoolVar(&perDecl, "per-decl", false, "report per-declaration check timing in the output")
-	fs.BoolVar(&runGen, "gen", false, "also run the Go transpiler as a final pipeline phase (file mode)")
+	fs.BoolVar(&runGen, "gen", false, "also run the selected backend as a final pipeline phase")
+	fs.StringVar(&backendName, "backend", defaultBackendName(), "code generation backend for --gen (go or llvm)")
+	fs.StringVar(&emitName, "emit", "", "artifact mode for --gen (go or llvm-ir; default follows backend)")
 	fs.BoolVar(&showDiagnostics, "diagnostics", false, "render full diagnostics after the pipeline report")
 	fs.StringVar(&cpuProfile, "cpuprofile", "", "write a CPU pprof profile to this path")
 	fs.StringVar(&memProfile, "memprofile", "", "write a memory pprof profile to this path after the pipeline")
@@ -64,6 +70,14 @@ func runPipeline(args []string) {
 	_ = fs.Parse(args)
 	if fs.NArg() != 1 {
 		fs.Usage()
+		os.Exit(2)
+	}
+	backendID := backend.NameGo
+	emitMode := backend.EmitGoSource
+	if runGen {
+		backendID, emitMode = resolveBackendAndEmitFlags("pipeline", backendName, emitName)
+	} else if backendName != defaultBackendName() || emitName != "" {
+		fmt.Fprintln(os.Stderr, "osty pipeline: --backend/--emit require --gen")
 		os.Exit(2)
 	}
 	target := fs.Arg(0)
@@ -89,8 +103,10 @@ func runPipeline(args []string) {
 		stream = os.Stderr
 	}
 	cfg := pipeline.Config{
-		PerDecl: perDecl,
-		RunGen:  runGen,
+		PerDecl:    perDecl,
+		RunGen:     runGen,
+		GenBackend: backendID,
+		GenEmit:    emitMode,
 	}
 
 	info, err := os.Stat(target)
@@ -123,6 +139,7 @@ func runPipeline(args []string) {
 			os.Exit(1)
 		}
 		sourceForDiagnostics = src
+		cfg.GenSourcePath = target
 		r = pipeline.RunWithConfig(src, stream, cfg)
 	}
 

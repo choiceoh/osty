@@ -57,7 +57,7 @@ const programMainName = "_ostyProgramMain"
 // EntryKind identifies how the harness should invoke an entry — as a
 // regular test (recorded in pass/fail totals) or as a benchmark
 // (currently only invoked once; iteration counts and timing are
-// future work, per LANG_SPEC_v0.3 §11.4).
+// future work, per LANG_SPEC_v0.4 §11.4).
 type EntryKind int
 
 const (
@@ -326,28 +326,6 @@ func isOstyStringerRuntime(d goast.Decl) bool {
 func isOstyToStringRuntime(d goast.Decl) bool {
 	fn, ok := d.(*goast.FuncDecl)
 	return ok && fn.Recv == nil && fn.Name != nil && fn.Name.Name == "ostyToString"
-}
-
-func ostyEqualRuntimeName(d goast.Decl) string {
-	switch d := d.(type) {
-	case *goast.FuncDecl:
-		if d.Recv != nil || d.Name == nil {
-			return ""
-		}
-		switch d.Name.Name {
-		case "ostyEqual", "ostyEqualValue", "ostyIsNilValue":
-			return d.Name.Name
-		}
-	case *goast.GenDecl:
-		if d.Tok != gotoken.TYPE || len(d.Specs) != 1 {
-			return ""
-		}
-		ts, ok := d.Specs[0].(*goast.TypeSpec)
-		if ok && ts.Name != nil && ts.Name.Name == "ostyEqualVisit" {
-			return ts.Name.Name
-		}
-	}
-	return ""
 }
 
 // isRangeRuntime reports whether d is the Range struct gen emits

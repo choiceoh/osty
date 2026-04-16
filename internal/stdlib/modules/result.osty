@@ -30,9 +30,23 @@ pub enum Result<T, E> {
         }
     }
 
+    pub fn expect(self, msg: String) -> T {
+        match self {
+            Ok(value) -> value,
+            Err(_) -> __resultAbort(msg),
+        }
+    }
+
     pub fn unwrapErr(self) -> E {
         match self {
             Ok(_) -> __resultAbort("called unwrapErr on Ok"),
+            Err(error) -> error,
+        }
+    }
+
+    pub fn expectErr(self, msg: String) -> E {
+        match self {
+            Ok(_) -> __resultAbort(msg),
             Err(error) -> error,
         }
     }
@@ -41,6 +55,13 @@ pub enum Result<T, E> {
         match self {
             Ok(value) -> value,
             Err(_) -> fallback,
+        }
+    }
+
+    pub fn unwrapOrElse(self, fallback: fn(E) -> T) -> T {
+        match self {
+            Ok(value) -> value,
+            Err(error) -> fallback(error),
         }
     }
 
@@ -55,6 +76,54 @@ pub enum Result<T, E> {
         match self {
             Ok(_) -> None,
             Err(error) -> Some(error),
+        }
+    }
+
+    pub fn and<U>(self, other: Result<U, E>) -> Result<U, E> {
+        match self {
+            Ok(_) -> other,
+            Err(error) -> Err(error),
+        }
+    }
+
+    pub fn andThen<U>(self, f: fn(T) -> Result<U, E>) -> Result<U, E> {
+        match self {
+            Ok(value) -> f(value),
+            Err(error) -> Err(error),
+        }
+    }
+
+    pub fn or<F>(self, other: Result<T, F>) -> Result<T, F> {
+        match self {
+            Ok(value) -> Ok(value),
+            Err(_) -> other,
+        }
+    }
+
+    pub fn orElse<F>(self, f: fn(E) -> Result<T, F>) -> Result<T, F> {
+        match self {
+            Ok(value) -> Ok(value),
+            Err(error) -> f(error),
+        }
+    }
+
+    pub fn inspect(self, f: fn(T) -> ()) -> Result<T, E> {
+        match self {
+            Ok(value) -> {
+                f(value)
+                Ok(value)
+            },
+            Err(error) -> Err(error),
+        }
+    }
+
+    pub fn inspectErr(self, f: fn(E) -> ()) -> Result<T, E> {
+        match self {
+            Ok(value) -> Ok(value),
+            Err(error) -> {
+                f(error)
+                Err(error)
+            },
         }
     }
 

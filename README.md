@@ -5,22 +5,25 @@ general-purpose, statically-typed, GC'd language specified in
 [`LANG_SPEC_v0.4/`](./LANG_SPEC_v0.4/README.md) with grammar fixed in
 [`OSTY_GRAMMAR_v0.4.md`](./OSTY_GRAMMAR_v0.4.md).
 
-The target is transpilation to Go. Current scope: front-end
-(lex → parse → resolve → type-check), multi-file packages and
-workspaces, formatter, linter, a JSON-RPC LSP server, a Go
-transpiler with **Phases 1–6 wired end-to-end** (primitives,
-control flow, structs/enums/match, generics/closures,
-Option/Result/`?`, `use`/FFI, channels/concurrency), project
-scaffolding (`osty new` / `osty init`), a manifest-driven build
-orchestrator (`osty build`) that reads `osty.toml` / `osty.lock`
-and threads the front-end + gen across the declared packages, a
-working test runner (`osty test`), API documentation generation
-(`osty doc`), CI quality tooling (`osty ci`), and a package manager
-(`osty add` / `osty update` / `osty publish`) backed by a
-file-backed HTTP registry server for local/private registries. The next
-language baseline is v0.4: the grammar is frozen, the remaining
-semantic corners are closed, and the next work is implementation/runtime
-coverage rather than language-decision churn.
+The default production backend transpiles to Go, and an early LLVM
+backend now shares the same artifact/cache layout for native IR,
+object, and binary experiments. Current scope: front-end (lex → parse
+→ resolve → type-check), multi-file packages and workspaces, formatter,
+linter, a JSON-RPC LSP server, a Go transpiler with **Phases 1–6 wired
+end-to-end** (primitives, control flow, structs/enums/match,
+generics/closures, Option/Result/`?`, `use`/FFI, channels/concurrency),
+an LLVM backend slice for scalar/control-flow/Bool/String smoke
+programs, project scaffolding (`osty new` / `osty init`), a
+manifest-driven build orchestrator (`osty build`) that reads
+`osty.toml` / `osty.lock` and threads the front-end + selected backend
+across the declared packages, a working test runner (`osty test`), API
+documentation generation (`osty doc`), CI quality tooling (`osty ci`),
+profile/target/feature/cache inspection commands, and a package manager
+(`osty add` / `osty update` / `osty publish`) backed by a file-backed
+HTTP registry server for local/private registries. The current language
+baseline is v0.4: the grammar is frozen, the remaining semantic corners
+are closed, and the next work is implementation/runtime coverage rather
+than language-decision churn.
 
 ## Status
 
@@ -40,16 +43,18 @@ coverage rather than language-decision churn.
 | Independent IR (`internal/ir`) | done — patterns, match, closures, struct/field/method |
 | Project scaffolding (`internal/scaffold`, `osty new` / `osty init`) | done — `--bin`, `--lib`, `--workspace`, `--cli`, `--service` |
 | Manifest + lockfile + SemVer (`internal/manifest`, `lockfile`, `pkgmgr/semver`) | done (parse + validate + resolve) |
-| Build orchestrator (`osty build`) | done — manifest → front-end → gen, profile/target/feature wiring |
+| Build orchestrator (`osty build`) | done — manifest → front-end → backend emit/build, profile/target/feature wiring, backend-aware artifact/cache paths |
 | Test runner harness (`internal/testgen`) | done — merges per-file gen output, injects a real std.testing runtime + main(), runs via `go run` |
 | `osty test` (discovery + front-end + execution) | done — validates and **runs** discovered `test*` / `bench*` fns; failures and pass/fail totals report inline |
 | API doc generator (`internal/docgen`, `osty doc`) | done — HTML + markdown, field docs, cross-refs, workspace mode |
 | CI quality tooling (`internal/ci`, `osty ci`) | done — signature-aware snapshots, workspace coverage, JSON reports |
-| Pipeline visualizer (`osty pipeline`) | done — per-stage timing, workspace mode, package-mode gen, baseline diff, LSP trace, `--explain` |
+| Pipeline visualizer (`osty pipeline`) | done — per-stage timing, workspace mode, backend-aware gen, baseline diff, LSP trace, `--explain` |
+| Profiles / targets / features / cache (`internal/profile`, `osty profiles` / `targets` / `features` / `cache`) | done — built-in and manifest profiles, cross-target env, feature closure + file pragmas, backend-aware fingerprints |
+| LLVM backend (`internal/backend`, `internal/llvmgen`, `--backend llvm`) | early executable slice — textual IR/object/binary for scalar/control-flow/Bool/String smoke programs, host `clang` driver, inspectable skeleton + categorized diagnostics for unsupported source shapes |
 | Package registry backend / `osty registry serve` | done — file-backed HTTP server for index/search/download/publish/yank, with ETag index responses and bearer-token write auth |
 | Package registry / `osty add` / `osty update` / `osty run` | done (resolve + vendor + lockfile-honoring re-resolves, ETag-cached registry index, copy fallback for symlink-less filesystems; CLI: `add`, `remove`/`rm`, `update`, `run`, `fetch`, `publish`, `search`, `info`, `yank`/`unyank`, `login`/`logout`; `--locked` / `--frozen` CI guards) |
 | Package manager (`osty add` / `osty update`, path + git + registry sources, SemVer resolver, deterministic lockfile) | wired — `add` mutates `osty.toml` and re-vendors; `update` re-resolves selectively or in full |
-| `osty run` (build + exec through gen) | wired — resolves manifest, vendors deps, transpiles entry, `go run`s the output with profile/target-aware flags |
+| `osty run` (build + exec through selected backend) | wired — resolves manifest, vendors deps, emits the entry artifact, executes host Go/LLVM binaries with profile/feature flags, and rejects cross-target execution |
 | `osty publish` (pack + upload tarball to a registry) | wired — deterministic gzipped tar, sha256 checksum, bearer-auth POST; `--dry-run` stops before upload |
 
 The front-end (lex → parse → resolve → type-check) is **coverage-complete
@@ -120,7 +125,8 @@ osty/
 │   ├── lint/                # Style/correctness lint rules (L0xxx codes)
 │   ├── format/              # Canonical-style formatter
 │   ├── ir/                  # Independent intermediate representation
-│   ├── backend/             # Backend names, emit modes, artifact layout
+│   ├── backend/             # Backend names, emit modes, artifact layout, host shims
+│   ├── llvmgen/             # LLVM bridge generated from Osty selfhost-core backend logic
 │   ├── gen/                 # Go transpiler (Phases 1–6; `osty gen FILE`)
 │   ├── testgen/             # Test runner harness (drives `osty test`)
 │   ├── docgen/              # API doc generator (HTML + markdown; `osty doc`)
@@ -133,6 +139,8 @@ osty/
 │   ├── lockfile/            # osty.lock read/write
 │   ├── registry/            # Package registry client + file-backed HTTP server
 │   └── pkgmgr/semver/       # SemVer parse, compare, constraint match
+├── examples/
+│   └── selfhost-core/       # Osty-authored compiler/self-hosting cores, incl. LLVM emitter prototype
 └── testdata/                # .osty fixtures used by tests and backend corpus
 ```
 
@@ -149,12 +157,12 @@ go build -o osty ./cmd/osty
 ```sh
 osty new NAME          # scaffold a new project directory (--lib, --workspace)
 osty init              # scaffold into the current directory (same flags as new)
-osty build [DIR]       # manifest-driven: manifest → deps → front-end
+osty build [DIR]       # manifest-driven: manifest → deps → front-end → backend
 osty add PKG           # append a dependency to osty.toml and re-resolve
 osty remove NAME...    # drop dependencies from osty.toml and re-resolve (alias: rm)
 osty update [NAMES...] # refresh the lockfile (selective or full)
-osty run [-- ARGS...]  # build and exec the binary through gen
-osty test [PATH|FILTERS...] # discover & validate *_test.osty; list test + bench fns
+osty run [-- ARGS...]  # build and exec the binary through the selected backend
+osty test [PATH|FILTERS...] # discover, build, and run *_test.osty tests/benches
 osty publish           # pack the project and upload to a registry
 osty search QUERY      # full-text search the registry (--registry, --limit)
 osty info PKG          # show registry metadata for a package (--all-versions)
@@ -172,15 +180,20 @@ osty typecheck FILE    # same as check, plus a per-expression type dump
 osty lint FILE|DIR     # style + correctness warnings (L0xxx codes)
 osty fmt FILE          # repair + format to canonical style (see --check, --write, --engine)
 osty repair FILE       # auto-fix common AI-authored syntax/idiom slips
-osty gen FILE          # transpile to Go source (see -o, --package)
+osty gen FILE          # emit one file through a backend (see -o, --package)
 osty doc PATH          # generate API documentation (HTML + markdown)
 osty ci                # run CI quality checks (signatures, coverage, snapshots)
+osty ci snapshot       # capture the exported API baseline
+osty profiles          # list build profiles (debug, release, profile, test, ...)
+osty targets           # list declared cross-compilation targets
+osty features          # list declared opt-in features
+osty cache [ls|clean|info] # inspect or prune backend build caches
 osty scaffold          # generators (fixture / schema / ffi)
 osty lsp               # run the language server on stdio
 osty explain [CODE]    # describe a diagnostic (Exxxx/Wxxxx/Lxxxx); no arg lists every code
 osty pipeline FILE|DIR # run every front-end phase; per-stage timing
-                       # (--json, --trace, --per-decl, --gen, --cpuprofile,
-                       #  --memprofile, --baseline)
+                       # (--json, --trace, --per-decl, --gen, --backend,
+                       #  --emit, --cpuprofile, --memprofile, --baseline)
                        # DIR may be a single package or a workspace root
 ```
 
@@ -221,30 +234,38 @@ newline-separated `else`.
 
 `gen`-specific flags (after the subcommand):
 
-- `-o PATH` / `--out PATH` — write Go source to `PATH` instead of stdout
+- `-o PATH` / `--out PATH` — write the emitted artifact to `PATH` instead of stdout
 - `--package NAME` — Go package clause for the emitted file (default: `main`)
 - `--backend NAME` — code generation backend (`go` or `llvm`; default: `go`;
-  `llvm` is currently parsed but not implemented)
+  `llvm` emits textual `.ll` for the early scalar/control-flow/plain/escaped
+  string subset, including immutable/mutable string locals and simple String
+  function boundaries, and falls back to an inspectable skeleton for unsupported
+  shapes with Osty-authored instruction builders and category diagnostics)
 - `--emit MODE` — requested text artifact. `go` emits Go source for the Go
   backend; `llvm-ir` is reserved for the LLVM backend.
 
+`pipeline --gen` accepts the same source-artifact backend selection:
+`--backend go --emit go` for Go source, or `--backend llvm --emit llvm-ir` for
+LLVM IR. Without `--gen`, `--backend` and `--emit` are rejected because the
+pipeline is otherwise front-end only.
+
 ### Debugging build / run / test failures
 
-`osty gen`, `osty build`, `osty run`, and `osty test` keep the generated
-Go inspectable. Emitted Go now includes comments like:
+`osty gen`, `osty build`, `osty run`, and `osty test` keep generated
+artifacts inspectable. Emitted Go includes comments like:
 
 ```go
 // Osty: /path/to/main.osty:12:5
 ```
 
-When `go build`, `go run`, or the test harness fails after the Osty
-front-end has succeeded, the CLI prints a short post-mortem:
+When `go build`, `go run`, the LLVM toolchain, or the test harness fails
+after the Osty front-end has succeeded, the CLI prints a short post-mortem:
 
-- the generated Go file or scratch directory to inspect;
+- the generated Go/LLVM artifact or scratch directory to inspect;
 - the nearest Osty source marker for Go compile errors and panic stack traces;
 - a category for common Go-side failures such as `package/import`,
   `transpile output`, `generated Go type/check`, or `runtime panic`;
-- the exact Go command to rerun from the generated output directory.
+- the exact Go or `clang` command to rerun from the generated output directory.
 
 For package/import errors, start with the reported `use go "..."` path
 or project dependency configuration. For runtime panics, read the Go
@@ -281,18 +302,38 @@ creating a new one.
 `build` / `run` / `test` backend flags (after the subcommand):
 
 - `--backend NAME` — code generation backend (`go` or `llvm`; default: `go`;
-  `llvm` is currently parsed but not implemented)
+  `llvm` can write textual IR for the early scalar/control-flow/plain/escaped
+  string subset, including immutable/mutable string locals and simple String
+  function boundaries, and when `clang` is available, drive object/binary
+  emission for supported programs; unsupported shapes still prepare skeleton
+  artifacts and report the missing lowering through categorized diagnostics
+  generated from the Osty selfhost-core backend policy; supported scalar
+  instruction strings are generated from that same backend core)
 - `--emit MODE` — requested artifact mode (`go`, `llvm-ir`, `object`, or
   `binary`). `build --emit go` writes inspectable Go without linking a binary;
-  `run` and `test` require `binary` because they execute the result.
+  `build --backend llvm --emit object|binary` uses `clang`; `run` requires
+  `binary` because it executes the result. `test` still uses the Go harness;
+  `--backend llvm` is reserved for backend-aware test generation.
+
+`profiles` / `targets` / `features` / `cache` commands:
+
+- `osty profiles [--verbose]` — list built-in and manifest-defined profiles,
+  including `debug`, `release`, `profile`, and `test`.
+- `osty targets` — list manifest `[target.<arch-os>]` cross-compilation
+  presets.
+- `osty features` — list manifest `[features]` entries and the default set.
+- `osty cache ls` — show backend-aware build fingerprints under `.osty/cache/`.
+- `osty cache info [--profile NAME] [--target TRIPLE] [--backend NAME]` —
+  inspect one cached fingerprint.
+- `osty cache clean` — remove `.osty/cache/` and `.osty/out/` build artifacts.
 
 `osty build` loads `osty.toml` starting at the given path (or the cwd),
 resolves dependencies against `osty.lock` (regenerated if stale),
 vendors deps into `<project>/.osty/deps/`, and runs the front-end
-(parse → resolve → check → lint) plus gen across every package
-the manifest names. For binary packages it emits Go into
-`<project>/.osty/out/<profile>[-<target>]/go/`, invokes `go build`, and
-reports diagnostics with generated-source mapping.
+(parse → resolve → check → lint) plus selected backend emission across every
+package the manifest names. For binary packages it emits backend artifacts into
+`<project>/.osty/out/<profile>[-<target>]/{go,llvm}/`, invokes the selected
+toolchain, and reports diagnostics with generated-source mapping.
 
 `add`-specific flags (after the subcommand):
 

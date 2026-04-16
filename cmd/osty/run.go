@@ -9,7 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
+	"runtime"
 
 	"github.com/osty/osty/internal/backend"
 	"github.com/osty/osty/internal/check"
@@ -29,17 +29,18 @@ import (
 //  2. Resolve the project as a package; confirm we have an entry
 //     point (manifest Bin target or default main.osty with fn main).
 //  3. Run the front-end (parse + resolve + type check).
-//  4. Transpile the entry file via internal/backend into .osty/out.
-//  5. `go run` the generated Go source, passing through the
-//     user-supplied arguments after `--`.
+//  4. Emit the entry file via internal/backend into .osty/out.
+//  5. Execute the host artifact, passing through the user-supplied
+//     arguments after `--` (`go run` for the Go backend, a native
+//     binary for the LLVM backend).
 //
 // Limitations (current emitter):
 //
 //   - Multi-file packages aren't fully emitted by gen yet; run executes
 //     the selected entry file. Complex unsupported lowering shapes may
-//     still emit TODO markers and fail to compile as Go.
+//     still emit TODO markers/skeletons and fail to compile or link.
 //
-//   - Registry / git dep code is vendored but NOT yet transpiled
+//   - Registry / git dep code is vendored but NOT yet emitted
 //     together with the entry file — the Workspace loader sees them
 //     for resolution, but package-per-package emission still needs to
 //     land before they contribute Go code.
@@ -62,7 +63,7 @@ func runRun(args []string, cliF cliFlags) {
 	var pf profileFlags
 	pf.register(fs)
 	_ = fs.Parse(args)
-	_, emitMode := resolveBackendAndEmitFlags("run", backendName, emitName)
+	backendID, emitMode := resolveBackendAndEmitFlags("run", backendName, emitName)
 	runArgs := fs.Args()
 
 	runDir, err := os.Getwd()
@@ -179,14 +180,22 @@ func runRun(args []string, cliF cliFlags) {
 		chk = &check.Result{}
 	}
 
-	// Step 4: transpile to Go. Per-profile/target/backend
+	// Step 4: emit the selected backend. Per-profile/target/backend
 	// subdirectories keep debug / release / cross-built artifacts from
 	// clobbering each other.
 	triple := ""
 	if resolved.Target != nil {
 		triple = resolved.Target.Triple
 	}
-	goResult, err := backend.GoBackend{}.Emit(context.Background(), backend.Request{
+	binName := ""
+	if backendID == backend.NameLLVM {
+		binName = binaryName(m)
+		if runtime.GOOS == "windows" {
+			binName += ".exe"
+		}
+	}
+	selectedBackend := backendFromCLI("run", backendID)
+	emitResult, err := selectedBackend.Emit(context.Background(), backend.Request{
 		Layout: backend.Layout{
 			Root:    root,
 			Profile: resolved.Profile.Name,
@@ -200,16 +209,20 @@ func runRun(args []string, cliF cliFlags) {
 			Resolve:     res,
 			Check:       chk,
 		},
-		Features: resolved.Features,
+		BinaryName: binName,
+		Features:   resolved.Features,
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "osty run: %v\n", err)
-		os.Exit(1)
+		exitBackendEmitError("run", emitResult, err)
+	}
+	if backendID != backend.NameGo {
+		runLLVMBinary(emitResult.Artifacts.Binary, runArgs, runDir)
+		return
 	}
 	// Gen returns warnings for unsupported lowering shapes; we still
 	// try to run the output because the clean portion may compile.
-	goPath := goResult.Artifacts.GoSource
-	reportTranspileWarning("osty run", entryAbs, goPath, firstBackendWarning(goResult))
+	goPath := emitResult.Artifacts.GoSource
+	reportTranspileWarning("osty run", entryAbs, goPath, firstBackendWarning(emitResult))
 
 	// Step 5: go run. Profile-derived flags (e.g. `-gcflags=-N -l`
 	// for debug, `-ldflags=-s -w` for release) precede the source
@@ -250,6 +263,30 @@ func runRun(args []string, cliF cliFlags) {
 	}
 }
 
+func runLLVMBinary(binPath string, args []string, dir string) {
+	if binPath == "" {
+		fmt.Fprintln(os.Stderr, "osty run: llvm backend did not produce a binary")
+		os.Exit(1)
+	}
+	absBin, err := filepath.Abs(binPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "osty run: %v\n", err)
+		os.Exit(1)
+	}
+	cmd := exec.Command(absBin, args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Dir = dir
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			os.Exit(exitErr.ExitCode())
+		}
+		fmt.Fprintf(os.Stderr, "osty run: exec llvm binary: %v\n", err)
+		os.Exit(1)
+	}
+}
+
 // mergeEnv overlays per-build env overrides (GOOS, GOARCH,
 // CGO_ENABLED, plus any user-declared vars) on top of the parent
 // process's environment and returns a slice suitable for exec.Cmd.Env.
@@ -286,20 +323,4 @@ func mergeEnv(parent []string, overrides map[string]string) []string {
 		out = append(out, kv)
 	}
 	return out
-}
-
-// stripLeadingDashes drops a leading `--` argument separator used to
-// pass through flags to the underlying `go run` child. Only the
-// first occurrence is stripped so subsequent `--` pairs pass through
-// verbatim.
-func stripLeadingDashes(args []string) []string {
-	for i, a := range args {
-		if a == "--" {
-			return args[i+1:]
-		}
-		if !strings.HasPrefix(a, "-") {
-			return args[i:]
-		}
-	}
-	return nil
 }

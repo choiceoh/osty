@@ -539,7 +539,7 @@ func (w *Workspace) ResolveUseTarget(dotPath string, usePos token.Pos) (*Package
 		fmt.Sprintf("package `%s` not found in this workspace", dotPath)).
 		Code(diag.CodeUnknownPackage).
 		PrimaryPos(usePos, "unknown package").
-		Note("v0.3 §5.2: imports resolve to subdirectories of the project root")
+		Note("v0.4 §5.2: imports resolve to subdirectories of the project root")
 	if err != nil {
 		d.Note(err.Error())
 	}

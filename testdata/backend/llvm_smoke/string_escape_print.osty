@@ -1,0 +1,3 @@
+fn main() {
+    println("line one\nquote \" slash \\")
+}

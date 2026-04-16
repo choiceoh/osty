@@ -21,14 +21,14 @@ fn selfhostRuntimeUsesGenericStdlibStubs() {
 	if len(parseDiags) != 0 {
 		t.Fatalf("parse diagnostics: %v", parseDiags)
 	}
-	checkedSrc := selfhostFileSource(file, src, stdlib.LoadCached())
-	if !bytes.Contains(checkedSrc, []byte("use testing {")) {
-		t.Fatalf("synthetic stdlib import missing:\n%s", checkedSrc)
+	checkedSrc := selfhostFileSource(file, nil, src, stdlib.LoadCached())
+	if !bytes.Contains(checkedSrc.source, []byte("use testing {")) {
+		t.Fatalf("synthetic stdlib import missing:\n%s", checkedSrc.source)
 	}
-	if !bytes.Contains(checkedSrc, []byte("fn assertEq<T>(")) {
-		t.Fatalf("generic stdlib function was not preserved:\n%s", checkedSrc)
+	if !bytes.Contains(checkedSrc.source, []byte("fn assertEq<T>(")) {
+		t.Fatalf("generic stdlib function was not preserved:\n%s", checkedSrc.source)
 	}
-	checked := selfhost.CheckSourceStructured(checkedSrc)
+	checked := selfhost.CheckSourceStructured(checkedSrc.source)
 	if checked.Summary.Errors != 0 {
 		t.Fatalf(
 			"selfhost checker summary = errors:%d accepted:%d assignments:%d",

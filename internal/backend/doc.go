@@ -1,8 +1,12 @@
 // Package backend defines the small contract shared by concrete Osty
 // code-generation backends.
 //
-// The current CLI still calls the Go transpiler directly. This package is the
-// migration point for making that path backend-aware before adding LLVM output:
-// it owns stable backend names, emit modes, artifact/cache layout helpers, and
-// the minimal interface concrete backends will implement.
+// The CLI routes Go and LLVM emission through this package so both backends use
+// the same artifact/cache layout contract. LLVM lowering is still small, but it
+// can produce textual IR and drive a host clang toolchain for supported
+// object/binary artifacts. LLVM backend meaning, including scalar instruction
+// builders, plain/escaped ASCII string constants/local values/function values,
+// and unsupported-source diagnostic categories, is authored in Osty
+// selfhost-core; this package remains the bootstrap host shim for file I/O and
+// process execution.
 package backend

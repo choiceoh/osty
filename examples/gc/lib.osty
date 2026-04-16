@@ -42,6 +42,7 @@ pub struct GcConfig {
     pub incrementalBudget: Int,
     pub largeObjectThreshold: Int,
     pub tlabSize: Int,
+    pub cardSize: Int,
 }
 
 pub struct GcStats {
@@ -154,6 +155,99 @@ pub struct GcBarrierCounters {
     pub rememberedSetWrites: Int,
     pub incrementalShades: Int,
     pub loadForwards: Int,
+}
+
+pub struct GcCardTable {
+    pub cardSize: Int,
+    dirtyCards: Set<Int>,
+    pub dirtyWrites: Int,
+    pub scannedCards: Int,
+    pub clearedCards: Int,
+}
+
+pub struct GcMinorCollectionTrace {
+    pub rootObjectsScanned: Int,
+    pub globalRootsScanned: Int,
+    pub asyncFrameRootsScanned: Int,
+    pub rememberedObjectsScanned: Int,
+    pub dirtyCardsScanned: Int,
+    pub youngMarked: Int,
+    pub survivorCopiedObjects: Int,
+    pub promotedObjects: Int,
+    pub edenReset: Bool,
+    pub survivorSwap: Bool,
+}
+
+pub struct GcFullMarkTrace {
+    pub rootObjectsSeeded: Int,
+    pub globalRootsSeeded: Int,
+    pub asyncFrameRootsSeeded: Int,
+    pub queueSeeded: Int,
+    pub objectsScanned: Int,
+    pub pointerSlotsScanned: Int,
+    pub regionObjectsVisited: Int,
+    pub sweptObjects: Int,
+}
+
+pub struct GcForwardingEntry {
+    pub objectId: Int,
+    pub fromAddress: Int,
+    pub toAddress: Int,
+    pub size: Int,
+    pub fromRegion: GcRegionKind,
+    pub toRegion: GcRegionKind,
+}
+
+pub struct GcEvacuationTrace {
+    pub selectedObjects: Int,
+    pub forwardedObjects: Int,
+    pub pinnedSkipped: Int,
+    pub humongousSkipped: Int,
+    pub bytesCopied: Int,
+}
+
+pub struct GcRemapTrace {
+    pub rootSlotsVisited: Int,
+    pub rootSlotsRemapped: Int,
+    pub objectRefsVisited: Int,
+    pub objectRefsRemapped: Int,
+    pub loweredSlotsVisited: Int,
+    pub loweredSlotsRemapped: Int,
+    pub verified: Bool,
+}
+
+pub enum GcLoweredStoreKind {
+    GcStructFieldStore,
+    GcTuplePayloadStore,
+    GcEnumPayloadStore,
+    GcReceiverFieldStore,
+    GcArrayElementStore,
+    GcListElementStore,
+    GcMapKeyStore,
+    GcMapValueStore,
+    GcSetKeyStore,
+    GcRuntimeFrameSlotStore,
+    GcAsyncFrameRootStore,
+}
+
+pub struct GcLoweredPointerSlot {
+    pub ownerId: Int,
+    pub slot: Int,
+    pub name: String,
+    pub kind: GcLoweredStoreKind,
+    pub objectId: Int,
+}
+
+pub struct GcLoweredStoreEvent {
+    pub kind: GcLoweredStoreKind,
+    pub ownerId: Int,
+    pub slot: Int,
+    pub name: String,
+    pub oldValue: Int,
+    pub newValue: Int,
+    pub barrierSlotKind: GcBarrierSlotKind,
+    pub preWriteCalled: Bool,
+    pub postWriteCalled: Bool,
 }
 
 pub enum GcSafepointKind {
@@ -324,10 +418,17 @@ pub struct GcHeap {
     tenured: GcTenuredAllocator,
     humongous: GcHumongousAllocator,
     barriers: GcBarrierCounters,
+    cardTable: GcCardTable,
+    loweredPointerSlots: Map<String, GcLoweredPointerSlot>,
     remembered: Set<Int>,
     grey: List<Int>,
+    forwarding: Map<Int, GcForwardingEntry>,
     allocatedSinceLastGC: Int,
     lastStats: GcStats?,
+    lastMinorTrace: GcMinorCollectionTrace,
+    lastFullMarkTrace: GcFullMarkTrace,
+    lastEvacuationTrace: GcEvacuationTrace,
+    lastRemapTrace: GcRemapTrace,
 
     pub fn tryAllocate(mut self, kind: ObjectKind, size: Int) -> Result<Int, String> {
         let normalized = normalizeSize(size)
@@ -435,6 +536,7 @@ pub struct GcHeap {
             next.remembered = true
             self.objects.insert(ownerId, next)
             self.remembered.insert(ownerId)
+            self.dirtyCardForObject(ownerId, true)
             self.recordRememberedSetBarrier()
         }
 
@@ -453,6 +555,217 @@ pub struct GcHeap {
         } else {
             None
         }
+    }
+
+    pub fn lowerStructFieldStore(
+        mut self,
+        ownerId: Int,
+        slot: Int,
+        name: String,
+        newValue: Int,
+    ) -> GcLoweredStoreEvent? {
+        self.lowerPointerSlotStore(
+            GcStructFieldStore,
+            GcBarrierObjectField,
+            ownerId,
+            slot,
+            name,
+            newValue,
+        )
+    }
+
+    pub fn lowerTuplePayloadStore(
+        mut self,
+        ownerId: Int,
+        slot: Int,
+        name: String,
+        newValue: Int,
+    ) -> GcLoweredStoreEvent? {
+        self.lowerPointerSlotStore(
+            GcTuplePayloadStore,
+            GcBarrierObjectField,
+            ownerId,
+            slot,
+            name,
+            newValue,
+        )
+    }
+
+    pub fn lowerEnumPayloadStore(
+        mut self,
+        ownerId: Int,
+        slot: Int,
+        name: String,
+        newValue: Int,
+    ) -> GcLoweredStoreEvent? {
+        self.lowerPointerSlotStore(
+            GcEnumPayloadStore,
+            GcBarrierObjectField,
+            ownerId,
+            slot,
+            name,
+            newValue,
+        )
+    }
+
+    pub fn lowerReceiverFieldStore(
+        mut self,
+        ownerId: Int,
+        slot: Int,
+        name: String,
+        newValue: Int,
+    ) -> GcLoweredStoreEvent? {
+        self.lowerPointerSlotStore(
+            GcReceiverFieldStore,
+            GcBarrierObjectField,
+            ownerId,
+            slot,
+            name,
+            newValue,
+        )
+    }
+
+    pub fn lowerArrayElementStore(
+        mut self,
+        ownerId: Int,
+        index: Int,
+        newValue: Int,
+    ) -> GcLoweredStoreEvent? {
+        self.lowerPointerSlotStore(
+            GcArrayElementStore,
+            GcBarrierArrayElement,
+            ownerId,
+            index,
+            loweredCollectionSlotName("array", index),
+            newValue,
+        )
+    }
+
+    pub fn lowerListElementStore(
+        mut self,
+        ownerId: Int,
+        index: Int,
+        newValue: Int,
+    ) -> GcLoweredStoreEvent? {
+        self.lowerPointerSlotStore(
+            GcListElementStore,
+            GcBarrierArrayElement,
+            ownerId,
+            index,
+            loweredCollectionSlotName("list", index),
+            newValue,
+        )
+    }
+
+    pub fn lowerMapKeyStore(
+        mut self,
+        ownerId: Int,
+        slot: Int,
+        newValue: Int,
+    ) -> GcLoweredStoreEvent? {
+        self.lowerPointerSlotStore(
+            GcMapKeyStore,
+            GcBarrierArrayElement,
+            ownerId,
+            slot,
+            loweredCollectionSlotName("map.key", slot),
+            newValue,
+        )
+    }
+
+    pub fn lowerMapValueStore(
+        mut self,
+        ownerId: Int,
+        slot: Int,
+        newValue: Int,
+    ) -> GcLoweredStoreEvent? {
+        self.lowerPointerSlotStore(
+            GcMapValueStore,
+            GcBarrierArrayElement,
+            ownerId,
+            slot,
+            loweredCollectionSlotName("map.value", slot),
+            newValue,
+        )
+    }
+
+    pub fn lowerSetKeyStore(
+        mut self,
+        ownerId: Int,
+        slot: Int,
+        newValue: Int,
+    ) -> GcLoweredStoreEvent? {
+        self.lowerPointerSlotStore(
+            GcSetKeyStore,
+            GcBarrierArrayElement,
+            ownerId,
+            slot,
+            loweredCollectionSlotName("set.key", slot),
+            newValue,
+        )
+    }
+
+    pub fn lowerRuntimeFrameSlotStore(
+        mut self,
+        frameObjectId: Int,
+        slot: Int,
+        name: String,
+        newValue: Int,
+    ) -> GcLoweredStoreEvent? {
+        if !(self.objects.containsKey(frameObjectId)) {
+            return None
+        }
+        if self.objects[frameObjectId].kind != GcRuntimeFrame {
+            return None
+        }
+        self.lowerPointerSlotStore(
+            GcRuntimeFrameSlotStore,
+            GcBarrierRuntimeFrame,
+            frameObjectId,
+            slot,
+            name,
+            newValue,
+        )
+    }
+
+    pub fn lowerAsyncFrameRootStore(
+        mut self,
+        taskId: Int,
+        slot: Int,
+        name: String,
+        newValue: Int,
+    ) -> GcLoweredStoreEvent? {
+        if !(self.asyncFrames.containsKey(taskId)) {
+            return None
+        }
+        let frame = self.asyncFrames[taskId]
+        if frame.state != GcAsyncFrameSuspended {
+            return None
+        }
+        if frame.frameObjectId < 0 || !(self.objects.containsKey(frame.frameObjectId)) {
+            return None
+        }
+        if slot < 0 || name == "" {
+            return None
+        }
+        if newValue < -1 {
+            return None
+        }
+        if newValue >= 0 && !(self.objects.containsKey(newValue)) {
+            return None
+        }
+        let key = loweredPointerSlotKey(GcAsyncFrameRootStore, frame.frameObjectId, slot)
+        let oldValue = self.loweredPointerSlotStoredValue(key)
+        let lowered = self.lowerPointerSlotStore(
+            GcAsyncFrameRootStore,
+            GcBarrierAsyncFrameRoot,
+            frame.frameObjectId,
+            slot,
+            name,
+            newValue,
+        )
+        self.syncAsyncFrameRootSnapshot(taskId, oldValue, newValue)
+        lowered
     }
 
     pub fn addRoot(mut self, id: Int) -> Bool {
@@ -849,7 +1162,7 @@ pub struct GcHeap {
             let _ = self.gcPreWriteBarrier(GcBarrierObjectField, from, to)
         }
         let before = next.refs.len()
-        next.refs = next.refs.filter(|id| id != to)
+        next.refs = intListWithout(next.refs, to)
         self.objects.insert(from, next)
         if before != next.refs.len() {
             self.rebuildRemembered()
@@ -973,16 +1286,34 @@ pub struct GcHeap {
         let beforeObjects = self.objectCount()
         let beforeBytes = self.liveBytes
         let beforeFragmentedBytes = self.fragmentedBytes()
-        let rememberedScanned = self.remembered.len()
+        let rootObjectsScanned = self.roots.len()
+        let globalRootsScanned = self.globalObjectRootCount()
+        let asyncFrameRootsScanned = self.asyncFrameRootCount()
+        let dirtyCardsScanned = self.cardTable.dirtyCards.len()
+        let rememberedScanned = self.rememberedObjectsOnDirtyCards()
         let allocationBytesSinceLastGC = self.allocatedSinceLastGC
 
         self.clearYoungMarks()
         self.markYoungRoots()
         let markSteps = self.drainGrey(0, true)
-        let (reclaimedObjects, reclaimedBytes, promotedObjects) = self.sweepYoung()
+        let (reclaimedObjects, reclaimedBytes, promotedObjects, survivorCopiedObjects) = self.sweepYoung()
+        self.recordCardScan(dirtyCardsScanned)
+        self.clearScannedDirtyCards(dirtyCardsScanned)
         self.rebuildRemembered()
         self.minorCollections = self.minorCollections + 1
         self.allocatedSinceLastGC = 0
+        self.lastMinorTrace = GcMinorCollectionTrace {
+            rootObjectsScanned,
+            globalRootsScanned,
+            asyncFrameRootsScanned,
+            rememberedObjectsScanned: rememberedScanned,
+            dirtyCardsScanned,
+            youngMarked: markSteps,
+            survivorCopiedObjects,
+            promotedObjects,
+            edenReset: true,
+            survivorSwap: true,
+        }
 
         let stats = GcStats {
             kind: "minor",
@@ -1026,12 +1357,17 @@ pub struct GcHeap {
 
         self.phase = GcMarking
         self.clearAllMarks()
+        let rootObjectsSeeded = self.roots.len()
+        let globalRootsSeeded = self.globalObjectRootCount()
+        let asyncFrameRootsSeeded = self.asyncFrameRootCount()
         for id in self.roots.toList() {
             self.shade(id)
         }
         self.shadeGlobalRoots()
         self.shadeAsyncFrameRoots()
+        let queueSeeded = self.grey.len()
         let markSteps = self.drainGrey(0, false)
+        let pointerSlotsScanned = self.markedPointerSlotCount()
 
         self.phase = GcSweeping
         let (reclaimedObjects, reclaimedBytes) = self.sweepAll()
@@ -1040,6 +1376,16 @@ pub struct GcHeap {
         self.majorCollections = self.majorCollections + 1
         self.phase = GcIdle
         self.allocatedSinceLastGC = 0
+        self.lastFullMarkTrace = GcFullMarkTrace {
+            rootObjectsSeeded,
+            globalRootsSeeded,
+            asyncFrameRootsSeeded,
+            queueSeeded,
+            objectsScanned: markSteps,
+            pointerSlotsScanned,
+            regionObjectsVisited: beforeObjects,
+            sweptObjects: reclaimedObjects,
+        }
 
         let stats = GcStats {
             kind: "major",
@@ -1131,7 +1477,7 @@ pub struct GcHeap {
         for (taskId, frame) in self.asyncFrames {
             let _ = taskId
             if frame.state == GcAsyncFrameSuspended {
-                total = total + frame.roots.len()
+                total = total + intListLen(frame.roots)
                 if frame.frameObjectId >= 0 {
                     total = total + 1
                 }
@@ -1226,6 +1572,160 @@ pub struct GcHeap {
 
     pub fn rememberedCount(self) -> Int {
         self.remembered.len()
+    }
+
+    pub fn cardSize(self) -> Int {
+        self.cardTable.cardSize
+    }
+
+    pub fn dirtyCardCount(self) -> Int {
+        self.cardTable.dirtyCards.len()
+    }
+
+    pub fn dirtyCardWriteCount(self) -> Int {
+        self.cardTable.dirtyWrites
+    }
+
+    pub fn cardScanCount(self) -> Int {
+        self.cardTable.scannedCards
+    }
+
+    pub fn cardClearCount(self) -> Int {
+        self.cardTable.clearedCards
+    }
+
+    pub fn cardIndexForObject(self, id: Int) -> Int? {
+        if !(self.objects.containsKey(id)) {
+            return None
+        }
+        Some(self.cardIndexForAddress(self.objects[id].address))
+    }
+
+    pub fn cardIsDirty(self, card: Int) -> Bool {
+        self.cardTable.dirtyCards.contains(card)
+    }
+
+    pub fn lastMinorRootObjectsScanned(self) -> Int {
+        self.lastMinorTrace.rootObjectsScanned
+    }
+
+    pub fn lastMinorGlobalRootsScanned(self) -> Int {
+        self.lastMinorTrace.globalRootsScanned
+    }
+
+    pub fn lastMinorAsyncFrameRootsScanned(self) -> Int {
+        self.lastMinorTrace.asyncFrameRootsScanned
+    }
+
+    pub fn lastMinorRememberedObjectsScanned(self) -> Int {
+        self.lastMinorTrace.rememberedObjectsScanned
+    }
+
+    pub fn lastMinorDirtyCardsScanned(self) -> Int {
+        self.lastMinorTrace.dirtyCardsScanned
+    }
+
+    pub fn lastMinorYoungMarked(self) -> Int {
+        self.lastMinorTrace.youngMarked
+    }
+
+    pub fn lastMinorSurvivorCopiedObjects(self) -> Int {
+        self.lastMinorTrace.survivorCopiedObjects
+    }
+
+    pub fn lastMinorPromotedObjects(self) -> Int {
+        self.lastMinorTrace.promotedObjects
+    }
+
+    pub fn lastMinorEdenReset(self) -> Bool {
+        self.lastMinorTrace.edenReset
+    }
+
+    pub fn lastMinorSurvivorSwap(self) -> Bool {
+        self.lastMinorTrace.survivorSwap
+    }
+
+    pub fn lastFullMarkObjectsScanned(self) -> Int {
+        self.lastFullMarkTrace.objectsScanned
+    }
+
+    pub fn lastFullMarkPointerSlotsScanned(self) -> Int {
+        self.lastFullMarkTrace.pointerSlotsScanned
+    }
+
+    pub fn lastFullMarkSweptObjects(self) -> Int {
+        self.lastFullMarkTrace.sweptObjects
+    }
+
+    pub fn objectPointerSlotCount(self, id: Int) -> Int? {
+        if !(self.objects.containsKey(id)) {
+            return None
+        }
+        Some(intListLen(self.objects[id].refs))
+    }
+
+    pub fn objectScalarBytes(self, id: Int) -> Int? {
+        if !(self.objects.containsKey(id)) {
+            return None
+        }
+        let pointerBytes = intListLen(self.objects[id].refs) * 8
+        if self.objects[id].size > pointerBytes {
+            Some(self.objects[id].size - pointerBytes)
+        } else {
+            Some(0)
+        }
+    }
+
+    pub fn forwardingEntryCount(self) -> Int {
+        self.forwarding.len()
+    }
+
+    pub fn forwardedFromAddress(self, id: Int) -> Int? {
+        if self.forwarding.containsKey(id) {
+            Some(self.forwarding[id].fromAddress)
+        } else {
+            None
+        }
+    }
+
+    pub fn forwardedToAddress(self, id: Int) -> Int? {
+        if self.forwarding.containsKey(id) {
+            Some(self.forwarding[id].toAddress)
+        } else {
+            None
+        }
+    }
+
+    pub fn lastEvacuationForwardedObjects(self) -> Int {
+        self.lastEvacuationTrace.forwardedObjects
+    }
+
+    pub fn lastEvacuationPinnedSkipped(self) -> Int {
+        self.lastEvacuationTrace.pinnedSkipped
+    }
+
+    pub fn lastEvacuationHumongousSkipped(self) -> Int {
+        self.lastEvacuationTrace.humongousSkipped
+    }
+
+    pub fn lastEvacuationBytesCopied(self) -> Int {
+        self.lastEvacuationTrace.bytesCopied
+    }
+
+    pub fn lastRemapRootSlotsRemapped(self) -> Int {
+        self.lastRemapTrace.rootSlotsRemapped
+    }
+
+    pub fn lastRemapObjectRefsRemapped(self) -> Int {
+        self.lastRemapTrace.objectRefsRemapped
+    }
+
+    pub fn lastRemapLoweredSlotsRemapped(self) -> Int {
+        self.lastRemapTrace.loweredSlotsRemapped
+    }
+
+    pub fn lastRemapVerified(self) -> Bool {
+        self.lastRemapTrace.verified
     }
 
     pub fn nurseryBytes(self) -> Int {
@@ -1370,6 +1870,10 @@ pub struct GcHeap {
         }
     }
 
+    pub fn isLargeObject(self, id: Int) -> Bool {
+        self.objects.containsKey(id) && self.objects[id].large
+    }
+
     pub fn regionOf(self, id: Int) -> GcRegionKind? {
         if self.objects.containsKey(id) {
             Some(self.objects[id].region)
@@ -1487,6 +1991,51 @@ pub struct GcHeap {
         self.barriers.loadForwards
     }
 
+    pub fn loweredObjectFieldCount(self) -> Int {
+        self.loweredPointerSlotCount()
+    }
+
+    pub fn loweredObjectFieldValue(self, ownerId: Int, slot: Int) -> Int? {
+        match self.loweredPointerSlotValue(GcStructFieldStore, ownerId, slot) {
+            Some(value) -> {
+                return Some(value)
+            },
+            None -> {},
+        }
+        match self.loweredPointerSlotValue(GcTuplePayloadStore, ownerId, slot) {
+            Some(value) -> {
+                return Some(value)
+            },
+            None -> {},
+        }
+        match self.loweredPointerSlotValue(GcEnumPayloadStore, ownerId, slot) {
+            Some(value) -> {
+                return Some(value)
+            },
+            None -> {},
+        }
+        match self.loweredPointerSlotValue(GcReceiverFieldStore, ownerId, slot) {
+            Some(value) -> {
+                return Some(value)
+            },
+            None -> {},
+        }
+        None
+    }
+
+    pub fn loweredPointerSlotCount(self) -> Int {
+        self.loweredPointerSlots.len()
+    }
+
+    pub fn loweredPointerSlotValue(self, kind: GcLoweredStoreKind, ownerId: Int, slot: Int) -> Int? {
+        let key = loweredPointerSlotKey(kind, ownerId, slot)
+        if self.loweredPointerSlots.containsKey(key) {
+            Some(self.loweredPointerSlots[key].objectId)
+        } else {
+            None
+        }
+    }
+
     pub fn pinnedObjectCount(self) -> Int {
         let mut total = 0
         for (id, obj) in self.objects {
@@ -1519,6 +2068,9 @@ pub struct GcHeap {
         }
         if self.config.tlabSize < 0 {
             return Err("tlabSize is negative: {self.config.tlabSize}")
+        }
+        if self.config.cardSize <= 0 {
+            return Err("cardSize must be positive: {self.config.cardSize}")
         }
 
         for (id, obj) in self.objects {
@@ -1619,6 +2171,75 @@ pub struct GcHeap {
         }
         if self.barriers.preWriteCalls < 0 || self.barriers.postWriteCalls < 0 || self.barriers.loadCalls < 0 || self.barriers.rememberedSetWrites < 0 || self.barriers.incrementalShades < 0 || self.barriers.loadForwards < 0 {
             return Err("barrier counters have negative accounting")
+        }
+        if self.cardTable.cardSize != self.config.cardSize {
+            return Err("card table size does not match config")
+        }
+        if self.cardTable.dirtyWrites < 0 || self.cardTable.scannedCards < 0 || self.cardTable.clearedCards < 0 {
+            return Err("card table has negative accounting")
+        }
+        for card in self.cardTable.dirtyCards.toList() {
+            if card < 0 {
+                return Err("card table contains negative card index {card}")
+            }
+            if !(self.dirtyCardHasRememberedObject(card)) {
+                return Err("dirty card {card} has no remembered old-to-young object")
+            }
+        }
+        if self.lastMinorTrace.rootObjectsScanned < 0 || self.lastMinorTrace.globalRootsScanned < 0 || self.lastMinorTrace.asyncFrameRootsScanned < 0 || self.lastMinorTrace.rememberedObjectsScanned < 0 || self.lastMinorTrace.dirtyCardsScanned < 0 || self.lastMinorTrace.youngMarked < 0 || self.lastMinorTrace.survivorCopiedObjects < 0 || self.lastMinorTrace.promotedObjects < 0 {
+            return Err("minor collection trace has negative accounting")
+        }
+        if self.lastFullMarkTrace.rootObjectsSeeded < 0 || self.lastFullMarkTrace.globalRootsSeeded < 0 || self.lastFullMarkTrace.asyncFrameRootsSeeded < 0 || self.lastFullMarkTrace.queueSeeded < 0 || self.lastFullMarkTrace.objectsScanned < 0 || self.lastFullMarkTrace.pointerSlotsScanned < 0 || self.lastFullMarkTrace.regionObjectsVisited < 0 || self.lastFullMarkTrace.sweptObjects < 0 {
+            return Err("full mark trace has negative accounting")
+        }
+        if self.lastEvacuationTrace.selectedObjects < 0 || self.lastEvacuationTrace.forwardedObjects < 0 || self.lastEvacuationTrace.pinnedSkipped < 0 || self.lastEvacuationTrace.humongousSkipped < 0 || self.lastEvacuationTrace.bytesCopied < 0 {
+            return Err("evacuation trace has negative accounting")
+        }
+        if self.lastRemapTrace.rootSlotsVisited < 0 || self.lastRemapTrace.rootSlotsRemapped < 0 || self.lastRemapTrace.objectRefsVisited < 0 || self.lastRemapTrace.objectRefsRemapped < 0 || self.lastRemapTrace.loweredSlotsVisited < 0 || self.lastRemapTrace.loweredSlotsRemapped < 0 {
+            return Err("remap trace has negative accounting")
+        }
+        if !(self.verifyForwardingTable()) {
+            return Err("forwarding table is inconsistent")
+        }
+        for (key, slot) in self.loweredPointerSlots {
+            if key != loweredPointerSlotKey(slot.kind, slot.ownerId, slot.slot) {
+                return Err("lowered pointer slot key/slot mismatch: {key}")
+            }
+            if slot.ownerId <= 0 || !(self.objects.containsKey(slot.ownerId)) {
+                return Err("lowered pointer slot {key} references missing owner")
+            }
+            if slot.slot < 0 {
+                return Err("lowered pointer slot {key} has negative slot")
+            }
+            if slot.name == "" {
+                return Err("lowered pointer slot {key} has empty name")
+            }
+            if slot.objectId < -1 {
+                return Err("lowered pointer slot {key} has invalid object id {slot.objectId}")
+            }
+            if slot.kind == GcRuntimeFrameSlotStore && self.objects[slot.ownerId].kind != GcRuntimeFrame {
+                return Err("runtime frame slot {key} is not attached to a runtime frame")
+            }
+            if slot.kind == GcAsyncFrameRootStore {
+                if self.objects[slot.ownerId].kind != GcRuntimeFrame {
+                    return Err("async frame root slot {key} is not attached to a runtime frame")
+                }
+                if slot.objectId >= 0 && !(self.asyncFrameSnapshotContains(
+                    slot.ownerId,
+                    slot.objectId,
+                )) {
+                    return Err("async frame root slot {key} is missing from snapshot roots")
+                }
+            }
+            if slot.objectId >= 0 {
+                if !(self.objects.containsKey(slot.objectId)) {
+                    return Err("lowered pointer slot {key} references missing object")
+                }
+                let owner = self.objects[slot.ownerId]
+                if !(owner.refs.contains(slot.objectId)) {
+                    return Err("lowered pointer slot {key} is missing from owner refs")
+                }
+            }
         }
         let survivorBytes = self.survivorBytes()
         if survivorBytes > self.config.survivorLimit {
@@ -1774,7 +2395,7 @@ pub struct GcHeap {
                         return Err(e)
                     },
                 }
-            } else if frame.frameObjectId >= 0 || frame.roots.len() > 0 {
+            } else if frame.frameObjectId >= 0 || intListLen(frame.roots) > 0 {
                 return Err("inactive async frame {taskId} still retains roots")
             }
         }
@@ -1816,6 +2437,10 @@ pub struct GcHeap {
             }
             if !(self.hasYoungRef(obj)) {
                 return Err("remembered object {id} has no young reference")
+            }
+            let card = self.objectCardIndex(obj)
+            if !(self.cardTable.dirtyCards.contains(card)) {
+                return Err("remembered object {id} has no dirty card")
             }
         }
 
@@ -2085,11 +2710,7 @@ pub struct GcHeap {
             }
         }
 
-        for id in self.remembered.toList() {
-            if self.objects.containsKey(id) {
-                self.shadeYoungChildren(self.objects[id])
-            }
-        }
+        self.markYoungRememberedCards()
     }
 
     fn markYoungRootObject(mut self, id: Int) {
@@ -2098,6 +2719,19 @@ pub struct GcHeap {
             self.shadeYoung(id)
         } else {
             self.shadeYoungChildren(obj)
+        }
+    }
+
+    fn markYoungRememberedCards(mut self) {
+        for card in self.cardTable.dirtyCards.toList() {
+            for id in self.remembered.toList() {
+                if self.objects.containsKey(id) {
+                    let obj = self.objects[id]
+                    if obj.remembered && self.objectCardIndex(obj) == card {
+                        self.shadeYoungChildren(obj)
+                    }
+                }
+            }
         }
     }
 
@@ -2156,10 +2790,11 @@ pub struct GcHeap {
         }
     }
 
-    fn sweepYoung(mut self) -> (Int, Int, Int) {
+    fn sweepYoung(mut self) -> (Int, Int, Int, Int) {
         let mut reclaimedObjects = 0
         let mut reclaimedBytes = 0
         let mut promotedObjects = 0
+        let mut survivorCopiedObjects = 0
         let mut survivorBytes = 0
         let ids = self.objects.keys()
 
@@ -2175,6 +2810,7 @@ pub struct GcHeap {
                             promotedObjects = promotedObjects + 1
                         } else {
                             survivorBytes = survivorBytes + next.size
+                            survivorCopiedObjects = survivorCopiedObjects + 1
                         }
                         next.region = regionForObject(next)
                         next.marked = false
@@ -2191,7 +2827,7 @@ pub struct GcHeap {
             }
         }
 
-        (reclaimedObjects, reclaimedBytes, promotedObjects)
+        (reclaimedObjects, reclaimedBytes, promotedObjects, survivorCopiedObjects)
     }
 
     fn shouldPromoteYoungSurvivor(self, obj: GcObject, survivorBytes: Int) -> Bool {
@@ -2258,15 +2894,26 @@ pub struct GcHeap {
     }
 
     fn compactLive(mut self) -> Int {
+        self.forwarding.clear()
         let ids = self.objects.keys().sorted()
         let mut freeList: List<GcFreeBlock> = []
         let mut cursor = 0
         let mut moved = 0
+        let mut selectedObjects = 0
+        let mut pinnedSkipped = 0
+        let mut humongousSkipped = 0
+        let mut bytesCopied = 0
 
         for id in ids {
             if self.objects.containsKey(id) {
                 let mut next = self.objects[id]
                 if next.pinned || next.large {
+                    if next.pinned {
+                        pinnedSkipped = pinnedSkipped + 1
+                    }
+                    if next.large {
+                        humongousSkipped = humongousSkipped + 1
+                    }
                     if next.address > cursor {
                         let gapSize = next.address - cursor
                         if !(self.rangeOverlapsHumongousFree(cursor, gapSize)) {
@@ -2283,11 +2930,27 @@ pub struct GcHeap {
                         cursor = end
                     }
                 } else {
+                    selectedObjects = selectedObjects + 1
                     cursor = self.avoidHumongousFreeBlocks(cursor, next.size)
                     if next.address != cursor {
+                        let fromAddress = next.address
+                        let fromRegion = next.region
                         moved = moved + 1
+                        bytesCopied = bytesCopied + next.size
+                        self.forwarding.insert(
+                            id,
+                            GcForwardingEntry {
+                                objectId: id,
+                                fromAddress,
+                                toAddress: cursor,
+                                size: next.size,
+                                fromRegion,
+                                toRegion: regionForObject(next),
+                            },
+                        )
                     }
                     next.address = cursor
+                    next.region = regionForObject(next)
                     cursor = cursor + next.size
                 }
                 self.objects.insert(id, next)
@@ -2306,6 +2969,14 @@ pub struct GcHeap {
         let mut humongous = self.humongous
         humongous.cursor = cursor
         self.humongous = humongous
+        self.lastEvacuationTrace = GcEvacuationTrace {
+            selectedObjects,
+            forwardedObjects: moved,
+            pinnedSkipped,
+            humongousSkipped,
+            bytesCopied,
+        }
+        self.lastRemapTrace = self.remapForwardedReferences()
         moved
     }
 
@@ -2491,8 +3162,223 @@ pub struct GcHeap {
         self.barriers = barriers
     }
 
+    fn recordCardScan(mut self, count: Int) {
+        if count <= 0 {
+            return
+        }
+        let mut cardTable = self.cardTable
+        cardTable.scannedCards = cardTable.scannedCards + count
+        self.cardTable = cardTable
+    }
+
+    fn clearScannedDirtyCards(mut self, count: Int) {
+        let mut cardTable = self.cardTable
+        cardTable.dirtyCards.clear()
+        if count > 0 {
+            cardTable.clearedCards = cardTable.clearedCards + count
+        }
+        self.cardTable = cardTable
+    }
+
+    fn resetDirtyCardsForRebuild(mut self) {
+        let mut cardTable = self.cardTable
+        cardTable.dirtyCards.clear()
+        self.cardTable = cardTable
+    }
+
+    fn dirtyCardForObject(mut self, id: Int, countWrite: Bool) {
+        if !(self.objects.containsKey(id)) {
+            return
+        }
+        let card = self.cardIndexForAddress(self.objects[id].address)
+        if card < 0 {
+            return
+        }
+
+        let mut cardTable = self.cardTable
+        if !(cardTable.dirtyCards.contains(card)) {
+            cardTable.dirtyCards.insert(card)
+            if countWrite {
+                cardTable.dirtyWrites = cardTable.dirtyWrites + 1
+            }
+        }
+        self.cardTable = cardTable
+    }
+
+    fn cardIndexForAddress(self, address: Int) -> Int {
+        if self.cardTable.cardSize <= 0 {
+            return -1
+        }
+        address / self.cardTable.cardSize
+    }
+
+    fn objectCardIndex(self, obj: GcObject) -> Int {
+        self.cardIndexForAddress(obj.address)
+    }
+
+    fn rememberedObjectsOnDirtyCards(self) -> Int {
+        let mut total = 0
+        for id in self.remembered.toList() {
+            if self.objects.containsKey(id) {
+                let obj = self.objects[id]
+                let card = self.objectCardIndex(obj)
+                if self.cardTable.dirtyCards.contains(card) {
+                    total = total + 1
+                }
+            }
+        }
+        total
+    }
+
+    fn dirtyCardHasRememberedObject(self, card: Int) -> Bool {
+        for id in self.remembered.toList() {
+            if self.objects.containsKey(id) {
+                let obj = self.objects[id]
+                if obj.remembered && self.objectCardIndex(obj) == card {
+                    return true
+                }
+            }
+        }
+        false
+    }
+
+    fn lowerPointerSlotStore(
+        mut self,
+        kind: GcLoweredStoreKind,
+        barrierSlotKind: GcBarrierSlotKind,
+        ownerId: Int,
+        slot: Int,
+        name: String,
+        newValue: Int,
+    ) -> GcLoweredStoreEvent? {
+        if slot < 0 || name == "" {
+            return None
+        }
+        if !(self.objects.containsKey(ownerId)) {
+            return None
+        }
+        if newValue < -1 {
+            return None
+        }
+        if newValue >= 0 && !(self.objects.containsKey(newValue)) {
+            return None
+        }
+
+        let key = loweredPointerSlotKey(kind, ownerId, slot)
+        let oldValue = self.loweredPointerSlotStoredValue(key)
+        let mut preWriteCalled = false
+        if oldValue >= 0 {
+            preWriteCalled = self.gcPreWriteBarrier(barrierSlotKind, ownerId, oldValue)
+        }
+
+        self.loweredPointerSlots.insert(
+            key,
+            GcLoweredPointerSlot {
+                ownerId,
+                slot,
+                name,
+                kind,
+                objectId: newValue,
+            },
+        )
+        self.syncLoweredPointerSlotRefs(ownerId, oldValue, newValue)
+        let postWriteCalled = self.gcPostWriteBarrier(barrierSlotKind, ownerId, newValue)
+        self.rebuildRemembered()
+
+        Some(
+            GcLoweredStoreEvent {
+                kind,
+                ownerId,
+                slot,
+                name,
+                oldValue,
+                newValue,
+                barrierSlotKind,
+                preWriteCalled,
+                postWriteCalled,
+            },
+        )
+    }
+
+    fn syncLoweredPointerSlotRefs(mut self, ownerId: Int, oldValue: Int, newValue: Int) {
+        if !(self.objects.containsKey(ownerId)) {
+            return
+        }
+
+        let mut obj = self.objects[ownerId]
+        if oldValue >= 0 && oldValue != newValue && !(self.loweredPointerSlotStillReferences(
+            ownerId,
+            oldValue,
+        )) {
+            obj.refs = intListWithout(obj.refs, oldValue)
+        }
+        if newValue >= 0 && !(obj.refs.contains(newValue)) {
+            obj.refs.push(newValue)
+        }
+        self.objects.insert(ownerId, obj)
+    }
+
+    fn syncAsyncFrameRootSnapshot(mut self, taskId: Int, oldValue: Int, newValue: Int) {
+        if !(self.asyncFrames.containsKey(taskId)) {
+            return
+        }
+
+        let mut frame = self.asyncFrames[taskId]
+        if oldValue >= 0 && oldValue != newValue && !(self.asyncFrameLoweredRootStillReferences(
+            frame.frameObjectId,
+            oldValue,
+        )) {
+            frame.roots = intListWithout(frame.roots, oldValue)
+        }
+        if newValue >= 0 && !(intListContains(frame.roots, newValue)) {
+            frame.roots.push(newValue)
+        }
+        self.asyncFrames.insert(taskId, frame)
+    }
+
+    fn loweredPointerSlotStillReferences(self, ownerId: Int, objectId: Int) -> Bool {
+        for (key, slot) in self.loweredPointerSlots {
+            let _ = key
+            if slot.ownerId == ownerId && slot.objectId == objectId {
+                return true
+            }
+        }
+        false
+    }
+
+    fn asyncFrameLoweredRootStillReferences(self, frameObjectId: Int, objectId: Int) -> Bool {
+        for (key, slot) in self.loweredPointerSlots {
+            let _ = key
+            if slot.kind == GcAsyncFrameRootStore && slot.ownerId == frameObjectId && slot.objectId == objectId {
+                return true
+            }
+        }
+        false
+    }
+
+    fn asyncFrameSnapshotContains(self, frameObjectId: Int, objectId: Int) -> Bool {
+        for (taskId, frame) in self.asyncFrames {
+            let _ = taskId
+            if frame.state == GcAsyncFrameSuspended && frame.frameObjectId == frameObjectId && intListContains(
+                frame.roots,
+                objectId,
+            ) {
+                return true
+            }
+        }
+        false
+    }
+
+    fn loweredPointerSlotStoredValue(self, key: String) -> Int {
+        if self.loweredPointerSlots.containsKey(key) {
+            return self.loweredPointerSlots[key].objectId
+        }
+        return -1
+    }
+
     fn rebuildRemembered(mut self) {
         self.remembered.clear()
+        self.resetDirtyCardsForRebuild()
         let ids = self.objects.keys()
         for id in ids {
             if self.objects.containsKey(id) {
@@ -2500,6 +3386,7 @@ pub struct GcHeap {
                 next.remembered = next.generation > 0 && self.hasYoungRef(next)
                 if next.remembered {
                     self.remembered.insert(id)
+                    self.dirtyCardForObject(id, false)
                 }
                 self.objects.insert(id, next)
             }
@@ -2510,11 +3397,19 @@ pub struct GcHeap {
         if self.closureEnvironments.containsKey(id) {
             let _ = self.closureEnvironments.remove(id)
         }
+        let keys = self.loweredPointerSlots.keys()
+        for key in keys {
+            if self.loweredPointerSlots.containsKey(key) {
+                let slot = self.loweredPointerSlots[key]
+                if slot.ownerId == id || slot.objectId == id {
+                    let _ = self.loweredPointerSlots.remove(key)
+                }
+            }
+        }
     }
 
     fn validateClosureCaptures(self, captures: List<GcClosureCapture>) -> Result<(), String> {
-        let empty: List<Int> = []
-        let mut seenSlots = empty.toSet()
+        let mut seenSlots: Map<Int, Bool> = {:}
         for capture in captures {
             if capture.slot < 0 {
                 return Err("closure capture slot must be non-negative")
@@ -2522,10 +3417,10 @@ pub struct GcHeap {
             if capture.name == "" {
                 return Err("closure capture slot {capture.slot} is unnamed")
             }
-            if seenSlots.contains(capture.slot) {
+            if seenSlots.containsKey(capture.slot) {
                 return Err("duplicate closure capture slot {capture.slot}")
             }
-            seenSlots.insert(capture.slot)
+            seenSlots.insert(capture.slot, true)
             if capture.kind == GcCaptureScalar {
                 if capture.objectId >= 0 {
                     return Err("scalar closure capture {capture.name} cannot carry an object")
@@ -2545,16 +3440,15 @@ pub struct GcHeap {
     }
 
     fn validateAsyncFrameRoots(self, roots: List<Int>) -> Result<(), String> {
-        let empty: List<Int> = []
-        let mut seen = empty.toSet()
+        let mut seen: Map<Int, Bool> = {:}
         for id in roots {
             if id <= 0 {
                 return Err("async frame root id must be positive")
             }
-            if seen.contains(id) {
+            if seen.containsKey(id) {
                 return Err("async frame has duplicate root {id}")
             }
-            seen.insert(id)
+            seen.insert(id, true)
             if !(self.objects.containsKey(id)) {
                 return Err("async frame references missing root {id}")
             }
@@ -2594,6 +3488,118 @@ pub struct GcHeap {
         false
     }
 
+    fn markedPointerSlotCount(self) -> Int {
+        let mut total = 0
+        for (id, obj) in self.objects {
+            let _ = id
+            if obj.marked {
+                total = total + intListLen(obj.refs)
+            }
+        }
+        total
+    }
+
+    fn remapForwardedReferences(self) -> GcRemapTrace {
+        let mut rootSlotsVisited = 0
+        let mut rootSlotsRemapped = 0
+        for id in self.roots.toList() {
+            rootSlotsVisited = rootSlotsVisited + 1
+            if self.forwarding.containsKey(id) {
+                rootSlotsRemapped = rootSlotsRemapped + 1
+            }
+        }
+
+        for (key, root) in self.globalRoots {
+            let _ = key
+            if root.objectId >= 0 {
+                rootSlotsVisited = rootSlotsVisited + 1
+                if self.forwarding.containsKey(root.objectId) {
+                    rootSlotsRemapped = rootSlotsRemapped + 1
+                }
+            }
+        }
+
+        for (taskId, frame) in self.asyncFrames {
+            let _ = taskId
+            if frame.state == GcAsyncFrameSuspended {
+                if frame.frameObjectId >= 0 {
+                    rootSlotsVisited = rootSlotsVisited + 1
+                    if self.forwarding.containsKey(frame.frameObjectId) {
+                        rootSlotsRemapped = rootSlotsRemapped + 1
+                    }
+                }
+                for id in frame.roots {
+                    rootSlotsVisited = rootSlotsVisited + 1
+                    if self.forwarding.containsKey(id) {
+                        rootSlotsRemapped = rootSlotsRemapped + 1
+                    }
+                }
+            }
+        }
+
+        let mut objectRefsVisited = 0
+        let mut objectRefsRemapped = 0
+        for (id, obj) in self.objects {
+            let _ = id
+            for childId in obj.refs {
+                objectRefsVisited = objectRefsVisited + 1
+                if self.forwarding.containsKey(childId) {
+                    objectRefsRemapped = objectRefsRemapped + 1
+                }
+            }
+        }
+
+        let mut loweredSlotsVisited = 0
+        let mut loweredSlotsRemapped = 0
+        for (key, slot) in self.loweredPointerSlots {
+            let _ = key
+            if slot.objectId >= 0 {
+                loweredSlotsVisited = loweredSlotsVisited + 1
+                if self.forwarding.containsKey(slot.objectId) {
+                    loweredSlotsRemapped = loweredSlotsRemapped + 1
+                }
+            }
+        }
+
+        GcRemapTrace {
+            rootSlotsVisited,
+            rootSlotsRemapped,
+            objectRefsVisited,
+            objectRefsRemapped,
+            loweredSlotsVisited,
+            loweredSlotsRemapped,
+            verified: self.verifyForwardingTable(),
+        }
+    }
+
+    fn verifyForwardingTable(self) -> Bool {
+        for (id, entry) in self.forwarding {
+            if id != entry.objectId {
+                return false
+            }
+            if entry.fromAddress == entry.toAddress {
+                return false
+            }
+            if entry.size <= 0 {
+                return false
+            }
+            if !(self.objects.containsKey(id)) {
+                return false
+            }
+            let obj = self.objects[id]
+            if obj.address != entry.toAddress {
+                return false
+            }
+            if obj.size != entry.size {
+                return false
+            }
+            if obj.pinned || obj.large {
+                return false
+            }
+        }
+        true
+    }
+
     fn heapSpan(self) -> Int {
         let mut span = 0
         for (id, obj) in self.objects {
@@ -2616,6 +3622,7 @@ pub fn productionGcConfig() -> GcConfig {
         incrementalBudget: 64,
         largeObjectThreshold: 128 * 1024,
         tlabSize: 32 * 1024,
+        cardSize: 512,
     }
 }
 
@@ -2628,6 +3635,7 @@ pub fn testGcConfig() -> GcConfig {
         incrementalBudget: 1,
         largeObjectThreshold: 512,
         tlabSize: 64,
+        cardSize: 64,
     }
 }
 
@@ -2640,9 +3648,19 @@ pub fn newGcHeap(config: GcConfig) -> GcHeap {
     let tenured = emptyTenuredAllocator()
     let humongous = emptyHumongousAllocator()
     let barriers = emptyBarrierCounters()
+    let loweredPointerSlots: Map<String, GcLoweredPointerSlot> = {:}
+    let forwarding: Map<Int, GcForwardingEntry> = {:}
     let emptyRoots: List<Int> = []
     let emptyRemembered: List<Int> = []
+    let emptyDirtyCards: List<Int> = []
     let grey: List<Int> = []
+    let cardTable = GcCardTable {
+        cardSize: config.cardSize,
+        dirtyCards: emptyDirtyCards.toSet(),
+        dirtyWrites: 0,
+        scannedCards: 0,
+        clearedCards: 0,
+    }
 
     GcHeap {
         config,
@@ -2662,15 +3680,74 @@ pub fn newGcHeap(config: GcConfig) -> GcHeap {
         tenured,
         humongous,
         barriers,
+        cardTable,
+        loweredPointerSlots,
         remembered: emptyRemembered.toSet(),
         grey,
+        forwarding,
         allocatedSinceLastGC: 0,
         lastStats: None,
+        lastMinorTrace: emptyMinorCollectionTrace(),
+        lastFullMarkTrace: emptyFullMarkTrace(),
+        lastEvacuationTrace: emptyEvacuationTrace(),
+        lastRemapTrace: emptyRemapTrace(),
     }
 }
 
 fn globalRootKey(moduleName: String, name: String) -> String {
     "{moduleName}::{name}"
+}
+
+fn loweredPointerSlotKey(kind: GcLoweredStoreKind, ownerId: Int, slot: Int) -> String {
+    "{loweredStoreKindName(kind)}:{ownerId}:{slot}"
+}
+
+fn loweredStoreKindName(kind: GcLoweredStoreKind) -> String {
+    match kind {
+        GcStructFieldStore -> "struct.field",
+        GcTuplePayloadStore -> "tuple.payload",
+        GcEnumPayloadStore -> "enum.payload",
+        GcReceiverFieldStore -> "receiver.field",
+        GcArrayElementStore -> "array.element",
+        GcListElementStore -> "list.element",
+        GcMapKeyStore -> "map.key",
+        GcMapValueStore -> "map.value",
+        GcSetKeyStore -> "set.key",
+        GcRuntimeFrameSlotStore -> "runtime.frame",
+        GcAsyncFrameRootStore -> "async.frame.root",
+    }
+}
+
+fn loweredCollectionSlotName(prefix: String, slot: Int) -> String {
+    "{prefix}[{slot}]"
+}
+
+fn intListLen(values: List<Int>) -> Int {
+    let mut total = 0
+    for value in values {
+        let _ = value
+        total = total + 1
+    }
+    total
+}
+
+fn intListWithout(values: List<Int>, removed: Int) -> List<Int> {
+    let mut out: List<Int> = []
+    for value in values {
+        if value != removed {
+            out.push(value)
+        }
+    }
+    out
+}
+
+fn intListContains(values: List<Int>, target: Int) -> Bool {
+    for value in values {
+        if value == target {
+            return true
+        }
+    }
+    false
 }
 
 fn closureCaptureObjectIds(captures: List<GcClosureCapture>) -> List<Int> {
@@ -2732,6 +3809,56 @@ fn emptyBarrierCounters() -> GcBarrierCounters {
         rememberedSetWrites: 0,
         incrementalShades: 0,
         loadForwards: 0,
+    }
+}
+
+fn emptyMinorCollectionTrace() -> GcMinorCollectionTrace {
+    GcMinorCollectionTrace {
+        rootObjectsScanned: 0,
+        globalRootsScanned: 0,
+        asyncFrameRootsScanned: 0,
+        rememberedObjectsScanned: 0,
+        dirtyCardsScanned: 0,
+        youngMarked: 0,
+        survivorCopiedObjects: 0,
+        promotedObjects: 0,
+        edenReset: false,
+        survivorSwap: false,
+    }
+}
+
+fn emptyFullMarkTrace() -> GcFullMarkTrace {
+    GcFullMarkTrace {
+        rootObjectsSeeded: 0,
+        globalRootsSeeded: 0,
+        asyncFrameRootsSeeded: 0,
+        queueSeeded: 0,
+        objectsScanned: 0,
+        pointerSlotsScanned: 0,
+        regionObjectsVisited: 0,
+        sweptObjects: 0,
+    }
+}
+
+fn emptyEvacuationTrace() -> GcEvacuationTrace {
+    GcEvacuationTrace {
+        selectedObjects: 0,
+        forwardedObjects: 0,
+        pinnedSkipped: 0,
+        humongousSkipped: 0,
+        bytesCopied: 0,
+    }
+}
+
+fn emptyRemapTrace() -> GcRemapTrace {
+    GcRemapTrace {
+        rootSlotsVisited: 0,
+        rootSlotsRemapped: 0,
+        objectRefsVisited: 0,
+        objectRefsRemapped: 0,
+        loweredSlotsVisited: 0,
+        loweredSlotsRemapped: 0,
+        verified: true,
     }
 }
 
@@ -2858,16 +3985,15 @@ pub fn validateSafepointPlan(plan: GcSafepointPlan) -> Result<(), String> {
         return Err("safepoint plan has negative frame slot count")
     }
 
-    let empty: List<Int> = []
-    let mut seenIds = empty.toSet()
+    let mut seenIds: Map<Int, Bool> = {:}
     for point in plan.safepoints {
         if point.id <= 0 {
             return Err("safepoint id must be positive")
         }
-        if seenIds.contains(point.id) {
+        if seenIds.containsKey(point.id) {
             return Err("duplicate safepoint id {point.id}")
         }
-        seenIds.insert(point.id)
+        seenIds.insert(point.id, true)
 
         match validateSafepoint(plan, point) {
             Ok(_) -> {},
@@ -2986,11 +4112,13 @@ pub fn buildGcStackMap(
     )
 }
 
-pub fn stackMapEntryFor(map: GcStackMap, safepointId: Int) -> GcStackMapEntry? {
+pub fn stackMapEntryIndex(map: GcStackMap, safepointId: Int) -> Int? {
+    let mut index = 0
     for entry in map.entries {
         if entry.safepointId == safepointId {
-            return Some(entry)
+            return Some(index)
         }
+        index = index + 1
     }
     None
 }
@@ -3061,8 +4189,7 @@ fn validateSafepoint(plan: GcSafepointPlan, point: GcSafepoint) -> Result<(), St
         return Err("async yield safepoint {point.id} must be marked maySuspend")
     }
 
-    let empty: List<Int> = []
-    let mut seenSlots = empty.toSet()
+    let mut seenSlots: Map<Int, Bool> = {:}
     for root in point.liveRoots {
         if root.slot < 0 || root.slot >= plan.frameSlots {
             return Err("safepoint {point.id} root slot {root.slot} is outside frame")
@@ -3070,10 +4197,10 @@ fn validateSafepoint(plan: GcSafepointPlan, point: GcSafepoint) -> Result<(), St
         if root.name == "" {
             return Err("safepoint {point.id} root slot {root.slot} is unnamed")
         }
-        if seenSlots.contains(root.slot) {
+        if seenSlots.containsKey(root.slot) {
             return Err("safepoint {point.id} has duplicate root slot {root.slot}")
         }
-        seenSlots.insert(root.slot)
+        seenSlots.insert(root.slot, true)
 
         if root.kind == GcDerivedRootSlot {
             if root.derivedFrom < 0 {
@@ -3109,17 +4236,16 @@ fn safepointMayAllocate(kind: GcSafepointKind) -> Bool {
 }
 
 fn validateFrameLayout(plan: GcSafepointPlan, frameLayout: List<GcFrameSlot>) -> Result<(), String> {
-    let empty: List<Int> = []
-    let mut seenSlots = empty.toSet()
+    let mut seenSlots: Map<Int, Bool> = {:}
 
     for slot in frameLayout {
         if slot.slot < 0 || slot.slot >= plan.frameSlots {
             return Err("frame slot {slot.slot} is outside frame")
         }
-        if seenSlots.contains(slot.slot) {
+        if seenSlots.containsKey(slot.slot) {
             return Err("duplicate frame slot {slot.slot}")
         }
-        seenSlots.insert(slot.slot)
+        seenSlots.insert(slot.slot, true)
         if slot.name == "" {
             return Err("frame slot {slot.slot} is unnamed")
         }
@@ -3146,9 +4272,10 @@ fn validateFrameLayout(plan: GcSafepointPlan, frameLayout: List<GcFrameSlot>) ->
 
 fn validateSafepointAgainstFrameLayout(point: GcSafepoint, frameLayout: List<GcFrameSlot>) -> Result<(), String> {
     for root in point.liveRoots {
-        let frame = frameLayoutSlot(frameLayout, root.slot)
+        let frame = frameLayoutSlotIndex(frameLayout, root.slot)
         match frame {
-            Some(slot) -> {
+            Some(index) -> {
+                let slot = frameLayout[index]
                 if !(slot.pointer) {
                     return Err("safepoint {point.id} marks non-pointer frame slot {root.slot} live")
                 }
@@ -3252,18 +4379,20 @@ fn normalizeInlineSlots(inlineSlots: Int, frameSlots: Int) -> Int {
     }
 }
 
-fn frameLayoutSlot(frameLayout: List<GcFrameSlot>, slotId: Int) -> GcFrameSlot? {
+fn frameLayoutSlotIndex(frameLayout: List<GcFrameSlot>, slotId: Int) -> Int? {
+    let mut index = 0
     for slot in frameLayout {
         if slot.slot == slotId {
-            return Some(slot)
+            return Some(index)
         }
+        index = index + 1
     }
     None
 }
 
 fn frameLayoutHasPointerSlot(frameLayout: List<GcFrameSlot>, slotId: Int) -> Bool {
-    match frameLayoutSlot(frameLayout, slotId) {
-        Some(slot) -> slot.pointer,
+    match frameLayoutSlotIndex(frameLayout, slotId) {
+        Some(index) -> frameLayout[index].pointer,
         None -> false,
     }
 }

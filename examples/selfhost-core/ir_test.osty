@@ -116,3 +116,74 @@ fn testIrSemanticSymbolsUseStableNames() {
     testing.assert(foundParam)
     testing.assertEq(irInvalidScopeCount(module), 0)
 }
+
+fn testIrLowersPureAstParserIntoIndependentModule() {
+    let source = r"""
+        struct Pair<A, B> { first: A, second: B }
+        enum Maybe<T> { Some(T), None }
+        fn add(left: Int, right: Int) -> Int {
+            let total = left + right
+            return total
+        }
+        """
+    let file = astParse(source)
+    let module = irLowerAstFile("main", file)
+    let summary = irSummarize(module)
+    let root = irArenaNodeAt(module.arena, module.root)
+
+    testing.assertEq(astFileErrorCount(file), 0)
+    testing.assertEq(irNodeKindName(root.kind), "module")
+    testing.assertEq(irChildCount(module, module.root), astFileDeclCount(file))
+    testing.assertEq(summary.decls, 3)
+    testing.assertEq(summary.structs, 1)
+    testing.assertEq(summary.enums, 1)
+    testing.assertEq(summary.funcs, 1)
+    testing.assert(summary.stmts >= 2)
+    testing.assert(summary.exprs >= 1)
+    testing.assert(summary.types >= 4)
+    testing.assertEq(summary.diagnostics, 0)
+    testing.assertEq(summary.invalidParents, 0)
+    testing.assert(summary.scopes >= 2)
+    testing.assert(summary.symbols >= 3)
+    testing.assertEq(summary.invalidScopes, 0)
+
+    let mut foundAdd = false
+    let mut foundPair = false
+    for symbol in module.semantic.symbols {
+        if symbol.name == "add" && irSymbolKindName(symbol.kind) == "function" {
+            foundAdd = true
+        } else if symbol.name == "Pair" && irSymbolKindName(symbol.kind) == "type" {
+            foundPair = true
+        }
+    }
+    testing.assert(foundAdd)
+    testing.assert(foundPair)
+}
+
+fn testIrAstLoweringSurfacesParserDiagnostics() {
+    let file = astParse(r"fn broken() { let x = @ }")
+    let module = irLowerAstFile("main", file)
+    let summary = irSummarize(module)
+
+    testing.assert(astFileErrorCount(file) > 0)
+    testing.assert(summary.diagnostics > 0)
+    testing.assertEq(summary.invalidParents, 0)
+}
+
+fn testIrAstSemanticCarriesEffectAndFlowMetadata() {
+    let file = astParse(
+        r"""
+            fn main() {
+                println("hello")
+                return
+            }
+            """,
+    )
+    let module = irLowerAstFile("main", file)
+    let summary = irSummarize(module)
+
+    testing.assertEq(astFileErrorCount(file), 0)
+    testing.assert(summary.effectfulNodes >= 1)
+    testing.assert(summary.terminalNodes >= 1)
+    testing.assertEq(summary.invalidScopes, 0)
+}

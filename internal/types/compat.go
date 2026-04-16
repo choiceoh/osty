@@ -104,7 +104,7 @@ func sameNamedSymbol(a, b *resolve.Symbol) bool {
 }
 
 // Assignable reports whether a value of type `src` can be assigned to a
-// destination of type `dst`. The rules track v0.3:
+// destination of type `dst`. The rules track v0.4:
 //
 //   - Identical types are assignable.
 //   - Never is assignable to any type (bottom).
@@ -158,7 +158,7 @@ func Assignable(dst, src Type) bool {
 	}
 	// A concrete value flows into an Optional: `let x: Int? = 5_i32` if
 	// the int type matches inner. This is the implicit `Some(v)` wrap
-	// that v0.3 semantically supports via inference at the literal level.
+	// that v0.4 semantically supports via inference at the literal level.
 	if o, ok := dst.(*Optional); ok {
 		if Identical(o.Inner, src) {
 			return true

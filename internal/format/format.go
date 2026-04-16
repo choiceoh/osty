@@ -216,12 +216,11 @@ func (p *printer) blank() {
 func (p *printer) indent() { p.level++ }
 func (p *printer) dedent() { p.level-- }
 
-// rawByte, rawRune, rawString append directly to the output buffer
-// without touching pendingNL / atLineStart or emitting indent. They
-// exist so trivia- and triple-string-emission paths, which manage
-// their own line boundaries, don't have to reach into p.buf directly.
+// rawByte and rawString append directly to the output buffer without touching
+// pendingNL / atLineStart or emitting indent. They exist so trivia- and
+// triple-string-emission paths, which manage their own line boundaries, don't
+// have to reach into p.buf directly.
 func (p *printer) rawByte(b byte)     { p.buf.WriteByte(b) }
-func (p *printer) rawRune(r rune)     { p.buf.WriteRune(r) }
 func (p *printer) rawString(s string) { p.buf.WriteString(s) }
 
 // finalize walks the formatted buffer once, producing the final bytes:

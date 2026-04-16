@@ -758,15 +758,3 @@ func applyLockPin(src Source, d manifest.Dependency, lock *lockfile.Lock) {
 	// Narrow to an exact match. ParseReq accepts "=X.Y.Z".
 	rs.versionReq = "=" + pv.String()
 }
-
-// joinURIFields renders human-readable source info for logging. Kept
-// package-local because most callers only need Source.URI().
-func joinURIFields(parts ...string) string {
-	parts2 := make([]string, 0, len(parts))
-	for _, p := range parts {
-		if p != "" {
-			parts2 = append(parts2, p)
-		}
-	}
-	return strings.Join(parts2, " ")
-}
