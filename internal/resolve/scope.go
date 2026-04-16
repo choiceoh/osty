@@ -11,6 +11,8 @@
 package resolve
 
 import (
+	"sync"
+
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/token"
 )
@@ -109,6 +111,12 @@ type Symbol struct {
 	// deferred to the package manager), Package stays nil and the
 	// member-access code falls back to a permissive diagnostic.
 	Package *Package
+
+	// idOnce guards idCache. See ID() in symbolid.go — the cache
+	// holds the symbol's content-hash identity and is populated on
+	// first access.
+	idOnce  sync.Once
+	idCache SymbolID
 }
 
 // IsBuiltin returns true for prelude/primitive symbols.
