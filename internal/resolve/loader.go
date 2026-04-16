@@ -99,10 +99,12 @@ func loadPackagePaths(paths []string, dir, name string, transform SourceTransfor
 			src = transform(p, src)
 		}
 		parsed := parser.ParseDetailed(src)
+		canonicalSrc, canonicalMap := canonical.SourceWithMap(src, parsed.File)
 		pkg.Files = append(pkg.Files, &PackageFile{
 			Path:            p,
 			Source:          src,
-			CanonicalSource: canonical.Source(src, parsed.File),
+			CanonicalSource: canonicalSrc,
+			CanonicalMap:    canonicalMap,
 			File:            parsed.File,
 			ParseDiags:      parsed.Diagnostics,
 			ParseProvenance: parsed.Provenance,

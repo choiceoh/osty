@@ -10,9 +10,11 @@ import (
 	"sync"
 
 	"github.com/osty/osty/internal/ast"
+	"github.com/osty/osty/internal/canonical"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/selfhost"
+	"github.com/osty/osty/internal/sourcemap"
 	"github.com/osty/osty/internal/token"
 	"github.com/osty/osty/internal/toolchain"
 	"github.com/osty/osty/internal/types"
@@ -201,10 +203,11 @@ type selfhostCheckedSource struct {
 }
 
 type selfhostFileSegment struct {
-	file  *ast.File
-	scope *resolve.Scope
-	refs  map[*ast.Ident]*resolve.Symbol
-	base  int
+	file      *ast.File
+	scope     *resolve.Scope
+	refs      map[*ast.Ident]*resolve.Symbol
+	base      int
+	sourceMap *sourcemap.Map
 }
 
 func applyNativeFileResult(result *Result, file *ast.File, rr *resolve.Result, src []byte, stdlib resolve.StdlibProvider) {
@@ -427,14 +430,14 @@ func buildSelfhostSpanIndex(src selfhostCheckedSource) *selfhostSpanIndex {
 			continue
 		}
 		for _, decl := range file.file.Decls {
-			idx.addNode(decl, file.base, file.scope)
+			idx.addNode(decl, file.base, file.scope, file.sourceMap)
 		}
 		for _, stmt := range file.file.Stmts {
-			idx.addNode(stmt, file.base, file.scope)
+			idx.addNode(stmt, file.base, file.scope, file.sourceMap)
 		}
-		idx.addScopeSubtree(file.scope, file.base)
+		idx.addScopeSubtree(file.scope, file.base, file.sourceMap)
 		for _, sym := range file.refs {
-			idx.addSymbol(sym, file.base, file.scope)
+			idx.addSymbol(sym, file.base, file.scope, file.sourceMap)
 		}
 	}
 	return idx
@@ -462,11 +465,11 @@ func (idx *selfhostSpanIndex) scopeFor(key selfhostSpanKey) *resolve.Scope {
 	return best
 }
 
-func (idx *selfhostSpanIndex) addNode(n ast.Node, base int, scope *resolve.Scope) {
+func (idx *selfhostSpanIndex) addNode(n ast.Node, base int, scope *resolve.Scope, sm *sourcemap.Map) {
 	if n == nil {
 		return
 	}
-	key, haveKey := spanKeyForNode(n, base)
+	key, haveKey := spanKeyForNode(n, base, sm)
 	if haveKey {
 		if _, ok := idx.scopes[key]; !ok {
 			idx.scopes[key] = scope
@@ -487,267 +490,237 @@ func (idx *selfhostSpanIndex) addNode(n ast.Node, base int, scope *resolve.Scope
 	}
 	switch v := n.(type) {
 	case *ast.FnDecl:
-		if v.Recv != nil {
-			idx.addNode(v.Recv, base, scope)
-		}
+		idx.addNode(v.Recv, base, scope, sm)
 		for _, g := range v.Generics {
-			idx.addNode(g, base, scope)
+			idx.addNode(g, base, scope, sm)
 		}
 		for _, p := range v.Params {
-			idx.addNode(p, base, scope)
+			idx.addNode(p, base, scope, sm)
 		}
-		if v.ReturnType != nil {
-			idx.addNode(v.ReturnType, base, scope)
-		}
-		if v.Body != nil {
-			idx.addNode(v.Body, base, scope)
-		}
+		idx.addNode(v.ReturnType, base, scope, sm)
+		idx.addNode(v.Body, base, scope, sm)
 	case *ast.StructDecl:
 		for _, g := range v.Generics {
-			idx.addNode(g, base, scope)
+			idx.addNode(g, base, scope, sm)
 		}
 		for _, f := range v.Fields {
-			idx.addNode(f, base, scope)
+			idx.addNode(f, base, scope, sm)
 		}
 		for _, m := range v.Methods {
-			idx.addNode(m, base, scope)
+			idx.addNode(m, base, scope, sm)
 		}
 	case *ast.EnumDecl:
 		for _, g := range v.Generics {
-			idx.addNode(g, base, scope)
+			idx.addNode(g, base, scope, sm)
 		}
 		for _, variant := range v.Variants {
-			idx.addNode(variant, base, scope)
+			idx.addNode(variant, base, scope, sm)
 		}
 		for _, m := range v.Methods {
-			idx.addNode(m, base, scope)
+			idx.addNode(m, base, scope, sm)
 		}
 	case *ast.InterfaceDecl:
 		for _, g := range v.Generics {
-			idx.addNode(g, base, scope)
+			idx.addNode(g, base, scope, sm)
 		}
 		for _, sup := range v.Extends {
-			idx.addNode(sup, base, scope)
+			idx.addNode(sup, base, scope, sm)
 		}
 		for _, m := range v.Methods {
-			idx.addNode(m, base, scope)
+			idx.addNode(m, base, scope, sm)
 		}
 	case *ast.TypeAliasDecl:
 		for _, g := range v.Generics {
-			idx.addNode(g, base, scope)
+			idx.addNode(g, base, scope, sm)
 		}
-		if v.Target != nil {
-			idx.addNode(v.Target, base, scope)
-		}
+		idx.addNode(v.Target, base, scope, sm)
 	case *ast.LetDecl:
-		if v.Type != nil {
-			idx.addNode(v.Type, base, scope)
-		}
-		if v.Value != nil {
-			idx.addNode(v.Value, base, scope)
-		}
+		idx.addNode(v.Type, base, scope, sm)
+		idx.addNode(v.Value, base, scope, sm)
 	case *ast.UseDecl:
 		for _, d := range v.GoBody {
-			idx.addNode(d, base, scope)
+			idx.addNode(d, base, scope, sm)
 		}
 	case *ast.Field:
-		if v.Type != nil {
-			idx.addNode(v.Type, base, scope)
-		}
-		if v.Default != nil {
-			idx.addNode(v.Default, base, scope)
-		}
+		idx.addNode(v.Type, base, scope, sm)
+		idx.addNode(v.Default, base, scope, sm)
 	case *ast.Variant:
 		for _, f := range v.Fields {
-			idx.addNode(f, base, scope)
+			idx.addNode(f, base, scope, sm)
 		}
 	case *ast.Param:
 		if haveKey && v.Name != "" {
 			idx.bindNode(selfhostNameSpanKey{selfhostSpanKey: key, name: v.Name}, v)
 		}
-		if v.Pattern != nil {
-			idx.addNode(v.Pattern, base, scope)
-		}
-		if v.Type != nil {
-			idx.addNode(v.Type, base, scope)
-		}
-		if v.Default != nil {
-			idx.addNode(v.Default, base, scope)
-		}
+		idx.addNode(v.Pattern, base, scope, sm)
+		idx.addNode(v.Type, base, scope, sm)
+		idx.addNode(v.Default, base, scope, sm)
 	case *ast.GenericParam:
 		for _, con := range v.Constraints {
-			idx.addNode(con, base, scope)
+			idx.addNode(con, base, scope, sm)
 		}
 	case *ast.NamedType:
 		for _, a := range v.Args {
-			idx.addNode(a, base, scope)
+			idx.addNode(a, base, scope, sm)
 		}
 	case *ast.OptionalType:
-		idx.addNode(v.Inner, base, scope)
+		idx.addNode(v.Inner, base, scope, sm)
 	case *ast.TupleType:
 		for _, elem := range v.Elems {
-			idx.addNode(elem, base, scope)
+			idx.addNode(elem, base, scope, sm)
 		}
 	case *ast.FnType:
 		for _, p := range v.Params {
-			idx.addNode(p, base, scope)
+			idx.addNode(p, base, scope, sm)
 		}
-		if v.ReturnType != nil {
-			idx.addNode(v.ReturnType, base, scope)
-		}
+		idx.addNode(v.ReturnType, base, scope, sm)
 	case *ast.Block:
 		for _, s := range v.Stmts {
-			idx.addNode(s, base, scope)
+			idx.addNode(s, base, scope, sm)
 		}
 	case *ast.LetStmt:
 		if name := bindingPatternName(v.Pattern); name != "" {
-			if patKey, ok := spanKeyForNode(v.Pattern, base); ok {
+			if patKey, ok := spanKeyForNode(v.Pattern, base, sm); ok {
 				idx.bindNode(selfhostNameSpanKey{selfhostSpanKey: patKey, name: name}, v)
 			}
 		}
-		if v.Pattern != nil {
-			idx.addNode(v.Pattern, base, scope)
-		}
-		if v.Type != nil {
-			idx.addNode(v.Type, base, scope)
-		}
-		if v.Value != nil {
-			idx.addNode(v.Value, base, scope)
-		}
+		idx.addNode(v.Pattern, base, scope, sm)
+		idx.addNode(v.Type, base, scope, sm)
+		idx.addNode(v.Value, base, scope, sm)
 	case *ast.ExprStmt:
-		idx.addNode(v.X, base, scope)
+		idx.addNode(v.X, base, scope, sm)
 	case *ast.AssignStmt:
 		for _, t := range v.Targets {
-			idx.addNode(t, base, scope)
+			idx.addNode(t, base, scope, sm)
 		}
-		idx.addNode(v.Value, base, scope)
+		idx.addNode(v.Value, base, scope, sm)
 	case *ast.ReturnStmt:
-		idx.addNode(v.Value, base, scope)
+		idx.addNode(v.Value, base, scope, sm)
 	case *ast.ChanSendStmt:
-		idx.addNode(v.Channel, base, scope)
-		idx.addNode(v.Value, base, scope)
+		idx.addNode(v.Channel, base, scope, sm)
+		idx.addNode(v.Value, base, scope, sm)
 	case *ast.DeferStmt:
-		idx.addNode(v.X, base, scope)
+		idx.addNode(v.X, base, scope, sm)
 	case *ast.ForStmt:
-		idx.addNode(v.Pattern, base, scope)
-		idx.addNode(v.Iter, base, scope)
-		idx.addNode(v.Body, base, scope)
+		idx.addNode(v.Pattern, base, scope, sm)
+		idx.addNode(v.Iter, base, scope, sm)
+		idx.addNode(v.Body, base, scope, sm)
 	case *ast.UnaryExpr:
-		idx.addNode(v.X, base, scope)
+		idx.addNode(v.X, base, scope, sm)
 	case *ast.BinaryExpr:
-		idx.addNode(v.Left, base, scope)
-		idx.addNode(v.Right, base, scope)
+		idx.addNode(v.Left, base, scope, sm)
+		idx.addNode(v.Right, base, scope, sm)
 	case *ast.QuestionExpr:
-		idx.addNode(v.X, base, scope)
+		idx.addNode(v.X, base, scope, sm)
 	case *ast.CallExpr:
-		idx.addNode(v.Fn, base, scope)
+		idx.addNode(v.Fn, base, scope, sm)
 		for _, a := range v.Args {
-			idx.addNode(a, base, scope)
+			idx.addNode(a, base, scope, sm)
 		}
 	case *ast.Arg:
-		idx.addNode(v.Value, base, scope)
+		idx.addNode(v.Value, base, scope, sm)
 	case *ast.FieldExpr:
-		idx.addNode(v.X, base, scope)
+		idx.addNode(v.X, base, scope, sm)
 	case *ast.IndexExpr:
-		idx.addNode(v.X, base, scope)
-		idx.addNode(v.Index, base, scope)
+		idx.addNode(v.X, base, scope, sm)
+		idx.addNode(v.Index, base, scope, sm)
 	case *ast.TurbofishExpr:
-		idx.addNode(v.Base, base, scope)
+		idx.addNode(v.Base, base, scope, sm)
 		for _, a := range v.Args {
-			idx.addNode(a, base, scope)
+			idx.addNode(a, base, scope, sm)
 		}
 	case *ast.RangeExpr:
-		idx.addNode(v.Start, base, scope)
-		idx.addNode(v.Stop, base, scope)
+		idx.addNode(v.Start, base, scope, sm)
+		idx.addNode(v.Stop, base, scope, sm)
 	case *ast.ParenExpr:
-		idx.addNode(v.X, base, scope)
+		idx.addNode(v.X, base, scope, sm)
 	case *ast.TupleExpr:
 		for _, e := range v.Elems {
-			idx.addNode(e, base, scope)
+			idx.addNode(e, base, scope, sm)
 		}
 	case *ast.ListExpr:
 		for _, e := range v.Elems {
-			idx.addNode(e, base, scope)
+			idx.addNode(e, base, scope, sm)
 		}
 	case *ast.MapExpr:
 		for _, e := range v.Entries {
-			idx.addNode(e, base, scope)
+			idx.addNode(e, base, scope, sm)
 		}
 	case *ast.MapEntry:
-		idx.addNode(v.Key, base, scope)
-		idx.addNode(v.Value, base, scope)
+		idx.addNode(v.Key, base, scope, sm)
+		idx.addNode(v.Value, base, scope, sm)
 	case *ast.StructLit:
-		idx.addNode(v.Type, base, scope)
+		idx.addNode(v.Type, base, scope, sm)
 		for _, f := range v.Fields {
-			idx.addNode(f, base, scope)
+			idx.addNode(f, base, scope, sm)
 		}
-		idx.addNode(v.Spread, base, scope)
+		idx.addNode(v.Spread, base, scope, sm)
 	case *ast.StructLitField:
-		idx.addNode(v.Value, base, scope)
+		idx.addNode(v.Value, base, scope, sm)
 	case *ast.IfExpr:
-		idx.addNode(v.Pattern, base, scope)
-		idx.addNode(v.Cond, base, scope)
-		idx.addNode(v.Then, base, scope)
-		idx.addNode(v.Else, base, scope)
+		idx.addNode(v.Pattern, base, scope, sm)
+		idx.addNode(v.Cond, base, scope, sm)
+		idx.addNode(v.Then, base, scope, sm)
+		idx.addNode(v.Else, base, scope, sm)
 	case *ast.MatchExpr:
-		idx.addNode(v.Scrutinee, base, scope)
+		idx.addNode(v.Scrutinee, base, scope, sm)
 		for _, a := range v.Arms {
-			idx.addNode(a, base, scope)
+			idx.addNode(a, base, scope, sm)
 		}
 	case *ast.MatchArm:
-		idx.addNode(v.Pattern, base, scope)
-		idx.addNode(v.Guard, base, scope)
-		idx.addNode(v.Body, base, scope)
+		idx.addNode(v.Pattern, base, scope, sm)
+		idx.addNode(v.Guard, base, scope, sm)
+		idx.addNode(v.Body, base, scope, sm)
 	case *ast.ClosureExpr:
 		for _, p := range v.Params {
-			idx.addNode(p, base, scope)
+			idx.addNode(p, base, scope, sm)
 		}
-		idx.addNode(v.ReturnType, base, scope)
-		idx.addNode(v.Body, base, scope)
+		idx.addNode(v.ReturnType, base, scope, sm)
+		idx.addNode(v.Body, base, scope, sm)
 	case *ast.LiteralPat:
-		idx.addNode(v.Literal, base, scope)
+		idx.addNode(v.Literal, base, scope, sm)
 	case *ast.IdentPat:
 		if haveKey && v.Name != "" {
 			idx.bindNode(selfhostNameSpanKey{selfhostSpanKey: key, name: v.Name}, v)
 		}
 	case *ast.TuplePat:
 		for _, p := range v.Elems {
-			idx.addNode(p, base, scope)
+			idx.addNode(p, base, scope, sm)
 		}
 	case *ast.StructPat:
 		for _, f := range v.Fields {
-			idx.addNode(f, base, scope)
+			idx.addNode(f, base, scope, sm)
 		}
 	case *ast.StructPatField:
-		idx.addNode(v.Pattern, base, scope)
+		idx.addNode(v.Pattern, base, scope, sm)
 	case *ast.VariantPat:
 		for _, a := range v.Args {
-			idx.addNode(a, base, scope)
+			idx.addNode(a, base, scope, sm)
 		}
 	case *ast.RangePat:
-		idx.addNode(v.Start, base, scope)
-		idx.addNode(v.Stop, base, scope)
+		idx.addNode(v.Start, base, scope, sm)
+		idx.addNode(v.Stop, base, scope, sm)
 	case *ast.OrPat:
 		for _, a := range v.Alts {
-			idx.addNode(a, base, scope)
+			idx.addNode(a, base, scope, sm)
 		}
 	case *ast.BindingPat:
 		if haveKey && v.Name != "" {
 			idx.bindNode(selfhostNameSpanKey{selfhostSpanKey: key, name: v.Name}, v)
 		}
-		idx.addNode(v.Pattern, base, scope)
+		idx.addNode(v.Pattern, base, scope, sm)
 	}
 }
 
-func (idx *selfhostSpanIndex) addScopeSubtree(scope *resolve.Scope, base int) {
+func (idx *selfhostSpanIndex) addScopeSubtree(scope *resolve.Scope, base int, sm *sourcemap.Map) {
 	if scope == nil {
 		return
 	}
 	for _, sym := range scope.Symbols() {
-		idx.addSymbol(sym, base, scope)
+		idx.addSymbol(sym, base, scope, sm)
 	}
 	for _, child := range scope.Children() {
-		idx.addScopeSubtree(child, base)
+		idx.addScopeSubtree(child, base, sm)
 	}
 }
 
@@ -928,11 +901,11 @@ func selfhostExprKind(expr ast.Expr) string {
 	}
 }
 
-func (idx *selfhostSpanIndex) addSymbol(sym *resolve.Symbol, base int, scope *resolve.Scope) {
+func (idx *selfhostSpanIndex) addSymbol(sym *resolve.Symbol, base int, scope *resolve.Scope, sm *sourcemap.Map) {
 	if sym == nil || sym.Decl == nil || sym.Name == "" {
 		return
 	}
-	key, ok := spanKeyForNode(sym.Decl, base)
+	key, ok := spanKeyForNode(sym.Decl, base, sm)
 	if !ok {
 		return
 	}
@@ -942,7 +915,7 @@ func (idx *selfhostSpanIndex) addSymbol(sym *resolve.Symbol, base int, scope *re
 	}
 }
 
-func spanKeyForNode(n ast.Node, base int) (key selfhostSpanKey, ok bool) {
+func spanKeyForNode(n ast.Node, base int, sm *sourcemap.Map) (key selfhostSpanKey, ok bool) {
 	if n == nil {
 		return selfhostSpanKey{}, false
 	}
@@ -954,6 +927,15 @@ func spanKeyForNode(n ast.Node, base int) (key selfhostSpanKey, ok bool) {
 	}()
 	start := n.Pos().Offset
 	end := n.End().Offset
+	if sm != nil {
+		if generated, ok := sm.GeneratedSpanForOriginal(diag.Span{
+			Start: n.Pos(),
+			End:   n.End(),
+		}); ok {
+			start = generated.Start.Offset
+			end = generated.End.Offset
+		}
+	}
 	if end < start {
 		return selfhostSpanKey{}, false
 	}
@@ -1172,6 +1154,12 @@ func fileStartSpan(src []byte) diag.Span {
 }
 
 func selfhostFileSource(file *ast.File, rr *resolve.Result, src []byte, stdlib resolve.StdlibProvider) selfhostCheckedSource {
+	var canonicalMap *sourcemap.Map
+	if file != nil {
+		if canonicalSrc, sm := canonical.SourceWithMap(src, file); len(canonicalSrc) > 0 && bytes.Equal(canonicalSrc, src) {
+			canonicalMap = sm
+		}
+	}
 	var b bytes.Buffer
 	writeSelfhostImports(&b, nil, stdlib, fileUses(file))
 	if b.Len() > 0 {
@@ -1191,10 +1179,11 @@ func selfhostFileSource(file *ast.File, rr *resolve.Result, src []byte, stdlib r
 	return selfhostCheckedSource{
 		source: b.Bytes(),
 		files: []selfhostFileSegment{{
-			file:  file,
-			scope: scope,
-			refs:  refs,
-			base:  base,
+			file:      file,
+			scope:     scope,
+			refs:      refs,
+			base:      base,
+			sourceMap: canonicalMap,
 		}},
 	}
 }
@@ -1217,10 +1206,11 @@ func selfhostPackageSource(pkg *resolve.Package, ws *resolve.Workspace, stdlib r
 			b.WriteByte('\n')
 		}
 		files = append(files, selfhostFileSegment{
-			file:  pf.File,
-			scope: pf.FileScope,
-			refs:  pf.Refs,
-			base:  base,
+			file:      pf.File,
+			scope:     pf.FileScope,
+			refs:      pf.Refs,
+			base:      base,
+			sourceMap: pf.CanonicalMap,
 		})
 	}
 	return selfhostCheckedSource{source: b.Bytes(), files: files}

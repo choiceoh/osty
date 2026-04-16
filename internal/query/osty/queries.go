@@ -9,6 +9,7 @@ import (
 	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/query"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/sourcemap"
 )
 
 // ---- Value types ----
@@ -20,6 +21,7 @@ import (
 type ParseResult struct {
 	Source          []byte
 	CanonicalSource []byte
+	CanonicalMap    *sourcemap.Map
 	File            *ast.File
 	Diags           []*diag.Diagnostic
 	Provenance      *parser.Provenance
@@ -123,9 +125,11 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 		func(ctx *query.Ctx, path string) ParseResult {
 			src := inp.SourceText.Fetch(ctx, path)
 			parsed := parser.ParseDetailed(src)
+			canonicalSrc, canonicalMap := canonical.SourceWithMap(src, parsed.File)
 			return ParseResult{
 				Source:          src,
-				CanonicalSource: canonical.Source(src, parsed.File),
+				CanonicalSource: canonicalSrc,
+				CanonicalMap:    canonicalMap,
 				File:            parsed.File,
 				Diags:           parsed.Diagnostics,
 				Provenance:      parsed.Provenance,
@@ -153,6 +157,7 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 					Path:            f,
 					Source:          pr.Source,
 					CanonicalSource: pr.CanonicalSource,
+					CanonicalMap:    pr.CanonicalMap,
 					File:            pr.File,
 					ParseDiags:      pr.Diags,
 					ParseProvenance: pr.Provenance,
@@ -180,6 +185,7 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 					Path:            pf.Path,
 					Source:          pf.Source,
 					CanonicalSource: pf.CanonicalSource,
+					CanonicalMap:    pf.CanonicalMap,
 					File:            pf.File,
 					ParseDiags:      pf.ParseDiags,
 					ParseProvenance: pf.ParseProvenance,
