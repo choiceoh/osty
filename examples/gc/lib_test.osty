@@ -1241,6 +1241,75 @@ fn testHardeningReportAuditsBarriersAndBudgets() {
     testing.assert(contract.refSameUsesStableIdentity)
 }
 
+fn testHardeningReportFailsOnLoweredSlotMismatch() {
+    let mut heap = newGcHeap(testGcConfig())
+    let parent = heap.allocate(GcRecord, 16)
+    let child = heap.allocate(GcArray, 16)
+    testing.assert(heap.addRoot(parent))
+    match heap.lowerStructFieldStore(parent, 0, "child", child) {
+        Some(_) -> {},
+        None -> testing.fail("lowered field store failed"),
+    }
+    assertValid(heap)
+
+    if heap.objects.containsKey(parent) {
+        let entry = heap.objects[parent]
+        let emptyRefs: List<Int> = []
+        let mut next = entry
+        next.refs = emptyRefs
+        heap.objects.insert(parent, next)
+    } else {
+        testing.fail("missing parent object")
+    }
+
+    let audit = heap.barrierAudit()
+    testing.assertEq(audit.loweredSlots, 1)
+    testing.assertEq(audit.invalidObjectReferences, 0)
+    testing.assertEq(audit.missingOwnerRefs, 1)
+    testing.assertEq(audit.rememberedMismatches, 0)
+    testing.assert(!(audit.passed))
+
+    let thresholds = gcPerformanceThresholdsForProfile(GcThroughputFirstProfile)
+    let report = heap.hardeningReport(thresholds)
+    testing.assert(!(report.passed))
+    testing.assert(!(report.heapValid))
+    testing.assert(!(report.barrierAuditPassed))
+    testing.assert(report.performancePassed)
+    testing.assertEq(report.loweredSlots, 1)
+    testing.assert(report.validationMessage != "")
+}
+
+fn testBarrierAuditDetectsRememberedMismatch() {
+    let mut heap = newGcHeap(testGcConfig())
+    let old = heap.allocateTenured(GcRecord, 16)
+    let young = heap.allocate(GcArray, 16)
+    testing.assert(heap.addRoot(old))
+    testing.assert(heap.link(old, young))
+    assertValid(heap)
+
+    if heap.objects.containsKey(old) {
+        let entry = heap.objects[old]
+        let mut next = entry
+        next.remembered = false
+        heap.objects.insert(old, next)
+    } else {
+        testing.fail("missing old object")
+    }
+
+    let audit = heap.barrierAudit()
+    testing.assertEq(audit.invalidObjectReferences, 0)
+    testing.assertEq(audit.missingOwnerRefs, 0)
+    testing.assertEq(audit.rememberedMismatches, 1)
+    testing.assert(!(audit.passed))
+
+    let thresholds = gcPerformanceThresholdsForProfile(GcThroughputFirstProfile)
+    let report = heap.hardeningReport(thresholds)
+    testing.assert(!(report.passed))
+    testing.assert(!(report.heapValid))
+    testing.assert(!(report.barrierAuditPassed))
+    testing.assert(report.performancePassed)
+}
+
 fn testLlvmHandleTablePreservesIdentityAcrossCompaction() {
     let mut heap = newGcHeap(testGcConfig())
     let dead = heap.allocate(GcBytes, 16)
@@ -1355,6 +1424,21 @@ fn testValidateHeapRejectsLlvmPinnedRootWithoutPinnedHandle() {
     } else {
         testing.fail("missing llvm handle")
     }
+
+    let _ = testing.expectError(heap.validateHeap())
+}
+
+fn testValidateHeapRejectsLlvmBridgeRuntimeRootAccountingMismatch() {
+    let mut heap = newGcHeap(testGcConfig())
+    let handle = heap.allocateLlvmHandle(GcRecord, 24, "llvm.accounting")
+    let rootRef = intOr(heap.bindLlvmRootRef(handle, GcLlvmStackRoot, "accounting.root"), -1)
+    assertValid(heap)
+
+    testing.assert(handle > 0)
+    testing.assert(rootRef > 0)
+    let mut trace = heap.llvmBridgeTrace
+    trace.runtimeRootsAdded = 0
+    heap.llvmBridgeTrace = trace
 
     let _ = testing.expectError(heap.validateHeap())
 }
