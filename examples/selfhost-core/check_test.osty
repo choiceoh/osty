@@ -74,6 +74,42 @@ fn testSelfCheckerEmitsStructuredResult() {
     testing.assert(frontCheckResultInstantiationCount(checked) >= 1)
 }
 
+fn testSelfCheckerCollectsGoUseAliasTypesAndFields() {
+    let checked = frontendCheckSource(
+        r"""
+            use go "example.com/host" as host {
+                fn Make() -> Item
+
+                struct Item {
+                    Name: String
+                }
+            }
+
+            fn main() {
+                let item: host.Item = host.Make()
+                let name: String = item.Name
+            }
+            """,
+    )
+
+    testing.assertEq(checked.errors, 0)
+}
+
+fn testSelfCheckerCollectsUppercaseTopLevelLets() {
+    let checked = frontendCheckSource(
+        r"""
+            pub type CheckName = String
+            pub let CheckFormat: CheckName = "format"
+
+            fn main() {
+                let name: String = CheckFormat
+            }
+            """,
+    )
+
+    testing.assertEq(checked.errors, 0)
+}
+
 fn checkResultSymbolType(result: FrontCheckResult, kind: String, name: String, owner: String) -> String {
     let mut found = ""
     for symbol in result.symbols {
