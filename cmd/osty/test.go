@@ -635,11 +635,10 @@ func executeTestPackage(dir string, pkg *resolve.Package, chk *check.Result, ent
 	// still try to run the harness because the clean portion often
 	// compiles; surface the generated file path for post-mortem work.
 	reportTranspileWarning("osty test", dir, mainPath, genErr)
-	// The generated package needs a module context. The harness has no
-	// third-party dependencies so a bare go.mod is sufficient; it
-	// also insulates the scratch directory from ambient GOPATH /
-	// workspace settings that might otherwise hijack the build.
-	goMod := []byte("module ostytest\n\ngo 1.22\n")
+	// The generated package needs a module context. Keep it under the
+	// current Go module path when one is available so generated `use go`
+	// imports can legally reference this repository's internal packages.
+	goMod := testHarnessGoMod(root)
 	goModPath := filepath.Join(outDir, "go.mod")
 	if err := os.WriteFile(goModPath, goMod, 0o644); err != nil {
 		return 0, 0, err
@@ -807,6 +806,51 @@ func parseHarnessSummary(out string) (pass int, fail int, ok bool) {
 		}
 	}
 	return 0, 0, false
+}
+
+func testHarnessGoMod(root string) []byte {
+	const fallback = "module ostytest\n\ngo 1.22\n"
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return []byte(fallback)
+	}
+	data, err := os.ReadFile(filepath.Join(abs, "go.mod"))
+	if err != nil {
+		return []byte(fallback)
+	}
+	modulePath, goVersion := parseGoModHeader(data)
+	if modulePath == "" {
+		return []byte(fallback)
+	}
+	if goVersion == "" {
+		goVersion = "1.22"
+	}
+	return []byte(fmt.Sprintf(
+		"module %s/ostytest\n\ngo %s\n\nrequire %s v0.0.0\n\nreplace %s => %s\n",
+		modulePath,
+		goVersion,
+		modulePath,
+		modulePath,
+		filepath.ToSlash(abs),
+	))
+}
+
+func parseGoModHeader(data []byte) (string, string) {
+	var modulePath string
+	var goVersion string
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		if fields[0] == "module" && modulePath == "" {
+			modulePath = fields[1]
+		}
+		if fields[0] == "go" && goVersion == "" {
+			goVersion = fields[1]
+		}
+	}
+	return modulePath, goVersion
 }
 
 // relOrSelf returns a path relative to root when possible, otherwise

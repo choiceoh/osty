@@ -3,7 +3,6 @@ package check
 import (
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/osty/osty/internal/ast"
@@ -57,8 +56,8 @@ func (r *Result) LookupType(e ast.Expr) types.Type {
 
 // Opts bundles optional inputs to File / Package / Workspace.
 type Opts struct {
-	// UseSelfhost is retained for source compatibility. The bootstrapped
-	// Osty checker is now the only checker implementation.
+	// UseSelfhost is retained for source compatibility after removing
+	// the generated selfhost checker. It is currently ignored.
 	UseSelfhost bool
 
 	// Source is the raw source for File. Package and Workspace read
@@ -91,7 +90,7 @@ func firstOpt(opts []Opts) Opts {
 	return opts[0]
 }
 
-// File runs self-hosted type checking for one resolved source file.
+// File returns a compatibility diagnostic for one resolved source file.
 //
 // The resolver's Result is consumed read-only: this package never
 // mutates symbol tables or the AST. Diagnostics from this pass are
@@ -100,26 +99,18 @@ func firstOpt(opts []Opts) Opts {
 func File(f *ast.File, rr *resolve.Result, opts ...Opts) *Result {
 	opt := firstOpt(opts)
 	result := newResult()
-	if len(opt.Source) == 0 {
-		result.Diags = append(result.Diags, missingSourceDiag("file"))
-		return result
-	}
 	result.Diags = append(result.Diags, checkerUnavailableDiag("file"))
 	recordSelfhostDeclPass(opt.OnDecl, f, "collect")
 	recordSelfhostDeclPass(opt.OnDecl, f, "check")
 	return result
 }
 
-// Package runs self-hosted type checking across every file in a
+// Package returns a compatibility diagnostic across every file in a
 // resolver Package.
 func Package(pkg *resolve.Package, pr *resolve.PackageResult, opts ...Opts) *Result {
 	opt := firstOpt(opts)
 	result := newResult()
 	if pkg == nil || len(pkg.Files) == 0 {
-		return result
-	}
-	if missing := firstMissingPackageSource(pkg); missing != "" {
-		result.Diags = append(result.Diags, missingSourceDiag("package "+missing))
 		return result
 	}
 	result.Diags = append(result.Diags, checkerUnavailableDiag("package"))
@@ -133,10 +124,9 @@ func Package(pkg *resolve.Package, pr *resolve.PackageResult, opts ...Opts) *Res
 	return result
 }
 
-// Workspace type-checks every package in a resolved workspace with the
-// self-hosted checker. Diagnostics are attributed per-package for
-// display, while the structural maps are shared so downstream phases
-// can see cross-package types from the same workspace result set.
+// Workspace returns compatibility diagnostics for every package in a
+// resolved workspace. Structural maps remain shared so downstream
+// phases can keep traversing a stable Result shape.
 func Workspace(
 	ws *resolve.Workspace,
 	resolved map[string]*resolve.PackageResult,
@@ -175,11 +165,7 @@ func Workspace(
 		if isProviderStdlibPackage(ws, e.path, e.pkg) || len(e.pkg.Files) == 0 {
 			continue
 		}
-		if missing := firstMissingPackageSource(e.pkg); missing != "" {
-			result.Diags = append(result.Diags, missingSourceDiag("package "+missing))
-			continue
-		}
-		result.Diags = append(result.Diags, checkerUnavailableDiag("workspace package"))
+		result.Diags = append(result.Diags, checkerUnavailableDiag("workspace package "+e.path))
 	}
 	for _, e := range walk {
 		for _, pf := range e.pkg.Files {
@@ -211,37 +197,11 @@ func resultWithSharedMaps(shared *Result) *Result {
 	}
 }
 
-func firstMissingPackageSource(pkg *resolve.Package) string {
-	if pkg == nil {
-		return ""
-	}
-	for _, pf := range pkg.Files {
-		if pf == nil || pf.File == nil {
-			continue
-		}
-		if len(pf.Source) == 0 {
-			if pf.Path != "" {
-				return pf.Path
-			}
-			return "<unknown>"
-		}
-	}
-	return ""
-}
-
-func missingSourceDiag(scope string) *diag.Diagnostic {
-	pos := token.Pos{Line: 1, Column: 1, Offset: 0}
-	return diag.New(diag.Error, fmt.Sprintf("self-hosted checker requires source bytes for %s checking", scope)).
-		Primary(diag.Span{Start: pos, End: pos}, "").
-		Note("the legacy Go checker has been removed; pass check.Opts.Source or populate resolve.PackageFile.Source").
-		Build()
-}
-
 func checkerUnavailableDiag(scope string) *diag.Diagnostic {
 	pos := token.Pos{Line: 1, Column: 1, Offset: 0}
-	return diag.New(diag.Error, fmt.Sprintf("type checker is currently unavailable for %s", scope)).
+	return diag.New(diag.Error, fmt.Sprintf("type checking unavailable for %s", scope)).
 		Primary(diag.Span{Start: pos, End: pos}, "").
-		Note("the generated Go selfhost checker bridge was removed; wire a replacement checker entrypoint").
+		Note("the generated selfhost checker and its bridge were removed").
 		Build()
 }
 
@@ -259,58 +219,4 @@ func isProviderStdlibPackage(ws *resolve.Workspace, path string, pkg *resolve.Pa
 		ws.Stdlib != nil &&
 		strings.HasPrefix(path, resolve.StdPrefix) &&
 		ws.Stdlib.LookupPackage(path) == pkg
-}
-
-var scalarByName = map[string]types.Type{
-	"Int":     types.Int,
-	"Int8":    types.Int8,
-	"Int16":   types.Int16,
-	"Int32":   types.Int32,
-	"Int64":   types.Int64,
-	"UInt8":   types.UInt8,
-	"UInt16":  types.UInt16,
-	"UInt32":  types.UInt32,
-	"UInt64":  types.UInt64,
-	"Byte":    types.Byte,
-	"Float":   types.Float,
-	"Float32": types.Float32,
-	"Float64": types.Float64,
-	"Bool":    types.Bool,
-	"Char":    types.Char,
-	"String":  types.String,
-	"Bytes":   types.Bytes,
-	"Never":   types.Never,
-}
-
-// syntheticBuiltinSym returns a process-wide Symbol that stands in for
-// a prelude builtin when constructing types outside any resolver
-// context. The cache guarantees identity across files.
-func syntheticBuiltinSym(name string) *resolve.Symbol {
-	if sym, ok := syntheticBuiltinsRead(name); ok {
-		return sym
-	}
-	sym := &resolve.Symbol{Name: name, Kind: resolve.SymBuiltin}
-	syntheticBuiltinsStore(name, sym)
-	return sym
-}
-
-var (
-	syntheticBuiltinsMu sync.RWMutex
-	syntheticBuiltins   = map[string]*resolve.Symbol{}
-)
-
-func syntheticBuiltinsRead(name string) (*resolve.Symbol, bool) {
-	syntheticBuiltinsMu.RLock()
-	defer syntheticBuiltinsMu.RUnlock()
-	sym, ok := syntheticBuiltins[name]
-	return sym, ok
-}
-
-func syntheticBuiltinsStore(name string, sym *resolve.Symbol) {
-	syntheticBuiltinsMu.Lock()
-	defer syntheticBuiltinsMu.Unlock()
-	if _, ok := syntheticBuiltins[name]; ok {
-		return
-	}
-	syntheticBuiltins[name] = sym
 }

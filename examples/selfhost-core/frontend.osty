@@ -1265,15 +1265,12 @@ pub fn frontStringStructureScan(
 
     let mut segmentStart = contentStart
     let mut skip = 0
-    let mut escaped = false
     for idx in contentStart..contentEnd {
         if skip > 0 {
             skip = skip - 1
         } else {
             let unit = frontUnitAt(units, idx)
-            if escaped {
-                escaped = false
-            } else if unit == "\\" {
+            if unit == "\\" {
                 let escape = frontEscapeScan(units, idx + 1, contentEnd)
                 if !(escape.ok) {
                     out.diagnostics.push(
@@ -1285,7 +1282,6 @@ pub fn frontStringStructureScan(
                     )
                     out.escapeErrors = out.escapeErrors + 1
                 }
-                escaped = true
                 skip = escape.consumed
             } else if unit == r"{" {
                 if idx > segmentStart {

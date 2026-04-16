@@ -3606,6 +3606,26 @@ pub struct GcHeap {
         if self.llvmBridgeTrace.handlesCreated < 0 || self.llvmBridgeTrace.handlesReleased < 0 || self.llvmBridgeTrace.rootRefsBound < 0 || self.llvmBridgeTrace.rootRefsReleased < 0 || self.llvmBridgeTrace.runtimeRootsAdded < 0 || self.llvmBridgeTrace.runtimeRootsRemoved < 0 || self.llvmBridgeTrace.handleLoads < 0 || self.llvmBridgeTrace.handleStores < 0 || self.llvmBridgeTrace.identityChecks < 0 || self.llvmBridgeTrace.staleHandleLoads < 0 || self.llvmBridgeTrace.loweredAllocations < 0 || self.llvmBridgeTrace.loweredStores < 0 {
             return Err("llvm bridge trace has negative accounting")
         }
+        if self.llvmBridgeTrace.handlesReleased > self.llvmBridgeTrace.handlesCreated {
+            return Err("llvm bridge released more handles than it created")
+        }
+        if self.llvmBridgeTrace.rootRefsReleased > self.llvmBridgeTrace.rootRefsBound {
+            return Err("llvm bridge released more root refs than it bound")
+        }
+        if self.llvmBridgeTrace.runtimeRootsRemoved > self.llvmBridgeTrace.runtimeRootsAdded {
+            return Err("llvm bridge removed more runtime roots than it added")
+        }
+        if self.llvmHandleCount() != self.llvmBridgeTrace.handlesCreated {
+            return Err("llvm bridge handle creation count does not match table size")
+        }
+        if self.llvmRootRefCount() != self.llvmBridgeTrace.rootRefsBound {
+            return Err("llvm bridge root ref bind count does not match table size")
+        }
+        let expectedRuntimeRoots = self.llvmBridgeTrace.runtimeRootsAdded - self.llvmBridgeTrace.runtimeRootsRemoved
+        if self.llvmRuntimeRootCount() != expectedRuntimeRoots {
+            return Err("llvm bridge runtime root count does not match accounting")
+        }
+        let mut releasedHandles = 0
         for (handle, entry) in self.llvmHandles {
             if handle != entry.handle {
                 return Err("llvm handle key/id mismatch: key={handle}, entry={entry.handle}")
@@ -3621,6 +3641,9 @@ pub struct GcHeap {
             }
             if entry.loads < 0 || entry.stores < 0 {
                 return Err("llvm handle {handle} has negative accounting")
+            }
+            if entry.released {
+                releasedHandles = releasedHandles + 1
             }
             if entry.released && (entry.rooted || entry.pinned) {
                 return Err("released llvm handle {handle} still has live flags")
@@ -3645,6 +3668,10 @@ pub struct GcHeap {
                 }
             }
         }
+        if releasedHandles != self.llvmBridgeTrace.handlesReleased {
+            return Err("llvm bridge released handle count does not match table state")
+        }
+        let mut releasedRootRefs = 0
         for (rootRefId, rootRef) in self.llvmRootRefs {
             if rootRefId != rootRef.rootRefId {
                 return Err(
@@ -3664,6 +3691,9 @@ pub struct GcHeap {
             }
             if rootRef.pinned != (rootRef.kind == GcLlvmPinnedRoot && rootRef.alive) {
                 return Err("llvm root ref {rootRefId} has stale pin metadata")
+            }
+            if !(rootRef.alive) {
+                releasedRootRefs = releasedRootRefs + 1
             }
             if rootRef.alive {
                 if !(self.llvmHandles.containsKey(rootRef.handle)) {
@@ -3686,6 +3716,9 @@ pub struct GcHeap {
                     return Err("llvm pinned root ref {rootRefId} did not pin its object")
                 }
             }
+        }
+        if releasedRootRefs != self.llvmBridgeTrace.rootRefsReleased {
+            return Err("llvm bridge released root ref count does not match table state")
         }
         for objectId in self.llvmRuntimeRoots.toList() {
             if !(self.objects.containsKey(objectId)) {

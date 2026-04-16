@@ -441,6 +441,40 @@ fn testLargeTenuredAllocationRoutesToHumongousSpace() {
     testing.assertEq(heap.humongousBytes(), 64)
 }
 
+fn testValidateHeapRejectsTenuredFreeBlockOverlappingLiveObject() {
+    let mut heap = newGcHeap(testGcConfig())
+    let old = heap.allocateTenured(GcRecord, 16)
+    assertValid(heap)
+
+    heap.tenured.freeList.push(
+        GcFreeBlock {
+            address: intOr(heap.addressOf(old), -1),
+            size: 8,
+        },
+    )
+
+    let _ = testing.expectError(heap.validateHeap())
+}
+
+fn testValidateHeapRejectsHumongousFreeBlockOverlappingTenuredFreeBlock() {
+    let mut heap = newGcHeap(humongousSpaceGcConfig())
+    heap.nextAddress = 64
+    heap.tenured.freeList.push(
+        GcFreeBlock {
+            address: 16,
+            size: 16,
+        },
+    )
+    heap.humongous.freeList.push(
+        GcFreeBlock {
+            address: 16,
+            size: 16,
+        },
+    )
+
+    let _ = testing.expectError(heap.validateHeap())
+}
+
 fn testMajorCollectionReclaimsCycles() {
     let mut heap = newGcHeap(testGcConfig())
     assertValid(heap)
@@ -1241,6 +1275,145 @@ fn testHardeningReportAuditsBarriersAndBudgets() {
     testing.assert(contract.refSameUsesStableIdentity)
 }
 
+fn testHardeningReportFailsOnLoweredSlotMismatch() {
+    let mut heap = newGcHeap(testGcConfig())
+    let parent = heap.allocate(GcRecord, 16)
+    let child = heap.allocate(GcArray, 16)
+    testing.assert(heap.addRoot(parent))
+    match heap.lowerStructFieldStore(parent, 0, "child", child) {
+        Some(_) -> {},
+        None -> testing.fail("lowered field store failed"),
+    }
+    assertValid(heap)
+
+    if heap.objects.containsKey(parent) {
+        let entry = heap.objects[parent]
+        let emptyRefs: List<Int> = []
+        let mut next = entry
+        next.refs = emptyRefs
+        heap.objects.insert(parent, next)
+    } else {
+        testing.fail("missing parent object")
+    }
+
+    let audit = heap.barrierAudit()
+    testing.assertEq(audit.loweredSlots, 1)
+    testing.assertEq(audit.invalidObjectReferences, 0)
+    testing.assertEq(audit.missingOwnerRefs, 1)
+    testing.assertEq(audit.rememberedMismatches, 0)
+    testing.assert(!(audit.passed))
+
+    let thresholds = gcPerformanceThresholdsForProfile(GcThroughputFirstProfile)
+    let report = heap.hardeningReport(thresholds)
+    testing.assert(!(report.passed))
+    testing.assert(!(report.heapValid))
+    testing.assert(!(report.barrierAuditPassed))
+    testing.assert(report.performancePassed)
+    testing.assertEq(report.loweredSlots, 1)
+    testing.assert(report.validationMessage != "")
+}
+
+fn testHardeningReportFailsOnInvalidLoweredObjectReference() {
+    let mut heap = newGcHeap(testGcConfig())
+    let parent = heap.allocate(GcRecord, 16)
+    let child = heap.allocate(GcArray, 16)
+    testing.assert(heap.addRoot(parent))
+    match heap.lowerStructFieldStore(parent, 0, "child", child) {
+        Some(_) -> {},
+        None -> testing.fail("lowered field store failed"),
+    }
+    assertValid(heap)
+
+    let key = "struct.field:{parent}:0"
+    if heap.loweredPointerSlots.containsKey(key) {
+        let entry = heap.loweredPointerSlots[key]
+        let mut next = entry
+        next.objectId = 999
+        heap.loweredPointerSlots.insert(key, next)
+    } else {
+        testing.fail("missing lowered pointer slot")
+    }
+
+    let audit = heap.barrierAudit()
+    testing.assertEq(audit.loweredSlots, 1)
+    testing.assertEq(audit.invalidObjectReferences, 1)
+    testing.assertEq(audit.missingOwnerRefs, 0)
+    testing.assertEq(audit.rememberedMismatches, 0)
+    testing.assert(!(audit.passed))
+
+    let thresholds = gcPerformanceThresholdsForProfile(GcThroughputFirstProfile)
+    let report = heap.hardeningReport(thresholds)
+    testing.assert(!(report.passed))
+    testing.assert(!(report.heapValid))
+    testing.assert(!(report.barrierAuditPassed))
+    testing.assert(report.performancePassed)
+    testing.assertEq(report.loweredSlots, 1)
+    testing.assert(report.validationMessage != "")
+}
+
+fn testBarrierAuditDetectsRememberedMismatch() {
+    let mut heap = newGcHeap(testGcConfig())
+    let old = heap.allocateTenured(GcRecord, 16)
+    let young = heap.allocate(GcArray, 16)
+    testing.assert(heap.addRoot(old))
+    testing.assert(heap.link(old, young))
+    assertValid(heap)
+
+    if heap.objects.containsKey(old) {
+        let entry = heap.objects[old]
+        let mut next = entry
+        next.remembered = false
+        heap.objects.insert(old, next)
+    } else {
+        testing.fail("missing old object")
+    }
+
+    let audit = heap.barrierAudit()
+    testing.assertEq(audit.invalidObjectReferences, 0)
+    testing.assertEq(audit.missingOwnerRefs, 0)
+    testing.assertEq(audit.rememberedMismatches, 1)
+    testing.assert(!(audit.passed))
+
+    let thresholds = gcPerformanceThresholdsForProfile(GcThroughputFirstProfile)
+    let report = heap.hardeningReport(thresholds)
+    testing.assert(!(report.passed))
+    testing.assert(!(report.heapValid))
+    testing.assert(!(report.barrierAuditPassed))
+    testing.assert(report.performancePassed)
+}
+
+fn testHardeningReportFailsPerformanceThresholds() {
+    let mut heap = newGcHeap(testGcConfig())
+    let parent = heap.allocate(GcRecord, 16)
+    let child = heap.allocate(GcArray, 16)
+    testing.assert(heap.addRoot(parent))
+    match heap.lowerStructFieldStore(parent, 0, "child", child) {
+        Some(_) -> {},
+        None -> testing.fail("lowered field store failed"),
+    }
+    let _ = heap.majorCollect()
+    assertValid(heap)
+
+    let baseline = heap.performanceReport(gcPerformanceThresholdsForProfile(GcThroughputFirstProfile))
+    testing.assert(baseline.liveBytes > 0)
+    let thresholds = GcPerformanceThresholds {
+        maxPauseUnits: baseline.pauseUnits,
+        maxFragmentedBytes: 1024,
+        maxLiveBytes: baseline.liveBytes - 1,
+        maxRememberedObjects: 64,
+        maxDirtyCards: 64,
+    }
+
+    let performance = heap.performanceReport(thresholds)
+    testing.assertEq(performance.pauseUnits, baseline.pauseUnits)
+    testing.assert(!(performance.passed))
+
+    let report = heap.hardeningReport(thresholds)
+    testing.assert(!(report.passed))
+    testing.assert(report.heapValid)
+    testing.assert(report.barrierAuditPassed)
+    testing.assert(!(report.performancePassed))
+}
 fn testLlvmHandleTablePreservesIdentityAcrossCompaction() {
     let mut heap = newGcHeap(testGcConfig())
     let dead = heap.allocate(GcBytes, 16)
@@ -1355,6 +1528,21 @@ fn testValidateHeapRejectsLlvmPinnedRootWithoutPinnedHandle() {
     } else {
         testing.fail("missing llvm handle")
     }
+
+    let _ = testing.expectError(heap.validateHeap())
+}
+
+fn testValidateHeapRejectsLlvmBridgeRuntimeRootAccountingMismatch() {
+    let mut heap = newGcHeap(testGcConfig())
+    let handle = heap.allocateLlvmHandle(GcRecord, 24, "llvm.accounting")
+    let rootRef = intOr(heap.bindLlvmRootRef(handle, GcLlvmStackRoot, "accounting.root"), -1)
+    assertValid(heap)
+
+    testing.assert(handle > 0)
+    testing.assert(rootRef > 0)
+    let mut trace = heap.llvmBridgeTrace
+    trace.runtimeRootsAdded = 0
+    heap.llvmBridgeTrace = trace
 
     let _ = testing.expectError(heap.validateHeap())
 }
@@ -1476,6 +1664,31 @@ fn testEvacuationRecordsForwardingForMovedObjects() {
     testing.assertEq(heap.lastEvacuationForwardedObjects(), 2)
     testing.assertEq(heap.lastEvacuationBytesCopied(), 32)
     testing.assert(heap.lastRemapVerified())
+}
+
+fn testValidateHeapRejectsForwardingTableMismatch() {
+    let mut heap = newGcHeap(testGcConfig())
+    let dead = heap.allocate(GcBytes, 16)
+    let first = heap.allocate(GcRecord, 20)
+    let second = heap.allocate(GcArray, 12)
+    testing.assert(heap.addRoot(first))
+    testing.assert(heap.addRoot(second))
+    assertValid(heap)
+
+    let _ = dead
+    let _ = heap.majorCollect()
+    assertValid(heap)
+
+    if heap.forwarding.containsKey(first) {
+        let entry = heap.forwarding[first]
+        let mut next = entry
+        next.toAddress = entry.toAddress + 4
+        heap.forwarding.insert(first, next)
+    } else {
+        testing.fail("missing forwarding entry")
+    }
+
+    let _ = testing.expectError(heap.validateHeap())
 }
 
 fn testRootAndObjectRemapTraceCoversForwardedHandles() {
@@ -1990,6 +2203,31 @@ fn testClosureDescriptorRejectsInvalidCaptures() {
     assertValid(heap)
 }
 
+fn testValidateHeapRejectsClosureCaptureRefMismatch() {
+    let mut heap = newGcHeap(testGcConfig())
+    let closure = heap.allocate(GcClosure, 24)
+    let first = heap.allocate(GcRecord, 16)
+    let second = heap.allocate(GcArray, 16)
+    let captures: List<GcClosureCapture> = [
+        gcValueCapture(0, "first", first),
+        gcValueCapture(1, "second", second),
+    ]
+    testing.assert(heap.installClosureEnvironment(closure, "brokenClosure", captures))
+    assertValid(heap)
+
+    if heap.objects.containsKey(closure) {
+        let entry = heap.objects[closure]
+        let brokenRefs: List<Int> = [first, first]
+        let mut next = entry
+        next.refs = brokenRefs
+        heap.objects.insert(closure, next)
+    } else {
+        testing.fail("missing closure object")
+    }
+
+    let _ = testing.expectError(heap.validateHeap())
+}
+
 fn testSuspendedAsyncFrameKeepsRootsUntilResume() {
     let mut heap = newGcHeap(testGcConfig())
     let frame = heap.allocate(GcRuntimeFrame, 32)
@@ -2025,6 +2263,66 @@ fn testSuspendedAsyncFrameKeepsRootsUntilResume() {
     testing.assertEq(heap.asyncFrameCount(), 1)
     testing.assertEq(heap.suspendedAsyncFrameCount(), 0)
     testing.assertEq(heap.asyncFrameRootCount(), 0)
+}
+
+fn testValidateHeapRejectsInactiveAsyncFrameRetainingRoots() {
+    let mut heap = newGcHeap(testGcConfig())
+    let frame = heap.allocate(GcRuntimeFrame, 32)
+    let payload = heap.allocate(GcRecord, 16)
+    let roots: List<Int> = [payload]
+    testing.assert(heap.suspendAsyncFrame(81, "task.inactive-corrupt", 6, frame, roots))
+    assertValid(heap)
+
+    if heap.asyncFrames.containsKey(81) {
+        let entry = heap.asyncFrames[81]
+        let mut next = entry
+        next.state = GcAsyncFrameRunning
+        heap.asyncFrames.insert(81, next)
+    } else {
+        testing.fail("missing async frame")
+    }
+
+    let _ = testing.expectError(heap.validateHeap())
+}
+
+fn testValidateHeapRejectsSuspendedAsyncFrameWithInvalidSafepoint() {
+    let mut heap = newGcHeap(testGcConfig())
+    let frame = heap.allocate(GcRuntimeFrame, 32)
+    let payload = heap.allocate(GcRecord, 16)
+    let roots: List<Int> = [payload]
+    testing.assert(heap.suspendAsyncFrame(82, "task.bad-safepoint", 7, frame, roots))
+    assertValid(heap)
+
+    if heap.asyncFrames.containsKey(82) {
+        let entry = heap.asyncFrames[82]
+        let mut next = entry
+        next.safepointId = 0
+        heap.asyncFrames.insert(82, next)
+    } else {
+        testing.fail("missing async frame")
+    }
+
+    let _ = testing.expectError(heap.validateHeap())
+}
+
+fn testValidateHeapRejectsSuspendedAsyncFrameMissingFrameObject() {
+    let mut heap = newGcHeap(testGcConfig())
+    let frame = heap.allocate(GcRuntimeFrame, 32)
+    let payload = heap.allocate(GcRecord, 16)
+    let roots: List<Int> = [payload]
+    testing.assert(heap.suspendAsyncFrame(83, "task.missing-frame", 9, frame, roots))
+    assertValid(heap)
+
+    if heap.asyncFrames.containsKey(83) {
+        let entry = heap.asyncFrames[83]
+        let mut next = entry
+        next.frameObjectId = -1
+        heap.asyncFrames.insert(83, next)
+    } else {
+        testing.fail("missing async frame")
+    }
+
+    let _ = testing.expectError(heap.validateHeap())
 }
 
 fn testAsyncFrameAddedDuringIncrementalMarkingIsShaded() {
@@ -2171,6 +2469,31 @@ fn testAsyncFrameRootOverwriteDropsOldSnapshotRoot() {
     testing.assert(!(heap.contains(first)))
     testing.assert(heap.contains(second))
     testing.assertEq(stats.reclaimedObjects, 1)
+}
+
+fn testValidateHeapRejectsAsyncFrameRootSlotMissingSnapshotRoot() {
+    let mut heap = newGcHeap(testGcConfig())
+    let frame = heap.allocate(GcRuntimeFrame, 32)
+    let payload = heap.allocate(GcClosure, 24)
+    let roots: List<Int> = []
+    testing.assert(heap.suspendAsyncFrame(79, "task.corrupt", 5, frame, roots))
+
+    match heap.lowerAsyncFrameRootStore(79, 1, "root.payload", payload) {
+        Some(_) -> {},
+        None -> testing.fail("async frame root lowering failed"),
+    }
+    assertValid(heap)
+
+    if heap.asyncFrames.containsKey(79) {
+        let entry = heap.asyncFrames[79]
+        let mut next = entry
+        next.roots = []
+        heap.asyncFrames.insert(79, next)
+    } else {
+        testing.fail("missing async frame")
+    }
+
+    let _ = testing.expectError(heap.validateHeap())
 }
 
 fn testSafepointPlanValidatesPreciseLiveRoots() {
