@@ -1191,6 +1191,16 @@ func llvmIntBinaryInstruction(op string) string {
 		return "sdiv"
 	case "%":
 		return "srem"
+	case "&":
+		return "and"
+	case "|":
+		return "or"
+	case "^":
+		return "xor"
+	case "<<":
+		return "shl"
+	case ">>":
+		return "ashr"
 	default:
 		return ""
 	}

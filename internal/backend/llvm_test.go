@@ -375,6 +375,33 @@ fn main() {
 	}
 }
 
+func TestLLVMBackendBinaryRunsBitwiseIntOps(t *testing.T) {
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
+
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitBinary, `fn main() {
+    println(~-43)
+    println((1 << 5) | (1 << 3) | 2)
+    println((255 >> 2) ^ 21)
+    println(58 & 43)
+}
+`)
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	output, err := exec.Command(result.Artifacts.Binary).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
+	}
+	if got, want := string(output), "42\n42\n42\n42\n"; got != want {
+		t.Fatalf("binary stdout = %q, want %q", got, want)
+	}
+}
+
 func TestLLVMBackendBinaryMutReceiverMethodWritesBackToCaller(t *testing.T) {
 	if _, err := exec.LookPath("clang"); err != nil {
 		t.Skip("clang not found on PATH")
