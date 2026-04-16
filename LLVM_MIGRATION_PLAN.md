@@ -265,13 +265,19 @@ artifact/cache layout 정책은 [`LLVM_ARTIFACT_LAYOUT.md`](./LLVM_ARTIFACT_LAYO
     등 모든 NamedType slot을 재작성, dedupe 키는 fn 네임스페이스와
     분리 (`MonomorphTypeDedupeKey`). Struct LLVM smoke 통과:
     `TestGenerateModuleGenericStructPairMonomorphized`
-    (mangled nominal 타입이 aggregate로 emit). Enum variant-call E2E
-    smoke는 llvmgen의 legacy variant-lowering이 mangled enum 이름을
-    처리하도록 확장되기 전까지 skipped 상태로 두며 IR-level 테스트
-    `TestMonomorphizeGenericEnumSpecialization`이 행동을 잠근다.
-  - 남은 범위: generic interface 선언, method-local generic parameter,
-    bare function-pointer turbofish (`let f = id::<Int>`),
-    llvmgen enum variant-call lowering의 mangled 이름 지원.
+    (mangled nominal 타입이 aggregate로 emit).
+  - Phase 3(generic enum variant-call 경로)는 main의 독립 구현
+    (`isUnresolvedType` + `inferVariantLiteralType` + `enumVariantFieldExpr`)이
+    checker의 `*ErrType` 누락을 보완해 `Maybe.Some(42)` 같은 variant
+    constructor가 `Maybe<Int>`로 풀리도록 한다. Payload-free
+    (`Maybe.None`)은 let/scrutinee context에서 type을 전파한다.
+  - Phase 4(struct/enum method-local generic parameter)도 IR 단계에서
+    구현되어 있다: `_Z<templateArgs>E` 접미사 mangling 트랙, fn/type/method
+    worklist 세 개를 인터리브 drain, emit 시점에 receiverEnv ⊕ methodEnv를
+    머지. 원본 generic method는 Pass 6이 출력에서 제거한다. smoke:
+    `TestGenerateModuleMethodLocalGenericGetMonomorphized`.
+  - 남은 범위: generic interface 선언, interface-value vtable dispatch,
+    bare function-pointer turbofish (`let f = id::<Int>`).
 - workspace/dependency graph를 codegen/link order로 변환한다.
 - `use go` FFI는 LLVM backend에서 그대로 지원하기 어렵기 때문에 새 FFI 정책을
   정한다.

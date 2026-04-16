@@ -294,6 +294,51 @@ pub fn monomorphShouldInstantiate(typeArgsLen: Int, fnGenericsLen: Int) -> Bool 
     typeArgsLen > 0 && typeArgsLen == fnGenericsLen
 }
 
+/// MonomorphMethodRequest drives Phase 4: the method-local portion of
+/// a specialization symbol. The owner prefix is NOT included here —
+/// the LLVM backend appends it automatically via `llvmMethodIRName`
+/// (`{owner}__{method}`). This request only produces the method-local
+/// tail so the final symbol is `{ownerMangled}__{methodMangled}`.
+pub struct MonomorphMethodRequest {
+    pub ownerMangled: String,
+    pub methodName: String,
+    pub typeArgCodes: List<String>,
+}
+
+/// monomorphMangleMethodName produces the method-local portion of a
+/// specialized method symbol. Template args use the same Itanium
+/// `I<codes>E` wrapper as free-fn symbols, preceded by `_Z` so the
+/// marker remains distinguishable from plain method names. An empty
+/// typeArgCodes list yields the input name unchanged so callers that
+/// accidentally route a non-generic method through here stay safe.
+pub fn monomorphMangleMethodName(methodName: String, typeArgCodes: List<String>) -> String {
+    if typeArgCodes.len() == 0 {
+        return methodName
+    }
+    let targs = monomorphTemplateArgs(typeArgCodes)
+    "{methodName}_Z{targs}"
+}
+
+/// monomorphMangleMethod wraps monomorphMangleMethodName in the shared
+/// MonomorphMangled return shape so Go callers see the same API as
+/// free-fn / type mangling.
+pub fn monomorphMangleMethod(req: MonomorphMethodRequest) -> MonomorphMangled {
+    let symbol = monomorphMangleMethodName(req.methodName, req.typeArgCodes)
+    MonomorphMangled { symbol }
+}
+
+/// monomorphMethodDedupeKey scopes method specialization identity by
+/// owner (already mangled by the caller), method source name, and its
+/// concrete type-arg codes. The extra `method` segment keeps the key
+/// disjoint from the fn/type namespaces.
+pub fn monomorphMethodDedupeKey(ownerMangled: String, methodName: String, typeArgCodes: List<String>) -> String {
+    let mut key = "{ownerMangled}\u{1f}method\u{1f}{methodName}"
+    for c in typeArgCodes {
+        key = "{key}\u{1f}{c}"
+    }
+    key
+}
+
 /// stringByteLength returns the UTF-8 byte length of a string. Matches
 /// std.strings.len's implementation so the Itanium length prefix agrees
 /// with what a demangler expects.

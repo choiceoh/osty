@@ -45,13 +45,24 @@ func Monomorphize(mod *Module) (*Module, []error) {
 		genericStructsByName: map[string]*StructDecl{},
 		genericEnumsByName:   map[string]*EnumDecl{},
 		typeSeen:             map[string]string{},
+		structsByName:        map[string]*StructDecl{},
+		enumsByName:          map[string]*EnumDecl{},
+		structsByMangled:     map[string]*StructDecl{},
+		enumsByMangled:       map[string]*EnumDecl{},
+		originalStructOf:     map[string]*StructDecl{},
+		originalEnumOf:       map[string]*EnumDecl{},
+		receiverEnvOf:        map[string]SubstEnv{},
+		methodSeen:           map[string]string{},
 	}
 
 	// Pass 1: index every generic top-level declaration so the scanner
 	// can resolve references against the original forms without
 	// revisiting mod.Decls for each call/type site. Generic free fns go
 	// in genericsByName; generic struct/enum declarations go in
-	// genericStructsByName / genericEnumsByName (Phase 2).
+	// genericStructsByName / genericEnumsByName (Phase 2). Every struct
+	// and enum is *also* registered in structsByName / enumsByName so
+	// Phase 4 method-specialization can resolve an owner from a bare
+	// source name (non-generic owner path).
 	for _, d := range mod.Decls {
 		switch x := d.(type) {
 		case *FnDecl:
@@ -59,10 +70,12 @@ func Monomorphize(mod *Module) (*Module, []error) {
 				state.genericsByName[x.Name] = x
 			}
 		case *StructDecl:
+			state.structsByName[x.Name] = x
 			if len(x.Generics) > 0 {
 				state.genericStructsByName[x.Name] = x
 			}
 		case *EnumDecl:
+			state.enumsByName[x.Name] = x
 			if len(x.Generics) > 0 {
 				state.genericEnumsByName[x.Name] = x
 			}
@@ -80,6 +93,14 @@ func Monomorphize(mod *Module) (*Module, []error) {
 		}
 		out := cloneDecl(d)
 		state.out.Decls = append(state.out.Decls, out)
+		// Phase 4: register the cloned non-generic owner so method
+		// specialization can append onto the output struct/enum directly.
+		switch cp := out.(type) {
+		case *StructDecl:
+			state.structsByName[cp.Name] = cp
+		case *EnumDecl:
+			state.enumsByName[cp.Name] = cp
+		}
 		state.scanDecl(out)
 	}
 	state.pushLocalTypeScope()
@@ -90,11 +111,13 @@ func Monomorphize(mod *Module) (*Module, []error) {
 	}
 	state.popLocalTypeScope()
 
-	// Pass 3+4 (interleaved): drain both queues until neither grows.
-	// Emitting a specialization may discover further generic call sites
-	// (grows fn queue) or generic type references (grows type queue),
-	// so we loop until both reach a fixed point.
-	for len(state.queue) > 0 || len(state.typeQueue) > 0 {
+	// Pass 3+4+5 (interleaved): drain all three queues until none grows.
+	// Emitting a fn specialization may discover generic call sites
+	// (grows fn queue) or generic type references (grows type queue);
+	// emitting a type specialization may discover generic method calls
+	// (grows method queue). We loop until every queue reaches its fixed
+	// point.
+	for len(state.queue) > 0 || len(state.typeQueue) > 0 || len(state.methodQueue) > 0 {
 		for i := 0; i < len(state.queue); i++ {
 			state.emitSpecialization(state.queue[i])
 		}
@@ -103,7 +126,17 @@ func Monomorphize(mod *Module) (*Module, []error) {
 			state.emitTypeSpecialization(state.typeQueue[i])
 		}
 		state.typeQueue = state.typeQueue[:0]
+		for i := 0; i < len(state.methodQueue); i++ {
+			state.emitMethodSpecialization(state.methodQueue[i])
+		}
+		state.methodQueue = state.methodQueue[:0]
 	}
+
+	// Pass 6: drop any preserved generic methods left on struct/enum
+	// specializations. These originals served as templates for
+	// `rewriteGenericMethodCall`; the concrete specializations have
+	// already been appended to their owners' Methods lists.
+	state.dropPreservedGenericMethods()
 
 	return state.out, state.errs
 }
@@ -152,6 +185,51 @@ type monoState struct {
 	// concrete function or script body so unresolved Idents can recover
 	// a type from an earlier let-binding.
 	localTypeScopes []map[string]Type
+
+	// Phase 4: method-specialization bookkeeping.
+	//
+	// structsByName / enumsByName index every owner (generic AND
+	// non-generic) by source name. After Pass 2 the non-generic entries
+	// point at the *output* clones so method-specialization emitters can
+	// append directly onto the emitted struct/enum.
+	structsByName map[string]*StructDecl
+	enumsByName   map[string]*EnumDecl
+	// structsByMangled / enumsByMangled index emitted specialization
+	// clones by their mangled nominal symbol (`_ZTSN…E`).
+	structsByMangled map[string]*StructDecl
+	enumsByMangled   map[string]*EnumDecl
+	// originalStructOf / originalEnumOf map a mangled nominal back to
+	// the original generic declaration in the input module so method
+	// specialization can find the still-generic method template.
+	originalStructOf map[string]*StructDecl
+	originalEnumOf   map[string]*EnumDecl
+	// receiverEnvOf remembers the owner-level substitution env used
+	// when the nominal specialization was emitted. Method bodies may
+	// reference receiver-level TypeVars, so method specialization
+	// substitutes both envs at once.
+	receiverEnvOf map[string]SubstEnv
+	// methodSeen maps MonomorphMethodDedupeKey(ownerMangled, method, args)
+	// to the mangled method-local name.
+	methodSeen map[string]string
+	// methodQueue is the worklist of pending method specializations.
+	methodQueue []monoMethodInstance
+}
+
+// monoMethodInstance is one pending method specialization. ownerKind
+// selects the struct (0) / enum (1) bucket used at emit time to look
+// the final owner clone up in structsByMangled / enumsByMangled (with
+// a fallback to structsByName / enumsByName for non-generic owners).
+// Both the ref and the receiver-level env are resolved at emit time so
+// a method request can be queued before its owner has been emitted.
+// methodEnv holds the method-local substitution (U → concrete, …);
+// the receiver-level env is fetched from receiverEnvOf during emit and
+// merged on top.
+type monoMethodInstance struct {
+	ownerKind         int // 0=struct, 1=enum
+	ownerMangled      string
+	origMethod        *FnDecl
+	mangledMethodName string
+	methodEnv         SubstEnv
 }
 
 // monoInstance is one pending free-fn specialization.
@@ -270,6 +348,11 @@ func (s *monoState) requestStructType(decl *StructDecl, typeArgs []Type) string 
 	// that requests the same specialization from inside the emitter hits
 	// the seen cache and terminates instead of looping.
 	s.typeSeen[key] = mangled
+	// Phase 4: expose the mangled→original mapping as soon as the
+	// request is recognized so method-call rewriting that happens
+	// before the owner specialization has actually been emitted still
+	// resolves its owner through originalStructOf.
+	s.originalStructOf[mangled] = decl
 	s.typeQueue = append(s.typeQueue, monoTypeInstance{
 		structDecl: decl,
 		typeArgs:   append([]Type(nil), typeArgs...),
@@ -306,6 +389,8 @@ func (s *monoState) requestEnumType(decl *EnumDecl, typeArgs []Type) string {
 	req := NewMonomorphTypeRequest(s.pkg, decl.Name, typeArgCodes)
 	mangled := MonomorphMangleType(req).Symbol()
 	s.typeSeen[key] = mangled
+	// Phase 4: see requestStructType for the rationale.
+	s.originalEnumOf[mangled] = decl
 	s.typeQueue = append(s.typeQueue, monoTypeInstance{
 		enumDecl: decl,
 		typeArgs: append([]Type(nil), typeArgs...),
@@ -347,6 +432,11 @@ func (s *monoState) emitStructSpecialization(rec monoTypeInstance) {
 	}
 	clone.Methods = s.keepNonGenericMethods(clone.Name, clone.Methods)
 	s.out.Decls = append(s.out.Decls, clone)
+	// Phase 4: record the mangled nominal ↔ original/clone mapping so
+	// method-specialization can resolve owners and substitute properly.
+	s.structsByMangled[clone.Name] = clone
+	s.originalStructOf[clone.Name] = rec.structDecl
+	s.receiverEnvOf[clone.Name] = env
 }
 
 // emitEnumSpecialization is the enum counterpart of emitStructSpecialization.
@@ -366,6 +456,10 @@ func (s *monoState) emitEnumSpecialization(rec monoTypeInstance) {
 	}
 	clone.Methods = s.keepNonGenericMethods(clone.Name, clone.Methods)
 	s.out.Decls = append(s.out.Decls, clone)
+	// Phase 4: mirror the struct index (see emitStructSpecialization).
+	s.enumsByMangled[clone.Name] = clone
+	s.originalEnumOf[clone.Name] = rec.enumDecl
+	s.receiverEnvOf[clone.Name] = env
 }
 
 // rewriteType walks a Type tree top-down rewriting every generic
@@ -556,29 +650,261 @@ func (s *monoState) rewriteExprType(e Expr) {
 // (method-local generics are Phase 3+ scope). Surviving methods have
 // their bodies scanned so any nested generic call sites they contain
 // still drive the worklist.
+// keepNonGenericMethods processes a specialization's methods.
+// Phase 4: method-local generic methods are *preserved* as templates
+// for `rewriteGenericMethodCall`; they are dropped from the final
+// output by `dropPreservedGenericMethods` once all call sites have
+// been rewritten. Non-generic methods are rewritten + scanned in
+// place as before.
 func (s *monoState) keepNonGenericMethods(owner string, methods []*FnDecl) []*FnDecl {
 	if len(methods) == 0 {
 		return methods
 	}
-	kept := methods[:0]
 	for _, m := range methods {
 		if m == nil {
 			continue
 		}
 		if len(m.Generics) > 0 {
-			s.addErr("monomorph: method %s.%s has method-local generics; skipped (Phase 3+ scope)",
-				owner, m.Name)
+			// Preserve — a concrete specialization may need this
+			// method body as a template during method-queue drain.
+			// Scanning the body now would walk TypeVar-carrying
+			// expressions and trip `containsTypeVar`.
 			continue
 		}
-		// Rewrite the post-substitution signature so any user-generic
-		// references surviving `SubstituteTypes` (nested or built-in
-		// wrapping like `Option<Pair<T, T>>`) become mangled symbols,
-		// then scan the body for call/type sites nested inside.
 		s.rewriteFnSignature(m)
 		s.scanFnBody(m)
-		kept = append(kept, m)
 	}
-	return kept
+	return methods
+}
+
+// mergeEnv builds a SubstEnv that stacks the method-local bindings on
+// top of the receiver-level bindings. Method-local names override
+// when they collide (user-visible shadowing).
+func mergeEnv(receiver, method SubstEnv) SubstEnv {
+	if len(receiver) == 0 && len(method) == 0 {
+		return SubstEnv{}
+	}
+	out := make(SubstEnv, len(receiver)+len(method))
+	for k, v := range receiver {
+		out[k] = v
+	}
+	for k, v := range method {
+		out[k] = v
+	}
+	return out
+}
+
+// extractOwnerNominal peels Optional wrappers off a Type to find the
+// enclosing NamedType name. Returns "" for types that don't resolve to
+// a nominal owner (function pointers, tuples, etc.) — callers should
+// treat that as "not a method-on-nominal" and bail.
+func extractOwnerNominal(t Type) string {
+	for {
+		switch x := t.(type) {
+		case *NamedType:
+			return x.Name
+		case *OptionalType:
+			t = x.Inner
+		default:
+			return ""
+		}
+	}
+}
+
+// resolveOwner turns an owner nominal (either the mangled `_ZTSN…E`
+// symbol of a requested/emitted specialization, or a bare source name
+// like `Box` for a non-generic owner) into:
+//   - ownerKind: 0 = struct, 1 = enum
+//   - ownerMangled: canonical owner identifier (same as nominal)
+//   - origStruct / origEnum: the original declaration whose method
+//     should be cloned as the specialization template
+//   - receiverEnv: the substitution env that produced the owner
+//     specialization (nil for non-generic owners)
+//
+// Returns ok=false when the nominal doesn't match any known owner.
+// Importantly this succeeds for mangled nominals even before the
+// owner specialization has been emitted, because requestStructType /
+// requestEnumType populate originalStructOf / originalEnumOf as soon
+// as the request is queued.
+func (s *monoState) resolveOwner(nominal string) (
+	ownerKind int,
+	ownerMangled string,
+	origStruct *StructDecl,
+	origEnum *EnumDecl,
+	receiverEnv SubstEnv,
+	ok bool,
+) {
+	if nominal == "" {
+		return
+	}
+	if orig, has := s.originalStructOf[nominal]; has {
+		return 0, nominal, orig, nil, s.receiverEnvOf[nominal], true
+	}
+	if orig, has := s.originalEnumOf[nominal]; has {
+		return 1, nominal, nil, orig, s.receiverEnvOf[nominal], true
+	}
+	if sd, has := s.structsByName[nominal]; has {
+		return 0, nominal, sd, nil, nil, true
+	}
+	if ed, has := s.enumsByName[nominal]; has {
+		return 1, nominal, nil, ed, nil, true
+	}
+	return
+}
+
+// findMethod returns the first method with the given source name, or
+// nil. Used by `rewriteGenericMethodCall` to recover the original
+// generic method template for a call site.
+func findMethod(methods []*FnDecl, name string) *FnDecl {
+	for _, m := range methods {
+		if m != nil && m.Name == name {
+			return m
+		}
+	}
+	return nil
+}
+
+// rewriteGenericMethodCall handles the Phase 4 method-call path. When
+// a MethodCall carries method-local type args, we resolve the owner,
+// find the generic method template, and enqueue a specialization. The
+// call site is then rewritten to point at the mangled method-local
+// symbol so the LLVM backend sees a non-generic method.
+//
+// This must be called AFTER the receiver has been scanned so
+// receiver.Type() reflects any type-level rewrite (generic owner →
+// mangled nominal).
+func (s *monoState) rewriteGenericMethodCall(c *MethodCall) {
+	if c == nil || len(c.TypeArgs) == 0 || c.Receiver == nil {
+		return
+	}
+	nominal := extractOwnerNominal(c.Receiver.Type())
+	if nominal == "" {
+		return
+	}
+	kind, ownerMangled, origStruct, origEnum, receiverEnv, ok := s.resolveOwner(nominal)
+	if !ok {
+		return
+	}
+	var origMethods []*FnDecl
+	switch {
+	case origStruct != nil:
+		origMethods = origStruct.Methods
+	case origEnum != nil:
+		origMethods = origEnum.Methods
+	}
+	origMethod := findMethod(origMethods, c.Name)
+	if origMethod == nil {
+		return
+	}
+	if len(origMethod.Generics) == 0 {
+		// Call had type args but the declared method has no method-local
+		// generics. Let the existing non-generic path through.
+		return
+	}
+	if !MonomorphShouldInstantiate(len(c.TypeArgs), len(origMethod.Generics)) {
+		s.addErr("monomorph: arity mismatch for method %s.%s: %d type args vs %d generics",
+			ownerMangled, origMethod.Name, len(c.TypeArgs), len(origMethod.Generics))
+		return
+	}
+	for i, ta := range c.TypeArgs {
+		if containsTypeVar(ta) {
+			s.addErr("monomorph: type arg %d of method %s.%s still contains a type variable (%s)",
+				i, ownerMangled, origMethod.Name, typeString(ta))
+			return
+		}
+	}
+	typeArgCodes := make([]string, len(c.TypeArgs))
+	for i, ta := range c.TypeArgs {
+		typeArgCodes[i] = typeCodeOf(ta, s.pkg)
+	}
+	key := MonomorphMethodDedupeKey(ownerMangled, origMethod.Name, typeArgCodes)
+	mangledMethod, seen := s.methodSeen[key]
+	if !seen {
+		req := NewMonomorphMethodRequest(ownerMangled, origMethod.Name, typeArgCodes)
+		mangledMethod = MonomorphMangleMethod(req).Symbol()
+		s.methodSeen[key] = mangledMethod
+		s.methodQueue = append(s.methodQueue, monoMethodInstance{
+			ownerKind:         kind,
+			ownerMangled:      ownerMangled,
+			origMethod:        origMethod,
+			mangledMethodName: mangledMethod,
+			methodEnv:         buildSubstEnv(origMethod.Generics, c.TypeArgs),
+		})
+	}
+	_ = receiverEnv // receiverEnv is resolved at emit time via receiverEnvOf
+	c.Name = mangledMethod
+	c.TypeArgs = nil
+}
+
+// emitMethodSpecialization materializes one queued method instance.
+// The original generic method is cloned, type-substituted through the
+// merged receiver+method env, rewritten, and appended onto the owner
+// specialization's Methods list so the LLVM backend dispatches to it
+// just like any other concrete method. The owner clone is looked up
+// here (rather than at request time) so methods queued before their
+// owner specialization has emitted still land on the correct decl.
+func (s *monoState) emitMethodSpecialization(rec monoMethodInstance) {
+	if rec.origMethod == nil {
+		return
+	}
+	clone := cloneFnDecl(rec.origMethod)
+	clone.Name = rec.mangledMethodName
+	clone.Generics = nil
+	// Resolve the owner-level env *now* so a method call that was
+	// queued before the owner specialization existed picks up the
+	// receiver substitution that the owner emitter has since recorded.
+	fullEnv := mergeEnv(s.receiverEnvOf[rec.ownerMangled], rec.methodEnv)
+	SubstituteTypes(clone, fullEnv)
+	s.rewriteFnSignature(clone)
+	s.scanFnBody(clone)
+	switch rec.ownerKind {
+	case 0:
+		if sd := s.structsByMangled[rec.ownerMangled]; sd != nil {
+			sd.Methods = append(sd.Methods, clone)
+			return
+		}
+		if sd := s.structsByName[rec.ownerMangled]; sd != nil {
+			sd.Methods = append(sd.Methods, clone)
+		}
+	case 1:
+		if ed := s.enumsByMangled[rec.ownerMangled]; ed != nil {
+			ed.Methods = append(ed.Methods, clone)
+			return
+		}
+		if ed := s.enumsByName[rec.ownerMangled]; ed != nil {
+			ed.Methods = append(ed.Methods, clone)
+		}
+	}
+}
+
+// dropPreservedGenericMethods removes any method-local generic methods
+// that survived until after the worklist drained. These were kept on
+// the owner's Methods list as templates for rewriteGenericMethodCall;
+// they must not leak into the final IR because the LLVM backend
+// rejects methods carrying generic parameters.
+func (s *monoState) dropPreservedGenericMethods() {
+	for _, d := range s.out.Decls {
+		switch x := d.(type) {
+		case *StructDecl:
+			x.Methods = filterOutGenericMethods(x.Methods)
+		case *EnumDecl:
+			x.Methods = filterOutGenericMethods(x.Methods)
+		}
+	}
+}
+
+func filterOutGenericMethods(methods []*FnDecl) []*FnDecl {
+	out := methods[:0]
+	for _, m := range methods {
+		if m == nil {
+			continue
+		}
+		if len(m.Generics) > 0 {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 // emitSpecialization materializes one queued free-fn instance: clones
@@ -616,6 +942,11 @@ func (s *monoState) scanDecl(d Decl) {
 			}
 		}
 		for _, m := range d.Methods {
+			// Phase 4: method-local generic methods stay preserved as
+			// templates. Scanning their body would walk TypeVars.
+			if m == nil || len(m.Generics) > 0 {
+				continue
+			}
 			s.rewriteFnSignature(m)
 			s.scanFnBody(m)
 		}
@@ -629,6 +960,9 @@ func (s *monoState) scanDecl(d Decl) {
 			}
 		}
 		for _, m := range d.Methods {
+			if m == nil || len(m.Generics) > 0 {
+				continue
+			}
 			s.rewriteFnSignature(m)
 			s.scanFnBody(m)
 		}
@@ -1093,12 +1427,16 @@ func (s *monoState) scanExpr(e Expr) {
 			s.scanExpr(e.Args[i].Value)
 		}
 	case *MethodCall:
-		// Generic method monomorphization is out of scope for Phase 1.
-		// Non-generic method calls still need their args walked for
-		// generic calls nested inside.
+		// Phase 4: rewrite the call site to a mangled method
+		// specialization when method-local type args are present.
+		// Walk receiver/args FIRST so their types end up in mangled
+		// form before we peek at receiver.Type() to resolve the owner.
 		s.scanExpr(e.Receiver)
 		for i := range e.Args {
 			s.scanExpr(e.Args[i].Value)
+		}
+		if len(e.TypeArgs) > 0 {
+			s.rewriteGenericMethodCall(e)
 		}
 	case *IntrinsicCall:
 		for i := range e.Args {
