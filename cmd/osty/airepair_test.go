@@ -97,6 +97,18 @@ func TestUsageOutputUsesCanonicalAIRepairNames(t *testing.T) {
 		if !strings.Contains(got.stderr, "--no-airepair") {
 			t.Fatalf("stderr = %q, want canonical --no-airepair flag in help", got.stderr)
 		}
+		if !strings.Contains(got.stderr, "--capture-dir DIR") {
+			t.Fatalf("stderr = %q, want airepair capture-dir flag in help", got.stderr)
+		}
+		if !strings.Contains(got.stderr, "--capture-if MODE") {
+			t.Fatalf("stderr = %q, want airepair capture-if flag in help", got.stderr)
+		}
+		if !strings.Contains(got.stderr, "osty airepair triage DIR") {
+			t.Fatalf("stderr = %q, want airepair triage command in usage", got.stderr)
+		}
+		if !strings.Contains(got.stderr, "osty airepair promote CASE") {
+			t.Fatalf("stderr = %q, want airepair promote command in usage", got.stderr)
+		}
 		if !strings.Contains(got.stderr, "airepair-specific flags") {
 			t.Fatalf("stderr = %q, want airepair-specific help header", got.stderr)
 		}
@@ -113,8 +125,14 @@ func TestUsageOutputUsesCanonicalAIRepairNames(t *testing.T) {
 		if got.exit != 2 {
 			t.Fatalf("osty repair exit = %d, want 2\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
 		}
-		if !strings.Contains(got.stderr, "usage: osty airepair [--check] [--write] [--json] [--stdin-name NAME] [--mode rewrite|parse|frontend] FILE|-") {
+		if !strings.Contains(got.stderr, "usage: osty airepair [--check] [--write] [--json] [--capture-dir DIR] [--capture-name NAME] [--capture-if residual|changed|always] [--stdin-name NAME] [--mode rewrite|parse|frontend] FILE|-") {
 			t.Fatalf("stderr = %q, want canonical airepair subcommand usage", got.stderr)
+		}
+		if !strings.Contains(got.stderr, "osty airepair triage [--top N] DIR") {
+			t.Fatalf("stderr = %q, want canonical airepair triage usage", got.stderr)
+		}
+		if !strings.Contains(got.stderr, "osty airepair promote [--dest DIR] [--name NAME] CASE") {
+			t.Fatalf("stderr = %q, want canonical airepair promote usage", got.stderr)
 		}
 		if strings.Contains(got.stderr, "usage: osty repair [--check] [--write] FILE") {
 			t.Fatalf("stderr = %q, did not want legacy repair usage text", got.stderr)
@@ -134,6 +152,7 @@ func TestAIRepairJSONReportFromStdin(t *testing.T) {
 	var report struct {
 		Filename      string `json:"filename"`
 		Mode          string `json:"mode"`
+		Status        string `json:"status"`
 		Changed       bool   `json:"changed"`
 		Improved      bool   `json:"improved"`
 		Accepted      bool   `json:"accepted"`
@@ -143,6 +162,10 @@ func TestAIRepairJSONReportFromStdin(t *testing.T) {
 			SourceHabit string  `json:"source_habit"`
 			Confidence  float64 `json:"confidence"`
 		} `json:"change_details"`
+		Summary struct {
+			TotalErrorsReduced int `json:"total_errors_reduced"`
+			ResidualErrors     int `json:"residual_errors"`
+		} `json:"summary"`
 		Before struct {
 			Parse struct {
 				Errors int `json:"errors"`
@@ -164,6 +187,9 @@ func TestAIRepairJSONReportFromStdin(t *testing.T) {
 	if report.Mode != "frontend" {
 		t.Fatalf("mode = %q, want frontend", report.Mode)
 	}
+	if report.Status != "repaired_clean" {
+		t.Fatalf("status = %q, want repaired_clean", report.Status)
+	}
 	if !report.Changed || !report.Improved || !report.Accepted {
 		t.Fatalf("report flags = changed:%v improved:%v accepted:%v, want all true", report.Changed, report.Improved, report.Accepted)
 	}
@@ -175,6 +201,12 @@ func TestAIRepairJSONReportFromStdin(t *testing.T) {
 	}
 	if report.Source != "fn main() {}\n" {
 		t.Fatalf("source = %q, want repaired source", report.Source)
+	}
+	if report.Summary.TotalErrorsReduced <= 0 {
+		t.Fatalf("summary.total_errors_reduced = %d, want > 0", report.Summary.TotalErrorsReduced)
+	}
+	if report.Summary.ResidualErrors != 0 {
+		t.Fatalf("summary.residual_errors = %d, want 0", report.Summary.ResidualErrors)
 	}
 	if len(report.ChangeDetails) != 1 {
 		t.Fatalf("len(change_details) = %d, want 1", len(report.ChangeDetails))
@@ -190,6 +222,222 @@ func TestAIRepairJSONReportFromStdin(t *testing.T) {
 	}
 	if report.ChangeDetails[0].Confidence <= 0.0 {
 		t.Fatalf("change_details[0].confidence = %v, want > 0", report.ChangeDetails[0].Confidence)
+	}
+}
+
+func TestAIRepairCaptureResidualCaseWritesCorpusArtifacts(t *testing.T) {
+	captureDir := filepath.Join(t.TempDir(), "captures")
+	input := "fn main() {\n    let items = [1, 2]\n    for i, item in enumerate(items):\n        println(item)\n}\n"
+
+	got := runOstyCLIWithInput(t,
+		input,
+		"airepair",
+		"--json",
+		"--capture-dir", captureDir,
+		"--capture-name", "python_enumerate_case",
+		"-")
+	if got.exit != 0 {
+		t.Fatalf("airepair capture exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
+	}
+
+	inputPath := filepath.Join(captureDir, "python_enumerate_case.input.osty")
+	expectedPath := filepath.Join(captureDir, "python_enumerate_case.expected.osty")
+	reportPath := filepath.Join(captureDir, "python_enumerate_case.report.json")
+	for _, path := range []string{inputPath, expectedPath, reportPath} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected captured artifact %s: %v", path, err)
+		}
+	}
+
+	inputBytes, err := os.ReadFile(inputPath)
+	if err != nil {
+		t.Fatalf("read captured input: %v", err)
+	}
+	if string(inputBytes) != input {
+		t.Fatalf("captured input = %q, want original input", string(inputBytes))
+	}
+
+	expectedBytes, err := os.ReadFile(expectedPath)
+	if err != nil {
+		t.Fatalf("read captured expected: %v", err)
+	}
+	if got, want := string(expectedBytes), "fn main() {\n    let items = [1, 2]\n    for (i, item) in items.enumerate() {\n        println(item)\n    }\n}\n"; got != want {
+		t.Fatalf("captured expected = %q, want %q", got, want)
+	}
+
+	var report struct {
+		Status  string `json:"status"`
+		Summary struct {
+			ResidualErrors     int `json:"residual_errors"`
+			TotalErrorsReduced int `json:"total_errors_reduced"`
+		} `json:"summary"`
+	}
+	reportBytes, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("read captured report: %v", err)
+	}
+	if err := json.Unmarshal(reportBytes, &report); err != nil {
+		t.Fatalf("decode captured report: %v\nreport:\n%s", err, string(reportBytes))
+	}
+	if report.Status != "repaired_residual" {
+		t.Fatalf("captured status = %q, want repaired_residual", report.Status)
+	}
+	if report.Summary.ResidualErrors <= 0 {
+		t.Fatalf("captured summary.residual_errors = %d, want > 0", report.Summary.ResidualErrors)
+	}
+	if report.Summary.TotalErrorsReduced <= 0 {
+		t.Fatalf("captured summary.total_errors_reduced = %d, want > 0", report.Summary.TotalErrorsReduced)
+	}
+}
+
+func TestAIRepairCaptureResidualDefaultSkipsCleanCases(t *testing.T) {
+	captureDir := filepath.Join(t.TempDir(), "captures")
+
+	got := runOstyCLIWithInput(t,
+		"func main() {}\n",
+		"airepair",
+		"--json",
+		"--capture-dir", captureDir,
+		"--capture-name", "clean_case",
+		"-")
+	if got.exit != 0 {
+		t.Fatalf("airepair capture exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
+	}
+
+	_, err := os.Stat(filepath.Join(captureDir, "clean_case.input.osty"))
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("capture residual default created clean artifact unexpectedly: %v", err)
+	}
+}
+
+func TestAIRepairCaptureChangedWritesCleanRepairedCase(t *testing.T) {
+	captureDir := filepath.Join(t.TempDir(), "captures")
+
+	got := runOstyCLIWithInput(t,
+		"func main() {}\n",
+		"airepair",
+		"--json",
+		"--capture-dir", captureDir,
+		"--capture-name", "changed_case",
+		"--capture-if", "changed",
+		"-")
+	if got.exit != 0 {
+		t.Fatalf("airepair capture exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
+	}
+
+	if _, err := os.Stat(filepath.Join(captureDir, "changed_case.input.osty")); err != nil {
+		t.Fatalf("expected changed capture artifact: %v", err)
+	}
+}
+
+func TestAIRepairCaptureFlagsRequireCaptureDir(t *testing.T) {
+	for _, args := range [][]string{
+		{"airepair", "--capture-name", "sample", "-"},
+		{"airepair", "--capture-if", "changed", "-"},
+	} {
+		got := runOstyCLIWithInput(t, "func main() {}\n", args...)
+		if got.exit != 2 {
+			t.Fatalf("%v exit = %d, want 2\nstdout:\n%s\nstderr:\n%s", args, got.exit, got.stdout, got.stderr)
+		}
+		if !strings.Contains(got.stderr, "--capture") {
+			t.Fatalf("%v stderr = %q, want capture-dir validation", args, got.stderr)
+		}
+	}
+}
+
+func TestAIRepairTriageSummarizesCapturedReports(t *testing.T) {
+	captureDir := filepath.Join(t.TempDir(), "captures")
+
+	residual := runOstyCLIWithInput(t,
+		"fn main() {\n    let items = [1, 2]\n    for i, item in enumerate(items):\n        println(item)\n}\n",
+		"airepair",
+		"--json",
+		"--capture-dir", captureDir,
+		"--capture-name", "python_enumerate_case",
+		"-")
+	if residual.exit != 0 {
+		t.Fatalf("capture residual exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", residual.exit, residual.stdout, residual.stderr)
+	}
+
+	changed := runOstyCLIWithInput(t,
+		"func main() {}\n",
+		"airepair",
+		"--json",
+		"--capture-dir", captureDir,
+		"--capture-name", "foreign_fn_case",
+		"--capture-if", "changed",
+		"-")
+	if changed.exit != 0 {
+		t.Fatalf("capture changed exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", changed.exit, changed.stdout, changed.stderr)
+	}
+
+	got := runOstyCLI(t, "airepair", "triage", captureDir)
+	if got.exit != 0 {
+		t.Fatalf("airepair triage exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
+	}
+	if strings.TrimSpace(got.stderr) != "" {
+		t.Fatalf("triage stderr = %q, want empty stderr", got.stderr)
+	}
+	for _, want := range []string{
+		"scanned 2 case(s)",
+		"repaired_clean",
+		"repaired_residual",
+		"foreign_function_keyword",
+		"python_enumerate_loop",
+		"E0700",
+		"python_enumerate_loop -> E0700",
+		"python_enumerate_case",
+	} {
+		if !strings.Contains(got.stdout, want) {
+			t.Fatalf("triage stdout missing %q\nstdout:\n%s", want, got.stdout)
+		}
+	}
+}
+
+func TestAIRepairPromoteCopiesCapturedCaseIntoCorpus(t *testing.T) {
+	captureDir := filepath.Join(t.TempDir(), "captures")
+	destDir := filepath.Join(t.TempDir(), "corpus")
+
+	captured := runOstyCLIWithInput(t,
+		"fn main() {\n    let items = [1, 2]\n    for i, item in enumerate(items):\n        println(item)\n}\n",
+		"airepair",
+		"--json",
+		"--capture-dir", captureDir,
+		"--capture-name", "python_enumerate_case",
+		"-")
+	if captured.exit != 0 {
+		t.Fatalf("capture residual exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", captured.exit, captured.stdout, captured.stderr)
+	}
+
+	got := runOstyCLI(t,
+		"airepair",
+		"promote",
+		"--dest", destDir,
+		"--name", "promoted_enumerate_loop",
+		filepath.Join(captureDir, "python_enumerate_case.report.json"))
+	if got.exit != 0 {
+		t.Fatalf("airepair promote exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
+	}
+	if strings.TrimSpace(got.stderr) != "" {
+		t.Fatalf("promote stderr = %q, want empty stderr", got.stderr)
+	}
+	if !strings.Contains(got.stdout, "promoted_enumerate_loop.input.osty") {
+		t.Fatalf("promote stdout = %q, want promoted path summary", got.stdout)
+	}
+
+	inputBytes, err := os.ReadFile(filepath.Join(destDir, "promoted_enumerate_loop.input.osty"))
+	if err != nil {
+		t.Fatalf("read promoted input: %v", err)
+	}
+	expectedBytes, err := os.ReadFile(filepath.Join(destDir, "promoted_enumerate_loop.expected.osty"))
+	if err != nil {
+		t.Fatalf("read promoted expected: %v", err)
+	}
+	if got, want := string(inputBytes), "fn main() {\n    let items = [1, 2]\n    for i, item in enumerate(items):\n        println(item)\n}\n"; got != want {
+		t.Fatalf("promoted input = %q, want %q", got, want)
+	}
+	if got, want := string(expectedBytes), "fn main() {\n    let items = [1, 2]\n    for (i, item) in items.enumerate() {\n        println(item)\n    }\n}\n"; got != want {
+		t.Fatalf("promoted expected = %q, want %q", got, want)
 	}
 }
 
