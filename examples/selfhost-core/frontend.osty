@@ -185,7 +185,7 @@ pub struct FrontLexStream {
     pub escapeErrors: Int,
 }
 
-/// FrontLexSummary keeps the lexer dogfood executable without depending on
+/// FrontLexSummary keeps the self-hosted lexer executable without depending on
 /// dynamic token-buffer generation yet.
 pub struct FrontLexSummary {
     pub tokens: Int,

@@ -5,18 +5,19 @@ Go toolchain. The implementation is authored in Osty and compiled into Go.
 
 The source of truth is:
 
-- `examples/dogfood/semver.osty`
-- `examples/dogfood/semver_parse.osty`
-- `examples/dogfood/frontend.osty`
-- `examples/dogfood/lexer.osty`
-- `examples/dogfood/parser.osty`
-- `examples/dogfood/checker.osty`
+- `examples/selfhost-core/semver.osty`
+- `examples/selfhost-core/semver_parse.osty`
+- `examples/selfhost-core/frontend.osty`
+- `examples/selfhost-core/lexer.osty`
+- `examples/selfhost-core/parser.osty`
+- `examples/selfhost-core/formatter_ast.osty`
+- `examples/selfhost-core/check_bridge.osty`
+- `examples/selfhost-core/check.osty`
 - `internal/selfhost/ast_lower.osty`
 
-`examples/selfhost-core/check.osty` is intentionally a symlink to the dogfood
-checker. `examples/selfhost-core/check_bridge.osty` supplies only the small
-lexer/parser adapter needed by that package, so the self-hosted checker logic
-has one implementation.
+`examples/selfhost-core/check_bridge.osty` supplies only the small parser
+adapter needed by the shared checker API, so the self-hosted front end and
+checker logic have one implementation.
 
 Regenerate the Go bridge with:
 
@@ -24,7 +25,7 @@ Regenerate the Go bridge with:
 go generate ./internal/selfhost
 ```
 
-The generator merges the dogfood sources, emits `generated.go` through
+The generator merges the selfhost-core sources, emits `generated.go` through
 `cmd/osty gen`, regenerates `internal/selfhost/astbridge/generated.go` from
 `internal/ast`, and reapplies the small Go hot-path overrides that keep lexing
 position lookups linear. Public compiler packages should call

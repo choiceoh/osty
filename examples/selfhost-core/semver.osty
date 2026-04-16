@@ -5,10 +5,10 @@ pub enum SemPreIdent {
     PreText(String),
 }
 
-/// SemVersion is the package-manager version shape used by the dogfood port.
+/// SemVersion is the package-manager version shape used by the selfhost port.
 ///
 /// The Go implementation stores an arbitrary pre-release slice. This Osty
-/// dogfood version keeps the first three identifiers explicit, which covers
+/// selfhost version keeps the first three identifiers explicit, which covers
 /// the forms currently exercised by the package-manager tests while keeping
 /// the comparison logic fully authored in Osty.
 pub struct SemVersion {

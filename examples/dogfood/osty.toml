@@ -1,9 +1,0 @@
-[package]
-name = "dogfood"
-version = "0.1.0"
-edition = "0.3"
-description = "Self-dogfooding source summarizer used by the Osty example corpus."
-license = "MIT"
-keywords = ["dogfood", "examples", "testing"]
-
-[dependencies]

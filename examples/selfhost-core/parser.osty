@@ -1336,10 +1336,18 @@ fn opParseTypeAtom(p: OstyParser) -> Int {
     if tok.kind == FrontLParen { return opParseTupleType(p) }
     if tok.kind == FrontIdent {
         let start = p.pos
-        let name = tok.text
+        let mut name = tok.text
         opAdvance(p)
+        for opAt(p, FrontDot) && opPeekAt(p, 1).kind == FrontIdent {
+            opAdvance(p)
+            name = "{name}.{opPeek(p).text}"
+            opAdvance(p)
+        }
         let mut typeArgs: List<Int> = []
         if opEat(p, FrontLt) {
+            if opAt(p, FrontGt) || opAt(p, FrontShr) || opAt(p, FrontGeq) || opAt(p, FrontShrEq) {
+                opErrorFull(p, "type argument list requires at least one type", "remove `<>` or provide a type, e.g. `<Int>`", "", "E0020")
+            }
             for !(opAt(p, FrontGt)) && !(opAt(p, FrontShr)) && !(opAt(p, FrontGeq)) && !(opAt(p, FrontShrEq)) && !(opAt(p, FrontEOF)) { typeArgs.push(opParseType(p))
             if !(opEat(p, FrontComma)) { break } }
             opExpectTypeGT(p)
@@ -1685,8 +1693,12 @@ fn opParseUseDecl(p: OstyParser) -> Int {
     if opEat(p, FrontLBrace) {
         opSkipNewlines(p)
         for !(opAt(p, FrontRBrace)) && !(opAt(p, FrontEOF)) {
-            if opAt(p, FrontFn) || opAt(p, FrontStruct) || opAt(p, FrontType) {
+            if opAt(p, FrontFn) {
                 goItems.push(opParseFnDecl(p, false, []))
+            } else if opAt(p, FrontStruct) {
+                goItems.push(opParseStructDecl(p, false))
+            } else if opAt(p, FrontType) {
+                goItems.push(opParseTypeAliasDecl(p, false))
             } else {
                 let _ = opAdvance(p)
             }

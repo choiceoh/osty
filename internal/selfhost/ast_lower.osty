@@ -1002,6 +1002,8 @@ fn astLowerLetDecl(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> 
     let patNode = astArenaNodeAt(arena, n.left)
     if patNode.kind == AstNIdent {
         name = patNode.text
+    } else if patNode.kind == AstNPattern && patNode.extra == astPatternIdentKind() {
+        name = patNode.text
     } else if strings.HasPrefix(patNode.text, "ident:") {
         name = strings.TrimPrefix(patNode.text, "ident:")
     }
@@ -1509,6 +1511,9 @@ fn astLowerPattern(arena: AstArena, toks: List<astbridge.Token>, idx: Int) -> as
     if n.kind == AstNIntLit || n.kind == AstNFloatLit || n.kind == AstNStringLit || n.kind == AstNCharLit || n.kind == AstNByteLit || n.kind == AstNBoolLit {
         return astbridge.LiteralPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerExpr(arena, toks, idx))
     }
+    if n.kind == AstNPattern && n.extra > 0 {
+        return astLowerStructuredPattern(arena, toks, n)
+    }
     astLowerTextPattern(arena, toks, n)
 }
 
@@ -1521,6 +1526,58 @@ fn astLowerTuplePat(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) ->
         }
     }
     astbridge.TuplePatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), elems)
+}
+
+fn astLowerStructuredPattern(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Pattern {
+    if n.extra == astPatternIdentKind() {
+        return astbridge.IdentPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), n.text)
+    }
+    if n.extra == astPatternWildcardKind() {
+        return astbridge.WildcardPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n))
+    }
+    if n.extra == astPatternLiteralKind() {
+        return astbridge.LiteralPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerPatternLiteralExprNode(arena, toks, n))
+    }
+    if n.extra == astPatternTupleKind() {
+        return astLowerTuplePat(arena, toks, n)
+    }
+    if n.extra == astPatternVariantKind() {
+        let mut args = astbridge.EmptyPatternList()
+        for child in n.children {
+            let p = astLowerPattern(arena, toks, child)
+            if !(astbridge.IsNilPattern(p)) {
+                args.push(p)
+            }
+        }
+        return astbridge.VariantPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerSplitPath(n.text), args)
+    }
+    if n.extra == astPatternStructKind() {
+        let mut fields = astbridge.EmptyStructPatFieldList()
+        for child in n.children {
+            let cn = astArenaNodeAt(arena, child)
+            if cn.extra == astPatternFieldKind() {
+                fields.push(astbridge.StructPatFieldNode(astLowerNodePos(toks, cn), cn.text, astLowerPattern(arena, toks, cn.left)))
+            } else {
+                let pat = astLowerPattern(arena, toks, child)
+                if cn.extra == astPatternIdentKind() {
+                    fields.push(astbridge.StructPatFieldNode(astLowerNodePos(toks, cn), cn.text, astbridge.NilPattern()))
+                } else if !(astbridge.IsNilPattern(pat)) {
+                    fields.push(astbridge.StructPatFieldNode(astLowerNodePos(toks, cn), "", pat))
+                }
+            }
+        }
+        return astbridge.StructPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerSplitPath(n.text), fields, n.flags == 1)
+    }
+    if n.extra == astPatternBindingKind() {
+        return astbridge.BindingPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), n.text, astLowerPattern(arena, toks, n.left))
+    }
+    if n.extra == astPatternRangeKind() {
+        return astbridge.RangePatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerPatternLiteralExpr(arena, toks, n.left), astLowerPatternLiteralExpr(arena, toks, n.right), n.flags == 1)
+    }
+    if n.extra == astPatternOrKind() {
+        return astbridge.OrPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerOrAlts(arena, toks, n))
+    }
+    astbridge.WildcardPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n))
 }
 
 fn astLowerTextPattern(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Pattern {
@@ -1596,7 +1653,7 @@ fn astLowerCollectOrAlt(arena: AstArena, toks: List<astbridge.Token>, idx: Int, 
         return out
     }
     let n = astArenaNodeAt(arena, idx)
-    if n.text == "or" {
+    if n.extra == astPatternOrKind() || n.text == "or" {
         let left = astLowerCollectOrAlt(arena, toks, n.left, out)
         return astLowerCollectOrAlt(arena, toks, n.right, left)
     }
@@ -1612,7 +1669,11 @@ fn astLowerPatternLiteralExpr(arena: AstArena, toks: List<astbridge.Token>, idx:
         return astbridge.NilExpr()
     }
     let n = astArenaNodeAt(arena, idx)
-    if n.text == "negLiteral" {
+    astLowerPatternLiteralExprNode(arena, toks, n)
+}
+
+fn astLowerPatternLiteralExprNode(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Expr {
+    if n.text == "negLiteral" || (n.extra == astPatternLiteralKind() && n.text == "-" && n.left >= 0) {
         return astbridge.UnaryExprNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerKind(FrontMinus), astLowerLiteralPatternExpr(toks, astArenaNodeAt(arena, n.left)))
     }
     astLowerLiteralPatternExpr(toks, n)
