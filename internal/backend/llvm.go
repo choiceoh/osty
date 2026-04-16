@@ -18,7 +18,8 @@ var ErrLLVMNotImplemented = errors.New(llvmgen.UnsupportedBackendErrorMessage())
 
 type llvmToolchain interface {
 	CompileObject(ctx context.Context, irPath, objectPath, target string) error
-	LinkBinary(ctx context.Context, objectPath, binaryPath, target string) error
+	CompileCObject(ctx context.Context, sourcePath, objectPath, target string) error
+	LinkBinary(ctx context.Context, objectPaths []string, binaryPath, target string) error
 }
 
 // LLVMBackend emits textual LLVM IR and can drive a host LLVM-compatible
@@ -75,7 +76,12 @@ func (b LLVMBackend) Emit(ctx context.Context, req Request) (*Result, error) {
 		if artifacts.Binary == "" {
 			return out, fmt.Errorf("%s", llvmgen.MissingBinaryArtifactMessage())
 		}
-		if err := tc.LinkBinary(ctx, artifacts.Object, artifacts.Binary, req.Layout.Target); err != nil {
+		runtimeObjects, err := compileBundledRuntime(ctx, tc, artifacts.RuntimeDir, req.Layout.Target)
+		if err != nil {
+			return out, err
+		}
+		objectPaths := append([]string{artifacts.Object}, runtimeObjects...)
+		if err := tc.LinkBinary(ctx, objectPaths, artifacts.Binary, req.Layout.Target); err != nil {
 			return out, err
 		}
 		return out, nil
@@ -114,9 +120,33 @@ func (clangToolchain) CompileObject(ctx context.Context, irPath, objectPath, tar
 	return runClang(ctx, "compile object", args)
 }
 
-func (clangToolchain) LinkBinary(ctx context.Context, objectPath, binaryPath, target string) error {
-	args := llvmgen.ClangLinkBinaryArgs(target, objectPath, binaryPath)
+func (clangToolchain) CompileCObject(ctx context.Context, sourcePath, objectPath, target string) error {
+	args := clangCompileCObjectArgs(target, sourcePath, objectPath)
+	return runClang(ctx, "compile runtime", args)
+}
+
+func (clangToolchain) LinkBinary(ctx context.Context, objectPaths []string, binaryPath, target string) error {
+	args := clangLinkBinaryArgs(target, objectPaths, binaryPath)
 	return runClang(ctx, "link binary", args)
+}
+
+func clangCompileCObjectArgs(target, sourcePath, objectPath string) []string {
+	args := []string{}
+	if target != "" {
+		args = append(args, "--target="+target)
+	}
+	args = append(args, "-std=c11", "-c", sourcePath, "-o", objectPath)
+	return args
+}
+
+func clangLinkBinaryArgs(target string, objectPaths []string, binaryPath string) []string {
+	args := []string{}
+	if target != "" {
+		args = append(args, "--target="+target)
+	}
+	args = append(args, objectPaths...)
+	args = append(args, "-o", binaryPath)
+	return args
 }
 
 func runClang(ctx context.Context, action string, args []string) error {

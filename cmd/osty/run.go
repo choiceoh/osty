@@ -210,12 +210,12 @@ func runRun(args []string, cliF cliFlags) {
 	if err != nil {
 		exitBackendEmitError("run", emitResult, err)
 	}
-	runLLVMBinary(emitResult.Artifacts.Binary, runArgs, runDir)
+	runNativeBinary(emitResult.Artifacts.Binary, runArgs, runDir)
 }
 
-func runLLVMBinary(binPath string, args []string, dir string) {
+func runNativeBinary(binPath string, args []string, dir string) {
 	if binPath == "" {
-		fmt.Fprintln(os.Stderr, "osty run: llvm backend did not produce a binary")
+		fmt.Fprintln(os.Stderr, "osty run: native backend did not produce a binary")
 		os.Exit(1)
 	}
 	absBin, err := filepath.Abs(binPath)
