@@ -29,6 +29,20 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Verify clean archive build
+        run: |
+          clean="$RUNNER_TEMP/osty-clean"
+          bin="$RUNNER_TEMP/osty-clean-bin"
+          rm -rf "$clean"
+          rm -rf "$bin"
+          mkdir -p "$clean"
+          mkdir -p "$bin"
+          git archive --format=tar HEAD | tar -xf - -C "$clean"
+          (
+            cd "$clean"
+            go build -o "$bin/osty" ./cmd/osty
+          )
+
       - name: Format
         run: |
           unformatted="$(gofmt -l $(git ls-files '*.go'))"
