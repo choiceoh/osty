@@ -168,6 +168,10 @@ func main() {
 			flags.fixDryRun = true
 			args = append([]string{"lint"}, rest...)
 		}
+		if _, present := takeBoolFlag(args[1:], "--selfhost"); present {
+			fmt.Fprintln(os.Stderr, "osty lint: --selfhost has been removed")
+			os.Exit(2)
+		}
 		if rest, present := takeBoolFlag(args[1:], "--strict"); present {
 			flags.strict = true
 			args = append([]string{"lint"}, rest...)
@@ -409,7 +413,7 @@ func main() {
 		file, parseDiags := parser.ParseDiagnostics(src)
 		res := resolveFile(file)
 		chk := check.File(file, res, checkOptsForSource(src))
-		lr := runLintEngine(src, file, res, chk, flags)
+		lr := runLintEngine(file, res, chk)
 		if cfg, ok := loadLintConfigNear(path); ok {
 			lr = cfg.Apply(lr)
 		}
@@ -668,7 +672,6 @@ func runLintLoadedPackage(
 	printPackageDiags(pkg, all, flags)
 	return lintPackageOutcome{anyErr: hasError(all), anyWarn: hasWarning(all)}
 }
-
 // runResolvePackage is runCheckPackage plus a resolution dump per file.
 func runResolvePackage(dir string, flags cliFlags) {
 	pkg, err := resolve.LoadPackage(dir)
@@ -923,13 +926,7 @@ func resolveFile(file *ast.File) *resolve.Result {
 	return resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
 }
 
-func runLintEngine(
-	src []byte,
-	file *ast.File,
-	res *resolve.Result,
-	chk *check.Result,
-	flags cliFlags,
-) *lint.Result {
+func runLintEngine(file *ast.File, res *resolve.Result, chk *check.Result) *lint.Result {
 	return lint.File(file, res, chk)
 }
 
