@@ -4,7 +4,6 @@ import (
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/resolve"
-	"github.com/osty/osty/internal/selfhost"
 )
 
 // handleReferences answers `textDocument/references`. We locate the
@@ -155,9 +154,9 @@ func (s *Server) findReferences(doc *document, target *resolve.Symbol, includeDe
 // itself a reference (enum variants bound via their type body); (b)
 // parser fragments where an ident is recorded in both Refs and TypeRefs.
 func sortDedupLocations(locs []Location) []Location {
-	converted := make([]selfhost.LSPLocation, 0, len(locs))
+	converted := make([]LSPLocation, 0, len(locs))
 	for _, loc := range locs {
-		converted = append(converted, selfhost.LSPLocation{
+		converted = append(converted, LSPLocation{
 			URI:            loc.URI,
 			StartLine:      loc.Range.Start.Line,
 			StartCharacter: loc.Range.Start.Character,
@@ -165,7 +164,7 @@ func sortDedupLocations(locs []Location) []Location {
 			EndCharacter:   loc.Range.End.Character,
 		})
 	}
-	resolved := selfhost.SortDedupLSPLocations(converted)
+	resolved := SortDedupLSPLocations(converted)
 	out := make([]Location, 0, len(resolved))
 	for _, loc := range resolved {
 		out = append(out, Location{

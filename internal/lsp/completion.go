@@ -5,7 +5,6 @@ import (
 
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/resolve"
-	"github.com/osty/osty/internal/selfhost"
 )
 
 // handleCompletion answers `textDocument/completion`. Behavior splits
@@ -61,7 +60,7 @@ func (s *Server) handleCompletion(req *rpcRequest) {
 // to suppress completion inside literals should gate on the parsed
 // AST before invoking this.
 func precedingContext(src []byte, offset int) (prefix, afterDot string) {
-	ctx := selfhost.LSPPrecedingCompletionContext(src, offset)
+	ctx := LSPPrecedingCompletionContext(src, offset)
 	return ctx.Prefix, ctx.AfterDot
 }
 
@@ -132,7 +131,7 @@ func sortCompletionItems(in []CompletionItem) []CompletionItem {
 	for _, item := range in {
 		labels = append(labels, item.Label)
 	}
-	indexes := selfhost.SortLSPCompletionIndexes(labels)
+	indexes := SortLSPCompletionIndexes(labels)
 	out := make([]CompletionItem, 0, len(indexes))
 	for _, idx := range indexes {
 		if idx < 0 || idx >= len(in) {
@@ -149,11 +148,11 @@ func sortCompletionItems(in []CompletionItem) []CompletionItem {
 func completionItemFromSym(label string, sym *resolve.Symbol, r *check.Result) CompletionItem {
 	item := CompletionItem{
 		Label: label,
-		Kind:  CompletionItemKind(selfhost.LSPCompletionKindForSymbolKind(sym.Kind.String())),
+		Kind:  CompletionItemKind(LSPCompletionKindForSymbolKind(sym.Kind.String())),
 	}
 	if r != nil {
 		if t := r.LookupSymType(sym); t != nil {
-			item.Detail = selfhost.LSPCompletionDetail(sym.Kind.String(), label, t.String())
+			item.Detail = LSPCompletionDetail(sym.Kind.String(), label, t.String())
 		}
 	}
 	if doc := symbolDoc(sym); doc != "" {
@@ -162,6 +161,6 @@ func completionItemFromSym(label string, sym *resolve.Symbol, r *check.Result) C
 			Value: doc,
 		}
 	}
-	item.SortText = selfhost.LSPCompletionSortTextForSymbolKind(sym.Kind.String(), label)
+	item.SortText = LSPCompletionSortTextForSymbolKind(sym.Kind.String(), label)
 	return item
 }

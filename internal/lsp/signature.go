@@ -5,7 +5,6 @@ import (
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/resolve"
-	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/token"
 	"github.com/osty/osty/internal/types"
 )
@@ -113,9 +112,9 @@ func buildSignatureInfo(call *ast.CallExpr, a *docAnalysis) (SignatureInformatio
 	// it; otherwise fall back to `argN` placeholders so the shape is
 	// still useful.
 	paramNames := parameterNames(fnDecl, len(fnType.Params))
-	params := make([]selfhost.LSPSignatureParam, 0, len(fnType.Params))
+	params := make([]LSPSignatureParam, 0, len(fnType.Params))
 	for i, pt := range fnType.Params {
-		params = append(params, selfhost.LSPSignatureParam{
+		params = append(params, LSPSignatureParam{
 			Name:     paramNames[i],
 			TypeName: pt.String(),
 		})
@@ -124,7 +123,7 @@ func buildSignatureInfo(call *ast.CallExpr, a *docAnalysis) (SignatureInformatio
 	if fnType.Return != nil && !types.IsUnit(fnType.Return) {
 		returnType = fnType.Return.String()
 	}
-	rendered := selfhost.LSPBuildSignatureText(sym.Name, params, returnType)
+	rendered := LSPBuildSignatureText(sym.Name, params, returnType)
 	paramInfo := make([]ParameterInformation, 0, len(rendered.ParameterLabels))
 	for _, paramLabel := range rendered.ParameterLabels {
 		paramInfo = append(paramInfo, ParameterInformation{Label: paramLabel})
@@ -192,7 +191,7 @@ func activeParamFor(call *ast.CallExpr, pos token.Pos) uint32 {
 	for _, arg := range call.Args {
 		argEnds = append(argEnds, arg.End().Offset)
 	}
-	return selfhost.LSPActiveParameter(argEnds, pos.Offset)
+	return LSPActiveParameter(argEnds, pos.Offset)
 }
 
 // forEachChild is a tiny AST walker that visits the children of

@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/osty/osty/internal/diag"
-	"github.com/osty/osty/internal/selfhost"
 )
 
 // handleCodeAction answers `textDocument/codeAction`. It produces two
@@ -118,12 +117,12 @@ func prefixUnderscoreFix(doc *document, d LSPDiagnostic) CodeAction {
 	start := doc.analysis.lines.lspToOsty(d.Range.Start)
 	name := identifierAt(doc.src, start.Offset)
 	return CodeAction{
-		Title:       selfhost.LSPPrefixUnderscoreTitle(name),
+		Title:       LSPPrefixUnderscoreTitle(name),
 		Kind:        CodeActionQuickFix,
 		Diagnostics: []LSPDiagnostic{d},
 		Edit: &WorkspaceEdit{
 			Changes: map[string][]TextEdit{
-				doc.uri: {{Range: d.Range, NewText: selfhost.LSPPrefixUnderscoreName(name)}},
+				doc.uri: {{Range: d.Range, NewText: LSPPrefixUnderscoreName(name)}},
 			},
 		},
 		IsPreferred: true,
@@ -156,5 +155,5 @@ func removeLineFix(doc *document, d LSPDiagnostic) CodeAction {
 // Returns "" when the cursor isn't on an ident — common with
 // synthesized diagnostics that don't have real source text.
 func identifierAt(src []byte, off int) string {
-	return selfhost.LSPIdentifierAt(src, off)
+	return LSPIdentifierAt(src, off)
 }
