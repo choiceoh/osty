@@ -1,0 +1,6 @@
+fn main() {
+    let items = [1, 2]
+    let count = items.len()
+    let size = items.len()
+    println(count + size)
+}

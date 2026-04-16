@@ -1,6 +1,8 @@
 fn main() {
     let items = [1, 2]
-    for (i, item) in items.enumerate() {
+    let _airepair_enumerate0 = items
+    for i in 0.._airepair_enumerate0.len() {
+        let item = _airepair_enumerate0[i]
         println(item)
     }
 }

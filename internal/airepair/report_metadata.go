@@ -102,6 +102,14 @@ func reportChangeMetaForKind(kind string) reportChangeMeta {
 		return reportChangeMeta{"loop", "python_enumerate_loop", 0.97}
 	case "tuple_loop_pattern":
 		return reportChangeMeta{"loop", "bare_tuple_loop_binding", 0.96}
+	case "enumerate_index_loop":
+		return reportChangeMeta{"semantic", "python_enumerate_loop", 0.96}
+	case "builtin_append_call":
+		return reportChangeMeta{"semantic", "foreign_append_helper", 0.94}
+	case "builtin_len_call":
+		return reportChangeMeta{"semantic", "foreign_len_helper", 0.98}
+	case "length_property":
+		return reportChangeMeta{"semantic", "javascript_length_property", 0.98}
 	default:
 		return reportChangeMeta{"unknown", "unknown", 0.50}
 	}

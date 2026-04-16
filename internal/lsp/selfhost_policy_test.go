@@ -359,7 +359,29 @@ func TestFixAllActionUsesAIRepairForPythonEnumerateLoop(t *testing.T) {
 	if len(edits) != 1 {
 		t.Fatalf("len(edits) = %d, want 1", len(edits))
 	}
-	if got, want := edits[0].NewText, "fn main() {\n    let items = [1, 2]\n    for (i, item) in items.enumerate() {\n        println(item)\n    }\n}\n"; got != want {
+	if got, want := edits[0].NewText, "fn main() {\n    let items = [1, 2]\n    let _airepair_enumerate0 = items\n    for i in 0.._airepair_enumerate0.len() {\n        let item = _airepair_enumerate0[i]\n        println(item)\n    }\n}\n"; got != want {
+		t.Fatalf("newText = %q, want %q", got, want)
+	}
+}
+
+func TestFixAllActionUsesAIRepairForSemanticHelpers(t *testing.T) {
+	src := []byte("fn main() {\n    let mut items = [1, 2]\n    let count = len(items)\n    let size = items.length\n    items = append(items, count + size)\n    println(items)\n}\n")
+	s := NewServer(bytes.NewReader(nil), io.Discard, io.Discard)
+	doc := &document{
+		uri:      "file:///tmp/main.osty",
+		src:      src,
+		analysis: s.analyzeSingleFile(src),
+	}
+
+	action := fixAllAction(doc)
+	if action == nil {
+		t.Fatal("fixAllAction() = nil, want airepair-backed action")
+	}
+	edits := action.Edit.Changes[doc.uri]
+	if len(edits) != 1 {
+		t.Fatalf("len(edits) = %d, want 1", len(edits))
+	}
+	if got, want := edits[0].NewText, "fn main() {\n    let mut items = [1, 2]\n    let count = items.len()\n    let size = items.len()\n    items.push(count + size)\n    println(items)\n}\n"; got != want {
 		t.Fatalf("newText = %q, want %q", got, want)
 	}
 }

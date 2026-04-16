@@ -254,6 +254,9 @@ func uniqueAIRepairSourceHabits(report airepair.Report) []string {
 }
 
 func aiRepairPrimaryHabit(report airepair.Report, habits []string) string {
+	if habit := strings.TrimSpace(report.ResidualPrimaryHabit); habit != "" {
+		return habit
+	}
 	for i := len(report.ChangeDetails) - 1; i >= 0; i-- {
 		habit := strings.TrimSpace(report.ChangeDetails[i].SourceHabit)
 		if habit != "" {

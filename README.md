@@ -277,7 +277,9 @@ Legacy alias: `osty repair`
 - `--check` — exit 1 if the file contains repairable syntax slips
 - `--write` — rewrite the file in place instead of printing
 - `--json` — emit a structured report including before/after front-end diagnostics
-  plus `status`/`summary` and `change_details` metadata (`phase`, `source_habit`, `confidence`) for tooling
+  plus `status`/`summary`, `accepted_reason` / `rejected_reason`, residual
+  hints (`residual_primary_code`, `residual_primary_habit`), and `change_details`
+  metadata (`phase`, `source_habit`, `confidence`) for tooling
 - `--capture-dir DIR` — write corpus-ready `.input.osty`, `.expected.osty`, and `.report.json` artifacts to `DIR`
 - `--capture-name NAME` — basename to use for captured airepair artifacts
 - `--capture-if residual|changed|always` — capture only residual cases by default, or widen to changed/all cases
@@ -294,7 +296,7 @@ writes corpus-style artifacts only when airepair still leaves residual diagnosti
 
 For quick triage, `osty airepair triage tmp/airepair-cases`
 
-To promote one captured case into the checked-in corpus, `osty airepair promote tmp/airepair-cases/python_enumerate_case`
+To promote one captured case into the checked-in corpus, `osty airepair promote tmp/airepair-cases/foreign_fn_tuple_index_case`
 
 Single-file `osty check`, `osty resolve`, `osty typecheck`, and `osty lint`
 run airepair in memory by default before parsing. You can still tune or disable it

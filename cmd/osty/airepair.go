@@ -43,7 +43,7 @@ func runAIRepairMain(args []string, stdin io.Reader, stdout, stderr io.Writer) i
 	fs.BoolVar(&checkMode, "c", false, "alias for --check")
 	fs.BoolVar(&writeMode, "write", false, "overwrite FILE in place")
 	fs.BoolVar(&writeMode, "w", false, "alias for --write")
-	fs.BoolVar(&jsonMode, "json", false, "emit a structured airepair report as JSON")
+	fs.BoolVar(&jsonMode, "json", false, "emit a structured airepair report as JSON (including accepted/residual metadata)")
 	fs.StringVar(&captureDir, "capture-dir", captureDir, "write captured airepair artifacts to DIR")
 	fs.StringVar(&captureName, "capture-name", captureName, "basename for captured airepair artifacts")
 	fs.StringVar(&captureModeName, "capture-if", captureModeName, "capture when residual, changed, or always")
