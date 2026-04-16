@@ -69,6 +69,115 @@ fn testAddFails() {
 	}
 }
 
+func TestRunTestMainPassesNativeLLVMResultTests(t *testing.T) {
+	requireClangForNativeTest(t)
+
+	dir := t.TempDir()
+	writeNativeTestFile(t, dir, "lib.osty", `pub enum CalcError {
+    DivideByZero,
+}
+
+pub fn div(a: Int, b: Int) -> Result<Int, CalcError> {
+    if b == 0 { Err(DivideByZero) } else { Ok(a / b) }
+}
+`)
+	writeNativeTestFile(t, dir, "lib_test.osty", `use std.testing
+
+fn testDiv() {
+    let q = testing.expectOk(div(10, 2))
+    testing.assertEq(q, 5)
+    testing.expectError(div(1, 0))
+}
+`)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := runTestMain([]string{dir}, cliFlags{}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("runTestMain() exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	}
+	if got := stdout.String(); !strings.Contains(got, "ok\ttestDiv") || !strings.Contains(got, "ok\t1 tests passed") {
+		t.Fatalf("stdout = %q, want Result-based passing test summary", got)
+	}
+	if got := stderr.String(); strings.TrimSpace(got) != "" {
+		t.Fatalf("stderr = %q, want empty stderr", got)
+	}
+}
+
+func TestRunTestMainReportsNativeLLVMExpectOkFailure(t *testing.T) {
+	requireClangForNativeTest(t)
+
+	dir := t.TempDir()
+	writeNativeTestFile(t, dir, "lib.osty", `pub enum CalcError {
+    DivideByZero,
+}
+
+pub fn div(a: Int, b: Int) -> Result<Int, CalcError> {
+    if b == 0 { Err(DivideByZero) } else { Ok(a / b) }
+}
+`)
+	writeNativeTestFile(t, dir, "lib_test.osty", `use std.testing
+
+fn testExpectOkFails() {
+    testing.expectOk(div(1, 0))
+}
+`)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := runTestMain([]string{dir}, cliFlags{}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("runTestMain() exit = %d, want 1\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	}
+	if got := stdout.String(); !strings.Contains(got, "FAIL\ttestExpectOkFails") || !strings.Contains(got, "testing.expectOk failed at") {
+		t.Fatalf("stdout = %q, want expectOk failure output", got)
+	}
+	if got := stderr.String(); !strings.Contains(got, "osty test: testExpectOkFails: exit status 1") {
+		t.Fatalf("stderr = %q, want native expectOk failure summary", got)
+	}
+}
+
+func TestRunTestMainPassesNativeLLVMTupleTableTests(t *testing.T) {
+	requireClangForNativeTest(t)
+
+	dir := t.TempDir()
+	writeNativeTestFile(t, dir, "lib.osty", `pub fn clamp(v: Int, lo: Int, hi: Int) -> Int {
+    if v < lo { lo } else if v > hi { hi } else { v }
+}
+`)
+	writeNativeTestFile(t, dir, "lib_test.osty", `use std.testing
+
+fn testClampTable() {
+    let cases = [
+        (5, 0, 10, 5),
+        (-1, 0, 10, 0),
+        (99, 0, 10, 10),
+    ]
+    for c in cases {
+        let (v, lo, hi, expected) = c
+        testing.assertEq(clamp(v, lo, hi), expected)
+    }
+}
+
+fn benchClampHotPath() {
+    let _ = clamp(1, 0, 10)
+}
+`)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := runTestMain([]string{dir}, cliFlags{}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("runTestMain() exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	}
+	if got := stdout.String(); !strings.Contains(got, "ok\ttestClampTable") || !strings.Contains(got, "ok\t1 tests passed") {
+		t.Fatalf("stdout = %q, want tuple-table passing test summary", got)
+	}
+	if got := stderr.String(); strings.TrimSpace(got) != "" {
+		t.Fatalf("stderr = %q, want empty stderr", got)
+	}
+}
+
 func requireClangForNativeTest(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("clang"); err != nil {
