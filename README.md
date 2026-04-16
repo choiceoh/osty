@@ -46,7 +46,7 @@ than language-decision churn.
 | Build orchestrator (`osty build`) | done — manifest → front-end → backend emit/build, profile/target/feature wiring, backend-aware artifact/cache paths |
 | Test runner harness (`internal/testgen`) | done — merges per-file gen output, injects a real std.testing runtime + main(), runs via `go run` |
 | `osty test` (discovery + front-end + execution) | done — validates and **runs** discovered `test*` / `bench*` fns; failures and pass/fail totals report inline |
-| API doc generator (`internal/docgen`, `osty doc`) | done — HTML + markdown, field docs, cross-refs, workspace mode |
+| API doc generator (`internal/docgen`, `osty doc`) | done — self-hosted Osty source generates the Go package; HTML + markdown, field docs, cross-refs, workspace mode |
 | CI quality tooling (`internal/ci`, `osty ci`) | done — Osty-authored generated CI core, signature-aware snapshots, workspace coverage, JSON reports |
 | Pipeline visualizer (`osty pipeline`) | done — per-stage timing, workspace mode, backend-aware gen, baseline diff, LSP trace, `--explain` |
 | Profiles / targets / features / cache (`internal/profile`, `osty profiles` / `targets` / `features` / `cache`) | done — built-in and manifest profiles, cross-target env, feature closure + file pragmas, backend-aware fingerprints |
@@ -129,7 +129,7 @@ osty/
 │   ├── llvmgen/             # LLVM bridge generated from Osty selfhost-core backend logic
 │   ├── gen/                 # Go transpiler (Phases 1–6; `osty gen FILE`)
 │   ├── testgen/             # Test runner harness (drives `osty test`)
-│   ├── docgen/              # API doc generator (HTML + markdown; `osty doc`)
+│   ├── docgen/              # self-hosted API doc generator (HTML + markdown; `osty doc`)
 │   ├── ci/                  # CI quality tooling (`osty ci`, generated core)
 │   ├── cihost/              # Go host bridge for generated CI core
 │   ├── profile/             # Build profiles / targets / features

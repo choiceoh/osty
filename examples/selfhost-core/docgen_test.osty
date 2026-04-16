@@ -1,0 +1,154 @@
+use std.testing
+
+use go "strings" as docTestStrings {
+    fn Contains(s: String, substr: String) -> Bool
+}
+
+fn assertSelfDocContains(output: String, text: String) {
+    if !(docTestStrings.Contains(output, text)) {
+        testing.fail("missing {text} in {output}")
+    }
+}
+
+fn testSelfDocGenExtractsPublicSurface() {
+    let source = r"""
+        /// Adds numbers.
+        pub fn add(left: Int, right: Int = 0) -> Int {
+            return left + right
+        }
+
+        fn hidden() {}
+
+        /// A user record.
+        pub struct User<T> {
+            /// User name.
+            pub name: String
+            age: Int
+
+            /// Builds a display name.
+            pub fn display(self) -> String {
+                return self.name
+            }
+        }
+
+        /// Lookup result.
+        pub enum Lookup<T> {
+            /// Found a value.
+            Found(T),
+            Missing,
+
+            /// Reports whether the lookup found data.
+            pub fn ok(self) -> Bool {
+                return true
+            }
+        }
+
+        /// Readable stream.
+        pub interface Reader {
+            /// Reads bytes.
+            fn read(buf: Bytes) -> Int
+        }
+
+        /// Name collection.
+        pub type Names = List<String>
+
+        /// Maximum user count.
+        pub let maxUsers: Int = 10
+        """
+
+    let pkg = selfDocFromSource("demo", "lib.osty", source)
+    testing.assertEq(selfDocPackageDeclCount(pkg), 6)
+    testing.assert(selfDocPackageHasDecl(pkg, "add", "function"))
+    testing.assert(selfDocPackageHasDecl(pkg, "User", "struct"))
+    testing.assert(selfDocPackageHasDecl(pkg, "Lookup", "enum"))
+    testing.assert(selfDocPackageHasDecl(pkg, "Reader", "interface"))
+    testing.assert(selfDocPackageHasDecl(pkg, "Names", "type"))
+    testing.assert(selfDocPackageHasDecl(pkg, "maxUsers", "constant"))
+    testing.assert(!(selfDocPackageHasDecl(pkg, "hidden", "function")))
+
+    let user = selfDocPackageDeclNamed(pkg, "User")
+    testing.assertEq(selfDocFieldCount(user.fields), 1)
+    testing.assertEq(selfDocMethodCount(user.methods), 1)
+    testing.assertEq(user.fields[0].name, "name")
+    testing.assertEq(user.fields[0].doc, "User name.")
+
+    let lookup = selfDocPackageDeclNamed(pkg, "Lookup")
+    testing.assertEq(selfDocVariantCount(lookup.variants), 2)
+    testing.assertEq(selfDocMethodCount(lookup.methods), 1)
+    testing.assertEq(lookup.variants[0].payload[0], "T")
+}
+
+fn testSelfDocGenRendersMarkdownAndSections() {
+    let source = r"""
+        /// Adds two numbers.
+        ///
+        /// Params:
+        /// - left: first value
+        /// - right: second value
+        /// Returns: the sum.
+        /// Example:
+        /// let value = add(1, 2)
+        /// See: subtract, total
+        pub fn add(left: Int, right: Int) -> Int {
+            return left + right
+        }
+        """
+
+    let pkg = selfDocFromSource("math", "math.osty", source)
+    let markdown = selfDocRenderMarkdown(pkg)
+    assertSelfDocContains(markdown, "# Package `math`")
+    assertSelfDocContains(markdown, "### Function `add`")
+    assertSelfDocContains(markdown, "pub fn add(left: Int, right: Int) -> Int")
+    assertSelfDocContains(markdown, "Adds two numbers.")
+    assertSelfDocContains(markdown, "#### Parameters")
+    assertSelfDocContains(markdown, "| `left` | first value |")
+    assertSelfDocContains(markdown, "#### Returns")
+    assertSelfDocContains(markdown, "the sum.")
+    assertSelfDocContains(markdown, "```osty\nlet value = add(1, 2)\n```")
+    assertSelfDocContains(markdown, "- `subtract`")
+
+    let report = selfDocVerifyExamples(pkg)
+    testing.assertEq(report.examples, 1)
+    testing.assertEq(report.failures, 0)
+}
+
+fn testSelfDocGenRendersReferences() {
+    let source = r"""
+        /// A user.
+        pub struct User {
+            pub name: String
+        }
+
+        /// Stores users.
+        pub struct Store {
+            pub current: User
+
+            /// Looks up a user.
+            pub fn find(self, id: Int) -> User {
+                return self.current
+            }
+        }
+        """
+
+    let pkg = selfDocFromSource("refs", "refs.osty", source)
+    let markdown = selfDocRenderMarkdown(pkg)
+    assertSelfDocContains(markdown, "_References: [`User`](#struct-user)_")
+
+    let html = selfDocRenderHTML(pkg)
+    assertSelfDocContains(html, "<a href=\"#struct-user\">User</a>")
+}
+
+fn testSelfDocGenReportsBrokenExamples() {
+    let source = r"""
+        /// Broken example.
+        /// Example:
+        /// fn broken( {
+        pub fn demo() {}
+        """
+    let pkg = selfDocFromSource("broken", "broken.osty", source)
+    let report = selfDocVerifyExamples(pkg)
+
+    testing.assertEq(report.examples, 1)
+    testing.assertEq(report.failures, 1)
+    assertSelfDocContains(report.firstFailure, "broken.osty")
+}

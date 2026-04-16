@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/osty/osty/internal/docgen"
@@ -103,7 +104,7 @@ func runDoc(args []string, flags cliFlags) {
 		return
 	}
 
-	var pkgDoc *docgen.Package
+	var pkgDoc *docgen.SelfDocPackage
 	if info.IsDir() {
 		pkg, err := resolve.LoadPackage(path)
 		if err != nil {
@@ -123,7 +124,7 @@ func runDoc(args []string, flags cliFlags) {
 		if anyFatal {
 			os.Exit(1)
 		}
-		pkgDoc = docgen.FromPackage(pkg)
+		pkgDoc = docPackageFromResolved(pkg)
 	} else {
 		src, err := os.ReadFile(path)
 		if err != nil {
@@ -139,12 +140,11 @@ func runDoc(args []string, flags cliFlags) {
 			os.Exit(1)
 		}
 		label := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-		pkgDoc = docgen.FromFile(label, file)
-		pkgDoc.Modules[0].Path = path
+		pkgDoc = docgen.FromSource(label, path, string(src))
 	}
 
 	if title != "" {
-		pkgDoc.Name = title
+		pkgDoc = docgen.RenamePackage(pkgDoc, title)
 	}
 
 	// Verify examples first so a failure aborts before producing
@@ -155,7 +155,7 @@ func runDoc(args []string, flags cliFlags) {
 		errs := docgen.VerifyExamples(pkgDoc)
 		if len(errs) > 0 {
 			for _, e := range errs {
-				fmt.Fprintln(os.Stderr, e.Format())
+				fmt.Fprintln(os.Stderr, docgen.ExampleErrorFormat(e))
 			}
 			fmt.Fprintf(os.Stderr, "osty doc: %d example(s) failed to parse\n", len(errs))
 			os.Exit(1)
@@ -173,7 +173,7 @@ func runDoc(args []string, flags cliFlags) {
 	ext := extForFormat(format)
 
 	if checkMode {
-		target := checkTarget(outPath, pkgDoc.Name, ext)
+		target := checkTarget(outPath, docgen.PackageName(pkgDoc), ext)
 		if target == "" {
 			fmt.Fprintln(os.Stderr, "osty doc: --check requires --out FILE or --out DIR to locate the file to compare against")
 			os.Exit(2)
@@ -191,7 +191,7 @@ func runDoc(args []string, flags cliFlags) {
 		return
 	}
 
-	if err := writeDocOutput(pkgDoc.Name, outPath, ext, rendered); err != nil {
+	if err := writeDocOutput(docgen.PackageName(pkgDoc), outPath, ext, rendered); err != nil {
 		fmt.Fprintf(os.Stderr, "osty doc: %v\n", err)
 		os.Exit(1)
 	}
@@ -238,7 +238,7 @@ func runWorkspaceDoc(root, format, outPath, title string,
 
 	// Build docgen Packages keyed by the workspace's import paths so
 	// the index page's display order matches the resolver's view.
-	docPkgs := map[string]*docgen.Package{}
+	docPkgs := map[string]*docgen.SelfDocPackage{}
 	anyFatal := false
 	for impPath, pkg := range ws.Packages {
 		if pkg == nil {
@@ -256,26 +256,38 @@ func runWorkspaceDoc(root, format, outPath, title string,
 				printDiags(fmter, f.ParseDiags, flags)
 			}
 		}
-		dp := docgen.FromPackage(pkg)
+		dp := docPackageFromResolved(pkg)
 		// Workspace packages often have no Name set by the loader —
 		// fall back to the import path or directory basename.
-		dp.Name = docgen.PreferredPackageName(dp.Name, impPath, pkg.Dir)
+		dp = docgen.RenamePackage(dp,
+			docgen.PreferredPackageName(docgen.PackageName(dp), impPath, pkg.Dir))
 		docPkgs[impPath] = dp
 	}
 	if anyFatal {
 		os.Exit(1)
 	}
 
-	wsDoc := docgen.FromWorkspaceMap(root, docPkgs)
+	keys := make([]string, 0, len(docPkgs))
+	for impPath := range docPkgs {
+		keys = append(keys, impPath)
+	}
+	sort.Strings(keys)
+	orderedPkgs := make([]*docgen.SelfDocPackage, 0, len(keys))
+	for _, impPath := range keys {
+		if docPkgs[impPath] != nil {
+			orderedPkgs = append(orderedPkgs, docPkgs[impPath])
+		}
+	}
+	wsDoc := docgen.FromWorkspacePackages(root, orderedPkgs)
 	_ = title // workspace heading is "Workspace API documentation" by convention
 
 	if verifyEx {
 		var totalErrs int
-		for _, dp := range wsDoc.Packages {
+		for _, dp := range orderedPkgs {
 			errs := docgen.VerifyExamples(dp)
 			totalErrs += len(errs)
 			for _, e := range errs {
-				fmt.Fprintln(os.Stderr, e.Format())
+				fmt.Fprintln(os.Stderr, docgen.ExampleErrorFormat(e))
 			}
 		}
 		if totalErrs > 0 {
@@ -294,14 +306,14 @@ func runWorkspaceDoc(root, format, outPath, title string,
 	// Per-package files first, then the index — that ordering means a
 	// half-written run still leaves valid per-package docs even if
 	// something goes wrong producing the index.
-	for _, dp := range wsDoc.Packages {
+	for _, dp := range orderedPkgs {
 		var rendered string
 		if format == "html" {
 			rendered = docgen.RenderHTML(dp)
 		} else {
 			rendered = docgen.RenderMarkdown(dp)
 		}
-		fname := safeDocFilename(dp.Name) + ext
+		fname := docgen.SafePackageFilename(docgen.PackageName(dp)) + ext
 		target := filepath.Join(dir, fname)
 		if err := os.WriteFile(target, []byte(rendered), 0o644); err != nil {
 			fmt.Fprintf(os.Stderr, "osty doc: %v\n", err)
@@ -325,7 +337,17 @@ func runWorkspaceDoc(root, format, outPath, title string,
 	}
 
 	fmt.Fprintf(os.Stderr, "osty doc: wrote %d package(s) + index to %s\n",
-		len(wsDoc.Packages), dir)
+		len(orderedPkgs), dir)
+}
+
+func docPackageFromResolved(pkg *resolve.Package) *docgen.SelfDocPackage {
+	paths := make([]string, 0, len(pkg.Files))
+	sources := make([]string, 0, len(pkg.Files))
+	for _, f := range pkg.Files {
+		paths = append(paths, f.Path)
+		sources = append(sources, string(f.Source))
+	}
+	return docgen.FromSources(pkg.Name, pkg.Dir, paths, sources)
 }
 
 // extForFormat maps a format name to the on-disk extension the writer
@@ -362,7 +384,7 @@ func checkTarget(out, pkgName, ext string) string {
 	}
 	if wantDir {
 		dir := strings.TrimRight(out, "/"+string(os.PathSeparator))
-		return filepath.Join(dir, safeDocFilename(pkgName)+ext)
+		return filepath.Join(dir, docgen.SafePackageFilename(pkgName)+ext)
 	}
 	return out
 }
@@ -391,7 +413,7 @@ func writeDocOutput(pkgName, out, ext, content string) error {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
-		name := safeDocFilename(pkgName) + ext
+		name := docgen.SafePackageFilename(pkgName) + ext
 		target := filepath.Join(dir, name)
 		return os.WriteFile(target, []byte(content), 0o644)
 	}
@@ -402,26 +424,4 @@ func writeDocOutput(pkgName, out, ext, content string) error {
 		}
 	}
 	return os.WriteFile(out, []byte(content), 0o644)
-}
-
-// safeDocFilename keeps the output filename deterministic and portable:
-// non-[A-Za-z0-9._-] characters become '_' so a package named
-// `my.pkg/foo` still resolves to a single file.
-func safeDocFilename(name string) string {
-	if name == "" {
-		return "doc"
-	}
-	var b strings.Builder
-	for _, r := range name {
-		switch {
-		case r >= 'a' && r <= 'z',
-			r >= 'A' && r <= 'Z',
-			r >= '0' && r <= '9',
-			r == '.', r == '_', r == '-':
-			b.WriteRune(r)
-		default:
-			b.WriteByte('_')
-		}
-	}
-	return b.String()
 }
