@@ -1,0 +1,839 @@
+use go "strings" as strings {
+    fn Contains(s: String, substr: String) -> Bool
+    fn Fields(s: String) -> List<String>
+    fn HasPrefix(s: String, prefix: String) -> Bool
+    fn Join(elems: List<String>, sep: String) -> String
+    fn Split(s: String, sep: String) -> List<String>
+    fn SplitN(s: String, sep: String, n: Int) -> List<String>
+    fn TrimSpace(s: String) -> String
+}
+
+/// ManifestPackageSpec is the self-hosted subset of a [package] table.
+pub struct ManifestPackageSpec {
+    pub present: Bool,
+    pub name: String,
+    pub version: String,
+    pub edition: String,
+    pub tableLine: Int,
+    pub nameLine: Int,
+    pub versionLine: Int,
+    pub editionLine: Int,
+}
+
+/// ManifestWorkspaceSpec is the self-hosted subset of a [workspace] table.
+pub struct ManifestWorkspaceSpec {
+    pub present: Bool,
+    pub members: List<String>,
+}
+
+/// ManifestProfileSpec is the pure-data surface of one [profile.*] table.
+pub struct ManifestProfileSpec {
+    pub name: String,
+    pub inherits: String,
+    pub hasOptLevel: Bool,
+    pub optLevel: Int,
+    pub line: Int,
+}
+
+/// ManifestTargetSpec is the pure-data surface of one [target.*] table.
+pub struct ManifestTargetSpec {
+    pub triple: String,
+    pub line: Int,
+}
+
+/// ManifestDependencySpec is the validation surface of one dependency entry.
+pub struct ManifestDependencySpec {
+    pub name: String,
+    pub versionReq: String,
+    pub path: String,
+    pub git: String,
+    pub section: String,
+    pub line: Int,
+}
+
+/// ManifestDiagnosticSpec is a source-positioned diagnostic from self-hosted validation.
+pub struct ManifestDiagnosticSpec {
+    pub severity: String,
+    pub code: String,
+    pub message: String,
+    pub line: Int,
+    pub hint: String,
+}
+
+/// ManifestSpec collects the manifest fields whose validation has no I/O.
+pub struct ManifestSpec {
+    pub pkg: ManifestPackageSpec,
+    pub workspace: ManifestWorkspaceSpec,
+    pub dependencies: List<ManifestDependencySpec>,
+    pub devDependencies: List<ManifestDependencySpec>,
+    pub profiles: List<ManifestProfileSpec>,
+    pub targets: List<ManifestTargetSpec>,
+    pub defaultFeatures: List<String>,
+    pub features: List<FeatureSpec>,
+}
+
+/// ManifestValidation summarizes self-hosted manifest validation findings.
+pub struct ManifestValidation {
+    pub missingRoots: Int,
+    pub missingPackageNames: Int,
+    pub badPackageNames: Int,
+    pub missingPackageVersions: Int,
+    pub badPackageVersions: Int,
+    pub missingEditions: Int,
+    pub unknownEditions: Int,
+    pub emptyWorkspaces: Int,
+    pub badProfileOptLevels: Int,
+    pub unknownProfileBases: Int,
+    pub profileCycles: Int,
+    pub badTargets: Int,
+    pub badDependencyVersions: Int,
+    pub features: FeatureValidation,
+}
+
+pub fn manifestPackageSpec(
+    present: Bool,
+    name: String,
+    version: String,
+    edition: String,
+) -> ManifestPackageSpec {
+    manifestPackageSpecAt(present, name, version, edition, 1, 1, 1, 1)
+}
+
+pub fn manifestPackageSpecAt(
+    present: Bool,
+    name: String,
+    version: String,
+    edition: String,
+    tableLine: Int,
+    nameLine: Int,
+    versionLine: Int,
+    editionLine: Int,
+) -> ManifestPackageSpec {
+    ManifestPackageSpec { present, name, version, edition, tableLine, nameLine, versionLine, editionLine }
+}
+
+pub fn manifestWorkspaceSpec(present: Bool, members: List<String>) -> ManifestWorkspaceSpec {
+    ManifestWorkspaceSpec { present, members }
+}
+
+pub fn manifestProfileSpec(
+    name: String,
+    inherits: String,
+    hasOptLevel: Bool,
+    optLevel: Int,
+) -> ManifestProfileSpec {
+    manifestProfileSpecAt(name, inherits, hasOptLevel, optLevel, 1)
+}
+
+pub fn manifestProfileSpecAt(
+    name: String,
+    inherits: String,
+    hasOptLevel: Bool,
+    optLevel: Int,
+    line: Int,
+) -> ManifestProfileSpec {
+    ManifestProfileSpec { name, inherits, hasOptLevel, optLevel, line }
+}
+
+pub fn manifestTargetSpec(triple: String) -> ManifestTargetSpec {
+    manifestTargetSpecAt(triple, 1)
+}
+
+pub fn manifestTargetSpecAt(triple: String, line: Int) -> ManifestTargetSpec {
+    ManifestTargetSpec { triple, line }
+}
+
+pub fn manifestDependencySpec(
+    name: String,
+    versionReq: String,
+    path: String,
+    git: String,
+) -> ManifestDependencySpec {
+    manifestDependencySpecAt(name, versionReq, path, git, "dependencies", 1)
+}
+
+pub fn manifestDependencySpecAt(
+    name: String,
+    versionReq: String,
+    path: String,
+    git: String,
+    section: String,
+    line: Int,
+) -> ManifestDependencySpec {
+    ManifestDependencySpec { name, versionReq, path, git, section, line }
+}
+
+pub fn manifestDiagnosticSpec(
+    severity: String,
+    code: String,
+    message: String,
+    line: Int,
+    hint: String,
+) -> ManifestDiagnosticSpec {
+    ManifestDiagnosticSpec { severity, code, message, line: manifestLine(line), hint }
+}
+
+pub fn manifestSpec(
+    pkg: ManifestPackageSpec,
+    workspace: ManifestWorkspaceSpec,
+    profiles: List<ManifestProfileSpec>,
+    targets: List<ManifestTargetSpec>,
+    defaultFeatures: List<String>,
+    features: List<FeatureSpec>,
+) -> ManifestSpec {
+    manifestSpecWithDeps(pkg, workspace, [], [], profiles, targets, defaultFeatures, features)
+}
+
+pub fn manifestSpecWithDeps(
+    pkg: ManifestPackageSpec,
+    workspace: ManifestWorkspaceSpec,
+    dependencies: List<ManifestDependencySpec>,
+    devDependencies: List<ManifestDependencySpec>,
+    profiles: List<ManifestProfileSpec>,
+    targets: List<ManifestTargetSpec>,
+    defaultFeatures: List<String>,
+    features: List<FeatureSpec>,
+) -> ManifestSpec {
+    ManifestSpec { pkg, workspace, dependencies, devDependencies, profiles, targets, defaultFeatures, features }
+}
+
+pub fn emptyManifestValidation() -> ManifestValidation {
+    ManifestValidation {
+        missingRoots: 0,
+        missingPackageNames: 0,
+        badPackageNames: 0,
+        missingPackageVersions: 0,
+        badPackageVersions: 0,
+        missingEditions: 0,
+        unknownEditions: 0,
+        emptyWorkspaces: 0,
+        badProfileOptLevels: 0,
+        unknownProfileBases: 0,
+        profileCycles: 0,
+        badTargets: 0,
+        badDependencyVersions: 0,
+        features: emptyFeatureValidation(),
+    }
+}
+
+/// validateManifestSpec mirrors the pure-data manifest checks from the Go host.
+pub fn validateManifestSpec(spec: ManifestSpec) -> ManifestValidation {
+    let mut out = emptyManifestValidation()
+    if !(spec.pkg.present) && !(spec.workspace.present) {
+        out.missingRoots = out.missingRoots + 1
+        return out
+    }
+
+    if spec.pkg.present {
+        if spec.pkg.name == "" {
+            out.missingPackageNames = out.missingPackageNames + 1
+        } else if !(manifestPackageNameValid(spec.pkg.name)) {
+            out.badPackageNames = out.badPackageNames + 1
+        }
+
+        if spec.pkg.version == "" {
+            out.missingPackageVersions = out.missingPackageVersions + 1
+        } else if !(manifestPackageVersionValid(spec.pkg.version)) {
+            out.badPackageVersions = out.badPackageVersions + 1
+        }
+
+        if spec.pkg.edition == "" {
+            out.missingEditions = out.missingEditions + 1
+        } else if !(manifestEditionKnown(spec.pkg.edition)) {
+            out.unknownEditions = out.unknownEditions + 1
+        }
+    }
+
+    if spec.workspace.present && spec.workspace.members.len() == 0 {
+        out.emptyWorkspaces = out.emptyWorkspaces + 1
+    }
+
+    out = validateManifestProfiles(spec.profiles, out)
+    out = validateManifestTargets(spec.targets, out)
+    out = validateManifestDependencies(spec.dependencies, out)
+    out = validateManifestDependencies(spec.devDependencies, out)
+    out.features = validateFeatureGraph(spec.defaultFeatures, spec.features)
+    out
+}
+
+/// validateManifestDiagnostics returns the concrete diagnostics for the Go host adapter.
+pub fn validateManifestDiagnostics(spec: ManifestSpec) -> List<ManifestDiagnosticSpec> {
+    let mut out: List<ManifestDiagnosticSpec> = []
+    if !(spec.pkg.present) && !(spec.workspace.present) {
+        out.push(manifestError(
+            "E2010",
+            "manifest defines neither [package] nor [workspace]",
+            1,
+            "",
+        ))
+        return out
+    }
+
+    if spec.pkg.present {
+        if spec.pkg.name == "" {
+            out.push(manifestError(
+                "E2011",
+                "[package] missing required field `name`",
+                spec.pkg.tableLine,
+                "",
+            ))
+        } else if !(manifestPackageNameValid(spec.pkg.name)) {
+            out.push(manifestError(
+                "E2014",
+                "package.name `{spec.pkg.name}` is not a valid identifier (must match [A-Za-z_][A-Za-z0-9_-]*)",
+                spec.pkg.nameLine,
+                "",
+            ))
+        }
+
+        if spec.pkg.version == "" {
+            out.push(manifestError(
+                "E2011",
+                "[package] missing required field `version`",
+                spec.pkg.tableLine,
+                "",
+            ))
+        } else if !(manifestPackageVersionValid(spec.pkg.version)) {
+            out.push(manifestError(
+                "E2015",
+                "package.version `{spec.pkg.version}` is not a valid semver (want X.Y.Z)",
+                spec.pkg.versionLine,
+                "",
+            ))
+        }
+
+        if spec.pkg.edition == "" {
+            out.push(manifestWarning(
+                "E2011",
+                "[package] missing `edition`; defaulting to {manifestCurrentEdition()}",
+                spec.pkg.tableLine,
+                "add edition = \"0.4\" to pin the spec version",
+            ))
+        } else if !(manifestEditionKnown(spec.pkg.edition)) {
+            out.push(manifestError(
+                "E2016",
+                "unknown edition `{spec.pkg.edition}` (known: {manifestKnownEditionsText()})",
+                spec.pkg.editionLine,
+                "",
+            ))
+        }
+    }
+
+    if spec.workspace.present && spec.workspace.members.len() == 0 {
+        out.push(manifestError(
+            "E2018",
+            "[workspace] has no `members` - a workspace must declare at least one member package",
+            1,
+            "",
+        ))
+    }
+
+    out = manifestProfileDiagnostics(spec.profiles, out)
+    out = manifestTargetDiagnostics(spec.targets, out)
+    out = manifestDependencyDiagnostics(spec.dependencies, out)
+    out = manifestDependencyDiagnostics(spec.devDependencies, out)
+    out = manifestFeatureDiagnostics(spec.defaultFeatures, spec.features, out)
+    out
+}
+
+pub fn manifestValidationErrorCount(v: ManifestValidation) -> Int {
+    let mut count = 0
+    count = count + v.missingRoots
+    count = count + v.missingPackageNames
+    count = count + v.badPackageNames
+    count = count + v.missingPackageVersions
+    count = count + v.badPackageVersions
+    count = count + v.unknownEditions
+    count = count + v.emptyWorkspaces
+    count = count + v.badProfileOptLevels
+    count = count + v.unknownProfileBases
+    count = count + v.profileCycles
+    count = count + v.badTargets
+    count = count + v.badDependencyVersions
+    count = count + v.features.undefinedDefault
+    count = count + v.features.selfReferences
+    count
+}
+
+pub fn manifestValidationWarningCount(v: ManifestValidation) -> Int {
+    v.missingEditions
+}
+
+pub fn manifestPackageNameValid(name: String) -> Bool {
+    if name == "" {
+        return false
+    }
+    let mut index = 0
+    for unit in strings.Split(name, "") {
+        if index == 0 {
+            if !(manifestPackageNameStart(unit)) {
+                return false
+            }
+        } else if !(manifestPackageNameUnit(unit)) {
+            return false
+        }
+        index = index + 1
+    }
+    true
+}
+
+pub fn manifestPackageVersionValid(version: String) -> Bool {
+    if version == "" || strings.HasPrefix(version, "v") {
+        return false
+    }
+
+    let plus = splitSummary(strings.SplitN(version, "+", 2))
+    if plus.count == 2 && !(buildIdentifiersValid(plus.second)) {
+        return false
+    }
+
+    let dash = splitSummary(strings.SplitN(plus.first, "-", 2))
+    let mut coreValid = false
+    match parseSemCore(dash.first) {
+        Ok(_) -> {
+            coreValid = true
+        },
+        Err(_) -> {
+            coreValid = false
+        },
+    }
+    if !(coreValid) {
+        return false
+    }
+    if dash.count == 1 {
+        return true
+    }
+    manifestVersionIdentifiersValid(dash.second)
+}
+
+pub fn manifestEditionKnown(edition: String) -> Bool {
+    edition == "0.3" || edition == "0.4"
+}
+
+pub fn manifestTargetTripleValid(triple: String) -> Bool {
+    let parts = splitSummary(strings.SplitN(triple, "-", 2))
+    parts.count == 2 && parts.first != "" && parts.second != ""
+}
+
+pub fn manifestProfileExists(name: String, profiles: List<ManifestProfileSpec>) -> Bool {
+    for profile in profiles {
+        if profile.name == name {
+            return true
+        }
+    }
+    false
+}
+
+pub fn manifestVersionReqValid(req: String) -> Bool {
+    let text = strings.TrimSpace(req)
+    if text == "" {
+        return false
+    }
+    if text == "*" {
+        return true
+    }
+    for part in strings.Fields(text) {
+        if !(manifestVersionReqPartValid(part)) {
+            return false
+        }
+    }
+    true
+}
+
+fn validateManifestProfiles(
+    profiles: List<ManifestProfileSpec>,
+    validation: ManifestValidation,
+) -> ManifestValidation {
+    let mut out = validation
+    for profile in profiles {
+        if profile.hasOptLevel && (profile.optLevel < 0 || profile.optLevel > 3) {
+            out.badProfileOptLevels = out.badProfileOptLevels + 1
+        }
+        if profile.inherits != "" &&
+            !(manifestBuiltinProfile(profile.inherits)) &&
+            !(manifestProfileExists(profile.inherits, profiles)) {
+            out.unknownProfileBases = out.unknownProfileBases + 1
+        }
+    }
+
+    for profile in profiles {
+        if manifestProfileHasCycle(profile.name, profiles) {
+            out.profileCycles = out.profileCycles + 1
+        }
+    }
+    out
+}
+
+fn validateManifestTargets(
+    targets: List<ManifestTargetSpec>,
+    validation: ManifestValidation,
+) -> ManifestValidation {
+    let mut out = validation
+    for target in targets {
+        if !(manifestTargetTripleValid(target.triple)) {
+            out.badTargets = out.badTargets + 1
+        }
+    }
+    out
+}
+
+fn validateManifestDependencies(
+    deps: List<ManifestDependencySpec>,
+    validation: ManifestValidation,
+) -> ManifestValidation {
+    let mut out = validation
+    for dep in deps {
+        if dep.path == "" && dep.git == "" && dep.versionReq != "" && dep.versionReq != "*" {
+            if !(manifestVersionReqValid(dep.versionReq)) {
+                out.badDependencyVersions = out.badDependencyVersions + 1
+            }
+        }
+    }
+    out
+}
+
+fn manifestError(
+    code: String,
+    message: String,
+    line: Int,
+    hint: String,
+) -> ManifestDiagnosticSpec {
+    manifestDiagnosticSpec("error", code, message, line, hint)
+}
+
+fn manifestWarning(
+    code: String,
+    message: String,
+    line: Int,
+    hint: String,
+) -> ManifestDiagnosticSpec {
+    manifestDiagnosticSpec("warning", code, message, line, hint)
+}
+
+fn manifestLine(line: Int) -> Int {
+    if line > 0 {
+        return line
+    }
+    1
+}
+
+fn manifestCurrentEdition() -> String {
+    "0.4"
+}
+
+fn manifestKnownEditionsText() -> String {
+    "0.3, 0.4"
+}
+
+fn manifestProfileDiagnostics(
+    profiles: List<ManifestProfileSpec>,
+    diagnostics: List<ManifestDiagnosticSpec>,
+) -> List<ManifestDiagnosticSpec> {
+    let mut out = diagnostics
+    for profile in profiles {
+        if profile.hasOptLevel && (profile.optLevel < 0 || profile.optLevel > 3) {
+            out.push(manifestError(
+                "E2013",
+                "profile.{profile.name}.opt-level {profile.optLevel} out of range (want 0-3)",
+                profile.line,
+                "",
+            ))
+        }
+        if profile.inherits != "" &&
+            !(manifestBuiltinProfile(profile.inherits)) &&
+            !(manifestProfileExists(profile.inherits, profiles)) {
+            out.push(manifestError(
+                "E2017",
+                "profile.{profile.name}.inherits = \"{profile.inherits}\": unknown base profile",
+                profile.line,
+                "must be a built-in (debug, release, profile, test) or a manifest-declared profile",
+            ))
+        }
+    }
+
+    for profile in profiles {
+        if manifestProfileHasCycle(profile.name, profiles) {
+            out.push(manifestError(
+                "E2017",
+                "profile.{profile.name}: inherits chain forms a cycle",
+                profile.line,
+                "",
+            ))
+        }
+    }
+    out
+}
+
+fn manifestTargetDiagnostics(
+    targets: List<ManifestTargetSpec>,
+    diagnostics: List<ManifestDiagnosticSpec>,
+) -> List<ManifestDiagnosticSpec> {
+    let mut out = diagnostics
+    for target in targets {
+        if !(manifestTargetTripleValid(target.triple)) {
+            out.push(manifestError(
+                "E2017",
+                "target.{target.triple}: triple must be <arch>-<os>",
+                target.line,
+                "examples: amd64-linux, arm64-darwin, wasm-js",
+            ))
+        }
+    }
+    out
+}
+
+fn manifestDependencyDiagnostics(
+    deps: List<ManifestDependencySpec>,
+    diagnostics: List<ManifestDiagnosticSpec>,
+) -> List<ManifestDiagnosticSpec> {
+    let mut out = diagnostics
+    for dep in deps {
+        if dep.path == "" && dep.git == "" && dep.versionReq != "" && dep.versionReq != "*" {
+            if !(manifestVersionReqValid(dep.versionReq)) {
+                out.push(manifestError(
+                    "E2017",
+                    "{dep.section}.{dep.name} has invalid version requirement \"{dep.versionReq}\"",
+                    dep.line,
+                    "examples: \"1.2.3\", \"^1.0\", \">=1.0, <2\", \"*\"",
+                ))
+            }
+        }
+    }
+    out
+}
+
+fn manifestFeatureDiagnostics(
+    defaults: List<String>,
+    features: List<FeatureSpec>,
+    diagnostics: List<ManifestDiagnosticSpec>,
+) -> List<ManifestDiagnosticSpec> {
+    let mut out = diagnostics
+    for name in defaults {
+        if !(featureExists(name, features)) {
+            out.push(manifestError(
+                "E2017",
+                "features.default references undefined feature \"{name}\"",
+                1,
+                "",
+            ))
+        }
+    }
+    for feature in features {
+        for dep in feature.deps {
+            if dep == feature.name {
+                out.push(manifestError(
+                    "E2017",
+                    "features.{feature.name} lists itself",
+                    1,
+                    "",
+                ))
+            }
+        }
+    }
+    out
+}
+
+fn manifestPackageNameStart(unit: String) -> Bool {
+    (unit >= "A" && unit <= "Z") || (unit >= "a" && unit <= "z") || unit == "_"
+}
+
+fn manifestPackageNameUnit(unit: String) -> Bool {
+    manifestPackageNameStart(unit) || (unit >= "0" && unit <= "9") || unit == "-"
+}
+
+fn manifestVersionIdentifiersValid(text: String) -> Bool {
+    if text == "" {
+        return false
+    }
+    for part in strings.Split(text, ".") {
+        if !(identifierTextValid(part)) {
+            return false
+        }
+    }
+    true
+}
+
+fn manifestVersionReqPartValid(part: String) -> Bool {
+    if strings.HasPrefix(part, "^") {
+        return manifestPartialVersionValid(manifestTrimPrefix1(part))
+    }
+    if strings.HasPrefix(part, "~") {
+        return manifestPartialVersionValid(manifestTrimPrefix1(part))
+    }
+    if strings.Contains(part, "*") {
+        return manifestWildcardReqValid(part)
+    }
+    let split = manifestSplitReqOp(part)
+    manifestPartialVersionValid(split.second)
+}
+
+fn manifestPartialVersionValid(version: String) -> Bool {
+    if version == "" {
+        return false
+    }
+    let text = if strings.HasPrefix(version, "v") {
+        manifestTrimPrefix1(version)
+    } else {
+        version
+    }
+    if text == "" {
+        return false
+    }
+
+    let plus = splitSummary(strings.SplitN(text, "+", 2))
+    let dash = splitSummary(strings.SplitN(plus.first, "-", 2))
+    let parts = splitSummary(strings.Split(dash.first, "."))
+    if parts.count < 1 || parts.count > 3 {
+        return false
+    }
+    if !(manifestReqNumberValid(parts.first)) {
+        return false
+    }
+    if parts.count >= 2 && !(manifestReqNumberValid(parts.second)) {
+        return false
+    }
+    if parts.count >= 3 && !(manifestReqNumberValid(parts.third)) {
+        return false
+    }
+    true
+}
+
+fn manifestWildcardReqValid(req: String) -> Bool {
+    if req == "*" {
+        return true
+    }
+    let parts = splitSummary(strings.Split(req, "."))
+    if parts.count > 3 {
+        return false
+    }
+
+    let starAt = manifestWildcardIndex(parts)
+    if starAt < 0 {
+        return false
+    }
+    if starAt == 0 {
+        return manifestWildcardOrMissing(parts.second) && manifestWildcardOrMissing(parts.third)
+    }
+    if starAt == 1 {
+        return manifestReqNumberValid(parts.first) && manifestWildcardOrMissing(parts.second) && manifestWildcardOrMissing(parts.third)
+    }
+    manifestReqNumberValid(parts.first) && manifestReqNumberValid(parts.second) && manifestWildcardOrMissing(parts.third)
+}
+
+fn manifestWildcardIndex(parts: SemSplit) -> Int {
+    if manifestWildcardUnit(parts.first) {
+        return 0
+    }
+    if parts.count >= 2 && manifestWildcardUnit(parts.second) {
+        return 1
+    }
+    if parts.count >= 3 && manifestWildcardUnit(parts.third) {
+        return 2
+    }
+    return -1
+}
+
+fn manifestWildcardUnit(unit: String) -> Bool {
+    unit == "*" || unit == "x" || unit == "X"
+}
+
+fn manifestWildcardOrMissing(unit: String) -> Bool {
+    unit == "" || manifestWildcardUnit(unit)
+}
+
+fn manifestReqNumberValid(text: String) -> Bool {
+    match parseSemNumber(text) {
+        Ok(_) -> true,
+        Err(_) -> false,
+    }
+}
+
+fn manifestSplitReqOp(part: String) -> SemSplit {
+    if strings.HasPrefix(part, ">=") {
+        return SemSplit { count: 2, first: ">=", second: manifestTrimPrefixN(part, 2), third: "" }
+    }
+    if strings.HasPrefix(part, "<=") {
+        return SemSplit { count: 2, first: "<=", second: manifestTrimPrefixN(part, 2), third: "" }
+    }
+    if strings.HasPrefix(part, ">") {
+        return SemSplit { count: 2, first: ">", second: manifestTrimPrefix1(part), third: "" }
+    }
+    if strings.HasPrefix(part, "<") {
+        return SemSplit { count: 2, first: "<", second: manifestTrimPrefix1(part), third: "" }
+    }
+    if strings.HasPrefix(part, "=") {
+        return SemSplit { count: 2, first: "=", second: manifestTrimPrefix1(part), third: "" }
+    }
+    SemSplit { count: 1, first: "", second: part, third: "" }
+}
+
+fn manifestTrimPrefix1(text: String) -> String {
+    manifestTrimPrefixN(text, 1)
+}
+
+fn manifestTrimPrefixN(text: String, n: Int) -> String {
+    let units = strings.Split(text, "")
+    let mut out: List<String> = []
+    let mut i = 0
+    for unit in units {
+        if i >= n {
+            out.push(unit)
+        }
+        i = i + 1
+    }
+    strings.Join(out, "")
+}
+
+fn manifestBuiltinProfile(name: String) -> Bool {
+    name == "debug" || name == "release" || name == "profile" || name == "test"
+}
+
+fn manifestProfileHasCycle(name: String, profiles: List<ManifestProfileSpec>) -> Bool {
+    manifestProfileCycleVisit(name, profiles, [])
+}
+
+fn manifestProfileCycleVisit(
+    name: String,
+    profiles: List<ManifestProfileSpec>,
+    stack: List<String>,
+) -> Bool {
+    if manifestBuiltinProfile(name) {
+        return false
+    }
+    if manifestStringListContains(stack, name) {
+        return true
+    }
+    for profile in profiles {
+        if profile.name == name {
+            if profile.inherits == "" {
+                return false
+            }
+            if manifestBuiltinProfile(profile.inherits) {
+                return false
+            }
+            if !(manifestProfileExists(profile.inherits, profiles)) {
+                return false
+            }
+            return manifestProfileCycleVisit(profile.inherits, profiles, manifestStringListAppended(stack, name))
+        }
+    }
+    false
+}
+
+fn manifestStringListContains(items: List<String>, target: String) -> Bool {
+    for item in items {
+        if item == target {
+            return true
+        }
+    }
+    false
+}
+
+fn manifestStringListAppended(items: List<String>, item: String) -> List<String> {
+    let mut out: List<String> = []
+    for existing in items {
+        out.push(existing)
+    }
+    out.push(item)
+    out
+}

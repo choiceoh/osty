@@ -17,7 +17,7 @@ the compiler evolves.
 - `selfhost-core`: standalone package for the self-hosting algorithms,
   including the
   runnable lexer scanner, front-end seed models, and broad example-style
-  tests for SemVer, registry selection, manifest features, diagnostics,
+  tests for SemVer, registry selection, manifest validation, diagnostics,
   package archive classification, a pure Osty semantic IR bridge,
   Osty-written linter and resolver cores, the shared self-hosted checker
   through a thin package bridge, plus the pure Osty formatter.

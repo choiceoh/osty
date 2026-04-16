@@ -160,7 +160,7 @@ type Target struct {
 // Package is the manifest's `[package]` section.
 type Package struct {
 	Name        string
-	Version     string // SemVer-ish — validated by pkgmgr/semver
+	Version     string // SemVer-ish — validated by the self-hosted manifest core
 	Edition     string // osty spec version, e.g. "0.3"
 	Description string
 	Authors     []string
@@ -242,8 +242,11 @@ type Registry struct {
 }
 
 // Parse parses osty.toml bytes into a Manifest. Returns a descriptive
-// error on malformed input or schema violations — the error line
-// numbers come from the underlying TOML parser.
+// error on malformed TOML or structural schema violations whose shape
+// prevents building a Manifest. Semantic requirements such as a root
+// [package]/[workspace] table or required package identity fields are
+// reported by Validate so they flow through the self-hosted manifest
+// validation core.
 func Parse(src []byte) (*Manifest, error) {
 	root, err := parseTOML(src)
 	if err != nil {
@@ -443,12 +446,6 @@ func Parse(src []byte) (*Manifest, error) {
 			m.Features[name] = items
 		}
 	}
-	// A manifest must declare at least one of [package] or [workspace].
-	// This is the sole required-section check after the workspace pass
-	// so either kind of root manifest is accepted.
-	if !m.HasPackage && m.Workspace == nil {
-		return nil, fmt.Errorf("osty.toml: missing [package] section")
-	}
 	return m, nil
 }
 
@@ -559,35 +556,26 @@ func parseTargetSection(triple string, t *tomlTable) (*Target, error) {
 	return tgt, nil
 }
 
-// parsePackageSection fills out *Package from a TOML table. Missing
-// required fields (`name`, `version`) produce a clear error.
-// Positions of the per-field values are recorded in out.*Pos so
-// Validate's diagnostics can point back at the source.
+// parsePackageSection fills out *Package from a TOML table. Positions
+// of the per-field values are recorded in out.*Pos so Validate's
+// diagnostics can point back at the source. Missing semantic fields
+// are left empty and reported by the self-hosted validation core.
 func parsePackageSection(t *tomlTable, out *Package) error {
-	name, ok := t.get("name")
-	if !ok {
-		return fmt.Errorf("osty.toml:%d: [package] is missing required key `name`", t.Line)
-	}
-	if name.Str == nil {
-		return fmt.Errorf("osty.toml:%d: package.name must be a string", name.Line)
-	}
-	out.Name = *name.Str
-	out.NamePos = token.Pos{Line: name.Line, Column: 1}
-	ver, ok := t.get("version")
-	if !ok {
-		return fmt.Errorf("osty.toml:%d: [package] is missing required key `version`", t.Line)
-	}
-	if ver.Str == nil {
-		return fmt.Errorf("osty.toml:%d: package.version must be a string", ver.Line)
-	}
-	out.Version = *ver.Str
-	out.VersionPos = token.Pos{Line: ver.Line, Column: 1}
-
 	for _, key := range t.keys {
 		v, _ := t.get(key)
 		switch key {
-		case "name", "version":
-			// handled above
+		case "name":
+			if v.Str == nil {
+				return fmt.Errorf("osty.toml:%d: package.name must be a string", v.Line)
+			}
+			out.Name = *v.Str
+			out.NamePos = token.Pos{Line: v.Line, Column: 1}
+		case "version":
+			if v.Str == nil {
+				return fmt.Errorf("osty.toml:%d: package.version must be a string", v.Line)
+			}
+			out.Version = *v.Str
+			out.VersionPos = token.Pos{Line: v.Line, Column: 1}
 		case "edition":
 			if v.Str == nil {
 				return fmt.Errorf("osty.toml:%d: package.edition must be a string", v.Line)
