@@ -23,8 +23,7 @@ fixture를 명시적으로 분류해서, Go backend의 현재 동작과 LLVM bac
 | `examples/calc` | `front-end-only` | `check` pass, `test` fail | Package front-end baseline으로만 사용한다. 현재 `osty test`는 `expectError` error type mismatch로 실패한다. |
 | `examples/workspace` | `front-end-only` | `check` pass, root `build` pass | Workspace resolution/orchestration baseline이다. Root binary는 없다. |
 | `examples/stdlib-tour` | `future-runtime` | Not sampled in Phase 1 | stdlib runtime coverage가 늘어난 뒤 module별로 승격한다. |
-| `examples/dogfood` | `front-end-only` | Not sampled in Phase 1 | Self-host/dogfood scale fixture. LLVM 초기 executable gate로는 너무 크다. |
-| `examples/selfhost-core` | `front-end-only` | Not sampled in Phase 1 | Front-end/dogfood baseline. LLVM 초기 executable gate에서 제외한다. |
+| `examples/selfhost-core` | `front-end-only` | Not sampled in Phase 1 | Self-hosting front-end baseline. LLVM 초기 executable gate에서 제외한다. |
 | `word_freq.osty` | `future-runtime` | Not sampled in Phase 1 | Real-world candidate. Regex/fs/json/parallel 등 runtime dependency가 크다. |
 | `testdata/spec/positive/*.osty` | `front-end-only` | Existing spec corpus | Spec coverage용이다. 일부 파일은 library-shaped라 실행 gate로 쓰지 않는다. |
 | `testdata/spec/negative/reject.osty` | `front-end-only` | Existing reject corpus | Diagnostic reject 기준이다. Backend gate로 쓰지 않는다. |

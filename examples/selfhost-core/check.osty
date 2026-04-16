@@ -1,1 +1,3929 @@
-../dogfood/checker.osty
+use go "strings" as strings {
+    fn HasPrefix(s: String, prefix: String) -> Bool
+    fn HasSuffix(s: String, suffix: String) -> Bool
+    fn Join(elems: List<String>, sep: String) -> String
+    fn Split(s: String, sep: String) -> List<String>
+    fn SplitN(s: String, sep: String, n: Int) -> List<String>
+    fn TrimPrefix(s: String, prefix: String) -> String
+    fn TrimSpace(s: String) -> String
+    fn TrimSuffix(s: String, suffix: String) -> String
+}
+
+pub struct FrontCheckBinding {
+    pub name: String,
+    pub typeName: String,
+    pub mutable: Bool,
+}
+
+pub struct FrontFnSig {
+    pub name: String,
+    pub receiverType: String,
+    pub returnType: String,
+    pub paramNames: List<String>,
+    pub paramTypes: List<String>,
+    pub generics: List<String>,
+    pub genericBounds: List<FrontTypeSubst>,
+}
+
+pub struct FrontFieldSig {
+    pub owner: String,
+    pub name: String,
+    pub typeName: String,
+    pub hasDefault: Bool,
+}
+
+pub struct FrontVariantSig {
+    pub owner: String,
+    pub name: String,
+    pub fieldTypes: List<String>,
+    pub generics: List<String>,
+}
+
+pub struct FrontAliasSig {
+    pub name: String,
+    pub typeName: String,
+    pub generics: List<String>,
+}
+
+pub struct FrontTypeSig {
+    pub name: String,
+    pub generics: List<String>,
+}
+
+pub struct FrontTypeSubst {
+    pub name: String,
+    pub typeName: String,
+}
+
+pub struct FrontTypeView {
+    pub kind: String,
+    pub head: String,
+    pub args: List<String>,
+    pub params: List<String>,
+    pub ret: String,
+}
+
+pub struct FrontInterfaceExtSig {
+    pub owner: String,
+    pub typeName: String,
+}
+
+pub struct FrontCheckedNode {
+    pub node: Int,
+    pub kind: String,
+    pub typeName: String,
+    pub start: Int,
+    pub end: Int,
+}
+
+pub struct FrontCheckedBinding {
+    pub node: Int,
+    pub name: String,
+    pub typeName: String,
+    pub mutable: Bool,
+    pub start: Int,
+    pub end: Int,
+}
+
+pub struct FrontCheckedSymbol {
+    pub node: Int,
+    pub kind: String,
+    pub name: String,
+    pub owner: String,
+    pub typeName: String,
+    pub start: Int,
+    pub end: Int,
+}
+
+pub struct FrontCheckInstantiation {
+    pub node: Int,
+    pub callee: String,
+    pub typeArgs: List<String>,
+    pub resultType: String,
+    pub start: Int,
+    pub end: Int,
+}
+
+pub struct FrontCheckEnv {
+    pub bindings: List<FrontCheckBinding>,
+    pub fns: List<FrontFnSig>,
+    pub fields: List<FrontFieldSig>,
+    pub variants: List<FrontVariantSig>,
+    pub aliases: List<FrontAliasSig>,
+    pub types: List<FrontTypeSig>,
+    pub interfaces: List<String>,
+    pub interfaceExtends: List<FrontInterfaceExtSig>,
+    pub genericBounds: List<FrontTypeSubst>,
+    pub returnType: String,
+    pub assignments: Int,
+    pub accepted: Int,
+    pub errors: Int,
+    pub typedNodes: List<FrontCheckedNode>,
+    pub checkedBindings: List<FrontCheckedBinding>,
+    pub checkedSymbols: List<FrontCheckedSymbol>,
+    pub instantiations: List<FrontCheckInstantiation>,
+}
+
+pub struct FrontCheckResult {
+    pub summary: FrontCheckSummary,
+    pub typedNodes: List<FrontCheckedNode>,
+    pub bindings: List<FrontCheckedBinding>,
+    pub symbols: List<FrontCheckedSymbol>,
+    pub instantiations: List<FrontCheckInstantiation>,
+}
+
+pub fn frontendCheckSource(source: String) -> FrontCheckSummary {
+    frontendCheckSourceStructured(source).summary
+}
+
+pub fn frontendCheckSourceStructured(source: String) -> FrontCheckResult {
+    frontendCheckLexedSourceStructured(ostyLexSource(source))
+}
+
+pub fn frontendCheckLexedSource(lexed: OstyLexedSource) -> FrontCheckSummary {
+    frontendCheckLexedSourceStructured(lexed).summary
+}
+
+pub fn frontendCheckLexedSourceStructured(lexed: OstyLexedSource) -> FrontCheckResult {
+    frontendCheckAstStructured(astParseLexedSource(lexed))
+}
+
+pub fn frontendCheckAst(file: AstFile) -> FrontCheckSummary {
+    frontendCheckAstStructured(file).summary
+}
+
+pub fn frontendCheckAstStructured(file: AstFile) -> FrontCheckResult {
+    let mut env = frontCheckEnv("()")
+    env.errors = astFileErrorCount(file)
+    frontCheckCollectDecls(file, env)
+    for declIdx in file.arena.decls {
+        frontCheckDecl(file, env, declIdx)
+    }
+    frontCheckResultFromEnv(env)
+}
+
+fn frontCheckSummaryFromEnv(env: FrontCheckEnv) -> FrontCheckSummary {
+    FrontCheckSummary {
+        assignments: env.assignments,
+        accepted: env.accepted,
+        errors: env.errors,
+    }
+}
+
+fn frontCheckResultFromEnv(env: FrontCheckEnv) -> FrontCheckResult {
+    FrontCheckResult {
+        summary: frontCheckSummaryFromEnv(env),
+        typedNodes: env.typedNodes,
+        bindings: env.checkedBindings,
+        symbols: env.checkedSymbols,
+        instantiations: env.instantiations,
+    }
+}
+
+fn frontCheckEnv(returnType: String) -> FrontCheckEnv {
+    let mut env = FrontCheckEnv {
+        bindings: [],
+        fns: [],
+        fields: [],
+        variants: [],
+        aliases: [],
+        types: [],
+        interfaces: [],
+        interfaceExtends: [],
+        genericBounds: [],
+        returnType,
+        assignments: 0,
+        accepted: 0,
+        errors: 0,
+        typedNodes: [],
+        checkedBindings: [],
+        checkedSymbols: [],
+        instantiations: [],
+    }
+    frontCheckInstallBuiltins(env)
+    env
+}
+
+fn frontCheckChildEnv(parent: FrontCheckEnv, returnType: String) -> FrontCheckEnv {
+    FrontCheckEnv {
+        bindings: parent.bindings,
+        fns: parent.fns,
+        fields: parent.fields,
+        variants: parent.variants,
+        aliases: parent.aliases,
+        types: parent.types,
+        interfaces: parent.interfaces,
+        interfaceExtends: parent.interfaceExtends,
+        genericBounds: parent.genericBounds,
+        returnType,
+        assignments: 0,
+        accepted: 0,
+        errors: 0,
+        typedNodes: [],
+        checkedBindings: [],
+        checkedSymbols: parent.checkedSymbols,
+        instantiations: [],
+    }
+}
+
+fn frontCheckInstallBuiltins(env: FrontCheckEnv) {
+    env.types.push(FrontTypeSig { name: "Option", generics: ["T"] })
+    env.variants.push(FrontVariantSig { owner: "Option", name: "Some", fieldTypes: ["T"], generics: ["T"] })
+    env.variants.push(FrontVariantSig { owner: "Option", name: "None", fieldTypes: [], generics: ["T"] })
+    env.types.push(FrontTypeSig { name: "Result", generics: ["T", "E"] })
+    env.variants.push(FrontVariantSig { owner: "Result", name: "Ok", fieldTypes: ["T"], generics: ["T", "E"] })
+    env.variants.push(FrontVariantSig { owner: "Result", name: "Err", fieldTypes: ["E"], generics: ["T", "E"] })
+}
+
+fn frontCheckMerge(parent: FrontCheckEnv, child: FrontCheckEnv) {
+    parent.assignments = parent.assignments + child.assignments
+    parent.accepted = parent.accepted + child.accepted
+    parent.errors = parent.errors + child.errors
+    for typed in child.typedNodes {
+        parent.typedNodes.push(typed)
+    }
+    for binding in child.checkedBindings {
+        parent.checkedBindings.push(binding)
+    }
+    for inst in child.instantiations {
+        parent.instantiations.push(inst)
+    }
+}
+
+pub fn frontCheckResultTypedNodeCount(result: FrontCheckResult) -> Int {
+    let mut count = 0
+    for typed in result.typedNodes {
+        let _ = typed
+        count = count + 1
+    }
+    count
+}
+
+pub fn frontCheckResultBindingType(result: FrontCheckResult, name: String) -> String {
+    let mut found = ""
+    for binding in result.bindings {
+        if binding.name == name {
+            found = binding.typeName
+        }
+    }
+    found
+}
+
+pub fn frontCheckResultSymbolCount(result: FrontCheckResult, kind: String) -> Int {
+    let mut count = 0
+    for symbol in result.symbols {
+        if kind == "" || symbol.kind == kind {
+            count = count + 1
+        }
+    }
+    count
+}
+
+pub fn frontCheckResultInstantiationCount(result: FrontCheckResult) -> Int {
+    let mut count = 0
+    for inst in result.instantiations {
+        let _ = inst
+        count = count + 1
+    }
+    count
+}
+
+fn frontCheckHasTypedNode(env: FrontCheckEnv, node: Int) -> Bool {
+    for typed in env.typedNodes {
+        if typed.node == node {
+            return true
+        }
+    }
+    false
+}
+
+fn frontCheckRecordTypedNode(file: AstFile, env: FrontCheckEnv, nodeIdx: Int, typeName: String) {
+    if nodeIdx < 0 || typeName == "" || typeName == "Invalid" {
+        return
+    }
+    if frontCheckHasTypedNode(env, nodeIdx) {
+        return
+    }
+    let node = astArenaNodeAt(file.arena, nodeIdx)
+    env.typedNodes.push(
+        FrontCheckedNode {
+            node: nodeIdx,
+            kind: astNodeKindName(node.kind),
+            typeName,
+            start: node.start,
+            end: node.end,
+        },
+    )
+}
+
+fn frontCheckTypedExpr(file: AstFile, env: FrontCheckEnv, nodeIdx: Int, typeName: String) -> String {
+    frontCheckRecordTypedNode(file, env, nodeIdx, typeName)
+    typeName
+}
+
+fn frontCheckRecordBinding(env: FrontCheckEnv, node: Int, name: String, typeName: String, mutable: Bool, start: Int, end: Int) {
+    if name != "" && name != "_" {
+        env.checkedBindings.push(FrontCheckedBinding { node, name, typeName, mutable, start, end })
+    }
+}
+
+fn frontCheckRecordSymbol(env: FrontCheckEnv, nodeIdx: Int, node: AstNode, kind: String, name: String, owner: String, typeName: String) {
+    env.checkedSymbols.push(
+        FrontCheckedSymbol {
+            node: nodeIdx,
+            kind,
+            name,
+            owner,
+            typeName,
+            start: node.start,
+            end: node.end,
+        },
+    )
+}
+
+fn frontCheckConcreteTypeArgs(generics: List<String>, substs: List<FrontTypeSubst>) -> List<String> {
+    let mut out: List<String> = []
+    for generic in generics {
+        let value = frontCheckSubstLookup(substs, generic)
+        if value != "" {
+            out.push(value)
+        }
+    }
+    out
+}
+
+fn frontCheckRecordInstantiation(file: AstFile, env: FrontCheckEnv, nodeIdx: Int, callee: String, generics: List<String>, substs: List<FrontTypeSubst>, resultType: String) {
+    if nodeIdx < 0 {
+        return
+    }
+    let typeArgs = frontCheckConcreteTypeArgs(generics, substs)
+    if frontCheckStringCount(typeArgs) == 0 {
+        return
+    }
+    let node = astArenaNodeAt(file.arena, nodeIdx)
+    env.instantiations.push(
+        FrontCheckInstantiation {
+            node: nodeIdx,
+            callee,
+            typeArgs,
+            resultType,
+            start: node.start,
+            end: node.end,
+        },
+    )
+}
+
+fn frontCheckCollectDecls(file: AstFile, env: FrontCheckEnv) {
+    for declIdx in file.arena.decls {
+        let decl = astArenaNodeAt(file.arena, declIdx)
+        frontCheckCollectDecl(file, env, declIdx, decl, "", [])
+    }
+}
+
+fn frontCheckCollectDecl(file: AstFile, env: FrontCheckEnv, declIdx: Int, decl: AstNode, owner: String, ownerGenerics: List<String>) {
+    if decl.kind == AstNFnDecl {
+        if frontCheckFnExists(env, decl.text, owner) {
+            env.errors = env.errors + 1
+        }
+        frontCheckCheckGenericParams(file, env, decl.children2)
+        let sig = frontFnSigFromDecl(file, decl, owner, ownerGenerics)
+        env.fns.push(sig)
+        frontCheckRecordSymbol(env, declIdx, decl, "fn", decl.text, owner, frontCheckFnType(sig.paramTypes, sig.returnType))
+        return
+    }
+    if decl.kind == AstNStructDecl {
+        frontCheckCheckGenericParams(file, env, decl.children2)
+        let generics = frontCheckGenericNames(file, decl.children2)
+        if frontCheckDeclaredTypeExists(env, decl.text) {
+            env.errors = env.errors + 1
+        }
+        env.types.push(FrontTypeSig { name: decl.text, generics })
+        frontCheckRecordSymbol(env, declIdx, decl, "struct", decl.text, owner, frontCheckGenericOwnerType(decl.text, generics, []))
+        for memberIdx in decl.children {
+            let member = astArenaNodeAt(file.arena, memberIdx)
+            if member.kind == AstNField_ {
+                if frontCheckFieldLookup(env, decl.text, member.text).name != "" {
+                    env.errors = env.errors + 1
+                }
+                let field = FrontFieldSig {
+                    owner: decl.text,
+                    name: member.text,
+                    typeName: frontCheckTypeName(file, member.right),
+                    hasDefault: member.left >= 0,
+                }
+                env.fields.push(field)
+                frontCheckRecordSymbol(env, memberIdx, member, "field", member.text, decl.text, field.typeName)
+            } else if member.kind == AstNFnDecl {
+                frontCheckCollectDecl(file, env, memberIdx, member, decl.text, generics)
+            }
+        }
+        return
+    }
+    if decl.kind == AstNEnumDecl {
+        frontCheckCheckGenericParams(file, env, decl.children2)
+        let generics = frontCheckGenericNames(file, decl.children2)
+        if frontCheckDeclaredTypeExists(env, decl.text) {
+            env.errors = env.errors + 1
+        }
+        env.types.push(FrontTypeSig { name: decl.text, generics })
+        frontCheckRecordSymbol(env, declIdx, decl, "enum", decl.text, owner, frontCheckGenericOwnerType(decl.text, generics, []))
+        for memberIdx in decl.children {
+            let member = astArenaNodeAt(file.arena, memberIdx)
+            if member.kind == AstNVariant {
+                if frontCheckVariantLookupForOwner(env, member.text, decl.text).name != "" {
+                    env.errors = env.errors + 1
+                }
+                let mut fieldTypes: List<String> = []
+                for fieldIdx in member.children {
+                    fieldTypes.push(frontCheckTypeName(file, fieldIdx))
+                }
+                env.variants.push(FrontVariantSig { owner: decl.text, name: member.text, fieldTypes, generics })
+                frontCheckRecordSymbol(env, memberIdx, member, "variant", member.text, decl.text, frontCheckGenericOwnerType(decl.text, generics, []))
+            } else if member.kind == AstNFnDecl {
+                frontCheckCollectDecl(file, env, memberIdx, member, decl.text, generics)
+            }
+        }
+        return
+    }
+    if decl.kind == AstNInterfaceDecl {
+        if frontCheckDeclaredTypeExists(env, decl.text) {
+            env.errors = env.errors + 1
+        }
+        env.types.push(FrontTypeSig { name: decl.text, generics: [] })
+        env.interfaces.push(decl.text)
+        frontCheckRecordSymbol(env, declIdx, decl, "interface", decl.text, owner, decl.text)
+        for superIdx in decl.children2 {
+            env.interfaceExtends.push(FrontInterfaceExtSig { owner: decl.text, typeName: frontCheckTypeName(file, superIdx) })
+        }
+        for memberIdx in decl.children {
+            let member = astArenaNodeAt(file.arena, memberIdx)
+            if member.kind == AstNFnDecl {
+                if frontCheckFnExists(env, member.text, decl.text) {
+                    env.errors = env.errors + 1
+                }
+                frontCheckCheckGenericParams(file, env, member.children2)
+                env.fns.push(frontFnSigFromInterfaceDecl(file, member, decl.text))
+                let sig = frontFnSigFromInterfaceDecl(file, member, decl.text)
+                frontCheckRecordSymbol(env, memberIdx, member, "fn", member.text, decl.text, frontCheckFnType(sig.paramTypes, sig.returnType))
+            } else if member.kind == AstNType {
+                env.interfaceExtends.push(FrontInterfaceExtSig { owner: decl.text, typeName: frontCheckTypeName(file, memberIdx) })
+            }
+        }
+        return
+    }
+    if decl.kind == AstNTypeAlias {
+        frontCheckCheckGenericParams(file, env, decl.children)
+        if frontCheckDeclaredTypeExists(env, decl.text) {
+            env.errors = env.errors + 1
+        }
+        env.aliases.push(FrontAliasSig { name: decl.text, typeName: frontCheckTypeName(file, decl.left), generics: frontCheckGenericNames(file, decl.children) })
+        frontCheckRecordSymbol(env, declIdx, decl, "alias", decl.text, owner, frontCheckTypeName(file, decl.left))
+        return
+    }
+    if decl.kind == AstNLet {
+        let declared = frontCheckTypeName(file, frontCheckFirstChild(decl))
+        if declared != "()" && declared != "Invalid" {
+            frontCheckBindPattern(file, env, decl.left, declared, decl.flags == 1)
+        }
+        return
+    }
+    if decl.kind == AstNUseDecl {
+        let alias = frontCheckLastPathSegment(decl.text)
+        for itemIdx in decl.children {
+            let item = astArenaNodeAt(file.arena, itemIdx)
+            if item.kind == AstNFnDecl {
+                let mut sig = frontFnSigFromDecl(file, item, "", [])
+                sig.name = "{alias}.{sig.name}"
+                env.fns.push(sig)
+                frontCheckRecordSymbol(env, itemIdx, item, "fn", sig.name, alias, frontCheckFnType(sig.paramTypes, sig.returnType))
+            }
+        }
+    }
+}
+
+fn frontFnSigFromDecl(file: AstFile, decl: AstNode, owner: String, ownerGenerics: List<String>) -> FrontFnSig {
+    frontFnSigFromDeclMode(file, decl, owner, ownerGenerics, false)
+}
+
+fn frontFnSigFromInterfaceDecl(file: AstFile, decl: AstNode, owner: String) -> FrontFnSig {
+    frontFnSigFromDeclMode(file, decl, owner, [], true)
+}
+
+fn frontFnSigFromDeclMode(file: AstFile, decl: AstNode, owner: String, ownerGenerics: List<String>, preserveSelf: Bool) -> FrontFnSig {
+    let mut paramNames: List<String> = []
+    let mut paramTypes: List<String> = []
+    let mut generics = ownerGenerics
+    let mut genericBounds = frontCheckGenericBounds(file, decl.children2)
+    for genericIdx in decl.children2 {
+        let generic = astArenaNodeAt(file.arena, genericIdx)
+        generics.push(generic.text)
+    }
+    let selfType = frontCheckSelfType(owner, ownerGenerics)
+    for paramIdx in decl.children {
+        let param = astArenaNodeAt(file.arena, paramIdx)
+        let mut paramType = frontCheckTypeName(file, param.right)
+        if param.text == "self" && owner != "" && param.right < 0 {
+            paramType = selfType
+        }
+        paramNames.push(param.text)
+        paramTypes.push(frontCheckReplaceSelfMode(paramType, selfType, preserveSelf))
+    }
+    FrontFnSig {
+        name: decl.text,
+        receiverType: owner,
+        returnType: frontCheckReplaceSelfMode(frontCheckTypeName(file, decl.left), selfType, preserveSelf),
+        paramNames,
+        paramTypes,
+        generics,
+        genericBounds,
+    }
+}
+
+fn frontCheckGenericNames(file: AstFile, idxs: List<Int>) -> List<String> {
+    let mut names: List<String> = []
+    for idx in idxs {
+        let n = astArenaNodeAt(file.arena, idx)
+        names.push(n.text)
+    }
+    names
+}
+
+fn frontCheckCheckGenericParams(file: AstFile, env: FrontCheckEnv, idxs: List<Int>) {
+    let mut seen: List<String> = []
+    for idx in idxs {
+        let n = astArenaNodeAt(file.arena, idx)
+        if frontCheckStringContains(seen, n.text) {
+            env.errors = env.errors + 1
+        }
+        seen.push(n.text)
+    }
+}
+
+fn frontCheckStringContains(xs: List<String>, needle: String) -> Bool {
+    for x in xs {
+        if x == needle {
+            return true
+        }
+    }
+    false
+}
+
+fn frontCheckGenericBounds(file: AstFile, idxs: List<Int>) -> List<FrontTypeSubst> {
+    let mut bounds: List<FrontTypeSubst> = []
+    for idx in idxs {
+        let generic = astArenaNodeAt(file.arena, idx)
+        for boundIdx in generic.children {
+            bounds.push(FrontTypeSubst { name: generic.text, typeName: frontCheckTypeName(file, boundIdx) })
+        }
+    }
+    bounds
+}
+
+fn frontCheckSelfType(owner: String, generics: List<String>) -> String {
+    if owner == "" {
+        return "Invalid"
+    }
+    if frontCheckStringCount(generics) == 0 {
+        return owner
+    }
+    let joined = frontCheckJoinTypes(generics)
+    "{owner}<{joined}>"
+}
+
+fn frontCheckReplaceSelf(typeName: String, selfType: String) -> String {
+    frontCheckReplaceSelfMode(typeName, selfType, false)
+}
+
+fn frontCheckReplaceSelfMode(typeName: String, selfType: String, preserveSelf: Bool) -> String {
+    if typeName == "Self" {
+        if preserveSelf {
+            return "Self"
+        }
+        return selfType
+    }
+    let view = frontCheckParseType(typeName)
+    if view.kind == "tuple" {
+        let mut elems: List<String> = []
+        for elem in view.args {
+            elems.push(frontCheckReplaceSelfMode(elem, selfType, preserveSelf))
+        }
+        return frontCheckTupleType(elems)
+    }
+    if view.kind == "fn" {
+        let mut params: List<String> = []
+        for param in view.params {
+            params.push(frontCheckReplaceSelfMode(param, selfType, preserveSelf))
+        }
+        return frontCheckFnType(params, frontCheckReplaceSelfMode(view.ret, selfType, preserveSelf))
+    }
+    if view.kind == "named" && frontCheckStringCount(view.args) > 0 {
+        let mut args: List<String> = []
+        for arg in view.args {
+            args.push(frontCheckReplaceSelfMode(arg, selfType, preserveSelf))
+        }
+        return frontCheckNamedType(view.head, args)
+    }
+    typeName
+}
+
+fn frontCheckDecl(file: AstFile, env: FrontCheckEnv, idx: Int) {
+    let decl = astArenaNodeAt(file.arena, idx)
+    if decl.kind == AstNFnDecl {
+        frontCheckFnDecl(file, env, decl, "", [])
+        return
+    }
+    if decl.kind == AstNStructDecl {
+        let generics = frontCheckGenericNames(file, decl.children2)
+        for memberIdx in decl.children {
+            let member = astArenaNodeAt(file.arena, memberIdx)
+            if member.kind == AstNField_ && member.left >= 0 {
+                let got = frontCheckExpr(file, env, member.left)
+                frontCheckExpectAssignable(env, frontCheckTypeName(file, member.right), got)
+            } else if member.kind == AstNFnDecl {
+                frontCheckFnDecl(file, env, member, decl.text, generics)
+            }
+        }
+        return
+    }
+    if decl.kind == AstNEnumDecl {
+        let generics = frontCheckGenericNames(file, decl.children2)
+        for memberIdx in decl.children {
+            let member = astArenaNodeAt(file.arena, memberIdx)
+            if member.kind == AstNFnDecl {
+                frontCheckFnDecl(file, env, member, decl.text, generics)
+            }
+        }
+        return
+    }
+    if decl.kind == AstNLet {
+        let _ = frontCheckStmt(file, env, idx)
+    }
+}
+
+fn frontCheckFnDecl(file: AstFile, parent: FrontCheckEnv, decl: AstNode, owner: String, ownerGenerics: List<String>) {
+    let sig = frontFnSigFromDecl(file, decl, owner, ownerGenerics)
+    let mut env = frontCheckChildEnv(parent, sig.returnType)
+    env.genericBounds = sig.genericBounds
+    let mut idx = 0
+    for paramName in sig.paramNames {
+        let paramType = frontCheckStringAt(sig.paramTypes, idx)
+        if paramName != "" {
+            let paramIdx = frontCheckIntAt(decl.children, idx)
+            let param = astArenaNodeAt(file.arena, paramIdx)
+            frontCheckBindNode(env, paramName, paramType, false, paramIdx, param.start, param.end)
+        }
+        idx = idx + 1
+    }
+    if decl.right >= 0 {
+        let bodyType = frontCheckBlockHint(file, env, decl.right, true, sig.returnType)
+        if sig.returnType != "()" && bodyType != "Never" {
+            frontCheckExpectAssignable(env, sig.returnType, bodyType)
+        }
+    }
+    frontCheckMerge(parent, env)
+}
+
+fn frontCheckBind(env: FrontCheckEnv, name: String, typeName: String, mutable: Bool) {
+    frontCheckBindNode(env, name, typeName, mutable, -1, 0, 0)
+}
+
+fn frontCheckBindNode(env: FrontCheckEnv, name: String, typeName: String, mutable: Bool, node: Int, start: Int, end: Int) {
+    if name != "" && name != "_" {
+        env.bindings.push(FrontCheckBinding { name, typeName, mutable })
+        frontCheckRecordBinding(env, node, name, typeName, mutable, start, end)
+    }
+}
+
+fn frontCheckBindingCount(xs: List<FrontCheckBinding>) -> Int {
+    let mut count = 0
+    for x in xs {
+        let _ = x
+        count = count + 1
+    }
+    count
+}
+
+fn frontCheckBindingAt(xs: List<FrontCheckBinding>, idx: Int) -> FrontCheckBinding {
+    let mut i = 0
+    for x in xs {
+        if i == idx {
+            return x
+        }
+        i = i + 1
+    }
+    FrontCheckBinding { name: "", typeName: "Invalid", mutable: false }
+}
+
+fn frontCheckBindingsFrom(env: FrontCheckEnv, start: Int) -> List<FrontCheckBinding> {
+    let mut out: List<FrontCheckBinding> = []
+    let mut i = 0
+    for binding in env.bindings {
+        if i >= start {
+            out.push(binding)
+        }
+        i = i + 1
+    }
+    out
+}
+
+fn frontCheckBindingsAgree(env: FrontCheckEnv, left: List<FrontCheckBinding>, right: List<FrontCheckBinding>) -> Bool {
+    if frontCheckBindingCount(left) != frontCheckBindingCount(right) {
+        return false
+    }
+    let mut i = 0
+    for l in left {
+        let r = frontCheckBindingAt(right, i)
+        if l.name != r.name {
+            return false
+        }
+        if !(frontCheckIsAssignable(env, l.typeName, r.typeName)) || !(frontCheckIsAssignable(env, r.typeName, l.typeName)) {
+            return false
+        }
+        i = i + 1
+    }
+    true
+}
+
+fn frontCheckPopBindings(env: FrontCheckEnv, target: Int) {
+    let mut count = frontCheckBindingCount(env.bindings)
+    for count > target {
+        env.bindings.pop()
+        count = count - 1
+    }
+}
+
+fn frontCheckLookup(env: FrontCheckEnv, name: String) -> String {
+    let mut found = "Invalid"
+    for b in env.bindings {
+        if b.name == name {
+            found = b.typeName
+        }
+    }
+    found
+}
+
+fn frontCheckLookupMutable(env: FrontCheckEnv, name: String) -> Bool {
+    let mut found = false
+    for b in env.bindings {
+        if b.name == name {
+            found = b.mutable
+        }
+    }
+    found
+}
+
+fn frontCheckSigLookup(env: FrontCheckEnv, name: String) -> FrontFnSig {
+    for sig in env.fns {
+        if sig.name == name && sig.receiverType == "" {
+            return sig
+        }
+    }
+    FrontFnSig { name: "", receiverType: "", returnType: "Invalid", paramNames: [], paramTypes: [], generics: [], genericBounds: [] }
+}
+
+fn frontCheckFnExists(env: FrontCheckEnv, name: String, owner: String) -> Bool {
+    for sig in env.fns {
+        if sig.name == name && sig.receiverType == owner {
+            return true
+        }
+    }
+    false
+}
+
+fn frontCheckMethodLookup(env: FrontCheckEnv, owner: String, name: String) -> FrontFnSig {
+    frontCheckMethodLookupAt(env, owner, name, 0)
+}
+
+fn frontCheckMethodLookupAt(env: FrontCheckEnv, owner: String, name: String, depth: Int) -> FrontFnSig {
+    for sig in env.fns {
+        if sig.name == name && sig.receiverType == owner {
+            return sig
+        }
+    }
+    if depth < 8 && frontCheckIsInterface(env, owner) {
+        for ext in env.interfaceExtends {
+            if ext.owner == owner {
+                let sig = frontCheckMethodLookupAt(env, frontCheckTypeHead(frontCheckResolveAliasesDeep(env, ext.typeName)), name, depth + 1)
+                if sig.name != "" {
+                    return sig
+                }
+            }
+        }
+    }
+    FrontFnSig { name: "", receiverType: "", returnType: "Invalid", paramNames: [], paramTypes: [], generics: [], genericBounds: [] }
+}
+
+fn frontCheckBoundMethodLookup(env: FrontCheckEnv, owner: String, name: String) -> FrontFnSig {
+    for bound in env.genericBounds {
+        if bound.name == owner {
+            let iface = frontCheckTypeHead(frontCheckResolveAliasesDeep(env, bound.typeName))
+            let sig = frontCheckMethodLookup(env, iface, name)
+            if sig.name != "" {
+                return sig
+            }
+        }
+    }
+    FrontFnSig { name: "", receiverType: "", returnType: "Invalid", paramNames: [], paramTypes: [], generics: [], genericBounds: [] }
+}
+
+fn frontCheckFieldLookup(env: FrontCheckEnv, owner: String, name: String) -> FrontFieldSig {
+    for field in env.fields {
+        if field.owner == owner && field.name == name {
+            return field
+        }
+    }
+    FrontFieldSig { owner: "", name: "", typeName: "Invalid", hasDefault: false }
+}
+
+fn frontCheckVariantLookup(env: FrontCheckEnv, name: String) -> FrontVariantSig {
+    let mut found = FrontVariantSig { owner: "", name: "", fieldTypes: [], generics: [] }
+    for variant in env.variants {
+        if variant.name == name {
+            found = variant
+        }
+    }
+    found
+}
+
+fn frontCheckVariantLookupForOwner(env: FrontCheckEnv, name: String, owner: String) -> FrontVariantSig {
+    let mut found = FrontVariantSig { owner: "", name: "", fieldTypes: [], generics: [] }
+    for variant in env.variants {
+        if variant.name == name && variant.owner == owner {
+            found = variant
+        }
+    }
+    found
+}
+
+fn frontCheckTypeSigLookup(env: FrontCheckEnv, name: String) -> FrontTypeSig {
+    let mut found = FrontTypeSig { name: "", generics: [] }
+    for sig in env.types {
+        if sig.name == name {
+            found = sig
+        }
+    }
+    found
+}
+
+fn frontCheckIsInterface(env: FrontCheckEnv, name: String) -> Bool {
+    for iface in env.interfaces {
+        if iface == name {
+            return true
+        }
+    }
+    false
+}
+
+fn frontCheckDeclaredTypeExists(env: FrontCheckEnv, name: String) -> Bool {
+    if frontCheckTypeSigLookup(env, name).name != "" {
+        return true
+    }
+    if frontCheckAliasLookup(env, name).name != "" {
+        return true
+    }
+    false
+}
+
+fn frontCheckAliasTarget(env: FrontCheckEnv, name: String) -> String {
+    for alias in env.aliases {
+        if alias.name == name && frontCheckStringCount(alias.generics) == 0 {
+            return alias.typeName
+        }
+    }
+    ""
+}
+
+fn frontCheckAliasLookup(env: FrontCheckEnv, name: String) -> FrontAliasSig {
+    for alias in env.aliases {
+        if alias.name == name {
+            return alias
+        }
+    }
+    FrontAliasSig { name: "", typeName: "", generics: [] }
+}
+
+fn frontCheckResolveAliasOnce(env: FrontCheckEnv, typeName: String) -> String {
+    let target = frontCheckAliasTarget(env, typeName)
+    if target != "" {
+        return target
+    }
+    let view = frontCheckParseType(typeName)
+    if view.kind == "named" && frontCheckStringCount(view.args) > 0 {
+        let alias = frontCheckAliasLookup(env, view.head)
+        if alias.name != "" && frontCheckStringCount(alias.generics) > 0 {
+            let mut substs: List<FrontTypeSubst> = []
+            let mut i = 0
+            for generic in alias.generics {
+                substs.push(FrontTypeSubst { name: generic, typeName: frontCheckStringAt(view.args, i) })
+                i = i + 1
+            }
+            return frontCheckSubstitute(alias.typeName, substs)
+        }
+    }
+    ""
+}
+
+fn frontCheckResolveAlias(env: FrontCheckEnv, typeName: String) -> String {
+    let mut current = typeName
+    let mut depth = 0
+    for depth < 8 {
+        let target = frontCheckResolveAliasOnce(env, current)
+        if target == "" {
+            return current
+        }
+        current = target
+        depth = depth + 1
+    }
+    current
+}
+
+fn frontCheckResolveAliasesDeep(env: FrontCheckEnv, typeName: String) -> String {
+    frontCheckResolveAliasesDeepAt(env, typeName, 0)
+}
+
+fn frontCheckResolveAliasesDeepAt(env: FrontCheckEnv, typeName: String, depth: Int) -> String {
+    if depth > 8 {
+        return typeName
+    }
+    let direct = frontCheckResolveAlias(env, typeName)
+    if direct != typeName {
+        return frontCheckResolveAliasesDeepAt(env, direct, depth + 1)
+    }
+    let view = frontCheckParseType(typeName)
+    if view.kind == "tuple" {
+        let mut elems: List<String> = []
+        for elem in view.args {
+            elems.push(frontCheckResolveAliasesDeepAt(env, elem, depth + 1))
+        }
+        return frontCheckTupleType(elems)
+    }
+    if view.kind == "fn" {
+        let mut params: List<String> = []
+        for param in view.params {
+            params.push(frontCheckResolveAliasesDeepAt(env, param, depth + 1))
+        }
+        return frontCheckFnType(params, frontCheckResolveAliasesDeepAt(env, view.ret, depth + 1))
+    }
+    if view.kind == "named" && frontCheckStringCount(view.args) > 0 {
+        let mut args: List<String> = []
+        for arg in view.args {
+            args.push(frontCheckResolveAliasesDeepAt(env, arg, depth + 1))
+        }
+        return frontCheckNamedType(view.head, args)
+    }
+    typeName
+}
+
+fn frontCheckTypeName(file: AstFile, idx: Int) -> String {
+    if idx < 0 {
+        return "()"
+    }
+    let node = astArenaNodeAt(file.arena, idx)
+    if node.kind != AstNType {
+        return "Invalid"
+    }
+    if node.text == "optional" {
+        return frontCheckOneArgType("Option", frontCheckTypeName(file, node.left))
+    }
+    if node.text == "fn" {
+        let mut params: List<String> = []
+        for paramIdx in node.children {
+            params.push(frontCheckTypeName(file, paramIdx))
+        }
+        return frontCheckFnType(params, frontCheckTypeName(file, node.right))
+    }
+    if node.text == "tuple" {
+        let mut elems: List<String> = []
+        for elemIdx in node.children {
+            elems.push(frontCheckTypeName(file, elemIdx))
+        }
+        if frontCheckStringCount(elems) == 0 {
+            return "()"
+        }
+        return "({frontCheckJoinTypes(elems)})"
+    }
+    if frontCheckIntCount(node.children) > 0 {
+        let mut args: List<String> = []
+        for argIdx in node.children {
+            args.push(frontCheckTypeName(file, argIdx))
+        }
+        return "{node.text}<{frontCheckJoinTypes(args)}>"
+    }
+    if node.text == "Unit" {
+        return "()"
+    }
+    if node.text == "error" {
+        return "Invalid"
+    }
+    node.text
+}
+
+fn frontCheckFnType(params: List<String>, ret: String) -> String {
+    "fn({frontCheckJoinTypes(params)}) -> {ret}"
+}
+
+fn frontCheckJoinTypes(xs: List<String>) -> String {
+    strings.Join(xs, ", ")
+}
+
+fn frontCheckOneArgType(head: String, arg: String) -> String {
+    "{head}<{arg}>"
+}
+
+fn frontCheckTwoArgType(head: String, left: String, right: String) -> String {
+    "{head}<{left}, {right}>"
+}
+
+fn frontCheckStringCount(xs: List<String>) -> Int {
+    let mut count = 0
+    for x in xs {
+        let _ = x
+        count = count + 1
+    }
+    count
+}
+
+fn frontCheckIntCount(xs: List<Int>) -> Int {
+    let mut count = 0
+    for x in xs {
+        let _ = x
+        count = count + 1
+    }
+    count
+}
+
+fn frontCheckStringAt(xs: List<String>, idx: Int) -> String {
+    let mut i = 0
+    for x in xs {
+        if i == idx {
+            return x
+        }
+        i = i + 1
+    }
+    "Invalid"
+}
+
+fn frontCheckStringDrop(xs: List<String>, start: Int) -> List<String> {
+    let mut out: List<String> = []
+    let mut i = 0
+    for x in xs {
+        if i >= start {
+            out.push(x)
+        }
+        i = i + 1
+    }
+    out
+}
+
+fn frontCheckIntAt(xs: List<Int>, idx: Int) -> Int {
+    let mut i = 0
+    for x in xs {
+        if i == idx {
+            return x
+        }
+        i = i + 1
+    }
+    -1
+}
+
+fn frontCheckLastPathSegment(path: String) -> String {
+    let parts = strings.Split(path, ".")
+    let mut last = path
+    for part in parts {
+        last = part
+    }
+    last
+}
+
+fn frontCheckTypeHead(typeName: String) -> String {
+    frontCheckParseType(typeName).head
+}
+
+fn frontCheckParseType(typeName: String) -> FrontTypeView {
+    let text = strings.TrimSpace(typeName)
+    if text == "" {
+        return FrontTypeView { kind: "invalid", head: "Invalid", args: [], params: [], ret: "" }
+    }
+    if strings.HasPrefix(text, "(") && strings.HasSuffix(text, ")") {
+        let inner = strings.TrimSuffix(strings.TrimPrefix(text, "("), ")")
+        let mut elems: List<String> = []
+        if strings.TrimSpace(inner) != "" {
+            elems = frontCheckSplitTopLevel(inner)
+        }
+        return FrontTypeView { kind: "tuple", head: "Tuple", args: elems, params: [], ret: "" }
+    }
+    if strings.HasPrefix(text, "fn(") {
+        let paramsText = frontCheckFnParamsTextRaw(text)
+        let mut params: List<String> = []
+        if strings.TrimSpace(paramsText) != "" {
+            params = frontCheckSplitTopLevel(paramsText)
+        }
+        let ret = frontCheckFnReturnRaw(text)
+        return FrontTypeView { kind: "fn", head: "fn", args: [], params, ret }
+    }
+    let head = frontCheckRawTypeHead(text)
+    let argsText = frontCheckGenericArgsTextRaw(text, head)
+    let mut args: List<String> = []
+    if strings.TrimSpace(argsText) != "" {
+        args = frontCheckSplitTopLevel(argsText)
+    }
+    FrontTypeView { kind: "named", head, args, params: [], ret: "" }
+}
+
+fn frontCheckRawTypeHead(typeName: String) -> String {
+    let mut head = ""
+    for unit in strings.Split(typeName, "") {
+        if unit == "<" {
+            return head
+        }
+        head = "{head}{unit}"
+    }
+    head
+}
+
+fn frontCheckGenericArgsText(typeName: String) -> String {
+    frontCheckJoinTypes(frontCheckGenericArgs(typeName))
+}
+
+fn frontCheckGenericArgsTextRaw(typeName: String, head: String) -> String {
+    if !(strings.HasPrefix(typeName, "{head}<")) || !(strings.HasSuffix(typeName, ">")) {
+        return ""
+    }
+    strings.TrimSuffix(strings.TrimPrefix(typeName, "{head}<"), ">")
+}
+
+fn frontCheckGenericArgs(typeName: String) -> List<String> {
+    frontCheckParseType(typeName).args
+}
+
+fn frontCheckNamedType(head: String, args: List<String>) -> String {
+    if frontCheckStringCount(args) == 0 {
+        return head
+    }
+    "{head}<{frontCheckJoinTypes(args)}>"
+}
+
+fn frontCheckTupleType(elems: List<String>) -> String {
+    if frontCheckStringCount(elems) == 0 {
+        return "()"
+    }
+    "({frontCheckJoinTypes(elems)})"
+}
+
+fn frontCheckSplitTopLevel(text: String) -> List<String> {
+    let mut out: List<String> = []
+    let mut cur = ""
+    let mut angle = 0
+    let mut paren = 0
+    for unit in strings.Split(text, "") {
+        if unit == "<" {
+            angle = angle + 1
+            cur = "{cur}{unit}"
+        } else if unit == ">" {
+            angle = angle - 1
+            cur = "{cur}{unit}"
+        } else if unit == "(" {
+            paren = paren + 1
+            cur = "{cur}{unit}"
+        } else if unit == ")" {
+            paren = paren - 1
+            cur = "{cur}{unit}"
+        } else if unit == "," && angle == 0 && paren == 0 {
+            out.push(strings.TrimSpace(cur))
+            cur = ""
+        } else {
+            cur = "{cur}{unit}"
+        }
+    }
+    if strings.TrimSpace(cur) != "" {
+        out.push(strings.TrimSpace(cur))
+    }
+    out
+}
+
+fn frontCheckGenericArgAt(typeName: String, idx: Int) -> String {
+    frontCheckStringAt(frontCheckGenericArgs(typeName), idx)
+}
+
+fn frontCheckIsInvalid(typeName: String) -> Bool {
+    typeName == "Invalid"
+}
+
+fn frontCheckIsNever(typeName: String) -> Bool {
+    typeName == "Never"
+}
+
+fn frontCheckIsNumeric(typeName: String) -> Bool {
+    typeName == "Int" || typeName == "Float" || typeName == "UntypedInt" || typeName == "UntypedFloat" || typeName == "Byte" || typeName == "Char"
+}
+
+fn frontCheckIsInteger(typeName: String) -> Bool {
+    typeName == "Int" || typeName == "UntypedInt" || typeName == "Byte" || typeName == "Char"
+}
+
+fn frontCheckIsOrdered(typeName: String) -> Bool {
+    frontCheckIsNumeric(typeName) || typeName == "String" || typeName == "Bool"
+}
+
+fn frontCheckIsAssignable(env: FrontCheckEnv, dstRaw: String, srcRaw: String) -> Bool {
+    let dst = frontCheckResolveAliasesDeep(env, dstRaw)
+    let src = frontCheckResolveAliasesDeep(env, srcRaw)
+    if dst == "Any" || src == "Any" || frontCheckIsInvalid(dst) || frontCheckIsInvalid(src) {
+        return true
+    }
+    if src == "Never" || dst == src {
+        return true
+    }
+    if src == "UntypedInt" {
+        return dst == "Int" || dst == "Float" || dst == "Byte" || dst == "Char"
+    }
+    if src == "UntypedFloat" {
+        return dst == "Float"
+    }
+    let dstHead = frontCheckTypeHead(dst)
+    let srcHead = frontCheckTypeHead(src)
+    if frontCheckIsInterface(env, dstHead) {
+        return frontCheckSatisfiesInterface(env, src, dst)
+    }
+    if dstHead == "Tuple" && srcHead == "Tuple" {
+        let dstElems = frontCheckTupleElems(dst)
+        let srcElems = frontCheckTupleElems(src)
+        if frontCheckStringCount(dstElems) != frontCheckStringCount(srcElems) {
+            return false
+        }
+        let mut i = 0
+        for dstElem in dstElems {
+            if !(frontCheckIsAssignable(env, dstElem, frontCheckStringAt(srcElems, i))) {
+                return false
+            }
+            i = i + 1
+        }
+        return true
+    }
+    if dstHead == "fn" && srcHead == "fn" {
+        let dstParams = frontCheckFnParams(dst)
+        let srcParams = frontCheckFnParams(src)
+        if frontCheckStringCount(dstParams) != frontCheckStringCount(srcParams) {
+            return false
+        }
+        let mut i = 0
+        for dstParam in dstParams {
+            if !(frontCheckIsAssignable(env, dstParam, frontCheckStringAt(srcParams, i))) ||
+                    !(frontCheckIsAssignable(env, frontCheckStringAt(srcParams, i), dstParam)) {
+                return false
+            }
+            i = i + 1
+        }
+        return frontCheckIsAssignable(env, frontCheckFnReturn(dst), frontCheckFnReturn(src))
+    }
+    if dstHead == srcHead && strings.HasSuffix(dst, ">") && strings.HasSuffix(src, ">") {
+        let dstArgs = frontCheckSplitTopLevel(frontCheckGenericArgsText(dst))
+        let srcArgs = frontCheckSplitTopLevel(frontCheckGenericArgsText(src))
+        if frontCheckStringCount(dstArgs) != frontCheckStringCount(srcArgs) {
+            return false
+        }
+        let mut i = 0
+        for dstArg in dstArgs {
+            if !(frontCheckIsAssignable(env, dstArg, frontCheckStringAt(srcArgs, i))) {
+                return false
+            }
+            i = i + 1
+        }
+        return true
+    }
+    false
+}
+
+fn frontCheckExpectAssignable(env: FrontCheckEnv, dst: String, src: String) {
+    env.assignments = env.assignments + 1
+    if frontCheckIsAssignable(env, dst, src) {
+        env.accepted = env.accepted + 1
+    } else {
+        env.errors = env.errors + 1
+    }
+}
+
+fn frontCheckSatisfiesInterface(env: FrontCheckEnv, concreteRaw: String, ifaceRaw: String) -> Bool {
+    frontCheckSatisfiesInterfaceAt(env, concreteRaw, ifaceRaw, 0)
+}
+
+fn frontCheckSatisfiesInterfaceAt(env: FrontCheckEnv, concreteRaw: String, ifaceRaw: String, depth: Int) -> Bool {
+    if depth > 8 {
+        return true
+    }
+    let concrete = frontCheckResolveAliasesDeep(env, concreteRaw)
+    let iface = frontCheckResolveAliasesDeep(env, ifaceRaw)
+    let concreteHead = frontCheckTypeHead(concrete)
+    let ifaceHead = frontCheckTypeHead(iface)
+    if !(frontCheckIsInterface(env, ifaceHead)) {
+        return false
+    }
+    if concreteHead == ifaceHead {
+        return true
+    }
+    if frontCheckGenericBoundSatisfies(env, concreteHead, iface, depth + 1) {
+        return true
+    }
+    if frontCheckIsInterface(env, concreteHead) {
+        for ext in env.interfaceExtends {
+            if ext.owner == concreteHead && frontCheckSatisfiesInterfaceAt(env, ext.typeName, iface, depth + 1) {
+                return true
+            }
+        }
+    }
+    for ext in env.interfaceExtends {
+        if ext.owner == ifaceHead && !(frontCheckSatisfiesInterfaceAt(env, concrete, ext.typeName, depth + 1)) {
+            return false
+        }
+    }
+    for want in env.fns {
+        if want.receiverType == ifaceHead {
+            let got = frontCheckMethodLookup(env, concreteHead, want.name)
+            if got.name == "" {
+                return false
+            }
+            if !(frontCheckInterfaceMethodMatches(env, concrete, iface, got, want)) {
+                return false
+            }
+        }
+    }
+    true
+}
+
+fn frontCheckGenericBoundSatisfies(env: FrontCheckEnv, genericName: String, iface: String, depth: Int) -> Bool {
+    for bound in env.genericBounds {
+        if bound.name == genericName && frontCheckSatisfiesInterfaceAt(env, bound.typeName, iface, depth + 1) {
+            return true
+        }
+    }
+    false
+}
+
+fn frontCheckInterfaceMethodMatches(env: FrontCheckEnv, concrete: String, iface: String, got: FrontFnSig, want: FrontFnSig) -> Bool {
+    if frontCheckStringCount(got.paramTypes) != frontCheckStringCount(want.paramTypes) {
+        return false
+    }
+    let concreteHead = frontCheckTypeHead(concrete)
+    let ifaceHead = frontCheckTypeHead(iface)
+    let concreteSubsts = frontCheckReceiverSubsts(env, concreteHead, concrete)
+    let mut i = 0
+    for wantParamRaw in want.paramTypes {
+        let gotParamRaw = frontCheckStringAt(got.paramTypes, i)
+        if i > 0 {
+            let wantParam = frontCheckInterfaceSelfType(wantParamRaw, ifaceHead, concrete)
+            let gotParam = frontCheckSubstitute(gotParamRaw, concreteSubsts)
+            if !(frontCheckSameInterfaceSlot(env, wantParam, gotParam, ifaceHead, concrete)) &&
+                    (!(frontCheckIsAssignable(env, wantParam, gotParam)) || !(frontCheckIsAssignable(env, gotParam, wantParam))) {
+                return false
+            }
+        }
+        i = i + 1
+    }
+    let wantReturn = frontCheckInterfaceSelfType(want.returnType, ifaceHead, concrete)
+    let gotReturn = frontCheckSubstitute(got.returnType, concreteSubsts)
+    frontCheckSameInterfaceSlot(env, wantReturn, gotReturn, ifaceHead, concrete) || frontCheckIsAssignable(env, wantReturn, gotReturn)
+}
+
+fn frontCheckInterfaceSelfType(typeName: String, ifaceHead: String, concreteType: String) -> String {
+    let _ = ifaceHead
+    if typeName == "Self" {
+        return concreteType
+    }
+    let view = frontCheckParseType(typeName)
+    if view.kind == "tuple" {
+        let mut elems: List<String> = []
+        for elem in view.args {
+            elems.push(frontCheckInterfaceSelfType(elem, ifaceHead, concreteType))
+        }
+        return frontCheckTupleType(elems)
+    }
+    if view.kind == "fn" {
+        let mut params: List<String> = []
+        for param in view.params {
+            params.push(frontCheckInterfaceSelfType(param, ifaceHead, concreteType))
+        }
+        return frontCheckFnType(params, frontCheckInterfaceSelfType(view.ret, ifaceHead, concreteType))
+    }
+    if view.kind == "named" && frontCheckStringCount(view.args) > 0 {
+        let mut args: List<String> = []
+        for arg in view.args {
+            args.push(frontCheckInterfaceSelfType(arg, ifaceHead, concreteType))
+        }
+        return frontCheckNamedType(view.head, args)
+    }
+    typeName
+}
+
+fn frontCheckSameInterfaceSlot(env: FrontCheckEnv, want: String, got: String, ifaceHead: String, concreteHead: String) -> Bool {
+    let _ = env
+    want == got || (want == concreteHead && got == concreteHead) || (want == ifaceHead && got == concreteHead)
+}
+
+fn frontCheckUnify(env: FrontCheckEnv, left: String, right: String) -> String {
+    if frontCheckIsInvalid(left) {
+        return right
+    }
+    if frontCheckIsInvalid(right) {
+        return left
+    }
+    if left == right {
+        return left
+    }
+    if left == "Never" {
+        return right
+    }
+    if right == "Never" {
+        return left
+    }
+    if frontCheckIsAssignable(env, left, right) {
+        return left
+    }
+    if frontCheckIsAssignable(env, right, left) {
+        return right
+    }
+    env.errors = env.errors + 1
+    "Invalid"
+}
+
+fn frontCheckBlock(file: AstFile, env: FrontCheckEnv, blockIdx: Int, asExpr: Bool) -> String {
+    frontCheckBlockHint(file, env, blockIdx, asExpr, "")
+}
+
+fn frontCheckBlockHint(file: AstFile, env: FrontCheckEnv, blockIdx: Int, asExpr: Bool, hint: String) -> String {
+    if blockIdx < 0 {
+        return "()"
+    }
+    let block = astArenaNodeAt(file.arena, blockIdx)
+    if block.kind != AstNBlock {
+        return frontCheckExprHint(file, env, blockIdx, hint)
+    }
+    let mark = frontCheckBindingCount(env.bindings)
+    let mut result = "()"
+    let mut seen = 0
+    let mut total = 0
+    for stmt in block.children {
+        let _ = stmt
+        total = total + 1
+    }
+    for stmtIdx in block.children {
+        seen = seen + 1
+        if asExpr && seen == total {
+            result = frontCheckStmtAsExprHint(file, env, stmtIdx, hint)
+        } else {
+            let _ = frontCheckStmt(file, env, stmtIdx)
+        }
+    }
+    frontCheckPopBindings(env, mark)
+    result
+}
+
+fn frontCheckStmtAsExpr(file: AstFile, env: FrontCheckEnv, idx: Int) -> String {
+    frontCheckStmtAsExprHint(file, env, idx, "")
+}
+
+fn frontCheckStmtAsExprHint(file: AstFile, env: FrontCheckEnv, idx: Int, hint: String) -> String {
+    if idx < 0 {
+        return "()"
+    }
+    let node = astArenaNodeAt(file.arena, idx)
+    if node.kind == AstNExprStmt {
+        return frontCheckExprHint(file, env, node.left, hint)
+    }
+    frontCheckStmt(file, env, idx)
+}
+
+fn frontCheckStmt(file: AstFile, env: FrontCheckEnv, idx: Int) -> String {
+    if idx < 0 {
+        return "()"
+    }
+    let node = astArenaNodeAt(file.arena, idx)
+    if node.kind == AstNLet {
+        let declared = frontCheckTypeName(file, frontCheckFirstChild(node))
+        let valueType = frontCheckExprHint(file, env, node.right, declared)
+        if !(frontCheckPatternIrrefutable(file, node.left)) {
+            env.errors = env.errors + 1
+        }
+        let mut finalType = valueType
+        if declared != "()" && declared != "Invalid" {
+            frontCheckExpectAssignable(env, declared, valueType)
+            finalType = declared
+        }
+        frontCheckBindPattern(file, env, node.left, finalType, node.flags == 1)
+        return "()"
+    }
+    if node.kind == AstNAssign {
+        let targetType = frontCheckExpr(file, env, node.left)
+        let valueType = frontCheckExprHint(file, env, node.right, targetType)
+        if frontCheckAssignTargetMutable(file, env, node.left) {
+            frontCheckExpectAssignable(env, targetType, valueType)
+        } else {
+            env.assignments = env.assignments + 1
+            env.errors = env.errors + 1
+        }
+        return "()"
+    }
+    if node.kind == AstNReturn {
+        let valueType = frontCheckExprHint(file, env, node.left, env.returnType)
+        frontCheckExpectAssignable(env, env.returnType, valueType)
+        return "Never"
+    }
+    if node.kind == AstNExprStmt {
+        let _ = frontCheckExpr(file, env, node.left)
+        return "()"
+    }
+    if node.kind == AstNFor {
+        return frontCheckFor(file, env, node)
+    }
+    if node.kind == AstNDefer {
+        let _ = frontCheckExpr(file, env, node.left)
+        return "()"
+    }
+    if node.kind == AstNBreak || node.kind == AstNContinue {
+        return "Never"
+    }
+    frontCheckExpr(file, env, idx)
+}
+
+fn frontCheckFor(file: AstFile, env: FrontCheckEnv, node: AstNode) -> String {
+    let mark = frontCheckBindingCount(env.bindings)
+    if node.text == "cond" {
+        let condType = frontCheckExpr(file, env, node.left)
+        if condType != "Bool" && !(frontCheckIsInvalid(condType)) {
+            env.errors = env.errors + 1
+        }
+    } else if node.text == "forlet" {
+        let valueType = frontCheckExpr(file, env, node.left)
+        frontCheckBindPattern(file, env, frontCheckIntAt(node.children, 0), valueType, false)
+    } else if node.text == "forin" {
+        let iterType = frontCheckResolveAliasesDeep(env, frontCheckExpr(file, env, frontCheckIntAt(node.children, 1)))
+        let elemType = frontCheckIterableElement(iterType)
+        if elemType == "Invalid" {
+            env.errors = env.errors + 1
+        }
+        frontCheckBindPattern(file, env, frontCheckIntAt(node.children, 0), elemType, false)
+    }
+    let _ = frontCheckBlock(file, env, node.right, false)
+    frontCheckPopBindings(env, mark)
+    "()"
+}
+
+fn frontCheckIterableElement(typeName: String) -> String {
+    let head = frontCheckTypeHead(typeName)
+    if head == "List" || head == "Range" || head == "Option" {
+        return frontCheckGenericArgAt(typeName, 0)
+    }
+    if head == "Map" {
+        return "({frontCheckGenericArgAt(typeName, 0)}, {frontCheckGenericArgAt(typeName, 1)})"
+    }
+    "Invalid"
+}
+
+fn frontCheckFirstChild(node: AstNode) -> Int {
+    for child in node.children {
+        return child
+    }
+    -1
+}
+
+fn frontCheckSecondChild(node: AstNode) -> Int {
+    let mut i = 0
+    for child in node.children {
+        if i == 1 {
+            return child
+        }
+        i = i + 1
+    }
+    -1
+}
+
+fn frontCheckAssignTargetMutable(file: AstFile, env: FrontCheckEnv, idx: Int) -> Bool {
+    let node = astArenaNodeAt(file.arena, idx)
+    if node.kind == AstNIdent {
+        return frontCheckLookupMutable(env, node.text)
+    }
+    if node.kind == AstNField || node.kind == AstNIndex {
+        return frontCheckAssignTargetMutable(file, env, node.left)
+    }
+    true
+}
+
+fn frontCheckExpr(file: AstFile, env: FrontCheckEnv, idx: Int) -> String {
+    frontCheckExprHint(file, env, idx, "")
+}
+
+fn frontCheckExprHint(file: AstFile, env: FrontCheckEnv, idx: Int, hint: String) -> String {
+    if idx < 0 {
+        return "()"
+    }
+    let node = astArenaNodeAt(file.arena, idx)
+    if node.kind == AstNIntLit {
+        if hint == "Float" {
+            return frontCheckTypedExpr(file, env, idx, "Float")
+        }
+        return frontCheckTypedExpr(file, env, idx, "UntypedInt")
+    }
+    if node.kind == AstNFloatLit {
+        if hint == "Float" {
+            return frontCheckTypedExpr(file, env, idx, "Float")
+        }
+        return frontCheckTypedExpr(file, env, idx, "UntypedFloat")
+    }
+    if node.kind == AstNStringLit {
+        return frontCheckTypedExpr(file, env, idx, "String")
+    }
+    if node.kind == AstNBoolLit {
+        return frontCheckTypedExpr(file, env, idx, "Bool")
+    }
+    if node.kind == AstNCharLit {
+        return frontCheckTypedExpr(file, env, idx, "Char")
+    }
+    if node.kind == AstNByteLit {
+        return frontCheckTypedExpr(file, env, idx, "Byte")
+    }
+    if node.kind == AstNIdent {
+        return frontCheckTypedExpr(file, env, idx, frontCheckIdentHint(env, node.text, hint))
+    }
+    if node.kind == AstNParen {
+        return frontCheckTypedExpr(file, env, idx, frontCheckExprHint(file, env, node.left, hint))
+    }
+    if node.kind == AstNBlock {
+        return frontCheckTypedExpr(file, env, idx, frontCheckBlockHint(file, env, idx, true, hint))
+    }
+    if node.kind == AstNUnary {
+        return frontCheckTypedExpr(file, env, idx, frontCheckUnary(file, env, node))
+    }
+    if node.kind == AstNBinary {
+        return frontCheckTypedExpr(file, env, idx, frontCheckBinary(file, env, node))
+    }
+    if node.kind == AstNIf {
+        return frontCheckTypedExpr(file, env, idx, frontCheckIfHint(file, env, node, hint))
+    }
+    if node.kind == AstNCall {
+        return frontCheckTypedExpr(file, env, idx, frontCheckCallHint(file, env, idx, node, hint))
+    }
+    if node.kind == AstNList {
+        return frontCheckTypedExpr(file, env, idx, frontCheckList(file, env, node, hint))
+    }
+    if node.kind == AstNTuple {
+        return frontCheckTypedExpr(file, env, idx, frontCheckTuple(file, env, node, hint))
+    }
+    if node.kind == AstNMap {
+        return frontCheckTypedExpr(file, env, idx, frontCheckMap(file, env, node, hint))
+    }
+    if node.kind == AstNRange {
+        return frontCheckTypedExpr(file, env, idx, frontCheckRange(file, env, node))
+    }
+    if node.kind == AstNField {
+        return frontCheckTypedExpr(file, env, idx, frontCheckField(file, env, node))
+    }
+    if node.kind == AstNIndex {
+        return frontCheckTypedExpr(file, env, idx, frontCheckIndex(file, env, node))
+    }
+    if node.kind == AstNMatch {
+        return frontCheckTypedExpr(file, env, idx, frontCheckMatchHint(file, env, node, hint))
+    }
+    if node.kind == AstNStructLit {
+        return frontCheckTypedExpr(file, env, idx, frontCheckStructLitHint(file, env, node, hint))
+    }
+    if node.kind == AstNClosure {
+        return frontCheckTypedExpr(file, env, idx, frontCheckClosure(file, env, node, frontCheckFnParams(hint), frontCheckFnReturn(hint)))
+    }
+    if node.kind == AstNQuestion {
+        return frontCheckTypedExpr(file, env, idx, frontCheckQuestion(file, env, node))
+    }
+    if node.kind == AstNTurbofish {
+        return frontCheckTypedExpr(file, env, idx, frontCheckExpr(file, env, node.left))
+    }
+    frontCheckTypedExpr(file, env, idx, "Invalid")
+}
+
+fn frontCheckIdent(env: FrontCheckEnv, name: String) -> String {
+    frontCheckIdentHint(env, name, "")
+}
+
+fn frontCheckIdentHint(env: FrontCheckEnv, name: String, hint: String) -> String {
+    let found = frontCheckLookup(env, name)
+    if found != "Invalid" {
+        return found
+    }
+    let mut variant = frontCheckVariantLookup(env, name)
+    if hint != "" {
+        let hinted = frontCheckVariantLookupForOwner(env, name, frontCheckTypeHead(frontCheckResolveAliasesDeep(env, hint)))
+        if hinted.name != "" {
+            variant = hinted
+        }
+    }
+    if variant.name != "" && frontCheckStringCount(variant.fieldTypes) == 0 {
+        let resolvedHint = frontCheckResolveAliasesDeep(env, hint)
+        if resolvedHint != "" && frontCheckTypeHead(resolvedHint) == variant.owner {
+            return resolvedHint
+        }
+        return frontCheckGenericOwnerType(variant.owner, variant.generics, [])
+    }
+    if frontCheckSigLookup(env, name).name != "" {
+        if frontCheckTypeHead(hint) == "fn" {
+            return hint
+        }
+        return "fn"
+    }
+    if name != "_" {
+        env.errors = env.errors + 1
+    }
+    "Invalid"
+}
+
+fn frontCheckUnary(file: AstFile, env: FrontCheckEnv, node: AstNode) -> String {
+    let inner = frontCheckResolveAliasesDeep(env, frontCheckExpr(file, env, node.left))
+    if node.op == FrontNot {
+        if inner != "Bool" && !(frontCheckIsInvalid(inner)) {
+            env.errors = env.errors + 1
+            return "Invalid"
+        }
+        return "Bool"
+    }
+    if node.op == FrontMinus {
+        if frontCheckIsNumeric(inner) {
+            return inner
+        }
+        if !(frontCheckIsInvalid(inner)) {
+            env.errors = env.errors + 1
+        }
+        return "Invalid"
+    }
+    if node.op == FrontBitNot {
+        if frontCheckIsInteger(inner) {
+            return inner
+        }
+        if !(frontCheckIsInvalid(inner)) {
+            env.errors = env.errors + 1
+        }
+    }
+    "Invalid"
+}
+
+fn frontCheckBinary(file: AstFile, env: FrontCheckEnv, node: AstNode) -> String {
+    let left = frontCheckResolveAliasesDeep(env, frontCheckExpr(file, env, node.left))
+    let right = frontCheckResolveAliasesDeep(env, frontCheckExpr(file, env, node.right))
+    if node.op == FrontEq || node.op == FrontNeq {
+        if frontCheckIsAssignable(env, left, right) || frontCheckIsAssignable(env, right, left) {
+            return "Bool"
+        }
+        env.errors = env.errors + 1
+        return "Invalid"
+    }
+    if node.op == FrontLt || node.op == FrontGt || node.op == FrontLeq || node.op == FrontGeq {
+        if frontCheckIsOrdered(left) && (frontCheckIsAssignable(env, left, right) || frontCheckIsAssignable(env, right, left)) {
+            return "Bool"
+        }
+        env.errors = env.errors + 1
+        return "Invalid"
+    }
+    if node.op == FrontAnd || node.op == FrontOr {
+        if left == "Bool" && right == "Bool" {
+            return "Bool"
+        }
+        env.errors = env.errors + 1
+        return "Invalid"
+    }
+    if node.op == FrontQQ {
+        if frontCheckTypeHead(left) != "Option" {
+            env.errors = env.errors + 1
+            return "Invalid"
+        }
+        let inner = frontCheckGenericArgAt(left, 0)
+        frontCheckExpectAssignable(env, inner, right)
+        return inner
+    }
+    if node.op == FrontBitAnd || node.op == FrontBitOr || node.op == FrontBitXor || node.op == FrontShl || node.op == FrontShr {
+        if frontCheckIsInteger(left) && frontCheckIsInteger(right) {
+            if left == "UntypedInt" {
+                return right
+            }
+            return left
+        }
+        env.errors = env.errors + 1
+        return "Invalid"
+    }
+    if node.op == FrontPlus || node.op == FrontMinus || node.op == FrontStar || node.op == FrontSlash || node.op == FrontPercent {
+        if !(frontCheckIsNumeric(left)) || !(frontCheckIsNumeric(right)) {
+            env.errors = env.errors + 1
+            return "Invalid"
+        }
+        if left == "Float" || right == "Float" || left == "UntypedFloat" || right == "UntypedFloat" {
+            if left == "UntypedFloat" && right == "UntypedFloat" {
+                return "UntypedFloat"
+            }
+            return "Float"
+        }
+        if left == "Int" || right == "Int" {
+            return "Int"
+        }
+        return "UntypedInt"
+    }
+    "Invalid"
+}
+
+fn frontCheckList(file: AstFile, env: FrontCheckEnv, node: AstNode, hint: String) -> String {
+    let mut elem = "Invalid"
+    if frontCheckTypeHead(hint) == "List" {
+        elem = frontCheckGenericArgAt(hint, 0)
+    }
+    let mut seen = 0
+    for child in node.children {
+        let got = frontCheckExprHint(file, env, child, elem)
+        if seen == 0 && elem == "Invalid" {
+            elem = got
+        } else {
+            elem = frontCheckUnify(env, elem, got)
+        }
+        seen = seen + 1
+    }
+    frontCheckOneArgType("List", elem)
+}
+
+fn frontCheckMap(file: AstFile, env: FrontCheckEnv, node: AstNode, hint: String) -> String {
+    let mut keyType = "Invalid"
+    let mut valType = "Invalid"
+    if frontCheckTypeHead(hint) == "Map" {
+        keyType = frontCheckGenericArgAt(hint, 0)
+        valType = frontCheckGenericArgAt(hint, 1)
+    }
+    let mut i = 0
+    for keyIdx in node.children {
+        let valIdx = frontCheckIntAt(node.children2, i)
+        let gotKey = frontCheckExprHint(file, env, keyIdx, keyType)
+        let gotVal = frontCheckExprHint(file, env, valIdx, valType)
+        if i == 0 && keyType == "Invalid" && valType == "Invalid" {
+            keyType = gotKey
+            valType = gotVal
+        } else {
+            keyType = frontCheckUnify(env, keyType, gotKey)
+            valType = frontCheckUnify(env, valType, gotVal)
+        }
+        i = i + 1
+    }
+    frontCheckTwoArgType("Map", keyType, valType)
+}
+
+fn frontCheckTuple(file: AstFile, env: FrontCheckEnv, node: AstNode, hint: String) -> String {
+    let hints = frontCheckTupleElems(hint)
+    let mut elems: List<String> = []
+    let mut i = 0
+    for child in node.children {
+        elems.push(frontCheckExprHint(file, env, child, frontCheckStringAt(hints, i)))
+        i = i + 1
+    }
+    if frontCheckStringCount(elems) == 0 {
+        return "()"
+    }
+    "({frontCheckJoinTypes(elems)})"
+}
+
+fn frontCheckRange(file: AstFile, env: FrontCheckEnv, node: AstNode) -> String {
+    let mut elem = "Int"
+    if node.left >= 0 {
+        let left = frontCheckResolveAliasesDeep(env, frontCheckExpr(file, env, node.left))
+        if !(frontCheckIsInteger(left)) {
+            env.errors = env.errors + 1
+        }
+        elem = left
+    }
+    if node.right >= 0 {
+        let right = frontCheckResolveAliasesDeep(env, frontCheckExpr(file, env, node.right))
+        if !(frontCheckIsInteger(right)) {
+            env.errors = env.errors + 1
+        }
+        elem = frontCheckUnify(env, elem, right)
+    }
+    frontCheckOneArgType("Range", elem)
+}
+
+fn frontCheckIf(file: AstFile, env: FrontCheckEnv, node: AstNode) -> String {
+    frontCheckIfHint(file, env, node, "")
+}
+
+fn frontCheckIfHint(file: AstFile, env: FrontCheckEnv, node: AstNode, hint: String) -> String {
+    let mark = frontCheckBindingCount(env.bindings)
+    if node.flags == 1 {
+        let valueType = frontCheckExpr(file, env, node.left)
+        frontCheckBindPattern(file, env, frontCheckSecondChild(node), valueType, false)
+    } else {
+        let cond = frontCheckExpr(file, env, node.left)
+        if cond != "Bool" && !(frontCheckIsInvalid(cond)) {
+            env.errors = env.errors + 1
+        }
+    }
+    let thenType = frontCheckBlockHint(file, env, node.right, true, hint)
+    frontCheckPopBindings(env, mark)
+    let elseIdx = frontCheckFirstChild(node)
+    if elseIdx < 0 {
+        return "()"
+    }
+    let elseMark = frontCheckBindingCount(env.bindings)
+    let elseNode = astArenaNodeAt(file.arena, elseIdx)
+    let mut elseType = "()"
+    if elseNode.kind == AstNBlock {
+        elseType = frontCheckBlockHint(file, env, elseIdx, true, hint)
+    } else {
+        elseType = frontCheckExprHint(file, env, elseIdx, hint)
+    }
+    frontCheckPopBindings(env, elseMark)
+    frontCheckUnify(env, thenType, elseType)
+}
+
+fn frontCheckCall(file: AstFile, env: FrontCheckEnv, node: AstNode) -> String {
+    frontCheckCallHint(file, env, -1, node, "")
+}
+
+fn frontCheckCallHint(file: AstFile, env: FrontCheckEnv, callIdx: Int, node: AstNode, hint: String) -> String {
+    let callee = astArenaNodeAt(file.arena, node.left)
+    if callee.kind == AstNTurbofish {
+        return frontCheckTurbofishCall(file, env, callIdx, callee, node.children)
+    }
+    if callee.kind == AstNIdent {
+        let bindingType = frontCheckResolveAliasesDeep(env, frontCheckLookup(env, callee.text))
+        if frontCheckTypeHead(bindingType) == "fn" {
+            return frontCheckCallFnType(file, env, bindingType, node.children)
+        }
+        let variant = frontCheckVariantLookup(env, callee.text)
+        if variant.name != "" {
+            return frontCheckVariantCallWithSubsts(file, env, variant, node.children, frontCheckVariantHintSubsts(env, variant, hint))
+        }
+        let sig = frontCheckSigLookup(env, callee.text)
+        if sig.name != "" {
+            return frontCheckCallSig(file, env, callIdx, sig, node.children, 0, [])
+        }
+        if frontCheckIsBuiltinCallName(callee.text) {
+            return frontCheckBuiltinCall(file, env, callee.text, node.children)
+        }
+        env.errors = env.errors + 1
+        return "Invalid"
+    }
+    if callee.kind == AstNField {
+        let packageName = frontCheckPackageFnNameEnv(file, env, callee)
+        if packageName != "" {
+            let sig = frontCheckSigLookup(env, packageName)
+            if sig.name != "" {
+                return frontCheckCallSig(file, env, callIdx, sig, node.children, 0, [])
+            }
+        }
+        let recvType = frontCheckResolveAliasesDeep(env, frontCheckExpr(file, env, callee.left))
+        let methodResult = frontCheckStdMethodCall(file, env, callee, recvType, node.children)
+        if methodResult != "Invalid" {
+            return methodResult
+        }
+        let owner = frontCheckTypeHead(recvType)
+        let sig = frontCheckMethodLookup(env, owner, callee.text)
+        if sig.name != "" {
+            let substs = frontCheckReceiverSubsts(env, owner, recvType)
+            return frontCheckCallSig(file, env, callIdx, sig, node.children, 1, substs)
+        }
+        let boundSig = frontCheckBoundMethodLookup(env, owner, callee.text)
+        if boundSig.name != "" {
+            return frontCheckCallSig(file, env, callIdx, boundSig, node.children, 1, [FrontTypeSubst { name: "Self", typeName: recvType }])
+        }
+        if !(frontCheckIsInvalid(recvType)) {
+            env.errors = env.errors + 1
+        }
+        return "Invalid"
+    }
+    let fnType = frontCheckExpr(file, env, node.left)
+    if frontCheckTypeHead(fnType) == "fn" {
+        return frontCheckCallFnType(file, env, fnType, node.children)
+    }
+    env.errors = env.errors + 1
+    "Invalid"
+}
+
+fn frontCheckPackageFnName(file: AstFile, field: AstNode) -> String {
+    let left = astArenaNodeAt(file.arena, field.left)
+    if left.kind == AstNIdent {
+        return "{left.text}.{field.text}"
+    }
+    ""
+}
+
+fn frontCheckPackageFnNameEnv(file: AstFile, env: FrontCheckEnv, field: AstNode) -> String {
+    let left = astArenaNodeAt(file.arena, field.left)
+    if left.kind == AstNIdent && frontCheckLookup(env, left.text) == "Invalid" {
+        return "{left.text}.{field.text}"
+    }
+    ""
+}
+
+fn frontCheckBuiltinCall(file: AstFile, env: FrontCheckEnv, name: String, args: List<Int>) -> String {
+    if name == "print" || name == "println" {
+        for argIdx in args {
+            let _ = frontCheckExpr(file, env, argIdx)
+        }
+        return "()"
+    }
+    if name == "panic" {
+        for argIdx in args {
+            let _ = frontCheckExpr(file, env, argIdx)
+        }
+        return "Never"
+    }
+    if name == "len" {
+        frontCheckExpectArgCount(env, args, 1)
+        let valueType = frontCheckResolveAliasesDeep(env, frontCheckExpr(file, env, frontCheckIntAt(args, 0)))
+        let head = frontCheckTypeHead(valueType)
+        if head == "List" || head == "Map" || valueType == "String" || valueType == "Bytes" {
+            return "Int"
+        }
+        if !(frontCheckIsInvalid(valueType)) {
+            env.errors = env.errors + 1
+        }
+    }
+    "Invalid"
+}
+
+fn frontCheckIsBuiltinCallName(name: String) -> Bool {
+    name == "print" || name == "println" || name == "panic" || name == "len"
+}
+
+fn frontCheckTurbofishCall(file: AstFile, env: FrontCheckEnv, callIdx: Int, callee: AstNode, args: List<Int>) -> String {
+    let target = astArenaNodeAt(file.arena, callee.left)
+    let typeArgs = frontCheckTypeArgs(file, callee.children)
+    if target.kind == AstNIdent {
+        let variant = frontCheckVariantLookup(env, target.text)
+        if variant.name != "" {
+            let substs = frontCheckExplicitSubsts(env, variant.generics, typeArgs)
+            return frontCheckVariantCallWithSubsts(file, env, variant, args, substs)
+        }
+        let sig = frontCheckSigLookup(env, target.text)
+        if sig.name != "" {
+            let substs = frontCheckExplicitSubsts(env, sig.generics, typeArgs)
+            return frontCheckCallSig(file, env, callIdx, sig, args, 0, substs)
+        }
+    }
+    if target.kind == AstNField {
+        let recvType = frontCheckResolveAliasesDeep(env, frontCheckExpr(file, env, target.left))
+        let owner = frontCheckTypeHead(recvType)
+        let sig = frontCheckMethodLookup(env, owner, target.text)
+        if sig.name != "" {
+            let mut substs = frontCheckReceiverSubsts(env, owner, recvType)
+            let ownerGenericCount = frontCheckStringCount(frontCheckTypeSigLookup(env, owner).generics)
+            let methodGenerics = frontCheckStringDrop(sig.generics, ownerGenericCount)
+            let explicit = frontCheckExplicitSubsts(env, methodGenerics, typeArgs)
+            for item in explicit {
+                substs.push(item)
+            }
+            return frontCheckCallSig(file, env, callIdx, sig, args, 1, substs)
+        }
+    }
+    env.errors = env.errors + 1
+    "Invalid"
+}
+
+fn frontCheckTypeArgs(file: AstFile, idxs: List<Int>) -> List<String> {
+    let mut out: List<String> = []
+    for idx in idxs {
+        out.push(frontCheckTypeName(file, idx))
+    }
+    out
+}
+
+fn frontCheckExplicitSubsts(env: FrontCheckEnv, generics: List<String>, typeArgs: List<String>) -> List<FrontTypeSubst> {
+    let mut out: List<FrontTypeSubst> = []
+    if frontCheckStringCount(generics) != frontCheckStringCount(typeArgs) {
+        env.errors = env.errors + 1
+    }
+    let mut i = 0
+    for generic in generics {
+        let arg = frontCheckStringAt(typeArgs, i)
+        if arg != "Invalid" {
+            out.push(FrontTypeSubst { name: generic, typeName: arg })
+        }
+        i = i + 1
+    }
+    out
+}
+
+fn frontCheckVariantHintSubsts(env: FrontCheckEnv, variant: FrontVariantSig, hint: String) -> List<FrontTypeSubst> {
+    let mut out: List<FrontTypeSubst> = []
+    let resolved = frontCheckResolveAliasesDeep(env, hint)
+    if resolved == "" || frontCheckTypeHead(resolved) != variant.owner {
+        return out
+    }
+    let mut i = 0
+    for generic in variant.generics {
+        let arg = frontCheckGenericArgAt(resolved, i)
+        if arg != "Invalid" {
+            out.push(FrontTypeSubst { name: generic, typeName: arg })
+        }
+        i = i + 1
+    }
+    out
+}
+
+fn frontCheckVariantCall(file: AstFile, env: FrontCheckEnv, variant: FrontVariantSig, args: List<Int>) -> String {
+    frontCheckVariantCallWithSubsts(file, env, variant, args, [])
+}
+
+fn frontCheckVariantCallWithSubsts(file: AstFile, env: FrontCheckEnv, variant: FrontVariantSig, args: List<Int>, initialSubsts: List<FrontTypeSubst>) -> String {
+    let mut substs = initialSubsts
+    if frontCheckIntCount(args) != frontCheckStringCount(variant.fieldTypes) {
+        env.errors = env.errors + 1
+        return frontCheckGenericOwnerType(variant.owner, variant.generics, substs)
+    }
+    let mut i = 0
+    for argIdx in args {
+        let want = frontCheckStringAt(variant.fieldTypes, i)
+        let got = frontCheckExprHint(file, env, argIdx, frontCheckSubstitute(want, substs))
+        substs = frontCheckBindGenerics(env, want, got, variant.generics, substs)
+        frontCheckExpectAssignable(env, frontCheckSubstitute(want, substs), got)
+        i = i + 1
+    }
+    frontCheckGenericOwnerType(variant.owner, variant.generics, substs)
+}
+
+fn frontCheckGenericOwnerType(owner: String, generics: List<String>, substs: List<FrontTypeSubst>) -> String {
+    if frontCheckStringCount(generics) == 0 {
+        return owner
+    }
+    let mut args: List<String> = []
+    for generic in generics {
+        let value = frontCheckSubstLookup(substs, generic)
+        if value == "" {
+            args.push(generic)
+        } else {
+            args.push(value)
+        }
+    }
+    "{owner}<{frontCheckJoinTypes(args)}>"
+}
+
+fn frontCheckCallSig(file: AstFile, env: FrontCheckEnv, callIdx: Int, sig: FrontFnSig, args: List<Int>, skip: Int, initialSubsts: List<FrontTypeSubst>) -> String {
+    let mut substs = initialSubsts
+    let wantCount = frontCheckStringCount(sig.paramTypes) - skip
+    let gotCount = frontCheckIntCount(args)
+    if gotCount != wantCount {
+        env.errors = env.errors + 1
+    }
+    let mut i = 0
+    for argIdx in args {
+        let rawWant = frontCheckStringAt(sig.paramTypes, i + skip)
+        let want = frontCheckSubstitute(rawWant, substs)
+        let hint = frontCheckEraseGenericHints(want, sig.generics)
+        let got = frontCheckExprHint(file, env, argIdx, hint)
+        substs = frontCheckBindGenerics(env, rawWant, got, sig.generics, substs)
+        frontCheckExpectAssignable(env, frontCheckSubstitute(rawWant, substs), got)
+        i = i + 1
+    }
+    frontCheckCheckGenericBounds(env, sig.genericBounds, substs)
+    let resultType = frontCheckSubstitute(sig.returnType, substs)
+    frontCheckRecordInstantiation(file, env, callIdx, sig.name, sig.generics, substs, resultType)
+    resultType
+}
+
+fn frontCheckCheckGenericBounds(env: FrontCheckEnv, bounds: List<FrontTypeSubst>, substs: List<FrontTypeSubst>) {
+    for bound in bounds {
+        let actual = frontCheckSubstLookup(substs, bound.name)
+        if actual != "" {
+            frontCheckExpectAssignable(env, bound.typeName, actual)
+        }
+    }
+}
+
+fn frontCheckCallFnType(file: AstFile, env: FrontCheckEnv, fnType: String, args: List<Int>) -> String {
+    let params = frontCheckFnParams(fnType)
+    if frontCheckStringCount(params) != frontCheckIntCount(args) {
+        env.errors = env.errors + 1
+    }
+    let mut i = 0
+    for argIdx in args {
+        let want = frontCheckStringAt(params, i)
+        let got = frontCheckExprHint(file, env, argIdx, want)
+        frontCheckExpectAssignable(env, want, got)
+        i = i + 1
+    }
+    frontCheckFnReturn(fnType)
+}
+
+fn frontCheckReceiverSubsts(env: FrontCheckEnv, owner: String, recvType: String) -> List<FrontTypeSubst> {
+    let mut out: List<FrontTypeSubst> = [FrontTypeSubst { name: "Self", typeName: recvType }]
+    let sig = frontCheckTypeSigLookup(env, owner)
+    let mut i = 0
+    for generic in sig.generics {
+        out.push(FrontTypeSubst { name: generic, typeName: frontCheckGenericArgAt(recvType, i) })
+        i = i + 1
+    }
+    out
+}
+
+fn frontCheckBindGenerics(env: FrontCheckEnv, want: String, got: String, generics: List<String>, substs: List<FrontTypeSubst>) -> List<FrontTypeSubst> {
+    let mut out = substs
+    if frontCheckIsGenericName(want, generics) {
+        return frontCheckAddSubst(env, out, want, got)
+    }
+    let wantView = frontCheckParseType(want)
+    let gotView = frontCheckParseType(got)
+    if wantView.kind == "tuple" && gotView.kind == "tuple" && frontCheckStringCount(wantView.args) == frontCheckStringCount(gotView.args) {
+        let mut i = 0
+        for wantArg in wantView.args {
+            out = frontCheckBindGenerics(env, wantArg, frontCheckStringAt(gotView.args, i), generics, out)
+            i = i + 1
+        }
+        return out
+    }
+    if wantView.kind == "fn" && gotView.kind == "fn" && frontCheckStringCount(wantView.params) == frontCheckStringCount(gotView.params) {
+        let mut i = 0
+        for wantParam in wantView.params {
+            out = frontCheckBindGenerics(env, wantParam, frontCheckStringAt(gotView.params, i), generics, out)
+            i = i + 1
+        }
+        return frontCheckBindGenerics(env, wantView.ret, gotView.ret, generics, out)
+    }
+    if wantView.kind == "named" && gotView.kind == "named" && wantView.head == gotView.head &&
+            frontCheckStringCount(wantView.args) == frontCheckStringCount(gotView.args) && frontCheckStringCount(wantView.args) > 0 {
+        let mut i = 0
+        for wantArg in wantView.args {
+            out = frontCheckBindGenerics(env, wantArg, frontCheckStringAt(gotView.args, i), generics, out)
+            i = i + 1
+        }
+    }
+    out
+}
+
+fn frontCheckIsGenericName(name: String, generics: List<String>) -> Bool {
+    for generic in generics {
+        if generic == name {
+            return true
+        }
+    }
+    false
+}
+
+fn frontCheckAddSubst(env: FrontCheckEnv, substs: List<FrontTypeSubst>, name: String, typeName: String) -> List<FrontTypeSubst> {
+    let mut out = substs
+    let existing = frontCheckSubstLookup(substs, name)
+    if existing == "" || existing == "Invalid" {
+        out.push(FrontTypeSubst { name, typeName })
+        return out
+    }
+    if !(frontCheckIsAssignable(env, existing, typeName)) && !(frontCheckIsAssignable(env, typeName, existing)) {
+        env.errors = env.errors + 1
+    }
+    out
+}
+
+fn frontCheckSubstLookup(substs: List<FrontTypeSubst>, name: String) -> String {
+    let mut found = ""
+    for subst in substs {
+        if subst.name == name {
+            found = subst.typeName
+        }
+    }
+    found
+}
+
+fn frontCheckSubstitute(typeName: String, substs: List<FrontTypeSubst>) -> String {
+    let direct = frontCheckSubstLookup(substs, typeName)
+    if direct != "" {
+        return direct
+    }
+    let view = frontCheckParseType(typeName)
+    if view.kind == "tuple" {
+        let mut elems: List<String> = []
+        for elem in view.args {
+            elems.push(frontCheckSubstitute(elem, substs))
+        }
+        return frontCheckTupleType(elems)
+    }
+    if view.kind == "fn" {
+        let mut params: List<String> = []
+        for param in view.params {
+            params.push(frontCheckSubstitute(param, substs))
+        }
+        return frontCheckFnType(params, frontCheckSubstitute(view.ret, substs))
+    }
+    if view.kind == "named" && frontCheckStringCount(view.args) > 0 {
+        let mut args: List<String> = []
+        for arg in view.args {
+            args.push(frontCheckSubstitute(arg, substs))
+        }
+        return frontCheckNamedType(view.head, args)
+    }
+    typeName
+}
+
+fn frontCheckEraseGenericHints(typeName: String, generics: List<String>) -> String {
+    if frontCheckIsGenericName(typeName, generics) {
+        return "Invalid"
+    }
+    let view = frontCheckParseType(typeName)
+    if view.kind == "tuple" {
+        let mut elems: List<String> = []
+        for elem in view.args {
+            elems.push(frontCheckEraseGenericHints(elem, generics))
+        }
+        return frontCheckTupleType(elems)
+    }
+    if view.kind == "fn" {
+        let mut params: List<String> = []
+        for param in view.params {
+            params.push(frontCheckEraseGenericHints(param, generics))
+        }
+        return frontCheckFnType(params, frontCheckEraseGenericHints(view.ret, generics))
+    }
+    if view.kind == "named" && frontCheckStringCount(view.args) > 0 {
+        let mut args: List<String> = []
+        for arg in view.args {
+            args.push(frontCheckEraseGenericHints(arg, generics))
+        }
+        return frontCheckNamedType(view.head, args)
+    }
+    typeName
+}
+
+fn frontCheckField(file: AstFile, env: FrontCheckEnv, node: AstNode) -> String {
+    let packageName = frontCheckPackageFnNameEnv(file, env, node)
+    if packageName != "" && frontCheckSigLookup(env, packageName).name != "" {
+        return "fn"
+    }
+    let recvType = frontCheckResolveAliasesDeep(env, frontCheckExpr(file, env, node.left))
+    let owner = frontCheckTypeHead(recvType)
+    let field = frontCheckFieldLookup(env, owner, node.text)
+    if field.name != "" {
+        let substs = frontCheckReceiverSubsts(env, owner, recvType)
+        let fieldType = frontCheckSubstitute(field.typeName, substs)
+        if node.flags == 1 {
+            return frontCheckOneArgType("Option", fieldType)
+        }
+        return fieldType
+    }
+    if frontCheckMethodLookup(env, owner, node.text).name != "" {
+        return "fn"
+    }
+    if frontCheckBoundMethodLookup(env, owner, node.text).name != "" {
+        return "fn"
+    }
+    if !(frontCheckIsInvalid(recvType)) {
+        env.errors = env.errors + 1
+    }
+    "Invalid"
+}
+
+fn frontCheckIndex(file: AstFile, env: FrontCheckEnv, node: AstNode) -> String {
+    let objectType = frontCheckResolveAliasesDeep(env, frontCheckExpr(file, env, node.left))
+    let indexType = frontCheckExpr(file, env, node.right)
+    let head = frontCheckTypeHead(objectType)
+    if head == "List" || head == "Range" {
+        frontCheckExpectAssignable(env, "Int", indexType)
+        return frontCheckGenericArgAt(objectType, 0)
+    }
+    if head == "Map" {
+        frontCheckExpectAssignable(env, frontCheckGenericArgAt(objectType, 0), indexType)
+        return frontCheckGenericArgAt(objectType, 1)
+    }
+    if objectType == "String" {
+        frontCheckExpectAssignable(env, "Int", indexType)
+        return "Char"
+    }
+    if objectType == "Bytes" {
+        frontCheckExpectAssignable(env, "Int", indexType)
+        return "Byte"
+    }
+    if !(frontCheckIsInvalid(objectType)) {
+        env.errors = env.errors + 1
+    }
+    "Invalid"
+}
+
+fn frontCheckStructLit(file: AstFile, env: FrontCheckEnv, node: AstNode) -> String {
+    frontCheckStructLitHint(file, env, node, "")
+}
+
+fn frontCheckStructLitHint(file: AstFile, env: FrontCheckEnv, node: AstNode, hint: String) -> String {
+    let nameNode = astArenaNodeAt(file.arena, node.left)
+    let typeName = nameNode.text
+    let typeSig = frontCheckTypeSigLookup(env, typeName)
+    if typeSig.name == "" {
+        env.errors = env.errors + 1
+        return "Invalid"
+    }
+    let hintType = frontCheckResolveAliasesDeep(env, hint)
+    let mut substs: List<FrontTypeSubst> = []
+    if frontCheckTypeHead(hintType) == typeName {
+        substs = frontCheckReceiverSubsts(env, typeName, hintType)
+    }
+    if node.right >= 0 {
+        let spread = frontCheckResolveAliasesDeep(env, frontCheckExprHint(file, env, node.right, hintType))
+        if frontCheckTypeHead(spread) == typeName {
+            substs = frontCheckReceiverSubsts(env, typeName, spread)
+        }
+        frontCheckExpectAssignable(env, frontCheckGenericOwnerType(typeName, typeSig.generics, substs), spread)
+    }
+    for fieldIdx in node.children {
+        let fieldNode = astArenaNodeAt(file.arena, fieldIdx)
+        if frontCheckStructLitFieldCount(file, node, fieldNode.text) > 1 {
+            env.errors = env.errors + 1
+        }
+        let field = frontCheckFieldLookup(env, typeName, fieldNode.text)
+        if field.name == "" {
+            env.errors = env.errors + 1
+        } else {
+            let mut valueType = "Invalid"
+            let want = frontCheckSubstitute(field.typeName, substs)
+            if fieldNode.left >= 0 {
+                valueType = frontCheckExprHint(file, env, fieldNode.left, want)
+            } else {
+                valueType = frontCheckLookup(env, fieldNode.text)
+            }
+            substs = frontCheckBindGenerics(env, field.typeName, valueType, typeSig.generics, substs)
+            frontCheckExpectAssignable(env, frontCheckSubstitute(field.typeName, substs), valueType)
+        }
+    }
+    for field in env.fields {
+        if field.owner == typeName && !(field.hasDefault) && !(frontCheckStructLitHasField(file, node, field.name)) && node.right < 0 {
+            env.errors = env.errors + 1
+        }
+    }
+    frontCheckGenericOwnerType(typeName, typeSig.generics, substs)
+}
+
+fn frontCheckStructLitHasField(file: AstFile, node: AstNode, name: String) -> Bool {
+    for fieldIdx in node.children {
+        let field = astArenaNodeAt(file.arena, fieldIdx)
+        if field.text == name {
+            return true
+        }
+    }
+    false
+}
+
+fn frontCheckStructLitFieldCount(file: AstFile, node: AstNode, name: String) -> Int {
+    let mut count = 0
+    for fieldIdx in node.children {
+        let field = astArenaNodeAt(file.arena, fieldIdx)
+        if field.text == name {
+            count = count + 1
+        }
+    }
+    count
+}
+
+fn frontCheckMatch(file: AstFile, env: FrontCheckEnv, node: AstNode) -> String {
+    frontCheckMatchHint(file, env, node, "")
+}
+
+fn frontCheckMatchHint(file: AstFile, env: FrontCheckEnv, node: AstNode, hint: String) -> String {
+    let scrutinee = frontCheckExpr(file, env, node.left)
+    let mut result = "Invalid"
+    let mut seen = 0
+    for armIdx in node.children {
+        let mark = frontCheckBindingCount(env.bindings)
+        let arm = astArenaNodeAt(file.arena, armIdx)
+        frontCheckPatternCompatible(file, env, arm.left, scrutinee)
+        let guardIdx = frontCheckFirstChild(arm)
+        if guardIdx >= 0 {
+            let guard = frontCheckExpr(file, env, guardIdx)
+            if guard != "Bool" && !(frontCheckIsInvalid(guard)) {
+                env.errors = env.errors + 1
+            }
+        }
+        let bodyType = frontCheckExprHint(file, env, arm.right, hint)
+        if seen == 0 {
+            result = bodyType
+        } else {
+            result = frontCheckUnify(env, result, bodyType)
+        }
+        frontCheckPopBindings(env, mark)
+        seen = seen + 1
+    }
+    frontCheckCheckMatchExhaustive(file, env, node, scrutinee, seen)
+    result
+}
+
+fn frontCheckCheckMatchExhaustive(file: AstFile, env: FrontCheckEnv, node: AstNode, scrutineeType: String, arms: Int) {
+    if arms == 0 {
+        env.errors = env.errors + 1
+        return
+    }
+    let scrutinee = frontCheckResolveAliasesDeep(env, scrutineeType)
+    frontCheckCheckMatchReachability(file, env, node, scrutinee)
+    if frontCheckIsInvalid(scrutinee) || frontCheckMatchHasCatchAll(file, node) {
+        return
+    }
+    let owner = frontCheckTypeHead(scrutinee)
+    if owner == "Bool" {
+        if !(frontCheckMatchCoversBool(file, node, true)) || !(frontCheckMatchCoversBool(file, node, false)) {
+            env.errors = env.errors + 1
+        }
+        return
+    }
+    if owner == "Tuple" && frontCheckTupleAllBool(scrutinee) {
+        if !(frontCheckMatchCoversBoolTuple(file, node, scrutinee)) {
+            env.errors = env.errors + 1
+        }
+        return
+    }
+    if frontCheckStructFieldCount(env, owner) > 0 {
+        if !(frontCheckMatchCoversStruct(file, env, node, owner)) {
+            env.errors = env.errors + 1
+        }
+        return
+    }
+    let mut variantCount = 0
+    let mut missing = false
+    for variant in env.variants {
+        if variant.owner == owner {
+            variantCount = variantCount + 1
+            if !(frontCheckMatchCoversVariantComplete(file, node, variant)) {
+                missing = true
+            }
+        }
+    }
+    if variantCount > 0 && missing {
+        env.errors = env.errors + 1
+    }
+}
+
+fn frontCheckCheckMatchReachability(file: AstFile, env: FrontCheckEnv, node: AstNode, scrutineeType: String) {
+    let mut current = 0
+    for armIdx in node.children {
+        let arm = astArenaNodeAt(file.arena, armIdx)
+        let mut prevIndex = 0
+        for prevArmIdx in node.children {
+            if prevIndex >= current {
+                break
+            }
+            let prevArm = astArenaNodeAt(file.arena, prevArmIdx)
+            if frontCheckFirstChild(prevArm) < 0 && frontCheckPatternCoversPattern(file, env, prevArm.left, arm.left, scrutineeType) {
+                env.errors = env.errors + 1
+                break
+            }
+            prevIndex = prevIndex + 1
+        }
+        current = current + 1
+    }
+}
+
+fn frontCheckPatternCoversPattern(file: AstFile, env: FrontCheckEnv, prevIdx: Int, curIdx: Int, scrutineeType: String) -> Bool {
+    if frontCheckPatternCoversAny(file, prevIdx) {
+        return true
+    }
+    let owner = frontCheckTypeHead(scrutineeType)
+    if owner == "Bool" {
+        let cur = astArenaNodeAt(file.arena, curIdx)
+        if cur.kind == AstNPattern && frontCheckPatternKind(cur) == "literal" {
+            let lit = frontCheckPatternPayload(cur)
+            if lit == "true" || lit == "false" || cur.flags == 1 || cur.flags == 2 {
+                return frontCheckPatternCoversBool(file, prevIdx, lit == "true" || cur.flags == 1)
+            }
+        }
+    }
+    let curPat = astArenaNodeAt(file.arena, curIdx)
+    if curPat.kind == AstNPattern && frontCheckPatternIsVariant(curPat) {
+        let variant = frontCheckVariantLookupForOwner(env, frontCheckPatternName(curPat), owner)
+        if variant.name != "" {
+            return frontCheckPatternCoversVariantCompleteSingle(file, prevIdx, variant)
+        }
+    }
+    false
+}
+
+fn frontCheckMatchHasCatchAll(file: AstFile, node: AstNode) -> Bool {
+    for armIdx in node.children {
+        let arm = astArenaNodeAt(file.arena, armIdx)
+        if frontCheckFirstChild(arm) < 0 && frontCheckPatternCoversAny(file, arm.left) {
+            return true
+        }
+    }
+    false
+}
+
+fn frontCheckMatchCoversVariant(file: AstFile, node: AstNode, name: String) -> Bool {
+    for armIdx in node.children {
+        let arm = astArenaNodeAt(file.arena, armIdx)
+        if frontCheckFirstChild(arm) < 0 && frontCheckPatternCoversVariant(file, arm.left, name) {
+            return true
+        }
+    }
+    false
+}
+
+fn frontCheckMatchCoversVariantComplete(file: AstFile, node: AstNode, variant: FrontVariantSig) -> Bool {
+    let fieldCases = frontCheckVariantFiniteFieldCases(file, variant)
+    if frontCheckStringCount(fieldCases) > 0 {
+        for fieldCase in fieldCases {
+            if !(frontCheckMatchCoversVariantCase(file, node, variant, fieldCase)) {
+                return false
+            }
+        }
+        return true
+    }
+    for armIdx in node.children {
+        let arm = astArenaNodeAt(file.arena, armIdx)
+        if frontCheckFirstChild(arm) < 0 && frontCheckPatternCoversVariantCompleteSingle(file, arm.left, variant) {
+            return true
+        }
+    }
+    false
+}
+
+fn frontCheckMatchCoversVariantCase(file: AstFile, node: AstNode, variant: FrontVariantSig, fieldCase: String) -> Bool {
+    for armIdx in node.children {
+        let arm = astArenaNodeAt(file.arena, armIdx)
+        if frontCheckFirstChild(arm) < 0 && frontCheckPatternCoversVariantCase(file, arm.left, variant, fieldCase) {
+            return true
+        }
+    }
+    false
+}
+
+fn frontCheckVariantFiniteFieldCases(file: AstFile, variant: FrontVariantSig) -> List<String> {
+    if frontCheckStringCount(variant.fieldTypes) == 0 {
+        return []
+    }
+    let mut out: List<String> = [""]
+    for fieldType in variant.fieldTypes {
+        let fieldCases = frontCheckFiniteCases(file, fieldType, 0)
+        if frontCheckStringCount(fieldCases) == 0 {
+            return []
+        }
+        out = frontCheckCombineCases(out, fieldCases)
+        if frontCheckStringCount(out) > 32 {
+            return []
+        }
+    }
+    out
+}
+
+fn frontCheckFiniteCases(file: AstFile, typeName: String, depth: Int) -> List<String> {
+    if depth > 4 {
+        return []
+    }
+    let head = frontCheckTypeHead(typeName)
+    if typeName == "Bool" {
+        return ["true", "false"]
+    }
+    if head == "Tuple" {
+        let mut out: List<String> = [""]
+        for elem in frontCheckTupleElems(typeName) {
+            let elemCases = frontCheckFiniteCases(file, elem, depth + 1)
+            if frontCheckStringCount(elemCases) == 0 {
+                return []
+            }
+            out = frontCheckCombineCases(out, elemCases)
+            if frontCheckStringCount(out) > 32 {
+                return []
+            }
+        }
+        let mut wrapped: List<String> = []
+        for value in out {
+            wrapped.push("({value})")
+        }
+        return wrapped
+    }
+    let mut out: List<String> = []
+    let mut variants = 0
+    for variant in fileCheckVariantsByOwner(file, head) {
+        variants = variants + 1
+        if frontCheckStringCount(variant.fieldTypes) == 0 {
+            out.push(variant.name)
+        } else {
+            let fieldCases = frontCheckVariantFiniteFieldCases(file, variant)
+            if frontCheckStringCount(fieldCases) == 0 {
+                return []
+            }
+            for fieldCase in fieldCases {
+                out.push("{variant.name}({fieldCase})")
+            }
+        }
+        if frontCheckStringCount(out) > 32 {
+            return []
+        }
+    }
+    if variants == 0 {
+        return []
+    }
+    out
+}
+
+fn fileCheckVariantsByOwner(file: AstFile, owner: String) -> List<FrontVariantSig> {
+    let mut out: List<FrontVariantSig> = []
+    for declIdx in file.arena.decls {
+        let decl = astArenaNodeAt(file.arena, declIdx)
+        if decl.kind == AstNEnumDecl && decl.text == owner {
+            let generics = frontCheckGenericNames(file, decl.children2)
+            for memberIdx in decl.children {
+                let member = astArenaNodeAt(file.arena, memberIdx)
+                if member.kind == AstNVariant {
+                    let mut fieldTypes: List<String> = []
+                    for fieldIdx in member.children {
+                        fieldTypes.push(frontCheckTypeName(file, fieldIdx))
+                    }
+                    out.push(FrontVariantSig { owner: decl.text, name: member.text, fieldTypes, generics })
+                }
+            }
+        }
+    }
+    out
+}
+
+fn frontCheckCombineCases(prefixes: List<String>, suffixes: List<String>) -> List<String> {
+    let mut out: List<String> = []
+    for prefix in prefixes {
+        for suffix in suffixes {
+            if prefix == "" {
+                out.push(suffix)
+            } else {
+                out.push("{prefix}|{suffix}")
+            }
+        }
+    }
+    out
+}
+
+fn frontCheckMatchCoversBool(file: AstFile, node: AstNode, value: Bool) -> Bool {
+    for armIdx in node.children {
+        let arm = astArenaNodeAt(file.arena, armIdx)
+        if frontCheckFirstChild(arm) < 0 && frontCheckPatternCoversBool(file, arm.left, value) {
+            return true
+        }
+    }
+    false
+}
+
+fn frontCheckMatchCoversBoolTuple(file: AstFile, node: AstNode, tupleType: String) -> Bool {
+    let arity = frontCheckStringCount(frontCheckTupleElems(tupleType))
+    let limit = frontCheckPow2(arity)
+    let mut mask = 0
+    for mask < limit {
+        if !(frontCheckMatchCoversBoolTupleMask(file, node, arity, mask)) {
+            return false
+        }
+        mask = mask + 1
+    }
+    true
+}
+
+fn frontCheckMatchCoversBoolTupleMask(file: AstFile, node: AstNode, arity: Int, mask: Int) -> Bool {
+    for armIdx in node.children {
+        let arm = astArenaNodeAt(file.arena, armIdx)
+        if frontCheckFirstChild(arm) < 0 && frontCheckPatternCoversBoolTupleMask(file, arm.left, arity, mask) {
+            return true
+        }
+    }
+    false
+}
+
+fn frontCheckMatchCoversStruct(file: AstFile, env: FrontCheckEnv, node: AstNode, owner: String) -> Bool {
+    for armIdx in node.children {
+        let arm = astArenaNodeAt(file.arena, armIdx)
+        if frontCheckFirstChild(arm) < 0 && frontCheckPatternCoversStruct(file, env, arm.left, owner) {
+            return true
+        }
+    }
+    false
+}
+
+fn frontCheckPow2(n: Int) -> Int {
+    let mut out = 1
+    let mut i = 0
+    for i < n {
+        out = out * 2
+        i = i + 1
+    }
+    out
+}
+
+fn frontCheckTupleAllBool(tupleType: String) -> Bool {
+    let elems = frontCheckTupleElems(tupleType)
+    let count = frontCheckStringCount(elems)
+    if count == 0 || count > 4 {
+        return false
+    }
+    for elem in elems {
+        if elem != "Bool" {
+            return false
+        }
+    }
+    true
+}
+
+fn frontCheckStructFieldCount(env: FrontCheckEnv, owner: String) -> Int {
+    let mut count = 0
+    for field in env.fields {
+        if field.owner == owner {
+            count = count + 1
+        }
+    }
+    count
+}
+
+fn frontCheckPatternKind(pat: AstNode) -> String {
+    if pat.extra == astPatternIdentKind() {
+        return "ident"
+    }
+    if pat.extra == astPatternVariantKind() {
+        return "variant"
+    }
+    if pat.extra == astPatternStructKind() {
+        return "struct"
+    }
+    if pat.extra == astPatternBindingKind() {
+        return "binding"
+    }
+    if pat.extra == astPatternLiteralKind() {
+        if pat.text == "-" && pat.left >= 0 {
+            return "negLiteral"
+        }
+        return "literal"
+    }
+    if pat.extra == astPatternWildcardKind() {
+        return "wildcard"
+    }
+    if pat.extra == astPatternTupleKind() {
+        return "tuple"
+    }
+    if pat.extra == astPatternRangeKind() {
+        return "range"
+    }
+    if pat.extra == astPatternOrKind() {
+        return "or"
+    }
+    if pat.extra == astPatternFieldKind() {
+        return "field"
+    }
+    if strings.HasPrefix(pat.text, "ident:") {
+        return "ident"
+    }
+    if strings.HasPrefix(pat.text, "variant:") {
+        return "variant"
+    }
+    if strings.HasPrefix(pat.text, "struct:") {
+        return "struct"
+    }
+    if strings.HasPrefix(pat.text, "binding:") {
+        return "binding"
+    }
+    if strings.HasPrefix(pat.text, "literal:") {
+        return "literal"
+    }
+    if pat.op == FrontAt {
+        return "binding"
+    }
+    if pat.op == FrontLBrace && astIsUpperName(pat.text) {
+        return "struct"
+    }
+    if pat.op == FrontIdent && astIsUpperName(pat.text) {
+        return "variant"
+    }
+    if pat.op == FrontIdent && pat.text != "" {
+        return "ident"
+    }
+    pat.text
+}
+
+fn frontCheckPatternPayload(pat: AstNode) -> String {
+    let kind = frontCheckPatternKind(pat)
+    if pat.extra > 0 && (kind == "ident" || kind == "variant" || kind == "struct" || kind == "binding" || kind == "literal" || kind == "field") {
+        return pat.text
+    }
+    if strings.HasPrefix(pat.text, "ident:") {
+        return strings.TrimPrefix(pat.text, "ident:")
+    }
+    if strings.HasPrefix(pat.text, "variant:") {
+        return strings.TrimPrefix(pat.text, "variant:")
+    }
+    if strings.HasPrefix(pat.text, "struct:") {
+        return strings.TrimPrefix(pat.text, "struct:")
+    }
+    if strings.HasPrefix(pat.text, "binding:") {
+        return strings.TrimPrefix(pat.text, "binding:")
+    }
+    if strings.HasPrefix(pat.text, "literal:") {
+        return strings.TrimPrefix(pat.text, "literal:")
+    }
+    pat.text
+}
+
+fn frontCheckPatternName(pat: AstNode) -> String {
+    frontCheckLastPathSegment(frontCheckPatternPayload(pat))
+}
+
+fn frontCheckPatternIsBindingIdent(pat: AstNode) -> Bool {
+    let name = frontCheckPatternName(pat)
+    frontCheckPatternKind(pat) == "ident" && name != "" && !(astIsUpperName(name))
+}
+
+fn frontCheckPatternIsVariant(pat: AstNode) -> Bool {
+    let kind = frontCheckPatternKind(pat)
+    kind == "variant" || (kind == "ident" && astIsUpperName(frontCheckPatternName(pat)))
+}
+
+fn frontCheckPatternIsVariantNamed(pat: AstNode, name: String) -> Bool {
+    frontCheckPatternIsVariant(pat) && frontCheckPatternName(pat) == name
+}
+
+fn frontCheckPatternIsStructNamed(pat: AstNode, name: String) -> Bool {
+    frontCheckPatternKind(pat) == "struct" && frontCheckPatternName(pat) == name
+}
+
+fn frontCheckPatternIsBindingAt(pat: AstNode) -> Bool {
+    frontCheckPatternKind(pat) == "binding"
+}
+
+fn frontCheckPatternBoolValue(pat: AstNode, value: Bool) -> Bool {
+    let lit = frontCheckPatternPayload(pat)
+    if lit == "true" {
+        return value
+    }
+    if lit == "false" {
+        return !(value)
+    }
+    (value && pat.flags == 1) || (!(value) && pat.flags == 2)
+}
+
+fn frontCheckPatternCoversAny(file: AstFile, patIdx: Int) -> Bool {
+    if patIdx < 0 {
+        return false
+    }
+    let pat = astArenaNodeAt(file.arena, patIdx)
+    if pat.kind != AstNPattern {
+        return false
+    }
+    if frontCheckPatternKind(pat) == "wildcard" {
+        return true
+    }
+    if frontCheckPatternIsBindingIdent(pat) {
+        return true
+    }
+    if frontCheckPatternIsBindingAt(pat) {
+        return frontCheckPatternCoversAny(file, pat.left)
+    }
+    if frontCheckPatternKind(pat) == "or" {
+        return frontCheckPatternCoversAny(file, pat.left) || frontCheckPatternCoversAny(file, pat.right)
+    }
+    false
+}
+
+fn frontCheckPatternCoversStruct(file: AstFile, env: FrontCheckEnv, patIdx: Int, owner: String) -> Bool {
+    if patIdx < 0 {
+        return false
+    }
+    let pat = astArenaNodeAt(file.arena, patIdx)
+    if pat.kind != AstNPattern {
+        return false
+    }
+    if frontCheckPatternCoversAny(file, patIdx) {
+        return true
+    }
+    if frontCheckPatternIsStructNamed(pat, owner) {
+        for field in env.fields {
+            if field.owner == owner {
+                let fieldPatIdx = frontCheckStructPatternField(file, pat, field.name)
+                if fieldPatIdx < 0 {
+                    if !(pat.flags == 1) {
+                        return false
+                    }
+                } else if !(frontCheckPatternCoversAny(file, fieldPatIdx)) {
+                    return false
+                }
+            }
+        }
+        return true
+    }
+    if frontCheckPatternIsBindingAt(pat) {
+        return frontCheckPatternCoversStruct(file, env, pat.left, owner)
+    }
+    if frontCheckPatternKind(pat) == "or" {
+        return frontCheckPatternCoversStruct(file, env, pat.left, owner) || frontCheckPatternCoversStruct(file, env, pat.right, owner)
+    }
+    false
+}
+
+fn frontCheckStructPatternField(file: AstFile, pat: AstNode, name: String) -> Int {
+    for fieldIdx in pat.children {
+        let fieldPat = astArenaNodeAt(file.arena, fieldIdx)
+        if fieldPat.text == name {
+            return fieldPat.left
+        }
+    }
+    -1
+}
+
+fn frontCheckPatternCoversBoolTupleMask(file: AstFile, patIdx: Int, arity: Int, mask: Int) -> Bool {
+    if patIdx < 0 {
+        return false
+    }
+    let pat = astArenaNodeAt(file.arena, patIdx)
+    if pat.kind != AstNPattern {
+        return false
+    }
+    if frontCheckPatternCoversAny(file, patIdx) {
+        return true
+    }
+    if frontCheckPatternKind(pat) == "tuple" {
+        if frontCheckIntCount(pat.children) != arity {
+            return false
+        }
+        let mut i = 0
+        for child in pat.children {
+            if !(frontCheckPatternCoversBool(file, child, frontCheckBoolMaskAt(mask, i))) {
+                return false
+            }
+            i = i + 1
+        }
+        return true
+    }
+    if frontCheckPatternIsBindingAt(pat) {
+        return frontCheckPatternCoversBoolTupleMask(file, pat.left, arity, mask)
+    }
+    if frontCheckPatternKind(pat) == "or" {
+        return frontCheckPatternCoversBoolTupleMask(file, pat.left, arity, mask) || frontCheckPatternCoversBoolTupleMask(file, pat.right, arity, mask)
+    }
+    false
+}
+
+fn frontCheckBoolMaskAt(mask: Int, idx: Int) -> Bool {
+    let div = frontCheckPow2(idx)
+    ((mask / div) % 2) == 1
+}
+
+fn frontCheckPatternCoversBool(file: AstFile, patIdx: Int, value: Bool) -> Bool {
+    if patIdx < 0 {
+        return false
+    }
+    let pat = astArenaNodeAt(file.arena, patIdx)
+    if pat.kind != AstNPattern {
+        return false
+    }
+    if frontCheckPatternCoversAny(file, patIdx) {
+        return true
+    }
+    if frontCheckPatternKind(pat) == "literal" {
+        return frontCheckPatternBoolValue(pat, value)
+    }
+    if frontCheckPatternIsBindingAt(pat) {
+        return frontCheckPatternCoversBool(file, pat.left, value)
+    }
+    if frontCheckPatternKind(pat) == "or" {
+        return frontCheckPatternCoversBool(file, pat.left, value) || frontCheckPatternCoversBool(file, pat.right, value)
+    }
+    false
+}
+
+fn frontCheckPatternCoversVariant(file: AstFile, patIdx: Int, name: String) -> Bool {
+    if patIdx < 0 {
+        return false
+    }
+    let pat = astArenaNodeAt(file.arena, patIdx)
+    if pat.kind != AstNPattern {
+        return false
+    }
+    if frontCheckPatternCoversAny(file, patIdx) {
+        return true
+    }
+    if frontCheckPatternIsVariant(pat) {
+        return frontCheckPatternName(pat) == name
+    }
+    if frontCheckPatternIsBindingAt(pat) {
+        return frontCheckPatternCoversVariant(file, pat.left, name)
+    }
+    if frontCheckPatternKind(pat) == "or" {
+        return frontCheckPatternCoversVariant(file, pat.left, name) || frontCheckPatternCoversVariant(file, pat.right, name)
+    }
+    false
+}
+
+fn frontCheckPatternCoversVariantCase(file: AstFile, patIdx: Int, variant: FrontVariantSig, fieldCase: String) -> Bool {
+    if patIdx < 0 {
+        return false
+    }
+    let pat = astArenaNodeAt(file.arena, patIdx)
+    if pat.kind != AstNPattern {
+        return false
+    }
+    if frontCheckPatternCoversAny(file, patIdx) {
+        return true
+    }
+    if frontCheckPatternIsVariantNamed(pat, variant.name) {
+        let caseFields = frontCheckSplitCaseFields(fieldCase)
+        if frontCheckIntCount(pat.children) != frontCheckStringCount(caseFields) {
+            return false
+        }
+        let mut i = 0
+        for child in pat.children {
+            let fieldType = frontCheckStringAt(variant.fieldTypes, i)
+            let value = frontCheckStringAt(caseFields, i)
+            if !(frontCheckPatternCoversFiniteCase(file, child, fieldType, value)) {
+                return false
+            }
+            i = i + 1
+        }
+        return true
+    }
+    if frontCheckPatternIsBindingAt(pat) {
+        return frontCheckPatternCoversVariantCase(file, pat.left, variant, fieldCase)
+    }
+    if frontCheckPatternKind(pat) == "or" {
+        return frontCheckPatternCoversVariantCase(file, pat.left, variant, fieldCase) || frontCheckPatternCoversVariantCase(file, pat.right, variant, fieldCase)
+    }
+    false
+}
+
+fn frontCheckPatternCoversFiniteCase(file: AstFile, patIdx: Int, typeName: String, value: String) -> Bool {
+    if patIdx < 0 {
+        return false
+    }
+    let pat = astArenaNodeAt(file.arena, patIdx)
+    if pat.kind != AstNPattern {
+        return false
+    }
+    if frontCheckPatternCoversAny(file, patIdx) {
+        return true
+    }
+    let head = frontCheckTypeHead(typeName)
+    if typeName == "Bool" {
+        return frontCheckPatternCoversBool(file, patIdx, value == "true")
+    }
+    if head == "Tuple" {
+        if frontCheckPatternKind(pat) == "tuple" {
+            let elems = frontCheckTupleElems(typeName)
+            let mut tupleText = value
+            if strings.HasPrefix(tupleText, "(") && strings.HasSuffix(tupleText, ")") {
+                tupleText = strings.TrimSuffix(strings.TrimPrefix(tupleText, "("), ")")
+            }
+            let values = frontCheckSplitCaseFields(tupleText)
+            if frontCheckIntCount(pat.children) != frontCheckStringCount(values) || frontCheckStringCount(elems) != frontCheckStringCount(values) {
+                return false
+            }
+            let mut i = 0
+            for child in pat.children {
+                if !(frontCheckPatternCoversFiniteCase(file, child, frontCheckStringAt(elems, i), frontCheckStringAt(values, i))) {
+                    return false
+                }
+                i = i + 1
+            }
+            return true
+        }
+        if frontCheckPatternIsBindingAt(pat) {
+            return frontCheckPatternCoversFiniteCase(file, pat.left, typeName, value)
+        }
+        if frontCheckPatternKind(pat) == "or" {
+            return frontCheckPatternCoversFiniteCase(file, pat.left, typeName, value) || frontCheckPatternCoversFiniteCase(file, pat.right, typeName, value)
+        }
+        return false
+    }
+    let caseHead = frontCheckCaseHead(value)
+    let caseVariant = frontCheckVariantLookupInFile(file, head, caseHead)
+    if caseVariant.name != "" {
+        if frontCheckPatternIsVariantNamed(pat, caseVariant.name) {
+            let argsText = frontCheckCaseArgsText(value)
+            let caseArgs = frontCheckSplitCaseFields(argsText)
+            if frontCheckIntCount(pat.children) != frontCheckStringCount(caseArgs) || frontCheckStringCount(caseVariant.fieldTypes) != frontCheckStringCount(caseArgs) {
+                return false
+            }
+            let mut i = 0
+            for child in pat.children {
+                if !(frontCheckPatternCoversFiniteCase(file, child, frontCheckStringAt(caseVariant.fieldTypes, i), frontCheckStringAt(caseArgs, i))) {
+                    return false
+                }
+                i = i + 1
+            }
+            return true
+        }
+        if frontCheckPatternIsBindingAt(pat) {
+            return frontCheckPatternCoversFiniteCase(file, pat.left, typeName, value)
+        }
+        if frontCheckPatternKind(pat) == "or" {
+            return frontCheckPatternCoversFiniteCase(file, pat.left, typeName, value) || frontCheckPatternCoversFiniteCase(file, pat.right, typeName, value)
+        }
+    }
+    false
+}
+
+fn frontCheckVariantLookupInFile(file: AstFile, owner: String, name: String) -> FrontVariantSig {
+    for variant in fileCheckVariantsByOwner(file, owner) {
+        if variant.name == name {
+            return variant
+        }
+    }
+    FrontVariantSig { owner: "", name: "", fieldTypes: [], generics: [] }
+}
+
+fn frontCheckCaseHead(value: String) -> String {
+    let mut head = ""
+    for unit in strings.Split(value, "") {
+        if unit == "(" {
+            return strings.TrimSpace(head)
+        }
+        head = "{head}{unit}"
+    }
+    strings.TrimSpace(head)
+}
+
+fn frontCheckCaseArgsText(value: String) -> String {
+    let mut out = ""
+    let mut found = false
+    let mut depth = 0
+    for unit in strings.Split(value, "") {
+        if found {
+            if unit == "(" {
+                depth = depth + 1
+                out = "{out}{unit}"
+            } else if unit == ")" {
+                if depth == 0 {
+                    return out
+                }
+                depth = depth - 1
+                out = "{out}{unit}"
+            } else {
+                out = "{out}{unit}"
+            }
+        } else if unit == "(" {
+            found = true
+        }
+    }
+    ""
+}
+
+fn frontCheckSplitCaseFields(text: String) -> List<String> {
+    let mut out: List<String> = []
+    if strings.TrimSpace(text) == "" {
+        return out
+    }
+    let mut cur = ""
+    let mut paren = 0
+    for unit in strings.Split(text, "") {
+        if unit == "(" {
+            paren = paren + 1
+            cur = "{cur}{unit}"
+        } else if unit == ")" {
+            paren = paren - 1
+            cur = "{cur}{unit}"
+        } else if unit == "|" && paren == 0 {
+            out.push(strings.TrimSpace(cur))
+            cur = ""
+        } else {
+            cur = "{cur}{unit}"
+        }
+    }
+    if strings.TrimSpace(cur) != "" {
+        out.push(strings.TrimSpace(cur))
+    }
+    out
+}
+
+fn frontCheckPatternCoversVariantCompleteSingle(file: AstFile, patIdx: Int, variant: FrontVariantSig) -> Bool {
+    if patIdx < 0 {
+        return false
+    }
+    let pat = astArenaNodeAt(file.arena, patIdx)
+    if pat.kind != AstNPattern {
+        return false
+    }
+    if frontCheckPatternCoversAny(file, patIdx) {
+        return true
+    }
+    if frontCheckPatternIsVariantNamed(pat, variant.name) {
+        if frontCheckIntCount(pat.children) != frontCheckStringCount(variant.fieldTypes) {
+            return false
+        }
+        for child in pat.children {
+            if !(frontCheckPatternCoversAny(file, child)) {
+                return false
+            }
+        }
+        return true
+    }
+    if frontCheckPatternIsBindingAt(pat) {
+        return frontCheckPatternCoversVariantCompleteSingle(file, pat.left, variant)
+    }
+    if frontCheckPatternKind(pat) == "or" {
+        return frontCheckPatternCoversVariantCompleteSingle(file, pat.left, variant) || frontCheckPatternCoversVariantCompleteSingle(file, pat.right, variant)
+    }
+    false
+}
+
+fn frontCheckPatternCoversVariantBoolMask(file: AstFile, patIdx: Int, variant: FrontVariantSig, mask: Int) -> Bool {
+    if patIdx < 0 {
+        return false
+    }
+    let pat = astArenaNodeAt(file.arena, patIdx)
+    if pat.kind != AstNPattern {
+        return false
+    }
+    if frontCheckPatternCoversAny(file, patIdx) {
+        return true
+    }
+    if frontCheckPatternIsVariantNamed(pat, variant.name) {
+        let arity = frontCheckStringCount(variant.fieldTypes)
+        if frontCheckIntCount(pat.children) != arity {
+            return false
+        }
+        let mut i = 0
+        for child in pat.children {
+            if !(frontCheckPatternCoversBool(file, child, frontCheckBoolMaskAt(mask, i))) {
+                return false
+            }
+            i = i + 1
+        }
+        return true
+    }
+    if frontCheckPatternIsBindingAt(pat) {
+        return frontCheckPatternCoversVariantBoolMask(file, pat.left, variant, mask)
+    }
+    if frontCheckPatternKind(pat) == "or" {
+        return frontCheckPatternCoversVariantBoolMask(file, pat.left, variant, mask) || frontCheckPatternCoversVariantBoolMask(file, pat.right, variant, mask)
+    }
+    false
+}
+
+fn frontCheckPatternIrrefutable(file: AstFile, patIdx: Int) -> Bool {
+    if patIdx < 0 {
+        return true
+    }
+    let pat = astArenaNodeAt(file.arena, patIdx)
+    if pat.kind != AstNPattern {
+        return true
+    }
+    if frontCheckPatternKind(pat) == "wildcard" {
+        return true
+    }
+    if frontCheckPatternIsBindingIdent(pat) {
+        return true
+    }
+    if frontCheckPatternKind(pat) == "tuple" {
+        for child in pat.children {
+            if !(frontCheckPatternIrrefutable(file, child)) {
+                return false
+            }
+        }
+        return true
+    }
+    if frontCheckPatternKind(pat) == "struct" {
+        for fieldIdx in pat.children {
+            let fieldPat = astArenaNodeAt(file.arena, fieldIdx)
+            if !(frontCheckPatternIrrefutable(file, fieldPat.left)) {
+                return false
+            }
+        }
+        return true
+    }
+    if frontCheckPatternIsBindingAt(pat) {
+        return frontCheckPatternIrrefutable(file, pat.left)
+    }
+    false
+}
+
+fn frontCheckBindPattern(file: AstFile, env: FrontCheckEnv, patIdx: Int, typeName: String, mutable: Bool) {
+    if patIdx < 0 {
+        return
+    }
+    let pat = astArenaNodeAt(file.arena, patIdx)
+    if pat.kind != AstNPattern {
+        return
+    }
+    if frontCheckPatternIsBindingIdent(pat) {
+        frontCheckBindNode(env, frontCheckPatternName(pat), typeName, mutable, patIdx, pat.start, pat.end)
+        return
+    }
+    if frontCheckPatternKind(pat) == "tuple" {
+        let elems = frontCheckTupleElems(typeName)
+        let mut i = 0
+        for child in pat.children {
+            frontCheckBindPattern(file, env, child, frontCheckStringAt(elems, i), mutable)
+            i = i + 1
+        }
+        return
+    }
+    if frontCheckPatternIsVariant(pat) {
+        let variant = frontCheckVariantLookup(env, frontCheckPatternName(pat))
+        let mut i = 0
+        for child in pat.children {
+            frontCheckBindPattern(file, env, child, frontCheckStringAt(variant.fieldTypes, i), mutable)
+            i = i + 1
+        }
+        return
+    }
+    if frontCheckPatternIsBindingAt(pat) {
+        frontCheckBind(env, frontCheckPatternName(pat), typeName, mutable)
+        frontCheckBindPattern(file, env, pat.left, typeName, mutable)
+    }
+}
+
+fn frontCheckPatternCompatible(file: AstFile, env: FrontCheckEnv, patIdx: Int, scrutineeType: String) {
+    if patIdx < 0 {
+        return
+    }
+    let pat = astArenaNodeAt(file.arena, patIdx)
+    if pat.kind != AstNPattern {
+        return
+    }
+    let scrutineeResolved = frontCheckResolveAliasesDeep(env, scrutineeType)
+    if frontCheckPatternKind(pat) == "wildcard" {
+        return
+    }
+    if frontCheckPatternIsBindingIdent(pat) {
+        frontCheckBind(env, frontCheckPatternName(pat), scrutineeResolved, false)
+        return
+    }
+    if frontCheckPatternKind(pat) == "literal" {
+        let litType = frontCheckPatternLiteralType(pat)
+        if !(frontCheckIsAssignable(env, scrutineeResolved, litType)) && !(frontCheckIsAssignable(env, litType, scrutineeResolved)) {
+            env.errors = env.errors + 1
+        }
+        return
+    }
+    if frontCheckPatternKind(pat) == "negLiteral" {
+        let inner = astArenaNodeAt(file.arena, pat.left)
+        let litType = frontCheckPatternLiteralType(inner)
+        if !(frontCheckIsNumeric(litType)) {
+            env.errors = env.errors + 1
+            return
+        }
+        if !(frontCheckIsAssignable(env, scrutineeResolved, litType)) && !(frontCheckIsAssignable(env, litType, scrutineeResolved)) {
+            env.errors = env.errors + 1
+        }
+        return
+    }
+    if frontCheckPatternKind(pat) == "range" {
+        if !(frontCheckIsOrdered(scrutineeResolved)) {
+            env.errors = env.errors + 1
+            return
+        }
+        frontCheckPatternCompatible(file, env, pat.left, scrutineeResolved)
+        if pat.right >= 0 {
+            frontCheckPatternCompatible(file, env, pat.right, scrutineeResolved)
+        }
+        return
+    }
+    if frontCheckPatternKind(pat) == "tuple" {
+        let elems = frontCheckTupleElems(scrutineeResolved)
+        if frontCheckStringCount(elems) != frontCheckIntCount(pat.children) {
+            env.errors = env.errors + 1
+        }
+        let mut i = 0
+        for child in pat.children {
+            frontCheckPatternCompatible(file, env, child, frontCheckStringAt(elems, i))
+            i = i + 1
+        }
+        return
+    }
+    if frontCheckPatternIsVariant(pat) {
+        let variant = frontCheckVariantLookupForOwner(env, frontCheckPatternName(pat), frontCheckTypeHead(scrutineeResolved))
+        if variant.name == "" || frontCheckTypeHead(scrutineeResolved) != variant.owner {
+            env.errors = env.errors + 1
+            return
+        }
+        let substs = frontCheckVariantPatternSubsts(scrutineeResolved, variant)
+        let mut i = 0
+        for child in pat.children {
+            frontCheckPatternCompatible(file, env, child, frontCheckSubstitute(frontCheckStringAt(variant.fieldTypes, i), substs))
+            i = i + 1
+        }
+        return
+    }
+    if frontCheckPatternKind(pat) == "struct" {
+        let structName = frontCheckPatternName(pat)
+        if frontCheckTypeHead(scrutineeResolved) != structName {
+            env.errors = env.errors + 1
+            return
+        }
+        let substs = frontCheckReceiverSubsts(env, structName, scrutineeResolved)
+        for fieldIdx in pat.children {
+            let fieldPat = astArenaNodeAt(file.arena, fieldIdx)
+            let field = frontCheckFieldLookup(env, structName, fieldPat.text)
+            if field.name == "" {
+                env.errors = env.errors + 1
+            } else {
+                frontCheckPatternCompatible(file, env, fieldPat.left, frontCheckSubstitute(field.typeName, substs))
+            }
+        }
+        return
+    }
+    if frontCheckPatternIsBindingAt(pat) {
+        frontCheckBind(env, frontCheckPatternName(pat), scrutineeResolved, false)
+        frontCheckPatternCompatible(file, env, pat.left, scrutineeResolved)
+        return
+    }
+    if frontCheckPatternKind(pat) == "or" {
+        let mark = frontCheckBindingCount(env.bindings)
+        frontCheckPatternCompatible(file, env, pat.left, scrutineeResolved)
+        let leftBindings = frontCheckBindingsFrom(env, mark)
+        frontCheckPopBindings(env, mark)
+        frontCheckPatternCompatible(file, env, pat.right, scrutineeResolved)
+        let rightBindings = frontCheckBindingsFrom(env, mark)
+        frontCheckPopBindings(env, mark)
+        if !(frontCheckBindingsAgree(env, leftBindings, rightBindings)) {
+            env.errors = env.errors + 1
+            return
+        }
+        for binding in leftBindings {
+            frontCheckBind(env, binding.name, binding.typeName, binding.mutable)
+        }
+        return
+    }
+}
+
+fn frontCheckVariantPatternSubsts(scrutineeType: String, variant: FrontVariantSig) -> List<FrontTypeSubst> {
+    let mut substs: List<FrontTypeSubst> = []
+    if frontCheckTypeHead(scrutineeType) != variant.owner {
+        return substs
+    }
+    let mut i = 0
+    for generic in variant.generics {
+        substs.push(FrontTypeSubst { name: generic, typeName: frontCheckGenericArgAt(scrutineeType, i) })
+        i = i + 1
+    }
+    substs
+}
+
+fn frontCheckPatternLiteralType(pat: AstNode) -> String {
+    if pat.op == FrontInt {
+        return "UntypedInt"
+    }
+    if pat.op == FrontFloat {
+        return "UntypedFloat"
+    }
+    if pat.op == FrontString || pat.op == FrontRawString {
+        return "String"
+    }
+    if pat.op == FrontChar {
+        return "Char"
+    }
+    if pat.op == FrontByte {
+        return "Byte"
+    }
+    if frontCheckPatternKind(pat) == "literal" {
+        return "Bool"
+    }
+    "Invalid"
+}
+
+fn frontCheckTupleElems(typeName: String) -> List<String> {
+    let view = frontCheckParseType(typeName)
+    if view.kind == "tuple" {
+        return view.args
+    }
+    []
+}
+
+fn frontCheckClosure(file: AstFile, env: FrontCheckEnv, node: AstNode, paramHints: List<String>, retHint: String) -> String {
+    let mark = frontCheckBindingCount(env.bindings)
+    let mut params: List<String> = []
+    let mut i = 0
+    for paramIdx in node.children {
+        let param = astArenaNodeAt(file.arena, paramIdx)
+        let mut paramType = frontCheckTypeName(file, param.right)
+        if paramType == "()" || paramType == "Invalid" {
+            paramType = frontCheckStringAt(paramHints, i)
+        }
+        if param.left >= 0 {
+            if !(frontCheckPatternIrrefutable(file, param.left)) {
+                env.errors = env.errors + 1
+            }
+            frontCheckBindPattern(file, env, param.left, paramType, false)
+        } else {
+            frontCheckBind(env, param.text, paramType, false)
+        }
+        params.push(paramType)
+        i = i + 1
+    }
+    let bodyType = frontCheckExprHint(file, env, node.left, retHint)
+    let mut ret = bodyType
+    if node.right >= 0 {
+        ret = frontCheckTypeName(file, node.right)
+        frontCheckExpectAssignable(env, ret, bodyType)
+    } else if retHint != "" && retHint != "Invalid" {
+        frontCheckExpectAssignable(env, retHint, bodyType)
+        ret = retHint
+    }
+    frontCheckPopBindings(env, mark)
+    frontCheckFnType(params, ret)
+}
+
+fn frontCheckFnParams(typeName: String) -> List<String> {
+    let view = frontCheckParseType(typeName)
+    if view.kind == "fn" {
+        return view.params
+    }
+    []
+}
+
+fn frontCheckFnReturn(typeName: String) -> String {
+    let view = frontCheckParseType(typeName)
+    if view.kind == "fn" {
+        return view.ret
+    }
+    ""
+}
+
+fn frontCheckFnParamsText(typeName: String) -> String {
+    frontCheckFnParamsTextRaw(typeName)
+}
+
+fn frontCheckFnParamsTextRaw(typeName: String) -> String {
+    let mut params = ""
+    let mut depth = 0
+    let mut i = 0
+    for unit in strings.Split(typeName, "") {
+        if i >= 3 {
+            if unit == "(" {
+                depth = depth + 1
+                params = "{params}{unit}"
+            } else if unit == ")" {
+                if depth == 0 {
+                    return params
+                }
+                depth = depth - 1
+                params = "{params}{unit}"
+            } else {
+                params = "{params}{unit}"
+            }
+        }
+        i = i + 1
+    }
+    params
+}
+
+fn frontCheckFnReturnText(typeName: String) -> String {
+    frontCheckFnReturnTextRaw(typeName)
+}
+
+fn frontCheckFnReturnRaw(typeName: String) -> String {
+    let ret = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(frontCheckFnReturnTextRaw(typeName)), "->"))
+    if ret == "" {
+        return "()"
+    }
+    ret
+}
+
+fn frontCheckFnReturnTextRaw(typeName: String) -> String {
+    let mut rest = ""
+    let mut depth = 0
+    let mut i = 0
+    let mut found = false
+    for unit in strings.Split(typeName, "") {
+        if i >= 3 {
+            if found {
+                rest = "{rest}{unit}"
+            } else if unit == "(" {
+                depth = depth + 1
+            } else if unit == ")" {
+                if depth == 0 {
+                    found = true
+                } else {
+                    depth = depth - 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    rest
+}
+
+fn frontCheckQuestion(file: AstFile, env: FrontCheckEnv, node: AstNode) -> String {
+    let inner = frontCheckResolveAliasesDeep(env, frontCheckExpr(file, env, node.left))
+    let head = frontCheckTypeHead(inner)
+    let returnType = frontCheckResolveAliasesDeep(env, env.returnType)
+    let returnHead = frontCheckTypeHead(returnType)
+    if head == "Option" {
+        if returnHead != "Option" && !(frontCheckIsInvalid(env.returnType)) {
+            env.errors = env.errors + 1
+        }
+        return frontCheckGenericArgAt(inner, 0)
+    }
+    if head == "Result" {
+        if returnHead != "Result" && !(frontCheckIsInvalid(env.returnType)) {
+            env.errors = env.errors + 1
+        } else if returnHead == "Result" {
+            frontCheckExpectAssignable(env, frontCheckGenericArgAt(returnType, 1), frontCheckGenericArgAt(inner, 1))
+        }
+        return frontCheckGenericArgAt(inner, 0)
+    }
+    if !(frontCheckIsInvalid(inner)) {
+        env.errors = env.errors + 1
+    }
+    "Invalid"
+}
+
+fn frontCheckStdMethodCall(file: AstFile, env: FrontCheckEnv, callee: AstNode, recvType: String, args: List<Int>) -> String {
+    let receiver = frontCheckResolveAliasesDeep(env, recvType)
+    let head = frontCheckTypeHead(receiver)
+    let name = callee.text
+    if head == "List" {
+        return frontCheckListMethod(file, env, callee, receiver, args)
+    }
+    if head == "Map" {
+        return frontCheckMapMethod(file, env, receiver, name, args)
+    }
+    if head == "Option" {
+        return frontCheckOptionMethod(file, env, receiver, name, args)
+    }
+    if head == "Result" {
+        return frontCheckResultMethod(file, env, receiver, name, args)
+    }
+    if receiver == "String" {
+        return frontCheckStringMethod(file, env, name, args)
+    }
+    if receiver == "Bytes" {
+        return frontCheckBytesMethod(file, env, name, args)
+    }
+    "Invalid"
+}
+
+fn frontCheckListMethod(file: AstFile, env: FrontCheckEnv, callee: AstNode, recvType: String, args: List<Int>) -> String {
+    let elem = frontCheckGenericArgAt(recvType, 0)
+    let name = callee.text
+    if name == "push" {
+        frontCheckRequireMutableReceiver(file, env, callee)
+        frontCheckExpectArgCount(env, args, 1)
+        frontCheckExpectAssignable(env, elem, frontCheckExprHint(file, env, frontCheckIntAt(args, 0), elem))
+        return "()"
+    }
+    if name == "pop" {
+        frontCheckRequireMutableReceiver(file, env, callee)
+        frontCheckExpectArgCount(env, args, 0)
+        return frontCheckOneArgType("Option", elem)
+    }
+    if name == "len" {
+        frontCheckExpectArgCount(env, args, 0)
+        return "Int"
+    }
+    if name == "isEmpty" {
+        frontCheckExpectArgCount(env, args, 0)
+        return "Bool"
+    }
+    if name == "contains" {
+        frontCheckExpectArgCount(env, args, 1)
+        frontCheckExpectAssignable(env, elem, frontCheckExprHint(file, env, frontCheckIntAt(args, 0), elem))
+        return "Bool"
+    }
+    if name == "map" {
+        frontCheckExpectArgCount(env, args, 1)
+        let fnType = frontCheckClosureArg(file, env, frontCheckIntAt(args, 0), [elem], "Invalid")
+        return frontCheckOneArgType("List", frontCheckFnReturn(fnType))
+    }
+    if name == "filter" {
+        frontCheckExpectArgCount(env, args, 1)
+        let _ = frontCheckClosureArg(file, env, frontCheckIntAt(args, 0), [elem], "Bool")
+        return recvType
+    }
+    if name == "fold" {
+        frontCheckExpectArgCount(env, args, 2)
+        let mut acc = frontCheckExpr(file, env, frontCheckIntAt(args, 0))
+        if acc == "UntypedInt" {
+            acc = "Int"
+        } else if acc == "UntypedFloat" {
+            acc = "Float"
+        }
+        let _ = frontCheckClosureArg(file, env, frontCheckIntAt(args, 1), [acc, elem], acc)
+        return acc
+    }
+    "Invalid"
+}
+
+fn frontCheckMapMethod(file: AstFile, env: FrontCheckEnv, recvType: String, name: String, args: List<Int>) -> String {
+    let key = frontCheckGenericArgAt(recvType, 0)
+    let val = frontCheckGenericArgAt(recvType, 1)
+    if name == "len" {
+        frontCheckExpectArgCount(env, args, 0)
+        return "Int"
+    }
+    if name == "isEmpty" {
+        frontCheckExpectArgCount(env, args, 0)
+        return "Bool"
+    }
+    if name == "containsKey" {
+        frontCheckExpectArgCount(env, args, 1)
+        frontCheckExpectAssignable(env, key, frontCheckExprHint(file, env, frontCheckIntAt(args, 0), key))
+        return "Bool"
+    }
+    if name == "insert" {
+        frontCheckExpectArgCount(env, args, 2)
+        frontCheckExpectAssignable(env, key, frontCheckExprHint(file, env, frontCheckIntAt(args, 0), key))
+        frontCheckExpectAssignable(env, val, frontCheckExprHint(file, env, frontCheckIntAt(args, 1), val))
+        return "()"
+    }
+    if name == "remove" {
+        frontCheckExpectArgCount(env, args, 1)
+        frontCheckExpectAssignable(env, key, frontCheckExprHint(file, env, frontCheckIntAt(args, 0), key))
+        return frontCheckOneArgType("Option", val)
+    }
+    if name == "keys" {
+        frontCheckExpectArgCount(env, args, 0)
+        return frontCheckOneArgType("List", key)
+    }
+    if name == "values" {
+        frontCheckExpectArgCount(env, args, 0)
+        return frontCheckOneArgType("List", val)
+    }
+    "Invalid"
+}
+
+fn frontCheckOptionMethod(file: AstFile, env: FrontCheckEnv, recvType: String, name: String, args: List<Int>) -> String {
+    let elem = frontCheckGenericArgAt(recvType, 0)
+    if name == "unwrap" {
+        frontCheckExpectArgCount(env, args, 0)
+        return elem
+    }
+    if name == "isSome" || name == "isNone" {
+        frontCheckExpectArgCount(env, args, 0)
+        return "Bool"
+    }
+    if name == "unwrapOr" {
+        frontCheckExpectArgCount(env, args, 1)
+        frontCheckExpectAssignable(env, elem, frontCheckExprHint(file, env, frontCheckIntAt(args, 0), elem))
+        return elem
+    }
+    "Invalid"
+}
+
+fn frontCheckResultMethod(file: AstFile, env: FrontCheckEnv, recvType: String, name: String, args: List<Int>) -> String {
+    let ok = frontCheckGenericArgAt(recvType, 0)
+    let err = frontCheckGenericArgAt(recvType, 1)
+    if name == "unwrap" {
+        frontCheckExpectArgCount(env, args, 0)
+        return ok
+    }
+    if name == "unwrapErr" {
+        frontCheckExpectArgCount(env, args, 0)
+        return err
+    }
+    if name == "isOk" || name == "isErr" {
+        frontCheckExpectArgCount(env, args, 0)
+        return "Bool"
+    }
+    if name == "ok" {
+        frontCheckExpectArgCount(env, args, 0)
+        return frontCheckOneArgType("Option", ok)
+    }
+    if name == "err" {
+        frontCheckExpectArgCount(env, args, 0)
+        return frontCheckOneArgType("Option", err)
+    }
+    if name == "unwrapOr" {
+        frontCheckExpectArgCount(env, args, 1)
+        frontCheckExpectAssignable(env, ok, frontCheckExprHint(file, env, frontCheckIntAt(args, 0), ok))
+        return ok
+    }
+    "Invalid"
+}
+
+fn frontCheckStringMethod(file: AstFile, env: FrontCheckEnv, name: String, args: List<Int>) -> String {
+    if name == "len" {
+        frontCheckExpectArgCount(env, args, 0)
+        return "Int"
+    }
+    if name == "isEmpty" {
+        frontCheckExpectArgCount(env, args, 0)
+        return "Bool"
+    }
+    if name == "contains" || name == "startsWith" || name == "endsWith" {
+        frontCheckExpectArgCount(env, args, 1)
+        frontCheckExpectAssignable(env, "String", frontCheckExprHint(file, env, frontCheckIntAt(args, 0), "String"))
+        return "Bool"
+    }
+    if name == "split" {
+        frontCheckExpectArgCount(env, args, 1)
+        frontCheckExpectAssignable(env, "String", frontCheckExprHint(file, env, frontCheckIntAt(args, 0), "String"))
+        return frontCheckOneArgType("List", "String")
+    }
+    "Invalid"
+}
+
+fn frontCheckBytesMethod(file: AstFile, env: FrontCheckEnv, name: String, args: List<Int>) -> String {
+    if name == "len" {
+        frontCheckExpectArgCount(env, args, 0)
+        return "Int"
+    }
+    if name == "isEmpty" {
+        frontCheckExpectArgCount(env, args, 0)
+        return "Bool"
+    }
+    if name == "toString" {
+        frontCheckExpectArgCount(env, args, 0)
+        return "String"
+    }
+    "Invalid"
+}
+
+fn frontCheckClosureArg(file: AstFile, env: FrontCheckEnv, idx: Int, params: List<String>, ret: String) -> String {
+    let node = astArenaNodeAt(file.arena, idx)
+    if node.kind == AstNClosure {
+        return frontCheckClosure(file, env, node, params, ret)
+    }
+    let want = frontCheckFnType(params, ret)
+    let got = frontCheckExprHint(file, env, idx, want)
+    frontCheckExpectAssignable(env, want, got)
+    got
+}
+
+fn frontCheckExpectArgCount(env: FrontCheckEnv, args: List<Int>, want: Int) {
+    if frontCheckIntCount(args) != want {
+        env.errors = env.errors + 1
+    }
+}
+
+fn frontCheckRequireMutableReceiver(file: AstFile, env: FrontCheckEnv, callee: AstNode) {
+    let left = astArenaNodeAt(file.arena, callee.left)
+    if left.kind == AstNIdent && !(frontCheckLookupMutable(env, left.text)) {
+        env.errors = env.errors + 1
+    }
+}

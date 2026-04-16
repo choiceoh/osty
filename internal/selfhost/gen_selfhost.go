@@ -13,12 +13,14 @@ import (
 )
 
 var sourceFiles = []string{
-	"examples/dogfood/semver.osty",
-	"examples/dogfood/semver_parse.osty",
-	"examples/dogfood/frontend.osty",
-	"examples/dogfood/lexer.osty",
-	"examples/dogfood/parser.osty",
-	"examples/dogfood/checker.osty",
+	"examples/selfhost-core/semver.osty",
+	"examples/selfhost-core/semver_parse.osty",
+	"examples/selfhost-core/frontend.osty",
+	"examples/selfhost-core/lexer.osty",
+	"examples/selfhost-core/parser.osty",
+	"examples/selfhost-core/formatter_ast.osty",
+	"examples/selfhost-core/check_bridge.osty",
+	"examples/selfhost-core/check.osty",
 	"internal/selfhost/ast_lower.osty",
 }
 
