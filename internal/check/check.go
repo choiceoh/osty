@@ -56,8 +56,8 @@ func (r *Result) LookupType(e ast.Expr) types.Type {
 
 // Opts bundles optional inputs to File / Package / Workspace.
 type Opts struct {
-	// UseSelfhost is retained for source compatibility after removing
-	// the generated checker. It is currently ignored.
+	// UseSelfhost is retained for source compatibility. Native checker
+	// selection now happens inside the host boundary instead.
 	UseSelfhost bool
 
 	// UseGolegacy is retained for callers that already switched names.
@@ -94,7 +94,9 @@ func firstOpt(opts []Opts) Opts {
 	return opts[0]
 }
 
-// File returns a compatibility diagnostic for one resolved source file.
+// File runs type checking for one resolved source file when a native
+// checker boundary is available. Otherwise it returns an
+// unavailability diagnostic.
 //
 // The resolver's Result is consumed read-only: this package never
 // mutates symbol tables or the AST. Diagnostics from this pass are
@@ -103,21 +105,22 @@ func firstOpt(opts []Opts) Opts {
 func File(f *ast.File, rr *resolve.Result, opts ...Opts) *Result {
 	opt := firstOpt(opts)
 	result := newResult()
-	result.Diags = append(result.Diags, checkerUnavailableDiag("file"))
+	applyNativeFileResult(result, f, rr, opt.Source, opt.Stdlib)
 	recordSelfhostDeclPass(opt.OnDecl, f, "collect")
 	recordSelfhostDeclPass(opt.OnDecl, f, "check")
 	return result
 }
 
-// Package returns a compatibility diagnostic across every file in a
-// resolver Package.
+// Package runs type checking across every file in a resolver Package
+// when a native checker boundary is available. Otherwise it returns an
+// unavailability diagnostic.
 func Package(pkg *resolve.Package, pr *resolve.PackageResult, opts ...Opts) *Result {
 	opt := firstOpt(opts)
 	result := newResult()
 	if pkg == nil || len(pkg.Files) == 0 {
 		return result
 	}
-	result.Diags = append(result.Diags, checkerUnavailableDiag("package"))
+	applyNativePackageResult(result, pkg, pr, nil, opt.Stdlib)
 	for _, pf := range pkg.Files {
 		if pf == nil {
 			continue
@@ -128,9 +131,10 @@ func Package(pkg *resolve.Package, pr *resolve.PackageResult, opts ...Opts) *Res
 	return result
 }
 
-// Workspace returns compatibility diagnostics for every package in a
-// resolved workspace. Structural maps remain shared so downstream
-// phases can keep traversing a stable Result shape.
+// Workspace returns type-check results for every package in a resolved
+// workspace. Structural maps remain shared so downstream phases can
+// keep traversing a stable Result shape even when the native checker
+// is unavailable for one or more packages.
 func Workspace(
 	ws *resolve.Workspace,
 	resolved map[string]*resolve.PackageResult,
@@ -164,13 +168,7 @@ func Workspace(
 	for _, e := range walk {
 		out[e.path] = resultWithSharedMaps(shared)
 	}
-	for _, e := range walk {
-		result := out[e.path]
-		if isProviderStdlibPackage(ws, e.path, e.pkg) || len(e.pkg.Files) == 0 {
-			continue
-		}
-		result.Diags = append(result.Diags, checkerUnavailableDiag("workspace package "+e.path))
-	}
+	applyNativeWorkspaceResults(ws, resolved, out, opt.Stdlib)
 	for _, e := range walk {
 		for _, pf := range e.pkg.Files {
 			if pf == nil {
@@ -201,12 +199,17 @@ func resultWithSharedMaps(shared *Result) *Result {
 	}
 }
 
-func checkerUnavailableDiag(scope string) *diag.Diagnostic {
+func checkerUnavailableDiag(scope string, notes ...string) *diag.Diagnostic {
 	pos := token.Pos{Line: 1, Column: 1, Offset: 0}
-	return diag.New(diag.Error, fmt.Sprintf("type checking unavailable for %s", scope)).
-		Primary(diag.Span{Start: pos, End: pos}, "").
-		Note("the generated checker and its bridge were removed").
-		Build()
+	b := diag.New(diag.Error, fmt.Sprintf("type checking unavailable for %s", scope)).
+		Primary(diag.Span{Start: pos, End: pos}, "")
+	for _, note := range notes {
+		if strings.TrimSpace(note) == "" {
+			continue
+		}
+		b.Note(note)
+	}
+	return b.Build()
 }
 
 func recordSelfhostDeclPass(onDecl func(ast.Decl, string, time.Duration), file *ast.File, phase string) {
