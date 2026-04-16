@@ -72,6 +72,8 @@ type Result struct {
 	Changed           bool
 	Improved          bool
 	Accepted          bool
+	AcceptedReason    string
+	RejectedReason    string
 	PassesUsed        int
 	DiagnosticsBefore []*diag.Diagnostic
 	DiagnosticsAfter  []*diag.Diagnostic
@@ -81,22 +83,26 @@ type Result struct {
 
 // Report is the JSON-friendly form of Result for CLI and tooling consumers.
 type Report struct {
-	Filename          string             `json:"filename"`
-	Mode              Mode               `json:"mode"`
-	Status            ReportStatus       `json:"status"`
-	Changed           bool               `json:"changed"`
-	Improved          bool               `json:"improved"`
-	Accepted          bool               `json:"accepted"`
-	PassesUsed        int                `json:"passes_used"`
-	Skipped           int                `json:"skipped"`
-	Changes           []repair.Change    `json:"changes"`
-	ChangeDetails     []ReportChange     `json:"change_details"`
-	Summary           ReportSummary      `json:"summary"`
-	Before            ProbeStats         `json:"before"`
-	After             ProbeStats         `json:"after"`
-	DiagnosticsBefore []*diag.Diagnostic `json:"diagnostics_before"`
-	DiagnosticsAfter  []*diag.Diagnostic `json:"diagnostics_after"`
-	Source            string             `json:"source"`
+	Filename             string             `json:"filename"`
+	Mode                 Mode               `json:"mode"`
+	Status               ReportStatus       `json:"status"`
+	Changed              bool               `json:"changed"`
+	Improved             bool               `json:"improved"`
+	Accepted             bool               `json:"accepted"`
+	AcceptedReason       string             `json:"accepted_reason,omitempty"`
+	RejectedReason       string             `json:"rejected_reason,omitempty"`
+	PassesUsed           int                `json:"passes_used"`
+	Skipped              int                `json:"skipped"`
+	Changes              []repair.Change    `json:"changes"`
+	ChangeDetails        []ReportChange     `json:"change_details"`
+	Summary              ReportSummary      `json:"summary"`
+	ResidualPrimaryCode  string             `json:"residual_primary_code,omitempty"`
+	ResidualPrimaryHabit string             `json:"residual_primary_habit,omitempty"`
+	Before               ProbeStats         `json:"before"`
+	After                ProbeStats         `json:"after"`
+	DiagnosticsBefore    []*diag.Diagnostic `json:"diagnostics_before"`
+	DiagnosticsAfter     []*diag.Diagnostic `json:"diagnostics_after"`
+	Source               string             `json:"source"`
 }
 
 // ReportChange adds airepair-specific metadata to a user-facing change.
@@ -124,6 +130,7 @@ func Analyze(req Request) Result {
 	combined := repair.Result{Source: currentSource}
 	proposed := false
 	passesUsed := 0
+	rejectedReason := ""
 
 	phases := []phaseFunc{
 		func(src []byte, _ []*diag.Diagnostic) repair.Result { return repair.Source(src) },
@@ -131,6 +138,7 @@ func Analyze(req Request) Result {
 		diagnosticGuidedSource,
 		diagnosticForeignLoopSource,
 		diagnosticTupleLoopSource,
+		diagnosticSemanticSource,
 	}
 	if req.MaxPasses <= 0 || req.MaxPasses > len(phases) {
 		req.MaxPasses = len(phases)
@@ -147,6 +155,9 @@ func Analyze(req Request) Result {
 		proposed = true
 		nextStats, nextDiags := probe(candidate.Source)
 		if !isAccepted(mode, currentStats, nextStats, candidate) {
+			if rejectedReason == "" {
+				rejectedReason = explainRejectedReason(mode, currentStats, nextStats)
+			}
 			continue
 		}
 		currentSource = append([]byte(nil), candidate.Source...)
@@ -159,6 +170,12 @@ func Analyze(req Request) Result {
 	combined.Source = currentSource
 	improved := isImproved(mode, beforeStats, currentStats, combined)
 	accepted := !proposed || passesUsed > 0
+	acceptedReason := ""
+	if accepted {
+		acceptedReason = explainAcceptedReason(mode, beforeStats, currentStats, combined, proposed)
+	} else if rejectedReason == "" {
+		rejectedReason = "no_improving_candidate"
+	}
 
 	return Result{
 		Filename:          req.Filename,
@@ -169,6 +186,8 @@ func Analyze(req Request) Result {
 		Changed:           !bytes.Equal(original, currentSource),
 		Improved:          improved,
 		Accepted:          accepted,
+		AcceptedReason:    acceptedReason,
+		RejectedReason:    rejectedReason,
 		PassesUsed:        passesUsed,
 		DiagnosticsBefore: beforeDiags,
 		DiagnosticsAfter:  currentDiags,
@@ -184,22 +203,113 @@ func (r Result) JSONReport() Report {
 		details = append(details, annotateReportChange(change))
 	}
 	return Report{
-		Filename:          r.Filename,
-		Mode:              r.Mode,
-		Status:            r.ReportStatus(),
-		Changed:           r.Changed,
-		Improved:          r.Improved,
-		Accepted:          r.Accepted,
-		PassesUsed:        r.PassesUsed,
-		Skipped:           r.Repair.Skipped,
-		Changes:           append([]repair.Change(nil), r.Repair.Changes...),
-		ChangeDetails:     details,
-		Summary:           r.ReportSummary(),
-		Before:            r.Before,
-		After:             r.After,
-		DiagnosticsBefore: append([]*diag.Diagnostic(nil), r.DiagnosticsBefore...),
-		DiagnosticsAfter:  append([]*diag.Diagnostic(nil), r.DiagnosticsAfter...),
-		Source:            string(r.Repaired),
+		Filename:             r.Filename,
+		Mode:                 r.Mode,
+		Status:               r.ReportStatus(),
+		Changed:              r.Changed,
+		Improved:             r.Improved,
+		Accepted:             r.Accepted,
+		AcceptedReason:       r.AcceptedReason,
+		RejectedReason:       r.RejectedReason,
+		PassesUsed:           r.PassesUsed,
+		Skipped:              r.Repair.Skipped,
+		Changes:              append([]repair.Change(nil), r.Repair.Changes...),
+		ChangeDetails:        details,
+		Summary:              r.ReportSummary(),
+		ResidualPrimaryCode:  r.ResidualPrimaryCode(),
+		ResidualPrimaryHabit: r.ResidualPrimaryHabit(),
+		Before:               r.Before,
+		After:                r.After,
+		DiagnosticsBefore:    append([]*diag.Diagnostic(nil), r.DiagnosticsBefore...),
+		DiagnosticsAfter:     append([]*diag.Diagnostic(nil), r.DiagnosticsAfter...),
+		Source:               string(r.Repaired),
+	}
+}
+
+func explainAcceptedReason(mode Mode, before, after ProbeStats, repaired repair.Result, proposed bool) string {
+	if !proposed || (!repairedChanged(repaired) && before == after) {
+		return "already_clean"
+	}
+	if after.Parse.Errors < before.Parse.Errors {
+		return "parse_errors_reduced"
+	}
+	if after.Resolve.Errors < before.Resolve.Errors {
+		return "resolve_errors_reduced"
+	}
+	if after.Check.Errors < before.Check.Errors {
+		return "check_errors_reduced"
+	}
+	if after.TotalWarnings < before.TotalWarnings {
+		return "warnings_reduced"
+	}
+	if mode == ModeRewriteOnly && len(repaired.Changes) > 0 {
+		return "rewrite_mode_applied"
+	}
+	if len(repaired.Changes) > 0 {
+		return "non_regressing_rewrite_accepted"
+	}
+	return "accepted"
+}
+
+func explainRejectedReason(mode Mode, before, after ProbeStats) string {
+	if after.Parse.Errors > before.Parse.Errors {
+		return "parse_regression_blocked"
+	}
+	if mode == ModeAutoAssist && after.Resolve.Errors > before.Resolve.Errors {
+		return "resolve_regression_blocked"
+	}
+	if mode == ModeAutoAssist && after.Check.Errors > before.Check.Errors {
+		return "check_regression_blocked"
+	}
+	if after.TotalErrors > before.TotalErrors {
+		return "front_end_regression_blocked"
+	}
+	if after.TotalWarnings > before.TotalWarnings {
+		return "warning_regression_blocked"
+	}
+	return "no_improvement"
+}
+
+func repairedChanged(repaired repair.Result) bool {
+	return len(repaired.Changes) > 0 || repaired.Skipped > 0
+}
+
+func (r Result) ResidualPrimaryCode() string {
+	if r.After.TotalErrors == 0 {
+		return ""
+	}
+	for _, d := range r.DiagnosticsAfter {
+		if d == nil || d.Severity != diag.Error {
+			continue
+		}
+		if d.Code != "" {
+			return d.Code
+		}
+	}
+	return "(uncoded)"
+}
+
+func (r Result) ResidualPrimaryHabit() string {
+	if r.After.TotalErrors == 0 {
+		return ""
+	}
+	for i := len(r.Repair.Changes) - 1; i >= 0; i-- {
+		meta := reportChangeMetaForKind(r.Repair.Changes[i].Kind)
+		if meta.sourceHabit != "" && meta.sourceHabit != "unknown" {
+			return meta.sourceHabit
+		}
+	}
+	switch {
+	case bytes.Contains(r.Repaired, []byte(".enumerate()")):
+		return "python_enumerate_loop"
+	case bytes.Contains(r.Repaired, []byte("append(")):
+		return "foreign_append_helper"
+	case bytes.Contains(r.Repaired, []byte("len(")):
+		return "foreign_len_helper"
+	case bytes.Contains(r.Repaired, []byte(".length")):
+		return "javascript_length_property"
+	default:
+		return ""
 	}
 }
 

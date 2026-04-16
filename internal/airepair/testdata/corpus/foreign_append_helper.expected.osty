@@ -1,0 +1,5 @@
+fn main() {
+    let mut items = [1]
+    items.push(2)
+    println(items)
+}

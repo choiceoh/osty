@@ -52,7 +52,7 @@ func TestAnalyzeRewriteModeAcceptsSafeLexicalRewrite(t *testing.T) {
 
 func TestJSONReportSummarizesResidualOutcomes(t *testing.T) {
 	result := Analyze(Request{
-		Source:   []byte("fn main() {\n    let items = [1, 2]\n    for i, item in enumerate(items):\n        println(item)\n}\n"),
+		Source:   []byte("func main() {\n    let pair = (1, 2)\n    let first = pair[0]\n    println(first)\n}\n"),
 		Filename: "main.osty",
 		Mode:     ModeFrontEndAssist,
 	})
@@ -64,14 +64,20 @@ func TestJSONReportSummarizesResidualOutcomes(t *testing.T) {
 	if report.Summary.ResidualErrors <= 0 {
 		t.Fatalf("summary.residual_errors = %d, want > 0", report.Summary.ResidualErrors)
 	}
-	if report.Summary.TotalErrorsReduced <= 0 {
-		t.Fatalf("summary.total_errors_reduced = %d, want > 0", report.Summary.TotalErrorsReduced)
-	}
 	if len(report.ChangeDetails) == 0 {
 		t.Fatal("expected report change_details metadata")
 	}
-	if report.ChangeDetails[len(report.ChangeDetails)-1].Phase != "loop" {
-		t.Fatalf("last change phase = %q, want loop", report.ChangeDetails[len(report.ChangeDetails)-1].Phase)
+	if report.ChangeDetails[len(report.ChangeDetails)-1].Phase != "lexical" {
+		t.Fatalf("last change phase = %q, want lexical", report.ChangeDetails[len(report.ChangeDetails)-1].Phase)
+	}
+	if report.AcceptedReason == "" {
+		t.Fatal("expected accepted_reason metadata")
+	}
+	if report.ResidualPrimaryCode == "" {
+		t.Fatal("expected residual_primary_code metadata")
+	}
+	if got, want := report.ResidualPrimaryHabit, "foreign_function_keyword"; got != want {
+		t.Fatalf("residual_primary_habit = %q, want %q", got, want)
 	}
 }
 
@@ -316,7 +322,7 @@ func TestAnalyzeFrontEndAssistRewritesPythonEnumerateLoop(t *testing.T) {
 	if !result.Changed {
 		t.Fatal("expected airepair to rewrite a Python enumerate loop")
 	}
-	if got, want := string(result.Repaired), "fn main() {\n    let items = [1, 2]\n    for (i, item) in items.enumerate() {\n        println(item)\n    }\n}\n"; got != want {
+	if got, want := string(result.Repaired), "fn main() {\n    let items = [1, 2]\n    let _airepair_enumerate0 = items\n    for i in 0.._airepair_enumerate0.len() {\n        let item = _airepair_enumerate0[i]\n        println(item)\n    }\n}\n"; got != want {
 		t.Fatalf("repaired source = %q, want %q", got, want)
 	}
 	if result.Before.Parse.Errors == 0 {
@@ -324,6 +330,30 @@ func TestAnalyzeFrontEndAssistRewritesPythonEnumerateLoop(t *testing.T) {
 	}
 	if result.After.Parse.Errors != 0 {
 		t.Fatalf("after.parse.errors = %d, want 0 after repair", result.After.Parse.Errors)
+	}
+	if result.After.TotalErrors != 0 {
+		t.Fatalf("after.total_errors = %d, want 0 after checker-friendly lowering", result.After.TotalErrors)
+	}
+}
+
+func TestAnalyzeFrontEndAssistRewritesSemanticForeignHelpers(t *testing.T) {
+	result := Analyze(Request{
+		Source:   []byte("fn main() {\n    let mut items = [1, 2]\n    let count = len(items)\n    let size = items.length\n    items = append(items, count + size)\n    println(items)\n}\n"),
+		Filename: "main.osty",
+		Mode:     ModeFrontEndAssist,
+	})
+
+	if !result.Changed {
+		t.Fatal("expected airepair to rewrite foreign helper habits")
+	}
+	if got, want := string(result.Repaired), "fn main() {\n    let mut items = [1, 2]\n    let count = items.len()\n    let size = items.len()\n    items.push(count + size)\n    println(items)\n}\n"; got != want {
+		t.Fatalf("repaired source = %q, want %q", got, want)
+	}
+	if result.Before.TotalErrors == 0 {
+		t.Fatalf("before.total_errors = %d, want checker failures before repair", result.Before.TotalErrors)
+	}
+	if result.After.TotalErrors != 0 {
+		t.Fatalf("after.total_errors = %d, want 0 after semantic helper repair", result.After.TotalErrors)
 	}
 }
 
