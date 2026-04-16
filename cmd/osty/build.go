@@ -17,6 +17,7 @@ import (
 	"github.com/osty/osty/internal/profile"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/stdlib"
+	"github.com/osty/osty/internal/toolchain"
 )
 
 // runBuild implements the `osty build` subcommand: the manifest-aware
@@ -218,7 +219,7 @@ func isOstySource(name string) bool {
 // future wiring (set via -ldflags during release builds) will
 // substitute a git sha.
 func toolVersion() string {
-	return "osty-dev"
+	return toolchain.Version()
 }
 
 func cacheableBuildEmit(backendID backend.Name, emitMode backend.EmitMode) bool {

@@ -140,6 +140,43 @@ Requires Go 1.22+.
 go build -o osty ./cmd/osty
 ```
 
+## Native Checker
+
+`internal/check` now targets an external checker executable boundary. By
+default the CLI manages a versioned checker artifact under
+`.osty/toolchain/<tool-version>/osty-native-checker` and builds it on demand.
+`OSTY_NATIVE_CHECKER_BIN` is still supported as an override/debug escape hatch.
+
+This repository also ships a repo-local wrapper at
+[`scripts/osty-native-checker`](./scripts/osty-native-checker), backed by
+[`cmd/osty-native-checker/`](./cmd/osty-native-checker/).
+
+Normal use no longer needs any env var:
+
+```sh
+go run ./cmd/osty check examples/gc
+```
+
+To force a specific checker binary:
+
+```sh
+export OSTY_NATIVE_CHECKER_BIN="$PWD/scripts/osty-native-checker"
+go run ./cmd/osty check examples/gc
+```
+
+Or wrap a single command:
+
+```sh
+./scripts/with-native-checker go run ./cmd/osty build --backend llvm --emit llvm-ir examples/gc
+```
+
+If you prefer a prebuilt binary for speed:
+
+```sh
+go build -o .osty/bin/osty-native-checker ./cmd/osty-native-checker
+export OSTY_NATIVE_CHECKER_BIN="$PWD/.osty/bin/osty-native-checker"
+```
+
 ## CLI
 
 ```sh

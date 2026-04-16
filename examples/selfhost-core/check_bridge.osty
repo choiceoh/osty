@@ -1,0 +1,9 @@
+/// astParseLexedSource keeps the shared checker API decoupled from the parser
+/// package shape. The lexer-owned OstyLexedSource is lowered through the
+/// selfhost-core parser here.
+pub fn astParseLexedSource(lexed: OstyLexedSource) -> AstFile {
+    let tokens = frontTokensFromSource(lexed.source, lexed.stream)
+    let mut p = newOstyParser(tokens)
+    opParseFile(p)
+    AstFile { arena: p.arena }
+}

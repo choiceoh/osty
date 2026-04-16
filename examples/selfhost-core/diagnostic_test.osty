@@ -1,0 +1,104 @@
+use std.testing
+
+use go "strings" as diagStrings {
+    fn Contains(s: String, substr: String) -> Bool
+}
+
+fn assertDiagnosticSeverity(code: String, want: String) {
+    testing.assertEq(diagnosticSeverityName(diagnosticSeverity(code)), want)
+}
+
+fn assertDiagnosticFamily(code: String, want: String) {
+    testing.assertEq(diagnosticFamilyName(diagnosticFamily(code)), want)
+}
+
+fn assertDiagnosticTextContains(output: String, text: String) {
+    if !(diagStrings.Contains(output, text)) {
+        testing.fail("missing {text} in {output}")
+    }
+}
+
+fn testDiagnosticExamplesClassifySeverityPrefixes() {
+    assertDiagnosticSeverity("E0001", "error")
+    assertDiagnosticSeverity("E9999", "error")
+    assertDiagnosticSeverity("W0000", "warning")
+    assertDiagnosticSeverity("W9999", "warning")
+    assertDiagnosticSeverity("L0000", "lint")
+    assertDiagnosticSeverity("L9999", "lint")
+    assertDiagnosticSeverity("X0001", "unknown")
+    assertDiagnosticSeverity("", "unknown")
+}
+
+fn testDiagnosticExamplesClassifyCompilerFamilies() {
+    assertDiagnosticFamily("E0001", "lexical")
+    assertDiagnosticFamily("E0007", "lexical")
+    assertDiagnosticFamily("E0100", "declaration")
+    assertDiagnosticFamily("E0106", "declaration")
+    assertDiagnosticFamily("E0204", "expression")
+    assertDiagnosticFamily("E0301", "type-pattern")
+    assertDiagnosticFamily("E0400", "annotation")
+    assertDiagnosticFamily("E0509", "resolution")
+    assertDiagnosticFamily("E0609", "control-flow")
+    assertDiagnosticFamily("E0762", "type-checking")
+    assertDiagnosticFamily("E2000", "manifest")
+    assertDiagnosticFamily("E2032", "manifest")
+    assertDiagnosticFamily("E2050", "scaffold")
+    assertDiagnosticFamily("E2052", "scaffold")
+}
+
+fn testDiagnosticExamplesClassifyToolFamilies() {
+    assertDiagnosticFamily("L0001", "lint")
+    assertDiagnosticFamily("L0041", "lint")
+    assertDiagnosticFamily("W0000", "warning")
+    assertDiagnosticFamily("W0750", "warning")
+}
+
+fn testDiagnosticExamplesClassifyUnknownFamilyGaps() {
+    assertDiagnosticFamily("E0000", "unknown")
+    assertDiagnosticFamily("E0099", "unknown")
+    assertDiagnosticFamily("E2040", "unknown")
+    assertDiagnosticFamily("L0000", "unknown")
+    assertDiagnosticFamily("Z0000", "unknown")
+}
+
+fn testDiagnosticExamplesIdentifyCompilationBlockers() {
+    testing.assert(diagnosticIsCompilerError("E0500"))
+    testing.assert(diagnosticIsCompilerError("E2017"))
+    testing.assert(!(diagnosticIsCompilerError("W0001")))
+    testing.assert(!(diagnosticIsCompilerError("L0001")))
+    testing.assert(!(diagnosticIsCompilerError("Z0000")))
+}
+
+fn testDiagnosticSourceLocationUsesAnalyzerTokenSpans() {
+    let source = "fn main() \{\n    missing()\n\}\n"
+    let result = selfResolveSource(source)
+    let diag = result.diagnostics[0]
+    let loc = diagnosticSourceLocation(source, diag.start, diag.end)
+
+    testing.assertEq(loc.line, 2)
+    testing.assertEq(loc.column, 5)
+    testing.assert(loc.endColumn > loc.column)
+    testing.assert(loc.token <= loc.endToken)
+}
+
+fn testDiagnosticFormatsResolveDiagnosticsWithLocations() {
+    let source = "fn main() \{\n    missing()\n\}\n"
+    let result = selfResolveSource(source)
+    let output = diagnosticFormatSelfResolveDiagnostics(source, result)
+
+    assertDiagnosticTextContains(output, "error[E0500]")
+    assertDiagnosticTextContains(output, "resolution")
+    assertDiagnosticTextContains(output, "at 2:5")
+    assertDiagnosticTextContains(output, "undefined name `missing`")
+}
+
+fn testDiagnosticFormatsLintDiagnosticsWithLocations() {
+    let source = "fn same(x: Int) -> Bool \{\n    x == (x)\n\}\n"
+    let report = selfLintSource(source)
+    let output = diagnosticFormatSelfLintDiagnostics(source, report)
+
+    assertDiagnosticTextContains(output, "lint[L0041]")
+    assertDiagnosticTextContains(output, "lint")
+    assertDiagnosticTextContains(output, "at 2:5")
+    assertDiagnosticTextContains(output, "value is compared with itself `x`")
+}

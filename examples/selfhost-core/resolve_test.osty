@@ -1,0 +1,320 @@
+use std.testing
+
+fn testSelfResolverCollectsSymbolsAndReferences() {
+    let result = selfResolveSource(
+        r"""
+            use std.testing
+
+            struct User { name: String }
+            enum Color { Red, Green }
+
+            fn add(left: Int, right: Int) -> Int {
+                let total = left + right
+                total
+            }
+
+            fn main() {
+                let answer = add(1, 2)
+                testing.assert(answer == 3)
+            }
+            """,
+    )
+
+    testing.assertEq(selfResolveDiagnosticCount(result), 0)
+    testing.assert(selfResolveHasSymbol(result, "testing", "package"))
+    testing.assert(selfResolveHasSymbol(result, "User", "type"))
+    testing.assert(selfResolveHasSymbol(result, "Color", "type"))
+    testing.assert(selfResolveHasSymbol(result, "Red", "variant"))
+    testing.assert(selfResolveHasSymbol(result, "add", "fn"))
+    testing.assert(result.refs >= 5)
+}
+
+fn testSelfResolverTracksReferenceNames() {
+    let source = r"""
+            use std.fmt as fmt
+
+            fn main() {
+                fmt.format("{}", [])
+            }
+            """
+    let file = astParse(source)
+    let result = selfResolveSource(source)
+    let mut fmtNode = -1
+    let mut nodeIdx = 0
+    for node in file.arena.nodes {
+        if node.kind == AstNIdent && node.text == "fmt" {
+            fmtNode = nodeIdx
+        }
+        nodeIdx = nodeIdx + 1
+    }
+
+    testing.assertEq(selfResolveDiagnosticCount(result), 0)
+    testing.assert(selfResolveHasRef(result, "fmt"))
+    testing.assert(selfResolveHasRefNode(result, fmtNode))
+}
+
+fn testSelfResolverReportsDuplicatesAndUndefinedNames() {
+    let result = selfResolveSource(
+        r"""
+            fn duplicate() {}
+            fn duplicate() {}
+
+            fn main() {
+                let value = missing + alsoMissing
+                duplicate()
+            }
+            """,
+    )
+
+    testing.assertEq(result.duplicates, 1)
+    testing.assertEq(selfResolveCodeCount(result, "E0501"), 1)
+    testing.assertEq(selfResolveCodeCount(result, "E0500"), 2)
+    let mut sawNodeBackedUndefined = false
+    let mut sawNodeBackedDuplicate = false
+    for diag in result.diagnostics {
+        if diag.code == "E0500" && diag.node >= 0 {
+            sawNodeBackedUndefined = true
+        }
+        if diag.code == "E0501" && diag.node >= 0 {
+            sawNodeBackedDuplicate = true
+        }
+    }
+    testing.assert(sawNodeBackedUndefined)
+    testing.assert(sawNodeBackedDuplicate)
+}
+
+fn testSelfResolverTracksLocalDeclarationsInOrder() {
+    let result = selfResolveSource(
+        r"""
+            fn main(input: Int) -> Int {
+                let doubled = input + input
+                let finalValue = doubled + 1
+                finalValue
+            }
+            """,
+    )
+
+    testing.assertEq(selfResolveDiagnosticCount(result), 0)
+    testing.assert(result.refs >= 4)
+}
+
+fn testSelfResolverRejectsDuplicateBindingsInSameScope() {
+    let result = selfResolveSource(
+        r"""
+            fn main() {
+                let value = 1
+                let value = 2
+                value
+            }
+            """,
+    )
+
+    testing.assertEq(result.duplicates, 1)
+    testing.assertEq(selfResolveCodeCount(result, "E0501"), 1)
+}
+
+fn testSelfResolverAllowsShadowingInChildScopes() {
+    let result = selfResolveSource(
+        r"""
+            fn main(input: Int) -> Int {
+                let value = input
+                {
+                    let value = value + 1
+                    value
+                }
+                value
+            }
+            """,
+    )
+
+    testing.assertEq(selfResolveDiagnosticCount(result), 0)
+    testing.assert(selfResolveHasRef(result, "value"))
+}
+
+fn testSelfResolverDoesNotLeakNestedBindings() {
+    let result = selfResolveSource(
+        r"""
+            fn main() {
+                {
+                    let hidden = 1
+                    hidden
+                }
+                hidden
+            }
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0500"), 1)
+}
+
+fn testSelfResolverAllowsClosureParameterShadowingOuterBinding() {
+    let result = selfResolveSource(
+        r"""
+            fn main(value: Int) -> Int {
+                let f = |value| value + 1
+                f(value)
+            }
+            """,
+    )
+
+    testing.assertEq(selfResolveDiagnosticCount(result), 0)
+}
+
+fn testSelfResolverBindsSelfReceiverParameter() {
+    let result = selfResolveSource(
+        r"""
+            struct User {
+                name: String,
+                pub fn label(self) -> String {
+                    self.name
+                }
+            }
+            """,
+    )
+
+    testing.assertEq(selfResolveDiagnosticCount(result), 0)
+    testing.assert(selfResolveHasRef(result, "self"))
+}
+
+fn testSelfResolverResolvesGenericTypeReferences() {
+    let result = selfResolveSource(
+        r"""
+            interface Show {}
+
+            struct Box<T> {
+                value: T,
+                pub fn get(self) -> T {
+                    self.value
+                }
+            }
+
+            fn id<T: Show>(value: T) -> T {
+                value
+            }
+            """,
+    )
+
+    testing.assertEq(selfResolveDiagnosticCount(result), 0)
+    testing.assert(selfResolveHasTypeRef(result, "T"))
+    testing.assert(selfResolveHasTypeRef(result, "Show"))
+}
+
+fn testSelfResolverReportsTypePositionErrors() {
+    let result = selfResolveSource(
+        r"""
+            fn helper() {}
+            fn bad(a: Missing) -> helper {
+                a
+            }
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0500"), 1)
+    testing.assertEq(selfResolveCodeCount(result, "E0502"), 1)
+}
+
+fn testSelfResolverReportsSelfOutsideMethodAndSelfTypeOutsideType() {
+    let result = selfResolveSource(
+        r"""
+            fn bad(self) -> Self {
+                Self
+            }
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0503"), 1)
+    testing.assertEq(selfResolveCodeCount(result, "E0504"), 2)
+}
+
+fn testSelfResolverAllowsSelfTypeInsideTypeBody() {
+    let result = selfResolveSource(
+        r"""
+            struct User {
+                pub fn clone(self) -> Self {
+                    Self { }
+                }
+            }
+            """,
+    )
+
+    testing.assertEq(selfResolveDiagnosticCount(result), 0)
+    testing.assert(selfResolveHasTypeRef(result, "Self"))
+    testing.assert(selfResolveHasRef(result, "Self"))
+}
+
+fn testSelfResolverResolvesVariantAndStructPatterns() {
+    let result = selfResolveSource(
+        r"""
+            enum Result2 {
+                Ok2(Int),
+                Err2(String),
+            }
+
+            struct User {
+                name: String,
+            }
+
+            fn unwrap(r: Result2, u: User) -> Int {
+                let User { name } = u
+                match r {
+                    Ok2(n) -> n,
+                    Err2(_) -> 0,
+                }
+            }
+            """,
+    )
+
+    testing.assertEq(selfResolveDiagnosticCount(result), 0)
+    testing.assert(selfResolveHasRef(result, "Ok2"))
+    testing.assert(selfResolveHasRef(result, "Err2"))
+    testing.assert(selfResolveHasTypeRef(result, "User"))
+}
+
+fn testSelfResolverReportsPatternPathErrors() {
+    let result = selfResolveSource(
+        r"""
+            fn bad(x: Int) -> Int {
+                match x {
+                    Missing(v) -> v,
+                }
+            }
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0500"), 1)
+}
+
+fn testSelfResolverReportsOrPatternBindingMismatch() {
+    let result = selfResolveSource(
+        r"""
+            enum Maybe2 {
+                Some2(Int),
+                None2,
+            }
+
+            fn bad(m: Maybe2) -> Int {
+                match m {
+                    Some2(n) | None2 -> 0,
+                }
+            }
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0605"), 1)
+}
+
+fn testSelfResolverAllowsSameMethodNamesAcrossTypes() {
+    let result = selfResolveSource(
+        r"""
+            struct Alpha {
+                fn id(self) {}
+            }
+
+            struct Beta {
+                fn id(self) {}
+            }
+            """,
+    )
+
+    testing.assertEq(selfResolveDiagnosticCount(result), 0)
+}

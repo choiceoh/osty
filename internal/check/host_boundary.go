@@ -15,6 +15,7 @@ import (
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/token"
+	"github.com/osty/osty/internal/toolchain"
 	"github.com/osty/osty/internal/types"
 )
 
@@ -109,17 +110,28 @@ func (e nativeCheckerExec) CheckSourceStructured(src []byte) (nativeCheckResult,
 }
 
 var nativeCheckerFactory = defaultNativeChecker
+var ensureManagedNativeChecker = func() (string, error) {
+	return toolchain.EnsureNativeChecker(".")
+}
 
 func defaultNativeChecker() (nativeChecker, string) {
 	path := strings.TrimSpace(os.Getenv(nativeCheckerEnv))
-	if path == "" {
-		return nil, fmt.Sprintf("%s is not set", nativeCheckerEnv)
+	if path != "" {
+		resolved, err := exec.LookPath(path)
+		if err != nil {
+			return nil, fmt.Sprintf("%s=%q was not found", nativeCheckerEnv, path)
+		}
+		return nativeCheckerExec{path: resolved}, ""
 	}
-	resolved, err := exec.LookPath(path)
+	managedPath, err := ensureManagedNativeChecker()
 	if err != nil {
-		return nil, fmt.Sprintf("%s=%q was not found", nativeCheckerEnv, path)
+		return nil, fmt.Sprintf(
+			"%s is not set and the managed toolchain checker could not be prepared: %v",
+			nativeCheckerEnv,
+			err,
+		)
 	}
-	return nativeCheckerExec{path: resolved}, ""
+	return nativeCheckerExec{path: managedPath}, ""
 }
 
 type selfhostCheckedSource struct {
