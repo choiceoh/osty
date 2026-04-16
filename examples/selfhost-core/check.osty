@@ -233,6 +233,8 @@ fn frontCheckInstallBuiltins(env: FrontCheckEnv) {
     env.types.push(FrontTypeSig { name: "Result", generics: ["T", "E"] })
     env.variants.push(FrontVariantSig { owner: "Result", name: "Ok", fieldTypes: ["T"], generics: ["T", "E"] })
     env.variants.push(FrontVariantSig { owner: "Result", name: "Err", fieldTypes: ["E"], generics: ["T", "E"] })
+    env.types.push(FrontTypeSig { name: "Chan", generics: ["T"] })
+    env.types.push(FrontTypeSig { name: "ThreadHandle", generics: [] })
 }
 
 fn frontCheckMerge(parent: FrontCheckEnv, child: FrontCheckEnv) {
@@ -670,7 +672,7 @@ fn frontCheckFnDecl(file: AstFile, parent: FrontCheckEnv, decl: AstNode, owner: 
         if paramName != "" {
             let paramIdx = frontCheckIntAt(decl.children, idx)
             let param = astArenaNodeAt(file.arena, paramIdx)
-            frontCheckBindNode(env, paramName, paramType, false, paramIdx, param.start, param.end)
+            frontCheckBindNode(env, paramName, paramType, true, paramIdx, param.start, param.end)
         }
         idx = idx + 1
     }
@@ -1240,6 +1242,12 @@ fn frontCheckIsAssignable(env: FrontCheckEnv, dstRaw: String, srcRaw: String) ->
     if src == "UntypedFloat" {
         return dst == "Float"
     }
+    if dst == "UntypedInt" {
+        return src == "Int" || src == "Byte" || src == "Char"
+    }
+    if dst == "UntypedFloat" {
+        return src == "Float"
+    }
     let dstHead = frontCheckTypeHead(dst)
     let srcHead = frontCheckTypeHead(src)
     if frontCheckIsInterface(env, dstHead) {
@@ -1522,6 +1530,17 @@ fn frontCheckStmt(file: AstFile, env: FrontCheckEnv, idx: Int) -> String {
         }
         return "()"
     }
+    if node.kind == AstNChanSend {
+        let chanType = frontCheckResolveAliasesDeep(env, frontCheckExpr(file, env, node.left))
+        let head = frontCheckTypeHead(chanType)
+        if head == "Chan" {
+            let elem = frontCheckGenericArgAt(chanType, 0)
+            frontCheckExpectAssignable(env, elem, frontCheckExprHint(file, env, node.right, elem))
+        } else if !(frontCheckIsInvalid(chanType)) {
+            env.errors = env.errors + 1
+        }
+        return "()"
+    }
     if node.kind == AstNReturn {
         let valueType = frontCheckExprHint(file, env, node.left, env.returnType)
         frontCheckExpectAssignable(env, env.returnType, valueType)
@@ -1575,6 +1594,9 @@ fn frontCheckIterableElement(typeName: String) -> String {
     if head == "Map" {
         return "({frontCheckGenericArgAt(typeName, 0)}, {frontCheckGenericArgAt(typeName, 1)})"
     }
+    if head == "Chan" {
+        return frontCheckGenericArgAt(typeName, 0)
+    }
     "Invalid"
 }
 
@@ -1602,7 +1624,7 @@ fn frontCheckAssignTargetMutable(file: AstFile, env: FrontCheckEnv, idx: Int) ->
         return frontCheckLookupMutable(env, node.text)
     }
     if node.kind == AstNField || node.kind == AstNIndex {
-        return frontCheckAssignTargetMutable(file, env, node.left)
+        return true
     }
     true
 }
@@ -2024,6 +2046,34 @@ fn frontCheckBuiltinCall(file: AstFile, env: FrontCheckEnv, name: String, args: 
         }
         return "Never"
     }
+    if name == "spawn" {
+        frontCheckExpectArgCount(env, args, 1)
+        let fnType = frontCheckExprHint(file, env, frontCheckIntAt(args, 0), "fn() -> ()")
+        if frontCheckTypeHead(fnType) != "fn" && !(frontCheckIsInvalid(fnType)) {
+            env.errors = env.errors + 1
+        }
+        return "ThreadHandle"
+    }
+    if name == "parallel" {
+        let mut elem = "Invalid"
+        for argIdx in args {
+            let fnType = frontCheckExpr(file, env, argIdx)
+            if frontCheckTypeHead(fnType) == "fn" {
+                let ret = frontCheckFnReturn(fnType)
+                if elem == "Invalid" {
+                    elem = ret
+                } else if !(frontCheckIsAssignable(env, elem, ret)) && !(frontCheckIsAssignable(env, ret, elem)) {
+                    env.errors = env.errors + 1
+                }
+            } else if !(frontCheckIsInvalid(fnType)) {
+                env.errors = env.errors + 1
+            }
+        }
+        if elem == "Invalid" {
+            elem = "()"
+        }
+        return "List<{elem}>"
+    }
     if name == "len" {
         frontCheckExpectArgCount(env, args, 1)
         let valueType = frontCheckResolveAliasesDeep(env, frontCheckExpr(file, env, frontCheckIntAt(args, 0)))
@@ -2039,7 +2089,7 @@ fn frontCheckBuiltinCall(file: AstFile, env: FrontCheckEnv, name: String, args: 
 }
 
 fn frontCheckIsBuiltinCallName(name: String) -> Bool {
-    name == "print" || name == "println" || name == "panic" || name == "len"
+    name == "print" || name == "println" || name == "panic" || name == "len" || name == "spawn" || name == "parallel"
 }
 
 fn frontCheckTurbofishCall(file: AstFile, env: FrontCheckEnv, callIdx: Int, callee: AstNode, args: List<Int>) -> String {
@@ -2058,6 +2108,15 @@ fn frontCheckTurbofishCall(file: AstFile, env: FrontCheckEnv, callIdx: Int, call
         }
     }
     if target.kind == AstNField {
+        let packageName = frontCheckPackageFnNameEnv(file, env, target)
+        if packageName == "thread.chan" {
+            frontCheckExpectArgCount(env, args, 1)
+            if frontCheckStringCount(typeArgs) != 1 {
+                env.errors = env.errors + 1
+                return "Chan<Invalid>"
+            }
+            return "Chan<{frontCheckStringAt(typeArgs, 0)}>"
+        }
         let recvType = frontCheckResolveAliasesDeep(env, frontCheckExpr(file, env, target.left))
         let owner = frontCheckTypeHead(recvType)
         let sig = frontCheckMethodLookup(env, owner, target.text)
@@ -3376,6 +3435,12 @@ fn frontCheckBindPattern(file: AstFile, env: FrontCheckEnv, patIdx: Int, typeNam
         return
     }
     let pat = astArenaNodeAt(file.arena, patIdx)
+    if pat.kind == AstNIdent {
+        if pat.text != "_" && !(astIsUpperName(pat.text)) {
+            frontCheckBindNode(env, pat.text, typeName, mutable, patIdx, pat.start, pat.end)
+        }
+        return
+    }
     if pat.kind != AstNPattern {
         return
     }
@@ -3578,9 +3643,9 @@ fn frontCheckClosure(file: AstFile, env: FrontCheckEnv, node: AstNode, paramHint
             if !(frontCheckPatternIrrefutable(file, param.left)) {
                 env.errors = env.errors + 1
             }
-            frontCheckBindPattern(file, env, param.left, paramType, false)
+            frontCheckBindPattern(file, env, param.left, paramType, true)
         } else {
-            frontCheckBind(env, param.text, paramType, false)
+            frontCheckBind(env, param.text, paramType, true)
         }
         params.push(paramType)
         i = i + 1
@@ -3724,6 +3789,17 @@ fn frontCheckStdMethodCall(file: AstFile, env: FrontCheckEnv, callee: AstNode, r
     }
     if receiver == "Bytes" {
         return frontCheckBytesMethod(file, env, name, args)
+    }
+    if head == "Chan" {
+        if name == "close" {
+            frontCheckExpectArgCount(env, args, 0)
+            return "()"
+        }
+        return "Invalid"
+    }
+    if receiver == "ThreadHandle" && name == "join" {
+        frontCheckExpectArgCount(env, args, 0)
+        return "()"
     }
     "Invalid"
 }
