@@ -74,6 +74,7 @@ fn testValidateHeapRejectsLiveByteMismatch() {
     let closureEnvironments: Map<Int, GcClosureEnvironment> = {:}
     let asyncFrames: Map<Int, GcAsyncFrameRoot> = {:}
     let tlabs: Map<Int, GcTlab> = {:}
+    let tenured = emptyTenuredAllocator()
     let heap = GcHeap {
         config: testGcConfig(),
         nextId: 2,
@@ -89,6 +90,7 @@ fn testValidateHeapRejectsLiveByteMismatch() {
         closureEnvironments,
         asyncFrames,
         tlabs,
+        tenured,
         remembered: empty.toSet(),
         grey: [],
         allocatedSinceLastGC: 16,
@@ -144,6 +146,7 @@ fn testValidateHeapRejectsMissingRememberedEdge() {
     let closureEnvironments: Map<Int, GcClosureEnvironment> = {:}
     let asyncFrames: Map<Int, GcAsyncFrameRoot> = {:}
     let tlabs: Map<Int, GcTlab> = {:}
+    let tenured = emptyTenuredAllocator()
     let heap = GcHeap {
         config: testGcConfig(),
         nextId: 3,
@@ -159,6 +162,7 @@ fn testValidateHeapRejectsMissingRememberedEdge() {
         closureEnvironments,
         asyncFrames,
         tlabs,
+        tenured,
         remembered: empty.toSet(),
         grey: [],
         allocatedSinceLastGC: 32,
@@ -403,6 +407,66 @@ fn testZeroSizedSurvivorSpacePromotesAllSurvivors() {
     testing.assertEq(heap.survivorBytes(), 0)
 }
 
+fn testTenuredAllocationBypassesNurseryAndUsesOldBackend() {
+    let mut heap = newGcHeap(survivorSpaceGcConfig(64, 2))
+    let object = heap.allocateTenured(GcRecord, 24)
+    assertValid(heap)
+
+    testing.assert(heap.contains(object))
+    testing.assertEq(heap.generationOf(object) ?? -1, 1)
+    testing.assertEq(heap.regionOf(object) ?? GcEdenRegion, GcOldRegion)
+    testing.assertEq(heap.nurseryBytes(), 0)
+    testing.assertEq(heap.oldBytes(), 24)
+    testing.assertEq(heap.tenuredObjectCount(), 1)
+    testing.assertEq(heap.tenuredDirectAllocationCount(), 1)
+    testing.assertEq(heap.tenuredBumpAllocationCount(), 1)
+    testing.assertEq(heap.tenuredReuseAllocationCount(), 0)
+    testing.assertEq(heap.tenuredFreeBytes(), 0)
+    testing.assertEq(heap.tenuredCursor(), 24)
+}
+
+fn testMinorPromotionUsesTenuredBackendAndReleasesNurserySlot() {
+    let mut heap = newGcHeap(survivorSpaceGcConfig(0, 4))
+    let rooted = heap.allocate(GcRecord, 16)
+    testing.assert(heap.addRoot(rooted))
+    testing.assertEq(heap.addressOf(rooted) ?? -1, 0)
+    assertValid(heap)
+
+    let stats = heap.minorCollect()
+    assertValid(heap)
+
+    testing.assert(heap.contains(rooted))
+    testing.assertEq(stats.promotedObjects, 1)
+    testing.assertEq(heap.generationOf(rooted) ?? -1, 1)
+    testing.assertEq(heap.regionOf(rooted) ?? GcEdenRegion, GcOldRegion)
+    testing.assertEq(heap.addressOf(rooted) ?? -1, 16)
+    testing.assertEq(heap.tenuredPromotedAllocationCount(), 1)
+    testing.assertEq(heap.tenuredBumpAllocationCount(), 1)
+    testing.assertEq(heap.tenuredFreeBlockCount(), 1)
+    testing.assertEq(heap.tenuredFreeBytes(), 16)
+    testing.assertEq(heap.fragmentedBytes(), 16)
+}
+
+fn testTenuredAllocationReusesPromotionFreeBlock() {
+    let mut heap = newGcHeap(survivorSpaceGcConfig(0, 4))
+    let rooted = heap.allocate(GcRecord, 16)
+    testing.assert(heap.addRoot(rooted))
+    let _ = heap.minorCollect()
+    assertValid(heap)
+
+    let reused = heap.allocateTenured(GcArray, 8)
+    assertValid(heap)
+
+    testing.assertEq(heap.addressOf(reused) ?? -1, 0)
+    testing.assertEq(heap.generationOf(reused) ?? -1, 1)
+    testing.assertEq(heap.regionOf(reused) ?? GcEdenRegion, GcOldRegion)
+    testing.assertEq(heap.tenuredReuseAllocationCount(), 1)
+    testing.assertEq(heap.tenuredDirectAllocationCount(), 1)
+    testing.assertEq(heap.tenuredReusedBytes(), 8)
+    testing.assertEq(heap.tenuredFreeBytes(), 8)
+    testing.assertEq(heap.fragmentedBytes(), 8)
+}
+
 fn testNurseryCycleDiesWithoutRoots() {
     let mut heap = newGcHeap(testGcConfig())
     let left = heap.allocate(GcRecord, 16)
@@ -494,6 +558,7 @@ fn testPinnedObjectLeavesCompactionHoleUntilUnpinned() {
     testing.assertEq(first.reclaimedObjects, 1)
     testing.assertEq(first.afterFragmentedBytes, 20)
     testing.assertEq(heap.fragmentedBytes(), 20)
+    testing.assertEq(heap.tenuredFreeBytes(), 20)
 
     testing.assert(heap.unpin(pinned))
     assertValid(heap)
@@ -507,6 +572,34 @@ fn testPinnedObjectLeavesCompactionHoleUntilUnpinned() {
     testing.assertEq(second.afterFragmentedBytes, 0)
     testing.assertEq(second.compactedObjects, 2)
     testing.assertEq(heap.fragmentedBytes(), 0)
+    testing.assertEq(heap.tenuredFreeBytes(), 0)
+}
+
+fn testTenuredAllocationReusesPinnedCompactionHole() {
+    let mut heap = newGcHeap(testGcConfig())
+    let dead = heap.allocate(GcBytes, 20)
+    let pinned = heap.allocate(GcRecord, 20)
+    let tail = heap.allocate(GcArray, 10)
+
+    testing.assert(heap.addRoot(pinned))
+    testing.assert(heap.addRoot(tail))
+    testing.assert(heap.pin(pinned))
+    assertValid(heap)
+
+    let _ = heap.majorCollect()
+    assertValid(heap)
+    testing.assert(!(heap.contains(dead)))
+    testing.assertEq(heap.tenuredFreeBytes(), 20)
+
+    let old = heap.allocateTenured(GcClosure, 12)
+    assertValid(heap)
+
+    testing.assertEq(heap.addressOf(old) ?? -1, 0)
+    testing.assertEq(heap.generationOf(old) ?? -1, 1)
+    testing.assertEq(heap.regionOf(old) ?? GcEdenRegion, GcOldRegion)
+    testing.assertEq(heap.tenuredReuseAllocationCount(), 1)
+    testing.assertEq(heap.tenuredFreeBytes(), 8)
+    testing.assertEq(heap.fragmentedBytes(), 8)
 }
 
 fn testTryAllocateReportsOutOfMemoryAfterFullCollection() {
