@@ -29,6 +29,8 @@ func TestBundledRuntimeDebugCollectRespectsRoots(t *testing.T) {
 #endif
 
 void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
+void osty_gc_pre_write_v1(void *owner, void *old_value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.pre_write_v1"));
+void *osty_gc_load_v1(void *value) __asm__(OSTY_GC_SYMBOL("osty.gc.load_v1"));
 void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
 void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
 
@@ -53,11 +55,13 @@ int main(void) {
 
     void *list = osty_rt_list_new();
     void *child = osty_gc_alloc_v1(8, 16, "child");
+    osty_gc_pre_write_v1(list, child, 0);
     osty_rt_list_push_ptr(list, child);
     osty_gc_root_bind_v1(list);
     osty_gc_debug_collect();
     printf("%lld\n", (long long)osty_gc_debug_live_count());
     printf("%lld\n", (long long)osty_rt_list_len(list));
+    printf("%d\n", osty_gc_load_v1(list) == list);
     osty_gc_root_release_v1(list);
     osty_gc_debug_collect();
     printf("%lld\n", (long long)osty_gc_debug_live_count());
@@ -85,7 +89,7 @@ int main(void) {
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
-	if got, want := string(runOutput), "1\n0\n2\n1\n0\n3\n1\n1\n0\n"; got != want {
+	if got, want := string(runOutput), "1\n0\n2\n1\n1\n0\n3\n1\n1\n0\n"; got != want {
 		t.Fatalf("runtime GC harness stdout = %q, want %q", got, want)
 	}
 }

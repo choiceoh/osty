@@ -45,12 +45,16 @@ func TestGeneratedGcRuntimeAbiSmokeIR(t *testing.T) {
 
 	assertGeneratedIRContains(t, ir, "source_filename = \"/tmp/gc_runtime_abi.osty\"")
 	assertGeneratedIRContains(t, ir, "declare ptr @osty.gc.alloc_v1(i64, i64, ptr)")
+	assertGeneratedIRContains(t, ir, "declare void @osty.gc.pre_write_v1(ptr, ptr, i64)")
 	assertGeneratedIRContains(t, ir, "declare void @osty.gc.post_write_v1(ptr, ptr, i64)")
+	assertGeneratedIRContains(t, ir, "declare ptr @osty.gc.load_v1(ptr)")
 	assertGeneratedIRContains(t, ir, "declare void @osty.gc.root_bind_v1(ptr)")
 	assertGeneratedIRContains(t, ir, "declare void @osty.gc.root_release_v1(ptr)")
 	assertGeneratedIRContains(t, ir, "@.str0 = private unnamed_addr constant [15 x i8] c\"llvm.gc.object\\00\"")
 	assertGeneratedIRContains(t, ir, "%t0 = call ptr @osty.gc.alloc_v1(i64 1, i64 32, ptr @.str0)")
-	assertGeneratedIRContains(t, ir, "call void @osty.gc.post_write_v1(ptr %t0, ptr %t1, i64 0)")
+	assertGeneratedIRContains(t, ir, "call void @osty.gc.pre_write_v1(ptr %t0, ptr %t1, i64 0)")
+	assertGeneratedIRContains(t, ir, "%t2 = call ptr @osty.gc.load_v1(ptr %t1)")
+	assertGeneratedIRContains(t, ir, "call void @osty.gc.post_write_v1(ptr %t0, ptr %t2, i64 0)")
 	assertGeneratedIRContains(t, ir, "call void @osty.gc.root_release_v1(ptr %t0)")
 }
 
