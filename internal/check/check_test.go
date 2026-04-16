@@ -48,6 +48,50 @@ func TestCheck_OptInSelfhostDiagnostics(t *testing.T) {
 	}
 }
 
+func TestCheck_OptInSelfhostWithoutSourceUsesGoFallback(t *testing.T) {
+	src := []byte(`fn main() { let x: Int = "nope" }`)
+	file, parseDiags := parser.ParseDiagnostics(src)
+	if len(parseDiags) != 0 {
+		t.Fatalf("parse diagnostics: %v", parseDiags)
+	}
+	res := resolve.File(file, resolve.NewPrelude())
+	chk := check.File(file, res, check.Opts{UseSelfhost: true})
+	if len(chk.Diags) != 1 {
+		t.Fatalf("fallback diagnostic count = %d, want 1: %#v", len(chk.Diags), chk.Diags)
+	}
+	if strings.Contains(chk.Diags[0].Message, "self-hosted checker") {
+		t.Fatalf("diagnostic unexpectedly came from selfhost checker without source: %q", chk.Diags[0].Message)
+	}
+}
+
+func TestCheck_OptInSelfhostStructuredMaps(t *testing.T) {
+	src := []byte(`
+fn id<T>(value: T) -> T { value }
+
+fn main() {
+    let y = id::<Int>(1)
+}
+`)
+	file, parseDiags := parser.ParseDiagnostics(src)
+	if len(parseDiags) != 0 {
+		t.Fatalf("parse diagnostics: %v", parseDiags)
+	}
+	res := resolve.File(file, resolve.NewPrelude())
+	chk := check.File(file, res, check.Opts{UseSelfhost: true, Source: src})
+	if len(chk.Diags) != 0 {
+		t.Fatalf("selfhost diagnostics: %v", chk.Diags)
+	}
+	if len(chk.Types) == 0 {
+		t.Fatal("selfhost result did not populate expression types")
+	}
+	if len(chk.LetTypes) == 0 {
+		t.Fatal("selfhost result did not populate let binding types")
+	}
+	if len(chk.Instantiations) == 0 {
+		t.Fatal("selfhost result did not populate generic instantiations")
+	}
+}
+
 // assertCodes asserts that the observed set of diagnostic codes matches
 // `want` exactly (set equality, order-independent). Useful because
 // parser + resolver + checker diagnostics can interleave and we only

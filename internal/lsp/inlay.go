@@ -55,7 +55,7 @@ func (s *Server) handleInlayHint(req *rpcRequest) {
 			}
 			hints = append(hints, InlayHint{
 				Position:    doc.analysis.lines.ostyToLSP(ip.End()),
-				Label:       ": " + t.String(),
+				Label:       ": " + inlayTypeString(t),
 				Kind:        InlayHintKindType,
 				PaddingLeft: false,
 			})
@@ -73,7 +73,7 @@ func (s *Server) handleInlayHint(req *rpcRequest) {
 			}
 			hints = append(hints, InlayHint{
 				Position: doc.analysis.lines.offsetToLSP(nameOff + len(v.Name)),
-				Label:    ": " + t.String(),
+				Label:    ": " + inlayTypeString(t),
 				Kind:     InlayHintKindType,
 			})
 		}
@@ -96,6 +96,13 @@ func lookupNodeType(a *docAnalysis, decl ast.Node, rhs ast.Expr) types.Type {
 		return a.check.LookupType(rhs)
 	}
 	return nil
+}
+
+func inlayTypeString(t types.Type) string {
+	if u, ok := t.(*types.Untyped); ok {
+		t = u.Default()
+	}
+	return t.String()
 }
 
 // nodeInRange keeps the traversal bounded to the editor's viewport.
