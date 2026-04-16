@@ -130,6 +130,7 @@ func TestLLVMBackendEmitBinaryBuildsBundledRuntime(t *testing.T) {
 	for _, want := range []string{
 		"osty_rt_list_new",
 		"osty_rt_list_push_bytes_v1",
+		"osty_rt_list_push_bytes_roots_v1",
 		"osty_rt_list_get_bytes_v1",
 		"osty_rt_strings_Equal",
 		"osty.gc.pre_write_v1",
