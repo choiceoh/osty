@@ -14,6 +14,7 @@ import (
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/token"
 	"github.com/osty/osty/internal/toolchain"
 	"github.com/osty/osty/internal/types"
@@ -21,9 +22,9 @@ import (
 
 const nativeCheckerEnv = "OSTY_NATIVE_CHECKER_BIN"
 
-// The checker now targets an Osty-native executable boundary instead of the
-// deleted generated Go bridge. The external tool is expected to read one JSON
-// request from stdin and emit one JSON response to stdout.
+// The checker targets an Osty-native request/response boundary. The preferred
+// path uses an external executable, and the default host implementation falls
+// back to the embedded selfhost checker when that binary is unavailable.
 type nativeChecker interface {
 	CheckSourceStructured([]byte) (nativeCheckResult, error)
 }
@@ -109,6 +110,68 @@ func (e nativeCheckerExec) CheckSourceStructured(src []byte) (nativeCheckResult,
 	return checked, nil
 }
 
+type embeddedNativeChecker struct{}
+
+func (embeddedNativeChecker) CheckSourceStructured(src []byte) (nativeCheckResult, error) {
+	checked := selfhost.CheckSourceStructured(src)
+	return adaptEmbeddedCheckResult(checked), nil
+}
+
+func adaptEmbeddedCheckResult(checked selfhost.CheckResult) nativeCheckResult {
+	result := nativeCheckResult{
+		Summary: nativeCheckSummary{
+			Assignments: checked.Summary.Assignments,
+			Accepted:    checked.Summary.Accepted,
+			Errors:      checked.Summary.Errors,
+		},
+		TypedNodes:     make([]nativeCheckedNode, 0, len(checked.TypedNodes)),
+		Bindings:       make([]nativeCheckedBinding, 0, len(checked.Bindings)),
+		Symbols:        make([]nativeCheckedSymbol, 0, len(checked.Symbols)),
+		Instantiations: make([]nativeCheckInstantiation, 0, len(checked.Instantiations)),
+	}
+	for _, node := range checked.TypedNodes {
+		result.TypedNodes = append(result.TypedNodes, nativeCheckedNode{
+			Node:     node.Node,
+			Kind:     node.Kind,
+			TypeName: node.TypeName,
+			Start:    node.Start,
+			End:      node.End,
+		})
+	}
+	for _, binding := range checked.Bindings {
+		result.Bindings = append(result.Bindings, nativeCheckedBinding{
+			Node:     binding.Node,
+			Name:     binding.Name,
+			TypeName: binding.TypeName,
+			Mutable:  binding.Mutable,
+			Start:    binding.Start,
+			End:      binding.End,
+		})
+	}
+	for _, symbol := range checked.Symbols {
+		result.Symbols = append(result.Symbols, nativeCheckedSymbol{
+			Node:     symbol.Node,
+			Kind:     symbol.Kind,
+			Name:     symbol.Name,
+			Owner:    symbol.Owner,
+			TypeName: symbol.TypeName,
+			Start:    symbol.Start,
+			End:      symbol.End,
+		})
+	}
+	for _, inst := range checked.Instantiations {
+		result.Instantiations = append(result.Instantiations, nativeCheckInstantiation{
+			Node:       inst.Node,
+			Callee:     inst.Callee,
+			TypeArgs:   append([]string(nil), inst.TypeArgs...),
+			ResultType: inst.ResultType,
+			Start:      inst.Start,
+			End:        inst.End,
+		})
+	}
+	return result
+}
+
 var nativeCheckerFactory = defaultNativeChecker
 var ensureManagedNativeChecker = func() (string, error) {
 	return toolchain.EnsureNativeChecker(".")
@@ -125,8 +188,8 @@ func defaultNativeChecker() (nativeChecker, string) {
 	}
 	managedPath, err := ensureManagedNativeChecker()
 	if err != nil {
-		return nil, fmt.Sprintf(
-			"%s is not set and the managed toolchain checker could not be prepared: %v",
+		return embeddedNativeChecker{}, fmt.Sprintf(
+			"%s is not set and the managed toolchain checker could not be prepared: %v; falling back to the embedded checker",
 			nativeCheckerEnv,
 			err,
 		)

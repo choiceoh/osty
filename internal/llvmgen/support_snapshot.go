@@ -1419,18 +1419,12 @@ func llvmNominalDeclHeaderDiagnostic(kind string, name string, identOk bool, gen
 	if genericCount != 0 {
 		return llvmUnsupportedDiagnostic("type-system", fmt.Sprintf("generic %s %q is not supported", kind, name))
 	}
-	if methodCount != 0 {
-		return llvmUnsupportedDiagnostic("function-signature", fmt.Sprintf("%s %q methods are not supported", kind, name))
-	}
 	return llvmUnsupportedDiagnosticWith("", "", "", "")
 }
 
 func llvmFunctionHeaderDiagnostic(name string, identOk bool, hasRecv bool, genericCount int, hasBody bool, isMain bool, paramCount int, hasReturnType bool) *LlvmUnsupportedDiagnostic {
 	if !identOk {
 		return llvmUnsupportedDiagnostic("name", fmt.Sprintf("function name %q", name))
-	}
-	if hasRecv {
-		return llvmUnsupportedDiagnostic("function-signature", "methods are not supported")
 	}
 	if genericCount != 0 {
 		return llvmUnsupportedDiagnostic("function-signature", "generic functions are not supported")

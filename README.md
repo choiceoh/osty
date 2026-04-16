@@ -142,16 +142,18 @@ go build -o osty ./cmd/osty
 
 ## Native Checker
 
-`internal/check` now targets an external checker executable boundary. By
-default the CLI manages a versioned checker artifact under
-`.osty/toolchain/<tool-version>/osty-native-checker` and builds it on demand.
-`OSTY_NATIVE_CHECKER_BIN` is still supported as an override/debug escape hatch.
+`internal/check` prefers an external checker executable boundary when one is
+available. By default the CLI manages a versioned checker artifact under
+`.osty/toolchain/<tool-version>/osty-native-checker` and builds it on demand,
+but falls back to the embedded selfhost checker when that binary is unavailable.
+`OSTY_NATIVE_CHECKER_BIN` is still supported as a strict override/debug escape
+hatch.
 
 This repository also ships a repo-local wrapper at
 [`scripts/osty-native-checker`](./scripts/osty-native-checker), backed by
 [`cmd/osty-native-checker/`](./cmd/osty-native-checker/).
 
-Normal use no longer needs any env var:
+Normal use no longer needs any env var or prebuilt checker binary:
 
 ```sh
 go run ./cmd/osty check examples/calc

@@ -401,3 +401,43 @@ func TestLLVMBackendBinaryRunsBitwiseIntOps(t *testing.T) {
 		t.Fatalf("binary stdout = %q, want %q", got, want)
 	}
 }
+
+func TestLLVMBackendBinaryMutReceiverMethodWritesBackToCaller(t *testing.T) {
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
+
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitBinary, `struct Counter {
+    value: Int,
+
+    fn add(mut self, delta: Int) -> Int {
+        self.value = self.value + delta
+        self.value
+    }
+
+    fn get(self) -> Int {
+        self.value
+    }
+}
+
+fn main() {
+    let mut counter = Counter { value: 1 }
+    println(counter.add(2))
+    println(counter.get())
+}
+`)
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	cmd := exec.Command(result.Artifacts.Binary)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
+	}
+	if got, want := string(output), "3\n3\n"; got != want {
+		t.Fatalf("binary stdout = %q, want %q", got, want)
+	}
+}
