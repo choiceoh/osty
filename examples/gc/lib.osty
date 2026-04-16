@@ -3625,6 +3625,9 @@ pub struct GcHeap {
             if entry.released && (entry.rooted || entry.pinned) {
                 return Err("released llvm handle {handle} still has live flags")
             }
+            if !(entry.released) && entry.pinned != self.llvmHandleHasAlivePinnedRootRef(handle) {
+                return Err("llvm handle {handle} has stale pin metadata")
+            }
             if entry.rooted {
                 if !(self.objects.containsKey(entry.objectId)) {
                     return Err("rooted llvm handle {handle} references missing object")
@@ -3670,11 +3673,17 @@ pub struct GcHeap {
                 if entry.released || entry.objectId != rootRef.objectId {
                     return Err("llvm root ref {rootRefId} is detached from its handle")
                 }
+                if rootRef.kind == GcLlvmPinnedRoot && !(entry.pinned) {
+                    return Err("llvm pinned root ref {rootRefId} is missing handle pin state")
+                }
                 if !(self.objects.containsKey(rootRef.objectId)) {
                     return Err("llvm root ref {rootRefId} references missing object")
                 }
                 if !(self.llvmRuntimeRoots.contains(rootRef.objectId)) {
                     return Err("llvm root ref {rootRefId} is missing from runtime roots")
+                }
+                if rootRef.kind == GcLlvmPinnedRoot && !(self.objects[rootRef.objectId].pinned) {
+                    return Err("llvm pinned root ref {rootRefId} did not pin its object")
                 }
             }
         }
