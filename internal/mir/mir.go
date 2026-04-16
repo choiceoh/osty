@@ -1,0 +1,895 @@
+package mir
+
+import (
+	"fmt"
+
+	"github.com/osty/osty/internal/ir"
+)
+
+// ==== Source positions (shared with HIR) ====
+
+// Pos mirrors ir.Pos; kept as a local type so MIR consumers do not need
+// to import `ir` for position info even though today we just alias it.
+type Pos = ir.Pos
+
+// Span is a half-open [Start, End) source range. Every MIR node carries
+// one so diagnostics can still anchor back to the original source.
+type Span = ir.Span
+
+// ==== Type reuse ====
+
+// Type is a semantic type. We reuse ir.Type directly because (a) it has
+// no back-references to the AST/resolver, (b) monomorphisation runs at
+// the HIR level and every type reaching MIR is already concrete, and
+// (c) having one type vocabulary removes an entire translation layer
+// between HIR and MIR.
+type Type = ir.Type
+
+// Canonical primitive singletons, re-exported so MIR consumers never
+// need to reach into ir.T* themselves.
+var (
+	TInt     = ir.TInt
+	TInt8    = ir.TInt8
+	TInt16   = ir.TInt16
+	TInt32   = ir.TInt32
+	TInt64   = ir.TInt64
+	TUInt8   = ir.TUInt8
+	TUInt16  = ir.TUInt16
+	TUInt32  = ir.TUInt32
+	TUInt64  = ir.TUInt64
+	TByte    = ir.TByte
+	TFloat   = ir.TFloat
+	TFloat32 = ir.TFloat32
+	TFloat64 = ir.TFloat64
+	TBool    = ir.TBool
+	TChar    = ir.TChar
+	TString  = ir.TString
+	TBytes   = ir.TBytes
+	TUnit    = ir.TUnit
+	TNever   = ir.TNever
+)
+
+// ==== Module ====
+
+// Module is the MIR form of an Osty compilation unit. It is always
+// monomorphic: no TypeVar appears in any type reachable from the module
+// root.
+type Module struct {
+	Package   string
+	Functions []*Function
+	Globals   []*Global
+	Uses      []*Use
+	Layouts   *LayoutTable
+	Issues    []error
+	SpanV     Span
+}
+
+// At returns the module's source span.
+func (m *Module) At() Span { return m.SpanV }
+
+// LookupFunction finds a function by mangled symbol. Returns nil when
+// no match exists.
+func (m *Module) LookupFunction(symbol string) *Function {
+	if m == nil {
+		return nil
+	}
+	for _, fn := range m.Functions {
+		if fn != nil && fn.Name == symbol {
+			return fn
+		}
+	}
+	return nil
+}
+
+// ==== Globals / Uses ====
+
+// Global is a top-level `let` binding. The initialiser is a MIR
+// function — the global's value is whatever the function returns. This
+// matches how LLVM lowers top-level state today: the backend emits an
+// initialiser that runs before main.
+type Global struct {
+	Name  string
+	Type  Type
+	Init  *Function // nil when the caller has not lowered an init yet
+	Mut   bool
+	SpanV Span
+}
+
+// At returns the global's span.
+func (g *Global) At() Span { return g.SpanV }
+
+// Use represents an import that MIR still needs to carry for FFI
+// bridging (Go FFI modules, runtime aliases). Non-FFI imports are
+// fully resolved away during MIR lowering.
+type Use struct {
+	Path         []string
+	RawPath      string
+	Alias        string
+	IsGoFFI      bool
+	IsRuntimeFFI bool
+	GoPath       string
+	RuntimePath  string
+	SpanV        Span
+}
+
+// At returns the import's span.
+func (u *Use) At() Span { return u.SpanV }
+
+// ==== Function ====
+
+// LocalID identifies a local within a function. _0 is always the
+// return slot; IDs are dense and contiguous from 0.
+type LocalID int
+
+// BlockID identifies a basic block within a function. The entry block
+// is whatever Function.Entry points at (conventionally 0).
+type BlockID int
+
+// Function is one MIR function: parameters, return slot, a set of
+// named locals, a CFG of basic blocks.
+type Function struct {
+	Name        string   // mangled symbol
+	Params      []LocalID
+	ReturnType  Type
+	ReturnLocal LocalID
+	Locals      []*Local
+	Blocks      []*BasicBlock
+	Entry       BlockID
+	IsExternal  bool
+	IsIntrinsic bool
+	Exported    bool
+	SpanV       Span
+}
+
+// At returns the function's source span.
+func (f *Function) At() Span { return f.SpanV }
+
+// NewLocal appends a fresh local and returns its ID.
+func (f *Function) NewLocal(name string, t Type, mut bool, sp Span) LocalID {
+	id := LocalID(len(f.Locals))
+	f.Locals = append(f.Locals, &Local{
+		ID:    id,
+		Name:  name,
+		Type:  t,
+		Mut:   mut,
+		SpanV: sp,
+	})
+	return id
+}
+
+// Local returns the local with the given ID, or nil if the ID is out
+// of range.
+func (f *Function) Local(id LocalID) *Local {
+	if int(id) < 0 || int(id) >= len(f.Locals) {
+		return nil
+	}
+	return f.Locals[id]
+}
+
+// Block returns the block with the given ID, or nil if the ID is out
+// of range.
+func (f *Function) Block(id BlockID) *BasicBlock {
+	if int(id) < 0 || int(id) >= len(f.Blocks) {
+		return nil
+	}
+	return f.Blocks[id]
+}
+
+// NewBlock appends a fresh block with no instructions and a nil
+// terminator. Callers must install a terminator before validation.
+func (f *Function) NewBlock(sp Span) BlockID {
+	id := BlockID(len(f.Blocks))
+	f.Blocks = append(f.Blocks, &BasicBlock{ID: id, SpanV: sp})
+	return id
+}
+
+// ==== Local ====
+
+// Local is one slot in a function's frame. Locals cover parameters,
+// the return slot, user-named bindings, and compiler temporaries.
+type Local struct {
+	ID       LocalID
+	Name     string // empty for synthetic temporaries
+	Type     Type
+	Mut      bool
+	IsParam  bool
+	IsReturn bool
+	SpanV    Span
+}
+
+// At returns the local's source span.
+func (l *Local) At() Span { return l.SpanV }
+
+// ==== Basic block ====
+
+// BasicBlock is a straight-line run of instructions followed by
+// exactly one terminator. Terminator must be non-nil after lowering.
+type BasicBlock struct {
+	ID     BlockID
+	Instrs []Instr
+	Term   Terminator
+	SpanV  Span
+}
+
+// At returns the block's source span (the span of the first
+// instruction, or the block header if the block is empty).
+func (b *BasicBlock) At() Span { return b.SpanV }
+
+// Append adds an instruction to the block. Callers are expected to
+// respect the invariant that no instruction follows the terminator —
+// the validator catches violations, but the helper does not.
+func (b *BasicBlock) Append(instr Instr) {
+	b.Instrs = append(b.Instrs, instr)
+}
+
+// SetTerminator installs the block's terminator. Subsequent Append
+// calls are a MIR bug; the validator flags them.
+func (b *BasicBlock) SetTerminator(t Terminator) {
+	b.Term = t
+}
+
+// ==== Instructions ====
+
+// Instr is the common interface for every MIR instruction.
+type Instr interface {
+	instrNode()
+	At() Span
+}
+
+// AssignInstr is `dest = rvalue`. The dest Place must reference a
+// local that already exists; projections are allowed (field / tuple /
+// variant / index / deref).
+type AssignInstr struct {
+	Dest  Place
+	Src   RValue
+	SpanV Span
+}
+
+func (*AssignInstr) instrNode()  {}
+func (a *AssignInstr) At() Span  { return a.SpanV }
+
+// CallInstr is a direct or indirect call. Dest is nil when the return
+// value is discarded or when the function returns unit.
+type CallInstr struct {
+	Dest   *Place
+	Callee Callee
+	Args   []Operand
+	SpanV  Span
+}
+
+func (*CallInstr) instrNode() {}
+func (c *CallInstr) At() Span { return c.SpanV }
+
+// IntrinsicInstr is a call to a compiler-known intrinsic (the print
+// family today). Keeping intrinsics distinct from user calls lets
+// backends dispatch without matching on names.
+type IntrinsicInstr struct {
+	Dest  *Place
+	Kind  IntrinsicKind
+	Args  []Operand
+	SpanV Span
+}
+
+func (*IntrinsicInstr) instrNode() {}
+func (i *IntrinsicInstr) At() Span { return i.SpanV }
+
+// IntrinsicKind enumerates the MIR-visible intrinsics. The values
+// match ir.IntrinsicKind for the print family so that the lowerer can
+// pass them through unchanged.
+type IntrinsicKind int
+
+const (
+	IntrinsicInvalid  IntrinsicKind = iota
+	IntrinsicPrint                  // stdout, no newline
+	IntrinsicPrintln                // stdout, newline
+	IntrinsicEprint                 // stderr, no newline
+	IntrinsicEprintln               // stderr, newline
+	IntrinsicAbort                  // unreachable runtime trap
+	IntrinsicStringConcat
+)
+
+// StorageLiveInstr marks a local as alive. Optional; backends that do
+// not care may ignore it.
+type StorageLiveInstr struct {
+	Local LocalID
+	SpanV Span
+}
+
+func (*StorageLiveInstr) instrNode() {}
+func (s *StorageLiveInstr) At() Span { return s.SpanV }
+
+// StorageDeadInstr marks a local as dead. Paired with StorageLive.
+type StorageDeadInstr struct {
+	Local LocalID
+	SpanV Span
+}
+
+func (*StorageDeadInstr) instrNode() {}
+func (s *StorageDeadInstr) At() Span { return s.SpanV }
+
+// ==== Callee ====
+
+// Callee is the target of a CallInstr.
+type Callee interface {
+	calleeNode()
+}
+
+// FnRef is a direct call to a function by its mangled symbol. Type
+// carries the full function type for the validator's benefit.
+type FnRef struct {
+	Symbol string
+	Type   Type
+}
+
+func (*FnRef) calleeNode() {}
+
+// IndirectCall is a call through a first-class function value. The
+// operand's type is expected to be an FnType.
+type IndirectCall struct {
+	Callee Operand
+}
+
+func (*IndirectCall) calleeNode() {}
+
+// ==== Terminators ====
+
+// Terminator is the control-flow edge leaving a basic block. Every
+// block has exactly one.
+type Terminator interface {
+	termNode()
+	At() Span
+}
+
+// GotoTerm is an unconditional jump.
+type GotoTerm struct {
+	Target BlockID
+	SpanV  Span
+}
+
+func (*GotoTerm) termNode()  {}
+func (g *GotoTerm) At() Span { return g.SpanV }
+
+// BranchTerm chooses between two successors based on a boolean
+// operand.
+type BranchTerm struct {
+	Cond  Operand
+	Then  BlockID
+	Else  BlockID
+	SpanV Span
+}
+
+func (*BranchTerm) termNode() {}
+func (b *BranchTerm) At() Span { return b.SpanV }
+
+// SwitchIntTerm dispatches on an integer scrutinee. Cases are tried
+// in order; Default is taken when no case matches.
+type SwitchIntTerm struct {
+	Scrutinee Operand
+	Cases     []SwitchCase
+	Default   BlockID
+	SpanV     Span
+}
+
+func (*SwitchIntTerm) termNode() {}
+func (s *SwitchIntTerm) At() Span { return s.SpanV }
+
+// SwitchCase is one match arm of a SwitchIntTerm.
+type SwitchCase struct {
+	Value  int64
+	Target BlockID
+	Label  string // optional debug label (variant name / literal text)
+}
+
+// ReturnTerm returns from the function. The returned value is the
+// contents of the function's ReturnLocal.
+type ReturnTerm struct {
+	SpanV Span
+}
+
+func (*ReturnTerm) termNode()  {}
+func (r *ReturnTerm) At() Span { return r.SpanV }
+
+// UnreachableTerm marks a path that the compiler believes is
+// unreachable. Emitted at the "no arm matched" sink of an exhaustive
+// match, after `!`-returning calls, etc.
+type UnreachableTerm struct {
+	SpanV Span
+}
+
+func (*UnreachableTerm) termNode() {}
+func (u *UnreachableTerm) At() Span { return u.SpanV }
+
+// ==== Places / projections ====
+
+// Place identifies a storage location. It is a local optionally
+// refined by a chain of projections.
+type Place struct {
+	Local       LocalID
+	Projections []Projection
+}
+
+// Base returns a Place with just the root local and no projections.
+// Useful as a concise way to describe the storage root.
+func (p Place) Base() Place { return Place{Local: p.Local} }
+
+// HasProjections reports whether the place has any refining
+// projections.
+func (p Place) HasProjections() bool { return len(p.Projections) > 0 }
+
+// Project returns a new Place extending p with proj.
+func (p Place) Project(proj Projection) Place {
+	next := make([]Projection, 0, len(p.Projections)+1)
+	next = append(next, p.Projections...)
+	next = append(next, proj)
+	return Place{Local: p.Local, Projections: next}
+}
+
+// Projection is one step refining a Place.
+type Projection interface {
+	projectionNode()
+}
+
+// FieldProj is a struct field access by index + name.
+type FieldProj struct {
+	Index int
+	Name  string
+	Type  Type
+}
+
+func (*FieldProj) projectionNode() {}
+
+// TupleProj is a tuple element access by index.
+type TupleProj struct {
+	Index int
+	Type  Type
+}
+
+func (*TupleProj) projectionNode() {}
+
+// VariantProj descends into an enum payload. FieldIdx < 0 selects the
+// whole payload tuple; otherwise it selects a single payload element.
+type VariantProj struct {
+	Variant  int
+	Name     string
+	FieldIdx int // -1 for "the whole payload"
+	Type     Type
+}
+
+func (*VariantProj) projectionNode() {}
+
+// IndexProj is `place[index]`. Index is an operand (usually an integer
+// local or constant); ElemType is the resulting type.
+type IndexProj struct {
+	Index    Operand
+	ElemType Type
+}
+
+func (*IndexProj) projectionNode() {}
+
+// DerefProj follows a pointer / optional unwrap. Retained in the
+// vocabulary for future borrow work; the current lowering does not
+// emit it.
+type DerefProj struct {
+	Type Type
+}
+
+func (*DerefProj) projectionNode() {}
+
+// ==== Operands ====
+
+// Operand is a read-only value: either a Place read or a literal.
+type Operand interface {
+	operandNode()
+	Type() Type
+}
+
+// CopyOp is a non-destructive read of a Place.
+type CopyOp struct {
+	Place Place
+	T     Type
+}
+
+func (*CopyOp) operandNode()   {}
+func (o *CopyOp) Type() Type   { return o.T }
+
+// MoveOp is a destructive read. Under the current GC-managed runtime
+// MoveOp and CopyOp behave identically; the distinction exists for
+// future owning-pointer lowerings.
+type MoveOp struct {
+	Place Place
+	T     Type
+}
+
+func (*MoveOp) operandNode() {}
+func (o *MoveOp) Type() Type { return o.T }
+
+// ConstOp is a compile-time constant.
+type ConstOp struct {
+	Const Const
+	T     Type
+}
+
+func (*ConstOp) operandNode() {}
+func (o *ConstOp) Type() Type {
+	if o.T != nil {
+		return o.T
+	}
+	if o.Const != nil {
+		return o.Const.Type()
+	}
+	return ir.ErrTypeVal
+}
+
+// ==== Constants ====
+
+// Const is a compile-time value. Every Const knows its type.
+type Const interface {
+	constNode()
+	Type() Type
+}
+
+// IntConst is an integer constant. Value is the two's complement
+// bit pattern reinterpreted as int64; signed vs unsigned is carried
+// by the Type.
+type IntConst struct {
+	Value int64
+	T     Type
+}
+
+func (*IntConst) constNode() {}
+func (c *IntConst) Type() Type {
+	if c.T == nil {
+		return TInt
+	}
+	return c.T
+}
+
+// BoolConst is `true` / `false`.
+type BoolConst struct {
+	Value bool
+}
+
+func (*BoolConst) constNode() {}
+func (*BoolConst) Type() Type { return TBool }
+
+// FloatConst is a float constant.
+type FloatConst struct {
+	Value float64
+	T     Type
+}
+
+func (*FloatConst) constNode() {}
+func (c *FloatConst) Type() Type {
+	if c.T == nil {
+		return TFloat
+	}
+	return c.T
+}
+
+// StringConst is a non-interpolated string constant.
+type StringConst struct {
+	Value string
+}
+
+func (*StringConst) constNode() {}
+func (*StringConst) Type() Type { return TString }
+
+// CharConst is a single code point.
+type CharConst struct {
+	Value rune
+}
+
+func (*CharConst) constNode() {}
+func (*CharConst) Type() Type { return TChar }
+
+// ByteConst is a single byte.
+type ByteConst struct {
+	Value byte
+}
+
+func (*ByteConst) constNode() {}
+func (*ByteConst) Type() Type { return TByte }
+
+// UnitConst is the `()` zero-value.
+type UnitConst struct{}
+
+func (*UnitConst) constNode() {}
+func (*UnitConst) Type() Type { return TUnit }
+
+// NullConst is the canonical "none" constant used to seed optional
+// locals. Backends emit their runtime's None representation when they
+// see this.
+type NullConst struct {
+	T Type
+}
+
+func (*NullConst) constNode() {}
+func (c *NullConst) Type() Type {
+	if c.T == nil {
+		return TUnit
+	}
+	return c.T
+}
+
+// FnConst is a compile-time function pointer literal. The symbol
+// names an already-mangled MIR function.
+type FnConst struct {
+	Symbol string
+	T      Type
+}
+
+func (*FnConst) constNode() {}
+func (c *FnConst) Type() Type {
+	if c.T == nil {
+		return ir.ErrTypeVal
+	}
+	return c.T
+}
+
+// ==== RValues ====
+
+// RValue is the right-hand side of an Assign. RValues never have side
+// effects on their own; side effects become CallInstr or
+// IntrinsicInstr.
+type RValue interface {
+	rvalueNode()
+}
+
+// UseRV is the identity rvalue: copy an operand into the destination.
+type UseRV struct {
+	Op Operand
+}
+
+func (*UseRV) rvalueNode() {}
+
+// UnaryRV is `op(arg)`.
+type UnaryRV struct {
+	Op  UnaryOp
+	Arg Operand
+	T   Type
+}
+
+func (*UnaryRV) rvalueNode() {}
+
+// BinaryRV is `lhs op rhs`.
+type BinaryRV struct {
+	Op    BinaryOp
+	Left  Operand
+	Right Operand
+	T     Type
+}
+
+func (*BinaryRV) rvalueNode() {}
+
+// AggregateKind enumerates the flavors of aggregate construction.
+type AggregateKind int
+
+const (
+	AggTuple AggregateKind = iota + 1
+	AggStruct
+	AggEnumVariant
+	AggList
+	AggMap
+)
+
+// AggregateRV constructs a compound value. For EnumVariant, VariantIdx
+// names the active arm and Fields is the (possibly empty) payload
+// tuple. For Struct, Fields is in declaration order (the lowerer
+// reorders keyword fields). For Tuple / List, Fields is positional.
+type AggregateRV struct {
+	Kind       AggregateKind
+	Fields     []Operand
+	T          Type
+	VariantIdx int    // EnumVariant only
+	VariantTag string // EnumVariant only (debug hint)
+}
+
+func (*AggregateRV) rvalueNode() {}
+
+// DiscriminantRV reads the variant tag of an enum / optional value.
+type DiscriminantRV struct {
+	Place Place
+	T     Type // the discriminant's numeric type
+}
+
+func (*DiscriminantRV) rvalueNode() {}
+
+// LenRV reads the length of a list / string / bytes. Backends map
+// this to their runtime's length query.
+type LenRV struct {
+	Place Place
+	T     Type
+}
+
+func (*LenRV) rvalueNode() {}
+
+// CastKind enumerates the MIR-visible casts. Stage-1 only needs
+// integer sign/width and optional wrap/unwrap.
+type CastKind int
+
+const (
+	CastInvalid     CastKind = iota
+	CastIntResize            // widen/narrow between integer widths
+	CastIntToFloat
+	CastFloatToInt
+	CastFloatResize
+	CastOptionalWrap   // T -> T? (wrap into Some)
+	CastOptionalUnwrap // T? -> T (checked earlier)
+	CastBitcast
+)
+
+// CastRV is a value conversion.
+type CastRV struct {
+	Kind CastKind
+	Arg  Operand
+	From Type
+	To   Type
+}
+
+func (*CastRV) rvalueNode() {}
+
+// AddressOfRV takes the address of a Place. Unused in Stage 1;
+// retained for future borrow analysis.
+type AddressOfRV struct {
+	Place Place
+	T     Type
+}
+
+func (*AddressOfRV) rvalueNode() {}
+
+// RefRV wraps a Place's value inside a reference-typed wrapper. Used
+// by the lowerer to materialise `Some(x)` when we already have x in a
+// place.
+type RefRV struct {
+	Place Place
+	T     Type
+}
+
+func (*RefRV) rvalueNode() {}
+
+// NullaryRVKind enumerates nullary rvalues that backends must
+// recognise by name.
+type NullaryRVKind int
+
+const (
+	NullaryNone NullaryRVKind = iota + 1
+)
+
+// NullaryRV materialises a nullary value such as the canonical None
+// for an Option type.
+type NullaryRV struct {
+	Kind NullaryRVKind
+	T    Type
+}
+
+func (*NullaryRV) rvalueNode() {}
+
+// ==== Unary / binary operators ====
+
+// UnaryOp enumerates MIR unary operators. The vocabulary mirrors HIR.
+type UnaryOp int
+
+const (
+	UnInvalid UnaryOp = iota
+	UnNeg             // -x
+	UnPlus            // +x (identity on numerics; kept for parity)
+	UnNot             // !x (boolean)
+	UnBitNot          // ~x
+)
+
+// BinaryOp enumerates MIR binary operators.
+type BinaryOp int
+
+const (
+	BinInvalid BinaryOp = iota
+
+	BinAdd
+	BinSub
+	BinMul
+	BinDiv
+	BinMod
+
+	BinEq
+	BinNeq
+	BinLt
+	BinLeq
+	BinGt
+	BinGeq
+
+	BinAnd
+	BinOr
+
+	BinBitAnd
+	BinBitOr
+	BinBitXor
+	BinShl
+	BinShr
+)
+
+// ==== Layouts ====
+
+// LayoutTable is the MIR-level index from type names to layout
+// records. Structural types (tuples, lists) are keyed by their
+// canonical string representation.
+type LayoutTable struct {
+	Structs map[string]*StructLayout
+	Enums   map[string]*EnumLayout
+	Tuples  map[string]*TupleLayout
+}
+
+// NewLayoutTable returns an empty layout table with initialised maps.
+func NewLayoutTable() *LayoutTable {
+	return &LayoutTable{
+		Structs: map[string]*StructLayout{},
+		Enums:   map[string]*EnumLayout{},
+		Tuples:  map[string]*TupleLayout{},
+	}
+}
+
+// StructLayout describes a single (possibly monomorphic) struct.
+type StructLayout struct {
+	Name    string
+	Mangled string
+	Fields  []FieldLayout
+	Size    int // 0 when the backend computes it
+	Align   int // 0 when the backend computes it
+}
+
+// FieldLayout is one entry inside a StructLayout or VariantLayout.
+type FieldLayout struct {
+	Index int
+	Name  string
+	Type  Type
+}
+
+// EnumLayout describes a single (possibly monomorphic) enum.
+type EnumLayout struct {
+	Name         string
+	Mangled      string
+	Discriminant Type
+	Variants     []VariantLayout
+}
+
+// VariantLayout is one enum arm.
+type VariantLayout struct {
+	Index   int
+	Name    string
+	Payload []FieldLayout
+}
+
+// TupleLayout describes the structural layout of a tuple. Key is the
+// canonical type string (e.g. "(Int, String)").
+type TupleLayout struct {
+	Key     string
+	Mangled string
+	Fields  []FieldLayout
+}
+
+// ==== Helpers for span propagation ====
+
+// SpanOfInstr returns the span of an instruction, or a zero Span when
+// nil.
+func SpanOfInstr(i Instr) Span {
+	if i == nil {
+		return Span{}
+	}
+	return i.At()
+}
+
+// SpanOfTerm returns the span of a terminator, or a zero Span when
+// nil.
+func SpanOfTerm(t Terminator) Span {
+	if t == nil {
+		return Span{}
+	}
+	return t.At()
+}
+
+// ==== Diagnostics helper ====
+
+// Unsupported returns a sentinel error signalling that MIR lowering
+// has not implemented the given HIR shape. Callers use this to
+// decide whether to fall back to the HIR path.
+func Unsupported(format string, args ...any) error {
+	return fmt.Errorf("mir: unsupported: "+format, args...)
+}
