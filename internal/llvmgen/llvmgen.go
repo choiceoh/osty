@@ -202,6 +202,7 @@ func Generate(file *ast.File, opts Options) ([]byte, error) {
 		if len(file.Decls) > 0 {
 			return nil, unsupported("source-layout", "mixed script statements and declarations")
 		}
+		g.tupleTypes = collectTupleTypes(file, nil, nil)
 		g.runtimeFFI = collectRuntimeFFI(file, nil, nil)
 		g.runtimeFFIPaths = collectRuntimeFFIPaths(file)
 		g.resultTypes = collectBuiltinResultTypes(file, nil, nil)
@@ -224,6 +225,7 @@ func Generate(file *ast.File, opts Options) ([]byte, error) {
 	g.enums = decls.enumsOrdered
 	g.enumsByName = decls.enumsByName
 	g.enumsByType = decls.enumsByType
+	g.tupleTypes = collectTupleTypes(file, decls.structsByName, decls.enumsByName)
 	g.resultTypes = collectBuiltinResultTypes(file, decls.structsByName, decls.enumsByName)
 	g.runtimeFFI = collectRuntimeFFI(file, decls.structsByName, decls.enumsByName)
 	g.runtimeFFIPaths = collectRuntimeFFIPaths(file)
@@ -633,6 +635,97 @@ func collectBuiltinResultTypes(file *ast.File, structs map[string]*structInfo, e
 		}
 	}
 	return out
+}
+
+func collectTupleTypes(file *ast.File, structs map[string]*structInfo, enums map[string]*enumInfo) map[string]tupleTypeInfo {
+	out := map[string]tupleTypeInfo{}
+	if file == nil {
+		return out
+	}
+	collectFn := func(fn *ast.FnDecl) {
+		if fn == nil {
+			return
+		}
+		for _, param := range fn.Params {
+			if param == nil {
+				continue
+			}
+			collectTupleTypeFromAST(out, param.Type, structs, enums)
+		}
+		collectTupleTypeFromAST(out, fn.ReturnType, structs, enums)
+	}
+	for _, decl := range file.Decls {
+		switch d := decl.(type) {
+		case *ast.FnDecl:
+			collectFn(d)
+		case *ast.StructDecl:
+			for _, field := range d.Fields {
+				if field == nil {
+					continue
+				}
+				collectTupleTypeFromAST(out, field.Type, structs, enums)
+			}
+			for _, method := range d.Methods {
+				collectFn(method)
+			}
+		case *ast.EnumDecl:
+			for _, variant := range d.Variants {
+				if variant == nil {
+					continue
+				}
+				for _, field := range variant.Fields {
+					collectTupleTypeFromAST(out, field, structs, enums)
+				}
+			}
+			for _, method := range d.Methods {
+				collectFn(method)
+			}
+		case *ast.LetDecl:
+			collectTupleTypeFromAST(out, d.Type, structs, enums)
+		}
+	}
+	return out
+}
+
+func collectTupleTypeFromAST(out map[string]tupleTypeInfo, t ast.Type, structs map[string]*structInfo, enums map[string]*enumInfo) {
+	if out == nil || t == nil {
+		return
+	}
+	switch tt := t.(type) {
+	case *ast.NamedType:
+		for _, arg := range tt.Args {
+			collectTupleTypeFromAST(out, arg, structs, enums)
+		}
+	case *ast.OptionalType:
+		collectTupleTypeFromAST(out, tt.Inner, structs, enums)
+	case *ast.TupleType:
+		elemTypes := make([]string, 0, len(tt.Elems))
+		elemListElemTyps := make([]string, 0, len(tt.Elems))
+		for _, elem := range tt.Elems {
+			collectTupleTypeFromAST(out, elem, structs, enums)
+			elemTyp, err := llvmType(elem, structs, enums)
+			if err != nil {
+				return
+			}
+			elemTypes = append(elemTypes, elemTyp)
+			if listElemTyp, ok, err := llvmListElementType(elem, structs, enums); err == nil && ok {
+				elemListElemTyps = append(elemListElemTyps, listElemTyp)
+			} else {
+				elemListElemTyps = append(elemListElemTyps, "")
+			}
+		}
+		info := tupleTypeInfo{
+			typ:              llvmTupleTypeName(elemTypes),
+			elems:            elemTypes,
+			elemListElemTyps: elemListElemTyps,
+		}
+		out[info.typ] = info
+	case *ast.FnType:
+		for _, param := range tt.Params {
+			collectTupleTypeFromAST(out, param, structs, enums)
+		}
+		collectTupleTypeFromAST(out, tt.ReturnType, structs, enums)
+	}
 }
 
 func collectBuiltinResultTypeFromAST(out map[string]builtinResultType, t ast.Type, structs map[string]*structInfo, enums map[string]*enumInfo) {
@@ -1261,6 +1354,7 @@ func (g *generator) emitLet(stmt *ast.LetStmt) error {
 	}
 	hintedListElemTyp := ""
 	if stmt.Type != nil {
+		collectTupleTypeFromAST(g.tupleTypes, stmt.Type, g.structsByName, g.enumsByName)
 		if listElemTyp, ok, err := llvmListElementType(stmt.Type, g.structsByName, g.enumsByName); err != nil {
 			return err
 		} else if ok {
