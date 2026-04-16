@@ -243,7 +243,7 @@ func (g *generator) runtimeFFICallArgs(fn *runtimeFFIFunction, callArgs []*ast.A
 			return nil, unsupportedf("call", "runtime FFI %s.%s requires positional arguments", fn.path, fn.sourceName)
 		}
 		param := fn.params[i]
-		v, err := g.emitExprWithHint(arg.Value, param.listElemTyp, false, "", "", false, "", false)
+		v, err := g.emitExprWithHintAndSourceType(arg.Value, param.sourceType, param.listElemTyp, false, "", "", false, "", false)
 		if err != nil {
 			return nil, err
 		}
