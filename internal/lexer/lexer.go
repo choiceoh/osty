@@ -19,7 +19,6 @@ type Lexer struct {
 	comments []token.Comment
 	errs     []*diag.Diagnostic
 	toks     []token.Token
-	nextPos  int
 }
 
 // New returns a lexer over src. The source must be UTF-8 encoded.
@@ -80,23 +79,5 @@ func (l *Lexer) Comments() []token.Comment { return l.comments }
 // Lex returns the complete token stream, terminated by EOF.
 func (l *Lexer) Lex() []token.Token {
 	l.toks, l.errs, l.comments = selfhost.Lex(l.src)
-	l.nextPos = 0
 	return l.toks
-}
-
-func (l *Lexer) next() token.Token {
-	if l.toks == nil {
-		l.Lex()
-	}
-	if l.nextPos >= len(l.toks) {
-		if len(l.toks) == 0 {
-			return token.Token{Kind: token.EOF}
-		}
-		return l.toks[len(l.toks)-1]
-	}
-	tok := l.toks[l.nextPos]
-	if tok.Kind != token.EOF {
-		l.nextPos++
-	}
-	return tok
 }

@@ -3,7 +3,6 @@ package check
 import (
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/osty/osty/internal/ast"
@@ -251,58 +250,4 @@ func isProviderStdlibPackage(ws *resolve.Workspace, path string, pkg *resolve.Pa
 		ws.Stdlib != nil &&
 		strings.HasPrefix(path, resolve.StdPrefix) &&
 		ws.Stdlib.LookupPackage(path) == pkg
-}
-
-var scalarByName = map[string]types.Type{
-	"Int":     types.Int,
-	"Int8":    types.Int8,
-	"Int16":   types.Int16,
-	"Int32":   types.Int32,
-	"Int64":   types.Int64,
-	"UInt8":   types.UInt8,
-	"UInt16":  types.UInt16,
-	"UInt32":  types.UInt32,
-	"UInt64":  types.UInt64,
-	"Byte":    types.Byte,
-	"Float":   types.Float,
-	"Float32": types.Float32,
-	"Float64": types.Float64,
-	"Bool":    types.Bool,
-	"Char":    types.Char,
-	"String":  types.String,
-	"Bytes":   types.Bytes,
-	"Never":   types.Never,
-}
-
-// syntheticBuiltinSym returns a process-wide Symbol that stands in for
-// a prelude builtin when constructing types outside any resolver
-// context. The cache guarantees identity across files.
-func syntheticBuiltinSym(name string) *resolve.Symbol {
-	if sym, ok := syntheticBuiltinsRead(name); ok {
-		return sym
-	}
-	sym := &resolve.Symbol{Name: name, Kind: resolve.SymBuiltin}
-	syntheticBuiltinsStore(name, sym)
-	return sym
-}
-
-var (
-	syntheticBuiltinsMu sync.RWMutex
-	syntheticBuiltins   = map[string]*resolve.Symbol{}
-)
-
-func syntheticBuiltinsRead(name string) (*resolve.Symbol, bool) {
-	syntheticBuiltinsMu.RLock()
-	defer syntheticBuiltinsMu.RUnlock()
-	sym, ok := syntheticBuiltins[name]
-	return sym, ok
-}
-
-func syntheticBuiltinsStore(name string, sym *resolve.Symbol) {
-	syntheticBuiltinsMu.Lock()
-	defer syntheticBuiltinsMu.Unlock()
-	if _, ok := syntheticBuiltins[name]; ok {
-		return
-	}
-	syntheticBuiltins[name] = sym
 }

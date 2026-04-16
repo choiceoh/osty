@@ -8,6 +8,17 @@ import (
 	"github.com/osty/osty/internal/token"
 )
 
+func semTypeIndex(t *testing.T, name string) uint32 {
+	t.Helper()
+	for i, typ := range semanticTokenTypes {
+		if typ == name {
+			return uint32(i)
+		}
+	}
+	t.Fatalf("semantic token type %q not found", name)
+	return 0
+}
+
 func TestClassifyTokenUsesSelfHostedPolicy(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -19,45 +30,45 @@ func TestClassifyTokenUsesSelfHostedPolicy(t *testing.T) {
 		{
 			name:     "keyword",
 			tok:      token.Token{Kind: token.FN},
-			wantType: semTypeKeyword,
+			wantType: semTypeIndex(t, "keyword"),
 			wantOK:   true,
 		},
 		{
 			name:     "operator",
 			tok:      token.Token{Kind: token.PLUSEQ},
-			wantType: semTypeOperator,
+			wantType: semTypeIndex(t, "operator"),
 			wantOK:   true,
 		},
 		{
 			name:     "number",
 			tok:      token.Token{Kind: token.INT},
-			wantType: semTypeNumber,
+			wantType: semTypeIndex(t, "number"),
 			wantOK:   true,
 		},
 		{
 			name:     "string",
 			tok:      token.Token{Kind: token.RAWSTRING},
-			wantType: semTypeString,
+			wantType: semTypeIndex(t, "string"),
 			wantOK:   true,
 		},
 		{
 			name:       "resolved function ident",
 			tok:        token.Token{Kind: token.IDENT, Pos: token.Pos{Offset: 10}},
 			symbolKind: resolve.SymFn,
-			wantType:   semTypeFunction,
+			wantType:   semTypeIndex(t, "function"),
 			wantOK:     true,
 		},
 		{
 			name:       "resolved parameter ident",
 			tok:        token.Token{Kind: token.IDENT, Pos: token.Pos{Offset: 10}},
 			symbolKind: resolve.SymParam,
-			wantType:   semTypeParameter,
+			wantType:   semTypeIndex(t, "parameter"),
 			wantOK:     true,
 		},
 		{
 			name:     "unresolved ident defaults to variable",
 			tok:      token.Token{Kind: token.IDENT, Pos: token.Pos{Offset: 10}},
-			wantType: semTypeVariable,
+			wantType: semTypeIndex(t, "variable"),
 			wantOK:   true,
 		},
 		{
@@ -85,15 +96,18 @@ func TestClassifyTokenUsesSelfHostedPolicy(t *testing.T) {
 }
 
 func TestEncodeSemTokensUsesSelfHostedDeltaEncoding(t *testing.T) {
+	keyword := semTypeIndex(t, "keyword")
+	function := semTypeIndex(t, "function")
+	variable := semTypeIndex(t, "variable")
 	got := encodeSemTokens([]semToken{
-		{line: 2, col: 4, length: 6, ttype: semTypeKeyword},
-		{line: 0, col: 2, length: 3, ttype: semTypeFunction},
-		{line: 0, col: 8, length: 1, ttype: semTypeVariable},
+		{line: 2, col: 4, length: 6, ttype: keyword},
+		{line: 0, col: 2, length: 3, ttype: function},
+		{line: 0, col: 8, length: 1, ttype: variable},
 	})
 	want := []uint32{
-		0, 2, 3, semTypeFunction, 0,
-		0, 6, 1, semTypeVariable, 0,
-		2, 4, 6, semTypeKeyword, 0,
+		0, 2, 3, function, 0,
+		0, 6, 1, variable, 0,
+		2, 4, 6, keyword, 0,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("encoded = %#v, want %#v", got, want)
