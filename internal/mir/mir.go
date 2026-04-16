@@ -276,6 +276,16 @@ func (i *IntrinsicInstr) At() Span { return i.SpanV }
 // IntrinsicKind enumerates the MIR-visible intrinsics. The values
 // match ir.IntrinsicKind for the print family so that the lowerer can
 // pass them through unchanged.
+//
+// Intrinsics split into broad families:
+//
+//   - print family: formatted output to stdout/stderr.
+//   - string / runtime builders: helpers the lowerer cannot inline.
+//   - concurrency: the runtime ABI for `taskGroup`, channels, spawn,
+//     handles, select, cancellation. Stage 2b introduces these. The
+//     runtime itself is not contract-frozen yet; backends read the
+//     intrinsic name and route to whatever symbol their runtime
+//     exposes.
 type IntrinsicKind int
 
 const (
@@ -286,6 +296,71 @@ const (
 	IntrinsicEprintln               // stderr, newline
 	IntrinsicAbort                  // unreachable runtime trap
 	IntrinsicStringConcat
+
+	// ---- concurrency: channels ----
+
+	// IntrinsicChanMake constructs a new Channel<T>. Args: [capacity
+	// Int]. Dest receives the new channel value; the element type is
+	// read from the destination local's type.
+	IntrinsicChanMake
+	// IntrinsicChanSend sends a value on a channel. Args: [channel,
+	// value]. Dest is nil (the statement has no value).
+	IntrinsicChanSend
+	// IntrinsicChanRecv receives a value from a channel. Args:
+	// [channel]. Dest receives Option<T> — None signals the channel
+	// is drained and closed, or a cancellation was observed.
+	IntrinsicChanRecv
+	// IntrinsicChanClose closes a channel. Args: [channel]. Dest nil.
+	IntrinsicChanClose
+	// IntrinsicChanIsClosed returns Bool. Args: [channel].
+	IntrinsicChanIsClosed
+
+	// ---- concurrency: structured tasks ----
+
+	// IntrinsicTaskGroup wraps a `taskGroup(|g| body)` call. Args:
+	// [closure]. Dest receives the closure's return value.
+	IntrinsicTaskGroup
+	// IntrinsicSpawn launches a task. Args: [closure] (detached) or
+	// [group, closure] (`g.spawn`). Dest receives a Handle<T>.
+	IntrinsicSpawn
+	// IntrinsicHandleJoin joins on a handle. Args: [handle]. Dest is
+	// the handle's T value.
+	IntrinsicHandleJoin
+	// IntrinsicGroupCancel cancels a group. Args: [group]. Dest nil.
+	IntrinsicGroupCancel
+	// IntrinsicGroupIsCancelled reports whether a group is cancelled.
+	// Args: [group]. Dest is Bool.
+	IntrinsicGroupIsCancelled
+
+	// ---- concurrency: high-level helpers ----
+
+	// IntrinsicParallel runs `parallel(items, concurrency, f)`. Args:
+	// [items, concurrency, f]. Dest is List<Result<R, Error>>.
+	IntrinsicParallel
+	// IntrinsicRace runs `race(body)`. Args: [body]. Dest is
+	// Result<T, Error>.
+	IntrinsicRace
+	// IntrinsicCollectAll runs `collectAll(body)`. Args: [body]. Dest
+	// is List<Result<T, Error>>.
+	IntrinsicCollectAll
+
+	// ---- concurrency: select ----
+
+	// IntrinsicSelect runs `thread.select(|s| body)`. Args: [body].
+	// Dest is unit; individual arms (recv/send/timeout/default) run
+	// their closures through the select runtime.
+	IntrinsicSelect
+
+	// ---- concurrency: cancellation ----
+
+	// IntrinsicIsCancelled returns Bool. Args: [].
+	IntrinsicIsCancelled
+	// IntrinsicCheckCancelled returns Result<(), Error>. Args: [].
+	IntrinsicCheckCancelled
+	// IntrinsicYield yields the current task. Args: [].
+	IntrinsicYield
+	// IntrinsicSleep sleeps for a Duration. Args: [duration].
+	IntrinsicSleep
 )
 
 // StorageLiveInstr marks a local as alive. Optional; backends that do

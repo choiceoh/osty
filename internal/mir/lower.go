@@ -513,7 +513,14 @@ func (bs *bodyState) lowerStmt(s ir.Stmt) {
 			bs.deferStack = append(bs.deferStack, x.Body)
 		}
 	case *ir.ChanSendStmt:
-		bs.l.noteIssue("channel send not lowered to MIR (stage 2 work)")
+		ch := bs.lowerExprAsOperand(x.Channel)
+		val := bs.lowerExprAsOperand(x.Value)
+		bs.emit(&IntrinsicInstr{
+			Dest:  nil,
+			Kind:  IntrinsicChanSend,
+			Args:  []Operand{ch, val},
+			SpanV: x.SpanV,
+		})
 	case *ir.ErrorStmt:
 		bs.l.noteIssue("error stmt reached MIR: %s", x.Note)
 	default:
@@ -978,8 +985,12 @@ func (bs *bodyState) lowerForRange(f *ir.ForStmt) {
 
 func (bs *bodyState) lowerForIn(f *ir.ForStmt) {
 	iterT := f.Iter.Type()
+	if isChannelType(iterT) {
+		bs.lowerForInChannel(f, iterT)
+		return
+	}
 	if !isListType(iterT) {
-		bs.l.noteIssue("for-in over non-List iterable is not lowered to MIR yet")
+		bs.l.noteIssue("for-in over non-List/Channel iterable is not lowered to MIR yet")
 		return
 	}
 	elemT := listElementType(iterT)
@@ -1062,6 +1073,79 @@ func (bs *bodyState) lowerForIn(f *ir.ForStmt) {
 		},
 		SpanV: f.SpanV,
 	})
+	bs.terminate(&GotoTerm{Target: header, SpanV: f.SpanV})
+	bs.loopStack = bs.loopStack[:len(bs.loopStack)-1]
+	bs.cur = exit
+}
+
+// lowerForInChannel lowers `for x in channel { body }`. Each iteration
+// reads a value via IntrinsicChanRecv (which returns Option<T>) and
+// exits when the receive yields None — matching the spec's
+// "`for x in ch` terminates when the channel is closed and drained,
+// or when the surrounding task is cancelled" semantics.
+func (bs *bodyState) lowerForInChannel(f *ir.ForStmt, iterT Type) {
+	elemT := channelElementType(iterT)
+	optT := &ir.OptionalType{Inner: elemT}
+	iter := bs.fn.NewLocal("_chan", iterT, false, f.SpanV)
+	bs.emit(&StorageLiveInstr{Local: iter, SpanV: f.SpanV})
+	bs.lowerExprInto(f.Iter, iter, iterT)
+
+	header := bs.newBlock(f.SpanV)
+	body := bs.newBlock(f.SpanV)
+	step := bs.newBlock(f.SpanV)
+	exit := bs.newBlock(f.SpanV)
+	bs.terminate(&GotoTerm{Target: header, SpanV: f.SpanV})
+
+	bs.cur = header
+	// opt := chan_recv(iter); switch opt { Some => body, None => exit }
+	opt := bs.fn.NewLocal("_recv", optT, false, f.SpanV)
+	bs.emit(&IntrinsicInstr{
+		Dest:  &Place{Local: opt},
+		Kind:  IntrinsicChanRecv,
+		Args:  []Operand{&CopyOp{Place: Place{Local: iter}, T: iterT}},
+		SpanV: f.SpanV,
+	})
+	disc := bs.freshTemp(TInt, f.SpanV)
+	bs.emit(&AssignInstr{
+		Dest:  Place{Local: disc},
+		Src:   &DiscriminantRV{Place: Place{Local: opt}, T: TInt},
+		SpanV: f.SpanV,
+	})
+	bs.terminate(&SwitchIntTerm{
+		Scrutinee: &CopyOp{Place: Place{Local: disc}, T: TInt},
+		Cases:     []SwitchCase{{Value: someTagOf(optT), Target: body, Label: "Some"}},
+		Default:   exit,
+		SpanV:     f.SpanV,
+	})
+
+	bs.loopStack = append(bs.loopStack, &loopFrame{breakBlock: exit, continueBlock: step})
+	bs.cur = body
+	bs.pushScope()
+	// Unwrap the payload into a named local.
+	elemLocal := bs.fn.NewLocal("_elem", elemT, false, f.SpanV)
+	payloadProj := &VariantProj{
+		Variant:  int(someTagOf(optT)),
+		Name:     "Some",
+		FieldIdx: 0,
+		Type:     elemT,
+	}
+	bs.emit(&AssignInstr{
+		Dest:  Place{Local: elemLocal},
+		Src:   &UseRV{Op: &CopyOp{Place: Place{Local: opt}.Project(payloadProj), T: elemT}},
+		SpanV: f.SpanV,
+	})
+	if f.Pattern != nil {
+		bs.bindPattern(f.Pattern, Place{Local: elemLocal}, elemT, f.SpanV)
+	} else if f.Var != "" {
+		bs.bind(f.Var, elemLocal)
+	}
+	for _, s := range f.Body.Stmts {
+		bs.lowerStmt(s)
+	}
+	bs.popScope()
+	bs.terminate(&GotoTerm{Target: step, SpanV: f.SpanV})
+
+	bs.cur = step
 	bs.terminate(&GotoTerm{Target: header, SpanV: f.SpanV})
 	bs.loopStack = bs.loopStack[:len(bs.loopStack)-1]
 	bs.cur = exit
@@ -2107,6 +2191,29 @@ func (bs *bodyState) lowerOptionalFieldInto(fe *ir.FieldExpr, dest Place, destT 
 // ==== calls ====
 
 func (bs *bodyState) lowerCallExprInto(c *ir.CallExpr, dest *Place, destT Type) {
+	// Concurrency-intrinsic fast path:
+	//
+	//   - Bare Ident callee: `taskGroup(...)`, `parallel(...)`,
+	//     `race(...)`, `collectAll(...)`. These reach prelude-visible
+	//     names so `qualifier == ""`.
+	//   - FieldExpr callee whose X names a use alias for a concurrency
+	//     module: `thread.spawn(f)`, `std.thread.chan::<Int>(0)`. The
+	//     qualifier is the use decl's raw path or alias; we lookup
+	//     the intrinsic and emit it directly.
+	if id, ok := c.Callee.(*ir.Ident); ok {
+		if kind := concurrencyIntrinsicForFree("", id.Name); kind != IntrinsicInvalid {
+			bs.emitConcurrencyIntrinsic(kind, c.Args, dest, destT, c.SpanV)
+			return
+		}
+	}
+	if fx, ok := c.Callee.(*ir.FieldExpr); ok {
+		if use := bs.l.useAliasFor(fx.X); use != nil {
+			if kind := concurrencyIntrinsicForFree(qualifierOf(use), fx.Name); kind != IntrinsicInvalid {
+				bs.emitConcurrencyIntrinsic(kind, c.Args, dest, destT, c.SpanV)
+				return
+			}
+		}
+	}
 	args, callee := bs.resolveCall(c)
 	if callee == nil {
 		bs.l.noteIssue("unsupported call: callee %T", c.Callee)
@@ -2116,6 +2223,37 @@ func (bs *bodyState) lowerCallExprInto(c *ir.CallExpr, dest *Place, destT Type) 
 		dest = nil
 	}
 	bs.emit(&CallInstr{Dest: dest, Callee: callee, Args: args, SpanV: c.SpanV})
+}
+
+// emitConcurrencyIntrinsic lowers args in source order and emits a
+// single IntrinsicInstr with the given kind. The destination is
+// discarded (set to nil) for kinds whose runtime ABI returns no value
+// (send, close, cancel, yield).
+func (bs *bodyState) emitConcurrencyIntrinsic(kind IntrinsicKind, args []ir.Arg, dest *Place, destT Type, sp Span) {
+	out := make([]Operand, len(args))
+	for i, a := range args {
+		out[i] = bs.lowerExprAsOperand(a.Value)
+	}
+	destPtr := dest
+	if destPtr != nil && isUnit(destT) {
+		destPtr = nil
+	}
+	if isVoidConcurrencyIntrinsic(kind) {
+		destPtr = nil
+	}
+	bs.emit(&IntrinsicInstr{Dest: destPtr, Kind: kind, Args: out, SpanV: sp})
+}
+
+// isVoidConcurrencyIntrinsic reports whether an intrinsic produces no
+// MIR-visible value (send, close, cancel, yield, sleep). Used so that
+// `ch.close()` in expression position doesn't carry a stale dest.
+func isVoidConcurrencyIntrinsic(kind IntrinsicKind) bool {
+	switch kind {
+	case IntrinsicChanSend, IntrinsicChanClose,
+		IntrinsicGroupCancel, IntrinsicYield:
+		return true
+	}
+	return false
 }
 
 // resolveCall figures out the callee and reorders keyword args.
@@ -2272,9 +2410,14 @@ func (bs *bodyState) orderArgs(args []ir.Arg, sig *fnSignature) []Operand {
 func (bs *bodyState) lowerMethodCallInto(mc *ir.MethodCall, dest Place, destT Type) {
 	// Package/FFI-qualified calls land here when HIR lowered `pkg.fn()`
 	// into MethodCall{Receiver: Ident(pkg), Name: fn}. The receiver is
-	// a use alias, not a value — emit a direct qualified call with no
-	// synthetic `self` argument.
+	// a use alias, not a value — fast-path to a concurrency intrinsic
+	// when the qualifier targets `thread`, or emit a direct qualified
+	// call with no synthetic `self` argument otherwise.
 	if use := bs.l.useAliasFor(mc.Receiver); use != nil {
+		if kind := concurrencyIntrinsicForFree(qualifierOf(use), mc.Name); kind != IntrinsicInvalid {
+			bs.emitConcurrencyIntrinsic(kind, mc.Args, &dest, destT, mc.SpanV)
+			return
+		}
 		args := make([]Operand, len(mc.Args))
 		for i, a := range mc.Args {
 			args[i] = bs.lowerExprAsOperand(a.Value)
@@ -2288,6 +2431,33 @@ func (bs *bodyState) lowerMethodCallInto(mc *ir.MethodCall, dest Place, destT Ty
 			Callee: &FnRef{Symbol: qualifiedSymbol(use, mc.Name), Type: mc.T},
 			Args:   args,
 			SpanV:  mc.SpanV,
+		})
+		return
+	}
+
+	// Concurrency-intrinsic fast path for method syntax on runtime-
+	// owned concurrency types: `ch.recv()`, `ch.close()`, `h.join()`,
+	// `g.spawn(f)`, `g.cancel()`, `g.isCancelled()`. The receiver
+	// becomes the first intrinsic arg; user args follow in source
+	// order.
+	if kind := concurrencyIntrinsicForMethod(mc.Receiver.Type(), mc.Name); kind != IntrinsicInvalid {
+		recv := bs.lowerExprAsOperand(mc.Receiver)
+		args := []Operand{recv}
+		for _, a := range mc.Args {
+			args = append(args, bs.lowerExprAsOperand(a.Value))
+		}
+		destPtr := &dest
+		if isUnit(destT) {
+			destPtr = nil
+		}
+		if isVoidConcurrencyIntrinsic(kind) {
+			destPtr = nil
+		}
+		bs.emit(&IntrinsicInstr{
+			Dest:  destPtr,
+			Kind:  kind,
+			Args:  args,
+			SpanV: mc.SpanV,
 		})
 		return
 	}
@@ -2429,6 +2599,118 @@ func (bs *bodyState) lowerVariantLit(v *ir.VariantLit, hint Type) RValue {
 		VariantIdx: idx,
 		VariantTag: v.Variant,
 	}
+}
+
+// ==== concurrency intrinsic recognition ====
+
+// concurrencyIntrinsicForFree maps a prelude / `thread`-namespaced
+// top-level function name to its MIR intrinsic kind. Returns
+// IntrinsicInvalid when the name is not a known concurrency primitive.
+//
+// The lowerer calls this for `Ident{Kind: IdentFn}` callees and for
+// package-qualified callees whose use decl targets `std.thread` —
+// the function call paths normalise both sources into the bare name
+// here. `qualifier` is the `use`-level prefix (e.g. "std.thread",
+// "thread") when the call was qualified, or "" for prelude-visible
+// names like `taskGroup`.
+func concurrencyIntrinsicForFree(qualifier, name string) IntrinsicKind {
+	threadNs := qualifier == "thread" || qualifier == "std.thread"
+	preludeOnly := qualifier == ""
+	switch name {
+	case "taskGroup":
+		if preludeOnly {
+			return IntrinsicTaskGroup
+		}
+	case "parallel":
+		if preludeOnly {
+			return IntrinsicParallel
+		}
+	case "race":
+		if preludeOnly || threadNs {
+			return IntrinsicRace
+		}
+	case "collectAll":
+		if preludeOnly || threadNs {
+			return IntrinsicCollectAll
+		}
+	case "spawn":
+		if threadNs {
+			return IntrinsicSpawn
+		}
+	case "chan":
+		if threadNs {
+			return IntrinsicChanMake
+		}
+	case "select":
+		if threadNs {
+			return IntrinsicSelect
+		}
+	case "isCancelled":
+		if threadNs {
+			return IntrinsicIsCancelled
+		}
+	case "checkCancelled":
+		if threadNs {
+			return IntrinsicCheckCancelled
+		}
+	case "yield":
+		if threadNs {
+			return IntrinsicYield
+		}
+	case "sleep":
+		if threadNs {
+			return IntrinsicSleep
+		}
+	}
+	return IntrinsicInvalid
+}
+
+// concurrencyIntrinsicForMethod maps a (receiverType, methodName)
+// pair to its MIR intrinsic kind. Used for method calls like
+// `ch.recv()`, `g.spawn(f)`, `h.join()`. Returns IntrinsicInvalid
+// when not a concurrency method.
+func concurrencyIntrinsicForMethod(receiverType Type, name string) IntrinsicKind {
+	recv := typeNameOf(receiverType)
+	switch recv {
+	case "Channel":
+		switch name {
+		case "recv":
+			return IntrinsicChanRecv
+		case "close":
+			return IntrinsicChanClose
+		case "isClosed":
+			return IntrinsicChanIsClosed
+		}
+	case "Handle":
+		if name == "join" {
+			return IntrinsicHandleJoin
+		}
+	case "Group", "TaskGroup":
+		switch name {
+		case "spawn":
+			return IntrinsicSpawn
+		case "cancel":
+			return IntrinsicGroupCancel
+		case "isCancelled":
+			return IntrinsicGroupIsCancelled
+		}
+	}
+	return IntrinsicInvalid
+}
+
+// qualifierOf extracts the package qualifier from a Use decl, or ""
+// when no use is associated. Used for concurrency-intrinsic lookup.
+func qualifierOf(use *ir.UseDecl) string {
+	if use == nil {
+		return ""
+	}
+	if use.RawPath != "" {
+		return use.RawPath
+	}
+	if use.Alias != "" {
+		return use.Alias
+	}
+	return ""
 }
 
 // ==== closures ====
@@ -2911,6 +3193,25 @@ func isListType(t ir.Type) bool {
 		return nt.Name == "List" && nt.Builtin
 	}
 	return false
+}
+
+// isChannelType reports whether t is a `Channel<T>`. The stdlib
+// declares Channel as a named type rather than a primitive, so we
+// accept both Builtin=false and Builtin=true to match HIR's view.
+func isChannelType(t ir.Type) bool {
+	if nt, ok := t.(*ir.NamedType); ok {
+		return nt.Name == "Channel"
+	}
+	return false
+}
+
+// channelElementType returns the T of a `Channel<T>`, or ErrType
+// when t isn't a channel.
+func channelElementType(t ir.Type) Type {
+	if nt, ok := t.(*ir.NamedType); ok && len(nt.Args) >= 1 {
+		return nt.Args[0]
+	}
+	return ir.ErrTypeVal
 }
 
 // isScalarPayload reports whether a type is a primitive/scalar shape

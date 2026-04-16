@@ -1166,3 +1166,348 @@ func TestLowerIfLetOption(t *testing.T) {
 		t.Fatalf("expected switchInt for if-let, got:\n%s", text)
 	}
 }
+
+// ==== Stage 2b: concurrency ====
+
+// threadUse builds a `use std.thread as thread` decl; most
+// concurrency tests start with it so the alias is registered in the
+// lowerer's useAliases index.
+func threadUse() *ir.UseDecl {
+	return &ir.UseDecl{
+		Path:    []string{"std", "thread"},
+		RawPath: "std.thread",
+		Alias:   "thread",
+	}
+}
+
+func TestLowerChanSendStmt(t *testing.T) {
+	// fn push(ch: Channel<Int>, value: Int) { ch <- value }
+	chanInt := &ir.NamedType{Name: "Channel", Args: []ir.Type{ir.TInt}}
+	fn := &ir.FnDecl{
+		Name:   "push",
+		Return: ir.TUnit,
+		Params: []*ir.Param{
+			{Name: "ch", Type: chanInt},
+			{Name: "value", Type: ir.TInt},
+		},
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.ChanSendStmt{
+					Channel: &ir.Ident{Name: "ch", Kind: ir.IdentParam, T: chanInt},
+					Value:   &ir.Ident{Name: "value", Kind: ir.IdentParam, T: ir.TInt},
+				},
+			},
+		},
+	}
+	mod := lowerHIR(t, fn)
+	text := Print(mod)
+	if !strings.Contains(text, "intrinsic chan_send(_1, _2)") {
+		t.Fatalf("expected chan_send intrinsic, got:\n%s", text)
+	}
+}
+
+func TestLowerChannelRecvMethod(t *testing.T) {
+	// fn pop(ch: Channel<Int>) -> Int? { ch.recv() }
+	chanInt := &ir.NamedType{Name: "Channel", Args: []ir.Type{ir.TInt}}
+	optInt := &ir.OptionalType{Inner: ir.TInt}
+	fn := &ir.FnDecl{
+		Name:   "pop",
+		Return: optInt,
+		Params: []*ir.Param{{Name: "ch", Type: chanInt}},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "ch", Kind: ir.IdentParam, T: chanInt},
+				Name:     "recv",
+				T:        optInt,
+			},
+		},
+	}
+	mod := lowerHIR(t, fn)
+	text := Print(mod)
+	if !strings.Contains(text, "intrinsic chan_recv(_1)") {
+		t.Fatalf("expected chan_recv intrinsic, got:\n%s", text)
+	}
+}
+
+func TestLowerChannelCloseMethod(t *testing.T) {
+	chanInt := &ir.NamedType{Name: "Channel", Args: []ir.Type{ir.TInt}}
+	fn := &ir.FnDecl{
+		Name:   "shut",
+		Return: ir.TUnit,
+		Params: []*ir.Param{{Name: "ch", Type: chanInt}},
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.ExprStmt{X: &ir.MethodCall{
+					Receiver: &ir.Ident{Name: "ch", Kind: ir.IdentParam, T: chanInt},
+					Name:     "close",
+					T:        ir.TUnit,
+				}},
+			},
+		},
+	}
+	mod := lowerHIR(t, fn)
+	text := Print(mod)
+	if !strings.Contains(text, "intrinsic chan_close(_1)") {
+		t.Fatalf("expected chan_close intrinsic, got:\n%s", text)
+	}
+}
+
+func TestLowerThreadChanMake(t *testing.T) {
+	// use std.thread as thread
+	// fn make() -> Channel<Int> { thread.chan::<Int>(10) }
+	chanInt := &ir.NamedType{Name: "Channel", Args: []ir.Type{ir.TInt}}
+	fn := &ir.FnDecl{
+		Name:   "make",
+		Return: chanInt,
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "thread"},
+				Name:     "chan",
+				TypeArgs: []ir.Type{ir.TInt},
+				Args: []ir.Arg{
+					{Value: &ir.IntLit{Text: "10", T: ir.TInt}},
+				},
+				T: chanInt,
+			},
+		},
+	}
+	mod := &ir.Module{Package: "main", Decls: []ir.Decl{threadUse(), fn}}
+	out := Lower(mod)
+	if errs := Validate(out); len(errs) > 0 {
+		t.Fatalf("validate: %v\n\n%s", errs, Print(out))
+	}
+	text := Print(out)
+	if !strings.Contains(text, "intrinsic chan_make(const 10 Int)") {
+		t.Fatalf("expected chan_make intrinsic, got:\n%s", text)
+	}
+}
+
+func TestLowerThreadSpawn(t *testing.T) {
+	// use std.thread as thread
+	// fn run(f: fn() -> Int) { thread.spawn(f) }
+	fnType := &ir.FnType{Return: ir.TInt}
+	handleT := &ir.NamedType{Name: "Handle", Args: []ir.Type{ir.TInt}}
+	fn := &ir.FnDecl{
+		Name:   "run",
+		Return: ir.TUnit,
+		Params: []*ir.Param{{Name: "f", Type: fnType}},
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.ExprStmt{X: &ir.MethodCall{
+					Receiver: &ir.Ident{Name: "thread"},
+					Name:     "spawn",
+					Args:     []ir.Arg{{Value: &ir.Ident{Name: "f", Kind: ir.IdentParam, T: fnType}}},
+					T:        handleT,
+				}},
+			},
+		},
+	}
+	mod := &ir.Module{Package: "main", Decls: []ir.Decl{threadUse(), fn}}
+	out := Lower(mod)
+	if errs := Validate(out); len(errs) > 0 {
+		t.Fatalf("validate: %v\n\n%s", errs, Print(out))
+	}
+	text := Print(out)
+	if !strings.Contains(text, "intrinsic spawn(_1)") {
+		t.Fatalf("expected spawn intrinsic, got:\n%s", text)
+	}
+}
+
+func TestLowerGroupSpawnMethod(t *testing.T) {
+	// Group.spawn() call — the receiver is a Group value, method
+	// "spawn". Expect IntrinsicSpawn with [group, closure].
+	groupT := &ir.NamedType{Name: "Group"}
+	fnType := &ir.FnType{Return: ir.TInt}
+	handleT := &ir.NamedType{Name: "Handle", Args: []ir.Type{ir.TInt}}
+	fn := &ir.FnDecl{
+		Name:   "launch",
+		Return: ir.TUnit,
+		Params: []*ir.Param{
+			{Name: "g", Type: groupT},
+			{Name: "f", Type: fnType},
+		},
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.ExprStmt{X: &ir.MethodCall{
+					Receiver: &ir.Ident{Name: "g", Kind: ir.IdentParam, T: groupT},
+					Name:     "spawn",
+					Args:     []ir.Arg{{Value: &ir.Ident{Name: "f", Kind: ir.IdentParam, T: fnType}}},
+					T:        handleT,
+				}},
+			},
+		},
+	}
+	mod := lowerHIR(t, fn)
+	text := Print(mod)
+	if !strings.Contains(text, "intrinsic spawn(_1, _2)") {
+		t.Fatalf("expected spawn intrinsic with [group, closure], got:\n%s", text)
+	}
+}
+
+func TestLowerHandleJoin(t *testing.T) {
+	// fn wait(h: Handle<Int>) -> Int { h.join() }
+	handleT := &ir.NamedType{Name: "Handle", Args: []ir.Type{ir.TInt}}
+	fn := &ir.FnDecl{
+		Name:   "wait",
+		Return: ir.TInt,
+		Params: []*ir.Param{{Name: "h", Type: handleT}},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "h", Kind: ir.IdentParam, T: handleT},
+				Name:     "join",
+				T:        ir.TInt,
+			},
+		},
+	}
+	mod := lowerHIR(t, fn)
+	text := Print(mod)
+	if !strings.Contains(text, "intrinsic handle_join(_1)") {
+		t.Fatalf("expected handle_join intrinsic, got:\n%s", text)
+	}
+}
+
+func TestLowerPreludeTaskGroup(t *testing.T) {
+	// fn run(f: fn(Group) -> Int) -> Int { taskGroup(f) }
+	groupT := &ir.NamedType{Name: "Group"}
+	closureT := &ir.FnType{Params: []ir.Type{groupT}, Return: ir.TInt}
+	fn := &ir.FnDecl{
+		Name:   "run",
+		Return: ir.TInt,
+		Params: []*ir.Param{{Name: "f", Type: closureT}},
+		Body: &ir.Block{
+			Result: &ir.CallExpr{
+				Callee: &ir.Ident{Name: "taskGroup", Kind: ir.IdentFn},
+				Args:   []ir.Arg{{Value: &ir.Ident{Name: "f", Kind: ir.IdentParam, T: closureT}}},
+				T:      ir.TInt,
+			},
+		},
+	}
+	mod := lowerHIR(t, fn)
+	text := Print(mod)
+	if !strings.Contains(text, "intrinsic task_group(_1)") {
+		t.Fatalf("expected task_group intrinsic, got:\n%s", text)
+	}
+}
+
+func TestLowerPreludeParallel(t *testing.T) {
+	// parallel(items, 4, f) — intrinsic with 3 args, positional.
+	listInt := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TInt}, Builtin: true}
+	fnType := &ir.FnType{Params: []ir.Type{ir.TInt}, Return: ir.TInt}
+	fn := &ir.FnDecl{
+		Name:   "compute",
+		Return: listInt,
+		Params: []*ir.Param{
+			{Name: "items", Type: listInt},
+			{Name: "f", Type: fnType},
+		},
+		Body: &ir.Block{
+			Result: &ir.CallExpr{
+				Callee: &ir.Ident{Name: "parallel", Kind: ir.IdentFn},
+				Args: []ir.Arg{
+					{Value: &ir.Ident{Name: "items", Kind: ir.IdentParam, T: listInt}},
+					{Value: &ir.IntLit{Text: "4", T: ir.TInt}},
+					{Value: &ir.Ident{Name: "f", Kind: ir.IdentParam, T: fnType}},
+				},
+				T: listInt,
+			},
+		},
+	}
+	mod := lowerHIR(t, fn)
+	text := Print(mod)
+	if !strings.Contains(text, "intrinsic parallel(_1, const 4 Int, _2)") {
+		t.Fatalf("expected parallel intrinsic, got:\n%s", text)
+	}
+}
+
+func TestLowerThreadCancellationHelpers(t *testing.T) {
+	// fn check() -> Bool { thread.isCancelled() }
+	fn := &ir.FnDecl{
+		Name:   "check",
+		Return: ir.TBool,
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "thread"},
+				Name:     "isCancelled",
+				T:        ir.TBool,
+			},
+		},
+	}
+	mod := &ir.Module{Package: "main", Decls: []ir.Decl{threadUse(), fn}}
+	out := Lower(mod)
+	if errs := Validate(out); len(errs) > 0 {
+		t.Fatalf("validate: %v\n\n%s", errs, Print(out))
+	}
+	text := Print(out)
+	if !strings.Contains(text, "intrinsic is_cancelled()") {
+		t.Fatalf("expected is_cancelled intrinsic, got:\n%s", text)
+	}
+}
+
+func TestLowerForInChannel(t *testing.T) {
+	// use std.thread
+	// fn drain(ch: Channel<Int>) { for x in ch { println(x) } }
+	chanInt := &ir.NamedType{Name: "Channel", Args: []ir.Type{ir.TInt}}
+	fn := &ir.FnDecl{
+		Name:   "drain",
+		Return: ir.TUnit,
+		Params: []*ir.Param{{Name: "ch", Type: chanInt}},
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.ForStmt{
+					Kind: ir.ForIn,
+					Var:  "x",
+					Iter: &ir.Ident{Name: "ch", Kind: ir.IdentParam, T: chanInt},
+					Body: &ir.Block{
+						Stmts: []ir.Stmt{
+							&ir.ExprStmt{X: &ir.IntrinsicCall{
+								Kind: ir.IntrinsicPrintln,
+								Args: []ir.Arg{{Value: &ir.Ident{Name: "x", Kind: ir.IdentLocal, T: ir.TInt}}},
+							}},
+						},
+					},
+				},
+			},
+		},
+	}
+	mod := lowerHIR(t, fn)
+	text := Print(mod)
+	if !strings.Contains(text, "intrinsic chan_recv(") {
+		t.Fatalf("expected chan_recv intrinsic in for-in, got:\n%s", text)
+	}
+	if !strings.Contains(text, "switchInt ") {
+		t.Fatalf("expected switchInt (Some vs None) for recv loop, got:\n%s", text)
+	}
+}
+
+// Regression: package-qualified `thread.chan` must go to the intrinsic
+// path, NOT to the plain qualified-call path that Stage 2a shipped.
+// Without the Stage 2b intrinsic fast-path, it would lower as
+// `call std.thread.chan(const 10 Int)` — useless to the backend.
+func TestLowerThreadChanIsIntrinsicNotCall(t *testing.T) {
+	chanInt := &ir.NamedType{Name: "Channel", Args: []ir.Type{ir.TInt}}
+	fn := &ir.FnDecl{
+		Name:   "make",
+		Return: chanInt,
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "thread"},
+				Name:     "chan",
+				TypeArgs: []ir.Type{ir.TInt},
+				Args:     []ir.Arg{{Value: &ir.IntLit{Text: "10", T: ir.TInt}}},
+				T:        chanInt,
+			},
+		},
+	}
+	mod := &ir.Module{Package: "main", Decls: []ir.Decl{threadUse(), fn}}
+	out := Lower(mod)
+	if errs := Validate(out); len(errs) > 0 {
+		t.Fatalf("validate: %v\n\n%s", errs, Print(out))
+	}
+	text := Print(out)
+	if strings.Contains(text, "call std.thread.chan") || strings.Contains(text, "call thread.chan") {
+		t.Fatalf("thread.chan must lower as an intrinsic, not a qualified call:\n%s", text)
+	}
+	if !strings.Contains(text, "intrinsic chan_make") {
+		t.Fatalf("expected chan_make intrinsic, got:\n%s", text)
+	}
+}
