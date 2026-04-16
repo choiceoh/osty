@@ -1265,6 +1265,12 @@ fn testHardeningReportAuditsBarriersAndBudgets() {
     testing.assert(report.barrierAuditPassed)
     testing.assert(report.performancePassed)
     testing.assertEq(report.runtimeContractVersion, 1)
+    testing.assertEq(report.heapReadinessScore, 100)
+    testing.assertEq(report.barrierReadinessScore, 100)
+    testing.assertEq(report.performanceReadinessScore, 100)
+    testing.assertEq(report.contractReadinessScore, 100)
+    testing.assertEq(report.readinessScore, 100)
+    testing.assertEq(report.readinessBand, GcReadinessHardened)
     testing.assertEq(report.loweredSlots, 1)
 
     let contract = heap.runtimeContract()
@@ -1309,6 +1315,12 @@ fn testHardeningReportFailsOnLoweredSlotMismatch() {
     testing.assert(!(report.heapValid))
     testing.assert(!(report.barrierAuditPassed))
     testing.assert(report.performancePassed)
+    testing.assertEq(report.heapReadinessScore, 0)
+    testing.assertEq(report.barrierReadinessScore, 70)
+    testing.assertEq(report.performanceReadinessScore, 100)
+    testing.assertEq(report.contractReadinessScore, 100)
+    testing.assertEq(report.readinessScore, 49)
+    testing.assertEq(report.readinessBand, GcReadinessBlocked)
     testing.assertEq(report.loweredSlots, 1)
     testing.assert(report.validationMessage != "")
 }
@@ -1347,6 +1359,12 @@ fn testHardeningReportFailsOnInvalidLoweredObjectReference() {
     testing.assert(!(report.heapValid))
     testing.assert(!(report.barrierAuditPassed))
     testing.assert(report.performancePassed)
+    testing.assertEq(report.heapReadinessScore, 0)
+    testing.assertEq(report.barrierReadinessScore, 60)
+    testing.assertEq(report.performanceReadinessScore, 100)
+    testing.assertEq(report.contractReadinessScore, 100)
+    testing.assertEq(report.readinessScore, 49)
+    testing.assertEq(report.readinessBand, GcReadinessBlocked)
     testing.assertEq(report.loweredSlots, 1)
     testing.assert(report.validationMessage != "")
 }
@@ -1380,6 +1398,12 @@ fn testBarrierAuditDetectsRememberedMismatch() {
     testing.assert(!(report.heapValid))
     testing.assert(!(report.barrierAuditPassed))
     testing.assert(report.performancePassed)
+    testing.assertEq(report.heapReadinessScore, 0)
+    testing.assertEq(report.barrierReadinessScore, 70)
+    testing.assertEq(report.performanceReadinessScore, 100)
+    testing.assertEq(report.contractReadinessScore, 100)
+    testing.assertEq(report.readinessScore, 49)
+    testing.assertEq(report.readinessBand, GcReadinessBlocked)
 }
 
 fn testHardeningReportFailsPerformanceThresholds() {
@@ -1413,6 +1437,12 @@ fn testHardeningReportFailsPerformanceThresholds() {
     testing.assert(report.heapValid)
     testing.assert(report.barrierAuditPassed)
     testing.assert(!(report.performancePassed))
+    testing.assertEq(report.heapReadinessScore, 100)
+    testing.assertEq(report.barrierReadinessScore, 100)
+    testing.assertEq(report.performanceReadinessScore, 80)
+    testing.assertEq(report.contractReadinessScore, 100)
+    testing.assertEq(report.readinessScore, 74)
+    testing.assertEq(report.readinessBand, GcReadinessExperimental)
 }
 fn testLlvmHandleTablePreservesIdentityAcrossCompaction() {
     let mut heap = newGcHeap(testGcConfig())
