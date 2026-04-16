@@ -20,7 +20,8 @@ the compiler evolves.
   tests for SemVer, registry selection, manifest validation, diagnostics,
   package archive classification, a pure Osty semantic IR bridge,
   Osty-written linter and resolver cores, the shared self-hosted checker
-  through a thin package bridge, plus the pure Osty formatter.
+  through a thin package bridge, pure Osty formatter, and self-hosted
+  doc generator.
 - `stdlib-tour`: front-end checked package that demonstrates Tier 1
   standard-library imports and Result-style error flow.
 - `workspace`: virtual workspace with two member packages and a
