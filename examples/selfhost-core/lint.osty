@@ -675,6 +675,7 @@ fn selfLintAstCheckFunction(
     if node.right >= 0 {
         out = selfLintAstCheckFunctionScopes(file, node, out)
         out = selfLintAstCheckBlockUsage(file, node.right, resolved, out)
+        out = selfLintAstCheckDeadStore(file, node.right, resolved, out)
         out = selfLintAstCheckDeadCode(file, node.right, out)
         out = selfLintAstCheckFlow(file, node.right, out)
         out = selfLintAstCheckSimplifyNode(file, node.right, resolved, out)
@@ -1037,6 +1038,260 @@ fn selfLintAstUnusedMutFix(file: AstFile, stmt: AstNode, item: SelfLintName) -> 
         return selfLintFix(stmt.start + 1, item.start + 1, item.name, "remove `mut`")
     }
     selfLintFix(stmt.start + 1, stmt.start + 2, "", "remove `mut`")
+}
+
+/// SelfLintPending tracks one `let mut x = E` whose initial value has not
+/// yet been observed. When the same block reassigns `x` without an
+/// intervening read, the initial store is dead and L0008 fires.
+struct SelfLintPending {
+    name: String,
+    nameStart: Int,
+    nameEnd: Int,
+    nameNode: Int,
+    initStart: Int,
+    initEnd: Int,
+    active: Bool,
+}
+
+fn selfLintAstCheckDeadStore(
+    file: AstFile,
+    idx: Int,
+    resolved: SelfResolveResult,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    if idx < 0 {
+        return report
+    }
+    let node = selfLintAstNode(file, idx)
+    let mut out = report
+    if node.kind == AstNBlock {
+        out = selfLintAstCheckBlockDeadStore(file, idx, resolved, out)
+    }
+    out = selfLintAstCheckDeadStore(file, node.left, resolved, out)
+    out = selfLintAstCheckDeadStore(file, node.right, resolved, out)
+    for child in node.children {
+        out = selfLintAstCheckDeadStore(file, child, resolved, out)
+    }
+    for child in node.children2 {
+        out = selfLintAstCheckDeadStore(file, child, resolved, out)
+    }
+    out
+}
+
+fn selfLintAstCheckBlockDeadStore(
+    file: AstFile,
+    blockIdx: Int,
+    resolved: SelfResolveResult,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    let block = selfLintAstNode(file, blockIdx)
+    if block.kind != AstNBlock {
+        return report
+    }
+    let mut out = report
+    let mut pending: List<SelfLintPending> = []
+    for stmtIdx in block.children {
+        let stmt = selfLintAstNode(file, stmtIdx)
+        if stmt.kind == AstNLet {
+            if stmt.right >= 0 {
+                pending = selfLintClearPendingByExprReads(file, stmt.right, pending, resolved)
+            }
+            if stmt.flags == 1 {
+                let names = selfLintAstPatternNames(file, stmt.left, [])
+                for item in names {
+                    if !(selfLintIsIntentionalDiscard(item.name)) {
+                        pending.push(SelfLintPending {
+                            name: item.name,
+                            nameStart: item.start,
+                            nameEnd: item.end,
+                            nameNode: item.node,
+                            initStart: stmt.start,
+                            initEnd: stmt.end,
+                            active: true,
+                        })
+                    }
+                }
+            }
+        } else if stmt.kind == AstNAssign && stmt.op == FrontAssign {
+            let targetNode = selfLintAstNode(file, stmt.left)
+            if targetNode.kind == AstNIdent {
+                pending = selfLintClearPendingByExprReads(file, stmt.right, pending, resolved)
+                let result = selfLintEmitDeadStores(out, pending, stmt.left, resolved)
+                out = result.report
+                pending = result.pending
+            } else {
+                pending = selfLintClearPendingByWriteTargetReads(file, stmt.left, pending, resolved)
+                pending = selfLintClearPendingByExprReads(file, stmt.right, pending, resolved)
+            }
+        } else {
+            pending = selfLintClearPendingByStmtReads(file, stmtIdx, pending, resolved)
+        }
+    }
+    out
+}
+
+struct SelfLintDeadStoreResult {
+    report: SelfLintReport,
+    pending: List<SelfLintPending>,
+}
+
+fn selfLintEmitDeadStores(
+    report: SelfLintReport,
+    pending: List<SelfLintPending>,
+    targetIdx: Int,
+    resolved: SelfResolveResult,
+) -> SelfLintDeadStoreResult {
+    let mut out = report
+    let mut next: List<SelfLintPending> = []
+    for entry in pending {
+        let mut copy = entry
+        if entry.active && selfResolveRefNodeTargets(
+            resolved,
+            targetIdx,
+            entry.name,
+            entry.nameStart,
+            entry.nameEnd,
+            entry.nameNode,
+        ) {
+            out = selfLintEmitAtNode(
+                out,
+                "L0008",
+                "value of `{entry.name}` is overwritten before being read",
+                entry.name,
+                entry.initStart,
+                entry.initEnd,
+                entry.nameNode,
+            )
+            copy.active = false
+        }
+        next.push(copy)
+    }
+    SelfLintDeadStoreResult { report: out, pending: next }
+}
+
+fn selfLintClearPendingByStmtReads(
+    file: AstFile,
+    stmtIdx: Int,
+    pending: List<SelfLintPending>,
+    resolved: SelfResolveResult,
+) -> List<SelfLintPending> {
+    let mut out: List<SelfLintPending> = []
+    for entry in pending {
+        let mut copy = entry
+        if entry.active && selfLintAstReadsBindingInExpr(file, stmtIdx, entry, resolved) {
+            copy.active = false
+        }
+        out.push(copy)
+    }
+    out
+}
+
+fn selfLintClearPendingByExprReads(
+    file: AstFile,
+    idx: Int,
+    pending: List<SelfLintPending>,
+    resolved: SelfResolveResult,
+) -> List<SelfLintPending> {
+    let mut out: List<SelfLintPending> = []
+    for entry in pending {
+        let mut copy = entry
+        if entry.active && selfLintAstReadsBindingInExpr(file, idx, entry, resolved) {
+            copy.active = false
+        }
+        out.push(copy)
+    }
+    out
+}
+
+fn selfLintClearPendingByWriteTargetReads(
+    file: AstFile,
+    idx: Int,
+    pending: List<SelfLintPending>,
+    resolved: SelfResolveResult,
+) -> List<SelfLintPending> {
+    let mut out: List<SelfLintPending> = []
+    for entry in pending {
+        let mut copy = entry
+        if entry.active && selfLintAstReadsBindingInWriteTarget(file, idx, entry, resolved) {
+            copy.active = false
+        }
+        out.push(copy)
+    }
+    out
+}
+
+/// selfLintAstReadsBindingInExpr returns true when any identifier inside
+/// `idx` resolves to `entry`'s binding. Treats the LHS of nested
+/// AstNAssign nodes as a write target so plain `x = E` is not counted as
+/// a read of `x`, while `x.field = E` and `x[i] = E` still are.
+fn selfLintAstReadsBindingInExpr(
+    file: AstFile,
+    idx: Int,
+    entry: SelfLintPending,
+    resolved: SelfResolveResult,
+) -> Bool {
+    if idx < 0 {
+        return false
+    }
+    let node = selfLintAstNode(file, idx)
+    if node.kind == AstNIdent {
+        return selfResolveRefNodeTargets(
+            resolved,
+            idx,
+            entry.name,
+            entry.nameStart,
+            entry.nameEnd,
+            entry.nameNode,
+        )
+    }
+    if node.kind == AstNAssign {
+        if selfLintAstReadsBindingInWriteTarget(file, node.left, entry, resolved) {
+            return true
+        }
+        return selfLintAstReadsBindingInExpr(file, node.right, entry, resolved)
+    }
+    if node.kind == AstNLet {
+        return selfLintAstReadsBindingInExpr(file, node.right, entry, resolved)
+    }
+    if selfLintAstReadsBindingInExpr(file, node.left, entry, resolved) {
+        return true
+    }
+    if selfLintAstReadsBindingInExpr(file, node.right, entry, resolved) {
+        return true
+    }
+    for child in node.children {
+        if selfLintAstReadsBindingInExpr(file, child, entry, resolved) {
+            return true
+        }
+    }
+    for child in node.children2 {
+        if selfLintAstReadsBindingInExpr(file, child, entry, resolved) {
+            return true
+        }
+    }
+    false
+}
+
+/// selfLintAstReadsBindingInWriteTarget treats `x` in `x = E` as a write,
+/// not a read. But `x.field = E` and `x[i] = E` do read `x` to access the
+/// field/element, so we descend into those carriers as ordinary reads.
+fn selfLintAstReadsBindingInWriteTarget(
+    file: AstFile,
+    idx: Int,
+    entry: SelfLintPending,
+    resolved: SelfResolveResult,
+) -> Bool {
+    if idx < 0 {
+        return false
+    }
+    let node = selfLintAstNode(file, idx)
+    if node.kind == AstNIdent {
+        return false
+    }
+    if node.kind == AstNParen {
+        return selfLintAstReadsBindingInWriteTarget(file, node.left, entry, resolved)
+    }
+    selfLintAstReadsBindingInExpr(file, idx, entry, resolved)
 }
 
 fn selfLintAstCheckUsageInNode(
