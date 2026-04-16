@@ -13,6 +13,11 @@ The source of truth is:
 - `examples/dogfood/checker.osty`
 - `internal/selfhost/ast_lower.osty`
 
+`examples/selfhost-core/check.osty` is intentionally a symlink to the dogfood
+checker. `examples/selfhost-core/check_bridge.osty` supplies only the small
+lexer/parser adapter needed by that package, so the self-hosted checker logic
+has one implementation.
+
 Regenerate the Go bridge with:
 
 ```sh

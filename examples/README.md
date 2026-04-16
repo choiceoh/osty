@@ -28,8 +28,8 @@ the compiler evolves.
   runnable lexer scanner, front-end seed models, and broad example-style
   tests for SemVer, registry selection, manifest features, diagnostics,
   package archive classification, a pure Osty semantic IR bridge,
-  Osty-written linter, resolver, and checker cores, plus the pure Osty
-  formatter.
+  Osty-written linter and resolver cores, the shared dogfood checker
+  through a thin package bridge, plus the pure Osty formatter.
 - `stdlib-tour`: front-end checked package that demonstrates Tier 1
   standard-library imports and Result-style error flow.
 - `workspace`: virtual workspace with two member packages and a
