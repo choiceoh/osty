@@ -16,15 +16,12 @@ func firstBackendWarning(r *backend.Result) error {
 }
 
 func defaultBackendName() string {
-	return backend.NameGo.String()
+	return backend.NameLLVM.String()
 }
 
 func defaultEmitMode(tool string, name backend.Name) backend.EmitMode {
 	if tool == "gen" || tool == "pipeline" {
-		if name == backend.NameLLVM {
-			return backend.EmitLLVMIR
-		}
-		return backend.EmitGoSource
+		return backend.EmitLLVMIR
 	}
 	return backend.EmitBinary
 }
@@ -33,6 +30,9 @@ func parseCLIBackend(raw string) (backend.Name, error) {
 	name, err := backend.ParseName(raw)
 	if err != nil {
 		return "", err
+	}
+	if name == backend.NameGo && !allowGoBackend {
+		return "", fmt.Errorf("backend %q has been removed from the public compiler path; use %q", name, backend.NameLLVM)
 	}
 	return name, nil
 }
@@ -50,6 +50,9 @@ func validateCLIEmit(tool string, name backend.Name, mode backend.EmitMode) erro
 	case "gen", "pipeline":
 		switch name {
 		case backend.NameGo:
+			if !allowGoBackend {
+				return fmt.Errorf("backend %q has been removed from the public compiler path; use %q", name, backend.NameLLVM)
+			}
 			if mode != backend.EmitGoSource {
 				return fmt.Errorf("%s with backend %q cannot emit %q (want %q)", tool, name, mode, backend.EmitGoSource)
 			}

@@ -42,6 +42,9 @@ func UseKey(u *ast.UseDecl) string {
 	if u == nil {
 		return ""
 	}
+	if u.IsFFI() {
+		return ""
+	}
 	if u.RawPath != "" && strings.ContainsAny(u.RawPath, "/") {
 		return u.RawPath
 	}

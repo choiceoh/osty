@@ -350,8 +350,8 @@ func useAlias(u *ast.UseDecl) string {
 	if u.Alias != "" {
 		return u.Alias
 	}
-	if u.IsGoFFI {
-		return lastSegment(u.GoPath, '/')
+	if u.IsFFI() {
+		return lastSegment(lastSegment(u.FFIPath(), '/'), '.')
 	}
 	if u.RawPath != "" && strings.ContainsAny(u.RawPath, "/") {
 		return lastSegment(u.RawPath, '/')

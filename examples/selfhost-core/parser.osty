@@ -1,4 +1,4 @@
-use go "strings" as strings {
+use runtime.strings as strings {
     fn Join(elems: List<String>, sep: String) -> String
     fn Split(s: String, sep: String) -> List<String>
     fn Repeat(s: String, count: Int) -> String

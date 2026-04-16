@@ -1,6 +1,6 @@
 use std.testing
 
-use go "strings" as llvmTestStrings {
+use runtime.strings as llvmTestStrings {
     fn Contains(s: String, substr: String) -> Bool
     fn Join(elems: List<String>, sep: String) -> String
 }
@@ -189,13 +189,19 @@ fn testLlvmExecutableCorpusPlanIsOstyOwned() {
 fn testLlvmUnsupportedDiagnosticPolicyIsOstyOwned() {
     let goFfi = llvmUnsupportedDiagnostic("go-ffi", "strings")
     testing.assert(goFfi.code == "LLVM001")
-    testing.assert(goFfi.kind == "go-only")
-    assertLlvmContains(goFfi.message, "use go \"strings\"")
-    assertLlvmContains(goFfi.message, "Go backend")
-    assertLlvmContains(goFfi.hint, "--backend=go")
+    testing.assert(goFfi.kind == "foreign-ffi")
+    assertLlvmContains(goFfi.message, "Go FFI import strings")
+    assertLlvmContains(goFfi.message, "self-hosted native backend")
+    assertLlvmContains(goFfi.hint, "Osty runtime FFI")
     let summary = llvmUnsupportedSummary(goFfi)
-    assertLlvmContains(summary, "LLVM001 go-only")
+    assertLlvmContains(summary, "LLVM001 foreign-ffi")
     assertLlvmContains(summary, "hint:")
+
+    let runtimeFfi = llvmUnsupportedDiagnostic("runtime-ffi", "runtime.strings")
+    testing.assert(runtimeFfi.code == "LLVM002")
+    testing.assert(runtimeFfi.kind == "runtime-ffi")
+    assertLlvmContains(runtimeFfi.message, "Osty runtime FFI import runtime.strings")
+    assertLlvmContains(runtimeFfi.hint, "runtime ABI shim")
 
     let fallback = llvmUnsupportedDiagnostic("unknown", "custom reason")
     testing.assert(fallback.code == "LLVM000")

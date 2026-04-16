@@ -41,7 +41,7 @@ func (l Layout) CachePath(n Name) string {
 	return filepath.Join(l.CacheRoot(), n.String()+".json")
 }
 
-// LegacyCachePath returns the current Go-only fingerprint path. It exists so
+// LegacyCachePath returns the pre-backend-aware fingerprint path. It exists so
 // the migration can read or retire old cache files deliberately.
 func (l Layout) LegacyCachePath() string {
 	return profile.LegacyCachePath(l.Root, l.Profile, l.Target)

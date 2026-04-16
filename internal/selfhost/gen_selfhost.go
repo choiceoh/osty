@@ -28,7 +28,7 @@ var sourceFiles = []string{
 
 const mergedPath = "/tmp/selfhost_merged.osty"
 
-const stringsPrelude = `use go "strings" as strings {
+const stringsPrelude = `use runtime.strings as strings {
     fn Count(s: String, substr: String) -> Int
     fn Fields(s: String) -> List<String>
     fn HasPrefix(s: String, prefix: String) -> Bool
@@ -66,7 +66,7 @@ func run() error {
 	defer os.Remove(mergedPath)
 
 	outPath := filepath.Join(root, "internal/selfhost/generated.go")
-	cmd := exec.Command("go", "run", "-tags", "selfhostgen", "./cmd/osty", "gen", "--package", "selfhost", "-o", outPath, mergedPath)
+	cmd := exec.Command("go", "run", "-tags", "selfhostgen", "./cmd/osty", "gen", "--backend", "go", "--emit", "go", "--package", "selfhost", "-o", outPath, mergedPath)
 	cmd.Dir = root
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -116,7 +116,7 @@ func mergedSource(root string) ([]byte, error) {
 }
 
 func stripLeadingStringsUse(src string) string {
-	const prefix = `use go "strings" as strings {`
+	const prefix = `use runtime.strings as strings {`
 	if !strings.HasPrefix(strings.TrimLeft(src, "\ufeff \t\r\n"), prefix) {
 		return src
 	}

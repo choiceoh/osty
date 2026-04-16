@@ -108,7 +108,7 @@ func (v *validator) validateDecl(d Decl) {
 			v.validateExpr(d.Value)
 		}
 	case *UseDecl:
-		if d.Alias == "" && !d.IsGoFFI {
+		if d.Alias == "" && !d.IsFFI() {
 			v.addf("use: empty Alias")
 		}
 	}

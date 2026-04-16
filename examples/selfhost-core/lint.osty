@@ -1,4 +1,4 @@
-use go "strings" as strings {
+use runtime.strings as strings {
     fn Contains(s: String, substr: String) -> Bool
     fn HasPrefix(s: String, prefix: String) -> Bool
     fn Join(elems: List<String>, sep: String) -> String

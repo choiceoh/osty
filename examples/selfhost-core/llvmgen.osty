@@ -1,4 +1,4 @@
-use go "strings" as llvmStrings {
+use runtime.strings as llvmStrings {
     fn Join(elems: List<String>, sep: String) -> String
     fn Split(s: String, sep: String) -> List<String>
 }
@@ -644,9 +644,21 @@ pub fn llvmUnsupportedDiagnostic(kind: String, detail: String) -> LlvmUnsupporte
         }
         return LlvmUnsupportedDiagnostic {
             code: "LLVM001",
-            kind: "go-only",
-            message: "use go \"{target}\" is only supported by the Go backend",
-            hint: "use --backend=go or replace it with a native/runtime binding before using --backend=llvm",
+            kind: "foreign-ffi",
+            message: "Go FFI import {target} is not supported by the self-hosted native backend",
+            hint: "replace it with an Osty runtime FFI binding before using the native backend",
+        }
+    }
+    if kind == "runtime-ffi" {
+        let mut target = detail
+        if target == "" {
+            target = "<unknown>"
+        }
+        return LlvmUnsupportedDiagnostic {
+            code: "LLVM002",
+            kind: "runtime-ffi",
+            message: "Osty runtime FFI import {target} needs native runtime lowering",
+            hint: "add the runtime ABI shim and lowering before compiling this source natively",
         }
     }
 
@@ -723,7 +735,7 @@ pub fn llvmUnsupportedDiagnostic(kind: String, detail: String) -> LlvmUnsupporte
         code: "LLVM000",
         kind: "unsupported-source",
         message: reason,
-        hint: "reduce the program to the LLVM smoke subset or keep using --backend=go for this source",
+        hint: "reduce the program to the LLVM smoke subset while the self-hosted native backend grows",
     }
 }
 

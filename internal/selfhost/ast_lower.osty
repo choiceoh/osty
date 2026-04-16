@@ -1,4 +1,4 @@
-use go "github.com/osty/osty/internal/selfhost/astbridge" as astbridge {
+use runtime.selfhost.astbridge as astbridge {
     struct File {}
     struct Decl {}
     struct FnDecl {}

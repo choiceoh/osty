@@ -254,10 +254,11 @@ func (r *resolver) emit(d *diag.Diagnostic) { r.diags = append(r.diags, d) }
 func (r *resolver) declareUse(u *ast.UseDecl) {
 	name := u.Alias
 	if name == "" {
-		// Default alias is the last path segment (or the Go path's basename
-		// for FFI). Per §5.2 / §12.1.
-		if u.IsGoFFI {
-			name = lastSeg(u.GoPath, '/')
+		// Default alias is the last path segment (or the FFI path's basename).
+		// Per §5.2 / §12.1.
+		if u.IsFFI() {
+			name = lastSeg(u.FFIPath(), '/')
+			name = lastSeg(name, '.')
 		} else if u.RawPath != "" && strings.Contains(u.RawPath, "/") {
 			name = lastSeg(u.RawPath, '/')
 		} else if len(u.Path) > 0 {
@@ -278,7 +279,7 @@ func (r *resolver) declareUse(u *ast.UseDecl) {
 	// attach the loaded Package to the symbol so member-access lookups
 	// (`pkg.Name`) can navigate to it. FFI imports stay opaque — they
 	// never point at an on-disk Osty package.
-	if !u.IsGoFFI && r.pkgScope != nil && r.pkg() != nil && r.pkg().workspace != nil {
+	if !u.IsFFI() && r.pkgScope != nil && r.pkg() != nil && r.pkg().workspace != nil {
 		targetPath := UseKey(u)
 		pkg, d := r.pkg().workspace.ResolveUseTarget(targetPath, u.PosV)
 		if d != nil {

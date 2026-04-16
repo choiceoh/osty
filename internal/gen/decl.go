@@ -439,8 +439,14 @@ func (g *gen) emitGenericParamList(params []*ast.GenericParam) {
 }
 
 func (g *gen) emitUseDecl(u *ast.UseDecl) {
-	if u.IsGoFFI {
-		// `use go "path" [as alias] { fn Foo(...); struct Bar { ... } }`
+	if u.IsFFI() {
+		importPath := u.GoPath
+		if u.IsRuntimeFFI {
+			importPath = runtimeFFIGoImport(u.RuntimePath)
+		}
+		// FFI declarations carry signatures in Osty source. The bootstrap Go
+		// emitter maps runtime FFI paths onto temporary host imports until the
+		// native runtime owns those calls.
 		//
 		// Emit a real Go import. When the Osty alias matches the Go
 		// package's default name (last path component), a bare import
@@ -452,18 +458,18 @@ func (g *gen) emitUseDecl(u *ast.UseDecl) {
 		// for it; call sites like `fmt.Println(x)` resolve to the real
 		// Go symbol via the package import.
 		alias := u.Alias
-		defaultAlias := lastPathComponent(u.GoPath)
+		defaultAlias := lastPathComponent(importPath)
 		if alias == "" {
 			alias = defaultAlias
 		}
 		if !g.aliasUsedAsSelector(alias) {
-			g.emitUseStub(alias, "struct{}{}", u.GoPath)
+			g.emitUseStub(alias, "struct{}{}", importPath)
 			return
 		}
 		if alias == defaultAlias {
-			g.use(u.GoPath)
+			g.use(importPath)
 		} else {
-			g.useAs(u.GoPath, alias)
+			g.useAs(importPath, alias)
 		}
 		return
 	}
@@ -1263,7 +1269,25 @@ func lastPathComponent(p string) string {
 	if i := strings.LastIndexByte(p, '/'); i >= 0 {
 		return p[i+1:]
 	}
+	if i := strings.LastIndexByte(p, '.'); i >= 0 {
+		return p[i+1:]
+	}
 	return p
+}
+
+func runtimeFFIGoImport(path string) string {
+	switch path {
+	case "runtime.strings":
+		return "strings"
+	case "runtime.path.filepath":
+		return "path/filepath"
+	case "runtime.net.http":
+		return "net/http"
+	case "runtime.selfhost.astbridge":
+		return "github.com/osty/osty/internal/selfhost/astbridge"
+	default:
+		return path
+	}
 }
 
 func useFullPath(u *ast.UseDecl) string {
@@ -1283,8 +1307,8 @@ func useDeclAlias(u *ast.UseDecl) string {
 	if u.Alias != "" {
 		return u.Alias
 	}
-	if u.IsGoFFI {
-		return lastPathComponent(u.GoPath)
+	if u.IsFFI() {
+		return lastPathComponent(u.FFIPath())
 	}
 	if u.RawPath != "" && strings.Contains(u.RawPath, "/") {
 		return lastPathComponent(u.RawPath)
