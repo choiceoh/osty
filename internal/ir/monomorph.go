@@ -38,21 +38,22 @@ func Monomorphize(mod *Module) (*Module, []error) {
 		return nil, nil
 	}
 	state := &monoState{
-		pkg:                  mod.Package,
-		out:                  &Module{Package: mod.Package, SpanV: mod.SpanV},
-		genericsByName:       map[string]*FnDecl{},
-		seen:                 map[string]string{},
-		genericStructsByName: map[string]*StructDecl{},
-		genericEnumsByName:   map[string]*EnumDecl{},
-		typeSeen:             map[string]string{},
-		structsByName:        map[string]*StructDecl{},
-		enumsByName:          map[string]*EnumDecl{},
-		structsByMangled:     map[string]*StructDecl{},
-		enumsByMangled:       map[string]*EnumDecl{},
-		originalStructOf:     map[string]*StructDecl{},
-		originalEnumOf:       map[string]*EnumDecl{},
-		receiverEnvOf:        map[string]SubstEnv{},
-		methodSeen:           map[string]string{},
+		pkg:                     mod.Package,
+		out:                     &Module{Package: mod.Package, SpanV: mod.SpanV},
+		genericsByName:          map[string]*FnDecl{},
+		seen:                    map[string]string{},
+		genericStructsByName:    map[string]*StructDecl{},
+		genericEnumsByName:      map[string]*EnumDecl{},
+		genericInterfacesByName: map[string]*InterfaceDecl{},
+		typeSeen:                map[string]string{},
+		structsByName:           map[string]*StructDecl{},
+		enumsByName:             map[string]*EnumDecl{},
+		structsByMangled:        map[string]*StructDecl{},
+		enumsByMangled:          map[string]*EnumDecl{},
+		originalStructOf:        map[string]*StructDecl{},
+		originalEnumOf:          map[string]*EnumDecl{},
+		receiverEnvOf:           map[string]SubstEnv{},
+		methodSeen:              map[string]string{},
 	}
 
 	// Pass 1: index every generic top-level declaration so the scanner
@@ -78,6 +79,10 @@ func Monomorphize(mod *Module) (*Module, []error) {
 			state.enumsByName[x.Name] = x
 			if len(x.Generics) > 0 {
 				state.genericEnumsByName[x.Name] = x
+			}
+		case *InterfaceDecl:
+			if len(x.Generics) > 0 {
+				state.genericInterfacesByName[x.Name] = x
 			}
 		}
 	}
@@ -152,6 +157,8 @@ func isGenericTopLevel(d Decl) bool {
 		return len(x.Generics) > 0
 	case *EnumDecl:
 		return len(x.Generics) > 0
+	case *InterfaceDecl:
+		return len(x.Generics) > 0
 	}
 	return false
 }
@@ -169,17 +176,18 @@ type monoState struct {
 	queue []monoInstance
 	errs  []error
 
-	// Phase 2: generic nominal-type bookkeeping.
+	// Phase 2/5: generic nominal-type bookkeeping.
 	//
-	// genericStructsByName / genericEnumsByName index the original
-	// generic declarations so scanning can recognize a generic
-	// NamedType reference by source name.
-	genericStructsByName map[string]*StructDecl
-	genericEnumsByName   map[string]*EnumDecl
+	// genericStructsByName / genericEnumsByName / genericInterfacesByName
+	// index the original generic declarations so scanning can recognize
+	// a generic NamedType reference by source name.
+	genericStructsByName    map[string]*StructDecl
+	genericEnumsByName      map[string]*EnumDecl
+	genericInterfacesByName map[string]*InterfaceDecl
 	// typeSeen maps a MonomorphTypeDedupeKey to the mangled type-symbol
 	// so duplicate requests short-circuit.
 	typeSeen map[string]string
-	// typeQueue is the worklist of pending struct/enum specializations.
+	// typeQueue is the worklist of pending struct/enum/interface specializations.
 	typeQueue []monoTypeInstance
 	// localTypeScopes tracks statement-local bindings while scanning a
 	// concrete function or script body so unresolved Idents can recover
@@ -240,15 +248,17 @@ type monoInstance struct {
 }
 
 // monoTypeInstance is one pending nominal-type specialization. Exactly
-// one of structDecl / enumDecl is non-nil; the other distinguishes the
-// emitter branch. typeArgs are the concrete types matching the
-// declaration's generics, and mangled is the `_ZTS…` symbol the engine
-// has already assigned and written to typeSeen.
+// one of structDecl / enumDecl / interfaceDecl is non-nil; the
+// populated slot distinguishes the emitter branch. typeArgs are the
+// concrete types matching the declaration's generics, and mangled is
+// the `_ZTS…` symbol the engine has already assigned and written to
+// typeSeen.
 type monoTypeInstance struct {
-	structDecl *StructDecl
-	enumDecl   *EnumDecl
-	typeArgs   []Type
-	mangled    string
+	structDecl    *StructDecl
+	enumDecl      *EnumDecl
+	interfaceDecl *InterfaceDecl
+	typeArgs      []Type
+	mangled       string
 }
 
 // addErr appends a non-fatal issue.
@@ -400,14 +410,78 @@ func (s *monoState) requestEnumType(decl *EnumDecl, typeArgs []Type) string {
 }
 
 // emitTypeSpecialization dispatches one queued nominal-type instance
-// to the appropriate struct/enum emitter.
+// to the appropriate struct/enum/interface emitter.
 func (s *monoState) emitTypeSpecialization(rec monoTypeInstance) {
 	switch {
 	case rec.structDecl != nil:
 		s.emitStructSpecialization(rec)
 	case rec.enumDecl != nil:
 		s.emitEnumSpecialization(rec)
+	case rec.interfaceDecl != nil:
+		s.emitInterfaceSpecialization(rec)
 	}
+}
+
+// requestInterfaceType is the interface counterpart of
+// requestStructType / requestEnumType.
+func (s *monoState) requestInterfaceType(decl *InterfaceDecl, typeArgs []Type) string {
+	if decl == nil {
+		return ""
+	}
+	if !MonomorphShouldInstantiate(len(typeArgs), len(decl.Generics)) {
+		s.addErr("monomorph: arity mismatch for interface %s: %d type args vs %d generics",
+			decl.Name, len(typeArgs), len(decl.Generics))
+		return ""
+	}
+	for i, ta := range typeArgs {
+		if containsTypeVar(ta) {
+			s.addErr("monomorph: type arg %d of interface %s still contains a type variable (%s)",
+				i, decl.Name, typeString(ta))
+			return ""
+		}
+	}
+	typeArgCodes := make([]string, len(typeArgs))
+	for i, ta := range typeArgs {
+		typeArgCodes[i] = typeCodeOf(ta, s.pkg)
+	}
+	key := MonomorphTypeDedupeKey(decl.Name, s.pkg, typeArgCodes)
+	if mangled, ok := s.typeSeen[key]; ok {
+		return mangled
+	}
+	req := NewMonomorphTypeRequest(s.pkg, decl.Name, typeArgCodes)
+	mangled := MonomorphMangleType(req).Symbol()
+	s.typeSeen[key] = mangled
+	s.typeQueue = append(s.typeQueue, monoTypeInstance{
+		interfaceDecl: decl,
+		typeArgs:      append([]Type(nil), typeArgs...),
+		mangled:       mangled,
+	})
+	return mangled
+}
+
+// emitInterfaceSpecialization materializes one queued interface
+// instance. Mirrors emitStructSpecialization: the interface is cloned,
+// Extends + method signatures are substituted, and the specialization
+// is appended to out.Decls. Method-local generic parameters on
+// interface methods are preserved as templates (matching struct/enum
+// policy); the Pass-6 cleanup strips them from the output.
+func (s *monoState) emitInterfaceSpecialization(rec monoTypeInstance) {
+	clone := cloneInterfaceDecl(rec.interfaceDecl)
+	clone.Name = rec.mangled
+	clone.Generics = nil
+	env := buildSubstEnv(rec.interfaceDecl.Generics, rec.typeArgs)
+	SubstituteTypes(clone, env)
+	for i, ext := range clone.Extends {
+		clone.Extends[i] = s.rewriteType(ext)
+	}
+	for _, m := range clone.Methods {
+		if m == nil || len(m.Generics) > 0 {
+			continue
+		}
+		s.rewriteFnSignature(m)
+		s.scanFnBody(m)
+	}
+	s.out.Decls = append(s.out.Decls, clone)
 }
 
 // emitStructSpecialization materializes one queued struct instance:
@@ -497,6 +571,11 @@ func (s *monoState) rewriteType(t Type) Type {
 		}
 		if ed, ok := s.genericEnumsByName[x.Name]; ok {
 			if mangled := s.requestEnumType(ed, x.Args); mangled != "" {
+				return &NamedType{Name: mangled}
+			}
+		}
+		if id, ok := s.genericInterfacesByName[x.Name]; ok {
+			if mangled := s.requestInterfaceType(id, x.Args); mangled != "" {
 				return &NamedType{Name: mangled}
 			}
 		}
@@ -888,6 +967,8 @@ func (s *monoState) dropPreservedGenericMethods() {
 		case *StructDecl:
 			x.Methods = filterOutGenericMethods(x.Methods)
 		case *EnumDecl:
+			x.Methods = filterOutGenericMethods(x.Methods)
+		case *InterfaceDecl:
 			x.Methods = filterOutGenericMethods(x.Methods)
 		}
 	}
