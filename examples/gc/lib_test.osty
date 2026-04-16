@@ -1316,6 +1316,49 @@ fn testLlvmRuntimeRootBridgeDropsReleasedRoots() {
     testing.assertEq(snapshot.staleHandleLoads, 1)
 }
 
+fn testLlvmPinnedRootReleaseClearsHandleAndObjectPinState() {
+    let mut heap = newGcHeap(testGcConfig())
+    let handle = heap.allocateLlvmHandle(GcRecord, 24, "llvm.pin")
+    let objectId = intOr(heap.llvmHandleObject(handle), -1)
+    let rootRef = intOr(heap.bindLlvmRootRef(handle, GcLlvmPinnedRoot, "pin.root"), -1)
+    assertValid(heap)
+
+    testing.assert(rootRef > 0)
+    testing.assertEq(heap.llvmPinnedHandleCount(), 1)
+    testing.assertEq(heap.pinnedObjectCount(), 1)
+    testing.assertEq(heap.llvmRuntimeRootCount(), 1)
+
+    testing.assert(heap.releaseLlvmRootRef(rootRef))
+    assertValid(heap)
+    testing.assertEq(heap.llvmLiveRootRefCount(), 0)
+    testing.assertEq(heap.llvmPinnedHandleCount(), 0)
+    testing.assertEq(heap.pinnedObjectCount(), 0)
+    testing.assertEq(heap.llvmRuntimeRootCount(), 0)
+
+    let _ = heap.majorCollect()
+    assertValid(heap)
+    testing.assert(!(heap.contains(objectId)))
+}
+
+fn testValidateHeapRejectsLlvmPinnedRootWithoutPinnedHandle() {
+    let mut heap = newGcHeap(testGcConfig())
+    let handle = heap.allocateLlvmHandle(GcRecord, 24, "llvm.pin-corrupt")
+    let rootRef = intOr(heap.bindLlvmRootRef(handle, GcLlvmPinnedRoot, "pin.corrupt"), -1)
+    assertValid(heap)
+
+    testing.assert(rootRef > 0)
+    if heap.llvmHandles.containsKey(handle) {
+        let entry = heap.llvmHandles[handle]
+        let mut next = entry
+        next.pinned = false
+        heap.llvmHandles.insert(handle, next)
+    } else {
+        testing.fail("missing llvm handle")
+    }
+
+    let _ = testing.expectError(heap.validateHeap())
+}
+
 fn testLoweredLlvmStoreTraceCallsWriteBarrier() {
     let mut heap = newGcHeap(testGcConfig())
     let ownerHandle = heap.allocateLlvmHandle(GcRecord, 16, "llvm.owner")
