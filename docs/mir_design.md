@@ -90,7 +90,7 @@ reason about generics.
 | Typed every node                 | yes                 | yes (with layout ids)|
 | Decision-tree pre-compilation    | yes                 | consumed by lowerer  |
 | Closure captures                 | yes (`Closure.Captures`) | lifted to top-level fn + `AggClosure` (Stage 2a) |
-| `defer` bodies                   | yes                 | function-scoped, replayed at every return edge (Stage 2a; inner-block scoping is Stage 2c) |
+| `defer` bodies                   | yes                 | per-block frames, replayed at every exit edge — block fall-through, return, `?`, `break`, `continue` (Stage 2c) |
 | Concurrency primitives           | yes                 | `IntrinsicInstr` set (Stage 2b)                      |
 | Compound & multi-target assign   | yes                 | expanded to `BinaryRV` / tuple destructure (Stage 2a) |
 | Top-level global read            | yes (`IdentGlobal`) | `GlobalRefRV` (Stage 2a)                              |
@@ -204,14 +204,19 @@ runtime symbol their target exposes. Kinds group into families:
   `IntrinsicHandleJoin`, `IntrinsicGroupCancel`,
   `IntrinsicGroupIsCancelled`.
 - **Concurrency — helpers**: `IntrinsicParallel`, `IntrinsicRace`,
-  `IntrinsicCollectAll`, `IntrinsicSelect`.
+  `IntrinsicCollectAll`, `IntrinsicSelect` (the outer `thread.select`
+  call), plus the per-arm intrinsics `IntrinsicSelectRecv`,
+  `IntrinsicSelectSend`, `IntrinsicSelectTimeout`,
+  `IntrinsicSelectDefault` for `s.recv`/`send`/`timeout`/`default`
+  inside the select closure.
 - **Concurrency — cancellation**: `IntrinsicIsCancelled`,
   `IntrinsicCheckCancelled`, `IntrinsicYield`, `IntrinsicSleep`.
 
 Intrinsics whose runtime ABI is "fire and forget" (`chan_send`,
-`chan_close`, `group_cancel`, `yield`) always carry a nil `Dest` —
-the lowerer drops the destination even when the call site was
-written in expression position.
+`chan_close`, `group_cancel`, `yield`, and all four
+`select_recv`/`send`/`timeout`/`default` arm registrations) always
+carry a nil `Dest` — the lowerer drops the destination even when the
+call site was written in expression position.
 
 `StorageLive` / `StorageDead` mark the live range of a local. Backends
 that do not care may ignore them; they exist so that future lifetime
@@ -355,9 +360,15 @@ a new one.
   `DecisionGuard.Cond == nil` chains to the next arm; `DecisionFail`
   becomes `Unreachable` when the original match was proven exhaustive
   and an explicit abort intrinsic otherwise.
-- `DeferStmt` is not lowered in Stage 1. The lowerer records a
-  non-fatal issue; callers that need full coverage fall back to the
-  HIR path.
+- `DeferStmt` registers its body with the innermost defer frame.
+  Frames are pushed/popped around every block-shaped scope. At each
+  control-flow exit the frames are replayed in LIFO:
+  - normal block fall-through replays only the top frame;
+  - `return` / `?` propagation / implicit unit fall-through replays
+    every frame;
+  - `break` and `continue` replay frames down to (inclusive of) the
+    enclosing loop body's frame, since each iteration enters the
+    body scope afresh.
 
 ### Expressions
 
@@ -558,9 +569,44 @@ MIR tests isolated from front-end churn.
     destination for those even when the call site was written in
     expression position.
 
-- **Stage 2c.** Inner-block defer scoping, closure-to-SSA captures
-  (upgrade `AggClosure` when borrow rules land), and the stdlib
-  intrinsic surface.
+- **Stage 2c (landed).** Inner-block defer scoping and the
+  `thread.select` arm expansion. Specifically:
+
+  - `bodyState.deferStack` is replaced by a stack of per-scope defer
+    *frames*. The function-level frame is seeded in `newBodyState`
+    and every block-containing lowerer (`lowerBlockStmt`,
+    `lowerIfStmt`/`lowerIfExprInto`, `lowerForInfinite` / `While` /
+    `Range` / `In` / `InChannel`, match-arm bodies, `if let` arms,
+    `lowerIfLetExprInto`, `lowerBlockExprInto`) pushes/pops its own
+    frame around the statements it emits. The replay rules are:
+    - Normal block fall-through replays the **top** frame before
+      popping.
+    - `return`, `?` propagation, the function's trailing expression,
+      and implicit unit fall-through all replay **every** frame in
+      LIFO.
+    - `break` and `continue` replay frames from the top down to and
+      *including* the enclosing loop body's frame, since each
+      iteration enters the body scope fresh. `loopFrame` records the
+      `deferDepth` captured right after the body frame is pushed.
+  - An inner-block defer no longer leaks into the enclosing
+    function's return — a regression test (`TestLowerDeferInner-
+    BlockDoesNotLeakToOuterReturn`) pins that invariant.
+  - `thread.select(|s| body)` arms are now distinguished by
+    receiver-type recognition. Method calls on a `Select` value —
+    `s.recv(ch, f)`, `s.send(ch, v, f)`, `s.timeout(d, f)`,
+    `s.default(f)` — lower to dedicated intrinsics
+    (`IntrinsicSelectRecv` / `Send` / `Timeout` / `Default`). All
+    four always carry `Dest: nil`, matching the Osty spec where
+    those builder methods are treated as fire-and-forget arm
+    registrations even though the surface signature returns
+    `Select`.
+
+  Closure-to-SSA captures are still deferred until the borrow rules
+  land in the language spec — `AggClosure` stays as-is for now and
+  will be upgraded once the spec stabilises. The stdlib intrinsic
+  surface beyond concurrency (list / string / map runtime entry
+  points) is also deferred; it needs its own table-driven design and
+  a separate review.
 
 - **Stage 3.** Introduce a new llvmgen entry point —
   `GenerateFromMIR(m *mir.Module, opts)` — that consumes MIR directly.

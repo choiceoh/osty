@@ -1511,3 +1511,289 @@ func TestLowerThreadChanIsIntrinsicNotCall(t *testing.T) {
 		t.Fatalf("expected chan_make intrinsic, got:\n%s", text)
 	}
 }
+
+// ==== Stage 2c: inner-block defer scoping ====
+
+// mkCallStmt is a tiny helper that wraps a print intrinsic in an
+// ExprStmt so tests can name defer bodies by their printed argument.
+func mkCallStmt(name string) ir.Stmt {
+	return &ir.ExprStmt{X: &ir.IntrinsicCall{
+		Kind: ir.IntrinsicPrintln,
+		Args: []ir.Arg{{Value: &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: name}}}}},
+	}}
+}
+
+func mkDefer(name string) *ir.DeferStmt {
+	return &ir.DeferStmt{Body: &ir.Block{Stmts: []ir.Stmt{mkCallStmt(name)}}}
+}
+
+// TestLowerDeferInnerBlockRunsAtBlockExit asserts that a defer
+// declared inside an inner `{ … }` block runs at that block's exit,
+// not only at the enclosing function's return.
+func TestLowerDeferInnerBlockRunsAtBlockExit(t *testing.T) {
+	// fn f() {
+	//   { defer inner(); body() }
+	//   after()
+	// }
+	// Expected order in the MIR dump: inner tag appears before after
+	// tag, because the inner block's defer replay happens before the
+	// function falls through to the `after()` call.
+	fn := mkFn("f", ir.TUnit, &ir.Block{
+		Stmts: []ir.Stmt{
+			&ir.Block{
+				Stmts: []ir.Stmt{
+					mkDefer("inner"),
+					mkCallStmt("body"),
+				},
+			},
+			mkCallStmt("after"),
+		},
+	})
+	mod := lowerHIR(t, fn)
+	text := Print(mod)
+	bodyI := strings.Index(text, `const "body"`)
+	innerI := strings.Index(text, `const "inner"`)
+	afterI := strings.Index(text, `const "after"`)
+	if bodyI < 0 || innerI < 0 || afterI < 0 {
+		t.Fatalf("expected body, inner, after in output:\n%s", text)
+	}
+	if !(bodyI < innerI && innerI < afterI) {
+		t.Fatalf("expected ordering body < inner < after, got %d/%d/%d:\n%s",
+			bodyI, innerI, afterI, text)
+	}
+}
+
+// TestLowerDeferMixedFunctionAndBlockScope confirms LIFO semantics
+// across an outer function-scoped defer and an inner block-scoped
+// defer. Both must replay; the inner one runs when its block exits,
+// the outer one runs at the function's return.
+func TestLowerDeferMixedFunctionAndBlockScope(t *testing.T) {
+	// fn f() {
+	//   defer outer()
+	//   { defer inner(); body() }
+	//   after()
+	// }
+	fn := mkFn("f", ir.TUnit, &ir.Block{
+		Stmts: []ir.Stmt{
+			mkDefer("outer"),
+			&ir.Block{
+				Stmts: []ir.Stmt{
+					mkDefer("inner"),
+					mkCallStmt("body"),
+				},
+			},
+			mkCallStmt("after"),
+			&ir.ReturnStmt{},
+		},
+	})
+	mod := lowerHIR(t, fn)
+	text := Print(mod)
+	body := strings.Index(text, `const "body"`)
+	inner := strings.Index(text, `const "inner"`)
+	after := strings.Index(text, `const "after"`)
+	outer := strings.Index(text, `const "outer"`)
+	if body < 0 || inner < 0 || after < 0 || outer < 0 {
+		t.Fatalf("expected all four markers, got:\n%s", text)
+	}
+	// body -> inner (block exit) -> after (outer block stmt) -> outer (return)
+	if !(body < inner && inner < after && after < outer) {
+		t.Fatalf("expected body < inner < after < outer, got %d/%d/%d/%d:\n%s",
+			body, inner, after, outer, text)
+	}
+}
+
+// TestLowerDeferInLoopReplaysOnBreak ensures a defer declared inside
+// a loop body replays on break — not just on return.
+func TestLowerDeferInLoopReplaysOnBreak(t *testing.T) {
+	// fn f() {
+	//   for {
+	//     defer loop()
+	//     break
+	//   }
+	//   after()
+	// }
+	fn := mkFn("f", ir.TUnit, &ir.Block{
+		Stmts: []ir.Stmt{
+			&ir.ForStmt{
+				Kind: ir.ForInfinite,
+				Body: &ir.Block{
+					Stmts: []ir.Stmt{
+						mkDefer("loop"),
+						&ir.BreakStmt{},
+					},
+				},
+			},
+			mkCallStmt("after"),
+		},
+	})
+	mod := lowerHIR(t, fn)
+	text := Print(mod)
+	loopI := strings.Index(text, `const "loop"`)
+	afterI := strings.Index(text, `const "after"`)
+	if loopI < 0 {
+		t.Fatalf("expected loop defer to be inlined on break:\n%s", text)
+	}
+	if afterI < 0 {
+		t.Fatalf("expected after to appear:\n%s", text)
+	}
+	if loopI > afterI {
+		t.Fatalf("loop defer must run before after (break inlines defers): got %d > %d:\n%s",
+			loopI, afterI, text)
+	}
+}
+
+// TestLowerDeferInLoopReplaysOnContinue ensures a defer declared
+// inside a loop body replays on continue too.
+func TestLowerDeferInLoopReplaysOnContinue(t *testing.T) {
+	fn := mkFn("f", ir.TUnit, &ir.Block{
+		Stmts: []ir.Stmt{
+			&ir.ForStmt{
+				Kind: ir.ForInfinite,
+				Body: &ir.Block{
+					Stmts: []ir.Stmt{
+						mkDefer("loop"),
+						&ir.ContinueStmt{},
+					},
+				},
+			},
+		},
+	})
+	mod := lowerHIR(t, fn)
+	text := Print(mod)
+	if !strings.Contains(text, `const "loop"`) {
+		t.Fatalf("expected loop defer to be inlined on continue:\n%s", text)
+	}
+}
+
+// TestLowerDeferInnerBlockDoesNotLeakToOuterReturn proves the fix for
+// the Stage 2a limitation: a defer in an inner block must NOT also
+// re-run at the function's return. If it did, the "inner" marker
+// would appear twice in the dump.
+func TestLowerDeferInnerBlockDoesNotLeakToOuterReturn(t *testing.T) {
+	fn := mkFn("f", ir.TUnit, &ir.Block{
+		Stmts: []ir.Stmt{
+			&ir.Block{
+				Stmts: []ir.Stmt{mkDefer("inner")},
+			},
+			&ir.ReturnStmt{},
+		},
+	})
+	mod := lowerHIR(t, fn)
+	text := Print(mod)
+	if n := strings.Count(text, `const "inner"`); n != 1 {
+		t.Fatalf("expected exactly one inner defer inline, got %d:\n%s", n, text)
+	}
+}
+
+// ==== Stage 2c: thread.select arm expansion ====
+
+func TestLowerSelectRecvArm(t *testing.T) {
+	// fn arm(s: Select, ch: Channel<Int>, f: fn(Int) -> ()) -> Select {
+	//   s.recv(ch, f)
+	// }
+	selectT := &ir.NamedType{Name: "Select"}
+	chanInt := &ir.NamedType{Name: "Channel", Args: []ir.Type{ir.TInt}}
+	cbT := &ir.FnType{Params: []ir.Type{ir.TInt}, Return: ir.TUnit}
+	fn := &ir.FnDecl{
+		Name:   "arm",
+		Return: selectT,
+		Params: []*ir.Param{
+			{Name: "s", Type: selectT},
+			{Name: "ch", Type: chanInt},
+			{Name: "f", Type: cbT},
+		},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "s", Kind: ir.IdentParam, T: selectT},
+				Name:     "recv",
+				Args: []ir.Arg{
+					{Value: &ir.Ident{Name: "ch", Kind: ir.IdentParam, T: chanInt}},
+					{Value: &ir.Ident{Name: "f", Kind: ir.IdentParam, T: cbT}},
+				},
+				T: selectT,
+			},
+		},
+	}
+	mod := lowerHIR(t, fn)
+	text := Print(mod)
+	if !strings.Contains(text, "intrinsic select_recv(_1, _2, _3)") {
+		t.Fatalf("expected select_recv intrinsic, got:\n%s", text)
+	}
+}
+
+func TestLowerSelectSendArm(t *testing.T) {
+	selectT := &ir.NamedType{Name: "Select"}
+	chanInt := &ir.NamedType{Name: "Channel", Args: []ir.Type{ir.TInt}}
+	cbT := &ir.FnType{Return: ir.TUnit}
+	fn := &ir.FnDecl{
+		Name:   "arm",
+		Return: selectT,
+		Params: []*ir.Param{
+			{Name: "s", Type: selectT},
+			{Name: "ch", Type: chanInt},
+			{Name: "v", Type: ir.TInt},
+			{Name: "f", Type: cbT},
+		},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "s", Kind: ir.IdentParam, T: selectT},
+				Name:     "send",
+				Args: []ir.Arg{
+					{Value: &ir.Ident{Name: "ch", Kind: ir.IdentParam, T: chanInt}},
+					{Value: &ir.Ident{Name: "v", Kind: ir.IdentParam, T: ir.TInt}},
+					{Value: &ir.Ident{Name: "f", Kind: ir.IdentParam, T: cbT}},
+				},
+				T: selectT,
+			},
+		},
+	}
+	mod := lowerHIR(t, fn)
+	text := Print(mod)
+	if !strings.Contains(text, "intrinsic select_send(_1, _2, _3, _4)") {
+		t.Fatalf("expected select_send intrinsic, got:\n%s", text)
+	}
+}
+
+func TestLowerSelectTimeoutAndDefaultArms(t *testing.T) {
+	selectT := &ir.NamedType{Name: "Select"}
+	durT := &ir.NamedType{Name: "Duration"}
+	cbT := &ir.FnType{Return: ir.TUnit}
+	fn := &ir.FnDecl{
+		Name:   "arms",
+		Return: selectT,
+		Params: []*ir.Param{
+			{Name: "s", Type: selectT},
+			{Name: "d", Type: durT},
+			{Name: "f", Type: cbT},
+		},
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.ExprStmt{X: &ir.MethodCall{
+					Receiver: &ir.Ident{Name: "s", Kind: ir.IdentParam, T: selectT},
+					Name:     "timeout",
+					Args: []ir.Arg{
+						{Value: &ir.Ident{Name: "d", Kind: ir.IdentParam, T: durT}},
+						{Value: &ir.Ident{Name: "f", Kind: ir.IdentParam, T: cbT}},
+					},
+					T: selectT,
+				}},
+			},
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "s", Kind: ir.IdentParam, T: selectT},
+				Name:     "default",
+				Args: []ir.Arg{
+					{Value: &ir.Ident{Name: "f", Kind: ir.IdentParam, T: cbT}},
+				},
+				T: selectT,
+			},
+		},
+	}
+	mod := lowerHIR(t, fn)
+	text := Print(mod)
+	if !strings.Contains(text, "intrinsic select_timeout(") {
+		t.Fatalf("expected select_timeout intrinsic, got:\n%s", text)
+	}
+	if !strings.Contains(text, "intrinsic select_default(") {
+		t.Fatalf("expected select_default intrinsic, got:\n%s", text)
+	}
+}

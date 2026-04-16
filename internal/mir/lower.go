@@ -370,13 +370,13 @@ type bodyState struct {
 	// loopStack is a stack of break/continue destinations.
 	loopStack []*loopFrame
 
-	// deferStack holds defer bodies in source order; they are replayed
-	// in LIFO at every function exit. Stage 2 keeps defers scoped to
-	// the enclosing function body; inner-block defers are still
-	// accepted but run at function exit rather than at inner-block
-	// exit, and a note records the simplification so callers can tell
-	// the difference.
-	deferStack []*ir.Block
+	// deferFrames is a stack of per-scope defer bodies. Index 0 is
+	// the function-level frame (seeded in newBodyState); deeper
+	// frames are pushed every time the lowerer enters an inner
+	// block scope (explicit Block stmt, `if`/`match` arm, loop body).
+	// Each frame holds HIR blocks in *source* order; replay inlines
+	// them in LIFO at the appropriate exit point.
+	deferFrames [][]*ir.Block
 }
 
 type ownerContext struct {
@@ -387,11 +387,20 @@ type ownerContext struct {
 type loopFrame struct {
 	breakBlock    BlockID
 	continueBlock BlockID
+	// deferDepth records the defer-frame depth active at the top of
+	// the loop body. `break` and `continue` unwind inner frames
+	// *inclusive* of this one — every iteration enters the body
+	// scope fresh, so the body's defers run on both exit paths.
+	deferDepth int
 }
 
 func newBodyState(l *lowerer, fn *Function) *bodyState {
 	bs := &bodyState{l: l, fn: fn, cur: fn.Entry}
 	bs.pushScope()
+	// Function-level defer frame. Stays for the lifetime of the
+	// function and is replayed on every exit edge (return, `?`
+	// propagation, fall-through).
+	bs.pushDeferScope()
 	// seed locals from parameters.
 	for i, p := range fn.Params {
 		loc := fn.Locals[p]
@@ -509,9 +518,7 @@ func (bs *bodyState) lowerStmt(s ir.Stmt) {
 	case *ir.MatchStmt:
 		bs.lowerMatchStmt(x)
 	case *ir.DeferStmt:
-		if x.Body != nil {
-			bs.deferStack = append(bs.deferStack, x.Body)
-		}
+		bs.addDefer(x.Body)
 	case *ir.ChanSendStmt:
 		ch := bs.lowerExprAsOperand(x.Channel)
 		val := bs.lowerExprAsOperand(x.Value)
@@ -530,6 +537,7 @@ func (bs *bodyState) lowerStmt(s ir.Stmt) {
 
 func (bs *bodyState) lowerBlockStmt(b *ir.Block) {
 	bs.pushScope()
+	bs.pushDeferScope()
 	for _, s := range b.Stmts {
 		bs.lowerStmt(s)
 	}
@@ -538,6 +546,8 @@ func (bs *bodyState) lowerBlockStmt(b *ir.Block) {
 		// still need its side effects.
 		_ = bs.lowerExprAsOperand(b.Result)
 	}
+	bs.replayTopFrame(b.SpanV)
+	bs.popDeferScope()
 	bs.popScope()
 }
 
@@ -788,19 +798,81 @@ func (bs *bodyState) lowerReturn(r *ir.ReturnStmt) {
 	bs.terminate(&ReturnTerm{SpanV: r.SpanV})
 }
 
-// runDefers inlines the accumulated defer bodies in LIFO order at
-// the current cursor. The stack is NOT popped — every exit point
-// replays the same set, matching the language semantics that each
-// defer runs exactly once on scope exit. Stage 2 uses function-level
-// scope: when the function ends (ReturnTerm, `?` early return, fall-
-// through), the replay happens at that exit. Break/continue edges
-// do not replay defers (they would run on the eventual loop exit).
-func (bs *bodyState) runDefers(sp Span) {
-	if len(bs.deferStack) == 0 {
+// ==== defer scoping ====
+//
+// Defer is scoped to the enclosing block. Each block pushes a fresh
+// defer frame on entry and pops it on exit. At every control-flow
+// exit edge the lowerer inlines the relevant frames in LIFO order:
+//
+//   - normal fall-through at block exit: replay+pop the top frame
+//   - `return` / `?` propagation / trailing-expr / implicit-unit:
+//     replay every frame (function-level through current) in LIFO
+//   - `break` / `continue`: replay frames down to and including the
+//     enclosing loop body's frame. Continue re-enters the body, so
+//     on the next iteration a fresh body frame is pushed and the
+//     body's defers re-register at compile time inside the same
+//     block. Statically this means the same MIR-inlined defer body
+//     appears at each exit point, not once per iteration.
+
+func (bs *bodyState) pushDeferScope() {
+	bs.deferFrames = append(bs.deferFrames, nil)
+}
+
+func (bs *bodyState) popDeferScope() {
+	if len(bs.deferFrames) == 0 {
 		return
 	}
-	for i := len(bs.deferStack) - 1; i >= 0; i-- {
-		body := bs.deferStack[i]
+	bs.deferFrames = bs.deferFrames[:len(bs.deferFrames)-1]
+}
+
+// addDefer registers a deferred block with the innermost frame.
+func (bs *bodyState) addDefer(body *ir.Block) {
+	if body == nil || len(bs.deferFrames) == 0 {
+		return
+	}
+	top := len(bs.deferFrames) - 1
+	bs.deferFrames[top] = append(bs.deferFrames[top], body)
+}
+
+// replayDefersFromDepth inlines defer frames from the top of the
+// stack down to depth (inclusive). depth=0 replays everything,
+// matching the behaviour expected at `return` / `?`.
+func (bs *bodyState) replayDefersFromDepth(depth int, sp Span) {
+	if depth < 0 {
+		depth = 0
+	}
+	// Skip when the cursor block is already terminated — the exit
+	// edge that ran the terminator has already performed its own
+	// replay, and we must not emit instructions after a terminator.
+	bb := bs.currentBlock()
+	if bb != nil && bb.Term != nil {
+		return
+	}
+	for i := len(bs.deferFrames) - 1; i >= depth; i-- {
+		bs.replayDeferFrame(bs.deferFrames[i], sp)
+	}
+}
+
+// replayTopFrame inlines only the innermost defer frame at the
+// current cursor. Used for normal block fall-through, before the
+// caller pops the frame.
+func (bs *bodyState) replayTopFrame(sp Span) {
+	if len(bs.deferFrames) == 0 {
+		return
+	}
+	bb := bs.currentBlock()
+	if bb != nil && bb.Term != nil {
+		return
+	}
+	bs.replayDeferFrame(bs.deferFrames[len(bs.deferFrames)-1], sp)
+}
+
+// replayDeferFrame inlines one frame in LIFO order. Each body runs
+// in its own name scope so local bindings from the surrounding
+// block don't leak into the cleanup logic.
+func (bs *bodyState) replayDeferFrame(frame []*ir.Block, sp Span) {
+	for i := len(frame) - 1; i >= 0; i-- {
+		body := frame[i]
 		if body == nil {
 			continue
 		}
@@ -816,12 +888,26 @@ func (bs *bodyState) runDefers(sp Span) {
 	_ = sp
 }
 
+// runDefers replays every defer frame (function-level + all inner
+// frames) at the cursor. Called at return / ? / fall-through exits.
+func (bs *bodyState) runDefers(sp Span) {
+	bs.replayDefersFromDepth(0, sp)
+}
+
+// currentDeferDepth returns the number of defer frames currently in
+// place. Recorded in loopFrame so break/continue know which frames
+// to unwind.
+func (bs *bodyState) currentDeferDepth() int {
+	return len(bs.deferFrames)
+}
+
 func (bs *bodyState) lowerBreak(b *ir.BreakStmt) {
 	if len(bs.loopStack) == 0 {
 		bs.l.noteIssue("break outside loop")
 		return
 	}
 	top := bs.loopStack[len(bs.loopStack)-1]
+	bs.replayDefersFromDepth(top.deferDepth, b.SpanV)
 	bs.terminate(&GotoTerm{Target: top.breakBlock, SpanV: b.SpanV})
 }
 
@@ -831,6 +917,7 @@ func (bs *bodyState) lowerContinue(c *ir.ContinueStmt) {
 		return
 	}
 	top := bs.loopStack[len(bs.loopStack)-1]
+	bs.replayDefersFromDepth(top.deferDepth, c.SpanV)
 	bs.terminate(&GotoTerm{Target: top.continueBlock, SpanV: c.SpanV})
 }
 
@@ -843,24 +930,30 @@ func (bs *bodyState) lowerIfStmt(st *ir.IfStmt) {
 
 	bs.cur = thenBB
 	bs.pushScope()
+	bs.pushDeferScope()
 	for _, s := range st.Then.Stmts {
 		bs.lowerStmt(s)
 	}
 	if st.Then.Result != nil {
 		_ = bs.lowerExprAsOperand(st.Then.Result)
 	}
+	bs.replayTopFrame(st.Then.SpanV)
+	bs.popDeferScope()
 	bs.popScope()
 	bs.terminate(&GotoTerm{Target: merge, SpanV: st.SpanV})
 
 	bs.cur = elseBB
 	if st.Else != nil {
 		bs.pushScope()
+		bs.pushDeferScope()
 		for _, s := range st.Else.Stmts {
 			bs.lowerStmt(s)
 		}
 		if st.Else.Result != nil {
 			_ = bs.lowerExprAsOperand(st.Else.Result)
 		}
+		bs.replayTopFrame(st.Else.SpanV)
+		bs.popDeferScope()
 		bs.popScope()
 	}
 	bs.terminate(&GotoTerm{Target: merge, SpanV: st.SpanV})
@@ -890,15 +983,20 @@ func (bs *bodyState) lowerForInfinite(f *ir.ForStmt) {
 	bs.terminate(&GotoTerm{Target: header, SpanV: f.SpanV})
 	bs.cur = header
 	bs.terminate(&GotoTerm{Target: body, SpanV: f.SpanV})
-	bs.loopStack = append(bs.loopStack, &loopFrame{breakBlock: exit, continueBlock: header})
 	bs.cur = body
 	bs.pushScope()
+	bs.pushDeferScope()
+	bs.loopStack = append(bs.loopStack, &loopFrame{
+		breakBlock: exit, continueBlock: header, deferDepth: len(bs.deferFrames) - 1,
+	})
 	for _, s := range f.Body.Stmts {
 		bs.lowerStmt(s)
 	}
+	bs.replayTopFrame(f.Body.SpanV)
+	bs.loopStack = bs.loopStack[:len(bs.loopStack)-1]
+	bs.popDeferScope()
 	bs.popScope()
 	bs.terminate(&GotoTerm{Target: header, SpanV: f.SpanV})
-	bs.loopStack = bs.loopStack[:len(bs.loopStack)-1]
 	bs.cur = exit
 }
 
@@ -910,15 +1008,20 @@ func (bs *bodyState) lowerForWhile(f *ir.ForStmt) {
 	bs.cur = header
 	cond := bs.lowerExprAsOperand(f.Cond)
 	bs.terminate(&BranchTerm{Cond: cond, Then: body, Else: exit, SpanV: f.SpanV})
-	bs.loopStack = append(bs.loopStack, &loopFrame{breakBlock: exit, continueBlock: header})
 	bs.cur = body
 	bs.pushScope()
+	bs.pushDeferScope()
+	bs.loopStack = append(bs.loopStack, &loopFrame{
+		breakBlock: exit, continueBlock: header, deferDepth: len(bs.deferFrames) - 1,
+	})
 	for _, s := range f.Body.Stmts {
 		bs.lowerStmt(s)
 	}
+	bs.replayTopFrame(f.Body.SpanV)
+	bs.loopStack = bs.loopStack[:len(bs.loopStack)-1]
+	bs.popDeferScope()
 	bs.popScope()
 	bs.terminate(&GotoTerm{Target: header, SpanV: f.SpanV})
-	bs.loopStack = bs.loopStack[:len(bs.loopStack)-1]
 	bs.cur = exit
 }
 
@@ -958,13 +1061,19 @@ func (bs *bodyState) lowerForRange(f *ir.ForStmt) {
 		Else:  exit,
 		SpanV: f.SpanV,
 	})
-	bs.loopStack = append(bs.loopStack, &loopFrame{breakBlock: exit, continueBlock: step})
 	bs.cur = body
 	bs.pushScope()
+	bs.pushDeferScope()
+	bs.loopStack = append(bs.loopStack, &loopFrame{
+		breakBlock: exit, continueBlock: step, deferDepth: len(bs.deferFrames) - 1,
+	})
 	bs.bind(f.Var, idx)
 	for _, s := range f.Body.Stmts {
 		bs.lowerStmt(s)
 	}
+	bs.replayTopFrame(f.Body.SpanV)
+	bs.loopStack = bs.loopStack[:len(bs.loopStack)-1]
+	bs.popDeferScope()
 	bs.popScope()
 	bs.terminate(&GotoTerm{Target: step, SpanV: f.SpanV})
 	bs.cur = step
@@ -979,7 +1088,6 @@ func (bs *bodyState) lowerForRange(f *ir.ForStmt) {
 		SpanV: f.SpanV,
 	})
 	bs.terminate(&GotoTerm{Target: header, SpanV: f.SpanV})
-	bs.loopStack = bs.loopStack[:len(bs.loopStack)-1]
 	bs.cur = exit
 }
 
@@ -1036,9 +1144,12 @@ func (bs *bodyState) lowerForIn(f *ir.ForStmt) {
 		Else:  exit,
 		SpanV: f.SpanV,
 	})
-	bs.loopStack = append(bs.loopStack, &loopFrame{breakBlock: exit, continueBlock: step})
 	bs.cur = body
 	bs.pushScope()
+	bs.pushDeferScope()
+	bs.loopStack = append(bs.loopStack, &loopFrame{
+		breakBlock: exit, continueBlock: step, deferDepth: len(bs.deferFrames) - 1,
+	})
 	// load current element: elem = iter[idx]
 	elemLocal := bs.fn.NewLocal("_elem", elemT, false, f.SpanV)
 	elemPlace := Place{Local: iter, Projections: []Projection{
@@ -1060,6 +1171,9 @@ func (bs *bodyState) lowerForIn(f *ir.ForStmt) {
 	for _, s := range f.Body.Stmts {
 		bs.lowerStmt(s)
 	}
+	bs.replayTopFrame(f.Body.SpanV)
+	bs.loopStack = bs.loopStack[:len(bs.loopStack)-1]
+	bs.popDeferScope()
 	bs.popScope()
 	bs.terminate(&GotoTerm{Target: step, SpanV: f.SpanV})
 	bs.cur = step
@@ -1074,7 +1188,6 @@ func (bs *bodyState) lowerForIn(f *ir.ForStmt) {
 		SpanV: f.SpanV,
 	})
 	bs.terminate(&GotoTerm{Target: header, SpanV: f.SpanV})
-	bs.loopStack = bs.loopStack[:len(bs.loopStack)-1]
 	bs.cur = exit
 }
 
@@ -1118,9 +1231,12 @@ func (bs *bodyState) lowerForInChannel(f *ir.ForStmt, iterT Type) {
 		SpanV:     f.SpanV,
 	})
 
-	bs.loopStack = append(bs.loopStack, &loopFrame{breakBlock: exit, continueBlock: step})
 	bs.cur = body
 	bs.pushScope()
+	bs.pushDeferScope()
+	bs.loopStack = append(bs.loopStack, &loopFrame{
+		breakBlock: exit, continueBlock: step, deferDepth: len(bs.deferFrames) - 1,
+	})
 	// Unwrap the payload into a named local.
 	elemLocal := bs.fn.NewLocal("_elem", elemT, false, f.SpanV)
 	payloadProj := &VariantProj{
@@ -1142,12 +1258,14 @@ func (bs *bodyState) lowerForInChannel(f *ir.ForStmt, iterT Type) {
 	for _, s := range f.Body.Stmts {
 		bs.lowerStmt(s)
 	}
+	bs.replayTopFrame(f.Body.SpanV)
+	bs.loopStack = bs.loopStack[:len(bs.loopStack)-1]
+	bs.popDeferScope()
 	bs.popScope()
 	bs.terminate(&GotoTerm{Target: step, SpanV: f.SpanV})
 
 	bs.cur = step
 	bs.terminate(&GotoTerm{Target: header, SpanV: f.SpanV})
-	bs.loopStack = bs.loopStack[:len(bs.loopStack)-1]
 	bs.cur = exit
 }
 
@@ -1207,6 +1325,7 @@ func (bs *bodyState) lowerMatch(scrutinee ir.Expr, arms []*ir.MatchArm, tree ir.
 	for i, arm := range arms {
 		bs.cur = armBlocks[i]
 		bs.pushScope()
+		bs.pushDeferScope()
 		// The decision tree already introduced bindings via MIR assigns.
 		// For tree-less fallback we would destructure here; we skip.
 		if arm.Body != nil {
@@ -1218,7 +1337,9 @@ func (bs *bodyState) lowerMatch(scrutinee ir.Expr, arms []*ir.MatchArm, tree ir.
 			} else if arm.Body.Result != nil {
 				_ = bs.lowerExprAsOperand(arm.Body.Result)
 			}
+			bs.replayTopFrame(arm.Body.SpanV)
 		}
+		bs.popDeferScope()
 		bs.popScope()
 		bs.terminate(&GotoTerm{Target: merge, SpanV: arm.SpanV})
 	}
@@ -1812,23 +1933,29 @@ func (bs *bodyState) lowerIfExprInto(ie *ir.IfExpr, dest Place, destT Type) {
 	bs.terminate(&BranchTerm{Cond: cond, Then: thenBB, Else: elseBB, SpanV: ie.SpanV})
 	bs.cur = thenBB
 	bs.pushScope()
+	bs.pushDeferScope()
 	for _, s := range ie.Then.Stmts {
 		bs.lowerStmt(s)
 	}
 	if ie.Then.Result != nil {
 		bs.lowerExprIntoPlace(ie.Then.Result, dest, destT)
 	}
+	bs.replayTopFrame(ie.Then.SpanV)
+	bs.popDeferScope()
 	bs.popScope()
 	bs.terminate(&GotoTerm{Target: merge, SpanV: ie.SpanV})
 	bs.cur = elseBB
 	if ie.Else != nil {
 		bs.pushScope()
+		bs.pushDeferScope()
 		for _, s := range ie.Else.Stmts {
 			bs.lowerStmt(s)
 		}
 		if ie.Else.Result != nil {
 			bs.lowerExprIntoPlace(ie.Else.Result, dest, destT)
 		}
+		bs.replayTopFrame(ie.Else.SpanV)
+		bs.popDeferScope()
 		bs.popScope()
 	}
 	bs.terminate(&GotoTerm{Target: merge, SpanV: ie.SpanV})
@@ -1841,12 +1968,15 @@ func (bs *bodyState) lowerBlockExprInto(be *ir.BlockExpr, dest Place, destT Type
 		return
 	}
 	bs.pushScope()
+	bs.pushDeferScope()
 	for _, s := range be.Block.Stmts {
 		bs.lowerStmt(s)
 	}
 	if be.Block.Result != nil {
 		bs.lowerExprIntoPlace(be.Block.Result, dest, destT)
 	}
+	bs.replayTopFrame(be.Block.SpanV)
+	bs.popDeferScope()
 	bs.popScope()
 }
 
@@ -1866,12 +1996,15 @@ func (bs *bodyState) lowerIfLetExprInto(ife *ir.IfLetExpr, dest Place, destT Typ
 		// Always take the else branch to stay conservative.
 		if ife.Else != nil {
 			bs.pushScope()
+			bs.pushDeferScope()
 			for _, s := range ife.Else.Stmts {
 				bs.lowerStmt(s)
 			}
 			if ife.Else.Result != nil {
 				bs.lowerExprIntoPlace(ife.Else.Result, dest, destT)
 			}
+			bs.replayTopFrame(ife.Else.SpanV)
+			bs.popDeferScope()
 			bs.popScope()
 		}
 		return
@@ -1894,6 +2027,7 @@ func (bs *bodyState) lowerIfLetExprInto(ife *ir.IfLetExpr, dest Place, destT Typ
 	})
 	bs.cur = thenBB
 	bs.pushScope()
+	bs.pushDeferScope()
 	// Bind payload elements.
 	layout := bs.l.variantLayout(vp.Enum, vp.Variant)
 	for i, arg := range vp.Args {
@@ -1908,17 +2042,22 @@ func (bs *bodyState) lowerIfLetExprInto(ife *ir.IfLetExpr, dest Place, destT Typ
 	if ife.Then.Result != nil {
 		bs.lowerExprIntoPlace(ife.Then.Result, dest, destT)
 	}
+	bs.replayTopFrame(ife.Then.SpanV)
+	bs.popDeferScope()
 	bs.popScope()
 	bs.terminate(&GotoTerm{Target: merge, SpanV: ife.SpanV})
 	bs.cur = elseBB
 	if ife.Else != nil {
 		bs.pushScope()
+		bs.pushDeferScope()
 		for _, s := range ife.Else.Stmts {
 			bs.lowerStmt(s)
 		}
 		if ife.Else.Result != nil {
 			bs.lowerExprIntoPlace(ife.Else.Result, dest, destT)
 		}
+		bs.replayTopFrame(ife.Else.SpanV)
+		bs.popDeferScope()
 		bs.popScope()
 	}
 	bs.terminate(&GotoTerm{Target: merge, SpanV: ife.SpanV})
@@ -2245,12 +2384,14 @@ func (bs *bodyState) emitConcurrencyIntrinsic(kind IntrinsicKind, args []ir.Arg,
 }
 
 // isVoidConcurrencyIntrinsic reports whether an intrinsic produces no
-// MIR-visible value (send, close, cancel, yield, sleep). Used so that
-// `ch.close()` in expression position doesn't carry a stale dest.
+// MIR-visible value (send, close, cancel, yield, select arms). Used
+// so that calls in expression position do not carry a stale dest.
 func isVoidConcurrencyIntrinsic(kind IntrinsicKind) bool {
 	switch kind {
 	case IntrinsicChanSend, IntrinsicChanClose,
-		IntrinsicGroupCancel, IntrinsicYield:
+		IntrinsicGroupCancel, IntrinsicYield,
+		IntrinsicSelectRecv, IntrinsicSelectSend,
+		IntrinsicSelectTimeout, IntrinsicSelectDefault:
 		return true
 	}
 	return false
@@ -2693,6 +2834,21 @@ func concurrencyIntrinsicForMethod(receiverType Type, name string) IntrinsicKind
 			return IntrinsicGroupCancel
 		case "isCancelled":
 			return IntrinsicGroupIsCancelled
+		}
+	case "Select":
+		// Arms of the `thread.select(|s| body)` DSL. Each method is
+		// a builder call whose signature in stdlib returns `self`, but
+		// the runtime treats them as arm registrations. MIR makes that
+		// explicit by emitting a dedicated intrinsic per arm.
+		switch name {
+		case "recv":
+			return IntrinsicSelectRecv
+		case "send":
+			return IntrinsicSelectSend
+		case "timeout":
+			return IntrinsicSelectTimeout
+		case "default":
+			return IntrinsicSelectDefault
 		}
 	}
 	return IntrinsicInvalid

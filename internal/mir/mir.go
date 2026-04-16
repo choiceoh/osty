@@ -350,6 +350,19 @@ const (
 	// Dest is unit; individual arms (recv/send/timeout/default) run
 	// their closures through the select runtime.
 	IntrinsicSelect
+	// IntrinsicSelectRecv registers a `s.recv(ch, f)` arm on a
+	// Select builder. Args: [select, channel, callback]. Dest nil.
+	IntrinsicSelectRecv
+	// IntrinsicSelectSend registers a `s.send(ch, v, f)` arm on a
+	// Select builder. Args: [select, channel, value, callback].
+	// Dest nil.
+	IntrinsicSelectSend
+	// IntrinsicSelectTimeout registers a `s.timeout(d, f)` arm on a
+	// Select builder. Args: [select, duration, callback]. Dest nil.
+	IntrinsicSelectTimeout
+	// IntrinsicSelectDefault registers a `s.default(f)` arm on a
+	// Select builder. Args: [select, callback]. Dest nil.
+	IntrinsicSelectDefault
 
 	// ---- concurrency: cancellation ----
 
