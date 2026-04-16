@@ -3,7 +3,7 @@ package lexer
 
 import (
 	"github.com/osty/osty/internal/diag"
-	"github.com/osty/osty/internal/selfhost"
+	"github.com/osty/osty/internal/docgen"
 	"github.com/osty/osty/internal/token"
 )
 
@@ -11,9 +11,9 @@ import (
 // diag.Diagnostic for callers that only need a position+message.
 type Error = diag.Diagnostic
 
-// Lexer is a small compatibility wrapper around the bootstrapped pure-Osty
-// lexer. It keeps comments and diagnostics available to older callers while
-// the token stream itself comes from internal/selfhost.
+// Lexer is a small compatibility wrapper around the docgen-hosted generated
+// frontend. It keeps comments and diagnostics available to older callers while
+// the token stream itself comes from the shared generated lexer core.
 type Lexer struct {
 	src      []byte
 	comments []token.Comment
@@ -78,6 +78,6 @@ func (l *Lexer) Comments() []token.Comment { return l.comments }
 
 // Lex returns the complete token stream, terminated by EOF.
 func (l *Lexer) Lex() []token.Token {
-	l.toks, l.errs, l.comments = selfhost.Lex(l.src)
+	l.toks, l.errs, l.comments = docgen.Lex(l.src)
 	return l.toks
 }

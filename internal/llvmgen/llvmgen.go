@@ -299,15 +299,17 @@ type declarations struct {
 }
 
 type fnSig struct {
-	name   string
-	ret    string
-	params []paramInfo
-	decl   *ast.FnDecl
+	name        string
+	ret         string
+	retListElem string
+	params      []paramInfo
+	decl        *ast.FnDecl
 }
 
 type paramInfo struct {
-	name string
-	typ  string
+	name     string
+	typ      string
+	listElem string
 }
 
 type structInfo struct {
@@ -356,6 +358,7 @@ type value struct {
 	ref       string
 	ptr       bool
 	gcManaged bool
+	listElem  string
 }
 
 const (
@@ -367,6 +370,7 @@ type runtimeFFIFunction struct {
 	sourceName  string
 	symbol      string
 	ret         string
+	retListElem string
 	params      []paramInfo
 	unsupported string
 }
@@ -509,6 +513,12 @@ func runtimeFFISignature(path string, fn *ast.FnDecl, structs map[string]*struct
 			return out
 		}
 		out.ret = ret
+		if listElem, ok, err := llvmListElementType(fn.ReturnType, structs, enums); err != nil {
+			out.unsupported = "return type: " + unsupportedMessage(err)
+			return out
+		} else if ok {
+			out.retListElem = listElem
+		}
 	}
 	for _, p := range fn.Params {
 		if p == nil {
@@ -528,7 +538,15 @@ func runtimeFFISignature(path string, fn *ast.FnDecl, structs map[string]*struct
 			out.unsupported = fmt.Sprintf("parameter %q: %s", name, unsupportedMessage(err))
 			return out
 		}
-		out.params = append(out.params, paramInfo{name: name, typ: typ})
+		listElem, ok, err := llvmListElementType(p.Type, structs, enums)
+		if err != nil {
+			out.unsupported = fmt.Sprintf("parameter %q: %s", name, unsupportedMessage(err))
+			return out
+		}
+		if !ok {
+			listElem = ""
+		}
+		out.params = append(out.params, paramInfo{name: name, typ: typ, listElem: listElem})
 	}
 	return out
 }
@@ -576,7 +594,7 @@ func isKnownRuntimeFFIPath(path string) bool {
 		return true
 	}
 	switch path {
-	case "runtime.strings", "runtime.path.filepath", "runtime.selfhost.astbridge":
+	case "runtime.strings", "runtime.path.filepath":
 		return true
 	default:
 		return false
@@ -606,6 +624,21 @@ func llvmRuntimeABIType(t ast.Type, structs map[string]*structInfo, enums map[st
 	default:
 		return "", unsupportedf("type-system", "runtime ABI type %T", t)
 	}
+}
+
+func llvmListElementType(t ast.Type, structs map[string]*structInfo, enums map[string]*enumInfo) (string, bool, error) {
+	named, ok := t.(*ast.NamedType)
+	if !ok || len(named.Path) != 1 || named.Path[0] != "List" {
+		return "", false, nil
+	}
+	if len(named.Args) != 1 {
+		return "", true, unsupported("type-system", "List requires exactly one type argument")
+	}
+	elem, err := llvmRuntimeABIType(named.Args[0], structs, enums)
+	if err != nil {
+		return "", true, err
+	}
+	return elem, true, nil
 }
 
 func collectStructShell(decl *ast.StructDecl) (*structInfo, error) {
@@ -762,6 +795,11 @@ func signatureOf(fn *ast.FnDecl, structs map[string]*structInfo, enums map[strin
 			return nil, unsupportedf("type-system", "function %q return type: %s", fn.Name, unsupportedMessage(err))
 		}
 		sig.ret = ret
+		if listElem, ok, err := llvmListElementType(fn.ReturnType, structs, enums); err != nil {
+			return nil, unsupportedf("type-system", "function %q return type: %s", fn.Name, unsupportedMessage(err))
+		} else if ok {
+			sig.retListElem = listElem
+		}
 	}
 	for _, p := range fn.Params {
 		if p.Pattern != nil || p.Name == "" {
@@ -777,7 +815,14 @@ func signatureOf(fn *ast.FnDecl, structs map[string]*structInfo, enums map[strin
 		if err != nil {
 			return nil, unsupportedf("type-system", "function %q parameter %q: %s", fn.Name, p.Name, unsupportedMessage(err))
 		}
-		sig.params = append(sig.params, paramInfo{name: p.Name, typ: typ})
+		listElem, ok, err := llvmListElementType(p.Type, structs, enums)
+		if err != nil {
+			return nil, unsupportedf("type-system", "function %q parameter %q: %s", fn.Name, p.Name, unsupportedMessage(err))
+		}
+		if !ok {
+			listElem = ""
+		}
+		sig.params = append(sig.params, paramInfo{name: p.Name, typ: typ, listElem: listElem})
 	}
 	return sig, nil
 }
@@ -810,7 +855,7 @@ func (g *generator) emitUserFunction(sig *fnSig) (string, error) {
 	g.beginFunction()
 	g.returnType = sig.ret
 	for _, p := range sig.params {
-		g.bindLocal(p.name, value{typ: p.typ, ref: "%" + p.name})
+		g.bindLocal(p.name, value{typ: p.typ, ref: "%" + p.name, listElem: p.listElem})
 	}
 	if sig.ret == "void" {
 		if err := g.emitBlock(sig.decl.Body.Stmts); err != nil {
@@ -957,12 +1002,21 @@ func (g *generator) emitLet(stmt *ast.LetStmt) error {
 		if typ != v.typ {
 			return unsupportedf("type-system", "let %q type %s, value %s", name, typ, v.typ)
 		}
+		if listElem, ok, err := llvmListElementType(stmt.Type, g.structsByName, g.enumsByName); err != nil {
+			return err
+		} else if ok {
+			if v.listElem != "" && v.listElem != listElem {
+				return unsupportedf("type-system", "let %q list element type %s, value %s", name, listElem, v.listElem)
+			}
+			v.listElem = listElem
+		}
 	}
 	if stmt.Mut {
 		emitter := g.toOstyEmitter()
 		slot := llvmMutableLetSlot(emitter, name, toOstyValue(v))
 		slotValue := fromOstyValue(slot)
 		slotValue.gcManaged = v.gcManaged
+		slotValue.listElem = v.listElem
 		g.bindGCRootIfManagedPointer(emitter, slotValue)
 		g.takeOstyEmitter(emitter)
 		g.bindLocal(name, slotValue)
@@ -1017,7 +1071,7 @@ func (g *generator) emitFor(stmt *ast.ForStmt) error {
 	}
 	rng, ok := stmt.Iter.(*ast.RangeExpr)
 	if !ok {
-		return unsupported("control-flow", "only range for-loops are supported")
+		return g.emitListFor(iterName, stmt.Iter, stmt.Body)
 	}
 	if rng.Start == nil || rng.Stop == nil {
 		return unsupported("control-flow", "open-ended ranges are not supported")
@@ -1053,6 +1107,9 @@ func (g *generator) emitExprStmt(expr ast.Expr) error {
 	call, ok := expr.(*ast.CallExpr)
 	if !ok {
 		return unsupported("statement", "only println calls are supported as expression statements")
+	}
+	if emitted, err := g.emitListMethodCallStmt(call); emitted || err != nil {
+		return err
 	}
 	if emitted, err := g.emitRuntimeFFICallStmt(call); emitted || err != nil {
 		return err
@@ -1182,6 +1239,8 @@ func (g *generator) emitExpr(expr ast.Expr) (value, error) {
 		return value{typ: "i1", ref: "false"}, nil
 	case *ast.StringLit:
 		return g.emitStringLiteral(e)
+	case *ast.ListExpr:
+		return g.emitListLiteral(e)
 	case *ast.Ident:
 		return g.emitIdent(e.Name)
 	case *ast.ParenExpr:
@@ -1222,7 +1281,43 @@ func (g *generator) loadIfPointer(v value) (value, error) {
 	emitter := g.toOstyEmitter()
 	out := llvmLoad(emitter, toOstyValue(v))
 	g.takeOstyEmitter(emitter)
-	return fromOstyValue(out), nil
+	loaded := fromOstyValue(out)
+	loaded.gcManaged = v.gcManaged
+	loaded.listElem = v.listElem
+	return loaded, nil
+}
+
+func (g *generator) emitListLiteral(lit *ast.ListExpr) (value, error) {
+	if lit == nil {
+		return value{}, unsupported("expression", "nil list literal")
+	}
+	elems := make([]value, 0, len(lit.Elems))
+	elemTyp := ""
+	for _, elem := range lit.Elems {
+		v, err := g.emitExpr(elem)
+		if err != nil {
+			return value{}, err
+		}
+		if elemTyp == "" {
+			elemTyp = v.typ
+		} else if v.typ != elemTyp {
+			return value{}, unsupportedf("type-system", "list literal element type %s, want %s", v.typ, elemTyp)
+		}
+		elems = append(elems, v)
+	}
+	newSymbol := llvmListRuntimeSymbol("new", elemTyp)
+	g.declareRuntimeSymbol(newSymbol, "ptr", nil)
+	emitter := g.toOstyEmitter()
+	out := llvmCall(emitter, "ptr", newSymbol, nil)
+	if elemTyp != "" {
+		pushSymbol := llvmListRuntimeSymbol("push", elemTyp)
+		g.declareRuntimeSymbol(pushSymbol, "void", []paramInfo{{typ: "ptr"}, {typ: elemTyp}})
+		for _, elem := range elems {
+			llvmCallVoid(emitter, pushSymbol, []*LlvmValue{out, toOstyValue(elem)})
+		}
+	}
+	g.takeOstyEmitter(emitter)
+	return value{typ: "ptr", ref: out.name, listElem: elemTyp}, nil
 }
 
 func (g *generator) emitStructLit(lit *ast.StructLit) (value, error) {
@@ -2022,6 +2117,9 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 	if v, found, err := g.emitEnumVariantCall(call); found || err != nil {
 		return v, err
 	}
+	if v, found, err := g.emitListMethodCall(call); found || err != nil {
+		return v, err
+	}
 	if v, found, err := g.emitRuntimeFFICall(call); found || err != nil {
 		return v, err
 	}
@@ -2049,7 +2147,9 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 	emitter := g.toOstyEmitter()
 	out := llvmCall(emitter, sig.ret, sig.name, args)
 	g.takeOstyEmitter(emitter)
-	return fromOstyValue(out), nil
+	valueOut := fromOstyValue(out)
+	valueOut.listElem = sig.retListElem
+	return valueOut, nil
 }
 
 func (g *generator) emitRuntimeFFICall(call *ast.CallExpr) (value, bool, error) {
@@ -2068,7 +2168,9 @@ func (g *generator) emitRuntimeFFICall(call *ast.CallExpr) (value, bool, error) 
 	emitter := g.toOstyEmitter()
 	out := llvmCall(emitter, fn.ret, fn.symbol, args)
 	g.takeOstyEmitter(emitter)
-	return fromOstyValue(out), true, nil
+	valueOut := fromOstyValue(out)
+	valueOut.listElem = fn.retListElem
+	return valueOut, true, nil
 }
 
 func (g *generator) emitRuntimeFFICallStmt(call *ast.CallExpr) (bool, error) {
@@ -2112,6 +2214,83 @@ func (g *generator) emitUserCallStmt(call *ast.CallExpr) (bool, error) {
 	}
 	g.takeOstyEmitter(emitter)
 	return true, nil
+}
+
+func (g *generator) emitListMethodCall(call *ast.CallExpr) (value, bool, error) {
+	field, ok := g.listMethodTarget(call)
+	if !ok {
+		return value{}, false, nil
+	}
+	if field.Name != "len" {
+		return value{}, false, nil
+	}
+	if len(call.Args) != 0 {
+		return value{}, true, unsupported("call", "list len takes no arguments")
+	}
+	base, err := g.emitExpr(field.X)
+	if err != nil {
+		return value{}, true, err
+	}
+	if base.typ != "ptr" {
+		return value{}, false, nil
+	}
+	g.declareRuntimeSymbol("osty_rt_list_len", "i64", []paramInfo{{typ: "ptr"}})
+	emitter := g.toOstyEmitter()
+	out := llvmCall(emitter, "i64", "osty_rt_list_len", []*LlvmValue{toOstyValue(base)})
+	g.takeOstyEmitter(emitter)
+	return fromOstyValue(out), true, nil
+}
+
+func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
+	field, ok := g.listMethodTarget(call)
+	if !ok {
+		return false, nil
+	}
+	if field.Name != "push" {
+		return false, nil
+	}
+	base, err := g.emitExpr(field.X)
+	if err != nil {
+		return true, err
+	}
+	if base.typ != "ptr" {
+		return false, nil
+	}
+	if len(call.Args) != 1 || call.Args[0] == nil || call.Args[0].Name != "" || call.Args[0].Value == nil {
+		return true, unsupported("call", "list push requires one positional argument")
+	}
+	arg, err := g.emitExpr(call.Args[0].Value)
+	if err != nil {
+		return true, err
+	}
+	elemTyp := base.listElem
+	if elemTyp == "" {
+		elemTyp = arg.typ
+	} else if arg.typ != elemTyp {
+		return true, unsupportedf("type-system", "list push argument type %s, want %s", arg.typ, elemTyp)
+	}
+	pushSymbol := llvmListRuntimeSymbol("push", elemTyp)
+	g.declareRuntimeSymbol(pushSymbol, "void", []paramInfo{{typ: "ptr"}, {typ: elemTyp}})
+	emitter := g.toOstyEmitter()
+	llvmCallVoid(emitter, pushSymbol, []*LlvmValue{toOstyValue(base), toOstyValue(arg)})
+	g.takeOstyEmitter(emitter)
+	return true, nil
+}
+
+func (g *generator) listMethodTarget(call *ast.CallExpr) (*ast.FieldExpr, bool) {
+	if call == nil {
+		return nil, false
+	}
+	field, ok := call.Fn.(*ast.FieldExpr)
+	if !ok || field.IsOptional {
+		return nil, false
+	}
+	if alias, ok := field.X.(*ast.Ident); ok {
+		if _, isRuntimeFFI := g.runtimeFFIPaths[alias.Name]; isRuntimeFFI {
+			return nil, false
+		}
+	}
+	return field, true
 }
 
 func (g *generator) userCallArgs(sig *fnSig, call *ast.CallExpr) ([]*LlvmValue, error) {
@@ -2201,6 +2380,75 @@ func (g *generator) declareRuntimeSymbol(symbol, ret string, params []paramInfo)
 	}
 	g.runtimeDecls[symbol] = runtimeDecl{symbol: symbol, ret: ret, params: params}
 	g.runtimeDeclOrder = append(g.runtimeDeclOrder, symbol)
+}
+
+func llvmListRuntimeSymbol(op, elemTyp string) string {
+	if elemTyp == "" {
+		return "osty_rt_list_" + op
+	}
+	return "osty_rt_list_" + op + "_" + llvmRuntimeSymbolSuffix(elemTyp)
+}
+
+func llvmRuntimeSymbolSuffix(typ string) string {
+	switch typ {
+	case "i64":
+		return "i64"
+	case "double":
+		return "f64"
+	case "i1":
+		return "i1"
+	case "ptr":
+		return "ptr"
+	default:
+		var b strings.Builder
+		for i := 0; i < len(typ); i++ {
+			c := typ[i]
+			if c == '_' || ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || ('0' <= c && c <= '9') {
+				b.WriteByte(c)
+				continue
+			}
+			b.WriteByte('_')
+		}
+		if b.Len() == 0 {
+			return "ptr"
+		}
+		return b.String()
+	}
+}
+
+func (g *generator) emitListFor(iterName string, iterExpr ast.Expr, body *ast.Block) error {
+	iterable, err := g.emitExpr(iterExpr)
+	if err != nil {
+		return err
+	}
+	if iterable.typ != "ptr" {
+		return unsupported("control-flow", "only range for-loops are supported")
+	}
+	elemTyp := iterable.listElem
+	if elemTyp == "" {
+		elemTyp = "ptr"
+	}
+	g.declareRuntimeSymbol("osty_rt_list_len", "i64", []paramInfo{{typ: "ptr"}})
+	getSymbol := llvmListRuntimeSymbol("get", elemTyp)
+	g.declareRuntimeSymbol(getSymbol, elemTyp, []paramInfo{{typ: "ptr"}, {typ: "i64"}})
+	emitter := g.toOstyEmitter()
+	length := llvmCall(emitter, "i64", "osty_rt_list_len", []*LlvmValue{toOstyValue(iterable)})
+	loop := llvmRangeStart(emitter, iterName+"_idx", llvmIntLiteral(0), length, false)
+	item := llvmCall(emitter, elemTyp, getSymbol, []*LlvmValue{toOstyValue(iterable), llvmI64(loop.current)})
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = loop.bodyLabel
+	g.pushScope()
+	g.bindLocal(iterName, fromOstyValue(item))
+	if err := g.emitBlock(body.Stmts); err != nil {
+		g.popScope()
+		return err
+	}
+	g.popScope()
+	emitter = g.toOstyEmitter()
+	llvmRangeEnd(emitter, loop)
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = loop.endLabel
+	return nil
 }
 
 func (g *generator) emitEnumVariantCall(call *ast.CallExpr) (value, bool, error) {
