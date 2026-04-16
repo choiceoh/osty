@@ -1,0 +1,888 @@
+// check_env.osty — elaboration environment. Holds the lexical binding
+// stack, module-level signatures (fns, fields, variants, aliases,
+// types, interfaces), active generic bounds, and the structured output
+// records that the host bridge serializes via `FrontCheckResult`.
+//
+// Phase 4 of the migration. Replaces the string-valued storage in the
+// legacy `FrontCheckEnv` (`toolchain/check.osty:98-229`) with `Ty`
+// arena indices so equality/substitution are O(1) rather than O(n)
+// string walks.
+//
+// Scoping: the `bindings` list doubles as a stack. Entering a block
+// records the current binding count via `checkScopeMark`; leaving the
+// block truncates back with `checkScopeDrop`. This mirrors the legacy
+// `frontCheckBindingsFrom` / `frontCheckPopBindings` pair and keeps
+// parent scopes untouched.
+
+use std.strings as strings
+
+// ---------------------------------------------------------------------
+// Signature records. Every `String` type field in the legacy env has
+// been replaced with a `Ty` arena index; callers resolve indices
+// through `ty.osty` helpers.
+// ---------------------------------------------------------------------
+
+pub struct CheckBinding {
+    pub name: String,
+    pub ty: Int,
+    pub mutable: Bool,
+    pub start: Int,
+    pub end: Int,
+}
+
+pub struct CheckFnSig {
+    pub name: String,
+    pub owner: String,
+    pub receiverTy: Int,        // -1 when free function
+    pub retTy: Int,
+    pub paramNames: List<String>,
+    pub paramTys: List<Int>,
+    pub generics: List<String>,
+    pub genericBounds: List<CheckGenericBound>,
+}
+
+pub struct CheckFieldSig {
+    pub owner: String,
+    pub name: String,
+    pub ty: Int,
+    pub hasDefault: Bool,
+}
+
+pub struct CheckVariantSig {
+    pub owner: String,
+    pub name: String,
+    pub fieldTys: List<Int>,
+    pub generics: List<String>,
+}
+
+pub struct CheckAliasSig {
+    pub name: String,
+    pub ty: Int,
+    pub generics: List<String>,
+}
+
+pub struct CheckTypeSig {
+    pub name: String,
+    pub generics: List<String>,
+    pub kind: String,           // "struct" / "enum" / "interface"
+}
+
+pub struct CheckInterfaceExt {
+    pub owner: String,
+    pub ifaceTy: Int,
+}
+
+pub struct CheckGenericBound {
+    pub tyParam: String,
+    pub iface: Int,
+}
+
+// ---------------------------------------------------------------------
+// Structured output records. Serialized by the host bridge through
+// `FrontCheckedNode` / `FrontCheckedBinding` / `FrontCheckedSymbol` /
+// `FrontCheckInstantiation` once the Core output stabilises.
+// ---------------------------------------------------------------------
+
+pub struct CheckTypedNode {
+    pub node: Int,
+    pub kind: String,
+    pub ty: Int,
+    pub start: Int,
+    pub end: Int,
+}
+
+pub struct CheckBindingRecord {
+    pub node: Int,
+    pub name: String,
+    pub ty: Int,
+    pub mutable: Bool,
+    pub start: Int,
+    pub end: Int,
+}
+
+pub struct CheckSymbolRecord {
+    pub node: Int,
+    pub kind: String,
+    pub name: String,
+    pub owner: String,
+    pub ty: Int,
+    pub start: Int,
+    pub end: Int,
+}
+
+pub struct CheckInstantiationRecord {
+    pub node: Int,
+    pub callee: String,
+    pub typeArgs: List<Int>,
+    pub resultTy: Int,
+    pub start: Int,
+    pub end: Int,
+}
+
+// ---------------------------------------------------------------------
+// Environment.
+// ---------------------------------------------------------------------
+
+pub struct CheckEnv {
+    pub tys: TyArena,
+
+    // Lexical stack; binding operations push to the tail and `checkScopeDrop`
+    // truncates to a previously captured mark.
+    pub bindings: List<CheckBinding>,
+
+    // Module-level signatures.
+    pub fns: List<CheckFnSig>,
+    pub fields: List<CheckFieldSig>,
+    pub variants: List<CheckVariantSig>,
+    pub aliases: List<CheckAliasSig>,
+    pub types: List<CheckTypeSig>,
+    pub interfaces: List<String>,
+    pub interfaceExtends: List<CheckInterfaceExt>,
+
+    // Generic bounds currently in scope (owner fn / struct / impl).
+    pub genericBounds: List<CheckGenericBound>,
+
+    // Flow context.
+    pub returnTy: Int,
+    pub fnName: String,
+    pub inLoop: Bool,
+
+    // Diagnostics + summary counters — legacy `errors` is derived from
+    // `diagnostics.len()` at the bridge seam.
+    pub diagnostics: List<CheckDiagnostic>,
+    pub assignments: Int,
+    pub accepted: Int,
+
+    // Structured output mirrors of the legacy summary.
+    pub typedNodes: List<CheckTypedNode>,
+    pub bindingRecords: List<CheckBindingRecord>,
+    pub symbolRecords: List<CheckSymbolRecord>,
+    pub instantiations: List<CheckInstantiationRecord>,
+}
+
+pub fn emptyCheckEnv(tys: TyArena) -> CheckEnv {
+    CheckEnv {
+        tys,
+        bindings: [],
+        fns: [],
+        fields: [],
+        variants: [],
+        aliases: [],
+        types: [],
+        interfaces: [],
+        interfaceExtends: [],
+        genericBounds: [],
+        returnTy: tErr(tys),
+        fnName: "",
+        inLoop: false,
+        diagnostics: [],
+        assignments: 0,
+        accepted: 0,
+        typedNodes: [],
+        bindingRecords: [],
+        symbolRecords: [],
+        instantiations: [],
+    }
+}
+
+// ---------------------------------------------------------------------
+// Scoping.
+//
+// A "scope mark" is just the current binding count. Callers capture it
+// with `checkScopeMark` before entering a block and call
+// `checkScopeDrop` with the same value when leaving; anything bound
+// inside the block is shed. Parent scopes are unaffected.
+// ---------------------------------------------------------------------
+
+pub fn checkScopeMark(env: CheckEnv) -> Int {
+    checkBindingCount(env)
+}
+
+pub fn checkScopeDrop(env: CheckEnv, mark: Int) {
+    // Repeatedly pop the tail until we are back at `mark`. Osty lists
+    // support `.pop()`; the early-break guards against negative marks.
+    let mut current = checkBindingCount(env)
+    for current > mark {
+        let _ = env.bindings.pop()
+        current = current - 1
+    }
+}
+
+pub fn checkBindingCount(env: CheckEnv) -> Int {
+    let mut n = 0
+    for b in env.bindings {
+        let _ = b
+        n = n + 1
+    }
+    n
+}
+
+// ---------------------------------------------------------------------
+// Bindings.
+// ---------------------------------------------------------------------
+
+/// checkBind pushes a new immutable binding onto the lexical stack.
+pub fn checkBind(env: CheckEnv, name: String, ty: Int) {
+    env.bindings.push(CheckBinding {
+        name,
+        ty,
+        mutable: false,
+        start: -1,
+        end: -1,
+    })
+}
+
+pub fn checkBindMut(env: CheckEnv, name: String, ty: Int) {
+    env.bindings.push(CheckBinding {
+        name,
+        ty,
+        mutable: true,
+        start: -1,
+        end: -1,
+    })
+}
+
+/// checkBindSpan pushes a binding while also remembering its AST span
+/// so the structured-output record can echo the exact source range.
+pub fn checkBindSpan(env: CheckEnv, name: String, ty: Int, mutable: Bool, start: Int, end: Int) {
+    env.bindings.push(CheckBinding { name, ty, mutable, start, end })
+}
+
+/// checkLookup walks the lexical stack from the tail back, returning
+/// the most recent binding for `name`. Returns `-1` (no type) when
+/// `name` is not in scope.
+pub fn checkLookup(env: CheckEnv, name: String) -> Int {
+    let mut found = -1
+    for b in env.bindings {
+        if b.name == name {
+            found = b.ty
+        }
+    }
+    found
+}
+
+pub fn checkLookupMutable(env: CheckEnv, name: String) -> Bool {
+    let mut mutable = false
+    for b in env.bindings {
+        if b.name == name {
+            mutable = b.mutable
+        }
+    }
+    mutable
+}
+
+// ---------------------------------------------------------------------
+// Module-level registration.
+// ---------------------------------------------------------------------
+
+pub fn checkRegisterFn(env: CheckEnv, sig: CheckFnSig) {
+    env.fns.push(sig)
+}
+
+pub fn checkLookupFn(env: CheckEnv, name: String, owner: String) -> CheckFnSig {
+    for sig in env.fns {
+        if sig.name == name && sig.owner == owner {
+            return sig
+        }
+    }
+    emptyCheckFnSig()
+}
+
+/// checkLookupMethod searches `fns` where `owner` matches the receiver
+/// type head. Inheritance through `interface extends` is followed via
+/// `interfaceExtends` — Phase 7 wires this up when interfaces land.
+pub fn checkLookupMethod(env: CheckEnv, owner: String, name: String) -> CheckFnSig {
+    let direct = checkLookupFn(env, name, owner)
+    if direct.name != "" {
+        return direct
+    }
+    // Walk extends for interface inheritance.
+    for ext in env.interfaceExtends {
+        if ext.owner == owner {
+            let parent = tyHeadAt(env.tys, ext.ifaceTy)
+            let found = checkLookupMethod(env, parent, name)
+            if found.name != "" {
+                return found
+            }
+        }
+    }
+    emptyCheckFnSig()
+}
+
+pub fn checkFnExists(env: CheckEnv, name: String, owner: String) -> Bool {
+    checkLookupFn(env, name, owner).name != ""
+}
+
+pub fn checkRegisterField(env: CheckEnv, field: CheckFieldSig) {
+    env.fields.push(field)
+}
+
+pub fn checkLookupField(env: CheckEnv, owner: String, name: String) -> CheckFieldSig {
+    for f in env.fields {
+        if f.owner == owner && f.name == name {
+            return f
+        }
+    }
+    emptyCheckFieldSig()
+}
+
+pub fn checkRegisterVariant(env: CheckEnv, variant: CheckVariantSig) {
+    env.variants.push(variant)
+}
+
+pub fn checkLookupVariant(env: CheckEnv, name: String) -> CheckVariantSig {
+    for v in env.variants {
+        if v.name == name {
+            return v
+        }
+    }
+    emptyCheckVariantSig()
+}
+
+pub fn checkLookupVariantInOwner(env: CheckEnv, owner: String, name: String) -> CheckVariantSig {
+    for v in env.variants {
+        if v.owner == owner && v.name == name {
+            return v
+        }
+    }
+    emptyCheckVariantSig()
+}
+
+pub fn checkRegisterAlias(env: CheckEnv, alias: CheckAliasSig) {
+    env.aliases.push(alias)
+}
+
+pub fn checkLookupAlias(env: CheckEnv, name: String) -> CheckAliasSig {
+    for a in env.aliases {
+        if a.name == name {
+            return a
+        }
+    }
+    emptyCheckAliasSig()
+}
+
+pub fn checkRegisterType(env: CheckEnv, sig: CheckTypeSig) {
+    env.types.push(sig)
+}
+
+pub fn checkLookupType(env: CheckEnv, name: String) -> CheckTypeSig {
+    for t in env.types {
+        if t.name == name {
+            return t
+        }
+    }
+    emptyCheckTypeSig()
+}
+
+pub fn checkDeclaredTypeExists(env: CheckEnv, name: String) -> Bool {
+    if checkLookupType(env, name).name != "" {
+        return true
+    }
+    if checkLookupAlias(env, name).name != "" {
+        return true
+    }
+    checkIsInterface(env, name)
+}
+
+pub fn checkRegisterInterface(env: CheckEnv, name: String) {
+    env.interfaces.push(name)
+}
+
+pub fn checkIsInterface(env: CheckEnv, name: String) -> Bool {
+    for i in env.interfaces {
+        if i == name {
+            return true
+        }
+    }
+    false
+}
+
+pub fn checkRegisterInterfaceExtends(env: CheckEnv, ext: CheckInterfaceExt) {
+    env.interfaceExtends.push(ext)
+}
+
+pub fn checkInterfaceExtendsList(env: CheckEnv, owner: String) -> List<Int> {
+    let mut out: List<Int> = []
+    for ext in env.interfaceExtends {
+        if ext.owner == owner {
+            out.push(ext.ifaceTy)
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------------------------
+// Generic bounds.
+// ---------------------------------------------------------------------
+
+pub fn checkAddGenericBound(env: CheckEnv, bound: CheckGenericBound) {
+    env.genericBounds.push(bound)
+}
+
+pub fn checkLookupGenericBound(env: CheckEnv, tyParam: String) -> Int {
+    let mut found = -1
+    for b in env.genericBounds {
+        if b.tyParam == tyParam {
+            found = b.iface
+        }
+    }
+    found
+}
+
+pub fn checkClearGenericBoundsAfter(env: CheckEnv, mark: Int) {
+    let mut current = checkGenericBoundCount(env)
+    for current > mark {
+        let _ = env.genericBounds.pop()
+        current = current - 1
+    }
+}
+
+pub fn checkGenericBoundMark(env: CheckEnv) -> Int {
+    checkGenericBoundCount(env)
+}
+
+fn checkGenericBoundCount(env: CheckEnv) -> Int {
+    let mut n = 0
+    for b in env.genericBounds {
+        let _ = b
+        n = n + 1
+    }
+    n
+}
+
+// ---------------------------------------------------------------------
+// Alias resolution. Expands user-defined aliases once and, for deep
+// resolution, recurses into named / tuple / fn structure.
+// ---------------------------------------------------------------------
+
+/// checkResolveAliasOnce returns the RHS of `ty` when `ty` is the head
+/// of a declared alias, otherwise -1 to signal "no change". The caller
+/// is expected to substitute generic parameters separately.
+pub fn checkResolveAliasOnce(env: CheckEnv, ty: Int) -> Int {
+    if ty < 0 {
+        return -1
+    }
+    let kind = tyKindAt(env.tys, ty)
+    if kind != TkNamed {
+        return -1
+    }
+    let head = tyHeadAt(env.tys, ty)
+    let alias = checkLookupAlias(env, head)
+    if alias.name == "" {
+        return -1
+    }
+    if checkStringListLen(alias.generics) == 0 {
+        return alias.ty
+    }
+    // Generic alias: substitute each formal with the corresponding arg.
+    let args = tyArgsAt(env.tys, ty)
+    if checkIntListLen(args) != checkStringListLen(alias.generics) {
+        return alias.ty
+    }
+    checkSubstituteTy(env, alias.ty, alias.generics, args)
+}
+
+pub fn checkResolveAlias(env: CheckEnv, ty: Int) -> Int {
+    let mut current = ty
+    let mut depth = 0
+    for depth < 8 {
+        let next = checkResolveAliasOnce(env, current)
+        if next < 0 {
+            return current
+        }
+        current = next
+        depth = depth + 1
+    }
+    current
+}
+
+/// checkResolveAliasDeep walks compound types (Named args, Tuple
+/// elements, Fn params/ret, Optional inner) and re-allocates a
+/// canonical form with every alias expanded.
+pub fn checkResolveAliasDeep(env: CheckEnv, ty: Int) -> Int {
+    checkResolveAliasDeepAt(env, ty, 0)
+}
+
+fn checkResolveAliasDeepAt(env: CheckEnv, ty: Int, depth: Int) -> Int {
+    if depth > 8 || ty < 0 {
+        return ty
+    }
+    let direct = checkResolveAlias(env, ty)
+    if !(tyEq(env.tys, direct, ty)) {
+        return checkResolveAliasDeepAt(env, direct, depth + 1)
+    }
+    let kind = tyKindAt(env.tys, ty)
+    match kind {
+        TkTuple -> {
+            let elems = tyArgsAt(env.tys, ty)
+            let mut out: List<Int> = []
+            for e in elems {
+                out.push(checkResolveAliasDeepAt(env, e, depth + 1))
+            }
+            tyTuple(env.tys, out)
+        },
+        TkFn -> {
+            let params = tyArgsAt(env.tys, ty)
+            let mut outParams: List<Int> = []
+            for p in params {
+                outParams.push(checkResolveAliasDeepAt(env, p, depth + 1))
+            }
+            let ret = checkResolveAliasDeepAt(env, tyRetAt(env.tys, ty), depth + 1)
+            tyFn(env.tys, outParams, ret)
+        },
+        TkNamed -> {
+            let args = tyArgsAt(env.tys, ty)
+            if checkIntListLen(args) == 0 {
+                return ty
+            }
+            let mut outArgs: List<Int> = []
+            for a in args {
+                outArgs.push(checkResolveAliasDeepAt(env, a, depth + 1))
+            }
+            tyNamed(env.tys, tyHeadAt(env.tys, ty), outArgs)
+        },
+        TkOptional -> {
+            let inner = checkResolveAliasDeepAt(env, tyInnerAt(env.tys, ty), depth + 1)
+            tyOptional(env.tys, inner)
+        },
+        _ -> ty,
+    }
+}
+
+/// checkSubstituteTy replaces every generic name in `ty` with the
+/// corresponding entry from `args` (positional, by index in
+/// `generics`). Compound shapes rebuild through the arena.
+pub fn checkSubstituteTy(env: CheckEnv, ty: Int, generics: List<String>, args: List<Int>) -> Int {
+    if ty < 0 {
+        return ty
+    }
+    let kind = tyKindAt(env.tys, ty)
+    match kind {
+        TkNamed -> {
+            let head = tyHeadAt(env.tys, ty)
+            let idx = checkIndexOfString(generics, head)
+            if idx >= 0 {
+                // Type parameter reference — replace with the substituted
+                // arg (if it was supplied).
+                if idx < checkIntListLen(args) {
+                    return args[idx]
+                }
+                return ty
+            }
+            let inner = tyArgsAt(env.tys, ty)
+            if checkIntListLen(inner) == 0 {
+                return ty
+            }
+            let mut rebuilt: List<Int> = []
+            for a in inner {
+                rebuilt.push(checkSubstituteTy(env, a, generics, args))
+            }
+            tyNamed(env.tys, head, rebuilt)
+        },
+        TkTuple -> {
+            let elems = tyArgsAt(env.tys, ty)
+            let mut out: List<Int> = []
+            for e in elems {
+                out.push(checkSubstituteTy(env, e, generics, args))
+            }
+            tyTuple(env.tys, out)
+        },
+        TkFn -> {
+            let params = tyArgsAt(env.tys, ty)
+            let mut outParams: List<Int> = []
+            for p in params {
+                outParams.push(checkSubstituteTy(env, p, generics, args))
+            }
+            let ret = checkSubstituteTy(env, tyRetAt(env.tys, ty), generics, args)
+            tyFn(env.tys, outParams, ret)
+        },
+        TkOptional -> {
+            tyOptional(env.tys, checkSubstituteTy(env, tyInnerAt(env.tys, ty), generics, args))
+        },
+        _ -> ty,
+    }
+}
+
+// ---------------------------------------------------------------------
+// Structured output recording.
+// ---------------------------------------------------------------------
+
+pub fn checkRecordTypedNode(env: CheckEnv, nodeIdx: Int, kind: String, ty: Int, start: Int, end: Int) {
+    env.typedNodes.push(CheckTypedNode { node: nodeIdx, kind, ty, start, end })
+}
+
+pub fn checkRecordBinding(env: CheckEnv, nodeIdx: Int, name: String, ty: Int, mutable: Bool, start: Int, end: Int) {
+    env.bindingRecords.push(CheckBindingRecord { node: nodeIdx, name, ty, mutable, start, end })
+}
+
+pub fn checkRecordSymbol(env: CheckEnv, nodeIdx: Int, kind: String, name: String, owner: String, ty: Int, start: Int, end: Int) {
+    env.symbolRecords.push(CheckSymbolRecord { node: nodeIdx, kind, name, owner, ty, start, end })
+}
+
+pub fn checkRecordInstantiation(env: CheckEnv, nodeIdx: Int, callee: String, typeArgs: List<Int>, resultTy: Int, start: Int, end: Int) {
+    env.instantiations.push(CheckInstantiationRecord {
+        node: nodeIdx,
+        callee,
+        typeArgs,
+        resultTy,
+        start,
+        end,
+    })
+}
+
+// ---------------------------------------------------------------------
+// Counter helpers — preserves legacy summary semantics so the existing
+// `FrontCheckResult.summary` contract keeps working.
+// ---------------------------------------------------------------------
+
+pub fn checkExpectAssignable(env: CheckEnv, expected: Int, got: Int, start: Int, end: Int) -> Bool {
+    env.assignments = env.assignments + 1
+    if checkIsAssignable(env, expected, got) {
+        env.accepted = env.accepted + 1
+        return true
+    }
+    env.diagnostics.push(diagMismatch(
+        tyToString(env.tys, checkResolveAliasDeep(env, expected)),
+        tyToString(env.tys, checkResolveAliasDeep(env, got)),
+        start,
+        end,
+    ))
+    false
+}
+
+/// checkIsAssignable implements structural assignability against the
+/// Ty arena. Mirrors the legacy rules (`toolchain/check.osty:1419-1495`)
+/// while dropping the repeated string parsing.
+pub fn checkIsAssignable(env: CheckEnv, dst: Int, src: Int) -> Bool {
+    let d = checkResolveAliasDeep(env, dst)
+    let s = checkResolveAliasDeep(env, src)
+    if tyIsErr(env.tys, d) || tyIsErr(env.tys, s) {
+        return true
+    }
+    if tyIsNamedHead(env.tys, d, "Any") || tyIsNamedHead(env.tys, s, "Any") {
+        return true
+    }
+    if tyIsNever(env.tys, s) {
+        return true
+    }
+    if tyEq(env.tys, d, s) {
+        return true
+    }
+    let sPrim = tyPrimAt(env.tys, s)
+    let dPrim = tyPrimAt(env.tys, d)
+    let sIsPrim = tyKindAt(env.tys, s) == TkPrim
+    let dIsPrim = tyKindAt(env.tys, d) == TkPrim
+    if sIsPrim && sPrim == PkUntypedInt {
+        return dIsPrim && (dPrim == PkInt || dPrim == PkFloat || dPrim == PkByte || dPrim == PkChar ||
+            dPrim == PkInt8 || dPrim == PkInt16 || dPrim == PkInt32 || dPrim == PkInt64 ||
+            dPrim == PkUInt8 || dPrim == PkUInt16 || dPrim == PkUInt32 || dPrim == PkUInt64 ||
+            dPrim == PkFloat32 || dPrim == PkFloat64)
+    }
+    if sIsPrim && sPrim == PkUntypedFloat {
+        return dIsPrim && (dPrim == PkFloat || dPrim == PkFloat32 || dPrim == PkFloat64)
+    }
+    if dIsPrim && dPrim == PkUntypedInt {
+        return sIsPrim && (sPrim == PkInt || sPrim == PkByte || sPrim == PkChar ||
+            sPrim == PkInt8 || sPrim == PkInt16 || sPrim == PkInt32 || sPrim == PkInt64)
+    }
+    if dIsPrim && dPrim == PkUntypedFloat {
+        return sIsPrim && (sPrim == PkFloat || sPrim == PkFloat32 || sPrim == PkFloat64)
+    }
+    // Tuple vs tuple, fn vs fn, named vs named — walk structurally.
+    let dk = tyKindAt(env.tys, d)
+    let sk = tyKindAt(env.tys, s)
+    if dk == TkTuple && sk == TkTuple {
+        let da = tyArgsAt(env.tys, d)
+        let sa = tyArgsAt(env.tys, s)
+        if checkIntListLen(da) != checkIntListLen(sa) {
+            return false
+        }
+        let mut i = 0
+        for de in da {
+            if !(checkIsAssignable(env, de, sa[i])) {
+                return false
+            }
+            i = i + 1
+        }
+        return true
+    }
+    if dk == TkFn && sk == TkFn {
+        let dp = tyArgsAt(env.tys, d)
+        let sp = tyArgsAt(env.tys, s)
+        if checkIntListLen(dp) != checkIntListLen(sp) {
+            return false
+        }
+        let mut i = 0
+        for dpe in dp {
+            let spe = sp[i]
+            // Function parameters are invariant (contravariant treated
+            // as equivalence to keep the checker predictable).
+            if !(checkIsAssignable(env, dpe, spe)) || !(checkIsAssignable(env, spe, dpe)) {
+                return false
+            }
+            i = i + 1
+        }
+        return checkIsAssignable(env, tyRetAt(env.tys, d), tyRetAt(env.tys, s))
+    }
+    if dk == TkNamed && sk == TkNamed && tyHeadAt(env.tys, d) == tyHeadAt(env.tys, s) {
+        let da = tyArgsAt(env.tys, d)
+        let sa = tyArgsAt(env.tys, s)
+        if checkIntListLen(da) != checkIntListLen(sa) {
+            return false
+        }
+        let mut i = 0
+        for de in da {
+            if !(checkIsAssignable(env, de, sa[i])) {
+                return false
+            }
+            i = i + 1
+        }
+        return true
+    }
+    if dk == TkOptional && sk == TkOptional {
+        return checkIsAssignable(env, tyInnerAt(env.tys, d), tyInnerAt(env.tys, s))
+    }
+    // Interface satisfaction is resolved in Phase 7 once `solve.osty`
+    // lands; until then any interface destination accepts via the
+    // generic-bound escape hatch.
+    if dk == TkNamed && checkIsInterface(env, tyHeadAt(env.tys, d)) {
+        return true
+    }
+    false
+}
+
+// ---------------------------------------------------------------------
+// Small helpers + empties.
+// ---------------------------------------------------------------------
+
+fn checkIntListLen(xs: List<Int>) -> Int {
+    let mut n = 0
+    for x in xs {
+        let _ = x
+        n = n + 1
+    }
+    n
+}
+
+fn checkStringListLen(xs: List<String>) -> Int {
+    let mut n = 0
+    for x in xs {
+        let _ = x
+        n = n + 1
+    }
+    n
+}
+
+fn checkIndexOfString(xs: List<String>, needle: String) -> Int {
+    let mut i = 0
+    for x in xs {
+        if x == needle {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
+
+pub fn emptyCheckBinding() -> CheckBinding {
+    CheckBinding { name: "", ty: -1, mutable: false, start: -1, end: -1 }
+}
+
+pub fn emptyCheckFnSig() -> CheckFnSig {
+    CheckFnSig {
+        name: "",
+        owner: "",
+        receiverTy: -1,
+        retTy: -1,
+        paramNames: [],
+        paramTys: [],
+        generics: [],
+        genericBounds: [],
+    }
+}
+
+pub fn emptyCheckFieldSig() -> CheckFieldSig {
+    CheckFieldSig { owner: "", name: "", ty: -1, hasDefault: false }
+}
+
+pub fn emptyCheckVariantSig() -> CheckVariantSig {
+    CheckVariantSig { owner: "", name: "", fieldTys: [], generics: [] }
+}
+
+pub fn emptyCheckAliasSig() -> CheckAliasSig {
+    CheckAliasSig { name: "", ty: -1, generics: [] }
+}
+
+pub fn emptyCheckTypeSig() -> CheckTypeSig {
+    CheckTypeSig { name: "", generics: [], kind: "" }
+}
+
+// ---------------------------------------------------------------------
+// Prelude wiring. Installs the canonical builtins the elaborator needs
+// before walking any user-supplied declarations. Mirrors
+// `frontCheckInstallBuiltins` at check.osty:220-230 but through the
+// typed arena.
+// ---------------------------------------------------------------------
+
+pub fn checkInstallPrelude(env: CheckEnv) {
+    let _ = env
+    // Register the built-in `Equal`, `Ordered`, and `Hashable`
+    // interfaces so `<T: Ordered>` bounds in user code find them.
+    checkRegisterInterface(env, "Equal")
+    checkRegisterInterface(env, "Ordered")
+    checkRegisterInterface(env, "Hashable")
+
+    // Register stdlib types that carry generics so alias/bound
+    // substitution has the arity information it needs.
+    checkRegisterType(env, CheckTypeSig { name: "List", generics: ["T"], kind: "struct" })
+    checkRegisterType(env, CheckTypeSig { name: "Map", generics: ["K", "V"], kind: "struct" })
+    checkRegisterType(env, CheckTypeSig { name: "Option", generics: ["T"], kind: "enum" })
+    checkRegisterType(env, CheckTypeSig { name: "Result", generics: ["T", "E"], kind: "enum" })
+    checkRegisterType(env, CheckTypeSig { name: "Range", generics: ["T"], kind: "struct" })
+
+    // Option / Result variants.
+    checkRegisterVariant(env, CheckVariantSig {
+        owner: "Option",
+        name: "Some",
+        fieldTys: [tyNamed(env.tys, "T", [])],
+        generics: ["T"],
+    })
+    checkRegisterVariant(env, CheckVariantSig {
+        owner: "Option",
+        name: "None",
+        fieldTys: [],
+        generics: ["T"],
+    })
+    checkRegisterVariant(env, CheckVariantSig {
+        owner: "Result",
+        name: "Ok",
+        fieldTys: [tyNamed(env.tys, "T", [])],
+        generics: ["T", "E"],
+    })
+    checkRegisterVariant(env, CheckVariantSig {
+        owner: "Result",
+        name: "Err",
+        fieldTys: [tyNamed(env.tys, "E", [])],
+        generics: ["T", "E"],
+    })
+}
+
+// Preserve a surface-level mirror of `frontCheckResult*`-style bridge
+// helpers used by the Go side. These read straight off the env.
+
+pub fn checkErrorsCount(env: CheckEnv) -> Int {
+    checkDiagCountErrors(env.diagnostics)
+}
+
+pub fn checkResolveBinding(env: CheckEnv, name: String) -> String {
+    let ty = checkLookup(env, name)
+    if ty < 0 {
+        return ""
+    }
+    tyToString(env.tys, ty)
+}
+
+pub fn checkEnvSummary(env: CheckEnv) -> String {
+    let errs = checkErrorsCount(env)
+    "assignments={env.assignments} accepted={env.accepted} errors={errs}"
+}

@@ -1,0 +1,147 @@
+// core_test.osty — unit tests for the Core IR arena. Validates that
+// hand-built trees round-trip through `corePrintNode` / `corePrintModule`
+// with stable labels and that accessors return what the constructors
+// stored. Orphan harness until the toolchain native tests land.
+
+use std.testing
+use std.strings as strings
+
+fn testCoreArenaHoldsLiterals() {
+    let tys = emptyTyArena()
+    let ca = emptyCoreArena()
+
+    let intLit = coreIntLit(ca, "42", tInt(tys), 0, 2)
+    testing.assertEq(coreKindAt(ca, intLit), CkIntLit)
+    testing.assertEq(coreTextAt(ca, intLit), "42")
+    testing.assertEq(coreTyAt(ca, intLit), tInt(tys))
+    testing.assertEq(coreStartAt(ca, intLit), 0)
+    testing.assertEq(coreEndAt(ca, intLit), 2)
+
+    let trueLit = coreBoolLit(ca, true, tBool(tys), 3, 7)
+    testing.assertEq(coreKindAt(ca, trueLit), CkBoolLit)
+    testing.assert(coreBoolLitValueAt(ca, trueLit))
+
+    let falseLit = coreBoolLit(ca, false, tBool(tys), 10, 15)
+    testing.assert(!(coreBoolLitValueAt(ca, falseLit)))
+}
+
+fn testCoreArenaBinaryShape() {
+    let tys = emptyTyArena()
+    let ca = emptyCoreArena()
+
+    let left = coreIntLit(ca, "1", tInt(tys), 0, 1)
+    let right = coreIntLit(ca, "2", tInt(tys), 4, 5)
+    let add = coreBinary(ca, BoAdd, left, right, tInt(tys), 0, 5)
+
+    testing.assertEq(coreKindAt(ca, add), CkBinary)
+    testing.assertEq(coreLeftAt(ca, add), left)
+    testing.assertEq(coreRightAt(ca, add), right)
+    match coreBinaryOpAt(ca, add) {
+        BoAdd -> testing.assert(true),
+        _ -> testing.assert(false),
+    }
+}
+
+fn testCoreArenaCallThreadsTypeArgs() {
+    let tys = emptyTyArena()
+    let ca = emptyCoreArena()
+
+    let id = coreIdent(ca, "id", IkFn, tFn(tys, [tInt(tys)], tInt(tys)), 0, 2)
+    let arg = coreIntLit(ca, "1", tInt(tys), 5, 6)
+    let call = coreCall(ca, id, [arg], [tInt(tys)], tInt(tys), 0, 8)
+
+    testing.assertEq(coreKindAt(ca, call), CkCall)
+    testing.assertEq(coreLeftAt(ca, call), id)
+    let children = coreChildrenAt(ca, call)
+    testing.assertEq(coreIntListLen(children), 1)
+    testing.assertEq(children[0], arg)
+
+    let ta = coreTypeArgsAt(ca, call)
+    testing.assertEq(coreIntListLen(ta), 1)
+    testing.assertEq(ta[0], tInt(tys))
+}
+
+fn testCorePrintModuleRendersHeader() {
+    let tys = emptyTyArena()
+    let mut module = emptyCoreModule("main")
+    // one let decl: `let answer: Int = 42`
+    let value = coreIntLit(module.arena, "42", tInt(tys), 0, 2)
+    let decl = coreLetDecl(module.arena, "answer", tInt(tys), value, false, false, 0, 20)
+    module.decls.push(decl)
+
+    let rendered = corePrintModule(module, tys)
+    testing.assert(strings.contains(rendered, "(module main"))
+    testing.assert(strings.contains(rendered, "LetDecl"))
+    testing.assert(strings.contains(rendered, "answer"))
+}
+
+fn testCoreIdentKindRoundTrip() {
+    let tys = emptyTyArena()
+    let ca = emptyCoreArena()
+
+    let local = coreIdent(ca, "x", IkLocal, tInt(tys), 0, 1)
+    match coreIdentKindAt(ca, local) {
+        IkLocal -> testing.assert(true),
+        _ -> testing.assert(false),
+    }
+
+    let fnIdent = coreIdent(ca, "len", IkFn, tInt(tys), 2, 5)
+    match coreIdentKindAt(ca, fnIdent) {
+        IkFn -> testing.assert(true),
+        _ -> testing.assert(false),
+    }
+
+    let variantIdent = coreIdent(ca, "Some", IkVariant, tInt(tys), 6, 10)
+    match coreIdentKindAt(ca, variantIdent) {
+        IkVariant -> testing.assert(true),
+        _ -> testing.assert(false),
+    }
+}
+
+fn testCorePatternShapes() {
+    let tys = emptyTyArena()
+    let ca = emptyCoreArena()
+
+    let wild = corePatWild(ca, 0, 1)
+    testing.assertEq(coreKindAt(ca, wild), CpWild)
+
+    let x = corePatIdent(ca, "x", false, tInt(tys), 3, 4)
+    testing.assertEq(coreKindAt(ca, x), CpIdent)
+    testing.assertEq(coreNameAt(ca, x), "x")
+
+    let some = corePatVariant(ca, "Option", "Some", [x], tInt(tys), 6, 12)
+    testing.assertEq(coreKindAt(ca, some), CpVariant)
+    testing.assertEq(coreOwnerAt(ca, some), "Option")
+    testing.assertEq(coreNameAt(ca, some), "Some")
+    let kids = coreChildrenAt(ca, some)
+    testing.assertEq(coreIntListLen(kids), 1)
+    testing.assertEq(kids[0], x)
+}
+
+fn testCoreForStmtVarietyFlag() {
+    let tys = emptyTyArena()
+    let ca = emptyCoreArena()
+
+    let body = coreStmtBlock(ca, [], 0, 2)
+    let infinite = coreForStmt(ca, -1, -1, body, 0, 0, 30)
+    testing.assertEq(coreFlagsAt(ca, infinite), 0)
+
+    let cond = coreBoolLit(ca, true, tBool(tys), 0, 4)
+    let whileStmt = coreForStmt(ca, -1, cond, body, 1, 0, 30)
+    testing.assertEq(coreFlagsAt(ca, whileStmt), 1)
+}
+
+fn coreIntListLen(xs: List<Int>) -> Int {
+    let mut n = 0
+    for x in xs {
+        let _ = x
+        n = n + 1
+    }
+    n
+}
+
+/// tFn is a thin wrapper used only in this test file — mirrors the
+/// `tyFn` helper that `ty.osty` exports.
+fn tFn(arena: TyArena, params: List<Int>, ret: Int) -> Int {
+    tyFn(arena, params, ret)
+}

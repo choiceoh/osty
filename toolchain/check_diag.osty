@@ -1,0 +1,376 @@
+// check_diag.osty — typed diagnostics for the bidirectional elaborator.
+//
+// Phase 2 of the migration. Replaces the counter-only error reporting
+// in the legacy `check.osty` (77 sites of `env.errors = env.errors + 1`)
+// with structured records carrying a stable Exxxx code, the offending
+// byte span, a human message, and optional notes.
+//
+// The code-namespace `E0700–E0799` is reserved for the front-end type
+// checker per `toolchain/diagnostic.osty:67` (FamilyTypeChecking). New
+// codes introduced here stay inside that band.
+//
+// Host-side registration (`internal/diag/codes.go`) is deferred until
+// the Go-side JSON bridge (`cmd/osty-native-checker`) gets its
+// `diagnostics` payload. Until then, `CheckDiagnostic.code` is a plain
+// `String` that round-trips through the bridge as-is.
+
+use std.strings as strings
+
+/// CheckDiagnostic is the structured record every check-time error or
+/// warning becomes. `start` and `end` are byte offsets into the parsed
+/// source, matching the existing convention used by `FrontCheckedNode`
+/// (`toolchain/check.osty:62-68`) — no separate line/column work is
+/// required on the host side.
+pub struct CheckDiagnostic {
+    pub code: String,
+    pub severity: DiagnosticSeverity,
+    pub message: String,
+    pub start: Int,
+    pub end: Int,
+    pub notes: List<String>,
+}
+
+// ---------------------------------------------------------------------
+// Reserved type-checking codes. Keeping them as `pub fn` constants
+// (rather than a dedicated enum) so call sites read as
+// `diagMismatch(...)` rather than threading a code enum everywhere.
+// ---------------------------------------------------------------------
+
+pub fn checkCodeTypeMismatch() -> String { "E0701" }
+pub fn checkCodeArgCount() -> String { "E0702" }
+pub fn checkCodeOperandType() -> String { "E0703" }
+pub fn checkCodeUnknownField() -> String { "E0704" }
+pub fn checkCodeMissingField() -> String { "E0705" }
+pub fn checkCodeNonExhaustiveMatch() -> String { "E0706" }
+pub fn checkCodeUnreachablePattern() -> String { "E0707" }
+pub fn checkCodeInvalidAssignTarget() -> String { "E0708" }
+pub fn checkCodeImmutableAssign() -> String { "E0709" }
+pub fn checkCodeUnknownName() -> String { "E0710" }
+pub fn checkCodeUnknownMethod() -> String { "E0711" }
+pub fn checkCodeUnknownVariant() -> String { "E0712" }
+pub fn checkCodeDuplicateField() -> String { "E0713" }
+pub fn checkCodeDuplicateMethod() -> String { "E0714" }
+pub fn checkCodeNotCallable() -> String { "E0715" }
+pub fn checkCodeCannotInferTyParam() -> String { "E0720" }
+pub fn checkCodeGenericBoundViolation() -> String { "E0721" }
+pub fn checkCodeInterfaceNotSatisfied() -> String { "E0722" }
+pub fn checkCodeQuestionNotOptional() -> String { "E0730" }
+pub fn checkCodeReturnMismatch() -> String { "E0731" }
+pub fn checkCodeClosureAnnotationRequired() -> String { "E0741" }
+pub fn checkCodePatternShapeMismatch() -> String { "E0742" }
+pub fn checkCodeNonEscapingEscape() -> String { "E0743" }
+
+// ---------------------------------------------------------------------
+// Low-level builder. Higher-level constructors below wrap this so call
+// sites stay readable.
+// ---------------------------------------------------------------------
+
+pub fn checkDiag(
+    code: String,
+    message: String,
+    start: Int,
+    end: Int,
+) -> CheckDiagnostic {
+    CheckDiagnostic {
+        code,
+        severity: diagnosticSeverity(code),
+        message,
+        start,
+        end,
+        notes: [],
+    }
+}
+
+/// checkDiagWithNotes attaches optional notes to a freshly built
+/// diagnostic. Notes are rendered underneath the primary span by the
+/// host-side renderer, mirroring the `internal/diag` surface.
+pub fn checkDiagWithNotes(
+    code: String,
+    message: String,
+    start: Int,
+    end: Int,
+    notes: List<String>,
+) -> CheckDiagnostic {
+    CheckDiagnostic {
+        code,
+        severity: diagnosticSeverity(code),
+        message,
+        start,
+        end,
+        notes,
+    }
+}
+
+// ---------------------------------------------------------------------
+// Domain-specific constructors. Each one fills in the stable message
+// template; the elaborator passes the `start`/`end` span of the node
+// the error is anchored to and, for type errors, the already-stringified
+// types (via `tyToString`) so the diagnostic stays stable across
+// arena-internal index churn.
+// ---------------------------------------------------------------------
+
+/// diagMismatch reports a type-assignment failure. `expected` and `got`
+/// are the rendered forms from `tyToString` — the elaborator pretty-
+/// prints once and hands them here.
+pub fn diagMismatch(expected: String, got: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiag(
+        checkCodeTypeMismatch(),
+        "type mismatch: expected `{expected}`, found `{got}`",
+        start,
+        end,
+    )
+}
+
+pub fn diagReturnMismatch(expected: String, got: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiag(
+        checkCodeReturnMismatch(),
+        "return type mismatch: expected `{expected}`, found `{got}`",
+        start,
+        end,
+    )
+}
+
+pub fn diagArgCount(fnName: String, want: Int, got: Int, start: Int, end: Int) -> CheckDiagnostic {
+    let msg = if fnName == "" {
+        "this call takes {want} argument(s) but {got} were supplied"
+    } else {
+        "`{fnName}` takes {want} argument(s) but {got} were supplied"
+    }
+    checkDiag(checkCodeArgCount(), msg, start, end)
+}
+
+pub fn diagOperandType(op: String, ty: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiag(
+        checkCodeOperandType(),
+        "operator `{op}` cannot be applied to `{ty}`",
+        start,
+        end,
+    )
+}
+
+pub fn diagUnknownName(name: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiag(
+        checkCodeUnknownName(),
+        "cannot find `{name}` in this scope",
+        start,
+        end,
+    )
+}
+
+pub fn diagUnknownField(owner: String, name: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiag(
+        checkCodeUnknownField(),
+        "no field `{name}` on type `{owner}`",
+        start,
+        end,
+    )
+}
+
+pub fn diagUnknownMethod(owner: String, name: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiag(
+        checkCodeUnknownMethod(),
+        "no method `{name}` on type `{owner}`",
+        start,
+        end,
+    )
+}
+
+pub fn diagUnknownVariant(enumName: String, variantName: String, start: Int, end: Int) -> CheckDiagnostic {
+    let msg = if enumName == "" {
+        "unknown variant `{variantName}`"
+    } else {
+        "enum `{enumName}` has no variant `{variantName}`"
+    }
+    checkDiag(checkCodeUnknownVariant(), msg, start, end)
+}
+
+pub fn diagMissingField(owner: String, fieldName: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiag(
+        checkCodeMissingField(),
+        "missing field `{fieldName}` in initializer for `{owner}`",
+        start,
+        end,
+    )
+}
+
+pub fn diagDuplicateField(owner: String, fieldName: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiag(
+        checkCodeDuplicateField(),
+        "duplicate field `{fieldName}` in initializer for `{owner}`",
+        start,
+        end,
+    )
+}
+
+pub fn diagDuplicateMethod(owner: String, name: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiag(
+        checkCodeDuplicateMethod(),
+        "duplicate method `{name}` on `{owner}`",
+        start,
+        end,
+    )
+}
+
+pub fn diagNonExhaustiveMatch(witness: String, start: Int, end: Int) -> CheckDiagnostic {
+    let msg = if witness == "" {
+        "match is not exhaustive"
+    } else {
+        "match is not exhaustive: missing `{witness}`"
+    }
+    checkDiag(checkCodeNonExhaustiveMatch(), msg, start, end)
+}
+
+pub fn diagUnreachablePattern(start: Int, end: Int) -> CheckDiagnostic {
+    checkDiag(
+        checkCodeUnreachablePattern(),
+        "unreachable pattern: earlier arm already covers this case",
+        start,
+        end,
+    )
+}
+
+pub fn diagInvalidAssignTarget(start: Int, end: Int) -> CheckDiagnostic {
+    checkDiag(
+        checkCodeInvalidAssignTarget(),
+        "expression is not an assignable place",
+        start,
+        end,
+    )
+}
+
+pub fn diagImmutableAssign(name: String, start: Int, end: Int) -> CheckDiagnostic {
+    let msg = if name == "" {
+        "cannot assign through an immutable binding"
+    } else {
+        "cannot assign to `{name}`: binding is not `mut`"
+    }
+    checkDiag(checkCodeImmutableAssign(), msg, start, end)
+}
+
+pub fn diagNotCallable(ty: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiag(
+        checkCodeNotCallable(),
+        "value of type `{ty}` is not callable",
+        start,
+        end,
+    )
+}
+
+pub fn diagCannotInferTyParam(name: String, fnName: String, start: Int, end: Int) -> CheckDiagnostic {
+    let msg = if fnName == "" {
+        "cannot infer type parameter `{name}`"
+    } else {
+        "cannot infer type parameter `{name}` of `{fnName}`"
+    }
+    checkDiag(checkCodeCannotInferTyParam(), msg, start, end)
+}
+
+pub fn diagBoundViolation(tyParam: String, bound: String, concrete: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiag(
+        checkCodeGenericBoundViolation(),
+        "type parameter `{tyParam}` requires bound `{bound}`, but `{concrete}` does not satisfy it",
+        start,
+        end,
+    )
+}
+
+pub fn diagInterfaceNotSatisfied(concrete: String, iface: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiag(
+        checkCodeInterfaceNotSatisfied(),
+        "`{concrete}` does not satisfy interface `{iface}`",
+        start,
+        end,
+    )
+}
+
+pub fn diagQuestionNotOptional(ty: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiag(
+        checkCodeQuestionNotOptional(),
+        "`?` operator requires `Option<T>` or `Result<T, E>`, found `{ty}`",
+        start,
+        end,
+    )
+}
+
+pub fn diagClosureAnnotationRequired(start: Int, end: Int) -> CheckDiagnostic {
+    checkDiag(
+        checkCodeClosureAnnotationRequired(),
+        "closure parameter types cannot be inferred here; add a type annotation",
+        start,
+        end,
+    )
+}
+
+pub fn diagPatternShapeMismatch(ty: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiag(
+        checkCodePatternShapeMismatch(),
+        "pattern does not match scrutinee of type `{ty}`",
+        start,
+        end,
+    )
+}
+
+pub fn diagNonEscapingEscape(ty: String, context: String, start: Int, end: Int) -> CheckDiagnostic {
+    let msg = if context == "" {
+        "`{ty}` cannot escape its defining scope"
+    } else {
+        "`{ty}` cannot escape via {context}"
+    }
+    checkDiag(checkCodeNonEscapingEscape(), msg, start, end)
+}
+
+// ---------------------------------------------------------------------
+// Store helpers — the elaborator keeps a `List<CheckDiagnostic>` on
+// its context. These helpers append without forgetting to stamp the
+// severity, and they count errors for the legacy summary contract.
+// ---------------------------------------------------------------------
+
+/// checkDiagPush appends a diagnostic to `xs` in place and returns the
+/// updated list. The return value lets callers chain without binding a
+/// temporary; the underlying List is mutated.
+pub fn checkDiagPush(xs: List<CheckDiagnostic>, d: CheckDiagnostic) -> List<CheckDiagnostic> {
+    xs.push(d)
+    xs
+}
+
+/// checkDiagCountErrors scans for diagnostics that block compilation
+/// (Severity=Error). Used to derive the legacy `errors` counter that
+/// the Go bridge in `internal/selfhost/check_adapter.go:86` reads.
+pub fn checkDiagCountErrors(xs: List<CheckDiagnostic>) -> Int {
+    let mut n = 0
+    for d in xs {
+        match d.severity {
+            SeverityError -> n = n + 1,
+            _ -> {},
+        }
+    }
+    n
+}
+
+pub fn checkDiagCount(xs: List<CheckDiagnostic>) -> Int {
+    let mut n = 0
+    for d in xs {
+        let _ = d
+        n = n + 1
+    }
+    n
+}
+
+/// checkDiagRender produces a single-line preview of a diagnostic
+/// suitable for test snapshots or quick debug prints.
+pub fn checkDiagRender(d: CheckDiagnostic) -> String {
+    let prefix = diagnosticSeverityName(d.severity)
+    if d.code == "" {
+        return "{prefix}: {d.message}"
+    }
+    "{prefix}[{d.code}]: {d.message}"
+}
+
+/// checkDiagRenderAll joins rendered previews with newlines.
+pub fn checkDiagRenderAll(xs: List<CheckDiagnostic>) -> String {
+    let mut parts: List<String> = []
+    for d in xs {
+        parts.push(checkDiagRender(d))
+    }
+    strings.join(parts, "\n")
+}
