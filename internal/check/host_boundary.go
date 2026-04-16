@@ -371,6 +371,7 @@ func buildSelfhostSpanIndex(src selfhostCheckedSource) *selfhostSpanIndex {
 		for _, stmt := range file.file.Stmts {
 			idx.addNode(stmt, file.base, file.scope)
 		}
+		idx.addScopeSubtree(file.scope, file.base)
 		for _, sym := range file.refs {
 			idx.addSymbol(sym, file.base, file.scope)
 		}
@@ -409,6 +410,7 @@ func (idx *selfhostSpanIndex) addNode(n ast.Node, base int, scope *resolve.Scope
 		if _, ok := idx.scopes[key]; !ok {
 			idx.scopes[key] = scope
 		}
+		idx.addDeclaredSymbol(n, key, scope)
 		if e, ok := n.(ast.Expr); ok {
 			if _, have := idx.exprs[key]; !have {
 				idx.exprs[key] = e
@@ -674,6 +676,68 @@ func (idx *selfhostSpanIndex) addNode(n ast.Node, base int, scope *resolve.Scope
 		}
 		idx.addNode(v.Pattern, base, scope)
 	}
+}
+
+func (idx *selfhostSpanIndex) addScopeSubtree(scope *resolve.Scope, base int) {
+	if scope == nil {
+		return
+	}
+	for _, sym := range scope.Symbols() {
+		idx.addSymbol(sym, base, scope)
+	}
+	for _, child := range scope.Children() {
+		idx.addScopeSubtree(child, base)
+	}
+}
+
+func (idx *selfhostSpanIndex) addDeclaredSymbol(n ast.Node, key selfhostSpanKey, scope *resolve.Scope) {
+	sym := declaredSymbolForNode(n, scope)
+	if sym == nil {
+		return
+	}
+	idx.symbols[selfhostNameSpanKey{selfhostSpanKey: key, name: sym.Name}] = sym
+}
+
+func declaredSymbolForNode(n ast.Node, scope *resolve.Scope) *resolve.Symbol {
+	if scope == nil {
+		return nil
+	}
+	pkgScope := scope.Parent()
+	if pkgScope == nil {
+		pkgScope = scope
+	}
+	switch v := n.(type) {
+	case *ast.FnDecl:
+		if v.Recv != nil || v.Name == "" {
+			return nil
+		}
+		return lookupLocalDeclSymbol(pkgScope, v.Name, v)
+	case *ast.StructDecl:
+		return lookupLocalDeclSymbol(pkgScope, v.Name, v)
+	case *ast.EnumDecl:
+		return lookupLocalDeclSymbol(pkgScope, v.Name, v)
+	case *ast.InterfaceDecl:
+		return lookupLocalDeclSymbol(pkgScope, v.Name, v)
+	case *ast.TypeAliasDecl:
+		return lookupLocalDeclSymbol(pkgScope, v.Name, v)
+	case *ast.LetDecl:
+		return lookupLocalDeclSymbol(pkgScope, v.Name, v)
+	case *ast.Variant:
+		return lookupLocalDeclSymbol(pkgScope, v.Name, v)
+	default:
+		return nil
+	}
+}
+
+func lookupLocalDeclSymbol(scope *resolve.Scope, name string, decl ast.Node) *resolve.Symbol {
+	if scope == nil || name == "" || decl == nil {
+		return nil
+	}
+	sym := scope.LookupLocal(name)
+	if sym == nil || sym.Decl != decl {
+		return nil
+	}
+	return sym
 }
 
 func (idx *selfhostSpanIndex) lookupExpr(key selfhostSpanKey, kind string) ast.Expr {

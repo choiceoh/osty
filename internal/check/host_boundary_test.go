@@ -98,6 +98,62 @@ func TestNativeBoundaryReportsMissingExecutable(t *testing.T) {
 	}
 }
 
+func TestNativeBoundaryPreservesUnreferencedSymbolTypes(t *testing.T) {
+	src := []byte(`fn unused(value: Int) -> Int {
+    0
+}
+
+fn main() {}
+`)
+	file, res := parseResolvedFile(t, src)
+	unusedDecl := file.Decls[0].(*ast.FnDecl)
+	param := unusedDecl.Params[0]
+
+	oldFactory := nativeCheckerFactory
+	nativeCheckerFactory = func() (nativeChecker, string) {
+		return fakeNativeChecker{result: nativeCheckResult{
+			Summary: nativeCheckSummary{Assignments: 1, Accepted: 1, Errors: 0},
+			Bindings: []nativeCheckedBinding{
+				{Name: "value", TypeName: "Int", Start: param.Pos().Offset, End: param.End().Offset},
+			},
+			Symbols: []nativeCheckedSymbol{
+				{Name: "unused", Kind: "fn", TypeName: "fn(Int) -> Int", Start: unusedDecl.Pos().Offset, End: unusedDecl.End().Offset},
+			},
+		}}, ""
+	}
+	t.Cleanup(func() { nativeCheckerFactory = oldFactory })
+
+	chk := File(file, res, Opts{Source: src, Stdlib: stdlib.LoadCached()})
+	if len(chk.Diags) != 0 {
+		t.Fatalf("expected no diagnostics, got %v", chk.Diags)
+	}
+	if got := chk.LookupSymType(res.FileScope.Lookup("unused")); got == nil || got.String() != "fn(Int) -> Int" {
+		t.Fatalf("unused fn type = %v, want fn(Int) -> Int", got)
+	}
+	paramSym := lookupChildScopeSymbol(res.FileScope, "fn:unused", "value")
+	if paramSym == nil {
+		t.Fatal("expected resolver symbol for unused parameter")
+	}
+	if got := chk.LookupSymType(paramSym); got == nil || got.String() != "Int" {
+		t.Fatalf("unused param type = %v, want Int", got)
+	}
+}
+
+func lookupChildScopeSymbol(root *resolve.Scope, kind, name string) *resolve.Symbol {
+	if root == nil {
+		return nil
+	}
+	for _, child := range root.Children() {
+		if child.Kind() == kind {
+			return child.LookupLocal(name)
+		}
+		if sym := lookupChildScopeSymbol(child, kind, name); sym != nil {
+			return sym
+		}
+	}
+	return nil
+}
+
 func parseResolvedFile(t *testing.T, src []byte) (*ast.File, *resolve.Result) {
 	t.Helper()
 	file, diags := parser.ParseDiagnostics(src)

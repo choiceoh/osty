@@ -71,6 +71,31 @@ func TestDefaultNativeCheckerUsesManagedArtifactWhenEnvUnset(t *testing.T) {
 	}
 }
 
+func TestNativeBoundaryExecKeepsUnusedDeclarationTypes(t *testing.T) {
+	src := []byte(`fn unused(value: Int) -> Int {
+    0
+}
+
+fn main() {}
+`)
+	file, res := parseResolvedFile(t, src)
+
+	bin := buildRepoNativeChecker(t)
+	t.Setenv(nativeCheckerEnv, bin)
+
+	oldFactory := nativeCheckerFactory
+	nativeCheckerFactory = defaultNativeChecker
+	t.Cleanup(func() { nativeCheckerFactory = oldFactory })
+
+	chk := File(file, res, Opts{Source: src, Stdlib: stdlib.LoadCached()})
+	if len(chk.Diags) != 0 {
+		t.Fatalf("expected no diagnostics, got %v", chk.Diags)
+	}
+	if got := chk.LookupSymType(res.FileScope.Lookup("unused")); got == nil || got.String() != "fn(Int) -> Int" {
+		t.Fatalf("unused fn type = %v, want fn(Int) -> Int", got)
+	}
+}
+
 func buildRepoNativeChecker(t *testing.T) string {
 	t.Helper()
 	cwd, err := os.Getwd()
