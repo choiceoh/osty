@@ -31,8 +31,8 @@ type Result struct {
 	// for types themselves it is a *Named or *Primitive.
 	SymTypes map[*resolve.Symbol]types.Type
 
-	// Descs maps struct/enum/interface/alias symbols to the collected
-	// declaration shape. Consumed by the Go transpiler to emit code.
+	// Descs maps struct/enum/interface/alias symbols to declaration
+	// shapes used by the legacy Go checker internals.
 	Descs map[*resolve.Symbol]*typeDesc
 
 	// Instantiations records the concrete type-argument list at every
@@ -69,9 +69,9 @@ func (r *Result) LookupType(e ast.Expr) types.Type {
 // Opts matches the legacy no-stdlib behavior.
 type Opts struct {
 	// UseSelfhost makes the bootstrapped Osty checker authoritative for
-	// checker diagnostics and expression/binding instantiation facts. The
-	// Go side only collects declaration shapes still consumed by gen, lint,
-	// and LSP features.
+	// checker diagnostics and expression/binding/instantiation facts. The
+	// Go side only bridges those facts onto resolver symbols and AST nodes
+	// still consumed by gen, lint, and LSP features.
 	UseSelfhost bool
 
 	// Source is the raw source for File when UseSelfhost is enabled.
@@ -149,11 +149,9 @@ func selfhostFile(f *ast.File, rr *resolve.Result, opt Opts) *Result {
 	c.indexPrimitiveMethods(opt.Primitives)
 	c.resultMethods = opt.ResultMethods
 	c.indexSymbolsFrom(rr)
-	for _, d := range f.Decls {
-		c.timedCollect(d)
-	}
 	applySelfhostFileResult(c.result, f, rr, opt.Source, opt.Stdlib)
-	c.recordSelfhostCheckPass(f)
+	c.recordSelfhostDeclPass(f, "collect")
+	c.recordSelfhostDeclPass(f, "check")
 	return c.result
 }
 
@@ -242,16 +240,10 @@ func selfhostPackage(pkg *resolve.Package, pr *resolve.PackageResult, opt Opts) 
 	for _, pf := range pkg.Files {
 		c.indexSymbolsFrom(fileResult(pf))
 	}
-	for _, pf := range pkg.Files {
-		c.file = pf.File
-		c.resolved = fileResult(pf)
-		for _, d := range pf.File.Decls {
-			c.timedCollect(d)
-		}
-	}
 	applySelfhostPackageResult(c.result, pkg, pr, nil, opt.Stdlib)
 	for _, pf := range pkg.Files {
-		c.recordSelfhostCheckPass(pf.File)
+		c.recordSelfhostDeclPass(pf.File, "collect")
+		c.recordSelfhostDeclPass(pf.File, "check")
 	}
 	return c.result
 }
@@ -441,15 +433,6 @@ func selfhostWorkspace(
 			c.indexSymbolsFrom(fileResult(pf))
 		}
 	}
-	for _, e := range walk {
-		for _, pf := range e.pkg.Files {
-			c.file = pf.File
-			c.resolved = fileResult(pf)
-			for _, d := range pf.File.Decls {
-				c.timedCollect(d)
-			}
-		}
-	}
 
 	out := map[string]*Result{}
 	for _, e := range walk {
@@ -464,7 +447,8 @@ func selfhostWorkspace(
 	applySelfhostWorkspaceResults(ws, resolved, out, opt.Stdlib)
 	for _, e := range walk {
 		for _, pf := range e.pkg.Files {
-			c.recordSelfhostCheckPass(pf.File)
+			c.recordSelfhostDeclPass(pf.File, "collect")
+			c.recordSelfhostDeclPass(pf.File, "check")
 		}
 	}
 	return out
@@ -934,12 +918,12 @@ func (c *checker) timedCheckDecl(d ast.Decl) {
 	c.onDecl(d, "check", time.Since(t0))
 }
 
-func (c *checker) recordSelfhostCheckPass(file *ast.File) {
+func (c *checker) recordSelfhostDeclPass(file *ast.File, phase string) {
 	if c.onDecl == nil || file == nil {
 		return
 	}
 	for _, d := range file.Decls {
-		c.onDecl(d, "check", 0)
+		c.onDecl(d, phase, 0)
 	}
 }
 

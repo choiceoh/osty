@@ -190,6 +190,8 @@ func buildSelfhostSpanIndex(src selfhostCheckedSource) *selfhostSpanIndex {
 		for _, stmt := range file.file.Stmts {
 			idx.addNode(stmt, file.base, file.scope)
 		}
+		idx.addScopeTreeSymbols(file.scope, file.base)
+		idx.addTopLevelDeclSymbols(file.file, file.scope, file.base)
 		for _, sym := range file.refs {
 			idx.addSymbol(sym, file.base, file.scope)
 		}
@@ -217,6 +219,57 @@ func (idx *selfhostSpanIndex) scopeFor(key selfhostSpanKey) *resolve.Scope {
 		}
 	}
 	return best
+}
+
+func (idx *selfhostSpanIndex) addScopeTreeSymbols(scope *resolve.Scope, base int) {
+	if scope == nil {
+		return
+	}
+	for _, sym := range scope.Symbols() {
+		idx.addSymbol(sym, base, scope)
+	}
+	for _, child := range scope.Children() {
+		idx.addScopeTreeSymbols(child, base)
+	}
+}
+
+func (idx *selfhostSpanIndex) addTopLevelDeclSymbols(file *ast.File, scope *resolve.Scope, base int) {
+	if file == nil || scope == nil {
+		return
+	}
+	for _, decl := range file.Decls {
+		switch n := decl.(type) {
+		case *ast.FnDecl:
+			idx.addVisibleSymbolForNode(scope, n.Name, n, base)
+		case *ast.StructDecl:
+			idx.addVisibleSymbolForNode(scope, n.Name, n, base)
+		case *ast.EnumDecl:
+			idx.addVisibleSymbolForNode(scope, n.Name, n, base)
+			for _, variant := range n.Variants {
+				idx.addVisibleSymbolForNode(scope, variant.Name, variant, base)
+			}
+		case *ast.InterfaceDecl:
+			idx.addVisibleSymbolForNode(scope, n.Name, n, base)
+		case *ast.TypeAliasDecl:
+			idx.addVisibleSymbolForNode(scope, n.Name, n, base)
+		case *ast.LetDecl:
+			idx.addVisibleSymbolForNode(scope, n.Name, n, base)
+		}
+	}
+}
+
+func (idx *selfhostSpanIndex) addVisibleSymbolForNode(scope *resolve.Scope, name string, node ast.Node, base int) {
+	if name == "" || node == nil {
+		return
+	}
+	for cur := scope; cur != nil; cur = cur.Parent() {
+		sym := cur.LookupLocal(name)
+		if sym == nil {
+			continue
+		}
+		idx.addSymbolForNode(sym, node, name, base, scope)
+		return
+	}
 }
 
 func (idx *selfhostSpanIndex) addNode(n ast.Node, base int, scope *resolve.Scope) {
@@ -626,11 +679,18 @@ func (idx *selfhostSpanIndex) addSymbol(sym *resolve.Symbol, base int, scope *re
 	if sym == nil || sym.Decl == nil || sym.Name == "" {
 		return
 	}
-	key, ok := spanKeyForNode(sym.Decl, base)
+	idx.addSymbolForNode(sym, sym.Decl, sym.Name, base, scope)
+}
+
+func (idx *selfhostSpanIndex) addSymbolForNode(sym *resolve.Symbol, node ast.Node, name string, base int, scope *resolve.Scope) {
+	if sym == nil || node == nil || name == "" {
+		return
+	}
+	key, ok := spanKeyForNode(node, base)
 	if !ok {
 		return
 	}
-	idx.symbols[selfhostNameSpanKey{selfhostSpanKey: key, name: sym.Name}] = sym
+	idx.symbols[selfhostNameSpanKey{selfhostSpanKey: key, name: name}] = sym
 	if _, ok := idx.scopes[key]; !ok {
 		idx.scopes[key] = scope
 	}
