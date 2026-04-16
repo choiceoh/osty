@@ -49,6 +49,9 @@ Each fixture should be independently checkable as a single file and avoid:
 | `testdata/backend/llvm_smoke/string_print.osty` | `hello, osty\n` | Phase 23 LLVM IR: plain printable-ASCII `String` literal through `println` and module string constants |
 | `testdata/backend/llvm_smoke/string_escape_print.osty` | `line one\nquote " slash \\\n` | Phase 24 LLVM IR: escaped ASCII `String` literal through Osty-owned LLVM C-string encoding |
 | `testdata/backend/llvm_smoke/string_let_print.osty` | `stored string\n` | Phase 25 LLVM IR: immutable local `String` value bound from a literal and printed through an identifier |
+| `testdata/backend/llvm_smoke/string_return_print.osty` | `from function\n` | Phase 27 LLVM IR: `String` return type lowered to `ptr` and printed from a function call |
+| `testdata/backend/llvm_smoke/string_param_print.osty` | `param string\n` | Phase 28 LLVM IR: `String` parameter and argument passing through helper calls |
+| `testdata/backend/llvm_smoke/string_mut_print.osty` | `after\n` | Phase 29 LLVM IR: mutable local `String` slot, assignment, load, and print |
 
 The Phase 10 skeleton behavior and the Phase 12-15 plus Phase 23-24 lowering
 behavior are mirrored in
@@ -114,6 +117,12 @@ produce NUL-terminated constants without a baked-in newline, and
 `llvmPrintlnString` uses the Osty-owned `@.fmt_str` format constant to add the
 line ending at print time. This keeps local String values usable for later
 non-print lowering phases.
+
+Phases 27-29 expand that corrected String value shape across simple function
+boundaries and mutable locals. The bridge now lowers the `String` type to
+`ptr`, so String-returning functions, String parameters, and mutable String
+slots can reuse the existing self-hosted call, return, load, store, and print
+builders.
 
 ## Promotion Rules
 

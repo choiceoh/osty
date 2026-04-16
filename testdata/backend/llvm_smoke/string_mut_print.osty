@@ -1,0 +1,5 @@
+fn main() {
+    let mut msg = "before"
+    msg = "after"
+    println(msg)
+}

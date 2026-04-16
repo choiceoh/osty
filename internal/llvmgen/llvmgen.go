@@ -1072,6 +1072,8 @@ func llvmType(t ast.Type) (string, error) {
 		return "i64", nil
 	case "Bool":
 		return "i1", nil
+	case "String":
+		return "ptr", nil
 	default:
 		return "", unsupportedf("type-system", "type %q", strings.Join(named.Path, "."))
 	}

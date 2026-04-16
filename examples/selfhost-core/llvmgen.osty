@@ -680,6 +680,21 @@ pub fn llvmSmokeExecutableCorpus() -> List<LlvmSmokeExecutableCase> {
             fixture: "string_let_print.osty",
             stdout: "stored string\n",
         },
+        LlvmSmokeExecutableCase {
+            name: "string-return",
+            fixture: "string_return_print.osty",
+            stdout: "from function\n",
+        },
+        LlvmSmokeExecutableCase {
+            name: "string-param",
+            fixture: "string_param_print.osty",
+            stdout: "param string\n",
+        },
+        LlvmSmokeExecutableCase {
+            name: "string-mut",
+            fixture: "string_mut_print.osty",
+            stdout: "after\n",
+        },
     ]
 }
 
@@ -832,6 +847,63 @@ pub fn llvmSmokeStringLetIR(sourcePath: String) -> String {
     let main = llvmEmitter()
     let msg = llvmStringLiteral(main, "stored string")
     llvmImmutableLet(main, "msg", msg)
+    llvmPrintlnString(main, llvmIdent(main, "msg"))
+    llvmReturnI32Zero(main)
+
+    llvmRenderModuleWithGlobals(
+        sourcePath,
+        "",
+        main.stringGlobals,
+        [
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+pub fn llvmSmokeStringReturnIR(sourcePath: String) -> String {
+    let greet = llvmEmitter()
+    llvmReturn(greet, llvmStringLiteral(greet, "from function"))
+
+    let main = llvmEmitter()
+    llvmPrintlnString(main, llvmCall(main, "ptr", "greet", []))
+    llvmReturnI32Zero(main)
+
+    llvmRenderModuleWithGlobals(
+        sourcePath,
+        "",
+        greet.stringGlobals,
+        [
+            llvmRenderFunction("ptr", "greet", [], greet.body),
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+pub fn llvmSmokeStringParamIR(sourcePath: String) -> String {
+    let echo = llvmEmitter()
+    llvmBind(echo, "msg", LlvmValue { typ: "ptr", name: "%msg", pointer: false })
+    llvmReturn(echo, llvmIdent(echo, "msg"))
+
+    let main = llvmEmitter()
+    let value = llvmCall(main, "ptr", "echo", [llvmStringLiteral(main, "param string")])
+    llvmPrintlnString(main, value)
+    llvmReturnI32Zero(main)
+
+    llvmRenderModuleWithGlobals(
+        sourcePath,
+        "",
+        main.stringGlobals,
+        [
+            llvmRenderFunction("ptr", "echo", [llvmParam("msg", "ptr")], echo.body),
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+pub fn llvmSmokeStringMutableIR(sourcePath: String) -> String {
+    let main = llvmEmitter()
+    llvmMutableLet(main, "msg", llvmStringLiteral(main, "before"))
+    let _ = llvmAssign(main, "msg", llvmStringLiteral(main, "after"))
     llvmPrintlnString(main, llvmIdent(main, "msg"))
     llvmReturnI32Zero(main)
 

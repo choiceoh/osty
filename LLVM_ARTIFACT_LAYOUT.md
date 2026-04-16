@@ -291,6 +291,14 @@ The initial helper package for this plan is `internal/backend`.
 27. Split String value constants from `println` formatting. Done in Phase 26:
     string literals now emit NUL-terminated value constants, while
     `llvmPrintlnString` owns the `@.fmt_str` newline formatting call.
+28. Add String return values. Done in Phase 27: `String` lowers to `ptr` in
+    function signatures, so String literals can be returned and printed from a
+    function call.
+29. Add String parameters. Done in Phase 28: `String` arguments and parameters
+    use the same `ptr` value path through generated self-hosted call builders.
+30. Add mutable String locals. Done in Phase 29: mutable `String` slots use
+    `alloca ptr`, `store ptr`, and `load ptr` through the existing Osty-owned
+    mutable local helpers.
 
 The backend subdirectory change should land before the LLVM backend writes any
 files, so LLVM never shares the old Go-only output location.
