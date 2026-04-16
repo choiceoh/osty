@@ -14,6 +14,7 @@ import (
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/backend"
+	"github.com/osty/osty/internal/canonical"
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/parser"
@@ -270,10 +271,11 @@ func parseNativeTestEntry(pkg *resolve.Package, tc nativeTestCase) (*ast.File, [
 	testPkg.Files = append(testPkg.Files, pkg.Files...)
 	runnerFile, runnerDiags := parser.ParseDiagnostics(runner)
 	testPkg.Files = append(testPkg.Files, &resolve.PackageFile{
-		Path:       runnerPath,
-		Source:     runner,
-		File:       runnerFile,
-		ParseDiags: runnerDiags,
+		Path:            runnerPath,
+		Source:          runner,
+		CanonicalSource: canonical.Source(runner, runnerFile),
+		File:            runnerFile,
+		ParseDiags:      runnerDiags,
 	})
 	file, src, err := parseGenEmitFile(testPkg)
 	if err != nil {

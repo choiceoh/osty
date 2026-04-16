@@ -15,14 +15,14 @@ func TestAnalyzeFrontEndAssistImprovesForeignSyntax(t *testing.T) {
 	if got, want := string(result.Repaired), "fn main() {}\n"; got != want {
 		t.Fatalf("repaired source = %q, want %q", got, want)
 	}
-	if result.Before.Parse.Errors == 0 {
-		t.Fatalf("before.parse.errors = %d, want parse failures before repair", result.Before.Parse.Errors)
+	if result.Before.Parse.Errors != 0 {
+		t.Fatalf("before.parse.errors = %d, want 0 because parser-native aliases already parse", result.Before.Parse.Errors)
 	}
 	if result.After.Parse.Errors != 0 {
 		t.Fatalf("after.parse.errors = %d, want 0 after repair", result.After.Parse.Errors)
 	}
-	if !result.Improved {
-		t.Fatal("expected airepair to mark the candidate as improved")
+	if result.Improved {
+		t.Fatal("expected airepair to accept a non-regressing canonical rewrite without marking diagnostics as improved")
 	}
 	if !result.Accepted {
 		t.Fatal("expected airepair to accept the repaired candidate")
@@ -115,8 +115,8 @@ func TestAnalyzeFrontEndAssistRewritesImportKeyword(t *testing.T) {
 	if got, want := string(result.Repaired), "use std.testing as t\nfn main() {}\n"; got != want {
 		t.Fatalf("repaired source = %q, want %q", got, want)
 	}
-	if result.Before.Parse.Errors == 0 {
-		t.Fatalf("before.parse.errors = %d, want parse failures before repair", result.Before.Parse.Errors)
+	if result.Before.Parse.Errors != 0 {
+		t.Fatalf("before.parse.errors = %d, want 0 because parser-native aliases already parse", result.Before.Parse.Errors)
 	}
 	if result.After.Parse.Errors != 0 {
 		t.Fatalf("after.parse.errors = %d, want 0 after repair", result.After.Parse.Errors)
@@ -322,7 +322,7 @@ func TestAnalyzeFrontEndAssistRewritesPythonEnumerateLoop(t *testing.T) {
 	if !result.Changed {
 		t.Fatal("expected airepair to rewrite a Python enumerate loop")
 	}
-	if got, want := string(result.Repaired), "fn main() {\n    let items = [1, 2]\n    let _airepair_enumerate0 = items\n    for i in 0.._airepair_enumerate0.len() {\n        let item = _airepair_enumerate0[i]\n        println(item)\n    }\n}\n"; got != want {
+	if got, want := string(result.Repaired), "fn main() {\n    let items = [1, 2]\n    let _osty_enumerate0 = items\n    for i in 0.._osty_enumerate0.len() {\n        let item = _osty_enumerate0[i]\n        println(item)\n    }\n}\n"; got != want {
 		t.Fatalf("repaired source = %q, want %q", got, want)
 	}
 	if result.Before.Parse.Errors == 0 {
@@ -349,8 +349,8 @@ func TestAnalyzeFrontEndAssistRewritesSemanticForeignHelpers(t *testing.T) {
 	if got, want := string(result.Repaired), "fn main() {\n    let mut items = [1, 2]\n    let count = items.len()\n    let size = items.len()\n    items.push(count + size)\n    println(items)\n}\n"; got != want {
 		t.Fatalf("repaired source = %q, want %q", got, want)
 	}
-	if result.Before.TotalErrors == 0 {
-		t.Fatalf("before.total_errors = %d, want checker failures before repair", result.Before.TotalErrors)
+	if result.Before.TotalErrors != 0 {
+		t.Fatalf("before.total_errors = %d, want 0 because parser-native helper lowering already keeps the source checkable", result.Before.TotalErrors)
 	}
 	if result.After.TotalErrors != 0 {
 		t.Fatalf("after.total_errors = %d, want 0 after semantic helper repair", result.After.TotalErrors)

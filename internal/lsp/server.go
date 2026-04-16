@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/osty/osty/internal/ast"
+	"github.com/osty/osty/internal/canonical"
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/lint"
@@ -295,10 +296,11 @@ type document struct {
 // is fast enough that incremental reuse isn't worth the complexity
 // at this stage.
 type docAnalysis struct {
-	lines   *lineIndex
-	file    *ast.File
-	resolve *resolve.Result
-	check   *check.Result
+	lines      *lineIndex
+	file       *ast.File
+	provenance *parser.Provenance
+	resolve    *resolve.Result
+	check      *check.Result
 	// lint is the lint pass output (may be nil if the pipeline
 	// skipped linting, e.g. a future mode flag). Downstream handlers
 	// use it for the source.organizeImports / source.fixAll actions
@@ -553,10 +555,12 @@ func substituteFileSource(pkg *resolve.Package, path string, src []byte) bool {
 		if pf.Path != path {
 			continue
 		}
-		file, parseDiags := parser.ParseDiagnostics(src)
+		parsed := parser.ParseDetailed(src)
 		pf.Source = src
-		pf.File = file
-		pf.ParseDiags = parseDiags
+		pf.CanonicalSource = canonical.Source(src, parsed.File)
+		pf.File = parsed.File
+		pf.ParseDiags = parsed.Diagnostics
+		pf.ParseProvenance = parsed.Provenance
 		return true
 	}
 	return false
@@ -592,6 +596,7 @@ func analysisForFileInPackage(
 	return &docAnalysis{
 		lines:      newLineIndex(src),
 		file:       pf.File,
+		provenance: pf.ParseProvenance,
 		resolve:    fileRes,
 		check:      chk,
 		lint:       lr,
@@ -660,19 +665,20 @@ func diagBelongsToFile(d *diag.Diagnostic, pf *resolve.PackageFile) bool {
 // repeated edits of the same buffer benefit from the incremental
 // cache and early cutoff.
 func (s *Server) analyzeSingleFile(src []byte) *docAnalysis {
-	file, parseDiags := parser.ParseDiagnostics(src)
-	res := resolve.File(file, s.prelude)
-	chk := check.File(file, res, lspCheckOpts(src))
-	lr := lint.File(file, res, chk)
+	parsed := parser.ParseDetailed(src)
+	res := resolve.File(parsed.File, s.prelude)
+	chk := check.File(parsed.File, res, lspCheckOpts(canonical.Source(src, parsed.File)))
+	lr := lint.File(parsed.File, res, chk)
 	all := make([]*diag.Diagnostic, 0,
-		len(parseDiags)+len(res.Diags)+len(chk.Diags)+len(lr.Diags))
-	all = append(all, parseDiags...)
+		len(parsed.Diagnostics)+len(res.Diags)+len(chk.Diags)+len(lr.Diags))
+	all = append(all, parsed.Diagnostics...)
 	all = append(all, res.Diags...)
 	all = append(all, chk.Diags...)
 	all = append(all, lr.Diags...)
 	return &docAnalysis{
 		lines:      newLineIndex(src),
-		file:       file,
+		file:       parsed.File,
+		provenance: parsed.Provenance,
 		resolve:    res,
 		check:      chk,
 		lint:       lr,
@@ -713,6 +719,7 @@ func (s *Server) analyzeSingleFileViaEngine(uri string, src []byte) *docAnalysis
 	return &docAnalysis{
 		lines:      newLineIndex(src),
 		file:       pr.File,
+		provenance: pr.Provenance,
 		resolve:    rr,
 		check:      chk,
 		lint:       lr,

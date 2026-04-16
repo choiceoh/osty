@@ -205,7 +205,7 @@ func TestFixAllActionUsesAIRepairForForeignSyntax(t *testing.T) {
 	if len(edits) != 1 {
 		t.Fatalf("len(edits) = %d, want 1", len(edits))
 	}
-	if got, want := edits[0].NewText, "use std.testing as t\nfn main() {}\n"; got != want {
+	if got, want := edits[0].NewText, "use std.testing as t\n\nfn main() {}\n"; got != want {
 		t.Fatalf("newText = %q, want %q", got, want)
 	}
 }
@@ -359,7 +359,7 @@ func TestFixAllActionUsesAIRepairForPythonEnumerateLoop(t *testing.T) {
 	if len(edits) != 1 {
 		t.Fatalf("len(edits) = %d, want 1", len(edits))
 	}
-	if got, want := edits[0].NewText, "fn main() {\n    let items = [1, 2]\n    let _airepair_enumerate0 = items\n    for i in 0.._airepair_enumerate0.len() {\n        let item = _airepair_enumerate0[i]\n        println(item)\n    }\n}\n"; got != want {
+	if got, want := edits[0].NewText, "fn main() {\n    let items = [1, 2]\n    let _osty_enumerate0 = items\n    for i in 0.._osty_enumerate0.len() {\n        let item = _osty_enumerate0[i]\n        println(item)\n    }\n}\n"; got != want {
 		t.Fatalf("newText = %q, want %q", got, want)
 	}
 }

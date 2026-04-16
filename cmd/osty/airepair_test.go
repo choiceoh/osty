@@ -67,19 +67,19 @@ func TestFmtAIRepairFlagAliasesDisableAutomaticFixes(t *testing.T) {
 			}
 
 			got := runOstyCLI(t, "fmt", flagArg, "--write", path)
-			if got.exit != 2 {
-				t.Fatalf("fmt %s exit = %d, want 2\nstdout:\n%s\nstderr:\n%s", flagArg, got.exit, got.stdout, got.stderr)
+			if got.exit != 0 {
+				t.Fatalf("fmt %s exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", flagArg, got.exit, got.stdout, got.stderr)
 			}
-			if !strings.Contains(got.stderr, "osty fmt:") {
-				t.Fatalf("fmt %s stderr = %q, want osty fmt parse failure", flagArg, got.stderr)
+			if strings.Contains(got.stderr, "--airepair") {
+				t.Fatalf("fmt %s stderr = %q, did not want airepair summary when only parser-native canonicalization ran", flagArg, got.stderr)
 			}
 
 			src, err := os.ReadFile(path)
 			if err != nil {
 				t.Fatalf("read source: %v", err)
 			}
-			if string(src) != original {
-				t.Fatalf("fmt %s rewrote source = %q, want unchanged %q", flagArg, string(src), original)
+			if got, want := string(src), "fn main() {}\n"; got != want {
+				t.Fatalf("fmt %s rewrote source = %q, want canonical parser-native output %q", flagArg, got, want)
 			}
 		})
 	}
@@ -194,10 +194,10 @@ func TestAIRepairJSONReportFromStdin(t *testing.T) {
 	if report.Status != "repaired_clean" {
 		t.Fatalf("status = %q, want repaired_clean", report.Status)
 	}
-	if !report.Changed || !report.Improved || !report.Accepted {
-		t.Fatalf("report flags = changed:%v improved:%v accepted:%v, want all true", report.Changed, report.Improved, report.Accepted)
+	if !report.Changed || report.Improved || !report.Accepted {
+		t.Fatalf("report flags = changed:%v improved:%v accepted:%v, want changed:true improved:false accepted:true", report.Changed, report.Improved, report.Accepted)
 	}
-	if got, want := report.AcceptedReason, "parse_errors_reduced"; got != want {
+	if got, want := report.AcceptedReason, "non_regressing_rewrite_accepted"; got != want {
 		t.Fatalf("accepted_reason = %q, want %q", got, want)
 	}
 	if report.RejectedReason != "" {
@@ -209,8 +209,8 @@ func TestAIRepairJSONReportFromStdin(t *testing.T) {
 	if report.ResidualPrimaryHabit != "" {
 		t.Fatalf("residual_primary_habit = %q, want empty for clean repair", report.ResidualPrimaryHabit)
 	}
-	if report.Before.Parse.Errors == 0 {
-		t.Fatalf("before.parse.errors = %d, want parse failures before repair", report.Before.Parse.Errors)
+	if report.Before.Parse.Errors != 0 {
+		t.Fatalf("before.parse.errors = %d, want 0 because parser-native aliases already parse", report.Before.Parse.Errors)
 	}
 	if report.After.Parse.Errors != 0 {
 		t.Fatalf("after.parse.errors = %d, want 0 after repair", report.After.Parse.Errors)
@@ -218,8 +218,8 @@ func TestAIRepairJSONReportFromStdin(t *testing.T) {
 	if report.Source != "fn main() {}\n" {
 		t.Fatalf("source = %q, want repaired source", report.Source)
 	}
-	if report.Summary.TotalErrorsReduced <= 0 {
-		t.Fatalf("summary.total_errors_reduced = %d, want > 0", report.Summary.TotalErrorsReduced)
+	if report.Summary.TotalErrorsReduced != 0 {
+		t.Fatalf("summary.total_errors_reduced = %d, want 0 when rewrite is accepted without reducing diagnostics", report.Summary.TotalErrorsReduced)
 	}
 	if report.Summary.ResidualErrors != 0 {
 		t.Fatalf("summary.residual_errors = %d, want 0", report.Summary.ResidualErrors)
@@ -464,20 +464,20 @@ func TestAIRepairPromoteCopiesCapturedCaseIntoCorpus(t *testing.T) {
 func TestCheckWithAIRepairPassesForeignSyntax(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "main.osty")
-	if err := os.WriteFile(path, []byte("func main() {}\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("func main() {\n    console.log(nil)\n}\n"), 0o644); err != nil {
 		t.Fatalf("write source: %v", err)
 	}
 
 	without := runOstyCLI(t, "check", "--no-airepair", path)
 	if without.exit == 0 {
-		t.Fatalf("check --no-airepair exit = %d, want non-zero parse failure", without.exit)
+		t.Fatalf("check --no-airepair exit = %d, want non-zero front-end failure", without.exit)
 	}
 
 	with := runOstyCLI(t, "check", path)
 	if with.exit != 0 {
 		t.Fatalf("check auto airepair exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", with.exit, with.stdout, with.stderr)
 	}
-	if !strings.Contains(with.stderr, "osty check --airepair: applied 1 repair(s)") {
+	if !strings.Contains(with.stderr, "osty check --airepair: applied 3 repair(s)") {
 		t.Fatalf("stderr = %q, want in-memory airepair summary", with.stderr)
 	}
 }
@@ -645,8 +645,11 @@ func TestCheckWithAIRepairPassesSemanticForeignHelpers(t *testing.T) {
 	}
 
 	without := runOstyCLI(t, "check", "--no-airepair", path)
-	if without.exit == 0 {
-		t.Fatalf("check --no-airepair exit = %d, want non-zero failure", without.exit)
+	if without.exit != 0 {
+		t.Fatalf("check --no-airepair exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", without.exit, without.stdout, without.stderr)
+	}
+	if strings.Contains(without.stderr, "--airepair") {
+		t.Fatalf("stderr = %q, did not want airepair summary for parser-owned helper lowering", without.stderr)
 	}
 
 	with := runOstyCLI(t, "check", path)
@@ -654,7 +657,52 @@ func TestCheckWithAIRepairPassesSemanticForeignHelpers(t *testing.T) {
 		t.Fatalf("check auto airepair exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", with.exit, with.stdout, with.stderr)
 	}
 	if !strings.Contains(with.stderr, "osty check --airepair: applied 3 repair(s)") {
-		t.Fatalf("stderr = %q, want semantic-helper airepair summary", with.stderr)
+		t.Fatalf("stderr = %q, want semantic-helper airepair summary on the auto path", with.stderr)
+	}
+}
+
+func TestCheckWithoutAIRepairPassesStableParserAliases(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.osty")
+	source := "import std.testing as t\nfunc main() {\n    while false {\n        break\n    }\n}\n"
+	if err := os.WriteFile(path, []byte(source), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+
+	got := runOstyCLI(t, "check", "--no-airepair", path)
+	if got.exit != 0 {
+		t.Fatalf("check --no-airepair exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
+	}
+	if strings.Contains(got.stderr, "--airepair") {
+		t.Fatalf("stderr = %q, did not want airepair summary for parser-owned aliases", got.stderr)
+	}
+}
+
+func TestCheckWithoutAIRepairPassesParserLoweredEnumerateLoop(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.osty")
+	source := "fn main() {\n    let items = [1, 2]\n    for (i, item) in enumerate(items) {\n        println(i)\n        println(item)\n    }\n}\n"
+	if err := os.WriteFile(path, []byte(source), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+
+	got := runOstyCLI(t, "check", "--no-airepair", path)
+	if got.exit != 0 {
+		t.Fatalf("check --no-airepair exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
+	}
+}
+
+func TestCheckWithoutAIRepairPassesParserLoweredSemanticHelpers(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.osty")
+	source := "fn main() {\n    let mut items = [1, 2]\n    let count = len(items)\n    let size = items.length\n    items = append(items, count + size)\n    println(items)\n}\n"
+	if err := os.WriteFile(path, []byte(source), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+
+	got := runOstyCLI(t, "check", "--no-airepair", path)
+	if got.exit != 0 {
+		t.Fatalf("check --no-airepair exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
 	}
 }
 

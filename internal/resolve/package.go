@@ -3,6 +3,7 @@ package resolve
 import (
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
+	"github.com/osty/osty/internal/parser"
 )
 
 // Package is the resolver's view of one Osty package — i.e. one directory
@@ -47,6 +48,10 @@ type PackageFile struct {
 	// Source is the raw UTF-8 bytes. Retained so diagnostics can render
 	// source snippets without re-reading the file.
 	Source []byte
+	// CanonicalSource is the checker-facing canonical Osty source produced from
+	// the parsed AST after parser-owned normalization/lowering. When empty,
+	// callers should fall back to Source.
+	CanonicalSource []byte
 	// File is the parsed AST. Never nil, even when Parse reported errors;
 	// best-effort partial trees support multi-error reporting.
 	File *ast.File
@@ -54,6 +59,9 @@ type PackageFile struct {
 	// file. They are merged with resolver diagnostics by the package
 	// walker.
 	ParseDiags []*diag.Diagnostic
+	// ParseProvenance records parser-owned stable alias absorption and AST
+	// lowerings that were applied before resolve/check.
+	ParseProvenance *parser.Provenance
 	// FileScope is the file-local scope (contains this file's `use`
 	// aliases). Populated by ResolvePackage. Its parent is the package
 	// scope; the resolver walks per-file expression bodies rooted here.
@@ -64,6 +72,16 @@ type PackageFile struct {
 	// AST with name resolution already applied.
 	Refs     map[*ast.Ident]*Symbol
 	TypeRefs map[*ast.NamedType]*Symbol
+}
+
+func (pf *PackageFile) CheckerSource() []byte {
+	if pf == nil {
+		return nil
+	}
+	if len(pf.CanonicalSource) > 0 {
+		return pf.CanonicalSource
+	}
+	return pf.Source
 }
 
 // PackageResult is returned by ResolvePackage. It contains one

@@ -52,6 +52,7 @@ import (
 	"github.com/osty/osty/internal/airepair"
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/backend"
+	"github.com/osty/osty/internal/canonical"
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/format"
@@ -420,7 +421,8 @@ func main() {
 
 	switch cmd {
 	case "parse":
-		file, diags := parser.ParseDiagnostics(src)
+		parsed := parser.ParseDetailed(src)
+		file, diags := parsed.File, parsed.Diagnostics
 		printDiags(formatter, diags, flags)
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
@@ -442,9 +444,10 @@ func main() {
 			os.Exit(1)
 		}
 	case "check":
-		file, diags := parser.ParseDiagnostics(src)
+		parsed := parser.ParseDetailed(src)
+		file, diags := parsed.File, parsed.Diagnostics
 		res := resolveFile(file)
-		chk := check.File(file, res, checkOptsForSource(src))
+		chk := check.File(file, res, checkOptsForSource(canonical.Source(src, file)))
 		all := append(append(append([]*diag.Diagnostic{}, diags...), res.Diags...), chk.Diags...)
 		printDiags(formatter, all, flags)
 		if flags.inspect {
@@ -454,9 +457,10 @@ func main() {
 			os.Exit(1)
 		}
 	case "typecheck":
-		file, diags := parser.ParseDiagnostics(src)
+		parsed := parser.ParseDetailed(src)
+		file, diags := parsed.File, parsed.Diagnostics
 		res := resolveFile(file)
-		chk := check.File(file, res, checkOptsForSource(src))
+		chk := check.File(file, res, checkOptsForSource(canonical.Source(src, file)))
 		all := append(append(append([]*diag.Diagnostic{}, diags...), res.Diags...), chk.Diags...)
 		printDiags(formatter, all, flags)
 		printTypes(chk)
@@ -464,7 +468,8 @@ func main() {
 			os.Exit(1)
 		}
 	case "resolve":
-		file, parseDiags := parser.ParseDiagnostics(src)
+		parsed := parser.ParseDetailed(src)
+		file, parseDiags := parsed.File, parsed.Diagnostics
 		res := resolveFile(file)
 		all := append(append([]*diag.Diagnostic{}, parseDiags...), res.Diags...)
 		printDiags(formatter, all, flags)
@@ -491,9 +496,10 @@ func main() {
 		if cfg, base, ok := loadLintConfigWithBase(path); ok && cfg.ShouldExclude(path, base) {
 			return
 		}
-		file, parseDiags := parser.ParseDiagnostics(src)
+		parsed := parser.ParseDetailed(src)
+		file, parseDiags := parsed.File, parsed.Diagnostics
 		res := resolveFile(file)
-		chk := check.File(file, res, checkOptsForSource(src))
+		chk := check.File(file, res, checkOptsForSource(canonical.Source(src, file)))
 		lr := runLintEngine(file, res, chk)
 		if cfg, ok := loadLintConfigNear(path); ok {
 			lr = cfg.Apply(lr)
@@ -1771,15 +1777,17 @@ func loadSelectedGenFilesWithTransform(sourcePath string, files []string, transf
 		if transform != nil {
 			src = transform(path, src)
 		}
-		file, parseDiags := parser.ParseDiagnostics(src)
+		parsed := parser.ParseDetailed(src)
 		pf := &resolve.PackageFile{
-			Path:       path,
-			Source:     src,
-			File:       file,
-			ParseDiags: parseDiags,
+			Path:            path,
+			Source:          src,
+			CanonicalSource: canonical.Source(src, parsed.File),
+			File:            parsed.File,
+			ParseDiags:      parsed.Diagnostics,
+			ParseProvenance: parsed.Provenance,
 		}
 		pkg.Files = append(pkg.Files, pf)
-		res.Diags = append(res.Diags, parseDiags...)
+		res.Diags = append(res.Diags, parsed.Diagnostics...)
 		if path == sourcePath {
 			entryFile = pf
 		}
@@ -1884,14 +1892,15 @@ func parseGenEmitFile(pkg *resolve.Package) (*ast.File, []byte, error) {
 		if pf == nil {
 			continue
 		}
-		if len(pf.Source) == 0 {
+		src := pf.CheckerSource()
+		if len(src) == 0 {
 			continue
 		}
 		if merged.Len() > 0 {
 			merged.WriteByte('\n')
 		}
-		merged.Write(pf.Source)
-		if !bytes.HasSuffix(pf.Source, []byte("\n")) {
+		merged.Write(src)
+		if !bytes.HasSuffix(src, []byte("\n")) {
 			merged.WriteByte('\n')
 		}
 	}

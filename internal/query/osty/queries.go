@@ -2,6 +2,7 @@ package osty
 
 import (
 	"github.com/osty/osty/internal/ast"
+	"github.com/osty/osty/internal/canonical"
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/lint"
@@ -17,9 +18,11 @@ import (
 // parser consumed, enabling diagnostic rendering without re-reading
 // the file.
 type ParseResult struct {
-	Source []byte
-	File   *ast.File
-	Diags  []*diag.Diagnostic
+	Source          []byte
+	CanonicalSource []byte
+	File            *ast.File
+	Diags           []*diag.Diagnostic
+	Provenance      *parser.Provenance
 }
 
 // ResolvedPackage is an immutable view over a resolved package. Once
@@ -119,8 +122,14 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 	qs.Parse = query.Register(db, "Parse",
 		func(ctx *query.Ctx, path string) ParseResult {
 			src := inp.SourceText.Fetch(ctx, path)
-			file, diags := parser.ParseDiagnostics(src)
-			return ParseResult{Source: src, File: file, Diags: diags}
+			parsed := parser.ParseDetailed(src)
+			return ParseResult{
+				Source:          src,
+				CanonicalSource: canonical.Source(src, parsed.File),
+				File:            parsed.File,
+				Diags:           parsed.Diagnostics,
+				Provenance:      parsed.Provenance,
+			}
 		},
 		hashParseResult,
 	)
@@ -141,10 +150,12 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 			for _, f := range files {
 				pr := qs.Parse.Fetch(ctx, f)
 				pkg.Files = append(pkg.Files, &resolve.PackageFile{
-					Path:       f,
-					Source:     pr.Source,
-					File:       pr.File,
-					ParseDiags: pr.Diags,
+					Path:            f,
+					Source:          pr.Source,
+					CanonicalSource: pr.CanonicalSource,
+					File:            pr.File,
+					ParseDiags:      pr.Diags,
+					ParseProvenance: pr.Provenance,
 				})
 			}
 			return pkg
@@ -166,10 +177,12 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 			}
 			for i, pf := range built.Files {
 				pkg.Files[i] = &resolve.PackageFile{
-					Path:       pf.Path,
-					Source:     pf.Source,
-					File:       pf.File,
-					ParseDiags: pf.ParseDiags,
+					Path:            pf.Path,
+					Source:          pf.Source,
+					CanonicalSource: pf.CanonicalSource,
+					File:            pf.File,
+					ParseDiags:      pf.ParseDiags,
+					ParseProvenance: pf.ParseProvenance,
 				}
 			}
 			// Stdlib attachment requires an unexported resolve.Workspace

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/osty/osty/internal/canonical"
 	"github.com/osty/osty/internal/parser"
 )
 
@@ -97,12 +98,14 @@ func loadPackagePaths(paths []string, dir, name string, transform SourceTransfor
 		if transform != nil {
 			src = transform(p, src)
 		}
-		file, parseDiags := parser.ParseDiagnostics(src)
+		parsed := parser.ParseDetailed(src)
 		pkg.Files = append(pkg.Files, &PackageFile{
-			Path:       p,
-			Source:     src,
-			File:       file,
-			ParseDiags: parseDiags,
+			Path:            p,
+			Source:          src,
+			CanonicalSource: canonical.Source(src, parsed.File),
+			File:            parsed.File,
+			ParseDiags:      parsed.Diagnostics,
+			ParseProvenance: parsed.Provenance,
 		})
 	}
 	return pkg, nil
