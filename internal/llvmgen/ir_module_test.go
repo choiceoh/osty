@@ -255,28 +255,80 @@ fn main() {
 }
 
 // TestGenerateModuleGenericEnumMaybeMonomorphized verifies that a
-// generic `enum Maybe<T>` lands as a concrete mangled nominal.
-//
-// Currently skipped: Phase 2 correctly rewrites the IR but the LLVM
-// backend's legacy variant-call conversion (`Maybe.Some(42)` → dotted
-// AST FieldExpr) fires an `LLVM015` unsupported diagnostic when the
-// enum name is a mangled Itanium symbol. The IR-level behaviour is
-// covered by TestMonomorphizeGenericEnumSpecialization in
-// internal/ir/monomorph_test.go; the end-to-end smoke is left here as a
-// regression beacon and picked up by the llvmgen enum-lowering
-// follow-up (tracked alongside Phase 2 scope in LLVM_MIGRATION_PLAN.md).
+// generic `enum Maybe<T>` lands as a concrete mangled nominal and that
+// a variant literal with only let-context type information still lowers
+// through the legacy AST bridge.
 func TestGenerateModuleGenericEnumMaybeMonomorphized(t *testing.T) {
-	t.Skip("llvmgen variant-call lowering with mangled enum names is Phase 3+ scope")
 	src := `enum Maybe<T> { Some(T), None }
 
 fn main() {
-    let m = Maybe.Some(42)
-    println(1)
+    let m: Maybe<Int> = Maybe.Some(42)
+    if let Maybe.Some(x) = m {
+        println(x)
+    } else {
+        println(0)
+    }
 }
 `
 	got := runMonoLowerPipeline(t, src, "/tmp/phase2_maybe_ir.osty")
 	const wantTypeName = "_ZTSN4main5MaybeIlEE"
 	if !strings.Contains(got, wantTypeName) {
 		t.Fatalf("generated IR missing mangled enum type %q:\n%s", wantTypeName, got)
+	}
+}
+
+func TestGenerateModuleGenericEnumMaybeInferredFromPayload(t *testing.T) {
+	src := `enum Maybe<T> { Some(T), None }
+
+fn main() {
+    let m = Maybe.Some(42)
+    if let Maybe.Some(x) = m {
+        println(x)
+    } else {
+        println(0)
+    }
+}
+`
+	got := runMonoLowerPipeline(t, src, "/tmp/phase2_maybe_inferred_ir.osty")
+	const wantTypeName = "_ZTSN4main5MaybeIlEE"
+	if !strings.Contains(got, wantTypeName) {
+		t.Fatalf("generated IR missing inferred mangled enum type %q:\n%s", wantTypeName, got)
+	}
+}
+
+func TestGenerateModuleGenericEnumMaybeNoneFromLetContext(t *testing.T) {
+	src := `enum Maybe<T> { Some(T), None }
+
+fn main() {
+    let m: Maybe<Int> = Maybe.None
+    if let Maybe.None = m {
+        println(1)
+    } else {
+        println(0)
+    }
+}
+`
+	got := runMonoLowerPipeline(t, src, "/tmp/phase2_maybe_none_ir.osty")
+	const wantTypeName = "_ZTSN4main5MaybeIlEE"
+	if !strings.Contains(got, wantTypeName) {
+		t.Fatalf("generated IR missing payload-free mangled enum type %q:\n%s", wantTypeName, got)
+	}
+}
+
+func TestGenerateModuleBuiltinResultFieldConstructors(t *testing.T) {
+	src := `fn main() {
+    let ok: Result<Int, String> = Result.Ok(42)
+    let err: Result<Int, String> = Result.Err("x")
+    println(1)
+}
+`
+	got := runMonoLowerPipeline(t, src, "/tmp/phase2_result_field_ctor_ir.osty")
+	for _, want := range []string{
+		"%Result.i64.ptr",
+		"insertvalue %Result.i64.ptr",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
 	}
 }
