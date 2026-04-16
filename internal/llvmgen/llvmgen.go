@@ -35,10 +35,18 @@ import (
 var ErrUnsupported = errors.New("llvmgen: unsupported source shape")
 
 // Options configures textual LLVM IR emission.
+//
+// UseMIR opts into the Stage 3 MIR-direct emitter. When true,
+// GenerateModule dispatches to GenerateFromMIR (using the caller-
+// prepared MIR module on the Entry); when false, the legacy HIR→AST
+// bridge path is taken. The flag is false by default so existing
+// callers stay on the proven path while the MIR emitter grows to
+// parity.
 type Options struct {
 	PackageName string
 	SourcePath  string
 	Target      string
+	UseMIR      bool
 }
 
 // SmokeExecutableCase describes one LLVM executable parity case. The data is
