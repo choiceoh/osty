@@ -87,7 +87,7 @@ use go "github.com/osty/osty/internal/selfhost/astbridge" as astbridge {
     fn InterfaceDeclNode(pos: Pos, end: Pos, isPub: Bool, name: String, generics: List<GenericParam>, extends: List<Type>, methods: List<FnDecl>, doc: String, anns: List<Annotation>) -> Decl
     fn TypeAliasDeclNode(pos: Pos, end: Pos, isPub: Bool, name: String, generics: List<GenericParam>, target: Type, doc: String, anns: List<Annotation>) -> Decl
     fn UseDeclNode(pos: Pos, end: Pos, raw: String, path: List<String>, isGo: Bool, alias: String, body: List<Decl>) -> Decl
-    fn LetDeclNode(pos: Pos, end: Pos, isPub: Bool, isMut: Bool, name: String, typ: Type, value: Expr, doc: String, anns: List<Annotation>) -> Decl
+    fn LetDeclNode(pos: Pos, end: Pos, isPub: Bool, isMut: Bool, mutPos: Pos, name: String, typ: Type, value: Expr, doc: String, anns: List<Annotation>) -> Decl
     fn FieldNode(pos: Pos, end: Pos, isPub: Bool, name: String, typ: Type, def: Expr, doc: String, anns: List<Annotation>) -> Field
     fn VariantNode(pos: Pos, end: Pos, name: String, fields: List<Type>, anns: List<Annotation>, doc: String) -> Variant
     fn ParamNode(pos: Pos, end: Pos, name: String, pat: Pattern, typ: Type, def: Expr) -> Param
@@ -103,7 +103,7 @@ use go "github.com/osty/osty/internal/selfhost/astbridge" as astbridge {
     fn BlockNode(pos: Pos, end: Pos, stmts: List<Stmt>) -> Block
     fn BlockAsStmt(b: Block) -> Stmt
     fn BlockAsExpr(b: Block) -> Expr
-    fn LetStmtNode(pos: Pos, end: Pos, pat: Pattern, isMut: Bool, typ: Type, value: Expr) -> Stmt
+    fn LetStmtNode(pos: Pos, end: Pos, pat: Pattern, isMut: Bool, mutPos: Pos, typ: Type, value: Expr) -> Stmt
     fn ReturnStmtNode(pos: Pos, end: Pos, value: Expr) -> Stmt
     fn BreakStmtNode(pos: Pos, end: Pos) -> Stmt
     fn ContinueStmtNode(pos: Pos, end: Pos) -> Stmt
@@ -158,6 +158,7 @@ use go "github.com/osty/osty/internal/selfhost/astbridge" as astbridge {
     fn TokenKind(tok: Token) -> Kind
     fn TokenPos(tok: Token) -> Pos
     fn TokenEnd(tok: Token) -> Pos
+    fn ZeroPos() -> Pos
     fn TokenValue(tok: Token) -> String
     fn TokenLeadingDoc(tok: Token) -> String
     fn TokenIsPub(tok: Token) -> Bool
@@ -504,6 +505,18 @@ fn astLowerNodePos(toks: List<astbridge.Token>, n: AstNode) -> astbridge.Pos {
 
 fn astLowerNodeEnd(toks: List<astbridge.Token>, n: AstNode) -> astbridge.Pos {
     astLowerEnd(toks, n.end)
+}
+
+fn astLowerMutPos(toks: List<astbridge.Token>, n: AstNode) -> astbridge.Pos {
+    if !(n.flags == 1) {
+        return astbridge.ZeroPos()
+    }
+    for i in n.start..n.end {
+        if astbridge.TokenKindString(astLowerTok(toks, i)) == "mut" {
+            return astbridge.TokenPos(astLowerTok(toks, i))
+        }
+    }
+    astbridge.ZeroPos()
 }
 
 fn astLowerDoc(toks: List<astbridge.Token>, idx: Int) -> String {
@@ -997,6 +1010,7 @@ fn astLowerLetDecl(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> 
         astLowerNodeEnd(toks, n),
         astbridge.TokenIsPub(astLowerTok(toks, n.start - 1)),
         n.flags == 1,
+        astLowerMutPos(toks, n),
         name,
         astLowerChildType(arena, toks, n, 0),
         astLowerExpr(arena, toks, n.right),
@@ -1149,7 +1163,7 @@ fn astLowerStmt(arena: AstArena, toks: List<astbridge.Token>, idx: Int) -> astbr
     }
     let n = astArenaNodeAt(arena, idx)
     if n.kind == AstNLet {
-        return astbridge.LetStmtNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerPattern(arena, toks, n.left), n.flags == 1, astLowerChildType(arena, toks, n, 0), astLowerExpr(arena, toks, n.right))
+        return astbridge.LetStmtNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerPattern(arena, toks, n.left), n.flags == 1, astLowerMutPos(toks, n), astLowerChildType(arena, toks, n, 0), astLowerExpr(arena, toks, n.right))
     }
     if n.kind == AstNReturn {
         return astbridge.ReturnStmtNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerExpr(arena, toks, n.left))
