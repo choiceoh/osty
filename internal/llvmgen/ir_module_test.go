@@ -481,6 +481,49 @@ fn main() {
 	}
 }
 
+// TestGenerateModuleMangledInterfaceNameVtableDispatch covers Phase 6f:
+// Phase 5's generic interface specialization emits nominal names in
+// the Itanium `_ZTSN…E` shape. Phase 6a-6e's vtable scaffold must
+// continue to work on those mangled names — discovery, vtable
+// emission, boxing, and dispatch all keyed on the exact string
+// produced by `MonomorphMangleType`. The parser does not yet accept
+// generic interface declarations, so this smoke feeds the mangled
+// name as the raw source identifier; the resulting pipeline stage
+// mirrors what Phase 5 would hand llvmgen for a `Container<Int>`
+// specialization.
+func TestGenerateModuleMangledInterfaceNameVtableDispatch(t *testing.T) {
+	const mangled = "_ZTSN4main9ContainerIlEE"
+	src := `interface ` + mangled + ` {
+    fn get(self) -> Int
+}
+
+struct IntBox {
+    value: Int,
+
+    fn get(self) -> Int {
+        self.value
+    }
+}
+
+fn main() {
+    let b = IntBox { value: 3 }
+    let c: ` + mangled + ` = b
+    println(c.get())
+}
+`
+	got := runMonoLowerPipeline(t, src, "/tmp/phase6f_mangled_iface.osty")
+	for _, want := range []string{
+		"%osty.iface",
+		mangled,
+		"@osty.vtable.IntBox__" + mangled,
+		"ptr @IntBox__get",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // TestGenerateModuleMethodLocalGenericGetMonomorphized verifies the
 // Phase 4 path: a non-generic struct with a generic method
 // (`fn get<U>(self, u: U) -> U`) gets specialized per turbofish call

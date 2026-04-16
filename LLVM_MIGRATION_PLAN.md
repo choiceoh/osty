@@ -307,11 +307,22 @@ artifact/cache layout 정책은 [`LLVM_ARTIFACT_LAYOUT.md`](./LLVM_ARTIFACT_LAYO
     `boxInterfaceValue`가 반환 value에 `sourceType: ifaceType`을 태그
     해 slot이 자신의 선언 interface identity를 기억한다. smoke:
     `TestGenerateModuleInterfaceBoxingFromAssign`.
+  - Phase 6f(Phase 5 mangled interface 이름 ↔ Phase 6 vtable 통합):
+    코드 변경 없이 이미 맞물려 있다. Phase 5가 generic interface를
+    specialize할 때 결과 이름은 `_ZTSN…E` Itanium RTTI 포맷이고,
+    Phase 6a의 `discoverInterfaceImplementations`는 이 이름을 그대로
+    소비해 `@osty.vtable.<impl>__<mangled>` vtable global을 emit한다.
+    boxing / dispatch 경로도 `interfaceInfo.name` 기준이라 추가 처리
+    불필요. smoke: `TestGenerateModuleMangledInterfaceNameVtableDispatch`
+    가 mangled 이름을 source identifier로 직접 써서 경로 전체를
+    regression-lock (parser가 generic interface `interface Foo<T>` 선언
+    문법을 아직 수용하지 않아 실제 Container<Int> → Container<Int>
+    specialization E2E는 별도 parser/checker 확장 후).
   - 남은 범위: bare function-pointer turbofish (`let f = id::<Int>`),
-    generic interface specialization의 vtable 연결 (Phase 5 `_ZTSN…E` +
-    Phase 6a scaffold), 암묵 타입 변환, payload-free / 비-리터럴 인자를
-    가진 variant call의 타입 복원(궁극적으로는 checker 쪽 generic
-    variant-constructor inference 보강).
+    generic interface 선언 파서 지원 (`interface Foo<T>` 문법),
+    암묵 타입 변환, payload-free / 비-리터럴 인자를 가진 variant call의
+    타입 복원(궁극적으로는 checker 쪽 generic variant-constructor
+    inference 보강).
 - workspace/dependency graph를 codegen/link order로 변환한다.
 - `use go` FFI는 LLVM backend에서 그대로 지원하기 어렵기 때문에 새 FFI 정책을
   정한다.
