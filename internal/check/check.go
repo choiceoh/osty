@@ -68,6 +68,20 @@ func (r *Result) LookupType(e ast.Expr) types.Type {
 // Opts bundles optional inputs to File / Package / Workspace. A zero
 // Opts matches the legacy no-stdlib behavior.
 type Opts struct {
+	// UseSelfhost makes the bootstrapped Osty checker authoritative for
+	// checker diagnostics. The legacy Go checker still runs to populate
+	// structural Result maps consumed by gen, lint, and LSP features.
+	UseSelfhost bool
+
+	// Source is the raw source for File when UseSelfhost is enabled.
+	// Package and Workspace read sources from resolve.PackageFile.
+	Source []byte
+
+	// Stdlib supplies std.* package signatures to the selfhost checker
+	// when UseSelfhost is enabled outside a Workspace that already has
+	// a Stdlib provider attached.
+	Stdlib resolve.StdlibProvider
+
 	// Primitives is the stdlib's intrinsic-method table (typically
 	// obtained from stdlib.Registry.Primitives). When non-nil, methods
 	// declared on `#[intrinsic_methods(...)]` placeholder structs are
@@ -109,15 +123,19 @@ func firstOpt(opts []Opts) Opts {
 // method calls on primitive receivers consult the provided
 // intrinsic-method table.
 func File(f *ast.File, rr *resolve.Result, opts ...Opts) *Result {
+	opt := firstOpt(opts)
 	c := newChecker()
 	c.file = f
 	c.resolved = rr
-	c.onDecl = firstOpt(opts).OnDecl
+	c.onDecl = opt.OnDecl
 	c.initBuiltins()
-	c.indexPrimitiveMethods(firstOpt(opts).Primitives)
-	c.resultMethods = firstOpt(opts).ResultMethods
+	c.indexPrimitiveMethods(opt.Primitives)
+	c.resultMethods = opt.ResultMethods
 	c.indexSymbolsFrom(rr)
 	c.run()
+	if opt.UseSelfhost {
+		applySelfhostFileResult(c.result, f, opt.Source, opt.Stdlib)
+	}
 	return c.result
 }
 
@@ -135,6 +153,7 @@ func File(f *ast.File, rr *resolve.Result, opts ...Opts) *Result {
 //  3. Stmts   — any file's top-level script statements are checked
 //     last, with an implicit `fn main()` env.
 func Package(pkg *resolve.Package, pr *resolve.PackageResult, opts ...Opts) *Result {
+	opt := firstOpt(opts)
 	c := newChecker()
 	if len(pkg.Files) == 0 {
 		return c.result
@@ -143,10 +162,10 @@ func Package(pkg *resolve.Package, pr *resolve.PackageResult, opts ...Opts) *Res
 	// scope gets us there — all files in a package share the same
 	// prelude through the package scope.
 	c.resolved = fileResult(pkg.Files[0])
-	c.onDecl = firstOpt(opts).OnDecl
+	c.onDecl = opt.OnDecl
 	c.initBuiltins()
-	c.indexPrimitiveMethods(firstOpt(opts).Primitives)
-	c.resultMethods = firstOpt(opts).ResultMethods
+	c.indexPrimitiveMethods(opt.Primitives)
+	c.resultMethods = opt.ResultMethods
 
 	// Phase A: build symbol indexes from every file's Refs/TypeRefs
 	// BEFORE any collect pass runs, so the checker can cross-reference
@@ -186,6 +205,9 @@ func Package(pkg *resolve.Package, pr *resolve.PackageResult, opts ...Opts) *Res
 		e := &env{retType: types.Unit}
 		c.checkStmts(pf.File.Stmts, e)
 	}
+	if opt.UseSelfhost {
+		applySelfhostPackageResult(c.result, pkg, nil, opt.Stdlib)
+	}
 	return c.result
 }
 
@@ -204,6 +226,7 @@ func Workspace(
 	resolved map[string]*resolve.PackageResult,
 	opts ...Opts,
 ) map[string]*Result {
+	opt := firstOpt(opts)
 	type pkgEntry struct {
 		path string
 		pkg  *resolve.Package
@@ -223,8 +246,8 @@ func Workspace(
 	}
 
 	c := newChecker()
-	c.indexPrimitiveMethods(firstOpt(opts).Primitives)
-	c.resultMethods = firstOpt(opts).ResultMethods
+	c.indexPrimitiveMethods(opt.Primitives)
+	c.resultMethods = opt.ResultMethods
 	// Seed c.resolved with any file's view so initBuiltins can walk up
 	// to the prelude. Every file in the workspace reaches the same
 	// prelude, so this is independent of which package we pick first.
@@ -293,6 +316,9 @@ func Workspace(
 			Instantiations: c.result.Instantiations,
 			Diags:          pkgDiags,
 		}
+	}
+	if opt.UseSelfhost {
+		applySelfhostWorkspaceResults(ws, out, opt.Stdlib)
 	}
 	return out
 }

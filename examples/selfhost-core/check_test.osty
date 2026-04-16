@@ -1,72 +1,164 @@
 use std.testing
 
-fn testSelfCheckerAcceptsPrimitiveFlow() {
-    let result = selfCheckSource(
+fn testSelfCheckerAcceptsAstTypeFlow() {
+    let checked = frontendCheckSource(
         r"""
-            fn inc(x: Int) -> Int {
-                let next: Int = x + 1
-                return next
+            interface Show {
+                fn show(self) -> String
+            }
+
+            struct Box<T> {
+                value: T
+
+                fn show(self) -> String {
+                    "box"
+                }
+            }
+
+            type IntBox = Box<Int>
+
+            fn id<T>(value: T) -> T {
+                value
+            }
+
+            fn render<T: Show>(value: T) -> String {
+                value.show()
             }
 
             fn main() {
-                let mut value: Int = inc(1)
-                value = value + 1
+                let boxed: IntBox = Box { value: id::<Int>(1) }
+                let text: String = render(boxed)
+                let values: List<Int> = [1, 2]
+                let size: Int = values.map(|x| x + 1).len()
+                let outcome: Result<Int, String> = Ok(size)
+                let ok: Option<Int> = outcome.ok()
+                let got: Int = ok.unwrapOr(0)
             }
             """,
     )
 
-    testing.assertEq(result.resolveErrors, 0)
-    testing.assertEq(selfCheckDiagnosticCount(result), 0)
-    testing.assert(result.checkedExpressions >= 3)
+    testing.assertEq(checked.errors, 0)
+    testing.assert(checked.assignments >= 8)
+    testing.assert(checked.accepted >= 8)
 }
 
-fn testSelfCheckerReportsAssignmentReturnAndConditionErrors() {
-    let result = selfCheckSource(
+fn testSelfCheckerEmitsStructuredResult() {
+    let checked = frontendCheckSourceStructured(
         r"""
-            fn bad(flag: Bool) -> Int {
-                let count: Int = "nope"
-                let value: Int = 1
-                value = 2
-                if 1 {}
-                return flag
+            struct Box<T> {
+                value: T
+            }
+
+            fn id<T>(value: T) -> T {
+                value
+            }
+
+            fn main() {
+                let boxed: Box<Int> = Box { value: id::<Int>(1) }
             }
             """,
     )
 
-    testing.assertEq(result.resolveErrors, 0)
-    testing.assertEq(selfCheckCodeCount(result, "E0700"), 1)
-    testing.assertEq(selfCheckCodeCount(result, "E0725"), 1)
-    testing.assertEq(selfCheckCodeCount(result, "E0715"), 1)
-    testing.assertEq(selfCheckCodeCount(result, "E0726"), 1)
+    testing.assertEq(checked.summary.errors, 0)
+    testing.assert(frontCheckResultTypedNodeCount(checked) > 0)
+    testing.assertEq(frontCheckResultBindingType(checked, "boxed"), "Box<Int>")
+    testing.assert(frontCheckResultSymbolCount(checked, "fn") >= 2)
+    testing.assert(frontCheckResultSymbolCount(checked, "struct") >= 1)
+    testing.assert(frontCheckResultInstantiationCount(checked) >= 1)
 }
 
-fn testSelfCheckerReportsCallShapeErrors() {
-    let result = selfCheckSource(
+fn testSelfCheckerReportsAssignmentReturnAndCallErrors() {
+    let checked = frontendCheckSource(
         r"""
             fn takesInt(value: Int) -> Int {
                 value
             }
 
-            fn main() {
-                takesInt("bad")
-                takesInt(1, 2)
+            fn bad(flag: Bool) -> Int {
+                let count: Int = "nope"
+                let call: Bool = takesInt("bad")
+                return flag
             }
             """,
     )
 
-    testing.assertEq(result.resolveErrors, 0)
-    testing.assertEq(selfCheckCodeCount(result, "E0700"), 1)
-    testing.assertEq(selfCheckCodeCount(result, "E0701"), 1)
+    testing.assert(checked.errors >= 3)
+    testing.assert(checked.assignments >= 3)
 }
 
-fn testSelfCheckerCarriesResolverErrorCount() {
-    let result = selfCheckSource(
+fn testSelfCheckerChecksMatchExhaustivenessAndPatterns() {
+    let nonExhaustive = frontendCheckSource(
         r"""
-            fn main() {
-                missing()
+            enum Color { Red, Green }
+
+            fn code(color: Color) -> Int {
+                match color {
+                    Red -> 1,
+                }
             }
             """,
     )
 
-    testing.assert(result.resolveErrors > 0)
+    let badPattern = frontendCheckSource(
+        r"""
+            enum Maybe { Some(Int), None }
+
+            fn main() {
+                let Some(value) = Some(1)
+                let f = |Some(value)| value
+            }
+            """,
+    )
+
+    testing.assert(nonExhaustive.errors > 0)
+    testing.assert(badPattern.errors >= 2)
+}
+
+fn testSelfCheckerChecksInterfaceSatisfaction() {
+    let good = frontendCheckSource(
+        r"""
+            interface Named {
+                fn name(self) -> String
+            }
+
+            struct User {
+                name: String
+
+                fn name(self) -> String {
+                    self.name
+                }
+            }
+
+            fn display<T: Named>(value: T) -> String {
+                value.name()
+            }
+
+            fn main() {
+                let user: User = User { name: "Ada" }
+                let label: String = display(user)
+            }
+            """,
+    )
+
+    let bad = frontendCheckSource(
+        r"""
+            interface Named {
+                fn name(self) -> String
+            }
+
+            struct User { age: Int }
+
+            fn display<T: Named>(value: T) -> String {
+                value.name()
+            }
+
+            fn main() {
+                let user: User = User { age: 37 }
+                let label: String = display(user)
+            }
+            """,
+    )
+
+    testing.assertEq(good.errors, 0)
+    testing.assert(bad.errors > 0)
 }

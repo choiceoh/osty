@@ -18,6 +18,7 @@ var sourceFiles = []string{
 	"examples/dogfood/frontend.osty",
 	"examples/dogfood/lexer.osty",
 	"examples/dogfood/parser.osty",
+	"examples/dogfood/checker.osty",
 }
 
 const mergedPath = "/tmp/selfhost_merged.osty"
@@ -34,6 +35,7 @@ const stringsPrelude = `use go "strings" as strings {
     fn SplitN(s: String, sep: String, n: Int) -> List<String>
     fn TrimPrefix(s: String, prefix: String) -> String
     fn TrimSpace(s: String) -> String
+    fn TrimSuffix(s: String, suffix: String) -> String
 }
 `
 
@@ -56,9 +58,10 @@ func run() error {
 	if err := os.WriteFile(mergedPath, merged, 0o644); err != nil {
 		return fmt.Errorf("write merged selfhost source: %w", err)
 	}
+	defer os.Remove(mergedPath)
 
 	outPath := filepath.Join(root, "internal/selfhost/generated.go")
-	cmd := exec.Command("go", "run", "./cmd/osty", "gen", "--package", "selfhost", "-o", outPath, mergedPath)
+	cmd := exec.Command("go", "run", "-tags", "selfhostgen", "./cmd/osty", "gen", "--package", "selfhost", "-o", outPath, mergedPath)
 	cmd.Dir = root
 	output, err := cmd.CombinedOutput()
 	if err != nil {
