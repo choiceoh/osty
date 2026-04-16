@@ -350,6 +350,50 @@ func TestValidateRejectsForWithBothVarAndPattern(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsDuplicateGenericParam(t *testing.T) {
+	fn := &FnDecl{
+		Name:     "id",
+		Generics: []*TypeParam{{Name: "T"}, {Name: "T"}},
+		Return:   TInt,
+		Body:     &Block{},
+	}
+	m := &Module{Package: "main", Decls: []Decl{fn}}
+	errs := Validate(m)
+	if len(errs) == 0 {
+		t.Fatal("expected validation error for duplicate generic params")
+	}
+}
+
+func TestValidateRejectsNilCallTypeArg(t *testing.T) {
+	e := &CallExpr{
+		Callee:   &Ident{Name: "id", Kind: IdentFn, T: &FnType{Params: []Type{TInt}, Return: TInt}},
+		TypeArgs: []Type{nil},
+		Args:     []Arg{{Value: intLit("1")}},
+		T:        TInt,
+	}
+	m := moduleWithExpr(e)
+	errs := Validate(m)
+	if len(errs) == 0 {
+		t.Fatal("expected validation error for nil call TypeArg")
+	}
+}
+
+func TestValidateRejectsInvalidMatchTree(t *testing.T) {
+	e := &MatchExpr{
+		Scrutinee: intLit("1"),
+		Arms: []*MatchArm{
+			{Pattern: &WildPat{}, Body: &Block{Result: intLit("1")}},
+		},
+		Tree: &DecisionLeaf{ArmIndex: 99},
+		T:    TInt,
+	}
+	m := moduleWithExpr(e)
+	errs := Validate(m)
+	if len(errs) == 0 {
+		t.Fatal("expected validation error for invalid match tree")
+	}
+}
+
 // ==== Helpers ====
 
 func moduleWithExpr(e Expr) *Module {
