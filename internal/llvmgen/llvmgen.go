@@ -201,6 +201,7 @@ func generateASTFile(file *ast.File, opts Options) ([]byte, error) {
 		runtimeFFI:      map[string]map[string]*runtimeFFIFunction{},
 		runtimeFFIPaths: map[string]string{},
 		runtimeDecls:    map[string]runtimeDecl{},
+		traceHelpers:    map[string]string{},
 		tupleTypes:      map[string]tupleTypeInfo{},
 		resultTypes:     map[string]builtinResultType{},
 	}
@@ -305,6 +306,8 @@ type generator struct {
 	testingAliases    map[string]bool
 	runtimeDecls      map[string]runtimeDecl
 	runtimeDeclOrder  []string
+	traceHelpers      map[string]string
+	traceHelperDefs   []string
 
 	temp              int
 	label             int
@@ -360,6 +363,12 @@ type fnSig struct {
 	receiverMut    bool
 	ret            string
 	retListElemTyp string
+	retListString  bool
+	retMapKeyTyp   string
+	retMapValueTyp string
+	retMapKeyString bool
+	retSetElemTyp  string
+	retSetElemString bool
 	params         []paramInfo
 	decl           *ast.FnDecl
 }
@@ -369,6 +378,12 @@ type paramInfo struct {
 	typ         string
 	irTyp       string
 	listElemTyp string
+	listElemString bool
+	mapKeyTyp   string
+	mapValueTyp string
+	mapKeyString bool
+	setElemTyp  string
+	setElemString bool
 	mutable     bool
 	byRef       bool
 }
@@ -386,6 +401,12 @@ type fieldInfo struct {
 	typ         string
 	index       int
 	listElemTyp string
+	listElemString bool
+	mapKeyTyp   string
+	mapValueTyp string
+	mapKeyString bool
+	setElemTyp  string
+	setElemString bool
 }
 
 type enumInfo struct {
@@ -430,6 +451,12 @@ type value struct {
 	mutable     bool
 	gcManaged   bool
 	listElemTyp string
+	listElemString bool
+	mapKeyTyp   string
+	mapValueTyp string
+	mapKeyString bool
+	setElemTyp  string
+	setElemString bool
 	rootPaths   [][]int
 }
 
@@ -1039,6 +1066,53 @@ func llvmListElementType(t ast.Type, env typeEnv) (string, bool, error) {
 	return elemTyp, true, nil
 }
 
+func llvmListElementInfo(t ast.Type, env typeEnv) (string, bool, bool, error) {
+	elemTyp, ok, err := llvmListElementType(t, env)
+	if err != nil || !ok {
+		return elemTyp, false, ok, err
+	}
+	return elemTyp, llvmNamedTypeIsString(t.(*ast.NamedType).Args[0]), true, nil
+}
+
+func llvmMapTypes(t ast.Type, env typeEnv) (string, string, bool, bool, error) {
+	named, ok := t.(*ast.NamedType)
+	if !ok {
+		return "", "", false, false, nil
+	}
+	if len(named.Path) != 1 || named.Path[0] != "Map" || len(named.Args) != 2 {
+		return "", "", false, false, nil
+	}
+	keyTyp, err := llvmRuntimeABIType(named.Args[0], env)
+	if err != nil {
+		return "", "", false, true, err
+	}
+	valueTyp, err := llvmRuntimeABIType(named.Args[1], env)
+	if err != nil {
+		return "", "", false, true, err
+	}
+	return keyTyp, valueTyp, llvmNamedTypeIsString(named.Args[0]), true, nil
+}
+
+func llvmSetElementType(t ast.Type, env typeEnv) (string, bool, bool, error) {
+	named, ok := t.(*ast.NamedType)
+	if !ok {
+		return "", false, false, nil
+	}
+	if len(named.Path) != 1 || named.Path[0] != "Set" || len(named.Args) != 1 {
+		return "", false, false, nil
+	}
+	elemTyp, err := llvmRuntimeABIType(named.Args[0], env)
+	if err != nil {
+		return "", false, true, err
+	}
+	return elemTyp, llvmNamedTypeIsString(named.Args[0]), true, nil
+}
+
+func llvmNamedTypeIsString(t ast.Type) bool {
+	named, ok := t.(*ast.NamedType)
+	return ok && len(named.Path) == 1 && named.Path[0] == "String" && len(named.Args) == 0
+}
+
 func collectInterfaceShell(decl *ast.InterfaceDecl) (*interfaceInfo, error) {
 	if decl == nil {
 		return nil, unsupported("source-layout", "nil interface")
@@ -1114,11 +1188,27 @@ func collectStructFields(info *structInfo, env typeEnv) error {
 			return unsupported(diag.kind, diag.message)
 		}
 		fieldInfo := fieldInfo{name: field.Name, typ: typ, index: i}
-		if listElemTyp, ok, err := llvmListElementType(field.Type, env); err != nil {
+		if listElemTyp, listElemString, ok, err := llvmListElementInfo(field.Type, env); err != nil {
 			diag := llvmStructFieldDiagnostic(info.name, field.Name, true, false, false, false, unsupportedMessage(err))
 			return unsupported(diag.kind, diag.message)
 		} else if ok {
 			fieldInfo.listElemTyp = listElemTyp
+			fieldInfo.listElemString = listElemString
+		}
+		if mapKeyTyp, mapValueTyp, mapKeyString, ok, err := llvmMapTypes(field.Type, env); err != nil {
+			diag := llvmStructFieldDiagnostic(info.name, field.Name, true, false, false, false, unsupportedMessage(err))
+			return unsupported(diag.kind, diag.message)
+		} else if ok {
+			fieldInfo.mapKeyTyp = mapKeyTyp
+			fieldInfo.mapValueTyp = mapValueTyp
+			fieldInfo.mapKeyString = mapKeyString
+		}
+		if setElemTyp, setElemString, ok, err := llvmSetElementType(field.Type, env); err != nil {
+			diag := llvmStructFieldDiagnostic(info.name, field.Name, true, false, false, false, unsupportedMessage(err))
+			return unsupported(diag.kind, diag.message)
+		} else if ok {
+			fieldInfo.setElemTyp = setElemTyp
+			fieldInfo.setElemString = setElemString
 		}
 		info.fields = append(info.fields, fieldInfo)
 		info.byName[field.Name] = fieldInfo
@@ -1271,18 +1361,48 @@ func signatureOf(fn *ast.FnDecl, ownerName string, env typeEnv) (*fnSig, error) 
 			return nil, unsupported(diag.kind, diag.message)
 		}
 		info := paramInfo{name: p.Name, typ: typ}
-		if listElemTyp, ok, err := llvmListElementType(p.Type, env); err != nil {
+		if listElemTyp, listElemString, ok, err := llvmListElementInfo(p.Type, env); err != nil {
 			diag := llvmFunctionParamDiagnostic(fn.Name, p.Name, false, false, true, unsupportedMessage(err))
 			return nil, unsupported(diag.kind, diag.message)
 		} else if ok {
 			info.listElemTyp = listElemTyp
+			info.listElemString = listElemString
+		}
+		if mapKeyTyp, mapValueTyp, mapKeyString, ok, err := llvmMapTypes(p.Type, env); err != nil {
+			diag := llvmFunctionParamDiagnostic(fn.Name, p.Name, false, false, true, unsupportedMessage(err))
+			return nil, unsupported(diag.kind, diag.message)
+		} else if ok {
+			info.mapKeyTyp = mapKeyTyp
+			info.mapValueTyp = mapValueTyp
+			info.mapKeyString = mapKeyString
+		}
+		if setElemTyp, setElemString, ok, err := llvmSetElementType(p.Type, env); err != nil {
+			diag := llvmFunctionParamDiagnostic(fn.Name, p.Name, false, false, true, unsupportedMessage(err))
+			return nil, unsupported(diag.kind, diag.message)
+		} else if ok {
+			info.setElemTyp = setElemTyp
+			info.setElemString = setElemString
 		}
 		sig.params = append(sig.params, info)
 	}
-	if listElemTyp, ok, err := llvmListElementType(fn.ReturnType, env); err != nil {
+	if listElemTyp, listElemString, ok, err := llvmListElementInfo(fn.ReturnType, env); err != nil {
 		return nil, unsupportedf("type-system", "function %q return type: %s", fn.Name, unsupportedMessage(err))
 	} else if ok {
 		sig.retListElemTyp = listElemTyp
+		sig.retListString = listElemString
+	}
+	if mapKeyTyp, mapValueTyp, mapKeyString, ok, err := llvmMapTypes(fn.ReturnType, env); err != nil {
+		return nil, unsupportedf("type-system", "function %q return type: %s", fn.Name, unsupportedMessage(err))
+	} else if ok {
+		sig.retMapKeyTyp = mapKeyTyp
+		sig.retMapValueTyp = mapValueTyp
+		sig.retMapKeyString = mapKeyString
+	}
+	if setElemTyp, setElemString, ok, err := llvmSetElementType(fn.ReturnType, env); err != nil {
+		return nil, unsupportedf("type-system", "function %q return type: %s", fn.Name, unsupportedMessage(err))
+	} else if ok {
+		sig.retSetElemTyp = setElemTyp
+		sig.retSetElemString = setElemString
 	}
 	return sig, nil
 }
@@ -1320,10 +1440,18 @@ func (g *generator) emitUserFunction(sig *fnSig) (string, error) {
 	g.returnType = sig.ret
 	g.returnListElemTyp = sig.retListElemTyp
 	for _, p := range sig.params {
-		v := value{typ: p.typ, ref: "%" + p.name, listElemTyp: p.listElemTyp}
-		if p.listElemTyp != "" {
-			v.gcManaged = true
+		v := value{
+			typ:           p.typ,
+			ref:           "%" + p.name,
+			listElemTyp:   p.listElemTyp,
+			listElemString: p.listElemString,
+			mapKeyTyp:     p.mapKeyTyp,
+			mapValueTyp:   p.mapValueTyp,
+			mapKeyString:  p.mapKeyString,
+			setElemTyp:    p.setElemTyp,
+			setElemString: p.setElemString,
 		}
+		v.gcManaged = valueNeedsManagedRoot(v)
 		v.rootPaths = g.rootPathsForType(p.typ)
 		if p.byRef {
 			v.ptr = true
@@ -1344,7 +1472,7 @@ func (g *generator) emitUserFunction(sig *fnSig) (string, error) {
 			g.takeOstyEmitter(emitter)
 		}
 	} else {
-		if err := g.emitReturningBlock(sig.decl.Body.Stmts, sig.ret, sig.retListElemTyp); err != nil {
+		if err := g.emitReturningBlock(sig.decl.Body.Stmts, sig.ret, sig.retListElemTyp, sig.retMapKeyTyp, sig.retMapValueTyp, sig.retSetElemTyp); err != nil {
 			return "", err
 		}
 	}
@@ -1423,7 +1551,7 @@ func (g *generator) emitGCSafepoint(emitter *LlvmEmitter) {
 	g.needsGCRuntime = true
 }
 
-func (g *generator) emitReturningBlock(stmts []ast.Stmt, retType, retListElemTyp string) error {
+func (g *generator) emitReturningBlock(stmts []ast.Stmt, retType, retListElemTyp string, retMapKeyTyp string, retMapValueTyp string, retSetElemTyp string) error {
 	if len(stmts) == 0 {
 		return unsupported("function-signature", "function body has no return value")
 	}
@@ -1442,7 +1570,7 @@ func (g *generator) emitReturningBlock(stmts []ast.Stmt, retType, retListElemTyp
 			if s.Value == nil {
 				return unsupported("function-signature", "bare return in value-returning function")
 			}
-			v, err := g.emitExprWithListHint(s.Value, retListElemTyp)
+			v, err := g.emitExprWithHint(s.Value, retListElemTyp, false, retMapKeyTyp, retMapValueTyp, false, retSetElemTyp, false)
 			if err != nil {
 				return err
 			}
@@ -1456,7 +1584,7 @@ func (g *generator) emitReturningBlock(stmts []ast.Stmt, retType, retListElemTyp
 			g.leaveBlock()
 			return nil
 		case *ast.ExprStmt:
-			v, err := g.emitExprWithListHint(s.X, retListElemTyp)
+			v, err := g.emitExprWithHint(s.X, retListElemTyp, false, retMapKeyTyp, retMapValueTyp, false, retSetElemTyp, false)
 			if err != nil {
 				return err
 			}
@@ -1522,15 +1650,35 @@ func (g *generator) emitLet(stmt *ast.LetStmt) error {
 		return unsupported("statement", "let has no value")
 	}
 	hintedListElemTyp := ""
+	hintedListElemString := false
+	hintedMapKeyTyp := ""
+	hintedMapValueTyp := ""
+	hintedMapKeyString := false
+	hintedSetElemTyp := ""
+	hintedSetElemString := false
 	if stmt.Type != nil {
 		collectTupleTypeFromAST(g.tupleTypes, stmt.Type, g.typeEnv())
-		if listElemTyp, ok, err := llvmListElementType(stmt.Type, g.typeEnv()); err != nil {
+		if listElemTyp, listElemString, ok, err := llvmListElementInfo(stmt.Type, g.typeEnv()); err != nil {
 			return err
 		} else if ok {
 			hintedListElemTyp = listElemTyp
+			hintedListElemString = listElemString
+		}
+		if mapKeyTyp, mapValueTyp, mapKeyString, ok, err := llvmMapTypes(stmt.Type, g.typeEnv()); err != nil {
+			return err
+		} else if ok {
+			hintedMapKeyTyp = mapKeyTyp
+			hintedMapValueTyp = mapValueTyp
+			hintedMapKeyString = mapKeyString
+		}
+		if setElemTyp, setElemString, ok, err := llvmSetElementType(stmt.Type, g.typeEnv()); err != nil {
+			return err
+		} else if ok {
+			hintedSetElemTyp = setElemTyp
+			hintedSetElemString = setElemString
 		}
 	}
-	v, err := g.emitExprWithListHint(stmt.Value, hintedListElemTyp)
+	v, err := g.emitExprWithHint(stmt.Value, hintedListElemTyp, hintedListElemString, hintedMapKeyTyp, hintedMapValueTyp, hintedMapKeyString, hintedSetElemTyp, hintedSetElemString)
 	if err != nil {
 		return err
 	}
@@ -1562,7 +1710,7 @@ func (g *generator) emitAssign(stmt *ast.AssignStmt) error {
 		if !slot.mutable {
 			return unsupportedf("statement", "assignment to immutable identifier %q", target.Name)
 		}
-		v, err := g.emitExprWithListHint(stmt.Value, slot.listElemTyp)
+		v, err := g.emitExprWithHint(stmt.Value, slot.listElemTyp, slot.listElemString, slot.mapKeyTyp, slot.mapValueTyp, slot.mapKeyString, slot.setElemTyp, slot.setElemString)
 		if err != nil {
 			return err
 		}
@@ -1576,6 +1724,11 @@ func (g *generator) emitAssign(stmt *ast.AssignStmt) error {
 		return nil
 	}
 	field, ok := stmt.Targets[0].(*ast.FieldExpr)
+	if !ok {
+		if index, ok := stmt.Targets[0].(*ast.IndexExpr); ok {
+			return g.emitIndexAssign(index, stmt.Value)
+		}
+	}
 	if !ok {
 		return unsupportedf("statement", "assignment target %T", stmt.Targets[0])
 	}
@@ -1608,7 +1761,7 @@ func (g *generator) emitFieldAssign(target *ast.FieldExpr, rhs ast.Expr) error {
 	if !ok {
 		return unsupportedf("expression", "struct %q has no field %q", info.name, target.Name)
 	}
-	v, err := g.emitExprWithListHint(rhs, field.listElemTyp)
+	v, err := g.emitExprWithHint(rhs, field.listElemTyp, field.listElemString, field.mapKeyTyp, field.mapValueTyp, field.mapKeyString, field.setElemTyp, field.setElemString)
 	if err != nil {
 		return err
 	}
@@ -1635,6 +1788,59 @@ func (g *generator) emitFieldAssign(target *ast.FieldExpr, rhs ast.Expr) error {
 	return nil
 }
 
+func (g *generator) emitIndexAssign(target *ast.IndexExpr, rhs ast.Expr) error {
+	if target == nil {
+		return unsupported("statement", "nil index assignment target")
+	}
+	base, err := g.emitExpr(target.X)
+	if err != nil {
+		return err
+	}
+	if base.listElemTyp == "" {
+		return unsupported("statement", "index assignment currently supports lists only")
+	}
+	index, err := g.emitExpr(target.Index)
+	if err != nil {
+		return err
+	}
+	if index.typ != "i64" {
+		return unsupportedf("type-system", "list index type %s, want i64", index.typ)
+	}
+	v, err := g.emitExprWithHint(rhs, "", false, "", "", false, "", false)
+	if err != nil {
+		return err
+	}
+	if v.typ != base.listElemTyp {
+		return unsupportedf("type-system", "list assignment value type %s, want %s", v.typ, base.listElemTyp)
+	}
+	loaded, err := g.loadIfPointer(v)
+	if err != nil {
+		return err
+	}
+	emitter := g.toOstyEmitter()
+	if listUsesTypedRuntime(base.listElemTyp) {
+		symbol := listRuntimeSetSymbol(base.listElemTyp)
+		g.declareRuntimeSymbol(symbol, "void", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: base.listElemTyp}})
+		emitter.body = append(emitter.body, fmt.Sprintf(
+			"  call void @%s(%s)",
+			symbol,
+			llvmCallArgs([]*LlvmValue{toOstyValue(base), toOstyValue(index), toOstyValue(loaded)}),
+		))
+	} else {
+		traceSymbol := g.traceCallbackSymbol(base.listElemTyp, g.rootPathsForType(base.listElemTyp))
+		addr := g.spillValueAddress(emitter, "list.set", loaded)
+		sizeValue := g.emitTypeSize(emitter, base.listElemTyp)
+		g.declareRuntimeSymbol(listRuntimeSetBytesSymbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}})
+		emitter.body = append(emitter.body, fmt.Sprintf(
+			"  call void @%s(%s)",
+			listRuntimeSetBytesSymbol(),
+				llvmCallArgs([]*LlvmValue{toOstyValue(base), toOstyValue(index), {typ: "ptr", name: addr}, sizeValue, {typ: "ptr", name: llvmPointerOperand(traceSymbol)}}),
+		))
+	}
+	g.takeOstyEmitter(emitter)
+	return nil
+}
+
 func (g *generator) emitFor(stmt *ast.ForStmt) error {
 	if stmt.IsForLet {
 		return g.emitForLet(stmt)
@@ -1649,8 +1855,8 @@ func (g *generator) emitFor(stmt *ast.ForStmt) error {
 	if err != nil {
 		return err
 	}
-	if iterTyp, elemTyp, ok := g.staticExprType(stmt.Iter); ok && iterTyp == "ptr" && elemTyp != "" {
-		return g.emitListFor(stmt, iterName, elemTyp)
+	if iterInfo, ok := g.staticExprInfo(stmt.Iter); ok && iterInfo.typ == "ptr" && iterInfo.listElemTyp != "" {
+		return g.emitListFor(stmt, iterName, iterInfo.listElemTyp)
 	}
 	rng, ok := stmt.Iter.(*ast.RangeExpr)
 	if !ok {
@@ -1868,7 +2074,7 @@ func (g *generator) emitReturn(stmt *ast.ReturnStmt) error {
 	case g.returnType == "" || g.returnType == "void":
 		return unsupported("function-signature", "return with value in void-returning function")
 	default:
-		ret, err = g.emitExprWithListHint(stmt.Value, g.returnListElemTyp)
+		ret, err = g.emitExprWithHint(stmt.Value, g.returnListElemTyp, false, "", "", false, "", false)
 		if err != nil {
 			return err
 		}
@@ -1900,6 +2106,12 @@ func (g *generator) emitExprStmt(expr ast.Expr) error {
 		return err
 	}
 	if emitted, err := g.emitListMethodCallStmt(call); emitted || err != nil {
+		return err
+	}
+	if emitted, err := g.emitMapMethodCallStmt(call); emitted || err != nil {
+		return err
+	}
+	if emitted, err := g.emitSetMethodCallStmt(call); emitted || err != nil {
 		return err
 	}
 	if emitted, err := g.emitRuntimeFFICallStmt(call); emitted || err != nil {
@@ -2344,10 +2556,14 @@ func (g *generator) emitExpr(expr ast.Expr) (value, error) {
 		return g.emitCall(e)
 	case *ast.FieldExpr:
 		return g.emitFieldExpr(e)
+	case *ast.IndexExpr:
+		return g.emitIndexExpr(e)
 	case *ast.TupleExpr:
 		return g.emitTupleExpr(e)
 	case *ast.ListExpr:
 		return g.emitListExprWithHint(e, "")
+	case *ast.MapExpr:
+		return g.emitMapExprWithHint(e, "", "", false)
 	case *ast.StructLit:
 		return g.emitStructLit(e)
 	case *ast.IfExpr:
@@ -2377,8 +2593,7 @@ func (g *generator) loadIfPointer(v value) (value, error) {
 	out := llvmLoad(emitter, toOstyValue(v))
 	g.takeOstyEmitter(emitter)
 	loaded := fromOstyValue(out)
-	loaded.gcManaged = v.gcManaged
-	loaded.listElemTyp = v.listElemTyp
+	copyContainerMetadata(&loaded, v)
 	loaded.rootPaths = cloneRootPaths(v.rootPaths)
 	return loaded, nil
 }
@@ -2462,7 +2677,7 @@ func (g *generator) emitStructLit(lit *ast.StructLit) (value, error) {
 		if litField.Value == nil {
 			v, err = g.emitIdent(litField.Name)
 		} else {
-			v, err = g.emitExprWithListHint(litField.Value, field.listElemTyp)
+			v, err = g.emitExprWithHint(litField.Value, field.listElemTyp, field.listElemString, field.mapKeyTyp, field.mapValueTyp, field.mapKeyString, field.setElemTyp, field.setElemString)
 		}
 		if err != nil {
 			return value{}, err
@@ -2504,9 +2719,86 @@ func (g *generator) emitFieldExpr(expr *ast.FieldExpr) (value, error) {
 	g.takeOstyEmitter(emitter)
 	loaded := fromOstyValue(out)
 	loaded.listElemTyp = field.listElemTyp
-	loaded.gcManaged = field.typ == "ptr" || field.listElemTyp != ""
+	loaded.listElemString = field.listElemString
+	loaded.mapKeyTyp = field.mapKeyTyp
+	loaded.mapValueTyp = field.mapValueTyp
+	loaded.mapKeyString = field.mapKeyString
+	loaded.setElemTyp = field.setElemTyp
+	loaded.setElemString = field.setElemString
+	loaded.gcManaged = valueNeedsManagedRoot(loaded)
 	loaded.rootPaths = g.rootPathsForType(field.typ)
 	return loaded, nil
+}
+
+func (g *generator) emitIndexExpr(expr *ast.IndexExpr) (value, error) {
+	if expr == nil {
+		return value{}, unsupported("expression", "nil index expression")
+	}
+	base, err := g.emitExpr(expr.X)
+	if err != nil {
+		return value{}, err
+	}
+	index, err := g.emitExpr(expr.Index)
+	if err != nil {
+		return value{}, err
+	}
+	switch {
+	case base.listElemTyp != "":
+		if index.typ != "i64" {
+			return value{}, unsupportedf("type-system", "list index type %s, want i64", index.typ)
+		}
+		if listUsesTypedRuntime(base.listElemTyp) {
+			symbol := listRuntimeGetSymbol(base.listElemTyp)
+			g.declareRuntimeSymbol(symbol, base.listElemTyp, []paramInfo{{typ: "ptr"}, {typ: "i64"}})
+			emitter := g.toOstyEmitter()
+			out := llvmCall(emitter, base.listElemTyp, symbol, []*LlvmValue{toOstyValue(base), toOstyValue(index)})
+			g.takeOstyEmitter(emitter)
+			v := fromOstyValue(out)
+			v.gcManaged = base.listElemTyp == "ptr"
+			v.rootPaths = g.rootPathsForType(base.listElemTyp)
+			return v, nil
+		}
+		traceSymbol := g.traceCallbackSymbol(base.listElemTyp, g.rootPathsForType(base.listElemTyp))
+		emitter := g.toOstyEmitter()
+		slot := llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca %s", slot, base.listElemTyp))
+		sizeValue := g.emitTypeSize(emitter, base.listElemTyp)
+		g.declareRuntimeSymbol(listRuntimeGetBytesSymbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}})
+		emitter.body = append(emitter.body, fmt.Sprintf(
+			"  call void @%s(%s)",
+			listRuntimeGetBytesSymbol(),
+			llvmCallArgs([]*LlvmValue{toOstyValue(base), toOstyValue(index), {typ: "ptr", name: slot}, sizeValue, {typ: "ptr", name: llvmPointerOperand(traceSymbol)}}),
+		))
+		loaded := g.loadValueFromAddress(emitter, base.listElemTyp, slot)
+		g.takeOstyEmitter(emitter)
+		loaded.rootPaths = g.rootPathsForType(base.listElemTyp)
+		return loaded, nil
+	case base.mapKeyTyp != "":
+		if index.typ != base.mapKeyTyp {
+			return value{}, unsupportedf("type-system", "map index type %s, want %s", index.typ, base.mapKeyTyp)
+		}
+		loadedKey, err := g.loadIfPointer(index)
+		if err != nil {
+			return value{}, err
+		}
+		symbol := mapRuntimeGetOrAbortSymbol(base.mapKeyTyp, base.mapKeyString)
+		g.declareRuntimeSymbol(symbol, "void", []paramInfo{{typ: "ptr"}, {typ: base.mapKeyTyp}, {typ: "ptr"}})
+		emitter := g.toOstyEmitter()
+		slot := llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca %s", slot, base.mapValueTyp))
+		emitter.body = append(emitter.body, fmt.Sprintf(
+			"  call void @%s(%s)",
+			symbol,
+			llvmCallArgs([]*LlvmValue{toOstyValue(base), toOstyValue(loadedKey), {typ: "ptr", name: slot}}),
+		))
+		out := g.loadValueFromAddress(emitter, base.mapValueTyp, slot)
+		g.takeOstyEmitter(emitter)
+		out.gcManaged = base.mapValueTyp == "ptr"
+		out.rootPaths = g.rootPathsForType(base.mapValueTyp)
+		return out, nil
+	default:
+		return value{}, unsupportedf("expression", "index expression on %s", base.typ)
+	}
 }
 
 func (g *generator) enumVariantValue(expr *ast.FieldExpr) (value, bool, error) {
@@ -2848,10 +3140,7 @@ func (g *generator) emitIfExprPhi(labels *LlvmIfLabels, thenPred, elsePred strin
 	g.takeOstyEmitter(emitter)
 	g.currentBlock = labels.endLabel
 	out := value{typ: thenValue.typ, ref: tmp}
-	if thenValue.listElemTyp != "" && thenValue.listElemTyp == elseValue.listElemTyp {
-		out.listElemTyp = thenValue.listElemTyp
-	}
-	out.gcManaged = out.typ == "ptr" || thenValue.gcManaged || elseValue.gcManaged
+	mergeContainerMetadata(&out, thenValue, elseValue)
 	out.rootPaths = g.rootPathsForType(out.typ)
 	return out, nil
 }
@@ -3207,17 +3496,17 @@ func (g *generator) emitSelectValue(cond *LlvmValue, thenValue, elseValue value)
 	emitter.body = append(emitter.body, fmt.Sprintf("  %s = select i1 %s, %s %s, %s %s", tmp, cond.name, thenValue.typ, thenValue.ref, elseValue.typ, elseValue.ref))
 	g.takeOstyEmitter(emitter)
 	out := value{typ: thenValue.typ, ref: tmp}
-	if thenValue.listElemTyp != "" && thenValue.listElemTyp == elseValue.listElemTyp {
-		out.listElemTyp = thenValue.listElemTyp
-	}
-	out.gcManaged = out.typ == "ptr" || thenValue.gcManaged || elseValue.gcManaged
+	mergeContainerMetadata(&out, thenValue, elseValue)
 	out.rootPaths = g.rootPathsForType(out.typ)
 	return out, nil
 }
 
-func (g *generator) emitExprWithListHint(expr ast.Expr, listElemTyp string) (value, error) {
+func (g *generator) emitExprWithHint(expr ast.Expr, listElemTyp string, listElemString bool, mapKeyTyp string, mapValueTyp string, mapKeyString bool, setElemTyp string, setElemString bool) (value, error) {
 	if list, ok := expr.(*ast.ListExpr); ok {
 		return g.emitListExprWithHint(list, listElemTyp)
+	}
+	if m, ok := expr.(*ast.MapExpr); ok {
+		return g.emitMapExprWithHint(m, mapKeyTyp, mapValueTyp, mapKeyString)
 	}
 	return g.emitExpr(expr)
 }
@@ -3281,10 +3570,10 @@ func (g *generator) emitListAggregatePush(listValue, elem value) error {
 		return err
 	}
 	if offsetCount == 0 {
-		g.declareRuntimeSymbol(listRuntimePushBytesSymbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "ptr"}, {typ: "i64"}})
+		g.declareRuntimeSymbol(listRuntimePushBytesV1Symbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "ptr"}, {typ: "i64"}})
 		emitter.body = append(emitter.body, fmt.Sprintf(
 			"  call void @%s(%s)",
-			listRuntimePushBytesSymbol(),
+			listRuntimePushBytesV1Symbol(),
 			llvmCallArgs([]*LlvmValue{toOstyValue(listValue), toOstyValue(value{typ: "ptr", ref: slot.ref}), toOstyValue(size)}),
 		))
 	} else {
@@ -3306,13 +3595,13 @@ func (g *generator) emitListAggregatePush(listValue, elem value) error {
 }
 
 func (g *generator) emitListAggregateGet(listValue value, index value, elemTyp string) (value, error) {
-	g.declareRuntimeSymbol(listRuntimeGetBytesSymbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}, {typ: "i64"}})
+	g.declareRuntimeSymbol(listRuntimeGetBytesV1Symbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}, {typ: "i64"}})
 	emitter := g.toOstyEmitter()
 	slot := g.emitAggregateScratchSlot(emitter, elemTyp, "zeroinitializer")
 	size := g.emitAggregateByteSize(emitter, elemTyp)
 	emitter.body = append(emitter.body, fmt.Sprintf(
 		"  call void @%s(%s)",
-		listRuntimeGetBytesSymbol(),
+		listRuntimeGetBytesV1Symbol(),
 		llvmCallArgs([]*LlvmValue{toOstyValue(listValue), toOstyValue(index), toOstyValue(value{typ: "ptr", ref: slot.ref}), toOstyValue(size)}),
 	))
 	out := llvmLoad(emitter, toOstyValue(slot))
@@ -3358,9 +3647,14 @@ func (g *generator) emitListExprWithHint(expr *ast.ListExpr, hintedElemTyp strin
 		return listValue, nil
 	}
 	pushSymbol := ""
+	traceSymbol := ""
 	if !useAggregateABI {
-		pushSymbol = listRuntimePushSymbol(elemTyp)
-		g.declareRuntimeSymbol(pushSymbol, "void", []paramInfo{{typ: "ptr"}, {typ: elemTyp}})
+		if listUsesTypedRuntime(elemTyp) {
+			pushSymbol = listRuntimePushSymbol(elemTyp)
+			g.declareRuntimeSymbol(pushSymbol, "void", []paramInfo{{typ: "ptr"}, {typ: elemTyp}})
+		} else {
+			traceSymbol = g.traceCallbackSymbol(elemTyp, g.rootPathsForType(elemTyp))
+		}
 	}
 	for _, elem := range emittedElems {
 		loaded, err := g.loadIfPointer(elem)
@@ -3374,26 +3668,128 @@ func (g *generator) emitListExprWithHint(expr *ast.ListExpr, hintedElemTyp strin
 			continue
 		}
 		emitter = g.toOstyEmitter()
-		emitter.body = append(emitter.body, fmt.Sprintf(
-			"  call void @%s(%s)",
-			pushSymbol,
-			llvmCallArgs([]*LlvmValue{toOstyValue(listValue), toOstyValue(loaded)}),
-		))
+		if listUsesTypedRuntime(elemTyp) {
+			pushSymbol := listRuntimePushSymbol(elemTyp)
+			g.declareRuntimeSymbol(pushSymbol, "void", []paramInfo{{typ: "ptr"}, {typ: elemTyp}})
+			emitter.body = append(emitter.body, fmt.Sprintf(
+				"  call void @%s(%s)",
+				pushSymbol,
+				llvmCallArgs([]*LlvmValue{toOstyValue(listValue), toOstyValue(loaded)}),
+			))
+		} else {
+			addr := g.spillValueAddress(emitter, "list.elem", loaded)
+			sizeValue := g.emitTypeSize(emitter, elemTyp)
+			g.declareRuntimeSymbol(listRuntimePushBytesSymbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}})
+			emitter.body = append(emitter.body, fmt.Sprintf(
+				"  call void @%s(%s)",
+				listRuntimePushBytesSymbol(),
+				llvmCallArgs([]*LlvmValue{
+					toOstyValue(listValue),
+					{typ: "ptr", name: addr},
+					sizeValue,
+					{typ: "ptr", name: llvmPointerOperand(traceSymbol)},
+				}),
+			))
+		}
 		g.takeOstyEmitter(emitter)
 	}
 	return listValue, nil
+}
+
+func (g *generator) emitMapExprWithHint(expr *ast.MapExpr, hintedKeyTyp, hintedValueTyp string, hintedKeyString bool) (value, error) {
+	if expr == nil {
+		return value{}, unsupported("expression", "nil map literal")
+	}
+	keyTyp := hintedKeyTyp
+	valueTyp := hintedValueTyp
+	keyIsString := hintedKeyString
+	g.pushScope()
+	defer g.popScope()
+	type entryPair struct {
+		key   value
+		value value
+	}
+	entries := make([]entryPair, 0, len(expr.Entries))
+	for _, entry := range expr.Entries {
+		if entry == nil {
+			return value{}, unsupported("expression", "nil map entry")
+		}
+		key, err := g.emitExpr(entry.Key)
+		if err != nil {
+			return value{}, err
+		}
+		val, err := g.emitExpr(entry.Value)
+		if err != nil {
+			return value{}, err
+		}
+		if keyTyp == "" {
+			keyTyp = key.typ
+			keyIsString = key.typ == "ptr"
+		}
+		if valueTyp == "" {
+			valueTyp = val.typ
+		}
+		if key.typ != keyTyp || val.typ != valueTyp {
+			return value{}, unsupportedf("type-system", "map literal entry types %s/%s, want %s/%s", key.typ, val.typ, keyTyp, valueTyp)
+		}
+		entries = append(entries, entryPair{
+			key:   g.protectManagedTemporary("map.key", key),
+			value: g.protectManagedTemporary("map.value", val),
+		})
+	}
+	if keyTyp == "" || valueTyp == "" {
+		return value{}, unsupported("expression", "empty map literal requires an explicit Map<K, V> type")
+	}
+	traceSymbol := g.traceCallbackSymbol(valueTyp, g.rootPathsForType(valueTyp))
+	g.declareRuntimeSymbol(mapRuntimeNewSymbol(), "ptr", []paramInfo{{typ: "i64"}, {typ: "i64"}, {typ: "i64"}, {typ: "ptr"}})
+	emitter := g.toOstyEmitter()
+	valueSize := g.emitTypeSize(emitter, valueTyp)
+	out := llvmCall(emitter, "ptr", mapRuntimeNewSymbol(), []*LlvmValue{
+		llvmI64(strconv.Itoa(containerAbiKind(keyTyp, keyIsString))),
+		llvmI64(strconv.Itoa(containerAbiKind(valueTyp, false))),
+		valueSize,
+		{typ: "ptr", name: llvmPointerOperand(traceSymbol)},
+	})
+	g.takeOstyEmitter(emitter)
+	mapValue := fromOstyValue(out)
+	mapValue.gcManaged = true
+	mapValue.mapKeyTyp = keyTyp
+	mapValue.mapValueTyp = valueTyp
+	mapValue.mapKeyString = keyIsString
+	for _, entry := range entries {
+		if err := g.emitMapInsert(mapValue, entry.key, entry.value); err != nil {
+			return value{}, err
+		}
+	}
+	return mapValue, nil
+}
+
+func (g *generator) emitMapInsert(base, key, val value) error {
+	insertSymbol := mapRuntimeInsertSymbol(base.mapKeyTyp, base.mapKeyString)
+	keyLoaded, err := g.loadIfPointer(key)
+	if err != nil {
+		return err
+	}
+	valLoaded, err := g.loadIfPointer(val)
+	if err != nil {
+		return err
+	}
+	emitter := g.toOstyEmitter()
+	valAddr := g.spillValueAddress(emitter, "map.insert.value", valLoaded)
+	g.declareRuntimeSymbol(insertSymbol, "void", []paramInfo{{typ: "ptr"}, {typ: base.mapKeyTyp}, {typ: "ptr"}})
+	emitter.body = append(emitter.body, fmt.Sprintf(
+		"  call void @%s(%s)",
+		insertSymbol,
+		llvmCallArgs([]*LlvmValue{toOstyValue(base), toOstyValue(keyLoaded), {typ: "ptr", name: valAddr}}),
+	))
+	g.takeOstyEmitter(emitter)
+	return nil
 }
 
 func (g *generator) emitListMethodCall(call *ast.CallExpr) (value, bool, error) {
 	field, elemTyp, found := g.listMethodInfo(call)
 	if !found {
 		return value{}, false, nil
-	}
-	if field.Name != "len" {
-		return value{}, false, nil
-	}
-	if len(call.Args) != 0 {
-		return value{}, true, unsupported("call", "list.len requires no arguments")
 	}
 	base, err := g.emitExpr(field.X)
 	if err != nil {
@@ -3402,11 +3798,43 @@ func (g *generator) emitListMethodCall(call *ast.CallExpr) (value, bool, error) 
 	if base.typ != "ptr" || elemTyp == "" {
 		return value{}, true, unsupportedf("type-system", "list receiver type %s", base.typ)
 	}
-	g.declareRuntimeSymbol(listRuntimeLenSymbol(), "i64", []paramInfo{{typ: "ptr"}})
-	emitter := g.toOstyEmitter()
-	out := llvmCall(emitter, "i64", listRuntimeLenSymbol(), []*LlvmValue{toOstyValue(base)})
-	g.takeOstyEmitter(emitter)
-	return fromOstyValue(out), true, nil
+	switch field.Name {
+	case "len":
+		if len(call.Args) != 0 {
+			return value{}, true, unsupported("call", "list.len requires no arguments")
+		}
+		g.declareRuntimeSymbol(listRuntimeLenSymbol(), "i64", []paramInfo{{typ: "ptr"}})
+		emitter := g.toOstyEmitter()
+		out := llvmCall(emitter, "i64", listRuntimeLenSymbol(), []*LlvmValue{toOstyValue(base)})
+		g.takeOstyEmitter(emitter)
+		return fromOstyValue(out), true, nil
+	case "sorted":
+		if len(call.Args) != 0 || elemTyp != "i64" {
+			return value{}, true, unsupported("call", "list.sorted currently supports List<Int> with no arguments")
+		}
+		g.declareRuntimeSymbol(listRuntimeSortedI64Symbol(), "ptr", []paramInfo{{typ: "ptr"}})
+		emitter := g.toOstyEmitter()
+		out := llvmCall(emitter, "ptr", listRuntimeSortedI64Symbol(), []*LlvmValue{toOstyValue(base)})
+		g.takeOstyEmitter(emitter)
+		v := fromOstyValue(out)
+		v.gcManaged = true
+		v.listElemTyp = "i64"
+		return v, true, nil
+	case "toSet":
+		if len(call.Args) != 0 || elemTyp != "i64" {
+			return value{}, true, unsupported("call", "list.toSet currently supports List<Int> with no arguments")
+		}
+		g.declareRuntimeSymbol(listRuntimeToSetI64Symbol(), "ptr", []paramInfo{{typ: "ptr"}})
+		emitter := g.toOstyEmitter()
+		out := llvmCall(emitter, "ptr", listRuntimeToSetI64Symbol(), []*LlvmValue{toOstyValue(base)})
+		g.takeOstyEmitter(emitter)
+		v := fromOstyValue(out)
+		v.gcManaged = true
+		v.setElemTyp = "i64"
+		return v, true, nil
+	default:
+		return value{}, false, nil
+	}
 }
 
 func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
@@ -3454,11 +3882,237 @@ func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
 	pushSymbol := listRuntimePushSymbol(elemTyp)
 	g.declareRuntimeSymbol(pushSymbol, "void", []paramInfo{{typ: "ptr"}, {typ: elemTyp}})
 	emitter = g.toOstyEmitter()
-	emitter.body = append(emitter.body, fmt.Sprintf(
-		"  call void @%s(%s)",
-		pushSymbol,
-		llvmCallArgs([]*LlvmValue{toOstyValue(baseValue), toOstyValue(argValue)}),
-	))
+	if listUsesTypedRuntime(elemTyp) {
+		g.declareRuntimeSymbol(pushSymbol, "void", []paramInfo{{typ: "ptr"}, {typ: elemTyp}})
+		emitter.body = append(emitter.body, fmt.Sprintf(
+			"  call void @%s(%s)",
+			pushSymbol,
+			llvmCallArgs([]*LlvmValue{toOstyValue(baseValue), toOstyValue(argValue)}),
+		))
+	} else {
+		traceSymbol := g.traceCallbackSymbol(elemTyp, g.rootPathsForType(elemTyp))
+		addr := g.spillValueAddress(emitter, "list.push", argValue)
+		sizeValue := g.emitTypeSize(emitter, elemTyp)
+		g.declareRuntimeSymbol(listRuntimePushBytesSymbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}})
+		emitter.body = append(emitter.body, fmt.Sprintf(
+			"  call void @%s(%s)",
+			listRuntimePushBytesSymbol(),
+			llvmCallArgs([]*LlvmValue{toOstyValue(baseValue), {typ: "ptr", name: addr}, sizeValue, {typ: "ptr", name: llvmPointerOperand(traceSymbol)}}),
+		))
+	}
+	g.takeOstyEmitter(emitter)
+	return true, nil
+}
+
+func (g *generator) emitMapMethodCall(call *ast.CallExpr) (value, bool, error) {
+	field, keyTyp, _, keyString, found := g.mapMethodInfo(call)
+	if !found {
+		return value{}, false, nil
+	}
+	base, err := g.emitExpr(field.X)
+	if err != nil {
+		return value{}, true, err
+	}
+	switch field.Name {
+	case "containsKey":
+		if len(call.Args) != 1 || call.Args[0].Name != "" || call.Args[0].Value == nil {
+			return value{}, true, unsupported("call", "map.containsKey requires one positional argument")
+		}
+		key, err := g.emitExpr(call.Args[0].Value)
+		if err != nil {
+			return value{}, true, err
+		}
+		if key.typ != keyTyp {
+			return value{}, true, unsupportedf("type-system", "map.containsKey key type %s, want %s", key.typ, keyTyp)
+		}
+		loaded, err := g.loadIfPointer(key)
+		if err != nil {
+			return value{}, true, err
+		}
+		symbol := mapRuntimeContainsSymbol(keyTyp, keyString)
+		g.declareRuntimeSymbol(symbol, "i1", []paramInfo{{typ: "ptr"}, {typ: keyTyp}})
+		emitter := g.toOstyEmitter()
+		out := llvmCall(emitter, "i1", symbol, []*LlvmValue{toOstyValue(base), toOstyValue(loaded)})
+		g.takeOstyEmitter(emitter)
+		return fromOstyValue(out), true, nil
+	case "keys":
+		if len(call.Args) != 0 {
+			return value{}, true, unsupported("call", "map.keys requires no arguments")
+		}
+		g.declareRuntimeSymbol(mapRuntimeKeysSymbol(), "ptr", []paramInfo{{typ: "ptr"}})
+		emitter := g.toOstyEmitter()
+		out := llvmCall(emitter, "ptr", mapRuntimeKeysSymbol(), []*LlvmValue{toOstyValue(base)})
+		g.takeOstyEmitter(emitter)
+		v := fromOstyValue(out)
+		v.gcManaged = true
+		v.listElemTyp = keyTyp
+		v.listElemString = keyString
+		return v, true, nil
+	case "remove":
+		if len(call.Args) != 1 || call.Args[0].Name != "" || call.Args[0].Value == nil {
+			return value{}, true, unsupported("call", "map.remove requires one positional argument")
+		}
+		key, err := g.emitExpr(call.Args[0].Value)
+		if err != nil {
+			return value{}, true, err
+		}
+		if key.typ != keyTyp {
+			return value{}, true, unsupportedf("type-system", "map.remove key type %s, want %s", key.typ, keyTyp)
+		}
+		loaded, err := g.loadIfPointer(key)
+		if err != nil {
+			return value{}, true, err
+		}
+		symbol := mapRuntimeRemoveSymbol(keyTyp, keyString)
+		g.declareRuntimeSymbol(symbol, "i1", []paramInfo{{typ: "ptr"}, {typ: keyTyp}})
+		emitter := g.toOstyEmitter()
+		llvmCall(emitter, "i1", symbol, []*LlvmValue{toOstyValue(base), toOstyValue(loaded)})
+		g.takeOstyEmitter(emitter)
+		return value{typ: "ptr", ref: "null"}, true, nil
+	default:
+		return value{}, false, nil
+	}
+}
+
+func (g *generator) emitMapMethodCallStmt(call *ast.CallExpr) (bool, error) {
+	field, keyTyp, _, keyString, found := g.mapMethodInfo(call)
+	if !found {
+		return false, nil
+	}
+	if field.Name != "insert" && field.Name != "remove" {
+		return false, nil
+	}
+	base, err := g.emitExpr(field.X)
+	if err != nil {
+		return true, err
+	}
+	if field.Name == "insert" {
+		if len(call.Args) != 2 || call.Args[0].Name != "" || call.Args[1].Name != "" || call.Args[0].Value == nil || call.Args[1].Value == nil {
+			return true, unsupported("call", "map.insert requires two positional arguments")
+		}
+		key, err := g.emitExpr(call.Args[0].Value)
+		if err != nil {
+			return true, err
+		}
+		val, err := g.emitExpr(call.Args[1].Value)
+		if err != nil {
+			return true, err
+		}
+		if key.typ != keyTyp || val.typ != base.mapValueTyp {
+			return true, unsupportedf("type-system", "map.insert types %s/%s, want %s/%s", key.typ, val.typ, keyTyp, base.mapValueTyp)
+		}
+		return true, g.emitMapInsert(base, key, val)
+	}
+	if len(call.Args) != 1 || call.Args[0].Name != "" || call.Args[0].Value == nil {
+		return true, unsupported("call", "map.remove requires one positional argument")
+	}
+	key, err := g.emitExpr(call.Args[0].Value)
+	if err != nil {
+		return true, err
+	}
+	if key.typ != keyTyp {
+		return true, unsupportedf("type-system", "map.remove key type %s, want %s", key.typ, keyTyp)
+	}
+	loaded, err := g.loadIfPointer(key)
+	if err != nil {
+		return true, err
+	}
+	symbol := mapRuntimeRemoveSymbol(keyTyp, keyString)
+	g.declareRuntimeSymbol(symbol, "i1", []paramInfo{{typ: "ptr"}, {typ: keyTyp}})
+	emitter := g.toOstyEmitter()
+	llvmCall(emitter, "i1", symbol, []*LlvmValue{toOstyValue(base), toOstyValue(loaded)})
+	g.takeOstyEmitter(emitter)
+	return true, nil
+}
+
+func (g *generator) emitSetMethodCall(call *ast.CallExpr) (value, bool, error) {
+	field, elemTyp, elemString, found := g.setMethodInfo(call)
+	if !found {
+		return value{}, false, nil
+	}
+	base, err := g.emitExpr(field.X)
+	if err != nil {
+		return value{}, true, err
+	}
+	switch field.Name {
+	case "len":
+		if len(call.Args) != 0 {
+			return value{}, true, unsupported("call", "set.len requires no arguments")
+		}
+		g.declareRuntimeSymbol(setRuntimeLenSymbol(), "i64", []paramInfo{{typ: "ptr"}})
+		emitter := g.toOstyEmitter()
+		out := llvmCall(emitter, "i64", setRuntimeLenSymbol(), []*LlvmValue{toOstyValue(base)})
+		g.takeOstyEmitter(emitter)
+		return fromOstyValue(out), true, nil
+	case "contains", "remove":
+		if len(call.Args) != 1 || call.Args[0].Name != "" || call.Args[0].Value == nil {
+			return value{}, true, unsupportedf("call", "set.%s requires one positional argument", field.Name)
+		}
+		item, err := g.emitExpr(call.Args[0].Value)
+		if err != nil {
+			return value{}, true, err
+		}
+		if item.typ != elemTyp {
+			return value{}, true, unsupportedf("type-system", "set.%s item type %s, want %s", field.Name, item.typ, elemTyp)
+		}
+		loaded, err := g.loadIfPointer(item)
+		if err != nil {
+			return value{}, true, err
+		}
+		symbol := setRuntimeContainsSymbol(elemTyp, elemString)
+		if field.Name == "remove" {
+			symbol = setRuntimeRemoveSymbol(elemTyp, elemString)
+		}
+		g.declareRuntimeSymbol(symbol, "i1", []paramInfo{{typ: "ptr"}, {typ: elemTyp}})
+		emitter := g.toOstyEmitter()
+		out := llvmCall(emitter, "i1", symbol, []*LlvmValue{toOstyValue(base), toOstyValue(loaded)})
+		g.takeOstyEmitter(emitter)
+		return fromOstyValue(out), true, nil
+	case "toList":
+		if len(call.Args) != 0 {
+			return value{}, true, unsupported("call", "set.toList requires no arguments")
+		}
+		g.declareRuntimeSymbol(setRuntimeToListSymbol(), "ptr", []paramInfo{{typ: "ptr"}})
+		emitter := g.toOstyEmitter()
+		out := llvmCall(emitter, "ptr", setRuntimeToListSymbol(), []*LlvmValue{toOstyValue(base)})
+		g.takeOstyEmitter(emitter)
+		v := fromOstyValue(out)
+		v.gcManaged = true
+		v.listElemTyp = elemTyp
+		v.listElemString = elemString
+		return v, true, nil
+	default:
+		return value{}, false, nil
+	}
+}
+
+func (g *generator) emitSetMethodCallStmt(call *ast.CallExpr) (bool, error) {
+	field, elemTyp, elemString, found := g.setMethodInfo(call)
+	if !found || field.Name != "insert" {
+		return false, nil
+	}
+	if len(call.Args) != 1 || call.Args[0].Name != "" || call.Args[0].Value == nil {
+		return true, unsupported("call", "set.insert requires one positional argument")
+	}
+	base, err := g.emitExpr(field.X)
+	if err != nil {
+		return true, err
+	}
+	item, err := g.emitExpr(call.Args[0].Value)
+	if err != nil {
+		return true, err
+	}
+	if item.typ != elemTyp {
+		return true, unsupportedf("type-system", "set.insert item type %s, want %s", item.typ, elemTyp)
+	}
+	loaded, err := g.loadIfPointer(item)
+	if err != nil {
+		return true, err
+	}
+	symbol := setRuntimeInsertSymbol(elemTyp, elemString)
+	g.declareRuntimeSymbol(symbol, "i1", []paramInfo{{typ: "ptr"}, {typ: elemTyp}})
+	emitter := g.toOstyEmitter()
+	llvmCall(emitter, "i1", symbol, []*LlvmValue{toOstyValue(base), toOstyValue(loaded)})
 	g.takeOstyEmitter(emitter)
 	return true, nil
 }
@@ -3509,13 +4163,32 @@ func (g *generator) emitListFor(stmt *ast.ForStmt, iterName, elemTyp string) err
 			return err
 		}
 		g.bindLocal(iterName, item)
-	} else {
+	} else if listUsesTypedRuntime(elemTyp) {
 		getSymbol := listRuntimeGetSymbol(elemTyp)
 		g.declareRuntimeSymbol(getSymbol, elemTyp, []paramInfo{{typ: "ptr"}, {typ: "i64"}})
 		emitter = g.toOstyEmitter()
 		item := llvmCall(emitter, elemTyp, getSymbol, []*LlvmValue{toOstyValue(iterableValue), llvmI64(loop.current)})
 		g.takeOstyEmitter(emitter)
 		loaded := fromOstyValue(item)
+		loaded.gcManaged = elemTyp == "ptr"
+		loaded.rootPaths = g.rootPathsForType(elemTyp)
+		g.bindLocal(iterName, loaded)
+	} else {
+		traceSymbol := g.traceCallbackSymbol(elemTyp, g.rootPathsForType(elemTyp))
+		emitter = g.toOstyEmitter()
+		slot := llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca %s", slot, elemTyp))
+		sizeValue := g.emitTypeSize(emitter, elemTyp)
+		g.declareRuntimeSymbol(listRuntimeGetBytesSymbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}})
+		emitter.body = append(emitter.body, fmt.Sprintf(
+			"  call void @%s(%s)",
+			listRuntimeGetBytesSymbol(),
+			llvmCallArgs([]*LlvmValue{toOstyValue(iterableValue), llvmI64(loop.current), {typ: "ptr", name: slot}, sizeValue, {typ: "ptr", name: llvmPointerOperand(traceSymbol)}}),
+		))
+		g.takeOstyEmitter(emitter)
+		emitter = g.toOstyEmitter()
+		loaded := g.loadValueFromAddress(emitter, elemTyp, slot)
+		g.takeOstyEmitter(emitter)
 		loaded.rootPaths = g.rootPathsForType(elemTyp)
 		g.bindLocal(iterName, loaded)
 	}
@@ -3773,6 +4446,12 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 	if v, found, err := g.emitListMethodCall(call); found || err != nil {
 		return v, err
 	}
+	if v, found, err := g.emitMapMethodCall(call); found || err != nil {
+		return v, err
+	}
+	if v, found, err := g.emitSetMethodCall(call); found || err != nil {
+		return v, err
+	}
 	if v, found, err := g.emitRuntimeFFICall(call); found || err != nil {
 		return v, err
 	}
@@ -3807,7 +4486,13 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 	g.popScope()
 	ret := fromOstyValue(out)
 	ret.listElemTyp = sig.retListElemTyp
-	ret.gcManaged = sig.ret == "ptr" || sig.retListElemTyp != ""
+	ret.listElemString = sig.retListString
+	ret.mapKeyTyp = sig.retMapKeyTyp
+	ret.mapValueTyp = sig.retMapValueTyp
+	ret.mapKeyString = sig.retMapKeyString
+	ret.setElemTyp = sig.retSetElemTyp
+	ret.setElemString = sig.retSetElemString
+	ret.gcManaged = valueNeedsManagedRoot(ret)
 	ret.rootPaths = g.rootPathsForType(sig.ret)
 	return ret, nil
 }
@@ -3998,7 +4683,7 @@ func (g *generator) userCallArgs(sig *fnSig, receiverExpr ast.Expr, call *ast.Ca
 			return nil, unsupportedf("call", "function %q requires positional arguments", sig.name)
 		}
 		param := sig.params[paramIndex+i]
-		v, err := g.emitExprWithListHint(arg.Value, param.listElemTyp)
+		v, err := g.emitExprWithHint(arg.Value, param.listElemTyp, param.listElemString, param.mapKeyTyp, param.mapValueTyp, param.mapKeyString, param.setElemTyp, param.setElemString)
 		if err != nil {
 			return nil, err
 		}
@@ -4062,11 +4747,11 @@ func (g *generator) userCallTarget(call *ast.CallExpr) (*fnSig, ast.Expr, bool, 
 		if fn.IsOptional {
 			return nil, nil, false, unsupported("call", "optional method calls are not supported")
 		}
-		baseTyp, _, ok := g.staticExprType(fn.X)
+		baseInfo, ok := g.staticExprInfo(fn.X)
 		if !ok {
 			return nil, nil, false, nil
 		}
-		methods := g.methods[baseTyp]
+		methods := g.methods[baseInfo.typ]
 		if methods == nil {
 			return nil, nil, false, nil
 		}
@@ -4120,7 +4805,7 @@ func (g *generator) runtimeFFICallArgs(fn *runtimeFFIFunction, callArgs []*ast.A
 			return nil, unsupportedf("call", "runtime FFI %s.%s requires positional arguments", fn.path, fn.sourceName)
 		}
 		param := fn.params[i]
-		v, err := g.emitExprWithListHint(arg.Value, param.listElemTyp)
+		v, err := g.emitExprWithHint(arg.Value, param.listElemTyp, false, "", "", false, "", false)
 		if err != nil {
 			return nil, err
 		}
@@ -4205,6 +4890,9 @@ func (g *generator) enumVariantCallTarget(call *ast.CallExpr) (enumVariantRef, b
 }
 
 func (g *generator) render(defs []string) []byte {
+	if len(g.traceHelperDefs) != 0 {
+		defs = append(append([]string(nil), g.traceHelperDefs...), defs...)
+	}
 	allDefs := make([]string, 0, len(g.globalDefs)+len(defs))
 	allDefs = append(allDefs, g.globalDefs...)
 	allDefs = append(allDefs, defs...)
@@ -4919,12 +5607,11 @@ func (g *generator) popScope() {
 }
 
 func (g *generator) bindNamedLocal(name string, v value, mutable bool) {
-	if mutable || (v.typ == "ptr" && v.gcManaged) || len(v.rootPaths) != 0 {
+	if mutable || (v.typ == "ptr" && valueNeedsManagedRoot(v)) || len(v.rootPaths) != 0 {
 		emitter := g.toOstyEmitter()
 		slot := llvmMutableLetSlot(emitter, name, toOstyValue(v))
 		slotValue := fromOstyValue(slot)
-		slotValue.gcManaged = v.gcManaged
-		slotValue.listElemTyp = v.listElemTyp
+		copyContainerMetadata(&slotValue, v)
 		slotValue.mutable = mutable
 		slotValue.rootPaths = cloneRootPaths(v.rootPaths)
 		g.bindGCRootIfManagedPointer(emitter, slotValue)
@@ -4934,6 +5621,38 @@ func (g *generator) bindNamedLocal(name string, v value, mutable bool) {
 	}
 	v.mutable = false
 	g.bindLocal(name, v)
+}
+
+func valueNeedsManagedRoot(v value) bool {
+	return v.gcManaged || v.listElemTyp != "" || v.mapKeyTyp != "" || v.setElemTyp != ""
+}
+
+func copyContainerMetadata(dst *value, src value) {
+	dst.listElemTyp = src.listElemTyp
+	dst.listElemString = src.listElemString
+	dst.mapKeyTyp = src.mapKeyTyp
+	dst.mapValueTyp = src.mapValueTyp
+	dst.mapKeyString = src.mapKeyString
+	dst.setElemTyp = src.setElemTyp
+	dst.setElemString = src.setElemString
+	dst.gcManaged = valueNeedsManagedRoot(*dst)
+}
+
+func mergeContainerMetadata(dst *value, left, right value) {
+	if left.listElemTyp != "" && left.listElemTyp == right.listElemTyp {
+		dst.listElemTyp = left.listElemTyp
+		dst.listElemString = left.listElemString && right.listElemString
+	}
+	if left.mapKeyTyp != "" && left.mapKeyTyp == right.mapKeyTyp && left.mapValueTyp == right.mapValueTyp {
+		dst.mapKeyTyp = left.mapKeyTyp
+		dst.mapValueTyp = left.mapValueTyp
+		dst.mapKeyString = left.mapKeyString && right.mapKeyString
+	}
+	if left.setElemTyp != "" && left.setElemTyp == right.setElemTyp {
+		dst.setElemTyp = left.setElemTyp
+		dst.setElemString = left.setElemString && right.setElemString
+	}
+	dst.gcManaged = valueNeedsManagedRoot(*dst)
 }
 
 type gcSafepointRoot struct {
@@ -4967,6 +5686,13 @@ func prependRootIndex(index int, paths [][]int) [][]int {
 	return out
 }
 
+func llvmPointerOperand(name string) string {
+	if name == "" || name == "null" || strings.HasPrefix(name, "@") || strings.HasPrefix(name, "%") {
+		return name
+	}
+	return "@" + name
+}
+
 func (g *generator) rootPathsForType(typ string) [][]int {
 	return g.rootPathsForTypeSeen(typ, map[string]bool{})
 }
@@ -4982,7 +5708,7 @@ func (g *generator) rootPathsForTypeSeen(typ string, seen map[string]bool) [][]i
 		seen[typ] = true
 		var out [][]int
 		for _, field := range info.fields {
-			if field.listElemTyp != "" {
+			if field.listElemTyp != "" || field.mapKeyTyp != "" || field.setElemTyp != "" {
 				out = append(out, []int{field.index})
 				continue
 			}
@@ -5112,6 +5838,84 @@ func (g *generator) aggregateFieldType(typ string, index int) (string, bool) {
 		return info.elems[index], true
 	}
 	return "", false
+}
+
+func (g *generator) traceCallbackSymbol(typ string, rootPaths [][]int) string {
+	if typ == "" {
+		return "null"
+	}
+	if typ == "ptr" {
+		g.declareRuntimeSymbol("osty.gc.mark_slot_v1", "void", []paramInfo{{typ: "ptr"}})
+		g.needsGCRuntime = true
+		return "osty.gc.mark_slot_v1"
+	}
+	if len(rootPaths) == 0 {
+		return "null"
+	}
+	key := typ + ":" + fmt.Sprint(rootPaths)
+	if name, ok := g.traceHelpers[key]; ok {
+		return name
+	}
+	name := fmt.Sprintf("osty_rt_trace_%d", len(g.traceHelpers))
+	g.traceHelpers[key] = name
+	g.declareRuntimeSymbol("osty.gc.mark_slot_v1", "void", []paramInfo{{typ: "ptr"}})
+	g.needsGCRuntime = true
+	body := []string{}
+	currentType := ""
+	for _, path := range rootPaths {
+		addr := "%value.addr"
+		currentType = typ
+		for _, index := range path {
+			fieldPtr := fmt.Sprintf("%%trace.field.%d.%d", len(body), index)
+			body = append(body, fmt.Sprintf(
+				"  %s = getelementptr inbounds %s, ptr %s, i32 0, i32 %d",
+				fieldPtr,
+				currentType,
+				addr,
+				index,
+			))
+			nextType, ok := g.aggregateFieldType(currentType, index)
+			if !ok {
+				currentType = ""
+				break
+			}
+			addr = fieldPtr
+			currentType = nextType
+		}
+		if currentType == "" {
+			continue
+		}
+		body = append(body, fmt.Sprintf("  call void @osty.gc.mark_slot_v1(ptr %s)", addr))
+	}
+	body = append(body, "  ret void")
+	g.traceHelperDefs = append(g.traceHelperDefs, llvmRenderFunction("void", name, []*LlvmParam{llvmParam("value.addr", "ptr")}, body))
+	return name
+}
+
+func (g *generator) spillValueAddress(emitter *LlvmEmitter, prefix string, v value) string {
+	slot := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca %s", slot, v.typ))
+	emitter.body = append(emitter.body, fmt.Sprintf("  store %s %s, ptr %s", v.typ, v.ref, slot))
+	return slot
+}
+
+func (g *generator) loadValueFromAddress(emitter *LlvmEmitter, typ, addr string) value {
+	loaded := fromOstyValue(llvmLoad(emitter, &LlvmValue{typ: typ, name: addr, pointer: true}))
+	return loaded
+}
+
+func (g *generator) emitTypeSize(emitter *LlvmEmitter, typ string) *LlvmValue {
+	switch typ {
+	case "i64", "double", "ptr":
+		return llvmI64("8")
+	case "i1":
+		return llvmI64("1")
+	}
+	ptr := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = getelementptr %s, ptr null, i32 1", ptr, typ))
+	out := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = ptrtoint ptr %s to i64", out, ptr))
+	return llvmI64(out)
 }
 
 func (g *generator) bindLocal(name string, v value) {
@@ -5268,105 +6072,174 @@ func identPatternName(p ast.Pattern) (string, error) {
 	return id.Name, nil
 }
 
-func (g *generator) staticExprType(expr ast.Expr) (string, string, bool) {
+func (g *generator) staticExprInfo(expr ast.Expr) (value, bool) {
 	switch e := expr.(type) {
 	case *ast.IntLit:
-		return "i64", "", true
+		return value{typ: "i64"}, true
 	case *ast.FloatLit:
-		return "double", "", true
+		return value{typ: "double"}, true
 	case *ast.BoolLit:
-		return "i1", "", true
+		return value{typ: "i1"}, true
 	case *ast.StringLit:
-		return "ptr", "", true
+		return value{typ: "ptr"}, true
 	case *ast.Ident:
 		if v, ok := g.lookupLocal(e.Name); ok {
-			return v.typ, v.listElemTyp, true
+			return v, true
 		}
 		if v, ok := g.lookupGlobal(e.Name); ok {
-			return v.typ, v.listElemTyp, true
+			return v, true
 		}
 	case *ast.ParenExpr:
-		return g.staticExprType(e.X)
+		return g.staticExprInfo(e.X)
 	case *ast.TupleExpr:
 		elemTypes := make([]string, 0, len(e.Elems))
 		for _, elem := range e.Elems {
-			typ, _, ok := g.staticExprType(elem)
+			info, ok := g.staticExprInfo(elem)
 			if !ok {
-				return "", "", false
+				return value{}, false
 			}
-			elemTypes = append(elemTypes, typ)
+			elemTypes = append(elemTypes, info.typ)
 		}
-		return llvmTupleTypeName(elemTypes), "", true
+		return value{typ: llvmTupleTypeName(elemTypes)}, true
 	case *ast.ListExpr:
 		if elemTyp, ok := g.staticListLiteralElementType(e); ok {
-			return "ptr", elemTyp, true
+			return value{typ: "ptr", gcManaged: true, listElemTyp: elemTyp}, true
 		}
+	case *ast.MapExpr:
+		return value{}, false
 	case *ast.CallExpr:
-		if retTyp, found, ok := g.staticListMethodResult(e); found {
-			return retTyp, "", ok
+		if out, found, ok := g.staticCollectionMethodResult(e); found {
+			return out, ok
 		}
 		if id, ok := e.Fn.(*ast.Ident); ok {
 			if sig := g.functions[id.Name]; sig != nil && sig.ret != "" && sig.ret != "void" {
-				return sig.ret, sig.retListElemTyp, true
+				return value{
+					typ:            sig.ret,
+					listElemTyp:    sig.retListElemTyp,
+					listElemString: sig.retListString,
+					mapKeyTyp:      sig.retMapKeyTyp,
+					mapValueTyp:    sig.retMapValueTyp,
+					mapKeyString:   sig.retMapKeyString,
+					setElemTyp:     sig.retSetElemTyp,
+					setElemString:  sig.retSetElemString,
+					gcManaged:      sig.retListElemTyp != "" || sig.retMapKeyTyp != "" || sig.retSetElemTyp != "",
+				}, true
 			}
 		}
 		if field, ok := e.Fn.(*ast.FieldExpr); ok && !field.IsOptional {
-			if baseTyp, _, ok := g.staticExprType(field.X); ok {
-				if methods := g.methods[baseTyp]; methods != nil {
+			if baseInfo, ok := g.staticExprInfo(field.X); ok {
+				if methods := g.methods[baseInfo.typ]; methods != nil {
 					if sig := methods[field.Name]; sig != nil && sig.ret != "" && sig.ret != "void" {
-						return sig.ret, sig.retListElemTyp, true
+						return value{
+							typ:            sig.ret,
+							listElemTyp:    sig.retListElemTyp,
+							listElemString: sig.retListString,
+							mapKeyTyp:      sig.retMapKeyTyp,
+							mapValueTyp:    sig.retMapValueTyp,
+							mapKeyString:   sig.retMapKeyString,
+							setElemTyp:     sig.retSetElemTyp,
+							setElemString:  sig.retSetElemString,
+							gcManaged:      sig.retListElemTyp != "" || sig.retMapKeyTyp != "" || sig.retSetElemTyp != "",
+						}, true
 					}
 				}
 			}
 		}
 		if fn, found, err := g.runtimeFFICallTarget(e); found && err == nil && fn.ret != "" && fn.ret != "void" {
-			return fn.ret, fn.listElemTyp, true
+			return value{typ: fn.ret, listElemTyp: fn.listElemTyp, gcManaged: fn.listElemTyp != ""}, true
 		}
 	case *ast.FieldExpr:
 		if e.IsOptional {
-			return "", "", false
+			return value{}, false
 		}
-		baseTyp, _, ok := g.staticExprType(e.X)
+		baseInfo, ok := g.staticExprInfo(e.X)
 		if !ok {
-			return "", "", false
+			return value{}, false
 		}
-		if info := g.structsByType[baseTyp]; info != nil {
+		if info := g.structsByType[baseInfo.typ]; info != nil {
 			if field, ok := info.byName[e.Name]; ok {
-				return field.typ, field.listElemTyp, true
+				return value{
+					typ:            field.typ,
+					listElemTyp:    field.listElemTyp,
+					listElemString: field.listElemString,
+					mapKeyTyp:      field.mapKeyTyp,
+					mapValueTyp:    field.mapValueTyp,
+					mapKeyString:   field.mapKeyString,
+					setElemTyp:     field.setElemTyp,
+					setElemString:  field.setElemString,
+					gcManaged:      field.listElemTyp != "" || field.mapKeyTyp != "" || field.setElemTyp != "",
+				}, true
+			}
+		}
+	case *ast.IndexExpr:
+		if baseInfo, ok := g.staticExprInfo(e.X); ok {
+			switch {
+			case baseInfo.listElemTyp != "":
+				return value{typ: baseInfo.listElemTyp, gcManaged: baseInfo.listElemTyp == "ptr", rootPaths: g.rootPathsForType(baseInfo.listElemTyp)}, true
+			case baseInfo.mapKeyTyp != "":
+				return value{typ: baseInfo.mapValueTyp, gcManaged: baseInfo.mapValueTyp == "ptr", rootPaths: g.rootPathsForType(baseInfo.mapValueTyp)}, true
 			}
 		}
 	}
-	return "", "", false
+	return value{}, false
 }
 
 func (g *generator) staticListLiteralElementType(expr *ast.ListExpr) (string, bool) {
 	if expr == nil || len(expr.Elems) == 0 {
 		return "", false
 	}
-	elemTyp, _, ok := g.staticExprType(expr.Elems[0])
+	elemInfo, ok := g.staticExprInfo(expr.Elems[0])
 	if !ok {
 		return "", false
 	}
+	elemTyp := elemInfo.typ
 	for _, elem := range expr.Elems[1:] {
-		typ, _, ok := g.staticExprType(elem)
-		if !ok || typ != elemTyp {
+		info, ok := g.staticExprInfo(elem)
+		if !ok || info.typ != elemTyp {
 			return "", false
 		}
 	}
 	return elemTyp, true
 }
 
-func (g *generator) staticListMethodResult(call *ast.CallExpr) (string, bool, bool) {
-	field, _, found := g.listMethodInfo(call)
-	if !found {
-		return "", false, false
+func (g *generator) staticCollectionMethodResult(call *ast.CallExpr) (value, bool, bool) {
+	if field, elemTyp, found := g.listMethodInfo(call); found {
+		switch field.Name {
+		case "len":
+			return value{typ: "i64"}, true, true
+		case "sorted":
+			return value{typ: "ptr", gcManaged: true, listElemTyp: elemTyp}, true, true
+		case "toSet":
+			return value{typ: "ptr", gcManaged: true, setElemTyp: elemTyp}, true, true
+		default:
+			return value{}, true, false
+		}
 	}
-	switch field.Name {
-	case "len":
-		return "i64", true, true
-	default:
-		return "", true, false
+	if _, keyTyp, _, keyString, found := g.mapMethodInfo(call); found {
+		switch field := call.Fn.(*ast.FieldExpr); field.Name {
+		case "containsKey":
+			return value{typ: "i1"}, true, true
+		case "keys":
+			return value{typ: "ptr", gcManaged: true, listElemTyp: keyTyp, listElemString: keyString}, true, true
+		case "remove":
+			return value{typ: "ptr"}, true, true
+		default:
+			return value{}, true, false
+		}
 	}
+	if _, elemTyp, elemString, found := g.setMethodInfo(call); found {
+		switch field := call.Fn.(*ast.FieldExpr); field.Name {
+		case "len":
+			return value{typ: "i64"}, true, true
+		case "contains", "remove":
+			return value{typ: "i1"}, true, true
+		case "toList":
+			return value{typ: "ptr", gcManaged: true, listElemTyp: elemTyp, listElemString: elemString}, true, true
+		default:
+			return value{}, true, false
+		}
+	}
+	return value{}, false, false
 }
 
 func (g *generator) listMethodInfo(call *ast.CallExpr) (*ast.FieldExpr, string, bool) {
@@ -5378,26 +6251,78 @@ func (g *generator) listMethodInfo(call *ast.CallExpr) (*ast.FieldExpr, string, 
 		return nil, "", false
 	}
 	switch field.Name {
-	case "len", "push":
+	case "len", "push", "sorted", "toSet":
 	default:
 		return nil, "", false
 	}
-	baseTyp, elemTyp, ok := g.staticExprType(field.X)
-	if !ok || baseTyp != "ptr" || elemTyp == "" {
+	baseInfo, ok := g.staticExprInfo(field.X)
+	if !ok || baseInfo.typ != "ptr" || baseInfo.listElemTyp == "" {
 		return nil, "", false
 	}
-	return field, elemTyp, true
+	return field, baseInfo.listElemTyp, true
+}
+
+func (g *generator) mapMethodInfo(call *ast.CallExpr) (*ast.FieldExpr, string, string, bool, bool) {
+	if call == nil {
+		return nil, "", "", false, false
+	}
+	field, ok := call.Fn.(*ast.FieldExpr)
+	if !ok || field.IsOptional {
+		return nil, "", "", false, false
+	}
+	switch field.Name {
+	case "containsKey", "insert", "remove", "keys":
+	default:
+		return nil, "", "", false, false
+	}
+	baseInfo, ok := g.staticExprInfo(field.X)
+	if !ok || baseInfo.typ != "ptr" || baseInfo.mapKeyTyp == "" || baseInfo.mapValueTyp == "" {
+		return nil, "", "", false, false
+	}
+	return field, baseInfo.mapKeyTyp, baseInfo.mapValueTyp, baseInfo.mapKeyString, true
+}
+
+func (g *generator) setMethodInfo(call *ast.CallExpr) (*ast.FieldExpr, string, bool, bool) {
+	if call == nil {
+		return nil, "", false, false
+	}
+	field, ok := call.Fn.(*ast.FieldExpr)
+	if !ok || field.IsOptional {
+		return nil, "", false, false
+	}
+	switch field.Name {
+	case "len", "contains", "insert", "remove", "toList":
+	default:
+		return nil, "", false, false
+	}
+	baseInfo, ok := g.staticExprInfo(field.X)
+	if !ok || baseInfo.typ != "ptr" || baseInfo.setElemTyp == "" {
+		return nil, "", false, false
+	}
+	return field, baseInfo.setElemTyp, baseInfo.setElemString, true
 }
 
 func listRuntimeNewSymbol() string {
 	return "osty_rt_list_new"
 }
 
+func listRuntimePushBytesSymbol() string {
+	return "osty_rt_list_push_bytes"
+}
+
+func listRuntimeGetBytesSymbol() string {
+	return "osty_rt_list_get_bytes"
+}
+
+func listRuntimeSetBytesSymbol() string {
+	return "osty_rt_list_set_bytes"
+}
+
 func listRuntimeLenSymbol() string {
 	return "osty_rt_list_len"
 }
 
-func listRuntimePushBytesSymbol() string {
+func listRuntimePushBytesV1Symbol() string {
 	return "osty_rt_list_push_bytes_v1"
 }
 
@@ -5405,7 +6330,7 @@ func listRuntimePushBytesRootsSymbol() string {
 	return "osty_rt_list_push_bytes_roots_v1"
 }
 
-func listRuntimeGetBytesSymbol() string {
+func listRuntimeGetBytesV1Symbol() string {
 	return "osty_rt_list_get_bytes_v1"
 }
 
@@ -5415,6 +6340,111 @@ func listRuntimePushSymbol(elemTyp string) string {
 
 func listRuntimeGetSymbol(elemTyp string) string {
 	return "osty_rt_list_get_" + listRuntimeSymbolSuffix(elemTyp)
+}
+
+func listRuntimeSetSymbol(elemTyp string) string {
+	return "osty_rt_list_set_" + listRuntimeSymbolSuffix(elemTyp)
+}
+
+func listRuntimeSortedI64Symbol() string {
+	return "osty_rt_list_sorted_i64"
+}
+
+func listRuntimeToSetI64Symbol() string {
+	return "osty_rt_list_to_set_i64"
+}
+
+func mapRuntimeNewSymbol() string {
+	return "osty_rt_map_new"
+}
+
+func mapRuntimeContainsSymbol(keyTyp string, keyString bool) string {
+	return "osty_rt_map_contains_" + mapSetKeySuffix(keyTyp, keyString)
+}
+
+func mapRuntimeInsertSymbol(keyTyp string, keyString bool) string {
+	return "osty_rt_map_insert_" + mapSetKeySuffix(keyTyp, keyString)
+}
+
+func mapRuntimeRemoveSymbol(keyTyp string, keyString bool) string {
+	return "osty_rt_map_remove_" + mapSetKeySuffix(keyTyp, keyString)
+}
+
+func mapRuntimeGetOrAbortSymbol(keyTyp string, keyString bool) string {
+	return "osty_rt_map_get_or_abort_" + mapSetKeySuffix(keyTyp, keyString)
+}
+
+func mapRuntimeKeysSymbol() string {
+	return "osty_rt_map_keys"
+}
+
+func setRuntimeNewSymbol() string {
+	return "osty_rt_set_new"
+}
+
+func setRuntimeLenSymbol() string {
+	return "osty_rt_set_len"
+}
+
+func setRuntimeContainsSymbol(elemTyp string, elemString bool) string {
+	return "osty_rt_set_contains_" + mapSetKeySuffix(elemTyp, elemString)
+}
+
+func setRuntimeInsertSymbol(elemTyp string, elemString bool) string {
+	return "osty_rt_set_insert_" + mapSetKeySuffix(elemTyp, elemString)
+}
+
+func setRuntimeRemoveSymbol(elemTyp string, elemString bool) string {
+	return "osty_rt_set_remove_" + mapSetKeySuffix(elemTyp, elemString)
+}
+
+func setRuntimeToListSymbol() string {
+	return "osty_rt_set_to_list"
+}
+
+func containerAbiKind(typ string, isString bool) int {
+	if isString {
+		return 5
+	}
+	switch typ {
+	case "i64":
+		return 1
+	case "i1":
+		return 2
+	case "double":
+		return 3
+	case "ptr":
+		return 4
+	default:
+		return 6
+	}
+}
+
+func mapSetKeySuffix(typ string, isString bool) string {
+	if isString {
+		return "string"
+	}
+	switch typ {
+	case "i64":
+		return "i64"
+	case "i1":
+		return "i1"
+	case "double":
+		return "f64"
+	case "ptr":
+		return "ptr"
+	default:
+		return "bytes"
+	}
+}
+
+func listUsesTypedRuntime(elemTyp string) bool {
+	switch elemTyp {
+	case "i64", "i1", "double", "ptr":
+		return true
+	default:
+		return false
+	}
 }
 
 func listRuntimeSymbolSuffix(typ string) string {
