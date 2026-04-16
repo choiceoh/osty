@@ -191,112 +191,27 @@ func primarySpanOffset(d *diag.Diagnostic) int {
 	return -1
 }
 
-// ---- Symbols ----
+// ---- Symbols & Types ----
+//
+// Symbols and types have content-hash IDs computed once in their
+// home packages ([resolve.Symbol.ID], [types.ID]). The hash.go file
+// writes those precomputed [32]byte identities into the hasher
+// instead of re-serializing each symbol / type's fields. This keeps
+// per-query-run hashing to simple byte appends.
 
-// hashSymbol serializes a resolver symbol by its semantic identity —
-// name, kind, declaration position, visibility, package origin. This
-// is crucial for resolver early cutoff: two ResolvePackage runs over
-// equivalent source produce fresh *Symbol pointers but identical
-// semantic tuples.
 func hashSymbol(h *stableHasher, s *resolve.Symbol) {
 	if s == nil {
 		h.byte(0)
 		return
 	}
 	h.byte(1)
-	h.str(s.Name)
-	h.byte(byte(s.Kind))
-	h.pos(s.Pos)
-	h.bool(s.Pub)
-	if s.Package != nil {
-		h.byte(1)
-		h.str(s.Package.Dir)
-	} else {
-		h.byte(0)
-	}
-	// Decl's concrete type is 1-to-1 with Symbol.Kind (SymFn↔FnDecl,
-	// SymStruct↔StructDecl, ...), so hashing Decl's type tag would be
-	// redundant with the Kind byte above. A nil-vs-set distinction
-	// is the only extra signal worth preserving: builtins have
-	// Decl == nil.
-	if s.Decl == nil {
-		h.byte(0)
-	} else {
-		h.byte(1)
-	}
+	id := s.ID()
+	h.h.Write(id[:])
 }
 
-// ---- Types ----
-
-// hashType serializes a semantic type by structure. The generic
-// parameter TypeVar references its declaring Symbol by the same
-// symbol-hash used above; Named types include both the declaring
-// symbol and the recursive argument types.
 func hashType(h *stableHasher, t types.Type) {
-	if t == nil {
-		h.byte(0)
-		return
-	}
-	switch tt := t.(type) {
-	case *types.Primitive:
-		h.byte(1)
-		h.byte(byte(tt.Kind))
-	case *types.Untyped:
-		h.byte(2)
-		h.byte(byte(tt.Kind))
-	case *types.Tuple:
-		h.byte(3)
-		h.u32(uint32(len(tt.Elems)))
-		for _, e := range tt.Elems {
-			hashType(h, e)
-		}
-	case *types.Optional:
-		h.byte(4)
-		hashType(h, tt.Inner)
-	case *types.FnType:
-		h.byte(5)
-		h.u32(uint32(len(tt.Params)))
-		for _, p := range tt.Params {
-			hashType(h, p)
-		}
-		hashType(h, tt.Return)
-	case *types.Named:
-		h.byte(6)
-		hashSymbol(h, tt.Sym)
-		h.u32(uint32(len(tt.Args)))
-		for _, a := range tt.Args {
-			hashType(h, a)
-		}
-	case *types.TypeVar:
-		h.byte(7)
-		hashSymbol(h, tt.Sym)
-		h.u32(uint32(len(tt.Bounds)))
-		for _, b := range tt.Bounds {
-			hashType(h, b)
-		}
-	case *types.Builder:
-		h.byte(8)
-		hashType(h, tt.Struct)
-		// Set membership: emit sorted names so permutation doesn't
-		// affect the hash.
-		names := make([]string, 0, len(tt.Set))
-		for n := range tt.Set {
-			names = append(names, n)
-		}
-		sort.Strings(names)
-		h.u32(uint32(len(names)))
-		for _, n := range names {
-			h.str(n)
-		}
-		h.bool(tt.Preloaded)
-	case *types.Error:
-		h.byte(9)
-	default:
-		// Unknown kind: fall back to a stable tag so we at least don't
-		// panic. Downstream cutoff loses precision for this case, but
-		// correctness is preserved.
-		h.byte(255)
-	}
+	id := types.ID(t)
+	h.h.Write(id[:])
 }
 
 // ---- ResolvePackage ----
