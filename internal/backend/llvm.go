@@ -76,12 +76,15 @@ func (b LLVMBackend) Emit(ctx context.Context, req Request) (*Result, error) {
 		if artifacts.Binary == "" {
 			return out, fmt.Errorf("%s", llvmgen.MissingBinaryArtifactMessage())
 		}
-		runtimeObjects, err := compileBundledRuntime(ctx, tc, artifacts.RuntimeDir, req.Layout.Target)
+		runtimeObject, err := ensureLocalGCRuntimeObject(ctx, tc, artifacts, req.Layout.Target)
 		if err != nil {
 			return out, err
 		}
-		objectPaths := append([]string{artifacts.Object}, runtimeObjects...)
-		if err := tc.LinkBinary(ctx, objectPaths, artifacts.Binary, req.Layout.Target); err != nil {
+		linkObjects := []string{artifacts.Object}
+		if runtimeObject != "" {
+			linkObjects = append(linkObjects, runtimeObject)
+		}
+		if err := tc.LinkBinary(ctx, linkObjects, artifacts.Binary, req.Layout.Target); err != nil {
 			return out, err
 		}
 		return out, nil
@@ -126,26 +129,16 @@ func (clangToolchain) CompileCObject(ctx context.Context, sourcePath, objectPath
 }
 
 func (clangToolchain) LinkBinary(ctx context.Context, objectPaths []string, binaryPath, target string) error {
-	args := clangLinkBinaryArgs(target, objectPaths, binaryPath)
+	args := llvmgen.ClangLinkBinaryArgs(target, objectPaths, binaryPath)
 	return runClang(ctx, "link binary", args)
 }
 
 func clangCompileCObjectArgs(target, sourcePath, objectPath string) []string {
 	args := []string{}
 	if target != "" {
-		args = append(args, "--target="+target)
+		args = append(args, "-target", target)
 	}
 	args = append(args, "-std=c11", "-c", sourcePath, "-o", objectPath)
-	return args
-}
-
-func clangLinkBinaryArgs(target string, objectPaths []string, binaryPath string) []string {
-	args := []string{}
-	if target != "" {
-		args = append(args, "--target="+target)
-	}
-	args = append(args, objectPaths...)
-	args = append(args, "-o", binaryPath)
 	return args
 }
 

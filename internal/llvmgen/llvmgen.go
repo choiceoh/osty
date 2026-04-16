@@ -86,8 +86,8 @@ func ClangCompileObjectArgs(target, irPath, objectPath string) []string {
 
 // ClangLinkBinaryArgs returns the argv shape for `.o -> binary`, generated
 // from the Osty-authored backend core.
-func ClangLinkBinaryArgs(target, objectPath, binaryPath string) []string {
-	return llvmClangLinkBinaryArgs(target, objectPath, binaryPath)
+func ClangLinkBinaryArgs(target string, objectPaths []string, binaryPath string) []string {
+	return llvmClangLinkBinaryArgs(target, objectPaths, binaryPath)
 }
 
 func MissingClangMessage() string {
@@ -190,7 +190,7 @@ func Generate(file *ast.File, opts Options) ([]byte, error) {
 		return nil, &UnsupportedError{Diagnostic: diag}
 	}
 	g := &generator{
-		sourcePath:      filepath.ToSlash(firstNonEmpty(opts.SourcePath, "<unknown>")),
+		sourcePath:      filepath.ToSlash(llvmFirstNonEmpty(opts.SourcePath, "<unknown>")),
 		target:          opts.Target,
 		runtimeFFI:      map[string]map[string]*runtimeFFIFunction{},
 		runtimeFFIPaths: map[string]string{},
@@ -252,7 +252,7 @@ func fileUnsupportedDiagnostic(file *ast.File) (UnsupportedDiagnostic, bool) {
 		if use != nil && use.IsGoFFI {
 			return UnsupportedDiagnosticFor("go-ffi", use.GoPath), true
 		}
-		if use != nil && use.IsRuntimeFFI && !isKnownRuntimeFFIPath(use.RuntimePath) {
+		if use != nil && use.IsRuntimeFFI && !llvmIsKnownRuntimeFfiPath(use.RuntimePath) {
 			return UnsupportedDiagnosticFor("runtime-ffi", use.RuntimePath), true
 		}
 	}
@@ -452,7 +452,7 @@ func collectRuntimeFFI(file *ast.File, structs map[string]*structInfo, enums map
 		return out
 	}
 	for _, use := range file.Uses {
-		if use == nil || !use.IsRuntimeFFI || !isKnownRuntimeFFIPath(use.RuntimePath) {
+		if use == nil || !use.IsRuntimeFFI || !llvmIsKnownRuntimeFfiPath(use.RuntimePath) {
 			continue
 		}
 		alias := runtimeFFIAlias(use)
@@ -481,7 +481,7 @@ func collectRuntimeFFIPaths(file *ast.File) map[string]string {
 		return out
 	}
 	for _, use := range file.Uses {
-		if use == nil || !use.IsRuntimeFFI || !isKnownRuntimeFFIPath(use.RuntimePath) {
+		if use == nil || !use.IsRuntimeFFI || !llvmIsKnownRuntimeFfiPath(use.RuntimePath) {
 			continue
 		}
 		if alias := runtimeFFIAlias(use); alias != "" {
@@ -497,12 +497,8 @@ func runtimeFFISignature(path string, fn *ast.FnDecl, structs map[string]*struct
 		sourceName: fn.Name,
 		symbol:     runtimeFFISymbol(path, fn.Name),
 	}
-	if fn.Recv != nil {
-		out.unsupported = "methods are not supported"
-		return out
-	}
-	if len(fn.Generics) != 0 {
-		out.unsupported = "generic functions are not supported"
+	if msg := llvmRuntimeFfiHeaderUnsupported(fn.Recv != nil, len(fn.Generics)); msg != "" {
+		out.unsupported = msg
 		return out
 	}
 	if fn.ReturnType == nil {
@@ -510,12 +506,12 @@ func runtimeFFISignature(path string, fn *ast.FnDecl, structs map[string]*struct
 	} else {
 		ret, err := llvmRuntimeABIType(fn.ReturnType, structs, enums)
 		if err != nil {
-			out.unsupported = "return type: " + unsupportedMessage(err)
+			out.unsupported = llvmRuntimeFfiReturnUnsupported(unsupportedMessage(err))
 			return out
 		}
 		out.ret = ret
 		if listElemTyp, ok, err := llvmListElementType(fn.ReturnType, structs, enums); err != nil {
-			out.unsupported = "return type: " + unsupportedMessage(err)
+			out.unsupported = llvmRuntimeFfiReturnUnsupported(unsupportedMessage(err))
 			return out
 		} else if ok {
 			out.listElemTyp = listElemTyp
@@ -523,25 +519,22 @@ func runtimeFFISignature(path string, fn *ast.FnDecl, structs map[string]*struct
 	}
 	for _, p := range fn.Params {
 		if p == nil {
-			out.unsupported = "nil parameter"
+			out.unsupported = llvmRuntimeFfiParamUnsupported("", true, false, "")
 			return out
 		}
 		if p.Pattern != nil || p.Default != nil {
-			out.unsupported = "pattern/default parameters are not supported"
+			out.unsupported = llvmRuntimeFfiParamUnsupported("", false, true, "")
 			return out
 		}
-		name := p.Name
-		if name == "" {
-			name = fmt.Sprintf("arg%d", len(out.params))
-		}
+		name := llvmSignatureParamName(p.Name, len(out.params))
 		typ, err := llvmRuntimeABIType(p.Type, structs, enums)
 		if err != nil {
-			out.unsupported = fmt.Sprintf("parameter %q: %s", name, unsupportedMessage(err))
+			out.unsupported = llvmRuntimeFfiParamUnsupported(name, false, false, unsupportedMessage(err))
 			return out
 		}
 		info := paramInfo{name: name, typ: typ}
 		if listElemTyp, ok, err := llvmListElementType(p.Type, structs, enums); err != nil {
-			out.unsupported = fmt.Sprintf("parameter %q: %s", name, unsupportedMessage(err))
+			out.unsupported = llvmRuntimeFfiParamUnsupported(name, false, false, unsupportedMessage(err))
 			return out
 		} else if ok {
 			info.listElemTyp = listElemTyp
@@ -555,50 +548,15 @@ func runtimeFFIAlias(use *ast.UseDecl) string {
 	if use == nil {
 		return ""
 	}
-	if use.Alias != "" {
-		return use.Alias
-	}
+	lastPath := ""
 	if len(use.Path) > 0 {
-		return use.Path[len(use.Path)-1]
+		lastPath = use.Path[len(use.Path)-1]
 	}
-	parts := strings.Split(use.RuntimePath, ".")
-	if len(parts) == 0 {
-		return ""
-	}
-	return parts[len(parts)-1]
+	return llvmRuntimeFfiAlias(use.Alias, lastPath, use.RuntimePath)
 }
 
 func runtimeFFISymbol(path, name string) string {
-	path = strings.TrimPrefix(path, "runtime.")
-	var b strings.Builder
-	b.WriteString("osty_rt_")
-	for i := 0; i < len(path); i++ {
-		c := path[i]
-		if c == '.' || c == '/' || c == '-' {
-			b.WriteByte('_')
-			continue
-		}
-		if c == '_' || ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || ('0' <= c && c <= '9') {
-			b.WriteByte(c)
-			continue
-		}
-		b.WriteByte('_')
-	}
-	b.WriteByte('_')
-	b.WriteString(name)
-	return b.String()
-}
-
-func isKnownRuntimeFFIPath(path string) bool {
-	if strings.HasPrefix(path, "runtime.package.") {
-		return true
-	}
-	switch path {
-	case "runtime.strings", "runtime.path.filepath", "runtime.golegacy.astbridge":
-		return true
-	default:
-		return false
-	}
+	return llvmRuntimeFfiSymbol(path, name)
 }
 
 func llvmRuntimeABIType(t ast.Type, structs map[string]*structInfo, enums map[string]*enumInfo) (string, error) {
@@ -606,19 +564,19 @@ func llvmRuntimeABIType(t ast.Type, structs map[string]*structInfo, enums map[st
 	case nil:
 		return "void", nil
 	case *ast.NamedType:
-		if len(tt.Path) == 1 && len(tt.Args) == 0 {
-			switch tt.Path[0] {
-			case "Int", "Float", "Bool", "String":
-				return llvmType(tt, structs, enums)
+		name := ""
+		structType := ""
+		enumType := ""
+		if len(tt.Path) == 1 {
+			name = tt.Path[0]
+			if info := structs[name]; info != nil {
+				structType = info.typ
 			}
-			if info := structs[tt.Path[0]]; info != nil {
-				return info.typ, nil
-			}
-			if info := enums[tt.Path[0]]; info != nil {
-				return info.typ, nil
+			if info := enums[name]; info != nil {
+				enumType = info.typ
 			}
 		}
-		return "ptr", nil
+		return llvmRuntimeAbiNamedType(name, len(tt.Path), len(tt.Args), structType, enumType), nil
 	case *ast.OptionalType, *ast.TupleType, *ast.FnType:
 		return "ptr", nil
 	default:
@@ -628,7 +586,14 @@ func llvmRuntimeABIType(t ast.Type, structs map[string]*structInfo, enums map[st
 
 func llvmListElementType(t ast.Type, structs map[string]*structInfo, enums map[string]*enumInfo) (string, bool, error) {
 	named, ok := t.(*ast.NamedType)
-	if !ok || len(named.Path) != 1 || named.Path[0] != "List" || len(named.Args) != 1 {
+	if !ok {
+		return "", false, nil
+	}
+	name := ""
+	if len(named.Path) == 1 {
+		name = named.Path[0]
+	}
+	if !llvmIsRuntimeAbiListType(name, len(named.Path), len(named.Args)) {
 		return "", false, nil
 	}
 	elemTyp, err := llvmRuntimeABIType(named.Args[0], structs, enums)
@@ -642,18 +607,12 @@ func collectStructShell(decl *ast.StructDecl) (*structInfo, error) {
 	if decl == nil {
 		return nil, unsupported("source-layout", "nil struct")
 	}
-	if !isLLVMIdent(decl.Name) {
-		return nil, unsupportedf("name", "struct name %q", decl.Name)
-	}
-	if len(decl.Generics) != 0 {
-		return nil, unsupportedf("type-system", "generic struct %q is not supported", decl.Name)
-	}
-	if len(decl.Methods) != 0 {
-		return nil, unsupportedf("function-signature", "struct %q methods are not supported", decl.Name)
+	if diag := llvmNominalDeclHeaderDiagnostic("struct", decl.Name, llvmIsIdent(decl.Name), len(decl.Generics), len(decl.Methods)); diag.kind != "" {
+		return nil, unsupported(diag.kind, diag.message)
 	}
 	return &structInfo{
 		name:   decl.Name,
-		typ:    "%" + decl.Name,
+		typ:    llvmStructTypeName(decl.Name),
 		decl:   decl,
 		byName: map[string]fieldInfo{},
 	}, nil
@@ -667,25 +626,26 @@ func collectStructFields(info *structInfo, structs map[string]*structInfo) error
 		if field == nil {
 			return unsupportedf("source-layout", "struct %q has nil field", info.name)
 		}
-		if !isLLVMIdent(field.Name) {
-			return unsupportedf("name", "struct %q field name %q", info.name, field.Name)
-		}
-		if field.Default != nil {
-			return unsupportedf("type-system", "struct %q field %q has a default value", info.name, field.Name)
+		if diag := llvmStructFieldDiagnostic(info.name, field.Name, llvmIsIdent(field.Name), field.Default != nil, false, false, ""); diag.kind != "" {
+			return unsupported(diag.kind, diag.message)
 		}
 		if _, exists := info.byName[field.Name]; exists {
-			return unsupportedf("source-layout", "struct %q duplicate field %q", info.name, field.Name)
+			diag := llvmStructFieldDiagnostic(info.name, field.Name, true, false, true, false, "")
+			return unsupported(diag.kind, diag.message)
 		}
 		typ, err := llvmType(field.Type, structs, nil)
 		if err != nil {
-			return unsupportedf("type-system", "struct %q field %q: %s", info.name, field.Name, unsupportedMessage(err))
+			diag := llvmStructFieldDiagnostic(info.name, field.Name, true, false, false, false, unsupportedMessage(err))
+			return unsupported(diag.kind, diag.message)
 		}
 		if typ == info.typ {
-			return unsupportedf("type-system", "struct %q recursive field %q", info.name, field.Name)
+			diag := llvmStructFieldDiagnostic(info.name, field.Name, true, false, false, true, "")
+			return unsupported(diag.kind, diag.message)
 		}
 		fieldInfo := fieldInfo{name: field.Name, typ: typ, index: i}
 		if listElemTyp, ok, err := llvmListElementType(field.Type, structs, nil); err != nil {
-			return unsupportedf("type-system", "struct %q field %q: %s", info.name, field.Name, unsupportedMessage(err))
+			diag := llvmStructFieldDiagnostic(info.name, field.Name, true, false, false, false, unsupportedMessage(err))
+			return unsupported(diag.kind, diag.message)
 		} else if ok {
 			fieldInfo.listElemTyp = listElemTyp
 		}
@@ -699,18 +659,12 @@ func collectEnum(decl *ast.EnumDecl) (*enumInfo, error) {
 	if decl == nil {
 		return nil, unsupported("source-layout", "nil enum")
 	}
-	if !isLLVMIdent(decl.Name) {
-		return nil, unsupportedf("name", "enum name %q", decl.Name)
-	}
-	if len(decl.Generics) != 0 {
-		return nil, unsupportedf("type-system", "generic enum %q is not supported", decl.Name)
-	}
-	if len(decl.Methods) != 0 {
-		return nil, unsupportedf("function-signature", "enum %q methods are not supported", decl.Name)
+	if diag := llvmNominalDeclHeaderDiagnostic("enum", decl.Name, llvmIsIdent(decl.Name), len(decl.Generics), len(decl.Methods)); diag.kind != "" {
+		return nil, unsupported(diag.kind, diag.message)
 	}
 	info := &enumInfo{
 		name:     decl.Name,
-		typ:      "i64",
+		typ:      llvmEnumStorageType(decl.Name, false),
 		decl:     decl,
 		variants: map[string]variantInfo{},
 	}
@@ -718,75 +672,68 @@ func collectEnum(decl *ast.EnumDecl) (*enumInfo, error) {
 		if variant == nil {
 			return nil, unsupportedf("source-layout", "enum %q has nil variant", decl.Name)
 		}
-		if !isLLVMIdent(variant.Name) {
-			return nil, unsupportedf("name", "enum %q variant name %q", decl.Name, variant.Name)
+		if diag := llvmEnumVariantHeaderDiagnostic(decl.Name, variant.Name, llvmIsIdent(variant.Name), len(variant.Fields), false); diag.kind != "" {
+			return nil, unsupported(diag.kind, diag.message)
 		}
 		payloads := make([]string, 0, len(variant.Fields))
-		if len(variant.Fields) > 1 {
-			return nil, unsupportedf("type-system", "enum %q variant %q has %d payload fields; only one scalar payload is supported", decl.Name, variant.Name, len(variant.Fields))
-		}
 		if len(variant.Fields) == 1 {
 			typ, err := llvmEnumPayloadType(variant.Fields[0])
 			if err != nil {
-				return nil, unsupportedf("type-system", "enum %q variant %q payload: %s", decl.Name, variant.Name, unsupportedMessage(err))
+				diag := llvmEnumPayloadDiagnostic(decl.Name, variant.Name, unsupportedMessage(err), "", "")
+				return nil, unsupported(diag.kind, diag.message)
 			}
 			if info.payloadTyp == "" {
 				info.payloadTyp = typ
 			} else if info.payloadTyp != typ {
-				return nil, unsupportedf("type-system", "enum %q mixes payload types %s and %s", decl.Name, info.payloadTyp, typ)
+				diag := llvmEnumPayloadDiagnostic(decl.Name, variant.Name, "", info.payloadTyp, typ)
+				return nil, unsupported(diag.kind, diag.message)
 			}
 			payloads = append(payloads, typ)
 			info.hasPayload = true
 		}
 		if _, exists := info.variants[variant.Name]; exists {
-			return nil, unsupportedf("source-layout", "enum %q duplicate variant %q", decl.Name, variant.Name)
+			diag := llvmEnumVariantHeaderDiagnostic(decl.Name, variant.Name, true, len(variant.Fields), true)
+			return nil, unsupported(diag.kind, diag.message)
 		}
 		info.variants[variant.Name] = variantInfo{name: variant.Name, tag: i, payloads: payloads}
 	}
-	if info.hasPayload {
-		info.typ = "%" + info.name
-	}
+	info.typ = llvmEnumStorageType(info.name, info.hasPayload)
 	return info, nil
 }
 
 func llvmEnumPayloadType(t ast.Type) (string, error) {
 	named, ok := t.(*ast.NamedType)
-	if !ok || len(named.Args) != 0 || len(named.Path) != 1 {
+	if !ok {
 		return "", unsupported("type-system", "LLVM enum payloads currently support Int or Float only")
 	}
-	switch named.Path[0] {
-	case "Int":
-		return "i64", nil
-	case "Float":
-		return "double", nil
-	case "String":
-		return "ptr", nil
-	default:
-		return "", unsupported("type-system", "LLVM enum payloads currently support Int, Float, or String only")
+	name := ""
+	if len(named.Path) == 1 {
+		name = named.Path[0]
 	}
+	if typ := llvmEnumPayloadNamedType(name, len(named.Path), len(named.Args)); typ != "" {
+		return typ, nil
+	}
+	return "", unsupported("type-system", "LLVM enum payloads currently support Int, Float, or String only")
 }
 
 func signatureOf(fn *ast.FnDecl, structs map[string]*structInfo, enums map[string]*enumInfo) (*fnSig, error) {
 	if fn == nil {
 		return nil, unsupported("source-layout", "nil function")
 	}
-	if !isLLVMIdent(fn.Name) {
-		return nil, unsupportedf("name", "function name %q", fn.Name)
-	}
-	if fn.Recv != nil {
-		return nil, unsupported("function-signature", "methods are not supported")
-	}
-	if len(fn.Generics) != 0 {
-		return nil, unsupported("function-signature", "generic functions are not supported")
-	}
-	if fn.Body == nil {
-		return nil, unsupportedf("source-layout", "function %q has no body", fn.Name)
+	if diag := llvmFunctionHeaderDiagnostic(
+		fn.Name,
+		llvmIsIdent(fn.Name),
+		fn.Recv != nil,
+		len(fn.Generics),
+		fn.Body != nil,
+		fn.Name == "main",
+		len(fn.Params),
+		fn.ReturnType != nil,
+	); diag.kind != "" {
+		return nil, unsupported(diag.kind, diag.message)
 	}
 	sig := &fnSig{name: fn.Name, decl: fn}
 	if fn.Name == "main" {
-		if len(fn.Params) != 0 || fn.ReturnType != nil {
-			return nil, unsupported("function-signature", "LLVM main must have no params and no return type")
-		}
 		return sig, nil
 	}
 	if fn.ReturnType == nil {
@@ -794,27 +741,32 @@ func signatureOf(fn *ast.FnDecl, structs map[string]*structInfo, enums map[strin
 	} else {
 		ret, err := llvmType(fn.ReturnType, structs, enums)
 		if err != nil {
-			return nil, unsupportedf("type-system", "function %q return type: %s", fn.Name, unsupportedMessage(err))
+			diag := llvmFunctionReturnDiagnostic(fn.Name, unsupportedMessage(err))
+			return nil, unsupported(diag.kind, diag.message)
 		}
 		sig.ret = ret
 	}
 	for _, p := range fn.Params {
-		if p.Pattern != nil || p.Name == "" {
-			return nil, unsupportedf("function-signature", "function %q has non-identifier parameter", fn.Name)
+		if diag := llvmFunctionParamDiagnostic(fn.Name, p.Name, p.Pattern != nil || p.Name == "", false, true, ""); diag.kind != "" {
+			return nil, unsupported(diag.kind, diag.message)
 		}
 		if p.Default != nil {
-			return nil, unsupportedf("function-signature", "function %q has default parameter values", fn.Name)
+			diag := llvmFunctionParamDiagnostic(fn.Name, p.Name, false, true, true, "")
+			return nil, unsupported(diag.kind, diag.message)
 		}
-		if !isLLVMIdent(p.Name) {
-			return nil, unsupportedf("name", "parameter name %q", p.Name)
+		if !llvmIsIdent(p.Name) {
+			diag := llvmFunctionParamDiagnostic(fn.Name, p.Name, false, false, false, "")
+			return nil, unsupported(diag.kind, diag.message)
 		}
 		typ, err := llvmType(p.Type, structs, enums)
 		if err != nil {
-			return nil, unsupportedf("type-system", "function %q parameter %q: %s", fn.Name, p.Name, unsupportedMessage(err))
+			diag := llvmFunctionParamDiagnostic(fn.Name, p.Name, false, false, true, unsupportedMessage(err))
+			return nil, unsupported(diag.kind, diag.message)
 		}
 		info := paramInfo{name: p.Name, typ: typ}
 		if listElemTyp, ok, err := llvmListElementType(p.Type, structs, enums); err != nil {
-			return nil, unsupportedf("type-system", "function %q parameter %q: %s", fn.Name, p.Name, unsupportedMessage(err))
+			diag := llvmFunctionParamDiagnostic(fn.Name, p.Name, false, false, true, unsupportedMessage(err))
+			return nil, unsupported(diag.kind, diag.message)
 		} else if ok {
 			info.listElemTyp = listElemTyp
 		}
@@ -1217,7 +1169,7 @@ func (g *generator) emitStringLiteral(lit *ast.StringLit) (value, error) {
 	if !ok {
 		return value{}, unsupported("expression", "interpolated String literals are not supported by LLVM")
 	}
-	if !isLLVMASCIIStringText(text) {
+	if !llvmIsAsciiStringText(text) {
 		return value{}, unsupported("type-system", "plain String literals currently require ASCII text with printable bytes or newline, tab, and carriage-return escapes")
 	}
 	emitter := g.toOstyEmitter()
@@ -1315,7 +1267,7 @@ func (g *generator) emitStructLit(lit *ast.StructLit) (value, error) {
 		if field == nil {
 			return value{}, unsupportedf("expression", "struct %q has nil literal field", typeName)
 		}
-		if !isLLVMIdent(field.Name) {
+		if !llvmIsIdent(field.Name) {
 			return value{}, unsupportedf("name", "struct %q literal field name %q", typeName, field.Name)
 		}
 		if _, exists := fields[field.Name]; exists {
@@ -1407,7 +1359,7 @@ func (g *generator) enumVariantConstant(info *enumInfo, variant variantInfo) (va
 		if len(variant.payloads) != 0 {
 			return value{}, unsupportedf("expression", "enum variant %q requires a payload", variant.name)
 		}
-		return g.emitEnumPayloadVariant(info, variant, value{typ: info.payloadTyp, ref: zeroLiteral(info.payloadTyp)})
+		return g.emitEnumPayloadVariant(info, variant, value{typ: info.payloadTyp, ref: llvmZeroLiteral(info.payloadTyp)})
 	}
 	out := llvmEnumVariant(info.name, variant.tag)
 	return fromOstyValue(out), nil
@@ -1501,24 +1453,15 @@ func (g *generator) emitBinary(e *ast.BinaryExpr) (value, error) {
 	if err != nil {
 		return value{}, err
 	}
-	if isCompareOp(e.Op) {
+	if llvmIsCompareOp(e.Op.String()) {
 		return g.emitCompare(e.Op, left, right)
 	}
 	if e.Op == token.AND || e.Op == token.OR {
 		return g.emitLogical(e.Op, left, right)
 	}
 	if left.typ == "double" && right.typ == "double" {
-		op := ""
-		switch e.Op {
-		case token.PLUS:
-			op = "fadd"
-		case token.MINUS:
-			op = "fsub"
-		case token.STAR:
-			op = "fmul"
-		case token.SLASH:
-			op = "fdiv"
-		default:
+		op := llvmFloatBinaryInstruction(e.Op.String())
+		if op == "" {
 			return value{}, unsupportedf("expression", "binary operator %q", e.Op)
 		}
 		emitter := g.toOstyEmitter()
@@ -1529,19 +1472,8 @@ func (g *generator) emitBinary(e *ast.BinaryExpr) (value, error) {
 	if left.typ != "i64" || right.typ != "i64" {
 		return value{}, unsupportedf("type-system", "binary operator %q on %s/%s", e.Op, left.typ, right.typ)
 	}
-	op := ""
-	switch e.Op {
-	case token.PLUS:
-		op = "add"
-	case token.MINUS:
-		op = "sub"
-	case token.STAR:
-		op = "mul"
-	case token.SLASH:
-		op = "sdiv"
-	case token.PERCENT:
-		op = "srem"
-	default:
+	op := llvmIntBinaryInstruction(e.Op.String())
+	if op == "" {
 		return value{}, unsupportedf("expression", "binary operator %q", e.Op)
 	}
 	emitter := g.toOstyEmitter()
@@ -1554,13 +1486,8 @@ func (g *generator) emitLogical(op token.Kind, left, right value) (value, error)
 	if left.typ != "i1" || right.typ != "i1" {
 		return value{}, unsupportedf("type-system", "logical operator %q on %s/%s", op, left.typ, right.typ)
 	}
-	inst := ""
-	switch op {
-	case token.AND:
-		inst = "and"
-	case token.OR:
-		inst = "or"
-	default:
+	inst := llvmLogicalInstruction(op.String())
+	if inst == "" {
 		return value{}, unsupportedf("expression", "logical operator %q", op)
 	}
 	emitter := g.toOstyEmitter()
@@ -1577,17 +1504,17 @@ func (g *generator) emitCompare(op token.Kind, left, right value) (value, error)
 	var out *LlvmValue
 	switch left.typ {
 	case "i64", "i1":
-		pred, err := llvmIntComparePred(op)
-		if err != nil {
+		pred := llvmIntComparePredicate(op.String())
+		if pred == "" {
 			g.takeOstyEmitter(emitter)
-			return value{}, err
+			return value{}, unsupportedf("expression", "comparison operator %q", op)
 		}
 		out = llvmCompare(emitter, pred, toOstyValue(left), toOstyValue(right))
 	case "double":
-		pred, err := llvmFloatComparePred(op)
-		if err != nil {
+		pred := llvmFloatComparePredicate(op.String())
+		if pred == "" {
 			g.takeOstyEmitter(emitter)
-			return value{}, err
+			return value{}, unsupportedf("expression", "comparison operator %q", op)
 		}
 		out = llvmCompareF64(emitter, pred, toOstyValue(left), toOstyValue(right))
 	case "ptr":
@@ -1616,44 +1543,6 @@ func (g *generator) emitRuntimeStringCompare(op token.Kind, left, right value) (
 	}
 	g.takeOstyEmitter(emitter)
 	return fromOstyValue(out), nil
-}
-
-func llvmIntComparePred(op token.Kind) (string, error) {
-	switch op {
-	case token.EQ:
-		return "eq", nil
-	case token.NEQ:
-		return "ne", nil
-	case token.LT:
-		return "slt", nil
-	case token.GT:
-		return "sgt", nil
-	case token.LEQ:
-		return "sle", nil
-	case token.GEQ:
-		return "sge", nil
-	default:
-		return "", unsupportedf("expression", "comparison operator %q", op)
-	}
-}
-
-func llvmFloatComparePred(op token.Kind) (string, error) {
-	switch op {
-	case token.EQ:
-		return "oeq", nil
-	case token.NEQ:
-		return "one", nil
-	case token.LT:
-		return "olt", nil
-	case token.GT:
-		return "ogt", nil
-	case token.LEQ:
-		return "ole", nil
-	case token.GEQ:
-		return "oge", nil
-	default:
-		return "", unsupportedf("expression", "comparison operator %q", op)
-	}
 }
 
 func (g *generator) emitIfExprValue(expr *ast.IfExpr) (value, error) {
@@ -2181,7 +2070,7 @@ func (g *generator) matchPayloadEnumPattern(info *enumInfo, pattern ast.Pattern)
 		out.payloadType = variant.payloads[0]
 		switch arg := p.Args[0].(type) {
 		case *ast.IdentPat:
-			if !isLLVMIdent(arg.Name) {
+			if !llvmIsIdent(arg.Name) {
 				return enumPatternInfo{}, true, unsupportedf("name", "enum payload binding name %q", arg.Name)
 			}
 			out.payloadName = arg.Name
@@ -2596,37 +2485,12 @@ func structTypeExprName(expr ast.Expr) (string, bool) {
 	return id.Name, true
 }
 
-func isLLVMASCIIStringText(text string) bool {
-	for i := 0; i < len(text); i++ {
-		ch := text[i]
-		switch ch {
-		case '\n', '\t', '\r':
-			continue
-		}
-		if ch < 0x20 || ch > 0x7e {
-			return false
-		}
-	}
-	return true
-}
-
 func toLLVMParams(params []paramInfo) []*LlvmParam {
 	out := make([]*LlvmParam, 0, len(params))
 	for _, p := range params {
 		out = append(out, llvmParam(p.name, p.typ))
 	}
 	return out
-}
-
-func zeroLiteral(typ string) string {
-	switch typ {
-	case "double":
-		return "0.0"
-	case "ptr":
-		return "null"
-	default:
-		return "0"
-	}
 }
 
 func (g *generator) pushScope() {
@@ -2655,7 +2519,7 @@ func identPatternName(p ast.Pattern) (string, error) {
 	if !ok || id.Name == "" {
 		return "", unsupported("statement", "only identifier let patterns are supported")
 	}
-	if !isLLVMIdent(id.Name) {
+	if !llvmIsIdent(id.Name) {
 		return "", unsupportedf("name", "let name %q", id.Name)
 	}
 	return id.Name, nil
@@ -2801,65 +2665,25 @@ func listRuntimeSymbolSuffix(typ string) string {
 func llvmType(t ast.Type, structs map[string]*structInfo, enums map[string]*enumInfo) (string, error) {
 	switch tt := t.(type) {
 	case *ast.NamedType:
-		if len(tt.Path) != 1 {
-			return "ptr", nil
-		}
-		if len(tt.Args) != 0 {
-			return "ptr", nil
-		}
-		switch tt.Path[0] {
-		case "Int":
-			return "i64", nil
-		case "Float":
-			return "double", nil
-		case "Bool":
-			return "i1", nil
-		case "String":
-			return "ptr", nil
-		case "Bytes", "Error":
-			return "ptr", nil
-		default:
-			if info := structs[tt.Path[0]]; info != nil {
-				return info.typ, nil
+		name := ""
+		structType := ""
+		enumType := ""
+		if len(tt.Path) == 1 {
+			name = tt.Path[0]
+			if info := structs[name]; info != nil {
+				structType = info.typ
 			}
-			if info := enums[tt.Path[0]]; info != nil {
-				return info.typ, nil
+			if info := enums[name]; info != nil {
+				enumType = info.typ
 			}
-			return "", unsupportedf("type-system", "type %q", strings.Join(tt.Path, "."))
 		}
+		if typ := llvmNamedType(name, len(tt.Path), len(tt.Args), structType, enumType); typ != "" {
+			return typ, nil
+		}
+		return "", unsupportedf("type-system", "type %q", strings.Join(tt.Path, "."))
 	case *ast.OptionalType, *ast.TupleType, *ast.FnType:
 		return "ptr", nil
 	default:
 		return "", unsupportedf("type-system", "type %T", t)
 	}
-}
-
-func isCompareOp(op token.Kind) bool {
-	switch op {
-	case token.EQ, token.NEQ, token.LT, token.GT, token.LEQ, token.GEQ:
-		return true
-	default:
-		return false
-	}
-}
-
-func isLLVMIdent(name string) bool {
-	if name == "" {
-		return false
-	}
-	for i := 0; i < len(name); i++ {
-		c := name[i]
-		if c == '_' || ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || (i > 0 && '0' <= c && c <= '9') {
-			continue
-		}
-		return false
-	}
-	return true
-}
-
-func firstNonEmpty(a, b string) string {
-	if a != "" {
-		return a
-	}
-	return b
 }

@@ -364,10 +364,23 @@ pub struct GcHardeningReport {
     pub heapValid: Bool,
     pub barrierAuditPassed: Bool,
     pub performancePassed: Bool,
+    pub heapReadinessScore: Int,
+    pub barrierReadinessScore: Int,
+    pub performanceReadinessScore: Int,
+    pub contractReadinessScore: Int,
+    pub readinessScore: Int,
+    pub readinessBand: GcReadinessBand,
     pub ffiPinnedObjects: Int,
     pub loweredSlots: Int,
     pub validationMessage: String,
     pub passed: Bool,
+}
+
+pub enum GcReadinessBand {
+    GcReadinessBlocked,
+    GcReadinessExperimental,
+    GcReadinessUsable,
+    GcReadinessHardened,
 }
 
 pub enum GcBackendTarget {
@@ -2255,10 +2268,58 @@ pub struct GcHeap {
     }
 
     pub fn hardeningReport(self, thresholds: GcPerformanceThresholds) -> GcHardeningReport {
+        let maxPauseUnits = thresholds.maxPauseUnits
+        let maxFragmentedBytes = thresholds.maxFragmentedBytes
+        let maxLiveBytes = thresholds.maxLiveBytes
+        let maxRememberedObjects = thresholds.maxRememberedObjects
+        let maxDirtyCards = thresholds.maxDirtyCards
         let snapshot = self.diagnosticsSnapshot()
         let audit = self.barrierAudit()
         let performance = self.performanceReport(thresholds)
         let contract = self.runtimeContract()
+        let heapReadinessScore = gcHeapReadinessScore(snapshot.heapValid)
+        let barrierReadinessScore = gcBarrierReadinessScore(
+            audit.invalidObjectReferences,
+            audit.missingOwnerRefs,
+            audit.rememberedMismatches,
+        )
+        let performanceReadinessScore = gcPerformanceReadinessScore(
+            performance.pauseUnits,
+            performance.fragmentedBytes,
+            performance.liveBytes,
+            performance.rememberedObjects,
+            performance.dirtyCards,
+            maxPauseUnits,
+            maxFragmentedBytes,
+            maxLiveBytes,
+            maxRememberedObjects,
+            maxDirtyCards,
+        )
+        let contractReadinessScore = gcContractReadinessScore(
+            contract.version,
+            contract.oomReturnsResult,
+            contract.abortSkipsGc,
+            contract.deferRootsRequireStackMap,
+            contract.ffiPinsUsePinBit,
+            contract.stableIdentityUsesObjectId,
+            contract.movingCollectorRequiresRemap,
+            contract.refSameUsesStableIdentity,
+        )
+        let readinessScore = gcOverallReadinessScore(
+            snapshot.heapValid,
+            audit.passed,
+            performance.passed,
+            heapReadinessScore,
+            barrierReadinessScore,
+            performanceReadinessScore,
+            contractReadinessScore,
+        )
+        let readinessBand = gcReadinessBandFor(
+            snapshot.heapValid,
+            audit.passed,
+            performance.passed,
+            readinessScore,
+        )
         let passed = snapshot.heapValid && audit.passed && performance.passed
 
         GcHardeningReport {
@@ -2266,6 +2327,12 @@ pub struct GcHeap {
             heapValid: snapshot.heapValid,
             barrierAuditPassed: audit.passed,
             performancePassed: performance.passed,
+            heapReadinessScore,
+            barrierReadinessScore,
+            performanceReadinessScore,
+            contractReadinessScore,
+            readinessScore,
+            readinessBand,
             ffiPinnedObjects: self.pinnedObjectCount(),
             loweredSlots: audit.loweredSlots,
             validationMessage: snapshot.validationMessage,
@@ -5368,6 +5435,15 @@ pub fn tracePhaseName(phase: TracePhase) -> String {
     }
 }
 
+pub fn gcReadinessBandName(band: GcReadinessBand) -> String {
+    match band {
+        GcReadinessBlocked -> "blocked",
+        GcReadinessExperimental -> "experimental",
+        GcReadinessUsable -> "usable",
+        GcReadinessHardened -> "hardened",
+    }
+}
+
 pub fn gcRuntimeContractV1() -> GcRuntimeContract {
     GcRuntimeContract {
         version: 1,
@@ -5562,6 +5638,178 @@ fn intListDebug(values: List<Int>) -> String {
 
 fn limitAllows(observed: Int, limit: Int) -> Bool {
     limit <= 0 || observed <= limit
+}
+
+fn gcHeapReadinessScore(heapValid: Bool) -> Int {
+    if heapValid {
+        100
+    } else {
+        0
+    }
+}
+
+fn gcBarrierReadinessScore(
+    invalidObjectReferences: Int,
+    missingOwnerRefs: Int,
+    rememberedMismatches: Int,
+) -> Int {
+    let mut score = 100
+    if invalidObjectReferences > 0 {
+        score = score - 40
+    }
+    if missingOwnerRefs > 0 {
+        score = score - 30
+    }
+    if rememberedMismatches > 0 {
+        score = score - 30
+    }
+    clampScore(score)
+}
+
+fn gcPerformanceThresholdPassCount(
+    pauseUnits: Int,
+    fragmentedBytes: Int,
+    liveBytes: Int,
+    rememberedObjects: Int,
+    dirtyCards: Int,
+    maxPauseUnits: Int,
+    maxFragmentedBytes: Int,
+    maxLiveBytes: Int,
+    maxRememberedObjects: Int,
+    maxDirtyCards: Int,
+) -> Int {
+    let mut passed = 0
+    if limitAllows(pauseUnits, maxPauseUnits) {
+        passed = passed + 1
+    }
+    if limitAllows(fragmentedBytes, maxFragmentedBytes) {
+        passed = passed + 1
+    }
+    if limitAllows(liveBytes, maxLiveBytes) {
+        passed = passed + 1
+    }
+    if limitAllows(rememberedObjects, maxRememberedObjects) {
+        passed = passed + 1
+    }
+    if limitAllows(dirtyCards, maxDirtyCards) {
+        passed = passed + 1
+    }
+    passed
+}
+
+fn gcPerformanceReadinessScore(
+    pauseUnits: Int,
+    fragmentedBytes: Int,
+    liveBytes: Int,
+    rememberedObjects: Int,
+    dirtyCards: Int,
+    maxPauseUnits: Int,
+    maxFragmentedBytes: Int,
+    maxLiveBytes: Int,
+    maxRememberedObjects: Int,
+    maxDirtyCards: Int,
+) -> Int {
+    percent(
+        gcPerformanceThresholdPassCount(
+            pauseUnits,
+            fragmentedBytes,
+            liveBytes,
+            rememberedObjects,
+            dirtyCards,
+            maxPauseUnits,
+            maxFragmentedBytes,
+            maxLiveBytes,
+            maxRememberedObjects,
+            maxDirtyCards,
+        ),
+        5,
+    )
+}
+
+fn gcContractReadinessScore(
+    version: Int,
+    oomReturnsResult: Bool,
+    abortSkipsGc: Bool,
+    deferRootsRequireStackMap: Bool,
+    ffiPinsUsePinBit: Bool,
+    stableIdentityUsesObjectId: Bool,
+    movingCollectorRequiresRemap: Bool,
+    refSameUsesStableIdentity: Bool,
+) -> Int {
+    let mut passed = 0
+    if version > 0 {
+        passed = passed + 1
+    }
+    if oomReturnsResult {
+        passed = passed + 1
+    }
+    if abortSkipsGc {
+        passed = passed + 1
+    }
+    if deferRootsRequireStackMap {
+        passed = passed + 1
+    }
+    if ffiPinsUsePinBit {
+        passed = passed + 1
+    }
+    if stableIdentityUsesObjectId {
+        passed = passed + 1
+    }
+    if movingCollectorRequiresRemap {
+        passed = passed + 1
+    }
+    if refSameUsesStableIdentity {
+        passed = passed + 1
+    }
+    percent(passed, 8)
+}
+
+fn gcOverallReadinessScore(
+    heapValid: Bool,
+    barrierAuditPassed: Bool,
+    performancePassed: Bool,
+    heapReadinessScore: Int,
+    barrierReadinessScore: Int,
+    performanceReadinessScore: Int,
+    contractReadinessScore: Int,
+) -> Int {
+    let mut score = (
+        heapReadinessScore * 35 + barrierReadinessScore * 25 + performanceReadinessScore * 25 +
+            contractReadinessScore * 15
+    ) / 100
+    if (!(heapValid) || !(barrierAuditPassed)) && score > 49 {
+        score = 49
+    } else if !(performancePassed) && score > 74 {
+        score = 74
+    }
+    clampScore(score)
+}
+
+fn gcReadinessBandFor(
+    heapValid: Bool,
+    barrierAuditPassed: Bool,
+    performancePassed: Bool,
+    readinessScore: Int,
+) -> GcReadinessBand {
+    if !(heapValid) || !(barrierAuditPassed) {
+        GcReadinessBlocked
+    } else if !(performancePassed) || readinessScore < 65 {
+        GcReadinessExperimental
+    } else if readinessScore < 85 {
+        GcReadinessUsable
+    } else {
+        GcReadinessHardened
+    }
+}
+
+fn clampScore(score: Int) -> Int {
+    if score < 0 {
+        0
+    } else if score > 100 {
+        100
+    } else {
+        score
+    }
 }
 
 fn closureCaptureObjectIds(captures: List<GcClosureCapture>) -> List<Int> {

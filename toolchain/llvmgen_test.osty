@@ -95,10 +95,11 @@ fn testLlvmToolchainPlanIsOstyOwned() {
     assertLlvmContains(compile, "-o /tmp/main.o")
 
     let link = llvmTestStrings.join(
-        llvmClangLinkBinaryArgs("", "/tmp/main.o", "/tmp/app"),
+        llvmClangLinkBinaryArgs("", ["/tmp/main.o", "/tmp/runtime/gc_runtime.o"], "/tmp/app"),
         " ",
     )
     assertLlvmContains(link, "/tmp/main.o")
+    assertLlvmContains(link, "/tmp/runtime/gc_runtime.o")
     assertLlvmContains(link, "-o /tmp/app")
     testing.assert(!(llvmTestStrings.contains(link, "-target")))
     assertLlvmContains(llvmMissingClangMessage(), "clang not found")

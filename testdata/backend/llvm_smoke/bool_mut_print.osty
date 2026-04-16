@@ -1,0 +1,9 @@
+fn main() {
+    let mut flag = false
+    flag = true
+    if flag {
+        println(42)
+    } else {
+        println(0)
+    }
+}

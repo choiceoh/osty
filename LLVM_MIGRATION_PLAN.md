@@ -454,6 +454,42 @@ return/parameter boundaries와 mutable local slots을 지나도 동일하게 동
 - 기존 `Float`/`String` smoke fixture와 같은 방식으로 `Osty` 소유의 helper corpus
   및 drift-guard 경로에서 일관되게 컴파일되어야 한다.
 
+### Phase 64-73. Value/control-flow smoke expansion
+
+목표: 값 위치 `if`, `Bool` 경계, exclusive range loop, unary/modulo, 그리고
+`String`/`Bool` struct field 읽기를 한 묶음으로 추가해, LLVM executable smoke의
+저수준 control-flow와 value-position coverage를 넓힌다.
+
+작업:
+
+- `int_if_expr_print.osty`를 추가해 `Int` value-position `if` expression을
+  검증한다.
+- `string_if_expr_print.osty`를 추가해 `String` value-position `if` expression을
+  검증한다.
+- `float_if_expr_print.osty`를 추가해 `Float` value-position `if` expression을
+  검증한다.
+- `bool_param_return_print.osty`를 추가해 `Bool` parameter/return boundary를
+  검증한다.
+- `int_range_exclusive_print.osty`를 추가해 exclusive `Int` range loop를
+  검증한다.
+- `int_unary_print.osty`를 추가해 unary `Int` lowering을 검증한다.
+- `int_modulo_print.osty`를 추가해 `Int` modulo lowering을 검증한다.
+- `struct_string_field_print.osty`를 추가해 `String` field read from simple struct
+  aggregate를 검증한다.
+- `struct_bool_field_print.osty`를 추가해 `Bool` field read from simple struct
+  aggregate를 검증한다.
+- `bool_mut_print.osty`를 추가해 mutable `Bool` local slot과 assignment를
+  검증한다.
+- `LLVM_BACKEND_CORPUS.md`에 Phase 64~73 항목을 추가하고 expected stdout을
+  정리한다.
+
+완료 조건:
+
+- value-position `if`, `Bool` boundary, exclusive range loop, unary/modulo,
+  and struct field smoke가 같은 native backend 경로로 통과해야 한다.
+- 문서에 적힌 expected stdout과 fixture 목록이 서로 일치해야 한다.
+- 이 묶음은 qualified constructor/pattern 확장과는 별개로 유지된다.
+
 ## Toolchain 전략
 
 초기 전략:

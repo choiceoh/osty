@@ -672,6 +672,7 @@ func runLintLoadedPackage(
 	printPackageDiags(pkg, all, flags)
 	return lintPackageOutcome{anyErr: hasError(all), anyWarn: hasWarning(all)}
 }
+
 // runResolvePackage is runCheckPackage plus a resolution dump per file.
 func runResolvePackage(dir string, flags cliFlags) {
 	pkg, err := resolve.LoadPackage(dir)

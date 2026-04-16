@@ -1,0 +1,11 @@
+fn sumBefore(n: Int) -> Int {
+    let mut total = 0
+    for i in 0..n {
+        total = total + i
+    }
+    total
+}
+
+fn main() {
+    println(sumBefore(7))
+}

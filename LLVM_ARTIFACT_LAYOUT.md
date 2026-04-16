@@ -44,6 +44,11 @@ Backend-aware artifacts should use this shape:
       include/
 ```
 
+The LLVM native binary path links a local runtime ABI object from the backend
+runtime directory at native link time. That object satisfies the `osty.gc.*`
+surface for the executable binary, but it remains a backend-local runtime ABI
+object rather than full Go GC parity.
+
 The profile/target key remains unchanged:
 
 ```text
@@ -85,7 +90,7 @@ use `llvm`, not `clang`, `llc`, `capi`, or `llvm-ir`.
 | `go` | `binary` | `go/main.go`, `go/<binary>` |
 | `llvm` | `llvm-ir` | `llvm/main.ll` |
 | `llvm` | `object` | `llvm/main.ll`, `llvm/main.o` |
-| `llvm` | `binary` | `llvm/main.ll`, `llvm/main.o`, `llvm/<binary>` |
+| `llvm` | `binary` | `llvm/main.ll`, `llvm/main.o`, `llvm/runtime/gc_runtime.ll`, `llvm/runtime/gc_runtime.o`, `llvm/<binary>` |
 
 For `osty run --backend=llvm`, the effective emit mode is `binary` because the
 command must execute a host binary.
@@ -119,7 +124,7 @@ Fingerprint fields should include:
 - `tool_version`: Osty compiler version
 - backend toolchain identity
   - Go: `go version`, `go` executable path/modtime
-  - LLVM: `clang --version` or `llc --version`, linker path, runtime ABI version
+- LLVM: `clang --version` or `llc --version`, linker path, backend runtime ABI version
 - source hashes
 - manifest/profile/target/features
 - produced artifact paths relative to project root
@@ -158,6 +163,8 @@ LLVM:
 
 - `llvm/main.ll` should initially keep readable source comments or metadata
   anchors near emitted functions/basic blocks.
+- `llvm/main.o` links against the backend runtime ABI object from
+  `llvm/runtime/` for native binary emission.
 - Later DWARF metadata may be added, but textual anchors are required first so
   failure reporting works before full debug-info support.
 

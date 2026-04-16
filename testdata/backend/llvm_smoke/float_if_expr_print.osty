@@ -1,0 +1,11 @@
+fn pick(flag: Bool) -> Float {
+    if flag {
+        42.0
+    } else {
+        0.0
+    }
+}
+
+fn main() {
+    println(pick(true))
+}
