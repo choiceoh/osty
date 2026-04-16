@@ -158,11 +158,13 @@ func loadRegistry() *Registry {
 			r.absorbPrimitiveStub(file, p)
 			continue
 		}
-		if moduleName(p) == "result" {
+		name := moduleName(p)
+		rebindPreludeBuiltinTypes(pkg, prelude, name)
+		if name == "result" {
 			r.absorbResultStub(file)
 		}
-		r.Modules[moduleName(p)] = &Module{
-			Name:    moduleName(p),
+		r.Modules[name] = &Module{
+			Name:    name,
 			Path:    p,
 			Source:  src,
 			File:    file,
@@ -196,6 +198,54 @@ func cloneRegistry(r *Registry) *Registry {
 		out.ResultMethods[k] = v
 	}
 	return out
+}
+
+var preludeBuiltinRebinds = map[string][]string{
+	"collections": {"List", "Map", "Set"},
+	"error":       {"Error"},
+	"option":      {"Option"},
+	"result":      {"Result"},
+}
+
+// rebindPreludeBuiltinTypes makes stdlib module exports that mirror
+// prelude types share the prelude symbol identity. The module AST keeps
+// the source declarations so method surfaces and future source emission
+// can still inspect them, but user-facing qualified references such as
+// `collections.List<T>` and `result.Result<T, E>` resolve to the same
+// semantic type as bare `List<T>` / `Result<T, E>`.
+func rebindPreludeBuiltinTypes(pkg *resolve.Package, prelude *resolve.Scope, module string) {
+	if pkg == nil || pkg.PkgScope == nil || prelude == nil {
+		return
+	}
+	names := preludeBuiltinRebinds[module]
+	if len(names) == 0 {
+		return
+	}
+	builtins := map[string]*resolve.Symbol{}
+	for _, name := range names {
+		sym := prelude.LookupLocal(name)
+		if sym == nil || sym.Kind != resolve.SymBuiltin {
+			continue
+		}
+		builtins[name] = sym
+		pkg.PkgScope.DefineForce(sym)
+	}
+	if len(builtins) == 0 {
+		return
+	}
+	for _, pf := range pkg.Files {
+		if pf == nil {
+			continue
+		}
+		for nt, sym := range pf.TypeRefs {
+			if nt == nil || sym == nil {
+				continue
+			}
+			if builtin := builtins[sym.Name]; builtin != nil {
+				pf.TypeRefs[nt] = builtin
+			}
+		}
+	}
 }
 
 func promoteTopLevelLets(file *ast.File) {
