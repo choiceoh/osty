@@ -961,6 +961,21 @@ pub fn llvmIntBinaryInstruction(op: String) -> String {
     if op == "%" {
         return "srem"
     }
+    if op == "&" {
+        return "and"
+    }
+    if op == "|" {
+        return "or"
+    }
+    if op == "^" {
+        return "xor"
+    }
+    if op == "<<" {
+        return "shl"
+    }
+    if op == ">>" {
+        return "ashr"
+    }
     ""
 }
 

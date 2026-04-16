@@ -1588,7 +1588,7 @@ fn frontCheckFor(file: AstFile, env: FrontCheckEnv, node: AstNode) -> String {
 
 fn frontCheckIterableElement(typeName: String) -> String {
     let head = frontCheckTypeHead(typeName)
-    if head == "List" || head == "Range" || head == "Option" {
+    if head == "List" || head == "Range" || head == "Option" || head == "Set" {
         return frontCheckGenericArgAt(typeName, 0)
     }
     if head == "Map" {
@@ -3398,16 +3398,7 @@ fn frontCheckPatternIrrefutable(file: AstFile, patIdx: Int) -> Bool {
         return true
     }
     let pat = astArenaNodeAt(file.arena, patIdx)
-    if pat.kind != AstNPattern {
-        return true
-    }
-    if frontCheckPatternKind(pat) == "wildcard" {
-        return true
-    }
-    if frontCheckPatternIsBindingIdent(pat) {
-        return true
-    }
-    if frontCheckPatternKind(pat) == "tuple" {
+    if pat.kind == AstNTuple {
         for child in pat.children {
             if !(frontCheckPatternIrrefutable(file, child)) {
                 return false
@@ -3415,7 +3406,25 @@ fn frontCheckPatternIrrefutable(file: AstFile, patIdx: Int) -> Bool {
         }
         return true
     }
-    if frontCheckPatternKind(pat) == "struct" {
+    let kind = frontCheckPatternKind(pat)
+    if kind == "" {
+        return true
+    }
+    if kind == "wildcard" {
+        return true
+    }
+    if frontCheckPatternIsBindingIdent(pat) {
+        return true
+    }
+    if kind == "tuple" {
+        for child in pat.children {
+            if !(frontCheckPatternIrrefutable(file, child)) {
+                return false
+            }
+        }
+        return true
+    }
+    if kind == "struct" {
         for fieldIdx in pat.children {
             let fieldPat = astArenaNodeAt(file.arena, fieldIdx)
             if !(frontCheckPatternIrrefutable(file, fieldPat.left)) {
@@ -3441,14 +3450,24 @@ fn frontCheckBindPattern(file: AstFile, env: FrontCheckEnv, patIdx: Int, typeNam
         }
         return
     }
-    if pat.kind != AstNPattern {
+    if pat.kind == AstNTuple {
+        let elems = frontCheckTupleElems(typeName)
+        let mut i = 0
+        for child in pat.children {
+            frontCheckBindPattern(file, env, child, frontCheckStringAt(elems, i), mutable)
+            i = i + 1
+        }
+        return
+    }
+    let kind = frontCheckPatternKind(pat)
+    if kind == "" {
         return
     }
     if frontCheckPatternIsBindingIdent(pat) {
         frontCheckBindNode(env, frontCheckPatternName(pat), typeName, mutable, patIdx, pat.start, pat.end)
         return
     }
-    if frontCheckPatternKind(pat) == "tuple" {
+    if kind == "tuple" {
         let elems = frontCheckTupleElems(typeName)
         let mut i = 0
         for child in pat.children {
@@ -3477,25 +3496,39 @@ fn frontCheckPatternCompatible(file: AstFile, env: FrontCheckEnv, patIdx: Int, s
         return
     }
     let pat = astArenaNodeAt(file.arena, patIdx)
-    if pat.kind != AstNPattern {
+    if pat.kind == AstNTuple {
+        let scrutineeResolved = frontCheckResolveAliasesDeep(env, scrutineeType)
+        let elems = frontCheckTupleElems(scrutineeResolved)
+        if frontCheckStringCount(elems) != frontCheckIntCount(pat.children) {
+            env.errors = env.errors + 1
+        }
+        let mut i = 0
+        for child in pat.children {
+            frontCheckPatternCompatible(file, env, child, frontCheckStringAt(elems, i))
+            i = i + 1
+        }
+        return
+    }
+    let kind = frontCheckPatternKind(pat)
+    if kind == "" {
         return
     }
     let scrutineeResolved = frontCheckResolveAliasesDeep(env, scrutineeType)
-    if frontCheckPatternKind(pat) == "wildcard" {
+    if kind == "wildcard" {
         return
     }
     if frontCheckPatternIsBindingIdent(pat) {
         frontCheckBind(env, frontCheckPatternName(pat), scrutineeResolved, false)
         return
     }
-    if frontCheckPatternKind(pat) == "literal" {
+    if kind == "literal" {
         let litType = frontCheckPatternLiteralType(pat)
         if !(frontCheckIsAssignable(env, scrutineeResolved, litType)) && !(frontCheckIsAssignable(env, litType, scrutineeResolved)) {
             env.errors = env.errors + 1
         }
         return
     }
-    if frontCheckPatternKind(pat) == "negLiteral" {
+    if kind == "negLiteral" {
         let inner = astArenaNodeAt(file.arena, pat.left)
         let litType = frontCheckPatternLiteralType(inner)
         if !(frontCheckIsNumeric(litType)) {
@@ -3507,7 +3540,7 @@ fn frontCheckPatternCompatible(file: AstFile, env: FrontCheckEnv, patIdx: Int, s
         }
         return
     }
-    if frontCheckPatternKind(pat) == "range" {
+    if kind == "range" {
         if !(frontCheckIsOrdered(scrutineeResolved)) {
             env.errors = env.errors + 1
             return
@@ -3518,7 +3551,7 @@ fn frontCheckPatternCompatible(file: AstFile, env: FrontCheckEnv, patIdx: Int, s
         }
         return
     }
-    if frontCheckPatternKind(pat) == "tuple" {
+    if kind == "tuple" {
         let elems = frontCheckTupleElems(scrutineeResolved)
         if frontCheckStringCount(elems) != frontCheckIntCount(pat.children) {
             env.errors = env.errors + 1
@@ -3544,7 +3577,7 @@ fn frontCheckPatternCompatible(file: AstFile, env: FrontCheckEnv, patIdx: Int, s
         }
         return
     }
-    if frontCheckPatternKind(pat) == "struct" {
+    if kind == "struct" {
         let structName = frontCheckPatternName(pat)
         if frontCheckTypeHead(scrutineeResolved) != structName {
             env.errors = env.errors + 1
@@ -3567,7 +3600,7 @@ fn frontCheckPatternCompatible(file: AstFile, env: FrontCheckEnv, patIdx: Int, s
         frontCheckPatternCompatible(file, env, pat.left, scrutineeResolved)
         return
     }
-    if frontCheckPatternKind(pat) == "or" {
+    if kind == "or" {
         let mark = frontCheckBindingCount(env.bindings)
         frontCheckPatternCompatible(file, env, pat.left, scrutineeResolved)
         let leftBindings = frontCheckBindingsFrom(env, mark)
@@ -3778,6 +3811,9 @@ fn frontCheckStdMethodCall(file: AstFile, env: FrontCheckEnv, callee: AstNode, r
     if head == "Map" {
         return frontCheckMapMethod(file, env, receiver, name, args)
     }
+    if head == "Set" {
+        return frontCheckSetMethod(file, env, receiver, name, args)
+    }
     if head == "Option" {
         return frontCheckOptionMethod(file, env, receiver, name, args)
     }
@@ -3852,6 +3888,18 @@ fn frontCheckListMethod(file: AstFile, env: FrontCheckEnv, callee: AstNode, recv
         let _ = frontCheckClosureArg(file, env, frontCheckIntAt(args, 1), [acc, elem], acc)
         return acc
     }
+    if name == "sorted" {
+        frontCheckExpectArgCount(env, args, 0)
+        return recvType
+    }
+    if name == "toSet" {
+        frontCheckExpectArgCount(env, args, 0)
+        return frontCheckOneArgType("Set", elem)
+    }
+    if name == "clear" {
+        frontCheckExpectArgCount(env, args, 0)
+        return "()"
+    }
     "Invalid"
 }
 
@@ -3889,6 +3937,46 @@ fn frontCheckMapMethod(file: AstFile, env: FrontCheckEnv, recvType: String, name
     if name == "values" {
         frontCheckExpectArgCount(env, args, 0)
         return frontCheckOneArgType("List", val)
+    }
+    if name == "clear" {
+        frontCheckExpectArgCount(env, args, 0)
+        return "()"
+    }
+    "Invalid"
+}
+
+fn frontCheckSetMethod(file: AstFile, env: FrontCheckEnv, recvType: String, name: String, args: List<Int>) -> String {
+    let elem = frontCheckGenericArgAt(recvType, 0)
+    if name == "len" {
+        frontCheckExpectArgCount(env, args, 0)
+        return "Int"
+    }
+    if name == "isEmpty" {
+        frontCheckExpectArgCount(env, args, 0)
+        return "Bool"
+    }
+    if name == "contains" {
+        frontCheckExpectArgCount(env, args, 1)
+        frontCheckExpectAssignable(env, elem, frontCheckExprHint(file, env, frontCheckIntAt(args, 0), elem))
+        return "Bool"
+    }
+    if name == "insert" {
+        frontCheckExpectArgCount(env, args, 1)
+        frontCheckExpectAssignable(env, elem, frontCheckExprHint(file, env, frontCheckIntAt(args, 0), elem))
+        return "()"
+    }
+    if name == "remove" {
+        frontCheckExpectArgCount(env, args, 1)
+        frontCheckExpectAssignable(env, elem, frontCheckExprHint(file, env, frontCheckIntAt(args, 0), elem))
+        return "Bool"
+    }
+    if name == "toList" {
+        frontCheckExpectArgCount(env, args, 0)
+        return frontCheckOneArgType("List", elem)
+    }
+    if name == "clear" {
+        frontCheckExpectArgCount(env, args, 0)
+        return "()"
     }
     "Invalid"
 }

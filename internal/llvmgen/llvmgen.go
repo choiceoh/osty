@@ -215,6 +215,7 @@ func Generate(file *ast.File, opts Options) ([]byte, error) {
 		return nil, err
 	}
 	g.functions = decls.functionsByName
+	g.methods = decls.methodsByType
 	g.structs = decls.structsOrdered
 	g.structsByName = decls.structsByName
 	g.structsByType = decls.structsByType
@@ -266,6 +267,7 @@ type generator struct {
 	sourcePath       string
 	target           string
 	functions        map[string]*fnSig
+	methods          map[string]map[string]*fnSig
 	structs          []*structInfo
 	structsByName    map[string]*structInfo
 	structsByType    map[string]*structInfo
@@ -278,27 +280,41 @@ type generator struct {
 	runtimeDecls     map[string]runtimeDecl
 	runtimeDeclOrder []string
 
-	temp         int
-	label        int
-	stringID     int
-	stringDefs   []*LlvmStringGlobal
-	body         []string
-	locals       []map[string]value
-	returnType   string
+	temp              int
+	label             int
+	stringID          int
+	stringDefs        []*LlvmStringGlobal
+	body              []string
+	locals            []map[string]value
+	returnType        string
 	returnListElemTyp string
-	currentBlock string
-	blockOpen    bool
+	currentBlock      string
+	currentReachable  bool
 
 	needsGCRuntime bool
 	gcRootSlots    []value
 	gcRootMarks    []int
 	nextSafepoint  int
 	hiddenLocalID  int
+	loopStack      []loopContext
+}
+
+type loopContext struct {
+	continueLabel string
+	breakLabel    string
+	scopeDepth    int
+}
+
+type scopeState struct {
+	locals      []map[string]value
+	gcRootSlots []value
+	gcRootMarks []int
 }
 
 type declarations struct {
 	functionsOrdered []*fnSig
 	functionsByName  map[string]*fnSig
+	methodsByType    map[string]map[string]*fnSig
 	structsOrdered   []*structInfo
 	structsByName    map[string]*structInfo
 	structsByType    map[string]*structInfo
@@ -309,6 +325,9 @@ type declarations struct {
 
 type fnSig struct {
 	name           string
+	irName         string
+	receiverType   string
+	receiverMut    bool
 	ret            string
 	retListElemTyp string
 	params         []paramInfo
@@ -318,7 +337,10 @@ type fnSig struct {
 type paramInfo struct {
 	name        string
 	typ         string
+	irTyp       string
 	listElemTyp string
+	mutable     bool
+	byRef       bool
 }
 
 type structInfo struct {
@@ -398,6 +420,7 @@ type runtimeDecl struct {
 func collectDeclarations(file *ast.File) (*declarations, error) {
 	out := &declarations{
 		functionsByName: map[string]*fnSig{},
+		methodsByType:   map[string]map[string]*fnSig{},
 		structsByName:   map[string]*structInfo{},
 		structsByType:   map[string]*structInfo{},
 		enumsByName:     map[string]*enumInfo{},
@@ -437,7 +460,7 @@ func collectDeclarations(file *ast.File) (*declarations, error) {
 		}
 	}
 	for _, info := range out.structsOrdered {
-		if err := collectStructFields(info, out.structsByName); err != nil {
+		if err := collectStructFields(info, out.structsByName, out.enumsByName); err != nil {
 			return nil, err
 		}
 	}
@@ -446,7 +469,7 @@ func collectDeclarations(file *ast.File) (*declarations, error) {
 		if !ok {
 			continue
 		}
-		sig, err := signatureOf(fn, out.structsByName, out.enumsByName)
+		sig, err := signatureOf(fn, "", out.structsByName, out.enumsByName)
 		if err != nil {
 			return nil, err
 		}
@@ -456,7 +479,40 @@ func collectDeclarations(file *ast.File) (*declarations, error) {
 		out.functionsOrdered = append(out.functionsOrdered, sig)
 		out.functionsByName[sig.name] = sig
 	}
+	for _, info := range out.structsOrdered {
+		if err := collectMethodDeclarations(out, info.name, info.typ, info.decl.Methods, out.structsByName, out.enumsByName); err != nil {
+			return nil, err
+		}
+	}
+	for _, info := range out.enumsOrdered {
+		if err := collectMethodDeclarations(out, info.name, info.typ, info.decl.Methods, out.structsByName, out.enumsByName); err != nil {
+			return nil, err
+		}
+	}
 	return out, nil
+}
+
+func collectMethodDeclarations(out *declarations, ownerName, ownerType string, methods []*ast.FnDecl, structs map[string]*structInfo, enums map[string]*enumInfo) error {
+	if out == nil {
+		return unsupported("source-layout", "nil declarations")
+	}
+	for _, fn := range methods {
+		sig, err := signatureOf(fn, ownerName, structs, enums)
+		if err != nil {
+			return err
+		}
+		methodsByName := out.methodsByType[ownerType]
+		if methodsByName == nil {
+			methodsByName = map[string]*fnSig{}
+			out.methodsByType[ownerType] = methodsByName
+		}
+		if _, exists := methodsByName[sig.name]; exists {
+			return unsupportedf("source-layout", "duplicate method %q on %q", sig.name, ownerName)
+		}
+		out.functionsOrdered = append(out.functionsOrdered, sig)
+		methodsByName[sig.name] = sig
+	}
+	return nil
 }
 
 func collectRuntimeFFI(file *ast.File, structs map[string]*structInfo, enums map[string]*enumInfo) map[string]map[string]*runtimeFFIFunction {
@@ -651,7 +707,7 @@ func collectStructShell(decl *ast.StructDecl) (*structInfo, error) {
 	}, nil
 }
 
-func collectStructFields(info *structInfo, structs map[string]*structInfo) error {
+func collectStructFields(info *structInfo, structs map[string]*structInfo, enums map[string]*enumInfo) error {
 	if info == nil || info.decl == nil {
 		return unsupported("source-layout", "nil struct")
 	}
@@ -666,7 +722,7 @@ func collectStructFields(info *structInfo, structs map[string]*structInfo) error
 			diag := llvmStructFieldDiagnostic(info.name, field.Name, true, false, true, false, "")
 			return unsupported(diag.kind, diag.message)
 		}
-		typ, err := llvmType(field.Type, structs, nil)
+		typ, err := llvmType(field.Type, structs, enums)
 		if err != nil {
 			diag := llvmStructFieldDiagnostic(info.name, field.Name, true, false, false, false, unsupportedMessage(err))
 			return unsupported(diag.kind, diag.message)
@@ -676,7 +732,7 @@ func collectStructFields(info *structInfo, structs map[string]*structInfo) error
 			return unsupported(diag.kind, diag.message)
 		}
 		fieldInfo := fieldInfo{name: field.Name, typ: typ, index: i}
-		if listElemTyp, ok, err := llvmListElementType(field.Type, structs, nil); err != nil {
+		if listElemTyp, ok, err := llvmListElementType(field.Type, structs, enums); err != nil {
 			diag := llvmStructFieldDiagnostic(info.name, field.Name, true, false, false, false, unsupportedMessage(err))
 			return unsupported(diag.kind, diag.message)
 		} else if ok {
@@ -761,14 +817,14 @@ func llvmEnumPayloadType(t ast.Type) (string, error) {
 	return "", unsupported("type-system", "LLVM enum payloads currently support Int, Float, or String only")
 }
 
-func signatureOf(fn *ast.FnDecl, structs map[string]*structInfo, enums map[string]*enumInfo) (*fnSig, error) {
+func signatureOf(fn *ast.FnDecl, ownerName string, structs map[string]*structInfo, enums map[string]*enumInfo) (*fnSig, error) {
 	if fn == nil {
 		return nil, unsupported("source-layout", "nil function")
 	}
 	if diag := llvmFunctionHeaderDiagnostic(
 		fn.Name,
 		llvmIsIdent(fn.Name),
-		fn.Recv != nil,
+		false,
 		len(fn.Generics),
 		fn.Body != nil,
 		fn.Name == "main",
@@ -777,7 +833,23 @@ func signatureOf(fn *ast.FnDecl, structs map[string]*structInfo, enums map[strin
 	); diag.kind != "" {
 		return nil, unsupported(diag.kind, diag.message)
 	}
-	sig := &fnSig{name: fn.Name, decl: fn}
+	sig := &fnSig{name: fn.Name, irName: fn.Name, decl: fn}
+	if fn.Recv != nil {
+		ownerType, ok := llvmMethodOwnerType(ownerName, structs, enums)
+		if !ok {
+			return nil, unsupportedf("type-system", "unknown method receiver owner %q", ownerName)
+		}
+		sig.irName = llvmMethodIRName(ownerName, fn.Name)
+		sig.receiverType = ownerType
+		sig.receiverMut = fn.Recv.Mut
+		sig.params = append(sig.params, paramInfo{
+			name:    "self",
+			typ:     ownerType,
+			irTyp:   llvmMethodReceiverIRType(ownerType, fn.Recv.Mut),
+			mutable: fn.Recv.Mut,
+			byRef:   fn.Recv.Mut,
+		})
+	}
 	if fn.Name == "main" {
 		return sig, nil
 	}
@@ -830,7 +902,7 @@ func (g *generator) emitScriptMain(stmts []ast.Stmt) (string, error) {
 	if err := g.emitBlock(stmts); err != nil {
 		return "", err
 	}
-	if g.blockOpen {
+	if g.currentReachable {
 		emitter := g.toOstyEmitter()
 		g.releaseGCRoots(emitter)
 		llvmReturnI32Zero(emitter)
@@ -844,7 +916,7 @@ func (g *generator) emitMainFunction(sig *fnSig) (string, error) {
 	if err := g.emitBlock(sig.decl.Body.Stmts); err != nil {
 		return "", err
 	}
-	if g.blockOpen {
+	if g.currentReachable {
 		emitter := g.toOstyEmitter()
 		g.releaseGCRoots(emitter)
 		llvmReturnI32Zero(emitter)
@@ -863,13 +935,19 @@ func (g *generator) emitUserFunction(sig *fnSig) (string, error) {
 			v.gcManaged = true
 		}
 		v.rootPaths = g.rootPathsForType(p.typ)
-		g.bindNamedLocal(p.name, v, false)
+		if p.byRef {
+			v.ptr = true
+			v.mutable = p.mutable
+			g.bindLocal(p.name, v)
+			continue
+		}
+		g.bindNamedLocal(p.name, v, p.mutable)
 	}
 	if sig.ret == "void" {
 		if err := g.emitBlock(sig.decl.Body.Stmts); err != nil {
 			return "", err
 		}
-		if g.blockOpen {
+		if g.currentReachable {
 			emitter := g.toOstyEmitter()
 			g.releaseGCRoots(emitter)
 			emitter.body = append(emitter.body, "  ret void")
@@ -880,7 +958,7 @@ func (g *generator) emitUserFunction(sig *fnSig) (string, error) {
 			return "", err
 		}
 	}
-	return g.renderFunction(sig.ret, sig.name, sig.params), nil
+	return g.renderFunction(sig.ret, sig.irName, sig.params), nil
 }
 
 func (g *generator) beginFunction() {
@@ -895,7 +973,8 @@ func (g *generator) beginFunction() {
 	g.nextSafepoint = 1
 	g.hiddenLocalID = 0
 	g.currentBlock = "entry"
-	g.blockOpen = true
+	g.currentReachable = true
+	g.loopStack = nil
 }
 
 func (g *generator) bindGCRootIfManagedPointer(emitter *LlvmEmitter, slot value) {
@@ -963,7 +1042,7 @@ func (g *generator) emitReturningBlock(stmts []ast.Stmt, retType, retListElemTyp
 			if err := g.emitStmt(stmt); err != nil {
 				return err
 			}
-			if !g.blockOpen {
+			if !g.currentReachable {
 				return nil
 			}
 			continue
@@ -984,7 +1063,7 @@ func (g *generator) emitReturningBlock(stmts []ast.Stmt, retType, retListElemTyp
 			g.releaseGCRoots(emitter)
 			llvmReturn(emitter, toOstyValue(v))
 			g.takeOstyEmitter(emitter)
-			g.blockOpen = false
+			g.leaveBlock()
 			return nil
 		case *ast.ExprStmt:
 			v, err := g.emitExprWithListHint(s.X, retListElemTyp)
@@ -998,7 +1077,7 @@ func (g *generator) emitReturningBlock(stmts []ast.Stmt, retType, retListElemTyp
 			g.releaseGCRoots(emitter)
 			llvmReturn(emitter, toOstyValue(v))
 			g.takeOstyEmitter(emitter)
-			g.blockOpen = false
+			g.leaveBlock()
 			return nil
 		default:
 			return unsupportedf("statement", "final function statement %T", stmt)
@@ -1009,22 +1088,23 @@ func (g *generator) emitReturningBlock(stmts []ast.Stmt, retType, retListElemTyp
 
 func (g *generator) emitBlock(stmts []ast.Stmt) error {
 	for _, stmt := range stmts {
-		if !g.blockOpen {
-			return nil
-		}
 		if err := g.emitStmt(stmt); err != nil {
 			return err
+		}
+		if !g.currentReachable {
+			break
 		}
 	}
 	return nil
 }
 
 func (g *generator) emitStmt(stmt ast.Stmt) error {
+	if !g.currentReachable {
+		return nil
+	}
 	switch s := stmt.(type) {
 	case *ast.Block:
-		g.pushScope()
-		defer g.popScope()
-		return g.emitBlock(s.Stmts)
+		return g.emitScopedStmtBlock(s.Stmts)
 	case *ast.LetStmt:
 		return g.emitLet(s)
 	case *ast.AssignStmt:
@@ -1033,6 +1113,10 @@ func (g *generator) emitStmt(stmt ast.Stmt) error {
 		return g.emitFor(s)
 	case *ast.ReturnStmt:
 		return g.emitReturn(s)
+	case *ast.BreakStmt:
+		return g.emitBreak()
+	case *ast.ContinueStmt:
+		return g.emitContinue()
 	case *ast.ExprStmt:
 		if ifExpr, ok := s.X.(*ast.IfExpr); ok {
 			return g.emitIfStmt(ifExpr)
@@ -1084,26 +1168,83 @@ func (g *generator) emitAssign(stmt *ast.AssignStmt) error {
 		return unsupported("statement", "multi-target assignment")
 	}
 	target, ok := stmt.Targets[0].(*ast.Ident)
+	if ok {
+		slot, ok := g.lookupLocal(target.Name)
+		if !ok {
+			return unsupportedf("name", "assignment to unknown identifier %q", target.Name)
+		}
+		if !slot.mutable {
+			return unsupportedf("statement", "assignment to immutable identifier %q", target.Name)
+		}
+		v, err := g.emitExprWithListHint(stmt.Value, slot.listElemTyp)
+		if err != nil {
+			return err
+		}
+		if v.typ != slot.typ {
+			return unsupportedf("type-system", "assignment to %q type %s, value %s", target.Name, slot.typ, v.typ)
+		}
+		emitter := g.toOstyEmitter()
+		llvmStore(emitter, toOstyValue(slot), toOstyValue(v))
+		g.postGCWriteIfPointer(emitter, slot, v)
+		g.takeOstyEmitter(emitter)
+		return nil
+	}
+	field, ok := stmt.Targets[0].(*ast.FieldExpr)
 	if !ok {
 		return unsupportedf("statement", "assignment target %T", stmt.Targets[0])
 	}
-	slot, ok := g.lookupLocal(target.Name)
+	return g.emitFieldAssign(field, stmt.Value)
+}
+
+func (g *generator) emitFieldAssign(target *ast.FieldExpr, rhs ast.Expr) error {
+	if target == nil {
+		return unsupported("statement", "nil field assignment target")
+	}
+	if target.IsOptional {
+		return unsupported("statement", "optional field assignment is not supported")
+	}
+	baseIdent, ok := target.X.(*ast.Ident)
 	if !ok {
-		return unsupportedf("name", "assignment to unknown identifier %q", target.Name)
+		return unsupportedf("statement", "field assignment base %T", target.X)
 	}
-	if !slot.mutable {
-		return unsupportedf("statement", "assignment to immutable identifier %q", target.Name)
+	slot, ok := g.lookupLocal(baseIdent.Name)
+	if !ok {
+		return unsupportedf("name", "assignment to unknown identifier %q", baseIdent.Name)
 	}
-	v, err := g.emitExprWithListHint(stmt.Value, slot.listElemTyp)
+	if !slot.ptr || !slot.mutable {
+		return unsupportedf("statement", "assignment to immutable field %q.%s", baseIdent.Name, target.Name)
+	}
+	info := g.structsByType[slot.typ]
+	if info == nil {
+		return unsupportedf("type-system", "field assignment on %s", slot.typ)
+	}
+	field, ok := info.byName[target.Name]
+	if !ok {
+		return unsupportedf("expression", "struct %q has no field %q", info.name, target.Name)
+	}
+	v, err := g.emitExprWithListHint(rhs, field.listElemTyp)
 	if err != nil {
 		return err
 	}
-	if v.typ != slot.typ {
-		return unsupportedf("type-system", "assignment to %q type %s, value %s", target.Name, slot.typ, v.typ)
+	if v.typ != field.typ {
+		return unsupportedf("type-system", "field assignment %q.%s type %s, value %s", baseIdent.Name, target.Name, field.typ, v.typ)
+	}
+	current, err := g.loadIfPointer(slot)
+	if err != nil {
+		return err
 	}
 	emitter := g.toOstyEmitter()
-	llvmStore(emitter, toOstyValue(slot), toOstyValue(v))
-	g.postGCWriteIfPointer(emitter, slot, v)
+	tmp := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf(
+		"  %s = insertvalue %s %s, %s %s, %d",
+		tmp,
+		current.typ,
+		current.ref,
+		v.typ,
+		v.ref,
+		field.index,
+	))
+	llvmStore(emitter, toOstyValue(slot), toOstyValue(value{typ: current.typ, ref: tmp}))
 	g.takeOstyEmitter(emitter)
 	return nil
 }
@@ -1114,6 +1255,9 @@ func (g *generator) emitFor(stmt *ast.ForStmt) error {
 	}
 	if stmt.Body == nil {
 		return unsupported("control-flow", "for has no body")
+	}
+	if stmt.Pattern == nil {
+		return g.emitWhileFor(stmt)
 	}
 	iterName, err := identPatternName(stmt.Pattern)
 	if err != nil {
@@ -1143,27 +1287,107 @@ func (g *generator) emitFor(stmt *ast.ForStmt) error {
 	emitter := g.toOstyEmitter()
 	loop := llvmRangeStart(emitter, iterName, toOstyValue(start), toOstyValue(stop), rng.Inclusive)
 	g.takeOstyEmitter(emitter)
-	g.currentBlock = loop.bodyLabel
-	g.blockOpen = true
+	g.enterBlock(loop.bodyLabel)
+	continueLabel := g.nextNamedLabel("for.cont")
+	g.pushLoop(loopContext{
+		continueLabel: continueLabel,
+		breakLabel:    loop.endLabel,
+		scopeDepth:    len(g.locals),
+	})
+	scopeDepth := len(g.locals)
 	g.pushScope()
 	g.bindLocal(iterName, value{typ: "i64", ref: loop.current})
 	if err := g.emitBlock(stmt.Body.Stmts); err != nil {
-		g.popScope()
+		if len(g.locals) > scopeDepth {
+			g.popScope()
+		}
+		g.popLoop()
 		return err
 	}
-	g.popScope()
-	emitter = g.toOstyEmitter()
-	if g.blockOpen {
-		g.emitGCSafepoint(emitter)
-		next := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = add i64 %s, 1", next, loop.current))
-		emitter.body = append(emitter.body, fmt.Sprintf("  store i64 %s, ptr %s", next, loop.iterPtr))
-		emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", loop.condLabel))
+	if len(g.locals) > scopeDepth {
+		g.popScope()
 	}
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", loop.endLabel))
+	g.popLoop()
+	if g.currentReachable {
+		g.branchTo(continueLabel)
+	}
+	emitter = g.toOstyEmitter()
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", continueLabel))
+	g.emitGCSafepoint(emitter)
+	llvmRangeEnd(emitter, loop)
 	g.takeOstyEmitter(emitter)
-	g.currentBlock = loop.endLabel
-	g.blockOpen = true
+	g.enterBlock(loop.endLabel)
+	return nil
+}
+
+func (g *generator) emitWhileFor(stmt *ast.ForStmt) error {
+	emitter := g.toOstyEmitter()
+	condLabel := llvmNextLabel(emitter, "for.cond")
+	bodyLabel := llvmNextLabel(emitter, "for.body")
+	continueLabel := llvmNextLabel(emitter, "for.cont")
+	endLabel := llvmNextLabel(emitter, "for.end")
+	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", condLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", condLabel))
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(condLabel)
+
+	if stmt.Iter == nil {
+		emitter = g.toOstyEmitter()
+		emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", bodyLabel))
+		emitter.body = append(emitter.body, fmt.Sprintf("%s:", bodyLabel))
+		g.takeOstyEmitter(emitter)
+	} else {
+		cond, err := g.emitExpr(stmt.Iter)
+		if err != nil {
+			return err
+		}
+		if cond.typ != "i1" {
+			return unsupportedf("type-system", "for condition type %s, want i1", cond.typ)
+		}
+		emitter = g.toOstyEmitter()
+		emitter.body = append(emitter.body, fmt.Sprintf(
+			"  br i1 %s, label %%%s, label %%%s",
+			toOstyValue(cond).name,
+			bodyLabel,
+			endLabel,
+		))
+		emitter.body = append(emitter.body, fmt.Sprintf("%s:", bodyLabel))
+		g.takeOstyEmitter(emitter)
+	}
+	g.enterBlock(bodyLabel)
+
+	g.pushLoop(loopContext{
+		continueLabel: continueLabel,
+		breakLabel:    endLabel,
+		scopeDepth:    len(g.locals),
+	})
+	scopeDepth := len(g.locals)
+	g.pushScope()
+	if err := g.emitBlock(stmt.Body.Stmts); err != nil {
+		if len(g.locals) > scopeDepth {
+			g.popScope()
+		}
+		g.popLoop()
+		return err
+	}
+	if len(g.locals) > scopeDepth {
+		g.popScope()
+	}
+	g.popLoop()
+	if g.currentReachable {
+		g.branchTo(continueLabel)
+	}
+
+	emitter = g.toOstyEmitter()
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", continueLabel))
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(continueLabel)
+	emitter = g.toOstyEmitter()
+	g.emitGCSafepoint(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", condLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(endLabel)
 	return nil
 }
 
@@ -1180,6 +1404,7 @@ func (g *generator) emitForLet(stmt *ast.ForStmt) error {
 	emitter := g.toOstyEmitter()
 	condLabel := llvmNextLabel(emitter, "for.cond")
 	bodyLabel := llvmNextLabel(emitter, "for.body")
+	continueLabel := llvmNextLabel(emitter, "for.cont")
 	endLabel := llvmNextLabel(emitter, "for.end")
 	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", condLabel))
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", condLabel))
@@ -1197,29 +1422,49 @@ func (g *generator) emitForLet(stmt *ast.ForStmt) error {
 	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", cond.name, bodyLabel, endLabel))
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", bodyLabel))
 	g.takeOstyEmitter(emitter)
-	g.currentBlock = bodyLabel
+	g.enterBlock(bodyLabel)
 
+	g.pushLoop(loopContext{
+		continueLabel: continueLabel,
+		breakLabel:    endLabel,
+		scopeDepth:    len(g.locals),
+	})
+	scopeDepth := len(g.locals)
 	g.pushScope()
 	if bind != nil {
 		if err := bind(); err != nil {
-			g.popScope()
+			if len(g.locals) > scopeDepth {
+				g.popScope()
+			}
+			g.popLoop()
 			return err
 		}
 	}
 	if err := g.emitBlock(stmt.Body.Stmts); err != nil {
-		g.popScope()
+		if len(g.locals) > scopeDepth {
+			g.popScope()
+		}
+		g.popLoop()
 		return err
 	}
-	g.popScope()
+	if len(g.locals) > scopeDepth {
+		g.popScope()
+	}
+	g.popLoop()
+	if g.currentReachable {
+		g.branchTo(continueLabel)
+	}
 
 	emitter = g.toOstyEmitter()
-	if g.blockOpen {
-		emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", condLabel))
-	}
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", continueLabel))
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(continueLabel)
+	emitter = g.toOstyEmitter()
+	g.emitGCSafepoint(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", condLabel))
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
 	g.takeOstyEmitter(emitter)
-	g.currentBlock = endLabel
-	g.blockOpen = true
+	g.enterBlock(endLabel)
 	return nil
 }
 
@@ -1256,7 +1501,7 @@ func (g *generator) emitReturn(stmt *ast.ReturnStmt) error {
 		llvmReturn(emitter, toOstyValue(ret))
 	}
 	g.takeOstyEmitter(emitter)
-	g.blockOpen = false
+	g.leaveBlock()
 	return nil
 }
 
@@ -1441,43 +1686,38 @@ func (g *generator) emitIfStmt(expr *ast.IfExpr) error {
 	emitter := g.toOstyEmitter()
 	labels := llvmIfStart(emitter, toOstyValue(cond))
 	g.takeOstyEmitter(emitter)
-	g.currentBlock = labels.thenLabel
-	g.blockOpen = true
-	g.pushScope()
-	if err := g.emitBlock(expr.Then.Stmts); err != nil {
-		g.popScope()
+	g.enterBlock(labels.thenLabel)
+	baseState := g.captureScopeState()
+	if err := g.emitScopedStmtBlock(expr.Then.Stmts); err != nil {
 		return err
 	}
-	g.popScope()
-	thenOpen := g.blockOpen
-	emitter = g.toOstyEmitter()
-	if thenOpen {
-		emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", labels.endLabel))
+	thenReachable := g.currentReachable
+	if thenReachable {
+		g.branchTo(labels.endLabel)
 	}
+	g.restoreScopeState(baseState)
+	emitter = g.toOstyEmitter()
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", labels.elseLabel))
 	g.takeOstyEmitter(emitter)
-	g.currentBlock = labels.elseLabel
-	g.blockOpen = true
+	g.enterBlock(labels.elseLabel)
 	if expr.Else != nil {
 		if err := g.emitElse(expr.Else); err != nil {
 			return err
 		}
 	}
-	elseOpen := g.blockOpen
-	emitter = g.toOstyEmitter()
-	if elseOpen {
-		emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", labels.endLabel))
+	elseReachable := g.currentReachable
+	if elseReachable {
+		g.branchTo(labels.endLabel)
 	}
-	if thenOpen || elseOpen {
+	g.restoreScopeState(baseState)
+	if thenReachable || elseReachable {
+		emitter = g.toOstyEmitter()
 		emitter.body = append(emitter.body, fmt.Sprintf("%s:", labels.endLabel))
+		g.takeOstyEmitter(emitter)
+		g.enterBlock(labels.endLabel)
+		return nil
 	}
-	g.takeOstyEmitter(emitter)
-	if thenOpen || elseOpen {
-		g.currentBlock = labels.endLabel
-		g.blockOpen = true
-	} else {
-		g.blockOpen = false
-	}
+	g.leaveBlock()
 	return nil
 }
 
@@ -1496,49 +1736,54 @@ func (g *generator) emitIfLetStmt(expr *ast.IfExpr) error {
 	emitter := g.toOstyEmitter()
 	labels := llvmIfStart(emitter, cond)
 	g.takeOstyEmitter(emitter)
-	g.currentBlock = labels.thenLabel
-	g.blockOpen = true
+	g.enterBlock(labels.thenLabel)
+	baseState := g.captureScopeState()
+	scopeDepth := len(g.locals)
 	g.pushScope()
 	if bind != nil {
 		if err := bind(); err != nil {
-			g.popScope()
+			if len(g.locals) > scopeDepth {
+				g.popScope()
+			}
 			return err
 		}
 	}
 	if err := g.emitBlock(expr.Then.Stmts); err != nil {
-		g.popScope()
+		if len(g.locals) > scopeDepth {
+			g.popScope()
+		}
 		return err
 	}
-	g.popScope()
-	thenOpen := g.blockOpen
-	emitter = g.toOstyEmitter()
-	if thenOpen {
-		emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", labels.endLabel))
+	if len(g.locals) > scopeDepth {
+		g.popScope()
 	}
+	thenReachable := g.currentReachable
+	if thenReachable {
+		g.branchTo(labels.endLabel)
+	}
+	g.restoreScopeState(baseState)
+	emitter = g.toOstyEmitter()
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", labels.elseLabel))
 	g.takeOstyEmitter(emitter)
-	g.currentBlock = labels.elseLabel
-	g.blockOpen = true
+	g.enterBlock(labels.elseLabel)
 	if expr.Else != nil {
 		if err := g.emitElse(expr.Else); err != nil {
 			return err
 		}
 	}
-	elseOpen := g.blockOpen
-	emitter = g.toOstyEmitter()
-	if elseOpen {
-		emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", labels.endLabel))
+	elseReachable := g.currentReachable
+	if elseReachable {
+		g.branchTo(labels.endLabel)
 	}
-	if thenOpen || elseOpen {
+	g.restoreScopeState(baseState)
+	if thenReachable || elseReachable {
+		emitter = g.toOstyEmitter()
 		emitter.body = append(emitter.body, fmt.Sprintf("%s:", labels.endLabel))
+		g.takeOstyEmitter(emitter)
+		g.enterBlock(labels.endLabel)
+		return nil
 	}
-	g.takeOstyEmitter(emitter)
-	if thenOpen || elseOpen {
-		g.currentBlock = labels.endLabel
-		g.blockOpen = true
-	} else {
-		g.blockOpen = false
-	}
+	g.leaveBlock()
 	return nil
 }
 
@@ -1581,9 +1826,7 @@ func (g *generator) ifLetCondition(pattern ast.Pattern, scrutinee value) (*LlvmV
 func (g *generator) emitElse(expr ast.Expr) error {
 	switch e := expr.(type) {
 	case *ast.Block:
-		g.pushScope()
-		defer g.popScope()
-		return g.emitBlock(e.Stmts)
+		return g.emitScopedStmtBlock(e.Stmts)
 	case *ast.IfExpr:
 		return g.emitIfStmt(e)
 	default:
@@ -1898,6 +2141,14 @@ func (g *generator) emitUnary(e *ast.UnaryExpr) (value, error) {
 		}
 		emitter := g.toOstyEmitter()
 		out := llvmNotI1(emitter, toOstyValue(v))
+		g.takeOstyEmitter(emitter)
+		return fromOstyValue(out), nil
+	case token.BITNOT:
+		if v.typ != "i64" {
+			return value{}, unsupportedf("type-system", "bitwise not on %s", v.typ)
+		}
+		emitter := g.toOstyEmitter()
+		out := llvmBinaryI64(emitter, "xor", toOstyValue(v), llvmIntLiteral(-1))
 		g.takeOstyEmitter(emitter)
 		return fromOstyValue(out), nil
 	default:
@@ -2647,12 +2898,21 @@ func (g *generator) emitListFor(stmt *ast.ForStmt, iterName, elemTyp string) err
 	lenValue := llvmCall(emitter, "i64", listRuntimeLenSymbol(), []*LlvmValue{toOstyValue(iterableValue)})
 	loop := llvmRangeStart(emitter, iterName+"_idx", llvmIntLiteral(0), lenValue, false)
 	g.takeOstyEmitter(emitter)
-	g.currentBlock = loop.bodyLabel
-	g.blockOpen = true
+	g.enterBlock(loop.bodyLabel)
+	continueLabel := g.nextNamedLabel("for.cont")
+	g.pushLoop(loopContext{
+		continueLabel: continueLabel,
+		breakLabel:    loop.endLabel,
+		scopeDepth:    len(g.locals),
+	})
+	scopeDepth := len(g.locals)
 	g.pushScope()
 	iterableValue, err = g.loadIfPointer(iterable)
 	if err != nil {
-		g.popScope()
+		if len(g.locals) > scopeDepth {
+			g.popScope()
+		}
+		g.popLoop()
 		return err
 	}
 	emitter = g.toOstyEmitter()
@@ -2660,22 +2920,25 @@ func (g *generator) emitListFor(stmt *ast.ForStmt, iterName, elemTyp string) err
 	g.takeOstyEmitter(emitter)
 	g.bindLocal(iterName, fromOstyValue(item))
 	if err := g.emitBlock(stmt.Body.Stmts); err != nil {
-		g.popScope()
+		if len(g.locals) > scopeDepth {
+			g.popScope()
+		}
+		g.popLoop()
 		return err
 	}
-	g.popScope()
-	emitter = g.toOstyEmitter()
-	if g.blockOpen {
-		g.emitGCSafepoint(emitter)
-		next := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = add i64 %s, 1", next, loop.current))
-		emitter.body = append(emitter.body, fmt.Sprintf("  store i64 %s, ptr %s", next, loop.iterPtr))
-		emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", loop.condLabel))
+	if len(g.locals) > scopeDepth {
+		g.popScope()
 	}
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", loop.endLabel))
+	g.popLoop()
+	if g.currentReachable {
+		g.branchTo(continueLabel)
+	}
+	emitter = g.toOstyEmitter()
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", continueLabel))
+	g.emitGCSafepoint(emitter)
+	llvmRangeEnd(emitter, loop)
 	g.takeOstyEmitter(emitter)
-	g.currentBlock = loop.endLabel
-	g.blockOpen = true
+	g.enterBlock(loop.endLabel)
 	return nil
 }
 
@@ -2906,34 +3169,33 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 	if v, found, err := g.emitRuntimeFFICall(call); found || err != nil {
 		return v, err
 	}
-	id, ok := call.Fn.(*ast.Ident)
-	if !ok {
+	sig, receiverExpr, found, err := g.userCallTarget(call)
+	if err != nil {
+		return value{}, err
+	}
+	if !found {
+		if id, ok := call.Fn.(*ast.Ident); ok && id.Name == "println" {
+			return value{}, unsupported("call", "println is only supported as a statement")
+		}
 		return value{}, unsupportedf("call", "call target %T", call.Fn)
 	}
-	if id.Name == "println" {
-		return value{}, unsupported("call", "println is only supported as a statement")
-	}
-	sig := g.functions[id.Name]
-	if sig == nil {
-		return value{}, unsupportedf("name", "unknown function %q", id.Name)
-	}
 	if sig.ret == "" {
-		return value{}, unsupportedf("call", "function %q has no return value", id.Name)
+		return value{}, unsupportedf("call", "function %q has no return value", sig.name)
 	}
 	if sig.ret == "void" {
-		return value{}, unsupportedf("call", "function %q has no return value", id.Name)
+		return value{}, unsupportedf("call", "function %q has no return value", sig.name)
 	}
 	emitter := g.toOstyEmitter()
 	g.emitGCSafepoint(emitter)
 	g.takeOstyEmitter(emitter)
 	g.pushScope()
-	args, err := g.userCallArgs(sig, call)
+	args, err := g.userCallArgs(sig, receiverExpr, call)
 	if err != nil {
 		g.popScope()
 		return value{}, err
 	}
 	emitter = g.toOstyEmitter()
-	out := llvmCall(emitter, sig.ret, sig.name, args)
+	out := llvmCall(emitter, sig.ret, sig.irName, args)
 	g.takeOstyEmitter(emitter)
 	g.popScope()
 	ret := fromOstyValue(out)
@@ -3000,44 +3262,57 @@ func (g *generator) emitRuntimeFFICallStmt(call *ast.CallExpr) (bool, error) {
 }
 
 func (g *generator) emitUserCallStmt(call *ast.CallExpr) (bool, error) {
-	id, ok := call.Fn.(*ast.Ident)
-	if !ok {
-		return false, nil
+	sig, receiverExpr, found, err := g.userCallTarget(call)
+	if err != nil {
+		return true, err
 	}
-	sig := g.functions[id.Name]
-	if sig == nil {
+	if !found {
 		return false, nil
 	}
 	emitter := g.toOstyEmitter()
 	g.emitGCSafepoint(emitter)
 	g.takeOstyEmitter(emitter)
 	g.pushScope()
-	args, err := g.userCallArgs(sig, call)
+	args, err := g.userCallArgs(sig, receiverExpr, call)
 	if err != nil {
 		g.popScope()
 		return true, err
 	}
 	emitter = g.toOstyEmitter()
 	if sig.ret == "void" {
-		emitter.body = append(emitter.body, fmt.Sprintf("  call void @%s(%s)", sig.name, llvmCallArgs(args)))
+		emitter.body = append(emitter.body, fmt.Sprintf("  call void @%s(%s)", sig.irName, llvmCallArgs(args)))
 	} else {
-		llvmCall(emitter, sig.ret, sig.name, args)
+		llvmCall(emitter, sig.ret, sig.irName, args)
 	}
 	g.takeOstyEmitter(emitter)
 	g.popScope()
 	return true, nil
 }
 
-func (g *generator) userCallArgs(sig *fnSig, call *ast.CallExpr) ([]*LlvmValue, error) {
-	if len(call.Args) != len(sig.params) {
+func (g *generator) userCallArgs(sig *fnSig, receiverExpr ast.Expr, call *ast.CallExpr) ([]*LlvmValue, error) {
+	expectedArgs := len(sig.params)
+	if receiverExpr != nil {
+		expectedArgs--
+	}
+	if len(call.Args) != expectedArgs {
 		return nil, unsupportedf("call", "function %q argument count", sig.name)
+	}
+	args := make([]*LlvmValue, 0, len(sig.params))
+	paramIndex := 0
+	if receiverExpr != nil {
+		receiver, err := g.userCallReceiverArg(sig, sig.params[0], receiverExpr)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, receiver)
+		paramIndex = 1
 	}
 	values := make([]value, 0, len(call.Args))
 	for i, arg := range call.Args {
 		if arg.Name != "" || arg.Value == nil {
 			return nil, unsupportedf("call", "function %q requires positional arguments", sig.name)
 		}
-		param := sig.params[i]
+		param := sig.params[paramIndex+i]
 		v, err := g.emitExprWithListHint(arg.Value, param.listElemTyp)
 		if err != nil {
 			return nil, err
@@ -3047,7 +3322,6 @@ func (g *generator) userCallArgs(sig *fnSig, call *ast.CallExpr) ([]*LlvmValue, 
 		}
 		values = append(values, g.protectManagedTemporary(sig.name+".arg", v))
 	}
-	args := make([]*LlvmValue, 0, len(values))
 	for _, v := range values {
 		loaded, err := g.loadIfPointer(v)
 		if err != nil {
@@ -3056,6 +3330,69 @@ func (g *generator) userCallArgs(sig *fnSig, call *ast.CallExpr) ([]*LlvmValue, 
 		args = append(args, toOstyValue(loaded))
 	}
 	return args, nil
+}
+
+func (g *generator) userCallReceiverArg(sig *fnSig, param paramInfo, receiverExpr ast.Expr) (*LlvmValue, error) {
+	if param.byRef {
+		id, ok := receiverExpr.(*ast.Ident)
+		if !ok {
+			return nil, unsupportedf("call", "mut receiver for %q must be a local binding", sig.name)
+		}
+		slot, ok := g.lookupLocal(id.Name)
+		if !ok {
+			return nil, unsupportedf("name", "unknown receiver binding %q", id.Name)
+		}
+		if !slot.ptr || slot.typ != param.typ {
+			return nil, unsupportedf("type-system", "receiver for %q must be mutable %s", sig.name, param.typ)
+		}
+		return &LlvmValue{typ: "ptr", name: slot.ref}, nil
+	}
+	v, err := g.emitExpr(receiverExpr)
+	if err != nil {
+		return nil, err
+	}
+	if v.typ != param.typ {
+		return nil, unsupportedf("type-system", "receiver for %q type %s, want %s", sig.name, v.typ, param.typ)
+	}
+	protected := g.protectManagedTemporary(sig.name+".self", v)
+	loaded, err := g.loadIfPointer(protected)
+	if err != nil {
+		return nil, err
+	}
+	return toOstyValue(loaded), nil
+}
+
+func (g *generator) userCallTarget(call *ast.CallExpr) (*fnSig, ast.Expr, bool, error) {
+	if call == nil {
+		return nil, nil, false, nil
+	}
+	switch fn := call.Fn.(type) {
+	case *ast.Ident:
+		sig := g.functions[fn.Name]
+		if sig == nil {
+			return nil, nil, false, nil
+		}
+		return sig, nil, true, nil
+	case *ast.FieldExpr:
+		if fn.IsOptional {
+			return nil, nil, false, unsupported("call", "optional method calls are not supported")
+		}
+		baseTyp, _, ok := g.staticExprType(fn.X)
+		if !ok {
+			return nil, nil, false, nil
+		}
+		methods := g.methods[baseTyp]
+		if methods == nil {
+			return nil, nil, false, nil
+		}
+		sig := methods[fn.Name]
+		if sig == nil {
+			return nil, nil, false, nil
+		}
+		return sig, fn.X, true, nil
+	default:
+		return nil, nil, false, nil
+	}
 }
 
 func (g *generator) runtimeFFICallTarget(call *ast.CallExpr) (*runtimeFFIFunction, bool, error) {
@@ -3288,9 +3625,65 @@ func structTypeExprName(expr ast.Expr) (string, bool) {
 func toLLVMParams(params []paramInfo) []*LlvmParam {
 	out := make([]*LlvmParam, 0, len(params))
 	for _, p := range params {
-		out = append(out, llvmParam(p.name, p.typ))
+		out = append(out, llvmParam(p.name, llvmParamIRType(p)))
 	}
 	return out
+}
+
+func (g *generator) enterBlock(label string) {
+	g.currentBlock = label
+	g.currentReachable = true
+}
+
+func (g *generator) leaveBlock() {
+	g.currentBlock = ""
+	g.currentReachable = false
+}
+
+func (g *generator) branchTo(label string) {
+	emitter := g.toOstyEmitter()
+	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", label))
+	g.takeOstyEmitter(emitter)
+	g.leaveBlock()
+}
+
+func (g *generator) nextNamedLabel(prefix string) string {
+	emitter := g.toOstyEmitter()
+	label := llvmNextLabel(emitter, prefix)
+	g.takeOstyEmitter(emitter)
+	return label
+}
+
+func (g *generator) emitScopedStmtBlock(stmts []ast.Stmt) error {
+	scopeDepth := len(g.locals)
+	g.pushScope()
+	if err := g.emitBlock(stmts); err != nil {
+		if len(g.locals) > scopeDepth {
+			g.popScope()
+		}
+		return err
+	}
+	if len(g.locals) > scopeDepth {
+		g.popScope()
+	}
+	return nil
+}
+
+func (g *generator) captureScopeState() scopeState {
+	locals := append([]map[string]value(nil), g.locals...)
+	gcRootSlots := append([]value(nil), g.gcRootSlots...)
+	gcRootMarks := append([]int(nil), g.gcRootMarks...)
+	return scopeState{
+		locals:      locals,
+		gcRootSlots: gcRootSlots,
+		gcRootMarks: gcRootMarks,
+	}
+}
+
+func (g *generator) restoreScopeState(state scopeState) {
+	g.locals = append([]map[string]value(nil), state.locals...)
+	g.gcRootSlots = append([]value(nil), state.gcRootSlots...)
+	g.gcRootMarks = append([]int(nil), state.gcRootMarks...)
 }
 
 func (g *generator) pushScope() {
@@ -3305,7 +3698,7 @@ func (g *generator) popScope() {
 		g.gcRootMarks = g.gcRootMarks[:len(g.gcRootMarks)-1]
 	}
 	if mark < len(g.gcRootSlots) {
-		if g.blockOpen {
+		if g.currentReachable {
 			emitter := g.toOstyEmitter()
 			for i := len(g.gcRootSlots) - 1; i >= mark; i-- {
 				llvmGcRootRelease(emitter, toOstyValue(g.gcRootSlots[i]))
@@ -3482,6 +3875,50 @@ func (g *generator) bindLocal(name string, v value) {
 	g.locals[len(g.locals)-1][name] = v
 }
 
+func (g *generator) pushLoop(loop loopContext) {
+	g.loopStack = append(g.loopStack, loop)
+}
+
+func (g *generator) popLoop() {
+	if len(g.loopStack) == 0 {
+		return
+	}
+	g.loopStack = g.loopStack[:len(g.loopStack)-1]
+}
+
+func (g *generator) currentLoop() (loopContext, bool) {
+	if len(g.loopStack) == 0 {
+		return loopContext{}, false
+	}
+	return g.loopStack[len(g.loopStack)-1], true
+}
+
+func (g *generator) unwindScopesTo(scopeDepth int) {
+	for len(g.locals) > scopeDepth {
+		g.popScope()
+	}
+}
+
+func (g *generator) emitBreak() error {
+	loop, ok := g.currentLoop()
+	if !ok {
+		return unsupported("control-flow", "break outside of loop")
+	}
+	g.unwindScopesTo(loop.scopeDepth)
+	g.branchTo(loop.breakLabel)
+	return nil
+}
+
+func (g *generator) emitContinue() error {
+	loop, ok := g.currentLoop()
+	if !ok {
+		return unsupported("control-flow", "continue outside of loop")
+	}
+	g.unwindScopesTo(loop.scopeDepth)
+	g.branchTo(loop.continueLabel)
+	return nil
+}
+
 func (g *generator) nextHiddenLocalName(prefix string) string {
 	name := fmt.Sprintf("$%s.%d", prefix, g.hiddenLocalID)
 	g.hiddenLocalID++
@@ -3555,6 +3992,15 @@ func (g *generator) staticExprType(expr ast.Expr) (string, string, bool) {
 		if id, ok := e.Fn.(*ast.Ident); ok {
 			if sig := g.functions[id.Name]; sig != nil && sig.ret != "" && sig.ret != "void" {
 				return sig.ret, sig.retListElemTyp, true
+			}
+		}
+		if field, ok := e.Fn.(*ast.FieldExpr); ok && !field.IsOptional {
+			if baseTyp, _, ok := g.staticExprType(field.X); ok {
+				if methods := g.methods[baseTyp]; methods != nil {
+					if sig := methods[field.Name]; sig != nil && sig.ret != "" && sig.ret != "void" {
+						return sig.ret, sig.retListElemTyp, true
+					}
+				}
 			}
 		}
 		if fn, found, err := g.runtimeFFICallTarget(e); found && err == nil && fn.ret != "" && fn.ret != "void" {
@@ -3689,4 +4135,55 @@ func llvmType(t ast.Type, structs map[string]*structInfo, enums map[string]*enum
 	default:
 		return "", unsupportedf("type-system", "type %T", t)
 	}
+}
+
+func llvmMethodOwnerType(ownerName string, structs map[string]*structInfo, enums map[string]*enumInfo) (string, bool) {
+	if info := structs[ownerName]; info != nil {
+		return info.typ, true
+	}
+	if info := enums[ownerName]; info != nil {
+		return info.typ, true
+	}
+	return "", false
+}
+
+func llvmMethodIRName(ownerName, methodName string) string {
+	return sanitizeLLVMName(ownerName) + "__" + sanitizeLLVMName(methodName)
+}
+
+func llvmMethodReceiverIRType(ownerType string, mutable bool) string {
+	if mutable {
+		return "ptr"
+	}
+	return ownerType
+}
+
+func llvmParamIRType(param paramInfo) string {
+	if param.irTyp != "" {
+		return param.irTyp
+	}
+	return param.typ
+}
+
+func sanitizeLLVMName(name string) string {
+	if name == "" {
+		return "anon"
+	}
+	var b strings.Builder
+	for i, c := range name {
+		if c == '_' || ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || (i > 0 && '0' <= c && c <= '9') {
+			b.WriteRune(c)
+			continue
+		}
+		if i == 0 && '0' <= c && c <= '9' {
+			b.WriteByte('_')
+			b.WriteRune(c)
+			continue
+		}
+		b.WriteByte('_')
+	}
+	if b.Len() == 0 {
+		return "anon"
+	}
+	return b.String()
 }

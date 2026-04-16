@@ -83,6 +83,21 @@ func TestGeneratedComparePoliciesAreOstyOwned(t *testing.T) {
 	if got, want := llvmIntBinaryInstruction("%"), "srem"; got != want {
 		t.Fatalf("llvmIntBinaryInstruction(%q) = %q, want %q", "%", got, want)
 	}
+	if got, want := llvmIntBinaryInstruction("&"), "and"; got != want {
+		t.Fatalf("llvmIntBinaryInstruction(%q) = %q, want %q", "&", got, want)
+	}
+	if got, want := llvmIntBinaryInstruction("|"), "or"; got != want {
+		t.Fatalf("llvmIntBinaryInstruction(%q) = %q, want %q", "|", got, want)
+	}
+	if got, want := llvmIntBinaryInstruction("^"), "xor"; got != want {
+		t.Fatalf("llvmIntBinaryInstruction(%q) = %q, want %q", "^", got, want)
+	}
+	if got, want := llvmIntBinaryInstruction("<<"), "shl"; got != want {
+		t.Fatalf("llvmIntBinaryInstruction(%q) = %q, want %q", "<<", got, want)
+	}
+	if got, want := llvmIntBinaryInstruction(">>"), "ashr"; got != want {
+		t.Fatalf("llvmIntBinaryInstruction(%q) = %q, want %q", ">>", got, want)
+	}
 	if got, want := llvmFloatBinaryInstruction("/"), "fdiv"; got != want {
 		t.Fatalf("llvmFloatBinaryInstruction(%q) = %q, want %q", "/", got, want)
 	}
@@ -209,8 +224,8 @@ func TestGeneratedComparePoliciesAreOstyOwned(t *testing.T) {
 	if got := llvmFunctionHeaderDiagnostic("main", true, false, 0, true, true, 0, false); got.kind != "" {
 		t.Fatalf("llvmFunctionHeaderDiagnostic(%q, true, false, 0, true, true, 0, false).kind = %q, want empty", "main", got.kind)
 	}
-	if got, want := llvmFunctionHeaderDiagnostic("methodish", true, true, 0, true, false, 0, false).message, "methods are not supported"; got != want {
-		t.Fatalf("llvmFunctionHeaderDiagnostic(%q, true, true, 0, true, false, 0, false).message = %q, want %q", "methodish", got, want)
+	if got := llvmFunctionHeaderDiagnostic("methodish", true, true, 0, true, false, 0, false); got.kind != "" {
+		t.Fatalf("llvmFunctionHeaderDiagnostic(%q, true, true, 0, true, false, 0, false).kind = %q, want empty", "methodish", got.kind)
 	}
 	if got, want := llvmFunctionHeaderDiagnostic("main", true, false, 0, true, true, 1, false).message, "LLVM main must have no params and no return type"; got != want {
 		t.Fatalf("llvmFunctionHeaderDiagnostic(%q, true, false, 0, true, true, 1, false).message = %q, want %q", "main", got, want)

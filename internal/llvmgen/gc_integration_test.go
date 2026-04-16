@@ -84,3 +84,90 @@ fn main() {
 		}
 	}
 }
+
+func TestGenerateMutReceiverMethodsLowerToReceiverSlots(t *testing.T) {
+	file := parseLLVMGenFile(t, `struct Counter {
+    value: Int,
+
+    fn add(mut self, delta: Int) -> Int {
+        self.value = self.value + delta
+        self.value
+    }
+
+    fn get(self) -> Int {
+        self.value
+    }
+}
+
+fn main() {
+    let mut counter = Counter { value: 1 }
+    println(counter.add(2))
+    println(counter.get())
+}
+`)
+
+	ir, err := Generate(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/method_receivers.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"define i64 @Counter__add(ptr %self, i64 %delta)",
+		"define i64 @Counter__get(%Counter %self)",
+		"call i64 @Counter__add(ptr %t",
+		"call i64 @Counter__get(%Counter",
+		"insertvalue %Counter",
+		"alloca %Counter",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateStructFieldsCanUseEnumTypes(t *testing.T) {
+	file := parseLLVMGenFile(t, `enum Kind {
+    Ready,
+    Done,
+}
+
+struct Box {
+    kind: Kind,
+}
+
+fn tag(box: Box) -> Int {
+    match box.kind {
+        Ready -> 1,
+        Done -> 2,
+    }
+}
+
+fn main() {
+    let box = Box { kind: Ready }
+    println(tag(box))
+}
+`)
+
+	ir, err := Generate(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/enum_struct_field.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"%Box = type { i64 }",
+		"insertvalue %Box undef, i64 0, 0",
+		"extractvalue %Box",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
