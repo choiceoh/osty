@@ -56,9 +56,23 @@ func (r Result[T, E]) unwrap() T {
 	return r.Value
 }
 
+func (r Result[T, E]) expect(msg string) T {
+	if !r.IsOk {
+		panic(msg)
+	}
+	return r.Value
+}
+
 func (r Result[T, E]) unwrapErr() E {
 	if r.IsOk {
 		panic("called unwrapErr on Ok")
+	}
+	return r.Error
+}
+
+func (r Result[T, E]) expectErr(msg string) E {
+	if r.IsOk {
+		panic(msg)
 	}
 	return r.Error
 }
@@ -68,6 +82,13 @@ func (r Result[T, E]) unwrapOr(fallback T) T {
 		return r.Value
 	}
 	return fallback
+}
+
+func (r Result[T, E]) unwrapOrElse(fallback func(E) T) T {
+	if r.IsOk {
+		return r.Value
+	}
+	return fallback(r.Error)
 }
 
 func (r Result[T, E]) ok() *T {
@@ -89,6 +110,48 @@ func (r Result[T, E]) toString() string {
 		return "Ok(" + ostyToString(r.Value) + ")"
 	}
 	return "Err(" + ostyToString(r.Error) + ")"
+}
+
+func (r Result[T, E]) inspect(f func(T)) Result[T, E] {
+	if r.IsOk {
+		f(r.Value)
+	}
+	return r
+}
+
+func (r Result[T, E]) inspectErr(f func(E)) Result[T, E] {
+	if !r.IsOk {
+		f(r.Error)
+	}
+	return r
+}
+
+func resultAnd[T any, E any, U any](r Result[T, E], other Result[U, E]) Result[U, E] {
+	if r.IsOk {
+		return other
+	}
+	return resultErr[U, E](r.Error)
+}
+
+func resultAndThen[T any, E any, U any](r Result[T, E], f func(T) Result[U, E]) Result[U, E] {
+	if r.IsOk {
+		return f(r.Value)
+	}
+	return resultErr[U, E](r.Error)
+}
+
+func resultOr[T any, E any, F any](r Result[T, E], other Result[T, F]) Result[T, F] {
+	if r.IsOk {
+		return resultOk[T, F](r.Value)
+	}
+	return other
+}
+
+func resultOrElse[T any, E any, F any](r Result[T, E], f func(E) Result[T, F]) Result[T, F] {
+	if r.IsOk {
+		return resultOk[T, F](r.Value)
+	}
+	return f(r.Error)
 }
 
 func resultMap[T any, E any, U any](r Result[T, E], f func(T) U) Result[U, E] {
