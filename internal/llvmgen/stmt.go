@@ -43,6 +43,15 @@ func (g *generator) emitReturningBlock(stmts []ast.Stmt, retType string, retSour
 			if err != nil {
 				return err
 			}
+			// Phase 6d: auto-box a concrete return value into the
+			// declared interface type (same policy as emitReturn).
+			if retType == "%osty.iface" && v.typ != "%osty.iface" && g.returnSourceType != nil {
+				boxed, boxErr := g.boxInterfaceValue(g.returnSourceType, v)
+				if boxErr != nil {
+					return boxErr
+				}
+				v = boxed
+			}
 			if v.typ != retType {
 				return unsupportedf("type-system", "return type %s, want %s", v.typ, retType)
 			}
@@ -56,6 +65,14 @@ func (g *generator) emitReturningBlock(stmts []ast.Stmt, retType string, retSour
 			v, err := g.emitExprWithHintAndSourceType(s.X, retSourceType, retListElemTyp, false, retMapKeyTyp, retMapValueTyp, false, retSetElemTyp, false)
 			if err != nil {
 				return err
+			}
+			// Phase 6d: trailing-expression implicit return auto-boxing.
+			if retType == "%osty.iface" && v.typ != "%osty.iface" && g.returnSourceType != nil {
+				boxed, boxErr := g.boxInterfaceValue(g.returnSourceType, v)
+				if boxErr != nil {
+					return boxErr
+				}
+				v = boxed
 			}
 			if v.typ != retType {
 				return unsupportedf("type-system", "trailing expression type %s, want %s", v.typ, retType)
@@ -612,6 +629,16 @@ func (g *generator) emitReturn(stmt *ast.ReturnStmt) error {
 		ret, err = g.emitExprWithHintAndSourceType(stmt.Value, g.returnSourceType, g.returnListElemTyp, false, "", "", false, "", false)
 		if err != nil {
 			return err
+		}
+		// Phase 6d: auto-box a concrete return value when the declared
+		// return type is an interface. Mirrors the `let s: Sized = v`
+		// path in emitLet.
+		if g.returnType == "%osty.iface" && ret.typ != "%osty.iface" && g.returnSourceType != nil {
+			boxed, boxErr := g.boxInterfaceValue(g.returnSourceType, ret)
+			if boxErr != nil {
+				return boxErr
+			}
+			ret = boxed
 		}
 		if ret.typ != g.returnType {
 			return unsupportedf("type-system", "return type %s, want %s", ret.typ, g.returnType)

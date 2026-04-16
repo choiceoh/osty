@@ -363,6 +363,81 @@ fn main() {
 	}
 }
 
+// TestGenerateModuleInterfaceBoxingFromReturn covers Phase 6d's
+// return-position auto-boxing: a function whose declared return type
+// is an interface can return a concrete value, and the caller receives
+// a `%osty.iface` fat pointer suitable for subsequent dispatch.
+func TestGenerateModuleInterfaceBoxingFromReturn(t *testing.T) {
+	src := `interface Sized {
+    fn size(self) -> Int
+}
+
+struct Vec {
+    count: Int,
+
+    fn size(self) -> Int {
+        self.count
+    }
+}
+
+fn wrap(v: Vec) -> Sized {
+    v
+}
+
+fn main() {
+    let v = Vec { count: 5 }
+    let s = wrap(v)
+    println(s.size())
+}
+`
+	got := runMonoLowerPipeline(t, src, "/tmp/phase6d_return_box.osty")
+	for _, want := range []string{
+		"%osty.iface",
+		"@osty.vtable.Vec__Sized",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestGenerateModuleInterfaceBoxingFromCallArg covers Phase 6d's
+// call-argument auto-boxing: passing a concrete value into a parameter
+// whose declared type is an interface must insert a `%osty.iface` fat
+// pointer transparently so the callee's dispatch path works.
+func TestGenerateModuleInterfaceBoxingFromCallArg(t *testing.T) {
+	src := `interface Sized {
+    fn size(self) -> Int
+}
+
+struct Vec {
+    count: Int,
+
+    fn size(self) -> Int {
+        self.count
+    }
+}
+
+fn measure(s: Sized) -> Int {
+    s.size()
+}
+
+fn main() {
+    let v = Vec { count: 7 }
+    println(measure(v))
+}
+`
+	got := runMonoLowerPipeline(t, src, "/tmp/phase6d_callarg_box.osty")
+	for _, want := range []string{
+		"%osty.iface",
+		"@osty.vtable.Vec__Sized",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // TestGenerateModuleMethodLocalGenericGetMonomorphized verifies the
 // Phase 4 path: a non-generic struct with a generic method
 // (`fn get<U>(self, u: U) -> U`) gets specialized per turbofish call
