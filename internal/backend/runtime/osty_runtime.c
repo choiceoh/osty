@@ -4,6 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Active LLVM/native GC runtime path. See ../../../../RUNTIME_GC.md. */
+
 typedef void (*osty_gc_trace_fn)(void *payload);
 typedef void (*osty_gc_destroy_fn)(void *payload);
 
