@@ -74,13 +74,14 @@ func run() error {
 	if err := os.WriteFile(mergedPath, merged, 0o644); err != nil {
 		return fmt.Errorf("write merged selfhost source: %w", err)
 	}
+	tmpOutPath := filepath.Join(tmpDir, "generated.go")
 
 	cmd := exec.Command(
 		"go", "run", "-tags", "selfhostgen", "./cmd/osty", "gen",
 		"--backend", "go",
 		"--emit", "go",
 		"--package", "selfhost",
-		"-o", outPath,
+		"-o", tmpOutPath,
 		mergedPath,
 	)
 	cmd.Dir = root
@@ -88,7 +89,28 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("generate selfhost parser: %w\n%s", err, bytes.TrimSpace(output))
 	}
-	return patchGenerated(outPath)
+	if selfhostgenMissingTypes(output) {
+		return fmt.Errorf(
+			"generate selfhost parser: selfhostgen emitted untyped bootstrap Go; refusing to overwrite %s\n%s",
+			outPath,
+			bytes.TrimSpace(output),
+		)
+	}
+	if err := patchGenerated(tmpOutPath); err != nil {
+		return err
+	}
+	data, err := os.ReadFile(tmpOutPath)
+	if err != nil {
+		return fmt.Errorf("read patched selfhost code: %w", err)
+	}
+	if err := os.WriteFile(outPath, data, 0o644); err != nil {
+		return fmt.Errorf("install generated selfhost code: %w", err)
+	}
+	return nil
+}
+
+func selfhostgenMissingTypes(output []byte) bool {
+	return bytes.Contains(output, []byte("osty gen: warning: native type checking is unavailable"))
 }
 
 func generatedSelfhostUpToDate(root, outPath string) (bool, error) {
