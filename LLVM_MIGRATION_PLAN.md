@@ -22,12 +22,12 @@
 - Multi-file package, vendored dependency, workspace build의 실제 code emission은
   아직 제한이 있다. LLVM 전환 전에 package 단위 emit/link 모델을 분명히 해야
   한다.
-- 현재 Phase 21까지의 LLVM backend 의미는 `examples/selfhost-core/llvmgen.osty`
+- 현재 Phase 23까지의 LLVM backend 의미는 `examples/selfhost-core/llvmgen.osty`
   쪽으로 옮겨지고 있다. 여기에는 smoke IR builder, skeleton renderer,
   toolchain command plan, executable parity corpus, go-only diagnostic, 그리고
-  unsupported source-shape taxonomy가 포함된다. Phase 22부터는 성공 경로의
-  scalar instruction strings와 temp/label naming도 같은 selfhost-core에서
-  생성한다.
+  unsupported source-shape taxonomy가 포함된다. 성공 경로의 scalar instruction
+  strings, temp/label naming, 그리고 첫 plain `String` `println` module constant
+  shape도 같은 selfhost-core에서 생성한다.
 
 ## 이주 원칙
 
@@ -195,8 +195,8 @@ artifact/cache layout 정책은 [`LLVM_ARTIFACT_LAYOUT.md`](./LLVM_ARTIFACT_LAYO
 완료 조건:
 
 - `fn main() { println(1 + 2) }` 수준의 프로그램이 LLVM backend로 실행된다.
-- scalar/control-flow/boolean fixture가 Go backend와 같은 stdout/exit code를
-  낸다.
+- scalar/control-flow/boolean/plain-string fixture가 Go backend와 같은
+  stdout/exit code를 낸다.
 - 새 LLVM lowering 로직은 Go가 아니라 Osty 소스에 먼저 존재한다.
 - Go bridge가 Osty-authored emitter에서 생성된 renderers를 호출한다.
 - production bridge와 Osty-authored emitter가 byte-for-byte drift guard로 묶여

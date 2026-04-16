@@ -275,6 +275,11 @@ The initial helper package for this plan is `internal/backend`.
     mutable local slots, loads, stores, and Int range loops. Go still walks the
     bootstrap AST, but the LLVM instruction strings and temp/label naming live
     in `examples/selfhost-core/llvmgen.osty`.
+24. Add the first String LLVM vertical path through the self-hosted core. Done
+    in Phase 23: `println("plain ascii")` emits an Osty-owned module string
+    constant and `printf(ptr @.strN)` call, and the executable smoke corpus now
+    includes `string_print.osty`. The Go bridge only filters literals to the
+    current conservative subset before calling generated Osty helpers.
 
 The backend subdirectory change should land before the LLVM backend writes any
 files, so LLVM never shares the old Go-only output location.
