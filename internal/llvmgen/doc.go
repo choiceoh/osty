@@ -21,7 +21,7 @@
 // declaration-layout/runtime-FFI validation policies, LLVM toolchain command
 // plans, executable parity plans, and categorized
 // unsupported/backend-capability diagnostics are generated from
-// examples/selfhost-core/llvmgen.osty so the backend meaning is owned by Osty
+// toolchain/llvmgen.osty so the backend meaning is owned by Osty
 // source. This includes phase-54~63 payload generalization for `Float` and
 // `String` payload enums (return/param/mut/reversed/wildcard match coverage).
 // Qualified constructor/pattern forms remain for a later phase.

@@ -291,7 +291,7 @@ func CheckLint(m *manifest.Manifest, packages []*resolve.Package, results []*res
 
 func checkOpts() check.Opts {
 	reg := stdlib.LoadCached()
-	return check.Opts{UseSelfhost: true, Stdlib: reg, Primitives: reg.Primitives, ResultMethods: reg.ResultMethods}
+	return check.Opts{UseGolegacy: true, Stdlib: reg, Primitives: reg.Primitives, ResultMethods: reg.ResultMethods}
 }
 
 func lintConfigFromManifest(m *manifest.Manifest) *lint.Config {

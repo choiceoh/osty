@@ -101,7 +101,7 @@ func HashDir(dir string) (string, error) {
 // Ignores prefix differences as long as the algorithm family
 // matches HashPrefix.
 func VerifyChecksum(want, got string) error {
-	return SelfhostVerifyChecksum(want, got)
+	return GolegacyVerifyChecksum(want, got)
 }
 
 // skipDirEntry returns true for filesystem entries the packager

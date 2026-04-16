@@ -32,7 +32,7 @@ func (s *gitSource) Name() string     { return s.name }
 // encoded as a query string so the URI is parseable even by tools
 // that don't understand our schema.
 func (s *gitSource) URI() string {
-	return SelfhostGitSourceURI(s.url, s.tag, s.branch, s.rev)
+	return GolegacyGitSourceURI(s.url, s.tag, s.branch, s.rev)
 }
 
 // Fetch clones the repository into the user cache and checks out the
@@ -156,7 +156,7 @@ func (s *gitSource) snapshot(ctx context.Context, repo, commit, dst string) erro
 // order rev > tag > branch > HEAD. The fetcher resolves this into a
 // commit hash via rev-parse.
 func (s *gitSource) checkoutRef() string {
-	return SelfhostGitCheckoutRef(s.url, s.tag, s.branch, s.rev)
+	return GolegacyGitCheckoutRef(s.url, s.tag, s.branch, s.rev)
 }
 
 // sanitizeURL turns a URL into a filesystem-safe directory name.
@@ -164,7 +164,7 @@ func (s *gitSource) checkoutRef() string {
 // human-readability, so a simple replacement of non-alnum chars with
 // `_` is enough.
 func sanitizeURL(u string) string {
-	return SelfhostSanitizeURL(u)
+	return GolegacySanitizeURL(u)
 }
 
 // runGit executes `git <args>` in dir, inheriting stderr so users see

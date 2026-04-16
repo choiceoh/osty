@@ -5,7 +5,7 @@ import (
 	"github.com/osty/osty/internal/resolve"
 )
 
-// The deleted bootstrap selfhost checker is intentionally not reintroduced
+// The deleted bootstrap checker is intentionally not reintroduced
 // here. Until the runtime/native boundary lands, the checker surface stays as
 // an empty host boundary so parser/resolve-driven workflows can keep moving.
 func applySelfhostFileResult(*Result, *ast.File, *resolve.Result, []byte, resolve.StdlibProvider) {}

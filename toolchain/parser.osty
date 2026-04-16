@@ -1,9 +1,4 @@
-use runtime.strings as strings {
-    fn Join(elems: List<String>, sep: String) -> String
-    fn Split(s: String, sep: String) -> List<String>
-    fn Repeat(s: String, count: Int) -> String
-    fn HasPrefix(s: String, prefix: String) -> Bool
-}
+use std.strings as strings
 
 // ===================================================================
 // AST NODE KINDS
@@ -935,7 +930,7 @@ fn opParseStructLit(p: OstyParser, name: Int) -> Int {
 }
 
 fn astIsUpperName(text: String) -> Bool {
-    let units = strings.Split(text, "")
+    let units = strings.split(text, "")
     let first = frontUnitAt(units, 0)
     first >= "A" && first <= "Z"
 }
@@ -1219,7 +1214,7 @@ fn opParsePatternOneAlt(p: OstyParser) -> Int {
             opAdvance(p)
             path.push(opAdvance(p).text)
         }
-        let name = strings.Join(path, ".")
+        let name = strings.join(path, ".")
         if path.len() == 1 && (head == "true" || head == "false") { let mut n = emptyAstNode(AstNPattern)
         n.extra = astPatternLiteralKind()
         n.text = head
@@ -1707,7 +1702,7 @@ fn opParseUseDecl(p: OstyParser) -> Int {
         let _ = opExpect(p, FrontRBrace)
     }
     let mut n = emptyAstNode(AstNUseDecl)
-    n.text = strings.Join(path, ".")
+    n.text = strings.join(path, ".")
     n.children = goItems
     n.start = start
     n.end = p.pos
@@ -1743,7 +1738,7 @@ pub fn astPrettyPrint(file: AstFile) -> String {
     for d in file.arena.decls {
         lines = astPPNode(file.arena, d, 0, lines)
     }
-    strings.Join(lines, "\n")
+    strings.join(lines, "\n")
 }
 
 fn astPPNode(arena: AstArena, idx: Int, depth: Int, lines: List<String>) -> List<String> {
@@ -1751,7 +1746,7 @@ fn astPPNode(arena: AstArena, idx: Int, depth: Int, lines: List<String>) -> List
         return lines
     }
     let node = astArenaNodeAt(arena, idx)
-    let indent = strings.Repeat("  ", depth)
+    let indent = strings.repeat("  ", depth)
     let kindName = astNodeKindName(node.kind)
     if node.text != "" { lines.push("{indent}{kindName} \"{node.text}\"") } else { lines.push("{indent}{kindName}") }
     if node.left >= 0 {
@@ -1794,7 +1789,7 @@ pub fn astFormatErrors(file: AstFile) -> String {
         if e.note != "" { lines.push("  = note: {e.note}") }
         if e.hint != "" { lines.push("  = hint: {e.hint}") }
     }
-    strings.Join(lines, "\n")
+    strings.join(lines, "\n")
 }
 
 // ===================================================================

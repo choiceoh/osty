@@ -1,5 +1,5 @@
-// core_snapshot.go absorbs the former generated CI support surface into the
-// native package while the self-hosted source remains the long-term owner.
+// core_snapshot.go snapshots the Osty-authored CI support surface into the
+// native package while toolchain sources remain the long-term owner.
 
 package ci
 

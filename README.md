@@ -32,7 +32,7 @@ coverage. The public compiler path is now native-only through the LLVM backend.
 | Type checker (`internal/check`) | done for v0.4 front-end core — generic instantiation, structural interface checks, exhaustiveness, builder protocol, function-value arity, closure pattern params |
 | Linter (`internal/lint`, L0001–L0042, `--fix` / `--fix-dry-run`) | done |
 | Multi-file packages (`resolve` loader/package/workspace) | done |
-| LSP (`internal/lsp`, wired as `osty lsp`) | done — hover, definition, formatting, documentSymbol, lint diagnostics, editor policy backed by selfhost-core |
+| LSP (`internal/lsp`, wired as `osty lsp`) | done — hover, definition, formatting, documentSymbol, lint diagnostics, editor policy backed by toolchain sources |
 | Native LLVM backend (`internal/backend`, `internal/llvmgen`) | public backend path; scalar/control-flow/string smoke subset emits LLVM IR/object/binary, later phase 64-73 value/control-flow smoke expansion is documented, unsupported shapes report Osty-authored LLVM diagnostics |
 | Go transpiler (`internal/gen`) | bootstrap-only seed path compiled with `selfhostgen`; no longer exposed as a public backend |
 | Independent IR (`internal/ir`) | done — patterns, match, closures, struct/field/method |
@@ -115,8 +115,8 @@ osty/
 │   ├── format/              # Canonical-style formatter
 │   ├── ir/                  # Independent intermediate representation
 │   ├── backend/             # Backend names, emit modes, native artifact layout
-│   ├── llvmgen/             # LLVM bridge generated from Osty selfhost-core backend logic
-│   ├── docgen/              # self-hosted API doc generator (HTML + markdown; `osty doc`)
+│   ├── llvmgen/             # LLVM bridge generated from Osty toolchain backend logic
+│   ├── docgen/              # Osty-authored API doc generator (HTML + markdown; `osty doc`)
 │   ├── ci/                  # CI quality tooling (`osty ci`, generated core)
 │   ├── cihost/              # Go host bridge for generated CI core
 │   ├── profile/             # Build profiles / targets / features
@@ -127,8 +127,8 @@ osty/
 │   ├── lockfile/            # osty.lock read/write
 │   ├── registry/            # Package registry client + file-backed HTTP server
 │   └── pkgmgr/semver/       # SemVer parse, compare, constraint match
-├── examples/
-│   └── selfhost-core/       # Osty-authored compiler/self-hosting cores, CI policy core, LLVM emitter prototype
+├── examples/                # Executable/sample packages kept under compiler coverage
+├── toolchain/               # Osty-authored compiler/tooling cores and LLVM emitter prototype
 └── testdata/                # .osty fixtures used by tests and backend corpus
 ```
 
@@ -232,7 +232,7 @@ newline-separated `else`.
   payload), plus Phase 54-63 payload enum generalization (`Float` return/param/mut/reversed/wildcard,
   String payload return/param/mut/reversed/wildcard). Unsupported shapes still
   prepare skeleton artifacts and report structured diagnostics from the
-  selfhost-core backend policy)
+  toolchain backend policy)
 - `--emit MODE` — requested text artifact. `llvm-ir` emits LLVM IR.
 
 `pipeline --gen` accepts the same source-artifact backend selection:
@@ -294,7 +294,7 @@ creating a new one.
   object/binary emission and generated-source diagnostics are available for
   supported programs;
   unsupported shapes still prepare skeleton artifacts and report missing lowering
-  through structured diagnostics from the selfhost-core backend policy.
+  through structured diagnostics from the toolchain backend policy.
 - `--emit MODE` — requested artifact mode (`llvm-ir`, `object`, or
   `binary`). `build --backend llvm --emit object|binary` uses `clang`; `run`
   requires `binary` because it executes the result. Native test execution is

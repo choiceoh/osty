@@ -1,11 +1,9 @@
 use std.testing
 
-use runtime.strings as fmtStrings {
-    fn Contains(s: String, substr: String) -> Bool
-}
+use std.strings as fmtStrings
 
 fn assertFormatterContains(output: String, text: String) {
-    testing.assert(fmtStrings.Contains(output, text))
+    testing.assert(fmtStrings.contains(output, text))
 }
 
 fn testPureFormatterCompactsFunctionSpacing() {

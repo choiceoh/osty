@@ -1,6 +1,6 @@
-// validate_snapshot.go absorbs the former generated manifest validation
-// support into the native manifest package while the self-hosted source
-// remains the long-term owner.
+// validate_snapshot.go snapshots the Osty-authored manifest validation
+// support into the native manifest package while toolchain sources remain
+// the long-term owner.
 
 package manifest
 

@@ -23,7 +23,7 @@ pub struct SelfDocModule {
     pub decls: List<SelfDocDecl>,
 }
 
-/// SelfDocDecl is one public API declaration extracted from the selfhost AST.
+/// SelfDocDecl is one public API declaration extracted from the toolchain AST.
 pub struct SelfDocDecl {
     pub kind: String,
     pub name: String,

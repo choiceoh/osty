@@ -1,9 +1,4 @@
-use runtime.strings as strings {
-    fn HasPrefix(s: String, prefix: String) -> Bool
-    fn Split(s: String, sep: String) -> List<String>
-    fn SplitN(s: String, sep: String, n: Int) -> List<String>
-    fn TrimPrefix(s: String, prefix: String) -> String
-}
+use std.strings as strings
 
 /// SemSplit captures the first three fields from a string split.
 pub struct SemSplit {
@@ -37,18 +32,18 @@ pub fn parseSemVersionText(raw: String) -> Result<SemVersion, String> {
     if raw == "" {
         return Err("empty version")
     }
-    let text = strings.TrimPrefix(raw, "v")
+    let text = strings.trimPrefix(raw, "v")
     if text == "" {
         return Err("empty version")
     }
 
-    let plus = splitSummary(strings.SplitN(text, "+", 2))
+    let plus = splitSummary(strings.splitN(text, "+", 2))
     let build = plus.second
     if plus.count == 2 && !(buildIdentifiersValid(build)) {
         return Err("invalid build metadata")
     }
 
-    let dash = splitSummary(strings.SplitN(plus.first, "-", 2))
+    let dash = splitSummary(strings.splitN(plus.first, "-", 2))
     let base = parseSemCore(dash.first)?
     if dash.count == 1 {
         return Ok(
@@ -67,7 +62,7 @@ pub fn parseSemVersionText(raw: String) -> Result<SemVersion, String> {
         return Err("empty pre-release")
     }
 
-    let pre = splitSummary(strings.Split(dash.second, "."))
+    let pre = splitSummary(strings.split(dash.second, "."))
     if pre.count > 3 {
         return Err("too many pre-release identifiers")
     }
@@ -89,7 +84,7 @@ pub fn parseSemVersionText(raw: String) -> Result<SemVersion, String> {
 
 /// parseSemCore parses major.minor.patch.
 pub fn parseSemCore(text: String) -> Result<SemVersion, String> {
-    let parts = splitSummary(strings.Split(text, "."))
+    let parts = splitSummary(strings.split(text, "."))
     if parts.count != 3 {
         return Err("version must have major.minor.patch")
     }
@@ -119,11 +114,11 @@ pub fn parseSemNumber(text: String) -> Result<Int, String> {
     if text == "" {
         return Err("empty number")
     }
-    if stringUnitCount(text) > 1 && strings.HasPrefix(text, "0") {
+    if stringUnitCount(text) > 1 && strings.hasPrefix(text, "0") {
         return Err("number has leading zero")
     }
     let mut out = 0
-    for unit in strings.Split(text, "") {
+    for unit in strings.split(text, "") {
         let digit = digitStringValue(unit)
         if digit < 0 {
             return Err("invalid decimal digit")
@@ -138,7 +133,7 @@ pub fn buildIdentifiersValid(text: String) -> Bool {
     if text == "" {
         return false
     }
-    for part in strings.Split(text, ".") {
+    for part in strings.split(text, ".") {
         if !(identifierTextValid(part)) {
             return false
         }
@@ -151,7 +146,7 @@ pub fn identifierTextValid(text: String) -> Bool {
     if text == "" {
         return false
     }
-    for unit in strings.Split(text, "") {
+    for unit in strings.split(text, "") {
         if !(isSemIdentUnit(unit)) {
             return false
         }
@@ -164,7 +159,7 @@ pub fn allAsciiDigits(text: String) -> Bool {
     if text == "" {
         return false
     }
-    for unit in strings.Split(text, "") {
+    for unit in strings.split(text, "") {
         if digitStringValue(unit) < 0 {
             return false
         }
@@ -175,7 +170,7 @@ pub fn allAsciiDigits(text: String) -> Bool {
 /// stringUnitCount counts ASCII-oriented split units.
 pub fn stringUnitCount(text: String) -> Int {
     let mut count = 0
-    for unit in strings.Split(text, "") {
+    for unit in strings.split(text, "") {
         let _ = unit
         count = count + 1
     }

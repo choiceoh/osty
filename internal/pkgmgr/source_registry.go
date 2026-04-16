@@ -34,7 +34,7 @@ func (s *registrySource) URI() string {
 	// URL portion is resolved later (Fetch sees Env.Registries); the
 	// lockfile URI embeds the declared registry name so different
 	// registry hosts don't accidentally coalesce.
-	return SelfhostRegistrySourceURI(s.registryName)
+	return GolegacyRegistrySourceURI(s.registryName)
 }
 
 // Fetch queries the registry index for matching versions, selects the
@@ -84,7 +84,7 @@ func (s *registrySource) candidateRegistryVersions(ctx context.Context, env *Env
 		}
 	}
 	allCandidates := make([]registryCandidate, 0, len(versions))
-	selfhostCandidates := make([]SelfhostRegistryCandidate, 0, len(versions))
+	golegacyCandidates := make([]GolegacyRegistryCandidate, 0, len(versions))
 	for _, v := range versions {
 		sv, err := semver.ParseVersion(v.Version)
 		if err != nil {
@@ -94,7 +94,7 @@ func (s *registrySource) candidateRegistryVersions(ctx context.Context, env *Env
 			continue
 		}
 		allCandidates = append(allCandidates, registryCandidate{Version: sv, Meta: v})
-		selfhostCandidates = append(selfhostCandidates, SelfhostRegistryCandidate{
+		golegacyCandidates = append(golegacyCandidates, GolegacyRegistryCandidate{
 			PackageName: s.packageName,
 			Version:     v.Version,
 			Checksum:    v.Checksum,
@@ -102,8 +102,8 @@ func (s *registrySource) candidateRegistryVersions(ctx context.Context, env *Env
 		})
 	}
 	var candidates []registryCandidate
-	if ranked, err := SelfhostRankRegistryCandidates(s.name, s.packageName, s.registryName, s.versionReq, selfhostCandidates); err == nil {
-		candidates = registryCandidatesInSelfhostOrder(allCandidates, ranked)
+	if ranked, err := GolegacyRankRegistryCandidates(s.name, s.packageName, s.registryName, s.versionReq, golegacyCandidates); err == nil {
+		candidates = registryCandidatesInGolegacyOrder(allCandidates, ranked)
 	} else {
 		for _, c := range allCandidates {
 			if !req.Match(c.Version) {
@@ -122,7 +122,7 @@ func (s *registrySource) candidateRegistryVersions(ctx context.Context, env *Env
 	return candidates, nil
 }
 
-func registryCandidatesInSelfhostOrder(candidates []registryCandidate, ranked []SelfhostRegistryCandidate) []registryCandidate {
+func registryCandidatesInGolegacyOrder(candidates []registryCandidate, ranked []GolegacyRegistryCandidate) []registryCandidate {
 	used := make([]bool, len(candidates))
 	out := make([]registryCandidate, 0, len(ranked))
 	for _, r := range ranked {

@@ -225,21 +225,21 @@ The initial helper package for this plan is `internal/backend`.
     in Phase 14; the `control_flow` LLVM smoke fixture now emits real textual
     IR with `alloca`/`load`/`store` and loop labels.
 12. Port the Phase 12-14 lowering core to Osty source. Done as a correction
-    pass after Phase 14: `examples/selfhost-core/llvmgen.osty` now owns the
+    pass after Phase 14: `toolchain/llvmgen.osty` now owns the
     minimal/scalar/control-flow textual IR builder. Go `internal/llvmgen`
     includes generated bridge code from that Osty source and calls it for
     module/function rendering.
 13. Port the Phase 10 skeleton renderer to Osty source. Done after the Phase
-    12-14 correction pass: `examples/selfhost-core/llvmgen.osty` now owns the
+    12-14 correction pass: `toolchain/llvmgen.osty` now owns the
     unsupported/skeleton IR shape as well as the successful smoke IR builders.
 14. Add a drift guard between the Go bootstrap emitter and the Osty-owned
     emitter. Done after the Phase 10 port: `internal/backend` transpiles
-    `examples/selfhost-core/llvmgen.osty` during test and compares
+    `toolchain/llvmgen.osty` during test and compares
     minimal/scalar/control-flow/skeleton output byte-for-byte against the Go
     bootstrap/reference implementation.
 15. Route the production LLVM bridge through generated Osty-owned renderers.
     Done after the drift guard: `internal/llvmgen/osty_generated.go` is
-    generated from `examples/selfhost-core/llvmgen.osty`, and `Generate` plus
+    generated from `toolchain/llvmgen.osty`, and `Generate` plus
     unsupported skeleton fallback call those generated functions.
 16. Add Bool expression and value-position if/else lowering. Done in Phase 15;
     the `booleans` LLVM smoke fixture now emits comparison, logical not/and,
@@ -255,23 +255,23 @@ The initial helper package for this plan is `internal/backend`.
     artifacts/cache entries, and still let `osty cache clean` delete the old
     tree.
 19. Add the LLVM host toolchain driver. Done in Phase 18 with self-hosting
-    ownership preserved: `examples/selfhost-core/llvmgen.osty` owns the
+    ownership preserved: `toolchain/llvmgen.osty` owns the
     object/binary stage decisions, `clang` argv shape, and toolchain diagnostic
     text; the Go bridge only performs file I/O and process execution. Supported
     LLVM lowering can now drive `.ll -> .o` and `.o -> binary`,
     `build --backend=llvm --emit=object|binary` writes the expected artifacts,
     and `run --backend=llvm` executes the produced host binary.
 20. Add the executable parity gate for the LLVM smoke corpus. Done in Phase 19:
-    `examples/selfhost-core/llvmgen.osty` owns the fixture list and expected
+    `toolchain/llvmgen.osty` owns the fixture list and expected
     stdout via `llvmSmokeExecutableCorpus`, while the Go test only acts as the
     host shim that emits binaries and executes them when `clang` is available.
 21. Add self-hosted unsupported/backend-capability diagnostics. Done in Phase
-    20: `examples/selfhost-core/llvmgen.osty` owns go-only diagnostics such as
+    20: `toolchain/llvmgen.osty` owns go-only diagnostics such as
     `use go` under LLVM, generic unsupported fallback text, and the
     not-implemented backend message. The Go bridge detects source features and
     writes skeleton artifacts, but diagnostic wording and policy stay in Osty.
 22. Add the self-hosted unsupported taxonomy. Done in Phase 21:
-    `examples/selfhost-core/llvmgen.osty` owns the unsupported category codes
+    `toolchain/llvmgen.osty` owns the unsupported category codes
     and hints (`source-layout`, `type-system`, `statement`, `expression`,
     `control-flow`, `call`, `name`, and `function-signature`). The Go bridge
     only maps detected AST situations to those categories before writing the
@@ -281,14 +281,14 @@ The initial helper package for this plan is `internal/backend`.
     return, println, arithmetic, comparison, function calls, if branches,
     mutable local slots, loads, stores, and Int range loops. Go still walks the
     bootstrap AST, but the LLVM instruction strings and temp/label naming live
-    in `examples/selfhost-core/llvmgen.osty`.
+    in `toolchain/llvmgen.osty`.
 24. Add the first String LLVM vertical path through the self-hosted core. Done
     in Phase 23: `println("plain ascii")` emits an Osty-owned module string
     constant and print call, and the executable smoke corpus now includes
     `string_print.osty`. The Go bridge only filters literals to the current
     conservative subset before calling generated Osty helpers.
 25. Add escaped ASCII String constants through the self-hosted core. Done in
-    Phase 24: `examples/selfhost-core/llvmgen.osty` owns newline, tab,
+    Phase 24: `toolchain/llvmgen.osty` owns newline, tab,
     carriage-return, quote, and backslash encoding for LLVM C strings, and the
     smoke corpus now includes `string_escape_print.osty`.
 26. Add the first local String value path. Done in Phase 25: String literals
@@ -348,7 +348,7 @@ The initial helper package for this plan is `internal/backend`.
 46. Add Float literal/printing smoke. Done in Phase 46: `Float` is treated as
    `double` in this subset.
 47. Add Float arithmetic smoke. Done in Phase 47: `+`, `-`, `*`, `/` on `Float`
-   values are emitted through selfhosted LLVM builders.
+   values are emitted through toolchain-authored LLVM builders.
 48. Add Float return-boundary smoke. Done in Phase 48: return and call paths for
    `Float` values.
 49. Add Float parameter-boundary smoke. Done in Phase 49: `Float` value

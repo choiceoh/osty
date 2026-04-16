@@ -1,6 +1,6 @@
-// support_snapshot.go absorbs the former generated LLVM helper surface into
-// the native backend package so the bridge file can stay deleted while the
-// self-hosted source remains the long-term owner.
+// support_snapshot.go snapshots the Osty-authored LLVM helper surface into
+// the native backend package so the bridge file can stay deleted while
+// toolchain sources remain the long-term owner.
 
 package llvmgen
 

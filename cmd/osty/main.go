@@ -936,7 +936,7 @@ func runLintEngine(file *ast.File, res *resolve.Result, chk *check.Result) *lint
 // cost paid once per process.
 func checkOpts() check.Opts {
 	reg := stdlib.LoadCached()
-	return check.Opts{UseSelfhost: true, Stdlib: reg, Primitives: reg.Primitives, ResultMethods: reg.ResultMethods}
+	return check.Opts{UseGolegacy: true, Stdlib: reg, Primitives: reg.Primitives, ResultMethods: reg.ResultMethods}
 }
 
 func checkOptsForSource(src []byte) check.Opts {

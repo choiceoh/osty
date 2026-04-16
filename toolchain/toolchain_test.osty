@@ -1,8 +1,6 @@
 use std.testing
 
-use runtime.strings as strings {
-    fn Contains(s: String, substr: String) -> Bool
-}
+use std.strings as strings
 
 fn testSemverRequirementMatching() {
     let req = caretReq(stableVersion(1, 2, 3))
@@ -82,7 +80,7 @@ fn testManifestFeatureValidation() {
     testing.assertEq(bad.selfReferences, 1)
 }
 
-fn parsedSelfhostVersion(text: String) -> SemVersion {
+fn parsedToolchainVersion(text: String) -> SemVersion {
     let mut out = stableVersion(0, 0, 0)
     match parseSemVersionText(text) {
         Ok(version) -> {
@@ -93,21 +91,21 @@ fn parsedSelfhostVersion(text: String) -> SemVersion {
     out
 }
 
-fn testSelfhostExampleDependencyResolutionScenario() {
+fn testToolchainExampleDependencyResolutionScenario() {
     let versions = [
-        registryVersion(parsedSelfhostVersion("1.4.0"), false),
-        registryVersion(parsedSelfhostVersion("1.4.1"), false),
-        registryVersion(parsedSelfhostVersion("1.5.0"), true),
-        registryVersion(parsedSelfhostVersion("1.5.1-alpha"), false),
-        registryVersion(parsedSelfhostVersion("2.0.0"), false),
+        registryVersion(parsedToolchainVersion("1.4.0"), false),
+        registryVersion(parsedToolchainVersion("1.4.1"), false),
+        registryVersion(parsedToolchainVersion("1.5.0"), true),
+        registryVersion(parsedToolchainVersion("1.5.1-alpha"), false),
+        registryVersion(parsedToolchainVersion("2.0.0"), false),
     ]
-    let best = bestRegistryVersion(caretReq(parsedSelfhostVersion("1.4.0")), versions)
+    let best = bestRegistryVersion(caretReq(parsedToolchainVersion("1.4.0")), versions)
 
     testing.assert(best.found)
-    testing.assertEq(compareSemVersion(best.version, parsedSelfhostVersion("1.4.1")), 0)
+    testing.assertEq(compareSemVersion(best.version, parsedToolchainVersion("1.4.1")), 0)
 }
 
-fn testSelfhostExamplePackageArchiveScenario() {
+fn testToolchainExamplePackageArchiveScenario() {
     let paths = [
         "osty.toml",
         "osty.lock",
@@ -136,7 +134,7 @@ fn testSelfhostExamplePackageArchiveScenario() {
     testing.assertEq(ignored, 2)
 }
 
-fn testSelfhostExampleFrontEndPipelineScenario() {
+fn testToolchainExampleFrontEndPipelineScenario() {
     let source = r"""
         /// Adds two integers.
         pub fn add(a: Int, b: Int) -> Int {
@@ -156,7 +154,7 @@ fn testSelfhostExampleFrontEndPipelineScenario() {
     testing.assert(frontParseTreeNodeNameCount(tree, "return") >= 1)
 }
 
-fn testSelfhostExamplePipelineWiresIrWithAnalyzerCores() {
+fn testToolchainExamplePipelineWiresIrWithAnalyzerCores() {
     let source = r"""
         pub struct User { pub name: String }
         enum Color { Red, Green }
@@ -166,7 +164,7 @@ fn testSelfhostExamplePipelineWiresIrWithAnalyzerCores() {
             total
         }
         """
-    let report = selfhostPipelineSource("main", source)
+    let report = toolchainPipelineSource("main", source)
 
     testing.assert(report.tokens > 0)
     testing.assert(report.parseNodes > 0)
@@ -183,41 +181,41 @@ fn testSelfhostExamplePipelineWiresIrWithAnalyzerCores() {
     testing.assert(report.resolveSymbols >= 5)
     testing.assert(report.checkedExpressions >= 1)
     testing.assertEq(report.lintDiagnostics, 0)
-    testing.assertEq(selfhostPipelineBlockingErrorCount(report), 0)
+    testing.assertEq(toolchainPipelineBlockingErrorCount(report), 0)
 }
 
-fn testSelfhostExamplePipelineCarriesRecoveryIntoIr() {
-    let report = selfhostPipelineSource("main", r"fn broken( {")
+fn testToolchainExamplePipelineCarriesRecoveryIntoIr() {
+    let report = toolchainPipelineSource("main", r"fn broken( {")
 
     testing.assert(report.parseDiagnostics > 0)
     testing.assert(report.irDiagnostics > 0)
     testing.assert(report.lintParseErrors > 0)
 }
 
-fn testSelfhostExamplePipelineRendersAnalyzerDiagnostics() {
+fn testToolchainExamplePipelineRendersAnalyzerDiagnostics() {
     let source = "fn main() \{\n    let unusedValue = 1\n    missing()\n\}\n"
-    let report = selfhostPipelineSource("main", source)
+    let report = toolchainPipelineSource("main", source)
 
     testing.assert(report.resolveDiagnostics > 0)
     testing.assert(report.lintDiagnostics > 0)
     testing.assert(report.diagnostics != "")
-    testing.assert(selfhostPipelineBlockingErrorCount(report) >= report.resolveDiagnostics)
-    testing.assert(strings.Contains(report.diagnostics, "error[E0500]"))
-    testing.assert(strings.Contains(report.diagnostics, "resolution"))
-    testing.assert(strings.Contains(report.diagnostics, "undefined name `missing`"))
-    testing.assert(strings.Contains(report.diagnostics, "lint[L0001]"))
+    testing.assert(toolchainPipelineBlockingErrorCount(report) >= report.resolveDiagnostics)
+    testing.assert(strings.contains(report.diagnostics, "error[E0500]"))
+    testing.assert(strings.contains(report.diagnostics, "resolution"))
+    testing.assert(strings.contains(report.diagnostics, "undefined name `missing`"))
+    testing.assert(strings.contains(report.diagnostics, "lint[L0001]"))
 }
 
-fn testSelfhostExamplePipelinePreparesLintFixes() {
+fn testToolchainExamplePipelinePreparesLintFixes() {
     let source = "fn main(unused: Bool) -> Int \{\n    let unusedValue = 1\n    let mut neverChanged = 2\n    println(neverChanged)\n    return neverChanged\n\}\n"
-    let report = selfhostPipelineSourceWithFixes("main", source, true)
+    let report = toolchainPipelineSourceWithFixes("main", source, true)
 
     testing.assert(report.lintDiagnostics >= 4)
     testing.assert(report.lintFixes >= 4)
     testing.assertEq(report.lintFixSkipped, 0)
     testing.assert(report.lintFixApplied >= 4)
-    testing.assert(strings.Contains(report.fixedSource, "_unused"))
-    testing.assert(strings.Contains(report.fixedSource, "_unusedValue"))
-    testing.assert(strings.Contains(report.fixedSource, "let neverChanged = 2"))
-    testing.assert(!(strings.Contains(report.fixedSource, "return neverChanged")))
+    testing.assert(strings.contains(report.fixedSource, "_unused"))
+    testing.assert(strings.contains(report.fixedSource, "_unusedValue"))
+    testing.assert(strings.contains(report.fixedSource, "let neverChanged = 2"))
+    testing.assert(!(strings.contains(report.fixedSource, "return neverChanged")))
 }

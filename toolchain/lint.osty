@@ -1,10 +1,4 @@
-use runtime.strings as strings {
-    fn Contains(s: String, substr: String) -> Bool
-    fn HasPrefix(s: String, prefix: String) -> Bool
-    fn Join(elems: List<String>, sep: String) -> String
-    fn Split(s: String, sep: String) -> List<String>
-    fn TrimPrefix(s: String, prefix: String) -> String
-}
+use std.strings as strings
 
 /// Self-hosted lint rules currently cover unused bindings/imports/mutability,
 /// shadowing, reachability, naming, simple boolean simplifications, and a small
@@ -225,7 +219,7 @@ pub fn selfLintMachineFixCount(report: SelfLintReport) -> Int {
 
 pub fn selfLintApplyFixes(source: String, report: SelfLintReport) -> SelfLintApplyResult {
     let stream = frontendLexStream(source)
-    let units = strings.Split(source, "")
+    let units = strings.split(source, "")
     let unitCount = stringUnitCount(source)
     let mut edits: List<SelfLintEdit> = []
     let mut skipped = 0
@@ -296,11 +290,11 @@ fn selfLintApplyEdits(
 }
 
 fn selfLintApplyOneEdit(source: String, edit: SelfLintEdit) -> String {
-    let units = strings.Split(source, "")
+    let units = strings.split(source, "")
     let unitCount = stringUnitCount(source)
     let prefix = frontLexemeFromUnits(units, 0, edit.start)
     let suffix = frontLexemeFromUnits(units, edit.end, unitCount - edit.end)
-    strings.Join([prefix, edit.replacement, suffix], "")
+    strings.join([prefix, edit.replacement, suffix], "")
 }
 
 fn selfLintApplyFixTemplate(template: String, copied: String) -> String {
@@ -544,7 +538,7 @@ fn selfLintAstUseAlias(file: AstFile, node: AstNode) -> String {
 
 fn selfLintLastPathSegment(path: String) -> String {
     let mut last = ""
-    for part in strings.Split(path, ".") {
+    for part in strings.split(path, ".") {
         if part != "" {
             last = part
         }
@@ -1658,7 +1652,7 @@ fn selfLintAstPatternNames(
     }
     if selfLintAstPatternIsIdent(node) {
         out.push(selfLintNameAtNode(selfLintAstPatternName(node.text, "ident:"), node.start, node.end, idx))
-    } else if node.extra == selfLintAstPatternBindingKind() || strings.HasPrefix(node.text, "binding:") {
+    } else if node.extra == selfLintAstPatternBindingKind() || strings.hasPrefix(node.text, "binding:") {
         out.push(selfLintNameAtNode(selfLintAstPatternName(node.text, "binding:"), node.start, node.start + 1, idx))
         out = selfLintAstPatternNames(file, node.left, out)
     } else if node.extra == selfLintAstPatternFieldKind() || (node.extra == 0 && node.text != "" && node.left >= 0) {
@@ -1678,7 +1672,7 @@ fn selfLintAstPatternNames(
 }
 
 fn selfLintAstPatternIsIdent(node: AstNode) -> Bool {
-    node.extra == selfLintAstPatternIdentKind() || strings.HasPrefix(node.text, "ident:")
+    node.extra == selfLintAstPatternIdentKind() || strings.hasPrefix(node.text, "ident:")
 }
 
 fn selfLintAstPatternIdentKind() -> Int { 3 }
@@ -1688,8 +1682,8 @@ fn selfLintAstPatternBindingKind() -> Int { 9 }
 fn selfLintAstPatternFieldKind() -> Int { 10 }
 
 fn selfLintAstPatternName(text: String, prefix: String) -> String {
-    if strings.HasPrefix(text, prefix) {
-        return strings.TrimPrefix(text, prefix)
+    if strings.hasPrefix(text, prefix) {
+        return strings.trimPrefix(text, prefix)
     }
     text
 }
@@ -2110,11 +2104,11 @@ fn selfLintStringListContains(items: List<String>, target: String) -> Bool {
 }
 
 fn selfLintIsIntentionalDiscard(name: String) -> Bool {
-    name == "_" || strings.HasPrefix(name, "_")
+    name == "_" || strings.hasPrefix(name, "_")
 }
 
 fn selfLintIsUpperCamel(name: String) -> Bool {
-    if selfLintIsIntentionalDiscard(name) || strings.Contains(name, "_") {
+    if selfLintIsIntentionalDiscard(name) || strings.contains(name, "_") {
         return false
     }
     let first = selfLintFirstUnit(name)
@@ -2125,7 +2119,7 @@ fn selfLintIsLowerCamel(name: String) -> Bool {
     if selfLintIsIntentionalDiscard(name) {
         return true
     }
-    if strings.Contains(name, "_") {
+    if strings.contains(name, "_") {
         return false
     }
     let first = selfLintFirstUnit(name)
@@ -2133,5 +2127,5 @@ fn selfLintIsLowerCamel(name: String) -> Bool {
 }
 
 fn selfLintFirstUnit(name: String) -> String {
-    frontUnitAt(strings.Split(name, ""), 0)
+    frontUnitAt(strings.split(name, ""), 0)
 }

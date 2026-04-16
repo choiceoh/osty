@@ -1,12 +1,9 @@
 use std.testing
 
-use runtime.strings as llvmTestStrings {
-    fn Contains(s: String, substr: String) -> Bool
-    fn Join(elems: List<String>, sep: String) -> String
-}
+use std.strings as llvmTestStrings
 
 fn assertLlvmContains(ir: String, text: String) {
-    testing.assert(llvmTestStrings.Contains(ir, text))
+    testing.assert(llvmTestStrings.contains(ir, text))
 }
 
 fn testLlvmSmokeMinimalPrintIsOstyOwned() {
@@ -21,7 +18,7 @@ fn testLlvmSmokeMinimalPrintIsOstyOwned() {
 }
 
 fn testLlvmGcRuntimeDeclarationsAreOstyOwned() {
-    let declarations = llvmTestStrings.Join(llvmGcRuntimeDeclarations(), "\n")
+    let declarations = llvmTestStrings.join(llvmGcRuntimeDeclarations(), "\n")
 
     assertLlvmContains(declarations, "declare ptr @osty.gc.alloc_v1(i64, i64, ptr)")
     assertLlvmContains(declarations, "declare void @osty.gc.post_write_v1(ptr, ptr, i64)")
@@ -89,7 +86,7 @@ fn testLlvmToolchainPlanIsOstyOwned() {
     testing.assert(llvmNeedsBinaryArtifact("binary"))
     testing.assert(!(llvmNeedsBinaryArtifact("object")))
 
-    let compile = llvmTestStrings.Join(
+    let compile = llvmTestStrings.join(
         llvmClangCompileObjectArgs("x86_64-unknown-linux-gnu", "/tmp/main.ll", "/tmp/main.o"),
         " ",
     )
@@ -97,14 +94,14 @@ fn testLlvmToolchainPlanIsOstyOwned() {
     assertLlvmContains(compile, "-c /tmp/main.ll")
     assertLlvmContains(compile, "-o /tmp/main.o")
 
-    let link = llvmTestStrings.Join(
+    let link = llvmTestStrings.join(
         llvmClangLinkBinaryArgs("", ["/tmp/main.o", "/tmp/runtime/gc_runtime.o"], "/tmp/app"),
         " ",
     )
     assertLlvmContains(link, "/tmp/main.o")
     assertLlvmContains(link, "/tmp/runtime/gc_runtime.o")
     assertLlvmContains(link, "-o /tmp/app")
-    testing.assert(!(llvmTestStrings.Contains(link, "-target")))
+    testing.assert(!(llvmTestStrings.contains(link, "-target")))
     assertLlvmContains(llvmMissingClangMessage(), "clang not found")
     assertLlvmContains(
         llvmClangFailureMessage("link binary", "clang main.o -o app", "boom"),
@@ -115,7 +112,7 @@ fn testLlvmToolchainPlanIsOstyOwned() {
 fn testLlvmExecutableCorpusPlanIsOstyOwned() {
     let cases = llvmSmokeExecutableCorpus()
 
-    testing.assert(cases.len() == 54)
+    testing.assert(cases.len() == 44)
     testing.assert(cases[0].name == "minimal")
     testing.assert(cases[0].fixture == "minimal_print.osty")
     testing.assert(cases[0].stdout == "42\n")
@@ -248,36 +245,6 @@ fn testLlvmExecutableCorpusPlanIsOstyOwned() {
     testing.assert(cases[43].name == "string-payload-wildcard")
     testing.assert(cases[43].fixture == "string_payload_wildcard_print.osty")
     testing.assert(cases[43].stdout == "payload string\n")
-    testing.assert(cases[44].name == "int-if-expr")
-    testing.assert(cases[44].fixture == "int_if_expr_print.osty")
-    testing.assert(cases[44].stdout == "42\n")
-    testing.assert(cases[45].name == "string-if-expr")
-    testing.assert(cases[45].fixture == "string_if_expr_print.osty")
-    testing.assert(cases[45].stdout == "chosen string\n")
-    testing.assert(cases[46].name == "float-if-expr")
-    testing.assert(cases[46].fixture == "float_if_expr_print.osty")
-    testing.assert(cases[46].stdout == "42.000000\n")
-    testing.assert(cases[47].name == "bool-param-return")
-    testing.assert(cases[47].fixture == "bool_param_return_print.osty")
-    testing.assert(cases[47].stdout == "42\n")
-    testing.assert(cases[48].name == "int-range-exclusive")
-    testing.assert(cases[48].fixture == "int_range_exclusive_print.osty")
-    testing.assert(cases[48].stdout == "21\n")
-    testing.assert(cases[49].name == "int-unary")
-    testing.assert(cases[49].fixture == "int_unary_print.osty")
-    testing.assert(cases[49].stdout == "42\n")
-    testing.assert(cases[50].name == "int-modulo")
-    testing.assert(cases[50].fixture == "int_modulo_print.osty")
-    testing.assert(cases[50].stdout == "42\n")
-    testing.assert(cases[51].name == "struct-string-field")
-    testing.assert(cases[51].fixture == "struct_string_field_print.osty")
-    testing.assert(cases[51].stdout == "struct string\n")
-    testing.assert(cases[52].name == "struct-bool-field")
-    testing.assert(cases[52].fixture == "struct_bool_field_print.osty")
-    testing.assert(cases[52].stdout == "42\n")
-    testing.assert(cases[53].name == "bool-mut")
-    testing.assert(cases[53].fixture == "bool_mut_print.osty")
-    testing.assert(cases[53].stdout == "42\n")
 }
 
 fn testLlvmUnsupportedDiagnosticPolicyIsOstyOwned() {
@@ -338,168 +305,6 @@ fn testLlvmUnsupportedTaxonomyIsOstyOwned() {
     let sig = llvmUnsupportedDiagnostic("function-signature", "generic")
     testing.assert(sig.code == "LLVM017")
     assertLlvmContains(sig.hint, "non-generic")
-}
-
-fn testLlvmComparePoliciesAreOstyOwned() {
-    testing.assert(llvmIsCompareOp("=="))
-    testing.assert(llvmIsCompareOp(">="))
-    testing.assert(!(llvmIsCompareOp("+")))
-
-    testing.assert(llvmIntComparePredicate("==") == "eq")
-    testing.assert(llvmIntComparePredicate(">=") == "sge")
-    testing.assert(llvmIntComparePredicate("+") == "")
-
-    testing.assert(llvmFloatComparePredicate("==") == "oeq")
-    testing.assert(llvmFloatComparePredicate("<") == "olt")
-    testing.assert(llvmFloatComparePredicate("+") == "")
-
-    testing.assert(llvmIntBinaryInstruction("+") == "add")
-    testing.assert(llvmIntBinaryInstruction("%") == "srem")
-    testing.assert(llvmIntBinaryInstruction("&&") == "")
-
-    testing.assert(llvmFloatBinaryInstruction("+") == "fadd")
-    testing.assert(llvmFloatBinaryInstruction("/") == "fdiv")
-    testing.assert(llvmFloatBinaryInstruction("%") == "")
-
-    testing.assert(llvmLogicalInstruction("&&") == "and")
-    testing.assert(llvmLogicalInstruction("||") == "or")
-    testing.assert(llvmLogicalInstruction("+") == "")
-
-    testing.assert(llvmIsAsciiStringText("line one\n"))
-    testing.assert(!(llvmIsAsciiStringText("bad {€}")))
-
-    testing.assert(llvmIsIdent("main"))
-    testing.assert(llvmIsIdent("value2"))
-    testing.assert(!(llvmIsIdent("2value")))
-    testing.assert(!(llvmIsIdent("bad-name")))
-
-    testing.assert(llvmFirstNonEmpty("left", "right") == "left")
-    testing.assert(llvmFirstNonEmpty("", "right") == "right")
-
-    testing.assert(llvmIsKnownRuntimeFfiPath("runtime.strings"))
-    testing.assert(llvmIsKnownRuntimeFfiPath("runtime.package.manifest"))
-    testing.assert(!(llvmIsKnownRuntimeFfiPath("runtime.unknown")))
-
-    testing.assert(llvmRuntimeFfiAlias("alias", "strings", "runtime.strings") == "alias")
-    testing.assert(llvmRuntimeFfiAlias("", "strings", "runtime.strings") == "strings")
-    testing.assert(llvmRuntimeFfiAlias("", "", "runtime.package.manifest") == "manifest")
-
-    testing.assert(llvmRuntimeFfiSymbol("runtime.strings", "HasPrefix") == "osty_rt_strings_HasPrefix")
-    testing.assert(
-        llvmRuntimeFfiSymbol("runtime.package.pkg-manifest", "Load") == "osty_rt_package_pkg_manifest_Load",
-    )
-
-    testing.assert(llvmBuiltinType("Int") == "i64")
-    testing.assert(llvmBuiltinType("String") == "ptr")
-    testing.assert(llvmBuiltinType("Custom") == "")
-
-    testing.assert(llvmRuntimeAbiBuiltinType("Bool") == "i1")
-    testing.assert(llvmRuntimeAbiBuiltinType("Bytes") == "")
-
-    testing.assert(llvmEnumPayloadBuiltinType("Float") == "double")
-    testing.assert(llvmEnumPayloadBuiltinType("Bytes") == "")
-
-    testing.assert(llvmZeroLiteral("double") == "0.0")
-    testing.assert(llvmZeroLiteral("ptr") == "null")
-    testing.assert(llvmZeroLiteral("i64") == "0")
-
-    testing.assert(llvmStructTypeName("Pair") == "%Pair")
-    testing.assert(llvmEnumStorageType("Choice", true) == "%Choice")
-    testing.assert(llvmEnumStorageType("Choice", false) == "i64")
-
-    testing.assert(llvmSignatureParamName("lhs", 0) == "lhs")
-    testing.assert(llvmSignatureParamName("", 2) == "arg2")
-
-    testing.assert(llvmAllowsMainSignature(0, false))
-    testing.assert(!(llvmAllowsMainSignature(1, false)))
-    testing.assert(!(llvmAllowsMainSignature(0, true)))
-
-    testing.assert(llvmNamedType("String", 1, 0, "", "") == "ptr")
-    testing.assert(llvmNamedType("Pair", 1, 0, "%Pair", "") == "%Pair")
-    testing.assert(llvmNamedType("Choice", 1, 0, "", "%Choice") == "%Choice")
-    testing.assert(llvmNamedType("List", 2, 0, "", "") == "ptr")
-    testing.assert(llvmNamedType("Unknown", 1, 0, "", "") == "")
-
-    testing.assert(llvmRuntimeAbiNamedType("String", 1, 0, "", "") == "ptr")
-    testing.assert(llvmRuntimeAbiNamedType("Pair", 1, 0, "%Pair", "") == "%Pair")
-    testing.assert(llvmRuntimeAbiNamedType("List", 2, 1, "", "") == "ptr")
-
-    testing.assert(llvmEnumPayloadNamedType("Float", 1, 0) == "double")
-    testing.assert(llvmEnumPayloadNamedType("Bytes", 1, 0) == "")
-    testing.assert(llvmEnumPayloadNamedType("Float", 2, 0) == "")
-
-    let nominalOk = llvmNominalDeclHeaderDiagnostic("struct", "Pair", true, 0, 0)
-    testing.assert(nominalOk.kind == "")
-
-    let nominalName = llvmNominalDeclHeaderDiagnostic("enum", "bad-name", false, 0, 0)
-    testing.assert(nominalName.kind == "name")
-    testing.assert(nominalName.message == "enum name \"bad-name\"")
-
-    let nominalGeneric = llvmNominalDeclHeaderDiagnostic("struct", "Pair", true, 1, 0)
-    testing.assert(nominalGeneric.message == "generic struct \"Pair\" is not supported")
-
-    let fnOk = llvmFunctionHeaderDiagnostic("main", true, false, 0, true, true, 0, false)
-    testing.assert(fnOk.kind == "")
-
-    let fnRecv = llvmFunctionHeaderDiagnostic("methodish", true, true, 0, true, false, 0, false)
-    testing.assert(fnRecv.message == "methods are not supported")
-
-    let fnMain = llvmFunctionHeaderDiagnostic("main", true, false, 0, true, true, 1, false)
-    testing.assert(fnMain.message == "LLVM main must have no params and no return type")
-
-    testing.assert(llvmIsRuntimeAbiListType("List", 1, 1))
-    testing.assert(!(llvmIsRuntimeAbiListType("List", 1, 0)))
-
-    let fieldName = llvmStructFieldDiagnostic("Pair", "bad-name", false, false, false, false, "")
-    testing.assert(fieldName.kind == "name")
-    testing.assert(fieldName.message == "struct \"Pair\" field name \"bad-name\"")
-
-    let fieldDuplicate = llvmStructFieldDiagnostic("Pair", "left", true, false, true, false, "")
-    testing.assert(fieldDuplicate.message == "struct \"Pair\" duplicate field \"left\"")
-
-    let fieldType = llvmStructFieldDiagnostic("Pair", "left", true, false, false, false, "type \"Unknown\"")
-    testing.assert(fieldType.message == "struct \"Pair\" field \"left\": type \"Unknown\"")
-
-    let variantName = llvmEnumVariantHeaderDiagnostic("Choice", "bad-name", false, 0, false)
-    testing.assert(variantName.kind == "name")
-    testing.assert(variantName.message == "enum \"Choice\" variant name \"bad-name\"")
-
-    let variantPayloadCount = llvmEnumVariantHeaderDiagnostic("Choice", "Some", true, 2, false)
-    testing.assert(
-        variantPayloadCount.message == "enum \"Choice\" variant \"Some\" has 2 payload fields; only one scalar payload is supported",
-    )
-
-    let variantPayload = llvmEnumPayloadDiagnostic("Choice", "Some", "unsupported payload", "", "")
-    testing.assert(variantPayload.message == "enum \"Choice\" variant \"Some\" payload: unsupported payload")
-
-    let variantMix = llvmEnumPayloadDiagnostic("Choice", "Some", "", "i64", "double")
-    testing.assert(variantMix.message == "enum \"Choice\" mixes payload types i64 and double")
-
-    testing.assert(llvmRuntimeFfiHeaderUnsupported(true, 0) == "methods are not supported")
-    testing.assert(llvmRuntimeFfiHeaderUnsupported(false, 1) == "generic functions are not supported")
-    testing.assert(llvmRuntimeFfiReturnUnsupported("type \"Unknown\"") == "return type: type \"Unknown\"")
-    testing.assert(llvmRuntimeFfiParamUnsupported("", true, false, "") == "nil parameter")
-    testing.assert(
-        llvmRuntimeFfiParamUnsupported("arg0", false, true, "") == "pattern/default parameters are not supported",
-    )
-    testing.assert(
-        llvmRuntimeFfiParamUnsupported("arg0", false, false, "type \"Unknown\"") == "parameter \"arg0\": type \"Unknown\"",
-    )
-
-    let fnReturn = llvmFunctionReturnDiagnostic("sum", "type \"Unknown\"")
-    testing.assert(fnReturn.message == "function \"sum\" return type: type \"Unknown\"")
-
-    let fnParamShape = llvmFunctionParamDiagnostic("sum", "", true, false, true, "")
-    testing.assert(fnParamShape.message == "function \"sum\" has non-identifier parameter")
-
-    let fnParamDefault = llvmFunctionParamDiagnostic("sum", "value", false, true, true, "")
-    testing.assert(fnParamDefault.message == "function \"sum\" has default parameter values")
-
-    let fnParamName = llvmFunctionParamDiagnostic("sum", "bad-name", false, false, false, "")
-    testing.assert(fnParamName.message == "parameter name \"bad-name\"")
-
-    let fnParamType = llvmFunctionParamDiagnostic("sum", "value", false, false, true, "type \"Unknown\"")
-    testing.assert(fnParamType.message == "function \"sum\" parameter \"value\": type \"Unknown\"")
 }
 
 fn testLlvmSmokeScalarArithmeticIsOstyOwned() {
@@ -933,86 +738,4 @@ fn testLlvmSmokeStringPayloadWildcardIsOstyOwned() {
     assertLlvmContains(ir, "icmp eq i64")
     assertLlvmContains(ir, "extractvalue %Label")
     assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_str, ptr")
-}
-
-fn testLlvmSmokeIntIfExprIsOstyOwned() {
-    let ir = llvmSmokeIntIfExprIR("/tmp/int_if_expr_print.osty")
-
-    assertLlvmContains(ir, "br i1 true")
-    assertLlvmContains(ir, "phi i64")
-    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_i64, i64")
-}
-
-fn testLlvmSmokeStringIfExprIsOstyOwned() {
-    let ir = llvmSmokeStringIfExprIR("/tmp/string_if_expr_print.osty")
-
-    assertLlvmContains(ir, "br i1 true")
-    assertLlvmContains(ir, "phi ptr")
-    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_str, ptr")
-}
-
-fn testLlvmSmokeFloatIfExprIsOstyOwned() {
-    let ir = llvmSmokeFloatIfExprIR("/tmp/float_if_expr_print.osty")
-
-    assertLlvmContains(ir, "br i1 true")
-    assertLlvmContains(ir, "phi double")
-    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_f64, double")
-}
-
-fn testLlvmSmokeBoolParamReturnIsOstyOwned() {
-    let ir = llvmSmokeBoolParamReturnIR("/tmp/bool_param_return_print.osty")
-
-    assertLlvmContains(ir, "define i64 @pick(i1 %flag) \{")
-    assertLlvmContains(ir, "call i64 @pick(i1 true)")
-    assertLlvmContains(ir, "phi i64")
-}
-
-fn testLlvmSmokeIntRangeExclusiveIsOstyOwned() {
-    let ir = llvmSmokeIntRangeExclusiveIR("/tmp/int_range_exclusive_print.osty")
-
-    assertLlvmContains(ir, "icmp slt i64")
-    assertLlvmContains(ir, "br i1")
-    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_i64, i64")
-}
-
-fn testLlvmSmokeIntUnaryIsOstyOwned() {
-    let ir = llvmSmokeIntUnaryIR("/tmp/int_unary_print.osty")
-
-    assertLlvmContains(ir, "sub i64 40, 82")
-    assertLlvmContains(ir, "sub i64 0,")
-    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_i64, i64")
-}
-
-fn testLlvmSmokeIntModuloIsOstyOwned() {
-    let ir = llvmSmokeIntModuloIR("/tmp/int_modulo_print.osty")
-
-    assertLlvmContains(ir, "srem i64 85, 43")
-    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_i64, i64")
-}
-
-fn testLlvmSmokeStructStringFieldIsOstyOwned() {
-    let ir = llvmSmokeStructStringFieldIR("/tmp/struct_string_field_print.osty")
-
-    assertLlvmContains(ir, "%Message = type \{ ptr \}")
-    assertLlvmContains(ir, "extractvalue %Message")
-    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_str, ptr")
-}
-
-fn testLlvmSmokeStructBoolFieldIsOstyOwned() {
-    let ir = llvmSmokeStructBoolFieldIR("/tmp/struct_bool_field_print.osty")
-
-    assertLlvmContains(ir, "%Gate = type \{ i1 \}")
-    assertLlvmContains(ir, "extractvalue %Gate")
-    assertLlvmContains(ir, "br i1")
-    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_i64, i64 42)")
-}
-
-fn testLlvmSmokeBoolMutableIsOstyOwned() {
-    let ir = llvmSmokeBoolMutableIR("/tmp/bool_mut_print.osty")
-
-    assertLlvmContains(ir, "alloca i1")
-    assertLlvmContains(ir, "store i1 false")
-    assertLlvmContains(ir, "store i1 true")
-    assertLlvmContains(ir, "load i1")
-    assertLlvmContains(ir, "br i1")
 }

@@ -2,7 +2,7 @@ package ci
 
 import "testing"
 
-func TestSelfhostCoreDefaultOptions(t *testing.T) {
+func TestToolchainCoreDefaultOptions(t *testing.T) {
 	opts := DefaultOptions()
 	if !opts.Format || !opts.Lint || !opts.Policy || !opts.Lockfile {
 		t.Fatalf("default quick bundle disabled: %+v", opts)
@@ -16,7 +16,7 @@ func TestSelfhostCoreDefaultOptions(t *testing.T) {
 	}
 }
 
-func TestSelfhostCorePolicyManifestFields(t *testing.T) {
+func TestToolchainCorePolicyManifestFields(t *testing.T) {
 	ds := ciPolicyManifestFieldsCore(&CiManifestCore{
 		hasPackage: true,
 		name:       "Osty",
@@ -33,7 +33,7 @@ func TestSelfhostCorePolicyManifestFields(t *testing.T) {
 	}
 }
 
-func TestSelfhostCoreReleaseAndSemver(t *testing.T) {
+func TestToolchainCoreReleaseAndSemver(t *testing.T) {
 	ds := ciReleaseManifestCore(&CiReleaseCore{
 		hasManifest: true,
 		hasPackage:  true,

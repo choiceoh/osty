@@ -1,8 +1,4 @@
-use runtime.strings as strings {
-    fn HasPrefix(s: String, prefix: String) -> Bool
-    fn Split(s: String, sep: String) -> List<String>
-    fn TrimPrefix(s: String, prefix: String) -> String
-}
+use std.strings as strings
 
 /// SelfSymbol is the self-hosting resolver's compact symbol record.
 pub struct SelfSymbol {
@@ -1281,9 +1277,9 @@ fn srAstPatternNames(
     if node.kind != AstNPattern {
         return out
     }
-    if node.extra == srPatternIdentKind() || strings.HasPrefix(node.text, "ident:") {
+    if node.extra == srPatternIdentKind() || strings.hasPrefix(node.text, "ident:") {
         out.push(selfResolveName(srPatternName(node.text, "ident:"), node.start, node.end, idx))
-    } else if node.extra == srPatternBindingKind() || strings.HasPrefix(node.text, "binding:") {
+    } else if node.extra == srPatternBindingKind() || strings.hasPrefix(node.text, "binding:") {
         out.push(selfResolveName(srPatternName(node.text, "binding:"), node.start, node.start + 1, idx))
         out = srAstPatternNames(file, node.left, out)
     } else if node.extra == srPatternFieldKind() || (node.extra == 0 && node.text != "" && node.left >= 0) {
@@ -1309,8 +1305,8 @@ fn srPatternBindingKind() -> Int { 9 }
 fn srPatternFieldKind() -> Int { 10 }
 
 fn srPatternName(text: String, prefix: String) -> String {
-    if strings.HasPrefix(text, prefix) {
-        return strings.TrimPrefix(text, prefix)
+    if strings.hasPrefix(text, prefix) {
+        return strings.trimPrefix(text, prefix)
     }
     text
 }
@@ -1342,7 +1338,7 @@ fn srAstUseAlias(file: AstFile, node: AstNode) -> String {
 }
 
 fn srPathLastSegment(path: String) -> String {
-    let parts = strings.Split(path, ".")
+    let parts = strings.split(path, ".")
     let mut last = ""
     for part in parts {
         if part != "" {
@@ -1353,7 +1349,7 @@ fn srPathLastSegment(path: String) -> String {
 }
 
 fn srPathHead(path: String) -> String {
-    let parts = strings.Split(path, ".")
+    let parts = strings.split(path, ".")
     for part in parts {
         if part != "" {
             return part
@@ -1494,5 +1490,5 @@ fn srIsUpperName(name: String) -> Bool {
 }
 
 fn srIsDiscardName(name: String) -> Bool {
-    name == "_" || strings.HasPrefix(name, "_")
+    name == "_" || strings.hasPrefix(name, "_")
 }

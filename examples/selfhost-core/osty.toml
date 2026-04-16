@@ -1,9 +1,0 @@
-[package]
-name = "selfhost-core"
-version = "0.1.0"
-edition = "0.3"
-description = "Self-hosting core algorithms ported to Osty."
-license = "MIT"
-keywords = ["selfhost", "semver", "registry", "manifest", "diagnostics", "ir", "lint", "resolve", "check", "docgen", "llvm", "lsp"]
-
-[dependencies]
