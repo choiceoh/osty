@@ -81,7 +81,7 @@ fn testLlvmToolchainPlanIsOstyOwned() {
 fn testLlvmExecutableCorpusPlanIsOstyOwned() {
     let cases = llvmSmokeExecutableCorpus()
 
-    testing.assert(cases.len() == 7)
+    testing.assert(cases.len() == 10)
     testing.assert(cases[0].name == "minimal")
     testing.assert(cases[0].fixture == "minimal_print.osty")
     testing.assert(cases[0].stdout == "42\n")
@@ -103,6 +103,15 @@ fn testLlvmExecutableCorpusPlanIsOstyOwned() {
     testing.assert(cases[6].name == "string-let")
     testing.assert(cases[6].fixture == "string_let_print.osty")
     testing.assert(cases[6].stdout == "stored string\n")
+    testing.assert(cases[7].name == "string-return")
+    testing.assert(cases[7].fixture == "string_return_print.osty")
+    testing.assert(cases[7].stdout == "from function\n")
+    testing.assert(cases[8].name == "string-param")
+    testing.assert(cases[8].fixture == "string_param_print.osty")
+    testing.assert(cases[8].stdout == "param string\n")
+    testing.assert(cases[9].name == "string-mut")
+    testing.assert(cases[9].fixture == "string_mut_print.osty")
+    testing.assert(cases[9].stdout == "after\n")
 }
 
 fn testLlvmUnsupportedDiagnosticPolicyIsOstyOwned() {
@@ -233,4 +242,35 @@ fn testLlvmSmokeStringLetIsOstyOwned() {
     assertLlvmContains(ir, "define i32 @main() \{")
     assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_str, ptr @.str0)")
     assertLlvmContains(ir, "ret i32 0")
+}
+
+fn testLlvmSmokeStringReturnIsOstyOwned() {
+    let ir = llvmSmokeStringReturnIR("/tmp/string_return_print.osty")
+
+    assertLlvmContains(ir, "define ptr @greet() \{")
+    assertLlvmContains(ir, "@.str0 = private unnamed_addr constant [14 x i8] c\"from function\\00\"")
+    assertLlvmContains(ir, "ret ptr @.str0")
+    assertLlvmContains(ir, "%t0 = call ptr @greet()")
+    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_str, ptr %t0)")
+}
+
+fn testLlvmSmokeStringParamIsOstyOwned() {
+    let ir = llvmSmokeStringParamIR("/tmp/string_param_print.osty")
+
+    assertLlvmContains(ir, "define ptr @echo(ptr %msg) \{")
+    assertLlvmContains(ir, "ret ptr %msg")
+    assertLlvmContains(ir, "@.str0 = private unnamed_addr constant [13 x i8] c\"param string\\00\"")
+    assertLlvmContains(ir, "%t0 = call ptr @echo(ptr @.str0)")
+    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_str, ptr %t0)")
+}
+
+fn testLlvmSmokeStringMutableIsOstyOwned() {
+    let ir = llvmSmokeStringMutableIR("/tmp/string_mut_print.osty")
+
+    assertLlvmContains(ir, "@.str0 = private unnamed_addr constant [7 x i8] c\"before\\00\"")
+    assertLlvmContains(ir, "@.str1 = private unnamed_addr constant [6 x i8] c\"after\\00\"")
+    assertLlvmContains(ir, "alloca ptr")
+    assertLlvmContains(ir, "store ptr @.str1")
+    assertLlvmContains(ir, "load ptr")
+    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_str")
 }

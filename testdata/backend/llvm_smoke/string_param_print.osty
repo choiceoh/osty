@@ -1,0 +1,7 @@
+fn echo(msg: String) -> String {
+    msg
+}
+
+fn main() {
+    println(echo("param string"))
+}
