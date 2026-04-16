@@ -1020,7 +1020,7 @@ func (g *generator) emitAssign(stmt *ast.AssignStmt) error {
 
 func (g *generator) emitFor(stmt *ast.ForStmt) error {
 	if stmt.IsForLet {
-		return unsupported("control-flow", "for-let is not supported")
+		return g.emitForLet(stmt)
 	}
 	if stmt.Body == nil {
 		return unsupported("control-flow", "for has no body")
@@ -1063,6 +1063,59 @@ func (g *generator) emitFor(stmt *ast.ForStmt) error {
 	emitter = g.toOstyEmitter()
 	llvmRangeEnd(emitter, loop)
 	g.takeOstyEmitter(emitter)
+	return nil
+}
+
+func (g *generator) emitForLet(stmt *ast.ForStmt) error {
+	if stmt.Body == nil {
+		return unsupported("control-flow", "for has no body")
+	}
+	if stmt.Pattern == nil {
+		return unsupported("control-flow", "for-let requires a pattern")
+	}
+	if stmt.Iter == nil {
+		return unsupported("control-flow", "for-let requires an iterator expression")
+	}
+	emitter := g.toOstyEmitter()
+	condLabel := llvmNextLabel(emitter, "for.cond")
+	bodyLabel := llvmNextLabel(emitter, "for.body")
+	endLabel := llvmNextLabel(emitter, "for.end")
+	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", condLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", condLabel))
+	g.takeOstyEmitter(emitter)
+
+	scrutinee, err := g.emitExpr(stmt.Iter)
+	if err != nil {
+		return err
+	}
+	cond, bind, err := g.ifLetCondition(stmt.Pattern, scrutinee)
+	if err != nil {
+		return err
+	}
+	emitter = g.toOstyEmitter()
+	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", cond.name, bodyLabel, endLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", bodyLabel))
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = bodyLabel
+
+	g.pushScope()
+	if bind != nil {
+		if err := bind(); err != nil {
+			g.popScope()
+			return err
+		}
+	}
+	if err := g.emitBlock(stmt.Body.Stmts); err != nil {
+		g.popScope()
+		return err
+	}
+	g.popScope()
+
+	emitter = g.toOstyEmitter()
+	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", condLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = endLabel
 	return nil
 }
 
