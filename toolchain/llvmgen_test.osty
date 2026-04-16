@@ -1,6 +1,5 @@
-use std.testing
-
 use std.strings as llvmTestStrings
+use std.testing
 
 fn assertLlvmContains(ir: String, text: String) {
     testing.assert(llvmTestStrings.contains(ir, text))
@@ -112,7 +111,7 @@ fn testLlvmToolchainPlanIsOstyOwned() {
 fn testLlvmExecutableCorpusPlanIsOstyOwned() {
     let cases = llvmSmokeExecutableCorpus()
 
-    testing.assert(cases.len() == 44)
+    testing.assert(cases.len() == 54)
     testing.assert(cases[0].name == "minimal")
     testing.assert(cases[0].fixture == "minimal_print.osty")
     testing.assert(cases[0].stdout == "42\n")
@@ -245,6 +244,36 @@ fn testLlvmExecutableCorpusPlanIsOstyOwned() {
     testing.assert(cases[43].name == "string-payload-wildcard")
     testing.assert(cases[43].fixture == "string_payload_wildcard_print.osty")
     testing.assert(cases[43].stdout == "payload string\n")
+    testing.assert(cases[44].name == "int-if-expr")
+    testing.assert(cases[44].fixture == "int_if_expr_print.osty")
+    testing.assert(cases[44].stdout == "42\n")
+    testing.assert(cases[45].name == "string-if-expr")
+    testing.assert(cases[45].fixture == "string_if_expr_print.osty")
+    testing.assert(cases[45].stdout == "chosen string\n")
+    testing.assert(cases[46].name == "float-if-expr")
+    testing.assert(cases[46].fixture == "float_if_expr_print.osty")
+    testing.assert(cases[46].stdout == "42.000000\n")
+    testing.assert(cases[47].name == "bool-param-return")
+    testing.assert(cases[47].fixture == "bool_param_return_print.osty")
+    testing.assert(cases[47].stdout == "42\n")
+    testing.assert(cases[48].name == "int-range-exclusive")
+    testing.assert(cases[48].fixture == "int_range_exclusive_print.osty")
+    testing.assert(cases[48].stdout == "21\n")
+    testing.assert(cases[49].name == "int-unary")
+    testing.assert(cases[49].fixture == "int_unary_print.osty")
+    testing.assert(cases[49].stdout == "42\n")
+    testing.assert(cases[50].name == "int-modulo")
+    testing.assert(cases[50].fixture == "int_modulo_print.osty")
+    testing.assert(cases[50].stdout == "42\n")
+    testing.assert(cases[51].name == "struct-string-field")
+    testing.assert(cases[51].fixture == "struct_string_field_print.osty")
+    testing.assert(cases[51].stdout == "struct string\n")
+    testing.assert(cases[52].name == "struct-bool-field")
+    testing.assert(cases[52].fixture == "struct_bool_field_print.osty")
+    testing.assert(cases[52].stdout == "42\n")
+    testing.assert(cases[53].name == "bool-mut")
+    testing.assert(cases[53].fixture == "bool_mut_print.osty")
+    testing.assert(cases[53].stdout == "42\n")
 }
 
 fn testLlvmUnsupportedDiagnosticPolicyIsOstyOwned() {
@@ -368,7 +397,10 @@ fn testLlvmSmokeStringPrintIsOstyOwned() {
 fn testLlvmSmokeStringEscapeIsOstyOwned() {
     let ir = llvmSmokeStringEscapeIR("/tmp/string_escape_print.osty")
 
-    assertLlvmContains(ir, "@.str0 = private unnamed_addr constant [25 x i8] c\"line one\\0Aquote \\22 slash \\5C\\00\"")
+    assertLlvmContains(
+        ir,
+        "@.str0 = private unnamed_addr constant [25 x i8] c\"line one\\0Aquote \\22 slash \\5C\\00\"",
+    )
     assertLlvmContains(ir, "define i32 @main() \{")
     assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_str, ptr @.str0)")
     assertLlvmContains(ir, "ret i32 0")
@@ -377,7 +409,10 @@ fn testLlvmSmokeStringEscapeIsOstyOwned() {
 fn testLlvmSmokeStringLetIsOstyOwned() {
     let ir = llvmSmokeStringLetIR("/tmp/string_let_print.osty")
 
-    assertLlvmContains(ir, "@.str0 = private unnamed_addr constant [14 x i8] c\"stored string\\00\"")
+    assertLlvmContains(
+        ir,
+        "@.str0 = private unnamed_addr constant [14 x i8] c\"stored string\\00\"",
+    )
     assertLlvmContains(ir, "define i32 @main() \{")
     assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_str, ptr @.str0)")
     assertLlvmContains(ir, "ret i32 0")
@@ -387,7 +422,10 @@ fn testLlvmSmokeStringReturnIsOstyOwned() {
     let ir = llvmSmokeStringReturnIR("/tmp/string_return_print.osty")
 
     assertLlvmContains(ir, "define ptr @greet() \{")
-    assertLlvmContains(ir, "@.str0 = private unnamed_addr constant [14 x i8] c\"from function\\00\"")
+    assertLlvmContains(
+        ir,
+        "@.str0 = private unnamed_addr constant [14 x i8] c\"from function\\00\"",
+    )
     assertLlvmContains(ir, "ret ptr @.str0")
     assertLlvmContains(ir, "%t0 = call ptr @greet()")
     assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_str, ptr %t0)")
@@ -738,4 +776,98 @@ fn testLlvmSmokeStringPayloadWildcardIsOstyOwned() {
     assertLlvmContains(ir, "icmp eq i64")
     assertLlvmContains(ir, "extractvalue %Label")
     assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_str, ptr")
+}
+
+fn testLlvmSmokeIntIfExprIsOstyOwned() {
+    let ir = llvmSmokeIntIfExprIR("/tmp/int_if_expr_print.osty")
+
+    assertLlvmContains(ir, "if.expr.then0:")
+    assertLlvmContains(ir, "if.expr.else1:")
+    assertLlvmContains(ir, "phi i64 [ 42, %if.expr.then0 ], [ 0, %if.expr.else1 ]")
+    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_i64, i64 %t0)")
+}
+
+fn testLlvmSmokeStringIfExprIsOstyOwned() {
+    let ir = llvmSmokeStringIfExprIR("/tmp/string_if_expr_print.osty")
+
+    assertLlvmContains(
+        ir,
+        "@.str0 = private unnamed_addr constant [14 x i8] c\"chosen string\\00\"",
+    )
+    assertLlvmContains(ir, "@.str1 = private unnamed_addr constant [9 x i8] c\"fallback\\00\"")
+    assertLlvmContains(ir, "phi ptr [ @.str0, %if.expr.then0 ], [ @.str1, %if.expr.else1 ]")
+    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_str, ptr %t0)")
+}
+
+fn testLlvmSmokeFloatIfExprIsOstyOwned() {
+    let ir = llvmSmokeFloatIfExprIR("/tmp/float_if_expr_print.osty")
+
+    assertLlvmContains(ir, "if.expr.then0:")
+    assertLlvmContains(ir, "if.expr.else1:")
+    assertLlvmContains(ir, "phi double [ 42.0, %if.expr.then0 ], [ 0.0, %if.expr.else1 ]")
+    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_f64, double %t0)")
+}
+
+fn testLlvmSmokeBoolParamReturnIsOstyOwned() {
+    let ir = llvmSmokeBoolParamReturnIR("/tmp/bool_param_return_print.osty")
+
+    assertLlvmContains(ir, "define i64 @pick(i1 %flag) \{")
+    assertLlvmContains(ir, "if.expr.then0:")
+    assertLlvmContains(ir, "phi i64 [ 42, %if.expr.then0 ], [ 0, %if.expr.else1 ]")
+    assertLlvmContains(ir, "call i64 @pick(i1 true)")
+}
+
+fn testLlvmSmokeIntRangeExclusiveIsOstyOwned() {
+    let ir = llvmSmokeIntRangeExclusiveIR("/tmp/int_range_exclusive_print.osty")
+
+    assertLlvmContains(ir, "define i64 @sumTo(i64 %n) \{")
+    assertLlvmContains(ir, "br label %for.cond0")
+    assertLlvmContains(ir, "icmp slt i64")
+    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_i64, i64 %t0)")
+}
+
+fn testLlvmSmokeIntUnaryIsOstyOwned() {
+    let ir = llvmSmokeIntUnaryIR("/tmp/int_unary_print.osty")
+
+    assertLlvmContains(ir, "%t0 = sub i64 40, 82")
+    assertLlvmContains(ir, "%t1 = sub i64 0, %t0")
+    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_i64, i64 %t1)")
+}
+
+fn testLlvmSmokeIntModuloIsOstyOwned() {
+    let ir = llvmSmokeIntModuloIR("/tmp/int_modulo_print.osty")
+
+    assertLlvmContains(ir, "%t0 = srem i64 85, 43")
+    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_i64, i64 %t0)")
+}
+
+fn testLlvmSmokeStructStringFieldIsOstyOwned() {
+    let ir = llvmSmokeStructStringFieldIR("/tmp/struct_string_field_print.osty")
+
+    assertLlvmContains(ir, "%Message = type \{ ptr \}")
+    assertLlvmContains(
+        ir,
+        "@.str0 = private unnamed_addr constant [14 x i8] c\"struct string\\00\"",
+    )
+    assertLlvmContains(ir, "extractvalue %Message")
+    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_str, ptr %t2)")
+}
+
+fn testLlvmSmokeStructBoolFieldIsOstyOwned() {
+    let ir = llvmSmokeStructBoolFieldIR("/tmp/struct_bool_field_print.osty")
+
+    assertLlvmContains(ir, "%Gate = type \{ i1 \}")
+    assertLlvmContains(ir, "extractvalue %Gate")
+    assertLlvmContains(ir, "br i1 %t1, label %if.then")
+    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_i64, i64 42)")
+}
+
+fn testLlvmSmokeBoolMutableIsOstyOwned() {
+    let ir = llvmSmokeBoolMutableIR("/tmp/bool_mut_print.osty")
+
+    assertLlvmContains(ir, "alloca i1")
+    assertLlvmContains(ir, "store i1 false")
+    assertLlvmContains(ir, "store i1 true")
+    assertLlvmContains(ir, "load i1")
+    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_i64, i64 42)")
 }
