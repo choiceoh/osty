@@ -7,12 +7,20 @@ import (
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/ir"
+	"github.com/osty/osty/internal/mir"
 	"github.com/osty/osty/internal/resolve"
 )
 
 // PrepareEntry lowers a checked front-end source unit into the backend-neutral
 // IR contract. Validation failures are returned as an error because they
 // indicate a broken lowering contract rather than a user-visible backend gap.
+//
+// Stage 3 of the MIR migration additionally produces a MIR module alongside
+// the HIR module. MIR lowering runs after HIR monomorphization + validation,
+// so the HIR path remains the primary contract while backends that have
+// migrated can consume `Entry.MIR` directly. MIR validation issues are
+// recorded on the entry as non-fatal warnings — they do not short-circuit
+// the backend dispatch, because MIR is opt-in at this stage.
 func PrepareEntry(packageName, sourcePath string, file *ast.File, res *resolve.Result, chk *check.Result) (Entry, error) {
 	entry := Entry{
 		PackageName: packageName,
@@ -40,6 +48,19 @@ func PrepareEntry(packageName, sourcePath string, file *ast.File, res *resolve.R
 	if validateErrs := ir.Validate(mod); len(validateErrs) != 0 {
 		entry.IRIssues = append(entry.IRIssues, validateErrs...)
 		return entry, errors.Join(validateErrs...)
+	}
+	// Produce MIR alongside the HIR module. MIR consumes the monomorphic
+	// HIR; lowerer-reported issues become entry.MIRIssues and the structural
+	// validator adds any post-condition failures. MIR is not yet a
+	// backend-blocking contract — callers that consume it should check for
+	// nil and fall back to the HIR path.
+	mirMod := mir.Lower(mod)
+	if mirMod != nil {
+		entry.MIRIssues = append(entry.MIRIssues, mirMod.Issues...)
+		if mirValidateErrs := mir.Validate(mirMod); len(mirValidateErrs) != 0 {
+			entry.MIRIssues = append(entry.MIRIssues, mirValidateErrs...)
+		}
+		entry.MIR = mirMod
 	}
 	return entry, nil
 }

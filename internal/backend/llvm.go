@@ -56,11 +56,31 @@ func (b LLVMBackend) Emit(ctx context.Context, req Request) (*Result, error) {
 		PackageName: req.Entry.PackageName,
 		SourcePath:  req.Entry.SourcePath,
 		Target:      req.Layout.Target,
+		UseMIR:      featureEnabled(req.Features, "mir-backend"),
 	}
 	// IR is the sole input contract. The backend dispatcher never reaches
 	// for req.Entry.File — the AST is a front-end artifact that the LLVM
 	// backend does not consume directly any more.
-	irOut, genErr := llvmgen.GenerateModule(req.Entry.IR, opts)
+	//
+	// When the request opts into Stage 3 MIR emission (`--feature
+	// mir-backend`), route through the MIR-direct path if the entry
+	// carries a MIR module. Otherwise, and on MIR-emitter refusal, fall
+	// back to the legacy HIR→AST bridge so coverage stays identical to
+	// before the opt-in flag existed.
+	var (
+		irOut  []byte
+		genErr error
+	)
+	if opts.UseMIR && req.Entry.MIR != nil {
+		irOut, genErr = llvmgen.GenerateFromMIR(req.Entry.MIR, opts)
+		if genErr != nil && errors.Is(genErr, llvmgen.ErrUnsupported) {
+			// MIR emitter refused — fall back to the HIR path.
+			opts.UseMIR = false
+			irOut, genErr = llvmgen.GenerateModule(req.Entry.IR, opts)
+		}
+	} else {
+		irOut, genErr = llvmgen.GenerateModule(req.Entry.IR, opts)
+	}
 	if genErr == nil {
 		if err := os.WriteFile(artifacts.LLVMIR, irOut, 0o644); err != nil {
 			return nil, err
@@ -171,4 +191,16 @@ func runClang(ctx context.Context, action string, args []string) error {
 	}
 	command := "clang " + strings.Join(args, " ")
 	return fmt.Errorf("%s: %w", llvmgen.ClangFailureMessage(action, command, msg), err)
+}
+
+// featureEnabled reports whether `name` appears in the features
+// slice. Used by the LLVM backend to check opt-in flags like
+// "mir-backend".
+func featureEnabled(features []string, name string) bool {
+	for _, f := range features {
+		if f == name {
+			return true
+		}
+	}
+	return false
 }

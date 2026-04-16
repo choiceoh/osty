@@ -9,6 +9,7 @@ import (
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/ir"
+	"github.com/osty/osty/internal/mir"
 	"github.com/osty/osty/internal/resolve"
 )
 
@@ -112,6 +113,12 @@ type Backend interface {
 
 // Entry is the type-checked source unit a backend should emit. It keeps the
 // front-end products grouped under one backend-neutral contract.
+//
+// IR is the HIR-level module produced by `ir.Lower` + `ir.Monomorphize`.
+// MIR is the MIR-level module produced by `mir.Lower`, available for
+// backends that have migrated off the HIR→AST bridge. Both are populated
+// by `PrepareEntry`; current LLVM emission still reads `IR`, but the
+// Stage 3 MIR emitter consumes `MIR` directly.
 type Entry struct {
 	PackageName string
 	SourcePath  string
@@ -120,6 +127,8 @@ type Entry struct {
 	Check       *check.Result
 	IR          *ir.Module
 	IRIssues    []error
+	MIR         *mir.Module
+	MIRIssues   []error
 }
 
 // Request is the backend-neutral build request shared by gen/build/run/test
