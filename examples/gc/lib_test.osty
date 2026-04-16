@@ -47,6 +47,18 @@ fn survivorSpaceGcConfig(survivorLimit: Int, promotionAge: Int) -> GcConfig {
     }
 }
 
+fn humongousSpaceGcConfig() -> GcConfig {
+    GcConfig {
+        nurseryLimit: 64,
+        survivorLimit: 16,
+        heapLimit: 4096,
+        promotionAge: 2,
+        incrementalBudget: 1,
+        largeObjectThreshold: 32,
+        tlabSize: 64,
+    }
+}
+
 fn testValidateHeapRejectsLiveByteMismatch() {
     let refs: List<Int> = []
     let mut objects: Map<Int, GcObject> = {:}
@@ -75,6 +87,7 @@ fn testValidateHeapRejectsLiveByteMismatch() {
     let asyncFrames: Map<Int, GcAsyncFrameRoot> = {:}
     let tlabs: Map<Int, GcTlab> = {:}
     let tenured = emptyTenuredAllocator()
+    let humongous = emptyHumongousAllocator()
     let heap = GcHeap {
         config: testGcConfig(),
         nextId: 2,
@@ -91,6 +104,7 @@ fn testValidateHeapRejectsLiveByteMismatch() {
         asyncFrames,
         tlabs,
         tenured,
+        humongous,
         remembered: empty.toSet(),
         grey: [],
         allocatedSinceLastGC: 16,
@@ -147,6 +161,7 @@ fn testValidateHeapRejectsMissingRememberedEdge() {
     let asyncFrames: Map<Int, GcAsyncFrameRoot> = {:}
     let tlabs: Map<Int, GcTlab> = {:}
     let tenured = emptyTenuredAllocator()
+    let humongous = emptyHumongousAllocator()
     let heap = GcHeap {
         config: testGcConfig(),
         nextId: 3,
@@ -163,6 +178,7 @@ fn testValidateHeapRejectsMissingRememberedEdge() {
         asyncFrames,
         tlabs,
         tenured,
+        humongous,
         remembered: empty.toSet(),
         grey: [],
         allocatedSinceLastGC: 32,
@@ -233,17 +249,7 @@ fn testTelemetryRecordsNurseryPressureTrigger() {
 }
 
 fn testLargeObjectBypassesNurseryAndStartsHumongous() {
-    let mut heap = newGcHeap(
-        GcConfig {
-            nurseryLimit: 24,
-            survivorLimit: 16,
-            heapLimit: 4096,
-            promotionAge: 1,
-            incrementalBudget: 1,
-            largeObjectThreshold: 32,
-            tlabSize: 64,
-        },
-    )
+    let mut heap = newGcHeap(humongousSpaceGcConfig())
     let small = heap.allocate(GcRecord, 16)
     assertValid(heap)
 
@@ -257,6 +263,10 @@ fn testLargeObjectBypassesNurseryAndStartsHumongous() {
     testing.assertEq(heap.generationOf(large) ?? -1, 1)
     testing.assertEq(heap.nurseryBytes(), 16)
     testing.assertEq(heap.largeObjectCount(), 1)
+    testing.assertEq(heap.humongousBytes(), 64)
+    testing.assertEq(heap.humongousAllocatedObjectCount(), 1)
+    testing.assertEq(heap.humongousBumpAllocationCount(), 1)
+    testing.assertEq(heap.humongousFreeBytes(), 0)
     match heap.lastCollectionStats() {
         Some(_) -> testing.fail("large allocation unexpectedly triggered collection"),
         None -> {},
@@ -269,6 +279,95 @@ fn testLargeObjectBypassesNurseryAndStartsHumongous() {
     testing.assert(!(heap.contains(small)))
     testing.assertEq(heap.addressOf(large) ?? -1, 16)
     testing.assertEq(stats.afterFragmentedBytes, 16)
+}
+
+fn testHumongousObjectReclaimsToDedicatedFreeList() {
+    let mut heap = newGcHeap(humongousSpaceGcConfig())
+    let large = heap.allocate(GcBytes, 64)
+    assertValid(heap)
+
+    let stats = heap.majorCollect()
+    assertValid(heap)
+
+    testing.assert(!(heap.contains(large)))
+    testing.assertEq(stats.reclaimedObjects, 1)
+    testing.assertEq(stats.reclaimedBytes, 64)
+    testing.assertEq(heap.largeObjectCount(), 0)
+    testing.assertEq(heap.humongousFreeBlockCount(), 1)
+    testing.assertEq(heap.humongousFreeBytes(), 64)
+    testing.assertEq(heap.humongousReclaimedObjectCount(), 1)
+    testing.assertEq(heap.humongousReclaimedBytes(), 64)
+}
+
+fn testHumongousAllocationReusesDedicatedFreeBlock() {
+    let mut heap = newGcHeap(humongousSpaceGcConfig())
+    let dead = heap.allocate(GcBytes, 64)
+    assertValid(heap)
+
+    let _ = heap.majorCollect()
+    assertValid(heap)
+    testing.assert(!(heap.contains(dead)))
+    testing.assertEq(heap.humongousFreeBytes(), 64)
+
+    let reused = heap.allocate(GcArray, 40)
+    assertValid(heap)
+
+    testing.assert(heap.contains(reused))
+    testing.assert(heap.isLarge(reused) ?? false)
+    testing.assertEq(heap.addressOf(reused) ?? -1, 0)
+    testing.assertEq(heap.regionOf(reused) ?? GcEdenRegion, GcHumongousRegion)
+    testing.assertEq(heap.humongousReuseAllocationCount(), 1)
+    testing.assertEq(heap.humongousReusedBytes(), 40)
+    testing.assertEq(heap.humongousFreeBytes(), 24)
+}
+
+fn testTenuredAllocationDoesNotConsumeHumongousFreeBlock() {
+    let mut heap = newGcHeap(humongousSpaceGcConfig())
+    let dead = heap.allocate(GcBytes, 64)
+    let _ = heap.majorCollect()
+    assertValid(heap)
+    testing.assert(!(heap.contains(dead)))
+    testing.assertEq(heap.humongousFreeBytes(), 64)
+
+    let old = heap.allocateTenured(GcRecord, 16)
+    assertValid(heap)
+
+    testing.assertEq(heap.addressOf(old) ?? -1, 64)
+    testing.assertEq(heap.regionOf(old) ?? GcEdenRegion, GcOldRegion)
+    testing.assertEq(heap.tenuredBumpAllocationCount(), 1)
+    testing.assertEq(heap.humongousFreeBytes(), 64)
+    testing.assertEq(heap.humongousReuseAllocationCount(), 0)
+}
+
+fn testCompactionDoesNotMoveOldObjectIntoHumongousFreeBlock() {
+    let mut heap = newGcHeap(humongousSpaceGcConfig())
+    let deadLarge = heap.allocate(GcBytes, 64)
+    let old = heap.allocateTenured(GcRecord, 16)
+    testing.assert(heap.addRoot(old))
+    assertValid(heap)
+
+    let stats = heap.majorCollect()
+    assertValid(heap)
+
+    testing.assert(!(heap.contains(deadLarge)))
+    testing.assert(heap.contains(old))
+    testing.assertEq(stats.reclaimedObjects, 1)
+    testing.assertEq(heap.addressOf(old) ?? -1, 64)
+    testing.assertEq(heap.humongousFreeBytes(), 64)
+    testing.assertEq(heap.fragmentedBytes(), 64)
+}
+
+fn testLargeTenuredAllocationRoutesToHumongousSpace() {
+    let mut heap = newGcHeap(humongousSpaceGcConfig())
+    let large = heap.allocateTenured(GcBytes, 64)
+    assertValid(heap)
+
+    testing.assert(heap.isLarge(large) ?? false)
+    testing.assertEq(heap.regionOf(large) ?? GcEdenRegion, GcHumongousRegion)
+    testing.assertEq(heap.generationOf(large) ?? -1, 1)
+    testing.assertEq(heap.tenuredDirectAllocationCount(), 0)
+    testing.assertEq(heap.humongousAllocatedObjectCount(), 1)
+    testing.assertEq(heap.humongousBytes(), 64)
 }
 
 fn testMajorCollectionReclaimsCycles() {
