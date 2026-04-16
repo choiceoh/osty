@@ -283,14 +283,35 @@ artifact/cache layout 정책은 [`LLVM_ARTIFACT_LAYOUT.md`](./LLVM_ARTIFACT_LAYO
   - Phase 6a(interface vtable scaffold)는 llvmgen 렌더러에서 구조만
     갖춘다: `%osty.iface = type { ptr, ptr }` fat-pointer 타입과
     structural match 기반으로 발견된 (impl, interface) 쌍마다
-    `@osty.vtable.<impl>__<iface>` 상수 global을 emit. Boxing과
-    method dispatch 경로는 Phase 6b+로 보류
+    `@osty.vtable.<impl>__<iface>` 상수 global을 emit
     (smoke: `TestGenerateModuleInterfaceVtableEmitted`).
+  - Phase 6b(interface boxing + vtable dispatch) 추가: `llvmType`이
+    interface를 `%osty.iface`로 반환, `emitLet`의 concrete→interface
+    경로에서 boxing (alloca + insertvalue 2회), `emitInterfaceMethodCall`
+    이 수신자가 `%osty.iface`인 call을 vtable extractvalue + getelementptr
+    + indirect call로 낮춘다.
+    smoke: `TestGenerateModuleInterfaceBoxingDispatch`.
+  - Phase 6c(interface method의 non-self 인자): `methodDecl.Params`의
+    user-facing 파라미터를 `llvmType`으로 개별 lower하고 `emitExpr`로
+    argument value를 만들어 indirect call에 `ptr %data, <argTyp> %arg…`
+    형태로 threading. smoke: `TestGenerateModuleInterfaceDispatchWithArgs`.
+  - Phase 6d(let 외 context 자동 boxing): return statement / 블록의
+    trailing-expression implicit return / 함수 호출 인자에서 concrete
+    값이 interface-typed slot으로 들어가면 `boxInterfaceValue`가 자동
+    호출되어 fat pointer를 생성한다. `generator`에 `returnSourceType`
+    필드 추가로 AST 레벨 return 타입을 추적. smokes:
+    `TestGenerateModuleInterfaceBoxingFromReturn`,
+    `TestGenerateModuleInterfaceBoxingFromCallArg`.
+  - Phase 6e(assign-statement 자동 boxing): `let mut s: Iface = concrete`
+    로 bound된 slot에 concrete값을 `s = w`로 재할당하면 자동 boxing.
+    `boxInterfaceValue`가 반환 value에 `sourceType: ifaceType`을 태그
+    해 slot이 자신의 선언 interface identity를 기억한다. smoke:
+    `TestGenerateModuleInterfaceBoxingFromAssign`.
   - 남은 범위: bare function-pointer turbofish (`let f = id::<Int>`),
-    interface value의 boxing + vtable dispatch (Phase 6b+),
-    payload-free / 비-리터럴 인자를 가진 variant call의 타입
-    복원(궁극적으로는 checker 쪽 generic variant-constructor inference
-    보강).
+    generic interface specialization의 vtable 연결 (Phase 5 `_ZTSN…E` +
+    Phase 6a scaffold), 암묵 타입 변환, payload-free / 비-리터럴 인자를
+    가진 variant call의 타입 복원(궁극적으로는 checker 쪽 generic
+    variant-constructor inference 보강).
 - workspace/dependency graph를 codegen/link order로 변환한다.
 - `use go` FFI는 LLVM backend에서 그대로 지원하기 어렵기 때문에 새 FFI 정책을
   정한다.

@@ -293,6 +293,194 @@ fn main() {
 	}
 }
 
+func TestGenerateModuleInterfaceBoxingDispatch(t *testing.T) {
+	src := `interface Sized {
+    fn size(self) -> Int
+}
+
+struct Vec {
+    count: Int,
+
+    fn size(self) -> Int {
+        self.count
+    }
+}
+
+fn main() {
+    let v = Vec { count: 3 }
+    let s: Sized = v
+    println(s.size())
+}
+`
+	got := runMonoLowerPipeline(t, src, "/tmp/phase6b_box_dispatch.osty")
+	for _, want := range []string{
+		"%osty.iface",
+		"@osty.vtable.Vec__Sized",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestGenerateModuleInterfaceDispatchWithArgs covers Phase 6c: an
+// interface method taking non-self arguments is lowered to an
+// indirect vtable call that threads those arguments through.
+func TestGenerateModuleInterfaceDispatchWithArgs(t *testing.T) {
+	src := `interface Combine {
+    fn combine(self, other: Int) -> Int
+}
+
+struct Thing {
+    x: Int,
+
+    fn combine(self, other: Int) -> Int {
+        self.x + other
+    }
+}
+
+fn main() {
+    let t = Thing { x: 3 }
+    let c: Combine = t
+    println(c.combine(4))
+}
+`
+	got := runMonoLowerPipeline(t, src, "/tmp/phase6c_iface_args.osty")
+	for _, want := range []string{
+		"%osty.iface",
+		"@osty.vtable.Thing__Combine",
+		"ptr @Thing__combine",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+	// The indirect call must carry both the data ptr (self) and the
+	// non-self arg. The exact SSA name of the fn ptr is implementation
+	// detail, so we only assert on the shape near the call site.
+	if !strings.Contains(got, ", i64 4)") {
+		t.Fatalf("expected non-self arg `i64 4` threaded into indirect call:\n%s", got)
+	}
+}
+
+// TestGenerateModuleInterfaceBoxingFromReturn covers Phase 6d's
+// return-position auto-boxing: a function whose declared return type
+// is an interface can return a concrete value, and the caller receives
+// a `%osty.iface` fat pointer suitable for subsequent dispatch.
+func TestGenerateModuleInterfaceBoxingFromReturn(t *testing.T) {
+	src := `interface Sized {
+    fn size(self) -> Int
+}
+
+struct Vec {
+    count: Int,
+
+    fn size(self) -> Int {
+        self.count
+    }
+}
+
+fn wrap(v: Vec) -> Sized {
+    v
+}
+
+fn main() {
+    let v = Vec { count: 5 }
+    let s = wrap(v)
+    println(s.size())
+}
+`
+	got := runMonoLowerPipeline(t, src, "/tmp/phase6d_return_box.osty")
+	for _, want := range []string{
+		"%osty.iface",
+		"@osty.vtable.Vec__Sized",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestGenerateModuleInterfaceBoxingFromCallArg covers Phase 6d's
+// call-argument auto-boxing: passing a concrete value into a parameter
+// whose declared type is an interface must insert a `%osty.iface` fat
+// pointer transparently so the callee's dispatch path works.
+func TestGenerateModuleInterfaceBoxingFromCallArg(t *testing.T) {
+	src := `interface Sized {
+    fn size(self) -> Int
+}
+
+struct Vec {
+    count: Int,
+
+    fn size(self) -> Int {
+        self.count
+    }
+}
+
+fn measure(s: Sized) -> Int {
+    s.size()
+}
+
+fn main() {
+    let v = Vec { count: 7 }
+    println(measure(v))
+}
+`
+	got := runMonoLowerPipeline(t, src, "/tmp/phase6d_callarg_box.osty")
+	for _, want := range []string{
+		"%osty.iface",
+		"@osty.vtable.Vec__Sized",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestGenerateModuleInterfaceBoxingFromAssign covers Phase 6e: after a
+// `let mut s: Iface = concrete` binding, subsequent `s = concrete2`
+// reassignments must auto-box the new concrete value into a
+// `%osty.iface` fat pointer, mirroring the let / return / call-arg
+// boxing paths.
+func TestGenerateModuleInterfaceBoxingFromAssign(t *testing.T) {
+	src := `interface Sized {
+    fn size(self) -> Int
+}
+
+struct Vec {
+    count: Int,
+
+    fn size(self) -> Int {
+        self.count
+    }
+}
+
+fn main() {
+    let v = Vec { count: 3 }
+    let mut s: Sized = v
+    let w = Vec { count: 9 }
+    s = w
+    println(s.size())
+}
+`
+	got := runMonoLowerPipeline(t, src, "/tmp/phase6e_assign_box.osty")
+	for _, want := range []string{
+		"%osty.iface",
+		"@osty.vtable.Vec__Sized",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+	// Reassignment must emit TWO boxings (initial let + assign), so the
+	// vtable symbol appears at least twice in the final IR.
+	if strings.Count(got, "@osty.vtable.Vec__Sized") < 2 {
+		t.Fatalf("expected vtable symbol referenced at least twice (let + assign), got %d:\n%s",
+			strings.Count(got, "@osty.vtable.Vec__Sized"), got)
+	}
+}
+
 // TestGenerateModuleMethodLocalGenericGetMonomorphized verifies the
 // Phase 4 path: a non-generic struct with a generic method
 // (`fn get<U>(self, u: U) -> U`) gets specialized per turbofish call

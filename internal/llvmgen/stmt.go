@@ -14,6 +14,7 @@ package llvmgen
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/token"
@@ -42,6 +43,15 @@ func (g *generator) emitReturningBlock(stmts []ast.Stmt, retType string, retSour
 			if err != nil {
 				return err
 			}
+			// Phase 6d: auto-box a concrete return value into the
+			// declared interface type (same policy as emitReturn).
+			if retType == "%osty.iface" && v.typ != "%osty.iface" && g.returnSourceType != nil {
+				boxed, boxErr := g.boxInterfaceValue(g.returnSourceType, v)
+				if boxErr != nil {
+					return boxErr
+				}
+				v = boxed
+			}
 			if v.typ != retType {
 				return unsupportedf("type-system", "return type %s, want %s", v.typ, retType)
 			}
@@ -55,6 +65,14 @@ func (g *generator) emitReturningBlock(stmts []ast.Stmt, retType string, retSour
 			v, err := g.emitExprWithHintAndSourceType(s.X, retSourceType, retListElemTyp, false, retMapKeyTyp, retMapValueTyp, false, retSetElemTyp, false)
 			if err != nil {
 				return err
+			}
+			// Phase 6d: trailing-expression implicit return auto-boxing.
+			if retType == "%osty.iface" && v.typ != "%osty.iface" && g.returnSourceType != nil {
+				boxed, boxErr := g.boxInterfaceValue(g.returnSourceType, v)
+				if boxErr != nil {
+					return boxErr
+				}
+				v = boxed
 			}
 			if v.typ != retType {
 				return unsupportedf("type-system", "trailing expression type %s, want %s", v.typ, retType)
@@ -155,11 +173,80 @@ func (g *generator) emitLet(stmt *ast.LetStmt) error {
 		if err != nil {
 			return err
 		}
+		// Phase 6b: when a let binds a concrete struct/enum value into
+		// an interface-typed slot, box it into a `{data, vtable}` fat
+		// pointer before the type-check.
+		if typ == "%osty.iface" && v.typ != "%osty.iface" {
+			boxed, boxErr := g.boxInterfaceValue(stmt.Type, v)
+			if boxErr != nil {
+				return boxErr
+			}
+			v = boxed
+		}
 		if typ != v.typ {
 			return unsupportedf("type-system", "let pattern type %s, value %s", typ, v.typ)
 		}
 	}
 	return g.bindLetPattern(stmt.Pattern, v, stmt.Mut)
+}
+
+// boxInterfaceValue synthesises the `%osty.iface` fat pointer holding
+// (data_ptr, vtable_ptr) for a concrete value assigned into an
+// interface-typed slot. The concrete value is stack-allocated with
+// `alloca`, the interface decl is resolved from `ifaceType`, and the
+// (impl, iface) vtable symbol is pulled out of `interfaceInfo.impls`.
+// Method dispatch through the boxed value is handled separately in
+// emitInterfaceMethodCall.
+func (g *generator) boxInterfaceValue(ifaceType ast.Type, v value) (value, error) {
+	ifaceName := interfaceNominalName(ifaceType)
+	if ifaceName == "" {
+		return value{}, unsupportedf("type-system", "interface target %T", ifaceType)
+	}
+	iface := g.interfacesByName[ifaceName]
+	if iface == nil {
+		return value{}, unsupportedf("type-system", "unknown interface %q", ifaceName)
+	}
+	implName := strings.TrimPrefix(v.typ, "%")
+	if implName == v.typ || implName == "" {
+		return value{}, unsupportedf("type-system", "cannot box non-aggregate value %s into interface %q", v.typ, ifaceName)
+	}
+	var vtableSym string
+	for _, impl := range iface.impls {
+		if impl.implName == implName {
+			vtableSym = impl.vtableSym
+			break
+		}
+	}
+	if vtableSym == "" {
+		return value{}, unsupportedf("type-system", "type %q does not implement interface %q", implName, ifaceName)
+	}
+	emitter := g.toOstyEmitter()
+	slot := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca %s", slot, v.typ))
+	emitter.body = append(emitter.body, fmt.Sprintf("  store %s %s, ptr %s", v.typ, v.ref, slot))
+	step1 := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = insertvalue %%osty.iface undef, ptr %s, 0", step1, slot))
+	step2 := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = insertvalue %%osty.iface %s, ptr %s, 1", step2, step1, vtableSym))
+	g.takeOstyEmitter(emitter)
+	// Phase 6e: tag the boxed value with its interface AST type so
+	// downstream slots (e.g. `let mut s: Iface = …`) remember the
+	// declared interface identity and can auto-box reassignments.
+	return value{typ: "%osty.iface", ref: step2, sourceType: ifaceType}, nil
+}
+
+// interfaceNominalName returns the single-segment interface source
+// name from a type annotation, or "" if the annotation isn't a simple
+// named interface reference.
+func interfaceNominalName(t ast.Type) string {
+	nt, ok := t.(*ast.NamedType)
+	if !ok || nt == nil {
+		return ""
+	}
+	if len(nt.Path) != 1 {
+		return ""
+	}
+	return nt.Path[0]
 }
 
 func (g *generator) emitAssign(stmt *ast.AssignStmt) error {
@@ -181,6 +268,17 @@ func (g *generator) emitAssign(stmt *ast.AssignStmt) error {
 		v, err := g.emitExprWithHintAndSourceType(stmt.Value, slot.sourceType, slot.listElemTyp, slot.listElemString, slot.mapKeyTyp, slot.mapValueTyp, slot.mapKeyString, slot.setElemTyp, slot.setElemString)
 		if err != nil {
 			return err
+		}
+		// Phase 6e: auto-box a concrete rhs when the binding's declared
+		// slot type is an interface. Mirrors the let / return / call-arg
+		// boxing paths so reassignment stays consistent with the other
+		// interface-adjacent positions.
+		if slot.typ == "%osty.iface" && v.typ != "%osty.iface" && slot.sourceType != nil {
+			boxed, boxErr := g.boxInterfaceValue(slot.sourceType, v)
+			if boxErr != nil {
+				return boxErr
+			}
+			v = boxed
 		}
 		if v.typ != slot.typ {
 			return unsupportedf("type-system", "assignment to %q type %s, value %s", target.Name, slot.typ, v.typ)
@@ -545,6 +643,16 @@ func (g *generator) emitReturn(stmt *ast.ReturnStmt) error {
 		ret, err = g.emitExprWithHintAndSourceType(stmt.Value, g.returnSourceType, g.returnListElemTyp, false, "", "", false, "", false)
 		if err != nil {
 			return err
+		}
+		// Phase 6d: auto-box a concrete return value when the declared
+		// return type is an interface. Mirrors the `let s: Sized = v`
+		// path in emitLet.
+		if g.returnType == "%osty.iface" && ret.typ != "%osty.iface" && g.returnSourceType != nil {
+			boxed, boxErr := g.boxInterfaceValue(g.returnSourceType, ret)
+			if boxErr != nil {
+				return boxErr
+			}
+			ret = boxed
 		}
 		if ret.typ != g.returnType {
 			return unsupportedf("type-system", "return type %s, want %s", ret.typ, g.returnType)

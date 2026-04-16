@@ -2024,6 +2024,10 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 	if v, found, err := g.emitEnumVariantCall(call); found || err != nil {
 		return v, err
 	}
+	// Phase 6b: interface value method dispatch via `%osty.iface` vtable.
+	if v, found, err := g.emitInterfaceMethodCall(call); found || err != nil {
+		return v, err
+	}
 	if v, found, err := g.emitListMethodCall(call); found || err != nil {
 		return v, err
 	}
@@ -2365,6 +2369,16 @@ func (g *generator) userCallArgs(sig *fnSig, receiverExpr ast.Expr, call *ast.Ca
 		if err != nil {
 			return nil, err
 		}
+		// Phase 6d: auto-box a concrete value when the callee expects
+		// an interface. Mirrors the `let s: Sized = v` and return-value
+		// paths so call-site conversion lands consistently.
+		if param.typ == "%osty.iface" && v.typ != "%osty.iface" && param.sourceType != nil {
+			boxed, boxErr := g.boxInterfaceValue(param.sourceType, v)
+			if boxErr != nil {
+				return nil, boxErr
+			}
+			v = boxed
+		}
 		if v.typ != param.typ {
 			return nil, unsupportedf("type-system", "function %q arg %d type %s, want %s", sig.name, i+1, v.typ, param.typ)
 		}
@@ -2490,4 +2504,116 @@ func (g *generator) enumVariantCallTarget(call *ast.CallExpr) (enumVariantRef, b
 	default:
 		return enumVariantRef{}, false, nil
 	}
+}
+
+// emitInterfaceMethodCall dispatches a method call whose receiver is
+// an interface value (`%osty.iface` fat pointer). The fat pointer is
+// split into (data, vtable), the correct function-pointer slot is
+// loaded from the vtable array, and the call is emitted as an
+// `indirect call` with the data pointer threaded in as `self`.
+//
+// Phase 6b scope: zero non-self arguments only. Methods carrying
+// extra parameters return `found=true` with an `unsupported`
+// diagnostic so callers know the dispatch path was recognised.
+func (g *generator) emitInterfaceMethodCall(call *ast.CallExpr) (value, bool, error) {
+	fx, ok := call.Fn.(*ast.FieldExpr)
+	if !ok || fx == nil {
+		return value{}, false, nil
+	}
+	recv, err := g.emitExpr(fx.X)
+	if err != nil {
+		return value{}, true, err
+	}
+	if recv.typ != "%osty.iface" {
+		return value{}, false, nil
+	}
+	iface, slot := g.findInterfaceMethod(fx.Name)
+	if iface == nil {
+		return value{}, true, unsupportedf("call", "no interface declares method %q", fx.Name)
+	}
+	if slot < 0 || slot >= len(iface.decl.Methods) {
+		return value{}, true, unsupportedf("call", "interface %q has no slot for %q", iface.name, fx.Name)
+	}
+	methodDecl := iface.decl.Methods[slot]
+	if methodDecl == nil || methodDecl.ReturnType == nil {
+		return value{}, true, unsupportedf("call", "interface method %q has no return type", fx.Name)
+	}
+	// Phase 6c: interface method params are lowered individually and
+	// threaded into the indirect call as extra LLVM arguments. The
+	// receiver slot is carried by `FnDecl.Recv` (not `Params`), so
+	// `methodDecl.Params` already lists the non-self user-facing args
+	// 1:1 with `call.Args`.
+	nonSelfParams := methodDecl.Params
+	if len(nonSelfParams) != len(call.Args) {
+		return value{}, true, unsupportedf("call",
+			"interface method %q expects %d non-self args, got %d",
+			fx.Name, len(nonSelfParams), len(call.Args))
+	}
+	argPairs := make([][2]string, 0, len(nonSelfParams))
+	for i, p := range nonSelfParams {
+		if p == nil || p.Type == nil {
+			return value{}, true, unsupportedf("call", "interface method %q arg %d has no type", fx.Name, i)
+		}
+		paramTyp, err := llvmType(p.Type, g.typeEnv())
+		if err != nil {
+			return value{}, true, err
+		}
+		av, err := g.emitExpr(call.Args[i].Value)
+		if err != nil {
+			return value{}, true, err
+		}
+		if av.typ != paramTyp {
+			return value{}, true, unsupportedf("call",
+				"interface method %q arg %d: expected %s, got %s",
+				fx.Name, i, paramTyp, av.typ)
+		}
+		argPairs = append(argPairs, [2]string{paramTyp, av.ref})
+	}
+	retTyp, err := llvmType(methodDecl.ReturnType, g.typeEnv())
+	if err != nil {
+		return value{}, true, err
+	}
+	emitter := g.toOstyEmitter()
+	dataPtr := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = extractvalue %%osty.iface %s, 0", dataPtr, recv.ref))
+	vtable := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = extractvalue %%osty.iface %s, 1", vtable, recv.ref))
+	fnPtrSlot := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf(
+		"  %s = getelementptr [%d x ptr], ptr %s, i64 0, i64 %d",
+		fnPtrSlot, len(iface.methods), vtable, slot,
+	))
+	fnPtr := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = load ptr, ptr %s", fnPtr, fnPtrSlot))
+	callArgList := fmt.Sprintf("ptr %s", dataPtr)
+	for _, p := range argPairs {
+		callArgList += fmt.Sprintf(", %s %s", p[0], p[1])
+	}
+	ret := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf(
+		"  %s = call %s %s(%s)",
+		ret, retTyp, fnPtr, callArgList,
+	))
+	g.takeOstyEmitter(emitter)
+	return value{typ: retTyp, ref: ret}, true, nil
+}
+
+// findInterfaceMethod locates the (interface, slot) pair for a method
+// name across every known interface. Returns (nil, -1) when no
+// interface declares the name. Ambiguity — two different interfaces
+// declaring the same method name — picks the first match; a stricter
+// resolution (requiring the receiver's static interface type) is a
+// Phase 6c refinement.
+func (g *generator) findInterfaceMethod(name string) (*interfaceInfo, int) {
+	for _, iface := range g.interfacesByName {
+		if iface == nil {
+			continue
+		}
+		for i, m := range iface.methods {
+			if m.name == name {
+				return iface, i
+			}
+		}
+	}
+	return nil, -1
 }
