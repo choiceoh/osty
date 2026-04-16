@@ -186,8 +186,11 @@ The main v0.4 front-end static guarantee hooks are wired here:
   demand via `rewriteGenericMethodCall` + `emitMethodSpecialization`,
   appended to the owner's Methods list so the existing llvmgen dispatch
   keeps working; original generic method templates are stripped by a
-  final cleanup pass. Generic interface declarations and bare
-  function-pointer turbofish stay out of scope for this phase,
+  final cleanup pass. Generic interface declarations
+  (`interface Iterator<T>`) are specialized through the same typeQueue
+  path as struct/enum via `requestInterfaceType` +
+  `emitInterfaceSpecialization`. Bare function-pointer turbofish stays
+  out of scope for this phase,
 - structural interface satisfaction checks composed interfaces,
   `Self`-typed signatures, generic receiver substitution, params, and
   generic bounds,

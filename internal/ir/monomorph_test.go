@@ -1807,6 +1807,222 @@ func TestMonomorphMangleMethodHelpers(t *testing.T) {
 	}
 }
 
+// ==== Phase 5 generic interface specialization ====
+
+// genericIteratorInterface returns `interface Iterator<T> { fn next(self) -> T }`.
+func genericIteratorInterface() *InterfaceDecl {
+	tv := &TypeVar{Name: "T"}
+	return &InterfaceDecl{
+		Name:     "Iterator",
+		Generics: []*TypeParam{{Name: "T"}},
+		Methods: []*FnDecl{{
+			Name:   "next",
+			Params: []*Param{{Name: "self", Type: &NamedType{Name: "Iterator", Args: []Type{tv}}}},
+			Return: tv,
+		}},
+	}
+}
+
+// findInterfaceSpec returns the first mangled InterfaceDecl in a module.
+func findInterfaceSpec(m *Module) *InterfaceDecl {
+	for _, d := range m.Decls {
+		if id, ok := d.(*InterfaceDecl); ok && strings.HasPrefix(id.Name, "_ZTS") {
+			return id
+		}
+	}
+	return nil
+}
+
+func TestMonomorphizeGenericInterfaceSpecialization(t *testing.T) {
+	// interface Iterator<T> { fn next(self) -> T }
+	// fn use(it: Iterator<Int>) { ... }
+	// The parameter type triggers specialization of Iterator<Int>.
+	iter := genericIteratorInterface()
+	user := &FnDecl{
+		Name:   "use",
+		Params: []*Param{{Name: "it", Type: &NamedType{Name: "Iterator", Args: []Type{TInt}}}},
+		Return: TUnit,
+		Body:   &Block{},
+	}
+	in := &Module{Package: "main", Decls: []Decl{iter, user}}
+	out, errs := Monomorphize(in)
+	if len(errs) != 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	spec := findInterfaceSpec(out)
+	if spec == nil {
+		t.Fatalf("Iterator specialization missing from output: %+v", out.Decls)
+	}
+	if spec.Generics != nil {
+		t.Fatalf("specialization must shed generics, got %d", len(spec.Generics))
+	}
+	// The cloned fn `use` must have its param type rewritten to the mangled interface.
+	userCp := out.Decls[0].(*FnDecl)
+	pt, ok := userCp.Params[0].Type.(*NamedType)
+	if !ok || !strings.HasPrefix(pt.Name, "_ZTS") {
+		t.Fatalf("use.Params[0].Type not rewritten to mangled interface: %+v", userCp.Params[0].Type)
+	}
+	if pt.Name != spec.Name {
+		t.Fatalf("mangled names mismatch: param=%q spec=%q", pt.Name, spec.Name)
+	}
+	// Method signature must have concrete return.
+	if len(spec.Methods) != 1 || spec.Methods[0].Return != TInt {
+		t.Fatalf("interface method return not substituted to Int: %+v", spec.Methods)
+	}
+}
+
+func TestMonomorphizeGenericInterfaceDedup(t *testing.T) {
+	iter := genericIteratorInterface()
+	makeUser := func(name string) *FnDecl {
+		return &FnDecl{
+			Name:   name,
+			Params: []*Param{{Name: "it", Type: &NamedType{Name: "Iterator", Args: []Type{TInt}}}},
+			Return: TUnit,
+			Body:   &Block{},
+		}
+	}
+	in := &Module{Package: "main", Decls: []Decl{iter, makeUser("a"), makeUser("b")}}
+	out, _ := Monomorphize(in)
+	specs := 0
+	for _, d := range out.Decls {
+		if id, ok := d.(*InterfaceDecl); ok && strings.HasPrefix(id.Name, "_ZTS") {
+			specs++
+		}
+	}
+	if specs != 1 {
+		t.Fatalf("expected 1 deduped Iterator<Int> spec, got %d", specs)
+	}
+}
+
+func TestMonomorphizeGenericInterfaceDistinctArgs(t *testing.T) {
+	iter := genericIteratorInterface()
+	a := &FnDecl{
+		Name:   "a",
+		Params: []*Param{{Name: "it", Type: &NamedType{Name: "Iterator", Args: []Type{TInt}}}},
+		Return: TUnit, Body: &Block{},
+	}
+	b := &FnDecl{
+		Name:   "b",
+		Params: []*Param{{Name: "it", Type: &NamedType{Name: "Iterator", Args: []Type{TBool}}}},
+		Return: TUnit, Body: &Block{},
+	}
+	in := &Module{Package: "main", Decls: []Decl{iter, a, b}}
+	out, _ := Monomorphize(in)
+	specs := 0
+	for _, d := range out.Decls {
+		if id, ok := d.(*InterfaceDecl); ok && strings.HasPrefix(id.Name, "_ZTS") {
+			specs++
+		}
+	}
+	if specs != 2 {
+		t.Fatalf("expected 2 specs for distinct type args, got %d", specs)
+	}
+}
+
+func TestMonomorphizeUnusedGenericInterfaceDropped(t *testing.T) {
+	iter := genericIteratorInterface()
+	in := &Module{Package: "main", Decls: []Decl{iter}}
+	out, errs := Monomorphize(in)
+	if len(errs) != 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	for _, d := range out.Decls {
+		if _, ok := d.(*InterfaceDecl); ok {
+			t.Fatalf("unused generic interface should be dropped, still in output: %+v", d)
+		}
+	}
+}
+
+func TestMonomorphizeGenericInterfaceArityMismatch(t *testing.T) {
+	iter := genericIteratorInterface() // Generics=1
+	// Iterator<Int, Bool> — 2 type args
+	user := &FnDecl{
+		Name:   "use",
+		Params: []*Param{{Name: "it", Type: &NamedType{Name: "Iterator", Args: []Type{TInt, TBool}}}},
+		Return: TUnit, Body: &Block{},
+	}
+	in := &Module{Package: "main", Decls: []Decl{iter, user}}
+	_, errs := Monomorphize(in)
+	if len(errs) == 0 {
+		t.Fatalf("expected arity-mismatch error, got none")
+	}
+	joined := ""
+	for _, e := range errs {
+		joined += e.Error() + "\n"
+	}
+	if !strings.Contains(joined, "arity mismatch") || !strings.Contains(joined, "Iterator") {
+		t.Fatalf("expected 'arity mismatch' + 'Iterator' in err, got %q", joined)
+	}
+}
+
+func TestMonomorphizeInfersVariantLitTypeFromIntPayload(t *testing.T) {
+	// Simulate the front-end's ErrType drop: Maybe.Some(42) with every
+	// type slot left as ErrType. The recovery heuristic should infer
+	// `Maybe<Int>` from the IntLit payload, drive a Maybe<Int>
+	// specialization, and rewrite the VariantLit.T + Enum accordingly.
+	maybe := genericMaybeEnum()
+	lit := &VariantLit{
+		Enum:    "Maybe",
+		Variant: "Some",
+		T:       ErrTypeVal,
+		Args:    []Arg{{Value: &IntLit{Text: "42", T: ErrTypeVal}}},
+	}
+	main := &FnDecl{
+		Name: "main", Return: TUnit,
+		Body: &Block{Stmts: []Stmt{&LetStmt{
+			Name:  "m",
+			Type:  ErrTypeVal, // no annotation
+			Value: lit,
+		}}},
+	}
+	in := &Module{Package: "main", Decls: []Decl{maybe, main}}
+	out, errs := Monomorphize(in)
+	if len(errs) != 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	spec := findEnumSpec(out)
+	if spec == nil {
+		t.Fatalf("Maybe specialization missing; decls=%+v", out.Decls)
+	}
+	// Post-rewrite VariantLit should carry the mangled enum name in
+	// both Enum and T fields.
+	mainCp := out.Decls[0].(*FnDecl)
+	litCp := mainCp.Body.Stmts[0].(*LetStmt).Value.(*VariantLit)
+	if !strings.HasPrefix(litCp.Enum, "_ZTS") {
+		t.Fatalf("VariantLit.Enum should be mangled post-recovery, got %q", litCp.Enum)
+	}
+	if nt, ok := litCp.T.(*NamedType); !ok || nt.Name != litCp.Enum {
+		t.Fatalf("VariantLit.T should sync with mangled Enum, got %+v", litCp.T)
+	}
+	// The LetStmt annotation was missing — the scanner should have
+	// adopted the value's concrete type.
+	let := mainCp.Body.Stmts[0].(*LetStmt)
+	if _, isErr := let.Type.(*ErrType); isErr {
+		t.Fatalf("LetStmt.Type should be propagated from value, still ErrType")
+	}
+}
+
+func TestMonomorphizeVariantRecoveryLeavesPayloadFreeAlone(t *testing.T) {
+	// `Maybe.None` has no payload, so there's no concrete type to unify
+	// T against — the heuristic must bail out and leave the VariantLit
+	// untouched (no specialization requested).
+	maybe := genericMaybeEnum()
+	lit := &VariantLit{
+		Enum:    "Maybe",
+		Variant: "None",
+		T:       ErrTypeVal,
+	}
+	main := &FnDecl{
+		Name: "main", Return: TUnit,
+		Body: &Block{Stmts: []Stmt{&LetStmt{Name: "m", Type: ErrTypeVal, Value: lit}}},
+	}
+	in := &Module{Package: "main", Decls: []Decl{maybe, main}}
+	out, _ := Monomorphize(in)
+	if findEnumSpec(out) != nil {
+		t.Fatalf("payload-free Maybe.None must NOT drive a specialization (no inferable T)")
+	}
+}
+
 func TestMonomorphizeStructArityMismatchRecordsError(t *testing.T) {
 	pair := genericPairStruct()
 	main := &FnDecl{
