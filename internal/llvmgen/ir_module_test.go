@@ -293,6 +293,36 @@ fn main() {
 	}
 }
 
+func TestGenerateModuleInterfaceBoxingDispatch(t *testing.T) {
+	src := `interface Sized {
+    fn size(self) -> Int
+}
+
+struct Vec {
+    count: Int,
+
+    fn size(self) -> Int {
+        self.count
+    }
+}
+
+fn main() {
+    let v = Vec { count: 3 }
+    let s: Sized = v
+    println(s.size())
+}
+`
+	got := runMonoLowerPipeline(t, src, "/tmp/phase6b_box_dispatch.osty")
+	for _, want := range []string{
+		"%osty.iface",
+		"@osty.vtable.Vec__Sized",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // TestGenerateModuleMethodLocalGenericGetMonomorphized verifies the
 // Phase 4 path: a non-generic struct with a generic method
 // (`fn get<U>(self, u: U) -> U`) gets specialized per turbofish call
