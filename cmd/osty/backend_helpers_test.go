@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -33,6 +35,12 @@ func TestDefaultEmitMode(t *testing.T) {
 	}
 	if got := defaultEmitMode("gen", backend.NameLLVM); got != backend.EmitLLVMIR {
 		t.Fatalf("gen/llvm default emit = %q, want %q", got, backend.EmitLLVMIR)
+	}
+	if got := defaultEmitMode("pipeline", backend.NameGo); got != backend.EmitGoSource {
+		t.Fatalf("pipeline/go default emit = %q, want %q", got, backend.EmitGoSource)
+	}
+	if got := defaultEmitMode("pipeline", backend.NameLLVM); got != backend.EmitLLVMIR {
+		t.Fatalf("pipeline/llvm default emit = %q, want %q", got, backend.EmitLLVMIR)
 	}
 	if got := defaultEmitMode("build", backend.NameGo); got != backend.EmitBinary {
 		t.Fatalf("build/go default emit = %q, want %q", got, backend.EmitBinary)
@@ -67,6 +75,8 @@ func TestValidateCLIEmit(t *testing.T) {
 	}{
 		{"gen", backend.NameGo, backend.EmitGoSource},
 		{"gen", backend.NameLLVM, backend.EmitLLVMIR},
+		{"pipeline", backend.NameGo, backend.EmitGoSource},
+		{"pipeline", backend.NameLLVM, backend.EmitLLVMIR},
 		{"build", backend.NameGo, backend.EmitGoSource},
 		{"build", backend.NameGo, backend.EmitBinary},
 		{"build", backend.NameLLVM, backend.EmitObject},
@@ -87,6 +97,8 @@ func TestValidateCLIEmit(t *testing.T) {
 	}{
 		{"gen", backend.NameGo, backend.EmitBinary, "cannot emit"},
 		{"gen", backend.NameLLVM, backend.EmitObject, "cannot emit"},
+		{"pipeline", backend.NameGo, backend.EmitBinary, "cannot emit"},
+		{"pipeline", backend.NameLLVM, backend.EmitObject, "cannot emit"},
 		{"build", backend.NameGo, backend.EmitObject, "cannot emit"},
 		{"run", backend.NameGo, backend.EmitGoSource, "requires --emit"},
 		{"test", backend.NameLLVM, backend.EmitLLVMIR, "requires --emit"},
@@ -102,15 +114,54 @@ func TestValidateCLIEmit(t *testing.T) {
 	}
 }
 
-func TestRequireImplementedBackend(t *testing.T) {
-	if err := requireImplementedBackend(backend.NameGo); err != nil {
-		t.Fatalf("go backend rejected: %v", err)
+func TestValidateCLIEmitAllowsLLVMSkeletonModes(t *testing.T) {
+	for _, mode := range []backend.EmitMode{backend.EmitLLVMIR, backend.EmitObject, backend.EmitBinary} {
+		if err := validateCLIEmit("build", backend.NameLLVM, mode); err != nil {
+			t.Fatalf("build llvm %q rejected: %v", mode, err)
+		}
 	}
-	err := requireImplementedBackend(backend.NameLLVM)
-	if err == nil {
-		t.Fatal("llvm backend accepted; want not-implemented error")
+}
+
+func TestCacheableBuildEmit(t *testing.T) {
+	cases := []struct {
+		name    backend.Name
+		mode    backend.EmitMode
+		want    bool
+		context string
+	}{
+		{backend.NameGo, backend.EmitBinary, true, "go binary keeps the existing build cache"},
+		{backend.NameGo, backend.EmitGoSource, false, "go source emission stays uncached"},
+		{backend.NameLLVM, backend.EmitLLVMIR, true, "llvm-ir is the first successful LLVM build artifact"},
+		{backend.NameLLVM, backend.EmitObject, true, "llvm object emission now produces a cacheable artifact"},
+		{backend.NameLLVM, backend.EmitBinary, true, "llvm binary will use the build cache once implemented"},
 	}
-	if !strings.Contains(err.Error(), "not implemented yet") {
-		t.Fatalf("unexpected error: %v", err)
+	for _, tc := range cases {
+		if got := cacheableBuildEmit(tc.name, tc.mode); got != tc.want {
+			t.Fatalf("%s: cacheableBuildEmit(%q, %q) = %v, want %v", tc.context, tc.name, tc.mode, got, tc.want)
+		}
+	}
+}
+
+func TestCachedArtifactsExist(t *testing.T) {
+	root := t.TempDir()
+	if !cachedArtifactsExist(root, nil) {
+		t.Fatal("empty artifact map should preserve legacy cache behavior")
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".osty", "out", "debug", "llvm", "runtime"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".osty", "out", "debug", "llvm", "main.ll"), []byte("; ll\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	artifacts := map[string]string{
+		"llvm_ir":     ".osty/out/debug/llvm/main.ll",
+		"runtime_dir": ".osty/out/debug/llvm/runtime",
+	}
+	if !cachedArtifactsExist(root, artifacts) {
+		t.Fatalf("expected artifact map to be present: %+v", artifacts)
+	}
+	artifacts["object"] = ".osty/out/debug/llvm/main.o"
+	if cachedArtifactsExist(root, artifacts) {
+		t.Fatalf("missing object artifact should invalidate cache hit: %+v", artifacts)
 	}
 }

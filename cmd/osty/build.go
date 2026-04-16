@@ -57,7 +57,7 @@ func runBuild(args []string, flags cliFlags) {
 	var pf profileFlags
 	pf.register(fs)
 	_ = fs.Parse(args)
-	_, emitMode := resolveBackendAndEmitFlags("build", backendName, emitName)
+	backendID, emitMode := resolveBackendAndEmitFlags("build", backendName, emitName)
 	start := "."
 	if fs.NArg() == 1 {
 		start = fs.Arg(0)
@@ -91,15 +91,16 @@ func runBuild(args []string, flags cliFlags) {
 	// under the project root and compare against the cached
 	// fingerprint. A matching record lets us skip the front-end +
 	// gen entirely; --force overrides this.
-	if !force && emitMode == backend.EmitBinary {
-		if fp, err := profile.ReadFingerprint(root, profileName, triple); err == nil && fp != nil {
+	if !force && cacheableBuildEmit(backendID, emitMode) {
+		if fp, err := profile.ReadFingerprintForBackend(root, profileName, triple, backendID.String()); err == nil && fp != nil {
 			curSrc, err := profile.HashSources(root, isOstySource)
 			if err == nil {
 				augmentSourcesWithProjectFiles(curSrc, root)
-				fresh := profile.NewFingerprint(curSrc, resolved, toolVersion())
-				if fp.Equal(fresh) {
+				fresh := profile.NewBackendFingerprint(curSrc, resolved, toolVersion(),
+					backendID.String(), emitMode.String(), nil)
+				if fp.Equal(fresh) && cachedArtifactsExist(root, fp.Artifacts) {
 					fmt.Printf("Build is up to date (cache: %s)\n",
-						profile.CachePath(root, profileName, triple))
+						profile.BackendCachePath(root, profileName, triple, backendID.String()))
 					return
 				}
 			}
@@ -138,10 +139,11 @@ func runBuild(args []string, flags cliFlags) {
 	// single-package loader.
 	deps := pkgmgr.NewDepProvider(m, graph, env)
 	featSet := featureSet(resolved)
+	var emitResult *backend.Result
 	if m.Workspace != nil {
-		buildWorkspace(root, m, flags, deps, resolved, featSet, emitMode)
+		emitResult = buildWorkspace(root, m, flags, deps, resolved, featSet, backendID, emitMode)
 	} else {
-		buildPackage(root, m, flags, deps, resolved, featSet, emitMode)
+		emitResult = buildPackage(root, m, flags, deps, resolved, featSet, backendID, emitMode)
 	}
 
 	// Step 6: record the build fingerprint under .osty/cache/ so the
@@ -149,10 +151,12 @@ func runBuild(args []string, flags cliFlags) {
 	// failure to write the fingerprint is logged but doesn't fail
 	// the build — correctness is preserved, we just lose the
 	// incremental speed-up next time.
-	if emitMode == backend.EmitBinary {
+	if cacheableBuildEmit(backendID, emitMode) && emitResult != nil {
 		if sources, err := profile.HashSources(root, isOstySource); err == nil {
 			augmentSourcesWithProjectFiles(sources, root)
-			fp := profile.NewFingerprint(sources, resolved, toolVersion())
+			artifacts := fingerprintArtifacts(root, emitResult.Artifacts)
+			fp := profile.NewBackendFingerprint(sources, resolved, toolVersion(),
+				backendID.String(), emitMode.String(), artifacts)
 			if err := fp.Write(root); err != nil {
 				fmt.Fprintf(os.Stderr, "osty build: warning: cache write failed: %v\n", err)
 			}
@@ -216,13 +220,61 @@ func toolVersion() string {
 	return "osty-dev"
 }
 
+func cacheableBuildEmit(backendID backend.Name, emitMode backend.EmitMode) bool {
+	if emitMode == backend.EmitBinary {
+		return true
+	}
+	if backendID != backend.NameLLVM {
+		return false
+	}
+	return emitMode == backend.EmitLLVMIR || emitMode == backend.EmitObject
+}
+
+func fingerprintArtifacts(root string, artifacts backend.Artifacts) map[string]string {
+	out := map[string]string{}
+	add := func(key, path string) {
+		if path == "" {
+			return
+		}
+		if _, err := os.Stat(path); err != nil {
+			return
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return
+		}
+		out[key] = filepath.ToSlash(rel)
+	}
+	add("go_source", artifacts.GoSource)
+	add("llvm_ir", artifacts.LLVMIR)
+	add("object", artifacts.Object)
+	add("binary", artifacts.Binary)
+	add("runtime_dir", artifacts.RuntimeDir)
+	return out
+}
+
+func cachedArtifactsExist(root string, artifacts map[string]string) bool {
+	if len(artifacts) == 0 {
+		return true
+	}
+	for _, rel := range artifacts {
+		if rel == "" {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
 // buildWorkspace runs lex → parse → resolve → check over every member
 // of the workspace rooted at dir. Exits non-zero on any error-severity
 // diagnostic. deps supplies the Workspace's DepProvider so `use`
 // targets to vendored packages resolve. When the root manifest declares
-// a binary entry point, it is additionally transpiled and linked with
-// `go build` using the resolved profile's go-flags / env.
-func buildWorkspace(dir string, m *manifest.Manifest, flags cliFlags, deps resolve.DepProvider, resolved *profile.Resolved, feats map[string]bool, emitMode backend.EmitMode) {
+// a binary entry point, it is additionally emitted through the selected
+// backend.
+func buildWorkspace(dir string, m *manifest.Manifest, flags cliFlags, deps resolve.DepProvider, resolved *profile.Resolved, feats map[string]bool, backendID backend.Name, emitMode backend.EmitMode) *backend.Result {
 	ws, err := resolve.NewWorkspace(dir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty build: %v\n", err)
@@ -265,25 +317,26 @@ func buildWorkspace(dir string, m *manifest.Manifest, flags cliFlags, deps resol
 	if anyErr {
 		os.Exit(1)
 	}
-	// Transpile + `go build` the root binary package (if any). Library
-	// members fall out of the binary emit for now — multi-target
-	// workspace builds are tracked as emitter/back-end parity work.
+	// Emit the root binary package (if any). Library members fall out of the
+	// binary emit for now — multi-target workspace builds are tracked as
+	// emitter/backend parity work.
 	if m.HasPackage {
 		rootPkg := ws.Packages[""]
 		if rootPkg != nil {
-			emitAndBuild(dir, m, rootPkg, results[""], checks[""], resolved, feats, emitMode)
+			return emitAndBuild(dir, m, rootPkg, results[""], checks[""], resolved, feats, backendID, emitMode)
 		}
 	}
+	return nil
 }
 
-// buildPackage runs the front-end over a single-package project and
-// then drives gen + `go build` for the binary entry point.
+// buildPackage runs the front-end over a single-package project and then drives
+// the selected backend for the binary entry point.
 // When deps is non-nil, we wrap the package in a one-member Workspace
 // so `use` references to vendored external deps resolve through the
 // DepProvider. The plain resolve.LoadPackage path is kept as a
 // fallback for zero-dep projects because it's simpler and has no
 // workspace state to carry.
-func buildPackage(dir string, m *manifest.Manifest, flags cliFlags, deps resolve.DepProvider, resolved *profile.Resolved, feats map[string]bool, emitMode backend.EmitMode) {
+func buildPackage(dir string, m *manifest.Manifest, flags cliFlags, deps resolve.DepProvider, resolved *profile.Resolved, feats map[string]bool, backendID backend.Name, emitMode backend.EmitMode) *backend.Result {
 	if deps != nil {
 		ws, err := resolve.NewWorkspace(dir)
 		if err != nil {
@@ -314,9 +367,9 @@ func buildPackage(dir string, m *manifest.Manifest, flags cliFlags, deps resolve
 		}
 		rootPkg := ws.Packages[""]
 		if rootPkg != nil {
-			emitAndBuild(dir, m, rootPkg, results[""], checks[""], resolved, feats, emitMode)
+			return emitAndBuild(dir, m, rootPkg, results[""], checks[""], resolved, feats, backendID, emitMode)
 		}
-		return
+		return nil
 	}
 	pkg, err := resolve.LoadPackage(dir)
 	if err != nil {
@@ -333,24 +386,22 @@ func buildPackage(dir string, m *manifest.Manifest, flags cliFlags, deps resolve
 	// Note: the no-deps path feeds a synthetic PackageResult because
 	// emitAndBuild expects a *resolve.PackageResult with Diags; we
 	// already have all of it from ResolvePackage above.
-	emitAndBuild(dir, m, pkg, res, chk, resolved, feats, emitMode)
+	return emitAndBuild(dir, m, pkg, res, chk, resolved, feats, backendID, emitMode)
 }
 
-// emitAndBuild is the Go backend + `go build` driver. It picks the entry
-// file (manifest `[bin].path` or default `main.osty`), transpiles it
-// through internal/backend, writes the output under
-// .osty/out/<profile>[-<triple>]/go/, and invokes the Go toolchain
-// with the resolved profile's go-flags + target env. Libraries (no
-// entry file on disk) are a no-op until the emitter grows
-// package-per-package output.
+// emitAndBuild picks the entry file (manifest `[bin].path` or default
+// `main.osty`) and drives the selected backend. The Go backend still invokes
+// the Go toolchain for binary emission; LLVM can currently stop after
+// inspectable IR emission. Libraries (no entry file on disk) are a no-op until
+// the emitter grows package-per-package output.
 //
 // Files whose header declares `@feature: NAME` via the @feature
 // pragma are skipped when NAME isn't in the active feature set, so
 // feature-gated modules drop out before transpile.
 //
-// A failure at the go-build step returns a non-zero exit; a gen-time
+// A failure at the backend/toolchain step returns a non-zero exit; a gen-time
 // TODO marker is only logged so the clean portion remains inspectable.
-func emitAndBuild(root string, m *manifest.Manifest, pkg *resolve.Package, pr *resolve.PackageResult, chk *check.Result, resolved *profile.Resolved, feats map[string]bool, emitMode backend.EmitMode) {
+func emitAndBuild(root string, m *manifest.Manifest, pkg *resolve.Package, pr *resolve.PackageResult, chk *check.Result, resolved *profile.Resolved, feats map[string]bool, backendID backend.Name, emitMode backend.EmitMode) *backend.Result {
 	// 1. Locate the entry file. A library project has no entry;
 	// skip the emit path so `osty build` still works as a front-end
 	// check for libs.
@@ -361,7 +412,7 @@ func emitAndBuild(root string, m *manifest.Manifest, pkg *resolve.Package, pr *r
 	entryAbs := filepath.Join(root, entryRel)
 	if _, err := os.Stat(entryAbs); err != nil {
 		// Library or deferred binary: emit step is a no-op.
-		return
+		return nil
 	}
 	// 2. Feature-pragma filter: don't emit a file whose pragma
 	// requires an inactive feature. If the entry file is gated out
@@ -369,7 +420,7 @@ func emitAndBuild(root string, m *manifest.Manifest, pkg *resolve.Package, pr *r
 	if skipped, reason := fileIsFeatureGated(entryAbs, feats); skipped {
 		fmt.Fprintf(os.Stderr, "osty build: skipping %s (feature %q not enabled)\n",
 			entryRel, reason)
-		return
+		return nil
 	}
 	// 3. Find the PackageFile matching entryAbs so we can pass AST +
 	// Refs into gen.
@@ -406,7 +457,8 @@ func emitAndBuild(root string, m *manifest.Manifest, pkg *resolve.Package, pr *r
 			binName += ".exe"
 		}
 	}
-	goResult, err := backend.GoBackend{}.Emit(context.Background(), backend.Request{
+	selectedBackend := backendFromCLI("build", backendID)
+	emitResult, err := selectedBackend.Emit(context.Background(), backend.Request{
 		Layout: backend.Layout{
 			Root:    root,
 			Profile: profileName,
@@ -424,18 +476,42 @@ func emitAndBuild(root string, m *manifest.Manifest, pkg *resolve.Package, pr *r
 		Features:   resolved.Features,
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "osty build: %v\n", err)
+		exitBackendEmitError("build", emitResult, err)
+	}
+	if backendID != backend.NameGo {
+		switch emitMode {
+		case backend.EmitBinary:
+			if emitResult.Artifacts.Binary != "" {
+				fmt.Printf("Built %s (%s)\n", emitResult.Artifacts.Binary, profileName)
+				return emitResult
+			}
+		case backend.EmitObject:
+			if emitResult.Artifacts.Object != "" {
+				fmt.Printf("Generated %s (%s)\n", emitResult.Artifacts.Object, profileName)
+				return emitResult
+			}
+		case backend.EmitLLVMIR:
+			if artifact := emitResult.Artifacts.SourcePath(); artifact != "" {
+				fmt.Printf("Generated %s (%s)\n", artifact, profileName)
+				return emitResult
+			}
+		}
+		if artifact := emitResult.Artifacts.SourcePath(); artifact != "" {
+			fmt.Printf("Generated %s (%s)\n", artifact, profileName)
+			return emitResult
+		}
+		fmt.Fprintf(os.Stderr, "osty build: backend %q emit %q did not produce a buildable artifact\n", backendID, emitMode)
 		os.Exit(1)
 	}
-	goPath := goResult.Artifacts.GoSource
-	outDir := goResult.Artifacts.OutputDir
-	reportTranspileWarning("osty build", entryAbs, goPath, firstBackendWarning(goResult))
+	goPath := emitResult.Artifacts.GoSource
+	outDir := emitResult.Artifacts.OutputDir
+	reportTranspileWarning("osty build", entryAbs, goPath, firstBackendWarning(emitResult))
 	if emitMode == backend.EmitGoSource {
 		fmt.Printf("Generated %s (%s)\n", goPath, profileName)
-		return
+		return emitResult
 	}
 	// 5. Invoke `go build -o <bin>` with profile flags + target env.
-	binPath := goResult.Artifacts.Binary
+	binPath := emitResult.Artifacts.Binary
 	buildArgs := []string{"build"}
 	buildArgs = append(buildArgs, resolved.GoFlags()...)
 	buildArgs = append(buildArgs, "-o", binPath, goPath)
@@ -461,6 +537,7 @@ func emitAndBuild(root string, m *manifest.Manifest, pkg *resolve.Package, pr *r
 		os.Exit(1)
 	}
 	fmt.Printf("Built %s (%s)\n", binPath, profileName)
+	return emitResult
 }
 
 // binaryName returns the binary name for the package: the manifest's

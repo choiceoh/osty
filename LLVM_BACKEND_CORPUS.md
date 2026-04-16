@@ -43,9 +43,19 @@ Each fixture should be independently checkable as a single file and avoid:
 
 | Path | Expected stdout | Coverage |
 |---|---|---|
-| `testdata/backend/llvm_smoke/scalar_arithmetic.osty` | `42\n` | primitive integers, function call, arithmetic, if/else |
-| `testdata/backend/llvm_smoke/control_flow.osty` | `15\n` | mutable locals, inclusive range loop, accumulator update |
-| `testdata/backend/llvm_smoke/booleans.osty` | `7\n` | bool expressions, comparison, logical operators, conditional return |
+| `testdata/backend/llvm_smoke/minimal_print.osty` | `42\n` | Phase 12 minimal LLVM IR: no-arg `main` plus integer `println` expression |
+| `testdata/backend/llvm_smoke/scalar_arithmetic.osty` | `42\n` | Phase 13 LLVM IR: primitive integers, helper function call, immutable let, comparison, if/else |
+| `testdata/backend/llvm_smoke/control_flow.osty` | `15\n` | Phase 14 LLVM IR: mutable local, inclusive range loop, accumulator update |
+| `testdata/backend/llvm_smoke/booleans.osty` | `7\n` | Phase 15 LLVM IR: Bool comparison, logical not/and, value-position if/else, phi |
+
+The Phase 10 skeleton behavior and the Phase 12-15 lowering behavior are
+mirrored in
+`examples/selfhost-core/llvmgen.osty` so the LLVM backend logic is authored in
+Osty first. The Go `internal/llvmgen` package includes generated bridge code
+from that Osty source for module/function/skeleton rendering. A backend test
+transpiles the Osty emitter again and compares its
+minimal/scalar/control-flow/booleans and skeleton output byte-for-byte against
+the production bridge.
 
 These fixtures are deliberately smaller than the current examples. They are
 the first target for proving the thin vertical path:
@@ -53,6 +63,32 @@ the first target for proving the thin vertical path:
 ```text
 Osty source -> front-end -> internal/ir -> LLVM IR -> native binary
 ```
+
+Phase 18 adds the first host toolchain driver for this path: supported smoke
+fixtures can now go through `clang` from textual `.ll` to object/binary on
+hosts with that toolchain installed. Phase 19 adds the first executable parity
+gate for the table above. The case list and expected stdout are owned by
+`examples/selfhost-core/llvmgen.osty` via `llvmSmokeExecutableCorpus`; the Go
+test is only the host shim that runs the generated native binaries. The corpus
+still stays in `llvm-smoke` until CI policy promotes these gates to required
+jobs.
+
+Phase 20 moves unsupported/backend-capability diagnostics into the same
+self-hosted backend core. `use go` remains a `go-only` fixture class for native
+LLVM and receives the Osty-authored `LLVM001 go-only` diagnostic policy instead
+of Go-owned wording.
+
+Phase 21 extends that policy into a taxonomy for unsupported LLVM source
+shapes. The category codes and hints for source layout, type-system, statement,
+expression, control-flow, call, name, and function-signature failures are owned
+by `examples/selfhost-core/llvmgen.osty`; the Go bridge only detects the
+current AST situation and asks the generated policy for the diagnostic summary.
+
+Phase 22 routes the successful scalar instruction builders through that same
+self-hosted core. The Go bootstrap bridge still walks the existing AST while the
+LLVM strings for return, println, arithmetic, comparison, calls, if branches,
+loads, stores, mutable locals, and range loops are emitted by generated
+functions from `examples/selfhost-core/llvmgen.osty`.
 
 ## Promotion Rules
 

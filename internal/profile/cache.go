@@ -24,6 +24,8 @@ const CacheDirName = ".osty/cache"
 // clobber debug artifacts.
 const OutDirName = ".osty/out"
 
+const defaultCacheBackend = "go"
+
 // ArtifactKey formats the (profile, triple) tuple used to scope cache
 // entries and output directories. The triple portion is elided when
 // empty so host builds land at the familiar `out/<profile>/` path.
@@ -41,8 +43,25 @@ func OutputDir(root, profile, triple string) string {
 	return filepath.Join(root, OutDirName, ArtifactKey(profile, triple))
 }
 
-// CachePath returns the per-(profile, triple) fingerprint JSON file.
+// BackendCachePath returns the per-(profile, triple, backend) fingerprint JSON
+// file. Backend names are directory/file-safe stable identifiers such as "go"
+// and "llvm".
+func BackendCachePath(root, profile, triple, backend string) string {
+	if backend == "" {
+		backend = defaultCacheBackend
+	}
+	return filepath.Join(root, CacheDirName, ArtifactKey(profile, triple), backend+".json")
+}
+
+// CachePath returns the default Go backend fingerprint JSON file.
 func CachePath(root, profile, triple string) string {
+	return BackendCachePath(root, profile, triple, defaultCacheBackend)
+}
+
+// LegacyCachePath returns the pre-backend-aware fingerprint JSON file. New
+// builds do not write this path; it remains here so migration code and layout
+// tests can identify stale records deliberately.
+func LegacyCachePath(root, profile, triple string) string {
 	return filepath.Join(root, CacheDirName, ArtifactKey(profile, triple)+".json")
 }
 
@@ -54,6 +73,8 @@ func CachePath(root, profile, triple string) string {
 // The schema is forward-compatible by ignoring unknown JSON fields
 // — future tool versions can extend the record without migrating.
 type Fingerprint struct {
+	Backend     string            `json:"backend,omitempty"`
+	Emit        string            `json:"emit,omitempty"`
 	Profile     string            `json:"profile"`
 	Target      string            `json:"target,omitempty"`
 	ToolVersion string            `json:"tool_version"`
@@ -72,6 +93,12 @@ func (f *Fingerprint) Equal(other *Fingerprint) bool {
 		return false
 	}
 	if f.ToolVersion != other.ToolVersion {
+		return false
+	}
+	if f.Backend != other.Backend {
+		return false
+	}
+	if f.Emit != other.Emit {
 		return false
 	}
 	if !stringSliceEq(f.Features, other.Features) {
@@ -165,7 +192,22 @@ func NewFingerprint(sources map[string]string, r *Resolved, toolVer string) *Fin
 	}
 }
 
-// Write serializes f to the cache path for (profile, triple) under
+// NewBackendFingerprint builds a Fingerprint stamped with the backend and emit
+// mode that produced its artifacts.
+func NewBackendFingerprint(sources map[string]string, r *Resolved, toolVer, backend, emit string, artifacts map[string]string) *Fingerprint {
+	fp := NewFingerprint(sources, r, toolVer)
+	fp.Backend = backend
+	fp.Emit = emit
+	if len(artifacts) > 0 {
+		fp.Artifacts = map[string]string{}
+		for k, v := range artifacts {
+			fp.Artifacts[k] = v
+		}
+	}
+	return fp
+}
+
+// Write serializes f to the cache path for (profile, triple, backend) under
 // root. Parent directories are created as needed. The write is
 // atomic: content goes to a sibling `.tmp` file first, then Renamed
 // into place — a crash during `osty build` never leaves a truncated
@@ -174,7 +216,10 @@ func (f *Fingerprint) Write(root string) error {
 	if f == nil {
 		return fmt.Errorf("nil fingerprint")
 	}
-	path := CachePath(root, f.Profile, f.Target)
+	if f.Backend == "" {
+		f.Backend = defaultCacheBackend
+	}
+	path := BackendCachePath(root, f.Profile, f.Target, f.Backend)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -189,11 +234,23 @@ func (f *Fingerprint) Write(root string) error {
 	return os.Rename(tmp, path)
 }
 
-// ReadFingerprint loads the cached fingerprint for (profile, triple)
-// from root. Returns (nil, nil) when no such cache exists — a
-// missing cache is not an error, just a cold build.
+// ReadFingerprint loads the default Go backend fingerprint for
+// (profile, triple) from root.
 func ReadFingerprint(root, profile, triple string) (*Fingerprint, error) {
-	path := CachePath(root, profile, triple)
+	return ReadFingerprintForBackend(root, profile, triple, defaultCacheBackend)
+}
+
+// ReadFingerprintForBackend loads the cached fingerprint for (profile, triple,
+// backend) from root. Legacy <key>.json records are intentionally ignored so a
+// migrated build cannot accidentally skip work based on a Go-only cache path.
+//
+// Returns (nil, nil) when no such cache exists — a missing cache is not an
+// error, just a cold build.
+func ReadFingerprintForBackend(root, profile, triple, backend string) (*Fingerprint, error) {
+	if backend == "" {
+		backend = defaultCacheBackend
+	}
+	path := BackendCachePath(root, profile, triple, backend)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -201,6 +258,33 @@ func ReadFingerprint(root, profile, triple string) (*Fingerprint, error) {
 		}
 		return nil, err
 	}
+	f, err := parseFingerprint(path, data)
+	if err != nil {
+		return nil, err
+	}
+	if f.Backend == "" {
+		f.Backend = backend
+	}
+	return f, nil
+}
+
+// ReadLegacyFingerprint loads the old <key>.json cache path. Build does not
+// use this for freshness decisions; it exists for cache migration diagnostics.
+func ReadLegacyFingerprint(root, profile, triple string) (*Fingerprint, error) {
+	path := LegacyCachePath(root, profile, triple)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return parseFingerprint(path, data)
+}
+
+// parseFingerprint decodes one cache JSON record and annotates corrupt-cache
+// errors with the path that failed.
+func parseFingerprint(path string, data []byte) (*Fingerprint, error) {
 	var f Fingerprint
 	if err := json.Unmarshal(data, &f); err != nil {
 		return nil, fmt.Errorf("corrupt cache %s: %w", path, err)
@@ -210,6 +294,8 @@ func ReadFingerprint(root, profile, triple string) (*Fingerprint, error) {
 
 // CacheEntry is a compact summary used by `osty cache ls`.
 type CacheEntry struct {
+	Backend     string
+	Emit        string
 	Profile     string
 	Target      string
 	ToolVersion string
@@ -218,32 +304,50 @@ type CacheEntry struct {
 	BuiltAt     time.Time
 }
 
-// ListCache walks the cache directory under root and returns one
-// entry per valid fingerprint JSON. Corrupt files are silently
-// skipped so a single bad record doesn't break the listing. Entries
-// are sorted by (profile, target) for reproducible output.
+// ListCache walks the backend-aware cache directory under root and returns one
+// entry per valid fingerprint JSON. Legacy <key>.json files are ignored: they
+// may be cleaned, but they should not participate in migrated freshness checks.
+// Corrupt files are silently skipped so a single bad record doesn't break the
+// listing. Entries are sorted by (profile, target, backend) for reproducible
+// output.
 func ListCache(root string) ([]CacheEntry, error) {
 	dir := filepath.Join(root, CacheDirName)
-	entries, err := os.ReadDir(dir)
-	if err != nil {
+	if _, err := os.Stat(dir); err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
 		return nil, err
 	}
 	var out []CacheEntry
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-			continue
+	err := filepath.WalkDir(dir, func(full string, e fs.DirEntry, err error) error {
+		if err != nil {
+			return err
 		}
-		full := filepath.Join(dir, e.Name())
+		if e.IsDir() {
+			return nil
+		}
+		if !strings.HasSuffix(e.Name(), ".json") {
+			return nil
+		}
+		rel, err := filepath.Rel(dir, full)
+		if err != nil {
+			return nil
+		}
+		parts := strings.Split(filepath.ToSlash(rel), "/")
+		if len(parts) != 2 {
+			return nil
+		}
+		backend := strings.TrimSuffix(parts[1], ".json")
+		if backend == "" {
+			return nil
+		}
 		data, err := os.ReadFile(full)
 		if err != nil {
-			continue
+			return nil
 		}
-		var f Fingerprint
-		if err := json.Unmarshal(data, &f); err != nil {
-			continue
+		f, err := parseFingerprint(full, data)
+		if err != nil {
+			return nil
 		}
 		info, _ := e.Info()
 		size := int64(0)
@@ -251,6 +355,8 @@ func ListCache(root string) ([]CacheEntry, error) {
 			size = info.Size()
 		}
 		out = append(out, CacheEntry{
+			Backend:     firstNonEmpty(f.Backend, backend),
+			Emit:        f.Emit,
 			Profile:     f.Profile,
 			Target:      f.Target,
 			ToolVersion: f.ToolVersion,
@@ -258,12 +364,19 @@ func ListCache(root string) ([]CacheEntry, error) {
 			Size:        size,
 			BuiltAt:     f.BuiltAt,
 		})
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Profile != out[j].Profile {
 			return out[i].Profile < out[j].Profile
 		}
-		return out[i].Target < out[j].Target
+		if out[i].Target != out[j].Target {
+			return out[i].Target < out[j].Target
+		}
+		return out[i].Backend < out[j].Backend
 	})
 	return out, nil
 }
@@ -337,4 +450,11 @@ func stringSliceEq(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }

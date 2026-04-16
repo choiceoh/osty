@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -19,7 +20,7 @@ func defaultBackendName() string {
 }
 
 func defaultEmitMode(tool string, name backend.Name) backend.EmitMode {
-	if tool == "gen" {
+	if tool == "gen" || tool == "pipeline" {
 		if name == backend.NameLLVM {
 			return backend.EmitLLVMIR
 		}
@@ -44,24 +45,17 @@ func parseCLIEmitMode(raw string) (backend.EmitMode, error) {
 	return mode, nil
 }
 
-func requireImplementedBackend(name backend.Name) error {
-	if name != backend.NameGo {
-		return fmt.Errorf("backend %q is not implemented yet", name)
-	}
-	return nil
-}
-
 func validateCLIEmit(tool string, name backend.Name, mode backend.EmitMode) error {
 	switch tool {
-	case "gen":
+	case "gen", "pipeline":
 		switch name {
 		case backend.NameGo:
 			if mode != backend.EmitGoSource {
-				return fmt.Errorf("gen with backend %q cannot emit %q (want %q)", name, mode, backend.EmitGoSource)
+				return fmt.Errorf("%s with backend %q cannot emit %q (want %q)", tool, name, mode, backend.EmitGoSource)
 			}
 		case backend.NameLLVM:
 			if mode != backend.EmitLLVMIR {
-				return fmt.Errorf("gen with backend %q cannot emit %q (want %q)", name, mode, backend.EmitLLVMIR)
+				return fmt.Errorf("%s with backend %q cannot emit %q (want %q)", tool, name, mode, backend.EmitLLVMIR)
 			}
 		}
 	case "run", "test":
@@ -90,14 +84,36 @@ func resolveBackendAndEmitFlags(tool, backendRaw, emitRaw string) (backend.Name,
 		fmt.Fprintf(os.Stderr, "osty %s: %v\n", tool, err)
 		os.Exit(2)
 	}
-	if err := requireImplementedBackend(name); err != nil {
-		fmt.Fprintf(os.Stderr, "osty %s: %v\n", tool, err)
-		os.Exit(2)
-	}
 	return name, mode
 }
 
 func resolveBackendFlag(tool, raw string) backend.Name {
 	name, _ := resolveBackendAndEmitFlags(tool, raw, "")
 	return name
+}
+
+func backendFromCLI(tool string, name backend.Name) backend.Backend {
+	b, err := backend.New(name)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "osty %s: %v\n", tool, err)
+		os.Exit(2)
+	}
+	return b
+}
+
+func exitBackendEmitError(tool string, result *backend.Result, err error) {
+	if errors.Is(err, backend.ErrLLVMNotImplemented) {
+		fmt.Fprintf(os.Stderr, "osty %s: %v\n", tool, err)
+		if result != nil {
+			if artifact := result.Artifacts.SourcePath(); artifact != "" {
+				fmt.Fprintf(os.Stderr, "  artifact: %s\n", artifact)
+			}
+			if result.Artifacts.RuntimeDir != "" {
+				fmt.Fprintf(os.Stderr, "  runtime: %s\n", result.Artifacts.RuntimeDir)
+			}
+		}
+		os.Exit(1)
+	}
+	fmt.Fprintf(os.Stderr, "osty %s: %v\n", tool, err)
+	os.Exit(1)
 }

@@ -20,6 +20,12 @@ func TestCacheWriteReadRoundtrip(t *testing.T) {
 	if err := fp.Write(dir); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(dir, CacheDirName, NameDebug, "go.json")); err != nil {
+		t.Fatalf("backend-aware cache path missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, CacheDirName, NameDebug+".json")); !os.IsNotExist(err) {
+		t.Fatalf("legacy cache path should not be written, stat err=%v", err)
+	}
 	got, err := ReadFingerprint(dir, NameDebug, "")
 	if err != nil {
 		t.Fatalf("ReadFingerprint: %v", err)
@@ -79,6 +85,34 @@ func TestReadFingerprintMissing(t *testing.T) {
 	}
 }
 
+// TestReadFingerprintIgnoresLegacyPath confirms old <key>.json records do not
+// make migrated builds look fresh.
+func TestReadFingerprintIgnoresLegacyPath(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, CacheDirName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := LegacyCachePath(dir, NameDebug, "")
+	body := []byte(`{"profile":"debug","tool_version":"old","sources":{"main.osty":"abc"}}`)
+	if err := os.WriteFile(legacy, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fp, err := ReadFingerprint(dir, NameDebug, "")
+	if err != nil {
+		t.Fatalf("ReadFingerprint: %v", err)
+	}
+	if fp != nil {
+		t.Fatalf("ReadFingerprint returned legacy cache: %+v", fp)
+	}
+	legacyFP, err := ReadLegacyFingerprint(dir, NameDebug, "")
+	if err != nil {
+		t.Fatalf("ReadLegacyFingerprint: %v", err)
+	}
+	if legacyFP == nil || legacyFP.ToolVersion != "old" {
+		t.Fatalf("legacy read failed: %+v", legacyFP)
+	}
+}
+
 // TestListCacheAndClean exercises the cache-visualisation helpers.
 // After writing two fingerprints, ListCache should return both
 // entries sorted; CleanCache should remove them + any .osty/out
@@ -92,6 +126,9 @@ func TestListCacheAndClean(t *testing.T) {
 	}
 	if err := b.Write(dir); err != nil {
 		t.Fatalf("Write b: %v", err)
+	}
+	if err := os.WriteFile(LegacyCachePath(dir, "legacy", ""), []byte(`{"profile":"legacy","tool_version":"t","sources":{}}`), 0o644); err != nil {
+		t.Fatalf("write legacy: %v", err)
 	}
 	// Seed an out directory so CleanCache has something to remove.
 	outDir := OutputDir(dir, NameDebug, "")
@@ -111,6 +148,9 @@ func TestListCacheAndClean(t *testing.T) {
 	}
 	if entries[0].Profile != NameDebug {
 		t.Errorf("entries not sorted by profile name: %+v", entries)
+	}
+	if entries[0].Backend != "go" || entries[1].Backend != "go" {
+		t.Errorf("backend not inferred from cache path: %+v", entries)
 	}
 
 	total, err := CleanCache(dir)
