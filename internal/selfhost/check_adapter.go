@@ -5,9 +5,8 @@ package selfhost
 // CheckSummary is the exported Go shape for the bootstrapped Osty checker.
 //
 // The self-hosted checker is authoritative for mainstream checker diagnostics
-// and supplies structured expression/binding/instantiation facts to the Go
-// check.Result bridge. Declaration shapes are still collected on the Go side
-// until codegen no longer consumes the legacy descriptor structs directly.
+// and supplies structured expression, binding, declaration-symbol, and
+// instantiation facts to the Go check.Result bridge.
 type CheckSummary struct {
 	Assignments int
 	Accepted    int
@@ -69,7 +68,7 @@ func CheckSource(src []byte) CheckSummary {
 }
 
 // CheckSourceStructured runs the bootstrapped Osty checker and returns the
-// structured seed result that can be compared with the canonical Go checker.
+// structured result consumed by the Go check.Result bridge.
 func CheckSourceStructured(src []byte) CheckResult {
 	lexed := ostyLexSource(string(src))
 	checked := frontendCheckLexedSourceStructured(lexed)

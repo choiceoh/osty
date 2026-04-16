@@ -5,7 +5,7 @@
 //
 //   - *ast.File — the parsed syntax tree
 //   - *resolve.Result — symbol resolution (Refs, TypeRefs)
-//   - *check.Result — semantic types (Types, LetTypes, SymTypes, Descs)
+//   - *check.Result — semantic types (Types, LetTypes, SymTypes, Instantiations)
 //
 // No AST nodes are mutated; the package is a pure read-side consumer of
 // the front-end. Output is `package main` Go that can be fed directly to

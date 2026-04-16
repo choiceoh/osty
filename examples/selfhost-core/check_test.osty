@@ -53,6 +53,10 @@ fn testSelfCheckerEmitsStructuredResult() {
                 value
             }
 
+            fn unused() -> Int {
+                1
+            }
+
             fn main() {
                 let boxed: Box<Int> = Box { value: id::<Int>(1) }
             }
@@ -64,7 +68,20 @@ fn testSelfCheckerEmitsStructuredResult() {
     testing.assertEq(frontCheckResultBindingType(checked, "boxed"), "Box<Int>")
     testing.assert(frontCheckResultSymbolCount(checked, "fn") >= 2)
     testing.assert(frontCheckResultSymbolCount(checked, "struct") >= 1)
+    testing.assertEq(checkResultSymbolType(checked, "struct", "Box", ""), "Box<T>")
+    testing.assertEq(checkResultSymbolType(checked, "fn", "id", ""), "fn(T) -> T")
+    testing.assertEq(checkResultSymbolType(checked, "fn", "unused", ""), "fn() -> Int")
     testing.assert(frontCheckResultInstantiationCount(checked) >= 1)
+}
+
+fn checkResultSymbolType(result: FrontCheckResult, kind: String, name: String, owner: String) -> String {
+    let mut found = ""
+    for symbol in result.symbols {
+        if (kind == "" || symbol.kind == kind) && symbol.name == name && symbol.owner == owner {
+            found = symbol.typeName
+        }
+    }
+    found
 }
 
 fn testSelfCheckerReportsAssignmentReturnAndCallErrors() {
