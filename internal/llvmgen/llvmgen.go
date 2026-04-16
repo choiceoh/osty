@@ -867,6 +867,8 @@ func (g *generator) emitExpr(expr ast.Expr) (value, error) {
 		return g.emitStructLit(e)
 	case *ast.IfExpr:
 		return g.emitIfExprValue(e)
+	case *ast.MatchExpr:
+		return g.emitMatchExprValue(e)
 	default:
 		return value{}, unsupportedf("expression", "expression %T", expr)
 	}
@@ -1206,6 +1208,117 @@ func (g *generator) emitElseValue(expr ast.Expr) (value, error) {
 		return g.emitIfExprValue(e)
 	default:
 		return value{}, unsupportedf("control-flow", "else expression %T", expr)
+	}
+}
+
+func (g *generator) emitMatchExprValue(expr *ast.MatchExpr) (value, error) {
+	if expr == nil {
+		return value{}, unsupported("expression", "nil match expression")
+	}
+	if len(expr.Arms) != 2 {
+		return value{}, unsupportedf("expression", "match with %d arms", len(expr.Arms))
+	}
+	scrutinee, err := g.emitExpr(expr.Scrutinee)
+	if err != nil {
+		return value{}, err
+	}
+	if scrutinee.typ != "i64" {
+		return value{}, unsupportedf("type-system", "match scrutinee type %s, want enum tag", scrutinee.typ)
+	}
+	first := expr.Arms[0]
+	second := expr.Arms[1]
+	if first == nil || second == nil {
+		return value{}, unsupported("expression", "nil match arm")
+	}
+	if first.Guard != nil || second.Guard != nil {
+		return value{}, unsupported("control-flow", "match guards are not supported")
+	}
+	tag, ok, err := g.matchEnumTag(first.Pattern)
+	if err != nil {
+		return value{}, err
+	}
+	if !ok {
+		return value{}, unsupported("expression", "first match arm must be a payload-free enum variant")
+	}
+	if _, catchAll := second.Pattern.(*ast.WildcardPat); !catchAll {
+		if _, _, err := g.matchEnumTag(second.Pattern); err != nil {
+			return value{}, err
+		}
+	}
+	emitter := g.toOstyEmitter()
+	cond := llvmCompare(emitter, "eq", toOstyValue(scrutinee), toOstyValue(value{typ: "i64", ref: strconv.Itoa(tag)}))
+	labels := llvmIfExprStart(emitter, cond)
+	g.takeOstyEmitter(emitter)
+
+	thenValue, err := g.emitMatchArmBodyValue(first.Body)
+	if err != nil {
+		return value{}, err
+	}
+	emitter = g.toOstyEmitter()
+	llvmIfExprElse(emitter, labels)
+	g.takeOstyEmitter(emitter)
+
+	elseValue, err := g.emitMatchArmBodyValue(second.Body)
+	if err != nil {
+		return value{}, err
+	}
+	if thenValue.typ != elseValue.typ {
+		return value{}, unsupportedf("type-system", "match arm types %s/%s", thenValue.typ, elseValue.typ)
+	}
+	emitter = g.toOstyEmitter()
+	out := llvmIfExprEnd(emitter, thenValue.typ, toOstyValue(thenValue), toOstyValue(elseValue), labels)
+	g.takeOstyEmitter(emitter)
+	return fromOstyValue(out), nil
+}
+
+func (g *generator) emitMatchArmBodyValue(expr ast.Expr) (value, error) {
+	switch e := expr.(type) {
+	case *ast.Block:
+		g.pushScope()
+		defer g.popScope()
+		return g.emitBlockValue(e)
+	default:
+		return g.emitExpr(expr)
+	}
+}
+
+func (g *generator) matchEnumTag(pattern ast.Pattern) (int, bool, error) {
+	switch p := pattern.(type) {
+	case *ast.IdentPat:
+		var found variantInfo
+		count := 0
+		for _, info := range g.enumsByName {
+			if variant, ok := info.variants[p.Name]; ok {
+				found = variant
+				count++
+			}
+		}
+		if count == 0 {
+			return 0, false, nil
+		}
+		if count > 1 {
+			return 0, true, unsupportedf("name", "ambiguous enum variant pattern %q", p.Name)
+		}
+		return found.tag, true, nil
+	case *ast.VariantPat:
+		if len(p.Args) != 0 || len(p.Path) == 0 {
+			return 0, false, nil
+		}
+		name := p.Path[len(p.Path)-1]
+		if len(p.Path) == 2 {
+			info := g.enumsByName[p.Path[0]]
+			if info == nil {
+				return 0, false, nil
+			}
+			variant, ok := info.variants[name]
+			if !ok {
+				return 0, false, nil
+			}
+			return variant.tag, true, nil
+		}
+		return g.matchEnumTag(&ast.IdentPat{Name: name})
+	default:
+		return 0, false, nil
 	}
 }
 

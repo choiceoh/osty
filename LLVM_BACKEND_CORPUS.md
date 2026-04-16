@@ -146,6 +146,16 @@ boundaries, and mutable local slots can execute before the later tagged-payload
 ABI and match lowering work. The initial smoke fixtures use unqualified variant
 names because the self-hosted checker already supports that form.
 
+Phases 38-41 extend that same path to payload-free enum match expressions. The
+next four smoke fixtures stay intentionally tiny and all print `42\n`:
+
+| Path | Expected stdout | Coverage |
+|---|---|---|
+| `testdata/backend/llvm_smoke/enum_match_print.osty` | `42\n` | Phase 38 LLVM IR: payload-free enum match expression in `main` |
+| `testdata/backend/llvm_smoke/enum_match_return_print.osty` | `42\n` | Phase 39 LLVM IR: payload-free enum match expression crossing a function return boundary |
+| `testdata/backend/llvm_smoke/enum_match_param_print.osty` | `42\n` | Phase 40 LLVM IR: payload-free enum match expression crossing a function parameter boundary |
+| `testdata/backend/llvm_smoke/enum_match_mut_print.osty` | `42\n` | Phase 41 LLVM IR: payload-free enum match expression over a mutable local slot |
+
 ## Promotion Rules
 
 A fixture may move to a stronger class only when the required runtime and

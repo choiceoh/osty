@@ -31,7 +31,8 @@
   simple String function return/parameter paths, simple named struct type
   definitions, struct literals, field reads, struct function boundaries, and
   mutable struct locals, plus bare enum tag values across simple function and
-  mutable-local paths도 같은 selfhost-core에서 생성한다.
+  mutable-local paths와 그 다음 payload-free enum match-expression paths도 같은
+  selfhost-core에서 생성한다.
 
 ## 이주 원칙
 
@@ -330,8 +331,33 @@ artifact/cache layout 정책은 [`LLVM_ARTIFACT_LAYOUT.md`](./LLVM_ARTIFACT_LAYO
 | `Result<T,E>` | tagged payload | Go backend의 `Value/Error/IsOk`와 semantic parity |
 | `struct` | named LLVM struct | Phase 30-33 smoke subset uses value aggregates; full ABI/layout stability remains runtime work |
 | `enum` | `i64` tag for bare variants, tagged payload storage later | Phase 34-37 smoke subset covers payload-free variants; niche optimization is later |
+| `match` | enum-tag switch/branch lowering | Phase 38-41 smoke subset covers payload-free enum match expressions before tagged payload ABI work |
 | closure | fn pointer + env pointer | capture lifetime/ownership 필요 |
 | interface | data pointer + vtable pointer | vtable generation은 Phase 5+ |
+
+### Phase 38-41. Payload-free enum match expressions
+
+목표: payload-free enum tag values가 `match` expression 경로를 타고 helper
+return/parameter boundaries와 mutable local slots을 지나도 동일하게 동작하게
+한다.
+
+작업:
+
+- `enum_match_print.osty`를 `main` 안의 payload-free enum match expression
+  smoke fixture로 추가한다.
+- `enum_match_return_print.osty`를 helper return 경계 smoke fixture로 추가한다.
+- `enum_match_param_print.osty`를 helper parameter 경계 smoke fixture로 추가한다.
+- `enum_match_mut_print.osty`를 mutable local slot smoke fixture로 추가한다.
+- 네 fixture 모두 `42\n`를 출력하도록 유지하고, selfhosted backend core의
+  match lowering을 기준으로 문서화한다.
+
+완료 조건:
+
+- payload-free enum match expression lowering이 current LLVM smoke corpus에
+  반영되어야 한다.
+- 각 smoke fixture의 expected stdout가 `42\n`로 문서화되어야 한다.
+- match lowering은 여전히 `examples/selfhost-core/llvmgen.osty`에서 소유되어야
+  한다.
 
 ## Toolchain 전략
 

@@ -796,6 +796,26 @@ pub fn llvmSmokeExecutableCorpus() -> List<LlvmSmokeExecutableCase> {
             fixture: "enum_mut_print.osty",
             stdout: "42\n",
         },
+        LlvmSmokeExecutableCase {
+            name: "enum-match",
+            fixture: "enum_match_print.osty",
+            stdout: "42\n",
+        },
+        LlvmSmokeExecutableCase {
+            name: "enum-match-return",
+            fixture: "enum_match_return_print.osty",
+            stdout: "42\n",
+        },
+        LlvmSmokeExecutableCase {
+            name: "enum-match-param",
+            fixture: "enum_match_param_print.osty",
+            stdout: "42\n",
+        },
+        LlvmSmokeExecutableCase {
+            name: "enum-match-mut",
+            fixture: "enum_match_mut_print.osty",
+            stdout: "42\n",
+        },
     ]
 }
 
@@ -1198,6 +1218,105 @@ pub fn llvmSmokeEnumMutableIR(sourcePath: String) -> String {
     llvmIfElse(main, labels)
     llvmPrintlnI64(main, llvmIntLiteral(0))
     llvmIfEnd(main, labels)
+    llvmReturnI32Zero(main)
+
+    llvmRenderModule(
+        sourcePath,
+        "",
+        [
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+pub fn llvmSmokeEnumMatchIR(sourcePath: String) -> String {
+    let main = llvmEmitter()
+    llvmImmutableLet(main, "state", llvmEnumVariant("Switch", 1))
+    let cond = llvmCompare(main, "eq", llvmIdent(main, "state"), llvmEnumVariant("Switch", 1))
+    let labels = llvmIfExprStart(main, cond)
+    let thenValue = llvmIntLiteral(42)
+    llvmIfExprElse(main, labels)
+    let elseValue = llvmIntLiteral(0)
+    let result = llvmIfExprEnd(main, "i64", thenValue, elseValue, labels)
+    llvmPrintlnI64(main, result)
+    llvmReturnI32Zero(main)
+
+    llvmRenderModule(
+        sourcePath,
+        "",
+        [
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+pub fn llvmSmokeEnumMatchReturnIR(sourcePath: String) -> String {
+    let pick = llvmEmitter()
+    llvmReturn(pick, llvmEnumVariant("Switch", 1))
+
+    let score = llvmEmitter()
+    let state = llvmCall(score, "i64", "pick", [])
+    let cond = llvmCompare(score, "eq", state, llvmEnumVariant("Switch", 1))
+    let labels = llvmIfExprStart(score, cond)
+    let thenValue = llvmIntLiteral(42)
+    llvmIfExprElse(score, labels)
+    let elseValue = llvmIntLiteral(0)
+    let result = llvmIfExprEnd(score, "i64", thenValue, elseValue, labels)
+    llvmReturn(score, result)
+
+    let main = llvmEmitter()
+    let out = llvmCall(main, "i64", "score", [])
+    llvmPrintlnI64(main, out)
+    llvmReturnI32Zero(main)
+
+    llvmRenderModule(
+        sourcePath,
+        "",
+        [
+            llvmRenderFunction("i64", "pick", [], pick.body),
+            llvmRenderFunction("i64", "score", [], score.body),
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+pub fn llvmSmokeEnumMatchParamIR(sourcePath: String) -> String {
+    let score = llvmEmitter()
+    llvmBind(score, "state", llvmI64("%state"))
+    let cond = llvmCompare(score, "eq", llvmIdent(score, "state"), llvmEnumVariant("Switch", 1))
+    let labels = llvmIfExprStart(score, cond)
+    let thenValue = llvmIntLiteral(42)
+    llvmIfExprElse(score, labels)
+    let elseValue = llvmIntLiteral(0)
+    let result = llvmIfExprEnd(score, "i64", thenValue, elseValue, labels)
+    llvmReturn(score, result)
+
+    let main = llvmEmitter()
+    let out = llvmCall(main, "i64", "score", [llvmEnumVariant("Switch", 1)])
+    llvmPrintlnI64(main, out)
+    llvmReturnI32Zero(main)
+
+    llvmRenderModule(
+        sourcePath,
+        "",
+        [
+            llvmRenderFunction("i64", "score", [llvmParam("state", "i64")], score.body),
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+pub fn llvmSmokeEnumMatchMutableIR(sourcePath: String) -> String {
+    let main = llvmEmitter()
+    llvmMutableLet(main, "state", llvmEnumVariant("Switch", 0))
+    let _ = llvmAssign(main, "state", llvmEnumVariant("Switch", 1))
+    let cond = llvmCompare(main, "eq", llvmIdent(main, "state"), llvmEnumVariant("Switch", 1))
+    let labels = llvmIfExprStart(main, cond)
+    let thenValue = llvmIntLiteral(42)
+    llvmIfExprElse(main, labels)
+    let elseValue = llvmIntLiteral(0)
+    let result = llvmIfExprEnd(main, "i64", thenValue, elseValue, labels)
+    llvmPrintlnI64(main, result)
     llvmReturnI32Zero(main)
 
     llvmRenderModule(

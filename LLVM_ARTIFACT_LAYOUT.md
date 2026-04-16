@@ -320,6 +320,16 @@ The initial helper package for this plan is `internal/backend`.
 38. Add mutable enum locals. Done in Phase 37: enum tag values reuse the generic
     Osty-owned alloca/store/load helpers for whole-value assignment and later
     comparison.
+39. Add payload-free enum match expressions in `main`. Done in Phase 38: bare
+    enum tags drive two-arm `match` expressions before the later tagged-payload
+    ABI work.
+40. Add enum match return-boundary smoke. Done in Phase 39: payload-free enum
+    match expressions can consume helper return values.
+41. Add enum match parameter-boundary smoke. Done in Phase 40: payload-free
+    enum match expressions can consume helper parameters.
+42. Add mutable enum match locals. Done in Phase 41: enum match values reuse the
+    generic Osty-owned alloca/store/load helpers for whole-value assignment and
+    later comparison.
 
 The backend subdirectory change should land before the LLVM backend writes any
 files, so LLVM never shares the old Go-only output location.
