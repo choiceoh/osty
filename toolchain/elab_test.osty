@@ -107,6 +107,225 @@ fn testElabMatchExhaustivenessFailsWithoutCatchAll() {
     testing.assert(elabDiagHasCode(checked.diagnostics, "E0706"))
 }
 
+fn testElabMatchBoolMissingFalse() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn code(b: Bool) -> Int {
+                match b {
+                    true -> 1,
+                }
+            }
+            """,
+    )
+    testing.assert(checked.summary.errors >= 1)
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0706"))
+}
+
+fn testElabMatchBoolComplete() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn code(b: Bool) -> Int {
+                match b {
+                    true -> 1,
+                    false -> 0,
+                }
+            }
+            """,
+    )
+    testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0706")))
+    testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0707")))
+}
+
+fn testElabMatchOrPatternCoversBothBools() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn code(b: Bool) -> Int {
+                match b {
+                    true | false -> 1,
+                }
+            }
+            """,
+    )
+    testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0706")))
+}
+
+fn testElabMatchIntRequiresCatchAll() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn code(n: Int) -> Int {
+                match n {
+                    1 -> 10,
+                    2 -> 20,
+                }
+            }
+            """,
+    )
+    testing.assert(checked.summary.errors >= 1)
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0706"))
+}
+
+fn testElabMatchOptionNonWildcardPayload() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn code(o: Option<Int>) -> Int {
+                match o {
+                    Some(42) -> 1,
+                    None -> 0,
+                }
+            }
+            """,
+    )
+    // Phase 1 treats `Some(42)` as non-covering (payload is a literal,
+    // not irrefutable), so the match is non-exhaustive with witness
+    // `Option.Some(_)`.
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0706"))
+}
+
+fn testElabMatchReachabilityDuplicateTrue() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn code(b: Bool) -> Int {
+                match b {
+                    true -> 1,
+                    true -> 2,
+                    false -> 0,
+                }
+            }
+            """,
+    )
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0707"))
+}
+
+fn testElabMatchReachabilityCatchAllBeforeSpecific() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            enum Color { Red, Green, Blue }
+
+            fn code(c: Color) -> Int {
+                match c {
+                    _ -> 0,
+                    Red -> 1,
+                }
+            }
+            """,
+    )
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0707"))
+}
+
+fn testElabMatchReachabilityGuardedDoesNotShadow() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn positive(n: Int) -> Bool { n > 0 }
+
+            fn code(n: Int) -> Int {
+                match n {
+                    x if positive(x) -> 1,
+                    _ -> 0,
+                }
+            }
+            """,
+    )
+    // Guarded arm must not cause the trailing catch-all to be flagged
+    // unreachable, because the guard can fail.
+    testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0707")))
+}
+
+// ---------------------------------------------------------------------
+// Phase 2: Maranget-style nested coverage + payload reachability.
+// ---------------------------------------------------------------------
+
+fn testElabMatchPhase2OrPatternExhaustsOption() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn code(o: Option<Int>) -> Int {
+                match o {
+                    Some(_) | None -> 0,
+                }
+            }
+            """,
+    )
+    // Phase 2 recognises `Some(_) | None` as full enumeration without
+    // a catch-all.
+    testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0706")))
+}
+
+fn testElabMatchPhase2NestedOptionExhaustive() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn code(o: Option<Option<Int>>) -> Int {
+                match o {
+                    Some(Some(_)) -> 1,
+                    Some(None) -> 2,
+                    None -> 0,
+                }
+            }
+            """,
+    )
+    testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0706")))
+}
+
+fn testElabMatchPhase2NestedOptionMissingInner() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn code(o: Option<Option<Int>>) -> Int {
+                match o {
+                    Some(Some(_)) -> 1,
+                    None -> 0,
+                }
+            }
+            """,
+    )
+    // `Some(None)` is missing — E0706 witness should mention it.
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0706"))
+}
+
+fn testElabMatchPhase2PayloadReachabilityDuplicate() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn code(o: Option<Int>) -> Int {
+                match o {
+                    Some(_) -> 1,
+                    Some(_) -> 2,
+                    None -> 0,
+                }
+            }
+            """,
+    )
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0707"))
+}
+
+fn testElabMatchPhase2TupleCartesianExhaustive() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn code(p: (Bool, Bool)) -> Int {
+                match p {
+                    (true, _) -> 1,
+                    (false, true) -> 2,
+                    (false, false) -> 3,
+                }
+            }
+            """,
+    )
+    // (true, _) covers {(true, true), (true, false)} and the other two
+    // arms cover the false column; Phase 2 recognises the cartesian.
+    testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0706")))
+}
+
+fn testElabMatchPhase2TupleMissingSlot() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn code(p: (Bool, Bool)) -> Int {
+                match p {
+                    (true, true) -> 1,
+                    (false, false) -> 2,
+                }
+            }
+            """,
+    )
+    // Missing (true, false) and (false, true). Phase 2 reports E0706.
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0706"))
+}
+
 fn testElabQuestionOperatorRequiresOption() {
     let checked = frontendCheckSourceStructured(
         r"""
