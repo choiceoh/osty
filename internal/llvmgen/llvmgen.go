@@ -190,13 +190,18 @@ func Generate(file *ast.File, opts Options) ([]byte, error) {
 		return nil, &UnsupportedError{Diagnostic: diag}
 	}
 	g := &generator{
-		sourcePath: filepath.ToSlash(firstNonEmpty(opts.SourcePath, "<unknown>")),
-		target:     opts.Target,
+		sourcePath:      filepath.ToSlash(firstNonEmpty(opts.SourcePath, "<unknown>")),
+		target:          opts.Target,
+		runtimeFFI:      map[string]map[string]*runtimeFFIFunction{},
+		runtimeFFIPaths: map[string]string{},
+		runtimeDecls:    map[string]runtimeDecl{},
 	}
 	if len(file.Stmts) > 0 {
 		if len(file.Decls) > 0 {
 			return nil, unsupported("source-layout", "mixed script statements and declarations")
 		}
+		g.runtimeFFI = collectRuntimeFFI(file, nil, nil)
+		g.runtimeFFIPaths = collectRuntimeFFIPaths(file)
 		mainIR, err := g.emitScriptMain(file.Stmts)
 		if err != nil {
 			return nil, err
@@ -214,6 +219,8 @@ func Generate(file *ast.File, opts Options) ([]byte, error) {
 	g.enums = decls.enumsOrdered
 	g.enumsByName = decls.enumsByName
 	g.enumsByType = decls.enumsByType
+	g.runtimeFFI = collectRuntimeFFI(file, decls.structsByName, decls.enumsByName)
+	g.runtimeFFIPaths = collectRuntimeFFIPaths(file)
 	var defs []string
 	for _, sig := range decls.functionsOrdered {
 		if sig.name == "main" {
@@ -227,7 +234,10 @@ func Generate(file *ast.File, opts Options) ([]byte, error) {
 	}
 	mainSig := decls.functionsByName["main"]
 	if mainSig == nil {
-		return nil, unsupported("source-layout", "missing main function or script statements")
+		if len(defs) == 0 {
+			return nil, unsupported("source-layout", "missing main function or script statements")
+		}
+		return g.render(defs), nil
 	}
 	mainIR, err := g.emitMainFunction(mainSig)
 	if err != nil {
@@ -242,7 +252,7 @@ func fileUnsupportedDiagnostic(file *ast.File) (UnsupportedDiagnostic, bool) {
 		if use != nil && use.IsGoFFI {
 			return UnsupportedDiagnosticFor("go-ffi", use.GoPath), true
 		}
-		if use != nil && use.IsRuntimeFFI {
+		if use != nil && use.IsRuntimeFFI && !isKnownRuntimeFFIPath(use.RuntimePath) {
 			return UnsupportedDiagnosticFor("runtime-ffi", use.RuntimePath), true
 		}
 	}
@@ -250,23 +260,28 @@ func fileUnsupportedDiagnostic(file *ast.File) (UnsupportedDiagnostic, bool) {
 }
 
 type generator struct {
-	sourcePath    string
-	target        string
-	functions     map[string]*fnSig
-	structs       []*structInfo
-	structsByName map[string]*structInfo
-	structsByType map[string]*structInfo
-	enums         []*enumInfo
-	enumsByName   map[string]*enumInfo
-	enumsByType   map[string]*enumInfo
+	sourcePath       string
+	target           string
+	functions        map[string]*fnSig
+	structs          []*structInfo
+	structsByName    map[string]*structInfo
+	structsByType    map[string]*structInfo
+	enums            []*enumInfo
+	enumsByName      map[string]*enumInfo
+	enumsByType      map[string]*enumInfo
+	runtimeFFI       map[string]map[string]*runtimeFFIFunction
+	runtimeFFIPaths  map[string]string
+	runtimeDecls     map[string]runtimeDecl
+	runtimeDeclOrder []string
 
-	temp       int
-	label      int
-	stringID   int
-	stringDefs []*LlvmStringGlobal
-	body       []string
-	locals     []map[string]value
-	returnType string
+	temp         int
+	label        int
+	stringID     int
+	stringDefs   []*LlvmStringGlobal
+	body         []string
+	locals       []map[string]value
+	returnType   string
+	currentBlock string
 
 	needsGCRuntime bool
 	gcRootSlots    []value
@@ -347,6 +362,21 @@ const (
 	llvmGcRuntimeFrameSlotKind = 5
 )
 
+type runtimeFFIFunction struct {
+	path        string
+	sourceName  string
+	symbol      string
+	ret         string
+	params      []paramInfo
+	unsupported string
+}
+
+type runtimeDecl struct {
+	symbol string
+	ret    string
+	params []paramInfo
+}
+
 func collectDeclarations(file *ast.File) (*declarations, error) {
 	out := &declarations{
 		functionsByName: map[string]*fnSig{},
@@ -409,6 +439,173 @@ func collectDeclarations(file *ast.File) (*declarations, error) {
 		out.functionsByName[sig.name] = sig
 	}
 	return out, nil
+}
+
+func collectRuntimeFFI(file *ast.File, structs map[string]*structInfo, enums map[string]*enumInfo) map[string]map[string]*runtimeFFIFunction {
+	out := map[string]map[string]*runtimeFFIFunction{}
+	if file == nil {
+		return out
+	}
+	for _, use := range file.Uses {
+		if use == nil || !use.IsRuntimeFFI || !isKnownRuntimeFFIPath(use.RuntimePath) {
+			continue
+		}
+		alias := runtimeFFIAlias(use)
+		if alias == "" {
+			continue
+		}
+		funcs := out[alias]
+		if funcs == nil {
+			funcs = map[string]*runtimeFFIFunction{}
+			out[alias] = funcs
+		}
+		for _, decl := range use.GoBody {
+			fn, ok := decl.(*ast.FnDecl)
+			if !ok || fn == nil || fn.Name == "" {
+				continue
+			}
+			funcs[fn.Name] = runtimeFFISignature(use.RuntimePath, fn, structs, enums)
+		}
+	}
+	return out
+}
+
+func collectRuntimeFFIPaths(file *ast.File) map[string]string {
+	out := map[string]string{}
+	if file == nil {
+		return out
+	}
+	for _, use := range file.Uses {
+		if use == nil || !use.IsRuntimeFFI || !isKnownRuntimeFFIPath(use.RuntimePath) {
+			continue
+		}
+		if alias := runtimeFFIAlias(use); alias != "" {
+			out[alias] = use.RuntimePath
+		}
+	}
+	return out
+}
+
+func runtimeFFISignature(path string, fn *ast.FnDecl, structs map[string]*structInfo, enums map[string]*enumInfo) *runtimeFFIFunction {
+	out := &runtimeFFIFunction{
+		path:       path,
+		sourceName: fn.Name,
+		symbol:     runtimeFFISymbol(path, fn.Name),
+	}
+	if fn.Recv != nil {
+		out.unsupported = "methods are not supported"
+		return out
+	}
+	if len(fn.Generics) != 0 {
+		out.unsupported = "generic functions are not supported"
+		return out
+	}
+	if fn.ReturnType == nil {
+		out.ret = "void"
+	} else {
+		ret, err := llvmRuntimeABIType(fn.ReturnType, structs, enums)
+		if err != nil {
+			out.unsupported = "return type: " + unsupportedMessage(err)
+			return out
+		}
+		out.ret = ret
+	}
+	for _, p := range fn.Params {
+		if p == nil {
+			out.unsupported = "nil parameter"
+			return out
+		}
+		if p.Pattern != nil || p.Default != nil {
+			out.unsupported = "pattern/default parameters are not supported"
+			return out
+		}
+		name := p.Name
+		if name == "" {
+			name = fmt.Sprintf("arg%d", len(out.params))
+		}
+		typ, err := llvmRuntimeABIType(p.Type, structs, enums)
+		if err != nil {
+			out.unsupported = fmt.Sprintf("parameter %q: %s", name, unsupportedMessage(err))
+			return out
+		}
+		out.params = append(out.params, paramInfo{name: name, typ: typ})
+	}
+	return out
+}
+
+func runtimeFFIAlias(use *ast.UseDecl) string {
+	if use == nil {
+		return ""
+	}
+	if use.Alias != "" {
+		return use.Alias
+	}
+	if len(use.Path) > 0 {
+		return use.Path[len(use.Path)-1]
+	}
+	parts := strings.Split(use.RuntimePath, ".")
+	if len(parts) == 0 {
+		return ""
+	}
+	return parts[len(parts)-1]
+}
+
+func runtimeFFISymbol(path, name string) string {
+	path = strings.TrimPrefix(path, "runtime.")
+	var b strings.Builder
+	b.WriteString("osty_rt_")
+	for i := 0; i < len(path); i++ {
+		c := path[i]
+		if c == '.' || c == '/' || c == '-' {
+			b.WriteByte('_')
+			continue
+		}
+		if c == '_' || ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || ('0' <= c && c <= '9') {
+			b.WriteByte(c)
+			continue
+		}
+		b.WriteByte('_')
+	}
+	b.WriteByte('_')
+	b.WriteString(name)
+	return b.String()
+}
+
+func isKnownRuntimeFFIPath(path string) bool {
+	if strings.HasPrefix(path, "runtime.package.") {
+		return true
+	}
+	switch path {
+	case "runtime.strings", "runtime.path.filepath", "runtime.selfhost.astbridge":
+		return true
+	default:
+		return false
+	}
+}
+
+func llvmRuntimeABIType(t ast.Type, structs map[string]*structInfo, enums map[string]*enumInfo) (string, error) {
+	switch tt := t.(type) {
+	case nil:
+		return "void", nil
+	case *ast.NamedType:
+		if len(tt.Path) == 1 && len(tt.Args) == 0 {
+			switch tt.Path[0] {
+			case "Int", "Float", "Bool", "String":
+				return llvmType(tt, structs, enums)
+			}
+			if info := structs[tt.Path[0]]; info != nil {
+				return info.typ, nil
+			}
+			if info := enums[tt.Path[0]]; info != nil {
+				return info.typ, nil
+			}
+		}
+		return "ptr", nil
+	case *ast.OptionalType, *ast.TupleType, *ast.FnType:
+		return "ptr", nil
+	default:
+		return "", unsupportedf("type-system", "runtime ABI type %T", t)
+	}
 }
 
 func collectStructShell(decl *ast.StructDecl) (*structInfo, error) {
@@ -557,11 +754,15 @@ func signatureOf(fn *ast.FnDecl, structs map[string]*structInfo, enums map[strin
 		}
 		return sig, nil
 	}
-	ret, err := llvmType(fn.ReturnType, structs, enums)
-	if err != nil {
-		return nil, unsupportedf("type-system", "function %q return type: %s", fn.Name, unsupportedMessage(err))
+	if fn.ReturnType == nil {
+		sig.ret = "void"
+	} else {
+		ret, err := llvmType(fn.ReturnType, structs, enums)
+		if err != nil {
+			return nil, unsupportedf("type-system", "function %q return type: %s", fn.Name, unsupportedMessage(err))
+		}
+		sig.ret = ret
 	}
-	sig.ret = ret
 	for _, p := range fn.Params {
 		if p.Pattern != nil || p.Name == "" {
 			return nil, unsupportedf("function-signature", "function %q has non-identifier parameter", fn.Name)
@@ -611,8 +812,15 @@ func (g *generator) emitUserFunction(sig *fnSig) (string, error) {
 	for _, p := range sig.params {
 		g.bindLocal(p.name, value{typ: p.typ, ref: "%" + p.name})
 	}
-	if err := g.emitReturningBlock(sig.decl.Body.Stmts, sig.ret); err != nil {
-		return "", err
+	if sig.ret == "void" {
+		if err := g.emitBlock(sig.decl.Body.Stmts); err != nil {
+			return "", err
+		}
+		g.body = append(g.body, "  ret void")
+	} else {
+		if err := g.emitReturningBlock(sig.decl.Body.Stmts, sig.ret); err != nil {
+			return "", err
+		}
 	}
 	return g.renderFunction(sig.ret, sig.name, sig.params), nil
 }
@@ -624,6 +832,7 @@ func (g *generator) beginFunction() {
 	g.locals = []map[string]value{{}}
 	g.returnType = ""
 	g.gcRootSlots = nil
+	g.currentBlock = "entry"
 }
 
 func (g *generator) bindGCRootIfManagedPointer(emitter *LlvmEmitter, slot value) {
@@ -845,6 +1054,12 @@ func (g *generator) emitExprStmt(expr ast.Expr) error {
 	if !ok {
 		return unsupported("statement", "only println calls are supported as expression statements")
 	}
+	if emitted, err := g.emitRuntimeFFICallStmt(call); emitted || err != nil {
+		return err
+	}
+	if emitted, err := g.emitUserCallStmt(call); emitted || err != nil {
+		return err
+	}
 	return g.emitPrintln(call)
 }
 
@@ -865,6 +1080,7 @@ func (g *generator) emitIfStmt(expr *ast.IfExpr) error {
 	emitter := g.toOstyEmitter()
 	labels := llvmIfStart(emitter, toOstyValue(cond))
 	g.takeOstyEmitter(emitter)
+	g.currentBlock = labels.thenLabel
 	g.pushScope()
 	if err := g.emitBlock(expr.Then.Stmts); err != nil {
 		g.popScope()
@@ -874,6 +1090,7 @@ func (g *generator) emitIfStmt(expr *ast.IfExpr) error {
 	emitter = g.toOstyEmitter()
 	llvmIfElse(emitter, labels)
 	g.takeOstyEmitter(emitter)
+	g.currentBlock = labels.elseLabel
 	if expr.Else != nil {
 		if err := g.emitElse(expr.Else); err != nil {
 			return err
@@ -882,6 +1099,7 @@ func (g *generator) emitIfStmt(expr *ast.IfExpr) error {
 	emitter = g.toOstyEmitter()
 	llvmIfEnd(emitter, labels)
 	g.takeOstyEmitter(emitter)
+	g.currentBlock = labels.endLabel
 	return nil
 }
 
@@ -1296,9 +1514,29 @@ func (g *generator) emitCompare(op token.Kind, left, right value) (value, error)
 			return value{}, err
 		}
 		out = llvmCompareF64(emitter, pred, toOstyValue(left), toOstyValue(right))
+	case "ptr":
+		g.takeOstyEmitter(emitter)
+		return g.emitRuntimeStringCompare(op, left, right)
 	default:
 		g.takeOstyEmitter(emitter)
 		return value{}, unsupportedf("type-system", "compare type %s", left.typ)
+	}
+	g.takeOstyEmitter(emitter)
+	return fromOstyValue(out), nil
+}
+
+func (g *generator) emitRuntimeStringCompare(op token.Kind, left, right value) (value, error) {
+	if op != token.EQ && op != token.NEQ {
+		return value{}, unsupportedf("type-system", "compare type %s", left.typ)
+	}
+	g.declareRuntimeSymbol("osty_rt_strings_Equal", "i1", []paramInfo{
+		{typ: "ptr"},
+		{typ: "ptr"},
+	})
+	emitter := g.toOstyEmitter()
+	out := llvmCall(emitter, "i1", "osty_rt_strings_Equal", []*LlvmValue{toOstyValue(left), toOstyValue(right)})
+	if op == token.NEQ {
+		out = llvmNotI1(emitter, out)
 	}
 	g.takeOstyEmitter(emitter)
 	return fromOstyValue(out), nil
@@ -1362,6 +1600,7 @@ func (g *generator) emitIfExprValue(expr *ast.IfExpr) (value, error) {
 	emitter := g.toOstyEmitter()
 	labels := llvmIfExprStart(emitter, toOstyValue(cond))
 	g.takeOstyEmitter(emitter)
+	g.currentBlock = labels.thenLabel
 
 	g.pushScope()
 	thenValue, err := g.emitBlockValue(expr.Then)
@@ -1369,21 +1608,46 @@ func (g *generator) emitIfExprValue(expr *ast.IfExpr) (value, error) {
 	if err != nil {
 		return value{}, err
 	}
+	thenPred := g.currentBlock
 	emitter = g.toOstyEmitter()
 	llvmIfExprElse(emitter, labels)
 	g.takeOstyEmitter(emitter)
+	g.currentBlock = labels.elseLabel
 
 	elseValue, err := g.emitElseValue(expr.Else)
 	if err != nil {
 		return value{}, err
 	}
+	elsePred := g.currentBlock
 	if thenValue.typ != elseValue.typ {
 		return value{}, unsupportedf("type-system", "if expression branch types %s/%s", thenValue.typ, elseValue.typ)
 	}
-	emitter = g.toOstyEmitter()
-	out := llvmIfExprEnd(emitter, thenValue.typ, toOstyValue(thenValue), toOstyValue(elseValue), labels)
+	return g.emitIfExprPhi(labels, thenPred, elsePred, thenValue, elseValue)
+}
+
+func (g *generator) emitIfExprPhi(labels *LlvmIfLabels, thenPred, elsePred string, thenValue, elseValue value) (value, error) {
+	if labels == nil {
+		return value{}, unsupported("control-flow", "missing if-expression labels")
+	}
+	if thenValue.typ != elseValue.typ {
+		return value{}, unsupportedf("type-system", "if expression branch types %s/%s", thenValue.typ, elseValue.typ)
+	}
+	emitter := g.toOstyEmitter()
+	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", labels.endLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", labels.endLabel))
+	tmp := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf(
+		"  %s = phi %s [ %s, %%%s ], [ %s, %%%s ]",
+		tmp,
+		thenValue.typ,
+		thenValue.ref,
+		thenPred,
+		elseValue.ref,
+		elsePred,
+	))
 	g.takeOstyEmitter(emitter)
-	return fromOstyValue(out), nil
+	g.currentBlock = labels.endLabel
+	return value{typ: thenValue.typ, ref: tmp}, nil
 }
 
 func (g *generator) emitBlockValue(block *ast.Block) (value, error) {
@@ -1423,31 +1687,94 @@ func (g *generator) emitMatchExprValue(expr *ast.MatchExpr) (value, error) {
 	if expr == nil {
 		return value{}, unsupported("expression", "nil match expression")
 	}
-	if len(expr.Arms) != 2 {
-		return value{}, unsupportedf("expression", "match with %d arms", len(expr.Arms))
+	if len(expr.Arms) == 0 {
+		return value{}, unsupported("expression", "match with no arms")
 	}
 	scrutinee, err := g.emitExpr(expr.Scrutinee)
 	if err != nil {
 		return value{}, err
 	}
-	first := expr.Arms[0]
-	second := expr.Arms[1]
-	if first == nil || second == nil {
-		return value{}, unsupported("expression", "nil match arm")
-	}
-	if first.Guard != nil || second.Guard != nil {
-		return value{}, unsupported("control-flow", "match guards are not supported")
+	for _, arm := range expr.Arms {
+		if arm == nil {
+			return value{}, unsupported("expression", "nil match arm")
+		}
+		if arm.Guard != nil {
+			return value{}, unsupported("control-flow", "match guards are not supported")
+		}
 	}
 	if scrutinee.typ == "i64" {
-		return g.emitTagEnumMatchExprValue(scrutinee, first, second)
+		return g.emitTagEnumMatchExprValue(scrutinee, expr.Arms)
 	}
 	if info := g.enumsByType[scrutinee.typ]; info != nil && info.hasPayload {
+		if len(expr.Arms) != 2 {
+			return value{}, unsupportedf("expression", "payload enum match with %d arms", len(expr.Arms))
+		}
+		first := expr.Arms[0]
+		second := expr.Arms[1]
 		return g.emitPayloadEnumMatchExprValue(scrutinee, info, first, second)
 	}
 	return value{}, unsupportedf("type-system", "match scrutinee type %s, want enum tag", scrutinee.typ)
 }
 
-func (g *generator) emitTagEnumMatchExprValue(scrutinee value, first, second *ast.MatchArm) (value, error) {
+func (g *generator) emitTagEnumMatchExprValue(scrutinee value, arms []*ast.MatchArm) (value, error) {
+	if len(arms) == 2 {
+		return g.emitTagEnumMatchIfExprValue(scrutinee, arms[0], arms[1])
+	}
+	for _, arm := range arms {
+		if !matchArmBodyIsSelectSafe(arm.Body) {
+			return value{}, unsupported("expression", "multi-arm match currently requires literal/identifier arm bodies")
+		}
+	}
+	var current value
+	haveCurrent := false
+	for i := len(arms) - 1; i >= 0; i-- {
+		arm := arms[i]
+		if _, catchAll := arm.Pattern.(*ast.WildcardPat); catchAll {
+			if i != len(arms)-1 {
+				return value{}, unsupported("expression", "wildcard match arm must be last")
+			}
+			v, err := g.emitMatchArmBodyValue(arm.Body)
+			if err != nil {
+				return value{}, err
+			}
+			current = v
+			haveCurrent = true
+			continue
+		}
+		tag, ok, err := g.matchEnumTag(arm.Pattern)
+		if err != nil {
+			return value{}, err
+		}
+		if !ok {
+			return value{}, unsupported("expression", "match arm must be a payload-free enum variant")
+		}
+		armValue, err := g.emitMatchArmBodyValue(arm.Body)
+		if err != nil {
+			return value{}, err
+		}
+		if !haveCurrent {
+			current = armValue
+			haveCurrent = true
+			continue
+		}
+		if armValue.typ != current.typ {
+			return value{}, unsupportedf("type-system", "match arm types %s/%s", armValue.typ, current.typ)
+		}
+		emitter := g.toOstyEmitter()
+		cond := llvmCompare(emitter, "eq", toOstyValue(scrutinee), toOstyValue(value{typ: "i64", ref: strconv.Itoa(tag)}))
+		g.takeOstyEmitter(emitter)
+		current, err = g.emitSelectValue(cond, armValue, current)
+		if err != nil {
+			return value{}, err
+		}
+	}
+	if !haveCurrent {
+		return value{}, unsupported("expression", "match with no arms")
+	}
+	return current, nil
+}
+
+func (g *generator) emitTagEnumMatchIfExprValue(scrutinee value, first, second *ast.MatchArm) (value, error) {
 	tag, ok, err := g.matchEnumTag(first.Pattern)
 	if err != nil {
 		return value{}, err
@@ -1464,26 +1791,56 @@ func (g *generator) emitTagEnumMatchExprValue(scrutinee value, first, second *as
 	cond := llvmCompare(emitter, "eq", toOstyValue(scrutinee), toOstyValue(value{typ: "i64", ref: strconv.Itoa(tag)}))
 	labels := llvmIfExprStart(emitter, cond)
 	g.takeOstyEmitter(emitter)
+	g.currentBlock = labels.thenLabel
 
 	thenValue, err := g.emitMatchArmBodyValue(first.Body)
 	if err != nil {
 		return value{}, err
 	}
+	thenPred := g.currentBlock
 	emitter = g.toOstyEmitter()
 	llvmIfExprElse(emitter, labels)
 	g.takeOstyEmitter(emitter)
+	g.currentBlock = labels.elseLabel
 
 	elseValue, err := g.emitMatchArmBodyValue(second.Body)
 	if err != nil {
 		return value{}, err
 	}
+	elsePred := g.currentBlock
 	if thenValue.typ != elseValue.typ {
 		return value{}, unsupportedf("type-system", "match arm types %s/%s", thenValue.typ, elseValue.typ)
 	}
-	emitter = g.toOstyEmitter()
-	out := llvmIfExprEnd(emitter, thenValue.typ, toOstyValue(thenValue), toOstyValue(elseValue), labels)
+	return g.emitIfExprPhi(labels, thenPred, elsePred, thenValue, elseValue)
+}
+
+func (g *generator) emitSelectValue(cond *LlvmValue, thenValue, elseValue value) (value, error) {
+	if cond == nil || cond.typ != "i1" {
+		return value{}, unsupported("type-system", "select condition must be Bool")
+	}
+	if thenValue.typ != elseValue.typ {
+		return value{}, unsupportedf("type-system", "select branch types %s/%s", thenValue.typ, elseValue.typ)
+	}
+	emitter := g.toOstyEmitter()
+	tmp := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = select i1 %s, %s %s, %s %s", tmp, cond.name, thenValue.typ, thenValue.ref, elseValue.typ, elseValue.ref))
 	g.takeOstyEmitter(emitter)
-	return fromOstyValue(out), nil
+	return value{typ: thenValue.typ, ref: tmp}, nil
+}
+
+func matchArmBodyIsSelectSafe(expr ast.Expr) bool {
+	switch e := expr.(type) {
+	case *ast.IntLit, *ast.FloatLit, *ast.BoolLit, *ast.StringLit, *ast.Ident, *ast.FieldExpr:
+		return true
+	case *ast.Block:
+		if e == nil || len(e.Stmts) != 1 {
+			return false
+		}
+		stmt, ok := e.Stmts[0].(*ast.ExprStmt)
+		return ok && matchArmBodyIsSelectSafe(stmt.X)
+	default:
+		return false
+	}
 }
 
 func (g *generator) emitPayloadEnumMatchExprValue(scrutinee value, info *enumInfo, first, second *ast.MatchArm) (value, error) {
@@ -1511,6 +1868,7 @@ func (g *generator) emitPayloadEnumMatchExprValue(scrutinee value, info *enumInf
 	cond := llvmCompare(emitter, "eq", tag, toOstyValue(value{typ: "i64", ref: strconv.Itoa(firstPattern.variant.tag)}))
 	labels := llvmIfExprStart(emitter, cond)
 	g.takeOstyEmitter(emitter)
+	g.currentBlock = labels.thenLabel
 
 	g.pushScope()
 	if err := g.bindPayloadEnumPattern(scrutinee, firstPattern); err != nil {
@@ -1522,9 +1880,11 @@ func (g *generator) emitPayloadEnumMatchExprValue(scrutinee value, info *enumInf
 	if err != nil {
 		return value{}, err
 	}
+	thenPred := g.currentBlock
 	emitter = g.toOstyEmitter()
 	llvmIfExprElse(emitter, labels)
 	g.takeOstyEmitter(emitter)
+	g.currentBlock = labels.elseLabel
 
 	g.pushScope()
 	if secondHasPattern {
@@ -1538,13 +1898,11 @@ func (g *generator) emitPayloadEnumMatchExprValue(scrutinee value, info *enumInf
 	if err != nil {
 		return value{}, err
 	}
+	elsePred := g.currentBlock
 	if thenValue.typ != elseValue.typ {
 		return value{}, unsupportedf("type-system", "match arm types %s/%s", thenValue.typ, elseValue.typ)
 	}
-	emitter = g.toOstyEmitter()
-	out := llvmIfExprEnd(emitter, thenValue.typ, toOstyValue(thenValue), toOstyValue(elseValue), labels)
-	g.takeOstyEmitter(emitter)
-	return fromOstyValue(out), nil
+	return g.emitIfExprPhi(labels, thenPred, elsePred, thenValue, elseValue)
 }
 
 func (g *generator) bindPayloadEnumPattern(scrutinee value, pattern enumPatternInfo) error {
@@ -1664,6 +2022,9 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 	if v, found, err := g.emitEnumVariantCall(call); found || err != nil {
 		return v, err
 	}
+	if v, found, err := g.emitRuntimeFFICall(call); found || err != nil {
+		return v, err
+	}
 	id, ok := call.Fn.(*ast.Ident)
 	if !ok {
 		return value{}, unsupportedf("call", "call target %T", call.Fn)
@@ -1678,28 +2039,168 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 	if sig.ret == "" {
 		return value{}, unsupportedf("call", "function %q has no return value", id.Name)
 	}
-	if len(call.Args) != len(sig.params) {
-		return value{}, unsupportedf("call", "function %q argument count", id.Name)
+	if sig.ret == "void" {
+		return value{}, unsupportedf("call", "function %q has no return value", id.Name)
 	}
-	args := make([]*LlvmValue, 0, len(call.Args))
-	for i, arg := range call.Args {
-		if arg.Name != "" || arg.Value == nil {
-			return value{}, unsupportedf("call", "function %q requires positional arguments", id.Name)
-		}
-		v, err := g.emitExpr(arg.Value)
-		if err != nil {
-			return value{}, err
-		}
-		param := sig.params[i]
-		if v.typ != param.typ {
-			return value{}, unsupportedf("type-system", "function %q arg %d type %s, want %s", id.Name, i+1, v.typ, param.typ)
-		}
-		args = append(args, toOstyValue(v))
+	args, err := g.userCallArgs(sig, call)
+	if err != nil {
+		return value{}, err
 	}
 	emitter := g.toOstyEmitter()
 	out := llvmCall(emitter, sig.ret, sig.name, args)
 	g.takeOstyEmitter(emitter)
 	return fromOstyValue(out), nil
+}
+
+func (g *generator) emitRuntimeFFICall(call *ast.CallExpr) (value, bool, error) {
+	fn, found, err := g.runtimeFFICallTarget(call)
+	if !found || err != nil {
+		return value{}, found, err
+	}
+	if fn.ret == "void" {
+		return value{}, true, unsupportedf("call", "runtime FFI %s.%s has no return value", fn.path, fn.sourceName)
+	}
+	args, err := g.runtimeFFICallArgs(fn, call.Args)
+	if err != nil {
+		return value{}, true, err
+	}
+	g.declareRuntimeFFI(fn)
+	emitter := g.toOstyEmitter()
+	out := llvmCall(emitter, fn.ret, fn.symbol, args)
+	g.takeOstyEmitter(emitter)
+	return fromOstyValue(out), true, nil
+}
+
+func (g *generator) emitRuntimeFFICallStmt(call *ast.CallExpr) (bool, error) {
+	fn, found, err := g.runtimeFFICallTarget(call)
+	if !found || err != nil {
+		return found, err
+	}
+	args, err := g.runtimeFFICallArgs(fn, call.Args)
+	if err != nil {
+		return true, err
+	}
+	g.declareRuntimeFFI(fn)
+	if fn.ret == "void" {
+		g.body = append(g.body, fmt.Sprintf("  call void @%s(%s)", fn.symbol, llvmCallArgs(args)))
+		return true, nil
+	}
+	emitter := g.toOstyEmitter()
+	llvmCall(emitter, fn.ret, fn.symbol, args)
+	g.takeOstyEmitter(emitter)
+	return true, nil
+}
+
+func (g *generator) emitUserCallStmt(call *ast.CallExpr) (bool, error) {
+	id, ok := call.Fn.(*ast.Ident)
+	if !ok {
+		return false, nil
+	}
+	sig := g.functions[id.Name]
+	if sig == nil {
+		return false, nil
+	}
+	args, err := g.userCallArgs(sig, call)
+	if err != nil {
+		return true, err
+	}
+	emitter := g.toOstyEmitter()
+	if sig.ret == "void" {
+		emitter.body = append(emitter.body, fmt.Sprintf("  call void @%s(%s)", sig.name, llvmCallArgs(args)))
+	} else {
+		llvmCall(emitter, sig.ret, sig.name, args)
+	}
+	g.takeOstyEmitter(emitter)
+	return true, nil
+}
+
+func (g *generator) userCallArgs(sig *fnSig, call *ast.CallExpr) ([]*LlvmValue, error) {
+	if len(call.Args) != len(sig.params) {
+		return nil, unsupportedf("call", "function %q argument count", sig.name)
+	}
+	args := make([]*LlvmValue, 0, len(call.Args))
+	for i, arg := range call.Args {
+		if arg.Name != "" || arg.Value == nil {
+			return nil, unsupportedf("call", "function %q requires positional arguments", sig.name)
+		}
+		v, err := g.emitExpr(arg.Value)
+		if err != nil {
+			return nil, err
+		}
+		param := sig.params[i]
+		if v.typ != param.typ {
+			return nil, unsupportedf("type-system", "function %q arg %d type %s, want %s", sig.name, i+1, v.typ, param.typ)
+		}
+		args = append(args, toOstyValue(v))
+	}
+	return args, nil
+}
+
+func (g *generator) runtimeFFICallTarget(call *ast.CallExpr) (*runtimeFFIFunction, bool, error) {
+	if call == nil {
+		return nil, false, nil
+	}
+	field, ok := call.Fn.(*ast.FieldExpr)
+	if !ok {
+		return nil, false, nil
+	}
+	if field.IsOptional {
+		return nil, true, unsupported("runtime-ffi", "optional runtime FFI calls are not supported")
+	}
+	alias, ok := field.X.(*ast.Ident)
+	if !ok {
+		return nil, false, nil
+	}
+	path, ok := g.runtimeFFIPaths[alias.Name]
+	if !ok {
+		return nil, false, nil
+	}
+	funcs := g.runtimeFFI[alias.Name]
+	fn := funcs[field.Name]
+	if fn == nil {
+		return nil, true, unsupported("runtime-ffi", path+"."+field.Name)
+	}
+	if fn.unsupported != "" {
+		return nil, true, unsupported("runtime-ffi", fn.path+"."+fn.sourceName+" signature: "+fn.unsupported)
+	}
+	return fn, true, nil
+}
+
+func (g *generator) runtimeFFICallArgs(fn *runtimeFFIFunction, callArgs []*ast.Arg) ([]*LlvmValue, error) {
+	if len(callArgs) != len(fn.params) {
+		return nil, unsupportedf("call", "runtime FFI %s.%s argument count", fn.path, fn.sourceName)
+	}
+	args := make([]*LlvmValue, 0, len(callArgs))
+	for i, arg := range callArgs {
+		if arg == nil || arg.Name != "" || arg.Value == nil {
+			return nil, unsupportedf("call", "runtime FFI %s.%s requires positional arguments", fn.path, fn.sourceName)
+		}
+		v, err := g.emitExpr(arg.Value)
+		if err != nil {
+			return nil, err
+		}
+		param := fn.params[i]
+		if v.typ != param.typ {
+			return nil, unsupportedf("type-system", "runtime FFI %s.%s arg %d type %s, want %s", fn.path, fn.sourceName, i+1, v.typ, param.typ)
+		}
+		args = append(args, toOstyValue(v))
+	}
+	return args, nil
+}
+
+func (g *generator) declareRuntimeFFI(fn *runtimeFFIFunction) {
+	if fn == nil {
+		return
+	}
+	g.declareRuntimeSymbol(fn.symbol, fn.ret, fn.params)
+}
+
+func (g *generator) declareRuntimeSymbol(symbol, ret string, params []paramInfo) {
+	if _, exists := g.runtimeDecls[symbol]; exists {
+		return
+	}
+	g.runtimeDecls[symbol] = runtimeDecl{symbol: symbol, ret: ret, params: params}
+	g.runtimeDeclOrder = append(g.runtimeDeclOrder, symbol)
 }
 
 func (g *generator) emitEnumVariantCall(call *ast.CallExpr) (value, bool, error) {
@@ -1765,10 +2266,33 @@ func (g *generator) render(defs []string) []byte {
 			typeDefs = append(typeDefs, llvmStructTypeDef(info.name, []string{"i64", info.payloadTyp}))
 		}
 	}
+	runtimeDecls := g.runtimeDeclarationIR()
 	if g.needsGCRuntime {
-		return []byte(llvmRenderModuleWithGcRuntime(g.sourcePath, g.target, typeDefs, g.stringDefs, defs))
+		runtimeDecls = append(llvmGcRuntimeDeclarations(), runtimeDecls...)
+	}
+	if len(runtimeDecls) > 0 {
+		return []byte(llvmRenderModuleWithRuntimeDeclarations(g.sourcePath, g.target, typeDefs, g.stringDefs, runtimeDecls, defs))
 	}
 	return []byte(llvmRenderModuleWithGlobalsAndTypes(g.sourcePath, g.target, typeDefs, g.stringDefs, defs))
+}
+
+func (g *generator) runtimeDeclarationIR() []string {
+	if len(g.runtimeDeclOrder) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(g.runtimeDeclOrder))
+	for _, symbol := range g.runtimeDeclOrder {
+		decl, ok := g.runtimeDecls[symbol]
+		if !ok {
+			continue
+		}
+		paramTypes := make([]string, 0, len(decl.params))
+		for _, param := range decl.params {
+			paramTypes = append(paramTypes, param.typ)
+		}
+		out = append(out, fmt.Sprintf("declare %s @%s(%s)", decl.ret, decl.symbol, strings.Join(paramTypes, ", ")))
+	}
+	return out
 }
 
 func (g *generator) renderFunction(ret, name string, params []paramInfo) string {
@@ -1897,30 +2421,38 @@ func identPatternName(p ast.Pattern) (string, error) {
 }
 
 func llvmType(t ast.Type, structs map[string]*structInfo, enums map[string]*enumInfo) (string, error) {
-	named, ok := t.(*ast.NamedType)
-	if !ok {
-		return "", unsupportedf("type-system", "type %T", t)
-	}
-	if len(named.Args) != 0 || len(named.Path) != 1 {
-		return "", unsupportedf("type-system", "type %T", t)
-	}
-	switch named.Path[0] {
-	case "Int":
-		return "i64", nil
-	case "Float":
-		return "double", nil
-	case "Bool":
-		return "i1", nil
-	case "String":
+	switch tt := t.(type) {
+	case *ast.NamedType:
+		if len(tt.Path) != 1 {
+			return "ptr", nil
+		}
+		if len(tt.Args) != 0 {
+			return "ptr", nil
+		}
+		switch tt.Path[0] {
+		case "Int":
+			return "i64", nil
+		case "Float":
+			return "double", nil
+		case "Bool":
+			return "i1", nil
+		case "String":
+			return "ptr", nil
+		case "Bytes", "Error":
+			return "ptr", nil
+		default:
+			if info := structs[tt.Path[0]]; info != nil {
+				return info.typ, nil
+			}
+			if info := enums[tt.Path[0]]; info != nil {
+				return info.typ, nil
+			}
+			return "", unsupportedf("type-system", "type %q", strings.Join(tt.Path, "."))
+		}
+	case *ast.OptionalType, *ast.TupleType, *ast.FnType:
 		return "ptr", nil
 	default:
-		if info := structs[named.Path[0]]; info != nil {
-			return info.typ, nil
-		}
-		if info := enums[named.Path[0]]; info != nil {
-			return info.typ, nil
-		}
-		return "", unsupportedf("type-system", "type %q", strings.Join(named.Path, "."))
+		return "", unsupportedf("type-system", "type %T", t)
 	}
 }
 
