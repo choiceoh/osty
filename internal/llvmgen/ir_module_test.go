@@ -425,3 +425,45 @@ fn main() {
 		}
 	}
 }
+
+func TestGenerateModuleLetStructPatternDestructuring(t *testing.T) {
+	src := `use runtime.strings as strings {
+    fn Split(s: String, sep: String) -> List<String>
+}
+
+struct Pair {
+    first: Int
+    second: Int
+}
+
+struct Bucket {
+    pair: Pair
+    items: List<String>
+}
+
+fn main() {
+    let bucket @ Bucket {
+        pair: Pair { first, second },
+        items,
+    } = Bucket {
+        pair: Pair { first: 1, second: 2 },
+        items: strings.Split("pear,apple", ","),
+    }
+    println(first)
+    println(second)
+    println(items.sorted()[0])
+    println(bucket.pair.first)
+}
+`
+	got := runMonoLowerPipeline(t, src, "/tmp/phase2_let_struct_pattern_ir.osty")
+	for _, want := range []string{
+		"extractvalue %Bucket",
+		"extractvalue %Pair",
+		"declare ptr @osty_rt_list_sorted_string(ptr)",
+		"call ptr @osty_rt_list_sorted_string",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
