@@ -1431,6 +1431,30 @@ fn main() {}`
 	expectCode(t, src, diag.CodeUseGoUnsupported)
 }
 
+func TestParseUseBodyFnGenericsAccepted(t *testing.T) {
+	src := `use testing {
+    fn assertEq<T>(actual: T, expected: T)
+}
+fn main() {}`
+	f := parseOrFatal(t, src)
+	if len(f.Uses) != 1 {
+		t.Fatalf("uses = %d", len(f.Uses))
+	}
+	if f.Uses[0].IsGoFFI {
+		t.Fatal("synthetic use body should not be marked as Go FFI")
+	}
+	if len(f.Uses[0].GoBody) != 1 {
+		t.Fatalf("use body = %d", len(f.Uses[0].GoBody))
+	}
+	fn, ok := f.Uses[0].GoBody[0].(*ast.FnDecl)
+	if !ok {
+		t.Fatalf("body item = %T", f.Uses[0].GoBody[0])
+	}
+	if len(fn.Generics) != 1 || fn.Generics[0].Name != "T" {
+		t.Fatalf("generics = %+v", fn.Generics)
+	}
+}
+
 // TestParseUseGoFnParamDefaultRejected covers the diagnostic path for a
 // default value on a `use go` function parameter.
 func TestParseUseGoFnParamDefaultRejected(t *testing.T) {

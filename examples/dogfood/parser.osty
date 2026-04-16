@@ -1839,10 +1839,14 @@ fn opParseUseDecl(p: OstyParser) -> Int {
         opSkipNewlines(p)
         for !(opAt(p, FrontRBrace)) && !(opAt(p, FrontEOF)) {
             if opAt(p, FrontFn) {
-                opCheckUseGoFnSignature(p)
+                if isGo {
+                    opCheckUseGoFnSignature(p)
+                }
                 goItems.push(opParseFnDecl(p, false, []))
             } else if opAt(p, FrontStruct) {
-                opCheckUseGoStructBody(p)
+                if isGo {
+                    opCheckUseGoStructBody(p)
+                }
                 goItems.push(opParseStructDecl(p, false, []))
             } else if opAt(p, FrontType) {
                 goItems.push(opParseTypeAliasDecl(p, false, []))

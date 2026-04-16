@@ -100,6 +100,15 @@ fn testFrontendAstTypeCheckerChecksStructFieldsAndMethods() {
             }
             """,
     )
+    let fieldAssign = frontendCheckSource(
+        r"""
+            struct Counter { value: Int }
+
+            fn bump(counter: Counter) {
+                counter.value = counter.value + 1
+            }
+            """,
+    )
     let bad = frontendCheckSource(
         r"""
             struct Point { x: Int, y: Int }
@@ -113,7 +122,83 @@ fn testFrontendAstTypeCheckerChecksStructFieldsAndMethods() {
     )
 
     testing.assertEq(good.errors, 0)
+    testing.assertEq(fieldAssign.errors, 0)
     testing.assert(bad.errors > 0)
+}
+
+fn testFrontendAstTypeCheckerUnifiesUntypedIntWithConcreteGenericArgs() {
+    let good = frontendCheckSource(
+        r"""
+            fn choose<T>(left: T, right: T) -> T {
+                right
+            }
+
+            fn main() {
+                let n: Int = 1
+                let got: Int = choose(0, n)
+            }
+            """,
+    )
+
+    testing.assertEq(good.errors, 0)
+}
+
+fn testFrontendAstTypeCheckerBindsForInIdentifierPatterns() {
+    let good = frontendCheckSource(
+        r"""
+            fn sum(xs: List<Int>) -> Int {
+                let mut total = 0
+                for x in xs {
+                    total = total + x
+                }
+                total
+            }
+            """,
+    )
+
+    testing.assertEq(good.errors, 0)
+}
+
+fn testFrontendAstTypeCheckerAllowsParameterAccumulators() {
+    let good = frontendCheckSource(
+        r"""
+            fn appendLine(lines: List<String>) -> List<String> {
+                lines.push("next")
+                lines = lines.map(|line| line)
+                lines
+            }
+            """,
+    )
+
+    testing.assertEq(good.errors, 0)
+}
+
+fn testFrontendAstTypeCheckerAcceptsConcurrencyPreludeSurface() {
+    let good = frontendCheckSource(
+        r"""
+            fn summarize(xs: List<Int>) -> Int {
+                let ch = thread.chan::<Int>(0)
+                let h = spawn(|| {
+                    for x in xs {
+                        ch <- x
+                    }
+                    ch.close()
+                })
+                let mut total = 0
+                for n in ch {
+                    total = total + n
+                }
+                h.join()
+                total
+            }
+
+            fn batch() -> List<Int> {
+                parallel(|| 1, || 2, || 3)
+            }
+            """,
+    )
+
+    testing.assertEq(good.errors, 0)
 }
 
 fn testFrontendAstTypeCheckerChecksGenericEnumsAndMatchBindings() {

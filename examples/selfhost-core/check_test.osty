@@ -86,6 +86,95 @@ fn testSelfCheckerReportsAssignmentReturnAndCallErrors() {
     testing.assert(checked.assignments >= 3)
 }
 
+fn testSelfCheckerAcceptsFieldAssignmentThroughStructValues() {
+    let checked = frontendCheckSource(
+        r"""
+            struct Counter { value: Int }
+
+            fn bump(counter: Counter) {
+                counter.value = counter.value + 1
+            }
+            """,
+    )
+
+    testing.assertEq(checked.errors, 0)
+}
+
+fn testSelfCheckerUnifiesUntypedIntWithConcreteGenericArgs() {
+    let checked = frontendCheckSource(
+        r"""
+            fn choose<T>(left: T, right: T) -> T {
+                right
+            }
+
+            fn main() {
+                let n: Int = 1
+                let got: Int = choose(0, n)
+            }
+            """,
+    )
+
+    testing.assertEq(checked.errors, 0)
+}
+
+fn testSelfCheckerBindsForInIdentifierPatterns() {
+    let checked = frontendCheckSource(
+        r"""
+            fn sum(xs: List<Int>) -> Int {
+                let mut total = 0
+                for x in xs {
+                    total = total + x
+                }
+                total
+            }
+            """,
+    )
+
+    testing.assertEq(checked.errors, 0)
+}
+
+fn testSelfCheckerAllowsParameterAccumulators() {
+    let checked = frontendCheckSource(
+        r"""
+            fn appendLine(lines: List<String>) -> List<String> {
+                lines.push("next")
+                lines = lines.map(|line| line)
+                lines
+            }
+            """,
+    )
+
+    testing.assertEq(checked.errors, 0)
+}
+
+fn testSelfCheckerAcceptsConcurrencyPreludeSurface() {
+    let checked = frontendCheckSource(
+        r"""
+            fn summarize(xs: List<Int>) -> Int {
+                let ch = thread.chan::<Int>(0)
+                let h = spawn(|| {
+                    for x in xs {
+                        ch <- x
+                    }
+                    ch.close()
+                })
+                let mut total = 0
+                for n in ch {
+                    total = total + n
+                }
+                h.join()
+                total
+            }
+
+            fn batch() -> List<Int> {
+                parallel(|| 1, || 2, || 3)
+            }
+            """,
+    )
+
+    testing.assertEq(checked.errors, 0)
+}
+
 fn testSelfCheckerChecksMatchExhaustivenessAndPatterns() {
     let nonExhaustive = frontendCheckSource(
         r"""
