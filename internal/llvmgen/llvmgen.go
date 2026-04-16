@@ -203,6 +203,7 @@ func Generate(file *ast.File, opts Options) ([]byte, error) {
 		}
 		g.runtimeFFI = collectRuntimeFFI(file, nil, nil)
 		g.runtimeFFIPaths = collectRuntimeFFIPaths(file)
+		g.testingAliases = collectStdTestingAliases(file)
 		mainIR, err := g.emitScriptMain(file.Stmts)
 		if err != nil {
 			return nil, err
@@ -222,6 +223,7 @@ func Generate(file *ast.File, opts Options) ([]byte, error) {
 	g.enumsByType = decls.enumsByType
 	g.runtimeFFI = collectRuntimeFFI(file, decls.structsByName, decls.enumsByName)
 	g.runtimeFFIPaths = collectRuntimeFFIPaths(file)
+	g.testingAliases = collectStdTestingAliases(file)
 	var defs []string
 	for _, sig := range decls.functionsOrdered {
 		if sig.name == "main" {
@@ -272,6 +274,7 @@ type generator struct {
 	enumsByType      map[string]*enumInfo
 	runtimeFFI       map[string]map[string]*runtimeFFIFunction
 	runtimeFFIPaths  map[string]string
+	testingAliases   map[string]bool
 	runtimeDecls     map[string]runtimeDecl
 	runtimeDeclOrder []string
 
@@ -494,6 +497,26 @@ func collectRuntimeFFIPaths(file *ast.File) map[string]string {
 		}
 		if alias := runtimeFFIAlias(use); alias != "" {
 			out[alias] = use.RuntimePath
+		}
+	}
+	return out
+}
+
+func collectStdTestingAliases(file *ast.File) map[string]bool {
+	out := map[string]bool{}
+	if file == nil {
+		return out
+	}
+	for _, use := range file.Uses {
+		if use == nil || len(use.Path) != 2 || use.Path[0] != "std" || use.Path[1] != "testing" {
+			continue
+		}
+		alias := use.Alias
+		if alias == "" {
+			alias = "testing"
+		}
+		if alias != "" {
+			out[alias] = true
 		}
 	}
 	return out
@@ -1171,6 +1194,9 @@ func (g *generator) emitExprStmt(expr ast.Expr) error {
 	if !ok {
 		return unsupported("statement", "only println calls are supported as expression statements")
 	}
+	if emitted, err := g.emitTestingCallStmt(call); emitted || err != nil {
+		return err
+	}
 	if emitted, err := g.emitListMethodCallStmt(call); emitted || err != nil {
 		return err
 	}
@@ -1181,6 +1207,150 @@ func (g *generator) emitExprStmt(expr ast.Expr) error {
 		return err
 	}
 	return g.emitPrintln(call)
+}
+
+func (g *generator) emitTestingCallStmt(call *ast.CallExpr) (bool, error) {
+	method, ok := g.testingCallMethod(call)
+	if !ok {
+		return false, nil
+	}
+	switch method {
+	case "assert":
+		if len(call.Args) != 1 || call.Args[0] == nil || call.Args[0].Name != "" || call.Args[0].Value == nil {
+			return true, unsupported("call", "testing.assert requires one positional argument")
+		}
+		cond, err := g.emitExpr(call.Args[0].Value)
+		if err != nil {
+			return true, err
+		}
+		return true, g.emitTestingAssertion(cond, g.testingFailureMessage(call, "assert"))
+	case "assertEq":
+		return true, g.emitTestingCompare(call, token.EQ, "assertEq")
+	case "assertNe":
+		return true, g.emitTestingCompare(call, token.NEQ, "assertNe")
+	case "fail":
+		if len(call.Args) != 1 || call.Args[0] == nil || call.Args[0].Name != "" || call.Args[0].Value == nil {
+			return true, unsupported("call", "testing.fail requires one positional argument")
+		}
+		g.emitTestingAbort(g.testingFailureMessage(call, "fail"))
+		return true, nil
+	case "context":
+		return true, g.emitTestingContextStmt(call)
+	default:
+		return true, unsupportedf("call", "testing.%s is not supported by LLVM yet", method)
+	}
+}
+
+func (g *generator) testingCallMethod(call *ast.CallExpr) (string, bool) {
+	if call == nil {
+		return "", false
+	}
+	field, ok := call.Fn.(*ast.FieldExpr)
+	if !ok || field.IsOptional {
+		return "", false
+	}
+	alias, ok := field.X.(*ast.Ident)
+	if !ok || alias == nil || !g.testingAliases[alias.Name] {
+		return "", false
+	}
+	return field.Name, true
+}
+
+func (g *generator) emitTestingCompare(call *ast.CallExpr, op token.Kind, name string) error {
+	if len(call.Args) != 2 {
+		return unsupportedf("call", "testing.%s requires two positional arguments", name)
+	}
+	for _, arg := range call.Args {
+		if arg == nil || arg.Name != "" || arg.Value == nil {
+			return unsupportedf("call", "testing.%s requires positional arguments", name)
+		}
+	}
+	left, err := g.emitExpr(call.Args[0].Value)
+	if err != nil {
+		return err
+	}
+	right, err := g.emitExpr(call.Args[1].Value)
+	if err != nil {
+		return err
+	}
+	cond, err := g.emitCompare(op, left, right)
+	if err != nil {
+		return err
+	}
+	return g.emitTestingAssertion(cond, g.testingFailureMessage(call, name))
+}
+
+func (g *generator) emitTestingContextStmt(call *ast.CallExpr) error {
+	if len(call.Args) != 2 || call.Args[0] == nil || call.Args[1] == nil || call.Args[0].Name != "" || call.Args[1].Name != "" || call.Args[1].Value == nil {
+		return unsupported("call", "testing.context requires a message and a zero-arg closure")
+	}
+	closure, ok := call.Args[1].Value.(*ast.ClosureExpr)
+	if !ok {
+		return unsupported("call", "testing.context requires a closure body")
+	}
+	if len(closure.Params) != 0 || closure.ReturnType != nil || closure.Body == nil {
+		return unsupported("call", "testing.context requires a zero-arg closure with inferred unit return")
+	}
+	g.pushScope()
+	defer g.popScope()
+	return g.emitTestingClosureBody(closure.Body)
+}
+
+func (g *generator) emitTestingClosureBody(body ast.Expr) error {
+	switch expr := body.(type) {
+	case *ast.Block:
+		return g.emitBlock(expr.Stmts)
+	case *ast.IfExpr:
+		return g.emitIfStmt(expr)
+	default:
+		return g.emitExprStmt(expr)
+	}
+}
+
+func (g *generator) emitTestingAssertion(cond value, message string) error {
+	if cond.typ != "i1" {
+		return unsupportedf("type-system", "testing assertion condition type %s, want i1", cond.typ)
+	}
+	emitter := g.toOstyEmitter()
+	okLabel := llvmNextLabel(emitter, "test.ok")
+	failLabel := llvmNextLabel(emitter, "test.fail")
+	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", cond.ref, okLabel, failLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", failLabel))
+	g.emitTestingAbortWithEmitter(emitter, message, okLabel)
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = okLabel
+	return nil
+}
+
+func (g *generator) emitTestingAbort(message string) {
+	emitter := g.toOstyEmitter()
+	deadLabel := llvmNextLabel(emitter, "test.dead")
+	g.emitTestingAbortWithEmitter(emitter, message, deadLabel)
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = deadLabel
+}
+
+func (g *generator) emitTestingAbortWithEmitter(emitter *LlvmEmitter, message string, nextLabel string) {
+	text := llvmStringLiteral(emitter, message)
+	llvmPrintlnString(emitter, text)
+	g.declareRuntimeSymbol("exit", "void", []paramInfo{{typ: "i32"}})
+	emitter.body = append(emitter.body, "  call void @exit(i32 1)")
+	emitter.body = append(emitter.body, "  unreachable")
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", nextLabel))
+}
+
+func (g *generator) testingFailureMessage(call *ast.CallExpr, name string) string {
+	source := g.sourcePath
+	if source == "" {
+		source = "<test>"
+	} else if abs, err := filepath.Abs(source); err == nil {
+		source = abs
+	}
+	line := 0
+	if call != nil {
+		line = call.Pos().Line
+	}
+	return fmt.Sprintf("testing.%s failed at %s:%d", name, source, line)
 }
 
 func (g *generator) emitIfStmt(expr *ast.IfExpr) error {
