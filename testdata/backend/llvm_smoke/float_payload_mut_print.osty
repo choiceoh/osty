@@ -1,0 +1,13 @@
+enum FloatMaybe {
+    Full(Float)
+    Empty
+}
+
+fn main() {
+    let mut value: FloatMaybe = Empty
+    value = Full(42.0)
+    println(match value {
+        Full(x) -> x,
+        Empty -> 0.0,
+    })
+}

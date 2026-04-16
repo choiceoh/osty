@@ -354,6 +354,28 @@ The initial helper package for this plan is `internal/backend`.
    carrying `Float` fields.
 53. Add Float payload enum smoke. Done in Phase 53: `Full(Float)` payload enum
    construction, `match` binding, and print path.
+54. Add Float payload enum return-boundary smoke. Done in Phase 54: `Full(Float)` can
+   cross helper-return boundaries, and match can extract payload in caller return
+   context.
+55. Add Float payload enum parameter-boundary smoke. Done in Phase 55: payload enum
+   values with `Float` payload can pass through helper parameters and be pattern-matched.
+56. Add Float payload enum mutable locals. Done in Phase 56: mutable local slot write/read
+   for `FloatMaybe` values plus `match` payload binding in place.
+57. Add Float payload enum reversed two-arm matches. Done in Phase 57:
+   `match` payload dispatch works with `Empty` first and `Full(x)` second.
+58. Add Float payload enum wildcard matches. Done in Phase 58: `Full(_)` wildcard
+   match arm works for `Float` payload enum fixtures.
+59. Add String payload enum return-boundary smoke. Done in Phase 59: `Text(String)` enum
+   constructors can cross helper-return boundaries and lower to pointer-backed `String`
+   matching.
+60. Add String payload enum parameter-boundary smoke. Done in Phase 60: `Text(String)`
+   payload enums pass through helper parameters and can be returned from `match`.
+61. Add String payload enum mutable locals. Done in Phase 61: mutable `Label` locals with
+   `Text("payload string")` update and `match` payload extraction.
+62. Add String payload enum reversed two-arm matches. Done in Phase 62: enum payload
+   match order with `Empty` first and `Text(s)` second.
+63. Add String payload enum wildcard matches. Done in Phase 63: `Text(_)` wildcard
+   pattern matches for `String` payload enum fixtures.
 
 Float/Float32/Float64 policy is intentionally deferred.
 

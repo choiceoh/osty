@@ -1,0 +1,12 @@
+enum FloatMaybe {
+    Full(Float)
+    Empty
+}
+
+fn main() {
+    let value: FloatMaybe = Full(42.0)
+    println(match value {
+        Full(_) -> 42.0,
+        Empty -> 0.0,
+    })
+}
