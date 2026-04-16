@@ -31,8 +31,7 @@ The generator merges the selfhost-core sources, emits `generated.go` through
 position lookups linear. Public compiler packages should call
 `internal/lexer` and `internal/parser` for the canonical front end, and
 `internal/check` for type checking. The `internal/check` entrypoints route
-mainstream checker diagnostics through `internal/selfhost.CheckSource` while
-the legacy Go checker continues to populate structural maps for codegen and
-editor features. `internal/selfhost.CheckSourceStructured` exposes typed
-nodes, bindings, symbols, and generic instantiations for replacing those maps
-incrementally. This package is the adaptation boundary for bootstrapped code.
+mainstream checker diagnostics through `internal/selfhost.CheckSourceStructured`
+and bridge its typed nodes, bindings, declaration symbols, and generic
+instantiations onto the resolver symbols and AST nodes consumed by codegen and
+editor features. This package is the adaptation boundary for bootstrapped code.
