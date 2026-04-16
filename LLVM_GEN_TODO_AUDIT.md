@@ -1,8 +1,9 @@
 # LLVM Gen TODO Audit
 
-이 문서는 LLVM 이주 25-step Phase 3의 산출물이다. 목적은 현재 Go transpiler
+이 문서는 LLVM 이주 25-step Phase 3의 산출물이다. 목적은 당시 Go transpiler
 (`internal/gen`)의 TODO/unsupported marker를 감사해서, LLVM 1차 backend 범위가
-기존 Go backend coverage gap과 섞이지 않도록 하는 것이다.
+기존 Go backend coverage gap과 섞이지 않도록 하는 것이었다. 현재는 역사 기록이며,
+새 작업의 기준 문서로 취급하지 않는다.
 
 ## Static Marker Summary
 

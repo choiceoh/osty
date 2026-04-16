@@ -69,7 +69,7 @@ Backend directory names are stable API for tooling.
 
 | Backend | Directory | Notes |
 |---|---|---|
-| Go transpiler | `go` | Existing backend, still default during migration |
+| Go transpiler | `go` | Historical bootstrap path; kept here only as migration context while removal lands |
 | LLVM native | `llvm` | New backend; textual `.ll` first, then object/binary |
 
 Do not encode implementation detail in the backend directory name. For example,

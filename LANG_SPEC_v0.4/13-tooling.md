@@ -14,7 +14,7 @@ osty fmt FILE             Format source files (--check, --write)
 osty repair FILE          Repair common syntax/idiom slips before parsing
 osty check FILE|DIR       Type-check without building
 osty lint FILE|DIR        Style + correctness lint (--strict for CI)
-osty gen FILE             Emit a single file through go or llvm backend
+osty gen FILE             Emit a single file through the native backend
 osty doc PATH             Generate API docs (markdown or html)
 osty ci [PATH]            Run format/lint/policy/lockfile/API checks
 osty ci snapshot [PATH]   Capture the exported API baseline
@@ -41,11 +41,11 @@ osty explain [CODE]       Explain compiler or lint diagnostics
 `--profile`, `--release`, `--target`, `--features`, and
 `--no-default-features`. `build`, `run`, `test`, `add`, `update`, and
 `fetch` accept dependency-resolution guards: `--offline`, `--locked`,
-and `--frozen`. Backend-producing commands accept `--backend go|llvm`
-and `--emit go|llvm-ir|object|binary`; the Go backend remains the
-default. `run` requires a host binary and rejects cross-target
-execution. The `test` harness is currently Go-backed; `--backend llvm`
-is reserved for backend-aware test generation.
+and `--frozen`. Public backend-producing commands accept `--backend llvm`
+and `--emit llvm-ir|object|binary`. Historical Go-backend/bootstrap
+switches are not part of the public CLI contract. `run` requires a host
+binary and rejects cross-target execution. Native `osty test`
+execution is still pending.
 
 ### 13.2 Manifest
 

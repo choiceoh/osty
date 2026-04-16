@@ -76,7 +76,7 @@ front-end 에서 finite 하게 잡을 수 있을 것, 에러 메시지가 안정
 | 항목 | 분류 | 처리 |
 |---|---|---|
 | generic type parameter defaults (`struct Pair<T, U = T>`) | excluded feature | v0.4 grammar freeze 에서 제외. 나중에 넣으려면 새 edition 제안으로 재오픈. |
-| Go transpiler TODO markers / unsupported lowering forms | backend parity | 언어 스펙 미정이 아니라 gen coverage 문제. `internal/gen/doc.go` 와 tests 로 관리. |
+| Historical Go transpiler TODO audit / unsupported lowering forms | backend archive | 언어 스펙 미정이 아니라 retired backend parity 문맥이다. `LLVM_GEN_TODO_AUDIT.md` 는 역사 기록으로만 유지한다. |
 | IR가 아직 gen 의 입력이 아님 | backend architecture | `internal/ir/doc.go` 의 follow-on work. 언어 결정 아님. |
 | package-manager SAT solver, multi-binary manifests, build artifact convention | tooling/product backlog | manifest/pkgmgr/build 문서나 이슈로 관리. 언어 의미론 아님. |
 | LSP incremental sync, richer doc/comment transport | tooling backlog | LSP/editor 품질 항목. 언어 의미론 아님. |
