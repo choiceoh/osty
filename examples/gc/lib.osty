@@ -161,9 +161,14 @@ pub enum GcLoweredStoreKind {
     GcTuplePayloadStore,
     GcEnumPayloadStore,
     GcReceiverFieldStore,
+    GcArrayElementStore,
+    GcListElementStore,
+    GcMapKeyStore,
+    GcMapValueStore,
+    GcSetKeyStore,
 }
 
-pub struct GcLoweredObjectField {
+pub struct GcLoweredPointerSlot {
     pub ownerId: Int,
     pub slot: Int,
     pub name: String,
@@ -351,7 +356,7 @@ pub struct GcHeap {
     tenured: GcTenuredAllocator,
     humongous: GcHumongousAllocator,
     barriers: GcBarrierCounters,
-    loweredObjectFields: Map<String, GcLoweredObjectField>,
+    loweredPointerSlots: Map<String, GcLoweredPointerSlot>,
     remembered: Set<Int>,
     grey: List<Int>,
     allocatedSinceLastGC: Int,
@@ -490,7 +495,14 @@ pub struct GcHeap {
         name: String,
         newValue: Int,
     ) -> GcLoweredStoreEvent? {
-        self.lowerObjectFieldStore(GcStructFieldStore, ownerId, slot, name, newValue)
+        self.lowerPointerSlotStore(
+            GcStructFieldStore,
+            GcBarrierObjectField,
+            ownerId,
+            slot,
+            name,
+            newValue,
+        )
     }
 
     pub fn lowerTuplePayloadStore(
@@ -500,7 +512,14 @@ pub struct GcHeap {
         name: String,
         newValue: Int,
     ) -> GcLoweredStoreEvent? {
-        self.lowerObjectFieldStore(GcTuplePayloadStore, ownerId, slot, name, newValue)
+        self.lowerPointerSlotStore(
+            GcTuplePayloadStore,
+            GcBarrierObjectField,
+            ownerId,
+            slot,
+            name,
+            newValue,
+        )
     }
 
     pub fn lowerEnumPayloadStore(
@@ -510,7 +529,14 @@ pub struct GcHeap {
         name: String,
         newValue: Int,
     ) -> GcLoweredStoreEvent? {
-        self.lowerObjectFieldStore(GcEnumPayloadStore, ownerId, slot, name, newValue)
+        self.lowerPointerSlotStore(
+            GcEnumPayloadStore,
+            GcBarrierObjectField,
+            ownerId,
+            slot,
+            name,
+            newValue,
+        )
     }
 
     pub fn lowerReceiverFieldStore(
@@ -520,7 +546,94 @@ pub struct GcHeap {
         name: String,
         newValue: Int,
     ) -> GcLoweredStoreEvent? {
-        self.lowerObjectFieldStore(GcReceiverFieldStore, ownerId, slot, name, newValue)
+        self.lowerPointerSlotStore(
+            GcReceiverFieldStore,
+            GcBarrierObjectField,
+            ownerId,
+            slot,
+            name,
+            newValue,
+        )
+    }
+
+    pub fn lowerArrayElementStore(
+        mut self,
+        ownerId: Int,
+        index: Int,
+        newValue: Int,
+    ) -> GcLoweredStoreEvent? {
+        self.lowerPointerSlotStore(
+            GcArrayElementStore,
+            GcBarrierArrayElement,
+            ownerId,
+            index,
+            loweredCollectionSlotName("array", index),
+            newValue,
+        )
+    }
+
+    pub fn lowerListElementStore(
+        mut self,
+        ownerId: Int,
+        index: Int,
+        newValue: Int,
+    ) -> GcLoweredStoreEvent? {
+        self.lowerPointerSlotStore(
+            GcListElementStore,
+            GcBarrierArrayElement,
+            ownerId,
+            index,
+            loweredCollectionSlotName("list", index),
+            newValue,
+        )
+    }
+
+    pub fn lowerMapKeyStore(
+        mut self,
+        ownerId: Int,
+        slot: Int,
+        newValue: Int,
+    ) -> GcLoweredStoreEvent? {
+        self.lowerPointerSlotStore(
+            GcMapKeyStore,
+            GcBarrierArrayElement,
+            ownerId,
+            slot,
+            loweredCollectionSlotName("map.key", slot),
+            newValue,
+        )
+    }
+
+    pub fn lowerMapValueStore(
+        mut self,
+        ownerId: Int,
+        slot: Int,
+        newValue: Int,
+    ) -> GcLoweredStoreEvent? {
+        self.lowerPointerSlotStore(
+            GcMapValueStore,
+            GcBarrierArrayElement,
+            ownerId,
+            slot,
+            loweredCollectionSlotName("map.value", slot),
+            newValue,
+        )
+    }
+
+    pub fn lowerSetKeyStore(
+        mut self,
+        ownerId: Int,
+        slot: Int,
+        newValue: Int,
+    ) -> GcLoweredStoreEvent? {
+        self.lowerPointerSlotStore(
+            GcSetKeyStore,
+            GcBarrierArrayElement,
+            ownerId,
+            slot,
+            loweredCollectionSlotName("set.key", slot),
+            newValue,
+        )
     }
 
     pub fn addRoot(mut self, id: Int) -> Bool {
@@ -917,7 +1030,7 @@ pub struct GcHeap {
             let _ = self.gcPreWriteBarrier(GcBarrierObjectField, from, to)
         }
         let before = next.refs.len()
-        next.refs = next.refs.filter(|id| id != to)
+        next.refs = intListWithout(next.refs, to)
         self.objects.insert(from, next)
         if before != next.refs.len() {
             self.rebuildRemembered()
@@ -1199,7 +1312,7 @@ pub struct GcHeap {
         for (taskId, frame) in self.asyncFrames {
             let _ = taskId
             if frame.state == GcAsyncFrameSuspended {
-                total = total + frame.roots.len()
+                total = total + intListLen(frame.roots)
                 if frame.frameObjectId >= 0 {
                     total = total + 1
                 }
@@ -1556,13 +1669,45 @@ pub struct GcHeap {
     }
 
     pub fn loweredObjectFieldCount(self) -> Int {
-        self.loweredObjectFields.len()
+        self.loweredPointerSlotCount()
     }
 
     pub fn loweredObjectFieldValue(self, ownerId: Int, slot: Int) -> Int? {
-        let key = loweredObjectFieldKey(ownerId, slot)
-        if self.loweredObjectFields.containsKey(key) {
-            Some(self.loweredObjectFields[key].objectId)
+        match self.loweredPointerSlotValue(GcStructFieldStore, ownerId, slot) {
+            Some(value) -> {
+                return Some(value)
+            },
+            None -> {},
+        }
+        match self.loweredPointerSlotValue(GcTuplePayloadStore, ownerId, slot) {
+            Some(value) -> {
+                return Some(value)
+            },
+            None -> {},
+        }
+        match self.loweredPointerSlotValue(GcEnumPayloadStore, ownerId, slot) {
+            Some(value) -> {
+                return Some(value)
+            },
+            None -> {},
+        }
+        match self.loweredPointerSlotValue(GcReceiverFieldStore, ownerId, slot) {
+            Some(value) -> {
+                return Some(value)
+            },
+            None -> {},
+        }
+        None
+    }
+
+    pub fn loweredPointerSlotCount(self) -> Int {
+        self.loweredPointerSlots.len()
+    }
+
+    pub fn loweredPointerSlotValue(self, kind: GcLoweredStoreKind, ownerId: Int, slot: Int) -> Int? {
+        let key = loweredPointerSlotKey(kind, ownerId, slot)
+        if self.loweredPointerSlots.containsKey(key) {
+            Some(self.loweredPointerSlots[key].objectId)
         } else {
             None
         }
@@ -1701,29 +1846,29 @@ pub struct GcHeap {
         if self.barriers.preWriteCalls < 0 || self.barriers.postWriteCalls < 0 || self.barriers.loadCalls < 0 || self.barriers.rememberedSetWrites < 0 || self.barriers.incrementalShades < 0 || self.barriers.loadForwards < 0 {
             return Err("barrier counters have negative accounting")
         }
-        for (key, field) in self.loweredObjectFields {
-            if key != loweredObjectFieldKey(field.ownerId, field.slot) {
-                return Err("lowered object field key/slot mismatch: {key}")
+        for (key, slot) in self.loweredPointerSlots {
+            if key != loweredPointerSlotKey(slot.kind, slot.ownerId, slot.slot) {
+                return Err("lowered pointer slot key/slot mismatch: {key}")
             }
-            if field.ownerId <= 0 || !(self.objects.containsKey(field.ownerId)) {
-                return Err("lowered object field {key} references missing owner")
+            if slot.ownerId <= 0 || !(self.objects.containsKey(slot.ownerId)) {
+                return Err("lowered pointer slot {key} references missing owner")
             }
-            if field.slot < 0 {
-                return Err("lowered object field {key} has negative slot")
+            if slot.slot < 0 {
+                return Err("lowered pointer slot {key} has negative slot")
             }
-            if field.name == "" {
-                return Err("lowered object field {key} has empty name")
+            if slot.name == "" {
+                return Err("lowered pointer slot {key} has empty name")
             }
-            if field.objectId < -1 {
-                return Err("lowered object field {key} has invalid object id {field.objectId}")
+            if slot.objectId < -1 {
+                return Err("lowered pointer slot {key} has invalid object id {slot.objectId}")
             }
-            if field.objectId >= 0 {
-                if !(self.objects.containsKey(field.objectId)) {
-                    return Err("lowered object field {key} references missing object")
+            if slot.objectId >= 0 {
+                if !(self.objects.containsKey(slot.objectId)) {
+                    return Err("lowered pointer slot {key} references missing object")
                 }
-                let owner = self.objects[field.ownerId]
-                if !(owner.refs.contains(field.objectId)) {
-                    return Err("lowered object field {key} is missing from owner refs")
+                let owner = self.objects[slot.ownerId]
+                if !(owner.refs.contains(slot.objectId)) {
+                    return Err("lowered pointer slot {key} is missing from owner refs")
                 }
             }
         }
@@ -1881,7 +2026,7 @@ pub struct GcHeap {
                         return Err(e)
                     },
                 }
-            } else if frame.frameObjectId >= 0 || frame.roots.len() > 0 {
+            } else if frame.frameObjectId >= 0 || intListLen(frame.roots) > 0 {
                 return Err("inactive async frame {taskId} still retains roots")
             }
         }
@@ -2598,9 +2743,10 @@ pub struct GcHeap {
         self.barriers = barriers
     }
 
-    fn lowerObjectFieldStore(
+    fn lowerPointerSlotStore(
         mut self,
         kind: GcLoweredStoreKind,
+        barrierSlotKind: GcBarrierSlotKind,
         ownerId: Int,
         slot: Int,
         name: String,
@@ -2619,16 +2765,16 @@ pub struct GcHeap {
             return None
         }
 
-        let key = loweredObjectFieldKey(ownerId, slot)
-        let oldValue = self.loweredObjectFieldStoredValue(key)
+        let key = loweredPointerSlotKey(kind, ownerId, slot)
+        let oldValue = self.loweredPointerSlotStoredValue(key)
         let mut preWriteCalled = false
         if oldValue >= 0 {
-            preWriteCalled = self.gcPreWriteBarrier(GcBarrierObjectField, ownerId, oldValue)
+            preWriteCalled = self.gcPreWriteBarrier(barrierSlotKind, ownerId, oldValue)
         }
 
-        self.loweredObjectFields.insert(
+        self.loweredPointerSlots.insert(
             key,
-            GcLoweredObjectField {
+            GcLoweredPointerSlot {
                 ownerId,
                 slot,
                 name,
@@ -2636,8 +2782,8 @@ pub struct GcHeap {
                 objectId: newValue,
             },
         )
-        self.syncLoweredObjectFieldRefs(ownerId, oldValue, newValue)
-        let postWriteCalled = self.gcPostWriteBarrier(GcBarrierObjectField, ownerId, newValue)
+        self.syncLoweredPointerSlotRefs(ownerId, oldValue, newValue)
+        let postWriteCalled = self.gcPostWriteBarrier(barrierSlotKind, ownerId, newValue)
         self.rebuildRemembered()
 
         Some(
@@ -2648,24 +2794,24 @@ pub struct GcHeap {
                 name,
                 oldValue,
                 newValue,
-                barrierSlotKind: GcBarrierObjectField,
+                barrierSlotKind,
                 preWriteCalled,
                 postWriteCalled,
             },
         )
     }
 
-    fn syncLoweredObjectFieldRefs(mut self, ownerId: Int, oldValue: Int, newValue: Int) {
+    fn syncLoweredPointerSlotRefs(mut self, ownerId: Int, oldValue: Int, newValue: Int) {
         if !(self.objects.containsKey(ownerId)) {
             return
         }
 
         let mut obj = self.objects[ownerId]
-        if oldValue >= 0 && oldValue != newValue && !(self.loweredObjectFieldStillReferences(
+        if oldValue >= 0 && oldValue != newValue && !(self.loweredPointerSlotStillReferences(
             ownerId,
             oldValue,
         )) {
-            obj.refs = obj.refs.filter(|id| id != oldValue)
+            obj.refs = intListWithout(obj.refs, oldValue)
         }
         if newValue >= 0 && !(obj.refs.contains(newValue)) {
             obj.refs.push(newValue)
@@ -2673,19 +2819,19 @@ pub struct GcHeap {
         self.objects.insert(ownerId, obj)
     }
 
-    fn loweredObjectFieldStillReferences(self, ownerId: Int, objectId: Int) -> Bool {
-        for (key, field) in self.loweredObjectFields {
+    fn loweredPointerSlotStillReferences(self, ownerId: Int, objectId: Int) -> Bool {
+        for (key, slot) in self.loweredPointerSlots {
             let _ = key
-            if field.ownerId == ownerId && field.objectId == objectId {
+            if slot.ownerId == ownerId && slot.objectId == objectId {
                 return true
             }
         }
         false
     }
 
-    fn loweredObjectFieldStoredValue(self, key: String) -> Int {
-        if self.loweredObjectFields.containsKey(key) {
-            return self.loweredObjectFields[key].objectId
+    fn loweredPointerSlotStoredValue(self, key: String) -> Int {
+        if self.loweredPointerSlots.containsKey(key) {
+            return self.loweredPointerSlots[key].objectId
         }
         return -1
     }
@@ -2709,20 +2855,19 @@ pub struct GcHeap {
         if self.closureEnvironments.containsKey(id) {
             let _ = self.closureEnvironments.remove(id)
         }
-        let keys = self.loweredObjectFields.keys()
+        let keys = self.loweredPointerSlots.keys()
         for key in keys {
-            if self.loweredObjectFields.containsKey(key) {
-                let field = self.loweredObjectFields[key]
-                if field.ownerId == id || field.objectId == id {
-                    let _ = self.loweredObjectFields.remove(key)
+            if self.loweredPointerSlots.containsKey(key) {
+                let slot = self.loweredPointerSlots[key]
+                if slot.ownerId == id || slot.objectId == id {
+                    let _ = self.loweredPointerSlots.remove(key)
                 }
             }
         }
     }
 
     fn validateClosureCaptures(self, captures: List<GcClosureCapture>) -> Result<(), String> {
-        let empty: List<Int> = []
-        let mut seenSlots = empty.toSet()
+        let mut seenSlots: Map<Int, Bool> = {:}
         for capture in captures {
             if capture.slot < 0 {
                 return Err("closure capture slot must be non-negative")
@@ -2730,10 +2875,10 @@ pub struct GcHeap {
             if capture.name == "" {
                 return Err("closure capture slot {capture.slot} is unnamed")
             }
-            if seenSlots.contains(capture.slot) {
+            if seenSlots.containsKey(capture.slot) {
                 return Err("duplicate closure capture slot {capture.slot}")
             }
-            seenSlots.insert(capture.slot)
+            seenSlots.insert(capture.slot, true)
             if capture.kind == GcCaptureScalar {
                 if capture.objectId >= 0 {
                     return Err("scalar closure capture {capture.name} cannot carry an object")
@@ -2753,16 +2898,15 @@ pub struct GcHeap {
     }
 
     fn validateAsyncFrameRoots(self, roots: List<Int>) -> Result<(), String> {
-        let empty: List<Int> = []
-        let mut seen = empty.toSet()
+        let mut seen: Map<Int, Bool> = {:}
         for id in roots {
             if id <= 0 {
                 return Err("async frame root id must be positive")
             }
-            if seen.contains(id) {
+            if seen.containsKey(id) {
                 return Err("async frame has duplicate root {id}")
             }
-            seen.insert(id)
+            seen.insert(id, true)
             if !(self.objects.containsKey(id)) {
                 return Err("async frame references missing root {id}")
             }
@@ -2848,7 +2992,7 @@ pub fn newGcHeap(config: GcConfig) -> GcHeap {
     let tenured = emptyTenuredAllocator()
     let humongous = emptyHumongousAllocator()
     let barriers = emptyBarrierCounters()
-    let loweredObjectFields: Map<String, GcLoweredObjectField> = {:}
+    let loweredPointerSlots: Map<String, GcLoweredPointerSlot> = {:}
     let emptyRoots: List<Int> = []
     let emptyRemembered: List<Int> = []
     let grey: List<Int> = []
@@ -2871,7 +3015,7 @@ pub fn newGcHeap(config: GcConfig) -> GcHeap {
         tenured,
         humongous,
         barriers,
-        loweredObjectFields,
+        loweredPointerSlots,
         remembered: emptyRemembered.toSet(),
         grey,
         allocatedSinceLastGC: 0,
@@ -2883,8 +3027,45 @@ fn globalRootKey(moduleName: String, name: String) -> String {
     "{moduleName}::{name}"
 }
 
-fn loweredObjectFieldKey(ownerId: Int, slot: Int) -> String {
-    "{ownerId}:{slot}"
+fn loweredPointerSlotKey(kind: GcLoweredStoreKind, ownerId: Int, slot: Int) -> String {
+    "{loweredStoreKindName(kind)}:{ownerId}:{slot}"
+}
+
+fn loweredStoreKindName(kind: GcLoweredStoreKind) -> String {
+    match kind {
+        GcStructFieldStore -> "struct.field",
+        GcTuplePayloadStore -> "tuple.payload",
+        GcEnumPayloadStore -> "enum.payload",
+        GcReceiverFieldStore -> "receiver.field",
+        GcArrayElementStore -> "array.element",
+        GcListElementStore -> "list.element",
+        GcMapKeyStore -> "map.key",
+        GcMapValueStore -> "map.value",
+        GcSetKeyStore -> "set.key",
+    }
+}
+
+fn loweredCollectionSlotName(prefix: String, slot: Int) -> String {
+    "{prefix}[{slot}]"
+}
+
+fn intListLen(values: List<Int>) -> Int {
+    let mut total = 0
+    for value in values {
+        let _ = value
+        total = total + 1
+    }
+    total
+}
+
+fn intListWithout(values: List<Int>, removed: Int) -> List<Int> {
+    let mut out: List<Int> = []
+    for value in values {
+        if value != removed {
+            out.push(value)
+        }
+    }
+    out
 }
 
 fn closureCaptureObjectIds(captures: List<GcClosureCapture>) -> List<Int> {
@@ -3072,16 +3253,15 @@ pub fn validateSafepointPlan(plan: GcSafepointPlan) -> Result<(), String> {
         return Err("safepoint plan has negative frame slot count")
     }
 
-    let empty: List<Int> = []
-    let mut seenIds = empty.toSet()
+    let mut seenIds: Map<Int, Bool> = {:}
     for point in plan.safepoints {
         if point.id <= 0 {
             return Err("safepoint id must be positive")
         }
-        if seenIds.contains(point.id) {
+        if seenIds.containsKey(point.id) {
             return Err("duplicate safepoint id {point.id}")
         }
-        seenIds.insert(point.id)
+        seenIds.insert(point.id, true)
 
         match validateSafepoint(plan, point) {
             Ok(_) -> {},
@@ -3200,11 +3380,13 @@ pub fn buildGcStackMap(
     )
 }
 
-pub fn stackMapEntryFor(map: GcStackMap, safepointId: Int) -> GcStackMapEntry? {
+pub fn stackMapEntryIndex(map: GcStackMap, safepointId: Int) -> Int? {
+    let mut index = 0
     for entry in map.entries {
         if entry.safepointId == safepointId {
-            return Some(entry)
+            return Some(index)
         }
+        index = index + 1
     }
     None
 }
@@ -3275,8 +3457,7 @@ fn validateSafepoint(plan: GcSafepointPlan, point: GcSafepoint) -> Result<(), St
         return Err("async yield safepoint {point.id} must be marked maySuspend")
     }
 
-    let empty: List<Int> = []
-    let mut seenSlots = empty.toSet()
+    let mut seenSlots: Map<Int, Bool> = {:}
     for root in point.liveRoots {
         if root.slot < 0 || root.slot >= plan.frameSlots {
             return Err("safepoint {point.id} root slot {root.slot} is outside frame")
@@ -3284,10 +3465,10 @@ fn validateSafepoint(plan: GcSafepointPlan, point: GcSafepoint) -> Result<(), St
         if root.name == "" {
             return Err("safepoint {point.id} root slot {root.slot} is unnamed")
         }
-        if seenSlots.contains(root.slot) {
+        if seenSlots.containsKey(root.slot) {
             return Err("safepoint {point.id} has duplicate root slot {root.slot}")
         }
-        seenSlots.insert(root.slot)
+        seenSlots.insert(root.slot, true)
 
         if root.kind == GcDerivedRootSlot {
             if root.derivedFrom < 0 {
@@ -3323,17 +3504,16 @@ fn safepointMayAllocate(kind: GcSafepointKind) -> Bool {
 }
 
 fn validateFrameLayout(plan: GcSafepointPlan, frameLayout: List<GcFrameSlot>) -> Result<(), String> {
-    let empty: List<Int> = []
-    let mut seenSlots = empty.toSet()
+    let mut seenSlots: Map<Int, Bool> = {:}
 
     for slot in frameLayout {
         if slot.slot < 0 || slot.slot >= plan.frameSlots {
             return Err("frame slot {slot.slot} is outside frame")
         }
-        if seenSlots.contains(slot.slot) {
+        if seenSlots.containsKey(slot.slot) {
             return Err("duplicate frame slot {slot.slot}")
         }
-        seenSlots.insert(slot.slot)
+        seenSlots.insert(slot.slot, true)
         if slot.name == "" {
             return Err("frame slot {slot.slot} is unnamed")
         }
@@ -3360,9 +3540,10 @@ fn validateFrameLayout(plan: GcSafepointPlan, frameLayout: List<GcFrameSlot>) ->
 
 fn validateSafepointAgainstFrameLayout(point: GcSafepoint, frameLayout: List<GcFrameSlot>) -> Result<(), String> {
     for root in point.liveRoots {
-        let frame = frameLayoutSlot(frameLayout, root.slot)
+        let frame = frameLayoutSlotIndex(frameLayout, root.slot)
         match frame {
-            Some(slot) -> {
+            Some(index) -> {
+                let slot = frameLayout[index]
                 if !(slot.pointer) {
                     return Err("safepoint {point.id} marks non-pointer frame slot {root.slot} live")
                 }
@@ -3466,18 +3647,20 @@ fn normalizeInlineSlots(inlineSlots: Int, frameSlots: Int) -> Int {
     }
 }
 
-fn frameLayoutSlot(frameLayout: List<GcFrameSlot>, slotId: Int) -> GcFrameSlot? {
+fn frameLayoutSlotIndex(frameLayout: List<GcFrameSlot>, slotId: Int) -> Int? {
+    let mut index = 0
     for slot in frameLayout {
         if slot.slot == slotId {
-            return Some(slot)
+            return Some(index)
         }
+        index = index + 1
     }
     None
 }
 
 fn frameLayoutHasPointerSlot(frameLayout: List<GcFrameSlot>, slotId: Int) -> Bool {
-    match frameLayoutSlot(frameLayout, slotId) {
-        Some(slot) -> slot.pointer,
+    match frameLayoutSlotIndex(frameLayout, slotId) {
+        Some(index) -> frameLayout[index].pointer,
         None -> false,
     }
 }

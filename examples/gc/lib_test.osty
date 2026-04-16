@@ -89,7 +89,7 @@ fn testValidateHeapRejectsLiveByteMismatch() {
     let tenured = emptyTenuredAllocator()
     let humongous = emptyHumongousAllocator()
     let barriers = emptyBarrierCounters()
-    let loweredObjectFields: Map<String, GcLoweredObjectField> = {:}
+    let loweredPointerSlots: Map<String, GcLoweredPointerSlot> = {:}
     let heap = GcHeap {
         config: testGcConfig(),
         nextId: 2,
@@ -108,7 +108,7 @@ fn testValidateHeapRejectsLiveByteMismatch() {
         tenured,
         humongous,
         barriers,
-        loweredObjectFields,
+        loweredPointerSlots,
         remembered: empty.toSet(),
         grey: [],
         allocatedSinceLastGC: 16,
@@ -167,7 +167,7 @@ fn testValidateHeapRejectsMissingRememberedEdge() {
     let tenured = emptyTenuredAllocator()
     let humongous = emptyHumongousAllocator()
     let barriers = emptyBarrierCounters()
-    let loweredObjectFields: Map<String, GcLoweredObjectField> = {:}
+    let loweredPointerSlots: Map<String, GcLoweredPointerSlot> = {:}
     let heap = GcHeap {
         config: testGcConfig(),
         nextId: 3,
@@ -186,7 +186,7 @@ fn testValidateHeapRejectsMissingRememberedEdge() {
         tenured,
         humongous,
         barriers,
-        loweredObjectFields,
+        loweredPointerSlots,
         remembered: empty.toSet(),
         grey: [],
         allocatedSinceLastGC: 32,
@@ -591,6 +591,116 @@ fn testStoreLoweringRejectsInvalidTargetBeforeBarrier() {
     testing.assertEq(heap.loweredObjectFieldCount(), 0)
     testing.assertEq(heap.barrierPreWriteCallCount(), 0)
     testing.assertEq(heap.barrierPostWriteCallCount(), 0)
+}
+
+fn testArrayElementStoreLoweringUsesCollectionBarrier() {
+    let mut heap = newGcHeap(testGcConfig())
+    let array = heap.allocate(GcArray, 16)
+    testing.assert(heap.addRoot(array))
+    let _ = heap.majorCollect()
+    assertValid(heap)
+    testing.assertEq(heap.generationOf(array) ?? -1, 1)
+
+    let child = heap.allocate(GcRecord, 16)
+    match heap.lowerArrayElementStore(array, 0, child) {
+        Some(event) -> {
+            testing.assertEq(event.kind, GcArrayElementStore)
+            testing.assertEq(event.ownerId, array)
+            testing.assertEq(event.slot, 0)
+            testing.assertEq(event.name, "array[0]")
+            testing.assertEq(event.oldValue, -1)
+            testing.assertEq(event.newValue, child)
+            testing.assertEq(event.barrierSlotKind, GcBarrierArrayElement)
+            testing.assert(!(event.preWriteCalled))
+            testing.assert(event.postWriteCalled)
+        },
+        None -> testing.fail("array element store lowering failed"),
+    }
+    assertValid(heap)
+
+    testing.assertEq(heap.loweredPointerSlotCount(), 1)
+    testing.assertEq(heap.loweredPointerSlotValue(GcArrayElementStore, array, 0) ?? -1, child)
+    testing.assertEq(heap.refCount(array) ?? -1, 1)
+    testing.assertEq(heap.rememberedCount(), 1)
+    testing.assertEq(heap.barrierPostWriteCallCount(), 1)
+    testing.assertEq(heap.barrierRememberedSetWriteCount(), 1)
+}
+
+fn testMapKeyAndValueStoresKeepEntryObjectsAlive() {
+    let mut heap = newGcHeap(testGcConfig())
+    let table = heap.allocate(GcArray, 24)
+    let key = heap.allocate(GcRecord, 16)
+    let value = heap.allocate(GcClosure, 16)
+    testing.assert(heap.addRoot(table))
+
+    match heap.lowerMapKeyStore(table, 10, key) {
+        Some(event) -> {
+            testing.assertEq(event.kind, GcMapKeyStore)
+            testing.assertEq(event.name, "map.key[10]")
+            testing.assertEq(event.barrierSlotKind, GcBarrierArrayElement)
+        },
+        None -> testing.fail("map key store lowering failed"),
+    }
+    match heap.lowerMapValueStore(table, 11, value) {
+        Some(event) -> {
+            testing.assertEq(event.kind, GcMapValueStore)
+            testing.assertEq(event.name, "map.value[11]")
+            testing.assertEq(event.barrierSlotKind, GcBarrierArrayElement)
+        },
+        None -> testing.fail("map value store lowering failed"),
+    }
+    assertValid(heap)
+
+    testing.assertEq(heap.loweredPointerSlotCount(), 2)
+    testing.assertEq(heap.loweredPointerSlotValue(GcMapKeyStore, table, 10) ?? -1, key)
+    testing.assertEq(heap.loweredPointerSlotValue(GcMapValueStore, table, 11) ?? -1, value)
+    testing.assertEq(heap.refCount(table) ?? -1, 2)
+
+    let _ = heap.majorCollect()
+    assertValid(heap)
+    testing.assert(heap.contains(table))
+    testing.assert(heap.contains(key))
+    testing.assert(heap.contains(value))
+}
+
+fn testCollectionStoreOverwritePreservesSharedPointerSlot() {
+    let mut heap = newGcHeap(testGcConfig())
+    let list = heap.allocate(GcArray, 16)
+    let shared = heap.allocate(GcRecord, 16)
+    let replacement = heap.allocate(GcClosure, 16)
+    testing.assert(heap.addRoot(list))
+
+    match heap.lowerListElementStore(list, 0, shared) {
+        Some(event) -> testing.assertEq(event.kind, GcListElementStore),
+        None -> testing.fail("list element store lowering failed"),
+    }
+    match heap.lowerSetKeyStore(list, 1, shared) {
+        Some(event) -> testing.assertEq(event.kind, GcSetKeyStore),
+        None -> testing.fail("set key store lowering failed"),
+    }
+    match heap.lowerListElementStore(list, 0, replacement) {
+        Some(event) -> {
+            testing.assertEq(event.oldValue, shared)
+            testing.assertEq(event.newValue, replacement)
+            testing.assert(event.preWriteCalled)
+            testing.assert(event.postWriteCalled)
+        },
+        None -> testing.fail("list element overwrite lowering failed"),
+    }
+    assertValid(heap)
+
+    testing.assertEq(heap.loweredPointerSlotCount(), 2)
+    testing.assertEq(heap.loweredPointerSlotValue(GcListElementStore, list, 0) ?? -1, replacement)
+    testing.assertEq(heap.loweredPointerSlotValue(GcSetKeyStore, list, 1) ?? -1, shared)
+    testing.assertEq(heap.refCount(list) ?? -1, 2)
+    testing.assertEq(heap.barrierPreWriteCallCount(), 1)
+    testing.assertEq(heap.barrierPostWriteCallCount(), 3)
+
+    let _ = heap.majorCollect()
+    assertValid(heap)
+    testing.assert(heap.contains(list))
+    testing.assert(heap.contains(shared))
+    testing.assert(heap.contains(replacement))
 }
 
 fn testMinorCollectionMovesEdenObjectToSurvivorSpace() {
@@ -1437,9 +1547,9 @@ fn testStackMapBuildsBitmapOverflowAndDerivedRoots() {
     }
 
     let mut entry = emptyTestStackMapEntry()
-    match stackMapEntryFor(map, 1) {
-        Some(next) -> {
-            entry = next
+    match stackMapEntryIndex(map, 1) {
+        Some(index) -> {
+            entry = map.entries[index]
         },
         None -> testing.fail("missing stack map entry"),
     }
@@ -1503,7 +1613,7 @@ fn testStackMapPreservesDeferQuestionAndEarlyReturnRoots() {
         Err(e) -> testing.fail(e),
     }
 
-    let entry = stackMapEntryFor(map, 1) ?? emptyTestStackMapEntry()
+    let entry = map.entries[stackMapEntryIndex(map, 1) ?? 0]
     testing.assertEq(entry.bitmapWords[0], 7)
 
     let badRoots: List<GcLiveRootSlot> = [
@@ -1694,24 +1804,23 @@ fn stressIncrementalAndCompare(heap: GcHeap, ids: List<Int>) -> GcHeap {
     next
 }
 
-fn stressReachableFromRoots(heap: GcHeap) -> Set<Int> {
-    let empty: List<Int> = []
-    let mut seen = empty.toSet()
+fn stressReachableFromRoots(heap: GcHeap) -> Map<Int, Bool> {
+    let mut seen: Map<Int, Bool> = {:}
     let mut work: List<Int> = []
 
     for rootId in heap.roots.toList() {
-        if heap.objects.containsKey(rootId) && !(seen.contains(rootId)) {
-            seen.insert(rootId)
+        if heap.objects.containsKey(rootId) && !(seen.containsKey(rootId)) {
+            seen.insert(rootId, true)
             work.push(rootId)
         }
     }
 
     for (key, root) in heap.globalRoots {
         let _ = key
-        if root.objectId >= 0 && heap.objects.containsKey(root.objectId) && !(seen.contains(
+        if root.objectId >= 0 && heap.objects.containsKey(root.objectId) && !(seen.containsKey(
             root.objectId,
         )) {
-            seen.insert(root.objectId)
+            seen.insert(root.objectId, true)
             work.push(root.objectId)
         }
     }
@@ -1719,15 +1828,15 @@ fn stressReachableFromRoots(heap: GcHeap) -> Set<Int> {
     for (taskId, frame) in heap.asyncFrames {
         let _ = taskId
         if frame.state == GcAsyncFrameSuspended {
-            if frame.frameObjectId >= 0 && heap.objects.containsKey(frame.frameObjectId) && !(seen.contains(
+            if frame.frameObjectId >= 0 && heap.objects.containsKey(frame.frameObjectId) && !(seen.containsKey(
                 frame.frameObjectId,
             )) {
-                seen.insert(frame.frameObjectId)
+                seen.insert(frame.frameObjectId, true)
                 work.push(frame.frameObjectId)
             }
             for rootId in frame.roots {
-                if heap.objects.containsKey(rootId) && !(seen.contains(rootId)) {
-                    seen.insert(rootId)
+                if heap.objects.containsKey(rootId) && !(seen.containsKey(rootId)) {
+                    seen.insert(rootId, true)
                     work.push(rootId)
                 }
             }
@@ -1739,8 +1848,8 @@ fn stressReachableFromRoots(heap: GcHeap) -> Set<Int> {
         if id >= 0 && heap.objects.containsKey(id) {
             let obj = heap.objects[id]
             for childId in obj.refs {
-                if heap.objects.containsKey(childId) && !(seen.contains(childId)) {
-                    seen.insert(childId)
+                if heap.objects.containsKey(childId) && !(seen.containsKey(childId)) {
+                    seen.insert(childId, true)
                     work.push(childId)
                 }
             }
@@ -1750,8 +1859,8 @@ fn stressReachableFromRoots(heap: GcHeap) -> Set<Int> {
     seen
 }
 
-fn stressAssertMatchesReachability(heap: GcHeap, ids: List<Int>, expected: Set<Int>) {
+fn stressAssertMatchesReachability(heap: GcHeap, ids: List<Int>, expected: Map<Int, Bool>) {
     for id in ids {
-        testing.assertEq(heap.contains(id), expected.contains(id))
+        testing.assertEq(heap.contains(id), expected.containsKey(id))
     }
 }
