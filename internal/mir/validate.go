@@ -296,6 +296,13 @@ func (v *validator) validateRValue(fn *Function, bb *BasicBlock, rv RValue) {
 		if x.T == nil {
 			v.addf("function %q bb%d: NullaryRV nil Type", fn.Name, bb.ID)
 		}
+	case *GlobalRefRV:
+		if x.Name == "" {
+			v.addf("function %q bb%d: GlobalRefRV empty Name", fn.Name, bb.ID)
+		}
+		if x.T == nil {
+			v.addf("function %q bb%d: GlobalRefRV nil Type", fn.Name, bb.ID)
+		}
 	default:
 		v.addf("function %q bb%d: unknown rvalue %T", fn.Name, bb.ID, rv)
 	}

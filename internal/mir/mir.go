@@ -670,6 +670,12 @@ const (
 	AggEnumVariant
 	AggList
 	AggMap
+	// AggClosure is a closure value: Fields[0] is a FnConst operand
+	// naming the lifted closure body; Fields[1..] are the captured
+	// operands, in the order given by the lifted function's prefix
+	// parameters. Backends that want a flat fn-pointer fall back to
+	// ignoring captures when the capture list is empty.
+	AggClosure
 )
 
 // AggregateRV constructs a compound value. For EnumVariant, VariantIdx
@@ -746,6 +752,16 @@ type RefRV struct {
 }
 
 func (*RefRV) rvalueNode() {}
+
+// GlobalRefRV references a top-level `let` global by its symbol. The
+// backend chooses how to materialise the value (static slot, init-on-
+// first-use, etc.); MIR does not prescribe a strategy.
+type GlobalRefRV struct {
+	Name string
+	T    Type
+}
+
+func (*GlobalRefRV) rvalueNode() {}
 
 // NullaryRVKind enumerates nullary rvalues that backends must
 // recognise by name.
