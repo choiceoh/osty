@@ -1241,6 +1241,126 @@ fn testHardeningReportAuditsBarriersAndBudgets() {
     testing.assert(contract.refSameUsesStableIdentity)
 }
 
+fn testLlvmHandleTablePreservesIdentityAcrossCompaction() {
+    let mut heap = newGcHeap(testGcConfig())
+    let dead = heap.allocate(GcBytes, 16)
+    let handle = heap.allocateLlvmHandle(GcRecord, 24, "llvm.emitStructLit")
+    let objectId = intOr(heap.llvmHandleObject(handle), -1)
+    let beforeAddress = intOr(heap.addressOf(objectId), -1)
+    let rootRef = intOr(heap.bindLlvmRootRef(handle, GcLlvmStackRoot, "entry.stack"), -1)
+    assertValid(heap)
+
+    testing.assert(rootRef > 0)
+    testing.assertEq(heap.llvmHandleCount(), 1)
+    testing.assertEq(heap.llvmRootRefCount(), 1)
+    testing.assertEq(heap.llvmRuntimeRootCount(), 1)
+
+    let stats = heap.majorCollect()
+    assertValid(heap)
+    let afterAddress = intOr(heap.addressOf(objectId), -1)
+
+    testing.assert(!(heap.contains(dead)))
+    testing.assert(heap.contains(objectId))
+    testing.assert(afterAddress < beforeAddress)
+    testing.assert(heap.llvmHandleSame(handle, handle))
+    testing.assertEq(heap.lastRemapRootSlotsRemapped(), 1)
+    testing.assertEq(stats.compactedObjects, 1)
+
+    let snapshot = heap.llvmBridgeSnapshot()
+    testing.assertEq(snapshot.backend, GcLlvmBackend)
+    testing.assertEq(snapshot.handleCount, 1)
+    testing.assertEq(snapshot.liveHandleCount, 1)
+    testing.assertEq(snapshot.liveRootRefCount, 1)
+    testing.assertEq(snapshot.runtimeRootCount, 1)
+    testing.assertEq(snapshot.loweredAllocations, 1)
+    testing.assertEq(snapshot.identityChecks, 1)
+
+    match heap.lastLoweredAllocationTrace() {
+        Some(trace) -> {
+            testing.assertEq(trace.backend, GcLlvmBackend)
+            testing.assertEq(trace.handle, handle)
+            testing.assertEq(trace.objectId, objectId)
+            testing.assertEq(trace.kind, GcRecord)
+            testing.assertEq(trace.size, 24)
+            testing.assertEq(trace.allocationSite, "llvm.emitStructLit")
+            testing.assert(!(trace.usedThreadLocalBuffer))
+        },
+        None -> testing.fail("missing lowered allocation trace"),
+    }
+}
+
+fn testLlvmRuntimeRootBridgeDropsReleasedRoots() {
+    let mut heap = newGcHeap(testGcConfig())
+    let handle = heap.allocateLlvmHandle(GcRecord, 24, "llvm.emitCall")
+    let objectId = intOr(heap.llvmHandleObject(handle), -1)
+    let rootRef = intOr(heap.bindLlvmRootRef(handle, GcLlvmStackRoot, "call.root"), -1)
+    assertValid(heap)
+
+    let _ = heap.majorCollect()
+    assertValid(heap)
+    testing.assert(heap.contains(objectId))
+
+    testing.assert(heap.releaseLlvmRootRef(rootRef))
+    assertValid(heap)
+    testing.assertEq(heap.llvmLiveRootRefCount(), 0)
+    testing.assertEq(heap.llvmRuntimeRootCount(), 0)
+
+    let _ = heap.majorCollect()
+    assertValid(heap)
+    testing.assert(!(heap.contains(objectId)))
+    testing.assertEq(intOr(heap.loadLlvmHandle(handle), -1), -1)
+
+    let snapshot = heap.llvmBridgeSnapshot()
+    testing.assertEq(snapshot.rootRefCount, 1)
+    testing.assertEq(snapshot.liveHandleCount, 0)
+    testing.assertEq(snapshot.staleHandleLoads, 1)
+}
+
+fn testLoweredLlvmStoreTraceCallsWriteBarrier() {
+    let mut heap = newGcHeap(testGcConfig())
+    let ownerHandle = heap.allocateLlvmHandle(GcRecord, 16, "llvm.owner")
+    let childHandle = heap.allocateLlvmHandle(GcArray, 16, "llvm.child")
+    let ownerObject = intOr(heap.llvmHandleObject(ownerHandle), -1)
+    let childObject = intOr(heap.llvmHandleObject(childHandle), -1)
+    testing.assert(intOr(heap.bindLlvmRootRef(ownerHandle, GcLlvmStackRoot, "owner.root"), -1) > 0)
+    assertValid(heap)
+
+    match heap.lowerLlvmStore(ownerHandle, 0, "child", childHandle) {
+        Some(trace) -> {
+            testing.assertEq(trace.backend, GcLlvmBackend)
+            testing.assertEq(trace.ownerHandle, ownerHandle)
+            testing.assertEq(trace.newHandle, childHandle)
+            testing.assertEq(trace.ownerObjectId, ownerObject)
+            testing.assertEq(trace.newObjectId, childObject)
+            testing.assertEq(trace.oldObjectId, -1)
+            testing.assertEq(trace.slot, 0)
+            testing.assertEq(trace.name, "child")
+            testing.assert(trace.postWriteCalled)
+        },
+        None -> testing.fail("lowered llvm store failed"),
+    }
+    assertValid(heap)
+
+    testing.assertEq(intOr(heap.loweredObjectFieldValue(ownerObject, 0), -1), childObject)
+    testing.assertEq(heap.barrierPostWriteCallCount(), 1)
+    let snapshot = heap.llvmBridgeSnapshot()
+    testing.assertEq(snapshot.loweredStores, 1)
+    testing.assertEq(snapshot.handleStores, 1)
+
+    let _ = heap.majorCollect()
+    assertValid(heap)
+    testing.assert(heap.contains(ownerObject))
+    testing.assert(heap.contains(childObject))
+
+    match heap.lastLoweredStoreTrace() {
+        Some(trace) -> {
+            testing.assertEq(trace.ownerHandle, ownerHandle)
+            testing.assertEq(trace.newHandle, childHandle)
+        },
+        None -> testing.fail("missing lowered store trace"),
+    }
+}
+
 fn testMajorCompactionClosesHoles() {
     let mut heap = newGcHeap(testGcConfig())
     let first = heap.allocate(GcRecord, 10)

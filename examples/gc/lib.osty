@@ -370,6 +370,101 @@ pub struct GcHardeningReport {
     pub passed: Bool,
 }
 
+pub enum GcBackendTarget {
+    GcLlvmBackend,
+    GcNativeBackend,
+}
+
+pub enum GcLlvmRootRefKind {
+    GcLlvmStackRoot,
+    GcLlvmPinnedRoot,
+    GcLlvmExternalRoot,
+}
+
+pub enum GcBackendLoweringEventKind {
+    GcLoweredAllocationEvent,
+    GcLoweredStoreBarrierEvent,
+    GcLoweredRootEvent,
+    GcLoweredSafepointEvent,
+}
+
+pub struct GcLlvmHandleEntry {
+    pub handle: Int,
+    pub objectId: Int,
+    pub allocationSite: String,
+    pub rooted: Bool,
+    pub pinned: Bool,
+    pub released: Bool,
+    pub loads: Int,
+    pub stores: Int,
+}
+
+pub struct GcLlvmRootRefEntry {
+    pub rootRefId: Int,
+    pub handle: Int,
+    pub objectId: Int,
+    pub kind: GcLlvmRootRefKind,
+    pub pinned: Bool,
+    pub alive: Bool,
+    pub site: String,
+}
+
+pub struct GcLlvmBridgeTrace {
+    pub handlesCreated: Int,
+    pub handlesReleased: Int,
+    pub rootRefsBound: Int,
+    pub rootRefsReleased: Int,
+    pub runtimeRootsAdded: Int,
+    pub runtimeRootsRemoved: Int,
+    pub handleLoads: Int,
+    pub handleStores: Int,
+    pub identityChecks: Int,
+    pub staleHandleLoads: Int,
+    pub loweredAllocations: Int,
+    pub loweredStores: Int,
+}
+
+pub struct GcLoweredAllocationTrace {
+    pub backend: GcBackendTarget,
+    pub objectId: Int,
+    pub handle: Int,
+    pub kind: ObjectKind,
+    pub size: Int,
+    pub allocationSite: String,
+    pub usedThreadLocalBuffer: Bool,
+}
+
+pub struct GcLoweredStoreTrace {
+    pub backend: GcBackendTarget,
+    pub ownerHandle: Int,
+    pub oldHandle: Int,
+    pub newHandle: Int,
+    pub ownerObjectId: Int,
+    pub oldObjectId: Int,
+    pub newObjectId: Int,
+    pub slot: Int,
+    pub name: String,
+    pub postWriteCalled: Bool,
+}
+
+pub struct GcLlvmBridgeSnapshot {
+    pub backend: GcBackendTarget,
+    pub handleCount: Int,
+    pub liveHandleCount: Int,
+    pub rootRefCount: Int,
+    pub liveRootRefCount: Int,
+    pub runtimeRootCount: Int,
+    pub pinnedHandleCount: Int,
+    pub handlesCreated: Int,
+    pub handlesReleased: Int,
+    pub handleLoads: Int,
+    pub handleStores: Int,
+    pub identityChecks: Int,
+    pub staleHandleLoads: Int,
+    pub loweredAllocations: Int,
+    pub loweredStores: Int,
+}
+
 pub enum GcLoweredStoreKind {
     GcStructFieldStore,
     GcTuplePayloadStore,
@@ -585,6 +680,14 @@ pub struct GcHeap {
     lastRemapTrace: GcRemapTrace,
     schedulerTrace: GcIncrementalSchedulerTrace,
     concurrentTrace: GcConcurrentMarkTrace,
+    nextLlvmHandle: Int,
+    nextLlvmRootRef: Int,
+    llvmHandles: Map<Int, GcLlvmHandleEntry>,
+    llvmRootRefs: Map<Int, GcLlvmRootRefEntry>,
+    llvmRuntimeRoots: Set<Int>,
+    llvmBridgeTrace: GcLlvmBridgeTrace,
+    lastLoweredAllocation: GcLoweredAllocationTrace?,
+    lastLoweredStore: GcLoweredStoreTrace?,
 
     pub fn tryAllocate(mut self, kind: ObjectKind, size: Int) -> Result<Int, String> {
         let normalized = normalizeSize(size)
@@ -653,6 +756,319 @@ pub struct GcHeap {
 
     pub fn allocateThread(mut self, ownerId: Int, kind: ObjectKind, size: Int) -> Int {
         self.tryAllocateThread(ownerId, kind, size).unwrap()
+    }
+
+    pub fn allocateLlvmHandle(mut self, kind: ObjectKind, size: Int, allocationSite: String) -> Int {
+        let objectId = self.allocate(kind, size)
+        let handle = self.installLlvmHandle(objectId, allocationSite)
+        self.recordLoweredLlvmAllocation(objectId, handle, kind, normalizeSize(size), false)
+        handle
+    }
+
+    pub fn allocateLlvmHandleThread(
+        mut self,
+        ownerId: Int,
+        kind: ObjectKind,
+        size: Int,
+        allocationSite: String,
+    ) -> Int {
+        let beforeFast = self.tlabFastAllocationCount()
+        let objectId = self.allocateThread(ownerId, kind, size)
+        let handle = self.installLlvmHandle(objectId, allocationSite)
+        let usedThreadLocalBuffer = self.tlabFastAllocationCount() > beforeFast
+        self.recordLoweredLlvmAllocation(
+            objectId,
+            handle,
+            kind,
+            normalizeSize(size),
+            usedThreadLocalBuffer,
+        )
+        handle
+    }
+
+    pub fn exportLlvmHandle(mut self, objectId: Int, allocationSite: String) -> Int? {
+        if !(self.objects.containsKey(objectId)) {
+            return None
+        }
+        Some(self.installLlvmHandle(objectId, allocationSite))
+    }
+
+    pub fn releaseLlvmHandle(mut self, handle: Int) -> Bool {
+        if !(self.llvmHandles.containsKey(handle)) {
+            return false
+        }
+        let entry = self.llvmHandles[handle]
+        if entry.released {
+            return false
+        }
+        let objectId = entry.objectId
+
+        let rootRefIds = self.llvmRootRefs.keys()
+        for rootRefId in rootRefIds {
+            if self.llvmRootRefs.containsKey(rootRefId) {
+                let rootRef = self.llvmRootRefs[rootRefId]
+                if rootRef.handle == handle && rootRef.alive {
+                    let mut nextRef = rootRef
+                    nextRef.alive = false
+                    nextRef.pinned = false
+                    self.llvmRootRefs.insert(rootRefId, nextRef)
+                    self.recordLlvmRootRefReleased()
+                }
+            }
+        }
+
+        let mut next = entry
+        next.rooted = false
+        next.pinned = false
+        next.released = true
+        self.llvmHandles.insert(handle, next)
+        self.refreshLlvmRuntimeRootForObject(objectId)
+        self.refreshLlvmPinnedStateForObject(objectId)
+        self.recordLlvmHandleReleased()
+        true
+    }
+
+    pub fn retainLlvmHandleRoot(mut self, handle: Int) -> Bool {
+        if !(self.llvmHandles.containsKey(handle)) {
+            return false
+        }
+        let entry = self.llvmHandles[handle]
+        if entry.released || !(self.objects.containsKey(entry.objectId)) {
+            return false
+        }
+        let mut next = entry
+        next.rooted = true
+        self.llvmHandles.insert(handle, next)
+        self.ensureLlvmRuntimeRoot(entry.objectId)
+        if self.phase == GcMarking {
+            self.shade(entry.objectId)
+        }
+        true
+    }
+
+    pub fn releaseLlvmHandleRoot(mut self, handle: Int) -> Bool {
+        if !(self.llvmHandles.containsKey(handle)) {
+            return false
+        }
+        let entry = self.llvmHandles[handle]
+        if entry.released || !(entry.rooted) {
+            return false
+        }
+        let objectId = entry.objectId
+        let mut next = entry
+        next.rooted = false
+        self.llvmHandles.insert(handle, next)
+        self.refreshLlvmRuntimeRootForObject(objectId)
+        true
+    }
+
+    pub fn bindLlvmRootRef(mut self, handle: Int, kind: GcLlvmRootRefKind, site: String) -> Int? {
+        let objectId = intOptionalOr(self.llvmLiveObjectForHandle(handle), -1)
+        if objectId < 0 {
+            return None
+        }
+        let rootRefId = self.nextLlvmRootRef
+        self.nextLlvmRootRef = self.nextLlvmRootRef + 1
+        let pinned = kind == GcLlvmPinnedRoot
+        self.llvmRootRefs.insert(
+            rootRefId,
+            GcLlvmRootRefEntry {
+                rootRefId,
+                handle,
+                objectId,
+                kind,
+                pinned,
+                alive: true,
+                site: normalizeBridgeSite(site),
+            },
+        )
+        if pinned {
+            let _ = self.pin(objectId)
+            self.setLlvmHandlePinned(handle, true)
+        }
+        self.ensureLlvmRuntimeRoot(objectId)
+        if self.phase == GcMarking {
+            self.shade(objectId)
+        }
+        self.recordLlvmRootRefBound()
+        Some(rootRefId)
+    }
+
+    pub fn releaseLlvmRootRef(mut self, rootRefId: Int) -> Bool {
+        if !(self.llvmRootRefs.containsKey(rootRefId)) {
+            return false
+        }
+        let rootRef = self.llvmRootRefs[rootRefId]
+        if !(rootRef.alive) {
+            return false
+        }
+        let objectId = rootRef.objectId
+        let handle = rootRef.handle
+        let mut next = rootRef
+        next.alive = false
+        next.pinned = false
+        self.llvmRootRefs.insert(rootRefId, next)
+        self.refreshLlvmRuntimeRootForObject(objectId)
+        self.setLlvmHandlePinned(handle, self.llvmHandleHasAlivePinnedRootRef(handle))
+        self.refreshLlvmPinnedStateForObject(objectId)
+        self.recordLlvmRootRefReleased()
+        true
+    }
+
+    pub fn loadLlvmHandle(mut self, handle: Int) -> Int? {
+        if !(self.llvmHandles.containsKey(handle)) {
+            self.recordStaleLlvmHandleLoad()
+            return None
+        }
+        let entry = self.llvmHandles[handle]
+        if entry.released || !(self.objects.containsKey(entry.objectId)) {
+            self.recordStaleLlvmHandleLoad()
+            return None
+        }
+        let mut next = entry
+        next.loads = next.loads + 1
+        self.llvmHandles.insert(handle, next)
+        self.recordLlvmHandleLoad()
+        Some(entry.objectId)
+    }
+
+    pub fn lowerLlvmStore(
+        mut self,
+        ownerHandle: Int,
+        slot: Int,
+        name: String,
+        newHandle: Int,
+    ) -> GcLoweredStoreTrace? {
+        let ownerObjectId = intOptionalOr(self.llvmLiveObjectForHandle(ownerHandle), -1)
+        let newObjectId = intOptionalOr(self.llvmLiveObjectForHandle(newHandle), -1)
+        if ownerObjectId < 0 || newObjectId < 0 {
+            self.recordStaleLlvmHandleLoad()
+            return None
+        }
+        let oldObjectId = intOptionalOr(self.loweredObjectFieldValue(ownerObjectId, slot), -1)
+        match self.lowerStructFieldStore(ownerObjectId, slot, name, newObjectId) {
+            Some(lowered) -> {
+                self.recordLlvmHandleStore(ownerHandle)
+                let oldHandle = self.llvmFirstLiveHandleForObject(oldObjectId)
+                let trace = GcLoweredStoreTrace {
+                    backend: GcLlvmBackend,
+                    ownerHandle,
+                    oldHandle,
+                    newHandle,
+                    ownerObjectId,
+                    oldObjectId,
+                    newObjectId,
+                    slot,
+                    name,
+                    postWriteCalled: lowered.postWriteCalled,
+                }
+                self.lastLoweredStore = Some(trace)
+                self.recordLoweredLlvmStore()
+                return Some(trace)
+            },
+            None -> {},
+        }
+        None
+    }
+
+    pub fn llvmHandleSame(mut self, left: Int, right: Int) -> Bool {
+        self.recordLlvmIdentityCheck()
+        match self.llvmLiveObjectForHandle(left) {
+            Some(leftObject) -> {
+                match self.llvmLiveObjectForHandle(right) {
+                    Some(rightObject) -> leftObject == rightObject,
+                    None -> false,
+                }
+            },
+            None -> false,
+        }
+    }
+
+    pub fn llvmHandleObject(self, handle: Int) -> Int? {
+        self.llvmLiveObjectForHandle(handle)
+    }
+
+    pub fn llvmRootRefObject(self, rootRefId: Int) -> Int? {
+        if self.llvmRootRefs.containsKey(rootRefId) {
+            let rootRef = self.llvmRootRefs[rootRefId]
+            if rootRef.alive && self.objects.containsKey(rootRef.objectId) {
+                return Some(rootRef.objectId)
+            }
+        }
+        None
+    }
+
+    pub fn llvmHandleCount(self) -> Int {
+        self.llvmHandles.len()
+    }
+
+    pub fn llvmLiveHandleCount(self) -> Int {
+        let mut total = 0
+        for (handle, entry) in self.llvmHandles {
+            let _ = handle
+            if !(entry.released) && self.objects.containsKey(entry.objectId) {
+                total = total + 1
+            }
+        }
+        total
+    }
+
+    pub fn llvmRootRefCount(self) -> Int {
+        self.llvmRootRefs.len()
+    }
+
+    pub fn llvmLiveRootRefCount(self) -> Int {
+        let mut total = 0
+        for (rootRefId, rootRef) in self.llvmRootRefs {
+            let _ = rootRefId
+            if rootRef.alive && self.objects.containsKey(rootRef.objectId) {
+                total = total + 1
+            }
+        }
+        total
+    }
+
+    pub fn llvmRuntimeRootCount(self) -> Int {
+        self.llvmRuntimeRoots.len()
+    }
+
+    pub fn llvmPinnedHandleCount(self) -> Int {
+        let mut total = 0
+        for (handle, entry) in self.llvmHandles {
+            let _ = handle
+            if !(entry.released) && entry.pinned && self.objects.containsKey(entry.objectId) {
+                total = total + 1
+            }
+        }
+        total
+    }
+
+    pub fn llvmBridgeSnapshot(self) -> GcLlvmBridgeSnapshot {
+        GcLlvmBridgeSnapshot {
+            backend: GcLlvmBackend,
+            handleCount: self.llvmHandleCount(),
+            liveHandleCount: self.llvmLiveHandleCount(),
+            rootRefCount: self.llvmRootRefCount(),
+            liveRootRefCount: self.llvmLiveRootRefCount(),
+            runtimeRootCount: self.llvmRuntimeRootCount(),
+            pinnedHandleCount: self.llvmPinnedHandleCount(),
+            handlesCreated: self.llvmBridgeTrace.handlesCreated,
+            handlesReleased: self.llvmBridgeTrace.handlesReleased,
+            handleLoads: self.llvmBridgeTrace.handleLoads,
+            handleStores: self.llvmBridgeTrace.handleStores,
+            identityChecks: self.llvmBridgeTrace.identityChecks,
+            staleHandleLoads: self.llvmBridgeTrace.staleHandleLoads,
+            loweredAllocations: self.llvmBridgeTrace.loweredAllocations,
+            loweredStores: self.llvmBridgeTrace.loweredStores,
+        }
+    }
+
+    pub fn lastLoweredAllocationTrace(self) -> GcLoweredAllocationTrace? {
+        self.lastLoweredAllocation
+    }
+
+    pub fn lastLoweredStoreTrace(self) -> GcLoweredStoreTrace? {
+        self.lastLoweredStore
     }
 
     pub fn barrierAbi(self) -> GcBarrierAbi {
@@ -1346,6 +1762,7 @@ pub struct GcHeap {
         }
         self.shadeGlobalRoots()
         self.shadeAsyncFrameRoots()
+        self.shadeLlvmRuntimeRoots()
     }
 
     pub fn stepIncremental(mut self) -> GcStats {
@@ -1480,7 +1897,7 @@ pub struct GcHeap {
         }
         let mut trace = emptyConcurrentMarkTrace()
         trace.active = true
-        trace.snapshotRoots = self.rootCount() + self.globalObjectRootCount() + self.asyncFrameRootCount()
+        trace.snapshotRoots = self.rootCount() + self.globalObjectRootCount() + self.asyncFrameRootCount() + self.llvmRuntimeRootCount()
         trace.mutatorEpoch = self.concurrentTrace.mutatorEpoch + 1
         trace.barrierShadesAtStart = self.barriers.incrementalShades
         self.concurrentTrace = trace
@@ -1551,7 +1968,7 @@ pub struct GcHeap {
         let beforeBytes = self.liveBytes
         let beforeFragmentedBytes = self.fragmentedBytes()
         let allocationBytesSinceLastGC = self.allocatedSinceLastGC
-        let remarkRoots = self.rootCount() + self.globalObjectRootCount() + self.asyncFrameRootCount()
+        let remarkRoots = self.rootCount() + self.globalObjectRootCount() + self.asyncFrameRootCount() + self.llvmRuntimeRootCount()
 
         if self.phase == GcMarking {
             for id in self.roots.toList() {
@@ -1559,6 +1976,7 @@ pub struct GcHeap {
             }
             self.shadeGlobalRoots()
             self.shadeAsyncFrameRoots()
+            self.shadeLlvmRuntimeRoots()
         }
         let finalRemarkSteps = self.drainGrey(0, false)
 
@@ -1861,7 +2279,7 @@ pub struct GcHeap {
         let beforeObjects = self.objectCount()
         let beforeBytes = self.liveBytes
         let beforeFragmentedBytes = self.fragmentedBytes()
-        let rootObjectsScanned = self.roots.len()
+        let rootObjectsScanned = self.roots.len() + self.llvmRuntimeRootCount()
         let globalRootsScanned = self.globalObjectRootCount()
         let asyncFrameRootsScanned = self.asyncFrameRootCount()
         let dirtyCardsScanned = self.cardTable.dirtyCards.len()
@@ -1932,7 +2350,7 @@ pub struct GcHeap {
 
         self.phase = GcMarking
         self.clearAllMarks()
-        let rootObjectsSeeded = self.roots.len()
+        let rootObjectsSeeded = self.roots.len() + self.llvmRuntimeRootCount()
         let globalRootsSeeded = self.globalObjectRootCount()
         let asyncFrameRootsSeeded = self.asyncFrameRootCount()
         for id in self.roots.toList() {
@@ -1940,6 +2358,7 @@ pub struct GcHeap {
         }
         self.shadeGlobalRoots()
         self.shadeAsyncFrameRoots()
+        self.shadeLlvmRuntimeRoots()
         let queueSeeded = self.grey.len()
         let markSteps = self.drainGrey(0, false)
         let pointerSlotsScanned = self.markedPointerSlotCount()
@@ -1998,7 +2417,7 @@ pub struct GcHeap {
 
         self.phase = GcMarking
         self.clearAllMarks()
-        let rootObjectsSeeded = self.roots.len()
+        let rootObjectsSeeded = self.roots.len() + self.llvmRuntimeRootCount()
         let globalRootsSeeded = self.globalObjectRootCount()
         let asyncFrameRootsSeeded = self.asyncFrameRootCount()
         for id in self.roots.toList() {
@@ -2006,6 +2425,7 @@ pub struct GcHeap {
         }
         self.shadeGlobalRoots()
         self.shadeAsyncFrameRoots()
+        self.shadeLlvmRuntimeRoots()
         let queueSeeded = self.grey.len()
         let markSteps = self.drainGrey(0, false)
         let pointerSlotsScanned = self.markedPointerSlotCount()
@@ -2771,6 +3191,236 @@ pub struct GcHeap {
         total
     }
 
+    fn installLlvmHandle(mut self, objectId: Int, allocationSite: String) -> Int {
+        let handle = self.nextLlvmHandle
+        self.nextLlvmHandle = self.nextLlvmHandle + 1
+        self.llvmHandles.insert(
+            handle,
+            GcLlvmHandleEntry {
+                handle,
+                objectId,
+                allocationSite: normalizeBridgeSite(allocationSite),
+                rooted: false,
+                pinned: false,
+                released: false,
+                loads: 0,
+                stores: 0,
+            },
+        )
+        self.recordLlvmHandleCreated()
+        handle
+    }
+
+    fn llvmLiveObjectForHandle(self, handle: Int) -> Int? {
+        if self.llvmHandles.containsKey(handle) {
+            let entry = self.llvmHandles[handle]
+            if !(entry.released) && self.objects.containsKey(entry.objectId) {
+                return Some(entry.objectId)
+            }
+        }
+        None
+    }
+
+    fn llvmFirstLiveHandleForObject(self, objectId: Int) -> Int {
+        if objectId < 0 {
+            return -1
+        }
+        for handle in self.llvmHandles.keys().sorted() {
+            if self.llvmHandles.containsKey(handle) {
+                let entry = self.llvmHandles[handle]
+                if !(entry.released) && entry.objectId == objectId && self.objects.containsKey(
+                    objectId,
+                ) {
+                    return handle
+                }
+            }
+        }
+        -1
+    }
+
+    fn setLlvmHandlePinned(mut self, handle: Int, pinned: Bool) {
+        if self.llvmHandles.containsKey(handle) {
+            let entry = self.llvmHandles[handle]
+            if !(entry.released) {
+                let mut next = entry
+                next.pinned = pinned
+                self.llvmHandles.insert(handle, next)
+            }
+        }
+    }
+
+    fn ensureLlvmRuntimeRoot(mut self, objectId: Int) {
+        if objectId <= 0 || !(self.objects.containsKey(objectId)) {
+            return
+        }
+        if !(self.llvmRuntimeRoots.contains(objectId)) {
+            self.llvmRuntimeRoots.insert(objectId)
+            self.recordLlvmRuntimeRootAdded()
+        }
+    }
+
+    fn refreshLlvmRuntimeRootForObject(mut self, objectId: Int) {
+        if objectId <= 0 {
+            return
+        }
+        if self.llvmObjectHasAnyRootSource(objectId) {
+            self.ensureLlvmRuntimeRoot(objectId)
+        } else if self.llvmRuntimeRoots.contains(objectId) {
+            let _ = self.llvmRuntimeRoots.remove(objectId)
+            self.recordLlvmRuntimeRootRemoved()
+        }
+    }
+
+    fn llvmObjectHasAnyRootSource(self, objectId: Int) -> Bool {
+        for (handle, entry) in self.llvmHandles {
+            let _ = handle
+            if !(entry.released) && entry.rooted && entry.objectId == objectId && self.objects.containsKey(
+                objectId,
+            ) {
+                return true
+            }
+        }
+        for (rootRefId, rootRef) in self.llvmRootRefs {
+            let _ = rootRefId
+            if rootRef.alive && rootRef.objectId == objectId && self.objects.containsKey(objectId) {
+                return true
+            }
+        }
+        false
+    }
+
+    fn llvmHandleHasAlivePinnedRootRef(self, handle: Int) -> Bool {
+        for (rootRefId, rootRef) in self.llvmRootRefs {
+            let _ = rootRefId
+            if rootRef.alive && rootRef.handle == handle && rootRef.kind == GcLlvmPinnedRoot {
+                return true
+            }
+        }
+        false
+    }
+
+    fn llvmObjectHasAlivePinnedRootRef(self, objectId: Int) -> Bool {
+        for (rootRefId, rootRef) in self.llvmRootRefs {
+            let _ = rootRefId
+            if rootRef.alive && rootRef.objectId == objectId && rootRef.kind == GcLlvmPinnedRoot {
+                return true
+            }
+        }
+        false
+    }
+
+    fn refreshLlvmPinnedStateForObject(mut self, objectId: Int) {
+        if !(self.objects.containsKey(objectId)) {
+            return
+        }
+        if self.llvmObjectHasAlivePinnedRootRef(objectId) {
+            let _ = self.pin(objectId)
+        } else if self.objects[objectId].pinned {
+            let _ = self.unpin(objectId)
+        }
+    }
+
+    fn recordLoweredLlvmAllocation(
+        mut self,
+        objectId: Int,
+        handle: Int,
+        kind: ObjectKind,
+        size: Int,
+        usedThreadLocalBuffer: Bool,
+    ) {
+        let mut allocationSite = "lowered.unknown"
+        if self.llvmHandles.containsKey(handle) {
+            allocationSite = self.llvmHandles[handle].allocationSite
+        }
+        let trace = GcLoweredAllocationTrace {
+            backend: GcLlvmBackend,
+            objectId,
+            handle,
+            kind,
+            size,
+            allocationSite,
+            usedThreadLocalBuffer,
+        }
+        self.lastLoweredAllocation = Some(trace)
+        let mut bridge = self.llvmBridgeTrace
+        bridge.loweredAllocations = bridge.loweredAllocations + 1
+        self.llvmBridgeTrace = bridge
+    }
+
+    fn recordLlvmHandleCreated(mut self) {
+        let mut bridge = self.llvmBridgeTrace
+        bridge.handlesCreated = bridge.handlesCreated + 1
+        self.llvmBridgeTrace = bridge
+    }
+
+    fn recordLlvmHandleReleased(mut self) {
+        let mut bridge = self.llvmBridgeTrace
+        bridge.handlesReleased = bridge.handlesReleased + 1
+        self.llvmBridgeTrace = bridge
+    }
+
+    fn recordLlvmRootRefBound(mut self) {
+        let mut bridge = self.llvmBridgeTrace
+        bridge.rootRefsBound = bridge.rootRefsBound + 1
+        self.llvmBridgeTrace = bridge
+    }
+
+    fn recordLlvmRootRefReleased(mut self) {
+        let mut bridge = self.llvmBridgeTrace
+        bridge.rootRefsReleased = bridge.rootRefsReleased + 1
+        self.llvmBridgeTrace = bridge
+    }
+
+    fn recordLlvmRuntimeRootAdded(mut self) {
+        let mut bridge = self.llvmBridgeTrace
+        bridge.runtimeRootsAdded = bridge.runtimeRootsAdded + 1
+        self.llvmBridgeTrace = bridge
+    }
+
+    fn recordLlvmRuntimeRootRemoved(mut self) {
+        let mut bridge = self.llvmBridgeTrace
+        bridge.runtimeRootsRemoved = bridge.runtimeRootsRemoved + 1
+        self.llvmBridgeTrace = bridge
+    }
+
+    fn recordLlvmHandleLoad(mut self) {
+        let mut bridge = self.llvmBridgeTrace
+        bridge.handleLoads = bridge.handleLoads + 1
+        self.llvmBridgeTrace = bridge
+    }
+
+    fn recordLlvmHandleStore(mut self, handle: Int) {
+        if self.llvmHandles.containsKey(handle) {
+            let entry = self.llvmHandles[handle]
+            if !(entry.released) {
+                let mut next = entry
+                next.stores = next.stores + 1
+                self.llvmHandles.insert(handle, next)
+            }
+        }
+        let mut bridge = self.llvmBridgeTrace
+        bridge.handleStores = bridge.handleStores + 1
+        self.llvmBridgeTrace = bridge
+    }
+
+    fn recordLlvmIdentityCheck(mut self) {
+        let mut bridge = self.llvmBridgeTrace
+        bridge.identityChecks = bridge.identityChecks + 1
+        self.llvmBridgeTrace = bridge
+    }
+
+    fn recordStaleLlvmHandleLoad(mut self) {
+        let mut bridge = self.llvmBridgeTrace
+        bridge.staleHandleLoads = bridge.staleHandleLoads + 1
+        self.llvmBridgeTrace = bridge
+    }
+
+    fn recordLoweredLlvmStore(mut self) {
+        let mut bridge = self.llvmBridgeTrace
+        bridge.loweredStores = bridge.loweredStores + 1
+        self.llvmBridgeTrace = bridge
+    }
+
     pub fn validateHeap(self) -> Result<(), String> {
         let mut byteSum = 0
         let mut maxEnd = 0
@@ -2949,6 +3599,92 @@ pub struct GcHeap {
         }
         if self.concurrentTrace.active && self.phase == GcIdle {
             return Err("concurrent mark trace is active while heap is idle")
+        }
+        if self.nextLlvmHandle <= 0 || self.nextLlvmRootRef <= 0 {
+            return Err("llvm bridge next ids must be positive")
+        }
+        if self.llvmBridgeTrace.handlesCreated < 0 || self.llvmBridgeTrace.handlesReleased < 0 || self.llvmBridgeTrace.rootRefsBound < 0 || self.llvmBridgeTrace.rootRefsReleased < 0 || self.llvmBridgeTrace.runtimeRootsAdded < 0 || self.llvmBridgeTrace.runtimeRootsRemoved < 0 || self.llvmBridgeTrace.handleLoads < 0 || self.llvmBridgeTrace.handleStores < 0 || self.llvmBridgeTrace.identityChecks < 0 || self.llvmBridgeTrace.staleHandleLoads < 0 || self.llvmBridgeTrace.loweredAllocations < 0 || self.llvmBridgeTrace.loweredStores < 0 {
+            return Err("llvm bridge trace has negative accounting")
+        }
+        for (handle, entry) in self.llvmHandles {
+            if handle != entry.handle {
+                return Err("llvm handle key/id mismatch: key={handle}, entry={entry.handle}")
+            }
+            if handle <= 0 || handle >= self.nextLlvmHandle {
+                return Err("llvm handle {handle} is outside nextLlvmHandle {self.nextLlvmHandle}")
+            }
+            if entry.objectId <= 0 {
+                return Err("llvm handle {handle} has invalid object id {entry.objectId}")
+            }
+            if entry.allocationSite == "" {
+                return Err("llvm handle {handle} has empty allocation site")
+            }
+            if entry.loads < 0 || entry.stores < 0 {
+                return Err("llvm handle {handle} has negative accounting")
+            }
+            if entry.released && (entry.rooted || entry.pinned) {
+                return Err("released llvm handle {handle} still has live flags")
+            }
+            if entry.rooted {
+                if !(self.objects.containsKey(entry.objectId)) {
+                    return Err("rooted llvm handle {handle} references missing object")
+                }
+                if !(self.llvmRuntimeRoots.contains(entry.objectId)) {
+                    return Err("rooted llvm handle {handle} is missing from runtime roots")
+                }
+            }
+            if entry.pinned {
+                if !(self.objects.containsKey(entry.objectId)) {
+                    return Err("pinned llvm handle {handle} references missing object")
+                }
+                if !(self.objects[entry.objectId].pinned) {
+                    return Err("pinned llvm handle {handle} did not pin its object")
+                }
+            }
+        }
+        for (rootRefId, rootRef) in self.llvmRootRefs {
+            if rootRefId != rootRef.rootRefId {
+                return Err(
+                    "llvm root ref key/id mismatch: key={rootRefId}, entry={rootRef.rootRefId}",
+                )
+            }
+            if rootRefId <= 0 || rootRefId >= self.nextLlvmRootRef {
+                return Err(
+                    "llvm root ref {rootRefId} is outside nextLlvmRootRef {self.nextLlvmRootRef}",
+                )
+            }
+            if rootRef.handle <= 0 || rootRef.objectId <= 0 {
+                return Err("llvm root ref {rootRefId} has invalid handle or object")
+            }
+            if rootRef.site == "" {
+                return Err("llvm root ref {rootRefId} has empty site")
+            }
+            if rootRef.pinned != (rootRef.kind == GcLlvmPinnedRoot && rootRef.alive) {
+                return Err("llvm root ref {rootRefId} has stale pin metadata")
+            }
+            if rootRef.alive {
+                if !(self.llvmHandles.containsKey(rootRef.handle)) {
+                    return Err("llvm root ref {rootRefId} references missing handle")
+                }
+                let entry = self.llvmHandles[rootRef.handle]
+                if entry.released || entry.objectId != rootRef.objectId {
+                    return Err("llvm root ref {rootRefId} is detached from its handle")
+                }
+                if !(self.objects.containsKey(rootRef.objectId)) {
+                    return Err("llvm root ref {rootRefId} references missing object")
+                }
+                if !(self.llvmRuntimeRoots.contains(rootRef.objectId)) {
+                    return Err("llvm root ref {rootRefId} is missing from runtime roots")
+                }
+            }
+        }
+        for objectId in self.llvmRuntimeRoots.toList() {
+            if !(self.objects.containsKey(objectId)) {
+                return Err("llvm runtime root references missing object {objectId}")
+            }
+            if !(self.llvmObjectHasAnyRootSource(objectId)) {
+                return Err("llvm runtime root {objectId} has no live root source")
+            }
         }
         if !(self.verifyForwardingTable()) {
             return Err("forwarding table is inconsistent")
@@ -3410,6 +4146,12 @@ pub struct GcHeap {
         }
     }
 
+    fn shadeLlvmRuntimeRoots(mut self) {
+        for id in self.llvmRuntimeRoots.toList() {
+            self.shade(id)
+        }
+    }
+
     fn shadeObjectList(mut self, ids: List<Int>) {
         for id in ids {
             self.shade(id)
@@ -3459,6 +4201,12 @@ pub struct GcHeap {
                         self.markYoungRootObject(id)
                     }
                 }
+            }
+        }
+
+        for id in self.llvmRuntimeRoots.toList() {
+            if self.objects.containsKey(id) {
+                self.markYoungRootObject(id)
             }
         }
 
@@ -4359,6 +5107,13 @@ pub struct GcHeap {
             }
         }
 
+        for id in self.llvmRuntimeRoots.toList() {
+            rootSlotsVisited = rootSlotsVisited + 1
+            if self.forwarding.containsKey(id) {
+                rootSlotsRemapped = rootSlotsRemapped + 1
+            }
+        }
+
         let mut objectRefsVisited = 0
         let mut objectRefsRemapped = 0
         for (id, obj) in self.objects {
@@ -4621,9 +5376,12 @@ pub fn newGcHeap(config: GcConfig) -> GcHeap {
     let barriers = emptyBarrierCounters()
     let loweredPointerSlots: Map<String, GcLoweredPointerSlot> = {:}
     let forwarding: Map<Int, GcForwardingEntry> = {:}
+    let llvmHandles: Map<Int, GcLlvmHandleEntry> = {:}
+    let llvmRootRefs: Map<Int, GcLlvmRootRefEntry> = {:}
     let emptyRoots: List<Int> = []
     let emptyRemembered: List<Int> = []
     let emptyDirtyCards: List<Int> = []
+    let emptyLlvmRuntimeRoots: List<Int> = []
     let grey: List<Int> = []
     let cardTable = GcCardTable {
         cardSize: config.cardSize,
@@ -4664,6 +5422,14 @@ pub fn newGcHeap(config: GcConfig) -> GcHeap {
         lastRemapTrace: emptyRemapTrace(),
         schedulerTrace: emptyIncrementalSchedulerTrace(),
         concurrentTrace: emptyConcurrentMarkTrace(),
+        nextLlvmHandle: 1,
+        nextLlvmRootRef: 1,
+        llvmHandles,
+        llvmRootRefs,
+        llvmRuntimeRoots: emptyLlvmRuntimeRoots.toSet(),
+        llvmBridgeTrace: emptyLlvmBridgeTrace(),
+        lastLoweredAllocation: None,
+        lastLoweredStore: None,
     }
 }
 
@@ -4721,6 +5487,21 @@ fn intListContains(values: List<Int>, target: Int) -> Bool {
         }
     }
     false
+}
+
+fn intOptionalOr(value: Int?, fallback: Int) -> Int {
+    match value {
+        Some(next) -> next,
+        None -> fallback,
+    }
+}
+
+fn normalizeBridgeSite(site: String) -> String {
+    if site == "" {
+        "lowered.unknown"
+    } else {
+        site
+    }
 }
 
 fn intListDebug(values: List<Int>) -> String {
@@ -4876,6 +5657,23 @@ fn emptyConcurrentMarkTrace() -> GcConcurrentMarkTrace {
         mutatorEpoch: 0,
         barrierShadesAtStart: 0,
         barrierShadesAtFinish: 0,
+    }
+}
+
+fn emptyLlvmBridgeTrace() -> GcLlvmBridgeTrace {
+    GcLlvmBridgeTrace {
+        handlesCreated: 0,
+        handlesReleased: 0,
+        rootRefsBound: 0,
+        rootRefsReleased: 0,
+        runtimeRootsAdded: 0,
+        runtimeRootsRemoved: 0,
+        handleLoads: 0,
+        handleStores: 0,
+        identityChecks: 0,
+        staleHandleLoads: 0,
+        loweredAllocations: 0,
+        loweredStores: 0,
     }
 }
 
