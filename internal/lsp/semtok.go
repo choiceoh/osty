@@ -9,8 +9,7 @@ import (
 
 // semanticTokenTypes is the legend the server advertises in
 // ServerCapabilities. Indices into this slice appear in each encoded
-// token; the client maps them to theme colors. Keep in sync with
-// semTypeX constants below.
+// token; the client maps them to theme colors.
 var semanticTokenTypes = []string{
 	"namespace",
 	"type",
@@ -32,21 +31,6 @@ var semanticTokenModifiers = []string{
 	"declaration",
 	"readonly",
 }
-
-const (
-	semTypeNamespace  = 0
-	semTypeType       = 1
-	semTypeParameter  = 2
-	semTypeVariable   = 3
-	semTypeProperty   = 4
-	semTypeFunction   = 5
-	semTypeKeyword    = 6
-	semTypeString     = 7
-	semTypeNumber     = 8
-	semTypeOperator   = 9
-	semTypeComment    = 10
-	semTypeEnumMember = 11
-)
 
 // semToken is the intermediate form before relative encoding. `mods`
 // is always 0 today; kept in the struct so the wire-format (5 ints

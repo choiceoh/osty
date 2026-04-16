@@ -5,10 +5,14 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"go/ast"
 	"go/format"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -23,6 +27,85 @@ var sourceFiles = []string{
 }
 
 const mergedPath = "/tmp/docgen_merged.osty"
+
+var unusedGeneratedFunctions = []string{
+	"astCountNodeKind",
+	"astCountSummary",
+	"astFileDeclAt",
+	"astFileNodeCount",
+	"astParseSummary",
+	"astPrettyPrint",
+	"buildIdentifiersValid",
+	"classifyFrontLexeme",
+	"compareSemVersion",
+	"comparePreIdent",
+	"emptyFrontInterpolationToken",
+	"frontAssignableName",
+	"frontAssignment",
+	"frontBinaryResult",
+	"frontBinaryResultName",
+	"frontBuildParseTree",
+	"frontCommentKindName",
+	"frontCountParamTypeRefs",
+	"frontCountTypeRefs",
+	"frontInferLiteralName",
+	"frontInferLiteralKind",
+	"frontInterpolationTokenAt",
+	"frontInterpolationTokenCount",
+	"frontNodeKindByName",
+	"frontParseDiagnosticKindByName",
+	"frontParseTreeDiagnosticCount",
+	"frontParseTreeDiagnosticKindCount",
+	"frontParseTreeDiagnosticNameCount",
+	"frontParseTreeInvalidSpanCount",
+	"frontParseTreeNodeCount",
+	"frontParseTreeNodeKindCount",
+	"frontParseTreeNodeNameCount",
+	"frontStringPartKindName",
+	"frontToken",
+	"frontTokenKindByName",
+	"frontTokenTextAt",
+	"frontTokensFromStream",
+	"frontTypeName",
+	"frontendLexSummary",
+	"frontendCheckAssignments",
+	"frontendParseLexedSummary",
+	"frontendParseRichSummary",
+	"frontendParseSummary",
+	"frontendParseTree",
+	"isFrontIdentText",
+	"isSemPrerelease",
+	"ostyFormatCheck",
+	"ostyFormatLexErrors",
+	"ostyFormatSource",
+	"ostyFormatTokens",
+	"ostyIsAssignOp",
+	"ostyIsKeyword",
+	"ostyIsLiteral",
+	"ostyIsPunctuation",
+	"ostyLexResultCommentCount",
+	"ostyLexResultErrorCount",
+	"ostyLexResultTokenCount",
+	"ostyLexSummary",
+	"ostyLexTokens",
+	"ostyTokenKindName",
+	"parseSemCore",
+	"parseSemPreIdent",
+	"parseSemVersionText",
+	"prerelease1",
+	"prerelease2",
+	"resultAnd",
+	"resultAndThen",
+	"resultMap",
+	"resultMapErr",
+	"resultOr",
+	"resultOrElse",
+	"selfDocPackageDeclCount",
+	"selfDocPackageDeclNamed",
+	"selfDocPackageHasDecl",
+	"selfDocVerifyExamples",
+	"versionWithBuild",
+}
 
 const stringsPrelude = `use go "strings" as strings {
     fn Count(s: String, substr: String) -> Int
@@ -153,6 +236,14 @@ func patchGenerated(path string) error {
 			return err
 		}
 	}
+	src, err = dropGeneratedFunctions(src, unusedGeneratedFunctions)
+	if err != nil {
+		return err
+	}
+	src, err = stripUnusedGeneratedFunctions(path, src)
+	if err != nil {
+		return err
+	}
 	if strings.Contains(src, "sync.Mutex") && !strings.Contains(src, "\n\t\"sync\"\n") {
 		src = strings.Replace(src, "\n\t\"strings\"\n", "\n\t\"strings\"\n\t\"sync\"\n", 1)
 	}
@@ -167,7 +258,7 @@ func patchGenerated(path string) error {
 }
 
 func replaceGeneratedFunction(src, name, replacement string) (string, error) {
-	start := strings.Index(src, "func "+name+"(")
+	start := strings.Index(src, "func "+name)
 	if start < 0 {
 		return "", fmt.Errorf("generated function %s not found", name)
 	}
@@ -189,6 +280,135 @@ func replaceGeneratedFunction(src, name, replacement string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("generated function %s body is unterminated", name)
+}
+
+func dropGeneratedFunctions(src string, names []string) (string, error) {
+	var err error
+	for _, name := range names {
+		src, err = dropGeneratedFunction(src, name)
+		if err != nil {
+			return "", err
+		}
+	}
+	return src, nil
+}
+
+func dropGeneratedFunction(src, name string) (string, error) {
+	start, err := findGeneratedFunctionStart(src, name)
+	if err != nil {
+		return "", err
+	}
+	open := strings.IndexByte(src[start:], '{')
+	if open < 0 {
+		return "", fmt.Errorf("generated function %s has no body", name)
+	}
+	open += start
+	depth := 0
+	for i := open; i < len(src); i++ {
+		switch src[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				end := i + 1
+				for end < len(src) && src[end] == '\n' {
+					end++
+				}
+				return src[:start] + src[end:], nil
+			}
+		}
+	}
+	return "", fmt.Errorf("generated function %s body is unterminated", name)
+}
+
+func findGeneratedFunctionStart(src, name string) (int, error) {
+	needle := "func " + name
+	searchFrom := 0
+	for {
+		start := strings.Index(src[searchFrom:], needle)
+		if start < 0 {
+			return 0, fmt.Errorf("generated function %s not found", name)
+		}
+		start += searchFrom
+		next := start + len(needle)
+		if next < len(src) && (src[next] == '(' || src[next] == '[') {
+			return start, nil
+		}
+		searchFrom = next
+	}
+}
+
+func stripUnusedGeneratedFunctions(path, src string) (string, error) {
+	for {
+		names, err := unusedGeneratedFunctionNames(path, src)
+		if err != nil {
+			return "", err
+		}
+		if len(names) == 0 {
+			return src, nil
+		}
+		for _, name := range names {
+			src, err = dropGeneratedFunction(src, name)
+			if err != nil {
+				return "", err
+			}
+		}
+	}
+}
+
+func unusedGeneratedFunctionNames(path, src string) ([]string, error) {
+	fset := token.NewFileSet()
+	target, err := parser.ParseFile(fset, path, src, 0)
+	if err != nil {
+		return nil, fmt.Errorf("parse generated file %s: %w", path, err)
+	}
+	decls := map[string]bool{}
+	for _, d := range target.Decls {
+		fd, ok := d.(*ast.FuncDecl)
+		if !ok || fd.Recv != nil || ast.IsExported(fd.Name.Name) {
+			continue
+		}
+		decls[fd.Name.Name] = true
+	}
+	if len(decls) == 0 {
+		return nil, nil
+	}
+
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		return nil, fmt.Errorf("read generated dir for %s: %w", path, err)
+	}
+	refs := map[string]int{}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".go" {
+			continue
+		}
+		filePath := filepath.Join(filepath.Dir(path), entry.Name())
+		fileSrc := any(nil)
+		if filePath == path {
+			fileSrc = src
+		}
+		file, err := parser.ParseFile(fset, filePath, fileSrc, 0)
+		if err != nil || file.Name.Name != target.Name.Name {
+			continue
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			id, ok := n.(*ast.Ident)
+			if ok && decls[id.Name] {
+				refs[id.Name]++
+			}
+			return true
+		})
+	}
+	var names []string
+	for name := range decls {
+		if refs[name] == 1 {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names, nil
 }
 
 const frontPositionAtReplacement = `type frontPositionCacheState struct {
