@@ -237,30 +237,54 @@ fn f() {}
 }
 
 // TestBuildTailTriviaAfterNewline verifies that trivia following a trailing
-// NEWLINE token becomes file-tail trivia (under the GkErrorMissing sentinel
-// for now) rather than being attached as trailing of the NEWLINE. Round-trip
-// must still reproduce the source byte-for-byte.
+// NEWLINE token becomes file-tail trivia (parked under a GkEndOfFile leaf)
+// rather than being attached as trailing of the NEWLINE. Round-trip must
+// still reproduce the source byte-for-byte.
 func TestBuildTailTriviaAfterNewline(t *testing.T) {
 	const source = "fn f() {}\n// tail\n"
 	tree := buildTreeFromSource(t, source)
 
 	var newlineTrailedLineComment bool
+	var eofLeafCarriesTail bool
 	tree.Root().Walk(func(r cst.Red) bool {
-		if !r.IsToken() || r.Kind() != cst.GkToken {
+		if !r.IsToken() {
 			return true
 		}
-		tok := r.Token()
-		if tok.Text == "\n" && containsKind(triviaKinds(tree, tok.TrailingTrivia), cst.TriviaLineComment) {
-			newlineTrailedLineComment = true
+		switch r.Kind() {
+		case cst.GkToken:
+			tok := r.Token()
+			if tok.Text == "\n" && containsKind(triviaKinds(tree, tok.TrailingTrivia), cst.TriviaLineComment) {
+				newlineTrailedLineComment = true
+			}
+		case cst.GkEndOfFile:
+			tok := r.Token()
+			if containsKind(triviaKinds(tree, tok.LeadingTrivia), cst.TriviaLineComment) {
+				eofLeafCarriesTail = true
+			}
 		}
 		return true
 	})
 	if newlineTrailedLineComment {
 		t.Error("NEWLINE token must not carry a trailing line-comment; it belongs to file tail")
 	}
+	if !eofLeafCarriesTail {
+		t.Error("expected GkEndOfFile leaf to carry the tail `// tail` as leading trivia")
+	}
 
 	if got := string(emitTreeBytes(tree)); got != source {
 		t.Fatalf("round-trip mismatch:\nwant: %q\n got: %q", source, got)
+	}
+}
+
+// TestBuildEndOfFileIsLeaf verifies the structural properties of GkEndOfFile:
+// zero-width, leaf, and not flagged as an error (the previous GkErrorMissing
+// hack would have misreported this node as an error node).
+func TestBuildEndOfFileIsLeaf(t *testing.T) {
+	if !cst.GkEndOfFile.IsLeaf() {
+		t.Error("GkEndOfFile must be a leaf kind")
+	}
+	if cst.GkEndOfFile.IsError() {
+		t.Error("GkEndOfFile must not be classified as an error kind")
 	}
 }
 

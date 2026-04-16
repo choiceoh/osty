@@ -141,6 +141,15 @@ const (
 	GkError        // a region the parser salvaged with at least one diagnostic
 	GkErrorMissing // zero-width "expected X here" marker
 	GkErrorExtra   // well-formed-looking tokens that were in the wrong place
+
+	// ---- File-tail sentinel ----
+
+	// GkEndOfFile is a zero-width leaf that carries file-tail trivia
+	// (trailing whitespace/comments after the last real token). It is
+	// structurally a leaf like GkErrorMissing but is NOT an error — it
+	// exists so every source byte remains reachable from the tree even
+	// when no real token owns the bytes.
+	GkEndOfFile
 )
 
 // String returns a stable label for the kind — used in snapshots, test
@@ -165,7 +174,7 @@ func (k GreenKind) IsError() bool {
 // children.
 func (k GreenKind) IsLeaf() bool {
 	switch k {
-	case GkToken, GkTrivia, GkErrorMissing:
+	case GkToken, GkTrivia, GkErrorMissing, GkEndOfFile:
 		return true
 	}
 	return false
@@ -267,6 +276,7 @@ var greenKindNames = map[GreenKind]string{
 	GkError:            "Error",
 	GkErrorMissing:     "ErrorMissing",
 	GkErrorExtra:       "ErrorExtra",
+	GkEndOfFile:        "EndOfFile",
 }
 
 // GreenToken is an immutable leaf in the Green tree. It carries its raw
@@ -284,7 +294,7 @@ var greenKindNames = map[GreenKind]string{
 // single id in the arena, saving memory for common keyword/punctuation
 // tokens.
 type GreenToken struct {
-	Kind           GreenKind // always GkToken for terminals; GkErrorMissing for zero-width markers
+	Kind           GreenKind // GkToken for real terminals; GkErrorMissing / GkEndOfFile for zero-width sentinels
 	TokenKind      int       // underlying token.Kind, kept as int to avoid import cycles
 	Text           string    // raw source text for this token (length == Width for real tokens)
 	Width          int       // byte width of the token text only

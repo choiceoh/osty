@@ -20,7 +20,7 @@ import (
 //  3. Trivia attached as leading and trailing runs on tokens. Runs between
 //     tokens split at the first newline or doc comment — see
 //     pairTriviaToTokens for the exact rule. Tail trivia after the last
-//     token sits under the root via a zero-width GkErrorMissing sentinel.
+//     token sits under the root via a zero-width GkEndOfFile sentinel.
 //
 // Byte coverage: every source byte is reachable from the tree via either a
 // token's text or a trivia record. TestBuildRoundTrip enforces this.
@@ -68,11 +68,10 @@ func BuildFromParsed(src []byte, file *ast.File, toks []token.Token, trivias []T
 	}
 
 	if len(tailTrivia) > 0 {
-		// File-tail trivia (e.g. final newline with no successor token).
-		// Wrap it in a zero-width leaf under the file root so traversal
-		// reaches it. A dedicated GkEndOfFile kind would read better and
-		// is a future refinement.
-		b.Token(GkErrorMissing, 0, "", 0, translateTriviaIDs(tailTrivia, triviaIDs), nil)
+		// File-tail trivia (trailing whitespace/comments after the last
+		// real token). A zero-width GkEndOfFile leaf parks it under the
+		// file root so every source byte stays reachable from the tree.
+		b.Token(GkEndOfFile, 0, "", 0, translateTriviaIDs(tailTrivia, triviaIDs), nil)
 	}
 
 	b.FinishNode() // GkFile

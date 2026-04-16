@@ -4,6 +4,7 @@ package parser
 
 import (
 	"github.com/osty/osty/internal/ast"
+	"github.com/osty/osty/internal/cst"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/selfhost"
 )
@@ -26,4 +27,16 @@ func Parse(src []byte) (*ast.File, []error) {
 // diagnostics. This is the primary entry point for all compiler passes.
 func ParseDiagnostics(src []byte) (*ast.File, []*diag.Diagnostic) {
 	return selfhost.Parse(src)
+}
+
+// ParseCST lexes and parses src, then lifts the result into a lossless
+// Red/Green concrete syntax tree. Every source byte (after CRLF
+// normalization) is reachable from the returned tree — trivia is preserved
+// with same-line trailing / next-line leading semantics suitable for
+// formatters and LSP consumers.
+//
+// The diagnostics slice matches ParseDiagnostics; no additional analysis is
+// performed by lifting the tree.
+func ParseCST(src []byte) (*cst.Tree, []*diag.Diagnostic) {
+	return selfhost.ParseCST(src)
 }
