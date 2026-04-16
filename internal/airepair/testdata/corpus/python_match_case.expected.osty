@@ -1,0 +1,11 @@
+fn main() {
+    let value = 0
+    match value {
+        0 -> {
+            println(0)
+        },
+        _ -> {
+            println(1)
+        },
+    }
+}

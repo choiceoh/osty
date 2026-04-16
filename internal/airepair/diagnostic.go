@@ -267,6 +267,22 @@ func rewritePythonColonHeader(trimmed string) (pythonColonHeader, bool) {
 			scopeKind:  pythonScopeBlock,
 			elseish:    true,
 		}, true
+	case strings.HasPrefix(head, "elif "):
+		return pythonColonHeader{
+			rewritten:  "else if " + strings.TrimPrefix(head, "elif ") + " {",
+			changeKind: "python_elif_block",
+			message:    "replace Python-style `elif:` block with Osty braces",
+			scopeKind:  pythonScopeBlock,
+			elseish:    true,
+		}, true
+	case strings.HasPrefix(head, "elseif "):
+		return pythonColonHeader{
+			rewritten:  "else if " + strings.TrimPrefix(head, "elseif ") + " {",
+			changeKind: "python_elif_block",
+			message:    "replace alternate `elseif:` block with Osty braces",
+			scopeKind:  pythonScopeBlock,
+			elseish:    true,
+		}, true
 	case strings.HasPrefix(head, "else if "):
 		return pythonColonHeader{
 			rewritten:  head + " {",

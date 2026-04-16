@@ -1,0 +1,6 @@
+fn main() {
+    let entries = [(1, 2)]
+    for (k, v) in entries {
+        println(k)
+    }
+}

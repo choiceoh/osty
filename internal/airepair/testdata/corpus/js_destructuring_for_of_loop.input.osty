@@ -1,0 +1,6 @@
+fn main() {
+    let entries = [(1, 2)]
+    for (const [k, v] of entries) {
+        println(k)
+    }
+}

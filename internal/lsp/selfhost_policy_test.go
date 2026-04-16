@@ -232,6 +232,138 @@ func TestFixAllActionUsesAIRepairForPythonBlocks(t *testing.T) {
 	}
 }
 
+func TestFixAllActionUsesAIRepairForPythonElif(t *testing.T) {
+	src := []byte("fn main() {\n    if a:\n        println(1)\n    elif b:\n        println(2)\n    else:\n        println(0)\n}\n")
+	s := NewServer(bytes.NewReader(nil), io.Discard, io.Discard)
+	doc := &document{
+		uri:      "file:///tmp/main.osty",
+		src:      src,
+		analysis: s.analyzeSingleFile(src),
+	}
+
+	action := fixAllAction(doc)
+	if action == nil {
+		t.Fatal("fixAllAction() = nil, want airepair-backed action")
+	}
+	edits := action.Edit.Changes[doc.uri]
+	if len(edits) != 1 {
+		t.Fatalf("len(edits) = %d, want 1", len(edits))
+	}
+	if got, want := edits[0].NewText, "fn main() {\n    if a {\n        println(1)\n    } else if b {\n        println(2)\n    } else {\n        println(0)\n    }\n}\n"; got != want {
+		t.Fatalf("newText = %q, want %q", got, want)
+	}
+}
+
+func TestFixAllActionUsesAIRepairForPythonBareTupleLoop(t *testing.T) {
+	src := []byte("fn main() {\n    let items = [(1, 2)]\n    for k, v in items:\n        println(k)\n}\n")
+	s := NewServer(bytes.NewReader(nil), io.Discard, io.Discard)
+	doc := &document{
+		uri:      "file:///tmp/main.osty",
+		src:      src,
+		analysis: s.analyzeSingleFile(src),
+	}
+
+	action := fixAllAction(doc)
+	if action == nil {
+		t.Fatal("fixAllAction() = nil, want airepair-backed action")
+	}
+	edits := action.Edit.Changes[doc.uri]
+	if len(edits) != 1 {
+		t.Fatalf("len(edits) = %d, want 1", len(edits))
+	}
+	if got, want := edits[0].NewText, "fn main() {\n    let items = [(1, 2)]\n    for (k, v) in items {\n        println(k)\n    }\n}\n"; got != want {
+		t.Fatalf("newText = %q, want %q", got, want)
+	}
+}
+
+func TestFixAllActionUsesAIRepairForJSForOfLoop(t *testing.T) {
+	src := []byte("fn main() {\n    let items = [1, 2]\n    for (const item of items) {\n        println(item)\n    }\n}\n")
+	s := NewServer(bytes.NewReader(nil), io.Discard, io.Discard)
+	doc := &document{
+		uri:      "file:///tmp/main.osty",
+		src:      src,
+		analysis: s.analyzeSingleFile(src),
+	}
+
+	action := fixAllAction(doc)
+	if action == nil {
+		t.Fatal("fixAllAction() = nil, want airepair-backed action")
+	}
+	edits := action.Edit.Changes[doc.uri]
+	if len(edits) != 1 {
+		t.Fatalf("len(edits) = %d, want 1", len(edits))
+	}
+	if got, want := edits[0].NewText, "fn main() {\n    let items = [1, 2]\n    for item in items {\n        println(item)\n    }\n}\n"; got != want {
+		t.Fatalf("newText = %q, want %q", got, want)
+	}
+}
+
+func TestFixAllActionUsesAIRepairForJSDestructuringForOfLoop(t *testing.T) {
+	src := []byte("fn main() {\n    let entries = [(1, 2)]\n    for (const [k, v] of entries) {\n        println(k)\n    }\n}\n")
+	s := NewServer(bytes.NewReader(nil), io.Discard, io.Discard)
+	doc := &document{
+		uri:      "file:///tmp/main.osty",
+		src:      src,
+		analysis: s.analyzeSingleFile(src),
+	}
+
+	action := fixAllAction(doc)
+	if action == nil {
+		t.Fatal("fixAllAction() = nil, want airepair-backed action")
+	}
+	edits := action.Edit.Changes[doc.uri]
+	if len(edits) != 1 {
+		t.Fatalf("len(edits) = %d, want 1", len(edits))
+	}
+	if got, want := edits[0].NewText, "fn main() {\n    let entries = [(1, 2)]\n    for (k, v) in entries {\n        println(k)\n    }\n}\n"; got != want {
+		t.Fatalf("newText = %q, want %q", got, want)
+	}
+}
+
+func TestFixAllActionUsesAIRepairForPythonRangeLoop(t *testing.T) {
+	src := []byte("fn main() {\n    for i in range(3):\n        println(i)\n}\n")
+	s := NewServer(bytes.NewReader(nil), io.Discard, io.Discard)
+	doc := &document{
+		uri:      "file:///tmp/main.osty",
+		src:      src,
+		analysis: s.analyzeSingleFile(src),
+	}
+
+	action := fixAllAction(doc)
+	if action == nil {
+		t.Fatal("fixAllAction() = nil, want airepair-backed action")
+	}
+	edits := action.Edit.Changes[doc.uri]
+	if len(edits) != 1 {
+		t.Fatalf("len(edits) = %d, want 1", len(edits))
+	}
+	if got, want := edits[0].NewText, "fn main() {\n    for i in 0..3 {\n        println(i)\n    }\n}\n"; got != want {
+		t.Fatalf("newText = %q, want %q", got, want)
+	}
+}
+
+func TestFixAllActionUsesAIRepairForPythonEnumerateLoop(t *testing.T) {
+	src := []byte("fn main() {\n    let items = [1, 2]\n    for i, item in enumerate(items):\n        println(item)\n}\n")
+	s := NewServer(bytes.NewReader(nil), io.Discard, io.Discard)
+	doc := &document{
+		uri:      "file:///tmp/main.osty",
+		src:      src,
+		analysis: s.analyzeSingleFile(src),
+	}
+
+	action := fixAllAction(doc)
+	if action == nil {
+		t.Fatal("fixAllAction() = nil, want airepair-backed action")
+	}
+	edits := action.Edit.Changes[doc.uri]
+	if len(edits) != 1 {
+		t.Fatalf("len(edits) = %d, want 1", len(edits))
+	}
+	if got, want := edits[0].NewText, "fn main() {\n    let items = [1, 2]\n    for (i, item) in items.enumerate() {\n        println(item)\n    }\n}\n"; got != want {
+		t.Fatalf("newText = %q, want %q", got, want)
+	}
+}
+
 func TestFixAllActionUsesAIRepairForPythonMatchCase(t *testing.T) {
 	src := []byte("fn main() {\n    let value = 0\n    match value:\n        case 0:\n            println(0)\n        default:\n            println(1)\n}\n")
 	s := NewServer(bytes.NewReader(nil), io.Discard, io.Discard)
