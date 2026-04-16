@@ -22,12 +22,12 @@
 - Multi-file package, vendored dependency, workspace build의 실제 code emission은
   아직 제한이 있다. LLVM 전환 전에 package 단위 emit/link 모델을 분명히 해야
   한다.
-- 현재 Phase 25까지의 LLVM backend 의미는 `examples/selfhost-core/llvmgen.osty`
+- 현재 Phase 26까지의 LLVM backend 의미는 `examples/selfhost-core/llvmgen.osty`
   쪽으로 옮겨지고 있다. 여기에는 smoke IR builder, skeleton renderer,
   toolchain command plan, executable parity corpus, go-only diagnostic, 그리고
   unsupported source-shape taxonomy가 포함된다. 성공 경로의 scalar instruction
   strings, temp/label naming, plain/escaped ASCII `String` `println` module
-  constant shape, 그리고 첫 immutable local String value path도 같은
+  constant/formatting shape, 그리고 첫 immutable local String value path도 같은
   selfhost-core에서 생성한다.
 
 ## 이주 원칙

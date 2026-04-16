@@ -94,21 +94,26 @@ functions from `examples/selfhost-core/llvmgen.osty`.
 
 Phase 23 adds the first `String` vertical path without moving string semantics
 back into Go. `examples/selfhost-core/llvmgen.osty` owns the module-level string
-constant shape, newline terminator, `printf(ptr @.strN)` call, and the string
-smoke fixture entry. The Go bridge only classifies the AST literal as the
-current conservative subset: non-raw, non-triple, non-interpolated printable
-ASCII without quotes, backslashes, or control characters.
+constant shape, `printf` call, and the string smoke fixture entry. The Go
+bridge only classifies the AST literal as the current conservative subset:
+non-raw, non-triple, non-interpolated ASCII.
 
 Phase 24 expands that path to escaped ASCII strings while keeping the LLVM
 constant encoding self-hosted. `examples/selfhost-core/llvmgen.osty` now maps
 newline, tab, carriage return, quote, and backslash into LLVM C-string escapes
-before appending the `println` newline and NUL terminator. The Go bridge still
-only rejects source outside the currently supported ASCII subset.
+before appending the NUL terminator. The Go bridge still only rejects source
+outside the currently supported ASCII subset.
 
 Phase 25 promotes those string constants into the first local String value path.
 String literals lower to `ptr` values through generated Osty helpers, so an
 immutable `let msg = "..."` can bind the value and `println(msg)` can print the
 identifier without adding Go-owned LLVM instruction strings.
+
+Phase 26 separates String values from `println` formatting. String literals now
+produce NUL-terminated constants without a baked-in newline, and
+`llvmPrintlnString` uses the Osty-owned `@.fmt_str` format constant to add the
+line ending at print time. This keeps local String values usable for later
+non-print lowering phases.
 
 ## Promotion Rules
 

@@ -227,10 +227,10 @@ newline-separated `else`.
 - `-o PATH` / `--out PATH` — write Go source to `PATH` instead of stdout
 - `--package NAME` — Go package clause for the emitted file (default: `main`)
 - `--backend NAME` — code generation backend (`go` or `llvm`; default: `go`;
-  `llvm` emits textual `.ll` for the early scalar/control-flow/plain/escaped-string
-  subset, including immutable string locals, and falls back to an inspectable
-  skeleton for unsupported shapes with Osty-authored instruction builders and
-  category diagnostics)
+  `llvm` emits textual `.ll` for the early scalar/control-flow/plain/escaped
+  string subset, including immutable string locals, and falls back to an
+  inspectable skeleton for unsupported shapes with Osty-authored instruction
+  builders and category diagnostics)
 - `--emit MODE` — requested text artifact. `go` emits Go source for the Go
   backend; `llvm-ir` is reserved for the LLVM backend.
 
@@ -292,12 +292,13 @@ creating a new one.
 `build` / `run` / `test` backend flags (after the subcommand):
 
 - `--backend NAME` — code generation backend (`go` or `llvm`; default: `go`;
-  `llvm` can write textual IR for the early scalar/control-flow/plain/escaped-string
-  subset, including immutable string locals, and when `clang` is available,
-  drive object/binary emission for supported programs; unsupported shapes still prepare skeleton artifacts and report the
-  missing lowering through categorized diagnostics generated from the Osty
-  selfhost-core backend policy; supported scalar instruction strings are
-  generated from that same backend core)
+  `llvm` can write textual IR for the early scalar/control-flow/plain/escaped
+  string subset, including immutable string locals, and when `clang` is
+  available, drive object/binary emission for supported programs; unsupported
+  shapes still prepare skeleton artifacts and report the missing lowering
+  through categorized diagnostics generated from the Osty selfhost-core backend
+  policy; supported scalar instruction strings are generated from that same
+  backend core)
 - `--emit MODE` — requested artifact mode (`go`, `llvm-ir`, `object`, or
   `binary`). `build --emit go` writes inspectable Go without linking a binary;
   `build --backend llvm --emit object|binary` uses `clang`; `run` and `test`

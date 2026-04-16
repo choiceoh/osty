@@ -210,26 +210,27 @@ fn testLlvmSmokeBooleansIsOstyOwned() {
 fn testLlvmSmokeStringPrintIsOstyOwned() {
     let ir = llvmSmokeStringPrintIR("/tmp/string_print.osty")
 
-    assertLlvmContains(ir, "@.str0 = private unnamed_addr constant [13 x i8] c\"hello, osty\\0A\\00\"")
+    assertLlvmContains(ir, "@.fmt_str = private unnamed_addr constant [4 x i8] c\"%s\\0A\\00\"")
+    assertLlvmContains(ir, "@.str0 = private unnamed_addr constant [12 x i8] c\"hello, osty\\00\"")
     assertLlvmContains(ir, "define i32 @main() \{")
-    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.str0)")
+    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_str, ptr @.str0)")
     assertLlvmContains(ir, "ret i32 0")
 }
 
 fn testLlvmSmokeStringEscapeIsOstyOwned() {
     let ir = llvmSmokeStringEscapeIR("/tmp/string_escape_print.osty")
 
-    assertLlvmContains(ir, "@.str0 = private unnamed_addr constant [26 x i8] c\"line one\\0Aquote \\22 slash \\5C\\0A\\00\"")
+    assertLlvmContains(ir, "@.str0 = private unnamed_addr constant [25 x i8] c\"line one\\0Aquote \\22 slash \\5C\\00\"")
     assertLlvmContains(ir, "define i32 @main() \{")
-    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.str0)")
+    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_str, ptr @.str0)")
     assertLlvmContains(ir, "ret i32 0")
 }
 
 fn testLlvmSmokeStringLetIsOstyOwned() {
     let ir = llvmSmokeStringLetIR("/tmp/string_let_print.osty")
 
-    assertLlvmContains(ir, "@.str0 = private unnamed_addr constant [15 x i8] c\"stored string\\0A\\00\"")
+    assertLlvmContains(ir, "@.str0 = private unnamed_addr constant [14 x i8] c\"stored string\\00\"")
     assertLlvmContains(ir, "define i32 @main() \{")
-    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.str0)")
+    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_str, ptr @.str0)")
     assertLlvmContains(ir, "ret i32 0")
 }
