@@ -3105,17 +3105,6 @@ func (g *gen) emitBuiltinCall(name string, args []*ast.Arg, call *ast.CallExpr) 
 	return false
 }
 
-// emitCallArgList writes a comma-separated list of call arguments
-// without surrounding parens. Used by intrinsic rewrites.
-func (g *gen) emitCallArgList(args []*ast.Arg) {
-	for i, a := range args {
-		if i > 0 {
-			g.body.write(", ")
-		}
-		g.emitExpr(a.Value)
-	}
-}
-
 func (g *gen) emitPrintArgList(args []*ast.Arg) {
 	if len(args) > 0 {
 		g.needStringRuntime = true

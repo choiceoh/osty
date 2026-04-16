@@ -1,7 +1,6 @@
 package lint_test
 
 import (
-	"sort"
 	"strings"
 	"testing"
 
@@ -38,8 +37,7 @@ func runLint(t *testing.T, src string) []*diag.Diagnostic {
 
 // assertWarns asserts that `got` contains at least one diagnostic with
 // each code in `want`. Extra diagnostics are tolerated (they may belong
-// to other rules that happen to fire on the same fixture). For strict
-// coverage use assertOnly.
+// to other rules that happen to fire on the same fixture).
 func assertWarns(t *testing.T, got []*diag.Diagnostic, want ...string) {
 	t.Helper()
 	seen := map[string]int{}
@@ -50,24 +48,6 @@ func assertWarns(t *testing.T, got []*diag.Diagnostic, want ...string) {
 		if seen[w] == 0 {
 			t.Fatalf("expected warning code %s; got: %s", w, dumpCodes(got))
 		}
-	}
-}
-
-// assertOnly asserts that the returned codes are EXACTLY the multiset
-// `want`. Useful for negative tests that want to prove an unrelated rule
-// didn't fire.
-func assertOnly(t *testing.T, got []*diag.Diagnostic, want ...string) {
-	t.Helper()
-	haveCodes := make([]string, 0, len(got))
-	for _, d := range got {
-		haveCodes = append(haveCodes, d.Code)
-	}
-	sort.Strings(haveCodes)
-	wantCodes := append([]string{}, want...)
-	sort.Strings(wantCodes)
-	if strings.Join(haveCodes, ",") != strings.Join(wantCodes, ",") {
-		t.Fatalf("code set mismatch:\n  want: %s\n  got:  %s",
-			strings.Join(wantCodes, ","), dumpCodes(got))
 	}
 }
 

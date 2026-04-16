@@ -363,18 +363,6 @@ func (r *resolver) lookupPackageMember(pkgSym *Symbol, member string, refPos tok
 	return sym
 }
 
-// joinPath renders a dotted UsePath slice as the canonical import path.
-func joinPath(segs []string) string {
-	if len(segs) == 0 {
-		return ""
-	}
-	out := segs[0]
-	for _, s := range segs[1:] {
-		out += "." + s
-	}
-	return out
-}
-
 func lastSeg(s string, sep byte) string {
 	for i := len(s) - 1; i >= 0; i-- {
 		if s[i] == sep {
@@ -386,11 +374,10 @@ func lastSeg(s string, sep byte) string {
 
 // ---- Pass 1: top-level declarations ----
 
-// declareTopLevelPackage is the multi-file variant of declareTopLevel.
-// Every file's declarations share one package scope; duplicate names
-// between files are reported as cross-file conflicts, with the narrow
-// exception of `struct` / `enum` partial declarations whose merging is
-// handled by mergePartial.
+// declareTopLevelPackage installs top-level declarations into the shared package
+// scope. Duplicate names between files are reported as cross-file conflicts,
+// with the narrow exception of `struct` / `enum` partial declarations whose
+// merging is handled by mergePartial.
 //
 // The handler builds the Symbol it would have installed and delegates
 // to mergePartial for the insertion / duplicate logic. For enums, the
@@ -429,43 +416,6 @@ func (r *resolver) declareTopLevelPackage(d ast.Decl, merged map[string]*mergedD
 		r.mergePartial(r.pkgScope, merged, n.Name, &Symbol{
 			Name: n.Name, Kind: SymLet, Pos: n.PosV, Decl: n, Pub: n.Pub,
 		}, d)
-	}
-}
-
-func (r *resolver) declareTopLevel(d ast.Decl) {
-	r.checkAnnotations(topLevelAnnotations(d), ast.TargetTopLevelDecl)
-	switch n := d.(type) {
-	case *ast.FnDecl:
-		r.defineSymbol(n.Name, &Symbol{
-			Name: n.Name, Kind: SymFn, Pos: n.PosV, Decl: n, Pub: n.Pub,
-		})
-	case *ast.StructDecl:
-		r.defineSymbol(n.Name, &Symbol{
-			Name: n.Name, Kind: SymStruct, Pos: n.PosV, Decl: n, Pub: n.Pub,
-		})
-	case *ast.EnumDecl:
-		r.defineSymbol(n.Name, &Symbol{
-			Name: n.Name, Kind: SymEnum, Pos: n.PosV, Decl: n, Pub: n.Pub,
-		})
-		// §3.5: bare variants visible at file scope within the package.
-		for _, v := range n.Variants {
-			r.checkAnnotations(v.Annotations, ast.TargetVariant)
-			r.defineSymbol(v.Name, &Symbol{
-				Name: v.Name, Kind: SymVariant, Pos: v.PosV, Decl: v, Pub: n.Pub,
-			})
-		}
-	case *ast.InterfaceDecl:
-		r.defineSymbol(n.Name, &Symbol{
-			Name: n.Name, Kind: SymInterface, Pos: n.PosV, Decl: n, Pub: n.Pub,
-		})
-	case *ast.TypeAliasDecl:
-		r.defineSymbol(n.Name, &Symbol{
-			Name: n.Name, Kind: SymTypeAlias, Pos: n.PosV, Decl: n, Pub: n.Pub,
-		})
-	case *ast.LetDecl:
-		r.defineSymbol(n.Name, &Symbol{
-			Name: n.Name, Kind: SymLet, Pos: n.PosV, Decl: n, Pub: n.Pub,
-		})
 	}
 }
 
@@ -667,23 +617,6 @@ func isFlagOrTrue(arg *ast.AnnotationArg) bool {
 	}
 	b, ok := arg.Value.(*ast.BoolLit)
 	return ok && b.Value
-}
-
-// defineSymbol installs sym at the package scope, reporting a duplicate
-// declaration diagnostic if the name was already used there. Kept for
-// compatibility with the single-file code path that pre-dates the
-// package walker (declareTopLevelPackage goes through mergePartial
-// directly).
-func (r *resolver) defineSymbol(name string, sym *Symbol) {
-	scope := r.pkgScope
-	if scope == nil {
-		scope = r.current
-	}
-	if prev, ok := scope.Define(sym); !ok {
-		// `use` aliases and prelude names live in shadowable contexts;
-		// duplicates within the top-level scope are still reported.
-		r.duplicate(sym.Pos, name, prev)
-	}
 }
 
 func (r *resolver) duplicate(pos token.Pos, name string, prev *Symbol) {

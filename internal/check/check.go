@@ -509,19 +509,6 @@ func fileResult(pf *resolve.PackageFile) *resolve.Result {
 	}
 }
 
-// indexSymbols builds the Decl-node → Symbol reverse index used by every
-// pass-2 pattern / parameter / receiver lookup. The resolver stores
-// Symbols in nested scopes we can't enumerate from outside the package,
-// but every reference ends up in Refs or TypeRefs — one scan populates
-// the index from there. Bindings that are declared but never referenced
-// don't appear (they're unused, so no later lookup needs them).
-// indexSymbols is the legacy single-file entry that walks c.resolved's
-// Refs/TypeRefs. Kept so File() reads unchanged; Package() calls the
-// file-aware indexSymbolsFrom for each input file.
-func (c *checker) indexSymbols() {
-	c.indexSymbolsFrom(c.resolved)
-}
-
 // indexSymbolsFrom populates declToSym from a specific resolve.Result.
 // Called once per file during multi-file checking so every local
 // binding visible in ANY file is indexed before bodies are checked.
@@ -826,13 +813,6 @@ func (c *checker) emit(d *diag.Diagnostic) {
 	c.result.Diags = append(c.result.Diags, d)
 }
 
-func (c *checker) errf(pos token.Pos, code, format string, args ...any) {
-	c.emit(diag.New(diag.Error, fmt.Sprintf(format, args...)).
-		Code(code).
-		PrimaryPos(pos, "").
-		Build())
-}
-
 func (c *checker) errSpan(start, end token.Pos, code, format string, args ...any) {
 	c.emit(diag.New(diag.Error, fmt.Sprintf(format, args...)).
 		Code(code).
@@ -901,19 +881,6 @@ func (c *checker) errMethodNotFound(n ast.Node, recvDescription, got string, can
 		fmt.Sprintf("no method `%s` on %s", got, recvDescription)).
 		Code(diag.CodeUnknownMethod).
 		Primary(diag.Span{Start: n.Pos(), End: n.End()}, "no such method")
-	if s := suggestFrom(got, candidates); s != "" {
-		b.Hint(fmt.Sprintf("did you mean `%s`?", s))
-	}
-	c.emit(b.Build())
-}
-
-// errVariantNotFound is the enum-variant analogue. Candidates are
-// the variant names of the scrutinee's enum.
-func (c *checker) errVariantNotFound(n ast.Node, got string, candidates []string) {
-	b := diag.New(diag.Error,
-		fmt.Sprintf("unknown variant `%s`", got)).
-		Code(diag.CodeUnknownVariant).
-		Primary(diag.Span{Start: n.Pos(), End: n.End()}, "unknown variant")
 	if s := suggestFrom(got, candidates); s != "" {
 		b.Hint(fmt.Sprintf("did you mean `%s`?", s))
 	}

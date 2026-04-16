@@ -361,14 +361,6 @@ func (g *gen) useAs(path, alias string) {
 	g.imports[path] = alias
 }
 
-// todo emits a `// TODO: <msg>` comment and records the first occurrence
-// as a non-fatal error. Used when a construct isn't yet supported.
-func (g *gen) todo(format string, args ...any) {
-	msg := fmt.Sprintf(format, args...)
-	g.body.writef("/* TODO: %s */", msg)
-	g.errs = append(g.errs, fmt.Errorf("gen: %s", msg))
-}
-
 func (g *gen) sourceMarker(n ast.Node) {
 	if g.sourcePath == "" || n == nil {
 		return

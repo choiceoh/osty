@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
 
 	"github.com/osty/osty/internal/backend"
 	"github.com/osty/osty/internal/check"
@@ -323,20 +322,4 @@ func mergeEnv(parent []string, overrides map[string]string) []string {
 		out = append(out, kv)
 	}
 	return out
-}
-
-// stripLeadingDashes drops a leading `--` argument separator used to
-// pass through flags to the underlying `go run` child. Only the
-// first occurrence is stripped so subsequent `--` pairs pass through
-// verbatim.
-func stripLeadingDashes(args []string) []string {
-	for i, a := range args {
-		if a == "--" {
-			return args[i+1:]
-		}
-		if !strings.HasPrefix(a, "-") {
-			return args[i:]
-		}
-	}
-	return nil
 }

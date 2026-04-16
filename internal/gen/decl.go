@@ -1295,38 +1295,6 @@ func useDeclAlias(u *ast.UseDecl) string {
 	return ""
 }
 
-// goConstraint maps a list of Osty generic bounds to a single Go
-// type-parameter constraint. Prelude interfaces get Go built-in
-// analogues; user-defined interfaces are joined with `|` isn't
-// idiomatic, so we union-with-embedding into a single name when one
-// applies and fall back to `any` when the set is empty.
-func (g *gen) goConstraint(bounds []ast.Type) string {
-	if len(bounds) == 0 {
-		return "any"
-	}
-	parts := make([]string, 0, len(bounds))
-	for _, b := range bounds {
-		n, ok := b.(*ast.NamedType)
-		if !ok || len(n.Path) == 0 {
-			parts = append(parts, "any")
-			continue
-		}
-		switch n.Path[len(n.Path)-1] {
-		case "Ordered":
-			g.use("cmp")
-			parts = append(parts, "cmp.Ordered")
-		case "Equal", "Hashable":
-			parts = append(parts, "comparable")
-		default:
-			parts = append(parts, g.goTypeExpr(b))
-		}
-	}
-	// Multiple bounds: intersect via Go's interface-embedding only
-	// works as an interface definition, which is heavier than a
-	// one-liner. Pick the first — good enough for spec fixtures.
-	return parts[0]
-}
-
 // emitBlockAsReturn writes a block with the final expression optionally
 // lifted into an implicit `return`. Osty allows the last expression of
 // a function body to serve as the return value — Go requires an explicit
