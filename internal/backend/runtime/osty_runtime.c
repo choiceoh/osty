@@ -43,6 +43,8 @@ enum {
 static osty_gc_header *osty_gc_objects = NULL;
 static int64_t osty_gc_live_count = 0;
 static int64_t osty_gc_collection_count = 0;
+static bool osty_gc_safepoint_stress_loaded = false;
+static bool osty_gc_safepoint_stress_enabled = false;
 
 static void osty_rt_abort(const char *message) {
     fprintf(stderr, "osty llvm runtime: %s\n", message);
@@ -147,9 +149,23 @@ static void osty_gc_mark_payload(void *payload) {
     osty_gc_mark_header(osty_gc_find_header(payload));
 }
 
-static void osty_gc_collect_now(void) {
+static void osty_gc_mark_root_slot(void *slot_addr) {
+    void *payload = NULL;
+
+    if (slot_addr == NULL) {
+        return;
+    }
+    memcpy(&payload, slot_addr, sizeof(payload));
+    if (payload == NULL) {
+        return;
+    }
+    osty_gc_mark_payload(payload);
+}
+
+static void osty_gc_collect_now_with_stack_roots(void *const *root_slots, int64_t root_slot_count) {
     osty_gc_header *header = osty_gc_objects;
     osty_gc_header *next;
+    int64_t i;
 
     while (header != NULL) {
         header->marked = false;
@@ -161,6 +177,9 @@ static void osty_gc_collect_now(void) {
             osty_gc_mark_header(header);
         }
         header = header->next;
+    }
+    for (i = 0; i < root_slot_count; i++) {
+        osty_gc_mark_root_slot((void *)root_slots[i]);
     }
     header = osty_gc_objects;
     while (header != NULL) {
@@ -175,6 +194,26 @@ static void osty_gc_collect_now(void) {
         header = next;
     }
     osty_gc_collection_count += 1;
+}
+
+static void osty_gc_collect_now(void) {
+    osty_gc_collect_now_with_stack_roots(NULL, 0);
+}
+
+static bool osty_gc_safepoint_stress_enabled_now(void) {
+    const char *value;
+
+    if (osty_gc_safepoint_stress_loaded) {
+        return osty_gc_safepoint_stress_enabled;
+    }
+    osty_gc_safepoint_stress_loaded = true;
+    value = getenv("OSTY_GC_STRESS");
+    if (value == NULL || value[0] == '\0' || strcmp(value, "0") == 0 || strcmp(value, "false") == 0 || strcmp(value, "FALSE") == 0) {
+        osty_gc_safepoint_stress_enabled = false;
+    } else {
+        osty_gc_safepoint_stress_enabled = true;
+    }
+    return osty_gc_safepoint_stress_enabled;
 }
 
 static osty_rt_list *osty_rt_list_cast(void *raw_list) {
@@ -354,6 +393,7 @@ void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site)
 void osty_gc_post_write_v1(void *owner, void *value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.post_write_v1"));
 void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
 void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+void osty_gc_safepoint_v1(int64_t safepoint_id, void *const *root_slots, int64_t root_slot_count) __asm__(OSTY_GC_SYMBOL("osty.gc.safepoint_v1"));
 
 void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) {
     if (byte_size < 0) {
@@ -388,6 +428,17 @@ void osty_gc_root_release_v1(void *root) {
         osty_rt_abort("GC root release underflow");
     }
     header->root_count -= 1;
+}
+
+void osty_gc_safepoint_v1(int64_t safepoint_id, void *const *root_slots, int64_t root_slot_count) {
+    (void)safepoint_id;
+    if (root_slot_count < 0) {
+        osty_rt_abort("negative safepoint root slot count");
+    }
+    if (!osty_gc_safepoint_stress_enabled_now()) {
+        return;
+    }
+    osty_gc_collect_now_with_stack_roots(root_slots, root_slot_count);
 }
 
 void osty_gc_debug_collect(void) {

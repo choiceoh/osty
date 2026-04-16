@@ -131,6 +131,7 @@ func TestLLVMBackendEmitBinaryBuildsBundledRuntime(t *testing.T) {
 		"osty_rt_list_new",
 		"osty_rt_strings_Equal",
 		"osty.gc.root_bind_v1",
+		"osty.gc.safepoint_v1",
 		"osty_gc_debug_collect",
 	} {
 		if !strings.Contains(string(content), want) {
@@ -211,6 +212,55 @@ fn main() {
 		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
 	}
 	if got, want := string(output), "2\n1\n"; got != want {
+		t.Fatalf("binary stdout = %q, want %q", got, want)
+	}
+}
+
+func TestLLVMBackendBinarySafepointsKeepManagedRootsAlive(t *testing.T) {
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
+
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitBinary, `use runtime.strings as strings {
+    fn Split(s: String, sep: String) -> List<String>
+}
+
+struct Bucket {
+    items: List<String>
+}
+
+fn touch() {}
+
+fn localCount() -> Int {
+    let parts = strings.Split("gc,llvm", ",")
+    touch()
+    parts.len()
+}
+
+fn bucketCount(bucket: Bucket) -> Int {
+    touch()
+    bucket.items.len()
+}
+
+fn main() {
+    println(localCount())
+    let bucket = Bucket { items: strings.Split("one,two", ",") }
+    println(bucketCount(bucket))
+}
+`)
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	cmd := exec.Command(result.Artifacts.Binary)
+	cmd.Env = append(os.Environ(), "OSTY_GC_STRESS=1")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
+	}
+	if got, want := string(output), "2\n2\n"; got != want {
 		t.Fatalf("binary stdout = %q, want %q", got, want)
 	}
 }
