@@ -2274,6 +2274,16 @@ func (g *generator) userCallArgs(sig *fnSig, receiverExpr ast.Expr, call *ast.Ca
 		if err != nil {
 			return nil, err
 		}
+		// Phase 6d: auto-box a concrete value when the callee expects
+		// an interface. Mirrors the `let s: Sized = v` and return-value
+		// paths so call-site conversion lands consistently.
+		if param.typ == "%osty.iface" && v.typ != "%osty.iface" && param.sourceType != nil {
+			boxed, boxErr := g.boxInterfaceValue(param.sourceType, v)
+			if boxErr != nil {
+				return nil, boxErr
+			}
+			v = boxed
+		}
 		if v.typ != param.typ {
 			return nil, unsupportedf("type-system", "function %q arg %d type %s, want %s", sig.name, i+1, v.typ, param.typ)
 		}

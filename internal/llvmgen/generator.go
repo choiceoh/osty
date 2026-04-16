@@ -49,6 +49,7 @@ type generator struct {
 	body              []string
 	locals            []map[string]value
 	returnType        string
+	returnSourceType  ast.Type
 	returnListElemTyp string
 	currentBlock      string
 	currentReachable  bool
@@ -100,6 +101,7 @@ func (g *generator) beginFunction() {
 	g.body = nil
 	g.locals = []map[string]value{{}}
 	g.returnType = ""
+	g.returnSourceType = nil
 	g.returnListElemTyp = ""
 	g.gcRootSlots = nil
 	g.gcRootMarks = []int{0}
