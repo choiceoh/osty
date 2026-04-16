@@ -56,8 +56,8 @@ func runBuild(args []string, flags cliFlags) {
 	fs.BoolVar(&force, "force", false, "ignore the build cache; transpile every input")
 	var backendName string
 	var emitName string
-	fs.StringVar(&backendName, "backend", defaultBackendName(), "code generation backend (go or llvm)")
-	fs.StringVar(&emitName, "emit", "", "artifact mode (go, llvm-ir, object, or binary)")
+	fs.StringVar(&backendName, "backend", defaultBackendName(), "code generation backend (llvm)")
+	fs.StringVar(&emitName, "emit", "", "artifact mode (llvm-ir, object, or binary)")
 	var pf profileFlags
 	pf.register(fs)
 	_ = fs.Parse(args)
@@ -394,10 +394,8 @@ func buildPackage(dir string, m *manifest.Manifest, flags cliFlags, deps resolve
 }
 
 // emitAndBuild picks the entry file (manifest `[bin].path` or default
-// `main.osty`) and drives the selected backend. The Go backend still invokes
-// the Go toolchain for binary emission; LLVM can currently stop after
-// inspectable IR emission. Libraries (no entry file on disk) are a no-op until
-// the emitter grows package-per-package output.
+// `main.osty`) and drives the selected native backend. Libraries (no entry file
+// on disk) are a no-op until the emitter grows package-per-package output.
 //
 // Files whose header declares `@feature: NAME` via the @feature
 // pragma are skipped when NAME isn't in the active feature set, so

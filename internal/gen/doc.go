@@ -1,4 +1,5 @@
-// Package gen translates a type-checked Osty AST into Go source code.
+// Package gen translates a type-checked Osty AST into Go source code for the
+// selfhostgen bootstrap path.
 //
 // The transpiler runs after the front-end pipeline (lex → parse → resolve
 // → check) and consumes:
@@ -8,8 +9,8 @@
 //   - *check.Result — semantic types (Types, LetTypes, SymTypes, Instantiations)
 //
 // No AST nodes are mutated; the package is a pure read-side consumer of
-// the front-end. Output is `package main` Go that can be fed directly to
-// `go run` / `go build`.
+// the front-end. Output is `package main` Go for the bootstrap seed compiler;
+// the public compiler path uses the native LLVM backend instead.
 //
 // Phase 1 coverage (what's implemented):
 //
@@ -51,10 +52,10 @@
 //
 // Phases 5–6 coverage:
 //
-//   - use declarations and Go FFI (Phase 5)
+//   - use declarations and legacy/runtime FFI shims (Phase 5)
 //   - channels and structured-concurrency primitives (Phase 6)
 //
-// Remaining TODO markers in emitted Go are backend-coverage issues for
+// Remaining TODO markers in emitted Go are bootstrap-coverage issues for
 // particular AST shapes, not unresolved language semantics. The v0.4
 // language-decision register lives in SPEC_GAPS.md.
 package gen

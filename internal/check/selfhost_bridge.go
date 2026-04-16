@@ -1059,7 +1059,7 @@ func writeSelfhostPackageImport(b *bytes.Buffer, alias string, pkg *resolve.Pack
 	if body.Len() == 0 {
 		return
 	}
-	fmt.Fprintf(b, "use %s {\n", alias)
+	fmt.Fprintf(b, "use runtime.package.%s as %s {\n", alias, alias)
 	b.Write(body.Bytes())
 	b.WriteString("}\n")
 }

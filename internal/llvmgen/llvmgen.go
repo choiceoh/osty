@@ -242,6 +242,9 @@ func fileUnsupportedDiagnostic(file *ast.File) (UnsupportedDiagnostic, bool) {
 		if use != nil && use.IsGoFFI {
 			return UnsupportedDiagnosticFor("go-ffi", use.GoPath), true
 		}
+		if use != nil && use.IsRuntimeFFI {
+			return UnsupportedDiagnosticFor("runtime-ffi", use.RuntimePath), true
+		}
 	}
 	return UnsupportedDiagnostic{}, false
 }

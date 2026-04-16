@@ -1,10 +1,11 @@
+//go:build selfhostgen
+
 package backend
 
 import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 
 	"github.com/osty/osty/internal/check"
@@ -12,7 +13,8 @@ import (
 	"github.com/osty/osty/internal/resolve"
 )
 
-// GoBackend wraps the existing Go transpiler behind the backend contract.
+// GoBackend wraps the legacy Go transpiler behind the backend contract.
+// It is compiled only for selfhostgen bootstrap runs.
 type GoBackend struct{}
 
 func (GoBackend) Name() Name { return NameGo }
@@ -92,16 +94,4 @@ func join(parts []string, sep string) string {
 		out += sep + parts[i]
 	}
 	return out
-}
-
-// SourcePath returns a clean source path for diagnostics. Kept as a helper so
-// callers do not need to know the artifact struct's field names.
-func (a Artifacts) SourcePath() string {
-	if a.GoSource != "" {
-		return filepath.Clean(a.GoSource)
-	}
-	if a.LLVMIR != "" {
-		return filepath.Clean(a.LLVMIR)
-	}
-	return ""
 }

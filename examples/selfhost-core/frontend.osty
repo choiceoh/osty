@@ -1,4 +1,4 @@
-use go "strings" as strings {
+use runtime.strings as strings {
     fn Count(s: String, substr: String) -> Int
     fn Fields(s: String) -> List<String>
     fn HasPrefix(s: String, prefix: String) -> Bool

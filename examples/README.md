@@ -8,7 +8,7 @@ the compiler evolves.
 ## Packages
 
 - `calc`: small library used by the `osty test` harness smoke test.
-- `ffi`: runnable Go FFI example using the Go `strings` package.
+- `ffi`: legacy Go FFI example kept for bootstrap/checker coverage.
 - `gc`: independent garbage-collector core written in Osty, covering
   generational collection, remembered-set barriers, incremental marking,
   cycle reclamation, compaction, pinning, and allocation telemetry.

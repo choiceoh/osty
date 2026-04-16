@@ -1488,7 +1488,7 @@ func (g *gen) isStdlibAliasName(alias, module string) bool {
 }
 
 func stdlibUseMatchesAlias(u *ast.UseDecl, alias, module string) bool {
-	if u == nil || u.IsGoFFI || len(u.Path) != 2 || u.Path[0] != "std" || u.Path[1] != module {
+	if u == nil || u.IsFFI() || len(u.Path) != 2 || u.Path[0] != "std" || u.Path[1] != module {
 		return false
 	}
 	name := u.Alias

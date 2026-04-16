@@ -1,4 +1,4 @@
-use go "strings" as strings {
+use runtime.strings as strings {
     fn HasPrefix(s: String, prefix: String) -> Bool
     fn HasSuffix(s: String, suffix: String) -> Bool
     fn Join(elems: List<String>, sep: String) -> String
@@ -490,7 +490,7 @@ fn frontCheckCollectDecl(file: AstFile, env: FrontCheckEnv, declIdx: Int, decl: 
         return
     }
     if decl.kind == AstNUseDecl {
-        let alias = frontCheckLastPathSegment(decl.text)
+        let alias = frontCheckUseAlias(file, decl)
         for itemIdx in decl.children {
             let item = astArenaNodeAt(file.arena, itemIdx)
             if item.kind == AstNFnDecl {
@@ -4002,4 +4002,15 @@ fn frontCheckRequireMutableReceiver(file: AstFile, env: FrontCheckEnv, callee: A
     if left.kind == AstNIdent && !(frontCheckLookupMutable(env, left.text)) {
         env.errors = env.errors + 1
     }
+}
+
+fn frontCheckUseAlias(file: AstFile, node: AstNode) -> String {
+    let aliasIdx = frontCheckIntAt(node.children2, 0)
+    if aliasIdx >= 0 {
+        let alias = astArenaNodeAt(file.arena, aliasIdx)
+        if alias.text != "" {
+            return alias.text
+        }
+    }
+    frontCheckLastPathSegment(node.text)
 }

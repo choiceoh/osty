@@ -976,7 +976,15 @@ func llvmUnsupportedDiagnostic(kind string, detail string) *LlvmUnsupportedDiagn
 			target = "<unknown>"
 		}
 		// Osty: examples/selfhost-core/llvmgen.osty:645:9
-		return &LlvmUnsupportedDiagnostic{code: "LLVM001", kind: "go-only", message: fmt.Sprintf("use go \"%s\" is only supported by the Go backend", ostyToString(target)), hint: "use --backend=go or replace it with a native/runtime binding before using --backend=llvm"}
+		return &LlvmUnsupportedDiagnostic{code: "LLVM001", kind: "foreign-ffi", message: fmt.Sprintf("Go FFI import %s is not supported by the self-hosted native backend", ostyToString(target)), hint: "replace it with an Osty runtime FFI binding before using the native backend"}
+	}
+	if kind == "runtime-ffi" {
+		target := detail
+		_ = target
+		if target == "" {
+			target = "<unknown>"
+		}
+		return &LlvmUnsupportedDiagnostic{code: "LLVM002", kind: "runtime-ffi", message: fmt.Sprintf("Osty runtime FFI import %s needs native runtime lowering", ostyToString(target)), hint: "add the runtime ABI shim and lowering before compiling this source natively"}
 	}
 	// Osty: examples/selfhost-core/llvmgen.osty:653:5
 	if kind == "source-layout" {
@@ -1026,7 +1034,7 @@ func llvmUnsupportedDiagnostic(kind string, detail string) *LlvmUnsupportedDiagn
 		// Osty: examples/selfhost-core/llvmgen.osty:720:9
 		reason = "source shape is not supported by the current LLVM backend"
 	}
-	return &LlvmUnsupportedDiagnostic{code: "LLVM000", kind: "unsupported-source", message: reason, hint: "reduce the program to the LLVM smoke subset or keep using --backend=go for this source"}
+	return &LlvmUnsupportedDiagnostic{code: "LLVM000", kind: "unsupported-source", message: reason, hint: "reduce the program to the LLVM smoke subset while the self-hosted native backend grows"}
 }
 
 // Osty: examples/selfhost-core/llvmgen.osty:730:5

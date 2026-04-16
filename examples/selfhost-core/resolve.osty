@@ -1,4 +1,4 @@
-use go "strings" as strings {
+use runtime.strings as strings {
     fn HasPrefix(s: String, prefix: String) -> Bool
     fn Split(s: String, sep: String) -> List<String>
     fn TrimPrefix(s: String, prefix: String) -> String

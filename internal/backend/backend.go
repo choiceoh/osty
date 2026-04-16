@@ -14,6 +14,7 @@ import (
 type Name string
 
 const (
+	// NameGo is retained only for selfhostgen bootstrap runs.
 	NameGo   Name = "go"
 	NameLLVM Name = "llvm"
 )
@@ -26,7 +27,7 @@ func ParseName(s string) (Name, error) {
 	case NameLLVM:
 		return NameLLVM, nil
 	default:
-		return "", fmt.Errorf("unknown backend %q (want go or llvm)", s)
+		return "", fmt.Errorf("unknown backend %q (want llvm)", s)
 	}
 }
 
@@ -64,7 +65,7 @@ func ParseEmitMode(s string) (EmitMode, error) {
 	case EmitBinary:
 		return EmitBinary, nil
 	default:
-		return "", fmt.Errorf("unknown emit mode %q (want go, llvm-ir, object, or binary)", s)
+		return "", fmt.Errorf("unknown emit mode %q (want llvm-ir, object, or binary)", s)
 	}
 }
 
@@ -109,15 +110,15 @@ func ValidateEmit(n Name, m EmitMode) error {
 
 // Backend is implemented by concrete code-generation backends.
 //
-// Phase 5 only defines the interface. Later phases will wrap the existing Go
-// transpiler behind it and add the LLVM implementation.
+// The public compiler path is the self-hosted native backend. The Go backend
+// is available only in selfhostgen bootstrap builds.
 type Backend interface {
 	Name() Name
 	Emit(context.Context, Request) (*Result, error)
 }
 
-// Entry is the type-checked source unit a backend should emit. It mirrors the
-// current Go transpiler inputs while keeping them grouped under one contract.
+// Entry is the type-checked source unit a backend should emit. It keeps the
+// front-end products grouped under one backend-neutral contract.
 type Entry struct {
 	PackageName string
 	SourcePath  string

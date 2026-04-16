@@ -1,4 +1,4 @@
-use go "path/filepath" as filepath {
+use runtime.path.filepath as filepath {
     fn Base(path: String) -> String
     fn Ext(path: String) -> String
 }

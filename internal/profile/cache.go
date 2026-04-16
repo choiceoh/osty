@@ -19,12 +19,12 @@ import (
 // pair so concurrent cross-builds can coexist.
 const CacheDirName = ".osty/cache"
 
-// OutDirName is the transpiler's Go-source output root. Laid out as
+// OutDirName is the backend artifact output root. Laid out as
 // .osty/out/<profile>[-<triple>]/ so `osty build --release` doesn't
 // clobber debug artifacts.
 const OutDirName = ".osty/out"
 
-const defaultCacheBackend = "go"
+const defaultCacheBackend = "llvm"
 
 // ArtifactKey formats the (profile, triple) tuple used to scope cache
 // entries and output directories. The triple portion is elided when
@@ -53,7 +53,7 @@ func BackendCachePath(root, profile, triple, backend string) string {
 	return filepath.Join(root, CacheDirName, ArtifactKey(profile, triple), backend+".json")
 }
 
-// CachePath returns the default Go backend fingerprint JSON file.
+// CachePath returns the default native backend fingerprint JSON file.
 func CachePath(root, profile, triple string) string {
 	return BackendCachePath(root, profile, triple, defaultCacheBackend)
 }
@@ -234,7 +234,7 @@ func (f *Fingerprint) Write(root string) error {
 	return os.Rename(tmp, path)
 }
 
-// ReadFingerprint loads the default Go backend fingerprint for
+// ReadFingerprint loads the default native backend fingerprint for
 // (profile, triple) from root.
 func ReadFingerprint(root, profile, triple string) (*Fingerprint, error) {
 	return ReadFingerprintForBackend(root, profile, triple, defaultCacheBackend)

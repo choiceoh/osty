@@ -604,8 +604,8 @@ func (l *ByteLit) At() Span   { return l.SpanV }
 func (l *ByteLit) Type() Type { return TByte }
 
 // StringLit is a possibly interpolated string literal. Parts alternate
-// literal text and inner expressions — backends format the whole thing
-// via their own formatter (fmt.Sprintf for the Go backend).
+// literal text and inner expressions; backends format the whole thing
+// via their own formatter.
 type StringLit struct {
 	Parts    []StringPart
 	IsRaw    bool
@@ -854,21 +854,24 @@ func (t *TypeAliasDecl) DeclName() string { return t.Name }
 
 // UseDecl is a `use` import. Path is the source-level dotted path
 // (["std","io"]), Alias is the bound name (the last path segment when
-// the user didn't write `as alias`). GoPath / GoBody mirror the FFI
-// form `use go "path" { ... }`; they are empty for ordinary imports.
+// the user didn't write `as alias`). RuntimePath/GoPath plus GoBody mirror
+// FFI declarations; they are empty for ordinary imports.
 type UseDecl struct {
-	Path    []string
-	RawPath string
-	Alias   string
-	IsGoFFI bool
-	GoPath  string
-	GoBody  []Decl
-	SpanV   Span
+	Path         []string
+	RawPath      string
+	Alias        string
+	IsGoFFI      bool
+	IsRuntimeFFI bool
+	GoPath       string
+	RuntimePath  string
+	GoBody       []Decl
+	SpanV        Span
 }
 
 func (*UseDecl) declNode()          {}
 func (u *UseDecl) At() Span         { return u.SpanV }
 func (u *UseDecl) DeclName() string { return u.Alias }
+func (u *UseDecl) IsFFI() bool      { return u != nil && (u.IsGoFFI || u.IsRuntimeFFI) }
 
 // ==== Additional statements ====
 

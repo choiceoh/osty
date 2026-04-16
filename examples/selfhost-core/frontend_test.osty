@@ -316,7 +316,7 @@ fn testFrontendParserRecoversRichShapeFromBrokenBlock() {
 fn testFrontendParserPortsDeclarationSurface() {
     let parsed = frontendParseRichSummary(
         r"""
-            use go "net/http" as http {
+            use runtime.net.http as http {
                 fn Get(url: String) -> Result<Response, Error>
             }
 
@@ -340,9 +340,9 @@ fn testFrontendParserPortsDeclarationSurface() {
             """,
     )
 
-    testing.assertEq(parsed.goUses, 1)
+    testing.assertEq(parsed.goUses, 0)
     testing.assertEq(parsed.useAliases, 1)
-    testing.assertEq(parsed.useGoItems, 1)
+    testing.assertEq(parsed.useGoItems, 0)
     testing.assert(parsed.annotations >= 2)
     testing.assert(parsed.docComments >= 1)
     testing.assertEq(parsed.fields, 2)

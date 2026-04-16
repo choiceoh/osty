@@ -1,3 +1,5 @@
+//go:build !selfhostgen
+
 package check
 
 import (
@@ -22,7 +24,7 @@ fn selfhostRuntimeUsesGenericStdlibStubs() {
 		t.Fatalf("parse diagnostics: %v", parseDiags)
 	}
 	checkedSrc := selfhostFileSource(file, nil, src, stdlib.LoadCached())
-	if !bytes.Contains(checkedSrc.source, []byte("use testing {")) {
+	if !bytes.Contains(checkedSrc.source, []byte("use runtime.package.testing as testing {")) {
 		t.Fatalf("synthetic stdlib import missing:\n%s", checkedSrc.source)
 	}
 	if !bytes.Contains(checkedSrc.source, []byte("fn assertEq<T>(")) {

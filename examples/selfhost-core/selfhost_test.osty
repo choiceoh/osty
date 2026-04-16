@@ -1,6 +1,6 @@
 use std.testing
 
-use go "strings" as strings {
+use runtime.strings as strings {
     fn Contains(s: String, substr: String) -> Bool
 }
 
