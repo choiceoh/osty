@@ -20,6 +20,39 @@ fn testLlvmSmokeMinimalPrintIsOstyOwned() {
     assertLlvmContains(ir, "ret i32 0")
 }
 
+fn testLlvmGcRuntimeDeclarationsAreOstyOwned() {
+    let declarations = llvmTestStrings.Join(llvmGcRuntimeDeclarations(), "\n")
+
+    assertLlvmContains(declarations, "declare ptr @osty.gc.alloc_v1(i64, i64, ptr)")
+    assertLlvmContains(declarations, "declare void @osty.gc.post_write_v1(ptr, ptr, i64)")
+    assertLlvmContains(declarations, "declare void @osty.gc.root_bind_v1(ptr)")
+    assertLlvmContains(declarations, "declare void @osty.gc.root_release_v1(ptr)")
+}
+
+fn testLlvmSmokeGcRuntimeAbiIsOstyOwned() {
+    let ir = llvmSmokeGcRuntimeAbiIR("/tmp/gc_runtime_abi.osty")
+
+    assertLlvmContains(ir, "source_filename = \"/tmp/gc_runtime_abi.osty\"")
+    assertLlvmContains(ir, "declare ptr @osty.gc.alloc_v1(i64, i64, ptr)")
+    assertLlvmContains(ir, "declare void @osty.gc.post_write_v1(ptr, ptr, i64)")
+    assertLlvmContains(ir, "declare void @osty.gc.root_bind_v1(ptr)")
+    assertLlvmContains(ir, "declare void @osty.gc.root_release_v1(ptr)")
+    assertLlvmContains(
+        ir,
+        "@.str0 = private unnamed_addr constant [15 x i8] c\"llvm.gc.object\\00\"",
+    )
+    assertLlvmContains(
+        ir,
+        "@.str1 = private unnamed_addr constant [14 x i8] c\"llvm.gc.child\\00\"",
+    )
+    assertLlvmContains(ir, "%t0 = call ptr @osty.gc.alloc_v1(i64 1, i64 32, ptr @.str0)")
+    assertLlvmContains(ir, "call void @osty.gc.root_bind_v1(ptr %t0)")
+    assertLlvmContains(ir, "%t1 = call ptr @osty.gc.alloc_v1(i64 2, i64 16, ptr @.str1)")
+    assertLlvmContains(ir, "call void @osty.gc.post_write_v1(ptr %t0, ptr %t1, i64 0)")
+    assertLlvmContains(ir, "call void @osty.gc.root_release_v1(ptr %t0)")
+    assertLlvmContains(ir, "ret i32 0")
+}
+
 fn testLlvmSkeletonIsOstyOwned() {
     let ir = llvmRenderSkeleton(
         "main",
