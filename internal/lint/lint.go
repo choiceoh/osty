@@ -192,13 +192,6 @@ func (l *linter) emit(d *diag.Diagnostic) {
 	l.result.Diags = append(l.result.Diags, d)
 }
 
-func (l *linter) warnPos(pos token.Pos, code, format string, args ...any) {
-	l.emit(diag.New(diag.Warning, fmt.Sprintf(format, args...)).
-		Code(code).
-		PrimaryPos(pos, "").
-		Build())
-}
-
 func (l *linter) warnSpan(start, end token.Pos, code, format string, args ...any) {
 	l.emit(diag.New(diag.Warning, fmt.Sprintf(format, args...)).
 		Code(code).

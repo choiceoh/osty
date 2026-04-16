@@ -66,17 +66,6 @@ func loadManifestWithDiag(start string, flags cliFlags) (m *manifest.Manifest, r
 	return m, root, false
 }
 
-// resolveAndVendorEnv is the offline-only convenience entry point
-// retained for callers that don't care about Locked / Frozen
-// semantics. New call sites should use resolveAndVendorEnvOpts.
-//
-// An empty dependency list short-circuits and returns a bare env —
-// the Workspace still gets constructed, it just has nothing to look
-// up through the provider.
-func resolveAndVendorEnv(m *manifest.Manifest, root string, offline bool) (*pkgmgr.Graph, *pkgmgr.Env, error) {
-	return resolveAndVendorEnvOpts(m, root, resolveOpts{Offline: offline})
-}
-
 // resolveOpts bundles the toggles the package-manager flow accepts.
 // Threaded through every CLI subcommand that touches the resolver
 // (build, run, test, fetch, publish, add, update) so behavior stays

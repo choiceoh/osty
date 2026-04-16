@@ -476,20 +476,6 @@ func interpolationTokens(stream *FrontLexStream, start, count int, rt runeTable)
 	return out
 }
 
-func stringContent(s string) string {
-	switch {
-	case len(s) >= 6 && strings.HasPrefix(s, `r"""`) && strings.HasSuffix(s, `"""`):
-		return s[4 : len(s)-3]
-	case len(s) >= 6 && strings.HasPrefix(s, `"""`) && strings.HasSuffix(s, `"""`):
-		return s[3 : len(s)-3]
-	case len(s) >= 3 && strings.HasPrefix(s, `r"`) && strings.HasSuffix(s, `"`):
-		return s[2 : len(s)-1]
-	case len(s) >= 2 && strings.HasPrefix(s, `"`) && strings.HasSuffix(s, `"`):
-		return decodeEscapes(s[1 : len(s)-1])
-	}
-	return s
-}
-
 func decodeChar(s string) string {
 	if strings.HasPrefix(s, "b") {
 		s = s[1:]

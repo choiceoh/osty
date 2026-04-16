@@ -165,10 +165,6 @@ func (c *checker) floatLitType(_ *ast.FloatLit, hint types.Type) types.Type {
 
 // ---- Unary / binary ----
 
-func (c *checker) unaryType(e *ast.UnaryExpr, env *env) types.Type {
-	return c.unaryTypeHinted(e, nil, env)
-}
-
 // unaryTypeHinted propagates a surrounding type hint through a prefix
 // operator so literal-range checking sees the sign. For `-lit` the
 // inner literal bypasses its own positive-range check (the literal
@@ -579,19 +575,10 @@ func interfaceNamed(c *checker, t types.Type) (*types.Named, bool) {
 	return nil, false
 }
 
-// applyGenericCall is the monomorphizing call path. Given the fn type
-// and its generic type-parameter list, it infers concrete type arguments
-// from (a) the surrounding hint for the return type, and (b) each
-// positional argument, then substitutes into the param / return types
-// and rechecks with the concrete types. The instantiation is recorded
-// on Result.Instantiations so the Go transpiler can emit one
-// specialized copy per distinct argument list (§2.7.3).
-func (c *checker) applyGenericCall(e *ast.CallExpr, fn *types.FnType, generics []*types.TypeVar, hint types.Type, env *env) types.Type {
-	return c.applyGenericCallWithArgs(e, fn, generics, nil, hint, env)
-}
-
-// applyGenericCallWithArgs is applyGenericCall with an optional explicit
-// type-argument list from a turbofish.
+// applyGenericCallWithArgs is the monomorphizing call path. Given the fn
+// type and its generic type-parameter list, it infers concrete type
+// arguments from the surrounding hint, positional arguments, and an optional
+// explicit type-argument list from a turbofish.
 func (c *checker) applyGenericCallWithArgs(e *ast.CallExpr, fn *types.FnType, generics []*types.TypeVar, explicit []types.Type, hint types.Type, env *env) types.Type {
 	c.checkExplicitGenericArity(e, len(generics), explicit)
 	if len(generics) == 0 {
@@ -2279,14 +2266,6 @@ func (c *checker) tryFFICall(u *ast.UseDecl, fx *ast.FieldExpr, e *ast.CallExpr,
 	ft := c.externalFnType(fn, nil)
 	c.recordExpr(e.Fn, ft)
 	return c.applyFnTo(e, e.Args, ft, env)
-}
-
-// ffiType resolves an FFI body AST type reference via name-based prelude
-// lookup. Mirrors c.typeOf but doesn't require the resolver's TypeRefs
-// table — the FFI body isn't walked by the resolver, so type refs there
-// have no recorded symbol.
-func (c *checker) ffiType(n ast.Type) types.Type {
-	return c.externalType(n, nil)
 }
 
 func (c *checker) externalType(n ast.Type, pkg *resolve.Package) types.Type {

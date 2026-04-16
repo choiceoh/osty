@@ -87,11 +87,6 @@ func resolveBackendAndEmitFlags(tool, backendRaw, emitRaw string) (backend.Name,
 	return name, mode
 }
 
-func resolveBackendFlag(tool, raw string) backend.Name {
-	name, _ := resolveBackendAndEmitFlags(tool, raw, "")
-	return name
-}
-
 func backendFromCLI(tool string, name backend.Name) backend.Backend {
 	b, err := backend.New(name)
 	if err != nil {
