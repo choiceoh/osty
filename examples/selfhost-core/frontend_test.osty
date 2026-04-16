@@ -158,6 +158,18 @@ fn testFrontendLexerTokenizesInterpolationExpressions() {
     testing.assertEq(frontTokenKindName(frontInterpolationTokenAt(stream, 2).token.kind), "INT")
 }
 
+fn testFrontendLexerTokenizesInterpolationAfterEscapedQuote() {
+    let stream = frontendLexStream("\"value \\\"\{name\}\\\"\"")
+
+    testing.assertEq(frontStringPartCount(stream), 3)
+    testing.assertEq(frontInterpolationTokenCount(stream), 1)
+
+    let expr = frontStringPartAt(stream, 1)
+    testing.assertEq(frontStringPartKindName(expr.kind), "interpolation")
+    testing.assertEq(frontTokenKindName(frontInterpolationTokenAt(stream, 0).token.kind), "IDENT")
+    testing.assertEq(frontInterpolationTokenAt(stream, 0).token.start.column, 11)
+}
+
 fn testFrontendLexerNormalizesTripleStrings() {
     let stream = frontendLexStream("\"\"\"\n    alpha\n    beta\n    \"\"\"")
 

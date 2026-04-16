@@ -1,5 +1,3 @@
-//go:build selfhostgen
-
 package selfhost
 
 import "unicode/utf8"

@@ -485,52 +485,175 @@ fn frontCheckCollectDecl(file: AstFile, env: FrontCheckEnv, declIdx: Int, decl: 
     if decl.kind == AstNLet {
         let declared = frontCheckTypeName(file, frontCheckFirstChild(decl))
         if declared != "()" && declared != "Invalid" {
-            frontCheckBindPattern(file, env, decl.left, declared, decl.flags == 1)
+            frontCheckBindLetDecl(file, env, decl, declared)
         }
         return
     }
     if decl.kind == AstNUseDecl {
         let alias = frontCheckUseAlias(file, decl)
+        let importedTypes = frontCheckUseImportedTypeNames(file, decl)
         for itemIdx in decl.children {
             let item = astArenaNodeAt(file.arena, itemIdx)
             if item.kind == AstNFnDecl {
                 let mut sig = frontFnSigFromDecl(file, item, "", [])
                 sig.name = "{alias}.{sig.name}"
+                sig = frontCheckQualifyImportedSig(sig, alias, importedTypes)
                 env.fns.push(sig)
                 frontCheckRecordSymbol(env, itemIdx, item, "fn", sig.name, alias, frontCheckFnType(sig.paramTypes, sig.returnType))
             } else if item.kind == AstNStructDecl {
-                frontCheckCollectUseStruct(file, env, alias, itemIdx, item)
+                frontCheckCollectImportedStruct(file, env, itemIdx, item, alias, importedTypes)
+            } else if item.kind == AstNTypeAlias {
+                let generics = frontCheckGenericNames(file, item.children)
+                let name = "{alias}.{item.text}"
+                if frontCheckDeclaredTypeExists(env, name) {
+                    env.errors = env.errors + 1
+                }
+                env.aliases.push(
+                    FrontAliasSig {
+                        name,
+                        typeName: frontCheckQualifyImportedType(frontCheckTypeName(file, item.left), alias, importedTypes),
+                        generics,
+                    },
+                )
+                frontCheckRecordSymbol(env, itemIdx, item, "alias", name, alias, frontCheckAliasTarget(env, name))
             }
         }
     }
 }
 
-fn frontCheckCollectUseStruct(file: AstFile, env: FrontCheckEnv, alias: String, declIdx: Int, decl: AstNode) {
-    let qualified = "{alias}.{decl.text}"
-    env.types.push(FrontTypeSig { name: decl.text, generics: [] })
-    env.types.push(FrontTypeSig { name: qualified, generics: [] })
-    frontCheckRecordSymbol(env, declIdx, decl, "struct", qualified, alias, qualified)
-    for memberIdx in decl.children {
+fn frontCheckCollectImportedStruct(
+    file: AstFile,
+    env: FrontCheckEnv,
+    itemIdx: Int,
+    item: AstNode,
+    alias: String,
+    importedTypes: List<String>,
+) {
+    let generics = frontCheckGenericNames(file, item.children2)
+    let owner = "{alias}.{item.text}"
+    if frontCheckDeclaredTypeExists(env, owner) {
+        env.errors = env.errors + 1
+    }
+    env.types.push(FrontTypeSig { name: owner, generics })
+    frontCheckRecordSymbol(env, itemIdx, item, "struct", owner, alias, frontCheckGenericOwnerType(owner, generics, []))
+    for memberIdx in item.children {
         let member = astArenaNodeAt(file.arena, memberIdx)
         if member.kind == AstNField_ {
+            if frontCheckFieldLookup(env, owner, member.text).name != "" {
+                env.errors = env.errors + 1
+            }
             let field = FrontFieldSig {
-                owner: decl.text,
+                owner,
                 name: member.text,
-                typeName: frontCheckTypeName(file, member.right),
+                typeName: frontCheckQualifyImportedType(frontCheckTypeName(file, member.right), alias, importedTypes),
                 hasDefault: member.left >= 0,
             }
             env.fields.push(field)
-            env.fields.push(
-                FrontFieldSig {
-                    owner: qualified,
-                    name: field.name,
-                    typeName: field.typeName,
-                    hasDefault: field.hasDefault,
-                },
-            )
-            frontCheckRecordSymbol(env, memberIdx, member, "field", member.text, qualified, field.typeName)
+            frontCheckRecordSymbol(env, memberIdx, member, "field", member.text, owner, field.typeName)
+        } else if member.kind == AstNFnDecl {
+            let mut sig = frontFnSigFromDecl(file, member, owner, generics)
+            sig = frontCheckQualifyImportedSig(sig, alias, importedTypes)
+            env.fns.push(sig)
+            frontCheckRecordSymbol(env, memberIdx, member, "fn", member.text, owner, frontCheckFnType(sig.paramTypes, sig.returnType))
         }
     }
+}
+
+fn frontCheckUseAlias(file: AstFile, node: AstNode) -> String {
+    let aliasIdx = frontCheckIntAt(node.children2, 0)
+    if aliasIdx >= 0 {
+        let alias = astArenaNodeAt(file.arena, aliasIdx)
+        if alias.text != "" {
+            return alias.text
+        }
+    }
+    frontCheckLastPathSegment(frontCheckUsePathText(node))
+}
+
+fn frontCheckUsePathText(node: AstNode) -> String {
+    let text = node.text
+    if node.flags != 1 {
+        return text
+    }
+    if strings.HasPrefix(text, "r\"\"\"") && strings.HasSuffix(text, "\"\"\"") {
+        return strings.TrimSuffix(strings.TrimPrefix(text, "r\"\"\""), "\"\"\"")
+    }
+    if strings.HasPrefix(text, "\"\"\"") && strings.HasSuffix(text, "\"\"\"") {
+        return strings.TrimSuffix(strings.TrimPrefix(text, "\"\"\""), "\"\"\"")
+    }
+    if strings.HasPrefix(text, "r\"") && strings.HasSuffix(text, "\"") {
+        return strings.TrimSuffix(strings.TrimPrefix(text, "r\""), "\"")
+    }
+    if strings.HasPrefix(text, "\"") && strings.HasSuffix(text, "\"") {
+        return strings.TrimSuffix(strings.TrimPrefix(text, "\""), "\"")
+    }
+    text
+}
+
+fn frontCheckUseImportedTypeNames(file: AstFile, node: AstNode) -> List<String> {
+    let mut names: List<String> = []
+    for itemIdx in node.children {
+        let item = astArenaNodeAt(file.arena, itemIdx)
+        if item.kind == AstNStructDecl || item.kind == AstNEnumDecl || item.kind == AstNInterfaceDecl || item.kind == AstNTypeAlias {
+            names.push(item.text)
+        }
+    }
+    names
+}
+
+fn frontCheckQualifyImportedSig(sig: FrontFnSig, alias: String, importedTypes: List<String>) -> FrontFnSig {
+    let mut paramTypes: List<String> = []
+    for paramType in sig.paramTypes {
+        paramTypes.push(frontCheckQualifyImportedType(paramType, alias, importedTypes))
+    }
+    let mut bounds: List<FrontTypeSubst> = []
+    for bound in sig.genericBounds {
+        bounds.push(
+            FrontTypeSubst {
+                name: bound.name,
+                typeName: frontCheckQualifyImportedType(bound.typeName, alias, importedTypes),
+            },
+        )
+    }
+    FrontFnSig {
+        name: sig.name,
+        receiverType: sig.receiverType,
+        returnType: frontCheckQualifyImportedType(sig.returnType, alias, importedTypes),
+        paramNames: sig.paramNames,
+        paramTypes,
+        generics: sig.generics,
+        genericBounds: bounds,
+    }
+}
+
+fn frontCheckQualifyImportedType(typeName: String, alias: String, importedTypes: List<String>) -> String {
+    let view = frontCheckParseType(typeName)
+    if view.kind == "tuple" {
+        let mut elems: List<String> = []
+        for elem in view.args {
+            elems.push(frontCheckQualifyImportedType(elem, alias, importedTypes))
+        }
+        return frontCheckTupleType(elems)
+    }
+    if view.kind == "fn" {
+        let mut params: List<String> = []
+        for param in view.params {
+            params.push(frontCheckQualifyImportedType(param, alias, importedTypes))
+        }
+        return frontCheckFnType(params, frontCheckQualifyImportedType(view.ret, alias, importedTypes))
+    }
+    if view.kind == "named" {
+        let mut args: List<String> = []
+        for arg in view.args {
+            args.push(frontCheckQualifyImportedType(arg, alias, importedTypes))
+        }
+        let mut head = view.head
+        if frontCheckStringContains(importedTypes, head) {
+            head = "{alias}.{head}"
+        }
+        return frontCheckNamedType(head, args)
+    }
+    typeName
 }
 
 fn frontFnSigFromDecl(file: AstFile, decl: AstNode, owner: String, ownerGenerics: List<String>) -> FrontFnSig {
@@ -688,8 +811,53 @@ fn frontCheckDecl(file: AstFile, env: FrontCheckEnv, idx: Int) {
         return
     }
     if decl.kind == AstNLet {
-        let _ = frontCheckStmt(file, env, idx)
+        frontCheckLetDecl(file, env, decl)
     }
+}
+
+fn frontCheckLetDecl(file: AstFile, env: FrontCheckEnv, node: AstNode) {
+    let declared = frontCheckTypeName(file, frontCheckFirstChild(node))
+    let valueType = frontCheckExprHint(file, env, node.right, declared)
+    let mut finalType = valueType
+    if declared != "()" && declared != "Invalid" {
+        frontCheckExpectAssignable(env, declared, valueType)
+        finalType = declared
+    }
+    if frontCheckLetDeclName(file, node) == "" {
+        if !(frontCheckPatternIrrefutable(file, node.left)) {
+            env.errors = env.errors + 1
+        }
+        frontCheckBindPattern(file, env, node.left, finalType, node.flags == 1)
+    } else if declared == "()" || declared == "Invalid" {
+        frontCheckBindLetDecl(file, env, node, finalType)
+    }
+}
+
+fn frontCheckBindLetDecl(file: AstFile, env: FrontCheckEnv, node: AstNode, typeName: String) {
+    let name = frontCheckLetDeclName(file, node)
+    if name == "" {
+        frontCheckBindPattern(file, env, node.left, typeName, node.flags == 1)
+        return
+    }
+    let pat = astArenaNodeAt(file.arena, node.left)
+    frontCheckBindNode(env, name, typeName, node.flags == 1, node.left, pat.start, pat.end)
+}
+
+fn frontCheckLetDeclName(file: AstFile, node: AstNode) -> String {
+    if node.left < 0 {
+        return ""
+    }
+    let pat = astArenaNodeAt(file.arena, node.left)
+    if pat.kind == AstNIdent {
+        return pat.text
+    }
+    if pat.kind == AstNPattern {
+        let kind = frontCheckPatternKind(pat)
+        if (kind == "ident" || kind == "variant") && frontCheckIntCount(pat.children) == 0 && pat.left < 0 {
+            return frontCheckPatternName(pat)
+        }
+    }
+    ""
 }
 
 fn frontCheckFnDecl(file: AstFile, parent: FrontCheckEnv, decl: AstNode, owner: String, ownerGenerics: List<String>) {
@@ -4079,15 +4247,4 @@ fn frontCheckRequireMutableReceiver(file: AstFile, env: FrontCheckEnv, callee: A
     if left.kind == AstNIdent && !(frontCheckLookupMutable(env, left.text)) {
         env.errors = env.errors + 1
     }
-}
-
-fn frontCheckUseAlias(file: AstFile, node: AstNode) -> String {
-    let aliasIdx = frontCheckIntAt(node.children2, 0)
-    if aliasIdx >= 0 {
-        let alias = astArenaNodeAt(file.arena, aliasIdx)
-        if alias.text != "" {
-            return alias.text
-        }
-    }
-    frontCheckLastPathSegment(node.text)
 }
