@@ -1,11 +1,13 @@
 package check
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/osty/osty/internal/ast"
+	"github.com/osty/osty/internal/canonical"
 	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/stdlib"
@@ -137,6 +139,44 @@ fn main() {}
 	}
 	if got := chk.LookupSymType(paramSym); got == nil || got.String() != "Int" {
 		t.Fatalf("unused param type = %v, want Int", got)
+	}
+}
+
+func TestNativeBoundaryOverlaysCanonicalSourceSpansBackToOriginalAST(t *testing.T) {
+	src := []byte(`func main() {
+    let xs = [1]
+    let n = len(xs)
+}
+`)
+	file, res := parseResolvedFile(t, src)
+	mainDecl := file.Decls[0].(*ast.FnDecl)
+	letStmt := mainDecl.Body.Stmts[1].(*ast.LetStmt)
+	call := letStmt.Value.(*ast.CallExpr)
+
+	canonicalSrc, _ := canonical.SourceWithMap(src, file)
+	start := bytes.Index(canonicalSrc, []byte("xs.len()"))
+	if start < 0 {
+		t.Fatalf("canonical source = %q, want lowered xs.len()", canonicalSrc)
+	}
+	end := start + len("xs.len()")
+
+	oldFactory := nativeCheckerFactory
+	nativeCheckerFactory = func() (nativeChecker, string) {
+		return fakeNativeChecker{result: nativeCheckResult{
+			Summary: nativeCheckSummary{Assignments: 1, Accepted: 1, Errors: 0},
+			TypedNodes: []nativeCheckedNode{
+				{Kind: "Call", TypeName: "Int", Start: start, End: end},
+			},
+		}}, ""
+	}
+	t.Cleanup(func() { nativeCheckerFactory = oldFactory })
+
+	chk := File(file, res, Opts{Source: canonicalSrc, Stdlib: stdlib.LoadCached()})
+	if len(chk.Diags) != 0 {
+		t.Fatalf("expected no diagnostics, got %v", chk.Diags)
+	}
+	if got := chk.LookupType(call); got == nil || got.String() != "Int" {
+		t.Fatalf("call type = %v, want Int", got)
 	}
 }
 

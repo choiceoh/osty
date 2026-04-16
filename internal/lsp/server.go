@@ -299,6 +299,7 @@ type docAnalysis struct {
 	lines      *lineIndex
 	file       *ast.File
 	provenance *parser.Provenance
+	canonical  []byte
 	resolve    *resolve.Result
 	check      *check.Result
 	// lint is the lint pass output (may be nil if the pipeline
@@ -556,8 +557,10 @@ func substituteFileSource(pkg *resolve.Package, path string, src []byte) bool {
 			continue
 		}
 		parsed := parser.ParseDetailed(src)
+		canonicalSrc, canonicalMap := canonical.SourceWithMap(src, parsed.File)
 		pf.Source = src
-		pf.CanonicalSource = canonical.Source(src, parsed.File)
+		pf.CanonicalSource = canonicalSrc
+		pf.CanonicalMap = canonicalMap
 		pf.File = parsed.File
 		pf.ParseDiags = parsed.Diagnostics
 		pf.ParseProvenance = parsed.Provenance
@@ -597,6 +600,7 @@ func analysisForFileInPackage(
 		lines:      newLineIndex(src),
 		file:       pf.File,
 		provenance: pf.ParseProvenance,
+		canonical:  pf.CanonicalSource,
 		resolve:    fileRes,
 		check:      chk,
 		lint:       lr,
@@ -667,7 +671,8 @@ func diagBelongsToFile(d *diag.Diagnostic, pf *resolve.PackageFile) bool {
 func (s *Server) analyzeSingleFile(src []byte) *docAnalysis {
 	parsed := parser.ParseDetailed(src)
 	res := resolve.File(parsed.File, s.prelude)
-	chk := check.File(parsed.File, res, lspCheckOpts(canonical.Source(src, parsed.File)))
+	canonicalSrc, _ := canonical.SourceWithMap(src, parsed.File)
+	chk := check.File(parsed.File, res, lspCheckOpts(canonicalSrc))
 	lr := lint.File(parsed.File, res, chk)
 	all := make([]*diag.Diagnostic, 0,
 		len(parsed.Diagnostics)+len(res.Diags)+len(chk.Diags)+len(lr.Diags))
@@ -679,6 +684,7 @@ func (s *Server) analyzeSingleFile(src []byte) *docAnalysis {
 		lines:      newLineIndex(src),
 		file:       parsed.File,
 		provenance: parsed.Provenance,
+		canonical:  canonicalSrc,
 		resolve:    res,
 		check:      chk,
 		lint:       lr,
@@ -720,6 +726,7 @@ func (s *Server) analyzeSingleFileViaEngine(uri string, src []byte) *docAnalysis
 		lines:      newLineIndex(src),
 		file:       pr.File,
 		provenance: pr.Provenance,
+		canonical:  pr.CanonicalSource,
 		resolve:    rr,
 		check:      chk,
 		lint:       lr,

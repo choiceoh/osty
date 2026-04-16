@@ -270,10 +270,12 @@ func parseNativeTestEntry(pkg *resolve.Package, tc nativeTestCase) (*ast.File, [
 	}
 	testPkg.Files = append(testPkg.Files, pkg.Files...)
 	runnerFile, runnerDiags := parser.ParseDiagnostics(runner)
+	runnerCanonical, runnerCanonicalMap := canonical.SourceWithMap(runner, runnerFile)
 	testPkg.Files = append(testPkg.Files, &resolve.PackageFile{
 		Path:            runnerPath,
 		Source:          runner,
-		CanonicalSource: canonical.Source(runner, runnerFile),
+		CanonicalSource: runnerCanonical,
+		CanonicalMap:    runnerCanonicalMap,
 		File:            runnerFile,
 		ParseDiags:      runnerDiags,
 	})

@@ -4,6 +4,7 @@ import (
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/parser"
+	"github.com/osty/osty/internal/sourcemap"
 )
 
 // Package is the resolver's view of one Osty package — i.e. one directory
@@ -52,6 +53,10 @@ type PackageFile struct {
 	// the parsed AST after parser-owned normalization/lowering. When empty,
 	// callers should fall back to Source.
 	CanonicalSource []byte
+	// CanonicalMap projects canonical source spans back onto the original source
+	// spans carried by the parsed AST. Nil when the canonical source is a direct
+	// passthrough or no map was produced.
+	CanonicalMap *sourcemap.Map
 	// File is the parsed AST. Never nil, even when Parse reported errors;
 	// best-effort partial trees support multi-error reporting.
 	File *ast.File

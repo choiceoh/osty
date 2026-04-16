@@ -20,92 +20,94 @@ func (p *printer) printFile(f *ast.File) {
 	if f == nil {
 		return
 	}
-	p.lastSrcLine = 0
-
-	firstBodyOffset := 1<<31 - 1
-	if len(f.Decls) > 0 {
-		firstBodyOffset = f.Decls[0].Pos().Offset
-	}
-	if len(f.Stmts) > 0 && f.Stmts[0].Pos().Offset < firstBodyOffset {
-		firstBodyOffset = f.Stmts[0].Pos().Offset
-	}
-
-	var topUses, bodyUses []*ast.UseDecl
-	for _, u := range f.Uses {
-		if u.Pos().Offset < firstBodyOffset {
-			topUses = append(topUses, u)
-		} else {
-			bodyUses = append(bodyUses, u)
-		}
-	}
-
-	// Stable sort so two uses that share a group+key stay in original
-	// relative order (matters only for FFI, where multiple imports
-	// with different bodies can't collide on key anyway).
-	sort.SliceStable(topUses, func(i, j int) bool {
-		gi, gj := useGroupOrder(topUses[i]), useGroupOrder(topUses[j])
-		if gi != gj {
-			return gi < gj
-		}
-		return useSortKey(topUses[i]) < useSortKey(topUses[j])
-	})
-
-	// Inside the reordered top-use block, blank lines are managed
-	// explicitly — between groups only. triviaBefore fires just for
-	// the first use so leading file-header comments attach; later
-	// uses bypass it to prevent source-line gaps from a reordered
-	// sequence injecting blanks in the middle of a group.
-	prevGroup := -1
-	for i, u := range topUses {
-		u := u
-		g := useGroupOrder(u)
-		if i == 0 {
-			p.triviaBefore(u.Pos())
-		} else if g != prevGroup {
-			p.blank()
-		}
-		p.printUseDecl(u)
-		prevGroup = g
-	}
-	if len(topUses) > 0 {
-		// Separator between the reordered use block and the body;
-		// reset lastSrcLine so body blank-line detection runs
-		// against body node positions, not stale use positions.
-		p.blank()
+	p.recordNode("file", spanOfNode(f), func() {
 		p.lastSrcLine = 0
-	}
 
-	// Interleave body uses + other decls + stmts by source offset.
-	type topNode struct {
-		pos  token.Pos
-		end  token.Pos
-		emit func()
-	}
-	nodes := make([]topNode, 0, len(bodyUses)+len(f.Decls)+len(f.Stmts))
-	for _, u := range bodyUses {
-		u := u
-		nodes = append(nodes, topNode{u.Pos(), u.End(), func() { p.printUseDecl(u) }})
-	}
-	for _, d := range f.Decls {
-		d := d
-		nodes = append(nodes, topNode{declLeadLinePos(d), d.End(), func() { p.printDecl(d) }})
-	}
-	for _, s := range f.Stmts {
-		s := s
-		nodes = append(nodes, topNode{s.Pos(), s.End(), func() { p.printStmt(s) }})
-	}
-	sort.SliceStable(nodes, func(i, j int) bool {
-		return nodes[i].pos.Offset < nodes[j].pos.Offset
+		firstBodyOffset := 1<<31 - 1
+		if len(f.Decls) > 0 {
+			firstBodyOffset = f.Decls[0].Pos().Offset
+		}
+		if len(f.Stmts) > 0 && f.Stmts[0].Pos().Offset < firstBodyOffset {
+			firstBodyOffset = f.Stmts[0].Pos().Offset
+		}
+
+		var topUses, bodyUses []*ast.UseDecl
+		for _, u := range f.Uses {
+			if u.Pos().Offset < firstBodyOffset {
+				topUses = append(topUses, u)
+			} else {
+				bodyUses = append(bodyUses, u)
+			}
+		}
+
+		// Stable sort so two uses that share a group+key stay in original
+		// relative order (matters only for FFI, where multiple imports
+		// with different bodies can't collide on key anyway).
+		sort.SliceStable(topUses, func(i, j int) bool {
+			gi, gj := useGroupOrder(topUses[i]), useGroupOrder(topUses[j])
+			if gi != gj {
+				return gi < gj
+			}
+			return useSortKey(topUses[i]) < useSortKey(topUses[j])
+		})
+
+		// Inside the reordered top-use block, blank lines are managed
+		// explicitly — between groups only. triviaBefore fires just for
+		// the first use so leading file-header comments attach; later
+		// uses bypass it to prevent source-line gaps from a reordered
+		// sequence injecting blanks in the middle of a group.
+		prevGroup := -1
+		for i, u := range topUses {
+			u := u
+			g := useGroupOrder(u)
+			if i == 0 {
+				p.triviaBefore(u.Pos())
+			} else if g != prevGroup {
+				p.blank()
+			}
+			p.printUseDecl(u)
+			prevGroup = g
+		}
+		if len(topUses) > 0 {
+			// Separator between the reordered use block and the body;
+			// reset lastSrcLine so body blank-line detection runs
+			// against body node positions, not stale use positions.
+			p.blank()
+			p.lastSrcLine = 0
+		}
+
+		// Interleave body uses + other decls + stmts by source offset.
+		type topNode struct {
+			pos  token.Pos
+			end  token.Pos
+			emit func()
+		}
+		nodes := make([]topNode, 0, len(bodyUses)+len(f.Decls)+len(f.Stmts))
+		for _, u := range bodyUses {
+			u := u
+			nodes = append(nodes, topNode{u.Pos(), u.End(), func() { p.printUseDecl(u) }})
+		}
+		for _, d := range f.Decls {
+			d := d
+			nodes = append(nodes, topNode{declLeadLinePos(d), d.End(), func() { p.printDecl(d) }})
+		}
+		for _, s := range f.Stmts {
+			s := s
+			nodes = append(nodes, topNode{s.Pos(), s.End(), func() { p.printStmt(s) }})
+		}
+		sort.SliceStable(nodes, func(i, j int) bool {
+			return nodes[i].pos.Offset < nodes[j].pos.Offset
+		})
+
+		for _, n := range nodes {
+			p.triviaBefore(n.pos)
+			n.emit()
+			p.markSrcLine(n.end.Line)
+		}
+		if p.pendingNL {
+			p.flushNL()
+		}
 	})
-
-	for _, n := range nodes {
-		p.triviaBefore(n.pos)
-		n.emit()
-		p.markSrcLine(n.end.Line)
-	}
-	if p.pendingNL {
-		p.flushNL()
-	}
 }
 
 // useGroupOrder bins a use decl into the canonical group order:
@@ -362,41 +364,43 @@ func (p *printer) printDecl(d ast.Decl) {
 }
 
 func (p *printer) printUseDecl(u *ast.UseDecl) {
-	p.write("use ")
-	if u.IsGoFFI {
-		p.write("go ")
-		p.write(fmt.Sprintf("%q", u.GoPath))
-	} else if u.IsRuntimeFFI {
-		if u.RawPath != "" {
-			p.write(u.RawPath)
-		} else {
-			p.write(strings.Join(u.Path, "."))
-		}
-	} else {
-		// Prefer RawPath when it contains path separators (preserves the
-		// `github.com/...` style); otherwise join the dotted path.
-		if u.RawPath != "" && strings.ContainsAny(u.RawPath, "/:") {
-			p.write(u.RawPath)
-		} else {
-			p.write(strings.Join(u.Path, "."))
-		}
-	}
-	if u.Alias != "" {
-		p.write(" as ")
-		p.write(u.Alias)
-	}
-	if u.IsFFI() && len(u.GoBody) > 0 {
-		p.printBracedBody(u.Pos().Line, false, func() {
-			for _, d := range u.GoBody {
-				p.triviaBefore(d.Pos())
-				p.printDecl(d)
-				p.markSrcLine(d.End().Line)
+	p.recordNode("decl", spanOfNode(u), func() {
+		p.write("use ")
+		if u.IsGoFFI {
+			p.write("go ")
+			p.write(fmt.Sprintf("%q", u.GoPath))
+		} else if u.IsRuntimeFFI {
+			if u.RawPath != "" {
+				p.write(u.RawPath)
+			} else {
+				p.write(strings.Join(u.Path, "."))
 			}
-		})
-		return
-	}
-	p.trailingCommentAfter(u.End().Line)
-	p.nl()
+		} else {
+			// Prefer RawPath when it contains path separators (preserves the
+			// `github.com/...` style); otherwise join the dotted path.
+			if u.RawPath != "" && strings.ContainsAny(u.RawPath, "/:") {
+				p.write(u.RawPath)
+			} else {
+				p.write(strings.Join(u.Path, "."))
+			}
+		}
+		if u.Alias != "" {
+			p.write(" as ")
+			p.write(u.Alias)
+		}
+		if u.IsFFI() && len(u.GoBody) > 0 {
+			p.printBracedBody(u.Pos().Line, false, func() {
+				for _, d := range u.GoBody {
+					p.triviaBefore(d.Pos())
+					p.printDecl(d)
+					p.markSrcLine(d.End().Line)
+				}
+			})
+			return
+		}
+		p.trailingCommentAfter(u.End().Line)
+		p.nl()
+	})
 }
 
 // printDocLines emits a "///"-prefixed block from a DocComment string.
@@ -441,49 +445,51 @@ func (p *printer) printAnnotation(a *ast.Annotation) {
 }
 
 func (p *printer) printFnDecl(f *ast.FnDecl) {
-	p.printDocAndAnnotations(f.DocComment, f.Annotations)
-	p.writePub(f.Pub)
-	p.write("fn ")
-	p.write(f.Name)
-	p.printGenerics(f.Generics)
-	// Unify receiver + params into a single list so the bracketed
-	// renderer gets one decision point (flat vs multi-line) that
-	// accounts for the whole signature — receiver included.
-	type paramItem struct {
-		isSelf  bool
-		mutSelf bool
-		param   *ast.Param
-	}
-	items := make([]paramItem, 0, len(f.Params)+1)
-	if f.Recv != nil {
-		items = append(items, paramItem{isSelf: true, mutSelf: f.Recv.Mut})
-	}
-	for _, prm := range f.Params {
-		items = append(items, paramItem{param: prm})
-	}
-	// Multi-line decision is driven by the parameter span (receiver
-	// alone never forces multi-line).
-	printBracketedList(p, "(", ")", items, spanMultiline(f.Params), func(it paramItem) {
-		if it.isSelf {
-			if it.mutSelf {
-				p.write("mut self")
-			} else {
-				p.write("self")
-			}
-			return
+	p.recordNode("decl", spanOfNode(f), func() {
+		p.printDocAndAnnotations(f.DocComment, f.Annotations)
+		p.writePub(f.Pub)
+		p.write("fn ")
+		p.write(f.Name)
+		p.printGenerics(f.Generics)
+		// Unify receiver + params into a single list so the bracketed
+		// renderer gets one decision point (flat vs multi-line) that
+		// accounts for the whole signature — receiver included.
+		type paramItem struct {
+			isSelf  bool
+			mutSelf bool
+			param   *ast.Param
 		}
-		p.printParam(it.param)
+		items := make([]paramItem, 0, len(f.Params)+1)
+		if f.Recv != nil {
+			items = append(items, paramItem{isSelf: true, mutSelf: f.Recv.Mut})
+		}
+		for _, prm := range f.Params {
+			items = append(items, paramItem{param: prm})
+		}
+		// Multi-line decision is driven by the parameter span (receiver
+		// alone never forces multi-line).
+		printBracketedList(p, "(", ")", items, spanMultiline(f.Params), func(it paramItem) {
+			if it.isSelf {
+				if it.mutSelf {
+					p.write("mut self")
+				} else {
+					p.write("self")
+				}
+				return
+			}
+			p.printParam(it.param)
+		})
+		if f.ReturnType != nil {
+			p.write(" -> ")
+			p.printType(f.ReturnType)
+		}
+		if f.Body != nil {
+			p.write(" ")
+			p.printBlock(f.Body)
+		}
+		// Body is nil for an interface-declared method without a default.
+		p.nl()
 	})
-	if f.ReturnType != nil {
-		p.write(" -> ")
-		p.printType(f.ReturnType)
-	}
-	if f.Body != nil {
-		p.write(" ")
-		p.printBlock(f.Body)
-	}
-	// Body is nil for an interface-declared method without a default.
-	p.nl()
 }
 
 func (p *printer) printGenerics(gs []*ast.GenericParam) {
@@ -505,38 +511,42 @@ func (p *printer) printGenerics(gs []*ast.GenericParam) {
 }
 
 func (p *printer) printParam(prm *ast.Param) {
-	if prm.Pattern != nil {
-		p.printPattern(prm.Pattern)
-	} else {
-		p.write(prm.Name)
-	}
-	if prm.Type != nil {
-		p.write(": ")
-		p.printType(prm.Type)
-	}
-	if prm.Default != nil {
-		p.write(" = ")
-		p.printExpr(prm.Default)
-	}
+	p.recordNode("param", spanOfNode(prm), func() {
+		if prm.Pattern != nil {
+			p.printPattern(prm.Pattern)
+		} else {
+			p.write(prm.Name)
+		}
+		if prm.Type != nil {
+			p.write(": ")
+			p.printType(prm.Type)
+		}
+		if prm.Default != nil {
+			p.write(" = ")
+			p.printExpr(prm.Default)
+		}
+	})
 }
 
 func (p *printer) printStructDecl(s *ast.StructDecl) {
-	p.printDocAndAnnotations(s.DocComment, s.Annotations)
-	p.writePub(s.Pub)
-	p.write("struct ")
-	p.write(s.Name)
-	p.printGenerics(s.Generics)
-	p.printBracedBody(s.Pos().Line, len(s.Fields) == 0 && len(s.Methods) == 0, func() {
-		for _, fld := range s.Fields {
-			p.triviaBefore(leadPos(fld.Pos(), fld.Annotations, ""))
-			p.printField(fld)
-			p.markSrcLine(fld.End().Line)
-		}
-		for _, m := range s.Methods {
-			p.triviaBefore(leadPos(m.Pos(), m.Annotations, m.DocComment))
-			p.printFnDecl(m)
-			p.markSrcLine(m.End().Line)
-		}
+	p.recordNode("decl", spanOfNode(s), func() {
+		p.printDocAndAnnotations(s.DocComment, s.Annotations)
+		p.writePub(s.Pub)
+		p.write("struct ")
+		p.write(s.Name)
+		p.printGenerics(s.Generics)
+		p.printBracedBody(s.Pos().Line, len(s.Fields) == 0 && len(s.Methods) == 0, func() {
+			for _, fld := range s.Fields {
+				p.triviaBefore(leadPos(fld.Pos(), fld.Annotations, ""))
+				p.printField(fld)
+				p.markSrcLine(fld.End().Line)
+			}
+			for _, m := range s.Methods {
+				p.triviaBefore(leadPos(m.Pos(), m.Annotations, m.DocComment))
+				p.printFnDecl(m)
+				p.markSrcLine(m.End().Line)
+			}
+		})
 	})
 }
 
@@ -597,110 +607,128 @@ func declLeadLinePos(d ast.Decl) token.Pos {
 }
 
 func (p *printer) printField(f *ast.Field) {
-	p.printDocAndAnnotations("", f.Annotations)
-	p.writePub(f.Pub)
-	p.write(f.Name)
-	p.write(": ")
-	p.printType(f.Type)
-	if f.Default != nil {
-		p.write(" = ")
-		p.printExpr(f.Default)
-	}
-	p.write(",")
-	p.trailingCommentAfter(f.End().Line)
-	p.nl()
+	p.recordNode("field", spanOfNode(f), func() {
+		p.printDocAndAnnotations("", f.Annotations)
+		p.writePub(f.Pub)
+		p.write(f.Name)
+		p.write(": ")
+		p.printType(f.Type)
+		if f.Default != nil {
+			p.write(" = ")
+			p.printExpr(f.Default)
+		}
+		p.write(",")
+		p.trailingCommentAfter(f.End().Line)
+		p.nl()
+	})
 }
 
 func (p *printer) printEnumDecl(e *ast.EnumDecl) {
-	p.printDocAndAnnotations(e.DocComment, e.Annotations)
-	p.writePub(e.Pub)
-	p.write("enum ")
-	p.write(e.Name)
-	p.printGenerics(e.Generics)
-	p.printBracedBody(e.Pos().Line, len(e.Variants) == 0 && len(e.Methods) == 0, func() {
-		for _, v := range e.Variants {
-			p.triviaBefore(leadPos(v.Pos(), v.Annotations, v.DocComment))
-			p.printVariant(v)
-			p.markSrcLine(v.End().Line)
-		}
-		for _, m := range e.Methods {
-			p.triviaBefore(leadPos(m.Pos(), m.Annotations, m.DocComment))
-			p.printFnDecl(m)
-			p.markSrcLine(m.End().Line)
-		}
+	p.recordNode("decl", spanOfNode(e), func() {
+		p.printDocAndAnnotations(e.DocComment, e.Annotations)
+		p.writePub(e.Pub)
+		p.write("enum ")
+		p.write(e.Name)
+		p.printGenerics(e.Generics)
+		p.printBracedBody(e.Pos().Line, len(e.Variants) == 0 && len(e.Methods) == 0, func() {
+			for _, v := range e.Variants {
+				p.triviaBefore(leadPos(v.Pos(), v.Annotations, v.DocComment))
+				p.printVariant(v)
+				p.markSrcLine(v.End().Line)
+			}
+			for _, m := range e.Methods {
+				p.triviaBefore(leadPos(m.Pos(), m.Annotations, m.DocComment))
+				p.printFnDecl(m)
+				p.markSrcLine(m.End().Line)
+			}
+		})
 	})
 }
 
 func (p *printer) printVariant(v *ast.Variant) {
-	p.printDocAndAnnotations(v.DocComment, v.Annotations)
-	p.write(v.Name)
-	if len(v.Fields) > 0 {
-		p.write("(")
-		for i, t := range v.Fields {
-			if i > 0 {
-				p.write(", ")
+	p.recordNode("variant", spanOfNode(v), func() {
+		p.printDocAndAnnotations(v.DocComment, v.Annotations)
+		p.write(v.Name)
+		if len(v.Fields) > 0 {
+			p.write("(")
+			for i, t := range v.Fields {
+				if i > 0 {
+					p.write(", ")
+				}
+				p.printType(t)
 			}
-			p.printType(t)
+			p.write(")")
 		}
-		p.write(")")
-	}
-	p.write(",")
-	p.trailingCommentAfter(v.End().Line)
-	p.nl()
+		p.write(",")
+		p.trailingCommentAfter(v.End().Line)
+		p.nl()
+	})
 }
 
 func (p *printer) printInterfaceDecl(i *ast.InterfaceDecl) {
-	p.printDocAndAnnotations(i.DocComment, i.Annotations)
-	p.writePub(i.Pub)
-	p.write("interface ")
-	p.write(i.Name)
-	p.printGenerics(i.Generics)
-	p.printBracedBody(i.Pos().Line, len(i.Extends) == 0 && len(i.Methods) == 0, func() {
-		for _, ext := range i.Extends {
-			p.triviaBefore(ext.Pos())
-			p.printType(ext)
-			p.nl()
-			p.markSrcLine(ext.End().Line)
-		}
-		for _, m := range i.Methods {
-			p.triviaBefore(leadPos(m.Pos(), m.Annotations, m.DocComment))
-			p.printFnDecl(m)
-			p.markSrcLine(m.End().Line)
-		}
+	p.recordNode("decl", spanOfNode(i), func() {
+		p.printDocAndAnnotations(i.DocComment, i.Annotations)
+		p.writePub(i.Pub)
+		p.write("interface ")
+		p.write(i.Name)
+		p.printGenerics(i.Generics)
+		p.printBracedBody(i.Pos().Line, len(i.Extends) == 0 && len(i.Methods) == 0, func() {
+			for _, ext := range i.Extends {
+				p.triviaBefore(ext.Pos())
+				p.printType(ext)
+				p.nl()
+				p.markSrcLine(ext.End().Line)
+			}
+			for _, m := range i.Methods {
+				p.triviaBefore(leadPos(m.Pos(), m.Annotations, m.DocComment))
+				p.printFnDecl(m)
+				p.markSrcLine(m.End().Line)
+			}
+		})
 	})
 }
 
 func (p *printer) printTypeAliasDecl(t *ast.TypeAliasDecl) {
-	p.printDocAndAnnotations(t.DocComment, t.Annotations)
-	p.writePub(t.Pub)
-	p.write("type ")
-	p.write(t.Name)
-	p.printGenerics(t.Generics)
-	p.write(" = ")
-	p.printType(t.Target)
-	p.nl()
+	p.recordNode("decl", spanOfNode(t), func() {
+		p.printDocAndAnnotations(t.DocComment, t.Annotations)
+		p.writePub(t.Pub)
+		p.write("type ")
+		p.write(t.Name)
+		p.printGenerics(t.Generics)
+		p.write(" = ")
+		p.printType(t.Target)
+		p.nl()
+	})
 }
 
 func (p *printer) printLetDecl(l *ast.LetDecl) {
-	p.printDocAndAnnotations(l.DocComment, l.Annotations)
-	p.writePub(l.Pub)
-	p.write("let ")
-	if l.Mut {
-		p.write("mut ")
-	}
-	p.write(l.Name)
-	if l.Type != nil {
-		p.write(": ")
-		p.printType(l.Type)
-	}
-	if l.Value != nil {
-		p.write(" = ")
-		p.printExpr(l.Value)
-	}
-	p.nl()
+	p.recordNode("decl", spanOfNode(l), func() {
+		p.printDocAndAnnotations(l.DocComment, l.Annotations)
+		p.writePub(l.Pub)
+		p.write("let ")
+		if l.Mut {
+			p.write("mut ")
+		}
+		p.write(l.Name)
+		if l.Type != nil {
+			p.write(": ")
+			p.printType(l.Type)
+		}
+		if l.Value != nil {
+			p.write(" = ")
+			p.printExpr(l.Value)
+		}
+		p.nl()
+	})
 }
 
 func (p *printer) printType(t ast.Type) {
+	p.recordNode("type", spanOfNode(t), func() {
+		p.printTypeInner(t)
+	})
+}
+
+func (p *printer) printTypeInner(t ast.Type) {
 	switch n := t.(type) {
 	case *ast.NamedType:
 		// Spec §2.5 / §13.3: formatter rewrites Option<T> into T?.
@@ -756,6 +784,12 @@ func (p *printer) printType(t ast.Type) {
 }
 
 func (p *printer) printStmt(s ast.Stmt) {
+	p.recordNode("stmt", spanOfNode(s), func() {
+		p.printStmtInner(s)
+	})
+}
+
+func (p *printer) printStmtInner(s ast.Stmt) {
 	switch n := s.(type) {
 	case *ast.Block:
 		p.printBlock(n)
@@ -825,21 +859,23 @@ func (p *printer) printStmt(s ast.Stmt) {
 }
 
 func (p *printer) printBlock(b *ast.Block) {
-	if b == nil || len(b.Stmts) == 0 {
-		p.write("{}")
-		return
-	}
-	p.write("{")
-	p.nl()
-	p.indent()
-	p.lastSrcLine = b.Pos().Line
-	for _, s := range b.Stmts {
-		p.triviaBefore(s.Pos())
-		p.printStmt(s)
-		p.markSrcLine(s.End().Line)
-	}
-	p.dedent()
-	p.write("}")
+	p.recordNode("block", spanOfNode(b), func() {
+		if b == nil || len(b.Stmts) == 0 {
+			p.write("{}")
+			return
+		}
+		p.write("{")
+		p.nl()
+		p.indent()
+		p.lastSrcLine = b.Pos().Line
+		for _, s := range b.Stmts {
+			p.triviaBefore(s.Pos())
+			p.printStmt(s)
+			p.markSrcLine(s.End().Line)
+		}
+		p.dedent()
+		p.write("}")
+	})
 }
 
 func (p *printer) printForStmt(n *ast.ForStmt) {
@@ -864,6 +900,12 @@ func (p *printer) printForStmt(n *ast.ForStmt) {
 }
 
 func (p *printer) printExpr(e ast.Expr) {
+	p.recordNode("expr", spanOfNode(e), func() {
+		p.printExprInner(e)
+	})
+}
+
+func (p *printer) printExprInner(e ast.Expr) {
 	switch n := e.(type) {
 	case *ast.Ident:
 		p.write(n.Name)
@@ -1281,6 +1323,12 @@ func (p *printer) printClosure(c *ast.ClosureExpr) {
 }
 
 func (p *printer) printPattern(pat ast.Pattern) {
+	p.recordNode("pattern", spanOfNode(pat), func() {
+		p.printPatternInner(pat)
+	})
+}
+
+func (p *printer) printPatternInner(pat ast.Pattern) {
 	switch n := pat.(type) {
 	case *ast.WildcardPat:
 		p.write("_")

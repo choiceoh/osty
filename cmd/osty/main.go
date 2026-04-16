@@ -1781,10 +1781,12 @@ func loadSelectedGenFilesWithTransform(sourcePath string, files []string, transf
 			src = transform(path, src)
 		}
 		parsed := parser.ParseDetailed(src)
+		canonicalSrc, canonicalMap := canonical.SourceWithMap(src, parsed.File)
 		pf := &resolve.PackageFile{
 			Path:            path,
 			Source:          src,
-			CanonicalSource: canonical.Source(src, parsed.File),
+			CanonicalSource: canonicalSrc,
+			CanonicalMap:    canonicalMap,
 			File:            parsed.File,
 			ParseDiags:      parsed.Diagnostics,
 			ParseProvenance: parsed.Provenance,

@@ -10,6 +10,7 @@ import (
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/lexer"
 	"github.com/osty/osty/internal/parser"
+	"github.com/osty/osty/internal/sourcemap"
 	"github.com/osty/osty/internal/token"
 )
 
@@ -52,7 +53,7 @@ func Source(src []byte) ([]byte, []*diag.Diagnostic, error) {
 			return nil, diags, fmt.Errorf("cannot format file with parse errors")
 		}
 	}
-	p := newPrinter(l.Comments())
+	p := newPrinter(l.Comments(), nil)
 	// Formatted output is within ~10% of input size for well-written
 	// code; preallocating avoids ~log2(N) buffer reallocations on large
 	// files.
@@ -64,12 +65,22 @@ func Source(src []byte) ([]byte, []*diag.Diagnostic, error) {
 // File prints an already-parsed AST using the canonical Osty printer without
 // reparsing or preserving source comments/trivia.
 func File(file *ast.File) []byte {
+	out, _ := FileWithMap(file)
+	return out
+}
+
+// FileWithMap prints an already-parsed AST and returns a coarse source map
+// from canonical output spans back to the original source spans carried on the
+// AST.
+func FileWithMap(file *ast.File) ([]byte, *sourcemap.Map) {
 	if file == nil {
-		return nil
+		return nil, nil
 	}
-	p := newPrinter(nil)
+	builder := sourcemap.NewBuilder()
+	p := newPrinter(nil, builder)
 	p.printFile(file)
-	return p.bytes()
+	out := p.bytes()
+	return out, builder.Build(out)
 }
 
 // printer is the mutable state carried through one formatting pass.
@@ -93,12 +104,17 @@ type printer struct {
 	// lastSrcLine is the highest original-source line already accounted
 	// for. Blank-line preservation uses a 2-line gap against this.
 	lastSrcLine int
+
+	// maps records coarse node-level output spans so canonical output can be
+	// projected back onto original source spans.
+	maps *sourcemap.Builder
 }
 
-func newPrinter(comments []token.Comment) *printer {
+func newPrinter(comments []token.Comment, maps *sourcemap.Builder) *printer {
 	return &printer{
 		comments:    comments,
 		atLineStart: true,
+		maps:        maps,
 	}
 }
 
@@ -122,6 +138,7 @@ type snapshot struct {
 	atLineStart bool
 	commentIdx  int
 	lastSrcLine int
+	mapLen      int
 }
 
 func (p *printer) snapshot() snapshot {
@@ -132,6 +149,7 @@ func (p *printer) snapshot() snapshot {
 		atLineStart: p.atLineStart,
 		commentIdx:  p.commentIdx,
 		lastSrcLine: p.lastSrcLine,
+		mapLen:      p.maps.Snapshot(),
 	}
 }
 
@@ -142,6 +160,7 @@ func (p *printer) restore(s snapshot) {
 	p.atLineStart = s.atLineStart
 	p.commentIdx = s.commentIdx
 	p.lastSrcLine = s.lastSrcLine
+	p.maps.Restore(s.mapLen)
 }
 
 // currentCol returns the rune offset of the cursor within the current
@@ -177,6 +196,41 @@ func (p *printer) write(s string) {
 		p.emitIndent()
 	}
 	p.buf.WriteString(s)
+}
+
+func (p *printer) currentOffset() int {
+	return p.buf.Len()
+}
+
+func (p *printer) materializeNodeStart() {
+	if p.pendingNL {
+		p.flushNL()
+	}
+	if p.atLineStart {
+		p.emitIndent()
+	}
+}
+
+func (p *printer) recordNode(kind string, span diag.Span, emit func()) {
+	if p == nil {
+		return
+	}
+	if p.maps == nil || (span.Start.Line == 0 && span.Start.Offset == 0 && span.End.Offset == 0) {
+		emit()
+		return
+	}
+	p.materializeNodeStart()
+	start := p.currentOffset()
+	emit()
+	end := p.currentOffset()
+	p.maps.Add(kind, start, end, span)
+}
+
+func spanOfNode(n ast.Node) diag.Span {
+	if n == nil {
+		return diag.Span{}
+	}
+	return diag.Span{Start: n.Pos(), End: n.End()}
 }
 
 // indentString returns the indent prefix for the given level, sliced
