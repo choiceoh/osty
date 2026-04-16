@@ -1,0 +1,740 @@
+use go "strings" as llvmStrings {
+    fn Join(elems: List<String>, sep: String) -> String
+}
+
+/// LlvmValue is the self-hosted scalar value handle used by the native backend
+/// prototype. Pointer values represent mutable local slots and are loaded when
+/// used as expressions.
+pub struct LlvmValue {
+    pub typ: String,
+    pub name: String,
+    pub pointer: Bool,
+}
+
+pub struct LlvmParam {
+    pub name: String,
+    pub typ: String,
+}
+
+pub struct LlvmBinding {
+    pub name: String,
+    pub value: LlvmValue,
+}
+
+pub struct LlvmLookup {
+    pub found: Bool,
+    pub value: LlvmValue,
+}
+
+pub struct LlvmEmitter {
+    pub temp: Int,
+    pub label: Int,
+    pub body: List<String>,
+    pub locals: List<LlvmBinding>,
+}
+
+pub struct LlvmIfLabels {
+    pub thenLabel: String,
+    pub elseLabel: String,
+    pub endLabel: String,
+}
+
+pub struct LlvmRangeLoop {
+    pub condLabel: String,
+    pub bodyLabel: String,
+    pub endLabel: String,
+    pub iterPtr: String,
+    pub current: String,
+}
+
+pub struct LlvmSmokeExecutableCase {
+    pub name: String,
+    pub fixture: String,
+    pub stdout: String,
+}
+
+pub struct LlvmUnsupportedDiagnostic {
+    pub code: String,
+    pub kind: String,
+    pub message: String,
+    pub hint: String,
+}
+
+pub fn llvmEmitter() -> LlvmEmitter {
+    LlvmEmitter {
+        temp: 0,
+        label: 0,
+        body: [],
+        locals: [],
+    }
+}
+
+pub fn llvmI64(name: String) -> LlvmValue {
+    LlvmValue { typ: "i64", name, pointer: false }
+}
+
+pub fn llvmI1(name: String) -> LlvmValue {
+    LlvmValue { typ: "i1", name, pointer: false }
+}
+
+pub fn llvmIntLiteral(value: Int) -> LlvmValue {
+    llvmI64("{value}")
+}
+
+pub fn llvmParam(name: String, typ: String) -> LlvmParam {
+    LlvmParam { name, typ }
+}
+
+pub fn llvmBind(emitter: LlvmEmitter, name: String, value: LlvmValue) {
+    emitter.locals.push(LlvmBinding { name, value })
+}
+
+pub fn llvmLookup(emitter: LlvmEmitter, name: String) -> LlvmLookup {
+    let mut out = LlvmLookup { found: false, value: llvmI64("0") }
+    for binding in emitter.locals {
+        if binding.name == name {
+            out = LlvmLookup { found: true, value: binding.value }
+        }
+    }
+    out
+}
+
+pub fn llvmIdent(emitter: LlvmEmitter, name: String) -> LlvmValue {
+    let lookup = llvmLookup(emitter, name)
+    if !(lookup.found) {
+        return llvmI64("0")
+    }
+    if lookup.value.pointer {
+        return llvmLoad(emitter, lookup.value)
+    }
+    lookup.value
+}
+
+pub fn llvmLoad(emitter: LlvmEmitter, slot: LlvmValue) -> LlvmValue {
+    let tmp = llvmNextTemp(emitter)
+    emitter.body.push("  {tmp} = load {slot.typ}, ptr {slot.name}")
+    LlvmValue { typ: slot.typ, name: tmp, pointer: false }
+}
+
+pub fn llvmMutableLetSlot(
+    emitter: LlvmEmitter,
+    name: String,
+    initial: LlvmValue,
+) -> LlvmValue {
+    let ptr = llvmNextTemp(emitter)
+    emitter.body.push("  {ptr} = alloca {initial.typ}")
+    emitter.body.push("  store {initial.typ} {initial.name}, ptr {ptr}")
+    let slot = LlvmValue { typ: initial.typ, name: ptr, pointer: true }
+    llvmBind(emitter, name, slot)
+    slot
+}
+
+pub fn llvmMutableLet(emitter: LlvmEmitter, name: String, initial: LlvmValue) {
+    let _slot = llvmMutableLetSlot(emitter, name, initial)
+}
+
+pub fn llvmStore(emitter: LlvmEmitter, slot: LlvmValue, value: LlvmValue) {
+    emitter.body.push("  store {value.typ} {value.name}, ptr {slot.name}")
+}
+
+pub fn llvmAssign(emitter: LlvmEmitter, name: String, value: LlvmValue) -> Bool {
+    let lookup = llvmLookup(emitter, name)
+    if !(lookup.found) || !(lookup.value.pointer) || lookup.value.typ != value.typ {
+        return false
+    }
+    llvmStore(emitter, lookup.value, value)
+    true
+}
+
+pub fn llvmImmutableLet(emitter: LlvmEmitter, name: String, value: LlvmValue) {
+    llvmBind(
+        emitter,
+        name,
+        value,
+    )
+}
+
+pub fn llvmBinaryI64(
+    emitter: LlvmEmitter,
+    op: String,
+    left: LlvmValue,
+    right: LlvmValue,
+) -> LlvmValue {
+    let tmp = llvmNextTemp(emitter)
+    emitter.body.push("  {tmp} = {op} i64 {left.name}, {right.name}")
+    llvmI64(tmp)
+}
+
+pub fn llvmCompare(
+    emitter: LlvmEmitter,
+    pred: String,
+    left: LlvmValue,
+    right: LlvmValue,
+) -> LlvmValue {
+    let tmp = llvmNextTemp(emitter)
+    emitter.body.push("  {tmp} = icmp {pred} {left.typ} {left.name}, {right.name}")
+    llvmI1(tmp)
+}
+
+pub fn llvmNotI1(emitter: LlvmEmitter, value: LlvmValue) -> LlvmValue {
+    let tmp = llvmNextTemp(emitter)
+    emitter.body.push("  {tmp} = xor i1 {value.name}, true")
+    llvmI1(tmp)
+}
+
+pub fn llvmLogicalI1(
+    emitter: LlvmEmitter,
+    op: String,
+    left: LlvmValue,
+    right: LlvmValue,
+) -> LlvmValue {
+    let tmp = llvmNextTemp(emitter)
+    emitter.body.push("  {tmp} = {op} i1 {left.name}, {right.name}")
+    llvmI1(tmp)
+}
+
+pub fn llvmCall(
+    emitter: LlvmEmitter,
+    ret: String,
+    name: String,
+    args: List<LlvmValue>,
+) -> LlvmValue {
+    let tmp = llvmNextTemp(emitter)
+    emitter.body.push("  {tmp} = call {ret} @{name}({llvmCallArgs(args)})")
+    LlvmValue { typ: ret, name: tmp, pointer: false }
+}
+
+pub fn llvmPrintlnI64(emitter: LlvmEmitter, value: LlvmValue) {
+    let tmp = llvmNextTemp(emitter)
+    emitter.body.push("  {tmp} = call i32 (ptr, ...) @printf(ptr @.fmt_i64, i64 {value.name})")
+}
+
+pub fn llvmIfStart(emitter: LlvmEmitter, cond: LlvmValue) -> LlvmIfLabels {
+    let labels = LlvmIfLabels {
+        thenLabel: llvmNextLabel(emitter, "if.then"),
+        elseLabel: llvmNextLabel(emitter, "if.else"),
+        endLabel: llvmNextLabel(emitter, "if.end"),
+    }
+    emitter.body.push("  br i1 {cond.name}, label %{labels.thenLabel}, label %{labels.elseLabel}")
+    emitter.body.push("{labels.thenLabel}:")
+    labels
+}
+
+pub fn llvmIfElse(emitter: LlvmEmitter, labels: LlvmIfLabels) {
+    emitter.body.push("  br label %{labels.endLabel}")
+    emitter.body.push("{labels.elseLabel}:")
+}
+
+pub fn llvmIfEnd(emitter: LlvmEmitter, labels: LlvmIfLabels) {
+    emitter.body.push("  br label %{labels.endLabel}")
+    emitter.body.push("{labels.endLabel}:")
+}
+
+pub fn llvmIfExprStart(emitter: LlvmEmitter, cond: LlvmValue) -> LlvmIfLabels {
+    let labels = LlvmIfLabels {
+        thenLabel: llvmNextLabel(emitter, "if.expr.then"),
+        elseLabel: llvmNextLabel(emitter, "if.expr.else"),
+        endLabel: llvmNextLabel(emitter, "if.expr.end"),
+    }
+    emitter.body.push("  br i1 {cond.name}, label %{labels.thenLabel}, label %{labels.elseLabel}")
+    emitter.body.push("{labels.thenLabel}:")
+    labels
+}
+
+pub fn llvmIfExprElse(emitter: LlvmEmitter, labels: LlvmIfLabels) {
+    emitter.body.push("  br label %{labels.endLabel}")
+    emitter.body.push("{labels.elseLabel}:")
+}
+
+pub fn llvmIfExprEnd(
+    emitter: LlvmEmitter,
+    typ: String,
+    thenValue: LlvmValue,
+    elseValue: LlvmValue,
+    labels: LlvmIfLabels,
+) -> LlvmValue {
+    emitter.body.push("  br label %{labels.endLabel}")
+    emitter.body.push("{labels.endLabel}:")
+    let tmp = llvmNextTemp(emitter)
+    emitter.body.push(
+        "  {tmp} = phi {typ} [ {thenValue.name}, %{labels.thenLabel} ], [ {elseValue.name}, %{labels.elseLabel} ]",
+    )
+    LlvmValue { typ, name: tmp, pointer: false }
+}
+
+pub fn llvmInclusiveRangeStart(
+    emitter: LlvmEmitter,
+    iterName: String,
+    start: LlvmValue,
+    stop: LlvmValue,
+) -> LlvmRangeLoop {
+    llvmRangeStart(emitter, iterName, start, stop, true)
+}
+
+pub fn llvmRangeStart(
+    emitter: LlvmEmitter,
+    iterName: String,
+    start: LlvmValue,
+    stop: LlvmValue,
+    inclusive: Bool,
+) -> LlvmRangeLoop {
+    let iterPtr = llvmNextTemp(emitter)
+    emitter.body.push("  {iterPtr} = alloca i64")
+    emitter.body.push("  store i64 {start.name}, ptr {iterPtr}")
+
+    let loop = LlvmRangeLoop {
+        condLabel: llvmNextLabel(emitter, "for.cond"),
+        bodyLabel: llvmNextLabel(emitter, "for.body"),
+        endLabel: llvmNextLabel(emitter, "for.end"),
+        iterPtr,
+        current: "",
+    }
+    emitter.body.push("  br label %{loop.condLabel}")
+    emitter.body.push("{loop.condLabel}:")
+
+    let current = llvmNextTemp(emitter)
+    emitter.body.push("  {current} = load i64, ptr {iterPtr}")
+    let cmp = llvmNextTemp(emitter)
+    let mut pred = "slt"
+    if inclusive {
+        pred = "sle"
+    }
+    emitter.body.push("  {cmp} = icmp {pred} i64 {current}, {stop.name}")
+    emitter.body.push("  br i1 {cmp}, label %{loop.bodyLabel}, label %{loop.endLabel}")
+    emitter.body.push("{loop.bodyLabel}:")
+    llvmBind(emitter, iterName, llvmI64(current))
+
+    LlvmRangeLoop {
+        condLabel: loop.condLabel,
+        bodyLabel: loop.bodyLabel,
+        endLabel: loop.endLabel,
+        iterPtr: loop.iterPtr,
+        current,
+    }
+}
+
+pub fn llvmRangeEnd(emitter: LlvmEmitter, loop: LlvmRangeLoop) {
+    let next = llvmNextTemp(emitter)
+    emitter.body.push("  {next} = add i64 {loop.current}, 1")
+    emitter.body.push("  store i64 {next}, ptr {loop.iterPtr}")
+    emitter.body.push("  br label %{loop.condLabel}")
+    emitter.body.push("{loop.endLabel}:")
+}
+
+pub fn llvmReturn(emitter: LlvmEmitter, value: LlvmValue) {
+    emitter.body.push("  ret {value.typ} {value.name}")
+}
+
+pub fn llvmReturnI32Zero(emitter: LlvmEmitter) {
+    emitter.body.push("  ret i32 0")
+}
+
+pub fn llvmRenderModule(sourcePath: String, target: String, definitions: List<String>) -> String {
+    let mut lines = [
+        "; Code generated by osty LLVM backend. DO NOT EDIT.",
+        "; Osty: {sourcePath}",
+        "source_filename = \"{sourcePath}\"",
+    ]
+    if target != "" {
+        lines.push("target triple = \"{target}\"")
+    }
+    lines.push("")
+    lines.push("@.fmt_i64 = private unnamed_addr constant [5 x i8] c\"%ld\\0A\\00\"")
+    lines.push("declare i32 @printf(ptr, ...)")
+    let mut firstDefinition = true
+    for definition in definitions {
+        if firstDefinition {
+            lines.push("")
+            firstDefinition = false
+        }
+        lines.push(definition)
+    }
+    llvmStrings.Join(lines, "\n")
+}
+
+pub fn llvmRenderSkeleton(
+    packageName: String,
+    sourcePath: String,
+    emit: String,
+    target: String,
+    unsupported: String,
+) -> String {
+    let mut pkg = packageName
+    if pkg == "" {
+        pkg = "main"
+    }
+    let mut source = sourcePath
+    if source == "" {
+        source = "<unknown>"
+    }
+
+    let mut lines = [
+        "; Osty LLVM backend skeleton",
+        "; package: {pkg}",
+        "; source: {source}",
+        "; emit: {emit}",
+    ]
+    if target != "" {
+        lines.push("; target: {target}")
+    }
+    if unsupported != "" {
+        lines.push("; unsupported: {unsupported}")
+    }
+    lines.push("; code generation is not implemented yet")
+    lines.push("")
+    lines.push("source_filename = \"{source}\"")
+    if target != "" {
+        lines.push("target triple = \"{target}\"")
+    }
+    llvmStrings.Join([llvmStrings.Join(lines, "\n"), "\n"], "")
+}
+
+pub fn llvmRenderFunction(
+    ret: String,
+    name: String,
+    params: List<LlvmParam>,
+    body: List<String>,
+) -> String {
+    let mut lines = ["define {ret} @{name}({llvmParams(params)}) \{", "entry:"]
+    for line in body {
+        lines.push(line)
+    }
+    lines.push("\}")
+    llvmStrings.Join([llvmStrings.Join(lines, "\n"), "\n"], "")
+}
+
+pub fn llvmNeedsObjectArtifact(emit: String) -> Bool {
+    emit == "object" || emit == "binary"
+}
+
+pub fn llvmNeedsBinaryArtifact(emit: String) -> Bool {
+    emit == "binary"
+}
+
+pub fn llvmClangCompileObjectArgs(
+    target: String,
+    irPath: String,
+    objectPath: String,
+) -> List<String> {
+    let mut args: List<String> = []
+    if target != "" {
+        args.push("-target")
+        args.push(target)
+    }
+    args.push("-c")
+    args.push(irPath)
+    args.push("-o")
+    args.push(objectPath)
+    args
+}
+
+pub fn llvmClangLinkBinaryArgs(
+    target: String,
+    objectPath: String,
+    binaryPath: String,
+) -> List<String> {
+    let mut args: List<String> = []
+    if target != "" {
+        args.push("-target")
+        args.push(target)
+    }
+    args.push(objectPath)
+    args.push("-o")
+    args.push(binaryPath)
+    args
+}
+
+pub fn llvmMissingClangMessage() -> String {
+    "llvm backend: clang not found on PATH; install clang or use --emit=llvm-ir"
+}
+
+pub fn llvmMissingBinaryArtifactMessage() -> String {
+    "llvm backend: missing binary artifact path"
+}
+
+pub fn llvmClangFailureMessage(action: String, command: String, output: String) -> String {
+    "llvm backend: clang {action} failed\ncommand: {command}\n{output}"
+}
+
+pub fn llvmUnsupportedBackendErrorMessage() -> String {
+    "llvm backend: code generation is not implemented yet"
+}
+
+pub fn llvmUnsupportedDiagnostic(kind: String, detail: String) -> LlvmUnsupportedDiagnostic {
+    if kind == "go-ffi" {
+        let mut target = detail
+        if target == "" {
+            target = "<unknown>"
+        }
+        return LlvmUnsupportedDiagnostic {
+            code: "LLVM001",
+            kind: "go-only",
+            message: "use go \"{target}\" is only supported by the Go backend",
+            hint: "use --backend=go or replace it with a native/runtime binding before using --backend=llvm",
+        }
+    }
+
+    if kind == "source-layout" {
+        return llvmUnsupportedDiagnosticWith(
+            "LLVM010",
+            kind,
+            detail,
+            "reshape the file around the current LLVM subset: script statements or a simple main function",
+        )
+    }
+    if kind == "type-system" {
+        return llvmUnsupportedDiagnosticWith(
+            "LLVM011",
+            kind,
+            detail,
+            "use Int or Bool values until the LLVM runtime type surface grows",
+        )
+    }
+    if kind == "statement" {
+        return llvmUnsupportedDiagnosticWith(
+            "LLVM012",
+            kind,
+            detail,
+            "reduce the statement to let, assignment, if, range-for, return, or println",
+        )
+    }
+    if kind == "expression" {
+        return llvmUnsupportedDiagnosticWith(
+            "LLVM013",
+            kind,
+            detail,
+            "reduce the expression to Int, Bool, arithmetic, comparison, call, or value-if forms",
+        )
+    }
+    if kind == "control-flow" {
+        return llvmUnsupportedDiagnosticWith(
+            "LLVM014",
+            kind,
+            detail,
+            "use plain if/else or closed Int range loops for the current LLVM backend",
+        )
+    }
+    if kind == "call" {
+        return llvmUnsupportedDiagnosticWith(
+            "LLVM015",
+            kind,
+            detail,
+            "call an Osty function with positional Int/Bool arguments or use println as a statement",
+        )
+    }
+    if kind == "name" {
+        return llvmUnsupportedDiagnosticWith(
+            "LLVM016",
+            kind,
+            detail,
+            "use simple ASCII identifiers that the LLVM bridge can map directly",
+        )
+    }
+    if kind == "function-signature" {
+        return llvmUnsupportedDiagnosticWith(
+            "LLVM017",
+            kind,
+            detail,
+            "use non-generic functions with identifier parameters and Int/Bool types",
+        )
+    }
+
+    let mut reason = detail
+    if reason == "" {
+        reason = "source shape is not supported by the current LLVM backend"
+    }
+    LlvmUnsupportedDiagnostic {
+        code: "LLVM000",
+        kind: "unsupported-source",
+        message: reason,
+        hint: "reduce the program to the LLVM smoke subset or keep using --backend=go for this source",
+    }
+}
+
+pub fn llvmUnsupportedDiagnosticWith(
+    code: String,
+    kind: String,
+    detail: String,
+    hint: String,
+) -> LlvmUnsupportedDiagnostic {
+    let mut reason = detail
+    if reason == "" {
+        reason = "source shape is not supported by the current LLVM backend"
+    }
+    LlvmUnsupportedDiagnostic {
+        code,
+        kind,
+        message: reason,
+        hint,
+    }
+}
+
+pub fn llvmUnsupportedSummary(diag: LlvmUnsupportedDiagnostic) -> String {
+    "{diag.code} {diag.kind}: {diag.message}; hint: {diag.hint}"
+}
+
+pub fn llvmSmokeExecutableCorpus() -> List<LlvmSmokeExecutableCase> {
+    [
+        LlvmSmokeExecutableCase {
+            name: "minimal",
+            fixture: "minimal_print.osty",
+            stdout: "42\n",
+        },
+        LlvmSmokeExecutableCase {
+            name: "scalar",
+            fixture: "scalar_arithmetic.osty",
+            stdout: "42\n",
+        },
+        LlvmSmokeExecutableCase {
+            name: "control",
+            fixture: "control_flow.osty",
+            stdout: "15\n",
+        },
+        LlvmSmokeExecutableCase {
+            name: "booleans",
+            fixture: "booleans.osty",
+            stdout: "7\n",
+        },
+    ]
+}
+
+pub fn llvmSmokeMinimalPrintIR(sourcePath: String) -> String {
+    let emitter = llvmEmitter()
+    let value = llvmBinaryI64(emitter, "add", llvmIntLiteral(40), llvmIntLiteral(2))
+    llvmPrintlnI64(emitter, value)
+    llvmReturnI32Zero(emitter)
+    llvmRenderModule(
+        sourcePath,
+        "",
+        [
+            llvmRenderFunction("i32", "main", [], emitter.body),
+        ],
+    )
+}
+
+pub fn llvmSmokeScalarArithmeticIR(sourcePath: String) -> String {
+    let add = llvmEmitter()
+    llvmBind(add, "a", llvmI64("%a"))
+    llvmBind(add, "b", llvmI64("%b"))
+    let sum = llvmBinaryI64(add, "add", llvmIdent(add, "a"), llvmIdent(add, "b"))
+    llvmReturn(add, sum)
+
+    let main = llvmEmitter()
+    let value = llvmCall(main, "i64", "add", [llvmIntLiteral(40), llvmIntLiteral(2)])
+    llvmImmutableLet(main, "value", value)
+    let cond = llvmCompare(main, "eq", llvmIdent(main, "value"), llvmIntLiteral(42))
+    let labels = llvmIfStart(main, cond)
+    llvmPrintlnI64(main, llvmIdent(main, "value"))
+    llvmIfElse(main, labels)
+    llvmPrintlnI64(main, llvmIntLiteral(0))
+    llvmIfEnd(main, labels)
+    llvmReturnI32Zero(main)
+
+    llvmRenderModule(
+        sourcePath,
+        "",
+        [
+            llvmRenderFunction(
+                "i64",
+                "add",
+                [
+                    llvmParam("a", "i64"),
+                    llvmParam("b", "i64"),
+                ],
+                add.body,
+            ),
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+pub fn llvmSmokeControlFlowIR(sourcePath: String) -> String {
+    let sumTo = llvmEmitter()
+    llvmBind(sumTo, "n", llvmI64("%n"))
+    llvmMutableLet(sumTo, "total", llvmIntLiteral(0))
+    let loop = llvmInclusiveRangeStart(sumTo, "i", llvmIntLiteral(1), llvmIdent(sumTo, "n"))
+    let nextTotal = llvmBinaryI64(sumTo, "add", llvmIdent(sumTo, "total"), llvmIdent(sumTo, "i"))
+    let _ = llvmAssign(sumTo, "total", nextTotal)
+    llvmRangeEnd(sumTo, loop)
+    llvmReturn(sumTo, llvmIdent(sumTo, "total"))
+
+    let main = llvmEmitter()
+    let value = llvmCall(main, "i64", "sumTo", [llvmIntLiteral(5)])
+    llvmPrintlnI64(main, value)
+    llvmReturnI32Zero(main)
+
+    llvmRenderModule(
+        sourcePath,
+        "",
+        [
+            llvmRenderFunction("i64", "sumTo", [llvmParam("n", "i64")], sumTo.body),
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+pub fn llvmSmokeBooleansIR(sourcePath: String) -> String {
+    let choose = llvmEmitter()
+    llvmBind(choose, "a", llvmI64("%a"))
+    llvmBind(choose, "b", llvmI64("%b"))
+    let lt = llvmCompare(choose, "slt", llvmIdent(choose, "a"), llvmIdent(choose, "b"))
+    let eqZero = llvmCompare(choose, "eq", llvmIdent(choose, "a"), llvmIntLiteral(0))
+    let nonZero = llvmNotI1(choose, eqZero)
+    let cond = llvmLogicalI1(choose, "and", lt, nonZero)
+    let labels = llvmIfExprStart(choose, cond)
+    let thenValue = llvmBinaryI64(choose, "sub", llvmIdent(choose, "b"), llvmIdent(choose, "a"))
+    llvmIfExprElse(choose, labels)
+    let elseValue = llvmBinaryI64(choose, "add", llvmIdent(choose, "a"), llvmIdent(choose, "b"))
+    let result = llvmIfExprEnd(choose, "i64", thenValue, elseValue, labels)
+    llvmReturn(choose, result)
+
+    let main = llvmEmitter()
+    let value = llvmCall(main, "i64", "choose", [llvmIntLiteral(3), llvmIntLiteral(10)])
+    llvmPrintlnI64(main, value)
+    llvmReturnI32Zero(main)
+
+    llvmRenderModule(
+        sourcePath,
+        "",
+        [
+            llvmRenderFunction(
+                "i64",
+                "choose",
+                [
+                    llvmParam("a", "i64"),
+                    llvmParam("b", "i64"),
+                ],
+                choose.body,
+            ),
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+fn llvmCallArgs(args: List<LlvmValue>) -> String {
+    let mut parts: List<String> = []
+    for arg in args {
+        parts.push("{arg.typ} {arg.name}")
+    }
+    llvmStrings.Join(parts, ", ")
+}
+
+fn llvmParams(params: List<LlvmParam>) -> String {
+    let mut parts: List<String> = []
+    for param in params {
+        parts.push("{param.typ} %{param.name}")
+    }
+    llvmStrings.Join(parts, ", ")
+}
+
+fn llvmNextTemp(emitter: LlvmEmitter) -> String {
+    let name = "%t{emitter.temp}"
+    emitter.temp = emitter.temp + 1
+    name
+}
+
+fn llvmNextLabel(emitter: LlvmEmitter, prefix: String) -> String {
+    let name = "{prefix}{emitter.label}"
+    emitter.label = emitter.label + 1
+    name
+}

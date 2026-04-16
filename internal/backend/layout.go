@@ -44,7 +44,7 @@ func (l Layout) CachePath(n Name) string {
 // LegacyCachePath returns the current Go-only fingerprint path. It exists so
 // the migration can read or retire old cache files deliberately.
 func (l Layout) LegacyCachePath() string {
-	return profile.CachePath(l.Root, l.Profile, l.Target)
+	return profile.LegacyCachePath(l.Root, l.Profile, l.Target)
 }
 
 // Artifacts is the conventional set of paths a backend may write. Not every

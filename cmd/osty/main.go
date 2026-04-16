@@ -34,6 +34,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -43,10 +44,10 @@ import (
 	"strings"
 
 	"github.com/osty/osty/internal/ast"
+	"github.com/osty/osty/internal/backend"
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/format"
-	"github.com/osty/osty/internal/gen"
 	"github.com/osty/osty/internal/lexer"
 	"github.com/osty/osty/internal/lint"
 	"github.com/osty/osty/internal/lsp"
@@ -1119,7 +1120,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "       osty cache [ls|clean|info] (inspect / prune the build cache)")
 	fmt.Fprintln(os.Stderr, "       osty lsp                  (language server on stdio)")
 	fmt.Fprintln(os.Stderr, "       osty explain [CODE]       (describe a diagnostic code; no arg lists every code)")
-	fmt.Fprintln(os.Stderr, "       osty pipeline FILE|DIR    (run every front-end phase; per-stage timing)")
+	fmt.Fprintln(os.Stderr, "       osty pipeline FILE|DIR    (run every front-end phase; per-stage timing; --gen supports --backend)")
 	fmt.Fprintln(os.Stderr, "flags:")
 	fmt.Fprintln(os.Stderr, "  --no-color         disable ANSI escapes")
 	fmt.Fprintln(os.Stderr, "  --color            force ANSI escapes")
@@ -1329,7 +1330,7 @@ func runGen(args []string, flags cliFlags) {
 	fs.StringVar(&backendName, "backend", defaultBackendName(), "code generation backend (go or llvm)")
 	fs.StringVar(&emitName, "emit", "", "artifact mode (go or llvm-ir; default follows backend)")
 	_ = fs.Parse(args)
-	_, _ = resolveBackendAndEmitFlags("gen", backendName, emitName)
+	backendID, emitMode := resolveBackendAndEmitFlags("gen", backendName, emitName)
 	if fs.NArg() != 1 {
 		fs.Usage()
 		os.Exit(2)
@@ -1354,21 +1355,86 @@ func runGen(args []string, flags cliFlags) {
 	}
 
 	absPath, _ := filepath.Abs(path)
-	goSrc, gerr := gen.GenerateMapped(pkgName, file, res, chk, absPath)
-	// goSrc may still contain useful partial output; emit a warning
-	// but also write the source so the user can inspect it.
-	reportTranspileWarning("osty gen", absPath, outPath, gerr)
+	out, result, emitErr := emitGenArtifact(backendID, emitMode, pkgName, absPath, file, res, chk)
+	if out == nil && emitErr != nil {
+		exitBackendEmitError("gen", result, emitErr)
+	}
+	if emitErr == nil {
+		reportTranspileWarning("osty gen", absPath, outPath, firstBackendWarning(result))
+	}
 
 	if outPath != "" {
-		if err := os.WriteFile(outPath, goSrc, 0o644); err != nil {
+		if err := os.WriteFile(outPath, out, 0o644); err != nil {
 			fmt.Fprintf(os.Stderr, "osty gen: %v\n", err)
 			os.Exit(1)
 		}
-		return
-	}
-	if _, err := os.Stdout.Write(goSrc); err != nil {
+	} else if _, err := os.Stdout.Write(out); err != nil {
 		fmt.Fprintf(os.Stderr, "osty gen: %v\n", err)
 		os.Exit(1)
+	}
+	if emitErr != nil {
+		adjustGenResultForUserOutput(result, backendID, outPath)
+		exitBackendEmitError("gen", result, emitErr)
+	}
+}
+
+func emitGenArtifact(name backend.Name, mode backend.EmitMode, pkgName, sourcePath string, file *ast.File, res *resolve.Result, chk *check.Result) ([]byte, *backend.Result, error) {
+	b := backendFromCLI("gen", name)
+	tmpRoot, err := os.MkdirTemp("", "osty-gen-*")
+	if err != nil {
+		return nil, nil, err
+	}
+	defer os.RemoveAll(tmpRoot)
+
+	result, emitErr := b.Emit(context.Background(), backend.Request{
+		Layout: backend.Layout{
+			Root:    tmpRoot,
+			Profile: "gen",
+		},
+		Emit: mode,
+		Entry: backend.Entry{
+			PackageName: pkgName,
+			SourcePath:  sourcePath,
+			File:        file,
+			Resolve:     res,
+			Check:       chk,
+		},
+	})
+	if result == nil {
+		return nil, nil, emitErr
+	}
+	artifact := result.Artifacts.SourcePath()
+	if artifact == "" {
+		if emitErr != nil {
+			return nil, result, emitErr
+		}
+		return nil, result, fmt.Errorf("backend %q did not produce a source artifact", name)
+	}
+	data, readErr := os.ReadFile(artifact)
+	if readErr != nil {
+		if emitErr != nil {
+			return nil, result, emitErr
+		}
+		return nil, result, readErr
+	}
+	return data, result, emitErr
+}
+
+func adjustGenResultForUserOutput(result *backend.Result, name backend.Name, outPath string) {
+	if result == nil {
+		return
+	}
+	result.Artifacts.RuntimeDir = ""
+	if outPath == "" {
+		result.Artifacts.GoSource = ""
+		result.Artifacts.LLVMIR = ""
+		return
+	}
+	switch name {
+	case backend.NameGo:
+		result.Artifacts.GoSource = outPath
+	case backend.NameLLVM:
+		result.Artifacts.LLVMIR = outPath
 	}
 }
 

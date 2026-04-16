@@ -10,17 +10,19 @@
 package pipeline
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/osty/osty/internal/ast"
+	"github.com/osty/osty/internal/backend"
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/diag"
-	"github.com/osty/osty/internal/gen"
 	"github.com/osty/osty/internal/lexer"
 	"github.com/osty/osty/internal/lint"
 	"github.com/osty/osty/internal/parser"
@@ -135,15 +137,23 @@ type Config struct {
 	// returned Result includes a per-declaration timing table.
 	PerDecl bool
 
-	// RunGen runs the Go transpiler as a sixth pipeline phase. The
-	// returned GenBytes are the (possibly partial) Go source the
-	// transpiler emitted; GenError holds any fatal generator error.
+	// RunGen runs the selected backend as a sixth pipeline phase. The
+	// returned GenBytes are the (possibly partial) source artifact the
+	// backend emitted; GenError holds any fatal backend error.
 	RunGen bool
 
 	// GenPackageName is the Go package clause used when RunGen is set.
 	// Single-file mode defaults to "main"; package/workspace mode derives
 	// a valid Go identifier from the Osty package name when this is empty.
 	GenPackageName string
+
+	// GenBackend and GenEmit select the backend used by the optional gen
+	// pipeline phase. The zero value preserves the historical Go source stage.
+	GenBackend backend.Name
+	GenEmit    backend.EmitMode
+
+	// GenSourcePath is used for generated source anchors in single-file mode.
+	GenSourcePath string
 }
 
 func genPackageName(cfgName, fallback string) string {
@@ -207,6 +217,93 @@ var goKeywords = map[string]bool{
 	"import":      true,
 	"return":      true,
 	"var":         true,
+}
+
+func configuredGenBackend(cfg Config) backend.Name {
+	if cfg.GenBackend == "" {
+		return backend.NameGo
+	}
+	return cfg.GenBackend
+}
+
+func configuredGenEmit(cfg Config, name backend.Name) backend.EmitMode {
+	if cfg.GenEmit != "" {
+		return cfg.GenEmit
+	}
+	if name == backend.NameLLVM {
+		return backend.EmitLLVMIR
+	}
+	return backend.EmitGoSource
+}
+
+func genArtifactLabel(name backend.Name, mode backend.EmitMode) string {
+	if name == backend.NameLLVM || mode == backend.EmitLLVMIR {
+		return "LLVM IR"
+	}
+	return "Go"
+}
+
+func genHeader(name backend.Name, path string) string {
+	if name == backend.NameLLVM {
+		return fmt.Sprintf("\n; ---- %s ----\n", path)
+	}
+	return fmt.Sprintf("\n// ---- %s ----\n", path)
+}
+
+func emitConfiguredGen(cfg Config, pkgName string, file *ast.File, res *resolve.Result, chk *check.Result, sourcePath string) ([]byte, error) {
+	name := configuredGenBackend(cfg)
+	mode := configuredGenEmit(cfg, name)
+	b, err := backend.New(name)
+	if err != nil {
+		return nil, err
+	}
+	if sourcePath == "" {
+		sourcePath = "<pipeline>"
+	}
+	tmpRoot, err := os.MkdirTemp("", "osty-pipeline-gen-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(tmpRoot)
+
+	result, emitErr := b.Emit(context.Background(), backend.Request{
+		Layout: backend.Layout{
+			Root:    tmpRoot,
+			Profile: "pipeline",
+		},
+		Emit: mode,
+		Entry: backend.Entry{
+			PackageName: pkgName,
+			SourcePath:  sourcePath,
+			File:        file,
+			Resolve:     res,
+			Check:       chk,
+		},
+	})
+	if result == nil {
+		return nil, emitErr
+	}
+	artifact := result.Artifacts.SourcePath()
+	if artifact == "" {
+		if emitErr != nil {
+			return nil, emitErr
+		}
+		return nil, fmt.Errorf("backend %q did not produce a source artifact", name)
+	}
+	out, readErr := os.ReadFile(artifact)
+	if readErr != nil {
+		if emitErr != nil {
+			return nil, emitErr
+		}
+		return nil, readErr
+	}
+	if emitErr != nil {
+		return out, emitErr
+	}
+	if len(result.Warnings) > 0 {
+		return out, result.Warnings[0]
+	}
+	return out, nil
 }
 
 // Run executes lex → parse → resolve → check → lint over src with
@@ -352,14 +449,17 @@ func RunWithConfig(src []byte, stream io.Writer, cfg Config) Result {
 	if cfg.RunGen {
 		t0 = time.Now()
 		pkg := genPackageName(cfg.GenPackageName, "main")
-		out, err := gen.Generate(pkg, file, res, chk)
+		name := configuredGenBackend(cfg)
+		mode := configuredGenEmit(cfg, name)
+		out, err := emitConfiguredGen(cfg, pkg, file, res, chk, cfg.GenSourcePath)
 		r.GenBytes = out
 		r.GenError = err
 		genErr := 0
-		summary := fmt.Sprintf("%d bytes Go", len(out))
+		label := genArtifactLabel(name, mode)
+		summary := fmt.Sprintf("%d bytes %s", len(out), label)
 		if err != nil {
 			genErr = 1
-			summary = fmt.Sprintf("%d bytes Go (error: %v)", len(out), err)
+			summary = fmt.Sprintf("%d bytes %s (error: %v)", len(out), label, err)
 		}
 		emit(Stage{
 			Name:     "gen",
@@ -518,6 +618,8 @@ func RunPackage(dir string, stream io.Writer, cfg Config) (Result, error) {
 	if cfg.RunGen {
 		t0 = time.Now()
 		pkgName := genPackageName(cfg.GenPackageName, pkg.Name)
+		name := configuredGenBackend(cfg)
+		mode := configuredGenEmit(cfg, name)
 		var genBuf []byte
 		var firstErr error
 		genErrs := 0
@@ -530,9 +632,8 @@ func RunPackage(dir string, stream io.Writer, cfg Config) (Result, error) {
 				TypeRefs:  pf.TypeRefs,
 				FileScope: pf.FileScope,
 			}
-			out, err := gen.Generate(pkgName, pf.File, fileRes, chk)
-			header := fmt.Sprintf("\n// ---- %s ----\n", pf.Path)
-			genBuf = append(genBuf, []byte(header)...)
+			out, err := emitConfiguredGen(cfg, pkgName, pf.File, fileRes, chk, pf.Path)
+			genBuf = append(genBuf, []byte(genHeader(name, pf.Path))...)
 			genBuf = append(genBuf, out...)
 			if err != nil {
 				genErrs++
@@ -543,10 +644,11 @@ func RunPackage(dir string, stream io.Writer, cfg Config) (Result, error) {
 		}
 		r.GenBytes = genBuf
 		r.GenError = firstErr
-		summary := fmt.Sprintf("%d bytes Go (across %d files)", len(genBuf), len(pkg.Files))
+		label := genArtifactLabel(name, mode)
+		summary := fmt.Sprintf("%d bytes %s (across %d files)", len(genBuf), label, len(pkg.Files))
 		if firstErr != nil {
-			summary = fmt.Sprintf("%d bytes Go, %d file error(s); first: %v",
-				len(genBuf), genErrs, firstErr)
+			summary = fmt.Sprintf("%d bytes %s, %d file error(s); first: %v",
+				len(genBuf), label, genErrs, firstErr)
 		}
 		emit(Stage{
 			Name:     "gen",
@@ -748,6 +850,8 @@ func RunWorkspace(dir string, stream io.Writer, cfg Config) (Result, error) {
 	// --- gen (workspace-wide aggregation) ---
 	if cfg.RunGen {
 		t0 = time.Now()
+		name := configuredGenBackend(cfg)
+		mode := configuredGenEmit(cfg, name)
 		var genBuf []byte
 		var firstErr error
 		genErrs := 0
@@ -768,9 +872,8 @@ func RunWorkspace(dir string, stream io.Writer, cfg Config) (Result, error) {
 					TypeRefs:  pf.TypeRefs,
 					FileScope: pf.FileScope,
 				}
-				out, err := gen.Generate(pkgName, pf.File, fileRes, cr)
-				header := fmt.Sprintf("\n// ---- %s ----\n", pf.Path)
-				genBuf = append(genBuf, []byte(header)...)
+				out, err := emitConfiguredGen(cfg, pkgName, pf.File, fileRes, cr, pf.Path)
+				genBuf = append(genBuf, []byte(genHeader(name, pf.Path))...)
 				genBuf = append(genBuf, out...)
 				if err != nil {
 					genErrs++
@@ -782,10 +885,11 @@ func RunWorkspace(dir string, stream io.Writer, cfg Config) (Result, error) {
 		}
 		r.GenBytes = genBuf
 		r.GenError = firstErr
-		summary := fmt.Sprintf("%d bytes Go (across %d packages)", len(genBuf), len(pkgPaths))
+		label := genArtifactLabel(name, mode)
+		summary := fmt.Sprintf("%d bytes %s (across %d packages)", len(genBuf), label, len(pkgPaths))
 		if firstErr != nil {
-			summary = fmt.Sprintf("%d bytes Go, %d file error(s); first: %v",
-				len(genBuf), genErrs, firstErr)
+			summary = fmt.Sprintf("%d bytes %s, %d file error(s); first: %v",
+				len(genBuf), label, genErrs, firstErr)
 		}
 		emit(Stage{
 			Name:     "gen",

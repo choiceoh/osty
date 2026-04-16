@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/osty/osty/internal/backend"
@@ -62,7 +63,7 @@ func runRun(args []string, cliF cliFlags) {
 	var pf profileFlags
 	pf.register(fs)
 	_ = fs.Parse(args)
-	_, emitMode := resolveBackendAndEmitFlags("run", backendName, emitName)
+	backendID, emitMode := resolveBackendAndEmitFlags("run", backendName, emitName)
 	runArgs := fs.Args()
 
 	runDir, err := os.Getwd()
@@ -179,14 +180,22 @@ func runRun(args []string, cliF cliFlags) {
 		chk = &check.Result{}
 	}
 
-	// Step 4: transpile to Go. Per-profile/target/backend
+	// Step 4: emit the selected backend. Per-profile/target/backend
 	// subdirectories keep debug / release / cross-built artifacts from
 	// clobbering each other.
 	triple := ""
 	if resolved.Target != nil {
 		triple = resolved.Target.Triple
 	}
-	goResult, err := backend.GoBackend{}.Emit(context.Background(), backend.Request{
+	binName := ""
+	if backendID == backend.NameLLVM {
+		binName = binaryName(m)
+		if runtime.GOOS == "windows" {
+			binName += ".exe"
+		}
+	}
+	selectedBackend := backendFromCLI("run", backendID)
+	emitResult, err := selectedBackend.Emit(context.Background(), backend.Request{
 		Layout: backend.Layout{
 			Root:    root,
 			Profile: resolved.Profile.Name,
@@ -200,16 +209,20 @@ func runRun(args []string, cliF cliFlags) {
 			Resolve:     res,
 			Check:       chk,
 		},
-		Features: resolved.Features,
+		BinaryName: binName,
+		Features:   resolved.Features,
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "osty run: %v\n", err)
-		os.Exit(1)
+		exitBackendEmitError("run", emitResult, err)
+	}
+	if backendID != backend.NameGo {
+		runLLVMBinary(emitResult.Artifacts.Binary, runArgs, runDir)
+		return
 	}
 	// Gen returns warnings for unsupported lowering shapes; we still
 	// try to run the output because the clean portion may compile.
-	goPath := goResult.Artifacts.GoSource
-	reportTranspileWarning("osty run", entryAbs, goPath, firstBackendWarning(goResult))
+	goPath := emitResult.Artifacts.GoSource
+	reportTranspileWarning("osty run", entryAbs, goPath, firstBackendWarning(emitResult))
 
 	// Step 5: go run. Profile-derived flags (e.g. `-gcflags=-N -l`
 	// for debug, `-ldflags=-s -w` for release) precede the source
@@ -246,6 +259,30 @@ func runRun(args []string, cliF cliFlags) {
 			os.Exit(exitErr.ExitCode())
 		}
 		fmt.Fprintf(os.Stderr, "osty run: exec go: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func runLLVMBinary(binPath string, args []string, dir string) {
+	if binPath == "" {
+		fmt.Fprintln(os.Stderr, "osty run: llvm backend did not produce a binary")
+		os.Exit(1)
+	}
+	absBin, err := filepath.Abs(binPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "osty run: %v\n", err)
+		os.Exit(1)
+	}
+	cmd := exec.Command(absBin, args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Dir = dir
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			os.Exit(exitErr.ExitCode())
+		}
+		fmt.Fprintf(os.Stderr, "osty run: exec llvm binary: %v\n", err)
 		os.Exit(1)
 	}
 }

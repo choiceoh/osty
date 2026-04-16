@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/osty/osty/internal/ast"
+	"github.com/osty/osty/internal/backend"
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/manifest"
@@ -79,7 +80,11 @@ func runTest(args []string, flags cliFlags) {
 	var pf profileFlags
 	pf.register(fs)
 	_ = fs.Parse(args)
-	_, _ = resolveBackendAndEmitFlags("test", backendName, emitName)
+	backendID, _ := resolveBackendAndEmitFlags("test", backendName, emitName)
+	if backendID != backend.NameGo {
+		fmt.Fprintf(os.Stderr, "osty test: backend %q test harness is not implemented yet\n", backendID)
+		os.Exit(2)
+	}
 	positional := fs.Args()
 
 	// Split positional args into path targets (existing on disk) and
