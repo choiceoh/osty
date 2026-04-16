@@ -377,6 +377,14 @@ pub fn zonkList(env: CheckEnv, solver: Solver, xs: List<Int>) -> List<Int> {
     out
 }
 
+/// checkGenericBoundSatisfied asks whether the zonked `concreteTy`
+/// implements the interface bound `ifaceTy`.
+pub fn checkGenericBoundSatisfied(env: CheckEnv, solver: Solver, concreteTy: Int, ifaceTy: Int) -> Bool {
+    let concrete = zonk(env, solver, concreteTy)
+    let iface = zonk(env, solver, ifaceTy)
+    checkTypeSatisfiesInterface(env, concrete, iface)
+}
+
 fn solveIntLen(xs: List<Int>) -> Int {
     let mut n = 0
     for x in xs {

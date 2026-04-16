@@ -64,6 +64,7 @@ pub struct CheckAliasSig {
 pub struct CheckTypeSig {
     pub name: String,
     pub generics: List<String>,
+    pub genericBounds: List<CheckGenericBound>,
     pub kind: String,           // "struct" / "enum" / "interface"
 }
 
@@ -296,6 +297,13 @@ pub fn checkLookupMethod(env: CheckEnv, owner: String, name: String) -> CheckFnS
     if direct.name != "" {
         return direct
     }
+    for ifaceTy in checkGenericBoundsFor(env, owner) {
+        let ifaceHead = tyHeadAt(env.tys, checkResolveAliasDeep(env, ifaceTy))
+        let found = checkLookupMethod(env, ifaceHead, name)
+        if found.name != "" {
+            return found
+        }
+    }
     // Walk extends for interface inheritance.
     for ext in env.interfaceExtends {
         if ext.owner == owner {
@@ -427,6 +435,16 @@ pub fn checkLookupGenericBound(env: CheckEnv, tyParam: String) -> Int {
         }
     }
     found
+}
+
+pub fn checkGenericBoundsFor(env: CheckEnv, tyParam: String) -> List<Int> {
+    let mut out: List<Int> = []
+    for b in env.genericBounds {
+        if b.tyParam == tyParam {
+            out.push(b.iface)
+        }
+    }
+    out
 }
 
 pub fn checkClearGenericBoundsAfter(env: CheckEnv, mark: Int) {
@@ -637,13 +655,24 @@ pub fn checkRecordInstantiation(env: CheckEnv, nodeIdx: Int, callee: String, typ
 
 pub fn checkExpectAssignable(env: CheckEnv, expected: Int, got: Int, start: Int, end: Int) -> Bool {
     env.assignments = env.assignments + 1
-    if checkIsAssignable(env, expected, got) {
+    let expectedResolved = checkResolveAliasDeep(env, expected)
+    let gotResolved = checkResolveAliasDeep(env, got)
+    if checkIsAssignable(env, expectedResolved, gotResolved) {
         env.accepted = env.accepted + 1
         return true
     }
+    if tyKindAt(env.tys, expectedResolved) == TkNamed && checkIsInterface(env, tyHeadAt(env.tys, expectedResolved)) {
+        env.diagnostics.push(diagInterfaceNotSatisfied(
+            tyToString(env.tys, gotResolved),
+            tyToString(env.tys, expectedResolved),
+            start,
+            end,
+        ))
+        return false
+    }
     env.diagnostics.push(diagMismatch(
-        tyToString(env.tys, checkResolveAliasDeep(env, expected)),
-        tyToString(env.tys, checkResolveAliasDeep(env, got)),
+        tyToString(env.tys, expectedResolved),
+        tyToString(env.tys, gotResolved),
         start,
         end,
     ))
@@ -742,13 +771,92 @@ pub fn checkIsAssignable(env: CheckEnv, dst: Int, src: Int) -> Bool {
     if dk == TkOptional && sk == TkOptional {
         return checkIsAssignable(env, tyInnerAt(env.tys, d), tyInnerAt(env.tys, s))
     }
-    // Interface satisfaction is resolved in Phase 7 once `solve.osty`
-    // lands; until then any interface destination accepts via the
-    // generic-bound escape hatch.
     if dk == TkNamed && checkIsInterface(env, tyHeadAt(env.tys, d)) {
+        return checkTypeSatisfiesInterface(env, s, d)
+    }
+    false
+}
+
+pub fn checkTypeSatisfiesInterface(env: CheckEnv, concrete: Int, iface: Int) -> Bool {
+    let concreteResolved = checkResolveAliasDeep(env, concrete)
+    let ifaceResolved = checkResolveAliasDeep(env, iface)
+    if tyIsErr(env.tys, concreteResolved) || tyIsErr(env.tys, ifaceResolved) {
+        return true
+    }
+    if tyEq(env.tys, concreteResolved, ifaceResolved) {
+        return true
+    }
+    if tyKindAt(env.tys, ifaceResolved) != TkNamed {
+        return false
+    }
+    let ifaceHead = tyHeadAt(env.tys, ifaceResolved)
+    if !(checkIsInterface(env, ifaceHead)) {
+        return false
+    }
+    if tyKindAt(env.tys, concreteResolved) == TkNamed {
+        let concreteHead = tyHeadAt(env.tys, concreteResolved)
+        for boundTy in checkGenericBoundsFor(env, concreteHead) {
+            if checkTypeSatisfiesInterface(env, boundTy, ifaceResolved) {
+                return true
+            }
+        }
+        let required = checkInterfaceMethodSet(env, ifaceHead)
+        for req in required {
+            let found = checkLookupMethod(env, concreteHead, req.name)
+            if found.name == "" {
+                return false
+            }
+            let wantTy = checkConcreteMethodTy(env, req, ifaceResolved)
+            let gotTy = checkConcreteMethodTy(env, found, concreteResolved)
+            if !(checkIsAssignable(env, wantTy, gotTy)) {
+                return false
+            }
+        }
         return true
     }
     false
+}
+
+fn checkInterfaceMethodSet(env: CheckEnv, owner: String) -> List<CheckFnSig> {
+    let mut out: List<CheckFnSig> = []
+    let mut seen: List<String> = []
+    checkCollectInterfaceMethods(env, owner, out, seen)
+    out
+}
+
+fn checkCollectInterfaceMethods(env: CheckEnv, owner: String, out: List<CheckFnSig>, seen: List<String>) {
+    for sig in env.fns {
+        if sig.owner == owner && !(checkStringListContainsLocal(seen, sig.name)) {
+            out.push(sig)
+            seen.push(sig.name)
+        }
+    }
+    for extTy in checkInterfaceExtendsList(env, owner) {
+        let extHead = tyHeadAt(env.tys, checkResolveAliasDeep(env, extTy))
+        if extHead != "" {
+            checkCollectInterfaceMethods(env, extHead, out, seen)
+        }
+    }
+}
+
+fn checkConcreteMethodTy(env: CheckEnv, sig: CheckFnSig, ownerTy: Int) -> Int {
+    let ownerResolved = checkResolveAliasDeep(env, ownerTy)
+    let ownerHead = tyHeadAt(env.tys, ownerResolved)
+    let ownerSig = checkLookupType(env, ownerHead)
+    let ownerArgs = tyArgsAt(env.tys, ownerResolved)
+    let mut params: List<Int> = []
+    let ret = if checkStringListLen(ownerSig.generics) == checkIntListLen(ownerArgs) {
+        for p in sig.paramTys {
+            params.push(checkSubstituteTy(env, p, ownerSig.generics, ownerArgs))
+        }
+        checkSubstituteTy(env, sig.retTy, ownerSig.generics, ownerArgs)
+    } else {
+        for p in sig.paramTys {
+            params.push(p)
+        }
+        sig.retTy
+    }
+    tyFn(env.tys, params, ret)
 }
 
 // ---------------------------------------------------------------------
@@ -784,6 +892,15 @@ fn checkIndexOfString(xs: List<String>, needle: String) -> Int {
     -1
 }
 
+fn checkStringListContainsLocal(xs: List<String>, needle: String) -> Bool {
+    for x in xs {
+        if x == needle {
+            return true
+        }
+    }
+    false
+}
+
 pub fn emptyCheckBinding() -> CheckBinding {
     CheckBinding { name: "", ty: -1, mutable: false, start: -1, end: -1 }
 }
@@ -814,7 +931,7 @@ pub fn emptyCheckAliasSig() -> CheckAliasSig {
 }
 
 pub fn emptyCheckTypeSig() -> CheckTypeSig {
-    CheckTypeSig { name: "", generics: [], kind: "" }
+    CheckTypeSig { name: "", generics: [], genericBounds: [], kind: "" }
 }
 
 // ---------------------------------------------------------------------
@@ -834,11 +951,11 @@ pub fn checkInstallPrelude(env: CheckEnv) {
 
     // Register stdlib types that carry generics so alias/bound
     // substitution has the arity information it needs.
-    checkRegisterType(env, CheckTypeSig { name: "List", generics: ["T"], kind: "struct" })
-    checkRegisterType(env, CheckTypeSig { name: "Map", generics: ["K", "V"], kind: "struct" })
-    checkRegisterType(env, CheckTypeSig { name: "Option", generics: ["T"], kind: "enum" })
-    checkRegisterType(env, CheckTypeSig { name: "Result", generics: ["T", "E"], kind: "enum" })
-    checkRegisterType(env, CheckTypeSig { name: "Range", generics: ["T"], kind: "struct" })
+    checkRegisterType(env, CheckTypeSig { name: "List", generics: ["T"], genericBounds: [], kind: "struct" })
+    checkRegisterType(env, CheckTypeSig { name: "Map", generics: ["K", "V"], genericBounds: [], kind: "struct" })
+    checkRegisterType(env, CheckTypeSig { name: "Option", generics: ["T"], genericBounds: [], kind: "enum" })
+    checkRegisterType(env, CheckTypeSig { name: "Result", generics: ["T", "E"], genericBounds: [], kind: "enum" })
+    checkRegisterType(env, CheckTypeSig { name: "Range", generics: ["T"], genericBounds: [], kind: "struct" })
 
     // Option / Result variants.
     checkRegisterVariant(env, CheckVariantSig {

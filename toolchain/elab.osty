@@ -963,6 +963,7 @@ fn elabInferCall(cx: ElabCx, callIdx: Int, node: AstNode, expected: Int) -> Elab
 
     // Verify every type parameter is now resolved.
     elabReportUnresolvedGenerics(cx, solver, sig, freshs, node.start, node.end)
+    elabCheckGenericBounds(cx, solver, sig.generics, sig.genericBounds, freshs, node.start, node.end)
 
     // Record instantiation for the bridge summary.
     let typeArgsConcrete = zonkList(cx.env, solver, freshs)
@@ -1014,6 +1015,7 @@ fn elabInferMethodCall(cx: ElabCx, callNode: AstNode, fieldNode: AstNode, expect
     let retSubstituted = checkSubstituteTy(cx.env, sig.retTy, sig.generics, freshs)
     let retTy = zonk(cx.env, solver, retSubstituted)
     elabReportUnresolvedGenerics(cx, solver, sig, freshs, callNode.start, callNode.end)
+    elabCheckGenericBounds(cx, solver, sig.generics, sig.genericBounds, freshs, callNode.start, callNode.end)
 
     let typeArgsConcrete = zonkList(cx.env, solver, freshs)
     if checkIntListLenHelper(typeArgsConcrete) > 0 {
@@ -1148,6 +1150,37 @@ fn elabReportUnresolvedGenerics(
             cx.env.diagnostics.push(diagCannotInferTyParam(gname, sig.name, start, end))
         }
         i = i + 1
+    }
+}
+
+fn elabCheckGenericBounds(
+    cx: ElabCx,
+    solver: Solver,
+    generics: List<String>,
+    bounds: List<CheckGenericBound>,
+    freshs: List<Int>,
+    start: Int,
+    end: Int,
+) {
+    for bound in bounds {
+        let freshIdx = elabFindFresh(freshs, generics, bound.tyParam)
+        if freshIdx < 0 {
+            continue
+        }
+        let concrete = zonk(cx.env, solver, checkIntListAt(freshs, freshIdx))
+        if !(isFullyResolved(cx.env, solver, concrete)) {
+            continue
+        }
+        let ifaceTy = zonk(cx.env, solver, checkSubstituteTy(cx.env, bound.iface, generics, freshs))
+        if !(checkGenericBoundSatisfied(cx.env, solver, concrete, ifaceTy)) {
+            cx.env.diagnostics.push(diagBoundViolation(
+                bound.tyParam,
+                tyToString(cx.env.tys, ifaceTy),
+                tyToString(cx.env.tys, concrete),
+                start,
+                end,
+            ))
+        }
     }
 }
 
@@ -1508,6 +1541,7 @@ fn elabInferStructLit(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
         }
     }
 
+    elabCheckGenericBounds(cx, solver, typeSig.generics, typeSig.genericBounds, freshs, node.start, node.end)
     let concreteTypeArgs = zonkList(cx.env, solver, freshs)
     let resultTy = if checkIntListLenHelper(concreteTypeArgs) == 0 {
         tyNamed(tys, owner, [])
