@@ -1,6 +1,7 @@
 package check
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -136,6 +137,42 @@ fn main() {}
 	}
 	if got := chk.LookupSymType(paramSym); got == nil || got.String() != "Int" {
 		t.Fatalf("unused param type = %v, want Int", got)
+	}
+}
+
+func TestFileFallsBackToEmbeddedCheckerWhenManagedArtifactUnavailable(t *testing.T) {
+	src := []byte(`fn id<T>(value: T) -> T { value }
+
+fn main() {
+    let answer = id::<Int>(1)
+}
+`)
+	file, res := parseResolvedFile(t, src)
+	mainDecl := file.Decls[1].(*ast.FnDecl)
+	letStmt := mainDecl.Body.Stmts[0].(*ast.LetStmt)
+	call := letStmt.Value.(*ast.CallExpr)
+
+	t.Setenv(nativeCheckerEnv, "")
+
+	oldEnsure := ensureManagedNativeChecker
+	ensureManagedNativeChecker = func() (string, error) {
+		return "", fmt.Errorf("boom")
+	}
+	t.Cleanup(func() { ensureManagedNativeChecker = oldEnsure })
+
+	oldFactory := nativeCheckerFactory
+	nativeCheckerFactory = defaultNativeChecker
+	t.Cleanup(func() { nativeCheckerFactory = oldFactory })
+
+	chk := File(file, res, Opts{Source: src, Stdlib: stdlib.LoadCached()})
+	if len(chk.Diags) != 0 {
+		t.Fatalf("expected no diagnostics, got %v", chk.Diags)
+	}
+	if got := chk.LookupType(call); got == nil || got.String() != "Int" {
+		t.Fatalf("call type = %v, want Int", got)
+	}
+	if got := chk.LetTypes[letStmt]; got == nil || got.String() != "Int" {
+		t.Fatalf("binding type = %v, want Int", got)
 	}
 }
 
