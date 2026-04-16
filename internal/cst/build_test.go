@@ -126,17 +126,229 @@ pub fn main() {}
 	}
 }
 
-// emitTreeBytes walks the tree in pre-order and concatenates each token's
-// leading trivia bytes followed by its text. Result must equal tree.Source.
-func emitTreeBytes(tree *cst.Tree) []byte {
-	src := tree.Source
-	out := make([]byte, 0, len(src))
+// TestBuildTrailingCommentInline checks that a same-line comment after a
+// real (non-NEWLINE) token ends up as trailing trivia on that token. This is
+// the central case the split policy exists to enable; pre-policy, the
+// comment was buried in the next line's leading.
+func TestBuildTrailingCommentInline(t *testing.T) {
+	const source = `let x = 1 // hi
+let y = 2
+`
+	tree := buildTreeFromSource(t, source)
+	tokens := collectRealTokens(tree)
+
+	oneTok, ok := findTokenByText(tokens, "1")
+	if !ok {
+		t.Fatal("expected a `1` token in the tree")
+	}
+	letIdx := findNthTokenByText(tokens, "let", 2)
+	if letIdx < 0 {
+		t.Fatal("expected a second `let` token in the tree")
+	}
+	secondLet := tokens[letIdx]
+
+	gotTexts := triviaTexts(tree, oneTok.TrailingTrivia)
+	gotKinds := triviaKinds(tree, oneTok.TrailingTrivia)
+	if !containsKind(gotKinds, cst.TriviaLineComment) {
+		t.Errorf("`1` trailing should contain the line comment; got kinds=%v texts=%q", gotKinds, gotTexts)
+	}
+
+	secondLeadKinds := triviaKinds(tree, secondLet.LeadingTrivia)
+	if containsKind(secondLeadKinds, cst.TriviaLineComment) {
+		t.Errorf("second `let` leading must not carry the inline comment; got kinds=%v", secondLeadKinds)
+	}
+}
+
+// TestBuildTrailingNewlineTokenCarriesNoTrailing verifies the NEWLINE-token
+// rule: trivia that sits after a NEWLINE token never becomes its trailing;
+// it flows to the next token's leading. This keeps "the line that just
+// ended" (the NEWLINE text alone) cleanly separated from "what's on the
+// next line" (trivia in the following token's leading).
+func TestBuildTrailingNewlineTokenCarriesNoTrailing(t *testing.T) {
+	const source = `fn a() {}
+
+fn b() {}
+`
+	tree := buildTreeFromSource(t, source)
+
+	// Blank-line extra newline must land on the second fn's leading, never
+	// on the NEWLINE token's trailing.
+	var sawBlankLineOnFn bool
+	var newlineTokensTrailed int
 	tree.Root().Walk(func(r cst.Red) bool {
-		if !r.IsToken() {
+		if !r.IsToken() || r.Kind() != cst.GkToken {
 			return true
 		}
 		tok := r.Token()
-		for _, triID := range tok.LeadingTrivia {
+		if tok.Text == "\n" {
+			if len(tok.TrailingTrivia) > 0 {
+				newlineTokensTrailed++
+			}
+		}
+		if tok.Text == "fn" && r.Offset() > 0 {
+			if containsKind(triviaKinds(tree, tok.LeadingTrivia), cst.TriviaNewline) {
+				sawBlankLineOnFn = true
+			}
+		}
+		return true
+	})
+
+	if newlineTokensTrailed != 0 {
+		t.Errorf("NEWLINE tokens must not carry trailing trivia; %d did", newlineTokensTrailed)
+	}
+	if !sawBlankLineOnFn {
+		t.Error("second `fn` leading should carry the blank-line TriviaNewline")
+	}
+}
+
+// TestBuildDocCommentAttachesToNext verifies the doc-comment carveout: `///`
+// always stays with the following declaration, even if the previous real
+// token would otherwise accumulate trailing trivia.
+func TestBuildDocCommentAttachesToNext(t *testing.T) {
+	const source = `let x = 1
+/// doc
+fn f() {}
+`
+	tree := buildTreeFromSource(t, source)
+	tokens := collectRealTokens(tree)
+
+	fnIdx := findNthTokenByText(tokens, "fn", 1)
+	if fnIdx < 0 {
+		t.Fatal("expected an `fn` token")
+	}
+	fnTok := tokens[fnIdx]
+
+	fnLeadKinds := triviaKinds(tree, fnTok.LeadingTrivia)
+	if !containsKind(fnLeadKinds, cst.TriviaDocComment) {
+		t.Errorf("`fn` leading should own the doc comment; got kinds=%v", fnLeadKinds)
+	}
+
+	// No real token's trailing should swallow the doc comment.
+	tree.Root().Walk(func(r cst.Red) bool {
+		if !r.IsToken() || r.Kind() != cst.GkToken {
+			return true
+		}
+		tok := r.Token()
+		if containsKind(triviaKinds(tree, tok.TrailingTrivia), cst.TriviaDocComment) {
+			t.Errorf("token %q trailing contains doc comment; doc must always lead the next decl", tok.Text)
+		}
+		return true
+	})
+}
+
+// TestBuildTailTriviaAfterNewline verifies that trivia following a trailing
+// NEWLINE token becomes file-tail trivia (under the GkErrorMissing sentinel
+// for now) rather than being attached as trailing of the NEWLINE. Round-trip
+// must still reproduce the source byte-for-byte.
+func TestBuildTailTriviaAfterNewline(t *testing.T) {
+	const source = "fn f() {}\n// tail\n"
+	tree := buildTreeFromSource(t, source)
+
+	var newlineTrailedLineComment bool
+	tree.Root().Walk(func(r cst.Red) bool {
+		if !r.IsToken() || r.Kind() != cst.GkToken {
+			return true
+		}
+		tok := r.Token()
+		if tok.Text == "\n" && containsKind(triviaKinds(tree, tok.TrailingTrivia), cst.TriviaLineComment) {
+			newlineTrailedLineComment = true
+		}
+		return true
+	})
+	if newlineTrailedLineComment {
+		t.Error("NEWLINE token must not carry a trailing line-comment; it belongs to file tail")
+	}
+
+	if got := string(emitTreeBytes(tree)); got != source {
+		t.Fatalf("round-trip mismatch:\nwant: %q\n got: %q", source, got)
+	}
+}
+
+// --- test helpers ---
+
+func buildTreeFromSource(t *testing.T, source string) *cst.Tree {
+	t.Helper()
+	tree, _ := selfhost.ParseCST([]byte(source))
+	if tree == nil {
+		t.Fatal("ParseCST returned nil tree")
+	}
+	return tree
+}
+
+func collectRealTokens(tree *cst.Tree) []cst.GreenToken {
+	var out []cst.GreenToken
+	tree.Root().Walk(func(r cst.Red) bool {
+		if r.IsToken() && r.Kind() == cst.GkToken {
+			out = append(out, r.Token())
+		}
+		return true
+	})
+	return out
+}
+
+func findTokenByText(tokens []cst.GreenToken, text string) (cst.GreenToken, bool) {
+	for _, tok := range tokens {
+		if tok.Text == text {
+			return tok, true
+		}
+	}
+	return cst.GreenToken{}, false
+}
+
+func findNthTokenByText(tokens []cst.GreenToken, text string, n int) int {
+	seen := 0
+	for i, tok := range tokens {
+		if tok.Text == text {
+			seen++
+			if seen == n {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+func triviaTexts(tree *cst.Tree, ids []int) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		tri := tree.Arena.TriviaAt(id)
+		lo, hi := tri.Offset, tri.Offset+tri.Length
+		if lo < 0 || hi > len(tree.Source) {
+			out = append(out, "<oob>")
+			continue
+		}
+		out = append(out, string(tree.Source[lo:hi]))
+	}
+	return out
+}
+
+func triviaKinds(tree *cst.Tree, ids []int) []cst.TriviaKind {
+	out := make([]cst.TriviaKind, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, tree.Arena.TriviaAt(id).Kind)
+	}
+	return out
+}
+
+func containsKind(kinds []cst.TriviaKind, target cst.TriviaKind) bool {
+	for _, k := range kinds {
+		if k == target {
+			return true
+		}
+	}
+	return false
+}
+
+// emitTreeBytes walks the tree in pre-order and concatenates, for each token
+// leaf: leading trivia + text + trailing trivia. Result must equal
+// tree.Source. Trailing trivia is the addition over the pre-split-policy
+// implementation; omitting it here would break round-trip as soon as any
+// token carries same-line trailing trivia.
+func emitTreeBytes(tree *cst.Tree) []byte {
+	src := tree.Source
+	out := make([]byte, 0, len(src))
+	emitRun := func(indices []int) {
+		for _, triID := range indices {
 			tri := tree.Arena.TriviaAt(triID)
 			lo, hi := tri.Offset, tri.Offset+tri.Length
 			if lo < 0 {
@@ -149,7 +361,15 @@ func emitTreeBytes(tree *cst.Tree) []byte {
 				out = append(out, src[lo:hi]...)
 			}
 		}
+	}
+	tree.Root().Walk(func(r cst.Red) bool {
+		if !r.IsToken() {
+			return true
+		}
+		tok := r.Token()
+		emitRun(tok.LeadingTrivia)
 		out = append(out, tok.Text...)
+		emitRun(tok.TrailingTrivia)
 		return true
 	})
 	return out
