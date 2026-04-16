@@ -56,17 +56,18 @@ func (b LLVMBackend) Emit(ctx context.Context, req Request) (*Result, error) {
 		PackageName: req.Entry.PackageName,
 		SourcePath:  req.Entry.SourcePath,
 		Target:      req.Layout.Target,
-		UseMIR:      featureEnabled(req.Features, "mir-backend"),
+		UseMIR:      useMIRBackend(req.Features, req.Emit),
 	}
 	// IR is the sole input contract. The backend dispatcher never reaches
 	// for req.Entry.File — the AST is a front-end artifact that the LLVM
 	// backend does not consume directly any more.
 	//
-	// When the request opts into Stage 3 MIR emission (`--feature
-	// mir-backend`), route through the MIR-direct path if the entry
-	// carries a MIR module. Otherwise, and on MIR-emitter refusal, fall
-	// back to the legacy HIR→AST bridge so coverage stays identical to
-	// before the opt-in flag existed.
+	// MIR-first dispatch now defaults on the raw `llvm-ir` emission
+	// path. Requests can opt back into the legacy HIR→AST bridge with
+	// the `legacy-llvmgen` feature, or opt further in with
+	// `mir-backend` on object/binary emission while parity continues to
+	// grow. On MIR-emitter refusal we still fall back automatically, so
+	// enabling the new path cannot reduce coverage.
 	var (
 		irOut  []byte
 		genErr error
@@ -194,8 +195,7 @@ func runClang(ctx context.Context, action string, args []string) error {
 }
 
 // featureEnabled reports whether `name` appears in the features
-// slice. Used by the LLVM backend to check opt-in flags like
-// "mir-backend".
+// slice.
 func featureEnabled(features []string, name string) bool {
 	for _, f := range features {
 		if f == name {
@@ -203,4 +203,19 @@ func featureEnabled(features []string, name string) bool {
 		}
 	}
 	return false
+}
+
+// useMIRBackend reports whether LLVM emission should prefer the
+// MIR-direct path. Raw `llvm-ir` emission is MIR-first by default;
+// callers can opt back into the legacy HIR→AST bridge with the
+// `legacy-llvmgen` feature, or opt further in on object/binary
+// emission with `mir-backend` while parity stabilizes.
+func useMIRBackend(features []string, emit EmitMode) bool {
+	if featureEnabled(features, "legacy-llvmgen") {
+		return false
+	}
+	if featureEnabled(features, "mir-backend") {
+		return true
+	}
+	return emit == EmitLLVMIR
 }

@@ -66,13 +66,13 @@ source
   → ir.Validate      (HIR invariants)
   → mir.Lower        (HIR → MIR)              ⟵ Stage 1 landed
   → mir.Validate     (MIR invariants)         ⟵ Stage 1 landed
-  → backend dispatch (Stage 3):
+  → backend dispatch (Stage 4 partial default):
       if Options.UseMIR && Entry.MIR != nil:
         llvmgen.GenerateFromMIR(Entry.MIR, opts)
         └── on ErrUnsupported, falls back to HIR path
       else:
         llvmgen.GenerateModule(Entry.IR, opts)
-        └── legacy HIR→AST bridge (the default until Stage 4)
+        └── legacy HIR→AST bridge (explicit opt-out / fallback path)
 ```
 
 MIR lowering runs *after* monomorphisation: every `TypeVar` is gone,
@@ -672,8 +672,8 @@ MIR tests isolated from front-end churn.
   overlaps with the deferred closure-to-SSA story. They fall
   through to the ordinary `CallInstr` path for now.
 
-- **Stage 3 (landed — MVP).** Introduces an opt-in MIR-direct path
-  through `internal/llvmgen`.
+- **Stage 3 (landed — MVP).** Introduces a MIR-direct path through
+  `internal/llvmgen`.
 
   - **`backend.PrepareEntry` produces MIR.** `Entry` grows `MIR
     *mir.Module` and `MIRIssues []error` fields alongside the existing
@@ -681,18 +681,20 @@ MIR tests isolated from front-end churn.
     pipeline calls `mir.Lower` on the monomorphic HIR and runs
     `mir.Validate` on the result. MIR issues are collected as
     warnings rather than blocking the dispatch — the HIR path remains
-    authoritative until Stage 4 flips the default.
+    authoritative while the MIR emitter grows to parity.
   - **`llvmgen.GenerateFromMIR(m, opts)`** is the new public entry
     point. It consumes a `*mir.Module` directly (no HIR→AST bridge)
     and emits textual LLVM IR via an alloca-per-local SSA scheme
     (LLVM's mem2reg pass promotes to register form during opt).
-  - **Option gate.** `llvmgen.Options.UseMIR` selects the path.
-    The backend dispatcher (`internal/backend/llvm.go`) flips the
-    option on when the request carries `--feature mir-backend` and
-    routes to `GenerateFromMIR(entry.MIR, opts)`. On `ErrUnsupported`
-    the dispatcher catches the sentinel and falls back to the legacy
-    `GenerateModule(entry.IR, opts)` path so coverage regressions
-    are impossible until parity lands.
+  - **Dispatcher gate.** `llvmgen.Options.UseMIR` selects the path.
+    The backend dispatcher (`internal/backend/llvm.go`) now prefers
+    `GenerateFromMIR(entry.MIR, opts)` by default on raw `llvm-ir`
+    emission, lets requests opt back into the legacy bridge with the
+    `legacy-llvmgen` feature, and still allows explicit opt-in on
+    object/binary emission via `mir-backend`. On `ErrUnsupported` the
+    dispatcher catches the sentinel and falls back to
+    `GenerateModule(entry.IR, opts)` automatically, so coverage
+    regressions are impossible while parity lands.
   - **MVP coverage.** Primitive types (Int / UInt / Byte / Bool /
     Char / Float{32,64} / String / Unit), functions with primitive
     params + return types, `Assign` with Use/Unary/Binary/Const
@@ -711,9 +713,12 @@ MIR tests isolated from front-end churn.
     `GenerateFromMIR` with `ErrUnsupported` and accepted by the
     legacy path.
 
-- **Stage 4.** Flip the default at `GenerateModule` to the MIR path
-  once parity is green on the full corpus. Keep the legacy bridge
-  callable under a fallback flag.
+- **Stage 4 (partially landed — MIR-first IR emission).** The LLVM
+  backend now prefers the MIR-direct emitter by default for raw
+  `llvm-ir` output. The legacy HIR→AST bridge remains callable under
+  the `legacy-llvmgen` feature, object/binary emission can still opt in
+  explicitly with `mir-backend`, and the dispatcher falls back
+  automatically on `ErrUnsupported`.
 
 - **Stage 5.** Remove `legacyFileFromModule` and the AST-driven
   emitter. `internal/llvmgen` now speaks only MIR. Future backends
