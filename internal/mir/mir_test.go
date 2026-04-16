@@ -558,35 +558,81 @@ func TestLowerVariantLit(t *testing.T) {
 	}
 }
 
-func TestLowerRejectsUnsupportedClosure(t *testing.T) {
-	// The current stage-1 lowerer emits an unsupported note for
-	// closures; ensure we see it rather than silently succeeding.
+func TestLowerClosureNoCapture(t *testing.T) {
+	// `let f = |x| x + 1` should lift the closure body into a fresh
+	// top-level MIR function and materialise f as an AggClosure
+	// aggregate. No HIR Closure node survives.
+	fnType := &ir.FnType{Params: []ir.Type{ir.TInt}, Return: ir.TInt}
+	addOne := &ir.Closure{
+		Params: []*ir.Param{{Name: "x", Type: ir.TInt}},
+		Return: ir.TInt,
+		Body: &ir.Block{Result: &ir.BinaryExpr{
+			Op:    ir.BinAdd,
+			Left:  &ir.Ident{Name: "x", Kind: ir.IdentParam, T: ir.TInt},
+			Right: &ir.IntLit{Text: "1", T: ir.TInt},
+			T:     ir.TInt,
+		}},
+		T: fnType,
+	}
 	fn := mkFn("withClosure", ir.TUnit, &ir.Block{
 		Stmts: []ir.Stmt{
-			&ir.LetStmt{
-				Name: "f",
-				Type: &ir.FnType{Params: []ir.Type{ir.TInt}, Return: ir.TInt},
-				Value: &ir.Closure{
-					Params: []*ir.Param{{Name: "x", Type: ir.TInt}},
-					Return: ir.TInt,
-					Body:   &ir.Block{Result: &ir.Ident{Name: "x", Kind: ir.IdentParam, T: ir.TInt}},
-					T:      &ir.FnType{Params: []ir.Type{ir.TInt}, Return: ir.TInt},
-				},
-			},
+			&ir.LetStmt{Name: "f", Type: fnType, Value: addOne},
 		},
 	})
 	mod := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
 	out := Lower(mod)
-	// Expect a "closure not lowered" issue.
-	saw := false
-	for _, issue := range out.Issues {
-		if strings.Contains(issue.Error(), "closure") {
-			saw = true
-			break
-		}
+	if errs := Validate(out); len(errs) > 0 {
+		t.Fatalf("validate: %v\n\n%s", errs, Print(out))
 	}
-	if !saw {
-		t.Fatalf("expected 'closure not lowered' issue, got: %v", out.Issues)
+	text := Print(out)
+	if !strings.Contains(text, "aggregate closure(") {
+		t.Fatalf("expected aggregate closure, got:\n%s", text)
+	}
+	// There should now be two MIR functions: the outer `withClosure`
+	// and the lifted closure body.
+	if len(out.Functions) != 2 {
+		t.Fatalf("expected 2 lifted functions, got %d:\n%s", len(out.Functions), text)
+	}
+}
+
+func TestLowerClosureWithCaptures(t *testing.T) {
+	// `let n = 10; let f = |x| x + n` — the closure captures n. The
+	// lifted function's first parameter is the capture; the aggregate
+	// value carries [fnConst, copy(n)].
+	fnType := &ir.FnType{Params: []ir.Type{ir.TInt}, Return: ir.TInt}
+	body := &ir.Block{Result: &ir.BinaryExpr{
+		Op:    ir.BinAdd,
+		Left:  &ir.Ident{Name: "x", Kind: ir.IdentParam, T: ir.TInt},
+		Right: &ir.Ident{Name: "n", Kind: ir.IdentLocal, T: ir.TInt},
+		T:     ir.TInt,
+	}}
+	cl := &ir.Closure{
+		Params: []*ir.Param{{Name: "x", Type: ir.TInt}},
+		Return: ir.TInt,
+		Body:   body,
+		Captures: []*ir.Capture{
+			{Name: "n", Kind: ir.CaptureLocal, T: ir.TInt},
+		},
+		T: fnType,
+	}
+	fn := mkFn("withCapture", ir.TUnit, &ir.Block{
+		Stmts: []ir.Stmt{
+			&ir.LetStmt{Name: "n", Type: ir.TInt, Value: &ir.IntLit{Text: "10", T: ir.TInt}},
+			&ir.LetStmt{Name: "f", Type: fnType, Value: cl},
+		},
+	})
+	mod := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	out := Lower(mod)
+	if errs := Validate(out); len(errs) > 0 {
+		t.Fatalf("validate: %v\n\n%s", errs, Print(out))
+	}
+	text := Print(out)
+	// The lifted closure should take the capture as its first param.
+	if !strings.Contains(text, "withCapture__closure") {
+		t.Fatalf("expected lifted closure function, got:\n%s", text)
+	}
+	if !strings.Contains(text, "aggregate closure(const fn withCapture__closure") {
+		t.Fatalf("expected aggregate closure with fn symbol, got:\n%s", text)
 	}
 }
 
@@ -721,6 +767,361 @@ func TestLowerPreservesUseDecls(t *testing.T) {
 	}
 	if out.Uses[0].Alias != "strings" || !out.Uses[0].IsRuntimeFFI {
 		t.Fatalf("use decl not preserved: %+v", out.Uses[0])
+	}
+}
+
+// ==== Stage 2 additions ====
+
+func TestLowerDeferRunsAtReturn(t *testing.T) {
+	// fn work() { defer cleanup(); return }
+	// → at the return site the defer body is inlined before ReturnTerm.
+	fn := mkFn("work", ir.TUnit, &ir.Block{
+		Stmts: []ir.Stmt{
+			&ir.DeferStmt{Body: &ir.Block{
+				Stmts: []ir.Stmt{
+					&ir.ExprStmt{X: &ir.IntrinsicCall{
+						Kind: ir.IntrinsicPrintln,
+						Args: []ir.Arg{{Value: &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: "cleanup"}}}}},
+					}},
+				},
+			}},
+			&ir.ReturnStmt{},
+		},
+	})
+	mod := lowerHIR(t, fn)
+	text := Print(mod)
+	if !strings.Contains(text, `intrinsic println(const "cleanup")`) {
+		t.Fatalf("expected defer body inlined before return, got:\n%s", text)
+	}
+	// Ensure the defer is emitted on the return path, not as a
+	// lingering DeferStmt.
+	if strings.Contains(text, "DeferStmt") {
+		t.Fatalf("HIR DeferStmt leaked into MIR:\n%s", text)
+	}
+}
+
+func TestLowerDeferRunsLIFO(t *testing.T) {
+	// defer A(); defer B(); return — expected replay order is B, A.
+	mkDeferCall := func(name string) *ir.DeferStmt {
+		return &ir.DeferStmt{Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.ExprStmt{X: &ir.IntrinsicCall{
+					Kind: ir.IntrinsicPrintln,
+					Args: []ir.Arg{{Value: &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: name}}}}},
+				}},
+			},
+		}}
+	}
+	fn := mkFn("twoDefers", ir.TUnit, &ir.Block{
+		Stmts: []ir.Stmt{
+			mkDeferCall("A"),
+			mkDeferCall("B"),
+			&ir.ReturnStmt{},
+		},
+	})
+	mod := lowerHIR(t, fn)
+	text := Print(mod)
+	ai := strings.Index(text, `const "A"`)
+	bi := strings.Index(text, `const "B"`)
+	if ai < 0 || bi < 0 {
+		t.Fatalf("expected both defers in output:\n%s", text)
+	}
+	// LIFO: B runs first — so B appears before A in the dump.
+	if bi > ai {
+		t.Fatalf("expected LIFO replay (B before A), got A at %d, B at %d:\n%s", ai, bi, text)
+	}
+}
+
+func TestLowerGlobalRead(t *testing.T) {
+	// pub let version = 42
+	// fn get() -> Int { version }
+	globalT := ir.TInt
+	globalDecl := &ir.LetDecl{
+		Name:     "version",
+		Type:     globalT,
+		Value:    &ir.IntLit{Text: "42", T: globalT},
+		Exported: true,
+	}
+	getFn := &ir.FnDecl{
+		Name:   "get",
+		Return: ir.TInt,
+		Body: &ir.Block{
+			Result: &ir.Ident{Name: "version", Kind: ir.IdentGlobal, T: globalT},
+		},
+	}
+	mod := &ir.Module{Package: "main", Decls: []ir.Decl{globalDecl, getFn}}
+	out := Lower(mod)
+	if errs := Validate(out); len(errs) > 0 {
+		t.Fatalf("validate: %v\n\n%s", errs, Print(out))
+	}
+	text := Print(out)
+	if !strings.Contains(text, "global version Int") {
+		t.Fatalf("expected GlobalRefRV in lowered body, got:\n%s", text)
+	}
+	if len(out.Globals) != 1 || out.Globals[0].Name != "version" {
+		t.Fatalf("expected 1 global named version, got %+v", out.Globals)
+	}
+}
+
+func TestLowerCompoundAssign(t *testing.T) {
+	// fn add_one(mut x: Int) -> Int { x += 1; x }
+	fn := &ir.FnDecl{
+		Name:   "add_one",
+		Return: ir.TInt,
+		Params: []*ir.Param{{Name: "x", Type: ir.TInt}},
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.AssignStmt{
+					Op:      ir.AssignAdd,
+					Targets: []ir.Expr{&ir.Ident{Name: "x", Kind: ir.IdentParam, T: ir.TInt}},
+					Value:   &ir.IntLit{Text: "1", T: ir.TInt},
+				},
+			},
+			Result: &ir.Ident{Name: "x", Kind: ir.IdentParam, T: ir.TInt},
+		},
+	}
+	mod := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	out := Lower(mod)
+	if errs := Validate(out); len(errs) > 0 {
+		t.Fatalf("validate: %v\n\n%s", errs, Print(out))
+	}
+	text := Print(out)
+	if !strings.Contains(text, "_1 = _1 + const 1 Int") {
+		t.Fatalf("expected expanded compound assign, got:\n%s", text)
+	}
+}
+
+func TestLowerMultiTargetAssign(t *testing.T) {
+	// fn swap(mut a: Int, mut b: Int) { (a, b) = (b, a) }
+	fn := &ir.FnDecl{
+		Name:   "swap",
+		Return: ir.TUnit,
+		Params: []*ir.Param{
+			{Name: "a", Type: ir.TInt},
+			{Name: "b", Type: ir.TInt},
+		},
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.AssignStmt{
+					Op: ir.AssignEq,
+					Targets: []ir.Expr{
+						&ir.Ident{Name: "a", Kind: ir.IdentParam, T: ir.TInt},
+						&ir.Ident{Name: "b", Kind: ir.IdentParam, T: ir.TInt},
+					},
+					Value: &ir.TupleLit{
+						Elems: []ir.Expr{
+							&ir.Ident{Name: "b", Kind: ir.IdentParam, T: ir.TInt},
+							&ir.Ident{Name: "a", Kind: ir.IdentParam, T: ir.TInt},
+						},
+						T: &ir.TupleType{Elems: []ir.Type{ir.TInt, ir.TInt}},
+					},
+				},
+			},
+		},
+	}
+	mod := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	out := Lower(mod)
+	if errs := Validate(out); len(errs) > 0 {
+		t.Fatalf("validate: %v\n\n%s", errs, Print(out))
+	}
+	text := Print(out)
+	// Expect a tuple scratch and two projection reads into a/b.
+	if !strings.Contains(text, "_mtuple") {
+		t.Fatalf("expected scratch tuple for multi-assign, got:\n%s", text)
+	}
+	if !strings.Contains(text, ".0") || !strings.Contains(text, ".1") {
+		t.Fatalf("expected tuple projections for multi-assign, got:\n%s", text)
+	}
+}
+
+// Regression for the code-review catch on the `?` error path: when the
+// operand type differs from the enclosing return type, the lowerer
+// must rebuild the error value in the return type's shape (None for
+// Option, Err(payload) for Result) instead of copying the operand
+// straight into the return slot.
+func TestLowerQuestionOperatorRebuildsErrorForResult(t *testing.T) {
+	resultAE := &ir.NamedType{Name: "Result", Args: []ir.Type{ir.TInt, ir.TString}}
+	resultBE := &ir.NamedType{Name: "Result", Args: []ir.Type{ir.TBool, ir.TString}}
+	// fn widen(x: Result<Int, String>) -> Result<Bool, String> {
+	//   let n = x?
+	//   Ok(n > 0)
+	// }
+	fn := &ir.FnDecl{
+		Name:   "widen",
+		Return: resultBE,
+		Params: []*ir.Param{{Name: "x", Type: resultAE}},
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.LetStmt{
+					Name: "n",
+					Type: ir.TInt,
+					Value: &ir.QuestionExpr{
+						X: &ir.Ident{Name: "x", Kind: ir.IdentParam, T: resultAE},
+						T: ir.TInt,
+					},
+				},
+			},
+			Result: &ir.VariantLit{
+				Enum:    "Result",
+				Variant: "Ok",
+				Args: []ir.Arg{{Value: &ir.BinaryExpr{
+					Op:    ir.BinGt,
+					Left:  &ir.Ident{Name: "n", Kind: ir.IdentLocal, T: ir.TInt},
+					Right: &ir.IntLit{Text: "0", T: ir.TInt},
+					T:     ir.TBool,
+				}}},
+				T: resultBE,
+			},
+		},
+	}
+	mod := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	out := Lower(mod)
+	if errs := Validate(out); len(errs) > 0 {
+		t.Fatalf("validate: %v\n\n%s", errs, Print(out))
+	}
+	text := Print(out)
+	if !strings.Contains(text, "aggregate variant Err") {
+		t.Fatalf("expected Err to be rebuilt in return type, got:\n%s", text)
+	}
+	// And the return local type in the aggregate must be the widened
+	// result type — the string rendering will show "Result<Bool, String>".
+	if !strings.Contains(text, "Result<Bool, String>") {
+		t.Fatalf("expected Err aggregate typed as return type, got:\n%s", text)
+	}
+}
+
+func TestLowerQuestionOperatorNoneForOption(t *testing.T) {
+	// fn widen(x: Int?) -> Bool? {
+	//   let n = x?
+	//   Some(n > 0)
+	// }
+	intOpt := &ir.OptionalType{Inner: ir.TInt}
+	boolOpt := &ir.OptionalType{Inner: ir.TBool}
+	fn := &ir.FnDecl{
+		Name:   "widen",
+		Return: boolOpt,
+		Params: []*ir.Param{{Name: "x", Type: intOpt}},
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.LetStmt{
+					Name: "n",
+					Type: ir.TInt,
+					Value: &ir.QuestionExpr{
+						X: &ir.Ident{Name: "x", Kind: ir.IdentParam, T: intOpt},
+						T: ir.TInt,
+					},
+				},
+			},
+			Result: &ir.VariantLit{
+				Enum:    "Option",
+				Variant: "Some",
+				Args: []ir.Arg{{Value: &ir.BinaryExpr{
+					Op:    ir.BinGt,
+					Left:  &ir.Ident{Name: "n", Kind: ir.IdentLocal, T: ir.TInt},
+					Right: &ir.IntLit{Text: "0", T: ir.TInt},
+					T:     ir.TBool,
+				}}},
+				T: boolOpt,
+			},
+		},
+	}
+	mod := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	out := Lower(mod)
+	if errs := Validate(out); len(errs) > 0 {
+		t.Fatalf("validate: %v\n\n%s", errs, Print(out))
+	}
+	text := Print(out)
+	if !strings.Contains(text, "none Bool?") {
+		t.Fatalf("expected NullaryNone rebuilt as return-type None, got:\n%s", text)
+	}
+}
+
+// Regression for the code-review catch on package-qualified calls.
+// `strings.Split(s, ",")` must lower as a direct FnRef to a
+// qualified symbol with NO synthetic receiver argument.
+func TestLowerPackageQualifiedCall(t *testing.T) {
+	useDecl := &ir.UseDecl{
+		Path:         []string{"runtime", "strings"},
+		RawPath:      "runtime.strings",
+		Alias:        "strings",
+		IsRuntimeFFI: true,
+		RuntimePath:  "runtime.strings",
+	}
+	// fn first_part(s: String) -> List<String> {
+	//   strings.Split(s, ",")
+	// }
+	listStr := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TString}, Builtin: true}
+	fn := &ir.FnDecl{
+		Name:   "first_part",
+		Return: listStr,
+		Params: []*ir.Param{{Name: "s", Type: ir.TString}},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "strings"},
+				Name:     "Split",
+				Args: []ir.Arg{
+					{Value: &ir.Ident{Name: "s", Kind: ir.IdentParam, T: ir.TString}},
+					{Value: &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: ","}}}},
+				},
+				T: listStr,
+			},
+		},
+	}
+	mod := &ir.Module{Package: "main", Decls: []ir.Decl{useDecl, fn}}
+	out := Lower(mod)
+	if errs := Validate(out); len(errs) > 0 {
+		t.Fatalf("validate: %v\n\n%s", errs, Print(out))
+	}
+	text := Print(out)
+	// The call must NOT have the alias prepended as a receiver.
+	if !strings.Contains(text, "call runtime.strings.Split(") {
+		t.Fatalf("expected qualified runtime.strings.Split symbol, got:\n%s", text)
+	}
+	// Argument list must be exactly 2 operands (s, ",") — no receiver.
+	if strings.Contains(text, "call runtime.strings.Split(_1, _1,") {
+		t.Fatalf("receiver was incorrectly prepended as an argument:\n%s", text)
+	}
+}
+
+// Same regression via a CallExpr{FieldExpr} shape — even if the HIR
+// lowerer normally routes via MethodCall, the CallExpr path must
+// still classify package aliases as qualified direct calls.
+func TestLowerCallExprWithFieldCallee(t *testing.T) {
+	useDecl := &ir.UseDecl{
+		Path:         []string{"runtime", "strings"},
+		RawPath:      "runtime.strings",
+		Alias:        "strings",
+		IsRuntimeFFI: true,
+		RuntimePath:  "runtime.strings",
+	}
+	listStr := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TString}, Builtin: true}
+	fn := &ir.FnDecl{
+		Name:   "first_part",
+		Return: listStr,
+		Params: []*ir.Param{{Name: "s", Type: ir.TString}},
+		Body: &ir.Block{
+			Result: &ir.CallExpr{
+				Callee: &ir.FieldExpr{
+					X:    &ir.Ident{Name: "strings"},
+					Name: "Split",
+					T:    ir.ErrTypeVal,
+				},
+				Args: []ir.Arg{
+					{Value: &ir.Ident{Name: "s", Kind: ir.IdentParam, T: ir.TString}},
+					{Value: &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: ","}}}},
+				},
+				T: listStr,
+			},
+		},
+	}
+	mod := &ir.Module{Package: "main", Decls: []ir.Decl{useDecl, fn}}
+	out := Lower(mod)
+	if errs := Validate(out); len(errs) > 0 {
+		t.Fatalf("validate: %v\n\n%s", errs, Print(out))
+	}
+	text := Print(out)
+	if !strings.Contains(text, "call runtime.strings.Split(") {
+		t.Fatalf("expected qualified FieldExpr call, got:\n%s", text)
 	}
 }
 

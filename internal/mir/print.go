@@ -373,6 +373,8 @@ func rvalueString(rv RValue, f *Function) string {
 		return "ref " + placeString(x.Place, f)
 	case *NullaryRV:
 		return fmt.Sprintf("%s %s", nullaryKindName(x.Kind), typeString(x.T))
+	case *GlobalRefRV:
+		return fmt.Sprintf("global %s %s", x.Name, typeString(x.T))
 	}
 	return "(?)"
 }
@@ -502,6 +504,8 @@ func aggregateKindName(k AggregateKind) string {
 		return "list"
 	case AggMap:
 		return "map"
+	case AggClosure:
+		return "closure"
 	}
 	return "?"
 }
