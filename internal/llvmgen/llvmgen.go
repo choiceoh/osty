@@ -664,9 +664,9 @@ func (g *generator) emitStringLiteral(lit *ast.StringLit) (value, error) {
 		return value{}, unsupported("type-system", "plain String literals currently require ASCII text with printable bytes or newline, tab, and carriage-return escapes")
 	}
 	emitter := g.toOstyEmitter()
-	line := llvmStringLiteralLine(emitter, text)
+	out := llvmStringLiteral(emitter, text)
 	g.takeOstyEmitter(emitter)
-	return fromOstyValue(line), nil
+	return fromOstyValue(out), nil
 }
 
 func (g *generator) emitExpr(expr ast.Expr) (value, error) {

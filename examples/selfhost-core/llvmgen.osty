@@ -225,19 +225,19 @@ pub fn llvmPrintlnI64(emitter: LlvmEmitter, value: LlvmValue) {
     emitter.body.push("  {tmp} = call i32 (ptr, ...) @printf(ptr @.fmt_i64, i64 {value.name})")
 }
 
-pub fn llvmStringLiteralLine(emitter: LlvmEmitter, text: String) -> LlvmValue {
+pub fn llvmStringLiteral(emitter: LlvmEmitter, text: String) -> LlvmValue {
     let name = "@.str{emitter.stringId}"
     emitter.stringId = emitter.stringId + 1
-    let cstring = llvmCStringLine(text)
+    let cstring = llvmCString(text)
     emitter.stringGlobals.push(
         LlvmStringGlobal { name, encoded: cstring.encoded, byteLen: cstring.byteLen },
     )
     LlvmValue { typ: "ptr", name, pointer: false }
 }
 
-pub fn llvmCStringLine(text: String) -> LlvmCString {
-    let encoded = "{llvmCStringEscape(text)}\\0A\\00"
-    let byteLen = llvmStrings.Split(text, "").len() + 2
+pub fn llvmCString(text: String) -> LlvmCString {
+    let encoded = "{llvmCStringEscape(text)}\\00"
+    let byteLen = llvmStrings.Split(text, "").len() + 1
     LlvmCString { encoded, byteLen }
 }
 
@@ -263,7 +263,7 @@ pub fn llvmCStringEscape(text: String) -> String {
 
 pub fn llvmPrintlnString(emitter: LlvmEmitter, value: LlvmValue) {
     let tmp = llvmNextTemp(emitter)
-    emitter.body.push("  {tmp} = call i32 (ptr, ...) @printf(ptr {value.name})")
+    emitter.body.push("  {tmp} = call i32 (ptr, ...) @printf(ptr @.fmt_str, ptr {value.name})")
 }
 
 pub fn llvmIfStart(emitter: LlvmEmitter, cond: LlvmValue) -> LlvmIfLabels {
@@ -406,6 +406,7 @@ pub fn llvmRenderModuleWithGlobals(
     }
     lines.push("")
     lines.push("@.fmt_i64 = private unnamed_addr constant [5 x i8] c\"%ld\\0A\\00\"")
+    lines.push("@.fmt_str = private unnamed_addr constant [4 x i8] c\"%s\\0A\\00\"")
     for global in stringGlobals {
         lines.push("{global.name} = private unnamed_addr constant [{global.byteLen} x i8] c\"{global.encoded}\"")
     }
@@ -797,7 +798,7 @@ pub fn llvmSmokeBooleansIR(sourcePath: String) -> String {
 
 pub fn llvmSmokeStringPrintIR(sourcePath: String) -> String {
     let main = llvmEmitter()
-    let line = llvmStringLiteralLine(main, "hello, osty")
+    let line = llvmStringLiteral(main, "hello, osty")
     llvmPrintlnString(main, line)
     llvmReturnI32Zero(main)
 
@@ -813,7 +814,7 @@ pub fn llvmSmokeStringPrintIR(sourcePath: String) -> String {
 
 pub fn llvmSmokeStringEscapeIR(sourcePath: String) -> String {
     let main = llvmEmitter()
-    let line = llvmStringLiteralLine(main, "line one\nquote \" slash \\")
+    let line = llvmStringLiteral(main, "line one\nquote \" slash \\")
     llvmPrintlnString(main, line)
     llvmReturnI32Zero(main)
 
@@ -829,7 +830,7 @@ pub fn llvmSmokeStringEscapeIR(sourcePath: String) -> String {
 
 pub fn llvmSmokeStringLetIR(sourcePath: String) -> String {
     let main = llvmEmitter()
-    let msg = llvmStringLiteralLine(main, "stored string")
+    let msg = llvmStringLiteral(main, "stored string")
     llvmImmutableLet(main, "msg", msg)
     llvmPrintlnString(main, llvmIdent(main, "msg"))
     llvmReturnI32Zero(main)
