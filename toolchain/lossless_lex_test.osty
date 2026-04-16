@@ -1,0 +1,369 @@
+use std.testing
+use std.strings as strings
+
+// -------------------------------------------------------------------
+// ROUND-TRIP TESTS
+//
+// The safety net for every other feature in `lossless_lex.osty`. Any
+// change that reshapes trivia attachment must still satisfy
+// `reconstruct(lex(src)) == normalize(src)` byte-for-byte.
+// -------------------------------------------------------------------
+
+fn assertRoundTrip(source: String) {
+    let report = losslessRoundTripReport(source)
+    if !(report.ok) {
+        testing.fail("round-trip mismatch at offset {report.firstMismatchOffset}")
+    }
+    testing.assert(report.ok)
+}
+
+fn testRoundTripEmpty() {
+    assertRoundTrip("")
+}
+
+fn testRoundTripSingleIdent() {
+    assertRoundTrip("hello")
+}
+
+fn testRoundTripDecl() {
+    assertRoundTrip("fn main() { let x = 1 }")
+}
+
+fn testRoundTripWithComments() {
+    let src = "// top-level\nfn f() \{\n    // inner\n    let y = 2\n    /* block\n       comment */\n\}"
+    assertRoundTrip(src)
+}
+
+fn testRoundTripDocComments() {
+    let src = "/// doc one\n/// doc two\npub fn g() \{\}"
+    assertRoundTrip(src)
+}
+
+fn testRoundTripStringInterpolation() {
+    let src = "let greeting = \"hi, \{name\}\""
+    assertRoundTrip(src)
+}
+
+fn testRoundTripTripleString() {
+    let src = strings.join(
+        [
+            "let sql = \"\"\"",
+            "    SELECT *",
+            "    FROM users",
+            "    WHERE id = {id}",
+            "    \"\"\"",
+        ],
+        "\n",
+    )
+    assertRoundTrip(src)
+}
+
+fn testRoundTripRawString() {
+    // Build the source as segments to side-step an escape-sequencing
+    // quirk in the bootstrap lexer when `\"` immediately precedes `\\`.
+    let q = "\""
+    let bs = "\\"
+    let src = strings.join(
+        ["let pat = r", q, bs, "d+", bs, ".", bs, "d+", q],
+        "",
+    )
+    assertRoundTrip(src)
+}
+
+fn testRoundTripNumbers() {
+    let src = "let a = 0xFF\nlet b = 0b1010\nlet c = 1_000_000\nlet d = 3.14e-2"
+    assertRoundTrip(src)
+}
+
+fn testRoundTripCRLF() {
+    // \r\n should normalize to \n; round trip compares against the
+    // normalized source.
+    let src = "fn f() {\r\n    let x = 1\r\n}"
+    assertRoundTrip(src)
+}
+
+fn testRoundTripShebang() {
+    let src = "#!/usr/bin/env osty\nfn main() {}"
+    assertRoundTrip(src)
+}
+
+fn testRoundTripTrailingWhitespace() {
+    let src = "let x = 1   \n\n\n"
+    assertRoundTrip(src)
+}
+
+fn testRoundTripLeadingWhitespace() {
+    let src = "\n\n\n    let x = 1\n"
+    assertRoundTrip(src)
+}
+
+fn testRoundTripAllKeywords() {
+    let src = "pub fn f() { let mut x = 1 if x > 0 { return } else { defer cleanup() } for x < 10 { break } match x { _ -> 0 } use std.fs type Alias = Int struct S { pub a: Int } enum E { A, B } interface I {} }"
+    assertRoundTrip(src)
+}
+
+// -------------------------------------------------------------------
+// LINE INDEX TESTS
+// -------------------------------------------------------------------
+
+fn testLineIndexSingleLine() {
+    let stream = losslessLex("abc")
+    testing.assertEq(stream.lineIndex.lineCount, 1)
+    let loc = losslessLocate(stream.lineIndex, 2)
+    testing.assertEq(loc.line, 1)
+    testing.assertEq(loc.column, 3)
+}
+
+fn testLineIndexMultiline() {
+    let stream = losslessLex("a\nb\nc")
+    testing.assertEq(stream.lineIndex.lineCount, 3)
+    let loc = losslessLocate(stream.lineIndex, 2)
+    testing.assertEq(loc.line, 2)
+    testing.assertEq(loc.column, 1)
+    let loc2 = losslessLocate(stream.lineIndex, 4)
+    testing.assertEq(loc2.line, 3)
+    testing.assertEq(loc2.column, 1)
+}
+
+fn testLineIndexBeyondEOF() {
+    let stream = losslessLex("abc")
+    let loc = losslessLocate(stream.lineIndex, 100)
+    testing.assertEq(loc.line, 1)
+}
+
+// -------------------------------------------------------------------
+// TRIVIA CLASSIFICATION TESTS
+// -------------------------------------------------------------------
+
+fn testTriviaPicksUpShebang() {
+    let stream = losslessLex("#!/osty\nfn f() {}")
+    // first trivia should be a shebang.
+    let first = losslessTriviaFirst(stream)
+    testing.assert(first.kind == TriviaShebang)
+}
+
+fn testTriviaPicksUpDocComment() {
+    let stream = losslessLex("/// hi\nfn f() {}")
+    let first = losslessTriviaFirst(stream)
+    testing.assert(first.kind == TriviaDocComment)
+}
+
+fn testTriviaPicksUpBlockComment() {
+    let stream = losslessLex("/* hi */\nfn f() {}")
+    let first = losslessTriviaFirst(stream)
+    testing.assert(first.kind == TriviaBlockComment)
+}
+
+fn testTriviaUnterminatedBlockCommentTagged() {
+    let stream = losslessLex("/* never ends")
+    let first = losslessTriviaFirst(stream)
+    testing.assert(first.kind == TriviaUnterminatedBlockComment)
+}
+
+fn losslessTriviaFirst(stream: LosslessStream) -> LosslessTrivia {
+    for tr in stream.trivia {
+        return tr
+    }
+    LosslessTrivia {
+        kind: TriviaWhitespace,
+        offset: 0,
+        length: 0,
+        line: 1,
+        column: 1,
+        endLine: 1,
+        endColumn: 1,
+    }
+}
+
+// -------------------------------------------------------------------
+// DIAGNOSTIC TESTS
+// -------------------------------------------------------------------
+
+fn testFatArrowEmitsE0007() {
+    // Build the source so the test file itself never contains a literal
+    // fat arrow — the bootstrap lexer scans raw units, so writing the
+    // two-char sequence in a comment would fire our synthesized E0007
+    // on our own test file.
+    let gt = ">"
+    let fatSrc = "fn f() \{\n    match x \{\n        1 ={gt} 2,\n    \}\n\}"
+    let stream = losslessLex(fatSrc)
+    let code = losslessFirstDiagCode(stream)
+    testing.assertEq(code, "E0007")
+}
+
+fn testUnterminatedStringEmitsE0001() {
+    let stream = losslessLex("let s = \"abc")
+    let code = losslessFirstDiagCode(stream)
+    testing.assertEq(code, "E0001")
+}
+
+fn testUppercaseBaseEmitsE0002() {
+    let stream = losslessLex("let x = 0Xff")
+    let code = losslessFirstDiagCode(stream)
+    testing.assertEq(code, "E0002")
+}
+
+fn losslessFirstDiagCode(stream: LosslessStream) -> String {
+    for d in stream.diagnostics {
+        return d.diagCode
+    }
+    ""
+}
+
+// -------------------------------------------------------------------
+// MODE STACK TESTS
+// -------------------------------------------------------------------
+
+fn testModeStackOnStringToken() {
+    let stream = losslessLex("let s = \"hi\"")
+    let tokenCount = losslessTokenCount(stream)
+    let mut stringIdx = -1
+    let mut idx = 0
+    for tok in stream.tokens {
+        if tok.kind == FrontString {
+            stringIdx = idx
+        }
+        idx = idx + 1
+    }
+    testing.assert(stringIdx >= 0)
+    let frames = losslessModeStackAt(stream, stringIdx)
+    let mut frameCount = 0
+    for f in frames {
+        let _ = f
+        frameCount = frameCount + 1
+    }
+    testing.assertEq(frameCount, 1)
+    let _ = tokenCount
+}
+
+fn testModeStackOnTripleString() {
+    let src = strings.join(
+        [
+            "let q = \"\"\"",
+            "    SELECT 1",
+            "    \"\"\"",
+        ],
+        "\n",
+    )
+    let stream = losslessLex(src)
+    let mut idx = 0
+    let mut stringIdx = -1
+    for tok in stream.tokens {
+        if tok.kind == FrontString && tok.triple {
+            stringIdx = idx
+        }
+        idx = idx + 1
+    }
+    testing.assert(stringIdx >= 0)
+    let frames = losslessModeStackAt(stream, stringIdx)
+    for f in frames {
+        testing.assert(f.mode == ModeTripleStringBody || f.mode == ModeInterpolationExpr)
+    }
+}
+
+// -------------------------------------------------------------------
+// INCREMENTAL RE-LEX TESTS
+// -------------------------------------------------------------------
+
+fn testRelexIdentityEdit() {
+    let src = "fn f() { let x = 1 }"
+    let old = losslessLex(src)
+    let edit = LosslessEdit { start: 0, oldEnd: 0, replacement: "" }
+    let result = losslessRelex(old, edit)
+    testing.assertEq(result.report.offsetDelta, 0)
+    // After a no-op edit the token count should match the old stream.
+    let newCount = losslessTokenCount(result.stream)
+    let oldCount = losslessTokenCount(old)
+    testing.assertEq(newCount, oldCount)
+}
+
+fn testRelexAppend() {
+    let src = "let x = 1"
+    let old = losslessLex(src)
+    let oldCount = losslessTokenCount(old)
+    let edit = LosslessEdit {
+        start: stringUnitCount(src),
+        oldEnd: stringUnitCount(src),
+        replacement: "\nlet y = 2",
+    }
+    let result = losslessRelex(old, edit)
+    testing.assert(result.report.offsetDelta > 0)
+    let newCount = losslessTokenCount(result.stream)
+    testing.assert(newCount > oldCount)
+}
+
+fn testRelexReplaceToken() {
+    let src = "let x = 1"
+    let old = losslessLex(src)
+    let edit = LosslessEdit {
+        start: 8,
+        oldEnd: 9,
+        replacement: "42",
+    }
+    let result = losslessRelex(old, edit)
+    let newSrc = losslessApplyEdit(src, edit)
+    testing.assertEq(newSrc, "let x = 42")
+    let _ = result
+}
+
+fn testRelexStablePrefix() {
+    let src = "let a = 1\nlet b = 2\nlet c = 3"
+    let old = losslessLex(src)
+    // Edit the last line only; prefix covering `let a = 1\n` and
+    // `let b = 2\n` should be stable.
+    let editStart = stringUnitCount("let a = 1\nlet b = 2\nlet c = ")
+    let edit = LosslessEdit {
+        start: editStart,
+        oldEnd: editStart + 1,
+        replacement: "99",
+    }
+    let prefix = losslessStablePrefixBoundary(old, edit)
+    testing.assert(prefix > 0)
+}
+
+// -------------------------------------------------------------------
+// COMPAT BRIDGE TESTS
+// -------------------------------------------------------------------
+
+fn testCompatBridgeTokenKinds() {
+    let src = "fn f() { let x = 1 }"
+    let stream = losslessLex(src)
+    let fronts = losslessToFrontTokens(stream)
+    let losslessCount = losslessTokenCount(stream)
+    let mut bridgeCount = 0
+    for t in fronts {
+        let _ = t
+        bridgeCount = bridgeCount + 1
+    }
+    testing.assertEq(losslessCount, bridgeCount)
+}
+
+// -------------------------------------------------------------------
+// ACCESSORS
+// -------------------------------------------------------------------
+
+fn testLeadingTriviaLookup() {
+    let src = "// head\nfn f() {}"
+    let stream = losslessLex(src)
+    // The first significant token is `fn`; its leading trivia should
+    // include the line comment and the newline.
+    let fnToken = losslessTokenAt(stream, 0)
+    testing.assert(fnToken.leadingCount >= 1)
+    let leading = losslessLeadingTrivia(stream, 0)
+    let mut sawComment = false
+    for tr in leading {
+        if tr.kind == TriviaLineComment {
+            sawComment = true
+        }
+    }
+    testing.assert(sawComment)
+}
+
+fn testLocateTokenSpan() {
+    let src = "let x = 1"
+    let stream = losslessLex(src)
+    let tok = losslessTokenAt(stream, 0)
+    let loc = losslessTokenLocate(stream, tok)
+    testing.assertEq(loc.line, 1)
+    testing.assertEq(loc.column, 1)
+}
