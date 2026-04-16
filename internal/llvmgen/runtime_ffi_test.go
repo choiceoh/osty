@@ -374,3 +374,74 @@ func TestGenerateForInOverListStringUsesRuntimeABI(t *testing.T) {
 		}
 	}
 }
+
+func TestGenerateForInOverTemporaryManagedListUsesRootSlot(t *testing.T) {
+	file := parseLLVMGenFile(t, `use runtime.strings as strings {
+    fn Split(s: String, sep: String) -> List<String>
+}
+
+fn main() {
+    for item in strings.Split("a,b", ",") {
+        println(item)
+    }
+}
+`)
+
+	ir, err := Generate(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/list_for_in_temp.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"call ptr @osty_rt_strings_Split",
+		"call void @osty.gc.root_bind_v1",
+		"call void @osty.gc.safepoint_v1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateManagedTemporaryCallArgUsesRootSlot(t *testing.T) {
+	file := parseLLVMGenFile(t, `use runtime.strings as strings {
+    fn Split(s: String, sep: String) -> List<String>
+}
+
+fn count() -> Int {
+    1
+}
+
+fn take(items: List<String>, n: Int) -> Int {
+    items.len() + n
+}
+
+fn main() {
+    println(take(strings.Split("a,b", ","), count()))
+}
+`)
+
+	ir, err := Generate(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/call_arg_temp_root.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"call ptr @osty_rt_strings_Split",
+		"call void @osty.gc.root_bind_v1",
+		"call i64 @count(",
+		"call i64 @take(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
