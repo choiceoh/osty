@@ -1,0 +1,681 @@
+use go "strings" as strings {
+    fn Join(elems: List<String>, sep: String) -> String
+    fn Split(s: String, sep: String) -> List<String>
+    fn HasPrefix(s: String, prefix: String) -> Bool
+    fn HasSuffix(s: String, suffix: String) -> Bool
+    fn TrimPrefix(s: String, prefix: String) -> String
+    fn TrimSpace(s: String) -> String
+    fn ReplaceAll(s: String, old: String, new: String) -> String
+}
+
+// ===================================================================
+// OstyLexer — clean self-hosted lexer interface mirroring the Go
+// lexer at internal/lexer/lexer.go. Wraps frontendLexStream and adds:
+//   - LeadingDoc joining (Go: token.Token.LeadingDoc)
+//   - Rich token output with positions and text
+//   - Source normalization (\r\n -> \n)
+//   - Error formatting
+// ===================================================================
+
+/// OstyRichToken is a self-hosted token that carries all information
+/// the Go token.Token does: kind, position, text, doc comment, triple
+/// flag, and string parts (for interpolation).
+pub struct OstyRichToken {
+    pub kind: FrontTokenKind,
+    pub text: String,
+    pub startOffset: Int,
+    pub startLine: Int,
+    pub startCol: Int,
+    pub endOffset: Int,
+    pub endLine: Int,
+    pub endCol: Int,
+    pub leadingDoc: String,
+    pub triple: Bool,
+    pub partCount: Int,
+}
+
+/// OstyLexError mirrors diag.Diagnostic for lex errors.
+pub struct OstyLexError {
+    pub code: FrontLexDiagnosticCode,
+    pub diagCode: String,
+    pub message: String,
+    pub hint: String,
+    pub startOffset: Int,
+    pub startLine: Int,
+    pub startCol: Int,
+    pub endOffset: Int,
+    pub endLine: Int,
+    pub endCol: Int,
+}
+
+/// OstyLexComment stores a comment with position and kind.
+pub struct OstyLexComment {
+    pub kind: FrontCommentKind,
+    pub kindCode: Int,
+    pub text: String,
+    pub startOffset: Int,
+    pub startLine: Int,
+    pub startCol: Int,
+    pub endOffset: Int,
+    pub endLine: Int,
+    pub endCol: Int,
+    pub lines: Int,
+}
+
+/// OstyLexStringPart is the Go adapter-ready string part shape.
+pub struct OstyLexStringPart {
+    pub ownerToken: Int,
+    pub kindCode: Int,
+    pub text: String,
+    pub decodeEscapes: Bool,
+    pub exprTokenStart: Int,
+    pub exprTokenCount: Int,
+}
+
+/// OstyLexFacts holds the non-token side tables in Go adapter-ready form.
+pub struct OstyLexFacts {
+    pub errors: List<OstyLexError>,
+    pub comments: List<OstyLexComment>,
+    pub stringParts: List<OstyLexStringPart>,
+    pub leadingDocs: List<String>,
+}
+
+/// OstyLexResult is the full lexer output, equivalent to what the Go
+/// Lexer.Lex() + Lexer.Errors() + Lexer.Comments() returns.
+pub struct OstyLexResult {
+    pub tokens: List<OstyRichToken>,
+    pub errors: List<OstyLexError>,
+    pub comments: List<OstyLexComment>,
+    pub hasBom: Bool,
+    pub hasShebang: Bool,
+}
+
+/// OstyLexedSource is the parser/checker boundary for self-hosted callers.
+/// It keeps the normalized source next to the parser-compatible lexer stream
+/// so later stages never have to reconstruct token text from a different
+/// source buffer.
+pub struct OstyLexedSource {
+    pub source: String,
+    pub stream: FrontLexStream,
+}
+
+// ===================================================================
+// MAIN API
+// ===================================================================
+
+/// ostyLexSource returns the normalized source and frontend-compatible token
+/// stream used by the self-hosted parser and checker.
+pub fn ostyLexSource(source: String) -> OstyLexedSource {
+    let normalized = ostyNormalizeSource(source)
+    OstyLexedSource {
+        source: normalized,
+        stream: frontendLexStream(normalized),
+    }
+}
+
+/// ostyLex lexes source code and returns a rich result with tokens,
+/// errors, and comments. This is the self-hosted equivalent of:
+///   l := lexer.New(src)
+///   tokens := l.Lex()
+///   errors := l.Errors()
+///   comments := l.Comments()
+pub fn ostyLex(source: String) -> OstyLexResult {
+    let lexed = ostyLexSource(source)
+    let units = strings.Split(lexed.source, "")
+    let stream = lexed.stream
+    let facts = ostyLexFactsFromStream(lexed.source, stream)
+
+    let mut tokens: List<OstyRichToken> = []
+    let mut tokenIdx = 0
+    let tokenCount = frontLexTokenCount(stream)
+
+    for tokenIdx < tokenCount {
+        let lexTok = frontLexTokenAt(stream, tokenIdx)
+        let text = frontLexemeFromUnits(units, lexTok.start.offset, lexTok.length)
+
+        let mut rt = OstyRichToken {
+            kind: lexTok.kind,
+            text,
+            startOffset: lexTok.start.offset,
+            startLine: lexTok.start.line,
+            startCol: lexTok.start.column,
+            endOffset: lexTok.end.offset,
+            endLine: lexTok.end.line,
+            endCol: lexTok.end.column,
+            leadingDoc: ostyStringAt(facts.leadingDocs, tokenIdx),
+            triple: lexTok.triple,
+            partCount: lexTok.interpolations,
+        }
+        tokens.push(rt)
+        tokenIdx = tokenIdx + 1
+    }
+
+    OstyLexResult {
+        tokens,
+        errors: facts.errors,
+        comments: facts.comments,
+        hasBom: stream.bomStripped > 0,
+        hasShebang: stream.shebangs > 0,
+    }
+}
+
+/// ostyLexFactsFromStream converts diagnostic/comment/string-part side tables
+/// into a compact shape the Go adapter can copy into public compiler structs.
+pub fn ostyLexFactsFromStream(source: String, stream: FrontLexStream) -> OstyLexFacts {
+    let units = strings.Split(source, "")
+
+    let mut errors: List<OstyLexError> = []
+    let diagCount = frontLexDiagnosticCount(stream)
+    let mut di = 0
+    for di < diagCount {
+        errors.push(ostyLexErrorFromDiagnostic(units, frontLexDiagnosticAt(stream, di)))
+        di = di + 1
+    }
+    for fat in ostyFatArrowDiagnostics(units) {
+        errors.push(fat)
+    }
+
+    let mut comments: List<OstyLexComment> = []
+    let commentCount = frontCommentCount(stream)
+    let mut ci = 0
+    for ci < commentCount {
+        comments.push(ostyLexCommentFromFront(units, frontCommentAt(stream, ci)))
+        ci = ci + 1
+    }
+
+    let mut stringParts: List<OstyLexStringPart> = []
+    let tokenCount = frontLexTokenCount(stream)
+    let mut ti = 0
+    for ti < tokenCount {
+        let tok = frontLexTokenAt(stream, ti)
+        if tok.kind == FrontString || tok.kind == FrontRawString {
+            let before = ostyLexStringPartCount(stringParts)
+            let partCount = frontStringPartCount(stream)
+            let mut pi = 0
+            for pi < partCount {
+                let part = frontStringPartAt(stream, pi)
+                if part.ownerToken == ti {
+                    stringParts.push(ostyLexStringPartFromFront(units, tok, part))
+                }
+                pi = pi + 1
+            }
+            if ostyLexStringPartCount(stringParts) == before {
+                stringParts.push(ostyDefaultStringPart(units, tok, ti))
+            }
+        }
+        ti = ti + 1
+    }
+
+    let mut leadingDocs: List<String> = []
+    let mut li = 0
+    for li < tokenCount {
+        leadingDocs.push(ostyJoinDocLines(units, stream, frontLexTokenAt(stream, li)))
+        li = li + 1
+    }
+
+    OstyLexFacts { errors, comments, stringParts, leadingDocs }
+}
+
+/// ostyLexTokens is a convenience that returns just the parser-compatible
+/// token list from source. Equivalent to:
+///   stream := frontendLexStream(source)
+///   tokens := frontTokensFromSource(source, stream)
+pub fn ostyLexTokens(source: String) -> List<FrontToken> {
+    let lexed = ostyLexSource(source)
+    frontTokensFromSource(lexed.source, lexed.stream)
+}
+
+// ===================================================================
+// GO ADAPTER FACT HELPERS
+// ===================================================================
+
+fn ostyLexErrorFromDiagnostic(units: List<String>, d: FrontLexDiagnostic) -> OstyLexError {
+    OstyLexError {
+        code: d.code,
+        diagCode: ostyLexDiagnosticCode(d.code),
+        message: ostyLexDiagnosticMessage(units, d),
+        hint: ostyLexDiagnosticHint(d.code),
+        startOffset: d.start.offset,
+        startLine: d.start.line,
+        startCol: d.start.column,
+        endOffset: d.end.offset,
+        endLine: d.end.line,
+        endCol: d.end.column,
+    }
+}
+
+fn ostyFatArrowDiagnostics(units: List<String>) -> List<OstyLexError> {
+    let mut out: List<OstyLexError> = []
+    let unitCount = ostyStringListCount(units)
+    let mut idx = 0
+    for idx < unitCount - 1 {
+        if frontUnitAt(units, idx) == "=" && frontUnitAt(units, idx + 1) == ">" {
+            let start = frontPositionAt(units, idx)
+            let end = frontPositionAt(units, idx + 2)
+            let gt = ">"
+            out.push(
+                OstyLexError {
+                    code: FrontDiagIllegalCharacter,
+                    diagCode: "E0007",
+                    message: "`={gt}` is not valid Osty syntax; use `->`",
+                    hint: "",
+                    startOffset: start.offset,
+                    startLine: start.line,
+                    startCol: start.column,
+                    endOffset: end.offset,
+                    endLine: end.line,
+                    endCol: end.column,
+                },
+            )
+        }
+        idx = idx + 1
+    }
+    out
+}
+
+fn ostyLexDiagnosticCode(code: FrontLexDiagnosticCode) -> String {
+    match code {
+        FrontDiagUnterminatedBlockComment -> "E0004",
+        FrontDiagUnterminatedString -> "E0001",
+        FrontDiagUnterminatedInterpolation -> "E0001",
+        FrontDiagNewlineInString -> "E0001",
+        FrontDiagTripleMissingLeadingNewline -> "E0006",
+        FrontDiagBadTripleIndent -> "E0006",
+        FrontDiagUppercaseBasePrefix -> "E0002",
+        FrontDiagUnknownEscape -> "E0003",
+        FrontDiagEmptyChar -> "E0001",
+        FrontDiagEmptyByte -> "E0001",
+        FrontDiagIllegalCharacter -> "E0005",
+    }
+}
+
+fn ostyLexDiagnosticMessage(units: List<String>, d: FrontLexDiagnostic) -> String {
+    match d.code {
+        FrontDiagUnterminatedBlockComment -> "unterminated block comment",
+        FrontDiagUnterminatedString -> "unterminated string literal",
+        FrontDiagUnterminatedInterpolation -> "unterminated interpolation in string",
+        FrontDiagNewlineInString -> "newline in string literal",
+        FrontDiagTripleMissingLeadingNewline -> "invalid triple-quoted string",
+        FrontDiagBadTripleIndent -> "invalid triple-quoted string",
+        FrontDiagUppercaseBasePrefix -> "uppercase base prefix is not allowed",
+        FrontDiagUnknownEscape -> "unknown escape sequence",
+        FrontDiagEmptyChar -> ostyCharDiagnosticMessage(units, d.start.offset, false),
+        FrontDiagEmptyByte -> ostyCharDiagnosticMessage(units, d.start.offset, true),
+        FrontDiagIllegalCharacter -> "illegal character",
+    }
+}
+
+fn ostyCharDiagnosticMessage(units: List<String>, start: Int, byteLit: Bool) -> String {
+    if byteLit {
+        if frontUnitAt(units, start) == "b" && frontUnitAt(units, start + 1) == "'" {
+            let third = frontUnitAt(units, start + 2)
+            if third == "\n" || third == "\r" {
+                return "unterminated byte literal"
+            }
+        }
+        return "empty byte literal"
+    }
+    if frontUnitAt(units, start) == "'" {
+        let second = frontUnitAt(units, start + 1)
+        if second == "\n" || second == "\r" {
+            return "unterminated char literal"
+        }
+    }
+    "empty char literal"
+}
+
+fn ostyLexDiagnosticHint(code: FrontLexDiagnosticCode) -> String {
+    match code {
+        FrontDiagUppercaseBasePrefix -> "use lowercase base prefixes: `0x`, `0b`, or `0o`",
+        FrontDiagIllegalCharacter -> "",
+        FrontDiagUnterminatedBlockComment -> "",
+        FrontDiagUnterminatedString -> "",
+        FrontDiagUnterminatedInterpolation -> "",
+        FrontDiagNewlineInString -> "",
+        FrontDiagTripleMissingLeadingNewline -> "",
+        FrontDiagBadTripleIndent -> "",
+        FrontDiagUnknownEscape -> "",
+        FrontDiagEmptyChar -> "",
+        FrontDiagEmptyByte -> "",
+    }
+}
+
+fn ostyLexCommentFromFront(units: List<String>, c: FrontComment) -> OstyLexComment {
+    OstyLexComment {
+        kind: c.kind,
+        kindCode: ostyCommentKindCode(c.kind),
+        text: ostyCommentText(units, c),
+        startOffset: c.start.offset,
+        startLine: c.start.line,
+        startCol: c.start.column,
+        endOffset: c.end.offset,
+        endLine: c.end.line,
+        endCol: c.end.column,
+        lines: c.lines,
+    }
+}
+
+fn ostyCommentKindCode(kind: FrontCommentKind) -> Int {
+    match kind {
+        FrontCommentLine -> 0,
+        FrontCommentBlock -> 1,
+        FrontCommentDoc -> 2,
+    }
+}
+
+fn ostyCommentText(units: List<String>, c: FrontComment) -> String {
+    let start = c.start.offset
+    let end = c.end.offset
+    if c.kind == FrontCommentDoc {
+        return frontLexemeFromUnits(units, start + 3, end - start - 3)
+    }
+    if c.kind == FrontCommentLine {
+        return frontLexemeFromUnits(units, start + 2, end - start - 2)
+    }
+    if end - start >= 4 {
+        return frontLexemeFromUnits(units, start + 2, end - start - 4)
+    }
+    ""
+}
+
+fn ostyLexStringPartFromFront(
+    units: List<String>,
+    tok: FrontLexToken,
+    part: FrontStringPart,
+) -> OstyLexStringPart {
+    if part.kind == FrontStringInterpolation {
+        return OstyLexStringPart {
+            ownerToken: part.ownerToken,
+            kindCode: 1,
+            text: "",
+            decodeEscapes: false,
+            exprTokenStart: part.exprTokenStart,
+            exprTokenCount: part.exprTokenCount,
+        }
+    }
+    let mut text = frontLexemeFromUnits(units, part.start.offset, part.end.offset - part.start.offset)
+    if tok.triple {
+        text = ostyNormalizeTripleSegment(text)
+    }
+    OstyLexStringPart {
+        ownerToken: part.ownerToken,
+        kindCode: 0,
+        text,
+        decodeEscapes: tok.kind == FrontString && !(tok.triple),
+        exprTokenStart: 0,
+        exprTokenCount: 0,
+    }
+}
+
+fn ostyDefaultStringPart(units: List<String>, tok: FrontLexToken, owner: Int) -> OstyLexStringPart {
+    let mut text = ostyStringContentRaw(units, tok)
+    if tok.triple {
+        text = ostyNormalizeTripleSegment(text)
+    }
+    OstyLexStringPart {
+        ownerToken: owner,
+        kindCode: 0,
+        text,
+        decodeEscapes: tok.kind == FrontString && !(tok.triple),
+        exprTokenStart: 0,
+        exprTokenCount: 0,
+    }
+}
+
+fn ostyStringContentRaw(units: List<String>, tok: FrontLexToken) -> String {
+    let start = tok.start.offset
+    let end = tok.end.offset
+    if tok.kind == FrontRawString && tok.triple {
+        return frontLexemeFromUnits(units, start + 4, end - start - 7)
+    }
+    if tok.kind == FrontString && tok.triple {
+        return frontLexemeFromUnits(units, start + 3, end - start - 6)
+    }
+    if tok.kind == FrontRawString {
+        return frontLexemeFromUnits(units, start + 2, end - start - 3)
+    }
+    if tok.kind == FrontString {
+        return frontLexemeFromUnits(units, start + 1, end - start - 2)
+    }
+    ""
+}
+
+fn ostyNormalizeTripleSegment(text: String) -> String {
+    let trimIndent = strings.HasPrefix(text, "\n")
+    let mut body = text
+    if strings.HasPrefix(body, "\n") {
+        body = ostyDropPrefixUnits(body, 1)
+    }
+    if strings.HasSuffix(body, "\n") {
+        body = ostyDropSuffixUnits(body, 1)
+    }
+    let mut lines = strings.Split(body, "\n")
+    let indent = ostyFirstNonBlankIndent(lines)
+    let mut normalized: List<String> = []
+    for line in lines {
+        if trimIndent && indent != "" {
+            normalized.push(strings.TrimPrefix(line, indent))
+        } else {
+            normalized.push(line)
+        }
+    }
+    strings.Join(ostyTrimBlankTail(normalized), "\n")
+}
+
+fn ostyFirstNonBlankIndent(lines: List<String>) -> String {
+    for line in lines {
+        if strings.TrimSpace(line) != "" {
+            let units = strings.Split(line, "")
+            let mut idx = 0
+            let count = ostyStringListCount(units)
+            for idx < count {
+                let unit = frontUnitAt(units, idx)
+                if unit != " " && unit != "\t" {
+                    return frontLexemeFromUnits(units, 0, idx)
+                }
+                idx = idx + 1
+            }
+            return line
+        }
+    }
+    ""
+}
+
+fn ostyTrimBlankTail(lines: List<String>) -> List<String> {
+    let mut seen = 0
+    let mut keep = 0
+    for line in lines {
+        if strings.TrimSpace(line) != "" {
+            keep = seen + 1
+        }
+        seen = seen + 1
+    }
+    let mut out: List<String> = []
+    let mut idx = 0
+    for line in lines {
+        if idx < keep {
+            out.push(line)
+        }
+        idx = idx + 1
+    }
+    out
+}
+
+fn ostyDropPrefixUnits(text: String, count: Int) -> String {
+    let units = strings.Split(text, "")
+    frontLexemeFromUnits(units, count, ostyStringListCount(units) - count)
+}
+
+fn ostyDropSuffixUnits(text: String, count: Int) -> String {
+    let units = strings.Split(text, "")
+    frontLexemeFromUnits(units, 0, ostyStringListCount(units) - count)
+}
+
+fn ostyLexStringPartCount(parts: List<OstyLexStringPart>) -> Int {
+    let mut count = 0
+    for part in parts {
+        let _ = part
+        count = count + 1
+    }
+    count
+}
+
+fn ostyStringListCount(items: List<String>) -> Int {
+    let mut count = 0
+    for item in items {
+        let _ = item
+        count = count + 1
+    }
+    count
+}
+
+fn ostyStringAt(items: List<String>, target: Int) -> String {
+    let mut idx = 0
+    for item in items {
+        if idx == target {
+            return item
+        }
+        idx = idx + 1
+    }
+    ""
+}
+
+// ===================================================================
+// SOURCE NORMALIZATION
+// ===================================================================
+
+/// ostyNormalizeSource normalizes \r\n and lone \r to \n, matching
+/// the Go lexer's normalizeNewlines behavior.
+pub fn ostyNormalizeSource(source: String) -> String {
+    let step1 = strings.ReplaceAll(source, "\r\n", "\n")
+    strings.ReplaceAll(step1, "\r", "\n")
+}
+
+// ===================================================================
+// DOC COMMENT JOINING
+// ===================================================================
+
+fn ostyJoinDocLines(units: List<String>, stream: FrontLexStream, tok: FrontLexToken) -> String {
+    let docLines = tok.leadingDocLines
+    if docLines <= 0 {
+        return ""
+    }
+    let commentCount = frontCommentCount(stream)
+    let mut docParts: List<String> = []
+    let mut ci = 0
+    for ci < commentCount {
+        let c = frontCommentAt(stream, ci)
+        if c.kind == FrontCommentDoc && c.end.line <= tok.start.line && c.end.line >= tok.start.line - docLines {
+            docParts.push(strings.TrimSpace(ostyCommentText(units, c)))
+        }
+        ci = ci + 1
+    }
+    strings.Join(docParts, "\n")
+}
+
+// ===================================================================
+// TOKEN COUNT AND ACCESS HELPERS
+// ===================================================================
+
+pub fn ostyLexResultTokenCount(result: OstyLexResult) -> Int {
+    let mut c = 0
+    for t in result.tokens {
+        let _ = t
+        c = c + 1
+    }
+    c
+}
+
+pub fn ostyLexResultErrorCount(result: OstyLexResult) -> Int {
+    let mut c = 0
+    for e in result.errors {
+        let _ = e
+        c = c + 1
+    }
+    c
+}
+
+pub fn ostyLexResultCommentCount(result: OstyLexResult) -> Int {
+    let mut c = 0
+    for co in result.comments {
+        let _ = co
+        c = c + 1
+    }
+    c
+}
+
+pub fn ostyLexResultTokenAt(result: OstyLexResult, idx: Int) -> OstyRichToken {
+    let mut i = 0
+    for t in result.tokens {
+        if i == idx {
+            return t
+        }
+        i = i + 1
+    }
+    OstyRichToken {
+        kind: FrontEOF, text: "", startOffset: 0, startLine: 0, startCol: 0,
+        endOffset: 0, endLine: 0, endCol: 0, leadingDoc: "", triple: false, partCount: 0,
+    }
+}
+
+// ===================================================================
+// TOKEN KIND PREDICATES
+// ===================================================================
+
+pub fn ostyIsKeyword(kind: FrontTokenKind) -> Bool {
+    isFrontKeywordKind(kind)
+}
+
+pub fn ostyIsLiteral(kind: FrontTokenKind) -> Bool {
+    isFrontLiteralKind(kind)
+}
+
+pub fn ostyIsPunctuation(kind: FrontTokenKind) -> Bool {
+    isFrontPunctuationKind(kind)
+}
+
+pub fn ostyIsAssignOp(kind: FrontTokenKind) -> Bool {
+    frontIsAssignOp(kind)
+}
+
+// ===================================================================
+// SUMMARY API (backward compatible with frontendLexSummary)
+// ===================================================================
+
+/// ostyLexSummary returns the same summary structure as frontendLexSummary
+/// but using the rich lexer path.
+pub fn ostyLexSummary(source: String) -> FrontLexSummary {
+    frontendLexSummary(source)
+}
+
+// ===================================================================
+// FORMATTING
+// ===================================================================
+
+/// ostyFormatLexErrors formats all lex errors into a human-readable string.
+pub fn ostyFormatLexErrors(result: OstyLexResult) -> String {
+    let mut lines: List<String> = []
+    for e in result.errors {
+        lines.push("lex error: {e.message} at line {e.startLine}")
+    }
+    strings.Join(lines, "\n")
+}
+
+/// ostyFormatTokens produces a debug dump of the token stream.
+pub fn ostyFormatTokens(result: OstyLexResult) -> String {
+    let mut lines: List<String> = []
+    for t in result.tokens {
+        let kindName = frontTokenKindName(t.kind)
+        if t.text != "" && t.text != kindName {
+            lines.push("{t.startLine}:{t.startCol} {kindName} \"{t.text}\"")
+        } else {
+            lines.push("{t.startLine}:{t.startCol} {kindName}")
+        }
+    }
+    strings.Join(lines, "\n")
+}
+
+/// ostyTokenKindName returns the human-readable name for a token kind.
+pub fn ostyTokenKindName(kind: FrontTokenKind) -> String {
+    frontTokenKindName(kind)
+}

@@ -1,0 +1,152 @@
+use std.testing
+
+fn assertParsedVersion(text: String, want: SemVersion) {
+    match parseSemVersionText(text) {
+        Ok(got) -> testing.assertEq(compareSemVersion(got, want), 0),
+        Err(e) -> testing.fail(e),
+    }
+}
+
+fn assertParseVersionFails(text: String) {
+    match parseSemVersionText(text) {
+        Ok(_) -> testing.fail("expected parse failure"),
+        Err(_) -> testing.assert(true),
+    }
+}
+
+fn assertParsedNumber(text: String, want: Int) {
+    match parseSemNumber(text) {
+        Ok(got) -> testing.assertEq(got, want),
+        Err(e) -> testing.fail(e),
+    }
+}
+
+fn assertParseNumberFails(text: String) {
+    match parseSemNumber(text) {
+        Ok(_) -> testing.fail("expected number parse failure"),
+        Err(_) -> testing.assert(true),
+    }
+}
+
+fn assertPreNumber(text: String, want: Int) {
+    match parseSemPreIdent(text) {
+        Ok(got) -> testing.assertEq(comparePreIdent(got, preNumber(want)), 0),
+        Err(e) -> testing.fail(e),
+    }
+}
+
+fn assertPreText(text: String, want: String) {
+    match parseSemPreIdent(text) {
+        Ok(got) -> testing.assertEq(comparePreIdent(got, preText(want)), 0),
+        Err(e) -> testing.fail(e),
+    }
+}
+
+fn testParseSemverCoreAndBuild() {
+    assertParsedVersion("1.2.3", stableVersion(1, 2, 3))
+    assertParsedVersion("v1.2.3", stableVersion(1, 2, 3))
+    assertParsedVersion("0.0.0", stableVersion(0, 0, 0))
+    assertParsedVersion("1.0.0+build.2", versionWithBuild(1, 0, 0, "build.2"))
+}
+
+fn testParseSemverPrerelease() {
+    assertParsedVersion("1.2.3-alpha", prerelease1(1, 2, 3, preText("alpha")))
+    assertParsedVersion("1.2.3-alpha.1", prerelease2(1, 2, 3, preText("alpha"), preNumber(1)))
+
+    match parseSemVersionText("1.2.3-rc.1+meta") {
+        Ok(got) -> {
+            let want = semVersion(1, 2, 3, preText("rc"), preNumber(1), preNone(), "meta")
+            testing.assertEq(compareSemVersion(got, want), 0)
+        },
+        Err(e) -> testing.fail(e),
+    }
+}
+
+fn testParseSemverRejectsInvalidForms() {
+    assertParseVersionFails("")
+    assertParseVersionFails("1")
+    assertParseVersionFails("1.2")
+    assertParseVersionFails("1.2.3.4")
+    assertParseVersionFails("01.0.0")
+    assertParseVersionFails("1.02.0")
+    assertParseVersionFails("1.2.3-")
+    assertParseVersionFails("1.2.3-01")
+    assertParseVersionFails("1.2.3-alpha+")
+    assertParseVersionFails("1.2.3-al_pha")
+}
+
+fn testParseSemverSplitSummaryExamples() {
+    let one = splitSummary(["core"])
+    testing.assertEq(one.count, 1)
+    testing.assertEq(one.first, "core")
+    testing.assertEq(one.second, "")
+
+    let many = splitSummary(["major", "minor", "patch", "ignored"])
+    testing.assertEq(many.count, 4)
+    testing.assertEq(many.first, "major")
+    testing.assertEq(many.second, "minor")
+    testing.assertEq(many.third, "patch")
+}
+
+fn testParseSemverNumberExamples() {
+    assertParsedNumber("0", 0)
+    assertParsedNumber("7", 7)
+    assertParsedNumber("123", 123)
+
+    assertParseNumberFails("")
+    assertParseNumberFails("00")
+    assertParseNumberFails("01")
+    assertParseNumberFails("4a")
+}
+
+fn testParseSemverIdentifierExamples() {
+    testing.assert(allAsciiDigits("12345"))
+    testing.assert(!(allAsciiDigits("")))
+    testing.assert(!(allAsciiDigits("12a")))
+
+    testing.assert(identifierTextValid("rc-1"))
+    testing.assert(identifierTextValid("BUILD"))
+    testing.assert(!(identifierTextValid("")))
+    testing.assert(!(identifierTextValid("rc.1")))
+
+    testing.assert(buildIdentifiersValid("meta.7.sha"))
+    testing.assert(!(buildIdentifiersValid("")))
+    testing.assert(!(buildIdentifiersValid("meta..sha")))
+}
+
+fn testParseSemverPreIdentifierExamples() {
+    assertPreNumber("9", 9)
+    assertPreText("alpha", "alpha")
+    assertPreText("rc-1", "rc-1")
+
+    match parseSemPreIdent("01") {
+        Ok(_) -> testing.fail("expected leading-zero pre-release failure"),
+        Err(e) -> testing.assertEq(e, "number has leading zero"),
+    }
+    match parseSemPreIdent("bad_name") {
+        Ok(_) -> testing.fail("expected invalid pre-release failure"),
+        Err(e) -> testing.assertEq(e, "invalid pre-release identifier"),
+    }
+}
+
+fn testParseSemverPreservesPrereleaseAndBuildFields() {
+    match parseSemVersionText("2.3.4-beta.7.sha+build.11") {
+        Ok(got) -> {
+            testing.assertEq(got.major, 2)
+            testing.assertEq(got.minor, 3)
+            testing.assertEq(got.patch, 4)
+            testing.assertEq(got.build, "build.11")
+            testing.assertEq(comparePreIdent(got.pre1, preText("beta")), 0)
+            testing.assertEq(comparePreIdent(got.pre2, preNumber(7)), 0)
+            testing.assertEq(comparePreIdent(got.pre3, preText("sha")), 0)
+        },
+        Err(e) -> testing.fail(e),
+    }
+}
+
+fn testParseSemverRejectsExtraPrereleaseAndBadBuildExamples() {
+    assertParseVersionFails("1.2.3-a.b.c.d")
+    assertParseVersionFails("1.2.3+build..1")
+    assertParseVersionFails("1.2.3+bad_meta")
+    assertParseVersionFails("1.2.3-rc+bad_meta")
+}

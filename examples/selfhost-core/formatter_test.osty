@@ -1,0 +1,238 @@
+use std.testing
+
+use go "strings" as fmtStrings {
+    fn Contains(s: String, substr: String) -> Bool
+}
+
+fn assertFormatterContains(output: String, text: String) {
+    testing.assert(fmtStrings.Contains(output, text))
+}
+
+fn testPureFormatterCompactsFunctionSpacing() {
+    let formatted = ostyFormatSource(r"fn add(a:Int,b:Int)->Int{return a+b}")
+    testing.assert(formatted.ok)
+    testing.assertEq(
+        formatted.output,
+        "fn add(a: Int, b: Int) -> Int \{\n    return a + b\n\}\n",
+    )
+}
+
+fn testPureFormatterIsIdempotentForFormattedSubset() {
+    let source = "fn add(a: Int, b: Int) -> Int \{\n    return a + b\n\}\n"
+    let once = ostyFormatSource(source)
+    testing.assert(once.ok)
+    let twice = ostyFormatSource(once.output)
+    testing.assert(twice.ok)
+    testing.assertEq(once.output, twice.output)
+}
+
+fn testPureFormatterCheckReportsCleanAndDirty() {
+    let dirty = ostyFormatCheck(r"fn add(a:Int)->Int{return a}")
+    testing.assert(dirty.ok)
+    testing.assert(dirty.changed)
+    let clean = ostyFormatCheck(dirty.output)
+    testing.assert(clean.ok)
+    testing.assert(!(clean.changed))
+}
+
+fn testPureFormatterOutputFeedsFrontParser() {
+    let formatted = ostyFormatSource(r"fn add(a:Int,b:Int)->Int{return a+b}")
+    testing.assert(formatted.ok)
+    let tree = frontendParseTree(formatted.output)
+    testing.assertEq(frontParseTreeDiagnosticCount(tree), 0)
+    testing.assertEq(frontParseTreeInvalidSpanCount(tree), 0)
+}
+
+fn testPureFormatterFormatsTypesAndLists() {
+    let formatted = ostyFormatSource(
+        r"fn first(xs:List<Int>)->Int{let ys=[1,2,3] return xs[0]??ys[0]}",
+    )
+    testing.assert(formatted.ok)
+    testing.assertEq(
+        formatted.output,
+        "fn first(xs: List<Int>) -> Int \{\n    let ys = [1, 2, 3]\n    return xs[0] ?? ys[0]\n\}\n",
+    )
+}
+
+fn testPureFormatterPreservesLeadingLineComment() {
+    let formatted = ostyFormatSource("// hello\nfn f()\{return 1\}")
+    testing.assert(formatted.ok)
+    testing.assertEq(
+        formatted.output,
+        "// hello\nfn f() \{\n    return 1\n\}\n",
+    )
+}
+
+fn testPureFormatterAngleDepthTorture() {
+    let formatted = ostyFormatSource(
+        "fn max<T: Ordered + Hashable>(a:T,b:T)->T\{if a>b\{return a\}else\{return b\}\}\ntype Handler = fn(List<Int>, Map<String,List<Int>>) -> Result<(), Error?>\nfn load(json:Json,text:String)->Result<Config,Error>\{let cfg=json.parse::<Config>(text)? return Ok(cfg)\}\nfn splitClose()->Int\{let xs:List<Int>=[] let m:Map<Int,List<Int>>=m return 0\}\nfn compare(a:Int,b:Int)->Bool\{return a < b\}",
+    )
+    testing.assert(formatted.ok)
+    testing.assertEq(
+        formatted.output,
+        "fn max<T: Ordered + Hashable>(a: T, b: T) -> T \{\n    if a > b \{\n        return a\n    \} else \{\n        return b\n    \}\n\}\ntype Handler = fn(List<Int>, Map<String, List<Int>>) -> Result<(), Error?>\nfn load(json: Json, text: String) -> Result<Config, Error> \{\n    let cfg = json.parse::<Config>(text)?\n    return Ok(cfg)\n\}\nfn splitClose() -> Int \{\n    let xs: List<Int> = []\n    let m: Map<Int, List<Int>> = m\n    return 0\n\}\nfn compare(a: Int, b: Int) -> Bool \{\n    return a < b\n\}\n",
+    )
+}
+
+fn testPureFormatterClosureAndAnnotationDepth() {
+    let formatted = ostyFormatSource(
+        "#[deprecated(message = \"old\")]\nfn f(xs:List<Int>)->List<Int>\{return xs.map(|x:Int|x+1).filter(|x|x>1)\}\nfn g()->fn(Int)->Int\{return || 1\}",
+    )
+    testing.assert(formatted.ok)
+    testing.assertEq(
+        formatted.output,
+        "#[deprecated(message = \"old\")]\nfn f(xs: List<Int>) -> List<Int> \{\n    return xs.map(|x: Int| x + 1).filter(|x| x > 1)\n\}\nfn g() -> fn(Int) -> Int \{\n    return || 1\n\}\n",
+    )
+}
+
+fn testPureFormatterTypeContextDepth() {
+    let formatted = ostyFormatSource(
+        "enum Wire<T>\{Packet(Result<List<T>,Error>),Fn(fn(Result<T,Error>,Map<String,List<T>>)->Result<(),Error>)\}\nfn tuple()->(Result<Int,Error>,fn(List<Int>,Result<String,Error>)->Map<String,Int>)\{return make()\}",
+    )
+    if !(formatted.ok) {
+        testing.fail(formatted.message)
+    }
+    assertFormatterContains(formatted.output, "Packet(Result<List<T>, Error>)")
+    assertFormatterContains(
+        formatted.output,
+        "Fn(fn(Result<T, Error>, Map<String, List<T>>) -> Result<(), Error>)",
+    )
+    assertFormatterContains(
+        formatted.output,
+        "fn tuple() -> (Result<Int, Error>, fn(List<Int>, Result<String, Error>) -> Map<String, Int>)",
+    )
+    let tree = frontendParseTree(formatted.output)
+    testing.assertEq(frontParseTreeDiagnosticCount(tree), 0)
+    testing.assertEq(frontParseTreeInvalidSpanCount(tree), 0)
+}
+
+fn testPureFormatterBracePostfixAndEmptyMapDepth() {
+    let formatted = ostyFormatSource(
+        "fn f()->String\{return User\{name:\"Ada\",meta:\{:\}\}.name\}\nfn g()->Int\{return makeMap()[\"answer\"]\}",
+    )
+    if !(formatted.ok) {
+        testing.fail(formatted.message)
+    }
+    assertFormatterContains(formatted.output, "meta: \{:\}")
+    assertFormatterContains(formatted.output, "\}.name")
+    assertFormatterContains(formatted.output, "return makeMap()[\"answer\"]")
+    let tree = frontendParseTree(formatted.output)
+    testing.assertEq(frontParseTreeDiagnosticCount(tree), 0)
+    testing.assertEq(frontParseTreeInvalidSpanCount(tree), 0)
+}
+
+fn testPureFormatterPatternBraceDepth() {
+    let formatted = ostyFormatSource(
+        "struct User\{name:Int\}\nfn score(u:User)->Int\{return match u \{ User\{name\} if name > 0 -> name, User\{name\} -> name, _ -> 0 \}\}\nfn names(xs:List<User>)->List<Int>\{return xs.map(|User\{name\}|name)\}",
+    )
+    if !(formatted.ok) {
+        testing.fail(formatted.message)
+    }
+    assertFormatterContains(formatted.output, "\} if name > 0 -> name")
+    assertFormatterContains(formatted.output, "\} -> name")
+    assertFormatterContains(formatted.output, "\}| name")
+    let tree = frontendParseTree(formatted.output)
+    testing.assertEq(frontParseTreeDiagnosticCount(tree), 0)
+    testing.assertEq(frontParseTreeInvalidSpanCount(tree), 0)
+}
+
+fn testPureFormatterKeywordExpressionDepth() {
+    let formatted = ostyFormatSource(
+        "enum Maybe\{Some(Int),None\}\nfn f(opt:Maybe,ok:Bool)->Int\{if let Some(x)=opt\{return x\}else\{return 0\} for let Some(y)=opt\{return y\} return if ok\{1\}else\{2\}\}\nfn g(opt:Maybe)->Int\{return match opt \{ Some(v) if v > 0 -> v, Some(v) -> v, _ -> 0 \}\}\nfn h(opt:Maybe)->Int\{return if let Some(z)=opt\{z\}else\{0\}\}\nfn i(opt:Maybe)->Int\{if match opt \{ Some(v) -> v > 0, _ -> false \} \{ return 1 \} else \{ return 0 \}\}",
+    )
+    if !(formatted.ok) {
+        testing.fail(formatted.message)
+    }
+    assertFormatterContains(formatted.output, "if let Some(x) = opt \{")
+    assertFormatterContains(formatted.output, "for let Some(y) = opt \{")
+    assertFormatterContains(formatted.output, "return if ok \{")
+    assertFormatterContains(formatted.output, "return match opt \{")
+    assertFormatterContains(formatted.output, "Some(v) if v > 0 -> v")
+    assertFormatterContains(formatted.output, "return if let Some(z) = opt \{")
+    assertFormatterContains(formatted.output, "if match opt \{")
+    assertFormatterContains(formatted.output, "\} \{")
+    let tree = frontendParseTree(formatted.output)
+    testing.assertEq(frontParseTreeDiagnosticCount(tree), 0)
+    testing.assertEq(frontParseTreeInvalidSpanCount(tree), 0)
+}
+
+fn testPureFormatterPatternContinuationDepth() {
+    let formatted = ostyFormatSource(
+        "struct User\{name:Int\}\nfn f(u:User)->Int\{let User\{name\}=u let User\{name\}:User=u return name\}\nfn g(u:User)->Int\{if let User\{name\}=u\{return name\}else\{return 0\}\}\nfn h(users:List<User>)->Int\{for User\{name\} in users\{return name\} return 0\}\nfn k(xs:List<User>)->List<Int>\{return xs.map(|User\{name\}:User|name)\}",
+    )
+    if !(formatted.ok) {
+        testing.fail(formatted.message)
+    }
+    assertFormatterContains(formatted.output, "\} = u")
+    assertFormatterContains(formatted.output, "\}: User = u")
+    assertFormatterContains(formatted.output, "\} in users \{")
+    assertFormatterContains(formatted.output, "\}: User| name")
+    let tree = frontendParseTree(formatted.output)
+    testing.assertEq(frontParseTreeDiagnosticCount(tree), 0)
+    testing.assertEq(frontParseTreeInvalidSpanCount(tree), 0)
+}
+
+fn testPureFormatterPatternsUseAstLeaves() {
+    let formatted = ostyFormatSource(
+        "enum Maybe\{Some(Int),None\}\nstruct User\{name:Int,age:Int\}\nfn f(v:Maybe,u:User)->Int\{let User\{name:n,age,..\}=u return match v \{ Some( 1..= 3 ) | None -> 0, x @ Some( _ ) -> 1, _ -> n \}\}",
+    )
+    if !(formatted.ok) {
+        testing.fail(formatted.message)
+    }
+    assertFormatterContains(formatted.output, "let User \{ name: n, age, .. \} = u")
+    assertFormatterContains(formatted.output, "Some(1..=3) | None -> 0")
+    assertFormatterContains(formatted.output, "x @ Some(_) -> 1")
+    let tree = frontendParseTree(formatted.output)
+    testing.assertEq(frontParseTreeDiagnosticCount(tree), 0)
+    testing.assertEq(frontParseTreeInvalidSpanCount(tree), 0)
+}
+
+fn testPureFormatterRightBraceInfixContinuationDepth() {
+    let formatted = ostyFormatSource(
+        "fn f(ok:Bool,x:Int)->Int\{return if ok\{1\}else\{2\}+x\}\nfn g(x:Int)->Int\{return match x \{ 0 -> 1, _ -> 2 \} ?? 0\}\nfn h(x:Int)->Bool\{return Box\{value:x\}==Box\{value:0\}\}\nfn r(ok:Bool)->Range\{return if ok\{0\}else\{1\}..10\}\nfn lt(ok:Bool,x:Int)->Bool\{return if ok\{1\}else\{2\}<x\}\nfn gt(ok:Bool,x:Int)->Bool\{return if ok\{1\}else\{2\}>x\}",
+    )
+    if !(formatted.ok) {
+        testing.fail(formatted.message)
+    }
+    assertFormatterContains(formatted.output, "\} + x")
+    assertFormatterContains(formatted.output, "\} ?? 0")
+    assertFormatterContains(formatted.output, "\} == Box")
+    assertFormatterContains(formatted.output, "\}..10")
+    assertFormatterContains(formatted.output, "\} < x")
+    assertFormatterContains(formatted.output, "\} > x")
+    let tree = frontendParseTree(formatted.output)
+    testing.assertEq(frontParseTreeDiagnosticCount(tree), 0)
+    testing.assertEq(frontParseTreeInvalidSpanCount(tree), 0)
+}
+
+fn testPureFormatterPrefixOperatorDepth() {
+    let formatted = ostyFormatSource(
+        "fn neg(n:Int)->Int\{return -n\}\nfn not(ok:Bool)->Bool\{return !ok\}\nfn flip(n:Int)->Int\{return ~n\}\nfn cmp(a:Int,b:Int)->Bool\{return a < -b && a > -b\}\nfn expr(ok:Bool,x:Int)->Bool\{return if ok\{1\}else\{2\}< -x\}\nfn loop(done:Bool)\{for !done\{return\}\}\nfn scrutinee(ok:Bool)->Int\{return match !ok \{ true -> 1, _ -> 0 \}\}\nfn later(ok:Bool)\{defer !ok\}",
+    )
+    if !(formatted.ok) {
+        testing.fail(formatted.message)
+    }
+    assertFormatterContains(formatted.output, "return -n")
+    assertFormatterContains(formatted.output, "return !ok")
+    assertFormatterContains(formatted.output, "return ~n")
+    assertFormatterContains(formatted.output, "return a < -b && a > -b")
+    assertFormatterContains(formatted.output, "\} < -x")
+    assertFormatterContains(formatted.output, "for !done \{")
+    assertFormatterContains(formatted.output, "return match !ok \{")
+    assertFormatterContains(formatted.output, "defer !ok")
+    let tree = frontendParseTree(formatted.output)
+    testing.assertEq(frontParseTreeDiagnosticCount(tree), 0)
+    testing.assertEq(frontParseTreeInvalidSpanCount(tree), 0)
+}
+
+fn testPureFormatterRejectsLexErrors() {
+    let formatted = ostyFormatSource("\"unterminated")
+    testing.assert(!(formatted.ok))
+    testing.assert(formatted.message != "")
+}
+
+fn testPureFormatterRejectsParseErrors() {
+    let formatted = ostyFormatSource("fn f()\{a < b < c\}")
+    testing.assert(!(formatted.ok))
+    testing.assert(formatted.message != "")
+}

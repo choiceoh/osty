@@ -1,0 +1,116 @@
+use go "strings" as strings {
+    fn Join(elems: List<String>, sep: String) -> String
+}
+
+pub struct SelfhostPipelineReport {
+    pub tokens: Int,
+    pub parseNodes: Int,
+    pub parseDiagnostics: Int,
+    pub irNodes: Int,
+    pub irDecls: Int,
+    pub irFuncs: Int,
+    pub irStmts: Int,
+    pub irExprs: Int,
+    pub irDiagnostics: Int,
+    pub irInvalidParents: Int,
+    pub irScopes: Int,
+    pub irSymbols: Int,
+    pub irTypedNodes: Int,
+    pub irEffectfulNodes: Int,
+    pub irTerminalNodes: Int,
+    pub irInvalidScopes: Int,
+    pub resolveSymbols: Int,
+    pub resolveDiagnostics: Int,
+    pub checkDiagnostics: Int,
+    pub checkedExpressions: Int,
+    pub lintDiagnostics: Int,
+    pub lintParseErrors: Int,
+    pub lintFixes: Int,
+    pub lintFixApplied: Int,
+    pub lintFixSkipped: Int,
+    pub fixedSource: String,
+    pub diagnostics: String,
+}
+
+pub fn selfhostPipelineSource(packageName: String, source: String) -> SelfhostPipelineReport {
+    selfhostPipelineSourceWithFixes(packageName, source, false)
+}
+
+pub fn selfhostPipelineSourceWithFixes(
+    packageName: String,
+    source: String,
+    applyFixes: Bool,
+) -> SelfhostPipelineReport {
+    let stream = frontendLexStream(source)
+    let tree = frontendParseTree(source)
+    let ast = astParse(source)
+    let module = irLowerAstFile(packageName, ast)
+    let ir = irSummarize(module)
+    let resolved = selfResolveAstFile(ast)
+    let checked = frontendCheckSource(source)
+    let linted = selfLintResolvedAstSource(source, ast, resolved)
+    let mut fixed = SelfLintApplyResult { source: "", applied: 0, skipped: 0 }
+    if applyFixes {
+        fixed = selfLintApplyFixes(source, linted)
+    }
+
+    SelfhostPipelineReport {
+        tokens: frontLexTokenCount(stream),
+        parseNodes: frontParseTreeNodeCount(tree),
+        parseDiagnostics: frontParseTreeDiagnosticCount(tree),
+        irNodes: ir.nodes,
+        irDecls: ir.decls,
+        irFuncs: ir.funcs,
+        irStmts: ir.stmts,
+        irExprs: ir.exprs,
+        irDiagnostics: ir.diagnostics,
+        irInvalidParents: ir.invalidParents,
+        irScopes: ir.scopes,
+        irSymbols: ir.symbols,
+        irTypedNodes: ir.typedNodes,
+        irEffectfulNodes: ir.effectfulNodes,
+        irTerminalNodes: ir.terminalNodes,
+        irInvalidScopes: ir.invalidScopes,
+        resolveSymbols: selfhostPipelineSymbolCount(resolved),
+        resolveDiagnostics: selfResolveDiagnosticCount(resolved),
+        checkDiagnostics: checked.errors,
+        checkedExpressions: checked.accepted,
+        lintDiagnostics: selfLintDiagnosticCount(linted),
+        lintParseErrors: linted.parseErrors,
+        lintFixes: selfLintMachineFixCount(linted),
+        lintFixApplied: fixed.applied,
+        lintFixSkipped: fixed.skipped,
+        fixedSource: fixed.source,
+        diagnostics: selfhostPipelineDiagnosticOutput(source, resolved, linted),
+    }
+}
+
+pub fn selfhostPipelineBlockingErrorCount(report: SelfhostPipelineReport) -> Int {
+    report.parseDiagnostics + report.irDiagnostics + report.irInvalidParents + report.irInvalidScopes + report.resolveDiagnostics + report.checkDiagnostics + report.lintParseErrors
+}
+
+fn selfhostPipelineSymbolCount(result: SelfResolveResult) -> Int {
+    let mut count = 0
+    for symbol in result.symbols {
+        let _ = symbol
+        count = count + 1
+    }
+    count
+}
+
+fn selfhostPipelineDiagnosticOutput(
+    source: String,
+    resolved: SelfResolveResult,
+    linted: SelfLintReport,
+) -> String {
+    let mut lines: List<String> = []
+    let resolveText = diagnosticFormatSelfResolveDiagnostics(source, resolved)
+    if resolveText != "" {
+        lines.push(resolveText)
+    }
+    let lintText = diagnosticFormatSelfLintDiagnostics(source, linted)
+    if lintText != "" {
+        lines.push(lintText)
+    }
+    strings.Join(lines, "\n")
+}

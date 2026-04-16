@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+if [ "$#" -eq 0 ]; then
+    echo "usage: $0 COMMAND [ARGS...]" >&2
+    exit 2
+fi
+
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+export OSTY_NATIVE_CHECKER_BIN="$ROOT/scripts/osty-native-checker"
+
+exec "$@"

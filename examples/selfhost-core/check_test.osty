@@ -1,0 +1,270 @@
+use std.testing
+
+fn testSelfCheckerAcceptsAstTypeFlow() {
+    let checked = frontendCheckSource(
+        r"""
+            interface Show {
+                fn show(self) -> String
+            }
+
+            struct Box<T> {
+                value: T
+
+                fn show(self) -> String {
+                    "box"
+                }
+            }
+
+            type IntBox = Box<Int>
+
+            fn id<T>(value: T) -> T {
+                value
+            }
+
+            fn render<T: Show>(value: T) -> String {
+                value.show()
+            }
+
+            fn main() {
+                let boxed: IntBox = Box { value: id::<Int>(1) }
+                let text: String = render(boxed)
+                let values: List<Int> = [1, 2]
+                let size: Int = values.map(|x| x + 1).len()
+                let outcome: Result<Int, String> = Ok(size)
+                let ok: Option<Int> = outcome.ok()
+                let got: Int = ok.unwrapOr(0)
+            }
+            """,
+    )
+
+    testing.assertEq(checked.errors, 0)
+    testing.assert(checked.assignments >= 8)
+    testing.assert(checked.accepted >= 8)
+}
+
+fn testSelfCheckerEmitsStructuredResult() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            struct Box<T> {
+                value: T
+            }
+
+            fn id<T>(value: T) -> T {
+                value
+            }
+
+            fn unused() -> Int {
+                1
+            }
+
+            fn main() {
+                let boxed: Box<Int> = Box { value: id::<Int>(1) }
+            }
+            """,
+    )
+
+    testing.assertEq(checked.summary.errors, 0)
+    testing.assert(frontCheckResultTypedNodeCount(checked) > 0)
+    testing.assertEq(frontCheckResultBindingType(checked, "boxed"), "Box<Int>")
+    testing.assert(frontCheckResultSymbolCount(checked, "fn") >= 2)
+    testing.assert(frontCheckResultSymbolCount(checked, "struct") >= 1)
+    testing.assertEq(checkResultSymbolType(checked, "struct", "Box", ""), "Box<T>")
+    testing.assertEq(checkResultSymbolType(checked, "fn", "id", ""), "fn(T) -> T")
+    testing.assertEq(checkResultSymbolType(checked, "fn", "unused", ""), "fn() -> Int")
+    testing.assert(frontCheckResultInstantiationCount(checked) >= 1)
+}
+
+fn checkResultSymbolType(result: FrontCheckResult, kind: String, name: String, owner: String) -> String {
+    let mut found = ""
+    for symbol in result.symbols {
+        if (kind == "" || symbol.kind == kind) && symbol.name == name && symbol.owner == owner {
+            found = symbol.typeName
+        }
+    }
+    found
+}
+
+fn testSelfCheckerReportsAssignmentReturnAndCallErrors() {
+    let checked = frontendCheckSource(
+        r"""
+            fn takesInt(value: Int) -> Int {
+                value
+            }
+
+            fn bad(flag: Bool) -> Int {
+                let count: Int = "nope"
+                let call: Bool = takesInt("bad")
+                return flag
+            }
+            """,
+    )
+
+    testing.assert(checked.errors >= 3)
+    testing.assert(checked.assignments >= 3)
+}
+
+fn testSelfCheckerAcceptsFieldAssignmentThroughStructValues() {
+    let checked = frontendCheckSource(
+        r"""
+            struct Counter { value: Int }
+
+            fn bump(counter: Counter) {
+                counter.value = counter.value + 1
+            }
+            """,
+    )
+
+    testing.assertEq(checked.errors, 0)
+}
+
+fn testSelfCheckerUnifiesUntypedIntWithConcreteGenericArgs() {
+    let checked = frontendCheckSource(
+        r"""
+            fn choose<T>(left: T, right: T) -> T {
+                right
+            }
+
+            fn main() {
+                let n: Int = 1
+                let got: Int = choose(0, n)
+            }
+            """,
+    )
+
+    testing.assertEq(checked.errors, 0)
+}
+
+fn testSelfCheckerBindsForInIdentifierPatterns() {
+    let checked = frontendCheckSource(
+        r"""
+            fn sum(xs: List<Int>) -> Int {
+                let mut total = 0
+                for x in xs {
+                    total = total + x
+                }
+                total
+            }
+            """,
+    )
+
+    testing.assertEq(checked.errors, 0)
+}
+
+fn testSelfCheckerAllowsParameterAccumulators() {
+    let checked = frontendCheckSource(
+        r"""
+            fn appendLine(lines: List<String>) -> List<String> {
+                lines.push("next")
+                lines = lines.map(|line| line)
+                lines
+            }
+            """,
+    )
+
+    testing.assertEq(checked.errors, 0)
+}
+
+fn testSelfCheckerAcceptsConcurrencyPreludeSurface() {
+    let checked = frontendCheckSource(
+        r"""
+            fn summarize(xs: List<Int>) -> Int {
+                let ch = thread.chan::<Int>(0)
+                let h = spawn(|| {
+                    for x in xs {
+                        ch <- x
+                    }
+                    ch.close()
+                })
+                let mut total = 0
+                for n in ch {
+                    total = total + n
+                }
+                h.join()
+                total
+            }
+
+            fn batch() -> List<Int> {
+                parallel(|| 1, || 2, || 3)
+            }
+            """,
+    )
+
+    testing.assertEq(checked.errors, 0)
+}
+
+fn testSelfCheckerChecksMatchExhaustivenessAndPatterns() {
+    let nonExhaustive = frontendCheckSource(
+        r"""
+            enum Color { Red, Green }
+
+            fn code(color: Color) -> Int {
+                match color {
+                    Red -> 1,
+                }
+            }
+            """,
+    )
+
+    let badPattern = frontendCheckSource(
+        r"""
+            enum Maybe { Some(Int), None }
+
+            fn main() {
+                let Some(value) = Some(1)
+                let f = |Some(value)| value
+            }
+            """,
+    )
+
+    testing.assert(nonExhaustive.errors > 0)
+    testing.assert(badPattern.errors >= 2)
+}
+
+fn testSelfCheckerChecksInterfaceSatisfaction() {
+    let good = frontendCheckSource(
+        r"""
+            interface Named {
+                fn name(self) -> String
+            }
+
+            struct User {
+                name: String
+
+                fn name(self) -> String {
+                    self.name
+                }
+            }
+
+            fn display<T: Named>(value: T) -> String {
+                value.name()
+            }
+
+            fn main() {
+                let user: User = User { name: "Ada" }
+                let label: String = display(user)
+            }
+            """,
+    )
+
+    let bad = frontendCheckSource(
+        r"""
+            interface Named {
+                fn name(self) -> String
+            }
+
+            struct User { age: Int }
+
+            fn display<T: Named>(value: T) -> String {
+                value.name()
+            }
+
+            fn main() {
+                let user: User = User { age: 37 }
+                let label: String = display(user)
+            }
+            """,
+    )
+
+    testing.assertEq(good.errors, 0)
+    testing.assert(bad.errors > 0)
+}
