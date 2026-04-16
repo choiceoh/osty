@@ -76,7 +76,7 @@ type cliFlags struct {
 	strict     bool // lint: exit 1 on any warning
 	fix        bool // lint: apply machine-applicable suggestions in place
 	fixDryRun  bool // lint: compute fixes but print diff instead of writing
-	selfhost   bool // lint: use the bootstrapped Osty linter
+	selfhost   bool // lint: route through the removed selfhost linter compatibility path
 	showScopes bool // resolve: also print the nested scope tree
 	trace      bool // global: stream per-phase timing to stderr
 	explain    bool // global: append `osty explain CODE` text per unique code
@@ -469,7 +469,7 @@ func parseFlags() cliFlags {
 	flag.BoolVar(&f.strict, "strict", false, "exit non-zero on lint warnings (lint subcommand only)")
 	flag.BoolVar(&f.fix, "fix", false, "apply machine-applicable lint suggestions in place (lint subcommand only)")
 	flag.BoolVar(&f.fixDryRun, "fix-dry-run", false, "show the result of --fix on stdout without modifying files (lint subcommand only)")
-	flag.BoolVar(&f.selfhost, "selfhost", false, "lint: use the bootstrapped Osty linter")
+	flag.BoolVar(&f.selfhost, "selfhost", false, "lint: use the removed selfhost linter compatibility path")
 	flag.BoolVar(&f.showScopes, "scopes", false, "resolve: also dump the nested scope tree")
 	flag.BoolVar(&f.trace, "trace", false, "stream per-phase timing to stderr (single-file front-end commands)")
 	flag.BoolVar(&f.explain, "explain", false, "after diagnostics, print the `osty explain CODE` text for each unique code")
@@ -1297,7 +1297,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  --strict           lint: exit 1 on warnings (CI mode)")
 	fmt.Fprintln(os.Stderr, "  --fix              lint: apply machine-applicable suggestions")
 	fmt.Fprintln(os.Stderr, "  --fix-dry-run      lint: print fixed source without writing")
-	fmt.Fprintln(os.Stderr, "  --selfhost         lint: use the bootstrapped Osty linter")
+	fmt.Fprintln(os.Stderr, "  --selfhost         lint: use the removed selfhost linter compatibility path")
 	fmt.Fprintln(os.Stderr, "  --scopes           resolve: also print the nested scope tree")
 	fmt.Fprintln(os.Stderr, "  --trace            stream per-phase timing to stderr (front-end commands)")
 	fmt.Fprintln(os.Stderr, "  --explain          append `osty explain CODE` text after each diagnostic block")

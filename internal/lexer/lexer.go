@@ -11,9 +11,9 @@ import (
 // diag.Diagnostic for callers that only need a position+message.
 type Error = diag.Diagnostic
 
-// Lexer is a small compatibility wrapper around the bootstrapped pure-Osty
-// lexer. It keeps comments and diagnostics available to older callers while
-// the token stream itself comes from internal/selfhost.
+// Lexer is a small compatibility wrapper around the removed selfhost lexer.
+// It keeps the public surface stable while the underlying implementation
+// routes through the temporary internal/selfhost stub.
 type Lexer struct {
 	src      []byte
 	comments []token.Comment
