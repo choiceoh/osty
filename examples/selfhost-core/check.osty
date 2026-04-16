@@ -498,7 +498,37 @@ fn frontCheckCollectDecl(file: AstFile, env: FrontCheckEnv, declIdx: Int, decl: 
                 sig.name = "{alias}.{sig.name}"
                 env.fns.push(sig)
                 frontCheckRecordSymbol(env, itemIdx, item, "fn", sig.name, alias, frontCheckFnType(sig.paramTypes, sig.returnType))
+            } else if item.kind == AstNStructDecl {
+                frontCheckCollectUseStruct(file, env, alias, itemIdx, item)
             }
+        }
+    }
+}
+
+fn frontCheckCollectUseStruct(file: AstFile, env: FrontCheckEnv, alias: String, declIdx: Int, decl: AstNode) {
+    let qualified = "{alias}.{decl.text}"
+    env.types.push(FrontTypeSig { name: decl.text, generics: [] })
+    env.types.push(FrontTypeSig { name: qualified, generics: [] })
+    frontCheckRecordSymbol(env, declIdx, decl, "struct", qualified, alias, qualified)
+    for memberIdx in decl.children {
+        let member = astArenaNodeAt(file.arena, memberIdx)
+        if member.kind == AstNField_ {
+            let field = FrontFieldSig {
+                owner: decl.text,
+                name: member.text,
+                typeName: frontCheckTypeName(file, member.right),
+                hasDefault: member.left >= 0,
+            }
+            env.fields.push(field)
+            env.fields.push(
+                FrontFieldSig {
+                    owner: qualified,
+                    name: field.name,
+                    typeName: field.typeName,
+                    hasDefault: field.hasDefault,
+                },
+            )
+            frontCheckRecordSymbol(env, memberIdx, member, "field", member.text, qualified, field.typeName)
         }
     }
 }
@@ -1236,6 +1266,9 @@ fn frontCheckIsAssignable(env: FrontCheckEnv, dstRaw: String, srcRaw: String) ->
     if src == "Never" || dst == src {
         return true
     }
+    if frontCheckSamePathTailType(dst, src) {
+        return true
+    }
     if src == "UntypedInt" {
         return dst == "Int" || dst == "Float" || dst == "Byte" || dst == "Char"
     }
@@ -1300,6 +1333,18 @@ fn frontCheckIsAssignable(env: FrontCheckEnv, dstRaw: String, srcRaw: String) ->
         return true
     }
     false
+}
+
+fn frontCheckSamePathTailType(left: String, right: String) -> Bool {
+    let leftView = frontCheckParseType(left)
+    let rightView = frontCheckParseType(right)
+    if leftView.kind != "named" || rightView.kind != "named" {
+        return false
+    }
+    if frontCheckStringCount(leftView.args) > 0 || frontCheckStringCount(rightView.args) > 0 {
+        return false
+    }
+    frontCheckLastPathSegment(leftView.head) == frontCheckLastPathSegment(rightView.head)
 }
 
 fn frontCheckExpectAssignable(env: FrontCheckEnv, dst: String, src: String) {
@@ -1508,7 +1553,7 @@ fn frontCheckStmt(file: AstFile, env: FrontCheckEnv, idx: Int) -> String {
     if node.kind == AstNLet {
         let declared = frontCheckTypeName(file, frontCheckFirstChild(node))
         let valueType = frontCheckExprHint(file, env, node.right, declared)
-        if !(frontCheckPatternIrrefutable(file, node.left)) {
+        if !(frontCheckLetPatternIrrefutable(file, node.left)) {
             env.errors = env.errors + 1
         }
         let mut finalType = valueType
@@ -1516,7 +1561,7 @@ fn frontCheckStmt(file: AstFile, env: FrontCheckEnv, idx: Int) -> String {
             frontCheckExpectAssignable(env, declared, valueType)
             finalType = declared
         }
-        frontCheckBindPattern(file, env, node.left, finalType, node.flags == 1)
+        frontCheckBindLetPattern(file, env, node.left, finalType, node.flags == 1)
         return "()"
     }
     if node.kind == AstNAssign {
@@ -3428,6 +3473,38 @@ fn frontCheckPatternIrrefutable(file: AstFile, patIdx: Int) -> Bool {
         return frontCheckPatternIrrefutable(file, pat.left)
     }
     false
+}
+
+fn frontCheckLetPatternIrrefutable(file: AstFile, patIdx: Int) -> Bool {
+    if patIdx < 0 {
+        return true
+    }
+    let pat = astArenaNodeAt(file.arena, patIdx)
+    if frontCheckLetPatternIsSimpleIdent(pat) {
+        return true
+    }
+    frontCheckPatternIrrefutable(file, patIdx)
+}
+
+fn frontCheckLetPatternIsSimpleIdent(pat: AstNode) -> Bool {
+    if pat.kind == AstNIdent {
+        return true
+    }
+    pat.kind == AstNPattern && pat.op == FrontIdent && pat.text != ""
+}
+
+fn frontCheckBindLetPattern(file: AstFile, env: FrontCheckEnv, patIdx: Int, typeName: String, mutable: Bool) {
+    if patIdx < 0 {
+        return
+    }
+    let pat = astArenaNodeAt(file.arena, patIdx)
+    if frontCheckLetPatternIsSimpleIdent(pat) {
+        if frontCheckPatternName(pat) != "_" {
+            frontCheckBindNode(env, frontCheckPatternName(pat), typeName, mutable, patIdx, pat.start, pat.end)
+        }
+        return
+    }
+    frontCheckBindPattern(file, env, patIdx, typeName, mutable)
 }
 
 fn frontCheckBindPattern(file: AstFile, env: FrontCheckEnv, patIdx: Int, typeName: String, mutable: Bool) {
