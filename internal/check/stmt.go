@@ -1,3 +1,5 @@
+//go:build selfhostgen
+
 package check
 
 import (
