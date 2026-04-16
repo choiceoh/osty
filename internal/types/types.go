@@ -37,7 +37,7 @@ type Type interface {
 
 // ==== Primitive ====
 
-// PrimitiveKind enumerates the built-in scalar types of v0.3 §2.1 plus
+// PrimitiveKind enumerates the built-in scalar types of v0.4 §2.1 plus
 // the synthetic Unit and Never tags.
 type PrimitiveKind int
 
@@ -102,7 +102,7 @@ func (k PrimitiveKind) IsFloat() bool {
 func (k PrimitiveKind) IsNumeric() bool { return k.IsInteger() || k.IsFloat() }
 
 // IsOrdered reports whether the primitive has a built-in total order
-// (v0.3 §2.6.5).
+// (v0.4 §2.6.5).
 func (k PrimitiveKind) IsOrdered() bool {
 	switch k {
 	case PBool, PChar, PString, PBytes:

@@ -235,7 +235,7 @@ func (c *checker) binaryType(e *ast.BinaryExpr, env *env) types.Type {
 }
 
 // binaryOpResult validates an operator against its operands and returns
-// the result type. The error messages try to match v0.3 §2.2 phrasing.
+// the result type. The error messages try to match v0.4 §2.2 phrasing.
 func (c *checker) binaryOpResult(e *ast.BinaryExpr, op token.Kind, lt, rt types.Type) types.Type {
 	switch op {
 	// Arithmetic

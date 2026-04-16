@@ -157,13 +157,13 @@ var allRules = []Rule{
 		Code: diag.CodeNamingType, Name: "naming_type",
 		Category: CategoryNaming, DefaultSeverity: diag.Warning,
 		Summary:     "type name is not UpperCamelCase",
-		Description: "Types (struct, enum, interface, type alias, generic parameter) should be UpperCamelCase per the v0.3 spec examples.",
+		Description: "Types (struct, enum, interface, type alias, generic parameter) should be UpperCamelCase per the v0.4 spec examples.",
 	},
 	{
 		Code: diag.CodeNamingValue, Name: "naming_value",
 		Category: CategoryNaming, DefaultSeverity: diag.Warning,
 		Summary:     "value name is not lowerCamelCase",
-		Description: "Functions, methods, `let` bindings, and parameters should be lowerCamelCase per the v0.3 spec examples.",
+		Description: "Functions, methods, `let` bindings, and parameters should be lowerCamelCase per the v0.4 spec examples.",
 	},
 	{
 		Code: diag.CodeNamingVariant, Name: "naming_variant",

@@ -29,17 +29,18 @@ import (
 //  2. Resolve the project as a package; confirm we have an entry
 //     point (manifest Bin target or default main.osty with fn main).
 //  3. Run the front-end (parse + resolve + type check).
-//  4. Transpile the entry file via internal/backend into .osty/out.
-//  5. `go run` the generated Go source, passing through the
-//     user-supplied arguments after `--`.
+//  4. Emit the entry file via internal/backend into .osty/out.
+//  5. Execute the host artifact, passing through the user-supplied
+//     arguments after `--` (`go run` for the Go backend, a native
+//     binary for the LLVM backend).
 //
 // Limitations (current emitter):
 //
 //   - Multi-file packages aren't fully emitted by gen yet; run executes
 //     the selected entry file. Complex unsupported lowering shapes may
-//     still emit TODO markers and fail to compile as Go.
+//     still emit TODO markers/skeletons and fail to compile or link.
 //
-//   - Registry / git dep code is vendored but NOT yet transpiled
+//   - Registry / git dep code is vendored but NOT yet emitted
 //     together with the entry file — the Workspace loader sees them
 //     for resolution, but package-per-package emission still needs to
 //     land before they contribute Go code.
