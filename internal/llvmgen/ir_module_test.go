@@ -285,7 +285,12 @@ fn main() {
 	for _, want := range []string{
 		"%osty.iface = type { ptr, ptr }",
 		"@osty.vtable.Vec__Sized",
-		"ptr @Vec__size",
+		// Phase 6f follow-up: the vtable slot points at a shim that
+		// adapts the interface dispatch ABI to the underlying method's
+		// calling convention; the shim's body in turn calls the real
+		// `Vec__size` symbol.
+		"@osty.shim.Vec__Sized__size",
+		"@Vec__size",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("generated IR missing %q:\n%s", want, got)
@@ -349,7 +354,8 @@ fn main() {
 	for _, want := range []string{
 		"%osty.iface",
 		"@osty.vtable.Thing__Combine",
-		"ptr @Thing__combine",
+		"@osty.shim.Thing__Combine__combine",
+		"@Thing__combine",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("generated IR missing %q:\n%s", want, got)
@@ -478,6 +484,89 @@ fn main() {
 	if strings.Count(got, "@osty.vtable.Vec__Sized") < 2 {
 		t.Fatalf("expected vtable symbol referenced at least twice (let + assign), got %d:\n%s",
 			strings.Count(got, "@osty.vtable.Vec__Sized"), got)
+	}
+}
+
+// TestGenerateModuleMangledInterfaceNameVtableDispatch covers Phase 6f:
+// Phase 5's generic interface specialization emits nominal names in
+// the Itanium `_ZTSN…E` shape. Phase 6a-6e's vtable scaffold must
+// continue to work on those mangled names — discovery, vtable
+// emission, boxing, and dispatch all keyed on the exact string
+// produced by `MonomorphMangleType`. The parser does not yet accept
+// generic interface declarations, so this smoke feeds the mangled
+// name as the raw source identifier; the resulting pipeline stage
+// mirrors what Phase 5 would hand llvmgen for a `Container<Int>`
+// specialization.
+func TestGenerateModuleMangledInterfaceNameVtableDispatch(t *testing.T) {
+	const mangled = "_ZTSN4main9ContainerIlEE"
+	src := `interface ` + mangled + ` {
+    fn get(self) -> Int
+}
+
+struct IntBox {
+    value: Int,
+
+    fn get(self) -> Int {
+        self.value
+    }
+}
+
+fn main() {
+    let b = IntBox { value: 3 }
+    let c: ` + mangled + ` = b
+    println(c.get())
+}
+`
+	got := runMonoLowerPipeline(t, src, "/tmp/phase6f_mangled_iface.osty")
+	for _, want := range []string{
+		"%osty.iface",
+		mangled,
+		"@osty.vtable.IntBox__" + mangled,
+		"@osty.shim.IntBox__" + mangled + "__get",
+		"@IntBox__get",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestRenderInterfaceShimVoidReturn locks the bug fix for
+// `renderInterfaceShim`'s void-return path: when a method's return
+// is `void`, the shim must emit a bare `call void @impl(...)` rather
+// than binding the result to an SSA register (`%x = call void ...`),
+// which is not valid LLVM IR.
+//
+// Unit-level rather than end-to-end because statement-position
+// interface method calls (`c.clear()` as a stmt) are a separate
+// llvmgen gap; exercising `renderInterfaceShim` directly keeps this
+// regression lock narrowly focused on the fix itself.
+func TestRenderInterfaceShimVoidReturn(t *testing.T) {
+	iface := &interfaceInfo{name: "Clear"}
+	impl := interfaceImpl{
+		implName:  "Bin",
+		kind:      0,
+		vtableSym: "@osty.vtable.Bin__Clear",
+	}
+	m := interfaceMethodSig{name: "clear", slot: 0}
+	sig := &fnSig{
+		name:    "clear",
+		irName:  "Bin__clear",
+		ret:     "void",
+		params:  []paramInfo{{name: "self", typ: "%Bin"}},
+	}
+	sym, def := renderInterfaceShim(iface, impl, m, sig, "%Bin")
+	if sym == "" || def == "" {
+		t.Fatal("expected renderInterfaceShim to produce a shim for a void method")
+	}
+	if strings.Contains(def, "%ret.val = call void") {
+		t.Fatalf("invalid LLVM IR: bound SSA register to void call:\n%s", def)
+	}
+	if !strings.Contains(def, "call void @Bin__clear") {
+		t.Fatalf("expected bare `call void @Bin__clear` in shim body:\n%s", def)
+	}
+	if !strings.Contains(def, "  ret void") {
+		t.Fatalf("expected `ret void` terminator in shim body:\n%s", def)
 	}
 }
 

@@ -272,7 +272,8 @@ func (g *generator) renderInterfaceVtables() ([]string, string) {
 		}
 		haveAny = true
 		for _, impl := range iface.impls {
-			methodsByName := g.methods[g.ownerTypeFor(impl)]
+			implType := g.ownerTypeFor(impl)
+			methodsByName := g.methods[implType]
 			slots := make([]string, 0, len(iface.methods))
 			for _, m := range iface.methods {
 				sig := methodsByName[m.name]
@@ -280,7 +281,22 @@ func (g *generator) renderInterfaceVtables() ([]string, string) {
 					slots = append(slots, "ptr null")
 					continue
 				}
-				slots = append(slots, fmt.Sprintf("ptr @%s", sig.irName))
+				// Phase 6f follow-up: the vtable slot does not point
+				// at the concrete method directly because interface
+				// dispatch passes `self` as `ptr %data` while the
+				// underlying method expects the struct/enum value (or
+				// a `ptr` for mut receivers). A per-(impl, iface,
+				// method) shim adapts the calling convention: it
+				// loads the concrete value from the data pointer (or
+				// forwards the pointer for mut receivers) and tail-
+				// calls the real implementation.
+				shimSym, shimDef := renderInterfaceShim(iface, impl, m, sig, implType)
+				if shimDef != "" {
+					defs = append(defs, shimDef)
+					slots = append(slots, "ptr "+shimSym)
+				} else {
+					slots = append(slots, fmt.Sprintf("ptr @%s", sig.irName))
+				}
 			}
 			defs = append(defs, fmt.Sprintf(
 				"%s = constant [%d x ptr] [%s]",
@@ -295,6 +311,68 @@ func (g *generator) renderInterfaceVtables() ([]string, string) {
 	}
 	typeDef := "%osty.iface = type { ptr, ptr }"
 	return defs, typeDef
+}
+
+// renderInterfaceShim returns the `@osty.shim.<impl>__<iface>__<method>`
+// symbol and the LLVM IR definition of a shim that adapts the
+// interface dispatch ABI (`ptr %data, <non-self args>`) to the
+// underlying method's calling convention.
+//
+// For immutable receivers the shim loads the struct/enum value from
+// the data pointer before calling the real method; for `mut` receivers
+// (where the method already takes `ptr %self`) the pointer is
+// forwarded verbatim. A nil return signals a malformed signature the
+// caller must handle by falling back to a direct `ptr @<method>`
+// slot, which is still safe for receiver-less methods but will
+// typically yield an empty-return shim when one is actually needed.
+func renderInterfaceShim(iface *interfaceInfo, impl interfaceImpl, m interfaceMethodSig, sig *fnSig, implType string) (string, string) {
+	if sig == nil || implType == "" {
+		return "", ""
+	}
+	if len(sig.params) == 0 {
+		// No receiver slot — nothing to adapt.
+		return "", ""
+	}
+	receiver := sig.params[0]
+	shimSym := fmt.Sprintf("@osty.shim.%s__%s__%s", impl.implName, iface.name, m.name)
+	ret := sig.ret
+	if ret == "" {
+		ret = "void"
+	}
+	// Build the shim's parameter list: data ptr followed by any
+	// non-self user args. The underlying method will consume them
+	// with its own declared types.
+	shimParams := []string{"ptr %self.ptr"}
+	callArgs := make([]string, 0, len(sig.params))
+	if receiver.byRef {
+		// Mut receiver already expects a pointer — forward it.
+		callArgs = append(callArgs, "ptr %self.ptr")
+	} else {
+		// Immutable receiver expects the struct/enum value.
+		callArgs = append(callArgs, fmt.Sprintf("%s %%self.val", receiver.typ))
+	}
+	for i, p := range sig.params[1:] {
+		name := fmt.Sprintf("%%a%d", i)
+		shimParams = append(shimParams, fmt.Sprintf("%s %s", p.typ, name))
+		callArgs = append(callArgs, fmt.Sprintf("%s %s", p.typ, name))
+	}
+	var body strings.Builder
+	if !receiver.byRef {
+		body.WriteString(fmt.Sprintf("  %%self.val = load %s, ptr %%self.ptr\n", receiver.typ))
+	}
+	if ret == "void" {
+		// Void call sites must NOT bind an SSA destination —
+		// `%x = call void @f()` is not valid LLVM IR. Emit the bare
+		// call + `ret void`.
+		body.WriteString(fmt.Sprintf("  call void @%s(%s)\n", sig.irName, strings.Join(callArgs, ", ")))
+		body.WriteString("  ret void\n")
+	} else {
+		body.WriteString(fmt.Sprintf("  %%ret.val = call %s @%s(%s)\n", ret, sig.irName, strings.Join(callArgs, ", ")))
+		body.WriteString(fmt.Sprintf("  ret %s %%ret.val\n", ret))
+	}
+	def := fmt.Sprintf("define internal %s %s(%s) {\n%s}",
+		ret, shimSym, strings.Join(shimParams, ", "), body.String())
+	return shimSym, def
 }
 
 // ownerTypeFor returns the LLVM IR type symbol (`%Name`) a given

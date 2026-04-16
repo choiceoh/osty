@@ -691,6 +691,7 @@ fn main() {
 		t.Fatalf("binary stdout = %q, want %q", got, want)
 	}
 }
+
 func TestLLVMBackendBinaryGenericEnumVariantFromLetContext(t *testing.T) {
 	if _, err := exec.LookPath("clang"); err != nil {
 		t.Skip("clang not found on PATH")
@@ -895,6 +896,87 @@ fn main() {
 		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
 	}
 	if got, want := string(output), "1\n2\napple\n1\n"; got != want {
+		t.Fatalf("binary stdout = %q, want %q", got, want)
+	}
+}
+
+// TestLLVMBackendBinaryRunsGenericIdentity covers the generic
+// monomorphization path Phase 1 introduced, all the way through clang
+// to an executable. The monomorphizer must produce `_Z2idIlEl`, clang
+// must link and run it, and the process must print the forwarded
+// value. Complements the IR-only smoke in
+// `internal/llvmgen/ir_module_test.go::TestGenerateModuleGenericIdentityMonomorphized`.
+func TestLLVMBackendBinaryRunsGenericIdentity(t *testing.T) {
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
+
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitBinary, `fn id<T>(x: T) -> T { x }
+
+fn main() {
+    println(id::<Int>(42))
+}
+`)
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	cmd := exec.Command(result.Artifacts.Binary)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
+	}
+	if got, want := string(output), "42\n"; got != want {
+		t.Fatalf("binary stdout = %q, want %q", got, want)
+	}
+}
+
+// TestLLVMBackendBinaryRunsInterfaceBoxingDispatch exercises the full
+// Phase 6a-6e interface pipeline end-to-end: a struct's method set
+// structurally satisfies an interface, the concrete value is boxed
+// into a `%osty.iface` fat pointer at the `let` site, and the
+// subsequent method call is lowered to a vtable indirect call that
+// the linked binary actually executes. Complements the IR-only
+// smokes `TestGenerateModuleInterfaceBoxingDispatch` and friends by
+// confirming the emitted `insertvalue` / `extractvalue` / `load ptr`
+// / indirect-call sequence survives clang and runs correctly.
+func TestLLVMBackendBinaryRunsInterfaceBoxingDispatch(t *testing.T) {
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
+
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitBinary, `interface Sized {
+    fn size(self) -> Int
+}
+
+struct Vec {
+    count: Int,
+
+    fn size(self) -> Int {
+        self.count
+    }
+}
+
+fn main() {
+    let v = Vec { count: 3 }
+    let s: Sized = v
+    println(s.size())
+}
+`)
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	cmd := exec.Command(result.Artifacts.Binary)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
+	}
+	if got, want := string(output), "3\n"; got != want {
 		t.Fatalf("binary stdout = %q, want %q", got, want)
 	}
 }
