@@ -18838,17 +18838,14 @@ func opAddNode(p *OstyParser, node *AstNode) int {
 
 // Osty: /tmp/selfhost_merged.osty:6948:1
 func opSyncDecl(p *OstyParser) {
-	// Osty: /tmp/selfhost_merged.osty:6949:5
 	for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-		// Osty: /tmp/selfhost_merged.osty:6950:9
 		kind := opPeek(p).kind
-		_ = kind
-		// Osty: /tmp/selfhost_merged.osty:6951:9
-		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontFn{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontStruct{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontEnum{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontInterface{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontType{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontUse{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontPub{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontHash{})) {
-			// Osty: /tmp/selfhost_merged.osty:6951:182
+		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontFn{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontStruct{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontEnum{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontInterface{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontType{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontUse{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontPub{})) {
 			return
 		}
-		// Osty: /tmp/selfhost_merged.osty:6952:9
+		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontHash{})) && ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontLBracket{})) {
+			return
+		}
 		_ = opAdvance(p)
 	}
 }
@@ -20554,56 +20551,35 @@ func opParseStmt(p *OstyParser) int {
 
 // Osty: /tmp/selfhost_merged.osty:7678:1
 func opParseLetStmt(p *OstyParser) int {
-	// Osty: /tmp/selfhost_merged.osty:7679:5
+	return opParseLetStmtWithAnnotations(p, nil)
+}
+
+func opParseLetStmtWithAnnotations(p *OstyParser, anns []int) int {
 	start := p.pos
-	_ = start
-	// Osty: /tmp/selfhost_merged.osty:7680:5
 	_ = opAdvance(p)
-	// Osty: /tmp/selfhost_merged.osty:7681:5
 	isMut := false
-	_ = isMut
-	// Osty: /tmp/selfhost_merged.osty:7682:5
 	if opEat(p, FrontTokenKind(&FrontTokenKind_FrontMut{})) {
-		// Osty: /tmp/selfhost_merged.osty:7682:29
 		isMut = true
 	}
-	// Osty: /tmp/selfhost_merged.osty:7683:5
 	pat := opParsePattern(p)
-	_ = pat
-	// Osty: /tmp/selfhost_merged.osty:7684:5
 	typeIdx := -1
-	_ = typeIdx
-	// Osty: /tmp/selfhost_merged.osty:7685:5
 	if opEat(p, FrontTokenKind(&FrontTokenKind_FrontColon{})) {
-		// Osty: /tmp/selfhost_merged.osty:7685:31
 		typeIdx = opParseType(p)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7686:5
 	valueIdx := -1
-	_ = valueIdx
-	// Osty: /tmp/selfhost_merged.osty:7687:5
 	if opEat(p, FrontTokenKind(&FrontTokenKind_FrontAssign{})) {
-		// Osty: /tmp/selfhost_merged.osty:7687:32
 		valueIdx = opParseExpr(p)
 	}
-	// Osty: /tmp/selfhost_merged.osty:7688:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNLet{}))
-	_ = n
-	// Osty: /tmp/selfhost_merged.osty:7689:6
 	n.left = pat
-	// Osty: /tmp/selfhost_merged.osty:7690:6
 	n.right = valueIdx
-	// Osty: /tmp/selfhost_merged.osty:7691:6
 	n.children = []int{typeIdx}
-	// Osty: /tmp/selfhost_merged.osty:7692:6
 	n.start = start
-	// Osty: /tmp/selfhost_merged.osty:7693:6
 	n.end = p.pos
-	// Osty: /tmp/selfhost_merged.osty:7694:5
 	if isMut {
-		// Osty: /tmp/selfhost_merged.osty:7694:17
 		n.flags = 1
 	}
+	n.extra = opPackAnnotations(p, anns)
 	return opAddNode(p, n)
 }
 
@@ -21498,77 +21474,107 @@ func opParseTupleType(p *OstyParser) int {
 
 // Osty: /tmp/selfhost_merged.osty:8106:1
 func opParseAnnotations(p *OstyParser) []int {
-	// Osty: /tmp/selfhost_merged.osty:8107:5
-	var anns []int = make([]int, 0, 1)
-	_ = anns
-	// Osty: /tmp/selfhost_merged.osty:8108:5
+	var anns []int
 	for opAt(p, FrontTokenKind(&FrontTokenKind_FrontHash{})) && ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontLBracket{})) {
-		// Osty: /tmp/selfhost_merged.osty:8109:9
 		start := p.pos
-		_ = start
-		// Osty: /tmp/selfhost_merged.osty:8110:9
 		_ = opAdvance(p)
-		// Osty: /tmp/selfhost_merged.osty:8111:9
 		_ = opAdvance(p)
-		// Osty: /tmp/selfhost_merged.osty:8112:9
 		annName := ""
-		_ = annName
-		// Osty: /tmp/selfhost_merged.osty:8113:9
 		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})) {
-			// Osty: /tmp/selfhost_merged.osty:8113:34
 			annName = opAdvance(p).text
 		}
-		// Osty: /tmp/selfhost_merged.osty:8114:9
-		var annArgs []int = make([]int, 0, 1)
-		_ = annArgs
-		// Osty: /tmp/selfhost_merged.osty:8115:9
+		var annArgs []int
 		if opEat(p, FrontTokenKind(&FrontTokenKind_FrontLParen{})) {
-			// Osty: /tmp/selfhost_merged.osty:8116:13
-			for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontRParen{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-				// Osty: /tmp/selfhost_merged.osty:8117:17
-				if opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})) && ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontAssign{})) {
-					// Osty: /tmp/selfhost_merged.osty:8118:21
-					_ = opAdvance(p)
-					// Osty: /tmp/selfhost_merged.osty:8119:21
-					_ = opAdvance(p)
-				}
-				// Osty: /tmp/selfhost_merged.osty:8121:17
-				func() struct{} { annArgs = append(annArgs, opParseExpr(p)); return struct{}{} }()
-				// Osty: /tmp/selfhost_merged.osty:8122:17
-				if !(opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))) {
-					// Osty: /tmp/selfhost_merged.osty:8122:46
+			for !opAt(p, FrontTokenKind(&FrontTokenKind_FrontRParen{})) && !opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{})) {
+				annArgs = append(annArgs, opParseAnnotationArg(p))
+				if !opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{})) {
 					break
 				}
 			}
-			// Osty: /tmp/selfhost_merged.osty:8124:13
 			_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontRParen{}))
 		}
-		// Osty: /tmp/selfhost_merged.osty:8126:9
 		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontAssign{})) {
-			// Osty: /tmp/selfhost_merged.osty:8127:13
 			_ = opAdvance(p)
-			// Osty: /tmp/selfhost_merged.osty:8128:13
-			func() struct{} { annArgs = append(annArgs, opParseExpr(p)); return struct{}{} }()
+			annArgs = append(annArgs, opParseExpr(p))
 		}
-		// Osty: /tmp/selfhost_merged.osty:8130:9
 		_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontRBracket{}))
-		// Osty: /tmp/selfhost_merged.osty:8131:9
 		n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNAnnotation{}))
-		_ = n
-		// Osty: /tmp/selfhost_merged.osty:8132:10
 		n.text = annName
-		// Osty: /tmp/selfhost_merged.osty:8133:10
 		n.children = annArgs
-		// Osty: /tmp/selfhost_merged.osty:8134:10
 		n.start = start
-		// Osty: /tmp/selfhost_merged.osty:8135:10
 		n.end = p.pos
-		// Osty: /tmp/selfhost_merged.osty:8136:9
-		func() struct{} { anns = append(anns, opAddNode(p, n)); return struct{}{} }()
-		// Osty: /tmp/selfhost_merged.osty:8137:9
+		anns = append(anns, opAddNode(p, n))
 		opSkipNewlines(p)
 	}
 	return anns
+}
+
+func opParseAnnotationArg(p *OstyParser) int {
+	start := p.pos
+	key := opAnnotationArgName(p)
+	if key != "" && ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontAssign{})) {
+		_ = opAdvance(p)
+		_ = opAdvance(p)
+		valueIdx := opParseExpr(p)
+		n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNField_{}))
+		n.text = key
+		n.left = valueIdx
+		n.start = start
+		n.end = p.pos
+		return opAddNode(p, n)
+	}
+	if key != "" && (ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontComma{})) || ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontRParen{}))) {
+		_ = opAdvance(p)
+		n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNIdent{}))
+		n.text = key
+		n.start = start
+		n.end = p.pos
+		return opAddNode(p, n)
+	}
+	return opParseExpr(p)
+}
+
+func opAnnotationArgName(p *OstyParser) string {
+	tok := opPeek(p)
+	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) {
+		return tok.text
+	}
+	kind := tok.kind
+	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontFn{})) ||
+		ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontStruct{})) ||
+		ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontEnum{})) ||
+		ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontInterface{})) ||
+		ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontType{})) ||
+		ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLet{})) ||
+		ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontMut{})) ||
+		ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontPub{})) ||
+		ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontUse{})) ||
+		ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontIf{})) ||
+		ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontElse{})) ||
+		ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontMatch{})) ||
+		ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontFor{})) ||
+		ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontReturn{})) ||
+		ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBreak{})) ||
+		ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontContinue{})) ||
+		ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontDefer{})) {
+		return frontTokenKindName(kind)
+	}
+	return ""
+}
+
+func opPackAnnotations(p *OstyParser, anns []int) int {
+	if len(anns) == 0 {
+		return -1
+	}
+	if len(anns) == 1 {
+		return anns[0]
+	}
+	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNAnnotation{}))
+	n.text = "__group"
+	n.children = anns
+	n.start = astArenaNodeAt(p.arena, anns[0]).start
+	n.end = astArenaNodeAt(p.arena, anns[len(anns)-1]).end
+	return opAddNode(p, n)
 }
 
 // Osty: /tmp/selfhost_merged.osty:8146:1
@@ -21597,22 +21603,22 @@ func opParseDecl(p *OstyParser) int {
 	// Osty: /tmp/selfhost_merged.osty:8153:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontStruct{})) {
 		// Osty: /tmp/selfhost_merged.osty:8153:34
-		return opParseStructDecl(p, isPub)
+		return opParseStructDeclWithAnnotations(p, isPub, anns)
 	}
 	// Osty: /tmp/selfhost_merged.osty:8154:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontEnum{})) {
 		// Osty: /tmp/selfhost_merged.osty:8154:32
-		return opParseEnumDecl(p, isPub)
+		return opParseEnumDeclWithAnnotations(p, isPub, anns)
 	}
 	// Osty: /tmp/selfhost_merged.osty:8155:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontInterface{})) {
 		// Osty: /tmp/selfhost_merged.osty:8155:37
-		return opParseInterfaceDecl(p, isPub)
+		return opParseInterfaceDeclWithAnnotations(p, isPub, anns)
 	}
 	// Osty: /tmp/selfhost_merged.osty:8156:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontType{})) {
 		// Osty: /tmp/selfhost_merged.osty:8156:32
-		return opParseTypeAliasDecl(p, isPub)
+		return opParseTypeAliasDeclWithAnnotations(p, isPub, anns)
 	}
 	// Osty: /tmp/selfhost_merged.osty:8157:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontUse{})) {
@@ -21622,7 +21628,7 @@ func opParseDecl(p *OstyParser) int {
 	// Osty: /tmp/selfhost_merged.osty:8158:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontLet{})) {
 		// Osty: /tmp/selfhost_merged.osty:8158:31
-		return opParseLetStmt(p)
+		return opParseLetStmtWithAnnotations(p, anns)
 	}
 	// Osty: /tmp/selfhost_merged.osty:8159:5
 	errKindName := frontTokenKindName(tok.kind)
@@ -21744,478 +21750,292 @@ func opParseFnDecl(p *OstyParser, isPub bool, anns []int) int {
 		// Osty: /tmp/selfhost_merged.osty:8203:17
 		n.flags = 1
 	}
+	n.extra = opPackAnnotations(p, anns)
 	return opAddNode(p, n)
 }
 
 // Osty: /tmp/selfhost_merged.osty:8207:1
 func opParseStructDecl(p *OstyParser, isPub bool) int {
-	// Osty: /tmp/selfhost_merged.osty:8208:5
+	return opParseStructDeclWithAnnotations(p, isPub, nil)
+}
+
+func opParseStructDeclWithAnnotations(p *OstyParser, isPub bool, anns []int) int {
 	start := p.pos
-	_ = start
-	// Osty: /tmp/selfhost_merged.osty:8209:5
 	_ = opAdvance(p)
-	// Osty: /tmp/selfhost_merged.osty:8210:5
 	name := opExpect(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})).text
-	_ = name
-	// Osty: /tmp/selfhost_merged.osty:8211:5
 	genericParams := opParseGenericParams(p)
-	_ = genericParams
-	// Osty: /tmp/selfhost_merged.osty:8212:5
 	_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontLBrace{}))
-	// Osty: /tmp/selfhost_merged.osty:8213:5
-	var members []int = make([]int, 0, 1)
-	_ = members
-	// Osty: /tmp/selfhost_merged.osty:8214:5
+	var members []int
 	opSkipNewlines(p)
-	// Osty: /tmp/selfhost_merged.osty:8215:5
-	for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-		// Osty: /tmp/selfhost_merged.osty:8216:9
+	for !opAt(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) && !opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{})) {
 		memberAnns := opParseAnnotations(p)
-		_ = memberAnns
-		// Osty: /tmp/selfhost_merged.osty:8217:9
-		_ = memberAnns
-		// Osty: /tmp/selfhost_merged.osty:8218:9
 		memberPub := false
-		_ = memberPub
-		// Osty: /tmp/selfhost_merged.osty:8219:9
 		if opEat(p, FrontTokenKind(&FrontTokenKind_FrontPub{})) {
-			// Osty: /tmp/selfhost_merged.osty:8219:33
 			memberPub = true
 		}
-		// Osty: /tmp/selfhost_merged.osty:8220:9
 		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontFn{})) {
-			// Osty: /tmp/selfhost_merged.osty:8220:31
-			func() struct{} {
-				members = append(members, opParseFnDecl(p, memberPub, make([]int, 0, 1)))
-				return struct{}{}
-			}()
+			members = append(members, opParseFnDecl(p, memberPub, memberAnns))
 		} else if opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})) {
-			// Osty: /tmp/selfhost_merged.osty:8221:13
 			fs := p.pos
-			_ = fs
-			// Osty: /tmp/selfhost_merged.osty:8222:13
-			fn_ := opAdvance(p).text
-			_ = fn_
-			// Osty: /tmp/selfhost_merged.osty:8223:13
+			fieldName := opAdvance(p).text
 			_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontColon{}))
-			// Osty: /tmp/selfhost_merged.osty:8224:13
-			ft := opParseType(p)
-			_ = ft
-			// Osty: /tmp/selfhost_merged.osty:8225:13
+			fieldType := opParseType(p)
 			defIdx := -1
-			_ = defIdx
-			// Osty: /tmp/selfhost_merged.osty:8226:13
 			if opEat(p, FrontTokenKind(&FrontTokenKind_FrontAssign{})) {
-				// Osty: /tmp/selfhost_merged.osty:8226:40
 				defIdx = opParseExpr(p)
 			}
-			// Osty: /tmp/selfhost_merged.osty:8227:13
 			fNode := emptyAstNode(AstNodeKind(&AstNodeKind_AstNField_{}))
-			_ = fNode
-			// Osty: /tmp/selfhost_merged.osty:8228:18
-			fNode.text = fn_
-			// Osty: /tmp/selfhost_merged.osty:8229:18
-			fNode.right = ft
-			// Osty: /tmp/selfhost_merged.osty:8230:18
+			fNode.text = fieldName
+			fNode.right = fieldType
 			fNode.left = defIdx
-			// Osty: /tmp/selfhost_merged.osty:8231:18
 			fNode.start = fs
-			// Osty: /tmp/selfhost_merged.osty:8232:18
 			fNode.end = p.pos
-			// Osty: /tmp/selfhost_merged.osty:8233:13
 			if memberPub {
-				// Osty: /tmp/selfhost_merged.osty:8233:33
 				fNode.flags = 1
 			}
-			// Osty: /tmp/selfhost_merged.osty:8234:13
-			func() struct{} { members = append(members, opAddNode(p, fNode)); return struct{}{} }()
+			fNode.extra = opPackAnnotations(p, memberAnns)
+			members = append(members, opAddNode(p, fNode))
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:8236:13
 			opError(p, "expected field or method in struct")
-			// Osty: /tmp/selfhost_merged.osty:8237:13
 			_ = opAdvance(p)
 		}
-		// Osty: /tmp/selfhost_merged.osty:8239:9
 		opSkipNewlines(p)
-		// Osty: /tmp/selfhost_merged.osty:8240:9
 		_ = opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))
-		// Osty: /tmp/selfhost_merged.osty:8241:9
 		opSkipNewlines(p)
 	}
-	// Osty: /tmp/selfhost_merged.osty:8243:5
 	_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))
-	// Osty: /tmp/selfhost_merged.osty:8244:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNStructDecl{}))
-	_ = n
-	// Osty: /tmp/selfhost_merged.osty:8245:6
 	n.text = name
-	// Osty: /tmp/selfhost_merged.osty:8246:6
 	n.children = members
-	// Osty: /tmp/selfhost_merged.osty:8247:6
 	n.children2 = genericParams
-	// Osty: /tmp/selfhost_merged.osty:8248:6
 	n.start = start
-	// Osty: /tmp/selfhost_merged.osty:8249:6
 	n.end = p.pos
-	// Osty: /tmp/selfhost_merged.osty:8250:5
 	if isPub {
-		// Osty: /tmp/selfhost_merged.osty:8250:17
 		n.flags = 1
 	}
+	n.extra = opPackAnnotations(p, anns)
 	return opAddNode(p, n)
 }
 
 // Osty: /tmp/selfhost_merged.osty:8254:1
 func opParseEnumDecl(p *OstyParser, isPub bool) int {
-	// Osty: /tmp/selfhost_merged.osty:8255:5
+	return opParseEnumDeclWithAnnotations(p, isPub, nil)
+}
+
+func opParseEnumDeclWithAnnotations(p *OstyParser, isPub bool, anns []int) int {
 	start := p.pos
-	_ = start
-	// Osty: /tmp/selfhost_merged.osty:8256:5
 	_ = opAdvance(p)
-	// Osty: /tmp/selfhost_merged.osty:8257:5
 	name := opExpect(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})).text
-	_ = name
-	// Osty: /tmp/selfhost_merged.osty:8258:5
 	genericParams := opParseGenericParams(p)
-	_ = genericParams
-	// Osty: /tmp/selfhost_merged.osty:8259:5
 	_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontLBrace{}))
-	// Osty: /tmp/selfhost_merged.osty:8260:5
-	var members []int = make([]int, 0, 1)
-	_ = members
-	// Osty: /tmp/selfhost_merged.osty:8261:5
+	var members []int
 	opSkipNewlines(p)
-	// Osty: /tmp/selfhost_merged.osty:8262:5
-	for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-		// Osty: /tmp/selfhost_merged.osty:8263:9
+	for !opAt(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) && !opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{})) {
+		memberAnns := opParseAnnotations(p)
 		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontFn{})) || (opAt(p, FrontTokenKind(&FrontTokenKind_FrontPub{})) && ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontFn{}))) {
-			// Osty: /tmp/selfhost_merged.osty:8264:13
 			fnPub := opEat(p, FrontTokenKind(&FrontTokenKind_FrontPub{}))
-			_ = fnPub
-			// Osty: /tmp/selfhost_merged.osty:8265:13
-			func() struct{} {
-				members = append(members, opParseFnDecl(p, fnPub, make([]int, 0, 1)))
-				return struct{}{}
-			}()
+			members = append(members, opParseFnDecl(p, fnPub, memberAnns))
 		} else if opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})) {
-			// Osty: /tmp/selfhost_merged.osty:8267:13
 			vs := p.pos
-			_ = vs
-			// Osty: /tmp/selfhost_merged.osty:8268:13
-			vn := opAdvance(p).text
-			_ = vn
-			// Osty: /tmp/selfhost_merged.osty:8269:13
-			var vFields []int = make([]int, 0, 1)
-			_ = vFields
-			// Osty: /tmp/selfhost_merged.osty:8270:13
+			variantName := opAdvance(p).text
+			var vFields []int
 			if opEat(p, FrontTokenKind(&FrontTokenKind_FrontLParen{})) {
-				// Osty: /tmp/selfhost_merged.osty:8271:17
-				for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontRParen{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-					// Osty: /tmp/selfhost_merged.osty:8271:71
-					func() struct{} { vFields = append(vFields, opParseType(p)); return struct{}{} }()
-					// Osty: /tmp/selfhost_merged.osty:8272:17
-					if !(opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))) {
-						// Osty: /tmp/selfhost_merged.osty:8272:46
+				for !opAt(p, FrontTokenKind(&FrontTokenKind_FrontRParen{})) && !opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{})) {
+					vFields = append(vFields, opParseType(p))
+					if !opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{})) {
 						break
 					}
 				}
-				// Osty: /tmp/selfhost_merged.osty:8273:17
 				_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontRParen{}))
 			}
-			// Osty: /tmp/selfhost_merged.osty:8275:13
 			vNode := emptyAstNode(AstNodeKind(&AstNodeKind_AstNVariant{}))
-			_ = vNode
-			// Osty: /tmp/selfhost_merged.osty:8276:18
-			vNode.text = vn
-			// Osty: /tmp/selfhost_merged.osty:8277:18
+			vNode.text = variantName
 			vNode.children = vFields
-			// Osty: /tmp/selfhost_merged.osty:8278:18
 			vNode.start = vs
-			// Osty: /tmp/selfhost_merged.osty:8279:18
 			vNode.end = p.pos
-			// Osty: /tmp/selfhost_merged.osty:8280:13
-			func() struct{} { members = append(members, opAddNode(p, vNode)); return struct{}{} }()
+			vNode.extra = opPackAnnotations(p, memberAnns)
+			members = append(members, opAddNode(p, vNode))
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:8282:13
 			opError(p, "expected variant or method in enum")
-			// Osty: /tmp/selfhost_merged.osty:8283:13
 			_ = opAdvance(p)
 		}
-		// Osty: /tmp/selfhost_merged.osty:8285:9
 		opSkipNewlines(p)
-		// Osty: /tmp/selfhost_merged.osty:8286:9
 		_ = opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))
-		// Osty: /tmp/selfhost_merged.osty:8287:9
 		opSkipNewlines(p)
 	}
-	// Osty: /tmp/selfhost_merged.osty:8289:5
 	_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))
-	// Osty: /tmp/selfhost_merged.osty:8290:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNEnumDecl{}))
-	_ = n
-	// Osty: /tmp/selfhost_merged.osty:8291:6
 	n.text = name
-	// Osty: /tmp/selfhost_merged.osty:8292:6
 	n.children = members
-	// Osty: /tmp/selfhost_merged.osty:8293:6
 	n.children2 = genericParams
-	// Osty: /tmp/selfhost_merged.osty:8294:6
 	n.start = start
-	// Osty: /tmp/selfhost_merged.osty:8295:6
 	n.end = p.pos
-	// Osty: /tmp/selfhost_merged.osty:8296:5
 	if isPub {
-		// Osty: /tmp/selfhost_merged.osty:8296:17
 		n.flags = 1
 	}
+	n.extra = opPackAnnotations(p, anns)
 	return opAddNode(p, n)
 }
 
 // Osty: /tmp/selfhost_merged.osty:8300:1
 func opParseInterfaceDecl(p *OstyParser, isPub bool) int {
-	// Osty: /tmp/selfhost_merged.osty:8301:5
+	return opParseInterfaceDeclWithAnnotations(p, isPub, nil)
+}
+
+func opParseInterfaceDeclWithAnnotations(p *OstyParser, isPub bool, anns []int) int {
 	start := p.pos
-	_ = start
-	// Osty: /tmp/selfhost_merged.osty:8302:5
 	_ = opAdvance(p)
-	// Osty: /tmp/selfhost_merged.osty:8303:5
 	name := opExpect(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})).text
-	_ = name
-	// Osty: /tmp/selfhost_merged.osty:8304:5
-	var supers []int = make([]int, 0, 1)
-	_ = supers
-	// Osty: /tmp/selfhost_merged.osty:8305:5
+	var supers []int
 	if opEat(p, FrontTokenKind(&FrontTokenKind_FrontColon{})) {
-		// Osty: /tmp/selfhost_merged.osty:8305:31
 		for {
-			// Osty: /tmp/selfhost_merged.osty:8305:37
-			func() struct{} { supers = append(supers, opParseType(p)); return struct{}{} }()
-			// Osty: /tmp/selfhost_merged.osty:8306:5
-			if !(opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))) && !(opEat(p, FrontTokenKind(&FrontTokenKind_FrontPlus{}))) {
-				// Osty: /tmp/selfhost_merged.osty:8306:60
+			supers = append(supers, opParseType(p))
+			if !opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{})) && !opEat(p, FrontTokenKind(&FrontTokenKind_FrontPlus{})) {
 				break
 			}
 		}
 	}
-	// Osty: /tmp/selfhost_merged.osty:8307:5
 	_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontLBrace{}))
-	// Osty: /tmp/selfhost_merged.osty:8308:5
-	var members []int = make([]int, 0, 1)
-	_ = members
-	// Osty: /tmp/selfhost_merged.osty:8309:5
+	var members []int
 	opSkipNewlines(p)
-	// Osty: /tmp/selfhost_merged.osty:8310:5
-	for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-		// Osty: /tmp/selfhost_merged.osty:8311:9
+	for !opAt(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) && !opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{})) {
+		memberAnns := opParseAnnotations(p)
 		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontFn{})) || (opAt(p, FrontTokenKind(&FrontTokenKind_FrontPub{})) && ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontFn{}))) {
-			// Osty: /tmp/selfhost_merged.osty:8312:13
 			fnPub := opEat(p, FrontTokenKind(&FrontTokenKind_FrontPub{}))
-			_ = fnPub
-			// Osty: /tmp/selfhost_merged.osty:8313:13
-			func() struct{} {
-				members = append(members, opParseFnDecl(p, fnPub, make([]int, 0, 1)))
-				return struct{}{}
-			}()
+			members = append(members, opParseFnDecl(p, fnPub, memberAnns))
 		} else if opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})) {
-			// Osty: /tmp/selfhost_merged.osty:8315:13
-			func() struct{} { members = append(members, opParseType(p)); return struct{}{} }()
+			members = append(members, opParseType(p))
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:8317:13
 			opError(p, "expected method or type in interface")
-			// Osty: /tmp/selfhost_merged.osty:8318:13
 			_ = opAdvance(p)
 		}
-		// Osty: /tmp/selfhost_merged.osty:8320:9
 		opSkipNewlines(p)
 	}
-	// Osty: /tmp/selfhost_merged.osty:8322:5
 	_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))
-	// Osty: /tmp/selfhost_merged.osty:8323:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNInterfaceDecl{}))
-	_ = n
-	// Osty: /tmp/selfhost_merged.osty:8324:6
 	n.text = name
-	// Osty: /tmp/selfhost_merged.osty:8325:6
 	n.children = members
-	// Osty: /tmp/selfhost_merged.osty:8326:6
 	n.children2 = supers
-	// Osty: /tmp/selfhost_merged.osty:8327:6
 	n.start = start
-	// Osty: /tmp/selfhost_merged.osty:8328:6
 	n.end = p.pos
-	// Osty: /tmp/selfhost_merged.osty:8329:5
 	if isPub {
-		// Osty: /tmp/selfhost_merged.osty:8329:17
 		n.flags = 1
 	}
+	n.extra = opPackAnnotations(p, anns)
 	return opAddNode(p, n)
 }
 
 // Osty: /tmp/selfhost_merged.osty:8333:1
 func opParseTypeAliasDecl(p *OstyParser, isPub bool) int {
-	// Osty: /tmp/selfhost_merged.osty:8334:5
+	return opParseTypeAliasDeclWithAnnotations(p, isPub, nil)
+}
+
+func opParseTypeAliasDeclWithAnnotations(p *OstyParser, isPub bool, anns []int) int {
 	start := p.pos
-	_ = start
-	// Osty: /tmp/selfhost_merged.osty:8335:5
 	_ = opAdvance(p)
-	// Osty: /tmp/selfhost_merged.osty:8336:5
 	name := opExpect(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})).text
-	_ = name
-	// Osty: /tmp/selfhost_merged.osty:8337:5
 	genericParams := opParseGenericParams(p)
-	_ = genericParams
-	// Osty: /tmp/selfhost_merged.osty:8338:5
 	_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontAssign{}))
-	// Osty: /tmp/selfhost_merged.osty:8339:5
 	typeIdx := opParseType(p)
-	_ = typeIdx
-	// Osty: /tmp/selfhost_merged.osty:8340:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNTypeAlias{}))
-	_ = n
-	// Osty: /tmp/selfhost_merged.osty:8341:6
 	n.text = name
-	// Osty: /tmp/selfhost_merged.osty:8342:6
 	n.left = typeIdx
-	// Osty: /tmp/selfhost_merged.osty:8343:6
 	n.children = genericParams
-	// Osty: /tmp/selfhost_merged.osty:8344:6
 	n.start = start
-	// Osty: /tmp/selfhost_merged.osty:8345:6
 	n.end = p.pos
-	// Osty: /tmp/selfhost_merged.osty:8346:5
 	if isPub {
-		// Osty: /tmp/selfhost_merged.osty:8346:17
 		n.flags = 1
 	}
+	n.extra = opPackAnnotations(p, anns)
 	return opAddNode(p, n)
 }
 
 // Osty: /tmp/selfhost_merged.osty:8350:1
 func opParseUseDecl(p *OstyParser) int {
-	// Osty: /tmp/selfhost_merged.osty:8351:5
 	start := p.pos
-	_ = start
-	// Osty: /tmp/selfhost_merged.osty:8352:5
 	_ = opAdvance(p)
-	// Osty: /tmp/selfhost_merged.osty:8353:5
-	var path []string = make([]string, 0, 1)
-	_ = path
-	// Osty: /tmp/selfhost_merged.osty:8354:5
+	rawPath := ""
 	isGo := false
-	_ = isGo
-	// Osty: /tmp/selfhost_merged.osty:8355:5
 	alias := ""
-	_ = alias
-	// Osty: /tmp/selfhost_merged.osty:8356:5
 	aliasStart := -1
-	_ = aliasStart
-	// Osty: /tmp/selfhost_merged.osty:8357:5
 	if opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})) && opPeek(p).text == "go" {
-		// Osty: /tmp/selfhost_merged.osty:8358:9
 		isGo = true
-		// Osty: /tmp/selfhost_merged.osty:8359:9
 		_ = opAdvance(p)
-		// Osty: /tmp/selfhost_merged.osty:8360:9
 		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontString{})) || opAt(p, FrontTokenKind(&FrontTokenKind_FrontRawString{})) {
-			// Osty: /tmp/selfhost_merged.osty:8360:62
-			func() struct{} { path = append(path, opAdvance(p).text); return struct{}{} }()
+			rawPath = opAdvance(p).text
 		}
 	} else {
-		// Osty: /tmp/selfhost_merged.osty:8361:14
-		for opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})) {
-			// Osty: /tmp/selfhost_merged.osty:8361:40
-			func() struct{} { path = append(path, opAdvance(p).text); return struct{}{} }()
-			// Osty: /tmp/selfhost_merged.osty:8362:5
-			if !(opEat(p, FrontTokenKind(&FrontTokenKind_FrontDot{}))) {
-				// Osty: /tmp/selfhost_merged.osty:8362:32
-				break
-			}
-		}
+		rawPath = opParseUsePath(p)
 	}
-	// Osty: /tmp/selfhost_merged.osty:8363:5
 	if opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})) && opPeek(p).text == "as" {
-		// Osty: /tmp/selfhost_merged.osty:8364:9
 		_ = opAdvance(p)
-		// Osty: /tmp/selfhost_merged.osty:8365:9
 		aliasStart = p.pos
-		// Osty: /tmp/selfhost_merged.osty:8366:9
 		alias = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})).text
 	}
-	// Osty: /tmp/selfhost_merged.osty:8368:5
-	var goItems []int = make([]int, 0, 1)
-	_ = goItems
-	// Osty: /tmp/selfhost_merged.osty:8369:5
+	var goItems []int
 	if opEat(p, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
-		// Osty: /tmp/selfhost_merged.osty:8370:9
 		opSkipNewlines(p)
-		// Osty: /tmp/selfhost_merged.osty:8371:9
-		for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-			// Osty: /tmp/selfhost_merged.osty:8372:13
+		for !opAt(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) && !opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{})) {
+			bodyAnns := opParseAnnotations(p)
 			if opAt(p, FrontTokenKind(&FrontTokenKind_FrontFn{})) {
-				// Osty: /tmp/selfhost_merged.osty:8373:17
-				func() struct{} {
-					goItems = append(goItems, opParseFnDecl(p, false, make([]int, 0, 1)))
-					return struct{}{}
-				}()
+				goItems = append(goItems, opParseFnDecl(p, false, bodyAnns))
 			} else if opAt(p, FrontTokenKind(&FrontTokenKind_FrontStruct{})) {
-				// Osty: /tmp/selfhost_merged.osty:8375:17
-				func() struct{} { goItems = append(goItems, opParseStructDecl(p, false)); return struct{}{} }()
+				goItems = append(goItems, opParseStructDeclWithAnnotations(p, false, bodyAnns))
 			} else if opAt(p, FrontTokenKind(&FrontTokenKind_FrontType{})) {
-				// Osty: /tmp/selfhost_merged.osty:8377:17
-				func() struct{} { goItems = append(goItems, opParseTypeAliasDecl(p, false)); return struct{}{} }()
+				goItems = append(goItems, opParseTypeAliasDeclWithAnnotations(p, false, bodyAnns))
 			} else {
-				// Osty: /tmp/selfhost_merged.osty:8379:17
 				_ = opAdvance(p)
 			}
-			// Osty: /tmp/selfhost_merged.osty:8381:13
 			opSkipNewlines(p)
 		}
-		// Osty: /tmp/selfhost_merged.osty:8383:9
 		_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))
 	}
-	// Osty: /tmp/selfhost_merged.osty:8385:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNUseDecl{}))
-	_ = n
-	// Osty: /tmp/selfhost_merged.osty:8386:6
-	n.text = strings.Join(path, ".")
-	// Osty: /tmp/selfhost_merged.osty:8387:6
+	n.text = rawPath
 	n.children = goItems
-	// Osty: /tmp/selfhost_merged.osty:8388:6
 	n.start = start
-	// Osty: /tmp/selfhost_merged.osty:8389:6
 	n.end = p.pos
-	// Osty: /tmp/selfhost_merged.osty:8390:5
 	if isGo {
-		// Osty: /tmp/selfhost_merged.osty:8390:16
 		n.flags = 1
 	}
-	// Osty: /tmp/selfhost_merged.osty:8391:5
 	if alias != "" {
-		// Osty: /tmp/selfhost_merged.osty:8392:10
 		n.op = FrontTokenKind(&FrontTokenKind_FrontIdent{})
-		// Osty: /tmp/selfhost_merged.osty:8393:9
 		aliasNode := emptyAstNode(AstNodeKind(&AstNodeKind_AstNIdent{}))
-		_ = aliasNode
-		// Osty: /tmp/selfhost_merged.osty:8394:18
 		aliasNode.text = alias
-		// Osty: /tmp/selfhost_merged.osty:8395:18
 		aliasNode.start = aliasStart
-		// Osty: /tmp/selfhost_merged.osty:8396:18
-		aliasNode.end = func() int {
-			var _p1761 int = aliasStart
-			var _rhs1762 int = 1
-			if _rhs1762 > 0 && _p1761 > math.MaxInt-_rhs1762 {
-				panic("integer overflow")
-			}
-			if _rhs1762 < 0 && _p1761 < math.MinInt-_rhs1762 {
-				panic("integer overflow")
-			}
-			return _p1761 + _rhs1762
-		}()
-		// Osty: /tmp/selfhost_merged.osty:8397:10
+		aliasNode.end = aliasStart + 1
 		n.children2 = []int{opAddNode(p, aliasNode)}
 	}
 	return opAddNode(p, n)
+}
+
+func opParseUsePath(p *OstyParser) string {
+	if !opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})) {
+		return ""
+	}
+	out := opAdvance(p).text
+	for {
+		sep := opUsePathSep(opPeek(p).kind)
+		if sep == "" || !ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) {
+			break
+		}
+		_ = opAdvance(p)
+		out = fmt.Sprintf("%s%s%s", ostyToString(out), ostyToString(sep), ostyToString(opAdvance(p).text))
+	}
+	return out
+}
+
+func opUsePathSep(kind FrontTokenKind) string {
+	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontDot{})) {
+		return "."
+	}
+	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontSlash{})) {
+		return "/"
+	}
+	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontColon{})) {
+		return ":"
+	}
+	return ""
 }
 
 // Osty: /tmp/selfhost_merged.osty:8406:1
