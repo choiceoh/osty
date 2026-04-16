@@ -35,7 +35,7 @@ coverage. The public compiler path is now native-only through the LLVM backend.
 | LSP (`internal/lsp`, wired as `osty lsp`) | done — hover, definition, formatting, documentSymbol, lint diagnostics, editor policy backed by toolchain sources |
 | Native LLVM backend (`internal/backend`, `internal/llvmgen`) | public backend path; scalar/control-flow/string smoke subset emits LLVM IR/object/binary, later phase 64-73 value/control-flow smoke expansion is documented, unsupported shapes report Osty-authored LLVM diagnostics |
 | Go transpiler (`internal/gen`) | bootstrap-only seed path compiled with `selfhostgen`; no longer exposed as a public backend |
-| Independent IR (`internal/ir`) | done — patterns, match, closures, struct/field/method |
+| Independent IR (`internal/ir`) | done — patterns, match, closures, struct/field/method, generic free-fn + generic struct/enum monomorphization with Itanium-mangled specializations (`ir.Monomorphize`, invoked from `backend.PrepareEntry`; fn symbols use `_Z…`, nominal types use `_ZTS…`) |
 | Project scaffolding (`internal/scaffold`, `osty new` / `osty init`) | done — `--bin`, `--lib`, `--workspace`, `--cli`, `--service` |
 | Manifest + lockfile + SemVer (`internal/manifest`, `lockfile`, `pkgmgr/semver`) | done (parse + validate + resolve) |
 | Build orchestrator (`osty build`) | done — manifest → front-end → native backend, profile/target/feature wiring, backend-aware artifact/cache paths |

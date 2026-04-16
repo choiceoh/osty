@@ -25,8 +25,18 @@ func PrepareEntry(packageName, sourcePath string, file *ast.File, res *resolve.R
 		return entry, fmt.Errorf("backend: nil source file")
 	}
 	mod, issues := ir.Lower(packageName, file, res, chk)
-	entry.IR = mod
 	entry.IRIssues = append(entry.IRIssues, issues...)
+	// Monomorphize generic free functions in-place on the lowered module.
+	// The backend contract is "no TypeVar leaves IR once it reaches the
+	// emitter", so we run this transform before validation rather than
+	// leaving it to each backend. A nil input produces a nil output; keep
+	// the original module in that pathological case so the validator can
+	// still report its own issues below.
+	if monoMod, monoErrs := ir.Monomorphize(mod); monoMod != nil {
+		mod = monoMod
+		entry.IRIssues = append(entry.IRIssues, monoErrs...)
+	}
+	entry.IR = mod
 	if validateErrs := ir.Validate(mod); len(validateErrs) != 0 {
 		entry.IRIssues = append(entry.IRIssues, validateErrs...)
 		return entry, errors.Join(validateErrs...)

@@ -169,10 +169,18 @@ per-symbol types in `Result.SymTypes`. Entry points mirror
 
 The main v0.4 front-end static guarantee hooks are wired here:
 
-- generic call sites are recorded in `Result.Instantiations`; this
-  originally fed demand-driven monomorphization in `internal/gen` and
-  remains available as front-end metadata while that legacy path is
-  retired,
+- generic call sites are recorded in `Result.Instantiations`; the IR
+  lowerer forwards these onto `ir.CallExpr.TypeArgs` and leaves struct
+  literal / variant / type-annotation arguments on the corresponding
+  `NamedType.Args` slots. `ir.Monomorphize` (invoked from
+  `backend.PrepareEntry` before `ir.Validate`) materializes one
+  specialization per reachable (generic fn, concrete type-args) tuple
+  *and* per (generic struct/enum, concrete type-args) tuple, so LLVM
+  only ever sees concrete symbols. Function symbols use Itanium
+  `_Z…` mangling; nominal type symbols use the `_ZTS…` track for easy
+  distinction. Method-local generic parameters, generic interface
+  declarations, and bare function-pointer turbofish stay out of scope
+  for this phase,
 - structural interface satisfaction checks composed interfaces,
   `Self`-typed signatures, generic receiver substitution, params, and
   generic bounds,

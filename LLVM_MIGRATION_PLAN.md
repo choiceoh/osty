@@ -254,6 +254,24 @@ artifact/cache layout 정책은 [`LLVM_ARTIFACT_LAYOUT.md`](./LLVM_ARTIFACT_LAYO
   - exported symbol mangling
   - duplicate runtime/helper emission 제거
 - generic monomorphization 결과를 LLVM symbol로 materialize한다.
+  - Phase 1(generic free function)은 이미 구현되어 있다:
+    `toolchain/monomorph.osty`의 Itanium-호환 mangling 정책 +
+    `internal/ir.Monomorphize`가 `backend.PrepareEntry`에서 호출되어
+    LLVM 진입 시점에는 generic free fn이 concrete specialization으로
+    이미 lowered 되어 있다 (smoke: `TestGenerateModuleGenericIdentityMonomorphized`).
+  - Phase 2(generic struct/enum 선언 + struct-level method)도 IR
+    단계에서 구현되어 있다: `_ZTS…` 나미널-타입 mangling 트랙,
+    `rewriteType`이 StructLit/VariantLit/LetStmt/Field/Variant Payload
+    등 모든 NamedType slot을 재작성, dedupe 키는 fn 네임스페이스와
+    분리 (`MonomorphTypeDedupeKey`). Struct LLVM smoke 통과:
+    `TestGenerateModuleGenericStructPairMonomorphized`
+    (mangled nominal 타입이 aggregate로 emit). Enum variant-call E2E
+    smoke는 llvmgen의 legacy variant-lowering이 mangled enum 이름을
+    처리하도록 확장되기 전까지 skipped 상태로 두며 IR-level 테스트
+    `TestMonomorphizeGenericEnumSpecialization`이 행동을 잠근다.
+  - 남은 범위: generic interface 선언, method-local generic parameter,
+    bare function-pointer turbofish (`let f = id::<Int>`),
+    llvmgen enum variant-call lowering의 mangled 이름 지원.
 - workspace/dependency graph를 codegen/link order로 변환한다.
 - `use go` FFI는 LLVM backend에서 그대로 지원하기 어렵기 때문에 새 FFI 정책을
   정한다.

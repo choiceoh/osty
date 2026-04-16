@@ -38,28 +38,44 @@ func Monomorphize(mod *Module) (*Module, []error) {
 		return nil, nil
 	}
 	state := &monoState{
-		pkg:            mod.Package,
-		out:            &Module{Package: mod.Package, SpanV: mod.SpanV},
-		genericsByName: map[string]*FnDecl{},
-		seen:           map[string]string{},
+		pkg:                  mod.Package,
+		out:                  &Module{Package: mod.Package, SpanV: mod.SpanV},
+		genericsByName:       map[string]*FnDecl{},
+		seen:                 map[string]string{},
+		genericStructsByName: map[string]*StructDecl{},
+		genericEnumsByName:   map[string]*EnumDecl{},
+		typeSeen:             map[string]string{},
 	}
 
-	// Pass 1: index generic free fns so the scanner can resolve
-	// callees against the original declarations without revisiting
-	// mod.Decls for each call site.
+	// Pass 1: index every generic top-level declaration so the scanner
+	// can resolve references against the original forms without
+	// revisiting mod.Decls for each call/type site. Generic free fns go
+	// in genericsByName; generic struct/enum declarations go in
+	// genericStructsByName / genericEnumsByName (Phase 2).
 	for _, d := range mod.Decls {
-		if fn, ok := d.(*FnDecl); ok && len(fn.Generics) > 0 {
-			state.genericsByName[fn.Name] = fn
+		switch x := d.(type) {
+		case *FnDecl:
+			if len(x.Generics) > 0 {
+				state.genericsByName[x.Name] = x
+			}
+		case *StructDecl:
+			if len(x.Generics) > 0 {
+				state.genericStructsByName[x.Name] = x
+			}
+		case *EnumDecl:
+			if len(x.Generics) > 0 {
+				state.genericEnumsByName[x.Name] = x
+			}
 		}
 	}
 
 	// Pass 2: copy non-generic decls into the output module (cloning so
 	// rewrites are isolated from the input), scan their bodies for
-	// initial instantiation requests, and append the script.
+	// initial instantiation requests, and append the script. Generic
+	// top-level declarations are dropped here; their specializations
+	// will be appended during worklist drain.
 	for _, d := range mod.Decls {
-		if fn, ok := d.(*FnDecl); ok && len(fn.Generics) > 0 {
-			// generic free fn — drop from output; specializations will
-			// be appended at the end.
+		if isGenericTopLevel(d) {
 			continue
 		}
 		out := cloneDecl(d)
@@ -72,16 +88,37 @@ func Monomorphize(mod *Module) (*Module, []error) {
 		state.scanStmt(cloned)
 	}
 
-	// Pass 3: drain the worklist. Each iteration clones an original
-	// generic fn, substitutes type parameters, scans its body for
-	// further instantiations (which append to the queue), and adds the
-	// specialization to the output.
-	for i := 0; i < len(state.queue); i++ {
-		rec := state.queue[i]
-		state.emitSpecialization(rec)
+	// Pass 3+4 (interleaved): drain both queues until neither grows.
+	// Emitting a specialization may discover further generic call sites
+	// (grows fn queue) or generic type references (grows type queue),
+	// so we loop until both reach a fixed point.
+	for len(state.queue) > 0 || len(state.typeQueue) > 0 {
+		for i := 0; i < len(state.queue); i++ {
+			state.emitSpecialization(state.queue[i])
+		}
+		state.queue = state.queue[:0]
+		for i := 0; i < len(state.typeQueue); i++ {
+			state.emitTypeSpecialization(state.typeQueue[i])
+		}
+		state.typeQueue = state.typeQueue[:0]
 	}
 
 	return state.out, state.errs
+}
+
+// isGenericTopLevel reports whether a top-level declaration carries
+// generic parameters and therefore must be replaced by concrete
+// specializations rather than copied verbatim into the output.
+func isGenericTopLevel(d Decl) bool {
+	switch x := d.(type) {
+	case *FnDecl:
+		return len(x.Generics) > 0
+	case *StructDecl:
+		return len(x.Generics) > 0
+	case *EnumDecl:
+		return len(x.Generics) > 0
+	}
+	return false
 }
 
 // monoState carries the per-module monomorphization bookkeeping.
@@ -96,6 +133,19 @@ type monoState struct {
 	// drain lets new entries appended during scanning be picked up.
 	queue []monoInstance
 	errs  []error
+
+	// Phase 2: generic nominal-type bookkeeping.
+	//
+	// genericStructsByName / genericEnumsByName index the original
+	// generic declarations so scanning can recognize a generic
+	// NamedType reference by source name.
+	genericStructsByName map[string]*StructDecl
+	genericEnumsByName   map[string]*EnumDecl
+	// typeSeen maps a MonomorphTypeDedupeKey to the mangled type-symbol
+	// so duplicate requests short-circuit.
+	typeSeen map[string]string
+	// typeQueue is the worklist of pending struct/enum specializations.
+	typeQueue []monoTypeInstance
 }
 
 // monoInstance is one pending free-fn specialization.
@@ -103,6 +153,18 @@ type monoInstance struct {
 	fn       *FnDecl
 	typeArgs []Type
 	mangled  string
+}
+
+// monoTypeInstance is one pending nominal-type specialization. Exactly
+// one of structDecl / enumDecl is non-nil; the other distinguishes the
+// emitter branch. typeArgs are the concrete types matching the
+// declaration's generics, and mangled is the `_ZTS…` symbol the engine
+// has already assigned and written to typeSeen.
+type monoTypeInstance struct {
+	structDecl *StructDecl
+	enumDecl   *EnumDecl
+	typeArgs   []Type
+	mangled    string
 }
 
 // addErr appends a non-fatal issue.
@@ -166,39 +228,402 @@ func (s *monoState) request(fn *FnDecl, typeArgs []Type) string {
 	return mangled
 }
 
+// requestStructType enqueues a (generic struct decl, concrete type-args)
+// pair for specialization and returns the mangled type-symbol the
+// caller should substitute at the reference site. Duplicate requests
+// short-circuit via the typeSeen map. Returns "" when the request is
+// malformed (arity mismatch, unresolved type parameters).
+func (s *monoState) requestStructType(decl *StructDecl, typeArgs []Type) string {
+	if decl == nil {
+		return ""
+	}
+	if !MonomorphShouldInstantiate(len(typeArgs), len(decl.Generics)) {
+		s.addErr("monomorph: arity mismatch for struct %s: %d type args vs %d generics",
+			decl.Name, len(typeArgs), len(decl.Generics))
+		return ""
+	}
+	for i, ta := range typeArgs {
+		if containsTypeVar(ta) {
+			s.addErr("monomorph: type arg %d of struct %s still contains a type variable (%s)",
+				i, decl.Name, typeString(ta))
+			return ""
+		}
+	}
+	typeArgCodes := make([]string, len(typeArgs))
+	for i, ta := range typeArgs {
+		typeArgCodes[i] = typeCodeOf(ta, s.pkg)
+	}
+	key := MonomorphTypeDedupeKey(decl.Name, s.pkg, typeArgCodes)
+	if mangled, ok := s.typeSeen[key]; ok {
+		return mangled
+	}
+	req := NewMonomorphTypeRequest(s.pkg, decl.Name, typeArgCodes)
+	mangled := MonomorphMangleType(req).Symbol()
+	// Important: record the mangled name *before* enqueueing so that a
+	// recursive field type (e.g. `struct List<T> { next: Option<List<T>>? }`)
+	// that requests the same specialization from inside the emitter hits
+	// the seen cache and terminates instead of looping.
+	s.typeSeen[key] = mangled
+	s.typeQueue = append(s.typeQueue, monoTypeInstance{
+		structDecl: decl,
+		typeArgs:   append([]Type(nil), typeArgs...),
+		mangled:    mangled,
+	})
+	return mangled
+}
+
+// requestEnumType is the enum counterpart of requestStructType.
+func (s *monoState) requestEnumType(decl *EnumDecl, typeArgs []Type) string {
+	if decl == nil {
+		return ""
+	}
+	if !MonomorphShouldInstantiate(len(typeArgs), len(decl.Generics)) {
+		s.addErr("monomorph: arity mismatch for enum %s: %d type args vs %d generics",
+			decl.Name, len(typeArgs), len(decl.Generics))
+		return ""
+	}
+	for i, ta := range typeArgs {
+		if containsTypeVar(ta) {
+			s.addErr("monomorph: type arg %d of enum %s still contains a type variable (%s)",
+				i, decl.Name, typeString(ta))
+			return ""
+		}
+	}
+	typeArgCodes := make([]string, len(typeArgs))
+	for i, ta := range typeArgs {
+		typeArgCodes[i] = typeCodeOf(ta, s.pkg)
+	}
+	key := MonomorphTypeDedupeKey(decl.Name, s.pkg, typeArgCodes)
+	if mangled, ok := s.typeSeen[key]; ok {
+		return mangled
+	}
+	req := NewMonomorphTypeRequest(s.pkg, decl.Name, typeArgCodes)
+	mangled := MonomorphMangleType(req).Symbol()
+	s.typeSeen[key] = mangled
+	s.typeQueue = append(s.typeQueue, monoTypeInstance{
+		enumDecl: decl,
+		typeArgs: append([]Type(nil), typeArgs...),
+		mangled:  mangled,
+	})
+	return mangled
+}
+
+// emitTypeSpecialization dispatches one queued nominal-type instance
+// to the appropriate struct/enum emitter.
+func (s *monoState) emitTypeSpecialization(rec monoTypeInstance) {
+	switch {
+	case rec.structDecl != nil:
+		s.emitStructSpecialization(rec)
+	case rec.enumDecl != nil:
+		s.emitEnumSpecialization(rec)
+	}
+}
+
+// emitStructSpecialization materializes one queued struct instance:
+// clones the original declaration, renames it to the mangled symbol,
+// substitutes type parameters inside fields and method signatures/bodies,
+// rewrites any surviving user-generic references (nested generics like
+// `Option<Pair<T, T>>` become `Option<_ZTSN…E>` after `T` is concretized),
+// drops any method carrying its own generics (Phase 3+ scope), scans
+// surviving method bodies for further generic call sites, and appends
+// the result to out.Decls.
+func (s *monoState) emitStructSpecialization(rec monoTypeInstance) {
+	clone := cloneStructDecl(rec.structDecl)
+	clone.Name = rec.mangled
+	clone.Generics = nil
+	env := buildSubstEnv(rec.structDecl.Generics, rec.typeArgs)
+	SubstituteTypes(clone, env)
+	for _, f := range clone.Fields {
+		if f == nil {
+			continue
+		}
+		f.Type = s.rewriteType(f.Type)
+	}
+	clone.Methods = s.keepNonGenericMethods(clone.Name, clone.Methods)
+	s.out.Decls = append(s.out.Decls, clone)
+}
+
+// emitEnumSpecialization is the enum counterpart of emitStructSpecialization.
+func (s *monoState) emitEnumSpecialization(rec monoTypeInstance) {
+	clone := cloneEnumDecl(rec.enumDecl)
+	clone.Name = rec.mangled
+	clone.Generics = nil
+	env := buildSubstEnv(rec.enumDecl.Generics, rec.typeArgs)
+	SubstituteTypes(clone, env)
+	for _, v := range clone.Variants {
+		if v == nil {
+			continue
+		}
+		for i, p := range v.Payload {
+			v.Payload[i] = s.rewriteType(p)
+		}
+	}
+	clone.Methods = s.keepNonGenericMethods(clone.Name, clone.Methods)
+	s.out.Decls = append(s.out.Decls, clone)
+}
+
+// rewriteType walks a Type tree top-down rewriting every generic
+// user-declared NamedType into a concrete `_ZTS…` mangled reference
+// and enqueueing the matching specialization on typeQueue. Because Go's
+// Type is an interface, caller-side reassignment at the parent slot
+// drives the traversal — the returned Type should be stored back into
+// the slot the original came from (e.g. `p.Type = s.rewriteType(p.Type)`).
+//
+// NamedType.Args are rewritten first (bottom-up) so nested generic
+// references (`Pair<Maybe<Bool>, …>`) encode their inner mangled names
+// into the outer request's type-arg codes.
+func (s *monoState) rewriteType(t Type) Type {
+	if t == nil {
+		return nil
+	}
+	switch x := t.(type) {
+	case *NamedType:
+		for i, a := range x.Args {
+			x.Args[i] = s.rewriteType(a)
+		}
+		if x.Builtin {
+			return x
+		}
+		// Only user-declared nominal types drive specialization.
+		// Concrete (non-generic) references like `Point` fall through
+		// unchanged — they were not indexed in Pass 1.
+		if len(x.Args) == 0 {
+			return x
+		}
+		if sd, ok := s.genericStructsByName[x.Name]; ok {
+			if mangled := s.requestStructType(sd, x.Args); mangled != "" {
+				return &NamedType{Name: mangled}
+			}
+		}
+		if ed, ok := s.genericEnumsByName[x.Name]; ok {
+			if mangled := s.requestEnumType(ed, x.Args); mangled != "" {
+				return &NamedType{Name: mangled}
+			}
+		}
+		return x
+	case *OptionalType:
+		x.Inner = s.rewriteType(x.Inner)
+		return x
+	case *TupleType:
+		for i, e := range x.Elems {
+			x.Elems[i] = s.rewriteType(e)
+		}
+		return x
+	case *FnType:
+		for i, p := range x.Params {
+			x.Params[i] = s.rewriteType(p)
+		}
+		x.Return = s.rewriteType(x.Return)
+		return x
+	}
+	return t
+}
+
+// rewriteExprType rewrites every Type-valued field on an expression
+// node (e.g. Expr.T, ListLit.Elem, MapLit.KeyT/ValT, Closure.Return/T,
+// Ident.TypeArgs, CallExpr.TypeArgs, …). For StructLit/VariantLit it
+// also syncs TypeName/Enum with the mangled nominal name so later
+// lowering stages agree on the specialization to dispatch against.
+//
+// Called at the top of scanExpr so every visited expression has its
+// type slots brought up to date before the recursion drills further —
+// including deeply nested expressions inside closures and match arms.
+func (s *monoState) rewriteExprType(e Expr) {
+	if e == nil {
+		return
+	}
+	switch x := e.(type) {
+	case *IntLit:
+		x.T = s.rewriteType(x.T)
+	case *FloatLit:
+		x.T = s.rewriteType(x.T)
+	case *Ident:
+		x.T = s.rewriteType(x.T)
+		for i, ta := range x.TypeArgs {
+			x.TypeArgs[i] = s.rewriteType(ta)
+		}
+	case *UnaryExpr:
+		x.T = s.rewriteType(x.T)
+	case *BinaryExpr:
+		x.T = s.rewriteType(x.T)
+	case *CallExpr:
+		x.T = s.rewriteType(x.T)
+		for i, ta := range x.TypeArgs {
+			x.TypeArgs[i] = s.rewriteType(ta)
+		}
+	case *MethodCall:
+		x.T = s.rewriteType(x.T)
+		for i, ta := range x.TypeArgs {
+			x.TypeArgs[i] = s.rewriteType(ta)
+		}
+	case *ListLit:
+		x.Elem = s.rewriteType(x.Elem)
+	case *MapLit:
+		x.KeyT = s.rewriteType(x.KeyT)
+		x.ValT = s.rewriteType(x.ValT)
+	case *TupleLit:
+		x.T = s.rewriteType(x.T)
+	case *StructLit:
+		x.T = s.rewriteType(x.T)
+		if nt, ok := x.T.(*NamedType); ok && nt.Name != "" {
+			// Only override TypeName when the rewrite actually changed
+			// the nominal: a non-generic struct lit keeps its source
+			// name so existing llvmgen dispatch stays intact.
+			if x.TypeName != nt.Name {
+				x.TypeName = nt.Name
+			}
+		}
+	case *VariantLit:
+		x.T = s.rewriteType(x.T)
+		if nt, ok := x.T.(*NamedType); ok && nt.Name != "" {
+			if x.Enum != "" && x.Enum != nt.Name {
+				x.Enum = nt.Name
+			}
+		}
+	case *BlockExpr:
+		x.T = s.rewriteType(x.T)
+	case *IfExpr:
+		x.T = s.rewriteType(x.T)
+	case *IfLetExpr:
+		x.T = s.rewriteType(x.T)
+	case *MatchExpr:
+		x.T = s.rewriteType(x.T)
+	case *FieldExpr:
+		x.T = s.rewriteType(x.T)
+	case *IndexExpr:
+		x.T = s.rewriteType(x.T)
+	case *TupleAccess:
+		x.T = s.rewriteType(x.T)
+	case *RangeLit:
+		x.T = s.rewriteType(x.T)
+	case *QuestionExpr:
+		x.T = s.rewriteType(x.T)
+	case *CoalesceExpr:
+		x.T = s.rewriteType(x.T)
+	case *Closure:
+		x.Return = s.rewriteType(x.Return)
+		x.T = s.rewriteType(x.T)
+		for _, p := range x.Params {
+			if p == nil {
+				continue
+			}
+			p.Type = s.rewriteType(p.Type)
+		}
+		for _, c := range x.Captures {
+			if c == nil {
+				continue
+			}
+			c.T = s.rewriteType(c.T)
+		}
+	case *ErrorExpr:
+		x.T = s.rewriteType(x.T)
+	}
+}
+
+// keepNonGenericMethods filters a specialization's method list: methods
+// carrying their own generic parameters are dropped with a warning
+// (method-local generics are Phase 3+ scope). Surviving methods have
+// their bodies scanned so any nested generic call sites they contain
+// still drive the worklist.
+func (s *monoState) keepNonGenericMethods(owner string, methods []*FnDecl) []*FnDecl {
+	if len(methods) == 0 {
+		return methods
+	}
+	kept := methods[:0]
+	for _, m := range methods {
+		if m == nil {
+			continue
+		}
+		if len(m.Generics) > 0 {
+			s.addErr("monomorph: method %s.%s has method-local generics; skipped (Phase 3+ scope)",
+				owner, m.Name)
+			continue
+		}
+		// Rewrite the post-substitution signature so any user-generic
+		// references surviving `SubstituteTypes` (nested or built-in
+		// wrapping like `Option<Pair<T, T>>`) become mangled symbols,
+		// then scan the body for call/type sites nested inside.
+		s.rewriteFnSignature(m)
+		s.scanFnBody(m)
+		kept = append(kept, m)
+	}
+	return kept
+}
+
 // emitSpecialization materializes one queued free-fn instance: clones
 // the original body, substitutes type parameters, rewrites nested
-// generic calls, and appends the result to out.Decls.
+// generic references in the post-substitution signature (so a return
+// type like `Pair<T, T>` mangled into `Pair<Int, Int>` further lowers
+// to the `_ZTS…` nominal), scans the body, and appends the result.
 func (s *monoState) emitSpecialization(rec monoInstance) {
 	clone := cloneFnDecl(rec.fn)
 	clone.Name = rec.mangled
 	clone.Generics = nil
 	env := buildSubstEnv(rec.fn.Generics, rec.typeArgs)
 	SubstituteTypes(clone, env)
+	s.rewriteFnSignature(clone)
 	s.scanFnBody(clone)
 	s.out.Decls = append(s.out.Decls, clone)
 }
 
 // scanDecl walks a top-level declaration looking for generic call sites
-// that need rewriting in-place. Only non-generic bodies are scanned here
-// — generic bodies are handled by emitSpecialization after substitution.
+// and generic type references that need rewriting in-place. Only
+// non-generic bodies are scanned here — generic bodies are handled by
+// emitSpecialization / emitStructSpecialization / emitEnumSpecialization
+// after substitution. Declaration-level Type fields (function signatures,
+// struct fields, enum payloads) are not visited by scanExpr, so we
+// rewrite them explicitly here.
 func (s *monoState) scanDecl(d Decl) {
 	switch d := d.(type) {
 	case *FnDecl:
+		s.rewriteFnSignature(d)
 		s.scanFnBody(d)
 	case *StructDecl:
+		for _, f := range d.Fields {
+			if f != nil {
+				f.Type = s.rewriteType(f.Type)
+			}
+		}
 		for _, m := range d.Methods {
+			s.rewriteFnSignature(m)
 			s.scanFnBody(m)
 		}
 	case *EnumDecl:
+		for _, v := range d.Variants {
+			if v == nil {
+				continue
+			}
+			for i, p := range v.Payload {
+				v.Payload[i] = s.rewriteType(p)
+			}
+		}
 		for _, m := range d.Methods {
+			s.rewriteFnSignature(m)
 			s.scanFnBody(m)
 		}
 	case *LetDecl:
+		d.Type = s.rewriteType(d.Type)
 		if d.Value != nil {
 			s.scanExpr(d.Value)
 		}
 	}
+}
+
+// rewriteFnSignature rewrites the param and return type slots of a
+// function declaration. Used by scanDecl and by the struct/enum
+// specialization emitters to keep method signatures concrete once their
+// owner has been substituted.
+func (s *monoState) rewriteFnSignature(fn *FnDecl) {
+	if fn == nil {
+		return
+	}
+	for _, p := range fn.Params {
+		if p == nil {
+			continue
+		}
+		p.Type = s.rewriteType(p.Type)
+	}
+	fn.Return = s.rewriteType(fn.Return)
 }
 
 // scanFnBody walks a function body in place rewriting every generic
@@ -228,6 +653,7 @@ func (s *monoState) scanStmt(st Stmt) {
 	case *Block:
 		s.scanBlock(st)
 	case *LetStmt:
+		st.Type = s.rewriteType(st.Type)
 		if st.Value != nil {
 			s.scanExpr(st.Value)
 		}
@@ -283,6 +709,11 @@ func (s *monoState) scanExpr(e Expr) {
 	if e == nil {
 		return
 	}
+	// Phase 2: rewrite every generic NamedType reference buried in the
+	// expression's own type fields (e.g. StructLit.T, CallExpr.T,
+	// Ident.T). Safe to run before the case dispatch — idempotent on
+	// already-mangled references.
+	s.rewriteExprType(e)
 	switch e := e.(type) {
 	case *CallExpr:
 		// Rewrite generic call to mangled specialization.
@@ -489,6 +920,18 @@ func typeCodeOf(t Type, pkg string) string {
 		}
 		if t.Builtin {
 			return builtinTypeCode(t, pkg)
+		}
+		// Phase 2: a user-declared generic reference carries its concrete
+		// type arguments via NamedType.Args. Encode them through the
+		// template-nested form so a generic free function whose type arg
+		// is itself user-generic (e.g. `id::<Pair<Int,Int>>`) gets a
+		// unique mangled fn symbol per concrete Pair instantiation.
+		if len(t.Args) > 0 {
+			var sb strings.Builder
+			for _, a := range t.Args {
+				sb.WriteString(typeCodeOf(a, pkg))
+			}
+			return MonomorphUserTemplateNested(firstNonEmpty(pkg, "main"), t.Name, sb.String())
 		}
 		return MonomorphUserNested(firstNonEmpty(pkg, "main"), t.Name)
 	case *OptionalType:
