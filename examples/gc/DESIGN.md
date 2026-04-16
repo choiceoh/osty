@@ -1746,14 +1746,24 @@ Osty language spec은 OOM을 recoverable error로 보지 않는다. 이 library�
 ### Phase 41: Barrier Failure Paths and Bridge Accounting Integrity
 
 - Status: done for the executable prototype.
-- `barrierAudit()`의 failure path를 lowered slot/owner ref mismatch와 remembered bookkeeping
-  mismatch 테스트로 직접 잠근다.
+- `barrierAudit()`의 failure path를 lowered slot/owner ref mismatch, invalid lowered reference,
+  remembered bookkeeping mismatch 테스트로 직접 잠근다.
 - `hardeningReport()`가 heap invalid + barrier audit failure를 동시에 surface하는지 regression으로
   고정한다.
 - LLVM bridge trace의 handle/root/runtime-root accounting이 실제 table/set state와 어긋나면
   `validateHeap()`가 즉시 실패하도록 한다.
 - Acceptance criteria: audit/hardening drift와 bridge counter corruption이 런타임 연동 전에
   executable model에서 먼저 드러난다.
+
+### Phase 42: Performance Gate and Allocator Corruption Negatives
+
+- Status: done for the executable prototype.
+- `hardeningReport()`의 performance failure path를 threshold underflow 케이스로 regression에
+  고정한다.
+- Tenured free-list corruption이 live object와 겹칠 때 `validateHeap()`가 즉시 실패하는
+  negative path를 추가한다.
+- Acceptance criteria: hardening gate가 success path뿐 아니라 budget/free-list corruption도
+  실행 가능한 테스트로 드러낸다.
 ## Open Questions
 
 - Generational policy를 two-generation으로 고정할지, nursery plus aging tenured buckets로 확장할지.
@@ -1826,6 +1836,8 @@ allocation, root bind/release, post-write barrier call을 Osty-owned helper로 �
   regression test로 잠가 LLVM bridge state transition을 더 엄격하게 만든다.
 - Phase 41은 barrier audit failure path와 llvm bridge accounting mismatch를 hardening gate로
   묶어 negative-path coverage를 높인다.
+- Phase 42는 performance gate 실패와 allocator free-list corruption을 validator regression으로
+  잠가 production hardening surface를 더 촘촘하게 만든다.
 
 ## Future Native Runtime Path
 
