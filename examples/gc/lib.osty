@@ -110,6 +110,18 @@ pub struct GcTenuredAllocator {
     pub reusedBytes: Int,
 }
 
+pub struct GcHumongousAllocator {
+    pub cursor: Int,
+    pub freeList: List<GcFreeBlock>,
+    pub bumpAllocations: Int,
+    pub reuseAllocations: Int,
+    pub allocatedObjects: Int,
+    pub reclaimedObjects: Int,
+    pub allocatedBytes: Int,
+    pub reclaimedBytes: Int,
+    pub reusedBytes: Int,
+}
+
 pub enum GcSafepointKind {
     GcCallSafepoint,
     GcAllocationSafepoint,
@@ -276,6 +288,7 @@ pub struct GcHeap {
     asyncFrames: Map<Int, GcAsyncFrameRoot>,
     tlabs: Map<Int, GcTlab>,
     tenured: GcTenuredAllocator,
+    humongous: GcHumongousAllocator,
     remembered: Set<Int>,
     grey: List<Int>,
     allocatedSinceLastGC: Int,
@@ -1311,6 +1324,57 @@ pub struct GcHeap {
         total
     }
 
+    pub fn humongousBytes(self) -> Int {
+        let mut total = 0
+        for (id, obj) in self.objects {
+            let _ = id
+            if obj.large {
+                total = total + obj.size
+            }
+        }
+        total
+    }
+
+    pub fn humongousFreeBlockCount(self) -> Int {
+        self.humongous.freeList.len()
+    }
+
+    pub fn humongousFreeBytes(self) -> Int {
+        let mut total = 0
+        for block in self.humongous.freeList {
+            total = total + block.size
+        }
+        total
+    }
+
+    pub fn humongousBumpAllocationCount(self) -> Int {
+        self.humongous.bumpAllocations
+    }
+
+    pub fn humongousReuseAllocationCount(self) -> Int {
+        self.humongous.reuseAllocations
+    }
+
+    pub fn humongousAllocatedObjectCount(self) -> Int {
+        self.humongous.allocatedObjects
+    }
+
+    pub fn humongousReclaimedObjectCount(self) -> Int {
+        self.humongous.reclaimedObjects
+    }
+
+    pub fn humongousReclaimedBytes(self) -> Int {
+        self.humongous.reclaimedBytes
+    }
+
+    pub fn humongousReusedBytes(self) -> Int {
+        self.humongous.reusedBytes
+    }
+
+    pub fn humongousCursor(self) -> Int {
+        self.humongous.cursor
+    }
+
     pub fn pinnedObjectCount(self) -> Int {
         let mut total = 0
         for (id, obj) in self.objects {
@@ -1430,6 +1494,17 @@ pub struct GcHeap {
         if self.tenured.bumpAllocations < 0 || self.tenured.reuseAllocations < 0 || self.tenured.directAllocations < 0 || self.tenured.promotedAllocations < 0 || self.tenured.reusedBytes < 0 {
             return Err("tenured allocator has negative accounting")
         }
+        if self.humongous.cursor < 0 {
+            return Err("humongous allocator cursor is negative: {self.humongous.cursor}")
+        }
+        if self.humongous.cursor > self.nextAddress {
+            return Err(
+                "humongous allocator cursor {self.humongous.cursor} is beyond nextAddress {self.nextAddress}",
+            )
+        }
+        if self.humongous.bumpAllocations < 0 || self.humongous.reuseAllocations < 0 || self.humongous.allocatedObjects < 0 || self.humongous.reclaimedObjects < 0 || self.humongous.allocatedBytes < 0 || self.humongous.reclaimedBytes < 0 || self.humongous.reusedBytes < 0 {
+            return Err("humongous allocator has negative accounting")
+        }
         let survivorBytes = self.survivorBytes()
         if survivorBytes > self.config.survivorLimit {
             return Err(
@@ -1458,6 +1533,40 @@ pub struct GcHeap {
                     let other = self.tenured.freeList[otherIdx]
                     if rangesOverlap(block.address, block.size, other.address, other.size) {
                         return Err("tenured free blocks {idx} and {otherIdx} overlap")
+                    }
+                }
+            }
+        }
+
+        for idx in 0..self.humongous.freeList.len() {
+            let block = self.humongous.freeList[idx]
+            if block.address < 0 {
+                return Err("humongous free block {idx} has negative address {block.address}")
+            }
+            if block.size <= 0 {
+                return Err("humongous free block {idx} has non-positive size {block.size}")
+            }
+            if block.address + block.size > self.nextAddress {
+                return Err("humongous free block {idx} is outside heap span")
+            }
+            for (id, obj) in self.objects {
+                if rangesOverlap(block.address, block.size, obj.address, obj.size) {
+                    return Err("humongous free block {idx} overlaps live object {id}")
+                }
+            }
+            for tenuredIdx in 0..self.tenured.freeList.len() {
+                let tenuredBlock = self.tenured.freeList[tenuredIdx]
+                if rangesOverlap(block.address, block.size, tenuredBlock.address, tenuredBlock.size) {
+                    return Err(
+                        "humongous free block {idx} overlaps tenured free block {tenuredIdx}",
+                    )
+                }
+            }
+            for otherIdx in 0..self.humongous.freeList.len() {
+                if idx != otherIdx {
+                    let other = self.humongous.freeList[otherIdx]
+                    if rangesOverlap(block.address, block.size, other.address, other.size) {
+                        return Err("humongous free blocks {idx} and {otherIdx} overlap")
                     }
                 }
             }
@@ -1615,18 +1724,25 @@ pub struct GcHeap {
     }
 
     fn allocateRaw(mut self, kind: ObjectKind, size: Int) -> Int {
+        if self.isLargeSize(size) {
+            return self.allocateHumongousRaw(kind, size)
+        }
+
         let id = self.nextId
         let address = self.nextAddress
-        let large = self.isLargeSize(size)
         self.nextId = self.nextId + 1
         self.nextAddress = self.nextAddress + size
         self.liveBytes = self.liveBytes + size
         self.allocatedSinceLastGC = self.allocatedSinceLastGC + size
-        self.objects.insert(id, newGcObject(id, kind, size, address, self.cycle, large))
+        self.objects.insert(id, newGcObject(id, kind, size, address, self.cycle, false))
         id
     }
 
     fn allocateTenuredRaw(mut self, kind: ObjectKind, size: Int) -> Int {
+        if self.isLargeSize(size) {
+            return self.allocateHumongousRaw(kind, size)
+        }
+
         let id = self.nextId
         let address = self.reserveTenuredAddress(size)
         let mut object = newGcObject(id, kind, size, address, self.cycle, false)
@@ -1642,6 +1758,20 @@ pub struct GcHeap {
         tenured.directAllocations = tenured.directAllocations + 1
         self.tenured = tenured
         self.objects.insert(id, object)
+        id
+    }
+
+    fn allocateHumongousRaw(mut self, kind: ObjectKind, size: Int) -> Int {
+        let id = self.nextId
+        let address = self.reserveHumongousAddress(size)
+        self.nextId = self.nextId + 1
+        self.liveBytes = self.liveBytes + size
+        self.allocatedSinceLastGC = self.allocatedSinceLastGC + size
+        let mut humongous = self.humongous
+        humongous.allocatedObjects = humongous.allocatedObjects + 1
+        humongous.allocatedBytes = humongous.allocatedBytes + size
+        self.humongous = humongous
+        self.objects.insert(id, newGcObject(id, kind, size, address, self.cycle, true))
         id
     }
 
@@ -1996,7 +2126,9 @@ pub struct GcHeap {
                     self.objects.insert(id, next)
                 } else {
                     self.dropObjectSideTables(id)
-                    if obj.generation == 1 && !(obj.large) && !(obj.pinned) {
+                    if obj.large {
+                        self.releaseHumongousObject(obj)
+                    } else if obj.generation == 1 && !(obj.pinned) {
                         self.releaseTenuredBlock(obj.address, obj.size)
                     }
                     let _ = self.objects.remove(id)
@@ -2021,18 +2153,22 @@ pub struct GcHeap {
                 let mut next = self.objects[id]
                 if next.pinned || next.large {
                     if next.address > cursor {
-                        freeList.push(
-                            GcFreeBlock {
-                                address: cursor,
-                                size: next.address - cursor,
-                            },
-                        )
+                        let gapSize = next.address - cursor
+                        if !(self.rangeOverlapsHumongousFree(cursor, gapSize)) {
+                            freeList.push(
+                                GcFreeBlock {
+                                    address: cursor,
+                                    size: gapSize,
+                                },
+                            )
+                        }
                     }
                     let end = next.address + next.size
                     if end > cursor {
                         cursor = end
                     }
                 } else {
+                    cursor = self.avoidHumongousFreeBlocks(cursor, next.size)
                     if next.address != cursor {
                         moved = moved + 1
                     }
@@ -2043,11 +2179,18 @@ pub struct GcHeap {
             }
         }
 
+        let humongousEnd = self.humongousReservedEnd()
+        if humongousEnd > cursor {
+            cursor = humongousEnd
+        }
         self.nextAddress = cursor
         let mut tenured = self.tenured
         tenured.cursor = cursor
         tenured.freeList = freeList
         self.tenured = tenured
+        let mut humongous = self.humongous
+        humongous.cursor = cursor
+        self.humongous = humongous
         moved
     }
 
@@ -2094,6 +2237,49 @@ pub struct GcHeap {
         address
     }
 
+    fn reserveHumongousAddress(mut self, size: Int) -> Int {
+        let mut address = -1
+        let mut consumed = false
+        let mut nextFreeList: List<GcFreeBlock> = []
+
+        for block in self.humongous.freeList {
+            if !(consumed) && block.size >= size {
+                address = block.address
+                consumed = true
+                if block.size > size {
+                    nextFreeList.push(
+                        GcFreeBlock {
+                            address: block.address + size,
+                            size: block.size - size,
+                        },
+                    )
+                }
+            } else {
+                nextFreeList.push(block)
+            }
+        }
+
+        let mut humongous = self.humongous
+        if consumed {
+            humongous.freeList = nextFreeList
+            humongous.reuseAllocations = humongous.reuseAllocations + 1
+            humongous.reusedBytes = humongous.reusedBytes + size
+            self.humongous = humongous
+            return address
+        }
+
+        if humongous.cursor > self.nextAddress {
+            address = humongous.cursor
+        } else {
+            address = self.nextAddress
+        }
+        humongous.cursor = address + size
+        humongous.bumpAllocations = humongous.bumpAllocations + 1
+        self.nextAddress = humongous.cursor
+        self.humongous = humongous
+        address
+    }
+
     fn releaseTenuredBlock(mut self, address: Int, size: Int) {
         if size <= 0 {
             return
@@ -2101,6 +2287,63 @@ pub struct GcHeap {
         let mut tenured = self.tenured
         tenured.freeList.push(GcFreeBlock { address, size })
         self.tenured = tenured
+    }
+
+    fn releaseHumongousObject(mut self, obj: GcObject) {
+        let mut humongous = self.humongous
+        humongous.freeList.push(
+            GcFreeBlock {
+                address: obj.address,
+                size: obj.size,
+            },
+        )
+        humongous.reclaimedObjects = humongous.reclaimedObjects + 1
+        humongous.reclaimedBytes = humongous.reclaimedBytes + obj.size
+        self.humongous = humongous
+    }
+
+    fn avoidHumongousFreeBlocks(self, address: Int, size: Int) -> Int {
+        let mut candidate = address
+        let mut changed = true
+        for changed {
+            changed = false
+            for block in self.humongous.freeList {
+                if rangesOverlap(candidate, size, block.address, block.size) {
+                    candidate = block.address + block.size
+                    changed = true
+                }
+            }
+        }
+        candidate
+    }
+
+    fn rangeOverlapsHumongousFree(self, address: Int, size: Int) -> Bool {
+        for block in self.humongous.freeList {
+            if rangesOverlap(address, size, block.address, block.size) {
+                return true
+            }
+        }
+        false
+    }
+
+    fn humongousReservedEnd(self) -> Int {
+        let mut end = 0
+        for block in self.humongous.freeList {
+            let blockEnd = block.address + block.size
+            if blockEnd > end {
+                end = blockEnd
+            }
+        }
+        for (id, obj) in self.objects {
+            let _ = id
+            if obj.large {
+                let objectEnd = obj.address + obj.size
+                if objectEnd > end {
+                    end = objectEnd
+                }
+            }
+        }
+        end
     }
 
     fn rebuildRemembered(mut self) {
@@ -2250,6 +2493,7 @@ pub fn newGcHeap(config: GcConfig) -> GcHeap {
     let asyncFrames: Map<Int, GcAsyncFrameRoot> = {:}
     let tlabs: Map<Int, GcTlab> = {:}
     let tenured = emptyTenuredAllocator()
+    let humongous = emptyHumongousAllocator()
     let emptyRoots: List<Int> = []
     let emptyRemembered: List<Int> = []
     let grey: List<Int> = []
@@ -2270,6 +2514,7 @@ pub fn newGcHeap(config: GcConfig) -> GcHeap {
         asyncFrames,
         tlabs,
         tenured,
+        humongous,
         remembered: emptyRemembered.toSet(),
         grey,
         allocatedSinceLastGC: 0,
@@ -2313,6 +2558,21 @@ fn emptyTenuredAllocator() -> GcTenuredAllocator {
         reuseAllocations: 0,
         directAllocations: 0,
         promotedAllocations: 0,
+        reusedBytes: 0,
+    }
+}
+
+fn emptyHumongousAllocator() -> GcHumongousAllocator {
+    let freeList: List<GcFreeBlock> = []
+    GcHumongousAllocator {
+        cursor: 0,
+        freeList,
+        bumpAllocations: 0,
+        reuseAllocations: 0,
+        allocatedObjects: 0,
+        reclaimedObjects: 0,
+        allocatedBytes: 0,
+        reclaimedBytes: 0,
         reusedBytes: 0,
     }
 }
