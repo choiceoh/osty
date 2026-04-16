@@ -15,8 +15,6 @@ import (
 	"github.com/osty/osty/internal/types"
 )
 
-func selfhostRuntimeAvailable() bool { return true }
-
 type selfhostCheckedSource struct {
 	source []byte
 	files  []selfhostFileSegment
