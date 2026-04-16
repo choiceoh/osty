@@ -61,7 +61,6 @@ import (
 	"github.com/osty/osty/internal/repair"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/scaffold"
-	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/stdlib"
 	"github.com/osty/osty/internal/token"
 	"github.com/osty/osty/internal/types"
@@ -76,7 +75,7 @@ type cliFlags struct {
 	strict     bool // lint: exit 1 on any warning
 	fix        bool // lint: apply machine-applicable suggestions in place
 	fixDryRun  bool // lint: compute fixes but print diff instead of writing
-	selfhost   bool // lint: route through the removed selfhost linter compatibility path
+	selfhost   bool // lint: legacy alias retained during the host-boundary transition
 	showScopes bool // resolve: also print the nested scope tree
 	trace      bool // global: stream per-phase timing to stderr
 	explain    bool // global: append `osty explain CODE` text per unique code
@@ -688,7 +687,7 @@ func runLintLoadedPackage(
 	hasCfg bool,
 ) lintPackageOutcome {
 	if flags.selfhost {
-		return runSelfhostLintLoadedPackage(pkg, res, chk, flags, cfg, cfgBase, hasCfg)
+		return runLegacySelfhostLintLoadedPackage(pkg, res, chk, flags, cfg, cfgBase, hasCfg)
 	}
 	lr := lint.Package(pkg, res, chk)
 	if hasCfg {
@@ -699,7 +698,7 @@ func runLintLoadedPackage(
 	return lintPackageOutcome{anyErr: hasError(all), anyWarn: hasWarning(all)}
 }
 
-func runSelfhostLintLoadedPackage(
+func runLegacySelfhostLintLoadedPackage(
 	pkg *resolve.Package,
 	res *resolve.PackageResult,
 	chk *check.Result,
@@ -708,60 +707,19 @@ func runSelfhostLintLoadedPackage(
 	cfgBase string,
 	hasCfg bool,
 ) lintPackageOutcome {
-	frontDiags := append(append([]*diag.Diagnostic{}, res.Diags...), chk.Diags...)
-	printPackageDiags(pkg, frontDiags, flags)
-
-	files := selfhostLintPackageFiles(pkg, cfg, cfgBase, hasCfg, flags.fix || flags.fixDryRun)
-	var lintDiags []*diag.Diagnostic
-	for _, file := range files {
-		lintDiags = append(lintDiags, file.diags...)
-		if len(file.diags) == 0 {
-			continue
-		}
-		formatter := newFormatter(file.file.Path, file.file.Source, flags)
-		printDiags(formatter, file.diags, flags)
-	}
-
-	all := append(frontDiags, lintDiags...)
-	return lintPackageOutcome{
-		anyErr:   hasError(all),
-		anyWarn:  hasWarning(all),
-		fixFiles: files,
-	}
-}
-
-func selfhostLintPackageFiles(
-	pkg *resolve.Package,
-	cfg lint.Config,
-	cfgBase string,
-	hasCfg bool,
-	computeFixes bool,
-) []selfhostLintFileResult {
-	var files []selfhostLintFileResult
-	if pkg == nil {
-		return files
-	}
-	for _, pf := range pkg.Files {
-		if pf == nil {
-			continue
-		}
-		if hasCfg && cfg.ShouldExclude(pf.Path, cfgBase) {
-			continue
-		}
-		diags := selfhost.LintDiagnostics(pf.Source)
-		if hasCfg {
-			diags = cfg.Apply(&lint.Result{Diags: diags}).Diags
-		}
-		file := selfhostLintFileResult{file: pf, diags: diags, fixed: pf.Source}
-		if computeFixes {
-			fixed, applied, skipped := lint.ApplyFixes(pf.Source, diags)
-			file.fixed = fixed
-			file.applied = applied
-			file.skipped = skipped
-		}
-		files = append(files, file)
-	}
-	return files
+	return runLintLoadedPackage(pkg, res, chk, cliFlags{
+		noColor:    flags.noColor,
+		forceColor: flags.forceColor,
+		maxErrors:  flags.maxErrors,
+		jsonOutput: flags.jsonOutput,
+		strict:     flags.strict,
+		fix:        flags.fix,
+		fixDryRun:  flags.fixDryRun,
+		selfhost:   false,
+		showScopes: flags.showScopes,
+		trace:      flags.trace,
+		explain:    flags.explain,
+	}, cfg, cfgBase, hasCfg)
 }
 
 func emitSelfhostPackageFixes(files []selfhostLintFileResult, flags cliFlags) {
@@ -1065,7 +1023,7 @@ func runLintEngine(
 	flags cliFlags,
 ) *lint.Result {
 	if flags.selfhost {
-		return &lint.Result{Diags: selfhost.LintDiagnostics(src)}
+		return lint.File(file, res, chk)
 	}
 	return lint.File(file, res, chk)
 }
