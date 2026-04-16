@@ -178,6 +178,44 @@ pub struct GcMinorCollectionTrace {
     pub survivorSwap: Bool,
 }
 
+pub struct GcFullMarkTrace {
+    pub rootObjectsSeeded: Int,
+    pub globalRootsSeeded: Int,
+    pub asyncFrameRootsSeeded: Int,
+    pub queueSeeded: Int,
+    pub objectsScanned: Int,
+    pub pointerSlotsScanned: Int,
+    pub regionObjectsVisited: Int,
+    pub sweptObjects: Int,
+}
+
+pub struct GcForwardingEntry {
+    pub objectId: Int,
+    pub fromAddress: Int,
+    pub toAddress: Int,
+    pub size: Int,
+    pub fromRegion: GcRegionKind,
+    pub toRegion: GcRegionKind,
+}
+
+pub struct GcEvacuationTrace {
+    pub selectedObjects: Int,
+    pub forwardedObjects: Int,
+    pub pinnedSkipped: Int,
+    pub humongousSkipped: Int,
+    pub bytesCopied: Int,
+}
+
+pub struct GcRemapTrace {
+    pub rootSlotsVisited: Int,
+    pub rootSlotsRemapped: Int,
+    pub objectRefsVisited: Int,
+    pub objectRefsRemapped: Int,
+    pub loweredSlotsVisited: Int,
+    pub loweredSlotsRemapped: Int,
+    pub verified: Bool,
+}
+
 pub enum GcLoweredStoreKind {
     GcStructFieldStore,
     GcTuplePayloadStore,
@@ -384,9 +422,13 @@ pub struct GcHeap {
     loweredPointerSlots: Map<String, GcLoweredPointerSlot>,
     remembered: Set<Int>,
     grey: List<Int>,
+    forwarding: Map<Int, GcForwardingEntry>,
     allocatedSinceLastGC: Int,
     lastStats: GcStats?,
     lastMinorTrace: GcMinorCollectionTrace,
+    lastFullMarkTrace: GcFullMarkTrace,
+    lastEvacuationTrace: GcEvacuationTrace,
+    lastRemapTrace: GcRemapTrace,
 
     pub fn tryAllocate(mut self, kind: ObjectKind, size: Int) -> Result<Int, String> {
         let normalized = normalizeSize(size)
@@ -1315,12 +1357,17 @@ pub struct GcHeap {
 
         self.phase = GcMarking
         self.clearAllMarks()
+        let rootObjectsSeeded = self.roots.len()
+        let globalRootsSeeded = self.globalObjectRootCount()
+        let asyncFrameRootsSeeded = self.asyncFrameRootCount()
         for id in self.roots.toList() {
             self.shade(id)
         }
         self.shadeGlobalRoots()
         self.shadeAsyncFrameRoots()
+        let queueSeeded = self.grey.len()
         let markSteps = self.drainGrey(0, false)
+        let pointerSlotsScanned = self.markedPointerSlotCount()
 
         self.phase = GcSweeping
         let (reclaimedObjects, reclaimedBytes) = self.sweepAll()
@@ -1329,6 +1376,16 @@ pub struct GcHeap {
         self.majorCollections = self.majorCollections + 1
         self.phase = GcIdle
         self.allocatedSinceLastGC = 0
+        self.lastFullMarkTrace = GcFullMarkTrace {
+            rootObjectsSeeded,
+            globalRootsSeeded,
+            asyncFrameRootsSeeded,
+            queueSeeded,
+            objectsScanned: markSteps,
+            pointerSlotsScanned,
+            regionObjectsVisited: beforeObjects,
+            sweptObjects: reclaimedObjects,
+        }
 
         let stats = GcStats {
             kind: "major",
@@ -1586,6 +1643,89 @@ pub struct GcHeap {
 
     pub fn lastMinorSurvivorSwap(self) -> Bool {
         self.lastMinorTrace.survivorSwap
+    }
+
+    pub fn lastFullMarkObjectsScanned(self) -> Int {
+        self.lastFullMarkTrace.objectsScanned
+    }
+
+    pub fn lastFullMarkPointerSlotsScanned(self) -> Int {
+        self.lastFullMarkTrace.pointerSlotsScanned
+    }
+
+    pub fn lastFullMarkSweptObjects(self) -> Int {
+        self.lastFullMarkTrace.sweptObjects
+    }
+
+    pub fn objectPointerSlotCount(self, id: Int) -> Int? {
+        if !(self.objects.containsKey(id)) {
+            return None
+        }
+        Some(intListLen(self.objects[id].refs))
+    }
+
+    pub fn objectScalarBytes(self, id: Int) -> Int? {
+        if !(self.objects.containsKey(id)) {
+            return None
+        }
+        let pointerBytes = intListLen(self.objects[id].refs) * 8
+        if self.objects[id].size > pointerBytes {
+            Some(self.objects[id].size - pointerBytes)
+        } else {
+            Some(0)
+        }
+    }
+
+    pub fn forwardingEntryCount(self) -> Int {
+        self.forwarding.len()
+    }
+
+    pub fn forwardedFromAddress(self, id: Int) -> Int? {
+        if self.forwarding.containsKey(id) {
+            Some(self.forwarding[id].fromAddress)
+        } else {
+            None
+        }
+    }
+
+    pub fn forwardedToAddress(self, id: Int) -> Int? {
+        if self.forwarding.containsKey(id) {
+            Some(self.forwarding[id].toAddress)
+        } else {
+            None
+        }
+    }
+
+    pub fn lastEvacuationForwardedObjects(self) -> Int {
+        self.lastEvacuationTrace.forwardedObjects
+    }
+
+    pub fn lastEvacuationPinnedSkipped(self) -> Int {
+        self.lastEvacuationTrace.pinnedSkipped
+    }
+
+    pub fn lastEvacuationHumongousSkipped(self) -> Int {
+        self.lastEvacuationTrace.humongousSkipped
+    }
+
+    pub fn lastEvacuationBytesCopied(self) -> Int {
+        self.lastEvacuationTrace.bytesCopied
+    }
+
+    pub fn lastRemapRootSlotsRemapped(self) -> Int {
+        self.lastRemapTrace.rootSlotsRemapped
+    }
+
+    pub fn lastRemapObjectRefsRemapped(self) -> Int {
+        self.lastRemapTrace.objectRefsRemapped
+    }
+
+    pub fn lastRemapLoweredSlotsRemapped(self) -> Int {
+        self.lastRemapTrace.loweredSlotsRemapped
+    }
+
+    pub fn lastRemapVerified(self) -> Bool {
+        self.lastRemapTrace.verified
     }
 
     pub fn nurseryBytes(self) -> Int {
@@ -2048,6 +2188,18 @@ pub struct GcHeap {
         }
         if self.lastMinorTrace.rootObjectsScanned < 0 || self.lastMinorTrace.globalRootsScanned < 0 || self.lastMinorTrace.asyncFrameRootsScanned < 0 || self.lastMinorTrace.rememberedObjectsScanned < 0 || self.lastMinorTrace.dirtyCardsScanned < 0 || self.lastMinorTrace.youngMarked < 0 || self.lastMinorTrace.survivorCopiedObjects < 0 || self.lastMinorTrace.promotedObjects < 0 {
             return Err("minor collection trace has negative accounting")
+        }
+        if self.lastFullMarkTrace.rootObjectsSeeded < 0 || self.lastFullMarkTrace.globalRootsSeeded < 0 || self.lastFullMarkTrace.asyncFrameRootsSeeded < 0 || self.lastFullMarkTrace.queueSeeded < 0 || self.lastFullMarkTrace.objectsScanned < 0 || self.lastFullMarkTrace.pointerSlotsScanned < 0 || self.lastFullMarkTrace.regionObjectsVisited < 0 || self.lastFullMarkTrace.sweptObjects < 0 {
+            return Err("full mark trace has negative accounting")
+        }
+        if self.lastEvacuationTrace.selectedObjects < 0 || self.lastEvacuationTrace.forwardedObjects < 0 || self.lastEvacuationTrace.pinnedSkipped < 0 || self.lastEvacuationTrace.humongousSkipped < 0 || self.lastEvacuationTrace.bytesCopied < 0 {
+            return Err("evacuation trace has negative accounting")
+        }
+        if self.lastRemapTrace.rootSlotsVisited < 0 || self.lastRemapTrace.rootSlotsRemapped < 0 || self.lastRemapTrace.objectRefsVisited < 0 || self.lastRemapTrace.objectRefsRemapped < 0 || self.lastRemapTrace.loweredSlotsVisited < 0 || self.lastRemapTrace.loweredSlotsRemapped < 0 {
+            return Err("remap trace has negative accounting")
+        }
+        if !(self.verifyForwardingTable()) {
+            return Err("forwarding table is inconsistent")
         }
         for (key, slot) in self.loweredPointerSlots {
             if key != loweredPointerSlotKey(slot.kind, slot.ownerId, slot.slot) {
@@ -2742,15 +2894,26 @@ pub struct GcHeap {
     }
 
     fn compactLive(mut self) -> Int {
+        self.forwarding.clear()
         let ids = self.objects.keys().sorted()
         let mut freeList: List<GcFreeBlock> = []
         let mut cursor = 0
         let mut moved = 0
+        let mut selectedObjects = 0
+        let mut pinnedSkipped = 0
+        let mut humongousSkipped = 0
+        let mut bytesCopied = 0
 
         for id in ids {
             if self.objects.containsKey(id) {
                 let mut next = self.objects[id]
                 if next.pinned || next.large {
+                    if next.pinned {
+                        pinnedSkipped = pinnedSkipped + 1
+                    }
+                    if next.large {
+                        humongousSkipped = humongousSkipped + 1
+                    }
                     if next.address > cursor {
                         let gapSize = next.address - cursor
                         if !(self.rangeOverlapsHumongousFree(cursor, gapSize)) {
@@ -2767,11 +2930,27 @@ pub struct GcHeap {
                         cursor = end
                     }
                 } else {
+                    selectedObjects = selectedObjects + 1
                     cursor = self.avoidHumongousFreeBlocks(cursor, next.size)
                     if next.address != cursor {
+                        let fromAddress = next.address
+                        let fromRegion = next.region
                         moved = moved + 1
+                        bytesCopied = bytesCopied + next.size
+                        self.forwarding.insert(
+                            id,
+                            GcForwardingEntry {
+                                objectId: id,
+                                fromAddress,
+                                toAddress: cursor,
+                                size: next.size,
+                                fromRegion,
+                                toRegion: regionForObject(next),
+                            },
+                        )
                     }
                     next.address = cursor
+                    next.region = regionForObject(next)
                     cursor = cursor + next.size
                 }
                 self.objects.insert(id, next)
@@ -2790,6 +2969,14 @@ pub struct GcHeap {
         let mut humongous = self.humongous
         humongous.cursor = cursor
         self.humongous = humongous
+        self.lastEvacuationTrace = GcEvacuationTrace {
+            selectedObjects,
+            forwardedObjects: moved,
+            pinnedSkipped,
+            humongousSkipped,
+            bytesCopied,
+        }
+        self.lastRemapTrace = self.remapForwardedReferences()
         moved
     }
 
@@ -3301,6 +3488,118 @@ pub struct GcHeap {
         false
     }
 
+    fn markedPointerSlotCount(self) -> Int {
+        let mut total = 0
+        for (id, obj) in self.objects {
+            let _ = id
+            if obj.marked {
+                total = total + intListLen(obj.refs)
+            }
+        }
+        total
+    }
+
+    fn remapForwardedReferences(self) -> GcRemapTrace {
+        let mut rootSlotsVisited = 0
+        let mut rootSlotsRemapped = 0
+        for id in self.roots.toList() {
+            rootSlotsVisited = rootSlotsVisited + 1
+            if self.forwarding.containsKey(id) {
+                rootSlotsRemapped = rootSlotsRemapped + 1
+            }
+        }
+
+        for (key, root) in self.globalRoots {
+            let _ = key
+            if root.objectId >= 0 {
+                rootSlotsVisited = rootSlotsVisited + 1
+                if self.forwarding.containsKey(root.objectId) {
+                    rootSlotsRemapped = rootSlotsRemapped + 1
+                }
+            }
+        }
+
+        for (taskId, frame) in self.asyncFrames {
+            let _ = taskId
+            if frame.state == GcAsyncFrameSuspended {
+                if frame.frameObjectId >= 0 {
+                    rootSlotsVisited = rootSlotsVisited + 1
+                    if self.forwarding.containsKey(frame.frameObjectId) {
+                        rootSlotsRemapped = rootSlotsRemapped + 1
+                    }
+                }
+                for id in frame.roots {
+                    rootSlotsVisited = rootSlotsVisited + 1
+                    if self.forwarding.containsKey(id) {
+                        rootSlotsRemapped = rootSlotsRemapped + 1
+                    }
+                }
+            }
+        }
+
+        let mut objectRefsVisited = 0
+        let mut objectRefsRemapped = 0
+        for (id, obj) in self.objects {
+            let _ = id
+            for childId in obj.refs {
+                objectRefsVisited = objectRefsVisited + 1
+                if self.forwarding.containsKey(childId) {
+                    objectRefsRemapped = objectRefsRemapped + 1
+                }
+            }
+        }
+
+        let mut loweredSlotsVisited = 0
+        let mut loweredSlotsRemapped = 0
+        for (key, slot) in self.loweredPointerSlots {
+            let _ = key
+            if slot.objectId >= 0 {
+                loweredSlotsVisited = loweredSlotsVisited + 1
+                if self.forwarding.containsKey(slot.objectId) {
+                    loweredSlotsRemapped = loweredSlotsRemapped + 1
+                }
+            }
+        }
+
+        GcRemapTrace {
+            rootSlotsVisited,
+            rootSlotsRemapped,
+            objectRefsVisited,
+            objectRefsRemapped,
+            loweredSlotsVisited,
+            loweredSlotsRemapped,
+            verified: self.verifyForwardingTable(),
+        }
+    }
+
+    fn verifyForwardingTable(self) -> Bool {
+        for (id, entry) in self.forwarding {
+            if id != entry.objectId {
+                return false
+            }
+            if entry.fromAddress == entry.toAddress {
+                return false
+            }
+            if entry.size <= 0 {
+                return false
+            }
+            if !(self.objects.containsKey(id)) {
+                return false
+            }
+            let obj = self.objects[id]
+            if obj.address != entry.toAddress {
+                return false
+            }
+            if obj.size != entry.size {
+                return false
+            }
+            if obj.pinned || obj.large {
+                return false
+            }
+        }
+        true
+    }
+
     fn heapSpan(self) -> Int {
         let mut span = 0
         for (id, obj) in self.objects {
@@ -3350,6 +3649,7 @@ pub fn newGcHeap(config: GcConfig) -> GcHeap {
     let humongous = emptyHumongousAllocator()
     let barriers = emptyBarrierCounters()
     let loweredPointerSlots: Map<String, GcLoweredPointerSlot> = {:}
+    let forwarding: Map<Int, GcForwardingEntry> = {:}
     let emptyRoots: List<Int> = []
     let emptyRemembered: List<Int> = []
     let emptyDirtyCards: List<Int> = []
@@ -3384,9 +3684,13 @@ pub fn newGcHeap(config: GcConfig) -> GcHeap {
         loweredPointerSlots,
         remembered: emptyRemembered.toSet(),
         grey,
+        forwarding,
         allocatedSinceLastGC: 0,
         lastStats: None,
         lastMinorTrace: emptyMinorCollectionTrace(),
+        lastFullMarkTrace: emptyFullMarkTrace(),
+        lastEvacuationTrace: emptyEvacuationTrace(),
+        lastRemapTrace: emptyRemapTrace(),
     }
 }
 
@@ -3520,6 +3824,41 @@ fn emptyMinorCollectionTrace() -> GcMinorCollectionTrace {
         promotedObjects: 0,
         edenReset: false,
         survivorSwap: false,
+    }
+}
+
+fn emptyFullMarkTrace() -> GcFullMarkTrace {
+    GcFullMarkTrace {
+        rootObjectsSeeded: 0,
+        globalRootsSeeded: 0,
+        asyncFrameRootsSeeded: 0,
+        queueSeeded: 0,
+        objectsScanned: 0,
+        pointerSlotsScanned: 0,
+        regionObjectsVisited: 0,
+        sweptObjects: 0,
+    }
+}
+
+fn emptyEvacuationTrace() -> GcEvacuationTrace {
+    GcEvacuationTrace {
+        selectedObjects: 0,
+        forwardedObjects: 0,
+        pinnedSkipped: 0,
+        humongousSkipped: 0,
+        bytesCopied: 0,
+    }
+}
+
+fn emptyRemapTrace() -> GcRemapTrace {
+    GcRemapTrace {
+        rootSlotsVisited: 0,
+        rootSlotsRemapped: 0,
+        objectRefsVisited: 0,
+        objectRefsRemapped: 0,
+        loweredSlotsVisited: 0,
+        loweredSlotsRemapped: 0,
+        verified: true,
     }
 }
 
