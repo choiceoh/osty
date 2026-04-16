@@ -303,39 +303,42 @@ func TestGenerateFromMIRPrintln(t *testing.T) {
 	}
 }
 
-// TestGenerateFromMIRUnsupportedFallsBack — building a module with a
-// struct should make the MIR emitter return an ErrUnsupported error
-// so the backend dispatcher falls back to the legacy path.
+// TestGenerateFromMIRUnsupportedFallsBack — a module using enum
+// variants (outside the Stage 3 MVP) should make the MIR emitter
+// return an ErrUnsupported error so the backend dispatcher falls
+// back to the legacy path. Structs and tuples are now part of MVP
+// coverage; enums still need discriminant / variant-payload support
+// that the MVP doesn't ship yet.
 func TestGenerateFromMIRUnsupportedFallsBack(t *testing.T) {
-	pointT := &ir.NamedType{Name: "Point"}
+	maybeT := &ir.NamedType{Name: "Maybe"}
 	hir := &ir.Module{
 		Package: "main",
 		Decls: []ir.Decl{
-			&ir.StructDecl{
-				Name: "Point",
-				Fields: []*ir.Field{
-					{Name: "x", Type: ir.TInt, Exported: true},
+			&ir.EnumDecl{
+				Name: "Maybe",
+				Variants: []*ir.Variant{
+					{Name: "Some", Payload: []ir.Type{ir.TInt}},
+					{Name: "None"},
 				},
 			},
 			&ir.FnDecl{
 				Name:   "make",
-				Return: pointT,
+				Return: maybeT,
 				Body: &ir.Block{
-					Result: &ir.StructLit{
-						TypeName: "Point",
-						Fields: []ir.StructLitField{
-							{Name: "x", Value: &ir.IntLit{Text: "1", T: ir.TInt}},
-						},
-						T: pointT,
+					Result: &ir.VariantLit{
+						Enum:    "Maybe",
+						Variant: "Some",
+						Args:    []ir.Arg{{Value: &ir.IntLit{Text: "42", T: ir.TInt}}},
+						T:       maybeT,
 					},
 				},
 			},
 		},
 	}
 	m := buildMIRModuleFromHIR(t, hir)
-	_, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/struct.osty"})
+	_, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/enum.osty"})
 	if err == nil {
-		t.Fatalf("expected ErrUnsupported for struct; got nil")
+		t.Fatalf("expected ErrUnsupported for enum; got nil")
 	}
 	// Must wrap ErrUnsupported so the backend dispatcher can distinguish
 	// "this shape isn't in the MVP yet" from internal bugs.
@@ -423,20 +426,20 @@ func TestMIRDualEmitFromSource(t *testing.T) {
 }
 
 // TestMIRDualEmitGracefulFallback proves that when the MIR emitter
-// refuses a program (struct types aren't in the MVP), the backend
-// dispatcher (via Options.UseMIR and the opts wiring in
+// refuses a program (enum variant construction isn't in the MVP),
+// the backend dispatcher (via Options.UseMIR and the opts wiring in
 // internal/backend/llvm.go) can catch ErrUnsupported and retry on
 // the HIR path. We validate the sentinel semantics directly here —
 // the end-to-end dispatch wiring is covered by the backend tests in
 // internal/backend.
 func TestMIRDualEmitGracefulFallback(t *testing.T) {
-	src := `struct Point {
-    x: Int,
-    y: Int,
+	src := `enum Maybe {
+    Some(Int),
+    None,
 }
 
-fn origin() -> Point {
-    Point { x: 0, y: 0 }
+fn wrap(n: Int) -> Maybe {
+    Some(n)
 }
 `
 	file := parseLLVMGenFile(t, src)
@@ -455,7 +458,7 @@ fn origin() -> Point {
 
 	_, err := GenerateFromMIR(mirMod, Options{PackageName: "main", SourcePath: "/tmp/fallback.osty"})
 	if err == nil {
-		t.Fatalf("expected MIR emitter to refuse struct-bearing program")
+		t.Fatalf("expected MIR emitter to refuse enum-bearing program")
 	}
 	if !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("expected ErrUnsupported, got %T: %v", err, err)
@@ -468,5 +471,280 @@ fn origin() -> Point {
 	}
 	if !strings.Contains(string(out), "define ") {
 		t.Fatalf("HIR path produced no define line:\n%s", string(out))
+	}
+}
+
+// ==== Stage 3 aggregates: struct + tuple + projections ====
+
+func TestGenerateFromMIRStructLiteralAndFieldRead(t *testing.T) {
+	// struct Point { x: Int, y: Int }
+	// fn sum() -> Int { let p = Point { x: 1, y: 2 }; p.x + p.y }
+	pointT := &ir.NamedType{Name: "Point"}
+	pointDecl := &ir.StructDecl{
+		Name: "Point",
+		Fields: []*ir.Field{
+			{Name: "x", Type: ir.TInt, Exported: true},
+			{Name: "y", Type: ir.TInt, Exported: true},
+		},
+	}
+	sumFn := &ir.FnDecl{
+		Name:   "sum",
+		Return: ir.TInt,
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.LetStmt{
+					Name: "p",
+					Type: pointT,
+					Value: &ir.StructLit{
+						TypeName: "Point",
+						Fields: []ir.StructLitField{
+							{Name: "x", Value: &ir.IntLit{Text: "1", T: ir.TInt}},
+							{Name: "y", Value: &ir.IntLit{Text: "2", T: ir.TInt}},
+						},
+						T: pointT,
+					},
+				},
+			},
+			Result: &ir.BinaryExpr{
+				Op: ir.BinAdd,
+				Left: &ir.FieldExpr{
+					X:    &ir.Ident{Name: "p", Kind: ir.IdentLocal, T: pointT},
+					Name: "x",
+					T:    ir.TInt,
+				},
+				Right: &ir.FieldExpr{
+					X:    &ir.Ident{Name: "p", Kind: ir.IdentLocal, T: pointT},
+					Name: "y",
+					T:    ir.TInt,
+				},
+				T: ir.TInt,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{pointDecl, sumFn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/struct.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"%Point = type { i64, i64 }",
+		"insertvalue %Point undef, i64 1, 0",
+		"insertvalue %Point",
+		"extractvalue %Point",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateFromMIRTupleLiteralAndElementRead(t *testing.T) {
+	// fn pack() -> Int { let t = (1, 2); t.0 + t.1 }
+	tupT := &ir.TupleType{Elems: []ir.Type{ir.TInt, ir.TInt}}
+	fn := &ir.FnDecl{
+		Name:   "pack",
+		Return: ir.TInt,
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.LetStmt{
+					Name: "t",
+					Type: tupT,
+					Value: &ir.TupleLit{
+						Elems: []ir.Expr{
+							&ir.IntLit{Text: "1", T: ir.TInt},
+							&ir.IntLit{Text: "2", T: ir.TInt},
+						},
+						T: tupT,
+					},
+				},
+			},
+			Result: &ir.BinaryExpr{
+				Op: ir.BinAdd,
+				Left: &ir.TupleAccess{
+					X:     &ir.Ident{Name: "t", Kind: ir.IdentLocal, T: tupT},
+					Index: 0,
+					T:     ir.TInt,
+				},
+				Right: &ir.TupleAccess{
+					X:     &ir.Ident{Name: "t", Kind: ir.IdentLocal, T: tupT},
+					Index: 1,
+					T:     ir.TInt,
+				},
+				T: ir.TInt,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/tuple.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"%Tuple.i64.i64 = type { i64, i64 }",
+		"insertvalue %Tuple.i64.i64 undef, i64 1, 0",
+		"extractvalue %Tuple.i64.i64",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateFromMIRProjectedFieldWrite(t *testing.T) {
+	// struct Counter { value: Int }
+	// fn bump(mut c: Counter) -> Int { c.value = c.value + 1; c.value }
+	//
+	// The HIR builder here cuts a corner: we hand-build an AssignStmt
+	// whose target is a FieldExpr (`c.value`), which normally only
+	// appears after the resolver. MIR lowering still produces a
+	// projected assign, which is what this test exercises.
+	counterT := &ir.NamedType{Name: "Counter"}
+	counterDecl := &ir.StructDecl{
+		Name: "Counter",
+		Fields: []*ir.Field{
+			{Name: "value", Type: ir.TInt, Exported: true},
+		},
+	}
+	bumpFn := &ir.FnDecl{
+		Name:   "bump",
+		Return: ir.TInt,
+		Params: []*ir.Param{{Name: "c", Type: counterT}},
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.AssignStmt{
+					Op: ir.AssignEq,
+					Targets: []ir.Expr{&ir.FieldExpr{
+						X:    &ir.Ident{Name: "c", Kind: ir.IdentParam, T: counterT},
+						Name: "value",
+						T:    ir.TInt,
+					}},
+					Value: &ir.BinaryExpr{
+						Op: ir.BinAdd,
+						Left: &ir.FieldExpr{
+							X:    &ir.Ident{Name: "c", Kind: ir.IdentParam, T: counterT},
+							Name: "value",
+							T:    ir.TInt,
+						},
+						Right: &ir.IntLit{Text: "1", T: ir.TInt},
+						T:     ir.TInt,
+					},
+				},
+			},
+			Result: &ir.FieldExpr{
+				X:    &ir.Ident{Name: "c", Kind: ir.IdentParam, T: counterT},
+				Name: "value",
+				T:    ir.TInt,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{counterDecl, bumpFn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/counter.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"%Counter = type { i64 }",
+		"extractvalue %Counter",
+		"insertvalue %Counter",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateFromMIRNestedStructProjection(t *testing.T) {
+	// struct Inner { v: Int }
+	// struct Outer { inner: Inner }
+	// fn read(o: Outer) -> Int { o.inner.v }
+	innerT := &ir.NamedType{Name: "Inner"}
+	outerT := &ir.NamedType{Name: "Outer"}
+	innerDecl := &ir.StructDecl{
+		Name:   "Inner",
+		Fields: []*ir.Field{{Name: "v", Type: ir.TInt, Exported: true}},
+	}
+	outerDecl := &ir.StructDecl{
+		Name: "Outer",
+		Fields: []*ir.Field{
+			{Name: "inner", Type: innerT, Exported: true},
+		},
+	}
+	readFn := &ir.FnDecl{
+		Name:   "read",
+		Return: ir.TInt,
+		Params: []*ir.Param{{Name: "o", Type: outerT}},
+		Body: &ir.Block{
+			Result: &ir.FieldExpr{
+				X: &ir.FieldExpr{
+					X:    &ir.Ident{Name: "o", Kind: ir.IdentParam, T: outerT},
+					Name: "inner",
+					T:    innerT,
+				},
+				Name: "v",
+				T:    ir.TInt,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{innerDecl, outerDecl, readFn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/nested.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	// Both the Outer and Inner type defs should appear (sorted
+	// alphabetically in the emitter's deterministic order).
+	for _, want := range []string{
+		"%Inner = type { i64 }",
+		"%Outer = type { %Inner }",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+	// Two extractvalue instructions on the chain — one on Outer to
+	// get %Inner, one on Inner to get i64. The exact register names
+	// aren't contractual; just count occurrences.
+	if strings.Count(got, "extractvalue") < 2 {
+		t.Fatalf("expected at least two extractvalue ops for nested read:\n%s", got)
+	}
+}
+
+func TestGenerateFromMIRTupleFunctionParam(t *testing.T) {
+	// fn first(p: (Int, String)) -> Int { p.0 }
+	tupT := &ir.TupleType{Elems: []ir.Type{ir.TInt, ir.TString}}
+	fn := &ir.FnDecl{
+		Name:   "first",
+		Return: ir.TInt,
+		Params: []*ir.Param{{Name: "p", Type: tupT}},
+		Body: &ir.Block{
+			Result: &ir.TupleAccess{
+				X:     &ir.Ident{Name: "p", Kind: ir.IdentParam, T: tupT},
+				Index: 0,
+				T:     ir.TInt,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/tupparam.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"%Tuple.i64.string = type { i64, ptr }",
+		"define i64 @first(%Tuple.i64.string %arg0)",
+		"extractvalue %Tuple.i64.string",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
 	}
 }
