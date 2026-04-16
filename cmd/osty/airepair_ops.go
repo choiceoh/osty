@@ -55,7 +55,17 @@ func runAIRepairTriageMain(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "osty airepair triage: %v\n", err)
 		return 1
 	}
-	printAIRepairTriage(stdout, dir, reports, topN)
+	captured, err := loadAIRepairCapturedCases(dir)
+	if err != nil {
+		fmt.Fprintf(stderr, "osty airepair triage: %v\n", err)
+		return 1
+	}
+	corpus, err := loadAIRepairCorpusCases(defaultAIRepairCorpusDir())
+	if err != nil {
+		fmt.Fprintf(stderr, "osty airepair triage: %v\n", err)
+		return 1
+	}
+	printAIRepairTriage(stdout, dir, reports, captured, corpus, topN)
 	return 0
 }
 
@@ -139,7 +149,7 @@ func readAIRepairCapturedReport(path string) (airepair.Report, error) {
 	return report, nil
 }
 
-func printAIRepairTriage(w io.Writer, dir string, reports []aiRepairCapturedReport, topN int) {
+func printAIRepairTriage(w io.Writer, dir string, reports []aiRepairCapturedReport, captured []aiRepairCapturedCase, corpus []aiRepairCorpusCase, topN int) {
 	fmt.Fprintf(w, "osty airepair triage: scanned %d case(s) from %s\n", len(reports), dir)
 	if len(reports) == 0 {
 		return
@@ -201,6 +211,7 @@ func printAIRepairTriage(w io.Writer, dir string, reports []aiRepairCapturedRepo
 		fmt.Fprintf(w, "  %s  status=%s residual_errors=%d primary_habit=%s codes=%s\n",
 			rc.Name, rc.Status, rc.ResidualErrors, rc.PrimaryHabit, strings.Join(rc.Codes, ","))
 	}
+	printAIRepairLearningReport(w, buildAIRepairLearningReport(dir, defaultAIRepairCorpusDir(), captured, corpus, topN))
 }
 
 func printAIRepairCountSection(w io.Writer, title string, counts map[string]int, topN int) {
