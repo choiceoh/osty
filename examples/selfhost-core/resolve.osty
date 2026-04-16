@@ -1677,17 +1677,17 @@ fn srLevenshteinBounded(left: String, right: String, limit: Int) -> Int {
     let mut prev: List<Int> = []
     let mut cur: List<Int> = []
     let mut j = 0
-    while j <= rightLen {
+    for j <= rightLen {
         prev.push(j)
         cur.push(0)
         j = j + 1
     }
     let mut i = 1
-    while i <= leftLen {
+    for i <= leftLen {
         cur[0] = i
         let mut rowMin = cur[0]
         j = 1
-        while j <= rightLen {
+        for j <= rightLen {
             let leftUnit = srStringListAt(leftUnits, i - 1)
             let rightUnit = srStringListAt(rightUnits, j - 1)
             let cost = if leftUnit == rightUnit {
@@ -1712,7 +1712,7 @@ fn srLevenshteinBounded(left: String, right: String, limit: Int) -> Int {
             return limit
         }
         j = 0
-        while j <= rightLen {
+        for j <= rightLen {
             prev[j] = cur[j]
             cur[j] = 0
             j = j + 1

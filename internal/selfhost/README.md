@@ -7,17 +7,24 @@ The source of truth is:
 
 - `examples/selfhost-core/semver.osty`
 - `examples/selfhost-core/semver_parse.osty`
-- `examples/selfhost-core/frontend.osty`
+- `toolchain/frontend.osty`
 - `toolchain/lexer.osty`
 - `toolchain/parser.osty`
 - `examples/selfhost-core/formatter_ast.osty`
-- `examples/selfhost-core/check_bridge.osty`
-- `examples/selfhost-core/check.osty`
+- `toolchain/check_bridge.osty`
+- `toolchain/diagnostic.osty`
+- `toolchain/check_diag.osty`
+- `toolchain/ty.osty`
+- `toolchain/core.osty`
+- `toolchain/check_env.osty`
+- `toolchain/solve.osty`
+- `toolchain/elab.osty`
+- `toolchain/check.osty`
 - `internal/selfhost/ast_lower.osty`
 
-`examples/selfhost-core/check_bridge.osty` supplies only the small parser
-adapter needed by the shared checker API, so the self-hosted front end and
-checker logic have one implementation.
+`toolchain/check_bridge.osty` supplies the small parser adapter needed by the
+shared checker API, and the rest of the checker now comes directly from the
+same `toolchain/*.osty` sources the native checker path exercises.
 
 Regenerate the Go bridge with:
 

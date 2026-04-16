@@ -13,7 +13,6 @@ import (
 
 	"github.com/osty/osty/internal/selfhost/bundle"
 )
-
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -38,7 +37,7 @@ func run() error {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	merged, err := bundle.MergeSelfhostGenerated(root)
+	merged, err := bundle.MergeToolchainChecker(root)
 	if err != nil {
 		return err
 	}
@@ -47,6 +46,10 @@ func run() error {
 		return fmt.Errorf("write merged selfhost source: %w", err)
 	}
 	tmpOutPath := filepath.Join(tmpDir, "generated.go")
+	checkerPath := filepath.Join(tmpDir, "osty-native-checker")
+	if err := buildNativeChecker(root, checkerPath); err != nil {
+		return err
+	}
 
 	cmd := exec.Command(
 		"go", "run", "-tags", "selfhostgen", "./cmd/osty", "gen",
@@ -57,6 +60,7 @@ func run() error {
 		mergedPath,
 	)
 	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "OSTY_NATIVE_CHECKER_BIN="+checkerPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("generate selfhost parser: %w\n%s", err, bytes.TrimSpace(output))
@@ -77,6 +81,16 @@ func run() error {
 	}
 	if err := os.WriteFile(outPath, data, 0o644); err != nil {
 		return fmt.Errorf("install generated selfhost code: %w", err)
+	}
+	return nil
+}
+
+func buildNativeChecker(root, outPath string) error {
+	cmd := exec.Command("go", "build", "-o", outPath, "./cmd/osty-native-checker")
+	cmd.Dir = root
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("build native checker: %w\n%s", err, bytes.TrimSpace(output))
 	}
 	return nil
 }
@@ -107,7 +121,7 @@ func generatedSelfhostUpToDate(root, outPath string) (bool, error) {
 	if err := checkPath(filepath.Join(root, "internal/selfhost/gen_selfhost.go")); err != nil {
 		return false, fmt.Errorf("stat selfhost generator: %w", err)
 	}
-	for _, rel := range bundle.GeneratedFiles() {
+	for _, rel := range bundle.ToolchainCheckerFiles() {
 		if err := checkPath(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
 			return false, fmt.Errorf("stat %s: %w", rel, err)
 		}
