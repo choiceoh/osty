@@ -9,7 +9,7 @@ import (
 )
 
 // lintNaming flags identifiers that deviate from the project's house
-// style (per v0.3 spec examples):
+// style (per v0.4 spec examples):
 //
 //	L0030  types (struct / enum / interface / type alias / generic) must
 //	       be UpperCamelCase

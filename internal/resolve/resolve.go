@@ -165,7 +165,7 @@ func (r *resolver) bodyPass(pkg *Package) {
 						"`defer` is not allowed at the top level of a script").
 						Code(diag.CodeDeferAtScriptTop).
 						PrimaryPos(ds.PosV, "top-level defer").
-						Note("v0.3 §6 / §18.3: `defer` must appear inside an explicit `fn` body; the implicit main of a script does not accept it").
+						Note("v0.4 §6 / §18.3: `defer` must appear inside an explicit `fn` body; the implicit main of a script does not accept it").
 						Hint("wrap the deferred cleanup in an `fn` you invoke from the script body").
 						Build())
 					continue
@@ -442,7 +442,7 @@ func topLevelAnnotations(d ast.Decl) []*ast.Annotation {
 }
 
 // checkAnnotations validates the annotations on a declaration against
-// v0.2 R26 and v0.3 §18.1:
+// v0.2 R26 and v0.4 §18.1:
 //
 //   - unknown names are flagged by the parser (E0400) and skipped here;
 //   - the annotation's target kind must be permitted (E0607);
@@ -474,7 +474,7 @@ func (r *resolver) checkAnnotations(annots []*ast.Annotation, target ast.Annotat
 					"duplicate annotation here").
 				Secondary(diag.Span{Start: prev.PosV, End: prev.EndV},
 					"first occurrence here").
-				Note("v0.3 §18.1: the same annotation name may not appear more than once on a single target").
+				Note("v0.4 §18.1: the same annotation name may not appear more than once on a single target").
 				Build())
 			continue
 		}

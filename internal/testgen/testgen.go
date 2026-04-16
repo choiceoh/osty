@@ -57,7 +57,7 @@ const programMainName = "_ostyProgramMain"
 // EntryKind identifies how the harness should invoke an entry — as a
 // regular test (recorded in pass/fail totals) or as a benchmark
 // (currently only invoked once; iteration counts and timing are
-// future work, per LANG_SPEC_v0.3 §11.4).
+// future work, per LANG_SPEC_v0.4 §11.4).
 type EntryKind int
 
 const (

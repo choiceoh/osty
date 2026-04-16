@@ -2,20 +2,24 @@
 //
 // Subcommands:
 //
-//	osty new <name>            Scaffold a new project directory (spec §13.1).
-//	osty parse <file.osty>     Parse a file and print the AST as JSON.
-//	osty tokens <file.osty>    Lex a file and print the token stream.
-//	osty resolve <file.osty>   Lex+parse+name-resolve; print resolved refs.
-//	osty check <file.osty>     Lex+parse+resolve+type-check diagnostics only.
-//	osty typecheck <file.osty> Alias of `check` that also prints the inferred
-//	                           type of each expression (debugging aid).
-//	osty fmt <file.osty>       Repair then format source; see -check/-write/-no-repair.
-//	osty repair <file.osty>    Fix common AI-authored syntax slips; see -check/-write.
-//	osty gen <file.osty>       Transpile to Go (prints to stdout; -o writes to file).
-//	osty doc <path>            Emit markdown API docs for a file or package.
-//	osty lsp                   Run the Language Server Protocol server on stdio.
-//	osty explain [CODE]        Describe a diagnostic code; with no arg, list every code.
-//	osty pipeline <file.osty>  Run every front-end phase and print per-stage timing.
+//	osty new <name>              Scaffold a new project directory (spec §13.1).
+//	osty init                    Scaffold into the current directory.
+//	osty build [dir]             Resolve deps, run the front-end, emit/build artifacts.
+//	osty run [-- args...]        Build and execute the host binary.
+//	osty test [path|filter...]   Discover, build, and run *_test.osty tests.
+//	osty add/update/remove/fetch Manage manifest deps, vendoring, and osty.lock.
+//	osty publish/search/info     Interact with package registries.
+//	osty registry serve          Run a file-backed registry for local/private use.
+//	osty doc <path>              Emit markdown or HTML API docs.
+//	osty ci [path]               Run quality checks; `ci snapshot` captures API.
+//	osty profiles/targets/features/cache
+//	                             Inspect build profiles, target presets, features, cache.
+//	osty parse/tokens/resolve/check/typecheck/lint/fmt/repair
+//	                             Single-file/package front-end and source tools.
+//	osty gen <file.osty>         Emit a single file through go or llvm backend.
+//	osty lsp                     Run the Language Server Protocol server on stdio.
+//	osty explain [CODE]          Describe a diagnostic code; with no arg, list every code.
+//	osty pipeline <file|dir>     Run every front-end phase and print per-stage timing.
 //
 // Global flags (may precede the subcommand):
 //
@@ -134,9 +138,9 @@ func main() {
 		runScaffold(args[1:])
 		return
 	}
-	// build is the manifest-driven front-end over a directory. When
-	// passed a directory it loads osty.toml, validates, and runs
-	// check + lint across the package(s) the manifest describes.
+	// build is the manifest-driven project pipeline: load osty.toml,
+	// resolve deps, run the front-end, and ask the selected backend to
+	// emit/build artifacts under the profile/target output tree.
 	if cmd == "build" {
 		runBuild(args[1:], flags)
 		return
@@ -185,9 +189,9 @@ func main() {
 		runUpdate(args[1:], flags)
 		return
 	}
-	// run builds the project (via gen Phase 1) and executes the
-	// produced Go program; test walks *_test.osty files; publish packs
-	// a tarball and uploads it to a configured registry.
+	// run builds the project through the selected backend and executes
+	// the host binary; test walks *_test.osty files and runs the Go
+	// harness; publish packs a tarball and uploads it to a registry.
 	if cmd == "run" {
 		runRun(args[1:], flags)
 		return
@@ -1260,11 +1264,11 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "usage: osty [flags] (parse|tokens|resolve|check|typecheck|lint|fmt|repair|gen) FILE")
 	fmt.Fprintln(os.Stderr, "       osty new [--lib] NAME     (scaffold a new project)")
 	fmt.Fprintln(os.Stderr, "       osty init [--lib]         (scaffold into the current directory)")
-	fmt.Fprintln(os.Stderr, "       osty build [DIR]          (manifest-driven front end over a project)")
+	fmt.Fprintln(os.Stderr, "       osty build [DIR]          (manifest + deps + front end + backend artifacts)")
 	fmt.Fprintln(os.Stderr, "       osty add NAME[@VER]       (add a dependency; also --path, --git)")
 	fmt.Fprintln(os.Stderr, "       osty update [NAME...]     (refresh osty.lock)")
 	fmt.Fprintln(os.Stderr, "       osty run [-- ARGS...]     (build + exec the project's binary)")
-	fmt.Fprintln(os.Stderr, "       osty test [PATH|FILTER...] (discover *_test.osty; report tests found)")
+	fmt.Fprintln(os.Stderr, "       osty test [PATH|FILTER...] (discover, build, and run *_test.osty)")
 	fmt.Fprintln(os.Stderr, "       osty publish              (pack + upload the package to a registry)")
 	fmt.Fprintln(os.Stderr, "       osty search QUERY         (search the registry for packages)")
 	fmt.Fprintln(os.Stderr, "       osty yank --version V [PKG]   (mark a published version as yanked)")
@@ -1306,7 +1310,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  --check            exit 1 if FILE would be repaired")
 	fmt.Fprintln(os.Stderr, "  --write            overwrite FILE in place")
 	fmt.Fprintln(os.Stderr, "gen-specific flags (after the subcommand):")
-	fmt.Fprintln(os.Stderr, "  -o PATH            write Go source to PATH instead of stdout")
+	fmt.Fprintln(os.Stderr, "  -o PATH            write emitted artifact to PATH instead of stdout")
 	fmt.Fprintln(os.Stderr, "  --package NAME     Go package clause (default: main)")
 	fmt.Fprintln(os.Stderr, "  --backend NAME     code generation backend (go or llvm; default go)")
 	fmt.Fprintln(os.Stderr, "  --emit MODE        artifact mode (go or llvm-ir; default follows backend)")
@@ -1471,9 +1475,9 @@ func runFmt(args []string) {
 	}
 }
 
-// runGen implements the `osty gen` subcommand: transpile a single
-// .osty file to Go and either print the result to stdout or write it
-// to the path given by --out/-o.
+// runGen implements the `osty gen` subcommand: emit a single .osty
+// file through the selected backend and either print the requested
+// text artifact to stdout or write it to the path given by --out/-o.
 //
 // Exit codes:
 //
@@ -1481,7 +1485,7 @@ func runFmt(args []string) {
 //	1   unrecoverable I/O error, or transpile returned an error even
 //	    after partial output
 //	2   usage error (missing path, unknown flag), or parse/resolve/check
-//	    failures that would produce garbage Go
+//	    failures that would produce garbage backend output
 func runGen(args []string, flags cliFlags) {
 	fs := flag.NewFlagSet("gen", flag.ExitOnError)
 	fs.Usage = func() {
@@ -1491,7 +1495,7 @@ func runGen(args []string, flags cliFlags) {
 	var pkgName string
 	var backendName string
 	var emitName string
-	fs.StringVar(&outPath, "o", "", "write Go source to this file instead of stdout")
+	fs.StringVar(&outPath, "o", "", "write the emitted artifact to this file instead of stdout")
 	fs.StringVar(&outPath, "out", "", "alias for -o")
 	fs.StringVar(&pkgName, "package", "main", "Go package clause (default: main)")
 	fs.StringVar(&backendName, "backend", defaultBackendName(), "code generation backend (go or llvm)")
