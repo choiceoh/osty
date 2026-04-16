@@ -5,7 +5,6 @@ import (
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
-	"github.com/osty/osty/internal/selfhost"
 )
 
 // LSP code-action kind strings (LSP 3.17 §codeActionKind). Only the
@@ -33,7 +32,7 @@ type keyedUse struct {
 // a client asking for `"source"` gets every `source.*` subtype back —
 // this matches how LSP 3.17 defines `CodeActionKind` inheritance.
 func wantsKind(only []string, kind string) bool {
-	return selfhost.LSPWantsCodeActionKind(only, kind)
+	return LSPWantsCodeActionKind(only, kind)
 }
 
 // organizeImportsAction builds a `source.organizeImports` action when
@@ -136,15 +135,15 @@ func sortImportEntries(in []keyedUse) []keyedUse {
 	if len(in) <= 1 {
 		return in
 	}
-	keys := make([]selfhost.LSPImportSortKey, 0, len(in))
+	keys := make([]LSPImportSortKey, 0, len(in))
 	for _, item := range in {
-		keys = append(keys, selfhost.LSPImportSortKey{
+		keys = append(keys, LSPImportSortKey{
 			Group: item.group,
 			Key:   item.key,
 			Alias: item.u.Alias,
 		})
 	}
-	indexes := selfhost.SortLSPImportIndexes(keys)
+	indexes := SortLSPImportIndexes(keys)
 	out := make([]keyedUse, 0, len(indexes))
 	for _, idx := range indexes {
 		if idx < 0 || idx >= len(in) {
@@ -160,25 +159,25 @@ func sortImportEntries(in []keyedUse) []keyedUse {
 // importing to avoid pulling the formatter into the lsp package just
 // for a three-way switch.
 func useGroup(u *ast.UseDecl) int {
-	return selfhost.LSPUseGroup(u.IsFFI(), u.Path)
+	return LSPUseGroup(u.IsFFI(), u.Path)
 }
 
 // useKey is the intra-group sort key.
 func useKey(u *ast.UseDecl) string {
-	return selfhost.LSPUseKey(u.IsFFI(), u.FFIPath(), u.RawPath, u.Path)
+	return LSPUseKey(u.IsFFI(), u.FFIPath(), u.RawPath, u.Path)
 }
 
 // keyWithAlias combines the sort key with the alias so `use foo` and
 // `use foo as bar` don't dedupe into one entry.
 func keyWithAlias(group int, key, alias string) string {
-	return selfhost.LSPKeyWithAlias(group, key, alias)
+	return LSPKeyWithAlias(group, key, alias)
 }
 
 // useSourceText extracts the exact source text of a single-line use
 // decl. Multi-line FFI blocks (whose body spans several lines) are
 // returned verbatim including the `{ ... }` block.
 func useSourceText(src []byte, u *ast.UseDecl) string {
-	return selfhost.LSPUseSourceText(src, u.PosV.Offset, u.EndV.Offset)
+	return LSPUseSourceText(src, u.PosV.Offset, u.EndV.Offset)
 }
 
 // endOfLineOffset advances from `off` over any trailing whitespace
@@ -187,7 +186,7 @@ func useSourceText(src []byte, u *ast.UseDecl) string {
 // blank lines the user inserted between the last `use` and the next
 // decl are preserved — we stop after consuming the first newline.
 func endOfLineOffset(src []byte, off int) int {
-	return selfhost.LSPEndOfLineOffset(src, off)
+	return LSPEndOfLineOffset(src, off)
 }
 
 // hasTriviaBetweenUses reports whether non-whitespace bytes appear
@@ -211,7 +210,7 @@ func hasTriviaBetweenUses(src []byte, uses []*ast.UseDecl) bool {
 		if gapStart < 0 || gapEnd > len(src) || gapStart >= gapEnd {
 			continue
 		}
-		if selfhost.LSPHasTriviaBetweenOffsets(src, gapStart, gapEnd) {
+		if LSPHasTriviaBetweenOffsets(src, gapStart, gapEnd) {
 			return true
 		}
 	}
@@ -330,9 +329,9 @@ func collectMachineApplicable(doc *document) []TextEdit {
 // result is in document order, which LSP clients prefer even though
 // the spec doesn't strictly require it.
 func resolveOverlaps(in []TextEdit) []TextEdit {
-	converted := make([]selfhost.LSPTextEdit, 0, len(in))
+	converted := make([]LSPTextEdit, 0, len(in))
 	for _, edit := range in {
-		converted = append(converted, selfhost.LSPTextEdit{
+		converted = append(converted, LSPTextEdit{
 			StartLine:      edit.Range.Start.Line,
 			StartCharacter: edit.Range.Start.Character,
 			EndLine:        edit.Range.End.Line,
@@ -340,7 +339,7 @@ func resolveOverlaps(in []TextEdit) []TextEdit {
 			NewText:        edit.NewText,
 		})
 	}
-	resolved := selfhost.ResolveOverlappingLSPTextEdits(converted)
+	resolved := ResolveOverlappingLSPTextEdits(converted)
 	out := make([]TextEdit, 0, len(resolved))
 	for _, edit := range resolved {
 		out = append(out, TextEdit{

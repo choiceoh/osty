@@ -5,7 +5,6 @@ import (
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
-	"github.com/osty/osty/internal/selfhost"
 )
 
 // handleWorkspaceSymbol answers `workspace/symbol`. The search scope
@@ -68,14 +67,14 @@ func sortSymbolInformation(in []SymbolInformation) []SymbolInformation {
 	if len(in) <= 1 {
 		return in
 	}
-	keys := make([]selfhost.LSPSymbolSortKey, 0, len(in))
+	keys := make([]LSPSymbolSortKey, 0, len(in))
 	for _, sym := range in {
-		keys = append(keys, selfhost.LSPSymbolSortKey{
+		keys = append(keys, LSPSymbolSortKey{
 			Name: sym.Name,
 			URI:  sym.Location.URI,
 		})
 	}
-	indexes := selfhost.SortLSPSymbolIndexes(keys)
+	indexes := SortLSPSymbolIndexes(keys)
 	out := make([]SymbolInformation, 0, len(indexes))
 	for _, idx := range indexes {
 		if idx < 0 || idx >= len(in) {
@@ -206,9 +205,9 @@ func declEntryFor(d ast.Decl) (declEntry, bool) {
 }
 
 func lspSymbolKindForDecl(kind string, mutable bool) SymbolKind {
-	return SymbolKind(selfhost.LSPSymbolKindForDecl(kind, mutable))
+	return SymbolKind(LSPSymbolKindForDecl(kind, mutable))
 }
 
 func lspSymbolKindForMember(kind string) SymbolKind {
-	return SymbolKind(selfhost.LSPSymbolKindForMember(kind))
+	return SymbolKind(LSPSymbolKindForMember(kind))
 }

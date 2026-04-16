@@ -1,10 +1,9 @@
-package selfhost
+package lsp
 
 import "unicode/utf8"
 
-// LSPSemanticToken is the generator-build mirror of the real adapter type.
-// It keeps packages that import the LSP bridge buildable while generated.go is
-// being rebuilt from lsp.osty.
+// LSPSemanticToken is the Go-facing shape for an LSP semantic token before
+// protocol delta encoding.
 type LSPSemanticToken struct {
 	Line      uint32
 	Column    uint32

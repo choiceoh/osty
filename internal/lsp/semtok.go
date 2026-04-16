@@ -3,14 +3,12 @@ package lsp
 import (
 	"github.com/osty/osty/internal/lexer"
 	"github.com/osty/osty/internal/resolve"
-	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/token"
 )
 
 // semanticTokenTypes is the legend the server advertises in
 // ServerCapabilities. Indices into this slice appear in each encoded
-// token; the client maps them to theme colors. Keep in sync with
-// semTypeX constants below.
+// token; the client maps them to theme colors.
 var semanticTokenTypes = []string{
 	"namespace",
 	"type",
@@ -32,21 +30,6 @@ var semanticTokenModifiers = []string{
 	"declaration",
 	"readonly",
 }
-
-const (
-	semTypeNamespace  = 0
-	semTypeType       = 1
-	semTypeParameter  = 2
-	semTypeVariable   = 3
-	semTypeProperty   = 4
-	semTypeFunction   = 5
-	semTypeKeyword    = 6
-	semTypeString     = 7
-	semTypeNumber     = 8
-	semTypeOperator   = 9
-	semTypeComment    = 10
-	semTypeEnumMember = 11
-)
 
 // semToken is the intermediate form before relative encoding. `mods`
 // is always 0 today; kept in the struct so the wire-format (5 ints
@@ -111,7 +94,7 @@ func classifyToken(t token.Token, identIndex map[int]*resolve.Symbol) (semToken,
 			symbolKind = sym.Kind.String()
 		}
 	}
-	tokenType, ok := selfhost.LSPSemanticTypeForTokenKind(t.Kind.String(), symbolKind)
+	tokenType, ok := LSPSemanticTypeForTokenKind(t.Kind.String(), symbolKind)
 	if !ok {
 		return semToken{}, false
 	}
@@ -146,16 +129,16 @@ func commentSemToken(li *lineIndex, c token.Comment) semToken {
 		line:   lspStart.Line,
 		col:    lspStart.Character,
 		length: length,
-		ttype:  selfhost.LSPSemanticTypeForComment(),
+		ttype:  LSPSemanticTypeForComment(),
 	}
 }
 
 // encodeSemTokens turns absolute tokens into the sorted, delta-encoded form
 // LSP expects.
 func encodeSemTokens(sems []semToken) []uint32 {
-	tokens := make([]selfhost.LSPSemanticToken, 0, len(sems))
+	tokens := make([]LSPSemanticToken, 0, len(sems))
 	for _, t := range sems {
-		tokens = append(tokens, selfhost.LSPSemanticToken{
+		tokens = append(tokens, LSPSemanticToken{
 			Line:      t.line,
 			Column:    t.col,
 			Length:    t.length,
@@ -163,5 +146,5 @@ func encodeSemTokens(sems []semToken) []uint32 {
 			Modifiers: t.mods,
 		})
 	}
-	return selfhost.EncodeLSPSemanticTokens(tokens)
+	return EncodeLSPSemanticTokens(tokens)
 }

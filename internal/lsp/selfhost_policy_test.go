@@ -8,7 +8,6 @@ import (
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/resolve"
-	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/token"
 )
 
@@ -93,10 +92,10 @@ func TestDisplayTextUsesSelfHostedPolicy(t *testing.T) {
 	if got := b.String(); got != "struct User\n" {
 		t.Fatalf("hover signature = %q", got)
 	}
-	if got := selfhost.LSPHoverSignatureLine("binding", "value", "Int"); got != "let value: Int" {
+	if got := LSPHoverSignatureLine("binding", "value", "Int"); got != "let value: Int" {
 		t.Fatalf("hover binding = %q", got)
 	}
-	if got := selfhost.LSPCompletionDetail("function", "map", "fn(Int) -> String"); got != "fn map(Int) -> String" {
+	if got := LSPCompletionDetail("function", "map", "fn(Int) -> String"); got != "fn map(Int) -> String" {
 		t.Fatalf("completion detail = %q", got)
 	}
 }
