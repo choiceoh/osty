@@ -89,6 +89,7 @@ fn testValidateHeapRejectsLiveByteMismatch() {
     let tenured = emptyTenuredAllocator()
     let humongous = emptyHumongousAllocator()
     let barriers = emptyBarrierCounters()
+    let loweredObjectFields: Map<String, GcLoweredObjectField> = {:}
     let heap = GcHeap {
         config: testGcConfig(),
         nextId: 2,
@@ -107,6 +108,7 @@ fn testValidateHeapRejectsLiveByteMismatch() {
         tenured,
         humongous,
         barriers,
+        loweredObjectFields,
         remembered: empty.toSet(),
         grey: [],
         allocatedSinceLastGC: 16,
@@ -165,6 +167,7 @@ fn testValidateHeapRejectsMissingRememberedEdge() {
     let tenured = emptyTenuredAllocator()
     let humongous = emptyHumongousAllocator()
     let barriers = emptyBarrierCounters()
+    let loweredObjectFields: Map<String, GcLoweredObjectField> = {:}
     let heap = GcHeap {
         config: testGcConfig(),
         nextId: 3,
@@ -183,6 +186,7 @@ fn testValidateHeapRejectsMissingRememberedEdge() {
         tenured,
         humongous,
         barriers,
+        loweredObjectFields,
         remembered: empty.toSet(),
         grey: [],
         allocatedSinceLastGC: 32,
@@ -462,6 +466,131 @@ fn testUnlinkRunsPreWriteBarrierHook() {
 
     testing.assertEq(heap.barrierPreWriteCallCount(), 1)
     testing.assertEq(heap.refCount(parent) ?? -1, 0)
+}
+
+fn testStructFieldStoreLoweringTracksSlotAndPostBarrier() {
+    let mut heap = newGcHeap(testGcConfig())
+    let parent = heap.allocate(GcRecord, 16)
+    testing.assert(heap.addRoot(parent))
+    let _ = heap.majorCollect()
+    assertValid(heap)
+    testing.assertEq(heap.generationOf(parent) ?? -1, 1)
+
+    let child = heap.allocate(GcArray, 16)
+    match heap.lowerStructFieldStore(parent, 0, "next", child) {
+        Some(event) -> {
+            testing.assertEq(event.kind, GcStructFieldStore)
+            testing.assertEq(event.ownerId, parent)
+            testing.assertEq(event.slot, 0)
+            testing.assertEq(event.name, "next")
+            testing.assertEq(event.oldValue, -1)
+            testing.assertEq(event.newValue, child)
+            testing.assertEq(event.barrierSlotKind, GcBarrierObjectField)
+            testing.assert(!(event.preWriteCalled))
+            testing.assert(event.postWriteCalled)
+        },
+        None -> testing.fail("struct field store lowering failed"),
+    }
+    assertValid(heap)
+
+    testing.assertEq(heap.loweredObjectFieldCount(), 1)
+    testing.assertEq(heap.loweredObjectFieldValue(parent, 0) ?? -1, child)
+    testing.assertEq(heap.refCount(parent) ?? -1, 1)
+    testing.assertEq(heap.rememberedCount(), 1)
+    testing.assertEq(heap.barrierPostWriteCallCount(), 1)
+    testing.assertEq(heap.barrierRememberedSetWriteCount(), 1)
+}
+
+fn testFieldStoreOverwriteRunsPreBarrierAndDropsOldRef() {
+    let mut heap = newGcHeap(testGcConfig())
+    let parent = heap.allocate(GcRecord, 16)
+    let first = heap.allocate(GcArray, 16)
+    let second = heap.allocate(GcClosure, 16)
+    testing.assert(heap.addRoot(parent))
+    match heap.lowerTuplePayloadStore(parent, 1, "payload", first) {
+        Some(_) -> {},
+        None -> testing.fail("initial tuple payload store lowering failed"),
+    }
+    assertValid(heap)
+
+    match heap.lowerTuplePayloadStore(parent, 1, "payload", second) {
+        Some(event) -> {
+            testing.assertEq(event.kind, GcTuplePayloadStore)
+            testing.assertEq(event.oldValue, first)
+            testing.assertEq(event.newValue, second)
+            testing.assert(event.preWriteCalled)
+            testing.assert(event.postWriteCalled)
+        },
+        None -> testing.fail("tuple payload overwrite lowering failed"),
+    }
+    assertValid(heap)
+
+    testing.assertEq(heap.loweredObjectFieldCount(), 1)
+    testing.assertEq(heap.loweredObjectFieldValue(parent, 1) ?? -1, second)
+    testing.assertEq(heap.refCount(parent) ?? -1, 1)
+    testing.assertEq(heap.barrierPreWriteCallCount(), 1)
+    testing.assertEq(heap.barrierPostWriteCallCount(), 2)
+
+    let stats = heap.majorCollect()
+    assertValid(heap)
+    testing.assert(heap.contains(parent))
+    testing.assert(!(heap.contains(first)))
+    testing.assert(heap.contains(second))
+    testing.assertEq(stats.reclaimedObjects, 1)
+}
+
+fn testReceiverStoreLoweringShadesLateIncrementalEdge() {
+    let mut heap = newGcHeap(testGcConfig())
+    let root = heap.allocate(GcRecord, 16)
+    let existing = heap.allocate(GcArray, 16)
+    let late = heap.allocate(GcClosure, 16)
+
+    testing.assert(heap.addRoot(root))
+    match heap.lowerReceiverFieldStore(root, 0, "existing", existing) {
+        Some(_) -> {},
+        None -> testing.fail("receiver field store lowering failed"),
+    }
+    assertValid(heap)
+
+    heap.startIncrementalMajor()
+    assertValid(heap)
+    let markStats = heap.stepIncremental()
+    assertValid(heap)
+    testing.assertEq(markStats.kind, "incremental-mark")
+    testing.assertEq(heap.phaseNow(), GcMarking)
+
+    match heap.lowerReceiverFieldStore(root, 1, "late", late) {
+        Some(event) -> {
+            testing.assertEq(event.kind, GcReceiverFieldStore)
+            testing.assertEq(event.oldValue, -1)
+            testing.assertEq(event.newValue, late)
+            testing.assert(event.postWriteCalled)
+        },
+        None -> testing.fail("late receiver store lowering failed"),
+    }
+    assertValid(heap)
+    testing.assertEq(heap.barrierIncrementalShadeCount(), 1)
+
+    let done = heap.finishIncremental()
+    assertValid(heap)
+    testing.assertEq(done.kind, "incremental-sweep")
+    testing.assert(heap.contains(root))
+    testing.assert(heap.contains(existing))
+    testing.assert(heap.contains(late))
+}
+
+fn testStoreLoweringRejectsInvalidTargetBeforeBarrier() {
+    let mut heap = newGcHeap(testGcConfig())
+    let parent = heap.allocate(GcRecord, 16)
+    match heap.lowerEnumPayloadStore(parent, 2, "variant.payload", 999) {
+        Some(_) -> testing.fail("invalid enum payload store unexpectedly lowered"),
+        None -> {},
+    }
+    assertValid(heap)
+
+    testing.assertEq(heap.loweredObjectFieldCount(), 0)
+    testing.assertEq(heap.barrierPreWriteCallCount(), 0)
+    testing.assertEq(heap.barrierPostWriteCallCount(), 0)
 }
 
 fn testMinorCollectionMovesEdenObjectToSurvivorSpace() {

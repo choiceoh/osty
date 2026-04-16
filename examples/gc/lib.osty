@@ -156,6 +156,33 @@ pub struct GcBarrierCounters {
     pub loadForwards: Int,
 }
 
+pub enum GcLoweredStoreKind {
+    GcStructFieldStore,
+    GcTuplePayloadStore,
+    GcEnumPayloadStore,
+    GcReceiverFieldStore,
+}
+
+pub struct GcLoweredObjectField {
+    pub ownerId: Int,
+    pub slot: Int,
+    pub name: String,
+    pub kind: GcLoweredStoreKind,
+    pub objectId: Int,
+}
+
+pub struct GcLoweredStoreEvent {
+    pub kind: GcLoweredStoreKind,
+    pub ownerId: Int,
+    pub slot: Int,
+    pub name: String,
+    pub oldValue: Int,
+    pub newValue: Int,
+    pub barrierSlotKind: GcBarrierSlotKind,
+    pub preWriteCalled: Bool,
+    pub postWriteCalled: Bool,
+}
+
 pub enum GcSafepointKind {
     GcCallSafepoint,
     GcAllocationSafepoint,
@@ -324,6 +351,7 @@ pub struct GcHeap {
     tenured: GcTenuredAllocator,
     humongous: GcHumongousAllocator,
     barriers: GcBarrierCounters,
+    loweredObjectFields: Map<String, GcLoweredObjectField>,
     remembered: Set<Int>,
     grey: List<Int>,
     allocatedSinceLastGC: Int,
@@ -453,6 +481,46 @@ pub struct GcHeap {
         } else {
             None
         }
+    }
+
+    pub fn lowerStructFieldStore(
+        mut self,
+        ownerId: Int,
+        slot: Int,
+        name: String,
+        newValue: Int,
+    ) -> GcLoweredStoreEvent? {
+        self.lowerObjectFieldStore(GcStructFieldStore, ownerId, slot, name, newValue)
+    }
+
+    pub fn lowerTuplePayloadStore(
+        mut self,
+        ownerId: Int,
+        slot: Int,
+        name: String,
+        newValue: Int,
+    ) -> GcLoweredStoreEvent? {
+        self.lowerObjectFieldStore(GcTuplePayloadStore, ownerId, slot, name, newValue)
+    }
+
+    pub fn lowerEnumPayloadStore(
+        mut self,
+        ownerId: Int,
+        slot: Int,
+        name: String,
+        newValue: Int,
+    ) -> GcLoweredStoreEvent? {
+        self.lowerObjectFieldStore(GcEnumPayloadStore, ownerId, slot, name, newValue)
+    }
+
+    pub fn lowerReceiverFieldStore(
+        mut self,
+        ownerId: Int,
+        slot: Int,
+        name: String,
+        newValue: Int,
+    ) -> GcLoweredStoreEvent? {
+        self.lowerObjectFieldStore(GcReceiverFieldStore, ownerId, slot, name, newValue)
     }
 
     pub fn addRoot(mut self, id: Int) -> Bool {
@@ -1487,6 +1555,19 @@ pub struct GcHeap {
         self.barriers.loadForwards
     }
 
+    pub fn loweredObjectFieldCount(self) -> Int {
+        self.loweredObjectFields.len()
+    }
+
+    pub fn loweredObjectFieldValue(self, ownerId: Int, slot: Int) -> Int? {
+        let key = loweredObjectFieldKey(ownerId, slot)
+        if self.loweredObjectFields.containsKey(key) {
+            Some(self.loweredObjectFields[key].objectId)
+        } else {
+            None
+        }
+    }
+
     pub fn pinnedObjectCount(self) -> Int {
         let mut total = 0
         for (id, obj) in self.objects {
@@ -1619,6 +1700,32 @@ pub struct GcHeap {
         }
         if self.barriers.preWriteCalls < 0 || self.barriers.postWriteCalls < 0 || self.barriers.loadCalls < 0 || self.barriers.rememberedSetWrites < 0 || self.barriers.incrementalShades < 0 || self.barriers.loadForwards < 0 {
             return Err("barrier counters have negative accounting")
+        }
+        for (key, field) in self.loweredObjectFields {
+            if key != loweredObjectFieldKey(field.ownerId, field.slot) {
+                return Err("lowered object field key/slot mismatch: {key}")
+            }
+            if field.ownerId <= 0 || !(self.objects.containsKey(field.ownerId)) {
+                return Err("lowered object field {key} references missing owner")
+            }
+            if field.slot < 0 {
+                return Err("lowered object field {key} has negative slot")
+            }
+            if field.name == "" {
+                return Err("lowered object field {key} has empty name")
+            }
+            if field.objectId < -1 {
+                return Err("lowered object field {key} has invalid object id {field.objectId}")
+            }
+            if field.objectId >= 0 {
+                if !(self.objects.containsKey(field.objectId)) {
+                    return Err("lowered object field {key} references missing object")
+                }
+                let owner = self.objects[field.ownerId]
+                if !(owner.refs.contains(field.objectId)) {
+                    return Err("lowered object field {key} is missing from owner refs")
+                }
+            }
         }
         let survivorBytes = self.survivorBytes()
         if survivorBytes > self.config.survivorLimit {
@@ -2491,6 +2598,98 @@ pub struct GcHeap {
         self.barriers = barriers
     }
 
+    fn lowerObjectFieldStore(
+        mut self,
+        kind: GcLoweredStoreKind,
+        ownerId: Int,
+        slot: Int,
+        name: String,
+        newValue: Int,
+    ) -> GcLoweredStoreEvent? {
+        if slot < 0 || name == "" {
+            return None
+        }
+        if !(self.objects.containsKey(ownerId)) {
+            return None
+        }
+        if newValue < -1 {
+            return None
+        }
+        if newValue >= 0 && !(self.objects.containsKey(newValue)) {
+            return None
+        }
+
+        let key = loweredObjectFieldKey(ownerId, slot)
+        let oldValue = self.loweredObjectFieldStoredValue(key)
+        let mut preWriteCalled = false
+        if oldValue >= 0 {
+            preWriteCalled = self.gcPreWriteBarrier(GcBarrierObjectField, ownerId, oldValue)
+        }
+
+        self.loweredObjectFields.insert(
+            key,
+            GcLoweredObjectField {
+                ownerId,
+                slot,
+                name,
+                kind,
+                objectId: newValue,
+            },
+        )
+        self.syncLoweredObjectFieldRefs(ownerId, oldValue, newValue)
+        let postWriteCalled = self.gcPostWriteBarrier(GcBarrierObjectField, ownerId, newValue)
+        self.rebuildRemembered()
+
+        Some(
+            GcLoweredStoreEvent {
+                kind,
+                ownerId,
+                slot,
+                name,
+                oldValue,
+                newValue,
+                barrierSlotKind: GcBarrierObjectField,
+                preWriteCalled,
+                postWriteCalled,
+            },
+        )
+    }
+
+    fn syncLoweredObjectFieldRefs(mut self, ownerId: Int, oldValue: Int, newValue: Int) {
+        if !(self.objects.containsKey(ownerId)) {
+            return
+        }
+
+        let mut obj = self.objects[ownerId]
+        if oldValue >= 0 && oldValue != newValue && !(self.loweredObjectFieldStillReferences(
+            ownerId,
+            oldValue,
+        )) {
+            obj.refs = obj.refs.filter(|id| id != oldValue)
+        }
+        if newValue >= 0 && !(obj.refs.contains(newValue)) {
+            obj.refs.push(newValue)
+        }
+        self.objects.insert(ownerId, obj)
+    }
+
+    fn loweredObjectFieldStillReferences(self, ownerId: Int, objectId: Int) -> Bool {
+        for (key, field) in self.loweredObjectFields {
+            let _ = key
+            if field.ownerId == ownerId && field.objectId == objectId {
+                return true
+            }
+        }
+        false
+    }
+
+    fn loweredObjectFieldStoredValue(self, key: String) -> Int {
+        if self.loweredObjectFields.containsKey(key) {
+            return self.loweredObjectFields[key].objectId
+        }
+        return -1
+    }
+
     fn rebuildRemembered(mut self) {
         self.remembered.clear()
         let ids = self.objects.keys()
@@ -2509,6 +2708,15 @@ pub struct GcHeap {
     fn dropObjectSideTables(mut self, id: Int) {
         if self.closureEnvironments.containsKey(id) {
             let _ = self.closureEnvironments.remove(id)
+        }
+        let keys = self.loweredObjectFields.keys()
+        for key in keys {
+            if self.loweredObjectFields.containsKey(key) {
+                let field = self.loweredObjectFields[key]
+                if field.ownerId == id || field.objectId == id {
+                    let _ = self.loweredObjectFields.remove(key)
+                }
+            }
         }
     }
 
@@ -2640,6 +2848,7 @@ pub fn newGcHeap(config: GcConfig) -> GcHeap {
     let tenured = emptyTenuredAllocator()
     let humongous = emptyHumongousAllocator()
     let barriers = emptyBarrierCounters()
+    let loweredObjectFields: Map<String, GcLoweredObjectField> = {:}
     let emptyRoots: List<Int> = []
     let emptyRemembered: List<Int> = []
     let grey: List<Int> = []
@@ -2662,6 +2871,7 @@ pub fn newGcHeap(config: GcConfig) -> GcHeap {
         tenured,
         humongous,
         barriers,
+        loweredObjectFields,
         remembered: emptyRemembered.toSet(),
         grey,
         allocatedSinceLastGC: 0,
@@ -2671,6 +2881,10 @@ pub fn newGcHeap(config: GcConfig) -> GcHeap {
 
 fn globalRootKey(moduleName: String, name: String) -> String {
     "{moduleName}::{name}"
+}
+
+fn loweredObjectFieldKey(ownerId: Int, slot: Int) -> String {
+    "{ownerId}:{slot}"
 }
 
 fn closureCaptureObjectIds(captures: List<GcClosureCapture>) -> List<Int> {
