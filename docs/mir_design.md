@@ -89,9 +89,11 @@ reason about generics.
 | Control flow as expressions      | yes (`IfExpr`, `BlockExpr`) | no — only statements |
 | Typed every node                 | yes                 | yes (with layout ids)|
 | Decision-tree pre-compilation    | yes                 | consumed by lowerer  |
-| Closure captures                 | yes (`Closure.Captures`) | not yet (Stage 2+) |
-| `defer` bodies                   | yes                 | not yet (Stage 2+)   |
-| Concurrency primitives           | yes                 | not yet              |
+| Closure captures                 | yes (`Closure.Captures`) | lifted to top-level fn + `AggClosure` (Stage 2a) |
+| `defer` bodies                   | yes                 | function-scoped, replayed at every return edge (Stage 2a; inner-block scoping is Stage 2c) |
+| Concurrency primitives           | yes                 | not yet (Stage 2b)   |
+| Compound & multi-target assign   | yes                 | expanded to `BinaryRV` / tuple destructure (Stage 2a) |
+| Top-level global read            | yes (`IdentGlobal`) | `GlobalRefRV` (Stage 2a)                              |
 
 Anything in the "not yet" rows causes `mir.Lower` to return an
 "unsupported" diagnostic today. That signals the caller (e.g. the
@@ -229,11 +231,15 @@ RValue
   | AddressOfRV    { Place; Type }              // borrow (future use)
   | RefRV          { Place; Type }              // wrap into optional Some
   | NullaryRV      { Kind; Type }               // e.g. NoneOf<T>
+  | GlobalRefRV    { Name string; Type }        // read a top-level `let`
 ```
 
 `AggregateRV.Kind` enumerates `Tuple`, `Struct`, `EnumVariant`, `List`,
-`Map`. For `EnumVariant`, `VariantIdx` names the active arm and
-`Fields` is the payload tuple. The emitter uses the `LayoutTable` to
+`Map`, and `Closure`. For `EnumVariant`, `VariantIdx` names the active
+arm and `Fields` is the payload tuple. For `Closure`, `Fields[0]` is a
+`FnConst` operand naming the lifted closure body and `Fields[1..]` are
+the captured operands in the same order the lifted function declares
+them as its prefix parameters. The emitter uses the `LayoutTable` to
 pick the right in-memory representation (`%T = type { i64, ... }` for
 struct; `%Enum = type { i64, i64 }` with variant-specific payload in
 the current LLVM backend).
@@ -369,9 +375,11 @@ assigned into.
 - `IndexExpr`: `Place` with an `IndexProj`.
 - `QuestionExpr`: lower the sub-expression into a scratch local, emit
   a `DiscriminantRV` + `SwitchInt`; the "happy" successor extracts the
-  payload and continues, the "unhappy" successor wraps the error /
-  empty into the enclosing function's return shape and terminates
-  with `Return`.
+  payload and continues, the "unhappy" successor **rebuilds** the
+  error value in the enclosing function's return type — `NullaryRV{
+  NullaryNone}` for Option-shaped returns, `AggregateRV{EnumVariant}`
+  carrying the extracted `Err` payload for Result — and terminates
+  with `Return` after replaying defers.
 - `FieldExpr` (optional, `x?.field`): lower the receiver, check its
   discriminant, branch on None → fallthrough to the merge block with
   a `None` result, or extract the payload, read the field, wrap back
@@ -428,14 +436,63 @@ MIR tests isolated from front-end churn.
 
 ## Migration plan
 
-- **Stage 1 (this patch).** Add `internal/mir` with types, printer,
+- **Stage 1 (landed).** Add `internal/mir` with types, printer,
   validator, lowering, and tests. `internal/llvmgen` is untouched.
   `docs/mir_design.md` is this document.
 
-- **Stage 2.** Expand MIR lowering coverage to match the complete set
-  of HIR nodes exercised by the current LLVM test suite: closures,
-  defer, channels, taskGroup, stdlib intrinsics. Each expansion is a
-  small, independently reviewable patch.
+- **Stage 2a (landed).** Expand MIR coverage for the most common
+  HIR-only shapes and tighten two correctness bugs spotted in code
+  review:
+  - **Closures.** A `Closure` expression lifts its body into a fresh
+    top-level MIR function named `<parent>__closure<N>`. Captures
+    become the function's leading positional parameters, and the
+    closure value is an `AggregateRV{Kind: AggClosure}` whose first
+    field is a `FnConst` naming the lifted function and whose
+    remaining fields are the captured operands in parameter order.
+    Backends wanting a flat fn-pointer calling convention unpack the
+    aggregate; backends wanting a closure-struct ABI read the fields
+    by index.
+  - **Defer.** Defer bodies accumulate on a per-function stack and
+    replay in LIFO at every return edge — explicit `return`, the
+    function's trailing expression, `?` early-return, and implicit
+    unit fall-through. Break/continue do not replay (they jump to
+    the loop exit, where the defers will replay on the eventual
+    return). Stage 2 keeps defers anchored to the function scope;
+    inner-block scoping is documented as Stage 2b.
+  - **Top-level global reads.** `Ident{Kind: IdentGlobal}` now lowers
+    to a `GlobalRefRV{Name}` rvalue assigned into a fresh temp. The
+    rvalue is a named read; backends pick their materialisation
+    strategy (static slot, init-on-first-use).
+  - **Compound and multi-target assignment.** `x op= rhs` expands to
+    `x = x op rhs` via `BinaryRV`. `(a, b, …) = rhs` binds `rhs` into
+    a scratch tuple-typed local and fans out via `TupleProj` assigns
+    into each LHS place. Both paths reuse `lowerExprToPlace` so
+    field-indexed and tuple-indexed targets work.
+  - **`?` error-path fix.** `e?` inside a function whose return type
+    differs from `e`'s type used to copy the whole operand into the
+    return slot — correct only when the types happened to match. The
+    lowerer now classifies the operand as `Option`- or `Result`-
+    shaped and rebuilds the error value in the enclosing return
+    type: `NullaryRV{NullaryNone}` for Option, an `AggregateRV{Err}`
+    that re-wraps the extracted `Err` payload for Result.
+  - **Package / FFI qualified call fix.** `strings.Split(s, ",")`
+    used to lower as `Split(strings, s, ",")` because the FieldExpr
+    callee path treated the qualifier as a receiver. The lowerer now
+    indexes `use` aliases and, when a `MethodCall`'s receiver or a
+    `CallExpr`'s FieldExpr callee names a use alias, emits a direct
+    `FnRef` to the qualified symbol (`runtime.strings.Split`, etc.)
+    with no synthetic `self` argument. Non-alias FieldExpr callees
+    (first-class fn-typed fields) fall back to an `IndirectCall`
+    through the projected field value.
+
+- **Stage 2b.** Concurrency primitives — `spawn`, channel send / recv,
+  `taskGroup`, `thread.select`, runtime cancel. These are the largest
+  remaining HIR-only shapes; they ship after the runtime ABI is
+  settled so the lowering can target a stable set of intrinsics.
+
+- **Stage 2c.** Inner-block defer scoping, closure-to-SSA captures
+  (upgrade `AggClosure` when borrow rules land), and the stdlib
+  intrinsic surface.
 
 - **Stage 3.** Introduce a new llvmgen entry point —
   `GenerateFromMIR(m *mir.Module, opts)` — that consumes MIR directly.

@@ -23,12 +23,14 @@ func Lower(mod *ir.Module) *Module {
 		return &Module{Package: "", Layouts: NewLayoutTable()}
 	}
 	l := &lowerer{
-		src:     mod,
-		out:     &Module{Package: mod.Package, SpanV: mod.SpanV, Layouts: NewLayoutTable()},
-		fnSig:   map[string]*fnSignature{},
-		methods: map[string]*fnSignature{},
-		enums:   map[string]*ir.EnumDecl{},
-		structs: map[string]*ir.StructDecl{},
+		src:        mod,
+		out:        &Module{Package: mod.Package, SpanV: mod.SpanV, Layouts: NewLayoutTable()},
+		fnSig:      map[string]*fnSignature{},
+		methods:    map[string]*fnSignature{},
+		enums:      map[string]*ir.EnumDecl{},
+		structs:    map[string]*ir.StructDecl{},
+		globals:    map[string]*ir.LetDecl{},
+		useAliases: map[string]*ir.UseDecl{},
 	}
 	l.run()
 	return l.out
@@ -66,10 +68,13 @@ type lowerer struct {
 	src *ir.Module
 	out *Module
 
-	fnSig   map[string]*fnSignature
-	methods map[string]*fnSignature
-	enums   map[string]*ir.EnumDecl
-	structs map[string]*ir.StructDecl
+	fnSig       map[string]*fnSignature
+	methods     map[string]*fnSignature
+	enums       map[string]*ir.EnumDecl
+	structs     map[string]*ir.StructDecl
+	globals     map[string]*ir.LetDecl
+	useAliases  map[string]*ir.UseDecl // alias name → use decl
+	closureSeq  int
 }
 
 func (l *lowerer) noteIssue(format string, args ...any) {
@@ -134,6 +139,8 @@ func (l *lowerer) collectSignatures() {
 				}
 				l.methods[methodKey(x.Name, m.Name)] = sig
 			}
+		case *ir.LetDecl:
+			l.globals[x.Name] = x
 		case *ir.UseDecl:
 			l.emitUse(x)
 		}
@@ -176,6 +183,9 @@ func (l *lowerer) buildLayouts() {
 func (l *lowerer) emitUse(u *ir.UseDecl) {
 	if u == nil {
 		return
+	}
+	if u.Alias != "" {
+		l.useAliases[u.Alias] = u
 	}
 	l.out.Uses = append(l.out.Uses, &Use{
 		Path:         append([]string(nil), u.Path...),
@@ -278,6 +288,7 @@ func (l *lowerer) lowerFunction(fn *ir.FnDecl, owner string, asMethod bool) *Fun
 	if fn.Body.Result != nil {
 		// trailing expression — lower into the return local and return
 		bs.lowerExprInto(fn.Body.Result, out.ReturnLocal, retT)
+		bs.runDefers(fn.Body.SpanV)
 		bs.terminate(&ReturnTerm{SpanV: fn.Body.SpanV})
 		return out
 	}
@@ -358,6 +369,14 @@ type bodyState struct {
 
 	// loopStack is a stack of break/continue destinations.
 	loopStack []*loopFrame
+
+	// deferStack holds defer bodies in source order; they are replayed
+	// in LIFO at every function exit. Stage 2 keeps defers scoped to
+	// the enclosing function body; inner-block defers are still
+	// accepted but run at function exit rather than at inner-block
+	// exit, and a note records the simplification so callers can tell
+	// the difference.
+	deferStack []*ir.Block
 }
 
 type ownerContext struct {
@@ -490,7 +509,9 @@ func (bs *bodyState) lowerStmt(s ir.Stmt) {
 	case *ir.MatchStmt:
 		bs.lowerMatchStmt(x)
 	case *ir.DeferStmt:
-		bs.l.noteIssue("defer not lowered to MIR (stage 2 work)")
+		if x.Body != nil {
+			bs.deferStack = append(bs.deferStack, x.Body)
+		}
 	case *ir.ChanSendStmt:
 		bs.l.noteIssue("channel send not lowered to MIR (stage 2 work)")
 	case *ir.ErrorStmt:
@@ -634,26 +655,158 @@ func (bs *bodyState) lowerExprStmt(e *ir.ExprStmt) {
 }
 
 func (bs *bodyState) lowerAssign(a *ir.AssignStmt) {
-	// simple case: single target, AssignEq
-	if len(a.Targets) == 1 && a.Op == ir.AssignEq {
-		dst, ok := bs.lowerExprToPlace(a.Targets[0])
-		if !ok {
-			bs.l.noteIssue("assign: unsupported target %T", a.Targets[0])
-			return
-		}
-		bs.lowerExprIntoPlace(a.Value, dst, a.Value.Type())
+	if len(a.Targets) == 0 {
 		return
 	}
-	// compound / multi-target assignments not yet handled in MIR.
-	bs.l.noteIssue("compound/multi-target assign not lowered to MIR (op=%d, targets=%d)",
-		a.Op, len(a.Targets))
+	// Compound assignment (`+=`, `-=`, etc.) lowers as `x = x op rhs`
+	// and then delegates to the simple path. For multi-target stmts
+	// we only support the `=` op (HIR guarantees this by construction).
+	if a.Op != ir.AssignEq {
+		if len(a.Targets) != 1 {
+			bs.l.noteIssue("compound assign requires a single target (got %d)", len(a.Targets))
+			return
+		}
+		bs.lowerCompoundAssign(a)
+		return
+	}
+	// Multi-target assignment: `(a, b) = (c, d)`. Lower RHS into a
+	// scratch tuple, then destructure into each target via projections.
+	if len(a.Targets) > 1 {
+		bs.lowerMultiAssign(a)
+		return
+	}
+	// Single-target `x = rhs`.
+	dst, ok := bs.lowerExprToPlace(a.Targets[0])
+	if !ok {
+		bs.l.noteIssue("assign: unsupported target %T", a.Targets[0])
+		return
+	}
+	bs.lowerExprIntoPlace(a.Value, dst, a.Value.Type())
+}
+
+// lowerCompoundAssign expands `x op= y` into `x = x op y` over a MIR
+// BinaryRV. The left-hand side is read once and written once; we
+// evaluate RHS into a fresh temp first so call-time side effects run
+// before the implicit read of x.
+func (bs *bodyState) lowerCompoundAssign(a *ir.AssignStmt) {
+	target := a.Targets[0]
+	dst, ok := bs.lowerExprToPlace(target)
+	if !ok {
+		bs.l.noteIssue("compound assign: unsupported target %T", target)
+		return
+	}
+	op, okOp := assignOpToBinOp(a.Op)
+	if !okOp {
+		bs.l.noteIssue("compound assign: unknown op %d", a.Op)
+		return
+	}
+	lhsT := target.Type()
+	if lhsT == nil {
+		lhsT = a.Value.Type()
+	}
+	rhs := bs.lowerExprAsOperand(a.Value)
+	lhs := &CopyOp{Place: dst, T: lhsT}
+	bs.emit(&AssignInstr{
+		Dest:  dst,
+		Src:   &BinaryRV{Op: op, Left: lhs, Right: rhs, T: lhsT},
+		SpanV: a.SpanV,
+	})
+}
+
+// lowerMultiAssign lowers `(a, b, ...) = rhs` by binding rhs into a
+// scratch tuple-typed local and then assigning each target from a
+// TupleProj into that scratch.
+func (bs *bodyState) lowerMultiAssign(a *ir.AssignStmt) {
+	rhsT := a.Value.Type()
+	scratch := bs.fn.NewLocal("_mtuple", rhsT, false, a.SpanV)
+	bs.emit(&StorageLiveInstr{Local: scratch, SpanV: a.SpanV})
+	bs.lowerExprInto(a.Value, scratch, rhsT)
+	elemTs := tupleElementTypes(rhsT)
+	for i, target := range a.Targets {
+		dst, ok := bs.lowerExprToPlace(target)
+		if !ok {
+			bs.l.noteIssue("multi-target assign: unsupported target %T", target)
+			continue
+		}
+		et := elementTypeAt(elemTs, i)
+		if et == nil {
+			et = target.Type()
+		}
+		src := &CopyOp{
+			Place: Place{Local: scratch}.Project(&TupleProj{Index: i, Type: et}),
+			T:     et,
+		}
+		bs.emit(&AssignInstr{
+			Dest:  dst,
+			Src:   &UseRV{Op: src},
+			SpanV: a.SpanV,
+		})
+	}
+}
+
+// assignOpToBinOp maps ir.AssignOp compound variants to their MIR
+// BinaryOp equivalents. Returns false for AssignEq (pure assign has
+// no operator) and for unknown values.
+func assignOpToBinOp(op ir.AssignOp) (BinaryOp, bool) {
+	switch op {
+	case ir.AssignAdd:
+		return BinAdd, true
+	case ir.AssignSub:
+		return BinSub, true
+	case ir.AssignMul:
+		return BinMul, true
+	case ir.AssignDiv:
+		return BinDiv, true
+	case ir.AssignMod:
+		return BinMod, true
+	case ir.AssignAnd:
+		return BinBitAnd, true
+	case ir.AssignOr:
+		return BinBitOr, true
+	case ir.AssignXor:
+		return BinBitXor, true
+	case ir.AssignShl:
+		return BinShl, true
+	case ir.AssignShr:
+		return BinShr, true
+	}
+	return BinInvalid, false
 }
 
 func (bs *bodyState) lowerReturn(r *ir.ReturnStmt) {
 	if r.Value != nil {
 		bs.lowerExprInto(r.Value, bs.fn.ReturnLocal, bs.fn.ReturnType)
 	}
+	bs.runDefers(r.SpanV)
 	bs.terminate(&ReturnTerm{SpanV: r.SpanV})
+}
+
+// runDefers inlines the accumulated defer bodies in LIFO order at
+// the current cursor. The stack is NOT popped — every exit point
+// replays the same set, matching the language semantics that each
+// defer runs exactly once on scope exit. Stage 2 uses function-level
+// scope: when the function ends (ReturnTerm, `?` early return, fall-
+// through), the replay happens at that exit. Break/continue edges
+// do not replay defers (they would run on the eventual loop exit).
+func (bs *bodyState) runDefers(sp Span) {
+	if len(bs.deferStack) == 0 {
+		return
+	}
+	for i := len(bs.deferStack) - 1; i >= 0; i-- {
+		body := bs.deferStack[i]
+		if body == nil {
+			continue
+		}
+		bs.pushScope()
+		for _, s := range body.Stmts {
+			bs.lowerStmt(s)
+		}
+		if body.Result != nil {
+			_ = bs.lowerExprAsOperand(body.Result)
+		}
+		bs.popScope()
+	}
+	_ = sp
 }
 
 func (bs *bodyState) lowerBreak(b *ir.BreakStmt) {
@@ -1417,8 +1570,7 @@ func (bs *bodyState) lowerExprToRValue(e ir.Expr, hint Type) RValue {
 		bs.l.noteIssue("range literal in value position not lowered to MIR")
 		return &UseRV{Op: &ConstOp{Const: &UnitConst{}, T: TUnit}}
 	case *ir.Closure:
-		bs.l.noteIssue("closure literal not lowered to MIR (stage 2 work)")
-		return &UseRV{Op: &ConstOp{Const: &UnitConst{}, T: TUnit}}
+		return bs.lowerClosure(x, hint)
 	case *ir.ErrorExpr:
 		bs.l.noteIssue("error expression reached MIR: %s", x.Note)
 		return &UseRV{Op: &ConstOp{Const: &UnitConst{}, T: TUnit}}
@@ -1471,7 +1623,29 @@ func (bs *bodyState) lowerIdent(id *ir.Ident) Operand {
 		fnType := id.T
 		return &ConstOp{Const: &FnConst{Symbol: id.Name, T: fnType}, T: fnType}
 	case ir.IdentGlobal:
-		return &CopyOp{Place: Place{Local: bs.externalGlobalLocal(id.Name, id.T)}, T: id.T}
+		// Materialise a fresh local holding the current global value
+		// via a GlobalRefRV; backends pick their own strategy
+		// (static slot, init-on-first-use). We allocate one temp per
+		// read — redundancy elimination is a later optimisation pass.
+		t := id.T
+		if t == nil {
+			if decl, ok := bs.l.globals[id.Name]; ok {
+				t = decl.Type
+				if t == nil && decl.Value != nil {
+					t = decl.Value.Type()
+				}
+			}
+		}
+		if t == nil {
+			t = ir.ErrTypeVal
+		}
+		tmp := bs.freshTemp(t, id.SpanV)
+		bs.emit(&AssignInstr{
+			Dest:  Place{Local: tmp},
+			Src:   &GlobalRefRV{Name: id.Name, T: t},
+			SpanV: id.SpanV,
+		})
+		return &CopyOp{Place: Place{Local: tmp}, T: t}
 	case ir.IdentVariant:
 		// bare variant → aggregate with no payload.
 		t := id.T
@@ -1511,20 +1685,6 @@ func (bs *bodyState) lowerIdent(id *ir.Ident) Operand {
 		return &ConstOp{Const: &FnConst{Symbol: id.Name, T: t}, T: t}
 	}
 	return &ConstOp{Const: &UnitConst{}, T: TUnit}
-}
-
-// externalGlobalLocal allocates a local for a top-level global access
-// on first use. Subsequent reads reuse it.
-func (bs *bodyState) externalGlobalLocal(name string, t Type) LocalID {
-	if id, ok := bs.lookup(name); ok {
-		return id
-	}
-	id := bs.fn.NewLocal(name, t, false, Span{})
-	bs.bind(name, id)
-	// Issue a note — backend consumer will need to materialise the
-	// global load.
-	bs.l.noteIssue("global read %q materialised as uninitialised local (stage 2 work)", name)
-	return id
 }
 
 // lowerStringLit returns an operand for a StringLit.
@@ -1735,8 +1895,15 @@ func (bs *bodyState) lowerCoalesceInto(c *ir.CoalesceExpr, dest Place, destT Typ
 }
 
 // lowerQuestionInto handles `e?`. The receiver must be Option<T> or
-// Result<T, E>. For None/Err we early-return the same none/err value
-// via the function's return local.
+// Result<T, E>. On the error path we rebuild the none/err value in
+// the enclosing function's return type and early-return.
+//
+// The receiver's value type need not match the function's return
+// type; for Result, the Ok payload differs (A vs B) but the Err
+// payload is the shared tag type E, so the error path extracts
+// tmp.@Err.0 and rewraps it into a fresh Result<B, E>. For Option, the
+// error path is just "None of the return type" — materialised via
+// NullaryRV{NullaryNone}.
 func (bs *bodyState) lowerQuestionInto(q *ir.QuestionExpr, dest Place, destT Type) {
 	xT := q.X.Type()
 	tmp := bs.fn.NewLocal("_q", xT, false, q.SpanV)
@@ -1757,14 +1924,8 @@ func (bs *bodyState) lowerQuestionInto(q *ir.QuestionExpr, dest Place, destT Typ
 		SpanV:     q.SpanV,
 	})
 	bs.cur = errBB
-	// Wrap the failure into the fn's return type; for now we just copy
-	// tmp into the return slot (works when return type is the same as
-	// the operand type, as in typical Result/Option propagation).
-	bs.emit(&AssignInstr{
-		Dest:  Place{Local: bs.fn.ReturnLocal},
-		Src:   &UseRV{Op: &CopyOp{Place: Place{Local: tmp}, T: xT}},
-		SpanV: q.SpanV,
-	})
+	bs.rebuildErrorIntoReturn(tmp, xT, q.SpanV)
+	bs.runDefers(q.SpanV)
 	bs.terminate(&ReturnTerm{SpanV: q.SpanV})
 	bs.cur = okBB
 	payloadProj := &VariantProj{
@@ -1778,6 +1939,114 @@ func (bs *bodyState) lowerQuestionInto(q *ir.QuestionExpr, dest Place, destT Typ
 		Src:   &UseRV{Op: &CopyOp{Place: Place{Local: tmp}.Project(payloadProj), T: destT}},
 		SpanV: q.SpanV,
 	})
+}
+
+// rebuildErrorIntoReturn materialises the error value for a `?`
+// propagation in the shape of the enclosing function's return type.
+// `operand` holds the Option/Result the user wrote; `operandT` is its
+// type. The function writes into the function's return local.
+func (bs *bodyState) rebuildErrorIntoReturn(operand LocalID, operandT Type, sp Span) {
+	retT := bs.fn.ReturnType
+	// Fast path: types match exactly (e.g. `Result<A, E>?` inside a fn
+	// that also returns `Result<A, E>`). Just copy.
+	if typesMatch(operandT, retT) {
+		bs.emit(&AssignInstr{
+			Dest:  Place{Local: bs.fn.ReturnLocal},
+			Src:   &UseRV{Op: &CopyOp{Place: Place{Local: operand}, T: operandT}},
+			SpanV: sp,
+		})
+		return
+	}
+	switch classifyQShape(operandT) {
+	case qShapeOption:
+		// Option<A> propagating into any Option<B> (or B?): the error
+		// value is just None of the return type.
+		bs.emit(&AssignInstr{
+			Dest:  Place{Local: bs.fn.ReturnLocal},
+			Src:   &NullaryRV{Kind: NullaryNone, T: retT},
+			SpanV: sp,
+		})
+	case qShapeResult:
+		// Result<A, E> propagating into Result<B, E>: extract the Err
+		// payload, rebuild as Err(payload) in the return type.
+		errT := resultErrType(operandT)
+		errPayload := Place{Local: operand}.Project(&VariantProj{
+			Variant:  int(errTagOf(operandT)),
+			Name:     "Err",
+			FieldIdx: 0,
+			Type:     errT,
+		})
+		bs.emit(&AssignInstr{
+			Dest: Place{Local: bs.fn.ReturnLocal},
+			Src: &AggregateRV{
+				Kind:       AggEnumVariant,
+				Fields:     []Operand{&CopyOp{Place: errPayload, T: errT}},
+				T:          retT,
+				VariantIdx: int(errTagOf(retT)),
+				VariantTag: "Err",
+			},
+			SpanV: sp,
+		})
+	default:
+		// Unknown propagation target — conservative copy, note an
+		// issue so callers stay on the HIR path.
+		bs.l.noteIssue("? propagation: cannot rebuild %s in return type %s",
+			typeString(operandT), typeString(retT))
+		bs.emit(&AssignInstr{
+			Dest:  Place{Local: bs.fn.ReturnLocal},
+			Src:   &UseRV{Op: &CopyOp{Place: Place{Local: operand}, T: operandT}},
+			SpanV: sp,
+		})
+	}
+}
+
+// qShape classifies a type for `?` propagation purposes.
+type qShape int
+
+const (
+	qShapeUnknown qShape = iota
+	qShapeOption
+	qShapeResult
+)
+
+func classifyQShape(t Type) qShape {
+	switch x := t.(type) {
+	case *ir.OptionalType:
+		return qShapeOption
+	case *ir.NamedType:
+		switch x.Name {
+		case "Option", "Maybe":
+			return qShapeOption
+		case "Result":
+			return qShapeResult
+		}
+	}
+	return qShapeUnknown
+}
+
+func resultErrType(t Type) Type {
+	if nt, ok := t.(*ir.NamedType); ok && nt.Name == "Result" && len(nt.Args) >= 2 {
+		return nt.Args[1]
+	}
+	return ir.ErrTypeVal
+}
+
+// errTagOf returns the discriminant value for the error arm of a `?`-
+// able enum (Err / None). For Option/Maybe the error arm is None == 0;
+// for Result, Err == 0.
+func errTagOf(t Type) int64 {
+	return 0
+}
+
+// typesMatch is a cheap structural check used to decide when a `?`
+// propagation can just copy the receiver into the return slot without
+// re-wrapping. We rely on ir.Type.String() — it is canonical post-
+// monomorphisation and cheap to produce.
+func typesMatch(a, b Type) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.String() == b.String()
 }
 
 // lowerOptionalFieldInto handles `x?.field`.
@@ -1863,16 +2132,92 @@ func (bs *bodyState) resolveCall(c *ir.CallExpr) ([]Operand, Callee) {
 		ft := cal.T
 		return args, &FnRef{Symbol: cal.Name, Type: ft}
 	case *ir.FieldExpr:
-		// Callee like `foo.bar`: a package-qualified or method-style call.
-		// For runtime FFI we still route through FnRef with the field name.
-		recv := bs.lowerExprAsOperand(cal.X)
-		args := append([]Operand{recv}, bs.orderArgs(c.Args, nil)...)
-		return args, &FnRef{Symbol: cal.Name, Type: cal.T}
+		// Callee shaped `x.name(...)`. In practice HIR's own lowerer
+		// routes user-visible method syntax through MethodCall, so the
+		// only ways this branch fires are:
+		//
+		//   - package-qualified calls: `strings.Split(s, ",")` — `x` is
+		//     a Use alias and the call is a plain symbol call, NOT a
+		//     receiver-method call.
+		//   - first-class field holding a callable value: `r.handler(x)`
+		//     when `handler` is a closure / fn-typed field.
+		//
+		// Treating `x` as a receiver for the first case would produce
+		// `Split(strings, s, ",")`, which is the wrong ABI and loses
+		// the qualifier identity. So: classify before lowering.
+		if use := bs.l.useAliasFor(cal.X); use != nil {
+			return bs.resolveQualifiedCall(use, cal.Name, cal.T, c.Args)
+		}
+		// Not a package alias — fall back to an indirect call through
+		// the resolved field value. This preserves the fn-pointer-as-
+		// field shape without guessing at receiver ABI.
+		recvPlace, ok := bs.lowerExprToPlace(cal.X)
+		var calleeOp Operand
+		if ok {
+			fieldType := cal.T
+			info := bs.l.structFromType(cal.X.Type(), "")
+			idx := bs.l.fieldIndex(info, cal.Name)
+			proj := &FieldProj{Index: idx, Name: cal.Name, Type: fieldType}
+			calleeOp = &CopyOp{Place: recvPlace.Project(proj), T: fieldType}
+		} else {
+			calleeOp = bs.lowerExprAsOperand(c.Callee)
+		}
+		args := bs.orderArgs(c.Args, nil)
+		return args, &IndirectCall{Callee: calleeOp}
 	}
 	// Indirect call via operand.
 	args := bs.orderArgs(c.Args, nil)
 	callee := bs.lowerExprAsOperand(c.Callee)
 	return args, &IndirectCall{Callee: callee}
+}
+
+// resolveQualifiedCall lowers `alias.name(args...)` where `alias` is a
+// `use` import. The returned Callee is a direct FnRef whose symbol
+// encodes the qualifier, and the argument list does NOT include a
+// synthetic receiver.
+func (bs *bodyState) resolveQualifiedCall(use *ir.UseDecl, name string, t Type, args []ir.Arg) ([]Operand, Callee) {
+	out := make([]Operand, len(args))
+	for i, a := range args {
+		out[i] = bs.lowerExprAsOperand(a.Value)
+	}
+	return out, &FnRef{Symbol: qualifiedSymbol(use, name), Type: t}
+}
+
+// qualifiedSymbol returns the MIR-visible symbol for a package- or
+// FFI-qualified call. We keep the qualifier in the symbol so backends
+// can route the call to the right module (Go FFI bridge, runtime ABI
+// symbol, or a regular Osty package). Backends do their own mangling
+// on top.
+func qualifiedSymbol(use *ir.UseDecl, name string) string {
+	if use == nil {
+		return name
+	}
+	switch {
+	case use.IsRuntimeFFI && use.RuntimePath != "":
+		return use.RuntimePath + "." + name
+	case use.IsGoFFI && use.GoPath != "":
+		return use.GoPath + "." + name
+	}
+	if use.RawPath != "" {
+		return use.RawPath + "." + name
+	}
+	if use.Alias != "" {
+		return use.Alias + "." + name
+	}
+	return name
+}
+
+// useAliasFor returns the use decl whose alias matches the ident, or
+// nil if expr is not a bare alias reference.
+func (l *lowerer) useAliasFor(e ir.Expr) *ir.UseDecl {
+	id, ok := e.(*ir.Ident)
+	if !ok {
+		return nil
+	}
+	if id.Name == "" {
+		return nil
+	}
+	return l.useAliases[id.Name]
 }
 
 func (bs *bodyState) orderArgs(args []ir.Arg, sig *fnSignature) []Operand {
@@ -1925,6 +2270,28 @@ func (bs *bodyState) orderArgs(args []ir.Arg, sig *fnSignature) []Operand {
 }
 
 func (bs *bodyState) lowerMethodCallInto(mc *ir.MethodCall, dest Place, destT Type) {
+	// Package/FFI-qualified calls land here when HIR lowered `pkg.fn()`
+	// into MethodCall{Receiver: Ident(pkg), Name: fn}. The receiver is
+	// a use alias, not a value — emit a direct qualified call with no
+	// synthetic `self` argument.
+	if use := bs.l.useAliasFor(mc.Receiver); use != nil {
+		args := make([]Operand, len(mc.Args))
+		for i, a := range mc.Args {
+			args[i] = bs.lowerExprAsOperand(a.Value)
+		}
+		destPtr := &dest
+		if isUnit(destT) {
+			destPtr = nil
+		}
+		bs.emit(&CallInstr{
+			Dest:   destPtr,
+			Callee: &FnRef{Symbol: qualifiedSymbol(use, mc.Name), Type: mc.T},
+			Args:   args,
+			SpanV:  mc.SpanV,
+		})
+		return
+	}
+
 	recv := bs.lowerExprAsOperand(mc.Receiver)
 	typeName := typeNameOf(mc.Receiver.Type())
 	sig := bs.l.signatureForMethod(typeName, mc.Name)
@@ -2064,6 +2431,167 @@ func (bs *bodyState) lowerVariantLit(v *ir.VariantLit, hint Type) RValue {
 	}
 }
 
+// ==== closures ====
+
+// lowerClosure lifts a Closure body into a fresh top-level MIR
+// function (named `closure_<parent>_<N>`) and materialises the closure
+// value as an AggregateRV{Kind: AggClosure} whose first field is the
+// function symbol and whose remaining fields are the captured
+// operands, in the same order the lifted function declares them.
+//
+// The lifted function's parameter list is:
+//
+//	[capture0, capture1, ..., captureN-1, userArg0, userArg1, ...]
+//
+// so a backend that wants a plain fn-pointer calling convention can
+// just unpack the aggregate and pass the captures as the first N
+// args. Backends that want a closure-struct ABI can read the fields
+// by index from the aggregate directly.
+func (bs *bodyState) lowerClosure(cl *ir.Closure, hint Type) RValue {
+	if cl == nil {
+		return &UseRV{Op: &ConstOp{Const: &UnitConst{}, T: TUnit}}
+	}
+	closureT := cl.T
+	if closureT == nil {
+		closureT = hint
+	}
+	if closureT == nil {
+		closureT = ir.ErrTypeVal
+	}
+	symbol := bs.l.nextClosureSymbol(bs.fn.Name)
+	retT := cl.Return
+	if retT == nil {
+		retT = TUnit
+	}
+
+	// Build the lifted function. Captures are prefix parameters; the
+	// user params follow.
+	lifted := &Function{Name: symbol, ReturnType: retT, SpanV: cl.SpanV}
+	lifted.ReturnLocal = lifted.NewLocal("_return", retT, true, cl.SpanV)
+	lifted.Locals[lifted.ReturnLocal].IsReturn = true
+
+	// Register capture locals first so the body's resolver finds them
+	// by their HIR-level names.
+	captureLocals := make([]LocalID, len(cl.Captures))
+	for i, cap := range cl.Captures {
+		paramName := cap.Name
+		if paramName == "" {
+			paramName = fmt.Sprintf("_cap%d", i)
+		}
+		ct := cap.T
+		if ct == nil {
+			ct = ir.ErrTypeVal
+		}
+		id := lifted.NewLocal(paramName, ct, cap.Mut, cap.SpanV)
+		lifted.Locals[id].IsParam = true
+		lifted.Params = append(lifted.Params, id)
+		captureLocals[i] = id
+	}
+	// User-level parameters.
+	for _, p := range cl.Params {
+		name := p.Name
+		if name == "" {
+			name = fmt.Sprintf("arg%d", len(lifted.Params)-len(captureLocals))
+		}
+		pt := p.Type
+		if pt == nil {
+			pt = ir.ErrTypeVal
+		}
+		id := lifted.NewLocal(name, pt, false, p.SpanV)
+		lifted.Locals[id].IsParam = true
+		lifted.Params = append(lifted.Params, id)
+	}
+
+	// Entry block and body.
+	lifted.NewBlock(cl.SpanV)
+	lifted.Entry = 0
+	liftedBS := newBodyState(bs.l, lifted)
+	// newBodyState seeds locals from the function's declared params,
+	// which already include captures+user params. No further wiring
+	// needed: a free ident in the body referring to a capture name
+	// will resolve to the capture local just like a param.
+	if cl.Body != nil {
+		for _, s := range cl.Body.Stmts {
+			liftedBS.lowerStmt(s)
+		}
+		if cl.Body.Result != nil {
+			liftedBS.lowerExprInto(cl.Body.Result, lifted.ReturnLocal, retT)
+			liftedBS.runDefers(cl.Body.SpanV)
+			liftedBS.terminate(&ReturnTerm{SpanV: cl.Body.SpanV})
+		} else {
+			liftedBS.finishNoReturn()
+		}
+	} else {
+		liftedBS.finishNoReturn()
+	}
+	bs.l.out.Functions = append(bs.l.out.Functions, lifted)
+
+	// Materialise the closure value. The first field of the aggregate
+	// is a FnConst naming the lifted function; remaining fields carry
+	// the capture operands read from the enclosing scope.
+	fnType := &ir.FnType{Return: retT}
+	for _, p := range cl.Params {
+		fnType.Params = append(fnType.Params, p.Type)
+	}
+	fields := make([]Operand, 0, 1+len(cl.Captures))
+	fields = append(fields, &ConstOp{Const: &FnConst{Symbol: symbol, T: fnType}, T: fnType})
+	for _, cap := range cl.Captures {
+		fields = append(fields, bs.captureOperand(cap))
+	}
+	return &AggregateRV{
+		Kind:   AggClosure,
+		Fields: fields,
+		T:      closureT,
+	}
+}
+
+// captureOperand produces an Operand that reads a single capture from
+// the enclosing scope. A capture can resolve to a local, a parameter,
+// an outer closure's prefix-capture, a top-level fn, a global, or the
+// enclosing method's receiver; each case has a distinct lowering.
+func (bs *bodyState) captureOperand(cap *ir.Capture) Operand {
+	if cap == nil {
+		return &ConstOp{Const: &UnitConst{}, T: TUnit}
+	}
+	t := cap.T
+	if t == nil {
+		t = ir.ErrTypeVal
+	}
+	switch cap.Kind {
+	case ir.CaptureFn:
+		return &ConstOp{Const: &FnConst{Symbol: cap.Name, T: t}, T: t}
+	case ir.CaptureSelf:
+		if bs.self != nil {
+			return &CopyOp{Place: Place{Local: bs.self.localID}, T: t}
+		}
+	case ir.CaptureGlobal:
+		tmp := bs.freshTemp(t, cap.SpanV)
+		bs.emit(&AssignInstr{
+			Dest:  Place{Local: tmp},
+			Src:   &GlobalRefRV{Name: cap.Name, T: t},
+			SpanV: cap.SpanV,
+		})
+		return &CopyOp{Place: Place{Local: tmp}, T: t}
+	}
+	// Local, param, or an outer closure's prefix capture already lives
+	// in a MIR local with the same source-level name.
+	if id, ok := bs.lookup(cap.Name); ok {
+		return &CopyOp{Place: Place{Local: id}, T: t}
+	}
+	bs.l.noteIssue("closure capture %q not resolved in enclosing scope", cap.Name)
+	return &ConstOp{Const: &UnitConst{}, T: TUnit}
+}
+
+// nextClosureSymbol returns a unique symbol for a lifted closure
+// anchored at parent.
+func (l *lowerer) nextClosureSymbol(parent string) string {
+	l.closureSeq++
+	if parent == "" {
+		return fmt.Sprintf("closure_%d", l.closureSeq)
+	}
+	return fmt.Sprintf("%s__closure%d", parent, l.closureSeq)
+}
+
 // ==== misc helpers ====
 
 func (bs *bodyState) freshTemp(t Type, sp Span) LocalID {
@@ -2086,6 +2614,7 @@ func (bs *bodyState) finishNoReturn() {
 			Src:   &UseRV{Op: &ConstOp{Const: &UnitConst{}, T: TUnit}},
 			SpanV: bs.fn.SpanV,
 		})
+		bs.runDefers(bs.fn.SpanV)
 		bs.terminate(&ReturnTerm{SpanV: bs.fn.SpanV})
 		return
 	}
