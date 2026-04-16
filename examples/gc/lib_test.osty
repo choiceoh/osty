@@ -2121,6 +2121,63 @@ fn testValidateHeapRejectsGlobalRootKeyNameMismatch() {
     let _ = testing.expectError(heap.validateHeap())
 }
 
+fn testValidateHeapRejectsGlobalRootDanglingObjectAndIdentityCorruption() {
+    let mut emptyHeap = newGcHeap(testGcConfig())
+    let emptyObject = emptyHeap.allocate(GcRecord, 16)
+    testing.assert(emptyHeap.installGlobalRoot("pkg.meta", "empty-name", GcPackageGlobalRoot, emptyObject))
+    assertValid(emptyHeap)
+
+    let oldEmptyKey = globalRootKey("pkg.meta", "empty-name")
+    if emptyHeap.globalRoots.containsKey(oldEmptyKey) {
+        let entry = emptyHeap.globalRoots[oldEmptyKey]
+        let mut next = entry
+        next.name = ""
+        let _ = emptyHeap.globalRoots.remove(oldEmptyKey)
+        let emptyKey = globalRootKey("pkg.meta", "")
+        emptyHeap.globalRoots.insert(emptyKey, next)
+    } else {
+        testing.fail("missing empty-name global root")
+    }
+
+    let _ = testing.expectError(emptyHeap.validateHeap())
+
+    let mut invalidIdHeap = newGcHeap(testGcConfig())
+    let invalidObject = invalidIdHeap.allocate(GcArray, 16)
+    testing.assert(
+        invalidIdHeap.installGlobalRoot("pkg.meta", "invalid-id", GcTopLevelLetRoot, invalidObject),
+    )
+    assertValid(invalidIdHeap)
+
+    let invalidKey = globalRootKey("pkg.meta", "invalid-id")
+    if invalidIdHeap.globalRoots.containsKey(invalidKey) {
+        let entry = invalidIdHeap.globalRoots[invalidKey]
+        let mut next = entry
+        next.objectId = -2
+        invalidIdHeap.globalRoots.insert(invalidKey, next)
+    } else {
+        testing.fail("missing invalid-id global root")
+    }
+
+    let _ = testing.expectError(invalidIdHeap.validateHeap())
+
+    let mut missingHeap = newGcHeap(testGcConfig())
+    let missingObject = missingHeap.allocate(GcClosure, 24)
+    testing.assert(missingHeap.installGlobalRoot("pkg.meta", "dangling", GcPackageGlobalRoot, missingObject))
+    assertValid(missingHeap)
+
+    let missingKey = globalRootKey("pkg.meta", "dangling")
+    if missingHeap.globalRoots.containsKey(missingKey) {
+        let entry = missingHeap.globalRoots[missingKey]
+        let mut next = entry
+        next.objectId = 999
+        missingHeap.globalRoots.insert(missingKey, next)
+    } else {
+        testing.fail("missing dangling global root")
+    }
+
+    let _ = testing.expectError(missingHeap.validateHeap())
+}
+
 fn testCrossPackageGlobalReferenceKeepsDependencyObject() {
     let mut heap = newGcHeap(testGcConfig())
     let appGlobal = heap.allocate(GcRecord, 16)
@@ -2382,6 +2439,149 @@ fn testValidateHeapRejectsSuspendedAsyncFrameMissingFrameObject() {
     let _ = testing.expectError(heap.validateHeap())
 }
 
+fn testValidateHeapRejectsAsyncFrameIdentityCorruption() {
+    let mut mismatchHeap = newGcHeap(testGcConfig())
+    let mismatchFrame = mismatchHeap.allocate(GcRuntimeFrame, 32)
+    let mismatchPayload = mismatchHeap.allocate(GcRecord, 16)
+    let mismatchRoots: List<Int> = [mismatchPayload]
+    testing.assert(mismatchHeap.suspendAsyncFrame(84, "task.key-mismatch", 4, mismatchFrame, mismatchRoots))
+    assertValid(mismatchHeap)
+
+    if mismatchHeap.asyncFrames.containsKey(84) {
+        let entry = mismatchHeap.asyncFrames[84]
+        let mut next = entry
+        next.taskId = 904
+        mismatchHeap.asyncFrames.insert(84, next)
+    } else {
+        testing.fail("missing mismatch async frame")
+    }
+
+    let _ = testing.expectError(mismatchHeap.validateHeap())
+
+    let mut idHeap = newGcHeap(testGcConfig())
+    let idFrame = idHeap.allocate(GcRuntimeFrame, 32)
+    let idPayload = idHeap.allocate(GcRecord, 16)
+    let idRoots: List<Int> = [idPayload]
+    testing.assert(idHeap.suspendAsyncFrame(85, "task.nonpositive-id", 5, idFrame, idRoots))
+    assertValid(idHeap)
+
+    if idHeap.asyncFrames.containsKey(85) {
+        let entry = idHeap.asyncFrames[85]
+        let mut next = entry
+        next.taskId = 0
+        let _ = idHeap.asyncFrames.remove(85)
+        idHeap.asyncFrames.insert(0, next)
+    } else {
+        testing.fail("missing id async frame")
+    }
+
+    let _ = testing.expectError(idHeap.validateHeap())
+
+    let mut nameHeap = newGcHeap(testGcConfig())
+    let nameFrame = nameHeap.allocate(GcRuntimeFrame, 32)
+    let namePayload = nameHeap.allocate(GcRecord, 16)
+    let nameRoots: List<Int> = [namePayload]
+    testing.assert(nameHeap.suspendAsyncFrame(86, "task.empty-name", 6, nameFrame, nameRoots))
+    assertValid(nameHeap)
+
+    if nameHeap.asyncFrames.containsKey(86) {
+        let entry = nameHeap.asyncFrames[86]
+        let mut next = entry
+        next.functionName = ""
+        nameHeap.asyncFrames.insert(86, next)
+    } else {
+        testing.fail("missing empty-name async frame")
+    }
+
+    let _ = testing.expectError(nameHeap.validateHeap())
+}
+
+fn testValidateHeapRejectsAsyncFrameRootListCorruption() {
+    let mut duplicateHeap = newGcHeap(testGcConfig())
+    let duplicateFrame = duplicateHeap.allocate(GcRuntimeFrame, 32)
+    let duplicatePayload = duplicateHeap.allocate(GcRecord, 16)
+    let duplicateRoots: List<Int> = [duplicatePayload]
+    testing.assert(
+        duplicateHeap.suspendAsyncFrame(87, "task.duplicate-roots", 7, duplicateFrame, duplicateRoots),
+    )
+    assertValid(duplicateHeap)
+
+    if duplicateHeap.asyncFrames.containsKey(87) {
+        let entry = duplicateHeap.asyncFrames[87]
+        let mut next = entry
+        next.roots = [duplicatePayload, duplicatePayload]
+        duplicateHeap.asyncFrames.insert(87, next)
+    } else {
+        testing.fail("missing duplicate-root async frame")
+    }
+
+    let _ = testing.expectError(duplicateHeap.validateHeap())
+
+    let mut nonPositiveHeap = newGcHeap(testGcConfig())
+    let nonPositiveFrame = nonPositiveHeap.allocate(GcRuntimeFrame, 32)
+    let nonPositivePayload = nonPositiveHeap.allocate(GcRecord, 16)
+    let nonPositiveRoots: List<Int> = [nonPositivePayload]
+    testing.assert(
+        nonPositiveHeap.suspendAsyncFrame(
+            88,
+            "task.nonpositive-root",
+            8,
+            nonPositiveFrame,
+            nonPositiveRoots,
+        ),
+    )
+    assertValid(nonPositiveHeap)
+
+    if nonPositiveHeap.asyncFrames.containsKey(88) {
+        let entry = nonPositiveHeap.asyncFrames[88]
+        let mut next = entry
+        next.roots = [0]
+        nonPositiveHeap.asyncFrames.insert(88, next)
+    } else {
+        testing.fail("missing nonpositive-root async frame")
+    }
+
+    let _ = testing.expectError(nonPositiveHeap.validateHeap())
+
+    let mut missingHeap = newGcHeap(testGcConfig())
+    let missingFrame = missingHeap.allocate(GcRuntimeFrame, 32)
+    let missingPayload = missingHeap.allocate(GcRecord, 16)
+    let missingRoots: List<Int> = [missingPayload]
+    testing.assert(missingHeap.suspendAsyncFrame(89, "task.missing-root", 9, missingFrame, missingRoots))
+    assertValid(missingHeap)
+
+    if missingHeap.asyncFrames.containsKey(89) {
+        let entry = missingHeap.asyncFrames[89]
+        let mut next = entry
+        next.roots = [999]
+        missingHeap.asyncFrames.insert(89, next)
+    } else {
+        testing.fail("missing missing-root async frame")
+    }
+
+    let _ = testing.expectError(missingHeap.validateHeap())
+}
+
+fn testValidateHeapRejectsSuspendedAsyncFrameRootObjectKindMismatch() {
+    let mut heap = newGcHeap(testGcConfig())
+    let frame = heap.allocate(GcRuntimeFrame, 32)
+    let payload = heap.allocate(GcRecord, 16)
+    let roots: List<Int> = [payload]
+    testing.assert(heap.suspendAsyncFrame(90, "task.bad-frame-kind", 10, frame, roots))
+    assertValid(heap)
+
+    if heap.objects.containsKey(frame) {
+        let entry = heap.objects[frame]
+        let mut next = entry
+        next.kind = GcRecord
+        heap.objects.insert(frame, next)
+    } else {
+        testing.fail("missing bad-frame-kind object")
+    }
+
+    let _ = testing.expectError(heap.validateHeap())
+}
+
 fn testAsyncFrameAddedDuringIncrementalMarkingIsShaded() {
     let mut heap = newGcHeap(testGcConfig())
     let root = heap.allocate(GcRecord, 16)
@@ -2575,6 +2775,31 @@ fn testValidateHeapRejectsAsyncFrameRootSlotMissingSnapshotRoot() {
     let _ = testing.expectError(heap.validateHeap())
 }
 
+fn testValidateHeapRejectsAsyncFrameRootSlotOwnerKindMismatch() {
+    let mut heap = newGcHeap(testGcConfig())
+    let frame = heap.allocate(GcRuntimeFrame, 32)
+    let payload = heap.allocate(GcClosure, 24)
+    let roots: List<Int> = []
+    testing.assert(heap.suspendAsyncFrame(91, "task.bad-slot-owner", 11, frame, roots))
+
+    match heap.lowerAsyncFrameRootStore(91, 1, "root.payload", payload) {
+        Some(_) -> {},
+        None -> testing.fail("async frame root lowering failed"),
+    }
+    assertValid(heap)
+
+    if heap.objects.containsKey(frame) {
+        let entry = heap.objects[frame]
+        let mut next = entry
+        next.kind = GcRecord
+        heap.objects.insert(frame, next)
+    } else {
+        testing.fail("missing bad-slot-owner object")
+    }
+
+    let _ = testing.expectError(heap.validateHeap())
+}
+
 fn testSafepointPlanValidatesPreciseLiveRoots() {
     let callRoots: List<GcLiveRootSlot> = [
         gcRootSlot(0, GcLocalRootSlot, "payload"),
@@ -2609,6 +2834,71 @@ fn testSafepointPlanValidatesPreciseLiveRoots() {
     testing.assert(plan.safepoints[1].mayAllocate)
     testing.assert(!(plan.safepoints[2].mayAllocate))
     testing.assert(plan.safepoints[3].maySuspend)
+}
+
+fn testSafepointPlanRejectsInvalidPlanAndPointMetadata() {
+    let validRoots: List<GcLiveRootSlot> = [gcRootSlot(0, GcLocalRootSlot, "payload")]
+    let validPoints: List<GcSafepoint> = [gcSafepoint(1, GcCallSafepoint, 4, 12, validRoots)]
+    let emptyNamePlan = gcSafepointPlan("", 2, validPoints)
+    let _ = testing.expectError(validateSafepointPlan(emptyNamePlan))
+
+    let negativePlan = gcSafepointPlan("negativeFrame", -1, [])
+    let _ = testing.expectError(validateSafepointPlan(negativePlan))
+
+    let duplicatePoints: List<GcSafepoint> = [
+        gcSafepoint(1, GcCallSafepoint, 4, 12, [gcRootSlot(0, GcLocalRootSlot, "left")]),
+        gcSafepoint(1, GcCallSafepoint, 6, 20, [gcRootSlot(1, GcLocalRootSlot, "right")]),
+    ]
+    let duplicatePlan = gcSafepointPlan("duplicateId", 3, duplicatePoints)
+    let _ = testing.expectError(validateSafepointPlan(duplicatePlan))
+
+    let mut negativeNode = gcSafepoint(1, GcCallSafepoint, 4, 12, [gcRootSlot(0, GcLocalRootSlot, "payload")])
+    negativeNode.irNode = -1
+    let negativeNodePlan = gcSafepointPlan("negativeNode", 2, [negativeNode])
+    let _ = testing.expectError(validateSafepointPlan(negativeNodePlan))
+
+    let mut negativeOffset = gcSafepoint(
+        1,
+        GcCallSafepoint,
+        4,
+        12,
+        [gcRootSlot(0, GcLocalRootSlot, "payload")],
+    )
+    negativeOffset.instructionOffset = -1
+    let negativeOffsetPlan = gcSafepointPlan("negativeOffset", 2, [negativeOffset])
+    let _ = testing.expectError(validateSafepointPlan(negativeOffsetPlan))
+
+    let mut noCollect = gcSafepoint(1, GcCallSafepoint, 4, 12, [gcRootSlot(0, GcLocalRootSlot, "payload")])
+    noCollect.mayCollect = false
+    let noCollectPlan = gcSafepointPlan("noCollect", 2, [noCollect])
+    let _ = testing.expectError(validateSafepointPlan(noCollectPlan))
+
+    let mut noAllocate = gcSafepoint(
+        1,
+        GcAllocationSafepoint,
+        5,
+        16,
+        [gcRootSlot(0, GcLocalRootSlot, "payload")],
+    )
+    noAllocate.mayAllocate = false
+    let noAllocatePlan = gcSafepointPlan("noAllocate", 2, [noAllocate])
+    let _ = testing.expectError(validateSafepointPlan(noAllocatePlan))
+
+    let mut noSuspend = gcSafepoint(
+        1,
+        GcAsyncYieldSafepoint,
+        6,
+        20,
+        [gcRootSlot(0, GcLocalRootSlot, "payload")],
+    )
+    noSuspend.maySuspend = false
+    let noSuspendPlan = gcSafepointPlan("noSuspend", 2, [noSuspend])
+    let _ = testing.expectError(validateSafepointPlan(noSuspendPlan))
+
+    let mut badRoot = gcRootSlot(0, GcLocalRootSlot, "payload")
+    badRoot.derivedFrom = 1
+    let badRootPlan = gcSafepointPlan("badRootMetadata", 2, [gcSafepoint(1, GcCallSafepoint, 7, 24, [badRoot])])
+    let _ = testing.expectError(validateSafepointPlan(badRootPlan))
 }
 
 fn testSafepointPlanRejectsMissingStackMap() {
@@ -2727,6 +3017,37 @@ fn testStackMapRejectsIncompatibleRootSlotKindAndDerivedBaseMismatch() {
     let _ = testing.expectError(buildGcStackMap(basePlan, baseLayout, 8))
 }
 
+fn testStackMapRejectsDerivedFrameSlotPointerAndBaseCorruption() {
+    let pointerRoots: List<GcLiveRootSlot> = [
+        gcRootSlot(0, GcLocalRootSlot, "payload"),
+        gcDerivedRootSlot(2, "payload.field", 0),
+    ]
+    let pointerPoints: List<GcSafepoint> = [gcSafepoint(1, GcCallSafepoint, 9, 32, pointerRoots)]
+    let pointerPlan = gcSafepointPlan("badDerivedPointer", 4, pointerPoints)
+    let mut badPointerSlot = gcFrameSlot(2, GcFrameTupleFieldSlot, "payload.field", 16, false)
+    badPointerSlot.derivedFrom = 0
+    let pointerLayout: List<GcFrameSlot> = [
+        gcFrameSlot(0, GcFrameLocalSlot, "payload", 0, true),
+        badPointerSlot,
+    ]
+    let _ = testing.expectError(buildGcStackMap(pointerPlan, pointerLayout, 8))
+
+    let baseRoots: List<GcLiveRootSlot> = [
+        gcRootSlot(0, GcLocalRootSlot, "payload"),
+        gcDerivedRootSlot(2, "payload.field", 1),
+    ]
+    let basePoints: List<GcSafepoint> = [gcSafepoint(1, GcCallSafepoint, 10, 36, baseRoots)]
+    let basePlan = gcSafepointPlan("badDerivedBase", 4, basePoints)
+    let mut missingBaseSlot = gcFrameSlot(2, GcFrameTupleFieldSlot, "payload.field", 16, true)
+    missingBaseSlot.derivedFrom = 1
+    let baseLayout: List<GcFrameSlot> = [
+        gcFrameSlot(0, GcFrameLocalSlot, "payload", 0, true),
+        gcFrameSlot(1, GcFrameLocalSlot, "scalar.base", 8, false),
+        missingBaseSlot,
+    ]
+    let _ = testing.expectError(buildGcStackMap(basePlan, baseLayout, 8))
+}
+
 fn testStackMapPreservesDeferQuestionAndEarlyReturnRoots() {
     let roots: List<GcLiveRootSlot> = [
         gcRootSlot(0, GcLocalRootSlot, "defer.env"),
@@ -2772,6 +3093,28 @@ fn testStackMapPreservesDeferQuestionAndEarlyReturnRoots() {
         gcPreservedFrameSlot(2, GcFrameReturnSlot, "return.value", 16, true, false, false, true),
     ]
     let _ = testing.expectError(buildGcStackMap(badPlan, badLayout, 4))
+
+    let badDeferRoots: List<GcLiveRootSlot> = [
+        gcRootSlot(1, GcLocalRootSlot, "question.value"),
+        gcRootSlot(2, GcLocalRootSlot, "return.value"),
+    ]
+    let mut badDeferPoint = gcSafepoint(1, GcCallSafepoint, 12, 44, badDeferRoots)
+    badDeferPoint.runsDefer = true
+    badDeferPoint.questionExit = true
+    badDeferPoint.earlyReturn = true
+    let badDeferPlan = gcSafepointPlan("cleanupPathsBadDefer", 4, [badDeferPoint])
+    let _ = testing.expectError(buildGcStackMap(badDeferPlan, badLayout, 4))
+
+    let badReturnRoots: List<GcLiveRootSlot> = [
+        gcRootSlot(0, GcLocalRootSlot, "defer.env"),
+        gcRootSlot(1, GcLocalRootSlot, "question.value"),
+    ]
+    let mut badReturnPoint = gcSafepoint(1, GcCallSafepoint, 12, 44, badReturnRoots)
+    badReturnPoint.runsDefer = true
+    badReturnPoint.questionExit = true
+    badReturnPoint.earlyReturn = true
+    let badReturnPlan = gcSafepointPlan("cleanupPathsBadReturn", 4, [badReturnPoint])
+    let _ = testing.expectError(buildGcStackMap(badReturnPlan, badLayout, 4))
 }
 
 fn testRandomGraphStressMatchesReferenceModel() {
