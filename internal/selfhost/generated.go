@@ -28000,7 +28000,7 @@ func frontCheckIterableElement(typeName string) string {
 	head := frontCheckTypeHead(typeName)
 	_ = head
 	// Osty: /tmp/selfhost_merged.osty:10927:5
-	if head == "List" || head == "Range" || head == "Option" {
+	if head == "List" || head == "Range" || head == "Option" || head == "Set" {
 		// Osty: /tmp/selfhost_merged.osty:10928:9
 		return frontCheckGenericArgAt(typeName, 0)
 	}
@@ -31984,13 +31984,24 @@ func frontCheckPatternIrrefutable(file *AstFile, patIdx int) bool {
 	// Osty: /tmp/selfhost_merged.osty:12736:5
 	pat := astArenaNodeAt(file.arena, patIdx)
 	_ = pat
+	if ostyEqual(pat.kind, AstNodeKind(&AstNodeKind_AstNTuple{})) {
+		for _, child := range pat.children {
+			if !(frontCheckPatternIrrefutable(file, child)) {
+				return false
+			}
+		}
+		return true
+	}
 	// Osty: /tmp/selfhost_merged.osty:12737:5
-	if !ostyEqual(pat.kind, AstNodeKind(&AstNodeKind_AstNPattern{})) {
+	kind := frontCheckPatternKind(pat)
+	_ = kind
+	// Osty: /tmp/selfhost_merged.osty:12738:5
+	if kind == "" {
 		// Osty: /tmp/selfhost_merged.osty:12738:9
 		return true
 	}
 	// Osty: /tmp/selfhost_merged.osty:12740:5
-	if frontCheckPatternKind(pat) == "wildcard" {
+	if kind == "wildcard" {
 		// Osty: /tmp/selfhost_merged.osty:12741:9
 		return true
 	}
@@ -32000,7 +32011,7 @@ func frontCheckPatternIrrefutable(file *AstFile, patIdx int) bool {
 		return true
 	}
 	// Osty: /tmp/selfhost_merged.osty:12746:5
-	if frontCheckPatternKind(pat) == "tuple" {
+	if kind == "tuple" {
 		// Osty: /tmp/selfhost_merged.osty:12747:9
 		for _, child := range pat.children {
 			// Osty: /tmp/selfhost_merged.osty:12748:13
@@ -32013,7 +32024,7 @@ func frontCheckPatternIrrefutable(file *AstFile, patIdx int) bool {
 		return true
 	}
 	// Osty: /tmp/selfhost_merged.osty:12754:5
-	if frontCheckPatternKind(pat) == "struct" {
+	if kind == "struct" {
 		// Osty: /tmp/selfhost_merged.osty:12755:9
 		for _, fieldIdx := range pat.children {
 			// Osty: /tmp/selfhost_merged.osty:12756:13
@@ -32056,8 +32067,32 @@ func frontCheckBindPattern(file *AstFile, env *FrontCheckEnv, patIdx int, typeNa
 		// Osty: /tmp/selfhost_merged.osty:12778:9
 		return
 	}
+	if ostyEqual(pat.kind, AstNodeKind(&AstNodeKind_AstNTuple{})) {
+		elems := frontCheckTupleElems(typeName)
+		_ = elems
+		i := 0
+		_ = i
+		for _, child := range pat.children {
+			frontCheckBindPattern(file, env, child, frontCheckStringAt(elems, i), mutable)
+			func() {
+				var _cur2196 int = i
+				var _rhs2197 int = 1
+				if _rhs2197 > 0 && _cur2196 > math.MaxInt-_rhs2197 {
+					panic("integer overflow")
+				}
+				if _rhs2197 < 0 && _cur2196 < math.MinInt-_rhs2197 {
+					panic("integer overflow")
+				}
+				i = _cur2196 + _rhs2197
+			}()
+		}
+		return
+	}
 	// Osty: /tmp/selfhost_merged.osty:12780:5
-	if !ostyEqual(pat.kind, AstNodeKind(&AstNodeKind_AstNPattern{})) {
+	kind := frontCheckPatternKind(pat)
+	_ = kind
+	// Osty: /tmp/selfhost_merged.osty:12781:5
+	if kind == "" {
 		// Osty: /tmp/selfhost_merged.osty:12781:9
 		return
 	}
@@ -32069,7 +32104,7 @@ func frontCheckBindPattern(file *AstFile, env *FrontCheckEnv, patIdx int, typeNa
 		return
 	}
 	// Osty: /tmp/selfhost_merged.osty:12787:5
-	if frontCheckPatternKind(pat) == "tuple" {
+	if kind == "tuple" {
 		// Osty: /tmp/selfhost_merged.osty:12788:9
 		elems := frontCheckTupleElems(typeName)
 		_ = elems
@@ -32143,8 +32178,47 @@ func frontCheckPatternCompatible(file *AstFile, env *FrontCheckEnv, patIdx int, 
 	// Osty: /tmp/selfhost_merged.osty:12815:5
 	pat := astArenaNodeAt(file.arena, patIdx)
 	_ = pat
+	if ostyEqual(pat.kind, AstNodeKind(&AstNodeKind_AstNTuple{})) {
+		scrutineeResolved := frontCheckResolveAliasesDeep(env, scrutineeType)
+		_ = scrutineeResolved
+		elems := frontCheckTupleElems(scrutineeResolved)
+		_ = elems
+		if frontCheckStringCount(elems) != frontCheckIntCount(pat.children) {
+			env.errors = func() int {
+				var _p2208 int = env.errors
+				var _rhs2209 int = 1
+				if _rhs2209 > 0 && _p2208 > math.MaxInt-_rhs2209 {
+					panic("integer overflow")
+				}
+				if _rhs2209 < 0 && _p2208 < math.MinInt-_rhs2209 {
+					panic("integer overflow")
+				}
+				return _p2208 + _rhs2209
+			}()
+		}
+		i := 0
+		_ = i
+		for _, child := range pat.children {
+			frontCheckPatternCompatible(file, env, child, frontCheckStringAt(elems, i))
+			func() {
+				var _cur2210 int = i
+				var _rhs2211 int = 1
+				if _rhs2211 > 0 && _cur2210 > math.MaxInt-_rhs2211 {
+					panic("integer overflow")
+				}
+				if _rhs2211 < 0 && _cur2210 < math.MinInt-_rhs2211 {
+					panic("integer overflow")
+				}
+				i = _cur2210 + _rhs2211
+			}()
+		}
+		return
+	}
 	// Osty: /tmp/selfhost_merged.osty:12816:5
-	if !ostyEqual(pat.kind, AstNodeKind(&AstNodeKind_AstNPattern{})) {
+	kind := frontCheckPatternKind(pat)
+	_ = kind
+	// Osty: /tmp/selfhost_merged.osty:12817:5
+	if kind == "" {
 		// Osty: /tmp/selfhost_merged.osty:12817:9
 		return
 	}
@@ -32152,7 +32226,7 @@ func frontCheckPatternCompatible(file *AstFile, env *FrontCheckEnv, patIdx int, 
 	scrutineeResolved := frontCheckResolveAliasesDeep(env, scrutineeType)
 	_ = scrutineeResolved
 	// Osty: /tmp/selfhost_merged.osty:12820:5
-	if frontCheckPatternKind(pat) == "wildcard" {
+	if kind == "wildcard" {
 		// Osty: /tmp/selfhost_merged.osty:12821:9
 		return
 	}
@@ -32164,7 +32238,7 @@ func frontCheckPatternCompatible(file *AstFile, env *FrontCheckEnv, patIdx int, 
 		return
 	}
 	// Osty: /tmp/selfhost_merged.osty:12827:5
-	if frontCheckPatternKind(pat) == "literal" {
+	if kind == "literal" {
 		// Osty: /tmp/selfhost_merged.osty:12828:9
 		litType := frontCheckPatternLiteralType(pat)
 		_ = litType
@@ -32187,7 +32261,7 @@ func frontCheckPatternCompatible(file *AstFile, env *FrontCheckEnv, patIdx int, 
 		return
 	}
 	// Osty: /tmp/selfhost_merged.osty:12834:5
-	if frontCheckPatternKind(pat) == "negLiteral" {
+	if kind == "negLiteral" {
 		// Osty: /tmp/selfhost_merged.osty:12835:9
 		inner := astArenaNodeAt(file.arena, pat.left)
 		_ = inner
@@ -32230,7 +32304,7 @@ func frontCheckPatternCompatible(file *AstFile, env *FrontCheckEnv, patIdx int, 
 		return
 	}
 	// Osty: /tmp/selfhost_merged.osty:12846:5
-	if frontCheckPatternKind(pat) == "range" {
+	if kind == "range" {
 		// Osty: /tmp/selfhost_merged.osty:12847:9
 		if !(frontCheckIsOrdered(scrutineeResolved)) {
 			// Osty: /tmp/selfhost_merged.osty:12848:16
@@ -32259,7 +32333,7 @@ func frontCheckPatternCompatible(file *AstFile, env *FrontCheckEnv, patIdx int, 
 		return
 	}
 	// Osty: /tmp/selfhost_merged.osty:12857:5
-	if frontCheckPatternKind(pat) == "tuple" {
+	if kind == "tuple" {
 		// Osty: /tmp/selfhost_merged.osty:12858:9
 		elems := frontCheckTupleElems(scrutineeResolved)
 		_ = elems
@@ -32350,7 +32424,7 @@ func frontCheckPatternCompatible(file *AstFile, env *FrontCheckEnv, patIdx int, 
 		return
 	}
 	// Osty: /tmp/selfhost_merged.osty:12883:5
-	if frontCheckPatternKind(pat) == "struct" {
+	if kind == "struct" {
 		// Osty: /tmp/selfhost_merged.osty:12884:9
 		structName := frontCheckPatternName(pat)
 		_ = structName
@@ -32414,7 +32488,7 @@ func frontCheckPatternCompatible(file *AstFile, env *FrontCheckEnv, patIdx int, 
 		return
 	}
 	// Osty: /tmp/selfhost_merged.osty:12906:5
-	if frontCheckPatternKind(pat) == "or" {
+	if kind == "or" {
 		// Osty: /tmp/selfhost_merged.osty:12907:9
 		mark := frontCheckBindingCount(env.bindings)
 		_ = mark
@@ -32918,13 +32992,18 @@ func frontCheckStdMethodCall(file *AstFile, env *FrontCheckEnv, callee *AstNode,
 		return frontCheckMapMethod(file, env, receiver, name, args)
 	}
 	// Osty: /tmp/selfhost_merged.osty:13117:5
-	if head == "Option" {
+	if head == "Set" {
 		// Osty: /tmp/selfhost_merged.osty:13118:9
-		return frontCheckOptionMethod(file, env, receiver, name, args)
+		return frontCheckSetMethod(file, env, receiver, name, args)
 	}
 	// Osty: /tmp/selfhost_merged.osty:13120:5
-	if head == "Result" {
+	if head == "Option" {
 		// Osty: /tmp/selfhost_merged.osty:13121:9
+		return frontCheckOptionMethod(file, env, receiver, name, args)
+	}
+	// Osty: /tmp/selfhost_merged.osty:13123:5
+	if head == "Result" {
+		// Osty: /tmp/selfhost_merged.osty:13124:9
 		return frontCheckResultMethod(file, env, receiver, name, args)
 	}
 	// Osty: /tmp/selfhost_merged.osty:13123:5
@@ -33049,10 +33128,28 @@ func frontCheckListMethod(file *AstFile, env *FrontCheckEnv, callee *AstNode, re
 		// Osty: /tmp/selfhost_merged.osty:13189:9
 		return acc
 	}
+	// Osty: /tmp/selfhost_merged.osty:13191:5
+	if name == "sorted" {
+		// Osty: /tmp/selfhost_merged.osty:13192:9
+		frontCheckExpectArgCount(env, args, 0)
+		// Osty: /tmp/selfhost_merged.osty:13193:9
+		return recvType
+	}
+	// Osty: /tmp/selfhost_merged.osty:13195:5
+	if name == "toSet" {
+		// Osty: /tmp/selfhost_merged.osty:13196:9
+		frontCheckExpectArgCount(env, args, 0)
+		// Osty: /tmp/selfhost_merged.osty:13197:9
+		return frontCheckOneArgType("Set", elem)
+	}
+	if name == "clear" {
+		frontCheckExpectArgCount(env, args, 0)
+		return "()"
+	}
 	return "Invalid"
 }
 
-// Osty: /tmp/selfhost_merged.osty:13194:1
+// Osty: /tmp/selfhost_merged.osty:13201:1
 func frontCheckMapMethod(file *AstFile, env *FrontCheckEnv, recvType string, name string, args []int) string {
 	// Osty: /tmp/selfhost_merged.osty:13195:5
 	key := frontCheckGenericArgAt(recvType, 0)
@@ -33117,10 +33214,74 @@ func frontCheckMapMethod(file *AstFile, env *FrontCheckEnv, recvType string, nam
 		// Osty: /tmp/selfhost_merged.osty:13227:9
 		return frontCheckOneArgType("List", val)
 	}
+	if name == "clear" {
+		frontCheckExpectArgCount(env, args, 0)
+		return "()"
+	}
 	return "Invalid"
 }
 
-// Osty: /tmp/selfhost_merged.osty:13232:1
+// Osty: /tmp/selfhost_merged.osty:13239:1
+func frontCheckSetMethod(file *AstFile, env *FrontCheckEnv, recvType string, name string, args []int) string {
+	// Osty: /tmp/selfhost_merged.osty:13240:5
+	elem := frontCheckGenericArgAt(recvType, 0)
+	_ = elem
+	// Osty: /tmp/selfhost_merged.osty:13241:5
+	if name == "len" {
+		// Osty: /tmp/selfhost_merged.osty:13242:9
+		frontCheckExpectArgCount(env, args, 0)
+		// Osty: /tmp/selfhost_merged.osty:13243:9
+		return "Int"
+	}
+	// Osty: /tmp/selfhost_merged.osty:13245:5
+	if name == "isEmpty" {
+		// Osty: /tmp/selfhost_merged.osty:13246:9
+		frontCheckExpectArgCount(env, args, 0)
+		// Osty: /tmp/selfhost_merged.osty:13247:9
+		return "Bool"
+	}
+	// Osty: /tmp/selfhost_merged.osty:13249:5
+	if name == "contains" {
+		// Osty: /tmp/selfhost_merged.osty:13250:9
+		frontCheckExpectArgCount(env, args, 1)
+		// Osty: /tmp/selfhost_merged.osty:13251:9
+		frontCheckExpectAssignable(env, elem, frontCheckExprHint(file, env, frontCheckIntAt(args, 0), elem))
+		// Osty: /tmp/selfhost_merged.osty:13252:9
+		return "Bool"
+	}
+	// Osty: /tmp/selfhost_merged.osty:13254:5
+	if name == "insert" {
+		// Osty: /tmp/selfhost_merged.osty:13255:9
+		frontCheckExpectArgCount(env, args, 1)
+		// Osty: /tmp/selfhost_merged.osty:13256:9
+		frontCheckExpectAssignable(env, elem, frontCheckExprHint(file, env, frontCheckIntAt(args, 0), elem))
+		// Osty: /tmp/selfhost_merged.osty:13257:9
+		return "()"
+	}
+	// Osty: /tmp/selfhost_merged.osty:13259:5
+	if name == "remove" {
+		// Osty: /tmp/selfhost_merged.osty:13260:9
+		frontCheckExpectArgCount(env, args, 1)
+		// Osty: /tmp/selfhost_merged.osty:13261:9
+		frontCheckExpectAssignable(env, elem, frontCheckExprHint(file, env, frontCheckIntAt(args, 0), elem))
+		// Osty: /tmp/selfhost_merged.osty:13262:9
+		return "Bool"
+	}
+	// Osty: /tmp/selfhost_merged.osty:13264:5
+	if name == "toList" {
+		// Osty: /tmp/selfhost_merged.osty:13265:9
+		frontCheckExpectArgCount(env, args, 0)
+		// Osty: /tmp/selfhost_merged.osty:13266:9
+		return frontCheckOneArgType("List", elem)
+	}
+	if name == "clear" {
+		frontCheckExpectArgCount(env, args, 0)
+		return "()"
+	}
+	return "Invalid"
+}
+
+// Osty: /tmp/selfhost_merged.osty:13271:1
 func frontCheckOptionMethod(file *AstFile, env *FrontCheckEnv, recvType string, name string, args []int) string {
 	// Osty: /tmp/selfhost_merged.osty:13233:5
 	elem := frontCheckGenericArgAt(recvType, 0)

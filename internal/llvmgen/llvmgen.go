@@ -215,6 +215,7 @@ func Generate(file *ast.File, opts Options) ([]byte, error) {
 		return nil, err
 	}
 	g.functions = decls.functionsByName
+	g.methods = decls.methodsByType
 	g.structs = decls.structsOrdered
 	g.structsByName = decls.structsByName
 	g.structsByType = decls.structsByType
@@ -266,6 +267,7 @@ type generator struct {
 	sourcePath       string
 	target           string
 	functions        map[string]*fnSig
+	methods          map[string]map[string]*fnSig
 	structs          []*structInfo
 	structsByName    map[string]*structInfo
 	structsByType    map[string]*structInfo
@@ -311,6 +313,7 @@ type scopeState struct {
 type declarations struct {
 	functionsOrdered []*fnSig
 	functionsByName  map[string]*fnSig
+	methodsByType    map[string]map[string]*fnSig
 	structsOrdered   []*structInfo
 	structsByName    map[string]*structInfo
 	structsByType    map[string]*structInfo
@@ -321,6 +324,9 @@ type declarations struct {
 
 type fnSig struct {
 	name           string
+	irName         string
+	receiverType   string
+	receiverMut    bool
 	ret            string
 	retListElemTyp string
 	params         []paramInfo
@@ -330,7 +336,10 @@ type fnSig struct {
 type paramInfo struct {
 	name        string
 	typ         string
+	irTyp       string
 	listElemTyp string
+	mutable     bool
+	byRef       bool
 }
 
 type structInfo struct {
@@ -410,6 +419,7 @@ type runtimeDecl struct {
 func collectDeclarations(file *ast.File) (*declarations, error) {
 	out := &declarations{
 		functionsByName: map[string]*fnSig{},
+		methodsByType:   map[string]map[string]*fnSig{},
 		structsByName:   map[string]*structInfo{},
 		structsByType:   map[string]*structInfo{},
 		enumsByName:     map[string]*enumInfo{},
@@ -449,7 +459,7 @@ func collectDeclarations(file *ast.File) (*declarations, error) {
 		}
 	}
 	for _, info := range out.structsOrdered {
-		if err := collectStructFields(info, out.structsByName); err != nil {
+		if err := collectStructFields(info, out.structsByName, out.enumsByName); err != nil {
 			return nil, err
 		}
 	}
@@ -458,7 +468,7 @@ func collectDeclarations(file *ast.File) (*declarations, error) {
 		if !ok {
 			continue
 		}
-		sig, err := signatureOf(fn, out.structsByName, out.enumsByName)
+		sig, err := signatureOf(fn, "", out.structsByName, out.enumsByName)
 		if err != nil {
 			return nil, err
 		}
@@ -468,7 +478,40 @@ func collectDeclarations(file *ast.File) (*declarations, error) {
 		out.functionsOrdered = append(out.functionsOrdered, sig)
 		out.functionsByName[sig.name] = sig
 	}
+	for _, info := range out.structsOrdered {
+		if err := collectMethodDeclarations(out, info.name, info.typ, info.decl.Methods, out.structsByName, out.enumsByName); err != nil {
+			return nil, err
+		}
+	}
+	for _, info := range out.enumsOrdered {
+		if err := collectMethodDeclarations(out, info.name, info.typ, info.decl.Methods, out.structsByName, out.enumsByName); err != nil {
+			return nil, err
+		}
+	}
 	return out, nil
+}
+
+func collectMethodDeclarations(out *declarations, ownerName, ownerType string, methods []*ast.FnDecl, structs map[string]*structInfo, enums map[string]*enumInfo) error {
+	if out == nil {
+		return unsupported("source-layout", "nil declarations")
+	}
+	for _, fn := range methods {
+		sig, err := signatureOf(fn, ownerName, structs, enums)
+		if err != nil {
+			return err
+		}
+		methodsByName := out.methodsByType[ownerType]
+		if methodsByName == nil {
+			methodsByName = map[string]*fnSig{}
+			out.methodsByType[ownerType] = methodsByName
+		}
+		if _, exists := methodsByName[sig.name]; exists {
+			return unsupportedf("source-layout", "duplicate method %q on %q", sig.name, ownerName)
+		}
+		out.functionsOrdered = append(out.functionsOrdered, sig)
+		methodsByName[sig.name] = sig
+	}
+	return nil
 }
 
 func collectRuntimeFFI(file *ast.File, structs map[string]*structInfo, enums map[string]*enumInfo) map[string]map[string]*runtimeFFIFunction {
@@ -663,7 +706,7 @@ func collectStructShell(decl *ast.StructDecl) (*structInfo, error) {
 	}, nil
 }
 
-func collectStructFields(info *structInfo, structs map[string]*structInfo) error {
+func collectStructFields(info *structInfo, structs map[string]*structInfo, enums map[string]*enumInfo) error {
 	if info == nil || info.decl == nil {
 		return unsupported("source-layout", "nil struct")
 	}
@@ -678,7 +721,7 @@ func collectStructFields(info *structInfo, structs map[string]*structInfo) error
 			diag := llvmStructFieldDiagnostic(info.name, field.Name, true, false, true, false, "")
 			return unsupported(diag.kind, diag.message)
 		}
-		typ, err := llvmType(field.Type, structs, nil)
+		typ, err := llvmType(field.Type, structs, enums)
 		if err != nil {
 			diag := llvmStructFieldDiagnostic(info.name, field.Name, true, false, false, false, unsupportedMessage(err))
 			return unsupported(diag.kind, diag.message)
@@ -688,7 +731,7 @@ func collectStructFields(info *structInfo, structs map[string]*structInfo) error
 			return unsupported(diag.kind, diag.message)
 		}
 		fieldInfo := fieldInfo{name: field.Name, typ: typ, index: i}
-		if listElemTyp, ok, err := llvmListElementType(field.Type, structs, nil); err != nil {
+		if listElemTyp, ok, err := llvmListElementType(field.Type, structs, enums); err != nil {
 			diag := llvmStructFieldDiagnostic(info.name, field.Name, true, false, false, false, unsupportedMessage(err))
 			return unsupported(diag.kind, diag.message)
 		} else if ok {
@@ -773,14 +816,14 @@ func llvmEnumPayloadType(t ast.Type) (string, error) {
 	return "", unsupported("type-system", "LLVM enum payloads currently support Int, Float, or String only")
 }
 
-func signatureOf(fn *ast.FnDecl, structs map[string]*structInfo, enums map[string]*enumInfo) (*fnSig, error) {
+func signatureOf(fn *ast.FnDecl, ownerName string, structs map[string]*structInfo, enums map[string]*enumInfo) (*fnSig, error) {
 	if fn == nil {
 		return nil, unsupported("source-layout", "nil function")
 	}
 	if diag := llvmFunctionHeaderDiagnostic(
 		fn.Name,
 		llvmIsIdent(fn.Name),
-		fn.Recv != nil,
+		false,
 		len(fn.Generics),
 		fn.Body != nil,
 		fn.Name == "main",
@@ -789,7 +832,23 @@ func signatureOf(fn *ast.FnDecl, structs map[string]*structInfo, enums map[strin
 	); diag.kind != "" {
 		return nil, unsupported(diag.kind, diag.message)
 	}
-	sig := &fnSig{name: fn.Name, decl: fn}
+	sig := &fnSig{name: fn.Name, irName: fn.Name, decl: fn}
+	if fn.Recv != nil {
+		ownerType, ok := llvmMethodOwnerType(ownerName, structs, enums)
+		if !ok {
+			return nil, unsupportedf("type-system", "unknown method receiver owner %q", ownerName)
+		}
+		sig.irName = llvmMethodIRName(ownerName, fn.Name)
+		sig.receiverType = ownerType
+		sig.receiverMut = fn.Recv.Mut
+		sig.params = append(sig.params, paramInfo{
+			name:    "self",
+			typ:     ownerType,
+			irTyp:   llvmMethodReceiverIRType(ownerType, fn.Recv.Mut),
+			mutable: fn.Recv.Mut,
+			byRef:   fn.Recv.Mut,
+		})
+	}
 	if fn.Name == "main" {
 		return sig, nil
 	}
@@ -870,7 +929,13 @@ func (g *generator) emitUserFunction(sig *fnSig) (string, error) {
 			v.gcManaged = true
 		}
 		v.rootPaths = g.rootPathsForType(p.typ)
-		g.bindNamedLocal(p.name, v, false)
+		if p.byRef {
+			v.ptr = true
+			v.mutable = p.mutable
+			g.bindLocal(p.name, v)
+			continue
+		}
+		g.bindNamedLocal(p.name, v, p.mutable)
 	}
 	if sig.ret == "void" {
 		if err := g.emitBlock(sig.decl.Body.Stmts); err != nil {
@@ -885,7 +950,7 @@ func (g *generator) emitUserFunction(sig *fnSig) (string, error) {
 			return "", err
 		}
 	}
-	return g.renderFunction(sig.ret, sig.name, sig.params), nil
+	return g.renderFunction(sig.ret, sig.irName, sig.params), nil
 }
 
 func (g *generator) beginFunction() {
@@ -1087,26 +1152,83 @@ func (g *generator) emitAssign(stmt *ast.AssignStmt) error {
 		return unsupported("statement", "multi-target assignment")
 	}
 	target, ok := stmt.Targets[0].(*ast.Ident)
+	if ok {
+		slot, ok := g.lookupLocal(target.Name)
+		if !ok {
+			return unsupportedf("name", "assignment to unknown identifier %q", target.Name)
+		}
+		if !slot.mutable {
+			return unsupportedf("statement", "assignment to immutable identifier %q", target.Name)
+		}
+		v, err := g.emitExprWithListHint(stmt.Value, slot.listElemTyp)
+		if err != nil {
+			return err
+		}
+		if v.typ != slot.typ {
+			return unsupportedf("type-system", "assignment to %q type %s, value %s", target.Name, slot.typ, v.typ)
+		}
+		emitter := g.toOstyEmitter()
+		llvmStore(emitter, toOstyValue(slot), toOstyValue(v))
+		g.postGCWriteIfPointer(emitter, slot, v)
+		g.takeOstyEmitter(emitter)
+		return nil
+	}
+	field, ok := stmt.Targets[0].(*ast.FieldExpr)
 	if !ok {
 		return unsupportedf("statement", "assignment target %T", stmt.Targets[0])
 	}
-	slot, ok := g.lookupLocal(target.Name)
+	return g.emitFieldAssign(field, stmt.Value)
+}
+
+func (g *generator) emitFieldAssign(target *ast.FieldExpr, rhs ast.Expr) error {
+	if target == nil {
+		return unsupported("statement", "nil field assignment target")
+	}
+	if target.IsOptional {
+		return unsupported("statement", "optional field assignment is not supported")
+	}
+	baseIdent, ok := target.X.(*ast.Ident)
 	if !ok {
-		return unsupportedf("name", "assignment to unknown identifier %q", target.Name)
+		return unsupportedf("statement", "field assignment base %T", target.X)
 	}
-	if !slot.mutable {
-		return unsupportedf("statement", "assignment to immutable identifier %q", target.Name)
+	slot, ok := g.lookupLocal(baseIdent.Name)
+	if !ok {
+		return unsupportedf("name", "assignment to unknown identifier %q", baseIdent.Name)
 	}
-	v, err := g.emitExprWithListHint(stmt.Value, slot.listElemTyp)
+	if !slot.ptr || !slot.mutable {
+		return unsupportedf("statement", "assignment to immutable field %q.%s", baseIdent.Name, target.Name)
+	}
+	info := g.structsByType[slot.typ]
+	if info == nil {
+		return unsupportedf("type-system", "field assignment on %s", slot.typ)
+	}
+	field, ok := info.byName[target.Name]
+	if !ok {
+		return unsupportedf("expression", "struct %q has no field %q", info.name, target.Name)
+	}
+	v, err := g.emitExprWithListHint(rhs, field.listElemTyp)
 	if err != nil {
 		return err
 	}
-	if v.typ != slot.typ {
-		return unsupportedf("type-system", "assignment to %q type %s, value %s", target.Name, slot.typ, v.typ)
+	if v.typ != field.typ {
+		return unsupportedf("type-system", "field assignment %q.%s type %s, value %s", baseIdent.Name, target.Name, field.typ, v.typ)
+	}
+	current, err := g.loadIfPointer(slot)
+	if err != nil {
+		return err
 	}
 	emitter := g.toOstyEmitter()
-	llvmStore(emitter, toOstyValue(slot), toOstyValue(v))
-	g.postGCWriteIfPointer(emitter, slot, v)
+	tmp := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf(
+		"  %s = insertvalue %s %s, %s %s, %d",
+		tmp,
+		current.typ,
+		current.ref,
+		v.typ,
+		v.ref,
+		field.index,
+	))
+	llvmStore(emitter, toOstyValue(slot), toOstyValue(value{typ: current.typ, ref: tmp}))
 	g.takeOstyEmitter(emitter)
 	return nil
 }
@@ -2986,34 +3108,33 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 	if v, found, err := g.emitRuntimeFFICall(call); found || err != nil {
 		return v, err
 	}
-	id, ok := call.Fn.(*ast.Ident)
-	if !ok {
+	sig, receiverExpr, found, err := g.userCallTarget(call)
+	if err != nil {
+		return value{}, err
+	}
+	if !found {
+		if id, ok := call.Fn.(*ast.Ident); ok && id.Name == "println" {
+			return value{}, unsupported("call", "println is only supported as a statement")
+		}
 		return value{}, unsupportedf("call", "call target %T", call.Fn)
 	}
-	if id.Name == "println" {
-		return value{}, unsupported("call", "println is only supported as a statement")
-	}
-	sig := g.functions[id.Name]
-	if sig == nil {
-		return value{}, unsupportedf("name", "unknown function %q", id.Name)
-	}
 	if sig.ret == "" {
-		return value{}, unsupportedf("call", "function %q has no return value", id.Name)
+		return value{}, unsupportedf("call", "function %q has no return value", sig.name)
 	}
 	if sig.ret == "void" {
-		return value{}, unsupportedf("call", "function %q has no return value", id.Name)
+		return value{}, unsupportedf("call", "function %q has no return value", sig.name)
 	}
 	emitter := g.toOstyEmitter()
 	g.emitGCSafepoint(emitter)
 	g.takeOstyEmitter(emitter)
 	g.pushScope()
-	args, err := g.userCallArgs(sig, call)
+	args, err := g.userCallArgs(sig, receiverExpr, call)
 	if err != nil {
 		g.popScope()
 		return value{}, err
 	}
 	emitter = g.toOstyEmitter()
-	out := llvmCall(emitter, sig.ret, sig.name, args)
+	out := llvmCall(emitter, sig.ret, sig.irName, args)
 	g.takeOstyEmitter(emitter)
 	g.popScope()
 	ret := fromOstyValue(out)
@@ -3080,44 +3201,57 @@ func (g *generator) emitRuntimeFFICallStmt(call *ast.CallExpr) (bool, error) {
 }
 
 func (g *generator) emitUserCallStmt(call *ast.CallExpr) (bool, error) {
-	id, ok := call.Fn.(*ast.Ident)
-	if !ok {
-		return false, nil
+	sig, receiverExpr, found, err := g.userCallTarget(call)
+	if err != nil {
+		return true, err
 	}
-	sig := g.functions[id.Name]
-	if sig == nil {
+	if !found {
 		return false, nil
 	}
 	emitter := g.toOstyEmitter()
 	g.emitGCSafepoint(emitter)
 	g.takeOstyEmitter(emitter)
 	g.pushScope()
-	args, err := g.userCallArgs(sig, call)
+	args, err := g.userCallArgs(sig, receiverExpr, call)
 	if err != nil {
 		g.popScope()
 		return true, err
 	}
 	emitter = g.toOstyEmitter()
 	if sig.ret == "void" {
-		emitter.body = append(emitter.body, fmt.Sprintf("  call void @%s(%s)", sig.name, llvmCallArgs(args)))
+		emitter.body = append(emitter.body, fmt.Sprintf("  call void @%s(%s)", sig.irName, llvmCallArgs(args)))
 	} else {
-		llvmCall(emitter, sig.ret, sig.name, args)
+		llvmCall(emitter, sig.ret, sig.irName, args)
 	}
 	g.takeOstyEmitter(emitter)
 	g.popScope()
 	return true, nil
 }
 
-func (g *generator) userCallArgs(sig *fnSig, call *ast.CallExpr) ([]*LlvmValue, error) {
-	if len(call.Args) != len(sig.params) {
+func (g *generator) userCallArgs(sig *fnSig, receiverExpr ast.Expr, call *ast.CallExpr) ([]*LlvmValue, error) {
+	expectedArgs := len(sig.params)
+	if receiverExpr != nil {
+		expectedArgs--
+	}
+	if len(call.Args) != expectedArgs {
 		return nil, unsupportedf("call", "function %q argument count", sig.name)
+	}
+	args := make([]*LlvmValue, 0, len(sig.params))
+	paramIndex := 0
+	if receiverExpr != nil {
+		receiver, err := g.userCallReceiverArg(sig, sig.params[0], receiverExpr)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, receiver)
+		paramIndex = 1
 	}
 	values := make([]value, 0, len(call.Args))
 	for i, arg := range call.Args {
 		if arg.Name != "" || arg.Value == nil {
 			return nil, unsupportedf("call", "function %q requires positional arguments", sig.name)
 		}
-		param := sig.params[i]
+		param := sig.params[paramIndex+i]
 		v, err := g.emitExprWithListHint(arg.Value, param.listElemTyp)
 		if err != nil {
 			return nil, err
@@ -3127,7 +3261,6 @@ func (g *generator) userCallArgs(sig *fnSig, call *ast.CallExpr) ([]*LlvmValue, 
 		}
 		values = append(values, g.protectManagedTemporary(sig.name+".arg", v))
 	}
-	args := make([]*LlvmValue, 0, len(values))
 	for _, v := range values {
 		loaded, err := g.loadIfPointer(v)
 		if err != nil {
@@ -3136,6 +3269,69 @@ func (g *generator) userCallArgs(sig *fnSig, call *ast.CallExpr) ([]*LlvmValue, 
 		args = append(args, toOstyValue(loaded))
 	}
 	return args, nil
+}
+
+func (g *generator) userCallReceiverArg(sig *fnSig, param paramInfo, receiverExpr ast.Expr) (*LlvmValue, error) {
+	if param.byRef {
+		id, ok := receiverExpr.(*ast.Ident)
+		if !ok {
+			return nil, unsupportedf("call", "mut receiver for %q must be a local binding", sig.name)
+		}
+		slot, ok := g.lookupLocal(id.Name)
+		if !ok {
+			return nil, unsupportedf("name", "unknown receiver binding %q", id.Name)
+		}
+		if !slot.ptr || slot.typ != param.typ {
+			return nil, unsupportedf("type-system", "receiver for %q must be mutable %s", sig.name, param.typ)
+		}
+		return &LlvmValue{typ: "ptr", name: slot.ref}, nil
+	}
+	v, err := g.emitExpr(receiverExpr)
+	if err != nil {
+		return nil, err
+	}
+	if v.typ != param.typ {
+		return nil, unsupportedf("type-system", "receiver for %q type %s, want %s", sig.name, v.typ, param.typ)
+	}
+	protected := g.protectManagedTemporary(sig.name+".self", v)
+	loaded, err := g.loadIfPointer(protected)
+	if err != nil {
+		return nil, err
+	}
+	return toOstyValue(loaded), nil
+}
+
+func (g *generator) userCallTarget(call *ast.CallExpr) (*fnSig, ast.Expr, bool, error) {
+	if call == nil {
+		return nil, nil, false, nil
+	}
+	switch fn := call.Fn.(type) {
+	case *ast.Ident:
+		sig := g.functions[fn.Name]
+		if sig == nil {
+			return nil, nil, false, nil
+		}
+		return sig, nil, true, nil
+	case *ast.FieldExpr:
+		if fn.IsOptional {
+			return nil, nil, false, unsupported("call", "optional method calls are not supported")
+		}
+		baseTyp, _, ok := g.staticExprType(fn.X)
+		if !ok {
+			return nil, nil, false, nil
+		}
+		methods := g.methods[baseTyp]
+		if methods == nil {
+			return nil, nil, false, nil
+		}
+		sig := methods[fn.Name]
+		if sig == nil {
+			return nil, nil, false, nil
+		}
+		return sig, fn.X, true, nil
+	default:
+		return nil, nil, false, nil
+	}
 }
 
 func (g *generator) runtimeFFICallTarget(call *ast.CallExpr) (*runtimeFFIFunction, bool, error) {
@@ -3368,7 +3564,7 @@ func structTypeExprName(expr ast.Expr) (string, bool) {
 func toLLVMParams(params []paramInfo) []*LlvmParam {
 	out := make([]*LlvmParam, 0, len(params))
 	for _, p := range params {
-		out = append(out, llvmParam(p.name, p.typ))
+		out = append(out, llvmParam(p.name, llvmParamIRType(p)))
 	}
 	return out
 }
@@ -3735,6 +3931,15 @@ func (g *generator) staticExprType(expr ast.Expr) (string, string, bool) {
 				return sig.ret, sig.retListElemTyp, true
 			}
 		}
+		if field, ok := e.Fn.(*ast.FieldExpr); ok && !field.IsOptional {
+			if baseTyp, _, ok := g.staticExprType(field.X); ok {
+				if methods := g.methods[baseTyp]; methods != nil {
+					if sig := methods[field.Name]; sig != nil && sig.ret != "" && sig.ret != "void" {
+						return sig.ret, sig.retListElemTyp, true
+					}
+				}
+			}
+		}
 		if fn, found, err := g.runtimeFFICallTarget(e); found && err == nil && fn.ret != "" && fn.ret != "void" {
 			return fn.ret, fn.listElemTyp, true
 		}
@@ -3867,4 +4072,55 @@ func llvmType(t ast.Type, structs map[string]*structInfo, enums map[string]*enum
 	default:
 		return "", unsupportedf("type-system", "type %T", t)
 	}
+}
+
+func llvmMethodOwnerType(ownerName string, structs map[string]*structInfo, enums map[string]*enumInfo) (string, bool) {
+	if info := structs[ownerName]; info != nil {
+		return info.typ, true
+	}
+	if info := enums[ownerName]; info != nil {
+		return info.typ, true
+	}
+	return "", false
+}
+
+func llvmMethodIRName(ownerName, methodName string) string {
+	return sanitizeLLVMName(ownerName) + "__" + sanitizeLLVMName(methodName)
+}
+
+func llvmMethodReceiverIRType(ownerType string, mutable bool) string {
+	if mutable {
+		return "ptr"
+	}
+	return ownerType
+}
+
+func llvmParamIRType(param paramInfo) string {
+	if param.irTyp != "" {
+		return param.irTyp
+	}
+	return param.typ
+}
+
+func sanitizeLLVMName(name string) string {
+	if name == "" {
+		return "anon"
+	}
+	var b strings.Builder
+	for i, c := range name {
+		if c == '_' || ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || (i > 0 && '0' <= c && c <= '9') {
+			b.WriteRune(c)
+			continue
+		}
+		if i == 0 && '0' <= c && c <= '9' {
+			b.WriteByte('_')
+			b.WriteRune(c)
+			continue
+		}
+		b.WriteByte('_')
+	}
+	if b.Len() == 0 {
+		return "anon"
+	}
+	return b.String()
 }
