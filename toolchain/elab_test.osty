@@ -326,6 +326,308 @@ fn testElabMatchPhase2TupleMissingSlot() {
     testing.assert(elabDiagHasCode(checked.diagnostics, "E0706"))
 }
 
+// ---------------------------------------------------------------------
+// Phase 3: multi-witness + or-pat intra-duplicate.
+// ---------------------------------------------------------------------
+
+fn testElabMatchPhase3MultiWitnessListsMultipleMissing() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            enum Color { Red, Green, Blue }
+
+            fn code(c: Color) -> Int {
+                match c {
+                    Red -> 1,
+                }
+            }
+            """,
+    )
+    // Two variants are missing; the single E0706 message should mention
+    // both in its witness phrase. We only assert the code fires once;
+    // witness inspection (string contains "Green" and "Blue") is left
+    // to the golden snapshot when the harness runs this file.
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0706"))
+    testing.assertEq(elabDiagCodeCount(checked.diagnostics, "E0706"), 1)
+}
+
+fn testElabMatchPhase3OrPatternRedundantAlt() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            enum Color { Red, Green, Blue }
+
+            fn code(c: Color) -> Int {
+                match c {
+                    Red | Red -> 1,
+                    Green -> 2,
+                    Blue -> 3,
+                }
+            }
+            """,
+    )
+    // `Red | Red` — the second alt is redundant, arm flagged unreachable.
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0707"))
+}
+
+fn testElabMatchPhase3OrPatternSubsumedByPriorArm() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn code(b: Bool) -> Int {
+                match b {
+                    true -> 1,
+                    true | false -> 2,
+                }
+            }
+            """,
+    )
+    // Arm 2's `true` alternative is subsumed by arm 1; E0707 fires.
+    // (The `false` alternative is still useful but the redundancy in the
+    // or-pat is reported at the arm level.)
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0707"))
+}
+
+fn elabDiagCodeCount(diags: List<CheckDiagnostic>, code: String) -> Int {
+    let mut n = 0
+    for d in diags {
+        if d.code == code {
+            n = n + 1
+        }
+    }
+    n
+}
+
+// ---------------------------------------------------------------------
+// Phase 4: Int range reachability + struct matrix support.
+// ---------------------------------------------------------------------
+
+fn testElabMatchPhase4IntLiteralInsidePriorRange() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn code(n: Int) -> Int {
+                match n {
+                    1..=5 -> 1,
+                    3 -> 2,
+                    _ -> 0,
+                }
+            }
+            """,
+    )
+    // `3` falls inside `1..=5` → arm 2 is unreachable.
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0707"))
+}
+
+fn testElabMatchPhase4IntLiteralOutsidePriorRange() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn code(n: Int) -> Int {
+                match n {
+                    1..=5 -> 1,
+                    7 -> 2,
+                    _ -> 0,
+                }
+            }
+            """,
+    )
+    // `7` is outside `1..=5` → arm 2 is reachable.
+    testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0707")))
+}
+
+fn testElabMatchPhase4RangeContainedInPriorRange() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn code(n: Int) -> Int {
+                match n {
+                    0..=10 -> 1,
+                    2..=8 -> 2,
+                    _ -> 0,
+                }
+            }
+            """,
+    )
+    // `2..=8` ⊂ `0..=10` → arm 2 is unreachable.
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0707"))
+}
+
+fn testElabMatchPhase4RangeEscapesPriorRange() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn code(n: Int) -> Int {
+                match n {
+                    0..=5 -> 1,
+                    3..=10 -> 2,
+                    _ -> 0,
+                }
+            }
+            """,
+    )
+    // `3..=10` extends beyond `0..=5` → arm 2 is reachable.
+    testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0707")))
+}
+
+fn testElabMatchPhase4NegativeIntLiteral() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn code(n: Int) -> Int {
+                match n {
+                    -5..=5 -> 1,
+                    -3 -> 2,
+                    _ -> 0,
+                }
+            }
+            """,
+    )
+    // `-3` is in `-5..=5` → arm 2 is unreachable.
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0707"))
+}
+
+fn testElabMatchPhase4StructExhaustive() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            struct Point { x: Int, y: Int }
+
+            fn code(p: Point) -> Int {
+                match p {
+                    Point { x: _, y: _ } -> 0,
+                }
+            }
+            """,
+    )
+    // Struct has exactly one constructor; the all-wildcard match is
+    // exhaustive without a catch-all.
+    testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0706")))
+}
+
+fn testElabMatchPhase4StructNonExhaustive() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            struct Flags { a: Bool, b: Bool }
+
+            fn code(f: Flags) -> Int {
+                match f {
+                    Flags { a: true, b: _ } -> 1,
+                }
+            }
+            """,
+    )
+    // Missing `Flags { a: false, b: _ }` branch → E0706 reports it.
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0706"))
+}
+
+// ---------------------------------------------------------------------
+// Phase 5: hex/bin/oct int parsing + unbounded range intervals.
+// ---------------------------------------------------------------------
+
+fn testElabMatchPhase5HexLiteralInsidePriorRange() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn code(n: Int) -> Int {
+                match n {
+                    0..=31 -> 1,
+                    0x10 -> 2,
+                    _ -> 0,
+                }
+            }
+            """,
+    )
+    // 0x10 == 16, inside [0, 31].
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0707"))
+}
+
+fn testElabMatchPhase5BinLiteralInsidePriorRange() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn code(n: Int) -> Int {
+                match n {
+                    0..=15 -> 1,
+                    0b1010 -> 2,
+                    _ -> 0,
+                }
+            }
+            """,
+    )
+    // 0b1010 == 10, inside [0, 15].
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0707"))
+}
+
+fn testElabMatchPhase5OctLiteralInsidePriorRange() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn code(n: Int) -> Int {
+                match n {
+                    0..=100 -> 1,
+                    0o77 -> 2,
+                    _ -> 0,
+                }
+            }
+            """,
+    )
+    // 0o77 == 63, inside [0, 100].
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0707"))
+}
+
+fn testElabMatchPhase5UnboundedLoRangeCoversLiteral() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn code(n: Int) -> Int {
+                match n {
+                    ..=5 -> 1,
+                    3 -> 2,
+                    _ -> 0,
+                }
+            }
+            """,
+    )
+    // 3 ∈ (-∞, 5].
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0707"))
+}
+
+fn testElabMatchPhase5UnboundedHiRangeCoversLiteral() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn code(n: Int) -> Int {
+                match n {
+                    10.. -> 1,
+                    42 -> 2,
+                    _ -> 0,
+                }
+            }
+            """,
+    )
+    // 42 ∈ [10, +∞).
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0707"))
+}
+
+fn testElabMatchPhase5UnboundedLoRangeRejectsOutside() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn code(n: Int) -> Int {
+                match n {
+                    ..=5 -> 1,
+                    7 -> 2,
+                    _ -> 0,
+                }
+            }
+            """,
+    )
+    // 7 ∉ (-∞, 5] → arm 2 reachable.
+    testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0707")))
+}
+
+fn testElabMatchPhase5BoundedRangeSubsumedByUnbounded() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn code(n: Int) -> Int {
+                match n {
+                    0.. -> 1,
+                    5..=10 -> 2,
+                    _ -> 0,
+                }
+            }
+            """,
+    )
+    // [5, 10] ⊂ [0, +∞) → arm 2 unreachable.
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0707"))
+}
+
 fn testElabQuestionOperatorRequiresOption() {
     let checked = frontendCheckSourceStructured(
         r"""

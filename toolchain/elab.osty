@@ -1563,7 +1563,8 @@ fn elabInferMatch(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
     let pmOut = pmCheckMatch(cx, node, scrutTy)
     if pmOut.handled {
         if !pmOut.exhaustive {
-            cx.env.diagnostics.push(diagNonExhaustiveMatch(pmOut.witness, node.start, node.end))
+            let msg = pmWitnessesJoin(pmOut.witnesses)
+            cx.env.diagnostics.push(diagNonExhaustiveMatch(msg, node.start, node.end))
         }
         for armPos in pmOut.unreachable {
             let armIdx = checkIntListAt(node.children, armPos)
@@ -2189,11 +2190,14 @@ fn reachCheckArms(cx: ElabCx, matchNode: AstNode, scrutTy: Int) {
     }
     let isScalar = kind == TkPrim && !isBool
 
+    let isIntScalar = tyIsInteger(tys, scrutTy)
+
     let mut sawIrrefutable = false
     let mut boolTrue = false
     let mut boolFalse = false
     let mut coveredVariants: List<String> = []
     let mut coveredLits: List<String> = []
+    let mut coveredIntervals: List<PmInterval> = []
 
     let mut first = true
     for armIdx in matchNode.children {
@@ -2207,6 +2211,8 @@ fn reachCheckArms(cx: ElabCx, matchNode: AstNode, scrutTy: Int) {
                 armCoveredByBool(cx, arm.left, scrutTy, boolTrue, boolFalse)
             } else if isEnum {
                 armCoveredByEnum(cx, arm.left, scrutTy, coveredVariants)
+            } else if isIntScalar {
+                armCoveredByIntCoverage(cx, arm.left, coveredLits, coveredIntervals)
             } else if isScalar {
                 armCoveredByScalarLits(cx, arm.left, scrutTy, coveredLits)
             } else {
@@ -2227,12 +2233,99 @@ fn reachCheckArms(cx: ElabCx, matchNode: AstNode, scrutTy: Int) {
                 if patCoversBoolLit(cx, arm.left, "false", scrutTy) { boolFalse = true }
             } else if isEnum {
                 collectArmVariantNames(cx, arm.left, scrutTy, coveredVariants)
+            } else if isIntScalar {
+                collectArmIntCoverage(cx, arm.left, coveredLits, coveredIntervals)
             } else if isScalar {
                 collectArmScalarLits(cx, arm.left, coveredLits)
             }
         }
 
         first = false
+    }
+}
+
+/// armCoveredByIntCoverage extends the plain literal-string check with
+/// interval subsumption. A literal arm is covered when its value falls
+/// inside any prior interval; a range arm is covered when its interval
+/// is fully contained in some prior interval.
+fn armCoveredByIntCoverage(cx: ElabCx, patIdx: Int, coveredLits: List<String>, coveredIntervals: List<PmInterval>) -> Bool {
+    if patIdx < 0 {
+        return false
+    }
+    let p = astArenaNodeAt(cx.ast.arena, patIdx)
+    if p.kind != AstNPattern {
+        return false
+    }
+    let k = p.extra
+    if k == astPatternLiteralKind() {
+        let t = patLiteralTextOf(cx, p)
+        if t == "" { return false }
+        if stringListContains(coveredLits, t) {
+            return true
+        }
+        let parsed = pmParseIntLit(t)
+        if !parsed.ok {
+            return false
+        }
+        for iv in coveredIntervals {
+            if pmIntervalContainsInt(iv, parsed.value) {
+                return true
+            }
+        }
+        return false
+    }
+    if k == astPatternRangeKind() {
+        let (ok, iv) = pmRangePatternToInterval(cx, patIdx)
+        if !ok {
+            return false
+        }
+        for prior in coveredIntervals {
+            if pmIntervalContainsInterval(prior, iv) {
+                return true
+            }
+        }
+        return false
+    }
+    if k == astPatternOrKind() {
+        return armCoveredByIntCoverage(cx, p.left, coveredLits, coveredIntervals)
+            && armCoveredByIntCoverage(cx, p.right, coveredLits, coveredIntervals)
+    }
+    if k == astPatternBindingKind() {
+        return armCoveredByIntCoverage(cx, p.left, coveredLits, coveredIntervals)
+    }
+    false
+}
+
+fn collectArmIntCoverage(cx: ElabCx, patIdx: Int, outLits: List<String>, outIntervals: List<PmInterval>) {
+    if patIdx < 0 {
+        return
+    }
+    let p = astArenaNodeAt(cx.ast.arena, patIdx)
+    if p.kind != AstNPattern {
+        return
+    }
+    let k = p.extra
+    if k == astPatternLiteralKind() {
+        let t = patLiteralTextOf(cx, p)
+        if t != "" && !(stringListContains(outLits, t)) {
+            outLits.push(t)
+        }
+        return
+    }
+    if k == astPatternRangeKind() {
+        let (ok, iv) = pmRangePatternToInterval(cx, patIdx)
+        if ok {
+            outIntervals.push(iv)
+        }
+        return
+    }
+    if k == astPatternOrKind() {
+        collectArmIntCoverage(cx, p.left, outLits, outIntervals)
+        collectArmIntCoverage(cx, p.right, outLits, outIntervals)
+        return
+    }
+    if k == astPatternBindingKind() {
+        collectArmIntCoverage(cx, p.left, outLits, outIntervals)
     }
 }
 
@@ -2533,9 +2626,9 @@ pub struct PmCtor {
 }
 
 pub struct PmCheckOutcome {
-    pub handled: Bool,      // true if Phase 2 took responsibility
+    pub handled: Bool,      // true if Phase 2+ took responsibility
     pub exhaustive: Bool,
-    pub witness: String,
+    pub witnesses: List<String>,
     pub unreachable: List<Int>, // indices into matchNode.children
 }
 
@@ -2544,7 +2637,7 @@ fn emptyPmCtor() -> PmCtor {
 }
 
 fn pmNotHandled() -> PmCheckOutcome {
-    PmCheckOutcome { handled: false, exhaustive: true, witness: "", unreachable: [] }
+    PmCheckOutcome { handled: false, exhaustive: true, witnesses: [], unreachable: [] }
 }
 
 /// pmCheckMatch performs the Maranget usefulness analysis for a match
@@ -2581,6 +2674,9 @@ fn pmCheckMatch(cx: ElabCx, matchNode: AstNode, scrutTy: Int) -> PmCheckOutcome 
     let exhRes = pmExhaustivenessWitness(cx, rows, colTys)
 
     // Reachability: for each non-guarded arm, useful against prior rows.
+    // Also detect intra-arm or-pattern redundancy: when the arm's
+    // pattern is an or-pat `A | B | ...`, each alternative must add
+    // coverage beyond both the prior arms AND the earlier alternatives.
     let mut unreachable: List<Int> = []
     let mut priorRows: List<List<Int>> = []
     let mut armIter = 0
@@ -2588,8 +2684,19 @@ fn pmCheckMatch(cx: ElabCx, matchNode: AstNode, scrutTy: Int) -> PmCheckOutcome 
         if !(armGuarded(cx, armIdx)) {
             let arm = astArenaNodeAt(cx.ast.arena, armIdx)
             let row: List<Int> = [arm.left]
-            if checkListOfRowsLen(priorRows) > 0 {
-                if !(pmUseful(cx, priorRows, row, colTys)) {
+
+            // Whole-arm reachability: useful against prior arms?
+            let armReachable = if checkListOfRowsLen(priorRows) > 0 {
+                pmUseful(cx, priorRows, row, colTys)
+            } else {
+                true
+            }
+            if !armReachable {
+                unreachable.push(armIter)
+            } else {
+                // Intra or-pat dup: split arm's pat into alternatives; if
+                // alt i is subsumed by (priorRows ∪ alts[0..i]), flag.
+                if pmArmHasRedundantOrAlt(cx, priorRows, arm.left, scrutTy) {
                     unreachable.push(armIter)
                 }
             }
@@ -2601,15 +2708,70 @@ fn pmCheckMatch(cx: ElabCx, matchNode: AstNode, scrutTy: Int) -> PmCheckOutcome 
     PmCheckOutcome {
         handled: true,
         exhaustive: exhRes.exhaustive,
-        witness: exhRes.witness,
+        witnesses: exhRes.witnesses,
         unreachable,
     }
 }
 
+/// pmArmHasRedundantOrAlt returns true when the arm's pattern is an
+/// or-pattern `A | B | ...` whose i-th alternative is subsumed by the
+/// union of (prior arms ∪ earlier alternatives). The arm-level diag
+/// (E0707) is shared with whole-arm unreachable — the message reads
+/// "earlier arm already covers this case" which fits either failure.
+fn pmArmHasRedundantOrAlt(cx: ElabCx, priorRows: List<List<Int>>, patIdx: Int, scrutTy: Int) -> Bool {
+    if patIdx < 0 {
+        return false
+    }
+    let node = astArenaNodeAt(cx.ast.arena, patIdx)
+    if node.kind != AstNPattern || node.extra != astPatternOrKind() {
+        return false
+    }
+    let mut alts: List<Int> = []
+    orPatternFlatten(cx, node.left, scrutTy, alts)
+    orPatternFlatten(cx, node.right, scrutTy, alts)
+    let colTys: List<Int> = [scrutTy]
+    let mut merged: List<List<Int>> = []
+    for r in priorRows {
+        merged.push(r)
+    }
+    for alt in alts {
+        let row: List<Int> = [alt]
+        if checkListOfRowsLen(merged) > 0 {
+            if !(pmUseful(cx, merged, row, colTys)) {
+                return true
+            }
+        }
+        merged.push(row)
+    }
+    false
+}
+
+/// pmWitnessesJoin flattens the witness list into a single backtick-
+/// friendly phrase used in the E0706 message. Uses `|` as the separator
+/// so the result reads as an or-pattern (`Some(None) | None | ...`). If
+/// the algorithm was capped at `pmMaxWitnesses()` it appends an ellipsis
+/// phrase so the user knows there are more.
+fn pmWitnessesJoin(ws: List<String>) -> String {
+    let n = pmWitnessesCount(ws)
+    if n == 0 {
+        return ""
+    }
+    let joined = strings.join(ws, " | ")
+    if n >= pmMaxWitnesses() {
+        return "{joined} | ..."
+    }
+    joined
+}
+
 struct PmExhRes {
     exhaustive: Bool,
-    witness: String,
+    witnesses: List<String>,
 }
+
+// Phase 3: cap on the number of witnesses we report per non-exhaustive
+// match. Reported as `A | B | C`-style alternation so the message reads
+// naturally and is bounded even for large enums.
+fn pmMaxWitnesses() -> Int { 3 }
 
 fn pmTypeSupported(cx: ElabCx, ty: Int) -> Bool {
     let tys = cx.env.tys
@@ -2623,7 +2785,7 @@ fn pmTypeSupported(cx: ElabCx, ty: Int) -> Bool {
     if kind == TkNamed {
         let owner = tyHeadAt(tys, ty)
         let typeSig = checkLookupType(cx.env, owner)
-        return typeSig.kind == "enum"
+        return typeSig.kind == "enum" || typeSig.kind == "struct"
     }
     false
 }
@@ -2697,18 +2859,21 @@ fn pmUsefulFlat(cx: ElabCx, rows: List<List<Int>>, row: List<Int>, colTys: List<
     pmUseful(cx, srows, probeRow, newTys)
 }
 
-/// pmExhaustivenessWitness returns `(true, "")` when every value is
-/// matched by some row. Otherwise returns `(false, witness)` where
-/// `witness` is an example pattern missing from the match.
+/// pmExhaustivenessWitness returns `{exhaustive=true, witnesses=[]}`
+/// when every value is matched by some row. Otherwise it returns a list
+/// of missing-example patterns bounded by `pmMaxWitnesses()`. Multiple
+/// witnesses are accumulated across unmatched constructor branches so
+/// the user sees several missing cases at once rather than having to
+/// re-compile after each individual fix.
 fn pmExhaustivenessWitness(cx: ElabCx, rows: List<List<Int>>, colTys: List<Int>) -> PmExhRes {
     let nCols = checkIntListLenHelper(colTys)
     if nCols == 0 {
-        // Vacuously exhaustive if any row is present, else missing "()"
-        // (the empty tuple is the sole value).
+        // Vacuously exhaustive if any row is present, else missing the
+        // empty witness (will be rendered as `_` at higher levels).
         if checkListOfRowsLen(rows) > 0 {
-            return PmExhRes { exhaustive: true, witness: "" }
+            return PmExhRes { exhaustive: true, witnesses: [] }
         }
-        return PmExhRes { exhaustive: false, witness: "" }
+        return PmExhRes { exhaustive: false, witnesses: [""] }
     }
 
     let col0Ty = checkIntListAt(colTys, 0)
@@ -2718,35 +2883,68 @@ fn pmExhaustivenessWitness(cx: ElabCx, rows: List<List<Int>>, colTys: List<Int>)
     let ctors = pmConstructorsOfType(cx.env, col0Ty)
 
     if checkCtorListLen(ctors) == 0 {
-        // Non-enumerable column. Exhaustive iff a wildcard row exists
-        // and its suffix is exhaustive.
+        // Non-enumerable column (scalar).
         let drows = pmDefault(cx, flatRows, col0Ty)
         if !(pmExistsWildCol0(cx, flatRows, col0Ty)) {
             let sub = pmExhaustivenessWitness(cx, drows, restTys)
-            return PmExhRes { exhaustive: false, witness: pmCombineWitness("_", sub.witness) }
+            let ws = pmPrependWitnesses("_", sub.witnesses, 0)
+            return PmExhRes { exhaustive: false, witnesses: ws }
         }
         let sub = pmExhaustivenessWitness(cx, drows, restTys)
         if sub.exhaustive {
-            return PmExhRes { exhaustive: true, witness: "" }
+            return PmExhRes { exhaustive: true, witnesses: [] }
         }
-        return PmExhRes { exhaustive: false, witness: pmCombineWitness("_", sub.witness) }
+        let ws = pmPrependWitnesses("_", sub.witnesses, 0)
+        return PmExhRes { exhaustive: false, witnesses: ws }
     }
 
-    // Check each constructor branch; report the first missing one.
+    // Collect up to pmMaxWitnesses() missing cases across all ctors.
+    let mut out: List<String> = []
     for c in ctors {
+        if pmWitnessesCount(out) >= pmMaxWitnesses() {
+            break
+        }
         let srows = pmSpecialize(cx, flatRows, col0Ty, c)
         let newTys = intListConcat(c.subTys, restTys)
         let sub = pmExhaustivenessWitness(cx, srows, newTys)
         if !sub.exhaustive {
-            let ctorW = pmBuildCtorWitness(c, sub.witness)
-            // Extract the leftover witness for trailing columns: the
-            // sub-witness concatenates `arity` leading placeholders
-            // belonging to the ctor, followed by the rest.
-            let restW = pmTrimLeadingFields(sub.witness, c.arity)
-            return PmExhRes { exhaustive: false, witness: pmCombineWitness(ctorW, restW) }
+            for subW in sub.witnesses {
+                if pmWitnessesCount(out) >= pmMaxWitnesses() {
+                    break
+                }
+                let ctorW = pmBuildCtorWitness(c, subW)
+                let restW = pmTrimLeadingFields(subW, c.arity)
+                out.push(pmCombineWitness(ctorW, restW))
+            }
         }
     }
-    PmExhRes { exhaustive: true, witness: "" }
+    if pmWitnessesCount(out) == 0 {
+        return PmExhRes { exhaustive: true, witnesses: [] }
+    }
+    PmExhRes { exhaustive: false, witnesses: out }
+}
+
+fn pmWitnessesCount(xs: List<String>) -> Int {
+    let mut n = 0
+    for x in xs {
+        let _ = x
+        n = n + 1
+    }
+    n
+}
+
+fn pmPrependWitnesses(prefix: String, ws: List<String>, startSeen: Int) -> List<String> {
+    let mut out: List<String> = []
+    let mut seen = startSeen
+    for w in ws {
+        if seen >= pmMaxWitnesses() { break }
+        out.push(pmCombineWitness(prefix, w))
+        seen = seen + 1
+    }
+    if pmWitnessesCount(out) == 0 {
+        out.push(prefix)
+    }
+    out
 }
 
 // ---------------------------------------------------------------------
@@ -2913,7 +3111,54 @@ fn pmCellCtor(cx: ElabCx, cellIdx: Int, colTy: Int) -> PmCtor {
         let arity = checkIntListLenHelper(elems)
         return PmCtor { kind: "tuple", name: "", owner: "", arity, subTys: elems }
     }
+    if k == astPatternStructKind() {
+        if tyKindAt(tys, colTy) != TkNamed {
+            return emptyPmCtor()
+        }
+        let owner = tyHeadAt(tys, colTy)
+        return pmStructCtorFor(cx.env, owner, colTy)
+    }
     emptyPmCtor()
+}
+
+fn pmStructCtorFor(env: CheckEnv, owner: String, ty: Int) -> PmCtor {
+    let typeSig = checkLookupType(env, owner)
+    if typeSig.kind != "struct" {
+        return emptyPmCtor()
+    }
+    let fields = pmStructFieldsForOwner(env, owner)
+    let arity = checkFieldListLen(fields)
+    let ownerArgs = tyArgsAt(env.tys, ty)
+    let mut subTys: List<Int> = []
+    if checkStringListLenHelper(typeSig.generics) == checkIntListLenHelper(ownerArgs) && arity > 0 {
+        for f in fields {
+            subTys.push(checkSubstituteTy(env, f.ty, typeSig.generics, ownerArgs))
+        }
+    } else {
+        for f in fields {
+            subTys.push(f.ty)
+        }
+    }
+    PmCtor { kind: "struct", name: owner, owner, arity, subTys }
+}
+
+fn pmStructFieldsForOwner(env: CheckEnv, owner: String) -> List<CheckFieldSig> {
+    let mut out: List<CheckFieldSig> = []
+    for f in env.fields {
+        if f.owner == owner {
+            out.push(f)
+        }
+    }
+    out
+}
+
+fn checkFieldListLen(xs: List<CheckFieldSig>) -> Int {
+    let mut n = 0
+    for x in xs {
+        let _ = x
+        n = n + 1
+    }
+    n
 }
 
 fn pmVariantCtor(cx: ElabCx, v: CheckVariantSig, colTy: Int) -> PmCtor {
@@ -2954,10 +3199,37 @@ fn pmCellSubs(cx: ElabCx, cellIdx: Int, ctor: PmCtor, colTy: Int) -> List<Int> {
     if k == astPatternTupleKind() {
         return pmPadOrTrim(p.children, ctor.arity)
     }
+    if k == astPatternStructKind() {
+        return pmStructCellSubs(cx, p, ctor)
+    }
     if k == astPatternLiteralKind() {
         return pmWildRow(ctor.arity)
     }
     pmWildRow(ctor.arity)
+}
+
+fn pmStructCellSubs(cx: ElabCx, p: AstNode, ctor: PmCtor) -> List<Int> {
+    // Walk the struct's declared fields in registration order and, for
+    // each one, locate the matching `field: pat` entry in `p.children`.
+    // Missing fields (whether elided via `..` or just not mentioned) are
+    // represented as wildcard cells; shorthand `{ name }` is likewise a
+    // wildcard since it only binds.
+    let fields = pmStructFieldsForOwner(cx.env, ctor.owner)
+    let mut out: List<Int> = []
+    for f in fields {
+        let mut found = -1
+        for childIdx in p.children {
+            let child = astArenaNodeAt(cx.ast.arena, childIdx)
+            if child.extra == astPatternFieldKind() && child.text == f.name {
+                if child.left >= 0 {
+                    found = child.left
+                }
+                break
+            }
+        }
+        out.push(found)
+    }
+    out
 }
 
 fn pmCtorsMatch(a: PmCtor, b: PmCtor) -> Bool {
@@ -2975,6 +3247,9 @@ fn pmCtorsMatch(a: PmCtor, b: PmCtor) -> Bool {
     }
     if a.kind == "tuple" {
         return a.arity == b.arity
+    }
+    if a.kind == "struct" {
+        return a.owner == b.owner
     }
     false
 }
@@ -3017,6 +3292,9 @@ fn pmConstructorsOfType(env: CheckEnv, ty: Int) -> List<PmCtor> {
             }
             return out
         }
+        if typeSig.kind == "struct" {
+            return [pmStructCtorFor(env, owner, ty)]
+        }
     }
     []
 }
@@ -3053,6 +3331,13 @@ fn pmBuildCtorWitness(c: PmCtor, subFieldsW: String) -> String {
         }
         let leading = pmFirstNFields(subFieldsW, c.arity)
         return "{label}({leading})"
+    }
+    if c.kind == "struct" {
+        if c.arity == 0 {
+            return c.owner
+        }
+        let leading = pmFirstNFields(subFieldsW, c.arity)
+        return "{c.owner}({leading})"
     }
     "_"
 }
@@ -3171,4 +3456,227 @@ fn checkCtorListLen(xs: List<PmCtor>) -> Int {
         n = n + 1
     }
     n
+}
+
+// =====================================================================
+// Phase 4 — Int literal parser + interval-based scalar reachability
+// + struct matrix support.
+// =====================================================================
+
+pub struct PmIntParse {
+    pub ok: Bool,
+    pub value: Int,
+}
+
+/// pmParseIntLit parses an Osty integer literal text into an Int.
+/// Supports:
+///   - Optional leading `-`.
+///   - Underscores as digit separators anywhere inside the digits.
+///   - Decimal (default), hexadecimal (`0x` / `0X`), binary (`0b` / `0B`)
+///     and octal (`0o` / `0O`) prefixes.
+/// Float-shaped literals (containing `.` / `e` / `E` outside a hex
+/// context) are rejected. On any parse failure we return ok=false and
+/// the caller treats the literal as opaque for reachability.
+pub fn pmParseIntLit(text: String) -> PmIntParse {
+    let n = strings.len(text)
+    if n == 0 {
+        return PmIntParse { ok: false, value: 0 }
+    }
+    let mut negative = false
+    let mut i = 0
+    if strings.slice(text, 0, 1) == "-" {
+        negative = true
+        i = 1
+    }
+    if i >= n {
+        return PmIntParse { ok: false, value: 0 }
+    }
+    let mut base = 10
+    if i + 1 < n {
+        let lead = strings.slice(text, i, i + 2)
+        if lead == "0x" || lead == "0X" {
+            base = 16
+            i = i + 2
+        } else if lead == "0b" || lead == "0B" {
+            base = 2
+            i = i + 2
+        } else if lead == "0o" || lead == "0O" {
+            base = 8
+            i = i + 2
+        }
+    }
+    if i >= n {
+        return PmIntParse { ok: false, value: 0 }
+    }
+    let mut value: Int = 0
+    let mut digits = 0
+    for i < n {
+        let ch = strings.slice(text, i, i + 1)
+        if ch == "_" {
+            i = i + 1
+            continue
+        }
+        if base == 10 {
+            if ch == "." || ch == "e" || ch == "E" {
+                return PmIntParse { ok: false, value: 0 }
+            }
+        }
+        let d = pmDigitValueIn(ch, base)
+        if d < 0 {
+            return PmIntParse { ok: false, value: 0 }
+        }
+        value = value * base + d
+        digits = digits + 1
+        i = i + 1
+    }
+    if digits == 0 {
+        return PmIntParse { ok: false, value: 0 }
+    }
+    if negative {
+        value = 0 - value
+    }
+    PmIntParse { ok: true, value }
+}
+
+fn pmDigitValueIn(ch: String, base: Int) -> Int {
+    let d = pmDigitValue(ch)
+    if d >= 0 && d < base {
+        return d
+    }
+    if base == 16 {
+        if ch == "a" || ch == "A" { return 10 }
+        if ch == "b" || ch == "B" { return 11 }
+        if ch == "c" || ch == "C" { return 12 }
+        if ch == "d" || ch == "D" { return 13 }
+        if ch == "e" || ch == "E" { return 14 }
+        if ch == "f" || ch == "F" { return 15 }
+    }
+    -1
+}
+
+fn pmDigitValue(ch: String) -> Int {
+    if ch == "0" { return 0 }
+    if ch == "1" { return 1 }
+    if ch == "2" { return 2 }
+    if ch == "3" { return 3 }
+    if ch == "4" { return 4 }
+    if ch == "5" { return 5 }
+    if ch == "6" { return 6 }
+    if ch == "7" { return 7 }
+    if ch == "8" { return 8 }
+    if ch == "9" { return 9 }
+    -1
+}
+
+pub struct PmInterval {
+    pub lo: Int,
+    pub hi: Int,
+    pub loBounded: Bool,
+    pub hiBounded: Bool,
+    pub hiInclusive: Bool,
+}
+
+fn pmIntervalContainsInt(iv: PmInterval, v: Int) -> Bool {
+    if iv.loBounded {
+        if v < iv.lo {
+            return false
+        }
+    }
+    if iv.hiBounded {
+        if iv.hiInclusive {
+            if v > iv.hi {
+                return false
+            }
+        } else {
+            if v >= iv.hi {
+                return false
+            }
+        }
+    }
+    true
+}
+
+fn pmIntervalContainsInterval(outer: PmInterval, inner: PmInterval) -> Bool {
+    // outer ⊇ inner
+    if outer.loBounded {
+        if !inner.loBounded {
+            return false
+        }
+        if inner.lo < outer.lo {
+            return false
+        }
+    }
+    if outer.hiBounded {
+        if !inner.hiBounded {
+            return false
+        }
+        // Compute effective upper bound for each (exclusive ⇒ hi-1 on Int).
+        // We keep comparison in the original space with careful guards.
+        let outerCap = if outer.hiInclusive { outer.hi } else { outer.hi - 1 }
+        let innerCap = if inner.hiInclusive { inner.hi } else { inner.hi - 1 }
+        if innerCap > outerCap {
+            return false
+        }
+    }
+    true
+}
+
+/// pmRangePatternToInterval lowers an AstPatternRangeKind AST node into
+/// a `PmInterval`. Returns `ok=false` when either bound's text does not
+/// parse as Int — this is conservative: the interval-based reachability
+/// gives up and the arm remains reachable.
+fn pmRangePatternToInterval(cx: ElabCx, patIdx: Int) -> (Bool, PmInterval) {
+    let zero = PmInterval { lo: 0, hi: 0, loBounded: false, hiBounded: false, hiInclusive: false }
+    if patIdx < 0 {
+        return (false, zero)
+    }
+    let p = astArenaNodeAt(cx.ast.arena, patIdx)
+    if p.kind != AstNPattern || p.extra != astPatternRangeKind() {
+        return (false, zero)
+    }
+    let mut loBounded = false
+    let mut loVal = 0
+    if p.left >= 0 {
+        let loNode = astArenaNodeAt(cx.ast.arena, p.left)
+        if loNode.kind == AstNPattern && loNode.extra == astPatternLiteralKind() {
+            let loText = patLiteralTextOf(cx, loNode)
+            let parsed = pmParseIntLit(loText)
+            if !parsed.ok {
+                return (false, zero)
+            }
+            loVal = parsed.value
+            loBounded = true
+        } else {
+            return (false, zero)
+        }
+    }
+    let mut hiBounded = false
+    let mut hiVal = 0
+    if p.right >= 0 {
+        let hiNode = astArenaNodeAt(cx.ast.arena, p.right)
+        if hiNode.kind == AstNPattern && hiNode.extra == astPatternLiteralKind() {
+            let hiText = patLiteralTextOf(cx, hiNode)
+            let parsed = pmParseIntLit(hiText)
+            if !parsed.ok {
+                return (false, zero)
+            }
+            hiVal = parsed.value
+            hiBounded = true
+        } else {
+            return (false, zero)
+        }
+    }
+    let inclusive = p.flags == 1
+    (true, PmInterval { lo: loVal, hi: hiVal, loBounded, hiBounded, hiInclusive: inclusive })
+}
+
+fn pmLiteralPatternAsInt(cx: ElabCx, patIdx: Int) -> PmIntParse {
+    if patIdx < 0 {
+        return PmIntParse { ok: false, value: 0 }
+    }
+    let p = astArenaNodeAt(cx.ast.arena, patIdx)
+    if p.kind != AstNPattern || p.extra != astPatternLiteralKind() {
+        return PmIntParse { ok: false, value: 0 }
+    }
+    pmParseIntLit(patLiteralTextOf(cx, p))
 }
