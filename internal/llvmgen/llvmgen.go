@@ -1085,7 +1085,7 @@ func (g *generator) emitExprStmt(expr ast.Expr) error {
 
 func (g *generator) emitIfStmt(expr *ast.IfExpr) error {
 	if expr.IsIfLet {
-		return unsupported("control-flow", "if-let is not supported")
+		return g.emitIfLetStmt(expr)
 	}
 	if expr.Then == nil {
 		return unsupported("control-flow", "if has no then block")
@@ -1121,6 +1121,86 @@ func (g *generator) emitIfStmt(expr *ast.IfExpr) error {
 	g.takeOstyEmitter(emitter)
 	g.currentBlock = labels.endLabel
 	return nil
+}
+
+func (g *generator) emitIfLetStmt(expr *ast.IfExpr) error {
+	if expr.Then == nil {
+		return unsupported("control-flow", "if has no then block")
+	}
+	scrutinee, err := g.emitExpr(expr.Cond)
+	if err != nil {
+		return err
+	}
+	cond, bind, err := g.ifLetCondition(expr.Pattern, scrutinee)
+	if err != nil {
+		return err
+	}
+	emitter := g.toOstyEmitter()
+	labels := llvmIfStart(emitter, cond)
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = labels.thenLabel
+	g.pushScope()
+	if bind != nil {
+		if err := bind(); err != nil {
+			g.popScope()
+			return err
+		}
+	}
+	if err := g.emitBlock(expr.Then.Stmts); err != nil {
+		g.popScope()
+		return err
+	}
+	g.popScope()
+	emitter = g.toOstyEmitter()
+	llvmIfElse(emitter, labels)
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = labels.elseLabel
+	if expr.Else != nil {
+		if err := g.emitElse(expr.Else); err != nil {
+			return err
+		}
+	}
+	emitter = g.toOstyEmitter()
+	llvmIfEnd(emitter, labels)
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = labels.endLabel
+	return nil
+}
+
+func (g *generator) ifLetCondition(pattern ast.Pattern, scrutinee value) (*LlvmValue, func() error, error) {
+	if pattern == nil {
+		return nil, nil, unsupported("control-flow", "if-let requires a pattern")
+	}
+	if _, ok := pattern.(*ast.WildcardPat); ok {
+		return toOstyValue(value{typ: "i1", ref: "true"}), func() error { return nil }, nil
+	}
+	if info := g.enumsByType[scrutinee.typ]; info != nil && info.hasPayload {
+		matched, ok, err := g.matchPayloadEnumPattern(info, pattern)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !ok {
+			return nil, nil, unsupported("control-flow", "if-let pattern must be an enum variant")
+		}
+		emitter := g.toOstyEmitter()
+		tag := llvmExtractValue(emitter, toOstyValue(scrutinee), "i64", 0)
+		cond := llvmCompare(emitter, "eq", tag, toOstyValue(value{typ: "i64", ref: strconv.Itoa(matched.variant.tag)}))
+		g.takeOstyEmitter(emitter)
+		return cond, func() error {
+			return g.bindPayloadEnumPattern(scrutinee, matched)
+		}, nil
+	}
+	tag, ok, err := g.matchEnumTag(pattern)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !ok {
+		return nil, nil, unsupported("control-flow", "if-let pattern must be an enum variant")
+	}
+	emitter := g.toOstyEmitter()
+	cond := llvmCompare(emitter, "eq", toOstyValue(scrutinee), toOstyValue(value{typ: "i64", ref: strconv.Itoa(tag)}))
+	g.takeOstyEmitter(emitter)
+	return cond, func() error { return nil }, nil
 }
 
 func (g *generator) emitElse(expr ast.Expr) error {
@@ -1547,7 +1627,7 @@ func (g *generator) emitRuntimeStringCompare(op token.Kind, left, right value) (
 
 func (g *generator) emitIfExprValue(expr *ast.IfExpr) (value, error) {
 	if expr.IsIfLet {
-		return value{}, unsupported("control-flow", "if-let is not supported")
+		return g.emitIfLetExprValue(expr)
 	}
 	if expr.Then == nil {
 		return value{}, unsupported("control-flow", "if expression has no then block")
@@ -1568,6 +1648,55 @@ func (g *generator) emitIfExprValue(expr *ast.IfExpr) (value, error) {
 	g.currentBlock = labels.thenLabel
 
 	g.pushScope()
+	thenValue, err := g.emitBlockValue(expr.Then)
+	g.popScope()
+	if err != nil {
+		return value{}, err
+	}
+	thenPred := g.currentBlock
+	emitter = g.toOstyEmitter()
+	llvmIfExprElse(emitter, labels)
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = labels.elseLabel
+
+	elseValue, err := g.emitElseValue(expr.Else)
+	if err != nil {
+		return value{}, err
+	}
+	elsePred := g.currentBlock
+	if thenValue.typ != elseValue.typ {
+		return value{}, unsupportedf("type-system", "if expression branch types %s/%s", thenValue.typ, elseValue.typ)
+	}
+	return g.emitIfExprPhi(labels, thenPred, elsePred, thenValue, elseValue)
+}
+
+func (g *generator) emitIfLetExprValue(expr *ast.IfExpr) (value, error) {
+	if expr.Then == nil {
+		return value{}, unsupported("control-flow", "if expression has no then block")
+	}
+	if expr.Else == nil {
+		return value{}, unsupported("control-flow", "if expression has no else branch")
+	}
+	scrutinee, err := g.emitExpr(expr.Cond)
+	if err != nil {
+		return value{}, err
+	}
+	cond, bind, err := g.ifLetCondition(expr.Pattern, scrutinee)
+	if err != nil {
+		return value{}, err
+	}
+	emitter := g.toOstyEmitter()
+	labels := llvmIfExprStart(emitter, cond)
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = labels.thenLabel
+
+	g.pushScope()
+	if bind != nil {
+		if err := bind(); err != nil {
+			g.popScope()
+			return value{}, err
+		}
+	}
 	thenValue, err := g.emitBlockValue(expr.Then)
 	g.popScope()
 	if err != nil {
