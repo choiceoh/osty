@@ -289,12 +289,16 @@ artifact/cache layout 정책은 [`LLVM_ARTIFACT_LAYOUT.md`](./LLVM_ARTIFACT_LAYO
     interface를 `%osty.iface`로 반환, `emitLet`의 concrete→interface
     경로에서 boxing (alloca + insertvalue 2회), `emitInterfaceMethodCall`
     이 수신자가 `%osty.iface`인 call을 vtable extractvalue + getelementptr
-    + indirect call로 낮춘다. 현 Phase 6b 한계: 메서드는 non-self
-    인자 0개만 (추가 인자는 `LLVM0xx unsupported`로 바운드).
+    + indirect call로 낮춘다.
     smoke: `TestGenerateModuleInterfaceBoxingDispatch`.
+  - Phase 6c(interface method의 non-self 인자): `methodDecl.Params`의
+    user-facing 파라미터를 `llvmType`으로 개별 lower하고 `emitExpr`로
+    argument value를 만들어 indirect call에 `ptr %data, <argTyp> %arg…`
+    형태로 threading. smoke: `TestGenerateModuleInterfaceDispatchWithArgs`.
   - 남은 범위: bare function-pointer turbofish (`let f = id::<Int>`),
-    interface method의 non-self 인자 지원 (Phase 6c),
-    payload-free / 비-리터럴 인자를 가진 variant call의 타입
+    generic interface specialization의 vtable 연결 (Phase 5 `_ZTSN…E` +
+    Phase 6a scaffold), let 외 context(assign/return/fn arg)의 자동
+    boxing, payload-free / 비-리터럴 인자를 가진 variant call의 타입
     복원(궁극적으로는 checker 쪽 generic variant-constructor inference
     보강).
 - workspace/dependency graph를 codegen/link order로 변환한다.
