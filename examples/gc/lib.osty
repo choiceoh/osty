@@ -1,0 +1,3184 @@
+// gc - a high-grade independent garbage-collector core written in Osty.
+//
+// This package models the runtime pieces a native Osty backend would need:
+// a managed object graph, explicit roots, a nursery and tenured generation,
+// old-to-young remembered-set write barriers, incremental tri-color marking,
+// cycle collection, compaction, pinning, allocation pressure triggers, and
+// telemetry for every collection.
+
+pub enum ObjectKind {
+    GcRecord,
+    GcArray,
+    GcClosure,
+    GcBytes,
+    GcRuntimeFrame,
+}
+
+pub enum MarkColor {
+    GcWhite,
+    GcGrey,
+    GcBlack,
+}
+
+pub enum GcRegionKind {
+    GcEdenRegion,
+    GcSurvivorRegion,
+    GcOldRegion,
+    GcHumongousRegion,
+    GcPinnedRegion,
+}
+
+pub enum TracePhase {
+    GcIdle,
+    GcMarking,
+    GcSweeping,
+}
+
+pub struct GcConfig {
+    pub nurseryLimit: Int,
+    pub survivorLimit: Int,
+    pub heapLimit: Int,
+    pub promotionAge: Int,
+    pub incrementalBudget: Int,
+    pub largeObjectThreshold: Int,
+    pub tlabSize: Int,
+}
+
+pub struct GcStats {
+    pub kind: String,
+    pub trigger: String,
+    pub cycle: Int,
+    pub beforeObjects: Int,
+    pub afterObjects: Int,
+    pub reclaimedObjects: Int,
+    pub beforeBytes: Int,
+    pub afterBytes: Int,
+    pub reclaimedBytes: Int,
+    pub promotedObjects: Int,
+    pub compactedObjects: Int,
+    pub rememberedScanned: Int,
+    pub markSteps: Int,
+    pub pauseUnits: Int,
+    pub allocationBytesSinceLastGC: Int,
+    pub beforeFragmentedBytes: Int,
+    pub afterFragmentedBytes: Int,
+    pub fragmentedBytes: Int,
+    pub survivalPercent: Int,
+    pub promotionPercent: Int,
+}
+
+pub struct GcObject {
+    pub id: Int,
+    pub kind: ObjectKind,
+    pub size: Int,
+    pub address: Int,
+    pub generation: Int,
+    pub age: Int,
+    pub color: MarkColor,
+    pub marked: Bool,
+    pub pinned: Bool,
+    pub large: Bool,
+    pub region: GcRegionKind,
+    pub refs: List<Int>,
+    pub remembered: Bool,
+    pub allocatedCycle: Int,
+}
+
+pub struct GcTlab {
+    pub ownerId: Int,
+    pub start: Int,
+    pub cursor: Int,
+    pub limit: Int,
+    pub refills: Int,
+    pub fastAllocations: Int,
+    pub slowAllocations: Int,
+    pub wasteBytes: Int,
+}
+
+pub struct GcFreeBlock {
+    pub address: Int,
+    pub size: Int,
+}
+
+pub struct GcTenuredAllocator {
+    pub cursor: Int,
+    pub freeList: List<GcFreeBlock>,
+    pub bumpAllocations: Int,
+    pub reuseAllocations: Int,
+    pub directAllocations: Int,
+    pub promotedAllocations: Int,
+    pub reusedBytes: Int,
+}
+
+pub struct GcHumongousAllocator {
+    pub cursor: Int,
+    pub freeList: List<GcFreeBlock>,
+    pub bumpAllocations: Int,
+    pub reuseAllocations: Int,
+    pub allocatedObjects: Int,
+    pub reclaimedObjects: Int,
+    pub allocatedBytes: Int,
+    pub reclaimedBytes: Int,
+    pub reusedBytes: Int,
+}
+
+pub enum GcSafepointKind {
+    GcCallSafepoint,
+    GcAllocationSafepoint,
+    GcLoopBackedgeSafepoint,
+    GcAsyncYieldSafepoint,
+}
+
+pub enum GcRootSlotKind {
+    GcLocalRootSlot,
+    GcTemporaryRootSlot,
+    GcRegisterRootSlot,
+    GcSpillRootSlot,
+    GcClosureRootSlot,
+    GcDerivedRootSlot,
+}
+
+pub enum GcFrameSlotKind {
+    GcFrameLocalSlot,
+    GcFrameTemporarySlot,
+    GcFrameRegisterSpillSlot,
+    GcFrameClosureCaptureSlot,
+    GcFrameTupleFieldSlot,
+    GcFrameDeferSlot,
+    GcFrameQuestionSlot,
+    GcFrameReturnSlot,
+}
+
+pub enum GcGlobalRootKind {
+    GcTopLevelLetRoot,
+    GcConstantRoot,
+    GcPackageGlobalRoot,
+    GcStaticRoot,
+}
+
+pub enum GcGlobalInitState {
+    GcGlobalDeclared,
+    GcGlobalInitializing,
+    GcGlobalReady,
+    GcGlobalPoisoned,
+}
+
+pub enum GcClosureCaptureKind {
+    GcCaptureScalar,
+    GcCaptureValue,
+    GcCaptureBoxedValue,
+    GcCaptureMutableBox,
+}
+
+pub enum GcAsyncFrameState {
+    GcAsyncFrameRunning,
+    GcAsyncFrameSuspended,
+    GcAsyncFrameCompleted,
+    GcAsyncFrameCancelled,
+}
+
+pub struct GcLiveRootSlot {
+    pub slot: Int,
+    pub kind: GcRootSlotKind,
+    pub name: String,
+    pub derivedFrom: Int,
+    pub nullable: Bool,
+}
+
+pub struct GcSafepoint {
+    pub id: Int,
+    pub kind: GcSafepointKind,
+    pub irNode: Int,
+    pub instructionOffset: Int,
+    pub mayCollect: Bool,
+    pub mayAllocate: Bool,
+    pub maySuspend: Bool,
+    pub requiresStackMap: Bool,
+    pub runsDefer: Bool,
+    pub questionExit: Bool,
+    pub earlyReturn: Bool,
+    pub liveRoots: List<GcLiveRootSlot>,
+}
+
+pub struct GcSafepointPlan {
+    pub functionName: String,
+    pub frameSlots: Int,
+    pub safepoints: List<GcSafepoint>,
+}
+
+pub struct GcGlobalRoot {
+    pub moduleName: String,
+    pub name: String,
+    pub kind: GcGlobalRootKind,
+    pub state: GcGlobalInitState,
+    pub objectId: Int,
+}
+
+pub struct GcClosureCapture {
+    pub slot: Int,
+    pub name: String,
+    pub kind: GcClosureCaptureKind,
+    pub objectId: Int,
+}
+
+pub struct GcClosureEnvironment {
+    pub closureId: Int,
+    pub functionName: String,
+    pub captures: List<GcClosureCapture>,
+}
+
+pub struct GcAsyncFrameRoot {
+    pub taskId: Int,
+    pub functionName: String,
+    pub safepointId: Int,
+    pub state: GcAsyncFrameState,
+    pub frameObjectId: Int,
+    pub roots: List<Int>,
+}
+
+pub struct GcFrameSlot {
+    pub slot: Int,
+    pub kind: GcFrameSlotKind,
+    pub name: String,
+    pub byteOffset: Int,
+    pub pointer: Bool,
+    pub derivedFrom: Int,
+    pub preserveForDefer: Bool,
+    pub preserveForQuestion: Bool,
+    pub preserveForReturn: Bool,
+}
+
+pub struct GcDerivedRootMap {
+    pub derivedSlot: Int,
+    pub baseSlot: Int,
+}
+
+pub struct GcStackMapEntry {
+    pub safepointId: Int,
+    pub instructionOffset: Int,
+    pub liveCount: Int,
+    pub inlineSlots: Int,
+    pub bitmapWords: List<Int>,
+    pub overflowSlots: List<Int>,
+    pub derivedRoots: List<GcDerivedRootMap>,
+}
+
+pub struct GcStackMap {
+    pub functionName: String,
+    pub frameSlots: Int,
+    pub pointerSize: Int,
+    pub inlineSlots: Int,
+    pub frameLayout: List<GcFrameSlot>,
+    pub entries: List<GcStackMapEntry>,
+}
+
+pub struct GcHeap {
+    pub config: GcConfig,
+    nextId: Int,
+    nextAddress: Int,
+    liveBytes: Int,
+    cycle: Int,
+    minorCollections: Int,
+    majorCollections: Int,
+    phase: TracePhase,
+    objects: Map<Int, GcObject>,
+    roots: Set<Int>,
+    globalRoots: Map<String, GcGlobalRoot>,
+    closureEnvironments: Map<Int, GcClosureEnvironment>,
+    asyncFrames: Map<Int, GcAsyncFrameRoot>,
+    tlabs: Map<Int, GcTlab>,
+    tenured: GcTenuredAllocator,
+    humongous: GcHumongousAllocator,
+    remembered: Set<Int>,
+    grey: List<Int>,
+    allocatedSinceLastGC: Int,
+    lastStats: GcStats?,
+
+    pub fn tryAllocate(mut self, kind: ObjectKind, size: Int) -> Result<Int, String> {
+        let normalized = normalizeSize(size)
+        let large = self.isLargeSize(normalized)
+
+        if !(large) && self.phase == GcIdle && self.config.nurseryLimit > 0 && self.nurseryBytes() + normalized > self.config.nurseryLimit {
+            let _ = self.minorCollectFor("nursery-pressure")
+        }
+
+        if self.config.heapLimit > 0 && self.liveBytes + normalized > self.config.heapLimit {
+            let _ = self.majorCollectFor("heap-pressure")
+        }
+
+        if self.config.heapLimit > 0 && self.liveBytes + normalized > self.config.heapLimit {
+            Err("gc heap exhausted: requested {normalized} bytes with {self.liveBytes} live bytes")
+        } else {
+            Ok(self.allocateRaw(kind, normalized))
+        }
+    }
+
+    pub fn tryAllocateTenured(mut self, kind: ObjectKind, size: Int) -> Result<Int, String> {
+        let normalized = normalizeSize(size)
+
+        if self.config.heapLimit > 0 && self.liveBytes + normalized > self.config.heapLimit {
+            let _ = self.majorCollectFor("tenured-heap-pressure")
+        }
+
+        if self.config.heapLimit > 0 && self.liveBytes + normalized > self.config.heapLimit {
+            Err("gc heap exhausted: requested {normalized} bytes with {self.liveBytes} live bytes")
+        } else {
+            Ok(self.allocateTenuredRaw(kind, normalized))
+        }
+    }
+
+    pub fn tryAllocateThread(mut self, ownerId: Int, kind: ObjectKind, size: Int) -> Result<Int, String> {
+        let normalized = normalizeSize(size)
+        if ownerId <= 0 {
+            return Err("tlab owner id must be positive")
+        }
+        if self.config.tlabSize <= 0 || self.isLargeSize(normalized) || normalized > self.config.tlabSize {
+            return self.tryAllocate(kind, normalized)
+        }
+        if self.tlabCanAllocate(ownerId, normalized) && self.heapLimitAllows(normalized) {
+            return Ok(self.allocateRawInTlab(ownerId, kind, normalized))
+        }
+        match self.refillTlab(ownerId, normalized) {
+            Ok(_) -> {},
+            Err(e) -> {
+                return Err(e)
+            },
+        }
+        if self.tlabCanAllocate(ownerId, normalized) && self.heapLimitAllows(normalized) {
+            Ok(self.allocateRawInTlab(ownerId, kind, normalized))
+        } else {
+            Err("gc heap exhausted: requested {normalized} bytes with {self.liveBytes} live bytes")
+        }
+    }
+
+    pub fn allocate(mut self, kind: ObjectKind, size: Int) -> Int {
+        self.tryAllocate(kind, size).unwrap()
+    }
+
+    pub fn allocateTenured(mut self, kind: ObjectKind, size: Int) -> Int {
+        self.tryAllocateTenured(kind, size).unwrap()
+    }
+
+    pub fn allocateThread(mut self, ownerId: Int, kind: ObjectKind, size: Int) -> Int {
+        self.tryAllocateThread(ownerId, kind, size).unwrap()
+    }
+
+    pub fn addRoot(mut self, id: Int) -> Bool {
+        if !(self.objects.containsKey(id)) {
+            return false
+        }
+        self.roots.insert(id)
+        if self.phase == GcMarking {
+            self.shade(id)
+        }
+        true
+    }
+
+    pub fn removeRoot(mut self, id: Int) -> Bool {
+        self.roots.remove(id)
+    }
+
+    pub fn installGlobalRoot(
+        mut self,
+        moduleName: String,
+        name: String,
+        kind: GcGlobalRootKind,
+        id: Int,
+    ) -> Bool {
+        if !(self.objects.containsKey(id)) {
+            return false
+        }
+        if moduleName == "" || name == "" {
+            return false
+        }
+        let key = globalRootKey(moduleName, name)
+        if self.globalRoots.containsKey(key) {
+            return false
+        }
+        self.globalRoots.insert(
+            key,
+            GcGlobalRoot {
+                moduleName,
+                name,
+                kind,
+                state: GcGlobalReady,
+                objectId: id,
+            },
+        )
+        if self.phase == GcMarking {
+            self.shade(id)
+        }
+        true
+    }
+
+    pub fn declareGlobalRoot(mut self, moduleName: String, name: String, kind: GcGlobalRootKind) -> Bool {
+        if moduleName == "" || name == "" {
+            return false
+        }
+        let key = globalRootKey(moduleName, name)
+        if self.globalRoots.containsKey(key) {
+            return false
+        }
+        self.globalRoots.insert(
+            key,
+            GcGlobalRoot {
+                moduleName,
+                name,
+                kind,
+                state: GcGlobalDeclared,
+                objectId: -1,
+            },
+        )
+        true
+    }
+
+    pub fn beginGlobalInit(mut self, moduleName: String, name: String, kind: GcGlobalRootKind) -> Bool {
+        if moduleName == "" || name == "" {
+            return false
+        }
+        let key = globalRootKey(moduleName, name)
+        if self.globalRoots.containsKey(key) {
+            let mut root = self.globalRoots[key]
+            if root.state != GcGlobalDeclared {
+                return false
+            }
+            root.state = GcGlobalInitializing
+            root.objectId = -1
+            self.globalRoots.insert(key, root)
+            return true
+        }
+        self.globalRoots.insert(
+            key,
+            GcGlobalRoot {
+                moduleName,
+                name,
+                kind,
+                state: GcGlobalInitializing,
+                objectId: -1,
+            },
+        )
+        true
+    }
+
+    pub fn setGlobalRootObject(mut self, moduleName: String, name: String, id: Int) -> Bool {
+        let key = globalRootKey(moduleName, name)
+        if !(self.globalRoots.containsKey(key)) {
+            return false
+        }
+        if !(self.objects.containsKey(id)) {
+            return false
+        }
+        let mut root = self.globalRoots[key]
+        if root.state == GcGlobalPoisoned {
+            return false
+        }
+        root.objectId = id
+        if root.state == GcGlobalDeclared {
+            root.state = GcGlobalInitializing
+        }
+        self.globalRoots.insert(key, root)
+        if self.phase == GcMarking {
+            self.shade(id)
+        }
+        true
+    }
+
+    pub fn finishGlobalInit(mut self, moduleName: String, name: String) -> Bool {
+        let key = globalRootKey(moduleName, name)
+        if !(self.globalRoots.containsKey(key)) {
+            return false
+        }
+        let mut root = self.globalRoots[key]
+        if root.objectId < 0 || !(self.objects.containsKey(root.objectId)) {
+            return false
+        }
+        root.state = GcGlobalReady
+        self.globalRoots.insert(key, root)
+        if self.phase == GcMarking {
+            self.shade(root.objectId)
+        }
+        true
+    }
+
+    pub fn poisonGlobalRoot(mut self, moduleName: String, name: String) -> Bool {
+        let key = globalRootKey(moduleName, name)
+        if !(self.globalRoots.containsKey(key)) {
+            return false
+        }
+        let mut root = self.globalRoots[key]
+        root.state = GcGlobalPoisoned
+        root.objectId = -1
+        self.globalRoots.insert(key, root)
+        true
+    }
+
+    pub fn removeGlobalRoot(mut self, moduleName: String, name: String) -> Bool {
+        let key = globalRootKey(moduleName, name)
+        if self.globalRoots.containsKey(key) {
+            let _ = self.globalRoots.remove(key)
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn installClosureEnvironment(
+        mut self,
+        closureId: Int,
+        functionName: String,
+        captures: List<GcClosureCapture>,
+    ) -> Bool {
+        if !(self.objects.containsKey(closureId)) {
+            return false
+        }
+        if self.objects[closureId].kind != GcClosure {
+            return false
+        }
+        if functionName == "" {
+            return false
+        }
+        if self.closureEnvironments.containsKey(closureId) {
+            return false
+        }
+        match self.validateClosureCaptures(captures) {
+            Ok(_) -> {},
+            Err(_) -> {
+                return false
+            },
+        }
+
+        self.rewriteClosureCaptureRefs(closureId, captures)
+        self.closureEnvironments.insert(
+            closureId,
+            GcClosureEnvironment {
+                closureId,
+                functionName,
+                captures,
+            },
+        )
+        true
+    }
+
+    pub fn updateClosureCapture(mut self, closureId: Int, slot: Int, objectId: Int) -> Bool {
+        if !(self.closureEnvironments.containsKey(closureId)) {
+            return false
+        }
+        if !(self.objects.containsKey(objectId)) {
+            return false
+        }
+
+        let mut env = self.closureEnvironments[closureId]
+        let mut captures: List<GcClosureCapture> = []
+        let mut found = false
+        for capture in env.captures {
+            let mut next = capture
+            if next.slot == slot {
+                if next.kind == GcCaptureScalar {
+                    return false
+                }
+                next.objectId = objectId
+                found = true
+            }
+            captures.push(next)
+        }
+        if !(found) {
+            return false
+        }
+        match self.validateClosureCaptures(captures) {
+            Ok(_) -> {},
+            Err(_) -> {
+                return false
+            },
+        }
+
+        env.captures = captures
+        self.rewriteClosureCaptureRefs(closureId, captures)
+        self.closureEnvironments.insert(closureId, env)
+        true
+    }
+
+    pub fn removeClosureEnvironment(mut self, closureId: Int) -> Bool {
+        if self.closureEnvironments.containsKey(closureId) {
+            let _ = self.closureEnvironments.remove(closureId)
+            if self.objects.containsKey(closureId) {
+                let mut obj = self.objects[closureId]
+                obj.refs = []
+                obj.remembered = false
+                self.objects.insert(closureId, obj)
+                let _ = self.remembered.remove(closureId)
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn suspendAsyncFrame(
+        mut self,
+        taskId: Int,
+        functionName: String,
+        safepointId: Int,
+        frameObjectId: Int,
+        roots: List<Int>,
+    ) -> Bool {
+        if taskId <= 0 || functionName == "" || safepointId <= 0 {
+            return false
+        }
+        if !(self.objects.containsKey(frameObjectId)) {
+            return false
+        }
+        if self.objects[frameObjectId].kind != GcRuntimeFrame {
+            return false
+        }
+        match self.validateAsyncFrameRoots(roots) {
+            Ok(_) -> {},
+            Err(_) -> {
+                return false
+            },
+        }
+        if self.asyncFrames.containsKey(taskId) {
+            let old = self.asyncFrames[taskId]
+            if old.state == GcAsyncFrameCompleted || old.state == GcAsyncFrameCancelled {
+                return false
+            }
+        }
+
+        self.asyncFrames.insert(
+            taskId,
+            GcAsyncFrameRoot {
+                taskId,
+                functionName,
+                safepointId,
+                state: GcAsyncFrameSuspended,
+                frameObjectId,
+                roots,
+            },
+        )
+        if self.phase == GcMarking {
+            self.shade(frameObjectId)
+            self.shadeObjectList(roots)
+        }
+        true
+    }
+
+    pub fn resumeAsyncFrame(mut self, taskId: Int) -> Bool {
+        if !(self.asyncFrames.containsKey(taskId)) {
+            return false
+        }
+        let mut frame = self.asyncFrames[taskId]
+        if frame.state == GcAsyncFrameCompleted || frame.state == GcAsyncFrameCancelled {
+            return false
+        }
+        frame.state = GcAsyncFrameRunning
+        frame.frameObjectId = -1
+        frame.roots = []
+        self.asyncFrames.insert(taskId, frame)
+        true
+    }
+
+    pub fn completeAsyncFrame(mut self, taskId: Int) -> Bool {
+        if !(self.asyncFrames.containsKey(taskId)) {
+            return false
+        }
+        let mut frame = self.asyncFrames[taskId]
+        frame.state = GcAsyncFrameCompleted
+        frame.frameObjectId = -1
+        frame.roots = []
+        self.asyncFrames.insert(taskId, frame)
+        true
+    }
+
+    pub fn cancelAsyncFrame(mut self, taskId: Int) -> Bool {
+        if !(self.asyncFrames.containsKey(taskId)) {
+            return false
+        }
+        let mut frame = self.asyncFrames[taskId]
+        frame.state = GcAsyncFrameCancelled
+        frame.frameObjectId = -1
+        frame.roots = []
+        self.asyncFrames.insert(taskId, frame)
+        true
+    }
+
+    pub fn removeAsyncFrame(mut self, taskId: Int) -> Bool {
+        if self.asyncFrames.containsKey(taskId) {
+            let _ = self.asyncFrames.remove(taskId)
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn pin(mut self, id: Int) -> Bool {
+        if !(self.objects.containsKey(id)) {
+            return false
+        }
+        let mut next = self.objects[id]
+        next.pinned = true
+        next.region = regionForObject(next)
+        self.objects.insert(id, next)
+        true
+    }
+
+    pub fn unpin(mut self, id: Int) -> Bool {
+        if !(self.objects.containsKey(id)) {
+            return false
+        }
+        let mut next = self.objects[id]
+        next.pinned = false
+        next.region = regionForObject(next)
+        self.objects.insert(id, next)
+        true
+    }
+
+    pub fn link(mut self, from: Int, to: Int) -> Bool {
+        if !(self.objects.containsKey(from)) {
+            return false
+        }
+        if !(self.objects.containsKey(to)) {
+            return false
+        }
+
+        let child = self.objects[to]
+        let mut next = self.objects[from]
+        if !(next.refs.contains(to)) {
+            next.refs.push(to)
+        }
+        if next.generation > child.generation {
+            next.remembered = true
+            self.remembered.insert(from)
+        }
+        self.objects.insert(from, next)
+        if self.phase == GcMarking && next.color == GcBlack && child.color == GcWhite {
+            self.shade(to)
+        }
+        true
+    }
+
+    pub fn unlink(mut self, from: Int, to: Int) -> Bool {
+        if !(self.objects.containsKey(from)) {
+            return false
+        }
+        let mut next = self.objects[from]
+        let before = next.refs.len()
+        next.refs = next.refs.filter(|id| id != to)
+        self.objects.insert(from, next)
+        if before != next.refs.len() {
+            self.rebuildRemembered()
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn minorCollect(mut self) -> GcStats {
+        self.minorCollectFor("manual")
+    }
+
+    pub fn majorCollect(mut self) -> GcStats {
+        self.majorCollectFor("manual")
+    }
+
+    pub fn startIncrementalMajor(mut self) {
+        self.cycle = self.cycle + 1
+        self.phase = GcMarking
+        self.retireAllTlabs()
+        self.clearAllMarks()
+        for id in self.roots.toList() {
+            self.shade(id)
+        }
+        self.shadeGlobalRoots()
+        self.shadeAsyncFrameRoots()
+    }
+
+    pub fn stepIncremental(mut self) -> GcStats {
+        if self.phase == GcIdle {
+            self.startIncrementalMajor()
+        }
+
+        let beforeObjects = self.objectCount()
+        let beforeBytes = self.liveBytes
+        let beforeFragmentedBytes = self.fragmentedBytes()
+        let allocationBytesSinceLastGC = self.allocatedSinceLastGC
+
+        if self.phase == GcMarking {
+            let markSteps = self.drainGrey(self.config.incrementalBudget, false)
+            if self.grey.len() > 0 {
+                let stats = GcStats {
+                    kind: "incremental-mark",
+                    trigger: "incremental-budget",
+                    cycle: self.cycle,
+                    beforeObjects,
+                    afterObjects: self.objectCount(),
+                    reclaimedObjects: 0,
+                    beforeBytes,
+                    afterBytes: self.liveBytes,
+                    reclaimedBytes: 0,
+                    promotedObjects: 0,
+                    compactedObjects: 0,
+                    rememberedScanned: 0,
+                    markSteps,
+                    pauseUnits: telemetryPauseUnits(markSteps, 0, 0, 0, 0),
+                    allocationBytesSinceLastGC,
+                    beforeFragmentedBytes,
+                    afterFragmentedBytes: self.fragmentedBytes(),
+                    fragmentedBytes: self.fragmentedBytes(),
+                    survivalPercent: percent(self.objectCount(), beforeObjects),
+                    promotionPercent: 0,
+                }
+                self.lastStats = Some(stats)
+                return stats
+            }
+
+            self.phase = GcSweeping
+            let (reclaimedObjects, reclaimedBytes) = self.sweepAll()
+            let compactedObjects = self.compactLive()
+            self.rebuildRemembered()
+            self.majorCollections = self.majorCollections + 1
+            self.phase = GcIdle
+            self.allocatedSinceLastGC = 0
+
+            let stats = GcStats {
+                kind: "incremental-sweep",
+                trigger: "incremental-budget",
+                cycle: self.cycle,
+                beforeObjects,
+                afterObjects: self.objectCount(),
+                reclaimedObjects,
+                beforeBytes,
+                afterBytes: self.liveBytes,
+                reclaimedBytes,
+                promotedObjects: 0,
+                compactedObjects,
+                rememberedScanned: 0,
+                markSteps,
+                pauseUnits: telemetryPauseUnits(markSteps, reclaimedObjects, 0, compactedObjects, 0),
+                allocationBytesSinceLastGC,
+                beforeFragmentedBytes,
+                afterFragmentedBytes: self.fragmentedBytes(),
+                fragmentedBytes: self.fragmentedBytes(),
+                survivalPercent: percent(self.objectCount(), beforeObjects),
+                promotionPercent: 0,
+            }
+            self.lastStats = Some(stats)
+            return stats
+        }
+
+        self.majorCollectFor("manual")
+    }
+
+    pub fn finishIncremental(mut self) -> GcStats {
+        let mut last = emptyStats("incremental-idle", self)
+        for self.phase != GcIdle {
+            last = self.stepIncremental()
+        }
+        last
+    }
+
+    pub fn lastCollectionStats(self) -> GcStats? {
+        self.lastStats
+    }
+
+    fn minorCollectFor(mut self, trigger: String) -> GcStats {
+        self.cycle = self.cycle + 1
+        self.retireAllTlabs()
+        let beforeObjects = self.objectCount()
+        let beforeBytes = self.liveBytes
+        let beforeFragmentedBytes = self.fragmentedBytes()
+        let rememberedScanned = self.remembered.len()
+        let allocationBytesSinceLastGC = self.allocatedSinceLastGC
+
+        self.clearYoungMarks()
+        self.markYoungRoots()
+        let markSteps = self.drainGrey(0, true)
+        let (reclaimedObjects, reclaimedBytes, promotedObjects) = self.sweepYoung()
+        self.rebuildRemembered()
+        self.minorCollections = self.minorCollections + 1
+        self.allocatedSinceLastGC = 0
+
+        let stats = GcStats {
+            kind: "minor",
+            trigger,
+            cycle: self.cycle,
+            beforeObjects,
+            afterObjects: self.objectCount(),
+            reclaimedObjects,
+            beforeBytes,
+            afterBytes: self.liveBytes,
+            reclaimedBytes,
+            promotedObjects,
+            compactedObjects: 0,
+            rememberedScanned,
+            markSteps,
+            pauseUnits: telemetryPauseUnits(
+                markSteps,
+                reclaimedObjects,
+                promotedObjects,
+                0,
+                rememberedScanned,
+            ),
+            allocationBytesSinceLastGC,
+            beforeFragmentedBytes,
+            afterFragmentedBytes: self.fragmentedBytes(),
+            fragmentedBytes: self.fragmentedBytes(),
+            survivalPercent: percent(self.objectCount(), beforeObjects),
+            promotionPercent: percent(promotedObjects, beforeObjects),
+        }
+        self.lastStats = Some(stats)
+        stats
+    }
+
+    fn majorCollectFor(mut self, trigger: String) -> GcStats {
+        self.cycle = self.cycle + 1
+        self.retireAllTlabs()
+        let beforeObjects = self.objectCount()
+        let beforeBytes = self.liveBytes
+        let beforeFragmentedBytes = self.fragmentedBytes()
+        let allocationBytesSinceLastGC = self.allocatedSinceLastGC
+
+        self.phase = GcMarking
+        self.clearAllMarks()
+        for id in self.roots.toList() {
+            self.shade(id)
+        }
+        self.shadeGlobalRoots()
+        self.shadeAsyncFrameRoots()
+        let markSteps = self.drainGrey(0, false)
+
+        self.phase = GcSweeping
+        let (reclaimedObjects, reclaimedBytes) = self.sweepAll()
+        let compactedObjects = self.compactLive()
+        self.rebuildRemembered()
+        self.majorCollections = self.majorCollections + 1
+        self.phase = GcIdle
+        self.allocatedSinceLastGC = 0
+
+        let stats = GcStats {
+            kind: "major",
+            trigger,
+            cycle: self.cycle,
+            beforeObjects,
+            afterObjects: self.objectCount(),
+            reclaimedObjects,
+            beforeBytes,
+            afterBytes: self.liveBytes,
+            reclaimedBytes,
+            promotedObjects: 0,
+            compactedObjects,
+            rememberedScanned: 0,
+            markSteps,
+            pauseUnits: telemetryPauseUnits(markSteps, reclaimedObjects, 0, compactedObjects, 0),
+            allocationBytesSinceLastGC,
+            beforeFragmentedBytes,
+            afterFragmentedBytes: self.fragmentedBytes(),
+            fragmentedBytes: self.fragmentedBytes(),
+            survivalPercent: percent(self.objectCount(), beforeObjects),
+            promotionPercent: 0,
+        }
+        self.lastStats = Some(stats)
+        stats
+    }
+
+    pub fn contains(self, id: Int) -> Bool {
+        self.objects.containsKey(id)
+    }
+
+    pub fn objectCount(self) -> Int {
+        self.objects.len()
+    }
+
+    pub fn rootCount(self) -> Int {
+        self.roots.len()
+    }
+
+    pub fn globalRootCount(self) -> Int {
+        self.globalRoots.len()
+    }
+
+    pub fn globalObjectRootCount(self) -> Int {
+        let mut total = 0
+        for (key, root) in self.globalRoots {
+            let _ = key
+            if root.objectId >= 0 {
+                total = total + 1
+            }
+        }
+        total
+    }
+
+    pub fn closureEnvironmentCount(self) -> Int {
+        self.closureEnvironments.len()
+    }
+
+    pub fn closurePointerCaptureCount(self) -> Int {
+        let mut total = 0
+        for (closureId, env) in self.closureEnvironments {
+            let _ = closureId
+            for capture in env.captures {
+                if capture.objectId >= 0 {
+                    total = total + 1
+                }
+            }
+        }
+        total
+    }
+
+    pub fn asyncFrameCount(self) -> Int {
+        self.asyncFrames.len()
+    }
+
+    pub fn suspendedAsyncFrameCount(self) -> Int {
+        let mut total = 0
+        for (taskId, frame) in self.asyncFrames {
+            let _ = taskId
+            if frame.state == GcAsyncFrameSuspended {
+                total = total + 1
+            }
+        }
+        total
+    }
+
+    pub fn asyncFrameRootCount(self) -> Int {
+        let mut total = 0
+        for (taskId, frame) in self.asyncFrames {
+            let _ = taskId
+            if frame.state == GcAsyncFrameSuspended {
+                total = total + frame.roots.len()
+                if frame.frameObjectId >= 0 {
+                    total = total + 1
+                }
+            }
+        }
+        total
+    }
+
+    pub fn tlabCount(self) -> Int {
+        self.tlabs.len()
+    }
+
+    pub fn tlabRemaining(self, ownerId: Int) -> Int? {
+        if self.tlabs.containsKey(ownerId) {
+            Some(tlabRemainingBytes(self.tlabs[ownerId]))
+        } else {
+            None
+        }
+    }
+
+    pub fn tlabRefillCount(self) -> Int {
+        let mut total = 0
+        for (ownerId, tlab) in self.tlabs {
+            let _ = ownerId
+            total = total + tlab.refills
+        }
+        total
+    }
+
+    pub fn tlabFastAllocationCount(self) -> Int {
+        let mut total = 0
+        for (ownerId, tlab) in self.tlabs {
+            let _ = ownerId
+            total = total + tlab.fastAllocations
+        }
+        total
+    }
+
+    pub fn tlabSlowAllocationCount(self) -> Int {
+        let mut total = 0
+        for (ownerId, tlab) in self.tlabs {
+            let _ = ownerId
+            total = total + tlab.slowAllocations
+        }
+        total
+    }
+
+    pub fn tlabWasteBytes(self) -> Int {
+        let mut total = 0
+        for (ownerId, tlab) in self.tlabs {
+            let _ = ownerId
+            total = total + tlab.wasteBytes
+        }
+        total
+    }
+
+    pub fn tenuredFreeBlockCount(self) -> Int {
+        self.tenured.freeList.len()
+    }
+
+    pub fn tenuredFreeBytes(self) -> Int {
+        let mut total = 0
+        for block in self.tenured.freeList {
+            total = total + block.size
+        }
+        total
+    }
+
+    pub fn tenuredBumpAllocationCount(self) -> Int {
+        self.tenured.bumpAllocations
+    }
+
+    pub fn tenuredReuseAllocationCount(self) -> Int {
+        self.tenured.reuseAllocations
+    }
+
+    pub fn tenuredDirectAllocationCount(self) -> Int {
+        self.tenured.directAllocations
+    }
+
+    pub fn tenuredPromotedAllocationCount(self) -> Int {
+        self.tenured.promotedAllocations
+    }
+
+    pub fn tenuredReusedBytes(self) -> Int {
+        self.tenured.reusedBytes
+    }
+
+    pub fn tenuredCursor(self) -> Int {
+        self.tenured.cursor
+    }
+
+    pub fn rememberedCount(self) -> Int {
+        self.remembered.len()
+    }
+
+    pub fn nurseryBytes(self) -> Int {
+        let mut total = 0
+        for (id, obj) in self.objects {
+            let _ = id
+            if obj.generation == 0 {
+                total = total + obj.size
+            }
+        }
+        total
+    }
+
+    pub fn edenBytes(self) -> Int {
+        let mut total = 0
+        for (id, obj) in self.objects {
+            let _ = id
+            if obj.region == GcEdenRegion {
+                total = total + obj.size
+            }
+        }
+        total
+    }
+
+    pub fn survivorBytes(self) -> Int {
+        let mut total = 0
+        for (id, obj) in self.objects {
+            let _ = id
+            if obj.region == GcSurvivorRegion {
+                total = total + obj.size
+            }
+        }
+        total
+    }
+
+    pub fn edenObjectCount(self) -> Int {
+        let mut total = 0
+        for (id, obj) in self.objects {
+            let _ = id
+            if obj.region == GcEdenRegion {
+                total = total + 1
+            }
+        }
+        total
+    }
+
+    pub fn survivorObjectCount(self) -> Int {
+        let mut total = 0
+        for (id, obj) in self.objects {
+            let _ = id
+            if obj.region == GcSurvivorRegion {
+                total = total + 1
+            }
+        }
+        total
+    }
+
+    pub fn tenuredObjectCount(self) -> Int {
+        let mut total = 0
+        for (id, obj) in self.objects {
+            let _ = id
+            if obj.generation == 1 {
+                total = total + 1
+            }
+        }
+        total
+    }
+
+    pub fn oldBytes(self) -> Int {
+        let mut total = 0
+        for (id, obj) in self.objects {
+            let _ = id
+            if obj.generation == 1 {
+                total = total + obj.size
+            }
+        }
+        total
+    }
+
+    pub fn totalLiveBytes(self) -> Int {
+        self.liveBytes
+    }
+
+    pub fn fragmentedBytes(self) -> Int {
+        let span = self.heapSpan()
+        if span > self.liveBytes {
+            span - self.liveBytes
+        } else {
+            0
+        }
+    }
+
+    pub fn phaseNow(self) -> TracePhase {
+        self.phase
+    }
+
+    pub fn minorCount(self) -> Int {
+        self.minorCollections
+    }
+
+    pub fn majorCount(self) -> Int {
+        self.majorCollections
+    }
+
+    pub fn generationOf(self, id: Int) -> Int? {
+        if self.objects.containsKey(id) {
+            Some(self.objects[id].generation)
+        } else {
+            None
+        }
+    }
+
+    pub fn ageOf(self, id: Int) -> Int? {
+        if self.objects.containsKey(id) {
+            Some(self.objects[id].age)
+        } else {
+            None
+        }
+    }
+
+    pub fn addressOf(self, id: Int) -> Int? {
+        if self.objects.containsKey(id) {
+            Some(self.objects[id].address)
+        } else {
+            None
+        }
+    }
+
+    pub fn refCount(self, id: Int) -> Int? {
+        if self.objects.containsKey(id) {
+            Some(self.objects[id].refs.len())
+        } else {
+            None
+        }
+    }
+
+    pub fn isLarge(self, id: Int) -> Bool? {
+        if self.objects.containsKey(id) {
+            Some(self.objects[id].large)
+        } else {
+            None
+        }
+    }
+
+    pub fn regionOf(self, id: Int) -> GcRegionKind? {
+        if self.objects.containsKey(id) {
+            Some(self.objects[id].region)
+        } else {
+            None
+        }
+    }
+
+    pub fn globalRootObject(self, moduleName: String, name: String) -> Int? {
+        let key = globalRootKey(moduleName, name)
+        if self.globalRoots.containsKey(key) {
+            let root = self.globalRoots[key]
+            if root.objectId >= 0 {
+                Some(root.objectId)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
+    pub fn globalRootState(self, moduleName: String, name: String) -> GcGlobalInitState? {
+        let key = globalRootKey(moduleName, name)
+        if self.globalRoots.containsKey(key) {
+            Some(self.globalRoots[key].state)
+        } else {
+            None
+        }
+    }
+
+    pub fn largeObjectCount(self) -> Int {
+        let mut total = 0
+        for (id, obj) in self.objects {
+            let _ = id
+            if obj.large {
+                total = total + 1
+            }
+        }
+        total
+    }
+
+    pub fn humongousBytes(self) -> Int {
+        let mut total = 0
+        for (id, obj) in self.objects {
+            let _ = id
+            if obj.large {
+                total = total + obj.size
+            }
+        }
+        total
+    }
+
+    pub fn humongousFreeBlockCount(self) -> Int {
+        self.humongous.freeList.len()
+    }
+
+    pub fn humongousFreeBytes(self) -> Int {
+        let mut total = 0
+        for block in self.humongous.freeList {
+            total = total + block.size
+        }
+        total
+    }
+
+    pub fn humongousBumpAllocationCount(self) -> Int {
+        self.humongous.bumpAllocations
+    }
+
+    pub fn humongousReuseAllocationCount(self) -> Int {
+        self.humongous.reuseAllocations
+    }
+
+    pub fn humongousAllocatedObjectCount(self) -> Int {
+        self.humongous.allocatedObjects
+    }
+
+    pub fn humongousReclaimedObjectCount(self) -> Int {
+        self.humongous.reclaimedObjects
+    }
+
+    pub fn humongousReclaimedBytes(self) -> Int {
+        self.humongous.reclaimedBytes
+    }
+
+    pub fn humongousReusedBytes(self) -> Int {
+        self.humongous.reusedBytes
+    }
+
+    pub fn humongousCursor(self) -> Int {
+        self.humongous.cursor
+    }
+
+    pub fn pinnedObjectCount(self) -> Int {
+        let mut total = 0
+        for (id, obj) in self.objects {
+            let _ = id
+            if obj.pinned {
+                total = total + 1
+            }
+        }
+        total
+    }
+
+    pub fn validateHeap(self) -> Result<(), String> {
+        let mut byteSum = 0
+        let mut maxEnd = 0
+
+        if self.config.nurseryLimit < 0 {
+            return Err("nurseryLimit is negative: {self.config.nurseryLimit}")
+        }
+        if self.config.survivorLimit < 0 {
+            return Err("survivorLimit is negative: {self.config.survivorLimit}")
+        }
+        if self.config.promotionAge < 0 {
+            return Err("promotionAge is negative: {self.config.promotionAge}")
+        }
+        if self.config.incrementalBudget < 0 {
+            return Err("incrementalBudget is negative: {self.config.incrementalBudget}")
+        }
+        if self.config.largeObjectThreshold < 0 {
+            return Err("largeObjectThreshold is negative: {self.config.largeObjectThreshold}")
+        }
+        if self.config.tlabSize < 0 {
+            return Err("tlabSize is negative: {self.config.tlabSize}")
+        }
+
+        for (id, obj) in self.objects {
+            if obj.id != id {
+                return Err("heap object key/id mismatch: key={id}, object={obj.id}")
+            }
+            if id <= 0 {
+                return Err("heap object id must be positive: {id}")
+            }
+            if id >= self.nextId {
+                return Err("heap object id {id} is outside nextId {self.nextId}")
+            }
+            if obj.size <= 0 {
+                return Err("object {id} has non-positive size {obj.size}")
+            }
+            if obj.address < 0 {
+                return Err("object {id} has negative address {obj.address}")
+            }
+            if obj.generation != 0 && obj.generation != 1 {
+                return Err("object {id} has invalid generation {obj.generation}")
+            }
+            if obj.age < 0 {
+                return Err("object {id} has negative age {obj.age}")
+            }
+            if obj.large && obj.generation != 1 {
+                return Err("large object {id} is not tenured")
+            }
+            if !(obj.pinned) && !(obj.large) && obj.generation == 0 && obj.age == 0 && obj.region != GcEdenRegion {
+                return Err("young object {id} with age 0 is not in eden")
+            }
+            if !(obj.pinned) && !(obj.large) && obj.generation == 0 && obj.age > 0 && obj.region != GcSurvivorRegion {
+                return Err("aged young object {id} is not in survivor space")
+            }
+            if obj.region != regionForObject(obj) {
+                return Err("object {id} has stale region metadata")
+            }
+            if obj.color == GcWhite && obj.marked {
+                return Err("object {id} is white but marked")
+            }
+            if obj.color != GcWhite && !(obj.marked) {
+                return Err("object {id} is non-white but unmarked")
+            }
+
+            for childId in obj.refs {
+                if !(self.objects.containsKey(childId)) {
+                    return Err("object {id} references missing object {childId}")
+                }
+            }
+
+            let expectedRemembered = obj.generation > 0 && self.hasYoungRef(obj)
+            if obj.remembered != expectedRemembered {
+                return Err("object {id} remembered flag is stale")
+            }
+            if expectedRemembered && !(self.remembered.contains(id)) {
+                return Err("old object {id} has a young edge but is not remembered")
+            }
+            if !(expectedRemembered) && self.remembered.contains(id) {
+                return Err("object {id} is remembered without an old-to-young edge")
+            }
+
+            byteSum = byteSum + obj.size
+            let end = obj.address + obj.size
+            if end > maxEnd {
+                maxEnd = end
+            }
+        }
+
+        if byteSum != self.liveBytes {
+            return Err("liveBytes mismatch: field={self.liveBytes}, actual={byteSum}")
+        }
+        if maxEnd > self.nextAddress {
+            return Err("nextAddress {self.nextAddress} is before heap span {maxEnd}")
+        }
+        if self.allocatedSinceLastGC < 0 {
+            return Err("allocatedSinceLastGC is negative: {self.allocatedSinceLastGC}")
+        }
+        if self.tenured.cursor < 0 {
+            return Err("tenured allocator cursor is negative: {self.tenured.cursor}")
+        }
+        if self.tenured.cursor > self.nextAddress {
+            return Err(
+                "tenured allocator cursor {self.tenured.cursor} is beyond nextAddress {self.nextAddress}",
+            )
+        }
+        if self.tenured.bumpAllocations < 0 || self.tenured.reuseAllocations < 0 || self.tenured.directAllocations < 0 || self.tenured.promotedAllocations < 0 || self.tenured.reusedBytes < 0 {
+            return Err("tenured allocator has negative accounting")
+        }
+        if self.humongous.cursor < 0 {
+            return Err("humongous allocator cursor is negative: {self.humongous.cursor}")
+        }
+        if self.humongous.cursor > self.nextAddress {
+            return Err(
+                "humongous allocator cursor {self.humongous.cursor} is beyond nextAddress {self.nextAddress}",
+            )
+        }
+        if self.humongous.bumpAllocations < 0 || self.humongous.reuseAllocations < 0 || self.humongous.allocatedObjects < 0 || self.humongous.reclaimedObjects < 0 || self.humongous.allocatedBytes < 0 || self.humongous.reclaimedBytes < 0 || self.humongous.reusedBytes < 0 {
+            return Err("humongous allocator has negative accounting")
+        }
+        let survivorBytes = self.survivorBytes()
+        if survivorBytes > self.config.survivorLimit {
+            return Err(
+                "survivor space overflow: bytes={survivorBytes}, limit={self.config.survivorLimit}",
+            )
+        }
+
+        for idx in 0..self.tenured.freeList.len() {
+            let block = self.tenured.freeList[idx]
+            if block.address < 0 {
+                return Err("tenured free block {idx} has negative address {block.address}")
+            }
+            if block.size <= 0 {
+                return Err("tenured free block {idx} has non-positive size {block.size}")
+            }
+            if block.address + block.size > self.nextAddress {
+                return Err("tenured free block {idx} is outside heap span")
+            }
+            for (id, obj) in self.objects {
+                if rangesOverlap(block.address, block.size, obj.address, obj.size) {
+                    return Err("tenured free block {idx} overlaps live object {id}")
+                }
+            }
+            for otherIdx in 0..self.tenured.freeList.len() {
+                if idx != otherIdx {
+                    let other = self.tenured.freeList[otherIdx]
+                    if rangesOverlap(block.address, block.size, other.address, other.size) {
+                        return Err("tenured free blocks {idx} and {otherIdx} overlap")
+                    }
+                }
+            }
+        }
+
+        for idx in 0..self.humongous.freeList.len() {
+            let block = self.humongous.freeList[idx]
+            if block.address < 0 {
+                return Err("humongous free block {idx} has negative address {block.address}")
+            }
+            if block.size <= 0 {
+                return Err("humongous free block {idx} has non-positive size {block.size}")
+            }
+            if block.address + block.size > self.nextAddress {
+                return Err("humongous free block {idx} is outside heap span")
+            }
+            for (id, obj) in self.objects {
+                if rangesOverlap(block.address, block.size, obj.address, obj.size) {
+                    return Err("humongous free block {idx} overlaps live object {id}")
+                }
+            }
+            for tenuredIdx in 0..self.tenured.freeList.len() {
+                let tenuredBlock = self.tenured.freeList[tenuredIdx]
+                if rangesOverlap(block.address, block.size, tenuredBlock.address, tenuredBlock.size) {
+                    return Err(
+                        "humongous free block {idx} overlaps tenured free block {tenuredIdx}",
+                    )
+                }
+            }
+            for otherIdx in 0..self.humongous.freeList.len() {
+                if idx != otherIdx {
+                    let other = self.humongous.freeList[otherIdx]
+                    if rangesOverlap(block.address, block.size, other.address, other.size) {
+                        return Err("humongous free blocks {idx} and {otherIdx} overlap")
+                    }
+                }
+            }
+        }
+
+        for rootId in self.roots.toList() {
+            if !(self.objects.containsKey(rootId)) {
+                return Err("root references missing object {rootId}")
+            }
+        }
+
+        for (key, root) in self.globalRoots {
+            if key != globalRootKey(root.moduleName, root.name) {
+                return Err("global root key/name mismatch: {key}")
+            }
+            if root.moduleName == "" || root.name == "" {
+                return Err("global root has empty module or name")
+            }
+            if root.objectId < -1 {
+                return Err("global root {key} has invalid object id {root.objectId}")
+            }
+            if root.state == GcGlobalDeclared && root.objectId >= 0 {
+                return Err("declared global root {key} already has an object")
+            }
+            if root.state == GcGlobalReady && root.objectId < 0 {
+                return Err("ready global root {key} has no object")
+            }
+            if root.state == GcGlobalPoisoned && root.objectId >= 0 {
+                return Err("poisoned global root {key} still has an object")
+            }
+            if root.objectId >= 0 && !(self.objects.containsKey(root.objectId)) {
+                return Err("global root {key} references missing object {root.objectId}")
+            }
+        }
+
+        for (closureId, env) in self.closureEnvironments {
+            if closureId != env.closureId {
+                return Err("closure environment key/id mismatch: {closureId}")
+            }
+            if !(self.objects.containsKey(env.closureId)) {
+                return Err("closure environment {closureId} references missing closure")
+            }
+            let closure = self.objects[env.closureId]
+            if closure.kind != GcClosure {
+                return Err("closure environment {closureId} is not attached to a closure object")
+            }
+            if env.functionName == "" {
+                return Err("closure environment {closureId} has empty function name")
+            }
+            match self.validateClosureCaptures(env.captures) {
+                Ok(_) -> {},
+                Err(e) -> {
+                    return Err(e)
+                },
+            }
+            let expectedRefs = closureCaptureObjectIds(env.captures)
+            if closure.refs.len() != expectedRefs.len() {
+                return Err("closure environment {closureId} refs do not match capture descriptor")
+            }
+            for refId in expectedRefs {
+                if !(closure.refs.contains(refId)) {
+                    return Err("closure environment {closureId} is missing capture ref {refId}")
+                }
+            }
+        }
+
+        for (taskId, frame) in self.asyncFrames {
+            if taskId != frame.taskId {
+                return Err("async frame key/id mismatch: {taskId}")
+            }
+            if frame.taskId <= 0 {
+                return Err("async frame id must be positive")
+            }
+            if frame.functionName == "" {
+                return Err("async frame {taskId} has empty function name")
+            }
+            if frame.state == GcAsyncFrameSuspended {
+                if frame.safepointId <= 0 {
+                    return Err("suspended async frame {taskId} has invalid safepoint")
+                }
+                if frame.frameObjectId < 0 || !(self.objects.containsKey(frame.frameObjectId)) {
+                    return Err("suspended async frame {taskId} references missing frame object")
+                }
+                if self.objects[frame.frameObjectId].kind != GcRuntimeFrame {
+                    return Err("suspended async frame {taskId} root object is not a runtime frame")
+                }
+                match self.validateAsyncFrameRoots(frame.roots) {
+                    Ok(_) -> {},
+                    Err(e) -> {
+                        return Err(e)
+                    },
+                }
+            } else if frame.frameObjectId >= 0 || frame.roots.len() > 0 {
+                return Err("inactive async frame {taskId} still retains roots")
+            }
+        }
+
+        for (ownerId, tlab) in self.tlabs {
+            if ownerId != tlab.ownerId {
+                return Err("tlab key/owner mismatch: {ownerId}")
+            }
+            if tlab.ownerId <= 0 {
+                return Err("tlab owner id must be positive")
+            }
+            if tlab.start < 0 || tlab.cursor < 0 || tlab.limit < 0 {
+                return Err("tlab {ownerId} has negative range metadata")
+            }
+            if tlab.cursor < tlab.start || tlab.cursor > tlab.limit {
+                return Err("tlab {ownerId} cursor is outside its range")
+            }
+            if tlab.limit > self.nextAddress {
+                return Err("tlab {ownerId} limit is beyond heap cursor")
+            }
+            if tlab.refills < 0 || tlab.fastAllocations < 0 || tlab.slowAllocations < 0 || tlab.wasteBytes < 0 {
+                return Err("tlab {ownerId} has negative accounting")
+            }
+            if tlab.slowAllocations > tlab.refills {
+                return Err("tlab {ownerId} has more slow allocations than refills")
+            }
+        }
+
+        for id in self.remembered.toList() {
+            if !(self.objects.containsKey(id)) {
+                return Err("remembered set references missing object {id}")
+            }
+            let obj = self.objects[id]
+            if obj.generation == 0 {
+                return Err("young object {id} is present in remembered set")
+            }
+            if !(obj.remembered) {
+                return Err("remembered object {id} has remembered=false")
+            }
+            if !(self.hasYoungRef(obj)) {
+                return Err("remembered object {id} has no young reference")
+            }
+        }
+
+        if self.phase != GcMarking && self.grey.len() > 0 {
+            return Err("grey queue is non-empty outside marking phase")
+        }
+        for id in self.grey {
+            if !(self.objects.containsKey(id)) {
+                return Err("grey queue references missing object {id}")
+            }
+            let obj = self.objects[id]
+            if obj.color != GcGrey {
+                return Err("grey queue object {id} is not grey")
+            }
+            if !(obj.marked) {
+                return Err("grey queue object {id} is unmarked")
+            }
+        }
+
+        Ok(())
+    }
+
+    fn allocateRaw(mut self, kind: ObjectKind, size: Int) -> Int {
+        if self.isLargeSize(size) {
+            return self.allocateHumongousRaw(kind, size)
+        }
+
+        let id = self.nextId
+        let address = self.nextAddress
+        self.nextId = self.nextId + 1
+        self.nextAddress = self.nextAddress + size
+        self.liveBytes = self.liveBytes + size
+        self.allocatedSinceLastGC = self.allocatedSinceLastGC + size
+        self.objects.insert(id, newGcObject(id, kind, size, address, self.cycle, false))
+        id
+    }
+
+    fn allocateTenuredRaw(mut self, kind: ObjectKind, size: Int) -> Int {
+        if self.isLargeSize(size) {
+            return self.allocateHumongousRaw(kind, size)
+        }
+
+        let id = self.nextId
+        let address = self.reserveTenuredAddress(size)
+        let mut object = newGcObject(id, kind, size, address, self.cycle, false)
+        object.generation = 1
+        if object.age < self.config.promotionAge {
+            object.age = self.config.promotionAge
+        }
+        object.region = regionForObject(object)
+        self.nextId = self.nextId + 1
+        self.liveBytes = self.liveBytes + size
+        self.allocatedSinceLastGC = self.allocatedSinceLastGC + size
+        let mut tenured = self.tenured
+        tenured.directAllocations = tenured.directAllocations + 1
+        self.tenured = tenured
+        self.objects.insert(id, object)
+        id
+    }
+
+    fn allocateHumongousRaw(mut self, kind: ObjectKind, size: Int) -> Int {
+        let id = self.nextId
+        let address = self.reserveHumongousAddress(size)
+        self.nextId = self.nextId + 1
+        self.liveBytes = self.liveBytes + size
+        self.allocatedSinceLastGC = self.allocatedSinceLastGC + size
+        let mut humongous = self.humongous
+        humongous.allocatedObjects = humongous.allocatedObjects + 1
+        humongous.allocatedBytes = humongous.allocatedBytes + size
+        self.humongous = humongous
+        self.objects.insert(id, newGcObject(id, kind, size, address, self.cycle, true))
+        id
+    }
+
+    fn allocateRawInTlab(mut self, ownerId: Int, kind: ObjectKind, size: Int) -> Int {
+        let mut tlab = self.tlabs[ownerId]
+        let id = self.nextId
+        let address = tlab.cursor
+        tlab.cursor = tlab.cursor + size
+        tlab.fastAllocations = tlab.fastAllocations + 1
+        self.tlabs.insert(ownerId, tlab)
+        self.nextId = self.nextId + 1
+        self.liveBytes = self.liveBytes + size
+        self.allocatedSinceLastGC = self.allocatedSinceLastGC + size
+        self.objects.insert(id, newGcObject(id, kind, size, address, self.cycle, false))
+        id
+    }
+
+    fn refillTlab(mut self, ownerId: Int, requested: Int) -> Result<(), String> {
+        if self.phase == GcIdle && self.config.nurseryLimit > 0 && self.nurseryBytes() + requested > self.config.nurseryLimit {
+            let _ = self.minorCollectFor("tlab-refill")
+        }
+        if self.config.heapLimit > 0 && self.liveBytes + requested > self.config.heapLimit {
+            let _ = self.majorCollectFor("tlab-heap-pressure")
+        }
+        if self.config.heapLimit > 0 && self.liveBytes + requested > self.config.heapLimit {
+            return Err(
+                "gc heap exhausted: requested {requested} bytes with {self.liveBytes} live bytes",
+            )
+        }
+
+        let mut tlab = if self.tlabs.containsKey(ownerId) {
+            self.tlabs[ownerId]
+        } else {
+            emptyTlab(ownerId)
+        }
+        let waste = tlabRemainingBytes(tlab)
+        if waste > 0 {
+            tlab.wasteBytes = tlab.wasteBytes + waste
+        }
+        let refillSize = tlabRefillSize(self.config.tlabSize, requested)
+        tlab.start = self.nextAddress
+        tlab.cursor = self.nextAddress
+        tlab.limit = self.nextAddress + refillSize
+        tlab.refills = tlab.refills + 1
+        tlab.slowAllocations = tlab.slowAllocations + 1
+        self.nextAddress = self.nextAddress + refillSize
+        self.tlabs.insert(ownerId, tlab)
+        Ok(())
+    }
+
+    fn isLargeSize(self, size: Int) -> Bool {
+        self.config.largeObjectThreshold > 0 && size >= self.config.largeObjectThreshold
+    }
+
+    fn heapLimitAllows(self, size: Int) -> Bool {
+        self.config.heapLimit <= 0 || self.liveBytes + size <= self.config.heapLimit
+    }
+
+    fn tlabCanAllocate(self, ownerId: Int, size: Int) -> Bool {
+        if self.tlabs.containsKey(ownerId) {
+            tlabRemainingBytes(self.tlabs[ownerId]) >= size
+        } else {
+            false
+        }
+    }
+
+    fn retireAllTlabs(mut self) {
+        let ownerIds = self.tlabs.keys()
+        for ownerId in ownerIds {
+            if self.tlabs.containsKey(ownerId) {
+                let mut tlab = self.tlabs[ownerId]
+                let waste = tlabRemainingBytes(tlab)
+                if waste > 0 {
+                    tlab.wasteBytes = tlab.wasteBytes + waste
+                }
+                tlab.start = 0
+                tlab.cursor = 0
+                tlab.limit = 0
+                self.tlabs.insert(ownerId, tlab)
+            }
+        }
+    }
+
+    fn clearAllMarks(mut self) {
+        self.grey.clear()
+        let ids = self.objects.keys()
+        for id in ids {
+            if self.objects.containsKey(id) {
+                let mut next = self.objects[id]
+                next.marked = false
+                next.color = GcWhite
+                self.objects.insert(id, next)
+            }
+        }
+    }
+
+    fn clearYoungMarks(mut self) {
+        self.grey.clear()
+        let ids = self.objects.keys()
+        for id in ids {
+            if self.objects.containsKey(id) {
+                let obj = self.objects[id]
+                if obj.generation == 0 {
+                    let mut next = obj
+                    next.marked = false
+                    next.color = GcWhite
+                    self.objects.insert(id, next)
+                }
+            }
+        }
+    }
+
+    fn shade(mut self, id: Int) {
+        if self.objects.containsKey(id) {
+            let obj = self.objects[id]
+            if obj.color == GcWhite {
+                let mut next = obj
+                next.color = GcGrey
+                next.marked = true
+                self.objects.insert(id, next)
+                self.grey.push(id)
+            }
+        }
+    }
+
+    fn shadeGlobalRoots(mut self) {
+        for (key, root) in self.globalRoots {
+            let _ = key
+            if root.objectId >= 0 {
+                self.shade(root.objectId)
+            }
+        }
+    }
+
+    fn shadeAsyncFrameRoots(mut self) {
+        for (taskId, frame) in self.asyncFrames {
+            let _ = taskId
+            if frame.state == GcAsyncFrameSuspended {
+                if frame.frameObjectId >= 0 {
+                    self.shade(frame.frameObjectId)
+                }
+                self.shadeObjectList(frame.roots)
+            }
+        }
+    }
+
+    fn shadeObjectList(mut self, ids: List<Int>) {
+        for id in ids {
+            self.shade(id)
+        }
+    }
+
+    fn shadeYoung(mut self, id: Int) {
+        if self.objects.containsKey(id) {
+            let obj = self.objects[id]
+            if obj.generation == 0 && obj.color == GcWhite {
+                let mut next = obj
+                next.color = GcGrey
+                next.marked = true
+                self.objects.insert(id, next)
+                self.grey.push(id)
+            }
+        }
+    }
+
+    fn markYoungRoots(mut self) {
+        for id in self.roots.toList() {
+            if self.objects.containsKey(id) {
+                let obj = self.objects[id]
+                if obj.generation == 0 {
+                    self.shadeYoung(id)
+                } else {
+                    self.shadeYoungChildren(obj)
+                }
+            }
+        }
+
+        for (key, root) in self.globalRoots {
+            let _ = key
+            if root.objectId >= 0 && self.objects.containsKey(root.objectId) {
+                self.markYoungRootObject(root.objectId)
+            }
+        }
+
+        for (taskId, frame) in self.asyncFrames {
+            let _ = taskId
+            if frame.state == GcAsyncFrameSuspended {
+                if frame.frameObjectId >= 0 && self.objects.containsKey(frame.frameObjectId) {
+                    self.markYoungRootObject(frame.frameObjectId)
+                }
+                for id in frame.roots {
+                    if self.objects.containsKey(id) {
+                        self.markYoungRootObject(id)
+                    }
+                }
+            }
+        }
+
+        for id in self.remembered.toList() {
+            if self.objects.containsKey(id) {
+                self.shadeYoungChildren(self.objects[id])
+            }
+        }
+    }
+
+    fn markYoungRootObject(mut self, id: Int) {
+        let obj = self.objects[id]
+        if obj.generation == 0 {
+            self.shadeYoung(id)
+        } else {
+            self.shadeYoungChildren(obj)
+        }
+    }
+
+    fn shadeYoungChildren(mut self, obj: GcObject) {
+        for childId in obj.refs {
+            self.shadeYoung(childId)
+        }
+    }
+
+    fn drainGrey(mut self, budget: Int, youngOnly: Bool) -> Int {
+        let unlimited = budget <= 0
+        let mut steps = 0
+        for self.grey.len() > 0 && (unlimited || steps < budget) {
+            let id = self.grey.pop() ?? -1
+            if id >= 0 {
+                if youngOnly {
+                    self.blackenYoung(id)
+                } else {
+                    self.blacken(id)
+                }
+                steps = steps + 1
+            }
+        }
+        steps
+    }
+
+    fn blacken(mut self, id: Int) {
+        if self.objects.containsKey(id) {
+            let obj = self.objects[id]
+            if obj.color == GcGrey {
+                let refs = obj.refs
+                let mut next = obj
+                next.color = GcBlack
+                next.marked = true
+                self.objects.insert(id, next)
+                for childId in refs {
+                    self.shade(childId)
+                }
+            }
+        }
+    }
+
+    fn blackenYoung(mut self, id: Int) {
+        if self.objects.containsKey(id) {
+            let obj = self.objects[id]
+            if obj.generation == 0 && obj.color == GcGrey {
+                let refs = obj.refs
+                let mut next = obj
+                next.color = GcBlack
+                next.marked = true
+                self.objects.insert(id, next)
+                for childId in refs {
+                    self.shadeYoung(childId)
+                }
+            }
+        }
+    }
+
+    fn sweepYoung(mut self) -> (Int, Int, Int) {
+        let mut reclaimedObjects = 0
+        let mut reclaimedBytes = 0
+        let mut promotedObjects = 0
+        let mut survivorBytes = 0
+        let ids = self.objects.keys()
+
+        for id in ids {
+            if self.objects.containsKey(id) {
+                let obj = self.objects[id]
+                if obj.generation == 0 {
+                    if obj.marked {
+                        let mut next = obj
+                        next.age = next.age + 1
+                        if self.shouldPromoteYoungSurvivor(next, survivorBytes) {
+                            next = self.promoteYoungObject(next)
+                            promotedObjects = promotedObjects + 1
+                        } else {
+                            survivorBytes = survivorBytes + next.size
+                        }
+                        next.region = regionForObject(next)
+                        next.marked = false
+                        next.color = GcWhite
+                        self.objects.insert(id, next)
+                    } else {
+                        self.dropObjectSideTables(id)
+                        let _ = self.objects.remove(id)
+                        self.liveBytes = self.liveBytes - obj.size
+                        reclaimedObjects = reclaimedObjects + 1
+                        reclaimedBytes = reclaimedBytes + obj.size
+                    }
+                }
+            }
+        }
+
+        (reclaimedObjects, reclaimedBytes, promotedObjects)
+    }
+
+    fn shouldPromoteYoungSurvivor(self, obj: GcObject, survivorBytes: Int) -> Bool {
+        if obj.pinned {
+            return true
+        }
+        if obj.age >= self.config.promotionAge {
+            return true
+        }
+        if self.config.survivorLimit <= 0 {
+            return true
+        }
+        survivorBytes + obj.size > self.config.survivorLimit
+    }
+
+    fn promoteYoungObject(mut self, obj: GcObject) -> GcObject {
+        let mut next = obj
+        next.generation = 1
+        if !(next.pinned) && !(next.large) {
+            let sourceAddress = next.address
+            next.address = self.reserveTenuredAddress(next.size)
+            self.releaseTenuredBlock(sourceAddress, next.size)
+        }
+        let mut tenured = self.tenured
+        tenured.promotedAllocations = tenured.promotedAllocations + 1
+        self.tenured = tenured
+        next
+    }
+
+    fn sweepAll(mut self) -> (Int, Int) {
+        let mut reclaimedObjects = 0
+        let mut reclaimedBytes = 0
+        let ids = self.objects.keys()
+
+        for id in ids {
+            if self.objects.containsKey(id) {
+                let obj = self.objects[id]
+                if obj.marked {
+                    let mut next = obj
+                    next.generation = 1
+                    if next.age < self.config.promotionAge {
+                        next.age = self.config.promotionAge
+                    }
+                    next.region = regionForObject(next)
+                    next.marked = false
+                    next.color = GcWhite
+                    self.objects.insert(id, next)
+                } else {
+                    self.dropObjectSideTables(id)
+                    if obj.large {
+                        self.releaseHumongousObject(obj)
+                    } else if obj.generation == 1 && !(obj.pinned) {
+                        self.releaseTenuredBlock(obj.address, obj.size)
+                    }
+                    let _ = self.objects.remove(id)
+                    self.liveBytes = self.liveBytes - obj.size
+                    reclaimedObjects = reclaimedObjects + 1
+                    reclaimedBytes = reclaimedBytes + obj.size
+                }
+            }
+        }
+
+        (reclaimedObjects, reclaimedBytes)
+    }
+
+    fn compactLive(mut self) -> Int {
+        let ids = self.objects.keys().sorted()
+        let mut freeList: List<GcFreeBlock> = []
+        let mut cursor = 0
+        let mut moved = 0
+
+        for id in ids {
+            if self.objects.containsKey(id) {
+                let mut next = self.objects[id]
+                if next.pinned || next.large {
+                    if next.address > cursor {
+                        let gapSize = next.address - cursor
+                        if !(self.rangeOverlapsHumongousFree(cursor, gapSize)) {
+                            freeList.push(
+                                GcFreeBlock {
+                                    address: cursor,
+                                    size: gapSize,
+                                },
+                            )
+                        }
+                    }
+                    let end = next.address + next.size
+                    if end > cursor {
+                        cursor = end
+                    }
+                } else {
+                    cursor = self.avoidHumongousFreeBlocks(cursor, next.size)
+                    if next.address != cursor {
+                        moved = moved + 1
+                    }
+                    next.address = cursor
+                    cursor = cursor + next.size
+                }
+                self.objects.insert(id, next)
+            }
+        }
+
+        let humongousEnd = self.humongousReservedEnd()
+        if humongousEnd > cursor {
+            cursor = humongousEnd
+        }
+        self.nextAddress = cursor
+        let mut tenured = self.tenured
+        tenured.cursor = cursor
+        tenured.freeList = freeList
+        self.tenured = tenured
+        let mut humongous = self.humongous
+        humongous.cursor = cursor
+        self.humongous = humongous
+        moved
+    }
+
+    fn reserveTenuredAddress(mut self, size: Int) -> Int {
+        let mut address = -1
+        let mut consumed = false
+        let mut nextFreeList: List<GcFreeBlock> = []
+
+        for block in self.tenured.freeList {
+            if !(consumed) && block.size >= size {
+                address = block.address
+                consumed = true
+                if block.size > size {
+                    nextFreeList.push(
+                        GcFreeBlock {
+                            address: block.address + size,
+                            size: block.size - size,
+                        },
+                    )
+                }
+            } else {
+                nextFreeList.push(block)
+            }
+        }
+
+        let mut tenured = self.tenured
+        if consumed {
+            tenured.freeList = nextFreeList
+            tenured.reuseAllocations = tenured.reuseAllocations + 1
+            tenured.reusedBytes = tenured.reusedBytes + size
+            self.tenured = tenured
+            return address
+        }
+
+        if tenured.cursor > self.nextAddress {
+            address = tenured.cursor
+        } else {
+            address = self.nextAddress
+        }
+        tenured.cursor = address + size
+        tenured.bumpAllocations = tenured.bumpAllocations + 1
+        self.nextAddress = tenured.cursor
+        self.tenured = tenured
+        address
+    }
+
+    fn reserveHumongousAddress(mut self, size: Int) -> Int {
+        let mut address = -1
+        let mut consumed = false
+        let mut nextFreeList: List<GcFreeBlock> = []
+
+        for block in self.humongous.freeList {
+            if !(consumed) && block.size >= size {
+                address = block.address
+                consumed = true
+                if block.size > size {
+                    nextFreeList.push(
+                        GcFreeBlock {
+                            address: block.address + size,
+                            size: block.size - size,
+                        },
+                    )
+                }
+            } else {
+                nextFreeList.push(block)
+            }
+        }
+
+        let mut humongous = self.humongous
+        if consumed {
+            humongous.freeList = nextFreeList
+            humongous.reuseAllocations = humongous.reuseAllocations + 1
+            humongous.reusedBytes = humongous.reusedBytes + size
+            self.humongous = humongous
+            return address
+        }
+
+        if humongous.cursor > self.nextAddress {
+            address = humongous.cursor
+        } else {
+            address = self.nextAddress
+        }
+        humongous.cursor = address + size
+        humongous.bumpAllocations = humongous.bumpAllocations + 1
+        self.nextAddress = humongous.cursor
+        self.humongous = humongous
+        address
+    }
+
+    fn releaseTenuredBlock(mut self, address: Int, size: Int) {
+        if size <= 0 {
+            return
+        }
+        let mut tenured = self.tenured
+        tenured.freeList.push(GcFreeBlock { address, size })
+        self.tenured = tenured
+    }
+
+    fn releaseHumongousObject(mut self, obj: GcObject) {
+        let mut humongous = self.humongous
+        humongous.freeList.push(
+            GcFreeBlock {
+                address: obj.address,
+                size: obj.size,
+            },
+        )
+        humongous.reclaimedObjects = humongous.reclaimedObjects + 1
+        humongous.reclaimedBytes = humongous.reclaimedBytes + obj.size
+        self.humongous = humongous
+    }
+
+    fn avoidHumongousFreeBlocks(self, address: Int, size: Int) -> Int {
+        let mut candidate = address
+        let mut changed = true
+        for changed {
+            changed = false
+            for block in self.humongous.freeList {
+                if rangesOverlap(candidate, size, block.address, block.size) {
+                    candidate = block.address + block.size
+                    changed = true
+                }
+            }
+        }
+        candidate
+    }
+
+    fn rangeOverlapsHumongousFree(self, address: Int, size: Int) -> Bool {
+        for block in self.humongous.freeList {
+            if rangesOverlap(address, size, block.address, block.size) {
+                return true
+            }
+        }
+        false
+    }
+
+    fn humongousReservedEnd(self) -> Int {
+        let mut end = 0
+        for block in self.humongous.freeList {
+            let blockEnd = block.address + block.size
+            if blockEnd > end {
+                end = blockEnd
+            }
+        }
+        for (id, obj) in self.objects {
+            let _ = id
+            if obj.large {
+                let objectEnd = obj.address + obj.size
+                if objectEnd > end {
+                    end = objectEnd
+                }
+            }
+        }
+        end
+    }
+
+    fn rebuildRemembered(mut self) {
+        self.remembered.clear()
+        let ids = self.objects.keys()
+        for id in ids {
+            if self.objects.containsKey(id) {
+                let mut next = self.objects[id]
+                next.remembered = next.generation > 0 && self.hasYoungRef(next)
+                if next.remembered {
+                    self.remembered.insert(id)
+                }
+                self.objects.insert(id, next)
+            }
+        }
+    }
+
+    fn dropObjectSideTables(mut self, id: Int) {
+        if self.closureEnvironments.containsKey(id) {
+            let _ = self.closureEnvironments.remove(id)
+        }
+    }
+
+    fn validateClosureCaptures(self, captures: List<GcClosureCapture>) -> Result<(), String> {
+        let empty: List<Int> = []
+        let mut seenSlots = empty.toSet()
+        for capture in captures {
+            if capture.slot < 0 {
+                return Err("closure capture slot must be non-negative")
+            }
+            if capture.name == "" {
+                return Err("closure capture slot {capture.slot} is unnamed")
+            }
+            if seenSlots.contains(capture.slot) {
+                return Err("duplicate closure capture slot {capture.slot}")
+            }
+            seenSlots.insert(capture.slot)
+            if capture.kind == GcCaptureScalar {
+                if capture.objectId >= 0 {
+                    return Err("scalar closure capture {capture.name} cannot carry an object")
+                }
+            } else {
+                if capture.objectId < 0 {
+                    return Err("pointer closure capture {capture.name} has no object")
+                }
+                if !(self.objects.containsKey(capture.objectId)) {
+                    return Err(
+                        "closure capture {capture.name} references missing object {capture.objectId}",
+                    )
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn validateAsyncFrameRoots(self, roots: List<Int>) -> Result<(), String> {
+        let empty: List<Int> = []
+        let mut seen = empty.toSet()
+        for id in roots {
+            if id <= 0 {
+                return Err("async frame root id must be positive")
+            }
+            if seen.contains(id) {
+                return Err("async frame has duplicate root {id}")
+            }
+            seen.insert(id)
+            if !(self.objects.containsKey(id)) {
+                return Err("async frame references missing root {id}")
+            }
+        }
+        Ok(())
+    }
+
+    fn rewriteClosureCaptureRefs(mut self, closureId: Int, captures: List<GcClosureCapture>) {
+        if self.objects.containsKey(closureId) {
+            let mut obj = self.objects[closureId]
+            obj.refs = closureCaptureObjectIds(captures)
+            obj.remembered = obj.generation > 0 && self.hasYoungRef(obj)
+            if obj.remembered {
+                self.remembered.insert(closureId)
+            } else {
+                let _ = self.remembered.remove(closureId)
+            }
+            self.objects.insert(closureId, obj)
+
+            if self.phase == GcMarking && obj.color == GcBlack {
+                for childId in obj.refs {
+                    self.shade(childId)
+                }
+            }
+        }
+    }
+
+    fn hasYoungRef(self, obj: GcObject) -> Bool {
+        for childId in obj.refs {
+            if self.objects.containsKey(childId) {
+                let child = self.objects[childId]
+                if child.generation == 0 {
+                    return true
+                }
+            }
+        }
+        false
+    }
+
+    fn heapSpan(self) -> Int {
+        let mut span = 0
+        for (id, obj) in self.objects {
+            let _ = id
+            let end = obj.address + obj.size
+            if end > span {
+                span = end
+            }
+        }
+        span
+    }
+}
+
+pub fn productionGcConfig() -> GcConfig {
+    GcConfig {
+        nurseryLimit: 64 * 1024,
+        survivorLimit: 16 * 1024,
+        heapLimit: 16 * 1024 * 1024,
+        promotionAge: 2,
+        incrementalBudget: 64,
+        largeObjectThreshold: 128 * 1024,
+        tlabSize: 32 * 1024,
+    }
+}
+
+pub fn testGcConfig() -> GcConfig {
+    GcConfig {
+        nurseryLimit: 256,
+        survivorLimit: 64,
+        heapLimit: 4096,
+        promotionAge: 1,
+        incrementalBudget: 1,
+        largeObjectThreshold: 512,
+        tlabSize: 64,
+    }
+}
+
+pub fn newGcHeap(config: GcConfig) -> GcHeap {
+    let objects: Map<Int, GcObject> = {:}
+    let globalRoots: Map<String, GcGlobalRoot> = {:}
+    let closureEnvironments: Map<Int, GcClosureEnvironment> = {:}
+    let asyncFrames: Map<Int, GcAsyncFrameRoot> = {:}
+    let tlabs: Map<Int, GcTlab> = {:}
+    let tenured = emptyTenuredAllocator()
+    let humongous = emptyHumongousAllocator()
+    let emptyRoots: List<Int> = []
+    let emptyRemembered: List<Int> = []
+    let grey: List<Int> = []
+
+    GcHeap {
+        config,
+        nextId: 1,
+        nextAddress: 0,
+        liveBytes: 0,
+        cycle: 0,
+        minorCollections: 0,
+        majorCollections: 0,
+        phase: GcIdle,
+        objects,
+        roots: emptyRoots.toSet(),
+        globalRoots,
+        closureEnvironments,
+        asyncFrames,
+        tlabs,
+        tenured,
+        humongous,
+        remembered: emptyRemembered.toSet(),
+        grey,
+        allocatedSinceLastGC: 0,
+        lastStats: None,
+    }
+}
+
+fn globalRootKey(moduleName: String, name: String) -> String {
+    "{moduleName}::{name}"
+}
+
+fn closureCaptureObjectIds(captures: List<GcClosureCapture>) -> List<Int> {
+    let mut out: List<Int> = []
+    for capture in captures {
+        if capture.objectId >= 0 && !(out.contains(capture.objectId)) {
+            out.push(capture.objectId)
+        }
+    }
+    out
+}
+
+fn emptyTlab(ownerId: Int) -> GcTlab {
+    GcTlab {
+        ownerId,
+        start: 0,
+        cursor: 0,
+        limit: 0,
+        refills: 0,
+        fastAllocations: 0,
+        slowAllocations: 0,
+        wasteBytes: 0,
+    }
+}
+
+fn emptyTenuredAllocator() -> GcTenuredAllocator {
+    let freeList: List<GcFreeBlock> = []
+    GcTenuredAllocator {
+        cursor: 0,
+        freeList,
+        bumpAllocations: 0,
+        reuseAllocations: 0,
+        directAllocations: 0,
+        promotedAllocations: 0,
+        reusedBytes: 0,
+    }
+}
+
+fn emptyHumongousAllocator() -> GcHumongousAllocator {
+    let freeList: List<GcFreeBlock> = []
+    GcHumongousAllocator {
+        cursor: 0,
+        freeList,
+        bumpAllocations: 0,
+        reuseAllocations: 0,
+        allocatedObjects: 0,
+        reclaimedObjects: 0,
+        allocatedBytes: 0,
+        reclaimedBytes: 0,
+        reusedBytes: 0,
+    }
+}
+
+fn tlabRemainingBytes(tlab: GcTlab) -> Int {
+    if tlab.limit > tlab.cursor {
+        tlab.limit - tlab.cursor
+    } else {
+        0
+    }
+}
+
+fn tlabRefillSize(configured: Int, requested: Int) -> Int {
+    if configured > requested {
+        configured
+    } else {
+        requested
+    }
+}
+
+pub fn gcScalarCapture(slot: Int, name: String) -> GcClosureCapture {
+    GcClosureCapture {
+        slot,
+        name,
+        kind: GcCaptureScalar,
+        objectId: -1,
+    }
+}
+
+pub fn gcValueCapture(slot: Int, name: String, objectId: Int) -> GcClosureCapture {
+    GcClosureCapture {
+        slot,
+        name,
+        kind: GcCaptureValue,
+        objectId,
+    }
+}
+
+pub fn gcBoxedCapture(slot: Int, name: String, objectId: Int) -> GcClosureCapture {
+    GcClosureCapture {
+        slot,
+        name,
+        kind: GcCaptureBoxedValue,
+        objectId,
+    }
+}
+
+pub fn gcMutableBoxCapture(slot: Int, name: String, objectId: Int) -> GcClosureCapture {
+    GcClosureCapture {
+        slot,
+        name,
+        kind: GcCaptureMutableBox,
+        objectId,
+    }
+}
+
+pub fn gcRootSlot(slot: Int, kind: GcRootSlotKind, name: String) -> GcLiveRootSlot {
+    GcLiveRootSlot {
+        slot,
+        kind,
+        name,
+        derivedFrom: -1,
+        nullable: true,
+    }
+}
+
+pub fn gcDerivedRootSlot(slot: Int, name: String, derivedFrom: Int) -> GcLiveRootSlot {
+    GcLiveRootSlot {
+        slot,
+        kind: GcDerivedRootSlot,
+        name,
+        derivedFrom,
+        nullable: false,
+    }
+}
+
+pub fn gcSafepoint(
+    id: Int,
+    kind: GcSafepointKind,
+    irNode: Int,
+    instructionOffset: Int,
+    liveRoots: List<GcLiveRootSlot>,
+) -> GcSafepoint {
+    GcSafepoint {
+        id,
+        kind,
+        irNode,
+        instructionOffset,
+        mayCollect: true,
+        mayAllocate: safepointMayAllocate(kind),
+        maySuspend: kind == GcAsyncYieldSafepoint,
+        requiresStackMap: true,
+        runsDefer: false,
+        questionExit: false,
+        earlyReturn: false,
+        liveRoots,
+    }
+}
+
+pub fn gcSafepointPlan(functionName: String, frameSlots: Int, safepoints: List<GcSafepoint>) -> GcSafepointPlan {
+    GcSafepointPlan {
+        functionName,
+        frameSlots,
+        safepoints,
+    }
+}
+
+pub fn validateSafepointPlan(plan: GcSafepointPlan) -> Result<(), String> {
+    if plan.functionName == "" {
+        return Err("safepoint plan requires a function name")
+    }
+    if plan.frameSlots < 0 {
+        return Err("safepoint plan has negative frame slot count")
+    }
+
+    let empty: List<Int> = []
+    let mut seenIds = empty.toSet()
+    for point in plan.safepoints {
+        if point.id <= 0 {
+            return Err("safepoint id must be positive")
+        }
+        if seenIds.contains(point.id) {
+            return Err("duplicate safepoint id {point.id}")
+        }
+        seenIds.insert(point.id)
+
+        match validateSafepoint(plan, point) {
+            Ok(_) -> {},
+            Err(e) -> {
+                return Err(e)
+            },
+        }
+    }
+
+    Ok(())
+}
+
+pub fn gcFrameSlot(
+    slot: Int,
+    kind: GcFrameSlotKind,
+    name: String,
+    byteOffset: Int,
+    pointer: Bool,
+) -> GcFrameSlot {
+    GcFrameSlot {
+        slot,
+        kind,
+        name,
+        byteOffset,
+        pointer,
+        derivedFrom: -1,
+        preserveForDefer: false,
+        preserveForQuestion: false,
+        preserveForReturn: false,
+    }
+}
+
+pub fn gcPreservedFrameSlot(
+    slot: Int,
+    kind: GcFrameSlotKind,
+    name: String,
+    byteOffset: Int,
+    pointer: Bool,
+    preserveForDefer: Bool,
+    preserveForQuestion: Bool,
+    preserveForReturn: Bool,
+) -> GcFrameSlot {
+    GcFrameSlot {
+        slot,
+        kind,
+        name,
+        byteOffset,
+        pointer,
+        derivedFrom: -1,
+        preserveForDefer,
+        preserveForQuestion,
+        preserveForReturn,
+    }
+}
+
+pub fn gcDerivedFrameSlot(
+    slot: Int,
+    kind: GcFrameSlotKind,
+    name: String,
+    byteOffset: Int,
+    derivedFrom: Int,
+) -> GcFrameSlot {
+    GcFrameSlot {
+        slot,
+        kind,
+        name,
+        byteOffset,
+        pointer: true,
+        derivedFrom,
+        preserveForDefer: false,
+        preserveForQuestion: false,
+        preserveForReturn: false,
+    }
+}
+
+pub fn buildGcStackMap(
+    plan: GcSafepointPlan,
+    frameLayout: List<GcFrameSlot>,
+    inlineSlots: Int,
+) -> Result<GcStackMap, String> {
+    match validateSafepointPlan(plan) {
+        Ok(_) -> {},
+        Err(e) -> {
+            return Err(e)
+        },
+    }
+
+    match validateFrameLayout(plan, frameLayout) {
+        Ok(_) -> {},
+        Err(e) -> {
+            return Err(e)
+        },
+    }
+
+    let inline = normalizeInlineSlots(inlineSlots, plan.frameSlots)
+    let mut entries: List<GcStackMapEntry> = []
+    for point in plan.safepoints {
+        match validateSafepointAgainstFrameLayout(point, frameLayout) {
+            Ok(_) -> {},
+            Err(e) -> {
+                return Err(e)
+            },
+        }
+        entries.push(buildStackMapEntry(point, inline))
+    }
+
+    Ok(
+        GcStackMap {
+            functionName: plan.functionName,
+            frameSlots: plan.frameSlots,
+            pointerSize: 8,
+            inlineSlots: inline,
+            frameLayout,
+            entries,
+        },
+    )
+}
+
+pub fn stackMapEntryFor(map: GcStackMap, safepointId: Int) -> GcStackMapEntry? {
+    for entry in map.entries {
+        if entry.safepointId == safepointId {
+            return Some(entry)
+        }
+    }
+    None
+}
+
+pub fn stackMapHasPointer(entry: GcStackMapEntry, slot: Int) -> Bool {
+    if slot < 0 {
+        return false
+    }
+    if slot < entry.inlineSlots {
+        let word = slot / 32
+        if word < 0 || word >= entry.bitmapWords.len() {
+            return false
+        }
+        let mask = 1 << (slot % 32)
+        return (entry.bitmapWords[word] & mask) != 0
+    }
+
+    entry.overflowSlots.contains(slot)
+}
+
+fn newGcObject(id: Int, kind: ObjectKind, size: Int, address: Int, cycle: Int, large: Bool) -> GcObject {
+    let refs: List<Int> = []
+    let generation = if large {
+        1
+    } else {
+        0
+    }
+    let region = if large {
+        GcHumongousRegion
+    } else {
+        GcEdenRegion
+    }
+    GcObject {
+        id,
+        kind,
+        size,
+        address,
+        generation,
+        age: 0,
+        color: GcWhite,
+        marked: false,
+        pinned: false,
+        large,
+        region,
+        refs,
+        remembered: false,
+        allocatedCycle: cycle,
+    }
+}
+
+fn validateSafepoint(plan: GcSafepointPlan, point: GcSafepoint) -> Result<(), String> {
+    if point.irNode < 0 {
+        return Err("safepoint {point.id} has negative IR node")
+    }
+    if point.instructionOffset < 0 {
+        return Err("safepoint {point.id} has negative instruction offset")
+    }
+    if !(point.mayCollect) {
+        return Err("safepoint {point.id} cannot run collector work")
+    }
+    if !(point.requiresStackMap) {
+        return Err("safepoint {point.id} is missing required stack map")
+    }
+    if point.kind == GcAllocationSafepoint && !(point.mayAllocate) {
+        return Err("allocation safepoint {point.id} must be marked mayAllocate")
+    }
+    if point.kind == GcAsyncYieldSafepoint && !(point.maySuspend) {
+        return Err("async yield safepoint {point.id} must be marked maySuspend")
+    }
+
+    let empty: List<Int> = []
+    let mut seenSlots = empty.toSet()
+    for root in point.liveRoots {
+        if root.slot < 0 || root.slot >= plan.frameSlots {
+            return Err("safepoint {point.id} root slot {root.slot} is outside frame")
+        }
+        if root.name == "" {
+            return Err("safepoint {point.id} root slot {root.slot} is unnamed")
+        }
+        if seenSlots.contains(root.slot) {
+            return Err("safepoint {point.id} has duplicate root slot {root.slot}")
+        }
+        seenSlots.insert(root.slot)
+
+        if root.kind == GcDerivedRootSlot {
+            if root.derivedFrom < 0 {
+                return Err("derived root slot {root.slot} has no base slot")
+            }
+            if root.derivedFrom == root.slot {
+                return Err("derived root slot {root.slot} cannot derive from itself")
+            }
+            if !(safepointHasRootSlot(point.liveRoots, root.derivedFrom)) {
+                return Err(
+                    "derived root slot {root.slot} references missing base slot {root.derivedFrom}",
+                )
+            }
+        } else if root.derivedFrom >= 0 {
+            return Err("non-derived root slot {root.slot} has derivedFrom metadata")
+        }
+    }
+
+    Ok(())
+}
+
+fn safepointHasRootSlot(roots: List<GcLiveRootSlot>, slot: Int) -> Bool {
+    for root in roots {
+        if root.slot == slot {
+            return true
+        }
+    }
+    false
+}
+
+fn safepointMayAllocate(kind: GcSafepointKind) -> Bool {
+    kind == GcCallSafepoint || kind == GcAllocationSafepoint
+}
+
+fn validateFrameLayout(plan: GcSafepointPlan, frameLayout: List<GcFrameSlot>) -> Result<(), String> {
+    let empty: List<Int> = []
+    let mut seenSlots = empty.toSet()
+
+    for slot in frameLayout {
+        if slot.slot < 0 || slot.slot >= plan.frameSlots {
+            return Err("frame slot {slot.slot} is outside frame")
+        }
+        if seenSlots.contains(slot.slot) {
+            return Err("duplicate frame slot {slot.slot}")
+        }
+        seenSlots.insert(slot.slot)
+        if slot.name == "" {
+            return Err("frame slot {slot.slot} is unnamed")
+        }
+        if slot.byteOffset < 0 {
+            return Err("frame slot {slot.slot} has negative byte offset")
+        }
+        if slot.derivedFrom >= 0 {
+            if !(slot.pointer) {
+                return Err("derived frame slot {slot.slot} must be a pointer")
+            }
+            if slot.derivedFrom == slot.slot {
+                return Err("derived frame slot {slot.slot} cannot derive from itself")
+            }
+            if !(frameLayoutHasPointerSlot(frameLayout, slot.derivedFrom)) {
+                return Err(
+                    "derived frame slot {slot.slot} references missing pointer base {slot.derivedFrom}",
+                )
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn validateSafepointAgainstFrameLayout(point: GcSafepoint, frameLayout: List<GcFrameSlot>) -> Result<(), String> {
+    for root in point.liveRoots {
+        let frame = frameLayoutSlot(frameLayout, root.slot)
+        match frame {
+            Some(slot) -> {
+                if !(slot.pointer) {
+                    return Err("safepoint {point.id} marks non-pointer frame slot {root.slot} live")
+                }
+                if !(rootKindMatchesFrameSlot(root.kind, slot.kind)) {
+                    return Err(
+                        "safepoint {point.id} root slot {root.slot} has incompatible frame slot kind",
+                    )
+                }
+                if root.kind == GcDerivedRootSlot && slot.derivedFrom >= 0 && slot.derivedFrom != root.derivedFrom {
+                    return Err("derived root slot {root.slot} disagrees with frame layout base")
+                }
+            },
+            None -> {
+                return Err("safepoint {point.id} references missing frame slot {root.slot}")
+            },
+        }
+    }
+
+    for slot in frameLayout {
+        if point.runsDefer && slot.pointer && slot.preserveForDefer && !(safepointHasRootSlot(
+            point.liveRoots,
+            slot.slot,
+        )) {
+            return Err("safepoint {point.id} drops defer-preserved root slot {slot.slot}")
+        }
+        if point.questionExit && slot.pointer && slot.preserveForQuestion && !(safepointHasRootSlot(
+            point.liveRoots,
+            slot.slot,
+        )) {
+            return Err("safepoint {point.id} drops question-preserved root slot {slot.slot}")
+        }
+        if point.earlyReturn && slot.pointer && slot.preserveForReturn && !(safepointHasRootSlot(
+            point.liveRoots,
+            slot.slot,
+        )) {
+            return Err("safepoint {point.id} drops return-preserved root slot {slot.slot}")
+        }
+    }
+
+    Ok(())
+}
+
+fn buildStackMapEntry(point: GcSafepoint, inlineSlots: Int) -> GcStackMapEntry {
+    let mut bitmapWords = zeroBitmapWords(inlineSlots)
+    let mut overflowSlots: List<Int> = []
+    let mut derivedRoots: List<GcDerivedRootMap> = []
+
+    for root in point.liveRoots {
+        if root.slot < inlineSlots {
+            let word = root.slot / 32
+            let mask = 1 << (root.slot % 32)
+            bitmapWords[word] = bitmapWords[word] | mask
+        } else {
+            overflowSlots.push(root.slot)
+        }
+        if root.kind == GcDerivedRootSlot {
+            derivedRoots.push(
+                GcDerivedRootMap {
+                    derivedSlot: root.slot,
+                    baseSlot: root.derivedFrom,
+                },
+            )
+        }
+    }
+
+    GcStackMapEntry {
+        safepointId: point.id,
+        instructionOffset: point.instructionOffset,
+        liveCount: point.liveRoots.len(),
+        inlineSlots,
+        bitmapWords,
+        overflowSlots,
+        derivedRoots,
+    }
+}
+
+fn zeroBitmapWords(inlineSlots: Int) -> List<Int> {
+    let mut words: List<Int> = []
+    for idx in 0..bitmapWordCount(inlineSlots) {
+        let _ = idx
+        words.push(0)
+    }
+    words
+}
+
+fn bitmapWordCount(inlineSlots: Int) -> Int {
+    if inlineSlots <= 0 {
+        0
+    } else {
+        (inlineSlots + 31) / 32
+    }
+}
+
+fn normalizeInlineSlots(inlineSlots: Int, frameSlots: Int) -> Int {
+    if inlineSlots <= 0 {
+        frameSlots
+    } else if inlineSlots > frameSlots {
+        frameSlots
+    } else {
+        inlineSlots
+    }
+}
+
+fn frameLayoutSlot(frameLayout: List<GcFrameSlot>, slotId: Int) -> GcFrameSlot? {
+    for slot in frameLayout {
+        if slot.slot == slotId {
+            return Some(slot)
+        }
+    }
+    None
+}
+
+fn frameLayoutHasPointerSlot(frameLayout: List<GcFrameSlot>, slotId: Int) -> Bool {
+    match frameLayoutSlot(frameLayout, slotId) {
+        Some(slot) -> slot.pointer,
+        None -> false,
+    }
+}
+
+fn rootKindMatchesFrameSlot(rootKind: GcRootSlotKind, frameKind: GcFrameSlotKind) -> Bool {
+    match rootKind {
+        GcRegisterRootSlot -> frameKind == GcFrameRegisterSpillSlot,
+        GcSpillRootSlot -> frameKind == GcFrameRegisterSpillSlot,
+        GcTemporaryRootSlot -> frameKind == GcFrameTemporarySlot,
+        GcClosureRootSlot -> frameKind == GcFrameClosureCaptureSlot,
+        GcDerivedRootSlot -> true,
+        GcLocalRootSlot -> frameKind == GcFrameLocalSlot || frameKind == GcFrameTupleFieldSlot || frameKind == GcFrameDeferSlot || frameKind == GcFrameQuestionSlot || frameKind == GcFrameReturnSlot,
+    }
+}
+
+fn normalizeSize(size: Int) -> Int {
+    if size <= 0 {
+        1
+    } else {
+        size
+    }
+}
+
+fn rangesOverlap(leftAddress: Int, leftSize: Int, rightAddress: Int, rightSize: Int) -> Bool {
+    let leftEnd = leftAddress + leftSize
+    let rightEnd = rightAddress + rightSize
+    leftAddress < rightEnd && rightAddress < leftEnd
+}
+
+fn regionForObject(obj: GcObject) -> GcRegionKind {
+    if obj.pinned {
+        GcPinnedRegion
+    } else if obj.large {
+        GcHumongousRegion
+    } else if obj.generation == 0 {
+        if obj.age > 0 {
+            GcSurvivorRegion
+        } else {
+            GcEdenRegion
+        }
+    } else {
+        GcOldRegion
+    }
+}
+
+fn percent(part: Int, whole: Int) -> Int {
+    if whole <= 0 {
+        0
+    } else {
+        part * 100 / whole
+    }
+}
+
+fn telemetryPauseUnits(
+    markSteps: Int,
+    reclaimedObjects: Int,
+    promotedObjects: Int,
+    compactedObjects: Int,
+    rememberedScanned: Int,
+) -> Int {
+    markSteps + reclaimedObjects + promotedObjects + compactedObjects + rememberedScanned
+}
+
+fn emptyStats(kind: String, heap: GcHeap) -> GcStats {
+    let fragmented = heap.fragmentedBytes()
+    GcStats {
+        kind,
+        trigger: "idle",
+        cycle: heap.cycle,
+        beforeObjects: heap.objectCount(),
+        afterObjects: heap.objectCount(),
+        reclaimedObjects: 0,
+        beforeBytes: heap.totalLiveBytes(),
+        afterBytes: heap.totalLiveBytes(),
+        reclaimedBytes: 0,
+        promotedObjects: 0,
+        compactedObjects: 0,
+        rememberedScanned: 0,
+        markSteps: 0,
+        pauseUnits: 0,
+        allocationBytesSinceLastGC: heap.allocatedSinceLastGC,
+        beforeFragmentedBytes: fragmented,
+        afterFragmentedBytes: fragmented,
+        fragmentedBytes: heap.fragmentedBytes(),
+        survivalPercent: percent(heap.objectCount(), heap.objectCount()),
+        promotionPercent: 0,
+    }
+}

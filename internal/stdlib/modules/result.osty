@@ -23,13 +23,19 @@ pub enum Result<T, E> {
         }
     }
 
-    // Implemented by the runtime intrinsic because the Err branch
-    // aborts with Never.
-    pub fn unwrap(self) -> T
+    pub fn unwrap(self) -> T {
+        match self {
+            Ok(value) -> value,
+            Err(_) -> __resultAbort("called unwrap on Err"),
+        }
+    }
 
-    // Implemented by the runtime intrinsic because the Ok branch
-    // aborts with Never.
-    pub fn unwrapErr(self) -> E
+    pub fn unwrapErr(self) -> E {
+        match self {
+            Ok(_) -> __resultAbort("called unwrapErr on Ok"),
+            Err(error) -> error,
+        }
+    }
 
     pub fn unwrapOr(self, fallback: T) -> T {
         match self {
@@ -72,4 +78,8 @@ pub enum Result<T, E> {
             Err(error) -> "Err({error})",
         }
     }
+}
+
+fn __resultAbort(msg: String) -> Never {
+    __resultAbort(msg)
 }

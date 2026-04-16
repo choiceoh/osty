@@ -117,6 +117,7 @@ func TestAllSignatureStubsCheck(t *testing.T) {
 				t.Fatalf("%s parse: %s", p, d.Error())
 			}
 		}
+		promoteTopLevelLets(file)
 		pkg := &resolve.Package{
 			Name: moduleName(p),
 			Files: []*resolve.PackageFile{{
@@ -220,14 +221,9 @@ func TestResultModuleMethods(t *testing.T) {
 			t.Errorf("Registry.ResultMethods missing method %q", name)
 		}
 	}
-	for _, name := range []string{"isOk", "isErr", "unwrapOr", "ok", "err", "map", "mapErr", "toString"} {
+	for _, name := range []string{"isOk", "isErr", "unwrap", "unwrapErr", "unwrapOr", "ok", "err", "map", "mapErr", "toString"} {
 		if !hasBody[name] {
 			t.Errorf("Result.%s should have an Osty body", name)
-		}
-	}
-	for _, name := range []string{"unwrap", "unwrapErr"} {
-		if hasBody[name] {
-			t.Errorf("Result.%s should stay runtime-intrinsic", name)
 		}
 	}
 }
@@ -245,6 +241,29 @@ func TestResultModuleBodiesTypeCheck(t *testing.T) {
 	for _, d := range all {
 		if d.Severity == diag.Error {
 			t.Fatalf("std.result should type-check: [%s] %s", d.Code, d.Message)
+		}
+	}
+}
+
+func TestPureOstyModuleBodiesTypeCheck(t *testing.T) {
+	reg := Load()
+	for _, name := range []string{"option", "result", "strings", "collections", "bytes", "process", "random"} {
+		mod := reg.Modules[name]
+		if mod == nil {
+			t.Fatalf("std.%s not loaded", name)
+		}
+		file, parseDiags := parser.ParseDiagnostics(mod.Source)
+		res := resolve.FileWithStdlib(file, resolve.NewPrelude(), reg)
+		chk := check.File(file, res, check.Opts{
+			Primitives:    reg.Primitives,
+			ResultMethods: reg.ResultMethods,
+		})
+		all := append(append([]*diag.Diagnostic{}, parseDiags...), res.Diags...)
+		all = append(all, chk.Diags...)
+		for _, d := range all {
+			if d.Severity == diag.Error {
+				t.Fatalf("std.%s should type-check: [%s] %s", name, d.Code, d.Message)
+			}
 		}
 	}
 }
@@ -725,8 +744,12 @@ func TestTier1ModuleCoverage(t *testing.T) {
 	}{
 		{"io", []string{"print", "println", "eprint", "eprintln", "readLine"}},
 		{"fs", []string{"readToString", "writeString", "exists", "remove"}},
-		{"strings", []string{"split", "join", "contains", "startsWith", "endsWith",
-			"trim", "trimStart", "trimEnd", "toUpper", "toLower", "repeat", "replace"}},
+		{"strings", []string{"len", "isEmpty", "charCount", "get", "slice", "concat",
+			"chars", "bytes", "graphemes", "toBytes", "split", "splitN", "lines", "join",
+			"contains", "indexOf", "lastIndexOf", "count", "startsWith", "hasPrefix",
+			"endsWith", "hasSuffix", "trim", "trimSpace", "trimStart", "trimEnd",
+			"trimPrefix", "trimSuffix", "toUpper", "toLower", "repeat", "replace",
+			"replaceAll", "replaceN"}},
 		{"random", []string{"Rng", "default", "seeded"}},
 		{"url", []string{"Url", "parse", "join"}},
 		{"json", []string{"Json", "Encode", "Decode", "encode", "decode", "parse", "stringify"}},
@@ -741,6 +764,11 @@ func TestTier1ModuleCoverage(t *testing.T) {
 		{"ref", []string{"same"}},
 		{"process", []string{"abort", "unreachable", "todo", "ignoreError", "logError"}},
 		{"debug", []string{"dbg"}},
+		{"fmt", []string{"padLeft", "padRight", "center", "truncate",
+			"intToBase", "inBase", "bin", "binary", "oct", "octal", "hex", "hexUpper",
+			"zeroPad", "fixed", "toFixed", "scientific", "percentage",
+			"repeat", "thousands", "ordinal", "sign", "signFloat", "bytes",
+			"format", "joinWith", "join", "bullet", "numbered", "table"}},
 	}
 	for _, c := range cases {
 		mod := reg.Modules[c.module]
@@ -756,6 +784,25 @@ func TestTier1ModuleCoverage(t *testing.T) {
 			}
 			if !sym.Pub {
 				t.Errorf("std.%s export %q is not pub", c.module, name)
+			}
+		}
+	}
+}
+
+func TestStringFmtDebugModulesHaveOstyBodies(t *testing.T) {
+	reg := Load()
+	for _, module := range []string{"strings", "fmt", "debug"} {
+		mod := reg.Modules[module]
+		if mod == nil || mod.File == nil {
+			t.Fatalf("std.%s not loaded", module)
+		}
+		for _, decl := range mod.File.Decls {
+			fn, ok := decl.(*ast.FnDecl)
+			if !ok || !fn.Pub {
+				continue
+			}
+			if fn.Body == nil {
+				t.Errorf("std.%s.%s is still signature-only", module, fn.Name)
 			}
 		}
 	}
@@ -948,6 +995,63 @@ pub fn roundTrip(text: String) -> Bool {
 	for _, d := range append(res.Diags, chk.Diags...) {
 		if d.Severity == diag.Error {
 			t.Errorf("unexpected std.encoding diagnostic: %s", d.Error())
+		}
+	}
+}
+
+func TestBytesModuleCoverage(t *testing.T) {
+	reg := Load()
+	mod := reg.Modules["bytes"]
+	if mod == nil || mod.Package == nil {
+		t.Fatal("std.bytes not loaded")
+	}
+	for _, name := range []string{
+		"len", "isEmpty", "get", "slice", "equal", "contains", "startsWith", "endsWith",
+		"indexOf", "lastIndexOf", "split", "join", "concat", "repeat", "replace",
+		"replaceAll", "trimLeft", "trimRight", "trim", "trimSpace", "toUpper",
+		"toLower", "fromString", "from", "toString", "toHex", "fromHex",
+	} {
+		sym := mod.Package.PkgScope.LookupLocal(name)
+		if sym == nil {
+			t.Errorf("std.bytes missing export %q", name)
+			continue
+		}
+		if !sym.Pub {
+			t.Errorf("std.bytes export %q is not pub", name)
+		}
+	}
+}
+
+func TestBytesPackageTypeChecks(t *testing.T) {
+	src := []byte(`use std.bytes
+
+pub fn smoke(data: Bytes) -> Result<String, Error> {
+    let raw: Bytes = bytes.from([b'a', b'b', b'c'])
+    let tail: Bytes = bytes.slice(raw, 1, 3)
+    let same: Bool = bytes.equal(tail, bytes.fromString("bc"))
+    let idx: Int = bytes.indexOf(data, bytes.fromString("x")) ?? -1
+    let joined: Bytes = bytes.join(bytes.split(data, bytes.fromString(",")), bytes.fromString("|"))
+    let hex: String = bytes.toHex(joined)
+    let decoded: Bytes = bytes.fromHex(hex)?
+    if same && idx >= -1 {
+        decoded.toString()
+    } else {
+        bytes.toString(tail)
+    }
+}
+`)
+	file, parseDiags := parser.ParseDiagnostics(src)
+	for _, d := range parseDiags {
+		if d.Severity == diag.Error {
+			t.Fatalf("parse error: %s", d.Error())
+		}
+	}
+	reg := Load()
+	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), reg)
+	chk := check.File(file, res, check.Opts{Primitives: reg.Primitives, ResultMethods: reg.ResultMethods})
+	for _, d := range append(res.Diags, chk.Diags...) {
+		if d.Severity == diag.Error {
+			t.Errorf("unexpected std.bytes diagnostic: %s", d.Error())
 		}
 	}
 }

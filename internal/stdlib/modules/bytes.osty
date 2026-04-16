@@ -16,6 +16,10 @@ pub fn get(b: Bytes, i: Int) -> Byte? {
     b.get(i)
 }
 
+pub fn equal(a: Bytes, b: Bytes) -> Bool {
+    a == b
+}
+
 pub fn slice(b: Bytes, start: Int, end: Int) -> Bytes {
     slice(b, start, end)
 }

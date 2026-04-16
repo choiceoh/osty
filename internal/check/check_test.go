@@ -1519,7 +1519,7 @@ fn helper() -> Int { 5 }
 
 fn connect(x: Int = helper()) -> Int { x }
 `
-	assertCodes(t, runCheck(t, src), diag.CodeDefaultNotLiteral)
+	assertCodes(t, runCheck(t, src), diag.CodeDefaultExprNotLiteral)
 }
 
 func TestCheck_DefaultArgLiteralOK(t *testing.T) {

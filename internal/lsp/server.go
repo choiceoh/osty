@@ -394,6 +394,9 @@ func (s *Server) analyze(uri string, src []byte) *docAnalysis {
 // that file's source before running resolution. That way the LSP
 // reflects the user's in-progress edits — not the saved copy.
 func (s *Server) analyzePackageContaining(path string, src []byte) *docAnalysis {
+	if !isExistingFile(path) {
+		return nil
+	}
 	dir := filepath.Dir(path)
 	// A file qualifies for workspace analysis when EITHER:
 	//   - its own directory holds sibling packages (dir IS the root,
@@ -412,6 +415,14 @@ func (s *Server) analyzePackageContaining(path string, src []byte) *docAnalysis 
 		return s.analyzePackage(dir, path, src)
 	}
 	return nil
+}
+
+func isExistingFile(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return !info.IsDir()
 }
 
 // dirHasOstySiblings reports whether `dir` contains at least one
@@ -744,6 +755,9 @@ func (s *Server) workspaceRootForAny() string {
 	for uri := range s.docs.m {
 		path, ok := fileURIPath(uri)
 		if !ok {
+			continue
+		}
+		if !isExistingFile(path) {
 			continue
 		}
 		dir := filepath.Dir(path)

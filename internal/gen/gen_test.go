@@ -288,6 +288,36 @@ fn main() {
 	}
 }
 
+func TestStdEncodingBridgeValues(t *testing.T) {
+	goSrc, err := transpileWithStdlib(t, `use std.encoding
+
+fn main() {
+    let raw = encoding.hex.decode("6f737479").unwrap()
+    let b64 = encoding.base64
+    let safe64 = encoding.base64.url
+    let hexCodec = encoding.hex
+    let urlCodec = encoding.url
+    println(b64.encode(raw))
+    println(hexCodec.encode(b64.decode("b3N0eQ==").unwrap()))
+    println(safe64.encode(raw))
+    println(urlCodec.decode(urlCodec.encode("a b")).unwrap())
+}
+`)
+	if err != nil {
+		t.Fatalf("transpile: %v\n%s", err, goSrc)
+	}
+	out := strings.TrimSpace(runGo(t, goSrc))
+	want := strings.Join([]string{
+		"b3N0eQ==",
+		"6f737479",
+		"b3N0eQ==",
+		"a b",
+	}, "\n")
+	if out != want {
+		t.Fatalf("stdout = %q, want %q\n--- source ---\n%s", out, want, goSrc)
+	}
+}
+
 func TestStdEnvBridge(t *testing.T) {
 	goSrc, err := transpileWithStdlib(t, `use std.env
 
@@ -344,13 +374,16 @@ fn main() {
     let again = csv.decodeWith(semi, opts).unwrap()
     println(again[0][0])
     println(again[1][1])
+    let quoted = csv.decode("name,note\nalice,\"hello\nworld\"\n").unwrap()
+    println(quoted[1][1] == "hello\nworld")
+    println(csv.decode("\"bad\"x").isErr())
 }
 `)
 	if err != nil {
 		t.Fatalf("transpile: %v\n%s", err, goSrc)
 	}
 	out := strings.TrimSpace(runGo(t, goSrc))
-	want := strings.Join([]string{"alice", "25", "left;side", "down"}, "\n")
+	want := strings.Join([]string{"alice", "25", "left;side", "down", "true", "true"}, "\n")
 	if out != want {
 		t.Fatalf("stdout = %q, want %q\n--- source ---\n%s", out, want, goSrc)
 	}
@@ -588,6 +621,11 @@ fn main() {
     let joined = bytes.join(parts, bytes.fromString("-"))
     println(bytes.toString(joined).unwrap())
     println(bytes.trimSpace(bytes.fromString("  hi  ")))
+    let raw = bytes.from([b'A', b'B', b'C'])
+    println(bytes.toString(bytes.slice(raw, 1, 3)).unwrap())
+    println(raw.len())
+    println((bytes.fromString("x").concat(bytes.fromString("y"))).toString().unwrap())
+    println(bytes.from([255]).toString().isErr())
 }
 `)
 	if err != nil {
@@ -608,11 +646,15 @@ fn main() {
 		"2",
 		"Hello-World!",
 		"hi",
+		"BC",
+		"3",
+		"xy",
+		"true",
 	}, "\n")
 	if out != want {
 		t.Fatalf("stdout = %q, want:\n%s\n--- source ---\n%s", out, want, goSrc)
 	}
-	for _, needle := range []string{"bytesEqual", "bytesContains", "bytesToUpper", "bytesFromHex"} {
+	for _, needle := range []string{"bytesSlice", "bytesFrom", "bytesEqual", "bytesContains", "bytesToUpper", "bytesFromHex"} {
 		if !strings.Contains(string(goSrc), needle) {
 			t.Errorf("generated std.bytes bridge missing %s:\n%s", needle, goSrc)
 		}

@@ -330,6 +330,34 @@ fn foo`
 	}
 }
 
+func TestLexCommentTextAndLeadingDoc(t *testing.T) {
+	src := "// line\n/* block */\n/// doc\nfn foo"
+	l := New([]byte(src))
+	toks := l.Lex()
+	comments := l.Comments()
+	if len(comments) != 3 {
+		t.Fatalf("comments len = %d; want 3: %+v", len(comments), comments)
+	}
+	if comments[0].Kind != token.CommentLine || comments[0].Text != " line" {
+		t.Fatalf("line comment = %+v; want text without // delimiter", comments[0])
+	}
+	if comments[1].Kind != token.CommentBlock || comments[1].Text != " block " {
+		t.Fatalf("block comment = %+v; want text without /* */ delimiters", comments[1])
+	}
+	if comments[2].Kind != token.CommentDoc || comments[2].Text != " doc" {
+		t.Fatalf("doc comment = %+v; want text without /// delimiter", comments[2])
+	}
+	for _, tok := range toks {
+		if tok.Kind == token.FN {
+			if tok.LeadingDoc != "doc" {
+				t.Fatalf("fn leading doc = %q; want %q", tok.LeadingDoc, "doc")
+			}
+			return
+		}
+	}
+	t.Fatal("no fn token found")
+}
+
 func TestLexNewlines(t *testing.T) {
 	// Newline after `let x = 1` terminates the statement. After `=`, it
 	// doesn't (binary operator expecting rhs). After `,`, it doesn't.

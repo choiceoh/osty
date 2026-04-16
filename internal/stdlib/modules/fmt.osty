@@ -14,6 +14,11 @@ fn isNegZero(f: Float) -> Bool {
     f == 0.0 && (1.0 / f).isInfinite() && (1.0 / f) < 0.0
 }
 
+fn abortString() -> String {
+    let empty: List<String> = []
+    empty[0]
+}
+
 // ---------------------------------------------------------------------------
 // String alignment / padding
 // ---------------------------------------------------------------------------
@@ -54,19 +59,15 @@ pub fn center(s: String, width: Int, fill: Char = ' ') -> String {
 }
 
 // truncate limits s to at most maxLen characters, appending suffix
-// (default "…") when truncation occurs.
-pub fn truncate(s: String, maxLen: Int, suffix: String = "…") -> String {
+// (default "...") when truncation occurs.
+pub fn truncate(s: String, maxLen: Int, suffix: String = "...") -> String {
     let chars = s.chars()
     if chars.len() <= maxLen {
         return s
     }
     let suffixLen = suffix.chars().len()
     if maxLen <= suffixLen {
-        let mut out = ""
-        for i in 0..maxLen {
-            out = "{out}{chars[i]}"
-        }
-        return out
+        return suffix
     }
     let mut out = ""
     let limit = maxLen - suffixLen
@@ -84,7 +85,7 @@ pub fn truncate(s: String, maxLen: Int, suffix: String = "…") -> String {
 // Uses lowercase letters for digits above 9. Safe for Int.MIN.
 pub fn intToBase(n: Int, base: Int) -> String {
     if base < 2 || base > 36 {
-        return "0"
+        return abortString()
     }
     if n == 0 {
         return "0"
@@ -112,8 +113,18 @@ pub fn intToBase(n: Int, base: Int) -> String {
     }
 }
 
+// inBase converts n to a string in the given base (2-36).
+pub fn inBase(n: Int, base: Int) -> String {
+    intToBase(n, base)
+}
+
 // bin formats n in binary.
 pub fn bin(n: Int) -> String {
+    intToBase(n, 2)
+}
+
+// binary formats n in binary.
+pub fn binary(n: Int) -> String {
     intToBase(n, 2)
 }
 
@@ -122,14 +133,24 @@ pub fn oct(n: Int) -> String {
     intToBase(n, 8)
 }
 
+// octal formats n in octal.
+pub fn octal(n: Int) -> String {
+    intToBase(n, 8)
+}
+
 // hex formats n in lowercase hexadecimal.
-pub fn hex(n: Int) -> String {
-    intToBase(n, 16)
+pub fn hex(n: Int, upper: Bool = false) -> String {
+    let out = intToBase(n, 16)
+    if upper {
+        strings.toUpper(out)
+    } else {
+        out
+    }
 }
 
 // hexUpper formats n in uppercase hexadecimal.
 pub fn hexUpper(n: Int) -> String {
-    strings.toUpper(intToBase(n, 16))
+    hex(n, true)
 }
 
 // zeroPad pads an integer with leading zeros to at least width digits.
@@ -189,7 +210,12 @@ pub fn fixed(f: Float, decimals: Int) -> String {
     }
 }
 
-// scientific formats f in scientific notation (e.g. "1.23e+04").
+// toFixed formats f with exactly precision digits after the decimal point.
+pub fn toFixed(f: Float, precision: Int) -> String {
+    fixed(f, precision)
+}
+
+// scientific formats f in scientific notation (e.g. "1.23e+4").
 pub fn scientific(f: Float, decimals: Int = 6) -> String {
     if f.isNaN() {
         return "NaN"
@@ -200,11 +226,15 @@ pub fn scientific(f: Float, decimals: Int = 6) -> String {
         }
         return "Inf"
     }
+    let digits = if decimals < 0 { 0 } else { decimals }
     let negative = f < 0.0 || isNegZero(f)
     if f == 0.0 {
-        let zeros = strings.repeat("0", if decimals > 0 { decimals } else { 1 })
         let prefix = if negative { "-" } else { "" }
-        return "{prefix}0.{zeros}e+00"
+        if digits == 0 {
+            return "{prefix}0e+0"
+        }
+        let zeros = strings.repeat("0", digits)
+        return "{prefix}0.{zeros}e+0"
     }
     let mut abs = f.abs()
     let mut exp = 0
@@ -218,16 +248,16 @@ pub fn scientific(f: Float, decimals: Int = 6) -> String {
         exp = exp - 1
     }
 
-    let mut mantissa = fixed(abs, decimals)
+    let mut mantissa = fixed(abs, digits)
     let mChars = mantissa.chars()
     if mChars.len() >= 2 && mChars[0] == '1' && mChars[1] == '0' {
         exp = exp + 1
-        mantissa = fixed(1.0, decimals)
+        mantissa = fixed(1.0, digits)
     }
 
     let expSign = if exp >= 0 { "+" } else { "-" }
     let expAbs = if exp >= 0 { exp } else { -exp }
-    let expStr = padLeft(expAbs.toString(), 2, '0')
+    let expStr = expAbs.toString()
 
     let prefix = if negative { "-" } else { "" }
     "{prefix}{mantissa}e{expSign}{expStr}"
@@ -236,6 +266,11 @@ pub fn scientific(f: Float, decimals: Int = 6) -> String {
 // percentage formats f as a percentage with the given decimal places.
 pub fn percentage(f: Float, decimals: Int = 0) -> String {
     "{fixed(f * 100.0, decimals)}%"
+}
+
+// repeat returns s repeated n times.
+pub fn repeat(s: String, n: Int) -> String {
+    strings.repeat(s, n)
 }
 
 // ---------------------------------------------------------------------------
@@ -269,15 +304,15 @@ pub fn thousands(n: Int, sep: String = ",") -> String {
         n.toString()
     }
     let chars = s.chars()
-    let len = chars.len()
-    if len <= 3 {
+    let digitLen = chars.len()
+    if digitLen <= 3 {
         if negative {
             return "-{s}"
         }
         return s
     }
     let mut parts: List<String> = []
-    let mut end = len
+    let mut end = digitLen
     for end > 0 {
         let start = if end - 3 > 0 { end - 3 } else { 0 }
         let mut chunk = ""
@@ -369,27 +404,27 @@ pub fn bytes(n: Int) -> String {
 // Callers must use raw strings (r"...") or escape braces (\{ \})
 // to prevent Osty's own interpolation from consuming the placeholders.
 pub fn format(template: String, args: List<String>) -> String {
-    let lbrace: Char = '{'
-    let rbrace: Char = '}'
+    let lbrace: Char = r"{".chars()[0]
+    let rbrace: Char = r"}".chars()[0]
     let chars = template.chars()
-    let len = chars.len()
+    let templateLen = chars.len()
     let mut out = ""
     let mut i = 0
-    for i < len {
+    for i < templateLen {
         let c = chars[i]
         if c == lbrace {
-            if i + 1 < len && chars[i + 1] == lbrace {
+            if i + 1 < templateLen && chars[i + 1] == lbrace {
                 out = "{out}{lbrace}"
                 i = i + 2
                 continue
             }
             let mut numStr = ""
             let mut j = i + 1
-            for j < len && chars[j] != rbrace {
+            for j < templateLen && chars[j] != rbrace {
                 numStr = "{numStr}{chars[j]}"
                 j = j + 1
             }
-            if j < len && chars[j] == rbrace {
+            if j < templateLen && chars[j] == rbrace {
                 let idx = numStr.toInt()
                 if idx.isOk() {
                     let index = idx.unwrap()
@@ -407,7 +442,7 @@ pub fn format(template: String, args: List<String>) -> String {
                 i = i + 1
             }
         } else if c == rbrace {
-            if i + 1 < len && chars[i + 1] == rbrace {
+            if i + 1 < templateLen && chars[i + 1] == rbrace {
                 out = "{out}{rbrace}"
                 i = i + 2
                 continue
@@ -440,6 +475,28 @@ pub fn joinWith<T>(items: List<T>, sep: String, mapper: fn(T) -> String) -> Stri
     result
 }
 
+// join joins parts with sep. When last is non-empty, it is used before
+// the final element.
+pub fn join(parts: List<String>, sep: String, last: String = "") -> String {
+    if parts.isEmpty() {
+        return ""
+    }
+    if parts.len() == 1 {
+        return parts[0]
+    }
+    if last == "" {
+        return strings.join(parts, sep)
+    }
+    if parts.len() == 2 {
+        return "{parts[0]}{last}{parts[1]}"
+    }
+    let mut out = parts[0]
+    for i in 1..parts.len() - 1 {
+        out = "{out}{sep}{parts[i]}"
+    }
+    "{out}{last}{parts[parts.len() - 1]}"
+}
+
 // bullet produces a bulleted list from a list of strings.
 pub fn bullet(items: List<String>, marker: String = "- ") -> String {
     if items.isEmpty() {
@@ -460,7 +517,7 @@ pub fn numbered(items: List<String>) -> String {
     let mut lines: List<String> = []
     let width = items.len().toString().chars().len()
     for i in 0..items.len() {
-        let num = padLeft((i + 1).toString(), width)
+        let num = padLeft((i + 1).toString(), width, ' ')
         lines.push("{num}. {items[i]}")
     }
     strings.join(lines, "\n")
@@ -491,7 +548,7 @@ pub fn table(headers: List<String>, rows: List<List<String>>, sep: String = " | 
 
     let mut headerCells: List<String> = []
     for ci in 0..cols {
-        headerCells.push(padRight(headers[ci], widths[ci]))
+        headerCells.push(padRight(headers[ci], widths[ci], ' '))
     }
     let headerLine = strings.join(headerCells, sep)
 
@@ -506,7 +563,7 @@ pub fn table(headers: List<String>, rows: List<List<String>>, sep: String = " | 
         let mut cells: List<String> = []
         for ci in 0..cols {
             let cell = if ci < row.len() { row[ci] } else { "" }
-            cells.push(padRight(cell, widths[ci]))
+            cells.push(padRight(cell, widths[ci], ' '))
         }
         lines.push(strings.join(cells, sep))
     }

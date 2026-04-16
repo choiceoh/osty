@@ -122,6 +122,19 @@ type gen struct {
 	// toString implementations.
 	needStringRuntime bool
 
+	// needStdlibOsty/emittedStdlibOsty track stdlib modules that should
+	// be lowered from their bundled Osty source into this Go file instead
+	// of going through a Go bridge or an empty package stub.
+	needStdlibOsty    map[string]bool
+	emittedStdlibOsty map[string]bool
+
+	// stdlibInlineModule is non-empty while a bundled stdlib module is
+	// being emitted into another package. Top-level functions are renamed
+	// through stdlibInlineRenames so they cannot collide with user code.
+	stdlibInlineModule  string
+	stdlibInlineRenames map[string]string
+	emitGenericFnDecls  bool
+
 	// needRange is set when a standalone range literal is emitted, so
 	// the runtime Range struct can be injected at the top of the file.
 	needRange bool
@@ -234,16 +247,18 @@ type gen struct {
 
 func newGen(pkgName string, file *ast.File, res *resolve.Result, chk *check.Result) *gen {
 	g := &gen{
-		pkgName:      pkgName,
-		file:         file,
-		res:          res,
-		chk:          chk,
-		body:         newWriter(),
-		imports:      map[string]string{},
-		variantOwner: map[string]string{},
-		enumTypes:    map[string]bool{},
-		structTypes:  map[string]bool{},
-		methodNames:  map[string]map[string]bool{},
+		pkgName:           pkgName,
+		file:              file,
+		res:               res,
+		chk:               chk,
+		body:              newWriter(),
+		imports:           map[string]string{},
+		variantOwner:      map[string]string{},
+		enumTypes:         map[string]bool{},
+		structTypes:       map[string]bool{},
+		methodNames:       map[string]map[string]bool{},
+		needStdlibOsty:    map[string]bool{},
+		emittedStdlibOsty: map[string]bool{},
 	}
 	g.indexTypes()
 	g.initInstances()
@@ -403,6 +418,10 @@ func (g *gen) run() ([]byte, error) {
 		g.body.writeln("}")
 	}
 
+	// 2a. Inline selected stdlib modules from their Osty sources once all
+	//     user code has had a chance to mark call-site dependencies.
+	g.emitNeededStdlibOstyModules()
+
 	// 2b. Runtime flags set during body emission may demand additional
 	//     imports. Resolve them before we serialize the import block.
 	if g.needTaskGroup {
@@ -461,6 +480,7 @@ func (g *gen) run() ([]byte, error) {
 		g.needResult = true
 		g.useAs("bytes", "stdbytes")
 		g.useAs("encoding/hex", "_ostybyteshex")
+		g.useAs("unicode/utf8", "_ostybytesutf8")
 	}
 	if g.needCompress {
 		g.needResult = true
@@ -643,9 +663,20 @@ func resultMapErr[T any, E any, F any](r Result[T, E], f func(E) F) Result[T, F]
 	}
 	if g.needBytesRuntime {
 		out.WriteString(`
+func bytesClone(b []byte) []byte {
+	return append([]byte(nil), b...)
+}
+
+func bytesFrom(items []byte) []byte { return bytesClone(items) }
+
 func bytesFromString(s string) []byte { return []byte(s) }
 
-func bytesToString(b []byte) Result[string, any] { return resultOk[string, any](string(b)) }
+func bytesToString(b []byte) Result[string, any] {
+	if !_ostybytesutf8.Valid(b) {
+		return resultErr[string, any](fmt.Errorf("bytes: invalid UTF-8"))
+	}
+	return resultOk[string, any](string(b))
+}
 
 func bytesLen(b []byte) int { return len(b) }
 
@@ -657,6 +688,13 @@ func bytesGet(b []byte, i int) *byte {
 	}
 	v := b[i]
 	return &v
+}
+
+func bytesSlice(b []byte, start int, end int) []byte {
+	if start < 0 || end < start || end > len(b) {
+		panic("bytes.slice index out of range")
+	}
+	return bytesClone(b[start:end])
 }
 
 func bytesEqual(a []byte, b []byte) bool { return stdbytes.Equal(a, b) }
@@ -683,7 +721,14 @@ func bytesLastIndexOf(b []byte, sub []byte) *int {
 	return &i
 }
 
-func bytesSplit(b []byte, sep []byte) [][]byte { return stdbytes.Split(b, sep) }
+func bytesSplit(b []byte, sep []byte) [][]byte {
+	parts := stdbytes.Split(b, sep)
+	out := make([][]byte, len(parts))
+	for i, part := range parts {
+		out[i] = bytesClone(part)
+	}
+	return out
+}
 
 func bytesJoin(parts [][]byte, sep []byte) []byte { return stdbytes.Join(parts, sep) }
 
@@ -699,13 +744,13 @@ func bytesReplaceAll(b []byte, old []byte, new []byte) []byte {
 	return stdbytes.ReplaceAll(b, old, new)
 }
 
-func bytesTrimLeft(b []byte, strip []byte) []byte { return stdbytes.TrimLeft(b, string(strip)) }
+func bytesTrimLeft(b []byte, strip []byte) []byte { return bytesClone(stdbytes.TrimLeft(b, string(strip))) }
 
-func bytesTrimRight(b []byte, strip []byte) []byte { return stdbytes.TrimRight(b, string(strip)) }
+func bytesTrimRight(b []byte, strip []byte) []byte { return bytesClone(stdbytes.TrimRight(b, string(strip))) }
 
-func bytesTrim(b []byte, strip []byte) []byte { return stdbytes.Trim(b, string(strip)) }
+func bytesTrim(b []byte, strip []byte) []byte { return bytesClone(stdbytes.Trim(b, string(strip))) }
 
-func bytesTrimSpace(b []byte) []byte { return stdbytes.TrimSpace(b) }
+func bytesTrimSpace(b []byte) []byte { return bytesClone(stdbytes.TrimSpace(b)) }
 
 func bytesToUpper(b []byte) []byte { return stdbytes.ToUpper(b) }
 

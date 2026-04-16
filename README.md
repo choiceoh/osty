@@ -99,6 +99,11 @@ osty/
 ├── LANG_SPEC_v0.4/          # Current language spec (prose + examples)
 ├── OSTY_GRAMMAR_v0.4.md     # Current EBNF grammar + decision log
 ├── SPEC_GAPS.md             # Resolved-gap archive (no open items in v0.4)
+├── LLVM_MIGRATION_PLAN.md   # Planned migration from Go gen to LLVM backend
+├── LLVM_PHASE1_BASELINE.md  # Current Go-backend baseline for LLVM migration
+├── LLVM_BACKEND_CORPUS.md   # Backend parity fixture classes and smoke set
+├── LLVM_GEN_TODO_AUDIT.md   # Go-gen TODO audit and LLVM initial exclusions
+├── LLVM_ARTIFACT_LAYOUT.md  # Backend-aware output/cache layout policy
 ├── cmd/
 │   ├── osty/                # Main CLI (`osty` binary)
 │   └── codesdoc/            # Regenerates ERROR_CODES.md from codes.go
@@ -115,6 +120,7 @@ osty/
 │   ├── lint/                # Style/correctness lint rules (L0xxx codes)
 │   ├── format/              # Canonical-style formatter
 │   ├── ir/                  # Independent intermediate representation
+│   ├── backend/             # Backend names, emit modes, artifact layout
 │   ├── gen/                 # Go transpiler (Phases 1–6; `osty gen FILE`)
 │   ├── testgen/             # Test runner harness (drives `osty test`)
 │   ├── docgen/              # API doc generator (HTML + markdown; `osty doc`)
@@ -127,7 +133,7 @@ osty/
 │   ├── lockfile/            # osty.lock read/write
 │   ├── registry/            # Package registry client + file-backed HTTP server
 │   └── pkgmgr/semver/       # SemVer parse, compare, constraint match
-└── testdata/                # .osty fixtures used by tests
+└── testdata/                # .osty fixtures used by tests and backend corpus
 ```
 
 ## Building
@@ -217,6 +223,10 @@ newline-separated `else`.
 
 - `-o PATH` / `--out PATH` — write Go source to `PATH` instead of stdout
 - `--package NAME` — Go package clause for the emitted file (default: `main`)
+- `--backend NAME` — code generation backend (`go` or `llvm`; default: `go`;
+  `llvm` is currently parsed but not implemented)
+- `--emit MODE` — requested text artifact. `go` emits Go source for the Go
+  backend; `llvm-ir` is reserved for the LLVM backend.
 
 ### Debugging build / run / test failures
 
@@ -268,13 +278,21 @@ creating a new one.
   requires `osty.lock` to already exist. Catches "fresh checkout, no
   lockfile" mistakes before any download starts.
 
+`build` / `run` / `test` backend flags (after the subcommand):
+
+- `--backend NAME` — code generation backend (`go` or `llvm`; default: `go`;
+  `llvm` is currently parsed but not implemented)
+- `--emit MODE` — requested artifact mode (`go`, `llvm-ir`, `object`, or
+  `binary`). `build --emit go` writes inspectable Go without linking a binary;
+  `run` and `test` require `binary` because they execute the result.
+
 `osty build` loads `osty.toml` starting at the given path (or the cwd),
 resolves dependencies against `osty.lock` (regenerated if stale),
 vendors deps into `<project>/.osty/deps/`, and runs the front-end
 (parse → resolve → check → lint) plus gen across every package
-the manifest names. Future iterations will invoke `go build` on the
-emitted source; today step emits the Go into `<project>/.osty/out/`
-and reports diagnostics.
+the manifest names. For binary packages it emits Go into
+`<project>/.osty/out/<profile>[-<target>]/go/`, invokes `go build`, and
+reports diagnostics with generated-source mapping.
 
 `add`-specific flags (after the subcommand):
 
