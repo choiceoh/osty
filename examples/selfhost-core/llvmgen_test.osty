@@ -81,7 +81,7 @@ fn testLlvmToolchainPlanIsOstyOwned() {
 fn testLlvmExecutableCorpusPlanIsOstyOwned() {
     let cases = llvmSmokeExecutableCorpus()
 
-    testing.assert(cases.len() == 26)
+    testing.assert(cases.len() == 34)
     testing.assert(cases[0].name == "minimal")
     testing.assert(cases[0].fixture == "minimal_print.osty")
     testing.assert(cases[0].stdout == "42\n")
@@ -160,6 +160,30 @@ fn testLlvmExecutableCorpusPlanIsOstyOwned() {
     testing.assert(cases[25].name == "enum-payload-mut")
     testing.assert(cases[25].fixture == "enum_payload_mut_print.osty")
     testing.assert(cases[25].stdout == "42\n")
+    testing.assert(cases[26].name == "float-print")
+    testing.assert(cases[26].fixture == "float_print.osty")
+    testing.assert(cases[26].stdout == "42.000000\n")
+    testing.assert(cases[27].name == "float-arithmetic")
+    testing.assert(cases[27].fixture == "float_arithmetic_print.osty")
+    testing.assert(cases[27].stdout == "42.000000\n")
+    testing.assert(cases[28].name == "float-return")
+    testing.assert(cases[28].fixture == "float_return_print.osty")
+    testing.assert(cases[28].stdout == "42.000000\n")
+    testing.assert(cases[29].name == "float-param")
+    testing.assert(cases[29].fixture == "float_param_print.osty")
+    testing.assert(cases[29].stdout == "42.000000\n")
+    testing.assert(cases[30].name == "float-mutable")
+    testing.assert(cases[30].fixture == "float_mut_print.osty")
+    testing.assert(cases[30].stdout == "42.000000\n")
+    testing.assert(cases[31].name == "float-compare")
+    testing.assert(cases[31].fixture == "float_compare_print.osty")
+    testing.assert(cases[31].stdout == "42.000000\n")
+    testing.assert(cases[32].name == "float-struct")
+    testing.assert(cases[32].fixture == "float_struct_print.osty")
+    testing.assert(cases[32].stdout == "42.000000\n")
+    testing.assert(cases[33].name == "float-enum-payload")
+    testing.assert(cases[33].fixture == "float_enum_payload_print.osty")
+    testing.assert(cases[33].stdout == "42.000000\n")
 }
 
 fn testLlvmUnsupportedDiagnosticPolicyIsOstyOwned() {
@@ -468,4 +492,80 @@ fn testLlvmSmokeEnumPayloadMutableIsOstyOwned() {
     assertLlvmContains(ir, "store %Maybe")
     assertLlvmContains(ir, "load %Maybe")
     assertLlvmContains(ir, "extractvalue %Maybe")
+}
+
+fn testLlvmSmokeFloatPrintIsOstyOwned() {
+    let ir = llvmSmokeFloatPrintIR("/tmp/float_print.osty")
+
+    assertLlvmContains(ir, "@.fmt_f64 = private unnamed_addr constant [6 x i8] c\"%.6f\\0A\\00\"")
+    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_f64, double 42.0)")
+    assertLlvmContains(ir, "ret i32 0")
+}
+
+fn testLlvmSmokeFloatArithmeticIsOstyOwned() {
+    let ir = llvmSmokeFloatArithmeticIR("/tmp/float_arithmetic_print.osty")
+
+    assertLlvmContains(ir, "fadd double 40.0, 2.0")
+    assertLlvmContains(ir, "fsub double")
+    assertLlvmContains(ir, "fmul double")
+    assertLlvmContains(ir, "fdiv double")
+    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_f64, double")
+}
+
+fn testLlvmSmokeFloatReturnIsOstyOwned() {
+    let ir = llvmSmokeFloatReturnIR("/tmp/float_return_print.osty")
+
+    assertLlvmContains(ir, "define double @value() \{")
+    assertLlvmContains(ir, "ret double 42.0")
+    assertLlvmContains(ir, "call double @value()")
+    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_f64, double")
+}
+
+fn testLlvmSmokeFloatParamIsOstyOwned() {
+    let ir = llvmSmokeFloatParamIR("/tmp/float_param_print.osty")
+
+    assertLlvmContains(ir, "define double @score(double %value) \{")
+    assertLlvmContains(ir, "ret double %value")
+    assertLlvmContains(ir, "call double @score(double 42.0)")
+    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_f64, double")
+}
+
+fn testLlvmSmokeFloatMutableIsOstyOwned() {
+    let ir = llvmSmokeFloatMutableIR("/tmp/float_mut_print.osty")
+
+    assertLlvmContains(ir, "alloca double")
+    assertLlvmContains(ir, "store double 0.0")
+    assertLlvmContains(ir, "store double 42.0")
+    assertLlvmContains(ir, "load double")
+}
+
+fn testLlvmSmokeFloatCompareIsOstyOwned() {
+    let ir = llvmSmokeFloatCompareIR("/tmp/float_compare_print.osty")
+
+    assertLlvmContains(ir, "fcmp oeq double")
+    assertLlvmContains(ir, "fcmp one double")
+    assertLlvmContains(ir, "fcmp olt double")
+    assertLlvmContains(ir, "fcmp ogt double")
+    assertLlvmContains(ir, "fcmp ole double")
+    assertLlvmContains(ir, "fcmp oge double")
+    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_f64, double")
+}
+
+fn testLlvmSmokeFloatStructIsOstyOwned() {
+    let ir = llvmSmokeFloatStructIR("/tmp/float_struct_print.osty")
+
+    assertLlvmContains(ir, "%MaybeF = type \{ i64, double \}")
+    assertLlvmContains(ir, "insertvalue %MaybeF")
+    assertLlvmContains(ir, "extractvalue %MaybeF")
+    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_f64, double")
+}
+
+fn testLlvmSmokeFloatEnumPayloadIsOstyOwned() {
+    let ir = llvmSmokeFloatEnumPayloadIR("/tmp/float_enum_payload_print.osty")
+
+    assertLlvmContains(ir, "%MaybeF = type \{ i64, double \}")
+    assertLlvmContains(ir, "insertvalue %MaybeF")
+    assertLlvmContains(ir, "extractvalue %MaybeF")
+    assertLlvmContains(ir, "define i32 @main() \{")
+    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_f64, double")
 }

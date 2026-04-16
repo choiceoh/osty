@@ -97,8 +97,16 @@ pub fn llvmI1(name: String) -> LlvmValue {
     LlvmValue { typ: "i1", name, pointer: false }
 }
 
+pub fn llvmF64(name: String) -> LlvmValue {
+    LlvmValue { typ: "double", name, pointer: false }
+}
+
 pub fn llvmIntLiteral(value: Int) -> LlvmValue {
     llvmI64("{value}")
+}
+
+pub fn llvmFloatLiteral(value: String) -> LlvmValue {
+    llvmF64("{value}")
 }
 
 pub fn llvmEnumVariant(enumName: String, tag: Int) -> LlvmValue {
@@ -199,6 +207,17 @@ pub fn llvmBinaryI64(
     llvmI64(tmp)
 }
 
+pub fn llvmBinaryF64(
+    emitter: LlvmEmitter,
+    op: String,
+    left: LlvmValue,
+    right: LlvmValue,
+) -> LlvmValue {
+    let tmp = llvmNextTemp(emitter)
+    emitter.body.push("  {tmp} = {op} double {left.name}, {right.name}")
+    llvmF64(tmp)
+}
+
 pub fn llvmCompare(
     emitter: LlvmEmitter,
     pred: String,
@@ -207,6 +226,17 @@ pub fn llvmCompare(
 ) -> LlvmValue {
     let tmp = llvmNextTemp(emitter)
     emitter.body.push("  {tmp} = icmp {pred} {left.typ} {left.name}, {right.name}")
+    llvmI1(tmp)
+}
+
+pub fn llvmCompareF64(
+    emitter: LlvmEmitter,
+    pred: String,
+    left: LlvmValue,
+    right: LlvmValue,
+) -> LlvmValue {
+    let tmp = llvmNextTemp(emitter)
+    emitter.body.push("  {tmp} = fcmp {pred} double {left.name}, {right.name}")
     llvmI1(tmp)
 }
 
@@ -277,6 +307,11 @@ pub fn llvmExtractValue(
 pub fn llvmPrintlnI64(emitter: LlvmEmitter, value: LlvmValue) {
     let tmp = llvmNextTemp(emitter)
     emitter.body.push("  {tmp} = call i32 (ptr, ...) @printf(ptr @.fmt_i64, i64 {value.name})")
+}
+
+pub fn llvmPrintlnF64(emitter: LlvmEmitter, value: LlvmValue) {
+    let tmp = llvmNextTemp(emitter)
+    emitter.body.push("  {tmp} = call i32 (ptr, ...) @printf(ptr @.fmt_f64, double {value.name})")
 }
 
 pub fn llvmStringLiteral(emitter: LlvmEmitter, text: String) -> LlvmValue {
@@ -476,6 +511,7 @@ pub fn llvmRenderModuleWithGlobalsAndTypes(
         lines.push("")
     }
     lines.push("@.fmt_i64 = private unnamed_addr constant [5 x i8] c\"%ld\\0A\\00\"")
+    lines.push("@.fmt_f64 = private unnamed_addr constant [6 x i8] c\"%.6f\\0A\\00\"")
     lines.push("@.fmt_str = private unnamed_addr constant [4 x i8] c\"%s\\0A\\00\"")
     for global in stringGlobals {
         lines.push("{global.name} = private unnamed_addr constant [{global.byteLen} x i8] c\"{global.encoded}\"")
@@ -844,6 +880,46 @@ pub fn llvmSmokeExecutableCorpus() -> List<LlvmSmokeExecutableCase> {
             name: "enum-payload-mut",
             fixture: "enum_payload_mut_print.osty",
             stdout: "42\n",
+        },
+        LlvmSmokeExecutableCase {
+            name: "float-print",
+            fixture: "float_print.osty",
+            stdout: "42.000000\n",
+        },
+        LlvmSmokeExecutableCase {
+            name: "float-arithmetic",
+            fixture: "float_arithmetic_print.osty",
+            stdout: "42.000000\n",
+        },
+        LlvmSmokeExecutableCase {
+            name: "float-return",
+            fixture: "float_return_print.osty",
+            stdout: "42.000000\n",
+        },
+        LlvmSmokeExecutableCase {
+            name: "float-param",
+            fixture: "float_param_print.osty",
+            stdout: "42.000000\n",
+        },
+        LlvmSmokeExecutableCase {
+            name: "float-mutable",
+            fixture: "float_mut_print.osty",
+            stdout: "42.000000\n",
+        },
+        LlvmSmokeExecutableCase {
+            name: "float-compare",
+            fixture: "float_compare_print.osty",
+            stdout: "42.000000\n",
+        },
+        LlvmSmokeExecutableCase {
+            name: "float-struct",
+            fixture: "float_struct_print.osty",
+            stdout: "42.000000\n",
+        },
+        LlvmSmokeExecutableCase {
+            name: "float-enum-payload",
+            fixture: "float_enum_payload_print.osty",
+            stdout: "42.000000\n",
         },
     ]
 }
@@ -1465,6 +1541,162 @@ pub fn llvmSmokeEnumPayloadMutableIR(sourcePath: String) -> String {
         sourcePath,
         "",
         [llvmStructTypeDef("Maybe", ["i64", "i64"])],
+        [],
+        [
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+pub fn llvmSmokeFloatPrintIR(sourcePath: String) -> String {
+    let main = llvmEmitter()
+    llvmPrintlnF64(main, llvmFloatLiteral("42.0"))
+    llvmReturnI32Zero(main)
+
+    llvmRenderModule(
+        sourcePath,
+        "",
+        [llvmRenderFunction("i32", "main", [], main.body)],
+    )
+}
+
+pub fn llvmSmokeFloatArithmeticIR(sourcePath: String) -> String {
+    let main = llvmEmitter()
+    let add = llvmBinaryF64(main, "fadd", llvmFloatLiteral("40.0"), llvmFloatLiteral("2.0"))
+    let sub = llvmBinaryF64(main, "fsub", add, llvmFloatLiteral("0.0"))
+    let mul = llvmBinaryF64(main, "fmul", sub, llvmFloatLiteral("2.5"))
+    let div = llvmBinaryF64(main, "fdiv", mul, llvmFloatLiteral("2.5"))
+    llvmPrintlnF64(main, div)
+    llvmReturnI32Zero(main)
+
+    llvmRenderModule(
+        sourcePath,
+        "",
+        [llvmRenderFunction("i32", "main", [], main.body)],
+    )
+}
+
+pub fn llvmSmokeFloatReturnIR(sourcePath: String) -> String {
+    let value = llvmEmitter()
+    llvmReturn(value, llvmFloatLiteral("42.0"))
+
+    let main = llvmEmitter()
+    let out = llvmCall(main, "double", "value", [])
+    llvmPrintlnF64(main, out)
+    llvmReturnI32Zero(main)
+
+    llvmRenderModule(
+        sourcePath,
+        "",
+        [
+            llvmRenderFunction("double", "value", [], value.body),
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+pub fn llvmSmokeFloatParamIR(sourcePath: String) -> String {
+    let score = llvmEmitter()
+    llvmBind(score, "value", llvmF64("%value"))
+    llvmReturn(score, llvmIdent(score, "value"))
+
+    let main = llvmEmitter()
+    let out = llvmCall(main, "double", "score", [llvmFloatLiteral("42.0")])
+    llvmPrintlnF64(main, out)
+    llvmReturnI32Zero(main)
+
+    llvmRenderModule(
+        sourcePath,
+        "",
+        [
+            llvmRenderFunction("double", "score", [llvmParam("value", "double")], score.body),
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+pub fn llvmSmokeFloatMutableIR(sourcePath: String) -> String {
+    let main = llvmEmitter()
+    llvmMutableLet(main, "value", llvmFloatLiteral("0.0"))
+    let _ = llvmAssign(main, "value", llvmFloatLiteral("42.0"))
+    llvmPrintlnF64(main, llvmIdent(main, "value"))
+    llvmReturnI32Zero(main)
+
+    llvmRenderModule(
+        sourcePath,
+        "",
+        [
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+pub fn llvmSmokeFloatCompareIR(sourcePath: String) -> String {
+    let main = llvmEmitter()
+    let value = llvmFloatLiteral("42.0")
+    let eq = llvmCompareF64(main, "oeq", value, llvmFloatLiteral("42.0"))
+    let ne = llvmCompareF64(main, "one", value, llvmFloatLiteral("41.0"))
+    let lt = llvmCompareF64(main, "olt", value, llvmFloatLiteral("100.0"))
+    let gt = llvmCompareF64(main, "ogt", value, llvmFloatLiteral("0.0"))
+    let le = llvmCompareF64(main, "ole", value, llvmFloatLiteral("42.0"))
+    let ge = llvmCompareF64(main, "oge", value, llvmFloatLiteral("42.0"))
+    let cond = llvmLogicalI1(
+        main,
+        "and",
+        llvmLogicalI1(main, "and", llvmLogicalI1(main, "and", eq, ne), llvmLogicalI1(main, "and", lt, gt)),
+        llvmLogicalI1(main, "and", le, ge),
+    )
+    let labels = llvmIfStart(main, cond)
+    llvmPrintlnF64(main, value)
+    llvmIfElse(main, labels)
+    llvmPrintlnF64(main, llvmFloatLiteral("0.0"))
+    llvmIfEnd(main, labels)
+    llvmReturnI32Zero(main)
+
+    llvmRenderModule(
+        sourcePath,
+        "",
+        [llvmRenderFunction("i32", "main", [], main.body)],
+    )
+}
+
+pub fn llvmSmokeFloatStructIR(sourcePath: String) -> String {
+    let main = llvmEmitter()
+    let value = llvmStructLiteral(main, "%MaybeF", [llvmIntLiteral(7), llvmFloatLiteral("42.0")])
+    llvmImmutableLet(main, "value", value)
+    llvmPrintlnF64(main, llvmExtractValue(main, llvmIdent(main, "value"), "double", 1))
+    llvmReturnI32Zero(main)
+
+    llvmRenderModuleWithGlobalsAndTypes(
+        sourcePath,
+        "",
+        [llvmStructTypeDef("MaybeF", ["i64", "double"])],
+        [],
+        [
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+pub fn llvmSmokeFloatEnumPayloadIR(sourcePath: String) -> String {
+    let main = llvmEmitter()
+    let value = llvmEnumPayloadVariant(main, "%MaybeF", 0, llvmFloatLiteral("42.0"))
+    llvmImmutableLet(main, "value", value)
+    let valueRef = llvmIdent(main, "value")
+    let tag = llvmExtractValue(main, valueRef, "i64", 0)
+    let cond = llvmCompare(main, "eq", tag, llvmEnumVariant("MaybeF", 0))
+    let labels = llvmIfExprStart(main, cond)
+    let thenValue = llvmExtractValue(main, valueRef, "double", 1)
+    llvmIfExprElse(main, labels)
+    let elseValue = llvmFloatLiteral("0.0")
+    let out = llvmIfExprEnd(main, "double", thenValue, elseValue, labels)
+    llvmPrintlnF64(main, out)
+    llvmReturnI32Zero(main)
+
+    llvmRenderModuleWithGlobalsAndTypes(
+        sourcePath,
+        "",
+        [llvmStructTypeDef("MaybeF", ["i64", "double"])],
         [],
         [
             llvmRenderFunction("i32", "main", [], main.body),

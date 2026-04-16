@@ -32,7 +32,8 @@
   definitions, struct literals, field reads, struct function boundaries, and
   mutable struct locals, plus bare enum tag values across simple function and
   mutable-local paths와 그 다음 payload-free enum match-expression paths도 같은
-  selfhost-core에서 생성한다.
+  selfhost-core에서 생성한다. `Float`는 현재 double-subset로만 `Float`-smoke
+  경로를 처리하며, `Float32`/`Float64` width/ABI 정책은 후속 단계로 미룬다.
 
 ## 이주 원칙
 
@@ -323,7 +324,7 @@ artifact/cache layout 정책은 [`LLVM_ARTIFACT_LAYOUT.md`](./LLVM_ARTIFACT_LAYO
 | `Bool` | `i1` in SSA, ABI는 `i8` 가능 | runtime ABI에서 고정 |
 | `Char` | `i32` | Unicode scalar value |
 | `Byte` | `i8` | `UInt8`과 alias 여부 명시 필요 |
-| `Float/Float32/Float64` | `double/float/double` | `Float` width 정책 결정 |
+| `Float/Float32/Float64` | `double/float/double` | `Float`는 현재 단계에서 `double` 하위집합으로 다루고, `Float32`/`Float64` 정책은 후속 단계 |
 | `String` | `%osty.string` | pointer+len 또는 fat value |
 | `Bytes` | `%osty.bytes` | pointer+len+cap 또는 runtime-owned buffer |
 | `List<T>` | `%osty.list` + element descriptor | monomorphized typed list와 erased list 중 선택 |
@@ -388,6 +389,27 @@ return/parameter boundaries와 mutable local slots을 지나도 동일하게 동
 - 반환/파라미터/mutable local 경계 fixture가 문서와 동일한 기대 동작을 가져야
   한다.
 
+### Phase 46-53. Float smoke subset
+
+목표: `Float`를 `double`로 다루는 8개 LLVM smoke를 추가해, printf 기본 `%f`
+출력 형태로 `42.000000`을 내는 경로를 먼저 확인한다. `Float32`/`Float64`
+정책은 후속 단계로 미룬다.
+
+작업:
+
+- `float_print.osty`, `float_arithmetic_print.osty`, `float_return_print.osty`,
+  `float_param_print.osty`, `float_mut_print.osty`, `float_compare_print.osty`,
+  `float_struct_print.osty`, `float_enum_payload_print.osty`를 추가한다.
+- `LLVM_BACKEND_CORPUS.md`에 Phase 46~53 항목을 추가하고 기대 stdout을
+  `42.000000\n`으로 문서화한다.
+
+완료 조건:
+
+- `Float` smoke fixture의 8개가 같은 산출물 체인으로 selfhosted LLVM 경로에
+  포함되어야 한다.
+- `Float32`/`Float64` width 정책은 별도 단계에서 결정한다고 migration 문서에
+  명시되어야 한다.
+
 ## Toolchain 전략
 
 초기 전략:
@@ -445,7 +467,7 @@ return/parameter boundaries와 mutable local slots을 지나도 동일하게 동
 
 ## 의사결정이 필요한 항목
 
-- `Int`와 `Float`의 정확한 native width 정책
+- `Int`와 `Float`의 정확한 native width 정책 (`Float32`/`Float64`는 후속 단계)
 - Memory model: manual/free, arena, refcount, GC 중 1차 선택
 - Runtime implementation language
 - LLVM target triple을 manifest `[target.*]`에 통합할지 별도 키로 둘지
