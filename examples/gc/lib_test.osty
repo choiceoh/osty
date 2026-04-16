@@ -456,6 +456,25 @@ fn testValidateHeapRejectsTenuredFreeBlockOverlappingLiveObject() {
     let _ = testing.expectError(heap.validateHeap())
 }
 
+fn testValidateHeapRejectsHumongousFreeBlockOverlappingTenuredFreeBlock() {
+    let mut heap = newGcHeap(humongousSpaceGcConfig())
+    heap.nextAddress = 64
+    heap.tenured.freeList.push(
+        GcFreeBlock {
+            address: 16,
+            size: 16,
+        },
+    )
+    heap.humongous.freeList.push(
+        GcFreeBlock {
+            address: 16,
+            size: 16,
+        },
+    )
+
+    let _ = testing.expectError(heap.validateHeap())
+}
+
 fn testMajorCollectionReclaimsCycles() {
     let mut heap = newGcHeap(testGcConfig())
     assertValid(heap)
@@ -1647,6 +1666,31 @@ fn testEvacuationRecordsForwardingForMovedObjects() {
     testing.assert(heap.lastRemapVerified())
 }
 
+fn testValidateHeapRejectsForwardingTableMismatch() {
+    let mut heap = newGcHeap(testGcConfig())
+    let dead = heap.allocate(GcBytes, 16)
+    let first = heap.allocate(GcRecord, 20)
+    let second = heap.allocate(GcArray, 12)
+    testing.assert(heap.addRoot(first))
+    testing.assert(heap.addRoot(second))
+    assertValid(heap)
+
+    let _ = dead
+    let _ = heap.majorCollect()
+    assertValid(heap)
+
+    if heap.forwarding.containsKey(first) {
+        let entry = heap.forwarding[first]
+        let mut next = entry
+        next.toAddress = entry.toAddress + 4
+        heap.forwarding.insert(first, next)
+    } else {
+        testing.fail("missing forwarding entry")
+    }
+
+    let _ = testing.expectError(heap.validateHeap())
+}
+
 fn testRootAndObjectRemapTraceCoversForwardedHandles() {
     let mut heap = newGcHeap(testGcConfig())
     let dead = heap.allocate(GcBytes, 16)
@@ -2340,6 +2384,31 @@ fn testAsyncFrameRootOverwriteDropsOldSnapshotRoot() {
     testing.assert(!(heap.contains(first)))
     testing.assert(heap.contains(second))
     testing.assertEq(stats.reclaimedObjects, 1)
+}
+
+fn testValidateHeapRejectsAsyncFrameRootSlotMissingSnapshotRoot() {
+    let mut heap = newGcHeap(testGcConfig())
+    let frame = heap.allocate(GcRuntimeFrame, 32)
+    let payload = heap.allocate(GcClosure, 24)
+    let roots: List<Int> = []
+    testing.assert(heap.suspendAsyncFrame(79, "task.corrupt", 5, frame, roots))
+
+    match heap.lowerAsyncFrameRootStore(79, 1, "root.payload", payload) {
+        Some(_) -> {},
+        None -> testing.fail("async frame root lowering failed"),
+    }
+    assertValid(heap)
+
+    if heap.asyncFrames.containsKey(79) {
+        let entry = heap.asyncFrames[79]
+        let mut next = entry
+        next.roots = []
+        heap.asyncFrames.insert(79, next)
+    } else {
+        testing.fail("missing async frame")
+    }
+
+    let _ = testing.expectError(heap.validateHeap())
 }
 
 fn testSafepointPlanValidatesPreciseLiveRoots() {
