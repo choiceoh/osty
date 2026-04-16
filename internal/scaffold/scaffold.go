@@ -512,7 +512,7 @@ func RenderWorkspaceManifest(name, edition, member string) string {
 }
 
 func renderManifest(name, edition string, k Kind) string {
-	header := "# Binary project; `osty gen main.osty` transpiles the entry point to Go."
+	header := "# Binary project; `osty gen main.osty` emits LLVM IR for the entry point."
 	switch k {
 	case KindLib:
 		header = "# Library project; exposes a public API via `pub` declarations."

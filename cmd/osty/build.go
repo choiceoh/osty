@@ -1,13 +1,10 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"flag"
 	"fmt"
-	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -32,8 +29,8 @@ import (
 //  5. Run the front-end (parse + resolve + type-check + lint) across
 //     the project sources — as a workspace when [workspace] is present,
 //     as a single package otherwise.
-//  6. Emit the selected backend artifact (Go source/binary or LLVM
-//     IR/object/binary) under .osty/out/<profile>[-<target>]/<backend>/.
+//  6. Emit the selected backend artifact (LLVM IR/object/binary)
+//     under .osty/out/<profile>[-<target>]/<backend>/.
 //  7. Record a backend-aware fingerprint under .osty/cache/ so an
 //     unchanged build can skip the front-end and backend work.
 //
@@ -53,7 +50,7 @@ func runBuild(args []string, flags cliFlags) {
 	fs.BoolVar(&offline, "offline", false, "do not fetch dependencies; fail if caches are missing")
 	fs.BoolVar(&locked, "locked", false, "fail if osty.lock would change")
 	fs.BoolVar(&frozen, "frozen", false, "imply --locked --offline; require an existing osty.lock")
-	fs.BoolVar(&force, "force", false, "ignore the build cache; transpile every input")
+	fs.BoolVar(&force, "force", false, "ignore the build cache; rebuild every input")
 	var backendName string
 	var emitName string
 	fs.StringVar(&backendName, "backend", defaultBackendName(), "code generation backend (llvm)")
@@ -225,11 +222,9 @@ func toolVersion() string {
 }
 
 func cacheableBuildEmit(backendID backend.Name, emitMode backend.EmitMode) bool {
+	_ = backendID
 	if emitMode == backend.EmitBinary {
 		return true
-	}
-	if backendID != backend.NameLLVM {
-		return false
 	}
 	return emitMode == backend.EmitLLVMIR || emitMode == backend.EmitObject
 }
@@ -249,7 +244,6 @@ func fingerprintArtifacts(root string, artifacts backend.Artifacts) map[string]s
 		}
 		out[key] = filepath.ToSlash(rel)
 	}
-	add("go_source", artifacts.GoSource)
 	add("llvm_ir", artifacts.LLVMIR)
 	add("object", artifacts.Object)
 	add("binary", artifacts.Binary)
@@ -399,7 +393,7 @@ func buildPackage(dir string, m *manifest.Manifest, flags cliFlags, deps resolve
 //
 // Files whose header declares `@feature: NAME` via the @feature
 // pragma are skipped when NAME isn't in the active feature set, so
-// feature-gated modules drop out before transpile.
+// feature-gated modules drop out before backend emission.
 //
 // A failure at the backend/toolchain step returns a non-zero exit; a gen-time
 // TODO marker is only logged so the clean portion remains inspectable.
@@ -480,66 +474,26 @@ func emitAndBuild(root string, m *manifest.Manifest, pkg *resolve.Package, pr *r
 	if err != nil {
 		exitBackendEmitError("build", emitResult, err)
 	}
-	if backendID != backend.NameGo {
-		switch emitMode {
-		case backend.EmitBinary:
-			if emitResult.Artifacts.Binary != "" {
-				fmt.Printf("Built %s (%s)\n", emitResult.Artifacts.Binary, profileName)
-				return emitResult
-			}
-		case backend.EmitObject:
-			if emitResult.Artifacts.Object != "" {
-				fmt.Printf("Generated %s (%s)\n", emitResult.Artifacts.Object, profileName)
-				return emitResult
-			}
-		case backend.EmitLLVMIR:
-			if artifact := emitResult.Artifacts.SourcePath(); artifact != "" {
-				fmt.Printf("Generated %s (%s)\n", artifact, profileName)
-				return emitResult
-			}
+	switch emitMode {
+	case backend.EmitBinary:
+		if emitResult.Artifacts.Binary != "" {
+			fmt.Printf("Built %s (%s)\n", emitResult.Artifacts.Binary, profileName)
+			return emitResult
 		}
+	case backend.EmitObject:
+		if emitResult.Artifacts.Object != "" {
+			fmt.Printf("Generated %s (%s)\n", emitResult.Artifacts.Object, profileName)
+			return emitResult
+		}
+	case backend.EmitLLVMIR:
 		if artifact := emitResult.Artifacts.SourcePath(); artifact != "" {
 			fmt.Printf("Generated %s (%s)\n", artifact, profileName)
 			return emitResult
 		}
-		fmt.Fprintf(os.Stderr, "osty build: backend %q emit %q did not produce a buildable artifact\n", backendID, emitMode)
-		os.Exit(1)
 	}
-	goPath := emitResult.Artifacts.GoSource
-	outDir := emitResult.Artifacts.OutputDir
-	reportTranspileWarning("osty build", entryAbs, goPath, firstBackendWarning(emitResult))
-	if emitMode == backend.EmitGoSource {
-		fmt.Printf("Generated %s (%s)\n", goPath, profileName)
-		return emitResult
-	}
-	// 5. Invoke `go build -o <bin>` with profile flags + target env.
-	binPath := emitResult.Artifacts.Binary
-	buildArgs := []string{"build"}
-	buildArgs = append(buildArgs, resolved.GoFlags()...)
-	buildArgs = append(buildArgs, "-o", binPath, goPath)
-	cmd := exec.Command("go", buildArgs...)
-	var stderr bytes.Buffer
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = io.MultiWriter(os.Stderr, &stderr)
-	cmd.Dir = outDir
-	cmd.Env = mergeEnv(os.Environ(), resolved.GoEnv())
-	if err := cmd.Run(); err != nil {
-		reportGoFailure(goFailureReport{
-			Tool:      "osty build",
-			Action:    "go build",
-			Args:      cmd.Args,
-			WorkDir:   outDir,
-			Generated: []string{goPath},
-			Source:    entryAbs,
-			Stderr:    stderr.String(),
-			Err:       err,
-		})
-		fmt.Fprintf(os.Stderr, "osty build: go build: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Printf("Built %s (%s)\n", binPath, profileName)
-	return emitResult
+	fmt.Fprintf(os.Stderr, "osty build: backend %q emit %q did not produce a buildable artifact\n", backendID, emitMode)
+	os.Exit(1)
+	return nil
 }
 
 // binaryName returns the binary name for the package: the manifest's

@@ -17,9 +17,7 @@ package manager (`osty add` / `osty update` / `osty publish`) backed by a
 file-backed HTTP registry server for local/private registries. The current
 language baseline is v0.4: the grammar is frozen, the remaining semantic
 corners are closed, and the next work is native implementation/runtime
-coverage. The remaining Go emitter is bootstrap-only behind the `selfhostgen`
-build tag while the native backend grows enough coverage to rebuild the
-self-hosted compiler without that seed.
+coverage. The public compiler path is now native-only through the LLVM backend.
 
 ## Status
 
@@ -36,14 +34,12 @@ self-hosted compiler without that seed.
 | Multi-file packages (`resolve` loader/package/workspace) | done |
 | LSP (`internal/lsp`, wired as `osty lsp`) | done — hover, definition, formatting, documentSymbol, lint diagnostics, editor policy backed by selfhost-core |
 | Native LLVM backend (`internal/backend`, `internal/llvmgen`) | public backend path; scalar/control-flow/string smoke subset emits LLVM IR/object/binary, unsupported shapes report Osty-authored LLVM diagnostics |
-| Go transpiler (`internal/gen`) | bootstrap-only seed path compiled with `selfhostgen`; no longer exposed as a public backend |
 | Independent IR (`internal/ir`) | done — patterns, match, closures, struct/field/method |
 | Project scaffolding (`internal/scaffold`, `osty new` / `osty init`) | done — `--bin`, `--lib`, `--workspace`, `--cli`, `--service` |
 | Manifest + lockfile + SemVer (`internal/manifest`, `lockfile`, `pkgmgr/semver`) | done (parse + validate + resolve) |
 | Build orchestrator (`osty build`) | done — manifest → front-end → native backend, profile/target/feature wiring, backend-aware artifact/cache paths |
-| Test runner harness (`internal/testgen`) | legacy bootstrap harness behind `selfhostgen`; native test execution is still pending |
 | `osty test` | native backend harness pending; public CLI reports this instead of falling back to Go |
-| API doc generator (`internal/docgen`, `osty doc`) | done — self-hosted Osty source generates the Go package; HTML + markdown, field docs, cross-refs, workspace mode |
+| API doc generator (`internal/docgen`, `osty doc`) | done — checked-in generated Go package, HTML + markdown, field docs, cross-refs, workspace mode |
 | CI quality tooling (`internal/ci`, `osty ci`) | done — Osty-authored generated CI core, signature-aware snapshots, workspace coverage, JSON reports |
 | Pipeline visualizer (`osty pipeline`) | done — per-stage timing, workspace mode, backend-aware gen, baseline diff, LSP trace, `--explain` |
 | Profiles / targets / features / cache (`internal/profile`, `osty profiles` / `targets` / `features` / `cache`) | done — built-in and manifest profiles, cross-target env, feature closure + file pragmas, backend-aware fingerprints |
@@ -81,19 +77,8 @@ surface area. The resolved decisions are archived in
 
 ### Backend Status
 
-`osty gen FILE` now uses the native LLVM backend by default and writes LLVM IR
-unless another native artifact mode is requested by a build/run command. The
-old `internal/gen` Go emitter is retained only as the bootstrap seed used by
-`go generate ./internal/selfhost` under the `selfhostgen` build tag. Historical
-bootstrap phase scope, per `internal/gen/doc.go`:
-
-- **Phase 1** ✓ primitive literals/operators, user fn declarations,
-  let bindings, if / for / return, list literals, print intrinsics
-- **Phase 2** ✓ structs, enums, interfaces, type aliases, match, patterns
-- **Phase 3** ✓ generics, closures, collection methods
-- **Phase 4** ✓ Option / Result, `?` operator, defer
-- **Phase 5** ✓ `use` declarations, legacy Go FFI for the bootstrap seed
-- **Phase 6** ✓ channels, concurrency primitives
+`osty gen FILE` uses the native LLVM backend and writes LLVM IR unless another
+native artifact mode is requested by a build/run command.
 
 ## Layout
 
@@ -125,8 +110,6 @@ osty/
 │   ├── ir/                  # Independent intermediate representation
 │   ├── backend/             # Backend names, emit modes, native artifact layout
 │   ├── llvmgen/             # LLVM bridge generated from Osty selfhost-core backend logic
-│   ├── gen/                 # Bootstrap-only Go emitter (`selfhostgen`)
-│   ├── testgen/             # Bootstrap-only legacy Go test harness
 │   ├── docgen/              # self-hosted API doc generator (HTML + markdown; `osty doc`)
 │   ├── ci/                  # CI quality tooling (`osty ci`, generated core)
 │   ├── cihost/              # Go host bridge for generated CI core

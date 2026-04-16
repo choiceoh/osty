@@ -94,7 +94,7 @@ type Source interface {
 type FetchedPackage struct {
 	// LocalDir is the absolute path to the unpacked package sources.
 	// The directory contains osty.toml plus .osty files; resolver,
-	// checker, and transpiler all run over it directly.
+	// checker, and backend emission all run over it directly.
 	LocalDir string
 
 	// Manifest is the unpacked package's osty.toml. Parsed because

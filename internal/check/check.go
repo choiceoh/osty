@@ -28,7 +28,7 @@ type Result struct {
 
 	// Instantiations records the concrete type-argument list at every
 	// generic call site (identified by its *ast.CallExpr). The Go
-	// transpiler reads this to emit one monomorphized copy of the
+	// backend emission reads this to emit one monomorphized copy of the
 	// callee per distinct argument list.
 	Instantiations map[*ast.CallExpr][]types.Type
 
