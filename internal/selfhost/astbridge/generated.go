@@ -3,10 +3,9 @@
 package astbridge
 
 import (
-	"strings"
-
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/token"
+	"strings"
 )
 
 type (
