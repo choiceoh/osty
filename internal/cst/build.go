@@ -17,9 +17,10 @@ import (
 //     statements are not yet structured. The public Red API does not depend
 //     on that structuring, so consumers can migrate when the native Green
 //     parser (blocked on the self-host generator) lands.
-//  3. Trivia attached as leading runs on tokens. Conservative policy: all
-//     trivia preceding a token is leading for that token. Tail trivia sits
-//     under the root via a zero-width GkErrorMissing sentinel.
+//  3. Trivia attached as leading and trailing runs on tokens. Runs between
+//     tokens split at the first newline or doc comment — see
+//     pairTriviaToTokens for the exact rule. Tail trivia after the last
+//     token sits under the root via a zero-width GkErrorMissing sentinel.
 //
 // Byte coverage: every source byte is reachable from the tree via either a
 // token's text or a trivia record. TestBuildRoundTrip enforces this.
@@ -35,7 +36,7 @@ func BuildFromParsed(src []byte, file *ast.File, toks []token.Token, trivias []T
 	for i, tr := range trivias {
 		triviaIDs[i] = arena.AddTrivia(tr)
 	}
-	leading, tailTrivia := pairTriviaToTokens(toks, trivias)
+	leading, trailing, tailTrivia := pairTriviaToTokens(toks, trivias)
 
 	entities := collectEntities(file)
 
@@ -47,12 +48,12 @@ func BuildFromParsed(src []byte, file *ast.File, toks []token.Token, trivias []T
 
 		// Orphan tokens before the entity attach to the file root.
 		for tokIdx < len(toks) && !isEOF(toks[tokIdx]) && toks[tokIdx].Pos.Offset < startOff {
-			emitToken(b, toks[tokIdx], src, leading[tokIdx], triviaIDs)
+			emitToken(b, toks[tokIdx], src, leading[tokIdx], trailing[tokIdx], triviaIDs)
 			tokIdx++
 		}
 		b.StartNode(ent.kind)
 		for tokIdx < len(toks) && !isEOF(toks[tokIdx]) && toks[tokIdx].Pos.Offset < endOff {
-			emitToken(b, toks[tokIdx], src, leading[tokIdx], triviaIDs)
+			emitToken(b, toks[tokIdx], src, leading[tokIdx], trailing[tokIdx], triviaIDs)
 			tokIdx++
 		}
 		b.FinishNode()
@@ -62,7 +63,7 @@ func BuildFromParsed(src []byte, file *ast.File, toks []token.Token, trivias []T
 		if isEOF(tk) {
 			break
 		}
-		emitToken(b, tk, src, leading[tokIdx], triviaIDs)
+		emitToken(b, tk, src, leading[tokIdx], trailing[tokIdx], triviaIDs)
 		tokIdx++
 	}
 
@@ -157,33 +158,123 @@ func stmtKind(s ast.Stmt) GreenKind {
 
 func isEOF(tk token.Token) bool { return tk.Kind == token.EOF }
 
-// pairTriviaToTokens assigns each trivia as leading for exactly one token.
-// Policy: every trivia whose span ends at or before a token's start becomes
-// that token's leading trivia. Trivia remaining after the last token is
-// returned separately as tailTrivia for root-level emission.
+// pairTriviaToTokens splits each trivia run into leading/trailing attachments.
 //
-// This is the conservative Phase-4 rule. A future "same-line trailing"
-// refinement will split runs on the token side of an intervening newline.
-func pairTriviaToTokens(toks []token.Token, trivias []Trivia) (leading [][]int, tailTrivia []int) {
+// Osty emits a real token.NEWLINE token for each significant line terminator,
+// so the line-ending `\n` is usually NOT trivia — it's its own token. Trivia
+// only includes whitespace, comments, and the EXTRA newlines that make blank
+// lines. The attachment rule reflects that structure:
+//
+//   - First non-EOF token: no previous token exists, so its entire preceding
+//     trivia run is leading (handles shebang, BOM, file-leading comments).
+//   - Previous token is NEWLINE: the run is on a logically new line, so the
+//     whole run goes to the next token's leading (or to file tail if there
+//     is no next token). A NEWLINE token never carries trailing trivia.
+//   - Previous token is a normal token: the run stays on the same logical
+//     line as the previous token (before the next NEWLINE token arrives),
+//     with one carveout — if the run contains a TriviaDocComment, everything
+//     from that doc comment onward flows forward to the next token's leading
+//     so `///` always documents the following declaration.
+func pairTriviaToTokens(toks []token.Token, trivias []Trivia) (leading, trailing [][]int, tailTrivia []int) {
 	leading = make([][]int, len(toks))
+	trailing = make([][]int, len(toks))
+
+	lastNonEOF := -1
+	for i, tk := range toks {
+		if !isEOF(tk) {
+			lastNonEOF = i
+		}
+	}
+
 	triIdx := 0
-	for ti, tk := range toks {
+	prevNonEOF := -1
+	for i, tk := range toks {
 		if isEOF(tk) {
 			break
 		}
-		start := tk.Pos.Offset
-		for triIdx < len(trivias) && trivias[triIdx].Offset+trivias[triIdx].Length <= start {
-			leading[ti] = append(leading[ti], triIdx)
+		// Collect the run of trivia that ends at or before this token's start.
+		runStart := triIdx
+		for triIdx < len(trivias) && trivias[triIdx].Offset+trivias[triIdx].Length <= tk.Pos.Offset {
 			triIdx++
 		}
+		runEnd := triIdx
+
+		switch {
+		case prevNonEOF < 0:
+			// First real token.
+			for k := runStart; k < runEnd; k++ {
+				leading[i] = append(leading[i], k)
+			}
+		case toks[prevNonEOF].Kind == token.NEWLINE:
+			// Previous token ended the line — the run is on the next line.
+			for k := runStart; k < runEnd; k++ {
+				leading[i] = append(leading[i], k)
+			}
+		default:
+			// Same-line trailing for the previous token, except that a doc
+			// comment in the run peels the remainder forward.
+			docAt := findFirstDocComment(trivias, runStart, runEnd)
+			if docAt < 0 {
+				for k := runStart; k < runEnd; k++ {
+					trailing[prevNonEOF] = append(trailing[prevNonEOF], k)
+				}
+			} else {
+				for k := runStart; k < docAt; k++ {
+					trailing[prevNonEOF] = append(trailing[prevNonEOF], k)
+				}
+				for k := docAt; k < runEnd; k++ {
+					leading[i] = append(leading[i], k)
+				}
+			}
+		}
+		prevNonEOF = i
 	}
-	for ; triIdx < len(trivias); triIdx++ {
-		tailTrivia = append(tailTrivia, triIdx)
+
+	// Tail: trivia after the last non-EOF token.
+	if lastNonEOF >= 0 && triIdx < len(trivias) {
+		if toks[lastNonEOF].Kind == token.NEWLINE {
+			// The last real token ended a line — everything after is tail.
+			for k := triIdx; k < len(trivias); k++ {
+				tailTrivia = append(tailTrivia, k)
+			}
+		} else {
+			docAt := findFirstDocComment(trivias, triIdx, len(trivias))
+			if docAt < 0 {
+				for k := triIdx; k < len(trivias); k++ {
+					trailing[lastNonEOF] = append(trailing[lastNonEOF], k)
+				}
+			} else {
+				for k := triIdx; k < docAt; k++ {
+					trailing[lastNonEOF] = append(trailing[lastNonEOF], k)
+				}
+				for k := docAt; k < len(trivias); k++ {
+					tailTrivia = append(tailTrivia, k)
+				}
+			}
+		}
+	} else {
+		// No non-EOF tokens: everything is tail.
+		for k := triIdx; k < len(trivias); k++ {
+			tailTrivia = append(tailTrivia, k)
+		}
 	}
-	return leading, tailTrivia
+	return leading, trailing, tailTrivia
 }
 
-func emitToken(b *GreenBuilder, tk token.Token, src []byte, leadingIdx []int, triviaIDs []int) {
+// findFirstDocComment returns the index of the first TriviaDocComment in
+// trivias[lo:hi), or -1 if none. Doc comments are the only in-run split point
+// — all other same-line trivia stays trailing of the previous token because
+// Osty's NEWLINE tokens, not TriviaNewline, mark line boundaries.
+func findFirstDocComment(trivias []Trivia, lo, hi int) int {
+	for k := lo; k < hi; k++ {
+		if trivias[k].Kind == TriviaDocComment {
+			return k
+		}
+	}
+	return -1
+}
+
+func emitToken(b *GreenBuilder, tk token.Token, src []byte, leadingIdx, trailingIdx []int, triviaIDs []int) {
 	width := tk.End.Offset - tk.Pos.Offset
 	if width < 0 {
 		width = 0
@@ -192,7 +283,9 @@ func emitToken(b *GreenBuilder, tk token.Token, src []byte, leadingIdx []int, tr
 	if tk.Pos.Offset >= 0 && tk.End.Offset <= len(src) && tk.Pos.Offset <= tk.End.Offset {
 		text = string(src[tk.Pos.Offset:tk.End.Offset])
 	}
-	b.Token(GkToken, int(tk.Kind), text, width, translateTriviaIDs(leadingIdx, triviaIDs), nil)
+	b.Token(GkToken, int(tk.Kind), text, width,
+		translateTriviaIDs(leadingIdx, triviaIDs),
+		translateTriviaIDs(trailingIdx, triviaIDs))
 }
 
 func translateTriviaIDs(indices []int, triviaIDs []int) []int {
