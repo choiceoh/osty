@@ -519,8 +519,10 @@ func llvmEnumPayloadType(t ast.Type) (string, error) {
 		return "i64", nil
 	case "Float":
 		return "double", nil
+	case "String":
+		return "ptr", nil
 	default:
-		return "", unsupported("type-system", "LLVM enum payloads currently support Int or Float only")
+		return "", unsupported("type-system", "LLVM enum payloads currently support Int, Float, or String only")
 	}
 }
 
@@ -1812,6 +1814,8 @@ func zeroLiteral(typ string) string {
 	switch typ {
 	case "double":
 		return "0.0"
+	case "ptr":
+		return "null"
 	default:
 		return "0"
 	}

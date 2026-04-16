@@ -1,0 +1,13 @@
+enum Label {
+    Text(String)
+    Empty
+}
+
+fn main() {
+    let mut value: Label = Empty
+    value = Text("payload string")
+    println(match value {
+        Text(s) -> s,
+        Empty -> "missing",
+    })
+}

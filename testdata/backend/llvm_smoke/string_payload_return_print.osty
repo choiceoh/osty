@@ -1,0 +1,15 @@
+enum Label {
+    Text(String)
+    Empty
+}
+
+fn pick() -> Label {
+    Text("payload string")
+}
+
+fn main() {
+    println(match pick() {
+        Text(s) -> s,
+        Empty -> "missing",
+    })
+}

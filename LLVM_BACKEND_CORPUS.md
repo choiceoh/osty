@@ -72,8 +72,18 @@ Each fixture should be independently checkable as a single file and avoid:
 | `testdata/backend/llvm_smoke/float_compare_print.osty` | `42.000000\n` | Phase 51 LLVM IR: Float comparison in value-position `if` |
 | `testdata/backend/llvm_smoke/float_struct_print.osty` | `42.000000\n` | Phase 52 LLVM IR: Float field read from simple struct aggregate |
 | `testdata/backend/llvm_smoke/float_enum_payload_print.osty` | `42.000000\n` | Phase 53 LLVM IR: Float payload enum smoke (`Full(Float)`) |
+| `testdata/backend/llvm_smoke/float_payload_return_print.osty` | `42.000000\n` | Phase 54 LLVM IR: Float payload enum return boundary |
+| `testdata/backend/llvm_smoke/float_payload_param_print.osty` | `42.000000\n` | Phase 55 LLVM IR: Float payload enum parameter boundary |
+| `testdata/backend/llvm_smoke/float_payload_mut_print.osty` | `42.000000\n` | Phase 56 LLVM IR: Float payload enum mutable local and `match` |
+| `testdata/backend/llvm_smoke/float_payload_reversed_match_print.osty` | `42.000000\n` | Phase 57 LLVM IR: Float payload enum reversed two-arm `match` |
+| `testdata/backend/llvm_smoke/float_payload_wildcard_print.osty` | `42.000000\n` | Phase 58 LLVM IR: Float payload enum wildcard arm (`_`) in `match` |
+| `testdata/backend/llvm_smoke/string_payload_return_print.osty` | `payload string\n` | Phase 59 LLVM IR: String payload enum return boundary |
+| `testdata/backend/llvm_smoke/string_payload_param_print.osty` | `payload string\n` | Phase 60 LLVM IR: String payload enum parameter boundary |
+| `testdata/backend/llvm_smoke/string_payload_mut_print.osty` | `payload string\n` | Phase 61 LLVM IR: String payload enum mutable local and `match` |
+| `testdata/backend/llvm_smoke/string_payload_reversed_match_print.osty` | `payload string\n` | Phase 62 LLVM IR: String payload enum reversed two-arm `match` |
+| `testdata/backend/llvm_smoke/string_payload_wildcard_print.osty` | `payload string\n` | Phase 63 LLVM IR: String payload enum wildcard arm (`_`) in `match` |
 
-The Phase 10 skeleton behavior and the Phase 12-15 plus Phase 23-53 lowering
+The Phase 10 skeleton behavior and the Phase 12-15 plus Phase 23-63 lowering
 behavior are mirrored in
 `examples/selfhost-core/llvmgen.osty` so the LLVM backend logic is authored in
 Osty first. The Go `internal/llvmgen` package includes generated bridge code
@@ -179,8 +189,12 @@ Phases 42-45 add a single-`Int` payload enum smoke subset with a fixed ABI shape
 | `testdata/backend/llvm_smoke/enum_payload_param_print.osty` | `42\n` | Phase 44 LLVM IR: payload enum crossing function parameter and `Some(x)` binding |
 | `testdata/backend/llvm_smoke/enum_payload_mut_print.osty` | `42\n` | Phase 45 LLVM IR: payload enum mutable local slot and match payload binding after assignment |
 
-Phase 46-53 covers the `Float` double-subset smoke path. `Float32`/`Float64`
-width/ABI policy is explicitly deferred to a later phase.
+Phase 46-63 expands the `Float` and `String` payload smoke path. `Float32`/`Float64`
+policy is explicitly deferred to a later phase.
+
+Qualified constructor/pattern forms (for example `FloatMaybe.Full` / `FloatMaybe.Full(x)`)
+remain for a later phase because the current self-host checker does not pass them
+in this bundle.
 
 | Path | Expected stdout | Coverage |
 |---|---|---|
@@ -192,6 +206,16 @@ width/ABI policy is explicitly deferred to a later phase.
 | `testdata/backend/llvm_smoke/float_compare_print.osty` | `42.000000\n` | Phase 51 LLVM IR: Float comparison in value-position `if` |
 | `testdata/backend/llvm_smoke/float_struct_print.osty` | `42.000000\n` | Phase 52 LLVM IR: Float field read from simple struct aggregate |
 | `testdata/backend/llvm_smoke/float_enum_payload_print.osty` | `42.000000\n` | Phase 53 LLVM IR: Float payload enum smoke (`Full(Float)`) |
+| `testdata/backend/llvm_smoke/float_payload_return_print.osty` | `42.000000\n` | Phase 54 LLVM IR: Float payload enum return boundary |
+| `testdata/backend/llvm_smoke/float_payload_param_print.osty` | `42.000000\n` | Phase 55 LLVM IR: Float payload enum parameter boundary |
+| `testdata/backend/llvm_smoke/float_payload_mut_print.osty` | `42.000000\n` | Phase 56 LLVM IR: Float payload enum mutable local and `match` |
+| `testdata/backend/llvm_smoke/float_payload_reversed_match_print.osty` | `42.000000\n` | Phase 57 LLVM IR: Float payload enum reversed two-arm `match` |
+| `testdata/backend/llvm_smoke/float_payload_wildcard_print.osty` | `42.000000\n` | Phase 58 LLVM IR: Float payload enum wildcard arm (`_`) in `match` |
+| `testdata/backend/llvm_smoke/string_payload_return_print.osty` | `payload string\n` | Phase 59 LLVM IR: String payload enum return boundary |
+| `testdata/backend/llvm_smoke/string_payload_param_print.osty` | `payload string\n` | Phase 60 LLVM IR: String payload enum parameter boundary |
+| `testdata/backend/llvm_smoke/string_payload_mut_print.osty` | `payload string\n` | Phase 61 LLVM IR: String payload enum mutable local and `match` |
+| `testdata/backend/llvm_smoke/string_payload_reversed_match_print.osty` | `payload string\n` | Phase 62 LLVM IR: String payload enum reversed two-arm `match` |
+| `testdata/backend/llvm_smoke/string_payload_wildcard_print.osty` | `payload string\n` | Phase 63 LLVM IR: String payload enum wildcard arm (`_`) in `match` |
 
 ## Promotion Rules
 

@@ -1,0 +1,15 @@
+enum Label {
+    Text(String)
+    Empty
+}
+
+fn score(value: Label) -> String {
+    match value {
+        Text(s) -> s,
+        Empty -> "missing",
+    }
+}
+
+fn main() {
+    println(score(Text("payload string")))
+}
