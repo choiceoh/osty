@@ -247,6 +247,8 @@ type generator struct {
 
 	temp       int
 	label      int
+	stringID   int
+	stringDefs []*LlvmStringGlobal
 	body       []string
 	locals     []map[string]value
 	returnType string
@@ -635,15 +637,33 @@ func (g *generator) emitPrintln(call *ast.CallExpr) error {
 	if len(call.Args) != 1 || call.Args[0].Name != "" || call.Args[0].Value == nil {
 		return unsupported("call", "println requires one positional argument")
 	}
+	if lit, ok := call.Args[0].Value.(*ast.StringLit); ok {
+		return g.emitPrintlnString(lit)
+	}
 	v, err := g.emitExpr(call.Args[0].Value)
 	if err != nil {
 		return err
 	}
 	if v.typ != "i64" {
-		return unsupported("type-system", "println currently supports Int expressions only")
+		return unsupported("type-system", "println currently supports Int expressions and plain String literals only")
 	}
 	emitter := g.toOstyEmitter()
 	llvmPrintlnI64(emitter, toOstyValue(v))
+	g.takeOstyEmitter(emitter)
+	return nil
+}
+
+func (g *generator) emitPrintlnString(lit *ast.StringLit) error {
+	text, ok := plainStringLiteral(lit)
+	if !ok {
+		return unsupported("expression", "interpolated String literals are not supported by LLVM println")
+	}
+	if !isLLVMPlainCStringText(text) {
+		return unsupported("type-system", "plain String literals currently require printable ASCII without quotes, backslashes, or control characters")
+	}
+	emitter := g.toOstyEmitter()
+	line := llvmStringLiteralLine(emitter, text)
+	llvmPrintlnString(emitter, line)
 	g.takeOstyEmitter(emitter)
 	return nil
 }
@@ -927,7 +947,7 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 }
 
 func (g *generator) render(defs []string) []byte {
-	return []byte(llvmRenderModule(g.sourcePath, g.target, defs))
+	return []byte(llvmRenderModuleWithGlobals(g.sourcePath, g.target, g.stringDefs, defs))
 }
 
 func (g *generator) renderFunction(ret, name string, params []paramInfo) string {
@@ -936,16 +956,20 @@ func (g *generator) renderFunction(ret, name string, params []paramInfo) string 
 
 func (g *generator) toOstyEmitter() *LlvmEmitter {
 	return &LlvmEmitter{
-		temp:  g.temp,
-		label: g.label,
-		body:  append([]string(nil), g.body...),
+		temp:          g.temp,
+		label:         g.label,
+		stringId:      g.stringID,
+		body:          append([]string(nil), g.body...),
+		stringGlobals: append([]*LlvmStringGlobal(nil), g.stringDefs...),
 	}
 }
 
 func (g *generator) takeOstyEmitter(emitter *LlvmEmitter) {
 	g.temp = emitter.temp
 	g.label = emitter.label
+	g.stringID = emitter.stringId
 	g.body = emitter.body
+	g.stringDefs = emitter.stringGlobals
 }
 
 func toOstyValue(v value) *LlvmValue {
@@ -962,6 +986,30 @@ func fromOstyValue(v *LlvmValue) value {
 		ref: v.name,
 		ptr: v.pointer,
 	}
+}
+
+func plainStringLiteral(lit *ast.StringLit) (string, bool) {
+	if lit == nil || lit.IsRaw || lit.IsTriple {
+		return "", false
+	}
+	var b strings.Builder
+	for _, part := range lit.Parts {
+		if !part.IsLit {
+			return "", false
+		}
+		b.WriteString(part.Lit)
+	}
+	return b.String(), true
+}
+
+func isLLVMPlainCStringText(text string) bool {
+	for i := 0; i < len(text); i++ {
+		ch := text[i]
+		if ch < 0x20 || ch > 0x7e || ch == '"' || ch == '\\' {
+			return false
+		}
+	}
+	return true
 }
 
 func toLLVMParams(params []paramInfo) []*LlvmParam {

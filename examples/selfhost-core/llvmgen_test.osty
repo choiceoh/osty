@@ -81,7 +81,7 @@ fn testLlvmToolchainPlanIsOstyOwned() {
 fn testLlvmExecutableCorpusPlanIsOstyOwned() {
     let cases = llvmSmokeExecutableCorpus()
 
-    testing.assert(cases.len() == 4)
+    testing.assert(cases.len() == 5)
     testing.assert(cases[0].name == "minimal")
     testing.assert(cases[0].fixture == "minimal_print.osty")
     testing.assert(cases[0].stdout == "42\n")
@@ -94,6 +94,9 @@ fn testLlvmExecutableCorpusPlanIsOstyOwned() {
     testing.assert(cases[3].name == "booleans")
     testing.assert(cases[3].fixture == "booleans.osty")
     testing.assert(cases[3].stdout == "7\n")
+    testing.assert(cases[4].name == "string")
+    testing.assert(cases[4].fixture == "string_print.osty")
+    testing.assert(cases[4].stdout == "hello, osty\n")
 }
 
 fn testLlvmUnsupportedDiagnosticPolicyIsOstyOwned() {
@@ -196,4 +199,13 @@ fn testLlvmSmokeBooleansIsOstyOwned() {
     assertLlvmContains(ir, "if.expr.else1:")
     assertLlvmContains(ir, "phi i64")
     assertLlvmContains(ir, "%t0 = call i64 @choose(i64 3, i64 10)")
+}
+
+fn testLlvmSmokeStringPrintIsOstyOwned() {
+    let ir = llvmSmokeStringPrintIR("/tmp/string_print.osty")
+
+    assertLlvmContains(ir, "@.str0 = private unnamed_addr constant [13 x i8] c\"hello, osty\\0A\\00\"")
+    assertLlvmContains(ir, "define i32 @main() \{")
+    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.str0)")
+    assertLlvmContains(ir, "ret i32 0")
 }

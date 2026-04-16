@@ -47,15 +47,16 @@ Each fixture should be independently checkable as a single file and avoid:
 | `testdata/backend/llvm_smoke/scalar_arithmetic.osty` | `42\n` | Phase 13 LLVM IR: primitive integers, helper function call, immutable let, comparison, if/else |
 | `testdata/backend/llvm_smoke/control_flow.osty` | `15\n` | Phase 14 LLVM IR: mutable local, inclusive range loop, accumulator update |
 | `testdata/backend/llvm_smoke/booleans.osty` | `7\n` | Phase 15 LLVM IR: Bool comparison, logical not/and, value-position if/else, phi |
+| `testdata/backend/llvm_smoke/string_print.osty` | `hello, osty\n` | Phase 23 LLVM IR: plain printable-ASCII `String` literal through `println` and module string constants |
 
-The Phase 10 skeleton behavior and the Phase 12-15 lowering behavior are
+The Phase 10 skeleton behavior and the Phase 12-15 plus Phase 23 lowering behavior are
 mirrored in
 `examples/selfhost-core/llvmgen.osty` so the LLVM backend logic is authored in
 Osty first. The Go `internal/llvmgen` package includes generated bridge code
 from that Osty source for module/function/skeleton rendering. A backend test
 transpiles the Osty emitter again and compares its
-minimal/scalar/control-flow/booleans and skeleton output byte-for-byte against
-the production bridge.
+minimal/scalar/control-flow/booleans/string and skeleton output byte-for-byte
+against the production bridge.
 
 These fixtures are deliberately smaller than the current examples. They are
 the first target for proving the thin vertical path:
@@ -89,6 +90,13 @@ self-hosted core. The Go bootstrap bridge still walks the existing AST while the
 LLVM strings for return, println, arithmetic, comparison, calls, if branches,
 loads, stores, mutable locals, and range loops are emitted by generated
 functions from `examples/selfhost-core/llvmgen.osty`.
+
+Phase 23 adds the first `String` vertical path without moving string semantics
+back into Go. `examples/selfhost-core/llvmgen.osty` owns the module-level string
+constant shape, newline terminator, `printf(ptr @.strN)` call, and the string
+smoke fixture entry. The Go bridge only classifies the AST literal as the
+current conservative subset: non-raw, non-triple, non-interpolated printable
+ASCII without quotes, backslashes, or control characters.
 
 ## Promotion Rules
 
