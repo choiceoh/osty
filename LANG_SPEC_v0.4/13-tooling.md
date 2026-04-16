@@ -11,7 +11,8 @@ osty build [PATH]         Manifest + deps + front-end + backend emit/build
 osty run [-- ARGS...]     Build and execute the root binary on the host
 osty test [PATH|FILTER...] Discover, build, and run *_test.osty tests
 osty fmt FILE             Format source files (--check, --write)
-osty repair FILE          Repair common syntax/idiom slips before parsing
+osty airepair FILE        Repair common syntax/idiom slips before parsing
+                          (legacy alias: osty repair)
 osty check FILE|DIR       Type-check without building
 osty lint FILE|DIR        Style + correctness lint (--strict for CI)
 osty gen FILE             Emit a single file through the native backend

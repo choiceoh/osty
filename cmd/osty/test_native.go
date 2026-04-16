@@ -32,12 +32,14 @@ func runTestMain(args []string, flags cliFlags, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: osty test [--offline | --locked | --frozen] [--backend NAME] [--emit MODE] [PATH|FILTER...]")
+		fmt.Fprintln(stderr, "usage: osty test [--offline | --locked | --frozen] [--backend NAME] [--emit MODE] [--airepair] [--airepair-mode MODE] [PATH|FILTER...]")
 	}
 	var offline, locked, frozen bool
 	fs.BoolVar(&offline, "offline", false, "do not fetch dependencies; fail if caches are missing")
 	fs.BoolVar(&locked, "locked", false, "fail if osty.lock would change")
 	fs.BoolVar(&frozen, "frozen", false, "imply --locked --offline; require an existing osty.lock")
+	var aiRepairModeName string
+	registerAIRepairCommandFlags(fs, &flags.aiRepair, &aiRepairModeName)
 	var backendName string
 	var emitName string
 	fs.StringVar(&backendName, "backend", defaultBackendName(), "code generation backend (llvm)")
@@ -47,7 +49,12 @@ func runTestMain(args []string, flags cliFlags, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	_ = flags
+	mode, ok := parseAIRepairMode(aiRepairModeName)
+	if !ok {
+		fmt.Fprintf(stderr, "osty test: unknown airepair mode %q (want rewrite, parse, or frontend)\n", aiRepairModeName)
+		return 2
+	}
+	flags.aiMode = mode
 	_ = offline
 	_ = locked
 	_ = frozen
@@ -65,6 +72,7 @@ func runTestMain(args []string, flags cliFlags, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "osty test: %v\n", err)
 		return 1
 	}
+	applyAIRepairToPackage(pkg, "osty test --airepair", stderr, flags)
 	parseDiags := packageParseDiags(pkg)
 	if hasError(parseDiags) {
 		printPackageDiags(pkg, parseDiags, flags)

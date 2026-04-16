@@ -3,6 +3,7 @@ package lsp
 import (
 	"strings"
 
+	"github.com/osty/osty/internal/airepair"
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
 )
@@ -253,9 +254,10 @@ func unusedUseSet(doc *document) map[*ast.UseDecl]bool {
 
 // fixAllAction collects every machine-applicable suggestion the
 // analysis pipeline produced for this file and folds them into a
-// single WorkspaceEdit. The action is offered only when at least one
-// applicable fix exists so the lightbulb doesn't light up on clean
-// files.
+// single WorkspaceEdit. When airepair can adapt foreign syntax into
+// valid Osty, fix-all offers that full-document rewrite as well. The
+// action is offered only when at least one applicable fix exists so
+// the lightbulb doesn't light up on clean files.
 //
 // Resolver / checker diagnostics that carry suggestions are pulled
 // in as well; those already feed the per-diagnostic quick fixes, but
@@ -264,6 +266,17 @@ func fixAllAction(doc *document) *CodeAction {
 	a := doc.analysis
 	if a == nil || a.file == nil {
 		return nil
+	}
+	if edit := airepairFixAllEdit(doc); edit != nil {
+		return &CodeAction{
+			Title: "Fix all auto-fixable problems",
+			Kind:  CodeActionSourceFixAllOsty,
+			Edit: &WorkspaceEdit{
+				Changes: map[string][]TextEdit{
+					doc.uri: []TextEdit{*edit},
+				},
+			},
+		}
 	}
 	edits := collectMachineApplicable(doc)
 	if len(edits) == 0 {
@@ -284,6 +297,25 @@ func fixAllAction(doc *document) *CodeAction {
 				doc.uri: edits,
 			},
 		},
+	}
+}
+
+func airepairFixAllEdit(doc *document) *TextEdit {
+	if doc == nil || doc.analysis == nil {
+		return nil
+	}
+	result := airepair.Analyze(airepair.Request{
+		Source:   doc.src,
+		Filename: doc.uri,
+		Mode:     airepair.ModeFrontEndAssist,
+	})
+	if !result.Accepted || !result.Changed {
+		return nil
+	}
+	rng := doc.analysis.lines.rangeFromOffsets(0, len(doc.src))
+	return &TextEdit{
+		Range:   rng,
+		NewText: string(result.Repaired),
 	}
 }
 

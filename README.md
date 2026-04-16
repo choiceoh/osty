@@ -221,8 +221,8 @@ osty check FILE|DIR    # lex + parse + resolve + type-check (diagnostics only)
                        # inference rule applied (see LANG_SPEC_v0.4/02a-type-inference.md)
 osty typecheck FILE    # same as check, plus a per-expression type dump
 osty lint FILE|DIR     # style + correctness warnings (L0xxx codes)
-osty fmt FILE          # repair + format to canonical style (see --check, --write, --engine)
-osty repair FILE       # auto-fix common AI-authored syntax/idiom slips
+osty fmt FILE          # airepair + format to canonical style (see --check, --write, --engine)
+osty airepair FILE     # auto-fix common AI-authored syntax/idiom slips (legacy alias: repair)
 osty gen FILE          # emit LLVM IR (see -o, --package)
 osty doc PATH          # generate API documentation (HTML + markdown)
 osty ci                # run CI quality checks (signatures, coverage, snapshots)
@@ -257,21 +257,41 @@ Global flags (precede the subcommand):
 
 `fmt`-specific flags (after the subcommand):
 
-`osty fmt` runs the same automatic source repair pass before formatting by
+`osty fmt` runs the same automatic AI repair pass before formatting by
 default, so AI-authored syntax slips are normalized in one command.
 
 - `--check` — exit 1 if the file is not already formatted; show diff
 - `--write` — rewrite the file in place instead of printing
-- `--no-repair` — disable the default automatic source repair pass
+- `--airepair` — enable the default automatic AI repair pass
+- `--no-airepair` — disable the default automatic AI repair pass
+  Legacy aliases: `--repair`, `--no-repair`
 - `--engine go|osty` — choose the formatter engine. `go` is the default
   AST formatter; `osty` is a compatibility entry point that now shares the
   same AST-backed formatting contract instead of maintaining a separate
   token-heuristic printer.
 
-`repair`-specific flags (after the subcommand):
+`airepair`-specific flags (after the subcommand):
+
+Legacy alias: `osty repair`
 
 - `--check` — exit 1 if the file contains repairable syntax slips
 - `--write` — rewrite the file in place instead of printing
+- `--json` — emit a structured report including before/after front-end diagnostics
+- `--stdin-name NAME` — filename to use in reports when reading from stdin via `-`
+- `--mode rewrite|parse|frontend` — choose whether airepair scores candidate output by rewrite activity, parse diagnostics, or full front-end diagnostics
+
+`osty airepair -` reads from stdin and writes the repaired source (or JSON report
+with `--json`) to stdout.
+
+Single-file `osty check`, `osty resolve`, `osty typecheck`, and `osty lint`
+also accept in-memory adaptation flags after the subcommand:
+
+- `--airepair` — run airepair before the front-end pipeline without rewriting the file
+- `--airepair-mode rewrite|parse|frontend` — choose the acceptance heuristic for the adapted source
+
+The manifest-driven `osty build`, `osty run`, and `osty test` commands also
+accept `--airepair` and `--airepair-mode ...`; those rewrites stay in memory
+unless you explicitly run `osty airepair --write`.
 
 Repairs include common foreign-language carryovers such as `func`/`def`,
 `var`/`const`, `while`, `switch`/`case`, `nil`/`null`, Python word
