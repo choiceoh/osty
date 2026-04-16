@@ -259,6 +259,46 @@ fn main() {
 	}
 }
 
+// TestGenerateModuleInterfaceDispatchWithArgs covers Phase 6c: an
+// interface method taking non-self arguments is lowered to an
+// indirect vtable call that threads those arguments through.
+func TestGenerateModuleInterfaceDispatchWithArgs(t *testing.T) {
+	src := `interface Combine {
+    fn combine(self, other: Int) -> Int
+}
+
+struct Thing {
+    x: Int,
+
+    fn combine(self, other: Int) -> Int {
+        self.x + other
+    }
+}
+
+fn main() {
+    let t = Thing { x: 3 }
+    let c: Combine = t
+    println(c.combine(4))
+}
+`
+	got := runMonoLowerPipeline(t, src, "/tmp/phase6c_iface_args.osty")
+	for _, want := range []string{
+		"%osty.iface",
+		"@osty.vtable.Thing__Combine",
+		"ptr @Thing__combine",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+	// The indirect call must carry both the data ptr (self) and the
+	// non-self arg. The exact SSA name of the fn ptr is implementation
+	// detail, so we only assert on the shape near the call site.
+	if !strings.Contains(got, ", i64 4)") {
+		t.Fatalf("expected non-self arg `i64 4` threaded into indirect call:\n%s", got)
+	}
+}
+
 // TestGenerateModuleMethodLocalGenericGetMonomorphized verifies the
 // Phase 4 path: a non-generic struct with a generic method
 // (`fn get<U>(self, u: U) -> U`) gets specialized per turbofish call

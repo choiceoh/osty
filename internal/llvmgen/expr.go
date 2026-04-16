@@ -2433,8 +2433,36 @@ func (g *generator) emitInterfaceMethodCall(call *ast.CallExpr) (value, bool, er
 	if methodDecl == nil || methodDecl.ReturnType == nil {
 		return value{}, true, unsupportedf("call", "interface method %q has no return type", fx.Name)
 	}
-	if len(call.Args) != 0 {
-		return value{}, true, unsupportedf("call", "interface method %q with %d non-self args (Phase 6c scope)", fx.Name, len(call.Args))
+	// Phase 6c: interface method params are lowered individually and
+	// threaded into the indirect call as extra LLVM arguments. The
+	// receiver slot is carried by `FnDecl.Recv` (not `Params`), so
+	// `methodDecl.Params` already lists the non-self user-facing args
+	// 1:1 with `call.Args`.
+	nonSelfParams := methodDecl.Params
+	if len(nonSelfParams) != len(call.Args) {
+		return value{}, true, unsupportedf("call",
+			"interface method %q expects %d non-self args, got %d",
+			fx.Name, len(nonSelfParams), len(call.Args))
+	}
+	argPairs := make([][2]string, 0, len(nonSelfParams))
+	for i, p := range nonSelfParams {
+		if p == nil || p.Type == nil {
+			return value{}, true, unsupportedf("call", "interface method %q arg %d has no type", fx.Name, i)
+		}
+		paramTyp, err := llvmType(p.Type, g.typeEnv())
+		if err != nil {
+			return value{}, true, err
+		}
+		av, err := g.emitExpr(call.Args[i].Value)
+		if err != nil {
+			return value{}, true, err
+		}
+		if av.typ != paramTyp {
+			return value{}, true, unsupportedf("call",
+				"interface method %q arg %d: expected %s, got %s",
+				fx.Name, i, paramTyp, av.typ)
+		}
+		argPairs = append(argPairs, [2]string{paramTyp, av.ref})
 	}
 	retTyp, err := llvmType(methodDecl.ReturnType, g.typeEnv())
 	if err != nil {
@@ -2452,10 +2480,14 @@ func (g *generator) emitInterfaceMethodCall(call *ast.CallExpr) (value, bool, er
 	))
 	fnPtr := llvmNextTemp(emitter)
 	emitter.body = append(emitter.body, fmt.Sprintf("  %s = load ptr, ptr %s", fnPtr, fnPtrSlot))
+	callArgList := fmt.Sprintf("ptr %s", dataPtr)
+	for _, p := range argPairs {
+		callArgList += fmt.Sprintf(", %s %s", p[0], p[1])
+	}
 	ret := llvmNextTemp(emitter)
 	emitter.body = append(emitter.body, fmt.Sprintf(
-		"  %s = call %s %s(ptr %s)",
-		ret, retTyp, fnPtr, dataPtr,
+		"  %s = call %s %s(%s)",
+		ret, retTyp, fnPtr, callArgList,
 	))
 	g.takeOstyEmitter(emitter)
 	return value{typ: retTyp, ref: ret}, true, nil
