@@ -22,7 +22,7 @@
 - Multi-file package, vendored dependency, workspace build의 실제 code emission은
   아직 제한이 있다. LLVM 전환 전에 package 단위 emit/link 모델을 분명히 해야
   한다.
-- 현재 Phase 37까지의 LLVM backend 의미는 `examples/selfhost-core/llvmgen.osty`
+- 현재 Phase 45까지의 LLVM backend 의미는 `examples/selfhost-core/llvmgen.osty`
   쪽으로 옮겨지고 있다. 여기에는 smoke IR builder, skeleton renderer,
   toolchain command plan, executable parity corpus, go-only diagnostic, 그리고
   unsupported source-shape taxonomy가 포함된다. 성공 경로의 scalar instruction
@@ -330,8 +330,8 @@ artifact/cache layout 정책은 [`LLVM_ARTIFACT_LAYOUT.md`](./LLVM_ARTIFACT_LAYO
 | `Option<T>` | tagged payload | nullable pointer optimization은 후순위 |
 | `Result<T,E>` | tagged payload | Go backend의 `Value/Error/IsOk`와 semantic parity |
 | `struct` | named LLVM struct | Phase 30-33 smoke subset uses value aggregates; full ABI/layout stability remains runtime work |
-| `enum` | `i64` tag for bare variants, tagged payload storage later | Phase 34-37 smoke subset covers payload-free variants; niche optimization is later |
-| `match` | enum-tag switch/branch lowering | Phase 38-41 smoke subset covers payload-free enum match expressions before tagged payload ABI work |
+| `enum` | `i64` tag for bare variants, `%Enum = { i64, i64 }` for single-`Int` payload subset, tagged payload storage later | Phase 34-37 smoke subset covers payload-free variants; Phase 42-45 adds conservative single-`Int` tagged payload; broader payload layouts are later |
+| `match` | enum-tag switch/branch lowering | Phase 38-41 covers payload-free match expressions; Phase 42-45 adds `match` binding for single-`Int` payload enums |
 | closure | fn pointer + env pointer | capture lifetime/ownership 필요 |
 | interface | data pointer + vtable pointer | vtable generation은 Phase 5+ |
 
@@ -357,6 +357,35 @@ return/parameter boundaries와 mutable local slots을 지나도 동일하게 동
   반영되어야 한다.
 - 각 smoke fixture의 expected stdout가 `42\n`로 문서화되어야 한다.
 - match lowering은 여전히 `examples/selfhost-core/llvmgen.osty`에서 소유되어야
+  한다.
+
+### Phase 42-45. Single-Int payload enum smoke subset
+
+목표: 단일 `Int` payload를 가진 enum을 보수적인 ABI로 낮춰 `match`가
+`Some(x)` 바인딩을 수행할 수 있게 한다.
+
+제약: 현재 단계는 오직 `Some(Int)`와 `None` 형태의 태그+단일 `i64` payload
+경로만 다룬다. `Some`은 `%Maybe = type { i64, i64 }`로 인코딩되고 인덱스 `0`이
+태그, 인덱스 `1`이 payload이다.
+
+작업:
+
+- `enum_payload_print.osty`를 `main` 안에서 `Some(42)` 생성 후 `match`로 `Some(x)`
+  바인딩하는 payload enum fixture로 추가한다.
+- `enum_payload_return_print.osty`를 helper return 경계 payload enum fixture로
+  추가한다.
+- `enum_payload_param_print.osty`를 helper parameter 경계 payload enum fixture로
+  추가한다.
+- `enum_payload_mut_print.osty`를 mutable local 할당 후 `match` payload 바인딩을
+  수행하는 payload enum fixture로 추가한다.
+- 문서(`LLVM_BACKEND_CORPUS.md`)의 4개 fixture와 기대 출력 `42\n`를 연결한다.
+
+완료 조건:
+
+- `%Enum = type { i64, i64 }` 기반 단일 `Int` payload enum이 LLVM smoke corpus에
+  반영되어야 한다.
+- payload enum `match`에서 `Some(x)` 바인딩이 동작해야 한다.
+- 반환/파라미터/mutable local 경계 fixture가 문서와 동일한 기대 동작을 가져야
   한다.
 
 ## Toolchain 전략

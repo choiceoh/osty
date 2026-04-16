@@ -1,0 +1,15 @@
+enum Maybe {
+    Some(Int)
+    None
+}
+
+fn value() -> Maybe {
+    Some(42)
+}
+
+fn main() {
+    println(match value() {
+        Some(x) -> x,
+        None -> 0,
+    })
+}

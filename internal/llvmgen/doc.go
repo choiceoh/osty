@@ -4,8 +4,10 @@
 // functions or script files, integer println expressions, plain ASCII string
 // println literals, local string values with simple escapes, simple String
 // returns/parameters, simple value-aggregate structs, payload-free enum tags,
-// payload-free enum match expressions, immutable scalar lets, mutable scalar
-// locals, simple Int/Bool helper functions, statement-position if/else,
+// single-Int payload enum tags (`%Enum = { i64, i64 }`), payload-free enum
+// matches, payload-enum match expressions with payload binding, immutable
+// scalar lets, mutable scalar locals, simple Int/Bool helper functions,
+// statement-position if/else,
 // value-position if/else, simple Bool logical operators, and inclusive/
 // exclusive Int range loops.
 // Unsupported shapes return ErrUnsupported so callers can fall back to

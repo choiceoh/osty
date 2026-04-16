@@ -1,0 +1,12 @@
+enum Maybe {
+    Some(Int)
+    None
+}
+
+fn main() {
+    let value: Maybe = Some(42)
+    println(match value {
+        Some(x) -> x,
+        None -> 0,
+    })
+}

@@ -50,7 +50,7 @@ than language-decision churn.
 | CI quality tooling (`internal/ci`, `osty ci`) | done — Osty-authored generated CI core, signature-aware snapshots, workspace coverage, JSON reports |
 | Pipeline visualizer (`osty pipeline`) | done — per-stage timing, workspace mode, backend-aware gen, baseline diff, LSP trace, `--explain` |
 | Profiles / targets / features / cache (`internal/profile`, `osty profiles` / `targets` / `features` / `cache`) | done — built-in and manifest profiles, cross-target env, feature closure + file pragmas, backend-aware fingerprints |
-| LLVM backend (`internal/backend`, `internal/llvmgen`, `--backend llvm`) | early executable slice — textual IR/object/binary for scalar/control-flow/Bool/String smoke programs plus simple struct aggregates and payload-free enum matches, host `clang` driver, inspectable skeleton + categorized diagnostics for unsupported source shapes |
+| LLVM backend (`internal/backend`, `internal/llvmgen`, `--backend llvm`) | early executable slice — textual IR/object/binary for scalar/control-flow/Bool/String smoke programs plus simple struct aggregates and enum matches (payload-free + single-`Int` payload), host `clang` driver, inspectable skeleton + categorized diagnostics for unsupported source shapes |
 | Package registry backend / `osty registry serve` | done — file-backed HTTP server for index/search/download/publish/yank, with ETag index responses and bearer-token write auth |
 | Package registry / `osty add` / `osty update` / `osty run` | done (resolve + vendor + lockfile-honoring re-resolves, ETag-cached registry index, copy fallback for symlink-less filesystems; CLI: `add`, `remove`/`rm`, `update`, `run`, `fetch`, `publish`, `search`, `info`, `yank`/`unyank`, `login`/`logout`; `--locked` / `--frozen` CI guards) |
 | Package manager (`osty add` / `osty update`, path + git + registry sources, SemVer resolver, deterministic lockfile) | wired — `add` mutates `osty.toml` and re-vendors; `update` re-resolves selectively or in full |
@@ -240,10 +240,10 @@ newline-separated `else`.
 - `--backend NAME` — code generation backend (`go` or `llvm`; default: `go`;
   `llvm` emits textual `.ll` for the early scalar/control-flow/plain/escaped
   string subset, including immutable/mutable string locals and simple String
-  function boundaries plus simple struct aggregate values and payload-free enum
-  tags/match expressions, and falls back to an inspectable skeleton for
-  unsupported shapes with Osty-authored instruction builders and category
-  diagnostics)
+  function boundaries plus simple struct aggregate values and enum
+  tags/match expressions (payload-free + single-`Int` with `{ i64, i64 }`
+  payload), and falls back to an inspectable skeleton for unsupported shapes
+  with Osty-authored instruction builders and category diagnostics)
 - `--emit MODE` — requested text artifact. `go` emits Go source for the Go
   backend; `llvm-ir` is reserved for the LLVM backend.
 
@@ -307,12 +307,13 @@ creating a new one.
 - `--backend NAME` — code generation backend (`go` or `llvm`; default: `go`;
   `llvm` can write textual IR for the early scalar/control-flow/plain/escaped
   string subset, including immutable/mutable string locals and simple String
-  function boundaries plus simple struct aggregate values and payload-free enum
-  tags/match expressions, and when `clang` is available, drive object/binary
-  emission for supported programs; unsupported shapes still prepare skeleton
-  artifacts and report the missing lowering through categorized diagnostics
-  generated from the Osty selfhost-core backend policy; supported scalar
-  instruction strings are generated from that same backend core)
+  function boundaries plus simple struct aggregate values and enum tags/match
+  expressions (payload-free + single-`Int` with `{ i64, i64 }` payload), and
+  when `clang` is available, drive object/binary emission for supported
+  programs; unsupported shapes still prepare skeleton artifacts and report the
+  missing lowering through categorized diagnostics generated from the Osty
+  selfhost-core backend policy; supported scalar instruction strings are
+  generated from that same backend core)
 - `--emit MODE` — requested artifact mode (`go`, `llvm-ir`, `object`, or
   `binary`). `build --emit go` writes inspectable Go without linking a binary;
   `build --backend llvm --emit object|binary` uses `clang`; `run` requires

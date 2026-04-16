@@ -1,0 +1,13 @@
+enum Maybe {
+    Some(Int)
+    None
+}
+
+fn main() {
+    let mut value: Maybe = None
+    value = Some(42)
+    println(match value {
+        Some(x) -> x,
+        None -> 0,
+    })
+}
