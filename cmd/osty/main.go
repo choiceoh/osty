@@ -78,6 +78,7 @@ type cliFlags struct {
 	showScopes bool // resolve: also print the nested scope tree
 	trace      bool // global: stream per-phase timing to stderr
 	explain    bool // global: append `osty explain CODE` text per unique code
+	inspect    bool // check: emit one InspectRecord per expression (stdout)
 }
 
 func main() {
@@ -339,6 +340,12 @@ func main() {
 			case "check":
 				diags := append(append([]*diag.Diagnostic{}, selected.res.Diags...), selected.chk.Diags...)
 				printPackageDiags(selected.pkg, diags, flags)
+				if flags.inspect && selected.file != nil && selected.file.File != nil {
+					if !flags.jsonOutput {
+						fmt.Printf("# %s\n", selected.file.Path)
+					}
+					runInspect(selected.file.File, selected.chk, flags)
+				}
 				if hasError(diags) {
 					os.Exit(1)
 				}
@@ -416,6 +423,9 @@ func main() {
 		chk := check.File(file, res, checkOptsForSource(src))
 		all := append(append(append([]*diag.Diagnostic{}, diags...), res.Diags...), chk.Diags...)
 		printDiags(formatter, all, flags)
+		if flags.inspect {
+			runInspect(file, chk, flags)
+		}
 		if hasError(all) {
 			os.Exit(1)
 		}
@@ -514,6 +524,7 @@ func parseFlags() cliFlags {
 	flag.BoolVar(&f.showScopes, "scopes", false, "resolve: also dump the nested scope tree")
 	flag.BoolVar(&f.trace, "trace", false, "stream per-phase timing to stderr (single-file front-end commands)")
 	flag.BoolVar(&f.explain, "explain", false, "after diagnostics, print the `osty explain CODE` text for each unique code")
+	flag.BoolVar(&f.inspect, "inspect", false, "check: emit one record per expression showing the inference rule, type, and hint (see LANG_SPEC_v0.4/02a-type-inference.md)")
 	flag.Usage = usage
 	flag.Parse()
 	return f
@@ -561,6 +572,9 @@ func runCheckPackage(dir string, flags cliFlags) {
 	chk := check.Package(pkg, res, checkOpts())
 	diags := append(append([]*diag.Diagnostic{}, res.Diags...), chk.Diags...)
 	printPackageDiags(pkg, diags, flags)
+	if flags.inspect {
+		runInspectPackage(pkg, chk, flags)
+	}
 	if hasError(diags) {
 		os.Exit(1)
 	}
@@ -624,10 +638,14 @@ func runCheckWorkspace(dir string, flags cliFlags) {
 			continue
 		}
 		diags := append([]*diag.Diagnostic{}, r.Diags...)
-		if cr, ok := checks[p]; ok && cr != nil {
+		cr := checks[p]
+		if cr != nil {
 			diags = append(diags, cr.Diags...)
 		}
 		printPackageDiags(pkg, diags, flags)
+		if flags.inspect && cr != nil {
+			runInspectPackage(pkg, cr, flags)
+		}
 		if hasError(diags) {
 			anyErr = true
 		}
@@ -1208,6 +1226,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  --scopes           resolve: also print the nested scope tree")
 	fmt.Fprintln(os.Stderr, "  --trace            stream per-phase timing to stderr (front-end commands)")
 	fmt.Fprintln(os.Stderr, "  --explain          append `osty explain CODE` text after each diagnostic block")
+	fmt.Fprintln(os.Stderr, "  --inspect          check: emit one record per expression (rule, type, hint)")
 	fmt.Fprintln(os.Stderr, "fmt-specific flags (after the subcommand):")
 	fmt.Fprintln(os.Stderr, "  --check            exit 1 if FILE is not already formatted")
 	fmt.Fprintln(os.Stderr, "  --engine NAME      formatter engine: go (default) or osty")

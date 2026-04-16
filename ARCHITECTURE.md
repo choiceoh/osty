@@ -192,6 +192,26 @@ The v0.4 language-decision sweep is closed in `SPEC_GAPS.md`; remaining
 work is implementation backlog rather than broad checker architecture
 gaps.
 
+#### Type inference algorithm
+
+Bidirectional typing with local unification and monomorphization on
+generic instantiation. The full specification, including the rule
+table and a line-level mapping to the self-hosted implementation,
+lives at `LANG_SPEC_v0.4/02a-type-inference.md`. The reference
+implementation is `toolchain/check.osty`; `host_boundary.go` is a
+pure adapter that materializes the checker's output as
+`Result.Types`, `Result.LetTypes`, `Result.SymTypes`, and
+`Result.Instantiations` — it contains no inference logic of its own.
+
+For runtime inspection use `osty check --inspect FILE.osty`. The
+inspector (`inspect.go` + `inspect_format.go`) walks the AST after
+the checker finishes and emits one record per expression naming the
+rule that produced its type, the contextual hint the checker had,
+and any generic instantiation recorded for the site. It does not
+re-run inference — it classifies the already-typed nodes so the
+algorithm is directly observable against real code. `--json`
+switches the output to NDJSON.
+
 ### `internal/stdlib`
 Built-in prelude symbols injected into every file before resolution.
 `NewPrelude` returns the root scope; individual modules are Osty
