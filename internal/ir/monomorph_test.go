@@ -633,6 +633,14 @@ func newTestMonoState(structs map[string]*StructDecl, enums map[string]*EnumDecl
 		genericStructsByName: structs,
 		genericEnumsByName:   enums,
 		typeSeen:             map[string]string{},
+		structsByName:        map[string]*StructDecl{},
+		enumsByName:          map[string]*EnumDecl{},
+		structsByMangled:     map[string]*StructDecl{},
+		enumsByMangled:       map[string]*EnumDecl{},
+		originalStructOf:     map[string]*StructDecl{},
+		originalEnumOf:       map[string]*EnumDecl{},
+		receiverEnvOf:        map[string]SubstEnv{},
+		methodSeen:           map[string]string{},
 	}
 }
 
@@ -1479,50 +1487,323 @@ func TestMonomorphizeEnumMethodBodyScanned(t *testing.T) {
 	}
 }
 
-func TestMonomorphizeMethodLocalGenericSkipsWithWarning(t *testing.T) {
-	// struct Box<T> { value: T }
-	// impl { fn cast<U>(self) -> U { … } }  ← method-local generic U
-	// Phase 2 should drop cast from the specialization and warn.
-	box := &StructDecl{
-		Name:     "Box",
-		Generics: []*TypeParam{{Name: "T"}},
-		Fields:   []*Field{{Name: "value", Type: &TypeVar{Name: "T"}}},
+// ==== Phase 4 method-local generic specialization ====
+
+// genericBoxNonGeneric returns a `struct Box { value: Int; fn get<U>(self, u: U) -> U { u } }`
+// — a non-generic owner carrying a method with its own generic param.
+// Exposed as a helper so tests stay focused on behavior.
+func genericBoxNonGenericOwner() *StructDecl {
+	return &StructDecl{
+		Name:   "Box",
+		Fields: []*Field{{Name: "value", Type: TInt}},
 		Methods: []*FnDecl{{
-			Name:     "cast",
-			Generics: []*TypeParam{{Name: "U"}}, // method-local
-			Params:   []*Param{{Name: "self", Type: &NamedType{Name: "Box", Args: []Type{&TypeVar{Name: "T"}}}}},
-			Return:   &TypeVar{Name: "U"},
-			Body:     &Block{},
+			Name:     "get",
+			Generics: []*TypeParam{{Name: "U"}},
+			Params: []*Param{
+				{Name: "self", Type: &NamedType{Name: "Box"}},
+				{Name: "u", Type: &TypeVar{Name: "U"}},
+			},
+			Return: &TypeVar{Name: "U"},
+			Body:   &Block{Result: &Ident{Name: "u", Kind: IdentParam, T: &TypeVar{Name: "U"}}},
 		}},
 	}
-	boxT := &NamedType{Name: "Box", Args: []Type{TInt}}
+}
+
+// genericVecGenericOwner returns a `struct Vec<T>` with both a plain
+// method and a `map<U>` method exercising receiver+method generics.
+func genericVecGenericOwner() *StructDecl {
+	tvT := &TypeVar{Name: "T"}
+	tvU := &TypeVar{Name: "U"}
+	return &StructDecl{
+		Name:     "Vec",
+		Generics: []*TypeParam{{Name: "T"}},
+		Fields:   []*Field{{Name: "head", Type: tvT}},
+		Methods: []*FnDecl{{
+			Name:     "map",
+			Generics: []*TypeParam{{Name: "U"}},
+			Params: []*Param{
+				{Name: "self", Type: &NamedType{Name: "Vec", Args: []Type{tvT}}},
+				{Name: "seed", Type: tvU},
+			},
+			Return: tvU,
+			Body:   &Block{Result: &Ident{Name: "seed", Kind: IdentParam, T: tvU}},
+		}},
+	}
+}
+
+func TestMonomorphizeMethodLocalGenericOnNonGenericOwner(t *testing.T) {
+	// struct Box { value: Int; fn get<U>(self, u: U) -> U { u } }
+	// fn main() { let b = Box { value: 1 }; b.get::<Int>(7) }
+	// Expect: Box.Methods gets a specialization "get_ZIlE" with concrete
+	// param + return types, original generic `get` is dropped.
+	box := genericBoxNonGenericOwner()
+	call := &MethodCall{
+		Receiver: &Ident{Name: "b", Kind: IdentLocal, T: &NamedType{Name: "Box"}},
+		Name:     "get",
+		TypeArgs: []Type{TInt},
+		Args:     []Arg{{Value: intLit("7")}},
+		T:        TInt,
+	}
 	main := &FnDecl{
 		Name: "main", Return: TUnit,
-		Body: &Block{Stmts: []Stmt{&LetStmt{
-			Name: "b", Type: boxT,
-			Value: &StructLit{TypeName: "Box", T: boxT, Fields: []StructLitField{
-				{Name: "value", Value: intLit("1")},
-			}},
-		}}},
+		Body: &Block{Stmts: []Stmt{
+			&LetStmt{Name: "b", Type: &NamedType{Name: "Box"},
+				Value: &StructLit{TypeName: "Box", T: &NamedType{Name: "Box"},
+					Fields: []StructLitField{{Name: "value", Value: intLit("1")}}}},
+			&ExprStmt{X: call},
+		}},
 	}
 	in := &Module{Package: "main", Decls: []Decl{box, main}}
 	out, errs := Monomorphize(in)
+	if len(errs) != 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	// Find the Box decl in the output.
+	var boxCp *StructDecl
+	for _, d := range out.Decls {
+		if sd, ok := d.(*StructDecl); ok && sd.Name == "Box" {
+			boxCp = sd
+		}
+	}
+	if boxCp == nil {
+		t.Fatalf("Box missing from output decls")
+	}
+	if len(boxCp.Methods) != 1 {
+		t.Fatalf("expected exactly 1 method (specialization), got %d: %+v", len(boxCp.Methods), boxCp.Methods)
+	}
+	spec := boxCp.Methods[0]
+	if len(spec.Generics) != 0 {
+		t.Fatalf("method specialization must shed method-local generics, got %d", len(spec.Generics))
+	}
+	if !strings.Contains(spec.Name, "_Z") {
+		t.Fatalf("method specialization name should contain '_Z' marker, got %q", spec.Name)
+	}
+	if spec.Return != TInt {
+		t.Fatalf("method specialization return not substituted to Int: %T", spec.Return)
+	}
+	if spec.Params[1].Type != TInt {
+		t.Fatalf("method specialization param 'u' not substituted: %T", spec.Params[1].Type)
+	}
+	// Call site is rewritten to the mangled method name with TypeArgs cleared.
+	mainCp := out.Decls[1].(*FnDecl)
+	callCp := mainCp.Body.Stmts[1].(*ExprStmt).X.(*MethodCall)
+	if callCp.Name != spec.Name {
+		t.Fatalf("call site name not rewritten to %q, got %q", spec.Name, callCp.Name)
+	}
+	if len(callCp.TypeArgs) != 0 {
+		t.Fatalf("call site TypeArgs should be cleared, got %+v", callCp.TypeArgs)
+	}
+}
+
+func TestMonomorphizeMethodLocalGenericDedup(t *testing.T) {
+	box := genericBoxNonGenericOwner()
+	mk := func() *MethodCall {
+		return &MethodCall{
+			Receiver: &Ident{Name: "b", Kind: IdentLocal, T: &NamedType{Name: "Box"}},
+			Name:     "get",
+			TypeArgs: []Type{TInt},
+			Args:     []Arg{{Value: intLit("7")}},
+			T:        TInt,
+		}
+	}
+	main := &FnDecl{
+		Name: "main", Return: TUnit,
+		Body: &Block{Stmts: []Stmt{
+			&ExprStmt{X: mk()},
+			&ExprStmt{X: mk()},
+		}},
+	}
+	in := &Module{Package: "main", Decls: []Decl{box, main}}
+	out, _ := Monomorphize(in)
+	var boxCp *StructDecl
+	for _, d := range out.Decls {
+		if sd, ok := d.(*StructDecl); ok && sd.Name == "Box" {
+			boxCp = sd
+		}
+	}
+	if boxCp == nil || len(boxCp.Methods) != 1 {
+		t.Fatalf("expected 1 deduped method, got %+v", boxCp)
+	}
+}
+
+func TestMonomorphizeMethodLocalGenericDistinctArgs(t *testing.T) {
+	box := genericBoxNonGenericOwner()
+	main := &FnDecl{
+		Name: "main", Return: TUnit,
+		Body: &Block{Stmts: []Stmt{
+			&ExprStmt{X: &MethodCall{
+				Receiver: &Ident{Name: "b", Kind: IdentLocal, T: &NamedType{Name: "Box"}},
+				Name:     "get",
+				TypeArgs: []Type{TInt},
+				Args:     []Arg{{Value: intLit("1")}},
+				T:        TInt,
+			}},
+			&ExprStmt{X: &MethodCall{
+				Receiver: &Ident{Name: "b", Kind: IdentLocal, T: &NamedType{Name: "Box"}},
+				Name:     "get",
+				TypeArgs: []Type{TBool},
+				Args:     []Arg{{Value: &BoolLit{Value: true}}},
+				T:        TBool,
+			}},
+		}},
+	}
+	in := &Module{Package: "main", Decls: []Decl{box, main}}
+	out, _ := Monomorphize(in)
+	var boxCp *StructDecl
+	for _, d := range out.Decls {
+		if sd, ok := d.(*StructDecl); ok && sd.Name == "Box" {
+			boxCp = sd
+		}
+	}
+	if boxCp == nil || len(boxCp.Methods) != 2 {
+		t.Fatalf("expected 2 distinct method specializations, got %+v", boxCp.Methods)
+	}
+	if boxCp.Methods[0].Name == boxCp.Methods[1].Name {
+		t.Fatalf("distinct type args should produce distinct mangled names")
+	}
+}
+
+func TestMonomorphizeMethodLocalGenericOnGenericOwner(t *testing.T) {
+	// struct Vec<T> { head: T; fn map<U>(self, seed: U) -> U }
+	// fn main() { let v: Vec<Int> = …; v.map::<String>("x") }
+	// Expect: Vec<Int> specialization exists + one method specialization
+	// of map with concrete Int receiver context and String param/return.
+	vec := genericVecGenericOwner()
+	vecInt := &NamedType{Name: "Vec", Args: []Type{TInt}}
+	recv := &Ident{Name: "v", Kind: IdentLocal, T: vecInt}
+	call := &MethodCall{
+		Receiver: recv,
+		Name:     "map",
+		TypeArgs: []Type{TString},
+		Args:     []Arg{{Value: strLit("x")}},
+		T:        TString,
+	}
+	main := &FnDecl{
+		Name: "main", Return: TUnit,
+		Body: &Block{Stmts: []Stmt{
+			&LetStmt{Name: "v", Type: vecInt,
+				Value: &StructLit{TypeName: "Vec", T: vecInt,
+					Fields: []StructLitField{{Name: "head", Value: intLit("0")}}}},
+			&ExprStmt{X: call},
+		}},
+	}
+	in := &Module{Package: "main", Decls: []Decl{vec, main}}
+	out, errs := Monomorphize(in)
+	if len(errs) != 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	spec := findStructSpec(out)
+	if spec == nil {
+		t.Fatalf("Vec specialization missing; decls=%+v", out.Decls)
+	}
+	// spec.Methods should have one method specialization (the generic
+	// original is dropped in Pass 6).
+	if len(spec.Methods) != 1 {
+		t.Fatalf("expected 1 method spec on Vec<Int>, got %d: %+v", len(spec.Methods), spec.Methods)
+	}
+	m := spec.Methods[0]
+	if len(m.Generics) != 0 {
+		t.Fatalf("method spec must not carry method-local generics")
+	}
+	if m.Return != TString {
+		t.Fatalf("method spec return type not substituted to String: %T", m.Return)
+	}
+}
+
+func TestMonomorphizeMethodLocalGenericArityMismatch(t *testing.T) {
+	box := genericBoxNonGenericOwner()
+	// get<U> — pass two type args
+	call := &MethodCall{
+		Receiver: &Ident{Name: "b", Kind: IdentLocal, T: &NamedType{Name: "Box"}},
+		Name:     "get",
+		TypeArgs: []Type{TInt, TBool},
+		Args:     []Arg{{Value: intLit("1")}},
+		T:        TInt,
+	}
+	main := &FnDecl{
+		Name: "main", Return: TUnit,
+		Body: &Block{Stmts: []Stmt{&ExprStmt{X: call}}},
+	}
+	in := &Module{Package: "main", Decls: []Decl{box, main}}
+	_, errs := Monomorphize(in)
 	if len(errs) == 0 {
-		t.Fatalf("expected method-local generics warning, got none")
+		t.Fatalf("expected arity-mismatch error, got none")
 	}
 	joined := ""
 	for _, e := range errs {
 		joined += e.Error() + "\n"
 	}
-	if !strings.Contains(joined, "method-local generics") {
-		t.Fatalf("expected 'method-local generics' in err, got %q", joined)
+	if !strings.Contains(joined, "arity mismatch") {
+		t.Fatalf("expected 'arity mismatch' in err, got %q", joined)
 	}
-	spec := findStructSpec(out)
-	if spec == nil {
-		t.Fatalf("Box specialization missing")
+}
+
+func TestMonomorphizeMethodLocalGenericPreservedGenericsDropped(t *testing.T) {
+	// After specialization, NO struct/enum in out.Decls may still carry
+	// a method with len(Generics) > 0.
+	box := genericBoxNonGenericOwner()
+	call := &MethodCall{
+		Receiver: &Ident{Name: "b", Kind: IdentLocal, T: &NamedType{Name: "Box"}},
+		Name:     "get",
+		TypeArgs: []Type{TInt},
+		Args:     []Arg{{Value: intLit("1")}},
+		T:        TInt,
 	}
-	if len(spec.Methods) != 0 {
-		t.Fatalf("cast method should have been dropped, got %+v", spec.Methods)
+	main := &FnDecl{
+		Name: "main", Return: TUnit,
+		Body: &Block{Stmts: []Stmt{&ExprStmt{X: call}}},
+	}
+	out, _ := Monomorphize(&Module{Package: "main", Decls: []Decl{box, main}})
+	for _, d := range out.Decls {
+		switch x := d.(type) {
+		case *StructDecl:
+			for _, m := range x.Methods {
+				if len(m.Generics) > 0 {
+					t.Fatalf("Pass 6 missed a preserved generic method: %s.%s", x.Name, m.Name)
+				}
+			}
+		case *EnumDecl:
+			for _, m := range x.Methods {
+				if len(m.Generics) > 0 {
+					t.Fatalf("Pass 6 missed a preserved generic method: %s.%s", x.Name, m.Name)
+				}
+			}
+		}
+	}
+}
+
+func TestMonomorphizeMethodLocalGenericUncalledPreservedMethodsStillDropped(t *testing.T) {
+	// A generic method that is never called should still be absent
+	// from the final output (Pass 6 strip), and no specialization is
+	// generated.
+	box := genericBoxNonGenericOwner()
+	in := &Module{Package: "main", Decls: []Decl{box}}
+	out, errs := Monomorphize(in)
+	if len(errs) != 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	for _, d := range out.Decls {
+		if sd, ok := d.(*StructDecl); ok && sd.Name == "Box" {
+			if len(sd.Methods) != 0 {
+				t.Fatalf("Box should have zero methods when nothing called, got %+v", sd.Methods)
+			}
+		}
+	}
+}
+
+func TestMonomorphMangleMethodHelpers(t *testing.T) {
+	got := MonomorphMangleMethodName("map", []string{"Ss"})
+	const want = "map_ZISsE"
+	if got != want {
+		t.Fatalf("MonomorphMangleMethodName: got %q, want %q", got, want)
+	}
+	if MonomorphMangleMethodName("bare", nil) != "bare" {
+		t.Fatalf("empty typeArgCodes should pass through method name unchanged")
+	}
+	fnKey := MonomorphDedupeKey("get", "main", []string{"l"})
+	methodKey := MonomorphMethodDedupeKey("main", "get", []string{"l"})
+	if fnKey == methodKey {
+		t.Fatalf("method dedupe key must not collide with fn dedupe key")
 	}
 }
 

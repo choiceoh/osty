@@ -273,6 +273,52 @@ func MonomorphShouldInstantiate(typeArgsLen, fnGenericsLen int) bool {
 	return typeArgsLen > 0 && typeArgsLen == fnGenericsLen
 }
 
+// Osty: toolchain/monomorph.osty (Phase 4, MonomorphMethodRequest)
+type MonomorphMethodRequest struct {
+	ownerMangled string
+	methodName   string
+	typeArgCodes []string
+}
+
+// NewMonomorphMethodRequest builds a Phase 4 method-specialization
+// request. ownerMangled must already be the caller's final owner
+// symbol (e.g. `_ZTSN4main3VecIlEE` or a non-generic source name like
+// `Box`); the LLVM backend appends the returned method-local name via
+// `llvmMethodIRName`.
+func NewMonomorphMethodRequest(ownerMangled, methodName string, typeArgCodes []string) *MonomorphMethodRequest {
+	return &MonomorphMethodRequest{
+		ownerMangled: ownerMangled,
+		methodName:   methodName,
+		typeArgCodes: append([]string(nil), typeArgCodes...),
+	}
+}
+
+// Osty: toolchain/monomorph.osty (Phase 4, monomorphMangleMethodName)
+func MonomorphMangleMethodName(methodName string, typeArgCodes []string) string {
+	if len(typeArgCodes) == 0 {
+		return methodName
+	}
+	return methodName + "_Z" + MonomorphTemplateArgs(typeArgCodes)
+}
+
+// Osty: toolchain/monomorph.osty (Phase 4, monomorphMangleMethod)
+func MonomorphMangleMethod(req *MonomorphMethodRequest) *MonomorphMangled {
+	if req == nil {
+		return &MonomorphMangled{}
+	}
+	return &MonomorphMangled{symbol: MonomorphMangleMethodName(req.methodName, req.typeArgCodes)}
+}
+
+// Osty: toolchain/monomorph.osty (Phase 4, monomorphMethodDedupeKey)
+func MonomorphMethodDedupeKey(ownerMangled, methodName string, typeArgCodes []string) string {
+	sep := "\x1f"
+	key := ownerMangled + sep + "method" + sep + methodName
+	for _, c := range typeArgCodes {
+		key += sep + c
+	}
+	return key
+}
+
 // monomorphByteLength mirrors std.strings.len's UTF-8 byte counting so
 // the length prefix produced by MonomorphLengthPrefix matches what an
 // Itanium demangler expects. Kept unexported because the public
