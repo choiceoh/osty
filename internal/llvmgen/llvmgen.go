@@ -308,6 +308,7 @@ type enumInfo struct {
 	typ        string
 	decl       *ast.EnumDecl
 	hasPayload bool
+	payloadTyp string
 	variants   map[string]variantInfo
 }
 
@@ -479,12 +480,17 @@ func collectEnum(decl *ast.EnumDecl) (*enumInfo, error) {
 		}
 		payloads := make([]string, 0, len(variant.Fields))
 		if len(variant.Fields) > 1 {
-			return nil, unsupportedf("type-system", "enum %q variant %q has %d payload fields; only one Int payload is supported", decl.Name, variant.Name, len(variant.Fields))
+			return nil, unsupportedf("type-system", "enum %q variant %q has %d payload fields; only one scalar payload is supported", decl.Name, variant.Name, len(variant.Fields))
 		}
 		if len(variant.Fields) == 1 {
 			typ, err := llvmEnumPayloadType(variant.Fields[0])
 			if err != nil {
 				return nil, unsupportedf("type-system", "enum %q variant %q payload: %s", decl.Name, variant.Name, unsupportedMessage(err))
+			}
+			if info.payloadTyp == "" {
+				info.payloadTyp = typ
+			} else if info.payloadTyp != typ {
+				return nil, unsupportedf("type-system", "enum %q mixes payload types %s and %s", decl.Name, info.payloadTyp, typ)
 			}
 			payloads = append(payloads, typ)
 			info.hasPayload = true
@@ -502,10 +508,17 @@ func collectEnum(decl *ast.EnumDecl) (*enumInfo, error) {
 
 func llvmEnumPayloadType(t ast.Type) (string, error) {
 	named, ok := t.(*ast.NamedType)
-	if !ok || len(named.Args) != 0 || len(named.Path) != 1 || named.Path[0] != "Int" {
-		return "", unsupported("type-system", "LLVM enum payloads currently support Int only")
+	if !ok || len(named.Args) != 0 || len(named.Path) != 1 {
+		return "", unsupported("type-system", "LLVM enum payloads currently support Int or Float only")
 	}
-	return "i64", nil
+	switch named.Path[0] {
+	case "Int":
+		return "i64", nil
+	case "Float":
+		return "double", nil
+	default:
+		return "", unsupported("type-system", "LLVM enum payloads currently support Int or Float only")
+	}
 }
 
 func signatureOf(fn *ast.FnDecl, structs map[string]*structInfo, enums map[string]*enumInfo) (*fnSig, error) {
@@ -856,11 +869,13 @@ func (g *generator) emitPrintln(call *ast.CallExpr) error {
 	switch v.typ {
 	case "i64":
 		llvmPrintlnI64(emitter, toOstyValue(v))
+	case "double":
+		llvmPrintlnF64(emitter, toOstyValue(v))
 	case "ptr":
 		llvmPrintlnString(emitter, toOstyValue(v))
 	default:
 		g.takeOstyEmitter(emitter)
-		return unsupported("type-system", "println currently supports Int expressions and plain String values only")
+		return unsupported("type-system", "println currently supports Int, Float, and plain String values only")
 	}
 	g.takeOstyEmitter(emitter)
 	return nil
@@ -889,6 +904,14 @@ func (g *generator) emitExpr(expr ast.Expr) (value, error) {
 			return value{}, unsupportedf("expression", "invalid Int literal %q", e.Text)
 		}
 		return value{typ: "i64", ref: strconv.FormatInt(n, 10)}, nil
+	case *ast.FloatLit:
+		text := strings.ReplaceAll(e.Text, "_", "")
+		f, err := strconv.ParseFloat(text, 64)
+		if err != nil {
+			return value{}, unsupportedf("expression", "invalid Float literal %q", e.Text)
+		}
+		out := llvmFloatLiteral(strconv.FormatFloat(f, 'e', 16, 64))
+		return fromOstyValue(out), nil
 	case *ast.BoolLit:
 		if e.Value {
 			return value{typ: "i1", ref: "true"}, nil
@@ -1045,7 +1068,7 @@ func (g *generator) enumVariantConstant(info *enumInfo, variant variantInfo) (va
 		if len(variant.payloads) != 0 {
 			return value{}, unsupportedf("expression", "enum variant %q requires a payload", variant.name)
 		}
-		return g.emitEnumPayloadVariant(info, variant, value{typ: "i64", ref: "0"})
+		return g.emitEnumPayloadVariant(info, variant, value{typ: info.payloadTyp, ref: zeroLiteral(info.payloadTyp)})
 	}
 	out := llvmEnumVariant(info.name, variant.tag)
 	return fromOstyValue(out), nil
@@ -1083,8 +1106,8 @@ func (g *generator) emitEnumPayloadVariant(info *enumInfo, variant variantInfo, 
 	if !info.hasPayload {
 		return value{}, unsupportedf("expression", "enum %q has no payload layout", info.name)
 	}
-	if payload.typ != "i64" {
-		return value{}, unsupportedf("type-system", "enum %q variant %q payload type %s, want i64", info.name, variant.name, payload.typ)
+	if payload.typ != info.payloadTyp {
+		return value{}, unsupportedf("type-system", "enum %q variant %q payload type %s, want %s", info.name, variant.name, payload.typ, info.payloadTyp)
 	}
 	emitter := g.toOstyEmitter()
 	out := llvmEnumPayloadVariant(emitter, info.typ, variant.tag, toOstyValue(payload))
@@ -1099,16 +1122,22 @@ func (g *generator) emitUnary(e *ast.UnaryExpr) (value, error) {
 	}
 	switch e.Op {
 	case token.PLUS:
-		if v.typ != "i64" {
+		if v.typ != "i64" && v.typ != "double" {
 			return value{}, unsupportedf("type-system", "unary plus on %s", v.typ)
 		}
 		return v, nil
 	case token.MINUS:
-		if v.typ != "i64" {
+		emitter := g.toOstyEmitter()
+		var out *LlvmValue
+		switch v.typ {
+		case "i64":
+			out = llvmBinaryI64(emitter, "sub", llvmIntLiteral(0), toOstyValue(v))
+		case "double":
+			out = llvmBinaryF64(emitter, "fsub", llvmFloatLiteral("0.0"), toOstyValue(v))
+		default:
+			g.takeOstyEmitter(emitter)
 			return value{}, unsupportedf("type-system", "unary minus on %s", v.typ)
 		}
-		emitter := g.toOstyEmitter()
-		out := llvmBinaryI64(emitter, "sub", llvmIntLiteral(0), toOstyValue(v))
 		g.takeOstyEmitter(emitter)
 		return fromOstyValue(out), nil
 	case token.NOT:
@@ -1138,6 +1167,25 @@ func (g *generator) emitBinary(e *ast.BinaryExpr) (value, error) {
 	}
 	if e.Op == token.AND || e.Op == token.OR {
 		return g.emitLogical(e.Op, left, right)
+	}
+	if left.typ == "double" && right.typ == "double" {
+		op := ""
+		switch e.Op {
+		case token.PLUS:
+			op = "fadd"
+		case token.MINUS:
+			op = "fsub"
+		case token.STAR:
+			op = "fmul"
+		case token.SLASH:
+			op = "fdiv"
+		default:
+			return value{}, unsupportedf("expression", "binary operator %q", e.Op)
+		}
+		emitter := g.toOstyEmitter()
+		out := llvmBinaryF64(emitter, op, toOstyValue(left), toOstyValue(right))
+		g.takeOstyEmitter(emitter)
+		return fromOstyValue(out), nil
 	}
 	if left.typ != "i64" || right.typ != "i64" {
 		return value{}, unsupportedf("type-system", "binary operator %q on %s/%s", e.Op, left.typ, right.typ)
@@ -1186,32 +1234,67 @@ func (g *generator) emitCompare(op token.Kind, left, right value) (value, error)
 	if left.typ != right.typ {
 		return value{}, unsupportedf("type-system", "compare type mismatch %s/%s", left.typ, right.typ)
 	}
-	pred := ""
-	switch op {
-	case token.EQ:
-		pred = "eq"
-	case token.NEQ:
-		pred = "ne"
-	case token.LT:
-		pred = "slt"
-	case token.GT:
-		pred = "sgt"
-	case token.LEQ:
-		pred = "sle"
-	case token.GEQ:
-		pred = "sge"
-	default:
-		return value{}, unsupportedf("expression", "comparison operator %q", op)
-	}
+	emitter := g.toOstyEmitter()
+	var out *LlvmValue
 	switch left.typ {
 	case "i64", "i1":
+		pred, err := llvmIntComparePred(op)
+		if err != nil {
+			g.takeOstyEmitter(emitter)
+			return value{}, err
+		}
+		out = llvmCompare(emitter, pred, toOstyValue(left), toOstyValue(right))
+	case "double":
+		pred, err := llvmFloatComparePred(op)
+		if err != nil {
+			g.takeOstyEmitter(emitter)
+			return value{}, err
+		}
+		out = llvmCompareF64(emitter, pred, toOstyValue(left), toOstyValue(right))
 	default:
+		g.takeOstyEmitter(emitter)
 		return value{}, unsupportedf("type-system", "compare type %s", left.typ)
 	}
-	emitter := g.toOstyEmitter()
-	out := llvmCompare(emitter, pred, toOstyValue(left), toOstyValue(right))
 	g.takeOstyEmitter(emitter)
 	return fromOstyValue(out), nil
+}
+
+func llvmIntComparePred(op token.Kind) (string, error) {
+	switch op {
+	case token.EQ:
+		return "eq", nil
+	case token.NEQ:
+		return "ne", nil
+	case token.LT:
+		return "slt", nil
+	case token.GT:
+		return "sgt", nil
+	case token.LEQ:
+		return "sle", nil
+	case token.GEQ:
+		return "sge", nil
+	default:
+		return "", unsupportedf("expression", "comparison operator %q", op)
+	}
+}
+
+func llvmFloatComparePred(op token.Kind) (string, error) {
+	switch op {
+	case token.EQ:
+		return "oeq", nil
+	case token.NEQ:
+		return "one", nil
+	case token.LT:
+		return "olt", nil
+	case token.GT:
+		return "ogt", nil
+	case token.LEQ:
+		return "ole", nil
+	case token.GEQ:
+		return "oge", nil
+	default:
+		return "", unsupportedf("expression", "comparison operator %q", op)
+	}
 }
 
 func (g *generator) emitIfExprValue(expr *ast.IfExpr) (value, error) {
@@ -1634,7 +1717,7 @@ func (g *generator) render(defs []string) []byte {
 	}
 	for _, info := range g.enums {
 		if info.hasPayload {
-			typeDefs = append(typeDefs, llvmStructTypeDef(info.name, []string{"i64", "i64"}))
+			typeDefs = append(typeDefs, llvmStructTypeDef(info.name, []string{"i64", info.payloadTyp}))
 		}
 	}
 	return []byte(llvmRenderModuleWithGlobalsAndTypes(g.sourcePath, g.target, typeDefs, g.stringDefs, defs))
@@ -1722,6 +1805,15 @@ func toLLVMParams(params []paramInfo) []*LlvmParam {
 	return out
 }
 
+func zeroLiteral(typ string) string {
+	switch typ {
+	case "double":
+		return "0.0"
+	default:
+		return "0"
+	}
+}
+
 func (g *generator) pushScope() {
 	g.locals = append(g.locals, map[string]value{})
 }
@@ -1765,6 +1857,8 @@ func llvmType(t ast.Type, structs map[string]*structInfo, enums map[string]*enum
 	switch named.Path[0] {
 	case "Int":
 		return "i64", nil
+	case "Float":
+		return "double", nil
 	case "Bool":
 		return "i1", nil
 	case "String":

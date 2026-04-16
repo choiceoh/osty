@@ -9,12 +9,13 @@
 // scalar lets, mutable scalar locals, simple Int/Bool helper functions,
 // statement-position if/else,
 // value-position if/else, simple Bool logical operators, and inclusive/
-// exclusive Int range loops.
+// exclusive Int range loops. This phase also includes the `Float` smoke
+// subset as a `double`-backed subset.
 // Unsupported shapes return ErrUnsupported so callers can fall back to
 // inspectable skeleton IR while the backend grows. The module/function/skeleton
 // renderers, scalar/string/struct/enum instruction builders, LLVM toolchain
 // command plans, executable parity plans, and categorized
 // unsupported/backend-capability diagnostics are generated from
 // examples/selfhost-core/llvmgen.osty so the backend meaning is owned by Osty
-// source.
+// source. `Float32`/`Float64` policy is deferred to a later phase.
 package llvmgen

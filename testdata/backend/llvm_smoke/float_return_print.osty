@@ -1,0 +1,7 @@
+fn value() -> Float {
+    42.0
+}
+
+fn main() {
+    println(value())
+}

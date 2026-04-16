@@ -335,12 +335,27 @@ The initial helper package for this plan is `internal/backend`.
     payload for conservative enum smoke fixtures.
 44. Add payload enum return-boundary smoke. Done in Phase 43: single-`Int`
     payload enum tags and payload extraction can cross helper return values.
-45. Add payload enum parameter-boundary smoke. Done in Phase 44: single-`Int`
-    payload enum values can cross helper parameters and bind payload in
-    `match`.
-46. Add payload enum mutable-local smoke. Done in Phase 45: mutable payload enum
-    slots use whole-value assignment and match-time payload extraction in supported
-    lowering paths.
+45. Add payload enum parameter/mutable-local smoke. Done in Phase 44 for
+    parameter-boundary paths and Phase 45 for mutable-local paths, with
+    payload extraction in `match`.
+46. Add Float literal/printing smoke. Done in Phase 46: `Float` is treated as
+   `double` in this subset.
+47. Add Float arithmetic smoke. Done in Phase 47: `+`, `-`, `*`, `/` on `Float`
+   values are emitted through selfhosted LLVM builders.
+48. Add Float return-boundary smoke. Done in Phase 48: return and call paths for
+   `Float` values.
+49. Add Float parameter-boundary smoke. Done in Phase 49: `Float` value
+   passing across helper parameters.
+50. Add Float mutable-local smoke. Done in Phase 50: mutable `Float` local slot
+   assignment/load paths.
+51. Add Float comparison smoke. Done in Phase 51: value-position `if` on
+   `Float` comparisons.
+52. Add Float struct aggregate smoke. Done in Phase 52: simple struct values
+   carrying `Float` fields.
+53. Add Float payload enum smoke. Done in Phase 53: `Full(Float)` payload enum
+   construction, `match` binding, and print path.
+
+Float/Float32/Float64 policy is intentionally deferred.
 
 The backend subdirectory change should land before the LLVM backend writes any
 files, so LLVM never shares the old Go-only output location.

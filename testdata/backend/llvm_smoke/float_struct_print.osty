@@ -1,0 +1,9 @@
+struct Score {
+    left: Float
+    right: Float
+}
+
+fn main() {
+    let score = Score { left: 20.0, right: 22.0 }
+    println(score.left + score.right)
+}

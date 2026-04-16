@@ -1,0 +1,7 @@
+fn main() {
+    if 40.0 < 42.0 {
+        println(42.0)
+    } else {
+        println(0.0)
+    }
+}
