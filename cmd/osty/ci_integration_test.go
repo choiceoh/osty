@@ -256,6 +256,31 @@ func TestFmtNoRepairLeavesParserStrict(t *testing.T) {
 	}
 }
 
+func TestPipelineDiagnosticsFlagRendersFormattedDiagnostics(t *testing.T) {
+	if testing.Short() {
+		t.Skip("CLI integration test (slow)")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.osty")
+	if err := os.WriteFile(path, []byte("fn main() {\n    missing()\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, code := runOsty(t, dir, "pipeline", "--diagnostics", path)
+	if code != 1 {
+		t.Fatalf("expected exit 1, got %d. output:\n%s", code, out)
+	}
+	if !strings.Contains(out, "diagnostics by code:") {
+		t.Fatalf("missing pipeline report histogram:\n%s", out)
+	}
+	if !strings.Contains(out, "error[E0500]") {
+		t.Fatalf("missing formatted diagnostic code:\n%s", out)
+	}
+	if !strings.Contains(out, "-->") || !strings.Contains(out, "main.osty:2:5") {
+		t.Fatalf("missing formatted source location:\n%s", out)
+	}
+}
+
 func mustWrite(t *testing.T, dir, name, body string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {

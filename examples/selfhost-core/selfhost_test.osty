@@ -1,5 +1,9 @@
 use std.testing
 
+use go "strings" as strings {
+    fn Contains(s: String, substr: String) -> Bool
+}
+
 fn testSemverRequirementMatching() {
     let req = caretReq(stableVersion(1, 2, 3))
     testing.assert(semReqMatches(req, stableVersion(1, 2, 3)))
@@ -188,4 +192,18 @@ fn testSelfhostExamplePipelineCarriesRecoveryIntoIr() {
     testing.assert(report.parseDiagnostics > 0)
     testing.assert(report.irDiagnostics > 0)
     testing.assert(report.lintParseErrors > 0)
+}
+
+fn testSelfhostExamplePipelineRendersAnalyzerDiagnostics() {
+    let source = "fn main() \{\n    let unusedValue = 1\n    missing()\n\}\n"
+    let report = selfhostPipelineSource("main", source)
+
+    testing.assert(report.resolveDiagnostics > 0)
+    testing.assert(report.lintDiagnostics > 0)
+    testing.assert(report.diagnostics != "")
+    testing.assert(selfhostPipelineBlockingErrorCount(report) >= report.resolveDiagnostics)
+    testing.assert(strings.Contains(report.diagnostics, "error[E0500]"))
+    testing.assert(strings.Contains(report.diagnostics, "resolution"))
+    testing.assert(strings.Contains(report.diagnostics, "undefined name `missing`"))
+    testing.assert(strings.Contains(report.diagnostics, "lint[L0001]"))
 }

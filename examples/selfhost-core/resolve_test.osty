@@ -29,6 +29,30 @@ fn testSelfResolverCollectsSymbolsAndReferences() {
     testing.assert(result.refs >= 5)
 }
 
+fn testSelfResolverTracksReferenceNames() {
+    let source = r"""
+            use std.fmt as fmt
+
+            fn main() {
+                fmt.format("{}", [])
+            }
+            """
+    let file = astParse(source)
+    let result = selfResolveSource(source)
+    let mut fmtNode = -1
+    let mut nodeIdx = 0
+    for node in file.arena.nodes {
+        if node.kind == AstNIdent && node.text == "fmt" {
+            fmtNode = nodeIdx
+        }
+        nodeIdx = nodeIdx + 1
+    }
+
+    testing.assertEq(selfResolveDiagnosticCount(result), 0)
+    testing.assert(selfResolveHasRef(result, "fmt"))
+    testing.assert(selfResolveHasRefNode(result, fmtNode))
+}
+
 fn testSelfResolverReportsDuplicatesAndUndefinedNames() {
     let result = selfResolveSource(
         r"""
@@ -45,6 +69,18 @@ fn testSelfResolverReportsDuplicatesAndUndefinedNames() {
     testing.assertEq(result.duplicates, 1)
     testing.assertEq(selfResolveCodeCount(result, "E0501"), 1)
     testing.assertEq(selfResolveCodeCount(result, "E0500"), 2)
+    let mut sawNodeBackedUndefined = false
+    let mut sawNodeBackedDuplicate = false
+    for diag in result.diagnostics {
+        if diag.code == "E0500" && diag.node >= 0 {
+            sawNodeBackedUndefined = true
+        }
+        if diag.code == "E0501" && diag.node >= 0 {
+            sawNodeBackedDuplicate = true
+        }
+    }
+    testing.assert(sawNodeBackedUndefined)
+    testing.assert(sawNodeBackedDuplicate)
 }
 
 fn testSelfResolverTracksLocalDeclarationsInOrder() {

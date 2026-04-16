@@ -47,7 +47,7 @@ fn testSelfLintFindsSimplifiableSelfOperations() {
             fn same(x: Int) -> Bool {
                 let mut y = x
                 y = y
-                x == x
+                x == (x)
             }
             """,
     )
@@ -55,6 +55,73 @@ fn testSelfLintFindsSimplifiableSelfOperations() {
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintCodeCount(report, "L0041"), 1)
     testing.assertEq(selfLintCodeCount(report, "L0042"), 1)
+    let mut nodeBackedSimplifications = 0
+    for diag in report.diagnostics {
+        if (diag.code == "L0041" || diag.code == "L0042") && diag.node >= 0 {
+            nodeBackedSimplifications = nodeBackedSimplifications + 1
+        }
+    }
+    testing.assertEq(nodeBackedSimplifications, 2)
+}
+
+fn testSelfLintAstDoesNotCountFieldNamesAsReads() {
+    let report = selfLintSource(
+        r"""
+            fn build() -> User {
+                let name = 1
+                let user = User { name: "Ada" }
+                user
+            }
+            """,
+    )
+
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0001"), 1)
+}
+
+fn testSelfLintParserStoresUseAliasInAst() {
+    let file = astParse("use std.testing as t\n")
+    let decl = astFileDeclAt(file, 0)
+    let mut aliasIdx = -1
+    for child in decl.children2 {
+        aliasIdx = child
+    }
+    let alias = astArenaNodeAt(file.arena, aliasIdx)
+
+    testing.assertEq(astFileErrorCount(file), 0)
+    testing.assertEq(alias.text, "t")
+}
+
+fn testSelfLintUsesResolvedRefsForImportAliases() {
+    let source = r"""
+            use std.fmt as fmt
+
+            fn main() {
+                fmt.format("{}", [])
+            }
+            """
+    let file = astParse(source)
+    let resolved = selfResolveAstFile(file)
+    let report = selfLintResolvedAstSource(source, file, resolved)
+
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(report.resolveErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0003"), 0)
+}
+
+fn testSelfLintKeepsImportRefsWhenResolverHasOtherErrors() {
+    let source = r"""
+            use std.fmt as fmt
+
+            fn main() {
+                fmt.format("{}", [])
+                missing()
+            }
+            """
+    let report = selfLintSource(source)
+
+    testing.assert(report.resolveErrors >= 1)
+    testing.assertEq(selfLintCodeCount(report, "L0003"), 0)
 }
 
 fn testSelfLintFindsImportMutAndShadowingRules() {

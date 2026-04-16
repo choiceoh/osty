@@ -404,10 +404,12 @@ fn opParseExprBP(p: OstyParser, minBP: Int) -> Int {
             if op.kind == FrontDotDot || op.kind == FrontDotDotEq {
                 let mut rhsIdx = -1
                 if astStartsExpr(opPeek(p).kind) { rhsIdx = opParseExprBP(p, rbp) }
+                let leftNode = astArenaNodeAt(p.arena, left)
                 let mut rangeNode = emptyAstNode(AstNRange)
                 rangeNode.left = left
                 rangeNode.right = rhsIdx
-                rangeNode.start = p.pos
+                rangeNode.start = leftNode.start
+                rangeNode.end = p.pos
                 if op.kind == FrontDotDotEq { rangeNode.flags = 1 }
                 left = opAddNode(p, rangeNode)
                 if astIsNonAssocOp(opPeek(p).kind) && astSameLevel(op.kind, opPeek(p).kind) {
@@ -416,11 +418,13 @@ fn opParseExprBP(p: OstyParser, minBP: Int) -> Int {
                 }
             } else {
                 let rhs = opParseExprBP(p, rbp)
+                let leftNode = astArenaNodeAt(p.arena, left)
                 let mut binNode = emptyAstNode(AstNBinary)
                 binNode.op = op.kind
                 binNode.left = left
                 binNode.right = rhs
-                binNode.start = p.pos
+                binNode.start = leftNode.start
+                binNode.end = p.pos
                 left = opAddNode(p, binNode)
                 if astIsNonAssocOp(op.kind) && astIsNonAssocOp(opPeek(p).kind) && astSameLevel(op.kind, opPeek(p).kind) {
                     opErrorFull(p, "chained comparison operators require parentheses", "", "v0.2 R1: comparison operators are non-associative", "E0200")
@@ -966,28 +970,31 @@ fn opParseStmt(p: OstyParser) -> Int {
     if tok.kind == FrontFor { return opParseForStmt(p) }
     let expr = opParseExpr(p)
     let next = opPeek(p)
-    if next.kind == FrontChanArrow { let s = p.pos
+    if next.kind == FrontChanArrow {
     let _ = opAdvance(p)
     let v = opParseExpr(p)
+    let leftNode = astArenaNodeAt(p.arena, expr)
     let mut n = emptyAstNode(AstNChanSend)
     n.left = expr
     n.right = v
-    n.start = s
+    n.start = leftNode.start
     n.end = p.pos
     return opAddNode(p, n) }
-    if frontIsAssignOp(next.kind) { let s = p.pos
+    if frontIsAssignOp(next.kind) {
     let _ = opAdvance(p)
     let v = opParseExpr(p)
+    let leftNode = astArenaNodeAt(p.arena, expr)
     let mut n = emptyAstNode(AstNAssign)
     n.left = expr
     n.right = v
     n.op = next.kind
-    n.start = s
+    n.start = leftNode.start
     n.end = p.pos
     return opAddNode(p, n) }
+    let exprNode = astArenaNodeAt(p.arena, expr)
     let mut n = emptyAstNode(AstNExprStmt)
     n.left = expr
-    n.start = p.pos
+    n.start = exprNode.start
     n.end = p.pos
     opAddNode(p, n)
 }
@@ -1662,6 +1669,7 @@ fn opParseUseDecl(p: OstyParser) -> Int {
     let mut path: List<String> = []
     let mut isGo = false
     let mut alias = ""
+    let mut aliasStart = -1
     if opAt(p, FrontIdent) && opPeek(p).text == "go" {
         isGo = true
         let _ = opAdvance(p)
@@ -1670,6 +1678,7 @@ fn opParseUseDecl(p: OstyParser) -> Int {
     if !(opEat(p, FrontDot)) { break } } }
     if opAt(p, FrontIdent) && opPeek(p).text == "as" {
         let _ = opAdvance(p)
+        aliasStart = p.pos
         alias = opExpect(p, FrontIdent).text
     }
     let mut goItems: List<Int> = []
@@ -1691,7 +1700,14 @@ fn opParseUseDecl(p: OstyParser) -> Int {
     n.start = start
     n.end = p.pos
     if isGo { n.flags = 1 }
-    if alias != "" { n.op = FrontIdent }
+    if alias != "" {
+        n.op = FrontIdent
+        let mut aliasNode = emptyAstNode(AstNIdent)
+        aliasNode.text = alias
+        aliasNode.start = aliasStart
+        aliasNode.end = aliasStart + 1
+        n.children2 = [opAddNode(p, aliasNode)]
+    }
     opAddNode(p, n)
 }
 

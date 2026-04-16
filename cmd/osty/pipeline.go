@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"runtime/pprof"
 
+	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/pipeline"
 	"github.com/osty/osty/internal/resolve"
 )
@@ -14,6 +15,7 @@ import (
 // runPipeline implements
 //
 //	osty pipeline [--json] [--trace] [--per-decl] [--gen]
+//	              [--diagnostics]
 //	              [--cpuprofile PATH] [--memprofile PATH]
 //	              FILE-OR-DIR
 //
@@ -37,23 +39,25 @@ func runPipeline(args []string) {
 	fs := flag.NewFlagSet("pipeline", flag.ExitOnError)
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr,
-			"usage: osty pipeline [--json] [--trace] [--per-decl] [--gen]")
+			"usage: osty pipeline [--json] [--trace] [--per-decl] [--gen] [--diagnostics]")
 		fmt.Fprintln(os.Stderr,
 			"                     [--cpuprofile PATH] [--memprofile PATH] FILE-OR-DIR")
 	}
 	var (
-		jsonOut    bool
-		trace      bool
-		perDecl    bool
-		runGen     bool
-		cpuProfile string
-		memProfile string
-		baseline   string
+		jsonOut         bool
+		trace           bool
+		perDecl         bool
+		runGen          bool
+		showDiagnostics bool
+		cpuProfile      string
+		memProfile      string
+		baseline        string
 	)
 	fs.BoolVar(&jsonOut, "json", false, "emit machine-readable JSON instead of the text table")
 	fs.BoolVar(&trace, "trace", false, "stream a trace line to stderr as each phase completes")
 	fs.BoolVar(&perDecl, "per-decl", false, "report per-declaration check timing in the output")
 	fs.BoolVar(&runGen, "gen", false, "also run the Go transpiler as a final pipeline phase (file mode)")
+	fs.BoolVar(&showDiagnostics, "diagnostics", false, "render full diagnostics after the pipeline report")
 	fs.StringVar(&cpuProfile, "cpuprofile", "", "write a CPU pprof profile to this path")
 	fs.StringVar(&memProfile, "memprofile", "", "write a memory pprof profile to this path after the pipeline")
 	fs.StringVar(&baseline, "baseline", "", "compare against a previous --json snapshot at this path")
@@ -96,6 +100,8 @@ func runPipeline(args []string) {
 	}
 
 	var r pipeline.Result
+	var sourceForDiagnostics []byte
+	diagnosticFilename := target
 	if info.IsDir() {
 		// Workspace vs single-package detection mirrors what `osty
 		// check DIR` does: a workspace root has no top-level .osty
@@ -116,6 +122,7 @@ func runPipeline(args []string) {
 			fmt.Fprintf(os.Stderr, "osty pipeline: %v\n", err)
 			os.Exit(1)
 		}
+		sourceForDiagnostics = src
 		r = pipeline.RunWithConfig(src, stream, cfg)
 	}
 
@@ -154,6 +161,12 @@ func runPipeline(args []string) {
 		}
 	} else {
 		r.RenderText(os.Stdout)
+	}
+
+	if showDiagnostics && len(r.AllDiags) > 0 {
+		formatter := &diag.Formatter{Filename: diagnosticFilename, Source: sourceForDiagnostics}
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, formatter.FormatAll(r.AllDiags))
 	}
 
 	// Memory profile after the pipeline finishes. Force a GC first so
