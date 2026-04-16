@@ -131,6 +131,7 @@ func TestLLVMBackendEmitBinaryBuildsBundledRuntime(t *testing.T) {
 		"osty_rt_list_new",
 		"osty_rt_strings_Equal",
 		"osty.gc.root_bind_v1",
+		"osty_gc_debug_collect",
 	} {
 		if !strings.Contains(string(content), want) {
 			t.Fatalf("bundled runtime source missing %q", want)
