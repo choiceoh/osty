@@ -216,6 +216,14 @@ func (g *generator) render(defs []string) []byte {
 			typeDefs = append(typeDefs, llvmStructTypeDef(strings.TrimPrefix(info.typ, "%"), []string{"i64", info.okTyp, info.errTyp}))
 		}
 	}
+	// Phase 6a: interface fat-pointer type + per (impl, interface) vtable
+	// globals are emitted only when at least one interface has
+	// implementations — avoiding LLVM IR noise in modules that don't use
+	// interfaces at all.
+	if vtableDefs, vtableTypeDef := g.renderInterfaceVtables(); vtableTypeDef != "" {
+		typeDefs = append(typeDefs, vtableTypeDef)
+		allDefs = append(allDefs, vtableDefs...)
+	}
 	runtimeDecls := g.runtimeDeclarationIR()
 	if g.needsGCRuntime {
 		runtimeDecls = append(llvmGcRuntimeDeclarations(), runtimeDecls...)
@@ -224,6 +232,78 @@ func (g *generator) render(defs []string) []byte {
 		return []byte(llvmRenderModuleWithRuntimeDeclarations(g.sourcePath, g.target, typeDefs, g.stringDefs, runtimeDecls, allDefs))
 	}
 	return []byte(llvmRenderModuleWithGlobalsAndTypes(g.sourcePath, g.target, typeDefs, g.stringDefs, allDefs))
+}
+
+// renderInterfaceVtables builds the LLVM IR for the interface
+// fat-pointer type (`%osty.iface`) plus one `constant [N x ptr]`
+// global per (implementer, interface) pair discovered during
+// declaration collection.
+//
+// Returns (defs, typeDef) where typeDef is empty when no vtable is
+// needed (no interfaces, or no implementations of any interface).
+// Phase 6a scope: the globals are emitted and addressable via
+// `@osty.vtable.<impl>__<iface>`, but no boxing or dispatch path
+// consumes them yet — that lands in subsequent phases.
+func (g *generator) renderInterfaceVtables() ([]string, string) {
+	if len(g.interfacesByName) == 0 {
+		return nil, ""
+	}
+	// Stable iteration over interfaces for deterministic IR output.
+	ifaceNames := make([]string, 0, len(g.interfacesByName))
+	for name := range g.interfacesByName {
+		ifaceNames = append(ifaceNames, name)
+	}
+	sort.Strings(ifaceNames)
+	var defs []string
+	haveAny := false
+	for _, ifaceName := range ifaceNames {
+		iface := g.interfacesByName[ifaceName]
+		if iface == nil || len(iface.impls) == 0 {
+			continue
+		}
+		haveAny = true
+		for _, impl := range iface.impls {
+			methodsByName := g.methods[g.ownerTypeFor(impl)]
+			slots := make([]string, 0, len(iface.methods))
+			for _, m := range iface.methods {
+				sig := methodsByName[m.name]
+				if sig == nil {
+					slots = append(slots, "ptr null")
+					continue
+				}
+				slots = append(slots, fmt.Sprintf("ptr @%s", sig.irName))
+			}
+			defs = append(defs, fmt.Sprintf(
+				"%s = constant [%d x ptr] [%s]",
+				impl.vtableSym,
+				len(iface.methods),
+				strings.Join(slots, ", "),
+			))
+		}
+	}
+	if !haveAny {
+		return nil, ""
+	}
+	typeDef := "%osty.iface = type { ptr, ptr }"
+	return defs, typeDef
+}
+
+// ownerTypeFor returns the LLVM IR type symbol (`%Name`) a given
+// interface implementation refers to. Struct implementations carry the
+// struct's LLVM type name; enum implementations carry the enum's
+// tag/payload struct name.
+func (g *generator) ownerTypeFor(impl interfaceImpl) string {
+	switch impl.kind {
+	case 0:
+		if info := g.structsByName[impl.implName]; info != nil {
+			return info.typ
+		}
+	case 1:
+		if info := g.enumsByName[impl.implName]; info != nil {
+			return info.typ
+		}
+	}
+	return ""
 }
 
 func (g *generator) runtimeDeclarationIR() []string {

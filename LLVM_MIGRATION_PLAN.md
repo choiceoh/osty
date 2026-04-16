@@ -285,10 +285,17 @@ artifact/cache layout 정책은 [`LLVM_ARTIFACT_LAYOUT.md`](./LLVM_ARTIFACT_LAYO
     struct/enum과 동일한 `_ZTS` 나미널 트랙을 interface에도 확장,
     `requestInterfaceType` + `emitInterfaceSpecialization`로 type queue에
     편입. Interface-as-value vtable dispatch 경로는 별도 스코프.
+  - Phase 6a(interface vtable scaffold)는 llvmgen 렌더러에서 구조만
+    갖춘다: `%osty.iface = type { ptr, ptr }` fat-pointer 타입과
+    structural match 기반으로 발견된 (impl, interface) 쌍마다
+    `@osty.vtable.<impl>__<iface>` 상수 global을 emit. Boxing과
+    method dispatch 경로는 Phase 6b+로 보류
+    (smoke: `TestGenerateModuleInterfaceVtableEmitted`).
   - 남은 범위: bare function-pointer turbofish (`let f = id::<Int>`),
-    interface value의 vtable dispatch, payload-free / 비-리터럴 인자를
-    가진 variant call의 타입 복원(궁극적으로는 checker 쪽 generic
-    variant-constructor inference 보강).
+    interface value의 boxing + vtable dispatch (Phase 6b+),
+    payload-free / 비-리터럴 인자를 가진 variant call의 타입
+    복원(궁극적으로는 checker 쪽 generic variant-constructor inference
+    보강).
 - workspace/dependency graph를 codegen/link order로 변환한다.
 - `use go` FFI는 LLVM backend에서 그대로 지원하기 어렵기 때문에 새 FFI 정책을
   정한다.
