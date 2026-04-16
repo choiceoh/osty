@@ -285,7 +285,9 @@ type generator struct {
 	body         []string
 	locals       []map[string]value
 	returnType   string
+	returnListElemTyp string
 	currentBlock string
+	blockOpen    bool
 
 	needsGCRuntime bool
 	gcRootSlots    []value
@@ -828,10 +830,12 @@ func (g *generator) emitScriptMain(stmts []ast.Stmt) (string, error) {
 	if err := g.emitBlock(stmts); err != nil {
 		return "", err
 	}
-	emitter := g.toOstyEmitter()
-	g.releaseGCRoots(emitter)
-	llvmReturnI32Zero(emitter)
-	g.takeOstyEmitter(emitter)
+	if g.blockOpen {
+		emitter := g.toOstyEmitter()
+		g.releaseGCRoots(emitter)
+		llvmReturnI32Zero(emitter)
+		g.takeOstyEmitter(emitter)
+	}
 	return g.renderFunction("i32", "main", nil), nil
 }
 
@@ -840,16 +844,19 @@ func (g *generator) emitMainFunction(sig *fnSig) (string, error) {
 	if err := g.emitBlock(sig.decl.Body.Stmts); err != nil {
 		return "", err
 	}
-	emitter := g.toOstyEmitter()
-	g.releaseGCRoots(emitter)
-	llvmReturnI32Zero(emitter)
-	g.takeOstyEmitter(emitter)
+	if g.blockOpen {
+		emitter := g.toOstyEmitter()
+		g.releaseGCRoots(emitter)
+		llvmReturnI32Zero(emitter)
+		g.takeOstyEmitter(emitter)
+	}
 	return g.renderFunction("i32", "main", nil), nil
 }
 
 func (g *generator) emitUserFunction(sig *fnSig) (string, error) {
 	g.beginFunction()
 	g.returnType = sig.ret
+	g.returnListElemTyp = sig.retListElemTyp
 	for _, p := range sig.params {
 		v := value{typ: p.typ, ref: "%" + p.name, listElemTyp: p.listElemTyp}
 		if p.listElemTyp != "" {
@@ -862,10 +869,12 @@ func (g *generator) emitUserFunction(sig *fnSig) (string, error) {
 		if err := g.emitBlock(sig.decl.Body.Stmts); err != nil {
 			return "", err
 		}
-		emitter := g.toOstyEmitter()
-		g.releaseGCRoots(emitter)
-		emitter.body = append(emitter.body, "  ret void")
-		g.takeOstyEmitter(emitter)
+		if g.blockOpen {
+			emitter := g.toOstyEmitter()
+			g.releaseGCRoots(emitter)
+			emitter.body = append(emitter.body, "  ret void")
+			g.takeOstyEmitter(emitter)
+		}
 	} else {
 		if err := g.emitReturningBlock(sig.decl.Body.Stmts, sig.ret, sig.retListElemTyp); err != nil {
 			return "", err
@@ -880,11 +889,13 @@ func (g *generator) beginFunction() {
 	g.body = nil
 	g.locals = []map[string]value{{}}
 	g.returnType = ""
+	g.returnListElemTyp = ""
 	g.gcRootSlots = nil
 	g.gcRootMarks = []int{0}
 	g.nextSafepoint = 1
 	g.hiddenLocalID = 0
 	g.currentBlock = "entry"
+	g.blockOpen = true
 }
 
 func (g *generator) bindGCRootIfManagedPointer(emitter *LlvmEmitter, slot value) {
@@ -952,6 +963,9 @@ func (g *generator) emitReturningBlock(stmts []ast.Stmt, retType, retListElemTyp
 			if err := g.emitStmt(stmt); err != nil {
 				return err
 			}
+			if !g.blockOpen {
+				return nil
+			}
 			continue
 		}
 		switch s := stmt.(type) {
@@ -970,6 +984,7 @@ func (g *generator) emitReturningBlock(stmts []ast.Stmt, retType, retListElemTyp
 			g.releaseGCRoots(emitter)
 			llvmReturn(emitter, toOstyValue(v))
 			g.takeOstyEmitter(emitter)
+			g.blockOpen = false
 			return nil
 		case *ast.ExprStmt:
 			v, err := g.emitExprWithListHint(s.X, retListElemTyp)
@@ -983,6 +998,7 @@ func (g *generator) emitReturningBlock(stmts []ast.Stmt, retType, retListElemTyp
 			g.releaseGCRoots(emitter)
 			llvmReturn(emitter, toOstyValue(v))
 			g.takeOstyEmitter(emitter)
+			g.blockOpen = false
 			return nil
 		default:
 			return unsupportedf("statement", "final function statement %T", stmt)
@@ -993,6 +1009,9 @@ func (g *generator) emitReturningBlock(stmts []ast.Stmt, retType, retListElemTyp
 
 func (g *generator) emitBlock(stmts []ast.Stmt) error {
 	for _, stmt := range stmts {
+		if !g.blockOpen {
+			return nil
+		}
 		if err := g.emitStmt(stmt); err != nil {
 			return err
 		}
@@ -1012,6 +1031,8 @@ func (g *generator) emitStmt(stmt ast.Stmt) error {
 		return g.emitAssign(s)
 	case *ast.ForStmt:
 		return g.emitFor(s)
+	case *ast.ReturnStmt:
+		return g.emitReturn(s)
 	case *ast.ExprStmt:
 		if ifExpr, ok := s.X.(*ast.IfExpr); ok {
 			return g.emitIfStmt(ifExpr)
@@ -1122,6 +1143,8 @@ func (g *generator) emitFor(stmt *ast.ForStmt) error {
 	emitter := g.toOstyEmitter()
 	loop := llvmRangeStart(emitter, iterName, toOstyValue(start), toOstyValue(stop), rng.Inclusive)
 	g.takeOstyEmitter(emitter)
+	g.currentBlock = loop.bodyLabel
+	g.blockOpen = true
 	g.pushScope()
 	g.bindLocal(iterName, value{typ: "i64", ref: loop.current})
 	if err := g.emitBlock(stmt.Body.Stmts); err != nil {
@@ -1130,9 +1153,17 @@ func (g *generator) emitFor(stmt *ast.ForStmt) error {
 	}
 	g.popScope()
 	emitter = g.toOstyEmitter()
-	g.emitGCSafepoint(emitter)
-	llvmRangeEnd(emitter, loop)
+	if g.blockOpen {
+		g.emitGCSafepoint(emitter)
+		next := llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = add i64 %s, 1", next, loop.current))
+		emitter.body = append(emitter.body, fmt.Sprintf("  store i64 %s, ptr %s", next, loop.iterPtr))
+		emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", loop.condLabel))
+	}
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", loop.endLabel))
 	g.takeOstyEmitter(emitter)
+	g.currentBlock = loop.endLabel
+	g.blockOpen = true
 	return nil
 }
 
@@ -1182,10 +1213,50 @@ func (g *generator) emitForLet(stmt *ast.ForStmt) error {
 	g.popScope()
 
 	emitter = g.toOstyEmitter()
-	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", condLabel))
+	if g.blockOpen {
+		emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", condLabel))
+	}
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
 	g.takeOstyEmitter(emitter)
 	g.currentBlock = endLabel
+	g.blockOpen = true
+	return nil
+}
+
+func (g *generator) emitReturn(stmt *ast.ReturnStmt) error {
+	if stmt == nil {
+		return unsupported("statement", "nil return")
+	}
+	var ret value
+	var err error
+	switch {
+	case stmt.Value == nil:
+		if g.returnType != "" && g.returnType != "void" {
+			return unsupported("function-signature", "bare return in value-returning function")
+		}
+	case g.returnType == "" || g.returnType == "void":
+		return unsupported("function-signature", "return with value in void-returning function")
+	default:
+		ret, err = g.emitExprWithListHint(stmt.Value, g.returnListElemTyp)
+		if err != nil {
+			return err
+		}
+		if ret.typ != g.returnType {
+			return unsupportedf("type-system", "return type %s, want %s", ret.typ, g.returnType)
+		}
+	}
+	emitter := g.toOstyEmitter()
+	g.releaseGCRoots(emitter)
+	switch {
+	case stmt.Value == nil && g.returnType == "":
+		llvmReturnI32Zero(emitter)
+	case stmt.Value == nil && g.returnType == "void":
+		emitter.body = append(emitter.body, "  ret void")
+	default:
+		llvmReturn(emitter, toOstyValue(ret))
+	}
+	g.takeOstyEmitter(emitter)
+	g.blockOpen = false
 	return nil
 }
 
@@ -1371,25 +1442,42 @@ func (g *generator) emitIfStmt(expr *ast.IfExpr) error {
 	labels := llvmIfStart(emitter, toOstyValue(cond))
 	g.takeOstyEmitter(emitter)
 	g.currentBlock = labels.thenLabel
+	g.blockOpen = true
 	g.pushScope()
 	if err := g.emitBlock(expr.Then.Stmts); err != nil {
 		g.popScope()
 		return err
 	}
 	g.popScope()
+	thenOpen := g.blockOpen
 	emitter = g.toOstyEmitter()
-	llvmIfElse(emitter, labels)
+	if thenOpen {
+		emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", labels.endLabel))
+	}
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", labels.elseLabel))
 	g.takeOstyEmitter(emitter)
 	g.currentBlock = labels.elseLabel
+	g.blockOpen = true
 	if expr.Else != nil {
 		if err := g.emitElse(expr.Else); err != nil {
 			return err
 		}
 	}
+	elseOpen := g.blockOpen
 	emitter = g.toOstyEmitter()
-	llvmIfEnd(emitter, labels)
+	if elseOpen {
+		emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", labels.endLabel))
+	}
+	if thenOpen || elseOpen {
+		emitter.body = append(emitter.body, fmt.Sprintf("%s:", labels.endLabel))
+	}
 	g.takeOstyEmitter(emitter)
-	g.currentBlock = labels.endLabel
+	if thenOpen || elseOpen {
+		g.currentBlock = labels.endLabel
+		g.blockOpen = true
+	} else {
+		g.blockOpen = false
+	}
 	return nil
 }
 
@@ -1409,6 +1497,7 @@ func (g *generator) emitIfLetStmt(expr *ast.IfExpr) error {
 	labels := llvmIfStart(emitter, cond)
 	g.takeOstyEmitter(emitter)
 	g.currentBlock = labels.thenLabel
+	g.blockOpen = true
 	g.pushScope()
 	if bind != nil {
 		if err := bind(); err != nil {
@@ -1421,19 +1510,35 @@ func (g *generator) emitIfLetStmt(expr *ast.IfExpr) error {
 		return err
 	}
 	g.popScope()
+	thenOpen := g.blockOpen
 	emitter = g.toOstyEmitter()
-	llvmIfElse(emitter, labels)
+	if thenOpen {
+		emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", labels.endLabel))
+	}
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", labels.elseLabel))
 	g.takeOstyEmitter(emitter)
 	g.currentBlock = labels.elseLabel
+	g.blockOpen = true
 	if expr.Else != nil {
 		if err := g.emitElse(expr.Else); err != nil {
 			return err
 		}
 	}
+	elseOpen := g.blockOpen
 	emitter = g.toOstyEmitter()
-	llvmIfEnd(emitter, labels)
+	if elseOpen {
+		emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", labels.endLabel))
+	}
+	if thenOpen || elseOpen {
+		emitter.body = append(emitter.body, fmt.Sprintf("%s:", labels.endLabel))
+	}
 	g.takeOstyEmitter(emitter)
-	g.currentBlock = labels.endLabel
+	if thenOpen || elseOpen {
+		g.currentBlock = labels.endLabel
+		g.blockOpen = true
+	} else {
+		g.blockOpen = false
+	}
 	return nil
 }
 
@@ -2542,6 +2647,8 @@ func (g *generator) emitListFor(stmt *ast.ForStmt, iterName, elemTyp string) err
 	lenValue := llvmCall(emitter, "i64", listRuntimeLenSymbol(), []*LlvmValue{toOstyValue(iterableValue)})
 	loop := llvmRangeStart(emitter, iterName+"_idx", llvmIntLiteral(0), lenValue, false)
 	g.takeOstyEmitter(emitter)
+	g.currentBlock = loop.bodyLabel
+	g.blockOpen = true
 	g.pushScope()
 	iterableValue, err = g.loadIfPointer(iterable)
 	if err != nil {
@@ -2558,9 +2665,17 @@ func (g *generator) emitListFor(stmt *ast.ForStmt, iterName, elemTyp string) err
 	}
 	g.popScope()
 	emitter = g.toOstyEmitter()
-	g.emitGCSafepoint(emitter)
-	llvmRangeEnd(emitter, loop)
+	if g.blockOpen {
+		g.emitGCSafepoint(emitter)
+		next := llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = add i64 %s, 1", next, loop.current))
+		emitter.body = append(emitter.body, fmt.Sprintf("  store i64 %s, ptr %s", next, loop.iterPtr))
+		emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", loop.condLabel))
+	}
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", loop.endLabel))
 	g.takeOstyEmitter(emitter)
+	g.currentBlock = loop.endLabel
+	g.blockOpen = true
 	return nil
 }
 
@@ -3190,11 +3305,13 @@ func (g *generator) popScope() {
 		g.gcRootMarks = g.gcRootMarks[:len(g.gcRootMarks)-1]
 	}
 	if mark < len(g.gcRootSlots) {
-		emitter := g.toOstyEmitter()
-		for i := len(g.gcRootSlots) - 1; i >= mark; i-- {
-			llvmGcRootRelease(emitter, toOstyValue(g.gcRootSlots[i]))
+		if g.blockOpen {
+			emitter := g.toOstyEmitter()
+			for i := len(g.gcRootSlots) - 1; i >= mark; i-- {
+				llvmGcRootRelease(emitter, toOstyValue(g.gcRootSlots[i]))
+			}
+			g.takeOstyEmitter(emitter)
 		}
-		g.takeOstyEmitter(emitter)
 		g.gcRootSlots = g.gcRootSlots[:mark]
 	}
 	g.locals = g.locals[:len(g.locals)-1]
