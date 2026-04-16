@@ -61,6 +61,30 @@ fn demoStd() -> String {
 	}
 }
 
+func TestMergeFilesNormalizesWhileLoopsForBootstrap(t *testing.T) {
+	root := t.TempDir()
+	writeBundleFile(t, root, "while_loop.osty", `fn countdown(n: Int) -> Int {
+    let mut cur = n
+    while cur > 0 {
+        cur = cur - 1
+    }
+    cur
+}
+`)
+
+	merged, err := MergeFiles(root, []string{"while_loop.osty"})
+	if err != nil {
+		t.Fatalf("MergeFiles() error = %v", err)
+	}
+	got := string(merged)
+	if strings.Contains(got, "while cur > 0 {") {
+		t.Fatalf("merged source kept while loop sugar:\n%s", got)
+	}
+	if !strings.Contains(got, "for cur > 0 {") {
+		t.Fatalf("merged source missing bootstrap for-loop rewrite:\n%s", got)
+	}
+}
+
 func writeBundleFile(t *testing.T, root, rel, contents string) {
 	t.Helper()
 	path := filepath.Join(root, rel)

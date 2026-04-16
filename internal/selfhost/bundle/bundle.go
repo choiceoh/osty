@@ -90,6 +90,7 @@ func MergeFiles(root string, files []string) ([]byte, error) {
 		b.WriteString(" ----\n")
 		trimmed := stripLeadingStringsUse(string(data))
 		trimmed = normalizeStdStringsCalls(trimmed)
+		trimmed = normalizeWhileLoops(trimmed)
 		b.WriteString(trimmed)
 		if !strings.HasSuffix(trimmed, "\n") {
 			b.WriteByte('\n')
@@ -141,4 +142,22 @@ func normalizeStdStringsCalls(src string) string {
 		src = strings.ReplaceAll(src, pair[0], pair[1])
 	}
 	return src
+}
+
+// normalizeWhileLoops lowers checker-side `while cond { ... }` sugar to the
+// bootstrap parser's existing `for cond { ... }` surface.
+func normalizeWhileLoops(src string) string {
+	lines := strings.SplitAfter(src, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "while ") || !strings.HasSuffix(trimmed, "{") {
+			continue
+		}
+		idx := strings.Index(line, "while ")
+		if idx < 0 {
+			continue
+		}
+		lines[i] = line[:idx] + "for " + line[idx+len("while "):]
+	}
+	return strings.Join(lines, "")
 }
