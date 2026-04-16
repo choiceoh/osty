@@ -81,7 +81,11 @@ func llvmRuntimeABIType(t ast.Type, env typeEnv) (string, error) {
 				enumType = info.typ
 			}
 			if env.interfaces[name] != nil {
-				return "ptr", nil
+				// Phase 6b: interface values are `%osty.iface` fat
+				// pointers (data ptr + vtable ptr). At the runtime-ABI
+				// boundary they're passed by value just like any other
+				// aggregate.
+				return "%osty.iface", nil
 			}
 		}
 		return llvmRuntimeAbiNamedType(name, len(tt.Path), len(tt.Args), structType, enumType), nil
@@ -724,7 +728,10 @@ func llvmType(t ast.Type, env typeEnv) (string, error) {
 				enumType = info.typ
 			}
 			if env.interfaces[name] != nil {
-				return "ptr", nil
+				// Phase 6b: interface values carry a `{data, vtable}`
+				// fat pointer laid out as `%osty.iface` (see
+				// renderInterfaceVtables in generator.go).
+				return "%osty.iface", nil
 			}
 		}
 		if typ := llvmNamedType(name, len(tt.Path), len(tt.Args), structType, enumType); typ != "" {
