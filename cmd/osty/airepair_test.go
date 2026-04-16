@@ -106,6 +106,9 @@ func TestUsageOutputUsesCanonicalAIRepairNames(t *testing.T) {
 		if !strings.Contains(got.stderr, "osty airepair triage DIR") {
 			t.Fatalf("stderr = %q, want airepair triage command in usage", got.stderr)
 		}
+		if !strings.Contains(got.stderr, "osty airepair learn DIR") {
+			t.Fatalf("stderr = %q, want airepair learn command in usage", got.stderr)
+		}
 		if !strings.Contains(got.stderr, "osty airepair promote CASE") {
 			t.Fatalf("stderr = %q, want airepair promote command in usage", got.stderr)
 		}
@@ -130,6 +133,9 @@ func TestUsageOutputUsesCanonicalAIRepairNames(t *testing.T) {
 		}
 		if !strings.Contains(got.stderr, "osty airepair triage [--top N] DIR") {
 			t.Fatalf("stderr = %q, want canonical airepair triage usage", got.stderr)
+		}
+		if !strings.Contains(got.stderr, "osty airepair learn [--top N] [--corpus DIR] [--json] DIR") {
+			t.Fatalf("stderr = %q, want canonical airepair learn usage", got.stderr)
 		}
 		if !strings.Contains(got.stderr, "osty airepair promote [--dest DIR] [--name NAME] CASE") {
 			t.Fatalf("stderr = %q, want canonical airepair promote usage", got.stderr)
@@ -407,10 +413,97 @@ func TestAIRepairTriageSummarizesCapturedReports(t *testing.T) {
 		"E0700",
 		"foreign_function_keyword -> E0700",
 		"foreign_fn_tuple_index_case",
+		"learning priorities:",
+		"action=promote_and_fix_check",
 	} {
 		if !strings.Contains(got.stdout, want) {
 			t.Fatalf("triage stdout missing %q\nstdout:\n%s", want, got.stdout)
 		}
+	}
+}
+
+func TestAIRepairLearnJSONRanksCoveredResidualPriority(t *testing.T) {
+	captureDir := filepath.Join(t.TempDir(), "captures")
+	corpusDir := filepath.Join(t.TempDir(), "corpus")
+
+	captured := runOstyCLIWithInput(t,
+		"func main() {\n    let pair = (1, 2)\n    let first = pair[0]\n    println(first)\n}\n",
+		"airepair",
+		"--json",
+		"--capture-dir", captureDir,
+		"--capture-name", "foreign_fn_tuple_index_case",
+		"-")
+	if captured.exit != 0 {
+		t.Fatalf("capture residual exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", captured.exit, captured.stdout, captured.stderr)
+	}
+
+	if err := os.MkdirAll(corpusDir, 0o755); err != nil {
+		t.Fatalf("mkdir corpus: %v", err)
+	}
+	inputBytes, err := os.ReadFile(filepath.Join(captureDir, "foreign_fn_tuple_index_case.input.osty"))
+	if err != nil {
+		t.Fatalf("read captured input: %v", err)
+	}
+	expectedBytes, err := os.ReadFile(filepath.Join(captureDir, "foreign_fn_tuple_index_case.expected.osty"))
+	if err != nil {
+		t.Fatalf("read captured expected: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(corpusDir, "foreign_fn_tuple_index_case.input.osty"), inputBytes, 0o644); err != nil {
+		t.Fatalf("write corpus input: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(corpusDir, "foreign_fn_tuple_index_case.expected.osty"), expectedBytes, 0o644); err != nil {
+		t.Fatalf("write corpus expected: %v", err)
+	}
+
+	got := runOstyCLI(t, "airepair", "learn", "--json", "--corpus", corpusDir, captureDir)
+	if got.exit != 0 {
+		t.Fatalf("airepair learn exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
+	}
+	if strings.TrimSpace(got.stderr) != "" {
+		t.Fatalf("learn stderr = %q, want empty stderr", got.stderr)
+	}
+
+	var report struct {
+		CapturedCases int `json:"captured_cases"`
+		ResidualCases int `json:"residual_cases"`
+		Priorities    []struct {
+			Key                 string `json:"key"`
+			Stage               string `json:"stage"`
+			Cases               int    `json:"cases"`
+			CoveredByCorpus     bool   `json:"covered_by_corpus"`
+			RepresentativeCase  string `json:"representative_case"`
+			CorpusCase          string `json:"corpus_case"`
+			SuggestedAction     string `json:"suggested_action"`
+			SuggestedCorpusName string `json:"suggested_corpus_name"`
+		} `json:"priorities"`
+	}
+	if err := json.Unmarshal([]byte(got.stdout), &report); err != nil {
+		t.Fatalf("decode learn report: %v\nstdout:\n%s", err, got.stdout)
+	}
+	if report.CapturedCases != 1 || report.ResidualCases != 1 {
+		t.Fatalf("counts = captured:%d residual:%d, want 1/1", report.CapturedCases, report.ResidualCases)
+	}
+	if len(report.Priorities) != 1 {
+		t.Fatalf("len(priorities) = %d, want 1", len(report.Priorities))
+	}
+	priority := report.Priorities[0]
+	if got, want := priority.Key, "foreign_function_keyword -> E0700"; got != want {
+		t.Fatalf("priority key = %q, want %q", got, want)
+	}
+	if got, want := priority.Stage, "check"; got != want {
+		t.Fatalf("priority stage = %q, want %q", got, want)
+	}
+	if !priority.CoveredByCorpus {
+		t.Fatal("covered_by_corpus = false, want true")
+	}
+	if got, want := priority.CorpusCase, "foreign_fn_tuple_index_case"; got != want {
+		t.Fatalf("corpus_case = %q, want %q", got, want)
+	}
+	if got, want := priority.SuggestedAction, "fix_repeated_check"; got != want {
+		t.Fatalf("suggested_action = %q, want %q", got, want)
+	}
+	if got, want := priority.SuggestedCorpusName, "foreign_fn_tuple_index_case"; got != want {
+		t.Fatalf("suggested_corpus_name = %q, want %q", got, want)
 	}
 }
 

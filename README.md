@@ -284,6 +284,7 @@ Legacy alias: `osty repair`
 - `--capture-name NAME` — basename to use for captured airepair artifacts
 - `--capture-if residual|changed|always` — capture only residual cases by default, or widen to changed/all cases
 - `triage DIR` — summarize captured `.report.json` files by status, source habit, and residual diagnostic code
+- `learn DIR` — rank captured residual patterns into next-work priorities, with corpus coverage awareness
 - `promote CASE` — copy a captured case into `internal/airepair/testdata/corpus/` (override with `--dest DIR` or `--name NAME`)
 - `--stdin-name NAME` — filename to use in reports when reading from stdin via `-`
 - `--mode auto|rewrite|parse|frontend` — debug acceptance mode; `auto` is the default best-effort mode and should usually be left alone
@@ -295,6 +296,8 @@ For failure collection, `osty airepair --json --capture-dir tmp/airepair-cases -
 writes corpus-style artifacts only when airepair still leaves residual diagnostics.
 
 For quick triage, `osty airepair triage tmp/airepair-cases`
+
+For an agent-friendly ranked backlog, `osty airepair learn --json tmp/airepair-cases`
 
 To promote one captured case into the checked-in corpus, `osty airepair promote tmp/airepair-cases/foreign_fn_tuple_index_case`
 

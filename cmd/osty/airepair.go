@@ -22,6 +22,8 @@ func runAIRepairMain(args []string, stdin io.Reader, stdout, stderr io.Writer) i
 		switch args[0] {
 		case "triage":
 			return runAIRepairTriageMain(args[1:], stdout, stderr)
+		case "learn":
+			return runAIRepairLearnMain(args[1:], stdout, stderr)
 		case "promote":
 			return runAIRepairPromoteMain(args[1:], stdout, stderr)
 		}
@@ -31,6 +33,7 @@ func runAIRepairMain(args []string, stdin io.Reader, stdout, stderr io.Writer) i
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, "usage: osty airepair [--check] [--write] [--json] [--capture-dir DIR] [--capture-name NAME] [--capture-if residual|changed|always] [--stdin-name NAME] [--mode auto|rewrite|parse|frontend] FILE|-")
 		fmt.Fprintln(stderr, "       osty airepair triage [--top N] DIR")
+		fmt.Fprintln(stderr, "       osty airepair learn [--top N] [--corpus DIR] [--json] DIR")
 		fmt.Fprintln(stderr, "       osty airepair promote [--dest DIR] [--name NAME] CASE")
 	}
 	var checkMode, writeMode, jsonMode bool
