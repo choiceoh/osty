@@ -79,6 +79,7 @@ type Result struct {
 type Report struct {
 	Filename          string             `json:"filename"`
 	Mode              Mode               `json:"mode"`
+	Status            ReportStatus       `json:"status"`
 	Changed           bool               `json:"changed"`
 	Improved          bool               `json:"improved"`
 	Accepted          bool               `json:"accepted"`
@@ -86,6 +87,7 @@ type Report struct {
 	Skipped           int                `json:"skipped"`
 	Changes           []repair.Change    `json:"changes"`
 	ChangeDetails     []ReportChange     `json:"change_details"`
+	Summary           ReportSummary      `json:"summary"`
 	Before            ProbeStats         `json:"before"`
 	After             ProbeStats         `json:"after"`
 	DiagnosticsBefore []*diag.Diagnostic `json:"diagnostics_before"`
@@ -180,6 +182,7 @@ func (r Result) JSONReport() Report {
 	return Report{
 		Filename:          r.Filename,
 		Mode:              r.Mode,
+		Status:            r.ReportStatus(),
 		Changed:           r.Changed,
 		Improved:          r.Improved,
 		Accepted:          r.Accepted,
@@ -187,6 +190,7 @@ func (r Result) JSONReport() Report {
 		Skipped:           r.Repair.Skipped,
 		Changes:           append([]repair.Change(nil), r.Repair.Changes...),
 		ChangeDetails:     details,
+		Summary:           r.ReportSummary(),
 		Before:            r.Before,
 		After:             r.After,
 		DiagnosticsBefore: append([]*diag.Diagnostic(nil), r.DiagnosticsBefore...),
