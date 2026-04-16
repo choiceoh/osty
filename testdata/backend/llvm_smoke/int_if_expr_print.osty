@@ -1,0 +1,11 @@
+fn pick(flag: Bool) -> Int {
+    if flag {
+        42
+    } else {
+        0
+    }
+}
+
+fn main() {
+    println(pick(true))
+}
