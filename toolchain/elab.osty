@@ -1557,11 +1557,23 @@ fn elabInferMatch(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
         armIdx = armIdx + 1
     }
 
-    // Basic exhaustiveness: if scrutinee is Bool, require arms to
-    // cover `true` and `false` (or a catch-all); if an enum, require
-    // all variants be covered. Skip when we already emitted a
-    // pattern-shape mismatch.
-    checkExhaustivenessSimple(cx, node, scrutTy)
+    // Phase 2 dispatch: Maranget usefulness handles Bool, closed
+    // enums (nested payloads included), and tuples; other shapes fall
+    // back to the Phase 1 top-level logic.
+    let pmOut = pmCheckMatch(cx, node, scrutTy)
+    if pmOut.handled {
+        if !pmOut.exhaustive {
+            cx.env.diagnostics.push(diagNonExhaustiveMatch(pmOut.witness, node.start, node.end))
+        }
+        for armPos in pmOut.unreachable {
+            let armIdx = checkIntListAt(node.children, armPos)
+            let arm = astArenaNodeAt(cx.ast.arena, armIdx)
+            cx.env.diagnostics.push(diagUnreachablePattern(arm.start, arm.end))
+        }
+    } else {
+        exhaustCheckMatch(cx, node, scrutTy)
+        reachCheckArms(cx, node, scrutTy)
+    }
 
     let coreIdx = coreMatch(cx.core, scrutinee.node, armNodes, resultTy, node.start, node.end)
     ElabResult { node: coreIdx, ty: resultTy }
@@ -1670,24 +1682,75 @@ pub fn elabPattern(cx: ElabCx, idx: Int, scrutTy: Int) -> Int {
         return corePatBinding(cx.core, name, inner, false, scrutTy, node.start, node.end)
     }
 
+    if kind == "or" {
+        return elabOrPattern(cx, node, scrutTy)
+    }
+
+    if kind == "range" {
+        return elabRangePattern(cx, node, scrutTy)
+    }
+
     corePatErr(cx.core, node.start, node.end)
 }
 
+/// patternClassification maps the parser's pattern-kind tag (stored in
+/// `AstNode.extra`, see `parser.osty` line 104-114) onto a stable string
+/// tag used by `elabPattern` and the exhaustiveness/reachability pass.
+/// The tag constants are exposed via `astPatternWildcardKind()` etc.
 fn patternClassification(cx: ElabCx, node: AstNode) -> String {
     let _ = cx
-    // The legacy parser encodes the pattern variety in `flags`; we
-    // reuse the legacy classifier numbers from `parser.osty`:
-    //   0 = wildcard, 1 = ident, 2 = lit, 3 = variant, 4 = struct,
-    //   5 = tuple, 6 = or-pattern (unused for irrefutable contexts),
-    //   7 = range (unused), 8 = or, 9 = binding `@`.
-    if node.flags == 0 { return "wildcard" }
-    if node.flags == 1 { return "ident" }
-    if node.flags == 2 { return "lit" }
-    if node.flags == 3 { return "variant" }
-    if node.flags == 4 { return "struct" }
-    if node.flags == 5 { return "tuple" }
-    if node.flags == 9 { return "binding" }
+    let k = node.extra
+    if k == astPatternWildcardKind() { return "wildcard" }
+    if k == astPatternIdentKind() { return "ident" }
+    if k == astPatternLiteralKind() { return "lit" }
+    if k == astPatternVariantKind() { return "variant" }
+    if k == astPatternStructKind() { return "struct" }
+    if k == astPatternTupleKind() { return "tuple" }
+    if k == astPatternBindingKind() { return "binding" }
+    if k == astPatternOrKind() { return "or" }
+    if k == astPatternRangeKind() { return "range" }
     "unsupported"
+}
+
+fn elabOrPattern(cx: ElabCx, node: AstNode, scrutTy: Int) -> Int {
+    // Parser encodes or-pattern as a binary tree via `left` + `right`
+    // (see `opParsePattern` in parser.osty). Walk both subtrees so we
+    // flatten nested `A | B | C` into one alternative list for the
+    // Core IR.
+    let mut alts: List<Int> = []
+    orPatternFlatten(cx, node.left, scrutTy, alts)
+    orPatternFlatten(cx, node.right, scrutTy, alts)
+    corePatOr(cx.core, alts, scrutTy, node.start, node.end)
+}
+
+fn orPatternFlatten(cx: ElabCx, idx: Int, scrutTy: Int, alts: List<Int>) {
+    if idx < 0 {
+        return
+    }
+    let sub = astArenaNodeAt(cx.ast.arena, idx)
+    if sub.kind == AstNPattern && sub.extra == astPatternOrKind() {
+        orPatternFlatten(cx, sub.left, scrutTy, alts)
+        orPatternFlatten(cx, sub.right, scrutTy, alts)
+        return
+    }
+    alts.push(elabPattern(cx, idx, scrutTy))
+}
+
+fn elabRangePattern(cx: ElabCx, node: AstNode, scrutTy: Int) -> Int {
+    // Range patterns are opaque to Phase 1 exhaustiveness — they do not
+    // contribute to the covered set — but we still lower them so the
+    // Core IR round-trips correctly. Validate that the scrutinee is an
+    // ordered type (integer / char) and emit E0742 otherwise.
+    let tys = cx.env.tys
+    if !(tyIsErr(tys, scrutTy))
+        && !(tyIsInteger(tys, scrutTy))
+        && !(tyIsPrim(tys, scrutTy, PkChar)) {
+        cx.env.diagnostics.push(diagPatternShapeMismatch(tyToString(tys, scrutTy), node.start, node.end))
+    }
+    let lo = if node.left >= 0 { elabInfer(cx, node.left).node } else { -1 }
+    let hi = if node.right >= 0 { elabInfer(cx, node.right).node } else { -1 }
+    let inclusive = node.flags == 1
+    corePatRange(cx.core, lo, hi, inclusive, scrutTy, node.start, node.end)
 }
 
 fn elabVariantPattern(cx: ElabCx, node: AstNode, scrutTy: Int) -> Int {
@@ -1778,80 +1841,635 @@ fn elabStructPattern(cx: ElabCx, node: AstNode, scrutTy: Int) -> Int {
     corePatStruct(cx.core, owner, subs, false, scrutTy, node.start, node.end)
 }
 
+// =====================================================================
+// Exhaustiveness + reachability.
+//
+// Phase 1 rules (see plan §3):
+//   - Bool: both `true` and `false` must be covered (or an irrefutable
+//     arm present).
+//   - Closed enums: every variant must have a covering arm whose
+//     sub-patterns are all irrefutable against the variant's field
+//     types. Payload literals do NOT cover the variant (witness names
+//     the variant with `_` placeholders).
+//   - Scalar primitives (Int/String/Char/Float/Byte): require an
+//     irrefutable (catch-all) arm. Range patterns are opaque in Phase 1.
+//   - Tuple/struct scrutinees: require an irrefutable arm. Nested
+//     cartesian coverage is Phase 2.
+//   - Or-patterns flatten across `patCoversX` helpers; `A | B` covers
+//     both alternatives in a single arm.
+//   - Guarded arms (`pat if cond -> ...`) do not contribute to the
+//     covered set and are never themselves flagged unreachable.
+// =====================================================================
+
+fn patKindOf(n: AstNode) -> Int {
+    n.extra
+}
+
+fn armGuarded(cx: ElabCx, armIdx: Int) -> Bool {
+    let arm = astArenaNodeAt(cx.ast.arena, armIdx)
+    arm.right >= 0
+}
+
+/// patIsIrrefutable reports whether a pattern is guaranteed to match
+/// every value of `scrutTy`. Used both to short-circuit exhaustiveness
+/// (if any arm is irrefutable the match is covered) and to gate
+/// reachability (the pattern becomes a universal cover of subsequent
+/// arms).
+fn patIsIrrefutable(cx: ElabCx, patIdx: Int, scrutTy: Int) -> Bool {
+    if patIdx < 0 {
+        return false
+    }
+    let p = astArenaNodeAt(cx.ast.arena, patIdx)
+    if p.kind != AstNPattern {
+        return false
+    }
+    let k = patKindOf(p)
+    if k == astPatternWildcardKind() {
+        return true
+    }
+    if k == astPatternIdentKind() {
+        // An ident that names an enum variant on the scrutinee owner is
+        // a variant-match, not a binding.
+        let owner = tyHeadAt(cx.env.tys, scrutTy)
+        if owner != "" {
+            let hit = checkLookupVariantInOwner(cx.env, owner, p.text)
+            if hit.name != "" {
+                return false
+            }
+        }
+        return true
+    }
+    if k == astPatternBindingKind() {
+        return patIsIrrefutable(cx, p.left, scrutTy)
+    }
+    if k == astPatternTupleKind() {
+        let tys = cx.env.tys
+        if tyKindAt(tys, scrutTy) != TkTuple {
+            return false
+        }
+        let elems = tyArgsAt(tys, scrutTy)
+        if checkIntListLenHelper(elems) != checkIntListLenHelper(p.children) {
+            return false
+        }
+        let mut i = 0
+        for subIdx in p.children {
+            let elemTy = if i < checkIntListLenHelper(elems) {
+                checkIntListAt(elems, i)
+            } else {
+                tErr(tys)
+            }
+            if !(patIsIrrefutable(cx, subIdx, elemTy)) {
+                return false
+            }
+            i = i + 1
+        }
+        return true
+    }
+    if k == astPatternStructKind() {
+        let tys = cx.env.tys
+        if tyKindAt(tys, scrutTy) != TkNamed {
+            return false
+        }
+        let owner = tyHeadAt(tys, scrutTy)
+        let typeSig = checkLookupType(cx.env, owner)
+        if typeSig.kind != "struct" {
+            return false
+        }
+        for childIdx in p.children {
+            let child = astArenaNodeAt(cx.ast.arena, childIdx)
+            if child.extra == astPatternFieldKind() {
+                if child.left < 0 {
+                    // shorthand `{ name }` binds `name` as ident — irrefutable
+                    continue
+                }
+                let fieldSig = checkLookupField(cx.env, owner, child.text)
+                let fieldTy = if fieldSig.name != "" { fieldSig.ty } else { tErr(tys) }
+                if !(patIsIrrefutable(cx, child.left, fieldTy)) {
+                    return false
+                }
+            } else {
+                if !(patIsIrrefutable(cx, childIdx, tErr(tys))) {
+                    return false
+                }
+            }
+        }
+        // `hasRest` (p.flags == 1) means remaining fields are implicitly
+        // wildcard, which is fine — we already accepted every mentioned
+        // field as irrefutable.
+        return true
+    }
+    if k == astPatternOrKind() {
+        // An or-pattern is irrefutable if ANY alternative is irrefutable:
+        // that alternative always matches so the or always matches.
+        return orAnyIrrefutable(cx, p.left, scrutTy)
+            || orAnyIrrefutable(cx, p.right, scrutTy)
+    }
+    // variant / literal / range — refutable.
+    false
+}
+
+fn orAnyIrrefutable(cx: ElabCx, idx: Int, scrutTy: Int) -> Bool {
+    if idx < 0 {
+        return false
+    }
+    let sub = astArenaNodeAt(cx.ast.arena, idx)
+    if sub.kind == AstNPattern && sub.extra == astPatternOrKind() {
+        return orAnyIrrefutable(cx, sub.left, scrutTy)
+            || orAnyIrrefutable(cx, sub.right, scrutTy)
+    }
+    patIsIrrefutable(cx, idx, scrutTy)
+}
+
+/// anyUnguardedIrrefutableArm returns true when some arm is both
+/// unguarded and has an irrefutable pattern — such an arm alone makes
+/// the match exhaustive.
+fn anyUnguardedIrrefutableArm(cx: ElabCx, matchNode: AstNode, scrutTy: Int) -> Bool {
+    for armIdx in matchNode.children {
+        if armGuarded(cx, armIdx) {
+            continue
+        }
+        let arm = astArenaNodeAt(cx.ast.arena, armIdx)
+        if patIsIrrefutable(cx, arm.left, scrutTy) {
+            return true
+        }
+    }
+    false
+}
+
 // ---------------------------------------------------------------------
-// Exhaustiveness — simplified port. Handles the cases we verify with
-// the legacy checker's unit tests: Bool, closed enum, wildcard. Full
-// nested-pattern witness generation is deferred to a follow-up.
+// Exhaustiveness dispatch.
 // ---------------------------------------------------------------------
 
-fn checkExhaustivenessSimple(cx: ElabCx, node: AstNode, scrutTy: Int) {
+fn exhaustCheckMatch(cx: ElabCx, matchNode: AstNode, scrutTy: Int) {
     let tys = cx.env.tys
     if tyIsErr(tys, scrutTy) {
         return
     }
-    if matchHasCatchAll(cx, node) {
+    if anyUnguardedIrrefutableArm(cx, matchNode, scrutTy) {
         return
     }
     if tyIsPrim(tys, scrutTy, PkBool) {
-        if !(matchCoversBool(cx, node, true)) {
-            cx.env.diagnostics.push(diagNonExhaustiveMatch("true", node.start, node.end))
+        exhaustCheckBool(cx, matchNode, scrutTy)
+        return
+    }
+    let kind = tyKindAt(tys, scrutTy)
+    if kind == TkNamed {
+        let owner = tyHeadAt(tys, scrutTy)
+        let typeSig = checkLookupType(cx.env, owner)
+        if typeSig.kind == "enum" {
+            exhaustCheckEnum(cx, matchNode, scrutTy, owner)
+            return
         }
-        if !(matchCoversBool(cx, node, false)) {
-            cx.env.diagnostics.push(diagNonExhaustiveMatch("false", node.start, node.end))
+        if typeSig.kind == "struct" {
+            cx.env.diagnostics.push(diagNonExhaustiveMatch(witnessRenderStruct(cx, owner), matchNode.start, matchNode.end))
+            return
+        }
+        // Interface / unknown named — fall through to scalar branch below.
+    }
+    if kind == TkTuple {
+        cx.env.diagnostics.push(diagNonExhaustiveMatch(witnessRenderTuple(cx, scrutTy), matchNode.start, matchNode.end))
+        return
+    }
+    if kind == TkPrim {
+        // Non-Bool scalar requires catch-all; we are here only because
+        // no unguarded irrefutable arm exists.
+        cx.env.diagnostics.push(diagNonExhaustiveMatch("_", matchNode.start, matchNode.end))
+        return
+    }
+    // Fn / Self / Var / other: no check.
+}
+
+fn exhaustCheckBool(cx: ElabCx, matchNode: AstNode, scrutTy: Int) {
+    let mut seenTrue = false
+    let mut seenFalse = false
+    for armIdx in matchNode.children {
+        if armGuarded(cx, armIdx) {
+            continue
+        }
+        let arm = astArenaNodeAt(cx.ast.arena, armIdx)
+        if !seenTrue {
+            if patCoversBoolLit(cx, arm.left, "true", scrutTy) {
+                seenTrue = true
+            }
+        }
+        if !seenFalse {
+            if patCoversBoolLit(cx, arm.left, "false", scrutTy) {
+                seenFalse = true
+            }
+        }
+    }
+    if !seenTrue {
+        cx.env.diagnostics.push(diagNonExhaustiveMatch("true", matchNode.start, matchNode.end))
+    } else if !seenFalse {
+        cx.env.diagnostics.push(diagNonExhaustiveMatch("false", matchNode.start, matchNode.end))
+    }
+}
+
+fn patCoversBoolLit(cx: ElabCx, patIdx: Int, wantText: String, scrutTy: Int) -> Bool {
+    if patIdx < 0 {
+        return false
+    }
+    if patIsIrrefutable(cx, patIdx, scrutTy) {
+        return true
+    }
+    let p = astArenaNodeAt(cx.ast.arena, patIdx)
+    if p.kind != AstNPattern {
+        return false
+    }
+    let k = patKindOf(p)
+    if k == astPatternLiteralKind() && p.text == wantText {
+        return true
+    }
+    if k == astPatternOrKind() {
+        return patCoversBoolLit(cx, p.left, wantText, scrutTy)
+            || patCoversBoolLit(cx, p.right, wantText, scrutTy)
+    }
+    if k == astPatternBindingKind() {
+        return patCoversBoolLit(cx, p.left, wantText, scrutTy)
+    }
+    false
+}
+
+fn exhaustCheckEnum(cx: ElabCx, matchNode: AstNode, scrutTy: Int, owner: String) {
+    let variants = allVariantsForOwner(cx.env, owner)
+    if checkVariantListLen(variants) == 0 {
+        return
+    }
+    let _ = scrutTy
+    for v in variants {
+        if !(anyArmCoversVariant(cx, matchNode, scrutTy, v)) {
+            cx.env.diagnostics.push(diagNonExhaustiveMatch(witnessRenderVariant(v), matchNode.start, matchNode.end))
+            return
+        }
+    }
+}
+
+fn anyArmCoversVariant(cx: ElabCx, matchNode: AstNode, scrutTy: Int, v: CheckVariantSig) -> Bool {
+    for armIdx in matchNode.children {
+        if armGuarded(cx, armIdx) {
+            continue
+        }
+        let arm = astArenaNodeAt(cx.ast.arena, armIdx)
+        if patCoversVariant(cx, arm.left, scrutTy, v) {
+            return true
+        }
+    }
+    false
+}
+
+fn patCoversVariant(cx: ElabCx, patIdx: Int, scrutTy: Int, v: CheckVariantSig) -> Bool {
+    if patIdx < 0 {
+        return false
+    }
+    if patIsIrrefutable(cx, patIdx, scrutTy) {
+        return true
+    }
+    let p = astArenaNodeAt(cx.ast.arena, patIdx)
+    if p.kind != AstNPattern {
+        return false
+    }
+    let k = patKindOf(p)
+    if k == astPatternVariantKind() {
+        if lastPathSegment(p.text) != v.name {
+            return false
+        }
+        return variantSubsAllIrrefutable(cx, p, v)
+    }
+    if k == astPatternIdentKind() {
+        // Zero-arity variant shadowing: parser emits `Red` as ident.
+        if p.text == v.name && checkIntListLenHelper(v.fieldTys) == 0 {
+            return true
+        }
+        return false
+    }
+    if k == astPatternOrKind() {
+        return patCoversVariant(cx, p.left, scrutTy, v)
+            || patCoversVariant(cx, p.right, scrutTy, v)
+    }
+    if k == astPatternBindingKind() {
+        return patCoversVariant(cx, p.left, scrutTy, v)
+    }
+    false
+}
+
+fn variantSubsAllIrrefutable(cx: ElabCx, p: AstNode, v: CheckVariantSig) -> Bool {
+    let tys = cx.env.tys
+    let mut i = 0
+    for subIdx in p.children {
+        let fieldTy = if i < checkIntListLenHelper(v.fieldTys) {
+            checkIntListAt(v.fieldTys, i)
+        } else {
+            tErr(tys)
+        }
+        if !(patIsIrrefutable(cx, subIdx, fieldTy)) {
+            return false
+        }
+        i = i + 1
+    }
+    true
+}
+
+// ---------------------------------------------------------------------
+// Reachability — E0707. Maintains a coverage summary that is *inclusive*
+// (covered-so-far by arms 1..i-1, unguarded only) and flags arm i when
+// its pattern is wholly contained in that set.
+// ---------------------------------------------------------------------
+
+fn reachCheckArms(cx: ElabCx, matchNode: AstNode, scrutTy: Int) {
+    let tys = cx.env.tys
+    if tyIsErr(tys, scrutTy) {
+        return
+    }
+    let isBool = tyIsPrim(tys, scrutTy, PkBool)
+    let kind = tyKindAt(tys, scrutTy)
+    let isEnum = if kind == TkNamed {
+        checkLookupType(cx.env, tyHeadAt(tys, scrutTy)).kind == "enum"
+    } else {
+        false
+    }
+    let isScalar = kind == TkPrim && !isBool
+
+    let mut sawIrrefutable = false
+    let mut boolTrue = false
+    let mut boolFalse = false
+    let mut coveredVariants: List<String> = []
+    let mut coveredLits: List<String> = []
+
+    let mut first = true
+    for armIdx in matchNode.children {
+        let arm = astArenaNodeAt(cx.ast.arena, armIdx)
+        let guarded = armGuarded(cx, armIdx)
+
+        if !first && !guarded {
+            let unreachable = if sawIrrefutable {
+                true
+            } else if isBool {
+                armCoveredByBool(cx, arm.left, scrutTy, boolTrue, boolFalse)
+            } else if isEnum {
+                armCoveredByEnum(cx, arm.left, scrutTy, coveredVariants)
+            } else if isScalar {
+                armCoveredByScalarLits(cx, arm.left, scrutTy, coveredLits)
+            } else {
+                false
+            }
+            if unreachable {
+                cx.env.diagnostics.push(diagUnreachablePattern(arm.start, arm.end))
+            }
+        }
+
+        // Update cumulative coverage — guarded arms do not contribute.
+        if !guarded {
+            if patIsIrrefutable(cx, arm.left, scrutTy) {
+                sawIrrefutable = true
+            }
+            if isBool {
+                if patCoversBoolLit(cx, arm.left, "true", scrutTy) { boolTrue = true }
+                if patCoversBoolLit(cx, arm.left, "false", scrutTy) { boolFalse = true }
+            } else if isEnum {
+                collectArmVariantNames(cx, arm.left, scrutTy, coveredVariants)
+            } else if isScalar {
+                collectArmScalarLits(cx, arm.left, coveredLits)
+            }
+        }
+
+        first = false
+    }
+}
+
+fn armCoveredByBool(cx: ElabCx, patIdx: Int, scrutTy: Int, seenTrue: Bool, seenFalse: Bool) -> Bool {
+    if patIdx < 0 {
+        return false
+    }
+    if patIsIrrefutable(cx, patIdx, scrutTy) {
+        return seenTrue && seenFalse
+    }
+    let p = astArenaNodeAt(cx.ast.arena, patIdx)
+    if p.kind != AstNPattern {
+        return false
+    }
+    let k = patKindOf(p)
+    if k == astPatternLiteralKind() {
+        if p.text == "true" { return seenTrue }
+        if p.text == "false" { return seenFalse }
+        return false
+    }
+    if k == astPatternOrKind() {
+        return armCoveredByBool(cx, p.left, scrutTy, seenTrue, seenFalse)
+            && armCoveredByBool(cx, p.right, scrutTy, seenTrue, seenFalse)
+    }
+    if k == astPatternBindingKind() {
+        return armCoveredByBool(cx, p.left, scrutTy, seenTrue, seenFalse)
+    }
+    false
+}
+
+fn armCoveredByEnum(cx: ElabCx, patIdx: Int, scrutTy: Int, covered: List<String>) -> Bool {
+    if patIdx < 0 {
+        return false
+    }
+    if patIsIrrefutable(cx, patIdx, scrutTy) {
+        // An irrefutable pattern is covered only if every enum variant
+        // has already been seen. Phase 1 conservatively says no:
+        // wildcard-after-everything is a very common idiom and we do
+        // not want to flag a trailing `_ -> default` as unreachable
+        // unless the user has explicitly enumerated all variants.
+        return false
+    }
+    let p = astArenaNodeAt(cx.ast.arena, patIdx)
+    if p.kind != AstNPattern {
+        return false
+    }
+    let k = patKindOf(p)
+    if k == astPatternVariantKind() {
+        return stringListContains(covered, lastPathSegment(p.text))
+    }
+    if k == astPatternIdentKind() {
+        // zero-arity variant-shadow ident
+        let owner = tyHeadAt(cx.env.tys, scrutTy)
+        let hit = checkLookupVariantInOwner(cx.env, owner, p.text)
+        if hit.name == "" {
+            return false
+        }
+        return stringListContains(covered, p.text)
+    }
+    if k == astPatternOrKind() {
+        return armCoveredByEnum(cx, p.left, scrutTy, covered)
+            && armCoveredByEnum(cx, p.right, scrutTy, covered)
+    }
+    if k == astPatternBindingKind() {
+        return armCoveredByEnum(cx, p.left, scrutTy, covered)
+    }
+    false
+}
+
+fn armCoveredByScalarLits(cx: ElabCx, patIdx: Int, scrutTy: Int, covered: List<String>) -> Bool {
+    if patIdx < 0 {
+        return false
+    }
+    let p = astArenaNodeAt(cx.ast.arena, patIdx)
+    if p.kind != AstNPattern {
+        return false
+    }
+    let k = patKindOf(p)
+    if k == astPatternLiteralKind() {
+        let t = patLiteralTextOf(cx, p)
+        if t == "" { return false }
+        return stringListContains(covered, t)
+    }
+    if k == astPatternOrKind() {
+        return armCoveredByScalarLits(cx, p.left, scrutTy, covered)
+            && armCoveredByScalarLits(cx, p.right, scrutTy, covered)
+    }
+    if k == astPatternBindingKind() {
+        return armCoveredByScalarLits(cx, p.left, scrutTy, covered)
+    }
+    // Range / ident / wildcard are not scalar-literal coverage. Irrefutable
+    // patterns are excluded from reachability per `armCoveredByEnum`'s
+    // rationale.
+    false
+}
+
+fn collectArmVariantNames(cx: ElabCx, patIdx: Int, scrutTy: Int, out: List<String>) {
+    if patIdx < 0 {
+        return
+    }
+    let p = astArenaNodeAt(cx.ast.arena, patIdx)
+    if p.kind != AstNPattern {
+        return
+    }
+    let k = patKindOf(p)
+    if k == astPatternVariantKind() {
+        let vname = lastPathSegment(p.text)
+        if !(stringListContains(out, vname)) {
+            out.push(vname)
         }
         return
     }
-    if tyKindAt(tys, scrutTy) == TkNamed {
-        let owner = tyHeadAt(tys, scrutTy)
-        let variants = allVariantsForOwner(cx.env, owner)
-        for v in variants {
-            if !(matchCoversVariant(cx, node, v.name)) {
-                cx.env.diagnostics.push(diagNonExhaustiveMatch("{v.owner}.{v.name}", node.start, node.end))
-            }
+    if k == astPatternIdentKind() {
+        let owner = tyHeadAt(cx.env.tys, scrutTy)
+        let hit = checkLookupVariantInOwner(cx.env, owner, p.text)
+        if hit.name != "" && !(stringListContains(out, p.text)) {
+            out.push(p.text)
         }
+        return
+    }
+    if k == astPatternOrKind() {
+        collectArmVariantNames(cx, p.left, scrutTy, out)
+        collectArmVariantNames(cx, p.right, scrutTy, out)
+        return
+    }
+    if k == astPatternBindingKind() {
+        collectArmVariantNames(cx, p.left, scrutTy, out)
     }
 }
 
-fn matchHasCatchAll(cx: ElabCx, node: AstNode) -> Bool {
-    for armIdx in node.children {
-        let arm = astArenaNodeAt(cx.ast.arena, armIdx)
-        let patIdx = arm.left
-        let pat = astArenaNodeAt(cx.ast.arena, patIdx)
-        if pat.kind == AstNPattern && pat.flags == 0 {
-            return true
-        }
-        if pat.kind == AstNPattern && pat.flags == 1 {
-            return true
-        }
+fn collectArmScalarLits(cx: ElabCx, patIdx: Int, out: List<String>) {
+    if patIdx < 0 {
+        return
     }
-    false
+    let p = astArenaNodeAt(cx.ast.arena, patIdx)
+    if p.kind != AstNPattern {
+        return
+    }
+    let k = patKindOf(p)
+    if k == astPatternLiteralKind() {
+        let t = patLiteralTextOf(cx, p)
+        if t != "" && !(stringListContains(out, t)) {
+            out.push(t)
+        }
+        return
+    }
+    if k == astPatternOrKind() {
+        collectArmScalarLits(cx, p.left, out)
+        collectArmScalarLits(cx, p.right, out)
+        return
+    }
+    if k == astPatternBindingKind() {
+        collectArmScalarLits(cx, p.left, out)
+    }
 }
 
-fn matchCoversBool(cx: ElabCx, node: AstNode, want: Bool) -> Bool {
-    let needle = if want { "true" } else { "false" }
-    for armIdx in node.children {
-        let arm = astArenaNodeAt(cx.ast.arena, armIdx)
-        let pat = astArenaNodeAt(cx.ast.arena, arm.left)
-        if pat.kind == AstNPattern && pat.flags == 2 {
-            let litNode = astArenaNodeAt(cx.ast.arena, pat.left)
-            if litNode.text == needle {
-                return true
-            }
+fn patLiteralTextOf(cx: ElabCx, p: AstNode) -> String {
+    // Parser emits positive literals with `n.text = token text`; negative
+    // literals carry `n.text = "-"` and `n.left` pointing at the inner
+    // positive literal (see parser.osty:1185). Canonicalise the textual
+    // form for coverage-set membership.
+    if p.text == "-" && p.left >= 0 {
+        let inner = astArenaNodeAt(cx.ast.arena, p.left)
+        if inner.kind == AstNPattern && inner.extra == astPatternLiteralKind() {
+            return strings.concat("-", inner.text)
         }
     }
-    false
+    p.text
 }
 
-fn matchCoversVariant(cx: ElabCx, node: AstNode, variantName: String) -> Bool {
-    for armIdx in node.children {
-        let arm = astArenaNodeAt(cx.ast.arena, armIdx)
-        let pat = astArenaNodeAt(cx.ast.arena, arm.left)
-        if pat.kind == AstNPattern && pat.flags == 3 && pat.text == variantName {
-            return true
+// ---------------------------------------------------------------------
+// Witness rendering.
+// ---------------------------------------------------------------------
+
+fn witnessRenderVariant(v: CheckVariantSig) -> String {
+    let arity = checkIntListLenHelper(v.fieldTys)
+    if arity == 0 {
+        if v.owner == "" {
+            return v.name
+        }
+        return "{v.owner}.{v.name}"
+    }
+    let placeholders = repeatedPlaceholder(arity, ", ")
+    if v.owner == "" {
+        return "{v.name}({placeholders})"
+    }
+    "{v.owner}.{v.name}({placeholders})"
+}
+
+fn witnessRenderTuple(cx: ElabCx, scrutTy: Int) -> String {
+    let tys = cx.env.tys
+    let elems = tyArgsAt(tys, scrutTy)
+    let arity = checkIntListLenHelper(elems)
+    if arity == 0 {
+        return "()"
+    }
+    let inner = repeatedPlaceholder(arity, ", ")
+    "({inner})"
+}
+
+fn witnessRenderStruct(cx: ElabCx, owner: String) -> String {
+    // Avoid literal braces in interpolated strings (Phase 1); render
+    // struct witnesses as a parenthesised field-list. Full brace syntax
+    // is a Phase 2 polish once the host escape story is exercised.
+    let mut parts: List<String> = []
+    for f in cx.env.fields {
+        if f.owner == owner {
+            parts.push("{f.name}: _")
         }
     }
-    false
+    if checkStringListLenHelper(parts) == 0 {
+        if owner == "" {
+            return "_"
+        }
+        return owner
+    }
+    let inner = strings.join(parts, ", ")
+    "{owner}({inner})"
 }
+
+fn repeatedPlaceholder(count: Int, sep: String) -> String {
+    let mut out = ""
+    let mut i = 0
+    for i < count {
+        if i == 0 {
+            out = "_"
+        } else {
+            out = strings.concat(strings.concat(out, sep), "_")
+        }
+        i = i + 1
+    }
+    out
+}
+
+// ---------------------------------------------------------------------
+// Small list / string helpers.
+// ---------------------------------------------------------------------
 
 fn allVariantsForOwner(env: CheckEnv, owner: String) -> List<CheckVariantSig> {
     let mut out: List<CheckVariantSig> = []
@@ -1861,4 +2479,696 @@ fn allVariantsForOwner(env: CheckEnv, owner: String) -> List<CheckVariantSig> {
         }
     }
     out
+}
+
+fn checkVariantListLen(xs: List<CheckVariantSig>) -> Int {
+    let mut n = 0
+    for x in xs {
+        let _ = x
+        n = n + 1
+    }
+    n
+}
+
+fn lastPathSegment(s: String) -> String {
+    let parts = strings.split(s, ".")
+    let mut last = s
+    for p in parts {
+        last = p
+    }
+    last
+}
+
+// =====================================================================
+// Phase 2 — Maranget-style pattern matrix usefulness algorithm.
+//
+// Reference: L. Maranget, "Warnings for pattern matching" (1998).
+//
+// Adds precise nested exhaustiveness (e.g. `Some(_) | None` exhausts
+// Option<T>, `Some(Some(_)), Some(None), None` exhausts Option<Option<X>>)
+// and payload-level reachability (`Some(1), Some(1)` → E0707). Falls
+// back to Phase 1 logic for scrutinee shapes Phase 2 does not cover
+// (structs, scalars, unknown named types): those keep their catch-all
+// requirement.
+//
+// Matrix representation:
+//   - a ROW is a `List<Int>` of CELLS, parallel to the current column
+//     type vector;
+//   - a CELL is either `-1` (wildcard) or an `AstArena` pattern index
+//     whose `kind == AstNPattern`;
+//   - the column types are a parallel `List<Int>` into the TyArena.
+//
+// Or-patterns are flattened lazily: before specialisation on column 0,
+// any row whose col-0 cell is an or-pattern is split into one row per
+// alternative. Or-patterns in later columns are handled when that
+// column becomes column 0 after specialisation.
+// =====================================================================
+
+pub struct PmCtor {
+    pub kind: String,       // "bool" | "variant" | "tuple"
+    pub name: String,       // variant name / "true" / "false" / ""
+    pub owner: String,      // variant owner; empty for bool/tuple
+    pub arity: Int,
+    pub subTys: List<Int>,  // field types per sub-cell (same length as arity)
+}
+
+pub struct PmCheckOutcome {
+    pub handled: Bool,      // true if Phase 2 took responsibility
+    pub exhaustive: Bool,
+    pub witness: String,
+    pub unreachable: List<Int>, // indices into matchNode.children
+}
+
+fn emptyPmCtor() -> PmCtor {
+    PmCtor { kind: "", name: "", owner: "", arity: 0, subTys: [] }
+}
+
+fn pmNotHandled() -> PmCheckOutcome {
+    PmCheckOutcome { handled: false, exhaustive: true, witness: "", unreachable: [] }
+}
+
+/// pmCheckMatch performs the Maranget usefulness analysis for a match
+/// expression. Returns `handled = false` when the scrutinee shape is
+/// outside Phase 2's supported set; callers should fall back to the
+/// Phase 1 logic in that case.
+fn pmCheckMatch(cx: ElabCx, matchNode: AstNode, scrutTy: Int) -> PmCheckOutcome {
+    let tys = cx.env.tys
+    if tyIsErr(tys, scrutTy) {
+        return pmNotHandled()
+    }
+    if !(pmTypeSupported(cx, scrutTy)) {
+        return pmNotHandled()
+    }
+
+    // Build a single-column matrix, one row per arm (ignore guarded arms
+    // for coverage purposes; they are still candidates for reachability).
+    let mut rows: List<List<Int>> = []
+    let mut rowOwnersArm: List<Int> = []
+    let mut armOrder: List<Int> = []
+    let mut idx = 0
+    for armIdx in matchNode.children {
+        armOrder.push(armIdx)
+        if !(armGuarded(cx, armIdx)) {
+            let arm = astArenaNodeAt(cx.ast.arena, armIdx)
+            rows.push([arm.left])
+            rowOwnersArm.push(idx)
+        }
+        idx = idx + 1
+    }
+    let colTys: List<Int> = [scrutTy]
+
+    // Exhaustiveness: useful([_] :: rows, empty row of wildcards)?
+    let exhRes = pmExhaustivenessWitness(cx, rows, colTys)
+
+    // Reachability: for each non-guarded arm, useful against prior rows.
+    let mut unreachable: List<Int> = []
+    let mut priorRows: List<List<Int>> = []
+    let mut armIter = 0
+    for armIdx in matchNode.children {
+        if !(armGuarded(cx, armIdx)) {
+            let arm = astArenaNodeAt(cx.ast.arena, armIdx)
+            let row: List<Int> = [arm.left]
+            if checkListOfRowsLen(priorRows) > 0 {
+                if !(pmUseful(cx, priorRows, row, colTys)) {
+                    unreachable.push(armIter)
+                }
+            }
+            priorRows.push(row)
+        }
+        armIter = armIter + 1
+    }
+
+    PmCheckOutcome {
+        handled: true,
+        exhaustive: exhRes.exhaustive,
+        witness: exhRes.witness,
+        unreachable,
+    }
+}
+
+struct PmExhRes {
+    exhaustive: Bool,
+    witness: String,
+}
+
+fn pmTypeSupported(cx: ElabCx, ty: Int) -> Bool {
+    let tys = cx.env.tys
+    if tyIsPrim(tys, ty, PkBool) {
+        return true
+    }
+    let kind = tyKindAt(tys, ty)
+    if kind == TkTuple {
+        return true
+    }
+    if kind == TkNamed {
+        let owner = tyHeadAt(tys, ty)
+        let typeSig = checkLookupType(cx.env, owner)
+        return typeSig.kind == "enum"
+    }
+    false
+}
+
+// ---------------------------------------------------------------------
+// Core: usefulness + exhaustiveness.
+// ---------------------------------------------------------------------
+
+/// pmUseful returns true when `row` matches at least one value that no
+/// prior row in `rows` matches — the classic Maranget U(P, q) test.
+fn pmUseful(cx: ElabCx, rows: List<List<Int>>, row: List<Int>, colTys: List<Int>) -> Bool {
+    let nCols = checkIntListLenHelper(colTys)
+    if nCols == 0 {
+        return checkListOfRowsLen(rows) == 0
+    }
+
+    // Expand any or-pattern in column 0 of the probe row into multiple
+    // probe rows; usefulness is the disjunction.
+    let expanded = pmExpandRowCol0(cx, row, checkIntListAt(colTys, 0))
+    for altRow in expanded {
+        if pmUsefulFlat(cx, rows, altRow, colTys) {
+            return true
+        }
+    }
+    false
+}
+
+fn pmUsefulFlat(cx: ElabCx, rows: List<List<Int>>, row: List<Int>, colTys: List<Int>) -> Bool {
+    let col0Ty = checkIntListAt(colTys, 0)
+    let cell0 = intListAt(row, 0)
+    let rowRest = intListDrop(row, 1)
+    let restTys = intListDrop(colTys, 1)
+
+    // Flatten col-0 or-pats in the matrix.
+    let flatRows = pmFlattenMatrixCol0(cx, rows, col0Ty)
+
+    if pmCellIsWild(cx, cell0, col0Ty) {
+        let ctors = pmConstructorsOfType(cx.env, col0Ty)
+        if checkCtorListLen(ctors) == 0 {
+            // Non-enumerable column (e.g. Int). Drop via default matrix.
+            let drows = pmDefault(cx, flatRows, col0Ty)
+            return pmUseful(cx, drows, rowRest, restTys)
+        }
+        // Useful iff ANY constructor branch is useful.
+        for c in ctors {
+            let srows = pmSpecialize(cx, flatRows, col0Ty, c)
+            let wilds = pmWildRow(c.arity)
+            let probeRow = intListConcat(wilds, rowRest)
+            let newTys = intListConcat(c.subTys, restTys)
+            if pmUseful(cx, srows, probeRow, newTys) {
+                return true
+            }
+        }
+        return false
+    }
+
+    // Cell carries a concrete constructor.
+    let ctor = pmCellCtor(cx, cell0, col0Ty)
+    if ctor.kind == "" {
+        // Unsupported cell (e.g. literal against scalar, range). Drop to
+        // default-matrix behaviour conservatively: treat as wildcard for
+        // usefulness (the arm is always potentially reachable when Phase
+        // 2 cannot prove otherwise).
+        let drows = pmDefault(cx, flatRows, col0Ty)
+        return pmUseful(cx, drows, rowRest, restTys)
+    }
+    let subs = pmCellSubs(cx, cell0, ctor, col0Ty)
+    let probeRow = intListConcat(subs, rowRest)
+    let srows = pmSpecialize(cx, flatRows, col0Ty, ctor)
+    let newTys = intListConcat(ctor.subTys, restTys)
+    pmUseful(cx, srows, probeRow, newTys)
+}
+
+/// pmExhaustivenessWitness returns `(true, "")` when every value is
+/// matched by some row. Otherwise returns `(false, witness)` where
+/// `witness` is an example pattern missing from the match.
+fn pmExhaustivenessWitness(cx: ElabCx, rows: List<List<Int>>, colTys: List<Int>) -> PmExhRes {
+    let nCols = checkIntListLenHelper(colTys)
+    if nCols == 0 {
+        // Vacuously exhaustive if any row is present, else missing "()"
+        // (the empty tuple is the sole value).
+        if checkListOfRowsLen(rows) > 0 {
+            return PmExhRes { exhaustive: true, witness: "" }
+        }
+        return PmExhRes { exhaustive: false, witness: "" }
+    }
+
+    let col0Ty = checkIntListAt(colTys, 0)
+    let restTys = intListDrop(colTys, 1)
+
+    let flatRows = pmFlattenMatrixCol0(cx, rows, col0Ty)
+    let ctors = pmConstructorsOfType(cx.env, col0Ty)
+
+    if checkCtorListLen(ctors) == 0 {
+        // Non-enumerable column. Exhaustive iff a wildcard row exists
+        // and its suffix is exhaustive.
+        let drows = pmDefault(cx, flatRows, col0Ty)
+        if !(pmExistsWildCol0(cx, flatRows, col0Ty)) {
+            let sub = pmExhaustivenessWitness(cx, drows, restTys)
+            return PmExhRes { exhaustive: false, witness: pmCombineWitness("_", sub.witness) }
+        }
+        let sub = pmExhaustivenessWitness(cx, drows, restTys)
+        if sub.exhaustive {
+            return PmExhRes { exhaustive: true, witness: "" }
+        }
+        return PmExhRes { exhaustive: false, witness: pmCombineWitness("_", sub.witness) }
+    }
+
+    // Check each constructor branch; report the first missing one.
+    for c in ctors {
+        let srows = pmSpecialize(cx, flatRows, col0Ty, c)
+        let newTys = intListConcat(c.subTys, restTys)
+        let sub = pmExhaustivenessWitness(cx, srows, newTys)
+        if !sub.exhaustive {
+            let ctorW = pmBuildCtorWitness(c, sub.witness)
+            // Extract the leftover witness for trailing columns: the
+            // sub-witness concatenates `arity` leading placeholders
+            // belonging to the ctor, followed by the rest.
+            let restW = pmTrimLeadingFields(sub.witness, c.arity)
+            return PmExhRes { exhaustive: false, witness: pmCombineWitness(ctorW, restW) }
+        }
+    }
+    PmExhRes { exhaustive: true, witness: "" }
+}
+
+// ---------------------------------------------------------------------
+// Matrix transforms.
+// ---------------------------------------------------------------------
+
+fn pmSpecialize(cx: ElabCx, rows: List<List<Int>>, col0Ty: Int, ctor: PmCtor) -> List<List<Int>> {
+    let mut out: List<List<Int>> = []
+    for row in rows {
+        if checkIntListLenHelper(row) == 0 {
+            continue
+        }
+        let cell = checkIntListAt(row, 0)
+        let rest = intListDrop(row, 1)
+        if pmCellIsWild(cx, cell, col0Ty) {
+            let wilds = pmWildRow(ctor.arity)
+            out.push(intListConcat(wilds, rest))
+            continue
+        }
+        let cellCtor = pmCellCtor(cx, cell, col0Ty)
+        if pmCtorsMatch(cellCtor, ctor) {
+            let subs = pmCellSubs(cx, cell, ctor, col0Ty)
+            out.push(intListConcat(subs, rest))
+        }
+        // Non-matching constructor rows are dropped (do not contribute
+        // to ctor's branch).
+    }
+    out
+}
+
+fn pmDefault(cx: ElabCx, rows: List<List<Int>>, col0Ty: Int) -> List<List<Int>> {
+    let mut out: List<List<Int>> = []
+    for row in rows {
+        if checkIntListLenHelper(row) == 0 {
+            continue
+        }
+        let cell = checkIntListAt(row, 0)
+        if pmCellIsWild(cx, cell, col0Ty) {
+            out.push(intListDrop(row, 1))
+        }
+    }
+    out
+}
+
+fn pmFlattenMatrixCol0(cx: ElabCx, rows: List<List<Int>>, col0Ty: Int) -> List<List<Int>> {
+    let mut out: List<List<Int>> = []
+    for row in rows {
+        let expanded = pmExpandRowCol0(cx, row, col0Ty)
+        for r in expanded {
+            out.push(r)
+        }
+    }
+    out
+}
+
+fn pmExpandRowCol0(cx: ElabCx, row: List<Int>, col0Ty: Int) -> List<List<Int>> {
+    let n = checkIntListLenHelper(row)
+    if n == 0 {
+        return [row]
+    }
+    let cell0 = checkIntListAt(row, 0)
+    let rest = intListDrop(row, 1)
+    if cell0 < 0 {
+        return [row]
+    }
+    let p = astArenaNodeAt(cx.ast.arena, cell0)
+    if p.kind != AstNPattern {
+        return [row]
+    }
+    if p.extra == astPatternOrKind() {
+        let mut alts: List<Int> = []
+        orPatternFlatten(cx, p.left, col0Ty, alts)
+        orPatternFlatten(cx, p.right, col0Ty, alts)
+        let mut out: List<List<Int>> = []
+        for a in alts {
+            out.push(intListConcat([a], rest))
+        }
+        return out
+    }
+    if p.extra == astPatternBindingKind() {
+        return pmExpandRowCol0(cx, intListConcat([p.left], rest), col0Ty)
+    }
+    [row]
+}
+
+// ---------------------------------------------------------------------
+// Cell inspection.
+// ---------------------------------------------------------------------
+
+fn pmCellIsWild(cx: ElabCx, cellIdx: Int, colTy: Int) -> Bool {
+    if cellIdx < 0 {
+        return true
+    }
+    let p = astArenaNodeAt(cx.ast.arena, cellIdx)
+    if p.kind != AstNPattern {
+        return true
+    }
+    let k = p.extra
+    if k == astPatternWildcardKind() {
+        return true
+    }
+    if k == astPatternIdentKind() {
+        // Check if it names a variant against colTy owner: if so, it's
+        // a refutable zero-arity variant pattern, not wildcard.
+        let owner = tyHeadAt(cx.env.tys, colTy)
+        if owner != "" {
+            let hit = checkLookupVariantInOwner(cx.env, owner, p.text)
+            if hit.name != "" {
+                return false
+            }
+        }
+        return true
+    }
+    if k == astPatternBindingKind() {
+        return pmCellIsWild(cx, p.left, colTy)
+    }
+    false
+}
+
+fn pmCellCtor(cx: ElabCx, cellIdx: Int, colTy: Int) -> PmCtor {
+    if cellIdx < 0 {
+        return emptyPmCtor()
+    }
+    let p = astArenaNodeAt(cx.ast.arena, cellIdx)
+    if p.kind != AstNPattern {
+        return emptyPmCtor()
+    }
+    let k = p.extra
+    if k == astPatternBindingKind() {
+        return pmCellCtor(cx, p.left, colTy)
+    }
+    let tys = cx.env.tys
+
+    if k == astPatternLiteralKind() {
+        if tyIsPrim(tys, colTy, PkBool) && (p.text == "true" || p.text == "false") {
+            return PmCtor { kind: "bool", name: p.text, owner: "", arity: 0, subTys: [] }
+        }
+        // Non-Bool literal: opaque (non-enumerable).
+        return emptyPmCtor()
+    }
+    if k == astPatternVariantKind() {
+        let owner = tyHeadAt(tys, colTy)
+        let vname = lastPathSegment(p.text)
+        let hit = checkLookupVariantInOwner(cx.env, owner, vname)
+        if hit.name == "" {
+            return emptyPmCtor()
+        }
+        return pmVariantCtor(cx, hit, colTy)
+    }
+    if k == astPatternIdentKind() {
+        // Zero-arity variant via ident shadowing.
+        let owner = tyHeadAt(tys, colTy)
+        let hit = checkLookupVariantInOwner(cx.env, owner, p.text)
+        if hit.name == "" {
+            return emptyPmCtor()
+        }
+        return pmVariantCtor(cx, hit, colTy)
+    }
+    if k == astPatternTupleKind() {
+        if tyKindAt(tys, colTy) != TkTuple {
+            return emptyPmCtor()
+        }
+        let elems = tyArgsAt(tys, colTy)
+        let arity = checkIntListLenHelper(elems)
+        return PmCtor { kind: "tuple", name: "", owner: "", arity, subTys: elems }
+    }
+    emptyPmCtor()
+}
+
+fn pmVariantCtor(cx: ElabCx, v: CheckVariantSig, colTy: Int) -> PmCtor {
+    let tys = cx.env.tys
+    let ownerArgs = tyArgsAt(tys, colTy)
+    let arity = checkIntListLenHelper(v.fieldTys)
+    let subTys = if checkStringListLenHelper(v.generics) == checkIntListLenHelper(ownerArgs) && arity > 0 {
+        let mut subs: List<Int> = []
+        for ft in v.fieldTys {
+            subs.push(checkSubstituteTy(cx.env, ft, v.generics, ownerArgs))
+        }
+        subs
+    } else {
+        v.fieldTys
+    }
+    PmCtor { kind: "variant", name: v.name, owner: v.owner, arity, subTys }
+}
+
+fn pmCellSubs(cx: ElabCx, cellIdx: Int, ctor: PmCtor, colTy: Int) -> List<Int> {
+    if cellIdx < 0 {
+        return pmWildRow(ctor.arity)
+    }
+    let p = astArenaNodeAt(cx.ast.arena, cellIdx)
+    if p.kind != AstNPattern {
+        return pmWildRow(ctor.arity)
+    }
+    let k = p.extra
+    if k == astPatternBindingKind() {
+        return pmCellSubs(cx, p.left, ctor, colTy)
+    }
+    if k == astPatternVariantKind() {
+        // Pad / trim p.children to match arity.
+        return pmPadOrTrim(p.children, ctor.arity)
+    }
+    if k == astPatternIdentKind() {
+        return pmWildRow(ctor.arity)
+    }
+    if k == astPatternTupleKind() {
+        return pmPadOrTrim(p.children, ctor.arity)
+    }
+    if k == astPatternLiteralKind() {
+        return pmWildRow(ctor.arity)
+    }
+    pmWildRow(ctor.arity)
+}
+
+fn pmCtorsMatch(a: PmCtor, b: PmCtor) -> Bool {
+    if a.kind == "" || b.kind == "" {
+        return false
+    }
+    if a.kind != b.kind {
+        return false
+    }
+    if a.kind == "variant" {
+        return a.name == b.name && a.owner == b.owner
+    }
+    if a.kind == "bool" {
+        return a.name == b.name
+    }
+    if a.kind == "tuple" {
+        return a.arity == b.arity
+    }
+    false
+}
+
+fn pmConstructorsOfType(env: CheckEnv, ty: Int) -> List<PmCtor> {
+    let tys = env.tys
+    if tyIsPrim(tys, ty, PkBool) {
+        return [
+            PmCtor { kind: "bool", name: "true", owner: "", arity: 0, subTys: [] },
+            PmCtor { kind: "bool", name: "false", owner: "", arity: 0, subTys: [] },
+        ]
+    }
+    let kind = tyKindAt(tys, ty)
+    if kind == TkTuple {
+        let elems = tyArgsAt(tys, ty)
+        let arity = checkIntListLenHelper(elems)
+        return [
+            PmCtor { kind: "tuple", name: "", owner: "", arity, subTys: elems },
+        ]
+    }
+    if kind == TkNamed {
+        let owner = tyHeadAt(tys, ty)
+        let typeSig = checkLookupType(env, owner)
+        if typeSig.kind == "enum" {
+            let variants = allVariantsForOwner(env, owner)
+            let ownerArgs = tyArgsAt(tys, ty)
+            let mut out: List<PmCtor> = []
+            for v in variants {
+                let arity = checkIntListLenHelper(v.fieldTys)
+                let subTys = if checkStringListLenHelper(v.generics) == checkIntListLenHelper(ownerArgs) && arity > 0 {
+                    let mut subs: List<Int> = []
+                    for ft in v.fieldTys {
+                        subs.push(checkSubstituteTy(env, ft, v.generics, ownerArgs))
+                    }
+                    subs
+                } else {
+                    v.fieldTys
+                }
+                out.push(PmCtor { kind: "variant", name: v.name, owner: v.owner, arity, subTys })
+            }
+            return out
+        }
+    }
+    []
+}
+
+fn pmExistsWildCol0(cx: ElabCx, rows: List<List<Int>>, col0Ty: Int) -> Bool {
+    for row in rows {
+        if checkIntListLenHelper(row) == 0 {
+            continue
+        }
+        if pmCellIsWild(cx, checkIntListAt(row, 0), col0Ty) {
+            return true
+        }
+    }
+    false
+}
+
+// ---------------------------------------------------------------------
+// Witness construction.
+// ---------------------------------------------------------------------
+
+fn pmBuildCtorWitness(c: PmCtor, subFieldsW: String) -> String {
+    if c.kind == "bool" {
+        return c.name
+    }
+    if c.kind == "tuple" {
+        if c.arity == 0 { return "()" }
+        let leading = pmFirstNFields(subFieldsW, c.arity)
+        return "({leading})"
+    }
+    if c.kind == "variant" {
+        let label = if c.owner == "" { c.name } else { "{c.owner}.{c.name}" }
+        if c.arity == 0 {
+            return label
+        }
+        let leading = pmFirstNFields(subFieldsW, c.arity)
+        return "{label}({leading})"
+    }
+    "_"
+}
+
+fn pmCombineWitness(a: String, b: String) -> String {
+    if a == "" { return b }
+    if b == "" { return a }
+    "{a}, {b}"
+}
+
+fn pmFirstNFields(w: String, n: Int) -> String {
+    let parts = strings.split(w, ", ")
+    let mut out: List<String> = []
+    let mut i = 0
+    for p in parts {
+        if i >= n { break }
+        out.push(p)
+        i = i + 1
+    }
+    for i < n {
+        out.push("_")
+        i = i + 1
+    }
+    strings.join(out, ", ")
+}
+
+fn pmTrimLeadingFields(w: String, n: Int) -> String {
+    let parts = strings.split(w, ", ")
+    let total = checkStringListLenHelper(parts)
+    if total <= n {
+        return ""
+    }
+    let mut out: List<String> = []
+    let mut i = 0
+    for p in parts {
+        if i >= n {
+            out.push(p)
+        }
+        i = i + 1
+    }
+    strings.join(out, ", ")
+}
+
+// ---------------------------------------------------------------------
+// Small helpers.
+// ---------------------------------------------------------------------
+
+fn pmWildRow(n: Int) -> List<Int> {
+    let mut out: List<Int> = []
+    let mut i = 0
+    for i < n {
+        out.push(-1)
+        i = i + 1
+    }
+    out
+}
+
+fn pmPadOrTrim(xs: List<Int>, n: Int) -> List<Int> {
+    let mut out: List<Int> = []
+    let mut i = 0
+    for x in xs {
+        if i >= n { break }
+        out.push(x)
+        i = i + 1
+    }
+    for i < n {
+        out.push(-1)
+        i = i + 1
+    }
+    out
+}
+
+fn intListAt(xs: List<Int>, idx: Int) -> Int {
+    let mut i = 0
+    for x in xs {
+        if i == idx {
+            return x
+        }
+        i = i + 1
+    }
+    -1
+}
+
+fn intListDrop(xs: List<Int>, n: Int) -> List<Int> {
+    let mut out: List<Int> = []
+    let mut i = 0
+    for x in xs {
+        if i >= n {
+            out.push(x)
+        }
+        i = i + 1
+    }
+    out
+}
+
+fn intListConcat(a: List<Int>, b: List<Int>) -> List<Int> {
+    let mut out: List<Int> = []
+    for x in a { out.push(x) }
+    for y in b { out.push(y) }
+    out
+}
+
+fn checkListOfRowsLen(xs: List<List<Int>>) -> Int {
+    let mut n = 0
+    for x in xs {
+        let _ = x
+        n = n + 1
+    }
+    n
+}
+
+fn checkCtorListLen(xs: List<PmCtor>) -> Int {
+    let mut n = 0
+    for x in xs {
+        let _ = x
+        n = n + 1
+    }
+    n
 }
