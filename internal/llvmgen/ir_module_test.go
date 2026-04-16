@@ -374,6 +374,49 @@ fn main() {
 	}
 }
 
+// TestGenerateModuleInterfaceBoxingFromAssign covers Phase 6e: after a
+// `let mut s: Iface = concrete` binding, subsequent `s = concrete2`
+// reassignments must auto-box the new concrete value into a
+// `%osty.iface` fat pointer, mirroring the let / return / call-arg
+// boxing paths.
+func TestGenerateModuleInterfaceBoxingFromAssign(t *testing.T) {
+	src := `interface Sized {
+    fn size(self) -> Int
+}
+
+struct Vec {
+    count: Int,
+
+    fn size(self) -> Int {
+        self.count
+    }
+}
+
+fn main() {
+    let v = Vec { count: 3 }
+    let mut s: Sized = v
+    let w = Vec { count: 9 }
+    s = w
+    println(s.size())
+}
+`
+	got := runMonoLowerPipeline(t, src, "/tmp/phase6e_assign_box.osty")
+	for _, want := range []string{
+		"%osty.iface",
+		"@osty.vtable.Vec__Sized",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+	// Reassignment must emit TWO boxings (initial let + assign), so the
+	// vtable symbol appears at least twice in the final IR.
+	if strings.Count(got, "@osty.vtable.Vec__Sized") < 2 {
+		t.Fatalf("expected vtable symbol referenced at least twice (let + assign), got %d:\n%s",
+			strings.Count(got, "@osty.vtable.Vec__Sized"), got)
+	}
+}
+
 // TestGenerateModuleMethodLocalGenericGetMonomorphized verifies the
 // Phase 4 path: a non-generic struct with a generic method
 // (`fn get<U>(self, u: U) -> U`) gets specialized per turbofish call

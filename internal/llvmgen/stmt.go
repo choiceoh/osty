@@ -229,7 +229,10 @@ func (g *generator) boxInterfaceValue(ifaceType ast.Type, v value) (value, error
 	step2 := llvmNextTemp(emitter)
 	emitter.body = append(emitter.body, fmt.Sprintf("  %s = insertvalue %%osty.iface %s, ptr %s, 1", step2, step1, vtableSym))
 	g.takeOstyEmitter(emitter)
-	return value{typ: "%osty.iface", ref: step2}, nil
+	// Phase 6e: tag the boxed value with its interface AST type so
+	// downstream slots (e.g. `let mut s: Iface = …`) remember the
+	// declared interface identity and can auto-box reassignments.
+	return value{typ: "%osty.iface", ref: step2, sourceType: ifaceType}, nil
 }
 
 // interfaceNominalName returns the single-segment interface source
@@ -265,6 +268,17 @@ func (g *generator) emitAssign(stmt *ast.AssignStmt) error {
 		v, err := g.emitExprWithHint(stmt.Value, slot.listElemTyp, slot.listElemString, slot.mapKeyTyp, slot.mapValueTyp, slot.mapKeyString, slot.setElemTyp, slot.setElemString)
 		if err != nil {
 			return err
+		}
+		// Phase 6e: auto-box a concrete rhs when the binding's declared
+		// slot type is an interface. Mirrors the let / return / call-arg
+		// boxing paths so reassignment stays consistent with the other
+		// interface-adjacent positions.
+		if slot.typ == "%osty.iface" && v.typ != "%osty.iface" && slot.sourceType != nil {
+			boxed, boxErr := g.boxInterfaceValue(slot.sourceType, v)
+			if boxErr != nil {
+				return boxErr
+			}
+			v = boxed
 		}
 		if v.typ != slot.typ {
 			return unsupportedf("type-system", "assignment to %q type %s, value %s", target.Name, slot.typ, v.typ)
