@@ -1,0 +1,15 @@
+enum Switch {
+    Off
+    On
+}
+
+fn score(state: Switch) -> Int {
+    match state {
+        On -> 42,
+        Off -> 0,
+    }
+}
+
+fn main() {
+    println(score(On))
+}

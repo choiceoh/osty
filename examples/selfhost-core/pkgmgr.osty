@@ -1,0 +1,1257 @@
+use go "strings" as pkgStrings {
+    fn HasPrefix(s: String, prefix: String) -> Bool
+    fn Join(elems: List<String>, sep: String) -> String
+    fn Split(s: String, sep: String) -> List<String>
+    fn SplitN(s: String, sep: String, n: Int) -> List<String>
+    fn TrimPrefix(s: String, prefix: String) -> String
+    fn TrimRight(s: String, cutset: String) -> String
+    fn TrimSpace(s: String) -> String
+    fn TrimSuffix(s: String, suffix: String) -> String
+}
+
+/// SelfPkgSourceKind is the dependency-source shape the self-hosted package
+/// manager core can reason about without touching disk or network.
+pub enum SelfPkgSourceKind {
+    SelfPkgSourceRegistry,
+    SelfPkgSourcePath,
+    SelfPkgSourceGit,
+}
+
+/// SelfPkgDependency is the pure-data subset of one osty.toml dependency.
+pub struct SelfPkgDependency {
+    pub name: String,
+    pub packageName: String,
+    pub sourceKind: SelfPkgSourceKind,
+    pub versionReq: SemReq,
+    pub registry: String,
+    pub sourceRef: String,
+}
+
+/// SelfPkgCandidate is one concrete package version from a registry index.
+pub struct SelfPkgCandidate {
+    pub packageName: String,
+    pub version: SemVersion,
+    pub checksum: String,
+    pub yanked: Bool,
+}
+
+/// SelfPkgLockDependency is one edge rendered into osty.lock.
+pub struct SelfPkgLockDependency {
+    pub name: String,
+    pub version: SemVersion,
+    pub source: String,
+}
+
+/// SelfPkgLockPackage is one pinned package entry from osty.lock.
+pub struct SelfPkgLockPackage {
+    pub name: String,
+    pub version: SemVersion,
+    pub source: String,
+    pub checksum: String,
+    pub dependencies: List<SelfPkgLockDependency>,
+}
+
+/// SelfPkgLockLookup is an optional lock package without optional plumbing.
+pub struct SelfPkgLockLookup {
+    pub found: Bool,
+    pub pkg: SelfPkgLockPackage,
+}
+
+/// SelfPkgResolveDecision records the resolver's choice for one dependency.
+pub struct SelfPkgResolveDecision {
+    pub found: Bool,
+    pub name: String,
+    pub packageName: String,
+    pub version: SemVersion,
+    pub source: String,
+    pub checksum: String,
+    pub fromLock: Bool,
+    pub message: String,
+}
+
+/// SelfPkgResolvePlan summarizes direct dependency resolution.
+pub struct SelfPkgResolvePlan {
+    pub decisions: List<SelfPkgResolveDecision>,
+    pub missing: Int,
+}
+
+/// SelfPkgLockChangeKind mirrors the package-manager lockfile diff categories.
+pub enum SelfPkgLockChangeKind {
+    SelfPkgLockAdded,
+    SelfPkgLockRemoved,
+    SelfPkgLockVersion,
+    SelfPkgLockChecksum,
+    SelfPkgLockSource,
+}
+
+/// SelfPkgLockChange describes one difference between two lock snapshots.
+pub struct SelfPkgLockChange {
+    pub name: String,
+    pub kind: SelfPkgLockChangeKind,
+    pub oldVersion: SemVersion,
+    pub newVersion: SemVersion,
+    pub detail: String,
+}
+
+/// SelfPkgGitRef is the manifest-facing git source selector.
+pub struct SelfPkgGitRef {
+    pub url: String,
+    pub tag: String,
+    pub branch: String,
+    pub rev: String,
+}
+
+/// SelfPkgChecksumCheck reports checksum compatibility without exceptions.
+pub struct SelfPkgChecksumCheck {
+    pub ok: Bool,
+    pub message: String,
+}
+
+/// SelfPkgRegistryRequest is the HTTP shape a host shim executes.
+pub struct SelfPkgRegistryRequest {
+    pub method: String,
+    pub url: String,
+    pub accept: String,
+    pub contentType: String,
+    pub authorization: String,
+    pub checksum: String,
+    pub metadata: String,
+}
+
+/// SelfPkgStatusCheck reports whether a registry HTTP response is acceptable.
+pub struct SelfPkgStatusCheck {
+    pub ok: Bool,
+    pub message: String,
+}
+
+/// SelfPkgGraphNode is one resolved dependency node in a pure graph.
+pub struct SelfPkgGraphNode {
+    pub name: String,
+    pub packageName: String,
+    pub version: SemVersion,
+    pub source: String,
+    pub checksum: String,
+    pub deps: List<String>,
+}
+
+/// SelfPkgGraph is a registry-backed dependency graph plus stable order.
+pub struct SelfPkgGraph {
+    pub nodes: List<SelfPkgGraphNode>,
+    pub order: List<String>,
+    pub errors: List<String>,
+}
+
+/// SelfPkgDepLookupItem is the import-facing identity of a dependency.
+pub struct SelfPkgDepLookupItem {
+    pub name: String,
+    pub gitURL: String,
+}
+
+/// SelfPkgDepLookupResult is the dep-provider decision for one import path.
+pub struct SelfPkgDepLookupResult {
+    pub found: Bool,
+    pub name: String,
+}
+
+/// selfPkgRegistryDependency constructs a default-registry dependency.
+pub fn selfPkgRegistryDependency(name: String, req: SemReq) -> SelfPkgDependency {
+    selfPkgRegistryDependencyAs(name, "", "", req)
+}
+
+/// selfPkgRegistryDependencyAs constructs a registry dependency with optional
+/// remote package-name and registry-name overrides.
+pub fn selfPkgRegistryDependencyAs(
+    name: String,
+    packageName: String,
+    registry: String,
+    req: SemReq,
+) -> SelfPkgDependency {
+    SelfPkgDependency {
+        name,
+        packageName,
+        sourceKind: SelfPkgSourceRegistry,
+        versionReq: req,
+        registry,
+        sourceRef: "",
+    }
+}
+
+/// selfPkgPathDependency constructs a local path dependency.
+pub fn selfPkgPathDependency(name: String, path: String) -> SelfPkgDependency {
+    SelfPkgDependency {
+        name,
+        packageName: "",
+        sourceKind: SelfPkgSourcePath,
+        versionReq: anySemReq(),
+        registry: "",
+        sourceRef: path,
+    }
+}
+
+/// selfPkgGitDependency constructs a git dependency reference.
+pub fn selfPkgGitDependency(name: String, url: String) -> SelfPkgDependency {
+    SelfPkgDependency {
+        name,
+        packageName: "",
+        sourceKind: SelfPkgSourceGit,
+        versionReq: anySemReq(),
+        registry: "",
+        sourceRef: url,
+    }
+}
+
+/// selfPkgCandidate constructs one registry candidate.
+pub fn selfPkgCandidate(
+    packageName: String,
+    version: SemVersion,
+    checksum: String,
+    yanked: Bool,
+) -> SelfPkgCandidate {
+    SelfPkgCandidate { packageName, version, checksum, yanked }
+}
+
+/// selfPkgGitRef constructs one git source selector.
+pub fn selfPkgGitRef(url: String, tag: String, branch: String, rev: String) -> SelfPkgGitRef {
+    SelfPkgGitRef { url, tag, branch, rev }
+}
+
+/// selfPkgLockDependency constructs one lock edge.
+pub fn selfPkgLockDependency(
+    name: String,
+    version: SemVersion,
+    source: String,
+) -> SelfPkgLockDependency {
+    SelfPkgLockDependency { name, version, source }
+}
+
+/// selfPkgLockPackage constructs one lock entry.
+pub fn selfPkgLockPackage(
+    name: String,
+    version: SemVersion,
+    source: String,
+    checksum: String,
+    dependencies: List<SelfPkgLockDependency>,
+) -> SelfPkgLockPackage {
+    SelfPkgLockPackage { name, version, source, checksum, dependencies }
+}
+
+fn emptySelfPkgLockPackage() -> SelfPkgLockPackage {
+    selfPkgLockPackage("", stableVersion(0, 0, 0), "", "", [])
+}
+
+fn emptySelfPkgResolveDecision(name: String, message: String) -> SelfPkgResolveDecision {
+    SelfPkgResolveDecision {
+        found: false,
+        name,
+        packageName: "",
+        version: stableVersion(0, 0, 0),
+        source: "",
+        checksum: "",
+        fromLock: false,
+        message,
+    }
+}
+
+/// selfPkgCanonicalName returns the remote package name for registry lookups.
+pub fn selfPkgCanonicalName(dep: SelfPkgDependency) -> String {
+    if dep.packageName != "" {
+        dep.packageName
+    } else {
+        dep.name
+    }
+}
+
+/// selfPkgSourceURI renders the lockfile-stable source identifier.
+pub fn selfPkgSourceURI(dep: SelfPkgDependency) -> String {
+    match dep.sourceKind {
+        SelfPkgSourceRegistry -> {
+            if dep.registry == "" {
+                "registry+default"
+            } else {
+                "registry+{dep.registry}"
+            }
+        },
+        SelfPkgSourcePath -> "path+{dep.sourceRef}",
+        SelfPkgSourceGit -> "git+{dep.sourceRef}",
+    }
+}
+
+/// selfPkgGitURI renders git+URL plus the stable query selector.
+pub fn selfPkgGitURI(source: SelfPkgGitRef) -> String {
+    let mut params: List<String> = []
+    if source.tag != "" {
+        params.push("tag={source.tag}")
+    }
+    if source.branch != "" {
+        params.push("branch={source.branch}")
+    }
+    if source.rev != "" {
+        params.push("rev={source.rev}")
+    }
+    let base = "git+{source.url}"
+    if params.len() == 0 {
+        return base
+    }
+    let joined = pkgStrings.Join(params, "&")
+    "{base}?{joined}"
+}
+
+/// selfPkgGitCheckoutRef mirrors the Go fetcher's rev > tag > branch > HEAD rule.
+pub fn selfPkgGitCheckoutRef(source: SelfPkgGitRef) -> String {
+    if source.rev != "" {
+        source.rev
+    } else if source.tag != "" {
+        "refs/tags/{source.tag}"
+    } else if source.branch != "" {
+        "origin/{source.branch}"
+    } else {
+        "origin/HEAD"
+    }
+}
+
+/// selfPkgSanitizeURL maps arbitrary registry/git URLs to cache-safe path text.
+pub fn selfPkgSanitizeURL(url: String) -> String {
+    let mut out = ""
+    for unit in pkgStrings.Split(url, "") {
+        if selfPkgURLUnitSafe(unit) {
+            out = "{out}{unit}"
+        } else {
+            out = "{out}_"
+        }
+    }
+    out
+}
+
+fn selfPkgURLUnitSafe(unit: String) -> Bool {
+    (unit >= "A" && unit <= "Z") || (unit >= "a" && unit <= "z") || (unit >= "0" && unit <= "9") || unit == "-" || unit == "." || unit == "_"
+}
+
+/// selfPkgLockDependencyString renders the cargo-style lock edge shape.
+pub fn selfPkgLockDependencyString(dep: SelfPkgLockDependency) -> String {
+    let version = semVersionText(dep.version)
+    if dep.source == "" {
+        "{dep.name} {version}"
+    } else {
+        "{dep.name} {version} ({dep.source})"
+    }
+}
+
+/// selfPkgTomlQuote escapes a string for the canonical lockfile writer.
+pub fn selfPkgTomlQuote(text: String) -> String {
+    let slash = r"\"
+    let quote = "\""
+    let mut out = quote
+    for unit in pkgStrings.Split(text, "") {
+        if unit == "\\" {
+            out = "{out}{slash}{slash}"
+        } else if unit == "\"" {
+            out = "{out}{slash}{quote}"
+        } else if unit == "\n" {
+            out = "{out}{slash}n"
+        } else if unit == "\r" {
+            out = "{out}{slash}r"
+        } else if unit == "\t" {
+            out = "{out}{slash}t"
+        } else {
+            out = "{out}{unit}"
+        }
+    }
+    "{out}{quote}"
+}
+
+/// selfPkgMarshalLock renders a deterministic osty.lock snapshot.
+pub fn selfPkgMarshalLock(packages: List<SelfPkgLockPackage>) -> String {
+    let sorted = selfPkgSortLockPackages(packages)
+    let mut out = "# This file is auto-generated by osty.\n"
+    out = "{out}# Do not edit manually; `osty update` regenerates it.\n\n"
+    out = "{out}version = 1\n"
+    for pkg in sorted {
+        let version = semVersionText(pkg.version)
+        out = "{out}\n[[package]]\n"
+        out = "{out}name = {selfPkgTomlQuote(pkg.name)}\n"
+        out = "{out}version = {selfPkgTomlQuote(version)}\n"
+        if pkg.source != "" {
+            out = "{out}source = {selfPkgTomlQuote(pkg.source)}\n"
+        }
+        if pkg.checksum != "" {
+            out = "{out}checksum = {selfPkgTomlQuote(pkg.checksum)}\n"
+        }
+        if selfPkgLockDependencyCount(pkg.dependencies) > 0 {
+            out = "{out}dependencies = [\n"
+            for dep in selfPkgSortLockDependencies(pkg.dependencies) {
+                out = "{out}    {selfPkgTomlQuote(selfPkgLockDependencyString(dep))},\n"
+            }
+            out = "{out}]\n"
+        }
+    }
+    out
+}
+
+fn selfPkgLockDependencyCount(dependencies: List<SelfPkgLockDependency>) -> Int {
+    let mut count = 0
+    for dep in dependencies {
+        let _ = dep
+        count = count + 1
+    }
+    count
+}
+
+/// selfPkgSortLockPackages sorts by name then version text.
+pub fn selfPkgSortLockPackages(packages: List<SelfPkgLockPackage>) -> List<SelfPkgLockPackage> {
+    let mut out: List<SelfPkgLockPackage> = []
+    for pkg in packages {
+        out = selfPkgInsertLockPackage(out, pkg)
+    }
+    out
+}
+
+fn selfPkgInsertLockPackage(
+    packages: List<SelfPkgLockPackage>,
+    item: SelfPkgLockPackage,
+) -> List<SelfPkgLockPackage> {
+    let mut out: List<SelfPkgLockPackage> = []
+    let mut inserted = false
+    for pkg in packages {
+        if !(inserted) && selfPkgLockPackageLess(item, pkg) {
+            out.push(item)
+            inserted = true
+        }
+        out.push(pkg)
+    }
+    if !(inserted) {
+        out.push(item)
+    }
+    out
+}
+
+fn selfPkgLockPackageLess(a: SelfPkgLockPackage, b: SelfPkgLockPackage) -> Bool {
+    if a.name != b.name {
+        return a.name < b.name
+    }
+    semVersionText(a.version) < semVersionText(b.version)
+}
+
+/// selfPkgSortLockDependencies sorts by name then version text.
+pub fn selfPkgSortLockDependencies(dependencies: List<SelfPkgLockDependency>) -> List<SelfPkgLockDependency> {
+    let mut out: List<SelfPkgLockDependency> = []
+    for dep in dependencies {
+        out = selfPkgInsertLockDependency(out, dep)
+    }
+    out
+}
+
+fn selfPkgInsertLockDependency(
+    dependencies: List<SelfPkgLockDependency>,
+    item: SelfPkgLockDependency,
+) -> List<SelfPkgLockDependency> {
+    let mut out: List<SelfPkgLockDependency> = []
+    let mut inserted = false
+    for dep in dependencies {
+        if !(inserted) && selfPkgLockDependencyLess(item, dep) {
+            out.push(item)
+            inserted = true
+        }
+        out.push(dep)
+    }
+    if !(inserted) {
+        out.push(item)
+    }
+    out
+}
+
+fn selfPkgLockDependencyLess(a: SelfPkgLockDependency, b: SelfPkgLockDependency) -> Bool {
+    if a.name != b.name {
+        return a.name < b.name
+    }
+    semVersionText(a.version) < semVersionText(b.version)
+}
+
+/// selfPkgCandidateMatches reports whether a registry candidate is usable for
+/// a dependency after package-name, yanked-state, and SemVer checks.
+pub fn selfPkgCandidateMatches(dep: SelfPkgDependency, candidate: SelfPkgCandidate) -> Bool {
+    candidate.packageName == selfPkgCanonicalName(dep) && !(candidate.yanked) && semReqMatches(
+        dep.versionReq,
+        candidate.version,
+    )
+}
+
+/// selfPkgFindLockedPackage returns a lock entry by local dependency name.
+pub fn selfPkgFindLockedPackage(name: String, locked: List<SelfPkgLockPackage>) -> SelfPkgLockLookup {
+    for pkg in locked {
+        if pkg.name == name {
+            return SelfPkgLockLookup { found: true, pkg }
+        }
+    }
+    SelfPkgLockLookup { found: false, pkg: emptySelfPkgLockPackage() }
+}
+
+/// selfPkgFindCompatibleLockedPackage mirrors the Go resolver's registry pin
+/// rule: keep a lock entry when its source matches and its version still
+/// satisfies the manifest requirement.
+pub fn selfPkgFindCompatibleLockedPackage(
+    dep: SelfPkgDependency,
+    locked: List<SelfPkgLockPackage>,
+) -> SelfPkgLockLookup {
+    let wantSource = selfPkgSourceURI(dep)
+    for pkg in locked {
+        if pkg.name == dep.name {
+            if (pkg.source == "" || pkg.source == wantSource) && semReqMatches(
+                dep.versionReq,
+                pkg.version,
+            ) {
+                return SelfPkgLockLookup { found: true, pkg }
+            }
+        }
+    }
+    SelfPkgLockLookup { found: false, pkg: emptySelfPkgLockPackage() }
+}
+
+/// selfPkgSelectRegistryCandidate chooses the concrete version for one
+/// registry dependency. A still-compatible lock pin wins; otherwise the
+/// highest visible matching candidate is selected.
+pub fn selfPkgSelectRegistryCandidate(
+    dep: SelfPkgDependency,
+    candidates: List<SelfPkgCandidate>,
+    locked: List<SelfPkgLockPackage>,
+) -> SelfPkgResolveDecision {
+    let source = selfPkgSourceURI(dep)
+    let canonical = selfPkgCanonicalName(dep)
+    let lockedPkg = selfPkgFindCompatibleLockedPackage(dep, locked)
+    if lockedPkg.found {
+        for candidate in candidates {
+            if selfPkgCandidateMatches(dep, candidate) && compareSemVersion(
+                candidate.version,
+                lockedPkg.pkg.version,
+            ) == 0 {
+                return SelfPkgResolveDecision {
+                    found: true,
+                    name: dep.name,
+                    packageName: canonical,
+                    version: candidate.version,
+                    source,
+                    checksum: candidate.checksum,
+                    fromLock: true,
+                    message: "locked",
+                }
+            }
+        }
+    }
+
+    let mut found = false
+    let mut best = stableVersion(0, 0, 0)
+    let mut checksum = ""
+    for candidate in candidates {
+        if selfPkgCandidateMatches(dep, candidate) {
+            if !(found) || compareSemVersion(best, candidate.version) < 0 {
+                found = true
+                best = candidate.version
+                checksum = candidate.checksum
+            }
+        }
+    }
+    if found {
+        return SelfPkgResolveDecision {
+            found: true,
+            name: dep.name,
+            packageName: canonical,
+            version: best,
+            source,
+            checksum,
+            fromLock: false,
+            message: "selected",
+        }
+    }
+    emptySelfPkgResolveDecision(dep.name, "no matching registry version")
+}
+
+/// selfPkgResolveRegistryPlan resolves a list of direct registry deps against
+/// one in-memory registry view and optional lock pins.
+pub fn selfPkgResolveRegistryPlan(
+    deps: List<SelfPkgDependency>,
+    candidates: List<SelfPkgCandidate>,
+    locked: List<SelfPkgLockPackage>,
+) -> SelfPkgResolvePlan {
+    let mut decisions: List<SelfPkgResolveDecision> = []
+    let mut missing = 0
+    for dep in deps {
+        let decision = selfPkgSelectRegistryCandidate(dep, candidates, locked)
+        if !(decision.found) {
+            missing = missing + 1
+        }
+        decisions.push(decision)
+    }
+    SelfPkgResolvePlan { decisions, missing }
+}
+
+/// selfPkgPlanFoundCount counts successful decisions in a plan.
+pub fn selfPkgPlanFoundCount(plan: SelfPkgResolvePlan) -> Int {
+    let mut count = 0
+    for decision in plan.decisions {
+        if decision.found {
+            count = count + 1
+        }
+    }
+    count
+}
+
+/// selfPkgLockFromPlan turns a pure resolve plan into lock entries.
+pub fn selfPkgLockFromPlan(plan: SelfPkgResolvePlan) -> List<SelfPkgLockPackage> {
+    let mut out: List<SelfPkgLockPackage> = []
+    for decision in plan.decisions {
+        if decision.found {
+            out.push(
+                selfPkgLockPackage(
+                    decision.name,
+                    decision.version,
+                    decision.source,
+                    decision.checksum,
+                    [],
+                ),
+            )
+        }
+    }
+    out
+}
+
+/// selfPkgChecksumPrefix is the lockfile checksum algorithm tag.
+pub fn selfPkgChecksumPrefix() -> String {
+    "sha256:"
+}
+
+/// selfPkgVerifyChecksum checks already-computed checksums.
+pub fn selfPkgVerifyChecksum(want: String, got: String) -> SelfPkgChecksumCheck {
+    if want == "" {
+        return SelfPkgChecksumCheck { ok: true, message: "" }
+    }
+    let prefix = selfPkgChecksumPrefix()
+    let quote = "\""
+    if !(pkgStrings.HasPrefix(want, prefix)) || !(pkgStrings.HasPrefix(got, prefix)) {
+        return SelfPkgChecksumCheck {
+            ok: false,
+            message: "checksum mismatch: want {quote}{want}{quote}, got {quote}{got}{quote} (unsupported algorithm)",
+        }
+    }
+    if want != got {
+        return SelfPkgChecksumCheck {
+            ok: false,
+            message: "checksum mismatch:\n  want {want}\n  got  {got}",
+        }
+    }
+    SelfPkgChecksumCheck { ok: true, message: "" }
+}
+
+/// selfPkgDiffLocks reports package-level lock changes.
+pub fn selfPkgDiffLocks(
+    old: List<SelfPkgLockPackage>,
+    new: List<SelfPkgLockPackage>,
+) -> List<SelfPkgLockChange> {
+    let mut out: List<SelfPkgLockChange> = []
+    for oldPkg in old {
+        let next = selfPkgFindLockedPackage(oldPkg.name, new)
+        if !(next.found) {
+            out.push(
+                selfPkgLockChange(
+                    oldPkg.name,
+                    SelfPkgLockRemoved,
+                    oldPkg.version,
+                    stableVersion(0, 0, 0),
+                    "",
+                ),
+            )
+        } else if compareSemVersion(oldPkg.version, next.pkg.version) != 0 {
+            out.push(
+                selfPkgLockChange(
+                    oldPkg.name,
+                    SelfPkgLockVersion,
+                    oldPkg.version,
+                    next.pkg.version,
+                    "",
+                ),
+            )
+        } else if oldPkg.checksum != next.pkg.checksum {
+            let oldShort = selfPkgShortChecksum(oldPkg.checksum)
+            let newShort = selfPkgShortChecksum(next.pkg.checksum)
+            out.push(
+                selfPkgLockChange(
+                    oldPkg.name,
+                    SelfPkgLockChecksum,
+                    oldPkg.version,
+                    next.pkg.version,
+                    "{oldShort} -> {newShort}",
+                ),
+            )
+        } else if oldPkg.source != next.pkg.source {
+            out.push(
+                selfPkgLockChange(
+                    oldPkg.name,
+                    SelfPkgLockSource,
+                    oldPkg.version,
+                    next.pkg.version,
+                    "{oldPkg.source} -> {next.pkg.source}",
+                ),
+            )
+        }
+    }
+    for newPkg in new {
+        let prev = selfPkgFindLockedPackage(newPkg.name, old)
+        if !(prev.found) {
+            out.push(
+                selfPkgLockChange(
+                    newPkg.name,
+                    SelfPkgLockAdded,
+                    stableVersion(0, 0, 0),
+                    newPkg.version,
+                    "",
+                ),
+            )
+        }
+    }
+    out
+}
+
+fn selfPkgShortChecksum(checksum: String) -> String {
+    let prefix = selfPkgChecksumPrefix()
+    let text = pkgStrings.TrimPrefix(checksum, prefix)
+    if selfPkgStringUnitCount(text) > 12 {
+        return "{prefix}{selfPkgFirstUnits(text, 12)}"
+    }
+    checksum
+}
+
+fn selfPkgFirstUnits(text: String, limit: Int) -> String {
+    let mut out = ""
+    let mut count = 0
+    for unit in pkgStrings.Split(text, "") {
+        if count < limit {
+            out = "{out}{unit}"
+        }
+        count = count + 1
+    }
+    out
+}
+
+fn selfPkgStringUnitCount(text: String) -> Int {
+    let mut count = 0
+    for unit in pkgStrings.Split(text, "") {
+        let _ = unit
+        count = count + 1
+    }
+    count
+}
+
+/// selfPkgLockChange constructs a lock diff item.
+pub fn selfPkgLockChange(
+    name: String,
+    kind: SelfPkgLockChangeKind,
+    oldVersion: SemVersion,
+    newVersion: SemVersion,
+    detail: String,
+) -> SelfPkgLockChange {
+    SelfPkgLockChange { name, kind, oldVersion, newVersion, detail }
+}
+
+/// selfPkgLockChangeCount counts changes of one kind.
+pub fn selfPkgLockChangeCount(
+    changes: List<SelfPkgLockChange>,
+    kind: SelfPkgLockChangeKind,
+) -> Int {
+    let mut count = 0
+    for change in changes {
+        if selfPkgLockChangeKindEq(change.kind, kind) {
+            count = count + 1
+        }
+    }
+    count
+}
+
+/// selfPkgLockChangeKindEq compares lock change kinds.
+pub fn selfPkgLockChangeKindEq(a: SelfPkgLockChangeKind, b: SelfPkgLockChangeKind) -> Bool {
+    match a {
+        SelfPkgLockAdded -> match b {
+            SelfPkgLockAdded -> true,
+            _ -> false,
+        },
+        SelfPkgLockRemoved -> match b {
+            SelfPkgLockRemoved -> true,
+            _ -> false,
+        },
+        SelfPkgLockVersion -> match b {
+            SelfPkgLockVersion -> true,
+            _ -> false,
+        },
+        SelfPkgLockChecksum -> match b {
+            SelfPkgLockChecksum -> true,
+            _ -> false,
+        },
+        SelfPkgLockSource -> match b {
+            SelfPkgLockSource -> true,
+            _ -> false,
+        },
+    }
+}
+
+/// selfPkgRegistryEndpoint joins a base registry URL with path segments.
+pub fn selfPkgRegistryEndpoint(baseURL: String, segments: List<String>) -> String {
+    let mut parts: List<String> = [pkgStrings.TrimRight(baseURL, "/")]
+    for segment in segments {
+        parts.push(segment)
+    }
+    pkgStrings.Join(parts, "/")
+}
+
+/// selfPkgRegistryVersionsRequest builds the index-fetch request.
+pub fn selfPkgRegistryVersionsRequest(baseURL: String, name: String, token: String) -> SelfPkgRegistryRequest {
+    selfPkgRegistryRequest(
+        "GET",
+        selfPkgRegistryEndpoint(baseURL, ["v1", "crates", name]),
+        "application/json",
+        "",
+        selfPkgBearer(token),
+        "",
+        "",
+    )
+}
+
+/// selfPkgRegistryTarballRequest builds the tarball-download request.
+pub fn selfPkgRegistryTarballRequest(
+    baseURL: String,
+    name: String,
+    version: String,
+    token: String,
+) -> SelfPkgRegistryRequest {
+    selfPkgRegistryRequest(
+        "GET",
+        selfPkgRegistryEndpoint(baseURL, ["v1", "crates", name, version, "tar"]),
+        "application/json",
+        "",
+        selfPkgBearer(token),
+        "",
+        "",
+    )
+}
+
+/// selfPkgRegistryPublishRequest builds the publish-upload request metadata.
+pub fn selfPkgRegistryPublishRequest(
+    baseURL: String,
+    name: String,
+    version: String,
+    token: String,
+    checksum: String,
+    metadata: String,
+) -> SelfPkgRegistryRequest {
+    selfPkgRegistryRequest(
+        "PUT",
+        selfPkgRegistryEndpoint(baseURL, ["v1", "crates", name, version]),
+        "application/json",
+        "application/x-tar+gzip",
+        selfPkgBearer(token),
+        checksum,
+        metadata,
+    )
+}
+
+/// selfPkgRegistryYankRequest builds yank / unyank request metadata.
+pub fn selfPkgRegistryYankRequest(
+    baseURL: String,
+    name: String,
+    version: String,
+    token: String,
+    yanked: Bool,
+) -> SelfPkgRegistryRequest {
+    let mut method = "DELETE"
+    let mut segment = "yank"
+    if !(yanked) {
+        method = "PUT"
+        segment = "unyank"
+    }
+    selfPkgRegistryRequest(
+        method,
+        selfPkgRegistryEndpoint(baseURL, ["v1", "crates", name, version, segment]),
+        "application/json",
+        "",
+        selfPkgBearer(token),
+        "",
+        "",
+    )
+}
+
+fn selfPkgRegistryRequest(
+    method: String,
+    url: String,
+    accept: String,
+    contentType: String,
+    authorization: String,
+    checksum: String,
+    metadata: String,
+) -> SelfPkgRegistryRequest {
+    SelfPkgRegistryRequest { method, url, accept, contentType, authorization, checksum, metadata }
+}
+
+fn selfPkgBearer(token: String) -> String {
+    if token == "" {
+        ""
+    } else {
+        "Bearer {token}"
+    }
+}
+
+/// selfPkgRegistryStatusOK checks an HTTP status against allowed codes.
+pub fn selfPkgRegistryStatusOK(
+    url: String,
+    statusCode: Int,
+    body: String,
+    allowed: List<Int>,
+) -> SelfPkgStatusCheck {
+    for code in allowed {
+        if statusCode == code {
+            return SelfPkgStatusCheck { ok: true, message: "" }
+        }
+    }
+    let trimmed = pkgStrings.TrimSpace(body)
+    let mut msg = trimmed
+    if msg == "" {
+        msg = "HTTP {statusCode}"
+    }
+    SelfPkgStatusCheck { ok: false, message: "registry {url}: HTTP {statusCode}: {msg}" }
+}
+
+/// selfPkgGraphNode constructs a resolved graph node.
+pub fn selfPkgGraphNode(
+    name: String,
+    packageName: String,
+    version: SemVersion,
+    source: String,
+    checksum: String,
+    deps: List<String>,
+) -> SelfPkgGraphNode {
+    SelfPkgGraphNode { name, packageName, version, source, checksum, deps }
+}
+
+/// selfPkgGraphErrorCount counts graph errors.
+pub fn selfPkgGraphErrorCount(graph: SelfPkgGraph) -> Int {
+    let mut count = 0
+    for item in graph.errors {
+        let _ = item
+        count = count + 1
+    }
+    count
+}
+
+/// selfPkgGraphNodeCount counts graph nodes.
+pub fn selfPkgGraphNodeCount(graph: SelfPkgGraph) -> Int {
+    let mut count = 0
+    for item in graph.nodes {
+        let _ = item
+        count = count + 1
+    }
+    count
+}
+
+/// selfPkgGraphOrderCount counts ordered graph node names.
+pub fn selfPkgGraphOrderCount(graph: SelfPkgGraph) -> Int {
+    let mut count = 0
+    for item in graph.order {
+        let _ = item
+        count = count + 1
+    }
+    count
+}
+
+fn emptySelfPkgGraphNode() -> SelfPkgGraphNode {
+    selfPkgGraphNode("", "", stableVersion(0, 0, 0), "", "", [])
+}
+
+/// selfPkgResolveRegistryGraph resolves direct registry dependencies into a
+/// graph. The input dependency table is pure; a host shim supplies candidates
+/// and their dependency lists after reading registry metadata.
+pub fn selfPkgResolveRegistryGraph(
+    deps: List<SelfPkgDependency>,
+    candidates: List<SelfPkgCandidate>,
+    candidateDeps: List<SelfPkgCandidateDeps>,
+    locked: List<SelfPkgLockPackage>,
+) -> SelfPkgGraph {
+    let mut graph = SelfPkgGraph { nodes: [], order: [], errors: [] }
+    graph = selfPkgResolveRegistryPending(graph, deps, candidates, candidateDeps, locked)
+    graph.order = selfPkgTopoOrder(graph.nodes)
+    graph
+}
+
+fn selfPkgResolveRegistryPending(
+    graph: SelfPkgGraph,
+    pending: List<SelfPkgDependency>,
+    candidates: List<SelfPkgCandidate>,
+    candidateDeps: List<SelfPkgCandidateDeps>,
+    locked: List<SelfPkgLockPackage>,
+) -> SelfPkgGraph {
+    if pending.len() == 0 {
+        return graph
+    }
+    let dep = pending[0]
+    let mut rest = selfPkgDropFirstDependency(pending)
+    let mut next = graph
+    let existing = selfPkgFindGraphNode(dep.name, next.nodes)
+    if existing.found {
+        if !(semReqMatches(dep.versionReq, existing.node.version)) {
+            next.errors.push("dependency {dep.name} already resolved to incompatible version")
+        }
+    } else {
+        let decision = selfPkgSelectRegistryCandidate(dep, candidates, locked)
+        if !(decision.found) {
+            next.errors.push(decision.message)
+        } else {
+            let childDeps = selfPkgCandidateDependencyList(
+                decision.packageName,
+                decision.version,
+                candidateDeps,
+            )
+            let mut childNames: List<String> = []
+            for child in childDeps {
+                childNames.push(child.name)
+                rest.push(child)
+            }
+            next.nodes.push(
+                selfPkgGraphNode(
+                    decision.name,
+                    decision.packageName,
+                    decision.version,
+                    decision.source,
+                    decision.checksum,
+                    childNames,
+                ),
+            )
+        }
+    }
+    selfPkgResolveRegistryPending(next, rest, candidates, candidateDeps, locked)
+}
+
+/// SelfPkgGraphNodeLookup is an optional graph node.
+pub struct SelfPkgGraphNodeLookup {
+    pub found: Bool,
+    pub node: SelfPkgGraphNode,
+}
+
+/// SelfPkgCandidateDeps attaches dependency metadata to one candidate version.
+pub struct SelfPkgCandidateDeps {
+    pub packageName: String,
+    pub version: SemVersion,
+    pub dependencies: List<SelfPkgDependency>,
+}
+
+/// selfPkgCandidateDeps constructs registry metadata for graph resolution.
+pub fn selfPkgCandidateDeps(
+    packageName: String,
+    version: SemVersion,
+    dependencies: List<SelfPkgDependency>,
+) -> SelfPkgCandidateDeps {
+    SelfPkgCandidateDeps { packageName, version, dependencies }
+}
+
+fn selfPkgFindGraphNode(name: String, nodes: List<SelfPkgGraphNode>) -> SelfPkgGraphNodeLookup {
+    for node in nodes {
+        if node.name == name {
+            return SelfPkgGraphNodeLookup { found: true, node }
+        }
+    }
+    SelfPkgGraphNodeLookup { found: false, node: emptySelfPkgGraphNode() }
+}
+
+fn selfPkgCandidateDependencyList(
+    packageName: String,
+    version: SemVersion,
+    candidates: List<SelfPkgCandidateDeps>,
+) -> List<SelfPkgDependency> {
+    for item in candidates {
+        if item.packageName == packageName && compareSemVersion(item.version, version) == 0 {
+            return item.dependencies
+        }
+    }
+    []
+}
+
+fn selfPkgDropFirstDependency(deps: List<SelfPkgDependency>) -> List<SelfPkgDependency> {
+    let mut out: List<SelfPkgDependency> = []
+    let mut idx = 0
+    for dep in deps {
+        if idx > 0 {
+            out.push(dep)
+        }
+        idx = idx + 1
+    }
+    out
+}
+
+/// selfPkgTopoOrder returns a deterministic leaves-first dependency order.
+pub fn selfPkgTopoOrder(nodes: List<SelfPkgGraphNode>) -> List<String> {
+    let mut out: List<String> = []
+    let mut names: List<String> = []
+    for node in nodes {
+        names = selfPkgInsertStringSorted(names, node.name)
+    }
+    for name in names {
+        out = selfPkgTopoVisit(name, nodes, out)
+    }
+    out
+}
+
+fn selfPkgTopoVisit(
+    name: String,
+    nodes: List<SelfPkgGraphNode>,
+    out: List<String>,
+) -> List<String> {
+    if selfPkgStringListHas(out, name) {
+        return out
+    }
+    let lookup = selfPkgFindGraphNode(name, nodes)
+    if !(lookup.found) {
+        return out
+    }
+    let mut next = out
+    let mut deps: List<String> = []
+    for dep in lookup.node.deps {
+        deps = selfPkgInsertStringSorted(deps, dep)
+    }
+    for dep in deps {
+        next = selfPkgTopoVisit(dep, nodes, next)
+    }
+    if !(selfPkgStringListHas(next, name)) {
+        next.push(name)
+    }
+    next
+}
+
+fn selfPkgInsertStringSorted(items: List<String>, item: String) -> List<String> {
+    let mut out: List<String> = []
+    let mut inserted = false
+    for existing in items {
+        if !(inserted) && item < existing {
+            out.push(item)
+            inserted = true
+        }
+        if existing != item {
+            out.push(existing)
+        }
+    }
+    if !(inserted) && !(selfPkgStringListHas(out, item)) {
+        out.push(item)
+    }
+    out
+}
+
+fn selfPkgStringListHas(items: List<String>, item: String) -> Bool {
+    for existing in items {
+        if existing == item {
+            return true
+        }
+    }
+    false
+}
+
+/// selfPkgDepLookupItem constructs an import lookup row.
+pub fn selfPkgDepLookupItem(name: String, gitURL: String) -> SelfPkgDepLookupItem {
+    SelfPkgDepLookupItem { name, gitURL }
+}
+
+/// selfPkgLookupDependency maps a raw import path to a dependency alias.
+pub fn selfPkgLookupDependency(
+    rawPath: String,
+    graphNodes: List<SelfPkgDepLookupItem>,
+    manifestDeps: List<SelfPkgDepLookupItem>,
+) -> SelfPkgDepLookupResult {
+    let graphAlias = selfPkgFindLookupItemByName(graphNodes, rawPath)
+    if graphAlias.found {
+        return graphAlias
+    }
+    let manifestAlias = selfPkgFindLookupItemByName(manifestDeps, rawPath)
+    if manifestAlias.found {
+        return manifestAlias
+    }
+    if selfPkgPathHasSlash(rawPath) {
+        let graphGit = selfPkgFindLookupItemByGitURL(graphNodes, rawPath)
+        if graphGit.found {
+            return graphGit
+        }
+        let manifestGit = selfPkgFindLookupItemByGitURL(manifestDeps, rawPath)
+        if manifestGit.found {
+            return manifestGit
+        }
+    }
+    let last = selfPkgLastPathSegment(rawPath)
+    if last != rawPath {
+        let graphLast = selfPkgFindLookupItemByName(graphNodes, last)
+        if graphLast.found {
+            return graphLast
+        }
+        let manifestLast = selfPkgFindLookupItemByName(manifestDeps, last)
+        if manifestLast.found {
+            return manifestLast
+        }
+    }
+    SelfPkgDepLookupResult { found: false, name: "" }
+}
+
+fn selfPkgFindLookupItemByName(
+    items: List<SelfPkgDepLookupItem>,
+    name: String,
+) -> SelfPkgDepLookupResult {
+    for item in items {
+        if item.name == name {
+            return SelfPkgDepLookupResult { found: true, name: item.name }
+        }
+    }
+    SelfPkgDepLookupResult { found: false, name: "" }
+}
+
+fn selfPkgFindLookupItemByGitURL(
+    items: List<SelfPkgDepLookupItem>,
+    rawPath: String,
+) -> SelfPkgDepLookupResult {
+    let needle = selfPkgNormalizeGitURL(rawPath)
+    for item in items {
+        if item.gitURL != "" && selfPkgNormalizeGitURL(item.gitURL) == needle {
+            return SelfPkgDepLookupResult { found: true, name: item.name }
+        }
+    }
+    SelfPkgDepLookupResult { found: false, name: "" }
+}
+
+/// selfPkgNormalizeGitURL compares git dependencies across import spellings.
+pub fn selfPkgNormalizeGitURL(url: String) -> String {
+    let mut text = pkgStrings.TrimSuffix(url, "/")
+    text = pkgStrings.TrimSuffix(text, ".git")
+    let scheme = pkgStrings.SplitN(text, "://", 2)
+    if selfPkgStringListCount(scheme) == 2 {
+        text = scheme[1]
+    }
+    if pkgStrings.HasPrefix(text, "git@") {
+        text = pkgStrings.TrimPrefix(text, "git@")
+        let scp = pkgStrings.SplitN(text, ":", 2)
+        if selfPkgStringListCount(scp) == 2 {
+            let host = scp[0]
+            let repo = scp[1]
+            text = "{host}/{repo}"
+        }
+    }
+    text
+}
+
+fn selfPkgPathHasSlash(path: String) -> Bool {
+    let parts = pkgStrings.Split(path, "/")
+    selfPkgStringListCount(parts) > 1
+}
+
+fn selfPkgLastPathSegment(path: String) -> String {
+    let mut last = path
+    for part in pkgStrings.Split(path, "/") {
+        last = part
+    }
+    last
+}
+
+fn selfPkgStringListCount(items: List<String>) -> Int {
+    let mut count = 0
+    for item in items {
+        let _ = item
+        count = count + 1
+    }
+    count
+}

@@ -15,8 +15,6 @@ import (
 	"github.com/osty/osty/internal/types"
 )
 
-func selfhostRuntimeAvailable() bool { return true }
-
 type selfhostCheckedSource struct {
 	source []byte
 	files  []selfhostFileSegment
@@ -1040,7 +1038,7 @@ func writeSelfhostPackageImport(b *bytes.Buffer, alias string, pkg *resolve.Pack
 			if !ok || !fn.Pub || fn.Recv != nil {
 				continue
 			}
-			fmt.Fprintf(&body, "    fn %s(", fn.Name)
+			fmt.Fprintf(&body, "    fn %s%s(", fn.Name, selfhostGenericParamsSource(fn.Generics))
 			for i, param := range fn.Params {
 				if i > 0 {
 					body.WriteString(", ")
@@ -1061,9 +1059,28 @@ func writeSelfhostPackageImport(b *bytes.Buffer, alias string, pkg *resolve.Pack
 	if body.Len() == 0 {
 		return
 	}
-	fmt.Fprintf(b, "use go %q as %s {\n", alias, alias)
+	fmt.Fprintf(b, "use runtime.package.%s as %s {\n", alias, alias)
 	b.Write(body.Bytes())
 	b.WriteString("}\n")
+}
+
+func selfhostGenericParamsSource(params []*ast.GenericParam) string {
+	if len(params) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(params))
+	for _, param := range params {
+		if param == nil || param.Name == "" {
+			continue
+		}
+		// The synthetic checker source only needs generic arity. Stdlib bounds
+		// can reference interfaces from sibling packages that are not imported here.
+		names = append(names, param.Name)
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	return "<" + strings.Join(names, ", ") + ">"
 }
 
 func selfhostTypeSource(t ast.Type) string {

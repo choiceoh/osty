@@ -1,4 +1,4 @@
-use go "strings" as strings {
+use runtime.strings as strings {
     fn Split(s: String, sep: String) -> List<String>
 }
 

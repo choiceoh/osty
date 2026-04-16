@@ -28,7 +28,7 @@ func (s *pathSource) Name() string     { return s.name }
 // absolutize it, so lockfiles stay portable when collaborators have
 // identical relative layouts.
 func (s *pathSource) URI() string {
-	return "path+" + filepath.ToSlash(s.path)
+	return SelfhostPathSourceURI(filepath.ToSlash(s.path))
 }
 
 func (s *pathSource) absPath(env *Env) string {

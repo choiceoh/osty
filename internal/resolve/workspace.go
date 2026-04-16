@@ -231,7 +231,7 @@ func (w *Workspace) LoadPackage(dotPath string) (*Package, error) {
 	// loaded before we run resolution on this package.
 	for _, f := range pkg.Files {
 		for _, u := range f.File.Uses {
-			if u.IsGoFFI {
+			if u.IsFFI() {
 				continue
 			}
 			target := UseKey(u)
@@ -292,7 +292,7 @@ func (w *Workspace) loadFromExternalDir(key, dir string) (*Package, error) {
 
 	for _, f := range pkg.Files {
 		for _, u := range f.File.Uses {
-			if u.IsGoFFI {
+			if u.IsFFI() {
 				continue
 			}
 			target := UseKey(u)
@@ -429,7 +429,7 @@ func (w *Workspace) detectCycles() []importCycleDiag {
 		}
 		for _, f := range pkg.Files {
 			for _, u := range f.File.Uses {
-				if u.IsGoFFI {
+				if u.IsFFI() {
 					continue
 				}
 				target := UseKey(u)
@@ -539,7 +539,7 @@ func (w *Workspace) ResolveUseTarget(dotPath string, usePos token.Pos) (*Package
 		fmt.Sprintf("package `%s` not found in this workspace", dotPath)).
 		Code(diag.CodeUnknownPackage).
 		PrimaryPos(usePos, "unknown package").
-		Note("v0.3 §5.2: imports resolve to subdirectories of the project root")
+		Note("v0.4 §5.2: imports resolve to subdirectories of the project root")
 	if err != nil {
 		d.Note(err.Error())
 	}

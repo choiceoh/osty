@@ -1,3 +1,5 @@
+//go:build selfhostgen
+
 package check
 
 import (
@@ -32,11 +34,9 @@ func (c *checker) collect(d ast.Decl) {
 	case *ast.LetDecl:
 		c.collectLet(n)
 	case *ast.UseDecl:
-		// FFI `use go "path" { fn Foo(...); struct Bar { … } }` bodies
-		// carry inline declarations the checker should type-check too,
-		// even though the exported-member lookup (`pkg.Foo`) stays
-		// opaque in this MVP. Collecting now keeps per-fn signatures
-		// valid — anything mistyped in the FFI surface fires E0300 etc.
+		// FFI bodies carry inline declarations the checker should type-check
+		// too. Collecting now keeps per-fn signatures valid; anything
+		// mistyped in the FFI surface fires E0300 etc.
 		for _, gd := range n.GoBody {
 			c.collect(gd)
 		}

@@ -56,6 +56,9 @@ func (g *gen) emitStdlibOstyModule(module string) {
 
 	res := resolve.FileWithStdlib(mod.File, resolve.NewPrelude(), reg)
 	chk := check.File(mod.File, res, check.Opts{
+		UseSelfhost:   true,
+		Source:        mod.Source,
+		Stdlib:        reg,
 		Primitives:    reg.Primitives,
 		ResultMethods: reg.ResultMethods,
 	})

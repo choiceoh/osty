@@ -22,14 +22,18 @@
 - Multi-file package, vendored dependency, workspace build의 실제 code emission은
   아직 제한이 있다. LLVM 전환 전에 package 단위 emit/link 모델을 분명히 해야
   한다.
-- 현재 Phase 29까지의 LLVM backend 의미는 `examples/selfhost-core/llvmgen.osty`
+- 현재 Phase 45까지의 LLVM backend 의미는 `examples/selfhost-core/llvmgen.osty`
   쪽으로 옮겨지고 있다. 여기에는 smoke IR builder, skeleton renderer,
   toolchain command plan, executable parity corpus, go-only diagnostic, 그리고
   unsupported source-shape taxonomy가 포함된다. 성공 경로의 scalar instruction
   strings, temp/label naming, plain/escaped ASCII `String` `println` module
   constant/formatting shape, immutable/mutable local String value paths, and
-  simple String function return/parameter paths도 같은 selfhost-core에서
-  생성한다.
+  simple String function return/parameter paths, simple named struct type
+  definitions, struct literals, field reads, struct function boundaries, and
+  mutable struct locals, plus bare enum tag values across simple function and
+  mutable-local paths와 그 다음 payload-free enum match-expression paths도 같은
+  selfhost-core에서 생성한다. `Float`는 현재 double-subset로만 `Float`-smoke
+  경로를 처리하며, `Float32`/`Float64` width/ABI 정책은 후속 단계로 미룬다.
 
 ## 이주 원칙
 
@@ -320,16 +324,91 @@ artifact/cache layout 정책은 [`LLVM_ARTIFACT_LAYOUT.md`](./LLVM_ARTIFACT_LAYO
 | `Bool` | `i1` in SSA, ABI는 `i8` 가능 | runtime ABI에서 고정 |
 | `Char` | `i32` | Unicode scalar value |
 | `Byte` | `i8` | `UInt8`과 alias 여부 명시 필요 |
-| `Float/Float32/Float64` | `double/float/double` | `Float` width 정책 결정 |
+| `Float/Float32/Float64` | `double/float/double` | `Float`는 현재 단계에서 `double` 하위집합으로 다루고, `Float32`/`Float64` 정책은 후속 단계 |
 | `String` | `%osty.string` | pointer+len 또는 fat value |
 | `Bytes` | `%osty.bytes` | pointer+len+cap 또는 runtime-owned buffer |
 | `List<T>` | `%osty.list` + element descriptor | monomorphized typed list와 erased list 중 선택 |
 | `Option<T>` | tagged payload | nullable pointer optimization은 후순위 |
 | `Result<T,E>` | tagged payload | Go backend의 `Value/Error/IsOk`와 semantic parity |
-| `struct` | named LLVM struct 또는 opaque handle | layout stability 필요 |
-| `enum` | tag + max payload storage | niche optimization은 후순위 |
+| `struct` | named LLVM struct | Phase 30-33 smoke subset uses value aggregates; full ABI/layout stability remains runtime work |
+| `enum` | `i64` tag for bare variants, `%Enum = { i64, i64 }` for single-`Int` payload subset, tagged payload storage later | Phase 34-37 smoke subset covers payload-free variants; Phase 42-45 adds conservative single-`Int` tagged payload; broader payload layouts are later |
+| `match` | enum-tag switch/branch lowering | Phase 38-41 covers payload-free match expressions; Phase 42-45 adds `match` binding for single-`Int` payload enums |
 | closure | fn pointer + env pointer | capture lifetime/ownership 필요 |
 | interface | data pointer + vtable pointer | vtable generation은 Phase 5+ |
+
+### Phase 38-41. Payload-free enum match expressions
+
+목표: payload-free enum tag values가 `match` expression 경로를 타고 helper
+return/parameter boundaries와 mutable local slots을 지나도 동일하게 동작하게
+한다.
+
+작업:
+
+- `enum_match_print.osty`를 `main` 안의 payload-free enum match expression
+  smoke fixture로 추가한다.
+- `enum_match_return_print.osty`를 helper return 경계 smoke fixture로 추가한다.
+- `enum_match_param_print.osty`를 helper parameter 경계 smoke fixture로 추가한다.
+- `enum_match_mut_print.osty`를 mutable local slot smoke fixture로 추가한다.
+- 네 fixture 모두 `42\n`를 출력하도록 유지하고, selfhosted backend core의
+  match lowering을 기준으로 문서화한다.
+
+완료 조건:
+
+- payload-free enum match expression lowering이 current LLVM smoke corpus에
+  반영되어야 한다.
+- 각 smoke fixture의 expected stdout가 `42\n`로 문서화되어야 한다.
+- match lowering은 여전히 `examples/selfhost-core/llvmgen.osty`에서 소유되어야
+  한다.
+
+### Phase 42-45. Single-Int payload enum smoke subset
+
+목표: 단일 `Int` payload를 가진 enum을 보수적인 ABI로 낮춰 `match`가
+`Some(x)` 바인딩을 수행할 수 있게 한다.
+
+제약: 현재 단계는 오직 `Some(Int)`와 `None` 형태의 태그+단일 `i64` payload
+경로만 다룬다. `Some`은 `%Maybe = type { i64, i64 }`로 인코딩되고 인덱스 `0`이
+태그, 인덱스 `1`이 payload이다.
+
+작업:
+
+- `enum_payload_print.osty`를 `main` 안에서 `Some(42)` 생성 후 `match`로 `Some(x)`
+  바인딩하는 payload enum fixture로 추가한다.
+- `enum_payload_return_print.osty`를 helper return 경계 payload enum fixture로
+  추가한다.
+- `enum_payload_param_print.osty`를 helper parameter 경계 payload enum fixture로
+  추가한다.
+- `enum_payload_mut_print.osty`를 mutable local 할당 후 `match` payload 바인딩을
+  수행하는 payload enum fixture로 추가한다.
+- 문서(`LLVM_BACKEND_CORPUS.md`)의 4개 fixture와 기대 출력 `42\n`를 연결한다.
+
+완료 조건:
+
+- `%Enum = type { i64, i64 }` 기반 단일 `Int` payload enum이 LLVM smoke corpus에
+  반영되어야 한다.
+- payload enum `match`에서 `Some(x)` 바인딩이 동작해야 한다.
+- 반환/파라미터/mutable local 경계 fixture가 문서와 동일한 기대 동작을 가져야
+  한다.
+
+### Phase 46-53. Float smoke subset
+
+목표: `Float`를 `double`로 다루는 8개 LLVM smoke를 추가해, printf 기본 `%f`
+출력 형태로 `42.000000`을 내는 경로를 먼저 확인한다. `Float32`/`Float64`
+정책은 후속 단계로 미룬다.
+
+작업:
+
+- `float_print.osty`, `float_arithmetic_print.osty`, `float_return_print.osty`,
+  `float_param_print.osty`, `float_mut_print.osty`, `float_compare_print.osty`,
+  `float_struct_print.osty`, `float_enum_payload_print.osty`를 추가한다.
+- `LLVM_BACKEND_CORPUS.md`에 Phase 46~53 항목을 추가하고 기대 stdout을
+  `42.000000\n`으로 문서화한다.
+
+완료 조건:
+
+- `Float` smoke fixture의 8개가 같은 산출물 체인으로 selfhosted LLVM 경로에
+  포함되어야 한다.
+- `Float32`/`Float64` width 정책은 별도 단계에서 결정한다고 migration 문서에
+  명시되어야 한다.
 
 ## Toolchain 전략
 
@@ -388,7 +467,7 @@ artifact/cache layout 정책은 [`LLVM_ARTIFACT_LAYOUT.md`](./LLVM_ARTIFACT_LAYO
 
 ## 의사결정이 필요한 항목
 
-- `Int`와 `Float`의 정확한 native width 정책
+- `Int`와 `Float`의 정확한 native width 정책 (`Float32`/`Float64`는 후속 단계)
 - Memory model: manual/free, arena, refcount, GC 중 1차 선택
 - Runtime implementation language
 - LLVM target triple을 manifest `[target.*]`에 통합할지 별도 키로 둘지

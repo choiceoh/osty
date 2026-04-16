@@ -61,8 +61,8 @@ func runPipeline(args []string) {
 	fs.BoolVar(&trace, "trace", false, "stream a trace line to stderr as each phase completes")
 	fs.BoolVar(&perDecl, "per-decl", false, "report per-declaration check timing in the output")
 	fs.BoolVar(&runGen, "gen", false, "also run the selected backend as a final pipeline phase")
-	fs.StringVar(&backendName, "backend", defaultBackendName(), "code generation backend for --gen (go or llvm)")
-	fs.StringVar(&emitName, "emit", "", "artifact mode for --gen (go or llvm-ir; default follows backend)")
+	fs.StringVar(&backendName, "backend", defaultBackendName(), "code generation backend for --gen (llvm)")
+	fs.StringVar(&emitName, "emit", "", "artifact mode for --gen (llvm-ir; default follows backend)")
 	fs.BoolVar(&showDiagnostics, "diagnostics", false, "render full diagnostics after the pipeline report")
 	fs.StringVar(&cpuProfile, "cpuprofile", "", "write a CPU pprof profile to this path")
 	fs.StringVar(&memProfile, "memprofile", "", "write a memory pprof profile to this path after the pipeline")
@@ -72,8 +72,8 @@ func runPipeline(args []string) {
 		fs.Usage()
 		os.Exit(2)
 	}
-	backendID := backend.NameGo
-	emitMode := backend.EmitGoSource
+	backendID := backend.NameLLVM
+	emitMode := backend.EmitLLVMIR
 	if runGen {
 		backendID, emitMode = resolveBackendAndEmitFlags("pipeline", backendName, emitName)
 	} else if backendName != defaultBackendName() || emitName != "" {

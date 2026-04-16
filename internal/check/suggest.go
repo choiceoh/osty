@@ -1,3 +1,5 @@
+//go:build selfhostgen
+
 package check
 
 // suggestion utilities: for every "unknown field / method / variant"

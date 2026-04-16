@@ -1,3 +1,5 @@
+//go:build selfhostgen
+
 // Package check implements type checking for Osty.
 //
 // Runs AFTER parser + resolver. Consumes the resolved AST and produces a

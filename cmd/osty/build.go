@@ -23,19 +23,23 @@ import (
 )
 
 // runBuild implements the `osty build` subcommand: the manifest-aware
-// front-end pipeline end-to-end.
+// project pipeline end-to-end.
 //
 //  1. Locate osty.toml (walking up from PATH, default cwd).
 //  2. Load + validate the manifest, rendering any E2xxx diagnostics.
 //  3. Resolve dependencies (osty.lock is read; regenerated if stale).
 //  4. Vendor deps into <project>/.osty/deps/<name>/.
-//  5. Run the front-end (parse + resolve + type-check) across the
-//     project sources — as a workspace when [workspace] is present,
+//  5. Run the front-end (parse + resolve + type-check + lint) across
+//     the project sources — as a workspace when [workspace] is present,
 //     as a single package otherwise.
+//  6. Emit the selected backend artifact (Go source/binary or LLVM
+//     IR/object/binary) under .osty/out/<profile>[-<target>]/<backend>/.
+//  7. Record a backend-aware fingerprint under .osty/cache/ so an
+//     unchanged build can skip the front-end and backend work.
 //
 // Exit codes:
 //
-//	0   manifest + every package is clean
+//	0   manifest + every package is clean and requested artifacts were produced
 //	1   I/O failure, vendor / lockfile write error, or at least one
 //	    package emitted an error-severity diagnostic
 //	2   usage error or manifest validation failure
@@ -52,8 +56,8 @@ func runBuild(args []string, flags cliFlags) {
 	fs.BoolVar(&force, "force", false, "ignore the build cache; transpile every input")
 	var backendName string
 	var emitName string
-	fs.StringVar(&backendName, "backend", defaultBackendName(), "code generation backend (go or llvm)")
-	fs.StringVar(&emitName, "emit", "", "artifact mode (go, llvm-ir, object, or binary)")
+	fs.StringVar(&backendName, "backend", defaultBackendName(), "code generation backend (llvm)")
+	fs.StringVar(&emitName, "emit", "", "artifact mode (llvm-ir, object, or binary)")
 	var pf profileFlags
 	pf.register(fs)
 	_ = fs.Parse(args)
@@ -390,10 +394,8 @@ func buildPackage(dir string, m *manifest.Manifest, flags cliFlags, deps resolve
 }
 
 // emitAndBuild picks the entry file (manifest `[bin].path` or default
-// `main.osty`) and drives the selected backend. The Go backend still invokes
-// the Go toolchain for binary emission; LLVM can currently stop after
-// inspectable IR emission. Libraries (no entry file on disk) are a no-op until
-// the emitter grows package-per-package output.
+// `main.osty`) and drives the selected native backend. Libraries (no entry file
+// on disk) are a no-op until the emitter grows package-per-package output.
 //
 // Files whose header declares `@feature: NAME` via the @feature
 // pragma are skipped when NAME isn't in the active feature set, so

@@ -9,7 +9,7 @@ import (
 )
 
 // lintNaming flags identifiers that deviate from the project's house
-// style (per v0.3 spec examples):
+// style (per v0.4 spec examples):
 //
 //	L0030  types (struct / enum / interface / type alias / generic) must
 //	       be UpperCamelCase
@@ -17,7 +17,7 @@ import (
 //	       lowerCamelCase
 //	L0032  enum variants must be UpperCamelCase
 //
-// FFI bindings (declarations inside `use go "…" { … }`) are exempt: their
+// FFI bindings (declarations inside `use ... { … }`) are exempt: their
 // names mirror the host language's export convention, which is typically
 // UpperCamelCase even for functions. We therefore skip descent into
 // UseDecl.GoBody.

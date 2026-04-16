@@ -1,0 +1,1737 @@
+use go "strings" as strings {
+    fn HasPrefix(s: String, prefix: String) -> Bool
+    fn Join(elems: List<String>, sep: String) -> String
+    fn Repeat(s: String, count: Int) -> String
+    fn ReplaceAll(s: String, old: String, new: String) -> String
+    fn Split(s: String, sep: String) -> List<String>
+    fn SplitN(s: String, sep: String, n: Int) -> List<String>
+    fn ToLower(s: String) -> String
+    fn TrimPrefix(s: String, prefix: String) -> String
+    fn TrimSpace(s: String) -> String
+}
+
+/// SelfDocPackage is the self-hosted documentation root for one package.
+pub struct SelfDocPackage {
+    pub name: String,
+    pub dir: String,
+    pub modules: List<SelfDocModule>,
+}
+
+/// SelfDocModule stores the documented public declarations from one source.
+pub struct SelfDocModule {
+    pub path: String,
+    pub decls: List<SelfDocDecl>,
+}
+
+/// SelfDocDecl is one public API declaration extracted from the selfhost AST.
+pub struct SelfDocDecl {
+    pub kind: String,
+    pub name: String,
+    pub doc: String,
+    pub info: SelfDocInfo,
+    pub line: Int,
+    pub signature: String,
+    pub fields: List<SelfDocField>,
+    pub variants: List<SelfDocVariant>,
+    pub methods: List<SelfDocMethod>,
+    pub aliasTarget: String,
+    pub constType: String,
+}
+
+pub struct SelfDocMethod {
+    pub name: String,
+    pub doc: String,
+    pub info: SelfDocInfo,
+    pub line: Int,
+    pub signature: String,
+}
+
+pub struct SelfDocField {
+    pub name: String,
+    pub typ: String,
+    pub doc: String,
+}
+
+pub struct SelfDocVariant {
+    pub name: String,
+    pub payload: List<String>,
+    pub doc: String,
+}
+
+pub struct SelfDocInfo {
+    pub summary: String,
+    pub body: List<String>,
+    pub params: List<SelfDocParamDoc>,
+    pub returns: String,
+    pub examples: List<String>,
+    pub see: List<String>,
+}
+
+pub struct SelfDocParamDoc {
+    pub name: String,
+    pub desc: String,
+}
+
+pub struct SelfDocExample {
+    pub module: String,
+    pub decl: String,
+    pub line: Int,
+    pub code: String,
+}
+
+pub struct SelfDocExampleReport {
+    pub examples: Int,
+    pub failures: Int,
+    pub firstFailure: String,
+}
+
+pub struct SelfDocExampleError {
+    pub Module: String,
+    pub Decl: String,
+    pub Line: Int,
+    pub Message: String,
+}
+
+pub struct SelfDocWorkspace {
+    pub root: String,
+    pub packages: List<SelfDocPackage>,
+}
+
+struct SelfDocRef {
+    name: String,
+    anchor: String,
+}
+
+pub fn FromSource(packageName: String, path: String, source: String) -> SelfDocPackage {
+    selfDocFromSource(packageName, path, source)
+}
+
+pub fn FromSources(
+    packageName: String,
+    dir: String,
+    paths: List<String>,
+    sources: List<String>,
+) -> SelfDocPackage {
+    let mut modules: List<SelfDocModule> = []
+    let count = selfDocStringListCount(paths)
+    for idx in 0..count {
+        let path = paths[idx]
+        let mut source = ""
+        if idx < selfDocStringListCount(sources) {
+            source = sources[idx]
+        }
+        modules.push(selfDocModuleFromSource(path, source))
+    }
+    SelfDocPackage { name: packageName, dir, modules }
+}
+
+pub fn RenamePackage(pkg: SelfDocPackage, name: String) -> SelfDocPackage {
+    let mut out = pkg
+    out.name = name
+    out
+}
+
+pub fn PackageName(pkg: SelfDocPackage) -> String {
+    pkg.name
+}
+
+pub fn RenderMarkdown(pkg: SelfDocPackage) -> String {
+    selfDocRenderMarkdown(pkg)
+}
+
+pub fn RenderHTML(pkg: SelfDocPackage) -> String {
+    selfDocRenderHTML(pkg)
+}
+
+pub fn VerifyExamples(pkg: SelfDocPackage) -> List<SelfDocExampleError> {
+    let mut out: List<SelfDocExampleError> = []
+    for ex in selfDocExamples(pkg) {
+        let parsed = astParse(ex.code)
+        if astFileErrorCount(parsed) > 0 {
+            let first = astFileErrorAt(parsed, 0)
+            out.push(
+                SelfDocExampleError {
+                    Module: ex.module,
+                    Decl: ex.decl,
+                    Line: ex.line,
+                    Message: first.message,
+                },
+            )
+        }
+    }
+    out
+}
+
+pub fn ExampleErrorFormat(err: SelfDocExampleError) -> String {
+    if err.Message == "" {
+        return "{err.Module}: example in {err.Decl} failed: unknown parse failure"
+    }
+    "{err.Module}: example in {err.Decl} failed:\n  {err.Line}:1: {err.Message}"
+}
+
+pub fn FromWorkspacePackages(root: String, packages: List<SelfDocPackage>) -> SelfDocWorkspace {
+    SelfDocWorkspace { root, packages }
+}
+
+pub fn RenderWorkspaceMarkdown(ws: SelfDocWorkspace, ext: String) -> String {
+    selfDocRenderWorkspaceMarkdown(ws, ext)
+}
+
+pub fn RenderWorkspaceHTML(ws: SelfDocWorkspace, ext: String) -> String {
+    selfDocRenderWorkspaceHTML(ws, ext)
+}
+
+pub fn PreferredPackageName(name: String, importPath: String, dir: String) -> String {
+    if name != "" {
+        return name
+    }
+    if importPath != "" {
+        return importPath
+    }
+    if dir != "" {
+        return selfDocBaseName(dir)
+    }
+    "package"
+}
+
+pub fn SafePackageFilename(name: String) -> String {
+    selfDocSafePackageFilename(name)
+}
+
+pub fn selfDocFromSource(packageName: String, path: String, source: String) -> SelfDocPackage {
+    let module = selfDocModuleFromSource(path, source)
+    SelfDocPackage { name: packageName, dir: "", modules: [module] }
+}
+
+fn selfDocModuleFromSource(path: String, source: String) -> SelfDocModule {
+    let file = astParse(source)
+    let lexed = ostyLex(source)
+    let mut module = SelfDocModule { path, decls: [] }
+
+    for declIdx in file.arena.decls {
+        let node = astArenaNodeAt(file.arena, declIdx)
+        let decl = selfDocDeclFromNode(file, lexed, node)
+        if decl.kind != "" {
+            module.decls.push(decl)
+        }
+    }
+
+    module
+}
+
+pub fn selfDocRenderMarkdown(pkg: SelfDocPackage) -> String {
+    let mut lines: List<String> = []
+    let refs = selfDocBuildIndex(pkg)
+    lines.push("# Package `{pkg.name}`")
+    lines.push("")
+    if pkg.dir != "" {
+        lines.push("_Source directory: `{pkg.dir}`_")
+        lines.push("")
+    }
+
+    let toc = selfDocRenderTOC(pkg)
+    if toc != "" {
+        lines.push("## Contents")
+        lines.push("")
+        lines.push(toc)
+    }
+
+    for module in pkg.modules {
+        if selfDocDeclListCount(module.decls) > 0 {
+            lines.push("## `{module.path}`")
+            lines.push("")
+            for decl in module.decls {
+                lines.push(selfDocRenderDeclMarkdown(decl, 3, refs))
+            }
+        }
+    }
+
+    strings.Join(lines, "\n")
+}
+
+fn selfDocRenderHTML(pkg: SelfDocPackage) -> String {
+    let mut lines: List<String> = []
+    let safePackageName = selfDocHTMLEscape(pkg.name)
+    let refs = selfDocBuildIndex(pkg)
+    lines.push("<!doctype html>")
+    lines.push("<html lang=\"en\">")
+    lines.push("<head>")
+    lines.push("<meta charset=\"utf-8\">")
+    lines.push("<title>{safePackageName} - Osty API docs</title>")
+    lines.push(selfDocHTMLStylesheet())
+    lines.push("</head>")
+    lines.push("<body>")
+    lines.push("<main>")
+    lines.push("<h1>Package <code>{safePackageName}</code></h1>")
+    if pkg.dir != "" {
+        let safeDir = selfDocHTMLEscape(pkg.dir)
+        lines.push("<p class=\"src-path\">Source directory: <code>{safeDir}</code></p>")
+    }
+    let toc = selfDocRenderHTMLTOC(pkg)
+    if toc != "" {
+        lines.push("<nav class=\"toc\"><h2>Contents</h2>")
+        lines.push(toc)
+        lines.push("</nav>")
+    }
+    for module in pkg.modules {
+        if selfDocDeclListCount(module.decls) > 0 {
+            let label = selfDocBaseName(module.path)
+            let safeLabel = selfDocHTMLEscape(label)
+            lines.push("<section class=\"module\">")
+            lines.push("<h2><code>{safeLabel}</code></h2>")
+            for decl in module.decls {
+                lines.push(selfDocRenderHTMLDecl(decl, 3, refs))
+            }
+            lines.push("</section>")
+        }
+    }
+    lines.push("</main>")
+    lines.push("</body>")
+    lines.push("</html>")
+    let rendered = strings.Join(lines, "\n")
+    "{rendered}\n"
+}
+
+fn selfDocRenderHTMLTOC(pkg: SelfDocPackage) -> String {
+    let mut lines: List<String> = []
+    for module in pkg.modules {
+        if selfDocDeclListCount(module.decls) > 0 {
+            let label = selfDocBaseName(module.path)
+            let safeLabel = selfDocHTMLEscape(label)
+            lines.push("<h3><code>{safeLabel}</code></h3>")
+            lines.push("<ul>")
+            for decl in module.decls {
+                let anchor = selfDocRenderDeclAnchor(decl)
+                let title = selfDocKindTitle(decl.kind)
+                let safeTitle = selfDocHTMLEscape(title)
+                let safeDeclName = selfDocHTMLEscape(decl.name)
+                lines.push(
+                    "  <li><a href=\"#{anchor}\">{safeTitle} <code>{safeDeclName}</code></a></li>",
+                )
+            }
+            lines.push("</ul>")
+        }
+    }
+    strings.Join(lines, "\n")
+}
+
+fn selfDocRenderHTMLDecl(decl: SelfDocDecl, level: Int, refs: List<SelfDocRef>) -> String {
+    let mut lines: List<String> = []
+    let anchor = selfDocRenderDeclAnchor(decl)
+    let title = selfDocKindTitle(decl.kind)
+    let tag = selfDocHeadingTag(level)
+    let safeTitle = selfDocHTMLEscape(title)
+    let safeDeclName = selfDocHTMLEscape(decl.name)
+    let linkedSignature = selfDocLinkifyHTML(decl.signature, refs, decl.name)
+    lines.push("<article class=\"decl kind-{decl.kind}\" id='{anchor}'>")
+    lines.push("<{tag}>{safeTitle} <code>{safeDeclName}</code></{tag}>")
+    lines.push("<pre class=\"sig\"><code>{linkedSignature}</code></pre>")
+    if decl.line > 0 {
+        lines.push("<p class=\"source-line\">Defined at line {decl.line}.</p>")
+    }
+    lines = selfDocAppendInfoHTML(lines, decl.info)
+    if selfDocFieldCount(decl.fields) > 0 {
+        let anyFieldDoc = selfDocFieldsHaveDoc(decl.fields)
+        lines.push("<h4>Fields</h4>")
+        lines.push("<table class=\"fields\">")
+        if anyFieldDoc {
+            lines.push("<thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead>")
+        } else {
+            lines.push("<thead><tr><th>Name</th><th>Type</th></tr></thead>")
+        }
+        lines.push("<tbody>")
+        for field in decl.fields {
+            let safeFieldName = selfDocHTMLEscape(field.name)
+            let linkedFieldType = selfDocLinkifyHTML(field.typ, refs, decl.name)
+            if anyFieldDoc {
+                let fieldDoc = selfDocFirstLine(field.doc)
+                let safeFieldDoc = selfDocHTMLEscape(fieldDoc)
+                lines.push(
+                    "<tr><td><code>{safeFieldName}</code></td><td><code>{linkedFieldType}</code></td><td>{safeFieldDoc}</td></tr>",
+                )
+            } else {
+                lines.push(
+                    "<tr><td><code>{safeFieldName}</code></td><td><code>{linkedFieldType}</code></td></tr>",
+                )
+            }
+        }
+        lines.push("</tbody></table>")
+    }
+    if selfDocVariantCount(decl.variants) > 0 {
+        lines.push("<h4>Variants</h4>")
+        lines.push("<ul class=\"variants\">")
+        for variant in decl.variants {
+            let payload = strings.Join(variant.payload, ", ")
+            let safeVariantName = selfDocHTMLEscape(variant.name)
+            let variantDoc = selfDocHTMLDashDoc(variant.doc)
+            if payload == "" {
+                lines.push("<li><code>{safeVariantName}</code>{variantDoc}</li>")
+            } else {
+                let safePayload = selfDocLinkifyHTML(payload, refs, decl.name)
+                lines.push("<li><code>{safeVariantName}({safePayload})</code>{variantDoc}</li>")
+            }
+        }
+        lines.push("</ul>")
+    }
+    if selfDocMethodCount(decl.methods) > 0 {
+        lines.push("<h4>Methods</h4>")
+        lines.push("<div class=\"methods\">")
+        for method in decl.methods {
+            lines.push(selfDocRenderHTMLMethod(method, level + 1, refs))
+        }
+        lines.push("</div>")
+    }
+    lines.push("</article>")
+    strings.Join(lines, "\n")
+}
+
+fn selfDocRenderHTMLMethod(method: SelfDocMethod, level: Int, refs: List<SelfDocRef>) -> String {
+    let mut lines: List<String> = []
+    let tag = selfDocHeadingTag(level)
+    let anchor = selfDocSlug("Function {method.name}")
+    let safeMethodName = selfDocHTMLEscape(method.name)
+    let linkedSignature = selfDocLinkifyHTML(method.signature, refs, method.name)
+    lines.push("<article class=\"decl kind-function\" id='{anchor}'>")
+    lines.push("<{tag}>Function <code>{safeMethodName}</code></{tag}>")
+    lines.push("<pre class=\"sig\"><code>{linkedSignature}</code></pre>")
+    if method.line > 0 {
+        lines.push("<p class=\"source-line\">Defined at line {method.line}.</p>")
+    }
+    lines = selfDocAppendInfoHTML(lines, method.info)
+    lines.push("</article>")
+    strings.Join(lines, "\n")
+}
+
+fn selfDocAppendInfoHTML(lines: List<String>, info: SelfDocInfo) -> List<String> {
+    let mut out = lines
+    if info.summary != "" {
+        let safeSummary = selfDocHTMLEscape(info.summary)
+        out.push("<p class=\"summary\">{safeSummary}</p>")
+    }
+    for body in info.body {
+        let safeBody = selfDocHTMLEscape(body)
+        out.push("<p>{safeBody}</p>")
+    }
+    if selfDocParamDocCount(info.params) > 0 {
+        out.push("<h4>Parameters</h4>")
+        out.push("<table class=\"params\">")
+        out.push("<thead><tr><th>Name</th><th>Description</th></tr></thead>")
+        out.push("<tbody>")
+        for param in info.params {
+            let safeParamName = selfDocHTMLEscape(param.name)
+            let safeParamDesc = selfDocHTMLEscape(param.desc)
+            out.push("<tr><td><code>{safeParamName}</code></td><td>{safeParamDesc}</td></tr>")
+        }
+        out.push("</tbody></table>")
+    }
+    if info.returns != "" {
+        let safeReturns = selfDocHTMLEscape(info.returns)
+        out.push("<h4>Returns</h4>")
+        out.push("<p>{safeReturns}</p>")
+    }
+    for example in info.examples {
+        let safeExample = selfDocHTMLEscape(example)
+        out.push("<h4>Example</h4>")
+        out.push("<pre class=\"example\"><code>{safeExample}</code></pre>")
+    }
+    if selfDocStringListCount(info.see) > 0 {
+        out.push("<h4>See also</h4>")
+        out.push("<ul class=\"see-also\">")
+        for ref in info.see {
+            let safeRef = selfDocHTMLEscape(ref)
+            out.push("<li><code>{safeRef}</code></li>")
+        }
+        out.push("</ul>")
+    }
+    out
+}
+
+fn selfDocRenderWorkspaceMarkdown(ws: SelfDocWorkspace, ext: String) -> String {
+    let mut lines: List<String> = []
+    lines.push("# Workspace API documentation")
+    lines.push("")
+    if ws.root != "" {
+        lines.push("_Root: `{ws.root}`_")
+        lines.push("")
+    }
+    if selfDocPackageListCount(ws.packages) == 0 {
+        lines.push("_No documented packages._")
+        let rendered = strings.Join(lines, "\n")
+        return "{rendered}\n"
+    }
+    lines.push("## Packages")
+    lines.push("")
+    lines.push("| Package | Summary |")
+    lines.push("|---|---|")
+    for pkg in ws.packages {
+        let filename = selfDocSafePackageFilename(pkg.name)
+        let summary = selfDocPackageSummary(pkg)
+        let escapedSummary = selfDocEscapePipes(summary)
+        lines.push("| [`{pkg.name}`]({filename}{ext}) | {escapedSummary} |")
+    }
+    lines.push("")
+    strings.Join(lines, "\n")
+}
+
+fn selfDocRenderWorkspaceHTML(ws: SelfDocWorkspace, ext: String) -> String {
+    let mut lines: List<String> = []
+    lines.push("<!doctype html>")
+    lines.push("<html lang=\"en\">")
+    lines.push("<head>")
+    lines.push("<meta charset=\"utf-8\">")
+    lines.push("<title>Workspace API docs - Osty</title>")
+    lines.push(selfDocHTMLStylesheet())
+    lines.push("</head>")
+    lines.push("<body>")
+    lines.push("<main>")
+    lines.push("<h1>Workspace API documentation</h1>")
+    if ws.root != "" {
+        let safeRoot = selfDocHTMLEscape(ws.root)
+        lines.push("<p class=\"src-path\">Root: <code>{safeRoot}</code></p>")
+    }
+    if selfDocPackageListCount(ws.packages) == 0 {
+        lines.push("<p><em>No documented packages.</em></p>")
+        lines.push("</main>")
+        lines.push("</body>")
+        lines.push("</html>")
+        let rendered = strings.Join(lines, "\n")
+        return "{rendered}\n"
+    }
+    lines.push("<h2>Packages</h2>")
+    lines.push("<table>")
+    lines.push("<thead><tr><th>Package</th><th>Summary</th></tr></thead>")
+    lines.push("<tbody>")
+    for pkg in ws.packages {
+        let filename = selfDocSafePackageFilename(pkg.name)
+        let summary = selfDocPackageSummary(pkg)
+        let safePackageName = selfDocHTMLEscape(pkg.name)
+        let safeSummary = selfDocHTMLEscape(summary)
+        lines.push(
+            "<tr><td><a href='{filename}{ext}'><code>{safePackageName}</code></a></td><td>{safeSummary}</td></tr>",
+        )
+    }
+    lines.push("</tbody></table>")
+    lines.push("</main>")
+    lines.push("</body>")
+    lines.push("</html>")
+    let rendered = strings.Join(lines, "\n")
+    "{rendered}\n"
+}
+
+pub fn selfDocExamples(pkg: SelfDocPackage) -> List<SelfDocExample> {
+    let mut out: List<SelfDocExample> = []
+    for module in pkg.modules {
+        for decl in module.decls {
+            for code in decl.info.examples {
+                out.push(
+                    SelfDocExample {
+                        module: module.path,
+                        decl: "{decl.kind} {decl.name}",
+                        line: decl.line,
+                        code,
+                    },
+                )
+            }
+            for method in decl.methods {
+                for code in method.info.examples {
+                    out.push(
+                        SelfDocExample {
+                            module: module.path,
+                            decl: "method {method.name}",
+                            line: method.line,
+                            code,
+                        },
+                    )
+                }
+            }
+        }
+    }
+    out
+}
+
+pub fn selfDocVerifyExamples(pkg: SelfDocPackage) -> SelfDocExampleReport {
+    let mut examples = 0
+    let mut failures = 0
+    let mut firstFailure = ""
+
+    for ex in selfDocExamples(pkg) {
+        examples = examples + 1
+        let parsed = astParse(ex.code)
+        if astFileErrorCount(parsed) > 0 {
+            failures = failures + 1
+            if firstFailure == "" {
+                firstFailure = "{ex.module}: example in {ex.decl} failed"
+            }
+        }
+    }
+
+    SelfDocExampleReport { examples, failures, firstFailure }
+}
+
+pub fn selfDocPackageDeclCount(pkg: SelfDocPackage) -> Int {
+    let mut count = 0
+    for module in pkg.modules {
+        for decl in module.decls {
+            let _ = decl
+            count = count + 1
+        }
+    }
+    count
+}
+
+pub fn selfDocPackageHasDecl(pkg: SelfDocPackage, name: String, kind: String) -> Bool {
+    for module in pkg.modules {
+        for decl in module.decls {
+            if decl.name == name && decl.kind == kind {
+                return true
+            }
+        }
+    }
+    false
+}
+
+pub fn selfDocFieldCount(fields: List<SelfDocField>) -> Int {
+    let mut count = 0
+    for field in fields {
+        let _ = field
+        count = count + 1
+    }
+    count
+}
+
+pub fn selfDocMethodCount(methods: List<SelfDocMethod>) -> Int {
+    let mut count = 0
+    for method in methods {
+        let _ = method
+        count = count + 1
+    }
+    count
+}
+
+pub fn selfDocVariantCount(variants: List<SelfDocVariant>) -> Int {
+    let mut count = 0
+    for variant in variants {
+        let _ = variant
+        count = count + 1
+    }
+    count
+}
+
+pub fn selfDocPackageDeclNamed(pkg: SelfDocPackage, name: String) -> SelfDocDecl {
+    for module in pkg.modules {
+        for decl in module.decls {
+            if decl.name == name {
+                return decl
+            }
+        }
+    }
+    selfDocEmptyDecl()
+}
+
+fn selfDocDeclFromNode(file: AstFile, lexed: OstyLexResult, node: AstNode) -> SelfDocDecl {
+    if node.kind == AstNFnDecl && selfDocNodeIsPub(lexed, node) {
+        return selfDocFnDecl(file, lexed, node)
+    }
+    if node.kind == AstNStructDecl && selfDocNodeIsPub(lexed, node) {
+        return selfDocStructDecl(file, lexed, node)
+    }
+    if node.kind == AstNEnumDecl && selfDocNodeIsPub(lexed, node) {
+        return selfDocEnumDecl(file, lexed, node)
+    }
+    if node.kind == AstNInterfaceDecl && selfDocNodeIsPub(lexed, node) {
+        return selfDocInterfaceDecl(file, lexed, node)
+    }
+    if node.kind == AstNTypeAlias && selfDocNodeIsPub(lexed, node) {
+        return selfDocTypeAliasDecl(file, lexed, node)
+    }
+    if node.kind == AstNLet && selfDocNodeIsPub(lexed, node) {
+        return selfDocConstDecl(file, lexed, node)
+    }
+    selfDocEmptyDecl()
+}
+
+fn selfDocFnDecl(file: AstFile, lexed: OstyLexResult, node: AstNode) -> SelfDocDecl {
+    let doc = selfDocDocAt(lexed, node.start)
+    SelfDocDecl {
+        kind: "function",
+        name: node.text,
+        doc,
+        info: selfDocParseDoc(doc),
+        line: selfDocLineAt(lexed, node.start),
+        signature: selfDocRenderFnSignature(file, node),
+        fields: [],
+        variants: [],
+        methods: [],
+        aliasTarget: "",
+        constType: "",
+    }
+}
+
+fn selfDocStructDecl(file: AstFile, lexed: OstyLexResult, node: AstNode) -> SelfDocDecl {
+    let doc = selfDocDocAt(lexed, node.start)
+    let mut fields: List<SelfDocField> = []
+    let mut methods: List<SelfDocMethod> = []
+
+    for childIdx in node.children {
+        let child = astArenaNodeAt(file.arena, childIdx)
+        if child.kind == AstNField_ && selfDocNodeIsPub(lexed, child) {
+            fields.push(
+                SelfDocField {
+                    name: child.text,
+                    typ: selfDocRenderType(file, child.right),
+                    doc: selfDocDocAt(lexed, child.start),
+                },
+            )
+        } else if child.kind == AstNFnDecl && selfDocNodeIsPub(lexed, child) {
+            methods.push(selfDocMethodFromNode(file, lexed, child))
+        }
+    }
+
+    SelfDocDecl {
+        kind: "struct",
+        name: node.text,
+        doc,
+        info: selfDocParseDoc(doc),
+        line: selfDocLineAt(lexed, node.start),
+        signature: selfDocRenderStructHeader(file, node),
+        fields,
+        variants: [],
+        methods,
+        aliasTarget: "",
+        constType: "",
+    }
+}
+
+fn selfDocEnumDecl(file: AstFile, lexed: OstyLexResult, node: AstNode) -> SelfDocDecl {
+    let doc = selfDocDocAt(lexed, node.start)
+    let mut variants: List<SelfDocVariant> = []
+    let mut methods: List<SelfDocMethod> = []
+
+    for childIdx in node.children {
+        let child = astArenaNodeAt(file.arena, childIdx)
+        if child.kind == AstNVariant {
+            let mut payload: List<String> = []
+            for typIdx in child.children {
+                payload.push(selfDocRenderType(file, typIdx))
+            }
+            variants.push(
+                SelfDocVariant {
+                    name: child.text,
+                    payload,
+                    doc: selfDocDocAt(lexed, child.start),
+                },
+            )
+        } else if child.kind == AstNFnDecl && selfDocNodeIsPub(lexed, child) {
+            methods.push(selfDocMethodFromNode(file, lexed, child))
+        }
+    }
+
+    SelfDocDecl {
+        kind: "enum",
+        name: node.text,
+        doc,
+        info: selfDocParseDoc(doc),
+        line: selfDocLineAt(lexed, node.start),
+        signature: selfDocRenderEnumHeader(file, node),
+        fields: [],
+        variants,
+        methods,
+        aliasTarget: "",
+        constType: "",
+    }
+}
+
+fn selfDocInterfaceDecl(file: AstFile, lexed: OstyLexResult, node: AstNode) -> SelfDocDecl {
+    let doc = selfDocDocAt(lexed, node.start)
+    let mut methods: List<SelfDocMethod> = []
+
+    for childIdx in node.children {
+        let child = astArenaNodeAt(file.arena, childIdx)
+        if child.kind == AstNFnDecl {
+            methods.push(selfDocMethodFromNode(file, lexed, child))
+        }
+    }
+
+    SelfDocDecl {
+        kind: "interface",
+        name: node.text,
+        doc,
+        info: selfDocParseDoc(doc),
+        line: selfDocLineAt(lexed, node.start),
+        signature: selfDocRenderInterfaceHeader(file, node),
+        fields: [],
+        variants: [],
+        methods,
+        aliasTarget: "",
+        constType: "",
+    }
+}
+
+fn selfDocTypeAliasDecl(file: AstFile, lexed: OstyLexResult, node: AstNode) -> SelfDocDecl {
+    let doc = selfDocDocAt(lexed, node.start)
+    let target = selfDocRenderType(file, node.left)
+    SelfDocDecl {
+        kind: "type",
+        name: node.text,
+        doc,
+        info: selfDocParseDoc(doc),
+        line: selfDocLineAt(lexed, node.start),
+        signature: selfDocRenderTypeAliasHeader(file, node),
+        fields: [],
+        variants: [],
+        methods: [],
+        aliasTarget: target,
+        constType: "",
+    }
+}
+
+fn selfDocConstDecl(file: AstFile, lexed: OstyLexResult, node: AstNode) -> SelfDocDecl {
+    let doc = selfDocDocAt(lexed, node.start)
+    let typ = selfDocLetType(file, node)
+    SelfDocDecl {
+        kind: "constant",
+        name: selfDocLetName(file, node),
+        doc,
+        info: selfDocParseDoc(doc),
+        line: selfDocLineAt(lexed, node.start),
+        signature: selfDocRenderLetHeader(file, node),
+        fields: [],
+        variants: [],
+        methods: [],
+        aliasTarget: "",
+        constType: typ,
+    }
+}
+
+fn selfDocMethodFromNode(file: AstFile, lexed: OstyLexResult, node: AstNode) -> SelfDocMethod {
+    let doc = selfDocDocAt(lexed, node.start)
+    SelfDocMethod {
+        name: node.text,
+        doc,
+        info: selfDocParseDoc(doc),
+        line: selfDocLineAt(lexed, node.start),
+        signature: selfDocRenderFnSignature(file, node),
+    }
+}
+
+fn selfDocParseDoc(raw: String) -> SelfDocInfo {
+    let mut info = selfDocEmptyInfo()
+    if raw == "" {
+        return info
+    }
+
+    let mut section = "prose"
+    let mut exampleLines: List<String> = []
+    for rawLine in strings.Split(raw, "\n") {
+        let line = strings.TrimSpace(rawLine)
+        if selfDocIsSection(line, "Params:") || selfDocIsSection(line, "Param:") || selfDocIsSection(
+            line,
+            "Args:",
+        ) || selfDocIsSection(line, "Arguments:") {
+            info = selfDocFlushExample(info, exampleLines)
+            exampleLines = []
+            section = "params"
+            let rest = selfDocSectionRest(line)
+            if rest != "" {
+                info = selfDocAddParamLine(info, rest)
+            }
+        } else if selfDocIsSection(line, "Returns:") || selfDocIsSection(line, "Return:") {
+            info = selfDocFlushExample(info, exampleLines)
+            exampleLines = []
+            section = "returns"
+            let rest = selfDocSectionRest(line)
+            if rest != "" {
+                info.returns = selfDocAppendSentence(info.returns, rest)
+            }
+        } else if selfDocIsSection(line, "Example:") || selfDocIsSection(line, "Examples:") {
+            info = selfDocFlushExample(info, exampleLines)
+            exampleLines = []
+            section = "example"
+            let rest = selfDocSectionRest(line)
+            if rest != "" {
+                exampleLines.push(rest)
+            }
+        } else if selfDocIsSection(line, "See:") || selfDocIsSection(line, "See also:") {
+            info = selfDocFlushExample(info, exampleLines)
+            exampleLines = []
+            section = "see"
+            info = selfDocAddSeeLine(info, selfDocSectionRest(line))
+        } else if section == "params" {
+            if line != "" {
+                info = selfDocAddParamLine(info, line)
+            }
+        } else if section == "returns" {
+            if line != "" {
+                info.returns = selfDocAppendSentence(info.returns, line)
+            }
+        } else if section == "example" {
+            exampleLines.push(rawLine)
+        } else if section == "see" {
+            info = selfDocAddSeeLine(info, line)
+        } else if line != "" {
+            if info.summary == "" {
+                info.summary = line
+            } else {
+                info.body.push(line)
+            }
+        }
+    }
+
+    selfDocFlushExample(info, exampleLines)
+}
+
+fn selfDocRenderDeclMarkdown(decl: SelfDocDecl, level: Int, refs: List<SelfDocRef>) -> String {
+    let mut lines: List<String> = []
+    let heading = strings.Repeat("#", level)
+    let title = selfDocKindTitle(decl.kind)
+    lines.push("{heading} {title} `{decl.name}`")
+    lines.push("")
+    lines.push("```osty")
+    lines.push(decl.signature)
+    lines.push("```")
+    lines.push("")
+    if decl.line > 0 {
+        lines.push("_Defined at line {decl.line}._")
+        lines.push("")
+    }
+    let declRefs = selfDocRefsInDecl(decl, refs)
+    if selfDocStringListCount(declRefs) > 0 {
+        let links = selfDocJoinRefLinks(declRefs, refs)
+        lines.push("_References: {links}_")
+        lines.push("")
+    }
+    lines = selfDocAppendInfoMarkdown(lines, decl.info, level + 1)
+
+    if selfDocFieldCount(decl.fields) > 0 {
+        let subHeading = strings.Repeat("#", level + 1)
+        lines.push("{subHeading} Fields")
+        lines.push("")
+        let anyFieldDoc = selfDocFieldsHaveDoc(decl.fields)
+        if anyFieldDoc {
+            lines.push("| Name | Type | Description |")
+            lines.push("|---|---|---|")
+            for field in decl.fields {
+                let fieldDoc = selfDocFirstLine(field.doc)
+                lines.push("| `{field.name}` | `{field.typ}` | {fieldDoc} |")
+            }
+        } else {
+            lines.push("| Name | Type |")
+            lines.push("|---|---|")
+            for field in decl.fields {
+                lines.push("| `{field.name}` | `{field.typ}` |")
+            }
+        }
+        lines.push("")
+    }
+
+    if selfDocVariantCount(decl.variants) > 0 {
+        let subHeading = strings.Repeat("#", level + 1)
+        lines.push("{subHeading} Variants")
+        lines.push("")
+        for variant in decl.variants {
+            let payload = strings.Join(variant.payload, ", ")
+            let variantDoc = selfDocDashDoc(variant.doc)
+            if payload == "" {
+                lines.push("- `{variant.name}` {variantDoc}")
+            } else {
+                lines.push("- `{variant.name}({payload})` {variantDoc}")
+            }
+        }
+        lines.push("")
+    }
+
+    if selfDocMethodCount(decl.methods) > 0 {
+        let subHeading = strings.Repeat("#", level + 1)
+        lines.push("{subHeading} Methods")
+        lines.push("")
+        for method in decl.methods {
+            lines.push(selfDocRenderMethodMarkdown(method, level + 2, refs))
+        }
+    }
+
+    strings.Join(lines, "\n")
+}
+
+fn selfDocRenderMethodMarkdown(method: SelfDocMethod, level: Int, refs: List<SelfDocRef>) -> String {
+    let mut lines: List<String> = []
+    let heading = strings.Repeat("#", level)
+    lines.push("{heading} Function `{method.name}`")
+    lines.push("")
+    lines.push("```osty")
+    lines.push(method.signature)
+    lines.push("```")
+    lines.push("")
+    if method.line > 0 {
+        lines.push("_Defined at line {method.line}._")
+        lines.push("")
+    }
+    let methodRefs = selfDocRefsInMethod(method, refs)
+    if selfDocStringListCount(methodRefs) > 0 {
+        let links = selfDocJoinRefLinks(methodRefs, refs)
+        lines.push("_References: {links}_")
+        lines.push("")
+    }
+    lines = selfDocAppendInfoMarkdown(lines, method.info, level + 1)
+    strings.Join(lines, "\n")
+}
+
+fn selfDocAppendInfoMarkdown(lines: List<String>, info: SelfDocInfo, level: Int) -> List<String> {
+    let mut out = lines
+    if info.summary != "" {
+        out.push(info.summary)
+        out.push("")
+    }
+    for body in info.body {
+        out.push(body)
+        out.push("")
+    }
+    if selfDocParamDocCount(info.params) > 0 {
+        let heading = strings.Repeat("#", level)
+        out.push("{heading} Parameters")
+        out.push("")
+        out.push("| Name | Description |")
+        out.push("|---|---|")
+        for param in info.params {
+            let desc = selfDocEscapePipes(param.desc)
+            out.push("| `{param.name}` | {desc} |")
+        }
+        out.push("")
+    }
+    if info.returns != "" {
+        let heading = strings.Repeat("#", level)
+        out.push("{heading} Returns")
+        out.push("")
+        out.push(info.returns)
+        out.push("")
+    }
+    for example in info.examples {
+        let heading = strings.Repeat("#", level)
+        out.push("{heading} Example")
+        out.push("")
+        out.push("```osty")
+        out.push(example)
+        out.push("```")
+        out.push("")
+    }
+    if selfDocStringListCount(info.see) > 0 {
+        let heading = strings.Repeat("#", level)
+        out.push("{heading} See also")
+        out.push("")
+        for ref in info.see {
+            out.push("- `{ref}`")
+        }
+        out.push("")
+    }
+    out
+}
+
+fn selfDocRenderTOC(pkg: SelfDocPackage) -> String {
+    let mut lines: List<String> = []
+    for module in pkg.modules {
+        if selfDocDeclListCount(module.decls) > 0 {
+            lines.push("- **{module.path}**")
+            for decl in module.decls {
+                let anchor = selfDocRenderDeclAnchor(decl)
+                lines.push("  - [{decl.kind} `{decl.name}`](#{anchor})")
+            }
+        }
+    }
+    strings.Join(lines, "\n")
+}
+
+fn selfDocRenderFnSignature(file: AstFile, node: AstNode) -> String {
+    let mut text = ""
+    if node.flags == 1 {
+        text = "pub "
+    }
+    let generics = selfDocRenderGenerics(file, node.children2)
+    text = "{text}fn {node.text}{generics}("
+    let mut parts: List<String> = []
+    for paramIdx in node.children {
+        let param = astArenaNodeAt(file.arena, paramIdx)
+        parts.push(selfDocRenderParam(file, param))
+    }
+    let params = strings.Join(parts, ", ")
+    text = "{text}{params})"
+    if node.left >= 0 {
+        let ret = selfDocRenderType(file, node.left)
+        text = "{text} -> {ret}"
+    }
+    text
+}
+
+fn selfDocRenderParam(file: AstFile, param: AstNode) -> String {
+    if param.text == "self" {
+        if param.flags == 1 {
+            return "mut self"
+        }
+        return "self"
+    }
+    let mut text = param.text
+    if param.right >= 0 {
+        let typ = selfDocRenderType(file, param.right)
+        text = "{text}: {typ}"
+    }
+    if param.left >= 0 {
+        let value = selfDocRenderExpr(file, param.left)
+        text = "{text} = {value}"
+    }
+    text
+}
+
+fn selfDocRenderStructHeader(file: AstFile, node: AstNode) -> String {
+    let mut text = ""
+    if node.flags == 1 {
+        text = "pub "
+    }
+    let generics = selfDocRenderGenerics(file, node.children2)
+    "{text}struct {node.text}{generics}"
+}
+
+fn selfDocRenderEnumHeader(file: AstFile, node: AstNode) -> String {
+    let mut text = ""
+    if node.flags == 1 {
+        text = "pub "
+    }
+    let generics = selfDocRenderGenerics(file, node.children2)
+    "{text}enum {node.text}{generics}"
+}
+
+fn selfDocRenderInterfaceHeader(file: AstFile, node: AstNode) -> String {
+    let mut text = ""
+    if node.flags == 1 {
+        text = "pub "
+    }
+    text = "{text}interface {node.text}"
+    if selfDocIntListCount(node.children2) > 0 {
+        let supers = selfDocRenderTypeList(file, node.children2, " + ")
+        text = "{text}: {supers}"
+    }
+    text
+}
+
+fn selfDocRenderTypeAliasHeader(file: AstFile, node: AstNode) -> String {
+    let mut text = ""
+    if node.flags == 1 {
+        text = "pub "
+    }
+    let generics = selfDocRenderGenerics(file, node.children)
+    let target = selfDocRenderType(file, node.left)
+    "{text}type {node.text}{generics} = {target}"
+}
+
+fn selfDocRenderLetHeader(file: AstFile, node: AstNode) -> String {
+    let mut text = "pub let "
+    if node.flags == 1 {
+        text = "{text}mut "
+    }
+    let name = selfDocLetName(file, node)
+    text = "{text}{name}"
+    let typ = selfDocLetType(file, node)
+    if typ != "" {
+        text = "{text}: {typ}"
+    }
+    if node.right >= 0 {
+        let value = selfDocRenderExpr(file, node.right)
+        text = "{text} = {value}"
+    }
+    text
+}
+
+fn selfDocRenderGenerics(file: AstFile, params: List<Int>) -> String {
+    if selfDocIntListCount(params) == 0 {
+        return ""
+    }
+    let mut parts: List<String> = []
+    for paramIdx in params {
+        let param = astArenaNodeAt(file.arena, paramIdx)
+        let mut text = param.text
+        if selfDocIntListCount(param.children) > 0 {
+            let constraints = selfDocRenderTypeList(file, param.children, " + ")
+            text = "{text}: {constraints}"
+        }
+        parts.push(text)
+    }
+    let rendered = strings.Join(parts, ", ")
+    "<{rendered}>"
+}
+
+fn selfDocRenderTypeList(file: AstFile, ids: List<Int>, sep: String) -> String {
+    let mut parts: List<String> = []
+    for id in ids {
+        parts.push(selfDocRenderType(file, id))
+    }
+    strings.Join(parts, sep)
+}
+
+fn selfDocRenderType(file: AstFile, idx: Int) -> String {
+    if idx < 0 {
+        return ""
+    }
+    let node = astArenaNodeAt(file.arena, idx)
+    if node.kind != AstNType {
+        return ""
+    }
+    if node.text == "optional" {
+        let inner = selfDocRenderType(file, node.left)
+        return "{inner}?"
+    }
+    if node.text == "tuple" {
+        let rendered = selfDocRenderTypeList(file, node.children, ", ")
+        if selfDocIntListCount(node.children) == 1 {
+            return "({rendered},)"
+        }
+        return "({rendered})"
+    }
+    if node.text == "fn" {
+        let params = selfDocRenderTypeList(file, node.children, ", ")
+        let mut text = "fn({params})"
+        if node.right >= 0 {
+            let ret = selfDocRenderType(file, node.right)
+            text = "{text} -> {ret}"
+        }
+        return text
+    }
+    if node.text == "Option" && selfDocIntListCount(node.children) == 1 {
+        let inner = selfDocRenderType(file, node.children[0])
+        return "{inner}?"
+    }
+    if selfDocIntListCount(node.children) > 0 {
+        let args = selfDocRenderTypeList(file, node.children, ", ")
+        return "{node.text}<{args}>"
+    }
+    node.text
+}
+
+fn selfDocRenderExpr(file: AstFile, idx: Int) -> String {
+    if idx < 0 {
+        return ""
+    }
+    let node = astArenaNodeAt(file.arena, idx)
+    if node.kind == AstNIntLit || node.kind == AstNFloatLit || node.kind == AstNStringLit || node.kind == AstNCharLit || node.kind == AstNByteLit || node.kind == AstNBoolLit || node.kind == AstNIdent {
+        return node.text
+    }
+    if node.kind == AstNCall {
+        let mut args: List<String> = []
+        for argIdx in node.children {
+            args.push(selfDocRenderExpr(file, argIdx))
+        }
+        let callee = selfDocRenderExpr(file, node.left)
+        let renderedArgs = strings.Join(args, ", ")
+        return "{callee}({renderedArgs})"
+    }
+    "..."
+}
+
+fn selfDocLetName(file: AstFile, node: AstNode) -> String {
+    let pat = astArenaNodeAt(file.arena, node.left)
+    pat.text
+}
+
+fn selfDocLetType(file: AstFile, node: AstNode) -> String {
+    if selfDocIntListCount(node.children) > 0 && node.children[0] >= 0 {
+        return selfDocRenderType(file, node.children[0])
+    }
+    ""
+}
+
+fn selfDocNodeIsPub(lexed: OstyLexResult, node: AstNode) -> Bool {
+    if node.flags == 1 {
+        return true
+    }
+    if node.start > 0 {
+        return ostyLexResultTokenAt(lexed, node.start - 1).kind == FrontPub
+    }
+    false
+}
+
+fn selfDocDocAt(lexed: OstyLexResult, idx: Int) -> String {
+    let direct = ostyLexResultTokenAt(lexed, idx).leadingDoc
+    if direct != "" {
+        return direct
+    }
+    if idx > 0 && ostyLexResultTokenAt(lexed, idx - 1).kind == FrontPub {
+        return ostyLexResultTokenAt(lexed, idx - 1).leadingDoc
+    }
+    ""
+}
+
+fn selfDocLineAt(lexed: OstyLexResult, idx: Int) -> Int {
+    ostyLexResultTokenAt(lexed, idx).startLine
+}
+
+fn selfDocFlushExample(info: SelfDocInfo, lines: List<String>) -> SelfDocInfo {
+    let mut out = info
+    let example = selfDocTrimJoinedLines(lines)
+    if example != "" {
+        out.examples.push(example)
+    }
+    out
+}
+
+fn selfDocTrimJoinedLines(lines: List<String>) -> String {
+    let mut kept: List<String> = []
+    for line in lines {
+        let trimmed = strings.TrimSpace(line)
+        if selfDocStringListCount(kept) > 0 || trimmed != "" {
+            kept.push(line)
+        }
+    }
+    for selfDocStringListCount(kept) > 0 && strings.TrimSpace(
+        kept[selfDocStringListCount(kept) - 1],
+    ) == "" {
+        let mut next: List<String> = []
+        let limit = selfDocStringListCount(kept) - 1
+        for idx in 0..limit {
+            next.push(kept[idx])
+        }
+        kept = next
+    }
+    strings.Join(kept, "\n")
+}
+
+fn selfDocAddParamLine(info: SelfDocInfo, line: String) -> SelfDocInfo {
+    let mut out = info
+    let trimmed = strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(line, "- "), "* "))
+    let parts = strings.SplitN(trimmed, ":", 2)
+    if selfDocStringListCount(parts) == 2 {
+        out.params.push(
+            SelfDocParamDoc {
+                name: strings.TrimSpace(parts[0]),
+                desc: strings.TrimSpace(parts[1]),
+            },
+        )
+    } else if selfDocParamDocCount(out.params) > 0 && trimmed != "" {
+        let lastIdx = selfDocParamDocCount(out.params) - 1
+        let last = out.params[lastIdx]
+        out.params[lastIdx] = SelfDocParamDoc {
+            name: last.name,
+            desc: selfDocAppendSentence(last.desc, trimmed),
+        }
+    }
+    out
+}
+
+fn selfDocAddSeeLine(info: SelfDocInfo, line: String) -> SelfDocInfo {
+    let mut out = info
+    let trimmed = strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(line, "- "), "* "))
+    if trimmed == "" {
+        return out
+    }
+    for part in strings.Split(trimmed, ",") {
+        let ref = strings.TrimSpace(part)
+        if ref != "" {
+            out.see.push(ref)
+        }
+    }
+    out
+}
+
+fn selfDocAppendSentence(current: String, next: String) -> String {
+    if current == "" {
+        return next
+    }
+    "{current} {next}"
+}
+
+fn selfDocIsSection(line: String, label: String) -> Bool {
+    strings.HasPrefix(strings.ToLower(line), strings.ToLower(label))
+}
+
+fn selfDocSectionRest(line: String) -> String {
+    let parts = strings.SplitN(line, ":", 2)
+    if selfDocStringListCount(parts) == 2 {
+        return strings.TrimSpace(parts[1])
+    }
+    ""
+}
+
+fn selfDocRenderDeclAnchor(decl: SelfDocDecl) -> String {
+    let title = selfDocKindTitle(decl.kind)
+    selfDocSlug("{title} {decl.name}")
+}
+
+fn selfDocSlug(s: String) -> String {
+    let lower = strings.ToLower(s)
+    let noTicks = strings.ReplaceAll(lower, "`", "")
+    let spaces = strings.ReplaceAll(noTicks, " ", "-")
+    strings.ReplaceAll(spaces, "_", "-")
+}
+
+fn selfDocKindTitle(kind: String) -> String {
+    if kind == "function" {
+        return "Function"
+    }
+    if kind == "struct" {
+        return "Struct"
+    }
+    if kind == "enum" {
+        return "Enum"
+    }
+    if kind == "interface" {
+        return "Interface"
+    }
+    if kind == "type" {
+        return "Type"
+    }
+    if kind == "constant" {
+        return "Constant"
+    }
+    "Decl"
+}
+
+fn selfDocFirstLine(s: String) -> String {
+    let lines = strings.Split(s, "\n")
+    if selfDocStringListCount(lines) == 0 {
+        return ""
+    }
+    strings.TrimSpace(lines[0])
+}
+
+fn selfDocDashDoc(s: String) -> String {
+    let first = selfDocFirstLine(s)
+    if first == "" {
+        return ""
+    }
+    "- {first}"
+}
+
+fn selfDocEscapePipes(s: String) -> String {
+    strings.ReplaceAll(s, "|", "\\|")
+}
+
+fn selfDocBuildIndex(pkg: SelfDocPackage) -> List<SelfDocRef> {
+    let mut refs: List<SelfDocRef> = []
+    for module in pkg.modules {
+        for decl in module.decls {
+            if selfDocKindIsType(decl.kind) {
+                refs.push(SelfDocRef { name: decl.name, anchor: selfDocRenderDeclAnchor(decl) })
+            }
+        }
+    }
+    refs
+}
+
+fn selfDocKindIsType(kind: String) -> Bool {
+    kind == "struct" || kind == "enum" || kind == "interface" || kind == "type"
+}
+
+fn selfDocIndexAnchor(refs: List<SelfDocRef>, name: String) -> String {
+    for ref in refs {
+        if ref.name == name {
+            return ref.anchor
+        }
+    }
+    ""
+}
+
+fn selfDocStringListContains(items: List<String>, name: String) -> Bool {
+    for item in items {
+        if item == name {
+            return true
+        }
+    }
+    false
+}
+
+fn selfDocAddRefsFromText(
+    existing: List<String>,
+    text: String,
+    refs: List<SelfDocRef>,
+    exclude: String,
+) -> List<String> {
+    let mut out = existing
+    let units = strings.Split(text, "")
+    let mut idx = 0
+    let count = selfDocStringListCount(units)
+    for idx < count {
+        let unit = units[idx]
+        if selfDocIdentStart(unit) {
+            let mut word = unit
+            idx = idx + 1
+            for idx < count && selfDocIdentCont(units[idx]) {
+                word = "{word}{units[idx]}"
+                idx = idx + 1
+            }
+            let anchor = selfDocIndexAnchor(refs, word)
+            if anchor != "" && word != exclude && !(selfDocStringListContains(out, word)) {
+                out.push(word)
+            }
+        } else {
+            idx = idx + 1
+        }
+    }
+    out
+}
+
+fn selfDocIdentStart(unit: String) -> Bool {
+    unit == "_" || (unit >= "a" && unit <= "z") || (unit >= "A" && unit <= "Z")
+}
+
+fn selfDocIdentCont(unit: String) -> Bool {
+    selfDocIdentStart(unit) || (unit >= "0" && unit <= "9")
+}
+
+fn selfDocRefsInDecl(decl: SelfDocDecl, refs: List<SelfDocRef>) -> List<String> {
+    let mut out: List<String> = []
+    out = selfDocAddRefsFromText(out, decl.signature, refs, decl.name)
+    out = selfDocAddRefsFromText(out, decl.aliasTarget, refs, decl.name)
+    out = selfDocAddRefsFromText(out, decl.constType, refs, decl.name)
+    for field in decl.fields {
+        out = selfDocAddRefsFromText(out, field.typ, refs, decl.name)
+    }
+    for variant in decl.variants {
+        for payload in variant.payload {
+            out = selfDocAddRefsFromText(out, payload, refs, decl.name)
+        }
+    }
+    for method in decl.methods {
+        out = selfDocAddRefsFromText(out, method.signature, refs, decl.name)
+    }
+    out
+}
+
+fn selfDocRefsInMethod(method: SelfDocMethod, refs: List<SelfDocRef>) -> List<String> {
+    selfDocAddRefsFromText([], method.signature, refs, method.name)
+}
+
+fn selfDocJoinRefLinks(names: List<String>, refs: List<SelfDocRef>) -> String {
+    let mut parts: List<String> = []
+    for name in names {
+        let anchor = selfDocIndexAnchor(refs, name)
+        if anchor != "" {
+            parts.push("[`{name}`](#{anchor})")
+        }
+    }
+    strings.Join(parts, ", ")
+}
+
+fn selfDocLinkifyHTML(text: String, refs: List<SelfDocRef>, exclude: String) -> String {
+    let units = strings.Split(text, "")
+    let mut idx = 0
+    let count = selfDocStringListCount(units)
+    let mut parts: List<String> = []
+    for idx < count {
+        let unit = units[idx]
+        if selfDocIdentStart(unit) {
+            let mut word = unit
+            idx = idx + 1
+            for idx < count && selfDocIdentCont(units[idx]) {
+                word = "{word}{units[idx]}"
+                idx = idx + 1
+            }
+            let anchor = selfDocIndexAnchor(refs, word)
+            if anchor != "" && word != exclude {
+                let safeWord = selfDocHTMLEscape(word)
+                parts.push("<a href=\"#{anchor}\">{safeWord}</a>")
+            } else {
+                parts.push(selfDocHTMLEscape(word))
+            }
+        } else {
+            parts.push(selfDocHTMLEscape(unit))
+            idx = idx + 1
+        }
+    }
+    strings.Join(parts, "")
+}
+
+fn selfDocFieldsHaveDoc(fields: List<SelfDocField>) -> Bool {
+    for field in fields {
+        if field.doc != "" {
+            return true
+        }
+    }
+    false
+}
+
+fn selfDocHTMLEscape(s: String) -> String {
+    let amp = strings.ReplaceAll(s, "&", "&amp;")
+    let lt = strings.ReplaceAll(amp, "<", "&lt;")
+    let gt = strings.ReplaceAll(lt, ">", "&gt;")
+    let quote = strings.ReplaceAll(gt, "\"", "&#34;")
+    strings.ReplaceAll(quote, "'", "&#39;")
+}
+
+fn selfDocHeadingTag(level: Int) -> String {
+    if level <= 1 {
+        return "h1"
+    }
+    if level == 2 {
+        return "h2"
+    }
+    if level == 3 {
+        return "h3"
+    }
+    if level == 4 {
+        return "h4"
+    }
+    if level == 5 {
+        return "h5"
+    }
+    "h6"
+}
+
+fn selfDocHTMLDashDoc(s: String) -> String {
+    let first = selfDocFirstLine(s)
+    if first == "" {
+        return ""
+    }
+    let safeFirst = selfDocHTMLEscape(first)
+    " - {safeFirst}"
+}
+
+fn selfDocPackageSummary(pkg: SelfDocPackage) -> String {
+    for module in pkg.modules {
+        for decl in module.decls {
+            if decl.info.summary != "" {
+                return decl.info.summary
+            }
+        }
+    }
+    ""
+}
+
+fn selfDocSafePackageFilename(name: String) -> String {
+    if name == "" {
+        return "doc"
+    }
+    let units = strings.Split(name, "")
+    let mut out: List<String> = []
+    for unit in units {
+        if selfDocSafeFilenameUnit(unit) {
+            out.push(unit)
+        } else {
+            out.push("_")
+        }
+    }
+    strings.Join(out, "")
+}
+
+fn selfDocSafeFilenameUnit(unit: String) -> Bool {
+    if unit == "." || unit == "_" || unit == "-" {
+        return true
+    }
+    if unit >= "a" && unit <= "z" {
+        return true
+    }
+    if unit >= "A" && unit <= "Z" {
+        return true
+    }
+    if unit >= "0" && unit <= "9" {
+        return true
+    }
+    false
+}
+
+fn selfDocBaseName(path: String) -> String {
+    if path == "" {
+        return ""
+    }
+    let parts = strings.Split(path, "/")
+    if selfDocStringListCount(parts) == 0 {
+        return path
+    }
+    let last = parts[selfDocStringListCount(parts) - 1]
+    if last == "" {
+        return path
+    }
+    last
+}
+
+fn selfDocHTMLStylesheet() -> String {
+    r"""
+        <style>
+          :root { --fg: #24292f; --muted: #6e7781; --border: #d0d7de; --accent: #0969da; --bg-code: #f6f8fa; }
+          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; color: var(--fg); max-width: 920px; margin: 2rem auto; padding: 0 1.25rem; line-height: 1.55; }
+          h1 { border-bottom: 1px solid var(--border); padding-bottom: .3em; }
+          h1, h2, h3, h4, h5, h6 { margin-top: 1.5em; }
+          code { background: var(--bg-code); padding: .15em .35em; border-radius: 4px; font-size: .92em; }
+          pre { background: var(--bg-code); padding: .9em; border-radius: 6px; overflow-x: auto; }
+          pre code { background: none; padding: 0; }
+          table { border-collapse: collapse; margin: .5rem 0 1rem; width: 100%; }
+          th, td { border: 1px solid var(--border); padding: .4rem .6rem; text-align: left; vertical-align: top; }
+          th { background: var(--bg-code); }
+          nav.toc { background: var(--bg-code); padding: .9rem 1.1rem; border-radius: 6px; }
+          nav.toc h2 { margin-top: 0; font-size: 1.05rem; }
+          nav.toc ul { margin: .2rem 0 .8rem 1rem; padding: 0; }
+          nav.toc a { color: var(--accent); text-decoration: none; }
+          nav.toc a:hover { text-decoration: underline; }
+          .src-path, .source-line { color: var(--muted); font-size: .9em; }
+          article.decl { margin-top: 1.6rem; }
+          .methods { margin-left: 1rem; border-left: 2px solid var(--border); padding-left: 1rem; }
+          .summary { font-size: 1.05em; }
+        </style>
+        """
+}
+
+fn selfDocDeclListCount(decls: List<SelfDocDecl>) -> Int {
+    let mut count = 0
+    for decl in decls {
+        let _ = decl
+        count = count + 1
+    }
+    count
+}
+
+fn selfDocPackageListCount(packages: List<SelfDocPackage>) -> Int {
+    let mut count = 0
+    for pkg in packages {
+        let _ = pkg
+        count = count + 1
+    }
+    count
+}
+
+fn selfDocParamDocCount(params: List<SelfDocParamDoc>) -> Int {
+    let mut count = 0
+    for param in params {
+        let _ = param
+        count = count + 1
+    }
+    count
+}
+
+fn selfDocStringListCount(items: List<String>) -> Int {
+    let mut count = 0
+    for item in items {
+        let _ = item
+        count = count + 1
+    }
+    count
+}
+
+fn selfDocIntListCount(items: List<Int>) -> Int {
+    let mut count = 0
+    for item in items {
+        let _ = item
+        count = count + 1
+    }
+    count
+}
+
+fn selfDocEmptyInfo() -> SelfDocInfo {
+    SelfDocInfo {
+        summary: "",
+        body: [],
+        params: [],
+        returns: "",
+        examples: [],
+        see: [],
+    }
+}
+
+fn selfDocEmptyDecl() -> SelfDocDecl {
+    SelfDocDecl {
+        kind: "",
+        name: "",
+        doc: "",
+        info: selfDocEmptyInfo(),
+        line: 0,
+        signature: "",
+        fields: [],
+        variants: [],
+        methods: [],
+        aliasTarget: "",
+        constType: "",
+    }
+}

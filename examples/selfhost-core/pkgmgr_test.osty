@@ -1,0 +1,328 @@
+use std.testing
+
+use go "strings" as pkgTestStrings {
+    fn Contains(s: String, substr: String) -> Bool
+    fn Index(s: String, substr: String) -> Int
+}
+
+fn assertSelfPkgVersion(got: SemVersion, want: SemVersion) {
+    testing.assertEq(compareSemVersion(got, want), 0)
+}
+
+fn testSelfPkgSemVersionTextRendersLockVersions() {
+    testing.assertEq(semVersionText(stableVersion(1, 2, 3)), "1.2.3")
+    testing.assertEq(
+        semVersionText(prerelease2(1, 2, 3, preText("rc"), preNumber(1))),
+        "1.2.3-rc.1",
+    )
+    testing.assertEq(semVersionText(versionWithBuild(2, 0, 0, "build.7")), "2.0.0+build.7")
+}
+
+fn testSelfPkgSourceUrisMirrorLockfilePins() {
+    testing.assertEq(
+        selfPkgSourceURI(selfPkgRegistryDependency("json", wildcardMajorReq(1))),
+        "registry+default",
+    )
+    testing.assertEq(
+        selfPkgSourceURI(
+            selfPkgRegistryDependencyAs("json", "fast-json", "private", wildcardMajorReq(1)),
+        ),
+        "registry+private",
+    )
+    testing.assertEq(selfPkgSourceURI(selfPkgPathDependency("local", "../local")), "path+../local")
+    testing.assertEq(
+        selfPkgSourceURI(selfPkgGitDependency("net", "https://example.com/net.git")),
+        "git+https://example.com/net.git",
+    )
+}
+
+fn testSelfPkgGitSourceHelpersMirrorFetcherPolicy() {
+    let source = selfPkgGitRef("https://example.com/team/pkg.git", "v1.2.0", "main", "")
+
+    testing.assertEq(
+        selfPkgGitURI(source),
+        "git+https://example.com/team/pkg.git?tag=v1.2.0&branch=main",
+    )
+    testing.assertEq(selfPkgGitCheckoutRef(source), "refs/tags/v1.2.0")
+    testing.assertEq(selfPkgGitCheckoutRef(selfPkgGitRef("u", "", "dev", "")), "origin/dev")
+    testing.assertEq(selfPkgGitCheckoutRef(selfPkgGitRef("u", "", "", "abc123")), "abc123")
+    testing.assertEq(selfPkgGitCheckoutRef(selfPkgGitRef("u", "", "", "")), "origin/HEAD")
+    testing.assertEq(
+        selfPkgSanitizeURL("https://example.com/team/pkg.git"),
+        "https___example.com_team_pkg.git",
+    )
+}
+
+fn testSelfPkgRegistryResolutionHonorsCompatibleLock() {
+    let dep = selfPkgRegistryDependency("json", wildcardMajorReq(1))
+    let candidates = [
+        selfPkgCandidate("json", stableVersion(1, 5, 0), "sha256:newer", false),
+        selfPkgCandidate("json", stableVersion(1, 4, 0), "sha256:locked", false),
+        selfPkgCandidate("json", stableVersion(2, 0, 0), "sha256:major", false),
+    ]
+    let locked = [
+        selfPkgLockPackage(
+            "json",
+            stableVersion(1, 4, 0),
+            "registry+default",
+            "sha256:locked",
+            [],
+        ),
+    ]
+
+    let decision = selfPkgSelectRegistryCandidate(dep, candidates, locked)
+
+    testing.assert(decision.found)
+    testing.assert(decision.fromLock)
+    assertSelfPkgVersion(decision.version, stableVersion(1, 4, 0))
+    testing.assertEq(decision.checksum, "sha256:locked")
+}
+
+fn testSelfPkgRegistryResolutionUpdatesStaleOrYankedLock() {
+    let dep = selfPkgRegistryDependency("json", wildcardMajorReq(1))
+    let candidates = [
+        selfPkgCandidate("json", stableVersion(1, 5, 0), "sha256:yanked", true),
+        selfPkgCandidate("json", stableVersion(1, 4, 1), "sha256:fresh", false),
+        selfPkgCandidate("json", stableVersion(1, 4, 0), "sha256:old", false),
+    ]
+    let locked = [
+        selfPkgLockPackage(
+            "json",
+            stableVersion(1, 5, 0),
+            "registry+default",
+            "sha256:yanked",
+            [],
+        ),
+    ]
+
+    let decision = selfPkgSelectRegistryCandidate(dep, candidates, locked)
+
+    testing.assert(decision.found)
+    testing.assert(!(decision.fromLock))
+    assertSelfPkgVersion(decision.version, stableVersion(1, 4, 1))
+    testing.assertEq(decision.checksum, "sha256:fresh")
+}
+
+fn testSelfPkgRegistryResolutionUsesRemotePackageNameAndRegistry() {
+    let dep = selfPkgRegistryDependencyAs("json", "fast-json", "private", wildcardMajorReq(1))
+    let candidates = [
+        selfPkgCandidate("json", stableVersion(1, 9, 0), "sha256:wrong-name", false),
+        selfPkgCandidate("fast-json", stableVersion(1, 2, 0), "sha256:ok", false),
+    ]
+    let locked: List<SelfPkgLockPackage> = []
+
+    let decision = selfPkgSelectRegistryCandidate(dep, candidates, locked)
+
+    testing.assert(decision.found)
+    testing.assertEq(decision.name, "json")
+    testing.assertEq(decision.packageName, "fast-json")
+    testing.assertEq(decision.source, "registry+private")
+    assertSelfPkgVersion(decision.version, stableVersion(1, 2, 0))
+}
+
+fn testSelfPkgResolvePlanAndLockProjection() {
+    let deps = [
+        selfPkgRegistryDependency("json", wildcardMajorReq(1)),
+        selfPkgRegistryDependency("http", wildcardMinorReq(0, 8)),
+    ]
+    let candidates = [
+        selfPkgCandidate("json", stableVersion(1, 1, 0), "sha256:json", false),
+        selfPkgCandidate("http", stableVersion(0, 8, 3), "sha256:http", false),
+        selfPkgCandidate("http", stableVersion(0, 9, 0), "sha256:too-new", false),
+    ]
+    let locked: List<SelfPkgLockPackage> = []
+
+    let plan = selfPkgResolveRegistryPlan(deps, candidates, locked)
+    let lock = selfPkgLockFromPlan(plan)
+    let emptyDecisions: List<SelfPkgResolveDecision> = []
+
+    testing.assertEq(plan.missing, 0)
+    testing.assertEq(selfPkgPlanFoundCount(plan), 2)
+    testing.assertEq(
+        selfPkgPlanFoundCount(SelfPkgResolvePlan { decisions: emptyDecisions, missing: 0 }),
+        0,
+    )
+    testing.assertEq(selfPkgFindLockedPackage("json", lock).found, true)
+    assertSelfPkgVersion(selfPkgFindLockedPackage("http", lock).pkg.version, stableVersion(0, 8, 3))
+}
+
+fn testSelfPkgLockDependencyStringIncludesOptionalSource() {
+    testing.assertEq(
+        selfPkgLockDependencyString(selfPkgLockDependency("json", stableVersion(1, 2, 0), "")),
+        "json 1.2.0",
+    )
+    testing.assertEq(
+        selfPkgLockDependencyString(
+            selfPkgLockDependency("json", stableVersion(1, 2, 0), "registry+private"),
+        ),
+        "json 1.2.0 (registry+private)",
+    )
+}
+
+fn testSelfPkgMarshalLockSortsAndEscapesCanonicalOutput() {
+    let packages = [
+        selfPkgLockPackage(
+            "zed",
+            stableVersion(1, 0, 0),
+            "registry+default",
+            "sha256:zed",
+            [
+                selfPkgLockDependency("beta", stableVersion(0, 2, 0), ""),
+                selfPkgLockDependency("alpha", stableVersion(0, 1, 0), "registry+default"),
+            ],
+        ),
+        selfPkgLockPackage("alpha", stableVersion(0, 1, 0), "path+../a", "", []),
+    ]
+
+    let text = selfPkgMarshalLock(packages)
+
+    testing.assert(pkgStringsIndexBefore(text, "name = \"alpha\"", "name = \"zed\""))
+    testing.assert(
+        pkgStringsIndexBefore(text, "\"alpha 0.1.0 (registry+default)\"", "\"beta 0.2.0\""),
+    )
+    testing.assert(pkgTestStrings.Contains(text, "version = 1"))
+    testing.assertEq(selfPkgTomlQuote("plain"), "\"plain\"")
+    testing.assert(pkgTestStrings.Contains(selfPkgTomlQuote("line\nnext"), r"\n"))
+}
+
+fn pkgStringsIndexBefore(text: String, left: String, right: String) -> Bool {
+    let li = pkgTestStrings.Index(text, left)
+    let ri = pkgTestStrings.Index(text, right)
+    li >= 0 && ri >= 0 && li < ri
+}
+
+fn testSelfPkgChecksumVerification() {
+    testing.assert(selfPkgVerifyChecksum("", "anything").ok)
+    testing.assert(selfPkgVerifyChecksum("sha256:abc", "sha256:abc").ok)
+    testing.assert(!(selfPkgVerifyChecksum("sha256:abc", "sha256:def").ok))
+    testing.assert(!(selfPkgVerifyChecksum("md5:abc", "sha256:abc").ok))
+}
+
+fn testSelfPkgRegistryProtocolRequestsAndStatusChecks() {
+    let versions = selfPkgRegistryVersionsRequest("https://registry.example/", "json", "")
+    testing.assertEq(versions.method, "GET")
+    testing.assertEq(versions.url, "https://registry.example/v1/crates/json")
+    testing.assertEq(versions.authorization, "")
+
+    let publish = selfPkgRegistryPublishRequest(
+        "https://registry.example/",
+        "json",
+        "1.2.3",
+        "secret",
+        "sha256:abc",
+        "description=fast",
+    )
+    testing.assertEq(publish.method, "PUT")
+    testing.assertEq(publish.contentType, "application/x-tar+gzip")
+    testing.assertEq(publish.authorization, "Bearer secret")
+    testing.assertEq(publish.checksum, "sha256:abc")
+
+    let yank = selfPkgRegistryYankRequest("https://registry.example", "json", "1.2.3", "tok", true)
+    let unyank = selfPkgRegistryYankRequest(
+        "https://registry.example",
+        "json",
+        "1.2.3",
+        "tok",
+        false,
+    )
+    testing.assertEq(yank.method, "DELETE")
+    testing.assertEq(unyank.method, "PUT")
+    testing.assert(pkgTestStrings.Contains(yank.url, "/yank"))
+    testing.assert(pkgTestStrings.Contains(unyank.url, "/unyank"))
+
+    let okStatuses: List<Int> = [200, 201]
+    testing.assert(selfPkgRegistryStatusOK("u", 200, "", okStatuses).ok)
+    testing.assert(!(selfPkgRegistryStatusOK("u", 500, "boom", okStatuses).ok))
+}
+
+fn testSelfPkgRegistryGraphResolvesTransitiveDependencies() {
+    let deps = [selfPkgRegistryDependency("app", wildcardMajorReq(1))]
+    let candidates = [
+        selfPkgCandidate("app", stableVersion(1, 0, 0), "sha256:app", false),
+        selfPkgCandidate("util", stableVersion(0, 2, 0), "sha256:util", false),
+        selfPkgCandidate("leaf", stableVersion(0, 1, 0), "sha256:leaf", false),
+    ]
+    let candidateDeps = [
+        selfPkgCandidateDeps(
+            "app",
+            stableVersion(1, 0, 0),
+            [
+                selfPkgRegistryDependency("util", wildcardMinorReq(0, 2)),
+            ],
+        ),
+        selfPkgCandidateDeps(
+            "util",
+            stableVersion(0, 2, 0),
+            [
+                selfPkgRegistryDependency("leaf", wildcardMinorReq(0, 1)),
+            ],
+        ),
+        selfPkgCandidateDeps("leaf", stableVersion(0, 1, 0), []),
+    ]
+    let locked: List<SelfPkgLockPackage> = []
+
+    let graph = selfPkgResolveRegistryGraph(deps, candidates, candidateDeps, locked)
+
+    testing.assertEq(selfPkgGraphErrorCount(graph), 0)
+    testing.assertEq(selfPkgGraphNodeCount(graph), 3)
+    testing.assertEq(selfPkgGraphOrderCount(graph), 3)
+    testing.assertEq(graph.order[0], "leaf")
+    testing.assertEq(graph.order[1], "util")
+    testing.assertEq(graph.order[2], "app")
+}
+
+fn testSelfPkgDiffLocksReportsPackageLevelChanges() {
+    let old = [
+        selfPkgLockPackage("json", stableVersion(1, 0, 0), "registry+default", "sha256:old", []),
+        selfPkgLockPackage("http", stableVersion(0, 8, 0), "registry+default", "sha256:http", []),
+        selfPkgLockPackage(
+            "crypto",
+            stableVersion(0, 2, 0),
+            "registry+default",
+            "sha256:crypto",
+            [],
+        ),
+    ]
+    let new = [
+        selfPkgLockPackage("json", stableVersion(1, 1, 0), "registry+default", "sha256:new", []),
+        selfPkgLockPackage("http", stableVersion(0, 8, 0), "registry+mirror", "sha256:http", []),
+        selfPkgLockPackage("fmt", stableVersion(0, 1, 0), "registry+default", "sha256:fmt", []),
+    ]
+
+    let changes = selfPkgDiffLocks(old, new)
+
+    testing.assertEq(selfPkgLockChangeCount(changes, SelfPkgLockVersion), 1)
+    testing.assertEq(selfPkgLockChangeCount(changes, SelfPkgLockSource), 1)
+    testing.assertEq(selfPkgLockChangeCount(changes, SelfPkgLockRemoved), 1)
+    testing.assertEq(selfPkgLockChangeCount(changes, SelfPkgLockAdded), 1)
+}
+
+fn testSelfPkgLookupDependencyMirrorsImportProviderPolicy() {
+    let graphNodes = [
+        selfPkgDepLookupItem("fastjson", "https://github.com/acme/fastjson.git"),
+        selfPkgDepLookupItem("leaf", ""),
+    ]
+    let manifestDeps = [selfPkgDepLookupItem("http", "git@github.com:acme/http.git")]
+
+    testing.assertEq(
+        selfPkgNormalizeGitURL("git@github.com:acme/http.git/"),
+        "github.com/acme/http",
+    )
+    testing.assertEq(
+        selfPkgLookupDependency("fastjson", graphNodes, manifestDeps).name,
+        "fastjson",
+    )
+    testing.assertEq(
+        selfPkgLookupDependency("github.com/acme/fastjson", graphNodes, manifestDeps).name,
+        "fastjson",
+    )
+    testing.assertEq(
+        selfPkgLookupDependency("https://github.com/acme/http", graphNodes, manifestDeps).name,
+        "http",
+    )
+    testing.assertEq(
+        selfPkgLookupDependency("github.com/acme/leaf", graphNodes, manifestDeps).name,
+        "leaf",
+    )
+    testing.assert(!(selfPkgLookupDependency("missing", graphNodes, manifestDeps).found))
+}

@@ -42,7 +42,7 @@ let s = "hello
 
 Base prefixes must be lowercase.
 
-Spec: v0.2 R11 / v0.3 §1.6.1
+Spec: v0.2 R11 / v0.4 §1.6.1
 
 ```osty
 let n = 0X1F  // rejected
@@ -56,7 +56,7 @@ The escape sequence is unknown or references an invalid Unicode scalar value.
 
 Most commonly a surrogate code point.
 
-Spec: v0.3 §2.1
+Spec: v0.4 §2.1
 
 ```osty
 let c = '\u{D800}'  // rejected
@@ -88,7 +88,7 @@ Triple-quoted string violates the indent rules.
 
 The opening `"""` must be followed by a newline, every content line must begin with the closing-line's whitespace prefix, and the closing `"""` must be on its own line.
 
-Spec: v0.3 §1.6.3
+Spec: v0.4 §1.6.3
 
 **Fix**: realign the content and closing delimiter per §1.6.3.
 
@@ -98,7 +98,7 @@ The `=>` (fat-arrow) token was removed from the grammar.
 
 `match` arms and every other arrow position use `->` instead. Any occurrence of `=>` in source is a lex error (O7, §1.7).
 
-Spec: v0.3 §1.7, OSTY_GRAMMAR_v0.3 O7
+Spec: v0.4 §1.7, OSTY_GRAMMAR_v0.4 O7
 
 ```osty
 match x { 0 => "zero", _ => "other" }  // rejected
@@ -122,7 +122,7 @@ Functions declared inside `use go "..."` must not have a body.
 
 They forward to the imported Go function.
 
-Spec: v0.3 R17
+Spec: v0.4 R17
 
 ```osty
 use go "net/http" {
@@ -138,7 +138,7 @@ Structs inside `use go { ... }` blocks mirror Go field layout only.
 
 Methods live on the Go side.
 
-Spec: v0.3 R16
+Spec: v0.4 R16
 
 **Fix**: move the method definition to the Go file that owns the type.
 
@@ -156,7 +156,7 @@ A `use` path mixes dotted and urlish forms.
 
 A path is either dotted (`std.fs`) OR urlish (`github.com/x/y`) — the two cannot mix.
 
-Spec: v0.3 R15
+Spec: v0.4 R15
 
 **Fix**: choose one form for the whole path.
 
@@ -166,7 +166,7 @@ Spec: v0.3 R15
 
 It must sit on the same line as the closing `}` of the `if` body.
 
-Spec: v0.3 O2
+Spec: v0.4 O2
 
 ```osty
 if cond {
@@ -185,7 +185,7 @@ Parameter or field default is not a literal.
 
 Defaults must be restricted literal forms (literal, `-` numeric, `None`, `Ok(lit)`, `Err(lit)`, `[]`, `{:}`, `()`).
 
-Spec: v0.3 R18
+Spec: v0.4 R18
 
 ```osty
 fn connect(t: Int = computeTimeout()) {}  // rejected
@@ -201,7 +201,7 @@ fn connect(t: Int = computeTimeout()) {}  // rejected
 
 Comparison or range operators are non-associative.
 
-Spec: v0.3 R1
+Spec: v0.4 R1
 
 ```osty
 a < b < c      // rejected
@@ -214,7 +214,7 @@ a < b < c      // rejected
 
 `::` is reserved for turbofish and must be followed by `<`.
 
-Spec: v0.3 O6
+Spec: v0.4 O6
 
 ```osty
 foo::bar()     // rejected — did you mean `foo.bar()`?
@@ -228,7 +228,7 @@ Method chains must continue with a leading dot on the next line.
 
 A trailing `.` then newline is a syntax error.
 
-Spec: v0.3 O3
+Spec: v0.4 O3
 
 **Fix**: move the `.` to the start of the continuation line.
 
@@ -236,7 +236,7 @@ Spec: v0.3 O3
 
 A closure with an explicit return type must have a block body.
 
-Spec: v0.3 R25
+Spec: v0.4 R25
 
 ```osty
 let f = |x: Int| -> Int x * 2       // rejected
@@ -277,7 +277,7 @@ The annotation name is not recognized.
 
 Only `#[json(...)]` and `#[deprecated(...)]` are defined today.
 
-Spec: v0.3 R26
+Spec: v0.4 R26
 
 **Fix**: remove the annotation or use one of the recognized names.
 
@@ -325,7 +325,7 @@ For example, a function name used where a type is expected.
 
 The referenced package cannot be found.
 
-Spec: v0.3 §5
+Spec: v0.4 §5
 
 **Fix**: check the `use` path and verify the package is on disk or in the manifest.
 
@@ -335,7 +335,7 @@ A `use` graph contains a cycle.
 
 Package A imports B which eventually imports A. The resolver breaks the cycle and reports the first edge that closes it.
 
-Spec: v0.3 §5.3
+Spec: v0.4 §5.3
 
 **Fix**: extract shared declarations into a third package that both sides import.
 
@@ -345,7 +345,7 @@ A cross-package reference targets a non-`pub` item.
 
 Private items are visible only to other files in the same package.
 
-Spec: v0.3 §5.2
+Spec: v0.4 §5.2
 
 **Fix**: add `pub` to the declaration, or move the caller into the same package.
 
@@ -355,7 +355,7 @@ Package member access names an item that isn't exported.
 
 The member might be private, misspelled, or from a different package.
 
-Spec: v0.3 §5.2
+Spec: v0.4 §5.2
 
 **Fix**: verify the name is `pub` and matches the exported spelling.
 
@@ -411,7 +411,7 @@ let x = _  // rejected
 
 Every alternative of an or-pattern must bind the same names.
 
-Spec: v0.3 §4.3.1
+Spec: v0.4 §4.3.1
 
 ```osty
 match e {
@@ -427,7 +427,7 @@ An interface default method may not access fields on `self`.
 
 The interface has no view of the implementing type's layout.
 
-Spec: v0.3 §2.6.2
+Spec: v0.4 §2.6.2
 
 **Fix**: call other interface methods instead of reading fields directly.
 
@@ -437,7 +437,7 @@ The annotation's target is not in its permitted set.
 
 `#[json]` only attaches to struct fields; `#[deprecated]` to top-level declarations and methods; neither attaches to `use`.
 
-Spec: v0.3 §18.1
+Spec: v0.4 §18.1
 
 **Fix**: move the annotation to a permitted target.
 
@@ -445,7 +445,7 @@ Spec: v0.3 §18.1
 
 Bare `defer` at the top level of a script is rejected.
 
-Spec: v0.3 §6 / §18.3
+Spec: v0.4 §6 / §18.3
 
 **Fix**: wrap the cleanup in an explicit `fn` or move it inside an existing function body.
 
@@ -453,7 +453,7 @@ Spec: v0.3 §6 / §18.3
 
 The same annotation name may not appear twice on a single target.
 
-Spec: v0.3 §18.1
+Spec: v0.4 §18.1
 
 ```osty
 #[deprecated]
@@ -763,7 +763,7 @@ Use site references an item marked `#[deprecated]`.
 
 Emitted as a `diag.Warning`. Tooling can promote it to error via build configuration.
 
-Spec: v0.3 §3.8.2
+Spec: v0.4 §3.8.2
 
 **Fix**: migrate to the replacement noted in the `#[deprecated]` annotation.
 
@@ -773,7 +773,7 @@ Control flow diagnostics (E0760-E0769).
 
 CodeUnreachableCode: a statement appears after a divergent construct (return, break, continue, or an expression of type Never) and therefore can never execute.
 
-Spec: v0.3 §4 control flow, §2.1 Never
+Spec: v0.4 §4 control flow, §2.1 Never
 
 **Fix**: delete the dead statement or move it above the divergent one.
 
@@ -783,7 +783,7 @@ CodeMissingReturn: a non-unit function's body could reach its end without produc
 
 function's result.
 
-Spec: v0.3 §3.1
+Spec: v0.4 §3.1
 
 **Fix**: add an explicit `return` or make the final expression the
 

@@ -198,19 +198,38 @@ type Decorated interface {
 
 // UseDecl represents `use path`, `use path as alias`, and FFI forms.
 type UseDecl struct {
-	PosV    token.Pos
-	EndV    token.Pos
-	Path    []string // dot-separated path, or single entry with slashes for URLs
-	RawPath string   // e.g. "github.com/user/lib" as written
-	Alias   string   // optional `as alias`
-	IsGoFFI bool     // `use go "..."`
-	GoPath  string   // go import path
-	GoBody  []Decl   // declarations inside `{ ... }`
+	PosV         token.Pos
+	EndV         token.Pos
+	Path         []string // dot-separated path, or single entry with slashes for URLs
+	RawPath      string   // e.g. "github.com/user/lib" as written
+	Alias        string   // optional `as alias`
+	IsGoFFI      bool     // legacy bootstrap-only `use go "..."`
+	IsRuntimeFFI bool     // `use runtime.* { ... }`
+	GoPath       string   // legacy go import path
+	RuntimePath  string   // runtime ABI path, e.g. "runtime.strings"
+	GoBody       []Decl   // declarations inside `{ ... }`
 }
 
 func (*UseDecl) declNode()        {}
 func (u *UseDecl) Pos() token.Pos { return u.PosV }
 func (u *UseDecl) End() token.Pos { return u.EndV }
+
+func (u *UseDecl) IsFFI() bool {
+	return u != nil && (u.IsGoFFI || u.IsRuntimeFFI)
+}
+
+func (u *UseDecl) FFIPath() string {
+	if u == nil {
+		return ""
+	}
+	if u.IsRuntimeFFI {
+		return u.RuntimePath
+	}
+	if u.IsGoFFI {
+		return u.GoPath
+	}
+	return ""
+}
 
 // FnDecl is a top-level or method function declaration.
 type FnDecl struct {

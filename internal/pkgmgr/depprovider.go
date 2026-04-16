@@ -3,7 +3,6 @@ package pkgmgr
 import (
 	"path/filepath"
 	"sort"
-	"strings"
 
 	"github.com/osty/osty/internal/manifest"
 	"github.com/osty/osty/internal/resolve"
@@ -50,62 +49,31 @@ func (p *depProvider) LookupDep(rawPath string) (string, bool) {
 	if p == nil || p.m == nil || p.env == nil {
 		return "", false
 	}
-	// Rule 1: direct alias match.
-	if p.hasGraphNode(rawPath) {
-		return filepath.Join(p.env.VendorDir, rawPath), true
-	}
-	if dep, ok := findDepByAlias(p.m, rawPath); ok {
-		return filepath.Join(p.env.VendorDir, dep.Name), true
-	}
-	// Rule 2: git URL match.
-	if strings.ContainsAny(rawPath, "/") {
-		if name, ok := p.findGraphNodeByGitURL(rawPath); ok {
-			return filepath.Join(p.env.VendorDir, name), true
-		}
-		if dep, ok := findDepByGitURL(p.m, rawPath); ok {
-			return filepath.Join(p.env.VendorDir, dep.Name), true
-		}
-	}
-	// Rule 3: last-segment alias match.
-	if i := strings.LastIndex(rawPath, "/"); i >= 0 {
-		lastSeg := rawPath[i+1:]
-		if p.hasGraphNode(lastSeg) {
-			return filepath.Join(p.env.VendorDir, lastSeg), true
-		}
-		if dep, ok := findDepByAlias(p.m, lastSeg); ok {
-			return filepath.Join(p.env.VendorDir, dep.Name), true
-		}
+	decision := SelfhostLookupDependency(rawPath, p.graphLookupItems(), manifestLookupItems(p.m))
+	if decision.Found {
+		return filepath.Join(p.env.VendorDir, decision.Name), true
 	}
 	return "", false
 }
 
-func (p *depProvider) hasGraphNode(alias string) bool {
-	if p == nil || p.graph == nil || p.graph.Nodes == nil {
-		return false
-	}
-	_, ok := p.graph.Nodes[alias]
-	return ok
-}
-
-func (p *depProvider) findGraphNodeByGitURL(rawPath string) (string, bool) {
+func (p *depProvider) graphLookupItems() []SelfhostDepLookupItem {
 	if p == nil || p.graph == nil {
-		return "", false
+		return nil
 	}
-	needle := normalizeGitURL(rawPath)
+	out := make([]SelfhostDepLookupItem, 0, len(p.graph.Nodes))
 	for _, name := range p.graphNodeNames() {
 		n := p.graph.Nodes[name]
 		if n == nil {
 			continue
 		}
+		item := SelfhostDepLookupItem{Name: name}
 		gs, ok := n.Source.(*gitSource)
-		if !ok {
-			continue
+		if ok {
+			item.GitURL = gs.url
 		}
-		if normalizeGitURL(gs.url) == needle {
-			return name, true
-		}
+		out = append(out, item)
 	}
-	return "", false
+	return out
 }
 
 func (p *depProvider) graphNodeNames() []string {
@@ -123,63 +91,24 @@ func (p *depProvider) graphNodeNames() []string {
 	return names
 }
 
-// findDepByAlias walks both dependency tables and returns the entry
-// whose Name equals alias. Matches exactly — callers normalize
-// before calling.
-func findDepByAlias(m *manifest.Manifest, alias string) (manifest.Dependency, bool) {
+func manifestLookupItems(m *manifest.Manifest) []SelfhostDepLookupItem {
+	if m == nil {
+		return nil
+	}
+	out := make([]SelfhostDepLookupItem, 0, len(m.Dependencies)+len(m.DevDependencies))
 	for _, d := range m.Dependencies {
-		if d.Name == alias {
-			return d, true
-		}
+		out = append(out, dependencyLookupItem(d))
 	}
 	for _, d := range m.DevDependencies {
-		if d.Name == alias {
-			return d, true
-		}
+		out = append(out, dependencyLookupItem(d))
 	}
-	return manifest.Dependency{}, false
+	return out
 }
 
-// findDepByGitURL matches rawPath against every Dependency.Git.URL,
-// tolerating trailing `.git` and scheme differences (https:// vs
-// bare `github.com/...`). Extracts the comparable form and checks
-// both sides.
-func findDepByGitURL(m *manifest.Manifest, rawPath string) (manifest.Dependency, bool) {
-	needle := normalizeGitURL(rawPath)
-	check := func(d manifest.Dependency) bool {
-		if d.Git == nil {
-			return false
-		}
-		return normalizeGitURL(d.Git.URL) == needle
+func dependencyLookupItem(d manifest.Dependency) SelfhostDepLookupItem {
+	item := SelfhostDepLookupItem{Name: d.Name}
+	if d.Git != nil {
+		item.GitURL = d.Git.URL
 	}
-	for _, d := range m.Dependencies {
-		if check(d) {
-			return d, true
-		}
-	}
-	for _, d := range m.DevDependencies {
-		if check(d) {
-			return d, true
-		}
-	}
-	return manifest.Dependency{}, false
-}
-
-// normalizeGitURL strips scheme, trailing `.git`, and trailing
-// slash so two git URLs pointing at the same repo compare equal.
-// Input can be `https://github.com/user/lib.git`, `github.com/user/lib`,
-// `git@github.com:user/lib` (converted to slash form), etc.
-func normalizeGitURL(u string) string {
-	u = strings.TrimSuffix(u, "/")
-	u = strings.TrimSuffix(u, ".git")
-	// Strip scheme.
-	if i := strings.Index(u, "://"); i >= 0 {
-		u = u[i+3:]
-	}
-	// scp-style `git@host:user/repo` → `host/user/repo`.
-	if strings.HasPrefix(u, "git@") {
-		u = strings.TrimPrefix(u, "git@")
-		u = strings.Replace(u, ":", "/", 1)
-	}
-	return u
+	return item
 }

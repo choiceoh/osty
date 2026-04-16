@@ -1,10 +1,12 @@
+//go:build selfhostgen
+
 package check
 
 import (
 	"github.com/osty/osty/internal/ast"
 )
 
-// isAllowedDefaultExpr enforces v0.3 §3.1's rule that default
+// isAllowedDefaultExpr enforces v0.4 §3.1's rule that default
 // arguments must be simple literals. Allowed shapes:
 //
 //   - Numeric / string / char / byte / bool literals

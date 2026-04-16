@@ -203,13 +203,19 @@ func Generate(file *ast.File, opts Options) ([]byte, error) {
 		}
 		return g.render([]string{mainIR}), nil
 	}
-	decls, err := collectFunctions(file)
+	decls, err := collectDeclarations(file)
 	if err != nil {
 		return nil, err
 	}
-	g.functions = decls.byName
+	g.functions = decls.functionsByName
+	g.structs = decls.structsOrdered
+	g.structsByName = decls.structsByName
+	g.structsByType = decls.structsByType
+	g.enums = decls.enumsOrdered
+	g.enumsByName = decls.enumsByName
+	g.enumsByType = decls.enumsByType
 	var defs []string
-	for _, sig := range decls.ordered {
+	for _, sig := range decls.functionsOrdered {
 		if sig.name == "main" {
 			continue
 		}
@@ -219,7 +225,7 @@ func Generate(file *ast.File, opts Options) ([]byte, error) {
 		}
 		defs = append(defs, def)
 	}
-	mainSig := decls.byName["main"]
+	mainSig := decls.functionsByName["main"]
 	if mainSig == nil {
 		return nil, unsupported("source-layout", "missing main function or script statements")
 	}
@@ -236,14 +242,23 @@ func fileUnsupportedDiagnostic(file *ast.File) (UnsupportedDiagnostic, bool) {
 		if use != nil && use.IsGoFFI {
 			return UnsupportedDiagnosticFor("go-ffi", use.GoPath), true
 		}
+		if use != nil && use.IsRuntimeFFI {
+			return UnsupportedDiagnosticFor("runtime-ffi", use.RuntimePath), true
+		}
 	}
 	return UnsupportedDiagnostic{}, false
 }
 
 type generator struct {
-	sourcePath string
-	target     string
-	functions  map[string]*fnSig
+	sourcePath    string
+	target        string
+	functions     map[string]*fnSig
+	structs       []*structInfo
+	structsByName map[string]*structInfo
+	structsByType map[string]*structInfo
+	enums         []*enumInfo
+	enumsByName   map[string]*enumInfo
+	enumsByType   map[string]*enumInfo
 
 	temp       int
 	label      int
@@ -254,9 +269,15 @@ type generator struct {
 	returnType string
 }
 
-type fnDecls struct {
-	ordered []*fnSig
-	byName  map[string]*fnSig
+type declarations struct {
+	functionsOrdered []*fnSig
+	functionsByName  map[string]*fnSig
+	structsOrdered   []*structInfo
+	structsByName    map[string]*structInfo
+	structsByType    map[string]*structInfo
+	enumsOrdered     []*enumInfo
+	enumsByName      map[string]*enumInfo
+	enumsByType      map[string]*enumInfo
 }
 
 type fnSig struct {
@@ -271,33 +292,239 @@ type paramInfo struct {
 	typ  string
 }
 
+type structInfo struct {
+	name   string
+	typ    string
+	decl   *ast.StructDecl
+	fields []fieldInfo
+	byName map[string]fieldInfo
+}
+
+type fieldInfo struct {
+	name  string
+	typ   string
+	index int
+}
+
+type enumInfo struct {
+	name       string
+	typ        string
+	decl       *ast.EnumDecl
+	hasPayload bool
+	payloadTyp string
+	variants   map[string]variantInfo
+}
+
+type variantInfo struct {
+	name     string
+	tag      int
+	payloads []string
+}
+
+type enumVariantRef struct {
+	enum    *enumInfo
+	variant variantInfo
+}
+
+type enumPatternInfo struct {
+	variant           variantInfo
+	payloadName       string
+	payloadType       string
+	hasPayloadBinding bool
+}
+
 type value struct {
 	typ string
 	ref string
 	ptr bool
 }
 
-func collectFunctions(file *ast.File) (*fnDecls, error) {
-	out := &fnDecls{byName: map[string]*fnSig{}}
+func collectDeclarations(file *ast.File) (*declarations, error) {
+	out := &declarations{
+		functionsByName: map[string]*fnSig{},
+		structsByName:   map[string]*structInfo{},
+		structsByType:   map[string]*structInfo{},
+		enumsByName:     map[string]*enumInfo{},
+		enumsByType:     map[string]*enumInfo{},
+	}
+	for _, decl := range file.Decls {
+		switch d := decl.(type) {
+		case *ast.StructDecl:
+			info, err := collectStructShell(d)
+			if err != nil {
+				return nil, err
+			}
+			if _, exists := out.structsByName[info.name]; exists {
+				return nil, unsupportedf("source-layout", "duplicate struct %q", info.name)
+			}
+			out.structsOrdered = append(out.structsOrdered, info)
+			out.structsByName[info.name] = info
+			out.structsByType[info.typ] = info
+		case *ast.EnumDecl:
+			info, err := collectEnum(d)
+			if err != nil {
+				return nil, err
+			}
+			if _, exists := out.enumsByName[info.name]; exists {
+				return nil, unsupportedf("source-layout", "duplicate enum %q", info.name)
+			}
+			out.enumsOrdered = append(out.enumsOrdered, info)
+			out.enumsByName[info.name] = info
+			if info.hasPayload {
+				out.enumsByType[info.typ] = info
+			}
+		case *ast.FnDecl:
+			// Function signatures are collected after struct shells so named
+			// struct types can appear in parameters and returns.
+		default:
+			return nil, unsupportedf("source-layout", "top-level declaration %T", decl)
+		}
+	}
+	for _, info := range out.structsOrdered {
+		if err := collectStructFields(info, out.structsByName); err != nil {
+			return nil, err
+		}
+	}
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FnDecl)
 		if !ok {
-			return nil, unsupportedf("source-layout", "top-level declaration %T", decl)
+			continue
 		}
-		sig, err := signatureOf(fn)
+		sig, err := signatureOf(fn, out.structsByName, out.enumsByName)
 		if err != nil {
 			return nil, err
 		}
-		if _, exists := out.byName[sig.name]; exists {
+		if _, exists := out.functionsByName[sig.name]; exists {
 			return nil, unsupportedf("source-layout", "duplicate function %q", sig.name)
 		}
-		out.ordered = append(out.ordered, sig)
-		out.byName[sig.name] = sig
+		out.functionsOrdered = append(out.functionsOrdered, sig)
+		out.functionsByName[sig.name] = sig
 	}
 	return out, nil
 }
 
-func signatureOf(fn *ast.FnDecl) (*fnSig, error) {
+func collectStructShell(decl *ast.StructDecl) (*structInfo, error) {
+	if decl == nil {
+		return nil, unsupported("source-layout", "nil struct")
+	}
+	if !isLLVMIdent(decl.Name) {
+		return nil, unsupportedf("name", "struct name %q", decl.Name)
+	}
+	if len(decl.Generics) != 0 {
+		return nil, unsupportedf("type-system", "generic struct %q is not supported", decl.Name)
+	}
+	if len(decl.Methods) != 0 {
+		return nil, unsupportedf("function-signature", "struct %q methods are not supported", decl.Name)
+	}
+	return &structInfo{
+		name:   decl.Name,
+		typ:    "%" + decl.Name,
+		decl:   decl,
+		byName: map[string]fieldInfo{},
+	}, nil
+}
+
+func collectStructFields(info *structInfo, structs map[string]*structInfo) error {
+	if info == nil || info.decl == nil {
+		return unsupported("source-layout", "nil struct")
+	}
+	for i, field := range info.decl.Fields {
+		if field == nil {
+			return unsupportedf("source-layout", "struct %q has nil field", info.name)
+		}
+		if !isLLVMIdent(field.Name) {
+			return unsupportedf("name", "struct %q field name %q", info.name, field.Name)
+		}
+		if field.Default != nil {
+			return unsupportedf("type-system", "struct %q field %q has a default value", info.name, field.Name)
+		}
+		if _, exists := info.byName[field.Name]; exists {
+			return unsupportedf("source-layout", "struct %q duplicate field %q", info.name, field.Name)
+		}
+		typ, err := llvmType(field.Type, structs, nil)
+		if err != nil {
+			return unsupportedf("type-system", "struct %q field %q: %s", info.name, field.Name, unsupportedMessage(err))
+		}
+		if typ == info.typ {
+			return unsupportedf("type-system", "struct %q recursive field %q", info.name, field.Name)
+		}
+		fieldInfo := fieldInfo{name: field.Name, typ: typ, index: i}
+		info.fields = append(info.fields, fieldInfo)
+		info.byName[field.Name] = fieldInfo
+	}
+	return nil
+}
+
+func collectEnum(decl *ast.EnumDecl) (*enumInfo, error) {
+	if decl == nil {
+		return nil, unsupported("source-layout", "nil enum")
+	}
+	if !isLLVMIdent(decl.Name) {
+		return nil, unsupportedf("name", "enum name %q", decl.Name)
+	}
+	if len(decl.Generics) != 0 {
+		return nil, unsupportedf("type-system", "generic enum %q is not supported", decl.Name)
+	}
+	if len(decl.Methods) != 0 {
+		return nil, unsupportedf("function-signature", "enum %q methods are not supported", decl.Name)
+	}
+	info := &enumInfo{
+		name:     decl.Name,
+		typ:      "i64",
+		decl:     decl,
+		variants: map[string]variantInfo{},
+	}
+	for i, variant := range decl.Variants {
+		if variant == nil {
+			return nil, unsupportedf("source-layout", "enum %q has nil variant", decl.Name)
+		}
+		if !isLLVMIdent(variant.Name) {
+			return nil, unsupportedf("name", "enum %q variant name %q", decl.Name, variant.Name)
+		}
+		payloads := make([]string, 0, len(variant.Fields))
+		if len(variant.Fields) > 1 {
+			return nil, unsupportedf("type-system", "enum %q variant %q has %d payload fields; only one scalar payload is supported", decl.Name, variant.Name, len(variant.Fields))
+		}
+		if len(variant.Fields) == 1 {
+			typ, err := llvmEnumPayloadType(variant.Fields[0])
+			if err != nil {
+				return nil, unsupportedf("type-system", "enum %q variant %q payload: %s", decl.Name, variant.Name, unsupportedMessage(err))
+			}
+			if info.payloadTyp == "" {
+				info.payloadTyp = typ
+			} else if info.payloadTyp != typ {
+				return nil, unsupportedf("type-system", "enum %q mixes payload types %s and %s", decl.Name, info.payloadTyp, typ)
+			}
+			payloads = append(payloads, typ)
+			info.hasPayload = true
+		}
+		if _, exists := info.variants[variant.Name]; exists {
+			return nil, unsupportedf("source-layout", "enum %q duplicate variant %q", decl.Name, variant.Name)
+		}
+		info.variants[variant.Name] = variantInfo{name: variant.Name, tag: i, payloads: payloads}
+	}
+	if info.hasPayload {
+		info.typ = "%" + info.name
+	}
+	return info, nil
+}
+
+func llvmEnumPayloadType(t ast.Type) (string, error) {
+	named, ok := t.(*ast.NamedType)
+	if !ok || len(named.Args) != 0 || len(named.Path) != 1 {
+		return "", unsupported("type-system", "LLVM enum payloads currently support Int or Float only")
+	}
+	switch named.Path[0] {
+	case "Int":
+		return "i64", nil
+	case "Float":
+		return "double", nil
+	default:
+		return "", unsupported("type-system", "LLVM enum payloads currently support Int or Float only")
+	}
+}
+
+func signatureOf(fn *ast.FnDecl, structs map[string]*structInfo, enums map[string]*enumInfo) (*fnSig, error) {
 	if fn == nil {
 		return nil, unsupported("source-layout", "nil function")
 	}
@@ -320,7 +547,7 @@ func signatureOf(fn *ast.FnDecl) (*fnSig, error) {
 		}
 		return sig, nil
 	}
-	ret, err := llvmType(fn.ReturnType)
+	ret, err := llvmType(fn.ReturnType, structs, enums)
 	if err != nil {
 		return nil, unsupportedf("type-system", "function %q return type: %s", fn.Name, unsupportedMessage(err))
 	}
@@ -335,7 +562,7 @@ func signatureOf(fn *ast.FnDecl) (*fnSig, error) {
 		if !isLLVMIdent(p.Name) {
 			return nil, unsupportedf("name", "parameter name %q", p.Name)
 		}
-		typ, err := llvmType(p.Type)
+		typ, err := llvmType(p.Type, structs, enums)
 		if err != nil {
 			return nil, unsupportedf("type-system", "function %q parameter %q: %s", fn.Name, p.Name, unsupportedMessage(err))
 		}
@@ -476,7 +703,7 @@ func (g *generator) emitLet(stmt *ast.LetStmt) error {
 		return err
 	}
 	if stmt.Type != nil {
-		typ, err := llvmType(stmt.Type)
+		typ, err := llvmType(stmt.Type, g.structsByName, g.enumsByName)
 		if err != nil {
 			return err
 		}
@@ -645,11 +872,13 @@ func (g *generator) emitPrintln(call *ast.CallExpr) error {
 	switch v.typ {
 	case "i64":
 		llvmPrintlnI64(emitter, toOstyValue(v))
+	case "double":
+		llvmPrintlnF64(emitter, toOstyValue(v))
 	case "ptr":
 		llvmPrintlnString(emitter, toOstyValue(v))
 	default:
 		g.takeOstyEmitter(emitter)
-		return unsupported("type-system", "println currently supports Int expressions and plain String values only")
+		return unsupported("type-system", "println currently supports Int, Float, and plain String values only")
 	}
 	g.takeOstyEmitter(emitter)
 	return nil
@@ -678,6 +907,14 @@ func (g *generator) emitExpr(expr ast.Expr) (value, error) {
 			return value{}, unsupportedf("expression", "invalid Int literal %q", e.Text)
 		}
 		return value{typ: "i64", ref: strconv.FormatInt(n, 10)}, nil
+	case *ast.FloatLit:
+		text := strings.ReplaceAll(e.Text, "_", "")
+		f, err := strconv.ParseFloat(text, 64)
+		if err != nil {
+			return value{}, unsupportedf("expression", "invalid Float literal %q", e.Text)
+		}
+		out := llvmFloatLiteral(strconv.FormatFloat(f, 'e', 16, 64))
+		return fromOstyValue(out), nil
 	case *ast.BoolLit:
 		if e.Value {
 			return value{typ: "i1", ref: "true"}, nil
@@ -686,16 +923,7 @@ func (g *generator) emitExpr(expr ast.Expr) (value, error) {
 	case *ast.StringLit:
 		return g.emitStringLiteral(e)
 	case *ast.Ident:
-		if v, ok := g.lookupLocal(e.Name); ok {
-			if v.ptr {
-				emitter := g.toOstyEmitter()
-				out := llvmLoad(emitter, toOstyValue(v))
-				g.takeOstyEmitter(emitter)
-				return fromOstyValue(out), nil
-			}
-			return v, nil
-		}
-		return value{}, unsupportedf("name", "unknown identifier %q", e.Name)
+		return g.emitIdent(e.Name)
 	case *ast.ParenExpr:
 		return g.emitExpr(e.X)
 	case *ast.UnaryExpr:
@@ -704,11 +932,190 @@ func (g *generator) emitExpr(expr ast.Expr) (value, error) {
 		return g.emitBinary(e)
 	case *ast.CallExpr:
 		return g.emitCall(e)
+	case *ast.FieldExpr:
+		return g.emitFieldExpr(e)
+	case *ast.StructLit:
+		return g.emitStructLit(e)
 	case *ast.IfExpr:
 		return g.emitIfExprValue(e)
+	case *ast.MatchExpr:
+		return g.emitMatchExprValue(e)
 	default:
 		return value{}, unsupportedf("expression", "expression %T", expr)
 	}
+}
+
+func (g *generator) emitIdent(name string) (value, error) {
+	if v, ok := g.lookupLocal(name); ok {
+		return g.loadIfPointer(v)
+	}
+	if v, found, err := g.enumVariantIdent(name); found || err != nil {
+		return v, err
+	}
+	return value{}, unsupportedf("name", "unknown identifier %q", name)
+}
+
+func (g *generator) loadIfPointer(v value) (value, error) {
+	if !v.ptr {
+		return v, nil
+	}
+	emitter := g.toOstyEmitter()
+	out := llvmLoad(emitter, toOstyValue(v))
+	g.takeOstyEmitter(emitter)
+	return fromOstyValue(out), nil
+}
+
+func (g *generator) emitStructLit(lit *ast.StructLit) (value, error) {
+	typeName, ok := structTypeExprName(lit.Type)
+	if !ok {
+		return value{}, unsupportedf("type-system", "struct literal type %T", lit.Type)
+	}
+	info := g.structsByName[typeName]
+	if info == nil {
+		return value{}, unsupportedf("type-system", "unknown struct %q", typeName)
+	}
+	if lit.Spread != nil {
+		return value{}, unsupportedf("expression", "struct %q spread literal", typeName)
+	}
+	fields := map[string]*ast.StructLitField{}
+	for _, field := range lit.Fields {
+		if field == nil {
+			return value{}, unsupportedf("expression", "struct %q has nil literal field", typeName)
+		}
+		if !isLLVMIdent(field.Name) {
+			return value{}, unsupportedf("name", "struct %q literal field name %q", typeName, field.Name)
+		}
+		if _, exists := fields[field.Name]; exists {
+			return value{}, unsupportedf("expression", "struct %q duplicate literal field %q", typeName, field.Name)
+		}
+		if _, exists := info.byName[field.Name]; !exists {
+			return value{}, unsupportedf("expression", "struct %q unknown literal field %q", typeName, field.Name)
+		}
+		fields[field.Name] = field
+	}
+	values := make([]*LlvmValue, 0, len(info.fields))
+	for _, field := range info.fields {
+		litField := fields[field.name]
+		if litField == nil {
+			return value{}, unsupportedf("expression", "struct %q missing literal field %q", typeName, field.name)
+		}
+		var v value
+		var err error
+		if litField.Value == nil {
+			v, err = g.emitIdent(litField.Name)
+		} else {
+			v, err = g.emitExpr(litField.Value)
+		}
+		if err != nil {
+			return value{}, err
+		}
+		if v.typ != field.typ {
+			return value{}, unsupportedf("type-system", "struct %q field %q type %s, value %s", typeName, field.name, field.typ, v.typ)
+		}
+		values = append(values, toOstyValue(v))
+	}
+	emitter := g.toOstyEmitter()
+	out := llvmStructLiteral(emitter, info.typ, values)
+	g.takeOstyEmitter(emitter)
+	return fromOstyValue(out), nil
+}
+
+func (g *generator) emitFieldExpr(expr *ast.FieldExpr) (value, error) {
+	if expr.IsOptional {
+		return value{}, unsupported("expression", "optional field access is not supported")
+	}
+	if v, found, err := g.enumVariantValue(expr); found || err != nil {
+		return v, err
+	}
+	base, err := g.emitExpr(expr.X)
+	if err != nil {
+		return value{}, err
+	}
+	info := g.structsByType[base.typ]
+	if info == nil {
+		return value{}, unsupportedf("type-system", "field access on %s", base.typ)
+	}
+	field, ok := info.byName[expr.Name]
+	if !ok {
+		return value{}, unsupportedf("expression", "struct %q has no field %q", info.name, expr.Name)
+	}
+	emitter := g.toOstyEmitter()
+	out := llvmExtractValue(emitter, toOstyValue(base), field.typ, field.index)
+	g.takeOstyEmitter(emitter)
+	return fromOstyValue(out), nil
+}
+
+func (g *generator) enumVariantValue(expr *ast.FieldExpr) (value, bool, error) {
+	ref, ok := g.enumVariantByField(expr)
+	if !ok {
+		return value{}, false, nil
+	}
+	out, err := g.enumVariantConstant(ref.enum, ref.variant)
+	return out, true, err
+}
+
+func (g *generator) enumVariantIdent(name string) (value, bool, error) {
+	found, count := g.findBareEnumVariant(name)
+	if count == 0 {
+		return value{}, false, nil
+	}
+	if count > 1 {
+		return value{}, true, unsupportedf("name", "ambiguous enum variant %q", name)
+	}
+	out, err := g.enumVariantConstant(found.enum, found.variant)
+	return out, true, err
+}
+
+func (g *generator) enumVariantConstant(info *enumInfo, variant variantInfo) (value, error) {
+	if info.hasPayload {
+		if len(variant.payloads) != 0 {
+			return value{}, unsupportedf("expression", "enum variant %q requires a payload", variant.name)
+		}
+		return g.emitEnumPayloadVariant(info, variant, value{typ: info.payloadTyp, ref: zeroLiteral(info.payloadTyp)})
+	}
+	out := llvmEnumVariant(info.name, variant.tag)
+	return fromOstyValue(out), nil
+}
+
+func (g *generator) findBareEnumVariant(name string) (enumVariantRef, int) {
+	var found enumVariantRef
+	count := 0
+	for _, info := range g.enums {
+		if variant, ok := info.variants[name]; ok {
+			found = enumVariantRef{enum: info, variant: variant}
+			count++
+		}
+	}
+	return found, count
+}
+
+func (g *generator) enumVariantByField(expr *ast.FieldExpr) (enumVariantRef, bool) {
+	base, ok := expr.X.(*ast.Ident)
+	if !ok {
+		return enumVariantRef{}, false
+	}
+	info := g.enumsByName[base.Name]
+	if info == nil {
+		return enumVariantRef{}, false
+	}
+	variant, ok := info.variants[expr.Name]
+	if !ok {
+		return enumVariantRef{}, false
+	}
+	return enumVariantRef{enum: info, variant: variant}, true
+}
+
+func (g *generator) emitEnumPayloadVariant(info *enumInfo, variant variantInfo, payload value) (value, error) {
+	if !info.hasPayload {
+		return value{}, unsupportedf("expression", "enum %q has no payload layout", info.name)
+	}
+	if payload.typ != info.payloadTyp {
+		return value{}, unsupportedf("type-system", "enum %q variant %q payload type %s, want %s", info.name, variant.name, payload.typ, info.payloadTyp)
+	}
+	emitter := g.toOstyEmitter()
+	out := llvmEnumPayloadVariant(emitter, info.typ, variant.tag, toOstyValue(payload))
+	g.takeOstyEmitter(emitter)
+	return fromOstyValue(out), nil
 }
 
 func (g *generator) emitUnary(e *ast.UnaryExpr) (value, error) {
@@ -718,16 +1125,22 @@ func (g *generator) emitUnary(e *ast.UnaryExpr) (value, error) {
 	}
 	switch e.Op {
 	case token.PLUS:
-		if v.typ != "i64" {
+		if v.typ != "i64" && v.typ != "double" {
 			return value{}, unsupportedf("type-system", "unary plus on %s", v.typ)
 		}
 		return v, nil
 	case token.MINUS:
-		if v.typ != "i64" {
+		emitter := g.toOstyEmitter()
+		var out *LlvmValue
+		switch v.typ {
+		case "i64":
+			out = llvmBinaryI64(emitter, "sub", llvmIntLiteral(0), toOstyValue(v))
+		case "double":
+			out = llvmBinaryF64(emitter, "fsub", llvmFloatLiteral("0.0"), toOstyValue(v))
+		default:
+			g.takeOstyEmitter(emitter)
 			return value{}, unsupportedf("type-system", "unary minus on %s", v.typ)
 		}
-		emitter := g.toOstyEmitter()
-		out := llvmBinaryI64(emitter, "sub", llvmIntLiteral(0), toOstyValue(v))
 		g.takeOstyEmitter(emitter)
 		return fromOstyValue(out), nil
 	case token.NOT:
@@ -757,6 +1170,25 @@ func (g *generator) emitBinary(e *ast.BinaryExpr) (value, error) {
 	}
 	if e.Op == token.AND || e.Op == token.OR {
 		return g.emitLogical(e.Op, left, right)
+	}
+	if left.typ == "double" && right.typ == "double" {
+		op := ""
+		switch e.Op {
+		case token.PLUS:
+			op = "fadd"
+		case token.MINUS:
+			op = "fsub"
+		case token.STAR:
+			op = "fmul"
+		case token.SLASH:
+			op = "fdiv"
+		default:
+			return value{}, unsupportedf("expression", "binary operator %q", e.Op)
+		}
+		emitter := g.toOstyEmitter()
+		out := llvmBinaryF64(emitter, op, toOstyValue(left), toOstyValue(right))
+		g.takeOstyEmitter(emitter)
+		return fromOstyValue(out), nil
 	}
 	if left.typ != "i64" || right.typ != "i64" {
 		return value{}, unsupportedf("type-system", "binary operator %q on %s/%s", e.Op, left.typ, right.typ)
@@ -805,32 +1237,67 @@ func (g *generator) emitCompare(op token.Kind, left, right value) (value, error)
 	if left.typ != right.typ {
 		return value{}, unsupportedf("type-system", "compare type mismatch %s/%s", left.typ, right.typ)
 	}
-	pred := ""
-	switch op {
-	case token.EQ:
-		pred = "eq"
-	case token.NEQ:
-		pred = "ne"
-	case token.LT:
-		pred = "slt"
-	case token.GT:
-		pred = "sgt"
-	case token.LEQ:
-		pred = "sle"
-	case token.GEQ:
-		pred = "sge"
-	default:
-		return value{}, unsupportedf("expression", "comparison operator %q", op)
-	}
+	emitter := g.toOstyEmitter()
+	var out *LlvmValue
 	switch left.typ {
 	case "i64", "i1":
+		pred, err := llvmIntComparePred(op)
+		if err != nil {
+			g.takeOstyEmitter(emitter)
+			return value{}, err
+		}
+		out = llvmCompare(emitter, pred, toOstyValue(left), toOstyValue(right))
+	case "double":
+		pred, err := llvmFloatComparePred(op)
+		if err != nil {
+			g.takeOstyEmitter(emitter)
+			return value{}, err
+		}
+		out = llvmCompareF64(emitter, pred, toOstyValue(left), toOstyValue(right))
 	default:
+		g.takeOstyEmitter(emitter)
 		return value{}, unsupportedf("type-system", "compare type %s", left.typ)
 	}
-	emitter := g.toOstyEmitter()
-	out := llvmCompare(emitter, pred, toOstyValue(left), toOstyValue(right))
 	g.takeOstyEmitter(emitter)
 	return fromOstyValue(out), nil
+}
+
+func llvmIntComparePred(op token.Kind) (string, error) {
+	switch op {
+	case token.EQ:
+		return "eq", nil
+	case token.NEQ:
+		return "ne", nil
+	case token.LT:
+		return "slt", nil
+	case token.GT:
+		return "sgt", nil
+	case token.LEQ:
+		return "sle", nil
+	case token.GEQ:
+		return "sge", nil
+	default:
+		return "", unsupportedf("expression", "comparison operator %q", op)
+	}
+}
+
+func llvmFloatComparePred(op token.Kind) (string, error) {
+	switch op {
+	case token.EQ:
+		return "oeq", nil
+	case token.NEQ:
+		return "one", nil
+	case token.LT:
+		return "olt", nil
+	case token.GT:
+		return "ogt", nil
+	case token.LEQ:
+		return "ole", nil
+	case token.GEQ:
+		return "oge", nil
+	default:
+		return "", unsupportedf("expression", "comparison operator %q", op)
+	}
 }
 
 func (g *generator) emitIfExprValue(expr *ast.IfExpr) (value, error) {
@@ -910,7 +1377,251 @@ func (g *generator) emitElseValue(expr ast.Expr) (value, error) {
 	}
 }
 
+func (g *generator) emitMatchExprValue(expr *ast.MatchExpr) (value, error) {
+	if expr == nil {
+		return value{}, unsupported("expression", "nil match expression")
+	}
+	if len(expr.Arms) != 2 {
+		return value{}, unsupportedf("expression", "match with %d arms", len(expr.Arms))
+	}
+	scrutinee, err := g.emitExpr(expr.Scrutinee)
+	if err != nil {
+		return value{}, err
+	}
+	first := expr.Arms[0]
+	second := expr.Arms[1]
+	if first == nil || second == nil {
+		return value{}, unsupported("expression", "nil match arm")
+	}
+	if first.Guard != nil || second.Guard != nil {
+		return value{}, unsupported("control-flow", "match guards are not supported")
+	}
+	if scrutinee.typ == "i64" {
+		return g.emitTagEnumMatchExprValue(scrutinee, first, second)
+	}
+	if info := g.enumsByType[scrutinee.typ]; info != nil && info.hasPayload {
+		return g.emitPayloadEnumMatchExprValue(scrutinee, info, first, second)
+	}
+	return value{}, unsupportedf("type-system", "match scrutinee type %s, want enum tag", scrutinee.typ)
+}
+
+func (g *generator) emitTagEnumMatchExprValue(scrutinee value, first, second *ast.MatchArm) (value, error) {
+	tag, ok, err := g.matchEnumTag(first.Pattern)
+	if err != nil {
+		return value{}, err
+	}
+	if !ok {
+		return value{}, unsupported("expression", "first match arm must be a payload-free enum variant")
+	}
+	if _, catchAll := second.Pattern.(*ast.WildcardPat); !catchAll {
+		if _, _, err := g.matchEnumTag(second.Pattern); err != nil {
+			return value{}, err
+		}
+	}
+	emitter := g.toOstyEmitter()
+	cond := llvmCompare(emitter, "eq", toOstyValue(scrutinee), toOstyValue(value{typ: "i64", ref: strconv.Itoa(tag)}))
+	labels := llvmIfExprStart(emitter, cond)
+	g.takeOstyEmitter(emitter)
+
+	thenValue, err := g.emitMatchArmBodyValue(first.Body)
+	if err != nil {
+		return value{}, err
+	}
+	emitter = g.toOstyEmitter()
+	llvmIfExprElse(emitter, labels)
+	g.takeOstyEmitter(emitter)
+
+	elseValue, err := g.emitMatchArmBodyValue(second.Body)
+	if err != nil {
+		return value{}, err
+	}
+	if thenValue.typ != elseValue.typ {
+		return value{}, unsupportedf("type-system", "match arm types %s/%s", thenValue.typ, elseValue.typ)
+	}
+	emitter = g.toOstyEmitter()
+	out := llvmIfExprEnd(emitter, thenValue.typ, toOstyValue(thenValue), toOstyValue(elseValue), labels)
+	g.takeOstyEmitter(emitter)
+	return fromOstyValue(out), nil
+}
+
+func (g *generator) emitPayloadEnumMatchExprValue(scrutinee value, info *enumInfo, first, second *ast.MatchArm) (value, error) {
+	firstPattern, ok, err := g.matchPayloadEnumPattern(info, first.Pattern)
+	if err != nil {
+		return value{}, err
+	}
+	if !ok {
+		return value{}, unsupportedf("expression", "first match arm must be an enum %q variant", info.name)
+	}
+	var secondPattern enumPatternInfo
+	secondHasPattern := false
+	if _, catchAll := second.Pattern.(*ast.WildcardPat); !catchAll {
+		secondPattern, secondHasPattern, err = g.matchPayloadEnumPattern(info, second.Pattern)
+		if err != nil {
+			return value{}, err
+		}
+		if !secondHasPattern {
+			return value{}, unsupportedf("expression", "second match arm must be an enum %q variant or wildcard", info.name)
+		}
+	}
+
+	emitter := g.toOstyEmitter()
+	tag := llvmExtractValue(emitter, toOstyValue(scrutinee), "i64", 0)
+	cond := llvmCompare(emitter, "eq", tag, toOstyValue(value{typ: "i64", ref: strconv.Itoa(firstPattern.variant.tag)}))
+	labels := llvmIfExprStart(emitter, cond)
+	g.takeOstyEmitter(emitter)
+
+	g.pushScope()
+	if err := g.bindPayloadEnumPattern(scrutinee, firstPattern); err != nil {
+		g.popScope()
+		return value{}, err
+	}
+	thenValue, err := g.emitMatchArmBodyValue(first.Body)
+	g.popScope()
+	if err != nil {
+		return value{}, err
+	}
+	emitter = g.toOstyEmitter()
+	llvmIfExprElse(emitter, labels)
+	g.takeOstyEmitter(emitter)
+
+	g.pushScope()
+	if secondHasPattern {
+		if err := g.bindPayloadEnumPattern(scrutinee, secondPattern); err != nil {
+			g.popScope()
+			return value{}, err
+		}
+	}
+	elseValue, err := g.emitMatchArmBodyValue(second.Body)
+	g.popScope()
+	if err != nil {
+		return value{}, err
+	}
+	if thenValue.typ != elseValue.typ {
+		return value{}, unsupportedf("type-system", "match arm types %s/%s", thenValue.typ, elseValue.typ)
+	}
+	emitter = g.toOstyEmitter()
+	out := llvmIfExprEnd(emitter, thenValue.typ, toOstyValue(thenValue), toOstyValue(elseValue), labels)
+	g.takeOstyEmitter(emitter)
+	return fromOstyValue(out), nil
+}
+
+func (g *generator) bindPayloadEnumPattern(scrutinee value, pattern enumPatternInfo) error {
+	if !pattern.hasPayloadBinding {
+		return nil
+	}
+	emitter := g.toOstyEmitter()
+	payload := llvmExtractValue(emitter, toOstyValue(scrutinee), pattern.payloadType, 1)
+	g.takeOstyEmitter(emitter)
+	g.bindLocal(pattern.payloadName, fromOstyValue(payload))
+	return nil
+}
+
+func (g *generator) matchPayloadEnumPattern(info *enumInfo, pattern ast.Pattern) (enumPatternInfo, bool, error) {
+	switch p := pattern.(type) {
+	case *ast.IdentPat:
+		variant, ok := info.variants[p.Name]
+		if !ok {
+			return enumPatternInfo{}, false, nil
+		}
+		if len(variant.payloads) != 0 {
+			return enumPatternInfo{}, true, unsupportedf("expression", "enum variant pattern %q must bind its payload", p.Name)
+		}
+		return enumPatternInfo{variant: variant}, true, nil
+	case *ast.VariantPat:
+		if len(p.Path) == 0 || len(p.Path) > 2 {
+			return enumPatternInfo{}, false, nil
+		}
+		if len(p.Path) == 2 && p.Path[0] != info.name {
+			return enumPatternInfo{}, false, nil
+		}
+		name := p.Path[len(p.Path)-1]
+		variant, ok := info.variants[name]
+		if !ok {
+			return enumPatternInfo{}, false, nil
+		}
+		if len(p.Args) != len(variant.payloads) {
+			return enumPatternInfo{}, true, unsupportedf("expression", "enum variant pattern %q payload count", name)
+		}
+		out := enumPatternInfo{variant: variant}
+		if len(variant.payloads) == 0 {
+			return out, true, nil
+		}
+		out.payloadType = variant.payloads[0]
+		switch arg := p.Args[0].(type) {
+		case *ast.IdentPat:
+			if !isLLVMIdent(arg.Name) {
+				return enumPatternInfo{}, true, unsupportedf("name", "enum payload binding name %q", arg.Name)
+			}
+			out.payloadName = arg.Name
+			out.hasPayloadBinding = true
+		case *ast.WildcardPat:
+		default:
+			return enumPatternInfo{}, true, unsupportedf("expression", "enum variant payload pattern %T", arg)
+		}
+		return out, true, nil
+	default:
+		return enumPatternInfo{}, false, nil
+	}
+}
+
+func (g *generator) emitMatchArmBodyValue(expr ast.Expr) (value, error) {
+	switch e := expr.(type) {
+	case *ast.Block:
+		g.pushScope()
+		defer g.popScope()
+		return g.emitBlockValue(e)
+	default:
+		return g.emitExpr(expr)
+	}
+}
+
+func (g *generator) matchEnumTag(pattern ast.Pattern) (int, bool, error) {
+	switch p := pattern.(type) {
+	case *ast.IdentPat:
+		var found variantInfo
+		count := 0
+		for _, info := range g.enums {
+			if info.hasPayload {
+				continue
+			}
+			if variant, ok := info.variants[p.Name]; ok {
+				found = variant
+				count++
+			}
+		}
+		if count == 0 {
+			return 0, false, nil
+		}
+		if count > 1 {
+			return 0, true, unsupportedf("name", "ambiguous enum variant pattern %q", p.Name)
+		}
+		return found.tag, true, nil
+	case *ast.VariantPat:
+		if len(p.Args) != 0 || len(p.Path) == 0 {
+			return 0, false, nil
+		}
+		name := p.Path[len(p.Path)-1]
+		if len(p.Path) == 2 {
+			info := g.enumsByName[p.Path[0]]
+			if info == nil || info.hasPayload {
+				return 0, false, nil
+			}
+			variant, ok := info.variants[name]
+			if !ok {
+				return 0, false, nil
+			}
+			return variant.tag, true, nil
+		}
+		return g.matchEnumTag(&ast.IdentPat{Name: name})
+	default:
+		return 0, false, nil
+	}
+}
+
 func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
+	if v, found, err := g.emitEnumVariantCall(call); found || err != nil {
+		return v, err
+	}
 	id, ok := call.Fn.(*ast.Ident)
 	if !ok {
 		return value{}, unsupportedf("call", "call target %T", call.Fn)
@@ -949,8 +1660,70 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 	return fromOstyValue(out), nil
 }
 
+func (g *generator) emitEnumVariantCall(call *ast.CallExpr) (value, bool, error) {
+	ref, found, err := g.enumVariantCallTarget(call)
+	if !found || err != nil {
+		return value{}, found, err
+	}
+	if len(call.Args) != len(ref.variant.payloads) {
+		return value{}, true, unsupportedf("call", "enum variant %q argument count", ref.variant.name)
+	}
+	if len(ref.variant.payloads) == 0 {
+		out, err := g.enumVariantConstant(ref.enum, ref.variant)
+		return out, true, err
+	}
+	if !ref.enum.hasPayload {
+		return value{}, true, unsupportedf("expression", "enum %q has no payload layout", ref.enum.name)
+	}
+	arg := call.Args[0]
+	if arg.Name != "" || arg.Value == nil {
+		return value{}, true, unsupportedf("call", "enum variant %q requires positional payload", ref.variant.name)
+	}
+	payload, err := g.emitExpr(arg.Value)
+	if err != nil {
+		return value{}, true, err
+	}
+	if payload.typ != ref.variant.payloads[0] {
+		return value{}, true, unsupportedf("type-system", "enum variant %q payload type %s, want %s", ref.variant.name, payload.typ, ref.variant.payloads[0])
+	}
+	out, err := g.emitEnumPayloadVariant(ref.enum, ref.variant, payload)
+	return out, true, err
+}
+
+func (g *generator) enumVariantCallTarget(call *ast.CallExpr) (enumVariantRef, bool, error) {
+	switch fn := call.Fn.(type) {
+	case *ast.Ident:
+		found, count := g.findBareEnumVariant(fn.Name)
+		if count == 0 {
+			return enumVariantRef{}, false, nil
+		}
+		if count > 1 {
+			return enumVariantRef{}, true, unsupportedf("name", "ambiguous enum variant %q", fn.Name)
+		}
+		return found, true, nil
+	case *ast.FieldExpr:
+		found, ok := g.enumVariantByField(fn)
+		return found, ok, nil
+	default:
+		return enumVariantRef{}, false, nil
+	}
+}
+
 func (g *generator) render(defs []string) []byte {
-	return []byte(llvmRenderModuleWithGlobals(g.sourcePath, g.target, g.stringDefs, defs))
+	typeDefs := make([]string, 0, len(g.structs)+len(g.enumsByType))
+	for _, info := range g.structs {
+		fieldTypes := make([]string, 0, len(info.fields))
+		for _, field := range info.fields {
+			fieldTypes = append(fieldTypes, field.typ)
+		}
+		typeDefs = append(typeDefs, llvmStructTypeDef(info.name, fieldTypes))
+	}
+	for _, info := range g.enums {
+		if info.hasPayload {
+			typeDefs = append(typeDefs, llvmStructTypeDef(info.name, []string{"i64", info.payloadTyp}))
+		}
+	}
+	return []byte(llvmRenderModuleWithGlobalsAndTypes(g.sourcePath, g.target, typeDefs, g.stringDefs, defs))
 }
 
 func (g *generator) renderFunction(ret, name string, params []paramInfo) string {
@@ -1005,6 +1778,14 @@ func plainStringLiteral(lit *ast.StringLit) (string, bool) {
 	return b.String(), true
 }
 
+func structTypeExprName(expr ast.Expr) (string, bool) {
+	id, ok := expr.(*ast.Ident)
+	if !ok || id.Name == "" {
+		return "", false
+	}
+	return id.Name, true
+}
+
 func isLLVMASCIIStringText(text string) bool {
 	for i := 0; i < len(text); i++ {
 		ch := text[i]
@@ -1025,6 +1806,15 @@ func toLLVMParams(params []paramInfo) []*LlvmParam {
 		out = append(out, llvmParam(p.name, p.typ))
 	}
 	return out
+}
+
+func zeroLiteral(typ string) string {
+	switch typ {
+	case "double":
+		return "0.0"
+	default:
+		return "0"
+	}
 }
 
 func (g *generator) pushScope() {
@@ -1059,7 +1849,7 @@ func identPatternName(p ast.Pattern) (string, error) {
 	return id.Name, nil
 }
 
-func llvmType(t ast.Type) (string, error) {
+func llvmType(t ast.Type, structs map[string]*structInfo, enums map[string]*enumInfo) (string, error) {
 	named, ok := t.(*ast.NamedType)
 	if !ok {
 		return "", unsupportedf("type-system", "type %T", t)
@@ -1070,11 +1860,19 @@ func llvmType(t ast.Type) (string, error) {
 	switch named.Path[0] {
 	case "Int":
 		return "i64", nil
+	case "Float":
+		return "double", nil
 	case "Bool":
 		return "i1", nil
 	case "String":
 		return "ptr", nil
 	default:
+		if info := structs[named.Path[0]]; info != nil {
+			return info.typ, nil
+		}
+		if info := enums[named.Path[0]]; info != nil {
+			return info.typ, nil
+		}
 		return "", unsupportedf("type-system", "type %q", strings.Join(named.Path, "."))
 	}
 }

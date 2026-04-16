@@ -1078,12 +1078,14 @@ func nodeSpan(n ast.Node) Span {
 
 func (l *lowerer) lowerUseDecl(u *ast.UseDecl) Decl {
 	out := &UseDecl{
-		Path:    append([]string(nil), u.Path...),
-		RawPath: u.RawPath,
-		Alias:   u.Alias,
-		IsGoFFI: u.IsGoFFI,
-		GoPath:  u.GoPath,
-		SpanV:   nodeSpan(u),
+		Path:         append([]string(nil), u.Path...),
+		RawPath:      u.RawPath,
+		Alias:        u.Alias,
+		IsGoFFI:      u.IsGoFFI,
+		IsRuntimeFFI: u.IsRuntimeFFI,
+		GoPath:       u.GoPath,
+		RuntimePath:  u.RuntimePath,
+		SpanV:        nodeSpan(u),
 	}
 	if out.Alias == "" && len(out.Path) > 0 {
 		out.Alias = out.Path[len(out.Path)-1]

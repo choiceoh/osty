@@ -2,20 +2,24 @@
 //
 // Subcommands:
 //
-//	osty new <name>            Scaffold a new project directory (spec §13.1).
-//	osty parse <file.osty>     Parse a file and print the AST as JSON.
-//	osty tokens <file.osty>    Lex a file and print the token stream.
-//	osty resolve <file.osty>   Lex+parse+name-resolve; print resolved refs.
-//	osty check <file.osty>     Lex+parse+resolve+type-check diagnostics only.
-//	osty typecheck <file.osty> Alias of `check` that also prints the inferred
-//	                           type of each expression (debugging aid).
-//	osty fmt <file.osty>       Repair then format source; see -check/-write/-no-repair.
-//	osty repair <file.osty>    Fix common AI-authored syntax slips; see -check/-write.
-//	osty gen <file.osty>       Transpile to Go (prints to stdout; -o writes to file).
-//	osty doc <path>            Emit markdown API docs for a file or package.
-//	osty lsp                   Run the Language Server Protocol server on stdio.
-//	osty explain [CODE]        Describe a diagnostic code; with no arg, list every code.
-//	osty pipeline <file.osty>  Run every front-end phase and print per-stage timing.
+//	osty new <name>              Scaffold a new project directory (spec §13.1).
+//	osty init                    Scaffold into the current directory.
+//	osty build [dir]             Resolve deps, run the front-end, emit/build artifacts.
+//	osty run [-- args...]        Build and execute the host binary.
+//	osty test [path|filter...]   Discover, build, and run *_test.osty tests.
+//	osty add/update/remove/fetch Manage manifest deps, vendoring, and osty.lock.
+//	osty publish/search/info     Interact with package registries.
+//	osty registry serve          Run a file-backed registry for local/private use.
+//	osty doc <path>              Emit markdown or HTML API docs.
+//	osty ci [path]               Run quality checks; `ci snapshot` captures API.
+//	osty profiles/targets/features/cache
+//	                             Inspect build profiles, target presets, features, cache.
+//	osty parse/tokens/resolve/check/typecheck/lint/fmt/repair
+//	                             Single-file/package front-end and source tools.
+//	osty gen <file.osty>         Emit a single file through go or llvm backend.
+//	osty lsp                     Run the Language Server Protocol server on stdio.
+//	osty explain [CODE]          Describe a diagnostic code; with no arg, list every code.
+//	osty pipeline <file|dir>     Run every front-end phase and print per-stage timing.
 //
 // Global flags (may precede the subcommand):
 //
@@ -57,6 +61,7 @@ import (
 	"github.com/osty/osty/internal/repair"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/scaffold"
+	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/stdlib"
 	"github.com/osty/osty/internal/token"
 	"github.com/osty/osty/internal/types"
@@ -71,6 +76,7 @@ type cliFlags struct {
 	strict     bool // lint: exit 1 on any warning
 	fix        bool // lint: apply machine-applicable suggestions in place
 	fixDryRun  bool // lint: compute fixes but print diff instead of writing
+	selfhost   bool // lint: use the bootstrapped Osty linter
 	showScopes bool // resolve: also print the nested scope tree
 	trace      bool // global: stream per-phase timing to stderr
 	explain    bool // global: append `osty explain CODE` text per unique code
@@ -132,9 +138,9 @@ func main() {
 		runScaffold(args[1:])
 		return
 	}
-	// build is the manifest-driven front-end over a directory. When
-	// passed a directory it loads osty.toml, validates, and runs
-	// check + lint across the package(s) the manifest describes.
+	// build is the manifest-driven project pipeline: load osty.toml,
+	// resolve deps, run the front-end, and ask the selected backend to
+	// emit/build artifacts under the profile/target output tree.
 	if cmd == "build" {
 		runBuild(args[1:], flags)
 		return
@@ -152,7 +158,8 @@ func main() {
 			runLintList()
 			return
 		}
-		// Allow `osty lint --fix FILE` and `osty lint --strict FILE`
+		// Allow lint-only flags after the subcommand, e.g.
+		// `osty lint --selfhost --fix FILE`
 		// (subcommand-local flag placement). Strip them from args so
 		// downstream dispatch keeps seeing positional-only input.
 		if rest, present := takeBoolFlag(args[1:], "--fix"); present {
@@ -161,6 +168,10 @@ func main() {
 		}
 		if rest, present := takeBoolFlag(args[1:], "--fix-dry-run"); present {
 			flags.fixDryRun = true
+			args = append([]string{"lint"}, rest...)
+		}
+		if rest, present := takeBoolFlag(args[1:], "--selfhost"); present {
+			flags.selfhost = true
 			args = append([]string{"lint"}, rest...)
 		}
 		if rest, present := takeBoolFlag(args[1:], "--strict"); present {
@@ -178,9 +189,9 @@ func main() {
 		runUpdate(args[1:], flags)
 		return
 	}
-	// run builds the project (via gen Phase 1) and executes the
-	// produced Go program; test walks *_test.osty files; publish packs
-	// a tarball and uploads it to a configured registry.
+	// run builds the project through the selected backend and executes
+	// the host binary; test walks *_test.osty files and runs the Go
+	// harness; publish packs a tarball and uploads it to a registry.
 	if cmd == "run" {
 		runRun(args[1:], flags)
 		return
@@ -404,7 +415,7 @@ func main() {
 		file, parseDiags := parser.ParseDiagnostics(src)
 		res := resolveFile(file)
 		chk := check.File(file, res, checkOptsForSource(src))
-		lr := lint.File(file, res, chk)
+		lr := runLintEngine(src, file, res, chk, flags)
 		if cfg, ok := loadLintConfigNear(path); ok {
 			lr = cfg.Apply(lr)
 		}
@@ -413,24 +424,28 @@ func main() {
 		printDiags(formatter, all, flags)
 		if flags.fix || flags.fixDryRun {
 			newSrc, applied, skipped := lint.ApplyFixes(src, lr.Diags)
+			mode := "osty lint"
+			if flags.selfhost {
+				mode = "osty lint --selfhost"
+			}
 			switch {
 			case flags.fixDryRun:
 				// Write the would-be-applied source to stdout so users
 				// can pipe it through `diff` / `less` before committing
 				// to a real --fix pass. The file on disk is untouched.
 				if _, err := os.Stdout.Write(newSrc); err != nil {
-					fmt.Fprintf(os.Stderr, "osty lint --fix-dry-run: %v\n", err)
+					fmt.Fprintf(os.Stderr, "%s --fix-dry-run: %v\n", mode, err)
 					os.Exit(1)
 				}
-				fmt.Fprintf(os.Stderr, "osty lint --fix-dry-run: %d fix(es) would apply, %d overlap(s) would be skipped\n", applied, skipped)
+				fmt.Fprintf(os.Stderr, "%s --fix-dry-run: %d fix(es) would apply, %d overlap(s) would be skipped\n", mode, applied, skipped)
 			case flags.fix:
 				if applied > 0 {
 					if err := os.WriteFile(path, newSrc, 0o644); err != nil {
-						fmt.Fprintf(os.Stderr, "osty lint --fix: %v\n", err)
+						fmt.Fprintf(os.Stderr, "%s --fix: %v\n", mode, err)
 						os.Exit(1)
 					}
 				}
-				fmt.Fprintf(os.Stderr, "osty lint --fix: applied %d fix(es), skipped %d overlap(s)\n", applied, skipped)
+				fmt.Fprintf(os.Stderr, "%s --fix: applied %d fix(es), skipped %d overlap(s)\n", mode, applied, skipped)
 			}
 		}
 		if hasError(all) || (flags.strict && hasWarning(all)) {
@@ -454,6 +469,7 @@ func parseFlags() cliFlags {
 	flag.BoolVar(&f.strict, "strict", false, "exit non-zero on lint warnings (lint subcommand only)")
 	flag.BoolVar(&f.fix, "fix", false, "apply machine-applicable lint suggestions in place (lint subcommand only)")
 	flag.BoolVar(&f.fixDryRun, "fix-dry-run", false, "show the result of --fix on stdout without modifying files (lint subcommand only)")
+	flag.BoolVar(&f.selfhost, "selfhost", false, "lint: use the bootstrapped Osty linter")
 	flag.BoolVar(&f.showScopes, "scopes", false, "resolve: also dump the nested scope tree")
 	flag.BoolVar(&f.trace, "trace", false, "stream per-phase timing to stderr (single-file front-end commands)")
 	flag.BoolVar(&f.explain, "explain", false, "after diagnostics, print the `osty explain CODE` text for each unique code")
@@ -597,13 +613,12 @@ func runLintPackage(dir string, flags cliFlags) {
 	}
 	res := resolve.ResolvePackage(pkg, resolve.NewPrelude())
 	chk := check.Package(pkg, res, checkOpts())
-	lr := lint.Package(pkg, res, chk)
-	if cfg, ok := loadLintConfigNear(dir); ok {
-		lr = cfg.Apply(lr)
+	cfg, cfgBase, hasCfg := loadLintConfigWithBase(dir)
+	outcome := runLintLoadedPackage(pkg, res, chk, flags, cfg, cfgBase, hasCfg)
+	if flags.selfhost {
+		emitSelfhostPackageFixes(outcome.fixFiles, flags)
 	}
-	all := append(append(append([]*diag.Diagnostic{}, res.Diags...), chk.Diags...), lr.Diags...)
-	printPackageDiags(pkg, all, flags)
-	if hasError(all) || (flags.strict && hasWarning(all)) {
+	if outcome.anyErr || (flags.strict && outcome.anyWarn) {
 		os.Exit(1)
 	}
 }
@@ -618,6 +633,7 @@ func runLintWorkspace(dir string, flags cliFlags) {
 	}
 	ws.Stdlib = stdlib.LoadCached()
 	anyErr, anyWarn := false, false
+	var fixFiles []selfhostLintFileResult
 	runOne := func(path string) {
 		pkg, err := ws.LoadPackage(path)
 		if err != nil {
@@ -627,25 +643,164 @@ func runLintWorkspace(dir string, flags cliFlags) {
 		}
 		res := resolve.ResolvePackage(pkg, resolve.NewPrelude())
 		chk := check.Package(pkg, res, checkOpts())
-		lr := lint.Package(pkg, res, chk)
-		if cfg, ok := loadLintConfigNear(pkg.Dir); ok {
-			lr = cfg.Apply(lr)
-		}
-		all := append(append(append([]*diag.Diagnostic{}, res.Diags...), chk.Diags...), lr.Diags...)
-		printPackageDiags(pkg, all, flags)
-		if hasError(all) {
+		cfg, cfgBase, hasCfg := loadLintConfigWithBase(pkg.Dir)
+		outcome := runLintLoadedPackage(pkg, res, chk, flags, cfg, cfgBase, hasCfg)
+		if outcome.anyErr {
 			anyErr = true
 		}
-		if hasWarning(all) {
+		if outcome.anyWarn {
 			anyWarn = true
 		}
+		fixFiles = append(fixFiles, outcome.fixFiles...)
 	}
 	for _, p := range resolve.WorkspacePackagePaths(dir) {
 		runOne(p)
 	}
+	if flags.selfhost {
+		emitSelfhostPackageFixes(fixFiles, flags)
+	}
 	if anyErr || (flags.strict && anyWarn) {
 		os.Exit(1)
 	}
+}
+
+type lintPackageOutcome struct {
+	anyErr   bool
+	anyWarn  bool
+	fixFiles []selfhostLintFileResult
+}
+
+type selfhostLintFileResult struct {
+	file    *resolve.PackageFile
+	diags   []*diag.Diagnostic
+	fixed   []byte
+	applied int
+	skipped int
+}
+
+func runLintLoadedPackage(
+	pkg *resolve.Package,
+	res *resolve.PackageResult,
+	chk *check.Result,
+	flags cliFlags,
+	cfg lint.Config,
+	cfgBase string,
+	hasCfg bool,
+) lintPackageOutcome {
+	if flags.selfhost {
+		return runSelfhostLintLoadedPackage(pkg, res, chk, flags, cfg, cfgBase, hasCfg)
+	}
+	lr := lint.Package(pkg, res, chk)
+	if hasCfg {
+		lr = cfg.Apply(lr)
+	}
+	all := append(append(append([]*diag.Diagnostic{}, res.Diags...), chk.Diags...), lr.Diags...)
+	printPackageDiags(pkg, all, flags)
+	return lintPackageOutcome{anyErr: hasError(all), anyWarn: hasWarning(all)}
+}
+
+func runSelfhostLintLoadedPackage(
+	pkg *resolve.Package,
+	res *resolve.PackageResult,
+	chk *check.Result,
+	flags cliFlags,
+	cfg lint.Config,
+	cfgBase string,
+	hasCfg bool,
+) lintPackageOutcome {
+	frontDiags := append(append([]*diag.Diagnostic{}, res.Diags...), chk.Diags...)
+	printPackageDiags(pkg, frontDiags, flags)
+
+	files := selfhostLintPackageFiles(pkg, cfg, cfgBase, hasCfg, flags.fix || flags.fixDryRun)
+	var lintDiags []*diag.Diagnostic
+	for _, file := range files {
+		lintDiags = append(lintDiags, file.diags...)
+		if len(file.diags) == 0 {
+			continue
+		}
+		formatter := newFormatter(file.file.Path, file.file.Source, flags)
+		printDiags(formatter, file.diags, flags)
+	}
+
+	all := append(frontDiags, lintDiags...)
+	return lintPackageOutcome{
+		anyErr:   hasError(all),
+		anyWarn:  hasWarning(all),
+		fixFiles: files,
+	}
+}
+
+func selfhostLintPackageFiles(
+	pkg *resolve.Package,
+	cfg lint.Config,
+	cfgBase string,
+	hasCfg bool,
+	computeFixes bool,
+) []selfhostLintFileResult {
+	var files []selfhostLintFileResult
+	if pkg == nil {
+		return files
+	}
+	for _, pf := range pkg.Files {
+		if pf == nil {
+			continue
+		}
+		if hasCfg && cfg.ShouldExclude(pf.Path, cfgBase) {
+			continue
+		}
+		diags := selfhost.LintDiagnostics(pf.Source)
+		if hasCfg {
+			diags = cfg.Apply(&lint.Result{Diags: diags}).Diags
+		}
+		file := selfhostLintFileResult{file: pf, diags: diags, fixed: pf.Source}
+		if computeFixes {
+			fixed, applied, skipped := lint.ApplyFixes(pf.Source, diags)
+			file.fixed = fixed
+			file.applied = applied
+			file.skipped = skipped
+		}
+		files = append(files, file)
+	}
+	return files
+}
+
+func emitSelfhostPackageFixes(files []selfhostLintFileResult, flags cliFlags) {
+	if !(flags.fix || flags.fixDryRun) {
+		return
+	}
+	applied, skipped := 0, 0
+	for _, file := range files {
+		applied += file.applied
+		skipped += file.skipped
+	}
+	mode := "osty lint --selfhost"
+	if flags.fixDryRun {
+		for _, file := range files {
+			if file.applied == 0 {
+				continue
+			}
+			fmt.Fprintf(os.Stdout, "==> %s <==\n", file.file.Path)
+			if _, err := os.Stdout.Write(file.fixed); err != nil {
+				fmt.Fprintf(os.Stderr, "%s --fix-dry-run: %v\n", mode, err)
+				os.Exit(1)
+			}
+			if len(file.fixed) == 0 || file.fixed[len(file.fixed)-1] != '\n' {
+				fmt.Fprintln(os.Stdout)
+			}
+		}
+		fmt.Fprintf(os.Stderr, "%s --fix-dry-run: %d fix(es) would apply, %d overlap(s) would be skipped\n", mode, applied, skipped)
+		return
+	}
+	for _, file := range files {
+		if file.applied == 0 {
+			continue
+		}
+		if err := os.WriteFile(file.file.Path, file.fixed, 0o644); err != nil {
+			fmt.Fprintf(os.Stderr, "%s --fix: %v\n", mode, err)
+			os.Exit(1)
+		}
+	}
+	fmt.Fprintf(os.Stderr, "%s --fix: applied %d fix(es), skipped %d overlap(s)\n", mode, applied, skipped)
 }
 
 // runResolvePackage is runCheckPackage plus a resolution dump per file.
@@ -902,6 +1057,19 @@ func resolveFile(file *ast.File) *resolve.Result {
 	return resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
 }
 
+func runLintEngine(
+	src []byte,
+	file *ast.File,
+	res *resolve.Result,
+	chk *check.Result,
+	flags cliFlags,
+) *lint.Result {
+	if flags.selfhost {
+		return &lint.Result{Diags: selfhost.LintDiagnostics(src)}
+	}
+	return lint.File(file, res, chk)
+}
+
 // checkOpts builds the check.Opts every subcommand passes to the type
 // checker. Sourcing from the cached registry keeps the stdlib Load
 // cost paid once per process.
@@ -1096,11 +1264,11 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "usage: osty [flags] (parse|tokens|resolve|check|typecheck|lint|fmt|repair|gen) FILE")
 	fmt.Fprintln(os.Stderr, "       osty new [--lib] NAME     (scaffold a new project)")
 	fmt.Fprintln(os.Stderr, "       osty init [--lib]         (scaffold into the current directory)")
-	fmt.Fprintln(os.Stderr, "       osty build [DIR]          (manifest-driven front end over a project)")
+	fmt.Fprintln(os.Stderr, "       osty build [DIR]          (manifest + deps + front end + backend artifacts)")
 	fmt.Fprintln(os.Stderr, "       osty add NAME[@VER]       (add a dependency; also --path, --git)")
 	fmt.Fprintln(os.Stderr, "       osty update [NAME...]     (refresh osty.lock)")
 	fmt.Fprintln(os.Stderr, "       osty run [-- ARGS...]     (build + exec the project's binary)")
-	fmt.Fprintln(os.Stderr, "       osty test [PATH|FILTER...] (discover *_test.osty; report tests found)")
+	fmt.Fprintln(os.Stderr, "       osty test [PATH|FILTER...] (native test harness pending)")
 	fmt.Fprintln(os.Stderr, "       osty publish              (pack + upload the package to a registry)")
 	fmt.Fprintln(os.Stderr, "       osty search QUERY         (search the registry for packages)")
 	fmt.Fprintln(os.Stderr, "       osty yank --version V [PKG]   (mark a published version as yanked)")
@@ -1127,6 +1295,9 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  --max-errors N     show only the first N diagnostics")
 	fmt.Fprintln(os.Stderr, "  --json             emit diagnostics as NDJSON")
 	fmt.Fprintln(os.Stderr, "  --strict           lint: exit 1 on warnings (CI mode)")
+	fmt.Fprintln(os.Stderr, "  --fix              lint: apply machine-applicable suggestions")
+	fmt.Fprintln(os.Stderr, "  --fix-dry-run      lint: print fixed source without writing")
+	fmt.Fprintln(os.Stderr, "  --selfhost         lint: use the bootstrapped Osty linter")
 	fmt.Fprintln(os.Stderr, "  --scopes           resolve: also print the nested scope tree")
 	fmt.Fprintln(os.Stderr, "  --trace            stream per-phase timing to stderr (front-end commands)")
 	fmt.Fprintln(os.Stderr, "  --explain          append `osty explain CODE` text after each diagnostic block")
@@ -1139,10 +1310,10 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  --check            exit 1 if FILE would be repaired")
 	fmt.Fprintln(os.Stderr, "  --write            overwrite FILE in place")
 	fmt.Fprintln(os.Stderr, "gen-specific flags (after the subcommand):")
-	fmt.Fprintln(os.Stderr, "  -o PATH            write Go source to PATH instead of stdout")
-	fmt.Fprintln(os.Stderr, "  --package NAME     Go package clause (default: main)")
-	fmt.Fprintln(os.Stderr, "  --backend NAME     code generation backend (go or llvm; default go)")
-	fmt.Fprintln(os.Stderr, "  --emit MODE        artifact mode (go or llvm-ir; default follows backend)")
+	fmt.Fprintln(os.Stderr, "  -o PATH            write generated artifact to PATH instead of stdout")
+	fmt.Fprintln(os.Stderr, "  --package NAME     backend package/module name (default: main)")
+	fmt.Fprintln(os.Stderr, "  --backend NAME     code generation backend (llvm; default llvm)")
+	fmt.Fprintln(os.Stderr, "  --emit MODE        artifact mode (llvm-ir; default follows backend)")
 	fmt.Fprintln(os.Stderr, "new-specific flags (after the subcommand):")
 	fmt.Fprintln(os.Stderr, "  --lib              scaffold a library project (lib.osty, no main)")
 	fmt.Fprintln(os.Stderr, "  --bin              scaffold a binary project (main.osty) [default]")
@@ -1165,8 +1336,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  --target TRIPLE    cross-compilation target (e.g. amd64-linux)")
 	fmt.Fprintln(os.Stderr, "  --features LIST    comma-separated feature flags to enable")
 	fmt.Fprintln(os.Stderr, "  --no-default-features  drop the manifest's [features].default set")
-	fmt.Fprintln(os.Stderr, "  --backend NAME     code generation backend (go or llvm; default go)")
-	fmt.Fprintln(os.Stderr, "  --emit MODE        artifact mode (go, llvm-ir, object, or binary)")
+	fmt.Fprintln(os.Stderr, "  --backend NAME     code generation backend (llvm; default llvm)")
+	fmt.Fprintln(os.Stderr, "  --emit MODE        artifact mode (llvm-ir, object, or binary)")
 	fmt.Fprintln(os.Stderr, "build-specific flags:")
 	fmt.Fprintln(os.Stderr, "  --force            ignore the build cache and rebuild from source")
 }
@@ -1304,9 +1475,9 @@ func runFmt(args []string) {
 	}
 }
 
-// runGen implements the `osty gen` subcommand: transpile a single
-// .osty file to Go and either print the result to stdout or write it
-// to the path given by --out/-o.
+// runGen implements the `osty gen` subcommand: emit a single .osty
+// file through the selected backend and either print the requested
+// text artifact to stdout or write it to the path given by --out/-o.
 //
 // Exit codes:
 //
@@ -1314,7 +1485,7 @@ func runFmt(args []string) {
 //	1   unrecoverable I/O error, or transpile returned an error even
 //	    after partial output
 //	2   usage error (missing path, unknown flag), or parse/resolve/check
-//	    failures that would produce garbage Go
+//	    failures that would produce garbage backend output
 func runGen(args []string, flags cliFlags) {
 	fs := flag.NewFlagSet("gen", flag.ExitOnError)
 	fs.Usage = func() {
@@ -1324,11 +1495,11 @@ func runGen(args []string, flags cliFlags) {
 	var pkgName string
 	var backendName string
 	var emitName string
-	fs.StringVar(&outPath, "o", "", "write Go source to this file instead of stdout")
+	fs.StringVar(&outPath, "o", "", "write generated artifact to this file instead of stdout")
 	fs.StringVar(&outPath, "out", "", "alias for -o")
-	fs.StringVar(&pkgName, "package", "main", "Go package clause (default: main)")
-	fs.StringVar(&backendName, "backend", defaultBackendName(), "code generation backend (go or llvm)")
-	fs.StringVar(&emitName, "emit", "", "artifact mode (go or llvm-ir; default follows backend)")
+	fs.StringVar(&pkgName, "package", "main", "backend package/module name (default: main)")
+	fs.StringVar(&backendName, "backend", defaultBackendName(), "code generation backend (llvm)")
+	fs.StringVar(&emitName, "emit", "", "artifact mode (llvm-ir; default follows backend)")
 	_ = fs.Parse(args)
 	backendID, emitMode := resolveBackendAndEmitFlags("gen", backendName, emitName)
 	if fs.NArg() != 1 {

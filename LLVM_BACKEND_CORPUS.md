@@ -52,15 +52,35 @@ Each fixture should be independently checkable as a single file and avoid:
 | `testdata/backend/llvm_smoke/string_return_print.osty` | `from function\n` | Phase 27 LLVM IR: `String` return type lowered to `ptr` and printed from a function call |
 | `testdata/backend/llvm_smoke/string_param_print.osty` | `param string\n` | Phase 28 LLVM IR: `String` parameter and argument passing through helper calls |
 | `testdata/backend/llvm_smoke/string_mut_print.osty` | `after\n` | Phase 29 LLVM IR: mutable local `String` slot, assignment, load, and print |
+| `testdata/backend/llvm_smoke/struct_field_print.osty` | `42\n` | Phase 30 LLVM IR: named struct type definition, aggregate literal via `insertvalue`, and field reads via `extractvalue` |
+| `testdata/backend/llvm_smoke/struct_return_print.osty` | `42\n` | Phase 31 LLVM IR: simple struct value returned from a helper function and read in `main` |
+| `testdata/backend/llvm_smoke/struct_param_print.osty` | `42\n` | Phase 32 LLVM IR: simple struct value passed as a function parameter |
+| `testdata/backend/llvm_smoke/struct_mut_print.osty` | `42\n` | Phase 33 LLVM IR: mutable struct local slot, whole-value assignment, load, and field read |
+| `testdata/backend/llvm_smoke/enum_variant_print.osty` | `42\n` | Phase 34 LLVM IR: payload-free enum variants lower to Osty-owned `i64` tag values and compare in an `if` |
+| `testdata/backend/llvm_smoke/enum_return_print.osty` | `42\n` | Phase 35 LLVM IR: payload-free enum tag values cross function return boundaries |
+| `testdata/backend/llvm_smoke/enum_param_print.osty` | `42\n` | Phase 36 LLVM IR: payload-free enum tag values cross function parameter boundaries |
+| `testdata/backend/llvm_smoke/enum_mut_print.osty` | `42\n` | Phase 37 LLVM IR: mutable enum local slot, whole-value assignment, load, and comparison |
+| `testdata/backend/llvm_smoke/enum_payload_print.osty` | `42\n` | Phase 42 LLVM IR: single-Int payload enum variant constructor path (`%Maybe = type { i64, i64 }`) |
+| `testdata/backend/llvm_smoke/enum_payload_return_print.osty` | `42\n` | Phase 43 LLVM IR: payload enum return boundary with match-based payload extraction |
+| `testdata/backend/llvm_smoke/enum_payload_param_print.osty` | `42\n` | Phase 44 LLVM IR: payload enum parameter boundary with `Some(x)` match binding |
+| `testdata/backend/llvm_smoke/enum_payload_mut_print.osty` | `42\n` | Phase 45 LLVM IR: payload enum mutable local assignment and payload binding in `match` |
+| `testdata/backend/llvm_smoke/float_print.osty` | `42.000000\n` | Phase 46 LLVM IR: Float literal + `println` path (`double` subset) |
+| `testdata/backend/llvm_smoke/float_arithmetic_print.osty` | `42.000000\n` | Phase 47 LLVM IR: Float arithmetic (`+`, `-`, `*`, `/`) smoke |
+| `testdata/backend/llvm_smoke/float_return_print.osty` | `42.000000\n` | Phase 48 LLVM IR: Float return boundary |
+| `testdata/backend/llvm_smoke/float_param_print.osty` | `42.000000\n` | Phase 49 LLVM IR: Float parameter boundary |
+| `testdata/backend/llvm_smoke/float_mut_print.osty` | `42.000000\n` | Phase 50 LLVM IR: Float mutable local assignment |
+| `testdata/backend/llvm_smoke/float_compare_print.osty` | `42.000000\n` | Phase 51 LLVM IR: Float comparison in value-position `if` |
+| `testdata/backend/llvm_smoke/float_struct_print.osty` | `42.000000\n` | Phase 52 LLVM IR: Float field read from simple struct aggregate |
+| `testdata/backend/llvm_smoke/float_enum_payload_print.osty` | `42.000000\n` | Phase 53 LLVM IR: Float payload enum smoke (`Full(Float)`) |
 
-The Phase 10 skeleton behavior and the Phase 12-15 plus Phase 23-24 lowering
+The Phase 10 skeleton behavior and the Phase 12-15 plus Phase 23-53 lowering
 behavior are mirrored in
 `examples/selfhost-core/llvmgen.osty` so the LLVM backend logic is authored in
 Osty first. The Go `internal/llvmgen` package includes generated bridge code
 from that Osty source for module/function/skeleton rendering. A backend test
 transpiles the Osty emitter again and compares its
-minimal/scalar/control-flow/booleans/string and skeleton output byte-for-byte
-against the production bridge.
+minimal/scalar/control-flow/booleans/string/struct/enum/Float and skeleton
+output byte-for-byte against the production bridge.
 
 These fixtures are deliberately smaller than the current examples. They are
 the first target for proving the thin vertical path:
@@ -123,6 +143,55 @@ boundaries and mutable locals. The bridge now lowers the `String` type to
 `ptr`, so String-returning functions, String parameters, and mutable String
 slots can reuse the existing self-hosted call, return, load, store, and print
 builders.
+
+Phases 30-33 add the first value-aggregate struct path. Top-level non-generic
+struct declarations lower to named LLVM types, struct literals are assembled
+with the Osty-owned `insertvalue` builder, field reads use the Osty-owned
+`extractvalue` builder, and simple struct values can cross return/parameter
+boundaries or live in mutable local slots. The Go bridge still only collects
+declaration field order and source expression shape before calling generated
+self-hosted helpers.
+
+Phases 34-37 add the first payload-free enum path. Bare variants lower to
+Osty-owned `i64` tag values, so equality, if branches, function return/parameter
+boundaries, and mutable local slots can execute before the later tagged-payload
+ABI and match lowering work. The initial smoke fixtures use unqualified variant
+names because the self-hosted checker already supports that form.
+
+Phases 38-41 extend that same path to payload-free enum match expressions. The
+next four smoke fixtures stay intentionally tiny and all print `42\n`:
+
+| Path | Expected stdout | Coverage |
+|---|---|---|
+| `testdata/backend/llvm_smoke/enum_match_print.osty` | `42\n` | Phase 38 LLVM IR: payload-free enum match expression in `main` |
+| `testdata/backend/llvm_smoke/enum_match_return_print.osty` | `42\n` | Phase 39 LLVM IR: payload-free enum match expression crossing a function return boundary |
+| `testdata/backend/llvm_smoke/enum_match_param_print.osty` | `42\n` | Phase 40 LLVM IR: payload-free enum match expression crossing a function parameter boundary |
+| `testdata/backend/llvm_smoke/enum_match_mut_print.osty` | `42\n` | Phase 41 LLVM IR: payload-free enum match expression over a mutable local slot |
+
+Phases 42-45 add a single-`Int` payload enum smoke subset with a fixed ABI shape:
+`%Maybe = type { i64, i64 }`, where element `0` is tag and element `1` is
+`Int` payload.
+
+| Path | Expected stdout | Coverage |
+|---|---|---|
+| `testdata/backend/llvm_smoke/enum_payload_print.osty` | `42\n` | Phase 42 LLVM IR: single-Int payload enum constructor in `main` |
+| `testdata/backend/llvm_smoke/enum_payload_return_print.osty` | `42\n` | Phase 43 LLVM IR: payload enum crossing function return and extracting payload in `match` |
+| `testdata/backend/llvm_smoke/enum_payload_param_print.osty` | `42\n` | Phase 44 LLVM IR: payload enum crossing function parameter and `Some(x)` binding |
+| `testdata/backend/llvm_smoke/enum_payload_mut_print.osty` | `42\n` | Phase 45 LLVM IR: payload enum mutable local slot and match payload binding after assignment |
+
+Phase 46-53 covers the `Float` double-subset smoke path. `Float32`/`Float64`
+width/ABI policy is explicitly deferred to a later phase.
+
+| Path | Expected stdout | Coverage |
+|---|---|---|
+| `testdata/backend/llvm_smoke/float_print.osty` | `42.000000\n` | Phase 46 LLVM IR: Float literal + `println` path (`double` subset) |
+| `testdata/backend/llvm_smoke/float_arithmetic_print.osty` | `42.000000\n` | Phase 47 LLVM IR: Float arithmetic (`+`, `-`, `*`, `/`) smoke |
+| `testdata/backend/llvm_smoke/float_return_print.osty` | `42.000000\n` | Phase 48 LLVM IR: Float return boundary |
+| `testdata/backend/llvm_smoke/float_param_print.osty` | `42.000000\n` | Phase 49 LLVM IR: Float parameter boundary |
+| `testdata/backend/llvm_smoke/float_mut_print.osty` | `42.000000\n` | Phase 50 LLVM IR: Float mutable local assignment |
+| `testdata/backend/llvm_smoke/float_compare_print.osty` | `42.000000\n` | Phase 51 LLVM IR: Float comparison in value-position `if` |
+| `testdata/backend/llvm_smoke/float_struct_print.osty` | `42.000000\n` | Phase 52 LLVM IR: Float field read from simple struct aggregate |
+| `testdata/backend/llvm_smoke/float_enum_payload_print.osty` | `42.000000\n` | Phase 53 LLVM IR: Float payload enum smoke (`Full(Float)`) |
 
 ## Promotion Rules
 

@@ -1,0 +1,7 @@
+fn add(a: Float, b: Float) -> Float {
+    a + b
+}
+
+fn main() {
+    println(add(40.0, 2.0))
+}

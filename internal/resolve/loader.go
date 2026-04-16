@@ -12,7 +12,7 @@ import (
 
 // LoadPackage discovers and parses every `.osty` file directly under
 // dir (non-recursive) and returns them as a single Package ready for
-// ResolvePackage. Test files (`*_test.osty`) are excluded per v0.3 §11
+// ResolvePackage. Test files (`*_test.osty`) are excluded per v0.4 §11
 // so production builds don't drag test-only declarations into scope.
 //
 // The returned Package has Files sorted lexicographically by path for

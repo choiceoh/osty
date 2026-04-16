@@ -1,3 +1,5 @@
+//go:build selfhostgen
+
 package main
 
 import (
@@ -24,7 +26,7 @@ import (
 )
 
 // runTest implements `osty test [--offline] [PATH|FILTER...]` per
-// LANG_SPEC_v0.3 §11.
+// LANG_SPEC_v0.4 §11.
 //
 // Two invocation shapes are supported:
 //
@@ -32,8 +34,8 @@ import (
 //     project tree for `*_test.osty` files, groups them by containing
 //     directory, runs the full front-end pipeline per package (with
 //     test files included so they can reference sibling non-test
-//     declarations, per §11), and reports discovered `test*` /
-//     `bench*` functions per file.
+//     declarations, per §11), emits a Go harness, and executes the
+//     discovered `test*` / `bench*` functions per file.
 //
 //   - `osty test PATH` where PATH is a single `.osty` file or a bare
 //     directory (no manifest required): runs the same pipeline but
@@ -75,14 +77,14 @@ func runTest(args []string, flags cliFlags) {
 	fs.BoolVar(&frozen, "frozen", false, "imply --locked --offline; require an existing osty.lock")
 	var backendName string
 	var emitName string
-	fs.StringVar(&backendName, "backend", defaultBackendName(), "code generation backend (go or llvm)")
+	fs.StringVar(&backendName, "backend", defaultBackendName(), "code generation backend (llvm)")
 	fs.StringVar(&emitName, "emit", "", "artifact mode to execute (binary)")
 	var pf profileFlags
 	pf.register(fs)
 	_ = fs.Parse(args)
 	backendID, _ := resolveBackendAndEmitFlags("test", backendName, emitName)
 	if backendID != backend.NameGo {
-		fmt.Fprintf(os.Stderr, "osty test: backend %q test harness is not implemented yet\n", backendID)
+		fmt.Fprintf(os.Stderr, "osty test: native backend test harness is not implemented yet for %q\n", backendID)
 		os.Exit(2)
 	}
 	positional := fs.Args()
@@ -387,7 +389,7 @@ func preloadUseTargets(ws *resolve.Workspace, pkg *resolve.Package) {
 			continue
 		}
 		for _, u := range pf.File.Uses {
-			if u.IsGoFFI {
+			if u.IsFFI() {
 				continue
 			}
 			target := strings.Join(u.Path, ".")

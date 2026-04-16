@@ -19,20 +19,17 @@ const (
 // Profile is the set of knobs the compiler + linker consume when
 // producing an artifact. Field semantics:
 //
-//   - OptLevel is the optimization level passed as `-gcflags=-l=<n>`
-//     to the Go backend (0 = disable inlining, 2 = default release).
+//   - OptLevel is the optimization level carried through profile resolution;
+//     legacy bootstrap builds map it to Go compiler flags.
 //   - Debug toggles retention of DWARF symbols. `-ldflags=-w -s`
 //     strips them when false.
-//   - Overflow toggles integer-overflow runtime checks where the
-//     emitted Go code supports them (Phase 4 of the transpiler).
-//   - Inlining/LTO are per-call-site hints consumed by gen; they do
-//     not affect today's Phase 1 output but are honoured by the
-//     manifest parser so users can pin them ahead of time.
-//   - GoFlags is an ordered list of raw flags appended after the
-//     built-in derivation so users can override individual settings
-//     (e.g. `-trimpath`) without recomputing the whole flag slice.
-//   - Env is process-env key/value overrides threaded into the
-//     `go build` invocation (GOARCH, GOOS, CGO_ENABLED, …).
+//   - Overflow toggles integer-overflow runtime checks where the selected
+//     backend supports them.
+//   - Inlining/LTO are per-call-site hints carried through the manifest parser
+//     so users can pin them ahead of time.
+//   - GoFlags is a legacy bootstrap-only list of raw Go compiler flags.
+//   - Env is process-env key/value overrides threaded into backend toolchain
+//     invocations.
 //   - Inherits names another profile whose fields fill in unset
 //     values at merge time. Limited to one level of indirection so
 //     cycles are structurally impossible.

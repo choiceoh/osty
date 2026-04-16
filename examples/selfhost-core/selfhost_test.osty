@@ -1,6 +1,6 @@
 use std.testing
 
-use go "strings" as strings {
+use runtime.strings as strings {
     fn Contains(s: String, substr: String) -> Bool
 }
 
@@ -206,4 +206,18 @@ fn testSelfhostExamplePipelineRendersAnalyzerDiagnostics() {
     testing.assert(strings.Contains(report.diagnostics, "resolution"))
     testing.assert(strings.Contains(report.diagnostics, "undefined name `missing`"))
     testing.assert(strings.Contains(report.diagnostics, "lint[L0001]"))
+}
+
+fn testSelfhostExamplePipelinePreparesLintFixes() {
+    let source = "fn main(unused: Bool) -> Int \{\n    let unusedValue = 1\n    let mut neverChanged = 2\n    println(neverChanged)\n    return neverChanged\n\}\n"
+    let report = selfhostPipelineSourceWithFixes("main", source, true)
+
+    testing.assert(report.lintDiagnostics >= 4)
+    testing.assert(report.lintFixes >= 4)
+    testing.assertEq(report.lintFixSkipped, 0)
+    testing.assert(report.lintFixApplied >= 4)
+    testing.assert(strings.Contains(report.fixedSource, "_unused"))
+    testing.assert(strings.Contains(report.fixedSource, "_unusedValue"))
+    testing.assert(strings.Contains(report.fixedSource, "let neverChanged = 2"))
+    testing.assert(!(strings.Contains(report.fixedSource, "return neverChanged")))
 }

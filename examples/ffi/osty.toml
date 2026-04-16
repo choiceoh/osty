@@ -2,7 +2,7 @@
 name = "ffi-demo"
 version = "0.1.0"
 edition = "0.3"
-description = "Runnable Go FFI example."
+description = "Legacy Go FFI checker coverage example."
 license = "MIT"
 keywords = ["ffi", "go"]
 

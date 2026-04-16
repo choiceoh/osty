@@ -107,7 +107,7 @@ func runCi(args []string, cliF cliFlags) {
 		SemverWarnOnly: semverWarnOnly,
 		Strict:         strict,
 		Baseline:       baseline,
-		MaxFileBytes:   maxFileBytes,
+		MaxFileBytes:   int(maxFileBytes),
 	}
 
 	// Manifest parse-error rendering: surface E2xxx diagnostics
@@ -115,7 +115,7 @@ func runCi(args []string, cliF cliFlags) {
 	// manifest into Runner so it doesn't re-read the file from
 	// disk — keeping the "manifest loaded once per command"
 	// invariant the rest of cmd/osty maintains.
-	runner := ci.NewRunner(start, opts)
+	runner := ci.NewRunner(start, &opts)
 	if _, _, err := manifestLookupNear(start); err == nil {
 		m, root, abort := loadManifestWithDiag(start, cliF)
 		if abort {
@@ -124,8 +124,8 @@ func runCi(args []string, cliF cliFlags) {
 		runner.Manifest = m
 		runner.Root = root
 	}
-	if err := runner.Load(); err != nil {
-		fmt.Fprintf(os.Stderr, "osty ci: %v\n", err)
+	if msg := runner.Load(); msg != "" {
+		fmt.Fprintf(os.Stderr, "osty ci: %s\n", msg)
 		os.Exit(2)
 	}
 	// Default semver baseline is resolved relative to the
@@ -154,12 +154,40 @@ func runCi(args []string, cliF cliFlags) {
 // for downstream tooling (CI dashboards, release-note bots) to
 // consume.
 func printCiReportJSON(rep *ci.Report) {
+	out := struct {
+		ProjectRoot string        `json:"projectRoot"`
+		StartedAt   any           `json:"startedAt"`
+		FinishedAt  any           `json:"finishedAt"`
+		Checks      []ciCheckJSON `json:"checks"`
+	}{
+		ProjectRoot: rep.ProjectRoot,
+		StartedAt:   rep.StartedAt,
+		FinishedAt:  rep.FinishedAt,
+		Checks:      make([]ciCheckJSON, 0, len(rep.Checks)),
+	}
+	for _, c := range rep.Checks {
+		out.Checks = append(out.Checks, ciCheckJSON{
+			Name:    c.Name,
+			Passed:  c.Passed,
+			Skipped: c.Skipped,
+			Note:    c.Note,
+			Diags:   c.Diags,
+		})
+	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
-	if err := enc.Encode(rep); err != nil {
+	if err := enc.Encode(out); err != nil {
 		fmt.Fprintf(os.Stderr, "osty ci: encode: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+type ciCheckJSON struct {
+	Name    ci.CheckName       `json:"name"`
+	Passed  bool               `json:"passed"`
+	Skipped bool               `json:"skipped"`
+	Note    string             `json:"note,omitempty"`
+	Diags   []*diag.Diagnostic `json:"diagnostics,omitempty"`
 }
 
 // runCiSnapshot implements the `osty ci snapshot` sub-subcommand.
@@ -189,9 +217,9 @@ func runCiSnapshot(args []string) {
 		os.Exit(2)
 	}
 
-	runner := ci.NewRunner(start, ci.Options{})
-	if err := runner.Load(); err != nil {
-		fmt.Fprintf(os.Stderr, "osty ci snapshot: %v\n", err)
+	runner := ci.NewRunner(start, &ci.Options{})
+	if msg := runner.Load(); msg != "" {
+		fmt.Fprintf(os.Stderr, "osty ci snapshot: %s\n", msg)
 		os.Exit(1)
 	}
 	if len(runner.Packages) == 0 {
@@ -214,8 +242,8 @@ func runCiSnapshot(args []string) {
 	if target == "" {
 		target = filepath.Join(runner.Root, defaultSnapshotPath)
 	}
-	if err := ci.WriteSnapshot(target, snap); err != nil {
-		fmt.Fprintf(os.Stderr, "osty ci snapshot: %v\n", err)
+	if msg := ci.WriteSnapshot(target, snap); msg != "" {
+		fmt.Fprintf(os.Stderr, "osty ci snapshot: %s\n", msg)
 		os.Exit(1)
 	}
 	total := 0

@@ -142,13 +142,13 @@ type Config struct {
 	// backend emitted; GenError holds any fatal backend error.
 	RunGen bool
 
-	// GenPackageName is the Go package clause used when RunGen is set.
-	// Single-file mode defaults to "main"; package/workspace mode derives
-	// a valid Go identifier from the Osty package name when this is empty.
+	// GenPackageName is the backend package/module identifier used when RunGen
+	// is set. Single-file mode defaults to "main"; package/workspace mode
+	// derives a stable identifier from the Osty package name when this is empty.
 	GenPackageName string
 
 	// GenBackend and GenEmit select the backend used by the optional gen
-	// pipeline phase. The zero value preserves the historical Go source stage.
+	// pipeline phase. The zero value uses the self-hosted native backend.
 	GenBackend backend.Name
 	GenEmit    backend.EmitMode
 
@@ -221,7 +221,7 @@ var goKeywords = map[string]bool{
 
 func configuredGenBackend(cfg Config) backend.Name {
 	if cfg.GenBackend == "" {
-		return backend.NameGo
+		return backend.NameLLVM
 	}
 	return cfg.GenBackend
 }

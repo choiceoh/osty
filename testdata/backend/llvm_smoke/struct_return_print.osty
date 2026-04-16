@@ -1,0 +1,13 @@
+struct Pair {
+    left: Int
+    right: Int
+}
+
+fn makePair() -> Pair {
+    Pair { left: 10, right: 32 }
+}
+
+fn main() {
+    let pair = makePair()
+    println(pair.left + pair.right)
+}

@@ -10,9 +10,10 @@ import (
 	"github.com/osty/osty/internal/token"
 )
 
-// Read loads osty.toml from path and parses it. Convenience wrapper
-// around ReadFile + Parse so callers don't need to import `os` for
-// the common case.
+// Read loads osty.toml from path, parses it, and returns an error for
+// error-severity validation diagnostics. Convenience wrapper around
+// ReadFile + Parse for callers that do not need structured diagnostic
+// rendering.
 func Read(path string) (*Manifest, error) {
 	src, err := os.ReadFile(path)
 	if err != nil {
@@ -23,6 +24,11 @@ func Read(path string) (*Manifest, error) {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	m.SetSource(src, path)
+	for _, d := range Validate(m) {
+		if d != nil && d.Severity == diag.Error {
+			return nil, fmt.Errorf("%s: %w", path, d)
+		}
+	}
 	return m, nil
 }
 

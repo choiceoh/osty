@@ -299,6 +299,63 @@ The initial helper package for this plan is `internal/backend`.
 30. Add mutable String locals. Done in Phase 29: mutable `String` slots use
     `alloca ptr`, `store ptr`, and `load ptr` through the existing Osty-owned
     mutable local helpers.
+31. Add named struct type definitions and field reads. Done in Phase 30:
+    non-generic struct declarations emit `%Name = type { ... }`, struct
+    literals use the Osty-owned `insertvalue` builder, and field reads use the
+    Osty-owned `extractvalue` builder.
+32. Add struct return values. Done in Phase 31: simple aggregate struct values
+    can be returned from helper functions and read in `main`.
+33. Add struct parameters. Done in Phase 32: simple aggregate struct values can
+    be passed to helper functions and field-read inside the callee.
+34. Add mutable struct locals. Done in Phase 33: mutable struct slots reuse the
+    generic Osty-owned alloca/store/load helpers for whole-value assignment and
+    later field extraction.
+35. Add payload-free enum variant values. Done in Phase 34: bare variants lower
+    to Osty-owned `i64` tag values and can participate in equality/if smoke
+    paths.
+36. Add enum return values. Done in Phase 35: payload-free enum tag values can
+    cross helper return boundaries.
+37. Add enum parameters. Done in Phase 36: payload-free enum tag values can
+    cross helper parameter boundaries.
+38. Add mutable enum locals. Done in Phase 37: enum tag values reuse the generic
+    Osty-owned alloca/store/load helpers for whole-value assignment and later
+    comparison.
+39. Add payload-free enum match expressions in `main`. Done in Phase 38: bare
+    enum tags drive two-arm `match` expressions before the later tagged-payload
+    ABI work.
+40. Add enum match return-boundary smoke. Done in Phase 39: payload-free enum
+    match expressions can consume helper return values.
+41. Add enum match parameter-boundary smoke. Done in Phase 40: payload-free
+    enum match expressions can consume helper parameters.
+42. Add mutable enum match locals. Done in Phase 41: enum match values reuse the
+    generic Osty-owned alloca/store/load helpers for whole-value assignment and
+    later comparison.
+43. Add payload-enum declarations and constructors for a single-Int payload
+    subset. Done in Phase 42: `%Enum = type { i64, i64 }` represents tag and
+    payload for conservative enum smoke fixtures.
+44. Add payload enum return-boundary smoke. Done in Phase 43: single-`Int`
+    payload enum tags and payload extraction can cross helper return values.
+45. Add payload enum parameter/mutable-local smoke. Done in Phase 44 for
+    parameter-boundary paths and Phase 45 for mutable-local paths, with
+    payload extraction in `match`.
+46. Add Float literal/printing smoke. Done in Phase 46: `Float` is treated as
+   `double` in this subset.
+47. Add Float arithmetic smoke. Done in Phase 47: `+`, `-`, `*`, `/` on `Float`
+   values are emitted through selfhosted LLVM builders.
+48. Add Float return-boundary smoke. Done in Phase 48: return and call paths for
+   `Float` values.
+49. Add Float parameter-boundary smoke. Done in Phase 49: `Float` value
+   passing across helper parameters.
+50. Add Float mutable-local smoke. Done in Phase 50: mutable `Float` local slot
+   assignment/load paths.
+51. Add Float comparison smoke. Done in Phase 51: value-position `if` on
+   `Float` comparisons.
+52. Add Float struct aggregate smoke. Done in Phase 52: simple struct values
+   carrying `Float` fields.
+53. Add Float payload enum smoke. Done in Phase 53: `Full(Float)` payload enum
+   construction, `match` binding, and print path.
+
+Float/Float32/Float64 policy is intentionally deferred.
 
 The backend subdirectory change should land before the LLVM backend writes any
 files, so LLVM never shares the old Go-only output location.

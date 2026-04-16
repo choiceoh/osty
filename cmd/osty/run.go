@@ -1,11 +1,9 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"flag"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,22 +27,22 @@ import (
 //  2. Resolve the project as a package; confirm we have an entry
 //     point (manifest Bin target or default main.osty with fn main).
 //  3. Run the front-end (parse + resolve + type check).
-//  4. Transpile the entry file via internal/backend into .osty/out.
-//  5. `go run` the generated Go source, passing through the
+//  4. Emit the entry file via internal/backend into .osty/out.
+//  5. Execute the native backend binary, passing through the
 //     user-supplied arguments after `--`.
 //
 // Limitations (current emitter):
 //
-//   - Multi-file packages aren't fully emitted by gen yet; run executes
+//   - Multi-file packages aren't fully emitted by the backend yet; run executes
 //     the selected entry file. Complex unsupported lowering shapes may
-//     still emit TODO markers and fail to compile as Go.
+//     still produce an unsupported-backend diagnostic.
 //
-//   - Registry / git dep code is vendored but NOT yet transpiled
+//   - Registry / git dep code is vendored but NOT yet emitted
 //     together with the entry file — the Workspace loader sees them
 //     for resolution, but package-per-package emission still needs to
-//     land before they contribute Go code.
+//     land before they contribute native code.
 //
-// Exit codes: the child `go run` process's exit code is propagated.
+// Exit codes: the child native binary's exit code is propagated.
 // A 1–5 from the wrapper indicates an error inside osty itself.
 func runRun(args []string, cliF cliFlags) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
@@ -57,7 +55,7 @@ func runRun(args []string, cliF cliFlags) {
 	fs.BoolVar(&frozen, "frozen", false, "imply --locked --offline; require an existing osty.lock")
 	var backendName string
 	var emitName string
-	fs.StringVar(&backendName, "backend", defaultBackendName(), "code generation backend (go or llvm)")
+	fs.StringVar(&backendName, "backend", defaultBackendName(), "code generation backend (llvm)")
 	fs.StringVar(&emitName, "emit", "", "artifact mode to execute (binary)")
 	var pf profileFlags
 	pf.register(fs)
@@ -187,11 +185,9 @@ func runRun(args []string, cliF cliFlags) {
 		triple = resolved.Target.Triple
 	}
 	binName := ""
-	if backendID == backend.NameLLVM {
-		binName = binaryName(m)
-		if runtime.GOOS == "windows" {
-			binName += ".exe"
-		}
+	binName = binaryName(m)
+	if runtime.GOOS == "windows" {
+		binName += ".exe"
 	}
 	selectedBackend := backendFromCLI("run", backendID)
 	emitResult, err := selectedBackend.Emit(context.Background(), backend.Request{
@@ -214,52 +210,7 @@ func runRun(args []string, cliF cliFlags) {
 	if err != nil {
 		exitBackendEmitError("run", emitResult, err)
 	}
-	if backendID != backend.NameGo {
-		runLLVMBinary(emitResult.Artifacts.Binary, runArgs, runDir)
-		return
-	}
-	// Gen returns warnings for unsupported lowering shapes; we still
-	// try to run the output because the clean portion may compile.
-	goPath := emitResult.Artifacts.GoSource
-	reportTranspileWarning("osty run", entryAbs, goPath, firstBackendWarning(emitResult))
-
-	// Step 5: go run. Profile-derived flags (e.g. `-gcflags=-N -l`
-	// for debug, `-ldflags=-s -w` for release) precede the source
-	// path; cross-target env (GOOS, GOARCH, CGO_ENABLED) is layered
-	// onto the child process's environment.
-	goArgs := []string{"run"}
-	goArgs = append(goArgs, resolved.GoFlags()...)
-	goPathArg, err := filepath.Abs(goPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "osty run: %v\n", err)
-		os.Exit(1)
-	}
-	goArgs = append(goArgs, goPathArg)
-	goArgs = append(goArgs, runArgs...)
-	cmd := exec.Command("go", goArgs...)
-	var stderr bytes.Buffer
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = io.MultiWriter(os.Stderr, &stderr)
-	cmd.Dir = runDir
-	cmd.Env = mergeEnv(os.Environ(), resolved.GoEnv())
-	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			reportGoFailure(goFailureReport{
-				Tool:      "osty run",
-				Action:    "go run",
-				Args:      cmd.Args,
-				WorkDir:   runDir,
-				Generated: []string{goPathArg},
-				Source:    entryAbs,
-				Stderr:    stderr.String(),
-				Err:       err,
-			})
-			os.Exit(exitErr.ExitCode())
-		}
-		fmt.Fprintf(os.Stderr, "osty run: exec go: %v\n", err)
-		os.Exit(1)
-	}
+	runLLVMBinary(emitResult.Artifacts.Binary, runArgs, runDir)
 }
 
 func runLLVMBinary(binPath string, args []string, dir string) {

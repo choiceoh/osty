@@ -6,7 +6,10 @@
 // can produce textual IR and drive a host clang toolchain for supported
 // object/binary artifacts. LLVM backend meaning, including scalar instruction
 // builders, plain/escaped ASCII string constants/local values/function values,
-// and unsupported-source diagnostic categories, is authored in Osty
-// selfhost-core; this package remains the bootstrap host shim for file I/O and
-// process execution.
+// simple struct aggregate values, payload-free and single-`Int` payload enum tag
+// values, payload-free and payload-enum match expressions, and
+// unsupported-source diagnostic categories, including `Float` double-subset smoke
+// ownership and policy, is authored in Osty selfhost-core. `Float32`/`Float64`
+// policy is deferred. This package remains the bootstrap host shim for file I/O
+// and process execution.
 package backend

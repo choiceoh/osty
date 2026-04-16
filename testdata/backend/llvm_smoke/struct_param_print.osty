@@ -1,0 +1,12 @@
+struct Score {
+    base: Int
+    bonus: Int
+}
+
+fn total(score: Score) -> Int {
+    score.base + score.bonus
+}
+
+fn main() {
+    println(total(Score { base: 40, bonus: 2 }))
+}

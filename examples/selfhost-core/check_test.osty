@@ -53,6 +53,10 @@ fn testSelfCheckerEmitsStructuredResult() {
                 value
             }
 
+            fn unused() -> Int {
+                1
+            }
+
             fn main() {
                 let boxed: Box<Int> = Box { value: id::<Int>(1) }
             }
@@ -64,7 +68,20 @@ fn testSelfCheckerEmitsStructuredResult() {
     testing.assertEq(frontCheckResultBindingType(checked, "boxed"), "Box<Int>")
     testing.assert(frontCheckResultSymbolCount(checked, "fn") >= 2)
     testing.assert(frontCheckResultSymbolCount(checked, "struct") >= 1)
+    testing.assertEq(checkResultSymbolType(checked, "struct", "Box", ""), "Box<T>")
+    testing.assertEq(checkResultSymbolType(checked, "fn", "id", ""), "fn(T) -> T")
+    testing.assertEq(checkResultSymbolType(checked, "fn", "unused", ""), "fn() -> Int")
     testing.assert(frontCheckResultInstantiationCount(checked) >= 1)
+}
+
+fn checkResultSymbolType(result: FrontCheckResult, kind: String, name: String, owner: String) -> String {
+    let mut found = ""
+    for symbol in result.symbols {
+        if (kind == "" || symbol.kind == kind) && symbol.name == name && symbol.owner == owner {
+            found = symbol.typeName
+        }
+    }
+    found
 }
 
 fn testSelfCheckerReportsAssignmentReturnAndCallErrors() {
@@ -84,6 +101,95 @@ fn testSelfCheckerReportsAssignmentReturnAndCallErrors() {
 
     testing.assert(checked.errors >= 3)
     testing.assert(checked.assignments >= 3)
+}
+
+fn testSelfCheckerAcceptsFieldAssignmentThroughStructValues() {
+    let checked = frontendCheckSource(
+        r"""
+            struct Counter { value: Int }
+
+            fn bump(counter: Counter) {
+                counter.value = counter.value + 1
+            }
+            """,
+    )
+
+    testing.assertEq(checked.errors, 0)
+}
+
+fn testSelfCheckerUnifiesUntypedIntWithConcreteGenericArgs() {
+    let checked = frontendCheckSource(
+        r"""
+            fn choose<T>(left: T, right: T) -> T {
+                right
+            }
+
+            fn main() {
+                let n: Int = 1
+                let got: Int = choose(0, n)
+            }
+            """,
+    )
+
+    testing.assertEq(checked.errors, 0)
+}
+
+fn testSelfCheckerBindsForInIdentifierPatterns() {
+    let checked = frontendCheckSource(
+        r"""
+            fn sum(xs: List<Int>) -> Int {
+                let mut total = 0
+                for x in xs {
+                    total = total + x
+                }
+                total
+            }
+            """,
+    )
+
+    testing.assertEq(checked.errors, 0)
+}
+
+fn testSelfCheckerAllowsParameterAccumulators() {
+    let checked = frontendCheckSource(
+        r"""
+            fn appendLine(lines: List<String>) -> List<String> {
+                lines.push("next")
+                lines = lines.map(|line| line)
+                lines
+            }
+            """,
+    )
+
+    testing.assertEq(checked.errors, 0)
+}
+
+fn testSelfCheckerAcceptsConcurrencyPreludeSurface() {
+    let checked = frontendCheckSource(
+        r"""
+            fn summarize(xs: List<Int>) -> Int {
+                let ch = thread.chan::<Int>(0)
+                let h = spawn(|| {
+                    for x in xs {
+                        ch <- x
+                    }
+                    ch.close()
+                })
+                let mut total = 0
+                for n in ch {
+                    total = total + n
+                }
+                h.join()
+                total
+            }
+
+            fn batch() -> List<Int> {
+                parallel(|| 1, || 2, || 3)
+            }
+            """,
+    )
+
+    testing.assertEq(checked.errors, 0)
 }
 
 fn testSelfCheckerChecksMatchExhaustivenessAndPatterns() {

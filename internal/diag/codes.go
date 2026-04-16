@@ -18,7 +18,7 @@ const (
 
 	// Base prefixes must be lowercase.
 	//
-	// Spec: v0.2 R11 / v0.3 §1.6.1
+	// Spec: v0.2 R11 / v0.4 §1.6.1
 	// Example:
 	//   let n = 0X1F  // rejected
 	// Fix: use `0x1F` / `0b1010` / `0o777`.
@@ -28,7 +28,7 @@ const (
 	//
 	// Most commonly a surrogate code point.
 	//
-	// Spec: v0.3 §2.1
+	// Spec: v0.4 §2.1
 	// Example:
 	//   let c = '\u{D800}'  // rejected
 	// Fix: use a non-surrogate scalar (U+0..U+D7FF or U+E000..U+10FFFF).
@@ -54,7 +54,7 @@ const (
 	// must begin with the closing-line's whitespace prefix, and the
 	// closing `"""` must be on its own line.
 	//
-	// Spec: v0.3 §1.6.3
+	// Spec: v0.4 §1.6.3
 	// Fix: realign the content and closing delimiter per §1.6.3.
 	CodeBadTripleString = "E0006"
 
@@ -63,7 +63,7 @@ const (
 	// `match` arms and every other arrow position use `->` instead.
 	// Any occurrence of `=>` in source is a lex error (O7, §1.7).
 	//
-	// Spec: v0.3 §1.7, OSTY_GRAMMAR_v0.3 O7
+	// Spec: v0.4 §1.7, OSTY_GRAMMAR_v0.4 O7
 	// Example:
 	//   match x { 0 => "zero", _ => "other" }  // rejected
 	// Fix: replace `=>` with `->`.
@@ -80,7 +80,7 @@ const (
 	//
 	// They forward to the imported Go function.
 	//
-	// Spec: v0.3 R17
+	// Spec: v0.4 R17
 	// Example:
 	//   use go "net/http" {
 	//       fn Get(url: String) -> String { "x" }  // rejected
@@ -92,7 +92,7 @@ const (
 	//
 	// Methods live on the Go side.
 	//
-	// Spec: v0.3 R16
+	// Spec: v0.4 R16
 	// Fix: move the method definition to the Go file that owns the type.
 	CodeUseGoStructHasMethod = "E0102"
 
@@ -109,7 +109,7 @@ const (
 	// A path is either dotted (`std.fs`) OR urlish (`github.com/x/y`) —
 	// the two cannot mix.
 	//
-	// Spec: v0.3 R15
+	// Spec: v0.4 R15
 	// Fix: choose one form for the whole path.
 	CodeUsePathMixed = "E0104"
 
@@ -117,7 +117,7 @@ const (
 	//
 	// It must sit on the same line as the closing `}` of the `if` body.
 	//
-	// Spec: v0.3 O2
+	// Spec: v0.4 O2
 	// Example:
 	//   if cond {
 	//       ...
@@ -133,7 +133,7 @@ const (
 	// Defaults must be restricted literal forms (literal, `-` numeric,
 	// `None`, `Ok(lit)`, `Err(lit)`, `[]`, `{:}`, `()`).
 	//
-	// Spec: v0.3 R18
+	// Spec: v0.4 R18
 	// Example:
 	//   fn connect(t: Int = computeTimeout()) {}  // rejected
 	// Fix: use a literal default, or move the computation into the body.
@@ -143,7 +143,7 @@ const (
 
 	// Comparison or range operators are non-associative.
 	//
-	// Spec: v0.3 R1
+	// Spec: v0.4 R1
 	// Example:
 	//   a < b < c      // rejected
 	//   0..10..20      // rejected
@@ -152,7 +152,7 @@ const (
 
 	// `::` is reserved for turbofish and must be followed by `<`.
 	//
-	// Spec: v0.3 O6
+	// Spec: v0.4 O6
 	// Example:
 	//   foo::bar()     // rejected — did you mean `foo.bar()`?
 	// Fix: use `.` for member access or `::<T>` for type application.
@@ -162,13 +162,13 @@ const (
 	//
 	// A trailing `.` then newline is a syntax error.
 	//
-	// Spec: v0.3 O3
+	// Spec: v0.4 O3
 	// Fix: move the `.` to the start of the continuation line.
 	CodeTrailingDot = "E0202"
 
 	// A closure with an explicit return type must have a block body.
 	//
-	// Spec: v0.3 R25
+	// Spec: v0.4 R25
 	// Example:
 	//   let f = |x: Int| -> Int x * 2       // rejected
 	//   let f = |x: Int| -> Int { x * 2 }   // ok
@@ -198,7 +198,7 @@ const (
 	//
 	// Only `#[json(...)]` and `#[deprecated(...)]` are defined today.
 	//
-	// Spec: v0.3 R26
+	// Spec: v0.4 R26
 	// Fix: remove the annotation or use one of the recognized names.
 	CodeUnknownAnnotation = "E0400"
 
@@ -239,7 +239,7 @@ const (
 
 	// The referenced package cannot be found.
 	//
-	// Spec: v0.3 §5
+	// Spec: v0.4 §5
 	// Fix: check the `use` path and verify the package is on disk or in the manifest.
 	CodeUnknownPackage = "E0505"
 
@@ -248,7 +248,7 @@ const (
 	// Package A imports B which eventually imports A. The resolver
 	// breaks the cycle and reports the first edge that closes it.
 	//
-	// Spec: v0.3 §5.3
+	// Spec: v0.4 §5.3
 	// Fix: extract shared declarations into a third package that both sides import.
 	CodeCyclicImport = "E0506"
 
@@ -256,7 +256,7 @@ const (
 	//
 	// Private items are visible only to other files in the same package.
 	//
-	// Spec: v0.3 §5.2
+	// Spec: v0.4 §5.2
 	// Fix: add `pub` to the declaration, or move the caller into the same package.
 	CodePrivateAcrossPackages = "E0507"
 
@@ -264,7 +264,7 @@ const (
 	//
 	// The member might be private, misspelled, or from a different package.
 	//
-	// Spec: v0.3 §5.2
+	// Spec: v0.4 §5.2
 	// Fix: verify the name is `pub` and matches the exported spelling.
 	CodeUnknownExportedMember = "E0508"
 
@@ -310,7 +310,7 @@ const (
 
 	// Every alternative of an or-pattern must bind the same names.
 	//
-	// Spec: v0.3 §4.3.1
+	// Spec: v0.4 §4.3.1
 	// Example:
 	//   match e {
 	//       A(x) | B(x, y) -> ...   // rejected: `y` not bound by A
@@ -322,7 +322,7 @@ const (
 	//
 	// The interface has no view of the implementing type's layout.
 	//
-	// Spec: v0.3 §2.6.2
+	// Spec: v0.4 §2.6.2
 	// Fix: call other interface methods instead of reading fields directly.
 	CodeInterfaceDefaultField = "E0606"
 
@@ -331,19 +331,19 @@ const (
 	// `#[json]` only attaches to struct fields; `#[deprecated]` to
 	// top-level declarations and methods; neither attaches to `use`.
 	//
-	// Spec: v0.3 §18.1
+	// Spec: v0.4 §18.1
 	// Fix: move the annotation to a permitted target.
 	CodeAnnotationBadTarget = "E0607"
 
 	// Bare `defer` at the top level of a script is rejected.
 	//
-	// Spec: v0.3 §6 / §18.3
+	// Spec: v0.4 §6 / §18.3
 	// Fix: wrap the cleanup in an explicit `fn` or move it inside an existing function body.
 	CodeDeferAtScriptTop = "E0608"
 
 	// The same annotation name may not appear twice on a single target.
 	//
-	// Spec: v0.3 §18.1
+	// Spec: v0.4 §18.1
 	// Example:
 	//   #[deprecated]
 	//   #[deprecated]           // rejected
@@ -605,7 +605,7 @@ const (
 	// Emitted as a `diag.Warning`. Tooling can promote it to error via
 	// build configuration.
 	//
-	// Spec: v0.3 §3.8.2
+	// Spec: v0.4 §3.8.2
 	// Fix: migrate to the replacement noted in the `#[deprecated]` annotation.
 	CodeDeprecatedUse = "W0750"
 
@@ -614,13 +614,13 @@ const (
 	// CodeUnreachableCode: a statement appears after a divergent
 	// construct (return, break, continue, or an expression of type
 	// Never) and therefore can never execute.
-	// Spec: v0.3 §4 control flow, §2.1 Never
+	// Spec: v0.4 §4 control flow, §2.1 Never
 	// Fix: delete the dead statement or move it above the divergent one.
 	CodeUnreachableCode = "E0760"
 
 	// CodeMissingReturn: a non-unit function's body could reach its
 	// end without producing a value matching the return type.
-	// Spec: v0.3 §3.1
+	// Spec: v0.4 §3.1
 	// Fix: add an explicit `return` or make the final expression the
 	//      function's result.
 	CodeMissingReturn = "E0761"

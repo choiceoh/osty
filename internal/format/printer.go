@@ -12,8 +12,7 @@ import (
 
 // printFile emits top-level nodes. `use` declarations that sit above
 // the first non-use declaration are reordered into alphabetized groups
-// (stdlib → external → FFI) with a blank line between groups — gofmt
-// style, confined to the leading use block so late `use go` FFI
+// (stdlib → external → FFI) with a blank line between groups. Late FFI
 // imports stay where the author wrote them. Everything below the
 // first non-use decl is printed in source offset order, preserving
 // decl↔comment adjacency.
@@ -41,7 +40,7 @@ func (p *printer) printFile(f *ast.File) {
 	}
 
 	// Stable sort so two uses that share a group+key stay in original
-	// relative order (matters only for FFI, where multiple `use go`
+	// relative order (matters only for FFI, where multiple imports
 	// with different bodies can't collide on key anyway).
 	sort.SliceStable(topUses, func(i, j int) bool {
 		gi, gj := useGroupOrder(topUses[i]), useGroupOrder(topUses[j])
@@ -111,9 +110,9 @@ func (p *printer) printFile(f *ast.File) {
 
 // useGroupOrder bins a use decl into the canonical group order:
 // 0 = stdlib (`std.*`), 1 = external (everything else that's not
-// FFI), 2 = Go FFI (`use go "..."`).
+// FFI), 2 = FFI.
 func useGroupOrder(u *ast.UseDecl) int {
-	if u.IsGoFFI {
+	if u.IsFFI() {
 		return 2
 	}
 	if len(u.Path) > 0 && u.Path[0] == "std" {
@@ -125,8 +124,8 @@ func useGroupOrder(u *ast.UseDecl) int {
 // useSortKey is the intra-group sort key — the RawPath when set
 // (preserves github.com/... style), otherwise the dotted path.
 func useSortKey(u *ast.UseDecl) string {
-	if u.IsGoFFI {
-		return u.GoPath
+	if u.IsFFI() {
+		return u.FFIPath()
 	}
 	if u.RawPath != "" {
 		return u.RawPath
@@ -367,34 +366,34 @@ func (p *printer) printUseDecl(u *ast.UseDecl) {
 	if u.IsGoFFI {
 		p.write("go ")
 		p.write(fmt.Sprintf("%q", u.GoPath))
-		if u.Alias != "" {
-			p.write(" as ")
-			p.write(u.Alias)
+	} else if u.IsRuntimeFFI {
+		if u.RawPath != "" {
+			p.write(u.RawPath)
+		} else {
+			p.write(strings.Join(u.Path, "."))
 		}
-		if len(u.GoBody) > 0 {
-			p.printBracedBody(u.Pos().Line, false, func() {
-				for _, d := range u.GoBody {
-					p.triviaBefore(d.Pos())
-					p.printDecl(d)
-					p.markSrcLine(d.End().Line)
-				}
-			})
-			return
-		}
-		p.trailingCommentAfter(u.End().Line)
-		p.nl()
-		return
-	}
-	// Prefer RawPath when it contains path separators (preserves the
-	// `github.com/...` style); otherwise join the dotted path.
-	if u.RawPath != "" && strings.ContainsAny(u.RawPath, "/:") {
-		p.write(u.RawPath)
 	} else {
-		p.write(strings.Join(u.Path, "."))
+		// Prefer RawPath when it contains path separators (preserves the
+		// `github.com/...` style); otherwise join the dotted path.
+		if u.RawPath != "" && strings.ContainsAny(u.RawPath, "/:") {
+			p.write(u.RawPath)
+		} else {
+			p.write(strings.Join(u.Path, "."))
+		}
 	}
 	if u.Alias != "" {
 		p.write(" as ")
 		p.write(u.Alias)
+	}
+	if u.IsFFI() && len(u.GoBody) > 0 {
+		p.printBracedBody(u.Pos().Line, false, func() {
+			for _, d := range u.GoBody {
+				p.triviaBefore(d.Pos())
+				p.printDecl(d)
+				p.markSrcLine(d.End().Line)
+			}
+		})
+		return
 	}
 	p.trailingCommentAfter(u.End().Line)
 	p.nl()

@@ -43,11 +43,11 @@ func wantsKind(only []string, kind string) bool {
 //     side-effect imports prefixed with `_`).
 //   - Drops duplicates whose effective alias + target path coincide
 //     — two `use foo` entries collapse to one.
-//   - Groups into: stdlib (`std.*`), external, Go FFI — matching
+//   - Groups into: stdlib (`std.*`), external, FFI — matching
 //     `osty fmt`'s ordering rules — and sorts alphabetically within
 //     each group by raw path.
 //
-// FFI `use go "..." { ... }` blocks are treated as opaque: we still
+// FFI blocks are treated as opaque: we still
 // remove them if unused but don't attempt to rewrite their bodies.
 //
 // Returns nil if no changes would be made so the action isn't offered
@@ -160,12 +160,12 @@ func sortImportEntries(in []keyedUse) []keyedUse {
 // importing to avoid pulling the formatter into the lsp package just
 // for a three-way switch.
 func useGroup(u *ast.UseDecl) int {
-	return selfhost.LSPUseGroup(u.IsGoFFI, u.Path)
+	return selfhost.LSPUseGroup(u.IsFFI(), u.Path)
 }
 
 // useKey is the intra-group sort key.
 func useKey(u *ast.UseDecl) string {
-	return selfhost.LSPUseKey(u.IsGoFFI, u.GoPath, u.RawPath, u.Path)
+	return selfhost.LSPUseKey(u.IsFFI(), u.FFIPath(), u.RawPath, u.Path)
 }
 
 // keyWithAlias combines the sort key with the alias so `use foo` and

@@ -354,9 +354,9 @@ func (g *gen) use(path string) {
 	}
 }
 
-// useAs records a Go import under an alias (`import alias "path"`).
-// Used by `use go "path" as alias { ... }` FFI declarations when the
-// Osty alias differs from the Go package's default name.
+// useAs records a Go import under an alias (`import alias "path"`). Used by
+// bootstrap FFI declarations when the Osty alias differs from the Go package's
+// default name.
 func (g *gen) useAs(path, alias string) {
 	g.imports[path] = alias
 }

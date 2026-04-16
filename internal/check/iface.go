@@ -1,3 +1,5 @@
+//go:build selfhostgen
+
 package check
 
 import (
@@ -10,7 +12,7 @@ import (
 )
 
 // builtinSatisfies reports whether a primitive type satisfies one of the
-// built-in marker interfaces per v0.3 §2.6.5. Returns (matched, ok):
+// built-in marker interfaces per v0.4 §2.6.5. Returns (matched, ok):
 // matched=true means the interface name was recognized as built-in;
 // ok=true means the primitive satisfies it.
 func builtinSatisfies(iface string, t types.Type) (matched, ok bool) {

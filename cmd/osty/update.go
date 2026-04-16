@@ -61,7 +61,7 @@ func runUpdate(args []string, cliF cliFlags) {
 	// Selective update: discard just the targeted entries from the
 	// lockfile before resolving. The resolver then picks fresh
 	// versions for those names while honoring existing pins for the
-	// rest (see pkgmgr.applyLockPin).
+	// rest.
 	targets := fs.Args()
 	if len(targets) > 0 {
 		// Validate that every targeted name actually appears as a

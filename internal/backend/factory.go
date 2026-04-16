@@ -6,7 +6,7 @@ import "fmt"
 func New(name Name) (Backend, error) {
 	switch name {
 	case NameGo:
-		return GoBackend{}, nil
+		return newGoBackend()
 	case NameLLVM:
 		return LLVMBackend{}, nil
 	default:

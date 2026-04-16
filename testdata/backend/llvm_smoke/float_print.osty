@@ -1,0 +1,4 @@
+fn main() {
+    let value: Float = 42.0
+    println(value)
+}

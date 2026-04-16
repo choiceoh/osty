@@ -1,6 +1,7 @@
-use go "strings" as strings {
+use runtime.strings as strings {
     fn HasPrefix(s: String, prefix: String) -> Bool
     fn Split(s: String, sep: String) -> List<String>
+    fn TrimPrefix(s: String, prefix: String) -> String
 }
 
 /// SelfSymbol is the self-hosting resolver's compact symbol record.
@@ -27,14 +28,20 @@ pub struct SelfResolveDiagnostic {
     pub node: Int,
 }
 
-/// SelfResolveResult contains top-level/package symbols plus resolver
-/// diagnostics collected while walking function bodies.
+/// SelfResolveResult contains package symbols plus resolver diagnostics and
+/// references collected while walking lexical scopes in function bodies.
 pub struct SelfResolveResult {
     pub symbols: List<SelfSymbol>,
     pub diagnostics: List<SelfResolveDiagnostic>,
     pub refs: Int,
     pub refNames: List<String>,
     pub refNodes: List<Int>,
+    pub typeRefs: Int,
+    pub typeRefNames: List<String>,
+    pub typeRefNodes: List<Int>,
+    pub refTargets: List<Int>,
+    pub refTargetStarts: List<Int>,
+    pub refTargetEnds: List<Int>,
     pub unresolved: Int,
     pub duplicates: Int,
 }
@@ -94,6 +101,12 @@ pub fn emptySelfResolveResult() -> SelfResolveResult {
         refs: 0,
         refNames: [],
         refNodes: [],
+        typeRefs: 0,
+        typeRefNames: [],
+        typeRefNodes: [],
+        refTargets: [],
+        refTargetStarts: [],
+        refTargetEnds: [],
         unresolved: 0,
         duplicates: 0,
     }
@@ -108,7 +121,8 @@ pub fn selfResolveSource(source: String) -> SelfResolveResult {
 pub fn selfResolveAstFile(file: AstFile) -> SelfResolveResult {
     let mut result = emptySelfResolveResult()
     result = selfResolveAstCollectTopLevel(file, result)
-    result = selfResolveAstScanFunctions(file, result)
+    let scope = srRootScope(result)
+    result = selfResolveAstScanFunctions(file, scope, result)
     result
 }
 
@@ -168,6 +182,113 @@ pub fn selfResolveHasRefNode(result: SelfResolveResult, node: Int) -> Bool {
     false
 }
 
+pub fn selfResolveHasTypeRef(result: SelfResolveResult, name: String) -> Bool {
+    for refName in result.typeRefNames {
+        if refName == name {
+            return true
+        }
+    }
+    false
+}
+
+pub fn selfResolveHasRefTarget(
+    result: SelfResolveResult,
+    name: String,
+    start: Int,
+    end: Int,
+    node: Int,
+) -> Bool {
+    let mut idx = 0
+    for refName in result.refNames {
+        if refName == name {
+            let target = srIntListAt(result.refTargets, idx)
+            let targetStart = srIntListAt(result.refTargetStarts, idx)
+            let targetEnd = srIntListAt(result.refTargetEnds, idx)
+            if node >= 0 && target >= 0 && target == node {
+                return true
+            }
+            if targetStart == start && targetEnd == end {
+                return true
+            }
+        }
+        idx = idx + 1
+    }
+    false
+}
+
+pub fn selfResolveRefNodeTargets(
+    result: SelfResolveResult,
+    refNode: Int,
+    name: String,
+    start: Int,
+    end: Int,
+    targetNode: Int,
+) -> Bool {
+    let mut idx = 0
+    for node in result.refNodes {
+        if node == refNode {
+            let refName = srStringListAt(result.refNames, idx)
+            let target = srIntListAt(result.refTargets, idx)
+            let targetStart = srIntListAt(result.refTargetStarts, idx)
+            let targetEnd = srIntListAt(result.refTargetEnds, idx)
+            if refName == name {
+                if targetNode >= 0 && target >= 0 && target == targetNode {
+                    return true
+                }
+                if targetStart == start && targetEnd == end {
+                    return true
+                }
+            }
+        }
+        idx = idx + 1
+    }
+    false
+}
+
+pub fn selfResolveRefNodesSameTarget(
+    result: SelfResolveResult,
+    leftNode: Int,
+    rightNode: Int,
+) -> Bool {
+    let mut leftFound = false
+    let mut leftTarget = -1
+    let mut leftStart = -1
+    let mut leftEnd = -1
+    let mut idx = 0
+    for node in result.refNodes {
+        if node == leftNode {
+            leftFound = true
+            leftTarget = srIntListAt(result.refTargets, idx)
+            leftStart = srIntListAt(result.refTargetStarts, idx)
+            leftEnd = srIntListAt(result.refTargetEnds, idx)
+        }
+        idx = idx + 1
+    }
+
+    let mut rightFound = false
+    let mut rightTarget = -1
+    let mut rightStart = -1
+    let mut rightEnd = -1
+    idx = 0
+    for node in result.refNodes {
+        if node == rightNode {
+            rightFound = true
+            rightTarget = srIntListAt(result.refTargets, idx)
+            rightStart = srIntListAt(result.refTargetStarts, idx)
+            rightEnd = srIntListAt(result.refTargetEnds, idx)
+        }
+        idx = idx + 1
+    }
+
+    if !(leftFound) || !(rightFound) {
+        return false
+    }
+    if leftTarget >= 0 || rightTarget >= 0 {
+        return leftTarget == rightTarget
+    }
+    leftStart >= 0 && leftStart == rightStart && leftEnd == rightEnd
+}
+
 struct SelfResolveName {
     name: String,
     start: Int,
@@ -177,6 +298,54 @@ struct SelfResolveName {
 
 fn selfResolveName(name: String, start: Int, end: Int, node: Int) -> SelfResolveName {
     SelfResolveName { name, start, end, node }
+}
+
+/// SelfResolveScope is the self-hosted resolver's compact lexical scope. It
+/// stores the currently visible symbols as a flat list and uses `depth` to
+/// distinguish same-scope duplicates from legal child-scope shadowing.
+struct SelfResolveScope {
+    symbols: List<SelfSymbol>,
+    depth: Int,
+}
+
+fn srRootScope(result: SelfResolveResult) -> SelfResolveScope {
+    SelfResolveScope { symbols: srSymbolListCopy(result.symbols), depth: 0 }
+}
+
+fn srChildScope(parent: SelfResolveScope) -> SelfResolveScope {
+    SelfResolveScope { symbols: srSymbolListCopy(parent.symbols), depth: parent.depth + 1 }
+}
+
+fn srScopeDefine(
+    scope: SelfResolveScope,
+    result: SelfResolveResult,
+    sym: SelfSymbol,
+) -> SelfResolveResult {
+    let mut out = result
+    if srIsDiscardName(sym.name) {
+        return out
+    }
+    if srSymbolExistsAtDepth(scope.symbols, sym.name, scope.depth) {
+        return srDuplicateAtNode(out, sym.name, sym.start, sym.end, sym.node)
+    }
+    let mut scoped = sym
+    scoped.depth = scope.depth
+    scope.symbols.push(scoped)
+    out
+}
+
+fn srScopeLookup(scope: SelfResolveScope, name: String) -> SelfSymbol {
+    let mut found = selfSymbol("", "", "", 0, -1, 0, 0, false)
+    for sym in scope.symbols {
+        if sym.name == name {
+            found = sym
+        }
+    }
+    found
+}
+
+fn srScopeHas(scope: SelfResolveScope, name: String) -> Bool {
+    srScopeLookup(scope, name).name != ""
 }
 
 fn selfResolveAstCollectTopLevel(file: AstFile, result: SelfResolveResult) -> SelfResolveResult {
@@ -208,7 +377,6 @@ fn srAstCollectDecl(file: AstFile, idx: Int, result: SelfResolveResult) -> SelfR
             out,
             selfSymbolAtNode(node.text, "type", "", 0, 0, node.start, node.end, node.flags == 1, idx),
         )
-        out = srAstCollectMemberFunctions(file, node.children, out)
     } else if node.kind == AstNEnumDecl {
         out = srAddSymbol(
             out,
@@ -233,7 +401,6 @@ fn srAstCollectDecl(file: AstFile, idx: Int, result: SelfResolveResult) -> SelfR
                 )
             }
         }
-        out = srAstCollectMemberFunctions(file, node.children, out)
     } else if node.kind == AstNLet {
         let names = srAstPatternNames(file, node.left, [])
         for item in names {
@@ -241,21 +408,6 @@ fn srAstCollectDecl(file: AstFile, idx: Int, result: SelfResolveResult) -> SelfR
                 out,
                 selfSymbolAtNode(item.name, "value", srAstLetTypeName(file, node), 0, 0, item.start, item.end, false, item.node),
             )
-        }
-    }
-    out
-}
-
-fn srAstCollectMemberFunctions(
-    file: AstFile,
-    members: List<Int>,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
-    let mut out = result
-    for memberIdx in members {
-        let member = srAstNode(file, memberIdx)
-        if member.kind == AstNFnDecl {
-            out = srAstAddFunctionSymbol(file, memberIdx, out)
         }
     }
     out
@@ -283,10 +435,14 @@ fn srAstAddFunctionSymbol(
     )
 }
 
-fn selfResolveAstScanFunctions(file: AstFile, result: SelfResolveResult) -> SelfResolveResult {
+fn selfResolveAstScanFunctions(
+    file: AstFile,
+    scope: SelfResolveScope,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
     let mut out = result
     for declIdx in file.arena.decls {
-        out = srAstScanFunctionsInDecl(file, declIdx, out)
+        out = srAstScanFunctionsInDecl(file, declIdx, scope, out)
     }
     out
 }
@@ -294,6 +450,7 @@ fn selfResolveAstScanFunctions(file: AstFile, result: SelfResolveResult) -> Self
 fn srAstScanFunctionsInDecl(
     file: AstFile,
     idx: Int,
+    scope: SelfResolveScope,
     result: SelfResolveResult,
 ) -> SelfResolveResult {
     if idx < 0 {
@@ -302,14 +459,104 @@ fn srAstScanFunctionsInDecl(
     let node = srAstNode(file, idx)
     let mut out = result
     if node.kind == AstNFnDecl {
-        return srAstResolveFunction(file, idx, out)
+        return srAstResolveFunction(file, idx, scope, "", out)
     }
     if node.kind == AstNStructDecl || node.kind == AstNEnumDecl || node.kind == AstNInterfaceDecl {
+        return srAstResolveTypeDecl(file, idx, scope, out)
+    }
+    if node.kind == AstNTypeAlias {
+        return srAstResolveTypeAlias(file, node, scope, out)
+    }
+    if node.kind == AstNLet {
+        out = srAstResolveType(file, srAstChildAt(node.children, 0), scope, "", out)
+        return srAstResolveExpr(file, node.right, scope, out)
+    }
+    out
+}
+
+fn srAstResolveTypeDecl(
+    file: AstFile,
+    idx: Int,
+    scope: SelfResolveScope,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let node = srAstNode(file, idx)
+    let typeScope = srChildScope(scope)
+    let mut out = srScopeDefine(
+        typeScope,
+        result,
+        selfSymbolAtNode("Self", "type", node.text, 0, typeScope.depth, node.start, node.end, true, idx),
+    )
+    if node.kind == AstNStructDecl || node.kind == AstNEnumDecl {
+        out = srAstDeclareGenerics(file, node.children2, typeScope, out)
+    }
+    if node.kind == AstNStructDecl {
+        for memberIdx in node.children {
+            let member = srAstNode(file, memberIdx)
+            if member.kind == AstNField_ {
+                out = srAstResolveType(file, member.right, typeScope, node.text, out)
+                out = srAstResolveExpr(file, member.left, typeScope, out)
+            } else if member.kind == AstNFnDecl {
+                out = srAstResolveFunction(file, memberIdx, typeScope, node.text, out)
+            }
+        }
+    } else if node.kind == AstNEnumDecl {
+        for memberIdx in node.children {
+            let member = srAstNode(file, memberIdx)
+            if member.kind == AstNVariant {
+                for ty in member.children {
+                    out = srAstResolveType(file, ty, typeScope, node.text, out)
+                }
+            } else if member.kind == AstNFnDecl {
+                out = srAstResolveFunction(file, memberIdx, typeScope, node.text, out)
+            }
+        }
+    } else if node.kind == AstNInterfaceDecl {
+        for superIdx in node.children2 {
+            out = srAstResolveType(file, superIdx, typeScope, node.text, out)
+        }
         for memberIdx in node.children {
             let member = srAstNode(file, memberIdx)
             if member.kind == AstNFnDecl {
-                out = srAstResolveFunction(file, memberIdx, out)
+                out = srAstResolveFunction(file, memberIdx, typeScope, node.text, out)
+            } else if member.kind == AstNType {
+                out = srAstResolveType(file, memberIdx, typeScope, node.text, out)
             }
+        }
+    }
+    out
+}
+
+fn srAstResolveTypeAlias(
+    file: AstFile,
+    node: AstNode,
+    scope: SelfResolveScope,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let aliasScope = srChildScope(scope)
+    let mut out = srAstDeclareGenerics(file, node.children, aliasScope, result)
+    srAstResolveType(file, node.left, aliasScope, "", out)
+}
+
+fn srAstDeclareGenerics(
+    file: AstFile,
+    generics: List<Int>,
+    scope: SelfResolveScope,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let mut out = result
+    for genericIdx in generics {
+        let generic = srAstNode(file, genericIdx)
+        out = srScopeDefine(
+            scope,
+            out,
+            selfSymbolAtNode(generic.text, "generic", "", 0, scope.depth, generic.start, generic.end, false, genericIdx),
+        )
+    }
+    for genericIdx in generics {
+        let generic = srAstNode(file, genericIdx)
+        for boundIdx in generic.children {
+            out = srAstResolveType(file, boundIdx, scope, "", out)
         }
     }
     out
@@ -318,45 +565,31 @@ fn srAstScanFunctionsInDecl(
 fn srAstResolveFunction(
     file: AstFile,
     idx: Int,
+    scope: SelfResolveScope,
+    owner: String,
     result: SelfResolveResult,
 ) -> SelfResolveResult {
     let node = srAstNode(file, idx)
     let mut out = result
-    let mut locals: List<SelfSymbol> = []
+    let fnScope = srChildScope(scope)
+    out = srAstDeclareGenerics(file, node.children2, fnScope, out)
     for paramIdx in node.children {
         let param = srAstNode(file, paramIdx)
         if param.left >= 0 && param.text != "" {
-            out = srAstResolveExpr(file, param.left, locals, out)
+            out = srAstResolveExpr(file, param.left, fnScope, out)
         }
-        let names = srAstParamNames(file, param)
-        for item in names {
-            if !(srIsDiscardName(item.name)) && item.name != "self" {
-                if srLocalExists(locals, item.name) {
-                    out = srDuplicateAtNode(out, item.name, item.start, item.end, item.node)
-                }
-                locals.push(
-                    selfSymbolAtNode(
-                        item.name,
-                        "value",
-                        srAstTypeName(file, param.right),
-                        0,
-                        1,
-                        item.start,
-                        item.end,
-                        false,
-                        item.node,
-                    ),
-                )
-            }
-        }
+        out = srAstResolveType(file, param.right, fnScope, owner, out)
+        out = srAstResolveParamBindings(file, paramIdx, fnScope, owner, out)
     }
-    srAstResolveBlock(file, node.right, locals, out)
+    out = srAstResolveType(file, node.left, fnScope, owner, out)
+    let bodyScope = srChildScope(fnScope)
+    srAstResolveBlock(file, node.right, bodyScope, out)
 }
 
 fn srAstResolveBlock(
     file: AstFile,
     idx: Int,
-    locals: List<SelfSymbol>,
+    scope: SelfResolveScope,
     result: SelfResolveResult,
 ) -> SelfResolveResult {
     if idx < 0 {
@@ -364,26 +597,19 @@ fn srAstResolveBlock(
     }
     let node = srAstNode(file, idx)
     if node.kind != AstNBlock {
-        return srAstResolveExpr(file, idx, locals, result)
+        return srAstResolveExpr(file, idx, scope, result)
     }
     let mut out = result
     for stmtIdx in node.children {
         let stmt = srAstNode(file, stmtIdx)
         if stmt.kind == AstNLet {
+            out = srAstResolveType(file, srAstChildAt(stmt.children, 0), scope, "", out)
             if stmt.right >= 0 {
-                out = srAstResolveExpr(file, stmt.right, locals, out)
+                out = srAstResolveExpr(file, stmt.right, scope, out)
             }
-            let names = srAstPatternNames(file, stmt.left, [])
-            for item in names {
-                if !(srIsDiscardName(item.name)) {
-                    if srLocalExists(locals, item.name) {
-                        out = srDuplicateAtNode(out, item.name, item.start, item.end, item.node)
-                    }
-                    locals.push(srAstLocalSymbol(file, stmt, item))
-                }
-            }
+            out = srAstResolvePattern(file, stmt.left, scope, out)
         } else {
-            out = srAstResolveStmt(file, stmtIdx, locals, out)
+            out = srAstResolveStmt(file, stmtIdx, scope, out)
         }
     }
     out
@@ -392,7 +618,7 @@ fn srAstResolveBlock(
 fn srAstResolveStmt(
     file: AstFile,
     idx: Int,
-    locals: List<SelfSymbol>,
+    scope: SelfResolveScope,
     result: SelfResolveResult,
 ) -> SelfResolveResult {
     if idx < 0 {
@@ -401,46 +627,77 @@ fn srAstResolveStmt(
     let node = srAstNode(file, idx)
     let mut out = result
     if node.kind == AstNFor {
-        return srAstResolveFor(file, node, locals, out)
+        return srAstResolveFor(file, node, scope, out)
     }
     if node.kind == AstNReturn || node.kind == AstNDefer || node.kind == AstNExprStmt {
-        return srAstResolveExpr(file, node.left, locals, out)
+        return srAstResolveExpr(file, node.left, scope, out)
     }
     if node.kind == AstNAssign || node.kind == AstNChanSend {
-        out = srAstResolveExpr(file, node.left, locals, out)
-        return srAstResolveExpr(file, node.right, locals, out)
+        out = srAstResolveExpr(file, node.left, scope, out)
+        return srAstResolveExpr(file, node.right, scope, out)
     }
-    srAstResolveExpr(file, idx, locals, out)
+    srAstResolveExpr(file, idx, scope, out)
 }
 
 fn srAstResolveFor(
     file: AstFile,
     node: AstNode,
-    locals: List<SelfSymbol>,
+    scope: SelfResolveScope,
     result: SelfResolveResult,
 ) -> SelfResolveResult {
     let mut out = result
-    out = srAstResolveExpr(file, node.left, locals, out)
+    out = srAstResolveExpr(file, node.left, scope, out)
     let iterIdx = srAstChildAt(node.children, 1)
-    out = srAstResolveExpr(file, iterIdx, locals, out)
-    let mut loopLocals = srSymbolListCopy(locals)
+    out = srAstResolveExpr(file, iterIdx, scope, out)
+    let loopScope = srChildScope(scope)
     let patIdx = srAstChildAt(node.children, 0)
-    let names = srAstPatternNames(file, patIdx, [])
-    for item in names {
-        if !(srIsDiscardName(item.name)) {
-            if srLocalExists(loopLocals, item.name) {
-                out = srDuplicateAtNode(out, item.name, item.start, item.end, item.node)
-            }
-            loopLocals.push(srAstLocalSymbol(file, node, item))
+    out = srAstResolvePattern(file, patIdx, loopScope, out)
+    let bodyScope = srChildScope(loopScope)
+    srAstResolveBlock(file, node.right, bodyScope, out)
+}
+
+fn srAstResolveType(
+    file: AstFile,
+    idx: Int,
+    scope: SelfResolveScope,
+    owner: String,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    if idx < 0 {
+        return result
+    }
+    let node = srAstNode(file, idx)
+    if node.kind != AstNType {
+        return result
+    }
+    let mut out = result
+    if node.text == "error" {
+        return out
+    }
+    if node.text == "optional" {
+        out = srAstResolveType(file, node.left, scope, owner, out)
+    } else if node.text == "tuple" {
+        for child in node.children {
+            out = srAstResolveType(file, child, scope, owner, out)
+        }
+    } else if node.text == "fn" {
+        for child in node.children {
+            out = srAstResolveType(file, child, scope, owner, out)
+        }
+        out = srAstResolveType(file, node.right, scope, owner, out)
+    } else {
+        out = srResolveOneAstType(node.text, node.start, node.end, idx, scope, owner, out)
+        for child in node.children {
+            out = srAstResolveType(file, child, scope, owner, out)
         }
     }
-    srAstResolveBlock(file, node.right, loopLocals, out)
+    out
 }
 
 fn srAstResolveExpr(
     file: AstFile,
     idx: Int,
-    locals: List<SelfSymbol>,
+    scope: SelfResolveScope,
     result: SelfResolveResult,
 ) -> SelfResolveResult {
     if idx < 0 {
@@ -449,41 +706,41 @@ fn srAstResolveExpr(
     let node = srAstNode(file, idx)
     let mut out = result
     if node.kind == AstNIdent {
-        return srResolveOneAstIdent(node.text, node.start, node.end, idx, locals, out)
+        return srResolveOneAstIdent(node.text, node.start, node.end, idx, scope, out)
     }
     if node.kind == AstNField {
-        return srAstResolveExpr(file, node.left, locals, out)
+        return srAstResolveExpr(file, node.left, scope, out)
     }
     if node.kind == AstNStructLit {
-        out = srAstResolveExpr(file, node.left, locals, out)
+        out = srAstResolveExpr(file, node.left, scope, out)
         for fieldIdx in node.children {
-            out = srAstResolveStructField(file, fieldIdx, locals, out)
+            out = srAstResolveStructField(file, fieldIdx, scope, out)
         }
-        return srAstResolveExpr(file, node.right, locals, out)
+        return srAstResolveExpr(file, node.right, scope, out)
     }
     if node.kind == AstNIf {
-        return srAstResolveIf(file, node, locals, out)
+        return srAstResolveIf(file, node, scope, out)
     }
     if node.kind == AstNMatch {
-        return srAstResolveMatch(file, node, locals, out)
+        return srAstResolveMatch(file, node, scope, out)
     }
     if node.kind == AstNClosure {
-        return srAstResolveClosure(file, node, locals, out)
+        return srAstResolveClosure(file, node, scope, out)
     }
     if node.kind == AstNBlock {
-        let mut blockLocals = srSymbolListCopy(locals)
-        return srAstResolveBlock(file, idx, blockLocals, out)
+        let blockScope = srChildScope(scope)
+        return srAstResolveBlock(file, idx, blockScope, out)
     }
     if node.kind == AstNType || node.kind == AstNPattern || node.kind == AstNParam || node.kind == AstNGenericParam {
         return out
     }
-    out = srAstResolveExpr(file, node.left, locals, out)
-    out = srAstResolveExpr(file, node.right, locals, out)
+    out = srAstResolveExpr(file, node.left, scope, out)
+    out = srAstResolveExpr(file, node.right, scope, out)
     for child in node.children {
-        out = srAstResolveExpr(file, child, locals, out)
+        out = srAstResolveExpr(file, child, scope, out)
     }
     for child in node.children2 {
-        out = srAstResolveExpr(file, child, locals, out)
+        out = srAstResolveExpr(file, child, scope, out)
     }
     out
 }
@@ -491,7 +748,7 @@ fn srAstResolveExpr(
 fn srAstResolveStructField(
     file: AstFile,
     idx: Int,
-    locals: List<SelfSymbol>,
+    scope: SelfResolveScope,
     result: SelfResolveResult,
 ) -> SelfResolveResult {
     if idx < 0 {
@@ -499,62 +756,46 @@ fn srAstResolveStructField(
     }
     let node = srAstNode(file, idx)
     if node.kind != AstNField_ {
-        return srAstResolveExpr(file, idx, locals, result)
+        return srAstResolveExpr(file, idx, scope, result)
     }
     if node.left >= 0 {
-        return srAstResolveExpr(file, node.left, locals, result)
+        return srAstResolveExpr(file, node.left, scope, result)
     }
-    srResolveOneAstIdent(node.text, node.start, node.end, idx, locals, result)
+    srResolveOneAstIdent(node.text, node.start, node.end, idx, scope, result)
 }
 
 fn srAstResolveIf(
     file: AstFile,
     node: AstNode,
-    locals: List<SelfSymbol>,
+    scope: SelfResolveScope,
     result: SelfResolveResult,
 ) -> SelfResolveResult {
-    let mut out = srAstResolveExpr(file, node.left, locals, result)
-    let mut thenLocals = srSymbolListCopy(locals)
+    let mut out = srAstResolveExpr(file, node.left, scope, result)
+    let thenScope = srChildScope(scope)
     if node.flags == 1 {
         let patIdx = srAstChildAt(node.children, 1)
-        let names = srAstPatternNames(file, patIdx, [])
-        for item in names {
-            if !(srIsDiscardName(item.name)) {
-                if srLocalExists(thenLocals, item.name) {
-                    out = srDuplicateAtNode(out, item.name, item.start, item.end, item.node)
-                }
-                thenLocals.push(srAstLocalSymbol(file, node, item))
-            }
-        }
+        out = srAstResolvePattern(file, patIdx, thenScope, out)
     }
-    out = srAstResolveBlock(file, node.right, thenLocals, out)
+    let thenBlockScope = srChildScope(thenScope)
+    out = srAstResolveBlock(file, node.right, thenBlockScope, out)
     let elseIdx = srAstChildAt(node.children, 0)
-    let mut elseLocals = srSymbolListCopy(locals)
-    srAstResolveExpr(file, elseIdx, elseLocals, out)
+    srAstResolveExpr(file, elseIdx, scope, out)
 }
 
 fn srAstResolveMatch(
     file: AstFile,
     node: AstNode,
-    locals: List<SelfSymbol>,
+    scope: SelfResolveScope,
     result: SelfResolveResult,
 ) -> SelfResolveResult {
-    let mut out = srAstResolveExpr(file, node.left, locals, result)
+    let mut out = srAstResolveExpr(file, node.left, scope, result)
     for armIdx in node.children {
         let arm = srAstNode(file, armIdx)
-        let mut armLocals = srSymbolListCopy(locals)
-        let names = srAstPatternNames(file, arm.left, [])
-        for item in names {
-            if !(srIsDiscardName(item.name)) {
-                if srLocalExists(armLocals, item.name) {
-                    out = srDuplicateAtNode(out, item.name, item.start, item.end, item.node)
-                }
-                armLocals.push(srAstLocalSymbol(file, arm, item))
-            }
-        }
+        let armScope = srChildScope(scope)
+        out = srAstResolvePattern(file, arm.left, armScope, out)
         let guardIdx = srAstChildAt(arm.children, 0)
-        out = srAstResolveExpr(file, guardIdx, armLocals, out)
-        out = srAstResolveExpr(file, arm.right, armLocals, out)
+        out = srAstResolveExpr(file, guardIdx, armScope, out)
+        out = srAstResolveExpr(file, arm.right, armScope, out)
     }
     out
 }
@@ -562,42 +803,18 @@ fn srAstResolveMatch(
 fn srAstResolveClosure(
     file: AstFile,
     node: AstNode,
-    locals: List<SelfSymbol>,
+    scope: SelfResolveScope,
     result: SelfResolveResult,
 ) -> SelfResolveResult {
     let mut out = result
-    let mut closureLocals = srSymbolListCopy(locals)
+    let closureScope = srChildScope(scope)
     for paramIdx in node.children {
         let param = srAstNode(file, paramIdx)
-        let names = srAstParamNames(file, param)
-        for item in names {
-            if !(srIsDiscardName(item.name)) {
-                if srLocalExists(closureLocals, item.name) {
-                    out = srDuplicateAtNode(out, item.name, item.start, item.end, item.node)
-                }
-                closureLocals.push(srAstLocalSymbol(file, param, item))
-            }
-        }
+        out = srAstResolveType(file, param.right, closureScope, "", out)
+        out = srAstResolveParamBindings(file, paramIdx, closureScope, "", out)
     }
-    srAstResolveExpr(file, node.left, closureLocals, out)
-}
-
-fn srAstLocalSymbol(
-    file: AstFile,
-    owner: AstNode,
-    item: SelfResolveName,
-) -> SelfSymbol {
-    selfSymbolAtNode(
-        item.name,
-        "value",
-        srAstLetTypeNameFromOwner(file, owner),
-        0,
-        1,
-        item.start,
-        item.end,
-        false,
-        item.node,
-    )
+    out = srAstResolveType(file, node.right, closureScope, "", out)
+    srAstResolveExpr(file, node.left, closureScope, out)
 }
 
 fn srResolveOneAstIdent(
@@ -605,31 +822,446 @@ fn srResolveOneAstIdent(
     start: Int,
     end: Int,
     node: Int,
-    locals: List<SelfSymbol>,
+    scope: SelfResolveScope,
     result: SelfResolveResult,
 ) -> SelfResolveResult {
     let mut out = result
     if srIsBuiltinName(name) {
         return out
     }
-    if srLocalExists(locals, name) || srTopLevelExists(out.symbols, name) {
-        out.refs = out.refs + 1
-        out.refNames.push(name)
-        out.refNodes.push(node)
-        return out
+    if name == "self" {
+        let sym = srScopeLookup(scope, name)
+        if sym.name != "" {
+            return srRecordRef(out, name, node, sym)
+        }
+        return srSelfOutsideAtNode(out, start, end, node)
+    }
+    if name == "Self" {
+        let sym = srScopeLookup(scope, name)
+        if sym.name != "" {
+            return srRecordRef(out, name, node, sym)
+        }
+        return srSelfTypeOutsideAtNode(out, start, end, node)
+    }
+    let sym = srScopeLookup(scope, name)
+    if sym.name != "" {
+        return srRecordRef(out, name, node, sym)
     }
     out.unresolved = out.unresolved + 1
     out.diagnostics.push(selfResolveDiagnosticAtNode("E0500", "undefined name", name, start, end, node))
     out
 }
 
-fn srAstParamNames(file: AstFile, param: AstNode) -> List<SelfResolveName> {
-    let mut names: List<SelfResolveName> = []
-    if param.text != "" {
-        names.push(selfResolveName(param.text, param.start, param.end, -1))
-        return names
+fn srResolveOneAstType(
+    name: String,
+    start: Int,
+    end: Int,
+    node: Int,
+    scope: SelfResolveScope,
+    owner: String,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let mut out = result
+    if name == "Self" {
+        if owner == "" {
+            return srSelfTypeOutsideAtNode(out, start, end, node)
+        }
+        return srRecordTypeRef(out, name, node)
     }
-    srAstPatternNames(file, param.left, names)
+    if srIsBuiltinTypeName(name) {
+        return srRecordTypeRef(out, name, node)
+    }
+    let sym = srScopeLookup(scope, name)
+    if sym.name == "" {
+        out.unresolved = out.unresolved + 1
+        out.diagnostics.push(selfResolveDiagnosticAtNode("E0500", "undefined type", name, start, end, node))
+        return out
+    }
+    if !(srSymbolCanBeType(sym)) {
+        out.diagnostics.push(selfResolveDiagnosticAtNode("E0502", "name is not a type", name, start, end, node))
+        return out
+    }
+    srRecordTypeRef(out, name, node)
+}
+
+fn srRecordRef(
+    result: SelfResolveResult,
+    name: String,
+    node: Int,
+    target: SelfSymbol,
+) -> SelfResolveResult {
+    let mut out = result
+    out.refs = out.refs + 1
+    out.refNames.push(name)
+    out.refNodes.push(node)
+    out.refTargets.push(target.node)
+    out.refTargetStarts.push(target.start)
+    out.refTargetEnds.push(target.end)
+    out
+}
+
+fn srRecordBareRef(result: SelfResolveResult, name: String, node: Int) -> SelfResolveResult {
+    srRecordRef(result, name, node, srEmptySymbol())
+}
+
+fn srRecordTypeRef(result: SelfResolveResult, name: String, node: Int) -> SelfResolveResult {
+    let mut out = result
+    out.typeRefs = out.typeRefs + 1
+    out.typeRefNames.push(name)
+    out.typeRefNodes.push(node)
+    out
+}
+
+fn srSelfOutsideAtNode(result: SelfResolveResult, start: Int, end: Int, node: Int) -> SelfResolveResult {
+    let mut out = result
+    out.diagnostics.push(selfResolveDiagnosticAtNode("E0503", "`self` outside method", "self", start, end, node))
+    out
+}
+
+fn srSelfTypeOutsideAtNode(result: SelfResolveResult, start: Int, end: Int, node: Int) -> SelfResolveResult {
+    let mut out = result
+    out.diagnostics.push(selfResolveDiagnosticAtNode("E0504", "`Self` outside type body", "Self", start, end, node))
+    out
+}
+
+fn srAstResolveParamBindings(
+    file: AstFile,
+    paramIdx: Int,
+    scope: SelfResolveScope,
+    owner: String,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    if paramIdx < 0 {
+        return result
+    }
+    let param = srAstNode(file, paramIdx)
+    let mut out = result
+    if param.text != "" {
+        if param.text == "self" && owner == "" {
+            out = srSelfOutsideAtNode(out, param.start, param.end, paramIdx)
+        }
+        return srScopeDefine(
+            scope,
+            out,
+            selfSymbolAtNode(
+                param.text,
+                "value",
+                srAstTypeName(file, param.right),
+                0,
+                scope.depth,
+                param.start,
+                param.end,
+                false,
+                paramIdx,
+            ),
+        )
+    }
+    srAstResolvePattern(file, param.left, scope, out)
+}
+
+fn srAstResolvePattern(
+    file: AstFile,
+    idx: Int,
+    scope: SelfResolveScope,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    if idx < 0 {
+        return result
+    }
+    let node = srAstNode(file, idx)
+    let mut out = result
+    if node.kind == AstNIdent {
+        return srAstBindPatternName(scope, out, selfResolveName(node.text, node.start, node.end, idx))
+    }
+    if node.kind != AstNPattern {
+        return out
+    }
+    if node.extra == astPatternWildcardKind() {
+        return out
+    }
+    if node.extra == astPatternLiteralKind() {
+        return srAstResolvePatternValue(file, node.left, scope, out)
+    }
+    if node.extra == astPatternIdentKind() {
+        return srAstResolveIdentPattern(node, idx, scope, out)
+    }
+    if node.extra == astPatternFieldKind() {
+        if node.left >= 0 {
+            return srAstResolvePattern(file, node.left, scope, out)
+        }
+        return srAstBindPatternName(scope, out, selfResolveName(node.text, node.start, node.end, idx))
+    }
+    if node.extra == astPatternStructKind() {
+        out = srResolvePatternTypePath(node.text, node.start, node.end, idx, scope, out)
+        for child in node.children {
+            out = srAstResolvePattern(file, child, scope, out)
+        }
+        return out
+    }
+    if node.extra == astPatternVariantKind() {
+        out = srResolvePatternVariantPath(node.text, node.start, node.end, idx, scope, out)
+        for child in node.children {
+            out = srAstResolvePattern(file, child, scope, out)
+        }
+        return out
+    }
+    if node.extra == astPatternRangeKind() {
+        out = srAstResolvePatternValue(file, node.left, scope, out)
+        return srAstResolvePatternValue(file, node.right, scope, out)
+    }
+    if node.extra == astPatternOrKind() {
+        return srAstResolveOrPattern(file, node, scope, out)
+    }
+    if node.extra == astPatternBindingKind() {
+        out = srAstBindPatternName(scope, out, selfResolveName(node.text, node.start, node.start + 1, idx))
+        return srAstResolvePattern(file, node.left, scope, out)
+    }
+    out = srAstResolvePattern(file, node.left, scope, out)
+    out = srAstResolvePattern(file, node.right, scope, out)
+    for child in node.children {
+        out = srAstResolvePattern(file, child, scope, out)
+    }
+    out
+}
+
+fn srAstResolveIdentPattern(
+    node: AstNode,
+    idx: Int,
+    scope: SelfResolveScope,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    if srIsUpperName(node.text) {
+        if srIsBuiltinVariantName(node.text) {
+            return srRecordBareRef(result, node.text, idx)
+        }
+        let sym = srScopeLookup(scope, node.text)
+        if sym.kind == "variant" {
+            return srRecordRef(result, node.text, idx, sym)
+        }
+    }
+    srAstBindPatternName(scope, result, selfResolveName(node.text, node.start, node.end, idx))
+}
+
+fn srAstBindPatternName(
+    scope: SelfResolveScope,
+    result: SelfResolveResult,
+    item: SelfResolveName,
+) -> SelfResolveResult {
+    if srIsDiscardName(item.name) {
+        return result
+    }
+    srScopeDefine(
+        scope,
+        result,
+        selfSymbolAtNode(item.name, "value", "", 0, scope.depth, item.start, item.end, false, item.node),
+    )
+}
+
+fn srAstResolvePatternValue(
+    file: AstFile,
+    idx: Int,
+    scope: SelfResolveScope,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    if idx < 0 {
+        return result
+    }
+    let node = srAstNode(file, idx)
+    let mut out = result
+    if node.kind == AstNIdent {
+        return srResolveOneAstIdent(node.text, node.start, node.end, idx, scope, out)
+    }
+    if node.kind != AstNPattern {
+        return out
+    }
+    if node.extra == astPatternIdentKind() {
+        if srIsUpperName(node.text) {
+            return srResolvePatternVariantPath(node.text, node.start, node.end, idx, scope, out)
+        }
+        return srResolveOneAstIdent(node.text, node.start, node.end, idx, scope, out)
+    }
+    if node.extra == astPatternLiteralKind() {
+        return srAstResolvePatternValue(file, node.left, scope, out)
+    }
+    if node.extra == astPatternStructKind() {
+        out = srResolvePatternTypePath(node.text, node.start, node.end, idx, scope, out)
+    } else if node.extra == astPatternVariantKind() {
+        out = srResolvePatternVariantPath(node.text, node.start, node.end, idx, scope, out)
+    }
+    out = srAstResolvePatternValue(file, node.left, scope, out)
+    out = srAstResolvePatternValue(file, node.right, scope, out)
+    for child in node.children {
+        out = srAstResolvePatternValue(file, child, scope, out)
+    }
+    out
+}
+
+fn srAstResolveOrPattern(
+    file: AstFile,
+    node: AstNode,
+    scope: SelfResolveScope,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let mut alts: List<Int> = []
+    alts = srAstOrPatternAlts(file, node.left, alts)
+    alts = srAstOrPatternAlts(file, node.right, alts)
+    let mut out = result
+    let mut names: List<String> = []
+    let mut symbols: List<SelfSymbol> = []
+    let mut counts: List<Int> = []
+    let mut altCount = 0
+    for altIdx in alts {
+        altCount = altCount + 1
+        let altScope = srChildScope(scope)
+        out = srAstResolvePattern(file, altIdx, altScope, out)
+        let bound = srSymbolsAtDepth(altScope.symbols, altScope.depth)
+        for sym in bound {
+            let existing = srStringListIndex(names, sym.name)
+            if existing >= 0 {
+                counts[existing] = counts[existing] + 1
+            } else {
+                names.push(sym.name)
+                symbols.push(sym)
+                counts.push(1)
+            }
+        }
+    }
+    let mut idx = 0
+    for name in names {
+        let sym = symbols[idx]
+        if counts[idx] == altCount {
+            out = srScopeDefine(scope, out, sym)
+        } else {
+            out = srOrPatternMismatch(out, sym)
+        }
+        let _ = name
+        idx = idx + 1
+    }
+    out
+}
+
+fn srAstOrPatternAlts(file: AstFile, idx: Int, alts: List<Int>) -> List<Int> {
+    if idx < 0 {
+        return alts
+    }
+    let node = srAstNode(file, idx)
+    let mut out = alts
+    if node.kind == AstNPattern && node.extra == astPatternOrKind() {
+        out = srAstOrPatternAlts(file, node.left, out)
+        out = srAstOrPatternAlts(file, node.right, out)
+    } else {
+        out.push(idx)
+    }
+    out
+}
+
+fn srResolvePatternTypePath(
+    path: String,
+    start: Int,
+    end: Int,
+    node: Int,
+    scope: SelfResolveScope,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let head = srPathHead(path)
+    let mut out = result
+    if head == "" {
+        return out
+    }
+    if head == "Self" {
+        if srScopeHas(scope, head) {
+            return srRecordTypeRef(out, head, node)
+        }
+        return srSelfTypeOutsideAtNode(out, start, end, node)
+    }
+    if srIsBuiltinTypeName(head) {
+        return srRecordTypeRef(out, head, node)
+    }
+    let sym = srScopeLookup(scope, head)
+    if sym.name == "" {
+        out.unresolved = out.unresolved + 1
+        out.diagnostics.push(selfResolveDiagnosticAtNode("E0500", "undefined type", head, start, end, node))
+        return out
+    }
+    if !(srSymbolCanBeType(sym)) {
+        out.diagnostics.push(selfResolveDiagnosticAtNode("E0502", "name is not a type", head, start, end, node))
+        return out
+    }
+    srRecordTypeRef(out, head, node)
+}
+
+fn srResolvePatternVariantPath(
+    path: String,
+    start: Int,
+    end: Int,
+    node: Int,
+    scope: SelfResolveScope,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let head = srPathHead(path)
+    let name = srPathLastSegment(path)
+    let mut out = result
+    if head == "" {
+        return out
+    }
+    if head == name {
+        if srIsBuiltinVariantName(name) {
+            return srRecordBareRef(out, name, node)
+        }
+        let sym = srScopeLookup(scope, name)
+        if sym.name == "" {
+            out.unresolved = out.unresolved + 1
+            out.diagnostics.push(selfResolveDiagnosticAtNode("E0500", "undefined name", name, start, end, node))
+            return out
+        }
+        if sym.kind == "variant" {
+            return srRecordRef(out, name, node, sym)
+        }
+        out.diagnostics.push(selfResolveDiagnosticAtNode("E0502", "name is not a variant", name, start, end, node))
+        return out
+    }
+    if srIsBuiltinTypeName(head) {
+        return srRecordTypeRef(out, head, node)
+    }
+    let sym = srScopeLookup(scope, head)
+    if sym.name == "" {
+        out.unresolved = out.unresolved + 1
+        out.diagnostics.push(selfResolveDiagnosticAtNode("E0500", "undefined name", head, start, end, node))
+        return out
+    }
+    if srSymbolCanBeType(sym) {
+        return srRecordTypeRef(out, head, node)
+    }
+    if sym.kind == "variant" {
+        return srRecordRef(out, head, node, sym)
+    }
+    out.diagnostics.push(selfResolveDiagnosticAtNode("E0502", "name is not a pattern path", head, start, end, node))
+    out
+}
+
+fn srSymbolsAtDepth(symbols: List<SelfSymbol>, depth: Int) -> List<SelfSymbol> {
+    let mut out: List<SelfSymbol> = []
+    for sym in symbols {
+        if sym.depth == depth {
+            out.push(sym)
+        }
+    }
+    out
+}
+
+fn srOrPatternMismatch(result: SelfResolveResult, sym: SelfSymbol) -> SelfResolveResult {
+    let mut out = result
+    out.diagnostics.push(
+        selfResolveDiagnosticAtNode(
+            "E0605",
+            "name is not bound by every alternative of the or-pattern",
+            sym.name,
+            sym.start,
+            sym.end,
+            sym.node,
+        ),
+    )
+    out
 }
 
 fn srAstPatternNames(
@@ -649,12 +1281,12 @@ fn srAstPatternNames(
     if node.kind != AstNPattern {
         return out
     }
-    if node.extra == astPatternIdentKind() {
-        out.push(selfResolveName(node.text, node.start, node.end, idx))
-    } else if node.extra == astPatternBindingKind() {
-        out.push(selfResolveName(node.text, node.start, node.start + 1, idx))
+    if node.extra == srPatternIdentKind() || strings.HasPrefix(node.text, "ident:") {
+        out.push(selfResolveName(srPatternName(node.text, "ident:"), node.start, node.end, idx))
+    } else if node.extra == srPatternBindingKind() || strings.HasPrefix(node.text, "binding:") {
+        out.push(selfResolveName(srPatternName(node.text, "binding:"), node.start, node.start + 1, idx))
         out = srAstPatternNames(file, node.left, out)
-    } else if node.extra == astPatternFieldKind() {
+    } else if node.extra == srPatternFieldKind() || (node.extra == 0 && node.text != "" && node.left >= 0) {
         if node.left >= 0 {
             out = srAstPatternNames(file, node.left, out)
         } else {
@@ -670,15 +1302,21 @@ fn srAstPatternNames(
     out
 }
 
-fn srAstLetTypeName(file: AstFile, node: AstNode) -> String {
-    srAstTypeName(file, srAstChildAt(node.children, 0))
+fn srPatternIdentKind() -> Int { 3 }
+
+fn srPatternBindingKind() -> Int { 9 }
+
+fn srPatternFieldKind() -> Int { 10 }
+
+fn srPatternName(text: String, prefix: String) -> String {
+    if strings.HasPrefix(text, prefix) {
+        return strings.TrimPrefix(text, prefix)
+    }
+    text
 }
 
-fn srAstLetTypeNameFromOwner(file: AstFile, owner: AstNode) -> String {
-    if owner.kind == AstNLet {
-        return srAstLetTypeName(file, owner)
-    }
-    ""
+fn srAstLetTypeName(file: AstFile, node: AstNode) -> String {
+    srAstTypeName(file, srAstChildAt(node.children, 0))
 }
 
 fn srAstTypeName(file: AstFile, idx: Int) -> String {
@@ -714,6 +1352,16 @@ fn srPathLastSegment(path: String) -> String {
     last
 }
 
+fn srPathHead(path: String) -> String {
+    let parts = strings.Split(path, ".")
+    for part in parts {
+        if part != "" {
+            return part
+        }
+    }
+    ""
+}
+
 fn srAstNode(file: AstFile, idx: Int) -> AstNode {
     astArenaNodeAt(file.arena, idx)
 }
@@ -736,6 +1384,28 @@ fn srAstListCount(items: List<Int>) -> Int {
         count = count + 1
     }
     count
+}
+
+fn srIntListAt(items: List<Int>, target: Int) -> Int {
+    let mut idx = 0
+    for item in items {
+        if idx == target {
+            return item
+        }
+        idx = idx + 1
+    }
+    -1
+}
+
+fn srStringListAt(items: List<String>, target: Int) -> String {
+    let mut idx = 0
+    for item in items {
+        if idx == target {
+            return item
+        }
+        idx = idx + 1
+    }
+    ""
 }
 
 fn srSymbolListCopy(items: List<SelfSymbol>) -> List<SelfSymbol> {
@@ -775,24 +1445,6 @@ fn srDuplicateAtNode(
     out
 }
 
-fn srLocalExists(symbols: List<SelfSymbol>, name: String) -> Bool {
-    for sym in symbols {
-        if sym.name == name {
-            return true
-        }
-    }
-    false
-}
-
-fn srTopLevelExists(symbols: List<SelfSymbol>, name: String) -> Bool {
-    for sym in symbols {
-        if sym.name == name && sym.depth == 0 {
-            return true
-        }
-    }
-    false
-}
-
 fn srSymbolExistsAtDepth(symbols: List<SelfSymbol>, name: String, depth: Int) -> Bool {
     for sym in symbols {
         if sym.name == name && sym.depth == depth {
@@ -802,8 +1454,43 @@ fn srSymbolExistsAtDepth(symbols: List<SelfSymbol>, name: String, depth: Int) ->
     false
 }
 
+fn srStringListIndex(items: List<String>, target: String) -> Int {
+    let mut idx = 0
+    for item in items {
+        if item == target {
+            return idx
+        }
+        idx = idx + 1
+    }
+    -1
+}
+
+fn srSymbolCanBeType(sym: SelfSymbol) -> Bool {
+    sym.kind == "type" || sym.kind == "generic" || sym.kind == "package"
+}
+
+fn srEmptySymbol() -> SelfSymbol {
+    selfSymbolAtNode("", "", "", 0, -1, -1, -1, false, -1)
+}
+
+fn srSymbolFound(sym: SelfSymbol) -> Bool {
+    sym.name != ""
+}
+
 fn srIsBuiltinName(name: String) -> Bool {
     name == "true" || name == "false" || name == "None" || name == "Some" || name == "Ok" || name == "Err" || name == "println" || name == "panic" || name == "spawn" || name == "parallel" || name == "taskGroup" || name == "thread" || name == "Int" || name == "Float" || name == "Bool" || name == "String" || name == "Bytes" || name == "Char" || name == "Never" || name == "List" || name == "Map" || name == "Set" || name == "Option" || name == "Result" || name == "Error" || name == "Unit"
+}
+
+fn srIsBuiltinTypeName(name: String) -> Bool {
+    name == "Int" || name == "Float" || name == "Bool" || name == "String" || name == "Bytes" || name == "Char" || name == "Never" || name == "List" || name == "Map" || name == "Set" || name == "Option" || name == "Result" || name == "Error" || name == "Unit"
+}
+
+fn srIsBuiltinVariantName(name: String) -> Bool {
+    name == "None" || name == "Some" || name == "Ok" || name == "Err"
+}
+
+fn srIsUpperName(name: String) -> Bool {
+    astIsUpperName(name)
 }
 
 fn srIsDiscardName(name: String) -> Bool {

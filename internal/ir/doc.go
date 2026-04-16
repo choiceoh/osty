@@ -1,11 +1,10 @@
 // Package ir defines an independent intermediate representation (IR)
 // for Osty programs. It is a self-contained, backend-agnostic tree
-// that sits between the type-checked front-end and the Go transpiler /
-// future backends.
+// that sits between the type-checked front-end and native backends.
 //
 // Pipeline position:
 //
-//	source → lexer → parser → resolve → check → ir (this package) → gen
+//	source → lexer → parser → resolve → check → ir (this package) → backend
 //
 // Goals:
 //
@@ -65,9 +64,9 @@
 //
 // Known gaps (follow-on work)
 //
-//   - The Go transpiler (internal/gen) still consumes the AST
-//     directly. Rewriting it against `ir` is a substantial refactor
-//     tracked as a separate effort.
+//   - The native LLVM backend still consumes the AST directly in several
+//     places. Rewriting it fully against `ir` is a substantial refactor tracked
+//     as a separate effort.
 //
 //   - Generic monomorphisation info (check.Result.Instantiations) is
 //     not yet threaded through; backends that need per-call-site

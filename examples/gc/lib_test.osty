@@ -35,6 +35,54 @@ fn emptyTestStackMapEntry() -> GcStackMapEntry {
     }
 }
 
+fn testIntListLen(values: List<Int>) -> Int {
+    let mut total = 0
+    for value in values {
+        let _ = value
+        total = total + 1
+    }
+    total
+}
+
+fn testDerivedRootListLen(values: List<GcDerivedRootMap>) -> Int {
+    let mut total = 0
+    for value in values {
+        let _ = value
+        total = total + 1
+    }
+    total
+}
+
+fn testBoolMapContains(values: Map<Int, Bool>, key: Int) -> Bool {
+    for (candidate, present) in values {
+        if present && candidate == key {
+            return true
+        }
+    }
+    false
+}
+
+fn intOr(value: Int?, fallback: Int) -> Int {
+    match value {
+        Some(next) -> next,
+        None -> fallback,
+    }
+}
+
+fn regionOr(value: GcRegionKind?, fallback: GcRegionKind) -> GcRegionKind {
+    match value {
+        Some(next) -> next,
+        None -> fallback,
+    }
+}
+
+fn globalStateOr(value: GcGlobalInitState?, fallback: GcGlobalInitState) -> GcGlobalInitState {
+    match value {
+        Some(next) -> next,
+        None -> fallback,
+    }
+}
+
 fn survivorSpaceGcConfig(survivorLimit: Int, promotionAge: Int) -> GcConfig {
     GcConfig {
         nurseryLimit: 512,
@@ -44,6 +92,11 @@ fn survivorSpaceGcConfig(survivorLimit: Int, promotionAge: Int) -> GcConfig {
         incrementalBudget: 1,
         largeObjectThreshold: 512,
         tlabSize: 64,
+        cardSize: 64,
+        schedulerSafepointInterval: 2,
+        mutatorAssistBytes: 32,
+        concurrentMarkBudget: 1,
+        evacuationThresholdPercent: 50,
     }
 }
 
@@ -56,6 +109,11 @@ fn humongousSpaceGcConfig() -> GcConfig {
         incrementalBudget: 1,
         largeObjectThreshold: 32,
         tlabSize: 64,
+        cardSize: 64,
+        schedulerSafepointInterval: 2,
+        mutatorAssistBytes: 32,
+        concurrentMarkBudget: 1,
+        evacuationThresholdPercent: 50,
     }
 }
 
@@ -228,6 +286,11 @@ fn testTelemetryRecordsNurseryPressureTrigger() {
             incrementalBudget: 1,
             largeObjectThreshold: 512,
             tlabSize: 64,
+            cardSize: 64,
+            schedulerSafepointInterval: 2,
+            mutatorAssistBytes: 32,
+            concurrentMarkBudget: 1,
+            evacuationThresholdPercent: 50,
         },
     )
     let first = heap.allocate(GcRecord, 16)
@@ -266,9 +329,9 @@ fn testLargeObjectBypassesNurseryAndStartsHumongous() {
 
     testing.assert(heap.contains(small))
     testing.assert(heap.contains(large))
-    testing.assert(heap.isLarge(large) ?? false)
-    testing.assertEq(heap.regionOf(large) ?? GcEdenRegion, GcHumongousRegion)
-    testing.assertEq(heap.generationOf(large) ?? -1, 1)
+    testing.assert(heap.isLargeObject(large))
+    testing.assertEq(regionOr(heap.regionOf(large), GcEdenRegion), GcHumongousRegion)
+    testing.assertEq(intOr(heap.generationOf(large), -1), 1)
     testing.assertEq(heap.nurseryBytes(), 16)
     testing.assertEq(heap.largeObjectCount(), 1)
     testing.assertEq(heap.humongousBytes(), 64)
@@ -285,7 +348,7 @@ fn testLargeObjectBypassesNurseryAndStartsHumongous() {
     assertValid(heap)
 
     testing.assert(!(heap.contains(small)))
-    testing.assertEq(heap.addressOf(large) ?? -1, 16)
+    testing.assertEq(intOr(heap.addressOf(large), -1), 16)
     testing.assertEq(stats.afterFragmentedBytes, 16)
 }
 
@@ -321,9 +384,9 @@ fn testHumongousAllocationReusesDedicatedFreeBlock() {
     assertValid(heap)
 
     testing.assert(heap.contains(reused))
-    testing.assert(heap.isLarge(reused) ?? false)
-    testing.assertEq(heap.addressOf(reused) ?? -1, 0)
-    testing.assertEq(heap.regionOf(reused) ?? GcEdenRegion, GcHumongousRegion)
+    testing.assert(heap.isLargeObject(reused))
+    testing.assertEq(intOr(heap.addressOf(reused), -1), 0)
+    testing.assertEq(regionOr(heap.regionOf(reused), GcEdenRegion), GcHumongousRegion)
     testing.assertEq(heap.humongousReuseAllocationCount(), 1)
     testing.assertEq(heap.humongousReusedBytes(), 40)
     testing.assertEq(heap.humongousFreeBytes(), 24)
@@ -340,8 +403,8 @@ fn testTenuredAllocationDoesNotConsumeHumongousFreeBlock() {
     let old = heap.allocateTenured(GcRecord, 16)
     assertValid(heap)
 
-    testing.assertEq(heap.addressOf(old) ?? -1, 64)
-    testing.assertEq(heap.regionOf(old) ?? GcEdenRegion, GcOldRegion)
+    testing.assertEq(intOr(heap.addressOf(old), -1), 64)
+    testing.assertEq(regionOr(heap.regionOf(old), GcEdenRegion), GcOldRegion)
     testing.assertEq(heap.tenuredBumpAllocationCount(), 1)
     testing.assertEq(heap.humongousFreeBytes(), 64)
     testing.assertEq(heap.humongousReuseAllocationCount(), 0)
@@ -360,7 +423,7 @@ fn testCompactionDoesNotMoveOldObjectIntoHumongousFreeBlock() {
     testing.assert(!(heap.contains(deadLarge)))
     testing.assert(heap.contains(old))
     testing.assertEq(stats.reclaimedObjects, 1)
-    testing.assertEq(heap.addressOf(old) ?? -1, 64)
+    testing.assertEq(intOr(heap.addressOf(old), -1), 64)
     testing.assertEq(heap.humongousFreeBytes(), 64)
     testing.assertEq(heap.fragmentedBytes(), 64)
 }
@@ -370,9 +433,9 @@ fn testLargeTenuredAllocationRoutesToHumongousSpace() {
     let large = heap.allocateTenured(GcBytes, 64)
     assertValid(heap)
 
-    testing.assert(heap.isLarge(large) ?? false)
-    testing.assertEq(heap.regionOf(large) ?? GcEdenRegion, GcHumongousRegion)
-    testing.assertEq(heap.generationOf(large) ?? -1, 1)
+    testing.assert(heap.isLargeObject(large))
+    testing.assertEq(regionOr(heap.regionOf(large), GcEdenRegion), GcHumongousRegion)
+    testing.assertEq(intOr(heap.generationOf(large), -1), 1)
     testing.assertEq(heap.tenuredDirectAllocationCount(), 0)
     testing.assertEq(heap.humongousAllocatedObjectCount(), 1)
     testing.assertEq(heap.humongousBytes(), 64)
@@ -422,8 +485,8 @@ fn testLoadBarrierReturnsStableIdentityWithoutForwarding() {
     let object = heap.allocate(GcRecord, 16)
     assertValid(heap)
 
-    testing.assertEq(heap.gcLoadBarrier(object) ?? -1, object)
-    testing.assertEq(heap.gcLoadBarrier(999) ?? -1, -1)
+    testing.assertEq(intOr(heap.gcLoadBarrier(object), -1), object)
+    testing.assertEq(intOr(heap.gcLoadBarrier(999), -1), -1)
     testing.assertEq(heap.barrierLoadCallCount(), 2)
     testing.assertEq(heap.barrierLoadForwardCount(), 0)
 }
@@ -436,22 +499,62 @@ fn testMinorCollectionUsesRememberedSetAndPromotes() {
 
     let _ = heap.majorCollect()
     assertValid(heap)
-    testing.assertEq(heap.generationOf(parent) ?? -1, 1)
+    testing.assertEq(intOr(heap.generationOf(parent), -1), 1)
 
     let child = heap.allocate(GcArray, 32)
     testing.assert(heap.link(parent, child))
     assertValid(heap)
     testing.assertEq(heap.rememberedCount(), 1)
+    let parentCard = intOr(heap.cardIndexForObject(parent), -1)
+    testing.assert(parentCard >= 0)
+    testing.assert(heap.cardIsDirty(parentCard))
+    testing.assertEq(heap.dirtyCardCount(), 1)
+    testing.assertEq(heap.dirtyCardWriteCount(), 1)
     testing.assertEq(heap.barrierPostWriteCallCount(), 1)
     testing.assertEq(heap.barrierRememberedSetWriteCount(), 1)
 
     let stats = heap.minorCollect()
     assertValid(heap)
     testing.assert(heap.contains(child))
-    testing.assertEq(heap.generationOf(child) ?? -1, 1)
+    testing.assertEq(intOr(heap.generationOf(child), -1), 1)
     testing.assertEq(stats.promotedObjects, 1)
     testing.assertEq(stats.rememberedScanned, 1)
+    testing.assertEq(heap.lastMinorDirtyCardsScanned(), 1)
+    testing.assertEq(heap.lastMinorRememberedObjectsScanned(), 1)
+    testing.assertEq(heap.lastMinorPromotedObjects(), 1)
+    testing.assertEq(heap.cardScanCount(), 1)
+    testing.assertEq(heap.cardClearCount(), 1)
     testing.assertEq(heap.rememberedCount(), 0)
+    testing.assertEq(heap.dirtyCardCount(), 0)
+}
+
+fn testMinorCollectorBackendRecordsCopyPipeline() {
+    let mut heap = newGcHeap(survivorSpaceGcConfig(128, 3))
+    let parent = heap.allocate(GcRecord, 16)
+    testing.assert(heap.addRoot(parent))
+    let _ = heap.majorCollect()
+    assertValid(heap)
+
+    let child = heap.allocate(GcArray, 24)
+    testing.assert(heap.link(parent, child))
+    assertValid(heap)
+
+    let stats = heap.minorCollect()
+    assertValid(heap)
+
+    testing.assertEq(stats.rememberedScanned, 1)
+    testing.assertEq(heap.lastMinorRootObjectsScanned(), 1)
+    testing.assertEq(heap.lastMinorDirtyCardsScanned(), 1)
+    testing.assertEq(heap.lastMinorRememberedObjectsScanned(), 1)
+    testing.assertEq(heap.lastMinorYoungMarked(), 1)
+    testing.assertEq(heap.lastMinorSurvivorCopiedObjects(), 1)
+    testing.assertEq(heap.lastMinorPromotedObjects(), 0)
+    testing.assert(heap.lastMinorEdenReset())
+    testing.assert(heap.lastMinorSurvivorSwap())
+    testing.assertEq(intOr(heap.generationOf(child), -1), 0)
+    testing.assertEq(heap.survivorBytes(), 24)
+    testing.assertEq(heap.rememberedCount(), 1)
+    testing.assertEq(heap.dirtyCardCount(), 1)
 }
 
 fn testUnlinkRunsPreWriteBarrierHook() {
@@ -465,7 +568,7 @@ fn testUnlinkRunsPreWriteBarrierHook() {
     assertValid(heap)
 
     testing.assertEq(heap.barrierPreWriteCallCount(), 1)
-    testing.assertEq(heap.refCount(parent) ?? -1, 0)
+    testing.assertEq(intOr(heap.refCount(parent), -1), 0)
 }
 
 fn testStructFieldStoreLoweringTracksSlotAndPostBarrier() {
@@ -474,7 +577,7 @@ fn testStructFieldStoreLoweringTracksSlotAndPostBarrier() {
     testing.assert(heap.addRoot(parent))
     let _ = heap.majorCollect()
     assertValid(heap)
-    testing.assertEq(heap.generationOf(parent) ?? -1, 1)
+    testing.assertEq(intOr(heap.generationOf(parent), -1), 1)
 
     let child = heap.allocate(GcArray, 16)
     match heap.lowerStructFieldStore(parent, 0, "next", child) {
@@ -494,8 +597,8 @@ fn testStructFieldStoreLoweringTracksSlotAndPostBarrier() {
     assertValid(heap)
 
     testing.assertEq(heap.loweredObjectFieldCount(), 1)
-    testing.assertEq(heap.loweredObjectFieldValue(parent, 0) ?? -1, child)
-    testing.assertEq(heap.refCount(parent) ?? -1, 1)
+    testing.assertEq(intOr(heap.loweredObjectFieldValue(parent, 0), -1), child)
+    testing.assertEq(intOr(heap.refCount(parent), -1), 1)
     testing.assertEq(heap.rememberedCount(), 1)
     testing.assertEq(heap.barrierPostWriteCallCount(), 1)
     testing.assertEq(heap.barrierRememberedSetWriteCount(), 1)
@@ -526,8 +629,8 @@ fn testFieldStoreOverwriteRunsPreBarrierAndDropsOldRef() {
     assertValid(heap)
 
     testing.assertEq(heap.loweredObjectFieldCount(), 1)
-    testing.assertEq(heap.loweredObjectFieldValue(parent, 1) ?? -1, second)
-    testing.assertEq(heap.refCount(parent) ?? -1, 1)
+    testing.assertEq(intOr(heap.loweredObjectFieldValue(parent, 1), -1), second)
+    testing.assertEq(intOr(heap.refCount(parent), -1), 1)
     testing.assertEq(heap.barrierPreWriteCallCount(), 1)
     testing.assertEq(heap.barrierPostWriteCallCount(), 2)
 
@@ -599,7 +702,7 @@ fn testArrayElementStoreLoweringUsesCollectionBarrier() {
     testing.assert(heap.addRoot(array))
     let _ = heap.majorCollect()
     assertValid(heap)
-    testing.assertEq(heap.generationOf(array) ?? -1, 1)
+    testing.assertEq(intOr(heap.generationOf(array), -1), 1)
 
     let child = heap.allocate(GcRecord, 16)
     match heap.lowerArrayElementStore(array, 0, child) {
@@ -619,8 +722,8 @@ fn testArrayElementStoreLoweringUsesCollectionBarrier() {
     assertValid(heap)
 
     testing.assertEq(heap.loweredPointerSlotCount(), 1)
-    testing.assertEq(heap.loweredPointerSlotValue(GcArrayElementStore, array, 0) ?? -1, child)
-    testing.assertEq(heap.refCount(array) ?? -1, 1)
+    testing.assertEq(intOr(heap.loweredPointerSlotValue(GcArrayElementStore, array, 0), -1), child)
+    testing.assertEq(intOr(heap.refCount(array), -1), 1)
     testing.assertEq(heap.rememberedCount(), 1)
     testing.assertEq(heap.barrierPostWriteCallCount(), 1)
     testing.assertEq(heap.barrierRememberedSetWriteCount(), 1)
@@ -652,9 +755,9 @@ fn testMapKeyAndValueStoresKeepEntryObjectsAlive() {
     assertValid(heap)
 
     testing.assertEq(heap.loweredPointerSlotCount(), 2)
-    testing.assertEq(heap.loweredPointerSlotValue(GcMapKeyStore, table, 10) ?? -1, key)
-    testing.assertEq(heap.loweredPointerSlotValue(GcMapValueStore, table, 11) ?? -1, value)
-    testing.assertEq(heap.refCount(table) ?? -1, 2)
+    testing.assertEq(intOr(heap.loweredPointerSlotValue(GcMapKeyStore, table, 10), -1), key)
+    testing.assertEq(intOr(heap.loweredPointerSlotValue(GcMapValueStore, table, 11), -1), value)
+    testing.assertEq(intOr(heap.refCount(table), -1), 2)
 
     let _ = heap.majorCollect()
     assertValid(heap)
@@ -690,9 +793,12 @@ fn testCollectionStoreOverwritePreservesSharedPointerSlot() {
     assertValid(heap)
 
     testing.assertEq(heap.loweredPointerSlotCount(), 2)
-    testing.assertEq(heap.loweredPointerSlotValue(GcListElementStore, list, 0) ?? -1, replacement)
-    testing.assertEq(heap.loweredPointerSlotValue(GcSetKeyStore, list, 1) ?? -1, shared)
-    testing.assertEq(heap.refCount(list) ?? -1, 2)
+    testing.assertEq(
+        intOr(heap.loweredPointerSlotValue(GcListElementStore, list, 0), -1),
+        replacement,
+    )
+    testing.assertEq(intOr(heap.loweredPointerSlotValue(GcSetKeyStore, list, 1), -1), shared)
+    testing.assertEq(intOr(heap.refCount(list), -1), 2)
     testing.assertEq(heap.barrierPreWriteCallCount(), 1)
     testing.assertEq(heap.barrierPostWriteCallCount(), 3)
 
@@ -718,9 +824,9 @@ fn testMinorCollectionMovesEdenObjectToSurvivorSpace() {
 
     testing.assert(heap.contains(rooted))
     testing.assertEq(stats.promotedObjects, 0)
-    testing.assertEq(heap.generationOf(rooted) ?? -1, 0)
-    testing.assertEq(heap.ageOf(rooted) ?? -1, 1)
-    testing.assertEq(heap.regionOf(rooted) ?? GcOldRegion, GcSurvivorRegion)
+    testing.assertEq(intOr(heap.generationOf(rooted), -1), 0)
+    testing.assertEq(intOr(heap.ageOf(rooted), -1), 1)
+    testing.assertEq(regionOr(heap.regionOf(rooted), GcOldRegion), GcSurvivorRegion)
     testing.assertEq(heap.edenObjectCount(), 0)
     testing.assertEq(heap.survivorObjectCount(), 1)
     testing.assertEq(heap.survivorBytes(), 16)
@@ -736,16 +842,16 @@ fn testSecondMinorPromotesAgedSurvivor() {
     let first = heap.minorCollect()
     assertValid(heap)
     testing.assertEq(first.promotedObjects, 0)
-    testing.assertEq(heap.regionOf(rooted) ?? GcOldRegion, GcSurvivorRegion)
+    testing.assertEq(regionOr(heap.regionOf(rooted), GcOldRegion), GcSurvivorRegion)
 
     let second = heap.minorCollect()
     assertValid(heap)
 
     testing.assert(heap.contains(rooted))
     testing.assertEq(second.promotedObjects, 1)
-    testing.assertEq(heap.generationOf(rooted) ?? -1, 1)
-    testing.assertEq(heap.ageOf(rooted) ?? -1, 2)
-    testing.assertEq(heap.regionOf(rooted) ?? GcEdenRegion, GcOldRegion)
+    testing.assertEq(intOr(heap.generationOf(rooted), -1), 1)
+    testing.assertEq(intOr(heap.ageOf(rooted), -1), 2)
+    testing.assertEq(regionOr(heap.regionOf(rooted), GcEdenRegion), GcOldRegion)
     testing.assertEq(heap.survivorObjectCount(), 0)
     testing.assertEq(heap.survivorBytes(), 0)
     testing.assertEq(heap.tenuredObjectCount(), 1)
@@ -783,8 +889,8 @@ fn testZeroSizedSurvivorSpacePromotesAllSurvivors() {
 
     testing.assert(heap.contains(rooted))
     testing.assertEq(stats.promotedObjects, 1)
-    testing.assertEq(heap.generationOf(rooted) ?? -1, 1)
-    testing.assertEq(heap.regionOf(rooted) ?? GcEdenRegion, GcOldRegion)
+    testing.assertEq(intOr(heap.generationOf(rooted), -1), 1)
+    testing.assertEq(regionOr(heap.regionOf(rooted), GcEdenRegion), GcOldRegion)
     testing.assertEq(heap.survivorObjectCount(), 0)
     testing.assertEq(heap.survivorBytes(), 0)
 }
@@ -795,8 +901,8 @@ fn testTenuredAllocationBypassesNurseryAndUsesOldBackend() {
     assertValid(heap)
 
     testing.assert(heap.contains(object))
-    testing.assertEq(heap.generationOf(object) ?? -1, 1)
-    testing.assertEq(heap.regionOf(object) ?? GcEdenRegion, GcOldRegion)
+    testing.assertEq(intOr(heap.generationOf(object), -1), 1)
+    testing.assertEq(regionOr(heap.regionOf(object), GcEdenRegion), GcOldRegion)
     testing.assertEq(heap.nurseryBytes(), 0)
     testing.assertEq(heap.oldBytes(), 24)
     testing.assertEq(heap.tenuredObjectCount(), 1)
@@ -811,7 +917,7 @@ fn testMinorPromotionUsesTenuredBackendAndReleasesNurserySlot() {
     let mut heap = newGcHeap(survivorSpaceGcConfig(0, 4))
     let rooted = heap.allocate(GcRecord, 16)
     testing.assert(heap.addRoot(rooted))
-    testing.assertEq(heap.addressOf(rooted) ?? -1, 0)
+    testing.assertEq(intOr(heap.addressOf(rooted), -1), 0)
     assertValid(heap)
 
     let stats = heap.minorCollect()
@@ -819,9 +925,9 @@ fn testMinorPromotionUsesTenuredBackendAndReleasesNurserySlot() {
 
     testing.assert(heap.contains(rooted))
     testing.assertEq(stats.promotedObjects, 1)
-    testing.assertEq(heap.generationOf(rooted) ?? -1, 1)
-    testing.assertEq(heap.regionOf(rooted) ?? GcEdenRegion, GcOldRegion)
-    testing.assertEq(heap.addressOf(rooted) ?? -1, 16)
+    testing.assertEq(intOr(heap.generationOf(rooted), -1), 1)
+    testing.assertEq(regionOr(heap.regionOf(rooted), GcEdenRegion), GcOldRegion)
+    testing.assertEq(intOr(heap.addressOf(rooted), -1), 16)
     testing.assertEq(heap.tenuredPromotedAllocationCount(), 1)
     testing.assertEq(heap.tenuredBumpAllocationCount(), 1)
     testing.assertEq(heap.tenuredFreeBlockCount(), 1)
@@ -839,9 +945,9 @@ fn testTenuredAllocationReusesPromotionFreeBlock() {
     let reused = heap.allocateTenured(GcArray, 8)
     assertValid(heap)
 
-    testing.assertEq(heap.addressOf(reused) ?? -1, 0)
-    testing.assertEq(heap.generationOf(reused) ?? -1, 1)
-    testing.assertEq(heap.regionOf(reused) ?? GcEdenRegion, GcOldRegion)
+    testing.assertEq(intOr(heap.addressOf(reused), -1), 0)
+    testing.assertEq(intOr(heap.generationOf(reused), -1), 1)
+    testing.assertEq(regionOr(heap.regionOf(reused), GcEdenRegion), GcOldRegion)
     testing.assertEq(heap.tenuredReuseAllocationCount(), 1)
     testing.assertEq(heap.tenuredDirectAllocationCount(), 1)
     testing.assertEq(heap.tenuredReusedBytes(), 8)
@@ -897,6 +1003,364 @@ fn testIncrementalWriteBarrierKeepsNewBlackToWhiteEdge() {
     testing.assertEq(heap.phaseNow(), GcIdle)
 }
 
+fn testIncrementalSchedulerRunsBudgetedSafepointSteps() {
+    let mut heap = newGcHeap(testGcConfig())
+    let root = heap.allocate(GcRecord, 16)
+    let child = heap.allocate(GcArray, 16)
+    let grandchild = heap.allocate(GcClosure, 16)
+    testing.assert(heap.addRoot(root))
+    testing.assert(heap.link(root, child))
+    testing.assert(heap.link(child, grandchild))
+    assertValid(heap)
+
+    let idle = heap.schedulerSafepoint("loop")
+    assertValid(heap)
+    testing.assertEq(idle.kind, "scheduler-idle")
+    testing.assertEq(heap.schedulerSafepointCount(), 1)
+    testing.assertEq(heap.schedulerCycleStartCount(), 0)
+
+    let mark = heap.schedulerSafepoint("loop")
+    assertValid(heap)
+    testing.assertEq(mark.kind, "incremental-mark")
+    testing.assertEq(mark.trigger, "scheduler.loop")
+    testing.assertEq(mark.markSteps, 1)
+    testing.assertEq(heap.phaseNow(), GcMarking)
+    testing.assertEq(heap.schedulerSafepointCount(), 2)
+    testing.assertEq(heap.schedulerStepCount(), 1)
+    testing.assertEq(heap.schedulerLastBudget(), 1)
+    testing.assertEq(heap.schedulerCycleStartCount(), 1)
+
+    let done = heap.finishIncremental()
+    assertValid(heap)
+    testing.assertEq(done.kind, "incremental-sweep")
+    testing.assertEq(heap.schedulerCycleCompleteCount(), 1)
+    testing.assert(heap.contains(root))
+    testing.assert(heap.contains(child))
+    testing.assert(heap.contains(grandchild))
+}
+
+fn testMutatorAssistStartsIncrementalCycleOnDebt() {
+    let mut heap = newGcHeap(testGcConfig())
+    let root = heap.allocate(GcRecord, 16)
+    let child = heap.allocate(GcArray, 16)
+    let grandchild = heap.allocate(GcClosure, 16)
+    testing.assert(heap.addRoot(root))
+    testing.assert(heap.link(root, child))
+    testing.assert(heap.link(child, grandchild))
+    assertValid(heap)
+
+    let idle = heap.mutatorAssist(16)
+    assertValid(heap)
+    testing.assertEq(idle.kind, "mutator-assist-idle")
+    testing.assertEq(heap.schedulerAllocationDebtBytes(), 16)
+    testing.assertEq(heap.schedulerMutatorAssistStepCount(), 0)
+
+    let mark = heap.mutatorAssist(16)
+    assertValid(heap)
+    testing.assertEq(mark.kind, "incremental-mark")
+    testing.assertEq(mark.markSteps, 1)
+    testing.assertEq(heap.schedulerAllocationDebtBytes(), 32)
+    testing.assertEq(heap.schedulerMutatorAssistStepCount(), 1)
+    testing.assertEq(heap.schedulerCycleStartCount(), 1)
+
+    let done = heap.finishIncremental()
+    assertValid(heap)
+    testing.assertEq(done.kind, "incremental-sweep")
+    testing.assertEq(heap.schedulerAllocationDebtBytes(), 0)
+    testing.assertEq(heap.schedulerCycleCompleteCount(), 1)
+}
+
+fn testMostlyConcurrentMarkKeepsLateMutationAlive() {
+    let mut heap = newGcHeap(testGcConfig())
+    let root = heap.allocate(GcRecord, 16)
+    let existing = heap.allocate(GcArray, 16)
+    let late = heap.allocate(GcClosure, 16)
+    testing.assert(heap.addRoot(root))
+    testing.assert(heap.link(root, existing))
+    assertValid(heap)
+
+    testing.assert(heap.startMostlyConcurrentMark())
+    assertValid(heap)
+    let slice = heap.stepMostlyConcurrentMark()
+    assertValid(heap)
+    testing.assertEq(slice.kind, "concurrent-mark")
+    testing.assertEq(slice.markSteps, 1)
+    testing.assertEq(heap.concurrentMarkActive(), true)
+    testing.assertEq(heap.concurrentMarkSliceCount(), 1)
+    testing.assertEq(heap.concurrentMarkStepCount(), 1)
+    testing.assertEq(heap.concurrentSnapshotRootCount(), 1)
+
+    testing.assert(heap.link(root, late))
+    assertValid(heap)
+    testing.assertEq(heap.barrierIncrementalShadeCount(), 1)
+
+    let done = heap.finishMostlyConcurrentMark()
+    assertValid(heap)
+    testing.assertEq(done.kind, "concurrent-sweep")
+    testing.assertEq(heap.concurrentMarkActive(), false)
+    testing.assertEq(heap.concurrentRemarkRootCount(), 1)
+    testing.assertEq(heap.concurrentBarrierShadeDelta(), 1)
+    testing.assertEq(heap.concurrentMutatorEpoch(), 1)
+    testing.assert(heap.concurrentFinalRemarkStepCount() > 0)
+    testing.assert(heap.contains(root))
+    testing.assert(heap.contains(existing))
+    testing.assert(heap.contains(late))
+}
+
+fn testPolicyProfilesTuneMechanismKnobs() {
+    let latency = gcConfigForProfile(GcLatencyFirstProfile)
+    let throughput = gcConfigForProfile(GcThroughputFirstProfile)
+    let memory = gcConfigForProfile(GcMemoryTightProfile)
+    let heap = newGcHeap(memory)
+    assertValid(heap)
+
+    testing.assertEq(gcPolicyProfileName(GcLatencyFirstProfile), "latency-first")
+    testing.assert(latency.incrementalBudget < throughput.incrementalBudget)
+    testing.assert(latency.schedulerSafepointInterval < throughput.schedulerSafepointInterval)
+    testing.assert(memory.nurseryLimit < throughput.nurseryLimit)
+    testing.assert(memory.evacuationThresholdPercent > latency.evacuationThresholdPercent)
+    testing.assertEq(heap.evacuationThresholdPercent(), 80)
+    testing.assert(heap.shouldEvacuateRegion(80))
+    testing.assert(!(heap.shouldEvacuateRegion(81)))
+}
+
+fn testDiagnosticsSnapshotAndHeapDumpExposeGraph() {
+    let mut heap = newGcHeap(testGcConfig())
+    let root = heap.allocate(GcRecord, 16)
+    let child = heap.allocate(GcArray, 16)
+    let dead = heap.allocate(GcBytes, 16)
+    testing.assert(heap.addRoot(root))
+    testing.assert(heap.link(root, child))
+    assertValid(heap)
+
+    let stats = heap.majorCollect()
+    assertValid(heap)
+    testing.assertEq(stats.kind, "major")
+    testing.assert(!(heap.contains(dead)))
+
+    let snapshot = heap.diagnosticsSnapshot()
+    testing.assert(snapshot.heapValid)
+    testing.assertEq(snapshot.objectCount, 2)
+    testing.assertEq(snapshot.rootCount, 1)
+    testing.assertEq(snapshot.liveBytes, 32)
+    testing.assertEq(snapshot.lastKind, "major")
+    testing.assertEq(snapshot.lastTrigger, "manual")
+    testing.assert(snapshot.lastPauseUnits > 0)
+    testing.assertEq(snapshot.lastReclaimedObjects, 1)
+    testing.assertEq(snapshot.validationMessage, "ok")
+
+    let dump = heap.heapDump()
+    testing.assertEq(dump.objectCount, 2)
+    testing.assertEq(dump.edgeCount, 1)
+    testing.assertEq(dump.rootCount, 1)
+    testing.assertEq(dump.roots[0], root)
+    testing.assertEq(dump.objects[0].id, root)
+    testing.assertEq(dump.objects[0].kind, GcRecord)
+    testing.assertEq(dump.objects[0].refCount, 1)
+    testing.assert(dump.objects[0].rooted)
+    testing.assertEq(dump.edges[0].fromId, root)
+    testing.assertEq(dump.edges[0].toId, child)
+
+    match heap.heapObjectDebugLine(root) {
+        Some(line) -> {
+            testing.assertEq(
+                line,
+                "object id={root} kind=record region=old gen=1 size=16 addr=0 refs=[{child}] root=true pinned=false",
+            )
+        },
+        None -> testing.fail("missing heap object debug line"),
+    }
+    let graph = heap.objectGraphDebug()
+    testing.assert(graph != "")
+    testing.assertEq(tracePhaseName(snapshot.phase), "idle")
+}
+
+fn testStressModesCanDisableAndForceCompaction() {
+    let mut heap = newGcHeap(testGcConfig())
+    let dead = heap.allocate(GcBytes, 20)
+    let live = heap.allocate(GcRecord, 20)
+    testing.assert(heap.addRoot(live))
+    assertValid(heap)
+
+    let noCompact = heap.runStressMode(GcStressNoCompaction)
+    assertValid(heap)
+    testing.assertEq(noCompact.kind, "major-no-compact")
+    testing.assertEq(noCompact.trigger, "stress.no-compaction")
+    testing.assertEq(noCompact.compactedObjects, 0)
+    testing.assert(!(heap.contains(dead)))
+    testing.assertEq(intOr(heap.addressOf(live), -1), 20)
+    testing.assert(heap.fragmentedBytes() > 0)
+    testing.assertEq(heap.forwardingEntryCount(), 0)
+
+    let compact = heap.runStressMode(GcStressAlwaysCompact)
+    assertValid(heap)
+    testing.assertEq(compact.kind, "major")
+    testing.assertEq(compact.trigger, "stress.always-compact")
+    testing.assertEq(compact.compactedObjects, 1)
+    testing.assertEq(intOr(heap.addressOf(live), -1), 0)
+    testing.assertEq(heap.fragmentedBytes(), 0)
+    testing.assertEq(gcStressModeName(GcStressEveryAllocationMinor), "every-allocation-minor")
+}
+
+fn testHardeningReportAuditsBarriersAndBudgets() {
+    let mut heap = newGcHeap(testGcConfig())
+    let parent = heap.allocate(GcRecord, 16)
+    let child = heap.allocate(GcArray, 16)
+    testing.assert(heap.addRoot(parent))
+    match heap.lowerStructFieldStore(parent, 0, "child", child) {
+        Some(_) -> {},
+        None -> testing.fail("lowered field store failed"),
+    }
+    let _ = heap.majorCollect()
+    assertValid(heap)
+
+    let audit = heap.barrierAudit()
+    testing.assert(audit.passed)
+    testing.assertEq(audit.loweredSlots, 1)
+    testing.assertEq(audit.invalidObjectReferences, 0)
+    testing.assertEq(audit.missingOwnerRefs, 0)
+
+    let thresholds = gcPerformanceThresholdsForProfile(GcThroughputFirstProfile)
+    let performance = heap.performanceReport(thresholds)
+    testing.assert(performance.passed)
+    testing.assert(performance.pauseUnits > 0)
+
+    let report = heap.hardeningReport(thresholds)
+    testing.assert(report.passed)
+    testing.assert(report.heapValid)
+    testing.assert(report.barrierAuditPassed)
+    testing.assert(report.performancePassed)
+    testing.assertEq(report.runtimeContractVersion, 1)
+    testing.assertEq(report.loweredSlots, 1)
+
+    let contract = heap.runtimeContract()
+    testing.assert(contract.oomReturnsResult)
+    testing.assert(contract.abortSkipsGc)
+    testing.assert(contract.deferRootsRequireStackMap)
+    testing.assert(contract.ffiPinsUsePinBit)
+    testing.assert(contract.refSameUsesStableIdentity)
+}
+
+fn testLlvmHandleTablePreservesIdentityAcrossCompaction() {
+    let mut heap = newGcHeap(testGcConfig())
+    let dead = heap.allocate(GcBytes, 16)
+    let handle = heap.allocateLlvmHandle(GcRecord, 24, "llvm.emitStructLit")
+    let objectId = intOr(heap.llvmHandleObject(handle), -1)
+    let beforeAddress = intOr(heap.addressOf(objectId), -1)
+    let rootRef = intOr(heap.bindLlvmRootRef(handle, GcLlvmStackRoot, "entry.stack"), -1)
+    assertValid(heap)
+
+    testing.assert(rootRef > 0)
+    testing.assertEq(heap.llvmHandleCount(), 1)
+    testing.assertEq(heap.llvmRootRefCount(), 1)
+    testing.assertEq(heap.llvmRuntimeRootCount(), 1)
+
+    let stats = heap.majorCollect()
+    assertValid(heap)
+    let afterAddress = intOr(heap.addressOf(objectId), -1)
+
+    testing.assert(!(heap.contains(dead)))
+    testing.assert(heap.contains(objectId))
+    testing.assert(afterAddress < beforeAddress)
+    testing.assert(heap.llvmHandleSame(handle, handle))
+    testing.assertEq(heap.lastRemapRootSlotsRemapped(), 1)
+    testing.assertEq(stats.compactedObjects, 1)
+
+    let snapshot = heap.llvmBridgeSnapshot()
+    testing.assertEq(snapshot.backend, GcLlvmBackend)
+    testing.assertEq(snapshot.handleCount, 1)
+    testing.assertEq(snapshot.liveHandleCount, 1)
+    testing.assertEq(snapshot.liveRootRefCount, 1)
+    testing.assertEq(snapshot.runtimeRootCount, 1)
+    testing.assertEq(snapshot.loweredAllocations, 1)
+    testing.assertEq(snapshot.identityChecks, 1)
+
+    match heap.lastLoweredAllocationTrace() {
+        Some(trace) -> {
+            testing.assertEq(trace.backend, GcLlvmBackend)
+            testing.assertEq(trace.handle, handle)
+            testing.assertEq(trace.objectId, objectId)
+            testing.assertEq(trace.kind, GcRecord)
+            testing.assertEq(trace.size, 24)
+            testing.assertEq(trace.allocationSite, "llvm.emitStructLit")
+            testing.assert(!(trace.usedThreadLocalBuffer))
+        },
+        None -> testing.fail("missing lowered allocation trace"),
+    }
+}
+
+fn testLlvmRuntimeRootBridgeDropsReleasedRoots() {
+    let mut heap = newGcHeap(testGcConfig())
+    let handle = heap.allocateLlvmHandle(GcRecord, 24, "llvm.emitCall")
+    let objectId = intOr(heap.llvmHandleObject(handle), -1)
+    let rootRef = intOr(heap.bindLlvmRootRef(handle, GcLlvmStackRoot, "call.root"), -1)
+    assertValid(heap)
+
+    let _ = heap.majorCollect()
+    assertValid(heap)
+    testing.assert(heap.contains(objectId))
+
+    testing.assert(heap.releaseLlvmRootRef(rootRef))
+    assertValid(heap)
+    testing.assertEq(heap.llvmLiveRootRefCount(), 0)
+    testing.assertEq(heap.llvmRuntimeRootCount(), 0)
+
+    let _ = heap.majorCollect()
+    assertValid(heap)
+    testing.assert(!(heap.contains(objectId)))
+    testing.assertEq(intOr(heap.loadLlvmHandle(handle), -1), -1)
+
+    let snapshot = heap.llvmBridgeSnapshot()
+    testing.assertEq(snapshot.rootRefCount, 1)
+    testing.assertEq(snapshot.liveHandleCount, 0)
+    testing.assertEq(snapshot.staleHandleLoads, 1)
+}
+
+fn testLoweredLlvmStoreTraceCallsWriteBarrier() {
+    let mut heap = newGcHeap(testGcConfig())
+    let ownerHandle = heap.allocateLlvmHandle(GcRecord, 16, "llvm.owner")
+    let childHandle = heap.allocateLlvmHandle(GcArray, 16, "llvm.child")
+    let ownerObject = intOr(heap.llvmHandleObject(ownerHandle), -1)
+    let childObject = intOr(heap.llvmHandleObject(childHandle), -1)
+    testing.assert(intOr(heap.bindLlvmRootRef(ownerHandle, GcLlvmStackRoot, "owner.root"), -1) > 0)
+    assertValid(heap)
+
+    match heap.lowerLlvmStore(ownerHandle, 0, "child", childHandle) {
+        Some(trace) -> {
+            testing.assertEq(trace.backend, GcLlvmBackend)
+            testing.assertEq(trace.ownerHandle, ownerHandle)
+            testing.assertEq(trace.newHandle, childHandle)
+            testing.assertEq(trace.ownerObjectId, ownerObject)
+            testing.assertEq(trace.newObjectId, childObject)
+            testing.assertEq(trace.oldObjectId, -1)
+            testing.assertEq(trace.slot, 0)
+            testing.assertEq(trace.name, "child")
+            testing.assert(trace.postWriteCalled)
+        },
+        None -> testing.fail("lowered llvm store failed"),
+    }
+    assertValid(heap)
+
+    testing.assertEq(intOr(heap.loweredObjectFieldValue(ownerObject, 0), -1), childObject)
+    testing.assertEq(heap.barrierPostWriteCallCount(), 1)
+    let snapshot = heap.llvmBridgeSnapshot()
+    testing.assertEq(snapshot.loweredStores, 1)
+    testing.assertEq(snapshot.handleStores, 1)
+
+    let _ = heap.majorCollect()
+    assertValid(heap)
+    testing.assert(heap.contains(ownerObject))
+    testing.assert(heap.contains(childObject))
+
+    match heap.lastLoweredStoreTrace() {
+        Some(trace) -> {
+            testing.assertEq(trace.ownerHandle, ownerHandle)
+            testing.assertEq(trace.newHandle, childHandle)
+        },
+        None -> testing.fail("missing lowered store trace"),
+    }
+}
+
 fn testMajorCompactionClosesHoles() {
     let mut heap = newGcHeap(testGcConfig())
     let first = heap.allocate(GcRecord, 10)
@@ -906,11 +1370,11 @@ fn testMajorCompactionClosesHoles() {
     testing.assert(heap.addRoot(first))
     testing.assert(heap.addRoot(last))
     assertValid(heap)
-    let beforeLast = heap.addressOf(last) ?? -1
+    let beforeLast = intOr(heap.addressOf(last), -1)
 
     let stats = heap.majorCollect()
     assertValid(heap)
-    let afterLast = heap.addressOf(last) ?? -1
+    let afterLast = intOr(heap.addressOf(last), -1)
 
     testing.assert(!(heap.contains(dead)))
     testing.assert(afterLast < beforeLast)
@@ -918,6 +1382,79 @@ fn testMajorCompactionClosesHoles() {
     testing.assertEq(stats.reclaimedObjects, 1)
     testing.assertEq(stats.compactedObjects, 1)
     testing.assertEq(heap.fragmentedBytes(), 0)
+}
+
+fn testFullMarkCollectorRecordsWorkQueueAndTypeScans() {
+    let mut heap = newGcHeap(testGcConfig())
+    let root = heap.allocate(GcRecord, 24)
+    let child = heap.allocate(GcArray, 16)
+    let grandchild = heap.allocate(GcClosure, 16)
+    let dead = heap.allocate(GcBytes, 16)
+    testing.assert(heap.addRoot(root))
+    testing.assert(heap.link(root, child))
+    testing.assert(heap.link(child, grandchild))
+    assertValid(heap)
+
+    let stats = heap.majorCollect()
+    assertValid(heap)
+
+    testing.assert(heap.contains(root))
+    testing.assert(heap.contains(child))
+    testing.assert(heap.contains(grandchild))
+    testing.assert(!(heap.contains(dead)))
+    testing.assertEq(stats.markSteps, 3)
+    testing.assertEq(stats.reclaimedObjects, 1)
+    testing.assertEq(heap.lastFullMarkObjectsScanned(), 3)
+    testing.assertEq(heap.lastFullMarkPointerSlotsScanned(), 2)
+    testing.assertEq(heap.lastFullMarkSweptObjects(), 1)
+    testing.assertEq(intOr(heap.objectPointerSlotCount(root), -1), 1)
+    testing.assertEq(intOr(heap.objectScalarBytes(root), -1), 16)
+}
+
+fn testEvacuationRecordsForwardingForMovedObjects() {
+    let mut heap = newGcHeap(testGcConfig())
+    let dead = heap.allocate(GcBytes, 16)
+    let first = heap.allocate(GcRecord, 20)
+    let second = heap.allocate(GcArray, 12)
+    testing.assert(heap.addRoot(first))
+    testing.assert(heap.addRoot(second))
+    assertValid(heap)
+
+    let stats = heap.majorCollect()
+    assertValid(heap)
+
+    testing.assert(!(heap.contains(dead)))
+    testing.assertEq(stats.compactedObjects, 2)
+    testing.assertEq(heap.forwardingEntryCount(), 2)
+    testing.assertEq(intOr(heap.forwardedFromAddress(first), -1), 16)
+    testing.assertEq(intOr(heap.forwardedToAddress(first), -1), 0)
+    testing.assertEq(intOr(heap.forwardedFromAddress(second), -1), 36)
+    testing.assertEq(intOr(heap.forwardedToAddress(second), -1), 20)
+    testing.assertEq(heap.lastEvacuationForwardedObjects(), 2)
+    testing.assertEq(heap.lastEvacuationBytesCopied(), 32)
+    testing.assert(heap.lastRemapVerified())
+}
+
+fn testRootAndObjectRemapTraceCoversForwardedHandles() {
+    let mut heap = newGcHeap(testGcConfig())
+    let dead = heap.allocate(GcBytes, 16)
+    let root = heap.allocate(GcRecord, 20)
+    let child = heap.allocate(GcArray, 12)
+    testing.assert(heap.addRoot(root))
+    testing.assert(heap.link(root, child))
+    assertValid(heap)
+
+    let stats = heap.majorCollect()
+    assertValid(heap)
+
+    testing.assert(!(heap.contains(dead)))
+    testing.assertEq(stats.compactedObjects, 2)
+    testing.assertEq(heap.lastRemapRootSlotsRemapped(), 1)
+    testing.assertEq(heap.lastRemapObjectRefsRemapped(), 1)
+    testing.assertEq(heap.lastRemapLoweredSlotsRemapped(), 0)
+    testing.assert(heap.lastRemapVerified())
+    testing.assertEq(intOr(heap.refCount(root), -1), 1)
+    testing.assert(heap.contains(child))
 }
 
 fn testPinnedObjectLeavesCompactionHoleUntilUnpinned() {
@@ -935,23 +1472,24 @@ fn testPinnedObjectLeavesCompactionHoleUntilUnpinned() {
     assertValid(heap)
 
     testing.assert(!(heap.contains(dead)))
-    testing.assertEq(heap.addressOf(pinned) ?? -1, 20)
-    testing.assertEq(heap.addressOf(tail) ?? -1, 40)
-    testing.assertEq(heap.regionOf(pinned) ?? GcEdenRegion, GcPinnedRegion)
+    testing.assertEq(intOr(heap.addressOf(pinned), -1), 20)
+    testing.assertEq(intOr(heap.addressOf(tail), -1), 40)
+    testing.assertEq(regionOr(heap.regionOf(pinned), GcEdenRegion), GcPinnedRegion)
     testing.assertEq(heap.pinnedObjectCount(), 1)
     testing.assertEq(first.reclaimedObjects, 1)
     testing.assertEq(first.afterFragmentedBytes, 20)
     testing.assertEq(heap.fragmentedBytes(), 20)
     testing.assertEq(heap.tenuredFreeBytes(), 20)
+    testing.assertEq(heap.lastEvacuationPinnedSkipped(), 1)
 
     testing.assert(heap.unpin(pinned))
     assertValid(heap)
     let second = heap.majorCollect()
     assertValid(heap)
 
-    testing.assertEq(heap.regionOf(pinned) ?? GcEdenRegion, GcOldRegion)
-    testing.assertEq(heap.addressOf(pinned) ?? -1, 0)
-    testing.assertEq(heap.addressOf(tail) ?? -1, 20)
+    testing.assertEq(regionOr(heap.regionOf(pinned), GcEdenRegion), GcOldRegion)
+    testing.assertEq(intOr(heap.addressOf(pinned), -1), 0)
+    testing.assertEq(intOr(heap.addressOf(tail), -1), 20)
     testing.assertEq(heap.pinnedObjectCount(), 0)
     testing.assertEq(second.afterFragmentedBytes, 0)
     testing.assertEq(second.compactedObjects, 2)
@@ -978,9 +1516,9 @@ fn testTenuredAllocationReusesPinnedCompactionHole() {
     let old = heap.allocateTenured(GcClosure, 12)
     assertValid(heap)
 
-    testing.assertEq(heap.addressOf(old) ?? -1, 0)
-    testing.assertEq(heap.generationOf(old) ?? -1, 1)
-    testing.assertEq(heap.regionOf(old) ?? GcEdenRegion, GcOldRegion)
+    testing.assertEq(intOr(heap.addressOf(old), -1), 0)
+    testing.assertEq(intOr(heap.generationOf(old), -1), 1)
+    testing.assertEq(regionOr(heap.regionOf(old), GcEdenRegion), GcOldRegion)
     testing.assertEq(heap.tenuredReuseAllocationCount(), 1)
     testing.assertEq(heap.tenuredFreeBytes(), 8)
     testing.assertEq(heap.fragmentedBytes(), 8)
@@ -996,6 +1534,11 @@ fn testTryAllocateReportsOutOfMemoryAfterFullCollection() {
             incrementalBudget: 4,
             largeObjectThreshold: 512,
             tlabSize: 64,
+            cardSize: 64,
+            schedulerSafepointInterval: 2,
+            mutatorAssistBytes: 32,
+            concurrentMarkBudget: 1,
+            evacuationThresholdPercent: 50,
         },
     )
     let rooted = heap.allocate(GcRecord, 32)
@@ -1028,14 +1571,14 @@ fn testTlabFastPathAllocatesFromThreadLocalBuffer() {
     testing.assert(heap.contains(first))
     testing.assert(heap.contains(second))
     testing.assert(heap.contains(third))
-    testing.assertEq(heap.addressOf(first) ?? -1, 0)
-    testing.assertEq(heap.addressOf(second) ?? -1, 16)
-    testing.assertEq(heap.addressOf(third) ?? -1, 32)
+    testing.assertEq(intOr(heap.addressOf(first), -1), 0)
+    testing.assertEq(intOr(heap.addressOf(second), -1), 16)
+    testing.assertEq(intOr(heap.addressOf(third), -1), 32)
     testing.assertEq(heap.tlabCount(), 1)
     testing.assertEq(heap.tlabRefillCount(), 1)
     testing.assertEq(heap.tlabSlowAllocationCount(), 1)
     testing.assertEq(heap.tlabFastAllocationCount(), 3)
-    testing.assertEq(heap.tlabRemaining(1) ?? -1, 16)
+    testing.assertEq(intOr(heap.tlabRemaining(1), -1), 16)
     match heap.lastCollectionStats() {
         Some(_) -> testing.fail("tlab fast allocation unexpectedly ran collection"),
         None -> {},
@@ -1052,12 +1595,17 @@ fn testTlabRefillAccountsWasteWithoutCollecting() {
             incrementalBudget: 1,
             largeObjectThreshold: 512,
             tlabSize: 64,
+            cardSize: 64,
+            schedulerSafepointInterval: 2,
+            mutatorAssistBytes: 32,
+            concurrentMarkBudget: 1,
+            evacuationThresholdPercent: 50,
         },
     )
 
     let first = heap.allocateThread(1, GcRecord, 16)
     let second = heap.allocateThread(1, GcArray, 40)
-    testing.assertEq(heap.tlabRemaining(1) ?? -1, 8)
+    testing.assertEq(intOr(heap.tlabRemaining(1), -1), 8)
 
     let third = heap.allocateThread(1, GcClosure, 16)
     assertValid(heap)
@@ -1065,14 +1613,14 @@ fn testTlabRefillAccountsWasteWithoutCollecting() {
     testing.assert(heap.contains(first))
     testing.assert(heap.contains(second))
     testing.assert(heap.contains(third))
-    testing.assertEq(heap.addressOf(first) ?? -1, 0)
-    testing.assertEq(heap.addressOf(second) ?? -1, 16)
-    testing.assertEq(heap.addressOf(third) ?? -1, 64)
+    testing.assertEq(intOr(heap.addressOf(first), -1), 0)
+    testing.assertEq(intOr(heap.addressOf(second), -1), 16)
+    testing.assertEq(intOr(heap.addressOf(third), -1), 64)
     testing.assertEq(heap.tlabRefillCount(), 2)
     testing.assertEq(heap.tlabSlowAllocationCount(), 2)
     testing.assertEq(heap.tlabFastAllocationCount(), 3)
     testing.assertEq(heap.tlabWasteBytes(), 8)
-    testing.assertEq(heap.tlabRemaining(1) ?? -1, 48)
+    testing.assertEq(intOr(heap.tlabRemaining(1), -1), 48)
     match heap.lastCollectionStats() {
         Some(_) -> testing.fail("tlab refill unexpectedly ran collection"),
         None -> {},
@@ -1089,6 +1637,11 @@ fn testTlabRefillCanTriggerNurseryCollection() {
             incrementalBudget: 1,
             largeObjectThreshold: 512,
             tlabSize: 64,
+            cardSize: 64,
+            schedulerSafepointInterval: 2,
+            mutatorAssistBytes: 32,
+            concurrentMarkBudget: 1,
+            evacuationThresholdPercent: 50,
         },
     )
 
@@ -1096,7 +1649,7 @@ fn testTlabRefillCanTriggerNurseryCollection() {
     let deadB = heap.allocateThread(1, GcArray, 40)
     testing.assert(heap.contains(deadA))
     testing.assert(heap.contains(deadB))
-    testing.assertEq(heap.tlabRemaining(1) ?? -1, 8)
+    testing.assertEq(intOr(heap.tlabRemaining(1), -1), 8)
 
     let survivor = heap.allocateThread(1, GcClosure, 16)
     assertValid(heap)
@@ -1106,7 +1659,7 @@ fn testTlabRefillCanTriggerNurseryCollection() {
     testing.assert(heap.contains(survivor))
     testing.assertEq(heap.tlabRefillCount(), 2)
     testing.assertEq(heap.tlabWasteBytes(), 8)
-    testing.assertEq(heap.tlabRemaining(1) ?? -1, 48)
+    testing.assertEq(intOr(heap.tlabRemaining(1), -1), 48)
     match heap.lastCollectionStats() {
         Some(stats) -> {
             testing.assertEq(stats.kind, "minor")
@@ -1121,14 +1674,14 @@ fn testCollectionRetiresActiveTlabAndAccountsWaste() {
     let mut heap = newGcHeap(testGcConfig())
     let rooted = heap.allocateThread(1, GcRecord, 16)
     testing.assert(heap.addRoot(rooted))
-    testing.assertEq(heap.tlabRemaining(1) ?? -1, 48)
+    testing.assertEq(intOr(heap.tlabRemaining(1), -1), 48)
 
     let stats = heap.minorCollect()
     assertValid(heap)
 
     testing.assert(heap.contains(rooted))
     testing.assertEq(stats.kind, "minor")
-    testing.assertEq(heap.tlabRemaining(1) ?? -1, 0)
+    testing.assertEq(intOr(heap.tlabRemaining(1), -1), 0)
     testing.assertEq(heap.tlabWasteBytes(), 48)
 }
 
@@ -1142,6 +1695,11 @@ fn testLargeThreadAllocationBypassesTlab() {
             incrementalBudget: 1,
             largeObjectThreshold: 32,
             tlabSize: 64,
+            cardSize: 64,
+            schedulerSafepointInterval: 2,
+            mutatorAssistBytes: 32,
+            concurrentMarkBudget: 1,
+            evacuationThresholdPercent: 50,
         },
     )
 
@@ -1149,8 +1707,8 @@ fn testLargeThreadAllocationBypassesTlab() {
     assertValid(heap)
 
     testing.assert(heap.contains(large))
-    testing.assert(heap.isLarge(large) ?? false)
-    testing.assertEq(heap.regionOf(large) ?? GcEdenRegion, GcHumongousRegion)
+    testing.assert(heap.isLargeObject(large))
+    testing.assertEq(regionOr(heap.regionOf(large), GcEdenRegion), GcHumongousRegion)
     testing.assertEq(heap.tlabCount(), 0)
     testing.assertEq(heap.tlabFastAllocationCount(), 0)
 }
@@ -1174,7 +1732,7 @@ fn testGlobalRootKeepsObjectAcrossCollections() {
     testing.assertEq(minor.reclaimedObjects, 1)
     testing.assertEq(heap.globalRootCount(), 1)
     testing.assertEq(heap.globalObjectRootCount(), 1)
-    testing.assertEq(heap.globalRootObject("app", "cache") ?? -1, global)
+    testing.assertEq(intOr(heap.globalRootObject("app", "cache"), -1), global)
 
     testing.assert(heap.removeGlobalRoot("app", "cache"))
     let major = heap.majorCollect()
@@ -1199,13 +1757,16 @@ fn testPartiallyInitializedGlobalSurvivesCollectionUntilPoisoned() {
     testing.assert(heap.contains(table))
     testing.assertEq(first.reclaimedObjects, 0)
     testing.assertEq(
-        heap.globalRootState("pkg.init", "TABLE") ?? GcGlobalPoisoned,
+        globalStateOr(heap.globalRootState("pkg.init", "TABLE"), GcGlobalPoisoned),
         GcGlobalInitializing,
     )
 
     testing.assert(heap.finishGlobalInit("pkg.init", "TABLE"))
     assertValid(heap)
-    testing.assertEq(heap.globalRootState("pkg.init", "TABLE") ?? GcGlobalPoisoned, GcGlobalReady)
+    testing.assertEq(
+        globalStateOr(heap.globalRootState("pkg.init", "TABLE"), GcGlobalPoisoned),
+        GcGlobalReady,
+    )
 
     testing.assert(heap.poisonGlobalRoot("pkg.init", "TABLE"))
     assertValid(heap)
@@ -1215,7 +1776,7 @@ fn testPartiallyInitializedGlobalSurvivesCollectionUntilPoisoned() {
     testing.assert(!(heap.contains(table)))
     testing.assertEq(second.reclaimedObjects, 1)
     testing.assertEq(
-        heap.globalRootState("pkg.init", "TABLE") ?? GcGlobalDeclared,
+        globalStateOr(heap.globalRootState("pkg.init", "TABLE"), GcGlobalDeclared),
         GcGlobalPoisoned,
     )
     testing.assertEq(heap.globalObjectRootCount(), 0)
@@ -1242,7 +1803,7 @@ fn testGlobalRootLifecycleRejectsInvalidTransitions() {
     testing.assertEq(heap.globalRootCount(), 1)
     testing.assertEq(heap.globalObjectRootCount(), 0)
     testing.assertEq(
-        heap.globalRootState("pkg.config", "stable") ?? GcGlobalDeclared,
+        globalStateOr(heap.globalRootState("pkg.config", "stable"), GcGlobalDeclared),
         GcGlobalPoisoned,
     )
 }
@@ -1291,7 +1852,7 @@ fn testGlobalRootAddedDuringIncrementalMarkingIsShaded() {
     testing.assert(heap.contains(root))
     testing.assert(heap.contains(existing))
     testing.assert(heap.contains(lateGlobal))
-    testing.assertEq(heap.globalRootObject("late.module", "singleton") ?? -1, lateGlobal)
+    testing.assertEq(intOr(heap.globalRootObject("late.module", "singleton"), -1), lateGlobal)
 }
 
 fn testClosureEnvironmentKeepsCapturedObjectsAlive() {
@@ -1453,6 +2014,122 @@ fn testAsyncFrameAddedDuringIncrementalMarkingIsShaded() {
     testing.assert(heap.contains(payload))
 }
 
+fn testRuntimeFrameSlotStoreLoweringUsesRuntimeFrameBarrier() {
+    let mut heap = newGcHeap(testGcConfig())
+    let frame = heap.allocate(GcRuntimeFrame, 32)
+    testing.assert(heap.addRoot(frame))
+    let _ = heap.majorCollect()
+    assertValid(heap)
+    testing.assertEq(intOr(heap.generationOf(frame), -1), 1)
+
+    let payload = heap.allocate(GcRecord, 16)
+    match heap.lowerRuntimeFrameSlotStore(frame, 0, "spill.payload", payload) {
+        Some(event) -> {
+            testing.assertEq(event.kind, GcRuntimeFrameSlotStore)
+            testing.assertEq(event.ownerId, frame)
+            testing.assertEq(event.slot, 0)
+            testing.assertEq(event.name, "spill.payload")
+            testing.assertEq(event.oldValue, -1)
+            testing.assertEq(event.newValue, payload)
+            testing.assertEq(event.barrierSlotKind, GcBarrierRuntimeFrame)
+            testing.assert(event.postWriteCalled)
+        },
+        None -> testing.fail("runtime frame slot store lowering failed"),
+    }
+    assertValid(heap)
+
+    testing.assertEq(
+        intOr(heap.loweredPointerSlotValue(GcRuntimeFrameSlotStore, frame, 0), -1),
+        payload,
+    )
+    testing.assertEq(intOr(heap.refCount(frame), -1), 1)
+    testing.assertEq(heap.rememberedCount(), 1)
+    testing.assertEq(heap.barrierPostWriteCallCount(), 1)
+    testing.assertEq(heap.barrierRememberedSetWriteCount(), 1)
+}
+
+fn testAsyncFrameRootStoreLoweringShadesLateRoot() {
+    let mut heap = newGcHeap(testGcConfig())
+    let frame = heap.allocate(GcRuntimeFrame, 32)
+    let anchor = heap.allocate(GcRecord, 16)
+    match heap.lowerRuntimeFrameSlotStore(frame, 0, "spill.anchor", anchor) {
+        Some(_) -> {},
+        None -> testing.fail("runtime frame anchor store lowering failed"),
+    }
+    let roots: List<Int> = []
+    testing.assert(heap.suspendAsyncFrame(77, "task.await", 3, frame, roots))
+    assertValid(heap)
+
+    heap.startIncrementalMajor()
+    assertValid(heap)
+    let markStats = heap.stepIncremental()
+    assertValid(heap)
+    testing.assertEq(markStats.kind, "incremental-mark")
+    testing.assertEq(heap.phaseNow(), GcMarking)
+
+    let late = heap.allocate(GcClosure, 24)
+    match heap.lowerAsyncFrameRootStore(77, 2, "await.payload", late) {
+        Some(event) -> {
+            testing.assertEq(event.kind, GcAsyncFrameRootStore)
+            testing.assertEq(event.ownerId, frame)
+            testing.assertEq(event.slot, 2)
+            testing.assertEq(event.name, "await.payload")
+            testing.assertEq(event.barrierSlotKind, GcBarrierAsyncFrameRoot)
+            testing.assert(event.postWriteCalled)
+        },
+        None -> testing.fail("async frame root store lowering failed"),
+    }
+    assertValid(heap)
+    testing.assertEq(heap.asyncFrameRootCount(), 2)
+    testing.assertEq(intOr(heap.loweredPointerSlotValue(GcAsyncFrameRootStore, frame, 2), -1), late)
+    testing.assertEq(heap.barrierIncrementalShadeCount(), 1)
+
+    let done = heap.finishIncremental()
+    assertValid(heap)
+    testing.assertEq(done.kind, "incremental-sweep")
+    testing.assert(heap.contains(frame))
+    testing.assert(heap.contains(late))
+}
+
+fn testAsyncFrameRootOverwriteDropsOldSnapshotRoot() {
+    let mut heap = newGcHeap(testGcConfig())
+    let frame = heap.allocate(GcRuntimeFrame, 32)
+    let first = heap.allocate(GcRecord, 16)
+    let second = heap.allocate(GcArray, 16)
+    let roots: List<Int> = []
+    testing.assert(heap.suspendAsyncFrame(78, "task.replace", 4, frame, roots))
+
+    match heap.lowerAsyncFrameRootStore(78, 1, "root.value", first) {
+        Some(_) -> {},
+        None -> testing.fail("initial async frame root lowering failed"),
+    }
+    match heap.lowerAsyncFrameRootStore(78, 1, "root.value", second) {
+        Some(event) -> {
+            testing.assertEq(event.oldValue, first)
+            testing.assertEq(event.newValue, second)
+            testing.assert(event.preWriteCalled)
+            testing.assert(event.postWriteCalled)
+        },
+        None -> testing.fail("async frame root overwrite lowering failed"),
+    }
+    assertValid(heap)
+
+    testing.assertEq(heap.asyncFrameRootCount(), 2)
+    testing.assertEq(
+        intOr(heap.loweredPointerSlotValue(GcAsyncFrameRootStore, frame, 1), -1),
+        second,
+    )
+    testing.assertEq(heap.barrierPreWriteCallCount(), 1)
+    testing.assertEq(heap.barrierPostWriteCallCount(), 2)
+
+    let stats = heap.majorCollect()
+    assertValid(heap)
+    testing.assert(heap.contains(frame))
+    testing.assert(!(heap.contains(first)))
+    testing.assert(heap.contains(second))
+    testing.assertEq(stats.reclaimedObjects, 1)
+}
+
 fn testSafepointPlanValidatesPreciseLiveRoots() {
     let callRoots: List<GcLiveRootSlot> = [
         gcRootSlot(0, GcLocalRootSlot, "payload"),
@@ -1559,9 +2236,9 @@ fn testStackMapBuildsBitmapOverflowAndDerivedRoots() {
     testing.assertEq(map.inlineSlots, 8)
     testing.assertEq(entry.liveCount, 5)
     testing.assertEq(entry.bitmapWords[0], 27)
-    testing.assertEq(entry.overflowSlots.len(), 1)
+    testing.assertEq(testIntListLen(entry.overflowSlots), 1)
     testing.assertEq(entry.overflowSlots[0], 9)
-    testing.assertEq(entry.derivedRoots.len(), 1)
+    testing.assertEq(testDerivedRootListLen(entry.derivedRoots), 1)
     testing.assertEq(entry.derivedRoots[0].derivedSlot, 4)
     testing.assertEq(entry.derivedRoots[0].baseSlot, 0)
     testing.assert(stackMapHasPointer(entry, 0))
@@ -1613,7 +2290,7 @@ fn testStackMapPreservesDeferQuestionAndEarlyReturnRoots() {
         Err(e) -> testing.fail(e),
     }
 
-    let entry = map.entries[stackMapEntryIndex(map, 1) ?? 0]
+    let entry = map.entries[intOr(stackMapEntryIndex(map, 1), 0)]
     testing.assertEq(entry.bitmapWords[0], 7)
 
     let badRoots: List<GcLiveRootSlot> = [
@@ -1750,6 +2427,11 @@ fn stressGcConfig() -> GcConfig {
         incrementalBudget: 3,
         largeObjectThreshold: 80,
         tlabSize: 64,
+        cardSize: 64,
+        schedulerSafepointInterval: 3,
+        mutatorAssistBytes: 64,
+        concurrentMarkBudget: 3,
+        evacuationThresholdPercent: 45,
     }
 }
 
@@ -1844,7 +2526,7 @@ fn stressReachableFromRoots(heap: GcHeap) -> Map<Int, Bool> {
     }
 
     for work.len() > 0 {
-        let id = work.pop() ?? -1
+        let id = intOr(work.pop(), -1)
         if id >= 0 && heap.objects.containsKey(id) {
             let obj = heap.objects[id]
             for childId in obj.refs {
@@ -1861,6 +2543,6 @@ fn stressReachableFromRoots(heap: GcHeap) -> Map<Int, Bool> {
 
 fn stressAssertMatchesReachability(heap: GcHeap, ids: List<Int>, expected: Map<Int, Bool>) {
     for id in ids {
-        testing.assertEq(heap.contains(id), expected.containsKey(id))
+        testing.assertEq(heap.contains(id), testBoolMapContains(expected, id))
     }
 }

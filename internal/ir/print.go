@@ -146,7 +146,13 @@ func (p *printer) printDecl(d Decl) {
 		p.printExpr(d.Value)
 		p.b.WriteByte(')')
 	case *UseDecl:
-		p.writef("(use %s", strings.Join(d.Path, "."))
+		path := strings.Join(d.Path, ".")
+		if d.IsGoFFI {
+			path = d.GoPath
+		} else if d.IsRuntimeFFI {
+			path = d.RuntimePath
+		}
+		p.writef("(use %s", path)
 		if d.Alias != "" && (len(d.Path) == 0 || d.Alias != d.Path[len(d.Path)-1]) {
 			p.writef(" as=%s", d.Alias)
 		}

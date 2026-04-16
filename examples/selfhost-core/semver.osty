@@ -164,3 +164,41 @@ pub fn signString(a: String, b: String) -> Int {
         0
     }
 }
+
+/// semPreIdentIsNone reports whether a pre-release slot is empty.
+pub fn semPreIdentIsNone(ident: SemPreIdent) -> Bool {
+    match ident {
+        PreNone -> true,
+        _ -> false,
+    }
+}
+
+/// semPreIdentText renders one pre-release identifier.
+pub fn semPreIdentText(ident: SemPreIdent) -> String {
+    match ident {
+        PreNone -> "",
+        PreNumber(n) -> "{n}",
+        PreText(text) -> text,
+    }
+}
+
+/// semVersionText renders the package-manager SemVer form used in locks.
+pub fn semVersionText(v: SemVersion) -> String {
+    let mut out = "{v.major}.{v.minor}.{v.patch}"
+    if isSemPrerelease(v) {
+        let first = semPreIdentText(v.pre1)
+        out = "{out}-{first}"
+        if !(semPreIdentIsNone(v.pre2)) {
+            let second = semPreIdentText(v.pre2)
+            out = "{out}.{second}"
+        }
+        if !(semPreIdentIsNone(v.pre3)) {
+            let third = semPreIdentText(v.pre3)
+            out = "{out}.{third}"
+        }
+    }
+    if v.build != "" {
+        out = "{out}+{v.build}"
+    }
+    out
+}

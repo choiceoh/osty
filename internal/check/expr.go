@@ -1,3 +1,5 @@
+//go:build selfhostgen
+
 package check
 
 import (
@@ -235,7 +237,7 @@ func (c *checker) binaryType(e *ast.BinaryExpr, env *env) types.Type {
 }
 
 // binaryOpResult validates an operator against its operands and returns
-// the result type. The error messages try to match v0.3 §2.2 phrasing.
+// the result type. The error messages try to match v0.4 §2.2 phrasing.
 func (c *checker) binaryOpResult(e *ast.BinaryExpr, op token.Kind, lt, rt types.Type) types.Type {
 	switch op {
 	// Arithmetic
@@ -699,12 +701,12 @@ func (c *checker) tryPackageCallWithExplicit(
 		return nil, false
 	}
 	c.recordExpr(fx.X, types.ErrorType)
-	// FFI packages (`use go "path" { fn ... }`) carry their signatures
+	// FFI packages carry their signatures
 	// inline in UseDecl.GoBody. The resolver doesn't publish these in a
 	// normal PkgScope, so we match by name against the FFI body here so
 	// calls like `fmt.Println("x")` type-check against the declared
 	// signature and return the declared type.
-	if u, ok := pkgSym.Decl.(*ast.UseDecl); ok && u.IsGoFFI {
+	if u, ok := pkgSym.Decl.(*ast.UseDecl); ok && u.IsFFI() {
 		if t := c.tryFFICall(u, fx, e, env); t != nil {
 			return t, true
 		}
@@ -944,7 +946,7 @@ func isStdlibErrorUse(sym *resolve.Symbol, alias string) bool {
 		return false
 	}
 	u, ok := sym.Decl.(*ast.UseDecl)
-	if !ok || u.IsGoFFI || len(u.Path) != 2 || u.Path[0] != "std" || u.Path[1] != "error" {
+	if !ok || u.IsFFI() || len(u.Path) != 2 || u.Path[0] != "std" || u.Path[1] != "error" {
 		return false
 	}
 	name := u.Alias
@@ -2784,7 +2786,7 @@ func stdlibPackageModule(sym *resolve.Symbol) string {
 		return ""
 	}
 	u, ok := sym.Decl.(*ast.UseDecl)
-	if !ok || u.IsGoFFI || len(u.Path) != 2 || u.Path[0] != "std" {
+	if !ok || u.IsFFI() || len(u.Path) != 2 || u.Path[0] != "std" {
 		return ""
 	}
 	return u.Path[1]

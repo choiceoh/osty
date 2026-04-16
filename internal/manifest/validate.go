@@ -1,46 +1,13 @@
 package manifest
 
 import (
-	"fmt"
-	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/osty/osty/internal/diag"
-	"github.com/osty/osty/internal/pkgmgr/semver"
 	"github.com/osty/osty/internal/token"
 )
-
-// CurrentEdition is the Osty spec version that the toolchain targets.
-// Manifests pinning a different edition are accepted only if the
-// version appears in KnownEditions.
-const CurrentEdition = "0.4"
-
-// KnownEditions is the set of spec versions the toolchain understands.
-// Adding a new entry is the last step of graduating a spec draft —
-// older toolchains reject it with CodeManifestBadEdition so users
-// upgrade deliberately.
-var KnownEditions = map[string]bool{
-	"0.3": true,
-	"0.4": true,
-}
-
-// packageNameRE mirrors scaffold.nameRE: a leading letter or
-// underscore followed by letters, digits, underscores, or hyphens. The
-// parser accepts any string, but Validate rejects names that fail this
-// pattern so they cannot appear in user-visible use paths and directory
-// names (spec §5.1 — package == directory).
-var packageNameRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`)
-
-// semverRE matches the canonical MAJOR.MINOR.PATCH form with an
-// optional pre-release (`-foo.bar`) and build metadata (`+sha.123`)
-// segment — a strict subset of SemVer 2.0. Version requirement
-// strings in [dependencies] are checked by a laxer rule (versionReqRE)
-// because requirements commonly use operators (`^1.2`, `>=0.3, <1`).
-var semverRE = regexp.MustCompile(
-	`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)` +
-		`(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?` +
-		`(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$`)
 
 // ParseDiagnostics is the diagnostic-aware variant of Parse. It parses
 // src and — when the first-error returning Parse fails — converts the
@@ -63,291 +30,152 @@ func ParseDiagnostics(src []byte, path string) (*Manifest, []*diag.Diagnostic) {
 }
 
 // Validate runs semantic checks over a parsed Manifest and returns
-// diagnostic-encoded violations. Parse covers TOML syntax and structural
-// well-formedness; Validate additionally enforces:
-//
-//   - [package] is present (unless [workspace] is) — duplicated from
-//     Parse for defense-in-depth when callers construct a Manifest by
-//     other means.
-//   - package.name matches the identifier-ish regex.
-//   - package.version is a strict semver x.y.z[-pre][+build].
-//   - package.edition is one of KnownEditions.
-//   - [workspace] has at least one member when present.
-//
-// Nothing here mutates m; the returned slice may be empty.
+// diagnostic-encoded violations. The semantic decisions are generated
+// from examples/selfhost-core/manifest_validation.osty; this Go layer
+// only maps the host Manifest shape into the self-hosted data model and
+// wraps self-hosted diagnostic specs in the toolchain diagnostic type.
 func Validate(m *Manifest) []*diag.Diagnostic {
 	if m == nil {
 		return nil
 	}
-	var out []*diag.Diagnostic
-	add := func(code, msg string, pos token.Pos) {
-		out = append(out, diag.New(diag.Error, msg).
-			Code(code).
-			PrimaryPos(pos, "").
-			Build())
-	}
-
-	if !m.HasPackage && m.Workspace == nil {
-		add(diag.CodeManifestMissingPackage,
-			"manifest defines neither [package] nor [workspace]",
-			token.Pos{Line: 1, Column: 1})
-		return out
-	}
-
-	if m.HasPackage {
-		// package.name identifier check.
-		if m.Package.Name == "" {
-			add(diag.CodeManifestMissingField,
-				"[package] missing required field `name`",
-				m.Package.TablePos)
-		} else if !packageNameRE.MatchString(m.Package.Name) {
-			add(diag.CodeManifestBadName,
-				fmt.Sprintf("package.name `%s` is not a valid identifier (must match [A-Za-z_][A-Za-z0-9_-]*)",
-					m.Package.Name),
-				m.Package.NamePos)
-		}
-		// version must be strict semver.
-		if m.Package.Version == "" {
-			add(diag.CodeManifestMissingField,
-				"[package] missing required field `version`",
-				m.Package.TablePos)
-		} else if !semverRE.MatchString(m.Package.Version) {
-			add(diag.CodeManifestBadVersion,
-				fmt.Sprintf("package.version `%s` is not a valid semver (want X.Y.Z)",
-					m.Package.Version),
-				m.Package.VersionPos)
-		}
-		// edition must be a known spec version; blank edition is a soft
-		// miss (manifests that predate the field), not a validate-time
-		// error — but we warn so users upgrade deliberately.
-		if m.Package.Edition == "" {
-			out = append(out, diag.New(diag.Warning,
-				"[package] missing `edition`; defaulting to "+CurrentEdition).
-				Code(diag.CodeManifestMissingField).
-				PrimaryPos(m.Package.TablePos, "").
-				Hint(`add edition = "`+CurrentEdition+`" to pin the spec version`).
-				Build())
-		} else if !KnownEditions[m.Package.Edition] {
-			add(diag.CodeManifestBadEdition,
-				fmt.Sprintf("unknown edition `%s` (known: %s)",
-					m.Package.Edition, knownEditionsList()),
-				m.Package.EditionPos)
+	specs := validateManifestDiagnostics(manifestSpecFromHost(m))
+	out := make([]*diag.Diagnostic, 0, len(specs))
+	for _, spec := range specs {
+		if spec != nil {
+			out = append(out, manifestDiagnosticFromSpec(spec))
 		}
 	}
-
-	if m.Workspace != nil && len(m.Workspace.Members) == 0 {
-		// Virtual workspaces need members; otherwise the root is
-		// effectively empty.
-		add(diag.CodeManifestWorkspaceEmpty,
-			"[workspace] has no `members` — a workspace must declare at least one member package",
-			token.Pos{Line: 1, Column: 1})
-	}
-
-	// Dependency version-requirement grammar. Registry deps (those
-	// with a non-empty VersionReq and no Path/Git) must parse as
-	// semver requirements. Path and git deps bypass this check
-	// because they don't use the `^X.Y` operator form.
-	for _, d := range m.Dependencies {
-		validateDepVersionReq(d, "dependencies", &out)
-	}
-	for _, d := range m.DevDependencies {
-		validateDepVersionReq(d, "dev-dependencies", &out)
-	}
-
-	// Profile / target / feature checks. All three additive:
-	// an unknown profile field would have been rejected at parse
-	// time, but opt-level range and inherits-graph validity are
-	// semantic and belong here.
-	validateProfiles(m, &out)
-	validateTargets(m, &out)
-	validateFeatures(m, &out)
-
 	return out
 }
 
-// validateProfiles enforces the manifest's [profile.*] invariants:
-//
-//   - opt-level must lie in [0, 3]
-//   - inherits must name a profile that exists (built-in or manifest)
-//     or be one of the declared profile names in this manifest
-//   - the inherits chain must not contain a cycle
-//
-// Built-in profile names are always valid inherits targets.
-func validateProfiles(m *Manifest, out *[]*diag.Diagnostic) {
-	if len(m.Profiles) == 0 {
-		return
+func manifestDiagnosticFromSpec(spec *ManifestDiagnosticSpec) *diag.Diagnostic {
+	severity := diag.Error
+	switch spec.severity {
+	case "warning":
+		severity = diag.Warning
+	case "note":
+		severity = diag.Note
 	}
-	builtins := map[string]bool{
-		"debug": true, "release": true, "profile": true, "test": true,
+	b := diag.New(severity, spec.message).
+		Code(spec.code).
+		PrimaryPos(token.Pos{Line: manifestHostLine(spec.line), Column: 1}, "")
+	if spec.hint != "" {
+		b.Hint(spec.hint)
 	}
-	for name, p := range m.Profiles {
+	return b.Build()
+}
+
+func manifestSpecFromHost(m *Manifest) *ManifestSpec {
+	if m == nil {
+		return manifestSpec(
+			manifestPackageSpecAt(false, "", "", "", 1, 1, 1, 1),
+			manifestWorkspaceSpec(false, nil),
+			nil,
+			nil,
+			nil,
+			nil,
+		)
+	}
+	return manifestSpecWithDeps(
+		manifestPackageSpecAt(
+			m.HasPackage,
+			m.Package.Name,
+			m.Package.Version,
+			m.Package.Edition,
+			manifestHostLine(m.Package.TablePos.Line),
+			manifestHostLine(m.Package.NamePos.Line),
+			manifestHostLine(m.Package.VersionPos.Line),
+			manifestHostLine(m.Package.EditionPos.Line),
+		),
+		manifestWorkspaceSpec(m.Workspace != nil, workspaceMembers(m.Workspace)),
+		dependencySpecs(m.Dependencies, "dependencies"),
+		dependencySpecs(m.DevDependencies, "dev-dependencies"),
+		profileSpecs(m.Profiles),
+		targetSpecs(m.Targets),
+		append([]string(nil), m.DefaultFeatures...),
+		featureSpecs(m.Features),
+	)
+}
+
+func workspaceMembers(ws *Workspace) []string {
+	if ws == nil {
+		return nil
+	}
+	return append([]string(nil), ws.Members...)
+}
+
+func dependencySpecs(deps []Dependency, section string) []*ManifestDependencySpec {
+	out := make([]*ManifestDependencySpec, 0, len(deps))
+	for _, d := range deps {
+		git := ""
+		if d.Git != nil {
+			git = d.Git.URL
+		}
+		out = append(out, manifestDependencySpecAt(
+			d.Name,
+			d.VersionReq,
+			d.Path,
+			git,
+			section,
+			manifestHostLine(d.Pos.Line),
+		))
+	}
+	return out
+}
+
+func profileSpecs(profiles map[string]*Profile) []*ManifestProfileSpec {
+	names := make([]string, 0, len(profiles))
+	for name := range profiles {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	out := make([]*ManifestProfileSpec, 0, len(names))
+	for _, name := range names {
+		p := profiles[name]
 		if p == nil {
 			continue
 		}
-		if p.HasOptLevel && (p.OptLevel < 0 || p.OptLevel > 3) {
-			*out = append(*out, diag.New(diag.Error,
-				fmt.Sprintf("profile.%s.opt-level %d out of range (want 0–3)",
-					name, p.OptLevel)).
-				Code(diag.CodeManifestFieldType).
-				PrimaryPos(p.Pos, "").
-				Build())
-		}
-		if p.Inherits != "" {
-			if !builtins[p.Inherits] {
-				if _, ok := m.Profiles[p.Inherits]; !ok {
-					*out = append(*out, diag.New(diag.Error,
-						fmt.Sprintf("profile.%s.inherits = %q: unknown base profile",
-							name, p.Inherits)).
-						Code(diag.CodeManifestBadDepSpec).
-						PrimaryPos(p.Pos, "").
-						Hint("must be a built-in (debug, release, profile, test) or a manifest-declared profile").
-						Build())
-				}
-			}
-		}
+		out = append(out, manifestProfileSpecAt(
+			name,
+			p.Inherits,
+			p.HasOptLevel,
+			p.OptLevel,
+			manifestHostLine(p.Pos.Line),
+		))
 	}
-	// Cycle detection via DFS. Colors: 0 unvisited, 1 on stack, 2 done.
-	color := map[string]int{}
-	var visit func(name string) bool
-	visit = func(name string) bool {
-		if builtins[name] {
-			return false
-		}
-		p, ok := m.Profiles[name]
-		if !ok || p == nil {
-			return false
-		}
-		if color[name] == 1 {
-			*out = append(*out, diag.New(diag.Error,
-				fmt.Sprintf("profile.%s: inherits chain forms a cycle", name)).
-				Code(diag.CodeManifestBadDepSpec).
-				PrimaryPos(p.Pos, "").
-				Build())
-			return true
-		}
-		if color[name] == 2 {
-			return false
-		}
-		color[name] = 1
-		if p.Inherits != "" {
-			if visit(p.Inherits) {
-				return true
-			}
-		}
-		color[name] = 2
-		return false
-	}
-	for name := range m.Profiles {
-		visit(name)
-	}
+	return out
 }
 
-// validateTargets enforces triple well-formedness for [target.*].
-// The resolver already accepts triples optimistically; here we catch
-// typos like `[target.amd64]` or `[target.-linux]` at manifest time
-// so users get a clean error instead of a cryptic `go build` failure
-// much later.
-func validateTargets(m *Manifest, out *[]*diag.Diagnostic) {
-	for _, t := range m.Targets {
-		if t == nil {
-			continue
-		}
-		parts := splitTriple(t.Triple)
-		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-			*out = append(*out, diag.New(diag.Error,
-				fmt.Sprintf("target.%s: triple must be <arch>-<os>", t.Triple)).
-				Code(diag.CodeManifestBadDepSpec).
-				PrimaryPos(t.Pos, "").
-				Hint("examples: amd64-linux, arm64-darwin, wasm-js").
-				Build())
+func targetSpecs(targets []*Target) []*ManifestTargetSpec {
+	out := make([]*ManifestTargetSpec, 0, len(targets))
+	for _, t := range targets {
+		if t != nil {
+			out = append(out, manifestTargetSpecAt(t.Triple, manifestHostLine(t.Pos.Line)))
 		}
 	}
+	return out
 }
 
-// validateFeatures makes sure a feature doesn't name itself as a
-// dependency and that `[features].default` only mentions features
-// that actually exist. Cross-dep feature refs (`<dep>/<feat>`) are
-// passed through unchecked — that's the pkgmgr's concern, not ours.
-func validateFeatures(m *Manifest, out *[]*diag.Diagnostic) {
-	for _, f := range m.DefaultFeatures {
-		if _, ok := m.Features[f]; !ok {
-			*out = append(*out, diag.New(diag.Error,
-				fmt.Sprintf("features.default references undefined feature %q", f)).
-				Code(diag.CodeManifestBadDepSpec).
-				PrimaryPos(token.Pos{Line: 1, Column: 1}, "").
-				Build())
-		}
+func featureSpecs(features map[string][]string) []*FeatureSpec {
+	names := make([]string, 0, len(features))
+	for name := range features {
+		names = append(names, name)
 	}
-	for name, deps := range m.Features {
-		for _, d := range deps {
-			if d == name {
-				*out = append(*out, diag.New(diag.Error,
-					fmt.Sprintf("features.%s lists itself", name)).
-					Code(diag.CodeManifestBadDepSpec).
-					PrimaryPos(token.Pos{Line: 1, Column: 1}, "").
-					Build())
-			}
-		}
+	sort.Strings(names)
+	out := make([]*FeatureSpec, 0, len(names))
+	for _, name := range names {
+		out = append(out, featureSpec(name, append([]string(nil), features[name]...)))
 	}
+	return out
 }
 
-// splitTriple does the equivalent of profile.ParseTriple without
-// taking the package dep — mirrors the lightweight <arch>-<os> grammar.
-func splitTriple(s string) []string {
-	for i := 0; i < len(s); i++ {
-		if s[i] == '-' {
-			return []string{s[:i], s[i+1:]}
-		}
+func manifestHostLine(line int) int {
+	if line > 0 {
+		return line
 	}
-	return []string{s}
+	return 1
 }
 
-// validateDepVersionReq parses d.VersionReq through pkgmgr/semver.ParseReq
-// when the dep is a registry dep; emits CodeManifestBadDepSpec otherwise.
-// Path and git deps are ignored — their version comes from their source.
-func validateDepVersionReq(d Dependency, section string, out *[]*diag.Diagnostic) {
-	if d.Path != "" || d.Git != nil {
-		return
-	}
-	if d.VersionReq == "" {
-		return // missing source is handled by the parser (E2017)
-	}
-	if d.VersionReq == "*" {
-		return // "*" is a valid wildcard, bypasses the strict parser
-	}
-	if _, err := semver.ParseReq(d.VersionReq); err != nil {
-		*out = append(*out, diag.New(diag.Error,
-			fmt.Sprintf("%s.%s has invalid version requirement %q: %v",
-				section, d.Name, d.VersionReq, err)).
-			Code(diag.CodeManifestBadDepSpec).
-			PrimaryPos(d.Pos, "").
-			Hint("examples: \"1.2.3\", \"^1.0\", \">=1.0, <2\", \"*\"").
-			Build())
-	}
-}
-
-// knownEditionsList returns the sorted edition list as a human-readable
-// string for error messages. Small helper — the map isn't large enough
-// to warrant a cache.
-func knownEditionsList() string {
-	var ks []string
-	for k := range KnownEditions {
-		ks = append(ks, k)
-	}
-	// Sort to keep messages stable across runs.
-	for i := 1; i < len(ks); i++ {
-		for j := i; j > 0 && ks[j-1] > ks[j]; j-- {
-			ks[j-1], ks[j] = ks[j], ks[j-1]
-		}
-	}
-	return strings.Join(ks, ", ")
-}
-
-// errToDiagnostic decodes one of the `osty.toml:LINE: message` errors
-// produced by Parse into a structured Diagnostic. The code is picked
-// from the message text using a small lookup table of phrase →
-// code — imperfect but better than a blanket CodeManifestSyntax, and
-// scoped to messages this package actually emits.
 func errToDiagnostic(err error) *diag.Diagnostic {
 	msg := err.Error()
 	line, body := splitLinePrefix(msg)
@@ -358,41 +186,26 @@ func errToDiagnostic(err error) *diag.Diagnostic {
 		Build()
 }
 
-// splitLinePrefix parses the leading `osty.toml:LINE: body` and returns
-// the line number and the trimmed body. If the prefix is missing or
-// malformed the whole message is returned and line defaults to 0 —
-// diag.Formatter handles line == 0 by skipping the source snippet.
 func splitLinePrefix(msg string) (int, string) {
 	const prefix = "osty.toml:"
 	if !strings.HasPrefix(msg, prefix) {
 		return 0, msg
 	}
 	rest := msg[len(prefix):]
-	// Accept either `N: ...` or `N:C: ...` — our errors use the former
-	// but be tolerant of future extensions.
 	colon := strings.Index(rest, ":")
 	if colon < 0 {
 		return 0, msg
 	}
 	numPart := rest[:colon]
 	body := strings.TrimSpace(rest[colon+1:])
-	// A plain number → line 1. Try parsing; fall back to 0 on failure.
 	if n, err := strconv.Atoi(numPart); err == nil {
 		return n, body
 	}
 	return 0, msg
 }
 
-// pickCodeFromMessage routes a Parse message to the most specific
-// E2xxx code. The mapping is string-based rather than typed because
-// Parse emits plain errors; when we re-home Parse onto diagnostics
-// natively this function can go away.
 func pickCodeFromMessage(body string) string {
 	switch {
-	case strings.Contains(body, "missing [package]"):
-		return diag.CodeManifestMissingPackage
-	case strings.Contains(body, "missing required key"):
-		return diag.CodeManifestMissingField
 	case strings.Contains(body, "unknown key"):
 		return diag.CodeManifestUnknownKey
 	case strings.Contains(body, "must be a string"),
