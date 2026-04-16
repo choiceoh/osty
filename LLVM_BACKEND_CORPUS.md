@@ -49,6 +49,7 @@ Each fixture should be independently checkable as a single file and avoid:
 | `testdata/backend/llvm_smoke/booleans.osty` | `7\n` | Phase 15 LLVM IR: Bool comparison, logical not/and, value-position if/else, phi |
 | `testdata/backend/llvm_smoke/string_print.osty` | `hello, osty\n` | Phase 23 LLVM IR: plain printable-ASCII `String` literal through `println` and module string constants |
 | `testdata/backend/llvm_smoke/string_escape_print.osty` | `line one\nquote " slash \\\n` | Phase 24 LLVM IR: escaped ASCII `String` literal through Osty-owned LLVM C-string encoding |
+| `testdata/backend/llvm_smoke/string_let_print.osty` | `stored string\n` | Phase 25 LLVM IR: immutable local `String` value bound from a literal and printed through an identifier |
 
 The Phase 10 skeleton behavior and the Phase 12-15 plus Phase 23-24 lowering
 behavior are mirrored in
@@ -104,6 +105,11 @@ constant encoding self-hosted. `examples/selfhost-core/llvmgen.osty` now maps
 newline, tab, carriage return, quote, and backslash into LLVM C-string escapes
 before appending the `println` newline and NUL terminator. The Go bridge still
 only rejects source outside the currently supported ASCII subset.
+
+Phase 25 promotes those string constants into the first local String value path.
+String literals lower to `ptr` values through generated Osty helpers, so an
+immutable `let msg = "..."` can bind the value and `println(msg)` can print the
+identifier without adding Go-owned LLVM instruction strings.
 
 ## Promotion Rules
 

@@ -674,6 +674,11 @@ pub fn llvmSmokeExecutableCorpus() -> List<LlvmSmokeExecutableCase> {
             fixture: "string_escape_print.osty",
             stdout: "line one\nquote \" slash \\\n",
         },
+        LlvmSmokeExecutableCase {
+            name: "string-let",
+            fixture: "string_let_print.osty",
+            stdout: "stored string\n",
+        },
     ]
 }
 
@@ -810,6 +815,23 @@ pub fn llvmSmokeStringEscapeIR(sourcePath: String) -> String {
     let main = llvmEmitter()
     let line = llvmStringLiteralLine(main, "line one\nquote \" slash \\")
     llvmPrintlnString(main, line)
+    llvmReturnI32Zero(main)
+
+    llvmRenderModuleWithGlobals(
+        sourcePath,
+        "",
+        main.stringGlobals,
+        [
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+pub fn llvmSmokeStringLetIR(sourcePath: String) -> String {
+    let main = llvmEmitter()
+    let msg = llvmStringLiteralLine(main, "stored string")
+    llvmImmutableLet(main, "msg", msg)
+    llvmPrintlnString(main, llvmIdent(main, "msg"))
     llvmReturnI32Zero(main)
 
     llvmRenderModuleWithGlobals(

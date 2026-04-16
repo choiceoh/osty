@@ -637,35 +637,36 @@ func (g *generator) emitPrintln(call *ast.CallExpr) error {
 	if len(call.Args) != 1 || call.Args[0].Name != "" || call.Args[0].Value == nil {
 		return unsupported("call", "println requires one positional argument")
 	}
-	if lit, ok := call.Args[0].Value.(*ast.StringLit); ok {
-		return g.emitPrintlnString(lit)
-	}
 	v, err := g.emitExpr(call.Args[0].Value)
 	if err != nil {
 		return err
 	}
-	if v.typ != "i64" {
-		return unsupported("type-system", "println currently supports Int expressions and plain String literals only")
-	}
 	emitter := g.toOstyEmitter()
-	llvmPrintlnI64(emitter, toOstyValue(v))
+	switch v.typ {
+	case "i64":
+		llvmPrintlnI64(emitter, toOstyValue(v))
+	case "ptr":
+		llvmPrintlnString(emitter, toOstyValue(v))
+	default:
+		g.takeOstyEmitter(emitter)
+		return unsupported("type-system", "println currently supports Int expressions and plain String values only")
+	}
 	g.takeOstyEmitter(emitter)
 	return nil
 }
 
-func (g *generator) emitPrintlnString(lit *ast.StringLit) error {
+func (g *generator) emitStringLiteral(lit *ast.StringLit) (value, error) {
 	text, ok := plainStringLiteral(lit)
 	if !ok {
-		return unsupported("expression", "interpolated String literals are not supported by LLVM println")
+		return value{}, unsupported("expression", "interpolated String literals are not supported by LLVM")
 	}
 	if !isLLVMASCIIStringText(text) {
-		return unsupported("type-system", "plain String literals currently require ASCII text with printable bytes or newline, tab, and carriage-return escapes")
+		return value{}, unsupported("type-system", "plain String literals currently require ASCII text with printable bytes or newline, tab, and carriage-return escapes")
 	}
 	emitter := g.toOstyEmitter()
 	line := llvmStringLiteralLine(emitter, text)
-	llvmPrintlnString(emitter, line)
 	g.takeOstyEmitter(emitter)
-	return nil
+	return fromOstyValue(line), nil
 }
 
 func (g *generator) emitExpr(expr ast.Expr) (value, error) {
@@ -682,6 +683,8 @@ func (g *generator) emitExpr(expr ast.Expr) (value, error) {
 			return value{typ: "i1", ref: "true"}, nil
 		}
 		return value{typ: "i1", ref: "false"}, nil
+	case *ast.StringLit:
+		return g.emitStringLiteral(e)
 	case *ast.Ident:
 		if v, ok := g.lookupLocal(e.Name); ok {
 			if v.ptr {
