@@ -13,8 +13,10 @@ import (
 	"github.com/osty/osty/internal/token"
 )
 
-// ErrUnsupported marks source shapes that this early LLVM emitter does not
-// lower yet.
+// ErrUnsupported marks source shapes that this early LLVM emitter does
+// not lower yet. Callers observing this sentinel must render the
+// skeleton IR themselves — the LLVM backend dispatcher no longer falls
+// back to an AST path when IR lowering hits a gap.
 var ErrUnsupported = errors.New("llvmgen: unsupported source shape")
 
 // Options configures textual LLVM IR emission.
@@ -183,8 +185,17 @@ func toUnsupportedDiagnostic(diag UnsupportedDiagnostic) *LlvmUnsupportedDiagnos
 	}
 }
 
-// Generate emits textual LLVM IR for a minimal, scalar subset.
-func Generate(file *ast.File, opts Options) ([]byte, error) {
+// generateFromAST emits textual LLVM IR from a type-checked AST. It is
+// used only as an internal helper: the public entry point is
+// GenerateModule, which consumes the backend-neutral IR. The in-package
+// test suite still exercises this function directly because the
+// generator's rewrite to consume IR in place of AST is a separate
+// refactor — see ir_module.go for the current IR→AST bridge.
+//
+// External callers must route through GenerateModule. The LLVM backend
+// dispatcher (internal/backend/llvm.go) no longer falls back to an AST
+// path when the IR lowering hits a gap.
+func generateFromAST(file *ast.File, opts Options) ([]byte, error) {
 	return generateASTFile(file, opts)
 }
 

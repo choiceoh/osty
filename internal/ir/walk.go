@@ -106,6 +106,9 @@ func walkChildren(v Visitor, n Node) {
 
 	// ---- Decl sub-nodes ----
 	case *Param:
+		if n.Pattern != nil {
+			Walk(v, n.Pattern)
+		}
 		if n.Default != nil {
 			Walk(v, n.Default)
 		}
@@ -155,6 +158,9 @@ func walkChildren(v Visitor, n Node) {
 			Walk(v, n.Else)
 		}
 	case *ForStmt:
+		if n.Pattern != nil {
+			Walk(v, n.Pattern)
+		}
 		if n.Cond != nil {
 			Walk(v, n.Cond)
 		}
@@ -204,16 +210,16 @@ func walkChildren(v Visitor, n Node) {
 	case *CallExpr:
 		Walk(v, n.Callee)
 		for _, a := range n.Args {
-			Walk(v, a)
+			Walk(v, a.Value)
 		}
 	case *IntrinsicCall:
 		for _, a := range n.Args {
-			Walk(v, a)
+			Walk(v, a.Value)
 		}
 	case *MethodCall:
 		Walk(v, n.Receiver)
 		for _, a := range n.Args {
-			Walk(v, a)
+			Walk(v, a.Value)
 		}
 	case *ListLit:
 		for _, e := range n.Elems {
@@ -265,7 +271,7 @@ func walkChildren(v Visitor, n Node) {
 		}
 	case *VariantLit:
 		for _, a := range n.Args {
-			Walk(v, a)
+			Walk(v, a.Value)
 		}
 	case *BlockExpr:
 		if n.Block != nil {

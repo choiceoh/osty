@@ -20,7 +20,7 @@ func generateLLVMForTest(t *testing.T, src string) string {
 	if len(diags) > 0 {
 		t.Fatalf("parse returned %d diagnostics: %v", len(diags), diags[0])
 	}
-	ir, err := Generate(file, Options{SourcePath: "/tmp/managed.osty"})
+	ir, err := generateFromAST(file, Options{SourcePath: "/tmp/managed.osty"})
 	if err != nil {
 		t.Fatalf("Generate returned error: %v", err)
 	}

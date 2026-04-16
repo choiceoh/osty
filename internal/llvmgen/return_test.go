@@ -14,7 +14,7 @@ func TestGenerateNestedReturnInIfStmt(t *testing.T) {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "core",
 		SourcePath:  "/tmp/nested_return_if.osty",
 	})
@@ -45,7 +45,7 @@ func TestGenerateNestedReturnInLoopBody(t *testing.T) {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "core",
 		SourcePath:  "/tmp/nested_return_loop.osty",
 	})
@@ -77,7 +77,7 @@ func TestGenerateIfBothBranchesReturnVoid(t *testing.T) {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "core",
 		SourcePath:  "/tmp/return_void_branches.osty",
 	})

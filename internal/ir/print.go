@@ -87,7 +87,7 @@ func (p *printer) printDecl(d Decl) {
 			if i > 0 {
 				p.b.WriteByte(' ')
 			}
-			p.writef("%s:%s", pm.Name, typeString(pm.Type))
+			p.printParam(pm)
 		}
 		p.writef(") -> %s", typeString(d.Return))
 		if d.Body != nil {
@@ -240,6 +240,8 @@ func (p *printer) printStmt(s Stmt) {
 		p.writef("(for %s", forKindName(s.Kind))
 		if s.Var != "" {
 			p.writef(" %s", s.Var)
+		} else if s.Pattern != nil {
+			p.writef(" %s", PatternString(s.Pattern))
 		}
 		p.indent++
 		if s.Cond != nil {
@@ -332,6 +334,16 @@ func (p *printer) printExpr(e Expr) {
 		if e.Kind != IdentUnknown {
 			p.writef("#%s", identKindName(e.Kind))
 		}
+		if len(e.TypeArgs) > 0 {
+			p.b.WriteString("::<")
+			for i, ta := range e.TypeArgs {
+				if i > 0 {
+					p.b.WriteByte(',')
+				}
+				p.b.WriteString(typeString(ta))
+			}
+			p.b.WriteByte('>')
+		}
 	case *UnaryExpr:
 		p.writef("(%s ", unOpName(e.Op))
 		p.printExpr(e.X)
@@ -345,16 +357,26 @@ func (p *printer) printExpr(e Expr) {
 	case *CallExpr:
 		p.b.WriteString("(call ")
 		p.printExpr(e.Callee)
+		if len(e.TypeArgs) > 0 {
+			p.b.WriteString(" ::<")
+			for i, ta := range e.TypeArgs {
+				if i > 0 {
+					p.b.WriteByte(',')
+				}
+				p.b.WriteString(typeString(ta))
+			}
+			p.b.WriteByte('>')
+		}
 		for _, a := range e.Args {
 			p.b.WriteByte(' ')
-			p.printExpr(a)
+			p.printArg(a)
 		}
 		p.b.WriteByte(')')
 	case *IntrinsicCall:
 		p.writef("(intrinsic %s", intrinsicKindName(e.Kind))
 		for _, a := range e.Args {
 			p.b.WriteByte(' ')
-			p.printExpr(a)
+			p.printArg(a)
 		}
 		p.b.WriteByte(')')
 	case *MethodCall:
@@ -373,7 +395,7 @@ func (p *printer) printExpr(e Expr) {
 		}
 		for _, a := range e.Args {
 			p.b.WriteByte(' ')
-			p.printExpr(a)
+			p.printArg(a)
 		}
 		p.b.WriteByte(')')
 	case *ListLit:
@@ -473,9 +495,20 @@ func (p *printer) printExpr(e Expr) {
 			if i > 0 {
 				p.b.WriteByte(' ')
 			}
-			p.writef("%s:%s", pm.Name, typeString(pm.Type))
+			p.printParam(pm)
 		}
-		p.writef(") -> %s ", typeString(e.Return))
+		p.writef(") -> %s", typeString(e.Return))
+		if len(e.Captures) > 0 {
+			p.b.WriteString(" captures=[")
+			for i, c := range e.Captures {
+				if i > 0 {
+					p.b.WriteByte(' ')
+				}
+				p.writef("%s:%s", c.Name, typeString(c.T))
+			}
+			p.b.WriteByte(']')
+		}
+		p.b.WriteByte(' ')
 		p.printBlock(e.Body)
 		p.b.WriteByte(')')
 	case *VariantLit:
@@ -486,7 +519,7 @@ func (p *printer) printExpr(e Expr) {
 		p.b.WriteString(e.Variant)
 		for _, a := range e.Args {
 			p.b.WriteByte(' ')
-			p.printExpr(a)
+			p.printArg(a)
 		}
 		p.b.WriteByte(')')
 	case *BlockExpr:
@@ -543,6 +576,28 @@ func (p *printer) printNode(n Node) {
 	default:
 		p.writef("<%T>", n)
 	}
+}
+
+// printParam renders one parameter.
+func (p *printer) printParam(pm *Param) {
+	if pm == nil {
+		p.b.WriteString("?")
+		return
+	}
+	if pm.Pattern != nil {
+		p.writef("%s:%s", PatternString(pm.Pattern), typeString(pm.Type))
+		return
+	}
+	p.writef("%s:%s", pm.Name, typeString(pm.Type))
+}
+
+// printArg renders one call argument. Keyword args are written
+// `name:value`; positional args are the value alone.
+func (p *printer) printArg(a Arg) {
+	if a.Name != "" {
+		p.writef("%s:", a.Name)
+	}
+	p.printExpr(a.Value)
 }
 
 func (p *printer) printMatchArm(a *MatchArm) {

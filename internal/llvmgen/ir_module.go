@@ -9,10 +9,16 @@ import (
 	"github.com/osty/osty/internal/token"
 )
 
-// GenerateModule is the IR-first LLVM entry point used by the production
-// backend path. During migration it reifies the backend-owned IR into the
-// legacy AST bridge so the rest of the emitter can stay stable while the
-// direct AST boundary is removed from backend call sites.
+// GenerateModule is the sole public entry point of the LLVM backend.
+// It consumes the backend-neutral IR (internal/ir) and emits textual
+// LLVM IR.
+//
+// The implementation currently reifies the module back into a legacy
+// AST shape through legacyFileFromModule and then hands off to the
+// long-standing AST-driven emitter. This is a transitional detail:
+// external callers route through IR only, and the in-package test
+// helper generateFromAST is unexported. Once the emitter is rewritten
+// to consume IR directly, the bridge and the AST helper both go away.
 func GenerateModule(mod *ostyir.Module, opts Options) ([]byte, error) {
 	if mod == nil {
 		return nil, unsupported("source-layout", "nil module")
@@ -183,6 +189,13 @@ func legacyParamFromIR(param *ostyir.Param) (*ast.Param, error) {
 		EndV: end,
 		Name: param.Name,
 		Type: legacyTypeFromIR(param.Type),
+	}
+	if param.Pattern != nil {
+		pat, err := legacyPatternFromIR(param.Pattern)
+		if err != nil {
+			return nil, err
+		}
+		out.Pattern = pat
 	}
 	if param.Default != nil {
 		value, err := legacyExprFromIR(param.Default)
@@ -370,7 +383,9 @@ func legacyTypeFromIR(typ ostyir.Type) ast.Type {
 		}
 		return &ast.NamedType{Path: []string{name}}
 	case *ostyir.NamedType:
-		out := &ast.NamedType{Path: splitQualifiedName(t.Name)}
+		path := splitQualifiedName(t.Package)
+		path = append(path, t.Name)
+		out := &ast.NamedType{Path: path}
 		for _, arg := range t.Args {
 			out.Args = append(out.Args, legacyTypeFromIR(arg))
 		}
@@ -658,7 +673,11 @@ func legacyForStmtFromIR(stmt *ostyir.ForStmt) (ast.Stmt, error) {
 		out.Iter = iter
 		return out, nil
 	case ostyir.ForRange:
-		out.Pattern = &ast.IdentPat{PosV: start, EndV: start, Name: stmt.Var}
+		pat, err := legacyLoopPattern(stmt, start)
+		if err != nil {
+			return nil, err
+		}
+		out.Pattern = pat
 		startExpr, err := legacyExprFromIR(stmt.Start)
 		if err != nil {
 			return nil, err
@@ -676,7 +695,11 @@ func legacyForStmtFromIR(stmt *ostyir.ForStmt) (ast.Stmt, error) {
 		}
 		return out, nil
 	case ostyir.ForIn:
-		out.Pattern = &ast.IdentPat{PosV: start, EndV: start, Name: stmt.Var}
+		pat, err := legacyLoopPattern(stmt, start)
+		if err != nil {
+			return nil, err
+		}
+		out.Pattern = pat
 		iter, err := legacyExprFromIR(stmt.Iter)
 		if err != nil {
 			return nil, err
@@ -686,6 +709,18 @@ func legacyForStmtFromIR(stmt *ostyir.ForStmt) (ast.Stmt, error) {
 	default:
 		return nil, unsupportedf("control-flow", "IR for-kind %d", stmt.Kind)
 	}
+}
+
+// legacyLoopPattern bridges a for-loop binding back to ast.Pattern.
+func legacyLoopPattern(stmt *ostyir.ForStmt, pos token.Pos) (ast.Pattern, error) {
+	if stmt.Pattern != nil {
+		pat, err := legacyPatternFromIR(stmt.Pattern)
+		if err != nil {
+			return nil, err
+		}
+		return pat, nil
+	}
+	return &ast.IdentPat{PosV: pos, EndV: pos, Name: stmt.Var}, nil
 }
 
 func legacyDeferStmtFromIR(stmt *ostyir.DeferStmt) (ast.Stmt, error) {
@@ -839,13 +874,20 @@ func legacyCallExprFromIR(expr *ostyir.CallExpr) (ast.Expr, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(expr.TypeArgs) > 0 {
+		tf := &ast.TurbofishExpr{PosV: start, EndV: end, Base: fn}
+		for _, ta := range expr.TypeArgs {
+			tf.Args = append(tf.Args, legacyTypeFromIR(ta))
+		}
+		fn = tf
+	}
 	out := &ast.CallExpr{PosV: start, EndV: end, Fn: fn}
 	for _, arg := range expr.Args {
-		value, err := legacyExprFromIR(arg)
+		legacyArg, err := legacyIRArg(arg)
 		if err != nil {
 			return nil, err
 		}
-		out.Args = append(out.Args, &ast.Arg{PosV: value.Pos(), Value: value})
+		out.Args = append(out.Args, legacyArg)
 	}
 	return out, nil
 }
@@ -862,13 +904,26 @@ func legacyIntrinsicCallFromIR(expr *ostyir.IntrinsicCall) (ast.Expr, error) {
 		},
 	}
 	for _, arg := range expr.Args {
-		value, err := legacyExprFromIR(arg)
+		legacyArg, err := legacyIRArg(arg)
 		if err != nil {
 			return nil, err
 		}
-		out.Args = append(out.Args, &ast.Arg{PosV: value.Pos(), Value: value})
+		out.Args = append(out.Args, legacyArg)
 	}
 	return out, nil
+}
+
+// legacyIRArg bridges an ir.Arg into an ast.Arg.
+func legacyIRArg(arg ostyir.Arg) (*ast.Arg, error) {
+	value, err := legacyExprFromIR(arg.Value)
+	if err != nil {
+		return nil, err
+	}
+	pos := value.Pos()
+	if arg.SpanV.Start.Line != 0 {
+		pos = legacyPos(arg.SpanV.Start)
+	}
+	return &ast.Arg{PosV: pos, Name: arg.Name, Value: value}, nil
 }
 
 func legacyListLitFromIR(expr *ostyir.ListLit) (ast.Expr, error) {
@@ -965,11 +1020,11 @@ func legacyMethodCallFromIR(expr *ostyir.MethodCall) (ast.Expr, error) {
 	}
 	out := &ast.CallExpr{PosV: start, EndV: end, Fn: fn}
 	for _, arg := range expr.Args {
-		value, err := legacyExprFromIR(arg)
+		legacyArg, err := legacyIRArg(arg)
 		if err != nil {
 			return nil, err
 		}
-		out.Args = append(out.Args, &ast.Arg{PosV: value.Pos(), Value: value})
+		out.Args = append(out.Args, legacyArg)
 	}
 	return out, nil
 }
@@ -1117,11 +1172,11 @@ func legacyVariantLitFromIR(expr *ostyir.VariantLit) (ast.Expr, error) {
 	}
 	out := &ast.CallExpr{PosV: start, EndV: end, Fn: callee}
 	for _, arg := range expr.Args {
-		value, err := legacyExprFromIR(arg)
+		legacyArg, err := legacyIRArg(arg)
 		if err != nil {
 			return nil, err
 		}
-		out.Args = append(out.Args, &ast.Arg{PosV: value.Pos(), Value: value})
+		out.Args = append(out.Args, legacyArg)
 	}
 	return out, nil
 }

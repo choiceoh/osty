@@ -17,7 +17,7 @@ func TestGenerateWhileStyleForLoop(t *testing.T) {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "main",
 		SourcePath:  "/tmp/while_for.osty",
 	})
@@ -49,7 +49,7 @@ func TestGenerateBareForLoop(t *testing.T) {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "main",
 		SourcePath:  "/tmp/bare_for.osty",
 	})

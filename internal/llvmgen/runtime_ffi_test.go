@@ -37,7 +37,7 @@ fn main() {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "main",
 		SourcePath:  "/tmp/runtime_has_prefix.osty",
 		Target:      "x86_64-unknown-linux-gnu",
@@ -81,7 +81,7 @@ fn main() {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "main",
 		SourcePath:  "/tmp/runtime_unknown.osty",
 		Target:      "x86_64-unknown-linux-gnu",
@@ -112,7 +112,7 @@ func TestGenerateStringCompareUsesRuntimeABI(t *testing.T) {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "main",
 		SourcePath:  "/tmp/string_compare.osty",
 	})
@@ -152,7 +152,7 @@ pub fn kindName(kind: Kind) -> String {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "core",
 		SourcePath:  "/tmp/package_entry.osty",
 	})
@@ -185,7 +185,7 @@ pub fn keep(bag: RuntimeBag) -> RuntimeBag {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "core",
 		SourcePath:  "/tmp/runtime_bag.osty",
 	})
@@ -214,7 +214,7 @@ fn main() {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "main",
 		SourcePath:  "/tmp/void_call.osty",
 	})
@@ -246,7 +246,7 @@ fn values() -> List<Int> {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "core",
 		SourcePath:  "/tmp/list_literals.osty",
 	})
@@ -274,7 +274,7 @@ func TestGenerateListLenUsesRuntimeABI(t *testing.T) {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "core",
 		SourcePath:  "/tmp/list_len.osty",
 	})
@@ -300,7 +300,7 @@ func TestGenerateListPushStmtUsesRuntimeABI(t *testing.T) {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "core",
 		SourcePath:  "/tmp/list_push.osty",
 	})
@@ -328,7 +328,7 @@ func TestGenerateManagedListPushStmtUsesSafepoint(t *testing.T) {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "core",
 		SourcePath:  "/tmp/list_push_managed.osty",
 	})
@@ -356,7 +356,7 @@ func TestGenerateForInOverListStringUsesRuntimeABI(t *testing.T) {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "core",
 		SourcePath:  "/tmp/list_for_in.osty",
 	})
@@ -387,7 +387,7 @@ fn main() {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "main",
 		SourcePath:  "/tmp/list_for_in_temp.osty",
 	})
@@ -425,7 +425,7 @@ fn main() {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "main",
 		SourcePath:  "/tmp/call_arg_temp_root.osty",
 	})
@@ -471,7 +471,7 @@ fn main() {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "main",
 		SourcePath:  "/tmp/collections_runtime.osty",
 	})
@@ -512,7 +512,7 @@ fn main() {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "main",
 		SourcePath:  "/tmp/collections_trace_runtime.osty",
 	})

@@ -19,7 +19,7 @@ fn main() {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "main",
 		SourcePath:  "/tmp/top_level_alias_let.osty",
 	})
@@ -53,7 +53,7 @@ fn main() {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "main",
 		SourcePath:  "/tmp/top_level_interface_let.osty",
 	})
@@ -86,7 +86,7 @@ fn main() {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "main",
 		SourcePath:  "/tmp/top_level_mut_let.osty",
 	})

@@ -14,7 +14,7 @@ func TestGenerateBitwiseIntOps(t *testing.T) {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "main",
 		SourcePath:  "/tmp/bitwise_int_ops.osty",
 	})

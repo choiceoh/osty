@@ -33,18 +33,27 @@
 //     LetDecl, UseDecl.
 //   - Stmts: Block, LetStmt, ExprStmt, AssignStmt (multi-target),
 //     ReturnStmt, BreakStmt, ContinueStmt, IfStmt, ForStmt (inf /
-//     while / range / in), DeferStmt, ChanSendStmt, MatchStmt,
+//     while / range / in, with optional destructuring pattern),
+//     DeferStmt, ChanSendStmt, MatchStmt (arms + optional DecisionTree),
 //     ErrorStmt.
-//   - Exprs: literals (int/float/bool/char/byte/string/unit), Ident,
-//     UnaryExpr, BinaryExpr, CoalesceExpr, QuestionExpr, CallExpr,
-//     IntrinsicCall (print-family), MethodCall, VariantLit, FieldExpr,
-//     TupleAccess, IndexExpr, ListLit, MapLit, TupleLit, StructLit,
-//     RangeLit, Closure, BlockExpr, IfExpr, IfLetExpr, MatchExpr,
-//     ErrorExpr.
+//   - Exprs: literals (int/float/bool/char/byte/string/unit), Ident
+//     (carries TypeArgs for bare-turbofish references), UnaryExpr,
+//     BinaryExpr, CoalesceExpr, QuestionExpr, CallExpr (TypeArgs + Args),
+//     IntrinsicCall, MethodCall, VariantLit, FieldExpr, TupleAccess,
+//     IndexExpr, ListLit, MapLit, TupleLit, StructLit, RangeLit,
+//     Closure (Captures), BlockExpr, IfExpr, IfLetExpr, MatchExpr (arms
+//     + optional DecisionTree), ErrorExpr.
 //   - Patterns: WildPat, IdentPat, LitPat, TuplePat, StructPat,
 //     VariantPat, RangePat, OrPat, BindingPat, ErrorPat.
-//   - Types: PrimType (with canonical singletons), NamedType,
-//     OptionalType, TupleType, FnType, TypeVar, ErrType.
+//   - Types: PrimType (with canonical singletons), NamedType (Package
+//     qualifier + Name), OptionalType, TupleType, FnType, TypeVar,
+//     ErrType.
+//   - Arg: {Name, Value, SpanV} — keyword arguments preserved on
+//     CallExpr, MethodCall, IntrinsicCall, VariantLit.
+//   - Capture: {Name, Kind, T, Mut, SpanV} — per-Closure free-variable
+//     list computed during lowering.
+//   - DecisionNode: DecisionLeaf / DecisionFail / DecisionBind /
+//     DecisionGuard / DecisionSwitch — compiled match decision tree.
 //
 // Tools
 //
@@ -60,20 +69,30 @@
 //     renderer for tests and visual inspection.
 //
 //   - Validate(m) — lightweight structural sanity check useful during
-//     backend development.
+//     backend development. ValidateDecisionTree(n, armCount) checks a
+//     compiled match decision tree in isolation.
+//
+//   - Optimize(m, opts) — an IR-level optimiser that performs constant
+//     folding, algebraic simplification, dead-code elimination, and
+//     branch-literal folding. Every pass is opt-outable via
+//     OptimizeOptions.
+//
+//   - ComputeCaptures(body, params) — free-variable analysis over a
+//     closure body.
+//
+//   - CompileDecisionTree(scrutineeT, arms) — build a decision tree
+//     for a match.
 //
 // Known gaps (follow-on work)
 //
-//   - The native LLVM backend still consumes the AST directly in several
-//     places. Rewriting it fully against `ir` is a substantial refactor tracked
-//     as a separate effort.
+//   - The native LLVM backend's public API is IR-only: the dispatcher
+//     (internal/backend/llvm.go) accepts lowered IR modules and there
+//     is no fallback to the AST. Internally, llvmgen still routes the
+//     IR through a local IR→AST bridge (llvmgen.legacyFileFromModule)
+//     before feeding the long-standing emitter. That bridge is an
+//     implementation detail, not a public contract.
 //
-//   - Generic monomorphisation info (check.Result.Instantiations) is
-//     not yet threaded through; backends that need per-call-site
-//     type arguments should consult the checker until the IR
-//     surfaces them.
-//
-//   - Destructuring `for` heads lower to ForIn with an empty Var and
-//     a note; a ForDestructure variant may emerge when a consumer
-//     actually needs it.
+//   - The IR remains a typed tree — no SSA/CFG level. Flow-sensitive
+//     analyses (escape, lifetime, nullability) would need a MIR-style
+//     lowering beneath this package.
 package ir

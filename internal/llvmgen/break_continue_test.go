@@ -19,7 +19,7 @@ func TestGenerateRangeLoopBreakAndContinue(t *testing.T) {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "main",
 		SourcePath:  "/tmp/range_break_continue.osty",
 	})
@@ -57,7 +57,7 @@ func TestGenerateWhileLoopBreakAndContinue(t *testing.T) {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "main",
 		SourcePath:  "/tmp/while_break_continue.osty",
 	})

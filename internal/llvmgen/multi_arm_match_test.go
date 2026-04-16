@@ -27,7 +27,7 @@ fn score(kind: Kind) -> Int {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "core",
 		SourcePath:  "/tmp/multi_arm_block_match.osty",
 	})
@@ -74,7 +74,7 @@ fn score(kind: Kind) -> Int {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "core",
 		SourcePath:  "/tmp/multi_arm_call_match.osty",
 	})
@@ -118,7 +118,7 @@ fn score(value: Maybe) -> Int {
 }
 `)
 
-	ir, err := Generate(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "core",
 		SourcePath:  "/tmp/payload_multi_arm_block_match.osty",
 	})
