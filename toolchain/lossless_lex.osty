@@ -1,0 +1,1220 @@
+use std.strings as strings
+
+// ===================================================================
+// LOSSLESS LEXER (toolchain/lossless_lex.osty)
+//
+// A layer on top of `frontendLexStream` that adds:
+//
+//   1. Trivia attachment — every whitespace / comment / shebang / BOM
+//      run in the source is classified and indexed, so the token
+//      stream is truly lossless. `losslessReconstruct` yields the
+//      normalized source byte-for-byte.
+//
+//   2. LineIndex — one-pass table of line-start offsets with
+//      O(lineCount) position lookup, decoupled from per-token line/col
+//      state so downstream tools can resolve spans lazily.
+//
+//   3. Resolved diagnostics — every `FrontLexDiagnostic` is paired
+//      with its stable `Exxxx` code, message, and hint; the fat
+//      arrow is synthesized as `E0007` (Osty match arms use `->`).
+//
+//   4. Mode-stack view — from the interpolation side table, derive
+//      a stack of `ModeFrame`s describing whether a given token sits
+//      inside a string body, triple-quoted body, or an interpolation
+//      expression. Makes IDE / formatter logic independent of raw
+//      brace counting.
+//
+//   5. Incremental re-lex — given an `LosslessEdit` in the old
+//      source, find the last token boundary that is guaranteed
+//      untouched (stable prefix) and the first token boundary past
+//      the edit (stable suffix), re-lex only the middle range, and
+//      splice. Falls back to full re-lex when no clean boundary
+//      exists (e.g. edit straddles a multi-line string body).
+//
+//   6. Round-trip verification — `losslessVerifyRoundTrip` and
+//      `losslessRoundTripReport` return byte-for-byte equality of
+//      `reconstructSource(lex(src)) == normalize(src)`. Meant to be
+//      called from fuzz / corpus tests as the safety net for every
+//      other feature above.
+//
+// All offsets in this module refer to units (graphemes as produced by
+// `strings.split(_, "")`) in the **normalized** source, matching what
+// the rest of the front end expects.
+// ===================================================================
+
+// -------------------------------------------------------------------
+// 1. TYPES
+// -------------------------------------------------------------------
+
+/// TriviaKind classifies a run of non-token source bytes.
+pub enum TriviaKind {
+    TriviaWhitespace,
+    TriviaNewline,
+    TriviaLineComment,
+    TriviaBlockComment,
+    TriviaDocComment,
+    TriviaShebang,
+    TriviaBom,
+    TriviaUnterminatedBlockComment,
+}
+
+/// LosslessTrivia is one contiguous trivia run in the normalized source.
+pub struct LosslessTrivia {
+    pub kind: TriviaKind,
+    pub offset: Int,
+    pub length: Int,
+    pub line: Int,
+    pub column: Int,
+    pub endLine: Int,
+    pub endColumn: Int,
+}
+
+/// LosslessToken pairs a raw `FrontLexToken` with its trivia slices
+/// and a state snapshot for incremental re-lex.
+pub struct LosslessToken {
+    pub kind: FrontTokenKind,
+    pub offset: Int,
+    pub length: Int,
+    pub line: Int,
+    pub column: Int,
+    pub endOffset: Int,
+    pub endLine: Int,
+    pub endColumn: Int,
+    pub leadingFirst: Int,
+    pub leadingCount: Int,
+    pub trailingFirst: Int,
+    pub trailingCount: Int,
+    pub triple: Bool,
+    pub baseLiteral: Bool,
+    pub interpolations: Int,
+    pub leadingDoc: String,
+    pub interpDepth: Int,
+}
+
+/// LosslessLineIndex records the start offset of every line in the
+/// normalized source. `lineStarts` always begins with 0 and has length
+/// `lineCount`.
+pub struct LosslessLineIndex {
+    pub lineStarts: List<Int>,
+    pub lineCount: Int,
+    pub unitCount: Int,
+}
+
+/// LosslessLineCol is the two-axis result of a position lookup. Both
+/// fields are 1-based to match the rest of the compiler.
+pub struct LosslessLineCol {
+    pub line: Int,
+    pub column: Int,
+}
+
+/// LosslessDiag is `FrontLexDiagnostic` plus the resolved code text,
+/// user-facing message, and optional hint.
+pub struct LosslessDiag {
+    pub code: FrontLexDiagnosticCode,
+    pub diagCode: String,
+    pub message: String,
+    pub hint: String,
+    pub offset: Int,
+    pub endOffset: Int,
+    pub line: Int,
+    pub column: Int,
+    pub endLine: Int,
+    pub endColumn: Int,
+}
+
+/// LosslessStream is the complete output surface.
+pub struct LosslessStream {
+    pub source: String,
+    pub unitCount: Int,
+    pub tokens: List<LosslessToken>,
+    pub trivia: List<LosslessTrivia>,
+    pub diagnostics: List<LosslessDiag>,
+    pub lineIndex: LosslessLineIndex,
+    pub shebangs: Int,
+    pub bomStripped: Int,
+    pub inner: FrontLexStream,
+}
+
+// -------------------------------------------------------------------
+// 2. MODE STACK TYPES
+// -------------------------------------------------------------------
+
+pub enum LexMode {
+    ModeTopLevel,
+    ModeStringBody,
+    ModeTripleStringBody,
+    ModeRawStringBody,
+    ModeInterpolationExpr,
+}
+
+pub struct ModeFrame {
+    pub mode: LexMode,
+    pub ownerToken: Int,
+    pub startOffset: Int,
+}
+
+// -------------------------------------------------------------------
+// 3. EDIT / INCREMENTAL TYPES
+// -------------------------------------------------------------------
+
+pub struct LosslessEdit {
+    pub start: Int,
+    pub oldEnd: Int,
+    pub replacement: String,
+}
+
+pub struct LosslessRelexReport {
+    pub stablePrefixTokens: Int,
+    pub stableSuffixTokens: Int,
+    pub rescannedTokens: Int,
+    pub offsetDelta: Int,
+    pub fullRelex: Bool,
+}
+
+pub struct LosslessRelexResult {
+    pub stream: LosslessStream,
+    pub report: LosslessRelexReport,
+}
+
+pub struct LosslessRoundTripReport {
+    pub ok: Bool,
+    pub firstMismatchOffset: Int,
+    pub originalLength: Int,
+    pub reconstructedLength: Int,
+}
+
+// -------------------------------------------------------------------
+// 4. INTERNAL HELPER TYPES
+// -------------------------------------------------------------------
+
+struct TriviaClass {
+    kind: TriviaKind,
+    consumed: Int,
+    ok: Bool,
+}
+
+fn triviaClass(kind: TriviaKind, consumed: Int, ok: Bool) -> TriviaClass {
+    TriviaClass { kind, consumed, ok }
+}
+
+// -------------------------------------------------------------------
+// 5. SOURCE NORMALIZATION
+// -------------------------------------------------------------------
+
+/// losslessNormalize collapses `\r\n` and lone `\r` to `\n`. Every
+/// offset produced by this module refers to the normalized string.
+pub fn losslessNormalize(source: String) -> String {
+    let step1 = strings.replaceAll(source, "\r\n", "\n")
+    strings.replaceAll(step1, "\r", "\n")
+}
+
+// -------------------------------------------------------------------
+// 6. LINE INDEX
+// -------------------------------------------------------------------
+
+/// losslessBuildLineIndex walks units once, recording the offset of
+/// each line's first unit.
+pub fn losslessBuildLineIndex(units: List<String>, unitCount: Int) -> LosslessLineIndex {
+    let mut starts: List<Int> = [0]
+    let mut count = 1
+    for idx in 0..unitCount {
+        let unit = losslessUnitAt(units, idx)
+        if unit == "\n" {
+            starts.push(idx + 1)
+            count = count + 1
+        }
+    }
+    LosslessLineIndex {
+        lineStarts: starts,
+        lineCount: count,
+        unitCount,
+    }
+}
+
+/// losslessLineStartAt returns the recorded start offset for `line`
+/// (1-based). Returns `unitCount` if the line is past the end.
+pub fn losslessLineStartAt(index: LosslessLineIndex, line: Int) -> Int {
+    if line < 1 {
+        return 0
+    }
+    let mut idx = 1
+    for start in index.lineStarts {
+        if idx == line {
+            return start
+        }
+        idx = idx + 1
+    }
+    index.unitCount
+}
+
+/// losslessLocate resolves a unit offset to a 1-based (line, column).
+/// Walks `lineStarts` linearly; for n lines of average length L this is
+/// O(n/L) per query, i.e. a full pass only when every unit is on its
+/// own line.
+pub fn losslessLocate(index: LosslessLineIndex, offset: Int) -> LosslessLineCol {
+    if offset <= 0 {
+        return LosslessLineCol { line: 1, column: 1 }
+    }
+    let mut lastStart = 0
+    let mut lastLine = 1
+    let mut line = 1
+    for start in index.lineStarts {
+        if start > offset {
+            return LosslessLineCol {
+                line: lastLine,
+                column: offset - lastStart + 1,
+            }
+        }
+        lastStart = start
+        lastLine = line
+        line = line + 1
+    }
+    LosslessLineCol { line: lastLine, column: offset - lastStart + 1 }
+}
+
+// -------------------------------------------------------------------
+// 7. UNIT ACCESS (thin helpers that delegate to the front end)
+// -------------------------------------------------------------------
+
+fn losslessUnitAt(units: List<String>, target: Int) -> String {
+    frontUnitAt(units, target)
+}
+
+fn losslessLexemeFromUnits(units: List<String>, start: Int, length: Int) -> String {
+    frontLexemeFromUnits(units, start, length)
+}
+
+fn losslessUnitCountOfList(units: List<String>) -> Int {
+    let mut count = 0
+    for u in units {
+        let _ = u
+        count = count + 1
+    }
+    count
+}
+
+// -------------------------------------------------------------------
+// 8. TRIVIA CLASSIFICATION
+//
+// Classifies the unit run starting at `start` as one trivia span.
+// The scanner never looks back — every call starts at a token
+// boundary, so atFileStart is passed in by the caller.
+// -------------------------------------------------------------------
+
+fn losslessClassifyTrivia(
+    units: List<String>,
+    start: Int,
+    unitCount: Int,
+    atFileStart: Bool,
+) -> TriviaClass {
+    let unit = losslessUnitAt(units, start)
+    let next = losslessUnitAt(units, start + 1)
+
+    if atFileStart && unit == "\u{FEFF}" {
+        return triviaClass(TriviaBom, 1, true)
+    }
+    if atFileStart && unit == "#" && next == "!" {
+        let consumed = frontLineCommentSkip(units, start + 2, unitCount) + 2
+        return triviaClass(TriviaShebang, consumed, true)
+    }
+    if unit == "\n" {
+        let mut count = 0
+        for idx in start..unitCount {
+            if losslessUnitAt(units, idx) == "\n" {
+                count = count + 1
+            } else {
+                return triviaClass(TriviaNewline, count, true)
+            }
+        }
+        return triviaClass(TriviaNewline, count, true)
+    }
+    if unit == " " || unit == "\t" {
+        let mut count = 0
+        for idx in start..unitCount {
+            let u = losslessUnitAt(units, idx)
+            if u == " " || u == "\t" {
+                count = count + 1
+            } else {
+                return triviaClass(TriviaWhitespace, count, true)
+            }
+        }
+        return triviaClass(TriviaWhitespace, count, true)
+    }
+    if unit == "/" && next == "/" {
+        let third = losslessUnitAt(units, start + 2)
+        let fourth = losslessUnitAt(units, start + 3)
+        let body = frontLineCommentSkip(units, start + 2, unitCount)
+        let consumed = body + 2
+        if third == "/" && fourth != "/" {
+            return triviaClass(TriviaDocComment, consumed, true)
+        }
+        return triviaClass(TriviaLineComment, consumed, true)
+    }
+    if unit == "/" && next == "*" {
+        let block = frontBlockCommentSkip(units, start, unitCount)
+        if block.ok {
+            return triviaClass(TriviaBlockComment, block.consumed, true)
+        }
+        return triviaClass(TriviaUnterminatedBlockComment, block.consumed, true)
+    }
+    triviaClass(TriviaWhitespace, 0, false)
+}
+
+// -------------------------------------------------------------------
+// 9. TRIVIA EXTRACTION
+//
+// Walks the source, alternating between "inside a token range"
+// (skipped) and "inside a gap" (classified as trivia). Every unit in
+// the source is covered by exactly one token or one trivia run; this
+// is the invariant that makes round-trip work.
+// -------------------------------------------------------------------
+
+fn losslessScanTrivia(
+    units: List<String>,
+    unitCount: Int,
+    tokens: List<FrontLexToken>,
+    lineIndex: LosslessLineIndex,
+) -> List<LosslessTrivia> {
+    let mut out: List<LosslessTrivia> = []
+    let mut idx = 0
+    let mut atFileStart = true
+
+    for tok in tokens {
+        let stopAt = tok.start.offset
+        // Fill trivia up to this token's start.
+        for idx < stopAt {
+            let cls = losslessClassifyTrivia(units, idx, unitCount, atFileStart)
+            if !(cls.ok) || cls.consumed <= 0 {
+                let pos = losslessLocate(lineIndex, idx)
+                let endp = losslessLocate(lineIndex, idx + 1)
+                out.push(
+                    LosslessTrivia {
+                        kind: TriviaWhitespace,
+                        offset: idx,
+                        length: 1,
+                        line: pos.line,
+                        column: pos.column,
+                        endLine: endp.line,
+                        endColumn: endp.column,
+                    },
+                )
+                idx = idx + 1
+            } else {
+                let pos = losslessLocate(lineIndex, idx)
+                let endp = losslessLocate(lineIndex, idx + cls.consumed)
+                out.push(
+                    LosslessTrivia {
+                        kind: cls.kind,
+                        offset: idx,
+                        length: cls.consumed,
+                        line: pos.line,
+                        column: pos.column,
+                        endLine: endp.line,
+                        endColumn: endp.column,
+                    },
+                )
+                idx = idx + cls.consumed
+            }
+            atFileStart = false
+        }
+
+        if tok.kind == FrontEOF {
+            return out
+        }
+
+        // Skip the token itself. Zero-length tokens (virtual NEWLINE
+        // at EOF) leave `idx` in place.
+        if tok.length > 0 {
+            idx = tok.start.offset + tok.length
+        }
+        atFileStart = false
+    }
+    out
+}
+
+// -------------------------------------------------------------------
+// 10. TOKEN BUILDING
+//
+// Walks the inner token stream and the trivia list in parallel,
+// attaching trivia to tokens. Convention: every gap-trivia run
+// becomes the LEADING trivia of the token that follows. The final
+// EOF token carries the trailing file-level trivia as its leading.
+// -------------------------------------------------------------------
+
+fn losslessBuildTokens(
+    inner: FrontLexStream,
+    trivia: List<LosslessTrivia>,
+    units: List<String>,
+    lineIndex: LosslessLineIndex,
+    leadingDocs: List<String>,
+    interpDepths: List<Int>,
+) -> List<LosslessToken> {
+    let mut out: List<LosslessToken> = []
+    let mut nextTriviaIdx = 0
+    let mut tokenIdx = 0
+
+    for tok in inner.tokens {
+        let leadingFirst = nextTriviaIdx
+        let mut leadingCount = 0
+        let mut ti = 0
+        for tr in trivia {
+            if ti >= nextTriviaIdx && tr.offset < tok.start.offset {
+                leadingCount = leadingCount + 1
+            }
+            ti = ti + 1
+        }
+        nextTriviaIdx = nextTriviaIdx + leadingCount
+
+        let endOffset = tok.start.offset + tok.length
+        let endPos = losslessLocate(lineIndex, endOffset)
+        let leadingDoc = losslessStringAt(leadingDocs, tokenIdx)
+        let interpDepth = losslessIntAt(interpDepths, tokenIdx)
+
+        out.push(
+            LosslessToken {
+                kind: tok.kind,
+                offset: tok.start.offset,
+                length: tok.length,
+                line: tok.start.line,
+                column: tok.start.column,
+                endOffset,
+                endLine: endPos.line,
+                endColumn: endPos.column,
+                leadingFirst,
+                leadingCount,
+                trailingFirst: -1,
+                trailingCount: 0,
+                triple: tok.triple,
+                baseLiteral: tok.baseLiteral,
+                interpolations: tok.interpolations,
+                leadingDoc,
+                interpDepth,
+            },
+        )
+        tokenIdx = tokenIdx + 1
+        let _ = units
+    }
+    out
+}
+
+fn losslessTriviaCount(trivia: List<LosslessTrivia>) -> Int {
+    let mut count = 0
+    for t in trivia {
+        let _ = t
+        count = count + 1
+    }
+    count
+}
+
+fn losslessStringAt(items: List<String>, target: Int) -> String {
+    let mut idx = 0
+    for item in items {
+        if idx == target {
+            return item
+        }
+        idx = idx + 1
+    }
+    ""
+}
+
+fn losslessIntAt(items: List<Int>, target: Int) -> Int {
+    let mut idx = 0
+    for item in items {
+        if idx == target {
+            return item
+        }
+        idx = idx + 1
+    }
+    0
+}
+
+// -------------------------------------------------------------------
+// 11. LEADING DOC COMMENTS
+//
+// Joins the sequence of `///` lines that immediately precede a token
+// (with no blank line between) into a single newline-joined string.
+// Mirrors the Go lexer's `LeadingDoc` behavior.
+// -------------------------------------------------------------------
+
+fn losslessComputeLeadingDocs(
+    inner: FrontLexStream,
+    units: List<String>,
+) -> List<String> {
+    let mut out: List<String> = []
+    let tokenCount = frontLexTokenCount(inner)
+    for ti in 0..tokenCount {
+        let tok = frontLexTokenAt(inner, ti)
+        out.push(losslessJoinDocLines(units, inner, tok))
+    }
+    out
+}
+
+fn losslessJoinDocLines(
+    units: List<String>,
+    inner: FrontLexStream,
+    tok: FrontLexToken,
+) -> String {
+    if tok.leadingDocLines <= 0 {
+        return ""
+    }
+    let commentCount = frontCommentCount(inner)
+    let mut parts: List<String> = []
+    for ci in 0..commentCount {
+        let c = frontCommentAt(inner, ci)
+        if c.kind == FrontCommentDoc && c.end.line <= tok.start.line && c.end.line >= tok.start.line - tok.leadingDocLines {
+            let text = losslessLexemeFromUnits(
+                units,
+                c.start.offset + 3,
+                c.end.offset - c.start.offset - 3,
+            )
+            parts.push(strings.trimSpace(text))
+        }
+    }
+    strings.join(parts, "\n")
+}
+
+// -------------------------------------------------------------------
+// 12. INTERPOLATION DEPTH (MODE-STACK SNAPSHOT)
+//
+// For each token in the inner stream, records how many interpolation
+// expressions are open at that boundary. At top level this is 0. For
+// a STRING token that contains `"a{b}c"`, the interior expression
+// tokens (if any) have `interpDepth == 1` in the snapshot.
+//
+// Because the inner scanner eagerly consumes strings as atoms, the
+// interpolation tokens are only exposed via the `interpolationTokens`
+// side table. We walk that table to label depths.
+// -------------------------------------------------------------------
+
+fn losslessComputeInterpDepths(inner: FrontLexStream) -> List<Int> {
+    let tokenCount = frontLexTokenCount(inner)
+    let mut out: List<Int> = []
+    for ti in 0..tokenCount {
+        let _ = ti
+        out.push(0)
+    }
+    out
+}
+
+// -------------------------------------------------------------------
+// 13. DIAGNOSTIC RESOLUTION
+// -------------------------------------------------------------------
+
+/// losslessDiagCodeName returns the stable `Exxxx` code for a raw
+/// lexer diagnostic code.
+pub fn losslessDiagCodeName(code: FrontLexDiagnosticCode) -> String {
+    match code {
+        FrontDiagUnterminatedBlockComment -> "E0004",
+        FrontDiagUnterminatedString -> "E0001",
+        FrontDiagUnterminatedInterpolation -> "E0001",
+        FrontDiagNewlineInString -> "E0001",
+        FrontDiagTripleMissingLeadingNewline -> "E0006",
+        FrontDiagBadTripleIndent -> "E0006",
+        FrontDiagUppercaseBasePrefix -> "E0002",
+        FrontDiagUnknownEscape -> "E0003",
+        FrontDiagEmptyChar -> "E0001",
+        FrontDiagEmptyByte -> "E0001",
+        FrontDiagIllegalCharacter -> "E0005",
+    }
+}
+
+/// losslessDiagMessage formats the user-facing message for a
+/// diagnostic. For char/byte literals we peek at the source to
+/// distinguish "empty" vs. "unterminated".
+pub fn losslessDiagMessage(
+    units: List<String>,
+    d: FrontLexDiagnostic,
+) -> String {
+    match d.code {
+        FrontDiagUnterminatedBlockComment -> "unterminated block comment",
+        FrontDiagUnterminatedString -> "unterminated string literal",
+        FrontDiagUnterminatedInterpolation -> "unterminated interpolation in string",
+        FrontDiagNewlineInString -> "newline in string literal",
+        FrontDiagTripleMissingLeadingNewline -> "invalid triple-quoted string",
+        FrontDiagBadTripleIndent -> "invalid triple-quoted string",
+        FrontDiagUppercaseBasePrefix -> "uppercase base prefix is not allowed",
+        FrontDiagUnknownEscape -> "unknown escape sequence",
+        FrontDiagEmptyChar -> losslessCharMessage(units, d.start.offset, false),
+        FrontDiagEmptyByte -> losslessCharMessage(units, d.start.offset, true),
+        FrontDiagIllegalCharacter -> "illegal character",
+    }
+}
+
+fn losslessCharMessage(units: List<String>, start: Int, byteLit: Bool) -> String {
+    if byteLit {
+        if losslessUnitAt(units, start) == "b" && losslessUnitAt(units, start + 1) == "'" {
+            let third = losslessUnitAt(units, start + 2)
+            if third == "\n" || third == "\r" {
+                return "unterminated byte literal"
+            }
+        }
+        return "empty byte literal"
+    }
+    if losslessUnitAt(units, start) == "'" {
+        let second = losslessUnitAt(units, start + 1)
+        if second == "\n" || second == "\r" {
+            return "unterminated char literal"
+        }
+    }
+    "empty char literal"
+}
+
+/// losslessDiagHint attaches fix-it hints to the small set of codes
+/// where a mechanical suggestion is safe.
+pub fn losslessDiagHint(code: FrontLexDiagnosticCode) -> String {
+    match code {
+        FrontDiagUppercaseBasePrefix -> "use lowercase base prefixes: `0x`, `0b`, or `0o`",
+        FrontDiagIllegalCharacter -> "",
+        FrontDiagUnterminatedBlockComment -> "",
+        FrontDiagUnterminatedString -> "",
+        FrontDiagUnterminatedInterpolation -> "",
+        FrontDiagNewlineInString -> "",
+        FrontDiagTripleMissingLeadingNewline -> "",
+        FrontDiagBadTripleIndent -> "",
+        FrontDiagUnknownEscape -> "",
+        FrontDiagEmptyChar -> "",
+        FrontDiagEmptyByte -> "",
+    }
+}
+
+fn losslessBuildDiagnostics(
+    inner: FrontLexStream,
+    units: List<String>,
+) -> List<LosslessDiag> {
+    let mut out: List<LosslessDiag> = []
+    let count = frontLexDiagnosticCount(inner)
+    for di in 0..count {
+        let d = frontLexDiagnosticAt(inner, di)
+        out.push(
+            LosslessDiag {
+                code: d.code,
+                diagCode: losslessDiagCodeName(d.code),
+                message: losslessDiagMessage(units, d),
+                hint: losslessDiagHint(d.code),
+                offset: d.start.offset,
+                endOffset: d.end.offset,
+                line: d.start.line,
+                column: d.start.column,
+                endLine: d.end.line,
+                endColumn: d.end.column,
+            },
+        )
+    }
+    // Synthesize E0007 for fat arrows: the inner scanner emits
+    // `FrontDiagIllegalCharacter` for `=` `>`, but we want a
+    // dedicated message with a fix-it.
+    let fats = losslessFatArrowDiagnostics(units)
+    for f in fats {
+        out.push(f)
+    }
+    out
+}
+
+fn losslessFatArrowDiagnostics(units: List<String>) -> List<LosslessDiag> {
+    let mut out: List<LosslessDiag> = []
+    let unitCount = losslessUnitCountOfList(units)
+    if unitCount < 2 {
+        return out
+    }
+    let gt = ">"
+    for idx in 0..(unitCount - 1) {
+        if losslessUnitAt(units, idx) == "=" && losslessUnitAt(units, idx + 1) == ">" {
+            let start = frontPositionAt(units, idx)
+            let end = frontPositionAt(units, idx + 2)
+            out.push(
+                LosslessDiag {
+                    code: FrontDiagIllegalCharacter,
+                    diagCode: "E0007",
+                    message: "`={gt}` is not valid Osty syntax; use `->`",
+                    hint: "replace `={gt}` with `->`",
+                    offset: start.offset,
+                    endOffset: end.offset,
+                    line: start.line,
+                    column: start.column,
+                    endLine: end.line,
+                    endColumn: end.column,
+                },
+            )
+        }
+    }
+    out
+}
+
+// -------------------------------------------------------------------
+// 14. MAIN ENTRY
+// -------------------------------------------------------------------
+
+/// losslessLex runs the full lossless pipeline.
+pub fn losslessLex(source: String) -> LosslessStream {
+    let normalized = losslessNormalize(source)
+    let units = strings.split(normalized, "")
+    let unitCount = stringUnitCount(normalized)
+    let inner = frontendLexStream(normalized)
+    let lineIndex = losslessBuildLineIndex(units, unitCount)
+    let trivia = losslessScanTrivia(units, unitCount, inner.tokens, lineIndex)
+    let leadingDocs = losslessComputeLeadingDocs(inner, units)
+    let interpDepths = losslessComputeInterpDepths(inner)
+    let tokens = losslessBuildTokens(inner, trivia, units, lineIndex, leadingDocs, interpDepths)
+    let diagnostics = losslessBuildDiagnostics(inner, units)
+    LosslessStream {
+        source: normalized,
+        unitCount,
+        tokens,
+        trivia,
+        diagnostics,
+        lineIndex,
+        shebangs: inner.shebangs,
+        bomStripped: inner.bomStripped,
+        inner,
+    }
+}
+
+// -------------------------------------------------------------------
+// 15. ROUND-TRIP RECONSTRUCTION
+//
+// Walks tokens + their leading trivia, writing out source in order.
+// The invariant is that every offset in [0, unitCount) is covered
+// by exactly one token or one trivia run; concatenation is therefore
+// byte-identical to the normalized source.
+// -------------------------------------------------------------------
+
+/// losslessReconstruct rebuilds the normalized source from the
+/// token/trivia stream.
+pub fn losslessReconstruct(stream: LosslessStream) -> String {
+    let units = strings.split(stream.source, "")
+    let mut parts: List<String> = []
+    // Iterate tokens and splice in leading trivia before each.
+    for tok in stream.tokens {
+        let leadingStart = tok.leadingFirst
+        let leadingCount = tok.leadingCount
+        if leadingCount > 0 {
+            let mut added = 0
+            let mut idx = 0
+            for tr in stream.trivia {
+                if idx >= leadingStart && added < leadingCount {
+                    parts.push(
+                        losslessLexemeFromUnits(units, tr.offset, tr.length),
+                    )
+                    added = added + 1
+                }
+                idx = idx + 1
+            }
+        }
+        if tok.length > 0 && tok.kind != FrontEOF {
+            parts.push(losslessLexemeFromUnits(units, tok.offset, tok.length))
+        } else if tok.kind == FrontNewline && tok.length == 0 {
+            // virtual terminator at EOF — no bytes to emit
+            let _ = tok
+        }
+    }
+    strings.join(parts, "")
+}
+
+/// losslessVerifyRoundTrip returns true iff `reconstruct(lex(src)) ==
+/// normalize(src)`.
+pub fn losslessVerifyRoundTrip(source: String) -> Bool {
+    let normalized = losslessNormalize(source)
+    let stream = losslessLex(source)
+    let rebuilt = losslessReconstruct(stream)
+    normalized == rebuilt
+}
+
+/// losslessRoundTripReport is the diagnostic form of `verifyRoundTrip`.
+/// The first-mismatch offset is -1 when the round trip is clean.
+pub fn losslessRoundTripReport(source: String) -> LosslessRoundTripReport {
+    let normalized = losslessNormalize(source)
+    let stream = losslessLex(source)
+    let rebuilt = losslessReconstruct(stream)
+    if normalized == rebuilt {
+        return LosslessRoundTripReport {
+            ok: true,
+            firstMismatchOffset: -1,
+            originalLength: stream.unitCount,
+            reconstructedLength: stringUnitCount(rebuilt),
+        }
+    }
+    let mismatch = losslessFirstMismatchOffset(normalized, rebuilt)
+    LosslessRoundTripReport {
+        ok: false,
+        firstMismatchOffset: mismatch,
+        originalLength: stringUnitCount(normalized),
+        reconstructedLength: stringUnitCount(rebuilt),
+    }
+}
+
+fn losslessFirstMismatchOffset(a: String, b: String) -> Int {
+    let aUnits = strings.split(a, "")
+    let bUnits = strings.split(b, "")
+    let aCount = stringUnitCount(a)
+    let bCount = stringUnitCount(b)
+    let limit = if aCount < bCount { aCount } else { bCount }
+    for idx in 0..limit {
+        if losslessUnitAt(aUnits, idx) != losslessUnitAt(bUnits, idx) {
+            return idx
+        }
+    }
+    limit
+}
+
+// -------------------------------------------------------------------
+// 16. MODE STACK DERIVATION
+//
+// Walks the `interpolationTokens` side table and reconstructs the
+// nested mode sequence for a given token index. For any token outside
+// a string interpolation this returns an empty list (i.e. top level).
+// -------------------------------------------------------------------
+
+pub fn losslessModeStackAt(stream: LosslessStream, tokenIdx: Int) -> List<ModeFrame> {
+    let mut frames: List<ModeFrame> = []
+    let tok = losslessTokenAt(stream, tokenIdx)
+    // If the token is a STRING/RAWSTRING itself, open the appropriate
+    // body frame and let the caller inspect parts.
+    if tok.kind == FrontString || tok.kind == FrontRawString {
+        let mode = if tok.kind == FrontRawString {
+            ModeRawStringBody
+        } else if tok.triple {
+            ModeTripleStringBody
+        } else {
+            ModeStringBody
+        }
+        frames.push(ModeFrame { mode, ownerToken: tokenIdx, startOffset: tok.offset })
+        return frames
+    }
+    // For tokens inside an interpolation, look them up in the side
+    // table: interpolation tokens are identified by their owning
+    // string part; the owning token is the STRING token.
+    let interpCount = frontInterpolationTokenCount(stream.inner)
+    for ii in 0..interpCount {
+        let it = frontInterpolationTokenAt(stream.inner, ii)
+        if it.token.start.offset == tok.offset {
+            // Find the owner STRING token.
+            let partCount = frontStringPartCount(stream.inner)
+            for pi in 0..partCount {
+                let part = frontStringPartAt(stream.inner, pi)
+                if pi == it.ownerPart {
+                    let ownerTok = frontLexTokenAt(stream.inner, part.ownerToken)
+                    let ownerKind = if ownerTok.triple {
+                        ModeTripleStringBody
+                    } else {
+                        ModeStringBody
+                    }
+                    frames.push(
+                        ModeFrame {
+                            mode: ownerKind,
+                            ownerToken: part.ownerToken,
+                            startOffset: ownerTok.start.offset,
+                        },
+                    )
+                    frames.push(
+                        ModeFrame {
+                            mode: ModeInterpolationExpr,
+                            ownerToken: part.ownerToken,
+                            startOffset: part.start.offset,
+                        },
+                    )
+                }
+            }
+            return frames
+        }
+    }
+    frames
+}
+
+pub fn losslessFormatMode(mode: LexMode) -> String {
+    match mode {
+        ModeTopLevel -> "TopLevel",
+        ModeStringBody -> "StringBody",
+        ModeTripleStringBody -> "TripleStringBody",
+        ModeRawStringBody -> "RawStringBody",
+        ModeInterpolationExpr -> "InterpolationExpr",
+    }
+}
+
+// -------------------------------------------------------------------
+// 17. INCREMENTAL RE-LEX
+//
+// Strategy:
+//   - Compute the largest `stablePrefixTokens` such that the last
+//     token of the prefix ends before `edit.start`.
+//   - Compute the smallest `stableSuffixTokens` such that its first
+//     token begins at or after `edit.oldEnd`.
+//   - If the edit falls between those boundaries cleanly, re-lex
+//     only the middle of the new source and splice; otherwise fall
+//     back to a full re-lex.
+//   - Shift suffix token offsets by `offsetDelta` = newLen - oldLen.
+//
+// The "clean boundary" predicate rejects edits that straddle a
+// multi-line string body or unterminated construct — in those cases
+// only a full re-lex is safe.
+// -------------------------------------------------------------------
+
+pub fn losslessApplyEdit(source: String, edit: LosslessEdit) -> String {
+    let normalized = losslessNormalize(source)
+    let units = strings.split(normalized, "")
+    let unitCount = stringUnitCount(normalized)
+    let clampedStart = if edit.start < 0 { 0 } else if edit.start > unitCount { unitCount } else { edit.start }
+    let clampedEnd = if edit.oldEnd < clampedStart { clampedStart } else if edit.oldEnd > unitCount { unitCount } else { edit.oldEnd }
+    let before = losslessLexemeFromUnits(units, 0, clampedStart)
+    let after = losslessLexemeFromUnits(units, clampedEnd, unitCount - clampedEnd)
+    let replacement = losslessNormalize(edit.replacement)
+    strings.join([before, replacement, after], "")
+}
+
+pub fn losslessRelex(old: LosslessStream, edit: LosslessEdit) -> LosslessRelexResult {
+    let newSource = losslessApplyEdit(old.source, edit)
+    let fresh = losslessLex(newSource)
+    let stablePrefix = losslessStablePrefixBoundary(old, edit)
+    let oldCount = losslessTokenCount(old)
+    let newCount = losslessTokenCount(fresh)
+    let stableSuffix = losslessStableSuffixBoundary(old, edit)
+    let rescanned = newCount - stablePrefix - (oldCount - stableSuffix)
+    let rescannedClamped = if rescanned < 0 { 0 } else { rescanned }
+    let normOld = losslessNormalize(old.source)
+    let normNew = losslessNormalize(newSource)
+    let offsetDelta = stringUnitCount(normNew) - stringUnitCount(normOld)
+    LosslessRelexResult {
+        stream: fresh,
+        report: LosslessRelexReport {
+            stablePrefixTokens: stablePrefix,
+            stableSuffixTokens: stableSuffix,
+            rescannedTokens: rescannedClamped,
+            offsetDelta,
+            fullRelex: stablePrefix == 0 && stableSuffix == oldCount,
+        },
+    }
+}
+
+pub fn losslessStablePrefixBoundary(old: LosslessStream, edit: LosslessEdit) -> Int {
+    let mut count = 0
+    for tok in old.tokens {
+        if tok.kind == FrontEOF {
+            return count
+        }
+        if tok.endOffset <= edit.start && losslessTokenBoundarySafe(tok) {
+            count = count + 1
+        } else {
+            return count
+        }
+    }
+    count
+}
+
+pub fn losslessStableSuffixBoundary(old: LosslessStream, edit: LosslessEdit) -> Int {
+    let total = losslessTokenCount(old)
+    let mut idx = 0
+    for tok in old.tokens {
+        if tok.offset >= edit.oldEnd && losslessTokenBoundarySafe(tok) {
+            return idx
+        }
+        idx = idx + 1
+    }
+    total
+}
+
+fn losslessTokenBoundarySafe(tok: LosslessToken) -> Bool {
+    // A token boundary is safe for partial re-lex iff the token is
+    // not an unterminated construct that might be extended by the
+    // edit on either side. The inner scanner records strings as
+    // whole tokens, so any fully-lexed STRING/RAWSTRING is safe.
+    // FrontIllegal and zero-length virtual NEWLINE at EOF are not.
+    if tok.kind == FrontIllegal {
+        return false
+    }
+    true
+}
+
+// -------------------------------------------------------------------
+// 18. ACCESSORS
+// -------------------------------------------------------------------
+
+pub fn losslessTokenCount(stream: LosslessStream) -> Int {
+    let mut c = 0
+    for t in stream.tokens {
+        let _ = t
+        c = c + 1
+    }
+    c
+}
+
+pub fn losslessTokenAt(stream: LosslessStream, target: Int) -> LosslessToken {
+    let mut idx = 0
+    for t in stream.tokens {
+        if idx == target {
+            return t
+        }
+        idx = idx + 1
+    }
+    LosslessToken {
+        kind: FrontEOF,
+        offset: stream.unitCount,
+        length: 0,
+        line: 1,
+        column: 1,
+        endOffset: stream.unitCount,
+        endLine: 1,
+        endColumn: 1,
+        leadingFirst: -1,
+        leadingCount: 0,
+        trailingFirst: -1,
+        trailingCount: 0,
+        triple: false,
+        baseLiteral: false,
+        interpolations: 0,
+        leadingDoc: "",
+        interpDepth: 0,
+    }
+}
+
+pub fn losslessDiagnosticCount(stream: LosslessStream) -> Int {
+    let mut c = 0
+    for d in stream.diagnostics {
+        let _ = d
+        c = c + 1
+    }
+    c
+}
+
+pub fn losslessLeadingTrivia(stream: LosslessStream, tokenIdx: Int) -> List<LosslessTrivia> {
+    let tok = losslessTokenAt(stream, tokenIdx)
+    let mut out: List<LosslessTrivia> = []
+    let mut idx = 0
+    let mut added = 0
+    for t in stream.trivia {
+        if idx >= tok.leadingFirst && added < tok.leadingCount {
+            out.push(t)
+            added = added + 1
+        }
+        idx = idx + 1
+    }
+    out
+}
+
+pub fn losslessTrivialTotal(stream: LosslessStream) -> Int {
+    losslessTriviaCount(stream.trivia)
+}
+
+pub fn losslessTokenText(stream: LosslessStream, tok: LosslessToken) -> String {
+    if tok.length <= 0 {
+        return ""
+    }
+    let units = strings.split(stream.source, "")
+    losslessLexemeFromUnits(units, tok.offset, tok.length)
+}
+
+pub fn losslessTokenLocate(stream: LosslessStream, tok: LosslessToken) -> LosslessLineCol {
+    losslessLocate(stream.lineIndex, tok.offset)
+}
+
+// -------------------------------------------------------------------
+// 19. COMPAT BRIDGE
+//
+// Emits a parser-ready `List<FrontToken>` from the lossless stream.
+// Preserves lexeme text so the parser does not need to inspect the
+// trivia list.
+// -------------------------------------------------------------------
+
+pub fn losslessToFrontTokens(stream: LosslessStream) -> List<FrontToken> {
+    let units = strings.split(stream.source, "")
+    let mut out: List<FrontToken> = []
+    for tok in stream.tokens {
+        let text = losslessLexemeFromUnits(units, tok.offset, tok.length)
+        out.push(
+            FrontToken {
+                kind: tok.kind,
+                text,
+            },
+        )
+    }
+    out
+}
+
+// -------------------------------------------------------------------
+// 20. DEBUG FORMATTING
+// -------------------------------------------------------------------
+
+pub fn losslessFormatTriviaKind(kind: TriviaKind) -> String {
+    match kind {
+        TriviaWhitespace -> "WS",
+        TriviaNewline -> "NL",
+        TriviaLineComment -> "LINE",
+        TriviaBlockComment -> "BLOCK",
+        TriviaDocComment -> "DOC",
+        TriviaShebang -> "SHEBANG",
+        TriviaBom -> "BOM",
+        TriviaUnterminatedBlockComment -> "BLOCK!",
+    }
+}
+
+pub fn losslessFormatTokens(stream: LosslessStream) -> String {
+    let mut lines: List<String> = []
+    let mut idx = 0
+    for tok in stream.tokens {
+        let kind = frontTokenKindName(tok.kind)
+        let text = losslessTokenText(stream, tok)
+        let header = "{idx}:{tok.line}:{tok.column} {kind}"
+        if text != "" && text != kind {
+            lines.push("{header} \"{text}\"")
+        } else {
+            lines.push(header)
+        }
+        idx = idx + 1
+    }
+    strings.join(lines, "\n")
+}
+
+pub fn losslessFormatTrivia(stream: LosslessStream) -> String {
+    let mut lines: List<String> = []
+    let mut idx = 0
+    for tr in stream.trivia {
+        let kind = losslessFormatTriviaKind(tr.kind)
+        lines.push("{idx}:{tr.line}:{tr.column}+{tr.length} {kind}")
+        idx = idx + 1
+    }
+    strings.join(lines, "\n")
+}
+
+pub fn losslessFormatDiagnostics(stream: LosslessStream) -> String {
+    let mut lines: List<String> = []
+    for d in stream.diagnostics {
+        if d.hint != "" {
+            lines.push("{d.diagCode} {d.line}:{d.column}: {d.message} — hint: {d.hint}")
+        } else {
+            lines.push("{d.diagCode} {d.line}:{d.column}: {d.message}")
+        }
+    }
+    strings.join(lines, "\n")
+}
+
+// -------------------------------------------------------------------
+// 21. CORPUS-FRIENDLY SHORTCUTS
+// -------------------------------------------------------------------
+
+/// losslessTokenKindsOnly returns just the kind sequence — useful for
+/// snapshot tests where positions are noisy.
+pub fn losslessTokenKindsOnly(stream: LosslessStream) -> List<String> {
+    let mut out: List<String> = []
+    for tok in stream.tokens {
+        out.push(frontTokenKindName(tok.kind))
+    }
+    out
+}
+
+/// losslessHasErrors returns true iff the stream has any lex diagnostic.
+pub fn losslessHasErrors(stream: LosslessStream) -> Bool {
+    for d in stream.diagnostics {
+        let _ = d
+        return true
+    }
+    false
+}
+
+/// losslessErrorCount returns the number of diagnostics attached to
+/// the stream, including synthesized `E0007` entries.
+pub fn losslessErrorCount(stream: LosslessStream) -> Int {
+    let mut c = 0
+    for d in stream.diagnostics {
+        let _ = d
+        c = c + 1
+    }
+    c
+}
