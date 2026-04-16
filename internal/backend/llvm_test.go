@@ -809,3 +809,44 @@ func TestLLVMBackendBinaryBuiltinResultFieldConstructors(t *testing.T) {
 		t.Fatalf("binary stdout = %q, want %q", got, want)
 	}
 }
+
+func TestLLVMBackendBinaryBuiltinResultConstructorsTrackLocalContext(t *testing.T) {
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
+
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitBinary, `struct Holder {
+    ok: Result<Int, String>
+    flag: Result<Bool, String>
+}
+
+fn wrap(value: Int) -> Result<Int, String> {
+    return Result.Ok(value)
+}
+
+fn consume(value: Result<Bool, String>) -> Int {
+    1
+}
+
+fn main() {
+    let ok: Result<Int, String> = Result.Ok(42)
+    let flag: Result<Bool, String> = Result.Ok(true)
+    let holder = Holder { ok: Result.Err("bad"), flag: Result.Ok(true) }
+    let wrapped = wrap(7)
+    println(consume(Result.Ok(true)))
+}
+`)
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	output, err := exec.Command(result.Artifacts.Binary).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
+	}
+	if got, want := string(output), "1\n"; got != want {
+		t.Fatalf("binary stdout = %q, want %q", got, want)
+	}
+}

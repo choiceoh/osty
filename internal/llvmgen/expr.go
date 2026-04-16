@@ -314,7 +314,7 @@ func (g *generator) emitStructLit(lit *ast.StructLit) (value, error) {
 		if litField.Value == nil {
 			v, err = g.emitIdent(litField.Name)
 		} else {
-			v, err = g.emitExprWithHint(litField.Value, field.listElemTyp, field.listElemString, field.mapKeyTyp, field.mapValueTyp, field.mapKeyString, field.setElemTyp, field.setElemString)
+			v, err = g.emitExprWithHintAndSourceType(litField.Value, field.sourceType, field.listElemTyp, field.listElemString, field.mapKeyTyp, field.mapValueTyp, field.mapKeyString, field.setElemTyp, field.setElemString)
 		}
 		if err != nil {
 			return value{}, err
@@ -1265,6 +1265,66 @@ func (g *generator) emitExprWithHint(expr ast.Expr, listElemTyp string, listElem
 	return g.emitExpr(expr)
 }
 
+func builtinResultPayloadSourceType(sourceType ast.Type, constructor string) ast.Type {
+	named, ok := sourceType.(*ast.NamedType)
+	if !ok || len(named.Path) != 1 || named.Path[0] != "Result" || len(named.Args) != 2 {
+		return nil
+	}
+	if constructor == "Err" {
+		return named.Args[1]
+	}
+	return named.Args[0]
+}
+
+func (g *generator) emitExprWithHintAndSourceType(expr ast.Expr, sourceType ast.Type, listElemTyp string, listElemString bool, mapKeyTyp string, mapValueTyp string, mapKeyString bool, setElemTyp string, setElemString bool) (value, error) {
+	if sourceType != nil {
+		if listElemTyp == "" {
+			if elemTyp, elemString, ok, err := llvmListElementInfo(sourceType, g.typeEnv()); err != nil {
+				return value{}, err
+			} else if ok {
+				listElemTyp = elemTyp
+				listElemString = elemString
+			}
+		}
+		if mapKeyTyp == "" && mapValueTyp == "" {
+			if keyTyp, valueTyp, keyString, ok, err := llvmMapTypes(sourceType, g.typeEnv()); err != nil {
+				return value{}, err
+			} else if ok {
+				mapKeyTyp = keyTyp
+				mapValueTyp = valueTyp
+				mapKeyString = keyString
+			}
+		}
+		if setElemTyp == "" {
+			if elemTyp, elemString, ok, err := llvmSetElementType(sourceType, g.typeEnv()); err != nil {
+				return value{}, err
+			} else if ok {
+				setElemTyp = elemTyp
+				setElemString = elemString
+			}
+		}
+	}
+	if info, ok := builtinResultTypeFromAST(sourceType, g.typeEnv()); ok {
+		g.resultContexts = append(g.resultContexts, builtinResultContext{
+			info:       info,
+			sourceType: sourceType,
+		})
+		defer func() {
+			g.resultContexts = g.resultContexts[:len(g.resultContexts)-1]
+		}()
+	}
+	v, err := g.emitExprWithHint(expr, listElemTyp, listElemString, mapKeyTyp, mapValueTyp, mapKeyString, setElemTyp, setElemString)
+	if err != nil {
+		return value{}, err
+	}
+	if v.sourceType == nil && sourceType != nil {
+		if typ, err := llvmType(sourceType, g.typeEnv()); err == nil && typ == v.typ {
+			v.sourceType = sourceType
+		}
+	}
+	return v, nil
+}
+
 func (g *generator) usesAggregateListABI(elemTyp string) bool {
 	switch elemTyp {
 	case "", "i64", "i1", "double", "ptr":
@@ -2061,7 +2121,7 @@ func (g *generator) emitBuiltinResultConstructor(call *ast.CallExpr) (value, boo
 	if !ok {
 		return value{}, false, nil
 	}
-	info, ok := g.currentBuiltinResultType()
+	ctx, ok := g.currentBuiltinResultContext()
 	if !ok {
 		return value{}, true, unsupportedf("call", "%s requires a concrete Result<T, E> context", name)
 	}
@@ -2069,14 +2129,14 @@ func (g *generator) emitBuiltinResultConstructor(call *ast.CallExpr) (value, boo
 		return value{}, true, unsupportedf("call", "%s requires one positional argument", name)
 	}
 	payloadIndex := 1
-	payloadType := info.okTyp
+	payloadType := ctx.info.okTyp
 	tag := "0"
 	if name == "Err" {
 		payloadIndex = 2
-		payloadType = info.errTyp
+		payloadType = ctx.info.errTyp
 		tag = "1"
 	}
-	payload, err := g.emitExpr(call.Args[0].Value)
+	payload, err := g.emitExprWithHintAndSourceType(call.Args[0].Value, builtinResultPayloadSourceType(ctx.sourceType, name), "", false, "", "", false, "", false)
 	if err != nil {
 		return value{}, true, err
 	}
@@ -2086,27 +2146,31 @@ func (g *generator) emitBuiltinResultConstructor(call *ast.CallExpr) (value, boo
 	emitter := g.toOstyEmitter()
 	fields := []*LlvmValue{
 		toOstyValue(value{typ: "i64", ref: tag}),
-		toOstyValue(llvmZeroValue(info.okTyp)),
-		toOstyValue(llvmZeroValue(info.errTyp)),
+		toOstyValue(llvmZeroValue(ctx.info.okTyp)),
+		toOstyValue(llvmZeroValue(ctx.info.errTyp)),
 	}
 	fields[payloadIndex] = toOstyValue(payload)
-	out := llvmStructLiteral(emitter, info.typ, fields)
+	out := llvmStructLiteral(emitter, ctx.info.typ, fields)
 	g.takeOstyEmitter(emitter)
 	result := fromOstyValue(out)
+	result.sourceType = ctx.sourceType
 	result.rootPaths = g.rootPathsForType(result.typ)
 	return result, true, nil
 }
 
-func (g *generator) currentBuiltinResultType() (builtinResultType, bool) {
+func (g *generator) currentBuiltinResultContext() (builtinResultContext, bool) {
+	if n := len(g.resultContexts); n != 0 {
+		return g.resultContexts[n-1], true
+	}
 	if info, ok := g.resultTypes[g.returnType]; ok {
-		return info, true
+		return builtinResultContext{info: info, sourceType: g.returnSourceType}, true
 	}
 	if len(g.resultTypes) == 1 {
 		for _, info := range g.resultTypes {
-			return info, true
+			return builtinResultContext{info: info}, true
 		}
 	}
-	return builtinResultType{}, false
+	return builtinResultContext{}, false
 }
 
 func (g *generator) optionalUserCallTarget(call *ast.CallExpr) (*fnSig, ast.Type, bool, error) {
@@ -2192,7 +2256,7 @@ func (g *generator) optionalUserCallArgs(sig *fnSig, innerSource ast.Type, base 
 			return nil, unsupportedf("call", "function %q requires positional arguments", sig.name)
 		}
 		param := sig.params[i+1]
-		v, err := g.emitExprWithHint(arg.Value, param.listElemTyp, param.listElemString, param.mapKeyTyp, param.mapValueTyp, param.mapKeyString, param.setElemTyp, param.setElemString)
+		v, err := g.emitExprWithHintAndSourceType(arg.Value, param.sourceType, param.listElemTyp, param.listElemString, param.mapKeyTyp, param.mapValueTyp, param.mapKeyString, param.setElemTyp, param.setElemString)
 		if err != nil {
 			return nil, err
 		}
@@ -2297,7 +2361,7 @@ func (g *generator) userCallArgs(sig *fnSig, receiverExpr ast.Expr, call *ast.Ca
 			return nil, unsupportedf("call", "function %q requires positional arguments", sig.name)
 		}
 		param := sig.params[paramIndex+i]
-		v, err := g.emitExprWithHint(arg.Value, param.listElemTyp, param.listElemString, param.mapKeyTyp, param.mapValueTyp, param.mapKeyString, param.setElemTyp, param.setElemString)
+		v, err := g.emitExprWithHintAndSourceType(arg.Value, param.sourceType, param.listElemTyp, param.listElemString, param.mapKeyTyp, param.mapValueTyp, param.mapKeyString, param.setElemTyp, param.setElemString)
 		if err != nil {
 			return nil, err
 		}

@@ -19,7 +19,7 @@ import (
 	"github.com/osty/osty/internal/token"
 )
 
-func (g *generator) emitReturningBlock(stmts []ast.Stmt, retType, retListElemTyp string, retMapKeyTyp string, retMapValueTyp string, retSetElemTyp string) error {
+func (g *generator) emitReturningBlock(stmts []ast.Stmt, retType string, retSourceType ast.Type, retListElemTyp string, retMapKeyTyp string, retMapValueTyp string, retSetElemTyp string) error {
 	if len(stmts) == 0 {
 		return unsupported("function-signature", "function body has no return value")
 	}
@@ -38,7 +38,7 @@ func (g *generator) emitReturningBlock(stmts []ast.Stmt, retType, retListElemTyp
 			if s.Value == nil {
 				return unsupported("function-signature", "bare return in value-returning function")
 			}
-			v, err := g.emitExprWithHint(s.Value, retListElemTyp, false, retMapKeyTyp, retMapValueTyp, false, retSetElemTyp, false)
+			v, err := g.emitExprWithHintAndSourceType(s.Value, retSourceType, retListElemTyp, false, retMapKeyTyp, retMapValueTyp, false, retSetElemTyp, false)
 			if err != nil {
 				return err
 			}
@@ -52,7 +52,7 @@ func (g *generator) emitReturningBlock(stmts []ast.Stmt, retType, retListElemTyp
 			g.leaveBlock()
 			return nil
 		case *ast.ExprStmt:
-			v, err := g.emitExprWithHint(s.X, retListElemTyp, false, retMapKeyTyp, retMapValueTyp, false, retSetElemTyp, false)
+			v, err := g.emitExprWithHintAndSourceType(s.X, retSourceType, retListElemTyp, false, retMapKeyTyp, retMapValueTyp, false, retSetElemTyp, false)
 			if err != nil {
 				return err
 			}
@@ -146,7 +146,7 @@ func (g *generator) emitLet(stmt *ast.LetStmt) error {
 			hintedSetElemString = setElemString
 		}
 	}
-	v, err := g.emitExprWithHint(stmt.Value, hintedListElemTyp, hintedListElemString, hintedMapKeyTyp, hintedMapValueTyp, hintedMapKeyString, hintedSetElemTyp, hintedSetElemString)
+	v, err := g.emitExprWithHintAndSourceType(stmt.Value, stmt.Type, hintedListElemTyp, hintedListElemString, hintedMapKeyTyp, hintedMapValueTyp, hintedMapKeyString, hintedSetElemTyp, hintedSetElemString)
 	if err != nil {
 		return err
 	}
@@ -178,7 +178,7 @@ func (g *generator) emitAssign(stmt *ast.AssignStmt) error {
 		if !slot.mutable {
 			return unsupportedf("statement", "assignment to immutable identifier %q", target.Name)
 		}
-		v, err := g.emitExprWithHint(stmt.Value, slot.listElemTyp, slot.listElemString, slot.mapKeyTyp, slot.mapValueTyp, slot.mapKeyString, slot.setElemTyp, slot.setElemString)
+		v, err := g.emitExprWithHintAndSourceType(stmt.Value, slot.sourceType, slot.listElemTyp, slot.listElemString, slot.mapKeyTyp, slot.mapValueTyp, slot.mapKeyString, slot.setElemTyp, slot.setElemString)
 		if err != nil {
 			return err
 		}
@@ -229,7 +229,7 @@ func (g *generator) emitFieldAssign(target *ast.FieldExpr, rhs ast.Expr) error {
 	if !ok {
 		return unsupportedf("expression", "struct %q has no field %q", info.name, target.Name)
 	}
-	v, err := g.emitExprWithHint(rhs, field.listElemTyp, field.listElemString, field.mapKeyTyp, field.mapValueTyp, field.mapKeyString, field.setElemTyp, field.setElemString)
+	v, err := g.emitExprWithHintAndSourceType(rhs, field.sourceType, field.listElemTyp, field.listElemString, field.mapKeyTyp, field.mapValueTyp, field.mapKeyString, field.setElemTyp, field.setElemString)
 	if err != nil {
 		return err
 	}
@@ -542,7 +542,7 @@ func (g *generator) emitReturn(stmt *ast.ReturnStmt) error {
 	case g.returnType == "" || g.returnType == "void":
 		return unsupported("function-signature", "return with value in void-returning function")
 	default:
-		ret, err = g.emitExprWithHint(stmt.Value, g.returnListElemTyp, false, "", "", false, "", false)
+		ret, err = g.emitExprWithHintAndSourceType(stmt.Value, g.returnSourceType, g.returnListElemTyp, false, "", "", false, "", false)
 		if err != nil {
 			return err
 		}

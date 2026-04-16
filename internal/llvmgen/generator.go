@@ -49,9 +49,11 @@ type generator struct {
 	body              []string
 	locals            []map[string]value
 	returnType        string
+	returnSourceType  ast.Type
 	returnListElemTyp string
 	currentBlock      string
 	currentReachable  bool
+	resultContexts    []builtinResultContext
 
 	needsGCRuntime bool
 	gcRootSlots    []value
@@ -90,6 +92,11 @@ type value struct {
 	rootPaths      [][]int
 }
 
+type builtinResultContext struct {
+	info       builtinResultType
+	sourceType ast.Type
+}
+
 const (
 	llvmGcRuntimeFrameSlotKind = 5
 )
@@ -100,6 +107,7 @@ func (g *generator) beginFunction() {
 	g.body = nil
 	g.locals = []map[string]value{{}}
 	g.returnType = ""
+	g.returnSourceType = nil
 	g.returnListElemTyp = ""
 	g.gcRootSlots = nil
 	g.gcRootMarks = []int{0}
@@ -108,6 +116,7 @@ func (g *generator) beginFunction() {
 	g.currentBlock = "entry"
 	g.currentReachable = true
 	g.loopStack = nil
+	g.resultContexts = nil
 }
 
 func (g *generator) bindGCRootIfManagedPointer(emitter *LlvmEmitter, slot value) {
