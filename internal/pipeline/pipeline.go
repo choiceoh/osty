@@ -480,6 +480,17 @@ func RunWithConfig(src []byte, stream io.Writer, cfg Config) Result {
 // Result has empty Stages and the error is returned to the caller so
 // the CLI can decide whether to abort.
 func RunPackage(dir string, stream io.Writer, cfg Config) (Result, error) {
+	pkg, err := resolve.LoadPackage(dir)
+	if err != nil {
+		return Result{}, err
+	}
+	return RunLoadedPackage(pkg, stream, cfg), nil
+}
+
+// RunLoadedPackage is RunPackage for an already-loaded package. Callers use
+// this when a command wants package-context behavior over a curated file set
+// rather than a directory scan.
+func RunLoadedPackage(pkg *resolve.Package, stream io.Writer, cfg Config) Result {
 	var r Result
 	emit := func(s Stage) {
 		r.Stages = append(r.Stages, s)
@@ -491,10 +502,6 @@ func RunPackage(dir string, stream io.Writer, cfg Config) (Result, error) {
 
 	// --- load (lex + parse, all files) ---
 	t0 := time.Now()
-	pkg, err := resolve.LoadPackage(dir)
-	if err != nil {
-		return r, err
-	}
 	totalBytes, totalDecls, totalStmts, totalUses := 0, 0, 0, 0
 	var loadDiags []*diag.Diagnostic
 	for _, pf := range pkg.Files {
@@ -659,7 +666,7 @@ func RunPackage(dir string, stream io.Writer, cfg Config) (Result, error) {
 		})
 	}
 
-	return r, nil
+	return r
 }
 
 // RunWorkspace runs the front-end across every package in a workspace

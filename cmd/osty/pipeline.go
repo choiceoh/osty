@@ -133,14 +133,23 @@ func runPipeline(args []string) {
 			os.Exit(1)
 		}
 	} else {
-		src, err := os.ReadFile(target)
+		selected, handled, err := loadSelectedPackageEntry(target)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "osty pipeline: %v\n", err)
 			os.Exit(1)
 		}
-		sourceForDiagnostics = src
-		cfg.GenSourcePath = target
-		r = pipeline.RunWithConfig(src, stream, cfg)
+		if handled {
+			r = pipeline.RunLoadedPackage(selected.pkg, stream, cfg)
+		} else {
+			src, err := os.ReadFile(target)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "osty pipeline: %v\n", err)
+				os.Exit(1)
+			}
+			sourceForDiagnostics = src
+			cfg.GenSourcePath = target
+			r = pipeline.RunWithConfig(src, stream, cfg)
+		}
 	}
 
 	// Baseline mode supersedes the regular table: we render the diff

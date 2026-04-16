@@ -54,9 +54,10 @@ type Artifacts struct {
 	OutputDir string
 	CachePath string
 
-	LLVMIR string
-	Object string
-	Binary string
+	GoSource string
+	LLVMIR   string
+	Object   string
+	Binary   string
 
 	RuntimeDir string
 }
@@ -70,6 +71,8 @@ func (l Layout) Artifacts(n Name, binaryName string) Artifacts {
 		CachePath: l.CachePath(n),
 	}
 	switch n {
+	case NameGo:
+		out.GoSource = filepath.Join(out.OutputDir, "main.go")
 	case NameLLVM:
 		out.LLVMIR = filepath.Join(out.OutputDir, "main.ll")
 		out.Object = filepath.Join(out.OutputDir, "main.o")

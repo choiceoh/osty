@@ -325,6 +325,53 @@ func main() {
 		}
 	}
 
+	if cmd == "check" || cmd == "typecheck" || cmd == "resolve" {
+		selected, handled, err := loadSelectedPackageEntry(path)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "osty: %v\n", err)
+			os.Exit(1)
+		}
+		if handled {
+			if flags.trace {
+				pipeline.RunLoadedPackage(selected.pkg, os.Stderr, pipeline.Config{})
+			}
+			switch cmd {
+			case "check":
+				diags := append(append([]*diag.Diagnostic{}, selected.res.Diags...), selected.chk.Diags...)
+				printPackageDiags(selected.pkg, diags, flags)
+				if hasError(diags) {
+					os.Exit(1)
+				}
+				return
+			case "typecheck":
+				diags := append(append([]*diag.Diagnostic{}, selected.res.Diags...), selected.chk.Diags...)
+				printPackageDiags(selected.pkg, diags, flags)
+				printTypes(selected.chk)
+				if hasError(diags) {
+					os.Exit(1)
+				}
+				return
+			case "resolve":
+				printPackageDiags(selected.pkg, selected.res.Diags, flags)
+				if len(selected.file.Refs) > 0 {
+					fmt.Printf("# %s\n", selected.file.Path)
+					printResolutionRefs(selected.file.Refs)
+				}
+				if flags.showScopes {
+					if pkgScope := selected.file.FileScope.Parent(); pkgScope != nil {
+						printScopeTree(pkgScope)
+					} else {
+						printScopeTree(selected.file.FileScope)
+					}
+				}
+				if hasError(selected.res.Diags) {
+					os.Exit(1)
+				}
+				return
+			}
+		}
+	}
+
 	src, err := os.ReadFile(path)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
