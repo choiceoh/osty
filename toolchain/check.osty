@@ -129,7 +129,7 @@ fn collectDecls(cx: ElabCx) {
     for declIdx in cx.ast.arena.decls {
         let node = astArenaNodeAt(cx.ast.arena, declIdx)
         match node.kind {
-            AstNFnDecl -> collectFnDecl(cx, declIdx, node, "", []),
+            AstNFnDecl -> collectFnDecl(cx, declIdx, node, "", [], []),
             AstNStructDecl -> collectStructDecl(cx, declIdx, node),
             AstNEnumDecl -> collectEnumDecl(cx, declIdx, node),
             AstNInterfaceDecl -> collectInterfaceDecl(cx, declIdx, node),
@@ -140,10 +140,18 @@ fn collectDecls(cx: ElabCx) {
     }
 }
 
-fn collectFnDecl(cx: ElabCx, declIdx: Int, node: AstNode, owner: String, ownerGenerics: List<String>) {
+fn collectFnDecl(
+    cx: ElabCx,
+    declIdx: Int,
+    node: AstNode,
+    owner: String,
+    ownerGenerics: List<String>,
+    ownerBounds: List<CheckGenericBound>,
+) {
     let name = node.text
     let generics = collectGenericNames(cx, node.children2)
     let combinedGenerics = appendStringLists(ownerGenerics, generics)
+    let combinedBounds = appendGenericBounds(ownerBounds, collectGenericBounds(cx, node.children2))
 
     // Build paramTys / paramNames from node.children (AstNParam entries).
     let mut paramNames: List<String> = []
@@ -175,7 +183,7 @@ fn collectFnDecl(cx: ElabCx, declIdx: Int, node: AstNode, owner: String, ownerGe
         paramNames,
         paramTys,
         generics: combinedGenerics,
-        genericBounds: collectGenericBounds(cx, node.children2),
+        genericBounds: combinedBounds,
     }
     checkRegisterFn(cx.env, sig)
 
@@ -187,7 +195,8 @@ fn collectFnDecl(cx: ElabCx, declIdx: Int, node: AstNode, owner: String, ownerGe
 fn collectStructDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
     let name = node.text
     let generics = collectGenericNames(cx, node.children2)
-    checkRegisterType(cx.env, CheckTypeSig { name, generics, kind: "struct" })
+    let genericBounds = collectGenericBounds(cx, node.children2)
+    checkRegisterType(cx.env, CheckTypeSig { name, generics, genericBounds, kind: "struct" })
     let ownerTy = tyNamed(cx.env.tys, name, genericListToTyArgs(cx, generics))
     checkRecordSymbol(cx.env, declIdx, "struct", name, "", ownerTy, node.start, node.end)
 
@@ -207,7 +216,7 @@ fn collectStructDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
                 checkRegisterField(cx.env, field)
                 checkRecordSymbol(cx.env, memberIdx, "field", member.text, name, effectiveTy, member.start, member.end)
             },
-            AstNFnDecl -> collectFnDecl(cx, memberIdx, member, name, generics),
+            AstNFnDecl -> collectFnDecl(cx, memberIdx, member, name, generics, genericBounds),
             _ -> {},
         }
     }
@@ -216,7 +225,8 @@ fn collectStructDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
 fn collectEnumDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
     let name = node.text
     let generics = collectGenericNames(cx, node.children2)
-    checkRegisterType(cx.env, CheckTypeSig { name, generics, kind: "enum" })
+    let genericBounds = collectGenericBounds(cx, node.children2)
+    checkRegisterType(cx.env, CheckTypeSig { name, generics, genericBounds, kind: "enum" })
     let ownerTy = tyNamed(cx.env.tys, name, genericListToTyArgs(cx, generics))
     checkRecordSymbol(cx.env, declIdx, "enum", name, "", ownerTy, node.start, node.end)
 
@@ -240,7 +250,7 @@ fn collectEnumDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
                 })
                 checkRecordSymbol(cx.env, memberIdx, "variant", member.text, name, ownerTy, member.start, member.end)
             },
-            AstNFnDecl -> collectFnDecl(cx, memberIdx, member, name, generics),
+            AstNFnDecl -> collectFnDecl(cx, memberIdx, member, name, generics, genericBounds),
             _ -> {},
         }
     }
@@ -248,14 +258,19 @@ fn collectEnumDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
 
 fn collectInterfaceDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
     let name = node.text
-    let generics = collectGenericNames(cx, node.children2)
     checkRegisterInterface(cx.env, name)
-    checkRegisterType(cx.env, CheckTypeSig { name, generics, kind: "interface" })
+    checkRegisterType(cx.env, CheckTypeSig { name, generics: [], genericBounds: [], kind: "interface" })
     checkRecordSymbol(cx.env, declIdx, "interface", name, "", tyNamed(cx.env.tys, name, []), node.start, node.end)
+    for superIdx in node.children2 {
+        let ifaceTy = astTypeToTyInCollect(cx, superIdx)
+        if ifaceTy >= 0 {
+            checkRegisterInterfaceExtends(cx.env, CheckInterfaceExt { owner: name, ifaceTy })
+        }
+    }
     for memberIdx in node.children {
         let member = astArenaNodeAt(cx.ast.arena, memberIdx)
         if member.kind == AstNFnDecl {
-            collectFnDecl(cx, memberIdx, member, name, generics)
+            collectFnDecl(cx, memberIdx, member, name, [], [])
         }
     }
 }
@@ -303,10 +318,14 @@ fn elaborateFnBody(cx: ElabCx, node: AstNode, owner: String) {
         return
     }
     let mark = checkScopeMark(cx.env)
+    let boundsMark = checkGenericBoundMark(cx.env)
     let prevReturn = cx.env.returnTy
     let prevFnName = cx.env.fnName
     cx.env.returnTy = sig.retTy
     cx.env.fnName = sig.name
+    for bound in sig.genericBounds {
+        checkAddGenericBound(cx.env, bound)
+    }
 
     // Bind parameters.
     let mut i = 0
@@ -323,6 +342,7 @@ fn elaborateFnBody(cx: ElabCx, node: AstNode, owner: String) {
 
     cx.env.returnTy = prevReturn
     cx.env.fnName = prevFnName
+    checkClearGenericBoundsAfter(cx.env, boundsMark)
     checkScopeDrop(cx.env, mark)
 }
 
@@ -394,6 +414,17 @@ fn collectGenericBounds(cx: ElabCx, idxs: List<Int>) -> List<CheckGenericBound> 
 
 fn appendStringLists(a: List<String>, b: List<String>) -> List<String> {
     let mut out: List<String> = []
+    for x in a {
+        out.push(x)
+    }
+    for y in b {
+        out.push(y)
+    }
+    out
+}
+
+fn appendGenericBounds(a: List<CheckGenericBound>, b: List<CheckGenericBound>) -> List<CheckGenericBound> {
+    let mut out: List<CheckGenericBound> = []
     for x in a {
         out.push(x)
     }

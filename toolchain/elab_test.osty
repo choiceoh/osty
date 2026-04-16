@@ -99,6 +99,148 @@ fn testElabForInBindsLoopElementType() {
     testing.assertEq(frontCheckResultBindingType(checked, "x"), "Int")
 }
 
+fn testElabAllowsMethodCallsThroughGenericBounds() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            interface Named {
+                fn name(self) -> String
+            }
+
+            struct User {
+                name: String
+
+                fn name(self) -> String {
+                    self.name
+                }
+            }
+
+            fn display<T: Named>(value: T) -> String {
+                value.name()
+            }
+
+            fn main() {
+                let user: User = User { name: "Ada" }
+                let label: String = display(user)
+            }
+            """,
+    )
+    testing.assertEq(checked.summary.errors, 0)
+    testing.assertEq(frontCheckResultBindingType(checked, "label"), "String")
+}
+
+fn testElabRejectsUnsatisfiedGenericBounds() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            interface Named {
+                fn name(self) -> String
+            }
+
+            struct User { age: Int }
+
+            fn display<T: Named>(value: T) -> String {
+                value.name()
+            }
+
+            fn main() {
+                let user: User = User { age: 37 }
+                let label: String = display(user)
+            }
+            """,
+    )
+    testing.assert(checked.summary.errors >= 1)
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0721"))
+}
+
+fn testElabRespectsInterfaceExtendsWhenCheckingBounds() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            interface Named {
+                fn name(self) -> String
+            }
+
+            interface Tagged: Named {
+                fn tag(self) -> String
+            }
+
+            struct User {
+                name: String
+
+                fn name(self) -> String {
+                    self.name
+                }
+
+                fn tag(self) -> String {
+                    "user"
+                }
+            }
+
+            fn display<T: Tagged>(value: T) -> String {
+                value.name()
+            }
+
+            fn main() {
+                let user: User = User { name: "Ada" }
+                let label: String = display(user)
+            }
+            """,
+    )
+    testing.assertEq(checked.summary.errors, 0)
+    testing.assertEq(frontCheckResultBindingType(checked, "label"), "String")
+}
+
+fn testElabCarriesOwnerGenericBoundsIntoMethods() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            interface Named {
+                fn name(self) -> String
+            }
+
+            struct User {
+                name: String
+
+                fn name(self) -> String {
+                    self.name
+                }
+            }
+
+            struct Box<T: Named> {
+                value: T
+
+                fn display(self) -> String {
+                    self.value.name()
+                }
+            }
+
+            fn main() {
+                let box: Box<User> = Box { value: User { name: "Ada" } }
+                let label: String = box.display()
+            }
+            """,
+    )
+    testing.assertEq(checked.summary.errors, 0)
+    testing.assertEq(frontCheckResultBindingType(checked, "label"), "String")
+}
+
+fn testElabRejectsUnsatisfiedOwnerGenericBounds() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            interface Named {
+                fn name(self) -> String
+            }
+
+            struct Box<T: Named> {
+                value: T
+            }
+
+            fn main() {
+                let box: Box<Int> = Box { value: 1 }
+            }
+            """,
+    )
+    testing.assert(checked.summary.errors >= 1)
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0721"))
+}
+
 fn testElabIfElseJoinsBranches() {
     let checked = frontendCheckSource(
         r"""

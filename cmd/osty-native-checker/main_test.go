@@ -41,3 +41,34 @@ func TestRunRejectsInvalidJSON(t *testing.T) {
 		t.Fatalf("run error = %v, want decode error", err)
 	}
 }
+
+func TestRunChecksGenericBoundsAndInterfaceExtends(t *testing.T) {
+	var goodOut bytes.Buffer
+	goodIn := strings.NewReader(`{"source":"interface Named { fn name(self) -> String }\ninterface Tagged: Named { fn tag(self) -> String }\nstruct User { name: String fn name(self) -> String { self.name } fn tag(self) -> String { \"user\" } }\nfn display<T: Tagged>(value: T) -> String { value.name() }\nfn main() { let user: User = User { name: \"Ada\" } let label: String = display(user) }\n"}`)
+	if err := run(goodIn, &goodOut); err != nil {
+		t.Fatalf("run good error: %v", err)
+	}
+	var goodResp checkResponse
+	if err := json.Unmarshal(goodOut.Bytes(), &goodResp); err != nil {
+		t.Fatalf("decode good response: %v", err)
+	}
+	if goodResp.Summary.Errors != 0 {
+		t.Fatalf("good summary errors = %d, want 0", goodResp.Summary.Errors)
+	}
+	if len(goodResp.Instantiations) == 0 {
+		t.Fatalf("good instantiations = %#v, want generic call facts", goodResp.Instantiations)
+	}
+
+	var badOut bytes.Buffer
+	badIn := strings.NewReader(`{"source":"interface Named { fn name(self) -> String }\nstruct User { age: Int }\nfn display<T: Named>(value: T) -> String { value.name() }\nfn main() { let user: User = User { age: 37 } let label: String = display(user) }\n"}`)
+	if err := run(badIn, &badOut); err != nil {
+		t.Fatalf("run bad error: %v", err)
+	}
+	var badResp checkResponse
+	if err := json.Unmarshal(badOut.Bytes(), &badResp); err != nil {
+		t.Fatalf("decode bad response: %v", err)
+	}
+	if badResp.Summary.Errors == 0 {
+		t.Fatalf("bad summary errors = %d, want > 0", badResp.Summary.Errors)
+	}
+}
