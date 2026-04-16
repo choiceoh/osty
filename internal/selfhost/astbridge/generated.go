@@ -265,8 +265,15 @@ func UseDeclNode(pos, end Pos, raw string, path []string, isGo bool, alias strin
 	u := &ast.UseDecl{PosV: pos, EndV: end, Path: compactStrings(path), RawPath: raw, Alias: alias, IsGoFFI: isGo, GoBody: compactDecls(body)}
 	if isGo {
 		u.GoPath = raw
+	} else if useDeclIsRuntimeFFI(u) {
+		u.IsRuntimeFFI = true
+		u.RuntimePath = raw
 	}
 	return u
+}
+
+func useDeclIsRuntimeFFI(u *ast.UseDecl) bool {
+	return u != nil && len(u.GoBody) > 0 && len(u.Path) > 0 && u.Path[0] == "runtime"
 }
 
 func LetDeclNode(pos, end Pos, pub, mut bool, mutPos Pos, name string, typ Type, value Expr, doc string, anns []Annotation) Decl {

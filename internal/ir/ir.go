@@ -305,12 +305,17 @@ type Decl interface {
 // for free functions; methods carry a non-nil Receiver naming the
 // owning type. The backend emits Methods lists inside StructDecl /
 // EnumDecl instead of threading receivers through here.
+//
+// RecvMut mirrors ast.Receiver.Mut for methods: it records whether the
+// receiver was written as `mut self`. Free functions leave it false.
+// Backends use it to pick value vs. pointer receiver lowering.
 type FnDecl struct {
 	Name     string
 	Params   []*Param
 	Return   Type
 	Body     *Block
 	Exported bool
+	RecvMut  bool
 	Generics []*TypeParam
 	SpanV    Span
 }

@@ -46,6 +46,15 @@ func (l *lowerer) run() (*Module, []error) {
 		Package: l.pkgName,
 		SpanV:   l.fileSpan(),
 	}
+	// Use declarations live in a separate AST slice (file.Uses) but must
+	// reach the IR so downstream passes (LLVM runtime-FFI dispatch, Go
+	// backend FFI emission) can see them. Emit them first so the order in
+	// mod.Decls mirrors the source order — uses always precede decls.
+	for _, u := range l.file.Uses {
+		if lowered := l.lowerUseDecl(u); lowered != nil {
+			mod.Decls = append(mod.Decls, lowered)
+		}
+	}
 	for _, d := range l.file.Decls {
 		if lowered := l.lowerDecl(d); lowered != nil {
 			mod.Decls = append(mod.Decls, lowered)
@@ -103,6 +112,7 @@ func (l *lowerer) lowerFnDecl(fn *ast.FnDecl) *FnDecl {
 		Name:     fn.Name,
 		Return:   l.lowerType(fn.ReturnType),
 		Exported: fn.Pub,
+		RecvMut:  fn.Recv != nil && fn.Recv.Mut,
 		SpanV:    nodeSpan(fn),
 	}
 	if out.Return == nil {

@@ -145,7 +145,11 @@ func legacyFnDeclFromIR(fn *ostyir.FnDecl, asMethod bool) (*ast.FnDecl, error) {
 		ReturnType: legacyTypeFromIR(fn.Return),
 	}
 	if asMethod {
-		out.Recv = &ast.Receiver{PosV: start, EndV: start}
+		recv := &ast.Receiver{PosV: start, EndV: start, Mut: fn.RecvMut}
+		if fn.RecvMut {
+			recv.MutPos = start
+		}
+		out.Recv = recv
 	}
 	for _, gp := range fn.Generics {
 		out.Generics = append(out.Generics, legacyTypeParamFromIR(gp))

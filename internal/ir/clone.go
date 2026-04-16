@@ -219,6 +219,7 @@ func cloneFnDecl(fn *FnDecl) *FnDecl {
 		Return:   CloneType(fn.Return),
 		Body:     cloneBlockOrNil(fn.Body),
 		Exported: fn.Exported,
+		RecvMut:  fn.RecvMut,
 		SpanV:    fn.SpanV,
 	}
 	if len(fn.Params) > 0 {
