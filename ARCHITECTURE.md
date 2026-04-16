@@ -178,9 +178,13 @@ The main v0.4 front-end static guarantee hooks are wired here:
   *and* per (generic struct/enum, concrete type-args) tuple, so LLVM
   only ever sees concrete symbols. Function symbols use Itanium
   `_Z…` mangling; nominal type symbols use the `_ZTS…` track for easy
-  distinction. Method-local generic parameters, generic interface
-  declarations, and bare function-pointer turbofish stay out of scope
-  for this phase,
+  distinction. Generic variant constructor calls (e.g.
+  `Maybe.Some(42)`) whose surface type the checker leaves as `*ErrType`
+  are recovered inside the monomorphizer via `inferVariantLitType` +
+  `recoverLiteralType` — payload TypeVars are unified against the
+  concrete types of the call's literal arguments. Method-local generic
+  parameters, generic interface declarations, and bare function-pointer
+  turbofish stay out of scope for this phase,
 - structural interface satisfaction checks composed interfaces,
   `Self`-typed signatures, generic receiver substitution, params, and
   generic bounds,

@@ -1365,6 +1365,116 @@ func TestMonomorphizeMethodLocalGenericSkipsWithWarning(t *testing.T) {
 	}
 }
 
+// ==== Phase 3 VariantLit type recovery ====
+
+func TestRecoverLiteralTypeHandlesCommonLiterals(t *testing.T) {
+	cases := []struct {
+		name string
+		expr Expr
+		want Type
+	}{
+		{"IntLit", &IntLit{Text: "42"}, TInt},
+		{"BoolLit", &BoolLit{Value: true}, TBool},
+		{"StringLit", &StringLit{}, TString},
+		{"FloatLit", &FloatLit{Text: "1.5"}, TFloat},
+		{"CharLit", &CharLit{Value: 'a'}, TChar},
+		{"ByteLit", &ByteLit{Value: 1}, TByte},
+	}
+	for _, tc := range cases {
+		got := recoverLiteralType(tc.expr)
+		if got != tc.want {
+			t.Errorf("%s: recoverLiteralType=%T(%v), want %T(%v)", tc.name, got, got, tc.want, tc.want)
+		}
+	}
+}
+
+func TestRecoverLiteralTypePrefersExprTypeWhenConcrete(t *testing.T) {
+	// A non-Err Type() on the expr must take priority over the literal
+	// fallback — primitives get defaults (Int → TInt) but an annotated
+	// literal (e.g. `42: Int32`) surfaces its carrier type.
+	got := recoverLiteralType(&IntLit{Text: "42", T: TInt32})
+	if got != TInt32 {
+		t.Fatalf("expected TInt32 from expr.T, got %T", got)
+	}
+}
+
+func TestRecoverLiteralTypeFallsBackWhenErrType(t *testing.T) {
+	// When the expr carries ErrType (checker dropped the annotation),
+	// recoverLiteralType must reach for the literal-kind default.
+	got := recoverLiteralType(&IntLit{Text: "42", T: ErrTypeVal})
+	if got != TInt {
+		t.Fatalf("expected TInt fallback for IntLit with ErrType, got %T", got)
+	}
+}
+
+func TestMonomorphizeInfersVariantLitTypeFromIntPayload(t *testing.T) {
+	// Simulate the front-end's ErrType drop: Maybe.Some(42) with every
+	// type slot left as ErrType. The recovery heuristic should infer
+	// `Maybe<Int>` from the IntLit payload, drive a Maybe<Int>
+	// specialization, and rewrite the VariantLit.T + Enum accordingly.
+	maybe := genericMaybeEnum()
+	lit := &VariantLit{
+		Enum:    "Maybe",
+		Variant: "Some",
+		T:       ErrTypeVal,
+		Args:    []Arg{{Value: &IntLit{Text: "42", T: ErrTypeVal}}},
+	}
+	main := &FnDecl{
+		Name: "main", Return: TUnit,
+		Body: &Block{Stmts: []Stmt{&LetStmt{
+			Name:  "m",
+			Type:  ErrTypeVal, // no annotation
+			Value: lit,
+		}}},
+	}
+	in := &Module{Package: "main", Decls: []Decl{maybe, main}}
+	out, errs := Monomorphize(in)
+	if len(errs) != 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	spec := findEnumSpec(out)
+	if spec == nil {
+		t.Fatalf("Maybe specialization missing; decls=%+v", out.Decls)
+	}
+	// Post-rewrite VariantLit should carry the mangled enum name in
+	// both Enum and T fields.
+	mainCp := out.Decls[0].(*FnDecl)
+	litCp := mainCp.Body.Stmts[0].(*LetStmt).Value.(*VariantLit)
+	if !strings.HasPrefix(litCp.Enum, "_ZTS") {
+		t.Fatalf("VariantLit.Enum should be mangled post-recovery, got %q", litCp.Enum)
+	}
+	if nt, ok := litCp.T.(*NamedType); !ok || nt.Name != litCp.Enum {
+		t.Fatalf("VariantLit.T should sync with mangled Enum, got %+v", litCp.T)
+	}
+	// The LetStmt annotation was missing — the scanner should have
+	// adopted the value's concrete type.
+	let := mainCp.Body.Stmts[0].(*LetStmt)
+	if _, isErr := let.Type.(*ErrType); isErr {
+		t.Fatalf("LetStmt.Type should be propagated from value, still ErrType")
+	}
+}
+
+func TestMonomorphizeVariantRecoveryLeavesPayloadFreeAlone(t *testing.T) {
+	// `Maybe.None` has no payload, so there's no concrete type to unify
+	// T against — the heuristic must bail out and leave the VariantLit
+	// untouched (no specialization requested).
+	maybe := genericMaybeEnum()
+	lit := &VariantLit{
+		Enum:    "Maybe",
+		Variant: "None",
+		T:       ErrTypeVal,
+	}
+	main := &FnDecl{
+		Name: "main", Return: TUnit,
+		Body: &Block{Stmts: []Stmt{&LetStmt{Name: "m", Type: ErrTypeVal, Value: lit}}},
+	}
+	in := &Module{Package: "main", Decls: []Decl{maybe, main}}
+	out, _ := Monomorphize(in)
+	if findEnumSpec(out) != nil {
+		t.Fatalf("payload-free Maybe.None must NOT drive a specialization (no inferable T)")
+	}
+}
+
 func TestMonomorphizeStructArityMismatchRecordsError(t *testing.T) {
 	pair := genericPairStruct()
 	main := &FnDecl{
