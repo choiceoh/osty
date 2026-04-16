@@ -1367,31 +1367,34 @@ func runGen(args []string, flags cliFlags) {
 		os.Exit(2)
 	}
 	path := fs.Arg(0)
-	src, err := os.ReadFile(path)
+	entry, err := loadGenPackageEntry(path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
+		fmt.Fprintf(os.Stderr, "osty gen: %v\n", err)
 		os.Exit(1)
 	}
-
-	// Emitting LLVM IR from a broken AST would cascade nonsense, so
-	// abort on any front-end error before calling into the backend.
-	file, parseDiags := parser.ParseDiagnostics(src)
-	res := resolveFile(file)
-	chk := check.File(file, res, checkOptsForSource(src))
-	allDiags := append(append(append([]*diag.Diagnostic{}, parseDiags...), res.Diags...), chk.Diags...)
+	blockingCheckDiags, deferredCheckDiags := splitGenCheckDiags(entry.chk.Diags)
+	allDiags := append([]*diag.Diagnostic{}, entry.res.Diags...)
+	allDiags = append(allDiags, blockingCheckDiags...)
 	if hasError(allDiags) {
-		printDiags(newFormatter(path, src, flags), allDiags, flags)
+		printPackageDiags(entry.pkg, allDiags, flags)
 		fmt.Fprintf(os.Stderr, "osty gen: front-end errors prevent transpilation\n")
 		os.Exit(2)
 	}
+	if len(deferredCheckDiags) > 0 {
+		reportDeferredGenCheck(path, deferredCheckDiags)
+	}
+	file, _, err := parseGenEmitFile(entry.pkg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "osty gen: %v\n", err)
+		os.Exit(1)
+	}
 
-	absPath, _ := filepath.Abs(path)
-	out, result, emitErr := emitGenArtifact(backendID, emitMode, pkgName, absPath, file, res, chk)
+	out, result, emitErr := emitGenArtifact(backendID, emitMode, pkgName, entry.sourcePath, file, entry.fileResult(), entry.chk)
 	if out == nil && emitErr != nil {
 		exitBackendEmitError("gen", result, emitErr)
 	}
 	if emitErr == nil {
-		reportTranspileWarning("osty gen", absPath, outPath, firstBackendWarning(result))
+		reportTranspileWarning("osty gen", entry.sourcePath, outPath, firstBackendWarning(result))
 	}
 
 	if outPath != "" {
@@ -1463,6 +1466,213 @@ func adjustGenResultForUserOutput(result *backend.Result, name backend.Name, out
 	if name == backend.NameLLVM {
 		result.Artifacts.LLVMIR = outPath
 	}
+}
+
+type genPackageEntry struct {
+	sourcePath string
+	pkg        *resolve.Package
+	res        *resolve.PackageResult
+	chk        *check.Result
+	file       *resolve.PackageFile
+}
+
+func loadGenPackageEntry(path string) (*genPackageEntry, error) {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	if files := toolchainGenInputFiles(absPath); len(files) > 0 {
+		return loadSelectedGenFiles(absPath, files)
+	}
+	ws, err := resolve.NewWorkspace(filepath.Dir(absPath))
+	if err != nil {
+		return nil, err
+	}
+	ws.Stdlib = stdlib.LoadCached()
+	if _, err := ws.LoadPackage(""); err != nil {
+		return nil, err
+	}
+	results := ws.ResolveAll()
+	checks := check.Workspace(ws, results, checkOpts())
+	pkg := ws.Packages[""]
+	if pkg == nil {
+		return nil, fmt.Errorf("%s: no package sources were loaded", filepath.Dir(absPath))
+	}
+	var entryFile *resolve.PackageFile
+	for _, pf := range pkg.Files {
+		if pf == nil {
+			continue
+		}
+		fp, err := filepath.Abs(pf.Path)
+		if err != nil {
+			continue
+		}
+		if fp == absPath {
+			entryFile = pf
+			break
+		}
+	}
+	if entryFile == nil {
+		return nil, fmt.Errorf("%s is not part of the package rooted at %s", absPath, pkg.Dir)
+	}
+	res := results[""]
+	if res == nil {
+		return nil, fmt.Errorf("%s: package resolution did not produce a root result", pkg.Dir)
+	}
+	chk := checks[""]
+	if chk == nil {
+		chk = &check.Result{}
+	}
+	return &genPackageEntry{
+		sourcePath: absPath,
+		pkg:        pkg,
+		res:        res,
+		chk:        chk,
+		file:       entryFile,
+	}, nil
+}
+
+func loadSelectedGenFiles(sourcePath string, files []string) (*genPackageEntry, error) {
+	pkgDir := filepath.Dir(sourcePath)
+	pkg := &resolve.Package{
+		Dir:  pkgDir,
+		Name: filepath.Base(pkgDir),
+	}
+	res := &resolve.PackageResult{}
+	chk := &check.Result{}
+	var entryFile *resolve.PackageFile
+	for _, path := range files {
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		file, parseDiags := parser.ParseDiagnostics(src)
+		pf := &resolve.PackageFile{
+			Path:       path,
+			Source:     src,
+			File:       file,
+			ParseDiags: parseDiags,
+		}
+		pkg.Files = append(pkg.Files, pf)
+		res.Diags = append(res.Diags, parseDiags...)
+		if path == sourcePath {
+			entryFile = pf
+		}
+	}
+	if entryFile == nil {
+		return nil, fmt.Errorf("%s is not part of the selected gen input set", sourcePath)
+	}
+	return &genPackageEntry{
+		sourcePath: sourcePath,
+		pkg:        pkg,
+		res:        res,
+		chk:        chk,
+		file:       entryFile,
+	}, nil
+}
+
+func toolchainGenInputFiles(sourcePath string) []string {
+	dir := filepath.Dir(sourcePath)
+	if filepath.Base(dir) != "toolchain" {
+		return nil
+	}
+	name := filepath.Base(sourcePath)
+	var rel []string
+	switch name {
+	case "semver.osty":
+		rel = []string{"semver.osty"}
+	case "semver_parse.osty":
+		rel = []string{"semver.osty", "semver_parse.osty"}
+	case "frontend.osty":
+		rel = []string{"semver.osty", "semver_parse.osty", "frontend.osty", "lexer.osty", "parser.osty", "formatter_ast.osty"}
+	case "check_bridge.osty":
+		rel = []string{"semver.osty", "semver_parse.osty", "frontend.osty", "lexer.osty", "parser.osty", "formatter_ast.osty", "check_bridge.osty"}
+	case "check.osty":
+		rel = []string{"semver.osty", "semver_parse.osty", "frontend.osty", "lexer.osty", "parser.osty", "formatter_ast.osty", "check_bridge.osty", "check.osty"}
+	default:
+		return nil
+	}
+	out := make([]string, 0, len(rel))
+	for _, file := range rel {
+		out = append(out, filepath.Join(dir, file))
+	}
+	return out
+}
+
+func (e *genPackageEntry) fileResult() *resolve.Result {
+	if e == nil || e.file == nil {
+		return nil
+	}
+	return &resolve.Result{
+		Refs:      e.file.Refs,
+		TypeRefs:  e.file.TypeRefs,
+		FileScope: e.file.FileScope,
+		Diags:     e.res.Diags,
+	}
+}
+
+func splitGenCheckDiags(diags []*diag.Diagnostic) (blocking, deferred []*diag.Diagnostic) {
+	for _, d := range diags {
+		if isDeferredGenCheckDiag(d) {
+			deferred = append(deferred, d)
+			continue
+		}
+		blocking = append(blocking, d)
+	}
+	return blocking, deferred
+}
+
+func isDeferredGenCheckDiag(d *diag.Diagnostic) bool {
+	if d == nil || d.Severity != diag.Error {
+		return false
+	}
+	return strings.HasPrefix(d.Message, "type checking unavailable for ")
+}
+
+func reportDeferredGenCheck(path string, diags []*diag.Diagnostic) {
+	if len(diags) == 0 {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "osty gen: warning: native type checking is unavailable for %s; continuing with backend-only emission\n", path)
+	seen := map[string]bool{}
+	for _, d := range diags {
+		for _, note := range d.Notes {
+			note = strings.TrimSpace(note)
+			if note == "" || seen[note] {
+				continue
+			}
+			seen[note] = true
+			fmt.Fprintf(os.Stderr, "osty gen: note: %s\n", note)
+		}
+	}
+}
+
+func parseGenEmitFile(pkg *resolve.Package) (*ast.File, []byte, error) {
+	if pkg == nil {
+		return nil, nil, fmt.Errorf("missing package input for gen")
+	}
+	var merged bytes.Buffer
+	for _, pf := range pkg.Files {
+		if pf == nil || len(pf.Source) == 0 {
+			continue
+		}
+		if merged.Len() > 0 {
+			merged.WriteByte('\n')
+		}
+		merged.Write(pf.Source)
+		if !bytes.HasSuffix(pf.Source, []byte("\n")) {
+			merged.WriteByte('\n')
+		}
+	}
+	src := merged.Bytes()
+	if len(src) == 0 {
+		return nil, nil, fmt.Errorf("%s: no source bytes were available for backend emission", pkg.Dir)
+	}
+	file, parseDiags := parser.ParseDiagnostics(src)
+	if hasError(parseDiags) {
+		return nil, nil, fmt.Errorf("%s: merged package source did not parse cleanly for backend emission", pkg.Dir)
+	}
+	return file, src, nil
 }
 
 // runNew implements the `osty new NAME` subcommand: scaffold a fresh
