@@ -37,6 +37,12 @@ void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_re
 void osty_gc_debug_collect(void);
 int64_t osty_gc_debug_live_count(void);
 int64_t osty_gc_debug_collection_count(void);
+int64_t osty_gc_debug_pre_write_count(void);
+int64_t osty_gc_debug_pre_write_managed_count(void);
+int64_t osty_gc_debug_post_write_count(void);
+int64_t osty_gc_debug_post_write_managed_count(void);
+int64_t osty_gc_debug_load_count(void);
+int64_t osty_gc_debug_load_managed_count(void);
 void *osty_rt_list_new(void);
 void osty_rt_list_push_ptr(void *list, void *value);
 int64_t osty_rt_list_len(void *list);
@@ -62,6 +68,12 @@ int main(void) {
     printf("%lld\n", (long long)osty_gc_debug_live_count());
     printf("%lld\n", (long long)osty_rt_list_len(list));
     printf("%d\n", osty_gc_load_v1(list) == list);
+    printf("%lld\n", (long long)osty_gc_debug_pre_write_count());
+    printf("%lld\n", (long long)osty_gc_debug_pre_write_managed_count());
+    printf("%lld\n", (long long)osty_gc_debug_post_write_count());
+    printf("%lld\n", (long long)osty_gc_debug_post_write_managed_count());
+    printf("%lld\n", (long long)osty_gc_debug_load_count());
+    printf("%lld\n", (long long)osty_gc_debug_load_managed_count());
     osty_gc_root_release_v1(list);
     osty_gc_debug_collect();
     printf("%lld\n", (long long)osty_gc_debug_live_count());
@@ -72,6 +84,8 @@ int main(void) {
     printf("%lld\n", (long long)osty_gc_debug_live_count());
     printf("%d\n", osty_rt_strings_Equal((const char *)osty_rt_list_get_ptr(list, 0), "gc"));
     printf("%d\n", osty_rt_strings_Equal((const char *)osty_rt_list_get_ptr(list, 1), "llvm"));
+    printf("%lld\n", (long long)osty_gc_debug_load_count());
+    printf("%lld\n", (long long)osty_gc_debug_load_managed_count());
     osty_gc_root_release_v1(list);
     osty_gc_debug_collect();
     printf("%lld\n", (long long)osty_gc_debug_live_count());
@@ -89,7 +103,7 @@ int main(void) {
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
-	if got, want := string(runOutput), "1\n0\n2\n1\n1\n0\n3\n1\n1\n0\n"; got != want {
+	if got, want := string(runOutput), "1\n0\n2\n1\n1\n1\n1\n1\n1\n1\n1\n0\n3\n1\n1\n3\n3\n0\n"; got != want {
 		t.Fatalf("runtime GC harness stdout = %q, want %q", got, want)
 	}
 }
