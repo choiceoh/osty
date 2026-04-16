@@ -494,3 +494,26 @@ fn testFrontendTypeCheckerAssignmentBatch() {
     testing.assertEq(checked.accepted, 2)
     testing.assertEq(checked.errors, 1)
 }
+
+fn testFrontendLexerRejectsBadNumericSeparator() {
+    // Each violation (trailing, after-prefix, consecutive) fires one
+    // FrontDiagBadNumericSeparator. Valid forms on the same line stay silent.
+    let summary = frontendLexSummary("1_ 0x_FF 1__2 1_000 0xDEAD_BEEF")
+
+    testing.assertEq(summary.errors, 3)
+    testing.assertEq(summary.literals, 5)
+}
+
+fn testFrontendLexerRejectsEmptyCharAndByte() {
+    let summary = frontendLexSummary("let a = '' \n let b = b''")
+
+    // Two empty-literal violations — both map to E0009 downstream.
+    testing.assertEq(summary.errors, 2)
+}
+
+fn testFrontendLexerAcceptsValidNumericSeparators() {
+    let summary = frontendLexSummary("1_000 0xFF_FF 0b1010_1010 0o7_7_7 1_000.5 1.5e1_0")
+
+    testing.assertEq(summary.errors, 0)
+    testing.assertEq(summary.literals, 6)
+}

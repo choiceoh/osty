@@ -127,6 +127,9 @@ func lexDiagnosticsFromFacts(rt runeTable, facts *OstyLexFacts) []*diag.Diagnost
 	for _, d := range facts.errors {
 		diags = append(diags, lexDiagnostic(d, rt))
 	}
+	// Bridge until selfhost regen lands: post-scan for §1.6.1 numeric
+	// separator violations and surface them as E0008.
+	diags = append(diags, scanBadNumericSeparators(rt)...)
 	return diags
 }
 

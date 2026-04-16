@@ -4,12 +4,37 @@
 // and asserts the expected diagnostic code. Subsections are delimited
 // by `// === CASE: <Code> === <hint>` lines and terminated by `// === END`.
 
+// === CASE: E0001 === unterminated string literal
+fn f() { let s = "hello
+}
+// === END
+
 // === CASE: E0002 === uppercase base prefix
 fn f() { let n = 0X1F }
 // === END
 
 // === CASE: E0003 === surrogate code point in escape
 fn f() { let c = '\u{D800}' }
+// === END
+
+// === CASE: E0005 === illegal (non-ASCII) character outside strings
+fn f() { let x = 1 ⚡ 2 }
+// === END
+
+// === CASE: E0006 === triple-quoted string without leading newline
+fn f() { let s = """oops""" }
+// === END
+
+// === CASE: E0007 === fat-arrow removed
+fn f() -> Int { match 0 { 0 => 1, _ => 2 } }
+// === END
+
+// === CASE: E0008 === numeric separator placement
+fn f() { let a = 1_; let b = 0x_FF; let c = 1__000 }
+// === END
+
+// === CASE: E0009 === empty char / byte literal
+fn f() { let a = ''; let b = b'' }
 // === END
 
 // === CASE: E0101 === `use go` fn with body
@@ -120,3 +145,7 @@ defer println("{x}")
 #[deprecated]
 pub fn f() {}
 // === END
+
+// === CASE: E0004 === unterminated block comment (MUST remain last — the
+// unclosed /* is intentional and swallows every byte to EOF).
+/* never closes

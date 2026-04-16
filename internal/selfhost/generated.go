@@ -17213,10 +17213,10 @@ func ostyLexDiagnosticCode(code FrontLexDiagnosticCode) string {
 			return "E0003"
 		}
 		if func() bool { _, ok := _m1647.(*FrontLexDiagnosticCode_FrontDiagEmptyChar); return ok }() {
-			return "E0001"
+			return "E0009"
 		}
 		if func() bool { _, ok := _m1647.(*FrontLexDiagnosticCode_FrontDiagEmptyByte); return ok }() {
-			return "E0001"
+			return "E0009"
 		}
 		if func() bool { _, ok := _m1647.(*FrontLexDiagnosticCode_FrontDiagIllegalCharacter); return ok }() {
 			return "E0005"
