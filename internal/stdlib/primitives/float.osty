@@ -34,11 +34,16 @@ pub struct __FloatMethods {
     pub fn isInfinite(self) -> Bool { false }
     pub fn isFinite(self) -> Bool { false }
     pub fn toBits(self) -> UInt64 { 0 }
+    pub fn toFixed(self, n: Int) -> String { "" }
 
-    // Conversions to integer types. Per §2.3 overflow aborts; no
-    // Result wrapping on the lossy path. The toInt family here
-    // mirrors Int's outward-facing conversions but loses the
-    // fractional part.
+    // Explicit conversions to Int. The mode is named at the call site
+    // and failures stay in the value channel.
+    pub fn toIntTrunc(self) -> Result<Int, Error> { Ok(0) }
+    pub fn toIntRound(self) -> Result<Int, Error> { Ok(0) }
+    pub fn toIntFloor(self) -> Result<Int, Error> { Ok(0) }
+    pub fn toIntCeil(self) -> Result<Int, Error> { Ok(0) }
+
+    // Legacy lossy conversions kept for source compatibility.
     pub fn toInt(self) -> Int { 0 }
     pub fn toInt32(self) -> Int32 { 0 }
     pub fn toInt64(self) -> Int64 { 0 }

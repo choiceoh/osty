@@ -14,7 +14,7 @@ func TestPrimitiveMethodsCompileAndRun(t *testing.T) {
     println("{n.abs()} {n.min(3)} {n.max(3)} {n.clamp(-5, 5)} {n.signum()} {n.pow(2)} {narrowed} {checked} {missing} {n.toString()}")
 
     let f: Float = 9.25
-    println("{f.sqrt().round().toString()} {f.floor().toInt()} {f.fract().toString()} {f.isFinite()}")
+    println("{f.sqrt().round().toString()} {f.floor().toIntFloor().unwrap()} {f.fract().toString()} {f.isFinite()} {f.toFixed(1)}")
     let i8: Int8 = 5
     let f32: Float32 = 4.0
     println("{i8.checkedAdd(1).unwrap().toInt()} {i8.min(3).toInt()} {i8.clamp(0, 4).toInt()} {f32.max(5.0).toFloat().toString()}")
@@ -35,7 +35,7 @@ func TestPrimitiveMethodsCompileAndRun(t *testing.T) {
         Err(_) -> println("bad int"),
     }
     match "2.5".toFloat() {
-        Ok(v) -> println(v.toInt()),
+        Ok(v) -> println(v.toIntTrunc().unwrap()),
         Err(_) -> println("bad float"),
     }
 }
@@ -46,7 +46,7 @@ func TestPrimitiveMethodsCompileAndRun(t *testing.T) {
 	out := strings.TrimSpace(runGo(t, goSrc))
 	want := strings.Join([]string{
 		"7 -7 3 -5 -1 49 7 3 true -7",
-		"3 9 0.25 true",
+		"3 9 0.25 true 9.2",
 		"6 3 4 5",
 		"A true false 97",
 		"OSTY LANG true true true",
@@ -72,7 +72,7 @@ fn main() {
     println("{max.checkedAdd(1).isNone()} {max.saturatingAdd(1).toInt()} {min.checkedSub(1).isNone()} {min.saturatingSub(1).toInt()}")
     println("{min.checkedAbs().isNone()} {min.wrappingAbs().toInt()} {min.checkedNeg().isNone()}")
     println("{min.checkedDiv(-1).isNone()} {min.saturatingDiv(-1).toInt()} {min.wrappingDiv(-1).toInt()} {min.wrappingMod(-1).toInt()}")
-    println("{ten.checkedMul(13).isNone()} {ten.saturatingMul(13).toInt()} {ten.checkedShl(8).isNone()} {ten.wrappingShl(8).toInt()}")
+    println("{ten.checkedMul(13).isNone()} {ten.saturatingMul(13).toInt()} {ten.checkedShl(8).isNone()} {ten.wrappingShl(8).toInt()} {ten.checkedShl(-1).isNone()} {ten.wrappingShl(-1).toInt()}")
     println("{u.checkedAdd(10).isNone()} {u.saturatingAdd(10).toInt()} {u.checkedSub(251).isNone()} {u.saturatingSub(251).toInt()} {u.checkedMul(2).isNone()} {u.saturatingMul(2).toInt()}")
 
     let accent = "e\u{0301}"
@@ -82,6 +82,12 @@ fn main() {
 
     let bad = bytes.fromHex("ff").unwrap()
     println("{bad.toString().isErr()} {bytes.toString(bad).isErr()}")
+
+    let half: Float = 2.5
+    let neg: Float = -2.5
+    println("{half.round().toString()} {neg.round().toString()} {half.toIntTrunc().unwrap()} {half.toIntRound().unwrap()} {neg.toIntFloor().unwrap()} {neg.toIntCeil().unwrap()} {half.toFixed(2)} {half.toFixed(-1)}")
+    let zero = 0.0
+    println("{(1.0 / zero).toIntTrunc().isErr()}")
 }
 `)
 	if err != nil {
@@ -92,10 +98,12 @@ fn main() {
 		"true 127 true -128",
 		"true -128 true",
 		"true 127 -128 0",
-		"true 127 true 10",
+		"true 127 true 10 true 0",
 		"true 255 true 0 true 255",
 		"2 1 1 1",
 		"true true",
+		"2 -2 2 2 -3 -2 2.50 2",
+		"true",
 	}, "\n")
 	if out != want {
 		t.Fatalf("stdout = %q, want %q\n--- source ---\n%s", out, want, goSrc)

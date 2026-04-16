@@ -1609,6 +1609,16 @@ func (g *gen) emitOptionalMethodCall(c *ast.CallExpr, f *ast.FieldExpr) bool {
 		g.emitExpr(f.X)
 		g.body.write(`; if opt == nil { panic("called unwrap on None") }; return *opt }()`)
 		return true
+	case "expect":
+		if len(c.Args) != 1 {
+			return false
+		}
+		g.body.writef("func() %s { opt := ", innerGo)
+		g.emitExpr(f.X)
+		g.body.write("; var msg string = ")
+		g.emitExpr(c.Args[0].Value)
+		g.body.write("; if opt == nil { panic(msg) }; return *opt }()")
+		return true
 	case "unwrapOr":
 		if len(c.Args) != 1 {
 			return false
@@ -1619,6 +1629,49 @@ func (g *gen) emitOptionalMethodCall(c *ast.CallExpr, f *ast.FieldExpr) bool {
 		g.emitExpr(c.Args[0].Value)
 		g.body.write("; if opt != nil { return *opt }; return fallback }()")
 		return true
+	case "unwrapOrElse":
+		if len(c.Args) != 1 {
+			return false
+		}
+		g.body.writef("func() %s { opt := ", innerGo)
+		g.emitExpr(f.X)
+		g.body.write("; fallback := ")
+		g.emitExpr(c.Args[0].Value)
+		g.body.write("; if opt != nil { return *opt }; return fallback() }()")
+		return true
+	case "and":
+		if len(c.Args) != 1 {
+			return false
+		}
+		retGo := g.goType(g.typeOf(c))
+		g.body.writef("func() %s { opt := ", retGo)
+		g.emitExpr(f.X)
+		g.body.writef("; var other %s = ", retGo)
+		g.emitExpr(c.Args[0].Value)
+		g.body.write("; if opt != nil { return other }; return nil }()")
+		return true
+	case "andThen":
+		if len(c.Args) != 1 {
+			return false
+		}
+		retGo := g.goType(g.typeOf(c))
+		g.body.writef("func() %s { opt := ", retGo)
+		g.emitExpr(f.X)
+		g.body.write("; f := ")
+		g.emitExpr(c.Args[0].Value)
+		g.body.write("; if opt == nil { return nil }; return f(*opt) }()")
+		return true
+	case "or":
+		if len(c.Args) != 1 {
+			return false
+		}
+		retGo := g.goType(g.typeOf(c))
+		g.body.writef("func() %s { opt := ", retGo)
+		g.emitExpr(f.X)
+		g.body.writef("; var other %s = ", retGo)
+		g.emitExpr(c.Args[0].Value)
+		g.body.write("; if opt != nil { return opt }; return other }()")
+		return true
 	case "orElse":
 		if len(c.Args) != 1 {
 			return false
@@ -1628,6 +1681,37 @@ func (g *gen) emitOptionalMethodCall(c *ast.CallExpr, f *ast.FieldExpr) bool {
 		g.body.write("; fallback := ")
 		g.emitExpr(c.Args[0].Value)
 		g.body.write("; if opt != nil { return opt }; return fallback() }()")
+		return true
+	case "xor":
+		if len(c.Args) != 1 {
+			return false
+		}
+		retGo := g.goType(g.typeOf(c))
+		g.body.writef("func() %s { opt := ", retGo)
+		g.emitExpr(f.X)
+		g.body.writef("; var other %s = ", retGo)
+		g.emitExpr(c.Args[0].Value)
+		g.body.write("; if opt != nil { if other == nil { return opt }; return nil }; return other }()")
+		return true
+	case "filter":
+		if len(c.Args) != 1 {
+			return false
+		}
+		g.body.writef("func() *%s { opt := ", innerGo)
+		g.emitExpr(f.X)
+		g.body.write("; pred := ")
+		g.emitExpr(c.Args[0].Value)
+		g.body.write("; if opt == nil { return nil }; if pred(*opt) { return opt }; return nil }()")
+		return true
+	case "inspect":
+		if len(c.Args) != 1 {
+			return false
+		}
+		g.body.writef("func() *%s { opt := ", innerGo)
+		g.emitExpr(f.X)
+		g.body.write("; f := ")
+		g.emitExpr(c.Args[0].Value)
+		g.body.write("; if opt != nil { f(*opt) }; return opt }()")
 		return true
 	case "map":
 		if len(c.Args) != 1 {
@@ -1647,7 +1731,7 @@ func (g *gen) emitOptionalMethodCall(c *ast.CallExpr, f *ast.FieldExpr) bool {
 		g.body.write(retGo)
 		g.body.write(" = f(*opt); return &value }()")
 		return true
-	case "orError":
+	case "orError", "okOr":
 		if len(c.Args) != 1 {
 			return false
 		}
@@ -1662,7 +1746,8 @@ func (g *gen) emitOptionalMethodCall(c *ast.CallExpr, f *ast.FieldExpr) bool {
 		g.emitExpr(f.X)
 		g.body.write("; var msg string = ")
 		g.emitExpr(c.Args[0].Value)
-		g.body.writef("; if opt != nil { return %s{Value: *opt, IsOk: true} }; return %s{Error: msg} }()", resultGo, resultGo)
+		g.body.writef("; if opt != nil { return resultOk[%s, %s](*opt) }; return resultErr[%s, %s](msg) }()",
+			okGo, errGo, okGo, errGo)
 		return true
 	case "toString":
 		if len(c.Args) != 0 {
@@ -2731,6 +2816,50 @@ func (g *gen) emitResultMethodCall(c *ast.CallExpr, f *ast.FieldExpr) bool {
 		return false
 	}
 	switch f.Name {
+	case "and":
+		if len(c.Args) != 1 {
+			return false
+		}
+		g.needResult = true
+		g.body.write("resultAnd(")
+		g.emitExpr(f.X)
+		g.body.write(", ")
+		g.emitExpr(c.Args[0].Value)
+		g.body.write(")")
+		return true
+	case "andThen":
+		if len(c.Args) != 1 {
+			return false
+		}
+		g.needResult = true
+		g.body.write("resultAndThen(")
+		g.emitExpr(f.X)
+		g.body.write(", ")
+		g.emitExpr(c.Args[0].Value)
+		g.body.write(")")
+		return true
+	case "or":
+		if len(c.Args) != 1 {
+			return false
+		}
+		g.needResult = true
+		g.body.write("resultOr(")
+		g.emitExpr(f.X)
+		g.body.write(", ")
+		g.emitExpr(c.Args[0].Value)
+		g.body.write(")")
+		return true
+	case "orElse":
+		if len(c.Args) != 1 {
+			return false
+		}
+		g.needResult = true
+		g.body.write("resultOrElse(")
+		g.emitExpr(f.X)
+		g.body.write(", ")
+		g.emitExpr(c.Args[0].Value)
+		g.body.write(")")
+		return true
 	case "map":
 		if len(c.Args) != 1 {
 			return false

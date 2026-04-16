@@ -108,8 +108,10 @@ func TestResultIntrinsicMethodsRuntime(t *testing.T) {
     println(ok.isOk())
     println(ok.isErr())
     println(ok.unwrap())
+    println(ok.expect("ok expected"))
     println(ok.unwrapOr(9))
     println(ok.toString())
+    ok.inspect(|n| println("seen ok {n}"))
     let nested: Result<Result<Int, String>, String> = Ok(ok)
     println(nested.toString())
     println("{nested}")
@@ -122,8 +124,11 @@ func TestResultIntrinsicMethodsRuntime(t *testing.T) {
     println(err.isOk())
     println(err.isErr())
     println(err.unwrapOr(9))
+    println(err.unwrapOrElse(|e| e.len()))
     println(err.unwrapErr())
+    println(err.expectErr("err expected"))
     println(err.toString())
+    err.inspectErr(|e| println("seen err {e}"))
     match err.err() {
         Some(e) -> println("err value: {e}"),
         None -> println("missing"),
@@ -135,7 +140,7 @@ func TestResultIntrinsicMethodsRuntime(t *testing.T) {
 		t.Fatalf("transpile: %v\n%s", err, goSrc)
 	}
 	out := runGo(t, goSrc)
-	want := "true\nfalse\n5\n5\nOk(5)\nOk(Ok(5))\nOk(Ok(5))\nok value: 5\nfalse\ntrue\n9\nbad\nErr(bad)\nerr value: bad\n"
+	want := "true\nfalse\n5\n5\n5\nOk(5)\nseen ok 5\nOk(Ok(5))\nOk(Ok(5))\nok value: 5\nfalse\ntrue\n9\n3\nbad\nbad\nErr(bad)\nseen err bad\nerr value: bad\n"
 	if out != want {
 		t.Errorf("got %q, want %q\n--- src ---\n%s", out, want, goSrc)
 	}
@@ -164,6 +169,44 @@ fn main() {
         Ok(n) -> println("ok {n}"),
         Err(e) -> println("mapped err {e}"),
     }
+
+    let next: Result<String, Int> = Ok("next")
+    let anded = parse("ok").and(next)
+    match anded {
+        Ok(s) -> println("and {s}"),
+        Err(e) -> println("and err {e}"),
+    }
+
+    let nextErr: Result<String, Int> = Ok("skip")
+    let stopped = parse("bad").and(nextErr)
+    match stopped {
+        Ok(s) -> println("and {s}"),
+        Err(e) -> println("and err {e}"),
+    }
+
+    let chained = parse("ok").andThen(|n| Ok("n={n}"))
+    match chained {
+        Ok(s) -> println("chain {s}"),
+        Err(e) -> println("chain err {e}"),
+    }
+
+    let fallback: Result<Int, String> = Ok(7)
+    let recovered = parse("bad").or(fallback)
+    match recovered {
+        Ok(n) -> println("or {n}"),
+        Err(e) -> println("or err {e}"),
+    }
+
+    let changedErr = parse("bad").orElse(|e| Err("e={e}"))
+    match changedErr {
+        Ok(n) -> println("orElse ok {n}"),
+        Err(e) -> println("orElse err {e}"),
+    }
+
+    let inspected = parse("ok").inspect(|n| println("inspect {n}"))
+    println(inspected.unwrap())
+    let inspectedErr = parse("bad").inspectErr(|e| println("inspect err {e}"))
+    println(inspectedErr.unwrapErr())
 }
 `
 	goSrc, err := transpile(t, src)
@@ -171,7 +214,7 @@ fn main() {
 		t.Fatalf("transpile: %v\n%s", err, goSrc)
 	}
 	out := runGo(t, goSrc)
-	want := "mapped v=2\nstill err 40\nmapped err e=40\n"
+	want := "mapped v=2\nstill err 40\nmapped err e=40\nand next\nand err 40\nchain n=2\nor 7\norElse err e=40\ninspect 2\n2\ninspect err 40\n40\n"
 	if out != want {
 		t.Errorf("got %q, want %q\n--- src ---\n%s", out, want, goSrc)
 	}

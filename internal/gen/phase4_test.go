@@ -132,6 +132,23 @@ fn main() {
     }
     let mapped = a.map(|x| x + 1)
     println("{mapped.unwrap()}")
+    println("{a.expect("present")} {b.unwrapOrElse(|| 8)}")
+    let chained = a.andThen(|x| Some("n={x}"))
+    println(chained.unwrap())
+    let anded = a.and(Some("and"))
+    let noneAnd = b.and(Some("skip"))
+    println("{anded.unwrap()} {noneAnd.isNone()}")
+    let ored = b.or(Some(12))
+    let kept = a.or(Some(99))
+    println("{ored.unwrap()} {kept.unwrap()}")
+    let xored = a.xor(None)
+    let xoredNone = a.xor(Some(5))
+    println("{xored.unwrap()} {xoredNone.isNone()}")
+    let filtered = a.filter(|x| x > 3)
+    let filteredOut = a.filter(|x| x < 0)
+    println("{filtered.unwrap()} {filteredOut.isNone()}")
+    let inspected = a.inspect(|x| println("inspect {x}"))
+    println(inspected.unwrap())
     let result = b.orError("missing")
     println("{result.isErr()}")
     println(result.unwrapErr().message())
@@ -143,6 +160,8 @@ fn main() {
     println("{mappedResult.isErr()}")
     let mappedErr = result.mapErr(|e| e.message())
     println(mappedErr.unwrapErr())
+    let alias = b.okOr("alias")
+    println(alias.unwrapErr().message())
     println(a.toString())
     println(b.toString())
 }
@@ -152,7 +171,7 @@ fn main() {
 		t.Fatalf("transpile: %v\n%s", err, goSrc)
 	}
 	out := runGo(t, goSrc)
-	want := "true true\n4 7\n6 10\n9\n5\ntrue\nmissing\nmissing\ntrue\nmissing\nSome(4)\nNone\n"
+	want := "true true\n4 7\n6 10\n9\n5\n4 8\nn=4\nand true\n12 4\n4 true\n4 true\ninspect 4\n4\ntrue\nmissing\nmissing\ntrue\nmissing\nalias\nSome(4)\nNone\n"
 	if out != want {
 		t.Errorf("got %q, want %q\n--- src ---\n%s", out, want, goSrc)
 	}

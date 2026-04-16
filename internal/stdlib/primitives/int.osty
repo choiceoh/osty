@@ -24,8 +24,8 @@ pub struct __IntMethods {
     pub fn wrappingMul(self, other: Self) -> Self { self }
     pub fn wrappingDiv(self, other: Self) -> Self { self }
     pub fn wrappingMod(self, other: Self) -> Self { self }
-    pub fn wrappingShl(self, b: Self) -> Self { self }
-    pub fn wrappingShr(self, b: Self) -> Self { self }
+    pub fn wrappingShl(self, b: Int) -> Self { self }
+    pub fn wrappingShr(self, b: Int) -> Self { self }
     pub fn wrappingAbs(self) -> Self { self }
     pub fn wrappingNeg(self) -> Self { self }
 
@@ -34,8 +34,8 @@ pub struct __IntMethods {
     pub fn checkedMul(self, other: Self) -> Self? { None }
     pub fn checkedDiv(self, other: Self) -> Self? { None }
     pub fn checkedMod(self, other: Self) -> Self? { None }
-    pub fn checkedShl(self, b: Self) -> Self? { None }
-    pub fn checkedShr(self, b: Self) -> Self? { None }
+    pub fn checkedShl(self, b: Int) -> Self? { None }
+    pub fn checkedShr(self, b: Int) -> Self? { None }
     pub fn checkedAbs(self) -> Self? { None }
     pub fn checkedNeg(self) -> Self? { None }
 

@@ -4,7 +4,10 @@
 // rarely writes `use std.collections`. The module-local structs provide
 // the canonical signature surface for the collection methods in spec
 // §10.6. Runtime lowering is intrinsic because these types map directly
-// to Go slices/maps in the current backend.
+// to Go slices/maps in the current backend. Some pure bodies seed an
+// output collection from an intrinsic method before rebuilding it; that
+// keeps the placeholder `std.collections` types aligned with the prelude
+// builtin collection types until the prelude rebind lands.
 
 pub struct List<T> {
     pub fn len(self) -> Int
@@ -32,8 +35,24 @@ pub struct List<T> {
         None
     }
 
-    pub fn map<R>(self, f: fn(T) -> R) -> List<R>
-    pub fn filter(self, pred: fn(T) -> Bool) -> List<T>
+    pub fn map<R>(self, f: fn(T) -> R) -> List<R> {
+        let mut out = self.map(f)
+        out.clear()
+        for item in self {
+            out.push(f(item))
+        }
+        out
+    }
+    pub fn filter(self, pred: fn(T) -> Bool) -> List<T> {
+        let mut out = self.map(|item| item)
+        out.clear()
+        for item in self {
+            if pred(item) {
+                out.push(item)
+            }
+        }
+        out
+    }
     pub fn fold<A>(self, init: A, f: fn(A, T) -> A) -> A {
         let mut acc = init
         for item in self {
@@ -42,20 +61,94 @@ pub struct List<T> {
         acc
     }
     pub fn sorted(self) -> List<T>
-    pub fn sortedBy<K>(self, key: fn(T) -> K) -> List<T>
-    pub fn reversed(self) -> List<T>
-    pub fn appended(self, item: T) -> List<T>
-    pub fn concat(self, other: List<T>) -> List<T>
-    pub fn zip<U>(self, other: List<U>) -> List<(T, U)>
-    pub fn enumerate(self) -> List<(Int, T)>
+    pub fn sortedBy<K: Ordered>(self, key: fn(T) -> K) -> List<T> {
+        let mut out = self.map(|item| item)
+        out.clear()
+        for item in self {
+            out.push(item)
+        }
+
+        let mut i = 0
+        for i < out.len() {
+            let mut best = i
+            let mut j = i + 1
+            for j < out.len() {
+                if key(out[j]) < key(out[best]) {
+                    best = j
+                }
+                j = j + 1
+            }
+            if best != i {
+                let tmp = out[i]
+                out[i] = out[best]
+                out[best] = tmp
+            }
+            i = i + 1
+        }
+        out
+    }
+    pub fn reversed(self) -> List<T> {
+        let mut out = self.map(|item| item)
+        out.clear()
+        let mut i = self.len()
+        for i > 0 {
+            i = i - 1
+            out.push(self[i])
+        }
+        out
+    }
+    pub fn appended(self, item: T) -> List<T> {
+        let mut out = self.map(|value| value)
+        out.push(item)
+        out
+    }
+    pub fn concat(self, other: List<T>) -> List<T> {
+        let mut out = self.map(|item| item)
+        out.clear()
+        for item in self {
+            out.push(item)
+        }
+        for item in other {
+            out.push(item)
+        }
+        out
+    }
+    pub fn zip<U>(self, other: List<U>) -> List<(T, U)> {
+        let mut out = self.zip(other)
+        out.clear()
+        let limit = if self.len() < other.len() { self.len() } else { other.len() }
+        for i in 0..limit {
+            out.push((self[i], other[i]))
+        }
+        out
+    }
+    pub fn enumerate(self) -> List<(Int, T)> {
+        let mut out = self.enumerate()
+        out.clear()
+        let mut i = 0
+        for item in self {
+            out.push((i, item))
+            i = i + 1
+        }
+        out
+    }
 
     pub fn push(mut self, item: T)
-    pub fn pop(mut self) -> T?
+    pub fn pop(mut self) -> T? {
+        if self.isEmpty() {
+            return None
+        }
+        Some(self.removeAt(self.len() - 1))
+    }
     pub fn insert(mut self, index: Int, item: T)
     pub fn removeAt(mut self, index: Int) -> T
     pub fn sort(mut self)
     pub fn reverse(mut self)
-    pub fn clear(mut self)
+    pub fn clear(mut self) {
+        for self.len() > 0 {
+            self.removeAt(self.len() - 1)
+        }
+    }
 }
 
 pub struct Map<K: Hashable, V> {
@@ -67,9 +160,30 @@ pub struct Map<K: Hashable, V> {
     pub fn containsKey(self, key: K) -> Bool {
         self.get(key).isSome()
     }
-    pub fn keys(self) -> List<K>
-    pub fn values(self) -> List<V>
-    pub fn entries(self) -> List<(K, V)>
+    pub fn keys(self) -> List<K> {
+        let mut out = self.keys()
+        out.clear()
+        for (key, unusedValue) in self {
+            out.push(key)
+        }
+        out
+    }
+    pub fn values(self) -> List<V> {
+        let mut out = self.values()
+        out.clear()
+        for (unusedKey, value) in self {
+            out.push(value)
+        }
+        out
+    }
+    pub fn entries(self) -> List<(K, V)> {
+        let mut out = self.entries()
+        out.clear()
+        for (key, value) in self {
+            out.push((key, value))
+        }
+        out
+    }
 
     pub fn insert(mut self, key: K, value: V)
     pub fn remove(mut self, key: K) -> V?
@@ -82,9 +196,37 @@ pub struct Set<T: Hashable> {
         self.len() == 0
     }
     pub fn contains(self, item: T) -> Bool
-    pub fn union(self, other: Set<T>) -> Set<T>
-    pub fn intersect(self, other: Set<T>) -> Set<T>
-    pub fn difference(self, other: Set<T>) -> Set<T>
+    pub fn union(self, other: Set<T>) -> Set<T> {
+        let mut out = self.union(other)
+        out.clear()
+        for item in self {
+            out.insert(item)
+        }
+        for item in other {
+            out.insert(item)
+        }
+        out
+    }
+    pub fn intersect(self, other: Set<T>) -> Set<T> {
+        let mut out = self.union(other)
+        out.clear()
+        for item in self {
+            if other.contains(item) {
+                out.insert(item)
+            }
+        }
+        out
+    }
+    pub fn difference(self, other: Set<T>) -> Set<T> {
+        let mut out = self.union(other)
+        out.clear()
+        for item in self {
+            if other.contains(item) == false {
+                out.insert(item)
+            }
+        }
+        out
+    }
 
     pub fn insert(mut self, item: T)
     pub fn remove(mut self, item: T) -> Bool

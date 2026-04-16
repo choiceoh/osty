@@ -1275,6 +1275,46 @@ fn main() {
 	}
 }
 
+func TestCheck_IntShiftMethodsTakeIntCount(t *testing.T) {
+	src := `
+fn main() {
+    let x: Int8 = 5
+    let n: Int = 2
+    let a: Int8 = x.wrappingShl(n)
+    let b: Int8? = x.checkedShr(n)
+}
+`
+	got := runCheckWithStdlib(t, src)
+	if len(got) > 0 {
+		lines := make([]string, 0, len(got))
+		for _, d := range got {
+			lines = append(lines, d.Code+": "+d.Message)
+		}
+		t.Fatalf("expected no errors, got: %s", strings.Join(lines, ", "))
+	}
+}
+
+func TestCheck_FloatExplicitIntConversions(t *testing.T) {
+	src := `
+fn main() {
+    let f: Float = 2.5
+    let a: Result<Int, Error> = f.toIntTrunc()
+    let b: Result<Int, Error> = f.toIntRound()
+    let c: Result<Int, Error> = f.toIntFloor()
+    let d: Result<Int, Error> = f.toIntCeil()
+    let s: String = f.toFixed(2)
+}
+`
+	got := runCheckWithStdlib(t, src)
+	if len(got) > 0 {
+		lines := make([]string, 0, len(got))
+		for _, d := range got {
+			lines = append(lines, d.Code+": "+d.Message)
+		}
+		t.Fatalf("expected no errors, got: %s", strings.Join(lines, ", "))
+	}
+}
+
 func TestCheck_IntToInt32ReturnsResult(t *testing.T) {
 	// Narrowing conversion returns Result; using ? propagates the err.
 	src := `
@@ -1324,7 +1364,16 @@ fn main() {
     let y: String? = x.map(|n| "{n}")
     let z: Int? = None
     let recovered: Int? = z.orElse(|| Some(9))
+    let expected: Int = x.expect("present")
+    let lazy: Int = z.unwrapOrElse(|| 9)
+    let chained: String? = x.andThen(|n| Some("{n}"))
+    let dropped: String? = z.and(Some("unused"))
+    let kept: Int? = z.or(Some(10))
+    let xored: Int? = x.xor(None)
+    let filtered: Int? = x.filter(|n| n > 0)
+    let inspected: Int? = x.inspect(|n| println(n))
     let result: Result<Int, Error> = z.orError("missing")
+    let resultAlias: Result<Int, Error> = z.okOr("missing")
     let message: String = result.unwrapErr().message()
     let messageAgain: String = result.err().unwrap().message()
     let mapped: Result<String, Error> = result.map(|n| "{n}")
@@ -1355,6 +1404,14 @@ fn parse() -> Result<Int, String> { Ok(1) }
 fn test() {
     let mapped: Result<String, String> = parse().map(|n| "value={n}")
     let mappedErr: Result<Int, Int> = parse().mapErr(|e| e.len())
+    let expected: Int = parse().expect("present")
+    let fallback: Int = parse().unwrapOrElse(|e| e.len())
+    let anded: Result<String, String> = parse().and(Ok("next"))
+    let chained: Result<String, String> = parse().andThen(|n| Ok("value={n}"))
+    let fallbackErr: Result<Int, Int> = Err(0)
+    let recovered: Result<Int, Int> = parse().or(fallbackErr)
+    let recoveredElse: Result<Int, Int> = parse().orElse(|e| Err(e.len()))
+    let inspected: Result<Int, String> = parse().inspect(|n| println(n)).inspectErr(|e| println(e))
     let okValue: Int? = parse().ok()
     let errValue: String? = parse().err()
 }
