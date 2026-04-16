@@ -1,0 +1,15 @@
+enum Maybe {
+    Some(Int)
+    None
+}
+
+fn score(value: Maybe) -> Int {
+    match value {
+        Some(x) -> x,
+        None -> 0,
+    }
+}
+
+fn main() {
+    println(score(Some(42)))
+}

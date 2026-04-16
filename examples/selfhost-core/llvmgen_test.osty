@@ -81,7 +81,7 @@ fn testLlvmToolchainPlanIsOstyOwned() {
 fn testLlvmExecutableCorpusPlanIsOstyOwned() {
     let cases = llvmSmokeExecutableCorpus()
 
-    testing.assert(cases.len() == 22)
+    testing.assert(cases.len() == 26)
     testing.assert(cases[0].name == "minimal")
     testing.assert(cases[0].fixture == "minimal_print.osty")
     testing.assert(cases[0].stdout == "42\n")
@@ -148,6 +148,18 @@ fn testLlvmExecutableCorpusPlanIsOstyOwned() {
     testing.assert(cases[21].name == "enum-match-mut")
     testing.assert(cases[21].fixture == "enum_match_mut_print.osty")
     testing.assert(cases[21].stdout == "42\n")
+    testing.assert(cases[22].name == "enum-payload")
+    testing.assert(cases[22].fixture == "enum_payload_print.osty")
+    testing.assert(cases[22].stdout == "42\n")
+    testing.assert(cases[23].name == "enum-payload-return")
+    testing.assert(cases[23].fixture == "enum_payload_return_print.osty")
+    testing.assert(cases[23].stdout == "42\n")
+    testing.assert(cases[24].name == "enum-payload-param")
+    testing.assert(cases[24].fixture == "enum_payload_param_print.osty")
+    testing.assert(cases[24].stdout == "42\n")
+    testing.assert(cases[25].name == "enum-payload-mut")
+    testing.assert(cases[25].fixture == "enum_payload_mut_print.osty")
+    testing.assert(cases[25].stdout == "42\n")
 }
 
 fn testLlvmUnsupportedDiagnosticPolicyIsOstyOwned() {
@@ -420,4 +432,40 @@ fn testLlvmSmokeEnumMatchMutableIsOstyOwned() {
     assertLlvmContains(ir, "store i64 1")
     assertLlvmContains(ir, "load i64")
     assertLlvmContains(ir, "phi i64")
+}
+
+fn testLlvmSmokeEnumPayloadIsOstyOwned() {
+    let ir = llvmSmokeEnumPayloadIR("/tmp/enum_payload_print.osty")
+
+    assertLlvmContains(ir, "%Maybe = type \{ i64, i64 \}")
+    assertLlvmContains(ir, "insertvalue %Maybe")
+    assertLlvmContains(ir, "extractvalue %Maybe")
+    assertLlvmContains(ir, "phi i64")
+}
+
+fn testLlvmSmokeEnumPayloadReturnIsOstyOwned() {
+    let ir = llvmSmokeEnumPayloadReturnIR("/tmp/enum_payload_return_print.osty")
+
+    assertLlvmContains(ir, "define %Maybe @pick() \{")
+    assertLlvmContains(ir, "ret %Maybe")
+    assertLlvmContains(ir, "call %Maybe @pick()")
+    assertLlvmContains(ir, "extractvalue %Maybe")
+}
+
+fn testLlvmSmokeEnumPayloadParamIsOstyOwned() {
+    let ir = llvmSmokeEnumPayloadParamIR("/tmp/enum_payload_param_print.osty")
+
+    assertLlvmContains(ir, "define i64 @score(%Maybe %value) \{")
+    assertLlvmContains(ir, "call i64 @score(%Maybe")
+    assertLlvmContains(ir, "extractvalue %Maybe")
+    assertLlvmContains(ir, "phi i64")
+}
+
+fn testLlvmSmokeEnumPayloadMutableIsOstyOwned() {
+    let ir = llvmSmokeEnumPayloadMutableIR("/tmp/enum_payload_mut_print.osty")
+
+    assertLlvmContains(ir, "alloca %Maybe")
+    assertLlvmContains(ir, "store %Maybe")
+    assertLlvmContains(ir, "load %Maybe")
+    assertLlvmContains(ir, "extractvalue %Maybe")
 }

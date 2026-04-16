@@ -60,6 +60,10 @@ Each fixture should be independently checkable as a single file and avoid:
 | `testdata/backend/llvm_smoke/enum_return_print.osty` | `42\n` | Phase 35 LLVM IR: payload-free enum tag values cross function return boundaries |
 | `testdata/backend/llvm_smoke/enum_param_print.osty` | `42\n` | Phase 36 LLVM IR: payload-free enum tag values cross function parameter boundaries |
 | `testdata/backend/llvm_smoke/enum_mut_print.osty` | `42\n` | Phase 37 LLVM IR: mutable enum local slot, whole-value assignment, load, and comparison |
+| `testdata/backend/llvm_smoke/enum_payload_print.osty` | `42\n` | Phase 42 LLVM IR: single-Int payload enum variant constructor path (`%Maybe = type { i64, i64 }`) |
+| `testdata/backend/llvm_smoke/enum_payload_return_print.osty` | `42\n` | Phase 43 LLVM IR: payload enum return boundary with match-based payload extraction |
+| `testdata/backend/llvm_smoke/enum_payload_param_print.osty` | `42\n` | Phase 44 LLVM IR: payload enum parameter boundary with `Some(x)` match binding |
+| `testdata/backend/llvm_smoke/enum_payload_mut_print.osty` | `42\n` | Phase 45 LLVM IR: payload enum mutable local assignment and payload binding in `match` |
 
 The Phase 10 skeleton behavior and the Phase 12-15 plus Phase 23-37 lowering
 behavior are mirrored in
@@ -155,6 +159,17 @@ next four smoke fixtures stay intentionally tiny and all print `42\n`:
 | `testdata/backend/llvm_smoke/enum_match_return_print.osty` | `42\n` | Phase 39 LLVM IR: payload-free enum match expression crossing a function return boundary |
 | `testdata/backend/llvm_smoke/enum_match_param_print.osty` | `42\n` | Phase 40 LLVM IR: payload-free enum match expression crossing a function parameter boundary |
 | `testdata/backend/llvm_smoke/enum_match_mut_print.osty` | `42\n` | Phase 41 LLVM IR: payload-free enum match expression over a mutable local slot |
+
+Phases 42-45 add a single-`Int` payload enum smoke subset with a fixed ABI shape:
+`%Maybe = type { i64, i64 }`, where element `0` is tag and element `1` is
+`Int` payload.
+
+| Path | Expected stdout | Coverage |
+|---|---|---|
+| `testdata/backend/llvm_smoke/enum_payload_print.osty` | `42\n` | Phase 42 LLVM IR: single-Int payload enum constructor in `main` |
+| `testdata/backend/llvm_smoke/enum_payload_return_print.osty` | `42\n` | Phase 43 LLVM IR: payload enum crossing function return and extracting payload in `match` |
+| `testdata/backend/llvm_smoke/enum_payload_param_print.osty` | `42\n` | Phase 44 LLVM IR: payload enum crossing function parameter and `Some(x)` binding |
+| `testdata/backend/llvm_smoke/enum_payload_mut_print.osty` | `42\n` | Phase 45 LLVM IR: payload enum mutable local slot and match payload binding after assignment |
 
 ## Promotion Rules
 

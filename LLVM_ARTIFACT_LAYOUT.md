@@ -330,6 +330,17 @@ The initial helper package for this plan is `internal/backend`.
 42. Add mutable enum match locals. Done in Phase 41: enum match values reuse the
     generic Osty-owned alloca/store/load helpers for whole-value assignment and
     later comparison.
+43. Add payload-enum declarations and constructors for a single-Int payload
+    subset. Done in Phase 42: `%Enum = type { i64, i64 }` represents tag and
+    payload for conservative enum smoke fixtures.
+44. Add payload enum return-boundary smoke. Done in Phase 43: single-`Int`
+    payload enum tags and payload extraction can cross helper return values.
+45. Add payload enum parameter-boundary smoke. Done in Phase 44: single-`Int`
+    payload enum values can cross helper parameters and bind payload in
+    `match`.
+46. Add payload enum mutable-local smoke. Done in Phase 45: mutable payload enum
+    slots use whole-value assignment and match-time payload extraction in supported
+    lowering paths.
 
 The backend subdirectory change should land before the LLVM backend writes any
 files, so LLVM never shares the old Go-only output location.
