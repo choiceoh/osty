@@ -565,27 +565,30 @@ fn tyNamedToString(arena: TyArena, node: TyNode) -> String {
     if tyIntListLen(node.args) == 0 {
         return node.head
     }
+    let sep = ", "
     let mut parts: List<String> = []
     for arg in node.args {
         parts.push(tyToString(arena, arg))
     }
-    "{node.head}<{strings.join(parts, \", \")}>"
+    "{node.head}<{strings.join(parts, sep)}>"
 }
 
 fn tyTupleToString(arena: TyArena, elems: List<Int>) -> String {
+    let sep = ", "
     let mut parts: List<String> = []
     for e in elems {
         parts.push(tyToString(arena, e))
     }
-    "({strings.join(parts, \", \")})"
+    "({strings.join(parts, sep)})"
 }
 
 fn tyFnToString(arena: TyArena, params: List<Int>, ret: Int) -> String {
+    let sep = ", "
     let mut parts: List<String> = []
     for p in params {
         parts.push(tyToString(arena, p))
     }
-    "fn({strings.join(parts, \", \")}) -> {tyToString(arena, ret)}"
+    "fn({strings.join(parts, sep)}) -> {tyToString(arena, ret)}"
 }
 
 fn primKindName(prim: PrimKind) -> String {

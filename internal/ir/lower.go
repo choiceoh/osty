@@ -46,6 +46,11 @@ func (l *lowerer) run() (*Module, []error) {
 		Package: l.pkgName,
 		SpanV:   l.fileSpan(),
 	}
+	for _, u := range l.file.Uses {
+		if lowered := l.lowerDecl(u); lowered != nil {
+			mod.Decls = append(mod.Decls, lowered)
+		}
+	}
 	for _, d := range l.file.Decls {
 		if lowered := l.lowerDecl(d); lowered != nil {
 			mod.Decls = append(mod.Decls, lowered)
@@ -100,10 +105,11 @@ func (l *lowerer) lowerDecl(d ast.Decl) Decl {
 
 func (l *lowerer) lowerFnDecl(fn *ast.FnDecl) *FnDecl {
 	out := &FnDecl{
-		Name:     fn.Name,
-		Return:   l.lowerType(fn.ReturnType),
-		Exported: fn.Pub,
-		SpanV:    nodeSpan(fn),
+		Name:        fn.Name,
+		Return:      l.lowerType(fn.ReturnType),
+		ReceiverMut: fn.Recv != nil && fn.Recv.Mut,
+		Exported:    fn.Pub,
+		SpanV:       nodeSpan(fn),
 	}
 	if out.Return == nil {
 		out.Return = TUnit

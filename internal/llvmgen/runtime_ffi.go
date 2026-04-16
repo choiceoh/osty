@@ -322,12 +322,38 @@ func listRuntimeSetSymbol(elemTyp string) string {
 	return "osty_rt_list_set_" + listRuntimeSymbolSuffix(elemTyp)
 }
 
-func listRuntimeSortedI64Symbol() string {
-	return llvmListRuntimeSortedI64Symbol()
+func listRuntimeSortedSymbol(elemTyp string, elemString bool) string {
+	if elemString {
+		return "osty_rt_list_sorted_string"
+	}
+	switch elemTyp {
+	case "i64":
+		return "osty_rt_list_sorted_i64"
+	case "i1":
+		return "osty_rt_list_sorted_i1"
+	case "double":
+		return "osty_rt_list_sorted_f64"
+	default:
+		return ""
+	}
 }
 
-func listRuntimeToSetI64Symbol() string {
-	return llvmListRuntimeToSetI64Symbol()
+func listRuntimeToSetSymbol(elemTyp string, elemString bool) string {
+	if elemString {
+		return "osty_rt_list_to_set_string"
+	}
+	switch elemTyp {
+	case "i64":
+		return "osty_rt_list_to_set_i64"
+	case "i1":
+		return "osty_rt_list_to_set_i1"
+	case "double":
+		return "osty_rt_list_to_set_f64"
+	case "ptr":
+		return "osty_rt_list_to_set_ptr"
+	default:
+		return ""
+	}
 }
 
 func mapRuntimeNewSymbol() string {

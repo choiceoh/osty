@@ -24,17 +24,9 @@
 // populated by `check_diag.osty`; the summary counters are derived
 // values kept in sync for bridge stability.
 
-use std.strings as strings
-
 // ---------------------------------------------------------------------
 // Bridge record types (preserved for Go host compatibility).
 // ---------------------------------------------------------------------
-
-pub struct FrontCheckSummary {
-    pub assignments: Int,
-    pub accepted: Int,
-    pub errors: Int,
-}
 
 pub struct FrontCheckedNode {
     pub node: Int,
@@ -99,7 +91,7 @@ pub fn frontendCheckLexedSource(lexed: OstyLexedSource) -> FrontCheckSummary {
 }
 
 pub fn frontendCheckLexedSourceStructured(lexed: OstyLexedSource) -> FrontCheckResult {
-    let parsed = ostyParseLexed(lexed)
+    let parsed = astParseLexedSource(lexed)
     frontendCheckAstStructured(parsed)
 }
 
@@ -320,7 +312,7 @@ fn elaborateFnBody(cx: ElabCx, node: AstNode, owner: String) {
     let mut i = 0
     for pname in sig.paramNames {
         let pty = if i < checkIntListLenLocal(sig.paramTys) { checkIntListAtLocal(sig.paramTys, i) } else { tErr(cx.env.tys) }
-        checkBindSpan(cx.env, pname, pty, false, node.start, node.end)
+        checkBindSpan(cx.env, pname, pty, true, node.start, node.end)
         i = i + 1
     }
 

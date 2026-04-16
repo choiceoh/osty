@@ -74,13 +74,14 @@ func run() error {
 	if err := os.WriteFile(mergedPath, merged, 0o644); err != nil {
 		return fmt.Errorf("write merged selfhost source: %w", err)
 	}
+	tmpOutPath := filepath.Join(tmpDir, "generated.go")
 
 	cmd := exec.Command(
 		"go", "run", "-tags", "selfhostgen", "./cmd/osty", "gen",
 		"--backend", "go",
 		"--emit", "go",
 		"--package", "selfhost",
-		"-o", outPath,
+		"-o", tmpOutPath,
 		mergedPath,
 	)
 	cmd.Dir = root
@@ -88,7 +89,28 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("generate selfhost parser: %w\n%s", err, bytes.TrimSpace(output))
 	}
-	return patchGenerated(outPath)
+	if selfhostgenMissingTypes(output) {
+		return fmt.Errorf(
+			"generate selfhost parser: selfhostgen emitted untyped bootstrap Go; refusing to overwrite %s\n%s",
+			outPath,
+			bytes.TrimSpace(output),
+		)
+	}
+	if err := patchGenerated(tmpOutPath); err != nil {
+		return err
+	}
+	data, err := os.ReadFile(tmpOutPath)
+	if err != nil {
+		return fmt.Errorf("read patched selfhost code: %w", err)
+	}
+	if err := os.WriteFile(outPath, data, 0o644); err != nil {
+		return fmt.Errorf("install generated selfhost code: %w", err)
+	}
+	return nil
+}
+
+func selfhostgenMissingTypes(output []byte) bool {
+	return bytes.Contains(output, []byte("osty gen: warning: native type checking is unavailable"))
 }
 
 func generatedSelfhostUpToDate(root, outPath string) (bool, error) {
@@ -163,37 +185,23 @@ func mergedSource(root string) ([]byte, error) {
 }
 
 func stripLeadingStringsUse(src string) string {
-	trimmed := strings.TrimLeft(src, "\ufeff \t\r\n")
-
-	// Handle Go FFI form: use go "strings" as strings { ... }
 	const goPrefix = `use go "strings" as strings {`
-	if strings.HasPrefix(trimmed, goPrefix) {
-		lines := strings.SplitAfter(src, "\n")
-		started := false
-		for i, line := range lines {
-			t := strings.TrimSpace(line)
-			if !started {
-				if strings.HasPrefix(t, goPrefix) {
-					started = true
-				}
-				continue
-			}
-			if t == "}" {
-				return strings.Join(lines[i+1:], "")
-			}
-		}
-		return src
-	}
-
-	// Handle std.strings form: use std.strings as strings  (single line)
 	const stdPrefix = "use std.strings as strings"
-	if strings.HasPrefix(trimmed, stdPrefix) {
-		idx := strings.Index(src, stdPrefix)
-		end := strings.IndexByte(src[idx:], '\n')
-		if end >= 0 {
-			return src[:idx] + src[idx+end+1:]
+
+	lines := strings.SplitAfter(src, "\n")
+	for i := 0; i < len(lines); i++ {
+		trimmed := strings.TrimSpace(lines[i])
+		switch {
+		case strings.HasPrefix(trimmed, goPrefix):
+			for j := i + 1; j < len(lines); j++ {
+				if strings.TrimSpace(lines[j]) == "}" {
+					return strings.Join(lines[:i], "") + strings.Join(lines[j+1:], "")
+				}
+			}
+			return src
+		case trimmed == stdPrefix:
+			return strings.Join(lines[:i], "") + strings.Join(lines[i+1:], "")
 		}
-		return src[:idx]
 	}
 
 	return src

@@ -202,6 +202,10 @@ static void *osty_gc_allocate_managed(size_t byte_size, int64_t object_kind, con
 static void osty_gc_mark_payload(void *payload);
 bool osty_rt_strings_Equal(const char *left, const char *right);
 bool osty_rt_set_insert_i64(void *raw_set, int64_t item);
+bool osty_rt_set_insert_i1(void *raw_set, bool item);
+bool osty_rt_set_insert_f64(void *raw_set, double item);
+bool osty_rt_set_insert_ptr(void *raw_set, void *item);
+bool osty_rt_set_insert_string(void *raw_set, const char *item);
 
 static void osty_rt_list_trace(void *payload) {
     osty_rt_list *list = (osty_rt_list *)payload;
@@ -682,6 +686,56 @@ static int osty_rt_compare_i64_ascending(const void *left, const void *right) {
     return 0;
 }
 
+static int osty_rt_compare_i1_ascending(const void *left, const void *right) {
+    const bool left_value = *(const bool *)left;
+    const bool right_value = *(const bool *)right;
+    if (!left_value && right_value) {
+        return -1;
+    }
+    if (left_value && !right_value) {
+        return 1;
+    }
+    return 0;
+}
+
+static int osty_rt_compare_f64_ascending(const void *left, const void *right) {
+    const double left_value = *(const double *)left;
+    const double right_value = *(const double *)right;
+    const bool left_nan = left_value != left_value;
+    const bool right_nan = right_value != right_value;
+    if (left_nan && right_nan) {
+        return 0;
+    }
+    if (left_nan) {
+        return 1;
+    }
+    if (right_nan) {
+        return -1;
+    }
+    if (left_value < right_value) {
+        return -1;
+    }
+    if (left_value > right_value) {
+        return 1;
+    }
+    return 0;
+}
+
+static int osty_rt_compare_string_ascending(const void *left, const void *right) {
+    const char *left_value = *(const char * const *)left;
+    const char *right_value = *(const char * const *)right;
+    if (left_value == NULL || right_value == NULL) {
+        if (left_value == right_value) {
+            return 0;
+        }
+        if (left_value == NULL) {
+            return -1;
+        }
+        return 1;
+    }
+    return strcmp(left_value, right_value);
+}
+
 void *osty_rt_list_sorted_i64(void *raw_list) {
     osty_rt_list *list = osty_rt_list_cast(raw_list);
     void *out = osty_rt_list_new();
@@ -693,6 +747,48 @@ void *osty_rt_list_sorted_i64(void *raw_list) {
         osty_rt_list_push_i64(out, value);
     }
     qsort(osty_rt_list_cast(out)->data, (size_t)osty_rt_list_cast(out)->len, sizeof(int64_t), osty_rt_compare_i64_ascending);
+    return out;
+}
+
+void *osty_rt_list_sorted_i1(void *raw_list) {
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    void *out = osty_rt_list_new();
+    int64_t i;
+
+    osty_rt_list_ensure_layout(list, sizeof(bool), NULL);
+    for (i = 0; i < list->len; i++) {
+        bool value = osty_rt_list_get_i1(raw_list, i);
+        osty_rt_list_push_i1(out, value);
+    }
+    qsort(osty_rt_list_cast(out)->data, (size_t)osty_rt_list_cast(out)->len, sizeof(bool), osty_rt_compare_i1_ascending);
+    return out;
+}
+
+void *osty_rt_list_sorted_f64(void *raw_list) {
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    void *out = osty_rt_list_new();
+    int64_t i;
+
+    osty_rt_list_ensure_layout(list, sizeof(double), NULL);
+    for (i = 0; i < list->len; i++) {
+        double value = osty_rt_list_get_f64(raw_list, i);
+        osty_rt_list_push_f64(out, value);
+    }
+    qsort(osty_rt_list_cast(out)->data, (size_t)osty_rt_list_cast(out)->len, sizeof(double), osty_rt_compare_f64_ascending);
+    return out;
+}
+
+void *osty_rt_list_sorted_string(void *raw_list) {
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    void *out = osty_rt_list_new();
+    int64_t i;
+
+    osty_rt_list_ensure_layout(list, sizeof(void *), osty_gc_mark_slot_v1);
+    for (i = 0; i < list->len; i++) {
+        void *value = osty_rt_list_get_ptr(raw_list, i);
+        osty_rt_list_push_ptr(out, value);
+    }
+    qsort(osty_rt_list_cast(out)->data, (size_t)osty_rt_list_cast(out)->len, sizeof(void *), osty_rt_compare_string_ascending);
     return out;
 }
 
@@ -1017,6 +1113,58 @@ void *osty_rt_list_to_set_i64(void *raw_list) {
     for (i = 0; i < list->len; i++) {
         int64_t value = osty_rt_list_get_i64(raw_list, i);
         osty_rt_set_insert_i64(set, value);
+    }
+    return set;
+}
+
+void *osty_rt_list_to_set_i1(void *raw_list) {
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    void *set = osty_rt_set_new(OSTY_RT_ABI_I1);
+    int64_t i;
+
+    osty_rt_list_ensure_layout(list, sizeof(bool), NULL);
+    for (i = 0; i < list->len; i++) {
+        bool value = osty_rt_list_get_i1(raw_list, i);
+        osty_rt_set_insert_i1(set, value);
+    }
+    return set;
+}
+
+void *osty_rt_list_to_set_f64(void *raw_list) {
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    void *set = osty_rt_set_new(OSTY_RT_ABI_F64);
+    int64_t i;
+
+    osty_rt_list_ensure_layout(list, sizeof(double), NULL);
+    for (i = 0; i < list->len; i++) {
+        double value = osty_rt_list_get_f64(raw_list, i);
+        osty_rt_set_insert_f64(set, value);
+    }
+    return set;
+}
+
+void *osty_rt_list_to_set_ptr(void *raw_list) {
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    void *set = osty_rt_set_new(OSTY_RT_ABI_PTR);
+    int64_t i;
+
+    osty_rt_list_ensure_layout(list, sizeof(void *), osty_gc_mark_slot_v1);
+    for (i = 0; i < list->len; i++) {
+        void *value = osty_rt_list_get_ptr(raw_list, i);
+        osty_rt_set_insert_ptr(set, value);
+    }
+    return set;
+}
+
+void *osty_rt_list_to_set_string(void *raw_list) {
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    void *set = osty_rt_set_new(OSTY_RT_ABI_STRING);
+    int64_t i;
+
+    osty_rt_list_ensure_layout(list, sizeof(void *), osty_gc_mark_slot_v1);
+    for (i = 0; i < list->len; i++) {
+        void *value = osty_rt_list_get_ptr(raw_list, i);
+        osty_rt_set_insert_string(set, value);
     }
     return set;
 }

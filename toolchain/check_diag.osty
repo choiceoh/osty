@@ -59,6 +59,7 @@ pub fn checkCodeReturnMismatch() -> String { "E0731" }
 pub fn checkCodeClosureAnnotationRequired() -> String { "E0741" }
 pub fn checkCodePatternShapeMismatch() -> String { "E0742" }
 pub fn checkCodeNonEscapingEscape() -> String { "E0743" }
+pub fn checkCodeRefutablePattern() -> String { "E0744" }
 
 // ---------------------------------------------------------------------
 // Low-level builder. Higher-level constructors below wrap this so call
@@ -319,6 +320,15 @@ pub fn diagNonEscapingEscape(ty: String, context: String, start: Int, end: Int) 
     checkDiag(checkCodeNonEscapingEscape(), msg, start, end)
 }
 
+pub fn diagRefutablePattern(context: String, start: Int, end: Int) -> CheckDiagnostic {
+    let msg = if context == "" {
+        "pattern must be irrefutable here"
+    } else {
+        "pattern must be irrefutable in {context}"
+    }
+    checkDiag(checkCodeRefutablePattern(), msg, start, end)
+}
+
 // ---------------------------------------------------------------------
 // Store helpers — the elaborator keeps a `List<CheckDiagnostic>` on
 // its context. These helpers append without forgetting to stamp the
@@ -339,9 +349,8 @@ pub fn checkDiagPush(xs: List<CheckDiagnostic>, d: CheckDiagnostic) -> List<Chec
 pub fn checkDiagCountErrors(xs: List<CheckDiagnostic>) -> Int {
     let mut n = 0
     for d in xs {
-        match d.severity {
-            SeverityError -> n = n + 1,
-            _ -> {},
+        if d.severity == SeverityError {
+            n = n + 1
         }
     }
     n

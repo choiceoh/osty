@@ -139,6 +139,20 @@ fn testSelfCheckerReportsAssignmentReturnAndCallErrors() {
     testing.assert(checked.assignments >= 3)
 }
 
+fn testSelfCheckerBindsTuplePatternsInLets() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn main() {
+                let (id, name) = (1, "Ada")
+            }
+            """,
+    )
+
+    testing.assertEq(checked.summary.errors, 0)
+    testing.assertEq(frontCheckResultBindingType(checked, "id"), "Int")
+    testing.assertEq(frontCheckResultBindingType(checked, "name"), "String")
+}
+
 fn testSelfCheckerAcceptsFieldAssignmentThroughStructValues() {
     let checked = frontendCheckSource(
         r"""
@@ -171,7 +185,7 @@ fn testSelfCheckerUnifiesUntypedIntWithConcreteGenericArgs() {
 }
 
 fn testSelfCheckerBindsForInIdentifierPatterns() {
-    let checked = frontendCheckSource(
+    let checked = frontendCheckSourceStructured(
         r"""
             fn sum(xs: List<Int>) -> Int {
                 let mut total = 0
@@ -183,7 +197,8 @@ fn testSelfCheckerBindsForInIdentifierPatterns() {
             """,
     )
 
-    testing.assertEq(checked.errors, 0)
+    testing.assertEq(checked.summary.errors, 0)
+    testing.assertEq(frontCheckResultBindingType(checked, "x"), "Int")
 }
 
 fn testSelfCheckerAllowsParameterAccumulators() {

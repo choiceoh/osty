@@ -115,7 +115,7 @@ func (g *generator) emitExpr(expr ast.Expr) (value, error) {
 	case *ast.TupleExpr:
 		return g.emitTupleExpr(e)
 	case *ast.ListExpr:
-		return g.emitListExprWithHint(e, "")
+		return g.emitListExprWithHint(e, "", false)
 	case *ast.MapExpr:
 		return g.emitMapExprWithHint(e, "", "", false)
 	case *ast.StructLit:
@@ -1257,7 +1257,7 @@ func (g *generator) emitSelectValue(cond *LlvmValue, thenValue, elseValue value)
 
 func (g *generator) emitExprWithHint(expr ast.Expr, listElemTyp string, listElemString bool, mapKeyTyp string, mapValueTyp string, mapKeyString bool, setElemTyp string, setElemString bool) (value, error) {
 	if list, ok := expr.(*ast.ListExpr); ok {
-		return g.emitListExprWithHint(list, listElemTyp)
+		return g.emitListExprWithHint(list, listElemTyp, listElemString)
 	}
 	if m, ok := expr.(*ast.MapExpr); ok {
 		return g.emitMapExprWithHint(m, mapKeyTyp, mapValueTyp, mapKeyString)
@@ -1365,24 +1365,30 @@ func (g *generator) emitListAggregateGet(listValue value, index value, elemTyp s
 	return loaded, nil
 }
 
-func (g *generator) emitListExprWithHint(expr *ast.ListExpr, hintedElemTyp string) (value, error) {
+func (g *generator) emitListExprWithHint(expr *ast.ListExpr, hintedElemTyp string, hintedElemString bool) (value, error) {
 	if expr == nil {
 		return value{}, unsupported("expression", "nil list literal")
 	}
 	g.pushScope()
 	defer g.popScope()
 	elemTyp := hintedElemTyp
+	elemString := hintedElemString
 	emittedElems := make([]value, 0, len(expr.Elems))
-	for _, elem := range expr.Elems {
+	for i, elem := range expr.Elems {
 		v, err := g.emitExpr(elem)
 		if err != nil {
 			return value{}, err
 		}
+		isStringElem := g.staticExprIsString(elem)
 		if elemTyp == "" {
 			elemTyp = v.typ
+			elemString = isStringElem
 		}
 		if v.typ != elemTyp {
 			return value{}, unsupportedf("type-system", "list literal element type %s, want %s", v.typ, elemTyp)
+		}
+		if i > 0 && isStringElem != elemString {
+			return value{}, unsupported("type-system", "list literal mixes String and non-String ptr-backed values")
 		}
 		emittedElems = append(emittedElems, g.protectManagedTemporary("list.elem", v))
 	}
@@ -1397,6 +1403,7 @@ func (g *generator) emitListExprWithHint(expr *ast.ListExpr, hintedElemTyp strin
 	listValue := fromOstyValue(out)
 	listValue.gcManaged = true
 	listValue.listElemTyp = elemTyp
+	listValue.listElemString = elemString
 	if len(emittedElems) == 0 {
 		return listValue, nil
 	}
@@ -1541,7 +1548,7 @@ func (g *generator) emitMapInsert(base, key, val value) error {
 }
 
 func (g *generator) emitListMethodCall(call *ast.CallExpr) (value, bool, error) {
-	field, elemTyp, found := g.listMethodInfo(call)
+	field, elemTyp, elemString, found := g.listMethodInfo(call)
 	if !found {
 		return value{}, false, nil
 	}
@@ -1563,28 +1570,35 @@ func (g *generator) emitListMethodCall(call *ast.CallExpr) (value, bool, error) 
 		g.takeOstyEmitter(emitter)
 		return fromOstyValue(out), true, nil
 	case "sorted":
-		if len(call.Args) != 0 || elemTyp != "i64" {
-			return value{}, true, unsupported("call", "list.sorted currently supports List<Int> with no arguments")
+		symbol := listRuntimeSortedSymbol(elemTyp, elemString)
+		if len(call.Args) != 0 || symbol == "" {
+			return value{}, true, unsupported("call", "list.sorted currently supports List<Int>, List<Bool>, List<Float>, or List<String> with no arguments")
 		}
-		g.declareRuntimeSymbol(listRuntimeSortedI64Symbol(), "ptr", []paramInfo{{typ: "ptr"}})
+		g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "ptr"}})
 		emitter := g.toOstyEmitter()
-		out := llvmCall(emitter, "ptr", listRuntimeSortedI64Symbol(), []*LlvmValue{toOstyValue(base)})
+		out := llvmCall(emitter, "ptr", symbol, []*LlvmValue{toOstyValue(base)})
 		g.takeOstyEmitter(emitter)
 		v := fromOstyValue(out)
 		v.gcManaged = true
-		v.listElemTyp = "i64"
+		v.listElemTyp = elemTyp
+		v.listElemString = elemString
 		return v, true, nil
 	case "toSet":
-		if len(call.Args) != 0 || elemTyp != "i64" {
-			return value{}, true, unsupported("call", "list.toSet currently supports List<Int> with no arguments")
+		if elemTyp == "ptr" && !elemString && g.staticExprListElemIsBytes(field.X) {
+			return value{}, true, unsupported("call", "list.toSet currently supports List<Int>, List<Bool>, List<Float>, List<String>, or ptr-backed lists except List<Bytes>, with no arguments")
 		}
-		g.declareRuntimeSymbol(listRuntimeToSetI64Symbol(), "ptr", []paramInfo{{typ: "ptr"}})
+		symbol := listRuntimeToSetSymbol(elemTyp, elemString)
+		if len(call.Args) != 0 || symbol == "" {
+			return value{}, true, unsupported("call", "list.toSet currently supports List<Int>, List<Bool>, List<Float>, List<String>, or ptr-backed lists except List<Bytes>, with no arguments")
+		}
+		g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "ptr"}})
 		emitter := g.toOstyEmitter()
-		out := llvmCall(emitter, "ptr", listRuntimeToSetI64Symbol(), []*LlvmValue{toOstyValue(base)})
+		out := llvmCall(emitter, "ptr", symbol, []*LlvmValue{toOstyValue(base)})
 		g.takeOstyEmitter(emitter)
 		v := fromOstyValue(out)
 		v.gcManaged = true
-		v.setElemTyp = "i64"
+		v.setElemTyp = elemTyp
+		v.setElemString = elemString
 		return v, true, nil
 	default:
 		return value{}, false, nil

@@ -173,6 +173,14 @@ fn diagnosticSubject(name: String) -> String {
     }
 }
 
+fn diagnosticHint(hint: String) -> String {
+    if hint == "" {
+        ""
+    } else {
+        " hint=\"{hint}\""
+    }
+}
+
 fn diagnosticFormatOne(
     source: String,
     code: String,
@@ -191,7 +199,7 @@ pub fn diagnosticFormatSelfResolveDiagnostic(
     source: String,
     diag: SelfResolveDiagnostic,
 ) -> String {
-    diagnosticFormatOne(source, diag.code, diag.message, diag.name, diag.start, diag.end)
+    "{diagnosticFormatOne(source, diag.code, diag.message, diag.name, diag.start, diag.end)}{diagnosticHint(diag.hint)}"
 }
 
 pub fn diagnosticFormatSelfResolveDiagnostics(

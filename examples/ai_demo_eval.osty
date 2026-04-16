@@ -1,0 +1,317 @@
+// ai_demo_eval — 간단한 표현식 평가기 (Osty v0.4 핵심 기능 데모)
+//
+// 이 파일은 다음 10가지 기능을 보여줍니다:
+//   1. 재귀적 enum (트리 구조 표현)
+//   2. exhaustiveness 검사가 빛나는 패턴 매칭
+//   3. 구조적 인터페이스
+//   4. 제네릭 함수
+//   5. or-pattern, 범위 패턴, binding @ 패턴
+//   6. match 식 (값 반환)
+//   7. if 식
+//   8. 클로저 파라미터 패턴
+//   9. 튜플 분해
+//  10. struct 분해
+
+// ═══════════════════════════════════════════════════════════
+// 3. 구조적 인터페이스
+//    impl 블록 불필요 — 메서드 시그니처만 맞추면 자동 충족
+// ═══════════════════════════════════════════════════════════
+
+pub interface Printable {
+    fn format(self) -> String
+}
+
+// ═══════════════════════════════════════════════════════════
+// 평가 에러 타입
+// ═══════════════════════════════════════════════════════════
+
+pub enum EvalError {
+    DivByZero,
+    TypeMismatch,
+}
+
+// ═══════════════════════════════════════════════════════════
+// 평가 결과 값 — 정수 또는 불리언
+// ═══════════════════════════════════════════════════════════
+
+pub enum Value {
+    IntVal(Int),
+    BoolVal(Bool),
+
+    pub fn newInt(n: Int) -> Value {
+        Value.IntVal(n)
+    }
+
+    pub fn newBool(b: Bool) -> Value {
+        Value.BoolVal(b)
+    }
+
+    // 3. Printable 인터페이스 자동 충족 (구조적)
+    //    format(self) -> String 시그니처가 Printable과 일치하므로
+    //    별도 선언 없이 Value는 Printable을 만족함
+    pub fn format(self) -> String {
+        match self {
+            Value.IntVal(n) -> "{n}",
+            Value.BoolVal(b) -> if b { "true" } else { "false" },
+        }
+    }
+
+    // 5. or-pattern + 범위 패턴 + binding @ 패턴
+    //    - n @ 0        : 값 0을 n에 바인딩
+    //    - n @ 1..=9    : 1~9 범위를 n에 바인딩
+    //    - 100 | 200    : or-pattern으로 여러 리터럴 묶기
+    //    - n if n < 0   : guard (coverage에 기여 안 함)
+    pub fn classify(self) -> String {
+        match self {
+            Value.IntVal(n @ 0)      -> "zero",
+            Value.IntVal(n @ 1..=9)  -> "single digit: {n}",
+            Value.IntVal(n @ 10..=99) -> "two digits: {n}",
+            Value.IntVal(n) if n < 0 -> "negative: {n}",
+            Value.IntVal(100) | Value.IntVal(200) | Value.IntVal(300) -> "special",
+            Value.IntVal(n)          -> "large: {n}",
+            Value.BoolVal(_)         -> "boolean",
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// 1. 재귀적 enum — AST 노드를 트리로 표현
+//    Expr variant가 Expr을 다시 참조하므로 재귀적 데이터 구조
+// ═══════════════════════════════════════════════════════════
+
+pub enum Expr {
+    Num(Int),
+    Bool(Bool),
+    Add(Expr, Expr),
+    Sub(Expr, Expr),
+    Mul(Expr, Expr),
+    Div(Expr, Expr),
+    Neg(Expr),
+    If(Expr, Expr, Expr),
+
+    // 2. exhaustiveness 검사가 빛나는 패턴 매칭
+    //    모든 variant를 다루지 않으면 컴파일 에러 발생
+    pub fn eval(self) -> Result<Value, EvalError> {
+        match self {
+            Expr.Num(n) -> Ok(Value.newInt(n)),
+            Expr.Bool(b) -> Ok(Value.newBool(b)),
+            Expr.Add(a, b) -> {
+                // 9. 튜플 분해 — computeInts가 (Int, Int)를 반환
+                let (x, y) = computeInts(a, b)?
+                Ok(Value.newInt(x + y))
+            },
+            Expr.Sub(a, b) -> {
+                let (x, y) = computeInts(a, b)?
+                Ok(Value.newInt(x - y))
+            },
+            Expr.Mul(a, b) -> {
+                let (x, y) = computeInts(a, b)?
+                Ok(Value.newInt(x * y))
+            },
+            Expr.Div(a, b) -> {
+                let (x, y) = computeInts(a, b)?
+                // 7. if 식 — 값을 직접 반환
+                if y == 0 {
+                    Err(EvalError.DivByZero)
+                } else {
+                    Ok(Value.newInt(x / y))
+                }
+            },
+            // 중첩 match — ?로 에러를 먼저 전파한 뒤 값 패턴 매칭
+            Expr.Neg(e) -> match e.eval()? {
+                Value.IntVal(n) -> Ok(Value.newInt(0 - n)),
+                _ -> Err(EvalError.TypeMismatch),
+            },
+            Expr.If(cond, thenBranch, elseBranch) -> {
+                match cond.eval()? {
+                    Value.BoolVal(true) -> thenBranch.eval(),
+                    Value.BoolVal(false) -> elseBranch.eval(),
+                    _ -> Err(EvalError.TypeMismatch),
+                }
+            },
+        }
+    }
+
+    // 6. match 식 — 정수 값을 반환하는 순수 식
+    //    5. or-pattern도 함께 사용: Add | Sub, Mul | Div
+    pub fn precedence(self) -> Int {
+        match self {
+            Expr.Num(_) | Expr.Bool(_)            -> 0,
+            Expr.Neg(_)                           -> 3,
+            Expr.Add(_, _) | Expr.Sub(_, _)       -> 1,
+            Expr.Mul(_, _) | Expr.Div(_, _)       -> 2,
+            Expr.If(_, _, _)                      -> -1,
+        }
+    }
+
+    // 3. Printable 구조적 인터페이스 충족
+    pub fn format(self) -> String {
+        match self {
+            Expr.Num(n) -> "{n}",
+            Expr.Bool(b) -> if b { "true" } else { "false" },
+            Expr.Add(a, b) -> "({a.format()} + {b.format()})",
+            Expr.Sub(a, b) -> "({a.format()} - {b.format()})",
+            Expr.Mul(a, b) -> "({a.format()} * {b.format()})",
+            Expr.Div(a, b) -> "({a.format()} / {b.format()})",
+            Expr.Neg(e) -> "(-{e.format()})",
+            Expr.If(c, t, e) -> "(if {c.format()} {t.format()} else {e.format()})",
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// 9. 튜플 분해 — 두 Expr을 평가해 정수 튜플로 반환
+//    반환값 (Int, Int)를 호출부에서 let (x, y) = ... 로 분해
+// ═══════════════════════════════════════════════════════════
+
+fn computeInts(a: Expr, b: Expr) -> Result<(Int, Int), EvalError> {
+    let va = a.eval()?
+    let vb = b.eval()?
+    // 튜플 패턴 (Value, Value)을 매칭
+    match (va, vb) {
+        (Value.IntVal(x), Value.IntVal(y)) -> Ok((x, y)),
+        _ -> Err(EvalError.TypeMismatch),
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// 4. 제네릭 함수
+// ═══════════════════════════════════════════════════════════
+
+/// 제네릭 identity — 타입 매개변수 T, 제약 없음
+pub fn identity<T>(x: T) -> T {
+    x
+}
+
+/// 제네릭 + 제약: Printable을 만족하는 값을 포맷팅
+/// Expr과 Value 모두 format(self) -> String을 가지므로
+/// 구조적 인터페이스에 의해 자동으로 Printable 충족
+pub fn prettyPrint<T: Printable>(value: T) -> String {
+    ">> {value.format()}"
+}
+
+// ═══════════════════════════════════════════════════════════
+// 10. struct 분해 데모
+// ═══════════════════════════════════════════════════════════
+
+pub struct EvalResult {
+    pub expr: Expr,
+    pub value: Value,
+    pub formatted: String,
+}
+
+/// EvalResult 생성 — expr을 평가해 결과 struct를 채움
+pub fn makeResult(expr: Expr) -> Result<EvalResult, EvalError> {
+    let value = expr.eval()?
+    Ok(EvalResult {
+        expr: expr,
+        value: value,
+        formatted: expr.format(),
+    })
+}
+
+// ═══════════════════════════════════════════════════════════
+// 8. 클로저 파라미터 패턴 — 튜플 분해를 클로저 인자에서 수행
+// ═══════════════════════════════════════════════════════════
+
+/// 평가 결과 리스트를 요약 문자열 리스트로 변환
+pub fn summarizeResults(results: List<Result<EvalResult, EvalError>>) -> List<String> {
+    results.map(|r| match r {
+        Ok(res) -> {
+            // 10. struct 분해 — .. 으로 나머지 필드 무시
+            let EvalResult { value, formatted, .. } = res
+            "{formatted} = {value.format()}"
+        },
+        Err(EvalError.DivByZero) -> "error: divide by zero",
+        Err(EvalError.TypeMismatch) -> "error: type mismatch",
+    })
+}
+
+// ═══════════════════════════════════════════════════════════
+// 메인 진입점
+// ═══════════════════════════════════════════════════════════
+
+pub fn main() {
+    // ── 식 1: (1 + 2) * 3 = 9 ─────────────────────────
+    let expr1 = Expr.Mul(Expr.Add(Expr.Num(1), Expr.Num(2)), Expr.Num(3))
+
+    match expr1.eval() {
+        Ok(v) -> println("(1+2)*3 = {v.format()}"),
+        Err(EvalError.DivByZero) -> println("에러: 0으로 나눔"),
+        Err(EvalError.TypeMismatch) -> println("에러: 타입 불일치"),
+    }
+
+    // ── 식 2: ((10 - 3) * 2) + (-5) = 9 ──────────────
+    let expr2 = Expr.Add(
+        Expr.Mul(Expr.Sub(Expr.Num(10), Expr.Num(3)), Expr.Num(2)),
+        Expr.Neg(Expr.Num(5)),
+    )
+
+    // 10. struct 분해 — EvalResult에서 필드 추출
+    //     .. 패턴으로 expr 필드는 무시
+    match makeResult(expr2) {
+        Ok(EvalResult { value, formatted, .. }) -> {
+            println("식: {formatted}")
+            println("값: {value.format()}")
+        },
+        Err(e) -> match e {
+            EvalError.DivByZero -> println("에러: 0으로 나눔"),
+            EvalError.TypeMismatch -> println("에러: 타입 불일치"),
+        },
+    }
+
+    // ── 5. classify: binding @ + 범위 패턴 + or-pattern ──
+    println("42 분류:  {Value.IntVal(42).classify()}")
+    println("7 분류:   {Value.IntVal(7).classify()}")
+    println("-3 분류:  {Value.IntVal(-3).classify()}")
+    println("100 분류: {Value.IntVal(100).classify()}")
+
+    // ── 4. 제네릭 함수 — 제약 없는 identity ────────────
+    let same: Value = identity(Value.IntVal(42))
+    println("identity(42): {same.format()}")
+
+    // ── 4. 제네릭 함수 — Printable 제약 ───────────────
+    //    Expr은 format(self) -> String을 가지므로 Printable 자동 충족
+    let pretty: String = prettyPrint(expr1)
+    println("prettyPrint: {pretty}")
+
+    // ── 8. 클로저 파라미터 패턴 — 튜플 분해 ──────────
+    let pairs = [(1, "one"), (2, "two"), (3, "three")]
+    let labels = pairs.map(|(n, s)| "{n} -> {s}")
+    println("클로저 분해: {labels}")
+
+    // ── 6. match 식 — 우선순위를 정수 값으로 반환 ────
+    let prec = Expr.Add(Expr.Num(1), Expr.Num(2)).precedence()
+    println("Add 우선순위: {prec}")
+
+    // ── 7. if 식 — 값을 직접 바인딩 ──────────────────
+    //    } else { 는 반드시 같은 줄에 위치
+    let status = if prec == 1 { "low" } else { "high" }
+    println("우선순위 상태: {status}")
+
+    // ── 나눗셈 에러 처리 ─────────────────────────────
+    let badDiv = Expr.Div(Expr.Num(10), Expr.Num(0))
+    match badDiv.eval() {
+        Ok(v) -> println("10/0 = {v.format()}"),
+        Err(EvalError.DivByZero) -> println("10/0 -> 0으로 나누기 에러"),
+        Err(EvalError.TypeMismatch) -> println("10/0 -> 타입 에러"),
+    }
+
+    // ── if 식이 포함된 복합 표현식 ───────────────────
+    let exprIf = Expr.If(Expr.Bool(true), Expr.Num(42), Expr.Num(0))
+    match exprIf.eval() {
+        Ok(v) -> println("if true then 42 else 0 = {v.format()}"),
+        Err(e) -> println("if-expr 에러: {e}"),
+    }
+
+    // ── 8. 클로저 파라미터 패턴으로 결과 요약 ────────
+    let results = [
+        makeResult(Expr.Num(7)),
+        makeResult(Expr.Div(Expr.Num(1), Expr.Num(0))),
+        makeResult(Expr.Add(Expr.Num(3), Expr.Num(4))),
+    ]
+    let summaries = summarizeResults(results)
+    println("요약: {summaries}")
+
+    println("=== 완료 ===")
+}

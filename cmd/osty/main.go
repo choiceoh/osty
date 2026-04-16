@@ -14,7 +14,7 @@
 //	osty ci [path]               Run quality checks; `ci snapshot` captures API.
 //	osty profiles/targets/features/cache
 //	                             Inspect build profiles, target presets, features, cache.
-//	osty parse/tokens/resolve/check/typecheck/lint/fmt/repair
+//	osty parse/tokens/resolve/check/typecheck/lint/fmt/airepair
 //	                             Single-file/package front-end and source tools.
 //	osty gen <file.osty>         Emit a single file through the llvm backend.
 //	osty lsp                     Run the Language Server Protocol server on stdio.
@@ -32,7 +32,7 @@
 //
 //	--check        exit 1 if the file is not already formatted; print diff to stderr
 //	--engine NAME  formatter engine: go (default) or osty
-//	--no-repair    disable the default pre-format source repair pass
+//	--no-airepair disable the default pre-format AI repair pass
 //	--write        overwrite the file in place instead of printing to stdout
 package main
 
@@ -42,11 +42,14 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
+	"github.com/osty/osty/internal/airepair"
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/backend"
 	"github.com/osty/osty/internal/check"
@@ -79,6 +82,8 @@ type cliFlags struct {
 	trace      bool // global: stream per-phase timing to stderr
 	explain    bool // global: append `osty explain CODE` text per unique code
 	inspect    bool // check: emit one InspectRecord per expression (stdout)
+	aiRepair   bool // front-end: adapt AI-authored foreign syntax in memory
+	aiMode     airepair.Mode
 }
 
 func main() {
@@ -97,10 +102,11 @@ func main() {
 		runFmt(args[1:])
 		return
 	}
-	// repair has its own flag parser for --check/--write. It runs before
-	// parse so it can fix syntax slips that would otherwise block fmt/lint.
-	if cmd == "repair" {
-		runRepair(args[1:])
+	// airepair has its own flag parser for --check/--write. It runs
+	// before parse so it can fix syntax slips that would otherwise
+	// block fmt/lint. `repair` remains as a legacy alias.
+	if cmd == "airepair" || cmd == "repair" {
+		runAIRepair(args[1:])
 		return
 	}
 	// gen also has its own flag parser for --out/-o.
@@ -185,6 +191,15 @@ func main() {
 			flags.strict = true
 			args = append([]string{"lint"}, rest...)
 		}
+	}
+	if usesFrontEndAIRepair(cmd) {
+		rest, updatedFlags, err := consumeFrontEndAIRepairFlags(args[1:], flags)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "osty %s: %v\n", cmd, err)
+			os.Exit(2)
+		}
+		flags = updatedFlags
+		args = append([]string{cmd}, rest...)
 	}
 	// add / update are manifest-mutating commands: they edit osty.toml
 	// (and osty.lock). They have their own flag parsers in add.go / update.go.
@@ -341,6 +356,11 @@ func main() {
 			os.Exit(1)
 		}
 		if handled {
+			if flags.aiRepair {
+				applyAIRepairToPackage(selected.pkg, aiRepairPrefix(cmd), os.Stderr, flags)
+				selected.res = resolve.ResolvePackage(selected.pkg, resolve.NewPrelude())
+				selected.chk = check.Package(selected.pkg, selected.res, checkOpts())
+			}
 			if flags.trace {
 				pipeline.RunLoadedPackage(selected.pkg, os.Stderr, pipeline.Config{})
 			}
@@ -392,6 +412,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
 		os.Exit(1)
 	}
+	src = maybeAIRepairSource(path, src, aiRepairPrefix(cmd), os.Stderr, flags)
 	formatter := newFormatter(path, src, flags)
 
 	// --trace: run the full front-end once with streaming timing
@@ -576,6 +597,7 @@ func runCheckPackage(dir string, flags cliFlags) {
 		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
 		os.Exit(1)
 	}
+	applyAIRepairToPackage(pkg, aiRepairPrefix("check"), os.Stderr, flags)
 	res := resolve.ResolvePackage(pkg, resolve.NewPrelude())
 	chk := check.Package(pkg, res, checkOpts())
 	diags := append(append([]*diag.Diagnostic{}, res.Diags...), chk.Diags...)
@@ -626,6 +648,16 @@ func runCheckWorkspace(dir string, flags cliFlags) {
 	// pulled in lazily.
 	for _, p := range resolve.WorkspacePackagePaths(dir) {
 		_, _ = ws.LoadPackage(p)
+	}
+	if flags.aiRepair {
+		paths := make([]string, 0, len(ws.Packages))
+		for p := range ws.Packages {
+			paths = append(paths, p)
+		}
+		sort.Strings(paths)
+		for _, p := range paths {
+			applyAIRepairToPackage(ws.Packages[p], aiRepairPrefix("check"), os.Stderr, flags)
+		}
 	}
 	results := ws.ResolveAll()
 	// Run the type checker over every package, producing one Result per
@@ -678,6 +710,7 @@ func runLintPackage(dir string, flags cliFlags) {
 		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
 		os.Exit(1)
 	}
+	applyAIRepairToPackage(pkg, aiRepairPrefix("lint"), os.Stderr, flags)
 	res := resolve.ResolvePackage(pkg, resolve.NewPrelude())
 	chk := check.Package(pkg, res, checkOpts())
 	cfg, cfgBase, hasCfg := loadLintConfigWithBase(dir)
@@ -704,6 +737,7 @@ func runLintWorkspace(dir string, flags cliFlags) {
 			anyErr = true
 			return
 		}
+		applyAIRepairToPackage(pkg, aiRepairPrefix("lint"), os.Stderr, flags)
 		res := resolve.ResolvePackage(pkg, resolve.NewPrelude())
 		chk := check.Package(pkg, res, checkOpts())
 		cfg, cfgBase, hasCfg := loadLintConfigWithBase(pkg.Dir)
@@ -753,6 +787,7 @@ func runResolvePackage(dir string, flags cliFlags) {
 		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
 		os.Exit(1)
 	}
+	applyAIRepairToPackage(pkg, aiRepairPrefix("resolve"), os.Stderr, flags)
 	res := resolve.ResolvePackage(pkg, resolve.NewPrelude())
 	printPackageDiags(pkg, res.Diags, flags)
 	for _, f := range pkg.Files {
@@ -1036,6 +1071,123 @@ func hasWarning(diags []*diag.Diagnostic) bool {
 	return false
 }
 
+func usesFrontEndAIRepair(cmd string) bool {
+	switch cmd {
+	case "check", "typecheck", "resolve", "lint":
+		return true
+	default:
+		return false
+	}
+}
+
+func consumeFrontEndAIRepairFlags(args []string, flags cliFlags) ([]string, cliFlags, error) {
+	rest := make([]string, 0, len(args))
+	if flags.aiMode == "" {
+		flags.aiMode = airepair.ModeFrontEndAssist
+	}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--airepair" || arg == "--repair":
+			flags.aiRepair = true
+		case arg == "--no-airepair" || arg == "--no-repair":
+			flags.aiRepair = false
+		case strings.HasPrefix(arg, "--airepair="):
+			value := strings.TrimPrefix(arg, "--airepair=")
+			enabled, err := strconv.ParseBool(value)
+			if err != nil {
+				return nil, flags, fmt.Errorf("invalid boolean for --airepair: %q", value)
+			}
+			flags.aiRepair = enabled
+		case strings.HasPrefix(arg, "--repair="):
+			value := strings.TrimPrefix(arg, "--repair=")
+			enabled, err := strconv.ParseBool(value)
+			if err != nil {
+				return nil, flags, fmt.Errorf("invalid boolean for --repair: %q", value)
+			}
+			flags.aiRepair = enabled
+		case arg == "--airepair-mode" || arg == "--repair-mode":
+			if i+1 >= len(args) {
+				return nil, flags, fmt.Errorf("%s requires a value", arg)
+			}
+			mode, ok := parseAIRepairMode(args[i+1])
+			if !ok {
+				return nil, flags, fmt.Errorf("unknown airepair mode %q (want rewrite, parse, or frontend)", args[i+1])
+			}
+			flags.aiMode = mode
+			i++
+		case strings.HasPrefix(arg, "--airepair-mode="):
+			value := strings.TrimPrefix(arg, "--airepair-mode=")
+			mode, ok := parseAIRepairMode(value)
+			if !ok {
+				return nil, flags, fmt.Errorf("unknown airepair mode %q (want rewrite, parse, or frontend)", value)
+			}
+			flags.aiMode = mode
+		case strings.HasPrefix(arg, "--repair-mode="):
+			value := strings.TrimPrefix(arg, "--repair-mode=")
+			mode, ok := parseAIRepairMode(value)
+			if !ok {
+				return nil, flags, fmt.Errorf("unknown airepair mode %q (want rewrite, parse, or frontend)", value)
+			}
+			flags.aiMode = mode
+		default:
+			rest = append(rest, arg)
+		}
+	}
+	return rest, flags, nil
+}
+
+func aiRepairPrefix(cmd string) string {
+	return fmt.Sprintf("osty %s --airepair", cmd)
+}
+
+func maybeAIRepairSource(path string, src []byte, prefix string, summary io.Writer, flags cliFlags) []byte {
+	if !flags.aiRepair {
+		return src
+	}
+	result := airepair.Analyze(airepair.Request{
+		Source:   src,
+		Filename: path,
+		Mode:     flags.aiMode,
+	})
+	if !flags.jsonOutput && result.Accepted && (len(result.Repair.Changes) > 0 || result.Repair.Skipped > 0) {
+		reportRepairSummary(summary, prefix, path, result.Repair)
+	}
+	if result.Accepted {
+		return result.Repaired
+	}
+	return src
+}
+
+func applyAIRepairToPackage(pkg *resolve.Package, prefix string, summary io.Writer, flags cliFlags) {
+	if !flags.aiRepair || pkg == nil {
+		return
+	}
+	for _, pf := range pkg.Files {
+		if pf == nil {
+			continue
+		}
+		result := airepair.Analyze(airepair.Request{
+			Source:   pf.Source,
+			Filename: pf.Path,
+			Mode:     flags.aiMode,
+		})
+		if !flags.jsonOutput && result.Accepted && (len(result.Repair.Changes) > 0 || result.Repair.Skipped > 0) {
+			reportRepairSummary(summary, prefix, pf.Path, result.Repair)
+		}
+		if !result.Accepted || !result.Changed {
+			continue
+		}
+		file, parseDiags := parser.ParseDiagnostics(result.Repaired)
+		pf.Source = result.Repaired
+		pf.File = file
+		pf.ParseDiags = parseDiags
+		pf.FileScope = nil
+		pf.Refs = nil
+		pf.TypeRefs = nil
+	}
+}
+
 // loadLintConfigWithBase is loadLintConfigNear that also returns the
 // manifest directory. Callers need the base to resolve Exclude globs
 // against the project root rather than the target path's parent.
@@ -1195,7 +1347,7 @@ func printScopeNode(s *resolve.Scope, depth int) {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: osty [flags] (parse|tokens|resolve|check|typecheck|lint|fmt|repair|gen) FILE")
+	fmt.Fprintln(os.Stderr, "usage: osty [flags] (parse|tokens|resolve|check|typecheck|lint|fmt|airepair|gen) FILE")
 	fmt.Fprintln(os.Stderr, "       osty new [--lib] NAME     (scaffold a new project)")
 	fmt.Fprintln(os.Stderr, "       osty init [--lib]         (scaffold into the current directory)")
 	fmt.Fprintln(os.Stderr, "       osty build [DIR]          (manifest + deps + front end + backend artifacts)")
@@ -1239,10 +1391,17 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  --check            exit 1 if FILE is not already formatted")
 	fmt.Fprintln(os.Stderr, "  --engine NAME      formatter engine: go (default) or osty")
 	fmt.Fprintln(os.Stderr, "  --write            overwrite FILE in place")
-	fmt.Fprintln(os.Stderr, "  --no-repair        disable the default pre-format source repair pass")
-	fmt.Fprintln(os.Stderr, "repair-specific flags (after the subcommand):")
+	fmt.Fprintln(os.Stderr, "  --airepair         enable the default pre-format AI repair pass")
+	fmt.Fprintln(os.Stderr, "  --no-airepair      disable the default pre-format AI repair pass")
+	fmt.Fprintln(os.Stderr, "airepair-specific flags (after the subcommand):")
 	fmt.Fprintln(os.Stderr, "  --check            exit 1 if FILE would be repaired")
 	fmt.Fprintln(os.Stderr, "  --write            overwrite FILE in place")
+	fmt.Fprintln(os.Stderr, "  --json             emit a structured airepair report as JSON")
+	fmt.Fprintln(os.Stderr, "  --stdin-name NAME  filename to use in reports when FILE is -")
+	fmt.Fprintln(os.Stderr, "  --mode MODE        acceptance mode: rewrite, parse, or frontend")
+	fmt.Fprintln(os.Stderr, "front-end airepair flags (after check/resolve/typecheck/lint):")
+	fmt.Fprintln(os.Stderr, "  --airepair         adapt common AI-authored foreign syntax in memory")
+	fmt.Fprintln(os.Stderr, "  --airepair-mode    acceptance mode: rewrite, parse, or frontend")
 	fmt.Fprintln(os.Stderr, "gen-specific flags (after the subcommand):")
 	fmt.Fprintln(os.Stderr, "  -o PATH            write generated artifact to PATH instead of stdout")
 	fmt.Fprintln(os.Stderr, "  --package NAME     backend package/module name (default: main)")
@@ -1311,7 +1470,8 @@ func printTypes(r *check.Result) {
 
 // runFmt implements the `osty fmt` subcommand. The args slice holds
 // everything on the command line following `fmt` — zero or more of
-// --check/--write/--no-repair/--engine, then exactly one file path.
+// --check/--write/--airepair/--no-airepair/--engine, then exactly
+// one file path.
 //
 // Exit codes match gofmt conventions:
 //
@@ -1321,20 +1481,22 @@ func printTypes(r *check.Result) {
 func runFmt(args []string) {
 	fs := flag.NewFlagSet("fmt", flag.ExitOnError)
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: osty fmt [--check] [--write] [--no-repair] [--engine go|osty] FILE")
+		fmt.Fprintln(os.Stderr, "usage: osty fmt [--check] [--write] [--airepair] [--no-airepair] [--engine go|osty] FILE")
 	}
-	var checkMode, writeMode, noRepair bool
+	var checkMode, writeMode, noAIRepair bool
 	engine := "go"
 	repairMode := true
 	fs.BoolVar(&checkMode, "check", false, "exit 1 if FILE is not already formatted")
 	fs.BoolVar(&checkMode, "c", false, "alias for --check")
 	fs.BoolVar(&writeMode, "write", false, "overwrite FILE in place")
 	fs.BoolVar(&writeMode, "w", false, "alias for --write")
-	fs.BoolVar(&repairMode, "repair", true, "enable automatic source repair before formatting")
-	fs.BoolVar(&noRepair, "no-repair", false, "disable automatic source repair before formatting")
+	fs.BoolVar(&repairMode, "airepair", true, "enable automatic AI repair before formatting")
+	fs.BoolVar(&repairMode, "repair", true, "alias for --airepair")
+	fs.BoolVar(&noAIRepair, "no-airepair", false, "disable automatic AI repair before formatting")
+	fs.BoolVar(&noAIRepair, "no-repair", false, "alias for --no-airepair")
 	fs.StringVar(&engine, "engine", engine, "formatter engine (go|osty)")
 	_ = fs.Parse(args)
-	if noRepair {
+	if noAIRepair {
 		repairMode = false
 	}
 	if fs.NArg() != 1 {
@@ -1385,7 +1547,7 @@ func runFmt(args []string) {
 	if checkMode {
 		if !bytes.Equal(src, out) {
 			if repairMode && (len(repairs.Changes) > 0 || repairs.Skipped > 0) {
-				reportRepairSummary(path, repairs)
+				reportRepairSummary(os.Stderr, "osty fmt", path, repairs)
 			}
 			fmt.Fprintf(os.Stderr, "%s: not repaired/formatted\n", path)
 			os.Exit(1)

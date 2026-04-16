@@ -1,0 +1,503 @@
+/// 동시성 웹 크롤러 — Osty v0.4 종합 데모
+///
+/// 시연 기능 (10가지):
+///   1. taskGroup       — 구조적 동시성 (§8.1)
+///   2. 채널             — thread.chan, <-, recv(), for-in, close (§8.5)
+///   3. defer            — 리소스 정리 보장 (§4.12, §8.4.3)
+///   4. Result/Option    — ?, ?? (§4.5, §4.6)
+///   5. 옵셔널 체이닝    — ?. (§4.6)
+///   6. for ... in       — 반복 (§4.4)
+///   7. 클로저           — 참조 캡처 (§3.5)
+///   8. struct/enum/interface — 타입 정의 (§3.2–3.4)
+///   9. 패턴 매칭        — match, if let, for let (§4.3, §4.2, §4.4)
+///  10. select           — recv/timeout/default (§8.6)
+///
+/// 언어 규칙 (v0.4 grammar frozen):
+///   - ASI (세미콜론 없음)
+///   - 후행 . 금지, 선행 . 만 허용
+///   - } else 같은 줄
+///   - match arm → 사용 (=> 없음)
+///   - ch <- value 는 문 (식 아님)
+
+use std.strings
+
+// ═════════════════════════════════════════════════════
+// ⑧ struct + enum + interface
+// ═════════════════════════════════════════════════════
+
+/// 단일 페이지 크롤링 결과
+pub struct CrawlResult {
+    pub url: String,
+    pub title: String,
+    pub links: List<String>,
+    pub statusCode: Int,
+}
+
+/// 크롤링 에러 분류
+pub enum CrawlError {
+    Timeout(String),
+    NetworkFail(String),
+    ParseFail(String),
+    RateLimited(Int),
+}
+
+/// HTTP 요청 추상화 — 구조적 인터페이스 (impl 불필요)
+pub interface Fetcher {
+    fn fetch(self, url: String, timeoutMs: Int) -> Result<CrawlResult, Error>
+    fn isAllowed(self, url: String) -> Bool
+}
+
+// ═════════════════════════════════════════════════════
+// ⑨ 패턴 매칭 — or-패턴, 범위, 바인딩(@), guard, struct 패턴
+// ═════════════════════════════════════════════════════
+
+/// 에러를 읽기 쉬운 메시지로 변환
+/// — or-패턴(|), variant 패턴, wildcard
+pub fn describeError(err: Error) -> String {
+    match err.downcast::<CrawlError>() {
+        Some(CrawlError.Timeout(url)) ->
+            "시간 초과: {url}",
+        // or-패턴: 두 variant가 같은 바인딩(msg) 공유
+        Some(CrawlError.NetworkFail(msg) | CrawlError.ParseFail(msg)) ->
+            "오류: {msg}",
+        Some(CrawlError.RateLimited(secs)) ->
+            "요청 제한 — {secs}초 후 재시도",
+        None ->
+            "알 수 없는 오류",
+    }
+}
+
+/// HTTP 상태 코드 분류
+/// — 범위 패턴(..=), 바인딩 패턴(@), 리터럴, wildcard
+pub fn statusLabel(code: Int) -> String {
+    match code {
+        c @ 200..=299 -> "성공({c})",
+        c @ 300..=399 -> "리다이렉트({c})",
+        429           -> "요청제한",
+        c @ 400..=499 -> "클라이언트오류({c})",
+        c @ 500..=599 -> "서버오류({c})",
+        _             -> "알수없음",
+    }
+}
+
+/// CrawlResult를 상태별로 분기 — struct 패턴 + guard
+pub fn classify(result: CrawlResult) -> String {
+    match result {
+        CrawlResult { statusCode: 200, title, .. } ->
+            "OK: {title}",
+        CrawlResult { statusCode: c, url, .. } if c >= 400 ->
+            "에러 {c}: {url}",
+        CrawlResult { statusCode: c, .. } ->
+            "기타: 상태코드 {c}",
+    }
+}
+
+// ═════════════════════════════════════════════════════
+// ④ Result/Option 에러 처리 — ?, ??
+// ═════════════════════════════════════════════════════
+
+/// 단일 URL 크롤링 — ? 로 에러 전파
+fn crawlOne(
+    fetcher: Fetcher,
+    url: String,
+    timeoutMs: Int,
+) -> Result<CrawlResult, Error> {
+    if !fetcher.isAllowed(url) {
+        return Err(Error.new("robots.txt 차단: {url}"))
+    }
+    // ? 전파: fetch가 Err면 즉시 반환, Ok면 내부 꺼냄
+    let result = fetcher.fetch(url, timeoutMs)?
+    Ok(result)
+}
+
+// ═════════════════════════════════════════════════════
+// ⑤ 옵셔널 체이닝 (?.) + ?? nil-coalescing
+// ═════════════════════════════════════════════════════
+
+/// 안전한 제목 추출 — ?., ?? 시연
+pub fn safeTitle(result: CrawlResult?) -> String {
+    // result가 None → ?.: None → ??: 기본값 반환
+    result?.title ?? "제목 없음"
+}
+
+/// 안전한 첫 링크 — match + guard
+pub fn safeFirstLink(result: CrawlResult?) -> String {
+    match result {
+        Some(r) if r.links.len() > 0 -> r.links[0],
+        _ -> "https://example.com",
+    }
+}
+
+// ═════════════════════════════════════════════════════
+// ⑥ for ... in 반복 + ⑦ 클로저 (참조 캡처)
+// ═════════════════════════════════════════════════════
+
+/// URL 중복 제거 — 클로저가 seen을 참조 캡처
+pub fn dedupUrls(urls: List<String>) -> List<String> {
+    let mut seen: List<String> = []
+    let mut result: List<String> = []
+    for u in urls {
+        let lower = strings.toLower(u)
+        let mut dup = false
+        for s in seen {
+            if s == lower {
+                dup = true
+                break
+            }
+        }
+        if !dup {
+            seen.push(lower)
+            result.push(lower)
+        }
+    }
+    result
+}
+
+/// 결과 요약 리포트 — for-in 순회 + 문자열 연결
+pub fn summaryReport(results: List<CrawlResult>) -> String {
+    let mut report = "── 크롤링 결과 ──"
+    let mut totalLinks = 0
+    for r in results {
+        let n = r.links.len()
+        totalLinks = totalLinks + n
+        report = report + "\n  {r.url} — {statusLabel(r.statusCode)} ({n}개 링크)"
+    }
+    report + "\n총 {results.len()}페이지, {totalLinks}개 링크 수집"
+}
+
+// ═════════════════════════════════════════════════════
+// ① taskGroup + ② 채널 (생산자/워커/수집기 파이프라인)
+// ═════════════════════════════════════════════════════
+
+/// 병렬 크롤러 — 구조적 동시성
+///
+/// 아키텍처:
+///   생산자 ──(jobs 채널)──> 워커 ×N ──(results 채널)──> 수집기(메인)
+pub fn crawlParallel(
+    fetcher: Fetcher,
+    urls: List<String>,
+    workers: Int,
+    timeoutMs: Int,
+) -> Result<List<CrawlResult>, Error> {
+    // ② 채널 생성 — 버퍼 크기 = 워커 수
+    let jobs = thread.chan::<String>(workers)
+    let results = thread.chan::<Result<CrawlResult, Error>>(workers)
+
+    // ① taskGroup: 구조적 동시성 — 모든 spawn 완료 후 반환
+    taskGroup(|g| {
+        // ── 생산자: URL을 jobs 채널에 송신 후 close ──
+        // ⑦ 클로저: urls, jobs를 참조 캡처
+        g.spawn(|| {
+            for url in urls {
+                jobs <- url
+            }
+            jobs.close()
+        })
+
+        // ── 워커 풀: jobs 소비 → 크롤링 → results 송신 ──
+        // ② for x in ch: close 시 자동 종료
+        for _ in 0..workers {
+            g.spawn(|| {
+                for url in jobs {
+                    let r = crawlOne(fetcher, url, timeoutMs)
+                    results <- r
+                }
+            })
+        }
+
+        // ── 수집기: URL 수만큼 결과 대기 ──
+        let expected = urls.len()
+        let mut collected: List<CrawlResult> = []
+        for _ in 0..expected {
+            // ② recv() — Result 분해
+            match results.recv() {
+                Some(Ok(r)) -> collected.push(r),
+                // ④ ? 전파: Err 즉시 반환
+                Some(Err(e)) -> return Err(e),
+                None -> return Err(Error.new("결과 채널 조기 종료")),
+            }
+        }
+        Ok(collected)
+    })
+}
+
+// ═════════════════════════════════════════════════════
+// ⑩ select — recv / send / timeout / default
+// ═════════════════════════════════════════════════════
+
+/// select + 타임아웃 크롤링 — 정확히 하나의 브랜치만 실행
+pub fn crawlWithSelect(
+    fetcher: Fetcher,
+    url: String,
+    timeoutMs: Int,
+) -> Result<CrawlResult, Error> {
+    let ch = thread.chan::<Result<CrawlResult, Error>>(1)
+
+    taskGroup(|g| {
+        // ⑦ 클로저: fetcher, url, timeoutMs, ch 캡처
+        g.spawn(|| {
+            let r = crawlOne(fetcher, url, timeoutMs)
+            ch <- r
+        })
+
+        // ⑩ select: 결과 수신 또는 타임아웃 — 정확히 하나 실행
+        thread.select(|s| {
+            // recv 브랜치: 채널에서 결과 수신 시
+            s.recv(ch, |r| r)
+            // timeout 브랜치: timeoutMs 경과 시
+            s.timeout(timeoutMs.ms, || {
+                Err(Error.new("타임아웃: {url}"))
+            })
+        })
+    })
+}
+
+/// 실시간 스트림 크롤러 — select로 완료/타임아웃 동시 감시
+pub fn crawlStream(
+    fetcher: Fetcher,
+    urls: List<String>,
+    timeoutMs: Int,
+) -> Result<List<CrawlResult>, Error> {
+    let pages = thread.chan::<CrawlResult>(16)
+    let done = thread.chan::<Bool>(1)
+
+    taskGroup(|g| {
+        // 생산자: 순차 크롤링 → 채널 분배
+        g.spawn(|| {
+            for url in urls {
+                if !fetcher.isAllowed(url) {
+                    continue
+                }
+                // ⑨ match 패턴 매칭으로 성공/실패 분기
+                match crawlOne(fetcher, url, timeoutMs) {
+                    Ok(r) -> pages <- r,
+                    Err(e) -> println("경고: {describeError(e)}"),
+                }
+            }
+            pages.close()
+        })
+
+        // 진행 모니터: 실시간 출력
+        // ⑦ 클로저: count를 참조 캡처하여 변경
+        let mut count = 0
+        g.spawn(|| {
+            // ② for x in ch: close 시 자동 종료
+            for r in pages {
+                count = count + 1
+                println("[{count}] {r.url} — {statusLabel(r.statusCode)}")
+            }
+            done <- true
+        })
+
+        // ⑩ select: 완료 대기 또는 전체 타임아웃
+        let ok = thread.select(|s| {
+            s.recv(done, |_| true)
+            s.timeout(30.s, || {
+                println("전체 타임아웃")
+                false
+            })
+        })
+
+        if ok { Ok([]) } else { Err(Error.new("전체 타임아웃")) }
+    })
+}
+
+// ═════════════════════════════════════════════════════
+// ③ defer — 리소스 정리 보장 (LIFO, ? 전파 시에도 실행)
+// ═════════════════════════════════════════════════════
+
+/// 요청 로깅 헬퍼
+pub struct RequestLog {
+    url: String,
+}
+
+/// RequestLog 메서드 — 부분 선언으로 추가
+pub struct RequestLog {
+    /// 로그 종료 — defer에서 호출
+    pub fn finish(self) {
+        println("  ← 완료: {self.url}")
+    }
+}
+
+/// 요청 로그 시작
+pub fn requestLogStart(url: String) -> RequestLog {
+    println("  → 요청: {url}")
+    RequestLog { url }
+}
+
+/// ③ defer LIFO 데모 — 여러 리소스를 역순 정리
+fn deferDemo() {
+    // 먼저 등록한 defer가 나중에 실행 (LIFO)
+    let log1 = requestLogStart("리소스 A")
+    defer log1.finish()
+
+    let log2 = requestLogStart("리소스 B")
+    defer log2.finish()
+
+    println("  ... 작업 수행 중 ...")
+    // 스코프 종료 시: log2.finish() → log1.finish() 순서로 실행
+}
+
+// ═════════════════════════════════════════════════════
+// 시뮬레이션용 Fetcher — ③ defer, ④ ? 전파 시연
+// ═════════════════════════════════════════════════════
+
+pub struct SimFetcher {
+    mut delayMs: Int,
+}
+
+/// SimFetcher 메서드 — 부분 선언으로 추가
+pub struct SimFetcher {
+    /// HTTP 요청 시뮬레이션
+    /// ③ defer: ? 전파 시에도 log.finish() 보장 실행
+    pub fn fetch(
+        self,
+        url: String,
+        timeoutMs: Int,
+    ) -> Result<CrawlResult, Error> {
+        let log = requestLogStart(url)
+        // ③ defer: 정상/에러 관계없이 항상 실행
+        defer log.finish()
+
+        // 에러 시나리오 시뮬레이션
+        if strings.contains(url, "forbidden") {
+            // return해도 defer log.finish() 실행됨
+            return Err(Error.new("접근 금지: {url}"))
+        }
+        if strings.contains(url, "error") {
+            return Err(Error.new("네트워크 오류: {url}"))
+        }
+
+        // 지연 시뮬레이션
+        time.sleep(self.delayMs.ms)
+
+        Ok(CrawlResult {
+            url,
+            title: strings.toLower(url),
+            links: [
+                "{url}/about",
+                "{url}/docs",
+            ],
+            statusCode: 200,
+        })
+    }
+
+    /// robots.txt 확인 시뮬레이션
+    pub fn isAllowed(self, url: String) -> Bool {
+        !strings.contains(url, "forbidden")
+    }
+}
+
+/// SimFetcher 생성자
+pub fn newSimFetcher(delayMs: Int) -> SimFetcher {
+    SimFetcher { delayMs }
+}
+
+// ═════════════════════════════════════════════════════
+// 진입점 — 전체 기능 시연
+// ═════════════════════════════════════════════════════
+
+pub fn main() {
+    let fetcher = newSimFetcher(50)
+    let urls = [
+        "https://example.com",
+        "https://example.org",
+        "https://example.net",
+        "https://example.io",
+        "https://example.dev",
+    ]
+
+    // ── 1) taskGroup + 채널: 병렬 크롤링 ──────────────
+    println("══ 1) 병렬 크롤링 (taskGroup + 채널) ══")
+    match crawlParallel(fetcher, urls, 3, 5000) {
+        Ok(results) -> {
+            for r in results {
+                // ⑤ 옵셔널 체이닝 + ④ ?? 기본값
+                let title = safeTitle(Some(r))
+                let link = safeFirstLink(Some(r))
+                println("  {statusLabel(r.statusCode)}: {title}")
+                println("    첫 링크: {link}")
+            }
+            println(summaryReport(results))
+        },
+        Err(e) -> println("실패: {describeError(e)}"),
+    }
+
+    // ── 2) ⑩ select: 타임아웃 크롤링 ────────────────
+    println("")
+    println("══ 2) select 타임아웃 ══")
+    match crawlWithSelect(fetcher, "https://example.com", 3000) {
+        Ok(r) -> println("  성공: {r.title} ({r.links.len()}개 링크)"),
+        Err(e) -> println("  실패: {describeError(e)}"),
+    }
+
+    // ── 3) ⑤ 옵셔널 체이닝 + ?? ────────────────────
+    println("")
+    println("══ 3) 옵셔널 체이닝 + ?? ══")
+    let nothing: CrawlResult? = None
+    println("  None → 제목: \"{safeTitle(nothing)}\"")
+    println("  None → 링크: \"{safeFirstLink(nothing)}\"")
+    let something = CrawlResult {
+        url: "https://example.com",
+        title: "Example Domain",
+        links: ["https://example.com/about"],
+        statusCode: 200,
+    }
+    println("  Some → 제목: \"{safeTitle(Some(something))}\"")
+
+    // ── 4) ⑨ 패턴 매칭 (범위 + @ 바인딩) ───────────
+    println("")
+    println("══ 4) 패턴 매칭 ══")
+    let codes = [200, 301, 404, 429, 503, 999]
+    for code in codes {
+        println("  {code} → {statusLabel(code)}")
+    }
+
+    // ── 5) ③ defer LIFO 정리 ───────────────────────
+    println("")
+    println("══ 5) defer LIFO 정리 ══")
+    deferDemo()
+
+    // ── 6) ⑨ for let 패턴 ─────────────────────────
+    println("")
+    println("══ 6) for let 패턴 ══")
+    let queue = thread.chan::<String>(4)
+    taskGroup(|g| {
+        // 생산자
+        g.spawn(|| {
+            queue <- "작업 A"
+            queue <- "작업 B"
+            queue <- "작업 C"
+            queue.close()
+        })
+        // for let: 패턴 매칭 성공(Some) 시에만 반복, None이면 종료
+        for let Some(job) = queue.recv() {
+            println("  처리: {job}")
+        }
+        Ok(())
+    })
+
+    // ── 7) ⑦ 클로저 캡처 + 중복 제거 ───────────────
+    println("")
+    println("══ 7) 중복 제거 (클로저 캡처) ══")
+    let mixedUrls = [
+        "HTTPS://EXAMPLE.COM",
+        "https://example.com",
+        "https://example.org",
+        "HTTPS://EXAMPLE.ORG",
+    ]
+    let unique = dedupUrls(mixedUrls)
+    for u in unique {
+        println("  {u}")
+    }
+
+    // ── 8) ⑨ if let 패턴 ──────────────────────────
+    println("")
+    println("══ 8) if let 패턴 ══")
+    let maybeTitle: String? = Some("Osty 크롤러")
+    if let Some(t) = maybeTitle {
+        println("  if let: 제목 = {t}")
+    } else {
+        println("  if let: 제목 없음")
+    }
+}
