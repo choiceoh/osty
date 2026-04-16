@@ -1,0 +1,15 @@
+enum FloatMaybe {
+    Full(Float)
+    Empty
+}
+
+fn score(value: FloatMaybe) -> Float {
+    match value {
+        Full(x) -> x,
+        Empty -> 0.0,
+    }
+}
+
+fn main() {
+    println(score(Full(42.0)))
+}

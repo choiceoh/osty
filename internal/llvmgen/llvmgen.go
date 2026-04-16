@@ -267,6 +267,9 @@ type generator struct {
 	body       []string
 	locals     []map[string]value
 	returnType string
+
+	needsGCRuntime bool
+	gcRootSlots    []value
 }
 
 type declarations struct {
@@ -334,10 +337,15 @@ type enumPatternInfo struct {
 }
 
 type value struct {
-	typ string
-	ref string
-	ptr bool
+	typ       string
+	ref       string
+	ptr       bool
+	gcManaged bool
 }
+
+const (
+	llvmGcRuntimeFrameSlotKind = 5
+)
 
 func collectDeclarations(file *ast.File) (*declarations, error) {
 	out := &declarations{
@@ -519,8 +527,10 @@ func llvmEnumPayloadType(t ast.Type) (string, error) {
 		return "i64", nil
 	case "Float":
 		return "double", nil
+	case "String":
+		return "ptr", nil
 	default:
-		return "", unsupported("type-system", "LLVM enum payloads currently support Int or Float only")
+		return "", unsupported("type-system", "LLVM enum payloads currently support Int, Float, or String only")
 	}
 }
 
@@ -577,6 +587,7 @@ func (g *generator) emitScriptMain(stmts []ast.Stmt) (string, error) {
 		return "", err
 	}
 	emitter := g.toOstyEmitter()
+	g.releaseGCRoots(emitter)
 	llvmReturnI32Zero(emitter)
 	g.takeOstyEmitter(emitter)
 	return g.renderFunction("i32", "main", nil), nil
@@ -588,6 +599,7 @@ func (g *generator) emitMainFunction(sig *fnSig) (string, error) {
 		return "", err
 	}
 	emitter := g.toOstyEmitter()
+	g.releaseGCRoots(emitter)
 	llvmReturnI32Zero(emitter)
 	g.takeOstyEmitter(emitter)
 	return g.renderFunction("i32", "main", nil), nil
@@ -611,6 +623,30 @@ func (g *generator) beginFunction() {
 	g.body = nil
 	g.locals = []map[string]value{{}}
 	g.returnType = ""
+	g.gcRootSlots = nil
+}
+
+func (g *generator) bindGCRootIfManagedPointer(emitter *LlvmEmitter, slot value) {
+	if slot.typ != "ptr" || !slot.gcManaged {
+		return
+	}
+	llvmGcRootBind(emitter, toOstyValue(slot))
+	g.gcRootSlots = append(g.gcRootSlots, slot)
+	g.needsGCRuntime = true
+}
+
+func (g *generator) postGCWriteIfPointer(emitter *LlvmEmitter, slot, v value) {
+	if slot.typ != "ptr" || !slot.gcManaged || v.typ != "ptr" || !v.gcManaged {
+		return
+	}
+	llvmGcPostWrite(emitter, toOstyValue(slot), toOstyValue(v), llvmGcRuntimeFrameSlotKind)
+	g.needsGCRuntime = true
+}
+
+func (g *generator) releaseGCRoots(emitter *LlvmEmitter) {
+	for i := len(g.gcRootSlots) - 1; i >= 0; i-- {
+		llvmGcRootRelease(emitter, toOstyValue(g.gcRootSlots[i]))
+	}
 }
 
 func (g *generator) emitReturningBlock(stmts []ast.Stmt, retType string) error {
@@ -637,6 +673,7 @@ func (g *generator) emitReturningBlock(stmts []ast.Stmt, retType string) error {
 				return unsupportedf("type-system", "return type %s, want %s", v.typ, retType)
 			}
 			emitter := g.toOstyEmitter()
+			g.releaseGCRoots(emitter)
 			llvmReturn(emitter, toOstyValue(v))
 			g.takeOstyEmitter(emitter)
 			return nil
@@ -649,6 +686,7 @@ func (g *generator) emitReturningBlock(stmts []ast.Stmt, retType string) error {
 				return unsupportedf("type-system", "trailing expression type %s, want %s", v.typ, retType)
 			}
 			emitter := g.toOstyEmitter()
+			g.releaseGCRoots(emitter)
 			llvmReturn(emitter, toOstyValue(v))
 			g.takeOstyEmitter(emitter)
 			return nil
@@ -714,8 +752,11 @@ func (g *generator) emitLet(stmt *ast.LetStmt) error {
 	if stmt.Mut {
 		emitter := g.toOstyEmitter()
 		slot := llvmMutableLetSlot(emitter, name, toOstyValue(v))
+		slotValue := fromOstyValue(slot)
+		slotValue.gcManaged = v.gcManaged
+		g.bindGCRootIfManagedPointer(emitter, slotValue)
 		g.takeOstyEmitter(emitter)
-		g.bindLocal(name, fromOstyValue(slot))
+		g.bindLocal(name, slotValue)
 		return nil
 	}
 	g.bindLocal(name, v)
@@ -749,6 +790,7 @@ func (g *generator) emitAssign(stmt *ast.AssignStmt) error {
 	}
 	emitter := g.toOstyEmitter()
 	llvmStore(emitter, toOstyValue(slot), toOstyValue(v))
+	g.postGCWriteIfPointer(emitter, slot, v)
 	g.takeOstyEmitter(emitter)
 	return nil
 }
@@ -1723,6 +1765,9 @@ func (g *generator) render(defs []string) []byte {
 			typeDefs = append(typeDefs, llvmStructTypeDef(info.name, []string{"i64", info.payloadTyp}))
 		}
 	}
+	if g.needsGCRuntime {
+		return []byte(llvmRenderModuleWithGcRuntime(g.sourcePath, g.target, typeDefs, g.stringDefs, defs))
+	}
 	return []byte(llvmRenderModuleWithGlobalsAndTypes(g.sourcePath, g.target, typeDefs, g.stringDefs, defs))
 }
 
@@ -1812,6 +1857,8 @@ func zeroLiteral(typ string) string {
 	switch typ {
 	case "double":
 		return "0.0"
+	case "ptr":
+		return "null"
 	default:
 		return "0"
 	}

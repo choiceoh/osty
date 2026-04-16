@@ -30,6 +30,7 @@ var sourceFiles = []string{
 const mergedPath = "/tmp/selfhost_merged.osty"
 
 const stringsPrelude = `use runtime.strings as strings {
+    fn Contains(s: String, substr: String) -> Bool
     fn Count(s: String, substr: String) -> Int
     fn Fields(s: String) -> List<String>
     fn HasPrefix(s: String, prefix: String) -> Bool

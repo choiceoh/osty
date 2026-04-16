@@ -114,7 +114,7 @@ fn testLlvmToolchainPlanIsOstyOwned() {
 fn testLlvmExecutableCorpusPlanIsOstyOwned() {
     let cases = llvmSmokeExecutableCorpus()
 
-    testing.assert(cases.len() == 34)
+    testing.assert(cases.len() == 44)
     testing.assert(cases[0].name == "minimal")
     testing.assert(cases[0].fixture == "minimal_print.osty")
     testing.assert(cases[0].stdout == "42\n")
@@ -217,6 +217,36 @@ fn testLlvmExecutableCorpusPlanIsOstyOwned() {
     testing.assert(cases[33].name == "float-enum-payload")
     testing.assert(cases[33].fixture == "float_enum_payload_print.osty")
     testing.assert(cases[33].stdout == "42.000000\n")
+    testing.assert(cases[34].name == "float-payload-return")
+    testing.assert(cases[34].fixture == "float_payload_return_print.osty")
+    testing.assert(cases[34].stdout == "42.000000\n")
+    testing.assert(cases[35].name == "float-payload-param")
+    testing.assert(cases[35].fixture == "float_payload_param_print.osty")
+    testing.assert(cases[35].stdout == "42.000000\n")
+    testing.assert(cases[36].name == "float-payload-mut")
+    testing.assert(cases[36].fixture == "float_payload_mut_print.osty")
+    testing.assert(cases[36].stdout == "42.000000\n")
+    testing.assert(cases[37].name == "float-payload-reversed")
+    testing.assert(cases[37].fixture == "float_payload_reversed_match_print.osty")
+    testing.assert(cases[37].stdout == "42.000000\n")
+    testing.assert(cases[38].name == "float-payload-wildcard")
+    testing.assert(cases[38].fixture == "float_payload_wildcard_print.osty")
+    testing.assert(cases[38].stdout == "42.000000\n")
+    testing.assert(cases[39].name == "string-payload-return")
+    testing.assert(cases[39].fixture == "string_payload_return_print.osty")
+    testing.assert(cases[39].stdout == "payload string\n")
+    testing.assert(cases[40].name == "string-payload-param")
+    testing.assert(cases[40].fixture == "string_payload_param_print.osty")
+    testing.assert(cases[40].stdout == "payload string\n")
+    testing.assert(cases[41].name == "string-payload-mut")
+    testing.assert(cases[41].fixture == "string_payload_mut_print.osty")
+    testing.assert(cases[41].stdout == "payload string\n")
+    testing.assert(cases[42].name == "string-payload-reversed")
+    testing.assert(cases[42].fixture == "string_payload_reversed_match_print.osty")
+    testing.assert(cases[42].stdout == "payload string\n")
+    testing.assert(cases[43].name == "string-payload-wildcard")
+    testing.assert(cases[43].fixture == "string_payload_wildcard_print.osty")
+    testing.assert(cases[43].stdout == "payload string\n")
 }
 
 fn testLlvmUnsupportedDiagnosticPolicyIsOstyOwned() {
@@ -607,4 +637,107 @@ fn testLlvmSmokeFloatEnumPayloadIsOstyOwned() {
     assertLlvmContains(ir, "extractvalue %MaybeF")
     assertLlvmContains(ir, "define i32 @main() \{")
     assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_f64, double")
+}
+
+fn testLlvmSmokeFloatPayloadReturnIsOstyOwned() {
+    let ir = llvmSmokeFloatPayloadReturnIR("/tmp/float_payload_return_print.osty")
+
+    assertLlvmContains(ir, "%FloatMaybe = type \{ i64, double \}")
+    assertLlvmContains(ir, "define %FloatMaybe @pick() \{")
+    assertLlvmContains(ir, "ret %FloatMaybe")
+    assertLlvmContains(ir, "call %FloatMaybe @pick()")
+    assertLlvmContains(ir, "extractvalue %FloatMaybe")
+    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_f64, double")
+}
+
+fn testLlvmSmokeFloatPayloadParamIsOstyOwned() {
+    let ir = llvmSmokeFloatPayloadParamIR("/tmp/float_payload_param_print.osty")
+
+    assertLlvmContains(ir, "%FloatMaybe = type \{ i64, double \}")
+    assertLlvmContains(ir, "define double @score(%FloatMaybe %value) \{")
+    assertLlvmContains(ir, "call double @score(%FloatMaybe")
+    assertLlvmContains(ir, "extractvalue %FloatMaybe")
+    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_f64, double")
+}
+
+fn testLlvmSmokeFloatPayloadMutableIsOstyOwned() {
+    let ir = llvmSmokeFloatPayloadMutableIR("/tmp/float_payload_mut_print.osty")
+
+    assertLlvmContains(ir, "%FloatMaybe = type \{ i64, double \}")
+    assertLlvmContains(ir, "alloca %FloatMaybe")
+    assertLlvmContains(ir, "store %FloatMaybe")
+    assertLlvmContains(ir, "load %FloatMaybe")
+    assertLlvmContains(ir, "extractvalue %FloatMaybe")
+}
+
+fn testLlvmSmokeFloatPayloadReversedMatchIsOstyOwned() {
+    let ir = llvmSmokeFloatPayloadReversedMatchIR("/tmp/float_payload_reversed_match_print.osty")
+
+    assertLlvmContains(ir, "%FloatMaybe = type \{ i64, double \}")
+    assertLlvmContains(ir, "define i32 @main() \{")
+    assertLlvmContains(ir, "icmp eq i64")
+    assertLlvmContains(ir, "extractvalue %FloatMaybe")
+    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_f64, double")
+}
+
+fn testLlvmSmokeFloatPayloadWildcardIsOstyOwned() {
+    let ir = llvmSmokeFloatPayloadWildcardIR("/tmp/float_payload_wildcard_print.osty")
+
+    assertLlvmContains(ir, "%FloatMaybe = type \{ i64, double \}")
+    assertLlvmContains(ir, "define i32 @main() \{")
+    assertLlvmContains(ir, "icmp eq i64")
+    assertLlvmContains(ir, "extractvalue %FloatMaybe")
+    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_f64, double")
+}
+
+fn testLlvmSmokeStringPayloadReturnIsOstyOwned() {
+    let ir = llvmSmokeStringPayloadReturnIR("/tmp/string_payload_return_print.osty")
+
+    assertLlvmContains(ir, "%Label = type \{ i64, ptr \}")
+    assertLlvmContains(ir, "define %Label @pick() \{")
+    assertLlvmContains(ir, "ret %Label")
+    assertLlvmContains(ir, "call %Label @pick()")
+    assertLlvmContains(ir, "extractvalue %Label")
+    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_str, ptr")
+}
+
+fn testLlvmSmokeStringPayloadParamIsOstyOwned() {
+    let ir = llvmSmokeStringPayloadParamIR("/tmp/string_payload_param_print.osty")
+
+    assertLlvmContains(ir, "%Label = type \{ i64, ptr \}")
+    assertLlvmContains(ir, "define ptr @score(%Label %value) \{")
+    assertLlvmContains(ir, "call ptr @score(%Label")
+    assertLlvmContains(ir, "extractvalue %Label")
+    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_str, ptr")
+}
+
+fn testLlvmSmokeStringPayloadMutableIsOstyOwned() {
+    let ir = llvmSmokeStringPayloadMutableIR("/tmp/string_payload_mut_print.osty")
+
+    assertLlvmContains(ir, "%Label = type \{ i64, ptr \}")
+    assertLlvmContains(ir, "alloca %Label")
+    assertLlvmContains(ir, "store %Label")
+    assertLlvmContains(ir, "load %Label")
+    assertLlvmContains(ir, "extractvalue %Label")
+    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_str, ptr")
+}
+
+fn testLlvmSmokeStringPayloadReversedMatchIsOstyOwned() {
+    let ir = llvmSmokeStringPayloadReversedMatchIR("/tmp/string_payload_reversed_match_print.osty")
+
+    assertLlvmContains(ir, "%Label = type \{ i64, ptr \}")
+    assertLlvmContains(ir, "define i32 @main() \{")
+    assertLlvmContains(ir, "icmp eq i64")
+    assertLlvmContains(ir, "extractvalue %Label")
+    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_str, ptr")
+}
+
+fn testLlvmSmokeStringPayloadWildcardIsOstyOwned() {
+    let ir = llvmSmokeStringPayloadWildcardIR("/tmp/string_payload_wildcard_print.osty")
+
+    assertLlvmContains(ir, "%Label = type \{ i64, ptr \}")
+    assertLlvmContains(ir, "define i32 @main() \{")
+    assertLlvmContains(ir, "icmp eq i64")
+    assertLlvmContains(ir, "extractvalue %Label")
+    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_str, ptr")
 }

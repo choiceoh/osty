@@ -1,0 +1,15 @@
+enum FloatMaybe {
+    Full(Float)
+    Empty
+}
+
+fn pick() -> FloatMaybe {
+    Full(42.0)
+}
+
+fn main() {
+    println(match pick() {
+        Full(x) -> x,
+        Empty -> 0.0,
+    })
+}

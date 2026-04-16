@@ -410,6 +410,50 @@ return/parameter boundaries와 mutable local slots을 지나도 동일하게 동
 - `Float32`/`Float64` width 정책은 별도 단계에서 결정한다고 migration 문서에
   명시되어야 한다.
 
+### Phase 54-63. Payload enum generalization (`Float`/`String`)
+
+목표: `Float` payload enum과 `String` payload enum을 같은 형태로 일반화해
+반환/파라미터/mutable/local `match` 경계를 통일하고, 매칭 순서/와일드카드
+동작까지 검증한다.
+
+제약: 현재 단계는 `Some/None`처럼 예약어로 보존된 형태는 사용하지 않고,
+`Full(Float)`/`Text(String)`으로 진행한다. qualified constructor/pattern은
+자체점검 이슈로 이번 단계는 제외한다.
+
+작업:
+
+- `float_payload_return_print.osty`를 추가해 `Full(42.0)` 생성
+  후 helper-return 경계와 `match` 추출을 검증한다.
+- `float_payload_param_print.osty`를 추가해 float payload enum을 helper parameter로
+  전달해 반환 경계와 `match` 추출을 검증한다.
+- `float_payload_mut_print.osty`를 추가해 mutable local payload enum 슬롯을 쓰고
+  읽은 뒤 `match` 바인딩을 검증한다.
+- `float_payload_reversed_match_print.osty`를 추가해 `Empty -> ...`, `Full(x) -> ...`
+  순서의 two-arm match를 검증한다.
+- `float_payload_wildcard_print.osty`를 추가해 `Full(_)` 와일드카드 match arm을
+  검증한다.
+- `string_payload_return_print.osty`를 추가해 `Text("payload string")` 반환 후
+  `Text(s)`/`Empty` 분기와 문자열 반환을 검증한다.
+- `string_payload_param_print.osty`를 추가해 `String` payload enum parameter
+  경계를 검증한다.
+- `string_payload_mut_print.osty`를 추가해 mutable local `Text("payload string")`
+  업데이트와 `Text(s)`/`Empty` 분기를 검증한다.
+- `string_payload_reversed_match_print.osty`를 추가해 `Empty -> ...`, `Text(s) ->
+  ...` 순서의 two-arm match를 검증한다.
+- `string_payload_wildcard_print.osty`를 추가해 `Text(_)` 와일드카드 match arm을
+  검증한다.
+- `LLVM_BACKEND_CORPUS.md`에 Phase 54~63 항목을 추가하고 expected stdout과
+  각 산출물 경계를 정리한다.
+
+완료 조건:
+
+- `Float`와 `String` payload enum가 반환/파라미터/mutable locals/매치 패턴 순서/와일드카드로
+  공통되는 lowering 경로를 가져야 한다.
+- qualified 생성자 형태는 migration 계획에 맞춰 `later phase`로 분리해 둔 채
+  문서화되어야 한다.
+- 기존 `Float`/`String` smoke fixture와 같은 방식으로 `Osty` 소유의 helper corpus
+  및 drift-guard 경로에서 일관되게 컴파일되어야 한다.
+
 ## Toolchain 전략
 
 초기 전략:

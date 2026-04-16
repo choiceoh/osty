@@ -25,6 +25,8 @@ func run() error {
 	}
 	cmd := exec.Command(
 		"go", "run", "-tags", "selfhostgen", "./cmd/osty", "gen",
+		"--backend", "go",
+		"--emit", "go",
 		"--package", "ci",
 		"-o", "internal/ci/osty_generated.go",
 		"examples/selfhost-core/ci.osty",

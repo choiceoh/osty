@@ -47,7 +47,7 @@ self-hosted compiler without that seed.
 | CI quality tooling (`internal/ci`, `osty ci`) | done — Osty-authored generated CI core, signature-aware snapshots, workspace coverage, JSON reports |
 | Pipeline visualizer (`osty pipeline`) | done — per-stage timing, workspace mode, backend-aware gen, baseline diff, LSP trace, `--explain` |
 | Profiles / targets / features / cache (`internal/profile`, `osty profiles` / `targets` / `features` / `cache`) | done — built-in and manifest profiles, cross-target env, feature closure + file pragmas, backend-aware fingerprints |
-| LLVM backend (`internal/backend`, `internal/llvmgen`, `--backend llvm`) | early executable slice — textual IR/object/binary for scalar/control-flow/Bool/String and `Float` (double subset) smoke programs, plus simple struct aggregates and enum matches (payload-free + single-`Int` payload), host `clang` driver, inspectable skeleton + categorized diagnostics for unsupported source shapes |
+| LLVM backend (`internal/backend`, `internal/llvmgen`, `--backend llvm`) | early executable slice — textual IR/object/binary for scalar/control-flow/Bool/String and `Float`/String payload enum smoke programs, plus simple struct aggregates and enum matches (payload-free + single-`Int` and phase-54-63 payload generalization), host `clang` driver, inspectable skeleton + categorized diagnostics for unsupported source shapes |
 | Package registry backend / `osty registry serve` | done — file-backed HTTP server for index/search/download/publish/yank, with ETag index responses and bearer-token write auth |
 | Package registry / `osty add` / `osty update` / `osty run` | done (resolve + vendor + lockfile-honoring re-resolves, ETag-cached registry index, copy fallback for symlink-less filesystems; CLI: `add`, `remove`/`rm`, `update`, `run`, `fetch`, `publish`, `search`, `info`, `yank`/`unyank`, `login`/`logout`; `--locked` / `--frozen` CI guards) |
 | Package manager (`osty add` / `osty update`, path + git + registry sources, SemVer resolver, deterministic lockfile) | wired — `add` mutates `osty.toml` and re-vendors; `update` re-resolves selectively or in full |
@@ -238,11 +238,12 @@ newline-separated `else`.
 - `--backend NAME` — code generation backend (`llvm`; default: `llvm`;
   `llvm` emits textual `.ll` for the early scalar/control-flow/plain/escaped
   string subset, including immutable/mutable string locals and simple String
-  function boundaries plus simple struct aggregate values and enum tags/match
-  expressions (payload-free + single-`Int` with `{ i64, i64 }` payload), plus
-  Phase 46-53 `Float` double-subset smoke path. Unsupported shapes still prepare
-  skeleton artifacts and report structured diagnostics from the selfhost-core
-  backend policy)
+  function boundaries plus simple struct aggregate values and enum
+  tags/match expressions (payload-free + single-`Int` with `{ i64, i64 }`
+  payload), plus Phase 54-63 payload enum generalization (`Float` return/param/mut/reversed/wildcard,
+  String payload return/param/mut/reversed/wildcard). Unsupported shapes still
+  prepare skeleton artifacts and report structured diagnostics from the
+  selfhost-core backend policy)
 - `--emit MODE` — requested text artifact. `llvm-ir` emits LLVM IR.
 
 `pipeline --gen` accepts the same source-artifact backend selection:
@@ -299,8 +300,10 @@ creating a new one.
   string subset, including immutable/mutable string locals and simple String
   function boundaries plus simple struct aggregate values and enum tags/match
   expressions (payload-free + single-`Int` with `{ i64, i64 }` payload), plus
-  the Phase 46-53 `Float` double-subset path. `clang`-driven object/binary
-  emission and generated-source diagnostics are available for supported programs;
+  the Phase 54-63 payload enum generalization (`Float` return/param/mut/reversed/wildcard,
+  String payload return/param/mut/reversed/wildcard) path. `clang`-driven
+  object/binary emission and generated-source diagnostics are available for
+  supported programs;
   unsupported shapes still prepare skeleton artifacts and report missing lowering
   through structured diagnostics from the selfhost-core backend policy.
 - `--emit MODE` — requested artifact mode (`llvm-ir`, `object`, or
