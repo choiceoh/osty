@@ -276,10 +276,15 @@ artifact/cache layout 정책은 [`LLVM_ARTIFACT_LAYOUT.md`](./LLVM_ARTIFACT_LAYO
     경로를 증명한다. Payload-free variant(`Maybe.None`)처럼 인자로부터
     T를 유추할 수 없는 경우에는 휴리스틱이 보수적으로 포기하고 기존
     ErrType을 유지한다.
-  - 남은 범위: generic interface 선언, method-local generic parameter,
-    bare function-pointer turbofish (`let f = id::<Int>`),
-    payload-free / 비-리터럴 인자를 가진 variant call의 타입 복원(궁극적으로는
-    checker 쪽 generic variant-constructor inference 보강).
+  - Phase 4(struct/enum method-local generic parameter)도 IR 단계에서
+    구현되어 있다: `_Z<templateArgs>E` 접미사 mangling 트랙, fn/type/method
+    worklist 세 개를 인터리브 drain, emit 시점에 receiverEnv ⊕ methodEnv를
+    머지. 원본 generic method는 Pass 6이 출력에서 제거한다. smoke:
+    `TestGenerateModuleMethodLocalGenericGetMonomorphized`.
+  - 남은 범위: generic interface 선언, bare function-pointer turbofish
+    (`let f = id::<Int>`), payload-free / 비-리터럴 인자를 가진 variant
+    call의 타입 복원(궁극적으로는 checker 쪽 generic variant-constructor
+    inference 보강).
 - workspace/dependency graph를 codegen/link order로 변환한다.
 - `use go` FFI는 LLVM backend에서 그대로 지원하기 어렵기 때문에 새 FFI 정책을
   정한다.

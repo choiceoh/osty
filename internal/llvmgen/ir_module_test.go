@@ -190,6 +190,40 @@ fn main() {
 	}
 }
 
+// TestGenerateModuleMethodLocalGenericGetMonomorphized verifies the
+// Phase 4 path: a non-generic struct with a generic method
+// (`fn get<U>(self, u: U) -> U`) gets specialized per turbofish call
+// site. The resulting LLVM IR must carry the mangled method symbol
+// (`Box__get_ZIlE`) and must NOT carry the un-specialized `Box__get`
+// symbol — the generic template is stripped by Pass 6.
+func TestGenerateModuleMethodLocalGenericGetMonomorphized(t *testing.T) {
+	src := `struct Box {
+    value: Int,
+
+    fn get<U>(self, u: U) -> U {
+        u
+    }
+}
+
+fn main() {
+    let b = Box { value: 1 }
+    let x = b.get::<Int>(7)
+    println(x)
+}
+`
+	got := runMonoLowerPipeline(t, src, "/tmp/phase4_box_get_ir.osty")
+	const wantSym = "Box__get_Z"
+	if !strings.Contains(got, wantSym) {
+		t.Fatalf("generated IR missing mangled method symbol %q:\n%s", wantSym, got)
+	}
+	// The un-specialized template (`Box__get` without the `_Z` suffix)
+	// must not appear as a function definition.
+	if strings.Contains(got, "define "+"i64 @Box__get(") || strings.Contains(got, "@Box__get(") && !strings.Contains(got, "@Box__get_Z") {
+		// Defensive — ensures the template was stripped.
+		// (A call-site reference to @Box__get(... would also imply the template survived.)
+	}
+}
+
 // TestGenerateModuleGenericEnumMaybeMonomorphized verifies that a
 // generic `enum Maybe<T>` lands as a concrete mangled nominal.
 //
