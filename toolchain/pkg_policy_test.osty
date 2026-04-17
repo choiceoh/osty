@@ -1,0 +1,43 @@
+use std.testing
+
+fn testExpandFrozenFlagsPromotesOfflineAndLocked() {
+    let expanded = expandFrozenFlags(ResolveOpts { offline: false, locked: false, frozen: true })
+    testing.assert(expanded.offline)
+    testing.assert(expanded.locked)
+    testing.assert(expanded.frozen)
+}
+
+fn testExpandFrozenFlagsLeavesNonFrozenUntouched() {
+    let opts = ResolveOpts { offline: false, locked: true, frozen: false }
+    let expanded = expandFrozenFlags(opts)
+    testing.assert(!(expanded.offline))
+    testing.assert(expanded.locked)
+    testing.assert(!(expanded.frozen))
+}
+
+fn testFrozenMissingLockfileMessageFormat() {
+    testing.assertEq(
+        frozenMissingLockfileMessage("osty.lock"),
+        "--frozen requires an existing osty.lock; run `osty update` first",
+    )
+}
+
+fn testLockedDiffMessageEmptyChangesReturnsNone() {
+    match lockedDiffMessage("osty.lock", []) {
+        Some(_) -> testing.assert(false),
+        None -> testing.assert(true),
+    }
+}
+
+fn testLockedDiffMessageFormatsChanges() {
+    let changes = ["+ foo 1.0.0", "- bar 2.1.3", "~ baz 0.9 -> 1.0"]
+    match lockedDiffMessage("osty.lock", changes) {
+        Some(msg) -> {
+            testing.assertEq(
+                msg,
+                "--locked: osty.lock would change:\n  + foo 1.0.0\n  - bar 2.1.3\n  ~ baz 0.9 -> 1.0\nrerun without --locked to update the lockfile.",
+            )
+        },
+        None -> testing.assert(false),
+    }
+}
