@@ -303,28 +303,28 @@ func TestGenerateFromMIRPrintln(t *testing.T) {
 	}
 }
 
-// TestGenerateFromMIRUnsupportedFallsBack — a module with a top-
-// level global (still outside the MIR MVP — emitting globals needs
-// a ctor-slot or main-prologue init path we haven't designed yet)
-// must trip `ErrUnsupported` so the backend dispatcher falls back
-// to the legacy path.
+// TestGenerateFromMIRUnsupportedFallsBack — a module using an
+// unresolved NamedType (not a Builtin collection, not in the
+// module's LayoutTable, not a known prelude name) must trip
+// `ErrUnsupported` so the backend dispatcher falls back to the
+// legacy path.
 func TestGenerateFromMIRUnsupportedFallsBack(t *testing.T) {
-	// pub let version = 42
+	unknownT := &ir.NamedType{Name: "Unknown"}
 	hir := &ir.Module{
 		Package: "main",
 		Decls: []ir.Decl{
-			&ir.LetDecl{
-				Name:     "version",
-				Type:     ir.TInt,
-				Value:    &ir.IntLit{Text: "42", T: ir.TInt},
-				Exported: true,
+			&ir.FnDecl{
+				Name:   "use",
+				Return: ir.TUnit,
+				Params: []*ir.Param{{Name: "x", Type: unknownT}},
+				Body:   &ir.Block{},
 			},
 		},
 	}
 	m := buildMIRModuleFromHIR(t, hir)
-	_, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/global.osty"})
+	_, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/unknown.osty"})
 	if err == nil {
-		t.Fatalf("expected ErrUnsupported for global; got nil")
+		t.Fatalf("expected ErrUnsupported for unknown NamedType; got nil")
 	}
 	if !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("error does not wrap ErrUnsupported: %v", err)
@@ -416,16 +416,16 @@ func TestMIRDualEmitFromSource(t *testing.T) {
 // independent of parser / checker restrictions on closure-trailing-
 // expr source shape.
 func TestMIRDualEmitGracefulFallback(t *testing.T) {
-	// Use a top-level global — still outside MVP (globals need a
-	// ctor-slot or main-prologue init path we haven't designed yet).
+	// Use an unresolved NamedType — still outside MVP.
+	unknownT := &ir.NamedType{Name: "Unknown"}
 	hir := &ir.Module{
 		Package: "main",
 		Decls: []ir.Decl{
-			&ir.LetDecl{
-				Name:     "version",
-				Type:     ir.TInt,
-				Value:    &ir.IntLit{Text: "1", T: ir.TInt},
-				Exported: true,
+			&ir.FnDecl{
+				Name:   "use",
+				Return: ir.TUnit,
+				Params: []*ir.Param{{Name: "x", Type: unknownT}},
+				Body:   &ir.Block{},
 			},
 		},
 	}
@@ -1397,6 +1397,99 @@ func TestGenerateFromMIRTopLevelFnAsValue(t *testing.T) {
 	}
 	if !strings.Contains(got, "call i64 @double(i64 %arg0)") {
 		t.Fatalf("expected thunk to delegate to @double, got:\n%s", got)
+	}
+}
+
+// ==== Stage 3.10: top-level globals ====
+
+func TestGenerateFromMIRGlobalReadAndInit(t *testing.T) {
+	// pub let version = 42
+	// fn get() -> Int { version }
+	hir := &ir.Module{
+		Package: "main",
+		Decls: []ir.Decl{
+			&ir.LetDecl{
+				Name:     "version",
+				Type:     ir.TInt,
+				Value:    &ir.IntLit{Text: "42", T: ir.TInt},
+				Exported: true,
+			},
+			&ir.FnDecl{
+				Name:   "get",
+				Return: ir.TInt,
+				Body: &ir.Block{
+					Result: &ir.Ident{Name: "version", Kind: ir.IdentGlobal, T: ir.TInt},
+				},
+			},
+		},
+	}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/global.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		// Module-level global with zeroinitializer.
+		"@version = global i64 zeroinitializer",
+		// Init fn from the MIR lowerer.
+		"define i64 @_init_version()",
+		// Ctor runs the init and stores into the global.
+		"define private void @__osty_init_globals()",
+		"call i64 @_init_version()",
+		"store i64 %vversion, ptr @version",
+		// llvm.global_ctors registration.
+		"@llvm.global_ctors",
+		// Read side in `get` loads from the global.
+		"load i64, ptr @version",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateFromMIRMultipleGlobals(t *testing.T) {
+	// pub let a = 1
+	// pub let b = 2
+	// fn sum() -> Int { a + b }
+	hir := &ir.Module{
+		Package: "main",
+		Decls: []ir.Decl{
+			&ir.LetDecl{Name: "a", Type: ir.TInt, Value: &ir.IntLit{Text: "1", T: ir.TInt}, Exported: true},
+			&ir.LetDecl{Name: "b", Type: ir.TInt, Value: &ir.IntLit{Text: "2", T: ir.TInt}, Exported: true},
+			&ir.FnDecl{
+				Name:   "sum",
+				Return: ir.TInt,
+				Body: &ir.Block{
+					Result: &ir.BinaryExpr{
+						Op:    ir.BinAdd,
+						Left:  &ir.Ident{Name: "a", Kind: ir.IdentGlobal, T: ir.TInt},
+						Right: &ir.Ident{Name: "b", Kind: ir.IdentGlobal, T: ir.TInt},
+						T:     ir.TInt,
+					},
+				},
+			},
+		},
+	}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/multi.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	// Both globals + both inits + the ctor stores both.
+	for _, want := range []string{
+		"@a = global i64 zeroinitializer",
+		"@b = global i64 zeroinitializer",
+		"call i64 @_init_a()",
+		"call i64 @_init_b()",
+		"store i64 %va, ptr @a",
+		"store i64 %vb, ptr @b",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
 	}
 }
 

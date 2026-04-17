@@ -935,15 +935,36 @@ MIR tests isolated from front-end churn.
     operate. What changed: concurrency code now reaches the MIR
     emitter instead of falling back to the legacy HIR→AST bridge.
 
+- **Stage 3.10 (landed — top-level globals).** Module-level `let`
+  declarations now round-trip through the MIR emitter:
+
+  - Each `mir.Global` emits as `@<name> = global <T> zeroinitializer`
+    at the module top.
+  - Each `Global.Init` function (a zero-arg fn returning the global's
+    declared type — produced by `mir.Lower` for any `pub let x = e`)
+    is emitted as a regular LLVM fn definition before user functions.
+  - A generated `define private void @__osty_init_globals()`
+    constructor calls every init fn in MIR module order and stores
+    the result into the matching `@<name>` slot. It's registered
+    via `@llvm.global_ctors` at priority 65535 so it runs before
+    `main` but after any runtime setup ctor the runtime provides.
+  - `GlobalRefRV` on the rvalue side emits a `load <T>, ptr @<name>`
+    — the ctor has already initialised the slot by the time user
+    code executes.
+  - `checkSupported` removes the old hard block; global init fns
+    walk through the same `checkFunctionSupported` whitelist as
+    user fns so unsupported init shapes still trigger fallback.
+
 - **Stage 5 (deferred — still needs parity).** Remove
   `legacyFileFromModule` and the AST-driven emitter. Outstanding
-  parity gaps after Stage 3.9: GC roots / safepoints, top-level
-  globals, composite **map** element types, heap-escaping closure
-  envs, and `DerefProj` on anything other than a closure env.
-  Concurrency intrinsics crossed off in Stage 3.9; top-level
-  globals are the next wedge. See the MIR emitter's
-  `checkSupported` and `checkRValueSupported` for the current
-  whitelist.
+  parity gaps after Stage 3.10: GC roots / safepoints, composite
+  **map** element types, heap-escaping closure envs, and
+  `DerefProj` on anything other than a closure env. Top-level
+  globals crossed off in Stage 3.10; GC roots / safepoints are the
+  biggest remaining wedge — they thread through function entry,
+  call sites, and alloca slots so they deserve their own Stage
+  3.11+ design pass. See the MIR emitter's `checkSupported` and
+  `checkRValueSupported` for the current whitelist.
 
 Each stage is an opportunity to tighten the MIR shape: Stage 3 is
 where we learn which invariants the backend actually needs, Stage 4 is
