@@ -63,6 +63,7 @@ func GenerateFromMIR(m *mir.Module, opts Options) ([]byte, error) {
 		}
 	}
 	g.emitTypeDefs()
+	g.emitThunks()
 	g.emitStringPool()
 	g.emitRuntimeDeclarations()
 	return []byte(g.out.String()), nil
@@ -100,6 +101,14 @@ type mirGen struct {
 	enumLayouts     map[string]mir.Type   // mangled enum/option name → payload inner type
 	tupleDefs       map[string][]mir.Type // mangled tuple name → element types
 	tupleOrder      []string              // first-use order of tuple names
+
+	// Closure-env thunks generated on demand when a bare `FnConst`
+	// (top-level fn used as a value) reaches an indirect-call site.
+	// Under the uniform env ABI every closure call takes an env as
+	// implicit first arg; top-level fns have no env, so the thunk
+	// ignores env and delegates to the real fn.
+	thunkDefs map[string]string // symbol → full thunk IR
+	thunkOrder []string
 }
 
 // mirFnSig caches a function's LLVM signature so call sites can render
@@ -116,6 +125,7 @@ func newMIRGen(m *mir.Module, opts Options) *mirGen {
 		opts:          opts,
 		source:        filepath.ToSlash(firstNonEmpty(opts.SourcePath, "<unknown>")),
 		functionTypes: map[string]mirFnSig{},
+		thunkDefs:     map[string]string{},
 		declares:      map[string]string{},
 		strings:       map[string]string{},
 		tupleDefs:     map[string][]mir.Type{},
@@ -199,7 +209,7 @@ func (g *mirGen) typeSupported(t mir.Type) bool {
 		// them; actual operations go through runtime intrinsics.
 		if x.Builtin {
 			switch x.Name {
-			case "List", "Map", "Set":
+			case "List", "Map", "Set", "ClosureEnv":
 				return true
 			}
 		}
@@ -272,7 +282,7 @@ func (g *mirGen) checkInstrSupported(fn *mir.Function, inst mir.Instr) error {
 func (g *mirGen) checkProjectionsSupported(fn *mir.Function, p mir.Place, ctx string) error {
 	for i, proj := range p.Projections {
 		switch proj.(type) {
-		case *mir.FieldProj, *mir.TupleProj, *mir.VariantProj:
+		case *mir.FieldProj, *mir.TupleProj, *mir.VariantProj, *mir.DerefProj:
 			// allowed
 		case *mir.IndexProj:
 			// Accept IndexProj only when the projection base is a
@@ -313,17 +323,8 @@ func (g *mirGen) checkRValueSupported(fn *mir.Function, rv mir.RValue) error {
 		return nil
 	case *mir.AggregateRV:
 		switch r.Kind {
-		case mir.AggStruct, mir.AggTuple, mir.AggEnumVariant, mir.AggList:
+		case mir.AggStruct, mir.AggTuple, mir.AggEnumVariant, mir.AggList, mir.AggClosure:
 			return nil
-		case mir.AggClosure:
-			// Non-capturing closures (just a function pointer, no
-			// captures) are supported; capturing closures still need
-			// a heap-backed environment — leave them for a later
-			// stage and fall back to legacy.
-			if len(r.Fields) == 1 {
-				return nil
-			}
-			return unsupported("mir-mvp", fmt.Sprintf("closure with %d captures in %s", len(r.Fields)-1, fn.Name))
 		}
 		return unsupported("mir-mvp", fmt.Sprintf("aggregate kind %d not yet supported in %s", r.Kind, fn.Name))
 	}
@@ -411,6 +412,18 @@ func (g *mirGen) discoverFunctions() {
 }
 
 // emitRuntimeDeclarations writes `declare` lines for every runtime
+// emitThunks appends any closure thunks generated during function
+// emission. Thunks live below the normal user function definitions so
+// the output reads top-down: user fns first, then closure shims.
+func (g *mirGen) emitThunks() {
+	if len(g.thunkOrder) == 0 {
+		return
+	}
+	for _, sym := range g.thunkOrder {
+		g.out.WriteString(g.thunkDefs[sym])
+	}
+}
+
 // symbol the generated code referenced. Writing them at the end keeps
 // the emit stream simple (symbols get discovered while emitting
 // function bodies, and the final buffer concatenates the function
@@ -842,11 +855,20 @@ func (g *mirGen) emitDirectCall(c *mir.CallInstr, fnRef *mir.FnRef) error {
 	return g.emitCallSiteByName(c, fnRef.Symbol, sig.retLLVM, argStrs)
 }
 
-// emitIndirectCall handles calls through a ptr-typed operand, used
-// when a fn-typed variable / closure value is invoked. The MIR
-// emitter MVP supports non-capturing closures (the operand is a
-// plain fn pointer), so we read the LLVM signature off the operand's
-// FnType.
+// emitIndirectCall handles calls through a closure env pointer. The
+// MIR closure ABI packs every closure value as `ptr env` where env =
+// `{ ptr fn, cap0, cap1, ... }`. At the call site we:
+//
+//  1. Take the operand — it is already the env ptr (produced by
+//     AggregateRV{AggClosure} boxing, or by the lifted FnConst
+//     wrapper below).
+//  2. Load the fn ptr from env[0].
+//  3. Call the lifted fn with the env as implicit first arg plus the
+//     user args that the MIR call site carries.
+//
+// The user-visible signature (the MIR FnType on the callee operand)
+// intentionally does NOT include the env param — the emitter knows
+// about env and widens the LLVM signature here.
 func (g *mirGen) emitIndirectCall(c *mir.CallInstr, callee *mir.IndirectCall) error {
 	calleeOp := callee.Callee
 	if calleeOp == nil {
@@ -856,17 +878,26 @@ func (g *mirGen) emitIndirectCall(c *mir.CallInstr, callee *mir.IndirectCall) er
 	if !ok {
 		return unsupported("mir-mvp", fmt.Sprintf("indirect call on non-function type %s", mirTypeString(calleeOp.Type())))
 	}
-	// Resolve the fn pointer.
-	ptrVal, err := g.evalOperand(calleeOp, calleeOp.Type())
+	// Evaluate the operand to get the env ptr.
+	envPtr, err := g.evalOperand(calleeOp, calleeOp.Type())
 	if err != nil {
 		return err
 	}
-	// Lower args against the declared FnType signature.
+	// Load the fn pointer from env[0]. All closure envs share `ptr` as
+	// the slot-0 type, so we read it directly as a bare ptr load.
+	fnPtr := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(fnPtr)
+	g.fnBuf.WriteString(" = load ptr, ptr ")
+	g.fnBuf.WriteString(envPtr)
+	g.fnBuf.WriteByte('\n')
+	// Lower args against the declared FnType signature (user args).
 	retLLVM := "void"
 	if fnT.Return != nil && !isUnitType(fnT.Return) {
 		retLLVM = g.llvmType(fnT.Return)
 	}
-	argStrs := make([]string, 0, len(c.Args))
+	argStrs := make([]string, 0, 1+len(c.Args))
+	argStrs = append(argStrs, "ptr "+envPtr) // env as implicit first arg
 	for i, op := range c.Args {
 		var paramT mir.Type
 		if i < len(fnT.Params) {
@@ -881,13 +912,14 @@ func (g *mirGen) emitIndirectCall(c *mir.CallInstr, callee *mir.IndirectCall) er
 		}
 		argStrs = append(argStrs, g.llvmType(paramT)+" "+val)
 	}
-	// Build the LLVM call-type string matching the declared FnType.
-	paramParts := make([]string, 0, len(fnT.Params))
+	// Build the LLVM call-type string with env prepended.
+	paramParts := make([]string, 0, 1+len(fnT.Params))
+	paramParts = append(paramParts, "ptr")
 	for _, p := range fnT.Params {
 		paramParts = append(paramParts, g.llvmType(p))
 	}
 	callType := retLLVM + " (" + strings.Join(paramParts, ", ") + ")"
-	return g.emitCallSiteIndirect(c, callType, ptrVal, retLLVM, argStrs)
+	return g.emitCallSiteIndirect(c, callType, fnPtr, retLLVM, argStrs)
 }
 
 // emitCallSiteByName writes the actual `call` / `store` / void-call
@@ -1783,13 +1815,7 @@ func (g *mirGen) emitAggregate(rv *mir.AggregateRV, hintT mir.Type) (string, err
 	case mir.AggList:
 		return g.emitListLiteral(rv, aggT)
 	case mir.AggClosure:
-		// Stage 3.4 MVP: non-capturing closures only. The single
-		// field is a FnConst; the resulting ptr *is* the closure
-		// value.
-		if len(rv.Fields) != 1 {
-			return "", unsupported("mir-mvp", "closure with captures")
-		}
-		return g.evalOperand(rv.Fields[0], rv.Fields[0].Type())
+		return g.emitClosureEnv(rv)
 	}
 	elems, err := g.aggregateElementTypes(aggT, rv)
 	if err != nil {
@@ -2003,6 +2029,91 @@ func (g *mirGen) fromI64Slot(val string, targetT mir.Type) (string, error) {
 // emitListLiteral builds a `List<T>` from its element operands via
 // the runtime ABI: `osty_rt_list_new()` + a chain of typed pushes.
 // Returns the pointer register holding the new list.
+// emitClosureEnv boxes a closure into a heap-shaped env struct. The
+// MIR lowerer emits `AggregateRV{AggClosure, Fields: [FnConst, caps...]}`
+// and expects the lifted function to receive the env ptr as its first
+// argument. We allocate the env with a stack alloca (a conservative
+// choice — closures that escape the enclosing frame currently need
+// heap alloc; see the Stage 3.8 note in docs/mir_design.md) and fill
+// in the fn pointer at slot 0 plus captures at slots 1..N.
+//
+// The env struct type is a synthesised `%ClosureEnv.<signature>`
+// declared at module level; multiple closures with the same env
+// layout share one type def.
+func (g *mirGen) emitClosureEnv(rv *mir.AggregateRV) (string, error) {
+	if len(rv.Fields) < 1 {
+		return "", unsupported("mir-mvp", "empty closure aggregate")
+	}
+	// Collect element types: [ptr, cap0, cap1, ...]. The first field
+	// is the FnConst — we treat its LLVM type as ptr regardless of
+	// what the MIR type claims.
+	elemTs := make([]mir.Type, 0, len(rv.Fields))
+	elemTs = append(elemTs, mirClosureEnvType()) // slot 0 always ptr
+	for i := 1; i < len(rv.Fields); i++ {
+		elemTs = append(elemTs, rv.Fields[i].Type())
+	}
+	envName := g.closureEnvTypeName(elemTs)
+	// Alloca the env.
+	slot := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(slot)
+	g.fnBuf.WriteString(" = alloca %")
+	g.fnBuf.WriteString(envName)
+	g.fnBuf.WriteByte('\n')
+	// Store each field. Slot 0 is the fn ptr; slots 1..N are captures.
+	for i, op := range rv.Fields {
+		var val string
+		var err error
+		if i == 0 {
+			// The first field is ALWAYS the lifted closure fn
+			// pointer. Write the bare `@symbol` — the lifted fn
+			// already takes env as its first param, no thunk needed.
+			val, err = g.evalClosureFnConst(op)
+		} else {
+			val, err = g.evalOperand(op, elemTs[i])
+		}
+		if err != nil {
+			return "", err
+		}
+		elemLLVM := g.llvmType(elemTs[i])
+		gep := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(gep)
+		g.fnBuf.WriteString(" = getelementptr %")
+		g.fnBuf.WriteString(envName)
+		g.fnBuf.WriteString(", ptr ")
+		g.fnBuf.WriteString(slot)
+		g.fnBuf.WriteString(", i32 0, i32 ")
+		g.fnBuf.WriteString(strconv.Itoa(i))
+		g.fnBuf.WriteByte('\n')
+		g.fnBuf.WriteString("  store ")
+		g.fnBuf.WriteString(elemLLVM)
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(val)
+		g.fnBuf.WriteString(", ptr ")
+		g.fnBuf.WriteString(gep)
+		g.fnBuf.WriteByte('\n')
+	}
+	return slot, nil
+}
+
+// closureEnvTypeName registers a closure-env struct by element types
+// and returns its mangled name (e.g. `ClosureEnv.ptr.i64.ptr`). The
+// deterministic name makes cross-function sharing possible when two
+// closures happen to have the same env layout.
+func (g *mirGen) closureEnvTypeName(elems []mir.Type) string {
+	parts := make([]string, len(elems))
+	for i, t := range elems {
+		parts[i] = g.llvmTypeForTupleTag(t)
+	}
+	name := "ClosureEnv." + strings.Join(parts, ".")
+	if _, ok := g.tupleDefs[name]; !ok {
+		g.tupleDefs[name] = append([]mir.Type(nil), elems...)
+		g.tupleOrder = append(g.tupleOrder, name)
+	}
+	return name
+}
+
 func (g *mirGen) emitListLiteral(rv *mir.AggregateRV, aggT mir.Type) (string, error) {
 	elemT := listElemType(aggT)
 	if elemT == nil {
@@ -2196,9 +2307,130 @@ func (g *mirGen) evalOperand(op mir.Operand, hintT mir.Type) (string, error) {
 	case *mir.MoveOp:
 		return g.emitLoad(o.Place, o.T)
 	case *mir.ConstOp:
+		// Bare `FnConst` in value position (not a direct-call callee —
+		// those use `FnRef` and never flow through evalOperand). Under
+		// the uniform closure ABI every fn-typed VALUE must be an env
+		// pointer, so we wrap the top-level fn with a thunk that
+		// ignores env and delegates.
+		if fc, ok := o.Const.(*mir.FnConst); ok {
+			return g.emitFnValueWrapper(fc.Symbol, fc.T)
+		}
 		return g.renderConst(o.Const, o.T)
 	}
 	return "", unsupported("mir-mvp", fmt.Sprintf("operand %T", op))
+}
+
+// emitFnValueWrapper materialises a closure env pointing at a
+// top-level fn symbol. The env layout is `{ ptr thunk }` — no
+// captures. The thunk has env-first-arg ABI and delegates to the
+// real symbol, which keeps the caller's uniform IndirectCall path
+// working for fn values that came from a plain fn ref rather than a
+// `Closure` expression.
+func (g *mirGen) emitFnValueWrapper(symbol string, fnT mir.Type) (string, error) {
+	ft, _ := fnT.(*ir.FnType)
+	if ft == nil {
+		// Fallback: no signature known, can't generate a thunk.
+		return "@" + symbol, nil
+	}
+	g.ensureThunk(symbol, ft)
+	// Alloca a 1-field env, store the thunk ptr.
+	envTypeName := g.closureEnvTypeName([]mir.Type{mirClosureEnvType()})
+	envPtr := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(envPtr)
+	g.fnBuf.WriteString(" = alloca %")
+	g.fnBuf.WriteString(envTypeName)
+	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString("  store ptr @")
+	g.fnBuf.WriteString(thunkName(symbol))
+	g.fnBuf.WriteString(", ptr ")
+	g.fnBuf.WriteString(envPtr)
+	g.fnBuf.WriteByte('\n')
+	return envPtr, nil
+}
+
+// ensureThunk generates (once per symbol) a thunk function with
+// signature `ret (ptr env, user_params...) -> ret`. The body
+// discards env and tail-calls the real symbol.
+func (g *mirGen) ensureThunk(symbol string, fnT *ir.FnType) {
+	if _, ok := g.thunkDefs[symbol]; ok {
+		return
+	}
+	retLLVM := "void"
+	if fnT.Return != nil && !isUnitType(fnT.Return) {
+		retLLVM = g.llvmType(fnT.Return)
+	}
+	paramParts := make([]string, 0, len(fnT.Params))
+	argParts := make([]string, 0, len(fnT.Params))
+	for i, p := range fnT.Params {
+		paramParts = append(paramParts, g.llvmType(p)+" %arg"+strconv.Itoa(i))
+		argParts = append(argParts, g.llvmType(p)+" %arg"+strconv.Itoa(i))
+	}
+	headerParams := "ptr %env"
+	if len(paramParts) > 0 {
+		headerParams += ", " + strings.Join(paramParts, ", ")
+	}
+	var b strings.Builder
+	b.WriteString("define private ")
+	b.WriteString(retLLVM)
+	b.WriteString(" @")
+	b.WriteString(thunkName(symbol))
+	b.WriteByte('(')
+	b.WriteString(headerParams)
+	b.WriteString(") {\n")
+	b.WriteString("entry:\n")
+	if retLLVM == "void" {
+		b.WriteString("  call void @")
+		b.WriteString(symbol)
+		b.WriteByte('(')
+		b.WriteString(strings.Join(argParts, ", "))
+		b.WriteString(")\n")
+		b.WriteString("  ret void\n")
+	} else {
+		b.WriteString("  %ret = call ")
+		b.WriteString(retLLVM)
+		b.WriteString(" @")
+		b.WriteString(symbol)
+		b.WriteByte('(')
+		b.WriteString(strings.Join(argParts, ", "))
+		b.WriteString(")\n")
+		b.WriteString("  ret ")
+		b.WriteString(retLLVM)
+		b.WriteString(" %ret\n")
+	}
+	b.WriteString("}\n\n")
+	g.thunkDefs[symbol] = b.String()
+	g.thunkOrder = append(g.thunkOrder, symbol)
+}
+
+func thunkName(symbol string) string { return "__osty_closure_thunk_" + symbol }
+
+// evalClosureFnConst reads the fn-pointer operand that lives in slot
+// 0 of a closure aggregate. Unlike `evalOperand` for a ConstOp{
+// FnConst}, this does NOT wrap in a thunk — the MIR lowerer puts
+// lifted closure fns here, and those already take env as their first
+// parameter. Plain LLVM `@symbol` is what goes into the env slot.
+func (g *mirGen) evalClosureFnConst(op mir.Operand) (string, error) {
+	if co, ok := op.(*mir.ConstOp); ok {
+		if fc, ok := co.Const.(*mir.FnConst); ok {
+			if fc.Symbol == "" {
+				return "", unsupported("mir-mvp", "closure FnConst with empty symbol")
+			}
+			return "@" + fc.Symbol, nil
+		}
+	}
+	// Fallback for unexpected shapes: use the ordinary evaluator.
+	// Closures with already-wrapped fn ptrs still work, at the cost
+	// of an extra thunk indirection.
+	return g.evalOperand(op, op.Type())
+}
+
+// mirClosureEnvType returns the MIR type used for a closure env
+// pointer. Kept in sync with the MIR lowerer's `closureEnvType` —
+// both constructs name the same Builtin "ClosureEnv" which llvmType
+// maps to `ptr`.
+func mirClosureEnvType() mir.Type {
+	return &ir.NamedType{Name: "ClosureEnv", Builtin: true}
 }
 
 func (g *mirGen) emitLoad(place mir.Place, t mir.Type) (string, error) {
@@ -2240,6 +2472,31 @@ func (g *mirGen) emitLoad(place mir.Place, t mir.Type) (string, error) {
 	curLLVM := baseLLVM
 	curReg := aggReg
 	for i, proj := range place.Projections {
+		// DerefProj rebinds the running value to the declared
+		// aggregate loaded from the current ptr. Used by the MIR
+		// closure lowerer to walk into the env struct: `DerefProj{
+		// Type: envStructType}` replaces the ptr in curReg/curLLVM
+		// with the struct value in those registers so the next
+		// projection (TupleProj i+1) can extract a capture.
+		if dp, ok := proj.(*mir.DerefProj); ok {
+			innerT := dp.Type
+			if innerT == nil {
+				return "", unsupported("mir-mvp", "DerefProj without Type")
+			}
+			innerLLVM := g.llvmType(innerT)
+			loaded := g.fresh()
+			g.fnBuf.WriteString("  ")
+			g.fnBuf.WriteString(loaded)
+			g.fnBuf.WriteString(" = load ")
+			g.fnBuf.WriteString(innerLLVM)
+			g.fnBuf.WriteString(", ptr ")
+			g.fnBuf.WriteString(curReg)
+			g.fnBuf.WriteByte('\n')
+			curReg = loaded
+			curLLVM = innerLLVM
+			_ = i
+			continue
+		}
 		// IndexProj on a List base routes through the runtime — the
 		// LLVM view of a List is opaque `ptr`, so we can't use
 		// `extractvalue`. Emit `osty_rt_list_get_<suffix>(list, idx)`
@@ -2704,10 +2961,12 @@ func (g *mirGen) llvmType(t mir.Type) string {
 		}
 	case *ir.NamedType:
 		// Builtin collection types flow through the runtime as
-		// opaque pointers; there's no LLVM struct for them.
+		// opaque pointers; there's no LLVM struct for them. Same
+		// story for the MIR-lowerer-synthesised `ClosureEnv` which
+		// names a pointer into a closure env struct.
 		if x.Builtin {
 			switch x.Name {
-			case "List", "Map", "Set", "Bytes":
+			case "List", "Map", "Set", "Bytes", "ClosureEnv":
 				return "ptr"
 			}
 		}
@@ -2848,9 +3107,20 @@ func (g *mirGen) llvmTypeForTupleTag(t mir.Type) string {
 			return "unit"
 		}
 	case *ir.NamedType:
+		// Builtin types that flow as `ptr` at the LLVM boundary are
+		// tagged as "ptr" so mangled names like `ClosureEnv.ptr.i64`
+		// stay readable. User named types keep their declared name.
+		if x.Builtin {
+			switch x.Name {
+			case "List", "Map", "Set", "Bytes", "ClosureEnv":
+				return "ptr"
+			}
+		}
 		return x.Name
 	case *ir.TupleType:
 		return g.tupleName(x)
+	case *ir.FnType:
+		return "ptr"
 	}
 	return "opaque"
 }

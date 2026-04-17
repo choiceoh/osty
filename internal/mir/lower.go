@@ -3084,20 +3084,26 @@ func qualifierOf(use *ir.UseDecl) string {
 
 // ==== closures ====
 
+// closureEnvType is the MIR type for a closure env pointer. It prints
+// as `ClosureEnv` and the LLVM emitter maps it to `ptr`.
+var closureEnvType = &ir.NamedType{Name: "ClosureEnv", Builtin: true}
+
 // lowerClosure lifts a Closure body into a fresh top-level MIR
-// function (named `closure_<parent>_<N>`) and materialises the closure
-// value as an AggregateRV{Kind: AggClosure} whose first field is the
-// function symbol and whose remaining fields are the captured
-// operands, in the same order the lifted function declares them.
+// function and materialises the closure value as an
+// `AggregateRV{Kind: AggClosure}` whose first field is the fn symbol
+// and whose remaining fields are the captured operands.
 //
-// The lifted function's parameter list is:
+// The lifted function uses an **env-first-arg ABI**:
 //
-//	[capture0, capture1, ..., captureN-1, userArg0, userArg1, ...]
+//	fn <symbol>(env ClosureEnv, userArg0, userArg1, ...) -> R
 //
-// so a backend that wants a plain fn-pointer calling convention can
-// just unpack the aggregate and pass the captures as the first N
-// args. Backends that want a closure-struct ABI can read the fields
-// by index from the aggregate directly.
+// where `env` is a pointer to a heap-boxed struct
+// `{ ptr fn, <cap0>, <cap1>, ... }`. Inside the body, capture
+// references resolve to per-capture locals populated at entry via
+// `DerefProj + TupleProj` loads off the env. This uniform ABI lets
+// the MIR emitter dispatch all `IndirectCall` sites through the same
+// `load fn ptr from env[0]; call fn(env, user_args...)` sequence
+// regardless of whether the closure captures.
 func (bs *bodyState) lowerClosure(cl *ir.Closure, hint Type) RValue {
 	if cl == nil {
 		return &UseRV{Op: &ConstOp{Const: &UnitConst{}, T: TUnit}}
@@ -3115,34 +3121,22 @@ func (bs *bodyState) lowerClosure(cl *ir.Closure, hint Type) RValue {
 		retT = TUnit
 	}
 
-	// Build the lifted function. Captures are prefix parameters; the
-	// user params follow.
+	// Build the lifted function. First param is the env ptr; user
+	// params follow. Captures are NOT params — the entry block loads
+	// them from the env.
 	lifted := &Function{Name: symbol, ReturnType: retT, SpanV: cl.SpanV}
 	lifted.ReturnLocal = lifted.NewLocal("_return", retT, true, cl.SpanV)
 	lifted.Locals[lifted.ReturnLocal].IsReturn = true
 
-	// Register capture locals first so the body's resolver finds them
-	// by their HIR-level names.
-	captureLocals := make([]LocalID, len(cl.Captures))
-	for i, cap := range cl.Captures {
-		paramName := cap.Name
-		if paramName == "" {
-			paramName = fmt.Sprintf("_cap%d", i)
-		}
-		ct := cap.T
-		if ct == nil {
-			ct = ir.ErrTypeVal
-		}
-		id := lifted.NewLocal(paramName, ct, cap.Mut, cap.SpanV)
-		lifted.Locals[id].IsParam = true
-		lifted.Params = append(lifted.Params, id)
-		captureLocals[i] = id
-	}
+	envLocal := lifted.NewLocal("_env", closureEnvType, false, cl.SpanV)
+	lifted.Locals[envLocal].IsParam = true
+	lifted.Params = append(lifted.Params, envLocal)
+
 	// User-level parameters.
 	for _, p := range cl.Params {
 		name := p.Name
 		if name == "" {
-			name = fmt.Sprintf("arg%d", len(lifted.Params)-len(captureLocals))
+			name = fmt.Sprintf("arg%d", len(lifted.Params)-1)
 		}
 		pt := p.Type
 		if pt == nil {
@@ -3157,10 +3151,51 @@ func (bs *bodyState) lowerClosure(cl *ir.Closure, hint Type) RValue {
 	lifted.NewBlock(cl.SpanV)
 	lifted.Entry = 0
 	liftedBS := newBodyState(bs.l, lifted)
-	// newBodyState seeds locals from the function's declared params,
-	// which already include captures+user params. No further wiring
-	// needed: a free ident in the body referring to a capture name
-	// will resolve to the capture local just like a param.
+
+	// Env struct layout: `(ptr fn, cap0_type, cap1_type, ...)`. Slot 0
+	// holds the fn pointer at runtime; slots 1..N hold captures.
+	envStructElems := make([]ir.Type, 0, 1+len(cl.Captures))
+	envStructElems = append(envStructElems, closureEnvType) // ptr for fn slot
+	for _, cap := range cl.Captures {
+		ct := cap.T
+		if ct == nil {
+			ct = ir.ErrTypeVal
+		}
+		envStructElems = append(envStructElems, ct)
+	}
+	envStructType := &ir.TupleType{Elems: envStructElems}
+
+	// Emit per-capture loads at the top of the lifted body. Each
+	// capture gets a dedicated local bound to its HIR-level name so
+	// the rest of the body lowers unchanged — reads of the capture
+	// resolve through the regular locals lookup.
+	for i, cap := range cl.Captures {
+		ct := cap.T
+		if ct == nil {
+			ct = ir.ErrTypeVal
+		}
+		capName := cap.Name
+		if capName == "" {
+			capName = fmt.Sprintf("_cap%d", i)
+		}
+		capLocal := lifted.NewLocal(capName, ct, cap.Mut, cap.SpanV)
+		liftedBS.emit(&AssignInstr{
+			Dest: Place{Local: capLocal},
+			Src: &UseRV{Op: &CopyOp{
+				Place: Place{
+					Local: envLocal,
+					Projections: []Projection{
+						&DerefProj{Type: envStructType},
+						&TupleProj{Index: i + 1, Type: ct},
+					},
+				},
+				T: ct,
+			}},
+			SpanV: cap.SpanV,
+		})
+		liftedBS.bind(capName, capLocal)
+	}
+
 	if cl.Body != nil {
 		for _, s := range cl.Body.Stmts {
 			liftedBS.lowerStmt(s)
@@ -3177,9 +3212,9 @@ func (bs *bodyState) lowerClosure(cl *ir.Closure, hint Type) RValue {
 	}
 	bs.l.out.Functions = append(bs.l.out.Functions, lifted)
 
-	// Materialise the closure value. The first field of the aggregate
-	// is a FnConst naming the lifted function; remaining fields carry
-	// the capture operands read from the enclosing scope.
+	// Materialise the closure value. First field is a FnConst naming
+	// the lifted function; remaining fields carry the capture
+	// operands read from the enclosing scope.
 	fnType := &ir.FnType{Return: retT}
 	for _, p := range cl.Params {
 		fnType.Params = append(fnType.Params, p.Type)
