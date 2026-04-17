@@ -1068,12 +1068,16 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		if err != nil {
 			return err
 		}
-		if !listUsesTypedRuntime(elemLLVM) {
-			return unsupported("mir-mvp", "list_get on composite element type")
+		if listUsesTypedRuntime(elemLLVM) {
+			sym := "osty_rt_list_get_" + listRuntimeSymbolSuffix(elemLLVM)
+			g.declareRuntime(sym, "declare "+elemLLVM+" @"+sym+"(ptr, i64)")
+			return g.emitSimpleCall(i, sym, elemLLVM, []string{"ptr " + listReg, "i64 " + idxReg})
 		}
-		sym := "osty_rt_list_get_" + listRuntimeSymbolSuffix(elemLLVM)
-		g.declareRuntime(sym, "declare "+elemLLVM+" @"+sym+"(ptr, i64)")
-		return g.emitSimpleCall(i, sym, elemLLVM, []string{"ptr " + listReg, "i64 " + idxReg})
+		// Composite element — use the bytes-v1 helper with a stack
+		// slot as the out-pointer. Backend writes the value into the
+		// slot; we load it back and store into the intrinsic's dest
+		// (if any).
+		return g.emitListGetBytes(i, listReg, idxReg, elemT)
 	case mir.IntrinsicListSorted:
 		elemString := isStringLLVMType(elemT)
 		sym := listRuntimeSortedSymbol(elemLLVM, elemString)
@@ -2040,11 +2044,108 @@ func (g *mirGen) emitListPushOperand(listReg string, op mir.Operand, elemT mir.T
 		g.fnBuf.WriteString(")\n")
 		return nil
 	}
-	// Composite element — use the bytes helper with a stack-allocated
-	// slot and size=1 byte slot for string (runtime expects ptr). For
-	// true byte-sized elements the runtime looks at the size arg, so
-	// we pass its LLVM width.
-	return unsupported("mir-mvp", "list literal with composite element type: "+elemLLVM)
+	// Composite element (struct / tuple) — stage into a stack slot,
+	// compute the size via the `getelementptr null, 1` idiom, and
+	// call the bytes helper.
+	slot := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(slot)
+	g.fnBuf.WriteString(" = alloca ")
+	g.fnBuf.WriteString(elemLLVM)
+	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString("  store ")
+	g.fnBuf.WriteString(elemLLVM)
+	g.fnBuf.WriteByte(' ')
+	g.fnBuf.WriteString(val)
+	g.fnBuf.WriteString(", ptr ")
+	g.fnBuf.WriteString(slot)
+	g.fnBuf.WriteByte('\n')
+	sizeReg := g.emitSizeOf(elemLLVM)
+	sym := "osty_rt_list_push_bytes_v1"
+	g.declareRuntime(sym, "declare void @"+sym+"(ptr, ptr, i64)")
+	g.fnBuf.WriteString("  call void @")
+	g.fnBuf.WriteString(sym)
+	g.fnBuf.WriteString("(ptr ")
+	g.fnBuf.WriteString(listReg)
+	g.fnBuf.WriteString(", ptr ")
+	g.fnBuf.WriteString(slot)
+	g.fnBuf.WriteString(", i64 ")
+	g.fnBuf.WriteString(sizeReg)
+	g.fnBuf.WriteString(")\n")
+	return nil
+}
+
+// emitListGetBytes loads a composite list element via the bytes-v1
+// runtime helper. Allocates a stack slot sized to the element type,
+// asks the runtime to write into it, loads back, and stores into
+// the intrinsic's optional destination.
+func (g *mirGen) emitListGetBytes(i *mir.IntrinsicInstr, listReg, idxReg string, elemT mir.Type) error {
+	elemLLVM := g.llvmType(elemT)
+	slot := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(slot)
+	g.fnBuf.WriteString(" = alloca ")
+	g.fnBuf.WriteString(elemLLVM)
+	g.fnBuf.WriteByte('\n')
+	sizeReg := g.emitSizeOf(elemLLVM)
+	sym := "osty_rt_list_get_bytes_v1"
+	g.declareRuntime(sym, "declare void @"+sym+"(ptr, i64, ptr, i64)")
+	g.fnBuf.WriteString("  call void @")
+	g.fnBuf.WriteString(sym)
+	g.fnBuf.WriteString("(ptr ")
+	g.fnBuf.WriteString(listReg)
+	g.fnBuf.WriteString(", i64 ")
+	g.fnBuf.WriteString(idxReg)
+	g.fnBuf.WriteString(", ptr ")
+	g.fnBuf.WriteString(slot)
+	g.fnBuf.WriteString(", i64 ")
+	g.fnBuf.WriteString(sizeReg)
+	g.fnBuf.WriteString(")\n")
+	if i.Dest == nil {
+		return nil
+	}
+	destLoc := g.fn.Local(i.Dest.Local)
+	if destLoc == nil {
+		return fmt.Errorf("mir-mvp: list_get_bytes into unknown local %d", i.Dest.Local)
+	}
+	// Load the staged value, then store into dest.
+	loaded := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(loaded)
+	g.fnBuf.WriteString(" = load ")
+	g.fnBuf.WriteString(elemLLVM)
+	g.fnBuf.WriteString(", ptr ")
+	g.fnBuf.WriteString(slot)
+	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString("  store ")
+	g.fnBuf.WriteString(g.llvmType(destLoc.Type))
+	g.fnBuf.WriteByte(' ')
+	g.fnBuf.WriteString(loaded)
+	g.fnBuf.WriteString(", ptr ")
+	g.fnBuf.WriteString(g.localSlots[i.Dest.Local])
+	g.fnBuf.WriteByte('\n')
+	return nil
+}
+
+// emitSizeOf returns a fresh register holding the size in bytes of
+// the named LLVM type. Uses the standard `getelementptr null, 1`
+// idiom — LLVM's constant folder collapses it to a numeric literal
+// during opt. Works for any first-class type, including user
+// structs referenced by their `%Name` handle.
+func (g *mirGen) emitSizeOf(llvmType string) string {
+	gep := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(gep)
+	g.fnBuf.WriteString(" = getelementptr ")
+	g.fnBuf.WriteString(llvmType)
+	g.fnBuf.WriteString(", ptr null, i32 1\n")
+	size := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(size)
+	g.fnBuf.WriteString(" = ptrtoint ptr ")
+	g.fnBuf.WriteString(gep)
+	g.fnBuf.WriteString(" to i64\n")
+	return size
 }
 
 func listElemType(t mir.Type) mir.Type {
@@ -2155,29 +2256,60 @@ func (g *mirGen) emitLoad(place mir.Place, t mir.Type) (string, error) {
 				}
 			}
 			elemLLVM := g.llvmType(elemT)
-			if !listUsesTypedRuntime(elemLLVM) {
-				return "", unsupported("mir-mvp", "list[i] on composite element type")
-			}
-			sym := "osty_rt_list_get_" + listRuntimeSymbolSuffix(elemLLVM)
-			g.declareRuntime(sym, "declare "+elemLLVM+" @"+sym+"(ptr, i64)")
 			idxOp := ip.Index
 			idxVal, err := g.evalOperand(idxOp, mir.TInt)
 			if err != nil {
 				return "", err
 			}
-			next := g.fresh()
+			if listUsesTypedRuntime(elemLLVM) {
+				sym := "osty_rt_list_get_" + listRuntimeSymbolSuffix(elemLLVM)
+				g.declareRuntime(sym, "declare "+elemLLVM+" @"+sym+"(ptr, i64)")
+				next := g.fresh()
+				g.fnBuf.WriteString("  ")
+				g.fnBuf.WriteString(next)
+				g.fnBuf.WriteString(" = call ")
+				g.fnBuf.WriteString(elemLLVM)
+				g.fnBuf.WriteString(" @")
+				g.fnBuf.WriteString(sym)
+				g.fnBuf.WriteString("(ptr ")
+				g.fnBuf.WriteString(curReg)
+				g.fnBuf.WriteString(", i64 ")
+				g.fnBuf.WriteString(idxVal)
+				g.fnBuf.WriteString(")\n")
+				curReg = next
+				curLLVM = elemLLVM
+				continue
+			}
+			// Composite element — use bytes_v1 out-pointer ABI.
+			slot := g.fresh()
 			g.fnBuf.WriteString("  ")
-			g.fnBuf.WriteString(next)
-			g.fnBuf.WriteString(" = call ")
+			g.fnBuf.WriteString(slot)
+			g.fnBuf.WriteString(" = alloca ")
 			g.fnBuf.WriteString(elemLLVM)
-			g.fnBuf.WriteString(" @")
+			g.fnBuf.WriteByte('\n')
+			sizeReg := g.emitSizeOf(elemLLVM)
+			sym := "osty_rt_list_get_bytes_v1"
+			g.declareRuntime(sym, "declare void @"+sym+"(ptr, i64, ptr, i64)")
+			g.fnBuf.WriteString("  call void @")
 			g.fnBuf.WriteString(sym)
 			g.fnBuf.WriteString("(ptr ")
 			g.fnBuf.WriteString(curReg)
 			g.fnBuf.WriteString(", i64 ")
 			g.fnBuf.WriteString(idxVal)
+			g.fnBuf.WriteString(", ptr ")
+			g.fnBuf.WriteString(slot)
+			g.fnBuf.WriteString(", i64 ")
+			g.fnBuf.WriteString(sizeReg)
 			g.fnBuf.WriteString(")\n")
-			curReg = next
+			loaded := g.fresh()
+			g.fnBuf.WriteString("  ")
+			g.fnBuf.WriteString(loaded)
+			g.fnBuf.WriteString(" = load ")
+			g.fnBuf.WriteString(elemLLVM)
+			g.fnBuf.WriteString(", ptr ")
+			g.fnBuf.WriteString(slot)
+			g.fnBuf.WriteByte('\n')
+			curReg = loaded
 			curLLVM = elemLLVM
 			continue
 		}

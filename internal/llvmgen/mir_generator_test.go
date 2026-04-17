@@ -1141,3 +1141,118 @@ func TestGenerateFromMIRListIndexReadPtrElem(t *testing.T) {
 		}
 	}
 }
+
+// ==== Stage 3.6: composite list element types (bytes ABI) ====
+
+func TestGenerateFromMIRListStructPushAndRead(t *testing.T) {
+	// struct Point { x: Int, y: Int }
+	// fn build() -> Int {
+	//     let xs = [Point { x: 1, y: 2 }]
+	//     xs[0].x
+	// }
+	pointT := &ir.NamedType{Name: "Point"}
+	pointDecl := &ir.StructDecl{
+		Name: "Point",
+		Fields: []*ir.Field{
+			{Name: "x", Type: ir.TInt, Exported: true},
+			{Name: "y", Type: ir.TInt, Exported: true},
+		},
+	}
+	listPoint := &ir.NamedType{Name: "List", Args: []ir.Type{pointT}, Builtin: true}
+	fn := &ir.FnDecl{
+		Name:   "build",
+		Return: ir.TInt,
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.LetStmt{
+					Name: "xs",
+					Type: listPoint,
+					Value: &ir.ListLit{
+						Elems: []ir.Expr{
+							&ir.StructLit{
+								TypeName: "Point",
+								Fields: []ir.StructLitField{
+									{Name: "x", Value: &ir.IntLit{Text: "1", T: ir.TInt}},
+									{Name: "y", Value: &ir.IntLit{Text: "2", T: ir.TInt}},
+								},
+								T: pointT,
+							},
+						},
+						Elem: pointT,
+					},
+				},
+			},
+			Result: &ir.FieldExpr{
+				X: &ir.IndexExpr{
+					X:     &ir.Ident{Name: "xs", Kind: ir.IdentLocal, T: listPoint},
+					Index: &ir.IntLit{Text: "0", T: ir.TInt},
+					T:     pointT,
+				},
+				Name: "x",
+				T:    ir.TInt,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{pointDecl, fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/list_struct.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		// Struct layout for Point.
+		"%Point = type { i64, i64 }",
+		// Bytes-ABI push with a Point stack slot.
+		"declare void @osty_rt_list_push_bytes_v1(ptr, ptr, i64)",
+		"call void @osty_rt_list_push_bytes_v1(",
+		// Bytes-ABI get with an out-pointer.
+		"declare void @osty_rt_list_get_bytes_v1(ptr, i64, ptr, i64)",
+		"call void @osty_rt_list_get_bytes_v1(",
+		// Size computed via the gep-null-1 idiom.
+		"getelementptr %Point, ptr null, i32 1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateFromMIRListTupleElement(t *testing.T) {
+	tupT := &ir.TupleType{Elems: []ir.Type{ir.TInt, ir.TString}}
+	listTup := &ir.NamedType{Name: "List", Args: []ir.Type{tupT}, Builtin: true}
+	fn := &ir.FnDecl{
+		Name:   "make",
+		Return: listTup,
+		Body: &ir.Block{
+			Result: &ir.ListLit{
+				Elems: []ir.Expr{
+					&ir.TupleLit{
+						Elems: []ir.Expr{
+							&ir.IntLit{Text: "1", T: ir.TInt},
+							&ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: "a"}}},
+						},
+						T: tupT,
+					},
+				},
+				Elem: tupT,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/list_tuple.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"%Tuple.i64.string = type { i64, ptr }",
+		"call void @osty_rt_list_push_bytes_v1(",
+		"getelementptr %Tuple.i64.string, ptr null, i32 1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
