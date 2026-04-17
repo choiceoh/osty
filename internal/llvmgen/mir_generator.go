@@ -213,6 +213,13 @@ func (g *mirGen) typeSupported(t mir.Type) bool {
 				return true
 			}
 		}
+		// Concurrency runtime types are opaque pointers — the emitter
+		// doesn't need a declared layout for them. These match what
+		// the runtime ABI hands back from chan_make / spawn / etc.
+		switch x.Name {
+		case "Channel", "Handle", "Group", "TaskGroup", "Select", "Duration":
+			return true
+		}
 		if g.mod != nil && g.mod.Layouts != nil {
 			if _, ok := g.mod.Layouts.Structs[x.Name]; ok {
 				return true
@@ -354,6 +361,21 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 		return true
 	case mir.IntrinsicSetInsert, mir.IntrinsicSetContains, mir.IntrinsicSetLen,
 		mir.IntrinsicSetToList:
+		return true
+	// Concurrency — channels / tasks / select / cancellation / helpers.
+	case mir.IntrinsicChanMake, mir.IntrinsicChanSend, mir.IntrinsicChanRecv,
+		mir.IntrinsicChanClose, mir.IntrinsicChanIsClosed:
+		return true
+	case mir.IntrinsicTaskGroup, mir.IntrinsicSpawn, mir.IntrinsicHandleJoin,
+		mir.IntrinsicGroupCancel, mir.IntrinsicGroupIsCancelled:
+		return true
+	case mir.IntrinsicSelect, mir.IntrinsicSelectRecv, mir.IntrinsicSelectSend,
+		mir.IntrinsicSelectTimeout, mir.IntrinsicSelectDefault:
+		return true
+	case mir.IntrinsicIsCancelled, mir.IntrinsicCheckCancelled,
+		mir.IntrinsicYield, mir.IntrinsicSleep:
+		return true
+	case mir.IntrinsicParallel, mir.IntrinsicRace, mir.IntrinsicCollectAll:
 		return true
 	}
 	return false
@@ -1053,6 +1075,20 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 	case mir.IntrinsicSetInsert, mir.IntrinsicSetContains, mir.IntrinsicSetLen,
 		mir.IntrinsicSetToList:
 		return g.emitSetIntrinsic(i)
+	case mir.IntrinsicChanMake, mir.IntrinsicChanSend, mir.IntrinsicChanRecv,
+		mir.IntrinsicChanClose, mir.IntrinsicChanIsClosed:
+		return g.emitChannelIntrinsic(i)
+	case mir.IntrinsicTaskGroup, mir.IntrinsicSpawn, mir.IntrinsicHandleJoin,
+		mir.IntrinsicGroupCancel, mir.IntrinsicGroupIsCancelled:
+		return g.emitTaskIntrinsic(i)
+	case mir.IntrinsicSelect, mir.IntrinsicSelectRecv, mir.IntrinsicSelectSend,
+		mir.IntrinsicSelectTimeout, mir.IntrinsicSelectDefault:
+		return g.emitSelectIntrinsic(i)
+	case mir.IntrinsicIsCancelled, mir.IntrinsicCheckCancelled,
+		mir.IntrinsicYield, mir.IntrinsicSleep:
+		return g.emitCancelIntrinsic(i)
+	case mir.IntrinsicParallel, mir.IntrinsicRace, mir.IntrinsicCollectAll:
+		return g.emitConcurrencyHelperIntrinsic(i)
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("intrinsic %s", mirIntrinsicLabel(i.Kind)))
 }
@@ -1300,6 +1336,430 @@ func (g *mirGen) emitSetIntrinsic(i *mir.IntrinsicInstr) error {
 		return nil
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("set intrinsic kind %d", i.Kind))
+}
+
+// ==== concurrency intrinsics ====
+//
+// The concurrency family lowers to a stable-but-pending Osty runtime
+// ABI: symbols are prefixed `osty_rt_thread_*` / `osty_rt_task_*` /
+// `osty_rt_select_*` / `osty_rt_cancel_*` / `osty_rt_parallel_*`.
+// The runtime that provides them is still under design; for now the
+// emitter just produces correct LLVM text and declares the symbols —
+// linking will fail until the runtime ships them. This lets MIR-
+// consumed programs that mention concurrency pass through the emitter
+// without falling back to the legacy path.
+
+// emitChannelIntrinsic dispatches channel ops to runtime symbols.
+// Element type is read off the channel's `Channel<T>` NamedType and
+// dispatches through a scalar-vs-composite split mirroring the list
+// runtime ABI: scalar elements use typed `_i64` / `_i1` / `_f64` /
+// `_ptr` suffixes; composites go through the bytes ABI.
+func (g *mirGen) emitChannelIntrinsic(i *mir.IntrinsicInstr) error {
+	switch i.Kind {
+	case mir.IntrinsicChanMake:
+		// Args: [capacity]. Element type comes from the Dest's
+		// `Channel<T>` type.
+		if len(i.Args) != 1 {
+			return unsupported("mir-mvp", "chan_make arity")
+		}
+		cap, err := g.evalOperand(i.Args[0], mir.TInt)
+		if err != nil {
+			return err
+		}
+		sym := "osty_rt_thread_chan_make"
+		g.declareRuntime(sym, "declare ptr @"+sym+"(i64)")
+		return g.emitSimpleCall(i, sym, "ptr", []string{"i64 " + cap})
+	case mir.IntrinsicChanSend:
+		// Args: [channel, value].
+		if len(i.Args) != 2 {
+			return unsupported("mir-mvp", "chan_send arity")
+		}
+		chOp := i.Args[0]
+		valOp := i.Args[1]
+		chReg, err := g.evalOperand(chOp, chOp.Type())
+		if err != nil {
+			return err
+		}
+		elemT := channelElementType(chOp.Type())
+		if elemT == nil {
+			return unsupported("mir-mvp", "chan_send: missing element type")
+		}
+		valReg, err := g.evalOperand(valOp, elemT)
+		if err != nil {
+			return err
+		}
+		elemLLVM := g.llvmType(elemT)
+		if listUsesTypedRuntime(elemLLVM) {
+			sym := "osty_rt_thread_chan_send_" + listRuntimeSymbolSuffix(elemLLVM)
+			g.declareRuntime(sym, "declare void @"+sym+"(ptr, "+elemLLVM+")")
+			g.fnBuf.WriteString("  call void @")
+			g.fnBuf.WriteString(sym)
+			g.fnBuf.WriteString("(ptr ")
+			g.fnBuf.WriteString(chReg)
+			g.fnBuf.WriteString(", ")
+			g.fnBuf.WriteString(elemLLVM)
+			g.fnBuf.WriteByte(' ')
+			g.fnBuf.WriteString(valReg)
+			g.fnBuf.WriteString(")\n")
+			return nil
+		}
+		// Composite element — bytes fallback.
+		slot := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(slot)
+		g.fnBuf.WriteString(" = alloca ")
+		g.fnBuf.WriteString(elemLLVM)
+		g.fnBuf.WriteByte('\n')
+		g.fnBuf.WriteString("  store ")
+		g.fnBuf.WriteString(elemLLVM)
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(valReg)
+		g.fnBuf.WriteString(", ptr ")
+		g.fnBuf.WriteString(slot)
+		g.fnBuf.WriteByte('\n')
+		sizeReg := g.emitSizeOf(elemLLVM)
+		sym := "osty_rt_thread_chan_send_bytes_v1"
+		g.declareRuntime(sym, "declare void @"+sym+"(ptr, ptr, i64)")
+		g.fnBuf.WriteString("  call void @")
+		g.fnBuf.WriteString(sym)
+		g.fnBuf.WriteString("(ptr ")
+		g.fnBuf.WriteString(chReg)
+		g.fnBuf.WriteString(", ptr ")
+		g.fnBuf.WriteString(slot)
+		g.fnBuf.WriteString(", i64 ")
+		g.fnBuf.WriteString(sizeReg)
+		g.fnBuf.WriteString(")\n")
+		return nil
+	case mir.IntrinsicChanRecv:
+		// Args: [channel]. Dest receives Option<T>. The runtime
+		// returns a `{i64 disc, i64 payload}` aggregate matching the
+		// MIR enum layout, so we call and store directly.
+		if len(i.Args) != 1 {
+			return unsupported("mir-mvp", "chan_recv arity")
+		}
+		chOp := i.Args[0]
+		chReg, err := g.evalOperand(chOp, chOp.Type())
+		if err != nil {
+			return err
+		}
+		elemT := channelElementType(chOp.Type())
+		if elemT == nil {
+			return unsupported("mir-mvp", "chan_recv: missing element type")
+		}
+		elemLLVM := g.llvmType(elemT)
+		sym := "osty_rt_thread_chan_recv_" + chanRecvSuffix(elemLLVM)
+		g.declareRuntime(sym, "declare { i64, i64 } @"+sym+"(ptr)")
+		if i.Dest == nil {
+			g.fnBuf.WriteString("  call { i64, i64 } @")
+			g.fnBuf.WriteString(sym)
+			g.fnBuf.WriteString("(ptr ")
+			g.fnBuf.WriteString(chReg)
+			g.fnBuf.WriteString(")\n")
+			return nil
+		}
+		tmp := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(tmp)
+		g.fnBuf.WriteString(" = call { i64, i64 } @")
+		g.fnBuf.WriteString(sym)
+		g.fnBuf.WriteString("(ptr ")
+		g.fnBuf.WriteString(chReg)
+		g.fnBuf.WriteString(")\n")
+		destLoc := g.fn.Local(i.Dest.Local)
+		if destLoc == nil {
+			return fmt.Errorf("mir-mvp: chan_recv dest %d", i.Dest.Local)
+		}
+		g.fnBuf.WriteString("  store { i64, i64 } ")
+		g.fnBuf.WriteString(tmp)
+		g.fnBuf.WriteString(", ptr ")
+		g.fnBuf.WriteString(g.localSlots[i.Dest.Local])
+		g.fnBuf.WriteByte('\n')
+		return nil
+	case mir.IntrinsicChanClose:
+		if len(i.Args) != 1 {
+			return unsupported("mir-mvp", "chan_close arity")
+		}
+		chReg, err := g.evalOperand(i.Args[0], i.Args[0].Type())
+		if err != nil {
+			return err
+		}
+		sym := "osty_rt_thread_chan_close"
+		g.declareRuntime(sym, "declare void @"+sym+"(ptr)")
+		g.fnBuf.WriteString("  call void @")
+		g.fnBuf.WriteString(sym)
+		g.fnBuf.WriteString("(ptr ")
+		g.fnBuf.WriteString(chReg)
+		g.fnBuf.WriteString(")\n")
+		return nil
+	case mir.IntrinsicChanIsClosed:
+		if len(i.Args) != 1 {
+			return unsupported("mir-mvp", "chan_is_closed arity")
+		}
+		chReg, err := g.evalOperand(i.Args[0], i.Args[0].Type())
+		if err != nil {
+			return err
+		}
+		sym := "osty_rt_thread_chan_is_closed"
+		g.declareRuntime(sym, "declare i1 @"+sym+"(ptr)")
+		return g.emitSimpleCall(i, sym, "i1", []string{"ptr " + chReg})
+	}
+	return unsupported("mir-mvp", fmt.Sprintf("channel intrinsic kind %d", i.Kind))
+}
+
+// channelElementType pulls T out of `Channel<T>`. Returns nil when t
+// isn't a channel shape.
+func channelElementType(t mir.Type) mir.Type {
+	if nt, ok := t.(*ir.NamedType); ok && nt.Name == "Channel" && len(nt.Args) >= 1 {
+		return nt.Args[0]
+	}
+	return nil
+}
+
+// chanRecvSuffix maps an element LLVM type to the `_<suffix>` used by
+// the chan_recv runtime. Composite element types route through a
+// bytes variant that writes into an out-param slot.
+func chanRecvSuffix(elemLLVM string) string {
+	if listUsesTypedRuntime(elemLLVM) {
+		return listRuntimeSymbolSuffix(elemLLVM)
+	}
+	return "bytes_v1"
+}
+
+// emitTaskIntrinsic dispatches structured-task ops to runtime symbols.
+// `taskGroup(body)` and `spawn(body)` take a closure env ptr as
+// argument; `g.spawn(body)` is the 2-arg form `[group, body]`.
+func (g *mirGen) emitTaskIntrinsic(i *mir.IntrinsicInstr) error {
+	switch i.Kind {
+	case mir.IntrinsicTaskGroup:
+		if len(i.Args) != 1 {
+			return unsupported("mir-mvp", "task_group arity")
+		}
+		arg, err := g.evalOperand(i.Args[0], i.Args[0].Type())
+		if err != nil {
+			return err
+		}
+		retLLVM := "void"
+		if i.Dest != nil {
+			if dl := g.fn.Local(i.Dest.Local); dl != nil && !isUnitType(dl.Type) {
+				retLLVM = g.llvmType(dl.Type)
+			}
+		}
+		sym := "osty_rt_task_group"
+		g.declareRuntime(sym, "declare "+retLLVM+" @"+sym+"(ptr)")
+		return g.emitSimpleCall(i, sym, retLLVM, []string{"ptr " + arg})
+	case mir.IntrinsicSpawn:
+		// One-arg form: detached spawn(body). Two-arg form:
+		// `g.spawn(body)` — group-scoped. Both return a Handle ptr.
+		if len(i.Args) != 1 && len(i.Args) != 2 {
+			return unsupported("mir-mvp", "spawn arity")
+		}
+		operandArgs := make([]string, 0, len(i.Args))
+		for _, op := range i.Args {
+			v, err := g.evalOperand(op, op.Type())
+			if err != nil {
+				return err
+			}
+			operandArgs = append(operandArgs, "ptr "+v)
+		}
+		sym := "osty_rt_task_spawn"
+		sig := "declare ptr @" + sym + "(ptr)"
+		if len(i.Args) == 2 {
+			sym = "osty_rt_task_group_spawn"
+			sig = "declare ptr @" + sym + "(ptr, ptr)"
+		}
+		g.declareRuntime(sym, sig)
+		return g.emitSimpleCall(i, sym, "ptr", operandArgs)
+	case mir.IntrinsicHandleJoin:
+		if len(i.Args) != 1 {
+			return unsupported("mir-mvp", "handle_join arity")
+		}
+		handle, err := g.evalOperand(i.Args[0], i.Args[0].Type())
+		if err != nil {
+			return err
+		}
+		// Handle's T is the value the handle will yield; the runtime
+		// returns a ptr-wide slot the caller narrows.
+		retLLVM := "ptr"
+		if i.Dest != nil {
+			if dl := g.fn.Local(i.Dest.Local); dl != nil && !isUnitType(dl.Type) {
+				retLLVM = g.llvmType(dl.Type)
+			}
+		}
+		sym := "osty_rt_task_handle_join"
+		g.declareRuntime(sym, "declare "+retLLVM+" @"+sym+"(ptr)")
+		return g.emitSimpleCall(i, sym, retLLVM, []string{"ptr " + handle})
+	case mir.IntrinsicGroupCancel:
+		if len(i.Args) != 1 {
+			return unsupported("mir-mvp", "group_cancel arity")
+		}
+		g.evalOperand(i.Args[0], i.Args[0].Type())
+		return g.emitRuntimeVoidCall(i, "osty_rt_task_group_cancel", "ptr")
+	case mir.IntrinsicGroupIsCancelled:
+		if len(i.Args) != 1 {
+			return unsupported("mir-mvp", "group_is_cancelled arity")
+		}
+		group, err := g.evalOperand(i.Args[0], i.Args[0].Type())
+		if err != nil {
+			return err
+		}
+		sym := "osty_rt_task_group_is_cancelled"
+		g.declareRuntime(sym, "declare i1 @"+sym+"(ptr)")
+		return g.emitSimpleCall(i, sym, "i1", []string{"ptr " + group})
+	}
+	return unsupported("mir-mvp", fmt.Sprintf("task intrinsic kind %d", i.Kind))
+}
+
+// emitSelectIntrinsic handles the select DSL: the outer `select(body)`
+// call and the arm registrations (recv / send / timeout / default).
+// The arm runtime calls take the select builder as first arg.
+func (g *mirGen) emitSelectIntrinsic(i *mir.IntrinsicInstr) error {
+	switch i.Kind {
+	case mir.IntrinsicSelect:
+		return g.emitSimpleConcurrencyCall(i, "osty_rt_select", "void", []mir.Type{nil})
+	case mir.IntrinsicSelectRecv:
+		return g.emitSimpleConcurrencyCall(i, "osty_rt_select_recv", "void", nil)
+	case mir.IntrinsicSelectSend:
+		return g.emitSimpleConcurrencyCall(i, "osty_rt_select_send", "void", nil)
+	case mir.IntrinsicSelectTimeout:
+		return g.emitSimpleConcurrencyCall(i, "osty_rt_select_timeout", "void", nil)
+	case mir.IntrinsicSelectDefault:
+		return g.emitSimpleConcurrencyCall(i, "osty_rt_select_default", "void", nil)
+	}
+	return unsupported("mir-mvp", fmt.Sprintf("select intrinsic kind %d", i.Kind))
+}
+
+// emitCancelIntrinsic handles the cancellation + yield + sleep
+// helpers. None take a receiver; they operate on the implicit
+// current task.
+func (g *mirGen) emitCancelIntrinsic(i *mir.IntrinsicInstr) error {
+	switch i.Kind {
+	case mir.IntrinsicIsCancelled:
+		sym := "osty_rt_cancel_is_cancelled"
+		g.declareRuntime(sym, "declare i1 @"+sym+"()")
+		return g.emitSimpleCall(i, sym, "i1", nil)
+	case mir.IntrinsicCheckCancelled:
+		// Returns Result<(), Error> — runtime uses the `{i64, i64}`
+		// enum layout like chan_recv.
+		sym := "osty_rt_cancel_check_cancelled"
+		g.declareRuntime(sym, "declare { i64, i64 } @"+sym+"()")
+		if i.Dest == nil {
+			g.fnBuf.WriteString("  call { i64, i64 } @")
+			g.fnBuf.WriteString(sym)
+			g.fnBuf.WriteString("()\n")
+			return nil
+		}
+		tmp := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(tmp)
+		g.fnBuf.WriteString(" = call { i64, i64 } @")
+		g.fnBuf.WriteString(sym)
+		g.fnBuf.WriteString("()\n")
+		g.fnBuf.WriteString("  store { i64, i64 } ")
+		g.fnBuf.WriteString(tmp)
+		g.fnBuf.WriteString(", ptr ")
+		g.fnBuf.WriteString(g.localSlots[i.Dest.Local])
+		g.fnBuf.WriteByte('\n')
+		return nil
+	case mir.IntrinsicYield:
+		sym := "osty_rt_thread_yield"
+		g.declareRuntime(sym, "declare void @"+sym+"()")
+		g.fnBuf.WriteString("  call void @")
+		g.fnBuf.WriteString(sym)
+		g.fnBuf.WriteString("()\n")
+		return nil
+	case mir.IntrinsicSleep:
+		if len(i.Args) != 1 {
+			return unsupported("mir-mvp", "sleep arity")
+		}
+		dur, err := g.evalOperand(i.Args[0], i.Args[0].Type())
+		if err != nil {
+			return err
+		}
+		sym := "osty_rt_thread_sleep"
+		g.declareRuntime(sym, "declare void @"+sym+"(ptr)")
+		g.fnBuf.WriteString("  call void @")
+		g.fnBuf.WriteString(sym)
+		g.fnBuf.WriteString("(ptr ")
+		g.fnBuf.WriteString(dur)
+		g.fnBuf.WriteString(")\n")
+		return nil
+	}
+	return unsupported("mir-mvp", fmt.Sprintf("cancel intrinsic kind %d", i.Kind))
+}
+
+// emitConcurrencyHelperIntrinsic handles `parallel` / `race` /
+// `collectAll` via their runtime entry points.
+func (g *mirGen) emitConcurrencyHelperIntrinsic(i *mir.IntrinsicInstr) error {
+	switch i.Kind {
+	case mir.IntrinsicParallel:
+		// Args: [items, concurrency, f]. Returns List<Result<R, Error>>
+		// which the runtime reports as an opaque ptr.
+		if len(i.Args) != 3 {
+			return unsupported("mir-mvp", "parallel arity")
+		}
+		items, err := g.evalOperand(i.Args[0], i.Args[0].Type())
+		if err != nil {
+			return err
+		}
+		conc, err := g.evalOperand(i.Args[1], mir.TInt)
+		if err != nil {
+			return err
+		}
+		f, err := g.evalOperand(i.Args[2], i.Args[2].Type())
+		if err != nil {
+			return err
+		}
+		sym := "osty_rt_parallel"
+		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr, i64, ptr)")
+		return g.emitSimpleCall(i, sym, "ptr", []string{"ptr " + items, "i64 " + conc, "ptr " + f})
+	case mir.IntrinsicRace:
+		return g.emitSimpleConcurrencyCall(i, "osty_rt_task_race", "ptr", nil)
+	case mir.IntrinsicCollectAll:
+		return g.emitSimpleConcurrencyCall(i, "osty_rt_task_collect_all", "ptr", nil)
+	}
+	return unsupported("mir-mvp", fmt.Sprintf("concurrency helper kind %d", i.Kind))
+}
+
+// emitSimpleConcurrencyCall is a concise path for concurrency runtime
+// calls that take a fixed list of ptr-typed args (one per MIR arg) and
+// return the given LLVM type. If `expected` is non-nil its length
+// must match `len(i.Args)`.
+func (g *mirGen) emitSimpleConcurrencyCall(i *mir.IntrinsicInstr, sym, retLLVM string, expected []mir.Type) error {
+	if expected != nil && len(expected) != len(i.Args) {
+		return unsupported("mir-mvp", fmt.Sprintf("%s arity: got %d args", sym, len(i.Args)))
+	}
+	argParts := make([]string, 0, len(i.Args))
+	for _, op := range i.Args {
+		v, err := g.evalOperand(op, op.Type())
+		if err != nil {
+			return err
+		}
+		argParts = append(argParts, "ptr "+v)
+	}
+	paramParts := make([]string, len(i.Args))
+	for idx := range paramParts {
+		paramParts[idx] = "ptr"
+	}
+	g.declareRuntime(sym, "declare "+retLLVM+" @"+sym+"("+strings.Join(paramParts, ", ")+")")
+	return g.emitSimpleCall(i, sym, retLLVM, argParts)
+}
+
+// emitRuntimeVoidCall emits `call void @<sym>(ptr %arg0)` using the
+// already-evaluated operand chain in i.Args.
+func (g *mirGen) emitRuntimeVoidCall(i *mir.IntrinsicInstr, sym, argLLVM string) error {
+	val, err := g.evalOperand(i.Args[0], i.Args[0].Type())
+	if err != nil {
+		return err
+	}
+	g.declareRuntime(sym, "declare void @"+sym+"("+argLLVM+")")
+	g.fnBuf.WriteString("  call void @")
+	g.fnBuf.WriteString(sym)
+	g.fnBuf.WriteByte('(')
+	g.fnBuf.WriteString(argLLVM)
+	g.fnBuf.WriteByte(' ')
+	g.fnBuf.WriteString(val)
+	g.fnBuf.WriteString(")\n")
+	return nil
 }
 
 // emitSimpleCall emits a `call <ret> @<sym>(<args>)` instruction and
@@ -2970,6 +3430,12 @@ func (g *mirGen) llvmType(t mir.Type) string {
 				return "ptr"
 			}
 		}
+		// Concurrency runtime types are opaque pointers too — the
+		// runtime owns their representation.
+		switch x.Name {
+		case "Channel", "Handle", "Group", "TaskGroup", "Select", "Duration":
+			return "ptr"
+		}
 		// User-declared struct or enum — register the enum in the
 		// layout pool on first use and emit by name.
 		if g.mod != nil && g.mod.Layouts != nil {
@@ -3115,6 +3581,10 @@ func (g *mirGen) llvmTypeForTupleTag(t mir.Type) string {
 			case "List", "Map", "Set", "Bytes", "ClosureEnv":
 				return "ptr"
 			}
+		}
+		switch x.Name {
+		case "Channel", "Handle", "Group", "TaskGroup", "Select", "Duration":
+			return "ptr"
 		}
 		return x.Name
 	case *ir.TupleType:
