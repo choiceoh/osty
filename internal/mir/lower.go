@@ -2406,6 +2406,16 @@ func (bs *bodyState) resolveCall(c *ir.CallExpr) ([]Operand, Callee) {
 			// let the caller re-route through lowerExprToRValue.
 			return nil, nil
 		}
+		// Local / param idents holding a fn-typed value route through
+		// an indirect call — they are NOT module symbols. Globals
+		// that happen to hold a fn value would also land here today,
+		// but MIR lowering for global reads still goes through the
+		// generic path; revisit if that shape becomes common.
+		if cal.Kind == ir.IdentLocal || cal.Kind == ir.IdentParam {
+			calleeOp := bs.lowerIdent(cal)
+			args := bs.orderArgs(c.Args, nil)
+			return args, &IndirectCall{Callee: calleeOp}
+		}
 		sig := bs.l.signatureForFn(cal.Name)
 		args := bs.orderArgs(c.Args, sig)
 		ft := cal.T

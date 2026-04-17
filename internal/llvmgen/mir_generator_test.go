@@ -973,3 +973,92 @@ func TestGenerateFromMIRListSorted(t *testing.T) {
 		}
 	}
 }
+
+// ==== Stage 3.4: non-capturing closures + indirect calls ====
+
+func TestGenerateFromMIRNonCapturingClosureValue(t *testing.T) {
+	// fn pickDouble() -> fn(Int) -> Int { |x| x + 1 }
+	// MIR lowering for a non-capturing closure produces AggregateRV{
+	// Kind: AggClosure, Fields: [FnConst("<parent>__closure1")]}.
+	// The MIR emitter should collapse that to the fn-pointer value,
+	// emitting `@<symbol>` directly.
+	fnType := &ir.FnType{Params: []ir.Type{ir.TInt}, Return: ir.TInt}
+	pickDouble := &ir.FnDecl{
+		Name:   "pickDouble",
+		Return: fnType,
+		Body: &ir.Block{
+			Result: &ir.Closure{
+				Params: []*ir.Param{{Name: "x", Type: ir.TInt}},
+				Return: ir.TInt,
+				Body: &ir.Block{Result: &ir.BinaryExpr{
+					Op:    ir.BinAdd,
+					Left:  &ir.Ident{Name: "x", Kind: ir.IdentParam, T: ir.TInt},
+					Right: &ir.IntLit{Text: "1", T: ir.TInt},
+					T:     ir.TInt,
+				}},
+				T: fnType,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{pickDouble}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/closure.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	// Two functions should appear: the outer pickDouble and the lifted
+	// closure body. The outer returns a fn-pointer @ symbol directly.
+	if !strings.Contains(got, "define ptr @pickDouble()") {
+		t.Fatalf("expected pickDouble to return ptr, got:\n%s", got)
+	}
+	if !strings.Contains(got, "@pickDouble__closure1") {
+		t.Fatalf("expected lifted closure symbol in output:\n%s", got)
+	}
+	// The fn-pointer value should flow as an `@` literal, not as a
+	// struct / alloca — one of the most common signals we get this
+	// right is an `ret ptr @pickDouble__closure1` or a store of the
+	// raw @symbol into the return slot.
+	if !strings.Contains(got, "store ptr @pickDouble__closure1") {
+		t.Fatalf("expected fn-pointer store of @pickDouble__closure1:\n%s", got)
+	}
+}
+
+func TestGenerateFromMIRIndirectCall(t *testing.T) {
+	// fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }
+	fnType := &ir.FnType{Params: []ir.Type{ir.TInt}, Return: ir.TInt}
+	fn := &ir.FnDecl{
+		Name:   "apply",
+		Return: ir.TInt,
+		Params: []*ir.Param{
+			{Name: "f", Type: fnType},
+			{Name: "x", Type: ir.TInt},
+		},
+		Body: &ir.Block{
+			Result: &ir.CallExpr{
+				Callee: &ir.Ident{Name: "f", Kind: ir.IdentLocal, T: fnType},
+				Args: []ir.Arg{
+					{Value: &ir.Ident{Name: "x", Kind: ir.IdentParam, T: ir.TInt}},
+				},
+				T: ir.TInt,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/apply.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	// The body must call through the ptr-typed local, with a parenthesised
+	// signature that matches `fn(Int) -> Int`.
+	for _, want := range []string{
+		"define i64 @apply(ptr %arg0, i64 %arg1)",
+		"call i64 (i64)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
