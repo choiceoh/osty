@@ -3,14 +3,21 @@ package main
 import (
 	"bytes"
 	"context"
+	cryptorand "crypto/rand"
+	"encoding/binary"
 	"flag"
 	"fmt"
 	"io"
+	mathrand "math/rand/v2"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/backend"
@@ -34,7 +41,7 @@ func runTestMain(args []string, flags cliFlags, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: osty test [--offline | --locked | --frozen] [--backend NAME] [--emit MODE] [--airepair=false] [--airepair-mode MODE] [PATH|FILTER...]")
+		fmt.Fprintln(stderr, "usage: osty test [--offline | --locked | --frozen] [--backend NAME] [--emit MODE] [--airepair=false] [--airepair-mode MODE] [--seed HEX] [--serial] [--jobs N] [PATH|FILTER...]")
 	}
 	var offline, locked, frozen bool
 	fs.BoolVar(&offline, "offline", false, "do not fetch dependencies; fail if caches are missing")
@@ -46,9 +53,20 @@ func runTestMain(args []string, flags cliFlags, stdout, stderr io.Writer) int {
 	var emitName string
 	fs.StringVar(&backendName, "backend", defaultBackendName(), "code generation backend (llvm)")
 	fs.StringVar(&emitName, "emit", "", "artifact mode to execute (binary)")
+	var seedFlag string
+	fs.StringVar(&seedFlag, "seed", "", "deterministic test-order seed (decimal or 0x-hex); default is a fresh random seed")
+	var serial bool
+	fs.BoolVar(&serial, "serial", false, "run tests sequentially in the shuffled order (default: parallel)")
+	var jobs int
+	fs.IntVar(&jobs, "jobs", 0, "max concurrent tests when parallel (0 = runtime.NumCPU())")
 	var pf profileFlags
 	pf.register(fs)
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	seed, err := resolveTestSeed(seedFlag)
+	if err != nil {
+		fmt.Fprintf(stderr, "osty test: %v\n", err)
 		return 2
 	}
 	mode, ok := parseAIRepairMode(aiRepairModeName)
@@ -91,6 +109,12 @@ func runTestMain(args []string, flags cliFlags, stdout, stderr io.Writer) int {
 		return 0
 	}
 
+	// Shuffle with the resolved seed. Spec §11.7 — tests run in a random
+	// order so accidentally shared state surfaces instead of hiding
+	// behind declaration-order luck; the seed is printed so users can
+	// reproduce.
+	shuffleNativeTests(tests, seed)
+
 	b, err := backend.New(backendID)
 	if err != nil {
 		fmt.Fprintf(stderr, "osty test: %v\n", err)
@@ -103,36 +127,176 @@ func runTestMain(args []string, flags cliFlags, stdout, stderr io.Writer) int {
 	}
 	defer os.RemoveAll(tmpRoot)
 
-	fmt.Fprintf(stdout, "running %d tests\n", len(tests))
-	failures := 0
-	for _, tc := range tests {
-		run, err := compileAndRunNativeTest(context.Background(), b, emitMode, tmpRoot, pkg, tc)
-		if err != nil {
-			failures++
-			fmt.Fprintf(stdout, "FAIL\t%s\n", tc.Name)
-			fmt.Fprintf(stderr, "osty test: %s: %v\n", tc.Name, err)
-			if strings.TrimSpace(run.Stdout) != "" {
-				fmt.Fprintf(stdout, "%s", run.Stdout)
-				if !strings.HasSuffix(run.Stdout, "\n") {
-					fmt.Fprintln(stdout)
-				}
-			}
-			if strings.TrimSpace(run.Stderr) != "" {
-				fmt.Fprintf(stderr, "%s", run.Stderr)
-				if !strings.HasSuffix(run.Stderr, "\n") {
-					fmt.Fprintln(stderr)
-				}
-			}
-			continue
-		}
-		fmt.Fprintf(stdout, "ok\t%s\n", tc.Name)
-	}
+	fmt.Fprintf(stdout, "running %d tests (seed %s)\n", len(tests), formatTestSeed(seed))
+	started := time.Now()
+	workers := resolveTestWorkers(serial, jobs, len(tests))
+	failures := executeNativeTests(context.Background(), b, emitMode, tmpRoot, pkg, tests, workers, seed, stdout, stderr)
+	elapsed := time.Since(started)
 	if failures > 0 {
-		fmt.Fprintf(stdout, "FAIL\t%d/%d tests failed\n", failures, len(tests))
+		fmt.Fprintf(stdout, "FAIL\t%d/%d tests failed in %s (seed %s)\n", failures, len(tests), formatTestDuration(elapsed), formatTestSeed(seed))
 		return 1
 	}
-	fmt.Fprintf(stdout, "ok\t%d tests passed\n", len(tests))
+	fmt.Fprintf(stdout, "ok\t%d tests passed in %s (seed %s)\n", len(tests), formatTestDuration(elapsed), formatTestSeed(seed))
 	return 0
+}
+
+// executeNativeTests dispatches the compile+run loop over the shuffled
+// tests slice. With workers==1 we keep the serial single-goroutine path
+// so output ordering stays stable and deterministic under the seed.
+// With workers>1 each test is compiled and run on its own goroutine and
+// results are printed in completion order — still reproducible because
+// the *set* of executed tests and the failure verdict do not depend on
+// scheduling.
+func executeNativeTests(ctx context.Context, b backend.Backend, emitMode backend.EmitMode, tmpRoot string, pkg *resolve.Package, tests []nativeTestCase, workers int, seed uint64, stdout, stderr io.Writer) int {
+	if workers <= 1 {
+		failures := 0
+		for _, tc := range tests {
+			if reportNativeTestResult(runSingleNativeTest(ctx, b, emitMode, tmpRoot, pkg, tc), stdout, stderr) {
+				failures++
+			}
+		}
+		return failures
+	}
+	sem := make(chan struct{}, workers)
+	resultsCh := make(chan nativeTestOutcome, len(tests))
+	var wg sync.WaitGroup
+	for _, tc := range tests {
+		tc := tc
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			resultsCh <- runSingleNativeTest(ctx, b, emitMode, tmpRoot, pkg, tc)
+		}()
+	}
+	go func() {
+		wg.Wait()
+		close(resultsCh)
+	}()
+	failures := 0
+	for outcome := range resultsCh {
+		if reportNativeTestResult(outcome, stdout, stderr) {
+			failures++
+		}
+	}
+	return failures
+}
+
+type nativeTestOutcome struct {
+	Test    nativeTestCase
+	Run     nativeTestRun
+	Err     error
+	Elapsed time.Duration
+}
+
+func runSingleNativeTest(ctx context.Context, b backend.Backend, emitMode backend.EmitMode, tmpRoot string, pkg *resolve.Package, tc nativeTestCase) nativeTestOutcome {
+	start := time.Now()
+	run, err := compileAndRunNativeTest(ctx, b, emitMode, tmpRoot, pkg, tc)
+	return nativeTestOutcome{Test: tc, Run: run, Err: err, Elapsed: time.Since(start)}
+}
+
+// reportNativeTestResult emits the per-test status line and any captured
+// child-process output. Returns true iff the test failed, so callers can
+// tally the failure count without re-inspecting the outcome.
+func reportNativeTestResult(o nativeTestOutcome, stdout, stderr io.Writer) bool {
+	dur := formatTestDuration(o.Elapsed)
+	if o.Err != nil {
+		fmt.Fprintf(stdout, "FAIL\t%s\t%s\n", o.Test.Name, dur)
+		fmt.Fprintf(stderr, "osty test: %s: %v\n", o.Test.Name, o.Err)
+		if strings.TrimSpace(o.Run.Stdout) != "" {
+			fmt.Fprintf(stdout, "%s", o.Run.Stdout)
+			if !strings.HasSuffix(o.Run.Stdout, "\n") {
+				fmt.Fprintln(stdout)
+			}
+		}
+		if strings.TrimSpace(o.Run.Stderr) != "" {
+			fmt.Fprintf(stderr, "%s", o.Run.Stderr)
+			if !strings.HasSuffix(o.Run.Stderr, "\n") {
+				fmt.Fprintln(stderr)
+			}
+		}
+		return true
+	}
+	fmt.Fprintf(stdout, "ok\t%s\t%s\n", o.Test.Name, dur)
+	return false
+}
+
+// resolveTestSeed parses the --seed flag. The empty string produces a
+// fresh cryptographic-quality random seed; a leading `0x` switches the
+// parser to base-16 per spec §11.7's printed format.
+func resolveTestSeed(raw string) (uint64, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		var b [8]byte
+		if _, err := cryptorand.Read(b[:]); err != nil {
+			return 0, fmt.Errorf("generate random seed: %w", err)
+		}
+		return binary.LittleEndian.Uint64(b[:]), nil
+	}
+	base := 10
+	s := raw
+	if strings.HasPrefix(s, "0x") || strings.HasPrefix(s, "0X") {
+		base = 16
+		s = s[2:]
+	}
+	v, err := strconv.ParseUint(s, base, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid --seed %q: %w", raw, err)
+	}
+	return v, nil
+}
+
+func formatTestSeed(seed uint64) string {
+	return fmt.Sprintf("0x%X", seed)
+}
+
+// formatTestDuration renders the per-test wall time. Short tests round
+// to milliseconds so the column stays narrow; longer ones promote to
+// seconds with two decimals for readability.
+func formatTestDuration(d time.Duration) string {
+	if d < time.Second {
+		ms := d.Milliseconds()
+		if ms < 1 {
+			ms = 1
+		}
+		return fmt.Sprintf("%dms", ms)
+	}
+	return fmt.Sprintf("%.2fs", d.Seconds())
+}
+
+func resolveTestWorkers(serial bool, jobs, n int) int {
+	if serial {
+		return 1
+	}
+	if jobs < 0 {
+		jobs = 0
+	}
+	if jobs == 0 {
+		jobs = runtime.NumCPU()
+	}
+	if jobs < 1 {
+		jobs = 1
+	}
+	if jobs > n {
+		jobs = n
+	}
+	return jobs
+}
+
+// shuffleNativeTests randomizes the test slice in place using a PRNG
+// seeded from the resolved seed. The seeded rng is deterministic so
+// --seed reproduces the same order regardless of host.
+func shuffleNativeTests(tests []nativeTestCase, seed uint64) {
+	// math/rand/v2 needs two uint64 words to seed PCG; derive a second
+	// independent word from the first via a splitmix step so a single
+	// user-supplied seed still fills both slots reproducibly.
+	mix := seed + 0x9E3779B97F4A7C15
+	mix = (mix ^ (mix >> 30)) * 0xBF58476D1CE4E5B9
+	mix = (mix ^ (mix >> 27)) * 0x94D049BB133111EB
+	mix ^= mix >> 31
+	rng := mathrand.New(mathrand.NewPCG(seed, mix))
+	rng.Shuffle(len(tests), func(i, j int) { tests[i], tests[j] = tests[j], tests[i] })
 }
 
 func resolveTestTarget(args []string) (string, []string, error) {
