@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/osty/osty/internal/manifest"
 	"github.com/osty/osty/internal/profile"
+	"github.com/osty/osty/internal/runner"
 )
 
 // profileTestFallback is `osty test`'s default profile when the user
@@ -59,30 +61,15 @@ func (pf *profileFlags) resolve(m *manifest.Manifest, fallback string) (*profile
 	if err != nil {
 		return nil, "", err
 	}
-	name := pf.profileName
-	if pf.releaseShortcut {
-		if name != "" && name != profile.NameRelease {
-			return nil, "", fmt.Errorf("--release conflicts with --profile %s", name)
-		}
-		name = profile.NameRelease
+	// Profile name precedence and feature-string parsing live in
+	// toolchain/profile_flags.osty so every subcommand (build,
+	// run, test, ci) resolves identically.
+	sel := runner.SelectProfileName(pf.profileName, pf.releaseShortcut, fallback)
+	if sel.Conflict != "" {
+		return nil, "", errors.New(sel.Conflict)
 	}
-	if name == "" {
-		name = fallback
-		if name == "" {
-			name = profile.NameDebug
-		}
-	}
-	// Parse the feature list. Empty strings are dropped so
-	// `--features=` behaves as a no-op.
-	var feats []string
-	if pf.features != "" {
-		for _, f := range strings.Split(pf.features, ",") {
-			f = strings.TrimSpace(f)
-			if f != "" {
-				feats = append(feats, f)
-			}
-		}
-	}
+	name := sel.Name
+	feats := runner.ParseFeatureList(pf.features)
 	resolved, err := cfg.Resolve(name, pf.triple, feats, !pf.noDefaultFeatures)
 	if err != nil {
 		return nil, name, err
