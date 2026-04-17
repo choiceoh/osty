@@ -1,0 +1,50 @@
+use std.strings as strings
+
+/// Pure policy for classifying diagnostics at the CLI layer. The
+/// full Diagnostic struct stays in Go (internal/diag); callers
+/// destructure the fields they need and delegate to these
+/// predicates so every subcommand treats a given severity/code/
+/// message shape the same way.
+///
+/// Mirrored by `internal/runner/diag_policy.go`. The drift test
+/// in that package keeps them in sync.
+
+/// isDeferredGenCheckDiag reports whether an error-severity
+/// diagnostic from `osty gen`'s checker is a "native type checker
+/// unavailable" marker. Those get demoted from blocking errors to
+/// notes so gen can still emit an artifact while surfacing the
+/// limitation. Other error-severity diagnostics stay blocking.
+///
+/// Input: severity and message strings pulled off the Diagnostic.
+/// `severity` follows internal/diag's stringly form ("error",
+/// "warning", "note"); "error" is the only severity that gates
+/// this branch.
+pub fn isDeferredGenCheckDiag(severity: String, message: String) -> Bool {
+    if severity != "error" {
+        return false
+    }
+    strings.hasPrefix(message, "type checking unavailable for ")
+}
+
+/// scaffoldExitCode maps a scaffold diagnostic code to the process
+/// exit code the CLI should surface.
+///
+/// Convention matches the rest of the CLI:
+///   - 0: nothing went wrong (empty code string).
+///   - 2: usage errors — the user supplied a bad name, conflicting
+///     flag, or otherwise invalid input.
+///   - 1: everything else (I/O failure, destination conflict,
+///     unexpected state).
+///
+/// The only current user-error scaffold code is E2050
+/// (CodeScaffoldInvalidName). Add more branches here as the
+/// scaffold suite grows.
+pub fn scaffoldExitCode(diagCode: String) -> Int {
+    if diagCode == "" {
+        return 0
+    }
+    if diagCode == "E2050" {
+        return 2
+    }
+    1
+}

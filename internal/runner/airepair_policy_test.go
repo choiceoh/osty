@@ -60,6 +60,21 @@ func TestParseAiRepairCaptureModeRejectsUnknown(t *testing.T) {
 	}
 }
 
+func TestUsesFrontEndAIRepair(t *testing.T) {
+	enabled := []string{"check", "typecheck", "resolve", "lint"}
+	for _, cmd := range enabled {
+		if !UsesFrontEndAIRepair(cmd) {
+			t.Errorf("UsesFrontEndAIRepair(%q) = false, want true", cmd)
+		}
+	}
+	disabled := []string{"run", "build", "test", "gen", "pipeline", ""}
+	for _, cmd := range disabled {
+		if UsesFrontEndAIRepair(cmd) {
+			t.Errorf("UsesFrontEndAIRepair(%q) = true, want false", cmd)
+		}
+	}
+}
+
 func TestShouldCaptureAiRepair(t *testing.T) {
 	cases := []struct {
 		name         string

@@ -58,6 +58,18 @@ pub fn parseAiRepairCaptureMode(value: String) -> AiRepairCaptureModeResult {
     }
 }
 
+/// usesFrontEndAIRepair reports whether a subcommand should
+/// trigger AI-repair against the front-end diagnostics (parse +
+/// resolve + check) rather than just the parse/lex layer.
+///
+/// check / typecheck / resolve / lint all surface the full
+/// front-end error set to the user, so they benefit from repairs
+/// that fix resolution-stage symptoms; run/build/test care only
+/// about the parser rewrite.
+pub fn usesFrontEndAIRepair(cmd: String) -> Bool {
+    cmd == "check" || cmd == "typecheck" || cmd == "resolve" || cmd == "lint"
+}
+
 /// shouldCaptureAiRepair decides whether an airepair run warrants
 /// writing a capture artifact, given the resolved --capture-if
 /// mode and two facts from the repair result:
