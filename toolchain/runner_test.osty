@@ -1,0 +1,179 @@
+use std.testing
+
+fn testBinaryBaseNamePrecedence() {
+    testing.assertEq(binaryBaseName("cli", "mypkg"), "cli")
+    testing.assertEq(binaryBaseName("", "mypkg"), "mypkg")
+    testing.assertEq(binaryBaseName("", ""), "app")
+}
+
+fn testBinaryNameForAppliesExeOnWindows() {
+    testing.assertEq(binaryNameFor("cli", "mypkg", "linux"), "cli")
+    testing.assertEq(binaryNameFor("cli", "mypkg", "darwin"), "cli")
+    testing.assertEq(binaryNameFor("cli", "mypkg", "windows"), "cli.exe")
+    testing.assertEq(binaryNameFor("", "", "windows"), "app.exe")
+}
+
+fn testBinaryNameForIdempotentSuffix() {
+    testing.assertEq(binaryNameFor("cli.exe", "", "windows"), "cli.exe")
+}
+
+fn testBuildBinaryNameHostVariants() {
+    testing.assertEq(buildBinaryName("cli", "pkg", "", "", "linux"), "cli")
+    testing.assertEq(buildBinaryName("cli", "pkg", "", "", "windows"), "cli.exe")
+}
+
+fn testBuildBinaryNameCrossCompileAppendsTriple() {
+    testing.assertEq(
+        buildBinaryName("cli", "pkg", "aarch64-apple-darwin", "darwin", "linux"),
+        "cli-aarch64-apple-darwin",
+    )
+}
+
+fn testBuildBinaryNameWindowsHostSuppressesExeForLinuxTarget() {
+    testing.assertEq(
+        buildBinaryName("cli", "pkg", "x86_64-unknown-linux-gnu", "linux", "windows"),
+        "cli-x86_64-unknown-linux-gnu",
+    )
+}
+
+fn testBuildBinaryNameWindowsCrossFromWindowsKeepsExe() {
+    testing.assertEq(
+        buildBinaryName("cli", "pkg", "x86_64-pc-windows-msvc", "windows", "windows"),
+        "cli-x86_64-pc-windows-msvc.exe",
+    )
+}
+
+fn testEntryPathForDefaultAndOverride() {
+    testing.assertEq(entryPathFor("/proj", "", "/"), "/proj/main.osty")
+    testing.assertEq(entryPathFor("/proj", "src/cli.osty", "/"), "/proj/src/cli.osty")
+    testing.assertEq(entryPathFor("/proj/", "main.osty", "/"), "/proj/main.osty")
+}
+
+fn testCrossCompileGuardAllowsHostTriple() {
+    let outcome = crossCompileGuard("")
+    testing.assert(!(outcome.blocked))
+    match outcome.diag {
+        Some(_) -> testing.assert(false),
+        None -> testing.assert(true),
+    }
+}
+
+fn testCrossCompileGuardBlocksAndHints() {
+    let outcome = crossCompileGuard("aarch64-apple-darwin")
+    testing.assert(outcome.blocked)
+    match outcome.diag {
+        Some(d) -> {
+            testing.assertEq(d.severity, "error")
+            testing.assertEq(d.code, "R0001")
+            testing.assertEq(
+                d.message,
+                "cannot execute cross-compiled binary for aarch64-apple-darwin on host",
+            )
+            testing.assertEq(
+                d.hint,
+                "use `osty build --target aarch64-apple-darwin` to produce the binary",
+            )
+        },
+        None -> testing.assert(false),
+    }
+}
+
+fn testMergeEnvOverridesShadowParent() {
+    let parent: List<String> = ["PATH=/bin", "HOME=/root", "CGO_ENABLED=0"]
+    let overrides: List<EnvEntry> = [
+        EnvEntry { key: "CGO_ENABLED", value: "1" },
+        EnvEntry { key: "GOOS", value: "linux" },
+    ]
+    let merged = mergeEnv(parent, overrides)
+
+    testing.assertEq(merged[0], "CGO_ENABLED=1")
+    testing.assertEq(merged[1], "GOOS=linux")
+    testing.assertEq(merged[2], "PATH=/bin")
+    testing.assertEq(merged[3], "HOME=/root")
+}
+
+fn testMergeEnvNoOverridesReturnsParent() {
+    let parent: List<String> = ["PATH=/bin"]
+    let overrides: List<EnvEntry> = []
+    let merged = mergeEnv(parent, overrides)
+    testing.assertEq(merged[0], "PATH=/bin")
+}
+
+fn testMergeEnvKeepsMalformedParentEntries() {
+    let parent: List<String> = ["STRAY_NO_EQUALS", "GOOS=darwin"]
+    let overrides: List<EnvEntry> = [EnvEntry { key: "GOOS", value: "linux" }]
+    let merged = mergeEnv(parent, overrides)
+    testing.assertEq(merged[0], "GOOS=linux")
+    testing.assertEq(merged[1], "STRAY_NO_EQUALS")
+}
+
+fn testDefaultEmitModeByTool() {
+    testing.assertEq(defaultEmitMode("gen"), "llvm-ir")
+    testing.assertEq(defaultEmitMode("pipeline"), "llvm-ir")
+    testing.assertEq(defaultEmitMode("run"), "binary")
+    testing.assertEq(defaultEmitMode("test"), "binary")
+    testing.assertEq(defaultEmitMode("build"), "binary")
+}
+
+fn testToolEmitCompatHappyPath() {
+    match toolEmitCompat("gen", "go", "go") {
+        Some(_) -> testing.assert(false),
+        None -> testing.assert(true),
+    }
+    match toolEmitCompat("gen", "llvm", "llvm-ir") {
+        Some(_) -> testing.assert(false),
+        None -> testing.assert(true),
+    }
+    match toolEmitCompat("run", "llvm", "binary") {
+        Some(_) -> testing.assert(false),
+        None -> testing.assert(true),
+    }
+    match toolEmitCompat("test", "llvm", "binary") {
+        Some(_) -> testing.assert(false),
+        None -> testing.assert(true),
+    }
+    match toolEmitCompat("build", "llvm", "binary") {
+        Some(_) -> testing.assert(false),
+        None -> testing.assert(true),
+    }
+}
+
+fn testToolEmitCompatGenGoMustEmitGo() {
+    match toolEmitCompat("gen", "go", "llvm-ir") {
+        Some(d) -> {
+            testing.assertEq(d.code, "R0010")
+            testing.assertEq(
+                d.message,
+                "gen with backend \"go\" cannot emit \"llvm-ir\" (want \"go\")",
+            )
+        },
+        None -> testing.assert(false),
+    }
+}
+
+fn testToolEmitCompatGenLlvmMustEmitIr() {
+    match toolEmitCompat("pipeline", "llvm", "binary") {
+        Some(d) -> {
+            testing.assertEq(d.code, "R0011")
+            testing.assertEq(
+                d.message,
+                "pipeline with backend \"llvm\" cannot emit \"binary\" (want \"llvm-ir\")",
+            )
+        },
+        None -> testing.assert(false),
+    }
+}
+
+fn testToolEmitCompatRunNeedsBinary() {
+    match toolEmitCompat("run", "llvm", "llvm-ir") {
+        Some(d) -> {
+            testing.assertEq(d.code, "R0012")
+            testing.assertEq(d.message, "run requires --emit=\"binary\"")
+        },
+        None -> testing.assert(false),
+    }
+    match toolEmitCompat("test", "llvm", "object") {
+        Some(d) -> testing.assertEq(d.code, "R0012"),
+        None -> testing.assert(false),
+    }
+}

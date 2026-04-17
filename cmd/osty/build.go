@@ -16,6 +16,7 @@ import (
 	"github.com/osty/osty/internal/pkgmgr"
 	"github.com/osty/osty/internal/profile"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/runner"
 	"github.com/osty/osty/internal/stdlib"
 	"github.com/osty/osty/internal/toolchain"
 )
@@ -456,13 +457,22 @@ func emitAndBuild(root string, m *manifest.Manifest, pkg *resolve.Package, pr *r
 	profileName, triple := resolvedKey(resolved)
 	binName := ""
 	if emitMode == backend.EmitBinary {
-		binName = binaryName(m)
-		if triple != "" {
-			binName += "-" + triple
+		// Binary filename policy lives in toolchain/runner.osty —
+		// base name + optional -<triple> + optional .exe are all a
+		// function of (manifest, target, host). See internal/runner.
+		binBaseOverride := ""
+		pkgName := ""
+		if m != nil {
+			if m.Bin != nil {
+				binBaseOverride = m.Bin.Name
+			}
+			pkgName = m.Package.Name
 		}
-		if runtime.GOOS == "windows" && (triple == "" || resolved.Target == nil || resolved.Target.OS == "windows") {
-			binName += ".exe"
+		targetOS := ""
+		if resolved.Target != nil {
+			targetOS = resolved.Target.OS
 		}
+		binName = runner.BuildBinaryName(binBaseOverride, pkgName, triple, targetOS, runtime.GOOS)
 	}
 	selectedBackend := backendFromCLI("build", backendID)
 	entry, err := backend.PrepareEntry("main", entryAbs, entryFile.File, res, chk)
@@ -504,19 +514,6 @@ func emitAndBuild(root string, m *manifest.Manifest, pkg *resolve.Package, pr *r
 	fmt.Fprintf(os.Stderr, "osty build: backend %q emit %q did not produce a buildable artifact\n", backendID, emitMode)
 	os.Exit(1)
 	return nil
-}
-
-// binaryName returns the binary name for the package: the manifest's
-// [bin].name override, the package name, or "app" as a last-resort
-// default.
-func binaryName(m *manifest.Manifest) string {
-	if m != nil && m.Bin != nil && m.Bin.Name != "" {
-		return m.Bin.Name
-	}
-	if m != nil && m.Package.Name != "" {
-		return m.Package.Name
-	}
-	return "app"
 }
 
 // resolvedKey unpacks a Resolved into (profile name, triple) so the

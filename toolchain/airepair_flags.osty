@@ -1,0 +1,81 @@
+/// Pure flag-parsing policy for `osty airepair` and every
+/// subcommand that carries an --airepair-mode flag (osty run, osty
+/// test, osty gen, etc.). No I/O; callers read the flag string,
+/// delegate here, then act on the normalised result.
+///
+/// Mirrored by `internal/runner/airepair_policy.go`. Keep the two
+/// in sync — the Osty file is the source of truth at review time.
+
+/// AiRepairModeResult is the normalised outcome of parsing an
+/// --airepair-mode string. `ok == false` signals an unknown mode
+/// so the host can emit its usage error.
+pub struct AiRepairModeResult {
+    pub mode: String,
+    pub ok: Bool,
+}
+
+/// AiRepairCaptureModeResult is the same shape for --capture-if.
+pub struct AiRepairCaptureModeResult {
+    pub mode: String,
+    pub ok: Bool,
+}
+
+/// parseAiRepairMode accepts the flag value and returns the
+/// canonical mode name. Empty string and "auto" both resolve to
+/// "auto" so `--airepair-mode=` behaves as "omit the flag".
+///
+/// Known modes: auto, rewrite, parse, frontend. Any other value
+/// leaves `ok == false` and the host should reject with usage
+/// error 2.
+pub fn parseAiRepairMode(value: String) -> AiRepairModeResult {
+    if value == "" || value == "auto" {
+        AiRepairModeResult { mode: "auto", ok: true }
+    } else if value == "rewrite" {
+        AiRepairModeResult { mode: "rewrite", ok: true }
+    } else if value == "parse" {
+        AiRepairModeResult { mode: "parse", ok: true }
+    } else if value == "frontend" {
+        AiRepairModeResult { mode: "frontend", ok: true }
+    } else {
+        AiRepairModeResult { mode: "", ok: false }
+    }
+}
+
+/// parseAiRepairCaptureMode handles --capture-if. Empty string and
+/// "residual" both mean "capture when residual errors remain" so
+/// omitting the flag defaults to the conservative behaviour.
+///
+/// Known modes: residual, changed, always.
+pub fn parseAiRepairCaptureMode(value: String) -> AiRepairCaptureModeResult {
+    if value == "" || value == "residual" {
+        AiRepairCaptureModeResult { mode: "residual", ok: true }
+    } else if value == "changed" {
+        AiRepairCaptureModeResult { mode: "changed", ok: true }
+    } else if value == "always" {
+        AiRepairCaptureModeResult { mode: "always", ok: true }
+    } else {
+        AiRepairCaptureModeResult { mode: "", ok: false }
+    }
+}
+
+/// shouldCaptureAiRepair decides whether an airepair run warrants
+/// writing a capture artifact, given the resolved --capture-if
+/// mode and two facts from the repair result:
+///
+///   - `changed`: repair emitted any edits.
+///   - `totalErrorsAfter`: parser/resolve/check errors that remain
+///     after repair.
+///
+/// The conservative default ("residual") only captures cases where
+/// the user will need to inspect the failure — repair ran but
+/// errors remain. "changed" captures any rewrite attempt; "always"
+/// captures unconditionally (for corpus collection).
+pub fn shouldCaptureAiRepair(captureMode: String, changed: Bool, totalErrorsAfter: Int) -> Bool {
+    if captureMode == "always" {
+        return true
+    }
+    if captureMode == "changed" {
+        return changed
+    }
+    totalErrorsAfter > 0
+}

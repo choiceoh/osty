@@ -1,0 +1,265 @@
+use std.strings as strings
+
+/// Pure policy for `osty run`: no I/O, no process exec. Host glue in
+/// `cmd/osty/run.go` resolves the workspace and invokes the backend,
+/// then consults this module for the decisions that are purely a
+/// function of (manifest, target, host OS, environment).
+///
+/// Mirrored by `internal/runner/policy.go`. Keep the two in sync —
+/// the Go snapshot is authoritative for today's build but must stay
+/// a mechanical translation of this file.
+
+/// RunnerDiag is the structured diagnostic runner policy emits when
+/// it refuses a host-incompatible request.
+pub struct RunnerDiag {
+    pub severity: String,
+    pub code: String,
+    pub message: String,
+    pub hint: String,
+}
+
+/// EnvEntry is a `KEY=VALUE` override pair used by `mergeEnv`.
+pub struct EnvEntry {
+    pub key: String,
+    pub value: String,
+}
+
+/// CrossCompileOutcome reports whether a resolved target is
+/// executable on the invoking host.
+///
+/// `osty run` is a build-and-execute shortcut; a non-host triple
+/// would produce a binary that can't run locally, so `blocked=true`
+/// short-circuits with a diagnostic pointing to `osty build --target`.
+pub struct CrossCompileOutcome {
+    pub blocked: Bool,
+    pub diag: RunnerDiag?,
+}
+
+/// binaryBaseName chooses the plain binary filename (no extension).
+///
+/// Precedence: manifest `[bin].name` override, then package name,
+/// then the fallback `"app"`. `binaryNameFor` adds the platform
+/// suffix on top of this.
+pub fn binaryBaseName(binName: String, pkgName: String) -> String {
+    if binName != "" {
+        return binName
+    }
+    if pkgName != "" {
+        return pkgName
+    }
+    "app"
+}
+
+/// buildBinaryName returns the filename the backend should produce
+/// for any `osty build` or `osty run` invocation.
+///
+/// Inputs:
+///   - binName / pkgName — manifest overrides (see binaryBaseName).
+///   - targetTriple — LLVM target triple, or "" for the host.
+///   - targetOS — GOOS-shaped OS derived from the triple (or "" to
+///     infer from hostGoos). Cross-compiled binaries get a `-<triple>`
+///     suffix so debug/release/host variants don't clobber each other.
+///   - hostGoos — GOOS of the *invoking* machine. Only this machine
+///     cares about the `.exe` suffix, and only when the output is
+///     meant to run on a Windows host (either host build, or
+///     cross-compile targeting Windows from Windows).
+///
+/// The suffix rule is: append `.exe` when hostGoos is windows AND
+/// the produced artifact is a Windows binary (no cross-target, or
+/// cross-target OS is windows). Idempotent — a manifest binName
+/// like "cli.exe" doesn't double-suffix.
+pub fn buildBinaryName(
+    binName: String,
+    pkgName: String,
+    targetTriple: String,
+    targetOS: String,
+    hostGoos: String,
+) -> String {
+    let mut out = binaryBaseName(binName, pkgName)
+    if targetTriple != "" {
+        out = strings.concat(out, strings.concat("-", targetTriple))
+    }
+    let effectiveOS = if targetOS == "" { hostGoos } else { targetOS }
+    let producesWindowsBinary = targetTriple == "" || effectiveOS == "windows"
+    if hostGoos == "windows" && producesWindowsBinary && !(strings.hasSuffix(out, ".exe")) {
+        out = strings.concat(out, ".exe")
+    }
+    out
+}
+
+/// binaryNameFor is the `osty run` shorthand: host build, so the
+/// target triple / OS arguments collapse away.
+pub fn binaryNameFor(binName: String, pkgName: String, goos: String) -> String {
+    buildBinaryName(binName, pkgName, "", "", goos)
+}
+
+/// entryPathFor resolves the entry source file from manifest input.
+///
+/// When `[bin].path` is set the manifest value wins; otherwise we
+/// default to `<root>/main.osty`. `sep` lets the caller inject the
+/// host path separator (`/` on Unix, `\` on Windows) without this
+/// module depending on `std.os` — the manifest path is joined
+/// verbatim so `[bin].path = "src/cli.osty"` on Windows still
+/// produces `<root>\src/cli.osty`, same shape Go's `filepath.Join`
+/// returns.
+pub fn entryPathFor(root: String, binPath: String, sep: String) -> String {
+    if binPath == "" {
+        joinPath(root, "main.osty", sep)
+    } else {
+        joinPath(root, binPath, sep)
+    }
+}
+
+/// crossCompileGuard blocks `osty run` when the resolved profile
+/// pins a non-host target triple. `""` means "use host" and is
+/// always allowed.
+pub fn crossCompileGuard(targetTriple: String) -> CrossCompileOutcome {
+    if targetTriple == "" {
+        return CrossCompileOutcome { blocked: false, diag: None }
+    }
+    let msg = strings.concat(
+        "cannot execute cross-compiled binary for ",
+        strings.concat(targetTriple, " on host"),
+    )
+    let hint = strings.concat(
+        "use `osty build --target ",
+        strings.concat(targetTriple, "` to produce the binary"),
+    )
+    CrossCompileOutcome {
+        blocked: true,
+        diag: Some(
+            RunnerDiag {
+                severity: "error",
+                code: "R0001",
+                message: msg,
+                hint,
+            },
+        ),
+    }
+}
+
+/// mergeEnv overlays per-build env overrides on top of the parent
+/// process's environment. A later entry with the same key wins —
+/// the convention matches `exec.Command`'s own lookup. Overrides
+/// appear first in the output so readers see them without scanning
+/// the inherited parent.
+pub fn mergeEnv(parent: List<String>, overrides: List<EnvEntry>) -> List<String> {
+    if envOverridesEmpty(overrides) {
+        return parent
+    }
+
+    let mut out: List<String> = []
+    let mut seen: List<String> = []
+    for o in overrides {
+        out.push(strings.concat(o.key, strings.concat("=", o.value)))
+        seen.push(o.key)
+    }
+    for kv in parent {
+        let key = envEntryKey(kv)
+        if key == "" {
+            out.push(kv)
+        } else if envSeen(seen, key) {
+            let _ = key
+        } else {
+            out.push(kv)
+        }
+    }
+    out
+}
+
+fn envOverridesEmpty(overrides: List<EnvEntry>) -> Bool {
+    for o in overrides {
+        let _ = o
+        return false
+    }
+    true
+}
+
+fn envEntryKey(kv: String) -> String {
+    match strings.indexOf(kv, "=") {
+        Some(at) -> strings.slice(kv, 0, at),
+        None -> "",
+    }
+}
+
+fn envSeen(seen: List<String>, key: String) -> Bool {
+    for k in seen {
+        if k == key {
+            return true
+        }
+    }
+    false
+}
+
+fn joinPath(dir: String, rest: String, sep: String) -> String {
+    if dir == "" {
+        return rest
+    }
+    if strings.hasSuffix(dir, sep) {
+        strings.concat(dir, rest)
+    } else {
+        strings.concat(dir, strings.concat(sep, rest))
+    }
+}
+
+/// defaultEmitMode picks the --emit artifact mode when the caller
+/// didn't set it explicitly. gen/pipeline default to a text
+/// artifact (llvm-ir or go source, depending on backend; the
+/// caller already knows which backend it picked, so this function
+/// only answers the question "text or binary?" and lets the
+/// backend's own rules pin the exact text flavour).
+///
+/// tool is the subcommand name ("gen", "pipeline", "run", "test",
+/// "build"). Anything not in the gen-family wants a runnable
+/// binary.
+pub fn defaultEmitMode(tool: String) -> String {
+    if tool == "gen" || tool == "pipeline" {
+        "llvm-ir"
+    } else {
+        "binary"
+    }
+}
+
+/// toolEmitCompat enforces the tool-level rules on top of a
+/// backend's native capability matrix. The backend still gets to
+/// veto (e.g. "llvm can't emit go source") via its own
+/// ValidateEmit; this function handles the *tool's* constraints:
+/// gen/pipeline text-mode must match the backend's text format,
+/// and run/test need a binary.
+///
+/// Returns None on success, or a RunnerDiag describing the
+/// mismatch. The host prints the diagnostic and exits 2.
+pub fn toolEmitCompat(tool: String, backend: String, emit: String) -> RunnerDiag? {
+    if tool == "gen" || tool == "pipeline" {
+        if backend == "go" && emit != "go" {
+            return Some(toolEmitMismatch(tool, backend, emit, "go", "R0010"))
+        }
+        if backend == "llvm" && emit != "llvm-ir" {
+            return Some(toolEmitMismatch(tool, backend, emit, "llvm-ir", "R0011"))
+        }
+    }
+    if tool == "run" || tool == "test" {
+        if emit != "binary" {
+            return Some(
+                RunnerDiag {
+                    severity: "error",
+                    code: "R0012",
+                    message: tool + " requires --emit=\"binary\"",
+                    hint: "",
+                },
+            )
+        }
+    }
+    None
+}
+
+fn toolEmitMismatch(
+    tool: String,
+    backend: String,
+    got: String,
+    want: String,
+    code: String,
+) -> RunnerDiag {
+    let msg = tool + " with backend \"" + backend + "\" cannot emit \"" + got + "\" (want \"" + want + "\")"
+    RunnerDiag { severity: "error", code, message: msg, hint: "" }
+}

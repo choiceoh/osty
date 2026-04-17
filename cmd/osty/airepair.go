@@ -9,6 +9,7 @@ import (
 
 	"github.com/osty/osty/internal/airepair"
 	"github.com/osty/osty/internal/repair"
+	"github.com/osty/osty/internal/runner"
 )
 
 // runAIRepair implements `osty airepair`: a small pre-parser source fixer
@@ -175,19 +176,16 @@ func reportRepairSummary(w io.Writer, prefix, path string, res repair.Result) {
 	fmt.Fprintf(w, "%s: applied %d repair(s)\n", prefix, len(res.Changes))
 }
 
+// parseAIRepairMode routes the flag string through the shared
+// toolchain/airepair_flags.osty policy and then re-types the
+// canonical name back to airepair.Mode (the policy side stays
+// stringly-typed to keep it free of Go package imports).
 func parseAIRepairMode(value string) (airepair.Mode, bool) {
-	switch value {
-	case "", string(airepair.ModeAutoAssist):
-		return airepair.ModeAutoAssist, true
-	case string(airepair.ModeRewriteOnly):
-		return airepair.ModeRewriteOnly, true
-	case string(airepair.ModeParseAssist):
-		return airepair.ModeParseAssist, true
-	case string(airepair.ModeFrontEndAssist):
-		return airepair.ModeFrontEndAssist, true
-	default:
+	res := runner.ParseAiRepairMode(value)
+	if !res.Ok {
 		return "", false
 	}
+	return airepair.Mode(res.Mode), true
 }
 
 func registerAIRepairCommandFlags(fs *flag.FlagSet, enabled *bool, mode *string) {
