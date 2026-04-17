@@ -1,5 +1,3 @@
-//go:build selfhostgen
-
 package gen
 
 // goKeywords is the set of Go reserved words that MUST NOT appear as a

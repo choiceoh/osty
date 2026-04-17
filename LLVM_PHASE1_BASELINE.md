@@ -96,7 +96,7 @@ Observed passing packages before interruption included:
 - `internal/diag`
 - `internal/examples`
 - `internal/format`
-- `internal/gen`
+- `internal/gen` (historical — now `internal/bootstrap/gen`)
 - `internal/ir`
 - `internal/lexer`
 - `internal/lockfile`

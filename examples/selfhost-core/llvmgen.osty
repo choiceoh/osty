@@ -601,7 +601,7 @@ pub fn llvmUnsupportedDiagnostic(kind: String, detail: String) -> LlvmUnsupporte
             code: "LLVM001",
             kind: "go-only",
             message: "use go \"{target}\" is only supported by the Go backend",
-            hint: "use --backend=go or replace it with a native/runtime binding before using --backend=llvm",
+            hint: "replace it with a native/runtime binding before using --backend=llvm",
         }
     }
 
@@ -678,7 +678,7 @@ pub fn llvmUnsupportedDiagnostic(kind: String, detail: String) -> LlvmUnsupporte
         code: "LLVM000",
         kind: "unsupported-source",
         message: reason,
-        hint: "reduce the program to the LLVM smoke subset or keep using --backend=go for this source",
+        hint: "reduce the program to the LLVM smoke subset while the self-hosted native backend grows",
     }
 }
 

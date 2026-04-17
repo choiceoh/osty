@@ -34,7 +34,7 @@ coverage. The public compiler path is now native-only through the LLVM backend.
 | Multi-file packages (`resolve` loader/package/workspace) | done |
 | LSP (`internal/lsp`, wired as `osty lsp`) | done — hover, definition, formatting, documentSymbol, lint diagnostics, editor policy backed by toolchain sources |
 | Native LLVM backend (`internal/backend`, `internal/llvmgen`) | public backend path; scalar/control-flow/string smoke subset emits LLVM IR/object/binary, later phase 64-73 value/control-flow smoke expansion is documented, unsupported shapes report Osty-authored LLVM diagnostics |
-| Go transpiler (`internal/gen`) | bootstrap-only seed path compiled with `selfhostgen`; no longer exposed as a public backend |
+| Bootstrap Go transpiler (`internal/bootstrap/gen`, `cmd/osty-bootstrap-gen`) | developer-only tool that regenerates `internal/selfhost/generated.go` from the toolchain sources; not part of the public `osty` CLI |
 | Independent IR (`internal/ir`) | done — patterns, match, closures, struct/field/method, generic free-fn + generic struct/enum monomorphization with Itanium-mangled specializations (`ir.Monomorphize`, invoked from `backend.PrepareEntry`; fn symbols use `_Z…`, nominal types use `_ZTS…`) |
 | Project scaffolding (`internal/scaffold`, `osty new` / `osty init`) | done — `--bin`, `--lib`, `--workspace`, `--cli`, `--service` |
 | Manifest + lockfile + SemVer (`internal/manifest`, `lockfile`, `pkgmgr/semver`) | done (parse + validate + resolve) |
@@ -96,10 +96,11 @@ osty/
 ├── LLVM_MIGRATION_PLAN.md   # Native backend migration history/plan
 ├── LLVM_PHASE1_BASELINE.md  # Legacy Go-backend baseline for LLVM migration
 ├── LLVM_BACKEND_CORPUS.md   # Backend parity fixture classes and smoke set
-├── LLVM_GEN_TODO_AUDIT.md   # Go-gen TODO audit and LLVM initial exclusions
 ├── LLVM_ARTIFACT_LAYOUT.md  # Backend-aware output/cache layout policy
 ├── cmd/
 │   ├── osty/                # Main CLI (`osty` binary)
+│   ├── osty-bootstrap-gen/  # Dev-only seed transpiler (regenerates internal/selfhost/generated.go)
+│   ├── osty-native-checker/ # Host subprocess that runs the native Osty checker
 │   └── codesdoc/            # Regenerates ERROR_CODES.md from codes.go
 ├── internal/
 │   ├── token/               # Token kinds + positions
@@ -115,6 +116,7 @@ osty/
 │   ├── format/              # Canonical-style formatter
 │   ├── ir/                  # Independent intermediate representation
 │   ├── backend/             # Backend names, emit modes, native artifact layout
+│   ├── bootstrap/gen/       # Dev-only Osty→Go transpiler used by osty-bootstrap-gen (NOT a public backend)
 │   ├── llvmgen/             # LLVM bridge generated from Osty toolchain backend logic
 │   ├── docgen/              # Osty-authored API doc generator (HTML + markdown; `osty doc`)
 │   ├── ci/                  # CI quality tooling (`osty ci`, generated core)

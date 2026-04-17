@@ -1,5 +1,3 @@
-//go:build selfhostgen
-
 package gen
 
 // regexRuntime is the pure-Go backtracking NFA regex engine emitted when

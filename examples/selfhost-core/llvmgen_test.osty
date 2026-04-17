@@ -156,7 +156,7 @@ fn testLlvmUnsupportedDiagnosticPolicyIsOstyOwned() {
     testing.assert(goFfi.kind == "go-only")
     assertLlvmContains(goFfi.message, "use go \"strings\"")
     assertLlvmContains(goFfi.message, "Go backend")
-    assertLlvmContains(goFfi.hint, "--backend=go")
+    assertLlvmContains(goFfi.hint, "native/runtime binding")
     let summary = llvmUnsupportedSummary(goFfi)
     assertLlvmContains(summary, "LLVM001 go-only")
     assertLlvmContains(summary, "hint:")

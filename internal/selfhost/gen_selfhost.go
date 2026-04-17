@@ -31,7 +31,7 @@ func run() error {
 	} else if err != nil {
 		return err
 	}
-	tmpDir, err := os.MkdirTemp("", "osty-selfhostgen-*")
+	tmpDir, err := os.MkdirTemp("", "osty-bootstrap-gen-*")
 	if err != nil {
 		return fmt.Errorf("create selfhost temp dir: %w", err)
 	}
@@ -52,9 +52,7 @@ func run() error {
 	}
 
 	cmd := exec.Command(
-		"go", "run", "-tags", "selfhostgen", "./cmd/osty", "gen",
-		"--backend", "go",
-		"--emit", "go",
+		"go", "run", "./cmd/osty-bootstrap-gen",
 		"--package", "selfhost",
 		"-o", tmpOutPath,
 		mergedPath,
@@ -65,9 +63,9 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("generate selfhost parser: %w\n%s", err, bytes.TrimSpace(output))
 	}
-	if selfhostgenMissingTypes(output) {
+	if bootstrapGenMissingTypes(output) {
 		return fmt.Errorf(
-			"generate selfhost parser: selfhostgen emitted untyped bootstrap Go; refusing to overwrite %s\n%s",
+			"generate selfhost parser: bootstrap gen emitted untyped Go; refusing to overwrite %s\n%s",
 			outPath,
 			bytes.TrimSpace(output),
 		)
@@ -95,8 +93,8 @@ func buildNativeChecker(root, outPath string) error {
 	return nil
 }
 
-func selfhostgenMissingTypes(output []byte) bool {
-	return bytes.Contains(output, []byte("osty gen: warning: native type checking is unavailable"))
+func bootstrapGenMissingTypes(output []byte) bool {
+	return bytes.Contains(output, []byte("osty-bootstrap-gen: warning: native type checking is unavailable"))
 }
 
 func generatedSelfhostUpToDate(root, outPath string) (bool, error) {

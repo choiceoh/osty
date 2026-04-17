@@ -8,7 +8,7 @@
 - **셀프호스팅**: 컴파일러 본체(렉서/파서/리졸버/체커/린트/포매터/LLVM 코드젠/LSP 정책)는 전부 **Osty로 작성** (`toolchain/*.osty`)
 - Go는 **호스트 경계와 부트스트랩 역할만**: I/O, JSON-RPC, CLI 진입점, Osty→Go 셀프호스트 시드(`internal/selfhost/generated.go`), 얇은 어댑터(`internal/lexer`·`internal/parser` 등은 수십 줄짜리 파사드)
 - 외부 Go 의존성: `golang.org/x/sys`, `golang.org/x/term`만 허용 (추가 금지)
-- 공개 백엔드: LLVM만 (레거시 Go 트랜스파일러 `internal/gen`은 제거 중)
+- 공개 백엔드: LLVM만. Go 트랜스파일러는 `internal/bootstrap/gen`으로 격리되어 `cmd/osty-bootstrap-gen` 개발자 바이너리를 통해 `internal/selfhost/generated.go` 재생성 용도로만 쓰인다. LLVM 셀프호스팅이 완성되면 최종 제거 예정
 - Go 1.26+ (부트스트랩 빌드용)
 
 ## 언어 선택 규칙 (절대 준수)
@@ -59,10 +59,11 @@ source → lexer → parser → resolve → check → (format / lint / ir / back
 - `internal/lint` — `Lxxxx` 경고. 컴파일 차단 안 함
 - `internal/ir` — 백엔드-독립 IR
 - `internal/backend`, `internal/llvmgen` — LLVM 백엔드 (공개 경로)
-- `internal/gen` — 레거시 Go 트랜스파일러. **새 작업 금지**, 제거 중
+- `internal/bootstrap/gen` — 부트스트랩 전용 Osty→Go 트랜스파일러. 공개 CLI에서 접근 불가. **새 작업 금지**. `cmd/osty-bootstrap-gen`만이 호출하며, `internal/selfhost/generated.go` 재생성 전용
 - `internal/lsp` — stdio JSON-RPC LSP
 - `internal/manifest`, `internal/lockfile`, `internal/pkgmgr`, `internal/registry` — 패키지 매니저
 - `cmd/osty` — 메인 CLI. 서브커맨드는 `README.md` 참조
+- `cmd/osty-bootstrap-gen` — 개발자 전용 시드 트랜스파일러. 공개 도구 아님
 - `toolchain/*.osty` — Osty로 작성된 컴파일러/툴체인 코어. Go 측에서 bridge로 호출
 
 ## 진단 규칙 (Exxxx/Wxxxx/Lxxxx — 절대 준수)
@@ -137,7 +138,7 @@ source → lexer → parser → resolve → check → (format / lint / ir / back
 ## 하지 말 것
 
 - Osty로 작성 가능한 로직을 Go로 새로 작성
-- `internal/gen`(레거시 Go 트랜스파일러)에 새 기능 추가
+- `internal/bootstrap/gen`(부트스트랩 전용 Go 트랜스파일러)에 새 기능 추가 또는 공개 CLI에 재노출
 - `panic`으로 유저 입력 에러 처리
 - `ERROR_CODES.md`, `payload-types.ts` 같은 생성 파일 수동 편집
 - 외부 Go 의존성 추가 (`go.mod` 최소 상태 유지)

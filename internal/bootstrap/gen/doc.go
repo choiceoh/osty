@@ -1,7 +1,7 @@
-//go:build selfhostgen
-
 // Package gen translates a type-checked Osty AST into Go source code for the
-// selfhostgen bootstrap path.
+// bootstrap path. It is not part of the public compiler surface; the sole
+// caller is cmd/osty-bootstrap-gen, which regenerates
+// internal/selfhost/generated.go from the toolchain sources.
 //
 // The transpiler runs after the front-end pipeline (lex → parse → resolve
 // → check) and consumes:
@@ -40,7 +40,7 @@
 //
 // Result is lowered to a parametric Go struct (Value/Error/IsOk) and
 // pattern tests read `IsOk` directly rather than using type assertions
-// (see internal/gen/question.go and the Result helpers in match.go).
+// (see internal/bootstrap/gen/question.go and the Result helpers in match.go).
 //
 // The `?` operator is lifted out of any direct-evaluation position by
 // preLiftQuestions: a statement that contains one or more `?` gets a

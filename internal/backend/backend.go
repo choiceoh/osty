@@ -1,5 +1,3 @@
-//go:build !selfhostgen
-
 package backend
 
 import (
