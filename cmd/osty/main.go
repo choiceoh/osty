@@ -1324,7 +1324,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "       osty add NAME[@VER]       (add a dependency; also --path, --git)")
 	fmt.Fprintln(os.Stderr, "       osty update [NAME...]     (refresh osty.lock)")
 	fmt.Fprintln(os.Stderr, "       osty run [-- ARGS...]     (build + exec the project's binary)")
-	fmt.Fprintln(os.Stderr, "       osty test [PATH|FILTER...] (native test harness pending)")
+	fmt.Fprintln(os.Stderr, "       osty test [PATH|FILTER...] (discover + run test* functions; --seed, --serial, --jobs)")
 	fmt.Fprintln(os.Stderr, "       osty publish              (pack + upload the package to a registry)")
 	fmt.Fprintln(os.Stderr, "       osty search QUERY         (search the registry for packages)")
 	fmt.Fprintln(os.Stderr, "       osty yank --version V [PKG]   (mark a published version as yanked)")

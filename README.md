@@ -39,7 +39,7 @@ coverage. The public compiler path is now native-only through the LLVM backend.
 | Project scaffolding (`internal/scaffold`, `osty new` / `osty init`) | done — `--bin`, `--lib`, `--workspace`, `--cli`, `--service` |
 | Manifest + lockfile + SemVer (`internal/manifest`, `lockfile`, `pkgmgr/semver`) | done (parse + validate + resolve) |
 | Build orchestrator (`osty build`) | done — manifest → front-end → native backend, profile/target/feature wiring, backend-aware artifact/cache paths |
-| `osty test` | native backend harness pending; public CLI reports this instead of falling back to Go |
+| `osty test` | native backend harness — discovers `test*` functions, compiles each through the LLVM backend, runs in parallel by default with a seeded shuffled order (`--seed`, `--serial`, `--jobs`), reports per-test wall time and an `ok/FAIL` summary; assertions are intercepted by the LLVM generator and failures exit non-zero with the source location. `benchmark`/`snapshot` and per-argument structural diff are not implemented yet |
 | API doc generator (`internal/docgen`, `osty doc`) | done — checked-in generated Go package, HTML + markdown, field docs, cross-refs, workspace mode |
 | CI quality tooling (`internal/ci`, `osty ci`) | done — Osty-authored generated CI core, signature-aware snapshots, workspace coverage, JSON reports |
 | Pipeline visualizer (`osty pipeline`) | done — per-stage timing, workspace mode, backend-aware gen, baseline diff, LSP trace, `--explain` |
@@ -203,7 +203,7 @@ osty add PKG           # append a dependency to osty.toml and re-resolve
 osty remove NAME...    # drop dependencies from osty.toml and re-resolve (alias: rm)
 osty update [NAMES...] # refresh the lockfile (selective or full)
 osty run [-- ARGS...]  # build and exec the binary through the native backend
-osty test [PATH|FILTERS...] # native test harness pending
+osty test [PATH|FILTERS...] # discover test* functions and run them through the native backend (--seed, --serial, --jobs)
 osty publish           # pack the project and upload to a registry
 osty search QUERY      # full-text search the registry (--registry, --limit)
 osty info PKG          # show registry metadata for a package (--all-versions)

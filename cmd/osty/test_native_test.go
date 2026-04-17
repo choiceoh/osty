@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRunTestMainPassesNativeLLVMTest(t *testing.T) {
@@ -225,7 +226,11 @@ fn testManagedAggregateList() {
 
 func TestRunTestMainAIRepairAllowsForeignSyntaxBeforeDiscovery(t *testing.T) {
 	dir := t.TempDir()
-	writeNativeTestFile(t, dir, "helper.osty", "func helper() {}\n")
+	// `x := 1` is residual foreign syntax — the parser front-end does not
+	// normalize it (that only covers keyword aliases like `func`→`fn`,
+	// promoted in commit 10a634d), so airepair is the only route that
+	// lets the package reach discovery.
+	writeNativeTestFile(t, dir, "helper.osty", "pub fn helper() -> Int {\n    x := 1\n    x\n}\n")
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -262,4 +267,189 @@ func writeNativeTestFile(t *testing.T, dir, name, contents string) string {
 		t.Fatalf("write %s: %v", path, err)
 	}
 	return path
+}
+
+func TestResolveTestSeedAcceptsDecimalAndHex(t *testing.T) {
+	cases := []struct {
+		in   string
+		want uint64
+	}{
+		{"0", 0},
+		{"42", 42},
+		{"0x8F3A2B71", 0x8F3A2B71},
+		{"0XFF", 0xFF},
+	}
+	for _, tc := range cases {
+		got, err := resolveTestSeed(tc.in)
+		if err != nil {
+			t.Fatalf("resolveTestSeed(%q) error: %v", tc.in, err)
+		}
+		if got != tc.want {
+			t.Fatalf("resolveTestSeed(%q) = %#x, want %#x", tc.in, got, tc.want)
+		}
+	}
+	if _, err := resolveTestSeed("not-a-number"); err == nil {
+		t.Fatalf("resolveTestSeed(\"not-a-number\") expected error")
+	}
+}
+
+func TestResolveTestSeedEmptyIsFresh(t *testing.T) {
+	a, err := resolveTestSeed("")
+	if err != nil {
+		t.Fatalf("fresh seed: %v", err)
+	}
+	b, err := resolveTestSeed("")
+	if err != nil {
+		t.Fatalf("fresh seed: %v", err)
+	}
+	// Two fresh seeds almost certainly differ; if both are zero the RNG
+	// source is broken and this test exists to surface that.
+	if a == 0 && b == 0 {
+		t.Fatalf("two fresh seeds were both zero — crypto/rand not wired?")
+	}
+}
+
+func TestShuffleNativeTestsDeterministicPerSeed(t *testing.T) {
+	base := []nativeTestCase{
+		{Name: "a"}, {Name: "b"}, {Name: "c"}, {Name: "d"}, {Name: "e"},
+		{Name: "f"}, {Name: "g"}, {Name: "h"}, {Name: "i"}, {Name: "j"},
+	}
+	clone := func() []nativeTestCase { return append([]nativeTestCase(nil), base...) }
+	a := clone()
+	b := clone()
+	shuffleNativeTests(a, 0xDEADBEEF)
+	shuffleNativeTests(b, 0xDEADBEEF)
+	if !sameNativeTestOrder(a, b) {
+		t.Fatalf("same seed produced different orders:\n  a=%v\n  b=%v", a, b)
+	}
+	c := clone()
+	shuffleNativeTests(c, 0xCAFEBABE)
+	if sameNativeTestOrder(a, c) {
+		t.Fatalf("different seeds produced the same order: %v", a)
+	}
+}
+
+func sameNativeTestOrder(a, b []nativeTestCase) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Name != b[i].Name {
+			return false
+		}
+	}
+	return true
+}
+
+func TestResolveTestWorkersClamps(t *testing.T) {
+	if got := resolveTestWorkers(true, 4, 10); got != 1 {
+		t.Fatalf("--serial should force 1 worker, got %d", got)
+	}
+	if got := resolveTestWorkers(false, 4, 2); got != 2 {
+		t.Fatalf("workers should clamp to len(tests)=2, got %d", got)
+	}
+	if got := resolveTestWorkers(false, -3, 10); got < 1 {
+		t.Fatalf("workers should default to NumCPU>=1, got %d", got)
+	}
+}
+
+func TestFormatTestDurationSwitchesUnits(t *testing.T) {
+	if got := formatTestDuration(120 * time.Millisecond); got != "120ms" {
+		t.Fatalf("120ms format = %q", got)
+	}
+	if got := formatTestDuration(2500 * time.Millisecond); got != "2.50s" {
+		t.Fatalf("2.5s format = %q", got)
+	}
+	if got := formatTestDuration(time.Microsecond); got != "1ms" {
+		t.Fatalf("sub-millisecond rounds up to 1ms, got %q", got)
+	}
+}
+
+func TestRunTestMainHeaderIncludesSeedAndTiming(t *testing.T) {
+	requireClangForNativeTest(t)
+
+	dir := t.TempDir()
+	writeNativeTestFile(t, dir, "lib.osty", `pub fn add(a: Int, b: Int) -> Int {
+    a + b
+}
+`)
+	writeNativeTestFile(t, dir, "lib_test.osty", `use std.testing
+
+fn testAdd() {
+    testing.assertEq(add(1, 2), 3)
+}
+`)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := runTestMain([]string{"--seed", "0x1234", dir}, cliFlags{}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("runTestMain() exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	}
+	got := stdout.String()
+	if !strings.Contains(got, "running 1 tests (seed 0x1234)") {
+		t.Fatalf("stdout missing seeded header: %q", got)
+	}
+	// ok\ttestAdd\t<duration> — duration column is present.
+	if !strings.Contains(got, "ok\ttestAdd\t") {
+		t.Fatalf("stdout missing per-test timing column: %q", got)
+	}
+	if !strings.Contains(got, "seed 0x1234") {
+		t.Fatalf("summary should echo the seed: %q", got)
+	}
+}
+
+func TestRunTestMainSerialFlagRunsInShuffledOrder(t *testing.T) {
+	requireClangForNativeTest(t)
+
+	dir := t.TempDir()
+	writeNativeTestFile(t, dir, "lib.osty", `pub fn id(x: Int) -> Int { x }
+`)
+	// Three tests — with --serial + fixed seed, output order must be
+	// deterministic across runs.
+	writeNativeTestFile(t, dir, "lib_test.osty", `use std.testing
+
+fn testAlpha() { testing.assertEq(id(1), 1) }
+fn testBravo() { testing.assertEq(id(2), 2) }
+fn testCharlie() { testing.assertEq(id(3), 3) }
+`)
+
+	// Only the test-name order is seed-deterministic; wall-clock
+	// durations legitimately differ between runs, so extract the name
+	// sequence before comparing.
+	capture := func() []string {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		code := runTestMain([]string{"--seed", "0xABCDEF", "--serial", dir}, cliFlags{}, &stdout, &stderr)
+		if code != 0 {
+			t.Fatalf("runTestMain() exit = %d\nstderr:\n%s", code, stderr.String())
+		}
+		var order []string
+		for _, line := range strings.Split(stdout.String(), "\n") {
+			if strings.HasPrefix(line, "ok\ttest") || strings.HasPrefix(line, "FAIL\ttest") {
+				fields := strings.Split(line, "\t")
+				if len(fields) >= 2 {
+					order = append(order, fields[1])
+				}
+			}
+		}
+		return order
+	}
+	first := capture()
+	second := capture()
+	if strings.Join(first, ",") != strings.Join(second, ",") {
+		t.Fatalf("--serial + fixed seed should reproduce the same order.\nfirst: %v\nsecond: %v", first, second)
+	}
+	if len(first) != 3 {
+		t.Fatalf("expected 3 test status lines, got %v", first)
+	}
+	seen := map[string]bool{}
+	for _, n := range first {
+		seen[n] = true
+	}
+	for _, want := range []string{"testAlpha", "testBravo", "testCharlie"} {
+		if !seen[want] {
+			t.Fatalf("stdout missing %s status line; saw %v", want, first)
+		}
+	}
 }
