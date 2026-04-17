@@ -246,8 +246,12 @@ func (g *mirGen) checkInstrSupported(fn *mir.Function, inst mir.Instr) error {
 				return err
 			}
 		}
-		if _, ok := x.Callee.(*mir.FnRef); !ok {
-			return unsupported("mir-mvp", "indirect call not yet supported in "+fn.Name)
+		switch x.Callee.(type) {
+		case *mir.FnRef, *mir.IndirectCall:
+			// both supported now — IndirectCall through a fn-pointer
+			// operand.
+		default:
+			return unsupported("mir-mvp", fmt.Sprintf("call target %T not yet supported in %s", x.Callee, fn.Name))
 		}
 	case *mir.IntrinsicInstr:
 		if !isSupportedIntrinsic(x.Kind) {
@@ -286,6 +290,15 @@ func (g *mirGen) checkRValueSupported(fn *mir.Function, rv mir.RValue) error {
 		switch r.Kind {
 		case mir.AggStruct, mir.AggTuple, mir.AggEnumVariant, mir.AggList:
 			return nil
+		case mir.AggClosure:
+			// Non-capturing closures (just a function pointer, no
+			// captures) are supported; capturing closures still need
+			// a heap-backed environment — leave them for a later
+			// stage and fall back to legacy.
+			if len(r.Fields) == 1 {
+				return nil
+			}
+			return unsupported("mir-mvp", fmt.Sprintf("closure with %d captures in %s", len(r.Fields)-1, fn.Name))
 		}
 		return unsupported("mir-mvp", fmt.Sprintf("aggregate kind %d not yet supported in %s", r.Kind, fn.Name))
 	}
@@ -767,10 +780,18 @@ func (g *mirGen) emitAssign(a *mir.AssignInstr) error {
 }
 
 func (g *mirGen) emitCall(c *mir.CallInstr) error {
-	fnRef, ok := c.Callee.(*mir.FnRef)
-	if !ok {
-		return unsupported("mir-mvp", "indirect call")
+	switch callee := c.Callee.(type) {
+	case *mir.FnRef:
+		return g.emitDirectCall(c, callee)
+	case *mir.IndirectCall:
+		return g.emitIndirectCall(c, callee)
 	}
+	return unsupported("mir-mvp", fmt.Sprintf("call target %T", c.Callee))
+}
+
+// emitDirectCall handles `call <ret> @<symbol>(args)` — the common
+// case where the callee's signature is known at compile time.
+func (g *mirGen) emitDirectCall(c *mir.CallInstr, fnRef *mir.FnRef) error {
 	sig, known := g.functionTypes[fnRef.Symbol]
 	if !known {
 		return unsupported("mir-mvp", "call to unresolved symbol "+fnRef.Symbol)
@@ -793,16 +814,68 @@ func (g *mirGen) emitCall(c *mir.CallInstr) error {
 		}
 		argStrs = append(argStrs, g.llvmType(paramT)+" "+val)
 	}
-	// Build the call.
+	return g.emitCallSiteByName(c, fnRef.Symbol, sig.retLLVM, argStrs)
+}
+
+// emitIndirectCall handles calls through a ptr-typed operand, used
+// when a fn-typed variable / closure value is invoked. The MIR
+// emitter MVP supports non-capturing closures (the operand is a
+// plain fn pointer), so we read the LLVM signature off the operand's
+// FnType.
+func (g *mirGen) emitIndirectCall(c *mir.CallInstr, callee *mir.IndirectCall) error {
+	calleeOp := callee.Callee
+	if calleeOp == nil {
+		return unsupported("mir-mvp", "indirect call with nil callee")
+	}
+	fnT, ok := calleeOp.Type().(*ir.FnType)
+	if !ok {
+		return unsupported("mir-mvp", fmt.Sprintf("indirect call on non-function type %s", mirTypeString(calleeOp.Type())))
+	}
+	// Resolve the fn pointer.
+	ptrVal, err := g.evalOperand(calleeOp, calleeOp.Type())
+	if err != nil {
+		return err
+	}
+	// Lower args against the declared FnType signature.
+	retLLVM := "void"
+	if fnT.Return != nil && !isUnitType(fnT.Return) {
+		retLLVM = g.llvmType(fnT.Return)
+	}
+	argStrs := make([]string, 0, len(c.Args))
+	for i, op := range c.Args {
+		var paramT mir.Type
+		if i < len(fnT.Params) {
+			paramT = fnT.Params[i]
+		}
+		if paramT == nil {
+			paramT = op.Type()
+		}
+		val, err := g.evalOperand(op, paramT)
+		if err != nil {
+			return err
+		}
+		argStrs = append(argStrs, g.llvmType(paramT)+" "+val)
+	}
+	// Build the LLVM call-type string matching the declared FnType.
+	paramParts := make([]string, 0, len(fnT.Params))
+	for _, p := range fnT.Params {
+		paramParts = append(paramParts, g.llvmType(p))
+	}
+	callType := retLLVM + " (" + strings.Join(paramParts, ", ") + ")"
+	return g.emitCallSiteIndirect(c, callType, ptrVal, retLLVM, argStrs)
+}
+
+// emitCallSiteByName writes the actual `call` / `store` / void-call
+// lines for a direct fn-symbol call.
+func (g *mirGen) emitCallSiteByName(c *mir.CallInstr, symbol, retLLVM string, argStrs []string) error {
 	if c.Dest != nil {
 		destLoc := g.fn.Local(c.Dest.Local)
 		if destLoc == nil {
 			return fmt.Errorf("mir-mvp: call dest into unknown local %d", c.Dest.Local)
 		}
 		if isUnitType(destLoc.Type) {
-			// Call returns unit — emit as void call, no dest.
 			g.fnBuf.WriteString("  call void @")
-			g.fnBuf.WriteString(fnRef.Symbol)
+			g.fnBuf.WriteString(symbol)
 			g.fnBuf.WriteByte('(')
 			g.fnBuf.WriteString(strings.Join(argStrs, ", "))
 			g.fnBuf.WriteString(")\n")
@@ -812,9 +885,9 @@ func (g *mirGen) emitCall(c *mir.CallInstr) error {
 		g.fnBuf.WriteString("  ")
 		g.fnBuf.WriteString(tmp)
 		g.fnBuf.WriteString(" = call ")
-		g.fnBuf.WriteString(sig.retLLVM)
+		g.fnBuf.WriteString(retLLVM)
 		g.fnBuf.WriteString(" @")
-		g.fnBuf.WriteString(fnRef.Symbol)
+		g.fnBuf.WriteString(symbol)
 		g.fnBuf.WriteByte('(')
 		g.fnBuf.WriteString(strings.Join(argStrs, ", "))
 		g.fnBuf.WriteString(")\n")
@@ -827,11 +900,58 @@ func (g *mirGen) emitCall(c *mir.CallInstr) error {
 		g.fnBuf.WriteByte('\n')
 		return nil
 	}
-	// Void / discarded call.
 	g.fnBuf.WriteString("  call ")
-	g.fnBuf.WriteString(sig.retLLVM)
+	g.fnBuf.WriteString(retLLVM)
 	g.fnBuf.WriteString(" @")
-	g.fnBuf.WriteString(fnRef.Symbol)
+	g.fnBuf.WriteString(symbol)
+	g.fnBuf.WriteByte('(')
+	g.fnBuf.WriteString(strings.Join(argStrs, ", "))
+	g.fnBuf.WriteString(")\n")
+	return nil
+}
+
+// emitCallSiteIndirect writes the call sequence for an indirect fn
+// pointer invocation (`call <ret> (<params>) %ptr(args)`). Dest
+// semantics mirror the direct path.
+func (g *mirGen) emitCallSiteIndirect(c *mir.CallInstr, callType, ptrVal, retLLVM string, argStrs []string) error {
+	if c.Dest != nil {
+		destLoc := g.fn.Local(c.Dest.Local)
+		if destLoc == nil {
+			return fmt.Errorf("mir-mvp: call dest into unknown local %d", c.Dest.Local)
+		}
+		if isUnitType(destLoc.Type) {
+			g.fnBuf.WriteString("  call ")
+			g.fnBuf.WriteString(callType)
+			g.fnBuf.WriteByte(' ')
+			g.fnBuf.WriteString(ptrVal)
+			g.fnBuf.WriteByte('(')
+			g.fnBuf.WriteString(strings.Join(argStrs, ", "))
+			g.fnBuf.WriteString(")\n")
+			return nil
+		}
+		tmp := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(tmp)
+		g.fnBuf.WriteString(" = call ")
+		g.fnBuf.WriteString(callType)
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(ptrVal)
+		g.fnBuf.WriteByte('(')
+		g.fnBuf.WriteString(strings.Join(argStrs, ", "))
+		g.fnBuf.WriteString(")\n")
+		g.fnBuf.WriteString("  store ")
+		g.fnBuf.WriteString(g.llvmType(destLoc.Type))
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(tmp)
+		g.fnBuf.WriteString(", ptr ")
+		g.fnBuf.WriteString(g.localSlots[c.Dest.Local])
+		g.fnBuf.WriteByte('\n')
+		return nil
+	}
+	g.fnBuf.WriteString("  call ")
+	g.fnBuf.WriteString(callType)
+	g.fnBuf.WriteByte(' ')
+	g.fnBuf.WriteString(ptrVal)
 	g.fnBuf.WriteByte('(')
 	g.fnBuf.WriteString(strings.Join(argStrs, ", "))
 	g.fnBuf.WriteString(")\n")
@@ -1633,6 +1753,14 @@ func (g *mirGen) emitAggregate(rv *mir.AggregateRV, hintT mir.Type) (string, err
 		return g.emitEnumVariant(rv, aggT)
 	case mir.AggList:
 		return g.emitListLiteral(rv, aggT)
+	case mir.AggClosure:
+		// Stage 3.4 MVP: non-capturing closures only. The single
+		// field is a FnConst; the resulting ptr *is* the closure
+		// value.
+		if len(rv.Fields) != 1 {
+			return "", unsupported("mir-mvp", "closure with captures")
+		}
+		return g.evalOperand(rv.Fields[0], rv.Fields[0].Type())
 	}
 	elems, err := g.aggregateElementTypes(aggT, rv)
 	if err != nil {
@@ -2099,6 +2227,15 @@ func (g *mirGen) renderConst(c mir.Const, hintT mir.Type) (string, error) {
 		return sym, nil
 	case *mir.NullConst:
 		return "null", nil
+	case *mir.FnConst:
+		// Function-pointer literal. Renders as the global symbol
+		// reference — LLVM accepts `@fnname` wherever a ptr value is
+		// expected. The `discoverFunctions` pass has already recorded
+		// the target's signature so indirect calls can look it up.
+		if k.Symbol == "" {
+			return "", unsupported("mir-mvp", "FnConst with empty symbol")
+		}
+		return "@" + k.Symbol, nil
 	}
 	return "", unsupported("mir-mvp", fmt.Sprintf("const %T", c))
 }

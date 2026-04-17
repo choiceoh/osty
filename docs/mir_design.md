@@ -794,6 +794,28 @@ MIR tests isolated from front-end churn.
     still fall back to legacy — the bytes runtime path needs a
     struct-size computation that the MVP doesn't ship yet.
 
+- **Stage 3.4 (landed — non-capturing closures + indirect call).**
+
+  - **`FnConst`** constants now render as `@<symbol>` LLVM value
+    references, so MIR operands holding fn pointers flow through
+    the emitter without an extra alloca.
+  - **`AggregateRV{AggClosure}`** with a *single* field (a bare
+    `FnConst`, i.e. a non-capturing closure) collapses to the fn
+    pointer value. No allocation, no struct — the emitted MIR just
+    becomes `store ptr @<lifted-closure-symbol>, ptr <slot>`.
+    Capturing closures (multi-field `AggClosure`) still return
+    `ErrUnsupported` because they need a heap-backed environment
+    the MVP hasn't designed yet.
+  - **`IndirectCall`** is accepted when the callee operand has an
+    `FnType`. The emitter reads the LLVM signature off the FnType,
+    lowers each argument against the declared param types, and
+    emits `call <ret> (<params>) <ptr-operand>(<args>)`.
+  - **MIR lowerer fix**: `resolveCall` now routes
+    `Ident{Kind: IdentLocal|IdentParam}` callees through
+    `IndirectCall` (carrying a `CopyOp` of the local) instead of
+    minting a stray `FnRef` to a symbol that doesn't exist. That
+    unblocks first-class fn values passed as parameters.
+
 - **Stage 4 (partially landed — MIR-first IR emission).** The LLVM
   backend now prefers the MIR-direct emitter by default for raw
   `llvm-ir` output. The legacy HIR→AST bridge remains callable under
@@ -803,14 +825,15 @@ MIR tests isolated from front-end churn.
 
 - **Stage 5 (deferred — still needs parity).** Remove
   `legacyFileFromModule` and the AST-driven emitter. Blocked on the
-  MIR emitter covering closure captures (`AggClosure`), indirect
-  calls, concurrency intrinsics (the MIR lowerer already emits
-  them but the emitter doesn't map them to runtime symbols), GC
-  roots / safepoints, composite list/map element types, and the
-  `IndexProj` / `DerefProj` place projections. The cheapest next
-  wedge is closure captures — that unlocks large swathes of the
-  stdlib. See the MIR emitter's `checkSupported` and
-  `checkRValueSupported` for the current whitelist.
+  MIR emitter covering **capturing** closures (`AggClosure` with
+  captures, heap-backed environment, per-call capture unpacking),
+  concurrency intrinsics (the MIR lowerer already emits them but the
+  emitter doesn't map them to runtime symbols), GC roots /
+  safepoints, composite list/map element types, and the `IndexProj`
+  / `DerefProj` place projections. Non-capturing closures + indirect
+  calls landed in Stage 3.4; capturing closures are the next wedge.
+  See the MIR emitter's `checkSupported` and `checkRValueSupported`
+  for the current whitelist.
 
 Each stage is an opportunity to tighten the MIR shape: Stage 3 is
 where we learn which invariants the backend actually needs, Stage 4 is
