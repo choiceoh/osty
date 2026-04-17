@@ -42,6 +42,7 @@ func TestPolicySnapshotParityWithOsty(t *testing.T) {
 		"diag_policy.osty",
 		"test_runner.osty",
 		"scaffold_policy.osty",
+		"pkg_policy.osty",
 	}
 
 	// The Go side adapts names to Go conventions; RunnerDiag

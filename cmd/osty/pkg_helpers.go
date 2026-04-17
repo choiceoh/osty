@@ -2,15 +2,16 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/lockfile"
 	"github.com/osty/osty/internal/manifest"
 	"github.com/osty/osty/internal/pkgmgr"
+	"github.com/osty/osty/internal/runner"
 )
 
 // loadManifestWithDiag is the shared manifest entry point used by
@@ -88,10 +89,16 @@ func resolveAndVendorEnvOpts(m *manifest.Manifest, root string, opts resolveOpts
 	if m == nil {
 		return nil, nil, fmt.Errorf("nil manifest")
 	}
-	if opts.Frozen {
-		opts.Locked = true
-		opts.Offline = true
-	}
+	// Flag expansion (--frozen implies --locked --offline) and the
+	// human-readable rejection messages live in
+	// toolchain/pkg_policy.osty so every resolver caller surfaces
+	// the same strings.
+	expanded := runner.ExpandFrozenFlags(runner.ResolveOpts{
+		Offline: opts.Offline,
+		Locked:  opts.Locked,
+		Frozen:  opts.Frozen,
+	})
+	opts = resolveOpts{Offline: expanded.Offline, Locked: expanded.Locked, Frozen: expanded.Frozen}
 	env, err := pkgmgr.DefaultEnv(root)
 	if err != nil {
 		return nil, nil, err
@@ -104,7 +111,7 @@ func resolveAndVendorEnvOpts(m *manifest.Manifest, root string, opts resolveOpts
 	// fresh checkout that forgot to commit one.
 	priorLock, _ := lockfile.Read(root)
 	if opts.Frozen && priorLock == nil {
-		return nil, env, fmt.Errorf("--frozen requires an existing %s; run `osty update` first", lockfile.LockFile)
+		return nil, env, errors.New(runner.FrozenMissingLockfileMessage(lockfile.LockFile))
 	}
 	if len(m.Dependencies) == 0 && len(m.DevDependencies) == 0 {
 		return &pkgmgr.Graph{Root: m}, env, nil
@@ -115,14 +122,13 @@ func resolveAndVendorEnvOpts(m *manifest.Manifest, root string, opts resolveOpts
 	}
 	newLock := pkgmgr.LockFromGraph(graph)
 	if opts.Locked {
-		if changes := pkgmgr.DiffLock(priorLock, newLock); len(changes) > 0 {
-			var b strings.Builder
-			fmt.Fprintf(&b, "--locked: %s would change:\n", lockfile.LockFile)
-			for _, c := range changes {
-				fmt.Fprintf(&b, "  %s\n", c.String())
-			}
-			fmt.Fprintf(&b, "rerun without --locked to update the lockfile.")
-			return graph, env, fmt.Errorf("%s", b.String())
+		changes := pkgmgr.DiffLock(priorLock, newLock)
+		changeStrs := make([]string, 0, len(changes))
+		for _, c := range changes {
+			changeStrs = append(changeStrs, c.String())
+		}
+		if msg := runner.LockedDiffMessage(lockfile.LockFile, changeStrs); msg != "" {
+			return graph, env, errors.New(msg)
 		}
 	}
 	if err := pkgmgr.Vendor(graph, env); err != nil {

@@ -1,0 +1,67 @@
+use std.strings as strings
+
+/// Pure policy for `osty`'s package-manager CLI flags (--offline /
+/// --locked / --frozen) and the human-readable error messages they
+/// produce. Host glue (`cmd/osty/pkg_helpers.go`,
+/// `internal/lockfile`, `internal/pkgmgr`) owns file I/O and the
+/// actual resolve/vendor machinery; this module decides how the
+/// three flags combine and what text the CLI surfaces on rejection.
+///
+/// Mirrored by `internal/runner/pkg_policy.go`.
+
+/// ResolveOpts captures the three package-manager toggles. Shared
+/// by every subcommand that touches the resolver (build, run,
+/// test, fetch, publish, add, update).
+pub struct ResolveOpts {
+    pub offline: Bool,
+    pub locked: Bool,
+    pub frozen: Bool,
+}
+
+/// expandFrozenFlags applies `--frozen`'s implications. Frozen is
+/// a strict superset of locked+offline: "use exactly the lockfile
+/// on disk, and don't reach out for anything". The CLI resolves
+/// each subcommand's raw flag state through this expansion before
+/// looking at the individual toggles, so downstream code only has
+/// to check offline/locked and the frozen semantics are already
+/// baked in.
+pub fn expandFrozenFlags(opts: ResolveOpts) -> ResolveOpts {
+    if opts.frozen {
+        return ResolveOpts { offline: true, locked: true, frozen: true }
+    }
+    opts
+}
+
+/// frozenMissingLockfileMessage builds the error string printed
+/// when `--frozen` was requested but no lockfile exists. `name` is
+/// the lockfile basename (e.g. "osty.lock") — passed in so the
+/// constant stays a single source of truth in Go (lockfile.LockFile).
+pub fn frozenMissingLockfileMessage(lockfileName: String) -> String {
+    "--frozen requires an existing " + lockfileName + "; run `osty update` first"
+}
+
+/// lockedDiffMessage assembles the `--locked: NAME would change:`
+/// report. Returns None when the change list is empty (the host
+/// proceeds as normal); returns Some(...) when the host should
+/// reject with the rendered message.
+///
+/// `changes` is each change's pre-stringified form (pkgmgr.Change.String()).
+pub fn lockedDiffMessage(lockfileName: String, changes: List<String>) -> String? {
+    if lockedChangesEmpty(changes) {
+        return None
+    }
+    let mut out = "--locked: " + lockfileName + " would change:\n"
+    for c in changes {
+        out = out + "  " + c + "\n"
+    }
+    out = out + "rerun without --locked to update the lockfile."
+    Some(out)
+}
+
+fn lockedChangesEmpty(changes: List<String>) -> Bool {
+    for c in changes {
+        let _ = c
+        return false
+    }
+    true
+}
