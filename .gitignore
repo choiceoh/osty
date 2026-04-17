@@ -10,3 +10,6 @@ node_modules/
 .DS_Store
 .idea/
 *.swp
+
+# graphify knowledge graph (local dev artifact, rebuild with /graphify)
+graphify-out/
