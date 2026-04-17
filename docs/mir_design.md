@@ -898,17 +898,52 @@ MIR tests isolated from front-end churn.
   explicitly with `mir-backend`, and the dispatcher falls back
   automatically on `ErrUnsupported`.
 
+- **Stage 3.9 (landed — concurrency intrinsic runtime mapping).**
+  All MIR concurrency intrinsics emitted by the MIR lowerer now
+  route to a stable-but-pending Osty runtime ABI in `internal/
+  llvmgen`:
+
+  - **Channels**: `chan_make` → `osty_rt_thread_chan_make(i64) → ptr`;
+    `chan_send` → `osty_rt_thread_chan_send_<suffix>(ptr, <elem>)`
+    (scalar) or `…_send_bytes_v1(ptr, ptr, i64)` (composite); `chan_recv`
+    → `…_chan_recv_<suffix>(ptr) → {i64, i64}` (the enum layout
+    matches the Option<T> MIR convention); `chan_close` → `…_close(ptr)`;
+    `chan_is_closed` → `…_is_closed(ptr) → i1`.
+  - **Structured tasks**: `task_group(body)` → `osty_rt_task_group(ptr)
+    → <ret>`; detached `spawn(body)` → `osty_rt_task_spawn(ptr) → ptr`;
+    scoped `g.spawn(body)` → `osty_rt_task_group_spawn(ptr, ptr) → ptr`;
+    `h.join()` → `osty_rt_task_handle_join(ptr)`; `g.cancel()` /
+    `g.isCancelled()` → `osty_rt_task_group_cancel` /
+    `…_is_cancelled`.
+  - **Select**: `thread.select(body)` + the arm-registration intrinsics
+    (`s.recv` / `s.send` / `s.timeout` / `s.default`) map to
+    `osty_rt_select` and `osty_rt_select_<arm>`.
+  - **Cancellation / timing**: `thread.isCancelled()` /
+    `checkCancelled()` / `yield()` / `sleep()` →
+    `osty_rt_cancel_is_cancelled` / `…_check_cancelled` /
+    `osty_rt_thread_yield` / `…_sleep`.
+  - **Helpers**: `parallel` / `race` / `collectAll` →
+    `osty_rt_parallel` / `osty_rt_task_race` / `osty_rt_task_collect_all`.
+  - Concurrency runtime-owned types (`Channel<T>`, `Handle<T>`,
+    `Group` / `TaskGroup`, `Select`, `Duration`) all lower to `ptr`
+    at the LLVM boundary; `typeSupported` and `llvmType` accept them
+    without requiring a declared layout.
+  - The runtime itself isn't in-tree yet — generated LLVM text is
+    correct and the declare lines are emitted, but the symbols
+    won't link until the runtime ships. This matches how
+    `osty.gc.alloc_v1` and the list / map / set helpers already
+    operate. What changed: concurrency code now reaches the MIR
+    emitter instead of falling back to the legacy HIR→AST bridge.
+
 - **Stage 5 (deferred — still needs parity).** Remove
   `legacyFileFromModule` and the AST-driven emitter. Outstanding
-  parity gaps after Stage 3.8: concurrency intrinsics (the MIR
-  lowerer already emits them but the emitter doesn't map them to
-  runtime symbols), GC roots / safepoints, top-level globals,
-  composite **map** element types, heap-escaping closure envs, and
-  `DerefProj` on anything other than a closure env. Capturing
-  closures + indirect calls crossed off in Stage 3.8; concurrency
-  intrinsic runtime mapping is the next wedge. See the MIR
-  emitter's `checkSupported` and `checkRValueSupported` for the
-  current whitelist.
+  parity gaps after Stage 3.9: GC roots / safepoints, top-level
+  globals, composite **map** element types, heap-escaping closure
+  envs, and `DerefProj` on anything other than a closure env.
+  Concurrency intrinsics crossed off in Stage 3.9; top-level
+  globals are the next wedge. See the MIR emitter's
+  `checkSupported` and `checkRValueSupported` for the current
+  whitelist.
 
 Each stage is an opportunity to tighten the MIR shape: Stage 3 is
 where we learn which invariants the backend actually needs, Stage 4 is

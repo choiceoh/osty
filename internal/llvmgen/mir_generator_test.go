@@ -303,44 +303,28 @@ func TestGenerateFromMIRPrintln(t *testing.T) {
 	}
 }
 
-// TestGenerateFromMIRUnsupportedFallsBack — a module using a
-// concurrency primitive (`taskGroup`, still outside the MIR MVP)
-// should make the MIR emitter return an ErrUnsupported error so the
-// backend dispatcher falls back to the legacy path. Structs /
-// tuples / enums / optional / result / list / map / set / closures
-// (capturing + non-capturing) / indirect calls are all part of MVP
-// coverage as of Stage 3.8; concurrency intrinsics (spawn, chan,
-// taskGroup, select) still need runtime-symbol mapping.
+// TestGenerateFromMIRUnsupportedFallsBack — a module with a top-
+// level global (still outside the MIR MVP — emitting globals needs
+// a ctor-slot or main-prologue init path we haven't designed yet)
+// must trip `ErrUnsupported` so the backend dispatcher falls back
+// to the legacy path.
 func TestGenerateFromMIRUnsupportedFallsBack(t *testing.T) {
-	// fn run(body: fn(Group) -> Int) -> Int { taskGroup(body) }
-	groupT := &ir.NamedType{Name: "Group"}
-	fnType := &ir.FnType{Params: []ir.Type{groupT}, Return: ir.TInt}
+	// pub let version = 42
 	hir := &ir.Module{
 		Package: "main",
 		Decls: []ir.Decl{
-			&ir.FnDecl{
-				Name:   "run",
-				Return: ir.TInt,
-				Params: []*ir.Param{{Name: "body", Type: fnType}},
-				Body: &ir.Block{
-					Result: &ir.CallExpr{
-						Callee: &ir.Ident{
-							Name: "taskGroup", Kind: ir.IdentFn,
-							T: &ir.FnType{Params: []ir.Type{fnType}, Return: ir.TInt},
-						},
-						Args: []ir.Arg{
-							{Value: &ir.Ident{Name: "body", Kind: ir.IdentParam, T: fnType}},
-						},
-						T: ir.TInt,
-					},
-				},
+			&ir.LetDecl{
+				Name:     "version",
+				Type:     ir.TInt,
+				Value:    &ir.IntLit{Text: "42", T: ir.TInt},
+				Exported: true,
 			},
 		},
 	}
 	m := buildMIRModuleFromHIR(t, hir)
-	_, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/taskgroup.osty"})
+	_, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/global.osty"})
 	if err == nil {
-		t.Fatalf("expected ErrUnsupported for taskGroup; got nil")
+		t.Fatalf("expected ErrUnsupported for global; got nil")
 	}
 	if !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("error does not wrap ErrUnsupported: %v", err)
@@ -432,28 +416,19 @@ func TestMIRDualEmitFromSource(t *testing.T) {
 // independent of parser / checker restrictions on closure-trailing-
 // expr source shape.
 func TestMIRDualEmitGracefulFallback(t *testing.T) {
-	// Use a taskGroup intrinsic — still outside MVP after Stage 3.8
-	// (concurrency intrinsic runtime mapping is a separate wedge).
-	groupT := &ir.NamedType{Name: "Group"}
-	fnType := &ir.FnType{Params: []ir.Type{groupT}, Return: ir.TInt}
-	fn := &ir.FnDecl{
-		Name:   "run",
-		Return: ir.TInt,
-		Params: []*ir.Param{{Name: "body", Type: fnType}},
-		Body: &ir.Block{
-			Result: &ir.CallExpr{
-				Callee: &ir.Ident{
-					Name: "taskGroup", Kind: ir.IdentFn,
-					T: &ir.FnType{Params: []ir.Type{fnType}, Return: ir.TInt},
-				},
-				Args: []ir.Arg{
-					{Value: &ir.Ident{Name: "body", Kind: ir.IdentParam, T: fnType}},
-				},
-				T: ir.TInt,
+	// Use a top-level global — still outside MVP (globals need a
+	// ctor-slot or main-prologue init path we haven't designed yet).
+	hir := &ir.Module{
+		Package: "main",
+		Decls: []ir.Decl{
+			&ir.LetDecl{
+				Name:     "version",
+				Type:     ir.TInt,
+				Value:    &ir.IntLit{Text: "1", T: ir.TInt},
+				Exported: true,
 			},
 		},
 	}
-	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
 	monoMod, monoErrs := ir.Monomorphize(hir)
 	if len(monoErrs) != 0 {
 		t.Fatalf("monomorphize: %v", monoErrs)
@@ -462,7 +437,7 @@ func TestMIRDualEmitGracefulFallback(t *testing.T) {
 
 	_, err := GenerateFromMIR(mirMod, Options{PackageName: "main", SourcePath: "/tmp/fallback.osty"})
 	if err == nil {
-		t.Fatalf("expected MIR emitter to refuse taskGroup program")
+		t.Fatalf("expected MIR emitter to refuse global-bearing program")
 	}
 	if !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("expected ErrUnsupported, got %T: %v", err, err)
@@ -1422,5 +1397,163 @@ func TestGenerateFromMIRTopLevelFnAsValue(t *testing.T) {
 	}
 	if !strings.Contains(got, "call i64 @double(i64 %arg0)") {
 		t.Fatalf("expected thunk to delegate to @double, got:\n%s", got)
+	}
+}
+
+// ==== Stage 3.9: concurrency intrinsic runtime mapping ====
+
+func TestGenerateFromMIRChanSendRecv(t *testing.T) {
+	// fn push(ch: Channel<Int>, v: Int) { ch <- v }
+	chanInt := &ir.NamedType{Name: "Channel", Args: []ir.Type{ir.TInt}}
+	fn := &ir.FnDecl{
+		Name:   "push",
+		Return: ir.TUnit,
+		Params: []*ir.Param{
+			{Name: "ch", Type: chanInt},
+			{Name: "v", Type: ir.TInt},
+		},
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.ChanSendStmt{
+					Channel: &ir.Ident{Name: "ch", Kind: ir.IdentParam, T: chanInt},
+					Value:   &ir.Ident{Name: "v", Kind: ir.IdentParam, T: ir.TInt},
+				},
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/chan.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare void @osty_rt_thread_chan_send_i64(ptr, i64)",
+		"call void @osty_rt_thread_chan_send_i64(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateFromMIRChanMakeAndClose(t *testing.T) {
+	// use std.thread as thread
+	// fn setup() { let ch = thread.chan::<Int>(4); ch.close() }
+	useT := &ir.UseDecl{
+		Path: []string{"std", "thread"}, RawPath: "std.thread", Alias: "thread",
+	}
+	chanInt := &ir.NamedType{Name: "Channel", Args: []ir.Type{ir.TInt}}
+	fn := &ir.FnDecl{
+		Name:   "setup",
+		Return: ir.TUnit,
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.LetStmt{
+					Name: "ch",
+					Type: chanInt,
+					Value: &ir.MethodCall{
+						Receiver: &ir.Ident{Name: "thread", T: &ir.NamedType{Name: "ThreadModule"}},
+						Name:     "chan",
+						TypeArgs: []ir.Type{ir.TInt},
+						Args:     []ir.Arg{{Value: &ir.IntLit{Text: "4", T: ir.TInt}}},
+						T:        chanInt,
+					},
+				},
+				&ir.ExprStmt{X: &ir.MethodCall{
+					Receiver: &ir.Ident{Name: "ch", Kind: ir.IdentLocal, T: chanInt},
+					Name:     "close",
+					T:        ir.TUnit,
+				}},
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{useT, fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/make.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare ptr @osty_rt_thread_chan_make(i64)",
+		"call ptr @osty_rt_thread_chan_make(i64 4)",
+		"declare void @osty_rt_thread_chan_close(ptr)",
+		"call void @osty_rt_thread_chan_close(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateFromMIRTaskGroupAndSpawn(t *testing.T) {
+	// fn launch(body: fn(Group) -> Int) -> Int { taskGroup(body) }
+	groupT := &ir.NamedType{Name: "Group"}
+	fnType := &ir.FnType{Params: []ir.Type{groupT}, Return: ir.TInt}
+	fn := &ir.FnDecl{
+		Name:   "launch",
+		Return: ir.TInt,
+		Params: []*ir.Param{{Name: "body", Type: fnType}},
+		Body: &ir.Block{
+			Result: &ir.CallExpr{
+				Callee: &ir.Ident{
+					Name: "taskGroup", Kind: ir.IdentFn,
+					T: &ir.FnType{Params: []ir.Type{fnType}, Return: ir.TInt},
+				},
+				Args: []ir.Arg{
+					{Value: &ir.Ident{Name: "body", Kind: ir.IdentParam, T: fnType}},
+				},
+				T: ir.TInt,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/task.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare i64 @osty_rt_task_group(ptr)",
+		"call i64 @osty_rt_task_group(ptr ",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateFromMIRCancellationHelpers(t *testing.T) {
+	useT := &ir.UseDecl{
+		Path: []string{"std", "thread"}, RawPath: "std.thread", Alias: "thread",
+	}
+	fn := &ir.FnDecl{
+		Name:   "check",
+		Return: ir.TBool,
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "thread", T: &ir.NamedType{Name: "ThreadModule"}},
+				Name:     "isCancelled",
+				T:        ir.TBool,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{useT, fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/cancel.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare i1 @osty_rt_cancel_is_cancelled()",
+		"call i1 @osty_rt_cancel_is_cancelled()",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
 	}
 }
