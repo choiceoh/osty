@@ -1,11 +1,8 @@
 # Toolchain × LLVM compilability — status report
 
-Snapshot date: 2026-04-18, against branch tip `5ace7c3` (Stage 3.11 landed).
-
-The question this report answers: **can we run `toolchain/*.osty` through the
-LLVM backend today, and if not, what specifically blocks it?** The runbook is
-short because the answer is "no" — but the blockers are concrete and fall
-into three separate layers, each independently fixable.
+Snapshot date: 2026-04-18, against branch tip `5ace7c3`. Stage numbers
+shift week-over-week; for the live MIR-direct coverage see
+[docs/mir_design.md](./mir_design.md) Stage 3.x + Stage 5 sections.
 
 ## TL;DR
 
@@ -54,7 +51,7 @@ panic: runtime error: invalid memory address or nil pointer dereference
     internal/check/host_boundary.go:433
   check.overlaySelfhostResult
     internal/check/host_boundary.go:360
-  check.applySelfhostFileResult
+  check.applyNativeFileResult
     internal/check/host_boundary.go:248
   check.File
     internal/check/check.go:108
@@ -117,9 +114,9 @@ state instead of staying in the number state.
 
 ### E0500 — `std.strings` not in scope
 
-39 call sites in `toolchain/ast_lower.osty` reference `strings.HasPrefix`,
-`strings.TrimPrefix`, `strings.TrimSuffix`, `strings.Split`, `strings.Count`
-(and similar). The checker's hint (`did you mean stringAt?`) shows that
+29 call sites in `toolchain/ast_lower.osty` (39 diagnostics — some lines
+hold two calls) reference `strings.HasPrefix`, `strings.TrimPrefix`,
+`strings.TrimSuffix`, `strings.Split`, `strings.Count` (and similar). The checker's hint (`did you mean stringAt?`) shows that
 something named `stringAt` is reachable, but no module bound to `strings`
 is registered in the prelude / stdlib for this package.
 
@@ -163,34 +160,12 @@ any individual-site chasing is worthwhile.
 
 ## Layer 3 — MIR-direct backend coverage (for context)
 
-When front-end errors are out of the way, the backend is close to ready.
-`docs/mir_design.md` Stage 3.1–3.11 already landed coverage for:
-
-- primitives, struct aggregates, tuples, named enums
-- `Option` / `Result` / `Maybe` + payload match
-- `List<T>` / `Map<K,V>` / `Set<T>` — scalar elements via typed runtime
-  symbols, composite list elements via `bytes-v1` ABI (`IndexProj` included)
-- non-capturing **and** capturing closures via uniform env ABI + indirect
-  call
-- top-level globals via module-ctor init (`Options.EmitGC`-independent)
-- concurrency intrinsics mapped to declared-but-pending runtime symbols
-- GC roots + entry/back-edge safepoints for managed locals when
-  `Options.EmitGC` is set (String / Bytes / Channel / Handle / Group /
-  TaskGroup / Select / Duration / ClosureEnv included)
-
-Still outstanding (Stage 5 parity gate):
-
-- composite **map** element types (parallels the Stage 3.6 `bytes-v1` list path)
-- heap-escaping closure envs (Stage 3.8 ships stack-only)
-- `DerefProj` on non-env places
-- concurrency *runtime symbols* themselves (emitter emits declare lines;
-  the shared object is not shipped yet, so links will fail at final link
-  time even if IR generates)
-
-None of these are tripped during `osty check` or `osty gen` IR emission —
-they only matter at link time or for features `toolchain/*.osty` doesn't
-heavily use. The work budget to reach "`toolchain/*.osty` links into a
-runnable binary" is dominated by Layer 1 + Layer 2 above, not Layer 3.
+Live coverage and remaining gaps are tracked in
+[docs/mir_design.md](./mir_design.md) (Stage 3.x for landed shapes,
+Stage 5 for deferred parity items). The outstanding items at the time
+of writing are not tripped during `osty check` or `osty gen` IR
+emission, so the work budget to reach "`toolchain/*.osty` links into a
+runnable binary" is dominated by Layer 1 + Layer 2, not Layer 3.
 
 ## Recommended fix order (smallest → largest unlock)
 
@@ -204,7 +179,7 @@ runnable binary" is dominated by Layer 1 + Layer 2 above, not Layer 3.
    pattern is well-defined, fixture is small. Unblocks `lsp.osty`,
    `ci.osty`, `manifest_validation.osty`.
 
-3. **Decide `std.strings` policy.** Either port it (39 call sites in
+3. **Decide `std.strings` policy.** Either port it (29 call sites in
    one file say the demand is real) or rewrite `ast_lower.osty` against
    existing primitives. Unblocks `ast_lower.osty`.
 
@@ -216,24 +191,6 @@ runnable binary" is dominated by Layer 1 + Layer 2 above, not Layer 3.
    focused second pass.
 
 6. **Try `osty gen --backend=llvm toolchain/<file>.osty`** per-file.
-   Stage 3.1–3.11 should cover the language shapes toolchain uses;
-   anything that trips `mir-mvp` unsupported is a new, narrower wedge for
-   the MIR roadmap.
-
-Each step is independently reviewable. Step 1 alone probably collapses
-the pre-existing test-failure list and opens the CLI path for toolchain
-experiments.
-
-## Reproducing this report
-
-```bash
-go build -o /tmp/osty ./cmd/osty
-/tmp/osty check --airepair=false toolchain > /tmp/tc.log 2>&1
-
-grep -oE "E[0-9]{4}"          /tmp/tc.log | sort | uniq -c | sort -rn
-grep -oE "toolchain/[a-z_]+\.osty" /tmp/tc.log | sort | uniq -c | sort -rn
-
-# CLI panic repro
-printf 'fn main() { println(42) }\n' > /tmp/hello.osty
-/tmp/osty gen --backend=llvm /tmp/hello.osty   # panics today
-```
+   The MIR-direct emitter covers most of the language shapes toolchain
+   uses (see [mir_design.md](./mir_design.md)); anything that trips
+   `mir-mvp` unsupported is a new, narrower wedge for the MIR roadmap.
