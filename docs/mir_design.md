@@ -816,6 +816,26 @@ MIR tests isolated from front-end churn.
     minting a stray `FnRef` to a symbol that doesn't exist. That
     unblocks first-class fn values passed as parameters.
 
+- **Stage 3.5 (landed — `IndexProj` on `List<T>`).**
+
+  - `checkProjectionsSupported` accepts `IndexProj` when the
+    projection base is a builtin `List<T>` (the immediate preceding
+    type in the place chain, or the local's type for a leading
+    index projection).
+  - In `emitLoad`, when the walker hits an `IndexProj` on a ptr-
+    typed list base, it emits
+    `call <elem> @osty_rt_list_get_<suffix>(ptr %list, i64 %idx)`
+    instead of the usual `extractvalue`. The typed suffix (`_i64`,
+    `_i1`, `_f64`, `_ptr`) matches the Stage 3.3 runtime ABI.
+  - `projectionIndex` still returns `false` for `IndexProj` (there
+    is no static field index); the walker handles it via the
+    runtime-call branch. `projectionType` returns `IndexProj.ElemType`
+    so downstream projections (e.g. `xs[i].name`) compose without
+    extra plumbing.
+  - Composite list element types (structs, tuples, nested lists)
+    still fall back because the typed runtime ABI requires a
+    scalar-shaped LLVM element.
+
 - **Stage 4 (partially landed — MIR-first IR emission).** The LLVM
   backend now prefers the MIR-direct emitter by default for raw
   `llvm-ir` output. The legacy HIR→AST bridge remains callable under
@@ -829,11 +849,11 @@ MIR tests isolated from front-end churn.
   captures, heap-backed environment, per-call capture unpacking),
   concurrency intrinsics (the MIR lowerer already emits them but the
   emitter doesn't map them to runtime symbols), GC roots /
-  safepoints, composite list/map element types, and the `IndexProj`
-  / `DerefProj` place projections. Non-capturing closures + indirect
-  calls landed in Stage 3.4; capturing closures are the next wedge.
-  See the MIR emitter's `checkSupported` and `checkRValueSupported`
-  for the current whitelist.
+  safepoints, composite list/map element types, and `DerefProj`
+  place projections. Non-capturing closures + indirect calls landed
+  in Stage 3.4, IndexProj on lists in Stage 3.5; capturing closures
+  are the next wedge. See the MIR emitter's `checkSupported` and
+  `checkRValueSupported` for the current whitelist.
 
 Each stage is an opportunity to tighten the MIR shape: Stage 3 is
 where we learn which invariants the backend actually needs, Stage 4 is

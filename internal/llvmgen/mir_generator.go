@@ -266,19 +266,44 @@ func (g *mirGen) checkInstrSupported(fn *mir.Function, inst mir.Instr) error {
 }
 
 // checkProjectionsSupported walks a Place's projection chain and
-// refuses anything outside the emitter's current coverage. After
-// Stage 3.2 the set is FieldProj / TupleProj / VariantProj. IndexProj
-// and DerefProj still belong to later stages.
+// refuses anything outside the emitter's current coverage. Stage 3.5
+// adds IndexProj for list-typed bases (e.g. `xs[i]`). DerefProj still
+// belongs to later stages.
 func (g *mirGen) checkProjectionsSupported(fn *mir.Function, p mir.Place, ctx string) error {
-	for _, proj := range p.Projections {
+	for i, proj := range p.Projections {
 		switch proj.(type) {
 		case *mir.FieldProj, *mir.TupleProj, *mir.VariantProj:
 			// allowed
+		case *mir.IndexProj:
+			// Accept IndexProj only when the projection base is a
+			// List. Walking the projection chain from scratch would
+			// be overkill for the common case (`local[i]`), so we
+			// check the immediate preceding type: if it's the first
+			// projection, the base type is the local's type; else
+			// it's the previous projection's type.
+			var baseT mir.Type
+			if i == 0 {
+				baseT = g.localType(p.Local)
+			} else {
+				baseT = projectionType(p.Projections[i-1])
+			}
+			if !isListPtrType(baseT) {
+				return unsupported("mir-mvp", fmt.Sprintf("%s IndexProj on non-List base %s in %s", ctx, mirTypeString(baseT), fn.Name))
+			}
 		default:
 			return unsupported("mir-mvp", fmt.Sprintf("%s projection %T not yet supported in %s", ctx, proj, fn.Name))
 		}
 	}
 	return nil
+}
+
+// isListPtrType reports whether t is a `List<T>` builtin (which
+// lowers to a ptr at the LLVM boundary).
+func isListPtrType(t mir.Type) bool {
+	if nt, ok := t.(*ir.NamedType); ok {
+		return nt.Name == "List" && nt.Builtin
+	}
+	return false
 }
 
 func (g *mirGen) checkRValueSupported(fn *mir.Function, rv mir.RValue) error {
@@ -2114,6 +2139,48 @@ func (g *mirGen) emitLoad(place mir.Place, t mir.Type) (string, error) {
 	curLLVM := baseLLVM
 	curReg := aggReg
 	for i, proj := range place.Projections {
+		// IndexProj on a List base routes through the runtime — the
+		// LLVM view of a List is opaque `ptr`, so we can't use
+		// `extractvalue`. Emit `osty_rt_list_get_<suffix>(list, idx)`
+		// for typed elements and hand the result back as the new
+		// running value (the projection chain can keep going from
+		// there; e.g. `xs[i].name`).
+		if ip, ok := proj.(*mir.IndexProj); ok {
+			elemT := projectionType(proj)
+			if elemT == nil {
+				if i == len(place.Projections)-1 {
+					elemT = t
+				} else {
+					return "", unsupported("mir-mvp", "projection missing Type")
+				}
+			}
+			elemLLVM := g.llvmType(elemT)
+			if !listUsesTypedRuntime(elemLLVM) {
+				return "", unsupported("mir-mvp", "list[i] on composite element type")
+			}
+			sym := "osty_rt_list_get_" + listRuntimeSymbolSuffix(elemLLVM)
+			g.declareRuntime(sym, "declare "+elemLLVM+" @"+sym+"(ptr, i64)")
+			idxOp := ip.Index
+			idxVal, err := g.evalOperand(idxOp, mir.TInt)
+			if err != nil {
+				return "", err
+			}
+			next := g.fresh()
+			g.fnBuf.WriteString("  ")
+			g.fnBuf.WriteString(next)
+			g.fnBuf.WriteString(" = call ")
+			g.fnBuf.WriteString(elemLLVM)
+			g.fnBuf.WriteString(" @")
+			g.fnBuf.WriteString(sym)
+			g.fnBuf.WriteString("(ptr ")
+			g.fnBuf.WriteString(curReg)
+			g.fnBuf.WriteString(", i64 ")
+			g.fnBuf.WriteString(idxVal)
+			g.fnBuf.WriteString(")\n")
+			curReg = next
+			curLLVM = elemLLVM
+			continue
+		}
 		idx, ok := projectionIndex(proj)
 		if !ok {
 			return "", unsupported("mir-mvp", fmt.Sprintf("projection %T on read", proj))
@@ -2166,7 +2233,9 @@ func (g *mirGen) emitLoad(place mir.Place, t mir.Type) (string, error) {
 
 // projectionIndex returns the field index for a FieldProj / TupleProj.
 // VariantProj returns field 1 (the payload slot) because enum layouts
-// uniformly use `{ i64 disc, i64 payload }`.
+// uniformly use `{ i64 disc, i64 payload }`. IndexProj has no static
+// index and returns false — the walker handles it via a runtime call
+// rather than an `extractvalue`.
 func projectionIndex(p mir.Projection) (int, bool) {
 	switch x := p.(type) {
 	case *mir.FieldProj:
@@ -2180,9 +2249,9 @@ func projectionIndex(p mir.Projection) (int, bool) {
 }
 
 // projectionType returns the result type of a FieldProj / TupleProj /
-// VariantProj. For VariantProj the raw type in the place chain is
-// the payload's *declared* type; the enum slot itself is i64 and we
-// narrow at the read site via fromI64Slot.
+// VariantProj / IndexProj. For VariantProj the raw type in the place
+// chain is the payload's *declared* type; the enum slot itself is i64
+// and we narrow at the read site via fromI64Slot.
 func projectionType(p mir.Projection) mir.Type {
 	switch x := p.(type) {
 	case *mir.FieldProj:
@@ -2191,6 +2260,8 @@ func projectionType(p mir.Projection) mir.Type {
 		return x.Type
 	case *mir.VariantProj:
 		return x.Type
+	case *mir.IndexProj:
+		return x.ElemType
 	}
 	return nil
 }
