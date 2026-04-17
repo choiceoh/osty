@@ -744,6 +744,56 @@ MIR tests isolated from front-end churn.
     `DerefProj` remain in the unsupported set awaiting later
     expansion stages.
 
+- **Stage 3.2 (landed).** Enum / Option / Maybe / Result + variant
+  payload projections.
+
+  - All enum-shaped values share a fixed 2-word layout
+    `{ i64 disc, i64 payload }` matching the legacy emitter's
+    `%Maybe = type { i64, i64 }` convention. Scalar payloads up to
+    64 bits ride the payload slot via `zext` / `sext` / `bitcast` /
+    `ptrtoint` at construction and narrow back with
+    `trunc` / `bitcast` / `inttoptr` at read.
+  - User enums emit as `%EnumName = type { i64, i64 }` (registered
+    from `LayoutTable.Enums`). Prelude `Option<T>` / `Maybe<T>` /
+    `Result<T, E>` and the surface `T?` optional mint type-parametric
+    names like `%Option.i64`, `%Result.i64.string` so the IR still
+    encodes the element type in its name.
+  - `AggregateRV{EnumVariant}` compiles to two `insertvalue`
+    instructions — discriminant first, then payload. Bare variants
+    (no payload) fill the slot with zero. Single-scalar payloads
+    widen through the `toI64Slot` helper.
+  - `DiscriminantRV` loads the scrutinee aggregate and
+    `extractvalue` at index 0.
+  - `VariantProj` extracts the i64 payload slot and narrows it back
+    to the declared payload type through `fromI64Slot`, so that MIR
+    patterns like `if let Some(x) = opt` produce correct reads.
+  - `NullaryRV{NullaryNone}` emits a `{ 0, 0 }` aggregate of the
+    target enum type, and `CastRV` handles int resize, int↔float,
+    bitcast, optional-wrap/unwrap passthrough.
+
+- **Stage 3.3 (landed).** `List<T>` / `Map<K, V>` / `Set<T>` via
+  the runtime ABI.
+
+  - Builtin collection types resolve to `ptr` at the LLVM boundary.
+  - `AggregateRV{List}` compiles to `osty_rt_list_new()` + a chain
+    of `osty_rt_list_push_<suffix>` calls, using
+    `listRuntimeSymbolSuffix` to pick `_i64` / `_i1` / `_f64` /
+    `_ptr` / …
+  - Stdlib method intrinsics route through the runtime:
+    `list.len` / `is_empty` / `push` / `get` / `sorted` / `to_set`
+    → `osty_rt_list_*`; `map.get` / `set` / `contains` / `len` /
+    `keys` / `remove` → `osty_rt_map_*`; `set.insert` / `contains`
+    / `len` / `to_list` → `osty_rt_set_*`. Each symbol is declared
+    once (and only once) in the module's `declare` block via
+    `declareRuntime`.
+  - `map.get` lowers to `osty_rt_map_get_or_abort_<keysuffix>` to
+    match the legacy emitter's semantics; map values are widened
+    into the ptr-sized slot through `toI64Slot` + `inttoptr` when
+    the map value type is narrower than ptr.
+  - Composite list element types (structs, tuples, nested lists)
+    still fall back to legacy — the bytes runtime path needs a
+    struct-size computation that the MVP doesn't ship yet.
+
 - **Stage 4 (partially landed — MIR-first IR emission).** The LLVM
   backend now prefers the MIR-direct emitter by default for raw
   `llvm-ir` output. The legacy HIR→AST bridge remains callable under
@@ -751,9 +801,16 @@ MIR tests isolated from front-end churn.
   explicitly with `mir-backend`, and the dispatcher falls back
   automatically on `ErrUnsupported`.
 
-- **Stage 5.** Remove `legacyFileFromModule` and the AST-driven
-  emitter. `internal/llvmgen` now speaks only MIR. Future backends
-  (e.g. a bytecode VM, WASM) start from MIR with no AST knowledge.
+- **Stage 5 (deferred — still needs parity).** Remove
+  `legacyFileFromModule` and the AST-driven emitter. Blocked on the
+  MIR emitter covering closure captures (`AggClosure`), indirect
+  calls, concurrency intrinsics (the MIR lowerer already emits
+  them but the emitter doesn't map them to runtime symbols), GC
+  roots / safepoints, composite list/map element types, and the
+  `IndexProj` / `DerefProj` place projections. The cheapest next
+  wedge is closure captures — that unlocks large swathes of the
+  stdlib. See the MIR emitter's `checkSupported` and
+  `checkRValueSupported` for the current whitelist.
 
 Each stage is an opportunity to tighten the MIR shape: Stage 3 is
 where we learn which invariants the backend actually needs, Stage 4 is
