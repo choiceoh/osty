@@ -994,14 +994,45 @@ MIR tests isolated from front-end churn.
   That's the MVP shape — a follow-up can pack per-safepoint precise
   roots if the runtime needs them.
 
+- **Stage 3.12 (landed — composite map value types + ABI fix).**
+  `Map<K, V>` intrinsics (`.set` / `.get`) and `IndexProj` on a map
+  base now use the runtime's `(ptr map, K key, ptr value_slot)`
+  contract uniformly:
+
+  - **`map.set(k, v)`** spills `v` into a stack slot
+    (`alloca <VType>` + `store`) and passes the slot pointer as the
+    third arg of `osty_rt_map_insert_<keySuffix>`. Works for
+    primitive, ptr, and composite `V` — the runtime memcpy's
+    `value_size` bytes from the slot into its internal storage.
+  - **`m.get(k)` / `m[k]`** allocates an out-slot sized to
+    `<VType>`, calls
+    `void osty_rt_map_get_or_abort_<keySuffix>(ptr, K, ptr out)`,
+    then loads the result back. The old MIR-emitter signature was
+    `ptr(ptr, K)` — mismatched with the runtime, which returns
+    void and writes into `*out_value`. The rewrite matches the
+    runtime contract exactly and enables composite `V` as a
+    side-effect.
+  - **`IndexProj` on a map base** is now accepted in
+    `checkProjectionsSupported`; the read-projection emit loop
+    dispatches between List and Map via `isListPtrType` /
+    `isMapPtrType` on the running MIR type.
+  - The emit loop now tracks `curT` (MIR type of the running
+    value) alongside `curLLVM` (LLVM type name) so each
+    projection step knows how to interpret its base.
+
+  The old `inttoptr` widening shim in `map.set` is gone — it
+  happened to produce syntactically valid IR for primitive `V` but
+  passed the value bit-pattern as a pointer, which the runtime
+  would have dereferenced into garbage if linked end-to-end.
+
 - **Stage 5 (deferred — still needs parity).** Remove
   `legacyFileFromModule` and the AST-driven emitter. Outstanding
-  parity gaps after Stage 3.11: composite **map** element types,
-  heap-escaping closure envs, and `DerefProj` on anything other
-  than a closure env. Top-level globals crossed off in Stage 3.10;
-  GC roots / safepoints crossed off in Stage 3.11. See the MIR
-  emitter's `checkSupported` and `checkRValueSupported` for the
-  current whitelist.
+  parity gaps after Stage 3.12: heap-escaping closure envs and
+  `DerefProj` on anything other than a closure env. Top-level
+  globals crossed off in Stage 3.10; GC roots / safepoints
+  crossed off in Stage 3.11; composite map values crossed off in
+  Stage 3.12. See the MIR emitter's `checkSupported` and
+  `checkRValueSupported` for the current whitelist.
 
 Each stage is an opportunity to tighten the MIR shape: Stage 3 is
 where we learn which invariants the backend actually needs, Stage 4 is
