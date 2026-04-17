@@ -429,22 +429,33 @@ func TestMIRDualEmitFromSource(t *testing.T) {
 }
 
 // TestMIRDualEmitGracefulFallback proves that when the MIR emitter
-// refuses a program (IndexProj on a list is still outside the MVP
-// projection whitelist), the backend dispatcher catches
-// `ErrUnsupported` and retries on the HIR path. We hand-build the
-// HIR here so the test is independent of parser / checker
-// restrictions on closure-trailing-expr source shape.
+// refuses a program (a closure with captures is still outside the
+// MVP), the backend dispatcher catches `ErrUnsupported` and retries
+// on the HIR path. We hand-build the HIR here so the test is
+// independent of parser / checker restrictions on closure-trailing-
+// expr source shape.
 func TestMIRDualEmitGracefulFallback(t *testing.T) {
-	listInt := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TInt}, Builtin: true}
+	fnType := &ir.FnType{Params: []ir.Type{ir.TInt}, Return: ir.TInt}
 	fn := &ir.FnDecl{
-		Name:   "first",
-		Return: ir.TInt,
-		Params: []*ir.Param{{Name: "xs", Type: listInt}},
+		Name:   "make",
+		Return: fnType,
 		Body: &ir.Block{
-			Result: &ir.IndexExpr{
-				X:     &ir.Ident{Name: "xs", Kind: ir.IdentParam, T: listInt},
-				Index: &ir.IntLit{Text: "0", T: ir.TInt},
-				T:     ir.TInt,
+			Stmts: []ir.Stmt{
+				&ir.LetStmt{Name: "n", Type: ir.TInt, Value: &ir.IntLit{Text: "1", T: ir.TInt}},
+			},
+			Result: &ir.Closure{
+				Params: []*ir.Param{{Name: "x", Type: ir.TInt}},
+				Return: ir.TInt,
+				Body: &ir.Block{Result: &ir.BinaryExpr{
+					Op:    ir.BinAdd,
+					Left:  &ir.Ident{Name: "x", Kind: ir.IdentParam, T: ir.TInt},
+					Right: &ir.Ident{Name: "n", Kind: ir.IdentLocal, T: ir.TInt},
+					T:     ir.TInt,
+				}},
+				Captures: []*ir.Capture{
+					{Name: "n", Kind: ir.CaptureLocal, T: ir.TInt},
+				},
+				T: fnType,
 			},
 		},
 	}
@@ -457,7 +468,7 @@ func TestMIRDualEmitGracefulFallback(t *testing.T) {
 
 	_, err := GenerateFromMIR(mirMod, Options{PackageName: "main", SourcePath: "/tmp/fallback.osty"})
 	if err == nil {
-		t.Fatalf("expected MIR emitter to refuse index-projection program")
+		t.Fatalf("expected MIR emitter to refuse capturing-closure program")
 	}
 	if !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("expected ErrUnsupported, got %T: %v", err, err)
@@ -1056,6 +1067,74 @@ func TestGenerateFromMIRIndirectCall(t *testing.T) {
 	for _, want := range []string{
 		"define i64 @apply(ptr %arg0, i64 %arg1)",
 		"call i64 (i64)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+// ==== Stage 3.5: IndexProj on List ====
+
+func TestGenerateFromMIRListIndexRead(t *testing.T) {
+	// fn first(xs: List<Int>) -> Int { xs[0] }
+	listInt := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TInt}, Builtin: true}
+	fn := &ir.FnDecl{
+		Name:   "first",
+		Return: ir.TInt,
+		Params: []*ir.Param{{Name: "xs", Type: listInt}},
+		Body: &ir.Block{
+			Result: &ir.IndexExpr{
+				X:     &ir.Ident{Name: "xs", Kind: ir.IdentParam, T: listInt},
+				Index: &ir.IntLit{Text: "0", T: ir.TInt},
+				T:     ir.TInt,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/idx.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare i64 @osty_rt_list_get_i64(ptr, i64)",
+		"call i64 @osty_rt_list_get_i64(ptr ",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateFromMIRListIndexReadPtrElem(t *testing.T) {
+	// fn head(xs: List<String>) -> String { xs[0] }
+	listStr := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TString}, Builtin: true}
+	fn := &ir.FnDecl{
+		Name:   "head",
+		Return: ir.TString,
+		Params: []*ir.Param{{Name: "xs", Type: listStr}},
+		Body: &ir.Block{
+			Result: &ir.IndexExpr{
+				X:     &ir.Ident{Name: "xs", Kind: ir.IdentParam, T: listStr},
+				Index: &ir.IntLit{Text: "0", T: ir.TInt},
+				T:     ir.TString,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/idx-str.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	// String elements are ptr-wide in the runtime, so the typed
+	// runtime suffix is `_ptr`.
+	for _, want := range []string{
+		"declare ptr @osty_rt_list_get_ptr(ptr, i64)",
+		"call ptr @osty_rt_list_get_ptr(ptr ",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)
