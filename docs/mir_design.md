@@ -955,16 +955,53 @@ MIR tests isolated from front-end churn.
     walk through the same `checkFunctionSupported` whitelist as
     user fns so unsupported init shapes still trigger fallback.
 
+- **Stage 3.11 (landed — GC roots / safepoints, opt-in).** Adds
+  `Options.EmitGC` to `internal/llvmgen`. When set, the MIR emitter
+  instruments every function with the Osty GC runtime contract:
+
+  - **Managed locals** — any local whose MIR type lowers to an LLVM
+    `ptr` and is not a function pointer. Concretely: `String`,
+    `Bytes`, `List<T>`, `Map<K, V>`, `Set<T>`, `Channel`, `Handle`,
+    `Group`, `TaskGroup`, `Select`, `Duration`, `ClosureEnv`.
+  - **Entry prologue.** After the alloca/store preamble runs, each
+    non-param managed slot is zero-initialised
+    (`store ptr null, ptr %lN`) so the GC never observes undef
+    memory; then every managed slot (params included) is bound via
+    `call void @osty.gc.root_bind_v1(ptr %slot)`. Finally the
+    function takes an entry poll via
+    `call void @osty.gc.safepoint_v1(i64 <id>, ptr null, i64 0)`.
+    Pointer-free functions still take the entry safepoint but don't
+    emit any root_bind — this keeps cancellation responsive
+    everywhere.
+  - **Terminator epilogue.** `ReturnTerm` and `UnreachableTerm`
+    release every bound root in reverse bind order before the `ret`
+    / `unreachable`. For value-returning functions the return load
+    runs *before* the releases so the live value is already in an
+    SSA register when its backing slot drops off the root list.
+  - **Loop back-edges.** `GotoTerm` and `BranchTerm` emit a
+    safepoint whenever they jump to a block with ID ≤ the current
+    block's ID. That heuristic catches the standard
+    `cond → body → cond` while-loop shape `mir.Lower` produces, plus
+    any future loop construct that preserves block-id-monotone CFG
+    order.
+  - **Runtime declarations.** The emitter pulls
+    `@osty.gc.safepoint_v1(i64, ptr, i64)` in on first use; the
+    bind/release pair is pulled in together on the first bind or
+    release site so the declaration order is stable.
+
+  Passing `null/0` for the safepoint's explicit-root vector relies
+  on the runtime's bound-root tracking to locate live references.
+  That's the MVP shape — a follow-up can pack per-safepoint precise
+  roots if the runtime needs them.
+
 - **Stage 5 (deferred — still needs parity).** Remove
   `legacyFileFromModule` and the AST-driven emitter. Outstanding
-  parity gaps after Stage 3.10: GC roots / safepoints, composite
-  **map** element types, heap-escaping closure envs, and
-  `DerefProj` on anything other than a closure env. Top-level
-  globals crossed off in Stage 3.10; GC roots / safepoints are the
-  biggest remaining wedge — they thread through function entry,
-  call sites, and alloca slots so they deserve their own Stage
-  3.11+ design pass. See the MIR emitter's `checkSupported` and
-  `checkRValueSupported` for the current whitelist.
+  parity gaps after Stage 3.11: composite **map** element types,
+  heap-escaping closure envs, and `DerefProj` on anything other
+  than a closure env. Top-level globals crossed off in Stage 3.10;
+  GC roots / safepoints crossed off in Stage 3.11. See the MIR
+  emitter's `checkSupported` and `checkRValueSupported` for the
+  current whitelist.
 
 Each stage is an opportunity to tighten the MIR shape: Stage 3 is
 where we learn which invariants the backend actually needs, Stage 4 is

@@ -1650,3 +1650,244 @@ func TestGenerateFromMIRCancellationHelpers(t *testing.T) {
 		}
 	}
 }
+
+// ==== Stage 3.11: GC roots / safepoints (Options.EmitGC) ====
+
+// TestGenerateFromMIREmitGCDefaultOff — With EmitGC off (the default),
+// none of the osty.gc.* runtime symbols may appear even when the
+// function owns a managed-ptr local. This keeps the pre-Stage-3.11
+// MIR corpus byte-stable.
+func TestGenerateFromMIREmitGCDefaultOff(t *testing.T) {
+	// fn identity(s: String) -> String { s }
+	fn := &ir.FnDecl{
+		Name:   "identity",
+		Return: ir.TString,
+		Params: []*ir.Param{{Name: "s", Type: ir.TString}},
+		Body: &ir.Block{
+			Result: &ir.Ident{Name: "s", Kind: ir.IdentParam, T: ir.TString},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/gc-off.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, gcSym := range []string{
+		"osty.gc.root_bind_v1",
+		"osty.gc.root_release_v1",
+		"osty.gc.safepoint_v1",
+	} {
+		if strings.Contains(got, gcSym) {
+			t.Fatalf("unexpected GC symbol %q with EmitGC off:\n%s", gcSym, got)
+		}
+	}
+}
+
+// TestGenerateFromMIREmitGCManagedParam — A function with a
+// managed-ptr param (String) should bind the param slot as a root,
+// take an entry safepoint, and release the root before ret.
+func TestGenerateFromMIREmitGCManagedParam(t *testing.T) {
+	// fn identity(s: String) -> String { s }
+	fn := &ir.FnDecl{
+		Name:   "identity",
+		Return: ir.TString,
+		Params: []*ir.Param{{Name: "s", Type: ir.TString}},
+		Body: &ir.Block{
+			Result: &ir.Ident{Name: "s", Kind: ir.IdentParam, T: ir.TString},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/gc-param.osty",
+		EmitGC:      true,
+	})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		// Runtime declarations.
+		"declare void @osty.gc.root_bind_v1(ptr)",
+		"declare void @osty.gc.root_release_v1(ptr)",
+		"declare void @osty.gc.safepoint_v1(i64, ptr, i64)",
+		// Entry safepoint with numeric id 0.
+		"call void @osty.gc.safepoint_v1(i64 0, ptr null, i64 0)",
+		// Param slot is bound as a root.
+		"call void @osty.gc.root_bind_v1(ptr %p",
+		// Release on the return path.
+		"call void @osty.gc.root_release_v1(ptr %p",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+	// The return value load must happen before root_release so the
+	// live value is in an SSA register when the slot drops out of
+	// the root list.
+	loadIdx := strings.Index(got, "load ptr, ptr %p")
+	releaseIdx := strings.Index(got, "call void @osty.gc.root_release_v1")
+	retIdx := strings.Index(got, "ret ptr")
+	if loadIdx < 0 || releaseIdx < 0 || retIdx < 0 {
+		t.Fatalf("ordering markers missing in:\n%s", got)
+	}
+	if !(loadIdx < releaseIdx && releaseIdx < retIdx) {
+		t.Fatalf("expected load → release → ret ordering in:\n%s", got)
+	}
+}
+
+// TestGenerateFromMIREmitGCNonParamLocalZeroInit — A non-param
+// managed local must be null-initialised before root_bind so the GC
+// never scans undef memory.
+func TestGenerateFromMIREmitGCNonParamLocalZeroInit(t *testing.T) {
+	// fn first(xs: List<Int>) -> List<Int> { let y = xs; y }
+	listInt := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TInt}, Builtin: true}
+	fn := &ir.FnDecl{
+		Name:   "first",
+		Return: listInt,
+		Params: []*ir.Param{{Name: "xs", Type: listInt}},
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.LetStmt{
+					Name:  "y",
+					Type:  listInt,
+					Value: &ir.Ident{Name: "xs", Kind: ir.IdentParam, T: listInt},
+				},
+			},
+			Result: &ir.Ident{Name: "y", Kind: ir.IdentLocal, T: listInt},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/gc-local.osty",
+		EmitGC:      true,
+	})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	if !strings.Contains(got, "store ptr null, ptr %l") {
+		t.Fatalf("expected non-param local to be null-initialised in:\n%s", got)
+	}
+	// The null-init must happen before the bind so the GC sees a
+	// valid (null) pointer at every safepoint.
+	zeroIdx := strings.Index(got, "store ptr null, ptr %l")
+	bindIdx := strings.Index(got, "call void @osty.gc.root_bind_v1(ptr %l")
+	if zeroIdx < 0 || bindIdx < 0 {
+		t.Fatalf("zero-init / bind markers missing in:\n%s", got)
+	}
+	if !(zeroIdx < bindIdx) {
+		t.Fatalf("expected zero-init before root_bind in:\n%s", got)
+	}
+}
+
+// TestGenerateFromMIREmitGCNoManagedLocals — A function with only
+// value-typed locals still gets an entry safepoint. root_bind /
+// root_release never fire because there are no managed slots.
+func TestGenerateFromMIREmitGCNoManagedLocals(t *testing.T) {
+	// fn answer() -> Int { 42 }
+	fn := &ir.FnDecl{
+		Name:   "answer",
+		Return: ir.TInt,
+		Body: &ir.Block{
+			Result: &ir.IntLit{Text: "42", T: ir.TInt},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/gc-noptr.osty",
+		EmitGC:      true,
+	})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	if !strings.Contains(got, "call void @osty.gc.safepoint_v1") {
+		t.Fatalf("expected entry safepoint in:\n%s", got)
+	}
+	if strings.Contains(got, "osty.gc.root_bind_v1") {
+		t.Fatalf("unexpected root_bind in pointer-free function:\n%s", got)
+	}
+	if strings.Contains(got, "osty.gc.root_release_v1") {
+		t.Fatalf("unexpected root_release in pointer-free function:\n%s", got)
+	}
+}
+
+// TestGenerateFromMIREmitGCLoopSafepoint — A while-loop lowers to a
+// cond block whose branch terminator targets the loop body and the
+// exit. The back-edge from the body to the cond block must carry a
+// safepoint so cancellation / GC polls fire inside tight loops.
+func TestGenerateFromMIREmitGCLoopSafepoint(t *testing.T) {
+	// fn count() { let mut i = 0; while i < 10 { i = i + 1 } }
+	hir := &ir.Module{
+		Package: "main",
+		Decls: []ir.Decl{
+			&ir.FnDecl{
+				Name:   "count",
+				Return: ir.TUnit,
+				Body: &ir.Block{
+					Stmts: []ir.Stmt{
+						&ir.LetStmt{
+							Name:  "i",
+							Type:  ir.TInt,
+							Mut:   true,
+							Value: &ir.IntLit{Text: "0", T: ir.TInt},
+						},
+						&ir.ForStmt{
+							Kind: ir.ForWhile,
+							Cond: &ir.BinaryExpr{
+								Op:    ir.BinLt,
+								Left:  &ir.Ident{Name: "i", Kind: ir.IdentLocal, T: ir.TInt},
+								Right: &ir.IntLit{Text: "10", T: ir.TInt},
+								T:     ir.TBool,
+							},
+							Body: &ir.Block{
+								Stmts: []ir.Stmt{
+									&ir.AssignStmt{
+										Op:      ir.AssignEq,
+										Targets: []ir.Expr{&ir.Ident{Name: "i", Kind: ir.IdentLocal, T: ir.TInt}},
+										Value: &ir.BinaryExpr{
+											Op:    ir.BinAdd,
+											Left:  &ir.Ident{Name: "i", Kind: ir.IdentLocal, T: ir.TInt},
+											Right: &ir.IntLit{Text: "1", T: ir.TInt},
+											T:     ir.TInt,
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/gc-loop.osty",
+		EmitGC:      true,
+	})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	// Entry + at least one back-edge safepoint = ≥2 calls.
+	safepoints := strings.Count(got, "call void @osty.gc.safepoint_v1")
+	if safepoints < 2 {
+		t.Fatalf("expected ≥2 safepoints (entry + back-edge), got %d in:\n%s", safepoints, got)
+	}
+	// Safepoint ids must be strictly increasing per emission site.
+	if !strings.Contains(got, "safepoint_v1(i64 0,") {
+		t.Fatalf("expected safepoint id 0 in:\n%s", got)
+	}
+	if !strings.Contains(got, "safepoint_v1(i64 1,") {
+		t.Fatalf("expected safepoint id 1 in:\n%s", got)
+	}
+}
