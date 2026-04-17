@@ -1,0 +1,44 @@
+use std.testing
+
+fn testIsDeferredGenCheckDiagRecognizesMarker() {
+    testing.assert(
+        isDeferredGenCheckDiag(
+            "error",
+            "type checking unavailable for /tmp/foo.osty",
+        ),
+    )
+}
+
+fn testIsDeferredGenCheckDiagRequiresErrorSeverity() {
+    testing.assert(
+        !(isDeferredGenCheckDiag(
+            "warning",
+            "type checking unavailable for /tmp/foo.osty",
+        )),
+    )
+    testing.assert(
+        !(isDeferredGenCheckDiag(
+            "note",
+            "type checking unavailable for /tmp/foo.osty",
+        )),
+    )
+}
+
+fn testIsDeferredGenCheckDiagRejectsUnrelatedMessage() {
+    testing.assert(!(isDeferredGenCheckDiag("error", "undefined name `foo`")))
+    testing.assert(!(isDeferredGenCheckDiag("error", "")))
+}
+
+fn testScaffoldExitCodeEmptyIsZero() {
+    testing.assertEq(scaffoldExitCode(""), 0)
+}
+
+fn testScaffoldExitCodeInvalidNameIsUsage() {
+    testing.assertEq(scaffoldExitCode("E2050"), 2)
+}
+
+fn testScaffoldExitCodeOtherIsRuntime() {
+    testing.assertEq(scaffoldExitCode("E2051"), 1)
+    testing.assertEq(scaffoldExitCode("E9999"), 1)
+    testing.assertEq(scaffoldExitCode("L0001"), 1)
+}

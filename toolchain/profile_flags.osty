@@ -1,0 +1,66 @@
+use std.strings as strings
+
+/// Pure policy for profile/feature flag resolution. Shared by
+/// `osty build`, `osty run`, `osty test`, `osty ci`. Host glue
+/// (cmd/osty/profile_flags.go) reads raw flag strings, delegates
+/// here, and then threads the canonical result into the manifest's
+/// profile.Resolve call. No I/O, no manifest access.
+///
+/// Mirrored by `internal/runner/profile_policy.go`. The drift test
+/// under internal/runner keeps the two in sync.
+
+/// ProfileSelection is the result of applying precedence rules to
+/// --profile / --release / fallback. When `conflict` is non-empty
+/// the caller must fail with that exact message; `name` is then
+/// unset.
+pub struct ProfileSelection {
+    pub name: String,
+    pub conflict: String,
+}
+
+/// selectProfileName picks the effective profile name given the
+/// flag values and the subcommand's fallback.
+///
+/// Precedence (matches cargo):
+///   - --release wins, unless --profile is set to something other
+///     than "release", in which case we report the conflict and
+///     let the host print a usage error.
+///   - Otherwise --profile wins.
+///   - Otherwise the subcommand's fallback wins.
+///   - Otherwise "debug" (the universal default).
+pub fn selectProfileName(profileName: String, releaseShortcut: Bool, fallback: String) -> ProfileSelection {
+    if releaseShortcut {
+        if profileName != "" && profileName != "release" {
+            return ProfileSelection {
+                name: "",
+                conflict: "--release conflicts with --profile " + profileName,
+            }
+        }
+        return ProfileSelection { name: "release", conflict: "" }
+    }
+    if profileName != "" {
+        return ProfileSelection { name: profileName, conflict: "" }
+    }
+    if fallback != "" {
+        return ProfileSelection { name: fallback, conflict: "" }
+    }
+    ProfileSelection { name: "debug", conflict: "" }
+}
+
+/// parseFeatureList splits a comma-separated --features string,
+/// trims whitespace, and drops empty entries so `--features=`
+/// behaves as a no-op and `--features=a,,b ` yields ["a", "b"].
+/// Order is preserved.
+pub fn parseFeatureList(raw: String) -> List<String> {
+    let mut out: List<String> = []
+    if raw == "" {
+        return out
+    }
+    for part in strings.split(raw, ",") {
+        let trimmed = strings.trimSpace(part)
+        if trimmed != "" {
+            out.push(trimmed)
+        }
+    }
+    out
+}

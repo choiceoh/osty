@@ -1,0 +1,97 @@
+use std.strings as strings
+
+/// Pure policy for `osty test`'s native runner. Host glue picks
+/// the test files, compiles them, and executes the binaries; this
+/// module owns the cross-cutting rules:
+///
+///   - how --serial / --jobs / discovered-test-count combine into
+///     a worker pool size (resolveTestWorkers)
+///   - which test names pass the user-supplied filter list
+///     (matchesTestFilters)
+///   - how a raw test name is normalised into a filesystem-safe
+///     directory name under the layout root (sanitizeNativeTestName)
+///
+/// Mirrored by `internal/runner/test_runner_policy.go`.
+
+/// resolveTestWorkers picks the worker-pool size for the test
+/// runner.
+///
+/// Precedence:
+///   - --serial always wins: 1 worker, run in order.
+///   - --jobs N caps the pool at N (negative is treated as 0).
+///   - --jobs 0 (the default) uses the host's CPU count.
+///   - The pool is clamped to a minimum of 1 and to at most `n`
+///     (the number of discovered tests — no idle goroutines).
+pub fn resolveTestWorkers(serial: Bool, jobs: Int, cpuCount: Int, testCount: Int) -> Int {
+    if serial {
+        return 1
+    }
+    let mut effective = jobs
+    if effective < 0 {
+        effective = 0
+    }
+    if effective == 0 {
+        effective = cpuCount
+    }
+    if effective < 1 {
+        effective = 1
+    }
+    if effective > testCount {
+        effective = testCount
+    }
+    effective
+}
+
+/// matchesTestFilters returns true when `name` should be executed
+/// given the user's positional filter list.
+///
+/// Rules:
+///   - Empty filter list means "run everything".
+///   - Empty filter entries are ignored (so `osty test "" foo`
+///     behaves like `osty test foo`).
+///   - Otherwise the name matches if it contains any non-empty
+///     filter as a substring (cargo-style).
+pub fn matchesTestFilters(name: String, filters: List<String>) -> Bool {
+    if testFiltersEmpty(filters) {
+        return true
+    }
+    for filter in filters {
+        if filter == "" {
+            let _ = filter
+        } else if strings.contains(name, filter) {
+            return true
+        }
+    }
+    false
+}
+
+/// sanitizeNativeTestName turns a `test_*` identifier into a
+/// filesystem-safe directory stem under the per-test layout root.
+/// Letters, digits, and underscores pass through; everything else
+/// collapses to `_`. Empty input falls back to the stable stem
+/// `osty_test` so the runner still lays out a unique directory.
+pub fn sanitizeNativeTestName(name: String) -> String {
+    if name == "" {
+        return "osty_test"
+    }
+    let mut out = ""
+    for unit in strings.split(name, "") {
+        if (unit >= "a" && unit <= "z") || (unit >= "A" && unit <= "Z") || (unit >= "0" && unit <= "9") {
+            out = out + unit
+        } else {
+            out = out + "_"
+        }
+    }
+    if out == "" {
+        return "osty_test"
+    }
+    out
+}
+
+fn testFiltersEmpty(filters: List<String>) -> Bool {
+    for f in filters {
+        let _ = f
+        return false
+    }
+    true
+}

@@ -57,6 +57,21 @@ func ParseAiRepairCaptureMode(value string) AiRepairCaptureModeResult {
 	}
 }
 
+// UsesFrontEndAIRepair reports whether a subcommand surfaces the
+// full front-end error set (parse + resolve + check) and therefore
+// benefits from AI repair against resolution-stage symptoms, not
+// just the parser rewrite.
+//
+// Osty: toolchain/airepair_flags.osty:71
+func UsesFrontEndAIRepair(cmd string) bool {
+	switch cmd {
+	case "check", "typecheck", "resolve", "lint":
+		return true
+	default:
+		return false
+	}
+}
+
 // ShouldCaptureAiRepair decides whether an airepair run warrants
 // writing a capture artifact, given the resolved --capture-if mode
 // and two facts from the repair result.

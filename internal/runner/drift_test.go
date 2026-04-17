@@ -35,7 +35,13 @@ import (
 //   - You changed a Go snapshot; backport the change to its Osty
 //     source so the toolchain stays the authority.
 func TestPolicySnapshotParityWithOsty(t *testing.T) {
-	ostySources := []string{"runner.osty", "airepair_flags.osty"}
+	ostySources := []string{
+		"runner.osty",
+		"airepair_flags.osty",
+		"profile_flags.osty",
+		"diag_policy.osty",
+		"test_runner.osty",
+	}
 
 	// The Go side adapts names to Go conventions; RunnerDiag
 	// specifically is shortened to Diag here because the full

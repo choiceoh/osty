@@ -64,6 +64,7 @@ import (
 	"github.com/osty/osty/internal/pipeline"
 	"github.com/osty/osty/internal/repair"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/runner"
 	"github.com/osty/osty/internal/scaffold"
 	"github.com/osty/osty/internal/stdlib"
 	"github.com/osty/osty/internal/token"
@@ -1061,12 +1062,7 @@ func hasWarning(diags []*diag.Diagnostic) bool {
 }
 
 func usesFrontEndAIRepair(cmd string) bool {
-	switch cmd {
-	case "check", "typecheck", "resolve", "lint":
-		return true
-	default:
-		return false
-	}
+	return runner.UsesFrontEndAIRepair(cmd)
 }
 
 func consumeFrontEndAIRepairFlags(args []string, flags cliFlags) ([]string, cliFlags, error) {
@@ -1864,10 +1860,10 @@ func splitGenCheckDiags(diags []*diag.Diagnostic) (blocking, deferred []*diag.Di
 }
 
 func isDeferredGenCheckDiag(d *diag.Diagnostic) bool {
-	if d == nil || d.Severity != diag.Error {
+	if d == nil {
 		return false
 	}
-	return strings.HasPrefix(d.Message, "type checking unavailable for ")
+	return runner.IsDeferredGenCheckDiag(d.Severity.String(), d.Message)
 }
 
 func reportDeferredGenCheck(path string, diags []*diag.Diagnostic) {
@@ -2076,19 +2072,13 @@ func printScaffoldDiag(d *diag.Diagnostic) {
 	fmt.Fprintln(os.Stderr, f.FormatAll([]*diag.Diagnostic{d}))
 }
 
-// scaffoldExitCode maps a scaffold diagnostic code to a process exit
-// code. Usage errors (bad name, conflicting flags) exit 2; I/O
-// failures and pre-existing destinations exit 1.
+// scaffoldExitCode maps a scaffold diagnostic code to a process
+// exit code. Rule table lives in toolchain/diag_policy.osty.
 func scaffoldExitCode(d *diag.Diagnostic) int {
 	if d == nil {
 		return 0
 	}
-	switch d.Code {
-	case diag.CodeScaffoldInvalidName:
-		return 2
-	default:
-		return 1
-	}
+	return runner.ScaffoldExitCode(d.Code)
 }
 
 // runBuild lives in build.go — it pulls in the package-manager

@@ -41,6 +41,21 @@ fn testParseAiRepairCaptureModeRejectsUnknown() {
     testing.assertEq(res.mode, "")
 }
 
+fn testUsesFrontEndAIRepairCoversCheckerCommands() {
+    testing.assert(usesFrontEndAIRepair("check"))
+    testing.assert(usesFrontEndAIRepair("typecheck"))
+    testing.assert(usesFrontEndAIRepair("resolve"))
+    testing.assert(usesFrontEndAIRepair("lint"))
+}
+
+fn testUsesFrontEndAIRepairRejectsOtherCommands() {
+    testing.assert(!(usesFrontEndAIRepair("run")))
+    testing.assert(!(usesFrontEndAIRepair("build")))
+    testing.assert(!(usesFrontEndAIRepair("test")))
+    testing.assert(!(usesFrontEndAIRepair("gen")))
+    testing.assert(!(usesFrontEndAIRepair("")))
+}
+
 fn testShouldCaptureAiRepairAlways() {
     testing.assert(shouldCaptureAiRepair("always", false, 0))
     testing.assert(shouldCaptureAiRepair("always", true, 5))
