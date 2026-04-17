@@ -267,13 +267,15 @@ cross-file references to a `use` alias don't look unused locally.
 Wired as `osty lint` with `--strict` (CI mode: exit 1 on any
 warning).
 
-### `internal/gen`
-Legacy Go transpiler retained only as migration residue while its
-removal lands. Historically it consumed `*ast.File` +
-`*resolve.Result` + `*check.Result` and emitted mapped Go source for
-early bootstrap flows. New backend work should target
-`internal/backend` / `internal/llvmgen` instead of extending this
-path.
+### `internal/bootstrap/gen`
+Developer-only Osty→Go transpiler used exclusively to regenerate
+`internal/selfhost/generated.go` from the `toolchain/*.osty` sources.
+Not reachable from the public `osty` CLI; the sole caller is
+`cmd/osty-bootstrap-gen` (invoked by `internal/selfhost/gen_selfhost.go`
+via `go run`). Consumes `*ast.File` + `*resolve.Result` +
+`*check.Result` and emits source-mapped Go. Will be retired once the
+LLVM backend can self-host the toolchain directly; no new feature work
+belongs here.
 
 ### `internal/lsp`
 JSON-RPC language server on stdio. Lifecycle (`initialize` / `shutdown`

@@ -29,9 +29,7 @@ func TestToolchainCheckerSourcesTranspile(t *testing.T) {
 	generatedPath := filepath.Join(tmpDir, "toolchain_checker_generated.go")
 
 	cmd := exec.Command(
-		"go", "run", "-tags", "selfhostgen", "./cmd/osty", "gen",
-		"--backend", "go",
-		"--emit", "go",
+		"go", "run", "./cmd/osty-bootstrap-gen",
 		"--package", "selfhostsmoke",
 		"-o", generatedPath,
 		mergedPath,
