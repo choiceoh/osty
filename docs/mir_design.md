@@ -833,8 +833,28 @@ MIR tests isolated from front-end churn.
     so downstream projections (e.g. `xs[i].name`) compose without
     extra plumbing.
   - Composite list element types (structs, tuples, nested lists)
-    still fall back because the typed runtime ABI requires a
-    scalar-shaped LLVM element.
+    now route through the bytes-v1 fallback (Stage 3.6) rather than
+    falling back to the legacy path.
+
+- **Stage 3.6 (landed — composite list element types).**
+
+  - **`emitListPushOperand`** routes composite elements (anything
+    outside the `listUsesTypedRuntime` scalar set) through the
+    bytes-v1 runtime helper: alloca a slot sized to the element
+    type, store the value, compute the size via the
+    `getelementptr null, 1` + `ptrtoint` idiom, and call
+    `osty_rt_list_push_bytes_v1(list, ptr slot, i64 size)`.
+  - **`emitListGetBytes`** (new) handles the symmetric
+    `osty_rt_list_get_bytes_v1(list, idx, ptr out, i64 size)` ABI:
+    alloca a stack slot, let the runtime write into it, load back.
+    Reachable from both `IntrinsicListGet` (stdlib method) and the
+    `IndexProj` walker in `emitLoad`, so `xs[i]` on a
+    `List<Point>` or `List<(Int, String)>` compiles without
+    falling back.
+  - **`emitSizeOf`** (new) centralises the sizeof idiom —
+    `getelementptr %T, ptr null, i32 1` + `ptrtoint` — so every
+    composite-element call site uses the same LLVM-friendly
+    pattern.
 
 - **Stage 4 (partially landed — MIR-first IR emission).** The LLVM
   backend now prefers the MIR-direct emitter by default for raw
@@ -849,11 +869,13 @@ MIR tests isolated from front-end churn.
   captures, heap-backed environment, per-call capture unpacking),
   concurrency intrinsics (the MIR lowerer already emits them but the
   emitter doesn't map them to runtime symbols), GC roots /
-  safepoints, composite list/map element types, and `DerefProj`
-  place projections. Non-capturing closures + indirect calls landed
-  in Stage 3.4, IndexProj on lists in Stage 3.5; capturing closures
-  are the next wedge. See the MIR emitter's `checkSupported` and
-  `checkRValueSupported` for the current whitelist.
+  safepoints, top-level globals, composite **map** element types,
+  and `DerefProj` place projections. Non-capturing closures +
+  indirect calls landed in Stage 3.4, `IndexProj` on lists in Stage
+  3.5, composite **list** elements via the bytes-v1 ABI in Stage
+  3.6; capturing closures are the next wedge. See the MIR
+  emitter's `checkSupported` and `checkRValueSupported` for the
+  current whitelist.
 
 Each stage is an opportunity to tighten the MIR shape: Stage 3 is
 where we learn which invariants the backend actually needs, Stage 4 is
