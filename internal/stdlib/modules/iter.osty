@@ -1,10 +1,20 @@
 // std.iter — lazy iterator adapters and terminal operations.
+//
+// The v0.4 surface is eager over a backing `List<T>`: adapters walk
+// the list once and return a freshly-allocated `Iter<U>`. A lazy
+// pull-based implementation is tracked for post-v0.4 — until then the
+// semantics match `List<T>` methods but live behind the documented
+// fluent API so user code written against the spec works today.
 
 pub struct Iter<T> {
     items: List<T>,
 
     pub fn map<U>(self, f: fn(T) -> U) -> Iter<U> {
-        self.map(f)
+        let mut out: List<U> = []
+        for item in self.items {
+            out.push(f(item))
+        }
+        Iter { items: out }
     }
 
     pub fn filter(self, f: fn(T) -> Bool) -> Iter<T> {
@@ -89,13 +99,20 @@ pub struct Iter<T> {
 }
 
 pub fn from<T>(items: List<T>) -> Iter<T> {
-    from::<T>(items)
+    Iter { items }
 }
 
 pub fn empty<T>() -> Iter<T> {
-    empty::<T>()
+    let items: List<T> = []
+    Iter { items }
 }
 
 pub fn range(start: Int, stop: Int) -> Iter<Int> {
-    range(start, stop)
+    let mut items: List<Int> = []
+    let mut i = start
+    for i < stop {
+        items.push(i)
+        i = i + 1
+    }
+    Iter { items }
 }
