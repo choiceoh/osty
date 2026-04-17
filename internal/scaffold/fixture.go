@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	"github.com/osty/osty/internal/diag"
+	"github.com/osty/osty/internal/runner"
 	"github.com/osty/osty/internal/token"
 )
 
@@ -38,21 +39,19 @@ func RenderFixture(opts FixtureOptions) (string, *diag.Diagnostic) {
 	if d := ValidateName(opts.Name); d != nil {
 		return "", d
 	}
-	cases := opts.Cases
-	if cases <= 0 {
-		cases = 3
-	}
-	if cases > 64 {
-		// Refuse pathological case counts — the generated file would
-		// be unreadable. 64 rows is well past any reasonable starter
-		// and still produces a file under a few KiB.
+	// Row-count policy lives in toolchain/scaffold_policy.osty so
+	// the CLI flag default (3) and the readability cap (64) have
+	// a single source of truth.
+	resolved := runner.ResolveFixtureCases(opts.Cases)
+	if resolved.OverCap {
 		return "", diag.New(diag.Error,
-			fmt.Sprintf("fixture cases=%d exceeds the 64 row cap", cases)).
+			fmt.Sprintf("fixture cases=%d exceeds the %d row cap", opts.Cases, runner.ScaffoldFixtureCasesMax)).
 			Code(diag.CodeScaffoldInvalidName).
 			PrimaryPos(token.Pos{Line: 1, Column: 1}, "").
 			Hint("pick a smaller --cases value; you can always add rows by hand").
 			Build()
 	}
+	cases := resolved.Count
 
 	pkgName := identForName(opts.Name)
 	caseType := titleCase(pkgName) + "Case"
