@@ -1513,54 +1513,36 @@ func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 		if err != nil {
 			return err
 		}
-		// Map get uses a caller-supplied out-slot: the runtime copies
-		// value_size bytes from its internal storage into the slot.
-		// That shape matches the real runtime
-		// (`void(ptr, K, ptr out)`) and works uniformly for scalar and
-		// composite value types — including `Map<String, Point>`.
 		vLLVM := g.llvmType(valT)
-		outSlot := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(outSlot)
-		g.fnBuf.WriteString(" = alloca ")
-		g.fnBuf.WriteString(vLLVM)
-		g.fnBuf.WriteByte('\n')
-		sym := "osty_rt_map_get_or_abort_" + mapSetKeySuffix(keyLLVM, keyString)
-		g.declareRuntime(sym, "declare void @"+sym+"(ptr, "+keyLLVM+", ptr)")
-		g.fnBuf.WriteString("  call void @")
-		g.fnBuf.WriteString(sym)
-		g.fnBuf.WriteString("(ptr ")
-		g.fnBuf.WriteString(mapReg)
-		g.fnBuf.WriteString(", ")
-		g.fnBuf.WriteString(keyLLVM)
-		g.fnBuf.WriteByte(' ')
-		g.fnBuf.WriteString(kReg)
-		g.fnBuf.WriteString(", ptr ")
-		g.fnBuf.WriteString(outSlot)
-		g.fnBuf.WriteString(")\n")
-		if i.Dest == nil {
+		// When the destination local's LLVM type matches the map's
+		// value type exactly, hand the runtime the dest slot itself —
+		// the runtime will memcpy straight into it, skipping the
+		// fresh-alloca + load + store we'd otherwise need.
+		if i.Dest != nil {
+			destLoc := g.fn.Local(i.Dest.Local)
+			if destLoc == nil {
+				return fmt.Errorf("mir-mvp: map_get into unknown local %d", i.Dest.Local)
+			}
+			if g.llvmType(destLoc.Type) == vLLVM {
+				g.emitMapGetOrAbort(mapReg, kReg, keyLLVM, keyString, vLLVM, g.localSlots[i.Dest.Local])
+				return nil
+			}
+			// Type mismatch (a future coercion shape): fall through
+			// to the alloca-load path so the store retains its
+			// declared type width.
+			loaded := g.emitMapGetOrAbort(mapReg, kReg, keyLLVM, keyString, vLLVM, "")
+			g.fnBuf.WriteString("  store ")
+			g.fnBuf.WriteString(g.llvmType(destLoc.Type))
+			g.fnBuf.WriteByte(' ')
+			g.fnBuf.WriteString(loaded)
+			g.fnBuf.WriteString(", ptr ")
+			g.fnBuf.WriteString(g.localSlots[i.Dest.Local])
+			g.fnBuf.WriteByte('\n')
 			return nil
 		}
-		// Load from the out-slot and store into the destination local.
-		destLoc := g.fn.Local(i.Dest.Local)
-		if destLoc == nil {
-			return fmt.Errorf("mir-mvp: map_get into unknown local %d", i.Dest.Local)
-		}
-		loaded := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(loaded)
-		g.fnBuf.WriteString(" = load ")
-		g.fnBuf.WriteString(vLLVM)
-		g.fnBuf.WriteString(", ptr ")
-		g.fnBuf.WriteString(outSlot)
-		g.fnBuf.WriteByte('\n')
-		g.fnBuf.WriteString("  store ")
-		g.fnBuf.WriteString(g.llvmType(destLoc.Type))
-		g.fnBuf.WriteByte(' ')
-		g.fnBuf.WriteString(loaded)
-		g.fnBuf.WriteString(", ptr ")
-		g.fnBuf.WriteString(g.localSlots[i.Dest.Local])
-		g.fnBuf.WriteByte('\n')
+		// No destination — still perform the call for its side
+		// effects (abort-on-miss).
+		g.emitMapGetOrAbort(mapReg, kReg, keyLLVM, keyString, vLLVM, "")
 		return nil
 	case mir.IntrinsicMapSet:
 		if len(i.Args) != 3 {
@@ -1577,24 +1559,11 @@ func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 		}
 		vLLVM := g.llvmType(vOp.Type())
 		// Spill the value into a stack slot so the runtime can memcpy
-		// value_size bytes from it. This works uniformly for primitive
-		// scalars, ptr-sized handles, and composite aggregates — and
-		// replaces the old inttoptr widening shim, which was semantically
-		// wrong for primitives (it passed the value bitpattern AS a
-		// pointer) and outright impossible for structs / tuples.
-		valSlot := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(valSlot)
-		g.fnBuf.WriteString(" = alloca ")
-		g.fnBuf.WriteString(vLLVM)
-		g.fnBuf.WriteByte('\n')
-		g.fnBuf.WriteString("  store ")
-		g.fnBuf.WriteString(vLLVM)
-		g.fnBuf.WriteByte(' ')
-		g.fnBuf.WriteString(vReg)
-		g.fnBuf.WriteString(", ptr ")
-		g.fnBuf.WriteString(valSlot)
-		g.fnBuf.WriteByte('\n')
+		// value_size bytes from it. This replaces the old inttoptr
+		// widening shim, which was semantically wrong for primitives
+		// (it passed the value bitpattern AS a pointer) and outright
+		// impossible for structs / tuples.
+		valSlot := g.spillToSlot(vReg, vLLVM)
 		sym := "osty_rt_map_insert_" + mapSetKeySuffix(keyLLVM, keyString)
 		g.declareRuntime(sym, "declare void @"+sym+"(ptr, "+keyLLVM+", ptr)")
 		g.fnBuf.WriteString("  call void @")
@@ -1631,6 +1600,74 @@ func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 		return nil
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("map intrinsic kind %d", i.Kind))
+}
+
+// emitMapGetOrAbort emits the runtime call
+// `void osty_rt_map_get_or_abort_<suffix>(ptr map, K key, ptr out)`
+// and returns the SSA register holding the loaded value. If
+// `outSlot` is non-empty the caller has pre-allocated the
+// destination; the helper hands it straight to the runtime, skips
+// the post-call load, and returns "". If `outSlot` is empty the
+// helper allocates a fresh V-sized slot and loads through it.
+//
+// Shared between `IntrinsicMapGet` and `IndexProj` on a map base so
+// `m.get(k)` and `m[k]` can't drift in ABI.
+func (g *mirGen) emitMapGetOrAbort(mapReg, keyReg, keyLLVM string, keyString bool, valLLVM, outSlot string) string {
+	ownsSlot := outSlot == ""
+	if ownsSlot {
+		outSlot = g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(outSlot)
+		g.fnBuf.WriteString(" = alloca ")
+		g.fnBuf.WriteString(valLLVM)
+		g.fnBuf.WriteByte('\n')
+	}
+	sym := "osty_rt_map_get_or_abort_" + mapSetKeySuffix(keyLLVM, keyString)
+	g.declareRuntime(sym, "declare void @"+sym+"(ptr, "+keyLLVM+", ptr)")
+	g.fnBuf.WriteString("  call void @")
+	g.fnBuf.WriteString(sym)
+	g.fnBuf.WriteString("(ptr ")
+	g.fnBuf.WriteString(mapReg)
+	g.fnBuf.WriteString(", ")
+	g.fnBuf.WriteString(keyLLVM)
+	g.fnBuf.WriteByte(' ')
+	g.fnBuf.WriteString(keyReg)
+	g.fnBuf.WriteString(", ptr ")
+	g.fnBuf.WriteString(outSlot)
+	g.fnBuf.WriteString(")\n")
+	if !ownsSlot {
+		return ""
+	}
+	loaded := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(loaded)
+	g.fnBuf.WriteString(" = load ")
+	g.fnBuf.WriteString(valLLVM)
+	g.fnBuf.WriteString(", ptr ")
+	g.fnBuf.WriteString(outSlot)
+	g.fnBuf.WriteByte('\n')
+	return loaded
+}
+
+// spillToSlot materialises `val` (an SSA register of `llvmType`) in
+// an `alloca <llvmType>` stack slot and returns the slot register.
+// Useful when a runtime call takes its value by pointer — composite
+// map values, composite list elements, etc.
+func (g *mirGen) spillToSlot(val, llvmType string) string {
+	slot := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(slot)
+	g.fnBuf.WriteString(" = alloca ")
+	g.fnBuf.WriteString(llvmType)
+	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString("  store ")
+	g.fnBuf.WriteString(llvmType)
+	g.fnBuf.WriteByte(' ')
+	g.fnBuf.WriteString(val)
+	g.fnBuf.WriteString(", ptr ")
+	g.fnBuf.WriteString(slot)
+	g.fnBuf.WriteByte('\n')
+	return slot
 }
 
 // emitSetIntrinsic dispatches set intrinsics to runtime symbols.
@@ -3349,7 +3386,6 @@ func (g *mirGen) emitLoad(place mir.Place, t mir.Type) (string, error) {
 			curReg = loaded
 			curLLVM = innerLLVM
 			curT = innerT
-			_ = i
 			continue
 		}
 		// IndexProj on a List or Map base routes through the runtime —
@@ -3365,10 +3401,11 @@ func (g *mirGen) emitLoad(place mir.Place, t mir.Type) (string, error) {
 				}
 			}
 			elemLLVM := g.llvmType(elemT)
-			// Map IndexProj: spill an out-slot sized to V, call
-			// map_get_or_abort_<keySuffix>, load back. Mirrors the
-			// IntrinsicMapGet emit path so `m[k]` and `m.get(k)`
-			// share a single ABI.
+			// Map IndexProj: delegate to the shared runtime helper so
+			// `m[k]` and `m.get(k)` share a single ABI. The helper
+			// allocates a fresh out-slot, calls the runtime, loads
+			// the result, and returns the SSA register holding the
+			// loaded value.
 			if isMapPtrType(curT) {
 				keyT, _ := mapKeyValueTypes(curT)
 				if keyT == nil {
@@ -3380,34 +3417,7 @@ func (g *mirGen) emitLoad(place mir.Place, t mir.Type) (string, error) {
 				if err != nil {
 					return "", err
 				}
-				outSlot := g.fresh()
-				g.fnBuf.WriteString("  ")
-				g.fnBuf.WriteString(outSlot)
-				g.fnBuf.WriteString(" = alloca ")
-				g.fnBuf.WriteString(elemLLVM)
-				g.fnBuf.WriteByte('\n')
-				sym := "osty_rt_map_get_or_abort_" + mapSetKeySuffix(keyLLVM, keyString)
-				g.declareRuntime(sym, "declare void @"+sym+"(ptr, "+keyLLVM+", ptr)")
-				g.fnBuf.WriteString("  call void @")
-				g.fnBuf.WriteString(sym)
-				g.fnBuf.WriteString("(ptr ")
-				g.fnBuf.WriteString(curReg)
-				g.fnBuf.WriteString(", ")
-				g.fnBuf.WriteString(keyLLVM)
-				g.fnBuf.WriteByte(' ')
-				g.fnBuf.WriteString(kReg)
-				g.fnBuf.WriteString(", ptr ")
-				g.fnBuf.WriteString(outSlot)
-				g.fnBuf.WriteString(")\n")
-				loaded := g.fresh()
-				g.fnBuf.WriteString("  ")
-				g.fnBuf.WriteString(loaded)
-				g.fnBuf.WriteString(" = load ")
-				g.fnBuf.WriteString(elemLLVM)
-				g.fnBuf.WriteString(", ptr ")
-				g.fnBuf.WriteString(outSlot)
-				g.fnBuf.WriteByte('\n')
-				curReg = loaded
+				curReg = g.emitMapGetOrAbort(curReg, kReg, keyLLVM, keyString, elemLLVM, "")
 				curLLVM = elemLLVM
 				curT = elemT
 				continue

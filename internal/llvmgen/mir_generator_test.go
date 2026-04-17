@@ -1060,6 +1060,64 @@ func TestGenerateFromMIRMapPrimitiveGet(t *testing.T) {
 	}
 }
 
+// TestGenerateFromMIRMapGetMethodDestSlotFastPath — `let v = m.get(k)`
+// lowers to an IntrinsicMapGet with a known Dest local. When the
+// destination slot's LLVM type matches the value type, the emitter
+// hands the dest slot directly to the runtime — no extra alloca +
+// load + store pair. Locks in the fast path extracted during the
+// Stage 3.12 refactor.
+func TestGenerateFromMIRMapGetMethodDestSlotFastPath(t *testing.T) {
+	// fn lookup(m: Map<String, Int>, k: String) -> Int {
+	//     let v = m.get(k)
+	//     v
+	// }
+	mapT := &ir.NamedType{Name: "Map", Args: []ir.Type{ir.TString, ir.TInt}, Builtin: true}
+	fn := &ir.FnDecl{
+		Name:   "lookup",
+		Return: ir.TInt,
+		Params: []*ir.Param{
+			{Name: "m", Type: mapT},
+			{Name: "k", Type: ir.TString},
+		},
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.LetStmt{
+					Name: "v",
+					Type: ir.TInt,
+					Value: &ir.MethodCall{
+						Receiver: &ir.Ident{Name: "m", Kind: ir.IdentParam, T: mapT},
+						Name:     "get",
+						Args: []ir.Arg{
+							{Value: &ir.Ident{Name: "k", Kind: ir.IdentParam, T: ir.TString}},
+						},
+						T: ir.TInt,
+					},
+				},
+			},
+			Result: &ir.Ident{Name: "v", Kind: ir.IdentLocal, T: ir.TInt},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/map_get_method.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	// The runtime call's 3rd argument is the dest local's alloca
+	// slot (`%lN`) rather than a fresh emitter temp (`%tN`). That's
+	// the signal that the fast path skipped the extra alloca +
+	// load + store a separate out-slot would require.
+	if !strings.Contains(got, "call void @osty_rt_map_get_or_abort_string(ptr %t0, ptr %t1, ptr %l") {
+		t.Fatalf("expected runtime call to use dest local slot directly:\n%s", got)
+	}
+	// Fresh-temp out-slot would look like `call ... ptr %t<N>)` at
+	// the 3rd arg — guard against it.
+	if strings.Contains(got, "call void @osty_rt_map_get_or_abort_string(ptr %t0, ptr %t1, ptr %t") {
+		t.Fatalf("dest-slot fast path regressed to fresh-temp out-slot:\n%s", got)
+	}
+}
+
 func TestGenerateFromMIRSetContains(t *testing.T) {
 	setT := &ir.NamedType{Name: "Set", Args: []ir.Type{ir.TInt}, Builtin: true}
 	fn := &ir.FnDecl{
