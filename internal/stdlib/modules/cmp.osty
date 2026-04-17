@@ -10,15 +10,15 @@
 
 pub interface Equal {
     fn eq(self, other: Self) -> Bool
-    fn ne(self, other: Self) -> Bool { false }
+    fn ne(self, other: Self) -> Bool { !self.eq(other) }
 }
 
 pub interface Ordered {
     Equal
     fn lt(self, other: Self) -> Bool
-    fn le(self, other: Self) -> Bool { false }
-    fn gt(self, other: Self) -> Bool { false }
-    fn ge(self, other: Self) -> Bool { false }
+    fn le(self, other: Self) -> Bool { self.lt(other) || self.eq(other) }
+    fn gt(self, other: Self) -> Bool { !self.le(other) }
+    fn ge(self, other: Self) -> Bool { !self.lt(other) }
 }
 
 pub interface Hashable {

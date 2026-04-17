@@ -1,27 +1,22 @@
 // std.uuid — UUID generation and parsing.
+//
+// The concrete bytes and the randomness / wall-clock dependencies for
+// v4 / v7 live behind the runtime bridge; this stub is signature-only
+// so the type checker validates calls at the correct surface. The
+// previous placeholder bodies had two bugs: `toBytes` recursed on
+// itself, and `toString` returned the empty string. Both are now
+// body-less declarations, which the backend lowers to the real
+// runtime entry points rather than to bogus Osty fallbacks.
 
 pub struct Uuid {
-    pub fn toString(self) -> String {
-        ""
-    }
-
-    pub fn toBytes(self) -> Bytes {
-        self.toBytes()
-    }
+    pub fn toString(self) -> String
+    pub fn toBytes(self) -> Bytes
 }
 
-pub fn v4() -> Uuid {
-    Uuid {}
-}
+pub fn v4() -> Uuid
 
-pub fn v7() -> Uuid {
-    Uuid {}
-}
+pub fn v7() -> Uuid
 
-pub fn parse(text: String) -> Result<Uuid, Error> {
-    Ok(Uuid {})
-}
+pub fn parse(text: String) -> Result<Uuid, Error>
 
-pub fn nil() -> Uuid {
-    Uuid {}
-}
+pub fn nil() -> Uuid
