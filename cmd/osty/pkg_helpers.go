@@ -2,15 +2,16 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/lockfile"
 	"github.com/osty/osty/internal/manifest"
 	"github.com/osty/osty/internal/pkgmgr"
+	"github.com/osty/osty/internal/runner"
 )
 
 // loadManifestWithDiag is the shared manifest entry point used by
@@ -66,32 +67,19 @@ func loadManifestWithDiag(start string, flags cliFlags) (m *manifest.Manifest, r
 	return m, root, false
 }
 
-// resolveOpts bundles the toggles the package-manager flow accepts.
-// Threaded through every CLI subcommand that touches the resolver
-// (build, run, test, fetch, publish, add, update) so behavior stays
-// consistent.
-type resolveOpts struct {
-	// Offline forbids any network or fresh-fetch work. Cached
-	// downloads still satisfy registry deps.
-	Offline bool
-	// Locked refuses to *write* a different lockfile than the one
-	// already on disk. The resolve still runs; if the result would
-	// alter osty.lock, the caller errors out instead of overwriting.
-	// Mirrors `cargo --locked`.
-	Locked bool
-	// Frozen implies Locked AND Offline AND additionally requires
-	// that osty.lock already exist. Mirrors `cargo --frozen`.
-	Frozen bool
-}
+// resolveOpts bundles the --offline / --locked / --frozen toggles
+// threaded through every subcommand that touches the resolver
+// (build, run, test, fetch, publish, add, update). Field semantics
+// mirror cargo's flags of the same name, and the expansion rule
+// (--frozen implies --locked --offline) lives in
+// toolchain/pkg_policy.osty.
+type resolveOpts = runner.ResolveOpts
 
 func resolveAndVendorEnvOpts(m *manifest.Manifest, root string, opts resolveOpts) (*pkgmgr.Graph, *pkgmgr.Env, error) {
 	if m == nil {
 		return nil, nil, fmt.Errorf("nil manifest")
 	}
-	if opts.Frozen {
-		opts.Locked = true
-		opts.Offline = true
-	}
+	opts = runner.ExpandFrozenFlags(opts)
 	env, err := pkgmgr.DefaultEnv(root)
 	if err != nil {
 		return nil, nil, err
@@ -104,7 +92,7 @@ func resolveAndVendorEnvOpts(m *manifest.Manifest, root string, opts resolveOpts
 	// fresh checkout that forgot to commit one.
 	priorLock, _ := lockfile.Read(root)
 	if opts.Frozen && priorLock == nil {
-		return nil, env, fmt.Errorf("--frozen requires an existing %s; run `osty update` first", lockfile.LockFile)
+		return nil, env, errors.New(runner.FrozenMissingLockfileMessage(lockfile.LockFile))
 	}
 	if len(m.Dependencies) == 0 && len(m.DevDependencies) == 0 {
 		return &pkgmgr.Graph{Root: m}, env, nil
@@ -115,14 +103,13 @@ func resolveAndVendorEnvOpts(m *manifest.Manifest, root string, opts resolveOpts
 	}
 	newLock := pkgmgr.LockFromGraph(graph)
 	if opts.Locked {
-		if changes := pkgmgr.DiffLock(priorLock, newLock); len(changes) > 0 {
-			var b strings.Builder
-			fmt.Fprintf(&b, "--locked: %s would change:\n", lockfile.LockFile)
-			for _, c := range changes {
-				fmt.Fprintf(&b, "  %s\n", c.String())
-			}
-			fmt.Fprintf(&b, "rerun without --locked to update the lockfile.")
-			return graph, env, fmt.Errorf("%s", b.String())
+		changes := pkgmgr.DiffLock(priorLock, newLock)
+		changeStrs := make([]string, 0, len(changes))
+		for _, c := range changes {
+			changeStrs = append(changeStrs, c.String())
+		}
+		if msg := runner.LockedDiffMessage(lockfile.LockFile, changeStrs); msg != "" {
+			return graph, env, errors.New(msg)
 		}
 	}
 	if err := pkgmgr.Vendor(graph, env); err != nil {
