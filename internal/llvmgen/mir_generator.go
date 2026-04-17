@@ -54,6 +54,17 @@ func GenerateFromMIR(m *mir.Module, opts Options) ([]byte, error) {
 	}
 	g.emitHeader()
 	g.discoverFunctions()
+	// Emit the init functions FIRST (before user functions) so
+	// main-prologue call-site lookup finds their symbol types. They
+	// are full LLVM fn definitions just like user functions.
+	for _, glob := range m.Globals {
+		if glob == nil || glob.Init == nil {
+			continue
+		}
+		if err := g.emitFunction(glob.Init); err != nil {
+			return nil, err
+		}
+	}
 	for _, fn := range m.Functions {
 		if fn == nil {
 			continue
@@ -64,6 +75,7 @@ func GenerateFromMIR(m *mir.Module, opts Options) ([]byte, error) {
 	}
 	g.emitTypeDefs()
 	g.emitThunks()
+	g.emitGlobalVars()
 	g.emitStringPool()
 	g.emitRuntimeDeclarations()
 	return []byte(g.out.String()), nil
@@ -183,8 +195,57 @@ func (g *mirGen) checkSupported() error {
 			}
 		}
 	}
-	if len(g.mod.Globals) > 0 {
-		return unsupported("mir-mvp", "top-level globals not yet emitted by MIR backend")
+	for _, glob := range g.mod.Globals {
+		if glob == nil {
+			continue
+		}
+		if glob.Name == "" {
+			return unsupported("mir-mvp", "global with empty name")
+		}
+		if !g.typeSupported(glob.Type) {
+			return unsupported("mir-mvp", fmt.Sprintf("global %q has unsupported type %s", glob.Name, mirTypeString(glob.Type)))
+		}
+		if glob.Init != nil && !glob.Init.IsExternal {
+			// Init fns aren't in Module.Functions, so walk them
+			// through the same whitelist checks as user fns.
+			if err := g.checkFunctionSupported(glob.Init); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// checkFunctionSupported validates a single function against the
+// emitter whitelist. Used for global-init fns, which are not part of
+// Module.Functions yet still need the same checks.
+func (g *mirGen) checkFunctionSupported(fn *mir.Function) error {
+	if fn.IsIntrinsic {
+		return unsupported("mir-mvp", "intrinsic init fn "+fn.Name)
+	}
+	for _, loc := range fn.Locals {
+		if loc == nil {
+			continue
+		}
+		if !g.typeSupported(loc.Type) {
+			return unsupported("mir-mvp", fmt.Sprintf("unsupported local type %s in %s", mirTypeString(loc.Type), fn.Name))
+		}
+	}
+	if fn.ReturnType != nil && !g.typeSupported(fn.ReturnType) {
+		return unsupported("mir-mvp", fmt.Sprintf("unsupported return type %s in %s", mirTypeString(fn.ReturnType), fn.Name))
+	}
+	for _, bb := range fn.Blocks {
+		if bb == nil {
+			continue
+		}
+		for _, inst := range bb.Instrs {
+			if err := g.checkInstrSupported(fn, inst); err != nil {
+				return err
+			}
+		}
+		if err := g.checkTermSupported(fn, bb.Term); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -326,7 +387,8 @@ func isListPtrType(t mir.Type) bool {
 func (g *mirGen) checkRValueSupported(fn *mir.Function, rv mir.RValue) error {
 	switch r := rv.(type) {
 	case *mir.UseRV, *mir.UnaryRV, *mir.BinaryRV,
-		*mir.DiscriminantRV, *mir.NullaryRV, *mir.CastRV:
+		*mir.DiscriminantRV, *mir.NullaryRV, *mir.CastRV,
+		*mir.GlobalRefRV:
 		return nil
 	case *mir.AggregateRV:
 		switch r.Kind {
@@ -431,6 +493,90 @@ func (g *mirGen) discoverFunctions() {
 		}
 		g.functionTypes[fn.Name] = sig
 	}
+	// Register global-init fns too so call sites can reference them
+	// (currently only the main-prologue wiring does, but recording
+	// signatures here keeps the lookup uniform).
+	for _, glob := range g.mod.Globals {
+		if glob == nil || glob.Init == nil {
+			continue
+		}
+		fn := glob.Init
+		sig := mirFnSig{retLLVM: g.llvmType(fn.ReturnType), returnType: fn.ReturnType}
+		g.functionTypes[fn.Name] = sig
+	}
+}
+
+// emitGlobalVars writes `@<name> = global <T> zeroinitializer` lines
+// for each module-level Global, plus an `@osty_global_init` ctor
+// function that runs every init fn once at program start. The ctor
+// is wired through `@llvm.global_ctors` so it executes before `main`.
+func (g *mirGen) emitGlobalVars() {
+	if g.mod == nil || len(g.mod.Globals) == 0 {
+		return
+	}
+	var block strings.Builder
+	// @<name> = global <T> zeroinitializer — runtime fills this from
+	// the ctor below. We don't try to statically inline the init
+	// value (some init fns have side effects / non-const expressions);
+	// a deferred ctor is the uniform shape.
+	for _, glob := range g.mod.Globals {
+		if glob == nil {
+			continue
+		}
+		block.WriteByte('@')
+		block.WriteString(glob.Name)
+		block.WriteString(" = global ")
+		block.WriteString(g.llvmType(glob.Type))
+		block.WriteString(" zeroinitializer\n")
+	}
+	block.WriteByte('\n')
+	// Ctor function: `@__osty_init_globals() { call <Ti> @_init_xxx();
+	// store <Ti> %tmp, ptr @xxx; ... ret void }`.
+	block.WriteString("define private void @__osty_init_globals() {\n")
+	block.WriteString("entry:\n")
+	for _, glob := range g.mod.Globals {
+		if glob == nil || glob.Init == nil {
+			continue
+		}
+		initName := glob.Init.Name
+		retLLVM := g.llvmType(glob.Type)
+		tmp := "%v" + glob.Name
+		block.WriteString("  ")
+		block.WriteString(tmp)
+		block.WriteString(" = call ")
+		block.WriteString(retLLVM)
+		block.WriteString(" @")
+		block.WriteString(initName)
+		block.WriteString("()\n")
+		block.WriteString("  store ")
+		block.WriteString(retLLVM)
+		block.WriteByte(' ')
+		block.WriteString(tmp)
+		block.WriteString(", ptr @")
+		block.WriteString(glob.Name)
+		block.WriteByte('\n')
+	}
+	block.WriteString("  ret void\n")
+	block.WriteString("}\n\n")
+	// LLVM ctor registration. Priority 65535 runs last among ctors
+	// so anything with lower priority (runtime setup) has already
+	// executed.
+	block.WriteString("@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @__osty_init_globals, ptr null }]\n\n")
+
+	// Inject the block before the first `define ` / `declare ` line
+	// so the `@<name>` globals and the ctor sit alongside type defs.
+	body := g.out.String()
+	idx := earliestAfter(body, []string{"define ", "declare "})
+	if idx < 0 {
+		g.out.WriteString(block.String())
+		return
+	}
+	var rewritten strings.Builder
+	rewritten.WriteString(body[:idx])
+	rewritten.WriteString(block.String())
+	rewritten.WriteString(body[idx:])
+	g.out.Reset()
+	g.out.WriteString(rewritten.String())
 }
 
 // emitRuntimeDeclarations writes `declare` lines for every runtime
@@ -2058,6 +2204,19 @@ func (g *mirGen) evalRValue(rv mir.RValue, hintT mir.Type) (string, error) {
 		return g.emitNullaryRV(r, hintT)
 	case *mir.CastRV:
 		return g.emitCastRV(r)
+	case *mir.GlobalRefRV:
+		// Load the declared type from the module-level `@<name>`
+		// global. The ctor initialises it before user code runs, so
+		// the value is always valid when this load executes.
+		tmp := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(tmp)
+		g.fnBuf.WriteString(" = load ")
+		g.fnBuf.WriteString(g.llvmType(r.T))
+		g.fnBuf.WriteString(", ptr @")
+		g.fnBuf.WriteString(r.Name)
+		g.fnBuf.WriteByte('\n')
+		return tmp, nil
 	}
 	return "", unsupported("mir-mvp", fmt.Sprintf("rvalue %T", rv))
 }
