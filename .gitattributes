@@ -1,2 +1,9 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Osty source files — linguist detection
+*.osty linguist-language=Swift linguist-detectable=true
+
+# Generated sources — exclude from language stats
+**/generated.go linguist-generated=true
+ERROR_CODES.md linguist-generated=true
