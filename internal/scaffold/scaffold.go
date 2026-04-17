@@ -76,9 +76,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 
 	"github.com/osty/osty/internal/diag"
+	"github.com/osty/osty/internal/runner"
 	"github.com/osty/osty/internal/token"
 )
 
@@ -138,19 +138,16 @@ type Options struct {
 	WorkspaceMember string
 }
 
-// nameRE validates project names. A valid name starts with an ASCII
-// letter or underscore and may contain letters, digits, underscores,
-// or hyphens. Hyphens are accepted because filesystem project
-// directories commonly use them ("my-app") even though they are not
-// valid Osty identifiers — consumers that import this project with
-// `use` reach it by directory basename, so those users should prefer
-// a name that is also a valid identifier.
-var nameRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`)
-
-// ValidateName returns nil if name is acceptable as both a directory
-// name and the `name` field of osty.toml. A non-nil return is already
-// a diagnostic ready to render — the CLI just forwards it.
+// ValidateName returns nil if name is acceptable as both a
+// directory name and the `name` field of osty.toml. The rule
+// itself lives in toolchain/scaffold_policy.osty — this function
+// is just the host-side wrapper that shapes the failure into a
+// diagnostic the CLI can render. A non-nil return is already a
+// diagnostic ready to render.
 func ValidateName(name string) *diag.Diagnostic {
+	if runner.IsValidScaffoldName(name) {
+		return nil
+	}
 	if name == "" {
 		return diag.New(diag.Error, "project name is empty").
 			Code(diag.CodeScaffoldInvalidName).
@@ -158,16 +155,13 @@ func ValidateName(name string) *diag.Diagnostic {
 			Hint("pass a name: `osty new myproject`").
 			Build()
 	}
-	if !nameRE.MatchString(name) {
-		return diag.New(diag.Error,
-			fmt.Sprintf("invalid project name %q", name)).
-			Code(diag.CodeScaffoldInvalidName).
-			PrimaryPos(token.Pos{Line: 1, Column: 1}, "").
-			Note("must match [A-Za-z_][A-Za-z0-9_-]*").
-			Hint("try all-lowercase with hyphens, e.g. `my-tool`").
-			Build()
-	}
-	return nil
+	return diag.New(diag.Error,
+		fmt.Sprintf("invalid project name %q", name)).
+		Code(diag.CodeScaffoldInvalidName).
+		PrimaryPos(token.Pos{Line: 1, Column: 1}, "").
+		Note("must match [A-Za-z_][A-Za-z0-9_-]*").
+		Hint("try all-lowercase with hyphens, e.g. `my-tool`").
+		Build()
 }
 
 // Create writes a fresh project directory under opts.Parent (cwd by
