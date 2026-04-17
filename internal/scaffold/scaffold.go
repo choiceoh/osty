@@ -202,10 +202,12 @@ func Create(opts Options) (string, *diag.Diagnostic) {
 	} else if !os.IsNotExist(err) {
 		return "", ioErr(dir, err)
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	tx := &writeTx{}
+	if err := tx.mkdir(dir); err != nil {
 		return "", ioErr(dir, err)
 	}
-	if d := writeLayout(dir, opts); d != nil {
+	if d := writeLayout(tx, dir, opts); d != nil {
+		tx.rollback()
 		return dir, d
 	}
 	return dir, nil
@@ -252,7 +254,9 @@ func Init(opts Options) (string, *diag.Diagnostic) {
 	if d := checkNoConflicts(parent, opts); d != nil {
 		return "", d
 	}
-	if d := writeLayout(parent, opts); d != nil {
+	tx := &writeTx{}
+	if d := writeLayout(tx, parent, opts); d != nil {
+		tx.rollback()
 		return parent, d
 	}
 	return parent, nil
@@ -354,7 +358,9 @@ func expectedPaths(dir string, opts Options) []string {
 
 // writeLayout renders and writes every file in the layout. Called by
 // both Create and Init — the directory it writes into already exists.
-func writeLayout(dir string, opts Options) *diag.Diagnostic {
+// tx tracks files and directories the layout creates so Create/Init
+// can roll back on a mid-write failure, leaving no partial state.
+func writeLayout(tx *writeTx, dir string, opts Options) *diag.Diagnostic {
 	edition := opts.Edition
 	if edition == "" {
 		edition = CurrentEdition
@@ -366,81 +372,107 @@ func writeLayout(dir string, opts Options) *diag.Diagnostic {
 			member = "core"
 		}
 		memberDir := filepath.Join(dir, member)
-		if err := os.MkdirAll(memberDir, 0o755); err != nil {
+		if err := tx.mkdir(memberDir); err != nil {
 			return ioErr(memberDir, err)
 		}
-		files := []struct {
-			path    string
-			content string
-		}{
+		return tx.writeFiles([]fileSpec{
 			{filepath.Join(dir, "osty.toml"), renderWorkspaceManifest(opts.Name, edition, member)},
 			{filepath.Join(dir, ".gitignore"), gitignoreTemplate},
 			{filepath.Join(memberDir, "osty.toml"), renderManifest(member, edition, KindBin)},
 			{filepath.Join(memberDir, "main.osty"), binSourceTemplate},
 			{filepath.Join(memberDir, "main_test.osty"), binTestTemplate},
 			{filepath.Join(memberDir, ".gitignore"), gitignoreTemplate},
-		}
-		return writeFiles(files)
+		})
 	case KindLib:
-		files := []struct {
-			path    string
-			content string
-		}{
+		return tx.writeFiles([]fileSpec{
 			{filepath.Join(dir, "osty.toml"), renderManifest(opts.Name, edition, KindLib)},
 			{filepath.Join(dir, "lib.osty"), libSourceTemplate},
 			{filepath.Join(dir, "lib_test.osty"), libTestTemplate},
 			{filepath.Join(dir, ".gitignore"), gitignoreTemplate},
-		}
-		return writeFiles(files)
+		})
 	case KindCli:
-		files := []struct {
-			path    string
-			content string
-		}{
+		return tx.writeFiles([]fileSpec{
 			{filepath.Join(dir, "osty.toml"), renderManifest(opts.Name, edition, KindCli)},
 			{filepath.Join(dir, "main.osty"), cliMainTemplate},
 			{filepath.Join(dir, "args.osty"), cliArgsTemplate},
 			{filepath.Join(dir, "app.osty"), cliAppTemplate},
 			{filepath.Join(dir, "app_test.osty"), cliAppTestTemplate},
 			{filepath.Join(dir, ".gitignore"), gitignoreTemplate},
-		}
-		return writeFiles(files)
+		})
 	case KindService:
-		files := []struct {
-			path    string
-			content string
-		}{
+		return tx.writeFiles([]fileSpec{
 			{filepath.Join(dir, "osty.toml"), renderManifest(opts.Name, edition, KindService)},
 			{filepath.Join(dir, "main.osty"), serviceMainTemplate},
 			{filepath.Join(dir, "routes.osty"), serviceRoutesTemplate},
 			{filepath.Join(dir, "routes_test.osty"), serviceRoutesTestTemplate},
 			{filepath.Join(dir, ".gitignore"), gitignoreTemplate},
-		}
-		return writeFiles(files)
+		})
 	default: // KindBin
-		files := []struct {
-			path    string
-			content string
-		}{
+		return tx.writeFiles([]fileSpec{
 			{filepath.Join(dir, "osty.toml"), renderManifest(opts.Name, edition, KindBin)},
 			{filepath.Join(dir, "main.osty"), binSourceTemplate},
 			{filepath.Join(dir, "main_test.osty"), binTestTemplate},
 			{filepath.Join(dir, ".gitignore"), gitignoreTemplate},
-		}
-		return writeFiles(files)
+		})
 	}
 }
 
-func writeFiles(files []struct {
+type fileSpec struct {
 	path    string
 	content string
-}) *diag.Diagnostic {
+}
+
+// writeTx records directories and files a scaffold run creates so
+// rollback can restore the filesystem to its pre-run state on a
+// mid-write failure. Without rollback, a partial scaffold blocks the
+// next `osty new` / `osty init` with CodeScaffoldDestExists and forces
+// the user to clean up by hand.
+type writeTx struct {
+	createdDirs  []string // mkdir order; removed in reverse
+	createdFiles []string // writeFile order; removed in reverse
+}
+
+// mkdir creates dir (and parents) and records it for rollback. Only
+// directories mkdir creates belong to the transaction — preexisting
+// directories are left alone on rollback.
+func (tx *writeTx) mkdir(dir string) error {
+	if _, err := os.Stat(dir); err == nil {
+		return nil // already exists; not ours to remove on rollback
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tx.createdDirs = append(tx.createdDirs, dir)
+	return nil
+}
+
+// writeFiles writes each fileSpec in order, recording successful
+// writes for rollback. Stops on first error.
+func (tx *writeTx) writeFiles(files []fileSpec) *diag.Diagnostic {
 	for _, f := range files {
 		if err := os.WriteFile(f.path, []byte(f.content), 0o644); err != nil {
 			return ioErr(f.path, err)
 		}
+		tx.createdFiles = append(tx.createdFiles, f.path)
 	}
 	return nil
+}
+
+// rollback best-effort removes files and directories the transaction
+// created. Errors are swallowed so the caller's original diagnostic is
+// preserved. os.Remove on a non-empty directory returns ENOTEMPTY
+// (not a no-op), so a dir that somehow acquired unrelated contents
+// between mkdir and rollback stays put — the swallowed error is the
+// right outcome.
+func (tx *writeTx) rollback() {
+	for i := len(tx.createdFiles) - 1; i >= 0; i-- {
+		_ = os.Remove(tx.createdFiles[i])
+	}
+	for i := len(tx.createdDirs) - 1; i >= 0; i-- {
+		_ = os.Remove(tx.createdDirs[i])
+	}
 }
 
 func existsDiag(dir string) *diag.Diagnostic {
