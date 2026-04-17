@@ -16,6 +16,7 @@ import (
 	"github.com/osty/osty/internal/pkgmgr"
 	"github.com/osty/osty/internal/profile"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/runner"
 	"github.com/osty/osty/internal/stdlib"
 )
 
@@ -87,15 +88,18 @@ func runRun(args []string, cliF cliFlags) {
 		fmt.Fprintf(os.Stderr, "osty run: %v\n", perr)
 		os.Exit(2)
 	}
-	// `osty run` is a build-and-execute shortcut. A non-host target
-	// triple would produce a binary that can't run on this machine,
-	// so steer the user toward `osty build --target` instead.
+	// `osty run` is a build-and-execute shortcut. Policy for "may
+	// we exec this on the host?" lives in toolchain/runner.osty via
+	// runner.CrossCompileGuard so the same rule applies to any
+	// future host that wraps the run command (e.g. `osty test`
+	// running a native artifact).
+	targetTriple := ""
 	if resolved.Target != nil {
-		fmt.Fprintf(os.Stderr,
-			"osty run: cannot execute cross-compiled binary for %s on host\n",
-			resolved.Target.Triple)
-		fmt.Fprintln(os.Stderr,
-			"hint: use `osty build --target "+resolved.Target.Triple+"` to produce the binary")
+		targetTriple = resolved.Target.Triple
+	}
+	if guard := runner.CrossCompileGuard(targetTriple); guard.Blocked {
+		fmt.Fprintln(os.Stderr, "osty run: "+guard.Diag.Message)
+		fmt.Fprintln(os.Stderr, "hint: "+guard.Diag.Hint)
 		os.Exit(2)
 	}
 	_ = filepath.Join(root, manifest.ManifestFile) // kept for future inline rewriting
@@ -112,11 +116,14 @@ func runRun(args []string, cliF cliFlags) {
 	deps := pkgmgr.NewDepProvider(m, graph, env)
 
 	// Step 2: pick the entry file. A binary project uses main.osty
-	// at the project root unless [bin].path overrides it.
-	entry := filepath.Join(root, "main.osty")
-	if m.Bin != nil && m.Bin.Path != "" {
-		entry = filepath.Join(root, m.Bin.Path)
+	// at the project root unless [bin].path overrides it. The rule
+	// lives in toolchain/runner.osty; cross-platform separator is
+	// the host's filepath.Separator.
+	binPath := ""
+	if m.Bin != nil {
+		binPath = m.Bin.Path
 	}
+	entry := runner.EntryPathFor(root, binPath, string(filepath.Separator))
 	if _, err := os.Stat(entry); err != nil {
 		fmt.Fprintf(os.Stderr, "osty run: entry %s not found: %v\n", entry, err)
 		fmt.Fprintln(os.Stderr, "hint: create main.osty or override with [bin].path in osty.toml")
@@ -193,11 +200,18 @@ func runRun(args []string, cliF cliFlags) {
 	if resolved.Target != nil {
 		triple = resolved.Target.Triple
 	}
-	binName := ""
-	binName = binaryName(m)
-	if runtime.GOOS == "windows" {
-		binName += ".exe"
+	// Binary filename policy (base name + optional .exe suffix) is
+	// authored in toolchain/runner.osty and snapshotted in
+	// internal/runner. Keep this call site free of OS-shape logic.
+	binBaseOverride := ""
+	pkgName := ""
+	if m != nil {
+		if m.Bin != nil {
+			binBaseOverride = m.Bin.Name
+		}
+		pkgName = m.Package.Name
 	}
+	binName := runner.BinaryNameFor(binBaseOverride, pkgName, runtime.GOOS)
 	selectedBackend := backendFromCLI("run", backendID)
 	backendEntry, err := backend.PrepareEntry("main", entryAbs, file, res, chk)
 	if err != nil {
@@ -245,40 +259,3 @@ func runNativeBinary(binPath string, args []string, dir string) {
 	}
 }
 
-// mergeEnv overlays per-build env overrides (GOOS, GOARCH,
-// CGO_ENABLED, plus any user-declared vars) on top of the parent
-// process's environment and returns a slice suitable for exec.Cmd.Env.
-// A later entry with the same key wins — the convention matches
-// exec.Command's own lookup.
-func mergeEnv(parent []string, overrides map[string]string) []string {
-	if len(overrides) == 0 {
-		return parent
-	}
-	// Copy parent so the caller's slice stays intact.
-	out := make([]string, 0, len(parent)+len(overrides))
-	seen := map[string]bool{}
-	for k, v := range overrides {
-		out = append(out, k+"="+v)
-		seen[k] = true
-	}
-	for _, kv := range parent {
-		// KEY=VALUE — locate the '='; skip the parent entry when
-		// an override shadows it.
-		eq := -1
-		for i := 0; i < len(kv); i++ {
-			if kv[i] == '=' {
-				eq = i
-				break
-			}
-		}
-		if eq < 0 {
-			out = append(out, kv)
-			continue
-		}
-		if seen[kv[:eq]] {
-			continue
-		}
-		out = append(out, kv)
-	}
-	return out
-}

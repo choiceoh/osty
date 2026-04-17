@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/osty/osty/internal/backend"
+	"github.com/osty/osty/internal/runner"
 )
 
 func firstBackendWarning(r *backend.Result) error {
@@ -19,11 +20,21 @@ func defaultBackendName() string {
 	return backend.NameLLVM.String()
 }
 
+// defaultEmitMode delegates the text-vs-binary decision to
+// runner (toolchain/runner.osty) and then parses the canonical
+// string back into a backend.EmitMode. The Go backend was isolated
+// as bootstrap-only in af4e03b so the production registry only
+// exposes llvm-ir / binary / object; both of runner's outputs
+// (llvm-ir, binary) parse cleanly in the default build.
 func defaultEmitMode(tool string, name backend.Name) backend.EmitMode {
-	if tool == "gen" || tool == "pipeline" {
-		return backend.EmitLLVMIR
+	raw := runner.DefaultEmitMode(tool)
+	mode, err := backend.ParseEmitMode(raw)
+	if err != nil {
+		// runner only returns "llvm-ir" or "binary"; both are
+		// registered modes, so a parse failure here is a harness bug.
+		return backend.EmitBinary
 	}
-	return backend.EmitBinary
+	return mode
 }
 
 func parseCLIBackend(raw string) (backend.Name, error) {
@@ -38,16 +49,15 @@ func parseCLIEmitMode(raw string) (backend.EmitMode, error) {
 	return mode, nil
 }
 
+// validateCLIEmit runs two layers of validation. The tool-level
+// rules ("gen with backend go must emit go", "run requires
+// binary") live in toolchain/runner.osty so every future subcommand
+// that wraps the backend inherits the same UX. The backend's own
+// ValidateEmit then enforces capability ("this backend can't
+// produce this format at all").
 func validateCLIEmit(tool string, name backend.Name, mode backend.EmitMode) error {
-	switch tool {
-	case "gen", "pipeline":
-		if name == backend.NameLLVM && mode != backend.EmitLLVMIR {
-			return fmt.Errorf("%s with backend %q cannot emit %q (want %q)", tool, name, mode, backend.EmitLLVMIR)
-		}
-	case "run", "test":
-		if mode != backend.EmitBinary {
-			return fmt.Errorf("%s requires --emit=%q", tool, backend.EmitBinary)
-		}
+	if d := runner.ToolEmitCompat(tool, string(name), string(mode)); d != nil {
+		return errors.New(d.Message)
 	}
 	return backend.ValidateEmit(name, mode)
 }

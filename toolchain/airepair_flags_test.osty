@@ -1,0 +1,59 @@
+use std.testing
+
+fn testParseAiRepairModeKnownValues() {
+    let cases = [
+        ("", "auto"),
+        ("auto", "auto"),
+        ("rewrite", "rewrite"),
+        ("parse", "parse"),
+        ("frontend", "frontend"),
+    ]
+    for (input, want) in cases {
+        let res = parseAiRepairMode(input)
+        testing.assert(res.ok)
+        testing.assertEq(res.mode, want)
+    }
+}
+
+fn testParseAiRepairModeRejectsUnknown() {
+    let res = parseAiRepairMode("nope")
+    testing.assert(!(res.ok))
+    testing.assertEq(res.mode, "")
+}
+
+fn testParseAiRepairCaptureModeKnownValues() {
+    let cases = [
+        ("", "residual"),
+        ("residual", "residual"),
+        ("changed", "changed"),
+        ("always", "always"),
+    ]
+    for (input, want) in cases {
+        let res = parseAiRepairCaptureMode(input)
+        testing.assert(res.ok)
+        testing.assertEq(res.mode, want)
+    }
+}
+
+fn testParseAiRepairCaptureModeRejectsUnknown() {
+    let res = parseAiRepairCaptureMode("sometimes")
+    testing.assert(!(res.ok))
+    testing.assertEq(res.mode, "")
+}
+
+fn testShouldCaptureAiRepairAlways() {
+    testing.assert(shouldCaptureAiRepair("always", false, 0))
+    testing.assert(shouldCaptureAiRepair("always", true, 5))
+}
+
+fn testShouldCaptureAiRepairChanged() {
+    testing.assert(shouldCaptureAiRepair("changed", true, 0))
+    testing.assert(!(shouldCaptureAiRepair("changed", false, 5)))
+}
+
+fn testShouldCaptureAiRepairResidualDefault() {
+    testing.assert(shouldCaptureAiRepair("residual", false, 1))
+    testing.assert(!(shouldCaptureAiRepair("residual", true, 0)))
+    testing.assert(!(shouldCaptureAiRepair("", false, 0)))
+    testing.assert(shouldCaptureAiRepair("", false, 3))
+}

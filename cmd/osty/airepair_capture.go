@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	"github.com/osty/osty/internal/airepair"
+	"github.com/osty/osty/internal/runner"
 )
 
 type aiRepairCaptureMode string
@@ -18,28 +19,22 @@ const (
 	aiRepairCaptureAlways   aiRepairCaptureMode = "always"
 )
 
+// parseAIRepairCaptureMode routes the --capture-if flag through
+// toolchain/airepair_flags.osty and re-types the canonical name.
 func parseAIRepairCaptureMode(value string) (aiRepairCaptureMode, bool) {
-	switch value {
-	case "", string(aiRepairCaptureResidual):
-		return aiRepairCaptureResidual, true
-	case string(aiRepairCaptureChanged):
-		return aiRepairCaptureChanged, true
-	case string(aiRepairCaptureAlways):
-		return aiRepairCaptureAlways, true
-	default:
+	res := runner.ParseAiRepairCaptureMode(value)
+	if !res.Ok {
 		return "", false
 	}
+	return aiRepairCaptureMode(res.Mode), true
 }
 
+// shouldCaptureAIRepairResult destructures the airepair.Result
+// down to (changed, totalErrorsAfter) and lets the shared policy
+// decide. Keeps the airepair.Result Go type out of Osty so the
+// toolchain module stays pure.
 func shouldCaptureAIRepairResult(result airepair.Result, mode aiRepairCaptureMode) bool {
-	switch mode {
-	case aiRepairCaptureAlways:
-		return true
-	case aiRepairCaptureChanged:
-		return result.Changed
-	default:
-		return result.After.TotalErrors > 0
-	}
+	return runner.ShouldCaptureAiRepair(string(mode), result.Changed, result.After.TotalErrors)
 }
 
 func captureAIRepairCase(dir, base string, result airepair.Result) error {
