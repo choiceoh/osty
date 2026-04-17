@@ -886,6 +886,180 @@ func TestGenerateFromMIRMapGetAndSet(t *testing.T) {
 	}
 }
 
+// TestGenerateFromMIRMapStructValueSet — Map<String, Point> insert.
+// The composite value is spilled into a stack slot sized to %Point,
+// then passed by pointer to the runtime. This is the same shape the
+// primitive-value path uses after the Stage 3.11-follow-up rewrite;
+// composite values are what made the rewrite necessary.
+func TestGenerateFromMIRMapStructValueSet(t *testing.T) {
+	// struct Point { x: Int, y: Int }
+	// fn store(m: Map<String, Point>, k: String, p: Point) { m.set(k, p) }
+	pointT := &ir.NamedType{Name: "Point"}
+	pointDecl := &ir.StructDecl{
+		Name: "Point",
+		Fields: []*ir.Field{
+			{Name: "x", Type: ir.TInt, Exported: true},
+			{Name: "y", Type: ir.TInt, Exported: true},
+		},
+	}
+	mapT := &ir.NamedType{Name: "Map", Args: []ir.Type{ir.TString, pointT}, Builtin: true}
+	fn := &ir.FnDecl{
+		Name:   "store",
+		Return: ir.TUnit,
+		Params: []*ir.Param{
+			{Name: "m", Type: mapT},
+			{Name: "k", Type: ir.TString},
+			{Name: "p", Type: pointT},
+		},
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.ExprStmt{X: &ir.MethodCall{
+					Receiver: &ir.Ident{Name: "m", Kind: ir.IdentParam, T: mapT},
+					Name:     "set",
+					Args: []ir.Arg{
+						{Value: &ir.Ident{Name: "k", Kind: ir.IdentParam, T: ir.TString}},
+						{Value: &ir.Ident{Name: "p", Kind: ir.IdentParam, T: pointT}},
+					},
+					T: ir.TUnit,
+				}},
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{pointDecl, fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/map_struct_set.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		// Struct layout for Point.
+		"%Point = type { i64, i64 }",
+		// Insert signature stays `(ptr, key, ptr)`.
+		"declare void @osty_rt_map_insert_string(ptr, ptr, ptr)",
+		// Value is spilled into a %Point slot before the call.
+		"alloca %Point",
+		"store %Point ",
+		// The runtime gets the composite by pointer.
+		"call void @osty_rt_map_insert_string(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+	// Order check: the alloca and store must precede the map_insert
+	// call — otherwise the runtime would memcpy from undef memory.
+	allocaIdx := strings.Index(got, "alloca %Point")
+	storeIdx := strings.Index(got, "store %Point ")
+	callIdx := strings.Index(got, "call void @osty_rt_map_insert_string(")
+	if allocaIdx < 0 || storeIdx < 0 || callIdx < 0 {
+		t.Fatalf("ordering markers missing in:\n%s", got)
+	}
+	if !(allocaIdx < storeIdx && storeIdx < callIdx) {
+		t.Fatalf("expected alloca → store → call ordering in:\n%s", got)
+	}
+}
+
+// TestGenerateFromMIRMapStructValueGet — Map<String, Point> read.
+// The out-slot is sized to %Point; the runtime writes into it; we
+// load and store into the destination local. Validates the rewritten
+// `void(ptr, K, ptr)` signature and the post-load copy to dest.
+func TestGenerateFromMIRMapStructValueGet(t *testing.T) {
+	// struct Point { x: Int, y: Int }
+	// fn lookup(m: Map<String, Point>, k: String) -> Point { m[k] }
+	pointT := &ir.NamedType{Name: "Point"}
+	pointDecl := &ir.StructDecl{
+		Name: "Point",
+		Fields: []*ir.Field{
+			{Name: "x", Type: ir.TInt, Exported: true},
+			{Name: "y", Type: ir.TInt, Exported: true},
+		},
+	}
+	mapT := &ir.NamedType{Name: "Map", Args: []ir.Type{ir.TString, pointT}, Builtin: true}
+	fn := &ir.FnDecl{
+		Name:   "lookup",
+		Return: pointT,
+		Params: []*ir.Param{
+			{Name: "m", Type: mapT},
+			{Name: "k", Type: ir.TString},
+		},
+		Body: &ir.Block{
+			Result: &ir.IndexExpr{
+				X:     &ir.Ident{Name: "m", Kind: ir.IdentParam, T: mapT},
+				Index: &ir.Ident{Name: "k", Kind: ir.IdentParam, T: ir.TString},
+				T:     pointT,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{pointDecl, fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/map_struct_get.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"%Point = type { i64, i64 }",
+		// Get now has the corrected `void(ptr, K, ptr)` signature
+		// matching the real runtime.
+		"declare void @osty_rt_map_get_or_abort_string(ptr, ptr, ptr)",
+		// Out-slot sized to %Point.
+		"alloca %Point",
+		// The call takes the out-slot as its third argument.
+		"call void @osty_rt_map_get_or_abort_string(",
+		// Load from the out-slot.
+		"load %Point, ptr",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+// TestGenerateFromMIRMapPrimitiveGet — primitive-value map_get after
+// the rewrite. Regression guard against reverting to the old
+// ptr-returning signature.
+func TestGenerateFromMIRMapPrimitiveGet(t *testing.T) {
+	// fn lookup(m: Map<String, Int>, k: String) -> Int { m[k] }
+	mapT := &ir.NamedType{Name: "Map", Args: []ir.Type{ir.TString, ir.TInt}, Builtin: true}
+	fn := &ir.FnDecl{
+		Name:   "lookup",
+		Return: ir.TInt,
+		Params: []*ir.Param{
+			{Name: "m", Type: mapT},
+			{Name: "k", Type: ir.TString},
+		},
+		Body: &ir.Block{
+			Result: &ir.IndexExpr{
+				X:     &ir.Ident{Name: "m", Kind: ir.IdentParam, T: mapT},
+				Index: &ir.Ident{Name: "k", Kind: ir.IdentParam, T: ir.TString},
+				T:     ir.TInt,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/map_prim_get.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare void @osty_rt_map_get_or_abort_string(ptr, ptr, ptr)",
+		"call void @osty_rt_map_get_or_abort_string(",
+		"alloca i64",
+		"load i64, ptr",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+	// The old ptr-returning signature must not leak back in.
+	if strings.Contains(got, "declare ptr @osty_rt_map_get_or_abort_") {
+		t.Fatalf("regressed to ptr-returning get signature:\n%s", got)
+	}
+}
+
 func TestGenerateFromMIRSetContains(t *testing.T) {
 	setT := &ir.NamedType{Name: "Set", Args: []ir.Type{ir.TInt}, Builtin: true}
 	fn := &ir.FnDecl{

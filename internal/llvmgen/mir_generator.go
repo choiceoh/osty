@@ -367,20 +367,20 @@ func (g *mirGen) checkProjectionsSupported(fn *mir.Function, p mir.Place, ctx st
 		case *mir.FieldProj, *mir.TupleProj, *mir.VariantProj, *mir.DerefProj:
 			// allowed
 		case *mir.IndexProj:
-			// Accept IndexProj only when the projection base is a
-			// List. Walking the projection chain from scratch would
-			// be overkill for the common case (`local[i]`), so we
-			// check the immediate preceding type: if it's the first
-			// projection, the base type is the local's type; else
-			// it's the previous projection's type.
+			// Accept IndexProj on List and Map bases. Walking the
+			// projection chain from scratch would be overkill for the
+			// common case (`local[i]` / `m[k]`), so we check the
+			// immediate preceding type: if it's the first projection,
+			// the base type is the local's type; else it's the
+			// previous projection's type.
 			var baseT mir.Type
 			if i == 0 {
 				baseT = g.localType(p.Local)
 			} else {
 				baseT = projectionType(p.Projections[i-1])
 			}
-			if !isListPtrType(baseT) {
-				return unsupported("mir-mvp", fmt.Sprintf("%s IndexProj on non-List base %s in %s", ctx, mirTypeString(baseT), fn.Name))
+			if !isListPtrType(baseT) && !isMapPtrType(baseT) {
+				return unsupported("mir-mvp", fmt.Sprintf("%s IndexProj on non-List/Map base %s in %s", ctx, mirTypeString(baseT), fn.Name))
 			}
 		default:
 			return unsupported("mir-mvp", fmt.Sprintf("%s projection %T not yet supported in %s", ctx, proj, fn.Name))
@@ -394,6 +394,17 @@ func (g *mirGen) checkProjectionsSupported(fn *mir.Function, p mir.Place, ctx st
 func isListPtrType(t mir.Type) bool {
 	if nt, ok := t.(*ir.NamedType); ok {
 		return nt.Name == "List" && nt.Builtin
+	}
+	return false
+}
+
+// isMapPtrType reports whether t is a `Map<K, V>` builtin (which
+// lowers to a ptr at the LLVM boundary). Used by the IndexProj read
+// path to dispatch to the map_get_or_abort runtime when the base is
+// a map rather than a list.
+func isMapPtrType(t mir.Type) bool {
+	if nt, ok := t.(*ir.NamedType); ok {
+		return nt.Name == "Map" && nt.Builtin
 	}
 	return false
 }
@@ -1502,9 +1513,55 @@ func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 		if err != nil {
 			return err
 		}
+		// Map get uses a caller-supplied out-slot: the runtime copies
+		// value_size bytes from its internal storage into the slot.
+		// That shape matches the real runtime
+		// (`void(ptr, K, ptr out)`) and works uniformly for scalar and
+		// composite value types — including `Map<String, Point>`.
+		vLLVM := g.llvmType(valT)
+		outSlot := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(outSlot)
+		g.fnBuf.WriteString(" = alloca ")
+		g.fnBuf.WriteString(vLLVM)
+		g.fnBuf.WriteByte('\n')
 		sym := "osty_rt_map_get_or_abort_" + mapSetKeySuffix(keyLLVM, keyString)
-		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr, "+keyLLVM+")")
-		return g.emitSimpleCall(i, sym, "ptr", []string{"ptr " + mapReg, keyLLVM + " " + kReg})
+		g.declareRuntime(sym, "declare void @"+sym+"(ptr, "+keyLLVM+", ptr)")
+		g.fnBuf.WriteString("  call void @")
+		g.fnBuf.WriteString(sym)
+		g.fnBuf.WriteString("(ptr ")
+		g.fnBuf.WriteString(mapReg)
+		g.fnBuf.WriteString(", ")
+		g.fnBuf.WriteString(keyLLVM)
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(kReg)
+		g.fnBuf.WriteString(", ptr ")
+		g.fnBuf.WriteString(outSlot)
+		g.fnBuf.WriteString(")\n")
+		if i.Dest == nil {
+			return nil
+		}
+		// Load from the out-slot and store into the destination local.
+		destLoc := g.fn.Local(i.Dest.Local)
+		if destLoc == nil {
+			return fmt.Errorf("mir-mvp: map_get into unknown local %d", i.Dest.Local)
+		}
+		loaded := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(loaded)
+		g.fnBuf.WriteString(" = load ")
+		g.fnBuf.WriteString(vLLVM)
+		g.fnBuf.WriteString(", ptr ")
+		g.fnBuf.WriteString(outSlot)
+		g.fnBuf.WriteByte('\n')
+		g.fnBuf.WriteString("  store ")
+		g.fnBuf.WriteString(g.llvmType(destLoc.Type))
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(loaded)
+		g.fnBuf.WriteString(", ptr ")
+		g.fnBuf.WriteString(g.localSlots[i.Dest.Local])
+		g.fnBuf.WriteByte('\n')
+		return nil
 	case mir.IntrinsicMapSet:
 		if len(i.Args) != 3 {
 			return unsupported("mir-mvp", "map_set arity")
@@ -1519,20 +1576,25 @@ func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 			return err
 		}
 		vLLVM := g.llvmType(vOp.Type())
-		// Map insert expects a ptr-sized value; widen if needed.
-		if vLLVM != "ptr" {
-			widened, err := g.toI64Slot(vReg, vOp.Type())
-			if err != nil {
-				return err
-			}
-			ptr := g.fresh()
-			g.fnBuf.WriteString("  ")
-			g.fnBuf.WriteString(ptr)
-			g.fnBuf.WriteString(" = inttoptr i64 ")
-			g.fnBuf.WriteString(widened)
-			g.fnBuf.WriteString(" to ptr\n")
-			vReg = ptr
-		}
+		// Spill the value into a stack slot so the runtime can memcpy
+		// value_size bytes from it. This works uniformly for primitive
+		// scalars, ptr-sized handles, and composite aggregates — and
+		// replaces the old inttoptr widening shim, which was semantically
+		// wrong for primitives (it passed the value bitpattern AS a
+		// pointer) and outright impossible for structs / tuples.
+		valSlot := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(valSlot)
+		g.fnBuf.WriteString(" = alloca ")
+		g.fnBuf.WriteString(vLLVM)
+		g.fnBuf.WriteByte('\n')
+		g.fnBuf.WriteString("  store ")
+		g.fnBuf.WriteString(vLLVM)
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(vReg)
+		g.fnBuf.WriteString(", ptr ")
+		g.fnBuf.WriteString(valSlot)
+		g.fnBuf.WriteByte('\n')
 		sym := "osty_rt_map_insert_" + mapSetKeySuffix(keyLLVM, keyString)
 		g.declareRuntime(sym, "declare void @"+sym+"(ptr, "+keyLLVM+", ptr)")
 		g.fnBuf.WriteString("  call void @")
@@ -1544,7 +1606,7 @@ func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 		g.fnBuf.WriteByte(' ')
 		g.fnBuf.WriteString(kReg)
 		g.fnBuf.WriteString(", ptr ")
-		g.fnBuf.WriteString(vReg)
+		g.fnBuf.WriteString(valSlot)
 		g.fnBuf.WriteString(")\n")
 		return nil
 	case mir.IntrinsicMapRemove:
@@ -3258,6 +3320,11 @@ func (g *mirGen) emitLoad(place mir.Place, t mir.Type) (string, error) {
 
 	curLLVM := baseLLVM
 	curReg := aggReg
+	// curT tracks the MIR type of the running value so IndexProj can
+	// tell whether its base is a List (list_get) or a Map
+	// (map_get_or_abort). Each projection updates curT to the output
+	// of that step.
+	curT := baseT
 	for i, proj := range place.Projections {
 		// DerefProj rebinds the running value to the declared
 		// aggregate loaded from the current ptr. Used by the MIR
@@ -3281,15 +3348,13 @@ func (g *mirGen) emitLoad(place mir.Place, t mir.Type) (string, error) {
 			g.fnBuf.WriteByte('\n')
 			curReg = loaded
 			curLLVM = innerLLVM
+			curT = innerT
 			_ = i
 			continue
 		}
-		// IndexProj on a List base routes through the runtime — the
-		// LLVM view of a List is opaque `ptr`, so we can't use
-		// `extractvalue`. Emit `osty_rt_list_get_<suffix>(list, idx)`
-		// for typed elements and hand the result back as the new
-		// running value (the projection chain can keep going from
-		// there; e.g. `xs[i].name`).
+		// IndexProj on a List or Map base routes through the runtime —
+		// the LLVM view of both is opaque `ptr`, so we can't use
+		// `extractvalue`. Dispatch on the running MIR type.
 		if ip, ok := proj.(*mir.IndexProj); ok {
 			elemT := projectionType(proj)
 			if elemT == nil {
@@ -3300,6 +3365,53 @@ func (g *mirGen) emitLoad(place mir.Place, t mir.Type) (string, error) {
 				}
 			}
 			elemLLVM := g.llvmType(elemT)
+			// Map IndexProj: spill an out-slot sized to V, call
+			// map_get_or_abort_<keySuffix>, load back. Mirrors the
+			// IntrinsicMapGet emit path so `m[k]` and `m.get(k)`
+			// share a single ABI.
+			if isMapPtrType(curT) {
+				keyT, _ := mapKeyValueTypes(curT)
+				if keyT == nil {
+					return "", unsupported("mir-mvp", "map IndexProj without key type")
+				}
+				keyLLVM := g.llvmType(keyT)
+				keyString := isStringLLVMType(keyT)
+				kReg, err := g.evalOperand(ip.Index, keyT)
+				if err != nil {
+					return "", err
+				}
+				outSlot := g.fresh()
+				g.fnBuf.WriteString("  ")
+				g.fnBuf.WriteString(outSlot)
+				g.fnBuf.WriteString(" = alloca ")
+				g.fnBuf.WriteString(elemLLVM)
+				g.fnBuf.WriteByte('\n')
+				sym := "osty_rt_map_get_or_abort_" + mapSetKeySuffix(keyLLVM, keyString)
+				g.declareRuntime(sym, "declare void @"+sym+"(ptr, "+keyLLVM+", ptr)")
+				g.fnBuf.WriteString("  call void @")
+				g.fnBuf.WriteString(sym)
+				g.fnBuf.WriteString("(ptr ")
+				g.fnBuf.WriteString(curReg)
+				g.fnBuf.WriteString(", ")
+				g.fnBuf.WriteString(keyLLVM)
+				g.fnBuf.WriteByte(' ')
+				g.fnBuf.WriteString(kReg)
+				g.fnBuf.WriteString(", ptr ")
+				g.fnBuf.WriteString(outSlot)
+				g.fnBuf.WriteString(")\n")
+				loaded := g.fresh()
+				g.fnBuf.WriteString("  ")
+				g.fnBuf.WriteString(loaded)
+				g.fnBuf.WriteString(" = load ")
+				g.fnBuf.WriteString(elemLLVM)
+				g.fnBuf.WriteString(", ptr ")
+				g.fnBuf.WriteString(outSlot)
+				g.fnBuf.WriteByte('\n')
+				curReg = loaded
+				curLLVM = elemLLVM
+				curT = elemT
+				continue
+			}
 			idxOp := ip.Index
 			idxVal, err := g.evalOperand(idxOp, mir.TInt)
 			if err != nil {
@@ -3322,6 +3434,7 @@ func (g *mirGen) emitLoad(place mir.Place, t mir.Type) (string, error) {
 				g.fnBuf.WriteString(")\n")
 				curReg = next
 				curLLVM = elemLLVM
+				curT = elemT
 				continue
 			}
 			// Composite element — use bytes_v1 out-pointer ABI.
@@ -3355,6 +3468,7 @@ func (g *mirGen) emitLoad(place mir.Place, t mir.Type) (string, error) {
 			g.fnBuf.WriteByte('\n')
 			curReg = loaded
 			curLLVM = elemLLVM
+			curT = elemT
 			continue
 		}
 		idx, ok := projectionIndex(proj)
@@ -3388,6 +3502,7 @@ func (g *mirGen) emitLoad(place mir.Place, t mir.Type) (string, error) {
 			}
 			curReg = narrowed
 			curLLVM = g.llvmType(elemT)
+			curT = elemT
 			continue
 		}
 		elemLLVM := g.llvmType(elemT)
@@ -3403,6 +3518,7 @@ func (g *mirGen) emitLoad(place mir.Place, t mir.Type) (string, error) {
 		g.fnBuf.WriteByte('\n')
 		curLLVM = elemLLVM
 		curReg = next
+		curT = elemT
 	}
 	return curReg, nil
 }
