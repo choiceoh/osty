@@ -1,0 +1,57 @@
+use std.testing
+
+fn testResolveTestWorkersSerialAlwaysOne() {
+    testing.assertEq(resolveTestWorkers(true, 8, 16, 100), 1)
+    testing.assertEq(resolveTestWorkers(true, 0, 16, 100), 1)
+}
+
+fn testResolveTestWorkersDefaultsToCpuCount() {
+    testing.assertEq(resolveTestWorkers(false, 0, 8, 100), 8)
+}
+
+fn testResolveTestWorkersExplicitJobsWins() {
+    testing.assertEq(resolveTestWorkers(false, 4, 16, 100), 4)
+}
+
+fn testResolveTestWorkersClampsToTestCount() {
+    testing.assertEq(resolveTestWorkers(false, 32, 16, 4), 4)
+    testing.assertEq(resolveTestWorkers(false, 0, 16, 2), 2)
+}
+
+fn testResolveTestWorkersNegativeJobsBehavesAsDefault() {
+    testing.assertEq(resolveTestWorkers(false, -2, 8, 100), 8)
+}
+
+fn testResolveTestWorkersMinimumOne() {
+    testing.assertEq(resolveTestWorkers(false, 0, 0, 100), 1)
+}
+
+fn testMatchesTestFiltersEmptyListMatchesAll() {
+    testing.assert(matchesTestFilters("testFoo", []))
+}
+
+fn testMatchesTestFiltersSubstringMatches() {
+    testing.assert(matchesTestFilters("testParseConfigHappyPath", ["Config"]))
+    testing.assert(matchesTestFilters("testLexer", ["Lex", "Paren"]))
+}
+
+fn testMatchesTestFiltersRejectsNonMatching() {
+    testing.assert(!(matchesTestFilters("testLexer", ["Parser"])))
+}
+
+fn testMatchesTestFiltersIgnoresEmptyEntries() {
+    testing.assert(matchesTestFilters("testLexer", ["", "Lex"]))
+    testing.assert(!(matchesTestFilters("testLexer", ["", ""])))
+}
+
+fn testSanitizeNativeTestNameAllowsAlphanumeric() {
+    testing.assertEq(sanitizeNativeTestName("testFoo123"), "testFoo123")
+}
+
+fn testSanitizeNativeTestNameCollapsesSpecialChars() {
+    testing.assertEq(sanitizeNativeTestName("test.foo-bar baz"), "test_foo_bar_baz")
+}
+
+fn testSanitizeNativeTestNameEmptyFallsBack() {
+    testing.assertEq(sanitizeNativeTestName(""), "osty_test")
+}

@@ -26,6 +26,7 @@ import (
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/runner"
 )
 
 type nativeTestCase struct {
@@ -266,22 +267,7 @@ func formatTestDuration(d time.Duration) string {
 }
 
 func resolveTestWorkers(serial bool, jobs, n int) int {
-	if serial {
-		return 1
-	}
-	if jobs < 0 {
-		jobs = 0
-	}
-	if jobs == 0 {
-		jobs = runtime.NumCPU()
-	}
-	if jobs < 1 {
-		jobs = 1
-	}
-	if jobs > n {
-		jobs = n
-	}
-	return jobs
+	return runner.ResolveTestWorkers(serial, jobs, runtime.NumCPU(), n)
 }
 
 // shuffleNativeTests randomizes the test slice in place using a PRNG
@@ -374,18 +360,7 @@ func discoverNativeTests(pkg *resolve.Package, filters []string) ([]nativeTestCa
 }
 
 func matchesTestFilters(name string, filters []string) bool {
-	if len(filters) == 0 {
-		return true
-	}
-	for _, filter := range filters {
-		if filter == "" {
-			continue
-		}
-		if strings.Contains(name, filter) {
-			return true
-		}
-	}
-	return false
+	return runner.MatchesTestFilters(name, filters)
 }
 
 type nativeTestRun struct {
@@ -455,23 +430,7 @@ func parseNativeTestEntry(pkg *resolve.Package, tc nativeTestCase) (*ast.File, [
 }
 
 func sanitizeNativeTestName(name string) string {
-	var b strings.Builder
-	for _, r := range name {
-		switch {
-		case r >= 'a' && r <= 'z':
-			b.WriteRune(r)
-		case r >= 'A' && r <= 'Z':
-			b.WriteRune(r)
-		case r >= '0' && r <= '9':
-			b.WriteRune(r)
-		default:
-			b.WriteByte('_')
-		}
-	}
-	if b.Len() == 0 {
-		return "osty_test"
-	}
-	return b.String()
+	return runner.SanitizeNativeTestName(name)
 }
 
 func runNativeTestBinary(binPath string) (nativeTestRun, error) {
