@@ -41,11 +41,19 @@ var ErrUnsupported = errors.New("llvmgen: unsupported source shape")
 // callers can still leave the zero value to stay on the legacy
 // HIR→AST bridge or set it explicitly when running dual-emission
 // tests.
+//
+// EmitGC asks the MIR emitter to instrument generated code with the
+// Osty GC runtime contract — root-slot binding for managed locals,
+// release on return, and safepoint calls at function entry + loop
+// back-edges. Off by default so existing MIR-emission tests stay
+// byte-stable; opt in when you want to link against the managed
+// runtime.
 type Options struct {
 	PackageName string
 	SourcePath  string
 	Target      string
 	UseMIR      bool
+	EmitGC      bool
 }
 
 // SmokeExecutableCase describes one LLVM executable parity case. The data is
