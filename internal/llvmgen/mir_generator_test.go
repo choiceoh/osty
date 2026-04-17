@@ -303,47 +303,44 @@ func TestGenerateFromMIRPrintln(t *testing.T) {
 	}
 }
 
-// TestGenerateFromMIRUnsupportedFallsBack — a module using a closure
-// with captures (outside the Stage 3 MVP) should make the MIR emitter
-// return an ErrUnsupported error so the backend dispatcher falls
-// back to the legacy path. Structs / tuples / enums / optional /
-// result / list / map / set are all part of MVP coverage by Stage
-// 3.2+3.3; closures still need the AggClosure shape + indirect-call
-// support which remain deferred.
+// TestGenerateFromMIRUnsupportedFallsBack — a module using a
+// concurrency primitive (`taskGroup`, still outside the MIR MVP)
+// should make the MIR emitter return an ErrUnsupported error so the
+// backend dispatcher falls back to the legacy path. Structs /
+// tuples / enums / optional / result / list / map / set / closures
+// (capturing + non-capturing) / indirect calls are all part of MVP
+// coverage as of Stage 3.8; concurrency intrinsics (spawn, chan,
+// taskGroup, select) still need runtime-symbol mapping.
 func TestGenerateFromMIRUnsupportedFallsBack(t *testing.T) {
-	fnType := &ir.FnType{Params: []ir.Type{ir.TInt}, Return: ir.TInt}
+	// fn run(body: fn(Group) -> Int) -> Int { taskGroup(body) }
+	groupT := &ir.NamedType{Name: "Group"}
+	fnType := &ir.FnType{Params: []ir.Type{groupT}, Return: ir.TInt}
 	hir := &ir.Module{
 		Package: "main",
 		Decls: []ir.Decl{
 			&ir.FnDecl{
-				Name:   "make",
-				Return: fnType,
+				Name:   "run",
+				Return: ir.TInt,
+				Params: []*ir.Param{{Name: "body", Type: fnType}},
 				Body: &ir.Block{
-					Stmts: []ir.Stmt{
-						&ir.LetStmt{Name: "n", Type: ir.TInt, Value: &ir.IntLit{Text: "1", T: ir.TInt}},
-					},
-					Result: &ir.Closure{
-						Params: []*ir.Param{{Name: "x", Type: ir.TInt}},
-						Return: ir.TInt,
-						Body: &ir.Block{Result: &ir.BinaryExpr{
-							Op:    ir.BinAdd,
-							Left:  &ir.Ident{Name: "x", Kind: ir.IdentParam, T: ir.TInt},
-							Right: &ir.Ident{Name: "n", Kind: ir.IdentLocal, T: ir.TInt},
-							T:     ir.TInt,
-						}},
-						Captures: []*ir.Capture{
-							{Name: "n", Kind: ir.CaptureLocal, T: ir.TInt},
+					Result: &ir.CallExpr{
+						Callee: &ir.Ident{
+							Name: "taskGroup", Kind: ir.IdentFn,
+							T: &ir.FnType{Params: []ir.Type{fnType}, Return: ir.TInt},
 						},
-						T: fnType,
+						Args: []ir.Arg{
+							{Value: &ir.Ident{Name: "body", Kind: ir.IdentParam, T: fnType}},
+						},
+						T: ir.TInt,
 					},
 				},
 			},
 		},
 	}
 	m := buildMIRModuleFromHIR(t, hir)
-	_, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/closure.osty"})
+	_, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/taskgroup.osty"})
 	if err == nil {
-		t.Fatalf("expected ErrUnsupported for closure; got nil")
+		t.Fatalf("expected ErrUnsupported for taskGroup; got nil")
 	}
 	if !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("error does not wrap ErrUnsupported: %v", err)
@@ -435,27 +432,24 @@ func TestMIRDualEmitFromSource(t *testing.T) {
 // independent of parser / checker restrictions on closure-trailing-
 // expr source shape.
 func TestMIRDualEmitGracefulFallback(t *testing.T) {
-	fnType := &ir.FnType{Params: []ir.Type{ir.TInt}, Return: ir.TInt}
+	// Use a taskGroup intrinsic — still outside MVP after Stage 3.8
+	// (concurrency intrinsic runtime mapping is a separate wedge).
+	groupT := &ir.NamedType{Name: "Group"}
+	fnType := &ir.FnType{Params: []ir.Type{groupT}, Return: ir.TInt}
 	fn := &ir.FnDecl{
-		Name:   "make",
-		Return: fnType,
+		Name:   "run",
+		Return: ir.TInt,
+		Params: []*ir.Param{{Name: "body", Type: fnType}},
 		Body: &ir.Block{
-			Stmts: []ir.Stmt{
-				&ir.LetStmt{Name: "n", Type: ir.TInt, Value: &ir.IntLit{Text: "1", T: ir.TInt}},
-			},
-			Result: &ir.Closure{
-				Params: []*ir.Param{{Name: "x", Type: ir.TInt}},
-				Return: ir.TInt,
-				Body: &ir.Block{Result: &ir.BinaryExpr{
-					Op:    ir.BinAdd,
-					Left:  &ir.Ident{Name: "x", Kind: ir.IdentParam, T: ir.TInt},
-					Right: &ir.Ident{Name: "n", Kind: ir.IdentLocal, T: ir.TInt},
-					T:     ir.TInt,
-				}},
-				Captures: []*ir.Capture{
-					{Name: "n", Kind: ir.CaptureLocal, T: ir.TInt},
+			Result: &ir.CallExpr{
+				Callee: &ir.Ident{
+					Name: "taskGroup", Kind: ir.IdentFn,
+					T: &ir.FnType{Params: []ir.Type{fnType}, Return: ir.TInt},
 				},
-				T: fnType,
+				Args: []ir.Arg{
+					{Value: &ir.Ident{Name: "body", Kind: ir.IdentParam, T: fnType}},
+				},
+				T: ir.TInt,
 			},
 		},
 	}
@@ -468,7 +462,7 @@ func TestMIRDualEmitGracefulFallback(t *testing.T) {
 
 	_, err := GenerateFromMIR(mirMod, Options{PackageName: "main", SourcePath: "/tmp/fallback.osty"})
 	if err == nil {
-		t.Fatalf("expected MIR emitter to refuse capturing-closure program")
+		t.Fatalf("expected MIR emitter to refuse taskGroup program")
 	}
 	if !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("expected ErrUnsupported, got %T: %v", err, err)
@@ -1018,20 +1012,23 @@ func TestGenerateFromMIRNonCapturingClosureValue(t *testing.T) {
 		t.Fatalf("GenerateFromMIR: %v", err)
 	}
 	got := string(out)
-	// Two functions should appear: the outer pickDouble and the lifted
-	// closure body. The outer returns a fn-pointer @ symbol directly.
+	// Under the uniform env ABI, a non-capturing closure still
+	// allocates a 1-field env `{ ptr fn }` and the closure VALUE is
+	// the env ptr. The lifted fn takes env as first arg.
 	if !strings.Contains(got, "define ptr @pickDouble()") {
-		t.Fatalf("expected pickDouble to return ptr, got:\n%s", got)
+		t.Fatalf("expected pickDouble to return ptr (env), got:\n%s", got)
 	}
-	if !strings.Contains(got, "@pickDouble__closure1") {
-		t.Fatalf("expected lifted closure symbol in output:\n%s", got)
+	// The lifted closure body receives env as its first param.
+	if !strings.Contains(got, "define i64 @pickDouble__closure1(ptr ") {
+		t.Fatalf("expected lifted closure with env-first-arg ABI, got:\n%s", got)
 	}
-	// The fn-pointer value should flow as an `@` literal, not as a
-	// struct / alloca — one of the most common signals we get this
-	// right is an `ret ptr @pickDouble__closure1` or a store of the
-	// raw @symbol into the return slot.
+	// The closure value is an env struct allocated on the stack with
+	// the fn ptr stored at slot 0.
+	if !strings.Contains(got, "alloca %ClosureEnv.ptr") {
+		t.Fatalf("expected 1-field closure env alloca, got:\n%s", got)
+	}
 	if !strings.Contains(got, "store ptr @pickDouble__closure1") {
-		t.Fatalf("expected fn-pointer store of @pickDouble__closure1:\n%s", got)
+		t.Fatalf("expected fn-pointer store of @pickDouble__closure1 into env slot:\n%s", got)
 	}
 }
 
@@ -1062,11 +1059,14 @@ func TestGenerateFromMIRIndirectCall(t *testing.T) {
 		t.Fatalf("GenerateFromMIR: %v", err)
 	}
 	got := string(out)
-	// The body must call through the ptr-typed local, with a parenthesised
-	// signature that matches `fn(Int) -> Int`.
+	// The body must call through the ptr-typed local. Under the
+	// uniform closure ABI (Stage 3.8), every IndirectCall passes the
+	// env pointer as implicit first arg, so the signature includes
+	// `ptr` even though the user FnType is just `fn(Int) -> Int`.
 	for _, want := range []string{
 		"define i64 @apply(ptr %arg0, i64 %arg1)",
-		"call i64 (i64)",
+		// Load fn ptr from env[0], then call with env prefix.
+		"call i64 (ptr, i64)",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)
@@ -1254,5 +1254,173 @@ func TestGenerateFromMIRListTupleElement(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)
 		}
+	}
+}
+
+// ==== Stage 3.8: capturing closures via uniform env ABI ====
+
+func TestGenerateFromMIRCapturingClosure(t *testing.T) {
+	// fn makeAdder() -> fn(Int) -> Int {
+	//   let n = 10
+	//   |x| x + n     // captures n
+	// }
+	fnType := &ir.FnType{Params: []ir.Type{ir.TInt}, Return: ir.TInt}
+	fn := &ir.FnDecl{
+		Name:   "makeAdder",
+		Return: fnType,
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.LetStmt{Name: "n", Type: ir.TInt, Value: &ir.IntLit{Text: "10", T: ir.TInt}},
+			},
+			Result: &ir.Closure{
+				Params: []*ir.Param{{Name: "x", Type: ir.TInt}},
+				Return: ir.TInt,
+				Body: &ir.Block{Result: &ir.BinaryExpr{
+					Op:    ir.BinAdd,
+					Left:  &ir.Ident{Name: "x", Kind: ir.IdentParam, T: ir.TInt},
+					Right: &ir.Ident{Name: "n", Kind: ir.IdentLocal, T: ir.TInt},
+					T:     ir.TInt,
+				}},
+				Captures: []*ir.Capture{
+					{Name: "n", Kind: ir.CaptureLocal, T: ir.TInt},
+				},
+				T: fnType,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/cap.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	// The lifted fn takes env as first param, then user args.
+	if !strings.Contains(got, "define i64 @makeAdder__closure1(ptr ") {
+		t.Fatalf("expected lifted fn with env-first-arg ABI, got:\n%s", got)
+	}
+	// The env struct has two fields: ptr fn + i64 capture.
+	if !strings.Contains(got, "alloca %ClosureEnv.ptr.i64") {
+		t.Fatalf("expected 2-field env alloca, got:\n%s", got)
+	}
+	// Both fn ptr and capture get stored into the env via GEPs.
+	if !strings.Contains(got, "store ptr @makeAdder__closure1") {
+		t.Fatalf("expected fn ptr store, got:\n%s", got)
+	}
+	if strings.Count(got, "store i64 ") < 1 {
+		t.Fatalf("expected at least one capture store, got:\n%s", got)
+	}
+}
+
+func TestGenerateFromMIRCapturingClosureCalledIndirectly(t *testing.T) {
+	// fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }
+	//
+	// The MIR lowerer routes `f(x)` through IndirectCall. Combined
+	// with the env ABI this emits `call i64 (ptr, i64) <fnptr>(<env>,
+	// <x>)` — the env ptr (= f itself) is implicit first arg.
+	fnType := &ir.FnType{Params: []ir.Type{ir.TInt}, Return: ir.TInt}
+	apply := &ir.FnDecl{
+		Name:   "apply",
+		Return: ir.TInt,
+		Params: []*ir.Param{
+			{Name: "f", Type: fnType},
+			{Name: "x", Type: ir.TInt},
+		},
+		Body: &ir.Block{
+			Result: &ir.CallExpr{
+				Callee: &ir.Ident{Name: "f", Kind: ir.IdentLocal, T: fnType},
+				Args: []ir.Arg{
+					{Value: &ir.Ident{Name: "x", Kind: ir.IdentParam, T: ir.TInt}},
+				},
+				T: ir.TInt,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{apply}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/apply-cap.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	if !strings.Contains(got, "call i64 (ptr, i64)") {
+		t.Fatalf("expected env-first-arg indirect call signature, got:\n%s", got)
+	}
+	// Load fn ptr from env slot 0.
+	if !strings.Contains(got, "= load ptr, ptr ") {
+		t.Fatalf("expected env[0] fn-ptr load, got:\n%s", got)
+	}
+}
+
+func TestGenerateFromMIRTopLevelFnAsValue(t *testing.T) {
+	// fn double(x: Int) -> Int { x * 2 }
+	// fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }
+	// fn main() -> Int { apply(double, 3) }
+	//
+	// Passing the top-level `double` as a value requires the
+	// emitter to wrap it in a thunk + 1-field env so the apply
+	// callee can use the uniform env ABI.
+	fnType := &ir.FnType{Params: []ir.Type{ir.TInt}, Return: ir.TInt}
+	double := &ir.FnDecl{
+		Name:   "double",
+		Return: ir.TInt,
+		Params: []*ir.Param{{Name: "x", Type: ir.TInt}},
+		Body: &ir.Block{
+			Result: &ir.BinaryExpr{
+				Op:    ir.BinMul,
+				Left:  &ir.Ident{Name: "x", Kind: ir.IdentParam, T: ir.TInt},
+				Right: &ir.IntLit{Text: "2", T: ir.TInt},
+				T:     ir.TInt,
+			},
+		},
+	}
+	apply := &ir.FnDecl{
+		Name:   "apply",
+		Return: ir.TInt,
+		Params: []*ir.Param{
+			{Name: "f", Type: fnType},
+			{Name: "x", Type: ir.TInt},
+		},
+		Body: &ir.Block{
+			Result: &ir.CallExpr{
+				Callee: &ir.Ident{Name: "f", Kind: ir.IdentLocal, T: fnType},
+				Args: []ir.Arg{
+					{Value: &ir.Ident{Name: "x", Kind: ir.IdentParam, T: ir.TInt}},
+				},
+				T: ir.TInt,
+			},
+		},
+	}
+	mainFn := &ir.FnDecl{
+		Name:   "main",
+		Return: ir.TInt,
+		Body: &ir.Block{
+			Result: &ir.CallExpr{
+				Callee: &ir.Ident{
+					Name: "apply", Kind: ir.IdentFn,
+					T: &ir.FnType{Params: []ir.Type{fnType, ir.TInt}, Return: ir.TInt},
+				},
+				Args: []ir.Arg{
+					{Value: &ir.Ident{Name: "double", Kind: ir.IdentFn, T: fnType}},
+					{Value: &ir.IntLit{Text: "3", T: ir.TInt}},
+				},
+				T: ir.TInt,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{double, apply, mainFn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/toplevel.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	// A thunk is generated for `double` so the uniform env ABI can
+	// call through it.
+	if !strings.Contains(got, "define private i64 @__osty_closure_thunk_double(ptr ") {
+		t.Fatalf("expected thunk for double, got:\n%s", got)
+	}
+	if !strings.Contains(got, "call i64 @double(i64 %arg0)") {
+		t.Fatalf("expected thunk to delegate to @double, got:\n%s", got)
 	}
 }

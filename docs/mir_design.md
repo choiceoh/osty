@@ -856,6 +856,41 @@ MIR tests isolated from front-end churn.
     composite-element call site uses the same LLVM-friendly
     pattern.
 
+- **Stage 3.8 (landed — capturing closures + uniform env ABI).**
+  Supersedes Stage 3.4 with a single closure calling convention
+  used everywhere.
+
+  - **Closure value layout.** Every closure is a `ptr env`, where
+    env is a stack-allocated struct
+    `%ClosureEnv.<elemtags...> = type { ptr, cap0, cap1, ... }`.
+    Slot 0 is the fn pointer; slots 1..N are captures. Non-capturing
+    closures use a 1-field env `{ ptr fn }`. Envs share type defs
+    across closures with the same LLVM element layout so the module
+    doesn't pile up duplicates.
+  - **Lifted fn ABI.** The MIR lowerer's `lowerClosure` now emits
+    the lifted function with `fn(ptr env, user_args...) -> ret`.
+    Inside the body, capture locals are populated at entry by
+    loading from the env via `DerefProj{envTupleType} + TupleProj{
+    i+1}`. The rest of the body lowers unchanged — reads of the
+    capture name resolve through the regular locals lookup.
+  - **Indirect call.** `IndirectCall` on a FnType operand treats
+    the operand as the env ptr: load fn from env[0], emit
+    `call ret (ptr, user_args...) %fnptr(%env, %user_args)`. The
+    user-visible FnType doesn't include env; the emitter widens the
+    signature at the call site.
+  - **Top-level fn-as-value (thunks).** A bare `FnConst` reaching
+    value position (not a direct-call callee) gets wrapped into a
+    generated `__osty_closure_thunk_<sym>` that takes env as its
+    first arg and delegates to the real symbol. The thunk is
+    declared `define private`, is generated once per symbol, and
+    goes into the closure value's 1-field env. This keeps `let f =
+    topLevelFn; f(x)` working with the uniform ABI.
+  - **Escape note.** The env alloca lives on the caller's stack,
+    so a closure that escapes beyond the caller's lifetime is UB
+    for now. Heap-backed envs (via `osty.gc.alloc_v1`) are planned
+    but out of scope here — the common cases (sorting / filtering
+    / map-style callbacks consumed in-frame) work without heap.
+
 - **Stage 4 (partially landed — MIR-first IR emission).** The LLVM
   backend now prefers the MIR-direct emitter by default for raw
   `llvm-ir` output. The legacy HIR→AST bridge remains callable under
@@ -864,16 +899,14 @@ MIR tests isolated from front-end churn.
   automatically on `ErrUnsupported`.
 
 - **Stage 5 (deferred — still needs parity).** Remove
-  `legacyFileFromModule` and the AST-driven emitter. Blocked on the
-  MIR emitter covering **capturing** closures (`AggClosure` with
-  captures, heap-backed environment, per-call capture unpacking),
-  concurrency intrinsics (the MIR lowerer already emits them but the
-  emitter doesn't map them to runtime symbols), GC roots /
-  safepoints, top-level globals, composite **map** element types,
-  and `DerefProj` place projections. Non-capturing closures +
-  indirect calls landed in Stage 3.4, `IndexProj` on lists in Stage
-  3.5, composite **list** elements via the bytes-v1 ABI in Stage
-  3.6; capturing closures are the next wedge. See the MIR
+  `legacyFileFromModule` and the AST-driven emitter. Outstanding
+  parity gaps after Stage 3.8: concurrency intrinsics (the MIR
+  lowerer already emits them but the emitter doesn't map them to
+  runtime symbols), GC roots / safepoints, top-level globals,
+  composite **map** element types, heap-escaping closure envs, and
+  `DerefProj` on anything other than a closure env. Capturing
+  closures + indirect calls crossed off in Stage 3.8; concurrency
+  intrinsic runtime mapping is the next wedge. See the MIR
   emitter's `checkSupported` and `checkRValueSupported` for the
   current whitelist.
 
