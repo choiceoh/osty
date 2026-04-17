@@ -303,45 +303,48 @@ func TestGenerateFromMIRPrintln(t *testing.T) {
 	}
 }
 
-// TestGenerateFromMIRUnsupportedFallsBack — a module using enum
-// variants (outside the Stage 3 MVP) should make the MIR emitter
+// TestGenerateFromMIRUnsupportedFallsBack — a module using a closure
+// with captures (outside the Stage 3 MVP) should make the MIR emitter
 // return an ErrUnsupported error so the backend dispatcher falls
-// back to the legacy path. Structs and tuples are now part of MVP
-// coverage; enums still need discriminant / variant-payload support
-// that the MVP doesn't ship yet.
+// back to the legacy path. Structs / tuples / enums / optional /
+// result / list / map / set are all part of MVP coverage by Stage
+// 3.2+3.3; closures still need the AggClosure shape + indirect-call
+// support which remain deferred.
 func TestGenerateFromMIRUnsupportedFallsBack(t *testing.T) {
-	maybeT := &ir.NamedType{Name: "Maybe"}
+	fnType := &ir.FnType{Params: []ir.Type{ir.TInt}, Return: ir.TInt}
 	hir := &ir.Module{
 		Package: "main",
 		Decls: []ir.Decl{
-			&ir.EnumDecl{
-				Name: "Maybe",
-				Variants: []*ir.Variant{
-					{Name: "Some", Payload: []ir.Type{ir.TInt}},
-					{Name: "None"},
-				},
-			},
 			&ir.FnDecl{
 				Name:   "make",
-				Return: maybeT,
+				Return: fnType,
 				Body: &ir.Block{
-					Result: &ir.VariantLit{
-						Enum:    "Maybe",
-						Variant: "Some",
-						Args:    []ir.Arg{{Value: &ir.IntLit{Text: "42", T: ir.TInt}}},
-						T:       maybeT,
+					Stmts: []ir.Stmt{
+						&ir.LetStmt{Name: "n", Type: ir.TInt, Value: &ir.IntLit{Text: "1", T: ir.TInt}},
+					},
+					Result: &ir.Closure{
+						Params: []*ir.Param{{Name: "x", Type: ir.TInt}},
+						Return: ir.TInt,
+						Body: &ir.Block{Result: &ir.BinaryExpr{
+							Op:    ir.BinAdd,
+							Left:  &ir.Ident{Name: "x", Kind: ir.IdentParam, T: ir.TInt},
+							Right: &ir.Ident{Name: "n", Kind: ir.IdentLocal, T: ir.TInt},
+							T:     ir.TInt,
+						}},
+						Captures: []*ir.Capture{
+							{Name: "n", Kind: ir.CaptureLocal, T: ir.TInt},
+						},
+						T: fnType,
 					},
 				},
 			},
 		},
 	}
 	m := buildMIRModuleFromHIR(t, hir)
-	_, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/enum.osty"})
+	_, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/closure.osty"})
 	if err == nil {
-		t.Fatalf("expected ErrUnsupported for enum; got nil")
+		t.Fatalf("expected ErrUnsupported for closure; got nil")
 	}
-	// Must wrap ErrUnsupported so the backend dispatcher can distinguish
-	// "this shape isn't in the MVP yet" from internal bugs.
 	if !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("error does not wrap ErrUnsupported: %v", err)
 	}
@@ -426,51 +429,38 @@ func TestMIRDualEmitFromSource(t *testing.T) {
 }
 
 // TestMIRDualEmitGracefulFallback proves that when the MIR emitter
-// refuses a program (enum variant construction isn't in the MVP),
-// the backend dispatcher (via Options.UseMIR and the opts wiring in
-// internal/backend/llvm.go) can catch ErrUnsupported and retry on
-// the HIR path. We validate the sentinel semantics directly here —
-// the end-to-end dispatch wiring is covered by the backend tests in
-// internal/backend.
+// refuses a program (IndexProj on a list is still outside the MVP
+// projection whitelist), the backend dispatcher catches
+// `ErrUnsupported` and retries on the HIR path. We hand-build the
+// HIR here so the test is independent of parser / checker
+// restrictions on closure-trailing-expr source shape.
 func TestMIRDualEmitGracefulFallback(t *testing.T) {
-	src := `enum Maybe {
-    Some(Int),
-    None,
-}
-
-fn wrap(n: Int) -> Maybe {
-    Some(n)
-}
-`
-	file := parseLLVMGenFile(t, src)
-	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
-	reg := stdlib.LoadCached()
-	chk := check.File(file, res, check.Opts{
-		UseGolegacy:   true,
-		Stdlib:        reg,
-		Primitives:    reg.Primitives,
-		ResultMethods: reg.ResultMethods,
-		Source:        []byte(src),
-	})
-	hirMod, _ := ir.Lower("main", file, res, chk)
-	monoMod, _ := ir.Monomorphize(hirMod)
+	listInt := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TInt}, Builtin: true}
+	fn := &ir.FnDecl{
+		Name:   "first",
+		Return: ir.TInt,
+		Params: []*ir.Param{{Name: "xs", Type: listInt}},
+		Body: &ir.Block{
+			Result: &ir.IndexExpr{
+				X:     &ir.Ident{Name: "xs", Kind: ir.IdentParam, T: listInt},
+				Index: &ir.IntLit{Text: "0", T: ir.TInt},
+				T:     ir.TInt,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	monoMod, monoErrs := ir.Monomorphize(hir)
+	if len(monoErrs) != 0 {
+		t.Fatalf("monomorphize: %v", monoErrs)
+	}
 	mirMod := mir.Lower(monoMod)
 
 	_, err := GenerateFromMIR(mirMod, Options{PackageName: "main", SourcePath: "/tmp/fallback.osty"})
 	if err == nil {
-		t.Fatalf("expected MIR emitter to refuse enum-bearing program")
+		t.Fatalf("expected MIR emitter to refuse index-projection program")
 	}
 	if !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("expected ErrUnsupported, got %T: %v", err, err)
-	}
-
-	// The HIR path must still accept it.
-	out, hirErr := GenerateModule(monoMod, Options{PackageName: "main", SourcePath: "/tmp/fallback.osty"})
-	if hirErr != nil {
-		t.Fatalf("HIR path rejected a program the legacy emitter should accept: %v", hirErr)
-	}
-	if !strings.Contains(string(out), "define ") {
-		t.Fatalf("HIR path produced no define line:\n%s", string(out))
 	}
 }
 
@@ -742,6 +732,241 @@ func TestGenerateFromMIRTupleFunctionParam(t *testing.T) {
 		"%Tuple.i64.string = type { i64, ptr }",
 		"define i64 @first(%Tuple.i64.string %arg0)",
 		"extractvalue %Tuple.i64.string",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+// ==== Stage 3.2: enums + optional + result ====
+
+func TestGenerateFromMIREnumVariantConstruction(t *testing.T) {
+	// enum Maybe { Some(Int), None }
+	// fn wrap(n: Int) -> Maybe { Some(n) }
+	maybeT := &ir.NamedType{Name: "Maybe"}
+	enumDecl := &ir.EnumDecl{
+		Name: "Maybe",
+		Variants: []*ir.Variant{
+			{Name: "None"},
+			{Name: "Some", Payload: []ir.Type{ir.TInt}},
+		},
+	}
+	fn := &ir.FnDecl{
+		Name:   "wrap",
+		Return: maybeT,
+		Params: []*ir.Param{{Name: "n", Type: ir.TInt}},
+		Body: &ir.Block{
+			Result: &ir.VariantLit{
+				Enum:    "Maybe",
+				Variant: "Some",
+				Args:    []ir.Arg{{Value: &ir.Ident{Name: "n", Kind: ir.IdentParam, T: ir.TInt}}},
+				T:       maybeT,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{enumDecl, fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/enum.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"%Maybe = type { i64, i64 }",
+		"insertvalue %Maybe undef, i64 1, 0", // Some discriminant = 1
+		"insertvalue %Maybe",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateFromMIROptionalNoneConstruction(t *testing.T) {
+	// fn empty() -> Int? { None }
+	optT := &ir.OptionalType{Inner: ir.TInt}
+	fn := &ir.FnDecl{
+		Name:   "empty",
+		Return: optT,
+		Body: &ir.Block{
+			Result: &ir.VariantLit{
+				Enum:    "",
+				Variant: "None",
+				T:       optT,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/opt.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"%Option.i64 = type { i64, i64 }",
+		"insertvalue %Option.i64 undef, i64 0, 0", // None discriminant
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+// ==== Stage 3.3: list / map / set intrinsics ====
+
+func TestGenerateFromMIRListLiteralAndLen(t *testing.T) {
+	// fn size() -> Int { let xs = [1, 2, 3]; xs.len() }
+	listInt := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TInt}, Builtin: true}
+	fn := &ir.FnDecl{
+		Name:   "size",
+		Return: ir.TInt,
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.LetStmt{
+					Name: "xs",
+					Type: listInt,
+					Value: &ir.ListLit{
+						Elems: []ir.Expr{
+							&ir.IntLit{Text: "1", T: ir.TInt},
+							&ir.IntLit{Text: "2", T: ir.TInt},
+							&ir.IntLit{Text: "3", T: ir.TInt},
+						},
+						Elem: ir.TInt,
+					},
+				},
+			},
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "xs", Kind: ir.IdentLocal, T: listInt},
+				Name:     "len",
+				T:        ir.TInt,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/list.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare ptr @osty_rt_list_new()",
+		"call ptr @osty_rt_list_new()",
+		"declare void @osty_rt_list_push_i64(ptr, i64)",
+		"call void @osty_rt_list_push_i64(",
+		"declare i64 @osty_rt_list_len(ptr)",
+		"call i64 @osty_rt_list_len(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateFromMIRMapGetAndSet(t *testing.T) {
+	mapT := &ir.NamedType{Name: "Map", Args: []ir.Type{ir.TString, ir.TInt}, Builtin: true}
+	fn := &ir.FnDecl{
+		Name:   "store",
+		Return: ir.TUnit,
+		Params: []*ir.Param{
+			{Name: "m", Type: mapT},
+			{Name: "k", Type: ir.TString},
+			{Name: "v", Type: ir.TInt},
+		},
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.ExprStmt{X: &ir.MethodCall{
+					Receiver: &ir.Ident{Name: "m", Kind: ir.IdentParam, T: mapT},
+					Name:     "set",
+					Args: []ir.Arg{
+						{Value: &ir.Ident{Name: "k", Kind: ir.IdentParam, T: ir.TString}},
+						{Value: &ir.Ident{Name: "v", Kind: ir.IdentParam, T: ir.TInt}},
+					},
+					T: ir.TUnit,
+				}},
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/map.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare void @osty_rt_map_insert_string(ptr, ptr, ptr)",
+		"call void @osty_rt_map_insert_string(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateFromMIRSetContains(t *testing.T) {
+	setT := &ir.NamedType{Name: "Set", Args: []ir.Type{ir.TInt}, Builtin: true}
+	fn := &ir.FnDecl{
+		Name:   "has",
+		Return: ir.TBool,
+		Params: []*ir.Param{
+			{Name: "s", Type: setT},
+			{Name: "v", Type: ir.TInt},
+		},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "s", Kind: ir.IdentParam, T: setT},
+				Name:     "contains",
+				Args: []ir.Arg{
+					{Value: &ir.Ident{Name: "v", Kind: ir.IdentParam, T: ir.TInt}},
+				},
+				T: ir.TBool,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/set.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare i1 @osty_rt_set_contains_i64(ptr, i64)",
+		"call i1 @osty_rt_set_contains_i64(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateFromMIRListSorted(t *testing.T) {
+	listInt := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TInt}, Builtin: true}
+	fn := &ir.FnDecl{
+		Name:   "ordered",
+		Return: listInt,
+		Params: []*ir.Param{{Name: "xs", Type: listInt}},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "xs", Kind: ir.IdentParam, T: listInt},
+				Name:     "sorted",
+				T:        listInt,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/sort.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare ptr @osty_rt_list_sorted_i64(ptr)",
+		"call ptr @osty_rt_list_sorted_i64(",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)

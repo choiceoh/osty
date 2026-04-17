@@ -92,12 +92,14 @@ type mirGen struct {
 	stringOrder   []string            // order-of-insertion
 
 	// Aggregate type pools. Struct defs come from the module's
-	// LayoutTable; tuple defs are discovered on-demand as the emitter
-	// walks the function bodies. Both are rendered once before the
-	// first function definition.
-	structOrder []string                // struct name in LayoutTable order (sorted by name)
-	tupleDefs   map[string][]mir.Type   // mangled tuple name → element types
-	tupleOrder  []string                // first-use order of tuple names
+	// LayoutTable; tuple / option / result defs are discovered
+	// on-demand as the emitter walks the function bodies. All are
+	// rendered once before the first function definition.
+	structOrder     []string              // struct name in LayoutTable order (sorted)
+	enumLayoutOrder []string              // enum-shaped type names in first-use order
+	enumLayouts     map[string]mir.Type   // mangled enum/option name → payload inner type
+	tupleDefs       map[string][]mir.Type // mangled tuple name → element types
+	tupleOrder      []string              // first-use order of tuple names
 }
 
 // mirFnSig caches a function's LLVM signature so call sites can render
@@ -117,6 +119,7 @@ func newMIRGen(m *mir.Module, opts Options) *mirGen {
 		declares:      map[string]string{},
 		strings:       map[string]string{},
 		tupleDefs:     map[string][]mir.Type{},
+		enumLayouts:   map[string]mir.Type{},
 	}
 }
 
@@ -186,26 +189,45 @@ func (g *mirGen) typeSupported(t mir.Type) bool {
 			ir.PrimUInt8, ir.PrimUInt16, ir.PrimUInt32, ir.PrimUInt64,
 			ir.PrimByte, ir.PrimBool, ir.PrimChar,
 			ir.PrimFloat, ir.PrimFloat32, ir.PrimFloat64,
-			ir.PrimString, ir.PrimUnit, ir.PrimNever:
+			ir.PrimString, ir.PrimBytes, ir.PrimUnit, ir.PrimNever:
 			return true
 		}
 	case *ir.NamedType:
-		// User-declared struct (layout must exist in the module's
-		// LayoutTable). Enums, lists, maps, sets, optional-named
-		// forms are still refused by checkSupported above because
-		// they'd need discriminant / runtime handling the MVP doesn't
-		// carry yet.
+		// User-declared struct or enum (layout must exist in the
+		// module's LayoutTable). Builtin `List<T>`, `Map<K,V>`,
+		// `Set<T>` are always `ptr` at the LLVM level so we accept
+		// them; actual operations go through runtime intrinsics.
+		if x.Builtin {
+			switch x.Name {
+			case "List", "Map", "Set":
+				return true
+			}
+		}
 		if g.mod != nil && g.mod.Layouts != nil {
 			if _, ok := g.mod.Layouts.Structs[x.Name]; ok {
 				return true
 			}
+			if _, ok := g.mod.Layouts.Enums[x.Name]; ok {
+				return true
+			}
 		}
+		// Option<T> / Maybe<T> — treated as a 2-word enum layout.
+		switch x.Name {
+		case "Option", "Maybe", "Result":
+			return true
+		}
+	case *ir.OptionalType:
+		return g.typeSupported(x.Inner)
 	case *ir.TupleType:
 		for _, e := range x.Elems {
 			if !g.typeSupported(e) {
 				return false
 			}
 		}
+		return true
+	case *ir.FnType:
+		// Fn values pass as `ptr` at the LLVM boundary; accept them
+		// for now (closures with captures still fall back to legacy).
 		return true
 	}
 	return false
@@ -240,13 +262,13 @@ func (g *mirGen) checkInstrSupported(fn *mir.Function, inst mir.Instr) error {
 }
 
 // checkProjectionsSupported walks a Place's projection chain and
-// refuses anything outside the aggregate MVP (FieldProj / TupleProj).
-// Variant / Index / Deref projections need enum dispatch or runtime
-// hooks and belong to a later Stage 3 expansion.
+// refuses anything outside the emitter's current coverage. After
+// Stage 3.2 the set is FieldProj / TupleProj / VariantProj. IndexProj
+// and DerefProj still belong to later stages.
 func (g *mirGen) checkProjectionsSupported(fn *mir.Function, p mir.Place, ctx string) error {
 	for _, proj := range p.Projections {
 		switch proj.(type) {
-		case *mir.FieldProj, *mir.TupleProj:
+		case *mir.FieldProj, *mir.TupleProj, *mir.VariantProj:
 			// allowed
 		default:
 			return unsupported("mir-mvp", fmt.Sprintf("%s projection %T not yet supported in %s", ctx, proj, fn.Name))
@@ -257,11 +279,12 @@ func (g *mirGen) checkProjectionsSupported(fn *mir.Function, p mir.Place, ctx st
 
 func (g *mirGen) checkRValueSupported(fn *mir.Function, rv mir.RValue) error {
 	switch r := rv.(type) {
-	case *mir.UseRV, *mir.UnaryRV, *mir.BinaryRV:
+	case *mir.UseRV, *mir.UnaryRV, *mir.BinaryRV,
+		*mir.DiscriminantRV, *mir.NullaryRV, *mir.CastRV:
 		return nil
 	case *mir.AggregateRV:
 		switch r.Kind {
-		case mir.AggStruct, mir.AggTuple:
+		case mir.AggStruct, mir.AggTuple, mir.AggEnumVariant, mir.AggList:
 			return nil
 		}
 		return unsupported("mir-mvp", fmt.Sprintf("aggregate kind %d not yet supported in %s", r.Kind, fn.Name))
@@ -282,6 +305,16 @@ func (g *mirGen) checkTermSupported(fn *mir.Function, t mir.Terminator) error {
 func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 	switch k {
 	case mir.IntrinsicPrintln, mir.IntrinsicPrint:
+		return true
+	case mir.IntrinsicListPush, mir.IntrinsicListLen, mir.IntrinsicListGet,
+		mir.IntrinsicListIsEmpty, mir.IntrinsicListSorted, mir.IntrinsicListToSet:
+		return true
+	case mir.IntrinsicMapNew, mir.IntrinsicMapGet, mir.IntrinsicMapSet,
+		mir.IntrinsicMapContains, mir.IntrinsicMapLen, mir.IntrinsicMapKeys,
+		mir.IntrinsicMapRemove:
+		return true
+	case mir.IntrinsicSetInsert, mir.IntrinsicSetContains, mir.IntrinsicSetLen,
+		mir.IntrinsicSetToList:
 		return true
 	}
 	return false
@@ -384,8 +417,20 @@ func (g *mirGen) emitTypeDefs() {
 		}
 		sort.Strings(names)
 		g.structOrder = names
+		// User enums also go through the same 2-word layout as Option /
+		// Maybe / Result: `{ i64 disc, i64 payload }`. We pre-register
+		// them here so they're in the type-def block even if the
+		// function bodies haven't referenced their variants yet.
+		enumNames := make([]string, 0, len(g.mod.Layouts.Enums))
+		for name := range g.mod.Layouts.Enums {
+			enumNames = append(enumNames, name)
+		}
+		sort.Strings(enumNames)
+		for _, name := range enumNames {
+			g.registerEnumLayout(name, nil)
+		}
 	}
-	if len(g.structOrder) == 0 && len(g.tupleOrder) == 0 {
+	if len(g.structOrder) == 0 && len(g.tupleOrder) == 0 && len(g.enumLayoutOrder) == 0 {
 		return
 	}
 
@@ -404,6 +449,11 @@ func (g *mirGen) emitTypeDefs() {
 		block.WriteString(" = type { ")
 		block.WriteString(strings.Join(parts, ", "))
 		block.WriteString(" }\n")
+	}
+	for _, name := range g.enumLayoutOrder {
+		block.WriteByte('%')
+		block.WriteString(name)
+		block.WriteString(" = type { i64, i64 }\n")
 	}
 	for _, name := range g.tupleOrder {
 		elems := g.tupleDefs[name]
@@ -816,8 +866,353 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 			return unsupported("mir-mvp", "println with multiple args")
 		}
 		return g.emitPrintlnLike(i.Args[0], i.Kind == mir.IntrinsicPrintln)
+	case mir.IntrinsicListPush, mir.IntrinsicListLen, mir.IntrinsicListGet,
+		mir.IntrinsicListIsEmpty, mir.IntrinsicListSorted, mir.IntrinsicListToSet:
+		return g.emitListIntrinsic(i)
+	case mir.IntrinsicMapNew, mir.IntrinsicMapGet, mir.IntrinsicMapSet,
+		mir.IntrinsicMapContains, mir.IntrinsicMapLen, mir.IntrinsicMapKeys,
+		mir.IntrinsicMapRemove:
+		return g.emitMapIntrinsic(i)
+	case mir.IntrinsicSetInsert, mir.IntrinsicSetContains, mir.IntrinsicSetLen,
+		mir.IntrinsicSetToList:
+		return g.emitSetIntrinsic(i)
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("intrinsic %s", mirIntrinsicLabel(i.Kind)))
+}
+
+// ==== list / map / set intrinsics ====
+
+// emitListIntrinsic dispatches each list intrinsic to its runtime
+// symbol. Element type flows through the receiver (first arg); the
+// emitter reads its LLVM form to pick the typed or bytes-fallback
+// variant. Dest semantics match the MIR intrinsic contract.
+func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
+	if len(i.Args) < 1 {
+		return unsupported("mir-mvp", "list intrinsic with no receiver")
+	}
+	listOp := i.Args[0]
+	listReg, err := g.evalOperand(listOp, listOp.Type())
+	if err != nil {
+		return err
+	}
+	elemT := listElemType(listOp.Type())
+	if elemT == nil {
+		return unsupported("mir-mvp", "list intrinsic: missing element type")
+	}
+	elemLLVM := g.llvmType(elemT)
+	switch i.Kind {
+	case mir.IntrinsicListPush:
+		if len(i.Args) != 2 {
+			return unsupported("mir-mvp", "list_push arity")
+		}
+		return g.emitListPushOperand(listReg, i.Args[1], elemT)
+	case mir.IntrinsicListLen:
+		sym := "osty_rt_list_len"
+		g.declareRuntime(sym, "declare i64 @"+sym+"(ptr)")
+		return g.emitSimpleCall(i, sym, "i64", []string{"ptr " + listReg})
+	case mir.IntrinsicListIsEmpty:
+		sym := "osty_rt_list_is_empty"
+		g.declareRuntime(sym, "declare i1 @"+sym+"(ptr)")
+		return g.emitSimpleCall(i, sym, "i1", []string{"ptr " + listReg})
+	case mir.IntrinsicListGet:
+		if len(i.Args) != 2 {
+			return unsupported("mir-mvp", "list_get arity")
+		}
+		idxOp := i.Args[1]
+		idxReg, err := g.evalOperand(idxOp, idxOp.Type())
+		if err != nil {
+			return err
+		}
+		if !listUsesTypedRuntime(elemLLVM) {
+			return unsupported("mir-mvp", "list_get on composite element type")
+		}
+		sym := "osty_rt_list_get_" + listRuntimeSymbolSuffix(elemLLVM)
+		g.declareRuntime(sym, "declare "+elemLLVM+" @"+sym+"(ptr, i64)")
+		return g.emitSimpleCall(i, sym, elemLLVM, []string{"ptr " + listReg, "i64 " + idxReg})
+	case mir.IntrinsicListSorted:
+		elemString := isStringLLVMType(elemT)
+		sym := listRuntimeSortedSymbol(elemLLVM, elemString)
+		if sym == "" {
+			return unsupported("mir-mvp", "list_sorted on element type "+elemLLVM)
+		}
+		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr)")
+		return g.emitSimpleCall(i, sym, "ptr", []string{"ptr " + listReg})
+	case mir.IntrinsicListToSet:
+		elemString := isStringLLVMType(elemT)
+		sym := listRuntimeToSetSymbol(elemLLVM, elemString)
+		if sym == "" {
+			return unsupported("mir-mvp", "list_to_set on element type "+elemLLVM)
+		}
+		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr)")
+		return g.emitSimpleCall(i, sym, "ptr", []string{"ptr " + listReg})
+	}
+	return unsupported("mir-mvp", fmt.Sprintf("list intrinsic kind %d", i.Kind))
+}
+
+// emitMapIntrinsic dispatches map intrinsics to runtime symbols. Key
+// type dictates the suffix (`_i64`, `_string`, `_bytes`, …).
+func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
+	if i.Kind == mir.IntrinsicMapNew {
+		sym := "osty_rt_map_new"
+		g.declareRuntime(sym, "declare ptr @"+sym+"()")
+		return g.emitSimpleCall(i, sym, "ptr", nil)
+	}
+	if len(i.Args) < 1 {
+		return unsupported("mir-mvp", "map intrinsic with no receiver")
+	}
+	mapReg, err := g.evalOperand(i.Args[0], i.Args[0].Type())
+	if err != nil {
+		return err
+	}
+	keyT, valT := mapKeyValueTypes(i.Args[0].Type())
+	keyLLVM := g.llvmType(keyT)
+	keyString := isStringLLVMType(keyT)
+	_ = valT
+	switch i.Kind {
+	case mir.IntrinsicMapLen:
+		sym := "osty_rt_map_len"
+		g.declareRuntime(sym, "declare i64 @"+sym+"(ptr)")
+		return g.emitSimpleCall(i, sym, "i64", []string{"ptr " + mapReg})
+	case mir.IntrinsicMapKeys:
+		sym := "osty_rt_map_keys"
+		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr)")
+		return g.emitSimpleCall(i, sym, "ptr", []string{"ptr " + mapReg})
+	case mir.IntrinsicMapContains:
+		if len(i.Args) != 2 {
+			return unsupported("mir-mvp", "map_contains arity")
+		}
+		kReg, err := g.evalOperand(i.Args[1], keyT)
+		if err != nil {
+			return err
+		}
+		sym := "osty_rt_map_contains_" + mapSetKeySuffix(keyLLVM, keyString)
+		g.declareRuntime(sym, "declare i1 @"+sym+"(ptr, "+keyLLVM+")")
+		return g.emitSimpleCall(i, sym, "i1", []string{"ptr " + mapReg, keyLLVM + " " + kReg})
+	case mir.IntrinsicMapGet:
+		if len(i.Args) != 2 {
+			return unsupported("mir-mvp", "map_get arity")
+		}
+		kReg, err := g.evalOperand(i.Args[1], keyT)
+		if err != nil {
+			return err
+		}
+		sym := "osty_rt_map_get_or_abort_" + mapSetKeySuffix(keyLLVM, keyString)
+		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr, "+keyLLVM+")")
+		return g.emitSimpleCall(i, sym, "ptr", []string{"ptr " + mapReg, keyLLVM + " " + kReg})
+	case mir.IntrinsicMapSet:
+		if len(i.Args) != 3 {
+			return unsupported("mir-mvp", "map_set arity")
+		}
+		kReg, err := g.evalOperand(i.Args[1], keyT)
+		if err != nil {
+			return err
+		}
+		vOp := i.Args[2]
+		vReg, err := g.evalOperand(vOp, vOp.Type())
+		if err != nil {
+			return err
+		}
+		vLLVM := g.llvmType(vOp.Type())
+		// Map insert expects a ptr-sized value; widen if needed.
+		if vLLVM != "ptr" {
+			widened, err := g.toI64Slot(vReg, vOp.Type())
+			if err != nil {
+				return err
+			}
+			ptr := g.fresh()
+			g.fnBuf.WriteString("  ")
+			g.fnBuf.WriteString(ptr)
+			g.fnBuf.WriteString(" = inttoptr i64 ")
+			g.fnBuf.WriteString(widened)
+			g.fnBuf.WriteString(" to ptr\n")
+			vReg = ptr
+		}
+		sym := "osty_rt_map_insert_" + mapSetKeySuffix(keyLLVM, keyString)
+		g.declareRuntime(sym, "declare void @"+sym+"(ptr, "+keyLLVM+", ptr)")
+		g.fnBuf.WriteString("  call void @")
+		g.fnBuf.WriteString(sym)
+		g.fnBuf.WriteString("(ptr ")
+		g.fnBuf.WriteString(mapReg)
+		g.fnBuf.WriteString(", ")
+		g.fnBuf.WriteString(keyLLVM)
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(kReg)
+		g.fnBuf.WriteString(", ptr ")
+		g.fnBuf.WriteString(vReg)
+		g.fnBuf.WriteString(")\n")
+		return nil
+	case mir.IntrinsicMapRemove:
+		if len(i.Args) != 2 {
+			return unsupported("mir-mvp", "map_remove arity")
+		}
+		kReg, err := g.evalOperand(i.Args[1], keyT)
+		if err != nil {
+			return err
+		}
+		sym := "osty_rt_map_remove_" + mapSetKeySuffix(keyLLVM, keyString)
+		g.declareRuntime(sym, "declare void @"+sym+"(ptr, "+keyLLVM+")")
+		g.fnBuf.WriteString("  call void @")
+		g.fnBuf.WriteString(sym)
+		g.fnBuf.WriteString("(ptr ")
+		g.fnBuf.WriteString(mapReg)
+		g.fnBuf.WriteString(", ")
+		g.fnBuf.WriteString(keyLLVM)
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(kReg)
+		g.fnBuf.WriteString(")\n")
+		return nil
+	}
+	return unsupported("mir-mvp", fmt.Sprintf("map intrinsic kind %d", i.Kind))
+}
+
+// emitSetIntrinsic dispatches set intrinsics to runtime symbols.
+func (g *mirGen) emitSetIntrinsic(i *mir.IntrinsicInstr) error {
+	if len(i.Args) < 1 {
+		return unsupported("mir-mvp", "set intrinsic with no receiver")
+	}
+	setReg, err := g.evalOperand(i.Args[0], i.Args[0].Type())
+	if err != nil {
+		return err
+	}
+	elemT := setElemType(i.Args[0].Type())
+	elemLLVM := g.llvmType(elemT)
+	elemString := isStringLLVMType(elemT)
+	switch i.Kind {
+	case mir.IntrinsicSetLen:
+		sym := "osty_rt_set_len"
+		g.declareRuntime(sym, "declare i64 @"+sym+"(ptr)")
+		return g.emitSimpleCall(i, sym, "i64", []string{"ptr " + setReg})
+	case mir.IntrinsicSetToList:
+		sym := "osty_rt_set_to_list"
+		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr)")
+		return g.emitSimpleCall(i, sym, "ptr", []string{"ptr " + setReg})
+	case mir.IntrinsicSetContains:
+		if len(i.Args) != 2 {
+			return unsupported("mir-mvp", "set_contains arity")
+		}
+		vReg, err := g.evalOperand(i.Args[1], elemT)
+		if err != nil {
+			return err
+		}
+		sym := "osty_rt_set_contains_" + mapSetKeySuffix(elemLLVM, elemString)
+		g.declareRuntime(sym, "declare i1 @"+sym+"(ptr, "+elemLLVM+")")
+		return g.emitSimpleCall(i, sym, "i1", []string{"ptr " + setReg, elemLLVM + " " + vReg})
+	case mir.IntrinsicSetInsert:
+		if len(i.Args) != 2 {
+			return unsupported("mir-mvp", "set_insert arity")
+		}
+		vReg, err := g.evalOperand(i.Args[1], elemT)
+		if err != nil {
+			return err
+		}
+		sym := "osty_rt_set_insert_" + mapSetKeySuffix(elemLLVM, elemString)
+		g.declareRuntime(sym, "declare void @"+sym+"(ptr, "+elemLLVM+")")
+		g.fnBuf.WriteString("  call void @")
+		g.fnBuf.WriteString(sym)
+		g.fnBuf.WriteString("(ptr ")
+		g.fnBuf.WriteString(setReg)
+		g.fnBuf.WriteString(", ")
+		g.fnBuf.WriteString(elemLLVM)
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(vReg)
+		g.fnBuf.WriteString(")\n")
+		return nil
+	}
+	return unsupported("mir-mvp", fmt.Sprintf("set intrinsic kind %d", i.Kind))
+}
+
+// emitSimpleCall emits a `call <ret> @<sym>(<args>)` instruction and
+// handles the `dest` slot (store into alloca) if present.
+func (g *mirGen) emitSimpleCall(i *mir.IntrinsicInstr, sym, retLLVM string, args []string) error {
+	joined := strings.Join(args, ", ")
+	if i.Dest == nil || retLLVM == "void" {
+		g.fnBuf.WriteString("  call ")
+		g.fnBuf.WriteString(retLLVM)
+		g.fnBuf.WriteString(" @")
+		g.fnBuf.WriteString(sym)
+		g.fnBuf.WriteByte('(')
+		g.fnBuf.WriteString(joined)
+		g.fnBuf.WriteString(")\n")
+		return nil
+	}
+	destLoc := g.fn.Local(i.Dest.Local)
+	tmp := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(tmp)
+	g.fnBuf.WriteString(" = call ")
+	g.fnBuf.WriteString(retLLVM)
+	g.fnBuf.WriteString(" @")
+	g.fnBuf.WriteString(sym)
+	g.fnBuf.WriteByte('(')
+	g.fnBuf.WriteString(joined)
+	g.fnBuf.WriteString(")\n")
+	if destLoc == nil {
+		return nil
+	}
+	// Coerce to dest slot type if needed.
+	destLLVM := g.llvmType(destLoc.Type)
+	stored := tmp
+	if destLLVM != retLLVM {
+		// Most commonly this is widening a runtime i1 into a 1-bit slot
+		// (same width), or a ptr into an i64 etc. — keep conservative.
+		if widened, err := g.coerceValue(tmp, retLLVM, destLLVM); err == nil {
+			stored = widened
+		}
+	}
+	g.fnBuf.WriteString("  store ")
+	g.fnBuf.WriteString(destLLVM)
+	g.fnBuf.WriteByte(' ')
+	g.fnBuf.WriteString(stored)
+	g.fnBuf.WriteString(", ptr ")
+	g.fnBuf.WriteString(g.localSlots[i.Dest.Local])
+	g.fnBuf.WriteByte('\n')
+	return nil
+}
+
+// coerceValue applies a cheap cast between two LLVM scalar types. Used
+// when a runtime call returns a narrower/wider type than the MIR
+// destination's declared type. The set of conversions handled here is
+// deliberately narrow — anything unusual returns an error so we hit a
+// fall-back rather than emit invalid IR.
+func (g *mirGen) coerceValue(val, from, to string) (string, error) {
+	if from == to {
+		return val, nil
+	}
+	if from == "i1" && intLLVMBits(to) > 1 {
+		tmp := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(tmp)
+		g.fnBuf.WriteString(" = zext i1 ")
+		g.fnBuf.WriteString(val)
+		g.fnBuf.WriteString(" to ")
+		g.fnBuf.WriteString(to)
+		g.fnBuf.WriteByte('\n')
+		return tmp, nil
+	}
+	return val, nil
+}
+
+func mapKeyValueTypes(t mir.Type) (mir.Type, mir.Type) {
+	if nt, ok := t.(*ir.NamedType); ok && nt.Name == "Map" {
+		if len(nt.Args) >= 2 {
+			return nt.Args[0], nt.Args[1]
+		}
+	}
+	return nil, nil
+}
+
+func setElemType(t mir.Type) mir.Type {
+	if nt, ok := t.(*ir.NamedType); ok && nt.Name == "Set" && len(nt.Args) > 0 {
+		return nt.Args[0]
+	}
+	return nil
+}
+
+func isStringLLVMType(t mir.Type) bool {
+	if p, ok := t.(*ir.PrimType); ok {
+		return p.Kind == ir.PrimString
+	}
+	return false
 }
 
 // emitPrintlnLike prints a single primitive value using printf. The
@@ -1016,15 +1411,215 @@ func (g *mirGen) evalRValue(rv mir.RValue, hintT mir.Type) (string, error) {
 		return g.emitBinary(r.Op, left, right, r.Left.Type(), r.T)
 	case *mir.AggregateRV:
 		return g.emitAggregate(r, hintT)
+	case *mir.DiscriminantRV:
+		return g.emitDiscriminantRV(r)
+	case *mir.NullaryRV:
+		return g.emitNullaryRV(r, hintT)
+	case *mir.CastRV:
+		return g.emitCastRV(r)
 	}
 	return "", unsupported("mir-mvp", fmt.Sprintf("rvalue %T", rv))
 }
 
-// emitAggregate builds an LLVM aggregate value for a struct or tuple
-// via an `insertvalue` chain. Each iteration inserts one field into
-// the running aggregate. Starting from `undef` keeps the chain
-// dependency-free — LLVM's SROA + mem2reg collapses the undef chain
-// into direct reads during opt.
+// emitDiscriminantRV reads the i64 discriminant (field 0) from an
+// enum-shaped place. The place's type determines the aggregate's
+// LLVM type name.
+func (g *mirGen) emitDiscriminantRV(rv *mir.DiscriminantRV) (string, error) {
+	baseT := g.localType(rv.Place.Local)
+	// If the place has projections, follow them into the actual
+	// aggregate type; but for Stage 3.2 we only support a bare local
+	// scrutinee, since that is what ir.lowerMatch / lowerIfLet emit.
+	if rv.Place.HasProjections() {
+		return "", unsupported("mir-mvp", "discriminant through projections")
+	}
+	slot := g.localSlots[rv.Place.Local]
+	if slot == "" {
+		return "", fmt.Errorf("mir-mvp: discriminant from unknown local %d", rv.Place.Local)
+	}
+	agg := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(agg)
+	g.fnBuf.WriteString(" = load ")
+	g.fnBuf.WriteString(g.llvmType(baseT))
+	g.fnBuf.WriteString(", ptr ")
+	g.fnBuf.WriteString(slot)
+	g.fnBuf.WriteByte('\n')
+	tmp := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(tmp)
+	g.fnBuf.WriteString(" = extractvalue ")
+	g.fnBuf.WriteString(g.llvmType(baseT))
+	g.fnBuf.WriteByte(' ')
+	g.fnBuf.WriteString(agg)
+	g.fnBuf.WriteString(", 0\n")
+	return tmp, nil
+}
+
+// emitNullaryRV materialises nullary values — currently only
+// NullaryNone for optional/maybe. We emit `{ 0, 0 }` of the target's
+// LLVM type.
+func (g *mirGen) emitNullaryRV(rv *mir.NullaryRV, hintT mir.Type) (string, error) {
+	if rv.Kind != mir.NullaryNone {
+		return "", unsupported("mir-mvp", fmt.Sprintf("nullary rvalue kind %d", rv.Kind))
+	}
+	target := rv.T
+	if target == nil {
+		target = hintT
+	}
+	if target == nil {
+		return "", unsupported("mir-mvp", "nullary None with unknown target type")
+	}
+	aggLLVM := g.llvmType(target)
+	step1 := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(step1)
+	g.fnBuf.WriteString(" = insertvalue ")
+	g.fnBuf.WriteString(aggLLVM)
+	g.fnBuf.WriteString(" undef, i64 0, 0\n")
+	step2 := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(step2)
+	g.fnBuf.WriteString(" = insertvalue ")
+	g.fnBuf.WriteString(aggLLVM)
+	g.fnBuf.WriteByte(' ')
+	g.fnBuf.WriteString(step1)
+	g.fnBuf.WriteString(", i64 0, 1\n")
+	return step2, nil
+}
+
+// emitCastRV handles numeric resizing, int↔float conversions, and
+// optional wrap/unwrap (which is a no-op at the enum-layout level:
+// wrap means "insert as Some-tagged value" but MIR emits a separate
+// aggregate in practice). For now we support IntResize,
+// IntToFloat, FloatToInt, FloatResize, Bitcast; OptionalWrap/Unwrap
+// pass through as identity reads since the MIR lowerer already emits
+// the necessary aggregate construction.
+func (g *mirGen) emitCastRV(rv *mir.CastRV) (string, error) {
+	arg, err := g.evalOperand(rv.Arg, rv.From)
+	if err != nil {
+		return "", err
+	}
+	fromLLVM := g.llvmType(rv.From)
+	toLLVM := g.llvmType(rv.To)
+	switch rv.Kind {
+	case mir.CastIntResize:
+		return g.emitIntResize(arg, fromLLVM, toLLVM)
+	case mir.CastIntToFloat:
+		tmp := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(tmp)
+		g.fnBuf.WriteString(" = sitofp ")
+		g.fnBuf.WriteString(fromLLVM)
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(arg)
+		g.fnBuf.WriteString(" to ")
+		g.fnBuf.WriteString(toLLVM)
+		g.fnBuf.WriteByte('\n')
+		return tmp, nil
+	case mir.CastFloatToInt:
+		tmp := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(tmp)
+		g.fnBuf.WriteString(" = fptosi ")
+		g.fnBuf.WriteString(fromLLVM)
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(arg)
+		g.fnBuf.WriteString(" to ")
+		g.fnBuf.WriteString(toLLVM)
+		g.fnBuf.WriteByte('\n')
+		return tmp, nil
+	case mir.CastFloatResize:
+		op := "fpext"
+		if toLLVM == "float" && fromLLVM == "double" {
+			op = "fptrunc"
+		}
+		tmp := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(tmp)
+		g.fnBuf.WriteString(" = ")
+		g.fnBuf.WriteString(op)
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(fromLLVM)
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(arg)
+		g.fnBuf.WriteString(" to ")
+		g.fnBuf.WriteString(toLLVM)
+		g.fnBuf.WriteByte('\n')
+		return tmp, nil
+	case mir.CastBitcast:
+		if fromLLVM == toLLVM {
+			return arg, nil
+		}
+		tmp := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(tmp)
+		g.fnBuf.WriteString(" = bitcast ")
+		g.fnBuf.WriteString(fromLLVM)
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(arg)
+		g.fnBuf.WriteString(" to ")
+		g.fnBuf.WriteString(toLLVM)
+		g.fnBuf.WriteByte('\n')
+		return tmp, nil
+	case mir.CastOptionalWrap, mir.CastOptionalUnwrap:
+		// Identity at this stage — the MIR lowerer normally materialises
+		// wrap via AggregateRV{EnumVariant} and unwrap via VariantProj,
+		// so a bare CastRV with these kinds is a passthrough.
+		return arg, nil
+	}
+	return "", unsupported("mir-mvp", fmt.Sprintf("cast kind %d", rv.Kind))
+}
+
+func (g *mirGen) emitIntResize(arg, fromLLVM, toLLVM string) (string, error) {
+	if fromLLVM == toLLVM {
+		return arg, nil
+	}
+	fromBits := intLLVMBits(fromLLVM)
+	toBits := intLLVMBits(toLLVM)
+	if fromBits == 0 || toBits == 0 {
+		return "", unsupported("mir-mvp", "int-resize between "+fromLLVM+" and "+toLLVM)
+	}
+	op := "sext"
+	if toBits < fromBits {
+		op = "trunc"
+	}
+	tmp := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(tmp)
+	g.fnBuf.WriteString(" = ")
+	g.fnBuf.WriteString(op)
+	g.fnBuf.WriteByte(' ')
+	g.fnBuf.WriteString(fromLLVM)
+	g.fnBuf.WriteByte(' ')
+	g.fnBuf.WriteString(arg)
+	g.fnBuf.WriteString(" to ")
+	g.fnBuf.WriteString(toLLVM)
+	g.fnBuf.WriteByte('\n')
+	return tmp, nil
+}
+
+func intLLVMBits(s string) int {
+	switch s {
+	case "i1":
+		return 1
+	case "i8":
+		return 8
+	case "i16":
+		return 16
+	case "i32":
+		return 32
+	case "i64":
+		return 64
+	}
+	return 0
+}
+
+// emitAggregate builds an LLVM aggregate value for a struct / tuple /
+// enum / list via an `insertvalue` chain (for struct / tuple / enum)
+// or a runtime push chain (for list). Each iteration inserts one
+// field into the running aggregate. Starting from `undef` keeps the
+// chain dependency-free — LLVM's SROA + mem2reg collapses the undef
+// chain into direct reads during opt.
 func (g *mirGen) emitAggregate(rv *mir.AggregateRV, hintT mir.Type) (string, error) {
 	aggT := rv.T
 	if aggT == nil {
@@ -1032,6 +1627,12 @@ func (g *mirGen) emitAggregate(rv *mir.AggregateRV, hintT mir.Type) (string, err
 	}
 	if aggT == nil {
 		return "", unsupported("mir-mvp", "aggregate with unknown type")
+	}
+	switch rv.Kind {
+	case mir.AggEnumVariant:
+		return g.emitEnumVariant(rv, aggT)
+	case mir.AggList:
+		return g.emitListLiteral(rv, aggT)
 	}
 	elems, err := g.aggregateElementTypes(aggT, rv)
 	if err != nil {
@@ -1064,6 +1665,240 @@ func (g *mirGen) emitAggregate(rv *mir.AggregateRV, hintT mir.Type) (string, err
 		acc = tmp
 	}
 	return acc, nil
+}
+
+// emitEnumVariant builds `{ i64 disc, i64 payload }` for an enum or
+// optional value. Scalar payloads are zext/sext/bitcast into the i64
+// slot. Pointer payloads use ptrtoint. Bare variants (no payload)
+// fill the slot with zero.
+func (g *mirGen) emitEnumVariant(rv *mir.AggregateRV, aggT mir.Type) (string, error) {
+	aggLLVM := g.llvmType(aggT)
+	// Step 1: insert discriminant.
+	disc := strconv.Itoa(rv.VariantIdx)
+	tmp1 := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(tmp1)
+	g.fnBuf.WriteString(" = insertvalue ")
+	g.fnBuf.WriteString(aggLLVM)
+	g.fnBuf.WriteString(" undef, i64 ")
+	g.fnBuf.WriteString(disc)
+	g.fnBuf.WriteString(", 0\n")
+
+	// Step 2: insert payload. For single scalar payloads the value
+	// lives directly in the i64 slot. For no-payload variants we
+	// leave the slot at zero (still emit insert so LLVM's definedness
+	// analysis doesn't cling to undef).
+	var payloadI64 string
+	if len(rv.Fields) == 0 {
+		payloadI64 = "0"
+	} else if len(rv.Fields) == 1 {
+		arg := rv.Fields[0]
+		argT := arg.Type()
+		val, err := g.evalOperand(arg, argT)
+		if err != nil {
+			return "", err
+		}
+		payloadI64, err = g.toI64Slot(val, argT)
+		if err != nil {
+			return "", err
+		}
+	} else {
+		return "", unsupported("mir-mvp", fmt.Sprintf("enum variant with %d payload fields (only scalar / 0-arity supported)", len(rv.Fields)))
+	}
+	tmp2 := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(tmp2)
+	g.fnBuf.WriteString(" = insertvalue ")
+	g.fnBuf.WriteString(aggLLVM)
+	g.fnBuf.WriteByte(' ')
+	g.fnBuf.WriteString(tmp1)
+	g.fnBuf.WriteString(", i64 ")
+	g.fnBuf.WriteString(payloadI64)
+	g.fnBuf.WriteString(", 1\n")
+	return tmp2, nil
+}
+
+// toI64Slot converts an LLVM value of type `t` into the i64 payload
+// slot used by the enum layout. It emits the narrowest widening that
+// works: zext / sext for integers, bitcast for doubles, ptrtoint for
+// pointers. Returns the register holding the i64 value.
+func (g *mirGen) toI64Slot(val string, t mir.Type) (string, error) {
+	llvmT := g.llvmType(t)
+	switch llvmT {
+	case "i64":
+		return val, nil
+	case "i1":
+		tmp := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(tmp)
+		g.fnBuf.WriteString(" = zext i1 ")
+		g.fnBuf.WriteString(val)
+		g.fnBuf.WriteString(" to i64\n")
+		return tmp, nil
+	case "i8", "i16", "i32":
+		tmp := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(tmp)
+		g.fnBuf.WriteString(" = sext ")
+		g.fnBuf.WriteString(llvmT)
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(val)
+		g.fnBuf.WriteString(" to i64\n")
+		return tmp, nil
+	case "double":
+		tmp := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(tmp)
+		g.fnBuf.WriteString(" = bitcast double ")
+		g.fnBuf.WriteString(val)
+		g.fnBuf.WriteString(" to i64\n")
+		return tmp, nil
+	case "float":
+		// widen to double, then bitcast
+		widened := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(widened)
+		g.fnBuf.WriteString(" = fpext float ")
+		g.fnBuf.WriteString(val)
+		g.fnBuf.WriteString(" to double\n")
+		tmp := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(tmp)
+		g.fnBuf.WriteString(" = bitcast double ")
+		g.fnBuf.WriteString(widened)
+		g.fnBuf.WriteString(" to i64\n")
+		return tmp, nil
+	case "ptr":
+		tmp := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(tmp)
+		g.fnBuf.WriteString(" = ptrtoint ptr ")
+		g.fnBuf.WriteString(val)
+		g.fnBuf.WriteString(" to i64\n")
+		return tmp, nil
+	case "void":
+		return "0", nil
+	}
+	return "", unsupported("mir-mvp", "enum payload: cannot widen "+llvmT+" to i64")
+}
+
+// fromI64Slot reverses toI64Slot: the enum payload slot is an i64 and
+// we want it as its declared type. Used by VariantProj reads.
+func (g *mirGen) fromI64Slot(val string, targetT mir.Type) (string, error) {
+	llvmT := g.llvmType(targetT)
+	switch llvmT {
+	case "i64":
+		return val, nil
+	case "i1":
+		tmp := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(tmp)
+		g.fnBuf.WriteString(" = trunc i64 ")
+		g.fnBuf.WriteString(val)
+		g.fnBuf.WriteString(" to i1\n")
+		return tmp, nil
+	case "i8", "i16", "i32":
+		tmp := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(tmp)
+		g.fnBuf.WriteString(" = trunc i64 ")
+		g.fnBuf.WriteString(val)
+		g.fnBuf.WriteString(" to ")
+		g.fnBuf.WriteString(llvmT)
+		g.fnBuf.WriteByte('\n')
+		return tmp, nil
+	case "double":
+		tmp := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(tmp)
+		g.fnBuf.WriteString(" = bitcast i64 ")
+		g.fnBuf.WriteString(val)
+		g.fnBuf.WriteString(" to double\n")
+		return tmp, nil
+	case "float":
+		widened := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(widened)
+		g.fnBuf.WriteString(" = bitcast i64 ")
+		g.fnBuf.WriteString(val)
+		g.fnBuf.WriteString(" to double\n")
+		tmp := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(tmp)
+		g.fnBuf.WriteString(" = fptrunc double ")
+		g.fnBuf.WriteString(widened)
+		g.fnBuf.WriteString(" to float\n")
+		return tmp, nil
+	case "ptr":
+		tmp := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(tmp)
+		g.fnBuf.WriteString(" = inttoptr i64 ")
+		g.fnBuf.WriteString(val)
+		g.fnBuf.WriteString(" to ptr\n")
+		return tmp, nil
+	case "void":
+		return "undef", nil
+	}
+	return "", unsupported("mir-mvp", "variant payload read: cannot narrow i64 to "+llvmT)
+}
+
+// emitListLiteral builds a `List<T>` from its element operands via
+// the runtime ABI: `osty_rt_list_new()` + a chain of typed pushes.
+// Returns the pointer register holding the new list.
+func (g *mirGen) emitListLiteral(rv *mir.AggregateRV, aggT mir.Type) (string, error) {
+	elemT := listElemType(aggT)
+	if elemT == nil {
+		return "", unsupported("mir-mvp", "list literal: missing element type")
+	}
+	g.declareRuntime("osty_rt_list_new", "declare ptr @osty_rt_list_new()")
+	list := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(list)
+	g.fnBuf.WriteString(" = call ptr @osty_rt_list_new()\n")
+	for _, f := range rv.Fields {
+		if err := g.emitListPushOperand(list, f, elemT); err != nil {
+			return "", err
+		}
+	}
+	return list, nil
+}
+
+// emitListPushOperand pushes one value onto a list by runtime ABI
+// convention — typed push for scalar element types, bytes fallback
+// for composite ones.
+func (g *mirGen) emitListPushOperand(listReg string, op mir.Operand, elemT mir.Type) error {
+	val, err := g.evalOperand(op, elemT)
+	if err != nil {
+		return err
+	}
+	elemLLVM := g.llvmType(elemT)
+	if listUsesTypedRuntime(elemLLVM) {
+		sym := "osty_rt_list_push_" + listRuntimeSymbolSuffix(elemLLVM)
+		g.declareRuntime(sym, "declare void @"+sym+"(ptr, "+elemLLVM+")")
+		g.fnBuf.WriteString("  call void @")
+		g.fnBuf.WriteString(sym)
+		g.fnBuf.WriteString("(ptr ")
+		g.fnBuf.WriteString(listReg)
+		g.fnBuf.WriteString(", ")
+		g.fnBuf.WriteString(elemLLVM)
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(val)
+		g.fnBuf.WriteString(")\n")
+		return nil
+	}
+	// Composite element — use the bytes helper with a stack-allocated
+	// slot and size=1 byte slot for string (runtime expects ptr). For
+	// true byte-sized elements the runtime looks at the size arg, so
+	// we pass its LLVM width.
+	return unsupported("mir-mvp", "list literal with composite element type: "+elemLLVM)
+}
+
+func listElemType(t mir.Type) mir.Type {
+	if nt, ok := t.(*ir.NamedType); ok && nt.Name == "List" && len(nt.Args) > 0 {
+		return nt.Args[0]
+	}
+	return nil
 }
 
 // aggregateElementTypes returns the element types an aggregate's
@@ -1165,6 +2000,25 @@ func (g *mirGen) emitLoad(place mir.Place, t mir.Type) (string, error) {
 				return "", unsupported("mir-mvp", "projection missing Type")
 			}
 		}
+		if _, isVariant := proj.(*mir.VariantProj); isVariant {
+			// Variant payload lives in the i64 slot; extract i64,
+			// then narrow to the declared payload type.
+			rawSlot := g.fresh()
+			g.fnBuf.WriteString("  ")
+			g.fnBuf.WriteString(rawSlot)
+			g.fnBuf.WriteString(" = extractvalue ")
+			g.fnBuf.WriteString(curLLVM)
+			g.fnBuf.WriteByte(' ')
+			g.fnBuf.WriteString(curReg)
+			g.fnBuf.WriteString(", 1\n")
+			narrowed, err := g.fromI64Slot(rawSlot, elemT)
+			if err != nil {
+				return "", err
+			}
+			curReg = narrowed
+			curLLVM = g.llvmType(elemT)
+			continue
+		}
 		elemLLVM := g.llvmType(elemT)
 		next := g.fresh()
 		g.fnBuf.WriteString("  ")
@@ -1183,22 +2037,31 @@ func (g *mirGen) emitLoad(place mir.Place, t mir.Type) (string, error) {
 }
 
 // projectionIndex returns the field index for a FieldProj / TupleProj.
+// VariantProj returns field 1 (the payload slot) because enum layouts
+// uniformly use `{ i64 disc, i64 payload }`.
 func projectionIndex(p mir.Projection) (int, bool) {
 	switch x := p.(type) {
 	case *mir.FieldProj:
 		return x.Index, true
 	case *mir.TupleProj:
 		return x.Index, true
+	case *mir.VariantProj:
+		return 1, true
 	}
 	return 0, false
 }
 
-// projectionType returns the result type of a FieldProj / TupleProj.
+// projectionType returns the result type of a FieldProj / TupleProj /
+// VariantProj. For VariantProj the raw type in the place chain is
+// the payload's *declared* type; the enum slot itself is i64 and we
+// narrow at the read site via fromI64Slot.
 func projectionType(p mir.Projection) mir.Type {
 	switch x := p.(type) {
 	case *mir.FieldProj:
 		return x.Type
 	case *mir.TupleProj:
+		return x.Type
+	case *mir.VariantProj:
 		return x.Type
 	}
 	return nil
@@ -1500,13 +2363,101 @@ func (g *mirGen) llvmType(t mir.Type) string {
 			return "void"
 		}
 	case *ir.NamedType:
+		// Builtin collection types flow through the runtime as
+		// opaque pointers; there's no LLVM struct for them.
+		if x.Builtin {
+			switch x.Name {
+			case "List", "Map", "Set", "Bytes":
+				return "ptr"
+			}
+		}
+		// User-declared struct or enum — register the enum in the
+		// layout pool on first use and emit by name.
+		if g.mod != nil && g.mod.Layouts != nil {
+			if _, ok := g.mod.Layouts.Structs[x.Name]; ok {
+				return "%" + x.Name
+			}
+			if _, ok := g.mod.Layouts.Enums[x.Name]; ok {
+				g.registerEnumLayout(x.Name, nil)
+				return "%" + x.Name
+			}
+		}
+		// Prelude Option / Maybe / Result. Mint an anonymous
+		// `%Option.<T>` / `%Result.<T>.<E>` so the IR carries the
+		// element type in its name — mimicking how the legacy
+		// emitter names its specialisations.
+		switch x.Name {
+		case "Option", "Maybe":
+			return "%" + g.optionTypeName(x)
+		case "Result":
+			return "%" + g.resultTypeName(x)
+		}
 		return "%" + x.Name
+	case *ir.OptionalType:
+		return "%" + g.optionalTypeName(x)
 	case *ir.TupleType:
 		return "%" + g.tupleName(x)
+	case *ir.FnType:
+		return "ptr"
 	}
 	// Fallback: ptr works for anything we end up treating as opaque
 	// heap data.
 	return "ptr"
+}
+
+// ==== enum layout helpers ====
+
+// optionalTypeName returns a mangled `Option.<T>` name for a surface
+// `T?` optional. The layout is always `{ i64 disc, <payload> }` where
+// payload is the inner's LLVM type promoted to a slot-sized value.
+func (g *mirGen) optionalTypeName(t *ir.OptionalType) string {
+	name := "Option." + g.llvmTypeForTupleTag(t.Inner)
+	g.registerEnumLayout(name, t.Inner)
+	return name
+}
+
+func (g *mirGen) optionTypeName(t *ir.NamedType) string {
+	inner := mir.Type(nil)
+	if len(t.Args) > 0 {
+		inner = t.Args[0]
+	}
+	name := "Option"
+	if inner != nil {
+		name = "Option." + g.llvmTypeForTupleTag(inner)
+	}
+	g.registerEnumLayout(name, inner)
+	return name
+}
+
+// resultTypeName mangles a Result<T, E> name. Payload slot sits at
+// i64 width and Err payload (usually an Error ptr) reuses it via
+// bitcast — matching the legacy emitter's `%Result.T.E` convention.
+func (g *mirGen) resultTypeName(t *ir.NamedType) string {
+	name := "Result"
+	var inner mir.Type
+	if len(t.Args) >= 1 {
+		inner = t.Args[0]
+		name = "Result." + g.llvmTypeForTupleTag(t.Args[0])
+		if len(t.Args) >= 2 {
+			name += "." + g.llvmTypeForTupleTag(t.Args[1])
+		}
+	}
+	g.registerEnumLayout(name, inner)
+	return name
+}
+
+// registerEnumLayout records an enum-shaped type's payload for type
+// emission. The MIR emitter always uses `{ i64, <payload> }` where
+// payload is the wider of i64 / the inner type's LLVM form. For
+// scalar payloads smaller than i64 we upcast at construction;
+// pointer payloads sit in an i64 via ptrtoint so the layout stays
+// uniform with the legacy convention `%Maybe = type { i64, i64 }`.
+func (g *mirGen) registerEnumLayout(name string, inner mir.Type) {
+	if _, ok := g.enumLayouts[name]; ok {
+		return
+	}
+	g.enumLayouts[name] = inner
+	g.enumLayoutOrder = append(g.enumLayoutOrder, name)
 }
 
 // tupleName returns the mangled LLVM type name for a tuple and
