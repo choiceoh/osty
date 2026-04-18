@@ -3592,6 +3592,9 @@ func (g *mirGen) emitUnary(op mir.UnaryOp, arg string, t mir.Type) (string, erro
 }
 
 func (g *mirGen) emitBinary(op mir.BinaryOp, left, right string, argT, resT mir.Type) (string, error) {
+	if (op == mir.BinEq || op == mir.BinNeq) && isHeapEqualityType(argT) {
+		return g.emitHeapEquality(op, left, right)
+	}
 	argLLVM := g.llvmType(argT)
 	resLLVM := g.llvmType(resT)
 	isFloat := isFloatType(argT)
@@ -3685,6 +3688,48 @@ func (g *mirGen) emitBinary(op mir.BinaryOp, left, right string, argT, resT mir.
 	}
 	_ = resLLVM
 	return "", unsupported("mir-mvp", fmt.Sprintf("binary op %d", op))
+}
+
+// isHeapEqualityType reports whether MIR `==` / `!=` on values of type t
+// should be lowered to a runtime content-equality call instead of a raw
+// LLVM icmp on the pointer. Stage-1 covers String and Bytes; Bytes uses
+// the String runtime since both values share the C-string ABI.
+func isHeapEqualityType(t mir.Type) bool {
+	p, ok := t.(*ir.PrimType)
+	if !ok {
+		return false
+	}
+	return p.Kind == ir.PrimString || p.Kind == ir.PrimBytes
+}
+
+// emitHeapEquality lowers `==` / `!=` on pointer-shaped runtime values
+// (String, Bytes) to a call to the appropriate `osty_rt_*_Equal`
+// helper, negating the result for `!=`. The helper declarations are
+// registered lazily on first use so modules without any heap equality
+// stay byte-stable.
+func (g *mirGen) emitHeapEquality(op mir.BinaryOp, left, right string) (string, error) {
+	sym := llvmStringRuntimeEqualSymbol()
+	g.declareRuntime(sym, fmt.Sprintf("declare i1 @%s(ptr, ptr)", sym))
+	eq := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(eq)
+	g.fnBuf.WriteString(" = call i1 @")
+	g.fnBuf.WriteString(sym)
+	g.fnBuf.WriteString("(ptr ")
+	g.fnBuf.WriteString(left)
+	g.fnBuf.WriteString(", ptr ")
+	g.fnBuf.WriteString(right)
+	g.fnBuf.WriteString(")\n")
+	if op == mir.BinEq {
+		return eq, nil
+	}
+	neq := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(neq)
+	g.fnBuf.WriteString(" = xor i1 ")
+	g.fnBuf.WriteString(eq)
+	g.fnBuf.WriteString(", true\n")
+	return neq, nil
 }
 
 // ==== strings ====
