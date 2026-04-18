@@ -22,6 +22,39 @@ pub enum Option<T> {
         }
     }
 
+    pub fn isSomeAnd(self, pred: fn(T) -> Bool) -> Bool {
+        match self {
+            Some(value) -> pred(value),
+            None -> false,
+        }
+    }
+
+    pub fn isNoneOr(self, pred: fn(T) -> Bool) -> Bool {
+        match self {
+            Some(value) -> pred(value),
+            None -> true,
+        }
+    }
+
+    pub fn contains(self, item: T) -> Bool {
+        match self {
+            Some(value) -> value == item,
+            None -> false,
+        }
+    }
+
+    pub fn take(mut self) -> T? {
+        let old = self
+        self = None
+        old
+    }
+
+    pub fn replace(mut self, value: T) -> T? {
+        let old = self
+        self = Some(value)
+        old
+    }
+
     pub fn unwrap(self) -> T {
         match self {
             Some(value) -> value,
@@ -112,6 +145,30 @@ pub enum Option<T> {
         }
     }
 
+    pub fn mapOr<U>(self, fallback: U, f: fn(T) -> U) -> U {
+        match self {
+            Some(value) -> f(value),
+            None -> fallback,
+        }
+    }
+
+    pub fn mapOrElse<U>(self, fallback: fn() -> U, f: fn(T) -> U) -> U {
+        match self {
+            Some(value) -> f(value),
+            None -> fallback(),
+        }
+    }
+
+    pub fn zip<U>(self, other: U?) -> (T, U)? {
+        match self {
+            Some(a) -> match other {
+                Some(b) -> Some((a, b)),
+                None -> None,
+            },
+            None -> None,
+        }
+    }
+
     pub fn orError(self, msg: String) -> Result<T, Error> {
         match self {
             Some(value) -> Ok(value),
@@ -121,6 +178,13 @@ pub enum Option<T> {
 
     pub fn okOr(self, msg: String) -> Result<T, Error> {
         self.orError(msg)
+    }
+
+    pub fn okOrElse<E>(self, err: fn() -> E) -> Result<T, E> {
+        match self {
+            Some(value) -> Ok(value),
+            None -> Err(err()),
+        }
     }
 
     pub fn toString(self) -> String {
