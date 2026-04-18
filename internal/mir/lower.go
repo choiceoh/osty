@@ -264,10 +264,21 @@ func (l *lowerer) lowerFunction(fn *ir.FnDecl, owner string, asMethod bool) *Fun
 		retT = TUnit
 	}
 	symbol := fn.Name
+	// `Receiver` is not carried through `FnDecl.Params` in the IR; the
+	// owner's name + ReceiverMut flag is all that survives. Synthesise
+	// a self param at position 0 for methods so `paramLocals[0]` is
+	// well-defined downstream (bodyState.self points here).
+	params := fn.Params
 	if asMethod {
 		symbol = mangleMethodSymbol(owner, fn.Name)
+		selfParam := &ir.Param{
+			Name:  "self",
+			Type:  &ir.NamedType{Name: owner},
+			SpanV: fn.SpanV,
+		}
+		params = append([]*ir.Param{selfParam}, fn.Params...)
 	}
-	out := l.newFunction(symbol, fn.Params, retT, fn.SpanV, asMethod)
+	out := l.newFunction(symbol, params, retT, fn.SpanV, asMethod)
 	out.Exported = fn.Exported
 	if fn.Body == nil {
 		out.IsExternal = true
