@@ -21,16 +21,19 @@ fn testSelectProfileNameReleaseConflictReportsUsage() {
 fn testSelectProfileNameExplicitOverridesFallback() {
     let sel = selectProfileName("staging", false, "test")
     testing.assertEq(sel.name, "staging")
+    testing.assertEq(sel.conflict, "")
 }
 
 fn testSelectProfileNameFallbackUsedWhenUnset() {
     let sel = selectProfileName("", false, "test")
     testing.assertEq(sel.name, "test")
+    testing.assertEq(sel.conflict, "")
 }
 
 fn testSelectProfileNameUltimateDefaultIsDebug() {
     let sel = selectProfileName("", false, "")
     testing.assertEq(sel.name, "debug")
+    testing.assertEq(sel.conflict, "")
 }
 
 fn testParseFeatureListSplitsAndTrims() {
@@ -49,6 +52,27 @@ fn testParseFeatureListDropsEmpty() {
 
 fn testParseFeatureListEmptyInputReturnsEmpty() {
     let feats = parseFeatureList("")
+    let mut count = 0
+    for f in feats {
+        let _ = f
+        count = count + 1
+    }
+    testing.assertEq(count, 0)
+}
+
+fn testParseFeatureListSingleElement() {
+    let feats = parseFeatureList("a")
+    testing.assertEq(feats[0], "a")
+    let mut count = 0
+    for f in feats {
+        let _ = f
+        count = count + 1
+    }
+    testing.assertEq(count, 1)
+}
+
+fn testParseFeatureListWhitespaceOnlyIsEmpty() {
+    let feats = parseFeatureList("  ")
     let mut count = 0
     for f in feats {
         let _ = f

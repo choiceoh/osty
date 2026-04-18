@@ -32,15 +32,32 @@ fn testIsValidScaffoldNameRejectsBadChars() {
 }
 
 fn testResolveFixtureCasesDefaultsWhenZeroOrNegative() {
-    testing.assertEq(resolveFixtureCases(0).count, 3)
-    testing.assert(!(resolveFixtureCases(0).overCap))
-    testing.assertEq(resolveFixtureCases(-5).count, 3)
+    let zero = resolveFixtureCases(0)
+    testing.assertEq(zero.count, 3)
+    testing.assert(!(zero.overCap))
+
+    let neg = resolveFixtureCases(-5)
+    testing.assertEq(neg.count, 3)
+    testing.assert(!(neg.overCap))
 }
 
 fn testResolveFixtureCasesPassesThroughWithinRange() {
-    testing.assertEq(resolveFixtureCases(1).count, 1)
-    testing.assertEq(resolveFixtureCases(10).count, 10)
-    testing.assertEq(resolveFixtureCases(64).count, 64)
+    let one = resolveFixtureCases(1)
+    testing.assertEq(one.count, 1)
+    testing.assert(!(one.overCap))
+
+    let ten = resolveFixtureCases(10)
+    testing.assertEq(ten.count, 10)
+    testing.assert(!(ten.overCap))
+
+    let max = resolveFixtureCases(64)
+    testing.assertEq(max.count, 64)
+    testing.assert(!(max.overCap))
+}
+
+fn testScaffoldFixtureCapsConstants() {
+    testing.assertEq(scaffoldFixtureCasesDefault, 3)
+    testing.assertEq(scaffoldFixtureCasesMax, 64)
 }
 
 fn testResolveFixtureCasesClampsOverCap() {
