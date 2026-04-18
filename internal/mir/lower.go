@@ -280,6 +280,7 @@ func (l *lowerer) lowerFunction(fn *ir.FnDecl, owner string, asMethod bool) *Fun
 	}
 	out := l.newFunction(symbol, params, retT, fn.SpanV, asMethod)
 	out.Exported = fn.Exported
+	out.ExportSymbol = fn.ExportSymbol
 	if fn.Body == nil {
 		out.IsExternal = true
 		// Strip blocks for external stubs: the validator rejects empty
