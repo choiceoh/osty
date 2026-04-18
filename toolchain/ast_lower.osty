@@ -1,3 +1,5 @@
+use std.strings as strings
+
 use runtime.golegacy.astbridge as astbridge {
     struct File {}
     struct Decl {}
@@ -88,9 +90,9 @@ use runtime.golegacy.astbridge as astbridge {
     fn TypeAliasDeclNode(pos: Pos, end: Pos, isPub: Bool, name: String, generics: List<GenericParam>, target: Type, doc: String, anns: List<Annotation>) -> Decl
     fn UseDeclNode(pos: Pos, end: Pos, raw: String, path: List<String>, isGo: Bool, alias: String, body: List<Decl>) -> Decl
     fn LetDeclNode(pos: Pos, end: Pos, isPub: Bool, isMut: Bool, mutPos: Pos, name: String, typ: Type, value: Expr, doc: String, anns: List<Annotation>) -> Decl
-    fn FieldNode(pos: Pos, end: Pos, isPub: Bool, name: String, typ: Type, def: Expr, doc: String, anns: List<Annotation>) -> Field
+    fn FieldNode(pos: Pos, end: Pos, isPub: Bool, name: String, typ: Type, defaultValue: Expr, doc: String, anns: List<Annotation>) -> Field
     fn VariantNode(pos: Pos, end: Pos, name: String, fields: List<Type>, anns: List<Annotation>, doc: String) -> Variant
-    fn ParamNode(pos: Pos, end: Pos, name: String, pat: Pattern, typ: Type, def: Expr) -> Param
+    fn ParamNode(pos: Pos, end: Pos, name: String, pat: Pattern, typ: Type, defaultValue: Expr) -> Param
     fn GenericParamNode(pos: Pos, end: Pos, name: String, constraints: List<Type>) -> GenericParam
     fn AnnotationNode(pos: Pos, end: Pos, name: String, args: List<AnnotationArg>) -> Annotation
     fn AnnotationArgNode(pos: Pos, key: String, value: Expr) -> AnnotationArg
@@ -617,10 +619,10 @@ fn astLowerSplitPath(raw: String) -> List<String> {
     if raw == "" {
         return []
     }
-    if strings.Count(raw, "/") > 0 {
+    if strings.count(raw, "/") > 0 {
         return [raw]
     }
-    strings.Split(raw, ".")
+    strings.split(raw, ".")
 }
 
 fn astLowerUnquoteMaybe(s: String) -> String {
@@ -655,20 +657,20 @@ fn astLowerStringContent(s: String) -> String {
 
 fn astLowerDecodedLiteral(s: String) -> String {
     let mut raw = s
-    if strings.HasPrefix(raw, "b") {
-        raw = strings.TrimPrefix(raw, "b")
+    if strings.hasPrefix(raw, "b") {
+        raw = strings.trimPrefix(raw, "b")
     }
-    if strings.HasPrefix(raw, "'") && strings.HasSuffix(raw, "'") {
-        raw = strings.TrimSuffix(strings.TrimPrefix(raw, "'"), "'")
+    if strings.hasPrefix(raw, "'") && strings.hasSuffix(raw, "'") {
+        raw = strings.trimSuffix(strings.trimPrefix(raw, "'"), "'")
     }
     astLowerDecodeEscapes(raw)
 }
 
 fn astLowerDecodeEscapes(s: String) -> String {
-    if strings.Count(s, "\\") == 0 {
+    if strings.count(s, "\\") == 0 {
         return s
     }
-    let units = strings.Split(s, "")
+    let units = strings.split(s, "")
     let n = units.len()
     let mut parts: List<String> = []
     let mut i = 0
@@ -720,7 +722,7 @@ fn astLowerDecodeEscapes(s: String) -> String {
             }
         }
     }
-    strings.Join(parts, "")
+    strings.join(parts, "")
 }
 
 struct AstLowerUnicodeEscape {
@@ -1043,7 +1045,7 @@ fn astLowerParam(arena: AstArena, toks: List<astbridge.Token>, idx: Int) -> astb
     }
     let n = astArenaNodeAt(arena, idx)
     let mut pat = astbridge.NilPattern()
-    let mut def = astbridge.NilExpr()
+    let mut defaultValue = astbridge.NilExpr()
     if n.left >= 0 {
         if n.text == "" {
             let parsedPat = astLowerPattern(arena, toks, n.left)
@@ -1051,10 +1053,10 @@ fn astLowerParam(arena: AstArena, toks: List<astbridge.Token>, idx: Int) -> astb
                 pat = parsedPat
             }
         } else {
-            def = astLowerExpr(arena, toks, n.left)
+            defaultValue = astLowerExpr(arena, toks, n.left)
         }
     }
-    astbridge.ParamNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), n.text, pat, astLowerType(arena, toks, n.right), def)
+    astbridge.ParamNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), n.text, pat, astLowerType(arena, toks, n.right), defaultValue)
 }
 
 fn astLowerGenericParams(arena: AstArena, toks: List<astbridge.Token>, ids: List<Int>) -> List<astbridge.GenericParam> {
