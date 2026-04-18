@@ -7,7 +7,7 @@ use std.strings as strings
 
 fn testCheckDiagMismatchStampsCodeAndSeverity() {
     let d = diagMismatch("Int", "String", 12, 20)
-    testing.assertEq(d.code, "E0701")
+    testing.assertEq(d.code, "E0700")
     testing.assertEq(d.start, 12)
     testing.assertEq(d.end, 20)
     match d.severity {
@@ -20,7 +20,7 @@ fn testCheckDiagMismatchStampsCodeAndSeverity() {
 
 fn testCheckDiagArgCountIncludesCalleeWhenProvided() {
     let withName = diagArgCount("takesTwo", 2, 3, 0, 10)
-    testing.assertEq(withName.code, "E0702")
+    testing.assertEq(withName.code, "E0701")
     testing.assert(stringsContains(withName.message, "`takesTwo`"))
     testing.assert(stringsContains(withName.message, "2"))
     testing.assert(stringsContains(withName.message, "3"))
@@ -31,17 +31,17 @@ fn testCheckDiagArgCountIncludesCalleeWhenProvided() {
 
 fn testCheckDiagNonExhaustiveWitness() {
     let withWitness = diagNonExhaustiveMatch("None", 0, 0)
-    testing.assertEq(withWitness.code, "E0706")
+    testing.assertEq(withWitness.code, "E0731")
     testing.assert(stringsContains(withWitness.message, "None"))
 
     let noWitness = diagNonExhaustiveMatch("", 0, 0)
-    testing.assertEq(noWitness.code, "E0706")
+    testing.assertEq(noWitness.code, "E0731")
     testing.assert(stringsContains(noWitness.message, "not exhaustive"))
 }
 
 fn testCheckDiagQuestionNotOptional() {
     let d = diagQuestionNotOptional("Int", 5, 7)
-    testing.assertEq(d.code, "E0730")
+    testing.assertEq(d.code, "E0717")
     testing.assert(stringsContains(d.message, "Option"))
     testing.assert(stringsContains(d.message, "Result"))
     testing.assert(stringsContains(d.message, "`Int`"))
@@ -67,7 +67,7 @@ fn testCheckDiagCountErrorsDistinguishesSeverities() {
 fn testCheckDiagRenderIncludesCode() {
     let d = diagMismatch("Int", "Bool", 0, 0)
     let rendered = checkDiagRender(d)
-    testing.assert(stringsContains(rendered, "[E0701]"))
+    testing.assert(stringsContains(rendered, "[E0700]"))
     testing.assert(stringsContains(rendered, "error"))
 }
 

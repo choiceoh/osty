@@ -36,30 +36,35 @@ pub struct CheckDiagnostic {
 // `diagMismatch(...)` rather than threading a code enum everywhere.
 // ---------------------------------------------------------------------
 
-pub fn checkCodeTypeMismatch() -> String { "E0701" }
-pub fn checkCodeArgCount() -> String { "E0702" }
-pub fn checkCodeOperandType() -> String { "E0703" }
-pub fn checkCodeUnknownField() -> String { "E0704" }
-pub fn checkCodeMissingField() -> String { "E0705" }
-pub fn checkCodeNonExhaustiveMatch() -> String { "E0706" }
-pub fn checkCodeUnreachablePattern() -> String { "E0707" }
-pub fn checkCodeInvalidAssignTarget() -> String { "E0708" }
-pub fn checkCodeImmutableAssign() -> String { "E0709" }
-pub fn checkCodeUnknownName() -> String { "E0710" }
-pub fn checkCodeUnknownMethod() -> String { "E0711" }
-pub fn checkCodeUnknownVariant() -> String { "E0712" }
-pub fn checkCodeDuplicateField() -> String { "E0713" }
-pub fn checkCodeDuplicateMethod() -> String { "E0714" }
-pub fn checkCodeNotCallable() -> String { "E0715" }
-pub fn checkCodeCannotInferTyParam() -> String { "E0720" }
-pub fn checkCodeGenericBoundViolation() -> String { "E0721" }
-pub fn checkCodeInterfaceNotSatisfied() -> String { "E0722" }
-pub fn checkCodeQuestionNotOptional() -> String { "E0730" }
-pub fn checkCodeReturnMismatch() -> String { "E0731" }
-pub fn checkCodeClosureAnnotationRequired() -> String { "E0741" }
-pub fn checkCodePatternShapeMismatch() -> String { "E0742" }
+// Codes return the canonical E07xx numbers defined in
+// internal/diag/codes.go (the source that ERROR_CODES.md is generated
+// from). Do not renumber individually; either update both tables, or
+// add a new constant to codes.go first and reference it here.
+pub fn checkCodeTypeMismatch() -> String { "E0700" }
+pub fn checkCodeArgCount() -> String { "E0701" }
+pub fn checkCodeUnknownField() -> String { "E0702" }
+pub fn checkCodeUnknownMethod() -> String { "E0703" }
+pub fn checkCodeNotCallable() -> String { "E0704" }
+pub fn checkCodeMissingField() -> String { "E0708" }
+pub fn checkCodeQuestionNotOptional() -> String { "E0717" }
+pub fn checkCodeInvalidAssignTarget() -> String { "E0724" }
+pub fn checkCodeImmutableAssign() -> String { "E0725" }
+pub fn checkCodeReturnMismatch() -> String { "E0726" }
+pub fn checkCodeUnknownVariant() -> String { "E0728" }
+pub fn checkCodeNonExhaustiveMatch() -> String { "E0731" }
+pub fn checkCodeUnreachablePattern() -> String { "E0740" }
+pub fn checkCodeRefutablePattern() -> String { "E0741" }
+pub fn checkCodeGenericCallableReference() -> String { "E0742" }
 pub fn checkCodeNonEscapingEscape() -> String { "E0743" }
-pub fn checkCodeRefutablePattern() -> String { "E0744" }
+pub fn checkCodeOperandType() -> String { "E0744" }
+pub fn checkCodeUnknownName() -> String { "E0745" }
+pub fn checkCodeDuplicateField() -> String { "E0746" }
+pub fn checkCodeDuplicateMethod() -> String { "E0747" }
+pub fn checkCodeCannotInferTyParam() -> String { "E0748" }
+pub fn checkCodeGenericBoundViolation() -> String { "E0749" }
+pub fn checkCodeInterfaceNotSatisfied() -> String { "E0751" }
+pub fn checkCodeClosureAnnotationRequired() -> String { "E0752" }
+pub fn checkCodePatternShapeMismatch() -> String { "E0753" }
 
 // ---------------------------------------------------------------------
 // Low-level builder. Higher-level constructors below wrap this so call
@@ -318,6 +323,15 @@ pub fn diagNonEscapingEscape(ty: String, context: String, start: Int, end: Int) 
         "`{ty}` cannot escape via {context}"
     }
     checkDiag(checkCodeNonEscapingEscape(), msg, start, end)
+}
+
+pub fn diagGenericCallableReference(name: String, start: Int, end: Int) -> CheckDiagnostic {
+    let msg = if name == "" {
+        "generic callable cannot be referenced as a value; wrap it in a closure that fixes the type arguments"
+    } else {
+        "generic callable `{name}` cannot be referenced as a value; wrap it in a closure such as `|x| {name}::<T>(x)`"
+    }
+    checkDiag(checkCodeGenericCallableReference(), msg, start, end)
 }
 
 pub fn diagRefutablePattern(context: String, start: Int, end: Int) -> CheckDiagnostic {

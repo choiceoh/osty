@@ -595,15 +595,17 @@ const (
 	// Fix: merge or remove the shadowed arm.
 	CodeUnreachableArm = "E0740"
 
-	// Closure parameter pattern can fail to match.
+	// Pattern in an irrefutable position can fail to match.
 	//
-	// Closure parameters are destructured at every call site, so their
-	// patterns must be irrefutable: identifiers, `_`, tuples/structs
-	// made only of irrefutable sub-patterns, or `name @ irrefutable`.
+	// Three spec sites require irrefutable patterns: `let p = e` (§A.5
+	// let bindings), `for p in e` (§A.5 for-in bindings), and closure
+	// parameters (G16 — destructured at every call site). Irrefutable
+	// means: identifiers, `_`, tuples/structs made only of irrefutable
+	// sub-patterns, or `name @ irrefutable`.
 	//
-	// Spec: v0.4 G16
-	// Fix: accept the value with an irrefutable parameter pattern, then use `match` or `if let` inside the closure body.
-	CodeRefutableClosurePattern = "E0741"
+	// Spec: v0.4 §A.5, G16
+	// Fix: accept the value with an irrefutable pattern, then use `match` or `if let` inside the body for the refutable cases.
+	CodeRefutablePattern = "E0741"
 
 	// Generic function or method is referenced without being called.
 	//
@@ -626,6 +628,75 @@ const (
 	// Spec: v0.4 G13
 	// Fix: join/use the handle inside the `taskGroup` closure and return an ordinary value.
 	CodeCapabilityEscape = "E0743"
+
+	// Operator cannot be applied to the operand's type.
+	//
+	// Currently the runtime's catch-all for unary (`!`, `-`, `+`, `~`),
+	// binary arithmetic / bitwise / comparison / logical, `??` coalesce,
+	// `<-` channel send, and `in` membership type mismatches. The more
+	// specialized codes E0713/E0714/E0720/E0737/E0738 are reserved but
+	// not currently emitted — callers should expect E0744 today.
+	//
+	// Fix: convert an operand, or switch to an operator defined on the type.
+	CodeOperandType = "E0744"
+
+	// Resolver could not find a name in the current scope.
+	//
+	// Emitted by the checker when an identifier reference doesn't match
+	// any local binding or top-level function in scope (the resolver
+	// passed it through as a last-chance lookup, typically because of
+	// missing imports or a typo).
+	//
+	// Fix: check spelling, imports, and receiver type; if it's a method, write the receiver explicitly.
+	CodeUnknownName = "E0745"
+
+	// Struct literal (or declaration) names the same field twice.
+	//
+	// Fix: remove the duplicate or rename one of the entries.
+	CodeDuplicateField = "E0746"
+
+	// Two methods on the same type share a name.
+	//
+	// Fix: rename one of the methods, or merge their bodies.
+	CodeDuplicateMethod = "E0747"
+
+	// A type parameter could not be inferred from the arguments.
+	//
+	// Fix: supply the type argument explicitly via turbofish `f::<T>(...)`, or pass an argument whose type constrains the parameter.
+	CodeCannotInferTyParam = "E0748"
+
+	// A type argument violates a generic bound.
+	//
+	// Example:
+	//   fn f<T: Ordered>(x: T) { ... }
+	//   f("hello")     // String is not Ordered → rejected
+	//
+	// Fix: switch to a type that satisfies the bound, or relax the bound.
+	CodeGenericBoundViolation = "E0749"
+
+	// A concrete type does not satisfy a required interface.
+	//
+	// Osty's interfaces are structural — every method in the interface
+	// must be present on the concrete type with a matching signature.
+	//
+	// Fix: add the missing methods, or switch to a type that already satisfies the interface.
+	CodeInterfaceNotSatisfied = "E0751"
+
+	// Closure parameter lacks a type annotation in a context where it
+	// cannot be inferred (no expected-type hint from the call site).
+	//
+	// Fix: annotate the parameter explicitly (`|x: Int| ...`), or use the closure in a position that provides an expected type.
+	CodeClosureAnnotationRequired = "E0752"
+
+	// Pattern structure does not match the scrutinee's type.
+	//
+	// Covers literal / range / tuple-arity / struct / variant pattern
+	// shape errors — a broader category than the literal-type mismatch
+	// E0722: the scrutinee might be an Int where the pattern is a tuple,
+	// or the scrutinee a tuple of arity 3 where the pattern is arity 2.
+	//
+	// Fix: rewrite the pattern to match the scrutinee's shape, or guard with a type-narrowing arm above it.
+	CodePatternShapeMismatch = "E0753"
 
 	// Deprecation warning.
 

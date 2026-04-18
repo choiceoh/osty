@@ -229,6 +229,14 @@ fn elabInferIdent(cx: ElabCx, node: AstNode) -> ElabResult {
     // Unknown local — try top-level fn.
     let fnSig = checkLookupFn(cx.env, node.text, "")
     if fnSig.name != "" {
+        // G14: generic callables may not be referenced as values. A bare
+        // ident or a value-position turbofish `f::<T>` both land here; the
+        // call path in `elabInferCall` resolves via `checkLookupFn`
+        // directly and bypasses this site, so calls are unaffected.
+        if checkStringListLenHelper(fnSig.generics) > 0 {
+            cx.env.diagnostics.push(diagGenericCallableReference(node.text, node.start, node.end))
+            return elabErrResult(cx, node.start, node.end)
+        }
         let fnTy = fnSigToTy(cx.env, fnSig)
         let coreIdx = coreIdent(cx.core, node.text, IkFn, fnTy, node.start, node.end)
         return ElabResult { node: coreIdx, ty: fnTy }
@@ -1512,6 +1520,27 @@ fn elabInferStructLit(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
         }
     }
 
+    // Struct literal spread: `{ ..x, f: v, ... }`. The spread operand must
+    // produce a value of the same owner type; explicit fields below
+    // override spread values at runtime, so we collect spread-supplied
+    // names separately from `seenNames` (which still drives duplicate
+    // detection among the explicit fields).
+    let mut coreSpread = -1
+    let mut spreadSupplied: List<String> = []
+    if node.right >= 0 {
+        let spreadHint = tyNamed(tys, owner, freshs)
+        let spreadResult = elabCheck(cx, node.right, spreadHint)
+        coreSpread = spreadResult.node
+        let _ = unify(cx.env, solver, spreadHint, spreadResult.ty)
+        if tyIsNamedHead(tys, spreadResult.ty, owner) {
+            for f in cx.env.fields {
+                if f.owner == owner {
+                    spreadSupplied.push(f.name)
+                }
+            }
+        }
+    }
+
     let mut coreFieldsList: List<Int> = []
     let mut seenNames: List<String> = []
     for fieldIdx in node.children {
@@ -1534,9 +1563,13 @@ fn elabInferStructLit(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
         coreFieldsList.push(coreStructField(cx.core, fieldName, r.node, fieldNode.start, fieldNode.end))
     }
 
-    // Missing required fields.
+    // Missing required fields — a spread supplies every field of the
+    // owner, so we skip fields supplied either explicitly or via spread.
     for f in cx.env.fields {
-        if f.owner == owner && !(stringListContains(seenNames, f.name)) && !(f.hasDefault) {
+        if f.owner == owner
+           && !(stringListContains(seenNames, f.name))
+           && !(stringListContains(spreadSupplied, f.name))
+           && !(f.hasDefault) {
             cx.env.diagnostics.push(diagMissingField(owner, f.name, node.start, node.end))
         }
     }
@@ -1549,7 +1582,7 @@ fn elabInferStructLit(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
         tyNamed(tys, owner, concreteTypeArgs)
     }
 
-    let coreIdx = coreStruct(cx.core, owner, coreFieldsList, -1, concreteTypeArgs, resultTy, node.start, node.end)
+    let coreIdx = coreStruct(cx.core, owner, coreFieldsList, coreSpread, concreteTypeArgs, resultTy, node.start, node.end)
     ElabResult { node: coreIdx, ty: resultTy }
 }
 
