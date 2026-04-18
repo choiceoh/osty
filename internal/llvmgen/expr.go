@@ -2801,12 +2801,13 @@ func (g *generator) emitInterfaceMethodCall(call *ast.CallExpr) (value, bool, er
 	if !ok || fx == nil {
 		return value{}, false, nil
 	}
+	recvInfo, ok := g.staticExprInfo(fx.X)
+	if !ok || recvInfo.typ != "%osty.iface" {
+		return value{}, false, nil
+	}
 	recv, err := g.emitExpr(fx.X)
 	if err != nil {
 		return value{}, true, err
-	}
-	if recv.typ != "%osty.iface" {
-		return value{}, false, nil
 	}
 	iface, slot := g.findInterfaceMethod(fx.Name)
 	if iface == nil {
