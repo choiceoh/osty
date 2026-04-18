@@ -88,7 +88,8 @@ func injectReachableStdlibBodies(mod *ir.Module, reg *stdlib.Registry) ([]ir.Dec
 	var issues []error
 	for _, r := range reached {
 		res := stdlibResolveResult(reg, r.Module)
-		lowered, fnIssues := ir.LowerFnDecl(mod.Package, r.Fn, res, nil)
+		chk := stdlibCheckResult(reg, r.Module)
+		lowered, fnIssues := ir.LowerFnDecl(mod.Package, r.Fn, res, chk)
 		issues = append(issues, fnIssues...)
 		if lowered == nil {
 			continue
