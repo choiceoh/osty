@@ -877,3 +877,305 @@ fn testLlvmSmokeBoolMutableIsOstyOwned() {
     assertLlvmContains(ir, "load i1")
     assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_i64, i64 42)")
 }
+
+fn testLlvmListRuntimeSymbolsAreOstyOwned() {
+    testing.assertEq(llvmListRuntimeNewSymbol(), "osty_rt_list_new")
+    testing.assertEq(llvmListRuntimeLenSymbol(), "osty_rt_list_len")
+    testing.assertEq(llvmListRuntimePushSymbol("i64"), "osty_rt_list_push_i64")
+    testing.assertEq(llvmListRuntimePushSymbol("f64"), "osty_rt_list_push_f64")
+    testing.assertEq(llvmListRuntimePushSymbol("ptr"), "osty_rt_list_push_ptr")
+    testing.assertEq(llvmListRuntimeGetSymbol("i1"), "osty_rt_list_get_i1")
+    testing.assertEq(llvmListRuntimeGetSymbol("ptr"), "osty_rt_list_get_ptr")
+    testing.assertEq(llvmListRuntimeSetSymbol("i64"), "osty_rt_list_set_i64")
+    testing.assertEq(llvmListRuntimeSetSymbol("f64"), "osty_rt_list_set_f64")
+}
+
+fn testLlvmListRuntimeSortedSymbolPicksEntryPoint() {
+    testing.assertEq(llvmListRuntimeSortedSymbol("i64", false), "osty_rt_list_sorted_i64")
+    testing.assertEq(llvmListRuntimeSortedSymbol("i1", false), "osty_rt_list_sorted_i1")
+    testing.assertEq(llvmListRuntimeSortedSymbol("double", false), "osty_rt_list_sorted_f64")
+    testing.assertEq(llvmListRuntimeSortedSymbol("ptr", true), "osty_rt_list_sorted_string")
+    testing.assertEq(llvmListRuntimeSortedSymbol("ptr", false), "")
+    testing.assertEq(llvmListRuntimeSortedSymbol("%MyStruct", false), "")
+}
+
+fn testLlvmListRuntimeToSetSymbolPicksEntryPoint() {
+    testing.assertEq(llvmListRuntimeToSetSymbol("i64", false), "osty_rt_list_to_set_i64")
+    testing.assertEq(llvmListRuntimeToSetSymbol("i1", false), "osty_rt_list_to_set_i1")
+    testing.assertEq(llvmListRuntimeToSetSymbol("double", false), "osty_rt_list_to_set_f64")
+    testing.assertEq(llvmListRuntimeToSetSymbol("ptr", false), "osty_rt_list_to_set_ptr")
+    testing.assertEq(llvmListRuntimeToSetSymbol("ptr", true), "osty_rt_list_to_set_string")
+    testing.assertEq(llvmListRuntimeToSetSymbol("%MyStruct", false), "")
+}
+
+fn testLlvmListElementSuffixMatchesRuntimeAbi() {
+    testing.assertEq(llvmListElementSuffix("i64"), "i64")
+    testing.assertEq(llvmListElementSuffix("i1"), "i1")
+    testing.assertEq(llvmListElementSuffix("ptr"), "ptr")
+    testing.assertEq(llvmListElementSuffix("double"), "f64")
+    testing.assertEq(llvmListElementSuffix(""), "ptr")
+    testing.assertEq(llvmListElementSuffix("%MyStruct"), "_MyStruct")
+    testing.assertEq(llvmListElementSuffix("<4 x i32>"), "_4_x_i32_")
+}
+
+fn testLlvmListUsesTypedRuntime() {
+    testing.assert(llvmListUsesTypedRuntime("i64"))
+    testing.assert(llvmListUsesTypedRuntime("i1"))
+    testing.assert(llvmListUsesTypedRuntime("double"))
+    testing.assert(llvmListUsesTypedRuntime("ptr"))
+    testing.assert(!(llvmListUsesTypedRuntime("%MyStruct")))
+    testing.assert(!(llvmListUsesTypedRuntime("")))
+}
+
+fn testLlvmListRuntimeDeclarationsAreOstyOwned() {
+    let declarations = llvmTestStrings.join(llvmListRuntimeDeclarations(), "\n")
+
+    assertLlvmContains(declarations, "declare ptr @osty_rt_list_new()")
+    assertLlvmContains(declarations, "declare i64 @osty_rt_list_len(ptr)")
+    assertLlvmContains(declarations, "declare void @osty_rt_list_push_i64(ptr, i64)")
+    assertLlvmContains(declarations, "declare void @osty_rt_list_push_i1(ptr, i1)")
+    assertLlvmContains(declarations, "declare void @osty_rt_list_push_f64(ptr, double)")
+    assertLlvmContains(declarations, "declare void @osty_rt_list_push_ptr(ptr, ptr)")
+    assertLlvmContains(declarations, "declare i64 @osty_rt_list_get_i64(ptr, i64)")
+    assertLlvmContains(declarations, "declare i1 @osty_rt_list_get_i1(ptr, i64)")
+    assertLlvmContains(declarations, "declare double @osty_rt_list_get_f64(ptr, i64)")
+    assertLlvmContains(declarations, "declare ptr @osty_rt_list_get_ptr(ptr, i64)")
+    assertLlvmContains(declarations, "declare void @osty_rt_list_set_i64(ptr, i64, i64)")
+    assertLlvmContains(declarations, "declare void @osty_rt_list_set_i1(ptr, i64, i1)")
+    assertLlvmContains(declarations, "declare void @osty_rt_list_set_f64(ptr, i64, double)")
+    assertLlvmContains(declarations, "declare void @osty_rt_list_set_ptr(ptr, i64, ptr)")
+}
+
+fn testLlvmSmokeListBasicIsOstyOwned() {
+    let ir = llvmSmokeListBasicIR("/tmp/list_basic.osty")
+
+    assertLlvmContains(ir, "source_filename = \"/tmp/list_basic.osty\"")
+    assertLlvmContains(ir, "declare ptr @osty_rt_list_new()")
+    assertLlvmContains(ir, "declare i64 @osty_rt_list_len(ptr)")
+    assertLlvmContains(ir, "declare void @osty_rt_list_push_i64(ptr, i64)")
+    assertLlvmContains(ir, "declare i64 @osty_rt_list_get_i64(ptr, i64)")
+    assertLlvmContains(ir, "%t0 = call ptr @osty_rt_list_new()")
+    assertLlvmContains(ir, "call void @osty_rt_list_push_i64(ptr %t0, i64 10)")
+    assertLlvmContains(ir, "call void @osty_rt_list_push_i64(ptr %t0, i64 20)")
+    assertLlvmContains(ir, "call void @osty_rt_list_push_i64(ptr %t0, i64 30)")
+    assertLlvmContains(ir, "= call i64 @osty_rt_list_len(ptr %t0)")
+    assertLlvmContains(ir, "= call i64 @osty_rt_list_get_i64(ptr %t0, i64 1)")
+    assertLlvmContains(ir, "ret i32 0")
+}
+
+fn testLlvmMapRuntimeSymbolsAreOstyOwned() {
+    testing.assertEq(llvmMapRuntimeNewSymbol(), "osty_rt_map_new")
+    testing.assertEq(llvmMapRuntimeLenSymbol(), "osty_rt_map_len")
+    testing.assertEq(llvmMapRuntimeKeysSymbol(), "osty_rt_map_keys")
+    testing.assertEq(llvmMapRuntimeContainsSymbol("i64", false), "osty_rt_map_contains_i64")
+    testing.assertEq(llvmMapRuntimeInsertSymbol("i64", false), "osty_rt_map_insert_i64")
+    testing.assertEq(llvmMapRuntimeRemoveSymbol("double", false), "osty_rt_map_remove_f64")
+    testing.assertEq(llvmMapRuntimeGetOrAbortSymbol("ptr", true), "osty_rt_map_get_or_abort_string")
+    testing.assertEq(llvmMapRuntimeInsertSymbol("", false), "osty_rt_map_insert_bytes")
+}
+
+fn testLlvmMapKeySuffixMatchesRuntimeAbi() {
+    testing.assertEq(llvmMapKeySuffix("i64", false), "i64")
+    testing.assertEq(llvmMapKeySuffix("i1", false), "i1")
+    testing.assertEq(llvmMapKeySuffix("double", false), "f64")
+    testing.assertEq(llvmMapKeySuffix("ptr", false), "ptr")
+    testing.assertEq(llvmMapKeySuffix("ptr", true), "string")
+    testing.assertEq(llvmMapKeySuffix("i64", true), "string")
+    testing.assertEq(llvmMapKeySuffix("", false), "bytes")
+    testing.assertEq(llvmMapKeySuffix("%MyStruct", false), "bytes")
+}
+
+fn testLlvmMapRuntimeDeclarationsAreOstyOwned() {
+    let declarations = llvmTestStrings.join(llvmMapRuntimeDeclarations(), "\n")
+
+    assertLlvmContains(declarations, "declare ptr @osty_rt_map_new()")
+    assertLlvmContains(declarations, "declare i64 @osty_rt_map_len(ptr)")
+    assertLlvmContains(declarations, "declare ptr @osty_rt_map_keys(ptr)")
+    assertLlvmContains(declarations, "declare i1 @osty_rt_map_contains_i64(ptr, i64)")
+    assertLlvmContains(declarations, "declare i1 @osty_rt_map_contains_i1(ptr, i1)")
+    assertLlvmContains(declarations, "declare i1 @osty_rt_map_contains_f64(ptr, double)")
+    assertLlvmContains(declarations, "declare i1 @osty_rt_map_contains_ptr(ptr, ptr)")
+    assertLlvmContains(declarations, "declare i1 @osty_rt_map_contains_string(ptr, ptr)")
+    assertLlvmContains(declarations, "declare void @osty_rt_map_insert_i64(ptr, i64, ptr)")
+    assertLlvmContains(declarations, "declare void @osty_rt_map_insert_string(ptr, ptr, ptr)")
+    assertLlvmContains(declarations, "declare i1 @osty_rt_map_remove_i64(ptr, i64)")
+    assertLlvmContains(declarations, "declare i1 @osty_rt_map_remove_string(ptr, ptr)")
+    assertLlvmContains(declarations, "declare void @osty_rt_map_get_or_abort_i64(ptr, i64, ptr)")
+    assertLlvmContains(declarations, "declare void @osty_rt_map_get_or_abort_string(ptr, ptr, ptr)")
+}
+
+fn testLlvmClosureEnvTypeNameJoinsTags() {
+    testing.assertEq(llvmClosureEnvTypeName(["ptr"]), "ClosureEnv.ptr")
+    testing.assertEq(llvmClosureEnvTypeName(["ptr", "i64"]), "ClosureEnv.ptr.i64")
+    testing.assertEq(
+        llvmClosureEnvTypeName(["ptr", "i64", "double", "ptr"]),
+        "ClosureEnv.ptr.i64.double.ptr",
+    )
+}
+
+fn testLlvmClosureEnvTypeDefRendersStruct() {
+    let def = llvmClosureEnvTypeDef("ClosureEnv.ptr.i64", ["ptr", "i64"])
+    testing.assertEq(def, "%ClosureEnv.ptr.i64 = type \{ ptr, i64 \}")
+}
+
+fn testLlvmClosureThunkNameIsOstyOwned() {
+    testing.assertEq(llvmClosureThunkName("double_val"), "__osty_closure_thunk_double_val")
+    testing.assertEq(llvmClosureThunkName("add"), "__osty_closure_thunk_add")
+}
+
+fn testLlvmClosureThunkDefinitionForwardsArgs() {
+    let def = llvmClosureThunkDefinition("double_val", "i64", ["i64"])
+
+    assertLlvmContains(def, "define private i64 @__osty_closure_thunk_double_val(ptr %env, i64 %arg0)")
+    assertLlvmContains(def, "%ret = call i64 @double_val(i64 %arg0)")
+    assertLlvmContains(def, "ret i64 %ret")
+}
+
+fn testLlvmClosureThunkDefinitionVoidReturn() {
+    let def = llvmClosureThunkDefinition("noop", "void", [])
+
+    assertLlvmContains(def, "define private void @__osty_closure_thunk_noop(ptr %env)")
+    assertLlvmContains(def, "call void @noop()")
+    assertLlvmContains(def, "ret void")
+    testing.assert(!(llvmTestStrings.contains(def, "%ret = call")))
+}
+
+fn testLlvmClosureBareFnEnvTypeDefIsOneSlot() {
+    testing.assertEq(llvmClosureBareFnEnvTypeDef(), "%ClosureEnv.ptr = type \{ ptr \}")
+}
+
+fn testLlvmSmokeClosureThunkIsOstyOwned() {
+    let ir = llvmSmokeClosureThunkIR("/tmp/closure_thunk.osty")
+
+    assertLlvmContains(ir, "source_filename = \"/tmp/closure_thunk.osty\"")
+    assertLlvmContains(ir, "%ClosureEnv.ptr = type \{ ptr \}")
+    assertLlvmContains(ir, "define i64 @double_val(i64 %x)")
+    assertLlvmContains(ir, "define private i64 @__osty_closure_thunk_double_val(ptr %env, i64 %arg0)")
+    assertLlvmContains(ir, "%ret = call i64 @double_val(i64 %arg0)")
+    assertLlvmContains(ir, "define i32 @main()")
+    assertLlvmContains(ir, "%t0 = alloca %ClosureEnv.ptr")
+    assertLlvmContains(ir, "store ptr @__osty_closure_thunk_double_val, ptr %t1")
+    assertLlvmContains(ir, "= call i64 (ptr, i64) ")
+    assertLlvmContains(ir, "(ptr %t0, i64 21)")
+    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_i64, i64 ")
+    assertLlvmContains(ir, "ret i32 0")
+}
+
+fn testLlvmSmokeClosureBasicIsOstyOwned() {
+    let ir = llvmSmokeClosureBasicIR("/tmp/closure_basic.osty")
+
+    assertLlvmContains(ir, "source_filename = \"/tmp/closure_basic.osty\"")
+    assertLlvmContains(ir, "%ClosureEnv.ptr.i64 = type \{ ptr, i64 \}")
+    assertLlvmContains(ir, "define i64 @closure_body(ptr %env)")
+    assertLlvmContains(ir, "getelementptr %ClosureEnv.ptr.i64, ptr %env, i32 0, i32 1")
+    assertLlvmContains(ir, "= load i64, ptr ")
+    assertLlvmContains(ir, "define i32 @main()")
+    assertLlvmContains(ir, "%t0 = alloca %ClosureEnv.ptr.i64")
+    assertLlvmContains(ir, "%t1 = getelementptr %ClosureEnv.ptr.i64, ptr %t0, i32 0, i32 0")
+    assertLlvmContains(ir, "store ptr @closure_body, ptr %t1")
+    assertLlvmContains(ir, "%t2 = getelementptr %ClosureEnv.ptr.i64, ptr %t0, i32 0, i32 1")
+    assertLlvmContains(ir, "store i64 42, ptr %t2")
+    assertLlvmContains(ir, "= load ptr, ptr ")
+    assertLlvmContains(ir, "= call i64 (ptr) ")
+    assertLlvmContains(ir, "(ptr %t0)")
+    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_i64, i64 ")
+    assertLlvmContains(ir, "ret i32 0")
+}
+
+fn testLlvmSetRuntimeSymbolsAreOstyOwned() {
+    testing.assertEq(llvmSetRuntimeNewSymbol(), "osty_rt_set_new")
+    testing.assertEq(llvmSetRuntimeLenSymbol(), "osty_rt_set_len")
+    testing.assertEq(llvmSetRuntimeToListSymbol(), "osty_rt_set_to_list")
+    testing.assertEq(llvmSetRuntimeContainsSymbol("i64", false), "osty_rt_set_contains_i64")
+    testing.assertEq(llvmSetRuntimeInsertSymbol("double", false), "osty_rt_set_insert_f64")
+    testing.assertEq(llvmSetRuntimeRemoveSymbol("ptr", true), "osty_rt_set_remove_string")
+    testing.assertEq(llvmSetRuntimeInsertSymbol("", false), "osty_rt_set_insert_bytes")
+}
+
+fn testLlvmSetRuntimeDeclarationsAreOstyOwned() {
+    let declarations = llvmTestStrings.join(llvmSetRuntimeDeclarations(), "\n")
+
+    assertLlvmContains(declarations, "declare ptr @osty_rt_set_new(i64)")
+    assertLlvmContains(declarations, "declare i64 @osty_rt_set_len(ptr)")
+    assertLlvmContains(declarations, "declare ptr @osty_rt_set_to_list(ptr)")
+    assertLlvmContains(declarations, "declare i1 @osty_rt_set_contains_i64(ptr, i64)")
+    assertLlvmContains(declarations, "declare i1 @osty_rt_set_contains_string(ptr, ptr)")
+    assertLlvmContains(declarations, "declare i1 @osty_rt_set_insert_i64(ptr, i64)")
+    assertLlvmContains(declarations, "declare i1 @osty_rt_set_insert_f64(ptr, double)")
+    assertLlvmContains(declarations, "declare i1 @osty_rt_set_insert_string(ptr, ptr)")
+    assertLlvmContains(declarations, "declare i1 @osty_rt_set_remove_i64(ptr, i64)")
+    assertLlvmContains(declarations, "declare i1 @osty_rt_set_remove_string(ptr, ptr)")
+}
+
+fn testLlvmSmokeSetBasicIsOstyOwned() {
+    let ir = llvmSmokeSetBasicIR("/tmp/set_basic.osty")
+
+    assertLlvmContains(ir, "source_filename = \"/tmp/set_basic.osty\"")
+    assertLlvmContains(ir, "declare ptr @osty_rt_set_new(i64)")
+    assertLlvmContains(ir, "declare i64 @osty_rt_set_len(ptr)")
+    assertLlvmContains(ir, "declare i1 @osty_rt_set_insert_i64(ptr, i64)")
+    assertLlvmContains(ir, "declare i1 @osty_rt_set_contains_i64(ptr, i64)")
+    assertLlvmContains(ir, "declare i1 @osty_rt_set_remove_i64(ptr, i64)")
+    assertLlvmContains(ir, "declare ptr @osty_rt_set_to_list(ptr)")
+    assertLlvmContains(ir, "%t0 = call ptr @osty_rt_set_new(i64 1)")
+    assertLlvmContains(ir, "%t1 = call i1 @osty_rt_set_insert_i64(ptr %t0, i64 10)")
+    assertLlvmContains(ir, "= call i1 @osty_rt_set_contains_i64(ptr %t0, i64 20)")
+    assertLlvmContains(ir, "= call i1 @osty_rt_set_remove_i64(ptr %t0, i64 20)")
+    assertLlvmContains(ir, "= call i64 @osty_rt_set_len(ptr %t0)")
+    assertLlvmContains(ir, "= call ptr @osty_rt_set_to_list(ptr %t0)")
+    assertLlvmContains(ir, "ret i32 0")
+}
+
+fn testLlvmStringRuntimeSymbolsAreOstyOwned() {
+    testing.assertEq(llvmStringRuntimeEqualSymbol(), "osty_rt_strings_Equal")
+    testing.assertEq(llvmStringRuntimeHasPrefixSymbol(), "osty_rt_strings_HasPrefix")
+    testing.assertEq(llvmStringRuntimeSplitSymbol(), "osty_rt_strings_Split")
+    testing.assertEq(llvmStringRuntimeConcatSymbol(), "osty_rt_strings_Concat")
+    testing.assertEq(llvmStringRuntimeByteLenSymbol(), "osty_rt_strings_ByteLen")
+}
+
+fn testLlvmStringRuntimeDeclarationsAreOstyOwned() {
+    let declarations = llvmTestStrings.join(llvmStringRuntimeDeclarations(), "\n")
+
+    assertLlvmContains(declarations, "declare i1 @osty_rt_strings_Equal(ptr, ptr)")
+    assertLlvmContains(declarations, "declare i1 @osty_rt_strings_HasPrefix(ptr, ptr)")
+    assertLlvmContains(declarations, "declare ptr @osty_rt_strings_Split(ptr, ptr)")
+    assertLlvmContains(declarations, "declare ptr @osty_rt_strings_Concat(ptr, ptr)")
+    assertLlvmContains(declarations, "declare i64 @osty_rt_strings_ByteLen(ptr)")
+}
+
+fn testLlvmSmokeStringConcatIsOstyOwned() {
+    let ir = llvmSmokeStringConcatIR("/tmp/string_concat.osty")
+
+    assertLlvmContains(ir, "source_filename = \"/tmp/string_concat.osty\"")
+    assertLlvmContains(ir, "declare ptr @osty_rt_strings_Concat(ptr, ptr)")
+    assertLlvmContains(ir, "declare i1 @osty_rt_strings_HasPrefix(ptr, ptr)")
+    assertLlvmContains(ir, "declare i64 @osty_rt_strings_ByteLen(ptr)")
+    assertLlvmContains(ir, "@.str0 = private unnamed_addr constant [8 x i8] c\"hello, \\00\"")
+    assertLlvmContains(ir, "@.str1 = private unnamed_addr constant [5 x i8] c\"osty\\00\"")
+    assertLlvmContains(ir, "%t0 = call ptr @osty_rt_strings_Concat(ptr @.str0, ptr @.str1)")
+    assertLlvmContains(ir, "%t1 = call i1 @osty_rt_strings_HasPrefix(ptr %t0, ptr @.str0)")
+    assertLlvmContains(ir, "%t2 = call i64 @osty_rt_strings_ByteLen(ptr %t0)")
+    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_i64, i64 %t2)")
+    assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_str, ptr %t0)")
+    assertLlvmContains(ir, "ret i32 0")
+}
+
+fn testLlvmSmokeMapBasicIsOstyOwned() {
+    let ir = llvmSmokeMapBasicIR("/tmp/map_basic.osty")
+
+    assertLlvmContains(ir, "source_filename = \"/tmp/map_basic.osty\"")
+    assertLlvmContains(ir, "declare ptr @osty_rt_map_new()")
+    assertLlvmContains(ir, "declare i64 @osty_rt_map_len(ptr)")
+    assertLlvmContains(ir, "declare void @osty_rt_map_insert_i64(ptr, i64, ptr)")
+    assertLlvmContains(ir, "declare i1 @osty_rt_map_contains_i64(ptr, i64)")
+    assertLlvmContains(ir, "declare void @osty_rt_map_get_or_abort_i64(ptr, i64, ptr)")
+    assertLlvmContains(ir, "%t0 = call ptr @osty_rt_map_new()")
+    assertLlvmContains(ir, "%t1 = alloca i64")
+    assertLlvmContains(ir, "store i64 42, ptr %t1")
+    assertLlvmContains(ir, "call void @osty_rt_map_insert_i64(ptr %t0, i64 7, ptr %t1)")
+    assertLlvmContains(ir, "= call i1 @osty_rt_map_contains_i64(ptr %t0, i64 7)")
+    assertLlvmContains(ir, "call void @osty_rt_map_get_or_abort_i64(ptr %t0, i64 7, ptr")
+    assertLlvmContains(ir, "= call i64 @osty_rt_map_len(ptr %t0)")
+    assertLlvmContains(ir, "ret i32 0")
+}
