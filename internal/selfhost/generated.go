@@ -3512,9 +3512,6 @@ func frontStringStructureScan(units []string, start int, unitCount int, kind Fro
 	// Osty: /tmp/selfhost_merged.osty:1653:5
 	skip := 0
 	_ = skip
-	// Osty: /tmp/selfhost_merged.osty:1654:5
-	escaped := false
-	_ = escaped
 	// Osty: /tmp/selfhost_merged.osty:1655:5
 	for idx := contentStart; idx < contentEnd; idx++ {
 		// Osty: /tmp/selfhost_merged.osty:1656:9
@@ -3536,10 +3533,7 @@ func frontStringStructureScan(units []string, start int, unitCount int, kind Fro
 			unit := frontUnitAt(units, idx)
 			_ = unit
 			// Osty: /tmp/selfhost_merged.osty:1660:13
-			if escaped {
-				// Osty: /tmp/selfhost_merged.osty:1661:17
-				escaped = false
-			} else if unit == "\\" {
+			if unit == "\\" {
 				// Osty: /tmp/selfhost_merged.osty:1663:17
 				escape := frontEscapeScan(units, func() int {
 					var _p202 int = idx
@@ -3593,8 +3587,6 @@ func frontStringStructureScan(units []string, start int, unitCount int, kind Fro
 						return _p208 + _rhs209
 					}()
 				}
-				// Osty: /tmp/selfhost_merged.osty:1674:17
-				escaped = true
 				// Osty: /tmp/selfhost_merged.osty:1675:17
 				skip = escape.consumed
 			} else if unit == "{" {
