@@ -527,6 +527,17 @@ func (g *generator) enumVariantIdent(name string) (value, bool, error) {
 }
 
 func (g *generator) enumVariantConstant(info *enumInfo, variant variantInfo) (value, error) {
+	if info.isBoxed {
+		if len(variant.payloads) != 0 {
+			return value{}, unsupportedf("expression", "enum variant %q requires a payload", variant.name)
+		}
+		emitter := g.toOstyEmitter()
+		out := llvmEnumBoxedBareVariant(emitter, info.typ, variant.tag)
+		g.takeOstyEmitter(emitter)
+		enumValue := fromOstyValue(out)
+		enumValue.rootPaths = g.rootPathsForType(info.typ)
+		return enumValue, nil
+	}
 	if info.hasPayload {
 		if len(variant.payloads) != 0 {
 			return value{}, unsupportedf("expression", "enum variant %q requires a payload", variant.name)
@@ -568,6 +579,16 @@ func (g *generator) enumVariantByField(expr *ast.FieldExpr) (enumVariantRef, boo
 func (g *generator) emitEnumPayloadVariant(info *enumInfo, variant variantInfo, payload value) (value, error) {
 	if !info.hasPayload {
 		return value{}, unsupportedf("expression", "enum %q has no payload layout", info.name)
+	}
+	if info.isBoxed {
+		emitter := g.toOstyEmitter()
+		site := "enum." + info.name + "." + variant.name
+		out := llvmEnumBoxedPayloadVariant(emitter, info.typ, variant.tag, toOstyValue(payload), site)
+		g.takeOstyEmitter(emitter)
+		g.needsGCRuntime = true
+		enumValue := fromOstyValue(out)
+		enumValue.rootPaths = g.rootPathsForType(info.typ)
+		return enumValue, nil
 	}
 	if payload.typ != info.payloadTyp {
 		return value{}, unsupportedf("type-system", "enum %q variant %q payload type %s, want %s", info.name, variant.name, payload.typ, info.payloadTyp)
@@ -2087,7 +2108,13 @@ func (g *generator) bindPayloadEnumPattern(scrutinee value, pattern enumPatternI
 		return nil
 	}
 	emitter := g.toOstyEmitter()
-	payload := llvmExtractValue(emitter, toOstyValue(scrutinee), pattern.payloadType, 1)
+	var payload *LlvmValue
+	if pattern.isBoxed {
+		heapPtr := llvmExtractValue(emitter, toOstyValue(scrutinee), "ptr", 1)
+		payload = llvmLoadFromSlot(emitter, heapPtr, pattern.payloadType)
+	} else {
+		payload = llvmExtractValue(emitter, toOstyValue(scrutinee), pattern.payloadType, 1)
+	}
 	g.takeOstyEmitter(emitter)
 	payloadValue := fromOstyValue(payload)
 	payloadValue.listElemTyp = pattern.payloadListElemTyp
@@ -2107,7 +2134,7 @@ func (g *generator) matchPayloadEnumPattern(info *enumInfo, pattern ast.Pattern)
 		if len(variant.payloads) != 0 {
 			return enumPatternInfo{}, true, unsupportedf("expression", "enum variant pattern %q must bind its payload", p.Name)
 		}
-		return enumPatternInfo{variant: variant}, true, nil
+		return enumPatternInfo{variant: variant, isBoxed: info.isBoxed}, true, nil
 	case *ast.VariantPat:
 		if len(p.Path) == 0 || len(p.Path) > 2 {
 			return enumPatternInfo{}, false, nil
@@ -2123,7 +2150,7 @@ func (g *generator) matchPayloadEnumPattern(info *enumInfo, pattern ast.Pattern)
 		if len(p.Args) != len(variant.payloads) {
 			return enumPatternInfo{}, true, unsupportedf("expression", "enum variant pattern %q payload count", name)
 		}
-		out := enumPatternInfo{variant: variant}
+		out := enumPatternInfo{variant: variant, isBoxed: info.isBoxed}
 		if len(variant.payloads) == 0 {
 			return out, true, nil
 		}
