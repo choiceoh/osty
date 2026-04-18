@@ -121,6 +121,9 @@ func File(f *ast.File, rr *resolve.Result, opts ...Opts) *Result {
 	if d := runPrivilegeGate(f, opt.Privileged); len(d) > 0 {
 		result.Diags = append(result.Diags, d...)
 	}
+	if d := runPodShapeChecks(f); len(d) > 0 {
+		result.Diags = append(result.Diags, d...)
+	}
 	if d := runNoAllocChecks(f, rr); len(d) > 0 {
 		result.Diags = append(result.Diags, d...)
 	}
@@ -145,6 +148,9 @@ func Package(pkg *resolve.Package, pr *resolve.PackageResult, opts ...Opts) *Res
 			continue
 		}
 		if d := runPrivilegeGate(pf.File, privileged); len(d) > 0 {
+			result.Diags = append(result.Diags, d...)
+		}
+		if d := runPodShapeChecks(pf.File); len(d) > 0 {
 			result.Diags = append(result.Diags, d...)
 		}
 		if d := runNoAllocChecks(pf.File, nil); len(d) > 0 {
@@ -202,6 +208,9 @@ func Workspace(
 				continue
 			}
 			if d := runPrivilegeGate(pf.File, privileged); len(d) > 0 {
+				pkgResult.Diags = append(pkgResult.Diags, d...)
+			}
+			if d := runPodShapeChecks(pf.File); len(d) > 0 {
 				pkgResult.Diags = append(pkgResult.Diags, d...)
 			}
 			if d := runNoAllocChecks(pf.File, nil); len(d) > 0 {

@@ -663,6 +663,19 @@ const (
 
 	// Runtime sublanguage.
 
+	// CodePodShapeViolation: a `struct` carrying `#[pod]` violates the
+	// LANG_SPEC §19.4 plain-old-data rule. The diagnostic names the
+	// first offending field for non-Pod field types, or the first
+	// generic parameter that lacks a `T: Pod` bound for unbounded
+	// generic structs.
+	//
+	// Spec: v0.4 §19.4
+	// Fix: replace the offending field's type with a `Pod` type
+	//      (primitives, `RawPtr`, other `#[pod] #[repr(c)]` structs,
+	//      tuples of `Pod`, `Option<T: Pod>`); for unbounded generic
+	//      structs, add `T: Pod` to every type parameter.
+	CodePodShapeViolation = "E0771"
+
 	// CodeRuntimePrivilegeViolation: a runtime-sublanguage surface is
 	// used outside a privileged package. The surface includes the
 	// annotations `#[intrinsic]`, `#[pod]`, `#[repr(c)]`, `#[export(...)]`,

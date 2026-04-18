@@ -127,6 +127,16 @@ var annotationRules = map[string]AnnotationTarget{
 	// exact symbol name supplied, bypassing Osty name mangling. The
 	// argument is a string literal (§1.9). Runtime sublanguage only.
 	"export": TargetTopLevelDecl,
+	// `pod` (LANG_SPEC §19.4 / §19.6) requests the checker to verify
+	// that the annotated struct is plain-old-data: every field is
+	// `Pod`, generic parameters carry `T: Pod`, no managed
+	// references. Rejection is `E0771`. Runtime sublanguage only.
+	"pod": TargetTopLevelDecl,
+	// `repr(c)` (LANG_SPEC §19.6) forces C ABI field order, padding,
+	// and alignment on the annotated struct. Required on any struct
+	// passed across a `#[c_abi]` boundary or used with
+	// `raw.read`/`raw.write`. Runtime sublanguage only.
+	"repr": TargetTopLevelDecl,
 }
 
 // IsAllowedAnnotation reports whether an annotation name is part of the
