@@ -21,10 +21,8 @@ var runtimeGatedAnnotations = map[string]struct{}{
 	"c_abi":     {},
 	"export":    {},
 	"no_alloc":  {},
-	// `pod` and `repr` register in a separate spike. Once that lands,
-	// add them here:
-	//   "pod":  {},
-	//   "repr": {},
+	"pod":       {},
+	"repr":      {},
 }
 
 // runtimeGatedTypeNames is the set of bare identifiers that the
