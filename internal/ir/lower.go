@@ -132,6 +132,7 @@ func (l *lowerer) lowerFnDecl(fn *ast.FnDecl) *FnDecl {
 		Exported:     fn.Pub,
 		SpanV:        nodeSpan(fn),
 		ExportSymbol: extractExportSymbol(fn.Annotations),
+		CABI:         hasNamedAnnotation(fn.Annotations, "c_abi"),
 	}
 	if out.Return == nil {
 		out.Return = TUnit
@@ -154,6 +155,19 @@ func (l *lowerer) lowerFnDecl(fn *ast.FnDecl) *FnDecl {
 // arg validator (`checkExportArgs` in internal/resolve) is the
 // authoritative place that rejects a malformed `#[export]`, so at
 // this point in the pipeline we only pick up the well-formed cases.
+// hasNamedAnnotation reports whether `annots` contains an annotation
+// with the given name. Used by `lowerFnDecl` for bare-flag annotations
+// (`#[c_abi]`, `#[no_alloc]`, `#[intrinsic]`) where presence alone is
+// the signal — argument shape is the resolver's responsibility.
+func hasNamedAnnotation(annots []*ast.Annotation, name string) bool {
+	for _, a := range annots {
+		if a != nil && a.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 func extractExportSymbol(annots []*ast.Annotation) string {
 	for _, a := range annots {
 		if a == nil || a.Name != "export" {

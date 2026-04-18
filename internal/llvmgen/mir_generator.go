@@ -749,11 +749,22 @@ func (g *mirGen) emitFunction(fn *mir.Function) error {
 	if fn.ExportSymbol != "" {
 		emitName = fn.ExportSymbol
 	}
+	// `#[c_abi]` requests the platform C calling convention. LLVM
+	// IR syntax: `declare [cconv] <ret> @<name>(...)`. The `ccc`
+	// keyword goes before the return type. Default is also `ccc`,
+	// so the explicit keyword is currently a documentation/forward-
+	// compatibility marker rather than a behaviour change — but
+	// emitting it makes intent visible in the generated IR.
+	cconv := ""
+	if fn.CABI {
+		cconv = "ccc "
+	}
 
 	if fn.IsExternal {
 		// External stub: just a declare.
 		sig := g.functionTypes[fn.Name]
 		g.out.WriteString("declare ")
+		g.out.WriteString(cconv)
 		g.out.WriteString(sig.retLLVM)
 		g.out.WriteString(" @")
 		g.out.WriteString(emitName)
@@ -778,6 +789,7 @@ func (g *mirGen) emitFunction(fn *mir.Function) error {
 	// Signature line.
 	sig := g.functionTypes[fn.Name]
 	g.fnBuf.WriteString("define ")
+	g.fnBuf.WriteString(cconv)
 	g.fnBuf.WriteString(sig.retLLVM)
 	g.fnBuf.WriteString(" @")
 	g.fnBuf.WriteString(emitName)

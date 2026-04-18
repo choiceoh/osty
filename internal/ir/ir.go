@@ -323,6 +323,14 @@ type FnDecl struct {
 	// the mangled default. Applicable only to runtime-sublanguage
 	// functions in privileged packages (§19.2).
 	ExportSymbol string
+
+	// CABI is set when the function carries `#[c_abi]` (LANG_SPEC
+	// §19.6). The backend emits the function with the platform's C
+	// calling convention (`ccc` in LLVM) rather than Osty's calling
+	// convention. Almost always paired with `#[export("name")]` so
+	// the symbol can satisfy the runtime ABI contract; the two
+	// annotations are independently representable in the IR.
+	CABI bool
 }
 
 func (*FnDecl) declNode()          {}

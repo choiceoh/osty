@@ -145,6 +145,12 @@ type Function struct {
 	// `@<ExportSymbol>` instead of `@<Name>`, bypassing all mangling
 	// so the function can satisfy the runtime ABI contract.
 	ExportSymbol string
+
+	// CABI is set when the function carries `#[c_abi]` (LANG_SPEC
+	// §19.6). The LLVM emitter inserts the `ccc` calling-convention
+	// keyword in the `define`/`declare` line so the function uses
+	// the platform's C calling convention.
+	CABI bool
 }
 
 // At returns the function's source span.

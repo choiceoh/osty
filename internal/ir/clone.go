@@ -222,6 +222,7 @@ func cloneFnDecl(fn *FnDecl) *FnDecl {
 		Exported:     fn.Exported,
 		SpanV:        fn.SpanV,
 		ExportSymbol: fn.ExportSymbol,
+		CABI:         fn.CABI,
 	}
 	if len(fn.Params) > 0 {
 		out.Params = make([]*Param, len(fn.Params))
