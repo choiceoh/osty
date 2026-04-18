@@ -106,6 +106,9 @@ func File(f *ast.File, rr *resolve.Result, opts ...Opts) *Result {
 	opt := firstOpt(opts)
 	result := newResult()
 	applyNativeFileResult(result, f, rr, opt.Source, opt.Stdlib)
+	if d := runNoAllocChecks(f, rr); len(d) > 0 {
+		result.Diags = append(result.Diags, d...)
+	}
 	recordSelfhostDeclPass(opt.OnDecl, f, "collect")
 	recordSelfhostDeclPass(opt.OnDecl, f, "check")
 	return result
@@ -124,6 +127,9 @@ func Package(pkg *resolve.Package, pr *resolve.PackageResult, opts ...Opts) *Res
 	for _, pf := range pkg.Files {
 		if pf == nil {
 			continue
+		}
+		if d := runNoAllocChecks(pf.File, nil); len(d) > 0 {
+			result.Diags = append(result.Diags, d...)
 		}
 		recordSelfhostDeclPass(opt.OnDecl, pf.File, "collect")
 		recordSelfhostDeclPass(opt.OnDecl, pf.File, "check")
@@ -170,9 +176,13 @@ func Workspace(
 	}
 	applyNativeWorkspaceResults(ws, resolved, out, opt.Stdlib)
 	for _, e := range walk {
+		pkgResult := out[e.path]
 		for _, pf := range e.pkg.Files {
 			if pf == nil {
 				continue
+			}
+			if d := runNoAllocChecks(pf.File, nil); len(d) > 0 {
+				pkgResult.Diags = append(pkgResult.Diags, d...)
 			}
 			recordSelfhostDeclPass(opt.OnDecl, pf.File, "collect")
 			recordSelfhostDeclPass(opt.OnDecl, pf.File, "check")
