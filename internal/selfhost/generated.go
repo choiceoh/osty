@@ -28024,7 +28024,7 @@ func frontCheckBinary(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
 			return "Bool"
 		}
 		// Osty: /tmp/selfhost_merged.osty:11129:12
-		selfhostBumpError(env)
+		selfhostBumpErrorWithDetail(env, fmt.Sprintf("eq: %s, %s", left, right))
 		// Osty: /tmp/selfhost_merged.osty:11130:9
 		return "Invalid"
 	}
@@ -28036,7 +28036,7 @@ func frontCheckBinary(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
 			return "Bool"
 		}
 		// Osty: /tmp/selfhost_merged.osty:11136:12
-		selfhostBumpError(env)
+		selfhostBumpErrorWithDetail(env, fmt.Sprintf("ord: %s, %s", left, right))
 		// Osty: /tmp/selfhost_merged.osty:11137:9
 		return "Invalid"
 	}
@@ -28048,7 +28048,7 @@ func frontCheckBinary(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
 			return "Bool"
 		}
 		// Osty: /tmp/selfhost_merged.osty:11143:12
-		selfhostBumpError(env)
+		selfhostBumpErrorWithDetail(env, fmt.Sprintf("logical: %s, %s", left, right))
 		// Osty: /tmp/selfhost_merged.osty:11144:9
 		return "Invalid"
 	}
@@ -28057,7 +28057,7 @@ func frontCheckBinary(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
 		// Osty: /tmp/selfhost_merged.osty:11147:9
 		if frontCheckTypeHead(left) != "Option" {
 			// Osty: /tmp/selfhost_merged.osty:11148:16
-			selfhostBumpError(env)
+			selfhostBumpErrorWithDetail(env, fmt.Sprintf("?? lhs: %s", left))
 			// Osty: /tmp/selfhost_merged.osty:11149:13
 			return "Invalid"
 		}
@@ -28082,7 +28082,7 @@ func frontCheckBinary(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
 			return left
 		}
 		// Osty: /tmp/selfhost_merged.osty:11162:12
-		selfhostBumpError(env)
+		selfhostBumpErrorWithDetail(env, fmt.Sprintf("bit: %s, %s", left, right))
 		// Osty: /tmp/selfhost_merged.osty:11163:9
 		return "Invalid"
 	}
@@ -28091,7 +28091,7 @@ func frontCheckBinary(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
 		// Osty: /tmp/selfhost_merged.osty:11166:9
 		if !(frontCheckIsNumeric(left)) || !(frontCheckIsNumeric(right)) {
 			// Osty: /tmp/selfhost_merged.osty:11167:16
-			selfhostBumpError(env)
+			selfhostBumpErrorWithDetail(env, fmt.Sprintf("arith: %s, %s", left, right))
 			// Osty: /tmp/selfhost_merged.osty:11168:13
 			return "Invalid"
 		}
