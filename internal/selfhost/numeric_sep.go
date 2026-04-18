@@ -6,120 +6,83 @@ import (
 )
 
 // scanBadNumericSeparators enforces LANG_SPEC_v0.4 §1.6.1: underscores in
-// numeric literals may appear only between two digits of the same base. A
-// literal may not start with `_` (maximal munch turns that into an IDENT
-// anyway), end with `_`, contain `__`, or place `_` immediately after a
-// base prefix. `_` adjacent to `.`, `e`/`E`, or an exponent sign is
-// likewise rejected.
+// numeric literals must sit between two digits of the same base.
 //
-// The lexer core (examples/selfhost-core/frontend.osty:frontNumberScan)
-// has matching logic emitting FrontDiagBadNumericSeparator, but the
-// self-hosted regeneration path in this tree is blocked by pre-existing
-// issues (see resolve.osty `while` loops). Until regen is fixed this
-// Go-side post-processor mirrors the spec so the behavior reaches users
-// today; once regen lands the Osty-side diagnostic will cover it and this
-// helper becomes redundant (but harmless — duplicate diagnostics are
-// deduped by the adapter).
-func scanBadNumericSeparators(rt runeTable) []*diag.Diagnostic {
-	runes := rt.runes
+// Walks INT/FLOAT tokens (top-level and interpolation bodies), so string
+// bodies, comments, and identifiers never trip the check. Bridge until the
+// selfhost lexer emits FrontDiagBadNumericSeparator directly; duplicate
+// diagnostics are deduped by the adapter.
+func scanBadNumericSeparators(rt runeTable, stream *FrontLexStream) []*diag.Diagnostic {
 	var out []*diag.Diagnostic
-	for i := 0; i < len(runes); {
-		r := runes[i]
-		if r < '0' || r > '9' {
-			i++
-			continue
+	check := func(ft *FrontLexToken) {
+		if ft == nil || ft.start == nil {
+			return
 		}
-		// Identify base and body range [bodyStart, bodyEnd).
-		base := 10
-		bodyStart := i
-		bodyEnd := i
-		if r == '0' && i+1 < len(runes) {
-			switch runes[i+1] {
-			case 'x', 'X':
-				base = 16
-				bodyStart = i + 2
-			case 'b', 'B':
-				base = 2
-				bodyStart = i + 2
-			case 'o', 'O':
-				base = 8
-				bodyStart = i + 2
-			}
+		switch ft.kind.(type) {
+		case *FrontTokenKind_FrontInt, *FrontTokenKind_FrontFloat:
+		default:
+			return
 		}
-		// Consume the literal body.
-		j := bodyStart
-		for j < len(runes) && isNumericContinuation(runes[j], base) {
-			j++
+		if d := checkNumericLiteral(rt, ft.start.offset, ft.length); d != nil {
+			out = append(out, d)
 		}
-		bodyEnd = j
-		// For decimal, extend through the fractional part and exponent so
-		// adjacent-to-dot / adjacent-to-e underscores fall inside the
-		// scanned range.
-		if base == 10 {
-			if j < len(runes) && runes[j] == '.' && j+1 < len(runes) && runes[j+1] != '.' && isDecimalDigit(runes[j+1]) {
-				j++
-				for j < len(runes) && isNumericContinuation(runes[j], 10) {
-					j++
-				}
-				bodyEnd = j
-			}
-			if j < len(runes) && (runes[j] == 'e' || runes[j] == 'E') {
-				k := j + 1
-				if k < len(runes) && (runes[k] == '+' || runes[k] == '-') {
-					k++
-				}
-				if k < len(runes) && isDecimalDigit(runes[k]) {
-					j = k
-					for j < len(runes) && isNumericContinuation(runes[j], 10) {
-						j++
-					}
-					bodyEnd = j
-				}
-			}
-		}
-		// Look for any underscore whose neighbors are not both base digits.
-		bad := false
-		for k := bodyStart; k < bodyEnd; k++ {
-			if runes[k] != '_' {
-				continue
-			}
-			var prev, next rune = -1, -1
-			if k > 0 {
-				prev = runes[k-1]
-			}
-			if k+1 < len(runes) {
-				next = runes[k+1]
-			}
-			if !isBaseDigit(prev, base) || !isBaseDigit(next, base) {
-				bad = true
-				break
-			}
-		}
-		if bad {
-			start := posAtRune(runes, i)
-			start.Offset = rt.byteOffset(i)
-			end := posAtRune(runes, bodyEnd)
-			end.Offset = rt.byteOffset(bodyEnd)
-			out = append(out, diag.New(diag.Error, "numeric separator `_` must appear between two digits").
-				Code("E0008").
-				Primary(diag.Span{Start: start, End: end}, "").
-				Hint("place `_` only between two digits").
-				Build())
-		}
-		if j > i {
-			i = j
-		} else {
-			i++
+	}
+	for _, ft := range stream.tokens {
+		check(ft)
+	}
+	for _, it := range stream.interpolationTokens {
+		if it != nil {
+			check(it.token)
 		}
 	}
 	return out
 }
 
-func isNumericContinuation(r rune, base int) bool {
-	if r == '_' {
-		return true
+func checkNumericLiteral(rt runeTable, startRune, length int) *diag.Diagnostic {
+	runes := rt.runes
+	end := startRune + length
+	if end > len(runes) {
+		end = len(runes)
 	}
-	return isBaseDigit(r, base)
+	base := 10
+	bodyStart := startRune
+	if length >= 2 && runes[startRune] == '0' {
+		switch runes[startRune+1] {
+		case 'x', 'X':
+			base = 16
+			bodyStart = startRune + 2
+		case 'b', 'B':
+			base = 2
+			bodyStart = startRune + 2
+		case 'o', 'O':
+			base = 8
+			bodyStart = startRune + 2
+		}
+	}
+	for k := bodyStart; k < end; k++ {
+		if runes[k] != '_' {
+			continue
+		}
+		var prev, next rune = -1, -1
+		if k > startRune {
+			prev = runes[k-1]
+		}
+		if k+1 < end {
+			next = runes[k+1]
+		}
+		if !isBaseDigit(prev, base) || !isBaseDigit(next, base) {
+			startPos := posAtRune(runes, startRune)
+			startPos.Offset = rt.byteOffset(startRune)
+			endPos := posAtRune(runes, end)
+			endPos.Offset = rt.byteOffset(end)
+			return diag.New(diag.Error, "numeric separator `_` must appear between two digits").
+				Code("E0008").
+				Primary(diag.Span{Start: startPos, End: endPos}, "").
+				Hint("place `_` only between two digits").
+				Build()
+		}
+	}
+	return nil
 }
 
 func isBaseDigit(r rune, base int) bool {
@@ -134,10 +97,6 @@ func isBaseDigit(r rune, base int) bool {
 		return (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
 	}
 	return false
-}
-
-func isDecimalDigit(r rune) bool {
-	return r >= '0' && r <= '9'
 }
 
 // posAtRune computes a line/column position for the given rune index.
