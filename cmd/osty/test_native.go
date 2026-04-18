@@ -42,7 +42,7 @@ func runTestMain(args []string, flags cliFlags, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: osty test [--offline | --locked | --frozen] [--backend NAME] [--emit MODE] [--airepair=false] [--airepair-mode MODE] [--seed HEX] [--serial] [--jobs N] [PATH|FILTER...]")
+		fmt.Fprintln(stderr, "usage: osty test [--offline | --locked | --frozen] [--backend NAME] [--emit MODE] [--airepair=false] [--airepair-mode MODE] [--seed HEX] [--serial] [--jobs N] [--doc] [PATH|FILTER...]")
 	}
 	var offline, locked, frozen bool
 	fs.BoolVar(&offline, "offline", false, "do not fetch dependencies; fail if caches are missing")
@@ -60,6 +60,8 @@ func runTestMain(args []string, flags cliFlags, stdout, stderr io.Writer) int {
 	fs.BoolVar(&serial, "serial", false, "run tests sequentially in the shuffled order (default: parallel)")
 	var jobs int
 	fs.IntVar(&jobs, "jobs", 0, "max concurrent tests when parallel (0 = runtime.NumCPU())")
+	var docTests bool
+	fs.BoolVar(&docTests, "doc", false, "v0.5 G32: extract `osty-fenced examples from /// doc comments and run each as an additional test")
 	var pf profileFlags
 	pf.register(fs)
 	if err := fs.Parse(args); err != nil {
@@ -104,6 +106,14 @@ func runTestMain(args []string, flags cliFlags, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stderr, "osty test: %v\n", err)
 		return 1
+	}
+	if docTests {
+		doc, err := appendDoctestCases(pkg, filters)
+		if err != nil {
+			fmt.Fprintf(stderr, "osty test --doc: %v\n", err)
+			return 1
+		}
+		tests = append(tests, doc...)
 	}
 	if len(tests) == 0 {
 		fmt.Fprintln(stdout, "running 0 tests")
