@@ -387,6 +387,35 @@ func (r *Registry) LookupPackage(dotPath string) *resolve.Package {
 	return nil
 }
 
+// LookupFnDecl returns the top-level `fn` declaration with the given name
+// inside the stdlib module, or nil if the module or function is not
+// present. Only public and private free functions at file scope are
+// considered — methods declared inside struct/enum/interface bodies are
+// not exposed here because a backend that wants a method body must look
+// it up against its receiver type.
+//
+// The returned AST is the shared immutable registry copy; callers must
+// not mutate it.
+func (r *Registry) LookupFnDecl(module, name string) *ast.FnDecl {
+	if r == nil || module == "" || name == "" {
+		return nil
+	}
+	mod, ok := r.Modules[module]
+	if !ok || mod == nil || mod.File == nil {
+		return nil
+	}
+	for _, decl := range mod.File.Decls {
+		fn, ok := decl.(*ast.FnDecl)
+		if !ok {
+			continue
+		}
+		if fn.Name == name {
+			return fn
+		}
+	}
+	return nil
+}
+
 // collectStubPaths walks the embedded file system and returns every
 // .osty path in lexical order. Deterministic ordering keeps diagnostic
 // output stable across runs.
