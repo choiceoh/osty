@@ -710,7 +710,8 @@ func (g *generator) emitBinary(e *ast.BinaryExpr) (value, error) {
 		return value{}, err
 	}
 	if llvmIsCompareOp(e.Op.String()) {
-		return g.emitCompare(e.Op, left, right)
+		isString := g.staticExprIsString(e.Left) || g.staticExprIsString(e.Right)
+		return g.emitCompare(e.Op, left, right, isString)
 	}
 	if e.Op == token.AND || e.Op == token.OR {
 		return g.emitLogical(e.Op, left, right)
@@ -755,7 +756,7 @@ func (g *generator) emitLogical(op token.Kind, left, right value) (value, error)
 	return fromOstyValue(out), nil
 }
 
-func (g *generator) emitCompare(op token.Kind, left, right value) (value, error) {
+func (g *generator) emitCompare(op token.Kind, left, right value, isString bool) (value, error) {
 	if left.typ != right.typ {
 		return value{}, unsupportedf("type-system", "compare type mismatch %s/%s", left.typ, right.typ)
 	}
@@ -778,6 +779,9 @@ func (g *generator) emitCompare(op token.Kind, left, right value) (value, error)
 		out = llvmCompareF64(emitter, pred, toOstyValue(left), toOstyValue(right))
 	case "ptr":
 		g.takeOstyEmitter(emitter)
+		if !isString {
+			return value{}, unsupportedf("type-system", "comparison operator %q on non-String ptr values is not yet lowered", op)
+		}
 		return g.emitRuntimeStringCompare(op, left, right)
 	default:
 		g.takeOstyEmitter(emitter)
