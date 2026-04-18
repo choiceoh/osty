@@ -15,6 +15,22 @@ fn testExpandFrozenFlagsLeavesNonFrozenUntouched() {
     testing.assert(!(expanded.frozen))
 }
 
+fn testExpandFrozenFlagsIdempotentWhenAlreadySaturated() {
+    let opts = ResolveOpts { offline: true, locked: true, frozen: true }
+    let expanded = expandFrozenFlags(opts)
+    testing.assert(expanded.offline)
+    testing.assert(expanded.locked)
+    testing.assert(expanded.frozen)
+}
+
+fn testExpandFrozenFlagsAllOffPreserved() {
+    let opts = ResolveOpts { offline: false, locked: false, frozen: false }
+    let expanded = expandFrozenFlags(opts)
+    testing.assert(!(expanded.offline))
+    testing.assert(!(expanded.locked))
+    testing.assert(!(expanded.frozen))
+}
+
 fn testFrozenMissingLockfileMessageFormat() {
     testing.assertEq(
         frozenMissingLockfileMessage("osty.lock"),
