@@ -83,6 +83,18 @@ type Opts struct {
 	// once per compatibility phase ("collect" and "check"). The
 	// checker runs as one pass, so durations are reported as 0.
 	OnDecl func(decl ast.Decl, phase string, dur time.Duration)
+
+	// Privileged marks the file/package as privileged for the runtime
+	// sublanguage (LANG_SPEC §19.2). When false (the default), the
+	// privilege gate in privilege.go rejects `#[intrinsic]`, `#[c_abi]`,
+	// `#[export]`, `#[no_alloc]`, `use std.runtime.*`, and references
+	// to `RawPtr` / `Pod` with E0770.
+	//
+	// The Package / Workspace entry points compute this from the
+	// package path (`std.runtime.*` implies privileged). Callers of
+	// File() must supply the flag explicitly; the default false is
+	// correct for ordinary user code.
+	Privileged bool
 }
 
 // firstOpt returns the first Opts in the slice, or a zero value when
@@ -106,6 +118,9 @@ func File(f *ast.File, rr *resolve.Result, opts ...Opts) *Result {
 	opt := firstOpt(opts)
 	result := newResult()
 	applyNativeFileResult(result, f, rr, opt.Source, opt.Stdlib)
+	if d := runPrivilegeGate(f, opt.Privileged); len(d) > 0 {
+		result.Diags = append(result.Diags, d...)
+	}
 	if d := runNoAllocChecks(f, rr); len(d) > 0 {
 		result.Diags = append(result.Diags, d...)
 	}
@@ -124,9 +139,13 @@ func Package(pkg *resolve.Package, pr *resolve.PackageResult, opts ...Opts) *Res
 		return result
 	}
 	applyNativePackageResult(result, pkg, pr, nil, opt.Stdlib)
+	privileged := isPrivilegedPackage(pkg)
 	for _, pf := range pkg.Files {
 		if pf == nil {
 			continue
+		}
+		if d := runPrivilegeGate(pf.File, privileged); len(d) > 0 {
+			result.Diags = append(result.Diags, d...)
 		}
 		if d := runNoAllocChecks(pf.File, nil); len(d) > 0 {
 			result.Diags = append(result.Diags, d...)
@@ -177,9 +196,13 @@ func Workspace(
 	applyNativeWorkspaceResults(ws, resolved, out, opt.Stdlib)
 	for _, e := range walk {
 		pkgResult := out[e.path]
+		privileged := isPrivilegedPackagePath(e.path) || isPrivilegedPackage(e.pkg)
 		for _, pf := range e.pkg.Files {
 			if pf == nil {
 				continue
+			}
+			if d := runPrivilegeGate(pf.File, privileged); len(d) > 0 {
+				pkgResult.Diags = append(pkgResult.Diags, d...)
 			}
 			if d := runNoAllocChecks(pf.File, nil); len(d) > 0 {
 				pkgResult.Diags = append(pkgResult.Diags, d...)
