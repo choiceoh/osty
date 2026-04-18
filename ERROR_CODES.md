@@ -831,7 +831,17 @@ bool, `None`, `Ok(literal)`, `Err(literal)`, `[]`, `{:}`, or `()` literal.
 
 ---
 
-## Runtime sublanguage (E0772)
+## Runtime sublanguage (E0770–E0772)
+
+### E0770 — `CodeRuntimePrivilegeViolation`
+
+CodeRuntimePrivilegeViolation: a runtime-sublanguage surface is used outside a privileged package. The surface includes the annotations `#[intrinsic]`, `#[pod]`, `#[repr(c)]`, `#[export(...)]`, `#[c_abi]`, and `#[no_alloc]`; the opaque type `RawPtr`; the marker trait `Pod`; and any `use std.runtime.*` import. A package is privileged when its fully-qualified path begins with `std.runtime.` or when its manifest declares `[capabilities] runtime = true` and loads from the toolchain workspace root.
+
+workspace packages) add `[capabilities] runtime = true` to the package's `osty.toml`. User code has no way to opt in; refactor it to use ordinary managed types.
+
+Spec: v0.4 §19.2
+
+**Fix**: move the code into `std.runtime.*`, or (for toolchain
 
 ### E0772 — `CodeNoAllocViolation`
 

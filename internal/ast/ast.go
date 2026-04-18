@@ -111,9 +111,22 @@ var annotationRules = map[string]AnnotationTarget{
 	// to a function that allocates. The body walker in
 	// `internal/check/noalloc.go` enforces it (`E0772`). This is part of
 	// the runtime sublanguage; spec §19.2 restricts it to privileged
-	// packages, but the privilege gate is a separate phase from this
-	// target check.
+	// packages, and the privilege gate lives in
+	// `internal/check/privilege.go` (`E0770`).
 	"no_alloc": TargetTopLevelDecl | TargetMethod,
+	// `intrinsic` (LANG_SPEC §19.5 / §19.6) marks a body-less function
+	// whose implementation is supplied by the lowering layer. Runtime
+	// sublanguage only; privilege-gated by
+	// `internal/check/privilege.go`.
+	"intrinsic": TargetTopLevelDecl | TargetMethod,
+	// `c_abi` (LANG_SPEC §19.6) emits the function with the platform's
+	// C calling convention rather than Osty's. Almost always paired with
+	// `#[export(...)]`. Runtime sublanguage only.
+	"c_abi": TargetTopLevelDecl,
+	// `export("symbol")` (LANG_SPEC §19.6) emits the function with the
+	// exact symbol name supplied, bypassing Osty name mangling. The
+	// argument is a string literal (§1.9). Runtime sublanguage only.
+	"export": TargetTopLevelDecl,
 }
 
 // IsAllowedAnnotation reports whether an annotation name is part of the

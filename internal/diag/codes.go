@@ -663,6 +663,23 @@ const (
 
 	// Runtime sublanguage.
 
+	// CodeRuntimePrivilegeViolation: a runtime-sublanguage surface is
+	// used outside a privileged package. The surface includes the
+	// annotations `#[intrinsic]`, `#[pod]`, `#[repr(c)]`, `#[export(...)]`,
+	// `#[c_abi]`, and `#[no_alloc]`; the opaque type `RawPtr`; the
+	// marker trait `Pod`; and any `use std.runtime.*` import. A package
+	// is privileged when its fully-qualified path begins with
+	// `std.runtime.` or when its manifest declares
+	// `[capabilities] runtime = true` and loads from the toolchain
+	// workspace root.
+	//
+	// Spec: v0.4 §19.2
+	// Fix: move the code into `std.runtime.*`, or (for toolchain
+	//      workspace packages) add `[capabilities] runtime = true` to
+	//      the package's `osty.toml`. User code has no way to opt in;
+	//      refactor it to use ordinary managed types.
+	CodeRuntimePrivilegeViolation = "E0770"
+
 	// CodeNoAllocViolation: a function carrying `#[no_alloc]` contains
 	// an expression that requires the managed allocator (string
 	// interpolation, list/map/set literal, non-Pod struct literal,
