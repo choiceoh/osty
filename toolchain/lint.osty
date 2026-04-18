@@ -1906,11 +1906,11 @@ fn selfLintAstPatternNames(
         return out
     }
     if selfLintAstPatternIsIdent(node) {
-        out.push(selfLintNameAtNode(selfLintAstPatternName(node.text, "ident:"), node.start, node.end, idx))
-    } else if node.extra == selfLintAstPatternBindingKind() || strings.hasPrefix(node.text, "binding:") {
-        out.push(selfLintNameAtNode(selfLintAstPatternName(node.text, "binding:"), node.start, node.start + 1, idx))
+        out.push(selfLintNameAtNode(node.text, node.start, node.end, idx))
+    } else if node.extra == selfLintAstPatternBindingKind() {
+        out.push(selfLintNameAtNode(node.text, node.start, node.start + 1, idx))
         out = selfLintAstPatternNames(file, node.left, out)
-    } else if node.extra == selfLintAstPatternFieldKind() || (node.extra == 0 && node.text != "" && node.left >= 0) {
+    } else if node.extra == selfLintAstPatternFieldKind() {
         if node.left >= 0 {
             out = selfLintAstPatternNames(file, node.left, out)
         } else {
@@ -1927,7 +1927,7 @@ fn selfLintAstPatternNames(
 }
 
 fn selfLintAstPatternIsIdent(node: AstNode) -> Bool {
-    node.extra == selfLintAstPatternIdentKind() || strings.hasPrefix(node.text, "ident:")
+    node.extra == selfLintAstPatternIdentKind()
 }
 
 fn selfLintAstPatternIdentKind() -> Int { 3 }
@@ -1935,13 +1935,6 @@ fn selfLintAstPatternIdentKind() -> Int { 3 }
 fn selfLintAstPatternBindingKind() -> Int { 9 }
 
 fn selfLintAstPatternFieldKind() -> Int { 10 }
-
-fn selfLintAstPatternName(text: String, prefix: String) -> String {
-    if strings.hasPrefix(text, prefix) {
-        return strings.trimPrefix(text, prefix)
-    }
-    text
-}
 
 fn selfLintAstCountWritesAfter(
     file: AstFile,

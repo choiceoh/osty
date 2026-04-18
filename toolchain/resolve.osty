@@ -1445,12 +1445,12 @@ fn srAstPatternNames(
     if node.kind != AstNPattern {
         return out
     }
-    if node.extra == srPatternIdentKind() || strings.hasPrefix(node.text, "ident:") {
-        out.push(selfResolveName(srPatternName(node.text, "ident:"), node.start, node.end, idx))
-    } else if node.extra == srPatternBindingKind() || strings.hasPrefix(node.text, "binding:") {
-        out.push(selfResolveName(srPatternName(node.text, "binding:"), node.start, node.start + 1, idx))
+    if node.extra == srPatternIdentKind() {
+        out.push(selfResolveName(node.text, node.start, node.end, idx))
+    } else if node.extra == srPatternBindingKind() {
+        out.push(selfResolveName(node.text, node.start, node.start + 1, idx))
         out = srAstPatternNames(file, node.left, out)
-    } else if node.extra == srPatternFieldKind() || (node.extra == 0 && node.text != "" && node.left >= 0) {
+    } else if node.extra == srPatternFieldKind() {
         if node.left >= 0 {
             out = srAstPatternNames(file, node.left, out)
         } else {
@@ -1471,13 +1471,6 @@ fn srPatternIdentKind() -> Int { 3 }
 fn srPatternBindingKind() -> Int { 9 }
 
 fn srPatternFieldKind() -> Int { 10 }
-
-fn srPatternName(text: String, prefix: String) -> String {
-    if strings.hasPrefix(text, prefix) {
-        return strings.trimPrefix(text, prefix)
-    }
-    text
-}
 
 fn srAstLetTypeName(file: AstFile, node: AstNode) -> String {
     srAstTypeName(file, srAstChildAt(node.children, 0))
