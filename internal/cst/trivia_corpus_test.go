@@ -23,6 +23,7 @@ var corpus = []string{
 	"testdata/spec/positive/06-scripts.osty",
 	"testdata/spec/positive/07-errors.osty",
 	"testdata/spec/positive/08-concurrency.osty",
+	"testdata/spec/positive/10-collections.osty",
 	"testdata/spec/positive/11-testing.osty",
 	"testdata/spec/negative/reject.osty",
 	"testdata/full.osty",

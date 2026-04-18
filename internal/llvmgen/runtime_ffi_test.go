@@ -498,6 +498,48 @@ fn main() {
 	}
 }
 
+func TestGenerateMapPureHelpersTypeCheckThroughFrontEnd(t *testing.T) {
+	// Pure-Osty Map helpers (update/getOr/any/count/mergeWith/retainIf) are
+	// defined in internal/stdlib/modules/collections.osty with Osty bodies on
+	// top of the runtime intrinsics. The LLVM backend does not yet inline
+	// Osty-bodied stdlib methods through Generate(); tracking that gap is a
+	// separate work item. This test locks in a weaker invariant: a program
+	// that calls each new helper must at least parse with zero diagnostics,
+	// preventing grammar regressions in the call-site shape of the helpers
+	// (2-arg closures, nested `??` in `update`, etc.).
+	parseLLVMGenFile(t, `fn main() {
+    let mut counts: Map<String, Int> = {:}
+    counts.insert("a", 1)
+    counts.update("a", |n| (n ?? 0) + 10)
+
+    let fallback = counts.getOr("missing", 0)
+    let atLeastTwo = counts.count(|_k, v| v >= 2)
+    let hasA = counts.any(|k, _v| k == "a")
+    let allPos = counts.all(|_k, v| v > 0)
+    let firstBig = counts.find(|_k, v| v > 100)
+
+    let kept = counts.filter(|_k, v| v > 0)
+    let labeled = kept.mapValues(|v| v * 2)
+
+    let other: Map<String, Int> = {:}
+    let _merged = counts.merge(other)
+    let _summed = counts.mergeWith(other, |x, y| x + y)
+
+    counts.insertAll(other)
+    counts.retainIf(|_k, v| v > 5)
+    counts.forEach(|_k, _v| {})
+
+    if hasA && allPos {
+        println(fallback + atLeastTwo + labeled.len())
+    }
+}
+
+fn demoGroupBy(xs: List<Int>) -> Map<Bool, List<Int>> {
+    xs.groupBy(|n| n >= 0)
+}
+`)
+}
+
 func TestGenerateCollectionsEmitTraceHelpersForManagedAggregateValues(t *testing.T) {
 	file := parseLLVMGenFile(t, `struct Bucket {
     ids: List<Int>

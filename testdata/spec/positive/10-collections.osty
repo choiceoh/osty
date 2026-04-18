@@ -1,0 +1,47 @@
+// §10.6 Collection methods — Map<K, V> pure helpers + List<T>.groupBy bridge.
+// Every construct here must type-check with zero diagnostics.
+
+fn demoMapQuery(counts: Map<String, Int>) -> (Bool, Bool, Int, Int, (String, Int)?) {
+    let seenA = counts.any(|k, _v| k == "a")
+    let allPositive = counts.all(|_k, v| v > 0)
+    let atLeastTwo = counts.count(|_k, v| v >= 2)
+    let fallback = counts.getOr("missing", 0)
+    let firstBig = counts.find(|_k, v| v > 100)
+    (seenA, allPositive, atLeastTwo, fallback, firstBig)
+}
+
+fn demoMapTransform(src: Map<String, Int>) -> (Map<String, Int>, Map<String, String>) {
+    let kept = src.filter(|_k, v| v > 0)
+    let labeled = kept.mapValues(|v| "count={v}")
+    (kept, labeled)
+}
+
+fn demoMapMerge(a: Map<String, Int>, b: Map<String, Int>) -> (Map<String, Int>, Map<String, Int>) {
+    let lastWins = a.merge(b)
+    let summed = a.mergeWith(b, |x, y| x + y)
+    (lastWins, summed)
+}
+
+fn demoMapMutate(tokens: List<String>) -> Map<String, Int> {
+    let mut counts: Map<String, Int> = {:}
+    for t in tokens {
+        counts.update(t, |n| (n ?? 0) + 1)
+    }
+
+    let patch: Map<String, Int> = {:}
+    counts.insertAll(patch)
+    counts.retainIf(|_k, v| v > 0)
+    counts
+}
+
+fn demoForEach(m: Map<String, Int>) -> Int {
+    let mut total = 0
+    m.forEach(|_k, v| {
+        total = total + v
+    })
+    total
+}
+
+fn demoGroupBy(items: List<Int>) -> Map<Bool, List<Int>> {
+    items.groupBy(|n| n >= 0)
+}
