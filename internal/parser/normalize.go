@@ -65,12 +65,18 @@ func normalizeStableAliases(src []byte) ([]byte, []ProvenanceStep) {
 	toks, _, _ := selfhost.Lex(src)
 	var edits []stableAliasEdit
 
-	for _, tok := range toks {
+	for i, tok := range toks {
 		if tok.Kind != token.IDENT {
 			continue
 		}
 		spec, ok := stableAliasSpecs[tok.Value]
 		if !ok {
+			continue
+		}
+		// Preserve the identifier when it sits in `name : type` position
+		// (parameter, struct field, keyword argument, struct-literal field,
+		// map entry). Keyword aliases never legitimately appear there.
+		if i+1 < len(toks) && toks[i+1].Kind == token.COLON {
 			continue
 		}
 		replacement := aliasReplacement(spec.alias, spec.canonical)

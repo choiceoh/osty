@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/osty/osty/internal/ast"
+	"github.com/osty/osty/internal/diag"
 )
 
 func TestParseSlashSeparatedUsePath(t *testing.T) {
@@ -152,6 +153,27 @@ func TestParseAcceptsStableAliases(t *testing.T) {
 	}
 	if result.Provenance == nil || len(result.Provenance.Aliases) != 3 {
 		t.Fatalf("alias provenance = %#v, want 3 stable alias entries", result.Provenance)
+	}
+}
+
+func TestParseStableAliasesPreservedAsIdentifiers(t *testing.T) {
+	// Identifiers named after stable aliases (def, func, function, import, while)
+	// must survive when they occupy `name : type` slots — parameters, struct
+	// fields, keyword arguments. Otherwise FFI signatures that borrow host
+	// names (e.g. astbridge `def: Expr` in ParamNode/FieldNode) become E0001.
+	src := []byte(`use host.bridge as bridge {
+    fn FieldNode(name: String, def: Int) -> Int
+    fn ParamNode(name: String, def: Int) -> Int
+}
+`)
+	result := ParseDetailed(src)
+	for _, d := range result.Diagnostics {
+		if d.Severity == diag.Error {
+			t.Fatalf("unexpected parse error: %s — %s", d.Code, d.Message)
+		}
+	}
+	if result.Provenance != nil && len(result.Provenance.Aliases) != 0 {
+		t.Fatalf("alias provenance = %#v, want no rewrites for param names", result.Provenance.Aliases)
 	}
 }
 
