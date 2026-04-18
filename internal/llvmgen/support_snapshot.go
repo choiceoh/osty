@@ -212,6 +212,10 @@ func llvmLoad(emitter *LlvmEmitter, slot *LlvmValue) *LlvmValue {
 }
 
 // Osty: examples/selfhost-core/llvmgen.osty:161:5
+func llvmSlotAsPtr(slot *LlvmValue) *LlvmValue {
+	return &LlvmValue{typ: "ptr", name: slot.name, pointer: false}
+}
+
 func llvmMutableLetSlot(emitter *LlvmEmitter, name string, initial *LlvmValue) *LlvmValue {
 	// Osty: examples/selfhost-core/llvmgen.osty:166:5
 	ptr := llvmNextTemp(emitter)
@@ -838,6 +842,22 @@ func llvmRenderModuleWithGcRuntime(sourcePath string, target string, typeDefs []
 	return llvmRenderModuleWithRuntimeDeclarations(sourcePath, target, typeDefs, stringGlobals, llvmGcRuntimeDeclarations(), definitions)
 }
 
+func llvmRenderModuleWithListRuntime(sourcePath string, target string, typeDefs []string, stringGlobals []*LlvmStringGlobal, definitions []string) string {
+	return llvmRenderModuleWithRuntimeDeclarations(sourcePath, target, typeDefs, stringGlobals, llvmListRuntimeDeclarations(), definitions)
+}
+
+func llvmRenderModuleWithMapRuntime(sourcePath string, target string, typeDefs []string, stringGlobals []*LlvmStringGlobal, definitions []string) string {
+	return llvmRenderModuleWithRuntimeDeclarations(sourcePath, target, typeDefs, stringGlobals, llvmMapRuntimeDeclarations(), definitions)
+}
+
+func llvmRenderModuleWithSetRuntime(sourcePath string, target string, typeDefs []string, stringGlobals []*LlvmStringGlobal, definitions []string) string {
+	return llvmRenderModuleWithRuntimeDeclarations(sourcePath, target, typeDefs, stringGlobals, llvmSetRuntimeDeclarations(), definitions)
+}
+
+func llvmRenderModuleWithStringRuntime(sourcePath string, target string, typeDefs []string, stringGlobals []*LlvmStringGlobal, definitions []string) string {
+	return llvmRenderModuleWithRuntimeDeclarations(sourcePath, target, typeDefs, stringGlobals, llvmStringRuntimeDeclarations(), definitions)
+}
+
 // Osty: examples/selfhost-core/llvmgen.osty:581:1
 func llvmRenderModuleWithRuntimeDeclarations(sourcePath string, target string, typeDefs []string, stringGlobals []*LlvmStringGlobal, runtimeDeclarations []string, definitions []string) string {
 	// Osty: examples/selfhost-core/llvmgen.osty:589:5
@@ -1358,6 +1378,51 @@ func llvmListRuntimeToSetI64Symbol() string {
 	return "osty_rt_list_to_set_i64"
 }
 
+// Osty: toolchain/llvmgen.osty (parametric push symbol builder)
+func llvmListRuntimePushSymbol(suffix string) string {
+	return "osty_rt_list_push_" + suffix
+}
+
+func llvmListRuntimeGetSymbol(suffix string) string {
+	return "osty_rt_list_get_" + suffix
+}
+
+func llvmListRuntimeSetSymbol(suffix string) string {
+	return "osty_rt_list_set_" + suffix
+}
+
+func llvmListRuntimeSortedSymbol(elemTyp string, isString bool) string {
+	if isString {
+		return "osty_rt_list_sorted_string"
+	}
+	switch elemTyp {
+	case "i64":
+		return "osty_rt_list_sorted_i64"
+	case "i1":
+		return "osty_rt_list_sorted_i1"
+	case "double":
+		return "osty_rt_list_sorted_f64"
+	}
+	return ""
+}
+
+func llvmListRuntimeToSetSymbol(elemTyp string, isString bool) string {
+	if isString {
+		return "osty_rt_list_to_set_string"
+	}
+	switch elemTyp {
+	case "i64":
+		return "osty_rt_list_to_set_i64"
+	case "i1":
+		return "osty_rt_list_to_set_i1"
+	case "double":
+		return "osty_rt_list_to_set_f64"
+	case "ptr":
+		return "osty_rt_list_to_set_ptr"
+	}
+	return ""
+}
+
 // Osty: toolchain/llvmgen.osty:1108:1
 func llvmMapRuntimeNewSymbol() string {
 	return "osty_rt_map_new"
@@ -1366,6 +1431,43 @@ func llvmMapRuntimeNewSymbol() string {
 // Osty: toolchain/llvmgen.osty:1112:1
 func llvmMapRuntimeKeysSymbol() string {
 	return "osty_rt_map_keys"
+}
+
+func llvmMapRuntimeLenSymbol() string {
+	return "osty_rt_map_len"
+}
+
+func llvmMapKeySuffix(typ string, isString bool) string {
+	if isString {
+		return "string"
+	}
+	switch typ {
+	case "i64":
+		return "i64"
+	case "i1":
+		return "i1"
+	case "double":
+		return "f64"
+	case "ptr":
+		return "ptr"
+	}
+	return "bytes"
+}
+
+func llvmMapRuntimeContainsSymbol(keyTyp string, isString bool) string {
+	return "osty_rt_map_contains_" + llvmMapKeySuffix(keyTyp, isString)
+}
+
+func llvmMapRuntimeInsertSymbol(keyTyp string, isString bool) string {
+	return "osty_rt_map_insert_" + llvmMapKeySuffix(keyTyp, isString)
+}
+
+func llvmMapRuntimeRemoveSymbol(keyTyp string, isString bool) string {
+	return "osty_rt_map_remove_" + llvmMapKeySuffix(keyTyp, isString)
+}
+
+func llvmMapRuntimeGetOrAbortSymbol(keyTyp string, isString bool) string {
+	return "osty_rt_map_get_or_abort_" + llvmMapKeySuffix(keyTyp, isString)
 }
 
 // Osty: toolchain/llvmgen.osty:1116:1
@@ -1381,6 +1483,18 @@ func llvmSetRuntimeLenSymbol() string {
 // Osty: toolchain/llvmgen.osty:1124:1
 func llvmSetRuntimeToListSymbol() string {
 	return "osty_rt_set_to_list"
+}
+
+func llvmSetRuntimeContainsSymbol(elemTyp string, isString bool) string {
+	return "osty_rt_set_contains_" + llvmMapKeySuffix(elemTyp, isString)
+}
+
+func llvmSetRuntimeInsertSymbol(elemTyp string, isString bool) string {
+	return "osty_rt_set_insert_" + llvmMapKeySuffix(elemTyp, isString)
+}
+
+func llvmSetRuntimeRemoveSymbol(elemTyp string, isString bool) string {
+	return "osty_rt_set_remove_" + llvmMapKeySuffix(elemTyp, isString)
 }
 
 // Osty: toolchain/llvmgen.osty:1130:1
@@ -1400,6 +1514,469 @@ func llvmContainerAbiKind(typ string, isString bool) int {
 	default:
 		return 6
 	}
+}
+
+func llvmListUsesTypedRuntime(elemTyp string) bool {
+	return elemTyp == "i64" || elemTyp == "i1" || elemTyp == "double" || elemTyp == "ptr"
+}
+
+func llvmListElementSuffix(typ string) string {
+	switch typ {
+	case "i64", "i1", "ptr":
+		return typ
+	case "double":
+		return "f64"
+	}
+	out := ""
+	for _, c := range typ {
+		if c == '_' || ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || ('0' <= c && c <= '9') {
+			out += string(c)
+			continue
+		}
+		out += "_"
+	}
+	if out == "" {
+		return "ptr"
+	}
+	return out
+}
+
+func llvmListRuntimeDeclarations() []string {
+	return []string{
+		"declare ptr @osty_rt_list_new()",
+		"declare i64 @osty_rt_list_len(ptr)",
+		"declare void @osty_rt_list_push_i64(ptr, i64)",
+		"declare void @osty_rt_list_push_i1(ptr, i1)",
+		"declare void @osty_rt_list_push_f64(ptr, double)",
+		"declare void @osty_rt_list_push_ptr(ptr, ptr)",
+		"declare i64 @osty_rt_list_get_i64(ptr, i64)",
+		"declare i1 @osty_rt_list_get_i1(ptr, i64)",
+		"declare double @osty_rt_list_get_f64(ptr, i64)",
+		"declare ptr @osty_rt_list_get_ptr(ptr, i64)",
+		"declare void @osty_rt_list_set_i64(ptr, i64, i64)",
+		"declare void @osty_rt_list_set_i1(ptr, i64, i1)",
+		"declare void @osty_rt_list_set_f64(ptr, i64, double)",
+		"declare void @osty_rt_list_set_ptr(ptr, i64, ptr)",
+	}
+}
+
+func llvmListNew(emitter *LlvmEmitter) *LlvmValue {
+	return llvmCall(emitter, "ptr", "osty_rt_list_new", make([]*LlvmValue, 0))
+}
+
+func llvmListLen(emitter *LlvmEmitter, list *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "i64", "osty_rt_list_len", []*LlvmValue{list})
+}
+
+func llvmListPushI64(emitter *LlvmEmitter, list *LlvmValue, value *LlvmValue) {
+	llvmCallVoid(emitter, "osty_rt_list_push_i64", []*LlvmValue{list, value})
+}
+
+func llvmListPushI1(emitter *LlvmEmitter, list *LlvmValue, value *LlvmValue) {
+	llvmCallVoid(emitter, "osty_rt_list_push_i1", []*LlvmValue{list, value})
+}
+
+func llvmListPushF64(emitter *LlvmEmitter, list *LlvmValue, value *LlvmValue) {
+	llvmCallVoid(emitter, "osty_rt_list_push_f64", []*LlvmValue{list, value})
+}
+
+func llvmListPushPtr(emitter *LlvmEmitter, list *LlvmValue, value *LlvmValue) {
+	llvmCallVoid(emitter, "osty_rt_list_push_ptr", []*LlvmValue{list, value})
+}
+
+func llvmListGetI64(emitter *LlvmEmitter, list *LlvmValue, index *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "i64", "osty_rt_list_get_i64", []*LlvmValue{list, index})
+}
+
+func llvmListGetI1(emitter *LlvmEmitter, list *LlvmValue, index *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "i1", "osty_rt_list_get_i1", []*LlvmValue{list, index})
+}
+
+func llvmListGetF64(emitter *LlvmEmitter, list *LlvmValue, index *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "double", "osty_rt_list_get_f64", []*LlvmValue{list, index})
+}
+
+func llvmListGetPtr(emitter *LlvmEmitter, list *LlvmValue, index *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "ptr", "osty_rt_list_get_ptr", []*LlvmValue{list, index})
+}
+
+func llvmListSetI64(emitter *LlvmEmitter, list *LlvmValue, index *LlvmValue, value *LlvmValue) {
+	llvmCallVoid(emitter, "osty_rt_list_set_i64", []*LlvmValue{list, index, value})
+}
+
+func llvmListSetI1(emitter *LlvmEmitter, list *LlvmValue, index *LlvmValue, value *LlvmValue) {
+	llvmCallVoid(emitter, "osty_rt_list_set_i1", []*LlvmValue{list, index, value})
+}
+
+func llvmListSetF64(emitter *LlvmEmitter, list *LlvmValue, index *LlvmValue, value *LlvmValue) {
+	llvmCallVoid(emitter, "osty_rt_list_set_f64", []*LlvmValue{list, index, value})
+}
+
+func llvmListSetPtr(emitter *LlvmEmitter, list *LlvmValue, index *LlvmValue, value *LlvmValue) {
+	llvmCallVoid(emitter, "osty_rt_list_set_ptr", []*LlvmValue{list, index, value})
+}
+
+func llvmMapRuntimeDeclarations() []string {
+	return []string{
+		"declare ptr @osty_rt_map_new()",
+		"declare i64 @osty_rt_map_len(ptr)",
+		"declare ptr @osty_rt_map_keys(ptr)",
+		"declare i1 @osty_rt_map_contains_i64(ptr, i64)",
+		"declare i1 @osty_rt_map_contains_i1(ptr, i1)",
+		"declare i1 @osty_rt_map_contains_f64(ptr, double)",
+		"declare i1 @osty_rt_map_contains_ptr(ptr, ptr)",
+		"declare i1 @osty_rt_map_contains_string(ptr, ptr)",
+		"declare void @osty_rt_map_insert_i64(ptr, i64, ptr)",
+		"declare void @osty_rt_map_insert_i1(ptr, i1, ptr)",
+		"declare void @osty_rt_map_insert_f64(ptr, double, ptr)",
+		"declare void @osty_rt_map_insert_ptr(ptr, ptr, ptr)",
+		"declare void @osty_rt_map_insert_string(ptr, ptr, ptr)",
+		"declare i1 @osty_rt_map_remove_i64(ptr, i64)",
+		"declare i1 @osty_rt_map_remove_i1(ptr, i1)",
+		"declare i1 @osty_rt_map_remove_f64(ptr, double)",
+		"declare i1 @osty_rt_map_remove_ptr(ptr, ptr)",
+		"declare i1 @osty_rt_map_remove_string(ptr, ptr)",
+		"declare void @osty_rt_map_get_or_abort_i64(ptr, i64, ptr)",
+		"declare void @osty_rt_map_get_or_abort_i1(ptr, i1, ptr)",
+		"declare void @osty_rt_map_get_or_abort_f64(ptr, double, ptr)",
+		"declare void @osty_rt_map_get_or_abort_ptr(ptr, ptr, ptr)",
+		"declare void @osty_rt_map_get_or_abort_string(ptr, ptr, ptr)",
+	}
+}
+
+func llvmMapNew(emitter *LlvmEmitter) *LlvmValue {
+	return llvmCall(emitter, "ptr", "osty_rt_map_new", make([]*LlvmValue, 0))
+}
+
+func llvmMapLen(emitter *LlvmEmitter, m *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "i64", "osty_rt_map_len", []*LlvmValue{m})
+}
+
+func llvmMapKeys(emitter *LlvmEmitter, m *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "ptr", "osty_rt_map_keys", []*LlvmValue{m})
+}
+
+func llvmMapContainsI64(emitter *LlvmEmitter, m *LlvmValue, key *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "i1", "osty_rt_map_contains_i64", []*LlvmValue{m, key})
+}
+
+func llvmMapContainsI1(emitter *LlvmEmitter, m *LlvmValue, key *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "i1", "osty_rt_map_contains_i1", []*LlvmValue{m, key})
+}
+
+func llvmMapContainsF64(emitter *LlvmEmitter, m *LlvmValue, key *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "i1", "osty_rt_map_contains_f64", []*LlvmValue{m, key})
+}
+
+func llvmMapContainsPtr(emitter *LlvmEmitter, m *LlvmValue, key *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "i1", "osty_rt_map_contains_ptr", []*LlvmValue{m, key})
+}
+
+func llvmMapContainsString(emitter *LlvmEmitter, m *LlvmValue, key *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "i1", "osty_rt_map_contains_string", []*LlvmValue{m, key})
+}
+
+func llvmMapInsertI64(emitter *LlvmEmitter, m *LlvmValue, key *LlvmValue, valueSlot *LlvmValue) {
+	llvmCallVoid(emitter, "osty_rt_map_insert_i64", []*LlvmValue{m, key, valueSlot})
+}
+
+func llvmMapInsertI1(emitter *LlvmEmitter, m *LlvmValue, key *LlvmValue, valueSlot *LlvmValue) {
+	llvmCallVoid(emitter, "osty_rt_map_insert_i1", []*LlvmValue{m, key, valueSlot})
+}
+
+func llvmMapInsertF64(emitter *LlvmEmitter, m *LlvmValue, key *LlvmValue, valueSlot *LlvmValue) {
+	llvmCallVoid(emitter, "osty_rt_map_insert_f64", []*LlvmValue{m, key, valueSlot})
+}
+
+func llvmMapInsertPtr(emitter *LlvmEmitter, m *LlvmValue, key *LlvmValue, valueSlot *LlvmValue) {
+	llvmCallVoid(emitter, "osty_rt_map_insert_ptr", []*LlvmValue{m, key, valueSlot})
+}
+
+func llvmMapInsertString(emitter *LlvmEmitter, m *LlvmValue, key *LlvmValue, valueSlot *LlvmValue) {
+	llvmCallVoid(emitter, "osty_rt_map_insert_string", []*LlvmValue{m, key, valueSlot})
+}
+
+func llvmMapRemoveI64(emitter *LlvmEmitter, m *LlvmValue, key *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "i1", "osty_rt_map_remove_i64", []*LlvmValue{m, key})
+}
+
+func llvmMapRemoveI1(emitter *LlvmEmitter, m *LlvmValue, key *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "i1", "osty_rt_map_remove_i1", []*LlvmValue{m, key})
+}
+
+func llvmMapRemoveF64(emitter *LlvmEmitter, m *LlvmValue, key *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "i1", "osty_rt_map_remove_f64", []*LlvmValue{m, key})
+}
+
+func llvmMapRemovePtr(emitter *LlvmEmitter, m *LlvmValue, key *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "i1", "osty_rt_map_remove_ptr", []*LlvmValue{m, key})
+}
+
+func llvmMapRemoveString(emitter *LlvmEmitter, m *LlvmValue, key *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "i1", "osty_rt_map_remove_string", []*LlvmValue{m, key})
+}
+
+func llvmMapGetOrAbortI64(emitter *LlvmEmitter, m *LlvmValue, key *LlvmValue, outSlot *LlvmValue) {
+	llvmCallVoid(emitter, "osty_rt_map_get_or_abort_i64", []*LlvmValue{m, key, outSlot})
+}
+
+func llvmMapGetOrAbortI1(emitter *LlvmEmitter, m *LlvmValue, key *LlvmValue, outSlot *LlvmValue) {
+	llvmCallVoid(emitter, "osty_rt_map_get_or_abort_i1", []*LlvmValue{m, key, outSlot})
+}
+
+func llvmMapGetOrAbortF64(emitter *LlvmEmitter, m *LlvmValue, key *LlvmValue, outSlot *LlvmValue) {
+	llvmCallVoid(emitter, "osty_rt_map_get_or_abort_f64", []*LlvmValue{m, key, outSlot})
+}
+
+func llvmMapGetOrAbortPtr(emitter *LlvmEmitter, m *LlvmValue, key *LlvmValue, outSlot *LlvmValue) {
+	llvmCallVoid(emitter, "osty_rt_map_get_or_abort_ptr", []*LlvmValue{m, key, outSlot})
+}
+
+func llvmMapGetOrAbortString(emitter *LlvmEmitter, m *LlvmValue, key *LlvmValue, outSlot *LlvmValue) {
+	llvmCallVoid(emitter, "osty_rt_map_get_or_abort_string", []*LlvmValue{m, key, outSlot})
+}
+
+func llvmSetRuntimeDeclarations() []string {
+	return []string{
+		"declare ptr @osty_rt_set_new(i64)",
+		"declare i64 @osty_rt_set_len(ptr)",
+		"declare ptr @osty_rt_set_to_list(ptr)",
+		"declare i1 @osty_rt_set_contains_i64(ptr, i64)",
+		"declare i1 @osty_rt_set_contains_i1(ptr, i1)",
+		"declare i1 @osty_rt_set_contains_f64(ptr, double)",
+		"declare i1 @osty_rt_set_contains_ptr(ptr, ptr)",
+		"declare i1 @osty_rt_set_contains_string(ptr, ptr)",
+		"declare i1 @osty_rt_set_insert_i64(ptr, i64)",
+		"declare i1 @osty_rt_set_insert_i1(ptr, i1)",
+		"declare i1 @osty_rt_set_insert_f64(ptr, double)",
+		"declare i1 @osty_rt_set_insert_ptr(ptr, ptr)",
+		"declare i1 @osty_rt_set_insert_string(ptr, ptr)",
+		"declare i1 @osty_rt_set_remove_i64(ptr, i64)",
+		"declare i1 @osty_rt_set_remove_i1(ptr, i1)",
+		"declare i1 @osty_rt_set_remove_f64(ptr, double)",
+		"declare i1 @osty_rt_set_remove_ptr(ptr, ptr)",
+		"declare i1 @osty_rt_set_remove_string(ptr, ptr)",
+	}
+}
+
+func llvmSetNew(emitter *LlvmEmitter, elemKind int) *LlvmValue {
+	return llvmCall(emitter, "ptr", "osty_rt_set_new", []*LlvmValue{llvmIntLiteral(elemKind)})
+}
+
+func llvmSetLen(emitter *LlvmEmitter, set *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "i64", "osty_rt_set_len", []*LlvmValue{set})
+}
+
+func llvmSetToList(emitter *LlvmEmitter, set *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "ptr", "osty_rt_set_to_list", []*LlvmValue{set})
+}
+
+func llvmSetContainsI64(emitter *LlvmEmitter, set *LlvmValue, item *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "i1", "osty_rt_set_contains_i64", []*LlvmValue{set, item})
+}
+
+func llvmSetContainsI1(emitter *LlvmEmitter, set *LlvmValue, item *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "i1", "osty_rt_set_contains_i1", []*LlvmValue{set, item})
+}
+
+func llvmSetContainsF64(emitter *LlvmEmitter, set *LlvmValue, item *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "i1", "osty_rt_set_contains_f64", []*LlvmValue{set, item})
+}
+
+func llvmSetContainsPtr(emitter *LlvmEmitter, set *LlvmValue, item *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "i1", "osty_rt_set_contains_ptr", []*LlvmValue{set, item})
+}
+
+func llvmSetContainsString(emitter *LlvmEmitter, set *LlvmValue, item *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "i1", "osty_rt_set_contains_string", []*LlvmValue{set, item})
+}
+
+func llvmSetInsertI64(emitter *LlvmEmitter, set *LlvmValue, item *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "i1", "osty_rt_set_insert_i64", []*LlvmValue{set, item})
+}
+
+func llvmSetInsertI1(emitter *LlvmEmitter, set *LlvmValue, item *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "i1", "osty_rt_set_insert_i1", []*LlvmValue{set, item})
+}
+
+func llvmSetInsertF64(emitter *LlvmEmitter, set *LlvmValue, item *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "i1", "osty_rt_set_insert_f64", []*LlvmValue{set, item})
+}
+
+func llvmSetInsertPtr(emitter *LlvmEmitter, set *LlvmValue, item *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "i1", "osty_rt_set_insert_ptr", []*LlvmValue{set, item})
+}
+
+func llvmSetInsertString(emitter *LlvmEmitter, set *LlvmValue, item *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "i1", "osty_rt_set_insert_string", []*LlvmValue{set, item})
+}
+
+func llvmSetRemoveI64(emitter *LlvmEmitter, set *LlvmValue, item *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "i1", "osty_rt_set_remove_i64", []*LlvmValue{set, item})
+}
+
+func llvmSetRemoveI1(emitter *LlvmEmitter, set *LlvmValue, item *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "i1", "osty_rt_set_remove_i1", []*LlvmValue{set, item})
+}
+
+func llvmSetRemoveF64(emitter *LlvmEmitter, set *LlvmValue, item *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "i1", "osty_rt_set_remove_f64", []*LlvmValue{set, item})
+}
+
+func llvmSetRemovePtr(emitter *LlvmEmitter, set *LlvmValue, item *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "i1", "osty_rt_set_remove_ptr", []*LlvmValue{set, item})
+}
+
+func llvmSetRemoveString(emitter *LlvmEmitter, set *LlvmValue, item *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "i1", "osty_rt_set_remove_string", []*LlvmValue{set, item})
+}
+
+func llvmClosureEnvTypeName(elemTags []string) string {
+	return "ClosureEnv." + llvmStrings.Join(elemTags, ".")
+}
+
+func llvmClosureEnvTypeDef(name string, elemTypes []string) string {
+	return llvmStructTypeDef(name, elemTypes)
+}
+
+func llvmClosureEnvAlloc(emitter *LlvmEmitter, envTypeName string) *LlvmValue {
+	tmp := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca %%%s", tmp, envTypeName))
+	return &LlvmValue{typ: "ptr", name: tmp, pointer: false}
+}
+
+func llvmClosureEnvSlotGep(emitter *LlvmEmitter, envPtr *LlvmValue, envTypeName string, slotIndex int) string {
+	tmp := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = getelementptr %%%s, ptr %s, i32 0, i32 %d", tmp, envTypeName, envPtr.name, slotIndex))
+	return tmp
+}
+
+func llvmClosureEnvStoreFn(emitter *LlvmEmitter, envPtr *LlvmValue, envTypeName string, fnSymbol string) {
+	gep := llvmClosureEnvSlotGep(emitter, envPtr, envTypeName, 0)
+	emitter.body = append(emitter.body, fmt.Sprintf("  store ptr @%s, ptr %s", fnSymbol, gep))
+}
+
+func llvmClosureEnvStoreCapture(emitter *LlvmEmitter, envPtr *LlvmValue, envTypeName string, slotIndex int, value *LlvmValue) {
+	gep := llvmClosureEnvSlotGep(emitter, envPtr, envTypeName, slotIndex)
+	emitter.body = append(emitter.body, fmt.Sprintf("  store %s %s, ptr %s", value.typ, value.name, gep))
+}
+
+func llvmClosureEnvLoadFn(emitter *LlvmEmitter, envPtr *LlvmValue, envTypeName string) *LlvmValue {
+	gep := llvmClosureEnvSlotGep(emitter, envPtr, envTypeName, 0)
+	tmp := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = load ptr, ptr %s", tmp, gep))
+	return &LlvmValue{typ: "ptr", name: tmp, pointer: false}
+}
+
+func llvmClosureEnvLoadCapture(emitter *LlvmEmitter, envPtr *LlvmValue, envTypeName string, slotIndex int, captureType string) *LlvmValue {
+	gep := llvmClosureEnvSlotGep(emitter, envPtr, envTypeName, slotIndex)
+	tmp := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = load %s, ptr %s", tmp, captureType, gep))
+	return &LlvmValue{typ: captureType, name: tmp, pointer: false}
+}
+
+func llvmClosureCallIndirect(emitter *LlvmEmitter, envPtr *LlvmValue, envTypeName string, returnType string, extraArgs []*LlvmValue) *LlvmValue {
+	fnPtr := llvmClosureEnvLoadFn(emitter, envPtr, envTypeName)
+	args := []*LlvmValue{envPtr}
+	paramTypes := []string{"ptr"}
+	for _, a := range extraArgs {
+		args = append(args, a)
+		paramTypes = append(paramTypes, a.typ)
+	}
+	callType := returnType + " (" + llvmStrings.Join(paramTypes, ", ") + ")"
+	tmp := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = call %s %s(%s)", tmp, callType, fnPtr.name, llvmCallArgs(args)))
+	return &LlvmValue{typ: returnType, name: tmp, pointer: false}
+}
+
+func llvmClosureThunkName(symbol string) string {
+	return "__osty_closure_thunk_" + symbol
+}
+
+func llvmClosureThunkDefinition(symbol string, returnType string, paramTypes []string) string {
+	headerParts := []string{"ptr %env"}
+	argParts := make([]string, 0, len(paramTypes))
+	for i, p := range paramTypes {
+		headerParts = append(headerParts, fmt.Sprintf("%s %%arg%d", p, i))
+		argParts = append(argParts, fmt.Sprintf("%s %%arg%d", p, i))
+	}
+	header := llvmStrings.Join(headerParts, ", ")
+	callArgs := llvmStrings.Join(argParts, ", ")
+	thunk := llvmClosureThunkName(symbol)
+	lines := []string{
+		fmt.Sprintf("define private %s @%s(%s) {", returnType, thunk, header),
+		"entry:",
+	}
+	if returnType == "void" {
+		lines = append(lines, fmt.Sprintf("  call void @%s(%s)", symbol, callArgs))
+		lines = append(lines, "  ret void")
+	} else {
+		lines = append(lines, fmt.Sprintf("  %%ret = call %s @%s(%s)", returnType, symbol, callArgs))
+		lines = append(lines, fmt.Sprintf("  ret %s %%ret", returnType))
+	}
+	lines = append(lines, "}")
+	return llvmStrings.Join(lines, "\n")
+}
+
+func llvmClosureBareFnEnv(emitter *LlvmEmitter, symbol string) *LlvmValue {
+	envTypeName := llvmClosureEnvTypeName([]string{"ptr"})
+	env := llvmClosureEnvAlloc(emitter, envTypeName)
+	llvmClosureEnvStoreFn(emitter, env, envTypeName, llvmClosureThunkName(symbol))
+	return env
+}
+
+func llvmClosureBareFnEnvTypeDef() string {
+	return llvmClosureEnvTypeDef(llvmClosureEnvTypeName([]string{"ptr"}), []string{"ptr"})
+}
+
+func llvmStringRuntimeEqualSymbol() string {
+	return "osty_rt_strings_Equal"
+}
+
+func llvmStringRuntimeHasPrefixSymbol() string {
+	return "osty_rt_strings_HasPrefix"
+}
+
+func llvmStringRuntimeSplitSymbol() string {
+	return "osty_rt_strings_Split"
+}
+
+func llvmStringRuntimeConcatSymbol() string {
+	return "osty_rt_strings_Concat"
+}
+
+func llvmStringRuntimeByteLenSymbol() string {
+	return "osty_rt_strings_ByteLen"
+}
+
+func llvmStringRuntimeDeclarations() []string {
+	return []string{
+		"declare i1 @osty_rt_strings_Equal(ptr, ptr)",
+		"declare i1 @osty_rt_strings_HasPrefix(ptr, ptr)",
+		"declare ptr @osty_rt_strings_Split(ptr, ptr)",
+		"declare ptr @osty_rt_strings_Concat(ptr, ptr)",
+		"declare i64 @osty_rt_strings_ByteLen(ptr)",
+	}
+}
+
+func llvmStringEqual(emitter *LlvmEmitter, left *LlvmValue, right *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "i1", "osty_rt_strings_Equal", []*LlvmValue{left, right})
+}
+
+func llvmStringHasPrefix(emitter *LlvmEmitter, value *LlvmValue, prefix *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "i1", "osty_rt_strings_HasPrefix", []*LlvmValue{value, prefix})
+}
+
+func llvmStringSplit(emitter *LlvmEmitter, value *LlvmValue, sep *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "ptr", "osty_rt_strings_Split", []*LlvmValue{value, sep})
+}
+
+func llvmStringConcat(emitter *LlvmEmitter, left *LlvmValue, right *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "ptr", "osty_rt_strings_Concat", []*LlvmValue{left, right})
+}
+
+func llvmStringByteLen(emitter *LlvmEmitter, value *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "i64", "osty_rt_strings_ByteLen", []*LlvmValue{value})
 }
 
 func llvmBuiltinType(name string) string {
@@ -1676,6 +2253,123 @@ func llvmSmokeGcRuntimeAbiIR(sourcePath string) string {
 	// Osty: examples/selfhost-core/llvmgen.osty:1173:5
 	llvmReturnI32Zero(main)
 	return llvmRenderModuleWithGcRuntime(sourcePath, "", make([]string, 0, 1), main.stringGlobals, []string{llvmRenderFunction("i32", "main", make([]*LlvmParam, 0, 1), main.body)})
+}
+
+// Osty: toolchain/llvmgen.osty (llvmSmokeListBasicIR)
+func llvmSmokeListBasicIR(sourcePath string) string {
+	main := llvmEmitter()
+	list := llvmListNew(main)
+	llvmListPushI64(main, list, llvmIntLiteral(10))
+	llvmListPushI64(main, list, llvmIntLiteral(20))
+	llvmListPushI64(main, list, llvmIntLiteral(30))
+	length := llvmListLen(main, list)
+	llvmPrintlnI64(main, length)
+	second := llvmListGetI64(main, list, llvmIntLiteral(1))
+	llvmPrintlnI64(main, second)
+	llvmReturnI32Zero(main)
+	return llvmRenderModuleWithListRuntime(sourcePath, "", make([]string, 0, 1), main.stringGlobals, []string{llvmRenderFunction("i32", "main", make([]*LlvmParam, 0, 1), main.body)})
+}
+
+// Osty: toolchain/llvmgen.osty (llvmSmokeClosureThunkIR)
+func llvmSmokeClosureThunkIR(sourcePath string) string {
+	doubleBody := llvmEmitter()
+	llvmBind(doubleBody, "x", &LlvmValue{typ: "i64", name: "%x", pointer: false})
+	doubled := llvmBinaryI64(doubleBody, "mul", llvmIdent(doubleBody, "x"), llvmIntLiteral(2))
+	llvmReturn(doubleBody, doubled)
+
+	main := llvmEmitter()
+	env := llvmClosureBareFnEnv(main, "double_val")
+	envTypeName := llvmClosureEnvTypeName([]string{"ptr"})
+	result := llvmClosureCallIndirect(main, env, envTypeName, "i64", []*LlvmValue{llvmIntLiteral(21)})
+	llvmPrintlnI64(main, result)
+	llvmReturnI32Zero(main)
+
+	return llvmRenderModuleWithGlobalsAndTypes(
+		sourcePath,
+		"",
+		[]string{llvmClosureBareFnEnvTypeDef()},
+		main.stringGlobals,
+		[]string{
+			llvmRenderFunction("i64", "double_val", []*LlvmParam{llvmParam("x", "i64")}, doubleBody.body),
+			llvmClosureThunkDefinition("double_val", "i64", []string{"i64"}),
+			llvmRenderFunction("i32", "main", make([]*LlvmParam, 0, 1), main.body),
+		},
+	)
+}
+
+// Osty: toolchain/llvmgen.osty (llvmSmokeClosureBasicIR)
+func llvmSmokeClosureBasicIR(sourcePath string) string {
+	envTypeName := llvmClosureEnvTypeName([]string{"ptr", "i64"})
+	typeDef := llvmClosureEnvTypeDef(envTypeName, []string{"ptr", "i64"})
+
+	body := llvmEmitter()
+	llvmBind(body, "env", &LlvmValue{typ: "ptr", name: "%env", pointer: false})
+	envArg := llvmIdent(body, "env")
+	captured := llvmClosureEnvLoadCapture(body, envArg, envTypeName, 1, "i64")
+	llvmReturn(body, captured)
+
+	main := llvmEmitter()
+	env := llvmClosureEnvAlloc(main, envTypeName)
+	llvmClosureEnvStoreFn(main, env, envTypeName, "closure_body")
+	llvmClosureEnvStoreCapture(main, env, envTypeName, 1, llvmIntLiteral(42))
+	result := llvmClosureCallIndirect(main, env, envTypeName, "i64", []*LlvmValue{})
+	llvmPrintlnI64(main, result)
+	llvmReturnI32Zero(main)
+
+	return llvmRenderModuleWithGlobalsAndTypes(
+		sourcePath,
+		"",
+		[]string{typeDef},
+		main.stringGlobals,
+		[]string{
+			llvmRenderFunction("i64", "closure_body", []*LlvmParam{llvmParam("env", "ptr")}, body.body),
+			llvmRenderFunction("i32", "main", make([]*LlvmParam, 0, 1), main.body),
+		},
+	)
+}
+
+// Osty: toolchain/llvmgen.osty (llvmSmokeSetBasicIR)
+func llvmSmokeSetBasicIR(sourcePath string) string {
+	main := llvmEmitter()
+	set := llvmSetNew(main, llvmContainerAbiKind("i64", false))
+	_ = llvmSetInsertI64(main, set, llvmIntLiteral(10))
+	_ = llvmSetInsertI64(main, set, llvmIntLiteral(20))
+	_ = llvmSetInsertI64(main, set, llvmIntLiteral(30))
+	_ = llvmSetContainsI64(main, set, llvmIntLiteral(20))
+	_ = llvmSetRemoveI64(main, set, llvmIntLiteral(20))
+	llvmPrintlnI64(main, llvmSetLen(main, set))
+	_ = llvmSetToList(main, set)
+	llvmReturnI32Zero(main)
+	return llvmRenderModuleWithSetRuntime(sourcePath, "", make([]string, 0, 1), main.stringGlobals, []string{llvmRenderFunction("i32", "main", make([]*LlvmParam, 0, 1), main.body)})
+}
+
+// Osty: toolchain/llvmgen.osty (llvmSmokeStringConcatIR)
+func llvmSmokeStringConcatIR(sourcePath string) string {
+	main := llvmEmitter()
+	left := llvmStringLiteral(main, "hello, ")
+	right := llvmStringLiteral(main, "osty")
+	joined := llvmStringConcat(main, left, right)
+	_ = llvmStringHasPrefix(main, joined, left)
+	length := llvmStringByteLen(main, joined)
+	llvmPrintlnI64(main, length)
+	llvmPrintlnString(main, joined)
+	llvmReturnI32Zero(main)
+	return llvmRenderModuleWithStringRuntime(sourcePath, "", make([]string, 0, 1), main.stringGlobals, []string{llvmRenderFunction("i32", "main", make([]*LlvmParam, 0, 1), main.body)})
+}
+
+// Osty: toolchain/llvmgen.osty (llvmSmokeMapBasicIR)
+func llvmSmokeMapBasicIR(sourcePath string) string {
+	main := llvmEmitter()
+	m := llvmMapNew(main)
+	valueSlot := llvmMutableLetSlot(main, "value", llvmIntLiteral(42))
+	llvmMapInsertI64(main, m, llvmIntLiteral(7), llvmSlotAsPtr(valueSlot))
+	_ = llvmMapContainsI64(main, m, llvmIntLiteral(7))
+	outSlot := llvmMutableLetSlot(main, "out", llvmIntLiteral(0))
+	llvmMapGetOrAbortI64(main, m, llvmIntLiteral(7), llvmSlotAsPtr(outSlot))
+	llvmPrintlnI64(main, llvmLoad(main, outSlot))
+	llvmPrintlnI64(main, llvmMapLen(main, m))
+	llvmReturnI32Zero(main)
+	return llvmRenderModuleWithMapRuntime(sourcePath, "", make([]string, 0, 1), main.stringGlobals, []string{llvmRenderFunction("i32", "main", make([]*LlvmParam, 0, 1), main.body)})
 }
 
 // Osty: examples/selfhost-core/llvmgen.osty:1184:5

@@ -176,6 +176,15 @@ pub fn llvmStore(emitter: LlvmEmitter, slot: LlvmValue, value: LlvmValue) {
     emitter.body.push("  store {value.typ} {value.name}, ptr {slot.name}")
 }
 
+/// Reinterpret a slot (`{typ: T, pointer: true}` as produced by
+/// `llvmMutableLetSlot`) as a plain `ptr`-typed call argument. Runtime
+/// ABIs that accept out-pointers (Map insert/get_or_abort, composite
+/// List push_bytes, …) need the register address passed as `ptr`, not
+/// the value type the slot represents.
+pub fn llvmSlotAsPtr(slot: LlvmValue) -> LlvmValue {
+    LlvmValue { typ: "ptr", name: slot.name, pointer: false }
+}
+
 pub fn llvmAssign(emitter: LlvmEmitter, name: String, value: LlvmValue) -> Bool {
     let lookup = llvmLookup(emitter, name)
     if !(lookup.found) || !(lookup.value.pointer) || lookup.value.typ != value.typ {
@@ -592,6 +601,74 @@ pub fn llvmRenderModuleWithGcRuntime(
         typeDefs,
         stringGlobals,
         llvmGcRuntimeDeclarations(),
+        definitions,
+    )
+}
+
+pub fn llvmRenderModuleWithListRuntime(
+    sourcePath: String,
+    target: String,
+    typeDefs: List<String>,
+    stringGlobals: List<LlvmStringGlobal>,
+    definitions: List<String>,
+) -> String {
+    llvmRenderModuleWithRuntimeDeclarations(
+        sourcePath,
+        target,
+        typeDefs,
+        stringGlobals,
+        llvmListRuntimeDeclarations(),
+        definitions,
+    )
+}
+
+pub fn llvmRenderModuleWithMapRuntime(
+    sourcePath: String,
+    target: String,
+    typeDefs: List<String>,
+    stringGlobals: List<LlvmStringGlobal>,
+    definitions: List<String>,
+) -> String {
+    llvmRenderModuleWithRuntimeDeclarations(
+        sourcePath,
+        target,
+        typeDefs,
+        stringGlobals,
+        llvmMapRuntimeDeclarations(),
+        definitions,
+    )
+}
+
+pub fn llvmRenderModuleWithSetRuntime(
+    sourcePath: String,
+    target: String,
+    typeDefs: List<String>,
+    stringGlobals: List<LlvmStringGlobal>,
+    definitions: List<String>,
+) -> String {
+    llvmRenderModuleWithRuntimeDeclarations(
+        sourcePath,
+        target,
+        typeDefs,
+        stringGlobals,
+        llvmSetRuntimeDeclarations(),
+        definitions,
+    )
+}
+
+pub fn llvmRenderModuleWithStringRuntime(
+    sourcePath: String,
+    target: String,
+    typeDefs: List<String>,
+    stringGlobals: List<LlvmStringGlobal>,
+    definitions: List<String>,
+) -> String {
+    llvmRenderModuleWithRuntimeDeclarations(
+        sourcePath,
+        target,
+        typeDefs,
+        stringGlobals,
+        llvmStringRuntimeDeclarations(),
         definitions,
     )
 }
@@ -1105,12 +1182,114 @@ pub fn llvmListRuntimeToSetI64Symbol() -> String {
     "osty_rt_list_to_set_i64"
 }
 
+/// Parametric symbol builder for `osty_rt_list_push_<suffix>`. `suffix`
+/// must come from `llvmListElementSuffix` so struct element types are
+/// already sanitized to identifier-safe form.
+pub fn llvmListRuntimePushSymbol(suffix: String) -> String {
+    "osty_rt_list_push_{suffix}"
+}
+
+pub fn llvmListRuntimeGetSymbol(suffix: String) -> String {
+    "osty_rt_list_get_{suffix}"
+}
+
+pub fn llvmListRuntimeSetSymbol(suffix: String) -> String {
+    "osty_rt_list_set_{suffix}"
+}
+
+/// Pick the `osty_rt_list_sorted_*` entry point for an element LLVM
+/// type. Returns `""` when no typed runtime exists — callers use the
+/// empty string as the "unsupported element type" signal and emit a
+/// diagnostic rather than coercing to a wrong variant. Mirrors
+/// `listRuntimeSortedSymbol` in internal/llvmgen/runtime_ffi.go.
+pub fn llvmListRuntimeSortedSymbol(elemTyp: String, isString: Bool) -> String {
+    if isString {
+        return "osty_rt_list_sorted_string"
+    }
+    if elemTyp == "i64" {
+        return "osty_rt_list_sorted_i64"
+    }
+    if elemTyp == "i1" {
+        return "osty_rt_list_sorted_i1"
+    }
+    if elemTyp == "double" {
+        return "osty_rt_list_sorted_f64"
+    }
+    ""
+}
+
+/// Pick the `osty_rt_list_to_set_*` entry point for an element LLVM
+/// type. Returns `""` when no typed runtime exists — same "unsupported"
+/// convention as `llvmListRuntimeSortedSymbol`. Mirrors
+/// `listRuntimeToSetSymbol` in internal/llvmgen/runtime_ffi.go.
+pub fn llvmListRuntimeToSetSymbol(elemTyp: String, isString: Bool) -> String {
+    if isString {
+        return "osty_rt_list_to_set_string"
+    }
+    if elemTyp == "i64" {
+        return "osty_rt_list_to_set_i64"
+    }
+    if elemTyp == "i1" {
+        return "osty_rt_list_to_set_i1"
+    }
+    if elemTyp == "double" {
+        return "osty_rt_list_to_set_f64"
+    }
+    if elemTyp == "ptr" {
+        return "osty_rt_list_to_set_ptr"
+    }
+    ""
+}
+
 pub fn llvmMapRuntimeNewSymbol() -> String {
     "osty_rt_map_new"
 }
 
 pub fn llvmMapRuntimeKeysSymbol() -> String {
     "osty_rt_map_keys"
+}
+
+pub fn llvmMapRuntimeLenSymbol() -> String {
+    "osty_rt_map_len"
+}
+
+/// Encode a Map key LLVM type into the runtime symbol suffix. String
+/// keys collapse to `"string"` regardless of the underlying LLVM type
+/// (the runtime hashes the null-terminated payload, not the pointer).
+/// Mirrors `mapSetKeySuffix` in internal/llvmgen/runtime_ffi.go.
+pub fn llvmMapKeySuffix(typ: String, isString: Bool) -> String {
+    if isString {
+        return "string"
+    }
+    if typ == "i64" {
+        return "i64"
+    }
+    if typ == "i1" {
+        return "i1"
+    }
+    if typ == "double" {
+        return "f64"
+    }
+    if typ == "ptr" {
+        return "ptr"
+    }
+    "bytes"
+}
+
+pub fn llvmMapRuntimeContainsSymbol(keyTyp: String, isString: Bool) -> String {
+    "osty_rt_map_contains_{llvmMapKeySuffix(keyTyp, isString)}"
+}
+
+pub fn llvmMapRuntimeInsertSymbol(keyTyp: String, isString: Bool) -> String {
+    "osty_rt_map_insert_{llvmMapKeySuffix(keyTyp, isString)}"
+}
+
+pub fn llvmMapRuntimeRemoveSymbol(keyTyp: String, isString: Bool) -> String {
+    "osty_rt_map_remove_{llvmMapKeySuffix(keyTyp, isString)}"
+}
+
+pub fn llvmMapRuntimeGetOrAbortSymbol(keyTyp: String, isString: Bool) -> String {
+    "osty_rt_map_get_or_abort_{llvmMapKeySuffix(keyTyp, isString)}"
 }
 
 pub fn llvmSetRuntimeNewSymbol() -> String {
@@ -1123,6 +1302,23 @@ pub fn llvmSetRuntimeLenSymbol() -> String {
 
 pub fn llvmSetRuntimeToListSymbol() -> String {
     "osty_rt_set_to_list"
+}
+
+/// Set element suffix follows the same policy as Map keys: scalar types
+/// map to the typed runtime variants; anything else (including struct
+/// elements) collapses to `"bytes"` and the caller must switch to the
+/// composite path. Delegates to `llvmMapKeySuffix` to keep the two
+/// container key policies in lockstep.
+pub fn llvmSetRuntimeContainsSymbol(elemTyp: String, isString: Bool) -> String {
+    "osty_rt_set_contains_{llvmMapKeySuffix(elemTyp, isString)}"
+}
+
+pub fn llvmSetRuntimeInsertSymbol(elemTyp: String, isString: Bool) -> String {
+    "osty_rt_set_insert_{llvmMapKeySuffix(elemTyp, isString)}"
+}
+
+pub fn llvmSetRuntimeRemoveSymbol(elemTyp: String, isString: Bool) -> String {
+    "osty_rt_set_remove_{llvmMapKeySuffix(elemTyp, isString)}"
 }
 
 /// Container ABI kind code used by the runtime to pick the right traversal
@@ -1144,6 +1340,599 @@ pub fn llvmContainerAbiKind(typ: String, isString: Bool) -> Int {
         return 4
     }
     6
+}
+
+/// True when a List element LLVM type is serviced by the typed runtime
+/// ABI (`_i64`/`_i1`/`_f64`/`_ptr`). Non-matching types go through the
+/// composite `osty_rt_list_*_bytes_v1` path. Mirrors
+/// `listUsesTypedRuntime` in internal/llvmgen/runtime_ffi.go.
+pub fn llvmListUsesTypedRuntime(elemTyp: String) -> Bool {
+    elemTyp == "i64" || elemTyp == "i1" || elemTyp == "double" || elemTyp == "ptr"
+}
+
+/// Convert an LLVM element type string to the runtime symbol suffix.
+/// Scalar types map directly (`i64`, `i1`, `ptr`); `double` maps to
+/// `f64`. Anything else is sanitized into an identifier-safe form for
+/// composite struct elements. Mirrors `listRuntimeSymbolSuffix` in
+/// internal/llvmgen/runtime_ffi.go.
+pub fn llvmListElementSuffix(typ: String) -> String {
+    if typ == "i64" || typ == "i1" || typ == "ptr" {
+        return typ
+    }
+    if typ == "double" {
+        return "f64"
+    }
+    let mut out = ""
+    for c in typ.chars() {
+        if c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
+            out = "{out}{c}"
+            continue
+        }
+        out = "{out}_"
+    }
+    if out == "" {
+        return "ptr"
+    }
+    out
+}
+
+/// LLVM forward declarations for the `osty_rt_list_*` C runtime surface
+/// used by the scalar List<T> codegen path. The native backend emits
+/// these once per module that touches typed lists.
+pub fn llvmListRuntimeDeclarations() -> List<String> {
+    [
+        "declare ptr @osty_rt_list_new()",
+        "declare i64 @osty_rt_list_len(ptr)",
+        "declare void @osty_rt_list_push_i64(ptr, i64)",
+        "declare void @osty_rt_list_push_i1(ptr, i1)",
+        "declare void @osty_rt_list_push_f64(ptr, double)",
+        "declare void @osty_rt_list_push_ptr(ptr, ptr)",
+        "declare i64 @osty_rt_list_get_i64(ptr, i64)",
+        "declare i1 @osty_rt_list_get_i1(ptr, i64)",
+        "declare double @osty_rt_list_get_f64(ptr, i64)",
+        "declare ptr @osty_rt_list_get_ptr(ptr, i64)",
+        "declare void @osty_rt_list_set_i64(ptr, i64, i64)",
+        "declare void @osty_rt_list_set_i1(ptr, i64, i1)",
+        "declare void @osty_rt_list_set_f64(ptr, i64, double)",
+        "declare void @osty_rt_list_set_ptr(ptr, i64, ptr)",
+    ]
+}
+
+/// Emit `call ptr @osty_rt_list_new()` and return the resulting list
+/// handle. Callers are responsible for any GC root binding the managed
+/// value requires.
+pub fn llvmListNew(emitter: LlvmEmitter) -> LlvmValue {
+    llvmCall(emitter, "ptr", "osty_rt_list_new", [])
+}
+
+pub fn llvmListLen(emitter: LlvmEmitter, list: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "i64", "osty_rt_list_len", [list])
+}
+
+pub fn llvmListPushI64(emitter: LlvmEmitter, list: LlvmValue, value: LlvmValue) {
+    llvmCallVoid(emitter, "osty_rt_list_push_i64", [list, value])
+}
+
+pub fn llvmListPushI1(emitter: LlvmEmitter, list: LlvmValue, value: LlvmValue) {
+    llvmCallVoid(emitter, "osty_rt_list_push_i1", [list, value])
+}
+
+pub fn llvmListPushF64(emitter: LlvmEmitter, list: LlvmValue, value: LlvmValue) {
+    llvmCallVoid(emitter, "osty_rt_list_push_f64", [list, value])
+}
+
+pub fn llvmListPushPtr(emitter: LlvmEmitter, list: LlvmValue, value: LlvmValue) {
+    llvmCallVoid(emitter, "osty_rt_list_push_ptr", [list, value])
+}
+
+pub fn llvmListGetI64(emitter: LlvmEmitter, list: LlvmValue, index: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "i64", "osty_rt_list_get_i64", [list, index])
+}
+
+pub fn llvmListGetI1(emitter: LlvmEmitter, list: LlvmValue, index: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "i1", "osty_rt_list_get_i1", [list, index])
+}
+
+pub fn llvmListGetF64(emitter: LlvmEmitter, list: LlvmValue, index: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "double", "osty_rt_list_get_f64", [list, index])
+}
+
+pub fn llvmListGetPtr(emitter: LlvmEmitter, list: LlvmValue, index: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "ptr", "osty_rt_list_get_ptr", [list, index])
+}
+
+pub fn llvmListSetI64(emitter: LlvmEmitter, list: LlvmValue, index: LlvmValue, value: LlvmValue) {
+    llvmCallVoid(emitter, "osty_rt_list_set_i64", [list, index, value])
+}
+
+pub fn llvmListSetI1(emitter: LlvmEmitter, list: LlvmValue, index: LlvmValue, value: LlvmValue) {
+    llvmCallVoid(emitter, "osty_rt_list_set_i1", [list, index, value])
+}
+
+pub fn llvmListSetF64(emitter: LlvmEmitter, list: LlvmValue, index: LlvmValue, value: LlvmValue) {
+    llvmCallVoid(emitter, "osty_rt_list_set_f64", [list, index, value])
+}
+
+pub fn llvmListSetPtr(emitter: LlvmEmitter, list: LlvmValue, index: LlvmValue, value: LlvmValue) {
+    llvmCallVoid(emitter, "osty_rt_list_set_ptr", [list, index, value])
+}
+
+/// LLVM forward declarations for the `osty_rt_map_*` C runtime surface.
+/// Map values cross the ABI through caller-allocated out-slots (`ptr`),
+/// so only the 5 key variants (`i64`/`i1`/`f64`/`ptr`/`string`) shape
+/// the declaration set. `osty_rt_map_new` is declared 0-arg to match
+/// the shape the current native backend emits; a typed-constructor
+/// migration is tracked separately.
+pub fn llvmMapRuntimeDeclarations() -> List<String> {
+    [
+        "declare ptr @osty_rt_map_new()",
+        "declare i64 @osty_rt_map_len(ptr)",
+        "declare ptr @osty_rt_map_keys(ptr)",
+        "declare i1 @osty_rt_map_contains_i64(ptr, i64)",
+        "declare i1 @osty_rt_map_contains_i1(ptr, i1)",
+        "declare i1 @osty_rt_map_contains_f64(ptr, double)",
+        "declare i1 @osty_rt_map_contains_ptr(ptr, ptr)",
+        "declare i1 @osty_rt_map_contains_string(ptr, ptr)",
+        "declare void @osty_rt_map_insert_i64(ptr, i64, ptr)",
+        "declare void @osty_rt_map_insert_i1(ptr, i1, ptr)",
+        "declare void @osty_rt_map_insert_f64(ptr, double, ptr)",
+        "declare void @osty_rt_map_insert_ptr(ptr, ptr, ptr)",
+        "declare void @osty_rt_map_insert_string(ptr, ptr, ptr)",
+        "declare i1 @osty_rt_map_remove_i64(ptr, i64)",
+        "declare i1 @osty_rt_map_remove_i1(ptr, i1)",
+        "declare i1 @osty_rt_map_remove_f64(ptr, double)",
+        "declare i1 @osty_rt_map_remove_ptr(ptr, ptr)",
+        "declare i1 @osty_rt_map_remove_string(ptr, ptr)",
+        "declare void @osty_rt_map_get_or_abort_i64(ptr, i64, ptr)",
+        "declare void @osty_rt_map_get_or_abort_i1(ptr, i1, ptr)",
+        "declare void @osty_rt_map_get_or_abort_f64(ptr, double, ptr)",
+        "declare void @osty_rt_map_get_or_abort_ptr(ptr, ptr, ptr)",
+        "declare void @osty_rt_map_get_or_abort_string(ptr, ptr, ptr)",
+    ]
+}
+
+pub fn llvmMapNew(emitter: LlvmEmitter) -> LlvmValue {
+    llvmCall(emitter, "ptr", "osty_rt_map_new", [])
+}
+
+pub fn llvmMapLen(emitter: LlvmEmitter, map: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "i64", "osty_rt_map_len", [map])
+}
+
+pub fn llvmMapKeys(emitter: LlvmEmitter, map: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "ptr", "osty_rt_map_keys", [map])
+}
+
+pub fn llvmMapContainsI64(emitter: LlvmEmitter, map: LlvmValue, key: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "i1", "osty_rt_map_contains_i64", [map, key])
+}
+
+pub fn llvmMapContainsI1(emitter: LlvmEmitter, map: LlvmValue, key: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "i1", "osty_rt_map_contains_i1", [map, key])
+}
+
+pub fn llvmMapContainsF64(emitter: LlvmEmitter, map: LlvmValue, key: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "i1", "osty_rt_map_contains_f64", [map, key])
+}
+
+pub fn llvmMapContainsPtr(emitter: LlvmEmitter, map: LlvmValue, key: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "i1", "osty_rt_map_contains_ptr", [map, key])
+}
+
+pub fn llvmMapContainsString(emitter: LlvmEmitter, map: LlvmValue, key: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "i1", "osty_rt_map_contains_string", [map, key])
+}
+
+/// `valueSlot` must be a caller-allocated LLVM pointer (`ptr`) holding
+/// the value bytes. The runtime copies `value_size` bytes from the slot
+/// into its internal bucket — lifting the value through memory is the
+/// only shape that works uniformly for scalars, handles, and structs.
+pub fn llvmMapInsertI64(emitter: LlvmEmitter, map: LlvmValue, key: LlvmValue, valueSlot: LlvmValue) {
+    llvmCallVoid(emitter, "osty_rt_map_insert_i64", [map, key, valueSlot])
+}
+
+pub fn llvmMapInsertI1(emitter: LlvmEmitter, map: LlvmValue, key: LlvmValue, valueSlot: LlvmValue) {
+    llvmCallVoid(emitter, "osty_rt_map_insert_i1", [map, key, valueSlot])
+}
+
+pub fn llvmMapInsertF64(emitter: LlvmEmitter, map: LlvmValue, key: LlvmValue, valueSlot: LlvmValue) {
+    llvmCallVoid(emitter, "osty_rt_map_insert_f64", [map, key, valueSlot])
+}
+
+pub fn llvmMapInsertPtr(emitter: LlvmEmitter, map: LlvmValue, key: LlvmValue, valueSlot: LlvmValue) {
+    llvmCallVoid(emitter, "osty_rt_map_insert_ptr", [map, key, valueSlot])
+}
+
+pub fn llvmMapInsertString(emitter: LlvmEmitter, map: LlvmValue, key: LlvmValue, valueSlot: LlvmValue) {
+    llvmCallVoid(emitter, "osty_rt_map_insert_string", [map, key, valueSlot])
+}
+
+pub fn llvmMapRemoveI64(emitter: LlvmEmitter, map: LlvmValue, key: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "i1", "osty_rt_map_remove_i64", [map, key])
+}
+
+pub fn llvmMapRemoveI1(emitter: LlvmEmitter, map: LlvmValue, key: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "i1", "osty_rt_map_remove_i1", [map, key])
+}
+
+pub fn llvmMapRemoveF64(emitter: LlvmEmitter, map: LlvmValue, key: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "i1", "osty_rt_map_remove_f64", [map, key])
+}
+
+pub fn llvmMapRemovePtr(emitter: LlvmEmitter, map: LlvmValue, key: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "i1", "osty_rt_map_remove_ptr", [map, key])
+}
+
+pub fn llvmMapRemoveString(emitter: LlvmEmitter, map: LlvmValue, key: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "i1", "osty_rt_map_remove_string", [map, key])
+}
+
+/// `outSlot` must be a caller-allocated LLVM pointer sized for the value
+/// type. The runtime aborts on key-miss and otherwise writes the value
+/// bytes to the slot. Caller loads from `outSlot` to recover the value.
+pub fn llvmMapGetOrAbortI64(emitter: LlvmEmitter, map: LlvmValue, key: LlvmValue, outSlot: LlvmValue) {
+    llvmCallVoid(emitter, "osty_rt_map_get_or_abort_i64", [map, key, outSlot])
+}
+
+pub fn llvmMapGetOrAbortI1(emitter: LlvmEmitter, map: LlvmValue, key: LlvmValue, outSlot: LlvmValue) {
+    llvmCallVoid(emitter, "osty_rt_map_get_or_abort_i1", [map, key, outSlot])
+}
+
+pub fn llvmMapGetOrAbortF64(emitter: LlvmEmitter, map: LlvmValue, key: LlvmValue, outSlot: LlvmValue) {
+    llvmCallVoid(emitter, "osty_rt_map_get_or_abort_f64", [map, key, outSlot])
+}
+
+pub fn llvmMapGetOrAbortPtr(emitter: LlvmEmitter, map: LlvmValue, key: LlvmValue, outSlot: LlvmValue) {
+    llvmCallVoid(emitter, "osty_rt_map_get_or_abort_ptr", [map, key, outSlot])
+}
+
+pub fn llvmMapGetOrAbortString(emitter: LlvmEmitter, map: LlvmValue, key: LlvmValue, outSlot: LlvmValue) {
+    llvmCallVoid(emitter, "osty_rt_map_get_or_abort_string", [map, key, outSlot])
+}
+
+/// LLVM forward declarations for the `osty_rt_set_*` C runtime surface.
+/// Unlike Map, Set items are passed through the typed ABI (by value),
+/// so the declaration set mirrors the 5 key variants directly. The
+/// constructor takes an element-kind tag (`llvmContainerAbiKind`) so
+/// the runtime knows which storage sizing to allocate.
+pub fn llvmSetRuntimeDeclarations() -> List<String> {
+    [
+        "declare ptr @osty_rt_set_new(i64)",
+        "declare i64 @osty_rt_set_len(ptr)",
+        "declare ptr @osty_rt_set_to_list(ptr)",
+        "declare i1 @osty_rt_set_contains_i64(ptr, i64)",
+        "declare i1 @osty_rt_set_contains_i1(ptr, i1)",
+        "declare i1 @osty_rt_set_contains_f64(ptr, double)",
+        "declare i1 @osty_rt_set_contains_ptr(ptr, ptr)",
+        "declare i1 @osty_rt_set_contains_string(ptr, ptr)",
+        "declare i1 @osty_rt_set_insert_i64(ptr, i64)",
+        "declare i1 @osty_rt_set_insert_i1(ptr, i1)",
+        "declare i1 @osty_rt_set_insert_f64(ptr, double)",
+        "declare i1 @osty_rt_set_insert_ptr(ptr, ptr)",
+        "declare i1 @osty_rt_set_insert_string(ptr, ptr)",
+        "declare i1 @osty_rt_set_remove_i64(ptr, i64)",
+        "declare i1 @osty_rt_set_remove_i1(ptr, i1)",
+        "declare i1 @osty_rt_set_remove_f64(ptr, double)",
+        "declare i1 @osty_rt_set_remove_ptr(ptr, ptr)",
+        "declare i1 @osty_rt_set_remove_string(ptr, ptr)",
+    ]
+}
+
+/// Emit `call ptr @osty_rt_set_new(i64 <elemKind>)` where `elemKind` is
+/// the `llvmContainerAbiKind` tag (1=i64, 2=i1, 3=double, 4=ptr,
+/// 5=string). The runtime rejects other kinds at allocation time.
+pub fn llvmSetNew(emitter: LlvmEmitter, elemKind: Int) -> LlvmValue {
+    llvmCall(emitter, "ptr", "osty_rt_set_new", [llvmIntLiteral(elemKind)])
+}
+
+pub fn llvmSetLen(emitter: LlvmEmitter, set: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "i64", "osty_rt_set_len", [set])
+}
+
+pub fn llvmSetToList(emitter: LlvmEmitter, set: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "ptr", "osty_rt_set_to_list", [set])
+}
+
+pub fn llvmSetContainsI64(emitter: LlvmEmitter, set: LlvmValue, item: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "i1", "osty_rt_set_contains_i64", [set, item])
+}
+
+pub fn llvmSetContainsI1(emitter: LlvmEmitter, set: LlvmValue, item: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "i1", "osty_rt_set_contains_i1", [set, item])
+}
+
+pub fn llvmSetContainsF64(emitter: LlvmEmitter, set: LlvmValue, item: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "i1", "osty_rt_set_contains_f64", [set, item])
+}
+
+pub fn llvmSetContainsPtr(emitter: LlvmEmitter, set: LlvmValue, item: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "i1", "osty_rt_set_contains_ptr", [set, item])
+}
+
+pub fn llvmSetContainsString(emitter: LlvmEmitter, set: LlvmValue, item: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "i1", "osty_rt_set_contains_string", [set, item])
+}
+
+pub fn llvmSetInsertI64(emitter: LlvmEmitter, set: LlvmValue, item: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "i1", "osty_rt_set_insert_i64", [set, item])
+}
+
+pub fn llvmSetInsertI1(emitter: LlvmEmitter, set: LlvmValue, item: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "i1", "osty_rt_set_insert_i1", [set, item])
+}
+
+pub fn llvmSetInsertF64(emitter: LlvmEmitter, set: LlvmValue, item: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "i1", "osty_rt_set_insert_f64", [set, item])
+}
+
+pub fn llvmSetInsertPtr(emitter: LlvmEmitter, set: LlvmValue, item: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "i1", "osty_rt_set_insert_ptr", [set, item])
+}
+
+pub fn llvmSetInsertString(emitter: LlvmEmitter, set: LlvmValue, item: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "i1", "osty_rt_set_insert_string", [set, item])
+}
+
+pub fn llvmSetRemoveI64(emitter: LlvmEmitter, set: LlvmValue, item: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "i1", "osty_rt_set_remove_i64", [set, item])
+}
+
+pub fn llvmSetRemoveI1(emitter: LlvmEmitter, set: LlvmValue, item: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "i1", "osty_rt_set_remove_i1", [set, item])
+}
+
+pub fn llvmSetRemoveF64(emitter: LlvmEmitter, set: LlvmValue, item: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "i1", "osty_rt_set_remove_f64", [set, item])
+}
+
+pub fn llvmSetRemovePtr(emitter: LlvmEmitter, set: LlvmValue, item: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "i1", "osty_rt_set_remove_ptr", [set, item])
+}
+
+pub fn llvmSetRemoveString(emitter: LlvmEmitter, set: LlvmValue, item: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "i1", "osty_rt_set_remove_string", [set, item])
+}
+
+/// Build the canonical `ClosureEnv.<tag0>.<tag1>…` type name used by the
+/// closure-env ABI. Slot 0 is the lifted-fn pointer and its tag is
+/// always `"ptr"`; slots 1..N are captures and their tags must be the
+/// LLVM type of each capture (`"i64"`, `"double"`, `"ptr"`, etc.).
+/// Deterministic naming is what lets two closures with the same
+/// capture shape share a single `%type` definition.
+pub fn llvmClosureEnvTypeName(elemTags: List<String>) -> String {
+    "ClosureEnv.{llvmStrings.join(elemTags, ".")}"
+}
+
+/// Render the `%{name} = type { … }` declaration for a closure env.
+/// `elemTypes` must be the same length as the tag list that produced
+/// `name`: the first entry is `"ptr"` (fn slot) and the rest are each
+/// capture's LLVM type.
+pub fn llvmClosureEnvTypeDef(name: String, elemTypes: List<String>) -> String {
+    llvmStructTypeDef(name, elemTypes)
+}
+
+/// Emit `%tN = alloca %ClosureEnv.<sig>` and return the env pointer.
+/// The caller is responsible for storing the lifted-fn pointer and all
+/// captures before the env escapes. Stack allocation matches the
+/// current MIR lowerer policy — closures that outlive the enclosing
+/// frame need a separate heap path (see docs/mir_design.md Stage 3.8).
+pub fn llvmClosureEnvAlloc(emitter: LlvmEmitter, envTypeName: String) -> LlvmValue {
+    let tmp = llvmNextTemp(emitter)
+    emitter.body.push("  {tmp} = alloca %{envTypeName}")
+    LlvmValue { typ: "ptr", name: tmp, pointer: false }
+}
+
+fn llvmClosureEnvSlotGep(
+    emitter: LlvmEmitter,
+    envPtr: LlvmValue,
+    envTypeName: String,
+    slotIndex: Int,
+) -> String {
+    let tmp = llvmNextTemp(emitter)
+    emitter.body.push(
+        "  {tmp} = getelementptr %{envTypeName}, ptr {envPtr.name}, i32 0, i32 {slotIndex}",
+    )
+    tmp
+}
+
+/// Store the lifted-fn pointer into slot 0 of a closure env. `fnSymbol`
+/// is the LLVM module-level symbol for the closure body (e.g.
+/// `"closure_body_42"`); the helper prepends the `@` for you.
+pub fn llvmClosureEnvStoreFn(
+    emitter: LlvmEmitter,
+    envPtr: LlvmValue,
+    envTypeName: String,
+    fnSymbol: String,
+) {
+    let gep = llvmClosureEnvSlotGep(emitter, envPtr, envTypeName, 0)
+    emitter.body.push("  store ptr @{fnSymbol}, ptr {gep}")
+}
+
+/// Store a captured value into `slotIndex` (must be >= 1 — slot 0 is
+/// reserved for the fn pointer). `value.typ` is what the store
+/// instruction will assert.
+pub fn llvmClosureEnvStoreCapture(
+    emitter: LlvmEmitter,
+    envPtr: LlvmValue,
+    envTypeName: String,
+    slotIndex: Int,
+    value: LlvmValue,
+) {
+    let gep = llvmClosureEnvSlotGep(emitter, envPtr, envTypeName, slotIndex)
+    emitter.body.push("  store {value.typ} {value.name}, ptr {gep}")
+}
+
+/// Load slot 0 (the lifted-fn pointer) from an env.
+pub fn llvmClosureEnvLoadFn(
+    emitter: LlvmEmitter,
+    envPtr: LlvmValue,
+    envTypeName: String,
+) -> LlvmValue {
+    let gep = llvmClosureEnvSlotGep(emitter, envPtr, envTypeName, 0)
+    let tmp = llvmNextTemp(emitter)
+    emitter.body.push("  {tmp} = load ptr, ptr {gep}")
+    LlvmValue { typ: "ptr", name: tmp, pointer: false }
+}
+
+/// Load a captured value from `slotIndex` (>= 1). The caller supplies
+/// the expected LLVM type so the load instruction matches the layout
+/// used at store time.
+pub fn llvmClosureEnvLoadCapture(
+    emitter: LlvmEmitter,
+    envPtr: LlvmValue,
+    envTypeName: String,
+    slotIndex: Int,
+    captureType: String,
+) -> LlvmValue {
+    let gep = llvmClosureEnvSlotGep(emitter, envPtr, envTypeName, slotIndex)
+    let tmp = llvmNextTemp(emitter)
+    emitter.body.push("  {tmp} = load {captureType}, ptr {gep}")
+    LlvmValue { typ: captureType, name: tmp, pointer: false }
+}
+
+/// Emit an indirect call through the env: load slot 0 as the fn
+/// pointer, then call it with `envPtr` as the implicit first argument
+/// followed by `extraArgs`. The lifted function must be codegen'd with
+/// the matching signature `(ptr env, ...extraArgs) -> returnType`.
+/// The emitted call carries the full param-type list (`call RET (ptr,
+/// ARGT…) %fn(…)`) so the LLVM verifier can typecheck the callee.
+pub fn llvmClosureCallIndirect(
+    emitter: LlvmEmitter,
+    envPtr: LlvmValue,
+    envTypeName: String,
+    returnType: String,
+    extraArgs: List<LlvmValue>,
+) -> LlvmValue {
+    let fnPtr = llvmClosureEnvLoadFn(emitter, envPtr, envTypeName)
+    let mut args = [envPtr]
+    let mut paramTypes: List<String> = ["ptr"]
+    for arg in extraArgs {
+        args.push(arg)
+        paramTypes.push(arg.typ)
+    }
+    let callType = "{returnType} ({llvmStrings.join(paramTypes, \", \")})"
+    let tmp = llvmNextTemp(emitter)
+    emitter.body.push(
+        "  {tmp} = call {callType} {fnPtr.name}({llvmCallArgs(args)})",
+    )
+    LlvmValue { typ: returnType, name: tmp, pointer: false }
+}
+
+/// Canonical symbol name for the private thunk that wraps bare
+/// function `symbol` into the closure-env ABI. Deterministic so a
+/// second reference to the same bare fn reuses the same thunk def.
+pub fn llvmClosureThunkName(symbol: String) -> String {
+    "__osty_closure_thunk_{symbol}"
+}
+
+/// Render the `define private RET @__osty_closure_thunk_<symbol>(ptr
+/// %env, …)` body. Discards `%env`, forwards the user params, and
+/// returns whatever the underlying `@symbol` returns. The resulting
+/// string is ready to be appended to a module's `definitions` list.
+/// `paramTypes` must be the LLVM types of the WRAPPED function's
+/// parameters — the env parameter is prepended by this helper.
+pub fn llvmClosureThunkDefinition(
+    symbol: String,
+    returnType: String,
+    paramTypes: List<String>,
+) -> String {
+    let mut headerParts: List<String> = ["ptr %env"]
+    let mut argParts: List<String> = []
+    let mut i = 0
+    for paramType in paramTypes {
+        headerParts.push("{paramType} %arg{i}")
+        argParts.push("{paramType} %arg{i}")
+        i = i + 1
+    }
+    let header = llvmStrings.join(headerParts, ", ")
+    let callArgs = llvmStrings.join(argParts, ", ")
+    let thunk = llvmClosureThunkName(symbol)
+    let mut lines: List<String> = []
+    lines.push("define private {returnType} @{thunk}({header}) \{")
+    lines.push("entry:")
+    if returnType == "void" {
+        lines.push("  call void @{symbol}({callArgs})")
+        lines.push("  ret void")
+    } else {
+        lines.push("  %ret = call {returnType} @{symbol}({callArgs})")
+        lines.push("  ret {returnType} %ret")
+    }
+    lines.push("\}")
+    llvmStrings.join(lines, "\n")
+}
+
+/// Construct a 1-slot `%ClosureEnv.ptr` around a bare function so it
+/// can flow through code paths that expect a closure value. The thunk
+/// definition must already be emitted (via `llvmClosureThunkDefinition`)
+/// at module level. Callers invoke the returned env with
+/// `llvmClosureCallIndirect` just like any other closure.
+pub fn llvmClosureBareFnEnv(emitter: LlvmEmitter, symbol: String) -> LlvmValue {
+    let envTypeName = llvmClosureEnvTypeName(["ptr"])
+    let env = llvmClosureEnvAlloc(emitter, envTypeName)
+    llvmClosureEnvStoreFn(emitter, env, envTypeName, llvmClosureThunkName(symbol))
+    env
+}
+
+/// Type-def line for the 1-slot closure env used by
+/// `llvmClosureBareFnEnv`. Emit once per module that wraps any bare
+/// function through the thunk ABI.
+pub fn llvmClosureBareFnEnvTypeDef() -> String {
+    llvmClosureEnvTypeDef(llvmClosureEnvTypeName(["ptr"]), ["ptr"])
+}
+
+pub fn llvmStringRuntimeEqualSymbol() -> String {
+    "osty_rt_strings_Equal"
+}
+
+pub fn llvmStringRuntimeHasPrefixSymbol() -> String {
+    "osty_rt_strings_HasPrefix"
+}
+
+pub fn llvmStringRuntimeSplitSymbol() -> String {
+    "osty_rt_strings_Split"
+}
+
+pub fn llvmStringRuntimeConcatSymbol() -> String {
+    "osty_rt_strings_Concat"
+}
+
+pub fn llvmStringRuntimeByteLenSymbol() -> String {
+    "osty_rt_strings_ByteLen"
+}
+
+/// LLVM forward declarations for the `osty_rt_strings_*` C runtime
+/// surface. All string values cross the ABI as null-terminated `ptr`,
+/// and returned strings are GC-managed by the runtime (kind
+/// `OSTY_GC_KIND_STRING`); callers must treat the result as owned by
+/// the managed heap, not by `free`.
+pub fn llvmStringRuntimeDeclarations() -> List<String> {
+    [
+        "declare i1 @osty_rt_strings_Equal(ptr, ptr)",
+        "declare i1 @osty_rt_strings_HasPrefix(ptr, ptr)",
+        "declare ptr @osty_rt_strings_Split(ptr, ptr)",
+        "declare ptr @osty_rt_strings_Concat(ptr, ptr)",
+        "declare i64 @osty_rt_strings_ByteLen(ptr)",
+    ]
+}
+
+pub fn llvmStringEqual(emitter: LlvmEmitter, left: LlvmValue, right: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "i1", "osty_rt_strings_Equal", [left, right])
+}
+
+pub fn llvmStringHasPrefix(emitter: LlvmEmitter, value: LlvmValue, prefix: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "i1", "osty_rt_strings_HasPrefix", [value, prefix])
+}
+
+pub fn llvmStringSplit(emitter: LlvmEmitter, value: LlvmValue, sep: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "ptr", "osty_rt_strings_Split", [value, sep])
+}
+
+pub fn llvmStringConcat(emitter: LlvmEmitter, left: LlvmValue, right: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "ptr", "osty_rt_strings_Concat", [left, right])
+}
+
+pub fn llvmStringByteLen(emitter: LlvmEmitter, value: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "i64", "osty_rt_strings_ByteLen", [value])
 }
 
 pub fn llvmBuiltinType(name: String) -> String {
@@ -1795,6 +2584,208 @@ pub fn llvmSmokeGcRuntimeAbiIR(sourcePath: String) -> String {
     llvmReturnI32Zero(main)
 
     llvmRenderModuleWithGcRuntime(
+        sourcePath,
+        "",
+        [],
+        main.stringGlobals,
+        [
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+/// Smoke fixture exercising the bare-fn → thunk → closure-env path. A
+/// user-visible `double_val(i64) -> i64` function is defined, a private
+/// thunk `__osty_closure_thunk_double_val(ptr %env, i64 %arg0)` forwards
+/// to it ignoring env, and `main` wraps the bare fn into a 1-slot env
+/// + invokes it indirectly with argument `21` to print `42`. Covers the
+/// on-demand thunk generation that Osty uses whenever a plain function
+/// flows into a closure-shaped position.
+pub fn llvmSmokeClosureThunkIR(sourcePath: String) -> String {
+    let doubleBody = llvmEmitter()
+    llvmBind(doubleBody, "x", LlvmValue { typ: "i64", name: "%x", pointer: false })
+    let doubled = llvmBinaryI64(
+        doubleBody,
+        "mul",
+        llvmIdent(doubleBody, "x"),
+        llvmIntLiteral(2),
+    )
+    llvmReturn(doubleBody, doubled)
+
+    let main = llvmEmitter()
+    let env = llvmClosureBareFnEnv(main, "double_val")
+    let envTypeName = llvmClosureEnvTypeName(["ptr"])
+    let result = llvmClosureCallIndirect(
+        main,
+        env,
+        envTypeName,
+        "i64",
+        [llvmIntLiteral(21)],
+    )
+    llvmPrintlnI64(main, result)
+    llvmReturnI32Zero(main)
+
+    llvmRenderModuleWithGlobalsAndTypes(
+        sourcePath,
+        "",
+        [llvmClosureBareFnEnvTypeDef()],
+        main.stringGlobals,
+        [
+            llvmRenderFunction(
+                "i64",
+                "double_val",
+                [llvmParam("x", "i64")],
+                doubleBody.body,
+            ),
+            llvmClosureThunkDefinition("double_val", "i64", ["i64"]),
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+/// Smoke fixture exercising the closure-env ABI end-to-end. Defines a
+/// two-fn module: `closure_body` takes `(ptr env)` and reads its i64
+/// capture from slot 1; `main` allocates a `%ClosureEnv.ptr.i64`, stores
+/// `@closure_body` at slot 0 + `42` at slot 1, then invokes the closure
+/// indirectly through the env pointer. Covers type-def emission, alloca
+/// + GEP + store, and the `call RET (PTYPES) %fn(ENV, …)` form the
+/// verifier expects.
+pub fn llvmSmokeClosureBasicIR(sourcePath: String) -> String {
+    let envTypeName = llvmClosureEnvTypeName(["ptr", "i64"])
+    let typeDef = llvmClosureEnvTypeDef(envTypeName, ["ptr", "i64"])
+
+    let body = llvmEmitter()
+    llvmBind(body, "env", LlvmValue { typ: "ptr", name: "%env", pointer: false })
+    let envArg = llvmIdent(body, "env")
+    let captured = llvmClosureEnvLoadCapture(body, envArg, envTypeName, 1, "i64")
+    llvmReturn(body, captured)
+
+    let main = llvmEmitter()
+    let env = llvmClosureEnvAlloc(main, envTypeName)
+    llvmClosureEnvStoreFn(main, env, envTypeName, "closure_body")
+    llvmClosureEnvStoreCapture(main, env, envTypeName, 1, llvmIntLiteral(42))
+    let result = llvmClosureCallIndirect(main, env, envTypeName, "i64", [])
+    llvmPrintlnI64(main, result)
+    llvmReturnI32Zero(main)
+
+    llvmRenderModuleWithGlobalsAndTypes(
+        sourcePath,
+        "",
+        [typeDef],
+        main.stringGlobals,
+        [
+            llvmRenderFunction(
+                "i64",
+                "closure_body",
+                [llvmParam("env", "ptr")],
+                body.body,
+            ),
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+/// Smoke fixture exercising the `Set<Int>` runtime ABI end-to-end:
+/// allocate an i64-tagged set, insert three items, probe contains,
+/// remove one, print length, and materialize the remaining items as a
+/// list via `osty_rt_set_to_list`. Covers the 1-arg constructor and
+/// typed item ABI that distinguish Set from Map's out-pointer shape.
+pub fn llvmSmokeSetBasicIR(sourcePath: String) -> String {
+    let main = llvmEmitter()
+    let set = llvmSetNew(main, llvmContainerAbiKind("i64", false))
+    let _a = llvmSetInsertI64(main, set, llvmIntLiteral(10))
+    let _b = llvmSetInsertI64(main, set, llvmIntLiteral(20))
+    let _c = llvmSetInsertI64(main, set, llvmIntLiteral(30))
+    let _present = llvmSetContainsI64(main, set, llvmIntLiteral(20))
+    let _removed = llvmSetRemoveI64(main, set, llvmIntLiteral(20))
+    llvmPrintlnI64(main, llvmSetLen(main, set))
+    let _keys = llvmSetToList(main, set)
+    llvmReturnI32Zero(main)
+
+    llvmRenderModuleWithSetRuntime(
+        sourcePath,
+        "",
+        [],
+        main.stringGlobals,
+        [
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+/// Smoke fixture exercising the `osty_rt_strings_*` runtime: build two
+/// literals, concat them, probe equality against the literal prefix,
+/// compute byte length of the concat result, print both. Covers the
+/// `ptr`-returning GC-managed allocation path that distinguishes
+/// strings from the typed scalar runtime.
+pub fn llvmSmokeStringConcatIR(sourcePath: String) -> String {
+    let main = llvmEmitter()
+    let left = llvmStringLiteral(main, "hello, ")
+    let right = llvmStringLiteral(main, "osty")
+    let joined = llvmStringConcat(main, left, right)
+    let prefixed = llvmStringHasPrefix(main, joined, left)
+    let _unused = prefixed
+    let length = llvmStringByteLen(main, joined)
+    llvmPrintlnI64(main, length)
+    llvmPrintlnString(main, joined)
+    llvmReturnI32Zero(main)
+
+    llvmRenderModuleWithStringRuntime(
+        sourcePath,
+        "",
+        [],
+        main.stringGlobals,
+        [
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+/// Smoke fixture exercising the `Map<Int, Int>` runtime ABI end-to-end:
+/// allocate a map, insert one entry through a caller-allocated value slot,
+/// probe with `contains`, fetch via `get_or_abort`, read length, and print
+/// the stored value. Covers the out-pointer ABI shape that distinguishes
+/// Map from List and feeds golden IR assertions in llvmgen_test.osty.
+pub fn llvmSmokeMapBasicIR(sourcePath: String) -> String {
+    let main = llvmEmitter()
+    let map = llvmMapNew(main)
+    let valueSlot = llvmMutableLetSlot(main, "value", llvmIntLiteral(42))
+    llvmMapInsertI64(main, map, llvmIntLiteral(7), llvmSlotAsPtr(valueSlot))
+    let _present = llvmMapContainsI64(main, map, llvmIntLiteral(7))
+    let outSlot = llvmMutableLetSlot(main, "out", llvmIntLiteral(0))
+    llvmMapGetOrAbortI64(main, map, llvmIntLiteral(7), llvmSlotAsPtr(outSlot))
+    llvmPrintlnI64(main, llvmLoad(main, outSlot))
+    llvmPrintlnI64(main, llvmMapLen(main, map))
+    llvmReturnI32Zero(main)
+
+    llvmRenderModuleWithMapRuntime(
+        sourcePath,
+        "",
+        [],
+        main.stringGlobals,
+        [
+            llvmRenderFunction("i32", "main", [], main.body),
+        ],
+    )
+}
+
+/// Smoke fixture exercising the `List<Int>` runtime ABI end-to-end: allocate a
+/// list, push three i64 values, read the length, fetch index 1, and print both.
+/// Feeds golden IR assertions in llvmgen_test.osty and mirrors the scalar
+/// runtime surface the native backend will drive from AST lowering.
+pub fn llvmSmokeListBasicIR(sourcePath: String) -> String {
+    let main = llvmEmitter()
+    let list = llvmListNew(main)
+    llvmListPushI64(main, list, llvmIntLiteral(10))
+    llvmListPushI64(main, list, llvmIntLiteral(20))
+    llvmListPushI64(main, list, llvmIntLiteral(30))
+    let len = llvmListLen(main, list)
+    llvmPrintlnI64(main, len)
+    let second = llvmListGetI64(main, list, llvmIntLiteral(1))
+    llvmPrintlnI64(main, second)
+    llvmReturnI32Zero(main)
+
+    llvmRenderModuleWithListRuntime(
         sourcePath,
         "",
         [],

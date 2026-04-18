@@ -799,6 +799,27 @@ bool osty_rt_strings_Equal(const char *left, const char *right) {
     return strcmp(left, right) == 0;
 }
 
+int64_t osty_rt_strings_ByteLen(const char *value) {
+    if (value == NULL) {
+        return 0;
+    }
+    return (int64_t)strlen(value);
+}
+
+const char *osty_rt_strings_Concat(const char *left, const char *right) {
+    size_t left_len = (left == NULL) ? 0 : strlen(left);
+    size_t right_len = (right == NULL) ? 0 : strlen(right);
+    char *out = (char *)osty_gc_allocate_managed(left_len + right_len + 1, OSTY_GC_KIND_STRING, "runtime.strings.concat", NULL, NULL);
+    if (left_len != 0) {
+        memcpy(out, left, left_len);
+    }
+    if (right_len != 0) {
+        memcpy(out + left_len, right, right_len);
+    }
+    out[left_len + right_len] = '\0';
+    return out;
+}
+
 bool osty_rt_strings_HasPrefix(const char *value, const char *prefix) {
     size_t prefix_len;
     if (value == NULL || prefix == NULL) {

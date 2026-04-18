@@ -4,16 +4,17 @@
 // per-symbol forward declarations, and the container runtime symbol tables
 // (osty_rt_list_* / osty_rt_map_* / osty_rt_set_*) + their ABI-kind policy.
 //
-// NOTE(osty-migration): the runtime symbol tables and `containerAbiKind` /
-// `mapSetKeySuffix` / `listUsesTypedRuntime` / `listRuntimeSymbolSuffix` are
-// all pure-policy (no AST dependency) and are the **first Phase B Osty
-// migration target**. See toolchain/llvmgen.osty and the hand-synced Go
-// mirrors in internal/llvmgen/support_snapshot.go.
+// NOTE(osty-migration): the container runtime policy (`*RuntimeSymbol`,
+// `containerAbiKind`, `mapSetKeySuffix`, `listUsesTypedRuntime`,
+// `listRuntimeSymbolSuffix`) is Osty-owned — every function below is a
+// thin wrapper over the `llvm*` helpers generated from
+// toolchain/llvmgen.osty and mirrored in support_snapshot.go. The
+// wrappers stay here as a stable call surface for MIR generator code;
+// changing the policy means editing the Osty source.
 package llvmgen
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/osty/osty/internal/ast"
 )
@@ -311,49 +312,23 @@ func listRuntimeGetBytesV1Symbol() string {
 }
 
 func listRuntimePushSymbol(elemTyp string) string {
-	return "osty_rt_list_push_" + listRuntimeSymbolSuffix(elemTyp)
+	return llvmListRuntimePushSymbol(llvmListElementSuffix(elemTyp))
 }
 
 func listRuntimeGetSymbol(elemTyp string) string {
-	return "osty_rt_list_get_" + listRuntimeSymbolSuffix(elemTyp)
+	return llvmListRuntimeGetSymbol(llvmListElementSuffix(elemTyp))
 }
 
 func listRuntimeSetSymbol(elemTyp string) string {
-	return "osty_rt_list_set_" + listRuntimeSymbolSuffix(elemTyp)
+	return llvmListRuntimeSetSymbol(llvmListElementSuffix(elemTyp))
 }
 
 func listRuntimeSortedSymbol(elemTyp string, elemString bool) string {
-	if elemString {
-		return "osty_rt_list_sorted_string"
-	}
-	switch elemTyp {
-	case "i64":
-		return "osty_rt_list_sorted_i64"
-	case "i1":
-		return "osty_rt_list_sorted_i1"
-	case "double":
-		return "osty_rt_list_sorted_f64"
-	default:
-		return ""
-	}
+	return llvmListRuntimeSortedSymbol(elemTyp, elemString)
 }
 
 func listRuntimeToSetSymbol(elemTyp string, elemString bool) string {
-	if elemString {
-		return "osty_rt_list_to_set_string"
-	}
-	switch elemTyp {
-	case "i64":
-		return "osty_rt_list_to_set_i64"
-	case "i1":
-		return "osty_rt_list_to_set_i1"
-	case "double":
-		return "osty_rt_list_to_set_f64"
-	case "ptr":
-		return "osty_rt_list_to_set_ptr"
-	default:
-		return ""
-	}
+	return llvmListRuntimeToSetSymbol(elemTyp, elemString)
 }
 
 func mapRuntimeNewSymbol() string {
@@ -361,19 +336,19 @@ func mapRuntimeNewSymbol() string {
 }
 
 func mapRuntimeContainsSymbol(keyTyp string, keyString bool) string {
-	return "osty_rt_map_contains_" + mapSetKeySuffix(keyTyp, keyString)
+	return llvmMapRuntimeContainsSymbol(keyTyp, keyString)
 }
 
 func mapRuntimeInsertSymbol(keyTyp string, keyString bool) string {
-	return "osty_rt_map_insert_" + mapSetKeySuffix(keyTyp, keyString)
+	return llvmMapRuntimeInsertSymbol(keyTyp, keyString)
 }
 
 func mapRuntimeRemoveSymbol(keyTyp string, keyString bool) string {
-	return "osty_rt_map_remove_" + mapSetKeySuffix(keyTyp, keyString)
+	return llvmMapRuntimeRemoveSymbol(keyTyp, keyString)
 }
 
 func mapRuntimeGetOrAbortSymbol(keyTyp string, keyString bool) string {
-	return "osty_rt_map_get_or_abort_" + mapSetKeySuffix(keyTyp, keyString)
+	return llvmMapRuntimeGetOrAbortSymbol(keyTyp, keyString)
 }
 
 func mapRuntimeKeysSymbol() string {
@@ -389,15 +364,15 @@ func setRuntimeLenSymbol() string {
 }
 
 func setRuntimeContainsSymbol(elemTyp string, elemString bool) string {
-	return "osty_rt_set_contains_" + mapSetKeySuffix(elemTyp, elemString)
+	return llvmSetRuntimeContainsSymbol(elemTyp, elemString)
 }
 
 func setRuntimeInsertSymbol(elemTyp string, elemString bool) string {
-	return "osty_rt_set_insert_" + mapSetKeySuffix(elemTyp, elemString)
+	return llvmSetRuntimeInsertSymbol(elemTyp, elemString)
 }
 
 func setRuntimeRemoveSymbol(elemTyp string, elemString bool) string {
-	return "osty_rt_set_remove_" + mapSetKeySuffix(elemTyp, elemString)
+	return llvmSetRuntimeRemoveSymbol(elemTyp, elemString)
 }
 
 func setRuntimeToListSymbol() string {
@@ -409,50 +384,13 @@ func containerAbiKind(typ string, isString bool) int {
 }
 
 func mapSetKeySuffix(typ string, isString bool) string {
-	if isString {
-		return "string"
-	}
-	switch typ {
-	case "i64":
-		return "i64"
-	case "i1":
-		return "i1"
-	case "double":
-		return "f64"
-	case "ptr":
-		return "ptr"
-	default:
-		return "bytes"
-	}
+	return llvmMapKeySuffix(typ, isString)
 }
 
 func listUsesTypedRuntime(elemTyp string) bool {
-	switch elemTyp {
-	case "i64", "i1", "double", "ptr":
-		return true
-	default:
-		return false
-	}
+	return llvmListUsesTypedRuntime(elemTyp)
 }
 
 func listRuntimeSymbolSuffix(typ string) string {
-	switch typ {
-	case "i64", "i1", "ptr":
-		return typ
-	case "double":
-		return "f64"
-	}
-	var b strings.Builder
-	for i := 0; i < len(typ); i++ {
-		c := typ[i]
-		if c == '_' || ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || ('0' <= c && c <= '9') {
-			b.WriteByte(c)
-			continue
-		}
-		b.WriteByte('_')
-	}
-	if b.Len() == 0 {
-		return "ptr"
-	}
-	return b.String()
+	return llvmListElementSuffix(typ)
 }

@@ -292,6 +292,394 @@ func TestGeneratedComparePoliciesAreOstyOwned(t *testing.T) {
 	}
 }
 
+func TestGeneratedListRuntimeSymbolsAreOstyOwned(t *testing.T) {
+	cases := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"new", llvmListRuntimeNewSymbol(), "osty_rt_list_new"},
+		{"len", llvmListRuntimeLenSymbol(), "osty_rt_list_len"},
+		{"push_i64", llvmListRuntimePushSymbol("i64"), "osty_rt_list_push_i64"},
+		{"push_f64", llvmListRuntimePushSymbol("f64"), "osty_rt_list_push_f64"},
+		{"get_ptr", llvmListRuntimeGetSymbol("ptr"), "osty_rt_list_get_ptr"},
+		{"set_i1", llvmListRuntimeSetSymbol("i1"), "osty_rt_list_set_i1"},
+		{"sorted_i64", llvmListRuntimeSortedSymbol("i64", false), "osty_rt_list_sorted_i64"},
+		{"sorted_string", llvmListRuntimeSortedSymbol("ptr", true), "osty_rt_list_sorted_string"},
+		{"sorted_unsupported", llvmListRuntimeSortedSymbol("%MyStruct", false), ""},
+		{"to_set_f64", llvmListRuntimeToSetSymbol("double", false), "osty_rt_list_to_set_f64"},
+		{"to_set_string", llvmListRuntimeToSetSymbol("ptr", true), "osty_rt_list_to_set_string"},
+		{"to_set_unsupported", llvmListRuntimeToSetSymbol("%MyStruct", false), ""},
+	}
+	for _, c := range cases {
+		if c.got != c.want {
+			t.Fatalf("%s: got %q, want %q", c.name, c.got, c.want)
+		}
+	}
+}
+
+func TestGeneratedListElementSuffixMatchesRuntimeAbi(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"i64", "i64"},
+		{"i1", "i1"},
+		{"ptr", "ptr"},
+		{"double", "f64"},
+		{"", "ptr"},
+		{"%MyStruct", "_MyStruct"},
+		{"<4 x i32>", "_4_x_i32_"},
+	}
+	for _, c := range cases {
+		if got := llvmListElementSuffix(c.in); got != c.want {
+			t.Fatalf("llvmListElementSuffix(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+
+	typed := []string{"i64", "i1", "double", "ptr"}
+	for _, t0 := range typed {
+		if !llvmListUsesTypedRuntime(t0) {
+			t.Fatalf("llvmListUsesTypedRuntime(%q) = false, want true", t0)
+		}
+	}
+	for _, t0 := range []string{"", "%MyStruct", "float"} {
+		if llvmListUsesTypedRuntime(t0) {
+			t.Fatalf("llvmListUsesTypedRuntime(%q) = true, want false", t0)
+		}
+	}
+}
+
+func TestGeneratedListRuntimeDeclarationsAreOstyOwned(t *testing.T) {
+	decls := strings.Join(llvmListRuntimeDeclarations(), "\n")
+
+	want := []string{
+		"declare ptr @osty_rt_list_new()",
+		"declare i64 @osty_rt_list_len(ptr)",
+		"declare void @osty_rt_list_push_i64(ptr, i64)",
+		"declare void @osty_rt_list_push_i1(ptr, i1)",
+		"declare void @osty_rt_list_push_f64(ptr, double)",
+		"declare void @osty_rt_list_push_ptr(ptr, ptr)",
+		"declare i64 @osty_rt_list_get_i64(ptr, i64)",
+		"declare i1 @osty_rt_list_get_i1(ptr, i64)",
+		"declare double @osty_rt_list_get_f64(ptr, i64)",
+		"declare ptr @osty_rt_list_get_ptr(ptr, i64)",
+		"declare void @osty_rt_list_set_i64(ptr, i64, i64)",
+		"declare void @osty_rt_list_set_i1(ptr, i64, i1)",
+		"declare void @osty_rt_list_set_f64(ptr, i64, double)",
+		"declare void @osty_rt_list_set_ptr(ptr, i64, ptr)",
+	}
+	for _, w := range want {
+		assertGeneratedIRContains(t, decls, w)
+	}
+}
+
+func TestGeneratedListBasicSmokeIR(t *testing.T) {
+	ir := llvmSmokeListBasicIR("/tmp/list_basic.osty")
+
+	assertGeneratedIRContains(t, ir, "source_filename = \"/tmp/list_basic.osty\"")
+	assertGeneratedIRContains(t, ir, "declare ptr @osty_rt_list_new()")
+	assertGeneratedIRContains(t, ir, "declare i64 @osty_rt_list_len(ptr)")
+	assertGeneratedIRContains(t, ir, "declare void @osty_rt_list_push_i64(ptr, i64)")
+	assertGeneratedIRContains(t, ir, "declare i64 @osty_rt_list_get_i64(ptr, i64)")
+	assertGeneratedIRContains(t, ir, "%t0 = call ptr @osty_rt_list_new()")
+	assertGeneratedIRContains(t, ir, "call void @osty_rt_list_push_i64(ptr %t0, i64 10)")
+	assertGeneratedIRContains(t, ir, "call void @osty_rt_list_push_i64(ptr %t0, i64 20)")
+	assertGeneratedIRContains(t, ir, "call void @osty_rt_list_push_i64(ptr %t0, i64 30)")
+	assertGeneratedIRContains(t, ir, "= call i64 @osty_rt_list_len(ptr %t0)")
+	assertGeneratedIRContains(t, ir, "= call i64 @osty_rt_list_get_i64(ptr %t0, i64 1)")
+	assertGeneratedIRContains(t, ir, "ret i32 0")
+}
+
+func TestGeneratedClosureEnvTypeNameJoinsTags(t *testing.T) {
+	cases := []struct {
+		tags []string
+		want string
+	}{
+		{[]string{"ptr"}, "ClosureEnv.ptr"},
+		{[]string{"ptr", "i64"}, "ClosureEnv.ptr.i64"},
+		{[]string{"ptr", "i64", "double", "ptr"}, "ClosureEnv.ptr.i64.double.ptr"},
+	}
+	for _, c := range cases {
+		if got := llvmClosureEnvTypeName(c.tags); got != c.want {
+			t.Fatalf("llvmClosureEnvTypeName(%v) = %q, want %q", c.tags, got, c.want)
+		}
+	}
+}
+
+func TestGeneratedClosureEnvTypeDefRendersStruct(t *testing.T) {
+	got := llvmClosureEnvTypeDef("ClosureEnv.ptr.i64", []string{"ptr", "i64"})
+	want := "%ClosureEnv.ptr.i64 = type { ptr, i64 }"
+	if got != want {
+		t.Fatalf("llvmClosureEnvTypeDef = %q, want %q", got, want)
+	}
+}
+
+func TestGeneratedClosureThunkNameIsOstyOwned(t *testing.T) {
+	if got := llvmClosureThunkName("double_val"); got != "__osty_closure_thunk_double_val" {
+		t.Fatalf("llvmClosureThunkName = %q", got)
+	}
+	if got := llvmClosureThunkName("add"); got != "__osty_closure_thunk_add" {
+		t.Fatalf("llvmClosureThunkName = %q", got)
+	}
+}
+
+func TestGeneratedClosureThunkDefinitionForwardsArgs(t *testing.T) {
+	def := llvmClosureThunkDefinition("double_val", "i64", []string{"i64"})
+
+	assertGeneratedIRContains(t, def, "define private i64 @__osty_closure_thunk_double_val(ptr %env, i64 %arg0)")
+	assertGeneratedIRContains(t, def, "%ret = call i64 @double_val(i64 %arg0)")
+	assertGeneratedIRContains(t, def, "ret i64 %ret")
+}
+
+func TestGeneratedClosureThunkDefinitionVoidReturn(t *testing.T) {
+	def := llvmClosureThunkDefinition("noop", "void", []string{})
+
+	assertGeneratedIRContains(t, def, "define private void @__osty_closure_thunk_noop(ptr %env)")
+	assertGeneratedIRContains(t, def, "call void @noop()")
+	assertGeneratedIRContains(t, def, "ret void")
+	if strings.Contains(def, "%ret = call") {
+		t.Fatalf("void thunk should not bind a return register\nIR:\n%s", def)
+	}
+}
+
+func TestGeneratedClosureBareFnEnvTypeDefIsOneSlot(t *testing.T) {
+	got := llvmClosureBareFnEnvTypeDef()
+	want := "%ClosureEnv.ptr = type { ptr }"
+	if got != want {
+		t.Fatalf("llvmClosureBareFnEnvTypeDef = %q, want %q", got, want)
+	}
+}
+
+func TestGeneratedClosureThunkSmokeIR(t *testing.T) {
+	ir := llvmSmokeClosureThunkIR("/tmp/closure_thunk.osty")
+
+	assertGeneratedIRContains(t, ir, "source_filename = \"/tmp/closure_thunk.osty\"")
+	assertGeneratedIRContains(t, ir, "%ClosureEnv.ptr = type { ptr }")
+	assertGeneratedIRContains(t, ir, "define i64 @double_val(i64 %x)")
+	assertGeneratedIRContains(t, ir, "define private i64 @__osty_closure_thunk_double_val(ptr %env, i64 %arg0)")
+	assertGeneratedIRContains(t, ir, "%ret = call i64 @double_val(i64 %arg0)")
+	assertGeneratedIRContains(t, ir, "define i32 @main()")
+	assertGeneratedIRContains(t, ir, "%t0 = alloca %ClosureEnv.ptr")
+	assertGeneratedIRContains(t, ir, "store ptr @__osty_closure_thunk_double_val, ptr %t1")
+	assertGeneratedIRContains(t, ir, "= call i64 (ptr, i64) ")
+	assertGeneratedIRContains(t, ir, "(ptr %t0, i64 21)")
+	assertGeneratedIRContains(t, ir, "call i32 (ptr, ...) @printf(ptr @.fmt_i64, i64 ")
+	assertGeneratedIRContains(t, ir, "ret i32 0")
+}
+
+func TestGeneratedClosureBasicSmokeIR(t *testing.T) {
+	ir := llvmSmokeClosureBasicIR("/tmp/closure_basic.osty")
+
+	assertGeneratedIRContains(t, ir, "source_filename = \"/tmp/closure_basic.osty\"")
+	assertGeneratedIRContains(t, ir, "%ClosureEnv.ptr.i64 = type { ptr, i64 }")
+	assertGeneratedIRContains(t, ir, "define i64 @closure_body(ptr %env)")
+	assertGeneratedIRContains(t, ir, "getelementptr %ClosureEnv.ptr.i64, ptr %env, i32 0, i32 1")
+	assertGeneratedIRContains(t, ir, "= load i64, ptr ")
+	assertGeneratedIRContains(t, ir, "define i32 @main()")
+	assertGeneratedIRContains(t, ir, "%t0 = alloca %ClosureEnv.ptr.i64")
+	assertGeneratedIRContains(t, ir, "%t1 = getelementptr %ClosureEnv.ptr.i64, ptr %t0, i32 0, i32 0")
+	assertGeneratedIRContains(t, ir, "store ptr @closure_body, ptr %t1")
+	assertGeneratedIRContains(t, ir, "%t2 = getelementptr %ClosureEnv.ptr.i64, ptr %t0, i32 0, i32 1")
+	assertGeneratedIRContains(t, ir, "store i64 42, ptr %t2")
+	assertGeneratedIRContains(t, ir, "= load ptr, ptr ")
+	assertGeneratedIRContains(t, ir, "= call i64 (ptr) ")
+	assertGeneratedIRContains(t, ir, "(ptr %t0)")
+	assertGeneratedIRContains(t, ir, "call i32 (ptr, ...) @printf(ptr @.fmt_i64, i64 ")
+	assertGeneratedIRContains(t, ir, "ret i32 0")
+}
+
+func TestGeneratedSetRuntimeSymbolsAreOstyOwned(t *testing.T) {
+	cases := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"new", llvmSetRuntimeNewSymbol(), "osty_rt_set_new"},
+		{"len", llvmSetRuntimeLenSymbol(), "osty_rt_set_len"},
+		{"to_list", llvmSetRuntimeToListSymbol(), "osty_rt_set_to_list"},
+		{"contains_i64", llvmSetRuntimeContainsSymbol("i64", false), "osty_rt_set_contains_i64"},
+		{"insert_f64", llvmSetRuntimeInsertSymbol("double", false), "osty_rt_set_insert_f64"},
+		{"remove_string", llvmSetRuntimeRemoveSymbol("ptr", true), "osty_rt_set_remove_string"},
+		{"insert_bytes", llvmSetRuntimeInsertSymbol("", false), "osty_rt_set_insert_bytes"},
+	}
+	for _, c := range cases {
+		if c.got != c.want {
+			t.Fatalf("%s: got %q, want %q", c.name, c.got, c.want)
+		}
+	}
+}
+
+func TestGeneratedSetRuntimeDeclarationsAreOstyOwned(t *testing.T) {
+	decls := strings.Join(llvmSetRuntimeDeclarations(), "\n")
+
+	want := []string{
+		"declare ptr @osty_rt_set_new(i64)",
+		"declare i64 @osty_rt_set_len(ptr)",
+		"declare ptr @osty_rt_set_to_list(ptr)",
+		"declare i1 @osty_rt_set_contains_i64(ptr, i64)",
+		"declare i1 @osty_rt_set_contains_string(ptr, ptr)",
+		"declare i1 @osty_rt_set_insert_i64(ptr, i64)",
+		"declare i1 @osty_rt_set_insert_f64(ptr, double)",
+		"declare i1 @osty_rt_set_insert_string(ptr, ptr)",
+		"declare i1 @osty_rt_set_remove_i64(ptr, i64)",
+		"declare i1 @osty_rt_set_remove_string(ptr, ptr)",
+	}
+	for _, w := range want {
+		assertGeneratedIRContains(t, decls, w)
+	}
+}
+
+func TestGeneratedSetBasicSmokeIR(t *testing.T) {
+	ir := llvmSmokeSetBasicIR("/tmp/set_basic.osty")
+
+	assertGeneratedIRContains(t, ir, "source_filename = \"/tmp/set_basic.osty\"")
+	assertGeneratedIRContains(t, ir, "declare ptr @osty_rt_set_new(i64)")
+	assertGeneratedIRContains(t, ir, "declare i1 @osty_rt_set_insert_i64(ptr, i64)")
+	assertGeneratedIRContains(t, ir, "declare i1 @osty_rt_set_contains_i64(ptr, i64)")
+	assertGeneratedIRContains(t, ir, "declare i1 @osty_rt_set_remove_i64(ptr, i64)")
+	assertGeneratedIRContains(t, ir, "declare ptr @osty_rt_set_to_list(ptr)")
+	assertGeneratedIRContains(t, ir, "%t0 = call ptr @osty_rt_set_new(i64 1)")
+	assertGeneratedIRContains(t, ir, "%t1 = call i1 @osty_rt_set_insert_i64(ptr %t0, i64 10)")
+	assertGeneratedIRContains(t, ir, "= call i1 @osty_rt_set_contains_i64(ptr %t0, i64 20)")
+	assertGeneratedIRContains(t, ir, "= call i1 @osty_rt_set_remove_i64(ptr %t0, i64 20)")
+	assertGeneratedIRContains(t, ir, "= call i64 @osty_rt_set_len(ptr %t0)")
+	assertGeneratedIRContains(t, ir, "= call ptr @osty_rt_set_to_list(ptr %t0)")
+	assertGeneratedIRContains(t, ir, "ret i32 0")
+}
+
+func TestGeneratedStringRuntimeSymbolsAreOstyOwned(t *testing.T) {
+	cases := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"equal", llvmStringRuntimeEqualSymbol(), "osty_rt_strings_Equal"},
+		{"hasPrefix", llvmStringRuntimeHasPrefixSymbol(), "osty_rt_strings_HasPrefix"},
+		{"split", llvmStringRuntimeSplitSymbol(), "osty_rt_strings_Split"},
+		{"concat", llvmStringRuntimeConcatSymbol(), "osty_rt_strings_Concat"},
+		{"byteLen", llvmStringRuntimeByteLenSymbol(), "osty_rt_strings_ByteLen"},
+	}
+	for _, c := range cases {
+		if c.got != c.want {
+			t.Fatalf("%s: got %q, want %q", c.name, c.got, c.want)
+		}
+	}
+}
+
+func TestGeneratedStringRuntimeDeclarationsAreOstyOwned(t *testing.T) {
+	decls := strings.Join(llvmStringRuntimeDeclarations(), "\n")
+
+	want := []string{
+		"declare i1 @osty_rt_strings_Equal(ptr, ptr)",
+		"declare i1 @osty_rt_strings_HasPrefix(ptr, ptr)",
+		"declare ptr @osty_rt_strings_Split(ptr, ptr)",
+		"declare ptr @osty_rt_strings_Concat(ptr, ptr)",
+		"declare i64 @osty_rt_strings_ByteLen(ptr)",
+	}
+	for _, w := range want {
+		assertGeneratedIRContains(t, decls, w)
+	}
+}
+
+func TestGeneratedStringConcatSmokeIR(t *testing.T) {
+	ir := llvmSmokeStringConcatIR("/tmp/string_concat.osty")
+
+	assertGeneratedIRContains(t, ir, "source_filename = \"/tmp/string_concat.osty\"")
+	assertGeneratedIRContains(t, ir, "declare ptr @osty_rt_strings_Concat(ptr, ptr)")
+	assertGeneratedIRContains(t, ir, "declare i1 @osty_rt_strings_HasPrefix(ptr, ptr)")
+	assertGeneratedIRContains(t, ir, "declare i64 @osty_rt_strings_ByteLen(ptr)")
+	assertGeneratedIRContains(t, ir, "@.str0 = private unnamed_addr constant [8 x i8] c\"hello, \\00\"")
+	assertGeneratedIRContains(t, ir, "@.str1 = private unnamed_addr constant [5 x i8] c\"osty\\00\"")
+	assertGeneratedIRContains(t, ir, "%t0 = call ptr @osty_rt_strings_Concat(ptr @.str0, ptr @.str1)")
+	assertGeneratedIRContains(t, ir, "%t1 = call i1 @osty_rt_strings_HasPrefix(ptr %t0, ptr @.str0)")
+	assertGeneratedIRContains(t, ir, "%t2 = call i64 @osty_rt_strings_ByteLen(ptr %t0)")
+	assertGeneratedIRContains(t, ir, "call i32 (ptr, ...) @printf(ptr @.fmt_i64, i64 %t2)")
+	assertGeneratedIRContains(t, ir, "call i32 (ptr, ...) @printf(ptr @.fmt_str, ptr %t0)")
+	assertGeneratedIRContains(t, ir, "ret i32 0")
+}
+
+func TestGeneratedMapRuntimeSymbolsAreOstyOwned(t *testing.T) {
+	cases := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"new", llvmMapRuntimeNewSymbol(), "osty_rt_map_new"},
+		{"len", llvmMapRuntimeLenSymbol(), "osty_rt_map_len"},
+		{"keys", llvmMapRuntimeKeysSymbol(), "osty_rt_map_keys"},
+		{"contains_i64", llvmMapRuntimeContainsSymbol("i64", false), "osty_rt_map_contains_i64"},
+		{"insert_string", llvmMapRuntimeInsertSymbol("ptr", true), "osty_rt_map_insert_string"},
+		{"remove_f64", llvmMapRuntimeRemoveSymbol("double", false), "osty_rt_map_remove_f64"},
+		{"get_or_abort_ptr", llvmMapRuntimeGetOrAbortSymbol("ptr", false), "osty_rt_map_get_or_abort_ptr"},
+		{"insert_bytes", llvmMapRuntimeInsertSymbol("", false), "osty_rt_map_insert_bytes"},
+	}
+	for _, c := range cases {
+		if c.got != c.want {
+			t.Fatalf("%s: got %q, want %q", c.name, c.got, c.want)
+		}
+	}
+}
+
+func TestGeneratedMapKeySuffixMatchesRuntimeAbi(t *testing.T) {
+	cases := []struct {
+		typ      string
+		isString bool
+		want     string
+	}{
+		{"i64", false, "i64"},
+		{"i1", false, "i1"},
+		{"double", false, "f64"},
+		{"ptr", false, "ptr"},
+		{"ptr", true, "string"},
+		{"i64", true, "string"},
+		{"", false, "bytes"},
+		{"%MyStruct", false, "bytes"},
+	}
+	for _, c := range cases {
+		if got := llvmMapKeySuffix(c.typ, c.isString); got != c.want {
+			t.Fatalf("llvmMapKeySuffix(%q, %v) = %q, want %q", c.typ, c.isString, got, c.want)
+		}
+	}
+}
+
+func TestGeneratedMapRuntimeDeclarationsAreOstyOwned(t *testing.T) {
+	decls := strings.Join(llvmMapRuntimeDeclarations(), "\n")
+
+	want := []string{
+		"declare ptr @osty_rt_map_new()",
+		"declare i64 @osty_rt_map_len(ptr)",
+		"declare ptr @osty_rt_map_keys(ptr)",
+		"declare i1 @osty_rt_map_contains_i64(ptr, i64)",
+		"declare i1 @osty_rt_map_contains_string(ptr, ptr)",
+		"declare void @osty_rt_map_insert_i64(ptr, i64, ptr)",
+		"declare void @osty_rt_map_insert_string(ptr, ptr, ptr)",
+		"declare i1 @osty_rt_map_remove_i64(ptr, i64)",
+		"declare void @osty_rt_map_get_or_abort_i64(ptr, i64, ptr)",
+		"declare void @osty_rt_map_get_or_abort_string(ptr, ptr, ptr)",
+	}
+	for _, w := range want {
+		assertGeneratedIRContains(t, decls, w)
+	}
+}
+
+func TestGeneratedMapBasicSmokeIR(t *testing.T) {
+	ir := llvmSmokeMapBasicIR("/tmp/map_basic.osty")
+
+	assertGeneratedIRContains(t, ir, "source_filename = \"/tmp/map_basic.osty\"")
+	assertGeneratedIRContains(t, ir, "declare ptr @osty_rt_map_new()")
+	assertGeneratedIRContains(t, ir, "declare void @osty_rt_map_insert_i64(ptr, i64, ptr)")
+	assertGeneratedIRContains(t, ir, "declare i1 @osty_rt_map_contains_i64(ptr, i64)")
+	assertGeneratedIRContains(t, ir, "declare void @osty_rt_map_get_or_abort_i64(ptr, i64, ptr)")
+	assertGeneratedIRContains(t, ir, "%t0 = call ptr @osty_rt_map_new()")
+	assertGeneratedIRContains(t, ir, "%t1 = alloca i64")
+	assertGeneratedIRContains(t, ir, "store i64 42, ptr %t1")
+	assertGeneratedIRContains(t, ir, "call void @osty_rt_map_insert_i64(ptr %t0, i64 7, ptr %t1)")
+	assertGeneratedIRContains(t, ir, "= call i1 @osty_rt_map_contains_i64(ptr %t0, i64 7)")
+	assertGeneratedIRContains(t, ir, "call void @osty_rt_map_get_or_abort_i64(ptr %t0, i64 7, ptr")
+	assertGeneratedIRContains(t, ir, "= call i64 @osty_rt_map_len(ptr %t0)")
+	assertGeneratedIRContains(t, ir, "ret i32 0")
+}
+
 func TestGenerateLeavesRawStringGlobalsUnmanagedUntilHeapLowering(t *testing.T) {
 	ir := generateLLVMForTest(t, `
 fn main() {
