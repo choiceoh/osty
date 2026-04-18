@@ -1,0 +1,215 @@
+// fmt_test.osty — E2E verification of internal/stdlib/modules/fmt.osty
+// via the LLVM backend. Covers every pub fn with happy-path + edge
+// cases.
+//
+// Current status (2026-04-18): all 28 tests still fail under the LLVM
+// backend. The String `+` String and String-interpolation-via-concat
+// gaps were closed (see concat_interp_test.osty which passes 10/10),
+// but fmt bodies depend on additional backend features that are not
+// yet lowered:
+//
+//   1. `Int.toString()` / `Float.toString()` / `Char.toString()` —
+//      no method-dispatch path for numeric/char → String.
+//   2. List<String> methods `.len()` / `.isEmpty()` — fail with
+//      "code generation is not implemented yet" even on trivial
+//      empty or two-element lists.
+//   3. Generic `joinWith<T>` closure — IR validator rejects the
+//      module import with "Closure: param[0] nil Type" whenever
+//      multiple tests share the package (single-test isolation
+//      converts it to the codegen sentinel).
+//
+// Each gap is independent; fixing any one unblocks a subset of fmt.
+// Do not delete this file — re-run whenever a gap closes to see
+// which functions begin passing.
+
+use std.testing
+use std.fmt
+
+// ─── String alignment ─────────────────────────────────────────────
+
+fn testPadLeft() {
+    testing.assertEq(fmt.padLeft("x", 3), "  x")
+    testing.assertEq(fmt.padLeft("abc", 3), "abc")
+    testing.assertEq(fmt.padLeft("abcd", 2), "abcd")
+    testing.assertEq(fmt.padLeft("7", 4, '0'), "0007")
+}
+
+fn testPadRight() {
+    testing.assertEq(fmt.padRight("x", 3), "x  ")
+    testing.assertEq(fmt.padRight("abc", 3), "abc")
+    testing.assertEq(fmt.padRight("7", 4, '0'), "7000")
+}
+
+fn testCenter() {
+    testing.assertEq(fmt.center("x", 5), "  x  ")
+    testing.assertEq(fmt.center("ab", 5), " ab  ")
+    testing.assertEq(fmt.center("abc", 3), "abc")
+    testing.assertEq(fmt.center("hi", 6, '*'), "**hi**")
+}
+
+fn testTruncate() {
+    testing.assertEq(fmt.truncate("hello", 10), "hello")
+    testing.assertEq(fmt.truncate("hello world", 8), "hello...")
+    testing.assertEq(fmt.truncate("abc", 3), "abc")
+    testing.assertEq(fmt.truncate("abcd", 2), "...")
+}
+
+// ─── Integer formatting ───────────────────────────────────────────
+
+fn testIntToBase() {
+    testing.assertEq(fmt.intToBase(0, 10), "0")
+    testing.assertEq(fmt.intToBase(255, 16), "ff")
+    testing.assertEq(fmt.intToBase(-255, 16), "-ff")
+    testing.assertEq(fmt.intToBase(10, 2), "1010")
+    testing.assertEq(fmt.intToBase(35, 36), "z")
+}
+
+fn testInBaseAlias() {
+    testing.assertEq(fmt.inBase(42, 16), fmt.intToBase(42, 16))
+}
+
+fn testBinAliases() {
+    testing.assertEq(fmt.bin(5), "101")
+    testing.assertEq(fmt.binary(5), "101")
+    testing.assertEq(fmt.bin(0), "0")
+}
+
+fn testOctAliases() {
+    testing.assertEq(fmt.oct(8), "10")
+    testing.assertEq(fmt.octal(64), "100")
+}
+
+fn testHex() {
+    testing.assertEq(fmt.hex(255), "ff")
+    testing.assertEq(fmt.hex(255, true), "FF")
+    testing.assertEq(fmt.hexUpper(255), "FF")
+}
+
+fn testZeroPad() {
+    testing.assertEq(fmt.zeroPad(42, 5), "00042")
+    testing.assertEq(fmt.zeroPad(-7, 4), "-007")
+    testing.assertEq(fmt.zeroPad(12345, 3), "12345")
+}
+
+// ─── Float formatting ─────────────────────────────────────────────
+
+fn testFixed() {
+    testing.assertEq(fmt.fixed(3.14159, 2), "3.14")
+    testing.assertEq(fmt.fixed(0.0, 2), "0.00")
+    testing.assertEq(fmt.fixed(-1.5, 1), "-1.5")
+    testing.assertEq(fmt.fixed(1.0, 0), "1")
+    testing.assertEq(fmt.fixed(0.995, 2), "1.00")
+}
+
+fn testToFixedAlias() {
+    testing.assertEq(fmt.toFixed(2.5, 2), fmt.fixed(2.5, 2))
+}
+
+fn testScientific() {
+    testing.assertEq(fmt.scientific(12345.0, 2), "1.23e+4")
+    testing.assertEq(fmt.scientific(0.0012, 2), "1.20e-3")
+    testing.assertEq(fmt.scientific(0.0, 0), "0e+0")
+    testing.assertEq(fmt.scientific(-100.0, 1), "-1.0e+2")
+}
+
+fn testPercentage() {
+    testing.assertEq(fmt.percentage(0.5, 0), "50%")
+    testing.assertEq(fmt.percentage(0.1234, 2), "12.34%")
+    testing.assertEq(fmt.percentage(1.0, 1), "100.0%")
+}
+
+fn testRepeatFn() {
+    testing.assertEq(fmt.repeat("ab", 3), "ababab")
+    testing.assertEq(fmt.repeat("x", 0), "")
+}
+
+// ─── Number display ───────────────────────────────────────────────
+
+fn testThousands() {
+    testing.assertEq(fmt.thousands(0), "0")
+    testing.assertEq(fmt.thousands(1000), "1,000")
+    testing.assertEq(fmt.thousands(1234567), "1,234,567")
+    testing.assertEq(fmt.thousands(-1234567), "-1,234,567")
+    testing.assertEq(fmt.thousands(999), "999")
+    testing.assertEq(fmt.thousands(1000000, "_"), "1_000_000")
+}
+
+fn testOrdinal() {
+    testing.assertEq(fmt.ordinal(1), "1st")
+    testing.assertEq(fmt.ordinal(2), "2nd")
+    testing.assertEq(fmt.ordinal(3), "3rd")
+    testing.assertEq(fmt.ordinal(4), "4th")
+    testing.assertEq(fmt.ordinal(11), "11th")
+    testing.assertEq(fmt.ordinal(21), "21st")
+    testing.assertEq(fmt.ordinal(112), "112th")
+}
+
+fn testSign() {
+    testing.assertEq(fmt.sign(5), "+5")
+    testing.assertEq(fmt.sign(-3), "-3")
+    testing.assertEq(fmt.sign(0), "0")
+}
+
+fn testSignFloat() {
+    testing.assertEq(fmt.signFloat(2.5, 1), "+2.5")
+    testing.assertEq(fmt.signFloat(-2.5, 1), "-2.5")
+}
+
+fn testBytes() {
+    testing.assertEq(fmt.bytes(512), "512 B")
+    testing.assertEq(fmt.bytes(1024), "1.00 KiB")
+    testing.assertEq(fmt.bytes(1536), "1.50 KiB")
+    testing.assertEq(fmt.bytes(1048576), "1.00 MiB")
+}
+
+// ─── Sprintf ──────────────────────────────────────────────────────
+
+fn testFormatBasic() {
+    testing.assertEq(fmt.format(r"hello {0}", ["world"]), "hello world")
+    testing.assertEq(fmt.format(r"{0} + {1} = {2}", ["1", "2", "3"]), "1 + 2 = 3")
+}
+
+fn testFormatEscapes() {
+    testing.assertEq(fmt.format(r"{{0}}", ["x"]), r"{0}")
+    testing.assertEq(fmt.format(r"{0}{0}", ["ab"]), "abab")
+}
+
+fn testFormatOutOfRange() {
+    testing.assertEq(fmt.format(r"{5}", ["only"]), r"{5}")
+}
+
+// ─── Lists ────────────────────────────────────────────────────────
+
+fn testJoinWith() {
+    let nums = [1, 2, 3]
+    let result = fmt.joinWith(nums, "-", |n| n.toString())
+    testing.assertEq(result, "1-2-3")
+}
+
+fn testJoin() {
+    let empty: List<String> = []
+    testing.assertEq(fmt.join(["a", "b", "c"], ", "), "a, b, c")
+    testing.assertEq(fmt.join(["a", "b", "c"], ", ", " and "), "a, b and c")
+    testing.assertEq(fmt.join(["a", "b"], ", ", " and "), "a and b")
+    testing.assertEq(fmt.join(["a"], ", "), "a")
+    testing.assertEq(fmt.join(empty, ", "), "")
+}
+
+fn testBullet() {
+    let empty: List<String> = []
+    testing.assertEq(fmt.bullet(["a", "b"]), "- a\n- b")
+    testing.assertEq(fmt.bullet(["a"], "* "), "* a")
+    testing.assertEq(fmt.bullet(empty), "")
+}
+
+fn testNumbered() {
+    testing.assertEq(fmt.numbered(["a", "b"]), "1. a\n2. b")
+}
+
+fn testTable() {
+    let headers = ["Name", "Age"]
+    let rows = [["Alice", "30"], ["Bob", "5"]]
+    let result = fmt.table(headers, rows)
+    let expected = "Name  | Age\n----- | ---\nAlice | 30 \nBob   | 5  "
+    testing.assertEq(result, expected)
+}

@@ -275,6 +275,9 @@ func (g *generator) rootPathsForTypeSeen(typ string, seen map[string]bool) [][]i
 	if info := g.enumsByType[typ]; info != nil && info.hasPayload {
 		seen[typ] = true
 		defer delete(seen, typ)
+		if info.isBoxed {
+			return [][]int{{1}}
+		}
 		if info.payloadTyp == "ptr" {
 			return [][]int{{1}}
 		}
@@ -326,6 +329,9 @@ func (g *generator) aggregateFieldType(typ string, index int) (string, bool) {
 		case 0:
 			return "i64", true
 		case 1:
+			if info.isBoxed {
+				return "ptr", true
+			}
 			return info.payloadTyp, true
 		}
 	}

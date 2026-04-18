@@ -120,6 +120,47 @@ pub fn llvmEnumPayloadVariant(
     llvmStructLiteral(emitter, typ, [llvmEnumVariant(typ, tag), payload])
 }
 
+/// Construct a heterogeneous-payload ("boxed") enum value: allocate a
+/// single-field GC heap slot for the variant payload, store the payload
+/// value into that slot, then assemble the outer `{i64 tag, ptr payload}`
+/// aggregate. The current ABI assumes every supported payload type
+/// (i64/double/ptr) is 8 bytes. Dispatch selects a trace-aware allocator
+/// when the payload is a managed pointer so the GC can follow it; scalar
+/// payloads use a no-trace allocator.
+pub fn llvmEnumBoxedPayloadVariant(
+    emitter: LlvmEmitter,
+    enumTyp: String,
+    tag: Int,
+    payload: LlvmValue,
+    site: String,
+) -> LlvmValue {
+    let symbol = if payload.typ == "ptr" {
+        "osty.rt.enum_alloc_ptr_v1"
+    } else {
+        "osty.rt.enum_alloc_scalar_v1"
+    }
+    let heapPtr = llvmCall(
+        emitter,
+        "ptr",
+        symbol,
+        [llvmStringLiteral(emitter, site)],
+    )
+    llvmStore(emitter, heapPtr, payload)
+    llvmStructLiteral(emitter, enumTyp, [llvmEnumVariant(enumTyp, tag), heapPtr])
+}
+
+/// Construct a payload-free variant of a boxed enum: `{i64 tag, ptr null}`.
+/// Shared by bare-only variants (e.g. `SemPreIdent.PreNone`) of an enum
+/// whose other variants carry heterogeneous payloads.
+pub fn llvmEnumBoxedBareVariant(
+    emitter: LlvmEmitter,
+    enumTyp: String,
+    tag: Int,
+) -> LlvmValue {
+    let nullPtr = LlvmValue { typ: "ptr", name: "null", pointer: false }
+    llvmStructLiteral(emitter, enumTyp, [llvmEnumVariant(enumTyp, tag), nullPtr])
+}
+
 pub fn llvmParam(name: String, typ: String) -> LlvmParam {
     LlvmParam { name, typ }
 }
@@ -333,6 +374,8 @@ pub fn llvmGcRuntimeDeclarations() -> List<String> {
         "declare ptr @osty.gc.load_v1(ptr)",
         "declare void @osty.gc.root_bind_v1(ptr)",
         "declare void @osty.gc.root_release_v1(ptr)",
+        "declare ptr @osty.rt.enum_alloc_ptr_v1(ptr)",
+        "declare ptr @osty.rt.enum_alloc_scalar_v1(ptr)",
     ]
 }
 
@@ -1986,7 +2029,8 @@ pub fn llvmChanIsClosed(emitter: LlvmEmitter, channel: LlvmValue) -> LlvmValue {
 /// Deterministic naming is what lets two closures with the same
 /// capture shape share a single `%type` definition.
 pub fn llvmClosureEnvTypeName(elemTags: List<String>) -> String {
-    "ClosureEnv.{llvmStrings.join(elemTags, ".")}"
+    let joined = llvmStrings.join(elemTags, ".")
+    "ClosureEnv.{joined}"
 }
 
 /// Render the `%{name} = type { … }` declaration for a closure env.
@@ -2096,7 +2140,8 @@ pub fn llvmClosureCallIndirect(
         args.push(arg)
         paramTypes.push(arg.typ)
     }
-    let callType = "{returnType} ({llvmStrings.join(paramTypes, \", \")})"
+    let paramList = llvmStrings.join(paramTypes, ", ")
+    let callType = "{returnType} ({paramList})"
     let tmp = llvmNextTemp(emitter)
     emitter.body.push(
         "  {tmp} = call {callType} {fnPtr.name}({llvmCallArgs(args)})",
@@ -2484,7 +2529,7 @@ pub fn llvmEnumPayloadDiagnostic(
     if expectedType != "" && actualType != "" && expectedType != actualType {
         return llvmUnsupportedDiagnostic(
             "type-system",
-            "enum \"{enumName}\" mixes payload types {expectedType} and {actualType}",
+            "enum \"{enumName}\" mixes payload types {expectedType} and {actualType}; heterogeneous-payload enums require boxed representation (deferred)",
         )
     }
     llvmUnsupportedDiagnosticWith("", "", "", "")

@@ -1,0 +1,68 @@
+// concat_interp_test.osty — demonstrates the LLVM backend capabilities
+// added by wiring osty_rt_strings_Concat into emitBinary and
+// emitStringLiteral (internal/llvmgen/expr.go).
+//
+// Before this patch: every one of these assertions triggered
+// "interpolated String literals are not supported by LLVM" or
+// "binary operator on ptr/ptr". After the patch, all pass.
+
+use std.testing
+
+// ─── String `+` String ────────────────────────────────────────────
+
+fn testConcatBasic() {
+    testing.assertEq("a" + "b", "ab")
+}
+
+fn testConcatChain() {
+    testing.assertEq("x" + "y" + "z", "xyz")
+}
+
+fn testConcatMixedVarsAndLiterals() {
+    let greeting = "hello"
+    let target = "world"
+    testing.assertEq(greeting + ", " + target, "hello, world")
+}
+
+// ─── String interpolation (String parts only) ─────────────────────
+
+fn testInterpSingle() {
+    let name = "world"
+    testing.assertEq("hi, {name}!", "hi, world!")
+}
+
+fn testInterpMultiple() {
+    let a = "foo"
+    let b = "bar"
+    testing.assertEq("{a}_{b}_{a}", "foo_bar_foo")
+}
+
+fn testInterpAdjacent() {
+    let x = "X"
+    let y = "Y"
+    testing.assertEq("{x}{y}", "XY")
+}
+
+fn testInterpWithListIndex() {
+    let parts = ["a", "b", "c"]
+    testing.assertEq("{parts[0]}-{parts[1]}-{parts[2]}", "a-b-c")
+}
+
+fn testInterpInLoopMutation() {
+    let items = ["a", "b", "c", "d"]
+    let mut out = items[0]
+    for i in 1..items.len() {
+        out = "{out}-{items[i]}"
+    }
+    testing.assertEq(out, "a-b-c-d")
+}
+
+// ─── Raw strings (no interpolation; previously misrejected) ───────
+
+fn testRawPlain() {
+    testing.assertEq(r"hello", "hello")
+}
+
+fn testRawWithBraces() {
+    testing.assertEq(r"{literal-braces}", r"{literal-braces}")
+}

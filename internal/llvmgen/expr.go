@@ -59,17 +59,70 @@ func (g *generator) ifLetCondition(pattern ast.Pattern, scrutinee value) (*LlvmV
 }
 
 func (g *generator) emitStringLiteral(lit *ast.StringLit) (value, error) {
-	text, ok := plainStringLiteral(lit)
-	if !ok {
-		return value{}, unsupported("expression", "interpolated String literals are not supported by LLVM")
+	if lit == nil {
+		return value{}, unsupported("expression", "nil String literal")
 	}
-	if !llvmIsAsciiStringText(text) {
-		return value{}, unsupported("type-system", "plain String literals currently require ASCII text with printable bytes or newline, tab, and carriage-return escapes")
+	allLit := true
+	for _, part := range lit.Parts {
+		if !part.IsLit {
+			allLit = false
+			break
+		}
 	}
-	emitter := g.toOstyEmitter()
-	out := llvmStringLiteral(emitter, text)
-	g.takeOstyEmitter(emitter)
-	return fromOstyValue(out), nil
+	if allLit {
+		var b strings.Builder
+		for _, part := range lit.Parts {
+			b.WriteString(part.Lit)
+		}
+		text := b.String()
+		if !llvmIsAsciiStringText(text) {
+			return value{}, unsupported("type-system", "plain String literals currently require ASCII text with printable bytes or newline, tab, and carriage-return escapes")
+		}
+		emitter := g.toOstyEmitter()
+		out := llvmStringLiteral(emitter, text)
+		g.takeOstyEmitter(emitter)
+		return fromOstyValue(out), nil
+	}
+	return g.emitInterpolatedString(lit)
+}
+
+func (g *generator) emitInterpolatedString(lit *ast.StringLit) (value, error) {
+	if len(lit.Parts) == 0 {
+		emitter := g.toOstyEmitter()
+		out := llvmStringLiteral(emitter, "")
+		g.takeOstyEmitter(emitter)
+		return fromOstyValue(out), nil
+	}
+	pieces := make([]value, 0, len(lit.Parts))
+	for _, part := range lit.Parts {
+		if part.IsLit {
+			if !llvmIsAsciiStringText(part.Lit) {
+				return value{}, unsupported("type-system", "plain String literals currently require ASCII text with printable bytes or newline, tab, and carriage-return escapes")
+			}
+			emitter := g.toOstyEmitter()
+			out := llvmStringLiteral(emitter, part.Lit)
+			g.takeOstyEmitter(emitter)
+			pieces = append(pieces, fromOstyValue(out))
+			continue
+		}
+		v, err := g.emitExpr(part.Expr)
+		if err != nil {
+			return value{}, err
+		}
+		if v.typ != "ptr" || v.listElemTyp != "" || v.mapKeyTyp != "" {
+			return value{}, unsupportedf("type-system", "interpolation of %s value requires .toString() which the LLVM backend does not yet lower", v.typ)
+		}
+		pieces = append(pieces, v)
+	}
+	result := pieces[0]
+	for i := 1; i < len(pieces); i++ {
+		r, err := g.emitRuntimeStringConcat(result, pieces[i])
+		if err != nil {
+			return value{}, err
+		}
+		result = r
+	}
+	return result, nil
 }
 
 func (g *generator) emitExpr(expr ast.Expr) (value, error) {
@@ -527,6 +580,17 @@ func (g *generator) enumVariantIdent(name string) (value, bool, error) {
 }
 
 func (g *generator) enumVariantConstant(info *enumInfo, variant variantInfo) (value, error) {
+	if info.isBoxed {
+		if len(variant.payloads) != 0 {
+			return value{}, unsupportedf("expression", "enum variant %q requires a payload", variant.name)
+		}
+		emitter := g.toOstyEmitter()
+		out := llvmEnumBoxedBareVariant(emitter, info.typ, variant.tag)
+		g.takeOstyEmitter(emitter)
+		enumValue := fromOstyValue(out)
+		enumValue.rootPaths = g.rootPathsForType(info.typ)
+		return enumValue, nil
+	}
 	if info.hasPayload {
 		if len(variant.payloads) != 0 {
 			return value{}, unsupportedf("expression", "enum variant %q requires a payload", variant.name)
@@ -568,6 +632,16 @@ func (g *generator) enumVariantByField(expr *ast.FieldExpr) (enumVariantRef, boo
 func (g *generator) emitEnumPayloadVariant(info *enumInfo, variant variantInfo, payload value) (value, error) {
 	if !info.hasPayload {
 		return value{}, unsupportedf("expression", "enum %q has no payload layout", info.name)
+	}
+	if info.isBoxed {
+		emitter := g.toOstyEmitter()
+		site := "enum." + info.name + "." + variant.name
+		out := llvmEnumBoxedPayloadVariant(emitter, info.typ, variant.tag, toOstyValue(payload), site)
+		g.takeOstyEmitter(emitter)
+		g.needsGCRuntime = true
+		enumValue := fromOstyValue(out)
+		enumValue.rootPaths = g.rootPathsForType(info.typ)
+		return enumValue, nil
 	}
 	if payload.typ != info.payloadTyp {
 		return value{}, unsupportedf("type-system", "enum %q variant %q payload type %s, want %s", info.name, variant.name, payload.typ, info.payloadTyp)
@@ -650,6 +724,9 @@ func (g *generator) emitBinary(e *ast.BinaryExpr) (value, error) {
 		out := llvmBinaryF64(emitter, op, toOstyValue(left), toOstyValue(right))
 		g.takeOstyEmitter(emitter)
 		return fromOstyValue(out), nil
+	}
+	if left.typ == "ptr" && right.typ == "ptr" && e.Op == token.PLUS {
+		return g.emitRuntimeStringConcat(left, right)
 	}
 	if left.typ != "i64" || right.typ != "i64" {
 		return value{}, unsupportedf("type-system", "binary operator %q on %s/%s", e.Op, left.typ, right.typ)
@@ -818,6 +895,17 @@ func (g *generator) emitQuestionExprResult(expr *ast.QuestionExpr, info builtinR
 		out.gcManaged = true
 	}
 	return out, nil
+}
+
+func (g *generator) emitRuntimeStringConcat(left, right value) (value, error) {
+	g.declareRuntimeSymbol("osty_rt_strings_Concat", "ptr", []paramInfo{
+		{typ: "ptr"},
+		{typ: "ptr"},
+	})
+	emitter := g.toOstyEmitter()
+	out := llvmStringConcat(emitter, toOstyValue(left), toOstyValue(right))
+	g.takeOstyEmitter(emitter)
+	return fromOstyValue(out), nil
 }
 
 func (g *generator) emitRuntimeStringCompare(op token.Kind, left, right value) (value, error) {
@@ -2087,7 +2175,13 @@ func (g *generator) bindPayloadEnumPattern(scrutinee value, pattern enumPatternI
 		return nil
 	}
 	emitter := g.toOstyEmitter()
-	payload := llvmExtractValue(emitter, toOstyValue(scrutinee), pattern.payloadType, 1)
+	var payload *LlvmValue
+	if pattern.isBoxed {
+		heapPtr := llvmExtractValue(emitter, toOstyValue(scrutinee), "ptr", 1)
+		payload = llvmLoadFromSlot(emitter, heapPtr, pattern.payloadType)
+	} else {
+		payload = llvmExtractValue(emitter, toOstyValue(scrutinee), pattern.payloadType, 1)
+	}
 	g.takeOstyEmitter(emitter)
 	payloadValue := fromOstyValue(payload)
 	payloadValue.listElemTyp = pattern.payloadListElemTyp
@@ -2107,7 +2201,7 @@ func (g *generator) matchPayloadEnumPattern(info *enumInfo, pattern ast.Pattern)
 		if len(variant.payloads) != 0 {
 			return enumPatternInfo{}, true, unsupportedf("expression", "enum variant pattern %q must bind its payload", p.Name)
 		}
-		return enumPatternInfo{variant: variant}, true, nil
+		return enumPatternInfo{variant: variant, isBoxed: info.isBoxed}, true, nil
 	case *ast.VariantPat:
 		if len(p.Path) == 0 || len(p.Path) > 2 {
 			return enumPatternInfo{}, false, nil
@@ -2123,7 +2217,7 @@ func (g *generator) matchPayloadEnumPattern(info *enumInfo, pattern ast.Pattern)
 		if len(p.Args) != len(variant.payloads) {
 			return enumPatternInfo{}, true, unsupportedf("expression", "enum variant pattern %q payload count", name)
 		}
-		out := enumPatternInfo{variant: variant}
+		out := enumPatternInfo{variant: variant, isBoxed: info.isBoxed}
 		if len(variant.payloads) == 0 {
 			return out, true, nil
 		}

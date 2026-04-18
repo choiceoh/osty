@@ -3512,9 +3512,6 @@ func frontStringStructureScan(units []string, start int, unitCount int, kind Fro
 	// Osty: /tmp/selfhost_merged.osty:1653:5
 	skip := 0
 	_ = skip
-	// Osty: /tmp/selfhost_merged.osty:1654:5
-	escaped := false
-	_ = escaped
 	// Osty: /tmp/selfhost_merged.osty:1655:5
 	for idx := contentStart; idx < contentEnd; idx++ {
 		// Osty: /tmp/selfhost_merged.osty:1656:9
@@ -3536,10 +3533,7 @@ func frontStringStructureScan(units []string, start int, unitCount int, kind Fro
 			unit := frontUnitAt(units, idx)
 			_ = unit
 			// Osty: /tmp/selfhost_merged.osty:1660:13
-			if escaped {
-				// Osty: /tmp/selfhost_merged.osty:1661:17
-				escaped = false
-			} else if unit == "\\" {
+			if unit == "\\" {
 				// Osty: /tmp/selfhost_merged.osty:1663:17
 				escape := frontEscapeScan(units, func() int {
 					var _p202 int = idx
@@ -3593,8 +3587,6 @@ func frontStringStructureScan(units []string, start int, unitCount int, kind Fro
 						return _p208 + _rhs209
 					}()
 				}
-				// Osty: /tmp/selfhost_merged.osty:1674:17
-				escaped = true
 				// Osty: /tmp/selfhost_merged.osty:1675:17
 				skip = escape.consumed
 			} else if unit == "{" {
@@ -6247,6 +6239,10 @@ func frontStringLikeScan(units []string, start int, unitCount int, kind FrontTok
 		return _p492 + _rhs493
 	}()
 	_ = contentStart
+	braceDepth := 0
+	_ = braceDepth
+	skip := 0
+	_ = skip
 	// Osty: /tmp/selfhost_merged.osty:2556:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRawString{})) {
 		// Osty: /tmp/selfhost_merged.osty:2557:9
@@ -6390,16 +6386,8 @@ func frontStringLikeScan(units []string, start int, unitCount int, kind FrontTok
 			}()
 		}
 	}
-	// Hand-patched: `skip` gates the body so the `{` branch below can
-	// delegate a balanced interpolation to frontBalancedInterpolationSkip.
-	// See toolchain/frontend.osty for the canonical Osty form.
-	skip := 0
 	// Osty: /tmp/selfhost_merged.osty:2581:5
 	for idx := contentStart; idx < unitCount; idx++ {
-		if skip > 0 {
-			skip--
-			continue
-		}
 		// Osty: /tmp/selfhost_merged.osty:2582:9
 		unit := frontUnitAt(units, idx)
 		_ = unit
@@ -6459,7 +6447,33 @@ func frontStringLikeScan(units []string, start int, unitCount int, kind FrontTok
 			consumed = _cur520 + _rhs521
 		}()
 		// Osty: /tmp/selfhost_merged.osty:2599:9
-		if !ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRawString{})) && escaped {
+		if skip > 0 {
+			skip = skip - 1
+		} else if braceDepth > 0 {
+			if unit == "{" {
+				braceDepth = braceDepth + 1
+			} else if unit == "}" {
+				braceDepth = braceDepth - 1
+			} else if unit == "\"" {
+				inner := frontStringLikeScan(units, idx, unitCount, FrontTokenKind(&FrontTokenKind_FrontString{}))
+				skip = inner.consumed - 1
+			} else if unit == "r" && next == "\"" {
+				inner := frontStringLikeScan(units, idx, unitCount, FrontTokenKind(&FrontTokenKind_FrontRawString{}))
+				skip = inner.consumed - 1
+			} else if unit == "b" && next == "'" {
+				inner := frontStringLikeScan(units, idx, unitCount, FrontTokenKind(&FrontTokenKind_FrontByte{}))
+				skip = inner.consumed - 1
+			} else if unit == "'" {
+				inner := frontStringLikeScan(units, idx, unitCount, FrontTokenKind(&FrontTokenKind_FrontChar{}))
+				skip = inner.consumed - 1
+			} else if unit == "/" && next == "/" {
+				commentLen := frontLineCommentSkip(units, idx+2, unitCount) + 1
+				skip = commentLen - 1
+			} else if unit == "/" && next == "*" {
+				block := frontBlockCommentSkip(units, idx, unitCount)
+				skip = block.consumed - 1
+			}
+		} else if !ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRawString{})) && escaped {
 			// Osty: /tmp/selfhost_merged.osty:2600:13
 			escaped = false
 		} else if !ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRawString{})) && unit == "\\" {
@@ -6478,9 +6492,7 @@ func frontStringLikeScan(units []string, start int, unitCount int, kind FrontTok
 				}
 				interpolations = _cur522 + _rhs523
 			}()
-			skipUnits := frontBalancedInterpolationSkip(units, idx, unitCount)
-			consumed += skipUnits - 1
-			skip = skipUnits - 1
+			braceDepth = 1
 		} else if triple && unit == close && next == close && third == close {
 			// Osty: /tmp/selfhost_merged.osty:2606:13
 			return frontDetailedScanResult(kind, func() int {
@@ -6510,65 +6522,6 @@ func frontStringLikeScan(units []string, start int, unitCount int, kind FrontTok
 		}
 		return _p526 + _rhs527
 	}(), triple, interpolations, false, false)
-}
-
-// frontBalancedInterpolationSkip scans past a balanced `{...}` interpolation
-// expression starting at `start` (which must point at `{`) and returns the
-// total number of units covered, including the opening `{` and matching `}`.
-//
-// Nested strings are consumed via recursive frontStringLikeScan so a `"`
-// inside a nested string does not terminate the outer string. A `\` + its
-// next unit are passed through together so a `\"` sequence in expression
-// context is not mistaken for a nested string open.
-//
-// If no matching `}` is found before unitCount, the distance to unitCount is
-// returned; the outer scanner then reports its own unterminated-string
-// diagnostic, and frontStringStructureScan later emits an
-// unterminated-interpolation diagnostic on the same region.
-//
-// Hand-authored in generated.go. The canonical form lives in
-// toolchain/frontend.osty; when regen is usable again the Osty source
-// replaces this body.
-func frontBalancedInterpolationSkip(units []string, start int, unitCount int) int {
-	depth := 1
-	idx := start + 1
-	for idx < unitCount && depth > 0 {
-		unit := frontUnitAt(units, idx)
-		next := frontUnitAt(units, idx+1)
-		switch {
-		case unit == "{":
-			depth++
-			idx++
-		case unit == "}":
-			depth--
-			idx++
-		case unit == "\\":
-			idx += 2
-		case unit == "\"":
-			nested := frontStringLikeScan(units, idx, unitCount, FrontTokenKind(&FrontTokenKind_FrontString{}))
-			idx += nested.consumed
-		case unit == "r" && next == "\"":
-			nested := frontStringLikeScan(units, idx, unitCount, FrontTokenKind(&FrontTokenKind_FrontRawString{}))
-			idx += nested.consumed
-		case unit == "'":
-			nested := frontStringLikeScan(units, idx, unitCount, FrontTokenKind(&FrontTokenKind_FrontChar{}))
-			idx += nested.consumed
-		case unit == "b" && next == "'":
-			nested := frontStringLikeScan(units, idx, unitCount, FrontTokenKind(&FrontTokenKind_FrontByte{}))
-			idx += nested.consumed
-		case unit == "/" && next == "/":
-			idx += frontLineCommentSkip(units, idx+2, unitCount) + 2
-		case unit == "/" && next == "*":
-			block := frontBlockCommentSkip(units, idx, unitCount)
-			idx += block.consumed
-		default:
-			idx++
-		}
-	}
-	if idx > unitCount {
-		return unitCount - start
-	}
-	return idx - start
 }
 
 // Osty: /tmp/selfhost_merged.osty:2632:5
