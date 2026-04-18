@@ -29,6 +29,33 @@ the full v0.1 → v0.2 → v0.3 → v0.4 → v0.5 evolution.
 - `../OSTY_GRAMMAR_v0.4.md` — historical v0.4 grammar snapshot.
 - `../SPEC_GAPS.md` — archive of resolved gaps per version. No open items as of v0.5; new gap numbers are prohibited post-freeze.
 
+## `?`-family cheat sheet
+
+Four punctuation operators share the `?` glyph. They look related — three
+of them are — but each has a distinct role. Read this table before §4.
+
+| Form | Role | Operand → Result | Example | Spec |
+|---|---|---|---|---|
+| `expr?` | **Propagate** `Err`/`None` out of the enclosing function | `Result<T,E> → T` or `Option<T> → T` | `let cfg = parse(text)?` | §4.5 |
+| `expr?.m` | **Chain** on `Option`; short-circuit to `None` on the first missing step | `Option<T> → Option<U>` | `user?.address?.city` | §4.6 |
+| `lhs ?? rhs` | **Unwrap-or-default**; right side is lazy | `Option<T>, T → T` | `user?.name ?? "anon"` | §4.6 |
+| `err as? T` | **Downcast** an `Error` to its concrete nominal type (shortcut for `err.downcast::<T>()`) | `Error → T?` | `err as? FsError` | §7.4 (G27) |
+
+**Disambiguations (read once, save hours).**
+
+- `?` is legal on both `Result` and `Option`, but the enclosing function
+  must return the matching shape; mixing is a compile error — convert
+  with `Option.orError(msg)` or `Result.ok()`.
+- `?.` stays inside `Option`. It does **not** return from the function.
+  To exit a chain, end with `?` (`user?.address?.city?` in a fn
+  returning `Option<_>`).
+- `??` is `Option`-only. For `Result`, use `.unwrapOr(d)` / `match`.
+- `as?` is **not** a general type test. It works only on `Error`
+  values, using the nominal tag attached at up-cast time (§7.4). For
+  other "is it this variant?" questions, use pattern matching.
+- None of the four introduces null/nil. `?` in a type (`T?`) is sugar
+  for `Option<T>` (§2.5) — a separate surface.
+
 ## Table of Contents
 
 - [1. Lexical Structure](./01-lexical-structure.md)
