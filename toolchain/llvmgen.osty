@@ -1133,7 +1133,7 @@ pub fn llvmRuntimeFfiAlias(explicitAlias: String, lastPath: String, runtimePath:
     if lastPath != "" {
         return lastPath
     }
-    let parts = llvmStrings.Split(runtimePath, ".")
+    let parts = llvmStrings.split(runtimePath, ".")
     if parts.len() == 0 {
         return ""
     }

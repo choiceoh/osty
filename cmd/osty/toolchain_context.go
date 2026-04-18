@@ -76,7 +76,7 @@ func toolchainPackageInputFiles(sourcePath string) []string {
 		return nil
 	}
 	base := filepath.Base(sourcePath)
-	if strings.HasSuffix(base, "_test.osty") || base == "ast_lower.osty" {
+	if strings.HasSuffix(base, "_test.osty") {
 		return nil
 	}
 	entries, err := os.ReadDir(dir)
@@ -92,7 +92,7 @@ func toolchainPackageInputFiles(sourcePath string) []string {
 		if !strings.HasSuffix(name, ".osty") {
 			continue
 		}
-		if strings.HasSuffix(name, "_test.osty") || name == "ast_lower.osty" {
+		if strings.HasSuffix(name, "_test.osty") {
 			continue
 		}
 		files = append(files, filepath.Join(dir, name))

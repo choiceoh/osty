@@ -783,7 +783,11 @@ pub fn selfPkgLockChangeKindEq(a: SelfPkgLockChangeKind, b: SelfPkgLockChangeKin
 
 /// selfPkgRegistryEndpoint joins a base registry URL with path segments.
 pub fn selfPkgRegistryEndpoint(baseURL: String, segments: List<String>) -> String {
-    let mut parts: List<String> = [pkgStrings.TrimRight(baseURL, "/")]
+    let mut base = baseURL
+    for pkgStrings.hasSuffix(base, "/") {
+        base = pkgStrings.trimSuffix(base, "/")
+    }
+    let mut parts: List<String> = [base]
     for segment in segments {
         parts.push(segment)
     }
