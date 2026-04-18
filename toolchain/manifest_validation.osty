@@ -1,11 +1,11 @@
 use go "strings" as strings {
-    fn Contains(s: String, substr: String) -> Bool
-    fn Fields(s: String) -> List<String>
-    fn HasPrefix(s: String, prefix: String) -> Bool
-    fn Join(elems: List<String>, sep: String) -> String
-    fn Split(s: String, sep: String) -> List<String>
-    fn SplitN(s: String, sep: String, n: Int) -> List<String>
-    fn TrimSpace(s: String) -> String
+    fn contains(s: String, substr: String) -> Bool
+    fn fields(s: String) -> List<String>
+    fn hasPrefix(s: String, prefix: String) -> Bool
+    fn join(elems: List<String>, sep: String) -> String
+    fn split(s: String, sep: String) -> List<String>
+    fn splitN(s: String, sep: String, n: Int) -> List<String>
+    fn trimSpace(s: String) -> String
 }
 
 /// ManifestPackageSpec is the self-hosted subset of a [package] table.
@@ -364,7 +364,7 @@ pub fn manifestPackageNameValid(name: String) -> Bool {
         return false
     }
     let mut index = 0
-    for unit in strings.Split(name, "") {
+    for unit in strings.split(name, "") {
         if index == 0 {
             if !(manifestPackageNameStart(unit)) {
                 return false
@@ -378,16 +378,16 @@ pub fn manifestPackageNameValid(name: String) -> Bool {
 }
 
 pub fn manifestPackageVersionValid(version: String) -> Bool {
-    if version == "" || strings.HasPrefix(version, "v") {
+    if version == "" || strings.hasPrefix(version, "v") {
         return false
     }
 
-    let plus = splitSummary(strings.SplitN(version, "+", 2))
+    let plus = splitSummary(strings.splitN(version, "+", 2))
     if plus.count == 2 && !(buildIdentifiersValid(plus.second)) {
         return false
     }
 
-    let dash = splitSummary(strings.SplitN(plus.first, "-", 2))
+    let dash = splitSummary(strings.splitN(plus.first, "-", 2))
     let mut coreValid = false
     match parseSemCore(dash.first) {
         Ok(_) -> {
@@ -411,7 +411,7 @@ pub fn manifestEditionKnown(edition: String) -> Bool {
 }
 
 pub fn manifestTargetTripleValid(triple: String) -> Bool {
-    let parts = splitSummary(strings.SplitN(triple, "-", 2))
+    let parts = splitSummary(strings.splitN(triple, "-", 2))
     parts.count == 2 && parts.first != "" && parts.second != ""
 }
 
@@ -425,14 +425,14 @@ pub fn manifestProfileExists(name: String, profiles: List<ManifestProfileSpec>) 
 }
 
 pub fn manifestVersionReqValid(req: String) -> Bool {
-    let text = strings.TrimSpace(req)
+    let text = strings.trimSpace(req)
     if text == "" {
         return false
     }
     if text == "*" {
         return true
     }
-    for part in strings.Fields(text) {
+    for part in strings.fields(text) {
         if !(manifestVersionReqPartValid(part)) {
             return false
         }
@@ -645,7 +645,7 @@ fn manifestVersionIdentifiersValid(text: String) -> Bool {
     if text == "" {
         return false
     }
-    for part in strings.Split(text, ".") {
+    for part in strings.split(text, ".") {
         if !(identifierTextValid(part)) {
             return false
         }
@@ -654,13 +654,13 @@ fn manifestVersionIdentifiersValid(text: String) -> Bool {
 }
 
 fn manifestVersionReqPartValid(part: String) -> Bool {
-    if strings.HasPrefix(part, "^") {
+    if strings.hasPrefix(part, "^") {
         return manifestPartialVersionValid(manifestTrimPrefix1(part))
     }
-    if strings.HasPrefix(part, "~") {
+    if strings.hasPrefix(part, "~") {
         return manifestPartialVersionValid(manifestTrimPrefix1(part))
     }
-    if strings.Contains(part, "*") {
+    if strings.contains(part, "*") {
         return manifestWildcardReqValid(part)
     }
     let split = manifestSplitReqOp(part)
@@ -671,7 +671,7 @@ fn manifestPartialVersionValid(version: String) -> Bool {
     if version == "" {
         return false
     }
-    let text = if strings.HasPrefix(version, "v") {
+    let text = if strings.hasPrefix(version, "v") {
         manifestTrimPrefix1(version)
     } else {
         version
@@ -680,9 +680,9 @@ fn manifestPartialVersionValid(version: String) -> Bool {
         return false
     }
 
-    let plus = splitSummary(strings.SplitN(text, "+", 2))
-    let dash = splitSummary(strings.SplitN(plus.first, "-", 2))
-    let parts = splitSummary(strings.Split(dash.first, "."))
+    let plus = splitSummary(strings.splitN(text, "+", 2))
+    let dash = splitSummary(strings.splitN(plus.first, "-", 2))
+    let parts = splitSummary(strings.split(dash.first, "."))
     if parts.count < 1 || parts.count > 3 {
         return false
     }
@@ -702,7 +702,7 @@ fn manifestWildcardReqValid(req: String) -> Bool {
     if req == "*" {
         return true
     }
-    let parts = splitSummary(strings.Split(req, "."))
+    let parts = splitSummary(strings.split(req, "."))
     if parts.count > 3 {
         return false
     }
@@ -749,19 +749,19 @@ fn manifestReqNumberValid(text: String) -> Bool {
 }
 
 fn manifestSplitReqOp(part: String) -> SemSplit {
-    if strings.HasPrefix(part, ">=") {
+    if strings.hasPrefix(part, ">=") {
         return SemSplit { count: 2, first: ">=", second: manifestTrimPrefixN(part, 2), third: "" }
     }
-    if strings.HasPrefix(part, "<=") {
+    if strings.hasPrefix(part, "<=") {
         return SemSplit { count: 2, first: "<=", second: manifestTrimPrefixN(part, 2), third: "" }
     }
-    if strings.HasPrefix(part, ">") {
+    if strings.hasPrefix(part, ">") {
         return SemSplit { count: 2, first: ">", second: manifestTrimPrefix1(part), third: "" }
     }
-    if strings.HasPrefix(part, "<") {
+    if strings.hasPrefix(part, "<") {
         return SemSplit { count: 2, first: "<", second: manifestTrimPrefix1(part), third: "" }
     }
-    if strings.HasPrefix(part, "=") {
+    if strings.hasPrefix(part, "=") {
         return SemSplit { count: 2, first: "=", second: manifestTrimPrefix1(part), third: "" }
     }
     SemSplit { count: 1, first: "", second: part, third: "" }
@@ -772,7 +772,7 @@ fn manifestTrimPrefix1(text: String) -> String {
 }
 
 fn manifestTrimPrefixN(text: String, n: Int) -> String {
-    let units = strings.Split(text, "")
+    let units = strings.split(text, "")
     let mut out: List<String> = []
     let mut i = 0
     for unit in units {
@@ -781,7 +781,7 @@ fn manifestTrimPrefixN(text: String, n: Int) -> String {
         }
         i = i + 1
     }
-    strings.Join(out, "")
+    strings.join(out, "")
 }
 
 fn manifestBuiltinProfile(name: String) -> Bool {

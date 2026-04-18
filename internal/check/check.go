@@ -33,6 +33,26 @@ type Result struct {
 
 	// Diags aggregates the diagnostics produced during checking.
 	Diags []*diag.Diagnostic
+
+	// NativeCheckerTelemetry carries the per-context error histogram the
+	// bootstrapped native checker produced alongside the aggregate summary
+	// diagnostic. Populated by host_boundary on the File / Package / Workspace
+	// entry points. Consumed by `osty check --dump-native-diags`; nil when
+	// the native checker was unavailable or reported no errors.
+	NativeCheckerTelemetry *NativeCheckerTelemetry
+}
+
+// NativeCheckerTelemetry bundles the counters the bootstrapped native checker
+// surfaces to host tooling.
+type NativeCheckerTelemetry struct {
+	Assignments     int
+	Accepted        int
+	Errors          int
+	ErrorsByContext map[string]int
+	// ErrorDetails optionally maps a context key from ErrorsByContext to a
+	// finer breakdown — e.g. frontCheckIdentHint → unresolved identifier
+	// counts. Only populated at sites wired to selfhostBumpErrorWithDetail.
+	ErrorDetails map[string]map[string]int
 }
 
 // LookupSymType returns the declared type of a resolver symbol, or nil
