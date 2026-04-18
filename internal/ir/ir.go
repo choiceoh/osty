@@ -331,6 +331,15 @@ type FnDecl struct {
 	// the symbol can satisfy the runtime ABI contract; the two
 	// annotations are independently representable in the IR.
 	CABI bool
+
+	// IsIntrinsic is set when the function carries `#[intrinsic]`
+	// (LANG_SPEC §19.5 / §19.6). The body is a placeholder; the
+	// backend supplies the implementation at each call site (the
+	// 13 §19.5 `raw.*` intrinsics map to specific LLVM IR sequences
+	// per §19.7). The MIR pipeline currently bails on functions
+	// where this is set — backends must add per-intrinsic dispatch
+	// before the pipeline can consume them.
+	IsIntrinsic bool
 }
 
 func (*FnDecl) declNode()          {}
