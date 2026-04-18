@@ -628,17 +628,27 @@ fn astLowerUnquoteMaybe(s: String) -> String {
 }
 
 fn astLowerStringContent(s: String) -> String {
-    if strings.HasPrefix(s, "r\"\"\"") && strings.HasSuffix(s, "\"\"\"") {
-        return strings.TrimSuffix(strings.TrimPrefix(s, "r\"\"\""), "\"\"\"")
+    let n = s.len()
+    if n < 2 {
+        return s
     }
-    if strings.HasPrefix(s, "\"\"\"") && strings.HasSuffix(s, "\"\"\"") {
-        return astLowerDecodeEscapes(strings.TrimSuffix(strings.TrimPrefix(s, "\"\"\""), "\"\"\""))
+    let first = s[0..1]
+    if first == "\"" {
+        if n >= 6 && s[0..3] == "\"\"\"" && s[n - 3..n] == "\"\"\"" {
+            return astLowerDecodeEscapes(s[3..n - 3])
+        }
+        if s[n - 1..n] == "\"" {
+            return astLowerDecodeEscapes(s[1..n - 1])
+        }
+        return s
     }
-    if strings.HasPrefix(s, "r\"") && strings.HasSuffix(s, "\"") {
-        return strings.TrimSuffix(strings.TrimPrefix(s, "r\""), "\"")
-    }
-    if strings.HasPrefix(s, "\"") && strings.HasSuffix(s, "\"") {
-        return astLowerDecodeEscapes(strings.TrimSuffix(strings.TrimPrefix(s, "\""), "\""))
+    if first == "r" && s[1..2] == "\"" {
+        if n >= 7 && s[1..4] == "\"\"\"" && s[n - 3..n] == "\"\"\"" {
+            return s[4..n - 3]
+        }
+        if s[n - 1..n] == "\"" {
+            return s[2..n - 1]
+        }
     }
     s
 }
@@ -655,58 +665,62 @@ fn astLowerDecodedLiteral(s: String) -> String {
 }
 
 fn astLowerDecodeEscapes(s: String) -> String {
+    if strings.Count(s, "\\") == 0 {
+        return s
+    }
     let units = strings.Split(s, "")
-    let mut out = ""
+    let n = units.len()
+    let mut parts: List<String> = []
     let mut i = 0
-    for i < astLowerStringUnitCount(units) {
-        let unit = frontUnitAt(units, i)
+    for i < n {
+        let unit = units[i]
         if unit != "\\" {
-            out = "{out}{unit}"
+            parts.push(unit)
             i = i + 1
-        } else if i + 1 >= astLowerStringUnitCount(units) {
-            out = "{out}\\"
+        } else if i + 1 >= n {
+            parts.push("\\")
             i = i + 1
         } else {
-            let next = frontUnitAt(units, i + 1)
+            let next = units[i + 1]
             if next == "n" {
-                out = "{out}\n"
+                parts.push("\n")
                 i = i + 2
             } else if next == "r" {
-                out = "{out}\r"
+                parts.push("\r")
                 i = i + 2
             } else if next == "t" {
-                out = "{out}\t"
+                parts.push("\t")
                 i = i + 2
             } else if next == "0" {
-                out = "{out}{astbridge.RuneString(0)}"
+                parts.push(astbridge.RuneString(0))
                 i = i + 2
-            } else if next == "x" {
-                let high = frontHexValue(frontUnitAt(units, i + 2))
-                let low = frontHexValue(frontUnitAt(units, i + 3))
-                if i + 3 < astLowerStringUnitCount(units) && high >= 0 && low >= 0 {
+            } else if next == "x" && i + 3 < n {
+                let high = frontHexValue(units[i + 2])
+                let low = frontHexValue(units[i + 3])
+                if high >= 0 && low >= 0 {
                     let value: Int = (high * 16) + low
-                    out = "{out}{astbridge.RuneString(value)}"
+                    parts.push(astbridge.RuneString(value))
                     i = i + 4
                 } else {
-                    out = "{out}{next}"
+                    parts.push(next)
                     i = i + 2
                 }
-            } else if next == "u" && frontUnitAt(units, i + 2) == r"{" {
+            } else if next == "u" && i + 2 < n && units[i + 2] == r"{" {
                 let parsed = astLowerDecodeUnicodeEscape(units, i + 3)
                 if parsed.consumed > 0 {
-                    out = "{out}{astbridge.RuneString(parsed.value)}"
+                    parts.push(astbridge.RuneString(parsed.value))
                     i = i + 3 + parsed.consumed
                 } else {
-                    out = "{out}{next}"
+                    parts.push(next)
                     i = i + 2
                 }
             } else {
-                out = "{out}{next}"
+                parts.push(next)
                 i = i + 2
             }
         }
     }
-    out
+    strings.Join(parts, "")
 }
 
 struct AstLowerUnicodeEscape {
@@ -717,9 +731,9 @@ struct AstLowerUnicodeEscape {
 fn astLowerDecodeUnicodeEscape(units: List<String>, start: Int) -> AstLowerUnicodeEscape {
     let mut value = 0
     let mut consumed = 0
-    let total = astLowerStringUnitCount(units)
+    let total = units.len()
     for i in start..total {
-        let unit = frontUnitAt(units, i)
+        let unit = units[i]
         if unit == r"}" {
             if consumed == 0 {
                 return AstLowerUnicodeEscape { value: 0, consumed: 0 }
@@ -734,15 +748,6 @@ fn astLowerDecodeUnicodeEscape(units: List<String>, start: Int) -> AstLowerUnico
         consumed = consumed + 1
     }
     AstLowerUnicodeEscape { value: 0, consumed: 0 }
-}
-
-fn astLowerStringUnitCount(units: List<String>) -> Int {
-    let mut count = 0
-    for unit in units {
-        let _ = unit
-        count = count + 1
-    }
-    count
 }
 
 fn astLowerDecl(arena: AstArena, toks: List<astbridge.Token>, idx: Int) -> astbridge.Decl {
