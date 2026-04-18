@@ -1,0 +1,15 @@
+# concat_interp_e2e — regression harness for String `+` String and
+# String-only interpolation lowering via osty_rt_strings_Concat.
+# Kept separate from fmt_e2e so that unrelated fmt-module compile
+# failures don't mask this patch's behavior.
+#
+# Run from this directory:
+#
+#     osty test
+
+[package]
+name = "concat_interp_e2e"
+version = "0.1.0"
+edition = "0.3"
+
+[dependencies]
