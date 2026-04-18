@@ -1,0 +1,219 @@
+// std.char — ASCII classification and case folding for `Char`.
+//
+// Every predicate in this module considers only the U+0000..U+007F
+// range — non-ASCII scalars are treated as non-matching. For full
+// Unicode-category-aware tests (letters outside ASCII, non-ASCII
+// digits, etc.) use the Char intrinsic methods (`c.isDigit()`,
+// `c.isAlpha()`, ...), which the runtime backs with the full Unicode
+// database.
+//
+// The `isAscii*` prefix is deliberate: it makes the caller's
+// assumption visible at the call site. Lexer, JSON, CSV, URL, and
+// HTTP header parsers all want this surface — they work on bytes of a
+// well-defined grammar, not on arbitrary user text.
+
+// ---------- codepoint helpers ----------
+
+/// Unicode scalar value of `c` as an `Int`.
+pub fn codepoint(c: Char) -> Int {
+    c.toInt()
+}
+
+/// True if `c` is in the ASCII range U+0000..U+007F.
+pub fn isAscii(c: Char) -> Bool {
+    c <= '\u{7F}'
+}
+
+// ---------- ASCII classification ----------
+
+/// True if `c` is '0'..'9'.
+pub fn isAsciiDigit(c: Char) -> Bool {
+    '0' <= c && c <= '9'
+}
+
+/// True if `c` is '0'..'9', 'a'..'f', or 'A'..'F'.
+pub fn isAsciiHexDigit(c: Char) -> Bool {
+    isAsciiDigit(c) ||
+        ('a' <= c && c <= 'f') ||
+        ('A' <= c && c <= 'F')
+}
+
+/// True if `c` is '0'..'7'.
+pub fn isAsciiOctalDigit(c: Char) -> Bool {
+    '0' <= c && c <= '7'
+}
+
+/// True if `c` is '0' or '1'.
+pub fn isAsciiBinaryDigit(c: Char) -> Bool {
+    c == '0' || c == '1'
+}
+
+/// True if `c` is 'A'..'Z'.
+pub fn isAsciiUpper(c: Char) -> Bool {
+    'A' <= c && c <= 'Z'
+}
+
+/// True if `c` is 'a'..'z'.
+pub fn isAsciiLower(c: Char) -> Bool {
+    'a' <= c && c <= 'z'
+}
+
+/// True if `c` is an ASCII letter (A..Z or a..z).
+pub fn isAsciiAlpha(c: Char) -> Bool {
+    isAsciiUpper(c) || isAsciiLower(c)
+}
+
+/// True if `c` is an ASCII letter or digit.
+pub fn isAsciiAlphanumeric(c: Char) -> Bool {
+    isAsciiAlpha(c) || isAsciiDigit(c)
+}
+
+/// True if `c` is one of the six ASCII whitespace scalars:
+/// space, tab, LF, VT, FF, CR.
+pub fn isAsciiWhitespace(c: Char) -> Bool {
+    c == ' '      ||
+    c == '\t'     ||
+    c == '\n'     ||
+    c == '\u{0B}' ||   // VT
+    c == '\u{0C}' ||   // FF
+    c == '\r'
+}
+
+/// True if `c` is an ASCII control character: U+0000..U+001F or U+007F.
+pub fn isAsciiControl(c: Char) -> Bool {
+    c <= '\u{1F}' || c == '\u{7F}'
+}
+
+/// True if `c` is a printable ASCII character (space through tilde).
+pub fn isAsciiPrintable(c: Char) -> Bool {
+    ' ' <= c && c <= '~'
+}
+
+/// True if `c` is printable ASCII excluding space (U+0021..U+007E).
+pub fn isAsciiGraphic(c: Char) -> Bool {
+    '!' <= c && c <= '~'
+}
+
+/// True if `c` is one of the 32 ASCII punctuation scalars — the
+/// graphic ASCII characters that are neither letters nor digits.
+pub fn isAsciiPunctuation(c: Char) -> Bool {
+    isAsciiGraphic(c) && !isAsciiAlphanumeric(c)
+}
+
+/// True if `c` is LF or CR.
+pub fn isNewline(c: Char) -> Bool {
+    c == '\n' || c == '\r'
+}
+
+// ---------- ASCII case folding ----------
+
+/// ASCII-uppercase `c`. Non-ASCII-lowercase scalars are returned
+/// unchanged; this does NOT perform full Unicode case folding.
+pub fn toAsciiUpper(c: Char) -> Char {
+    if isAsciiLower(c) {
+        (c.toInt() - ('a'.toInt() - 'A'.toInt())).toChar()
+    } else {
+        c
+    }
+}
+
+/// ASCII-lowercase `c`. Non-ASCII-uppercase scalars are returned
+/// unchanged; this does NOT perform full Unicode case folding.
+pub fn toAsciiLower(c: Char) -> Char {
+    if isAsciiUpper(c) {
+        (c.toInt() + ('a'.toInt() - 'A'.toInt())).toChar()
+    } else {
+        c
+    }
+}
+
+/// True if `a` and `b` are equal under ASCII-only case folding.
+pub fn eqIgnoreAsciiCase(a: Char, b: Char) -> Bool {
+    toAsciiLower(a) == toAsciiLower(b)
+}
+
+// ---------- numeric parsing ----------
+
+/// Decimal value of an ASCII digit, or `None` if `c` is not '0'..'9'.
+pub fn digitValue(c: Char) -> Int? {
+    let n = c.toInt()
+    let zero = '0'.toInt()
+    if n >= zero && n <= '9'.toInt() {
+        Some(n - zero)
+    } else {
+        None
+    }
+}
+
+/// Value (0..15) of an ASCII hex digit, or `None` if `c` is not a hex
+/// digit. Both uppercase and lowercase letters are accepted.
+pub fn hexDigitValue(c: Char) -> Int? {
+    let n = c.toInt()
+    if n >= '0'.toInt() && n <= '9'.toInt() {
+        Some(n - '0'.toInt())
+    } else if n >= 'a'.toInt() && n <= 'f'.toInt() {
+        Some(n - 'a'.toInt() + 10)
+    } else if n >= 'A'.toInt() && n <= 'F'.toInt() {
+        Some(n - 'A'.toInt() + 10)
+    } else {
+        None
+    }
+}
+
+/// Value (0..7) of an ASCII octal digit, or `None` otherwise.
+pub fn octalDigitValue(c: Char) -> Int? {
+    let n = c.toInt()
+    let zero = '0'.toInt()
+    if n >= zero && n <= '7'.toInt() {
+        Some(n - zero)
+    } else {
+        None
+    }
+}
+
+/// Value in `radix` (2..36) of `c`, or `None` if `c` is not a valid
+/// digit in that radix. `radix` out of range returns `None`.
+pub fn toDigit(c: Char, radix: Int) -> Int? {
+    if radix < 2 || radix > 36 {
+        return None
+    }
+    let v = if isAsciiDigit(c) {
+        c.toInt() - '0'.toInt()
+    } else if 'a' <= c && c <= 'z' {
+        c.toInt() - 'a'.toInt() + 10
+    } else if 'A' <= c && c <= 'Z' {
+        c.toInt() - 'A'.toInt() + 10
+    } else {
+        return None
+    }
+    if v < radix {
+        Some(v)
+    } else {
+        None
+    }
+}
+
+/// ASCII digit for `d` in 0..9, or `None` otherwise.
+pub fn fromAsciiDigit(d: Int) -> Char? {
+    if 0 <= d && d <= 9 {
+        Some(('0'.toInt() + d).toChar())
+    } else {
+        None
+    }
+}
+
+/// ASCII digit for `d` in `radix` (2..36). Lowercase for letters.
+/// Returns `None` if `d` or `radix` is out of range.
+pub fn fromDigit(d: Int, radix: Int) -> Char? {
+    if radix < 2 || radix > 36 {
+        return None
+    }
+    if d < 0 || d >= radix {
+        return None
+    }
+    if d < 10 {
+        Some(('0'.toInt() + d).toChar())
+    } else {
+        Some(('a'.toInt() + d - 10).toChar())
+    }
+}
