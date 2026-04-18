@@ -1004,8 +1004,6 @@ fn astLowerLetDecl(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> 
         name = patNode.text
     } else if patNode.kind == AstNPattern && patNode.extra == astPatternIdentKind() {
         name = patNode.text
-    } else if strings.HasPrefix(patNode.text, "ident:") {
-        name = strings.TrimPrefix(patNode.text, "ident:")
     }
     astbridge.LetDeclNode(
         astLowerNodePos(toks, n),
@@ -1514,7 +1512,7 @@ fn astLowerPattern(arena: AstArena, toks: List<astbridge.Token>, idx: Int) -> as
     if n.kind == AstNPattern && n.extra > 0 {
         return astLowerStructuredPattern(arena, toks, n)
     }
-    astLowerTextPattern(arena, toks, n)
+    astbridge.WildcardPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n))
 }
 
 fn astLowerTuplePat(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Pattern {
@@ -1580,68 +1578,6 @@ fn astLowerStructuredPattern(arena: AstArena, toks: List<astbridge.Token>, n: As
     astbridge.WildcardPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n))
 }
 
-fn astLowerTextPattern(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Pattern {
-    if strings.HasPrefix(n.text, "ident:") {
-        return astbridge.IdentPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), strings.TrimPrefix(n.text, "ident:"))
-    }
-    if n.text == "wildcard" {
-        return astbridge.WildcardPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n))
-    }
-    if strings.HasPrefix(n.text, "literal:") {
-        return astbridge.LiteralPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerLiteralPatternExpr(toks, n))
-    }
-    if n.text == "negLiteral" {
-        return astbridge.LiteralPatNode(
-            astLowerNodePos(toks, n),
-            astLowerNodeEnd(toks, n),
-            astbridge.UnaryExprNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerKind(FrontMinus), astLowerLiteralPatternExpr(toks, astArenaNodeAt(arena, n.left))),
-        )
-    }
-    if n.text == "tuple" {
-        return astLowerTuplePat(arena, toks, n)
-    }
-    if strings.HasPrefix(n.text, "variant:") {
-        let mut args = astbridge.EmptyPatternList()
-        for child in n.children {
-            let p = astLowerPattern(arena, toks, child)
-            if !(astbridge.IsNilPattern(p)) {
-                args.push(p)
-            }
-        }
-        return astbridge.VariantPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerSplitPath(strings.TrimPrefix(n.text, "variant:")), args)
-    }
-    if strings.HasPrefix(n.text, "struct:") {
-        let mut fields = astbridge.EmptyStructPatFieldList()
-        for child in n.children {
-            let cn = astArenaNodeAt(arena, child)
-            if cn.text != "" && cn.left >= 0 {
-                fields.push(astbridge.StructPatFieldNode(astLowerNodePos(toks, cn), cn.text, astLowerPattern(arena, toks, cn.left)))
-            } else {
-                let pat = astLowerPattern(arena, toks, child)
-                let childNode = astArenaNodeAt(arena, child)
-                if childNode.kind == AstNIdent {
-                    fields.push(astbridge.StructPatFieldNode(astLowerNodePos(toks, childNode), childNode.text, astbridge.NilPattern()))
-                } else if strings.HasPrefix(childNode.text, "ident:") {
-                    fields.push(astbridge.StructPatFieldNode(astLowerNodePos(toks, childNode), strings.TrimPrefix(childNode.text, "ident:"), astbridge.NilPattern()))
-                } else if !(astbridge.IsNilPattern(pat)) {
-                    fields.push(astbridge.StructPatFieldNode(astLowerNodePos(toks, childNode), "", pat))
-                }
-            }
-        }
-        return astbridge.StructPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerSplitPath(strings.TrimPrefix(n.text, "struct:")), fields, n.flags == 1)
-    }
-    if strings.HasPrefix(n.text, "binding:") {
-        return astbridge.BindingPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), strings.TrimPrefix(n.text, "binding:"), astLowerPattern(arena, toks, n.left))
-    }
-    if n.text == "range" {
-        return astbridge.RangePatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerPatternLiteralExpr(arena, toks, n.left), astLowerPatternLiteralExpr(arena, toks, n.right), n.flags == 1)
-    }
-    if n.text == "or" {
-        return astbridge.OrPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerOrAlts(arena, toks, n))
-    }
-    astbridge.WildcardPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n))
-}
-
 fn astLowerOrAlts(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> List<astbridge.Pattern> {
     let mut out = astbridge.EmptyPatternList()
     out = astLowerCollectOrAlt(arena, toks, n.left, out)
@@ -1653,7 +1589,7 @@ fn astLowerCollectOrAlt(arena: AstArena, toks: List<astbridge.Token>, idx: Int, 
         return out
     }
     let n = astArenaNodeAt(arena, idx)
-    if n.extra == astPatternOrKind() || n.text == "or" {
+    if n.extra == astPatternOrKind() {
         let left = astLowerCollectOrAlt(arena, toks, n.left, out)
         return astLowerCollectOrAlt(arena, toks, n.right, left)
     }
@@ -1673,7 +1609,7 @@ fn astLowerPatternLiteralExpr(arena: AstArena, toks: List<astbridge.Token>, idx:
 }
 
 fn astLowerPatternLiteralExprNode(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Expr {
-    if n.text == "negLiteral" || (n.extra == astPatternLiteralKind() && n.text == "-" && n.left >= 0) {
+    if n.extra == astPatternLiteralKind() && n.text == "-" && n.left >= 0 {
         return astbridge.UnaryExprNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerKind(FrontMinus), astLowerLiteralPatternExpr(toks, astArenaNodeAt(arena, n.left)))
     }
     astLowerLiteralPatternExpr(toks, n)
@@ -1682,7 +1618,7 @@ fn astLowerPatternLiteralExprNode(arena: AstArena, toks: List<astbridge.Token>, 
 fn astLowerLiteralPatternExpr(toks: List<astbridge.Token>, n: AstNode) -> astbridge.Expr {
     let pos = astLowerNodePos(toks, n)
     let end = astLowerNodeEnd(toks, n)
-    let text = strings.TrimPrefix(n.text, "literal:")
+    let text = n.text
     if n.op == FrontInt {
         return astbridge.IntLitExpr(pos, end, text)
     }
