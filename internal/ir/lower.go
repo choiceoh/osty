@@ -133,6 +133,7 @@ func (l *lowerer) lowerFnDecl(fn *ast.FnDecl) *FnDecl {
 		SpanV:        nodeSpan(fn),
 		ExportSymbol: extractExportSymbol(fn.Annotations),
 		CABI:         hasNamedAnnotation(fn.Annotations, "c_abi"),
+		IsIntrinsic:  hasNamedAnnotation(fn.Annotations, "intrinsic"),
 	}
 	if out.Return == nil {
 		out.Return = TUnit
