@@ -129,21 +129,19 @@ Two equally-valid fixes:
    primitives (`stringAt`, char-index loops, etc). Faster, but doesn't
    help any of the other files that will eventually want `std.strings`.
 
-### E0001 — parser trips on `def: Expr` parameter
+### E0001 — parser trips on `def: Expr` parameter — **fixed**
 
-```
-fn FieldNode(pos: Pos, end: Pos, isPub: Bool, name: String, typ: Type, def: Expr, …)
-fn ParamNode(pos: Pos, end: Pos, name: String, pat: Pattern, typ: Type, def: Expr)
-```
+Root cause was the stable-alias pre-pass in `internal/parser/normalize.go`:
+it rewrote every `IDENT` token matching `def` / `func` / `function` /
+`import` / `while` to its canonical keyword form, regardless of position.
+`fn FieldNode(…, def: Expr, …)` and `fn ParamNode(…, def: Expr)` therefore
+had `def` silently rewritten to `fn`, producing four E0001 diagnostics at
+`ast_lower.osty:91` and `:93`.
 
-Both signatures live inside a `use runtime.golegacy.astbridge as astbridge {
-... }` FFI block (lines 1 – 254 of `ast_lower.osty`). The parser reports
-"expected IDENT, got fn" at the column of `def`, which suggests `def` is
-being handled as a reserved keyword in this position even though the
-grammar spec (`OSTY_GRAMMAR_v0.4.md`) doesn't list it. Worth double-checking
-the FFI-block param parser specifically — the regular fn-decl param parser
-accepts `def` fine (see `toolchain/ir.osty` and `ast_lower.osty:1043` which
-use `let mut def = …`).
+Fix: in `normalizeStableAliases`, skip the rewrite when the identifier is
+immediately followed by `:` (parameter / struct field / keyword-argument
+slot). Regression test in
+`internal/parser/parser_features_test.go::TestParseStableAliasesPreservedAsIdentifiers`.
 
 ### E0700 — 1700 checker errors, 97.6% accept rate
 
@@ -183,8 +181,9 @@ runnable binary" is dominated by Layer 1 + Layer 2, not Layer 3.
    one file say the demand is real) or rewrite `ast_lower.osty` against
    existing primitives. Unblocks `ast_lower.osty`.
 
-4. **Investigate parser sensitivity to `def`** inside FFI `use` blocks.
-   One call site, low effort, cleans up E0001/E0010.
+4. ~~**Investigate parser sensitivity to `def`** inside FFI `use` blocks.~~
+   Done — stable-alias pre-pass now skips rewrites when the identifier
+   sits in `name : type` position.
 
 5. **Re-run `osty check toolchain`** — expect the 1700 native-checker
    summary to collapse with most cascades gone. Remaining tail becomes a
