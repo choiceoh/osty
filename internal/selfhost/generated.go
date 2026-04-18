@@ -26904,6 +26904,14 @@ func frontCheckIsAssignable(env *FrontCheckEnv, dstRaw string, srcRaw string) bo
 		// Osty: /tmp/selfhost_merged.osty:10573:9
 		return true
 	}
+	// `use X as alias { struct Foo {} fn NilFoo() -> Foo }` registers the
+	// return type in bare form (`Foo`) while call-site annotations qualify
+	// it (`alias.Foo`). The bootstrapped type table has no edge joining
+	// the two, so treat them as the same type when their last dotted
+	// segment matches modulo a bare `<identifier>.` prefix on one side.
+	if selfhostTypesAliasEqual(dst, src) {
+		return true
+	}
 	// Osty: /tmp/selfhost_merged.osty:10575:5
 	if src == "UntypedInt" {
 		// Osty: /tmp/selfhost_merged.osty:10576:9
@@ -27085,7 +27093,7 @@ func frontCheckExpectAssignable(env *FrontCheckEnv, dst string, src string) {
 		}()
 	} else {
 		// Osty: /tmp/selfhost_merged.osty:10646:12
-		selfhostBumpError(env)
+		selfhostBumpErrorWithDetail(env, fmt.Sprintf("%s <- %s", dst, src))
 	}
 }
 
@@ -28016,7 +28024,7 @@ func frontCheckBinary(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
 			return "Bool"
 		}
 		// Osty: /tmp/selfhost_merged.osty:11129:12
-		selfhostBumpError(env)
+		selfhostBumpErrorWithDetail(env, fmt.Sprintf("eq: %s, %s", left, right))
 		// Osty: /tmp/selfhost_merged.osty:11130:9
 		return "Invalid"
 	}
@@ -28028,7 +28036,7 @@ func frontCheckBinary(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
 			return "Bool"
 		}
 		// Osty: /tmp/selfhost_merged.osty:11136:12
-		selfhostBumpError(env)
+		selfhostBumpErrorWithDetail(env, fmt.Sprintf("ord: %s, %s", left, right))
 		// Osty: /tmp/selfhost_merged.osty:11137:9
 		return "Invalid"
 	}
@@ -28040,7 +28048,7 @@ func frontCheckBinary(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
 			return "Bool"
 		}
 		// Osty: /tmp/selfhost_merged.osty:11143:12
-		selfhostBumpError(env)
+		selfhostBumpErrorWithDetail(env, fmt.Sprintf("logical: %s, %s", left, right))
 		// Osty: /tmp/selfhost_merged.osty:11144:9
 		return "Invalid"
 	}
@@ -28049,7 +28057,7 @@ func frontCheckBinary(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
 		// Osty: /tmp/selfhost_merged.osty:11147:9
 		if frontCheckTypeHead(left) != "Option" {
 			// Osty: /tmp/selfhost_merged.osty:11148:16
-			selfhostBumpError(env)
+			selfhostBumpErrorWithDetail(env, fmt.Sprintf("?? lhs: %s", left))
 			// Osty: /tmp/selfhost_merged.osty:11149:13
 			return "Invalid"
 		}
@@ -28074,7 +28082,7 @@ func frontCheckBinary(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
 			return left
 		}
 		// Osty: /tmp/selfhost_merged.osty:11162:12
-		selfhostBumpError(env)
+		selfhostBumpErrorWithDetail(env, fmt.Sprintf("bit: %s, %s", left, right))
 		// Osty: /tmp/selfhost_merged.osty:11163:9
 		return "Invalid"
 	}
@@ -28083,7 +28091,7 @@ func frontCheckBinary(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
 		// Osty: /tmp/selfhost_merged.osty:11166:9
 		if !(frontCheckIsNumeric(left)) || !(frontCheckIsNumeric(right)) {
 			// Osty: /tmp/selfhost_merged.osty:11167:16
-			selfhostBumpError(env)
+			selfhostBumpErrorWithDetail(env, fmt.Sprintf("arith: %s, %s", left, right))
 			// Osty: /tmp/selfhost_merged.osty:11168:13
 			return "Invalid"
 		}
@@ -28445,7 +28453,7 @@ func frontCheckCallHint(file *AstFile, env *FrontCheckEnv, callIdx int, node *As
 		// Osty: /tmp/selfhost_merged.osty:11343:9
 		if !(frontCheckIsInvalid(recvType)) {
 			// Osty: /tmp/selfhost_merged.osty:11344:16
-			selfhostBumpError(env)
+			selfhostBumpErrorWithDetail(env, fmt.Sprintf("%s.%s", owner, callee.text))
 		}
 		// Osty: /tmp/selfhost_merged.osty:11346:9
 		return "Invalid"
@@ -29319,7 +29327,7 @@ func frontCheckField(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
 	// Osty: /tmp/selfhost_merged.osty:11757:5
 	if !(frontCheckIsInvalid(recvType)) {
 		// Osty: /tmp/selfhost_merged.osty:11758:12
-		selfhostBumpError(env)
+		selfhostBumpErrorWithDetail(env, fmt.Sprintf("%s.%s", owner, node.text))
 	}
 	return "Invalid"
 }
@@ -32220,6 +32228,18 @@ func frontCheckListMethod(file *AstFile, env *FrontCheckEnv, callee *AstNode, re
 		// Osty: /tmp/selfhost_merged.osty:13168:9
 		return "Bool"
 	}
+	if name == "insert" {
+		// List.insert(index: Int, item: T) -> ()
+		// Mirrors the `pub fn insert(mut self, index: Int, item: T)` primitive
+		// declared in internal/stdlib/modules/collections.osty; the bootstrapped
+		// method table was missing this entry, surfacing as frontCheckCallHint
+		// misses whenever toolchain code used `list.insert(i, x)`.
+		frontCheckRequireMutableReceiver(file, env, callee)
+		frontCheckExpectArgCount(env, args, 2)
+		frontCheckExpectAssignable(env, "Int", frontCheckExprHint(file, env, frontCheckIntAt(args, 0), "Int"))
+		frontCheckExpectAssignable(env, elem, frontCheckExprHint(file, env, frontCheckIntAt(args, 1), elem))
+		return "()"
+	}
 	// Osty: /tmp/selfhost_merged.osty:13170:5
 	if name == "map" {
 		// Osty: /tmp/selfhost_merged.osty:13171:9
@@ -32531,6 +32551,43 @@ func frontCheckStringMethod(file *AstFile, env *FrontCheckEnv, name string, args
 		frontCheckExpectAssignable(env, "String", frontCheckExprHint(file, env, frontCheckIntAt(args, 0), "String"))
 		// Osty: /tmp/selfhost_merged.osty:13298:9
 		return frontCheckOneArgType("List", "String")
+	}
+	// Additional String primitive methods that the bootstrapped table was
+	// missing. The authoritative surface lives in
+	// internal/stdlib/primitives/string.osty; these entries cover the
+	// shapes toolchain/* actually calls today and were visible as
+	// frontCheckCallHint misses like `String.chars` / `String.bytes`.
+	if name == "chars" {
+		frontCheckExpectArgCount(env, args, 0)
+		return frontCheckOneArgType("List", "Char")
+	}
+	if name == "bytes" {
+		frontCheckExpectArgCount(env, args, 0)
+		return frontCheckOneArgType("List", "Byte")
+	}
+	if name == "graphemes" {
+		frontCheckExpectArgCount(env, args, 0)
+		return frontCheckOneArgType("List", "String")
+	}
+	if name == "lines" {
+		frontCheckExpectArgCount(env, args, 0)
+		return frontCheckOneArgType("List", "String")
+	}
+	if name == "charCount" {
+		frontCheckExpectArgCount(env, args, 0)
+		return "Int"
+	}
+	if name == "toBytes" {
+		frontCheckExpectArgCount(env, args, 0)
+		return "Bytes"
+	}
+	if name == "toString" {
+		frontCheckExpectArgCount(env, args, 0)
+		return "String"
+	}
+	if name == "toUpper" || name == "toLower" || name == "trim" || name == "trimStart" || name == "trimEnd" {
+		frontCheckExpectArgCount(env, args, 0)
+		return "String"
 	}
 	return "Invalid"
 }
