@@ -6239,6 +6239,10 @@ func frontStringLikeScan(units []string, start int, unitCount int, kind FrontTok
 		return _p492 + _rhs493
 	}()
 	_ = contentStart
+	braceDepth := 0
+	_ = braceDepth
+	skip := 0
+	_ = skip
 	// Osty: /tmp/selfhost_merged.osty:2556:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRawString{})) {
 		// Osty: /tmp/selfhost_merged.osty:2557:9
@@ -6443,7 +6447,33 @@ func frontStringLikeScan(units []string, start int, unitCount int, kind FrontTok
 			consumed = _cur520 + _rhs521
 		}()
 		// Osty: /tmp/selfhost_merged.osty:2599:9
-		if !ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRawString{})) && escaped {
+		if skip > 0 {
+			skip = skip - 1
+		} else if braceDepth > 0 {
+			if unit == "{" {
+				braceDepth = braceDepth + 1
+			} else if unit == "}" {
+				braceDepth = braceDepth - 1
+			} else if unit == "\"" {
+				inner := frontStringLikeScan(units, idx, unitCount, FrontTokenKind(&FrontTokenKind_FrontString{}))
+				skip = inner.consumed - 1
+			} else if unit == "r" && next == "\"" {
+				inner := frontStringLikeScan(units, idx, unitCount, FrontTokenKind(&FrontTokenKind_FrontRawString{}))
+				skip = inner.consumed - 1
+			} else if unit == "b" && next == "'" {
+				inner := frontStringLikeScan(units, idx, unitCount, FrontTokenKind(&FrontTokenKind_FrontByte{}))
+				skip = inner.consumed - 1
+			} else if unit == "'" {
+				inner := frontStringLikeScan(units, idx, unitCount, FrontTokenKind(&FrontTokenKind_FrontChar{}))
+				skip = inner.consumed - 1
+			} else if unit == "/" && next == "/" {
+				commentLen := frontLineCommentSkip(units, idx+2, unitCount) + 1
+				skip = commentLen - 1
+			} else if unit == "/" && next == "*" {
+				block := frontBlockCommentSkip(units, idx, unitCount)
+				skip = block.consumed - 1
+			}
+		} else if !ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRawString{})) && escaped {
 			// Osty: /tmp/selfhost_merged.osty:2600:13
 			escaped = false
 		} else if !ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRawString{})) && unit == "\\" {
@@ -6462,6 +6492,7 @@ func frontStringLikeScan(units []string, start int, unitCount int, kind FrontTok
 				}
 				interpolations = _cur522 + _rhs523
 			}()
+			braceDepth = 1
 		} else if triple && unit == close && next == close && third == close {
 			// Osty: /tmp/selfhost_merged.osty:2606:13
 			return frontDetailedScanResult(kind, func() int {
