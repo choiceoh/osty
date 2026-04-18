@@ -130,6 +130,13 @@ func (g *privilegeGate) walkDecl(d ast.Decl) {
 				g.walkType(p.Type)
 			}
 		}
+		// Walking the body catches runtime-only names in nested type
+		// positions the declaration header doesn't cover: let-binding
+		// annotations, closure parameter type annotations, and
+		// turbofish type arguments. Without this, a user could write
+		// `fn() { let p: RawPtr = 0 }` or `fn() { foo::<RawPtr>() }`
+		// and bypass the gate.
+		g.walkBlock(n.Body)
 	case *ast.StructDecl:
 		g.checkAnnotations(n.Annotations)
 		g.walkGenerics(n.Generics)
@@ -162,6 +169,136 @@ func (g *privilegeGate) walkDecl(d ast.Decl) {
 	case *ast.LetDecl:
 		g.checkAnnotations(n.Annotations)
 		g.walkType(n.Type)
+		g.walkExpr(n.Value)
+	}
+}
+
+// walkBlock walks every statement in a function body, inspecting
+// type annotations on let statements and descending into expression
+// positions that can carry type arguments.
+func (g *privilegeGate) walkBlock(b *ast.Block) {
+	if b == nil {
+		return
+	}
+	for _, s := range b.Stmts {
+		g.walkStmt(s)
+	}
+}
+
+func (g *privilegeGate) walkStmt(s ast.Stmt) {
+	switch n := s.(type) {
+	case nil:
+		return
+	case *ast.LetStmt:
+		g.walkType(n.Type)
+		g.walkExpr(n.Value)
+	case *ast.ExprStmt:
+		g.walkExpr(n.X)
+	case *ast.AssignStmt:
+		for _, t := range n.Targets {
+			g.walkExpr(t)
+		}
+		g.walkExpr(n.Value)
+	case *ast.ReturnStmt:
+		g.walkExpr(n.Value)
+	case *ast.ChanSendStmt:
+		g.walkExpr(n.Channel)
+		g.walkExpr(n.Value)
+	case *ast.DeferStmt:
+		g.walkExpr(n.X)
+	case *ast.ForStmt:
+		g.walkExpr(n.Iter)
+		g.walkBlock(n.Body)
+	case *ast.Block:
+		g.walkBlock(n)
+	}
+}
+
+// walkExpr descends into composite expressions so nested turbofish
+// type arguments, closure parameter types, and struct-literal types
+// are checked. The walker does not try to catch value-position uses
+// of `RawPtr` / `Pod` identifiers — those resolve as SymBuiltin and
+// downstream type-checking already rejects non-type uses. The scope
+// here is the type surface that can carry runtime-only names.
+func (g *privilegeGate) walkExpr(e ast.Expr) {
+	switch n := e.(type) {
+	case nil:
+		return
+	case *ast.UnaryExpr:
+		g.walkExpr(n.X)
+	case *ast.BinaryExpr:
+		g.walkExpr(n.Left)
+		g.walkExpr(n.Right)
+	case *ast.QuestionExpr:
+		g.walkExpr(n.X)
+	case *ast.CallExpr:
+		g.walkExpr(n.Fn)
+		for _, a := range n.Args {
+			if a != nil {
+				g.walkExpr(a.Value)
+			}
+		}
+	case *ast.FieldExpr:
+		g.walkExpr(n.X)
+	case *ast.IndexExpr:
+		g.walkExpr(n.X)
+		g.walkExpr(n.Index)
+	case *ast.TurbofishExpr:
+		g.walkExpr(n.Base)
+		for _, t := range n.Args {
+			g.walkType(t)
+		}
+	case *ast.RangeExpr:
+		g.walkExpr(n.Start)
+		g.walkExpr(n.Stop)
+	case *ast.ParenExpr:
+		g.walkExpr(n.X)
+	case *ast.TupleExpr:
+		for _, el := range n.Elems {
+			g.walkExpr(el)
+		}
+	case *ast.ListExpr:
+		for _, el := range n.Elems {
+			g.walkExpr(el)
+		}
+	case *ast.MapExpr:
+		for _, ent := range n.Entries {
+			if ent != nil {
+				g.walkExpr(ent.Key)
+				g.walkExpr(ent.Value)
+			}
+		}
+	case *ast.StructLit:
+		g.walkExpr(n.Type)
+		for _, f := range n.Fields {
+			if f != nil {
+				g.walkExpr(f.Value)
+			}
+		}
+		g.walkExpr(n.Spread)
+	case *ast.IfExpr:
+		g.walkExpr(n.Cond)
+		g.walkBlock(n.Then)
+		g.walkExpr(n.Else)
+	case *ast.MatchExpr:
+		g.walkExpr(n.Scrutinee)
+		for _, arm := range n.Arms {
+			if arm == nil {
+				continue
+			}
+			g.walkExpr(arm.Guard)
+			g.walkExpr(arm.Body)
+		}
+	case *ast.ClosureExpr:
+		for _, p := range n.Params {
+			if p != nil {
+				g.walkType(p.Type)
+			}
+		}
+		g.walkType(n.ReturnType)
+		g.walkExpr(n.Body)
+	case *ast.Block:
+		g.walkBlock(n)
 	}
 }
 
