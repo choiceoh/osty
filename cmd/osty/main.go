@@ -86,6 +86,12 @@ type cliFlags struct {
 	inspect    bool // check: emit one InspectRecord per expression (stdout)
 	aiRepair   bool // front-end: adapt AI-authored foreign syntax in memory
 	aiMode     airepair.Mode
+	// dumpNativeDiags prints the native checker's per-context error
+	// histogram (assignments/accepted/errors + breakdown) to stderr after
+	// a `check` / `typecheck` run. Populated from `internal/check.Result`
+	// once the native-checker boundary has been invoked. Off by default;
+	// nil-safe when the native checker was unavailable.
+	dumpNativeDiags bool
 }
 
 func main() {
@@ -454,6 +460,9 @@ func main() {
 		if flags.inspect {
 			runInspect(file, chk, flags)
 		}
+		if flags.dumpNativeDiags {
+			dumpNativeDiagsFor(path, chk)
+		}
 		if hasError(all) {
 			os.Exit(1)
 		}
@@ -556,6 +565,7 @@ func parseFlags() cliFlags {
 	flag.BoolVar(&f.trace, "trace", false, "stream per-phase timing to stderr (single-file front-end commands)")
 	flag.BoolVar(&f.explain, "explain", false, "after diagnostics, print the `osty explain CODE` text for each unique code")
 	flag.BoolVar(&f.inspect, "inspect", false, "check: emit one record per expression showing the inference rule, type, and hint (see LANG_SPEC_v0.5/02a-type-inference.md)")
+	flag.BoolVar(&f.dumpNativeDiags, "dump-native-diags", false, "check: after the run, print the native checker's per-context error histogram to stderr")
 	flag.Usage = usage
 	flag.Parse()
 	return f
@@ -605,6 +615,9 @@ func runCheckPackage(dir string, flags cliFlags) {
 	printPackageDiags(pkg, diags, flags)
 	if flags.inspect {
 		runInspectPackage(pkg, chk, flags)
+	}
+	if flags.dumpNativeDiags {
+		dumpNativeDiagsFor(dir, chk)
 	}
 	if hasError(diags) {
 		os.Exit(1)
@@ -677,6 +690,9 @@ func runCheckWorkspace(dir string, flags cliFlags) {
 		printPackageDiags(pkg, diags, flags)
 		if flags.inspect && cr != nil {
 			runInspectPackage(pkg, cr, flags)
+		}
+		if flags.dumpNativeDiags && cr != nil {
+			dumpNativeDiagsFor(p, cr)
 		}
 		if hasError(diags) {
 			anyErr = true

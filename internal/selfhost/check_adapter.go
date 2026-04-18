@@ -9,6 +9,14 @@ type CheckSummary struct {
 	Assignments int
 	Accepted    int
 	Errors      int
+	// ErrorsByContext buckets the total Errors count by the enclosing
+	// native-checker function at each error-detection site. Populated by
+	// selfhostBumpError; consumed by `osty check --dump-native-diags`.
+	ErrorsByContext map[string]int
+	// ErrorDetails optionally holds a second-level split under a given
+	// context. Populated only at sites that call selfhostBumpErrorWithDetail
+	// — currently frontCheckIdentHint (keyed by unresolved identifier).
+	ErrorDetails map[string]map[string]int
 }
 
 // CheckedNode records a checked expression node and its inferred type name.
@@ -61,6 +69,8 @@ type CheckResult struct {
 }
 
 // CheckSource runs the bootstrapped Osty checker over one source string.
+// The returned Summary carries ErrorsByContext so lightweight telemetry
+// callers do not need to materialise the full structured result.
 func CheckSource(src []byte) CheckSummary {
 	return CheckSourceStructured(src).Summary
 }
@@ -87,9 +97,36 @@ func adaptCheckSummary(checked *FrontCheckSummary) CheckSummary {
 	}
 }
 
+func adaptCheckSummaryWithContext(checked *FrontCheckResult) CheckSummary {
+	if checked == nil {
+		return CheckSummary{}
+	}
+	s := adaptCheckSummary(checked.summary)
+	if len(checked.errorsByContext) > 0 {
+		s.ErrorsByContext = make(map[string]int, len(checked.errorsByContext))
+		for k, v := range checked.errorsByContext {
+			s.ErrorsByContext[k] = v
+		}
+	}
+	if len(checked.errorDetails) > 0 {
+		s.ErrorDetails = make(map[string]map[string]int, len(checked.errorDetails))
+		for ctx, inner := range checked.errorDetails {
+			if len(inner) == 0 {
+				continue
+			}
+			copied := make(map[string]int, len(inner))
+			for k, v := range inner {
+				copied[k] = v
+			}
+			s.ErrorDetails[ctx] = copied
+		}
+	}
+	return s
+}
+
 func adaptCheckResult(checked *FrontCheckResult, lexed *OstyLexedSource) CheckResult {
 	result := CheckResult{
-		Summary:        adaptCheckSummary(checked.summary),
+		Summary:        adaptCheckSummaryWithContext(checked),
 		TypedNodes:     make([]CheckedNode, 0, len(checked.typedNodes)),
 		Bindings:       make([]CheckedBinding, 0, len(checked.bindings)),
 		Symbols:        make([]CheckedSymbol, 0, len(checked.symbols)),
