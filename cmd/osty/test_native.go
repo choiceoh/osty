@@ -334,7 +334,16 @@ func discoverNativeTests(pkg *resolve.Package, filters []string) ([]nativeTestCa
 			if fn.Name == "main" {
 				return nil, fmt.Errorf("package %s already defines main; native test runner currently requires a library-style package", pkg.Dir)
 			}
-			if !strings.HasPrefix(fn.Name, "test") || fn.Name == "testing" {
+			// A function is a test when either:
+			//   - its name starts with `test` (legacy convention from
+			//     v0.4, kept for backward compatibility), or
+			//   - it carries `#[test]` (v0.5 G32 inline annotation).
+			// The `testing` function in `std.testing` is explicitly
+			// excluded to avoid colliding with the assertion helper.
+			if fn.Name == "testing" {
+				continue
+			}
+			if !strings.HasPrefix(fn.Name, "test") && !hasTestAnnotation(fn) {
 				continue
 			}
 			if len(fn.Params) != 0 || fn.ReturnType != nil || fn.Body == nil {
@@ -361,6 +370,23 @@ func discoverNativeTests(pkg *resolve.Package, filters []string) ([]nativeTestCa
 
 func matchesTestFilters(name string, filters []string) bool {
 	return runner.MatchesTestFilters(name, filters)
+}
+
+// hasTestAnnotation reports whether a FnDecl carries `#[test]`.
+// v0.5 (G32) §11 introduces the annotation so tests can sit inline
+// next to production code without relying on the `test` name prefix
+// or the `_test.osty` file split. The annotation has no arguments
+// today, so exact-match is sufficient.
+func hasTestAnnotation(fn *ast.FnDecl) bool {
+	if fn == nil {
+		return false
+	}
+	for _, a := range fn.Annotations {
+		if a != nil && a.Name == "test" {
+			return true
+		}
+	}
+	return false
 }
 
 type nativeTestRun struct {
