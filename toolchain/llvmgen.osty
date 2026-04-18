@@ -2262,6 +2262,19 @@ pub fn llvmStringConcat(emitter: LlvmEmitter, left: LlvmValue, right: LlvmValue)
     llvmCall(emitter, "ptr", "osty_rt_strings_Concat", [left, right])
 }
 
+pub fn llvmStringCompare(
+    emitter: LlvmEmitter,
+    op: String,
+    left: LlvmValue,
+    right: LlvmValue,
+) -> LlvmValue {
+    let eq = llvmStringEqual(emitter, left, right)
+    if op == "!=" {
+        return llvmNotI1(emitter, eq)
+    }
+    eq
+}
+
 pub fn llvmStringByteLen(emitter: LlvmEmitter, value: LlvmValue) -> LlvmValue {
     llvmCall(emitter, "i64", "osty_rt_strings_ByteLen", [value])
 }

@@ -2140,6 +2140,14 @@ func llvmStringConcat(emitter *LlvmEmitter, left *LlvmValue, right *LlvmValue) *
 	return llvmCall(emitter, "ptr", "osty_rt_strings_Concat", []*LlvmValue{left, right})
 }
 
+func llvmStringCompare(emitter *LlvmEmitter, op string, left *LlvmValue, right *LlvmValue) *LlvmValue {
+	eq := llvmStringEqual(emitter, left, right)
+	if op == "!=" {
+		return llvmNotI1(emitter, eq)
+	}
+	return eq
+}
+
 func llvmStringByteLen(emitter *LlvmEmitter, value *LlvmValue) *LlvmValue {
 	return llvmCall(emitter, "i64", "osty_rt_strings_ByteLen", []*LlvmValue{value})
 }
