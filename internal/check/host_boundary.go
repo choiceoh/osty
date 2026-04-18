@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"reflect"
 	"strings"
 	"sync"
 
@@ -467,6 +468,13 @@ func (idx *selfhostSpanIndex) scopeFor(key selfhostSpanKey) *resolve.Scope {
 
 func (idx *selfhostSpanIndex) addNode(n ast.Node, base int, scope *resolve.Scope, sm *sourcemap.Map) {
 	if n == nil {
+		return
+	}
+	// Nilable AST fields (e.g. FnDecl.Body for interface methods without a
+	// default) arrive here as a non-nil ast.Node interface wrapping a nil
+	// pointer. The `n == nil` guard above misses that; the type switch below
+	// would then dereference the nil pointer.
+	if rv := reflect.ValueOf(n); rv.Kind() == reflect.Ptr && rv.IsNil() {
 		return
 	}
 	key, haveKey := spanKeyForNode(n, base, sm)
