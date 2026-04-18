@@ -57,3 +57,36 @@ pub struct Captures {
 pub fn compile(pattern: String) -> Result<Regex, RegexError> {
     Ok(Regex {})
 }
+
+// One-shot helpers: compile + apply in a single call. Fine for infrequent use;
+// if the same pattern runs against many inputs, compile() once and reuse the
+// Regex to avoid re-parsing per call.
+pub fn matches(text: String, pattern: String) -> Result<Bool, RegexError> {
+    let re = compile(pattern)?
+    Ok(re.matches(text))
+}
+
+pub fn find(text: String, pattern: String) -> Result<Match?, RegexError> {
+    let re = compile(pattern)?
+    Ok(re.find(text))
+}
+
+pub fn findAll(text: String, pattern: String) -> Result<List<Match>, RegexError> {
+    let re = compile(pattern)?
+    Ok(re.findAll(text))
+}
+
+pub fn replace(text: String, pattern: String, replacement: String) -> Result<String, RegexError> {
+    let re = compile(pattern)?
+    Ok(re.replace(text, replacement))
+}
+
+pub fn replaceAll(text: String, pattern: String, replacement: String) -> Result<String, RegexError> {
+    let re = compile(pattern)?
+    Ok(re.replaceAll(text, replacement))
+}
+
+pub fn split(text: String, pattern: String) -> Result<List<String>, RegexError> {
+    let re = compile(pattern)?
+    Ok(re.split(text))
+}
