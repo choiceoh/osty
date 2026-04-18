@@ -917,10 +917,7 @@ func (g *generator) emitRuntimeStringCompare(op token.Kind, left, right value) (
 		{typ: "ptr"},
 	})
 	emitter := g.toOstyEmitter()
-	out := llvmCall(emitter, "i1", "osty_rt_strings_Equal", []*LlvmValue{toOstyValue(left), toOstyValue(right)})
-	if op == token.NEQ {
-		out = llvmNotI1(emitter, out)
-	}
+	out := llvmStringCompare(emitter, op.String(), toOstyValue(left), toOstyValue(right))
 	g.takeOstyEmitter(emitter)
 	return fromOstyValue(out), nil
 }
