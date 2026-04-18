@@ -128,7 +128,8 @@ fn escapeJsonString(s: String) -> String {
         if c == 0x22 {
             out = "{out}\\\""
         } else if c == 0x5C {
-            out = "{out}\\\\"
+            let bs = "\\"
+            out = "{out}{bs}{bs}"
         } else if c == 0x08 {
             out = "{out}\\b"
         } else if c == 0x0C {
