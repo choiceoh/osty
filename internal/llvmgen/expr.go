@@ -59,17 +59,70 @@ func (g *generator) ifLetCondition(pattern ast.Pattern, scrutinee value) (*LlvmV
 }
 
 func (g *generator) emitStringLiteral(lit *ast.StringLit) (value, error) {
-	text, ok := plainStringLiteral(lit)
-	if !ok {
-		return value{}, unsupported("expression", "interpolated String literals are not supported by LLVM")
+	if lit == nil {
+		return value{}, unsupported("expression", "nil String literal")
 	}
-	if !llvmIsAsciiStringText(text) {
-		return value{}, unsupported("type-system", "plain String literals currently require ASCII text with printable bytes or newline, tab, and carriage-return escapes")
+	allLit := true
+	for _, part := range lit.Parts {
+		if !part.IsLit {
+			allLit = false
+			break
+		}
 	}
-	emitter := g.toOstyEmitter()
-	out := llvmStringLiteral(emitter, text)
-	g.takeOstyEmitter(emitter)
-	return fromOstyValue(out), nil
+	if allLit {
+		var b strings.Builder
+		for _, part := range lit.Parts {
+			b.WriteString(part.Lit)
+		}
+		text := b.String()
+		if !llvmIsAsciiStringText(text) {
+			return value{}, unsupported("type-system", "plain String literals currently require ASCII text with printable bytes or newline, tab, and carriage-return escapes")
+		}
+		emitter := g.toOstyEmitter()
+		out := llvmStringLiteral(emitter, text)
+		g.takeOstyEmitter(emitter)
+		return fromOstyValue(out), nil
+	}
+	return g.emitInterpolatedString(lit)
+}
+
+func (g *generator) emitInterpolatedString(lit *ast.StringLit) (value, error) {
+	if len(lit.Parts) == 0 {
+		emitter := g.toOstyEmitter()
+		out := llvmStringLiteral(emitter, "")
+		g.takeOstyEmitter(emitter)
+		return fromOstyValue(out), nil
+	}
+	pieces := make([]value, 0, len(lit.Parts))
+	for _, part := range lit.Parts {
+		if part.IsLit {
+			if !llvmIsAsciiStringText(part.Lit) {
+				return value{}, unsupported("type-system", "plain String literals currently require ASCII text with printable bytes or newline, tab, and carriage-return escapes")
+			}
+			emitter := g.toOstyEmitter()
+			out := llvmStringLiteral(emitter, part.Lit)
+			g.takeOstyEmitter(emitter)
+			pieces = append(pieces, fromOstyValue(out))
+			continue
+		}
+		v, err := g.emitExpr(part.Expr)
+		if err != nil {
+			return value{}, err
+		}
+		if v.typ != "ptr" || v.listElemTyp != "" || v.mapKeyTyp != "" {
+			return value{}, unsupportedf("type-system", "interpolation of %s value requires .toString() which the LLVM backend does not yet lower", v.typ)
+		}
+		pieces = append(pieces, v)
+	}
+	result := pieces[0]
+	for i := 1; i < len(pieces); i++ {
+		r, err := g.emitRuntimeStringConcat(result, pieces[i])
+		if err != nil {
+			return value{}, err
+		}
+		result = r
+	}
+	return result, nil
 }
 
 func (g *generator) emitExpr(expr ast.Expr) (value, error) {
@@ -672,6 +725,9 @@ func (g *generator) emitBinary(e *ast.BinaryExpr) (value, error) {
 		g.takeOstyEmitter(emitter)
 		return fromOstyValue(out), nil
 	}
+	if left.typ == "ptr" && right.typ == "ptr" && e.Op == token.PLUS {
+		return g.emitRuntimeStringConcat(left, right)
+	}
 	if left.typ != "i64" || right.typ != "i64" {
 		return value{}, unsupportedf("type-system", "binary operator %q on %s/%s", e.Op, left.typ, right.typ)
 	}
@@ -839,6 +895,17 @@ func (g *generator) emitQuestionExprResult(expr *ast.QuestionExpr, info builtinR
 		out.gcManaged = true
 	}
 	return out, nil
+}
+
+func (g *generator) emitRuntimeStringConcat(left, right value) (value, error) {
+	g.declareRuntimeSymbol("osty_rt_strings_Concat", "ptr", []paramInfo{
+		{typ: "ptr"},
+		{typ: "ptr"},
+	})
+	emitter := g.toOstyEmitter()
+	out := llvmStringConcat(emitter, toOstyValue(left), toOstyValue(right))
+	g.takeOstyEmitter(emitter)
+	return fromOstyValue(out), nil
 }
 
 func (g *generator) emitRuntimeStringCompare(op token.Kind, left, right value) (value, error) {
