@@ -5,6 +5,7 @@ import (
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/ir"
+	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/stdlib"
 )
 
@@ -57,4 +58,64 @@ func ReachableStdlibFns(mod *ir.Module, reg *stdlib.Registry) []ReachableStdlibF
 		return found[i].Fn.Name < found[j].Fn.Name
 	})
 	return found
+}
+
+// injectReachableStdlibBodies lowers every reachable stdlib function in
+// mod, renames each lowered fn to its mangled symbol, and rewrites the
+// matching call sites in mod in place. The returned []ir.Decl must be
+// appended to the user module's Decls.
+//
+// Each stdlib module carries its own resolve.Package; this function
+// constructs a lightweight resolve.Result from the file-level Refs/
+// TypeRefs/FileScope so lowerer identifier-kind queries hit the correct
+// stdlib scope. Checker information is not currently plumbed through —
+// lowering degrades gracefully to ErrTypeVal on typed expressions,
+// which the monomorphizer + MIR validator will flag if they reach a
+// consumer that cannot handle the gap.
+//
+// A nil module or nil registry returns (nil, nil). Any lowering issue
+// is propagated as a non-fatal error; callers should surface them via
+// entry.IRIssues rather than treat them as fatal.
+func injectReachableStdlibBodies(mod *ir.Module, reg *stdlib.Registry) ([]ir.Decl, []error) {
+	if mod == nil || reg == nil {
+		return nil, nil
+	}
+	reached := ReachableStdlibFns(mod, reg)
+	if len(reached) == 0 {
+		return nil, nil
+	}
+	var out []ir.Decl
+	var issues []error
+	for _, r := range reached {
+		res := stdlibResolveResult(reg, r.Module)
+		lowered, fnIssues := ir.LowerFnDecl(mod.Package, r.Fn, res, nil)
+		issues = append(issues, fnIssues...)
+		if lowered == nil {
+			continue
+		}
+		lowered.Name = StdlibSymbol(r.Module, r.Fn.Name)
+		out = append(out, lowered)
+	}
+	RewriteStdlibCallsites(mod, reached)
+	return out, issues
+}
+
+// stdlibResolveResult projects one stdlib module's parsed package into a
+// resolve.Result suitable for the lowerer. Returns nil if the module or
+// its parsed file is absent, which lets the lowerer degrade gracefully
+// rather than panic.
+func stdlibResolveResult(reg *stdlib.Registry, module string) *resolve.Result {
+	if reg == nil {
+		return nil
+	}
+	mod, ok := reg.Modules[module]
+	if !ok || mod == nil || mod.Package == nil || len(mod.Package.Files) == 0 {
+		return nil
+	}
+	pf := mod.Package.Files[0]
+	return &resolve.Result{
+		Refs:      pf.Refs,
+		TypeRefs:  pf.TypeRefs,
+		FileScope: pf.FileScope,
+	}
 }

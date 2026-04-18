@@ -3,13 +3,28 @@ package backend
 import (
 	"errors"
 	"fmt"
+	"os"
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/ir"
 	"github.com/osty/osty/internal/mir"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/stdlib"
 )
+
+// stdlibBodyLoweringEnabled reports whether the `PrepareEntry` step
+// should inject Osty-bodied stdlib functions into the user module. The
+// feature is off by default during rollout — users opt in by setting
+// `OSTY_STDLIB_BODY_LOWER=1`. Once the pipeline is stable the default
+// flips and this gate is removed.
+func stdlibBodyLoweringEnabled() bool {
+	switch os.Getenv("OSTY_STDLIB_BODY_LOWER") {
+	case "", "0", "false", "off":
+		return false
+	}
+	return true
+}
 
 // PrepareEntry lowers a checked front-end source unit into the backend-neutral
 // IR contract. Validation failures are returned as an error because they
@@ -34,6 +49,16 @@ func PrepareEntry(packageName, sourcePath string, file *ast.File, res *resolve.R
 	}
 	mod, issues := ir.Lower(packageName, file, res, chk)
 	entry.IRIssues = append(entry.IRIssues, issues...)
+	// Inject bodied stdlib functions reached from the user module before
+	// monomorphization runs, so any stdlib-owned generic body participates
+	// in the same mono pass. Rewriting callsites after injection rebinds
+	// `strings.foo(...)` to the mangled symbol the injected decl carries.
+	// Gated behind OSTY_STDLIB_BODY_LOWER during rollout.
+	if stdlibBodyLoweringEnabled() {
+		injected, injectionErrs := injectReachableStdlibBodies(mod, stdlib.LoadCached())
+		entry.IRIssues = append(entry.IRIssues, injectionErrs...)
+		mod.Decls = append(mod.Decls, injected...)
+	}
 	// Monomorphize generic free functions in-place on the lowered module.
 	// The backend contract is "no TypeVar leaves IR once it reaches the
 	// emitter", so we run this transform before validation rather than
