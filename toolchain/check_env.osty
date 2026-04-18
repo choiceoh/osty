@@ -530,41 +530,54 @@ fn checkResolveAliasDeepAt(env: CheckEnv, ty: Int, depth: Int) -> Int {
         return checkResolveAliasDeepAt(env, direct, depth + 1)
     }
     let kind = tyKindAt(env.tys, ty)
+    // Each compound-type arm delegates to a helper because the
+    // bootstrap Osty→Go transpiler miscompiles match arms whose
+    // body contains local let-bindings (emits a spurious bare
+    // `return` before the real one). Single-expression arms
+    // transpile cleanly.
     match kind {
-        TkTuple -> {
-            let elems = tyArgsAt(env.tys, ty)
-            let mut out: List<Int> = []
-            for e in elems {
-                out.push(checkResolveAliasDeepAt(env, e, depth + 1))
-            }
-            tyTuple(env.tys, out)
-        },
-        TkFn -> {
-            let params = tyArgsAt(env.tys, ty)
-            let mut outParams: List<Int> = []
-            for p in params {
-                outParams.push(checkResolveAliasDeepAt(env, p, depth + 1))
-            }
-            let ret = checkResolveAliasDeepAt(env, tyRetAt(env.tys, ty), depth + 1)
-            tyFn(env.tys, outParams, ret)
-        },
-        TkNamed -> {
-            let args = tyArgsAt(env.tys, ty)
-            if checkIntListLen(args) == 0 {
-                return ty
-            }
-            let mut outArgs: List<Int> = []
-            for a in args {
-                outArgs.push(checkResolveAliasDeepAt(env, a, depth + 1))
-            }
-            tyNamed(env.tys, tyHeadAt(env.tys, ty), outArgs)
-        },
-        TkOptional -> {
-            let inner = checkResolveAliasDeepAt(env, tyInnerAt(env.tys, ty), depth + 1)
-            tyOptional(env.tys, inner)
-        },
-        _ -> ty,
+        TkTuple    -> checkResolveAliasDeepTuple(env, ty, depth),
+        TkFn       -> checkResolveAliasDeepFn(env, ty, depth),
+        TkNamed    -> checkResolveAliasDeepNamed(env, ty, depth),
+        TkOptional -> checkResolveAliasDeepOptional(env, ty, depth),
+        _          -> ty,
     }
+}
+
+fn checkResolveAliasDeepTuple(env: CheckEnv, ty: Int, depth: Int) -> Int {
+    let elems = tyArgsAt(env.tys, ty)
+    let mut out: List<Int> = []
+    for e in elems {
+        out.push(checkResolveAliasDeepAt(env, e, depth + 1))
+    }
+    tyTuple(env.tys, out)
+}
+
+fn checkResolveAliasDeepFn(env: CheckEnv, ty: Int, depth: Int) -> Int {
+    let params = tyArgsAt(env.tys, ty)
+    let mut outParams: List<Int> = []
+    for p in params {
+        outParams.push(checkResolveAliasDeepAt(env, p, depth + 1))
+    }
+    let ret = checkResolveAliasDeepAt(env, tyRetAt(env.tys, ty), depth + 1)
+    tyFn(env.tys, outParams, ret)
+}
+
+fn checkResolveAliasDeepNamed(env: CheckEnv, ty: Int, depth: Int) -> Int {
+    let args = tyArgsAt(env.tys, ty)
+    if checkIntListLen(args) == 0 {
+        return ty
+    }
+    let mut outArgs: List<Int> = []
+    for a in args {
+        outArgs.push(checkResolveAliasDeepAt(env, a, depth + 1))
+    }
+    tyNamed(env.tys, tyHeadAt(env.tys, ty), outArgs)
+}
+
+fn checkResolveAliasDeepOptional(env: CheckEnv, ty: Int, depth: Int) -> Int {
+    let inner = checkResolveAliasDeepAt(env, tyInnerAt(env.tys, ty), depth + 1)
+    tyOptional(env.tys, inner)
 }
 
 /// checkSubstituteTy replaces every generic name in `ty` with the
@@ -575,50 +588,55 @@ pub fn checkSubstituteTy(env: CheckEnv, ty: Int, generics: List<String>, args: L
         return ty
     }
     let kind = tyKindAt(env.tys, ty)
+    // See note on checkResolveAliasDeepAt: match arms whose body
+    // carries local let-bindings miscompile through the bootstrap
+    // transpiler, so each compound arm delegates to a helper.
     match kind {
-        TkNamed -> {
-            let head = tyHeadAt(env.tys, ty)
-            let idx = checkIndexOfString(generics, head)
-            if idx >= 0 {
-                // Type parameter reference — replace with the substituted
-                // arg (if it was supplied).
-                if idx < checkIntListLen(args) {
-                    return args[idx]
-                }
-                return ty
-            }
-            let inner = tyArgsAt(env.tys, ty)
-            if checkIntListLen(inner) == 0 {
-                return ty
-            }
-            let mut rebuilt: List<Int> = []
-            for a in inner {
-                rebuilt.push(checkSubstituteTy(env, a, generics, args))
-            }
-            tyNamed(env.tys, head, rebuilt)
-        },
-        TkTuple -> {
-            let elems = tyArgsAt(env.tys, ty)
-            let mut out: List<Int> = []
-            for e in elems {
-                out.push(checkSubstituteTy(env, e, generics, args))
-            }
-            tyTuple(env.tys, out)
-        },
-        TkFn -> {
-            let params = tyArgsAt(env.tys, ty)
-            let mut outParams: List<Int> = []
-            for p in params {
-                outParams.push(checkSubstituteTy(env, p, generics, args))
-            }
-            let ret = checkSubstituteTy(env, tyRetAt(env.tys, ty), generics, args)
-            tyFn(env.tys, outParams, ret)
-        },
-        TkOptional -> {
-            tyOptional(env.tys, checkSubstituteTy(env, tyInnerAt(env.tys, ty), generics, args))
-        },
-        _ -> ty,
+        TkNamed    -> checkSubstituteTyNamed(env, ty, generics, args),
+        TkTuple    -> checkSubstituteTyTuple(env, ty, generics, args),
+        TkFn       -> checkSubstituteTyFn(env, ty, generics, args),
+        TkOptional -> tyOptional(env.tys, checkSubstituteTy(env, tyInnerAt(env.tys, ty), generics, args)),
+        _          -> ty,
     }
+}
+
+fn checkSubstituteTyNamed(env: CheckEnv, ty: Int, generics: List<String>, args: List<Int>) -> Int {
+    let head = tyHeadAt(env.tys, ty)
+    let idx = checkIndexOfString(generics, head)
+    if idx >= 0 {
+        if idx < checkIntListLen(args) {
+            return args[idx]
+        }
+        return ty
+    }
+    let inner = tyArgsAt(env.tys, ty)
+    if checkIntListLen(inner) == 0 {
+        return ty
+    }
+    let mut rebuilt: List<Int> = []
+    for a in inner {
+        rebuilt.push(checkSubstituteTy(env, a, generics, args))
+    }
+    tyNamed(env.tys, head, rebuilt)
+}
+
+fn checkSubstituteTyTuple(env: CheckEnv, ty: Int, generics: List<String>, args: List<Int>) -> Int {
+    let elems = tyArgsAt(env.tys, ty)
+    let mut out: List<Int> = []
+    for e in elems {
+        out.push(checkSubstituteTy(env, e, generics, args))
+    }
+    tyTuple(env.tys, out)
+}
+
+fn checkSubstituteTyFn(env: CheckEnv, ty: Int, generics: List<String>, args: List<Int>) -> Int {
+    let params = tyArgsAt(env.tys, ty)
+    let mut outParams: List<Int> = []
+    for p in params {
+        outParams.push(checkSubstituteTy(env, p, generics, args))
+    }
+    let ret = checkSubstituteTy(env, tyRetAt(env.tys, ty), generics, args)
+    tyFn(env.tys, outParams, ret)
 }
 
 // ---------------------------------------------------------------------
