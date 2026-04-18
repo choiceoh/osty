@@ -200,7 +200,11 @@ func (g *generator) render(defs []string) []byte {
 	}
 	for _, info := range g.enums {
 		if info.hasPayload {
-			typeDefs = append(typeDefs, llvmStructTypeDef(info.name, []string{"i64", info.payloadTyp}))
+			payloadSlot := info.payloadTyp
+			if info.isBoxed {
+				payloadSlot = "ptr"
+			}
+			typeDefs = append(typeDefs, llvmStructTypeDef(info.name, []string{"i64", payloadSlot}))
 		}
 	}
 	if len(g.tupleTypes) != 0 {

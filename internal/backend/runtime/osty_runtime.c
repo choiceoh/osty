@@ -1234,12 +1234,26 @@ void *osty_gc_load_v1(void *value) __asm__(OSTY_GC_SYMBOL("osty.gc.load_v1"));
 void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
 void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
 void osty_gc_safepoint_v1(int64_t safepoint_id, void *const *root_slots, int64_t root_slot_count) __asm__(OSTY_GC_SYMBOL("osty.gc.safepoint_v1"));
+void *osty_rt_enum_alloc_ptr_v1(const char *site) __asm__(OSTY_GC_SYMBOL("osty.rt.enum_alloc_ptr_v1"));
+void *osty_rt_enum_alloc_scalar_v1(const char *site) __asm__(OSTY_GC_SYMBOL("osty.rt.enum_alloc_scalar_v1"));
 
 void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) {
     if (byte_size < 0) {
         osty_rt_abort("negative GC allocation size");
     }
     return osty_gc_allocate_managed((size_t)byte_size, object_kind == 0 ? OSTY_GC_KIND_GENERIC : object_kind, site, NULL, NULL);
+}
+
+static void osty_rt_enum_ptr_payload_trace(void *payload) {
+    osty_gc_mark_root_slot(payload);
+}
+
+void *osty_rt_enum_alloc_ptr_v1(const char *site) {
+    return osty_gc_allocate_managed(8, OSTY_GC_KIND_GENERIC, site, osty_rt_enum_ptr_payload_trace, NULL);
+}
+
+void *osty_rt_enum_alloc_scalar_v1(const char *site) {
+    return osty_gc_allocate_managed(8, OSTY_GC_KIND_GENERIC, site, NULL, NULL);
 }
 
 void osty_gc_pre_write_v1(void *owner, void *old_value, int64_t slot_kind) {

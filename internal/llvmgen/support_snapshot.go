@@ -150,6 +150,21 @@ func llvmEnumPayloadVariant(emitter *LlvmEmitter, typ string, tag int, payload *
 	return llvmStructLiteral(emitter, typ, []*LlvmValue{llvmEnumVariant(typ, tag), payload})
 }
 
+func llvmEnumBoxedPayloadVariant(emitter *LlvmEmitter, enumTyp string, tag int, payload *LlvmValue, site string) *LlvmValue {
+	symbol := "osty.rt.enum_alloc_scalar_v1"
+	if payload.typ == "ptr" {
+		symbol = "osty.rt.enum_alloc_ptr_v1"
+	}
+	heapPtr := llvmCall(emitter, "ptr", symbol, []*LlvmValue{llvmStringLiteral(emitter, site)})
+	llvmStore(emitter, heapPtr, payload)
+	return llvmStructLiteral(emitter, enumTyp, []*LlvmValue{llvmEnumVariant(enumTyp, tag), heapPtr})
+}
+
+func llvmEnumBoxedBareVariant(emitter *LlvmEmitter, enumTyp string, tag int) *LlvmValue {
+	nullPtr := &LlvmValue{typ: "ptr", name: "null", pointer: false}
+	return llvmStructLiteral(emitter, enumTyp, []*LlvmValue{llvmEnumVariant(enumTyp, tag), nullPtr})
+}
+
 // Osty: examples/selfhost-core/llvmgen.osty:126:5
 func llvmParam(name string, typ string) *LlvmParam {
 	return &LlvmParam{name: name, typ: typ}
@@ -403,7 +418,7 @@ func llvmCallVoid(emitter *LlvmEmitter, name string, args []*LlvmValue) {
 
 // Osty: examples/selfhost-core/llvmgen.osty:275:5
 func llvmGcRuntimeDeclarations() []string {
-	return []string{"declare ptr @osty.gc.alloc_v1(i64, i64, ptr)", "declare void @osty.gc.pre_write_v1(ptr, ptr, i64)", "declare void @osty.gc.post_write_v1(ptr, ptr, i64)", "declare ptr @osty.gc.load_v1(ptr)", "declare void @osty.gc.root_bind_v1(ptr)", "declare void @osty.gc.root_release_v1(ptr)"}
+	return []string{"declare ptr @osty.gc.alloc_v1(i64, i64, ptr)", "declare void @osty.gc.pre_write_v1(ptr, ptr, i64)", "declare void @osty.gc.post_write_v1(ptr, ptr, i64)", "declare ptr @osty.gc.load_v1(ptr)", "declare void @osty.gc.root_bind_v1(ptr)", "declare void @osty.gc.root_release_v1(ptr)", "declare ptr @osty.rt.enum_alloc_ptr_v1(ptr)", "declare ptr @osty.rt.enum_alloc_scalar_v1(ptr)"}
 }
 
 // Osty: examples/selfhost-core/llvmgen.osty:284:5
@@ -2300,7 +2315,7 @@ func llvmEnumPayloadDiagnostic(enumName string, variantName string, detail strin
 		return llvmUnsupportedDiagnostic("type-system", fmt.Sprintf("enum %q variant %q payload: %s", enumName, variantName, detail))
 	}
 	if expectedType != "" && actualType != "" && expectedType != actualType {
-		return llvmUnsupportedDiagnostic("type-system", fmt.Sprintf("enum %q mixes payload types %s and %s", enumName, expectedType, actualType))
+		return llvmUnsupportedDiagnostic("type-system", fmt.Sprintf("enum %q mixes payload types %s and %s; heterogeneous-payload enums require boxed representation (deferred)", enumName, expectedType, actualType))
 	}
 	return llvmUnsupportedDiagnosticWith("", "", "", "")
 }

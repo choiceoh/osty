@@ -1,0 +1,17 @@
+# fmt_e2e — end-to-end verification of internal/stdlib/modules/fmt.osty
+# against the LLVM backend.
+#
+# Run from this directory:
+#
+#     osty test
+#
+# Current status: all 28 tests fail; remaining backend gaps documented
+# in fmt_test.osty's header. For the regression harness of the concat
+# and interpolation path, see ../concat_interp_e2e/.
+
+[package]
+name = "fmt_e2e"
+version = "0.1.0"
+edition = "0.3"
+
+[dependencies]

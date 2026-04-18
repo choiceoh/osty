@@ -101,6 +101,7 @@ type enumInfo struct {
 	decl       *ast.EnumDecl
 	hasPayload bool
 	payloadTyp string
+	isBoxed    bool
 	variants   map[string]variantInfo
 }
 
@@ -122,6 +123,7 @@ type enumPatternInfo struct {
 	payloadType        string
 	payloadListElemTyp string
 	hasPayloadBinding  bool
+	isBoxed            bool
 }
 
 type tupleTypeInfo struct {
@@ -879,11 +881,11 @@ func collectEnum(decl *ast.EnumDecl, env typeEnv) (*enumInfo, error) {
 				diag := llvmEnumPayloadDiagnostic(decl.Name, variant.Name, unsupportedMessage(err), "", "")
 				return nil, unsupported(diag.kind, diag.message)
 			}
-			if info.payloadTyp == "" {
+			if info.payloadTyp == "" && !info.isBoxed {
 				info.payloadTyp = typ
 			} else if info.payloadTyp != typ {
-				diag := llvmEnumPayloadDiagnostic(decl.Name, variant.Name, "", info.payloadTyp, typ)
-				return nil, unsupported(diag.kind, diag.message)
+				info.isBoxed = true
+				info.payloadTyp = ""
 			}
 			payloads = append(payloads, typ)
 			if listElemTyp, ok, err := llvmListElementType(variant.Fields[0], env); err != nil {
@@ -1363,6 +1365,9 @@ func (g *generator) constEnumVariantIdent(name string) (constValue, bool, error)
 }
 
 func (g *generator) constEnumVariant(info *enumInfo, variant variantInfo, payload *constValue) (constValue, error) {
+	if info.isBoxed {
+		return constValue{}, unsupportedf("type-system", "enum %q has heterogeneous (boxed) payloads; variants cannot be used in a constant expression because construction requires a runtime GC allocation. Use a constructor function (e.g. `fn makeX() -> %s { ... }`) and call it at runtime.", info.name, info.name)
+	}
 	if info.hasPayload {
 		payloadValue := constValue{typ: info.payloadTyp, init: llvmZeroLiteral(info.payloadTyp)}
 		if payload != nil {
