@@ -254,7 +254,7 @@ func TestGeneratedComparePoliciesAreOstyOwned(t *testing.T) {
 	if got, want := llvmEnumPayloadDiagnostic("Choice", "Some", "unsupported payload", "", "").message, `enum "Choice" variant "Some" payload: unsupported payload`; got != want {
 		t.Fatalf("llvmEnumPayloadDiagnostic(%q, %q, %q, %q, %q).message = %q, want %q", "Choice", "Some", "unsupported payload", "", "", got, want)
 	}
-	if got, want := llvmEnumPayloadDiagnostic("Choice", "Some", "", "i64", "double").message, `enum "Choice" mixes payload types i64 and double`; got != want {
+	if got, want := llvmEnumPayloadDiagnostic("Choice", "Some", "", "i64", "double").message, `enum "Choice" mixes payload types i64 and double; heterogeneous-payload enums require boxed representation (deferred)`; got != want {
 		t.Fatalf("llvmEnumPayloadDiagnostic(%q, %q, %q, %q, %q).message = %q, want %q", "Choice", "Some", "", "i64", "double", got, want)
 	}
 	if got, want := llvmRuntimeFfiHeaderUnsupported(true, 0), "methods are not supported"; got != want {
