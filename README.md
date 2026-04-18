@@ -601,12 +601,11 @@ regenerations.
 
 ## Contributing
 
-The current baseline is **v0.5 (final freeze)** (`LANG_SPEC_v0.5/`,
+The current baseline is **v0.5** (`LANG_SPEC_v0.5/`,
 `OSTY_GRAMMAR_v0.5.md`). v0.5 closes every known language-decision
-gap (G20-G35) and locks the language surface — grammar, prelude, §14
-excluded list, and stdlib public signatures are CI-checksum-locked.
-Post-freeze work is limited to compiler quality, tooling, and
-ecosystem. See [`SPEC_GAPS.md`](./SPEC_GAPS.md) for the full decision
+gap (G20-G35) accumulated from the v0.4 usage corpus. Future surface
+changes follow the normal versioning process and land in a new spec
+directory. See [`SPEC_GAPS.md`](./SPEC_GAPS.md) for the full decision
 log. The compiler follows spec decisions literally — if a construct
 "should" work but doesn't, verify it against the grammar first.
 

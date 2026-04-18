@@ -1,15 +1,15 @@
-# Osty Grammar — Rules & EBNF (v0.5 · Final Freeze)
+# Osty Grammar — Rules & EBNF (v0.5)
 
 v0.1 에서 열린 이슈 O1~O7 (v0.2 에서 해결), v0.3 grammar 확장, v0.4
 edge-case 결정(G13-G18), v0.5 에서 한 번에 수용된 15 개 결정
-(G20-G34) 까지 반영한 **최종본**. v0.5 이후 문법 표면은 CI 로 잠금 —
-이 문서의 content hash 가 바뀌면 릴리스 브랜치는 빌드 실패한다.
+(G20-G34) 까지 반영한 **현행본**. 문법 surface 변경은 정식 버전 업
+과 함께 이 문서에 반영된다.
 
 ---
 
 ## 결정 이력 (v0.1 → v0.2 → v0.3 → v0.4 → v0.5)
 
-### v0.4 → v0.5 (Final Freeze)
+### v0.4 → v0.5
 
 **새 contextual keyword 3 개.** 기존 식별자로 쓰이던 자리에서는
 여전히 식별자로 파싱된다.
@@ -55,7 +55,9 @@ edge-case 결정(G13-G18), v0.5 에서 한 번에 수용된 15 개 결정
 - `RangeExpr` 에 optional `by Expr` suffix (G25).
 - `AsExpr` — `Expr 'as?' TypeName` postfix (G27).
 - `DefaultLiteral` 확장 — 필드가 모두 literal 인 struct literal 과
-  `const fn` 호출 반환값 포함 (G21).
+  `const fn` 호출 반환값 포함 (G21). `const fn` 본문은 §3.1.1
+  capability matrix 에 한정 — 매트릭스 밖 구문은 `E0766`,
+  call graph cycle 은 `E0767`, 제네릭 `const fn` 은 `E0768`.
 
 **Grammar 규모 변화**.
 
@@ -67,9 +69,9 @@ edge-case 결정(G13-G18), v0.5 에서 한 번에 수용된 15 개 결정
 | Lexer token classes | 34 | 36 | +2 |
 | Diagnostic bands used | E0001-E0779 | E0001-E0779 + E0405 | +1 band |
 
-**Freeze 규칙.** v0.5 태그 이후 위 표의 값은 변경 금지. 새
-contextual keyword, annotation, production 추가는 edition 제안
-(v1.0+) 에서만 가능.
+**변경 원칙.** 위 표의 값은 v0.5 기준. 새 contextual keyword,
+annotation, production 추가는 정식 버전 업 과 함께 이 표에 반영되며,
+v0.5.x 패치 안에서 조용히 바뀌지 않는다.
 
 ### v0.3 → v0.4
 

@@ -912,6 +912,30 @@ the nested stack.
 
 **Fix**: rename one of the two labels so each name is unique within
 
+### E0766 — `CodeConstFnDisallowed`
+
+CodeConstFnDisallowed: the body of a `const fn` contains a construct outside the §3.1.1 capability matrix. Allowed: literals, arithmetic / comparison / boolean on numeric / bool, `let` bindings, parameter references, references to top-level `pub? let` of DefaultLiteral type, direct calls to other `const fn` (acyclic), struct / enum-variant / tuple / list / map construction with all-const operands. Forbidden: control flow (`if` / `match` / `for` / `loop` / `while` / `return` / `defer` / `?`), closures, method calls, operator overloads, string concatenation / interpolation, `let mut` / assignment, FFI symbols, `panic` / `todo` / `abort`, recursion, I/O. v0.5 (G21) §3.1.1.
+
+drop `const` if the function is only needed at runtime.
+
+**Fix**: rewrite the body using only matrix-allowed constructs, or
+
+### E0767 — `CodeConstFnCycle`
+
+CodeConstFnCycle: the `const fn` call graph contains a cycle — either direct recursion (`const fn f() { f() }`) or a transitive loop between two or more `const fn`s. Reported at the resolver pass before type checking. v0.5 (G21) §3.1.1.
+
+express the computation iteratively via a runtime function, or precompute the value as a `pub let` binding.
+
+**Fix**: break the cycle. Recursion is not available in `const fn`;
+
+### E0768 — `CodeConstFnGeneric`
+
+CodeConstFnGeneric: a `const fn` declaration carries type parameters (`const fn f<T>(...)`). Generic `const fn` would require a monomorphizing const-evaluation engine, which Osty does not provide. v0.5 (G21) §3.1.1.
+
+`const` and use an ordinary generic function at runtime.
+
+**Fix**: declare a separate `const fn` per concrete type, or drop
+
 ### E0754 — `CodeOpAnnotationBadSignature`
 
 CodeOpAnnotationBadSignature: a method carrying `#[op(X)]` does not match the required shape for operator X (wrong parameter count, wrong self-position, wrong return type). v0.5 (G35) §3.1.

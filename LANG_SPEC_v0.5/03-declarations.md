@@ -76,6 +76,84 @@ error: positional argument after keyword argument
            or move all keyword arguments to the end of the call.
 ```
 
+#### 3.1.1 `const fn` — Compile-Time Evaluable Functions
+
+A function declared `const fn` (optionally `pub const fn`) is evaluable at
+compile time. The sole motivating use case is composition of values
+usable as `DefaultLiteral` (G21): a `const fn` call whose arguments are
+themselves `DefaultLiteral`s may appear in a default-argument position.
+
+```osty
+const fn kb(n: Int) -> Int { n * 1024 }
+const fn defaultBuffer() -> Int { kb(8) }
+
+pub fn connect(host: String, buffer: Int = defaultBuffer()) -> Result<Conn, Error> {
+    ...
+}
+```
+
+The body of a `const fn` is restricted to the set below. A construct
+outside this set is `E0766`.
+
+**Capability matrix.**
+
+| Construct                                                | Allowed |
+|----------------------------------------------------------|---------|
+| Literal values (numeric, string, char, byte, bool, `None`, `()`) | yes |
+| Unary `-` on numeric literals                            | yes |
+| Arithmetic `+ - * / %` on `Int` / `Float` operands       | yes |
+| Comparison `< <= > >= == !=`                             | yes |
+| Boolean `&& \|\| !`                                      | yes |
+| `let` binding (immutable, single-assignment)             | yes |
+| Parameter reference (own formals)                        | yes |
+| Reference to a top-level `pub? let` of `DefaultLiteral` type | yes |
+| Direct call to another `const fn` (acyclic; see below)   | yes |
+| Struct literal with all-const fields                     | yes |
+| Enum variant construction with all-const payloads (incl. `Some`/`Ok`/`Err`) | yes |
+| Tuple literal with all-const elements                    | yes |
+| List / Map literal with all-const elements               | yes |
+| Parenthesized / block expression whose result is const   | yes |
+| `if` / `match` / `for` / `loop` / `while`                | **no** |
+| `return` statement                                       | **no** (use final-expression form) |
+| `?` operator                                             | **no** |
+| `defer`                                                  | **no** |
+| Recursion, direct or through a `const fn` cycle          | **no** |
+| String concatenation `+` or interpolation `"{expr}"`     | **no** |
+| Closure / lambda expression                              | **no** |
+| Method call, operator via `#[op(...)]`                   | **no** |
+| `let mut`, assignment, compound assignment               | **no** |
+| FFI symbols from `use go "..."` blocks                   | **no** |
+| `panic` / `todo` / `abort` / `unreachable`               | **no** |
+| Generic type parameters on the `const fn` itself         | **no** |
+| I/O (`println`, `std.fs.*`, etc.)                        | **no** |
+
+**Additional rules.**
+
+- The call graph of `const fn` declarations must be acyclic. A cycle
+  — direct or transitive — is `E0767`, reported at the resolver pass
+  before type checking.
+- `const fn` may not declare type parameters (`E0768`). If a type-
+  generic compile-time value is needed, declare per-type `const fn`s
+  or fall back to a runtime `pub let` (monomorphization of a generic
+  `const fn` would require a const-evaluation engine Osty does not
+  provide).
+- The return type of a `const fn` must be a concrete type whose values
+  are themselves `DefaultLiteral`-compatible under the extended
+  definition (numeric / string / char / byte / bool / `None` / `()` /
+  struct whose fields are such / enum variant whose payloads are such /
+  tuple / list / map of such).
+- A `const fn` call in any position other than a default-argument
+  expression is evaluated at the call site exactly like an ordinary
+  function call. The `const` prefix constrains the **body** and
+  enables **default-argument use**; it does not force constant-
+  folding in runtime call sites.
+
+**Forward compatibility.** The FORBID rows above are the stable set for
+v0.5. Relaxing any of them is an additive, semver-observable change —
+it enables source that previously did not compile. Such changes must
+ship under a normal minor version bump; no FORBID row silently flips
+to ALLOW inside a v0.5.x patch release.
+
 ### 3.2 Variables
 
 ```osty

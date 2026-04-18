@@ -3,20 +3,19 @@
 This chapter records the evolution of the specification across released
 versions. The latest release is at the top.
 
-### 18.-1 v0.4 → v0.5 — Final Freeze
+### 18.-1 v0.4 → v0.5
 
-v0.5 is the **final surface expansion** of the language. After this
-release, grammar / prelude / `§14` excluded list / stdlib public
-signatures are locked for the lifetime of Osty. Subsequent work is
-limited to compiler quality, tooling, and ecosystem — bug fixes,
-performance, clearer diagnostics, and meaning-preserving optimization
-only.
+v0.5 is the release in which the accumulated v0.4 pain points are
+resolved in a single batch, rather than incrementally over multiple
+minors. Grammar / prelude / `§14` excluded list / stdlib public
+signatures in this release are intended to be stable for an extended
+period; when future changes are necessary they follow the normal
+versioning process.
 
-**Principle.** Close every observed v0.4 pain point in a single
-release so users never have to learn a new grammar or prelude again.
+**Principle.** Close every observed v0.4 pain point in one release so
+users do not need to learn a new grammar or prelude for each minor.
 Everything added is chosen because it eliminated a concrete pain in a
-real program; the excluded list is tightened to preempt re-opening
-requests.
+real program.
 
 **Additions — syntax (additive; all v0.4 programs compile unchanged).**
 
@@ -28,7 +27,7 @@ requests.
 | `receiver { field: value }` | struct update shorthand (receiver-typed literal; equivalent to `Type { ..receiver, field: value }`) | §4.6 |
 | `f(x) \|y\| { body }` | trailing closure — last function-typed arg moves outside parentheses | §4.5 |
 | `err as? T` | downcast shortcut (equivalent to `err.downcast::<T>()`) | §4.9 |
-| `pub? const fn` | compile-time evaluable function (pure, literal arithmetic + other const fn calls) | §3.1 |
+| `pub? const fn` | compile-time evaluable function; body constrained by §3.1.1 capability matrix (literals, arithmetic, acyclic const-fn calls, construction); recursion / control flow / string concat / generics forbidden | §3.1.1 |
 | `pub enum Status: Int { OK = 200, ... }` | enum with explicit integer discriminants (payload-free variants only) | §3.5 |
 | `use std.fs::{open, exists}` | scoped / grouped imports | §5 |
 | `pub use sub.Foo` | cross-module re-export | §5 |
@@ -58,7 +57,7 @@ requests.
 | ID | Subject | Outcome |
 |---|---|---|
 | **G20** | Function value parameter-name preservation | Names survive as metadata; keyword-call through fn-values allowed when names match; type equality ignores names. |
-| **G21** | Default argument literal definition extension | `DefaultLiteral` now includes struct literals whose fields are themselves literals, plus `const fn` return values. |
+| **G21** | Default argument literal definition extension | `DefaultLiteral` now includes struct literals whose fields are themselves literals, plus `const fn` return values. `const fn` body is constrained by the §3.1.1 capability matrix; the `const fn` call graph must be acyclic (`E0767`); `const fn` may not be generic (`E0768`); out-of-matrix construct is `E0766`. |
 | **G22** | `loop` expression | Value-returning unbounded loop; `break value` typed from all exit sites. |
 | **G23** | Trailing closure call | Last function-typed arg may move outside `(...)`; closure may follow a full or empty arg list. |
 | **G24** | Labeled break/continue | `'label:` prefixes loops; `break 'label` / `continue 'label`; unknown label is `E0763`. |
@@ -80,13 +79,13 @@ requests.
 - Reaffirmed permanent exclusions (total 9 after v0.5): `null` / `nil`, exceptions & `try`/`catch`, inheritance, macros, user-defined annotation set, `unsafe` (user-facing), user-visible raw pointer, `[]` / `()` / bitwise operator overload, generic type-parameter defaults.
 - Removed from excluded list (now part of language): `while`/`loop` keyword (the `for cond { }` while-style existed since v0.3; `loop { break v }` is new in v0.5), labeled `break`/`continue` (new in v0.5), `const` (new in v0.5 for compile-time functions only — still no run-time immutable binding form beyond `let`).
 
-**Grammar delta.** New contextual keywords `by`, `const`, `loop`. New syntactic markers `as?`, label prefix `'ident:`, trailing-closure call shape. Extended productions: `UseDecl`, `EnumDecl`, `StructLiteral`, `DefaultLiteral`, `CallExpr`, `FnDecl`. New annotations `#[op(...)]`, `#[cfg(...)]`, `#[test]`. New diagnostic codes span E0405, E0552–E0554, E0754–E0759, E0763–E0765. The
+**Grammar delta.** New contextual keywords `by`, `const`, `loop`. New syntactic markers `as?`, label prefix `'ident:`, trailing-closure call shape. Extended productions: `UseDecl`, `EnumDecl`, `StructLiteral`, `DefaultLiteral`, `CallExpr`, `FnDecl`. New annotations `#[op(...)]`, `#[cfg(...)]`, `#[test]`. New diagnostic codes span E0405, E0552–E0554, E0754–E0759, E0763–E0765, E0766–E0768. The
 E0760–E0762 control-flow slots (`CodeUnreachableCode`, `CodeMissingReturn`,
-`CodeDefaultNotLiteral`) remain as already defined in v0.4.
+`CodeDefaultNotLiteral`) remain as already defined in v0.4. E0766–E0768
+cover `const fn` body validation, const-fn call-graph cycles, and
+generic `const fn` rejection respectively (§3.1.1).
 
-**Implementation guidance.** The implementation order is (i) additive stdlib (Option / Result / List / Map extensions, `std.strings`, `Error.wrap`), (ii) small syntax (labels, `loop`, range `by`, `as?`, scoped imports, `pub use`, enum discriminants, `#[cfg]`), (iii) medium syntax (struct update shorthand, trailing closure, struct-literal defaults, `const fn`), (iv) type system (numeric widening, operator dispatch, function-value name preservation), (v) test infrastructure (inline `#[test]`, doctest, property framework). Each feature ships a positive spec example, a negative reject case, and a golden-snapshot diagnostic test.
-
-**Post-release contract.** After v0.5 tag: (1) grammar file, (2) prelude symbol list, (3) `§14` excluded list are CI-locked by content hash. Changes require an edition proposal (v1.0+).
+**Implementation guidance.** The implementation order is (i) additive stdlib (Option / Result / List / Map extensions, `std.strings`, `Error.wrap`), (ii) small syntax (labels, `loop`, range `by`, `as?`, scoped imports, `pub use`, enum discriminants, `#[cfg]`), (iii) medium syntax (struct update shorthand, trailing closure, struct-literal defaults, `const fn` with §3.1.1 capability matrix and acyclic-call-graph check), (iv) type system (numeric widening, operator dispatch, function-value name preservation), (v) test infrastructure (inline `#[test]`, doctest, property framework). Each feature ships a positive spec example, a negative reject case, and a golden-snapshot diagnostic test.
 
 ### 18.0 v0.4 minor: runtime primitives (additive)
 
@@ -132,7 +131,7 @@ stable diagnostics, and implementation status that matches the spec.
 | **G17** Nested pattern witness diagnostics | Exhaustiveness diagnostics report one minimal missing pattern. Tuple/struct witnesses refine the leftmost missing component; closed enum/Option/Result payloads recurse; open types use `_`; guarded arms do not contribute coverage. | §4.3 |
 | **G18** Stdlib protocol executable stubs | Protocol signatures in §10/§15/§16/§17 are tracked as checked `.osty` stubs first. Runtime/gen parity is implementation backlog unless a signature ambiguity is found. | §10, §15-§17 |
 
-Additional grammar-freeze hardening:
+Additional grammar hardening:
 
 - Empty turbofish (`foo::<>`) is a syntax error.
 - Empty generic/type argument lists (`fn f<>()`, `List<>`) are syntax

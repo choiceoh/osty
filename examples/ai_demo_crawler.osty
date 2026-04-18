@@ -12,7 +12,7 @@
 ///   9. 패턴 매칭        — match, if let, for let (§4.3, §4.2, §4.4)
 ///  10. select           — recv/timeout/default (§8.6)
 ///
-/// 언어 규칙 (v0.4 grammar frozen):
+/// 언어 규칙 (v0.5 baseline):
 ///   - ASI (세미콜론 없음)
 ///   - 후행 . 금지, 선행 . 만 허용
 ///   - } else 같은 줄
