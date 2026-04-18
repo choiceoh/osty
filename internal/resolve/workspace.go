@@ -140,6 +140,20 @@ type Workspace struct {
 	// A package appears here only during the DFS descent initiated by
 	// LoadPackage.
 	loading map[string]bool
+
+	// cfgEnv carries the `#[cfg(...)]` evaluation environment
+	// (os/target/arch/feature). When nil, ResolveAll populates it
+	// from `DefaultCfgEnv()` — i.e. the Go host values. The build
+	// driver sets this explicitly when cross-compiling or toggling
+	// features.
+	cfgEnv *CfgEnv
+}
+
+// SetCfgEnv installs a CfgEnv that subsequent ResolveAll calls use
+// for `#[cfg(...)]` evaluation. Passing nil restores the default
+// (host-derived) environment.
+func (w *Workspace) SetCfgEnv(env *CfgEnv) {
+	w.cfgEnv = env
 }
 
 // NewWorkspace creates a workspace anchored at the given filesystem
@@ -344,6 +358,30 @@ func (w *Workspace) ResolveAll() map[string]*PackageResult {
 
 	prelude := NewPrelude()
 
+	// v0.5 (G29) §5: `#[cfg(...)]` pre-resolve filter. Drop every
+	// declaration whose cfg guard is false before any package
+	// resolver inspects the file. Runs across every non-stub,
+	// non-pre-resolved package so cross-package symbol lookups in
+	// subsequent passes see the filtered surface only.
+	cfgEnv := w.cfgEnv
+	if cfgEnv == nil {
+		cfgEnv = DefaultCfgEnv()
+	}
+	cfgDiagsPerPkg := map[string][]*diag.Diagnostic{}
+	for path, pkg := range w.Packages {
+		if pkg.isStub {
+			continue
+		}
+		if w.isPreResolvedStdlib(path, pkg) {
+			continue
+		}
+		for _, f := range pkg.Files {
+			if ds := filterCfgDecls(f.File, cfgEnv); len(ds) > 0 {
+				cfgDiagsPerPkg[path] = append(cfgDiagsPerPkg[path], ds...)
+			}
+		}
+	}
+
 	// Per-package resolvers are needed so diagnostics stay
 	// segregated, but every one shares the same prelude. Build a
 	// resolver for each non-stub package up front.
@@ -394,6 +432,13 @@ func (w *Workspace) ResolveAll() map[string]*PackageResult {
 	for _, cd := range cycleDiags {
 		if r, ok := results[cd.importer]; ok {
 			r.Diags = append(r.Diags, cd.diag)
+		}
+	}
+	// Surface any cfg-argument diagnostics produced by the pre-filter.
+	// These attach to the package the bad cfg lived in.
+	for path, ds := range cfgDiagsPerPkg {
+		if r, ok := results[path]; ok {
+			r.Diags = append(r.Diags, ds...)
 		}
 	}
 	return results
