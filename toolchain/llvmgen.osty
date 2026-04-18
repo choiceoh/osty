@@ -185,6 +185,53 @@ pub fn llvmSlotAsPtr(slot: LlvmValue) -> LlvmValue {
     LlvmValue { typ: "ptr", name: slot.name, pointer: false }
 }
 
+/// Emit a bare `%tN = alloca <type>` and return the slot as a plain
+/// `ptr`-typed LlvmValue. Unlike `llvmMutableLetSlot` this does not
+/// store an initial value or bind a name — the result is ready to
+/// hand directly to a runtime call that wants an out-pointer.
+pub fn llvmAllocaSlot(emitter: LlvmEmitter, llvmType: String) -> LlvmValue {
+    let slot = llvmNextTemp(emitter)
+    emitter.body.push("  {slot} = alloca {llvmType}")
+    LlvmValue { typ: "ptr", name: slot, pointer: false }
+}
+
+/// Emit `alloca <value.typ>` + `store <value.typ> <value>, ptr <slot>`
+/// and return the slot as a plain `ptr`-typed LlvmValue. Use when a
+/// runtime call wants the value spilled through memory (composite
+/// Map/List value ABI, channel bytes path, …).
+pub fn llvmSpillToSlot(emitter: LlvmEmitter, value: LlvmValue) -> LlvmValue {
+    let slot = llvmAllocaSlot(emitter, value.typ)
+    emitter.body.push("  store {value.typ} {value.name}, ptr {slot.name}")
+    slot
+}
+
+/// Emit `%tN = load <llvmType>, ptr <slot>` and return the loaded
+/// value. Use after a runtime call has written into a slot allocated
+/// by `llvmAllocaSlot` — the typed variant of `llvmLoad`, which needs
+/// a `pointer: true` slot struct.
+pub fn llvmLoadFromSlot(
+    emitter: LlvmEmitter,
+    slot: LlvmValue,
+    llvmType: String,
+) -> LlvmValue {
+    let tmp = llvmNextTemp(emitter)
+    emitter.body.push("  {tmp} = load {llvmType}, ptr {slot.name}")
+    LlvmValue { typ: llvmType, name: tmp, pointer: false }
+}
+
+/// Emit the `getelementptr null, 1` / `ptrtoint` idiom that yields the
+/// byte size of an LLVM type at codegen time. LLVM's constant folder
+/// collapses both instructions to a numeric literal during opt, so the
+/// runtime receives a bare integer. Works for any first-class type,
+/// including user structs referenced by their `%Name` handle.
+pub fn llvmSizeOf(emitter: LlvmEmitter, llvmType: String) -> LlvmValue {
+    let gep = llvmNextTemp(emitter)
+    emitter.body.push("  {gep} = getelementptr {llvmType}, ptr null, i32 1")
+    let size = llvmNextTemp(emitter)
+    emitter.body.push("  {size} = ptrtoint ptr {gep} to i64")
+    LlvmValue { typ: "i64", name: size, pointer: false }
+}
+
 pub fn llvmAssign(emitter: LlvmEmitter, name: String, value: LlvmValue) -> Bool {
     let lookup = llvmLookup(emitter, name)
     if !(lookup.found) || !(lookup.value.pointer) || lookup.value.typ != value.typ {
@@ -652,6 +699,23 @@ pub fn llvmRenderModuleWithSetRuntime(
         typeDefs,
         stringGlobals,
         llvmSetRuntimeDeclarations(),
+        definitions,
+    )
+}
+
+pub fn llvmRenderModuleWithChannelRuntime(
+    sourcePath: String,
+    target: String,
+    typeDefs: List<String>,
+    stringGlobals: List<LlvmStringGlobal>,
+    definitions: List<String>,
+) -> String {
+    llvmRenderModuleWithRuntimeDeclarations(
+        sourcePath,
+        target,
+        typeDefs,
+        stringGlobals,
+        llvmChanRuntimeDeclarations(),
         definitions,
     )
 }
@@ -1425,6 +1489,31 @@ pub fn llvmListPushPtr(emitter: LlvmEmitter, list: LlvmValue, value: LlvmValue) 
     llvmCallVoid(emitter, "osty_rt_list_push_ptr", [list, value])
 }
 
+/// Emit a typed `osty_rt_list_push_<suffix>` call, picking the runtime
+/// symbol from `value.typ`. Precondition: the caller has already
+/// verified `llvmListUsesTypedRuntime(value.typ)` — composite struct
+/// elements need the `push_bytes_v1` path which this helper does not
+/// cover.
+pub fn llvmListPush(emitter: LlvmEmitter, list: LlvmValue, value: LlvmValue) {
+    let symbol = llvmListRuntimePushSymbol(llvmListElementSuffix(value.typ))
+    llvmCallVoid(emitter, symbol, [list, value])
+}
+
+/// Emit a typed `osty_rt_list_get_<suffix>` call and return the loaded
+/// element. `elemTyp` is the LLVM element type (`"i64"`, `"double"`,
+/// `"ptr"`, …) and drives both the runtime suffix and the LLVM return
+/// type of the call. Typed path only — composite elements use the
+/// `get_bytes_v1` out-pointer ABI.
+pub fn llvmListGet(
+    emitter: LlvmEmitter,
+    list: LlvmValue,
+    index: LlvmValue,
+    elemTyp: String,
+) -> LlvmValue {
+    let symbol = llvmListRuntimeGetSymbol(llvmListElementSuffix(elemTyp))
+    llvmCall(emitter, elemTyp, symbol, [list, index])
+}
+
 pub fn llvmListGetI64(emitter: LlvmEmitter, list: LlvmValue, index: LlvmValue) -> LlvmValue {
     llvmCall(emitter, "i64", "osty_rt_list_get_i64", [list, index])
 }
@@ -1590,6 +1679,61 @@ pub fn llvmMapGetOrAbortString(emitter: LlvmEmitter, map: LlvmValue, key: LlvmVa
     llvmCallVoid(emitter, "osty_rt_map_get_or_abort_string", [map, key, outSlot])
 }
 
+/// Emit `osty_rt_map_contains_<suffix>(map, key)` picking the suffix
+/// from `key.typ` / `isString`. Returns the `i1` result register. Use
+/// `isString = true` when the key is a string-typed `ptr` so the
+/// runtime selects byte-wise hashing rather than pointer identity.
+pub fn llvmMapContains(
+    emitter: LlvmEmitter,
+    map: LlvmValue,
+    key: LlvmValue,
+    isString: Bool,
+) -> LlvmValue {
+    let symbol = llvmMapRuntimeContainsSymbol(key.typ, isString)
+    llvmCall(emitter, "i1", symbol, [map, key])
+}
+
+/// Emit `osty_rt_map_insert_<suffix>(map, key, ptr valueSlot)`. Caller
+/// must have already stashed the value in `valueSlot` via
+/// `llvmMutableLetSlot` + `llvmSlotAsPtr` — the runtime memcpys
+/// `value_size` bytes from the slot into its bucket.
+pub fn llvmMapInsert(
+    emitter: LlvmEmitter,
+    map: LlvmValue,
+    key: LlvmValue,
+    valueSlot: LlvmValue,
+    isString: Bool,
+) {
+    let symbol = llvmMapRuntimeInsertSymbol(key.typ, isString)
+    llvmCallVoid(emitter, symbol, [map, key, valueSlot])
+}
+
+/// Emit `osty_rt_map_remove_<suffix>(map, key)`. Returns an `i1` whose
+/// value is true when the key was present (and has now been erased).
+pub fn llvmMapRemove(
+    emitter: LlvmEmitter,
+    map: LlvmValue,
+    key: LlvmValue,
+    isString: Bool,
+) -> LlvmValue {
+    let symbol = llvmMapRuntimeRemoveSymbol(key.typ, isString)
+    llvmCall(emitter, "i1", symbol, [map, key])
+}
+
+/// Emit `osty_rt_map_get_or_abort_<suffix>(map, key, ptr outSlot)`.
+/// Runtime aborts the program on key-miss; on hit it writes
+/// `value_size` bytes into `outSlot`. Caller loads back from the slot.
+pub fn llvmMapGetOrAbort(
+    emitter: LlvmEmitter,
+    map: LlvmValue,
+    key: LlvmValue,
+    outSlot: LlvmValue,
+    isString: Bool,
+) {
+    let symbol = llvmMapRuntimeGetOrAbortSymbol(key.typ, isString)
+    llvmCallVoid(emitter, symbol, [map, key, outSlot])
+}
+
 /// LLVM forward declarations for the `osty_rt_set_*` C runtime surface.
 /// Unlike Map, Set items are passed through the typed ABI (by value),
 /// so the declaration set mirrors the 5 key variants directly. The
@@ -1691,6 +1835,148 @@ pub fn llvmSetRemovePtr(emitter: LlvmEmitter, set: LlvmValue, item: LlvmValue) -
 
 pub fn llvmSetRemoveString(emitter: LlvmEmitter, set: LlvmValue, item: LlvmValue) -> LlvmValue {
     llvmCall(emitter, "i1", "osty_rt_set_remove_string", [set, item])
+}
+
+/// Emit `osty_rt_set_contains_<suffix>(set, item)` picking the suffix
+/// from `item.typ` / `isString`. Returns the `i1` membership result.
+pub fn llvmSetContains(
+    emitter: LlvmEmitter,
+    set: LlvmValue,
+    item: LlvmValue,
+    isString: Bool,
+) -> LlvmValue {
+    let symbol = llvmSetRuntimeContainsSymbol(item.typ, isString)
+    llvmCall(emitter, "i1", symbol, [set, item])
+}
+
+/// Emit `osty_rt_set_insert_<suffix>(set, item)`. Returns an `i1` whose
+/// value is true when the item was newly added (not already present).
+pub fn llvmSetInsert(
+    emitter: LlvmEmitter,
+    set: LlvmValue,
+    item: LlvmValue,
+    isString: Bool,
+) -> LlvmValue {
+    let symbol = llvmSetRuntimeInsertSymbol(item.typ, isString)
+    llvmCall(emitter, "i1", symbol, [set, item])
+}
+
+/// Emit `osty_rt_set_remove_<suffix>(set, item)`. Returns an `i1` that
+/// is true when the item was present and has now been removed.
+pub fn llvmSetRemove(
+    emitter: LlvmEmitter,
+    set: LlvmValue,
+    item: LlvmValue,
+    isString: Bool,
+) -> LlvmValue {
+    let symbol = llvmSetRuntimeRemoveSymbol(item.typ, isString)
+    llvmCall(emitter, "i1", symbol, [set, item])
+}
+
+/// Channel-element suffix follows the same "typed or bytes_v1" split
+/// as the other scalar-vs-composite runtime surfaces: i64/i1/f64/ptr
+/// get a typed entry point, everything else routes through the
+/// composite `_bytes_v1` helper that takes a `ptr size` out-param.
+pub fn llvmChanElementSuffix(elemTyp: String) -> String {
+    if llvmListUsesTypedRuntime(elemTyp) {
+        return llvmListElementSuffix(elemTyp)
+    }
+    "bytes_v1"
+}
+
+pub fn llvmChanRuntimeMakeSymbol() -> String {
+    "osty_rt_thread_chan_make"
+}
+
+pub fn llvmChanRuntimeSendSymbol(suffix: String) -> String {
+    "osty_rt_thread_chan_send_{suffix}"
+}
+
+pub fn llvmChanRuntimeSendBytesSymbol() -> String {
+    "osty_rt_thread_chan_send_bytes_v1"
+}
+
+pub fn llvmChanRuntimeRecvSymbol(suffix: String) -> String {
+    "osty_rt_thread_chan_recv_{suffix}"
+}
+
+pub fn llvmChanRuntimeCloseSymbol() -> String {
+    "osty_rt_thread_chan_close"
+}
+
+pub fn llvmChanRuntimeIsClosedSymbol() -> String {
+    "osty_rt_thread_chan_is_closed"
+}
+
+/// LLVM forward declarations for the `osty_rt_thread_chan_*` runtime.
+/// Returns all 10 entry points (make + close + is_closed + 4 typed
+/// send + 4 typed recv + 1 composite send + 1 composite recv). The
+/// Osty runtime that backs these symbols is still under construction —
+/// the native backend emits the declarations so modules that touch
+/// channels compile through the MIR path until the runtime lands.
+pub fn llvmChanRuntimeDeclarations() -> List<String> {
+    [
+        "declare ptr @osty_rt_thread_chan_make(i64)",
+        "declare void @osty_rt_thread_chan_close(ptr)",
+        "declare i1 @osty_rt_thread_chan_is_closed(ptr)",
+        "declare void @osty_rt_thread_chan_send_i64(ptr, i64)",
+        "declare void @osty_rt_thread_chan_send_i1(ptr, i1)",
+        "declare void @osty_rt_thread_chan_send_f64(ptr, double)",
+        "declare void @osty_rt_thread_chan_send_ptr(ptr, ptr)",
+        "declare void @osty_rt_thread_chan_send_bytes_v1(ptr, ptr, i64)",
+        "declare \{ i64, i64 \} @osty_rt_thread_chan_recv_i64(ptr)",
+        "declare \{ i64, i64 \} @osty_rt_thread_chan_recv_i1(ptr)",
+        "declare \{ i64, i64 \} @osty_rt_thread_chan_recv_f64(ptr)",
+        "declare \{ i64, i64 \} @osty_rt_thread_chan_recv_ptr(ptr)",
+        "declare \{ i64, i64 \} @osty_rt_thread_chan_recv_bytes_v1(ptr)",
+    ]
+}
+
+/// Emit `call ptr @osty_rt_thread_chan_make(i64 capacity)`.
+pub fn llvmChanMake(emitter: LlvmEmitter, capacity: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "ptr", llvmChanRuntimeMakeSymbol(), [capacity])
+}
+
+/// Emit a typed `osty_rt_thread_chan_send_<suffix>(ch, val)` picking
+/// the suffix from `value.typ`. Precondition: caller has verified
+/// `llvmListUsesTypedRuntime(value.typ)` — composite values route
+/// through `llvmChanSendBytes`.
+pub fn llvmChanSend(emitter: LlvmEmitter, channel: LlvmValue, value: LlvmValue) {
+    let symbol = llvmChanRuntimeSendSymbol(llvmListElementSuffix(value.typ))
+    llvmCallVoid(emitter, symbol, [channel, value])
+}
+
+/// Emit the composite-send path
+/// `osty_rt_thread_chan_send_bytes_v1(ch, ptr slot, i64 size)`. Caller
+/// has already spilled the value into `slot` and computed `size` via
+/// `llvmSpillToSlot` + `llvmSizeOf`.
+pub fn llvmChanSendBytes(
+    emitter: LlvmEmitter,
+    channel: LlvmValue,
+    slot: LlvmValue,
+    size: LlvmValue,
+) {
+    llvmCallVoid(emitter, llvmChanRuntimeSendBytesSymbol(), [channel, slot, size])
+}
+
+/// Emit `osty_rt_thread_chan_recv_<suffix>(ch)` and return the
+/// `{ i64 disc, i64 payload }` aggregate — matches the Option<T>
+/// enum layout the MIR lowerer expects, so callers can store it
+/// directly into their dest local.
+pub fn llvmChanRecv(emitter: LlvmEmitter, channel: LlvmValue, elemTyp: String) -> LlvmValue {
+    let symbol = llvmChanRuntimeRecvSymbol(llvmChanElementSuffix(elemTyp))
+    llvmCall(emitter, "\{ i64, i64 \}", symbol, [channel])
+}
+
+/// Emit `call void @osty_rt_thread_chan_close(ptr ch)`.
+pub fn llvmChanClose(emitter: LlvmEmitter, channel: LlvmValue) {
+    llvmCallVoid(emitter, llvmChanRuntimeCloseSymbol(), [channel])
+}
+
+/// Emit `call i1 @osty_rt_thread_chan_is_closed(ptr ch)` and return
+/// the i1 result register.
+pub fn llvmChanIsClosed(emitter: LlvmEmitter, channel: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "i1", llvmChanRuntimeIsClosedSymbol(), [channel])
 }
 
 /// Build the canonical `ClosureEnv.<tag0>.<tag1>…` type name used by the
