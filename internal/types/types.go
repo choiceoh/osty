@@ -65,6 +65,18 @@ const (
 	PString
 	PBytes
 
+	// Runtime-only scalar: an opaque pointer-shaped integer type used
+	// by the runtime sublanguage (LANG_SPEC §19.3). Privilege-gated by
+	// `internal/check/privilege.go`; registered here so that references
+	// inside privileged packages resolve to a concrete primitive with a
+	// stable size (8 bytes on the supported 64-bit targets) and so
+	// `#[pod]` struct fields typed as RawPtr check correctly.
+	//
+	// `RawPtr` is `Equal` and `Hashable` but **not** `Ordered` — the
+	// runtime uses tag bits, not numeric comparison, when it needs
+	// ordering on raw addresses (§19.3).
+	PRawPtr
+
 	// Bottom and unit (not really "primitives" in the spec but modelled
 	// the same way for uniform handling).
 	PNever
@@ -102,7 +114,8 @@ func (k PrimitiveKind) IsFloat() bool {
 func (k PrimitiveKind) IsNumeric() bool { return k.IsInteger() || k.IsFloat() }
 
 // IsOrdered reports whether the primitive has a built-in total order
-// (v0.4 §2.6.5).
+// (v0.4 §2.6.5). `RawPtr` is deliberately excluded per §19.3 — the
+// runtime uses tag bits, not numeric comparison, for address ordering.
 func (k PrimitiveKind) IsOrdered() bool {
 	switch k {
 	case PBool, PChar, PString, PBytes:
@@ -112,9 +125,10 @@ func (k PrimitiveKind) IsOrdered() bool {
 }
 
 // IsEqual reports whether the primitive supports `==` directly.
+// `RawPtr` is `Equal` (§19.3): two raw pointers compare bit-equal.
 func (k PrimitiveKind) IsEqual() bool {
 	switch k {
-	case PBool, PChar, PString, PBytes, PUnit:
+	case PBool, PChar, PString, PBytes, PUnit, PRawPtr:
 		return true
 	}
 	return k.IsNumeric()
@@ -163,6 +177,8 @@ func (p *Primitive) String() string {
 		return "String"
 	case PBytes:
 		return "Bytes"
+	case PRawPtr:
+		return "RawPtr"
 	case PNever:
 		return "Never"
 	case PUnit:
@@ -191,6 +207,7 @@ var (
 	Char    = &Primitive{Kind: PChar}
 	String  = &Primitive{Kind: PString}
 	Bytes   = &Primitive{Kind: PBytes}
+	RawPtr  = &Primitive{Kind: PRawPtr}
 	Never   = &Primitive{Kind: PNever}
 	Unit    = &Primitive{Kind: PUnit}
 )
@@ -235,6 +252,7 @@ var primitiveByKind = map[PrimitiveKind]*Primitive{
 	PChar:    Char,
 	PString:  String,
 	PBytes:   Bytes,
+	PRawPtr:  RawPtr,
 }
 
 var primitiveByName = map[string]*Primitive{
@@ -255,6 +273,7 @@ var primitiveByName = map[string]*Primitive{
 	"Char":    Char,
 	"String":  String,
 	"Bytes":   Bytes,
+	"RawPtr":  RawPtr,
 }
 
 // ==== Untyped (polymorphic literals) ====

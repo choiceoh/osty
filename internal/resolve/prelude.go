@@ -31,6 +31,12 @@ var preludeNames = []struct {
 	{"Bytes", SymBuiltin},
 	{"Never", SymBuiltin},
 
+	// Runtime-only primitive (LANG_SPEC §19.3). Resolved as a concrete
+	// primitive so privileged packages typecheck real `RawPtr` uses;
+	// the privilege gate in `internal/check/privilege.go` (E0770)
+	// rejects references from ordinary user packages.
+	{"RawPtr", SymBuiltin},
+
 	// Collection types (§2.4 / §10.6).
 	{"List", SymBuiltin},
 	{"Map", SymBuiltin},
