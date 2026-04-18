@@ -21,6 +21,24 @@ v0.3/v0.4 변경을 통합하여 단일 규범 문서로 재구성.
   닫는 baseline 이며, 자세한 결정은 `SPEC_GAPS.md` 와
   `LANG_SPEC_v0.4/18-change-history.md` 를 따른다.
 
+### v0.4 minor: runtime sublanguage (G19)
+
+- **EBNF 변경 0건.** §19 (runtime primitives) 가 추가되지만
+  새 token, 새 키워드, 새 production 모두 없다. 기존 `Annotation`
+  rule (R 규칙 § Part 2 의 `Annotation ::= '#' '[' IDENT
+  AnnotationArgs? ']'`) 와 fixed annotation set 매커니즘만 재사용한다.
+- 어노테이션 집합이 `#[json]`, `#[deprecated]` 에서 6 개 (`#[intrinsic]`,
+  `#[pod]`, `#[repr(...)]`, `#[export("...")]`, `#[c_abi]`, `#[no_alloc]`)
+  더해진다. 인자 형식은 기존 R 규칙 (key/value literal | bare flag)
+  안에서 처리. 진단은 `E0770`/`E0771`/`E0772` (control-flow 가 이미
+  쓰는 `E0760-E0769` 다음 free band).
+- 새 opaque type `RawPtr` 와 marker interface `Pod` 는 모두
+  type-system 레이어에서 추가되며, parser 의 type production 변경은
+  없다 (보통 식별자로 받아 resolver 가 의미를 부여).
+- Privilege gate 는 parser 가 아니라 resolver/checker 책임이다 — 일반
+  사용자 코드에서 위 어노테이션·타입·`std.runtime.*` import 를 사용하면
+  `E0770` 으로 거부되며 parser 는 변경 없이 그대로 통과시킨다.
+
 ### v0.2 → v0.3
 
 - **R25 확장**: `ClosureParam ::= LetPattern (':' Type)?` — closure

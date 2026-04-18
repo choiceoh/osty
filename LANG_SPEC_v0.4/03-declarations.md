@@ -332,12 +332,28 @@ Aliases are transparent; they create no new type.
 
 Osty has a fixed, compiler-recognized set of annotations. Applying any
 other annotation is a compile error; there is no user-extension
-mechanism. The complete v0.9 set is:
+mechanism. The complete set is:
+
+**User-facing annotations.**
 
 | Annotation | Applies to | Purpose |
 |---|---|---|
 | `#[json(...)]` | struct fields, enum variants | Customize JSON encoding/decoding (§10.8) |
 | `#[deprecated(...)]` | `fn`, `struct`, `enum`, `interface`, `type`, top-level `let`, struct/enum methods, struct fields, enum variants | Emit a warning when the item is referenced |
+
+**Runtime-only annotations** (privileged packages only — see §19.2 and §19.6).
+
+| Annotation | Applies to | Purpose |
+|---|---|---|
+| `#[intrinsic]` | `fn` declarations | Body is supplied by the lowering layer; source body must be empty (§19.5). Generic intrinsics participate in monomorphization. |
+| `#[pod]` | `struct` declarations | Requests the checker to verify the struct's `Pod` shape (§19.4); rejection is `E0771`. |
+| `#[repr(c)]` | `struct` declarations | Forces C ABI field order, padding, and alignment (§19.6). |
+| `#[export("name")]` | top-level `fn` declarations | Emit with the exact symbol name `name`, disabling Osty mangling (§19.6). |
+| `#[c_abi]` | top-level `fn` declarations | Use the platform C calling convention (§19.6). |
+| `#[no_alloc]` | `fn` and method declarations | Forbid managed allocation in the body, and forbid any direct or transitive call to a function that allocates (§19.6.1). |
+
+Applying any runtime-only annotation outside a privileged package is
+`E0770`, not the generic unknown-annotation error.
 
 Syntax is defined in §1.9. Both key/value (`name = value`) and bare-flag
 (`name`) argument forms are accepted.

@@ -3,6 +3,34 @@
 This chapter records the evolution of the specification across released
 versions. The latest release is at the top.
 
+### 18.0 v0.4 minor: runtime primitives (additive)
+
+`LANG_SPEC_v0.4/19-runtime-primitives.md` adds a package-gated runtime
+sublanguage. The change is strictly additive:
+
+- **No grammar change.** No new tokens, no new keywords, no EBNF
+  modification. The annotation form `#[name(args?)]` from §1.9 is
+  reused.
+- **No change to user-reachable surface.** `RawPtr`, the `Pod` marker
+  trait, and all six runtime annotations (`#[intrinsic]`, `#[pod]`,
+  `#[repr(...)]`, `#[export(...)]`, `#[c_abi]`, `#[no_alloc]`) are
+  rejected outside privileged packages with `E0770`. Programs that do
+  not opt in observe no behavior change.
+- **`unsafe` exclusion preserved.** §14 still excludes user-facing
+  `unsafe`. The runtime sublanguage is implementation-private; it is
+  reachable only by the toolchain itself, not by registry packages.
+- **New diagnostics.** `E0770` (privilege violation), `E0771`
+  (`#[pod]` shape rejection or unbounded generic), `E0772` (managed
+  allocation in `#[no_alloc]` body, or invalid type size for
+  `raw.cas`). All in the `E0770–E0779` typecheck-extension band; the
+  control-flow band `E0760–E0769` is already in use.
+- **Manifest schema dependency.** §19.2 introduces a `[capabilities]
+  runtime = true` table key in `osty.toml`. The manifest reference
+  (§10/§11/§13) gains this key in the same release.
+
+Recorded in `SPEC_GAPS.md` as **G19 — runtime sublanguage capability
+surface, decided**.
+
 ### 18.1 v0.3 → v0.4
 
 v0.4 closes the v0.3 edge-case decision queue without adding a large new

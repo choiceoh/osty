@@ -3,7 +3,7 @@
 Osty is a general-purpose, statically-typed, garbage-collected programming language.
 This directory holds the specification, split into per-section files for easier navigation and editing.
 
-**Status.** v0.4 — supersedes v0.3. Closes the remaining v0.3 edge-case decision queue (G13-G18): non-escaping structured-concurrency capabilities, generic method turbofish/method-reference rules, erased function-value arity, closure parameter irrefutability, stable nested witness policy, and checked stdlib protocol stubs. No known open gaps remain at the time of this release. See [`18-change-history.md`](./18-change-history.md) for the full v0.1 → v0.2 → v0.3 → v0.4 evolution.
+**Status.** v0.4 — supersedes v0.3. Closes the remaining v0.3 edge-case decision queue (G13-G18): non-escaping structured-concurrency capabilities, generic method turbofish/method-reference rules, erased function-value arity, closure parameter irrefutability, stable nested witness policy, and checked stdlib protocol stubs. The v0.4 baseline is later extended additively by §19 (runtime primitives — toolchain-only, no grammar change). No known user-facing open gaps remain at the time of this release. See [`18-change-history.md`](./18-change-history.md) for the full v0.1 → v0.2 → v0.3 → v0.4 evolution.
 
 **Companion documents.**
 
@@ -32,6 +32,7 @@ This directory holds the specification, split into per-section files for easier 
 - [16. I/O Protocol](./16-io-protocol.md)
 - [17. Display and Format Protocol](./17-display-and-format-protocol.md)
 - [18. Change History](./18-change-history.md)
+- [19. Runtime Primitives](./19-runtime-primitives.md) — toolchain-only sublanguage; not part of the user prelude
 
 ## Reading order
 
