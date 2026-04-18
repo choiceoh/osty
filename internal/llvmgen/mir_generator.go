@@ -745,13 +745,18 @@ func (g *mirGen) emitFunction(fn *mir.Function) error {
 	g.fnBuf.Reset()
 	g.gcRoots = g.gcRoots[:0]
 
+	emitName := fn.Name
+	if fn.ExportSymbol != "" {
+		emitName = fn.ExportSymbol
+	}
+
 	if fn.IsExternal {
 		// External stub: just a declare.
 		sig := g.functionTypes[fn.Name]
 		g.out.WriteString("declare ")
 		g.out.WriteString(sig.retLLVM)
 		g.out.WriteString(" @")
-		g.out.WriteString(fn.Name)
+		g.out.WriteString(emitName)
 		g.out.WriteByte('(')
 		g.out.WriteString(strings.Join(sig.paramLLVM, ", "))
 		g.out.WriteString(")\n\n")
@@ -775,7 +780,7 @@ func (g *mirGen) emitFunction(fn *mir.Function) error {
 	g.fnBuf.WriteString("define ")
 	g.fnBuf.WriteString(sig.retLLVM)
 	g.fnBuf.WriteString(" @")
-	g.fnBuf.WriteString(fn.Name)
+	g.fnBuf.WriteString(emitName)
 	g.fnBuf.WriteByte('(')
 	for i, pid := range fn.Params {
 		if i > 0 {

@@ -128,7 +128,7 @@ type BlockID int
 // Function is one MIR function: parameters, return slot, a set of
 // named locals, a CFG of basic blocks.
 type Function struct {
-	Name        string   // mangled symbol
+	Name        string // mangled symbol
 	Params      []LocalID
 	ReturnType  Type
 	ReturnLocal LocalID
@@ -139,6 +139,12 @@ type Function struct {
 	IsIntrinsic bool
 	Exported    bool
 	SpanV       Span
+
+	// ExportSymbol is the verbatim symbol name set by `#[export("name")]`
+	// (LANG_SPEC §19.6). When non-empty, the LLVM emitter writes
+	// `@<ExportSymbol>` instead of `@<Name>`, bypassing all mangling
+	// so the function can satisfy the runtime ABI contract.
+	ExportSymbol string
 }
 
 // At returns the function's source span.

@@ -316,6 +316,13 @@ type FnDecl struct {
 	Exported    bool
 	Generics    []*TypeParam
 	SpanV       Span
+
+	// ExportSymbol is the verbatim symbol name supplied via
+	// `#[export("name")]` (LANG_SPEC §19.6). When non-empty, the
+	// backend emits the function with this exact symbol instead of
+	// the mangled default. Applicable only to runtime-sublanguage
+	// functions in privileged packages (§19.2).
+	ExportSymbol string
 }
 
 func (*FnDecl) declNode()          {}

@@ -105,11 +105,12 @@ func (l *lowerer) lowerDecl(d ast.Decl) Decl {
 
 func (l *lowerer) lowerFnDecl(fn *ast.FnDecl) *FnDecl {
 	out := &FnDecl{
-		Name:        fn.Name,
-		Return:      l.lowerType(fn.ReturnType),
-		ReceiverMut: fn.Recv != nil && fn.Recv.Mut,
-		Exported:    fn.Pub,
-		SpanV:       nodeSpan(fn),
+		Name:         fn.Name,
+		Return:       l.lowerType(fn.ReturnType),
+		ReceiverMut:  fn.Recv != nil && fn.Recv.Mut,
+		Exported:     fn.Pub,
+		SpanV:        nodeSpan(fn),
+		ExportSymbol: extractExportSymbol(fn.Annotations),
 	}
 	if out.Return == nil {
 		out.Return = TUnit
@@ -124,6 +125,41 @@ func (l *lowerer) lowerFnDecl(fn *ast.FnDecl) *FnDecl {
 		out.Body = l.lowerBlock(fn.Body)
 	}
 	return out
+}
+
+// extractExportSymbol reads the `#[export("name")]` annotation from a
+// declaration's annotation list (LANG_SPEC §19.6). Returns the empty
+// string when the annotation is absent or malformed; the resolver's
+// arg validator (`checkExportArgs` in internal/resolve) is the
+// authoritative place that rejects a malformed `#[export]`, so at
+// this point in the pipeline we only pick up the well-formed cases.
+func extractExportSymbol(annots []*ast.Annotation) string {
+	for _, a := range annots {
+		if a == nil || a.Name != "export" {
+			continue
+		}
+		if len(a.Args) != 1 {
+			continue
+		}
+		arg := a.Args[0]
+		if arg == nil || arg.Key != "" || arg.Value == nil {
+			continue
+		}
+		lit, ok := arg.Value.(*ast.StringLit)
+		if !ok {
+			continue
+		}
+		var buf []byte
+		for _, p := range lit.Parts {
+			if !p.IsLit {
+				// Interpolation is a resolver error; ignore here.
+				return ""
+			}
+			buf = append(buf, p.Lit...)
+		}
+		return string(buf)
+	}
+	return ""
 }
 
 func (l *lowerer) lowerParam(p *ast.Param) *Param {
