@@ -26904,6 +26904,14 @@ func frontCheckIsAssignable(env *FrontCheckEnv, dstRaw string, srcRaw string) bo
 		// Osty: /tmp/selfhost_merged.osty:10573:9
 		return true
 	}
+	// `use X as alias { struct Foo {} fn NilFoo() -> Foo }` registers the
+	// return type in bare form (`Foo`) while call-site annotations qualify
+	// it (`alias.Foo`). The bootstrapped type table has no edge joining
+	// the two, so treat them as the same type when their last dotted
+	// segment matches modulo a bare `<identifier>.` prefix on one side.
+	if selfhostTypesAliasEqual(dst, src) {
+		return true
+	}
 	// Osty: /tmp/selfhost_merged.osty:10575:5
 	if src == "UntypedInt" {
 		// Osty: /tmp/selfhost_merged.osty:10576:9
@@ -27085,7 +27093,7 @@ func frontCheckExpectAssignable(env *FrontCheckEnv, dst string, src string) {
 		}()
 	} else {
 		// Osty: /tmp/selfhost_merged.osty:10646:12
-		selfhostBumpError(env)
+		selfhostBumpErrorWithDetail(env, fmt.Sprintf("%s <- %s", dst, src))
 	}
 }
 
