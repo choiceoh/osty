@@ -2123,3 +2123,79 @@ func TestGenerateFromMIREmitGCLoopSafepoint(t *testing.T) {
 		t.Fatalf("expected safepoint id 1 in:\n%s", got)
 	}
 }
+
+// TestGenerateFromMIRStringEquality — `fn eq() -> Bool { "a" == "b" }`
+// must lower to osty_rt_strings_Equal rather than a raw `icmp eq ptr`
+// (the latter would reduce to pointer identity, not content equality).
+func TestGenerateFromMIRStringEquality(t *testing.T) {
+	hir := &ir.Module{
+		Package: "main",
+		Decls: []ir.Decl{
+			&ir.FnDecl{
+				Name:   "eq",
+				Return: ir.TBool,
+				Body: &ir.Block{
+					Result: &ir.BinaryExpr{
+						Op:    ir.BinEq,
+						Left:  &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: "a"}}},
+						Right: &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: "b"}}},
+						T:     ir.TBool,
+					},
+				},
+			},
+		},
+	}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/streq.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare i1 @osty_rt_strings_Equal(ptr, ptr)",
+		"call i1 @osty_rt_strings_Equal(ptr",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "icmp eq ptr") {
+		t.Fatalf("found raw icmp eq ptr (should route through runtime helper):\n%s", got)
+	}
+}
+
+// TestGenerateFromMIRStringInequality — `!=` negates the runtime
+// equality result via xor, preserving the content-compare semantics.
+func TestGenerateFromMIRStringInequality(t *testing.T) {
+	hir := &ir.Module{
+		Package: "main",
+		Decls: []ir.Decl{
+			&ir.FnDecl{
+				Name:   "neq",
+				Return: ir.TBool,
+				Body: &ir.Block{
+					Result: &ir.BinaryExpr{
+						Op:    ir.BinNeq,
+						Left:  &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: "a"}}},
+						Right: &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: "b"}}},
+						T:     ir.TBool,
+					},
+				},
+			},
+		},
+	}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/strneq.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"call i1 @osty_rt_strings_Equal(ptr",
+		"xor i1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
