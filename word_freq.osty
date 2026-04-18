@@ -72,8 +72,7 @@ fn tokenize(text: String) -> Result<List<String>, Error> {
 fn tally(tokens: List<String>) -> Map<String, Int> {
     let mut counts: Map<String, Int> = {:}
     for t in tokens {
-        let n = counts.get(t) ?? 0
-        counts.insert(t, n + 1)
+        counts.update(t, |n| (n ?? 0) + 1)
     }
     counts
 }
@@ -129,10 +128,7 @@ for r in results {
                 "tokens": rep.totalTokens,
                 "unique": rep.counts.len(),
             })
-            for (k, v) in rep.counts {
-                let current = merged.get(k) ?? 0
-                merged.insert(k, current + v)
-            }
+            merged = merged.mergeWith(rep.counts, |a, b| a + b)
             totalTokens = totalTokens + rep.totalTokens
         },
         Err(e) -> {

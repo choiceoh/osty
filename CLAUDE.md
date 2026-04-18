@@ -773,6 +773,43 @@ pub fn fetchBytes(url: String) -> Result<Bytes, Error> {
 }
 ```
 
+## B.9.1 컬렉션 helper 전형 패턴
+
+`Map<K, V>`는 intrinsic (`insert/get/remove/keys/len`) + pure helper (spec §10.6)로 구성. **`get → ?? → insert` 3-call 패턴은 금지** — `update`로 한 번에.
+
+| # | helper | 대체되는 안티패턴 |
+|---|---|---|
+| 64.1 | `map.update(k, \|n\| (n ?? 0) + 1)` | `let n = map.get(k) ?? 0; map.insert(k, n + 1)` |
+| 64.2 | `map.getOr(k, d)` | `map.get(k) ?? d` (원한다면 유지 가능; `getOr`는 의도 명시) |
+| 64.3 | `a.mergeWith(b, \|x, y\| x + y)` | `for (k, v) in b { a.update(k, \|n\| (n ?? 0) + v) }` (단, 원본 보존 필요 시 mergeWith) |
+| 64.4 | `xs.groupBy(\|x\| key(x))` | `for x in xs { let k = key(x); let bucket = m.get(k) ?? []; bucket.push(x); m.insert(k, bucket) }` |
+| 64.5 | `map.mapValues(\|v\| f(v))` | `for (k, v) in m { out.insert(k, f(v)) }` |
+| 64.6 | `map.retainIf(\|_k, v\| pred(v))` | `for (k, v) in m.entries() { if !pred(v) { m.remove(k) } }` (iter-during-mutation 위험) |
+
+**전형 패턴** — 단어 빈도 집계 (canonical 레퍼런스: [word_freq.osty](word_freq.osty)):
+
+```osty
+fn tally(tokens: List<String>) -> Map<String, Int> {
+    let mut counts: Map<String, Int> = {:}
+    for t in tokens {
+        counts.update(t, |n| (n ?? 0) + 1)
+    }
+    counts
+}
+
+fn mergeReports(reports: List<Map<String, Int>>) -> Map<String, Int> {
+    let mut merged: Map<String, Int> = {:}
+    for r in reports {
+        merged = merged.mergeWith(r, |a, b| a + b)
+    }
+    merged
+}
+```
+
+**2-arg 클로저 경고:** `counts.any(|k, v| k == "a")` 는 L0002 경고 (`v` unused). 사용 안 하는 위치는 `_k` / `_v` 명시 — spec positive 코퍼스는 이 규칙 지킴.
+
+**백엔드 한계:** Map의 pure helper들은 stdlib에 Osty 본문으로 정의되지만, 현재 LLVM 백엔드는 intrinsic (`insert/get/remove/keys/len`) 외 bodied 메서드 lowering을 지원하지 않음 (LLVM015). 파싱/리졸브/체크까진 통과하지만 `osty run`은 실패. 백엔드가 catch up할 때까지 호출부는 intrinsic만 쓰는 경로로 fallback 가능하다는 점 명심.
+
 ## B.10 특수 / 테스트
 
 | # | 기법 | 비고 |

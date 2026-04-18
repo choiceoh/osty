@@ -31,6 +31,7 @@ appended(item: T) -> List<T>
 concat(other: List<T>) -> List<T>
 zip<U>(other: List<U>) -> List<(T, U)>
 enumerate() -> List<(Int, T)>
+groupBy<K>(key: fn(T) -> K) -> Map<K, List<T>>  // K: Hashable
 
 push(item: T)
 pop() -> T?
@@ -47,14 +48,29 @@ clear()
 len() -> Int
 isEmpty() -> Bool
 get(key: K) -> V?
+getOr(key: K, default: V) -> V
 containsKey(key: K) -> Bool
 keys() -> List<K>
 values() -> List<V>
 entries() -> List<(K, V)>
 
+forEach(f: fn(K, V))
+any(pred: fn(K, V) -> Bool) -> Bool
+all(pred: fn(K, V) -> Bool) -> Bool
+count(pred: fn(K, V) -> Bool) -> Int
+find(pred: fn(K, V) -> Bool) -> (K, V)?
+
+filter(pred: fn(K, V) -> Bool) -> Map<K, V>
+mapValues<R>(f: fn(V) -> R) -> Map<K, R>
+merge(other: Map<K, V>) -> Map<K, V>             // other wins on conflict
+mergeWith(other: Map<K, V>, combine: fn(V, V) -> V) -> Map<K, V>
+
 insert(key: K, value: V)
 remove(key: K) -> V?
 clear()
+update(key: K, f: fn(V?) -> V)                   // upsert with function
+insertAll(other: Map<K, V>)                      // bulk overwrite
+retainIf(pred: fn(K, V) -> Bool)                 // drop entries where pred is false
 ```
 
 #### `Set<T>`
