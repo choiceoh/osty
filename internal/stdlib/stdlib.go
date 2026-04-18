@@ -406,7 +406,23 @@ func collectStubPaths() []string {
 }
 
 // moduleName derives a module's logical name from its stub path.
-// "modules/io.osty" -> "io"; "primitives/int.osty" -> "int".
+//
+//	modules/io.osty             -> "io"             (std.io)
+//	modules/runtime/raw.osty    -> "runtime.raw"    (std.runtime.raw)
+//	primitives/int.osty         -> "int"
+//
+// The prefix (`modules/` or `primitives/`) is stripped; the remaining
+// relative path is dot-joined so nested packages produce dotted logical
+// names matching their `std.*` import path.
 func moduleName(p string) string {
+	clean := strings.TrimSuffix(p, stubExt)
+	if rel, ok := strings.CutPrefix(clean, "modules/"); ok {
+		return strings.ReplaceAll(rel, "/", ".")
+	}
+	if rel, ok := strings.CutPrefix(clean, "primitives/"); ok {
+		return strings.ReplaceAll(rel, "/", ".")
+	}
+	// Fallback for unexpected layouts — treat as a flat basename so
+	// callers never observe a broken module key.
 	return strings.TrimSuffix(path.Base(p), stubExt)
 }
