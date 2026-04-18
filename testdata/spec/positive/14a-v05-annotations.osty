@@ -1,0 +1,38 @@
+// v0.5 annotation reservation — `#[cfg]`, `#[op]`, `#[test]` names
+// are in the allowed annotation set. This fixture exercises only the
+// *name* registration; argument-shape parsing for composite cfg
+// expressions (`all(...)` / `any(...)` / `not(...)`) and operator
+// symbols in `#[op(...)]` is delivered in later Phase-2 parser work.
+
+// ---- #[cfg(...)] simple key/value form ----
+
+#[cfg(os = "linux")]
+fn linuxOnly() -> Int {
+    42
+}
+
+#[cfg(target = "wasm")]
+fn wasmOnly() -> Int {
+    43
+}
+
+#[cfg(feature = "ssl")]
+fn withSsl() -> Int {
+    44
+}
+
+// ---- #[test] ----
+
+#[test]
+fn simpleTest() {
+    let x = 1 + 2
+    let _ = x
+}
+
+#[test]
+fn arithmeticTest() {
+    let a: Int = 3 * 4
+    let b: Int = 12
+    let _ = a
+    let _ = b
+}

@@ -5,7 +5,7 @@ import (
 	"github.com/osty/osty/internal/token"
 )
 
-// scanBadNumericSeparators enforces LANG_SPEC_v0.4 §1.6.1: underscores in
+// scanBadNumericSeparators enforces LANG_SPEC_v0.5 §1.6.1: underscores in
 // numeric literals must sit between two digits of the same base.
 //
 // Walks INT/FLOAT tokens (top-level and interpolation bodies), so string

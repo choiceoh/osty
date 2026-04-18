@@ -564,7 +564,7 @@ func parseFlags() cliFlags {
 	flag.BoolVar(&f.showScopes, "scopes", false, "resolve: also dump the nested scope tree")
 	flag.BoolVar(&f.trace, "trace", false, "stream per-phase timing to stderr (single-file front-end commands)")
 	flag.BoolVar(&f.explain, "explain", false, "after diagnostics, print the `osty explain CODE` text for each unique code")
-	flag.BoolVar(&f.inspect, "inspect", false, "check: emit one record per expression showing the inference rule, type, and hint (see LANG_SPEC_v0.4/02a-type-inference.md)")
+	flag.BoolVar(&f.inspect, "inspect", false, "check: emit one record per expression showing the inference rule, type, and hint (see LANG_SPEC_v0.5/02a-type-inference.md)")
 	flag.BoolVar(&f.dumpNativeDiags, "dump-native-diags", false, "check: after the run, print the native checker's per-context error histogram to stderr")
 	flag.Usage = usage
 	flag.Parse()

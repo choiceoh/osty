@@ -3,10 +3,95 @@
 This chapter records the evolution of the specification across released
 versions. The latest release is at the top.
 
+### 18.-1 v0.4 → v0.5 — Final Freeze
+
+v0.5 is the **final surface expansion** of the language. After this
+release, grammar / prelude / `§14` excluded list / stdlib public
+signatures are locked for the lifetime of Osty. Subsequent work is
+limited to compiler quality, tooling, and ecosystem — bug fixes,
+performance, clearer diagnostics, and meaning-preserving optimization
+only.
+
+**Principle.** Close every observed v0.4 pain point in a single
+release so users never have to learn a new grammar or prelude again.
+Everything added is chosen because it eliminated a concrete pain in a
+real program; the excluded list is tightened to preempt re-opening
+requests.
+
+**Additions — syntax (additive; all v0.4 programs compile unchanged).**
+
+| Form | Purpose | §ref |
+|---|---|---|
+| `loop { ... break value }` | value-returning unbounded loop | §4.4 |
+| `'label: for / loop ... break 'label` | labeled break/continue across nested loops | §4.4 |
+| `0..100 by 2` | range step (contextual `by`) | §4.4 |
+| `receiver { field: value }` | struct update shorthand (receiver-typed literal; equivalent to `Type { ..receiver, field: value }`) | §4.6 |
+| `f(x) \|y\| { body }` | trailing closure — last function-typed arg moves outside parentheses | §4.5 |
+| `err as? T` | downcast shortcut (equivalent to `err.downcast::<T>()`) | §4.9 |
+| `pub? const fn` | compile-time evaluable function (pure, literal arithmetic + other const fn calls) | §3.1 |
+| `pub enum Status: Int { OK = 200, ... }` | enum with explicit integer discriminants (payload-free variants only) | §3.5 |
+| `use std.fs::{open, exists}` | scoped / grouped imports | §5 |
+| `pub use sub.Foo` | cross-module re-export | §5 |
+| `#[cfg(os = "linux")]` | conditional compilation (keys: `os` / `target` / `arch` / `feature`) | §5, §3.8 |
+| `#[op(+)] fn add(self, o: Self) -> Self` | opt-in operator overload (`+ - * / %` binary, `-` unary) | §3.1 |
+| `#[test] fn ...` | inline test function — no separate `_test.osty` required | §11 |
+
+**Additions — semantics (checker / lowering).**
+
+- **Lossless numeric widening** (§2.2a). Implicit: `Int8 → Int16 → Int32 → Int → Float64`, `Int → Float64`, `Float32 → Float64`. Narrowing still requires explicit `.toInt32() / .toInt16() / .toInt8() / .toIntTrunc() / .toIntRound() / .toIntFloor() / .toIntCeil() / .toFloat32()` — `E0765` on implicit narrowing.
+- **Bounded operator overloading** (§3.1, §4.5). `#[op(+)]` / `#[op(-)]` / `#[op(*)]` / `#[op(/)]` / `#[op(%)]` binary + `#[op(-)]` unary only. `== / < / > / <= / >= / != / [] / () / << / >> / & / | / ^` remain primitive-only. Duplicate `#[op]` for same operator on same type is `E0724`; non-allowed operator is `E0725`.
+- **Function value keyword-name preservation** (G20). `fn(...) -> ...` carries parameter names as type-equality-neutral metadata. Keyword calls through function values allowed when names match; default-value capture still erased per G15.
+
+**Additions — stdlib.**
+
+- **`Option<T>`** combinators: `isSome / isNone / isSomeAnd / isNoneOr / contains / take / replace / unwrap / expect / unwrapOr / unwrapOrElse / and / andThen / or / orElse / xor / filter / inspect / map / mapOr / mapOrElse / zip / okOr / okOrElse`.
+- **`Result<T, E>`** combinators: `isOk / isErr / isOkAnd / isErrAnd / contains / containsErr / unwrap / expect / unwrapErr / expectErr / unwrapOr / unwrapOrElse / ok / err / and / andThen / or / orElse / inspect / inspectErr / map / mapErr / mapOr / mapOrElse`.
+- **`List<T>`** extensions: `groupBy / chunked / windowed / partition / reduce / scan / flatMap / zip3` in addition to the existing `map / filter / fold / sorted / sortedBy / reversed / take / drop / appended / concat / zip / enumerate / push / pop / insert / removeAt / sort / reverse / clear`.
+- **`Map<K, V>`** extensions: `getOrInsert / getOrInsertWith / merge / mapValues / filter` on top of `get / containsKey / keys / values / entries / insert / remove / clear`.
+- **§10/24 `std.strings`** — full Unicode-aware chapter (previously referenced by name only).
+- **`Error.wrap(context)` / `Error.chain()`** + `WrappedError` type (§7).
+- **`std.testing.gen`** — `Gen<T>` + combinators (`oneOf / map / filter / pair / list / record`), shrinking for primitives / lists / structs, `testing.property(name, gen, pred)` runner.
+- **Doctest** — ``` ```osty ``` blocks inside `///` comments extracted and run by `osty test --doc`.
+
+**Resolved gaps (all decided in v0.5).**
+
+| ID | Subject | Outcome |
+|---|---|---|
+| **G20** | Function value parameter-name preservation | Names survive as metadata; keyword-call through fn-values allowed when names match; type equality ignores names. |
+| **G21** | Default argument literal definition extension | `DefaultLiteral` now includes struct literals whose fields are themselves literals, plus `const fn` return values. |
+| **G22** | `loop` expression | Value-returning unbounded loop; `break value` typed from all exit sites. |
+| **G23** | Trailing closure call | Last function-typed arg may move outside `(...)`; closure may follow a full or empty arg list. |
+| **G24** | Labeled break/continue | `'label:` prefixes loops; `break 'label` / `continue 'label`; unknown label is `E0763`. |
+| **G25** | Range step `by` | Contextual keyword inside range expressions; elsewhere an ordinary identifier. |
+| **G26** | Struct update shorthand | `receiver { field: value }` where `receiver` is a local identifier of struct type; desugars to `Type { ..receiver, field: value }`. |
+| **G27** | `as?` downcast syntax | Typed postfix form over `Error` values only; equivalent to `err.downcast::<T>()`. |
+| **G28** | Scoped / grouped imports | `use path::{a, b as c}` extends existing UseDecl. |
+| **G29** | Conditional compilation `#[cfg(...)]` | Pre-resolve filter; keys `os`, `target`, `arch`, `feature`; composition via `all` / `any` / `not`; unknown key is `E0405`. |
+| **G30** | `pub use` re-export | Re-exports inherit the declared visibility of the source symbol; cycles are `E0552`. |
+| **G31** | Enum integer discriminants | `pub enum X: Int { A = 1, ... }` with payload-free variants; `.discriminant()` / `.fromDiscriminant(n)` auto-derived. |
+| **G32** | Inline `#[test]` + doctest | Test functions may sit next to production code; doctests extracted from `///` blocks. |
+| **G33** | Property-based testing | `std.testing.gen` new submodule; `testing.property` runner; built-in shrinkers for core types. |
+| **G34** | Lossless numeric widening | Narrowing remains explicit with rounding-mode-suffixed converters; widening follows a total lattice. |
+| **G35** | Bounded operator overloading | Exactly six operators allowed via `#[op(...)]`; all other operators remain primitive-only. |
+
+**Changes to `§14` (excluded features).**
+
+- Removed (now allowed): "implicit numeric conversions" (replaced by lossless widening only, §2.2a), "operator overloading" (replaced by six-operator `#[op(...)]` opt-in, §3.1).
+- Reaffirmed permanent exclusions (total 9 after v0.5): `null` / `nil`, exceptions & `try`/`catch`, inheritance, macros, user-defined annotation set, `unsafe` (user-facing), user-visible raw pointer, `[]` / `()` / bitwise operator overload, generic type-parameter defaults.
+- Removed from excluded list (now part of language): `while`/`loop` keyword (the `for cond { }` while-style existed since v0.3; `loop { break v }` is new in v0.5), labeled `break`/`continue` (new in v0.5), `const` (new in v0.5 for compile-time functions only — still no run-time immutable binding form beyond `let`).
+
+**Grammar delta.** New contextual keywords `by`, `const`, `loop`. New syntactic markers `as?`, label prefix `'ident:`, trailing-closure call shape. Extended productions: `UseDecl`, `EnumDecl`, `StructLiteral`, `DefaultLiteral`, `CallExpr`, `FnDecl`. New annotations `#[op(...)]`, `#[cfg(...)]`, `#[test]`. New diagnostic codes span E0405, E0552–E0554, E0754–E0759, E0763–E0765. The
+E0760–E0762 control-flow slots (`CodeUnreachableCode`, `CodeMissingReturn`,
+`CodeDefaultNotLiteral`) remain as already defined in v0.4.
+
+**Implementation guidance.** The implementation order is (i) additive stdlib (Option / Result / List / Map extensions, `std.strings`, `Error.wrap`), (ii) small syntax (labels, `loop`, range `by`, `as?`, scoped imports, `pub use`, enum discriminants, `#[cfg]`), (iii) medium syntax (struct update shorthand, trailing closure, struct-literal defaults, `const fn`), (iv) type system (numeric widening, operator dispatch, function-value name preservation), (v) test infrastructure (inline `#[test]`, doctest, property framework). Each feature ships a positive spec example, a negative reject case, and a golden-snapshot diagnostic test.
+
+**Post-release contract.** After v0.5 tag: (1) grammar file, (2) prelude symbol list, (3) `§14` excluded list are CI-locked by content hash. Changes require an edition proposal (v1.0+).
+
 ### 18.0 v0.4 minor: runtime primitives (additive)
 
-`LANG_SPEC_v0.4/19-runtime-primitives.md` adds a package-gated runtime
-sublanguage. The change is strictly additive:
+§19 (runtime primitives) was added in the v0.4 additive minor, introducing
+a package-gated runtime sublanguage. The change is strictly additive:
 
 - **No grammar change.** No new tokens, no new keywords, no EBNF
   modification. The annotation form `#[name(args?)]` from §1.9 is

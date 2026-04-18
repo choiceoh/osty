@@ -137,6 +137,25 @@ var annotationRules = map[string]AnnotationTarget{
 	// passed across a `#[c_abi]` boundary or used with
 	// `raw.read`/`raw.write`. Runtime sublanguage only.
 	"repr": TargetTopLevelDecl,
+	// v0.5 (G29) §5. Conditional compilation. The annotation wraps any
+	// declaration; the resolver evaluates the cfg expression in a
+	// pre-resolve pass and drops declarations whose guard is false
+	// before type-checking runs. Permitted keys: `os`, `target`,
+	// `arch`, `feature`; composition via `all(...)` / `any(...)` /
+	// `not(...)`. Unknown keys are `E0405`.
+	"cfg": TargetTopLevelDecl | TargetMethod | TargetStructField | TargetVariant,
+	// v0.5 (G35) §3.1. Opt-in operator overloading. The annotation
+	// attaches to a method whose body implements one of the six
+	// permitted operators (`+`, `-`, `*`, `/`, `%`, unary `-`).
+	// Method signature validation is `E0754`; duplicate is `E0755`;
+	// operator outside the permitted set is `E0756`. All other
+	// operators remain primitive-only.
+	"op": TargetMethod,
+	// v0.5 (G32) §11. Inline test function marker. The test runner
+	// collects `#[test]`-annotated `fn`s alongside functions in
+	// `_test.osty` files; production builds exclude them. No
+	// arguments.
+	"test": TargetTopLevelDecl,
 }
 
 // IsAllowedAnnotation reports whether an annotation name is part of the
@@ -234,6 +253,7 @@ type UseDecl struct {
 	Path         []string // dot-separated path, or single entry with slashes for URLs
 	RawPath      string   // e.g. "github.com/user/lib" as written
 	Alias        string   // optional `as alias`
+	IsPub        bool     // v0.5 (G30) §5 — `pub use path` re-export
 	IsGoFFI      bool     // legacy bootstrap-only `use go "..."`
 	IsRuntimeFFI bool     // `use runtime.* { ... }`
 	GoPath       string   // legacy go import path

@@ -41,7 +41,7 @@ pub struct MonomorphTypeRequest {
 /// monomorphPrimCode maps an Osty primitive source name to its Itanium
 /// ABI builtin-type code. Returns "" for non-primitives so callers can
 /// fall back to the nested / template encodings. The table mirrors
-/// LANG_SPEC_v0.4/02-type-system.md §2.2 plus the relevant C++ ABI
+/// LANG_SPEC_v0.5/02-type-system.md §2.2 plus the relevant C++ ABI
 /// encodings; Osty's canonical `Int` is platform-independent i64 and
 /// maps to `l` (C `long`) to distinguish it from explicit `Int64` (`x`).
 pub fn monomorphPrimCode(name: String) -> String {

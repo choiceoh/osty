@@ -1,7 +1,7 @@
-# Osty v0.4 Agent Quick Spec
+# Osty v0.5 Agent Quick Spec
 
 AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위한 규칙 카드.
-예제는 싣지 않는다. 충돌 시 `LANG_SPEC_v0.4/`와 `OSTY_GRAMMAR_v0.4.md`가
+예제는 싣지 않는다. 충돌 시 `LANG_SPEC_v0.5/`와 `OSTY_GRAMMAR_v0.5.md`가
 우선한다.
 
 ## 1. File and Lexing

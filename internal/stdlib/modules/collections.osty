@@ -159,6 +159,136 @@ pub struct List<T> {
         out
     }
 
+    /// Split the list into non-overlapping chunks of `size`. The final
+    /// chunk is shorter when `self.len()` is not a multiple of `size`.
+    /// `size <= 0` aborts.
+    pub fn chunked(self, size: Int) -> List<List<T>> {
+        if size <= 0 {
+            abort("List.chunked: size must be positive, got {size}")
+        }
+        let mut out: List<List<T>> = []
+        let mut bucket: List<T> = []
+        for item in self {
+            bucket.push(item)
+            if bucket.len() >= size {
+                out.push(bucket)
+                bucket = []
+            }
+        }
+        if !bucket.isEmpty() {
+            out.push(bucket)
+        }
+        out
+    }
+
+    /// Sliding windows of length `size` advancing by `step` items each
+    /// step. Only full windows are returned; partial tails are dropped.
+    /// `size <= 0` or `step <= 0` aborts. When `size > self.len()` the
+    /// result is empty.
+    pub fn windowed(self, size: Int, step: Int) -> List<List<T>> {
+        if size <= 0 {
+            abort("List.windowed: size must be positive, got {size}")
+        }
+        if step <= 0 {
+            abort("List.windowed: step must be positive, got {step}")
+        }
+        let mut out: List<List<T>> = []
+        let n = self.len()
+        if size > n {
+            return out
+        }
+        let mut start = 0
+        for start + size <= n {
+            out.push(self.drop(start).take(size))
+            start = start + step
+        }
+        out
+    }
+
+    /// Split items into `(yes, no)` based on `pred`. Relative order is
+    /// preserved within each output list.
+    pub fn partition(self, pred: fn(T) -> Bool) -> (List<T>, List<T>) {
+        let mut yes: List<T> = []
+        let mut no: List<T> = []
+        for item in self {
+            if pred(item) {
+                yes.push(item)
+            } else {
+                no.push(item)
+            }
+        }
+        (yes, no)
+    }
+
+    /// Combine all elements with `f`, from left to right, using the
+    /// first element as the initial accumulator. Returns `None` for
+    /// an empty list. For an explicit initial value use `fold` instead.
+    pub fn reduce(self, f: fn(T, T) -> T) -> T? {
+        if self.isEmpty() {
+            return None
+        }
+        let mut first: T? = None
+        let mut tail: List<T> = []
+        let mut seenFirst = false
+        for item in self {
+            if !seenFirst {
+                first = Some(item)
+                seenFirst = true
+            } else {
+                tail.push(item)
+            }
+        }
+        let acc = first.unwrap()
+        Some(tail.fold(acc, f))
+    }
+
+    /// Running left fold — returns every intermediate accumulator.
+    /// The returned list has length `self.len() + 1`: the first entry
+    /// is `init` and the last is the final accumulator value.
+    ///
+    ///     [1, 2, 3].scan(0, |a, x| a + x) == [0, 1, 3, 6]
+    pub fn scan<A>(self, init: A, f: fn(A, T) -> A) -> List<A> {
+        let mut out: List<A> = [init]
+        let mut acc = init
+        for item in self {
+            acc = f(acc, item)
+            out.push(acc)
+        }
+        out
+    }
+
+    /// Map each element to a list and concatenate — the classic
+    /// "bind" of a list-monad. Relative order is preserved across
+    /// sub-lists.
+    pub fn flatMap<R>(self, f: fn(T) -> List<R>) -> List<R> {
+        let mut out: List<R> = []
+        for item in self {
+            for r in f(item) {
+                out.push(r)
+            }
+        }
+        out
+    }
+
+    /// Pair each element with the corresponding element of two other
+    /// lists. Length is the minimum of the three inputs; excess items
+    /// are dropped. Like `zip` but carrying a third column.
+    pub fn zip3<U, V>(self, other1: List<U>, other2: List<V>) -> List<(T, U, V)> {
+        let mut n = self.len()
+        if other1.len() < n { n = other1.len() }
+        if other2.len() < n { n = other2.len() }
+        let mut out: List<(T, U, V)> = []
+        let mut i = 0
+        for i < n {
+            let a = self.get(i).unwrap()
+            let b = other1.get(i).unwrap()
+            let c = other2.get(i).unwrap()
+            out.push((a, b, c))
+            i = i + 1
+        }
+        out
+    }
+
     pub fn push(mut self, item: T)
     pub fn pop(mut self) -> T? {
         if self.isEmpty() {

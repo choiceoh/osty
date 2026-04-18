@@ -269,37 +269,42 @@ fn unOpResultType(env: CheckEnv, op: UnOp, inner: Int, start: Int, end: Int) -> 
     if tyIsErr(tys, inner) {
         return inner
     }
+    // Each arm delegates to a helper so the match body stays a
+    // single expression per arm (bootstrap transpiler workaround).
     match op {
-        UoNot -> {
-            if tyEq(tys, inner, tBool(tys)) {
-                return tBool(tys)
-            }
-            env.diagnostics.push(diagOperandType("!", tyToString(tys, inner), start, end))
-            tErr(tys)
-        },
-        UoNeg -> {
-            if tyIsNumeric(tys, inner) {
-                return inner
-            }
-            env.diagnostics.push(diagOperandType("-", tyToString(tys, inner), start, end))
-            tErr(tys)
-        },
-        UoPlus -> {
-            if tyIsNumeric(tys, inner) {
-                return inner
-            }
-            env.diagnostics.push(diagOperandType("+", tyToString(tys, inner), start, end))
-            tErr(tys)
-        },
-        UoBitNot -> {
-            if tyIsInteger(tys, inner) {
-                return inner
-            }
-            env.diagnostics.push(diagOperandType("~", tyToString(tys, inner), start, end))
-            tErr(tys)
-        },
+        UoNot     -> unOpNot(env, inner, start, end),
+        UoNeg     -> unOpNumeric(env, "-", inner, start, end),
+        UoPlus    -> unOpNumeric(env, "+", inner, start, end),
+        UoBitNot  -> unOpBitNot(env, inner, start, end),
         UoInvalid -> tErr(tys),
     }
+}
+
+fn unOpNot(env: CheckEnv, inner: Int, start: Int, end: Int) -> Int {
+    let tys = env.tys
+    if tyEq(tys, inner, tBool(tys)) {
+        return tBool(tys)
+    }
+    env.diagnostics.push(diagOperandType("!", tyToString(tys, inner), start, end))
+    tErr(tys)
+}
+
+fn unOpNumeric(env: CheckEnv, symbol: String, inner: Int, start: Int, end: Int) -> Int {
+    let tys = env.tys
+    if tyIsNumeric(tys, inner) {
+        return inner
+    }
+    env.diagnostics.push(diagOperandType(symbol, tyToString(tys, inner), start, end))
+    tErr(tys)
+}
+
+fn unOpBitNot(env: CheckEnv, inner: Int, start: Int, end: Int) -> Int {
+    let tys = env.tys
+    if tyIsInteger(tys, inner) {
+        return inner
+    }
+    env.diagnostics.push(diagOperandType("~", tyToString(tys, inner), start, end))
+    tErr(tys)
 }
 
 // ---------------------------------------------------------------------

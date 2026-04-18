@@ -107,18 +107,18 @@ pub fn occursCheck(tys: TyArena, solver: Solver, varId: Int, ty: Int) -> Bool {
         return false
     }
     let kind = tyKindAt(tys, walked)
+    // Single-expression arms only — the bootstrap Osty→Go
+    // transpiler miscompiles match arms whose body is a brace block
+    // with an early `return`. `||` gives the same short-circuit
+    // behaviour the early-return form had.
     match kind {
-        TkVar -> tyVarIdAt(tys, walked) == varId,
-        TkNamed -> occursInList(tys, solver, varId, tyArgsAt(tys, walked)),
-        TkTuple -> occursInList(tys, solver, varId, tyArgsAt(tys, walked)),
-        TkFn -> {
-            if occursInList(tys, solver, varId, tyArgsAt(tys, walked)) {
-                return true
-            }
-            occursCheck(tys, solver, varId, tyRetAt(tys, walked))
-        },
+        TkVar      -> tyVarIdAt(tys, walked) == varId,
+        TkNamed    -> occursInList(tys, solver, varId, tyArgsAt(tys, walked)),
+        TkTuple    -> occursInList(tys, solver, varId, tyArgsAt(tys, walked)),
+        TkFn       -> occursInList(tys, solver, varId, tyArgsAt(tys, walked))
+                        || occursCheck(tys, solver, varId, tyRetAt(tys, walked)),
         TkOptional -> occursCheck(tys, solver, varId, tyInnerAt(tys, walked)),
-        _ -> false,
+        _          -> false,
     }
 }
 
@@ -294,40 +294,47 @@ fn zonkAt(env: CheckEnv, solver: Solver, ty: Int, depth: Int) -> Int {
     }
     let walked = solverWalk(env.tys, solver, ty)
     let kind = tyKindAt(env.tys, walked)
+    // Compound arms delegate to helpers so the match body stays
+    // single-expression — see note on checkResolveAliasDeepAt for
+    // the transpiler limitation driving this.
     match kind {
-        TkNamed -> {
-            let args = tyArgsAt(env.tys, walked)
-            if solveIntLen(args) == 0 {
-                return walked
-            }
-            let mut rebuilt: List<Int> = []
-            for a in args {
-                rebuilt.push(zonkAt(env, solver, a, depth + 1))
-            }
-            tyNamed(env.tys, tyHeadAt(env.tys, walked), rebuilt)
-        },
-        TkTuple -> {
-            let args = tyArgsAt(env.tys, walked)
-            let mut rebuilt: List<Int> = []
-            for a in args {
-                rebuilt.push(zonkAt(env, solver, a, depth + 1))
-            }
-            tyTuple(env.tys, rebuilt)
-        },
-        TkFn -> {
-            let args = tyArgsAt(env.tys, walked)
-            let mut rebuilt: List<Int> = []
-            for a in args {
-                rebuilt.push(zonkAt(env, solver, a, depth + 1))
-            }
-            let ret = zonkAt(env, solver, tyRetAt(env.tys, walked), depth + 1)
-            tyFn(env.tys, rebuilt, ret)
-        },
-        TkOptional -> {
-            tyOptional(env.tys, zonkAt(env, solver, tyInnerAt(env.tys, walked), depth + 1))
-        },
-        _ -> walked,
+        TkNamed    -> zonkAtNamed(env, solver, walked, depth),
+        TkTuple    -> zonkAtTuple(env, solver, walked, depth),
+        TkFn       -> zonkAtFn(env, solver, walked, depth),
+        TkOptional -> tyOptional(env.tys, zonkAt(env, solver, tyInnerAt(env.tys, walked), depth + 1)),
+        _          -> walked,
     }
+}
+
+fn zonkAtNamed(env: CheckEnv, solver: Solver, walked: Int, depth: Int) -> Int {
+    let args = tyArgsAt(env.tys, walked)
+    if solveIntLen(args) == 0 {
+        return walked
+    }
+    let mut rebuilt: List<Int> = []
+    for a in args {
+        rebuilt.push(zonkAt(env, solver, a, depth + 1))
+    }
+    tyNamed(env.tys, tyHeadAt(env.tys, walked), rebuilt)
+}
+
+fn zonkAtTuple(env: CheckEnv, solver: Solver, walked: Int, depth: Int) -> Int {
+    let args = tyArgsAt(env.tys, walked)
+    let mut rebuilt: List<Int> = []
+    for a in args {
+        rebuilt.push(zonkAt(env, solver, a, depth + 1))
+    }
+    tyTuple(env.tys, rebuilt)
+}
+
+fn zonkAtFn(env: CheckEnv, solver: Solver, walked: Int, depth: Int) -> Int {
+    let args = tyArgsAt(env.tys, walked)
+    let mut rebuilt: List<Int> = []
+    for a in args {
+        rebuilt.push(zonkAt(env, solver, a, depth + 1))
+    }
+    let ret = zonkAt(env, solver, tyRetAt(env.tys, walked), depth + 1)
+    tyFn(env.tys, rebuilt, ret)
 }
 
 // ---------------------------------------------------------------------
@@ -343,18 +350,15 @@ pub fn isFullyResolved(env: CheckEnv, solver: Solver, ty: Int) -> Bool {
     }
     let walked = solverWalk(env.tys, solver, ty)
     let kind = tyKindAt(env.tys, walked)
+    // Single-expression arms only (see note on tyEq).
     match kind {
-        TkVar -> false,
-        TkNamed -> allFullyResolved(env, solver, tyArgsAt(env.tys, walked)),
-        TkTuple -> allFullyResolved(env, solver, tyArgsAt(env.tys, walked)),
-        TkFn -> {
-            if !(allFullyResolved(env, solver, tyArgsAt(env.tys, walked))) {
-                return false
-            }
-            isFullyResolved(env, solver, tyRetAt(env.tys, walked))
-        },
+        TkVar      -> false,
+        TkNamed    -> allFullyResolved(env, solver, tyArgsAt(env.tys, walked)),
+        TkTuple    -> allFullyResolved(env, solver, tyArgsAt(env.tys, walked)),
+        TkFn       -> allFullyResolved(env, solver, tyArgsAt(env.tys, walked))
+                        && isFullyResolved(env, solver, tyRetAt(env.tys, walked)),
         TkOptional -> isFullyResolved(env, solver, tyInnerAt(env.tys, walked)),
-        _ -> true,
+        _          -> true,
     }
 }
 

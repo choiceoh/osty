@@ -45,3 +45,32 @@ fn demoForEach(m: Map<String, Int>) -> Int {
 fn demoGroupBy(items: List<Int>) -> Map<Bool, List<Int>> {
     items.groupBy(|n| n >= 0)
 }
+
+fn demoChunkedAndWindowed(items: List<Int>) -> (List<List<Int>>, List<List<Int>>) {
+    let chunks = items.chunked(3)
+    let windows = items.windowed(2, 1)
+    (chunks, windows)
+}
+
+fn demoPartition(items: List<Int>) -> (List<Int>, List<Int>) {
+    items.partition(|n| n >= 0)
+}
+
+fn demoReduceAndScan(xs: List<Int>) -> (Int?, List<Int>) {
+    let total = xs.reduce(|a, b| a + b)
+    let running = xs.scan(0, |acc, x| acc + x)
+    (total, running)
+}
+
+fn demoFlatMap(paragraphs: List<String>) -> List<String> {
+    paragraphs.flatMap(|p| [p])
+}
+
+fn demoZip3(a: List<Int>, b: List<String>, c: List<Bool>) -> List<(Int, String, Bool)> {
+    a.zip3(b, c)
+}
+
+fn demoErrorWrapChain(e: Error) -> List<Error> {
+    let wrapped = e.wrap("while loading")
+    wrapped.chain()
+}

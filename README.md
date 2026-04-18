@@ -2,8 +2,8 @@
 
 A work-in-progress implementation of the **Osty** programming language — a
 general-purpose, statically-typed, GC'd language specified in
-[`LANG_SPEC_v0.4/`](./LANG_SPEC_v0.4/README.md) with grammar fixed in
-[`OSTY_GRAMMAR_v0.4.md`](./OSTY_GRAMMAR_v0.4.md).
+[`LANG_SPEC_v0.5/`](./LANG_SPEC_v0.5/README.md) with grammar fixed in
+[`OSTY_GRAMMAR_v0.5.md`](./OSTY_GRAMMAR_v0.5.md).
 
 The target is a self-hosted native runtime and LLVM backend. Current scope:
 front-end (lex → parse → resolve → type-check), multi-file packages and
@@ -29,7 +29,7 @@ coverage. The public compiler path is now native-only through the LLVM backend.
 | Diagnostics (`error[E0002]:` with caret, hints, notes) | done |
 | Name resolution (single + multi-file, workspace, typo suggestions) | done |
 | Formatter (`internal/format`) | done |
-| Type checker (`internal/check`) | done for v0.4 front-end core — generic instantiation, structural interface checks, exhaustiveness, builder protocol, function-value arity, closure pattern params. Algorithm: bidirectional + local unification, spec in [`LANG_SPEC_v0.4/02a-type-inference.md`](./LANG_SPEC_v0.4/02a-type-inference.md); `osty check --inspect` observes it at runtime |
+| Type checker (`internal/check`) | done for v0.4 front-end core — generic instantiation, structural interface checks, exhaustiveness, builder protocol, function-value arity, closure pattern params. Algorithm: bidirectional + local unification, spec in [`LANG_SPEC_v0.5/02a-type-inference.md`](./LANG_SPEC_v0.5/02a-type-inference.md); `osty check --inspect` observes it at runtime |
 | Linter (`internal/lint`, L0001–L0042, `--fix` / `--fix-dry-run`) | done |
 | Multi-file packages (`resolve` loader/package/workspace) | done |
 | LSP (`internal/lsp`, wired as `osty lsp`) | done — hover, definition, formatting, documentSymbol, lint diagnostics, editor policy backed by toolchain sources |
@@ -90,8 +90,8 @@ parity.
 
 ```
 osty/
-├── LANG_SPEC_v0.4/          # Current language spec (prose + examples)
-├── OSTY_GRAMMAR_v0.4.md     # Current EBNF grammar + decision log
+├── LANG_SPEC_v0.5/          # Current language spec (prose + examples)
+├── OSTY_GRAMMAR_v0.5.md     # Current EBNF grammar + decision log
 ├── SPEC_GAPS.md             # Resolved-gap archive (no open items in v0.4)
 ├── LLVM_MIGRATION_PLAN.md   # Native backend migration history/plan
 ├── LLVM_PHASE1_BASELINE.md  # Legacy Go-backend baseline for LLVM migration
@@ -220,7 +220,7 @@ osty parse FILE        # parse to AST, emit JSON
 osty resolve FILE|DIR  # name resolution; directory = package mode (--scopes for tree)
 osty check FILE|DIR    # lex + parse + resolve + type-check (diagnostics only)
                        # --inspect prints one record per expression with the
-                       # inference rule applied (see LANG_SPEC_v0.4/02a-type-inference.md)
+                       # inference rule applied (see LANG_SPEC_v0.5/02a-type-inference.md)
 osty typecheck FILE    # same as check, plus a per-expression type dump
 osty lint FILE|DIR     # style + correctness warnings (L0xxx codes)
 osty fmt FILE          # airepair + format to canonical style (see --check, --write, --engine)
@@ -255,7 +255,7 @@ Global flags (precede the subcommand):
   unique code; applies to `check`, `typecheck`, `resolve`, `lint`, `parse`, `tokens`
 - `--inspect` — `check`-only: emit one record per expression naming the
   inference rule and the type/hint the checker used. Pairs with `--json` for
-  NDJSON output. See [`LANG_SPEC_v0.4/02a-type-inference.md`](./LANG_SPEC_v0.4/02a-type-inference.md).
+  NDJSON output. See [`LANG_SPEC_v0.5/02a-type-inference.md`](./LANG_SPEC_v0.5/02a-type-inference.md).
 
 `fmt`-specific flags (after the subcommand):
 
@@ -601,11 +601,14 @@ regenerations.
 
 ## Contributing
 
-The current baseline is **v0.4** (`LANG_SPEC_v0.4/`, `OSTY_GRAMMAR_v0.4.md`).
-v0.4 closed every known language-decision gap; new findings are tracked in
-[`SPEC_GAPS.md`](./SPEC_GAPS.md). The compiler follows spec decisions
-literally — if a construct "should" work but doesn't, verify it against
-the grammar first.
+The current baseline is **v0.5 (final freeze)** (`LANG_SPEC_v0.5/`,
+`OSTY_GRAMMAR_v0.5.md`). v0.5 closes every known language-decision
+gap (G20-G35) and locks the language surface — grammar, prelude, §14
+excluded list, and stdlib public signatures are CI-checksum-locked.
+Post-freeze work is limited to compiler quality, tooling, and
+ecosystem. See [`SPEC_GAPS.md`](./SPEC_GAPS.md) for the full decision
+log. The compiler follows spec decisions literally — if a construct
+"should" work but doesn't, verify it against the grammar first.
 
 Conventions:
 - Every new error site gets a stable `Exxxx` code in

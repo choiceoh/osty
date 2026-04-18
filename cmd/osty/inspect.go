@@ -5,7 +5,7 @@ package main
 // CLI: it picks the output format (text vs NDJSON) based on --json and
 // prefixes output with file paths when more than one file is involved.
 //
-// Algorithm reference: LANG_SPEC_v0.4/02a-type-inference.md.
+// Algorithm reference: LANG_SPEC_v0.5/02a-type-inference.md.
 
 import (
 	"fmt"

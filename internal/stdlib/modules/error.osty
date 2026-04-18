@@ -1,11 +1,46 @@
 // std.error — signature stub for the Osty standard library.
 //
-// Defines the auto-imported `Error` interface and the concrete
-// `BasicError` struct that most callers use for ad-hoc error values.
+// Defines the auto-imported `Error` interface, the concrete
+// `BasicError` struct that most callers use for ad-hoc error values,
+// and `WrappedError` that carries context when an inner failure is
+// annotated via `err.wrap("while reading {path}")`.
 
 pub interface Error {
     fn message(self) -> String
     fn source(self) -> Error? { None }
+
+    /// Wrap `self` with additional context. The returned `Error`
+    /// reports `"{context}: {self.message()}"` and makes `self`
+    /// available via `source()`; chains of `wrap` calls build a
+    /// linked annotation history that `chain()` can flatten.
+    ///
+    /// The default body allocates a `WrappedError`; concrete error
+    /// types typically do not override it — the wrapper shape is
+    /// deliberately uniform so log / diagnostic code reads the same
+    /// story regardless of which library produced the root cause.
+    fn wrap(self, context: String) -> Error {
+        WrappedError { context: context, cause: self }
+    }
+
+    /// Flatten the `source` chain into a list, starting with `self`
+    /// and following `.source()` repeatedly until `None`. The root
+    /// cause is the last element. An error with no source returns
+    /// a single-element list.
+    ///
+    /// Typical use inside an error handler:
+    ///
+    ///   for e in err.chain() {
+    ///       log.warn("  - {e.message()}")
+    ///   }
+    fn chain(self) -> List<Error> {
+        let mut out: List<Error> = [self]
+        let mut cur: Error? = self.source()
+        for let Some(e) = cur {
+            out.push(e)
+            cur = e.source()
+        }
+        out
+    }
 }
 
 pub struct BasicError {
@@ -20,6 +55,42 @@ pub struct BasicError {
     }
 }
 
+/// WrappedError carries a `context` string and the underlying error
+/// it was produced from. Instances are normally created through
+/// `err.wrap(context)`, not constructed literally, but the struct is
+/// public so diagnostic code can pattern-match to recover the
+/// structured parts.
+pub struct WrappedError {
+    pub context: String,
+    pub cause: Error,
+
+    pub fn message(self) -> String {
+        "{self.context}: {self.cause.message()}"
+    }
+
+    pub fn source(self) -> Error? {
+        Some(self.cause)
+    }
+}
+
 pub fn new(message: String) -> Error {
     BasicError { message }
+}
+
+/// Wrap an error with context at a non-method call site. Equivalent
+/// to `err.wrap(context)` — preserved for callers that pass the
+/// error through a pipeline of free functions.
+pub fn wrap(err: Error, context: String) -> Error {
+    err.wrap(context)
+}
+
+/// Root-cause helper: follow `.source()` links until a terminal
+/// error (no further source). Returns the input unchanged when it
+/// already has no source.
+pub fn rootCause(err: Error) -> Error {
+    let mut cur = err
+    for let Some(next) = cur.source() {
+        cur = next
+    }
+    cur
 }

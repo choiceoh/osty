@@ -103,7 +103,7 @@ func adaptLexStream(rt runeTable, stream *FrontLexStream, facts *OstyLexFacts) (
 			End:        rt.pos(ft.end),
 			Value:      rt.slice(startRune, endRune),
 			Triple:     ft.triple,
-			LeadingDoc: stringAt(facts.leadingDocs, len(toks)),
+			LeadingDoc: adapterStringAt(facts.leadingDocs, len(toks)),
 		}
 		fillLiteralParts(&tok, rt, stream, facts.stringParts, len(toks))
 		toks = append(toks, tok)
@@ -512,7 +512,11 @@ func lexDiagnostic(d *OstyLexError, rt runeTable) *diag.Diagnostic {
 	return b.Build()
 }
 
-func stringAt(items []string, idx int) string {
+// adapterStringAt is the adapter-local indexed-string fetch. The
+// Osty-side `stringAt` (in `toolchain/elab.osty`) transpiles into a
+// package-level `stringAt` in `generated.go`; this renamed helper
+// avoids the name collision while keeping the adapter self-contained.
+func adapterStringAt(items []string, idx int) string {
 	if idx < 0 || idx >= len(items) {
 		return ""
 	}

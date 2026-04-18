@@ -727,10 +727,126 @@ const (
 
 	// CodeDefaultNotLiteral: a default argument expression is not a
 	// literal (§3.1 forbids computed defaults).
+	// v0.5 (G21): the literal definition is extended to include struct
+	// literals whose fields are themselves literals, and the return
+	// value of a `const fn` call. Expressions outside this set still
+	// emit this code.
 	// Fix: replace the expression with a numeric, string, char, byte,
 	//      bool, `None`, `Ok(literal)`, `Err(literal)`, `[]`, `{:}`,
-	//      or `()` literal.
+	//      `()`, a struct literal of literals, or a `const fn` call.
 	CodeDefaultNotLiteral = "E0762"
+
+	// CodeUndefinedLabel: `break 'label` / `continue 'label` referred
+	// to a label that is not in scope (not attached to any enclosing
+	// loop).
+	// v0.5 (G24) §4.4.
+	// Fix: add `'label:` to the intended loop, or remove the label
+	//      from the break/continue.
+	CodeUndefinedLabel = "E0763"
+
+	// CodeLabelShadow: a `'label:` reuses a name already in scope from
+	// an outer loop, making `break 'label` in the inner loop ambiguous.
+	// v0.5 (G24) §4.4.
+	// Fix: rename one of the two labels so each name is unique within
+	//      the nested stack.
+	CodeLabelShadow = "E0764"
+
+	// v0.5 additions (G20-G35). The following codes extend the E07xx
+	// band for numeric widening, operator overloading, enum
+	// discriminants, and label/loop control flow. Module-resolution
+	// additions for `pub use` re-export and scoped imports live in
+	// the E055x band. `#[cfg(...)]` key validation lives in E0405.
+	//
+	// Free slots claimed: E0754-E0759 (typecheck), E0765-E0769
+	// (control flow), E0552-E0554 (name resolution), E0405 (imports).
+	// The E0770-E0772 slots are occupied by §19 runtime sublanguage
+	// diagnostics (CodeRuntimePrivilegeViolation,
+	// CodePodShapeViolation, CodeNoAllocViolation) defined below.
+
+	// CodeOpAnnotationBadSignature: a method carrying `#[op(X)]`
+	// does not match the required shape for operator X (wrong
+	// parameter count, wrong self-position, wrong return type).
+	// v0.5 (G35) §3.1.
+	// Fix: for binary `+`, `-`, `*`, `/`, `%`, declare
+	//      `fn(self, other: Rhs) -> Self` (or `Out` for `*`). For
+	//      unary `-`, declare `fn neg(self) -> Self`.
+	CodeOpAnnotationBadSignature = "E0754"
+
+	// CodeOpDuplicate: two methods on the same type carry the same
+	// `#[op(X)]` annotation.
+	// v0.5 (G35) §3.1.
+	// Fix: remove one of the duplicate operator implementations.
+	CodeOpDuplicate = "E0755"
+
+	// CodeOpNotAllowed: `#[op(...)]` names an operator outside the
+	// permitted set `{+, -, *, /, %}` (binary) and `{-}` (unary).
+	// `==`, `!=`, `<`, `<=`, `>`, `>=`, `[]`, `()`, `<<`, `>>`,
+	// `&`, `|`, `^` cannot be overloaded.
+	// v0.5 (G35) §3.1, §14.1.
+	// Fix: implement equality/ordering via the `Equal` / `Ordered`
+	//      interfaces; use named methods for indexing and bitwise ops.
+	CodeOpNotAllowed = "E0756"
+
+	// CodeAsQuestionBadType: `expr as? T` applied to a value whose
+	// static type is not a known `Error` implementor, or `T` is not
+	// a concrete type implementing `Error`.
+	// v0.5 (G27) §4.9.
+	// Fix: call `.downcast::<T>()` via method syntax on a non-error
+	//      value, or match structurally.
+	CodeAsQuestionBadType = "E0757"
+
+	// CodeEnumDiscriminantOnPayload: `enum X: Int { V(T) = N }` is
+	// rejected — discriminant assignment is only legal on payload-free
+	// variants.
+	// v0.5 (G31) §3.5.
+	// Fix: drop the payload (making it a unit variant) or drop the
+	//      `= N` assignment.
+	CodeEnumDiscriminantOnPayload = "E0758"
+
+	// CodeEnumDiscriminantDuplicate: two variants of the same enum
+	// are assigned the same discriminant value.
+	// v0.5 (G31) §3.5.
+	// Fix: pick distinct values for each variant.
+	CodeEnumDiscriminantDuplicate = "E0759"
+
+	// CodeImplicitNarrowingConversion: an expression site required an
+	// implicit numeric narrowing (e.g. `Int64 -> Int32`, `Float64 ->
+	// Int`). v0.5 allows lossless widening only; narrowing must be
+	// spelled explicitly.
+	// v0.5 (G34) §2.2a.
+	// Fix: call one of `.toInt32()`, `.toInt16()`, `.toInt8()`,
+	//      `.toIntTrunc()`, `.toIntRound()`, `.toIntFloor()`,
+	//      `.toIntCeil()`, or `.toFloat32()` to make the intent
+	//      explicit.
+	CodeImplicitNarrowingConversion = "E0765"
+
+	// Module-resolution diagnostics for v0.5 re-export and scoped
+	// imports (G28, G30).
+
+	// CodeReexportCycle: `pub use` re-export chain contains a cycle.
+	// v0.5 (G30) §5.
+	// Fix: break the cycle by rerouting one of the re-exports through
+	//      the original definition rather than another re-export.
+	CodeReexportCycle = "E0552"
+
+	// CodeReexportPrivate: `pub use` attempted to re-export a private
+	// symbol.
+	// v0.5 (G30) §5.
+	// Fix: make the source symbol `pub`, or drop the `pub use`.
+	CodeReexportPrivate = "E0553"
+
+	// CodeUseDuplicateName: a scoped `use path::{a, a}` names the same
+	// identifier twice, or two separate imports introduce the same
+	// local binding.
+	// v0.5 (G28) §5.
+	// Fix: remove the duplicate or use `as` to rename one side.
+	CodeUseDuplicateName = "E0554"
+
+	// CodeCfgUnknownKey: `#[cfg(key = "...")]` used an unknown key.
+	// v0.5 (G29) recognises only `os`, `target`, `arch`, `feature`.
+	// Fix: use one of the supported keys; unrecognised keys are not a
+	//      forward-compatibility hatch.
+	CodeCfgUnknownKey = "E0405"
 
 	// Runtime sublanguage.
 
@@ -740,7 +856,7 @@ const (
 	// generic parameter that lacks a `T: Pod` bound for unbounded
 	// generic structs.
 	//
-	// Spec: v0.4 §19.4
+	// Spec: v0.5 §19.4
 	// Fix: replace the offending field's type with a `Pod` type
 	//      (primitives, `RawPtr`, other `#[pod] #[repr(c)]` structs,
 	//      tuples of `Pod`, `Option<T: Pod>`); for unbounded generic
@@ -757,7 +873,7 @@ const (
 	// `[capabilities] runtime = true` and loads from the toolchain
 	// workspace root.
 	//
-	// Spec: v0.4 §19.2
+	// Spec: v0.5 §19.2
 	// Fix: move the code into `std.runtime.*`, or (for toolchain
 	//      workspace packages) add `[capabilities] runtime = true` to
 	//      the package's `osty.toml`. User code has no way to opt in;
@@ -772,7 +888,7 @@ const (
 	// band at E0770-E0779; the control-flow band E0760-E0769 above is
 	// already in use.
 	//
-	// Spec: v0.4 §19.6.1
+	// Spec: v0.5 §19.6.1
 	// Fix: replace the offending expression with raw-memory primitives
 	//      (`std.runtime.raw.*`), pre-allocated buffers, plain string
 	//      literals, or restructure the call so the callee is also
