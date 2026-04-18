@@ -1,6 +1,9 @@
 package airepair
 
-import "testing"
+import (
+	"bytes"
+	"testing"
+)
 
 func TestAnalyzeFrontEndAssistImprovesForeignSyntax(t *testing.T) {
 	result := Analyze(Request{
@@ -349,8 +352,8 @@ func TestAnalyzeFrontEndAssistRewritesSemanticForeignHelpers(t *testing.T) {
 	if got, want := string(result.Repaired), "fn main() {\n    let mut items = [1, 2]\n    let count = items.len()\n    let size = items.len()\n    items.push(count + size)\n    println(items)\n}\n"; got != want {
 		t.Fatalf("repaired source = %q, want %q", got, want)
 	}
-	if result.Before.TotalErrors != 0 {
-		t.Fatalf("before.total_errors = %d, want 0 because parser-native helper lowering already keeps the source checkable", result.Before.TotalErrors)
+	if result.Before.TotalErrors == 0 {
+		t.Fatalf("before.total_errors = %d, want >0 since parser no longer lowers `.length` and the native checker rejects it", result.Before.TotalErrors)
 	}
 	if result.After.TotalErrors != 0 {
 		t.Fatalf("after.total_errors = %d, want 0 after semantic helper repair", result.After.TotalErrors)
@@ -396,5 +399,23 @@ func TestAnalyzeFrontEndAssistRepairsPythonMatchCaseBlock(t *testing.T) {
 	}
 	if result.After.Parse.Errors != 0 {
 		t.Fatalf("after.parse.errors = %d, want 0 after repair", result.After.Parse.Errors)
+	}
+}
+
+func TestAnalyzePreservesStructLengthFieldAccess(t *testing.T) {
+	src := "pub struct Tok {\n    pub kind: Int,\n    pub length: Int,\n}\n\nfn wrong() -> Bool {\n    foo(nil)\n}\n\nfn main() {\n    let t = Tok { kind: 0, length: 5 }\n    let a = t.length\n    println(a)\n}\n"
+	result := Analyze(Request{
+		Source:   []byte(src),
+		Filename: "main.osty",
+		Mode:     ModeFrontEndAssist,
+	})
+
+	for _, c := range result.Repair.Changes {
+		if c.Kind == "length_property" {
+			t.Fatalf("airepair rewrote a valid struct `length` field access to `.len()`: %+v", c)
+		}
+	}
+	if bytes.Contains(result.Repaired, []byte("t.len()")) {
+		t.Fatalf("repaired source rewrote struct field access: %s", result.Repaired)
 	}
 }
