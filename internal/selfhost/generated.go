@@ -25411,6 +25411,31 @@ func frontCheckCollectDecl(file *AstFile, env *FrontCheckEnv, declIdx int, decl 
 				func() struct{} { env.fns = append(env.fns, sig); return struct{}{} }()
 				// Osty: /tmp/selfhost_merged.osty:9836:17
 				frontCheckRecordSymbol(env, itemIdx, item, "fn", sig.name, alias, frontCheckFnType(sig.paramTypes, sig.returnType))
+			} else if ostyEqual(item.kind, AstNodeKind(&AstNodeKind_AstNStructDecl{})) {
+				// `use go "..." as alias { struct Foo { field: T, ... } }`:
+				// register the struct under both its bare name (`Foo`) and
+				// the qualified `alias.Foo` form so field access resolves
+				// regardless of how the receiver type is spelled in the
+				// call site. Without this pass every FFI struct field
+				// access bumped through the frontCheckField tail (see the
+				// host.SymbolRef.Pkg / LoadResult.Error / Diff.Added
+				// clusters in --dump-native-diags).
+				generics := frontCheckGenericNames(file, item.children2)
+				_ = generics
+				qualified := fmt.Sprintf("%s.%s", ostyToString(alias), ostyToString(item.text))
+				env.types = append(env.types, &FrontTypeSig{name: item.text, generics: generics})
+				env.types = append(env.types, &FrontTypeSig{name: qualified, generics: generics})
+				frontCheckRecordSymbol(env, itemIdx, item, "struct", item.text, alias, frontCheckGenericOwnerType(item.text, generics, make([]*FrontTypeSubst, 0, 1)))
+				for _, memberIdx := range item.children {
+					member := astArenaNodeAt(file.arena, memberIdx)
+					if ostyEqual(member.kind, AstNodeKind(&AstNodeKind_AstNField_{})) {
+						fieldType := frontCheckTypeName(file, member.right)
+						hasDefault := member.left >= 0
+						env.fields = append(env.fields, &FrontFieldSig{owner: item.text, name: member.text, typeName: fieldType, hasDefault: hasDefault})
+						env.fields = append(env.fields, &FrontFieldSig{owner: qualified, name: member.text, typeName: fieldType, hasDefault: hasDefault})
+						frontCheckRecordSymbol(env, memberIdx, member, "field", member.text, item.text, fieldType)
+					}
+				}
 			}
 		}
 	}
