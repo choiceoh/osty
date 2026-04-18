@@ -28445,7 +28445,7 @@ func frontCheckCallHint(file *AstFile, env *FrontCheckEnv, callIdx int, node *As
 		// Osty: /tmp/selfhost_merged.osty:11343:9
 		if !(frontCheckIsInvalid(recvType)) {
 			// Osty: /tmp/selfhost_merged.osty:11344:16
-			selfhostBumpError(env)
+			selfhostBumpErrorWithDetail(env, fmt.Sprintf("%s.%s", owner, callee.text))
 		}
 		// Osty: /tmp/selfhost_merged.osty:11346:9
 		return "Invalid"
@@ -29319,7 +29319,7 @@ func frontCheckField(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
 	// Osty: /tmp/selfhost_merged.osty:11757:5
 	if !(frontCheckIsInvalid(recvType)) {
 		// Osty: /tmp/selfhost_merged.osty:11758:12
-		selfhostBumpError(env)
+		selfhostBumpErrorWithDetail(env, fmt.Sprintf("%s.%s", owner, node.text))
 	}
 	return "Invalid"
 }
@@ -32220,6 +32220,18 @@ func frontCheckListMethod(file *AstFile, env *FrontCheckEnv, callee *AstNode, re
 		// Osty: /tmp/selfhost_merged.osty:13168:9
 		return "Bool"
 	}
+	if name == "insert" {
+		// List.insert(index: Int, item: T) -> ()
+		// Mirrors the `pub fn insert(mut self, index: Int, item: T)` primitive
+		// declared in internal/stdlib/modules/collections.osty; the bootstrapped
+		// method table was missing this entry, surfacing as frontCheckCallHint
+		// misses whenever toolchain code used `list.insert(i, x)`.
+		frontCheckRequireMutableReceiver(file, env, callee)
+		frontCheckExpectArgCount(env, args, 2)
+		frontCheckExpectAssignable(env, "Int", frontCheckExprHint(file, env, frontCheckIntAt(args, 0), "Int"))
+		frontCheckExpectAssignable(env, elem, frontCheckExprHint(file, env, frontCheckIntAt(args, 1), elem))
+		return "()"
+	}
 	// Osty: /tmp/selfhost_merged.osty:13170:5
 	if name == "map" {
 		// Osty: /tmp/selfhost_merged.osty:13171:9
@@ -32531,6 +32543,43 @@ func frontCheckStringMethod(file *AstFile, env *FrontCheckEnv, name string, args
 		frontCheckExpectAssignable(env, "String", frontCheckExprHint(file, env, frontCheckIntAt(args, 0), "String"))
 		// Osty: /tmp/selfhost_merged.osty:13298:9
 		return frontCheckOneArgType("List", "String")
+	}
+	// Additional String primitive methods that the bootstrapped table was
+	// missing. The authoritative surface lives in
+	// internal/stdlib/primitives/string.osty; these entries cover the
+	// shapes toolchain/* actually calls today and were visible as
+	// frontCheckCallHint misses like `String.chars` / `String.bytes`.
+	if name == "chars" {
+		frontCheckExpectArgCount(env, args, 0)
+		return frontCheckOneArgType("List", "Char")
+	}
+	if name == "bytes" {
+		frontCheckExpectArgCount(env, args, 0)
+		return frontCheckOneArgType("List", "Byte")
+	}
+	if name == "graphemes" {
+		frontCheckExpectArgCount(env, args, 0)
+		return frontCheckOneArgType("List", "String")
+	}
+	if name == "lines" {
+		frontCheckExpectArgCount(env, args, 0)
+		return frontCheckOneArgType("List", "String")
+	}
+	if name == "charCount" {
+		frontCheckExpectArgCount(env, args, 0)
+		return "Int"
+	}
+	if name == "toBytes" {
+		frontCheckExpectArgCount(env, args, 0)
+		return "Bytes"
+	}
+	if name == "toString" {
+		frontCheckExpectArgCount(env, args, 0)
+		return "String"
+	}
+	if name == "toUpper" || name == "toLower" || name == "trim" || name == "trimStart" || name == "trimEnd" {
+		frontCheckExpectArgCount(env, args, 0)
+		return "String"
 	}
 	return "Invalid"
 }
