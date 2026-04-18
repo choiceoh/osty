@@ -1,7 +1,7 @@
 # Osty Grammar — Rules & EBNF (v0.4) *[Archived · superseded by v0.5]*
 
 > **Archival notice.** 이 문서는 v0.4 grammar 의 역사 스냅샷이다.
-> 현재 유효한 문법은 `OSTY_GRAMMAR_v0.5.md` (final freeze) 이다.
+> 현재 유효한 문법은 `OSTY_GRAMMAR_v0.5.md` 이다.
 > 아래 `LANG_SPEC_v0.4/` 경로 참조는 당시 컨텍스트 그대로 보존되어
 > 있다 — v0.5 기준으로는 `LANG_SPEC_v0.5/` 로 읽으면 된다.
 

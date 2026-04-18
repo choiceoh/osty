@@ -1,13 +1,11 @@
 ## 14. Excluded Features
 
-v0.5 is the final freeze. The items below are **permanently excluded**
-from the language. Re-opening any of them would require a new edition
-(v1.0+), not a minor release.
+The items below are excluded from v0.5. Items are grouped by reason so
+readers can see the argument without consulting the change history.
+Re-opening any of them requires a design proposal, a new minor or major
+version, and a migration story for existing code.
 
-Items are grouped by reason so readers can see the argument without
-consulting the change history.
-
-### 14.1 Permanent Exclusions
+### 14.1 Current Exclusions
 
 **Safety / correctness by construction.**
 
@@ -96,8 +94,9 @@ consulting the change history.
   is not a user surface.
 - `const` as a **run-time** immutable binding keyword — the `let`
   binding (which is immutable by default) already covers that
-  meaning. `const fn` (§3.1) names a compile-time evaluable function,
-  not a binding form.
+  meaning. `const fn` (§3.1.1) names a compile-time evaluable function,
+  not a binding form; its body is constrained by the capability matrix
+  in §3.1.1.
 
 ### 14.2 Accepted in v0.5 (previously excluded)
 
@@ -129,8 +128,9 @@ as scoped additions:
 - **Labeled `break` / `continue`** — `'label: for/loop ... break
   'label` (§4.4). Nested loops no longer require sentinel flags.
 - **`const`** — `const fn` only. Compile-time evaluable function
-  (§3.1), not a run-time binding form. `let` remains the sole
-  binding form.
+  (§3.1.1), not a run-time binding form. `let` remains the sole
+  binding form. The evaluable body is defined by the capability
+  matrix in §3.1.1; constructs outside the matrix are `E0766`.
 - **`#[cfg(...)]` annotation and `pub use` re-exports** — §5. Neither
   keyword is new; the surface is annotation-based and `use`-based
   respectively.

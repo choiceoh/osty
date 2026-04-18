@@ -3,7 +3,7 @@
 Osty is a general-purpose, statically-typed, garbage-collected programming language.
 This directory holds the specification, split into per-section files for easier navigation and editing.
 
-**Status.** v0.5 — **final freeze**. Supersedes v0.4. Closes 15 gaps
+**Status.** v0.5 — current spec baseline. Supersedes v0.4. Closes 15 gaps
 (G20–G34) accumulated from the v0.4 usage corpus: value-returning
 `loop`, labeled `break`/`continue`, range step `by`, struct update
 shorthand, trailing closure, `as?` downcast, `const fn`, enum integer
@@ -12,14 +12,10 @@ bounded operator overloading, lossless numeric widening, function
 value parameter-name preservation, inline `#[test]` + doctest +
 property-based testing. Two v0.4 exclusions ("implicit numeric
 conversions", "operator overloading") are replaced with precisely
-scoped, opt-in forms; the remaining nine exclusions are declared
-permanent.
+scoped, opt-in forms.
 
-After v0.5, grammar / prelude / `§14` excluded list / stdlib public
-signatures are CI-locked. No further surface expansion is planned —
-subsequent work is limited to compiler quality, tooling, and
-ecosystem. See [`18-change-history.md`](./18-change-history.md) for
-the full v0.1 → v0.2 → v0.3 → v0.4 → v0.5 evolution.
+See [`18-change-history.md`](./18-change-history.md) for the full
+v0.1 → v0.2 → v0.3 → v0.4 → v0.5 evolution.
 
 **Companion documents.**
 
@@ -27,7 +23,7 @@ the full v0.1 → v0.2 → v0.3 → v0.4 → v0.5 evolution.
   agents generating or editing Osty code.
 - `../OSTY_GRAMMAR_v0.5.md` — formal grammar (R1–R26 + EBNF). The lexer/parser ground truth.
 - `../OSTY_GRAMMAR_v0.4.md` — historical v0.4 grammar snapshot.
-- `../SPEC_GAPS.md` — archive of resolved gaps per version. No open items as of v0.5; new gap numbers are prohibited post-freeze.
+- `../SPEC_GAPS.md` — archive of resolved gaps per version. No open items as of v0.5.
 
 ## `?`-family cheat sheet
 

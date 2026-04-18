@@ -3,7 +3,7 @@
 ## 프로젝트
 
 **Osty**: 정적 타입, GC 기반, 범용 프로그래밍 언어의 **셀프호스팅 컴파일러/툴체인**.
-언어 스펙은 v0.4 (grammar frozen), 네이티브 백엔드는 LLVM.
+언어 스펙은 v0.5 (현행 baseline), 네이티브 백엔드는 LLVM.
 
 - **셀프호스팅**: 컴파일러 본체(렉서/파서/리졸버/체커/린트/포매터/LLVM 코드젠/LSP 정책)는 전부 **Osty로 작성** (`toolchain/*.osty`)
 - Go는 **호스트 경계와 부트스트랩 역할만**: I/O, JSON-RPC, CLI 진입점, Osty→Go 셀프호스트 시드(`internal/selfhost/generated.go`), 얇은 어댑터(`internal/lexer`·`internal/parser` 등은 수십 줄짜리 파사드)
@@ -116,10 +116,12 @@ source → lexer → parser → resolve → check → (format / lint / ir / back
   - `just gen <TestName>` / `just lsp <TestName>`
   - `just pipe <path>` — 파이프라인 타이밍
 
-## v0.4 불변 사항
+## v0.5 baseline 규칙
 
-- 그래마 frozen. 새 구문/키워드 추가는 스펙 개정 없이는 **금지**
-- `LANG_SPEC_v0.5/`와 `OSTY_GRAMMAR_v0.5.md`가 최종 권위
+- 새 구문/키워드 추가는 `LANG_SPEC_v0.5/` 개정 없이는 **금지**.
+  정식 버전 업(minor/major)과 함께만 surface 변경.
+- `LANG_SPEC_v0.5/`와 `OSTY_GRAMMAR_v0.5.md`가 권위. 스펙과 구현
+  충돌 시 스펙이 기준.
 - 문법 모호성 발견 → 컴파일러가 아니라 `SPEC_GAPS.md`에 먼저 기록
 - 공개 백엔드는 `--backend llvm`만. 새 백엔드 플래그 추가 금지
 
