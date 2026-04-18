@@ -10,6 +10,27 @@ import (
 	"github.com/osty/osty/internal/types"
 )
 
+// LowerFnDecl lowers a single Osty function declaration to its IR form.
+//
+// Unlike Lower, which consumes a whole file and its resolver/checker
+// results, LowerFnDecl is the entry point for lowering one fn body in
+// isolation — for example an Osty-bodied stdlib function being injected
+// alongside a user module. The caller supplies the resolve and check
+// results that cover fn's body; both may be nil when unavailable, with
+// the same degraded behavior as Lower (identifier kinds default to
+// IdentUnknown and expression types fall back to ErrTypeVal).
+//
+// Returns the lowered FnDecl plus any non-fatal lowering issues. A nil
+// input returns (nil, nil).
+func LowerFnDecl(pkgName string, fn *ast.FnDecl, res *resolve.Result, chk *check.Result) (*FnDecl, []error) {
+	if fn == nil {
+		return nil, nil
+	}
+	l := &lowerer{pkgName: pkgName, res: res, chk: chk}
+	out := l.lowerFnDecl(fn)
+	return out, l.issues
+}
+
 // Lower converts a type-checked Osty file into an independent IR Module.
 //
 // pkgName is the module's package name (e.g. "main"). res and chk may be
