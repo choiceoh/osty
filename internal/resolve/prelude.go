@@ -62,6 +62,15 @@ var preludeNames = []struct {
 	{"Ordered", SymBuiltin},
 	{"Hashable", SymBuiltin},
 
+	// Runtime-only marker interface (LANG_SPEC §19.4). Resolved as a
+	// built-in symbol so generic bound clauses `<T: Pod>` inside
+	// privileged packages typecheck; the privilege gate in
+	// `internal/check/privilege.go` (`E0770`) rejects references from
+	// ordinary user packages. `Pod` has no methods — it is a
+	// compile-time marker whose membership is decided structurally by
+	// the checker (§19.4 derivation rules), not by user `impl`.
+	{"Pod", SymBuiltin},
+
 	// Bool literals (treated as values via prelude — the parser already
 	// emits them as BoolLit, but `true`/`false` may also appear in
 	// patterns where the resolver sees them as Idents).

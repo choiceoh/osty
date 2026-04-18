@@ -123,6 +123,7 @@ func (g *privilegeGate) walkDecl(d ast.Decl) {
 	switch n := d.(type) {
 	case *ast.FnDecl:
 		g.checkAnnotations(n.Annotations)
+		g.walkGenerics(n.Generics)
 		g.walkType(n.ReturnType)
 		for _, p := range n.Params {
 			if p != nil {
@@ -131,6 +132,7 @@ func (g *privilegeGate) walkDecl(d ast.Decl) {
 		}
 	case *ast.StructDecl:
 		g.checkAnnotations(n.Annotations)
+		g.walkGenerics(n.Generics)
 		for _, f := range n.Fields {
 			if f != nil {
 				g.checkAnnotations(f.Annotations)
@@ -144,6 +146,7 @@ func (g *privilegeGate) walkDecl(d ast.Decl) {
 		}
 	case *ast.EnumDecl:
 		g.checkAnnotations(n.Annotations)
+		g.walkGenerics(n.Generics)
 		for _, m := range n.Methods {
 			if m != nil {
 				g.walkDecl(m)
@@ -151,12 +154,31 @@ func (g *privilegeGate) walkDecl(d ast.Decl) {
 		}
 	case *ast.InterfaceDecl:
 		g.checkAnnotations(n.Annotations)
+		g.walkGenerics(n.Generics)
 	case *ast.TypeAliasDecl:
 		g.checkAnnotations(n.Annotations)
+		g.walkGenerics(n.Generics)
 		g.walkType(n.Target)
 	case *ast.LetDecl:
 		g.checkAnnotations(n.Annotations)
 		g.walkType(n.Type)
+	}
+}
+
+// walkGenerics inspects each generic parameter's constraint list for
+// references to runtime-only names. A constraint like `<T: Pod>` or
+// `<T: Ordered + RawPtr>` appears as a Type in the parameter's
+// Constraints slice and is walked identically to a regular type
+// position — so the privilege gate catches runtime-only types used in
+// bound clauses too.
+func (g *privilegeGate) walkGenerics(gps []*ast.GenericParam) {
+	for _, gp := range gps {
+		if gp == nil {
+			continue
+		}
+		for _, c := range gp.Constraints {
+			g.walkType(c)
+		}
 	}
 }
 

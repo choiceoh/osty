@@ -124,13 +124,10 @@ pub fn takesPod<T: Pod>(value: T) -> T {
     value
 }
 `
-	// The `Pod` appears in the generic bound position; the spike
-	// walker only inspects parameter/return/field *types*, not bound
-	// clauses. So the current implementation produces 0 here. This is
-	// deliberate: bound clauses go through the resolver, which is the
-	// right place to reject runtime-only constraint names. Document
-	// the known gap.
-	assertPrivilegeCount(t, src, false, 0)
+	// `Pod` appears in the generic bound position. The privilege gate
+	// now walks generic constraint lists too (closing the spike-#292
+	// M1 gap), so the unprivileged use is rejected with `E0770`.
+	assertPrivilegeCount(t, src, false, 1)
 }
 
 func TestPrivilegeRejectsRawPtrInReturnType(t *testing.T) {
