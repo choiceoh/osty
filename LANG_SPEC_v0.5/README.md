@@ -1,16 +1,33 @@
-# Osty Language Specification v0.4
+# Osty Language Specification v0.5
 
 Osty is a general-purpose, statically-typed, garbage-collected programming language.
 This directory holds the specification, split into per-section files for easier navigation and editing.
 
-**Status.** v0.4 — supersedes v0.3. Closes the remaining v0.3 edge-case decision queue (G13-G18): non-escaping structured-concurrency capabilities, generic method turbofish/method-reference rules, erased function-value arity, closure parameter irrefutability, stable nested witness policy, and checked stdlib protocol stubs. The v0.4 baseline is later extended additively by §19 (runtime primitives — toolchain-only, no grammar change). No known user-facing open gaps remain at the time of this release. See [`18-change-history.md`](./18-change-history.md) for the full v0.1 → v0.2 → v0.3 → v0.4 evolution.
+**Status.** v0.5 — **final freeze**. Supersedes v0.4. Closes 15 gaps
+(G20–G34) accumulated from the v0.4 usage corpus: value-returning
+`loop`, labeled `break`/`continue`, range step `by`, struct update
+shorthand, trailing closure, `as?` downcast, `const fn`, enum integer
+discriminants, scoped imports, `pub use`, `#[cfg(...)]`, `#[op(...)]`
+bounded operator overloading, lossless numeric widening, function
+value parameter-name preservation, inline `#[test]` + doctest +
+property-based testing. Two v0.4 exclusions ("implicit numeric
+conversions", "operator overloading") are replaced with precisely
+scoped, opt-in forms; the remaining nine exclusions are declared
+permanent.
+
+After v0.5, grammar / prelude / `§14` excluded list / stdlib public
+signatures are CI-locked. No further surface expansion is planned —
+subsequent work is limited to compiler quality, tooling, and
+ecosystem. See [`18-change-history.md`](./18-change-history.md) for
+the full v0.1 → v0.2 → v0.3 → v0.4 → v0.5 evolution.
 
 **Companion documents.**
 
 - [`ABRIDGED.md`](./ABRIDGED.md) — short, example-free quick spec for AI
   agents generating or editing Osty code.
-- `../OSTY_GRAMMAR_v0.4.md` — formal grammar (R1–R26 + EBNF). The lexer/parser ground truth.
-- `../SPEC_GAPS.md` — archive of resolved gaps per version. No open items as of v0.4.
+- `../OSTY_GRAMMAR_v0.5.md` — formal grammar (R1–R26 + EBNF). The lexer/parser ground truth.
+- `../OSTY_GRAMMAR_v0.4.md` — historical v0.4 grammar snapshot.
+- `../SPEC_GAPS.md` — archive of resolved gaps per version. No open items as of v0.5; new gap numbers are prohibited post-freeze.
 
 ## Table of Contents
 
@@ -46,4 +63,4 @@ The chapters are mostly self-contained, but new readers benefit from this order:
 6. **Testing, FFI, tooling** (§11–§13) — workflow concerns.
 7. **Excluded features** (§14) — what is intentionally absent.
 8. **Protocols** (§15–§17) — the interface contracts that bind §10 together.
-9. **Change history** (§18) — upgrade notes for v0.1 and v0.2 users.
+9. **Change history** (§18) — upgrade notes for v0.1 → v0.5 users.

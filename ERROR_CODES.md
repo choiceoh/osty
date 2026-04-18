@@ -856,7 +856,7 @@ Covers literal / range / tuple-arity / struct / variant pattern shape errors —
 
 ---
 
-## Deprecation warning (W0750–E0762)
+## Deprecation warning (W0750–E0405)
 
 ### W0750 — `CodeDeprecatedUse`
 
@@ -890,11 +890,107 @@ Spec: v0.4 §3.1
 
 ### E0762 — `CodeDefaultNotLiteral`
 
-CodeDefaultNotLiteral: a default argument expression is not a literal (§3.1 forbids computed defaults).
+CodeDefaultNotLiteral: a default argument expression is not a literal (§3.1 forbids computed defaults). v0.5 (G21): the literal definition is extended to include struct literals whose fields are themselves literals, and the return value of a `const fn` call. Expressions outside this set still emit this code.
 
-bool, `None`, `Ok(literal)`, `Err(literal)`, `[]`, `{:}`, or `()` literal.
+bool, `None`, `Ok(literal)`, `Err(literal)`, `[]`, `{:}`, `()`, a struct literal of literals, or a `const fn` call.
 
 **Fix**: replace the expression with a numeric, string, char, byte,
+
+### E0763 — `CodeUndefinedLabel`
+
+CodeUndefinedLabel: `break 'label` / `continue 'label` referred to a label that is not in scope (not attached to any enclosing loop). v0.5 (G24) §4.4.
+
+from the break/continue.
+
+**Fix**: add `'label:` to the intended loop, or remove the label
+
+### E0764 — `CodeLabelShadow`
+
+CodeLabelShadow: a `'label:` reuses a name already in scope from an outer loop, making `break 'label` in the inner loop ambiguous. v0.5 (G24) §4.4.
+
+the nested stack.
+
+**Fix**: rename one of the two labels so each name is unique within
+
+### E0754 — `CodeOpAnnotationBadSignature`
+
+CodeOpAnnotationBadSignature: a method carrying `#[op(X)]` does not match the required shape for operator X (wrong parameter count, wrong self-position, wrong return type). v0.5 (G35) §3.1.
+
+`fn(self, other: Rhs) -> Self` (or `Out` for `*`). For unary `-`, declare `fn neg(self) -> Self`.
+
+**Fix**: for binary `+`, `-`, `*`, `/`, `%`, declare
+
+### E0755 — `CodeOpDuplicate`
+
+CodeOpDuplicate: two methods on the same type carry the same `#[op(X)]` annotation. v0.5 (G35) §3.1.
+
+**Fix**: remove one of the duplicate operator implementations.
+
+### E0756 — `CodeOpNotAllowed`
+
+CodeOpNotAllowed: `#[op(...)]` names an operator outside the permitted set `{+, -, *, /, %}` (binary) and `{-}` (unary). `==`, `!=`, `<`, `<=`, `>`, `>=`, `[]`, `()`, `<<`, `>>`, `&`, `|`, `^` cannot be overloaded. v0.5 (G35) §3.1, §14.1.
+
+interfaces; use named methods for indexing and bitwise ops.
+
+**Fix**: implement equality/ordering via the `Equal` / `Ordered`
+
+### E0757 — `CodeAsQuestionBadType`
+
+CodeAsQuestionBadType: `expr as? T` applied to a value whose static type is not a known `Error` implementor, or `T` is not a concrete type implementing `Error`. v0.5 (G27) §4.9.
+
+value, or match structurally.
+
+**Fix**: call `.downcast::<T>()` via method syntax on a non-error
+
+### E0758 — `CodeEnumDiscriminantOnPayload`
+
+CodeEnumDiscriminantOnPayload: `enum X: Int { V(T) = N }` is rejected — discriminant assignment is only legal on payload-free variants. v0.5 (G31) §3.5.
+
+`= N` assignment.
+
+**Fix**: drop the payload (making it a unit variant) or drop the
+
+### E0759 — `CodeEnumDiscriminantDuplicate`
+
+CodeEnumDiscriminantDuplicate: two variants of the same enum are assigned the same discriminant value. v0.5 (G31) §3.5.
+
+**Fix**: pick distinct values for each variant.
+
+### E0765 — `CodeImplicitNarrowingConversion`
+
+CodeImplicitNarrowingConversion: an expression site required an implicit numeric narrowing (e.g. `Int64 -> Int32`, `Float64 -> Int`). v0.5 allows lossless widening only; narrowing must be spelled explicitly. v0.5 (G34) §2.2a.
+
+`.toIntTrunc()`, `.toIntRound()`, `.toIntFloor()`, `.toIntCeil()`, or `.toFloat32()` to make the intent explicit.
+
+**Fix**: call one of `.toInt32()`, `.toInt16()`, `.toInt8()`,
+
+### E0552 — `CodeReexportCycle`
+
+CodeReexportCycle: `pub use` re-export chain contains a cycle. v0.5 (G30) §5.
+
+the original definition rather than another re-export.
+
+**Fix**: break the cycle by rerouting one of the re-exports through
+
+### E0553 — `CodeReexportPrivate`
+
+CodeReexportPrivate: `pub use` attempted to re-export a private symbol. v0.5 (G30) §5.
+
+**Fix**: make the source symbol `pub`, or drop the `pub use`.
+
+### E0554 — `CodeUseDuplicateName`
+
+CodeUseDuplicateName: a scoped `use path::{a, a}` names the same identifier twice, or two separate imports introduce the same local binding. v0.5 (G28) §5.
+
+**Fix**: remove the duplicate or use `as` to rename one side.
+
+### E0405 — `CodeCfgUnknownKey`
+
+CodeCfgUnknownKey: `#[cfg(key = "...")]` used an unknown key. v0.5 (G29) recognises only `os`, `target`, `arch`, `feature`.
+
+forward-compatibility hatch.
+
+**Fix**: use one of the supported keys; unrecognised keys are not a
 
 ---
 
@@ -906,7 +1002,7 @@ CodePodShapeViolation: a `struct` carrying `#[pod]` violates the LANG_SPEC §19.
 
 (primitives, `RawPtr`, other `#[pod] #[repr(c)]` structs, tuples of `Pod`, `Option<T: Pod>`); for unbounded generic structs, add `T: Pod` to every type parameter.
 
-Spec: v0.4 §19.4
+Spec: v0.5 §19.4
 
 **Fix**: replace the offending field's type with a `Pod` type
 
@@ -916,7 +1012,7 @@ CodeRuntimePrivilegeViolation: a runtime-sublanguage surface is used outside a p
 
 workspace packages) add `[capabilities] runtime = true` to the package's `osty.toml`. User code has no way to opt in; refactor it to use ordinary managed types.
 
-Spec: v0.4 §19.2
+Spec: v0.5 §19.2
 
 **Fix**: move the code into `std.runtime.*`, or (for toolchain
 
@@ -926,7 +1022,7 @@ CodeNoAllocViolation: a function carrying `#[no_alloc]` contains an expression t
 
 (`std.runtime.raw.*`), pre-allocated buffers, plain string literals, or restructure the call so the callee is also `#[no_alloc]`.
 
-Spec: v0.4 §19.6.1
+Spec: v0.5 §19.6.1
 
 **Fix**: replace the offending expression with raw-memory primitives
 

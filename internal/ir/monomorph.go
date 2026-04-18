@@ -17,7 +17,7 @@ import (
 //
 // Generic fns that are never called are dropped entirely — matching the
 // language spec's "header-like" demand-driven framing
-// (LANG_SPEC_v0.4/02-type-system.md §2.7.3).
+// (LANG_SPEC_v0.5/02-type-system.md §2.7.3).
 //
 // The returned []error collects non-fatal issues (unresolved type
 // parameters, arity mismatches). A nil module yields (nil, nil).

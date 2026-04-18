@@ -215,7 +215,7 @@ gaps.
 Bidirectional typing with local unification and monomorphization on
 generic instantiation. The full specification, including the rule
 table and a line-level mapping to the self-hosted implementation,
-lives at `LANG_SPEC_v0.4/02a-type-inference.md`. The reference
+lives at `LANG_SPEC_v0.5/02a-type-inference.md`. The reference
 implementation is `toolchain/check.osty`; `host_boundary.go` is a
 pure adapter that materializes the checker's output as
 `Result.Types`, `Result.LetTypes`, `Result.SymTypes`, and

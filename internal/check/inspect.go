@@ -5,7 +5,7 @@ package check
 // it reads the types already recorded in a *Result and classifies each
 // node by the inference rule that produced its type.
 //
-// The rule labels match the table in LANG_SPEC_v0.4/02a-type-inference.md
+// The rule labels match the table in LANG_SPEC_v0.5/02a-type-inference.md
 // §2a.4 and §2a.5. That file names each rule's position in the self-hosted
 // checker source (toolchain/check.osty) so readers can cross-reference the
 // spec, the reference implementation, and the runtime observation emitted
@@ -36,7 +36,7 @@ type InspectRecord struct {
 	End token.Pos
 	// NodeKind is the syntactic category, e.g. "IntLit", "CallExpr", "If".
 	NodeKind string
-	// Rule is the label from LANG_SPEC_v0.4/02a-type-inference.md.
+	// Rule is the label from LANG_SPEC_v0.5/02a-type-inference.md.
 	// Empty when no rule applied (e.g. node had no type recorded).
 	Rule string
 	// Type is the type the checker assigned to this node, or nil when

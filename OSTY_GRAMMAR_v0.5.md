@@ -1,17 +1,75 @@
-# Osty Grammar — Rules & EBNF (v0.4) *[Archived · superseded by v0.5]*
-
-> **Archival notice.** 이 문서는 v0.4 grammar 의 역사 스냅샷이다.
-> 현재 유효한 문법은 `OSTY_GRAMMAR_v0.5.md` (final freeze) 이다.
-> 아래 `LANG_SPEC_v0.4/` 경로 참조는 당시 컨텍스트 그대로 보존되어
-> 있다 — v0.5 기준으로는 `LANG_SPEC_v0.5/` 로 읽으면 된다.
+# Osty Grammar — Rules & EBNF (v0.5 · Final Freeze)
 
 v0.1 에서 열린 이슈 O1~O7 (v0.2 에서 해결), v0.3 grammar 확장, v0.4
-edge-case 결정(G13-G18)을 반영한 최종본. R1~R26 에 O1~O7 결정 및
-v0.3/v0.4 변경을 통합하여 단일 규범 문서로 재구성.
+edge-case 결정(G13-G18), v0.5 에서 한 번에 수용된 15 개 결정
+(G20-G34) 까지 반영한 **최종본**. v0.5 이후 문법 표면은 CI 로 잠금 —
+이 문서의 content hash 가 바뀌면 릴리스 브랜치는 빌드 실패한다.
 
 ---
 
-## 결정 이력 (v0.1 → v0.2 → v0.3 → v0.4)
+## 결정 이력 (v0.1 → v0.2 → v0.3 → v0.4 → v0.5)
+
+### v0.4 → v0.5 (Final Freeze)
+
+**새 contextual keyword 3 개.** 기존 식별자로 쓰이던 자리에서는
+여전히 식별자로 파싱된다.
+
+- **`loop`** — loop expression (`loop { ... break value }`).
+  역할상 `for cond { }` (Unit 반환 while-style) 와 구분된다.
+- **`const`** — `const fn` prefix. run-time binding 은 `let` 뿐이므로
+  `const` 는 항상 `fn` 앞에서만 keyword.
+- **`by`** — range expression 문맥 (`a..b by step` / `a..=b by step`)
+  에서만 keyword. 그 외 위치에서는 식별자.
+
+**새 lexer 토큰 2 개.**
+
+- **라벨 prefix `'ident:`** — 루프 앞, 또는 `break` / `continue`
+  대상 위치에서 label 토큰으로 lex.
+- **`as?`** — single 토큰. whitespace 없이 `as` 다음 `?`. Error
+  downcast 전용 postfix.
+
+**Annotation set 확장 (3 추가).**
+
+- **`#[op(+)]`**, `#[op(-)]`, `#[op(*)]`, `#[op(/)]`, `#[op(%)]`,
+  `#[op(-)]` unary — 여섯 개 arithmetic 연산자 opt-in 오버로딩 (G35).
+- **`#[cfg(expr)]`** — conditional compilation (G29). expr 은
+  `key = "value"` / `all(...)` / `any(...)` / `not(...)` 조합.
+- **`#[test]`** — inline test 함수 표식 (G32).
+
+**EBNF 변경 요약** (자세한 production 은 Part 2 에 인라인).
+
+- `Annotation` value 에 허용되는 operator literal 확장 — `#[op(+)]`
+  안의 `+` / `-` / `*` / `/` / `%` 는 annotation 문맥에서만 literal.
+- `EnumDecl` 에 discriminant 섹션 확장 — `enum X: IntN { A = N, ... }`
+  (G31). payload variant 에는 값 할당 불가 (`E0721`).
+- `StructLiteral` 에 shorthand 추가 — `Ident '{' FieldInit+ '}'`
+  receiver 식별자가 scope 내 struct 변수이면 spread shorthand 로
+  파싱 (G26).
+- `UseDecl` 확장 — `use path::{a, b as c}` (G28), `pub use path` (G30).
+- `CallExpr` 확장 — 마지막 인자가 함수 타입일 때 `(...)` 뒤에
+  trailing closure 허용 (G23).
+- `FnDecl` prefix 에 `const` optional (G21 / G22 / A8).
+- `LoopExpr` 신설 — `'loop' Block`; 값 반환 (G22).
+- 루프 prefix `'label:` — `for`, `loop` 앞에 optional label (G24).
+- `break` / `continue` 에 optional label argument (G24).
+- `RangeExpr` 에 optional `by Expr` suffix (G25).
+- `AsExpr` — `Expr 'as?' TypeName` postfix (G27).
+- `DefaultLiteral` 확장 — 필드가 모두 literal 인 struct literal 과
+  `const fn` 호출 반환값 포함 (G21).
+
+**Grammar 규모 변화**.
+
+| 항목 | v0.4 | v0.5 | Δ |
+|---|---:|---:|---:|
+| Contextual keywords | 7 | 10 | +3 |
+| Fixed annotation set | 8 | 11 | +3 |
+| EBNF production (approx) | 180 | 191 | +11 |
+| Lexer token classes | 34 | 36 | +2 |
+| Diagnostic bands used | E0001-E0779 | E0001-E0779 + E0405 | +1 band |
+
+**Freeze 규칙.** v0.5 태그 이후 위 표의 값은 변경 금지. 새
+contextual keyword, annotation, production 추가는 edition 제안
+(v1.0+) 에서만 가능.
 
 ### v0.3 → v0.4
 
@@ -24,7 +82,7 @@ v0.3/v0.4 변경을 통합하여 단일 규범 문서로 재구성.
   값으로 꺼낼 때 type arguments 를 부분 적용하는 문법은 없다.
 - Grammar token/rule 추가는 없음. v0.4 는 G13-G18 의미론·진단 결정을
   닫는 baseline 이며, 자세한 결정은 `SPEC_GAPS.md` 와
-  `LANG_SPEC_v0.4/18-change-history.md` 를 따른다.
+  `LANG_SPEC_v0.5/18-change-history.md` 를 따른다.
 
 ### v0.4 minor: runtime sublanguage (G19)
 
@@ -50,7 +108,7 @@ v0.3/v0.4 변경을 통합하여 단일 규범 문서로 재구성.
   파라미터가 `LetPattern` (튜플/struct destructure) 을 수용. 단
   refutable 패턴은 컴파일 에러.
 - 다른 grammar rule 변경 없음. LANG_SPEC v0.3 에서 모든 6개 open gap
-  (G4, G8–G12) 과 91건의 의미론 모호성이 결정됨 — `LANG_SPEC_v0.4/
+  (G4, G8–G12) 과 91건의 의미론 모호성이 결정됨 — `LANG_SPEC_v0.5/
   18-change-history.md` §18.2 참조.
 
 ### v0.1 → v0.2
@@ -748,16 +806,16 @@ Literal       ::= INT_LIT
 ## Part 3. 다음 단계
 
 1. **본 문서 리뷰** — R1~R26 결정 사항 교차 검증.
-2. 스펙 `LANG_SPEC_v0.4/` 와의 정합 — **완료** (v0.4 통합):
+2. 스펙 `LANG_SPEC_v0.5/` 와의 정합 — **완료** (v0.4 통합):
    - v0.2 에서 O1–O7 정합 완료 ✓
    - v0.3 에서 G4/G8/G9/G10/G11/G12 + 91건 의미론 모호성 전부 결정 ✓
    - v0.4 에서 G13-G18 edge-case 결정 완료 ✓
-   - 자세한 변경 내역은 `LANG_SPEC_v0.4/18-change-history.md` 참조.
+   - 자세한 변경 내역은 `LANG_SPEC_v0.5/18-change-history.md` 참조.
 
    **스펙 디렉토리 구조** (v0.2 부터 단일 파일 → 폴더):
-   - `LANG_SPEC_v0.4/README.md` — 인덱스 + 읽기 순서.
-   - `LANG_SPEC_v0.4/NN-<name>.md` — chapter §N (N = 1..9, 11..18).
-   - `LANG_SPEC_v0.4/10-standard-library/` — §10 의 stdlib 서브패키지별
+   - `LANG_SPEC_v0.5/README.md` — 인덱스 + 읽기 순서.
+   - `LANG_SPEC_v0.5/NN-<name>.md` — chapter §N (N = 1..9, 11..18).
+   - `LANG_SPEC_v0.5/10-standard-library/` — §10 의 stdlib 서브패키지별
      파일 (NN-<name>.md, N = 1..20) + chapter README.
 3. **테스트 코퍼스 작성** — 각 grammar 규칙당 positive/negative 최소 1쌍.
    - 특히 R2 ASI, R3 제한 문맥, R4 turbofish, R5 `..` 다의성, O4 `>>` 분할.
@@ -766,7 +824,7 @@ Literal       ::= INT_LIT
    - 또는 `lalrpop`/`chumsky` 등 콤비네이터 — O4 특수 처리 필요.
 5. **LSP 초안** — 토큰 정의는 본 문서의 렉서 규칙을 그대로 사용 가능.
 
-> 본 문서는 `LANG_SPEC_v0.4/` 의 §15 / §16 / §17 (Iteration / I/O /
+> 본 문서는 `LANG_SPEC_v0.5/` 의 §15 / §16 / §17 (Iteration / I/O /
 > Display 프로토콜) 와 함께 단일 정본을 구성한다. 사양 충돌이 발견되면
-> `LANG_SPEC_v0.4/` 가 우선한다 (구현·예제 의미론 측면). 토큰·문법
+> `LANG_SPEC_v0.5/` 가 우선한다 (구현·예제 의미론 측면). 토큰·문법
 > 규칙은 본 문서가 정본.
