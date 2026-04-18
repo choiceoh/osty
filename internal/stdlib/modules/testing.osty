@@ -14,6 +14,12 @@
 pub fn assert(cond: Bool) {
 }
 
+pub fn assertTrue(cond: Bool) {
+}
+
+pub fn assertFalse(cond: Bool) {
+}
+
 pub fn assertEq<T: Equal>(actual: T, expected: T) {
 }
 

@@ -1,8 +1,8 @@
 // stmt.go — statement-position emission: emitBlock, emitStmt dispatcher,
 // let/assign/for/return/break/continue/expr-stmt, if-stmt / if-let-stmt,
 // list·map·set method-call statements, user-call statements, println, and
-// testing-only statement helpers (testing.assert / assertEq / fail / context
-// / expectOk / expectError).
+// testing-only statement helpers (testing.assert / assertTrue / assertFalse /
+// assertEq / assertNe / fail / context / expectOk / expectError).
 //
 // NOTE(osty-migration): statement emission consumes ast.Stmt shapes and
 // drives the generator through side effects — this is the bulk of the
@@ -708,15 +708,30 @@ func (g *generator) emitTestingCallStmt(call *ast.CallExpr) (bool, error) {
 		return false, nil
 	}
 	switch method {
-	case "assert":
+	case "assert", "assertTrue":
 		if len(call.Args) != 1 || call.Args[0] == nil || call.Args[0].Name != "" || call.Args[0].Value == nil {
-			return true, unsupported("call", "testing.assert requires one positional argument")
+			return true, unsupportedf("call", "testing.%s requires one positional argument", method)
 		}
 		cond, err := g.emitExpr(call.Args[0].Value)
 		if err != nil {
 			return true, err
 		}
-		return true, g.emitTestingAssertion(cond, g.testingFailureMessage(call, "assert"))
+		return true, g.emitTestingAssertion(cond, g.testingFailureMessage(call, method))
+	case "assertFalse":
+		if len(call.Args) != 1 || call.Args[0] == nil || call.Args[0].Name != "" || call.Args[0].Value == nil {
+			return true, unsupported("call", "testing.assertFalse requires one positional argument")
+		}
+		cond, err := g.emitExpr(call.Args[0].Value)
+		if err != nil {
+			return true, err
+		}
+		if cond.typ != "i1" {
+			return true, unsupportedf("type-system", "testing.assertFalse condition type %s, want i1", cond.typ)
+		}
+		emitter := g.toOstyEmitter()
+		negated := llvmNotI1(emitter, toOstyValue(cond))
+		g.takeOstyEmitter(emitter)
+		return true, g.emitTestingAssertion(fromOstyValue(negated), g.testingFailureMessage(call, "assertFalse"))
 	case "assertEq":
 		return true, g.emitTestingCompare(call, token.EQ, "assertEq")
 	case "assertNe":
