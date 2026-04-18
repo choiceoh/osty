@@ -52,7 +52,7 @@ func runFrontend(src []byte, adaptTokens bool) *FrontendRun {
 	if adaptTokens {
 		run.ensureLexAdapted()
 	} else {
-		run.lexDiags = lexDiagnosticsFromFacts(rt, run.facts())
+		run.lexDiags = lexDiagnosticsFromFacts(rt, stream, run.facts())
 	}
 	return run
 }
@@ -72,7 +72,7 @@ func (r *FrontendRun) Comments() []token.Comment {
 // LexDiagnostics returns lexer-only diagnostics.
 func (r *FrontendRun) LexDiagnostics() []*diag.Diagnostic {
 	if r.lexDiags == nil {
-		r.lexDiags = lexDiagnosticsFromFacts(r.rt, r.facts())
+		r.lexDiags = lexDiagnosticsFromFacts(r.rt, r.stream, r.facts())
 	}
 	return r.lexDiags
 }
@@ -119,17 +119,17 @@ func adaptLexStream(rt runeTable, stream *FrontLexStream, facts *OstyLexFacts) (
 			EndLine: c.endLine,
 		})
 	}
-	return toks, lexDiagnosticsFromFacts(rt, facts), comments
+	return toks, lexDiagnosticsFromFacts(rt, stream, facts), comments
 }
 
-func lexDiagnosticsFromFacts(rt runeTable, facts *OstyLexFacts) []*diag.Diagnostic {
+func lexDiagnosticsFromFacts(rt runeTable, stream *FrontLexStream, facts *OstyLexFacts) []*diag.Diagnostic {
 	diags := make([]*diag.Diagnostic, 0, len(facts.errors))
 	for _, d := range facts.errors {
 		diags = append(diags, lexDiagnostic(d, rt))
 	}
 	// Bridge until selfhost regen lands: post-scan for §1.6.1 numeric
 	// separator violations and surface them as E0008.
-	diags = append(diags, scanBadNumericSeparators(rt)...)
+	diags = append(diags, scanBadNumericSeparators(rt, stream)...)
 	return diags
 }
 
