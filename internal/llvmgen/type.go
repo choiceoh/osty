@@ -573,6 +573,49 @@ func (g *generator) staticExprIsString(expr ast.Expr) bool {
 	return llvmNamedTypeIsString(resolved)
 }
 
+// iterableElemSourceType returns the element source type of a list-shaped
+// iterable, resolving aliases. The fallback reaches into structsByType so
+// nested `for` loops over List-typed struct fields still recover the element
+// source type when the base binding (itself an iter var) has no sourceType.
+func (g *generator) iterableElemSourceType(iter ast.Expr) (ast.Type, bool) {
+	src, ok := g.staticExprSourceType(iter)
+	if !ok {
+		src = g.structFieldListSourceType(iter)
+		if src == nil {
+			return nil, false
+		}
+	}
+	resolved, err := llvmResolveAliasType(src, g.typeEnv(), map[string]bool{})
+	if err != nil {
+		return nil, false
+	}
+	named, ok := resolved.(*ast.NamedType)
+	if !ok || len(named.Path) != 1 || named.Path[0] != "List" || len(named.Args) != 1 {
+		return nil, false
+	}
+	return named.Args[0], true
+}
+
+func (g *generator) structFieldListSourceType(expr ast.Expr) ast.Type {
+	field, ok := expr.(*ast.FieldExpr)
+	if !ok || field.IsOptional {
+		return nil
+	}
+	baseInfo, ok := g.staticExprInfo(field.X)
+	if !ok {
+		return nil
+	}
+	info := g.structsByType[baseInfo.typ]
+	if info == nil {
+		return nil
+	}
+	f, ok := info.byName[field.Name]
+	if !ok {
+		return nil
+	}
+	return f.sourceType
+}
+
 func (g *generator) staticExprListElemIsBytes(expr ast.Expr) bool {
 	sourceType, ok := g.staticExprSourceType(expr)
 	if !ok {
