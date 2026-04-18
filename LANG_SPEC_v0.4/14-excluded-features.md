@@ -24,7 +24,10 @@
 - C-style `for` loops
 - labelled `break` / `continue`
 - `const` (use top-level `let`)
-- `unsafe` (use FFI for foreign code)
+- `unsafe` (use FFI for foreign code; the toolchain's runtime
+  sublanguage in §19 is not a user-facing `unsafe` block — it is
+  implementation-private and rejected outside privileged packages
+  with `E0770`)
 - `where` clauses (use `T: I1 + I2` directly)
 - `yield` / generators
 - anonymous structs / structural records

@@ -3,8 +3,9 @@
 `LANG_SPEC_v0.4/` + `OSTY_GRAMMAR_v0.4.md` 기준.
 
 **v0.4 시점 open gap: 없음.** v0.3 의 구현·진단 경계가 부드럽던
-항목(G13-G18)을 v0.4 에서 모두 결정했다. 새 open gap 이 발견되면
-본 문서에 G19 부터 추가.
+항목(G13-G18)을 v0.4 에서 모두 결정했다. v0.4 baseline 위에 G19
+(runtime sublanguage) 가 additive minor 로 결정되어 §19 에
+명시되었다. 다음 새 gap 은 G20 부터 부여한다.
 
 스펙은 v0.2 부터 폴더 구조이다. §X (X = 1..18) 는 `LANG_SPEC_v0.4/NN-*.md`
 파일. §10 의 서브섹션은 `LANG_SPEC_v0.4/10-standard-library/NN-*.md`.
@@ -32,6 +33,7 @@ v0.4 의 초점은 새 문법을 크게 늘리는 것이 아니라, v0.3 에서 
 | **G16** | closure parameter patterns | closure parameter 는 `LetPattern (':' Type)?` 이되 irrefutable pattern 만 허용한다. ident, wildcard, tuple, struct, nested irrefutable 조합은 허용하고 literal/range/variant/or pattern 은 `E0741`. | decided |
 | **G17** | nested pattern witness diagnostics | exhaustiveness witness 는 한 개의 최소 missing pattern 만 출력한다. tuple/struct 는 좌측부터 첫 missing component 를 구체화하고 나머지는 `_`; closed enum/Option/Result payload 는 재귀 witness, 열린 타입은 `_`; guard arm 은 coverage 에 기여하지 않는다. | decided |
 | **G18** | stdlib protocol executable stubs | §10/§15/§16/§17 protocol 은 checked signature stubs 우선으로 관리한다. bodies 는 dummy 여도 parse/resolve/check 되는 `.osty` stub 이어야 하며, runtime/gen parity 는 language gap 이 아니라 implementation backlog 로 분리한다. | decided |
+| **G19** | runtime sublanguage capability surface | C 로 작성된 GC/allocator (`internal/backend/runtime/osty_runtime.c`) 를 Osty 로 셀프호스트할 수 있도록, **package-gated** 한 작은 surface 를 v0.4 에 additive minor 로 더한다. 사용자 prelude/문법은 변경 없음. opaque type `RawPtr` + marker trait `Pod` + 6 개 어노테이션 (`#[intrinsic]`, `#[pod]`, `#[repr(c)]`, `#[export("...")]`, `#[c_abi]`, `#[no_alloc]`) + `std.runtime.raw.*` 13 개 intrinsic (null/fromBits/bits/alloc/free/zero/copy/offset/read/write/cas/sizeOf/alignOf). 진단 `E0770` / `E0771` / `E0772` 추가. safepoint ABI 는 §19.10 에 명시 (compiler-emitted root array). | decided |
 
 ### Final v0.4 Decisions
 
@@ -47,6 +49,7 @@ front-end 에서 finite 하게 잡을 수 있을 것, 에러 메시지가 안정
 | **G16** | closure parameter 는 `LetPattern (':' Type)?` 를 구현하되 **irrefutable pattern 만** 허용한다. 허용: ident, wildcard, tuple, struct pattern against struct, nested irrefutable 조합. 금지: enum variant, range, literal-only match, refutable or-pattern. 실패 시 `E0741`. | v0.3 스펙과 일치하고 `let` destructuring 규칙을 재사용할 수 있다. refutable closure params 를 허용하지 않아 호출 실패 경로가 생기지 않는다. | parser/gen parity 확인, checker irrefutable predicate + tests 추가. |
 | **G17** | witness 진단은 **한 개의 최소 missing pattern** 만 출력한다. tuple/struct 는 좌측부터 첫 missing component 를 구체화하고 나머지는 `_` 로 둔다. enum/Option/Result payload 는 닫힌 타입이면 재귀 witness, 열린 타입이면 `_`. guard arm 은 coverage 에 기여하지 않는다. | 완벽한 pattern set 출력보다 안정적이고 읽기 쉽다. 현재 exhaustiveness 알고리즘과 잘 맞는다. | `findWitness` stringification 규칙 고정. nested tuple/struct/variant tests 추가. |
 | **G18** | stdlib protocol 은 v0.4 에서 **checked signature stubs 우선**으로 간다. bodies 는 dummy 여도 parse/resolve/check 되는 `.osty` stub 이어야 한다. 구현 없는 런타임 동작은 gen/runtime backlog 로 분리하고, protocol signature 모호성만 G 번호로 승격한다. | 언어/프론트엔드 결정과 런타임 구현을 분리한다. 스펙 drift 를 테스트가 바로 잡게 한다. | `TestAllSignatureStubsCheck` 가 모든 embedded stub 의 parse/resolve/check 를 검증. `std.thread` Handle 생성 body 의 G13 `E0743` 만 예외. |
+| **G19** | **Runtime sublanguage** 을 v0.4 baseline 에 additive minor 로 더한다. 새 surface 는 (a) opaque pointer-shaped type `RawPtr` (Pod, GC traceless), (b) compiler-decided marker interface `Pod`, (c) 어노테이션 6 개 — `#[intrinsic]`/`#[pod]`/`#[repr(c)]`/`#[export("name")]`/`#[c_abi]`/`#[no_alloc]`, (d) `std.runtime.raw` 의 13 개 intrinsic (`null`/`fromBits`/`bits`/`alloc`/`free`/`zero`/`copy`/`offset`/`read`/`write`/`cas`/`sizeOf`/`alignOf`), (e) §19.10 의 compiler-emitted root array safepoint ABI. **Gate 는 package path** 로만 — `std.runtime.*` 또는 toolchain workspace 안의 `[capabilities] runtime = true` 패키지만 사용 가능. 일반 사용자 코드에서 사용 시 `E0770`. `#[pod]` shape 위반은 `E0771`. `#[no_alloc]` 본문에서 managed allocation 발견 (또는 `cas` 의 invalid type size) 은 `E0772`. | (1) GC 를 Osty 로 셀프호스트하려면 raw memory + 주소 산술 + Pod load/store + C ABI export + "본문에서 절대 alloc 안함" 증명 + caller-emitted root array 가 필수다. (2) 사용자 prelude 에 `unsafe` 를 노출하지 않는 cleanest path 는 Rust `core::intrinsics` 와 같은 package-gated surface. (3) 새 grammar token 0 개, 새 키워드 0 개 → v0.4 grammar freeze 유지. (4) Pod 는 generic struct 의 경우 `T: Pod` bound 강제 (per-instantiation 은 v0.5 후보). (5) `cas` 는 `sizeOf<T> ∈ {1,2,4,8,16}` + 자연 정렬 제약. (6) `Option<T: Pod>` 은 Pod 이므로 runtime code 에서 `RawPtr?` 를 자유롭게 쓰지만, `#[c_abi]` 함수 반환 타입으로는 사용 불가 (allocator-failure 는 `null()` sentinel). | §19 새 챕터 작성 (10 개 sub-section). §2.1 / §2.6 / §3.8 / §14 / §18 cross-ref 추가. checker 에 (a) `E0770` privilege gate (annotation/type/import 모두), (b) `E0771` Pod shape 검사 + generic bound 검사, (c) `E0772` no_alloc 본문 walker + `cas` size 검사, (d) `Pod` 자동 derivation (primitives + `#[pod] #[repr(c)]` struct + tuple + `Option<T:Pod>`). lowering 에 (a) `raw.*` intrinsic 13 개 의 LLVM mapping 표 §19.7, (b) `#[c_abi]` → LLVM `ccc` calling conv, (c) `#[export]` → external linkage + `dso_local` preemption + exact symbol, (d) `read` 에 `freeze`. `std.runtime.raw` stdlib package + `osty_rt_alloc_aligned` shim 을 `internal/backend/runtime/raw_alloc_shim.c` 에 unconditionally 링크. 기존 `osty_runtime.c` ABI (alloc_v1/free... safepoint_v1/post_write_v1/...) 보존 테스트는 `internal/backend/llvm_runtime_gc_test.go` 를 그대로 통과시킴. manifest schema 의 `[capabilities] runtime = true` 는 §10/§11/§13 manifest reference 의 다음 minor 에 동기화. |
 
 ### Closed during v0.4 prep
 

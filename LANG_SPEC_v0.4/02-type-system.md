@@ -41,6 +41,10 @@ representable.
 Zero-sized structs (e.g. `struct Marker {}`) are allowed. They occupy no
 storage; collections and struct fields treat them as ordinary values.
 
+**Runtime-only types.** `RawPtr` is a pointer-shaped opaque type used by
+the toolchain's runtime sublanguage. It is **not** part of the user
+prelude and is unreachable from ordinary user code. See §19.3.
+
 ### 2.2 Numeric Conversions
 
 No implicit numeric conversions between variables. Conversions via
@@ -298,6 +302,12 @@ Map<K,V>:   K: Hashable + V: Hashable ⇒ Map<K,V>: Hashable
 User code cannot override the built-in `Equal`/`Hashable` instances of
 collection types; they are structural by definition. (Resolves G1 from
 the v0.1 gap list.)
+
+**Runtime-only marker.** `Pod` is a built-in marker interface
+(no methods) used by the runtime sublanguage to constrain raw
+load/store/CAS intrinsics. The compiler decides `Pod` membership
+structurally; user code cannot `impl Pod`. `Pod` is not part of the
+user prelude. See §19.4.
 
 ### 2.7 Generics
 
