@@ -81,6 +81,35 @@ fn main() {
 	}
 }
 
+// Regression: FnDecl.Body is nil for interface-declared methods without a
+// default. Passing it as ast.Node turned the nil *ast.Block into a typed-nil
+// interface that slipped past the n == nil guard in addNode and
+// nil-dereferenced inside the Block arm of the type switch.
+func TestNativeBoundaryIndexesInterfaceMethodWithoutDefaultBody(t *testing.T) {
+	src := []byte(`pub interface Reader {
+    fn read(self, n: Int) -> Int
+    fn close(self) -> Int { 0 }
+}
+
+fn main() {}
+`)
+	file, res := parseResolvedFile(t, src)
+
+	oldFactory := nativeCheckerFactory
+	nativeCheckerFactory = func() (nativeChecker, string) {
+		return fakeNativeChecker{result: nativeCheckResult{
+			Summary: nativeCheckSummary{Assignments: 0, Accepted: 0, Errors: 0},
+		}}, ""
+	}
+	t.Cleanup(func() { nativeCheckerFactory = oldFactory })
+
+	// Must not panic.
+	chk := File(file, res, Opts{Source: src, Stdlib: stdlib.LoadCached()})
+	if len(chk.Diags) != 0 {
+		t.Fatalf("expected no diagnostics, got %v", chk.Diags)
+	}
+}
+
 func TestNativeBoundaryReportsMissingExecutable(t *testing.T) {
 	src := []byte("fn main() {}\n")
 	file, res := parseResolvedFile(t, src)
