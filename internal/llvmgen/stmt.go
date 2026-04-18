@@ -1255,12 +1255,14 @@ func (g *generator) emitListFor(stmt *ast.ForStmt, iterName, elemTyp string) err
 		return err
 	}
 	indexValue := value{typ: "i64", ref: loop.current}
+	elemSource, _ := g.iterableElemSourceType(stmt.Iter)
 	if useAggregateABI {
 		item, err := g.emitListAggregateGet(iterableValue, indexValue, elemTyp)
 		if err != nil {
 			g.popScope()
 			return err
 		}
+		item.sourceType = elemSource
 		g.bindLocal(iterName, item)
 	} else if listUsesTypedRuntime(elemTyp) {
 		getSymbol := listRuntimeGetSymbol(elemTyp)
@@ -1271,6 +1273,7 @@ func (g *generator) emitListFor(stmt *ast.ForStmt, iterName, elemTyp string) err
 		loaded := fromOstyValue(item)
 		loaded.gcManaged = elemTyp == "ptr"
 		loaded.rootPaths = g.rootPathsForType(elemTyp)
+		loaded.sourceType = elemSource
 		g.bindLocal(iterName, loaded)
 	} else {
 		traceSymbol := g.traceCallbackSymbol(elemTyp, g.rootPathsForType(elemTyp))
@@ -1289,6 +1292,7 @@ func (g *generator) emitListFor(stmt *ast.ForStmt, iterName, elemTyp string) err
 		loaded := g.loadValueFromAddress(emitter, elemTyp, slot)
 		g.takeOstyEmitter(emitter)
 		loaded.rootPaths = g.rootPathsForType(elemTyp)
+		loaded.sourceType = elemSource
 		g.bindLocal(iterName, loaded)
 	}
 	if err := g.emitBlock(stmt.Body.Stmts); err != nil {
