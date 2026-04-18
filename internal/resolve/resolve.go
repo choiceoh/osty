@@ -507,15 +507,124 @@ func (r *resolver) checkAnnotations(annots []*ast.Annotation, target ast.Annotat
 }
 
 // checkAnnotationArgs validates each `#[name(arg = value)]` argument
-// against the fixed signature for that annotation (§3.8). Unknown keys
-// and wrong-typed values are both reported here.
+// against the fixed signature for that annotation (§3.8 / §19.6).
+// Unknown keys and wrong-typed values are both reported here.
 func (r *resolver) checkAnnotationArgs(a *ast.Annotation, target ast.AnnotationTarget) {
 	switch a.Name {
 	case "json":
 		r.checkJSONArgs(a, target)
 	case "deprecated":
 		r.checkDeprecatedArgs(a)
+	case "repr":
+		r.checkReprArgs(a)
+	case "export":
+		r.checkExportArgs(a)
+	case "intrinsic", "pod", "c_abi", "no_alloc":
+		r.checkNoArgsRuntime(a)
 	}
+}
+
+// checkReprArgs validates `#[repr(c)]` per LANG_SPEC §19.6: exactly
+// one bare-flag argument whose key is `c`. The v0.4 spec allocates
+// only the `c` form; future repr modes (e.g. `packed`) would extend
+// this set but are not part of v0.5.
+func (r *resolver) checkReprArgs(a *ast.Annotation) {
+	if len(a.Args) == 0 {
+		r.emit(diag.New(diag.Error,
+			"`#[repr]` requires a layout argument").
+			Code(diag.CodeAnnotationBadArg).
+			PrimaryPos(a.PosV, "missing argument `(c)`").
+			Note("LANG_SPEC §19.6: the only accepted form is `#[repr(c)]`").
+			Build())
+		return
+	}
+	if len(a.Args) > 1 {
+		r.emit(diag.New(diag.Error,
+			"`#[repr]` accepts exactly one argument").
+			Code(diag.CodeAnnotationBadArg).
+			PrimaryPos(a.Args[1].PosV, "extra argument").
+			Build())
+	}
+	arg := a.Args[0]
+	if !isFlagOrTrue(arg) {
+		r.emit(diag.New(diag.Error,
+			"`#[repr]` takes a bare-flag argument, not a value").
+			Code(diag.CodeAnnotationBadArg).
+			PrimaryPos(arg.PosV, "expected `c`").
+			Build())
+		return
+	}
+	if arg.Key != "c" {
+		r.emit(diag.New(diag.Error,
+			fmt.Sprintf("`#[repr(%s)]` is not a recognized layout", arg.Key)).
+			Code(diag.CodeAnnotationBadArg).
+			PrimaryPos(arg.PosV, "only `#[repr(c)]` is accepted").
+			Note("LANG_SPEC §19.6: v0.5 recognizes only the `c` layout").
+			Build())
+	}
+}
+
+// checkExportArgs validates `#[export("symbol")]` per LANG_SPEC §19.6:
+// exactly one positional string-literal argument naming the emitted
+// symbol. The argument has no key — the annotation-argument parser
+// stores the string literal as `Key="" Value=StringLit`.
+func (r *resolver) checkExportArgs(a *ast.Annotation) {
+	if len(a.Args) == 0 {
+		r.emit(diag.New(diag.Error,
+			"`#[export]` requires a symbol-name argument").
+			Code(diag.CodeAnnotationBadArg).
+			PrimaryPos(a.PosV, "missing string literal, e.g. `(\"osty.gc.alloc_v1\")`").
+			Note("LANG_SPEC §19.6: `#[export(\"name\")]` takes one string literal").
+			Build())
+		return
+	}
+	if len(a.Args) > 1 {
+		r.emit(diag.New(diag.Error,
+			"`#[export]` accepts exactly one argument").
+			Code(diag.CodeAnnotationBadArg).
+			PrimaryPos(a.Args[1].PosV, "extra argument").
+			Build())
+	}
+	arg := a.Args[0]
+	if arg.Key != "" {
+		r.emit(diag.New(diag.Error,
+			"`#[export]` takes a positional string literal, not a key-value argument").
+			Code(diag.CodeAnnotationBadArg).
+			PrimaryPos(arg.PosV, fmt.Sprintf("remove `%s =`", arg.Key)).
+			Build())
+		return
+	}
+	name, ok := stringArg(arg.Value)
+	if !ok {
+		r.emit(diag.New(diag.Error,
+			"`#[export]` requires a string literal argument").
+			Code(diag.CodeAnnotationBadArg).
+			PrimaryPos(arg.PosV, "expected string literal").
+			Build())
+		return
+	}
+	if name == "" {
+		r.emit(diag.New(diag.Error,
+			"`#[export]` symbol name must be non-empty").
+			Code(diag.CodeAnnotationBadArg).
+			PrimaryPos(arg.PosV, "empty symbol name").
+			Build())
+	}
+}
+
+// checkNoArgsRuntime validates the runtime annotations that take no
+// arguments: `#[intrinsic]`, `#[pod]`, `#[c_abi]`, `#[no_alloc]`.
+// Any argument is rejected.
+func (r *resolver) checkNoArgsRuntime(a *ast.Annotation) {
+	if len(a.Args) == 0 {
+		return
+	}
+	r.emit(diag.New(diag.Error,
+		fmt.Sprintf("`#[%s]` does not take arguments", a.Name)).
+		Code(diag.CodeAnnotationBadArg).
+		PrimaryPos(a.Args[0].PosV, "unexpected argument").
+		Note("LANG_SPEC §19.6: this annotation is a bare flag").
+		Build())
 }
 
 // checkJSONArgs validates #[json(...)] argument shapes per §3.8.1:
