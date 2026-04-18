@@ -229,14 +229,18 @@ func TestParseDetailedLowersSemanticHelpers(t *testing.T) {
 	if _, ok := countLet.Value.(*ast.CallExpr); !ok {
 		t.Fatalf("count value type = %T, want *ast.CallExpr", countLet.Value)
 	}
+	// `.length` is intentionally NOT lowered at parse time — it may be a
+	// legitimate struct field read, which only the type checker can
+	// disambiguate. airepair's type-aware semantic pass rewrites genuine
+	// JS-habit cases post-check.
 	sizeLet := fn.Body.Stmts[2].(*ast.LetStmt)
-	if _, ok := sizeLet.Value.(*ast.CallExpr); !ok {
-		t.Fatalf("size value type = %T, want *ast.CallExpr", sizeLet.Value)
+	if _, ok := sizeLet.Value.(*ast.FieldExpr); !ok {
+		t.Fatalf("size value type = %T, want *ast.FieldExpr (parser no longer lowers `.length`)", sizeLet.Value)
 	}
 	if _, ok := fn.Body.Stmts[3].(*ast.ExprStmt); !ok {
 		t.Fatalf("stmt[3] type = %T, want append lowered to *ast.ExprStmt", fn.Body.Stmts[3])
 	}
-	if result.Provenance == nil || len(result.Provenance.Lowerings) < 3 {
+	if result.Provenance == nil || len(result.Provenance.Lowerings) < 2 {
 		t.Fatalf("lowering provenance = %#v, want helper lowerings", result.Provenance)
 	}
 }

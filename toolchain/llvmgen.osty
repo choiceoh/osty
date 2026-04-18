@@ -1986,7 +1986,8 @@ pub fn llvmChanIsClosed(emitter: LlvmEmitter, channel: LlvmValue) -> LlvmValue {
 /// Deterministic naming is what lets two closures with the same
 /// capture shape share a single `%type` definition.
 pub fn llvmClosureEnvTypeName(elemTags: List<String>) -> String {
-    "ClosureEnv.{llvmStrings.join(elemTags, ".")}"
+    let sep = "."
+    "ClosureEnv.{llvmStrings.join(elemTags, sep)}"
 }
 
 /// Render the `%{name} = type { … }` declaration for a closure env.
@@ -2096,7 +2097,8 @@ pub fn llvmClosureCallIndirect(
         args.push(arg)
         paramTypes.push(arg.typ)
     }
-    let callType = "{returnType} ({llvmStrings.join(paramTypes, \", \")})"
+    let paramSep = ", "
+    let callType = "{returnType} ({llvmStrings.join(paramTypes, paramSep)})"
     let tmp = llvmNextTemp(emitter)
     emitter.body.push(
         "  {tmp} = call {callType} {fnPtr.name}({llvmCallArgs(args)})",
