@@ -1,0 +1,168 @@
+// std.testing.gen — property-based testing generators (v0.5 G33).
+//
+// A `Gen<T>` produces values of type `T` from a deterministic seed.
+// Generators compose — `pair` / `map` / `filter` / `list` / `oneOf`
+// — so users build domain types from primitives without writing
+// custom samplers.
+//
+// The `Gen<T>` type itself lives in `std.testing` (declared there
+// so `testing.property` can reference it without a circular
+// import). This module provides the combinators that build values
+// of that type.
+//
+// Use with `testing.property`:
+//
+//     use std.testing as testing
+//     use std.testing.gen as gen
+//
+//     #[test]
+//     fn reverseIsInvolutive() {
+//         testing.property(
+//             "reverse ∘ reverse == id",
+//             gen.list(gen.int(), 32),
+//             |xs: List<Int>| xs.reversed().reversed() == xs,
+//         )
+//     }
+//
+// v0.5 scope: signature stubs only (G18 convention). Runtime
+// sampling / shrinking is supplied by the native test runner; these
+// bodies return deterministic-looking placeholders so the stdlib
+// stub checker passes.
+
+use std.testing as testing
+
+// ---------- primitive generators ----------
+
+/// `int` returns a generator that produces any `Int` value. For
+/// focused ranges prefer `intRange`.
+pub fn int() -> testing.Gen<Int> {
+    testing.Gen { seed: 0, tag: 1 }
+}
+
+/// `intRange(lo, hi)` generates integers in `[lo, hi)`. Aborts at
+/// sample time if `hi <= lo`.
+pub fn intRange(lo: Int, hi: Int) -> testing.Gen<Int> {
+    let _ = lo
+    let _ = hi
+    testing.Gen { seed: 0, tag: 2 }
+}
+
+/// `bool` returns a fair coin-flip generator.
+pub fn bool() -> testing.Gen<Bool> {
+    testing.Gen { seed: 0, tag: 3 }
+}
+
+/// `float` produces `Float64` values drawn from a roughly uniform
+/// distribution over `[0, 1)`; combine with `map` for other ranges.
+pub fn float() -> testing.Gen<Float64> {
+    testing.Gen { seed: 0, tag: 4 }
+}
+
+/// `char` generates ASCII printable characters (`U+0020` through
+/// `U+007E`). Full-Unicode sampling lives behind `anyChar` when
+/// that lands.
+pub fn char() -> testing.Gen<Char> {
+    testing.Gen { seed: 0, tag: 5 }
+}
+
+/// `byte` samples the full `[0, 256)` byte range.
+pub fn byte() -> testing.Gen<Byte> {
+    testing.Gen { seed: 0, tag: 6 }
+}
+
+/// `asciiString(maxLen)` returns a string of up to `maxLen` ASCII
+/// printable bytes. Useful for parser / lexer property tests where
+/// arbitrary UTF-8 would muddy the signal.
+pub fn asciiString(maxLen: Int) -> testing.Gen<String> {
+    let _ = maxLen
+    testing.Gen { seed: 0, tag: 7 }
+}
+
+// ---------- combinators ----------
+
+/// `oneOf(choices)` samples one element from the supplied slice
+/// uniformly at random. Aborts at sample time when `choices` is
+/// empty.
+pub fn oneOf<T>(choices: List<T>) -> testing.Gen<T> {
+    let _ = choices
+    testing.Gen { seed: 0, tag: 10 }
+}
+
+/// `map` transforms the output of a generator by `f`. No shrinking
+/// information is added; the result shrinks through the underlying
+/// generator.
+pub fn map<T, U>(g: testing.Gen<T>, f: fn(T) -> U) -> testing.Gen<U> {
+    let _ = g
+    let _ = f
+    testing.Gen { seed: 0, tag: 11 }
+}
+
+/// `filter(g, pred)` keeps only samples that satisfy `pred`. The
+/// generator retries up to a small bound and then aborts the test
+/// case — do not use overly narrow predicates.
+pub fn filter<T>(g: testing.Gen<T>, pred: fn(T) -> Bool) -> testing.Gen<T> {
+    let _ = g
+    let _ = pred
+    testing.Gen { seed: 0, tag: 12 }
+}
+
+/// `pair` zips two generators so the property receives a
+/// two-element tuple.
+pub fn pair<A, B>(a: testing.Gen<A>, b: testing.Gen<B>) -> testing.Gen<(A, B)> {
+    let _ = a
+    let _ = b
+    testing.Gen { seed: 0, tag: 13 }
+}
+
+/// `triple` is `pair`'s three-way counterpart.
+pub fn triple<A, B, C>(a: testing.Gen<A>, b: testing.Gen<B>, c: testing.Gen<C>) -> testing.Gen<(A, B, C)> {
+    let _ = a
+    let _ = b
+    let _ = c
+    testing.Gen { seed: 0, tag: 14 }
+}
+
+/// `list(item, maxLen)` produces lists of length in `[0, maxLen]`.
+/// Lengths are drawn uniformly; for non-empty lists combine with
+/// `filter` or use `listOfSize`.
+pub fn list<T>(item: testing.Gen<T>, maxLen: Int) -> testing.Gen<List<T>> {
+    let _ = item
+    let _ = maxLen
+    testing.Gen { seed: 0, tag: 15 }
+}
+
+/// `listOfSize(item, size)` fixes list length to `size`.
+pub fn listOfSize<T>(item: testing.Gen<T>, size: Int) -> testing.Gen<List<T>> {
+    let _ = item
+    let _ = size
+    testing.Gen { seed: 0, tag: 16 }
+}
+
+/// `option(item)` wraps values from `item` so ~half the samples are
+/// `None`.
+pub fn option<T>(item: testing.Gen<T>) -> testing.Gen<T?> {
+    let _ = item
+    testing.Gen { seed: 0, tag: 17 }
+}
+
+/// `result(ok, err)` is `Ok` ~half the time and `Err` the rest.
+pub fn result<T, E>(ok: testing.Gen<T>, err: testing.Gen<E>) -> testing.Gen<Result<T, E>> {
+    let _ = ok
+    let _ = err
+    testing.Gen { seed: 0, tag: 18 }
+}
+
+/// `constant(value)` is a degenerate generator that always yields
+/// the same value — handy when one branch of a composed generator
+/// should be fixed.
+pub fn constant<T>(value: T) -> testing.Gen<T> {
+    let _ = value
+    testing.Gen { seed: 0, tag: 19 }
+}
+
+/// `oneOfGens(gens)` weighted-picks one of the supplied generators
+/// uniformly per sample. Use when a type has multiple variants.
+pub fn oneOfGens<T>(gens: List<testing.Gen<T>>) -> testing.Gen<T> {
+    let _ = gens
+    testing.Gen { seed: 0, tag: 20 }
+}

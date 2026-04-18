@@ -1,0 +1,51 @@
+// v0.5 G33 — property-based testing via std.testing.gen.
+// Exercises the property runner + generator combinators. Must
+// parse + resolve with zero diagnostics against the bundled
+// stdlib stubs.
+
+use std.testing as testing
+use std.testing.gen as gen
+
+// Simple invariant: reverse twice restores the list.
+#[test]
+fn reverseIsInvolutive() {
+    testing.property(
+        "reverse ∘ reverse == id",
+        gen.list(gen.int(), 32),
+        |xs: List<Int>| xs.reversed().reversed() == xs,
+    )
+}
+
+// Bounded iteration count — use when samples are expensive.
+#[test]
+fn sumCommutes() {
+    testing.propertyN(
+        "a + b == b + a",
+        gen.pair(gen.intRange(-100, 100), gen.intRange(-100, 100)),
+        500,
+        |(a, b)| a + b == b + a,
+    )
+}
+
+// Deterministic seed — handy for reproducing a failing run.
+#[test]
+fn seededReplay() {
+    testing.propertySeeded(
+        "bool is bool",
+        gen.bool(),
+        0xDEADBEEF,
+        |b: Bool| b || !b,
+    )
+}
+
+// Combined generators — pair + map + constant.
+#[test]
+fn userFieldsStayBounded() {
+    let nameGen = gen.asciiString(16)
+    let ageGen = gen.intRange(0, 150)
+    testing.property(
+        "user age is in [0, 150)",
+        gen.pair(nameGen, ageGen),
+        |(_name, age)| age >= 0 && age < 150,
+    )
+}

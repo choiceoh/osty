@@ -48,3 +48,59 @@ pub fn benchmark(iterations: Int, body: fn() -> Result<(), Error>) {
 
 pub fn snapshot(name: String, output: String) {
 }
+
+// ---------- property-based testing (v0.5 G33) ----------
+
+// `Gen<T>` is declared here so `property` / `propertyN` /
+// `propertySeeded` can name it without importing
+// `std.testing.gen` (which would import `std.testing` in turn).
+// The combinators that produce values of this type live in
+// `std.testing.gen` — import that submodule to build generators.
+//
+// Users write:
+//
+//     use std.testing as testing
+//     use std.testing.gen as gen
+//
+//     testing.property("reverse is involutive",
+//         gen.list(gen.int(), 32),
+//         |xs: List<Int>| xs.reversed().reversed() == xs,
+//     )
+
+/// `Gen<T>` is the opaque-ish sampler wrapper produced by the
+/// `std.testing.gen` combinators. Direct construction via `Gen
+/// { ... }` is reserved for stdlib internals.
+pub struct Gen<T> {
+    pub seed: Int,
+    pub tag: Int,
+}
+
+/// `property(name, g, pred)` runs `pred` against ~100 samples drawn
+/// from `g` and records one test result (pass / shrunk-
+/// counterexample failure) in the surrounding test case. Seed
+/// defaults to the runner-wide seed so a failing property is
+/// reproducible.
+pub fn property<T>(name: String, g: Gen<T>, pred: fn(T) -> Bool) {
+    let _ = name
+    let _ = g
+    let _ = pred
+}
+
+/// `propertyN` varies the sample budget. Use with large generators
+/// where 100 samples is too thin, or with cheap generators where
+/// more samples improve coverage.
+pub fn propertyN<T>(name: String, g: Gen<T>, iterations: Int, pred: fn(T) -> Bool) {
+    let _ = name
+    let _ = g
+    let _ = iterations
+    let _ = pred
+}
+
+/// `propertySeeded` pins the sample seed — useful inside a test
+/// that wants the property replay to match an earlier failing run.
+pub fn propertySeeded<T>(name: String, g: Gen<T>, seed: Int, pred: fn(T) -> Bool) {
+    let _ = name
+    let _ = g
+    let _ = seed
+    let _ = pred
+}
