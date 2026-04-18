@@ -216,6 +216,32 @@ func llvmSlotAsPtr(slot *LlvmValue) *LlvmValue {
 	return &LlvmValue{typ: "ptr", name: slot.name, pointer: false}
 }
 
+func llvmAllocaSlot(emitter *LlvmEmitter, llvmType string) *LlvmValue {
+	slot := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca %s", slot, llvmType))
+	return &LlvmValue{typ: "ptr", name: slot, pointer: false}
+}
+
+func llvmSpillToSlot(emitter *LlvmEmitter, value *LlvmValue) *LlvmValue {
+	slot := llvmAllocaSlot(emitter, value.typ)
+	emitter.body = append(emitter.body, fmt.Sprintf("  store %s %s, ptr %s", value.typ, value.name, slot.name))
+	return slot
+}
+
+func llvmLoadFromSlot(emitter *LlvmEmitter, slot *LlvmValue, llvmType string) *LlvmValue {
+	tmp := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = load %s, ptr %s", tmp, llvmType, slot.name))
+	return &LlvmValue{typ: llvmType, name: tmp, pointer: false}
+}
+
+func llvmSizeOf(emitter *LlvmEmitter, llvmType string) *LlvmValue {
+	gep := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = getelementptr %s, ptr null, i32 1", gep, llvmType))
+	size := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = ptrtoint ptr %s to i64", size, gep))
+	return &LlvmValue{typ: "i64", name: size, pointer: false}
+}
+
 func llvmMutableLetSlot(emitter *LlvmEmitter, name string, initial *LlvmValue) *LlvmValue {
 	// Osty: examples/selfhost-core/llvmgen.osty:166:5
 	ptr := llvmNextTemp(emitter)
@@ -856,6 +882,10 @@ func llvmRenderModuleWithSetRuntime(sourcePath string, target string, typeDefs [
 
 func llvmRenderModuleWithStringRuntime(sourcePath string, target string, typeDefs []string, stringGlobals []*LlvmStringGlobal, definitions []string) string {
 	return llvmRenderModuleWithRuntimeDeclarations(sourcePath, target, typeDefs, stringGlobals, llvmStringRuntimeDeclarations(), definitions)
+}
+
+func llvmRenderModuleWithChannelRuntime(sourcePath string, target string, typeDefs []string, stringGlobals []*LlvmStringGlobal, definitions []string) string {
+	return llvmRenderModuleWithRuntimeDeclarations(sourcePath, target, typeDefs, stringGlobals, llvmChanRuntimeDeclarations(), definitions)
 }
 
 // Osty: examples/selfhost-core/llvmgen.osty:581:1
@@ -1584,6 +1614,16 @@ func llvmListPushPtr(emitter *LlvmEmitter, list *LlvmValue, value *LlvmValue) {
 	llvmCallVoid(emitter, "osty_rt_list_push_ptr", []*LlvmValue{list, value})
 }
 
+func llvmListPush(emitter *LlvmEmitter, list *LlvmValue, value *LlvmValue) {
+	symbol := llvmListRuntimePushSymbol(llvmListElementSuffix(value.typ))
+	llvmCallVoid(emitter, symbol, []*LlvmValue{list, value})
+}
+
+func llvmListGet(emitter *LlvmEmitter, list *LlvmValue, index *LlvmValue, elemTyp string) *LlvmValue {
+	symbol := llvmListRuntimeGetSymbol(llvmListElementSuffix(elemTyp))
+	return llvmCall(emitter, elemTyp, symbol, []*LlvmValue{list, index})
+}
+
 func llvmListGetI64(emitter *LlvmEmitter, list *LlvmValue, index *LlvmValue) *LlvmValue {
 	return llvmCall(emitter, "i64", "osty_rt_list_get_i64", []*LlvmValue{list, index})
 }
@@ -1736,6 +1776,26 @@ func llvmMapGetOrAbortString(emitter *LlvmEmitter, m *LlvmValue, key *LlvmValue,
 	llvmCallVoid(emitter, "osty_rt_map_get_or_abort_string", []*LlvmValue{m, key, outSlot})
 }
 
+func llvmMapContains(emitter *LlvmEmitter, m *LlvmValue, key *LlvmValue, isString bool) *LlvmValue {
+	symbol := llvmMapRuntimeContainsSymbol(key.typ, isString)
+	return llvmCall(emitter, "i1", symbol, []*LlvmValue{m, key})
+}
+
+func llvmMapInsert(emitter *LlvmEmitter, m *LlvmValue, key *LlvmValue, valueSlot *LlvmValue, isString bool) {
+	symbol := llvmMapRuntimeInsertSymbol(key.typ, isString)
+	llvmCallVoid(emitter, symbol, []*LlvmValue{m, key, valueSlot})
+}
+
+func llvmMapRemove(emitter *LlvmEmitter, m *LlvmValue, key *LlvmValue, isString bool) *LlvmValue {
+	symbol := llvmMapRuntimeRemoveSymbol(key.typ, isString)
+	return llvmCall(emitter, "i1", symbol, []*LlvmValue{m, key})
+}
+
+func llvmMapGetOrAbort(emitter *LlvmEmitter, m *LlvmValue, key *LlvmValue, outSlot *LlvmValue, isString bool) {
+	symbol := llvmMapRuntimeGetOrAbortSymbol(key.typ, isString)
+	llvmCallVoid(emitter, symbol, []*LlvmValue{m, key, outSlot})
+}
+
 func llvmSetRuntimeDeclarations() []string {
 	return []string{
 		"declare ptr @osty_rt_set_new(i64)",
@@ -1829,6 +1889,96 @@ func llvmSetRemovePtr(emitter *LlvmEmitter, set *LlvmValue, item *LlvmValue) *Ll
 
 func llvmSetRemoveString(emitter *LlvmEmitter, set *LlvmValue, item *LlvmValue) *LlvmValue {
 	return llvmCall(emitter, "i1", "osty_rt_set_remove_string", []*LlvmValue{set, item})
+}
+
+func llvmSetContains(emitter *LlvmEmitter, set *LlvmValue, item *LlvmValue, isString bool) *LlvmValue {
+	symbol := llvmSetRuntimeContainsSymbol(item.typ, isString)
+	return llvmCall(emitter, "i1", symbol, []*LlvmValue{set, item})
+}
+
+func llvmSetInsert(emitter *LlvmEmitter, set *LlvmValue, item *LlvmValue, isString bool) *LlvmValue {
+	symbol := llvmSetRuntimeInsertSymbol(item.typ, isString)
+	return llvmCall(emitter, "i1", symbol, []*LlvmValue{set, item})
+}
+
+func llvmSetRemove(emitter *LlvmEmitter, set *LlvmValue, item *LlvmValue, isString bool) *LlvmValue {
+	symbol := llvmSetRuntimeRemoveSymbol(item.typ, isString)
+	return llvmCall(emitter, "i1", symbol, []*LlvmValue{set, item})
+}
+
+func llvmChanElementSuffix(elemTyp string) string {
+	if llvmListUsesTypedRuntime(elemTyp) {
+		return llvmListElementSuffix(elemTyp)
+	}
+	return "bytes_v1"
+}
+
+func llvmChanRuntimeMakeSymbol() string {
+	return "osty_rt_thread_chan_make"
+}
+
+func llvmChanRuntimeSendSymbol(suffix string) string {
+	return "osty_rt_thread_chan_send_" + suffix
+}
+
+func llvmChanRuntimeSendBytesSymbol() string {
+	return "osty_rt_thread_chan_send_bytes_v1"
+}
+
+func llvmChanRuntimeRecvSymbol(suffix string) string {
+	return "osty_rt_thread_chan_recv_" + suffix
+}
+
+func llvmChanRuntimeCloseSymbol() string {
+	return "osty_rt_thread_chan_close"
+}
+
+func llvmChanRuntimeIsClosedSymbol() string {
+	return "osty_rt_thread_chan_is_closed"
+}
+
+func llvmChanRuntimeDeclarations() []string {
+	return []string{
+		"declare ptr @osty_rt_thread_chan_make(i64)",
+		"declare void @osty_rt_thread_chan_close(ptr)",
+		"declare i1 @osty_rt_thread_chan_is_closed(ptr)",
+		"declare void @osty_rt_thread_chan_send_i64(ptr, i64)",
+		"declare void @osty_rt_thread_chan_send_i1(ptr, i1)",
+		"declare void @osty_rt_thread_chan_send_f64(ptr, double)",
+		"declare void @osty_rt_thread_chan_send_ptr(ptr, ptr)",
+		"declare void @osty_rt_thread_chan_send_bytes_v1(ptr, ptr, i64)",
+		"declare { i64, i64 } @osty_rt_thread_chan_recv_i64(ptr)",
+		"declare { i64, i64 } @osty_rt_thread_chan_recv_i1(ptr)",
+		"declare { i64, i64 } @osty_rt_thread_chan_recv_f64(ptr)",
+		"declare { i64, i64 } @osty_rt_thread_chan_recv_ptr(ptr)",
+		"declare { i64, i64 } @osty_rt_thread_chan_recv_bytes_v1(ptr)",
+	}
+}
+
+func llvmChanMake(emitter *LlvmEmitter, capacity *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "ptr", llvmChanRuntimeMakeSymbol(), []*LlvmValue{capacity})
+}
+
+func llvmChanSend(emitter *LlvmEmitter, channel *LlvmValue, value *LlvmValue) {
+	symbol := llvmChanRuntimeSendSymbol(llvmListElementSuffix(value.typ))
+	llvmCallVoid(emitter, symbol, []*LlvmValue{channel, value})
+}
+
+func llvmChanSendBytes(emitter *LlvmEmitter, channel *LlvmValue, slot *LlvmValue, size *LlvmValue) {
+	llvmCallVoid(emitter, llvmChanRuntimeSendBytesSymbol(), []*LlvmValue{channel, slot, size})
+}
+
+func llvmChanRecv(emitter *LlvmEmitter, channel *LlvmValue, elemTyp string) *LlvmValue {
+	symbol := llvmChanRuntimeRecvSymbol(llvmChanElementSuffix(elemTyp))
+	return llvmCall(emitter, "{ i64, i64 }", symbol, []*LlvmValue{channel})
+}
+
+func llvmChanClose(emitter *LlvmEmitter, channel *LlvmValue) {
+	llvmCallVoid(emitter, llvmChanRuntimeCloseSymbol(), []*LlvmValue{channel})
+}
+
+func llvmChanIsClosed(emitter *LlvmEmitter, channel *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "i1", llvmChanRuntimeIsClosedSymbol(), []*LlvmValue{channel})
 }
 
 func llvmClosureEnvTypeName(elemTags []string) string {

@@ -878,6 +878,24 @@ fn testLlvmSmokeBoolMutableIsOstyOwned() {
     assertLlvmContains(ir, "call i32 (ptr, ...) @printf(ptr @.fmt_i64, i64 42)")
 }
 
+fn testLlvmListPushDispatchesBySuffix() {
+    let i64Em = llvmEmitter()
+    let list = LlvmValue { typ: "ptr", name: "%list", pointer: false }
+    llvmListPush(i64Em, list, LlvmValue { typ: "i64", name: "42", pointer: false })
+    let i64Body = llvmTestStrings.join(i64Em.body, "\n")
+    assertLlvmContains(i64Body, "call void @osty_rt_list_push_i64(ptr %list, i64 42)")
+
+    let f64Em = llvmEmitter()
+    llvmListPush(f64Em, list, LlvmValue { typ: "double", name: "3.14", pointer: false })
+    let f64Body = llvmTestStrings.join(f64Em.body, "\n")
+    assertLlvmContains(f64Body, "call void @osty_rt_list_push_f64(ptr %list, double 3.14)")
+
+    let ptrEm = llvmEmitter()
+    llvmListPush(ptrEm, list, LlvmValue { typ: "ptr", name: "@.str0", pointer: false })
+    let ptrBody = llvmTestStrings.join(ptrEm.body, "\n")
+    assertLlvmContains(ptrBody, "call void @osty_rt_list_push_ptr(ptr %list, ptr @.str0)")
+}
+
 fn testLlvmListRuntimeSymbolsAreOstyOwned() {
     testing.assertEq(llvmListRuntimeNewSymbol(), "osty_rt_list_new")
     testing.assertEq(llvmListRuntimeLenSymbol(), "osty_rt_list_len")
@@ -1124,6 +1142,65 @@ fn testLlvmSmokeSetBasicIsOstyOwned() {
     assertLlvmContains(ir, "= call i64 @osty_rt_set_len(ptr %t0)")
     assertLlvmContains(ir, "= call ptr @osty_rt_set_to_list(ptr %t0)")
     assertLlvmContains(ir, "ret i32 0")
+}
+
+fn testLlvmChanRuntimeSymbolsAreOstyOwned() {
+    testing.assertEq(llvmChanRuntimeMakeSymbol(), "osty_rt_thread_chan_make")
+    testing.assertEq(llvmChanRuntimeCloseSymbol(), "osty_rt_thread_chan_close")
+    testing.assertEq(llvmChanRuntimeIsClosedSymbol(), "osty_rt_thread_chan_is_closed")
+    testing.assertEq(llvmChanRuntimeSendBytesSymbol(), "osty_rt_thread_chan_send_bytes_v1")
+    testing.assertEq(llvmChanRuntimeSendSymbol("i64"), "osty_rt_thread_chan_send_i64")
+    testing.assertEq(llvmChanRuntimeSendSymbol("f64"), "osty_rt_thread_chan_send_f64")
+    testing.assertEq(llvmChanRuntimeRecvSymbol("ptr"), "osty_rt_thread_chan_recv_ptr")
+    testing.assertEq(llvmChanRuntimeRecvSymbol("bytes_v1"), "osty_rt_thread_chan_recv_bytes_v1")
+}
+
+fn testLlvmChanElementSuffixMatchesPolicy() {
+    testing.assertEq(llvmChanElementSuffix("i64"), "i64")
+    testing.assertEq(llvmChanElementSuffix("i1"), "i1")
+    testing.assertEq(llvmChanElementSuffix("double"), "f64")
+    testing.assertEq(llvmChanElementSuffix("ptr"), "ptr")
+    testing.assertEq(llvmChanElementSuffix("%MyStruct"), "bytes_v1")
+    testing.assertEq(llvmChanElementSuffix(""), "bytes_v1")
+}
+
+fn testLlvmChanRuntimeDeclarationsAreOstyOwned() {
+    let declarations = llvmTestStrings.join(llvmChanRuntimeDeclarations(), "\n")
+
+    assertLlvmContains(declarations, "declare ptr @osty_rt_thread_chan_make(i64)")
+    assertLlvmContains(declarations, "declare void @osty_rt_thread_chan_close(ptr)")
+    assertLlvmContains(declarations, "declare i1 @osty_rt_thread_chan_is_closed(ptr)")
+    assertLlvmContains(declarations, "declare void @osty_rt_thread_chan_send_i64(ptr, i64)")
+    assertLlvmContains(declarations, "declare void @osty_rt_thread_chan_send_f64(ptr, double)")
+    assertLlvmContains(declarations, "declare void @osty_rt_thread_chan_send_bytes_v1(ptr, ptr, i64)")
+    assertLlvmContains(declarations, "declare \{ i64, i64 \} @osty_rt_thread_chan_recv_i64(ptr)")
+    assertLlvmContains(declarations, "declare \{ i64, i64 \} @osty_rt_thread_chan_recv_bytes_v1(ptr)")
+}
+
+fn testLlvmChanSendDispatchesBySuffix() {
+    let i64Em = llvmEmitter()
+    let ch = LlvmValue { typ: "ptr", name: "%ch", pointer: false }
+    llvmChanSend(i64Em, ch, LlvmValue { typ: "i64", name: "42", pointer: false })
+    assertLlvmContains(
+        llvmTestStrings.join(i64Em.body, "\n"),
+        "call void @osty_rt_thread_chan_send_i64(ptr %ch, i64 42)",
+    )
+
+    let f64Em = llvmEmitter()
+    llvmChanSend(f64Em, ch, LlvmValue { typ: "double", name: "3.14", pointer: false })
+    assertLlvmContains(
+        llvmTestStrings.join(f64Em.body, "\n"),
+        "call void @osty_rt_thread_chan_send_f64(ptr %ch, double 3.14)",
+    )
+}
+
+fn testLlvmChanRecvReturnsAggregate() {
+    let em = llvmEmitter()
+    let ch = LlvmValue { typ: "ptr", name: "%ch", pointer: false }
+    let recvRes = llvmChanRecv(em, ch, "i64")
+    let body = llvmTestStrings.join(em.body, "\n")
+    testing.assertEq(recvRes.typ, "\{ i64, i64 \}")
+    assertLlvmContains(body, "= call \{ i64, i64 \} @osty_rt_thread_chan_recv_i64(ptr %ch)")
 }
 
 fn testLlvmStringRuntimeSymbolsAreOstyOwned() {

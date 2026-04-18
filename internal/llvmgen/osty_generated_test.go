@@ -292,6 +292,27 @@ func TestGeneratedComparePoliciesAreOstyOwned(t *testing.T) {
 	}
 }
 
+func TestGeneratedListPushDispatchesBySuffix(t *testing.T) {
+	cases := []struct {
+		valTyp string
+		valReg string
+		want   string
+	}{
+		{"i64", "42", "call void @osty_rt_list_push_i64(ptr %list, i64 42)"},
+		{"i1", "true", "call void @osty_rt_list_push_i1(ptr %list, i1 true)"},
+		{"double", "3.14", "call void @osty_rt_list_push_f64(ptr %list, double 3.14)"},
+		{"ptr", "@.str0", "call void @osty_rt_list_push_ptr(ptr %list, ptr @.str0)"},
+	}
+	for _, c := range cases {
+		em := llvmEmitter()
+		llvmListPush(em,
+			&LlvmValue{typ: "ptr", name: "%list"},
+			&LlvmValue{typ: c.valTyp, name: c.valReg})
+		got := strings.Join(em.body, "\n")
+		assertGeneratedIRContains(t, got, c.want)
+	}
+}
+
 func TestGeneratedListRuntimeSymbolsAreOstyOwned(t *testing.T) {
 	cases := []struct {
 		name string
@@ -545,6 +566,95 @@ func TestGeneratedSetBasicSmokeIR(t *testing.T) {
 	assertGeneratedIRContains(t, ir, "= call i64 @osty_rt_set_len(ptr %t0)")
 	assertGeneratedIRContains(t, ir, "= call ptr @osty_rt_set_to_list(ptr %t0)")
 	assertGeneratedIRContains(t, ir, "ret i32 0")
+}
+
+func TestGeneratedChanRuntimeSymbolsAreOstyOwned(t *testing.T) {
+	cases := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"make", llvmChanRuntimeMakeSymbol(), "osty_rt_thread_chan_make"},
+		{"close", llvmChanRuntimeCloseSymbol(), "osty_rt_thread_chan_close"},
+		{"is_closed", llvmChanRuntimeIsClosedSymbol(), "osty_rt_thread_chan_is_closed"},
+		{"send_bytes", llvmChanRuntimeSendBytesSymbol(), "osty_rt_thread_chan_send_bytes_v1"},
+		{"send_i64", llvmChanRuntimeSendSymbol("i64"), "osty_rt_thread_chan_send_i64"},
+		{"send_f64", llvmChanRuntimeSendSymbol("f64"), "osty_rt_thread_chan_send_f64"},
+		{"recv_ptr", llvmChanRuntimeRecvSymbol("ptr"), "osty_rt_thread_chan_recv_ptr"},
+		{"recv_bytes", llvmChanRuntimeRecvSymbol("bytes_v1"), "osty_rt_thread_chan_recv_bytes_v1"},
+	}
+	for _, c := range cases {
+		if c.got != c.want {
+			t.Fatalf("%s: got %q, want %q", c.name, c.got, c.want)
+		}
+	}
+}
+
+func TestGeneratedChanElementSuffixMatchesPolicy(t *testing.T) {
+	cases := []struct {
+		elem string
+		want string
+	}{
+		{"i64", "i64"},
+		{"i1", "i1"},
+		{"double", "f64"},
+		{"ptr", "ptr"},
+		{"%MyStruct", "bytes_v1"},
+		{"", "bytes_v1"},
+	}
+	for _, c := range cases {
+		if got := llvmChanElementSuffix(c.elem); got != c.want {
+			t.Fatalf("llvmChanElementSuffix(%q) = %q, want %q", c.elem, got, c.want)
+		}
+	}
+}
+
+func TestGeneratedChanRuntimeDeclarationsAreOstyOwned(t *testing.T) {
+	decls := strings.Join(llvmChanRuntimeDeclarations(), "\n")
+
+	want := []string{
+		"declare ptr @osty_rt_thread_chan_make(i64)",
+		"declare void @osty_rt_thread_chan_close(ptr)",
+		"declare i1 @osty_rt_thread_chan_is_closed(ptr)",
+		"declare void @osty_rt_thread_chan_send_i64(ptr, i64)",
+		"declare void @osty_rt_thread_chan_send_f64(ptr, double)",
+		"declare void @osty_rt_thread_chan_send_bytes_v1(ptr, ptr, i64)",
+		"declare { i64, i64 } @osty_rt_thread_chan_recv_i64(ptr)",
+		"declare { i64, i64 } @osty_rt_thread_chan_recv_bytes_v1(ptr)",
+	}
+	for _, w := range want {
+		assertGeneratedIRContains(t, decls, w)
+	}
+}
+
+func TestGeneratedChanSendDispatchesBySuffix(t *testing.T) {
+	cases := []struct {
+		valTyp string
+		valReg string
+		want   string
+	}{
+		{"i64", "42", "call void @osty_rt_thread_chan_send_i64(ptr %ch, i64 42)"},
+		{"double", "3.14", "call void @osty_rt_thread_chan_send_f64(ptr %ch, double 3.14)"},
+		{"ptr", "@.str0", "call void @osty_rt_thread_chan_send_ptr(ptr %ch, ptr @.str0)"},
+	}
+	for _, c := range cases {
+		em := llvmEmitter()
+		llvmChanSend(em,
+			&LlvmValue{typ: "ptr", name: "%ch"},
+			&LlvmValue{typ: c.valTyp, name: c.valReg})
+		got := strings.Join(em.body, "\n")
+		assertGeneratedIRContains(t, got, c.want)
+	}
+}
+
+func TestGeneratedChanRecvReturnsAggregate(t *testing.T) {
+	em := llvmEmitter()
+	result := llvmChanRecv(em, &LlvmValue{typ: "ptr", name: "%ch"}, "i64")
+	if result.typ != "{ i64, i64 }" {
+		t.Fatalf("recv result typ = %q, want %q", result.typ, "{ i64, i64 }")
+	}
+	assertGeneratedIRContains(t, strings.Join(em.body, "\n"),
+		"= call { i64, i64 } @osty_rt_thread_chan_recv_i64(ptr %ch)")
 }
 
 func TestGeneratedStringRuntimeSymbolsAreOstyOwned(t *testing.T) {

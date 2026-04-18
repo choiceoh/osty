@@ -1420,9 +1420,12 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		}
 		return g.emitListPushOperand(listReg, i.Args[1], elemT)
 	case mir.IntrinsicListLen:
-		sym := "osty_rt_list_len"
+		sym := listRuntimeLenSymbol()
 		g.declareRuntime(sym, "declare i64 @"+sym+"(ptr)")
-		return g.emitSimpleCall(i, sym, "i64", []string{"ptr " + listReg})
+		em := g.ostyEmitter()
+		result := llvmListLen(em, &LlvmValue{typ: "ptr", name: listReg})
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
 	case mir.IntrinsicListIsEmpty:
 		sym := "osty_rt_list_is_empty"
 		g.declareRuntime(sym, "declare i1 @"+sym+"(ptr)")
@@ -1437,9 +1440,15 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 			return err
 		}
 		if listUsesTypedRuntime(elemLLVM) {
-			sym := "osty_rt_list_get_" + listRuntimeSymbolSuffix(elemLLVM)
+			sym := listRuntimeGetSymbol(elemLLVM)
 			g.declareRuntime(sym, "declare "+elemLLVM+" @"+sym+"(ptr, i64)")
-			return g.emitSimpleCall(i, sym, elemLLVM, []string{"ptr " + listReg, "i64 " + idxReg})
+			em := g.ostyEmitter()
+			result := llvmListGet(em,
+				&LlvmValue{typ: "ptr", name: listReg},
+				&LlvmValue{typ: "i64", name: idxReg},
+				elemLLVM)
+			g.flushOstyEmitter(em)
+			return g.storeIntrinsicResult(i, result)
 		}
 		// Composite element — use the bytes-v1 helper with a stack
 		// slot as the out-pointer. Backend writes the value into the
@@ -1453,7 +1462,10 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 			return unsupported("mir-mvp", "list_sorted on element type "+elemLLVM)
 		}
 		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr)")
-		return g.emitSimpleCall(i, sym, "ptr", []string{"ptr " + listReg})
+		em := g.ostyEmitter()
+		result := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "ptr", name: listReg}})
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
 	case mir.IntrinsicListToSet:
 		elemString := isStringLLVMType(elemT)
 		sym := listRuntimeToSetSymbol(elemLLVM, elemString)
@@ -1461,7 +1473,10 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 			return unsupported("mir-mvp", "list_to_set on element type "+elemLLVM)
 		}
 		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr)")
-		return g.emitSimpleCall(i, sym, "ptr", []string{"ptr " + listReg})
+		em := g.ostyEmitter()
+		result := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "ptr", name: listReg}})
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("list intrinsic kind %d", i.Kind))
 }
@@ -1487,13 +1502,19 @@ func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 	_ = valT
 	switch i.Kind {
 	case mir.IntrinsicMapLen:
-		sym := "osty_rt_map_len"
+		sym := llvmMapRuntimeLenSymbol()
 		g.declareRuntime(sym, "declare i64 @"+sym+"(ptr)")
-		return g.emitSimpleCall(i, sym, "i64", []string{"ptr " + mapReg})
+		em := g.ostyEmitter()
+		result := llvmMapLen(em, &LlvmValue{typ: "ptr", name: mapReg})
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
 	case mir.IntrinsicMapKeys:
-		sym := "osty_rt_map_keys"
+		sym := mapRuntimeKeysSymbol()
 		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr)")
-		return g.emitSimpleCall(i, sym, "ptr", []string{"ptr " + mapReg})
+		em := g.ostyEmitter()
+		result := llvmMapKeys(em, &LlvmValue{typ: "ptr", name: mapReg})
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
 	case mir.IntrinsicMapContains:
 		if len(i.Args) != 2 {
 			return unsupported("mir-mvp", "map_contains arity")
@@ -1502,9 +1523,15 @@ func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 		if err != nil {
 			return err
 		}
-		sym := "osty_rt_map_contains_" + mapSetKeySuffix(keyLLVM, keyString)
+		sym := mapRuntimeContainsSymbol(keyLLVM, keyString)
 		g.declareRuntime(sym, "declare i1 @"+sym+"(ptr, "+keyLLVM+")")
-		return g.emitSimpleCall(i, sym, "i1", []string{"ptr " + mapReg, keyLLVM + " " + kReg})
+		em := g.ostyEmitter()
+		result := llvmMapContains(em,
+			&LlvmValue{typ: "ptr", name: mapReg},
+			&LlvmValue{typ: keyLLVM, name: kReg},
+			keyString)
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
 	case mir.IntrinsicMapGet:
 		if len(i.Args) != 2 {
 			return unsupported("mir-mvp", "map_get arity")
@@ -1558,25 +1585,21 @@ func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 			return err
 		}
 		vLLVM := g.llvmType(vOp.Type())
+		sym := mapRuntimeInsertSymbol(keyLLVM, keyString)
+		g.declareRuntime(sym, "declare void @"+sym+"(ptr, "+keyLLVM+", ptr)")
 		// Spill the value into a stack slot so the runtime can memcpy
 		// value_size bytes from it. This replaces the old inttoptr
 		// widening shim, which was semantically wrong for primitives
 		// (it passed the value bitpattern AS a pointer) and outright
 		// impossible for structs / tuples.
-		valSlot := g.spillToSlot(vReg, vLLVM)
-		sym := "osty_rt_map_insert_" + mapSetKeySuffix(keyLLVM, keyString)
-		g.declareRuntime(sym, "declare void @"+sym+"(ptr, "+keyLLVM+", ptr)")
-		g.fnBuf.WriteString("  call void @")
-		g.fnBuf.WriteString(sym)
-		g.fnBuf.WriteString("(ptr ")
-		g.fnBuf.WriteString(mapReg)
-		g.fnBuf.WriteString(", ")
-		g.fnBuf.WriteString(keyLLVM)
-		g.fnBuf.WriteByte(' ')
-		g.fnBuf.WriteString(kReg)
-		g.fnBuf.WriteString(", ptr ")
-		g.fnBuf.WriteString(valSlot)
-		g.fnBuf.WriteString(")\n")
+		em := g.ostyEmitter()
+		slot := llvmSpillToSlot(em, &LlvmValue{typ: vLLVM, name: vReg})
+		llvmMapInsert(em,
+			&LlvmValue{typ: "ptr", name: mapReg},
+			&LlvmValue{typ: keyLLVM, name: kReg},
+			slot,
+			keyString)
+		g.flushOstyEmitter(em)
 		return nil
 	case mir.IntrinsicMapRemove:
 		if len(i.Args) != 2 {
@@ -1586,17 +1609,17 @@ func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 		if err != nil {
 			return err
 		}
-		sym := "osty_rt_map_remove_" + mapSetKeySuffix(keyLLVM, keyString)
-		g.declareRuntime(sym, "declare void @"+sym+"(ptr, "+keyLLVM+")")
-		g.fnBuf.WriteString("  call void @")
-		g.fnBuf.WriteString(sym)
-		g.fnBuf.WriteString("(ptr ")
-		g.fnBuf.WriteString(mapReg)
-		g.fnBuf.WriteString(", ")
-		g.fnBuf.WriteString(keyLLVM)
-		g.fnBuf.WriteByte(' ')
-		g.fnBuf.WriteString(kReg)
-		g.fnBuf.WriteString(")\n")
+		sym := mapRuntimeRemoveSymbol(keyLLVM, keyString)
+		// Runtime returns i1 (true = was present); MIR ignores it — the
+		// temp fall-through to DCE is fine but the decl must match the
+		// C runtime so the verifier accepts the call.
+		g.declareRuntime(sym, "declare i1 @"+sym+"(ptr, "+keyLLVM+")")
+		em := g.ostyEmitter()
+		_ = llvmMapRemove(em,
+			&LlvmValue{typ: "ptr", name: mapReg},
+			&LlvmValue{typ: keyLLVM, name: kReg},
+			keyString)
+		g.flushOstyEmitter(em)
 		return nil
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("map intrinsic kind %d", i.Kind))
@@ -1613,61 +1636,41 @@ func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 // Shared between `IntrinsicMapGet` and `IndexProj` on a map base so
 // `m.get(k)` and `m[k]` can't drift in ABI.
 func (g *mirGen) emitMapGetOrAbort(mapReg, keyReg, keyLLVM string, keyString bool, valLLVM, outSlot string) string {
+	sym := mapRuntimeGetOrAbortSymbol(keyLLVM, keyString)
+	g.declareRuntime(sym, "declare void @"+sym+"(ptr, "+keyLLVM+", ptr)")
+	em := g.ostyEmitter()
+	var slot *LlvmValue
 	ownsSlot := outSlot == ""
 	if ownsSlot {
-		outSlot = g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(outSlot)
-		g.fnBuf.WriteString(" = alloca ")
-		g.fnBuf.WriteString(valLLVM)
-		g.fnBuf.WriteByte('\n')
+		slot = llvmAllocaSlot(em, valLLVM)
+	} else {
+		slot = &LlvmValue{typ: "ptr", name: outSlot, pointer: false}
 	}
-	sym := "osty_rt_map_get_or_abort_" + mapSetKeySuffix(keyLLVM, keyString)
-	g.declareRuntime(sym, "declare void @"+sym+"(ptr, "+keyLLVM+", ptr)")
-	g.fnBuf.WriteString("  call void @")
-	g.fnBuf.WriteString(sym)
-	g.fnBuf.WriteString("(ptr ")
-	g.fnBuf.WriteString(mapReg)
-	g.fnBuf.WriteString(", ")
-	g.fnBuf.WriteString(keyLLVM)
-	g.fnBuf.WriteByte(' ')
-	g.fnBuf.WriteString(keyReg)
-	g.fnBuf.WriteString(", ptr ")
-	g.fnBuf.WriteString(outSlot)
-	g.fnBuf.WriteString(")\n")
+	llvmMapGetOrAbort(em,
+		&LlvmValue{typ: "ptr", name: mapReg},
+		&LlvmValue{typ: keyLLVM, name: keyReg},
+		slot,
+		keyString)
 	if !ownsSlot {
+		g.flushOstyEmitter(em)
 		return ""
 	}
-	loaded := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(loaded)
-	g.fnBuf.WriteString(" = load ")
-	g.fnBuf.WriteString(valLLVM)
-	g.fnBuf.WriteString(", ptr ")
-	g.fnBuf.WriteString(outSlot)
-	g.fnBuf.WriteByte('\n')
-	return loaded
+	loaded := llvmLoadFromSlot(em, slot, valLLVM)
+	g.flushOstyEmitter(em)
+	return loaded.name
 }
 
 // spillToSlot materialises `val` (an SSA register of `llvmType`) in
 // an `alloca <llvmType>` stack slot and returns the slot register.
 // Useful when a runtime call takes its value by pointer — composite
-// map values, composite list elements, etc.
+// map values, composite list elements, etc. Thin shim over the
+// Osty-owned `llvmSpillToSlot`; keep the `mirGen` receiver so existing
+// call sites don't need to thread an emitter.
 func (g *mirGen) spillToSlot(val, llvmType string) string {
-	slot := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(slot)
-	g.fnBuf.WriteString(" = alloca ")
-	g.fnBuf.WriteString(llvmType)
-	g.fnBuf.WriteByte('\n')
-	g.fnBuf.WriteString("  store ")
-	g.fnBuf.WriteString(llvmType)
-	g.fnBuf.WriteByte(' ')
-	g.fnBuf.WriteString(val)
-	g.fnBuf.WriteString(", ptr ")
-	g.fnBuf.WriteString(slot)
-	g.fnBuf.WriteByte('\n')
-	return slot
+	em := g.ostyEmitter()
+	slot := llvmSpillToSlot(em, &LlvmValue{typ: llvmType, name: val})
+	g.flushOstyEmitter(em)
+	return slot.name
 }
 
 // emitSetIntrinsic dispatches set intrinsics to runtime symbols.
@@ -1684,13 +1687,19 @@ func (g *mirGen) emitSetIntrinsic(i *mir.IntrinsicInstr) error {
 	elemString := isStringLLVMType(elemT)
 	switch i.Kind {
 	case mir.IntrinsicSetLen:
-		sym := "osty_rt_set_len"
+		sym := setRuntimeLenSymbol()
 		g.declareRuntime(sym, "declare i64 @"+sym+"(ptr)")
-		return g.emitSimpleCall(i, sym, "i64", []string{"ptr " + setReg})
+		em := g.ostyEmitter()
+		result := llvmSetLen(em, &LlvmValue{typ: "ptr", name: setReg})
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
 	case mir.IntrinsicSetToList:
-		sym := "osty_rt_set_to_list"
+		sym := setRuntimeToListSymbol()
 		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr)")
-		return g.emitSimpleCall(i, sym, "ptr", []string{"ptr " + setReg})
+		em := g.ostyEmitter()
+		result := llvmSetToList(em, &LlvmValue{typ: "ptr", name: setReg})
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
 	case mir.IntrinsicSetContains:
 		if len(i.Args) != 2 {
 			return unsupported("mir-mvp", "set_contains arity")
@@ -1699,9 +1708,15 @@ func (g *mirGen) emitSetIntrinsic(i *mir.IntrinsicInstr) error {
 		if err != nil {
 			return err
 		}
-		sym := "osty_rt_set_contains_" + mapSetKeySuffix(elemLLVM, elemString)
+		sym := setRuntimeContainsSymbol(elemLLVM, elemString)
 		g.declareRuntime(sym, "declare i1 @"+sym+"(ptr, "+elemLLVM+")")
-		return g.emitSimpleCall(i, sym, "i1", []string{"ptr " + setReg, elemLLVM + " " + vReg})
+		em := g.ostyEmitter()
+		result := llvmSetContains(em,
+			&LlvmValue{typ: "ptr", name: setReg},
+			&LlvmValue{typ: elemLLVM, name: vReg},
+			elemString)
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
 	case mir.IntrinsicSetInsert:
 		if len(i.Args) != 2 {
 			return unsupported("mir-mvp", "set_insert arity")
@@ -1710,17 +1725,17 @@ func (g *mirGen) emitSetIntrinsic(i *mir.IntrinsicInstr) error {
 		if err != nil {
 			return err
 		}
-		sym := "osty_rt_set_insert_" + mapSetKeySuffix(elemLLVM, elemString)
-		g.declareRuntime(sym, "declare void @"+sym+"(ptr, "+elemLLVM+")")
-		g.fnBuf.WriteString("  call void @")
-		g.fnBuf.WriteString(sym)
-		g.fnBuf.WriteString("(ptr ")
-		g.fnBuf.WriteString(setReg)
-		g.fnBuf.WriteString(", ")
-		g.fnBuf.WriteString(elemLLVM)
-		g.fnBuf.WriteByte(' ')
-		g.fnBuf.WriteString(vReg)
-		g.fnBuf.WriteString(")\n")
+		sym := setRuntimeInsertSymbol(elemLLVM, elemString)
+		// Runtime returns i1 (true = newly added); MIR discards the
+		// result when this intrinsic is used as a statement. Decl must
+		// match the C runtime — the temp ends up DCE'd.
+		g.declareRuntime(sym, "declare i1 @"+sym+"(ptr, "+elemLLVM+")")
+		em := g.ostyEmitter()
+		_ = llvmSetInsert(em,
+			&LlvmValue{typ: "ptr", name: setReg},
+			&LlvmValue{typ: elemLLVM, name: vReg},
+			elemString)
+		g.flushOstyEmitter(em)
 		return nil
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("set intrinsic kind %d", i.Kind))
@@ -1745,20 +1760,20 @@ func (g *mirGen) emitSetIntrinsic(i *mir.IntrinsicInstr) error {
 func (g *mirGen) emitChannelIntrinsic(i *mir.IntrinsicInstr) error {
 	switch i.Kind {
 	case mir.IntrinsicChanMake:
-		// Args: [capacity]. Element type comes from the Dest's
-		// `Channel<T>` type.
 		if len(i.Args) != 1 {
 			return unsupported("mir-mvp", "chan_make arity")
 		}
-		cap, err := g.evalOperand(i.Args[0], mir.TInt)
+		capReg, err := g.evalOperand(i.Args[0], mir.TInt)
 		if err != nil {
 			return err
 		}
-		sym := "osty_rt_thread_chan_make"
+		sym := llvmChanRuntimeMakeSymbol()
 		g.declareRuntime(sym, "declare ptr @"+sym+"(i64)")
-		return g.emitSimpleCall(i, sym, "ptr", []string{"i64 " + cap})
+		em := g.ostyEmitter()
+		result := llvmChanMake(em, &LlvmValue{typ: "i64", name: capReg})
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
 	case mir.IntrinsicChanSend:
-		// Args: [channel, value].
 		if len(i.Args) != 2 {
 			return unsupported("mir-mvp", "chan_send arity")
 		}
@@ -1777,51 +1792,28 @@ func (g *mirGen) emitChannelIntrinsic(i *mir.IntrinsicInstr) error {
 			return err
 		}
 		elemLLVM := g.llvmType(elemT)
+		chanVal := &LlvmValue{typ: "ptr", name: chReg}
 		if listUsesTypedRuntime(elemLLVM) {
-			sym := "osty_rt_thread_chan_send_" + listRuntimeSymbolSuffix(elemLLVM)
+			sym := llvmChanRuntimeSendSymbol(llvmListElementSuffix(elemLLVM))
 			g.declareRuntime(sym, "declare void @"+sym+"(ptr, "+elemLLVM+")")
-			g.fnBuf.WriteString("  call void @")
-			g.fnBuf.WriteString(sym)
-			g.fnBuf.WriteString("(ptr ")
-			g.fnBuf.WriteString(chReg)
-			g.fnBuf.WriteString(", ")
-			g.fnBuf.WriteString(elemLLVM)
-			g.fnBuf.WriteByte(' ')
-			g.fnBuf.WriteString(valReg)
-			g.fnBuf.WriteString(")\n")
+			em := g.ostyEmitter()
+			llvmChanSend(em, chanVal, &LlvmValue{typ: elemLLVM, name: valReg})
+			g.flushOstyEmitter(em)
 			return nil
 		}
 		// Composite element — bytes fallback.
-		slot := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(slot)
-		g.fnBuf.WriteString(" = alloca ")
-		g.fnBuf.WriteString(elemLLVM)
-		g.fnBuf.WriteByte('\n')
-		g.fnBuf.WriteString("  store ")
-		g.fnBuf.WriteString(elemLLVM)
-		g.fnBuf.WriteByte(' ')
-		g.fnBuf.WriteString(valReg)
-		g.fnBuf.WriteString(", ptr ")
-		g.fnBuf.WriteString(slot)
-		g.fnBuf.WriteByte('\n')
-		sizeReg := g.emitSizeOf(elemLLVM)
-		sym := "osty_rt_thread_chan_send_bytes_v1"
+		sym := llvmChanRuntimeSendBytesSymbol()
 		g.declareRuntime(sym, "declare void @"+sym+"(ptr, ptr, i64)")
-		g.fnBuf.WriteString("  call void @")
-		g.fnBuf.WriteString(sym)
-		g.fnBuf.WriteString("(ptr ")
-		g.fnBuf.WriteString(chReg)
-		g.fnBuf.WriteString(", ptr ")
-		g.fnBuf.WriteString(slot)
-		g.fnBuf.WriteString(", i64 ")
-		g.fnBuf.WriteString(sizeReg)
-		g.fnBuf.WriteString(")\n")
+		em := g.ostyEmitter()
+		slot := llvmSpillToSlot(em, &LlvmValue{typ: elemLLVM, name: valReg})
+		size := llvmSizeOf(em, elemLLVM)
+		llvmChanSendBytes(em, chanVal, slot, size)
+		g.flushOstyEmitter(em)
 		return nil
 	case mir.IntrinsicChanRecv:
-		// Args: [channel]. Dest receives Option<T>. The runtime
-		// returns a `{i64 disc, i64 payload}` aggregate matching the
-		// MIR enum layout, so we call and store directly.
+		// Dest receives Option<T>. The runtime returns a `{i64 disc,
+		// i64 payload}` aggregate matching the MIR enum layout, so we
+		// call and store directly.
 		if len(i.Args) != 1 {
 			return unsupported("mir-mvp", "chan_recv arity")
 		}
@@ -1835,33 +1827,21 @@ func (g *mirGen) emitChannelIntrinsic(i *mir.IntrinsicInstr) error {
 			return unsupported("mir-mvp", "chan_recv: missing element type")
 		}
 		elemLLVM := g.llvmType(elemT)
-		sym := "osty_rt_thread_chan_recv_" + chanRecvSuffix(elemLLVM)
+		sym := llvmChanRuntimeRecvSymbol(llvmChanElementSuffix(elemLLVM))
 		g.declareRuntime(sym, "declare { i64, i64 } @"+sym+"(ptr)")
+		em := g.ostyEmitter()
+		result := llvmChanRecv(em, &LlvmValue{typ: "ptr", name: chReg}, elemLLVM)
 		if i.Dest == nil {
-			g.fnBuf.WriteString("  call { i64, i64 } @")
-			g.fnBuf.WriteString(sym)
-			g.fnBuf.WriteString("(ptr ")
-			g.fnBuf.WriteString(chReg)
-			g.fnBuf.WriteString(")\n")
+			g.flushOstyEmitter(em)
 			return nil
 		}
-		tmp := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(tmp)
-		g.fnBuf.WriteString(" = call { i64, i64 } @")
-		g.fnBuf.WriteString(sym)
-		g.fnBuf.WriteString("(ptr ")
-		g.fnBuf.WriteString(chReg)
-		g.fnBuf.WriteString(")\n")
 		destLoc := g.fn.Local(i.Dest.Local)
 		if destLoc == nil {
+			g.flushOstyEmitter(em)
 			return fmt.Errorf("mir-mvp: chan_recv dest %d", i.Dest.Local)
 		}
-		g.fnBuf.WriteString("  store { i64, i64 } ")
-		g.fnBuf.WriteString(tmp)
-		g.fnBuf.WriteString(", ptr ")
-		g.fnBuf.WriteString(g.localSlots[i.Dest.Local])
-		g.fnBuf.WriteByte('\n')
+		em.body = append(em.body, fmt.Sprintf("  store { i64, i64 } %s, ptr %s", result.name, g.localSlots[i.Dest.Local]))
+		g.flushOstyEmitter(em)
 		return nil
 	case mir.IntrinsicChanClose:
 		if len(i.Args) != 1 {
@@ -1871,13 +1851,11 @@ func (g *mirGen) emitChannelIntrinsic(i *mir.IntrinsicInstr) error {
 		if err != nil {
 			return err
 		}
-		sym := "osty_rt_thread_chan_close"
+		sym := llvmChanRuntimeCloseSymbol()
 		g.declareRuntime(sym, "declare void @"+sym+"(ptr)")
-		g.fnBuf.WriteString("  call void @")
-		g.fnBuf.WriteString(sym)
-		g.fnBuf.WriteString("(ptr ")
-		g.fnBuf.WriteString(chReg)
-		g.fnBuf.WriteString(")\n")
+		em := g.ostyEmitter()
+		llvmChanClose(em, &LlvmValue{typ: "ptr", name: chReg})
+		g.flushOstyEmitter(em)
 		return nil
 	case mir.IntrinsicChanIsClosed:
 		if len(i.Args) != 1 {
@@ -1887,9 +1865,12 @@ func (g *mirGen) emitChannelIntrinsic(i *mir.IntrinsicInstr) error {
 		if err != nil {
 			return err
 		}
-		sym := "osty_rt_thread_chan_is_closed"
+		sym := llvmChanRuntimeIsClosedSymbol()
 		g.declareRuntime(sym, "declare i1 @"+sym+"(ptr)")
-		return g.emitSimpleCall(i, sym, "i1", []string{"ptr " + chReg})
+		em := g.ostyEmitter()
+		result := llvmChanIsClosed(em, &LlvmValue{typ: "ptr", name: chReg})
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("channel intrinsic kind %d", i.Kind))
 }
@@ -1904,13 +1885,10 @@ func channelElementType(t mir.Type) mir.Type {
 }
 
 // chanRecvSuffix maps an element LLVM type to the `_<suffix>` used by
-// the chan_recv runtime. Composite element types route through a
-// bytes variant that writes into an out-param slot.
+// the chan_recv runtime. Delegates to the Osty-owned policy so the
+// scalar/composite split stays in lockstep with `llvmChanRecv`.
 func chanRecvSuffix(elemLLVM string) string {
-	if listUsesTypedRuntime(elemLLVM) {
-		return listRuntimeSymbolSuffix(elemLLVM)
-	}
-	return "bytes_v1"
+	return llvmChanElementSuffix(elemLLVM)
 }
 
 // emitTaskIntrinsic dispatches structured-task ops to runtime symbols.
@@ -3005,17 +2983,16 @@ func (g *mirGen) emitListLiteral(rv *mir.AggregateRV, aggT mir.Type) (string, er
 	if elemT == nil {
 		return "", unsupported("mir-mvp", "list literal: missing element type")
 	}
-	g.declareRuntime("osty_rt_list_new", "declare ptr @osty_rt_list_new()")
-	list := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(list)
-	g.fnBuf.WriteString(" = call ptr @osty_rt_list_new()\n")
+	g.declareRuntime(listRuntimeNewSymbol(), "declare ptr @"+listRuntimeNewSymbol()+"()")
+	em := g.ostyEmitter()
+	listVal := llvmListNew(em)
+	g.flushOstyEmitter(em)
 	for _, f := range rv.Fields {
-		if err := g.emitListPushOperand(list, f, elemT); err != nil {
+		if err := g.emitListPushOperand(listVal.name, f, elemT); err != nil {
 			return "", err
 		}
 	}
-	return list, nil
+	return listVal.name, nil
 }
 
 // emitListPushOperand pushes one value onto a list by runtime ABI
@@ -3028,47 +3005,29 @@ func (g *mirGen) emitListPushOperand(listReg string, op mir.Operand, elemT mir.T
 	}
 	elemLLVM := g.llvmType(elemT)
 	if listUsesTypedRuntime(elemLLVM) {
-		sym := "osty_rt_list_push_" + listRuntimeSymbolSuffix(elemLLVM)
+		sym := listRuntimePushSymbol(elemLLVM)
 		g.declareRuntime(sym, "declare void @"+sym+"(ptr, "+elemLLVM+")")
-		g.fnBuf.WriteString("  call void @")
-		g.fnBuf.WriteString(sym)
-		g.fnBuf.WriteString("(ptr ")
-		g.fnBuf.WriteString(listReg)
-		g.fnBuf.WriteString(", ")
-		g.fnBuf.WriteString(elemLLVM)
-		g.fnBuf.WriteByte(' ')
-		g.fnBuf.WriteString(val)
-		g.fnBuf.WriteString(")\n")
+		em := g.ostyEmitter()
+		llvmListPush(em,
+			&LlvmValue{typ: "ptr", name: listReg, pointer: false},
+			&LlvmValue{typ: elemLLVM, name: val, pointer: false})
+		g.flushOstyEmitter(em)
 		return nil
 	}
 	// Composite element (struct / tuple) — stage into a stack slot,
 	// compute the size via the `getelementptr null, 1` idiom, and
 	// call the bytes helper.
-	slot := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(slot)
-	g.fnBuf.WriteString(" = alloca ")
-	g.fnBuf.WriteString(elemLLVM)
-	g.fnBuf.WriteByte('\n')
-	g.fnBuf.WriteString("  store ")
-	g.fnBuf.WriteString(elemLLVM)
-	g.fnBuf.WriteByte(' ')
-	g.fnBuf.WriteString(val)
-	g.fnBuf.WriteString(", ptr ")
-	g.fnBuf.WriteString(slot)
-	g.fnBuf.WriteByte('\n')
-	sizeReg := g.emitSizeOf(elemLLVM)
-	sym := "osty_rt_list_push_bytes_v1"
+	sym := listRuntimePushBytesV1Symbol()
 	g.declareRuntime(sym, "declare void @"+sym+"(ptr, ptr, i64)")
-	g.fnBuf.WriteString("  call void @")
-	g.fnBuf.WriteString(sym)
-	g.fnBuf.WriteString("(ptr ")
-	g.fnBuf.WriteString(listReg)
-	g.fnBuf.WriteString(", ptr ")
-	g.fnBuf.WriteString(slot)
-	g.fnBuf.WriteString(", i64 ")
-	g.fnBuf.WriteString(sizeReg)
-	g.fnBuf.WriteString(")\n")
+	em := g.ostyEmitter()
+	slot := llvmSpillToSlot(em, &LlvmValue{typ: elemLLVM, name: val})
+	size := llvmSizeOf(em, elemLLVM)
+	llvmCallVoid(em, sym, []*LlvmValue{
+		{typ: "ptr", name: listReg},
+		slot,
+		size,
+	})
+	g.flushOstyEmitter(em)
 	return nil
 }
 
@@ -3078,71 +3037,42 @@ func (g *mirGen) emitListPushOperand(listReg string, op mir.Operand, elemT mir.T
 // the intrinsic's optional destination.
 func (g *mirGen) emitListGetBytes(i *mir.IntrinsicInstr, listReg, idxReg string, elemT mir.Type) error {
 	elemLLVM := g.llvmType(elemT)
-	slot := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(slot)
-	g.fnBuf.WriteString(" = alloca ")
-	g.fnBuf.WriteString(elemLLVM)
-	g.fnBuf.WriteByte('\n')
-	sizeReg := g.emitSizeOf(elemLLVM)
-	sym := "osty_rt_list_get_bytes_v1"
+	sym := listRuntimeGetBytesV1Symbol()
 	g.declareRuntime(sym, "declare void @"+sym+"(ptr, i64, ptr, i64)")
-	g.fnBuf.WriteString("  call void @")
-	g.fnBuf.WriteString(sym)
-	g.fnBuf.WriteString("(ptr ")
-	g.fnBuf.WriteString(listReg)
-	g.fnBuf.WriteString(", i64 ")
-	g.fnBuf.WriteString(idxReg)
-	g.fnBuf.WriteString(", ptr ")
-	g.fnBuf.WriteString(slot)
-	g.fnBuf.WriteString(", i64 ")
-	g.fnBuf.WriteString(sizeReg)
-	g.fnBuf.WriteString(")\n")
+	em := g.ostyEmitter()
+	slot := llvmAllocaSlot(em, elemLLVM)
+	size := llvmSizeOf(em, elemLLVM)
+	llvmCallVoid(em, sym, []*LlvmValue{
+		{typ: "ptr", name: listReg},
+		{typ: "i64", name: idxReg},
+		slot,
+		size,
+	})
 	if i.Dest == nil {
+		g.flushOstyEmitter(em)
 		return nil
 	}
 	destLoc := g.fn.Local(i.Dest.Local)
 	if destLoc == nil {
+		g.flushOstyEmitter(em)
 		return fmt.Errorf("mir-mvp: list_get_bytes into unknown local %d", i.Dest.Local)
 	}
-	// Load the staged value, then store into dest.
-	loaded := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(loaded)
-	g.fnBuf.WriteString(" = load ")
-	g.fnBuf.WriteString(elemLLVM)
-	g.fnBuf.WriteString(", ptr ")
-	g.fnBuf.WriteString(slot)
-	g.fnBuf.WriteByte('\n')
-	g.fnBuf.WriteString("  store ")
-	g.fnBuf.WriteString(g.llvmType(destLoc.Type))
-	g.fnBuf.WriteByte(' ')
-	g.fnBuf.WriteString(loaded)
-	g.fnBuf.WriteString(", ptr ")
-	g.fnBuf.WriteString(g.localSlots[i.Dest.Local])
-	g.fnBuf.WriteByte('\n')
-	return nil
+	loaded := llvmLoadFromSlot(em, slot, elemLLVM)
+	g.flushOstyEmitter(em)
+	return g.storeIntrinsicResult(i, loaded)
 }
 
 // emitSizeOf returns a fresh register holding the size in bytes of
 // the named LLVM type. Uses the standard `getelementptr null, 1`
 // idiom — LLVM's constant folder collapses it to a numeric literal
 // during opt. Works for any first-class type, including user
-// structs referenced by their `%Name` handle.
+// structs referenced by their `%Name` handle. Thin shim over the
+// Osty-owned `llvmSizeOf`.
 func (g *mirGen) emitSizeOf(llvmType string) string {
-	gep := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(gep)
-	g.fnBuf.WriteString(" = getelementptr ")
-	g.fnBuf.WriteString(llvmType)
-	g.fnBuf.WriteString(", ptr null, i32 1\n")
-	size := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(size)
-	g.fnBuf.WriteString(" = ptrtoint ptr ")
-	g.fnBuf.WriteString(gep)
-	g.fnBuf.WriteString(" to i64\n")
-	return size
+	em := g.ostyEmitter()
+	size := llvmSizeOf(em, llvmType)
+	g.flushOstyEmitter(em)
+	return size.name
 }
 
 func listElemType(t mir.Type) mir.Type {
@@ -4052,6 +3982,58 @@ func (g *mirGen) fresh() string {
 	name := fmt.Sprintf("%%t%d", g.tempSeq)
 	g.tempSeq++
 	return name
+}
+
+// ostyEmitter returns an LlvmEmitter whose temp counter is seeded from
+// g.tempSeq. Call any Osty-authored emission helper (llvmListNew,
+// llvmListPush, …) against the returned emitter, then splice the
+// accumulated body into g.fnBuf via flushOstyEmitter. This is the
+// adapter that lets mir_generator.go delegate actual LLVM text to
+// toolchain/llvmgen.osty without double-counting temps.
+func (g *mirGen) ostyEmitter() *LlvmEmitter {
+	return &LlvmEmitter{temp: g.tempSeq, body: nil}
+}
+
+// flushOstyEmitter writes the emitter's body lines into g.fnBuf and
+// syncs the temp counter back. Every Osty helper output line already
+// carries its leading 2-space indent — we only need to add the
+// trailing newline.
+func (g *mirGen) flushOstyEmitter(em *LlvmEmitter) {
+	g.tempSeq = em.temp
+	for _, line := range em.body {
+		g.fnBuf.WriteString(line)
+		g.fnBuf.WriteByte('\n')
+	}
+}
+
+// storeIntrinsicResult handles the dest-local store half of the
+// old emitSimpleCall path after an Osty-authored helper has produced
+// the value-returning call. Returns nil when the intrinsic has no
+// destination (call result discarded); coerces scalar widths when the
+// dest local's type differs from what the runtime returned.
+func (g *mirGen) storeIntrinsicResult(i *mir.IntrinsicInstr, result *LlvmValue) error {
+	if i.Dest == nil {
+		return nil
+	}
+	destLoc := g.fn.Local(i.Dest.Local)
+	if destLoc == nil {
+		return nil
+	}
+	destLLVM := g.llvmType(destLoc.Type)
+	stored := result.name
+	if destLLVM != result.typ {
+		if widened, err := g.coerceValue(result.name, result.typ, destLLVM); err == nil {
+			stored = widened
+		}
+	}
+	g.fnBuf.WriteString("  store ")
+	g.fnBuf.WriteString(destLLVM)
+	g.fnBuf.WriteByte(' ')
+	g.fnBuf.WriteString(stored)
+	g.fnBuf.WriteString(", ptr ")
+	g.fnBuf.WriteString(g.localSlots[i.Dest.Local])
+	g.fnBuf.WriteByte('\n')
+	return nil
 }
 
 // ==== helpers ====
