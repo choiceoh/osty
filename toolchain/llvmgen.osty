@@ -1761,6 +1761,11 @@ pub fn llvmSmokeExecutableCorpus() -> List<LlvmSmokeExecutableCase> {
             fixture: "bool_mut_print.osty",
             stdout: "42\n",
         },
+        LlvmSmokeExecutableCase {
+            name: "result-question-int",
+            fixture: "result_question_int_print.osty",
+            stdout: "42\n",
+        },
     ]
 }
 
