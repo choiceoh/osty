@@ -14,9 +14,11 @@ type checkRequest struct {
 }
 
 type checkSummary struct {
-	Assignments int `json:"assignments"`
-	Accepted    int `json:"accepted"`
-	Errors      int `json:"errors"`
+	Assignments     int                       `json:"assignments"`
+	Accepted        int                       `json:"accepted"`
+	Errors          int                       `json:"errors"`
+	ErrorsByContext map[string]int            `json:"errorsByContext,omitempty"`
+	ErrorDetails    map[string]map[string]int `json:"errorDetails,omitempty"`
 }
 
 type checkedNode struct {
@@ -78,9 +80,11 @@ func run(stdin io.Reader, stdout io.Writer) error {
 	checked := selfhost.CheckSourceStructured([]byte(req.Source))
 	resp := checkResponse{
 		Summary: checkSummary{
-			Assignments: checked.Summary.Assignments,
-			Accepted:    checked.Summary.Accepted,
-			Errors:      checked.Summary.Errors,
+			Assignments:     checked.Summary.Assignments,
+			Accepted:        checked.Summary.Accepted,
+			Errors:          checked.Summary.Errors,
+			ErrorsByContext: checked.Summary.ErrorsByContext,
+			ErrorDetails:    checked.Summary.ErrorDetails,
 		},
 		TypedNodes:     make([]checkedNode, 0, len(checked.TypedNodes)),
 		Bindings:       make([]checkedBinding, 0, len(checked.Bindings)),

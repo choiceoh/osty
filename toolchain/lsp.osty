@@ -1,5 +1,5 @@
 use runtime.strings as strings {
-    fn Split(s: String, sep: String) -> List<String>
+    fn split(s: String, sep: String) -> List<String>
 }
 
 /// LspSemanticToken is the self-hosted policy shape for one LSP semantic
@@ -551,7 +551,7 @@ pub fn lspFindNameOffset(source: String, declStart: Int, declEnd: Int, name: Str
     if name == "" || declStart < 0 {
         return -1
     }
-    let units = strings.Split(source, "")
+    let units = strings.split(source, "")
     if declEnd > units.len() || declEnd <= declStart {
         return -1
     }
@@ -569,7 +569,7 @@ pub fn lspFindNameOffset(source: String, declStart: Int, declEnd: Int, name: Str
 }
 
 pub fn lspPrecedingCompletionContext(source: String, offset: Int) -> LspCompletionContext {
-    let units = strings.Split(source, "")
+    let units = strings.split(source, "")
     let mut end = offset
     if end > units.len() {
         end = units.len()
@@ -598,7 +598,7 @@ pub fn lspPrecedingCompletionContext(source: String, offset: Int) -> LspCompleti
 }
 
 pub fn lspIdentifierAt(source: String, offset: Int) -> String {
-    let units = strings.Split(source, "")
+    let units = strings.split(source, "")
     if offset < 0 || offset >= units.len() {
         return ""
     }
@@ -768,7 +768,7 @@ pub fn lspKeyWithAlias(group: Int, key: String, alias: String) -> String {
 }
 
 pub fn lspUseSourceText(source: String, start: Int, end: Int) -> String {
-    let units = strings.Split(source, "")
+    let units = strings.split(source, "")
     if start < 0 || end > units.len() || start >= end {
         return ""
     }
@@ -780,7 +780,7 @@ pub fn lspUseSourceText(source: String, start: Int, end: Int) -> String {
 }
 
 pub fn lspEndOfLineOffset(source: String, offset: Int) -> Int {
-    let units = strings.Split(source, "")
+    let units = strings.split(source, "")
     let mut off = offset
     if off < 0 {
         off = 0
@@ -801,7 +801,7 @@ pub fn lspEndOfLineOffset(source: String, offset: Int) -> Int {
 }
 
 pub fn lspHasTriviaBetweenOffsets(source: String, start: Int, end: Int) -> Bool {
-    let units = strings.Split(source, "")
+    let units = strings.split(source, "")
     if start < 0 || end > units.len() || start >= end {
         return false
     }
@@ -1131,7 +1131,7 @@ fn lspFnTypeTail(typeText: String) -> String {
     if !(lspStringHasPrefix(typeText, "fn")) {
         return ""
     }
-    let units = strings.Split(typeText, "")
+    let units = strings.split(typeText, "")
     return frontLexemeFromUnits(units, 2, units.len() - 2)
 }
 
@@ -1180,8 +1180,8 @@ fn lspStringHasPrefix(text: String, prefix: String) -> Bool {
     if prefix == "" {
         return true
     }
-    let textUnits = strings.Split(text, "")
-    let prefixUnits = strings.Split(prefix, "")
+    let textUnits = strings.split(text, "")
+    let prefixUnits = strings.split(prefix, "")
     if prefixUnits.len() > textUnits.len() {
         return false
     }

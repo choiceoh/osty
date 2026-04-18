@@ -35,9 +35,11 @@ type nativeCheckRequest struct {
 }
 
 type nativeCheckSummary struct {
-	Assignments int `json:"assignments"`
-	Accepted    int `json:"accepted"`
-	Errors      int `json:"errors"`
+	Assignments     int                       `json:"assignments"`
+	Accepted        int                       `json:"accepted"`
+	Errors          int                       `json:"errors"`
+	ErrorsByContext map[string]int            `json:"errorsByContext,omitempty"`
+	ErrorDetails    map[string]map[string]int `json:"errorDetails,omitempty"`
 }
 
 type nativeCheckedNode struct {
@@ -121,9 +123,11 @@ func (embeddedNativeChecker) CheckSourceStructured(src []byte) (nativeCheckResul
 func adaptEmbeddedCheckResult(checked selfhost.CheckResult) nativeCheckResult {
 	result := nativeCheckResult{
 		Summary: nativeCheckSummary{
-			Assignments: checked.Summary.Assignments,
-			Accepted:    checked.Summary.Accepted,
-			Errors:      checked.Summary.Errors,
+			Assignments:     checked.Summary.Assignments,
+			Accepted:        checked.Summary.Accepted,
+			Errors:          checked.Summary.Errors,
+			ErrorsByContext: cloneStringIntMap(checked.Summary.ErrorsByContext),
+			ErrorDetails:    cloneErrorDetailMap(checked.Summary.ErrorDetails),
 		},
 		TypedNodes:     make([]nativeCheckedNode, 0, len(checked.TypedNodes)),
 		Bindings:       make([]nativeCheckedBinding, 0, len(checked.Bindings)),
@@ -236,6 +240,9 @@ func applySelfhostFileResult(result *Result, file *ast.File, rr *resolve.Result,
 		return
 	}
 	checkedSrc := selfhostFileSource(file, rr, src, stdlib)
+	if dump := os.Getenv("OSTY_NATIVE_CHECKER_SOURCE_DUMP"); dump != "" {
+		_ = os.WriteFile(dump, checkedSrc.source, 0o644)
+	}
 	checked, err := runner.CheckSourceStructured(checkedSrc.source)
 	if err != nil {
 		result.Diags = append(result.Diags, checkerUnavailableDiag(
@@ -246,6 +253,7 @@ func applySelfhostFileResult(result *Result, file *ast.File, rr *resolve.Result,
 		return
 	}
 	result.Diags = nativeCheckerDiags(checkedSrc.source, checked)
+	result.NativeCheckerTelemetry = nativeCheckerTelemetry(checked)
 	overlaySelfhostResult(result, checkedSrc, checked)
 }
 
@@ -267,6 +275,9 @@ func applySelfhostPackageResult(result *Result, pkg *resolve.Package, _ *resolve
 		return
 	}
 	src := selfhostPackageSource(pkg, ws, stdlib)
+	if dump := os.Getenv("OSTY_NATIVE_CHECKER_SOURCE_DUMP"); dump != "" {
+		_ = os.WriteFile(dump, src.source, 0o644)
+	}
 	if len(src.source) == 0 {
 		result.Diags = append(result.Diags, checkerUnavailableDiag(
 			"package",
@@ -284,6 +295,7 @@ func applySelfhostPackageResult(result *Result, pkg *resolve.Package, _ *resolve
 		return
 	}
 	result.Diags = nativeCheckerDiags(src.source, checked)
+	result.NativeCheckerTelemetry = nativeCheckerTelemetry(checked)
 	overlaySelfhostResult(result, src, checked)
 }
 
@@ -302,6 +314,41 @@ func applySelfhostWorkspaceResults(ws *resolve.Workspace, _ map[string]*resolve.
 		}
 		applySelfhostPackageResult(result, pkg, nil, ws, stdlib)
 	}
+}
+
+func nativeCheckerTelemetry(checked nativeCheckResult) *NativeCheckerTelemetry {
+	if checked.Summary.Assignments == 0 && checked.Summary.Errors == 0 && len(checked.Summary.ErrorsByContext) == 0 {
+		return nil
+	}
+	return &NativeCheckerTelemetry{
+		Assignments:     checked.Summary.Assignments,
+		Accepted:        checked.Summary.Accepted,
+		Errors:          checked.Summary.Errors,
+		ErrorsByContext: cloneStringIntMap(checked.Summary.ErrorsByContext),
+		ErrorDetails:    cloneErrorDetailMap(checked.Summary.ErrorDetails),
+	}
+}
+
+func cloneErrorDetailMap(src map[string]map[string]int) map[string]map[string]int {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make(map[string]map[string]int, len(src))
+	for ctx, inner := range src {
+		out[ctx] = cloneStringIntMap(inner)
+	}
+	return out
+}
+
+func cloneStringIntMap(src map[string]int) map[string]int {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make(map[string]int, len(src))
+	for k, v := range src {
+		out[k] = v
+	}
+	return out
 }
 
 func nativeCheckerDiags(src []byte, checked nativeCheckResult) []*diag.Diagnostic {

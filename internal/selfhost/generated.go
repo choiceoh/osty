@@ -24752,6 +24752,8 @@ type FrontCheckEnv struct {
 	assignments      int
 	accepted         int
 	errors           int
+	errorsByContext  map[string]int
+	errorDetails     map[string]map[string]int
 	typedNodes       []*FrontCheckedNode
 	checkedBindings  []*FrontCheckedBinding
 	checkedSymbols   []*FrontCheckedSymbol
@@ -24760,11 +24762,13 @@ type FrontCheckEnv struct {
 
 // Osty: /tmp/selfhost_merged.osty:9463:5
 type FrontCheckResult struct {
-	summary        *FrontCheckSummary
-	typedNodes     []*FrontCheckedNode
-	bindings       []*FrontCheckedBinding
-	symbols        []*FrontCheckedSymbol
-	instantiations []*FrontCheckInstantiation
+	summary         *FrontCheckSummary
+	typedNodes      []*FrontCheckedNode
+	bindings        []*FrontCheckedBinding
+	symbols         []*FrontCheckedSymbol
+	instantiations  []*FrontCheckInstantiation
+	errorsByContext map[string]int
+	errorDetails    map[string]map[string]int
 }
 
 // Osty: /tmp/selfhost_merged.osty:9471:5
@@ -24816,13 +24820,13 @@ func frontCheckSummaryFromEnv(env *FrontCheckEnv) *FrontCheckSummary {
 
 // Osty: /tmp/selfhost_merged.osty:9509:1
 func frontCheckResultFromEnv(env *FrontCheckEnv) *FrontCheckResult {
-	return &FrontCheckResult{summary: frontCheckSummaryFromEnv(env), typedNodes: env.typedNodes, bindings: env.checkedBindings, symbols: env.checkedSymbols, instantiations: env.instantiations}
+	return &FrontCheckResult{summary: frontCheckSummaryFromEnv(env), typedNodes: env.typedNodes, bindings: env.checkedBindings, symbols: env.checkedSymbols, instantiations: env.instantiations, errorsByContext: env.errorsByContext, errorDetails: env.errorDetails}
 }
 
 // Osty: /tmp/selfhost_merged.osty:9519:1
 func frontCheckEnv(returnType string) *FrontCheckEnv {
 	// Osty: /tmp/selfhost_merged.osty:9520:5
-	env := &FrontCheckEnv{bindings: make([]*FrontCheckBinding, 0, 1), fns: make([]*FrontFnSig, 0, 1), fields: make([]*FrontFieldSig, 0, 1), variants: make([]*FrontVariantSig, 0, 1), aliases: make([]*FrontAliasSig, 0, 1), types: make([]*FrontTypeSig, 0, 1), interfaces: make([]string, 0, 1), interfaceExtends: make([]*FrontInterfaceExtSig, 0, 1), genericBounds: make([]*FrontTypeSubst, 0, 1), returnType: returnType, assignments: 0, accepted: 0, errors: 0, typedNodes: make([]*FrontCheckedNode, 0, 1), checkedBindings: make([]*FrontCheckedBinding, 0, 1), checkedSymbols: make([]*FrontCheckedSymbol, 0, 1), instantiations: make([]*FrontCheckInstantiation, 0, 1)}
+	env := &FrontCheckEnv{bindings: make([]*FrontCheckBinding, 0, 1), fns: make([]*FrontFnSig, 0, 1), fields: make([]*FrontFieldSig, 0, 1), variants: make([]*FrontVariantSig, 0, 1), aliases: make([]*FrontAliasSig, 0, 1), types: make([]*FrontTypeSig, 0, 1), interfaces: make([]string, 0, 1), interfaceExtends: make([]*FrontInterfaceExtSig, 0, 1), genericBounds: make([]*FrontTypeSubst, 0, 1), returnType: returnType, assignments: 0, accepted: 0, errors: 0, errorsByContext: make(map[string]int), typedNodes: make([]*FrontCheckedNode, 0, 1), checkedBindings: make([]*FrontCheckedBinding, 0, 1), checkedSymbols: make([]*FrontCheckedSymbol, 0, 1), instantiations: make([]*FrontCheckInstantiation, 0, 1)}
 	_ = env
 	// Osty: /tmp/selfhost_merged.osty:9539:5
 	frontCheckInstallBuiltins(env)
@@ -24831,7 +24835,7 @@ func frontCheckEnv(returnType string) *FrontCheckEnv {
 
 // Osty: /tmp/selfhost_merged.osty:9543:1
 func frontCheckChildEnv(parent *FrontCheckEnv, returnType string) *FrontCheckEnv {
-	return &FrontCheckEnv{bindings: parent.bindings, fns: parent.fns, fields: parent.fields, variants: parent.variants, aliases: parent.aliases, types: parent.types, interfaces: parent.interfaces, interfaceExtends: parent.interfaceExtends, genericBounds: parent.genericBounds, returnType: returnType, assignments: 0, accepted: 0, errors: 0, typedNodes: make([]*FrontCheckedNode, 0, 1), checkedBindings: make([]*FrontCheckedBinding, 0, 1), checkedSymbols: parent.checkedSymbols, instantiations: make([]*FrontCheckInstantiation, 0, 1)}
+	return &FrontCheckEnv{bindings: parent.bindings, fns: parent.fns, fields: parent.fields, variants: parent.variants, aliases: parent.aliases, types: parent.types, interfaces: parent.interfaces, interfaceExtends: parent.interfaceExtends, genericBounds: parent.genericBounds, returnType: returnType, assignments: 0, accepted: 0, errors: 0, errorsByContext: make(map[string]int), typedNodes: make([]*FrontCheckedNode, 0, 1), checkedBindings: make([]*FrontCheckedBinding, 0, 1), checkedSymbols: parent.checkedSymbols, instantiations: make([]*FrontCheckInstantiation, 0, 1)}
 }
 
 // Osty: /tmp/selfhost_merged.osty:9565:1
@@ -24916,6 +24920,29 @@ func frontCheckMerge(parent *FrontCheckEnv, child *FrontCheckEnv) {
 		}
 		return _p1930 + _rhs1931
 	}()
+	if len(child.errorsByContext) > 0 {
+		if parent.errorsByContext == nil {
+			parent.errorsByContext = make(map[string]int)
+		}
+		for k, v := range child.errorsByContext {
+			parent.errorsByContext[k] += v
+		}
+	}
+	if len(child.errorDetails) > 0 {
+		if parent.errorDetails == nil {
+			parent.errorDetails = make(map[string]map[string]int)
+		}
+		for ctx, inner := range child.errorDetails {
+			bucket := parent.errorDetails[ctx]
+			if bucket == nil {
+				bucket = make(map[string]int, len(inner))
+				parent.errorDetails[ctx] = bucket
+			}
+			for detail, n := range inner {
+				bucket[detail] += n
+			}
+		}
+	}
 	// Osty: /tmp/selfhost_merged.osty:9580:5
 	for _, typed := range child.typedNodes {
 		// Osty: /tmp/selfhost_merged.osty:9581:9
@@ -25151,17 +25178,7 @@ func frontCheckCollectDecl(file *AstFile, env *FrontCheckEnv, declIdx int, decl 
 		// Osty: /tmp/selfhost_merged.osty:9723:9
 		if frontCheckFnExists(env, decl.text, owner) {
 			// Osty: /tmp/selfhost_merged.osty:9724:16
-			env.errors = func() int {
-				var _p1938 int = env.errors
-				var _rhs1939 int = 1
-				if _rhs1939 > 0 && _p1938 > math.MaxInt-_rhs1939 {
-					panic("integer overflow")
-				}
-				if _rhs1939 < 0 && _p1938 < math.MinInt-_rhs1939 {
-					panic("integer overflow")
-				}
-				return _p1938 + _rhs1939
-			}()
+			selfhostBumpError(env)
 		}
 		// Osty: /tmp/selfhost_merged.osty:9726:9
 		frontCheckCheckGenericParams(file, env, decl.children2)
@@ -25185,17 +25202,7 @@ func frontCheckCollectDecl(file *AstFile, env *FrontCheckEnv, declIdx int, decl 
 		// Osty: /tmp/selfhost_merged.osty:9735:9
 		if frontCheckDeclaredTypeExists(env, decl.text) {
 			// Osty: /tmp/selfhost_merged.osty:9736:16
-			env.errors = func() int {
-				var _p1940 int = env.errors
-				var _rhs1941 int = 1
-				if _rhs1941 > 0 && _p1940 > math.MaxInt-_rhs1941 {
-					panic("integer overflow")
-				}
-				if _rhs1941 < 0 && _p1940 < math.MinInt-_rhs1941 {
-					panic("integer overflow")
-				}
-				return _p1940 + _rhs1941
-			}()
+			selfhostBumpError(env)
 		}
 		// Osty: /tmp/selfhost_merged.osty:9738:9
 		func() struct{} {
@@ -25214,17 +25221,7 @@ func frontCheckCollectDecl(file *AstFile, env *FrontCheckEnv, declIdx int, decl 
 				// Osty: /tmp/selfhost_merged.osty:9743:17
 				if frontCheckFieldLookup(env, decl.text, member.text).name != "" {
 					// Osty: /tmp/selfhost_merged.osty:9744:24
-					env.errors = func() int {
-						var _p1942 int = env.errors
-						var _rhs1943 int = 1
-						if _rhs1943 > 0 && _p1942 > math.MaxInt-_rhs1943 {
-							panic("integer overflow")
-						}
-						if _rhs1943 < 0 && _p1942 < math.MinInt-_rhs1943 {
-							panic("integer overflow")
-						}
-						return _p1942 + _rhs1943
-					}()
+					selfhostBumpError(env)
 				}
 				// Osty: /tmp/selfhost_merged.osty:9746:17
 				field := &FrontFieldSig{owner: decl.text, name: member.text, typeName: frontCheckTypeName(file, member.right), hasDefault: member.left >= 0}
@@ -25251,17 +25248,7 @@ func frontCheckCollectDecl(file *AstFile, env *FrontCheckEnv, declIdx int, decl 
 		// Osty: /tmp/selfhost_merged.osty:9763:9
 		if frontCheckDeclaredTypeExists(env, decl.text) {
 			// Osty: /tmp/selfhost_merged.osty:9764:16
-			env.errors = func() int {
-				var _p1944 int = env.errors
-				var _rhs1945 int = 1
-				if _rhs1945 > 0 && _p1944 > math.MaxInt-_rhs1945 {
-					panic("integer overflow")
-				}
-				if _rhs1945 < 0 && _p1944 < math.MinInt-_rhs1945 {
-					panic("integer overflow")
-				}
-				return _p1944 + _rhs1945
-			}()
+			selfhostBumpError(env)
 		}
 		// Osty: /tmp/selfhost_merged.osty:9766:9
 		func() struct{} {
@@ -25280,17 +25267,7 @@ func frontCheckCollectDecl(file *AstFile, env *FrontCheckEnv, declIdx int, decl 
 				// Osty: /tmp/selfhost_merged.osty:9771:17
 				if frontCheckVariantLookupForOwner(env, member.text, decl.text).name != "" {
 					// Osty: /tmp/selfhost_merged.osty:9772:24
-					env.errors = func() int {
-						var _p1946 int = env.errors
-						var _rhs1947 int = 1
-						if _rhs1947 > 0 && _p1946 > math.MaxInt-_rhs1947 {
-							panic("integer overflow")
-						}
-						if _rhs1947 < 0 && _p1946 < math.MinInt-_rhs1947 {
-							panic("integer overflow")
-						}
-						return _p1946 + _rhs1947
-					}()
+					selfhostBumpError(env)
 				}
 				// Osty: /tmp/selfhost_merged.osty:9774:17
 				var fieldTypes []string = make([]string, 0, 1)
@@ -25323,17 +25300,7 @@ func frontCheckCollectDecl(file *AstFile, env *FrontCheckEnv, declIdx int, decl 
 		// Osty: /tmp/selfhost_merged.osty:9787:9
 		if frontCheckDeclaredTypeExists(env, decl.text) {
 			// Osty: /tmp/selfhost_merged.osty:9788:16
-			env.errors = func() int {
-				var _p1948 int = env.errors
-				var _rhs1949 int = 1
-				if _rhs1949 > 0 && _p1948 > math.MaxInt-_rhs1949 {
-					panic("integer overflow")
-				}
-				if _rhs1949 < 0 && _p1948 < math.MinInt-_rhs1949 {
-					panic("integer overflow")
-				}
-				return _p1948 + _rhs1949
-			}()
+			selfhostBumpError(env)
 		}
 		// Osty: /tmp/selfhost_merged.osty:9789:9
 		frontCheckCheckGenericParams(file, env, decl.children2)
@@ -25359,17 +25326,7 @@ func frontCheckCollectDecl(file *AstFile, env *FrontCheckEnv, declIdx int, decl 
 				// Osty: /tmp/selfhost_merged.osty:9799:17
 				if frontCheckFnExists(env, member.text, decl.text) {
 					// Osty: /tmp/selfhost_merged.osty:9800:24
-					env.errors = func() int {
-						var _p1950 int = env.errors
-						var _rhs1951 int = 1
-						if _rhs1951 > 0 && _p1950 > math.MaxInt-_rhs1951 {
-							panic("integer overflow")
-						}
-						if _rhs1951 < 0 && _p1950 < math.MinInt-_rhs1951 {
-							panic("integer overflow")
-						}
-						return _p1950 + _rhs1951
-					}()
+					selfhostBumpError(env)
 				}
 				// Osty: /tmp/selfhost_merged.osty:9802:17
 				frontCheckCheckGenericParams(file, env, member.children2)
@@ -25401,17 +25358,7 @@ func frontCheckCollectDecl(file *AstFile, env *FrontCheckEnv, declIdx int, decl 
 		// Osty: /tmp/selfhost_merged.osty:9814:9
 		if frontCheckDeclaredTypeExists(env, decl.text) {
 			// Osty: /tmp/selfhost_merged.osty:9815:16
-			env.errors = func() int {
-				var _p1952 int = env.errors
-				var _rhs1953 int = 1
-				if _rhs1953 > 0 && _p1952 > math.MaxInt-_rhs1953 {
-					panic("integer overflow")
-				}
-				if _rhs1953 < 0 && _p1952 < math.MinInt-_rhs1953 {
-					panic("integer overflow")
-				}
-				return _p1952 + _rhs1953
-			}()
+			selfhostBumpError(env)
 		}
 		// Osty: /tmp/selfhost_merged.osty:9817:9
 		func() struct{} {
@@ -25439,7 +25386,14 @@ func frontCheckCollectDecl(file *AstFile, env *FrontCheckEnv, declIdx int, decl 
 	// Osty: /tmp/selfhost_merged.osty:9828:5
 	if ostyEqual(decl.kind, AstNodeKind(&AstNodeKind_AstNUseDecl{})) {
 		// Osty: /tmp/selfhost_merged.osty:9829:9
-		alias := frontCheckLastPathSegment(decl.text)
+		// The bootstrapped source stored `frontCheckLastPathSegment(decl.text)`
+		// here, which returned the Go FFI path literal with its surrounding
+		// quotes intact (e.g. `"strings"`). Call-site selector lookup uses
+		// the bare identifier, so every `use go "X" as X { fn Y ... }` alias
+		// failed to register in env.fns. Routing through selfhostUseDeclAlias
+		// prefers the parser's alias ident (children2[0]) and strips stray
+		// quote characters on the fallback path.
+		alias := selfhostUseDeclAlias(file, decl)
 		_ = alias
 		// Osty: /tmp/selfhost_merged.osty:9830:9
 		for _, itemIdx := range decl.children {
@@ -25550,17 +25504,7 @@ func frontCheckCheckGenericParams(file *AstFile, env *FrontCheckEnv, idxs []int)
 		// Osty: /tmp/selfhost_merged.osty:9893:9
 		if frontCheckStringContains(seen, n.text) {
 			// Osty: /tmp/selfhost_merged.osty:9894:16
-			env.errors = func() int {
-				var _p1954 int = env.errors
-				var _rhs1955 int = 1
-				if _rhs1955 > 0 && _p1954 > math.MaxInt-_rhs1955 {
-					panic("integer overflow")
-				}
-				if _rhs1955 < 0 && _p1954 < math.MinInt-_rhs1955 {
-					panic("integer overflow")
-				}
-				return _p1954 + _rhs1955
-			}()
+			selfhostBumpError(env)
 		}
 		// Osty: /tmp/selfhost_merged.osty:9896:9
 		func() struct{} { seen = append(seen, n.text); return struct{}{} }()
@@ -27141,17 +27085,7 @@ func frontCheckExpectAssignable(env *FrontCheckEnv, dst string, src string) {
 		}()
 	} else {
 		// Osty: /tmp/selfhost_merged.osty:10646:12
-		env.errors = func() int {
-			var _p2012 int = env.errors
-			var _rhs2013 int = 1
-			if _rhs2013 > 0 && _p2012 > math.MaxInt-_rhs2013 {
-				panic("integer overflow")
-			}
-			if _rhs2013 < 0 && _p2012 < math.MinInt-_rhs2013 {
-				panic("integer overflow")
-			}
-			return _p2012 + _rhs2013
-		}()
+		selfhostBumpError(env)
 	}
 }
 
@@ -27456,17 +27390,7 @@ func frontCheckUnify(env *FrontCheckEnv, left string, right string) string {
 		return right
 	}
 	// Osty: /tmp/selfhost_merged.osty:10788:8
-	env.errors = func() int {
-		var _p2024 int = env.errors
-		var _rhs2025 int = 1
-		if _rhs2025 > 0 && _p2024 > math.MaxInt-_rhs2025 {
-			panic("integer overflow")
-		}
-		if _rhs2025 < 0 && _p2024 < math.MinInt-_rhs2025 {
-			panic("integer overflow")
-		}
-		return _p2024 + _rhs2025
-	}()
+	selfhostBumpError(env)
 	return "Invalid"
 }
 
@@ -27591,17 +27515,7 @@ func frontCheckStmt(file *AstFile, env *FrontCheckEnv, idx int) string {
 		// Osty: /tmp/selfhost_merged.osty:10847:9
 		if !(frontCheckPatternIrrefutable(file, node.left)) {
 			// Osty: /tmp/selfhost_merged.osty:10848:16
-			env.errors = func() int {
-				var _p2030 int = env.errors
-				var _rhs2031 int = 1
-				if _rhs2031 > 0 && _p2030 > math.MaxInt-_rhs2031 {
-					panic("integer overflow")
-				}
-				if _rhs2031 < 0 && _p2030 < math.MinInt-_rhs2031 {
-					panic("integer overflow")
-				}
-				return _p2030 + _rhs2031
-			}()
+			selfhostBumpError(env)
 		}
 		// Osty: /tmp/selfhost_merged.osty:10850:9
 		finalType := valueType
@@ -27644,17 +27558,7 @@ func frontCheckStmt(file *AstFile, env *FrontCheckEnv, idx int) string {
 				return _p2032 + _rhs2033
 			}()
 			// Osty: /tmp/selfhost_merged.osty:10865:16
-			env.errors = func() int {
-				var _p2034 int = env.errors
-				var _rhs2035 int = 1
-				if _rhs2035 > 0 && _p2034 > math.MaxInt-_rhs2035 {
-					panic("integer overflow")
-				}
-				if _rhs2035 < 0 && _p2034 < math.MinInt-_rhs2035 {
-					panic("integer overflow")
-				}
-				return _p2034 + _rhs2035
-			}()
+			selfhostBumpError(env)
 		}
 		// Osty: /tmp/selfhost_merged.osty:10867:9
 		return "()"
@@ -27676,17 +27580,7 @@ func frontCheckStmt(file *AstFile, env *FrontCheckEnv, idx int) string {
 			frontCheckExpectAssignable(env, elem, frontCheckExprHint(file, env, node.right, elem))
 		} else if !(frontCheckIsInvalid(chanType)) {
 			// Osty: /tmp/selfhost_merged.osty:10876:16
-			env.errors = func() int {
-				var _p2036 int = env.errors
-				var _rhs2037 int = 1
-				if _rhs2037 > 0 && _p2036 > math.MaxInt-_rhs2037 {
-					panic("integer overflow")
-				}
-				if _rhs2037 < 0 && _p2036 < math.MinInt-_rhs2037 {
-					panic("integer overflow")
-				}
-				return _p2036 + _rhs2037
-			}()
+			selfhostBumpError(env)
 		}
 		// Osty: /tmp/selfhost_merged.osty:10878:9
 		return "()"
@@ -27741,17 +27635,7 @@ func frontCheckFor(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
 		// Osty: /tmp/selfhost_merged.osty:10906:9
 		if condType != "Bool" && !(frontCheckIsInvalid(condType)) {
 			// Osty: /tmp/selfhost_merged.osty:10907:16
-			env.errors = func() int {
-				var _p2038 int = env.errors
-				var _rhs2039 int = 1
-				if _rhs2039 > 0 && _p2038 > math.MaxInt-_rhs2039 {
-					panic("integer overflow")
-				}
-				if _rhs2039 < 0 && _p2038 < math.MinInt-_rhs2039 {
-					panic("integer overflow")
-				}
-				return _p2038 + _rhs2039
-			}()
+			selfhostBumpError(env)
 		}
 	} else if node.text == "forlet" {
 		// Osty: /tmp/selfhost_merged.osty:10910:9
@@ -27769,17 +27653,7 @@ func frontCheckFor(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
 		// Osty: /tmp/selfhost_merged.osty:10915:9
 		if elemType == "Invalid" {
 			// Osty: /tmp/selfhost_merged.osty:10916:16
-			env.errors = func() int {
-				var _p2040 int = env.errors
-				var _rhs2041 int = 1
-				if _rhs2041 > 0 && _p2040 > math.MaxInt-_rhs2041 {
-					panic("integer overflow")
-				}
-				if _rhs2041 < 0 && _p2040 < math.MinInt-_rhs2041 {
-					panic("integer overflow")
-				}
-				return _p2040 + _rhs2041
-			}()
+			selfhostBumpError(env)
 		}
 		// Osty: /tmp/selfhost_merged.osty:10918:9
 		frontCheckBindPattern(file, env, frontCheckIntAt(node.children, 0), elemType, false)
@@ -28073,17 +27947,7 @@ func frontCheckIdentHint(env *FrontCheckEnv, name string, hint string) string {
 	// Osty: /tmp/selfhost_merged.osty:11087:5
 	if name != "_" {
 		// Osty: /tmp/selfhost_merged.osty:11088:12
-		env.errors = func() int {
-			var _p2044 int = env.errors
-			var _rhs2045 int = 1
-			if _rhs2045 > 0 && _p2044 > math.MaxInt-_rhs2045 {
-				panic("integer overflow")
-			}
-			if _rhs2045 < 0 && _p2044 < math.MinInt-_rhs2045 {
-				panic("integer overflow")
-			}
-			return _p2044 + _rhs2045
-		}()
+		selfhostBumpErrorWithDetail(env, name)
 	}
 	return "Invalid"
 }
@@ -28098,17 +27962,7 @@ func frontCheckUnary(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
 		// Osty: /tmp/selfhost_merged.osty:11096:9
 		if inner != "Bool" && !(frontCheckIsInvalid(inner)) {
 			// Osty: /tmp/selfhost_merged.osty:11097:16
-			env.errors = func() int {
-				var _p2046 int = env.errors
-				var _rhs2047 int = 1
-				if _rhs2047 > 0 && _p2046 > math.MaxInt-_rhs2047 {
-					panic("integer overflow")
-				}
-				if _rhs2047 < 0 && _p2046 < math.MinInt-_rhs2047 {
-					panic("integer overflow")
-				}
-				return _p2046 + _rhs2047
-			}()
+			selfhostBumpError(env)
 			// Osty: /tmp/selfhost_merged.osty:11098:13
 			return "Invalid"
 		}
@@ -28125,17 +27979,7 @@ func frontCheckUnary(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
 		// Osty: /tmp/selfhost_merged.osty:11106:9
 		if !(frontCheckIsInvalid(inner)) {
 			// Osty: /tmp/selfhost_merged.osty:11107:16
-			env.errors = func() int {
-				var _p2048 int = env.errors
-				var _rhs2049 int = 1
-				if _rhs2049 > 0 && _p2048 > math.MaxInt-_rhs2049 {
-					panic("integer overflow")
-				}
-				if _rhs2049 < 0 && _p2048 < math.MinInt-_rhs2049 {
-					panic("integer overflow")
-				}
-				return _p2048 + _rhs2049
-			}()
+			selfhostBumpError(env)
 		}
 		// Osty: /tmp/selfhost_merged.osty:11109:9
 		return "Invalid"
@@ -28150,17 +27994,7 @@ func frontCheckUnary(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
 		// Osty: /tmp/selfhost_merged.osty:11115:9
 		if !(frontCheckIsInvalid(inner)) {
 			// Osty: /tmp/selfhost_merged.osty:11116:16
-			env.errors = func() int {
-				var _p2050 int = env.errors
-				var _rhs2051 int = 1
-				if _rhs2051 > 0 && _p2050 > math.MaxInt-_rhs2051 {
-					panic("integer overflow")
-				}
-				if _rhs2051 < 0 && _p2050 < math.MinInt-_rhs2051 {
-					panic("integer overflow")
-				}
-				return _p2050 + _rhs2051
-			}()
+			selfhostBumpError(env)
 		}
 	}
 	return "Invalid"
@@ -28182,17 +28016,7 @@ func frontCheckBinary(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
 			return "Bool"
 		}
 		// Osty: /tmp/selfhost_merged.osty:11129:12
-		env.errors = func() int {
-			var _p2052 int = env.errors
-			var _rhs2053 int = 1
-			if _rhs2053 > 0 && _p2052 > math.MaxInt-_rhs2053 {
-				panic("integer overflow")
-			}
-			if _rhs2053 < 0 && _p2052 < math.MinInt-_rhs2053 {
-				panic("integer overflow")
-			}
-			return _p2052 + _rhs2053
-		}()
+		selfhostBumpError(env)
 		// Osty: /tmp/selfhost_merged.osty:11130:9
 		return "Invalid"
 	}
@@ -28204,17 +28028,7 @@ func frontCheckBinary(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
 			return "Bool"
 		}
 		// Osty: /tmp/selfhost_merged.osty:11136:12
-		env.errors = func() int {
-			var _p2054 int = env.errors
-			var _rhs2055 int = 1
-			if _rhs2055 > 0 && _p2054 > math.MaxInt-_rhs2055 {
-				panic("integer overflow")
-			}
-			if _rhs2055 < 0 && _p2054 < math.MinInt-_rhs2055 {
-				panic("integer overflow")
-			}
-			return _p2054 + _rhs2055
-		}()
+		selfhostBumpError(env)
 		// Osty: /tmp/selfhost_merged.osty:11137:9
 		return "Invalid"
 	}
@@ -28226,17 +28040,7 @@ func frontCheckBinary(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
 			return "Bool"
 		}
 		// Osty: /tmp/selfhost_merged.osty:11143:12
-		env.errors = func() int {
-			var _p2056 int = env.errors
-			var _rhs2057 int = 1
-			if _rhs2057 > 0 && _p2056 > math.MaxInt-_rhs2057 {
-				panic("integer overflow")
-			}
-			if _rhs2057 < 0 && _p2056 < math.MinInt-_rhs2057 {
-				panic("integer overflow")
-			}
-			return _p2056 + _rhs2057
-		}()
+		selfhostBumpError(env)
 		// Osty: /tmp/selfhost_merged.osty:11144:9
 		return "Invalid"
 	}
@@ -28245,17 +28049,7 @@ func frontCheckBinary(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
 		// Osty: /tmp/selfhost_merged.osty:11147:9
 		if frontCheckTypeHead(left) != "Option" {
 			// Osty: /tmp/selfhost_merged.osty:11148:16
-			env.errors = func() int {
-				var _p2058 int = env.errors
-				var _rhs2059 int = 1
-				if _rhs2059 > 0 && _p2058 > math.MaxInt-_rhs2059 {
-					panic("integer overflow")
-				}
-				if _rhs2059 < 0 && _p2058 < math.MinInt-_rhs2059 {
-					panic("integer overflow")
-				}
-				return _p2058 + _rhs2059
-			}()
+			selfhostBumpError(env)
 			// Osty: /tmp/selfhost_merged.osty:11149:13
 			return "Invalid"
 		}
@@ -28280,17 +28074,7 @@ func frontCheckBinary(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
 			return left
 		}
 		// Osty: /tmp/selfhost_merged.osty:11162:12
-		env.errors = func() int {
-			var _p2060 int = env.errors
-			var _rhs2061 int = 1
-			if _rhs2061 > 0 && _p2060 > math.MaxInt-_rhs2061 {
-				panic("integer overflow")
-			}
-			if _rhs2061 < 0 && _p2060 < math.MinInt-_rhs2061 {
-				panic("integer overflow")
-			}
-			return _p2060 + _rhs2061
-		}()
+		selfhostBumpError(env)
 		// Osty: /tmp/selfhost_merged.osty:11163:9
 		return "Invalid"
 	}
@@ -28299,17 +28083,7 @@ func frontCheckBinary(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
 		// Osty: /tmp/selfhost_merged.osty:11166:9
 		if !(frontCheckIsNumeric(left)) || !(frontCheckIsNumeric(right)) {
 			// Osty: /tmp/selfhost_merged.osty:11167:16
-			env.errors = func() int {
-				var _p2062 int = env.errors
-				var _rhs2063 int = 1
-				if _rhs2063 > 0 && _p2062 > math.MaxInt-_rhs2063 {
-					panic("integer overflow")
-				}
-				if _rhs2063 < 0 && _p2062 < math.MinInt-_rhs2063 {
-					panic("integer overflow")
-				}
-				return _p2062 + _rhs2063
-			}()
+			selfhostBumpError(env)
 			// Osty: /tmp/selfhost_merged.osty:11168:13
 			return "Invalid"
 		}
@@ -28485,17 +28259,7 @@ func frontCheckRange(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
 		// Osty: /tmp/selfhost_merged.osty:11244:9
 		if !(frontCheckIsInteger(left)) {
 			// Osty: /tmp/selfhost_merged.osty:11245:16
-			env.errors = func() int {
-				var _p2070 int = env.errors
-				var _rhs2071 int = 1
-				if _rhs2071 > 0 && _p2070 > math.MaxInt-_rhs2071 {
-					panic("integer overflow")
-				}
-				if _rhs2071 < 0 && _p2070 < math.MinInt-_rhs2071 {
-					panic("integer overflow")
-				}
-				return _p2070 + _rhs2071
-			}()
+			selfhostBumpError(env)
 		}
 		// Osty: /tmp/selfhost_merged.osty:11247:9
 		elem = left
@@ -28508,17 +28272,7 @@ func frontCheckRange(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
 		// Osty: /tmp/selfhost_merged.osty:11251:9
 		if !(frontCheckIsInteger(right)) {
 			// Osty: /tmp/selfhost_merged.osty:11252:16
-			env.errors = func() int {
-				var _p2072 int = env.errors
-				var _rhs2073 int = 1
-				if _rhs2073 > 0 && _p2072 > math.MaxInt-_rhs2073 {
-					panic("integer overflow")
-				}
-				if _rhs2073 < 0 && _p2072 < math.MinInt-_rhs2073 {
-					panic("integer overflow")
-				}
-				return _p2072 + _rhs2073
-			}()
+			selfhostBumpError(env)
 		}
 		// Osty: /tmp/selfhost_merged.osty:11254:9
 		elem = frontCheckUnify(env, elem, right)
@@ -28550,17 +28304,7 @@ func frontCheckIfHint(file *AstFile, env *FrontCheckEnv, node *AstNode, hint str
 		// Osty: /tmp/selfhost_merged.osty:11270:9
 		if cond != "Bool" && !(frontCheckIsInvalid(cond)) {
 			// Osty: /tmp/selfhost_merged.osty:11271:16
-			env.errors = func() int {
-				var _p2074 int = env.errors
-				var _rhs2075 int = 1
-				if _rhs2075 > 0 && _p2074 > math.MaxInt-_rhs2075 {
-					panic("integer overflow")
-				}
-				if _rhs2075 < 0 && _p2074 < math.MinInt-_rhs2075 {
-					panic("integer overflow")
-				}
-				return _p2074 + _rhs2075
-			}()
+			selfhostBumpError(env)
 		}
 	}
 	// Osty: /tmp/selfhost_merged.osty:11274:5
@@ -28645,17 +28389,7 @@ func frontCheckCallHint(file *AstFile, env *FrontCheckEnv, callIdx int, node *As
 			return frontCheckBuiltinCall(file, env, callee.text, node.children)
 		}
 		// Osty: /tmp/selfhost_merged.osty:11317:12
-		env.errors = func() int {
-			var _p2076 int = env.errors
-			var _rhs2077 int = 1
-			if _rhs2077 > 0 && _p2076 > math.MaxInt-_rhs2077 {
-				panic("integer overflow")
-			}
-			if _rhs2077 < 0 && _p2076 < math.MinInt-_rhs2077 {
-				panic("integer overflow")
-			}
-			return _p2076 + _rhs2077
-		}()
+		selfhostBumpError(env)
 		// Osty: /tmp/selfhost_merged.osty:11318:9
 		return "Invalid"
 	}
@@ -28711,17 +28445,7 @@ func frontCheckCallHint(file *AstFile, env *FrontCheckEnv, callIdx int, node *As
 		// Osty: /tmp/selfhost_merged.osty:11343:9
 		if !(frontCheckIsInvalid(recvType)) {
 			// Osty: /tmp/selfhost_merged.osty:11344:16
-			env.errors = func() int {
-				var _p2078 int = env.errors
-				var _rhs2079 int = 1
-				if _rhs2079 > 0 && _p2078 > math.MaxInt-_rhs2079 {
-					panic("integer overflow")
-				}
-				if _rhs2079 < 0 && _p2078 < math.MinInt-_rhs2079 {
-					panic("integer overflow")
-				}
-				return _p2078 + _rhs2079
-			}()
+			selfhostBumpError(env)
 		}
 		// Osty: /tmp/selfhost_merged.osty:11346:9
 		return "Invalid"
@@ -28735,17 +28459,7 @@ func frontCheckCallHint(file *AstFile, env *FrontCheckEnv, callIdx int, node *As
 		return frontCheckCallFnType(file, env, fnType, node.children)
 	}
 	// Osty: /tmp/selfhost_merged.osty:11352:8
-	env.errors = func() int {
-		var _p2080 int = env.errors
-		var _rhs2081 int = 1
-		if _rhs2081 > 0 && _p2080 > math.MaxInt-_rhs2081 {
-			panic("integer overflow")
-		}
-		if _rhs2081 < 0 && _p2080 < math.MinInt-_rhs2081 {
-			panic("integer overflow")
-		}
-		return _p2080 + _rhs2081
-	}()
+	selfhostBumpError(env)
 	return "Invalid"
 }
 
@@ -28807,17 +28521,7 @@ func frontCheckBuiltinCall(file *AstFile, env *FrontCheckEnv, name string, args 
 		// Osty: /tmp/selfhost_merged.osty:11388:9
 		if frontCheckTypeHead(fnType) != "fn" && !(frontCheckIsInvalid(fnType)) {
 			// Osty: /tmp/selfhost_merged.osty:11389:16
-			env.errors = func() int {
-				var _p2082 int = env.errors
-				var _rhs2083 int = 1
-				if _rhs2083 > 0 && _p2082 > math.MaxInt-_rhs2083 {
-					panic("integer overflow")
-				}
-				if _rhs2083 < 0 && _p2082 < math.MinInt-_rhs2083 {
-					panic("integer overflow")
-				}
-				return _p2082 + _rhs2083
-			}()
+			selfhostBumpError(env)
 		}
 		// Osty: /tmp/selfhost_merged.osty:11391:9
 		return "ThreadHandle"
@@ -28843,31 +28547,11 @@ func frontCheckBuiltinCall(file *AstFile, env *FrontCheckEnv, name string, args 
 					elem = ret
 				} else if !(frontCheckIsAssignable(env, elem, ret)) && !(frontCheckIsAssignable(env, ret, elem)) {
 					// Osty: /tmp/selfhost_merged.osty:11402:24
-					env.errors = func() int {
-						var _p2084 int = env.errors
-						var _rhs2085 int = 1
-						if _rhs2085 > 0 && _p2084 > math.MaxInt-_rhs2085 {
-							panic("integer overflow")
-						}
-						if _rhs2085 < 0 && _p2084 < math.MinInt-_rhs2085 {
-							panic("integer overflow")
-						}
-						return _p2084 + _rhs2085
-					}()
+					selfhostBumpError(env)
 				}
 			} else if !(frontCheckIsInvalid(fnType)) {
 				// Osty: /tmp/selfhost_merged.osty:11405:20
-				env.errors = func() int {
-					var _p2086 int = env.errors
-					var _rhs2087 int = 1
-					if _rhs2087 > 0 && _p2086 > math.MaxInt-_rhs2087 {
-						panic("integer overflow")
-					}
-					if _rhs2087 < 0 && _p2086 < math.MinInt-_rhs2087 {
-						panic("integer overflow")
-					}
-					return _p2086 + _rhs2087
-				}()
+				selfhostBumpError(env)
 			}
 		}
 		// Osty: /tmp/selfhost_merged.osty:11408:9
@@ -28896,17 +28580,7 @@ func frontCheckBuiltinCall(file *AstFile, env *FrontCheckEnv, name string, args 
 		// Osty: /tmp/selfhost_merged.osty:11420:9
 		if !(frontCheckIsInvalid(valueType)) {
 			// Osty: /tmp/selfhost_merged.osty:11421:16
-			env.errors = func() int {
-				var _p2088 int = env.errors
-				var _rhs2089 int = 1
-				if _rhs2089 > 0 && _p2088 > math.MaxInt-_rhs2089 {
-					panic("integer overflow")
-				}
-				if _rhs2089 < 0 && _p2088 < math.MinInt-_rhs2089 {
-					panic("integer overflow")
-				}
-				return _p2088 + _rhs2089
-			}()
+			selfhostBumpError(env)
 		}
 	}
 	return "Invalid"
@@ -28962,17 +28636,7 @@ func frontCheckTurbofishCall(file *AstFile, env *FrontCheckEnv, callIdx int, cal
 			// Osty: /tmp/selfhost_merged.osty:11450:13
 			if frontCheckStringCount(typeArgs) != 1 {
 				// Osty: /tmp/selfhost_merged.osty:11451:20
-				env.errors = func() int {
-					var _p2090 int = env.errors
-					var _rhs2091 int = 1
-					if _rhs2091 > 0 && _p2090 > math.MaxInt-_rhs2091 {
-						panic("integer overflow")
-					}
-					if _rhs2091 < 0 && _p2090 < math.MinInt-_rhs2091 {
-						panic("integer overflow")
-					}
-					return _p2090 + _rhs2091
-				}()
+				selfhostBumpError(env)
 				// Osty: /tmp/selfhost_merged.osty:11452:17
 				return "Chan<Invalid>"
 			}
@@ -29012,17 +28676,7 @@ func frontCheckTurbofishCall(file *AstFile, env *FrontCheckEnv, callIdx int, cal
 		}
 	}
 	// Osty: /tmp/selfhost_merged.osty:11470:8
-	env.errors = func() int {
-		var _p2092 int = env.errors
-		var _rhs2093 int = 1
-		if _rhs2093 > 0 && _p2092 > math.MaxInt-_rhs2093 {
-			panic("integer overflow")
-		}
-		if _rhs2093 < 0 && _p2092 < math.MinInt-_rhs2093 {
-			panic("integer overflow")
-		}
-		return _p2092 + _rhs2093
-	}()
+	selfhostBumpError(env)
 	return "Invalid"
 }
 
@@ -29047,17 +28701,7 @@ func frontCheckExplicitSubsts(env *FrontCheckEnv, generics []string, typeArgs []
 	// Osty: /tmp/selfhost_merged.osty:11484:5
 	if frontCheckStringCount(generics) != frontCheckStringCount(typeArgs) {
 		// Osty: /tmp/selfhost_merged.osty:11485:12
-		env.errors = func() int {
-			var _p2094 int = env.errors
-			var _rhs2095 int = 1
-			if _rhs2095 > 0 && _p2094 > math.MaxInt-_rhs2095 {
-				panic("integer overflow")
-			}
-			if _rhs2095 < 0 && _p2094 < math.MinInt-_rhs2095 {
-				panic("integer overflow")
-			}
-			return _p2094 + _rhs2095
-		}()
+		selfhostBumpError(env)
 	}
 	// Osty: /tmp/selfhost_merged.osty:11487:5
 	i := 0
@@ -29143,17 +28787,7 @@ func frontCheckVariantCallWithSubsts(file *AstFile, env *FrontCheckEnv, variant 
 	// Osty: /tmp/selfhost_merged.osty:11521:5
 	if frontCheckIntCount(args) != frontCheckStringCount(variant.fieldTypes) {
 		// Osty: /tmp/selfhost_merged.osty:11522:12
-		env.errors = func() int {
-			var _p2100 int = env.errors
-			var _rhs2101 int = 1
-			if _rhs2101 > 0 && _p2100 > math.MaxInt-_rhs2101 {
-				panic("integer overflow")
-			}
-			if _rhs2101 < 0 && _p2100 < math.MinInt-_rhs2101 {
-				panic("integer overflow")
-			}
-			return _p2100 + _rhs2101
-		}()
+		selfhostBumpError(env)
 		// Osty: /tmp/selfhost_merged.osty:11523:9
 		return frontCheckGenericOwnerType(variant.owner, variant.generics, substs)
 	}
@@ -29239,17 +28873,7 @@ func frontCheckCallSig(file *AstFile, env *FrontCheckEnv, callIdx int, sig *Fron
 	// Osty: /tmp/selfhost_merged.osty:11556:5
 	if gotCount != wantCount {
 		// Osty: /tmp/selfhost_merged.osty:11557:12
-		env.errors = func() int {
-			var _p2106 int = env.errors
-			var _rhs2107 int = 1
-			if _rhs2107 > 0 && _p2106 > math.MaxInt-_rhs2107 {
-				panic("integer overflow")
-			}
-			if _rhs2107 < 0 && _p2106 < math.MinInt-_rhs2107 {
-				panic("integer overflow")
-			}
-			return _p2106 + _rhs2107
-		}()
+		selfhostBumpError(env)
 	}
 	// Osty: /tmp/selfhost_merged.osty:11559:5
 	i := 0
@@ -29328,17 +28952,7 @@ func frontCheckCallFnType(file *AstFile, env *FrontCheckEnv, fnType string, args
 	// Osty: /tmp/selfhost_merged.osty:11586:5
 	if frontCheckStringCount(params) != frontCheckIntCount(args) {
 		// Osty: /tmp/selfhost_merged.osty:11587:12
-		env.errors = func() int {
-			var _p2112 int = env.errors
-			var _rhs2113 int = 1
-			if _rhs2113 > 0 && _p2112 > math.MaxInt-_rhs2113 {
-				panic("integer overflow")
-			}
-			if _rhs2113 < 0 && _p2112 < math.MinInt-_rhs2113 {
-				panic("integer overflow")
-			}
-			return _p2112 + _rhs2113
-		}()
+		selfhostBumpError(env)
 	}
 	// Osty: /tmp/selfhost_merged.osty:11589:5
 	i := 0
@@ -29526,17 +29140,7 @@ func frontCheckAddSubst(env *FrontCheckEnv, substs []*FrontTypeSubst, name strin
 	// Osty: /tmp/selfhost_merged.osty:11660:5
 	if !(frontCheckIsAssignable(env, existing, typeName)) && !(frontCheckIsAssignable(env, typeName, existing)) {
 		// Osty: /tmp/selfhost_merged.osty:11661:12
-		env.errors = func() int {
-			var _p2124 int = env.errors
-			var _rhs2125 int = 1
-			if _rhs2125 > 0 && _p2124 > math.MaxInt-_rhs2125 {
-				panic("integer overflow")
-			}
-			if _rhs2125 < 0 && _p2124 < math.MinInt-_rhs2125 {
-				panic("integer overflow")
-			}
-			return _p2124 + _rhs2125
-		}()
+		selfhostBumpError(env)
 	}
 	return out
 }
@@ -29715,17 +29319,7 @@ func frontCheckField(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
 	// Osty: /tmp/selfhost_merged.osty:11757:5
 	if !(frontCheckIsInvalid(recvType)) {
 		// Osty: /tmp/selfhost_merged.osty:11758:12
-		env.errors = func() int {
-			var _p2126 int = env.errors
-			var _rhs2127 int = 1
-			if _rhs2127 > 0 && _p2126 > math.MaxInt-_rhs2127 {
-				panic("integer overflow")
-			}
-			if _rhs2127 < 0 && _p2126 < math.MinInt-_rhs2127 {
-				panic("integer overflow")
-			}
-			return _p2126 + _rhs2127
-		}()
+		selfhostBumpError(env)
 	}
 	return "Invalid"
 }
@@ -29772,17 +29366,7 @@ func frontCheckIndex(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
 	// Osty: /tmp/selfhost_merged.osty:11783:5
 	if !(frontCheckIsInvalid(objectType)) {
 		// Osty: /tmp/selfhost_merged.osty:11784:12
-		env.errors = func() int {
-			var _p2128 int = env.errors
-			var _rhs2129 int = 1
-			if _rhs2129 > 0 && _p2128 > math.MaxInt-_rhs2129 {
-				panic("integer overflow")
-			}
-			if _rhs2129 < 0 && _p2128 < math.MinInt-_rhs2129 {
-				panic("integer overflow")
-			}
-			return _p2128 + _rhs2129
-		}()
+		selfhostBumpError(env)
 	}
 	return "Invalid"
 }
@@ -29806,17 +29390,7 @@ func frontCheckStructLitHint(file *AstFile, env *FrontCheckEnv, node *AstNode, h
 	// Osty: /tmp/selfhost_merged.osty:11797:5
 	if typeSig.name == "" {
 		// Osty: /tmp/selfhost_merged.osty:11798:12
-		env.errors = func() int {
-			var _p2130 int = env.errors
-			var _rhs2131 int = 1
-			if _rhs2131 > 0 && _p2130 > math.MaxInt-_rhs2131 {
-				panic("integer overflow")
-			}
-			if _rhs2131 < 0 && _p2130 < math.MinInt-_rhs2131 {
-				panic("integer overflow")
-			}
-			return _p2130 + _rhs2131
-		}()
+		selfhostBumpError(env)
 		// Osty: /tmp/selfhost_merged.osty:11799:9
 		return "Invalid"
 	}
@@ -29852,17 +29426,7 @@ func frontCheckStructLitHint(file *AstFile, env *FrontCheckEnv, node *AstNode, h
 		// Osty: /tmp/selfhost_merged.osty:11815:9
 		if frontCheckStructLitFieldCount(file, node, fieldNode.text) > 1 {
 			// Osty: /tmp/selfhost_merged.osty:11816:16
-			env.errors = func() int {
-				var _p2132 int = env.errors
-				var _rhs2133 int = 1
-				if _rhs2133 > 0 && _p2132 > math.MaxInt-_rhs2133 {
-					panic("integer overflow")
-				}
-				if _rhs2133 < 0 && _p2132 < math.MinInt-_rhs2133 {
-					panic("integer overflow")
-				}
-				return _p2132 + _rhs2133
-			}()
+			selfhostBumpError(env)
 		}
 		// Osty: /tmp/selfhost_merged.osty:11818:9
 		field := frontCheckFieldLookup(env, typeName, fieldNode.text)
@@ -29870,17 +29434,7 @@ func frontCheckStructLitHint(file *AstFile, env *FrontCheckEnv, node *AstNode, h
 		// Osty: /tmp/selfhost_merged.osty:11819:9
 		if field.name == "" {
 			// Osty: /tmp/selfhost_merged.osty:11820:16
-			env.errors = func() int {
-				var _p2134 int = env.errors
-				var _rhs2135 int = 1
-				if _rhs2135 > 0 && _p2134 > math.MaxInt-_rhs2135 {
-					panic("integer overflow")
-				}
-				if _rhs2135 < 0 && _p2134 < math.MinInt-_rhs2135 {
-					panic("integer overflow")
-				}
-				return _p2134 + _rhs2135
-			}()
+			selfhostBumpError(env)
 		} else {
 			// Osty: /tmp/selfhost_merged.osty:11822:13
 			valueType := "Invalid"
@@ -29907,17 +29461,7 @@ func frontCheckStructLitHint(file *AstFile, env *FrontCheckEnv, node *AstNode, h
 		// Osty: /tmp/selfhost_merged.osty:11834:9
 		if field.owner == typeName && !(field.hasDefault) && !(frontCheckStructLitHasField(file, node, field.name)) && node.right < 0 {
 			// Osty: /tmp/selfhost_merged.osty:11835:16
-			env.errors = func() int {
-				var _p2136 int = env.errors
-				var _rhs2137 int = 1
-				if _rhs2137 > 0 && _p2136 > math.MaxInt-_rhs2137 {
-					panic("integer overflow")
-				}
-				if _rhs2137 < 0 && _p2136 < math.MinInt-_rhs2137 {
-					panic("integer overflow")
-				}
-				return _p2136 + _rhs2137
-			}()
+			selfhostBumpError(env)
 		}
 	}
 	return frontCheckGenericOwnerType(typeName, typeSig.generics, substs)
@@ -30005,17 +29549,7 @@ func frontCheckMatchHint(file *AstFile, env *FrontCheckEnv, node *AstNode, hint 
 			// Osty: /tmp/selfhost_merged.osty:11877:13
 			if guard != "Bool" && !(frontCheckIsInvalid(guard)) {
 				// Osty: /tmp/selfhost_merged.osty:11878:20
-				env.errors = func() int {
-					var _p2140 int = env.errors
-					var _rhs2141 int = 1
-					if _rhs2141 > 0 && _p2140 > math.MaxInt-_rhs2141 {
-						panic("integer overflow")
-					}
-					if _rhs2141 < 0 && _p2140 < math.MinInt-_rhs2141 {
-						panic("integer overflow")
-					}
-					return _p2140 + _rhs2141
-				}()
+				selfhostBumpError(env)
 			}
 		}
 		// Osty: /tmp/selfhost_merged.osty:11881:9
@@ -30054,17 +29588,7 @@ func frontCheckCheckMatchExhaustive(file *AstFile, env *FrontCheckEnv, node *Ast
 	// Osty: /tmp/selfhost_merged.osty:11895:5
 	if arms == 0 {
 		// Osty: /tmp/selfhost_merged.osty:11896:12
-		env.errors = func() int {
-			var _p2144 int = env.errors
-			var _rhs2145 int = 1
-			if _rhs2145 > 0 && _p2144 > math.MaxInt-_rhs2145 {
-				panic("integer overflow")
-			}
-			if _rhs2145 < 0 && _p2144 < math.MinInt-_rhs2145 {
-				panic("integer overflow")
-			}
-			return _p2144 + _rhs2145
-		}()
+		selfhostBumpError(env)
 		// Osty: /tmp/selfhost_merged.osty:11897:9
 		return
 	}
@@ -30086,17 +29610,7 @@ func frontCheckCheckMatchExhaustive(file *AstFile, env *FrontCheckEnv, node *Ast
 		// Osty: /tmp/selfhost_merged.osty:11906:9
 		if !(frontCheckMatchCoversBool(file, node, true)) || !(frontCheckMatchCoversBool(file, node, false)) {
 			// Osty: /tmp/selfhost_merged.osty:11907:16
-			env.errors = func() int {
-				var _p2146 int = env.errors
-				var _rhs2147 int = 1
-				if _rhs2147 > 0 && _p2146 > math.MaxInt-_rhs2147 {
-					panic("integer overflow")
-				}
-				if _rhs2147 < 0 && _p2146 < math.MinInt-_rhs2147 {
-					panic("integer overflow")
-				}
-				return _p2146 + _rhs2147
-			}()
+			selfhostBumpError(env)
 		}
 		// Osty: /tmp/selfhost_merged.osty:11909:9
 		return
@@ -30106,17 +29620,7 @@ func frontCheckCheckMatchExhaustive(file *AstFile, env *FrontCheckEnv, node *Ast
 		// Osty: /tmp/selfhost_merged.osty:11912:9
 		if !(frontCheckMatchCoversBoolTuple(file, node, scrutinee)) {
 			// Osty: /tmp/selfhost_merged.osty:11913:16
-			env.errors = func() int {
-				var _p2148 int = env.errors
-				var _rhs2149 int = 1
-				if _rhs2149 > 0 && _p2148 > math.MaxInt-_rhs2149 {
-					panic("integer overflow")
-				}
-				if _rhs2149 < 0 && _p2148 < math.MinInt-_rhs2149 {
-					panic("integer overflow")
-				}
-				return _p2148 + _rhs2149
-			}()
+			selfhostBumpError(env)
 		}
 		// Osty: /tmp/selfhost_merged.osty:11915:9
 		return
@@ -30126,17 +29630,7 @@ func frontCheckCheckMatchExhaustive(file *AstFile, env *FrontCheckEnv, node *Ast
 		// Osty: /tmp/selfhost_merged.osty:11918:9
 		if !(frontCheckMatchCoversStruct(file, env, node, owner)) {
 			// Osty: /tmp/selfhost_merged.osty:11919:16
-			env.errors = func() int {
-				var _p2150 int = env.errors
-				var _rhs2151 int = 1
-				if _rhs2151 > 0 && _p2150 > math.MaxInt-_rhs2151 {
-					panic("integer overflow")
-				}
-				if _rhs2151 < 0 && _p2150 < math.MinInt-_rhs2151 {
-					panic("integer overflow")
-				}
-				return _p2150 + _rhs2151
-			}()
+			selfhostBumpError(env)
 		}
 		// Osty: /tmp/selfhost_merged.osty:11921:9
 		return
@@ -30173,17 +29667,7 @@ func frontCheckCheckMatchExhaustive(file *AstFile, env *FrontCheckEnv, node *Ast
 	// Osty: /tmp/selfhost_merged.osty:11933:5
 	if variantCount > 0 && missing {
 		// Osty: /tmp/selfhost_merged.osty:11934:12
-		env.errors = func() int {
-			var _p2154 int = env.errors
-			var _rhs2155 int = 1
-			if _rhs2155 > 0 && _p2154 > math.MaxInt-_rhs2155 {
-				panic("integer overflow")
-			}
-			if _rhs2155 < 0 && _p2154 < math.MinInt-_rhs2155 {
-				panic("integer overflow")
-			}
-			return _p2154 + _rhs2155
-		}()
+		selfhostBumpError(env)
 	}
 }
 
@@ -30213,17 +29697,7 @@ func frontCheckCheckMatchReachability(file *AstFile, env *FrontCheckEnv, node *A
 			// Osty: /tmp/selfhost_merged.osty:11948:13
 			if frontCheckFirstChild(prevArm) < 0 && frontCheckPatternCoversPattern(file, env, prevArm.left, arm.left, scrutineeType) {
 				// Osty: /tmp/selfhost_merged.osty:11949:20
-				env.errors = func() int {
-					var _p2156 int = env.errors
-					var _rhs2157 int = 1
-					if _rhs2157 > 0 && _p2156 > math.MaxInt-_rhs2157 {
-						panic("integer overflow")
-					}
-					if _rhs2157 < 0 && _p2156 < math.MinInt-_rhs2157 {
-						panic("integer overflow")
-					}
-					return _p2156 + _rhs2157
-				}()
+				selfhostBumpError(env)
 				// Osty: /tmp/selfhost_merged.osty:11950:17
 				break
 			}
@@ -31981,17 +31455,7 @@ func frontCheckPatternCompatible(file *AstFile, env *FrontCheckEnv, patIdx int, 
 		elems := frontCheckTupleElems(scrutineeResolved)
 		_ = elems
 		if frontCheckStringCount(elems) != frontCheckIntCount(pat.children) {
-			env.errors = func() int {
-				var _p2208 int = env.errors
-				var _rhs2209 int = 1
-				if _rhs2209 > 0 && _p2208 > math.MaxInt-_rhs2209 {
-					panic("integer overflow")
-				}
-				if _rhs2209 < 0 && _p2208 < math.MinInt-_rhs2209 {
-					panic("integer overflow")
-				}
-				return _p2208 + _rhs2209
-			}()
+			selfhostBumpError(env)
 		}
 		i := 0
 		_ = i
@@ -32042,17 +31506,7 @@ func frontCheckPatternCompatible(file *AstFile, env *FrontCheckEnv, patIdx int, 
 		// Osty: /tmp/selfhost_merged.osty:12829:9
 		if !(frontCheckIsAssignable(env, scrutineeResolved, litType)) && !(frontCheckIsAssignable(env, litType, scrutineeResolved)) {
 			// Osty: /tmp/selfhost_merged.osty:12830:16
-			env.errors = func() int {
-				var _p2200 int = env.errors
-				var _rhs2201 int = 1
-				if _rhs2201 > 0 && _p2200 > math.MaxInt-_rhs2201 {
-					panic("integer overflow")
-				}
-				if _rhs2201 < 0 && _p2200 < math.MinInt-_rhs2201 {
-					panic("integer overflow")
-				}
-				return _p2200 + _rhs2201
-			}()
+			selfhostBumpError(env)
 		}
 		// Osty: /tmp/selfhost_merged.osty:12832:9
 		return
@@ -32068,34 +31522,14 @@ func frontCheckPatternCompatible(file *AstFile, env *FrontCheckEnv, patIdx int, 
 		// Osty: /tmp/selfhost_merged.osty:12837:9
 		if !(frontCheckIsNumeric(litType)) {
 			// Osty: /tmp/selfhost_merged.osty:12838:16
-			env.errors = func() int {
-				var _p2202 int = env.errors
-				var _rhs2203 int = 1
-				if _rhs2203 > 0 && _p2202 > math.MaxInt-_rhs2203 {
-					panic("integer overflow")
-				}
-				if _rhs2203 < 0 && _p2202 < math.MinInt-_rhs2203 {
-					panic("integer overflow")
-				}
-				return _p2202 + _rhs2203
-			}()
+			selfhostBumpError(env)
 			// Osty: /tmp/selfhost_merged.osty:12839:13
 			return
 		}
 		// Osty: /tmp/selfhost_merged.osty:12841:9
 		if !(frontCheckIsAssignable(env, scrutineeResolved, litType)) && !(frontCheckIsAssignable(env, litType, scrutineeResolved)) {
 			// Osty: /tmp/selfhost_merged.osty:12842:16
-			env.errors = func() int {
-				var _p2204 int = env.errors
-				var _rhs2205 int = 1
-				if _rhs2205 > 0 && _p2204 > math.MaxInt-_rhs2205 {
-					panic("integer overflow")
-				}
-				if _rhs2205 < 0 && _p2204 < math.MinInt-_rhs2205 {
-					panic("integer overflow")
-				}
-				return _p2204 + _rhs2205
-			}()
+			selfhostBumpError(env)
 		}
 		// Osty: /tmp/selfhost_merged.osty:12844:9
 		return
@@ -32105,17 +31539,7 @@ func frontCheckPatternCompatible(file *AstFile, env *FrontCheckEnv, patIdx int, 
 		// Osty: /tmp/selfhost_merged.osty:12847:9
 		if !(frontCheckIsOrdered(scrutineeResolved)) {
 			// Osty: /tmp/selfhost_merged.osty:12848:16
-			env.errors = func() int {
-				var _p2206 int = env.errors
-				var _rhs2207 int = 1
-				if _rhs2207 > 0 && _p2206 > math.MaxInt-_rhs2207 {
-					panic("integer overflow")
-				}
-				if _rhs2207 < 0 && _p2206 < math.MinInt-_rhs2207 {
-					panic("integer overflow")
-				}
-				return _p2206 + _rhs2207
-			}()
+			selfhostBumpError(env)
 			// Osty: /tmp/selfhost_merged.osty:12849:13
 			return
 		}
@@ -32137,17 +31561,7 @@ func frontCheckPatternCompatible(file *AstFile, env *FrontCheckEnv, patIdx int, 
 		// Osty: /tmp/selfhost_merged.osty:12859:9
 		if frontCheckStringCount(elems) != frontCheckIntCount(pat.children) {
 			// Osty: /tmp/selfhost_merged.osty:12860:16
-			env.errors = func() int {
-				var _p2208 int = env.errors
-				var _rhs2209 int = 1
-				if _rhs2209 > 0 && _p2208 > math.MaxInt-_rhs2209 {
-					panic("integer overflow")
-				}
-				if _rhs2209 < 0 && _p2208 < math.MinInt-_rhs2209 {
-					panic("integer overflow")
-				}
-				return _p2208 + _rhs2209
-			}()
+			selfhostBumpError(env)
 		}
 		// Osty: /tmp/selfhost_merged.osty:12862:9
 		i := 0
@@ -32180,17 +31594,7 @@ func frontCheckPatternCompatible(file *AstFile, env *FrontCheckEnv, patIdx int, 
 		// Osty: /tmp/selfhost_merged.osty:12871:9
 		if variant.name == "" || frontCheckTypeHead(scrutineeResolved) != variant.owner {
 			// Osty: /tmp/selfhost_merged.osty:12872:16
-			env.errors = func() int {
-				var _p2212 int = env.errors
-				var _rhs2213 int = 1
-				if _rhs2213 > 0 && _p2212 > math.MaxInt-_rhs2213 {
-					panic("integer overflow")
-				}
-				if _rhs2213 < 0 && _p2212 < math.MinInt-_rhs2213 {
-					panic("integer overflow")
-				}
-				return _p2212 + _rhs2213
-			}()
+			selfhostBumpError(env)
 			// Osty: /tmp/selfhost_merged.osty:12873:13
 			return
 		}
@@ -32228,17 +31632,7 @@ func frontCheckPatternCompatible(file *AstFile, env *FrontCheckEnv, patIdx int, 
 		// Osty: /tmp/selfhost_merged.osty:12885:9
 		if frontCheckTypeHead(scrutineeResolved) != structName {
 			// Osty: /tmp/selfhost_merged.osty:12886:16
-			env.errors = func() int {
-				var _p2216 int = env.errors
-				var _rhs2217 int = 1
-				if _rhs2217 > 0 && _p2216 > math.MaxInt-_rhs2217 {
-					panic("integer overflow")
-				}
-				if _rhs2217 < 0 && _p2216 < math.MinInt-_rhs2217 {
-					panic("integer overflow")
-				}
-				return _p2216 + _rhs2217
-			}()
+			selfhostBumpError(env)
 			// Osty: /tmp/selfhost_merged.osty:12887:13
 			return
 		}
@@ -32256,17 +31650,7 @@ func frontCheckPatternCompatible(file *AstFile, env *FrontCheckEnv, patIdx int, 
 			// Osty: /tmp/selfhost_merged.osty:12893:13
 			if field.name == "" {
 				// Osty: /tmp/selfhost_merged.osty:12894:20
-				env.errors = func() int {
-					var _p2218 int = env.errors
-					var _rhs2219 int = 1
-					if _rhs2219 > 0 && _p2218 > math.MaxInt-_rhs2219 {
-						panic("integer overflow")
-					}
-					if _rhs2219 < 0 && _p2218 < math.MinInt-_rhs2219 {
-						panic("integer overflow")
-					}
-					return _p2218 + _rhs2219
-				}()
+				selfhostBumpError(env)
 			} else {
 				// Osty: /tmp/selfhost_merged.osty:12896:17
 				frontCheckPatternCompatible(file, env, fieldPat.left, frontCheckSubstitute(field.typeName, substs))
@@ -32306,17 +31690,7 @@ func frontCheckPatternCompatible(file *AstFile, env *FrontCheckEnv, patIdx int, 
 		// Osty: /tmp/selfhost_merged.osty:12914:9
 		if !(frontCheckBindingsAgree(env, leftBindings, rightBindings)) {
 			// Osty: /tmp/selfhost_merged.osty:12915:16
-			env.errors = func() int {
-				var _p2220 int = env.errors
-				var _rhs2221 int = 1
-				if _rhs2221 > 0 && _p2220 > math.MaxInt-_rhs2221 {
-					panic("integer overflow")
-				}
-				if _rhs2221 < 0 && _p2220 < math.MinInt-_rhs2221 {
-					panic("integer overflow")
-				}
-				return _p2220 + _rhs2221
-			}()
+			selfhostBumpError(env)
 			// Osty: /tmp/selfhost_merged.osty:12916:13
 			return
 		}
@@ -32443,17 +31817,7 @@ func frontCheckClosure(file *AstFile, env *FrontCheckEnv, node *AstNode, paramHi
 			// Osty: /tmp/selfhost_merged.osty:12979:13
 			if !(frontCheckPatternIrrefutable(file, param.left)) {
 				// Osty: /tmp/selfhost_merged.osty:12980:20
-				env.errors = func() int {
-					var _p2224 int = env.errors
-					var _rhs2225 int = 1
-					if _rhs2225 > 0 && _p2224 > math.MaxInt-_rhs2225 {
-						panic("integer overflow")
-					}
-					if _rhs2225 < 0 && _p2224 < math.MinInt-_rhs2225 {
-						panic("integer overflow")
-					}
-					return _p2224 + _rhs2225
-				}()
+				selfhostBumpError(env)
 			}
 			// Osty: /tmp/selfhost_merged.osty:12982:13
 			frontCheckBindPattern(file, env, param.left, paramType, true)
@@ -32711,17 +32075,7 @@ func frontCheckQuestion(file *AstFile, env *FrontCheckEnv, node *AstNode) string
 		// Osty: /tmp/selfhost_merged.osty:13088:9
 		if returnHead != "Option" && !(frontCheckIsInvalid(env.returnType)) {
 			// Osty: /tmp/selfhost_merged.osty:13089:16
-			env.errors = func() int {
-				var _p2240 int = env.errors
-				var _rhs2241 int = 1
-				if _rhs2241 > 0 && _p2240 > math.MaxInt-_rhs2241 {
-					panic("integer overflow")
-				}
-				if _rhs2241 < 0 && _p2240 < math.MinInt-_rhs2241 {
-					panic("integer overflow")
-				}
-				return _p2240 + _rhs2241
-			}()
+			selfhostBumpError(env)
 		}
 		// Osty: /tmp/selfhost_merged.osty:13091:9
 		return frontCheckGenericArgAt(inner, 0)
@@ -32731,17 +32085,7 @@ func frontCheckQuestion(file *AstFile, env *FrontCheckEnv, node *AstNode) string
 		// Osty: /tmp/selfhost_merged.osty:13094:9
 		if returnHead != "Result" && !(frontCheckIsInvalid(env.returnType)) {
 			// Osty: /tmp/selfhost_merged.osty:13095:16
-			env.errors = func() int {
-				var _p2242 int = env.errors
-				var _rhs2243 int = 1
-				if _rhs2243 > 0 && _p2242 > math.MaxInt-_rhs2243 {
-					panic("integer overflow")
-				}
-				if _rhs2243 < 0 && _p2242 < math.MinInt-_rhs2243 {
-					panic("integer overflow")
-				}
-				return _p2242 + _rhs2243
-			}()
+			selfhostBumpError(env)
 		} else if returnHead == "Result" {
 			// Osty: /tmp/selfhost_merged.osty:13097:13
 			frontCheckExpectAssignable(env, frontCheckGenericArgAt(returnType, 1), frontCheckGenericArgAt(inner, 1))
@@ -32752,17 +32096,7 @@ func frontCheckQuestion(file *AstFile, env *FrontCheckEnv, node *AstNode) string
 	// Osty: /tmp/selfhost_merged.osty:13101:5
 	if !(frontCheckIsInvalid(inner)) {
 		// Osty: /tmp/selfhost_merged.osty:13102:12
-		env.errors = func() int {
-			var _p2244 int = env.errors
-			var _rhs2245 int = 1
-			if _rhs2245 > 0 && _p2244 > math.MaxInt-_rhs2245 {
-				panic("integer overflow")
-			}
-			if _rhs2245 < 0 && _p2244 < math.MinInt-_rhs2245 {
-				panic("integer overflow")
-			}
-			return _p2244 + _rhs2245
-		}()
+		selfhostBumpError(env)
 	}
 	return "Invalid"
 }
@@ -33253,17 +32587,7 @@ func frontCheckExpectArgCount(env *FrontCheckEnv, args []int, want int) {
 	// Osty: /tmp/selfhost_merged.osty:13331:5
 	if frontCheckIntCount(args) != want {
 		// Osty: /tmp/selfhost_merged.osty:13332:12
-		env.errors = func() int {
-			var _p2246 int = env.errors
-			var _rhs2247 int = 1
-			if _rhs2247 > 0 && _p2246 > math.MaxInt-_rhs2247 {
-				panic("integer overflow")
-			}
-			if _rhs2247 < 0 && _p2246 < math.MinInt-_rhs2247 {
-				panic("integer overflow")
-			}
-			return _p2246 + _rhs2247
-		}()
+		selfhostBumpError(env)
 	}
 }
 
@@ -33275,17 +32599,7 @@ func frontCheckRequireMutableReceiver(file *AstFile, env *FrontCheckEnv, callee 
 	// Osty: /tmp/selfhost_merged.osty:13338:5
 	if ostyEqual(left.kind, AstNodeKind(&AstNodeKind_AstNIdent{})) && !(frontCheckLookupMutable(env, left.text)) {
 		// Osty: /tmp/selfhost_merged.osty:13339:12
-		env.errors = func() int {
-			var _p2248 int = env.errors
-			var _rhs2249 int = 1
-			if _rhs2249 > 0 && _p2248 > math.MaxInt-_rhs2249 {
-				panic("integer overflow")
-			}
-			if _rhs2249 < 0 && _p2248 < math.MinInt-_rhs2249 {
-				panic("integer overflow")
-			}
-			return _p2248 + _rhs2249
-		}()
+		selfhostBumpError(env)
 	}
 }
 
