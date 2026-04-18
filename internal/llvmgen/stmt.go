@@ -787,7 +787,8 @@ func (g *generator) emitTestingCompare(call *ast.CallExpr, op token.Kind, name s
 	if err != nil {
 		return err
 	}
-	cond, err := g.emitCompare(op, left, right)
+	isString := g.staticExprIsString(call.Args[0].Value) || g.staticExprIsString(call.Args[1].Value)
+	cond, err := g.emitCompare(op, left, right, isString)
 	if err != nil {
 		return err
 	}
