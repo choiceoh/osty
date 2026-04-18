@@ -29,6 +29,10 @@ fn testIsDeferredGenCheckDiagRejectsUnrelatedMessage() {
     testing.assert(!(isDeferredGenCheckDiag("error", "")))
 }
 
+fn testIsDeferredGenCheckDiagRejectsEmptySeverity() {
+    testing.assert(!(isDeferredGenCheckDiag("", "type checking unavailable for x")))
+}
+
 fn testScaffoldExitCodeEmptyIsZero() {
     testing.assertEq(scaffoldExitCode(""), 0)
 }
