@@ -29343,6 +29343,20 @@ func frontCheckIndex(file *AstFile, env *FrontCheckEnv, node *AstNode) string {
 	// Osty: /tmp/selfhost_merged.osty:11766:5
 	head := frontCheckTypeHead(objectType)
 	_ = head
+	// Range-based slicing: `container[start..end]`. Returns a slice of the
+	// same container shape. The bootstrapped table only supported scalar
+	// integer indexing, so every `s[0..3]` / `list[0..n]` call sites
+	// spent an error bump on `Int <- Range<...>` during assignability
+	// checking, which was the single biggest cluster left in the tail.
+	if frontCheckTypeHead(indexType) == "Range" {
+		inner := frontCheckGenericArgAt(indexType, 0)
+		if inner != "" && !frontCheckIsInteger(inner) {
+			selfhostBumpErrorWithDetail(env, fmt.Sprintf("slice-index non-integer: %s", inner))
+		}
+		if head == "List" || objectType == "String" || objectType == "Bytes" {
+			return objectType
+		}
+	}
 	// Osty: /tmp/selfhost_merged.osty:11767:5
 	if head == "List" || head == "Range" {
 		// Osty: /tmp/selfhost_merged.osty:11768:9
