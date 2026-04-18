@@ -91,6 +91,28 @@ pub struct List<T> {
         }
         out
     }
+    pub fn take(self, n: Int) -> List<T> {
+        let mut out: List<T> = []
+        let len = self.len()
+        let limit = if n <= 0 { 0 } else if n < len { n } else { len }
+        let mut i = 0
+        for i < limit {
+            out.push(self[i])
+            i = i + 1
+        }
+        out
+    }
+    pub fn drop(self, n: Int) -> List<T> {
+        let mut out: List<T> = []
+        let len = self.len()
+        let start = if n <= 0 { 0 } else if n > len { len } else { n }
+        let mut i = start
+        for i < len {
+            out.push(self[i])
+            i = i + 1
+        }
+        out
+    }
     pub fn appended(self, item: T) -> List<T> {
         let mut out: List<T> = []
         for value in self {
