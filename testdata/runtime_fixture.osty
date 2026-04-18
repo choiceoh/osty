@@ -1,0 +1,131 @@
+// testdata/runtime_fixture.osty — a realistic §19 runtime sublanguage
+// sample file. Exercises every piece the GC self-hosting front-end
+// spike series (PRs #284–#322) delivered, in the shape a real
+// `toolchain/runtime/*.osty` source would have.
+//
+// This file is NOT part of any compiled build — it lives as a test
+// fixture that parser + resolver + privilege gate (privileged=true) +
+// pod shape checker + no_alloc walker all accept end-to-end.
+
+use std.runtime.raw
+
+// ---------------------------------------------------------------
+// Pod structs — LANG_SPEC §19.4.
+//
+// `Header` models the GC object header currently in
+// internal/backend/runtime/osty_runtime.c (osty_gc_header). The
+// runtime's linked-list traversal walks `next` — exactly the
+// `RawPtr`-is-Pod footgun documented in §19.4.
+// ---------------------------------------------------------------
+
+#[pod]
+#[repr(c)]
+pub struct Header {
+    pub next: RawPtr,
+    pub prev: RawPtr,
+    pub kind: Int8,
+    pub mark: Int8,
+    pub size: Int32,
+}
+
+// A payload table slot. Uses `Option<RawPtr>` for the "maybe-null"
+// pointer representation §19.4 accepts as Pod.
+#[pod]
+#[repr(c)]
+pub struct Slot {
+    pub payload: Option<RawPtr>,
+    pub tag: Int32,
+}
+
+// Generic Pod cell — §19.4 rule 3 requires the `T: Pod` bound.
+#[pod]
+#[repr(c)]
+pub struct Cell<T: Pod> {
+    pub value: T,
+    pub flag: Int8,
+}
+
+// Tuple of Pod is Pod (§19.4 rule 4).
+#[pod]
+#[repr(c)]
+pub struct Pair {
+    pub coords: (Int32, Int32),
+}
+
+// ---------------------------------------------------------------
+// Exported C-ABI runtime entry points — LANG_SPEC §19.6 canonical
+// stacking. Matches the existing `osty.gc.*_v1` ABI so a future
+// backend can replace C-implemented symbols with these.
+// ---------------------------------------------------------------
+
+#[export("osty.gc.alloc_v1")]
+#[c_abi]
+#[no_alloc]
+pub fn alloc_v1(bytes: Int, kind: Int) -> RawPtr {
+    let p = raw.alloc(bytes, 8)
+    if raw.bits(p) != 0 {
+        raw.zero(p, bytes)
+    }
+    p
+}
+
+#[export("osty.gc.free_v1")]
+#[c_abi]
+#[no_alloc]
+pub fn free_v1(p: RawPtr) {
+    raw.free(p)
+}
+
+// Pod-only write barrier. The generic parameter has a `T: Pod` bound
+// per §19.4 so the underlying `raw.write::<T>` constraint is satisfied.
+#[no_alloc]
+pub fn store_pod<T: Pod>(p: RawPtr, v: T) {
+    raw.write::<T>(p, v)
+}
+
+#[no_alloc]
+pub fn load_pod<T: Pod>(p: RawPtr) -> T {
+    raw.read::<T>(p)
+}
+
+// Free-list walker — exercises the `RawPtr` linked-list pattern the
+// runtime uses today. `read::<Header>(p)` returns a Pod value by
+// reading `sizeOf::<Header>()` bytes at `p` (§19.5, §19.7).
+#[no_alloc]
+pub fn walk_from(start: RawPtr) -> Int {
+    let mut cur = start
+    let mut count = 0
+    for i in 0..1000 {
+        if raw.bits(cur) == 0 {
+            return count
+        }
+        let h = raw.read::<Header>(cur)
+        cur = h.next
+        count = count + 1
+    }
+    count
+}
+
+// ---------------------------------------------------------------
+// Size helpers — §19.5 sizeOf / alignOf are compile-time constants.
+// ---------------------------------------------------------------
+
+#[no_alloc]
+pub fn header_size() -> Int {
+    raw.sizeOf::<Header>()
+}
+
+#[no_alloc]
+pub fn header_align() -> Int {
+    raw.alignOf::<Header>()
+}
+
+// ---------------------------------------------------------------
+// CAS — §19.5 restricts to Pod whose sizeOf is in {1,2,4,8,16}.
+// Int (8 bytes) is valid.
+// ---------------------------------------------------------------
+
+#[no_alloc]
+pub fn cas_counter(slot: RawPtr, old: Int, new: Int) -> Bool {
+    raw.cas::<Int>(slot, old, new)
+}
