@@ -1203,7 +1203,12 @@ func llvmUnsupportedDiagnostic(kind string, detail string) *LlvmUnsupportedDiagn
 		// Osty: examples/selfhost-core/llvmgen.osty:833:9
 		return llvmUnsupportedDiagnosticWith("LLVM017", kind, detail, "use non-generic functions with identifier parameters and Int/Bool types")
 	}
-	// Osty: examples/selfhost-core/llvmgen.osty:841:5
+	// Osty: examples/selfhost-core/llvmgen.osty:840:5
+	if kind == "stdlib-body" {
+		// Osty: examples/selfhost-core/llvmgen.osty:841:9
+		return llvmUnsupportedDiagnosticWith("LLVM018", kind, detail, "call stdlib functions whose bodies the LLVM backend can currently lower, or add a runtime shim for this symbol")
+	}
+	// Osty: examples/selfhost-core/llvmgen.osty:849:5
 	reason := detail
 	_ = reason
 	// Osty: examples/selfhost-core/llvmgen.osty:842:5

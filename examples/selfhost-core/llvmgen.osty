@@ -669,6 +669,14 @@ pub fn llvmUnsupportedDiagnostic(kind: String, detail: String) -> LlvmUnsupporte
             "use non-generic functions with identifier parameters and Int/Bool types",
         )
     }
+    if kind == "stdlib-body" {
+        return llvmUnsupportedDiagnosticWith(
+            "LLVM018",
+            kind,
+            detail,
+            "call stdlib functions whose bodies the LLVM backend can currently lower, or add a runtime shim for this symbol",
+        )
+    }
 
     let mut reason = detail
     if reason == "" {
