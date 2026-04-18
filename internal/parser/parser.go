@@ -35,20 +35,29 @@ func Parse(src []byte) (*ast.File, []error) {
 // AST plus parser-level provenance.
 func ParseDetailed(src []byte) Result {
 	normalized, aliases := normalizeStableAliases(src)
-	file, diags := selfhost.Parse(normalized)
+	// v0.5 (G28): expand `use path::{a, b as c}` into flat `use
+	// path.a; use path.b as c` lines before the self-hosted parser
+	// runs. Pure source rewrite — no AST shape change, offsets shift
+	// downward from the expansion point and provenance records each
+	// expansion.
+	expanded, scopedSteps := expandScopedImports(normalized)
+	file, diags := selfhost.Parse(expanded)
 	prov := &Provenance{}
 	if len(aliases) > 0 {
 		prov.Aliases = aliases
 	}
+	if len(scopedSteps) > 0 {
+		prov.Lowerings = append(prov.Lowerings, scopedSteps...)
+	}
 	if file != nil {
 		if lowerings := lowerStableAST(file); len(lowerings) > 0 {
-			prov.Lowerings = lowerings
+			prov.Lowerings = append(prov.Lowerings, lowerings...)
 		}
 		// v0.5 (G30): the self-hosted parser silently drops `pub`
 		// before `use`; flip IsPub on affected UseDecls here until
 		// the bootstrap regen pipeline is restored and the flag can
 		// be carried through the AST lowerer.
-		markPubUseDecls(normalized, file)
+		markPubUseDecls(expanded, file)
 	}
 	if prov.Empty() {
 		prov = nil
