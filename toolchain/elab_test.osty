@@ -29,7 +29,7 @@ fn testElabLetWithMismatchTriggersDiagnostic() {
             """,
     )
     testing.assert(checked.summary.errors >= 1)
-    testing.assert(elabDiagHasCode(checked.diagnostics, "E0701"))
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0700"))
 }
 
 fn testElabLetTuplePatternBindsDestructuredNames() {
@@ -54,7 +54,7 @@ fn testElabLetRefutablePatternTriggersDiagnostic() {
             """,
     )
     testing.assert(checked.summary.errors >= 1)
-    testing.assert(elabDiagHasCode(checked.diagnostics, "E0744"))
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0741"))
     testing.assertEq(frontCheckResultBindingType(checked, "value"), "Int")
 }
 
@@ -148,7 +148,7 @@ fn testElabRejectsUnsatisfiedGenericBounds() {
             """,
     )
     testing.assert(checked.summary.errors >= 1)
-    testing.assert(elabDiagHasCode(checked.diagnostics, "E0721"))
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0749"))
 }
 
 fn testElabRespectsInterfaceExtendsWhenCheckingBounds() {
@@ -239,7 +239,7 @@ fn testElabRejectsUnsatisfiedOwnerGenericBounds() {
             """,
     )
     testing.assert(checked.summary.errors >= 1)
-    testing.assert(elabDiagHasCode(checked.diagnostics, "E0721"))
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0749"))
 }
 
 fn testElabIfElseJoinsBranches() {
@@ -314,7 +314,7 @@ fn testElabMatchExhaustivenessFailsWithoutCatchAll() {
             """,
     )
     testing.assert(checked.summary.errors >= 1)
-    testing.assert(elabDiagHasCode(checked.diagnostics, "E0706"))
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0731"))
 }
 
 fn testElabMatchBoolMissingFalse() {
@@ -328,7 +328,7 @@ fn testElabMatchBoolMissingFalse() {
             """,
     )
     testing.assert(checked.summary.errors >= 1)
-    testing.assert(elabDiagHasCode(checked.diagnostics, "E0706"))
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0731"))
 }
 
 fn testElabMatchBoolComplete() {
@@ -342,8 +342,8 @@ fn testElabMatchBoolComplete() {
             }
             """,
     )
-    testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0706")))
-    testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0707")))
+    testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0731")))
+    testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0740")))
 }
 
 fn testElabMatchOrPatternCoversBothBools() {
@@ -356,7 +356,7 @@ fn testElabMatchOrPatternCoversBothBools() {
             }
             """,
     )
-    testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0706")))
+    testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0731")))
 }
 
 fn testElabMatchIntRequiresCatchAll() {
@@ -371,7 +371,7 @@ fn testElabMatchIntRequiresCatchAll() {
             """,
     )
     testing.assert(checked.summary.errors >= 1)
-    testing.assert(elabDiagHasCode(checked.diagnostics, "E0706"))
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0731"))
 }
 
 fn testElabMatchOptionNonWildcardPayload() {
@@ -388,7 +388,7 @@ fn testElabMatchOptionNonWildcardPayload() {
     // Phase 1 treats `Some(42)` as non-covering (payload is a literal,
     // not irrefutable), so the match is non-exhaustive with witness
     // `Option.Some(_)`.
-    testing.assert(elabDiagHasCode(checked.diagnostics, "E0706"))
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0731"))
 }
 
 fn testElabMatchReachabilityDuplicateTrue() {
@@ -403,7 +403,7 @@ fn testElabMatchReachabilityDuplicateTrue() {
             }
             """,
     )
-    testing.assert(elabDiagHasCode(checked.diagnostics, "E0707"))
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0740"))
 }
 
 fn testElabMatchReachabilityCatchAllBeforeSpecific() {
@@ -419,7 +419,7 @@ fn testElabMatchReachabilityCatchAllBeforeSpecific() {
             }
             """,
     )
-    testing.assert(elabDiagHasCode(checked.diagnostics, "E0707"))
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0740"))
 }
 
 fn testElabMatchReachabilityGuardedDoesNotShadow() {
@@ -437,7 +437,7 @@ fn testElabMatchReachabilityGuardedDoesNotShadow() {
     )
     // Guarded arm must not cause the trailing catch-all to be flagged
     // unreachable, because the guard can fail.
-    testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0707")))
+    testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0740")))
 }
 
 // ---------------------------------------------------------------------
@@ -456,7 +456,7 @@ fn testElabMatchPhase2OrPatternExhaustsOption() {
     )
     // Phase 2 recognises `Some(_) | None` as full enumeration without
     // a catch-all.
-    testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0706")))
+    testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0731")))
 }
 
 fn testElabMatchPhase2NestedOptionExhaustive() {
@@ -471,7 +471,7 @@ fn testElabMatchPhase2NestedOptionExhaustive() {
             }
             """,
     )
-    testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0706")))
+    testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0731")))
 }
 
 fn testElabMatchPhase2NestedOptionMissingInner() {
@@ -486,7 +486,7 @@ fn testElabMatchPhase2NestedOptionMissingInner() {
             """,
     )
     // `Some(None)` is missing — E0706 witness should mention it.
-    testing.assert(elabDiagHasCode(checked.diagnostics, "E0706"))
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0731"))
 }
 
 fn testElabMatchPhase2PayloadReachabilityDuplicate() {
@@ -501,7 +501,7 @@ fn testElabMatchPhase2PayloadReachabilityDuplicate() {
             }
             """,
     )
-    testing.assert(elabDiagHasCode(checked.diagnostics, "E0707"))
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0740"))
 }
 
 fn testElabMatchPhase2TupleCartesianExhaustive() {
@@ -518,7 +518,7 @@ fn testElabMatchPhase2TupleCartesianExhaustive() {
     )
     // (true, _) covers {(true, true), (true, false)} and the other two
     // arms cover the false column; Phase 2 recognises the cartesian.
-    testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0706")))
+    testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0731")))
 }
 
 fn testElabMatchPhase2TupleMissingSlot() {
@@ -533,7 +533,7 @@ fn testElabMatchPhase2TupleMissingSlot() {
             """,
     )
     // Missing (true, false) and (false, true). Phase 2 reports E0706.
-    testing.assert(elabDiagHasCode(checked.diagnostics, "E0706"))
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0731"))
 }
 
 // ---------------------------------------------------------------------
@@ -556,8 +556,8 @@ fn testElabMatchPhase3MultiWitnessListsMultipleMissing() {
     // both in its witness phrase. We only assert the code fires once;
     // witness inspection (string contains "Green" and "Blue") is left
     // to the golden snapshot when the harness runs this file.
-    testing.assert(elabDiagHasCode(checked.diagnostics, "E0706"))
-    testing.assertEq(elabDiagCodeCount(checked.diagnostics, "E0706"), 1)
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0731"))
+    testing.assertEq(elabDiagCodeCount(checked.diagnostics, "E0731"), 1)
 }
 
 fn testElabMatchPhase3OrPatternRedundantAlt() {
@@ -575,7 +575,7 @@ fn testElabMatchPhase3OrPatternRedundantAlt() {
             """,
     )
     // `Red | Red` — the second alt is redundant, arm flagged unreachable.
-    testing.assert(elabDiagHasCode(checked.diagnostics, "E0707"))
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0740"))
 }
 
 fn testElabMatchPhase3OrPatternSubsumedByPriorArm() {
@@ -592,7 +592,7 @@ fn testElabMatchPhase3OrPatternSubsumedByPriorArm() {
     // Arm 2's `true` alternative is subsumed by arm 1; E0707 fires.
     // (The `false` alternative is still useful but the redundancy in the
     // or-pat is reported at the arm level.)
-    testing.assert(elabDiagHasCode(checked.diagnostics, "E0707"))
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0740"))
 }
 
 fn elabDiagCodeCount(diags: List<CheckDiagnostic>, code: String) -> Int {
@@ -622,7 +622,7 @@ fn testElabMatchPhase4IntLiteralInsidePriorRange() {
             """,
     )
     // `3` falls inside `1..=5` → arm 2 is unreachable.
-    testing.assert(elabDiagHasCode(checked.diagnostics, "E0707"))
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0740"))
 }
 
 fn testElabMatchPhase4IntLiteralOutsidePriorRange() {
@@ -638,7 +638,7 @@ fn testElabMatchPhase4IntLiteralOutsidePriorRange() {
             """,
     )
     // `7` is outside `1..=5` → arm 2 is reachable.
-    testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0707")))
+    testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0740")))
 }
 
 fn testElabMatchPhase4RangeContainedInPriorRange() {
@@ -654,7 +654,7 @@ fn testElabMatchPhase4RangeContainedInPriorRange() {
             """,
     )
     // `2..=8` ⊂ `0..=10` → arm 2 is unreachable.
-    testing.assert(elabDiagHasCode(checked.diagnostics, "E0707"))
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0740"))
 }
 
 fn testElabMatchPhase4RangeEscapesPriorRange() {
@@ -670,7 +670,7 @@ fn testElabMatchPhase4RangeEscapesPriorRange() {
             """,
     )
     // `3..=10` extends beyond `0..=5` → arm 2 is reachable.
-    testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0707")))
+    testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0740")))
 }
 
 fn testElabMatchPhase4NegativeIntLiteral() {
@@ -686,7 +686,7 @@ fn testElabMatchPhase4NegativeIntLiteral() {
             """,
     )
     // `-3` is in `-5..=5` → arm 2 is unreachable.
-    testing.assert(elabDiagHasCode(checked.diagnostics, "E0707"))
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0740"))
 }
 
 fn testElabMatchPhase4StructExhaustive() {
@@ -703,7 +703,7 @@ fn testElabMatchPhase4StructExhaustive() {
     )
     // Struct has exactly one constructor; the all-wildcard match is
     // exhaustive without a catch-all.
-    testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0706")))
+    testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0731")))
 }
 
 fn testElabMatchPhase4StructNonExhaustive() {
@@ -719,7 +719,7 @@ fn testElabMatchPhase4StructNonExhaustive() {
             """,
     )
     // Missing `Flags { a: false, b: _ }` branch → E0706 reports it.
-    testing.assert(elabDiagHasCode(checked.diagnostics, "E0706"))
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0731"))
 }
 
 // ---------------------------------------------------------------------
@@ -739,7 +739,7 @@ fn testElabMatchPhase5HexLiteralInsidePriorRange() {
             """,
     )
     // 0x10 == 16, inside [0, 31].
-    testing.assert(elabDiagHasCode(checked.diagnostics, "E0707"))
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0740"))
 }
 
 fn testElabMatchPhase5BinLiteralInsidePriorRange() {
@@ -755,7 +755,7 @@ fn testElabMatchPhase5BinLiteralInsidePriorRange() {
             """,
     )
     // 0b1010 == 10, inside [0, 15].
-    testing.assert(elabDiagHasCode(checked.diagnostics, "E0707"))
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0740"))
 }
 
 fn testElabMatchPhase5OctLiteralInsidePriorRange() {
@@ -771,7 +771,7 @@ fn testElabMatchPhase5OctLiteralInsidePriorRange() {
             """,
     )
     // 0o77 == 63, inside [0, 100].
-    testing.assert(elabDiagHasCode(checked.diagnostics, "E0707"))
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0740"))
 }
 
 fn testElabMatchPhase5UnboundedLoRangeCoversLiteral() {
@@ -787,7 +787,7 @@ fn testElabMatchPhase5UnboundedLoRangeCoversLiteral() {
             """,
     )
     // 3 ∈ (-∞, 5].
-    testing.assert(elabDiagHasCode(checked.diagnostics, "E0707"))
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0740"))
 }
 
 fn testElabMatchPhase5UnboundedHiRangeCoversLiteral() {
@@ -803,7 +803,7 @@ fn testElabMatchPhase5UnboundedHiRangeCoversLiteral() {
             """,
     )
     // 42 ∈ [10, +∞).
-    testing.assert(elabDiagHasCode(checked.diagnostics, "E0707"))
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0740"))
 }
 
 fn testElabMatchPhase5UnboundedLoRangeRejectsOutside() {
@@ -819,7 +819,7 @@ fn testElabMatchPhase5UnboundedLoRangeRejectsOutside() {
             """,
     )
     // 7 ∉ (-∞, 5] → arm 2 reachable.
-    testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0707")))
+    testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0740")))
 }
 
 fn testElabMatchPhase5BoundedRangeSubsumedByUnbounded() {
@@ -835,7 +835,7 @@ fn testElabMatchPhase5BoundedRangeSubsumedByUnbounded() {
             """,
     )
     // [5, 10] ⊂ [0, +∞) → arm 2 unreachable.
-    testing.assert(elabDiagHasCode(checked.diagnostics, "E0707"))
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0740"))
 }
 
 fn testElabQuestionOperatorRequiresOption() {
@@ -847,7 +847,201 @@ fn testElabQuestionOperatorRequiresOption() {
             """,
     )
     testing.assert(checked.summary.errors >= 1)
-    testing.assert(elabDiagHasCode(checked.diagnostics, "E0730"))
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0717"))
+}
+
+// ---------------------------------------------------------------------
+// G14 — generic callable value references.
+// ---------------------------------------------------------------------
+
+fn testElabGenericFnBareReferenceRejected() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn id<T>(x: T) -> T { x }
+
+            fn main() {
+                let g = id
+            }
+            """,
+    )
+    testing.assert(checked.summary.errors >= 1)
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0742"))
+}
+
+fn testElabGenericFnTurbofishValueReferenceRejected() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn id<T>(x: T) -> T { x }
+
+            fn main() {
+                let g = id::<Int>
+            }
+            """,
+    )
+    testing.assert(checked.summary.errors >= 1)
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0742"))
+}
+
+fn testElabGenericFnDirectCallAllowed() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn id<T>(x: T) -> T { x }
+
+            fn main() {
+                let r = id(1)
+            }
+            """,
+    )
+    testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0742")))
+}
+
+fn testElabGenericFnTurbofishCallAllowed() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn id<T>(x: T) -> T { x }
+
+            fn main() {
+                let r = id::<Int>(1)
+            }
+            """,
+    )
+    testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0742")))
+}
+
+fn testElabGenericFnClosureWrapAllowed() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn id<T>(x: T) -> T { x }
+
+            fn main() {
+                let g = |x: Int| id::<Int>(x)
+            }
+            """,
+    )
+    testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0742")))
+}
+
+fn testElabNonGenericFnValueReferenceAllowed() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn add(x: Int, y: Int) -> Int { x + y }
+
+            fn main() {
+                let f = add
+            }
+            """,
+    )
+    testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0742")))
+}
+
+// ---------------------------------------------------------------------
+// Struct spread (§A.2) — `{ ..x, field: v }`.
+// ---------------------------------------------------------------------
+
+fn testElabStructSpreadOverrideSingleField() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            struct P { x: Int, y: Int }
+
+            fn bump(p: P) -> P {
+                P { ..p, x: p.x + 1 }
+            }
+            """,
+    )
+    testing.assertEq(checked.summary.errors, 0)
+}
+
+fn testElabStructSpreadCoversMissingFields() {
+    // Without spread the literal would be missing `y`, but `..p` supplies it.
+    let checked = frontendCheckSourceStructured(
+        r"""
+            struct P { x: Int, y: Int }
+
+            fn twiddle(p: P) -> P {
+                P { ..p, x: 5 }
+            }
+            """,
+    )
+    testing.assertEq(checked.summary.errors, 0)
+    testing.assert(!(elabDiagHasCode(checked.diagnostics, "E0708")))
+}
+
+fn testElabStructLiteralWithoutSpreadStillRequiresAllFields() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            struct P { x: Int, y: Int }
+
+            fn partial() -> P {
+                P { x: 5 }
+            }
+            """,
+    )
+    testing.assert(checked.summary.errors >= 1)
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0708"))
+}
+
+fn testElabStructSpreadRejectsWrongOwnerType() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            struct P { x: Int, y: Int }
+            struct Q { a: Int, b: Int }
+
+            fn bad(q: Q) -> P {
+                P { ..q, x: 5 }
+            }
+            """,
+    )
+    testing.assert(checked.summary.errors >= 1)
+}
+
+// ---------------------------------------------------------------------
+// G15 — function values erase default / keyword metadata.
+//
+// An `fn(...) -> R` type stores only positional parameter types; the
+// runtime therefore rejects calls that rely on defaults or keyword
+// arguments at the value site. Direct calls against the original
+// declaration still honor both. These tests pin that contract so a
+// future refactor cannot silently regrow default handling on fn values.
+// ---------------------------------------------------------------------
+
+fn testElabDirectCallHonorsDefaultArg() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn connect(host: String, port: Int = 80) -> Int { port }
+
+            fn main() {
+                let n = connect("api.com")
+            }
+            """,
+    )
+    testing.assertEq(checked.summary.errors, 0)
+}
+
+fn testElabFnValueCallRequiresExactArity() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn connect(host: String, port: Int = 80) -> Int { port }
+
+            fn call1(f: fn(String, Int) -> Int) -> Int {
+                f("api.com")
+            }
+            """,
+    )
+    testing.assert(checked.summary.errors >= 1)
+    testing.assert(elabDiagHasCode(checked.diagnostics, "E0701"))
+}
+
+fn testElabFnValueCallAcceptsAllPositional() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn connect(host: String, port: Int = 80) -> Int { port }
+
+            fn call2(f: fn(String, Int) -> Int) -> Int {
+                f("api.com", 443)
+            }
+            """,
+    )
+    testing.assertEq(checked.summary.errors, 0)
 }
 
 fn elabDiagHasCode(diags: List<CheckDiagnostic>, code: String) -> Bool {
