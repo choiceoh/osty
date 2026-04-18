@@ -31,6 +31,13 @@ pub fn sink() {
         triple
         with {x} interpolation
         """
+    // Nested string/char/comment inside interpolation — LANG_SPEC §1.6.3.
+    let xs: List<String> = ["a", "b"]
+    let s6 = "joined: {xs.join(", ")}"
+    let s7 = "dotted: {xs.join(".")}"
+    let s8 = "firstChar: {xs.find('a')}"
+    let s9 = "raw: {r"\d+"}"
+    let s10 = "block: {x /* ignore */ + 1}"
 
     // Char and byte literals.
     let ch1 = 'A'

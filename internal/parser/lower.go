@@ -165,9 +165,6 @@ func (l *stableLowerer) lowerExpr(expr ast.Expr) ast.Expr {
 		return n
 	case *ast.FieldExpr:
 		n.X = l.lowerExpr(n.X)
-		if lowered, ok := l.lowerLengthProperty(n); ok {
-			return lowered
-		}
 		return n
 	case *ast.IndexExpr:
 		n.X = l.lowerExpr(n.X)
@@ -337,23 +334,6 @@ func (l *stableLowerer) lowerBuiltinLenCall(call *ast.CallExpr) (ast.Expr, bool)
 			PosV: call.PosV,
 			EndV: call.EndV,
 			X:    target,
-			Name: "len",
-		},
-	}, true
-}
-
-func (l *stableLowerer) lowerLengthProperty(field *ast.FieldExpr) (ast.Expr, bool) {
-	if field == nil || field.IsOptional || field.Name != "length" {
-		return nil, false
-	}
-	l.emit("length_property", "javascript_length_property", "lower `.length` into `.len()`", field.Pos(), field.End())
-	return &ast.CallExpr{
-		PosV: field.PosV,
-		EndV: field.EndV,
-		Fn: &ast.FieldExpr{
-			PosV: field.PosV,
-			EndV: field.EndV,
-			X:    field.X,
 			Name: "len",
 		},
 	}, true

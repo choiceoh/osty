@@ -133,6 +133,64 @@ func TestLexInterpolationNestingOk(t *testing.T) {
 	expectNoLexErrors(t, `let s = "a {f({g: 1})} b"`)
 }
 
+// A string interpolation `"...{expr}..."` may contain nested string literals
+// inside the expression. The outer scanner must recognize that an opening
+// `{` enters expression context where a bare `"` starts a *new* string, not
+// the outer close. Regression test for the original bug: the inner `"` was
+// mis-read as the outer terminator, emitting E0001.
+func TestLexInterpolationNestedStringOk(t *testing.T) {
+	expectNoLexErrors(t, `let s = "a.{f(x, ".")}"`)
+	expectNoLexErrors(t, `let s = "got.{std.strings.join(xs, ".")}"`)
+}
+
+// A `\"` inside the interpolation expression is treated as a 2-unit
+// passthrough by the outer scanner — it must not let the `"` be confused
+// with the outer string's close. The *outer* string's span must therefore
+// cover the full `"a.{f(x, \", \")}"` range even though the inner
+// tokenization of `\"` is an error (backslash is illegal in expression
+// context). This locks in the outer-boundary invariant separately from
+// the inner-diagnostic outcome.
+func TestLexInterpolationEscapedQuoteSpansOuter(t *testing.T) {
+	src := `let s = "a.{f(x, \", \")}"`
+	l := New([]byte(src))
+	toks := l.Lex()
+	var str *token.Token
+	for i := range toks {
+		if toks[i].Kind == token.STRING {
+			str = &toks[i]
+			break
+		}
+	}
+	if str == nil {
+		t.Fatalf("no STRING token produced for %q", src)
+	}
+	// src is ASCII, so byte length equals rune-based column count.
+	wantStart := 9
+	wantEnd := len(src) + 1
+	if str.Pos.Column != wantStart {
+		t.Fatalf("outer STRING start column = %d; want %d", str.Pos.Column, wantStart)
+	}
+	if str.End.Column != wantEnd {
+		t.Fatalf("outer STRING end column = %d; want %d (source of length %d)",
+			str.End.Column, wantEnd, len(src))
+	}
+}
+
+// A nested string that itself contains `}` must not close the outer
+// interpolation — the `}` is inside the nested string's content, so it
+// is invisible to the interpolation's brace tracking.
+func TestLexInterpolationNestedStringWithBraceOk(t *testing.T) {
+	expectNoLexErrors(t, `let s = "a.{f(x, "}")}"`)
+}
+
+// Same nested-string rule applies to triple-quoted strings. Triple strings
+// require a leading newline per §1.6.3; content indent is stripped relative
+// to the closing `"""` indent, so every line (content + close) uses a
+// matching 4-space indent here.
+func TestLexTripleInterpolationNestedStringOk(t *testing.T) {
+	expectNoLexErrors(t, "let s = \"\"\"\n    { f(x, \".\") }\n    \"\"\"")
+}
+
 func TestLexTripleStringStripsIndent(t *testing.T) {
 	src := "let s = \"\"\"\n    line1\n    line2\n    \"\"\""
 	l := New([]byte(src))

@@ -132,6 +132,30 @@ func TestGenerateStringCompareUsesRuntimeABI(t *testing.T) {
 	}
 }
 
+func TestGenerateNonStringPtrCompareRejected(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn main() {
+    let a: List<Int> = [1, 2]
+    let b: List<Int> = [3, 4]
+    if a == b {
+        println(1)
+    } else {
+        println(0)
+    }
+}
+`)
+
+	_, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/nonstr_compare.osty",
+	})
+	if err == nil {
+		t.Fatal("Generate succeeded, want unsupported diagnostic for non-String ptr ==")
+	}
+	if got := err.Error(); !strings.Contains(got, "non-String ptr") {
+		t.Fatalf("error = %q, want to mention non-String ptr", got)
+	}
+}
+
 func TestGenerateLibraryModuleWithoutMain(t *testing.T) {
 	file := parseLLVMGenFile(t, `enum Kind {
     Manifest,

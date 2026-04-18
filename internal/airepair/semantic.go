@@ -6,10 +6,17 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/osty/osty/internal/ast"
+	"github.com/osty/osty/internal/canonical"
+	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/lexer"
+	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/repair"
+	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/stdlib"
 	"github.com/osty/osty/internal/token"
+	"github.com/osty/osty/internal/types"
 )
 
 const semanticIndentStep = "    "
@@ -350,6 +357,7 @@ func parseAppendCall(expr string) (string, string, bool) {
 
 func rewriteLengthProperties(src []byte) ([]byte, []repair.Change, bool) {
 	toks := lexer.New(src).Lex()
+	protected := validLengthFieldOffsets(src)
 	var edits []semanticEdit
 
 	for i := 0; i+1 < len(toks); i++ {
@@ -361,6 +369,9 @@ func rewriteLengthProperties(src []byte) ([]byte, []repair.Change, bool) {
 			continue
 		}
 		if i+2 < len(toks) && toks[i+2].Kind == token.LPAREN {
+			continue
+		}
+		if protected[name.Pos.Offset] {
 			continue
 		}
 		edits = append(edits, semanticEdit{
@@ -376,6 +387,214 @@ func rewriteLengthProperties(src []byte) ([]byte, []repair.Change, bool) {
 	}
 
 	return applySemanticEdits(src, edits)
+}
+
+// validLengthFieldOffsets returns the source offsets of `.length` identifiers
+// whose receiver type already has a `length` field — rewriting these to
+// `.len()` would replace a valid field read with a missing-method call.
+func validLengthFieldOffsets(src []byte) map[int]bool {
+	parsed := parser.ParseDetailed(src)
+	if parsed.File == nil {
+		return nil
+	}
+	res := resolve.FileWithStdlib(parsed.File, resolve.NewPrelude(), stdlib.LoadCached())
+	chk := check.File(parsed.File, res, checkOptsForSource(canonical.Source(src, parsed.File)))
+	if chk == nil {
+		return nil
+	}
+	skip := make(map[int]bool)
+	walkFieldExprs(parsed.File, func(fe *ast.FieldExpr) {
+		if fe.Name != "length" {
+			return
+		}
+		t := chk.Types[fe.X]
+		// Rewrite is only safe when the receiver is a known builtin
+		// container whose `.length` is genuine JS habit (String/Bytes/List/Map/Set).
+		// Unknown receiver types may resolve to a user struct in another
+		// file (airepair runs per-file, so cross-file imports are invisible),
+		// and user structs may legitimately declare a `length: Int` field —
+		// rewriting those to `.len()` replaces a valid field read with a
+		// missing-method call. Be conservative: protect anything that is
+		// not a known builtin.
+		if !isRewritableLengthReceiver(t) {
+			skip[fe.EndV.Offset-len(fe.Name)] = true
+		}
+	})
+	return skip
+}
+
+func isRewritableLengthReceiver(t types.Type) bool {
+	switch v := t.(type) {
+	case *types.Primitive:
+		return v.Kind == types.PString || v.Kind == types.PBytes
+	case *types.Named:
+		return v != nil && v.IsBuiltinNamed()
+	}
+	return false
+}
+
+// walkFieldExprs visits every FieldExpr in file, invoking fn.
+func walkFieldExprs(file *ast.File, fn func(*ast.FieldExpr)) {
+	var visit func(n ast.Node)
+	visit = func(n ast.Node) {
+		if n == nil {
+			return
+		}
+		switch v := n.(type) {
+		case *ast.File:
+			for _, d := range v.Decls {
+				visit(d)
+			}
+			for _, s := range v.Stmts {
+				visit(s)
+			}
+		case *ast.FnDecl:
+			for _, p := range v.Params {
+				if p != nil && p.Default != nil {
+					visit(p.Default)
+				}
+			}
+			if v.Body != nil {
+				visit(v.Body)
+			}
+		case *ast.StructDecl:
+			for _, m := range v.Methods {
+				visit(m)
+			}
+		case *ast.EnumDecl:
+			for _, m := range v.Methods {
+				visit(m)
+			}
+		case *ast.InterfaceDecl:
+			for _, m := range v.Methods {
+				visit(m)
+			}
+		case *ast.LetDecl:
+			visit(v.Value)
+		case *ast.Block:
+			for _, s := range v.Stmts {
+				visit(s)
+			}
+		case *ast.LetStmt:
+			visit(v.Value)
+		case *ast.AssignStmt:
+			for _, t := range v.Targets {
+				visit(t)
+			}
+			visit(v.Value)
+		case *ast.ExprStmt:
+			visit(v.X)
+		case *ast.ReturnStmt:
+			visit(v.Value)
+		case *ast.ChanSendStmt:
+			visit(v.Channel)
+			visit(v.Value)
+		case *ast.DeferStmt:
+			visit(v.X)
+		case *ast.ForStmt:
+			visit(v.Iter)
+			if v.Body != nil {
+				visit(v.Body)
+			}
+		case *ast.FieldExpr:
+			fn(v)
+			visit(v.X)
+		case *ast.CallExpr:
+			visit(v.Fn)
+			for _, a := range v.Args {
+				if a != nil {
+					visit(a.Value)
+				}
+			}
+		case *ast.IndexExpr:
+			visit(v.X)
+			visit(v.Index)
+		case *ast.BinaryExpr:
+			visit(v.Left)
+			visit(v.Right)
+		case *ast.UnaryExpr:
+			visit(v.X)
+		case *ast.ParenExpr:
+			visit(v.X)
+		case *ast.QuestionExpr:
+			visit(v.X)
+		case *ast.TurbofishExpr:
+			visit(v.Base)
+		case *ast.RangeExpr:
+			visit(v.Start)
+			visit(v.Stop)
+		case *ast.IfExpr:
+			visit(v.Cond)
+			if v.Then != nil {
+				visit(v.Then)
+			}
+			visit(v.Else)
+		case *ast.MatchExpr:
+			visit(v.Scrutinee)
+			for _, arm := range v.Arms {
+				if arm == nil {
+					continue
+				}
+				visit(arm.Guard)
+				visit(arm.Body)
+			}
+		case *ast.StructLit:
+			visit(v.Type)
+			for _, f := range v.Fields {
+				if f != nil {
+					visit(f.Value)
+				}
+			}
+			visit(v.Spread)
+		case *ast.ListExpr:
+			for _, e := range v.Elems {
+				visit(e)
+			}
+		case *ast.TupleExpr:
+			for _, e := range v.Elems {
+				visit(e)
+			}
+		case *ast.MapExpr:
+			for _, e := range v.Entries {
+				if e == nil {
+					continue
+				}
+				visit(e.Key)
+				visit(e.Value)
+			}
+		case *ast.ClosureExpr:
+			for _, p := range v.Params {
+				if p != nil && p.Default != nil {
+					visit(p.Default)
+				}
+			}
+			visit(v.Body)
+		case *ast.StringLit:
+			for _, p := range v.Parts {
+				if !p.IsLit {
+					visit(p.Expr)
+				}
+			}
+		}
+	}
+	visit(file)
+}
+
+func structHasField(t types.Type, name string) bool {
+	named, ok := t.(*types.Named)
+	if !ok || named == nil || named.Sym == nil {
+		return false
+	}
+	decl, ok := named.Sym.Decl.(*ast.StructDecl)
+	if !ok {
+		return false
+	}
+	for _, f := range decl.Fields {
+		if f != nil && f.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func rewriteBuiltinLenCalls(src []byte) ([]byte, []repair.Change, bool) {
