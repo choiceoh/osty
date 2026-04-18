@@ -1,0 +1,55 @@
+// std.runtime.raw — raw memory primitives for the runtime sublanguage.
+//
+// This package is part of the LANG_SPEC §19 runtime sublanguage and is
+// only usable from privileged packages (§19.2). User code that
+// attempts to `use std.runtime.raw` is rejected by the privilege gate
+// in `internal/check/privilege.go` with `E0770`.
+//
+// Every function here is `#[intrinsic]`: the body shown is a
+// placeholder for stub-resolution purposes only. The LLVM lowering
+// layer (§19.7) replaces each call with the table-specified IR
+// sequence at emit time. Intrinsics never appear as real symbols in
+// the output object file.
+//
+// For user-facing opaque semantics see §19.3 (RawPtr type) and §19.4
+// (Pod marker). Every generic intrinsic is constrained to `T: Pod`;
+// instantiation at a non-Pod type is `E0727` at the call site.
+
+#[intrinsic]
+pub fn null() -> RawPtr
+
+#[intrinsic]
+pub fn fromBits(n: Int) -> RawPtr
+
+#[intrinsic]
+pub fn bits(p: RawPtr) -> Int
+
+#[intrinsic]
+pub fn alloc(bytes: Int, align: Int) -> RawPtr
+
+#[intrinsic]
+pub fn free(p: RawPtr)
+
+#[intrinsic]
+pub fn zero(p: RawPtr, bytes: Int)
+
+#[intrinsic]
+pub fn copy(dst: RawPtr, src: RawPtr, bytes: Int)
+
+#[intrinsic]
+pub fn offset(p: RawPtr, bytes: Int) -> RawPtr
+
+#[intrinsic]
+pub fn read<T: Pod>(p: RawPtr) -> T
+
+#[intrinsic]
+pub fn write<T: Pod>(p: RawPtr, v: T)
+
+#[intrinsic]
+pub fn cas<T: Pod>(p: RawPtr, old: T, new: T) -> Bool
+
+#[intrinsic]
+pub fn sizeOf<T: Pod>() -> Int
+
+#[intrinsic]
+pub fn alignOf<T: Pod>() -> Int
