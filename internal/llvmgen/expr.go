@@ -718,9 +718,12 @@ func (g *generator) emitQuestionExpr(expr *ast.QuestionExpr) (value, error) {
 	if !ok {
 		return value{}, unsupported("type-system", "optional propagation source type is unknown")
 	}
+	if info, ok := builtinResultTypeFromAST(sourceType, g.typeEnv()); ok {
+		return g.emitQuestionExprResult(expr, info, sourceType)
+	}
 	innerSource, ok := unwrapOptionalSourceType(sourceType)
 	if !ok {
-		return value{}, unsupported("type-system", "optional propagation requires a T? value")
+		return value{}, unsupported("type-system", "optional propagation requires a T? or Result<T, E> value")
 	}
 	innerTyp, err := llvmType(innerSource, g.typeEnv())
 	if err != nil {
@@ -757,6 +760,63 @@ func (g *generator) emitQuestionExpr(expr *ast.QuestionExpr) (value, error) {
 		return value{}, err
 	}
 	out.sourceType = innerSource
+	return out, nil
+}
+
+// emitQuestionExprResult lowers `expr?` where `expr` evaluates to a
+// `Result<T, E>` struct `{i64 tag, T ok, E err}` and the enclosing
+// function returns `Result<T2, E>` (same error type). Ok: the `ok`
+// field continues the enclosing expression. Err: the `err` field is
+// re-packaged into the return Result with tag=1 and `ok` zeroed, then
+// returned immediately.
+func (g *generator) emitQuestionExprResult(expr *ast.QuestionExpr, info builtinResultType, sourceType ast.Type) (value, error) {
+	returnInfo, ok := g.resultTypes[g.returnType]
+	if !ok {
+		return value{}, unsupported("control-flow", "? on Result<T, E> requires the enclosing function to return Result<_, E>")
+	}
+	if returnInfo.errTyp != info.errTyp {
+		return value{}, unsupportedf("type-system", "? propagates err %s, function returns err %s", info.errTyp, returnInfo.errTyp)
+	}
+	base, err := g.emitExpr(expr.X)
+	if err != nil {
+		return value{}, err
+	}
+	if base.typ != info.typ {
+		return value{}, unsupportedf("type-system", "? on Result type %s, want %s", base.typ, info.typ)
+	}
+	emitter := g.toOstyEmitter()
+	tag := llvmExtractValue(emitter, toOstyValue(base), "i64", 0)
+	isErr := llvmCompare(emitter, "eq", tag, toOstyValue(value{typ: "i64", ref: "1"}))
+	errLabel := llvmNextLabel(emitter, "result.err")
+	okLabel := llvmNextLabel(emitter, "result.ok")
+	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", isErr.name, errLabel, okLabel))
+
+	// Err branch: repackage into the enclosing function's Result<T2, E>
+	// struct and return immediately. GC roots are released just before
+	// `ret` to mirror the bare-return path.
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", errLabel))
+	errSlot := llvmExtractValue(emitter, toOstyValue(base), info.errTyp, 2)
+	retFields := []*LlvmValue{
+		toOstyValue(value{typ: "i64", ref: "1"}),
+		toOstyValue(llvmZeroValue(returnInfo.okTyp)),
+		errSlot,
+	}
+	retStruct := llvmStructLiteral(emitter, returnInfo.typ, retFields)
+	g.releaseGCRoots(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  ret %s %s", returnInfo.typ, retStruct.name))
+
+	// Ok branch: extract the ok field and let the caller continue with it.
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", okLabel))
+	okSlot := llvmExtractValue(emitter, toOstyValue(base), info.okTyp, 1)
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(okLabel)
+
+	out := fromOstyValue(okSlot)
+	out.sourceType = builtinResultPayloadSourceType(sourceType, "Ok")
+	out.rootPaths = g.rootPathsForType(info.okTyp)
+	if info.okTyp == "ptr" {
+		out.gcManaged = true
+	}
 	return out, nil
 }
 
@@ -961,7 +1021,133 @@ func (g *generator) emitMatchExprValue(expr *ast.MatchExpr) (value, error) {
 	if info := g.enumsByType[scrutinee.typ]; info != nil && info.hasPayload {
 		return g.emitPayloadEnumMatchExprValue(scrutinee, info, expr.Arms)
 	}
+	if info, ok := g.resultTypes[scrutinee.typ]; ok {
+		return g.emitResultMatchExprValue(scrutinee, info, expr.Arms)
+	}
 	return value{}, unsupportedf("type-system", "match scrutinee type %s, want enum tag", scrutinee.typ)
+}
+
+// resultPatternInfo describes a single arm of a Result match: which
+// variant it targets, which struct field carries the payload, and
+// whether the arm binds the payload to a local name.
+type resultPatternInfo struct {
+	tag         int    // 0 = Ok, 1 = Err
+	fieldIndex  int    // 1 for Ok, 2 for Err
+	payloadType string // info.okTyp or info.errTyp
+	payloadName string
+	hasBinding  bool
+	isWildcard  bool // true if pattern is bare `_`
+}
+
+func (g *generator) matchResultPattern(info builtinResultType, pattern ast.Pattern) (resultPatternInfo, bool, error) {
+	if _, ok := pattern.(*ast.WildcardPat); ok {
+		return resultPatternInfo{isWildcard: true}, true, nil
+	}
+	vp, ok := pattern.(*ast.VariantPat)
+	if !ok || len(vp.Path) != 1 {
+		return resultPatternInfo{}, false, nil
+	}
+	out := resultPatternInfo{}
+	switch vp.Path[0] {
+	case "Ok":
+		out.tag = 0
+		out.fieldIndex = 1
+		out.payloadType = info.okTyp
+	case "Err":
+		out.tag = 1
+		out.fieldIndex = 2
+		out.payloadType = info.errTyp
+	default:
+		return resultPatternInfo{}, false, nil
+	}
+	if len(vp.Args) != 1 {
+		return resultPatternInfo{}, true, unsupportedf("expression", "Result variant pattern %q requires one argument", vp.Path[0])
+	}
+	switch arg := vp.Args[0].(type) {
+	case *ast.IdentPat:
+		if !llvmIsIdent(arg.Name) {
+			return resultPatternInfo{}, true, unsupportedf("name", "Result payload binding name %q", arg.Name)
+		}
+		out.payloadName = arg.Name
+		out.hasBinding = true
+	case *ast.WildcardPat:
+		// no binding
+	default:
+		return resultPatternInfo{}, true, unsupportedf("expression", "Result payload pattern %T", arg)
+	}
+	return out, true, nil
+}
+
+// emitResultMatchExprValue lowers a two-arm match on a Result<T, E>
+// scrutinee (the `{i64 tag, T ok, E err}` builtin struct). The arms
+// must cover Ok and Err in either order, optionally with a trailing
+// wildcard. Payload bindings are extracted from field 1 (Ok) or
+// field 2 (Err) per the existing Result ABI.
+func (g *generator) emitResultMatchExprValue(scrutinee value, info builtinResultType, arms []*ast.MatchArm) (value, error) {
+	if len(arms) != 2 {
+		return value{}, unsupportedf("expression", "Result match requires exactly 2 arms, got %d", len(arms))
+	}
+	firstInfo, firstOk, err := g.matchResultPattern(info, arms[0].Pattern)
+	if err != nil {
+		return value{}, err
+	}
+	if !firstOk {
+		return value{}, unsupported("expression", "Result match first arm must be Ok(...), Err(...), or _")
+	}
+	if firstInfo.isWildcard {
+		// Wildcard first arm short-circuits — never consult the tag.
+		return g.emitResultMatchArm(scrutinee, firstInfo, arms[0].Body)
+	}
+	secondInfo, secondOk, err := g.matchResultPattern(info, arms[1].Pattern)
+	if err != nil {
+		return value{}, err
+	}
+	if !secondOk {
+		return value{}, unsupported("expression", "Result match second arm must be Ok(...), Err(...), or _")
+	}
+	emitter := g.toOstyEmitter()
+	tag := llvmExtractValue(emitter, toOstyValue(scrutinee), "i64", 0)
+	cond := llvmCompare(emitter, "eq", tag, toOstyValue(value{typ: "i64", ref: strconv.Itoa(firstInfo.tag)}))
+	labels := llvmIfExprStart(emitter, cond)
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = labels.thenLabel
+
+	thenValue, err := g.emitResultMatchArm(scrutinee, firstInfo, arms[0].Body)
+	if err != nil {
+		return value{}, err
+	}
+	thenPred := g.currentBlock
+
+	emitter = g.toOstyEmitter()
+	llvmIfExprElse(emitter, labels)
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = labels.elseLabel
+
+	elseValue, err := g.emitResultMatchArm(scrutinee, secondInfo, arms[1].Body)
+	if err != nil {
+		return value{}, err
+	}
+	elsePred := g.currentBlock
+
+	if thenValue.typ != elseValue.typ {
+		return value{}, unsupportedf("type-system", "match arm types %s/%s", thenValue.typ, elseValue.typ)
+	}
+	return g.emitIfExprPhi(labels, thenPred, elsePred, thenValue, elseValue)
+}
+
+func (g *generator) emitResultMatchArm(scrutinee value, info resultPatternInfo, body ast.Expr) (value, error) {
+	g.pushScope()
+	defer g.popScope()
+	if info.hasBinding && !info.isWildcard {
+		emitter := g.toOstyEmitter()
+		payload := llvmExtractValue(emitter, toOstyValue(scrutinee), info.payloadType, info.fieldIndex)
+		g.takeOstyEmitter(emitter)
+		payloadValue := fromOstyValue(payload)
+		payloadValue.gcManaged = info.payloadType == "ptr"
+		payloadValue.rootPaths = g.rootPathsForType(info.payloadType)
+		g.bindNamedLocal(info.payloadName, payloadValue, false)
+	}
+	return g.emitMatchArmBodyValue(body)
 }
 
 func (g *generator) emitTagEnumMatchExprValue(scrutinee value, arms []*ast.MatchArm) (value, error) {

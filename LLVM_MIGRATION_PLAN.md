@@ -41,6 +41,57 @@
   toolchain에서 생성한다. `Float`는 현재 double-subset로만 `Float`-smoke
   경로를 처리하며, `Float32`/`Float64` width/ABI 정책은 후속 단계로 미룬다.
 
+## 셀프호스팅 critical path (2026-04 실사용 기반 재감사)
+
+기존 phase 번호(0~73)는 feature-slice 중심으로 쌓아왔다. 실제
+`toolchain/*.osty` 非-test 파일의 usage grep으로 재감사한 결과,
+셀프호스팅까지의 blocker 순서는 다음과 같다.
+
+### Tier A — 核 toolchain (`lexer → parser → check → ir → llvmgen`) 자가 컴파일 blocker
+
+| 기능 | 非-test 사용 | 현재 상태 | 관련 phase |
+|---|---|---|---|
+| `List<T>` literal + 메서드 lowering | 974회 | 🚧 runtime struct만 존재, emitter 없음 | TBD (Tier A-1) |
+| `Map<K,V>` literal + 메서드 lowering | 심볼 테이블 등 다수 | 🚧 runtime struct만 존재 | TBD (Tier A-2) |
+| `String` concat/slice/interpolation | 대부분 파일 | 🚧 ASCII literal + `println`만 | TBD (Tier A-3) |
+| Closure + env capture | AST visitor 전반 | 🚧 IR capture만 존재 | TBD (Tier A-4) |
+| Multi-file package emit + link | 37개 non-test 파일 | ❌ 단일 엔트리만 | TBD (Tier A-5) |
+| `std.strings` 함수 구현 | 20+ 파일에서 import | ❌ Go seed 경유 | TBD (Tier A-6) |
+
+### Tier B — pkgmgr (`semver`, `manifest`, `registry`, `solve`, `pkgmgr`) 자가 컴파일 blocker
+
+| 기능 | 非-test 사용 | 현재 상태 | 관련 phase |
+|---|---|---|---|
+| `String` payload enum (`PreText(String)`) | `semver.osty:5` | 🚧 Phase 54-63 — fixture 추가됨, 드라이브 확인 중 | [§Phase 54-63](#phase-54-63-payload-enum-generalization-floatstring) |
+| `Result<T, String>` ABI | semver_parse, manifest_validation | ❌ Result as enum 미설계 | 신규 phase 필요 |
+| `?` 전파 (Result) | `semver_parse.osty` 8곳 | 🚧 Option<ptr>만 지원 ([expr.go:713](internal/llvmgen/expr.go)) | 신규 phase 필요 |
+| struct/enum 복합 payload (Ok(SemVersion)) | semver_parse, manifest_validation | ❌ single-field scalar/ptr만 | 신규 phase 필요 |
+
+### 非-blocker (당초 Tier B 오판 항목)
+
+| 기능 | 非-test 사용 | 이유 |
+|---|---|---|
+| `defer` | 0건 | 核/pkgmgr 모두 쓰지 않음. AST formatter/lexer test에만 문자열로 등장. 구현 우선순위 최저. |
+| multi-field payload enum (`Node.BinOp(lhs, op, rhs)` 패턴) | 0건 | [core.osty](toolchain/core.osty:38), [ir.osty](toolchain/ir.osty:1)가 **arena + kind discriminator** 설계를 채택해 페이로드 enum 회피. `CoreNode` 단일 struct + flat `CoreKind` enum으로 모든 AST/IR 노드 표현. |
+| 재귀 페이로드 enum | 0건 | 위와 같은 이유로 회피됨. arena index(`CoreIdx = Int`)로 recursion 구현. |
+
+당초 CLAUDE.md 부록 A의 canonical 예시(Rust-like `Node.IntLit(val)` 페이로드 enum)를
+실제 구현으로 착각한 plan은 이 섹션으로 교정한다. arena+kind 설계는
+명시적 주석([core.osty 의 shape decisions](toolchain/core.osty))으로 보존된
+의도적 선택이며, LLVM 백엔드가 지원해야 할 최소 enum 표현은
+single-scalar-payload + bare tag이다.
+
+### 관심 순서
+
+1. Tier A-1 (List) + A-3 (String concat/slice) — 모든 frontend 경로가 의존.
+2. Tier A-2 (Map) + A-4 (Closure) — resolve/check/visitor가 의존.
+3. Tier A-5 (Multi-file linking) — Tier A가 한 파일에서 되면 즉시 다음 관문.
+4. Tier A-6 (`std.strings` 순수 구현) — A-3 위에서 얹음.
+5. Tier B — pkgmgr 경로. 核 셀프호스트와 독립적으로 진행 가능.
+6. 非-blocker는 유저 코드 예시 호환성 위주로 여유 시 진행.
+
+---
+
 ## 이주 원칙
 
 1. Go 백엔드는 migration 기간 동안 안정 백엔드로 유지한다.
@@ -576,6 +627,72 @@ return/parameter boundaries와 mutable local slots을 지나도 동일하게 동
   and struct field smoke가 같은 native backend 경로로 통과해야 한다.
 - 문서에 적힌 expected stdout과 fixture 목록이 서로 일치해야 한다.
 - 이 묶음은 qualified constructor/pattern 확장과는 별개로 유지된다.
+
+### Phase 74. Result<T, E> — `?` 전파 + match 분해 (pkgmgr 스코프)
+
+목표: pkgmgr 경로(semver/manifest 파서)가 쓰는 `Result<T, E>` 타입에 대해
+`?` 조기-리턴과 `match { Ok(v) -> ..., Err(x) -> ... }` 두-armc 분해를
+native backend에서 실행 가능하게 만든다. Tier B(pkgmgr 셀프호스트) critical
+path의 첫 번째 블로커.
+
+Result ABI는 이미 builtin으로 존재한다 — `%Result.<ok>.<err> = { i64 tag,
+<ok> ok, <err> err }` 3필드 struct, `Ok(x)`/`Err(x)` 생성자는
+`emitBuiltinResultConstructor`로 커버됨. 이 단계는 **소비 경로** (`?` 전파 +
+match 분해)를 추가한다.
+
+작업:
+
+- `emitQuestionExpr`에 Result 분기 추가. `staticExprSourceType` →
+  `builtinResultTypeFromAST` 매치 시 `emitQuestionExprResult`로 디스패치.
+- `emitQuestionExprResult`는 enclosing fn이 `Result<_, E>`(동일 err 타입)를
+  반환하는지 검증 → tag 추출 → 1(Err)이면 err 필드를 반환 Result struct로
+  재포장하고 `releaseGCRoots` 후 `ret` → 0(Ok)이면 ok 필드 추출해 calling
+  블록에 값을 넘긴다.
+- `emitMatchExprValue`에 `g.resultTypes[scrutinee.typ]` 조회 분기 추가,
+  `emitResultMatchExprValue`로 디스패치.
+- `matchResultPattern` 헬퍼: `Ok(name)`/`Ok(_)`/`Err(name)`/`Err(_)`/`_`
+  패턴을 tag + field index + 바인딩 정보로 환원.
+- `emitResultMatchExprValue`는 정확히 2-arm 매치(Ok·Err 어느 순서든, 선택적
+  wildcard 대체 arm)를 `llvmIfExprStart`/`llvmIfExprElse` 패턴으로 내려보낸다.
+  바인딩이 있을 때 해당 field를 `extractvalue`로 꺼내 local로 묶는다.
+- smoke fixture `result_question_int_print.osty` 추가 (Result<Int, String>
+  체인 `?`와 match 분해). 예상 stdout `42\n`으로 corpus에 등록.
+
+완료 조건:
+
+- `result_question_int_print.osty`가 `osty build`를 통해 실행 바이너리로
+  떨어지고, stdout이 `42`로 검증된다 (수동 검증 완료).
+- `?`와 match의 두 경로(Ok·Err)에서 `releaseGCRoots` + `ret` 순서가
+  기존 Optional ptr 경로와 동일하게 유지된다.
+- `TestGenerateResultQuestionExprInt`, `TestGenerateResultMatchExprInt`가
+  `internal/llvmgen/optional_test.go`에 추가되어 IR 형태 회귀를 봉쇄한다.
+- `Result<T, String>`의 T가 **struct / enum with Int payload**인 경우도
+  기존 `insertvalue`/`extractvalue`와 `llvmZeroValue`(`zeroinitializer`)
+  fallback으로 자동 동작함을 수동 테스트 2건으로 확인했다
+  (`Version`-구조체, `Tag`-enum with `Num(Int)`). 별도 코드 변경 불필요.
+
+파생 작업 (이 phase의 사전조건 해결):
+
+- `internal/mir/lower.go`의 method lowering panic (`paramLocals[0]` index
+  out of range) 수정. IR `FnDecl`은 receiver를 `Params`에 포함하지 않고
+  `ReceiverMut` 불리언과 소유자 타입만 보존하므로 MIR 쪽에서 자체적으로
+  synthetic `self` 파라미터를 `owner` nominal 타입으로 선두에 주입해야
+  한다 — `lowerFunction`에서 처리. 이 수정 후 `toolchain/core.osty` 단일
+  파일 기준 pipeline이 MIR 단계를 통과하고 lint/gen 단계까지 진행된다
+  (이전에는 MIR panic으로 즉시 중단).
+
+후속:
+
+- `toolchain/llvmgen.osty` 측 Osty-authored AST 에미터 포팅. 현재
+  `emitQuestionExpr`/`emitMatchExprValue`의 orchestration 계층은 Go에만
+  있고, Osty 측에는 lower-level `llvmExtractValue`/`llvmStructLiteral` 등
+  primitive만 존재. 전체 AST walker 포팅은 migration plan의 큰 단계로,
+  이 Phase 74의 단위는 아니다. 현재 Go 코드가 쓰는 primitive는 모두
+  `support_snapshot.go`에 이미 스냅샷되어 있어 primitive drift 위험은
+  낮다.
+- `Result<T, String>` T가 재귀 또는 heap-owned 복합체일 때 GC root /
+  write-barrier 요구사항은 추가 검토 필요. 현재 smoke 커버리지는 Int
+  / Int-payload enum / 단순 struct에 한정.
 
 ## Toolchain 전략
 

@@ -1,0 +1,20 @@
+fn halve(n: Int) -> Result<Int, String> {
+    if n == 0 {
+        Err("zero")
+    } else {
+        Ok(n / 2)
+    }
+}
+
+fn chain(n: Int) -> Result<Int, String> {
+    let a = halve(n)?
+    let b = halve(a)?
+    Ok(b)
+}
+
+fn main() {
+    println(match chain(168) {
+        Ok(v) -> v,
+        Err(_) -> 0,
+    })
+}
