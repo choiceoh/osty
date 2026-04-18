@@ -898,7 +898,17 @@ bool, `None`, `Ok(literal)`, `Err(literal)`, `[]`, `{:}`, or `()` literal.
 
 ---
 
-## Runtime sublanguage (E0770–E0772)
+## Runtime sublanguage (E0771–E0772)
+
+### E0771 — `CodePodShapeViolation`
+
+CodePodShapeViolation: a `struct` carrying `#[pod]` violates the LANG_SPEC §19.4 plain-old-data rule. The diagnostic names the first offending field for non-Pod field types, or the first generic parameter that lacks a `T: Pod` bound for unbounded generic structs.
+
+(primitives, `RawPtr`, other `#[pod] #[repr(c)]` structs, tuples of `Pod`, `Option<T: Pod>`); for unbounded generic structs, add `T: Pod` to every type parameter.
+
+Spec: v0.4 §19.4
+
+**Fix**: replace the offending field's type with a `Pod` type
 
 ### E0770 — `CodeRuntimePrivilegeViolation`
 
