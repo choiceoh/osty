@@ -661,6 +661,23 @@ const (
 	//      or `()` literal.
 	CodeDefaultNotLiteral = "E0762"
 
+	// Runtime sublanguage.
+
+	// CodeNoAllocViolation: a function carrying `#[no_alloc]` contains
+	// an expression that requires the managed allocator (string
+	// interpolation, list/map/set literal, non-Pod struct literal,
+	// non-runtime enum construction, Builder use), or calls a function
+	// that is not itself `#[no_alloc]`. LANG_SPEC §19 allocates this
+	// band at E0770-E0779; the control-flow band E0760-E0769 above is
+	// already in use.
+	//
+	// Spec: v0.4 §19.6.1
+	// Fix: replace the offending expression with raw-memory primitives
+	//      (`std.runtime.raw.*`), pre-allocated buffers, plain string
+	//      literals, or restructure the call so the callee is also
+	//      `#[no_alloc]`.
+	CodeNoAllocViolation = "E0772"
+
 	// Manifest — TOML syntax.
 
 	// Fallback TOML syntax error in `osty.toml`.

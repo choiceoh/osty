@@ -106,6 +106,14 @@ var annotationRules = map[string]AnnotationTarget{
 	// method — the bound is enforced only at call sites, matching the
 	// spec's "T: Ordered" annotations on conditional collection ops.
 	"requires": TargetMethod,
+	// `no_alloc` (LANG_SPEC §19.6) forbids managed allocation in the
+	// annotated function body, including any direct or transitive call
+	// to a function that allocates. The body walker in
+	// `internal/check/noalloc.go` enforces it (`E0772`). This is part of
+	// the runtime sublanguage; spec §19.2 restricts it to privileged
+	// packages, but the privilege gate is a separate phase from this
+	// target check.
+	"no_alloc": TargetTopLevelDecl | TargetMethod,
 }
 
 // IsAllowedAnnotation reports whether an annotation name is part of the
