@@ -253,6 +253,7 @@ type UseDecl struct {
 	Path         []string // dot-separated path, or single entry with slashes for URLs
 	RawPath      string   // e.g. "github.com/user/lib" as written
 	Alias        string   // optional `as alias`
+	IsPub        bool     // v0.5 (G30) §5 — `pub use path` re-export
 	IsGoFFI      bool     // legacy bootstrap-only `use go "..."`
 	IsRuntimeFFI bool     // `use runtime.* { ... }`
 	GoPath       string   // legacy go import path

@@ -44,6 +44,11 @@ func ParseDetailed(src []byte) Result {
 		if lowerings := lowerStableAST(file); len(lowerings) > 0 {
 			prov.Lowerings = lowerings
 		}
+		// v0.5 (G30): the self-hosted parser silently drops `pub`
+		// before `use`; flip IsPub on affected UseDecls here until
+		// the bootstrap regen pipeline is restored and the flag can
+		// be carried through the AST lowerer.
+		markPubUseDecls(normalized, file)
 	}
 	if prov.Empty() {
 		prov = nil
