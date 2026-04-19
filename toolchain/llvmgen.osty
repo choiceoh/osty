@@ -516,6 +516,8 @@ pub fn llvmCStringEscape(text: String) -> String {
             encoded = "{encoded}\\22"
         } else if unit == "\\" {
             encoded = "{encoded}\\5C"
+        } else if unit == "\u{1F}" {
+            encoded = "{encoded}\\1F"
         } else {
             encoded = "{encoded}{unit}"
         }
@@ -1191,7 +1193,7 @@ pub fn llvmLogicalInstruction(op: String) -> String {
 
 pub fn llvmIsAsciiStringText(text: String) -> Bool {
     for c in text.chars() {
-        if c == '\n' || c == '\t' || c == '\r' {
+        if c == '\n' || c == '\t' || c == '\r' || c == '\u{1F}' {
             continue
         }
         if c < ' ' || c > '~' {
