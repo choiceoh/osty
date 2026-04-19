@@ -669,6 +669,7 @@ func TestGeneratedStringRuntimeSymbolsAreOstyOwned(t *testing.T) {
 		{"concat", llvmStringRuntimeConcatSymbol(), "osty_rt_strings_Concat"},
 		{"int_to_string", llvmIntRuntimeToStringSymbol(), "osty_rt_int_to_string"},
 		{"float_to_string", llvmFloatRuntimeToStringSymbol(), "osty_rt_float_to_string"},
+		{"bool_to_string", llvmBoolRuntimeToStringSymbol(), "osty_rt_bool_to_string"},
 		{"byteLen", llvmStringRuntimeByteLenSymbol(), "osty_rt_strings_ByteLen"},
 	}
 	for _, c := range cases {
@@ -688,6 +689,7 @@ func TestGeneratedStringRuntimeDeclarationsAreOstyOwned(t *testing.T) {
 		"declare ptr @osty_rt_strings_Concat(ptr, ptr)",
 		"declare ptr @osty_rt_int_to_string(i64)",
 		"declare ptr @osty_rt_float_to_string(double)",
+		"declare ptr @osty_rt_bool_to_string(i1)",
 		"declare i64 @osty_rt_strings_ByteLen(ptr)",
 	}
 	for _, w := range want {
