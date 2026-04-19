@@ -108,7 +108,22 @@ func newBackendRequest(t *testing.T, emit EmitMode, src string) Request {
 	}
 }
 
+func requireClangForBackendTest(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
+}
+
+func parallelClangBackendTest(t *testing.T) {
+	t.Helper()
+	requireClangForBackendTest(t)
+	t.Parallel()
+}
+
 func TestLLVMBackendEmitBinaryBuildsBundledRuntime(t *testing.T) {
+	t.Parallel()
+
 	tc := &fakeLLVMToolchain{}
 	backend := LLVMBackend{toolchain: tc}
 	req := newBackendRequest(t, EmitBinary, `fn main() {
@@ -177,6 +192,8 @@ func TestLLVMBackendEmitBinaryBuildsBundledRuntime(t *testing.T) {
 }
 
 func TestLLVMBackendEmitLLVMIRSkipsToolchain(t *testing.T) {
+	t.Parallel()
+
 	tc := &fakeLLVMToolchain{}
 	backend := LLVMBackend{toolchain: tc}
 	req := newBackendRequest(t, EmitLLVMIR, `fn main() {
@@ -206,6 +223,8 @@ func TestLLVMBackendEmitLLVMIRSkipsToolchain(t *testing.T) {
 }
 
 func TestLLVMBackendEmitLLVMIRFromIRWithoutASTFallback(t *testing.T) {
+	t.Parallel()
+
 	tc := &fakeLLVMToolchain{}
 	backend := LLVMBackend{toolchain: tc}
 	req := newBackendRequest(t, EmitLLVMIR, `fn main() {
@@ -239,6 +258,8 @@ func TestLLVMBackendEmitLLVMIRFromIRWithoutASTFallback(t *testing.T) {
 }
 
 func TestUseMIRBackendDefaultsEnabled(t *testing.T) {
+	t.Parallel()
+
 	if !useMIRBackend(nil, EmitLLVMIR) {
 		t.Fatal("useMIRBackend(nil, EmitLLVMIR) = false, want true")
 	}
@@ -251,6 +272,8 @@ func TestUseMIRBackendDefaultsEnabled(t *testing.T) {
 }
 
 func TestUseMIRBackendLegacyFeatureDisables(t *testing.T) {
+	t.Parallel()
+
 	if useMIRBackend([]string{"legacy-llvmgen"}, EmitLLVMIR) {
 		t.Fatal("useMIRBackend(legacy-llvmgen, EmitLLVMIR) = true, want false")
 	}
@@ -264,6 +287,8 @@ func TestUseMIRBackendLegacyFeatureDisables(t *testing.T) {
 // rather than silently fall through to any AST-based path (no such
 // path exists any more).
 func TestLLVMBackendRefusesNilIR(t *testing.T) {
+	t.Parallel()
+
 	tc := &fakeLLVMToolchain{}
 	backend := LLVMBackend{toolchain: tc}
 	req := newBackendRequest(t, EmitLLVMIR, `fn main() { println(1) }`)
@@ -280,9 +305,7 @@ func TestLLVMBackendRefusesNilIR(t *testing.T) {
 }
 
 func TestLLVMBackendBinaryRunsBundledRuntime(t *testing.T) {
-	if _, err := exec.LookPath("clang"); err != nil {
-		t.Skip("clang not found on PATH")
-	}
+	parallelClangBackendTest(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `fn touch() {
@@ -317,9 +340,7 @@ fn main() {
 }
 
 func TestLLVMBackendBinarySafepointsKeepManagedRootsAlive(t *testing.T) {
-	if _, err := exec.LookPath("clang"); err != nil {
-		t.Skip("clang not found on PATH")
-	}
+	parallelClangBackendTest(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `use runtime.strings as strings {
@@ -366,9 +387,7 @@ fn main() {
 }
 
 func TestLLVMBackendBinaryAutoCollectsOnPressure(t *testing.T) {
-	if _, err := exec.LookPath("clang"); err != nil {
-		t.Skip("clang not found on PATH")
-	}
+	parallelClangBackendTest(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `use runtime.strings as strings {
@@ -404,9 +423,7 @@ fn main() {
 }
 
 func TestLLVMBackendBinaryForInOverTemporaryManagedListSurvivesPressure(t *testing.T) {
-	if _, err := exec.LookPath("clang"); err != nil {
-		t.Skip("clang not found on PATH")
-	}
+	parallelClangBackendTest(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `use runtime.strings as strings {
@@ -436,9 +453,7 @@ fn main() {
 }
 
 func TestLLVMBackendBinaryManagedTemporaryCallArgSurvivesPressure(t *testing.T) {
-	if _, err := exec.LookPath("clang"); err != nil {
-		t.Skip("clang not found on PATH")
-	}
+	parallelClangBackendTest(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `use runtime.strings as strings {
@@ -474,9 +489,7 @@ fn main() {
 }
 
 func TestLLVMBackendBinaryRunsBitwiseIntOps(t *testing.T) {
-	if _, err := exec.LookPath("clang"); err != nil {
-		t.Skip("clang not found on PATH")
-	}
+	parallelClangBackendTest(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `fn main() {
@@ -501,9 +514,7 @@ func TestLLVMBackendBinaryRunsBitwiseIntOps(t *testing.T) {
 }
 
 func TestLLVMBackendBinaryMutReceiverMethodWritesBackToCaller(t *testing.T) {
-	if _, err := exec.LookPath("clang"); err != nil {
-		t.Skip("clang not found on PATH")
-	}
+	parallelClangBackendTest(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `struct Counter {
@@ -541,9 +552,7 @@ fn main() {
 }
 
 func TestLLVMBackendBinaryCollectionsUseRuntimeContainers(t *testing.T) {
-	if _, err := exec.LookPath("clang"); err != nil {
-		t.Skip("clang not found on PATH")
-	}
+	parallelClangBackendTest(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `struct Pair {
@@ -599,9 +608,7 @@ fn main() {
 }
 
 func TestLLVMBackendBinaryManagedAggregateContainersSurvivePressureGC(t *testing.T) {
-	if _, err := exec.LookPath("clang"); err != nil {
-		t.Skip("clang not found on PATH")
-	}
+	parallelClangBackendTest(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `struct Bucket {
@@ -639,9 +646,7 @@ fn main() {
 }
 
 func TestLLVMBackendBinaryExtendedListSortedAndToSet(t *testing.T) {
-	if _, err := exec.LookPath("clang"); err != nil {
-		t.Skip("clang not found on PATH")
-	}
+	parallelClangBackendTest(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `fn main() {
@@ -682,9 +687,7 @@ func TestLLVMBackendBinaryExtendedListSortedAndToSet(t *testing.T) {
 }
 
 func TestLLVMBackendBinaryPtrBackedListToSetAndBoolPrint(t *testing.T) {
-	if _, err := exec.LookPath("clang"); err != nil {
-		t.Skip("clang not found on PATH")
-	}
+	parallelClangBackendTest(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `use runtime.strings as strings {
@@ -716,9 +719,7 @@ fn main() {
 }
 
 func TestLLVMBackendBinaryGenericEnumVariantFromLetContext(t *testing.T) {
-	if _, err := exec.LookPath("clang"); err != nil {
-		t.Skip("clang not found on PATH")
-	}
+	parallelClangBackendTest(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `enum Maybe<T> { Some(T), None }
@@ -747,9 +748,7 @@ fn main() {
 }
 
 func TestLLVMBackendBinaryGenericEnumVariantInferredFromPayload(t *testing.T) {
-	if _, err := exec.LookPath("clang"); err != nil {
-		t.Skip("clang not found on PATH")
-	}
+	parallelClangBackendTest(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `enum Maybe<T> { Some(T), None }
@@ -778,9 +777,7 @@ fn main() {
 }
 
 func TestLLVMBackendBinaryGenericEnumPayloadFreeVariantFromLetContext(t *testing.T) {
-	if _, err := exec.LookPath("clang"); err != nil {
-		t.Skip("clang not found on PATH")
-	}
+	parallelClangBackendTest(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `enum Maybe<T> { Some(T), None }
@@ -809,9 +806,7 @@ fn main() {
 }
 
 func TestLLVMBackendBinaryBuiltinResultFieldConstructors(t *testing.T) {
-	if _, err := exec.LookPath("clang"); err != nil {
-		t.Skip("clang not found on PATH")
-	}
+	parallelClangBackendTest(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `fn main() {
@@ -835,9 +830,7 @@ func TestLLVMBackendBinaryBuiltinResultFieldConstructors(t *testing.T) {
 }
 
 func TestLLVMBackendBinaryBuiltinResultConstructorsTrackLocalContext(t *testing.T) {
-	if _, err := exec.LookPath("clang"); err != nil {
-		t.Skip("clang not found on PATH")
-	}
+	parallelClangBackendTest(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `struct Holder {
@@ -876,9 +869,7 @@ fn main() {
 }
 
 func TestLLVMBackendBinaryLetStructPatternDestructuring(t *testing.T) {
-	if _, err := exec.LookPath("clang"); err != nil {
-		t.Skip("clang not found on PATH")
-	}
+	parallelClangBackendTest(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `use runtime.strings as strings {
@@ -930,9 +921,7 @@ fn main() {
 // value. Complements the IR-only smoke in
 // `internal/llvmgen/ir_module_test.go::TestGenerateModuleGenericIdentityMonomorphized`.
 func TestLLVMBackendBinaryRunsGenericIdentity(t *testing.T) {
-	if _, err := exec.LookPath("clang"); err != nil {
-		t.Skip("clang not found on PATH")
-	}
+	parallelClangBackendTest(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `fn id<T>(x: T) -> T { x }
@@ -966,9 +955,7 @@ fn main() {
 // confirming the emitted `insertvalue` / `extractvalue` / `load ptr`
 // / indirect-call sequence survives clang and runs correctly.
 func TestLLVMBackendBinaryRunsInterfaceBoxingDispatch(t *testing.T) {
-	if _, err := exec.LookPath("clang"); err != nil {
-		t.Skip("clang not found on PATH")
-	}
+	parallelClangBackendTest(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `interface Sized {

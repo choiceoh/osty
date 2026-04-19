@@ -7,9 +7,7 @@ import (
 )
 
 func TestLLVMBackendBinaryRunsWhileStyleForLoop(t *testing.T) {
-	if _, err := exec.LookPath("clang"); err != nil {
-		t.Skip("clang not found on PATH")
-	}
+	parallelClangBackendTest(t)
 
 	backend := LLVMBackend{}
 	req := newBackendRequest(t, EmitBinary, `fn main() {
