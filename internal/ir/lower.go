@@ -432,6 +432,8 @@ func primitiveByName(name string) *PrimType {
 		return TString
 	case "Bytes":
 		return TBytes
+	case "RawPtr":
+		return TRawPtr
 	}
 	return nil
 }
@@ -534,6 +536,8 @@ func primitiveByKind(k types.PrimitiveKind) *PrimType {
 		return TString
 	case types.PBytes:
 		return TBytes
+	case types.PRawPtr:
+		return TRawPtr
 	case types.PUnit:
 		return TUnit
 	case types.PNever:

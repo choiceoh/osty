@@ -82,6 +82,13 @@ const (
 	PrimString
 	PrimBytes
 
+	// Runtime-only opaque pointer-shaped scalar (LANG_SPEC §19.3).
+	// Represents `RawPtr` from `std.runtime` — an integer-shaped
+	// opaque type used by the runtime sublanguage. Mirrors
+	// `types.PRawPtr` so the IR lowerer can flow native-checker
+	// type info to call sites without losing precision.
+	PrimRawPtr
+
 	PrimUnit  // ()
 	PrimNever // !
 )
@@ -127,6 +134,8 @@ func (p *PrimType) String() string {
 		return "String"
 	case PrimBytes:
 		return "Bytes"
+	case PrimRawPtr:
+		return "RawPtr"
 	case PrimUnit:
 		return "()"
 	case PrimNever:
@@ -155,6 +164,7 @@ var (
 	TChar    = &PrimType{Kind: PrimChar}
 	TString  = &PrimType{Kind: PrimString}
 	TBytes   = &PrimType{Kind: PrimBytes}
+	TRawPtr  = &PrimType{Kind: PrimRawPtr}
 	TUnit    = &PrimType{Kind: PrimUnit}
 	TNever   = &PrimType{Kind: PrimNever}
 )
