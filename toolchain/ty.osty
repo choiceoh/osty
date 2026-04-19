@@ -86,7 +86,6 @@ pub struct TyNode {
 /// never allocate a fresh node for `Int`, `Bool`, ...
 pub struct TyArena {
     pub nodes: List<TyNode>,
-    pub nextVarId: Int,
 
     pub idxErr: Int,
     pub idxInt: Int,
@@ -134,7 +133,6 @@ pub fn emptyTyNode() -> TyNode {
 pub fn emptyTyArena() -> TyArena {
     let mut arena = TyArena {
         nodes: [],
-        nextVarId: 1,
         idxErr: -1,
         idxInt: -1, idxInt8: -1, idxInt16: -1, idxInt32: -1, idxInt64: -1,
         idxUInt8: -1, idxUInt16: -1, idxUInt32: -1, idxUInt64: -1,
@@ -314,12 +312,10 @@ pub fn tyOptional(arena: TyArena, inner: Int) -> Int {
 /// declaring fn/method name so two `T`s on different generics never
 /// collide during diagnostics.
 pub fn tyVarFresh(arena: TyArena, owner: String, name: String) -> Int {
-    let id = arena.nextVarId
-    arena.nextVarId = id + 1
     let idx = tyNodeCount(arena)
     let node = TyNode {
         kind: TkVar, prim: PkInvalid, head: "", args: [], ret: -1,
-        varId: id, varName: name, varOwner: owner,
+        varId: idx + 1, varName: name, varOwner: owner,
     }
     arena.nodes.push(node)
     idx
