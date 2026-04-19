@@ -31,10 +31,16 @@ func mergeToolchainSources(t *testing.T, root string, files []string) []byte {
 	return []byte(buf.String())
 }
 
-// TestProbeLargeFileParity lowers ir.osty and check_env.osty merged
-// with their cross-module type declarations. Single-file sweeps flag
-// these as LLVM011 — merging reveals whether that wall is a real
-// backend gap or cross-module scope. Info-only.
+// TestProbeLargeFileParity lowers each large / god-node toolchain
+// module merged with its cross-module type declarations. Single-file
+// sweeps flag every one of these as LLVM011; merging reveals whether
+// that wall is a real backend gap or pure cross-module scope.
+//
+// Coverage: ir.osty, check_env.osty, and the four god-nodes elab /
+// parser / lint / resolve. For each entry, `files` is the minimum
+// merge set that clears the single-file first wall — picked by walking
+// the first-wall type payload back to its declaring toolchain basename.
+// Info-only; never fails.
 func TestProbeLargeFileParity(t *testing.T) {
 	if testing.Short() {
 		t.Skip("info-only; skipped in -short")
@@ -54,6 +60,39 @@ func TestProbeLargeFileParity(t *testing.T) {
 		{
 			name:  "ir",
 			files: []string{"frontend.osty", "parser.osty", "ir.osty"},
+		},
+		{
+			name:  "parser",
+			files: []string{"frontend.osty", "parser.osty"},
+		},
+		{
+			name:  "resolve",
+			files: []string{"frontend.osty", "parser.osty", "resolve.osty"},
+		},
+		{
+			name:  "lint",
+			files: []string{"frontend.osty", "parser.osty", "resolve.osty", "lint.osty"},
+		},
+		{
+			// elab's type signature spans the whole check/diag closure, so
+			// each unresolved cross-file type is a scope artifact rather
+			// than a new backend wall — the merge set has to include every
+			// declaring basename in one shot.
+			name: "elab",
+			files: []string{
+				"frontend.osty",
+				"lexer.osty",
+				"parser.osty",
+				"diagnostic.osty",
+				"ty.osty",
+				"check_diag.osty",
+				"check_env.osty",
+				"resolve.osty",
+				"lint.osty",
+				"solve.osty",
+				"core.osty",
+				"elab.osty",
+			},
 		},
 	}
 	for _, c := range cases {
