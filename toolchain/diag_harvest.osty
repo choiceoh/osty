@@ -1,0 +1,98 @@
+use std.strings as harvestStrings
+
+/// DiagHarvestOutcome reports what happened when an example was
+/// routed through the matching self-host pipeline.
+///
+/// `expectedCode` mirrors the case input. `emittedCodes` is every
+/// diagnostic code observed — useful for telling the developer which
+/// codes fired when the expected one did not. `matched` is the simple
+/// predicate the harvest test asserts on.
+pub struct DiagHarvestOutcome {
+    pub expectedCode: String,
+    pub matched: Bool,
+    pub emittedCodes: List<String>,
+    pub phase: String,
+    pub skipped: Bool,
+}
+
+/// diagHarvestResolveCodes extracts every code observed while resolving
+/// `source` through the lex/parse/resolve pipeline.
+pub fn diagHarvestResolveCodes(source: String) -> List<String> {
+    let mut codes: List<String> = []
+    let result = selfResolveSource(source)
+    for d in result.diagnostics {
+        codes.push(d.code)
+    }
+    codes
+}
+
+/// diagHarvestCheckCodes runs the full frontend (lex/parse/check) and
+/// returns the diagnostic codes.
+pub fn diagHarvestCheckCodes(source: String) -> List<String> {
+    let mut codes: List<String> = []
+    let result = frontendCheckSourceStructured(source)
+    for d in result.diagnostics {
+        codes.push(d.code)
+    }
+    codes
+}
+
+/// diagHarvestLintCodes runs the linter pipeline on the source.
+pub fn diagHarvestLintCodes(source: String) -> List<String> {
+    let mut codes: List<String> = []
+    let report = selfLintSource(source)
+    for d in report.diagnostics {
+        codes.push(d.code)
+    }
+    codes
+}
+
+fn diagHarvestContains(codes: List<String>, needle: String) -> Bool {
+    for c in codes {
+        if c == needle {
+            return true
+        }
+    }
+    false
+}
+
+/// diagHarvestRun routes a single case through the correct self-host
+/// phase and records what fired. Cases tagged `phase: "skip"` return
+/// with `skipped: true` and no codes — the test scopes out
+/// manifest/scaffold bands that have no String-input entry point.
+pub fn diagHarvestRun(case: DiagHarvestCase) -> DiagHarvestOutcome {
+    if case.phase == "skip" {
+        return DiagHarvestOutcome {
+            expectedCode: case.code,
+            matched: false,
+            emittedCodes: [],
+            phase: case.phase,
+            skipped: true,
+        }
+    }
+    let codes = if case.phase == "lint" {
+        diagHarvestLintCodes(case.example)
+    } else if case.phase == "check" {
+        diagHarvestCheckCodes(case.example)
+    } else {
+        diagHarvestResolveCodes(case.example)
+    }
+    DiagHarvestOutcome {
+        expectedCode: case.code,
+        matched: diagHarvestContains(codes, case.code),
+        emittedCodes: codes,
+        phase: case.phase,
+        skipped: false,
+    }
+}
+
+/// diagHarvestFormatFailure renders a single failing outcome into a
+/// human-readable one-liner for test failure output.
+pub fn diagHarvestFormatFailure(outcome: DiagHarvestOutcome) -> String {
+    let observed = if outcome.emittedCodes.isEmpty() {
+        "<none>"
+    } else {
+        harvestStrings.join(outcome.emittedCodes, ", ")
+    }
+    "{outcome.expectedCode} ({outcome.phase}): expected code in diagnostics, got [{observed}]"
+}

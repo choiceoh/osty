@@ -48,35 +48,11 @@ pub fn diagnosticSeverityName(severity: DiagnosticSeverity) -> String {
     }
 }
 
-/// diagnosticFamily classifies codes into the ranges owned by compiler phases.
+/// diagnosticFamily classifies a stable code into the phase family that
+/// owns it. The body delegates to the generated manifest so adding a
+/// new code in internal/diag/codes.go is a one-file change.
 pub fn diagnosticFamily(code: String) -> DiagnosticFamily {
-    if code >= "E0001" && code <= "E0007" {
-        FamilyLexical
-    } else if code >= "E0100" && code <= "E0106" {
-        FamilyDeclaration
-    } else if code >= "E0200" && code <= "E0204" {
-        FamilyExpression
-    } else if code >= "E0300" && code <= "E0301" {
-        FamilyTypePattern
-    } else if code >= "E0400" && code <= "E0400" {
-        FamilyAnnotation
-    } else if code >= "E0500" && code <= "E0509" {
-        FamilyResolution
-    } else if code >= "E0600" && code <= "E0609" {
-        FamilyControlFlow
-    } else if code >= "E0700" && code <= "E0762" {
-        FamilyTypeChecking
-    } else if code >= "E2000" && code <= "E2032" {
-        FamilyManifest
-    } else if code >= "E2050" && code <= "E2052" {
-        FamilyScaffold
-    } else if code >= "L0001" && code <= "L9999" {
-        FamilyLint
-    } else if code >= "W0000" && code <= "W9999" {
-        FamilyWarning
-    } else {
-        FamilyUnknown
-    }
+    diagnosticFamilyForCode(code)
 }
 
 /// diagnosticFamilyName returns a stable label for docs and reports.
