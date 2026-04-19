@@ -219,6 +219,13 @@ type gen struct {
 	// emitQuestion. Nil when no lift is in progress.
 	questionSubs map[*ast.QuestionExpr]string
 
+	// matchSubs maps a MatchExpr that has been hoisted out of
+	// expression position to the Go identifier holding its value.
+	// Populated by preLiftMatches when an arm body contains a `return`
+	// (which the IIFE form would silently swallow); consumed by
+	// emitMatch. Nil when no match lift is in progress.
+	matchSubs map[*ast.MatchExpr]string
+
 	// instQueue is the pending list of generic-fn monomorphizations
 	// that still need to be emitted. emitCall appends to this queue
 	// each time it encounters a generic call site whose (sym, type
