@@ -5208,144 +5208,39 @@ func frontInterpolationTokenCount(stream *FrontLexStream) int {
 	return count
 }
 
-// Osty: /tmp/selfhost_merged.osty:2192:5
 func frontLexTokenAt(stream *FrontLexStream, target int) *FrontLexToken {
-	// Osty: /tmp/selfhost_merged.osty:2193:5
-	idx := 0
-	_ = idx
-	// Osty: /tmp/selfhost_merged.osty:2194:5
-	for _, tok := range stream.tokens {
-		// Osty: /tmp/selfhost_merged.osty:2195:9
-		if idx == target {
-			// Osty: /tmp/selfhost_merged.osty:2196:13
-			return tok
-		}
-		// Osty: /tmp/selfhost_merged.osty:2198:9
-		func() {
-			var _cur396 int = idx
-			var _rhs397 int = 1
-			if _rhs397 > 0 && _cur396 > math.MaxInt-_rhs397 {
-				panic("integer overflow")
-			}
-			if _rhs397 < 0 && _cur396 < math.MinInt-_rhs397 {
-				panic("integer overflow")
-			}
-			idx = _cur396 + _rhs397
-		}()
+	if target < 0 || target >= len(stream.tokens) {
+		return emptyFrontLexToken()
 	}
-	return emptyFrontLexToken()
+	return stream.tokens[target]
 }
 
-// Osty: /tmp/selfhost_merged.osty:2203:5
 func frontLexDiagnosticAt(stream *FrontLexStream, target int) *FrontLexDiagnostic {
-	// Osty: /tmp/selfhost_merged.osty:2204:5
-	idx := 0
-	_ = idx
-	// Osty: /tmp/selfhost_merged.osty:2205:5
-	for _, diag := range stream.diagnostics {
-		// Osty: /tmp/selfhost_merged.osty:2206:9
-		if idx == target {
-			// Osty: /tmp/selfhost_merged.osty:2207:13
-			return diag
-		}
-		// Osty: /tmp/selfhost_merged.osty:2209:9
-		func() {
-			var _cur398 int = idx
-			var _rhs399 int = 1
-			if _rhs399 > 0 && _cur398 > math.MaxInt-_rhs399 {
-				panic("integer overflow")
-			}
-			if _rhs399 < 0 && _cur398 < math.MinInt-_rhs399 {
-				panic("integer overflow")
-			}
-			idx = _cur398 + _rhs399
-		}()
+	if target < 0 || target >= len(stream.diagnostics) {
+		return emptyFrontLexDiagnostic()
 	}
-	return emptyFrontLexDiagnostic()
+	return stream.diagnostics[target]
 }
 
-// Osty: /tmp/selfhost_merged.osty:2214:5
 func frontCommentAt(stream *FrontLexStream, target int) *FrontComment {
-	// Osty: /tmp/selfhost_merged.osty:2215:5
-	idx := 0
-	_ = idx
-	// Osty: /tmp/selfhost_merged.osty:2216:5
-	for _, comment := range stream.comments {
-		// Osty: /tmp/selfhost_merged.osty:2217:9
-		if idx == target {
-			// Osty: /tmp/selfhost_merged.osty:2218:13
-			return comment
-		}
-		// Osty: /tmp/selfhost_merged.osty:2220:9
-		func() {
-			var _cur400 int = idx
-			var _rhs401 int = 1
-			if _rhs401 > 0 && _cur400 > math.MaxInt-_rhs401 {
-				panic("integer overflow")
-			}
-			if _rhs401 < 0 && _cur400 < math.MinInt-_rhs401 {
-				panic("integer overflow")
-			}
-			idx = _cur400 + _rhs401
-		}()
+	if target < 0 || target >= len(stream.comments) {
+		return emptyFrontComment()
 	}
-	return emptyFrontComment()
+	return stream.comments[target]
 }
 
-// Osty: /tmp/selfhost_merged.osty:2225:5
 func frontStringPartAt(stream *FrontLexStream, target int) *FrontStringPart {
-	// Osty: /tmp/selfhost_merged.osty:2226:5
-	idx := 0
-	_ = idx
-	// Osty: /tmp/selfhost_merged.osty:2227:5
-	for _, part := range stream.stringParts {
-		// Osty: /tmp/selfhost_merged.osty:2228:9
-		if idx == target {
-			// Osty: /tmp/selfhost_merged.osty:2229:13
-			return part
-		}
-		// Osty: /tmp/selfhost_merged.osty:2231:9
-		func() {
-			var _cur402 int = idx
-			var _rhs403 int = 1
-			if _rhs403 > 0 && _cur402 > math.MaxInt-_rhs403 {
-				panic("integer overflow")
-			}
-			if _rhs403 < 0 && _cur402 < math.MinInt-_rhs403 {
-				panic("integer overflow")
-			}
-			idx = _cur402 + _rhs403
-		}()
+	if target < 0 || target >= len(stream.stringParts) {
+		return emptyFrontStringPart()
 	}
-	return emptyFrontStringPart()
+	return stream.stringParts[target]
 }
 
-// Osty: /tmp/selfhost_merged.osty:2236:5
 func frontInterpolationTokenAt(stream *FrontLexStream, target int) *FrontInterpolationToken {
-	// Osty: /tmp/selfhost_merged.osty:2237:5
-	idx := 0
-	_ = idx
-	// Osty: /tmp/selfhost_merged.osty:2238:5
-	for _, token := range stream.interpolationTokens {
-		// Osty: /tmp/selfhost_merged.osty:2239:9
-		if idx == target {
-			// Osty: /tmp/selfhost_merged.osty:2240:13
-			return token
-		}
-		// Osty: /tmp/selfhost_merged.osty:2242:9
-		func() {
-			var _cur404 int = idx
-			var _rhs405 int = 1
-			if _rhs405 > 0 && _cur404 > math.MaxInt-_rhs405 {
-				panic("integer overflow")
-			}
-			if _rhs405 < 0 && _cur404 < math.MinInt-_rhs405 {
-				panic("integer overflow")
-			}
-			idx = _cur404 + _rhs405
-		}()
+	if target < 0 || target >= len(stream.interpolationTokens) {
+		return emptyFrontInterpolationToken()
 	}
-	return emptyFrontInterpolationToken()
+	return stream.interpolationTokens[target]
 }
 
 // Osty: /tmp/selfhost_merged.osty:2247:5
