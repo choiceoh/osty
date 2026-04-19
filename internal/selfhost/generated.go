@@ -18742,6 +18742,27 @@ func opAt(p *OstyParser, kind FrontTokenKind) bool {
 	return ostyEqual(opPeek(p).kind, kind)
 }
 
+func opIsStableAlias(tok *FrontToken, text string) bool {
+	return ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) && tok.text == text
+}
+
+func opIsFnHead(tok *FrontToken) bool {
+	return ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontFn{})) ||
+		opIsStableAlias(tok, "func") ||
+		opIsStableAlias(tok, "def") ||
+		opIsStableAlias(tok, "function")
+}
+
+func opIsUseHead(tok *FrontToken) bool {
+	return ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontUse{})) ||
+		opIsStableAlias(tok, "import")
+}
+
+func opIsForHead(tok *FrontToken) bool {
+	return ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontFor{})) ||
+		opIsStableAlias(tok, "while")
+}
+
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6918:1
 func opAdvance(p *OstyParser) *FrontToken {
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6919:5
@@ -18856,10 +18877,13 @@ func opSyncDecl(p *OstyParser) {
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6972:5
 	for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6973:9
+		tok := opPeek(p)
+		_ = tok
+		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6973:9
 		kind := opPeek(p).kind
 		_ = kind
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6974:9
-		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontFn{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontStruct{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontEnum{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontInterface{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontType{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontUse{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontPub{})) {
+		if opIsFnHead(tok) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontStruct{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontEnum{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontInterface{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontType{})) || opIsUseHead(tok) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontPub{})) {
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6974:161
 			return
 		}
@@ -18878,6 +18902,9 @@ func opSyncStmt(p *OstyParser) {
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6981:5
 	for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6982:9
+		tok := opPeek(p)
+		_ = tok
+		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6982:9
 		kind := opPeek(p).kind
 		_ = kind
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6983:9
@@ -18893,7 +18920,7 @@ func opSyncStmt(p *OstyParser) {
 			return
 		}
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6988:9
-		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLet{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontReturn{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBreak{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontContinue{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontDefer{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontFor{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontIf{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontMatch{})) {
+		if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLet{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontReturn{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBreak{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontContinue{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontDefer{})) || opIsForHead(tok) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontIf{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontMatch{})) {
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6988:184
 			return
 		}
@@ -19710,10 +19737,12 @@ func opLooksLikeMap(p *OstyParser) bool {
 		return false
 	}
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:7314:5
-	kind := opPeek(p).kind
+	tok := opPeek(p)
+	_ = tok
+	kind := tok.kind
 	_ = kind
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:7315:5
-	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLet{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontReturn{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBreak{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontContinue{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontDefer{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontFor{})) {
+	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLet{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontReturn{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBreak{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontContinue{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontDefer{})) || opIsForHead(tok) {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:7315:140
 		p.pos = save
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:7316:5
@@ -20497,7 +20526,7 @@ func opParseStmt(p *OstyParser) int {
 		return opParseDeferStmt(p)
 	}
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:7670:5
-	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontFor{})) {
+	if opIsForHead(tok) {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:7670:31
 		return opParseForStmt(p)
 	}
@@ -21293,7 +21322,7 @@ func opParseTypeAtom(p *OstyParser) int {
 	tok := opPeek(p)
 	_ = tok
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8036:5
-	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontFn{})) {
+	if opIsFnHead(tok) {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8036:30
 		return opParseFnType(p)
 	}
@@ -21757,7 +21786,7 @@ func opParseDecl(p *OstyParser) int {
 	tok := opPeek(p)
 	_ = tok
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8249:5
-	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontFn{})) {
+	if opIsFnHead(tok) {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8249:30
 		return opParseFnDecl(p, isPub, anns)
 	}
@@ -21782,7 +21811,7 @@ func opParseDecl(p *OstyParser) int {
 		return opParseTypeAliasDecl(p, isPub, anns)
 	}
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8254:5
-	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontUse{})) {
+	if opIsUseHead(tok) {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8254:31
 		return opParseUseDecl(p, isPub)
 	}
