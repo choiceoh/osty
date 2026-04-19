@@ -224,6 +224,7 @@ func cloneFnDecl(fn *FnDecl) *FnDecl {
 		ExportSymbol: fn.ExportSymbol,
 		CABI:         fn.CABI,
 		IsIntrinsic:  fn.IsIntrinsic,
+		NoAlloc:      fn.NoAlloc,
 	}
 	if len(fn.Params) > 0 {
 		out.Params = make([]*Param, len(fn.Params))
@@ -245,6 +246,8 @@ func cloneStructDecl(s *StructDecl) *StructDecl {
 		Name:     s.Name,
 		Exported: s.Exported,
 		SpanV:    s.SpanV,
+		Pod:      s.Pod,
+		ReprC:    s.ReprC,
 	}
 	if len(s.Fields) > 0 {
 		out.Fields = make([]*Field, len(s.Fields))

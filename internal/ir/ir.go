@@ -340,6 +340,14 @@ type FnDecl struct {
 	// where this is set — backends must add per-intrinsic dispatch
 	// before the pipeline can consume them.
 	IsIntrinsic bool
+
+	// NoAlloc is set when the function carries `#[no_alloc]`
+	// (LANG_SPEC §19.6.1). The front-end body walker
+	// (`internal/check/noalloc.go`) is the authoritative enforcer;
+	// this field exists so backends and tooling can identify the
+	// allocation-free contract without re-reading annotations. No
+	// codegen behavior is currently attached.
+	NoAlloc bool
 }
 
 func (*FnDecl) declNode()          {}
@@ -385,6 +393,20 @@ type StructDecl struct {
 	Generics []*TypeParam
 	Exported bool
 	SpanV    Span
+
+	// Pod is set when the struct carries `#[pod]` (LANG_SPEC §19.4).
+	// The front-end shape checker (`internal/check/podshape.go`) is
+	// the authoritative validator that the struct meets the §19.4
+	// derivation rules; this field exists so downstream backends and
+	// tooling can identify Pod structs without re-walking annotations.
+	Pod bool
+
+	// ReprC is set when the struct carries `#[repr(c)]` (LANG_SPEC
+	// §19.6). Required on any `#[pod]` struct (§19.4) and on any
+	// struct passed across a `#[c_abi]` boundary or used with
+	// `raw.read`/`raw.write`. The backend will use this to lock the
+	// field layout to C ABI when codegen for §19 lands.
+	ReprC bool
 }
 
 func (*StructDecl) declNode()          {}
