@@ -10,7 +10,8 @@ import (
 )
 
 type checkRequest struct {
-	Source string `json:"source"`
+	Source  string                      `json:"source,omitempty"`
+	Package *selfhost.PackageCheckInput `json:"package,omitempty"`
 }
 
 type checkSummary struct {
@@ -77,7 +78,18 @@ func run(stdin io.Reader, stdout io.Writer) error {
 	if err := json.NewDecoder(stdin).Decode(&req); err != nil {
 		return fmt.Errorf("decode checker request: %w", err)
 	}
-	checked := selfhost.CheckSourceStructured([]byte(req.Source))
+	var (
+		checked selfhost.CheckResult
+		err     error
+	)
+	if req.Package != nil {
+		checked, err = selfhost.CheckPackageStructured(*req.Package)
+		if err != nil {
+			return fmt.Errorf("check package request: %w", err)
+		}
+	} else {
+		checked = selfhost.CheckSourceStructured([]byte(req.Source))
+	}
 	resp := checkResponse{
 		Summary: checkSummary{
 			Assignments:     checked.Summary.Assignments,
