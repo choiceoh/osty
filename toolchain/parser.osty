@@ -115,6 +115,7 @@ pub fn astPatternErrorKind() -> Int { 11 }
 
 pub fn astUseDeclFlagGo() -> Int { 1 }
 pub fn astUseDeclFlagPub() -> Int { 2 }
+pub fn astUseDeclGroupMarker() -> Int { 1 }
 
 fn astUseDeclFlags(isGo: Bool, isPub: Bool) -> Int {
     if isGo && isPub {
@@ -141,6 +142,13 @@ pub fn astUseDeclIsPub(n: AstNode) -> Bool {
         return false
     }
     n.flags == astUseDeclFlagPub() || n.flags == astUseDeclFlagGo() + astUseDeclFlagPub()
+}
+
+pub fn astUseDeclIsGroup(n: AstNode) -> Bool {
+    if n.kind != AstNUseDecl {
+        return false
+    }
+    n.extra == astUseDeclGroupMarker()
 }
 
 pub fn astArenaAdd(arena: AstArena, node: AstNode) -> Int {
@@ -1789,6 +1797,10 @@ fn opParseUseDecl(p: OstyParser, isPub: Bool) -> Int {
         if opAt(p, FrontString) || opAt(p, FrontRawString) { rawPath = opAdvance(p).text }
     } else {
         rawPath = opParseUsePath(p)
+        if opAt(p, FrontColonColon) && opPeekAt(p, 1).kind == FrontLBrace {
+            let _ = opAdvance(p)
+            return opParseScopedUseDecl(p, start, rawPath, isPub)
+        }
     }
     if opAt(p, FrontIdent) && opPeek(p).text == "as" {
         let _ = opAdvance(p)
@@ -1813,11 +1825,15 @@ fn opParseUseDecl(p: OstyParser, isPub: Bool) -> Int {
         }
         let _ = opExpect(p, FrontRBrace)
     }
+    opBuildUseDecl(p, start, p.pos, rawPath, isGo, isPub, alias, aliasStart, goItems)
+}
+
+fn opBuildUseDecl(p: OstyParser, start: Int, end: Int, rawPath: String, isGo: Bool, isPub: Bool, alias: String, aliasStart: Int, body: List<Int>) -> Int {
     let mut n = emptyAstNode(AstNUseDecl)
     n.text = rawPath
-    n.children = goItems
+    n.children = body
     n.start = start
-    n.end = p.pos
+    n.end = end
     n.flags = astUseDeclFlags(isGo, isPub)
     if alias != "" {
         n.op = FrontIdent
@@ -1827,6 +1843,47 @@ fn opParseUseDecl(p: OstyParser, isPub: Bool) -> Int {
         aliasNode.end = aliasStart + 1
         n.children2 = [opAddNode(p, aliasNode)]
     }
+    opAddNode(p, n)
+}
+
+fn opParseScopedUseDecl(p: OstyParser, start: Int, basePath: String, isPub: Bool) -> Int {
+    let _ = opExpect(p, FrontLBrace)
+    let mut items: List<Int> = []
+    opSkipNewlines(p)
+    for !(opAt(p, FrontRBrace)) && !(opAt(p, FrontEOF)) {
+        if opEat(p, FrontComma) {
+            opSkipNewlines(p)
+            continue
+        }
+        if !(opAt(p, FrontIdent)) {
+            let gotName = frontTokenKindName(opPeek(p).kind)
+            opErrorFull(p, "expected grouped import item, got {gotName}", "grouped imports accept `name` or `name as alias` items", "", "E0001")
+            let _ = opAdvance(p)
+            opSkipNewlines(p)
+            continue
+        }
+        let itemName = opAdvance(p).text
+        let mut alias = ""
+        let mut aliasStart = -1
+        if opAt(p, FrontIdent) && opPeek(p).text == "as" {
+            let _ = opAdvance(p)
+            aliasStart = p.pos
+            alias = opExpect(p, FrontIdent).text
+        }
+        items.push(opBuildUseDecl(p, start, p.pos, "{basePath}.{itemName}", false, isPub, alias, aliasStart, []))
+        if !(opEat(p, FrontComma)) {
+            break
+        }
+        opSkipNewlines(p)
+    }
+    let _ = opExpect(p, FrontRBrace)
+    let mut n = emptyAstNode(AstNUseDecl)
+    n.text = basePath
+    n.children = items
+    n.start = start
+    n.end = p.pos
+    n.flags = astUseDeclFlags(false, isPub)
+    n.extra = astUseDeclGroupMarker()
     opAddNode(p, n)
 }
 
@@ -1991,8 +2048,9 @@ pub fn astCountSummary(file: AstFile) -> FrontParseSummary {
             if n.flags == 1 { s.publicDecls = s.publicDecls + 1 } },
             AstNTypeAlias -> { s.aliases = s.aliases + 1
             if n.flags == 1 { s.publicDecls = s.publicDecls + 1 } },
-            AstNUseDecl -> { s.uses = s.uses + 1
-            if astUseDeclIsGo(n) { s.goUses = s.goUses + 1 } },
+            AstNUseDecl -> {
+            if !(astUseDeclIsGroup(n)) { s.uses = s.uses + 1
+            if astUseDeclIsGo(n) { s.goUses = s.goUses + 1 } } },
             AstNBlock -> { s.blocks = s.blocks + 1 },
             AstNLet -> { s.lets = s.lets + 1
             s.statements = s.statements + 1

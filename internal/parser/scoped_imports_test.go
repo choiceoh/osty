@@ -100,24 +100,23 @@ use std.io
 	}
 }
 
-func TestScopedImportProvenance(t *testing.T) {
+func TestParseCanonicalScopedImport(t *testing.T) {
 	src := []byte(`use std.fs::{open, exists}
 `)
-	result := ParseDetailed(src)
-	if result.File == nil {
-		t.Fatal("parse failed")
+	file, diags := ParseCanonical(src)
+	if len(diags) > 0 {
+		t.Fatalf("ParseCanonical returned %d diagnostics: %v", len(diags), diags[0])
 	}
-	if result.Provenance == nil {
-		t.Fatal("expected provenance for scoped expansion, got nil")
+	if file == nil {
+		t.Fatal("ParseCanonical returned nil file")
 	}
-	found := false
-	for _, step := range result.Provenance.Lowerings {
-		if step.Kind == "scoped_import_expansion" {
-			found = true
-			break
-		}
+	if len(file.Uses) != 2 {
+		t.Fatalf("expected 2 canonical use decls, got %d", len(file.Uses))
 	}
-	if !found {
-		t.Errorf("expected scoped_import_expansion provenance step")
+	if file.Uses[0].RawPath != "std.fs.open" {
+		t.Fatalf("use[0]: got %q, want std.fs.open", file.Uses[0].RawPath)
+	}
+	if file.Uses[1].RawPath != "std.fs.exists" {
+		t.Fatalf("use[1]: got %q, want std.fs.exists", file.Uses[1].RawPath)
 	}
 }

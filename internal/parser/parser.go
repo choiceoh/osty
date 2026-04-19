@@ -43,7 +43,7 @@ func ParseDetailed(src []byte) Result {
 // ParseCanonical parses already-canonical source without running the
 // source-level compatibility rewrites that ParseDetailed applies for
 // user-authored code. Callers should use this only for trusted inputs that do
-// not rely on stable-alias keywords or scoped-import expansion.
+// not rely on stable-alias keyword rewrites.
 //
 // Unlike calling selfhost.Parse directly, this still applies the parser's
 // shared AST fixups so canonical sources that use lowered surface forms such

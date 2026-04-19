@@ -264,14 +264,16 @@ fn astLowerPublicFile(arena: AstArena, toks: List<astbridge.Token>) -> astbridge
             if !(astbridge.IsNilStmt(stmt)) {
                 stmts.push(stmt)
             }
+        } else if n.kind == AstNUseDecl {
+            for useDecl in astLowerUseDecls(arena, toks, n) {
+                if !(astbridge.IsNilDecl(useDecl)) {
+                    uses.push(useDecl)
+                }
+            }
         } else {
             let decl = astLowerDecl(arena, toks, idx)
             if !(astbridge.IsNilDecl(decl)) {
-                if n.kind == AstNUseDecl {
-                    uses.push(decl)
-                } else {
-                    decls.push(decl)
-                }
+                decls.push(decl)
             } else {
                 let stmt = astLowerStmt(arena, toks, idx)
                 if !(astbridge.IsNilStmt(stmt)) {
@@ -281,6 +283,24 @@ fn astLowerPublicFile(arena: AstArena, toks: List<astbridge.Token>) -> astbridge
         }
     }
     astbridge.FileNode(astLowerPos(toks, 0), astLowerEnd(toks, astLowerTokenCount(toks) - 1), uses, decls, stmts)
+}
+
+fn astLowerUseDecls(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> List<astbridge.Decl> {
+    let mut out = astbridge.EmptyDeclList()
+    if astUseDeclIsGroup(n) {
+        for child in n.children {
+            let childDecl = astLowerUseDecl(arena, toks, astArenaNodeAt(arena, child))
+            if !(astbridge.IsNilDecl(childDecl)) {
+                out.push(childDecl)
+            }
+        }
+        return out
+    }
+    let decl = astLowerUseDecl(arena, toks, n)
+    if !(astbridge.IsNilDecl(decl)) {
+        out.push(decl)
+    }
+    out
 }
 
 fn astLowerTokenCount(toks: List<astbridge.Token>) -> Int {
@@ -930,14 +950,12 @@ fn astLowerTypeAliasDecl(arena: AstArena, toks: List<astbridge.Token>, n: AstNod
 }
 
 fn astLowerUseDecl(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Decl {
+    if astUseDeclIsGroup(n) {
+        return astbridge.NilDecl()
+    }
     let mut raw = astLowerUnquoteMaybe(n.text)
     if astUseDeclIsGo(n) {
         let reconstructed = astLowerUseGoRawPath(toks, n)
-        if reconstructed != "" {
-            raw = reconstructed
-        }
-    } else {
-        let reconstructed = astLowerUseRawPath(toks, n)
         if reconstructed != "" {
             raw = reconstructed
         }
