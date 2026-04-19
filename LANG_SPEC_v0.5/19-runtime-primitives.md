@@ -620,7 +620,7 @@ lowering even after the IR plumbing is in place.
 
 | Piece | Status | Notes |
 |---|---|---|
-| Stdlib member type inference for `use std.runtime.raw` | **gap** | Today `raw.null()` resolves but checks as `*ir.ErrType` because the native checker does not flow stdlib intrinsic return types back to call sites. Lowering work is blocked on this until fixed. |
+| Stdlib member type inference for `use std.runtime.raw` | **gap** | Today `raw.null()` resolves but checks as `*ir.ErrType` because the native checker does not flow stdlib intrinsic return types back to call sites. Lowering work is blocked on this until fixed. The executable contract for the fix is `internal/llvmgen/runtime_intrinsic_typing_test.go` — 7 `t.Skip`'d tests state the expected typing for each intrinsic (`raw.null` → RawPtr, `raw.alloc` → RawPtr, `raw.bits` → Int, `raw.read::<T>` → T, `raw.cas::<T>` → Bool, `raw.sizeOf::<T>` → Int, chained `alloc/write/read/free`). The fix lands by removing the `t.Skip` lines and watching all 7 pass without further code changes. |
 
 **Out-of-scope (per §19.1) — never planned.**
 
