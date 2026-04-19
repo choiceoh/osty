@@ -1332,7 +1332,11 @@ func writeSelfhostPackageImport(b *bytes.Buffer, alias string, pkg *resolve.Pack
 			if !ok || !fn.Pub || fn.Recv != nil {
 				continue
 			}
-			fmt.Fprintf(&body, "    fn %s(", fn.Name)
+			fmt.Fprintf(&body, "    fn %s", fn.Name)
+			if generics := selfhostGenericParams(fn.Generics); generics != "" {
+				body.WriteString(generics)
+			}
+			body.WriteByte('(')
 			for i, param := range fn.Params {
 				if i > 0 {
 					body.WriteString(", ")
@@ -1356,6 +1360,37 @@ func writeSelfhostPackageImport(b *bytes.Buffer, alias string, pkg *resolve.Pack
 	fmt.Fprintf(b, "use go %q as %s {\n", alias, alias)
 	b.Write(body.Bytes())
 	b.WriteString("}\n")
+}
+
+// selfhostGenericParams formats a fn's generic parameter list for the
+// boundary writer. Empty list returns "" (no `<>` emitted). Per
+// LANG_SPEC §19.5, runtime intrinsic stubs declare generics like
+// `fn read<T: Pod>(p: RawPtr) -> T`; without this the boundary
+// dropped `<T: Pod>` and the native checker saw `T` as undeclared,
+// producing `ErrType` at every turbofish call site.
+func selfhostGenericParams(gps []*ast.GenericParam) string {
+	if len(gps) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(gps))
+	for _, gp := range gps {
+		if gp == nil {
+			continue
+		}
+		entry := gp.Name
+		if len(gp.Constraints) > 0 {
+			bounds := make([]string, 0, len(gp.Constraints))
+			for _, c := range gp.Constraints {
+				bounds = append(bounds, selfhostTypeSource(c))
+			}
+			entry += ": " + strings.Join(bounds, " + ")
+		}
+		parts = append(parts, entry)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "<" + strings.Join(parts, ", ") + ">"
 }
 
 func selfhostTypeSource(t ast.Type) string {

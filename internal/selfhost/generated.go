@@ -28571,6 +28571,18 @@ func frontCheckTurbofishCall(file *AstFile, env *FrontCheckEnv, callIdx int, cal
 			// Osty: /tmp/selfhost_merged.osty:11454:13
 			return fmt.Sprintf("Chan<%s>", ostyToString(frontCheckStringAt(typeArgs, 0)))
 		}
+		// Generic package-fn dispatch — e.g. `raw.read::<Int>(p)`. The
+		// non-turbofish call path (`frontCheckCall`) already does this
+		// lookup; the turbofish path used to fall through to method
+		// lookup, which fails for stdlib intrinsics. Mirrors the source
+		// fix in `examples/selfhost-core/check.osty`.
+		if packageName != "" {
+			pkgSig := frontCheckSigLookup(env, packageName)
+			if pkgSig.name != "" {
+				pkgSubsts := frontCheckExplicitSubsts(env, pkgSig.generics, typeArgs)
+				return frontCheckCallSig(file, env, callIdx, pkgSig, args, 0, pkgSubsts)
+			}
+		}
 		// Osty: /tmp/selfhost_merged.osty:11456:9
 		recvType := frontCheckResolveAliasesDeep(env, frontCheckExpr(file, env, target.left))
 		_ = recvType
