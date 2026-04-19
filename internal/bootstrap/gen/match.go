@@ -118,7 +118,6 @@ func (g *gen) emitMatchArm(scrut string, scrutType types.Type, arm *ast.MatchArm
 // emitted.
 func (g *gen) emitArmTrailer(body ast.Expr, asExpr bool) {
 	if asExpr {
-		g.body.write("return ")
 		g.emitArmBody(body)
 		g.body.nl()
 		return
@@ -134,25 +133,25 @@ func (g *gen) emitArmTrailer(body ast.Expr, asExpr bool) {
 	g.body.nl()
 }
 
-// emitArmBody writes the arm's body expression. A Block body is
-// evaluated via IIFE-free inlining: its final expression becomes the
-// return value.
+// emitArmBody writes `[stmts;] return tailExpr` for the arm body.
+// A Block body has its leading statements emitted inline and its final
+// expression lifted into the return; a bare expression is returned directly.
+// Callers must not pre-emit `return ` — this function owns the full return
+// statement so multi-stmt blocks don't produce a bare `return` before the
+// bindings (see Bug 2 in bootstrap/gen).
 func (g *gen) emitArmBody(body ast.Expr) {
 	if b, ok := body.(*ast.Block); ok && len(b.Stmts) > 0 {
 		last := b.Stmts[len(b.Stmts)-1]
 		if es, ok := last.(*ast.ExprStmt); ok {
-			// emit prior stmts inline, then return the last expr.
-			if len(b.Stmts) > 1 {
-				g.body.writeln("")
-				for _, s := range b.Stmts[:len(b.Stmts)-1] {
-					g.emitStmt(s)
-				}
-				g.body.write("return ")
+			for _, s := range b.Stmts[:len(b.Stmts)-1] {
+				g.emitStmt(s)
 			}
+			g.body.write("return ")
 			g.emitExpr(es.X)
 			return
 		}
 	}
+	g.body.write("return ")
 	g.emitExpr(body)
 }
 
