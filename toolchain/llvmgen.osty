@@ -2247,6 +2247,10 @@ pub fn llvmStringRuntimeJoinSymbol() -> String {
     "osty_rt_strings_Join"
 }
 
+pub fn llvmStringRuntimeTrimSpaceSymbol() -> String {
+    "osty_rt_strings_TrimSpace"
+}
+
 /// LLVM forward declarations for the string runtime surface plus the
 /// scalar `Int`/`Float` -> `String` helpers used by interpolation.
 /// All string values cross the ABI as null-terminated `ptr`, and
@@ -2264,6 +2268,7 @@ pub fn llvmStringRuntimeDeclarations() -> List<String> {
         "declare i64 @osty_rt_strings_ByteLen(ptr)",
         "declare i64 @osty_rt_strings_Compare(ptr, ptr)",
         "declare ptr @osty_rt_strings_Join(ptr, ptr)",
+        "declare ptr @osty_rt_strings_TrimSpace(ptr)",
     ]
 }
 
@@ -2322,6 +2327,10 @@ pub fn llvmStringRuntimeJoin(
     sep: LlvmValue,
 ) -> LlvmValue {
     llvmCall(emitter, "ptr", "osty_rt_strings_Join", [parts, sep])
+}
+
+pub fn llvmStringRuntimeTrimSpace(emitter: LlvmEmitter, value: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "ptr", "osty_rt_strings_TrimSpace", [value])
 }
 
 pub fn llvmBuiltinType(name: String) -> String {

@@ -63,8 +63,85 @@ func (g *generator) emitStdStringsCall(call *ast.CallExpr) (value, bool, error) 
 	case "join":
 		v, err := g.emitStdStringsJoin(call)
 		return v, true, err
+	case "split":
+		v, err := g.emitStdStringsSplit(call)
+		return v, true, err
+	case "trim", "trimSpace":
+		v, err := g.emitStdStringsUnary(call, field.Name, llvmStringRuntimeTrimSpaceSymbol())
+		return v, true, err
 	}
 	return value{}, false, nil
+}
+
+// stdStringsCallStaticResult mirrors runtimeFFICallTarget for the std.strings
+// shim — returns the static `value` shape for a call we know we'll route to
+// the runtime, so callers like staticExprInfo can downstream-classify the
+// result (List<String>, Bool, Int, ...). Returns ok=false for calls we don't
+// shim.
+func (g *generator) stdStringsCallStaticResult(call *ast.CallExpr) (value, bool) {
+	if call == nil || len(g.stdStringsAliases) == 0 {
+		return value{}, false
+	}
+	field, ok := call.Fn.(*ast.FieldExpr)
+	if !ok {
+		return value{}, false
+	}
+	alias, ok := field.X.(*ast.Ident)
+	if !ok || !g.stdStringsAliases[alias.Name] {
+		return value{}, false
+	}
+	switch field.Name {
+	case "compare":
+		return value{typ: "i64"}, true
+	case "hasPrefix":
+		return value{typ: "i1"}, true
+	case "join", "trim", "trimSpace":
+		return value{typ: "ptr", gcManaged: true}, true
+	case "split":
+		return value{typ: "ptr", gcManaged: true, listElemTyp: "ptr", listElemString: true}, true
+	}
+	return value{}, false
+}
+
+func (g *generator) emitStdStringsSplit(call *ast.CallExpr) (value, error) {
+	if len(call.Args) != 2 {
+		return value{}, unsupportedf("call", "strings.split expects 2 arguments, got %d", len(call.Args))
+	}
+	s, err := g.emitStdStringsArg(call.Args[0], "split", 0)
+	if err != nil {
+		return value{}, err
+	}
+	sep, err := g.emitStdStringsArg(call.Args[1], "split", 1)
+	if err != nil {
+		return value{}, err
+	}
+	symbol := "osty_rt_strings_Split"
+	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "ptr"}, {typ: "ptr"}})
+	emitter := g.toOstyEmitter()
+	out := llvmCall(emitter, "ptr", symbol, []*LlvmValue{toOstyValue(s), toOstyValue(sep)})
+	g.takeOstyEmitter(emitter)
+	parts := fromOstyValue(out)
+	parts.gcManaged = true
+	parts.listElemTyp = "ptr"
+	parts.listElemString = true
+	return parts, nil
+}
+
+func (g *generator) emitStdStringsUnary(call *ast.CallExpr, name, symbol string) (value, error) {
+	if len(call.Args) != 1 {
+		return value{}, unsupportedf("call", "strings.%s expects 1 argument, got %d", name, len(call.Args))
+	}
+	s, err := g.emitStdStringsArg(call.Args[0], name, 0)
+	if err != nil {
+		return value{}, err
+	}
+	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "ptr"}})
+	emitter := g.toOstyEmitter()
+	out := llvmCall(emitter, "ptr", symbol, []*LlvmValue{toOstyValue(s)})
+	g.takeOstyEmitter(emitter)
+	v := fromOstyValue(out)
+	v.gcManaged = true
+	return v, nil
 }
 
 func (g *generator) emitStdStringsJoin(call *ast.CallExpr) (value, error) {
