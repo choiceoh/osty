@@ -1225,6 +1225,59 @@ pub fn checkInstallPrelude(env: CheckEnv) {
         fieldTys: [tyNamed(env.tys, "E", [])],
         generics: ["T", "E"],
     })
+
+    // Prelude functions are callable by name and also valid as values
+    // (`let p = println`). Register them as top-level fn signatures.
+    checkRegisterFn(env, CheckFnSig {
+        name: "print",
+        owner: "",
+        receiverTy: -1,
+        retTy: tUnit(env.tys),
+        paramNames: ["s"],
+        paramTys: [tString(env.tys)],
+        generics: [],
+        genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "println",
+        owner: "",
+        receiverTy: -1,
+        retTy: tUnit(env.tys),
+        paramNames: ["s"],
+        paramTys: [tString(env.tys)],
+        generics: [],
+        genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "eprint",
+        owner: "",
+        receiverTy: -1,
+        retTy: tUnit(env.tys),
+        paramNames: ["s"],
+        paramTys: [tString(env.tys)],
+        generics: [],
+        genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "eprintln",
+        owner: "",
+        receiverTy: -1,
+        retTy: tUnit(env.tys),
+        paramNames: ["s"],
+        paramTys: [tString(env.tys)],
+        generics: [],
+        genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "panic",
+        owner: "",
+        receiverTy: -1,
+        retTy: tNever(env.tys),
+        paramNames: ["message"],
+        paramTys: [tString(env.tys)],
+        generics: [],
+        genericBounds: [],
+    })
 }
 
 // Preserve a surface-level mirror of `frontCheckResult*`-style bridge
