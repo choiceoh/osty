@@ -50,8 +50,11 @@ type NativeCheckerTelemetry struct {
 	Errors          int
 	ErrorsByContext map[string]int
 	// ErrorDetails optionally maps a context key from ErrorsByContext to a
-	// finer breakdown — e.g. frontCheckIdentHint → unresolved identifier
-	// counts. Only populated at sites wired to selfhostBumpErrorWithDetail.
+	// finer breakdown of rendered diagnostic messages under that code.
+	// Populated by selfhostDiagnosticTelemetry in the selfhost adapter;
+	// each message is suffixed with `@Lnn:Cnn` when the native checker
+	// surfaced a resolvable span, so identical messages at different
+	// source positions remain distinguishable.
 	ErrorDetails map[string]map[string]int
 }
 

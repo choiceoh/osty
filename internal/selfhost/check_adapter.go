@@ -98,28 +98,50 @@ func adaptCheckSummary(checked *FrontCheckSummary) CheckSummary {
 	}
 }
 
-func adaptCheckSummaryWithContext(checked *FrontCheckResult) CheckSummary {
+func adaptCheckSummaryWithContext(checked *FrontCheckResult, posLookup selfhostTokenPos) CheckSummary {
 	if checked == nil {
 		return CheckSummary{}
 	}
 	s := adaptCheckSummary(checked.summary)
-	s.ErrorsByContext, s.ErrorDetails = selfhostDiagnosticTelemetry(checked.diagnostics)
+	s.ErrorsByContext, s.ErrorDetails = selfhostDiagnosticTelemetry(checked.diagnostics, posLookup)
 	return s
 }
 
-func adaptCheckResult(checked *FrontCheckResult, lexed *OstyLexedSource) CheckResult {
-	result := CheckResult{
-		Summary:        adaptCheckSummaryWithContext(checked),
-		TypedNodes:     make([]CheckedNode, 0, len(checked.typedNodes)),
-		Bindings:       make([]CheckedBinding, 0, len(checked.bindings)),
-		Symbols:        make([]CheckedSymbol, 0, len(checked.symbols)),
-		Instantiations: make([]CheckInstantiation, 0, len(checked.instantiations)),
+// selfhostStreamTokenPos returns a selfhostTokenPos that reads 1-based
+// (line, column) directly off the lex stream's token positions. The
+// filename is always empty — file mode already surfaces the path in the
+// dump label above each telemetry block, so repeating it in every
+// suffix would only add noise.
+func selfhostStreamTokenPos(stream *FrontLexStream) selfhostTokenPos {
+	if stream == nil {
+		return nil
 	}
+	tokens := stream.tokens
+	return func(tokenIdx int) (string, int, int, bool) {
+		if tokenIdx < 0 || tokenIdx >= len(tokens) {
+			return "", 0, 0, false
+		}
+		tok := tokens[tokenIdx]
+		if tok == nil || tok.start == nil {
+			return "", 0, 0, false
+		}
+		return "", tok.start.line, tok.start.column, true
+	}
+}
+
+func adaptCheckResult(checked *FrontCheckResult, lexed *OstyLexedSource) CheckResult {
 	rt := newRuneTable("")
 	var stream *FrontLexStream
 	if lexed != nil {
 		rt = newRuneTable(lexed.source)
 		stream = lexed.stream
+	}
+	result := CheckResult{
+		Summary:        adaptCheckSummaryWithContext(checked, selfhostStreamTokenPos(stream)),
+		TypedNodes:     make([]CheckedNode, 0, len(checked.typedNodes)),
+		Bindings:       make([]CheckedBinding, 0, len(checked.bindings)),
+		Symbols:        make([]CheckedSymbol, 0, len(checked.symbols)),
+		Instantiations: make([]CheckInstantiation, 0, len(checked.instantiations)),
 	}
 	for _, node := range checked.typedNodes {
 		if node == nil {

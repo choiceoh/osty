@@ -3,12 +3,14 @@ package main
 // Helpers for `osty check --dump-native-diags`. The flag surfaces the
 // bootstrapped native checker's per-context error histogram so callers
 // working against aggregate error counts (1700-style summaries) can
-// split the tail by enclosing-function category without regenerating
+// split the tail by diagnostic code without regenerating
 // internal/selfhost/generated.go.
 //
-// Telemetry origin: internal/selfhost/check_telemetry.go tags every
-// call to selfhostBumpError with its Go caller name. host_boundary.go
-// plumbs the map into check.Result.NativeCheckerTelemetry.
+// Telemetry origin: internal/selfhost/check_telemetry.go buckets the
+// typed checker's structured CheckDiagnostic stream by stable code and
+// suffixes each detail row with `@Lnn:Cnn` drawn from the diagnostic's
+// primary span. host_boundary.go plumbs the resulting maps into
+// check.Result.NativeCheckerTelemetry.
 
 import (
 	"fmt"
@@ -65,8 +67,9 @@ func dumpNativeDiagsFor(label string, chk *check.Result) {
 
 // writeContextDetail prints the top-10 detail rows under a context bucket,
 // indented so they visually nest under the parent. No output when the
-// bucket is empty — only contexts wired to selfhostBumpErrorWithDetail
-// carry data, and callers should not assume every bucket is populated.
+// bucket is empty — a diagnostic whose primary span is unresolved (or
+// missing) yields a bare message with no `@Lnn:Cnn` suffix, and diagnostic
+// severities other than error never land here to begin with.
 func writeContextDetail(w *os.File, details map[string]int) {
 	if len(details) == 0 {
 		return
