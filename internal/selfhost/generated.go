@@ -24660,13 +24660,22 @@ type FrontCheckInstantiation struct {
 // Osty: /tmp/selfhost_merged.osty:9443:5
 type FrontCheckEnv struct {
 	bindings         []*FrontCheckBinding
+	bindingStacks    map[string][]*FrontCheckBinding
 	fns              []*FrontFnSig
+	fnByKey          map[string]*FrontFnSig
 	fields           []*FrontFieldSig
+	fieldByKey       map[string]*FrontFieldSig
 	variants         []*FrontVariantSig
+	variantByName    map[string]*FrontVariantSig
+	variantByOwner   map[string]*FrontVariantSig
 	aliases          []*FrontAliasSig
+	aliasByName      map[string]*FrontAliasSig
 	types            []*FrontTypeSig
+	typeByName       map[string]*FrontTypeSig
 	interfaces       []string
+	interfaceSet     map[string]bool
 	interfaceExtends []*FrontInterfaceExtSig
+	interfaceByOwner map[string][]*FrontInterfaceExtSig
 	genericBounds    []*FrontTypeSubst
 	returnType       string
 	assignments      int
@@ -24746,7 +24755,7 @@ func frontCheckResultFromEnv(env *FrontCheckEnv) *FrontCheckResult {
 // Osty: /tmp/selfhost_merged.osty:9519:1
 func frontCheckEnv(returnType string) *FrontCheckEnv {
 	// Osty: /tmp/selfhost_merged.osty:9520:5
-	env := &FrontCheckEnv{bindings: make([]*FrontCheckBinding, 0, 1), fns: make([]*FrontFnSig, 0, 1), fields: make([]*FrontFieldSig, 0, 1), variants: make([]*FrontVariantSig, 0, 1), aliases: make([]*FrontAliasSig, 0, 1), types: make([]*FrontTypeSig, 0, 1), interfaces: make([]string, 0, 1), interfaceExtends: make([]*FrontInterfaceExtSig, 0, 1), genericBounds: make([]*FrontTypeSubst, 0, 1), returnType: returnType, assignments: 0, accepted: 0, errors: 0, errorsByContext: make(map[string]int), typedNodes: make([]*FrontCheckedNode, 0, 1), checkedBindings: make([]*FrontCheckedBinding, 0, 1), checkedSymbols: make([]*FrontCheckedSymbol, 0, 1), instantiations: make([]*FrontCheckInstantiation, 0, 1)}
+	env := &FrontCheckEnv{bindings: make([]*FrontCheckBinding, 0, 1), bindingStacks: make(map[string][]*FrontCheckBinding), fns: make([]*FrontFnSig, 0, 1), fnByKey: make(map[string]*FrontFnSig), fields: make([]*FrontFieldSig, 0, 1), fieldByKey: make(map[string]*FrontFieldSig), variants: make([]*FrontVariantSig, 0, 1), variantByName: make(map[string]*FrontVariantSig), variantByOwner: make(map[string]*FrontVariantSig), aliases: make([]*FrontAliasSig, 0, 1), aliasByName: make(map[string]*FrontAliasSig), types: make([]*FrontTypeSig, 0, 1), typeByName: make(map[string]*FrontTypeSig), interfaces: make([]string, 0, 1), interfaceSet: make(map[string]bool), interfaceExtends: make([]*FrontInterfaceExtSig, 0, 1), interfaceByOwner: make(map[string][]*FrontInterfaceExtSig), genericBounds: make([]*FrontTypeSubst, 0, 1), returnType: returnType, assignments: 0, accepted: 0, errors: 0, errorsByContext: make(map[string]int), typedNodes: make([]*FrontCheckedNode, 0, 1), checkedBindings: make([]*FrontCheckedBinding, 0, 1), checkedSymbols: make([]*FrontCheckedSymbol, 0, 1), instantiations: make([]*FrontCheckInstantiation, 0, 1)}
 	_ = env
 	// Osty: /tmp/selfhost_merged.osty:9539:5
 	frontCheckInstallBuiltins(env)
@@ -24755,49 +24764,49 @@ func frontCheckEnv(returnType string) *FrontCheckEnv {
 
 // Osty: /tmp/selfhost_merged.osty:9543:1
 func frontCheckChildEnv(parent *FrontCheckEnv, returnType string) *FrontCheckEnv {
-	return &FrontCheckEnv{bindings: parent.bindings, fns: parent.fns, fields: parent.fields, variants: parent.variants, aliases: parent.aliases, types: parent.types, interfaces: parent.interfaces, interfaceExtends: parent.interfaceExtends, genericBounds: parent.genericBounds, returnType: returnType, assignments: 0, accepted: 0, errors: 0, errorsByContext: make(map[string]int), typedNodes: make([]*FrontCheckedNode, 0, 1), checkedBindings: make([]*FrontCheckedBinding, 0, 1), checkedSymbols: parent.checkedSymbols, instantiations: make([]*FrontCheckInstantiation, 0, 1)}
+	return &FrontCheckEnv{bindings: parent.bindings, bindingStacks: cloneFrontCheckBindingStacks(parent.bindingStacks), fns: parent.fns, fnByKey: parent.fnByKey, fields: parent.fields, fieldByKey: parent.fieldByKey, variants: parent.variants, variantByName: parent.variantByName, variantByOwner: parent.variantByOwner, aliases: parent.aliases, aliasByName: parent.aliasByName, types: parent.types, typeByName: parent.typeByName, interfaces: parent.interfaces, interfaceSet: parent.interfaceSet, interfaceExtends: parent.interfaceExtends, interfaceByOwner: parent.interfaceByOwner, genericBounds: parent.genericBounds, returnType: returnType, assignments: 0, accepted: 0, errors: 0, errorsByContext: make(map[string]int), typedNodes: make([]*FrontCheckedNode, 0, 1), checkedBindings: make([]*FrontCheckedBinding, 0, 1), checkedSymbols: parent.checkedSymbols, instantiations: make([]*FrontCheckInstantiation, 0, 1)}
 }
 
 // Osty: /tmp/selfhost_merged.osty:9565:1
 func frontCheckInstallBuiltins(env *FrontCheckEnv) {
 	// Osty: /tmp/selfhost_merged.osty:9566:5
 	func() struct{} {
-		env.types = append(env.types, &FrontTypeSig{name: "Option", generics: []string{"T"}})
+		frontCheckAddType(env, &FrontTypeSig{name: "Option", generics: []string{"T"}})
 		return struct{}{}
 	}()
 	// Osty: /tmp/selfhost_merged.osty:9567:5
 	func() struct{} {
-		env.variants = append(env.variants, &FrontVariantSig{owner: "Option", name: "Some", fieldTypes: []string{"T"}, generics: []string{"T"}})
+		frontCheckAddVariant(env, &FrontVariantSig{owner: "Option", name: "Some", fieldTypes: []string{"T"}, generics: []string{"T"}})
 		return struct{}{}
 	}()
 	// Osty: /tmp/selfhost_merged.osty:9568:5
 	func() struct{} {
-		env.variants = append(env.variants, &FrontVariantSig{owner: "Option", name: "None", fieldTypes: make([]string, 0, 1), generics: []string{"T"}})
+		frontCheckAddVariant(env, &FrontVariantSig{owner: "Option", name: "None", fieldTypes: make([]string, 0, 1), generics: []string{"T"}})
 		return struct{}{}
 	}()
 	// Osty: /tmp/selfhost_merged.osty:9569:5
 	func() struct{} {
-		env.types = append(env.types, &FrontTypeSig{name: "Result", generics: []string{"T", "E"}})
+		frontCheckAddType(env, &FrontTypeSig{name: "Result", generics: []string{"T", "E"}})
 		return struct{}{}
 	}()
 	// Osty: /tmp/selfhost_merged.osty:9570:5
 	func() struct{} {
-		env.variants = append(env.variants, &FrontVariantSig{owner: "Result", name: "Ok", fieldTypes: []string{"T"}, generics: []string{"T", "E"}})
+		frontCheckAddVariant(env, &FrontVariantSig{owner: "Result", name: "Ok", fieldTypes: []string{"T"}, generics: []string{"T", "E"}})
 		return struct{}{}
 	}()
 	// Osty: /tmp/selfhost_merged.osty:9571:5
 	func() struct{} {
-		env.variants = append(env.variants, &FrontVariantSig{owner: "Result", name: "Err", fieldTypes: []string{"E"}, generics: []string{"T", "E"}})
+		frontCheckAddVariant(env, &FrontVariantSig{owner: "Result", name: "Err", fieldTypes: []string{"E"}, generics: []string{"T", "E"}})
 		return struct{}{}
 	}()
 	// Osty: /tmp/selfhost_merged.osty:9572:5
 	func() struct{} {
-		env.types = append(env.types, &FrontTypeSig{name: "Chan", generics: []string{"T"}})
+		frontCheckAddType(env, &FrontTypeSig{name: "Chan", generics: []string{"T"}})
 		return struct{}{}
 	}()
 	// Osty: /tmp/selfhost_merged.osty:9573:5
 	func() struct{} {
-		env.types = append(env.types, &FrontTypeSig{name: "ThreadHandle", generics: make([]string, 0, 1)})
+		frontCheckAddType(env, &FrontTypeSig{name: "ThreadHandle", generics: make([]string, 0, 1)})
 		return struct{}{}
 	}()
 }
@@ -24877,6 +24886,87 @@ func frontCheckMerge(parent *FrontCheckEnv, child *FrontCheckEnv) {
 	for _, inst := range child.instantiations {
 		// Osty: /tmp/selfhost_merged.osty:9587:9
 		func() struct{} { parent.instantiations = append(parent.instantiations, inst); return struct{}{} }()
+	}
+}
+
+func frontCheckOwnerKey(owner string, name string) string {
+	return owner + "\x00" + name
+}
+
+func cloneFrontCheckBindingStacks(src map[string][]*FrontCheckBinding) map[string][]*FrontCheckBinding {
+	if len(src) == 0 {
+		return make(map[string][]*FrontCheckBinding)
+	}
+	dst := make(map[string][]*FrontCheckBinding, len(src))
+	for name, stack := range src {
+		dst[name] = append([]*FrontCheckBinding(nil), stack...)
+	}
+	return dst
+}
+
+func frontCheckAddFn(env *FrontCheckEnv, sig *FrontFnSig) {
+	env.fns = append(env.fns, sig)
+	env.fnByKey[frontCheckOwnerKey(sig.receiverType, sig.name)] = sig
+}
+
+func frontCheckAddField(env *FrontCheckEnv, field *FrontFieldSig) {
+	env.fields = append(env.fields, field)
+	env.fieldByKey[frontCheckOwnerKey(field.owner, field.name)] = field
+}
+
+func frontCheckAddVariant(env *FrontCheckEnv, variant *FrontVariantSig) {
+	env.variants = append(env.variants, variant)
+	env.variantByName[variant.name] = variant
+	env.variantByOwner[frontCheckOwnerKey(variant.owner, variant.name)] = variant
+}
+
+func frontCheckAddAlias(env *FrontCheckEnv, alias *FrontAliasSig) {
+	env.aliases = append(env.aliases, alias)
+	env.aliasByName[alias.name] = alias
+}
+
+func frontCheckAddType(env *FrontCheckEnv, sig *FrontTypeSig) {
+	env.types = append(env.types, sig)
+	env.typeByName[sig.name] = sig
+}
+
+func frontCheckAddInterface(env *FrontCheckEnv, name string) {
+	env.interfaces = append(env.interfaces, name)
+	env.interfaceSet[name] = true
+}
+
+func frontCheckAddInterfaceExt(env *FrontCheckEnv, ext *FrontInterfaceExtSig) {
+	env.interfaceExtends = append(env.interfaceExtends, ext)
+	env.interfaceByOwner[ext.owner] = append(env.interfaceByOwner[ext.owner], ext)
+}
+
+func frontCheckAddBinding(env *FrontCheckEnv, binding *FrontCheckBinding) {
+	env.bindings = append(env.bindings, binding)
+	if binding.name == "" || binding.name == "_" {
+		return
+	}
+	env.bindingStacks[binding.name] = append(env.bindingStacks[binding.name], binding)
+}
+
+func frontCheckPopBinding(env *FrontCheckEnv) {
+	if len(env.bindings) == 0 {
+		return
+	}
+	binding := env.bindings[len(env.bindings)-1]
+	var zero *FrontCheckBinding
+	env.bindings[len(env.bindings)-1] = zero
+	env.bindings = env.bindings[:len(env.bindings)-1]
+	if binding.name == "" || binding.name == "_" {
+		return
+	}
+	stack := env.bindingStacks[binding.name]
+	if len(stack) > 0 {
+		stack = stack[:len(stack)-1]
+	}
+	if len(stack) == 0 {
+		delete(env.bindingStacks, binding.name)
+	} else {
+		env.bindingStacks[binding.name] = stack
 	}
 }
 
@@ -25106,7 +25196,7 @@ func frontCheckCollectDecl(file *AstFile, env *FrontCheckEnv, declIdx int, decl 
 		sig := frontFnSigFromDecl(file, decl, owner, ownerGenerics)
 		_ = sig
 		// Osty: /tmp/selfhost_merged.osty:9728:9
-		func() struct{} { env.fns = append(env.fns, sig); return struct{}{} }()
+		func() struct{} { frontCheckAddFn(env, sig); return struct{}{} }()
 		// Osty: /tmp/selfhost_merged.osty:9729:9
 		frontCheckRecordSymbol(env, declIdx, decl, "fn", decl.text, owner, frontCheckFnType(sig.paramTypes, sig.returnType))
 		// Osty: /tmp/selfhost_merged.osty:9730:9
@@ -25126,7 +25216,7 @@ func frontCheckCollectDecl(file *AstFile, env *FrontCheckEnv, declIdx int, decl 
 		}
 		// Osty: /tmp/selfhost_merged.osty:9738:9
 		func() struct{} {
-			env.types = append(env.types, &FrontTypeSig{name: decl.text, generics: generics})
+			frontCheckAddType(env, &FrontTypeSig{name: decl.text, generics: generics})
 			return struct{}{}
 		}()
 		// Osty: /tmp/selfhost_merged.osty:9739:9
@@ -25147,7 +25237,7 @@ func frontCheckCollectDecl(file *AstFile, env *FrontCheckEnv, declIdx int, decl 
 				field := &FrontFieldSig{owner: decl.text, name: member.text, typeName: frontCheckTypeName(file, member.right), hasDefault: member.left >= 0}
 				_ = field
 				// Osty: /tmp/selfhost_merged.osty:9752:17
-				func() struct{} { env.fields = append(env.fields, field); return struct{}{} }()
+				func() struct{} { frontCheckAddField(env, field); return struct{}{} }()
 				// Osty: /tmp/selfhost_merged.osty:9753:17
 				frontCheckRecordSymbol(env, memberIdx, member, "field", member.text, decl.text, field.typeName)
 			} else if ostyEqual(member.kind, AstNodeKind(&AstNodeKind_AstNFnDecl{})) {
@@ -25172,7 +25262,7 @@ func frontCheckCollectDecl(file *AstFile, env *FrontCheckEnv, declIdx int, decl 
 		}
 		// Osty: /tmp/selfhost_merged.osty:9766:9
 		func() struct{} {
-			env.types = append(env.types, &FrontTypeSig{name: decl.text, generics: generics})
+			frontCheckAddType(env, &FrontTypeSig{name: decl.text, generics: generics})
 			return struct{}{}
 		}()
 		// Osty: /tmp/selfhost_merged.osty:9767:9
@@ -25202,7 +25292,7 @@ func frontCheckCollectDecl(file *AstFile, env *FrontCheckEnv, declIdx int, decl 
 				}
 				// Osty: /tmp/selfhost_merged.osty:9778:17
 				func() struct{} {
-					env.variants = append(env.variants, &FrontVariantSig{owner: decl.text, name: member.text, fieldTypes: fieldTypes, generics: generics})
+					frontCheckAddVariant(env, &FrontVariantSig{owner: decl.text, name: member.text, fieldTypes: fieldTypes, generics: generics})
 					return struct{}{}
 				}()
 				// Osty: /tmp/selfhost_merged.osty:9779:17
@@ -25229,11 +25319,11 @@ func frontCheckCollectDecl(file *AstFile, env *FrontCheckEnv, declIdx int, decl 
 		_ = ifaceGenerics
 		// Osty: /tmp/selfhost_merged.osty:9790:9
 		func() struct{} {
-			env.types = append(env.types, &FrontTypeSig{name: decl.text, generics: ifaceGenerics})
+			frontCheckAddType(env, &FrontTypeSig{name: decl.text, generics: ifaceGenerics})
 			return struct{}{}
 		}()
 		// Osty: /tmp/selfhost_merged.osty:9791:9
-		func() struct{} { env.interfaces = append(env.interfaces, decl.text); return struct{}{} }()
+		func() struct{} { frontCheckAddInterface(env, decl.text); return struct{}{} }()
 		// Osty: /tmp/selfhost_merged.osty:9792:9
 		frontCheckRecordSymbol(env, declIdx, decl, "interface", decl.text, owner, decl.text)
 		// Osty: /tmp/selfhost_merged.osty:9796:9
@@ -25252,7 +25342,7 @@ func frontCheckCollectDecl(file *AstFile, env *FrontCheckEnv, declIdx int, decl 
 				frontCheckCheckGenericParams(file, env, member.children2)
 				// Osty: /tmp/selfhost_merged.osty:9803:17
 				func() struct{} {
-					env.fns = append(env.fns, frontFnSigFromInterfaceDecl(file, member, decl.text))
+					frontCheckAddFn(env, frontFnSigFromInterfaceDecl(file, member, decl.text))
 					return struct{}{}
 				}()
 				// Osty: /tmp/selfhost_merged.osty:9804:17
@@ -25263,7 +25353,7 @@ func frontCheckCollectDecl(file *AstFile, env *FrontCheckEnv, declIdx int, decl 
 			} else if ostyEqual(member.kind, AstNodeKind(&AstNodeKind_AstNType{})) {
 				// Osty: /tmp/selfhost_merged.osty:9807:17
 				func() struct{} {
-					env.interfaceExtends = append(env.interfaceExtends, &FrontInterfaceExtSig{owner: decl.text, typeName: frontCheckTypeName(file, memberIdx)})
+					frontCheckAddInterfaceExt(env, &FrontInterfaceExtSig{owner: decl.text, typeName: frontCheckTypeName(file, memberIdx)})
 					return struct{}{}
 				}()
 			}
@@ -25282,7 +25372,7 @@ func frontCheckCollectDecl(file *AstFile, env *FrontCheckEnv, declIdx int, decl 
 		}
 		// Osty: /tmp/selfhost_merged.osty:9817:9
 		func() struct{} {
-			env.aliases = append(env.aliases, &FrontAliasSig{name: decl.text, typeName: frontCheckTypeName(file, decl.left), generics: frontCheckGenericNames(file, decl.children)})
+			frontCheckAddAlias(env, &FrontAliasSig{name: decl.text, typeName: frontCheckTypeName(file, decl.left), generics: frontCheckGenericNames(file, decl.children)})
 			return struct{}{}
 		}()
 		// Osty: /tmp/selfhost_merged.osty:9818:9
@@ -25328,7 +25418,7 @@ func frontCheckCollectDecl(file *AstFile, env *FrontCheckEnv, declIdx int, decl 
 				// Osty: /tmp/selfhost_merged.osty:9834:20
 				sig.name = fmt.Sprintf("%s.%s", ostyToString(alias), ostyToString(sig.name))
 				// Osty: /tmp/selfhost_merged.osty:9835:17
-				func() struct{} { env.fns = append(env.fns, sig); return struct{}{} }()
+				func() struct{} { frontCheckAddFn(env, sig); return struct{}{} }()
 				// Osty: /tmp/selfhost_merged.osty:9836:17
 				frontCheckRecordSymbol(env, itemIdx, item, "fn", sig.name, alias, frontCheckFnType(sig.paramTypes, sig.returnType))
 			}
@@ -25687,7 +25777,7 @@ func frontCheckBindNode(env *FrontCheckEnv, name string, typeName string, mutabl
 	if name != "" && name != "_" {
 		// Osty: /tmp/selfhost_merged.osty:10030:9
 		func() struct{} {
-			env.bindings = append(env.bindings, &FrontCheckBinding{name: name, typeName: typeName, mutable: mutable})
+			frontCheckAddBinding(env, &FrontCheckBinding{name: name, typeName: typeName, mutable: mutable})
 			return struct{}{}
 		}()
 		// Osty: /tmp/selfhost_merged.osty:10031:9
@@ -25697,86 +25787,26 @@ func frontCheckBindNode(env *FrontCheckEnv, name string, typeName string, mutabl
 
 // Osty: /tmp/selfhost_merged.osty:10035:1
 func frontCheckBindingCount(xs []*FrontCheckBinding) int {
-	// Osty: /tmp/selfhost_merged.osty:10036:5
-	count := 0
-	_ = count
-	// Osty: /tmp/selfhost_merged.osty:10037:5
-	for _, x := range xs {
-		// Osty: /tmp/selfhost_merged.osty:10038:9
-		_ = x
-		// Osty: /tmp/selfhost_merged.osty:10039:9
-		func() {
-			var _cur1958 int = count
-			var _rhs1959 int = 1
-			if _rhs1959 > 0 && _cur1958 > math.MaxInt-_rhs1959 {
-				panic("integer overflow")
-			}
-			if _rhs1959 < 0 && _cur1958 < math.MinInt-_rhs1959 {
-				panic("integer overflow")
-			}
-			count = _cur1958 + _rhs1959
-		}()
-	}
-	return count
+	return len(xs)
 }
 
 // Osty: /tmp/selfhost_merged.osty:10044:1
 func frontCheckBindingAt(xs []*FrontCheckBinding, idx int) *FrontCheckBinding {
-	// Osty: /tmp/selfhost_merged.osty:10045:5
-	i := 0
-	_ = i
-	// Osty: /tmp/selfhost_merged.osty:10046:5
-	for _, x := range xs {
-		// Osty: /tmp/selfhost_merged.osty:10047:9
-		if i == idx {
-			// Osty: /tmp/selfhost_merged.osty:10048:13
-			return x
-		}
-		// Osty: /tmp/selfhost_merged.osty:10050:9
-		func() {
-			var _cur1960 int = i
-			var _rhs1961 int = 1
-			if _rhs1961 > 0 && _cur1960 > math.MaxInt-_rhs1961 {
-				panic("integer overflow")
-			}
-			if _rhs1961 < 0 && _cur1960 < math.MinInt-_rhs1961 {
-				panic("integer overflow")
-			}
-			i = _cur1960 + _rhs1961
-		}()
+	if idx >= 0 && idx < len(xs) {
+		return xs[idx]
 	}
 	return &FrontCheckBinding{name: "", typeName: "Invalid", mutable: false}
 }
 
 // Osty: /tmp/selfhost_merged.osty:10055:1
 func frontCheckBindingsFrom(env *FrontCheckEnv, start int) []*FrontCheckBinding {
-	// Osty: /tmp/selfhost_merged.osty:10056:5
-	var out []*FrontCheckBinding = make([]*FrontCheckBinding, 0, 1)
-	_ = out
-	// Osty: /tmp/selfhost_merged.osty:10057:5
-	i := 0
-	_ = i
-	// Osty: /tmp/selfhost_merged.osty:10058:5
-	for _, binding := range env.bindings {
-		// Osty: /tmp/selfhost_merged.osty:10059:9
-		if i >= start {
-			// Osty: /tmp/selfhost_merged.osty:10060:13
-			func() struct{} { out = append(out, binding); return struct{}{} }()
-		}
-		// Osty: /tmp/selfhost_merged.osty:10062:9
-		func() {
-			var _cur1962 int = i
-			var _rhs1963 int = 1
-			if _rhs1963 > 0 && _cur1962 > math.MaxInt-_rhs1963 {
-				panic("integer overflow")
-			}
-			if _rhs1963 < 0 && _cur1962 < math.MinInt-_rhs1963 {
-				panic("integer overflow")
-			}
-			i = _cur1962 + _rhs1963
-		}()
+	if start < 0 {
+		start = 0
 	}
-	return out
+	if start >= len(env.bindings) {
+		return []*FrontCheckBinding{}
+	}
+	return append([]*FrontCheckBinding(nil), env.bindings[start:]...)
 }
 
 // Osty: /tmp/selfhost_merged.osty:10067:1
@@ -25827,17 +25857,7 @@ func frontCheckPopBindings(env *FrontCheckEnv, target int) {
 	_ = count
 	// Osty: /tmp/selfhost_merged.osty:10087:5
 	for count > target {
-		// Osty: /tmp/selfhost_merged.osty:10088:9
-		func() **FrontCheckBinding {
-			if len(env.bindings) == 0 {
-				return nil
-			}
-			v := env.bindings[len(env.bindings)-1]
-			var zero *FrontCheckBinding
-			env.bindings[len(env.bindings)-1] = zero
-			env.bindings = env.bindings[:len(env.bindings)-1]
-			return &v
-		}()
+		frontCheckPopBinding(env)
 		// Osty: /tmp/selfhost_merged.osty:10089:9
 		func() {
 			var _cur1966 int = count
@@ -25855,60 +25875,32 @@ func frontCheckPopBindings(env *FrontCheckEnv, target int) {
 
 // Osty: /tmp/selfhost_merged.osty:10093:1
 func frontCheckLookup(env *FrontCheckEnv, name string) string {
-	// Osty: /tmp/selfhost_merged.osty:10094:5
-	found := "Invalid"
-	_ = found
-	// Osty: /tmp/selfhost_merged.osty:10095:5
-	for _, b := range env.bindings {
-		// Osty: /tmp/selfhost_merged.osty:10096:9
-		if b.name == name {
-			// Osty: /tmp/selfhost_merged.osty:10097:13
-			found = b.typeName
-		}
+	if stack := env.bindingStacks[name]; len(stack) > 0 {
+		return stack[len(stack)-1].typeName
 	}
-	return found
+	return "Invalid"
 }
 
 // Osty: /tmp/selfhost_merged.osty:10103:1
 func frontCheckLookupMutable(env *FrontCheckEnv, name string) bool {
-	// Osty: /tmp/selfhost_merged.osty:10104:5
-	found := false
-	_ = found
-	// Osty: /tmp/selfhost_merged.osty:10105:5
-	for _, b := range env.bindings {
-		// Osty: /tmp/selfhost_merged.osty:10106:9
-		if b.name == name {
-			// Osty: /tmp/selfhost_merged.osty:10107:13
-			found = b.mutable
-		}
+	if stack := env.bindingStacks[name]; len(stack) > 0 {
+		return stack[len(stack)-1].mutable
 	}
-	return found
+	return false
 }
 
 // Osty: /tmp/selfhost_merged.osty:10113:1
 func frontCheckSigLookup(env *FrontCheckEnv, name string) *FrontFnSig {
-	// Osty: /tmp/selfhost_merged.osty:10114:5
-	for _, sig := range env.fns {
-		// Osty: /tmp/selfhost_merged.osty:10115:9
-		if sig.name == name && sig.receiverType == "" {
-			// Osty: /tmp/selfhost_merged.osty:10116:13
-			return sig
-		}
+	if sig, ok := env.fnByKey[frontCheckOwnerKey("", name)]; ok {
+		return sig
 	}
 	return &FrontFnSig{name: "", receiverType: "", returnType: "Invalid", paramNames: make([]string, 0, 1), paramTypes: make([]string, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*FrontTypeSubst, 0, 1)}
 }
 
 // Osty: /tmp/selfhost_merged.osty:10122:1
 func frontCheckFnExists(env *FrontCheckEnv, name string, owner string) bool {
-	// Osty: /tmp/selfhost_merged.osty:10123:5
-	for _, sig := range env.fns {
-		// Osty: /tmp/selfhost_merged.osty:10124:9
-		if sig.name == name && sig.receiverType == owner {
-			// Osty: /tmp/selfhost_merged.osty:10125:13
-			return true
-		}
-	}
-	return false
+	_, ok := env.fnByKey[frontCheckOwnerKey(owner, name)]
+	return ok
 }
 
 // Osty: /tmp/selfhost_merged.osty:10131:1
@@ -25918,38 +25910,27 @@ func frontCheckMethodLookup(env *FrontCheckEnv, owner string, name string) *Fron
 
 // Osty: /tmp/selfhost_merged.osty:10135:1
 func frontCheckMethodLookupAt(env *FrontCheckEnv, owner string, name string, depth int) *FrontFnSig {
-	// Osty: /tmp/selfhost_merged.osty:10136:5
-	for _, sig := range env.fns {
-		// Osty: /tmp/selfhost_merged.osty:10137:9
-		if sig.name == name && sig.receiverType == owner {
-			// Osty: /tmp/selfhost_merged.osty:10138:13
-			return sig
-		}
+	if sig, ok := env.fnByKey[frontCheckOwnerKey(owner, name)]; ok {
+		return sig
 	}
 	// Osty: /tmp/selfhost_merged.osty:10141:5
 	if depth < 8 && frontCheckIsInterface(env, owner) {
 		// Osty: /tmp/selfhost_merged.osty:10142:9
-		for _, ext := range env.interfaceExtends {
-			// Osty: /tmp/selfhost_merged.osty:10143:13
-			if ext.owner == owner {
-				// Osty: /tmp/selfhost_merged.osty:10144:17
-				sig := frontCheckMethodLookupAt(env, frontCheckTypeHead(frontCheckResolveAliasesDeep(env, ext.typeName)), name, func() int {
-					var _p1968 int = depth
-					var _rhs1969 int = 1
-					if _rhs1969 > 0 && _p1968 > math.MaxInt-_rhs1969 {
-						panic("integer overflow")
-					}
-					if _rhs1969 < 0 && _p1968 < math.MinInt-_rhs1969 {
-						panic("integer overflow")
-					}
-					return _p1968 + _rhs1969
-				}())
-				_ = sig
-				// Osty: /tmp/selfhost_merged.osty:10145:17
-				if sig.name != "" {
-					// Osty: /tmp/selfhost_merged.osty:10146:21
-					return sig
+		for _, ext := range env.interfaceByOwner[owner] {
+			sig := frontCheckMethodLookupAt(env, frontCheckTypeHead(frontCheckResolveAliasesDeep(env, ext.typeName)), name, func() int {
+				var _p1968 int = depth
+				var _rhs1969 int = 1
+				if _rhs1969 > 0 && _p1968 > math.MaxInt-_rhs1969 {
+					panic("integer overflow")
 				}
+				if _rhs1969 < 0 && _p1968 < math.MinInt-_rhs1969 {
+					panic("integer overflow")
+				}
+				return _p1968 + _rhs1969
+			}())
+			_ = sig
+			if sig.name != "" {
+				return sig
 			}
 		}
 	}
@@ -25980,76 +25961,39 @@ func frontCheckBoundMethodLookup(env *FrontCheckEnv, owner string, name string) 
 
 // Osty: /tmp/selfhost_merged.osty:10167:1
 func frontCheckFieldLookup(env *FrontCheckEnv, owner string, name string) *FrontFieldSig {
-	// Osty: /tmp/selfhost_merged.osty:10168:5
-	for _, field := range env.fields {
-		// Osty: /tmp/selfhost_merged.osty:10169:9
-		if field.owner == owner && field.name == name {
-			// Osty: /tmp/selfhost_merged.osty:10170:13
-			return field
-		}
+	if field, ok := env.fieldByKey[frontCheckOwnerKey(owner, name)]; ok {
+		return field
 	}
 	return &FrontFieldSig{owner: "", name: "", typeName: "Invalid", hasDefault: false}
 }
 
 // Osty: /tmp/selfhost_merged.osty:10176:1
 func frontCheckVariantLookup(env *FrontCheckEnv, name string) *FrontVariantSig {
-	// Osty: /tmp/selfhost_merged.osty:10177:5
-	found := &FrontVariantSig{owner: "", name: "", fieldTypes: make([]string, 0, 1), generics: make([]string, 0, 1)}
-	_ = found
-	// Osty: /tmp/selfhost_merged.osty:10178:5
-	for _, variant := range env.variants {
-		// Osty: /tmp/selfhost_merged.osty:10179:9
-		if variant.name == name {
-			// Osty: /tmp/selfhost_merged.osty:10180:13
-			found = variant
-		}
+	if variant, ok := env.variantByName[name]; ok {
+		return variant
 	}
-	return found
+	return &FrontVariantSig{owner: "", name: "", fieldTypes: make([]string, 0, 1), generics: make([]string, 0, 1)}
 }
 
 // Osty: /tmp/selfhost_merged.osty:10186:1
 func frontCheckVariantLookupForOwner(env *FrontCheckEnv, name string, owner string) *FrontVariantSig {
-	// Osty: /tmp/selfhost_merged.osty:10187:5
-	found := &FrontVariantSig{owner: "", name: "", fieldTypes: make([]string, 0, 1), generics: make([]string, 0, 1)}
-	_ = found
-	// Osty: /tmp/selfhost_merged.osty:10188:5
-	for _, variant := range env.variants {
-		// Osty: /tmp/selfhost_merged.osty:10189:9
-		if variant.name == name && variant.owner == owner {
-			// Osty: /tmp/selfhost_merged.osty:10190:13
-			found = variant
-		}
+	if variant, ok := env.variantByOwner[frontCheckOwnerKey(owner, name)]; ok {
+		return variant
 	}
-	return found
+	return &FrontVariantSig{owner: "", name: "", fieldTypes: make([]string, 0, 1), generics: make([]string, 0, 1)}
 }
 
 // Osty: /tmp/selfhost_merged.osty:10196:1
 func frontCheckTypeSigLookup(env *FrontCheckEnv, name string) *FrontTypeSig {
-	// Osty: /tmp/selfhost_merged.osty:10197:5
-	found := &FrontTypeSig{name: "", generics: make([]string, 0, 1)}
-	_ = found
-	// Osty: /tmp/selfhost_merged.osty:10198:5
-	for _, sig := range env.types {
-		// Osty: /tmp/selfhost_merged.osty:10199:9
-		if sig.name == name {
-			// Osty: /tmp/selfhost_merged.osty:10200:13
-			found = sig
-		}
+	if sig, ok := env.typeByName[name]; ok {
+		return sig
 	}
-	return found
+	return &FrontTypeSig{name: "", generics: make([]string, 0, 1)}
 }
 
 // Osty: /tmp/selfhost_merged.osty:10206:1
 func frontCheckIsInterface(env *FrontCheckEnv, name string) bool {
-	// Osty: /tmp/selfhost_merged.osty:10207:5
-	for _, iface := range env.interfaces {
-		// Osty: /tmp/selfhost_merged.osty:10208:9
-		if iface == name {
-			// Osty: /tmp/selfhost_merged.osty:10209:13
-			return true
-		}
-	}
-	return false
+	return env.interfaceSet[name]
 }
 
 // Osty: /tmp/selfhost_merged.osty:10215:1
@@ -26069,26 +26013,16 @@ func frontCheckDeclaredTypeExists(env *FrontCheckEnv, name string) bool {
 
 // Osty: /tmp/selfhost_merged.osty:10225:1
 func frontCheckAliasTarget(env *FrontCheckEnv, name string) string {
-	// Osty: /tmp/selfhost_merged.osty:10226:5
-	for _, alias := range env.aliases {
-		// Osty: /tmp/selfhost_merged.osty:10227:9
-		if alias.name == name && frontCheckStringCount(alias.generics) == 0 {
-			// Osty: /tmp/selfhost_merged.osty:10228:13
-			return alias.typeName
-		}
+	if alias, ok := env.aliasByName[name]; ok && frontCheckStringCount(alias.generics) == 0 {
+		return alias.typeName
 	}
 	return ""
 }
 
 // Osty: /tmp/selfhost_merged.osty:10234:1
 func frontCheckAliasLookup(env *FrontCheckEnv, name string) *FrontAliasSig {
-	// Osty: /tmp/selfhost_merged.osty:10235:5
-	for _, alias := range env.aliases {
-		// Osty: /tmp/selfhost_merged.osty:10236:9
-		if alias.name == name {
-			// Osty: /tmp/selfhost_merged.osty:10237:13
-			return alias
-		}
+	if alias, ok := env.aliasByName[name]; ok {
+		return alias
 	}
 	return &FrontAliasSig{name: "", typeName: "", generics: make([]string, 0, 1)}
 }
