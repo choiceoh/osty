@@ -1,0 +1,15 @@
+# int_interp_e2e — regression harness for Int (i64) lowering via
+# osty_rt_i64_to_string. Covers both `.toString()` calls and string
+# interpolation pieces. Mirrors the layout of concat_interp_e2e so the
+# two regression suites can be run independently.
+#
+# Run from this directory:
+#
+#     osty test
+
+[package]
+name = "int_interp_e2e"
+version = "0.1.0"
+edition = "0.3"
+
+[dependencies]

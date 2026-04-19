@@ -844,6 +844,16 @@ const char *osty_rt_strings_Concat(const char *left, const char *right) {
     return out;
 }
 
+/* -2^63 needs 20 chars + sign + NUL = 22 bytes; 24 keeps alignment friendly. */
+const char *osty_rt_i64_to_string(int64_t value) {
+    char *out = (char *)osty_gc_allocate_managed(24, OSTY_GC_KIND_STRING, "runtime.int.toString", NULL, NULL);
+    int written = snprintf(out, 24, "%lld", (long long)value);
+    if (written < 0) {
+        out[0] = '\0';
+    }
+    return out;
+}
+
 bool osty_rt_strings_HasPrefix(const char *value, const char *prefix) {
     size_t prefix_len;
     if (value == NULL || prefix == NULL) {

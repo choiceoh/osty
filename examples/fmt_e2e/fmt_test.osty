@@ -2,21 +2,23 @@
 // via the LLVM backend. Covers every pub fn with happy-path + edge
 // cases.
 //
-// Current status (2026-04-18): all 28 tests still fail under the LLVM
-// backend. The String `+` String and String-interpolation-via-concat
-// gaps were closed (see concat_interp_test.osty which passes 10/10),
-// but fmt bodies depend on additional backend features that are not
-// yet lowered:
+// Current status (2026-04-19): all 28 tests still fail under the LLVM
+// backend, but the dominant wall has shifted. Backend gaps that fmt
+// depends on:
 //
-//   1. `Int.toString()` / `Float.toString()` / `Char.toString()` —
-//      no method-dispatch path for numeric/char → String.
+//   1. `Int.toString()` lowers to osty_rt_i64_to_string (closed by
+//      examples/int_interp_e2e). `Float.toString()` and
+//      `Char.toString()` are still unhandled — the integer arm of
+//      String interpolation no longer trips LLVM011.
 //   2. List<String> methods `.len()` / `.isEmpty()` — fail with
 //      "code generation is not implemented yet" even on trivial
 //      empty or two-element lists.
 //   3. Generic `joinWith<T>` closure — IR validator rejects the
 //      module import with "Closure: param[0] nil Type" whenever
 //      multiple tests share the package (single-test isolation
-//      converts it to the codegen sentinel).
+//      converts it to the codegen sentinel). This is currently the
+//      first wall every test in this file hits, masking gaps #1
+//      (Float/Char arm) and #2 until it closes.
 //
 // Each gap is independent; fixing any one unblocks a subset of fmt.
 // Do not delete this file — re-run whenever a gap closes to see

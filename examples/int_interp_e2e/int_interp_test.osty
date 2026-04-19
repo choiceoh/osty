@@ -1,0 +1,92 @@
+// int_interp_test.osty — regression coverage for Int (i64) lowering
+// via osty_rt_i64_to_string. Before this patch every assertion below
+// failed with LLVM011 ("interpolation of i64 value requires .toString()
+// which the LLVM backend does not yet lower") or with the empty body
+// of the `#[intrinsic_methods(Int, ...)]` placeholder for
+// `Int.toString()` returning an empty String.
+
+use std.testing
+
+// ─── Int.toString() direct ────────────────────────────────────────
+
+fn testToStringZero() {
+    let n: Int = 0
+    testing.assertEq(n.toString(), "0")
+}
+
+fn testToStringPositive() {
+    let n: Int = 42
+    testing.assertEq(n.toString(), "42")
+}
+
+fn testToStringNegative() {
+    let n: Int = -7
+    testing.assertEq(n.toString(), "-7")
+}
+
+fn testToStringMaxInt64() {
+    let n: Int = 9_223_372_036_854_775_807
+    testing.assertEq(n.toString(), "9223372036854775807")
+}
+
+fn testToStringNearMinInt64() {
+    // Picking -2^63 + 1 sidesteps the literal-parsing wall around
+    // -2^63 (which currently surfaces as an integer literal one over
+    // Int64.max) while still exercising a 20-char negative result.
+    let n: Int = -9_223_372_036_854_775_807
+    testing.assertEq(n.toString(), "-9223372036854775807")
+}
+
+// ─── Int interpolation in String literals ─────────────────────────
+
+fn testInterpSingleInt() {
+    let n: Int = 5
+    testing.assertEq("v={n}", "v=5")
+}
+
+fn testInterpMultipleInts() {
+    let major: Int = 1
+    let minor: Int = 2
+    let patch: Int = 3
+    testing.assertEq("{major}.{minor}.{patch}", "1.2.3")
+}
+
+fn testInterpIntsAndStrings() {
+    let count: Int = 4
+    let unit = "ms"
+    testing.assertEq("took {count}{unit}", "took 4ms")
+}
+
+fn testInterpNegativeAndZero() {
+    let lo: Int = -1
+    let hi: Int = 0
+    testing.assertEq("[{lo},{hi}]", "[-1,0]")
+}
+
+// ─── Int values reached through arithmetic / fields ────────────────
+
+fn testInterpArith() {
+    let a: Int = 10
+    let b: Int = 3
+    testing.assertEq("{a + b}", "13")
+}
+
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+fn testInterpStructFields() {
+    let p = Point { x: 7, y: -8 }
+    testing.assertEq("({p.x}, {p.y})", "(7, -8)")
+}
+
+// ─── Loop-built interpolation ─────────────────────────────────────
+
+fn testInterpLoopAccumulate() {
+    let mut out = ""
+    for i in 0..3 {
+        out = "{out}{i},"
+    }
+    testing.assertEq(out, "0,1,2,")
+}

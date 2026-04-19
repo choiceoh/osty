@@ -668,6 +668,7 @@ func TestGeneratedStringRuntimeSymbolsAreOstyOwned(t *testing.T) {
 		{"split", llvmStringRuntimeSplitSymbol(), "osty_rt_strings_Split"},
 		{"concat", llvmStringRuntimeConcatSymbol(), "osty_rt_strings_Concat"},
 		{"byteLen", llvmStringRuntimeByteLenSymbol(), "osty_rt_strings_ByteLen"},
+		{"i64ToString", llvmI64ToStringSymbol(), "osty_rt_i64_to_string"},
 	}
 	for _, c := range cases {
 		if c.got != c.want {
@@ -685,6 +686,7 @@ func TestGeneratedStringRuntimeDeclarationsAreOstyOwned(t *testing.T) {
 		"declare ptr @osty_rt_strings_Split(ptr, ptr)",
 		"declare ptr @osty_rt_strings_Concat(ptr, ptr)",
 		"declare i64 @osty_rt_strings_ByteLen(ptr)",
+		"declare ptr @osty_rt_i64_to_string(i64)",
 	}
 	for _, w := range want {
 		assertGeneratedIRContains(t, decls, w)

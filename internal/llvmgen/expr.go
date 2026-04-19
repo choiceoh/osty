@@ -109,6 +109,14 @@ func (g *generator) emitInterpolatedString(lit *ast.StringLit) (value, error) {
 		if err != nil {
 			return value{}, err
 		}
+		if v.typ == "i64" && v.listElemTyp == "" && v.mapKeyTyp == "" {
+			converted, convErr := g.emitRuntimeI64ToString(v)
+			if convErr != nil {
+				return value{}, convErr
+			}
+			pieces = append(pieces, converted)
+			continue
+		}
 		if v.typ != "ptr" || v.listElemTyp != "" || v.mapKeyTyp != "" {
 			return value{}, unsupportedf("type-system", "interpolation of %s value requires .toString() which the LLVM backend does not yet lower", v.typ)
 		}
@@ -913,6 +921,19 @@ func (g *generator) emitRuntimeStringConcat(left, right value) (value, error) {
 	out := llvmStringConcat(emitter, toOstyValue(left), toOstyValue(right))
 	g.takeOstyEmitter(emitter)
 	return fromOstyValue(out), nil
+}
+
+func (g *generator) emitRuntimeI64ToString(v value) (value, error) {
+	if v.typ != "i64" {
+		return value{}, unsupportedf("type-system", "i64.toString lowering received %s", v.typ)
+	}
+	g.declareRuntimeSymbol(llvmI64ToStringSymbol(), "ptr", []paramInfo{{typ: "i64"}})
+	emitter := g.toOstyEmitter()
+	out := llvmI64ToString(emitter, toOstyValue(v))
+	g.takeOstyEmitter(emitter)
+	res := fromOstyValue(out)
+	res.gcManaged = true
+	return res, nil
 }
 
 func (g *generator) emitRuntimeStringCompare(op token.Kind, left, right value) (value, error) {
@@ -1894,6 +1915,35 @@ func (g *generator) emitMapInsert(base, key, val value) error {
 	return nil
 }
 
+// stdlib `int.osty` declares Int.toString as an `#[intrinsic_methods]`
+// placeholder with an empty body, which would otherwise lower to dead
+// IR; this dispatcher routes to the runtime helper instead.
+func (g *generator) emitPrimitiveToStringCall(call *ast.CallExpr) (value, bool, error) {
+	field, ok := call.Fn.(*ast.FieldExpr)
+	if !ok || field.IsOptional || field.Name != "toString" {
+		return value{}, false, nil
+	}
+	if len(call.Args) != 0 {
+		return value{}, false, nil
+	}
+	baseInfo, ok := g.staticExprInfo(field.X)
+	if !ok || baseInfo.typ != "i64" {
+		return value{}, false, nil
+	}
+	base, err := g.emitExpr(field.X)
+	if err != nil {
+		return value{}, true, err
+	}
+	if base.typ != "i64" {
+		return value{}, false, nil
+	}
+	out, err := g.emitRuntimeI64ToString(base)
+	if err != nil {
+		return value{}, true, err
+	}
+	return out, true, nil
+}
+
 func (g *generator) emitListMethodCall(call *ast.CallExpr) (value, bool, error) {
 	field, elemTyp, elemString, found := g.listMethodInfo(call)
 	if !found {
@@ -2341,6 +2391,9 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 		return v, err
 	}
 	if v, found, err := g.emitSetMethodCall(call); found || err != nil {
+		return v, err
+	}
+	if v, found, err := g.emitPrimitiveToStringCall(call); found || err != nil {
 		return v, err
 	}
 	if v, found, err := g.emitOptionalUserCall(call); found || err != nil {
