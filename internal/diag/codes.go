@@ -188,7 +188,7 @@ const (
 	//
 	// Spec: v0.4 O6
 	// Example:
-	//   foo::bar()     // rejected — did you mean `foo.bar()`?
+	//   foo::bar()     // rejected -- did you mean `foo.bar()`?
 	// Fix: use `.` for member access or `::<T>` for type application.
 	CodeTurbofishMissingLT = "E0201"
 

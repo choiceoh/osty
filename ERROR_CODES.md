@@ -251,7 +251,7 @@ a < b < c      // rejected
 Spec: v0.4 O6
 
 ```osty
-foo::bar()     // rejected — did you mean `foo.bar()`?
+foo::bar()     // rejected -- did you mean `foo.bar()`?
 ```
 
 **Fix**: use `.` for member access or `::<T>` for type application.
