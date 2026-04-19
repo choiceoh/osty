@@ -162,6 +162,11 @@ func patchGenerated(path string) error {
 		{name: "frontTokenAtList", body: frontTokenAtListReplacement},
 		{name: "astArenaNodeCount", body: astArenaNodeCountReplacement},
 		{name: "astArenaNodeAt", body: astArenaNodeAtReplacement},
+		{name: "frontLexTokenAt", body: frontLexTokenAtReplacement},
+		{name: "frontLexDiagnosticAt", body: frontLexDiagnosticAtReplacement},
+		{name: "frontCommentAt", body: frontCommentAtReplacement},
+		{name: "frontStringPartAt", body: frontStringPartAtReplacement},
+		{name: "frontInterpolationTokenAt", body: frontInterpolationTokenAtReplacement},
 	} {
 		var err error
 		src, err = replaceGeneratedFunction(src, fn.name, fn.body)
@@ -332,5 +337,45 @@ const astArenaNodeAtReplacement = `func astArenaNodeAt(arena *AstArena, idx int)
 		return emptyAstNode(AstNodeKind(&AstNodeKind_AstNError{}))
 	}
 	return arena.nodes[idx]
+}
+`
+
+const frontLexTokenAtReplacement = `func frontLexTokenAt(stream *FrontLexStream, target int) *FrontLexToken {
+	if target < 0 || target >= len(stream.tokens) {
+		return emptyFrontLexToken()
+	}
+	return stream.tokens[target]
+}
+`
+
+const frontLexDiagnosticAtReplacement = `func frontLexDiagnosticAt(stream *FrontLexStream, target int) *FrontLexDiagnostic {
+	if target < 0 || target >= len(stream.diagnostics) {
+		return emptyFrontLexDiagnostic()
+	}
+	return stream.diagnostics[target]
+}
+`
+
+const frontCommentAtReplacement = `func frontCommentAt(stream *FrontLexStream, target int) *FrontComment {
+	if target < 0 || target >= len(stream.comments) {
+		return emptyFrontComment()
+	}
+	return stream.comments[target]
+}
+`
+
+const frontStringPartAtReplacement = `func frontStringPartAt(stream *FrontLexStream, target int) *FrontStringPart {
+	if target < 0 || target >= len(stream.stringParts) {
+		return emptyFrontStringPart()
+	}
+	return stream.stringParts[target]
+}
+`
+
+const frontInterpolationTokenAtReplacement = `func frontInterpolationTokenAt(stream *FrontLexStream, target int) *FrontInterpolationToken {
+	if target < 0 || target >= len(stream.interpolationTokens) {
+		return emptyFrontInterpolationToken()
+	}
+	return stream.interpolationTokens[target]
 }
 `
