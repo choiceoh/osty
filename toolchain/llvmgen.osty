@@ -2330,11 +2330,14 @@ pub fn llvmStringCompare(
     left: LlvmValue,
     right: LlvmValue,
 ) -> LlvmValue {
-    let eq = llvmStringEqual(emitter, left, right)
-    if op == "!=" {
-        return llvmNotI1(emitter, eq)
+    if op == "==" {
+        return llvmStringEqual(emitter, left, right)
     }
-    eq
+    if op == "!=" {
+        return llvmNotI1(emitter, llvmStringEqual(emitter, left, right))
+    }
+    let cmp = llvmStringRuntimeCompare(emitter, left, right)
+    llvmCompare(emitter, llvmIntComparePredicate(op), cmp, llvmIntLiteral(0))
 }
 
 pub fn llvmStringByteLen(emitter: LlvmEmitter, value: LlvmValue) -> LlvmValue {

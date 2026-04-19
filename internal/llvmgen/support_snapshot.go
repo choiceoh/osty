@@ -2207,11 +2207,14 @@ func llvmBoolRuntimeToString(emitter *LlvmEmitter, value *LlvmValue) *LlvmValue 
 }
 
 func llvmStringCompare(emitter *LlvmEmitter, op string, left *LlvmValue, right *LlvmValue) *LlvmValue {
-	eq := llvmStringEqual(emitter, left, right)
-	if op == "!=" {
-		return llvmNotI1(emitter, eq)
+	if op == "==" {
+		return llvmStringEqual(emitter, left, right)
 	}
-	return eq
+	if op == "!=" {
+		return llvmNotI1(emitter, llvmStringEqual(emitter, left, right))
+	}
+	cmp := llvmStringRuntimeCompare(emitter, left, right)
+	return llvmCompare(emitter, llvmIntComparePredicate(op), cmp, llvmIntLiteral(0))
 }
 
 func llvmStringByteLen(emitter *LlvmEmitter, value *LlvmValue) *LlvmValue {

@@ -1,6 +1,7 @@
 package llvmgen
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -154,6 +155,32 @@ func TestSweepToolchainLargeTailLLVM011Subwalls(t *testing.T) {
 	}
 }
 
+// TestSweepToolchainLargeTailFocus prints the full wall message for
+// ir.osty and check_env.osty so the first-hit signature is visible
+// without scrolling the full sweep output. Info-only.
+func TestSweepToolchainLargeTailFocus(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+	focus := []string{"ir.osty", "check_env.osty"}
+	for _, name := range focus {
+		path := filepath.Join(root, "toolchain", name)
+		src, err := os.ReadFile(path)
+		if err != nil {
+			t.Logf("  %s: READ_ERR %v", name, err)
+			continue
+		}
+		file, _ := parser.ParseDiagnostics(src)
+		if file == nil {
+			t.Logf("  %s: PARSE_FAIL", name)
+			continue
+		}
+		_, err = generateFromAST(file, Options{PackageName: "main", SourcePath: path})
+		t.Logf("  %s: %s", name, formatWall(err))
+	}
+}
+
 // TestSweepToolchainLargeTailLLVM015Subwalls — same as LLVM011 sweep
 // but for LLVM015 (call dispatch). Info-only.
 func TestSweepToolchainLargeTailLLVM015Subwalls(t *testing.T) {
@@ -197,6 +224,10 @@ func wallCode(msg string) string {
 	return "OTHER"
 }
 
+// classifyLLVM011 splits the LLVM011 bucket into the concrete backend
+// features that would retire each sub-wall. Categories are named
+// after what the backend would need to grow, not what the source
+// looks like — keeps the histogram pointing at real work.
 func classifyLLVM011(msg string) string {
 	switch {
 	case strings.Contains(msg, "interpolation of i64 value requires .toString()"):
@@ -205,15 +236,66 @@ func classifyLLVM011(msg string) string {
 		return "float_interp_toString"
 	case strings.Contains(msg, "interpolation"):
 		return "interp_other"
-	case strings.Contains(msg, `parameter `) && strings.Contains(msg, ": type "):
-		return "fn_param_struct_type"
 	case strings.Contains(msg, "type \"T\""):
 		return "generic_T"
+	case strings.Contains(msg, "field ") && strings.Contains(msg, ": type "):
+		return "struct_field_type"
+	case strings.Contains(msg, "parameter ") && strings.Contains(msg, ": type "):
+		return "fn_param_struct_type"
+	case strings.Contains(msg, "return type: type "):
+		return "fn_return_struct_type"
 	case strings.Contains(msg, "field type"):
-		return "field_type"
+		return "field_type_legacy"
 	case strings.Contains(msg, "return type"):
 		return "return_type_mismatch"
+	case strings.Contains(msg, "struct literal type "):
+		return "struct_literal_type"
+	case strings.Contains(msg, "unknown struct "):
+		return "unknown_struct"
+	case strings.Contains(msg, "generic type alias "):
+		return "generic_type_alias"
+	case strings.Contains(msg, "cyclic type alias "):
+		return "cyclic_type_alias"
+	case strings.Contains(msg, "runtime ABI type "):
+		return "runtime_abi_type"
+	case strings.Contains(msg, "LLVM enum payloads"):
+		return "enum_payload_type"
+	case strings.Contains(msg, "type %T") || strings.Contains(msg, " type *ast."):
+		return "ast_type_node"
 	default:
 		return "other"
 	}
+}
+
+func classifyLLVM015(msg string) string {
+	switch {
+	case strings.Contains(msg, "*ast.FieldExpr"):
+		return "method_call_field"
+	case strings.Contains(msg, "*ast.Ident"):
+		return "dynamic_ident_call"
+	default:
+		return "other"
+	}
+}
+
+// formatWall renders a generateFromAST error as "CODE [subclass] — msg"
+// (or "CLEAN" on nil). Shared by the focus/parity probes so every
+// sweep speaks the same line format.
+func formatWall(err error) string {
+	if err == nil {
+		return "CLEAN"
+	}
+	msg := err.Error()
+	code := wallCode(msg)
+	sub := ""
+	switch code {
+	case "LLVM011":
+		sub = classifyLLVM011(msg)
+	case "LLVM015":
+		sub = classifyLLVM015(msg)
+	}
+	if sub == "" {
+		return fmt.Sprintf("%s — %s", code, msg)
+	}
+	return fmt.Sprintf("%s [%s] — %s", code, sub, msg)
 }

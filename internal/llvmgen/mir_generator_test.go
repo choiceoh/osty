@@ -2199,3 +2199,62 @@ func TestGenerateFromMIRStringInequality(t *testing.T) {
 		}
 	}
 }
+
+// TestGenerateFromMIRStringOrdering — String `<` / `<=` / `>` / `>=`
+// must lower to osty_rt_strings_Compare (i64 -1/0/+1) + `icmp <pred>
+// i64 result, 0`. Without this routing the MIR path would emit a raw
+// `icmp slt ptr` comparison, which reduces to pointer address ordering
+// rather than content ordering.
+func TestGenerateFromMIRStringOrdering(t *testing.T) {
+	cases := []struct {
+		name string
+		op   ir.BinOp
+		pred string
+	}{
+		{"lt", ir.BinLt, "icmp slt i64"},
+		{"leq", ir.BinLeq, "icmp sle i64"},
+		{"gt", ir.BinGt, "icmp sgt i64"},
+		{"geq", ir.BinGeq, "icmp sge i64"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			hir := &ir.Module{
+				Package: "main",
+				Decls: []ir.Decl{
+					&ir.FnDecl{
+						Name:   "cmp",
+						Return: ir.TBool,
+						Body: &ir.Block{
+							Result: &ir.BinaryExpr{
+								Op:    tc.op,
+								Left:  &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: "a"}}},
+								Right: &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: "b"}}},
+								T:     ir.TBool,
+							},
+						},
+					},
+				},
+			}
+			m := buildMIRModuleFromHIR(t, hir)
+			out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/strord.osty"})
+			if err != nil {
+				t.Fatalf("GenerateFromMIR: %v", err)
+			}
+			got := string(out)
+			for _, want := range []string{
+				"declare i64 @osty_rt_strings_Compare(ptr, ptr)",
+				"call i64 @osty_rt_strings_Compare(ptr",
+				tc.pred,
+				", 0",
+			} {
+				if !strings.Contains(got, want) {
+					t.Fatalf("missing %q in:\n%s", want, got)
+				}
+			}
+			if strings.Contains(got, "icmp slt ptr") || strings.Contains(got, "icmp sle ptr") ||
+				strings.Contains(got, "icmp sgt ptr") || strings.Contains(got, "icmp sge ptr") {
+				t.Fatalf("found raw icmp on ptr (ordering must route through runtime):\n%s", got)
+			}
+		})
+	}
+}
