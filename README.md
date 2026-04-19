@@ -14,22 +14,24 @@ emitter core for the native backend, project scaffolding (`osty new` /
 declared packages, API documentation generation (`osty doc`), CI quality
 tooling (`osty ci`), profile/target/feature/cache inspection commands, and a
 package manager (`osty add` / `osty update` / `osty publish`) backed by a
-file-backed HTTP registry server for local/private registries. The current
-language baseline is v0.4: the grammar is frozen, the remaining semantic
-corners are closed, and the next work is native implementation/runtime
-coverage. The public compiler path is now native-only through the LLVM backend.
+file-backed HTTP registry server for local/private registries. The repository
+tracks spec/grammar work in v0.5, but the shipped manifest/scaffolder path is
+still pinned to edition v0.4 today (`osty new` / `osty init` write
+`edition = "0.4"`, and checked-in fixtures still exercise legacy v0.3/v0.4
+inputs). The next work is native implementation/runtime coverage. The public
+compiler path is now native-only through the LLVM backend.
 
 ## Status
 
 | Phase | Status |
 |---|---|
 | Lexer (UTF-8, ASI, triple-quoted strings, interpolation) | done |
-| Parser (v0.4 grammar, error recovery, fuzz-clean) | done |
+| Parser (selfhosted front end, error recovery, fuzz-clean) | done |
 | AST (all node kinds implement `ast.Node`) | done |
 | Diagnostics (`error[E0002]:` with caret, hints, notes) | done |
 | Name resolution (single + multi-file, workspace, typo suggestions) | done |
 | Formatter (`internal/format`) | done |
-| Type checker (`internal/check`) | done for v0.4 front-end core — generic instantiation, structural interface checks, exhaustiveness, builder protocol, function-value arity, closure pattern params. Algorithm: bidirectional + local unification, spec in [`LANG_SPEC_v0.5/02a-type-inference.md`](./LANG_SPEC_v0.5/02a-type-inference.md); `osty check --inspect` observes it at runtime |
+| Type checker (`internal/check`) | done for the shipped v0.4 front-end core — generic instantiation, structural interface checks, exhaustiveness, builder protocol, function-value arity, closure pattern params. Algorithm: bidirectional + local unification, spec in [`LANG_SPEC_v0.5/02a-type-inference.md`](./LANG_SPEC_v0.5/02a-type-inference.md); `osty check --inspect` observes it at runtime |
 | Linter (`internal/lint`, L0001–L0042, `--fix` / `--fix-dry-run`) | done |
 | Multi-file packages (`resolve` loader/package/workspace) | done |
 | LSP (`internal/lsp`, wired as `osty lsp`) | done — hover, definition, formatting, documentSymbol, lint diagnostics, editor policy backed by toolchain sources |
@@ -40,7 +42,7 @@ coverage. The public compiler path is now native-only through the LLVM backend.
 | Manifest + lockfile + SemVer (`internal/manifest`, `lockfile`, `pkgmgr/semver`) | done (parse + validate + resolve) |
 | Build orchestrator (`osty build`) | done — manifest → front-end → native backend, profile/target/feature wiring, backend-aware artifact/cache paths |
 | `osty test` | native backend harness — discovers `test*` functions, compiles each through the LLVM backend, runs in parallel by default with a seeded shuffled order (`--seed`, `--serial`, `--jobs`), reports per-test wall time and an `ok/FAIL` summary; assertions are intercepted by the LLVM generator and failures exit non-zero with the source location. `benchmark`/`snapshot` and per-argument structural diff are not implemented yet |
-| API doc generator (`internal/docgen`, `osty doc`) | done — checked-in generated Go package, HTML + markdown, field docs, cross-refs, workspace mode |
+| API doc generator (`internal/docgen`, `osty doc`) | done — checked-in generated Go package, HTML + markdown, field docs, cross-refs, `--check`, `--verify-examples`, workspace mode |
 | CI quality tooling (`internal/ci`, `osty ci`) | done — Osty-authored generated CI core, signature-aware snapshots, workspace coverage, JSON reports |
 | Pipeline visualizer (`osty pipeline`) | done — per-stage timing, workspace mode, backend-aware gen, baseline diff, LSP trace, `--explain` |
 | Profiles / targets / features / cache (`internal/profile`, `osty profiles` / `targets` / `features` / `cache`) | done — built-in and manifest profiles, cross-target env, feature closure + file pragmas, backend-aware fingerprints |
@@ -50,6 +52,14 @@ coverage. The public compiler path is now native-only through the LLVM backend.
 | Package manager (`osty add` / `osty update`, path + git + registry sources, SemVer resolver, deterministic lockfile) | wired — `add` mutates `osty.toml` and re-vendors; `update` re-resolves selectively or in full |
 | `osty run` (build + exec through backend) | wired — resolves manifest, vendors deps, emits the native entry artifact, runs the backend binary with profile/feature flags, and rejects cross-target execution |
 | `osty publish` (pack + upload tarball to a registry) | wired — deterministic gzipped tar, sha256 checksum, bearer-auth POST; `--dry-run` stops before upload |
+
+Status note (revalidated 2026-04-19): the universal LLVM CLI wedge called out
+in older status docs is closed again. A fresh hello-world
+`osty gen --backend=llvm` run exits 0 and emits `.ll`, and the four targeted
+`internal/llvmgen` regressions previously cited in
+[`docs/toolchain_llvm_status.md`](./docs/toolchain_llvm_status.md) now pass.
+Current selfhosting/toolchain tracking is therefore about remaining front-end
+and toolchain-surface gaps, not a blanket "all LLVM CLI calls panic" state.
 
 The front-end (lex → parse → resolve → type-check) is **coverage-complete
 for the v0.4 core**: spec blocks parse, package/workspace resolution is
@@ -90,9 +100,9 @@ parity.
 
 ```
 osty/
-├── LANG_SPEC_v0.5/          # Current language spec (prose + examples)
+├── LANG_SPEC_v0.5/          # Current spec prose / design target
 ├── OSTY_GRAMMAR_v0.5.md     # Current EBNF grammar + decision log
-├── SPEC_GAPS.md             # Resolved-gap archive (no open items in v0.4)
+├── SPEC_GAPS.md             # Resolved-gap archive by language version
 ├── LLVM_MIGRATION_PLAN.md   # Native backend migration history/plan
 ├── LLVM_PHASE1_BASELINE.md  # Legacy Go-backend baseline for LLVM migration
 ├── LLVM_BACKEND_CORPUS.md   # Backend parity fixture classes and smoke set
@@ -104,9 +114,10 @@ osty/
 │   └── codesdoc/            # Regenerates ERROR_CODES.md from codes.go
 ├── internal/
 │   ├── token/               # Token kinds + positions
-│   ├── lexer/               # Source bytes → []Token
+│   ├── lexer/               # Thin Go facade over internal/selfhost tokenization
 │   ├── ast/                 # AST node types
-│   ├── parser/              # []Token → *ast.File
+│   ├── parser/              # Thin Go facade + compatibility lowerings over internal/selfhost
+│   ├── selfhost/            # Committed bootstrap-generated front end + adapters
 │   ├── diag/                # Diagnostics + Rust-style renderer
 │   ├── resolve/             # Name resolution (single + multi-file)
 │   ├── stdlib/              # Built-in prelude symbols + `modules/*.osty`
@@ -123,12 +134,13 @@ osty/
 │   ├── cihost/              # Go host bridge for generated CI core
 │   ├── profile/             # Build profiles / targets / features
 │   ├── lsp/                 # Language server (stdio JSON-RPC)
+│   ├── pipeline/            # Shared phase runner / timing helpers
 │   ├── scaffold/            # `osty new` / `osty init` project templates
 │   ├── tomlparse/           # Generic TOML parser (subset)
 │   ├── manifest/            # osty.toml parse + validate + lookup
 │   ├── lockfile/            # osty.lock read/write
 │   ├── registry/            # Package registry client + file-backed HTTP server
-│   └── pkgmgr/semver/       # SemVer parse, compare, constraint match
+│   └── pkgmgr/              # Dependency resolution, fetch/vendoring, SemVer
 ├── examples/                # Executable/sample packages kept under compiler coverage
 ├── toolchain/               # Osty-authored compiler/tooling cores and LLVM emitter prototype
 └── testdata/                # .osty fixtures used by tests and backend corpus
@@ -136,7 +148,7 @@ osty/
 
 ## Building
 
-Requires Go 1.22+.
+Requires Go 1.26.2 or newer (matching `go.mod`).
 
 ```sh
 go build -o osty ./cmd/osty
@@ -198,8 +210,8 @@ implementation work should land in the runtime path first.
 ## CLI
 
 ```sh
-osty new NAME          # scaffold a new project directory (--lib, --workspace)
-osty init              # scaffold into the current directory (same flags as new)
+osty new NAME          # scaffold a new project directory (--bin, --lib, --workspace, --cli, --service)
+osty init              # scaffold into the current directory (same kind flags; --name, --member)
 osty build [DIR]       # manifest-driven: manifest → deps → front-end → backend
 osty add PKG           # append a dependency to osty.toml and re-resolve
 osty remove NAME...    # drop dependencies from osty.toml and re-resolve (alias: rm)
@@ -225,15 +237,18 @@ osty typecheck FILE    # same as check, plus a per-expression type dump
 osty lint FILE|DIR     # style + correctness warnings (L0xxx codes)
 osty fmt FILE          # airepair + format to canonical style (see --check, --write, --engine)
 osty airepair FILE     # auto-fix common AI-authored syntax/idiom slips (legacy alias: repair)
+osty airepair triage DIR
+osty airepair learn DIR
+osty airepair promote CASE
 osty gen FILE          # emit LLVM IR (see -o, --package)
-osty doc PATH          # generate API documentation (HTML + markdown)
+osty doc PATH          # generate API documentation (HTML + markdown; --check, --verify-examples)
 osty ci                # run CI quality checks (signatures, coverage, snapshots)
 osty ci snapshot       # capture the exported API baseline
 osty profiles          # list build profiles (debug, release, profile, test, ...)
 osty targets           # list declared cross-compilation targets
 osty features          # list declared opt-in features
 osty cache [ls|clean|info] # inspect or prune backend build caches
-osty scaffold          # generators (fixture / schema / ffi)
+osty scaffold <kind>   # one-off generators (fixture / schema / ffi)
 osty lsp               # run the language server on stdio
 osty explain [CODE]    # describe a diagnostic (Exxxx/Wxxxx/Lxxxx); no arg lists every code
 osty pipeline FILE|DIR # run every front-end phase; per-stage timing
@@ -359,19 +374,20 @@ surface (`use runtime.* as name { ... }`) before using the native backend.
 
 `new` / `init`-specific flags (after the subcommand):
 
-- `--bin` — scaffold a binary project (default): `main.osty` with `fn main`
-- `--lib` — scaffold a library project: `lib.osty` with a `pub fn` starter,
-  no binary entry point
-- `--workspace` — scaffold a virtual workspace with one default member
-  (`init` only — combined with `--member NAME` to pick the member directory)
+- `--bin`, `--lib`, `--workspace`, `--cli`, `--service` — mutually
+  exclusive starter layouts; `--bin` is the default
+- `--member NAME` — workspace-only: default member directory name
+  (default `core`)
 - `--name NAME` — `init`-only: override the project name (defaults to the
   current directory basename)
 
-The scaffolded layout is three files (`osty.toml`, the source file, and
-`.gitignore`) in a new directory named after `NAME`. The manifest pins
-the current spec edition; `osty new` never overwrites an existing
-directory. `osty init` writes into the current directory instead of
-creating a new one.
+Binary and library starters create `osty.toml`, one source file, one
+companion `*_test.osty`, and `.gitignore`. `--cli` and `--service`
+create multi-file binary starters with tests. `--workspace` creates a
+root manifest plus one default member package. `osty new` never
+overwrites an existing directory; `osty init` writes into the current
+directory after checking for conflicting files. The scaffolder currently
+pins `edition = "0.4"`.
 
 `build` / `run` / `test` / `add` / `update` / `fetch`-specific flags
 (after the subcommand):
@@ -400,8 +416,9 @@ creating a new one.
   through structured diagnostics from the toolchain backend policy.
 - `--emit MODE` — requested artifact mode (`llvm-ir`, `object`, or
   `binary`). `build --backend llvm --emit object|binary` uses `clang`; `run`
-  requires `binary` because it executes the result. Native test execution is
-  still pending.
+  requires `binary` because it executes the result. `osty test` uses the same
+  native path under the hood and then runs discovered test functions through the
+  LLVM-backed harness.
 
 `profiles` / `targets` / `features` / `cache` commands:
 
@@ -498,7 +515,7 @@ a different package without leaving its directory.
 $ osty new myapp
 Created binary project "myapp" at $PWD/myapp
 $ cd myapp
-$ osty add ../my-shared-lib --path ../../shared
+$ osty add --path ../../shared
 Added dependency shared 0.1.0 (path+../../shared)
 $ osty build
 Resolved 1 dependencies for myapp v0.1.0
@@ -601,13 +618,16 @@ regenerations.
 
 ## Contributing
 
-The current baseline is **v0.5** (`LANG_SPEC_v0.5/`,
-`OSTY_GRAMMAR_v0.5.md`). v0.5 closes every known language-decision
-gap (G20-G35) accumulated from the v0.4 usage corpus. Future surface
-changes follow the normal versioning process and land in a new spec
-directory. See [`SPEC_GAPS.md`](./SPEC_GAPS.md) for the full decision
-log. The compiler follows spec decisions literally — if a construct
-"should" work but doesn't, verify it against the grammar first.
+Spec work in this repo is tracked under **v0.5**
+(`LANG_SPEC_v0.5/`, `OSTY_GRAMMAR_v0.5.md`), but the shipped project
+edition is still **0.4** today: `osty new` / `osty init` write
+`edition = "0.4"`, and manifest validation still accepts the
+historical `0.3` / `0.4` range used by checked-in examples. Future
+surface changes follow the normal versioning process and land in a new
+spec directory. See [`SPEC_GAPS.md`](./SPEC_GAPS.md) for the full
+decision log. When docs discuss newer surface area, be explicit about
+whether it is a design target or behavior already wired in the CLI and
+tests.
 
 Conventions:
 - Every new error site gets a stable `Exxxx` code in

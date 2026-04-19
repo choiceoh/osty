@@ -1,30 +1,28 @@
 # Selfhost Front End
 
-`internal/selfhost` is the default lexer and parser implementation used by the
-Go toolchain. The implementation is authored in Osty and compiled into Go.
+`internal/selfhost` contains the committed bootstrap-generated Go bridge for the
+Osty front end plus the adapters that let the rest of the Go codebase talk to
+it.
 
-The source of truth is:
+Today the public entrypoints are:
 
-- `examples/selfhost-core/semver.osty`
-- `examples/selfhost-core/semver_parse.osty`
-- `toolchain/frontend.osty`
-- `toolchain/lexer.osty`
-- `toolchain/parser.osty`
-- `examples/selfhost-core/formatter_ast.osty`
-- `toolchain/check_bridge.osty`
-- `toolchain/diagnostic.osty`
-- `toolchain/check_diag.osty`
-- `toolchain/ty.osty`
-- `toolchain/core.osty`
-- `toolchain/check_env.osty`
-- `toolchain/solve.osty`
-- `toolchain/elab.osty`
-- `toolchain/check.osty`
+- `internal/lexer` — thin Go facade over selfhost tokenization
+- `internal/parser` — thin Go facade over selfhost parsing plus Go-side
+  compatibility lowerings
+- `internal/check` — prefers the external native checker binary and uses the
+  embedded selfhost bridge as the fallback / adaptation boundary
+
+The exact merged Osty inputs live in
+[`internal/selfhost/bundle/bundle.go`](./bundle/bundle.go):
+
+- `GeneratedFiles()` feeds `internal/selfhost/generated.go`
+- `ToolchainCheckerFiles()` feeds the broader checker/bootstrap regeneration path
+
+Notable inputs currently include:
+
+- `examples/selfhost-core/{semver,semver_parse,frontend,formatter_ast,check_bridge,check,resolve,lint}.osty`
+- `toolchain/{frontend,lexer,parser,check_bridge,diagnostic,check_diag,ty,core,check_env,solve,elab,check}.osty`
 - `internal/selfhost/ast_lower.osty`
-
-`toolchain/check_bridge.osty` supplies the small parser adapter needed by the
-shared checker API, and the rest of the checker now comes directly from the
-same `toolchain/*.osty` sources the native checker path exercises.
 
 Regenerate the Go bridge with:
 
@@ -32,13 +30,13 @@ Regenerate the Go bridge with:
 go generate ./internal/selfhost
 ```
 
-The generator merges the selfhost-core sources, emits `generated.go` through
-`cmd/osty gen`, regenerates `internal/selfhost/astbridge/generated.go` from
-`internal/ast`, and reapplies the small Go hot-path overrides that keep lexing
-position lookups linear. Public compiler packages should call
-`internal/lexer` and `internal/parser` for the canonical front end, and
-`internal/check` for type checking. The `internal/check` entrypoints route
-mainstream checker diagnostics through `internal/selfhost.CheckSourceStructured`
-and bridge its typed nodes, bindings, declaration symbols, and generic
-instantiations onto the resolver symbols and AST nodes consumed by codegen and
-editor features. This package is the adaptation boundary for bootstrapped code.
+That flow:
+
+- regenerates `internal/selfhost/astbridge/generated.go`
+- merges the current toolchain/selfhost source bundle
+- builds a temporary `cmd/osty-native-checker`
+- invokes `cmd/osty-bootstrap-gen` to write `internal/selfhost/generated.go`
+- reapplies the small Go hot-path patches in `gen_selfhost.go`
+
+`internal/check` then maps the checker output back onto the resolver symbols and
+AST nodes consumed by codegen, LSP, and the rest of the host-side pipeline.
