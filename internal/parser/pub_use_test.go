@@ -72,6 +72,28 @@ func TestPubUseAcceptsAlias(t *testing.T) {
 	}
 }
 
+func TestParseCanonicalPubUseSetsIsPubFlag(t *testing.T) {
+	src := []byte(`pub use std.fs as filesystem
+`)
+	file, diags := ParseCanonical(src)
+	if len(diags) > 0 {
+		t.Fatalf("ParseCanonical returned %d diagnostics: %v", len(diags), diags[0])
+	}
+	if file == nil {
+		t.Fatal("ParseCanonical returned nil file")
+	}
+	if len(file.Uses) != 1 {
+		t.Fatalf("expected 1 use decl, got %d", len(file.Uses))
+	}
+	u := file.Uses[0]
+	if !u.IsPub {
+		t.Fatalf("expected canonical pub use to keep IsPub=true")
+	}
+	if u.Alias != "filesystem" {
+		t.Fatalf("expected alias=filesystem, got %q", u.Alias)
+	}
+}
+
 // Ensure `pub` on a non-use decl doesn't mistakenly mark anything.
 func TestPubFnDoesNotMarkFollowingUse(t *testing.T) {
 	src := []byte(`pub fn foo() -> Int { 42 }

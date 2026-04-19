@@ -931,7 +931,7 @@ fn astLowerTypeAliasDecl(arena: AstArena, toks: List<astbridge.Token>, n: AstNod
 
 fn astLowerUseDecl(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Decl {
     let mut raw = astLowerUnquoteMaybe(n.text)
-    if n.flags == 1 {
+    if astUseDeclIsGo(n) {
         let reconstructed = astLowerUseGoRawPath(toks, n)
         if reconstructed != "" {
             raw = reconstructed
@@ -955,10 +955,19 @@ fn astLowerUseDecl(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> 
         }
     }
     let mut path: List<String> = []
-    if !(n.flags == 1) {
+    if !(astUseDeclIsGo(n)) {
         path = astLowerSplitPath(raw)
     }
-    astbridge.UseDeclNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), raw, path, n.flags == 1, alias, body)
+    astbridge.UseDeclNodeFull(
+        astLowerNodePos(toks, n),
+        astLowerNodeEnd(toks, n),
+        raw,
+        path,
+        astUseDeclIsGo(n),
+        astUseDeclIsPub(n),
+        alias,
+        body,
+    )
 }
 
 fn astLowerUseRawPath(toks: List<astbridge.Token>, n: AstNode) -> String {

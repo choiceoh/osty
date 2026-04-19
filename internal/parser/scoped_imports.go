@@ -23,7 +23,7 @@ package parser
 // v0.5 scope:
 //   - `use PATH::{ ITEMS }` — comma-separated identifier list
 //   - Per-item `a as x` rename
-//   - `pub` prefix preserved verbatim (and flagged by markPubUseDecls)
+//   - `pub` prefix preserved verbatim
 //   - Trailing comma tolerated
 //
 // Out of scope:
@@ -123,8 +123,7 @@ func expandScopedImports(src []byte) ([]byte, []ProvenanceStep) {
 
 // findScopedUseSite scans forward from `from` for a `[pub] use PATH
 // ::{ ITEMS }` run. The `pub` prefix is preserved in the rewritten
-// text so markPubUseDecls still picks it up after expansion; the
-// rewrite only touches the `PATH::{...}` portion.
+// text; the rewrite only touches the `PATH::{...}` portion.
 func findScopedUseSite(toks []token.Token, from int) (scopedUseSite, bool, int) {
 	empty := scopedUseSite{}
 	i := from
