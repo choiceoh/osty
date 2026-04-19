@@ -58,6 +58,7 @@ pub enum PrimKind {
 /// TyKind discriminates the shape stored in a `TyNode`.
 pub enum TyKind {
     TkErr,              // poisoned / unresolved
+    TkPoison,           // hard error sentinel: suppress follow-up diagnostics
     TkPrim,             // TyNode.prim is meaningful
     TkNamed,            // TyNode.head + TyNode.args
     TkOptional,         // TyNode.ret holds the inner index
@@ -91,6 +92,7 @@ pub struct TyArena {
     pub internValues: List<Int>,
 
     pub idxErr: Int,
+    pub idxPoison: Int,
     pub idxInt: Int,
     pub idxInt8: Int,
     pub idxInt16: Int,
@@ -139,6 +141,7 @@ pub fn emptyTyArena() -> TyArena {
         internKeys: [],
         internValues: [],
         idxErr: -1,
+        idxPoison: -1,
         idxInt: -1, idxInt8: -1, idxInt16: -1, idxInt32: -1, idxInt64: -1,
         idxUInt8: -1, idxUInt16: -1, idxUInt32: -1, idxUInt64: -1,
         idxByte: -1, idxFloat: -1, idxFloat32: -1, idxFloat64: -1,
@@ -147,6 +150,7 @@ pub fn emptyTyArena() -> TyArena {
         idxUntypedInt: -1, idxUntypedFloat: -1,
     }
     arena.idxErr = tyAllocErr(arena)
+    arena.idxPoison = tyAllocPoison(arena)
     arena.idxInt = tyAllocPrim(arena, PkInt)
     arena.idxInt8 = tyAllocPrim(arena, PkInt8)
     arena.idxInt16 = tyAllocPrim(arena, PkInt16)
@@ -181,6 +185,16 @@ fn tyAllocErr(arena: TyArena) -> Int {
     idx
 }
 
+fn tyAllocPoison(arena: TyArena) -> Int {
+    let idx = tyNodeCount(arena)
+    let node = TyNode {
+        kind: TkPoison, prim: PkInvalid, head: "", args: [], ret: -1,
+        varId: 0, varName: "", varOwner: "",
+    }
+    arena.nodes.push(node)
+    idx
+}
+
 fn tyAllocPrim(arena: TyArena, prim: PrimKind) -> Int {
     let idx = tyNodeCount(arena)
     let node = TyNode {
@@ -203,6 +217,7 @@ pub fn tyNodeCount(arena: TyArena) -> Int {
 // ---------------------------------------------------------------------
 
 pub fn tErr(arena: TyArena) -> Int { arena.idxErr }
+pub fn tPoison(arena: TyArena) -> Int { arena.idxPoison }
 pub fn tInt(arena: TyArena) -> Int { arena.idxInt }
 pub fn tInt8(arena: TyArena) -> Int { arena.idxInt8 }
 pub fn tInt16(arena: TyArena) -> Int { arena.idxInt16 }
@@ -454,6 +469,14 @@ pub fn tyIsErr(arena: TyArena, idx: Int) -> Bool {
     tyKindAt(arena, idx) == TkErr
 }
 
+pub fn tyIsPoison(arena: TyArena, idx: Int) -> Bool {
+    tyKindAt(arena, idx) == TkPoison
+}
+
+pub fn tyIsBad(arena: TyArena, idx: Int) -> Bool {
+    tyIsErr(arena, idx) || tyIsPoison(arena, idx)
+}
+
 pub fn tyIsNever(arena: TyArena, idx: Int) -> Bool {
     let k = tyPrimAt(arena, idx)
     tyKindAt(arena, idx) == TkPrim && k == PkNever
@@ -531,6 +554,7 @@ pub fn tyEq(arena: TyArena, a: Int, b: Int) -> Bool {
     // short-circuit `&&`.
     match na.kind {
         TkErr -> true,
+        TkPoison -> true,
         TkPrim -> na.prim == nb.prim,
         TkNamed -> na.head == nb.head && tyEqList(arena, na.args, nb.args),
         TkOptional -> tyEq(arena, na.ret, nb.ret),
@@ -579,6 +603,7 @@ pub fn tyToString(arena: TyArena, idx: Int) -> String {
     let node = tyGet(arena, idx)
     match node.kind {
         TkErr -> "Invalid",
+        TkPoison -> "Poison",
         TkPrim -> primKindName(node.prim),
         TkNamed -> tyNamedToString(arena, node),
         TkOptional -> "{tyToString(arena, node.ret)}?",
@@ -668,6 +693,9 @@ pub fn tyFromString(arena: TyArena, source: String) -> Int {
     let trimmed = strings.trimSpace(source)
     if trimmed == "" {
         return tErr(arena)
+    }
+    if trimmed == "Poison" {
+        return tPoison(arena)
     }
     // Unwrap trailing `?` optionality first so the inner parse does not
     // have to treat it as a type-head continuation.

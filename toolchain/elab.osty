@@ -58,6 +58,12 @@ pub struct ElabCx {
     pub env: CheckEnv,
 }
 
+pub struct InstSession {
+    pub solver: Solver,
+    pub generics: List<String>,
+    pub freshs: List<Int>,
+}
+
 pub fn newElabCx(ast: AstFile, tys: TyArena) -> ElabCx {
     let env = emptyCheckEnv(tys)
     checkInstallPrelude(env)
@@ -122,7 +128,7 @@ fn elabCheckImpl(cx: ElabCx, idx: Int, expected: Int) -> ElabResult {
     if idx < 0 {
         return elabErrResult(cx, 0, 0)
     }
-    if tyIsErr(cx.env.tys, expected) {
+    if tyIsBad(cx.env.tys, expected) {
         return elabInferImpl(cx, idx)
     }
     let node = astArenaNodeAt(cx.ast.arena, idx)
@@ -149,7 +155,7 @@ fn elabCheckImpl(cx: ElabCx, idx: Int, expected: Int) -> ElabResult {
 /// needed.
 fn elabCheckViaInfer(cx: ElabCx, idx: Int, expected: Int) -> ElabResult {
     let r = elabInferImpl(cx, idx)
-    if !(tyIsErr(cx.env.tys, r.ty)) {
+    if !(tyIsBad(cx.env.tys, r.ty)) {
         let start = coreStartAt(cx.core, r.node)
         let end = coreEndAt(cx.core, r.node)
         let _ = checkExpectAssignable(cx.env, expected, r.ty, start, end)
@@ -247,7 +253,7 @@ fn elabInferIdent(cx: ElabCx, node: AstNode) -> ElabResult {
         // directly and bypasses this site, so calls are unaffected.
         if checkStringListLenHelper(fnSig.generics) > 0 {
             cx.env.diagnostics.push(diagGenericCallableReference(node.text, node.start, node.end))
-            return elabErrResult(cx, node.start, node.end)
+            return elabPoisonResult(cx, node.start, node.end)
         }
         let fnTy = fnSigToTy(cx.env, fnSig)
         let coreIdx = coreIdent(cx.core, node.text, IkFn, fnTy, node.start, node.end)
@@ -255,7 +261,7 @@ fn elabInferIdent(cx: ElabCx, node: AstNode) -> ElabResult {
     }
     // Fall through — unknown name.
     cx.env.diagnostics.push(diagUnknownName(node.text, node.start, node.end))
-    elabErrResult(cx, node.start, node.end)
+    elabPoisonResult(cx, node.start, node.end)
 }
 
 /// fnSigToTy builds an `fn(params) -> ret` type from a CheckFnSig.
@@ -278,7 +284,7 @@ fn elabInferUnary(cx: ElabCx, node: AstNode) -> ElabResult {
 
 fn unOpResultType(env: CheckEnv, op: UnOp, inner: Int, start: Int, end: Int) -> Int {
     let tys = env.tys
-    if tyIsErr(tys, inner) {
+    if tyIsBad(tys, inner) {
         return inner
     }
     // Each arm delegates to a helper so the match body stays a
@@ -340,7 +346,10 @@ fn elabInferBinary(cx: ElabCx, node: AstNode) -> ElabResult {
 
 fn binOpResultType(env: CheckEnv, op: BinOp, left: Int, right: Int, start: Int, end: Int) -> Int {
     let tys = env.tys
-    if tyIsErr(tys, left) || tyIsErr(tys, right) {
+    if tyIsBad(tys, left) || tyIsBad(tys, right) {
+        if tyIsPoison(tys, left) || tyIsPoison(tys, right) {
+            return tPoison(tys)
+        }
         return tErr(tys)
     }
     match op {
@@ -611,7 +620,7 @@ fn elabAssignableTarget(cx: ElabCx, idx: Int) -> ElabResult {
 fn elabReturnStmt(cx: ElabCx, node: AstNode) -> Int {
     let expected = cx.env.returnTy
     let valueIdx = node.left
-    let value = if valueIdx >= 0 && !(tyIsErr(cx.env.tys, expected)) {
+    let value = if valueIdx >= 0 && !(tyIsBad(cx.env.tys, expected)) {
         elabCheck(cx, valueIdx, expected)
     } else if valueIdx >= 0 {
         elabInfer(cx, valueIdx)
@@ -635,7 +644,7 @@ fn elabDeferStmt(cx: ElabCx, node: AstNode) -> Int {
 fn elabChanSendStmt(cx: ElabCx, node: AstNode) -> Int {
     let channel = elabInfer(cx, node.left)
     let elemTy = elabChannelElemTy(cx, channel.ty, node.start, node.end)
-    let value = if tyIsErr(cx.env.tys, elemTy) {
+    let value = if tyIsBad(cx.env.tys, elemTy) {
         elabInfer(cx, node.right)
     } else {
         elabCheck(cx, node.right, elemTy)
@@ -718,7 +727,10 @@ fn elabChannelElemTy(cx: ElabCx, ty: Int, start: Int, end: Int) -> Int {
             return checkIntListAt(args, 0)
         }
     }
-    if !(tyIsErr(tys, resolved)) {
+    if tyIsBad(tys, resolved) {
+        return resolved
+    }
+    if !(tyIsBad(tys, resolved)) {
         cx.env.diagnostics.push(diagOperandType("<-", tyToString(tys, resolved), start, end))
     }
     tErr(tys)
@@ -727,8 +739,8 @@ fn elabChannelElemTy(cx: ElabCx, ty: Int, start: Int, end: Int) -> Int {
 fn elabForIterableElemTy(cx: ElabCx, ty: Int, start: Int, end: Int) -> Int {
     let tys = cx.env.tys
     let resolved = checkResolveAliasDeep(cx.env, ty)
-    if tyIsErr(tys, resolved) {
-        return tErr(tys)
+    if tyIsBad(tys, resolved) {
+        return resolved
     }
     if tyIsPrim(tys, resolved, PkString) {
         return tChar(tys)
@@ -849,7 +861,7 @@ fn astBlockEscapesMatchResult(ast: AstFile, node: AstNode) -> Bool {
 }
 
 fn elabRecordTypedExpr(cx: ElabCx, idx: Int, out: ElabResult) {
-    if idx < 0 || out.node < 0 || tyIsErr(cx.env.tys, out.ty) {
+    if idx < 0 || out.node < 0 || tyIsBad(cx.env.tys, out.ty) {
         return
     }
     coreSetOrigin(cx.core, out.node, idx)
@@ -947,6 +959,12 @@ fn elabErrResult(cx: ElabCx, start: Int, end: Int) -> ElabResult {
     ElabResult { node, ty }
 }
 
+fn elabPoisonResult(cx: ElabCx, start: Int, end: Int) -> ElabResult {
+    let ty = tPoison(cx.env.tys)
+    let node = coreErrExpr(cx.core, ty, start, end)
+    ElabResult { node, ty }
+}
+
 fn checkIntListLenHelper(xs: List<Int>) -> Int {
     let mut n = 0
     for x in xs {
@@ -1016,51 +1034,40 @@ fn elabInferCall(cx: ElabCx, callIdx: Int, node: AstNode, expected: Int) -> Elab
     let sig = checkLookupFn(cx.env, baseCallee.text, "")
     if sig.name == "" {
         cx.env.diagnostics.push(diagUnknownName(baseCallee.text, baseCallee.start, baseCallee.end))
-        return elabErrResult(cx, node.start, node.end)
+        return elabPoisonResult(cx, node.start, node.end)
     }
 
     if checkStringListLenHelper(sig.generics) == 0 && checkIntListLenHelper(explicitArgs) == 0 {
         let coreFn = coreIdent(cx.core, baseCallee.text, IkFn, fnSigToTy(cx.env, sig), baseCallee.start, baseCallee.end)
         let coreArgs = elabCallArgsMonomorphic(cx, sig.name, sig.paramTys, argIdxs, node.start, node.end)
         let retTy = sig.retTy
-        if !(tyIsErr(cx.env.tys, expected)) {
+        if !(tyIsBad(cx.env.tys, expected)) {
             let _ = checkExpectAssignable(cx.env, expected, retTy, node.start, node.end)
         }
         let coreCallNode = coreCall(cx.core, coreFn, coreArgs, [], retTy, node.start, node.end)
         return ElabResult { node: coreCallNode, ty: retTy }
     }
 
-    let solver = newSolver()
-    let freshs = elabFreshenGenerics(cx, solver, sig.generics, sig.name)
+    let inst = instBegin(cx, sig.generics, sig.name)
 
     // Seed expected type into the solver if it shapes the return.
-    if !(tyIsErr(cx.env.tys, expected)) {
-        let specialisedRet = checkSubstituteTy(cx.env, sig.retTy, sig.generics, freshs)
-        let _ = unify(cx.env, solver, specialisedRet, expected)
-    }
+    instSeedExpectedRet(cx, inst, sig.retTy, expected)
 
     // Respect explicit turbofish args if supplied.
-    if checkIntListLenHelper(explicitArgs) == checkIntListLenHelper(freshs) {
-        let mut i = 0
-        for explicit in explicitArgs {
-            let fresh = checkIntListAt(freshs, i)
-            let _ = unify(cx.env, solver, fresh, explicit)
-            i = i + 1
-        }
-    }
+    instSeedPositionalArgs(cx, inst, explicitArgs)
 
     let coreFn = coreIdent(cx.core, baseCallee.text, IkFn, fnSigToTy(cx.env, sig), baseCallee.start, baseCallee.end)
-    let coreArgs = elabCallArgs(cx, solver, sig, freshs, argIdxs, node.start, node.end)
+    let coreArgs = elabCallArgs(cx, inst.solver, sig, inst.freshs, argIdxs, node.start, node.end)
 
-    let retSubstituted = checkSubstituteTy(cx.env, sig.retTy, sig.generics, freshs)
-    let retTy = zonk(cx.env, solver, retSubstituted)
+    let retSubstituted = instSubstitute(cx, inst, sig.retTy)
+    let retTy = instZonk(cx, inst, retSubstituted)
 
     // Verify every type parameter is now resolved.
-    elabReportUnresolvedGenerics(cx, solver, sig, freshs, node.start, node.end)
-    elabCheckGenericBounds(cx, solver, sig.generics, sig.genericBounds, freshs, node.start, node.end)
+    elabReportUnresolvedGenerics(cx, inst.solver, sig, inst.freshs, node.start, node.end)
+    instCheckBounds(cx, inst, sig.genericBounds, node.start, node.end)
 
     // Record instantiation for the bridge summary.
-    let typeArgsConcrete = zonkList(cx.env, solver, freshs)
+    let typeArgsConcrete = instConcreteArgs(cx, inst)
     if checkIntListLenHelper(typeArgsConcrete) > 0 {
         checkRecordInstantiation(cx.env, callIdx, sig.name, typeArgsConcrete, retTy, node.start, node.end)
     }
@@ -1074,18 +1081,21 @@ fn elabInferCall(cx: ElabCx, callIdx: Int, node: AstNode, expected: Int) -> Elab
 fn elabInferMethodCall(cx: ElabCx, callNode: AstNode, fieldNode: AstNode, expected: Int) -> ElabResult {
     let recv = elabInfer(cx, fieldNode.left)
     let recvResolved = checkResolveAliasDeep(cx.env, recv.ty)
+    if tyIsBad(cx.env.tys, recvResolved) {
+        return elabPoisonResult(cx, callNode.start, callNode.end)
+    }
     let ownerName = tyHeadAt(cx.env.tys, recvResolved)
     let methodName = fieldNode.text
     let sig = checkLookupMethod(cx.env, ownerName, methodName)
     if sig.name == "" {
         cx.env.diagnostics.push(diagUnknownMethod(ownerName, methodName, fieldNode.start, fieldNode.end))
-        return elabErrResult(cx, callNode.start, callNode.end)
+        return elabPoisonResult(cx, callNode.start, callNode.end)
     }
 
     if checkStringListLenHelper(sig.generics) == 0 {
         let coreArgs = elabCallArgsMonomorphic(cx, sig.name, sig.paramTys, callNode.children, callNode.start, callNode.end)
         let retTy = sig.retTy
-        if !(tyIsErr(cx.env.tys, expected)) {
+        if !(tyIsBad(cx.env.tys, expected)) {
             let _ = checkExpectAssignable(cx.env, expected, retTy, callNode.start, callNode.end)
         }
         let mcall = coreMethodCall(
@@ -1102,35 +1112,21 @@ fn elabInferMethodCall(cx: ElabCx, callNode: AstNode, fieldNode: AstNode, expect
         return ElabResult { node: mcall, ty: retTy }
     }
 
-    let solver = newSolver()
-    let freshs = elabFreshenGenerics(cx, solver, sig.generics, "{ownerName}.{sig.name}")
+    let inst = instBegin(cx, sig.generics, "{ownerName}.{sig.name}")
 
     // Bind the receiver type params against the receiver's concrete args.
     let typeSig = checkLookupType(cx.env, ownerName)
     let ownerArgs = tyArgsAt(cx.env.tys, recvResolved)
-    if checkStringListLenHelper(typeSig.generics) == checkIntListLenHelper(ownerArgs) {
-        let mut i = 0
-        for ownerGeneric in typeSig.generics {
-            let freshIdx = elabFindFresh(freshs, sig.generics, ownerGeneric)
-            if freshIdx >= 0 {
-                let _ = unify(cx.env, solver, checkIntListAt(freshs, freshIdx), checkIntListAt(ownerArgs, i))
-            }
-            i = i + 1
-        }
-    }
+    instSeedOwnerArgs(cx, inst, typeSig.generics, ownerArgs)
+    instSeedExpectedRet(cx, inst, sig.retTy, expected)
 
-    if !(tyIsErr(cx.env.tys, expected)) {
-        let specialisedRet = checkSubstituteTy(cx.env, sig.retTy, sig.generics, freshs)
-        let _ = unify(cx.env, solver, specialisedRet, expected)
-    }
+    let coreArgs = elabCallArgs(cx, inst.solver, sig, inst.freshs, callNode.children, callNode.start, callNode.end)
+    let retSubstituted = instSubstitute(cx, inst, sig.retTy)
+    let retTy = instZonk(cx, inst, retSubstituted)
+    elabReportUnresolvedGenerics(cx, inst.solver, sig, inst.freshs, callNode.start, callNode.end)
+    instCheckBounds(cx, inst, sig.genericBounds, callNode.start, callNode.end)
 
-    let coreArgs = elabCallArgs(cx, solver, sig, freshs, callNode.children, callNode.start, callNode.end)
-    let retSubstituted = checkSubstituteTy(cx.env, sig.retTy, sig.generics, freshs)
-    let retTy = zonk(cx.env, solver, retSubstituted)
-    elabReportUnresolvedGenerics(cx, solver, sig, freshs, callNode.start, callNode.end)
-    elabCheckGenericBounds(cx, solver, sig.generics, sig.genericBounds, freshs, callNode.start, callNode.end)
-
-    let typeArgsConcrete = zonkList(cx.env, solver, freshs)
+    let typeArgsConcrete = instConcreteArgs(cx, inst)
     if checkIntListLenHelper(typeArgsConcrete) > 0 {
         checkRecordInstantiation(cx.env, -1, "{ownerName}.{sig.name}", typeArgsConcrete, retTy, callNode.start, callNode.end)
     }
@@ -1157,9 +1153,12 @@ fn elabInferFnValueCall(cx: ElabCx, node: AstNode, argIdxs: List<Int>, expected:
     let _ = expected
     let callee = elabInfer(cx, node.left)
     let fnTy = checkResolveAliasDeep(cx.env, callee.ty)
+    if tyIsBad(cx.env.tys, fnTy) {
+        return elabPoisonResult(cx, node.start, node.end)
+    }
     if tyKindAt(cx.env.tys, fnTy) != TkFn {
         cx.env.diagnostics.push(diagNotCallable(tyToString(cx.env.tys, fnTy), node.start, node.end))
-        return elabErrResult(cx, node.start, node.end)
+        return elabPoisonResult(cx, node.start, node.end)
     }
     let paramTys = tyArgsAt(cx.env.tys, fnTy)
     let retTy = tyRetAt(cx.env.tys, fnTy)
@@ -1253,6 +1252,62 @@ fn elabCallArgsMonomorphic(
         i = i + 1
     }
     coreArgs
+}
+
+fn instBegin(cx: ElabCx, generics: List<String>, owner: String) -> InstSession {
+    let solver = newSolver()
+    let freshs = elabFreshenGenerics(cx, solver, generics, owner)
+    InstSession { solver, generics, freshs }
+}
+
+fn instSubstitute(cx: ElabCx, inst: InstSession, ty: Int) -> Int {
+    checkSubstituteTy(cx.env, ty, inst.generics, inst.freshs)
+}
+
+fn instSeedExpectedRet(cx: ElabCx, inst: InstSession, retTy: Int, expected: Int) {
+    if tyIsBad(cx.env.tys, expected) {
+        return
+    }
+    let specialisedRet = instSubstitute(cx, inst, retTy)
+    let _ = unify(cx.env, inst.solver, specialisedRet, expected)
+}
+
+fn instSeedPositionalArgs(cx: ElabCx, inst: InstSession, args: List<Int>) {
+    if checkIntListLenHelper(args) != checkIntListLenHelper(inst.freshs) {
+        return
+    }
+    let mut i = 0
+    for arg in args {
+        let fresh = checkIntListAt(inst.freshs, i)
+        let _ = unify(cx.env, inst.solver, fresh, arg)
+        i = i + 1
+    }
+}
+
+fn instSeedOwnerArgs(cx: ElabCx, inst: InstSession, ownerGenerics: List<String>, ownerArgs: List<Int>) {
+    if checkStringListLenHelper(ownerGenerics) != checkIntListLenHelper(ownerArgs) {
+        return
+    }
+    let mut i = 0
+    for ownerGeneric in ownerGenerics {
+        let freshIdx = elabFindFresh(inst.freshs, inst.generics, ownerGeneric)
+        if freshIdx >= 0 {
+            let _ = unify(cx.env, inst.solver, checkIntListAt(inst.freshs, freshIdx), checkIntListAt(ownerArgs, i))
+        }
+        i = i + 1
+    }
+}
+
+fn instZonk(cx: ElabCx, inst: InstSession, ty: Int) -> Int {
+    zonk(cx.env, inst.solver, ty)
+}
+
+fn instConcreteArgs(cx: ElabCx, inst: InstSession) -> List<Int> {
+    zonkList(cx.env, inst.solver, inst.freshs)
+}
+
+fn instCheckBounds(cx: ElabCx, inst: InstSession, bounds: List<CheckGenericBound>, start: Int, end: Int) {
+    elabCheckGenericBounds(cx, inst.solver, inst.generics, bounds, inst.freshs, start, end)
 }
 
 /// elabFreshenGenerics allocates one TyVar per generic in `generics`,
@@ -1382,6 +1437,9 @@ fn elabInferTurbofish(cx: ElabCx, node: AstNode) -> ElabResult {
 fn elabInferField(cx: ElabCx, node: AstNode) -> ElabResult {
     let recv = elabInfer(cx, node.left)
     let recvTy = checkResolveAliasDeep(cx.env, recv.ty)
+    if tyIsBad(cx.env.tys, recvTy) {
+        return elabPoisonResult(cx, node.start, node.end)
+    }
     let kind = tyKindAt(cx.env.tys, recvTy)
     let fieldName = node.text
     match kind {
@@ -1395,7 +1453,7 @@ fn elabInferField(cx: ElabCx, node: AstNode) -> ElabResult {
                     node.start,
                     node.end,
                 ))
-                return elabErrResult(cx, node.start, node.end)
+                return elabPoisonResult(cx, node.start, node.end)
             }
             let elemTy = checkIntListAt(elems, idx)
             let coreIdx = coreTupleAccess(cx.core, recv.node, idx, elemTy, node.start, node.end)
@@ -1406,7 +1464,7 @@ fn elabInferField(cx: ElabCx, node: AstNode) -> ElabResult {
             let fieldSig = checkLookupField(cx.env, owner, fieldName)
             if fieldSig.name == "" {
                 cx.env.diagnostics.push(diagUnknownField(owner, fieldName, node.start, node.end))
-                return elabErrResult(cx, node.start, node.end)
+                return elabPoisonResult(cx, node.start, node.end)
             }
             // Substitute owner generics.
             let typeSig = checkLookupType(cx.env, owner)
@@ -1426,7 +1484,7 @@ fn elabInferField(cx: ElabCx, node: AstNode) -> ElabResult {
                 node.start,
                 node.end,
             ))
-            elabErrResult(cx, node.start, node.end)
+            elabPoisonResult(cx, node.start, node.end)
         },
     }
 }
@@ -1478,6 +1536,9 @@ fn elabInferIndex(cx: ElabCx, node: AstNode) -> ElabResult {
     let idx = elabInfer(cx, node.right)
     let recvTy = checkResolveAliasDeep(cx.env, recv.ty)
     let tys = cx.env.tys
+    if tyIsBad(tys, recvTy) || tyIsBad(tys, idx.ty) {
+        return elabPoisonResult(cx, node.start, node.end)
+    }
     // List<T>[Int] → T
     if tyIsNamedHead(tys, recvTy, "List") {
         let args = tyArgsAt(tys, recvTy)
@@ -1510,7 +1571,7 @@ fn elabInferIndex(cx: ElabCx, node: AstNode) -> ElabResult {
         return ElabResult { node: coreIdx, ty: tChar(tys) }
     }
     cx.env.diagnostics.push(diagUnknownField(tyToString(tys, recvTy), "[]", node.start, node.end))
-    elabErrResult(cx, node.start, node.end)
+    elabPoisonResult(cx, node.start, node.end)
 }
 
 // ---------------------------------------------------------------------
@@ -1527,7 +1588,7 @@ fn elabInferList(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
         } else {
             tErr(tys)
         }
-        let listTy = tyNamed(tys, "List", [if tyIsErr(tys, elemHint) { tErr(tys) } else { elemHint }])
+        let listTy = tyNamed(tys, "List", [if tyIsPoison(tys, elemHint) { tPoison(tys) } else if tyIsErr(tys, elemHint) { tErr(tys) } else { elemHint }])
         let coreIdx = coreList(cx.core, [], listTy, node.start, node.end)
         return ElabResult { node: coreIdx, ty: listTy }
     }
@@ -1541,7 +1602,7 @@ fn elabInferList(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
     let mut elemTy = outerElem
     let mut i = 0
     for elemIdx in elemIdxs {
-        if tyIsErr(tys, elemTy) && i == 0 {
+        if tyIsBad(tys, elemTy) && i == 0 {
             // Infer from first element.
             let r = elabInfer(cx, elemIdx)
             elemTy = r.ty
@@ -1573,14 +1634,14 @@ fn elabInferMap(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
         let entryNode = astArenaNodeAt(cx.ast.arena, entryIdx)
         let keyIdx = entryNode.left
         let valIdx = entryNode.right
-        let keyResult = if tyIsErr(tys, keyTy) {
+        let keyResult = if tyIsBad(tys, keyTy) {
             let r = elabInfer(cx, keyIdx)
             if first { keyTy = r.ty }
             r
         } else {
             elabCheck(cx, keyIdx, keyTy)
         }
-        let valResult = if tyIsErr(tys, valTy) {
+        let valResult = if tyIsBad(tys, valTy) {
             let r = elabInfer(cx, valIdx)
             if first { valTy = r.ty }
             r
@@ -1614,7 +1675,7 @@ fn elabInferTuple(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
         } else {
             tErr(tys)
         }
-        let r = if tyIsErr(tys, hint) {
+        let r = if tyIsBad(tys, hint) {
             elabInfer(cx, elemIdx)
         } else {
             elabCheck(cx, elemIdx, hint)
@@ -1641,22 +1702,15 @@ fn elabInferStructLit(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
     let typeSig = checkLookupType(cx.env, owner)
     if typeSig.name == "" {
         cx.env.diagnostics.push(diagUnknownName(owner, node.start, node.end))
-        return elabErrResult(cx, node.start, node.end)
+        return elabPoisonResult(cx, node.start, node.end)
     }
 
-    let solver = newSolver()
-    let freshs = elabFreshenGenerics(cx, solver, typeSig.generics, owner)
+    let inst = instBegin(cx, typeSig.generics, owner)
 
     // Seed from expected if it matches the same owner head.
     if tyIsNamedHead(tys, expected, owner) {
         let expectedArgs = tyArgsAt(tys, expected)
-        if checkIntListLenHelper(expectedArgs) == checkIntListLenHelper(freshs) {
-            let mut i = 0
-            for fresh in freshs {
-                let _ = unify(cx.env, solver, fresh, checkIntListAt(expectedArgs, i))
-                i = i + 1
-            }
-        }
+        instSeedPositionalArgs(cx, inst, expectedArgs)
     }
 
     // Struct literal spread: `{ ..x, f: v, ... }`. The spread operand must
@@ -1667,10 +1721,10 @@ fn elabInferStructLit(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
     let mut coreSpread = -1
     let mut spreadSupplied: List<String> = []
     if node.right >= 0 {
-        let spreadHint = tyNamed(tys, owner, freshs)
+        let spreadHint = tyNamed(tys, owner, inst.freshs)
         let spreadResult = elabCheck(cx, node.right, spreadHint)
         coreSpread = spreadResult.node
-        let _ = unify(cx.env, solver, spreadHint, spreadResult.ty)
+        let _ = unify(cx.env, inst.solver, spreadHint, spreadResult.ty)
         if tyIsNamedHead(tys, spreadResult.ty, owner) {
             for f in cx.env.fields {
                 if f.owner == owner {
@@ -1695,10 +1749,10 @@ fn elabInferStructLit(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
         }
         seenNames.push(fieldName)
 
-        let specialised = checkSubstituteTy(cx.env, fieldSig.ty, typeSig.generics, freshs)
-        let hint = zonk(cx.env, solver, specialised)
+        let specialised = instSubstitute(cx, inst, fieldSig.ty)
+        let hint = instZonk(cx, inst, specialised)
         let r = elabCheck(cx, fieldNode.left, hint)
-        let _ = unify(cx.env, solver, hint, r.ty)
+        let _ = unify(cx.env, inst.solver, hint, r.ty)
         coreFieldsList.push(coreStructField(cx.core, fieldName, r.node, fieldNode.start, fieldNode.end))
     }
 
@@ -1713,8 +1767,8 @@ fn elabInferStructLit(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
         }
     }
 
-    elabCheckGenericBounds(cx, solver, typeSig.generics, typeSig.genericBounds, freshs, node.start, node.end)
-    let concreteTypeArgs = zonkList(cx.env, solver, freshs)
+    instCheckBounds(cx, inst, typeSig.genericBounds, node.start, node.end)
+    let concreteTypeArgs = instConcreteArgs(cx, inst)
     let resultTy = if checkIntListLenHelper(concreteTypeArgs) == 0 {
         tyNamed(tys, owner, [])
     } else {
@@ -1789,7 +1843,7 @@ fn elabInferClosure(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
     }
 
     let bodyIdx = node.left
-    let body = if !(tyIsErr(tys, expectedRet)) {
+    let body = if !(tyIsBad(tys, expectedRet)) {
         elabCheck(cx, bodyIdx, expectedRet)
     } else {
         elabInfer(cx, bodyIdx)
@@ -1811,10 +1865,10 @@ fn elabInferRange(cx: ElabCx, node: AstNode) -> ElabResult {
     let tys = cx.env.tys
     let lo = if node.left >= 0 { elabInfer(cx, node.left) } else { ElabResult { node: -1, ty: tInt(tys) } }
     let hi = if node.right >= 0 { elabInfer(cx, node.right) } else { ElabResult { node: -1, ty: tInt(tys) } }
-    if !(tyIsInteger(tys, lo.ty)) && !(tyIsErr(tys, lo.ty)) {
+    if !(tyIsInteger(tys, lo.ty)) && !(tyIsBad(tys, lo.ty)) {
         cx.env.diagnostics.push(diagMismatch("Int", tyToString(tys, lo.ty), node.start, node.end))
     }
-    if !(tyIsInteger(tys, hi.ty)) && !(tyIsErr(tys, hi.ty)) {
+    if !(tyIsInteger(tys, hi.ty)) && !(tyIsBad(tys, hi.ty)) {
         cx.env.diagnostics.push(diagMismatch("Int", tyToString(tys, hi.ty), node.start, node.end))
     }
     // Range result type mirrors the shared operand prim (Int in the
@@ -1838,7 +1892,7 @@ fn elabInferRange(cx: ElabCx, node: AstNode) -> ElabResult {
 fn elabInferIf(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
     let tys = cx.env.tys
     let cond = elabCheck(cx, node.left, tBool(tys))
-    let hasExpected = !(tyIsErr(tys, expected))
+    let hasExpected = !(tyIsBad(tys, expected))
 
     let then_ = if hasExpected {
         elabCheck(cx, node.right, expected)
@@ -1872,10 +1926,10 @@ fn elabInferIf(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
 /// back to the first when they are incompatible so downstream
 /// diagnostics stay anchored to the if.
 fn joinTypes(env: CheckEnv, a: Int, b: Int) -> Int {
-    if tyIsErr(env.tys, a) {
+    if tyIsBad(env.tys, a) {
         return b
     }
-    if tyIsErr(env.tys, b) {
+    if tyIsBad(env.tys, b) {
         return a
     }
     if tyEq(env.tys, a, b) {
@@ -1900,7 +1954,7 @@ fn joinTypes(env: CheckEnv, a: Int, b: Int) -> Int {
 fn elabInferMatch(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
     let scrutinee = elabInfer(cx, node.left)
     let scrutTy = checkResolveAliasDeep(cx.env, scrutinee.ty)
-    let hasExpected = !(tyIsErr(cx.env.tys, expected))
+    let hasExpected = !(tyIsBad(cx.env.tys, expected))
 
     let mut armNodes: List<Int> = []
     let mut resultTy = if hasExpected { expected } else { tErr(cx.env.tys) }
@@ -1929,12 +1983,12 @@ fn elabInferMatch(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
         let bodyEscapes = astExprEscapesMatchResult(cx.ast, bodyIdx)
         let body = if hasExpected {
             elabCheck(cx, bodyIdx, expected)
-        } else if tyIsErr(cx.env.tys, resultTy) {
+        } else if tyIsBad(cx.env.tys, resultTy) {
             elabInfer(cx, bodyIdx)
         } else {
             elabCheck(cx, bodyIdx, resultTy)
         }
-        if !hasExpected && tyIsErr(cx.env.tys, resultTy) && !bodyEscapes {
+        if !hasExpected && tyIsBad(cx.env.tys, resultTy) && !bodyEscapes {
             resultTy = body.ty
         }
 
@@ -1977,6 +2031,9 @@ fn elabInferQuestion(cx: ElabCx, node: AstNode) -> ElabResult {
     let inner = elabInfer(cx, node.left)
     let innerTy = checkResolveAliasDeep(cx.env, inner.ty)
     let retTy = checkResolveAliasDeep(cx.env, cx.env.returnTy)
+    if tyIsBad(tys, innerTy) || tyIsBad(tys, retTy) {
+        return elabPoisonResult(cx, node.start, node.end)
+    }
 
     if tyIsNamedHead(tys, innerTy, "Option") {
         let args = tyArgsAt(tys, innerTy)
@@ -1984,7 +2041,7 @@ fn elabInferQuestion(cx: ElabCx, node: AstNode) -> ElabResult {
             return elabErrResult(cx, node.start, node.end)
         }
         let payload = checkIntListAt(args, 0)
-        if !(tyIsNamedHead(tys, retTy, "Option")) && !(tyIsErr(tys, retTy)) {
+        if !(tyIsNamedHead(tys, retTy, "Option")) && !(tyIsBad(tys, retTy)) {
             cx.env.diagnostics.push(diagQuestionNotOptional(tyToString(tys, retTy), node.start, node.end))
         }
         let coreIdx = coreQuestion(cx.core, inner.node, payload, node.start, node.end)
@@ -2004,14 +2061,14 @@ fn elabInferQuestion(cx: ElabCx, node: AstNode) -> ElabResult {
                 let outerErr = checkIntListAt(retArgs, 1)
                 let _ = checkExpectAssignable(cx.env, outerErr, errTy, node.start, node.end)
             }
-        } else if !(tyIsErr(tys, retTy)) {
+        } else if !(tyIsBad(tys, retTy)) {
             cx.env.diagnostics.push(diagQuestionNotOptional(tyToString(tys, retTy), node.start, node.end))
         }
         let coreIdx = coreQuestion(cx.core, inner.node, payload, node.start, node.end)
         return ElabResult { node: coreIdx, ty: payload }
     }
 
-    if !(tyIsErr(tys, innerTy)) {
+    if !(tyIsBad(tys, innerTy)) {
         cx.env.diagnostics.push(diagQuestionNotOptional(tyToString(tys, innerTy), node.start, node.end))
     }
     elabErrResult(cx, node.start, node.end)
@@ -2056,7 +2113,7 @@ fn elabPatternMode(cx: ElabCx, idx: Int, scrutTy: Int, mutable: Bool, recordBind
     if kind == "lit" {
         let litIdx = node.left
         let lit = elabInfer(cx, litIdx)
-        if !(checkIsAssignable(cx.env, scrutTy, lit.ty)) && !(tyIsErr(tys, lit.ty)) {
+        if !(checkIsAssignable(cx.env, scrutTy, lit.ty)) && !(tyIsBad(tys, lit.ty)) {
             cx.env.diagnostics.push(diagPatternShapeMismatch(tyToString(tys, scrutTy), node.start, node.end))
         }
         return corePatLit(cx.core, lit.node, scrutTy, node.start, node.end)
@@ -2145,7 +2202,7 @@ fn elabRangePattern(cx: ElabCx, node: AstNode, scrutTy: Int) -> Int {
     // Core IR round-trips correctly. Validate that the scrutinee is an
     // ordered type (integer / char) and emit E0742 otherwise.
     let tys = cx.env.tys
-    if !(tyIsErr(tys, scrutTy))
+    if !(tyIsBad(tys, scrutTy))
         && !(tyIsInteger(tys, scrutTy))
         && !(tyIsPrim(tys, scrutTy, PkChar)) {
         cx.env.diagnostics.push(diagPatternShapeMismatch(tyToString(tys, scrutTy), node.start, node.end))
@@ -2413,7 +2470,7 @@ fn anyUnguardedIrrefutableArm(cx: ElabCx, matchNode: AstNode, scrutTy: Int) -> B
 
 fn exhaustCheckMatch(cx: ElabCx, matchNode: AstNode, scrutTy: Int) {
     let tys = cx.env.tys
-    if tyIsErr(tys, scrutTy) {
+    if tyIsBad(tys, scrutTy) {
         return
     }
     if anyUnguardedIrrefutableArm(cx, matchNode, scrutTy) {
@@ -2588,7 +2645,7 @@ fn variantSubsAllIrrefutable(cx: ElabCx, p: AstNode, v: CheckVariantSig) -> Bool
 
 fn reachCheckArms(cx: ElabCx, matchNode: AstNode, scrutTy: Int) {
     let tys = cx.env.tys
-    if tyIsErr(tys, scrutTy) {
+    if tyIsBad(tys, scrutTy) {
         return
     }
     let isBool = tyIsPrim(tys, scrutTy, PkBool)
@@ -3056,7 +3113,7 @@ fn pmNotHandled() -> PmCheckOutcome {
 /// Phase 1 logic in that case.
 fn pmCheckMatch(cx: ElabCx, matchNode: AstNode, scrutTy: Int) -> PmCheckOutcome {
     let tys = cx.env.tys
-    if tyIsErr(tys, scrutTy) {
+    if tyIsBad(tys, scrutTy) {
         return pmNotHandled()
     }
     if !(pmTypeSupported(cx, scrutTy)) {

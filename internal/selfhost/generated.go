@@ -25866,6 +25866,10 @@ type TyKind_TkErr struct{ _ref byte }
 
 func (TyKind_TkErr) _isTyKind() {}
 
+type TyKind_TkPoison struct{ _ref byte }
+
+func (TyKind_TkPoison) _isTyKind() {}
+
 type TyKind_TkPrim struct{ _ref byte }
 
 func (TyKind_TkPrim) _isTyKind() {}
@@ -25912,6 +25916,7 @@ type TyArena struct {
 	internKeys      []string
 	internValues    []int
 	idxErr          int
+	idxPoison       int
 	idxInt          int
 	idxInt8         int
 	idxInt16        int
@@ -25943,11 +25948,13 @@ func emptyTyNode() *TyNode {
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10241:5
 func emptyTyArena() *TyArena {
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10242:5
-	arena := &TyArena{nodes: make([]*TyNode, 0, 1), internKeys: make([]string, 0, 1), internValues: make([]int, 0, 1), idxErr: -1, idxInt: -1, idxInt8: -1, idxInt16: -1, idxInt32: -1, idxInt64: -1, idxUInt8: -1, idxUInt16: -1, idxUInt32: -1, idxUInt64: -1, idxByte: -1, idxFloat: -1, idxFloat32: -1, idxFloat64: -1, idxBool: -1, idxChar: -1, idxString: -1, idxBytes: -1, idxUnit: -1, idxNever: -1, idxUntypedInt: -1, idxUntypedFloat: -1}
+	arena := &TyArena{nodes: make([]*TyNode, 0, 1), internKeys: make([]string, 0, 1), internValues: make([]int, 0, 1), idxErr: -1, idxPoison: -1, idxInt: -1, idxInt8: -1, idxInt16: -1, idxInt32: -1, idxInt64: -1, idxUInt8: -1, idxUInt16: -1, idxUInt32: -1, idxUInt64: -1, idxByte: -1, idxFloat: -1, idxFloat32: -1, idxFloat64: -1, idxBool: -1, idxChar: -1, idxString: -1, idxBytes: -1, idxUnit: -1, idxNever: -1, idxUntypedInt: -1, idxUntypedFloat: -1}
 	_ = arena
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10252:10
 	arena.idxErr = tyAllocErr(arena)
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10253:10
+	arena.idxPoison = tyAllocPoison(arena)
+	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10254:10
 	arena.idxInt = tyAllocPrim(arena, PrimKind(&PrimKind_PkInt{}))
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10254:10
 	arena.idxInt8 = tyAllocPrim(arena, PrimKind(&PrimKind_PkInt8{}))
@@ -26006,6 +26013,19 @@ func tyAllocErr(arena *TyArena) int {
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10287:1
+func tyAllocPoison(arena *TyArena) int {
+	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10288:5
+	idx := tyNodeCount(arena)
+	_ = idx
+	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10289:5
+	node := &TyNode{kind: TyKind(&TyKind_TkPoison{}), prim: PrimKind(&PrimKind_PkInvalid{}), head: "", args: make([]int, 0, 1), ret: -1, varId: 0, varName: "", varOwner: ""}
+	_ = node
+	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10293:5
+	func() struct{} { arena.nodes = append(arena.nodes, node); return struct{}{} }()
+	return idx
+}
+
+// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10287:1
 func tyAllocPrim(arena *TyArena, prim PrimKind) int {
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10288:5
 	idx := tyNodeCount(arena)
@@ -26026,6 +26046,11 @@ func tyNodeCount(arena *TyArena) int {
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10313:5
 func tErr(arena *TyArena) int {
 	return arena.idxErr
+}
+
+// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10314:5
+func tPoison(arena *TyArena) int {
+	return arena.idxPoison
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10314:5
@@ -26393,6 +26418,16 @@ func tyIsErr(arena *TyArena, idx int) bool {
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10521:5
+func tyIsPoison(arena *TyArena, idx int) bool {
+	return ostyEqual(tyKindAt(arena, idx), TyKind(&TyKind_TkPoison{}))
+}
+
+// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10525:5
+func tyIsBad(arena *TyArena, idx int) bool {
+	return tyIsErr(arena, idx) || tyIsPoison(arena, idx)
+}
+
+// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10521:5
 func tyIsNever(arena *TyArena, idx int) bool {
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10522:5
 	k := tyPrimAt(arena, idx)
@@ -26491,6 +26526,9 @@ func tyEq(arena *TyArena, a int, b int) bool {
 		if func() bool { _, ok := _m1964.(*TyKind_TkErr); return ok }() {
 			return true
 		}
+		if func() bool { _, ok := _m1964.(*TyKind_TkPoison); return ok }() {
+			return true
+		}
 		if func() bool { _, ok := _m1964.(*TyKind_TkPrim); return ok }() {
 			return ostyEqual(na.prim, nb.prim)
 		}
@@ -26577,6 +26615,9 @@ func tyToString(arena *TyArena, idx int) string {
 		_ = _m1971
 		if func() bool { _, ok := _m1971.(*TyKind_TkErr); return ok }() {
 			return "Invalid"
+		}
+		if func() bool { _, ok := _m1971.(*TyKind_TkPoison); return ok }() {
+			return "Poison"
 		}
 		if func() bool { _, ok := _m1971.(*TyKind_TkPrim); return ok }() {
 			return primKindName(node.prim)
@@ -26746,6 +26787,11 @@ func tyFromString(arena *TyArena, source string) int {
 	if trimmed == "" {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10743:9
 		return tErr(arena)
+	}
+	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10745:5
+	if trimmed == "Poison" {
+		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10746:9
+		return tPoison(arena)
 	}
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10747:5
 	if strings.HasSuffix(trimmed, "?") && !(strings.HasSuffix(trimmed, "??")) {
@@ -31647,7 +31693,7 @@ func checkIsAssignable(env *CheckEnv, dst int, src int) bool {
 	s := checkResolveAliasDeep(env, src)
 	_ = s
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13395:5
-	if tyIsErr(env.tys, d) || tyIsErr(env.tys, s) {
+	if tyIsBad(env.tys, d) || tyIsBad(env.tys, s) {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13396:9
 		return true
 	}
@@ -31846,7 +31892,7 @@ func checkTypeSatisfiesInterface(env *CheckEnv, concrete int, iface int) bool {
 	ifaceResolved := checkResolveAliasDeep(env, iface)
 	_ = ifaceResolved
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13490:5
-	if tyIsErr(env.tys, concreteResolved) || tyIsErr(env.tys, ifaceResolved) {
+	if tyIsBad(env.tys, concreteResolved) || tyIsBad(env.tys, ifaceResolved) {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13491:9
 		return true
 	}
@@ -32324,7 +32370,7 @@ func unifyAt(env *CheckEnv, solver *Solver, aIn int, bIn int, depth int) bool {
 	bKind := tyKindAt(env.tys, b)
 	_ = bKind
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13887:5
-	if ostyEqual(aKind, TyKind(&TyKind_TkErr{})) || ostyEqual(bKind, TyKind(&TyKind_TkErr{})) {
+	if ostyEqual(aKind, TyKind(&TyKind_TkErr{})) || ostyEqual(bKind, TyKind(&TyKind_TkErr{})) || ostyEqual(aKind, TyKind(&TyKind_TkPoison{})) || ostyEqual(bKind, TyKind(&TyKind_TkPoison{})) {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13888:9
 		return true
 	}
@@ -32410,6 +32456,9 @@ func unifyAt(env *CheckEnv, solver *Solver, aIn int, bIn int, depth int) bool {
 			return tyHeadAt(env.tys, a) == tyHeadAt(env.tys, b)
 		}
 		if func() bool { _, ok := _m2081.(*TyKind_TkErr); return ok }() {
+			return true
+		}
+		if func() bool { _, ok := _m2081.(*TyKind_TkPoison); return ok }() {
 			return true
 		}
 		if func() bool { _, ok := _m2081.(*TyKind_TkVar); return ok }() {
@@ -32811,6 +32860,13 @@ type ElabCx struct {
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14186:5
+type InstSession struct {
+	solver   *Solver
+	generics []string
+	freshs   []int
+}
+
+// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14186:5
 func newElabCx(ast *AstFile, tys *TyArena) *ElabCx {
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14187:5
 	env := emptyCheckEnv(tys)
@@ -32939,7 +32995,7 @@ func elabCheckImpl(cx *ElabCx, idx int, expected int) *ElabResult {
 		return elabErrResult(cx, 0, 0)
 	}
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14250:5
-	if tyIsErr(cx.env.tys, expected) {
+	if tyIsBad(cx.env.tys, expected) {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14251:9
 		return elabInferImpl(cx, idx)
 	}
@@ -33000,7 +33056,7 @@ func elabCheckViaInfer(cx *ElabCx, idx int, expected int) *ElabResult {
 	r := elabInferImpl(cx, idx)
 	_ = r
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14277:5
-	if !(tyIsErr(cx.env.tys, r.ty)) {
+	if !(tyIsBad(cx.env.tys, r.ty)) {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14278:9
 		start := coreStartAt(cx.core, r.node)
 		_ = start
@@ -33156,7 +33212,7 @@ func elabInferIdent(cx *ElabCx, node *AstNode) *ElabResult {
 				return struct{}{}
 			}()
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14375:13
-			return elabErrResult(cx, node.start, node.end)
+			return elabPoisonResult(cx, node.start, node.end)
 		}
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14377:9
 		fnTy := fnSigToTy(cx.env, fnSig)
@@ -33172,7 +33228,7 @@ func elabInferIdent(cx *ElabCx, node *AstNode) *ElabResult {
 		cx.env.diagnostics = append(cx.env.diagnostics, diagUnknownName(node.text, node.start, node.end))
 		return struct{}{}
 	}()
-	return elabErrResult(cx, node.start, node.end)
+	return elabPoisonResult(cx, node.start, node.end)
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14387:1
@@ -33206,7 +33262,7 @@ func unOpResultType(env *CheckEnv, op UnOp, inner int, start int, end int) int {
 	tys := env.tys
 	_ = tys
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14406:5
-	if tyIsErr(tys, inner) {
+	if tyIsBad(tys, inner) {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14407:9
 		return inner
 	}
@@ -33323,8 +33379,11 @@ func binOpResultType(env *CheckEnv, op BinOp, left int, right int, start int, en
 	tys := env.tys
 	_ = tys
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14468:5
-	if tyIsErr(tys, left) || tyIsErr(tys, right) {
+	if tyIsBad(tys, left) || tyIsBad(tys, right) {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14469:9
+		if tyIsPoison(tys, left) || tyIsPoison(tys, right) {
+			return tPoison(tys)
+		}
 		return tErr(tys)
 	}
 	return func() int {
@@ -33906,7 +33965,7 @@ func elabReturnStmt(cx *ElabCx, node *AstNode) int {
 	_ = valueIdx
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14739:5
 	value := func() *ElabResult {
-		if valueIdx >= 0 && !(tyIsErr(cx.env.tys, expected)) {
+		if valueIdx >= 0 && !(tyIsBad(cx.env.tys, expected)) {
 			return elabCheck(cx, valueIdx, expected)
 		} else if valueIdx >= 0 {
 			return elabInfer(cx, valueIdx)
@@ -33947,7 +34006,7 @@ func elabChanSendStmt(cx *ElabCx, node *AstNode) int {
 	_ = elemTy
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14763:5
 	value := func() *ElabResult {
-		if tyIsErr(cx.env.tys, elemTy) {
+		if tyIsBad(cx.env.tys, elemTy) {
 			return elabInfer(cx, node.right)
 		} else {
 			return elabCheck(cx, node.right, elemTy)
@@ -34103,7 +34162,10 @@ func elabChannelElemTy(cx *ElabCx, ty int, start int, end int) int {
 		}
 	}
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14846:5
-	if !(tyIsErr(tys, resolved)) {
+	if tyIsBad(tys, resolved) {
+		return resolved
+	}
+	if !(tyIsBad(tys, resolved)) {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14847:9
 		func() struct{} {
 			cx.env.diagnostics = append(cx.env.diagnostics, diagOperandType("<-", tyToString(tys, resolved), start, end))
@@ -34122,9 +34184,9 @@ func elabForIterableElemTy(cx *ElabCx, ty int, start int, end int) int {
 	resolved := checkResolveAliasDeep(cx.env, ty)
 	_ = resolved
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14855:5
-	if tyIsErr(tys, resolved) {
+	if tyIsBad(tys, resolved) {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14856:9
-		return tErr(tys)
+		return resolved
 	}
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14858:5
 	if tyIsPrim(tys, resolved, PrimKind(&PrimKind_PkString{})) {
@@ -34358,7 +34420,7 @@ func astBlockEscapesMatchResult(ast *AstFile, node *AstNode) bool {
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14925:1
 func elabRecordTypedExpr(cx *ElabCx, idx int, out *ElabResult) {
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14926:5
-	if idx < 0 || out.node < 0 || tyIsErr(cx.env.tys, out.ty) {
+	if idx < 0 || out.node < 0 || tyIsBad(cx.env.tys, out.ty) {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14927:9
 		return
 	}
@@ -34591,6 +34653,17 @@ func elabErrResult(cx *ElabCx, start int, end int) *ElabResult {
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15024:1
+func elabPoisonResult(cx *ElabCx, start int, end int) *ElabResult {
+	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15025:5
+	ty := tPoison(cx.env.tys)
+	_ = ty
+	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15026:5
+	node := coreErrExpr(cx.core, ty, start, end)
+	_ = node
+	return &ElabResult{node: node, ty: ty}
+}
+
+// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15024:1
 func checkIntListLenHelper(xs []int) int {
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15025:5
 	n := 0
@@ -34702,76 +34775,40 @@ func elabInferCall(cx *ElabCx, callIdx int, node *AstNode, expected int) *ElabRe
 			return struct{}{}
 		}()
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15093:9
-		return elabErrResult(cx, node.start, node.end)
+		return elabPoisonResult(cx, node.start, node.end)
 	}
 	if checkStringListLenHelper(sig.generics) == 0 && checkIntListLenHelper(explicitArgs) == 0 {
 		coreFn := coreIdent(cx.core, baseCallee.text, IdentKind(&IdentKind_IkFn{}), fnSigToTy(cx.env, sig), baseCallee.start, baseCallee.end)
 		coreArgs := elabCallArgsMonomorphic(cx, sig.name, sig.paramTys, argIdxs, node.start, node.end)
 		retTy := sig.retTy
-		if !(tyIsErr(cx.env.tys, expected)) {
+		if !(tyIsBad(cx.env.tys, expected)) {
 			_ = checkExpectAssignable(cx.env, expected, retTy, node.start, node.end)
 		}
 		coreCallNode := coreCall(cx.core, coreFn, coreArgs, make([]int, 0, 1), retTy, node.start, node.end)
 		return &ElabResult{node: coreCallNode, ty: retTy}
 	}
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15096:5
-	solver := newSolver()
-	_ = solver
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15097:5
-	freshs := elabFreshenGenerics(cx, solver, sig.generics, sig.name)
-	_ = freshs
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15100:5
-	if !(tyIsErr(cx.env.tys, expected)) {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15101:9
-		specialisedRet := checkSubstituteTy(cx.env, sig.retTy, sig.generics, freshs)
-		_ = specialisedRet
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15102:9
-		_ = unify(cx.env, solver, specialisedRet, expected)
-	}
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15106:5
-	if checkIntListLenHelper(explicitArgs) == checkIntListLenHelper(freshs) {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15107:9
-		i := 0
-		_ = i
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15108:9
-		for _, explicit := range explicitArgs {
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15109:13
-			fresh := checkIntListAt(freshs, i)
-			_ = fresh
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15110:13
-			_ = unify(cx.env, solver, fresh, explicit)
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15111:13
-			func() {
-				var _cur2125 int = i
-				var _rhs2126 int = 1
-				if _rhs2126 > 0 && _cur2125 > math.MaxInt-_rhs2126 {
-					panic("integer overflow")
-				}
-				if _rhs2126 < 0 && _cur2125 < math.MinInt-_rhs2126 {
-					panic("integer overflow")
-				}
-				i = _cur2125 + _rhs2126
-			}()
-		}
-	}
+	inst := instBegin(cx, sig.generics, sig.name)
+	_ = inst
+	instSeedExpectedRet(cx, inst, sig.retTy, expected)
+	instSeedPositionalArgs(cx, inst, explicitArgs)
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15115:5
 	coreFn := coreIdent(cx.core, baseCallee.text, IdentKind(&IdentKind_IkFn{}), fnSigToTy(cx.env, sig), baseCallee.start, baseCallee.end)
 	_ = coreFn
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15116:5
-	coreArgs := elabCallArgs(cx, solver, sig, freshs, argIdxs, node.start, node.end)
+	coreArgs := elabCallArgs(cx, inst.solver, sig, inst.freshs, argIdxs, node.start, node.end)
 	_ = coreArgs
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15118:5
-	retSubstituted := checkSubstituteTy(cx.env, sig.retTy, sig.generics, freshs)
+	retSubstituted := instSubstitute(cx, inst, sig.retTy)
 	_ = retSubstituted
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15119:5
-	retTy := zonk(cx.env, solver, retSubstituted)
+	retTy := instZonk(cx, inst, retSubstituted)
 	_ = retTy
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15122:5
-	elabReportUnresolvedGenerics(cx, solver, sig, freshs, node.start, node.end)
+	elabReportUnresolvedGenerics(cx, inst.solver, sig, inst.freshs, node.start, node.end)
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15123:5
-	elabCheckGenericBounds(cx, solver, sig.generics, sig.genericBounds, freshs, node.start, node.end)
+	instCheckBounds(cx, inst, sig.genericBounds, node.start, node.end)
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15126:5
-	typeArgsConcrete := zonkList(cx.env, solver, freshs)
+	typeArgsConcrete := instConcreteArgs(cx, inst)
 	_ = typeArgsConcrete
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15127:5
 	if checkIntListLenHelper(typeArgsConcrete) > 0 {
@@ -34792,6 +34829,11 @@ func elabInferMethodCall(cx *ElabCx, callNode *AstNode, fieldNode *AstNode, expe
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15139:5
 	recvResolved := checkResolveAliasDeep(cx.env, recv.ty)
 	_ = recvResolved
+	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15139:9
+	if tyIsBad(cx.env.tys, recvResolved) {
+		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15140:13
+		return elabPoisonResult(cx, callNode.start, callNode.end)
+	}
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15140:5
 	ownerName := tyHeadAt(cx.env.tys, recvResolved)
 	_ = ownerName
@@ -34809,81 +34851,42 @@ func elabInferMethodCall(cx *ElabCx, callNode *AstNode, fieldNode *AstNode, expe
 			return struct{}{}
 		}()
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15145:9
-		return elabErrResult(cx, callNode.start, callNode.end)
+		return elabPoisonResult(cx, callNode.start, callNode.end)
 	}
 	if checkStringListLenHelper(sig.generics) == 0 {
 		coreArgs := elabCallArgsMonomorphic(cx, sig.name, sig.paramTys, callNode.children, callNode.start, callNode.end)
 		retTy := sig.retTy
-		if !(tyIsErr(cx.env.tys, expected)) {
+		if !(tyIsBad(cx.env.tys, expected)) {
 			_ = checkExpectAssignable(cx.env, expected, retTy, callNode.start, callNode.end)
 		}
 		mcall := coreMethodCall(cx.core, recv.node, methodName, ownerName, coreArgs, make([]int, 0, 1), retTy, callNode.start, callNode.end)
 		return &ElabResult{node: mcall, ty: retTy}
 	}
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15148:5
-	solver := newSolver()
-	_ = solver
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15149:5
-	freshs := elabFreshenGenerics(cx, solver, sig.generics, fmt.Sprintf("%s.%s", ostyToString(ownerName), ostyToString(sig.name)))
-	_ = freshs
+	inst := instBegin(cx, sig.generics, fmt.Sprintf("%s.%s", ostyToString(ownerName), ostyToString(sig.name)))
+	_ = inst
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15152:5
 	typeSig := checkLookupType(cx.env, ownerName)
 	_ = typeSig
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15153:5
 	ownerArgs := tyArgsAt(cx.env.tys, recvResolved)
 	_ = ownerArgs
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15154:5
-	if checkStringListLenHelper(typeSig.generics) == checkIntListLenHelper(ownerArgs) {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15155:9
-		i := 0
-		_ = i
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15156:9
-		for _, ownerGeneric := range typeSig.generics {
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15157:13
-			freshIdx := elabFindFresh(freshs, sig.generics, ownerGeneric)
-			_ = freshIdx
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15158:13
-			if freshIdx >= 0 {
-				// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15159:17
-				_ = unify(cx.env, solver, checkIntListAt(freshs, freshIdx), checkIntListAt(ownerArgs, i))
-			}
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15161:13
-			func() {
-				var _cur2127 int = i
-				var _rhs2128 int = 1
-				if _rhs2128 > 0 && _cur2127 > math.MaxInt-_rhs2128 {
-					panic("integer overflow")
-				}
-				if _rhs2128 < 0 && _cur2127 < math.MinInt-_rhs2128 {
-					panic("integer overflow")
-				}
-				i = _cur2127 + _rhs2128
-			}()
-		}
-	}
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15165:5
-	if !(tyIsErr(cx.env.tys, expected)) {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15166:9
-		specialisedRet := checkSubstituteTy(cx.env, sig.retTy, sig.generics, freshs)
-		_ = specialisedRet
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15167:9
-		_ = unify(cx.env, solver, specialisedRet, expected)
-	}
+	instSeedOwnerArgs(cx, inst, typeSig.generics, ownerArgs)
+	instSeedExpectedRet(cx, inst, sig.retTy, expected)
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15170:5
-	coreArgs := elabCallArgs(cx, solver, sig, freshs, callNode.children, callNode.start, callNode.end)
+	coreArgs := elabCallArgs(cx, inst.solver, sig, inst.freshs, callNode.children, callNode.start, callNode.end)
 	_ = coreArgs
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15171:5
-	retSubstituted := checkSubstituteTy(cx.env, sig.retTy, sig.generics, freshs)
+	retSubstituted := instSubstitute(cx, inst, sig.retTy)
 	_ = retSubstituted
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15172:5
-	retTy := zonk(cx.env, solver, retSubstituted)
+	retTy := instZonk(cx, inst, retSubstituted)
 	_ = retTy
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15173:5
-	elabReportUnresolvedGenerics(cx, solver, sig, freshs, callNode.start, callNode.end)
+	elabReportUnresolvedGenerics(cx, inst.solver, sig, inst.freshs, callNode.start, callNode.end)
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15174:5
-	elabCheckGenericBounds(cx, solver, sig.generics, sig.genericBounds, freshs, callNode.start, callNode.end)
+	instCheckBounds(cx, inst, sig.genericBounds, callNode.start, callNode.end)
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15176:5
-	typeArgsConcrete := zonkList(cx.env, solver, freshs)
+	typeArgsConcrete := instConcreteArgs(cx, inst)
 	_ = typeArgsConcrete
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15177:5
 	if checkIntListLenHelper(typeArgsConcrete) > 0 {
@@ -34906,6 +34909,11 @@ func elabInferFnValueCall(cx *ElabCx, node *AstNode, argIdxs []int, expected int
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15202:5
 	fnTy := checkResolveAliasDeep(cx.env, callee.ty)
 	_ = fnTy
+	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15202:9
+	if tyIsBad(cx.env.tys, fnTy) {
+		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15203:13
+		return elabPoisonResult(cx, node.start, node.end)
+	}
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15203:5
 	if !ostyEqual(tyKindAt(cx.env.tys, fnTy), TyKind(&TyKind_TkFn{})) {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15204:9
@@ -34914,7 +34922,7 @@ func elabInferFnValueCall(cx *ElabCx, node *AstNode, argIdxs []int, expected int
 			return struct{}{}
 		}()
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15205:9
-		return elabErrResult(cx, node.start, node.end)
+		return elabPoisonResult(cx, node.start, node.end)
 	}
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15207:5
 	paramTys := tyArgsAt(cx.env.tys, fnTy)
@@ -35085,6 +35093,62 @@ func elabCallArgsMonomorphic(cx *ElabCx, callee string, paramTys []int, argIdxs 
 		i++
 	}
 	return coreArgs
+}
+
+func instBegin(cx *ElabCx, generics []string, owner string) *InstSession {
+	solver := newSolver()
+	freshs := elabFreshenGenerics(cx, solver, generics, owner)
+	return &InstSession{solver: solver, generics: generics, freshs: freshs}
+}
+
+func instSubstitute(cx *ElabCx, inst *InstSession, ty int) int {
+	return checkSubstituteTy(cx.env, ty, inst.generics, inst.freshs)
+}
+
+func instSeedExpectedRet(cx *ElabCx, inst *InstSession, retTy int, expected int) {
+	if tyIsBad(cx.env.tys, expected) {
+		return
+	}
+	specialisedRet := instSubstitute(cx, inst, retTy)
+	_ = unify(cx.env, inst.solver, specialisedRet, expected)
+}
+
+func instSeedPositionalArgs(cx *ElabCx, inst *InstSession, args []int) {
+	if checkIntListLenHelper(args) != checkIntListLenHelper(inst.freshs) {
+		return
+	}
+	i := 0
+	for _, arg := range args {
+		fresh := checkIntListAt(inst.freshs, i)
+		_ = unify(cx.env, inst.solver, fresh, arg)
+		i++
+	}
+}
+
+func instSeedOwnerArgs(cx *ElabCx, inst *InstSession, ownerGenerics []string, ownerArgs []int) {
+	if checkStringListLenHelper(ownerGenerics) != checkIntListLenHelper(ownerArgs) {
+		return
+	}
+	i := 0
+	for _, ownerGeneric := range ownerGenerics {
+		freshIdx := elabFindFresh(inst.freshs, inst.generics, ownerGeneric)
+		if freshIdx >= 0 {
+			_ = unify(cx.env, inst.solver, checkIntListAt(inst.freshs, freshIdx), checkIntListAt(ownerArgs, i))
+		}
+		i++
+	}
+}
+
+func instZonk(cx *ElabCx, inst *InstSession, ty int) int {
+	return zonk(cx.env, inst.solver, ty)
+}
+
+func instConcreteArgs(cx *ElabCx, inst *InstSession) []int {
+	return zonkList(cx.env, inst.solver, inst.freshs)
+}
+
+func instCheckBounds(cx *ElabCx, inst *InstSession, bounds []*CheckGenericBound, start int, end int) {
+	elabCheckGenericBounds(cx, inst.solver, inst.generics, bounds, inst.freshs, start, end)
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15274:1
@@ -35306,6 +35370,9 @@ func elabInferField(cx *ElabCx, node *AstNode) *ElabResult {
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15398:5
 	recvTy := checkResolveAliasDeep(cx.env, recv.ty)
 	_ = recvTy
+	if tyIsBad(cx.env.tys, recvTy) {
+		return elabPoisonResult(cx, node.start, node.end)
+	}
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15399:5
 	kind := tyKindAt(cx.env.tys, recvTy)
 	_ = kind
@@ -35330,7 +35397,7 @@ func elabInferField(cx *ElabCx, node *AstNode) *ElabResult {
 					return struct{}{}
 				}()
 				// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15412:17
-				return elabErrResult(cx, node.start, node.end)
+				return elabPoisonResult(cx, node.start, node.end)
 			}
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15414:13
 			elemTy := checkIntListAt(elems, idx)
@@ -35355,7 +35422,7 @@ func elabInferField(cx *ElabCx, node *AstNode) *ElabResult {
 					return struct{}{}
 				}()
 				// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15423:17
-				return elabErrResult(cx, node.start, node.end)
+				return elabPoisonResult(cx, node.start, node.end)
 			}
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15426:13
 			typeSig := checkLookupType(cx.env, owner)
@@ -35383,7 +35450,7 @@ func elabInferField(cx *ElabCx, node *AstNode) *ElabResult {
 				cx.env.diagnostics = append(cx.env.diagnostics, diagUnknownField(tyToString(cx.env.tys, recvTy), fieldName, node.start, node.end))
 				return struct{}{}
 			}()
-			return elabErrResult(cx, node.start, node.end)
+			return elabPoisonResult(cx, node.start, node.end)
 		}
 	}()
 }
@@ -35557,6 +35624,9 @@ func elabInferIndex(cx *ElabCx, node *AstNode) *ElabResult {
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15494:5
 	tys := cx.env.tys
 	_ = tys
+	if tyIsBad(tys, recvTy) || tyIsBad(tys, idx.ty) {
+		return elabPoisonResult(cx, node.start, node.end)
+	}
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15496:5
 	if tyIsNamedHead(tys, recvTy, "List") {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15497:9
@@ -35652,7 +35722,9 @@ func elabInferList(cx *ElabCx, node *AstNode, expected int) *ElabResult {
 		_ = elemHint
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15544:9
 		listTy := tyNamed(tys, "List", []int{func() int {
-			if tyIsErr(tys, elemHint) {
+			if tyIsPoison(tys, elemHint) {
+				return tPoison(tys)
+			} else if tyIsErr(tys, elemHint) {
 				return tErr(tys)
 			} else {
 				return elemHint
@@ -35686,7 +35758,7 @@ func elabInferList(cx *ElabCx, node *AstNode, expected int) *ElabResult {
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15557:5
 	for _, elemIdx := range elemIdxs {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15558:9
-		if tyIsErr(tys, elemTy) && i == 0 {
+		if tyIsBad(tys, elemTy) && i == 0 {
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15560:13
 			r := elabInfer(cx, elemIdx)
 			_ = r
@@ -35779,7 +35851,7 @@ func elabInferMap(cx *ElabCx, node *AstNode, expected int) *ElabResult {
 		_ = valIdx
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15590:9
 		keyResult := func() *ElabResult {
-			if tyIsErr(tys, keyTy) {
+			if tyIsBad(tys, keyTy) {
 				// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15591:13
 				r := elabInfer(cx, keyIdx)
 				_ = r
@@ -35796,7 +35868,7 @@ func elabInferMap(cx *ElabCx, node *AstNode, expected int) *ElabResult {
 		_ = keyResult
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15597:9
 		valResult := func() *ElabResult {
-			if tyIsErr(tys, valTy) {
+			if tyIsBad(tys, valTy) {
 				// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15598:13
 				r := elabInfer(cx, valIdx)
 				_ = r
@@ -35872,7 +35944,7 @@ func elabInferTuple(cx *ElabCx, node *AstNode, expected int) *ElabResult {
 		_ = hint
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15631:9
 		r := func() *ElabResult {
-			if tyIsErr(tys, hint) {
+			if tyIsBad(tys, hint) {
 				return elabInfer(cx, elemIdx)
 			} else {
 				return elabCheck(cx, elemIdx, hint)
@@ -35932,42 +36004,17 @@ func elabInferStructLit(cx *ElabCx, node *AstNode, expected int) *ElabResult {
 			return struct{}{}
 		}()
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15658:9
-		return elabErrResult(cx, node.start, node.end)
+		return elabPoisonResult(cx, node.start, node.end)
 	}
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15661:5
-	solver := newSolver()
-	_ = solver
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15662:5
-	freshs := elabFreshenGenerics(cx, solver, typeSig.generics, owner)
-	_ = freshs
+	inst := instBegin(cx, typeSig.generics, owner)
+	_ = inst
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15665:5
 	if tyIsNamedHead(tys, expected, owner) {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15666:9
 		expectedArgs := tyArgsAt(tys, expected)
 		_ = expectedArgs
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15667:9
-		if checkIntListLenHelper(expectedArgs) == checkIntListLenHelper(freshs) {
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15668:13
-			i := 0
-			_ = i
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15669:13
-			for _, fresh := range freshs {
-				// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15670:17
-				_ = unify(cx.env, solver, fresh, checkIntListAt(expectedArgs, i))
-				// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15671:17
-				func() {
-					var _cur2154 int = i
-					var _rhs2155 int = 1
-					if _rhs2155 > 0 && _cur2154 > math.MaxInt-_rhs2155 {
-						panic("integer overflow")
-					}
-					if _rhs2155 < 0 && _cur2154 < math.MinInt-_rhs2155 {
-						panic("integer overflow")
-					}
-					i = _cur2154 + _rhs2155
-				}()
-			}
-		}
+		instSeedPositionalArgs(cx, inst, expectedArgs)
 	}
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15681:5
 	coreSpread := -1
@@ -35978,7 +36025,7 @@ func elabInferStructLit(cx *ElabCx, node *AstNode, expected int) *ElabResult {
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15683:5
 	if node.right >= 0 {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15684:9
-		spreadHint := tyNamed(tys, owner, freshs)
+		spreadHint := tyNamed(tys, owner, inst.freshs)
 		_ = spreadHint
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15685:9
 		spreadResult := elabCheck(cx, node.right, spreadHint)
@@ -35986,7 +36033,7 @@ func elabInferStructLit(cx *ElabCx, node *AstNode, expected int) *ElabResult {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15686:9
 		coreSpread = spreadResult.node
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15687:9
-		_ = unify(cx.env, solver, spreadHint, spreadResult.ty)
+		_ = unify(cx.env, inst.solver, spreadHint, spreadResult.ty)
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15688:9
 		if tyIsNamedHead(tys, spreadResult.ty, owner) {
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15689:13
@@ -36037,16 +36084,16 @@ func elabInferStructLit(cx *ElabCx, node *AstNode, expected int) *ElabResult {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15710:9
 		func() struct{} { seenNames = append(seenNames, fieldName); return struct{}{} }()
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15712:9
-		specialised := checkSubstituteTy(cx.env, fieldSig.ty, typeSig.generics, freshs)
+		specialised := instSubstitute(cx, inst, fieldSig.ty)
 		_ = specialised
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15713:9
-		hint := zonk(cx.env, solver, specialised)
+		hint := instZonk(cx, inst, specialised)
 		_ = hint
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15714:9
 		r := elabCheck(cx, fieldNode.left, hint)
 		_ = r
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15715:9
-		_ = unify(cx.env, solver, hint, r.ty)
+		_ = unify(cx.env, inst.solver, hint, r.ty)
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15716:9
 		func() struct{} {
 			coreFieldsList = append(coreFieldsList, coreStructField(cx.core, fieldName, r.node, fieldNode.start, fieldNode.end))
@@ -36065,9 +36112,9 @@ func elabInferStructLit(cx *ElabCx, node *AstNode, expected int) *ElabResult {
 		}
 	}
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15730:5
-	elabCheckGenericBounds(cx, solver, typeSig.generics, typeSig.genericBounds, freshs, node.start, node.end)
+	instCheckBounds(cx, inst, typeSig.genericBounds, node.start, node.end)
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15731:5
-	concreteTypeArgs := zonkList(cx.env, solver, freshs)
+	concreteTypeArgs := instConcreteArgs(cx, inst)
 	_ = concreteTypeArgs
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15732:5
 	resultTy := func() int {
@@ -36223,7 +36270,7 @@ func elabInferClosure(cx *ElabCx, node *AstNode, expected int) *ElabResult {
 	_ = bodyIdx
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15806:5
 	body := func() *ElabResult {
-		if !(tyIsErr(tys, expectedRet)) {
+		if !(tyIsBad(tys, expectedRet)) {
 			return elabCheck(cx, bodyIdx, expectedRet)
 		} else {
 			return elabInfer(cx, bodyIdx)
@@ -36268,7 +36315,7 @@ func elabInferRange(cx *ElabCx, node *AstNode) *ElabResult {
 	}()
 	_ = hi
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15828:5
-	if !(tyIsInteger(tys, lo.ty)) && !(tyIsErr(tys, lo.ty)) {
+	if !(tyIsInteger(tys, lo.ty)) && !(tyIsBad(tys, lo.ty)) {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15829:9
 		func() struct{} {
 			cx.env.diagnostics = append(cx.env.diagnostics, diagMismatch("Int", tyToString(tys, lo.ty), node.start, node.end))
@@ -36276,7 +36323,7 @@ func elabInferRange(cx *ElabCx, node *AstNode) *ElabResult {
 		}()
 	}
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15831:5
-	if !(tyIsInteger(tys, hi.ty)) && !(tyIsErr(tys, hi.ty)) {
+	if !(tyIsInteger(tys, hi.ty)) && !(tyIsBad(tys, hi.ty)) {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15832:9
 		func() struct{} {
 			cx.env.diagnostics = append(cx.env.diagnostics, diagMismatch("Int", tyToString(tys, hi.ty), node.start, node.end))
@@ -36313,7 +36360,7 @@ func elabInferIf(cx *ElabCx, node *AstNode, expected int) *ElabResult {
 	cond := elabCheck(cx, node.left, tBool(tys))
 	_ = cond
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15855:5
-	hasExpected := !(tyIsErr(tys, expected))
+	hasExpected := !(tyIsBad(tys, expected))
 	_ = hasExpected
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15857:5
 	then_ := func() *ElabResult {
@@ -36369,12 +36416,12 @@ func elabInferIf(cx *ElabCx, node *AstNode, expected int) *ElabResult {
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15888:1
 func joinTypes(env *CheckEnv, a int, b int) int {
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15889:5
-	if tyIsErr(env.tys, a) {
+	if tyIsBad(env.tys, a) {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15890:9
 		return b
 	}
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15892:5
-	if tyIsErr(env.tys, b) {
+	if tyIsBad(env.tys, b) {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15893:9
 		return a
 	}
@@ -36405,7 +36452,7 @@ func elabInferMatch(cx *ElabCx, node *AstNode, expected int) *ElabResult {
 	scrutTy := checkResolveAliasDeep(cx.env, scrutinee.ty)
 	_ = scrutTy
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15917:5
-	hasExpected := !(tyIsErr(cx.env.tys, expected))
+	hasExpected := !(tyIsBad(cx.env.tys, expected))
 	_ = hasExpected
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15919:5
 	var armNodes []int = make([]int, 0, 1)
@@ -36467,7 +36514,7 @@ func elabInferMatch(cx *ElabCx, node *AstNode, expected int) *ElabResult {
 		body := func() *ElabResult {
 			if hasExpected {
 				return elabCheck(cx, bodyIdx, expected)
-			} else if tyIsErr(cx.env.tys, resultTy) {
+			} else if tyIsBad(cx.env.tys, resultTy) {
 				return elabInfer(cx, bodyIdx)
 			} else {
 				return elabCheck(cx, bodyIdx, resultTy)
@@ -36475,7 +36522,7 @@ func elabInferMatch(cx *ElabCx, node *AstNode, expected int) *ElabResult {
 		}()
 		_ = body
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15946:9
-		if !hasExpected && tyIsErr(cx.env.tys, resultTy) && !bodyEscapes {
+		if !hasExpected && tyIsBad(cx.env.tys, resultTy) && !bodyEscapes {
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15947:13
 			resultTy = body.ty
 		}
@@ -36555,6 +36602,9 @@ func elabInferQuestion(cx *ElabCx, node *AstNode) *ElabResult {
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15988:5
 	retTy := checkResolveAliasDeep(cx.env, cx.env.returnTy)
 	_ = retTy
+	if tyIsBad(tys, innerTy) || tyIsBad(tys, retTy) {
+		return elabPoisonResult(cx, node.start, node.end)
+	}
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15990:5
 	if tyIsNamedHead(tys, innerTy, "Option") {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15991:9
@@ -36569,7 +36619,7 @@ func elabInferQuestion(cx *ElabCx, node *AstNode) *ElabResult {
 		payload := checkIntListAt(args, 0)
 		_ = payload
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15996:9
-		if !(tyIsNamedHead(tys, retTy, "Option")) && !(tyIsErr(tys, retTy)) {
+		if !(tyIsNamedHead(tys, retTy, "Option")) && !(tyIsBad(tys, retTy)) {
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15997:13
 			func() struct{} {
 				cx.env.diagnostics = append(cx.env.diagnostics, diagQuestionNotOptional(tyToString(tys, retTy), node.start, node.end))
@@ -36611,7 +36661,7 @@ func elabInferQuestion(cx *ElabCx, node *AstNode) *ElabResult {
 				// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:16014:17
 				_ = checkExpectAssignable(cx.env, outerErr, errTy, node.start, node.end)
 			}
-		} else if !(tyIsErr(tys, retTy)) {
+		} else if !(tyIsBad(tys, retTy)) {
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:16017:13
 			func() struct{} {
 				cx.env.diagnostics = append(cx.env.diagnostics, diagQuestionNotOptional(tyToString(tys, retTy), node.start, node.end))
@@ -36625,14 +36675,14 @@ func elabInferQuestion(cx *ElabCx, node *AstNode) *ElabResult {
 		return &ElabResult{node: coreIdx, ty: payload}
 	}
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:16023:5
-	if !(tyIsErr(tys, innerTy)) {
+	if !(tyIsBad(tys, innerTy)) {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:16024:9
 		func() struct{} {
 			cx.env.diagnostics = append(cx.env.diagnostics, diagQuestionNotOptional(tyToString(tys, innerTy), node.start, node.end))
 			return struct{}{}
 		}()
 	}
-	return elabErrResult(cx, node.start, node.end)
+	return elabPoisonResult(cx, node.start, node.end)
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:16033:5
@@ -36695,7 +36745,7 @@ func elabPatternMode(cx *ElabCx, idx int, scrutTy int, mutable bool, recordBindi
 		lit := elabInfer(cx, litIdx)
 		_ = lit
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:16068:9
-		if !(checkIsAssignable(cx.env, scrutTy, lit.ty)) && !(tyIsErr(tys, lit.ty)) {
+		if !(checkIsAssignable(cx.env, scrutTy, lit.ty)) && !(tyIsBad(tys, lit.ty)) {
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:16069:13
 			func() struct{} {
 				cx.env.diagnostics = append(cx.env.diagnostics, diagPatternShapeMismatch(tyToString(tys, scrutTy), node.start, node.end))
@@ -36853,7 +36903,7 @@ func elabRangePattern(cx *ElabCx, node *AstNode, scrutTy int) int {
 	tys := cx.env.tys
 	_ = tys
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:16157:5
-	if !(tyIsErr(tys, scrutTy)) && !(tyIsInteger(tys, scrutTy)) && !(tyIsPrim(tys, scrutTy, PrimKind(&PrimKind_PkChar{}))) {
+	if !(tyIsBad(tys, scrutTy)) && !(tyIsInteger(tys, scrutTy)) && !(tyIsPrim(tys, scrutTy, PrimKind(&PrimKind_PkChar{}))) {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:16160:9
 		func() struct{} {
 			cx.env.diagnostics = append(cx.env.diagnostics, diagPatternShapeMismatch(tyToString(tys, scrutTy), node.start, node.end))
@@ -37354,7 +37404,7 @@ func exhaustCheckMatch(cx *ElabCx, matchNode *AstNode, scrutTy int) {
 	tys := cx.env.tys
 	_ = tys
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:16425:5
-	if tyIsErr(tys, scrutTy) {
+	if tyIsBad(tys, scrutTy) {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:16426:9
 		return
 	}
@@ -37663,7 +37713,7 @@ func reachCheckArms(cx *ElabCx, matchNode *AstNode, scrutTy int) {
 	tys := cx.env.tys
 	_ = tys
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:16600:5
-	if tyIsErr(tys, scrutTy) {
+	if tyIsBad(tys, scrutTy) {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:16601:9
 		return
 	}
@@ -38421,7 +38471,7 @@ func pmCheckMatch(cx *ElabCx, matchNode *AstNode, scrutTy int) *PmCheckOutcome {
 	tys := cx.env.tys
 	_ = tys
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:17068:5
-	if tyIsErr(tys, scrutTy) {
+	if tyIsBad(tys, scrutTy) {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:17069:9
 		return pmNotHandled()
 	}
@@ -41459,7 +41509,7 @@ func serializeCheckResult(cx *ElabCx) *FrontCheckResult {
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18672:5
 	for _, node := range cx.core.nodes {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18673:9
-		if node.originAst < 0 || tyIsErr(cx.env.tys, node.ty) {
+		if node.originAst < 0 || tyIsBad(cx.env.tys, node.ty) {
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18674:13
 			continue
 		}

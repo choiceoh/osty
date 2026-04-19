@@ -157,9 +157,9 @@ fn unifyAt(env: CheckEnv, solver: Solver, aIn: Int, bIn: Int, depth: Int) -> Boo
     let aKind = tyKindAt(env.tys, a)
     let bKind = tyKindAt(env.tys, b)
 
-    // TyErr propagates silently — treat as unifying against anything to
-    // avoid cascading diagnostics when a subtree is already poisoned.
-    if aKind == TkErr || bKind == TkErr {
+    // Err/Poison propagate silently — once a subtree is already bad we
+    // avoid feeding that failure back into the local solver.
+    if aKind == TkErr || bKind == TkErr || aKind == TkPoison || bKind == TkPoison {
         return true
     }
 
@@ -188,6 +188,7 @@ fn unifyAt(env: CheckEnv, solver: Solver, aIn: Int, bIn: Int, depth: Int) -> Boo
         TkOptional -> unifyAt(env, solver, tyInnerAt(env.tys, a), tyInnerAt(env.tys, b), depth + 1),
         TkSelf -> tyHeadAt(env.tys, a) == tyHeadAt(env.tys, b),
         TkErr -> true,
+        TkPoison -> true,
         TkVar -> false,
     }
 }
