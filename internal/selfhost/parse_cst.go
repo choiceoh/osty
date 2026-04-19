@@ -24,7 +24,7 @@ func ParseCST(src []byte) (*cst.Tree, []*diag.Diagnostic) {
 	run := runFrontend(normalized, true)
 	toks := run.Tokens()
 	trivias := cst.Extract(normalized, toks)
-	file := astLowerPublicFile(run.parser.arena, toks)
+	file := run.File()
 	tree := cst.BuildFromParsed(normalized, file, toks, trivias)
 	return tree, run.Diagnostics()
 }

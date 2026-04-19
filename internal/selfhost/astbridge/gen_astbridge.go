@@ -464,10 +464,8 @@ func UseDeclNode(pos, end Pos, raw string, path []string, isGo bool, alias strin
 }
 
 // UseDeclNodeFull extends UseDeclNode with the v0.5 isPub flag
-// (G30 re-export). Keeping the three-argument UseDeclNode signature
-// lets the existing self-hosted callers (via bundle snapshots) stay
-// source-compatible until the next bootstrap regen includes the
-// pub use parser work.
+// (G30 re-export). The shorter UseDeclNode helper remains so older
+// generated callers can keep defaulting isPub to false.
 func UseDeclNodeFull(pos, end Pos, raw string, path []string, isGo, isPub bool, alias string, body []Decl) Decl {
 	u := &ast.UseDecl{PosV: pos, EndV: end, Path: compactStrings(path), RawPath: raw, Alias: alias, IsPub: isPub, IsGoFFI: isGo, GoBody: compactDecls(body)}
 	if isGo {
