@@ -8723,55 +8723,15 @@ func frontendParseRichSummary(source string) *FrontParseSummary {
 
 // Osty: /tmp/selfhost_merged.osty:3648:5
 func frontTokenListCount(tokens []*FrontToken) int {
-	// Osty: /tmp/selfhost_merged.osty:3649:5
-	count := 0
-	_ = count
-	// Osty: /tmp/selfhost_merged.osty:3650:5
-	for _, tok := range tokens {
-		// Osty: /tmp/selfhost_merged.osty:3651:9
-		_ = tok
-		// Osty: /tmp/selfhost_merged.osty:3652:9
-		func() {
-			var _cur652 int = count
-			var _rhs653 int = 1
-			if _rhs653 > 0 && _cur652 > math.MaxInt-_rhs653 {
-				panic("integer overflow")
-			}
-			if _rhs653 < 0 && _cur652 < math.MinInt-_rhs653 {
-				panic("integer overflow")
-			}
-			count = _cur652 + _rhs653
-		}()
-	}
-	return count
+	return len(tokens)
 }
 
 // Osty: /tmp/selfhost_merged.osty:3657:5
 func frontTokenAtList(tokens []*FrontToken, target int) *FrontToken {
-	// Osty: /tmp/selfhost_merged.osty:3658:5
-	idx := 0
-	_ = idx
-	// Osty: /tmp/selfhost_merged.osty:3659:5
-	for _, tok := range tokens {
-		// Osty: /tmp/selfhost_merged.osty:3660:9
-		if idx == target {
-			// Osty: /tmp/selfhost_merged.osty:3661:13
-			return tok
-		}
-		// Osty: /tmp/selfhost_merged.osty:3663:9
-		func() {
-			var _cur654 int = idx
-			var _rhs655 int = 1
-			if _rhs655 > 0 && _cur654 > math.MaxInt-_rhs655 {
-				panic("integer overflow")
-			}
-			if _rhs655 < 0 && _cur654 < math.MinInt-_rhs655 {
-				panic("integer overflow")
-			}
-			idx = _cur654 + _rhs655
-		}()
+	if target < 0 || target >= len(tokens) {
+		return frontEOF()
 	}
-	return frontEOF()
+	return tokens[target]
 }
 
 // Osty: /tmp/selfhost_merged.osty:3668:5
@@ -18525,55 +18485,15 @@ func astArenaAdd(arena *AstArena, node *AstNode) int {
 
 // Osty: /tmp/selfhost_merged.osty:6803:5
 func astArenaNodeCount(arena *AstArena) int {
-	// Osty: /tmp/selfhost_merged.osty:6804:5
-	count := 0
-	_ = count
-	// Osty: /tmp/selfhost_merged.osty:6805:5
-	for _, n := range arena.nodes {
-		// Osty: /tmp/selfhost_merged.osty:6806:9
-		_ = n
-		// Osty: /tmp/selfhost_merged.osty:6807:9
-		func() {
-			var _cur1733 int = count
-			var _rhs1734 int = 1
-			if _rhs1734 > 0 && _cur1733 > math.MaxInt-_rhs1734 {
-				panic("integer overflow")
-			}
-			if _rhs1734 < 0 && _cur1733 < math.MinInt-_rhs1734 {
-				panic("integer overflow")
-			}
-			count = _cur1733 + _rhs1734
-		}()
-	}
-	return count
+	return len(arena.nodes)
 }
 
 // Osty: /tmp/selfhost_merged.osty:6812:5
 func astArenaNodeAt(arena *AstArena, idx int) *AstNode {
-	// Osty: /tmp/selfhost_merged.osty:6813:5
-	i := 0
-	_ = i
-	// Osty: /tmp/selfhost_merged.osty:6814:5
-	for _, n := range arena.nodes {
-		// Osty: /tmp/selfhost_merged.osty:6815:9
-		if i == idx {
-			// Osty: /tmp/selfhost_merged.osty:6816:13
-			return n
-		}
-		// Osty: /tmp/selfhost_merged.osty:6818:9
-		func() {
-			var _cur1735 int = i
-			var _rhs1736 int = 1
-			if _rhs1736 > 0 && _cur1735 > math.MaxInt-_rhs1736 {
-				panic("integer overflow")
-			}
-			if _rhs1736 < 0 && _cur1735 < math.MinInt-_rhs1736 {
-				panic("integer overflow")
-			}
-			i = _cur1735 + _rhs1736
-		}()
+	if idx < 0 || idx >= len(arena.nodes) {
+		return emptyAstNode(AstNodeKind(&AstNodeKind_AstNError{}))
 	}
-	return emptyAstNode(AstNodeKind(&AstNodeKind_AstNError{}))
+	return arena.nodes[idx]
 }
 
 // Osty: /tmp/selfhost_merged.osty:6827:5
