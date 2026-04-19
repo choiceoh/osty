@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/osty/osty/internal/ast"
+	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/stdlib"
 )
 
@@ -122,6 +123,36 @@ fn main() {}
 	}
 	if got := chk.LookupSymType(res.FileScope.Lookup("unused")); got == nil || got.String() != "fn(Int) -> Int" {
 		t.Fatalf("unused fn type = %v, want fn(Int) -> Int", got)
+	}
+}
+
+func TestNativeBoundaryExecChecksStructuredPackageInput(t *testing.T) {
+	fileA := []byte("fn helper() -> Int { 1 }\n")
+	fileB := []byte("fn main() { let value = helper() }\n")
+
+	bin := buildRepoNativeChecker(t)
+	runner := nativeCheckerExec{path: bin}
+	checked, err := runner.CheckPackageStructured(selfhost.PackageCheckInput{
+		Files: []selfhost.PackageCheckFile{
+			{Source: fileA, Base: 0, Name: "a.osty"},
+			{Source: fileB, Base: len(fileA) + 1, Name: "b.osty"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CheckPackageStructured error: %v", err)
+	}
+	if checked.Summary.Errors != 0 {
+		t.Fatalf("summary errors = %d, want 0", checked.Summary.Errors)
+	}
+	found := false
+	for _, binding := range checked.Bindings {
+		if binding.Name == "value" && binding.TypeName == "Int" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("bindings = %#v, want value:Int from package request", checked.Bindings)
 	}
 }
 

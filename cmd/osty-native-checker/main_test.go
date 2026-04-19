@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/osty/osty/internal/selfhost"
 )
 
 func TestRunEmitsStructuredCheckResult(t *testing.T) {
@@ -70,5 +72,43 @@ func TestRunChecksGenericBoundsAndInterfaceExtends(t *testing.T) {
 	}
 	if badResp.Summary.Errors == 0 {
 		t.Fatalf("bad summary errors = %d, want > 0", badResp.Summary.Errors)
+	}
+}
+
+func TestRunChecksPackageStructuredRequest(t *testing.T) {
+	fileA := []byte("fn helper() -> Int { 1 }\n")
+	fileB := []byte("fn main() { let value = helper() }\n")
+	reqBody, err := json.Marshal(checkRequest{
+		Package: &selfhost.PackageCheckInput{
+			Files: []selfhost.PackageCheckFile{
+				{Source: fileA, Base: 0, Name: "a.osty"},
+				{Source: fileB, Base: len(fileA) + 1, Name: "b.osty"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	if err := run(bytes.NewReader(reqBody), &stdout); err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	var resp checkResponse
+	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Summary.Errors != 0 {
+		t.Fatalf("summary errors = %d, want 0", resp.Summary.Errors)
+	}
+	found := false
+	for _, binding := range resp.Bindings {
+		if binding.Name == "value" && binding.TypeName == "Int" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("bindings = %#v, want value:Int from package request", resp.Bindings)
 	}
 }
