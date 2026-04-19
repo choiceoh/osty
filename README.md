@@ -61,6 +61,19 @@ in older status docs is closed again. A fresh hello-world
 Current selfhosting/toolchain tracking is therefore about remaining front-end
 and toolchain-surface gaps, not a blanket "all LLVM CLI calls panic" state.
 
+Code-level re-audit on the same date narrows that further: the tree is not yet
+"fully self-hosted" end-to-end. `internal/check` still prefers a managed
+external `osty-native-checker` binary under `.osty/toolchain/<tool-version>/`
+and falls back to the embedded selfhost bridge when that executable is
+unavailable, and `go generate ./internal/selfhost` still shells out to
+`cmd/osty-bootstrap-gen` to refresh `internal/selfhost/generated.go`. The
+whole-toolchain LLVM probe still first-walls on the bootstrap-only
+`runtime.golegacy.astbridge` bridge; when those bootstrap-only files are
+excluded, the current native probe first-walls on `Char` parameter lowering
+(`lspUtf16UnitsForChar`). Collections, `Result<T, E>` propagation, and MIR
+closure env emission are partially implemented today, so the remaining work is
+uneven runtime/backend surface coverage rather than a single missing subsystem.
+
 The front-end (lex → parse → resolve → type-check) is **coverage-complete
 for the v0.4 core**: spec blocks parse, package/workspace resolution is
 covered, reject-rules have stable `Exxxx` diagnostics, and the checker

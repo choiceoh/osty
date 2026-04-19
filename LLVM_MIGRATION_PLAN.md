@@ -51,20 +51,20 @@
 
 | 기능 | 非-test 사용 | 현재 상태 | 관련 phase |
 |---|---|---|---|
-| `List<T>` literal + 메서드 lowering | 974회 | 🚧 runtime struct만 존재, emitter 없음 | TBD (Tier A-1) |
-| `Map<K,V>` literal + 메서드 lowering | 심볼 테이블 등 다수 | 🚧 runtime struct만 존재 | TBD (Tier A-2) |
-| `String` concat/slice/interpolation | 대부분 파일 | 🚧 ASCII literal + `println`만 | TBD (Tier A-3) |
-| Closure + env capture | AST visitor 전반 | 🚧 IR capture만 존재 | TBD (Tier A-4) |
-| Multi-file package emit + link | 37개 non-test 파일 | ❌ 단일 엔트리만 | TBD (Tier A-5) |
-| `std.strings` 함수 구현 | 20+ 파일에서 import | ❌ Go seed 경유 | TBD (Tier A-6) |
+| `List<T>` literal + 메서드 lowering | 974회 | 🟡 부분 구현 — legacy AST emitter가 list literal + `push` 및 일부 컬렉션 브리지를 낮춘다. 다만 whole-toolchain coverage는 아직 incomplete | TBD (Tier A-1) |
+| `Map<K,V>` literal + 메서드 lowering | 심볼 테이블 등 다수 | 🟡 부분 구현 — legacy AST emitter가 map literal + `insert` / `remove`를 낮춘다. 더 넓은 toolchain surface는 아직 incomplete | TBD (Tier A-2) |
+| `String` concat/slice/interpolation | 대부분 파일 | 🟡 부분 구현 — ASCII / runtime-backed concat / interpolation은 존재하지만 `Char`/`Byte` iteration (`String.chars` / `bytes`)과 더 넓은 string ABI가 blocker | TBD (Tier A-3) |
+| Closure + env capture | AST visitor 전반 | 🟡 부분 구현 — MIR path에는 capturing-closure env emission + tests가 있다. legacy AST emitter의 first-class fn-value/capture surface는 아직 incomplete | TBD (Tier A-4) |
+| Multi-file package emit + link | 37개 non-test 파일 | ❌ merged-probe가 주 검증 경로이며 package-level native self-compile/link는 아직 blocker | TBD (Tier A-5) |
+| `std.strings` 함수 구현 | 20+ 파일에서 import | 🟡 부분 구현 — legacy llvmgen이 일부 함수를 runtime shim으로 우회하지만 pure-Osty body는 여전히 `Char` / `List<Char>` lowering에 막힘 | TBD (Tier A-6) |
 
 ### Tier B — pkgmgr (`semver`, `manifest`, `registry`, `solve`, `pkgmgr`) 자가 컴파일 blocker
 
 | 기능 | 非-test 사용 | 현재 상태 | 관련 phase |
 |---|---|---|---|
 | `String` payload enum (`PreText(String)`) | `semver.osty:5` | 🚧 Phase 54-63 — fixture 추가됨, 드라이브 확인 중 | [§Phase 54-63](#phase-54-63-payload-enum-generalization-floatstring) |
-| `Result<T, String>` ABI | semver_parse, manifest_validation | ❌ Result as enum 미설계 | 신규 phase 필요 |
-| `?` 전파 (Result) | `semver_parse.osty` 8곳 | 🚧 Option<ptr>만 지원 ([expr.go:713](internal/llvmgen/expr.go)) | 신규 phase 필요 |
+| `Result<T, String>` ABI | semver_parse, manifest_validation | 🟡 부분 구현 — legacy AST emitter가 aggregate `Result<T, E> = {tag, ok, err}`를 갖고 있으나 pkgmgr 전체 shape는 아직 다 못 덮음 | 신규 phase 필요 |
+| `?` 전파 (Result) | `semver_parse.osty` 8곳 | 🟡 부분 구현 — legacy AST path가 matching `Result<_, E>` 반환 함수에서 `?`를 낮춘다. broader selfhost coverage는 아직 미완 | 신규 phase 필요 |
 | struct/enum 복합 payload (Ok(SemVersion)) | semver_parse, manifest_validation | ❌ single-field scalar/ptr만 | 신규 phase 필요 |
 
 ### 非-blocker (당초 Tier B 오판 항목)
@@ -84,9 +84,9 @@ single-scalar-payload + bare tag이다.
 ### 관심 순서
 
 1. Tier A-1 (List) + A-3 (String concat/slice) — 모든 frontend 경로가 의존.
-2. Tier A-2 (Map) + A-4 (Closure) — resolve/check/visitor가 의존.
-3. Tier A-5 (Multi-file linking) — Tier A가 한 파일에서 되면 즉시 다음 관문.
-4. Tier A-6 (`std.strings` 순수 구현) — A-3 위에서 얹음.
+2. Tier A-6 (`std.strings` 순수 구현) — 현재 native probe first-wall이 `Char`이므로 A-3와 사실상 한 묶음.
+3. Tier A-2 (Map) + A-4 (Closure) — resolve/check/visitor가 의존.
+4. Tier A-5 (Multi-file linking) — Tier A가 한 파일에서 되면 즉시 다음 관문.
 5. Tier B — pkgmgr 경로. 核 셀프호스트와 독립적으로 진행 가능.
 6. 非-blocker는 유저 코드 예시 호환성 위주로 여유 시 진행.
 
