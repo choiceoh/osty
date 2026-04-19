@@ -1,10 +1,20 @@
 package selfhost
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+
+	"github.com/osty/osty/internal/ast"
+	"github.com/osty/osty/internal/sourcemap"
+)
 
 type PackageCheckFile struct {
 	Source []byte
-	Base   int
+	File   *ast.File
+	// SourceMap projects original parser AST spans into the canonical checker
+	// source held in Source. Nil when Source is a direct passthrough.
+	SourceMap *sourcemap.Map
+	Base      int
 	// Name is the display filename surfaced in diagnostic telemetry (typically
 	// a basename like `user.osty`). Empty when unknown; the telemetry suffix
 	// falls back to `@Lnn:Cnn` without a filename prefix in that case.
@@ -80,6 +90,22 @@ type PackageCheckInput struct {
 // env, and runs the typed checker without routing through concatenated source
 // text for parsing.
 func CheckPackageStructured(input PackageCheckInput) (CheckResult, error) {
+	if selfhostCanBuildPackageAstDirect(input.Files) {
+		file, layout, err := selfhostBuildPackageAstDirect(input.Files)
+		if err == nil {
+			if file == nil {
+				return CheckResult{}, nil
+			}
+			cx := newElabCx(file, emptyTyArena())
+			selfhostInstallImportSurfaces(cx.env, input.Imports)
+			elabFile(cx)
+			return adaptCheckResultWithByteLayout(serializeCheckResult(cx), layout), nil
+		}
+		var unsupported *selfhostLoweringUnsupported
+		if !errors.As(err, &unsupported) {
+			return CheckResult{}, err
+		}
+	}
 	file, layout, err := selfhostBuildPackageAst(input.Files)
 	if err != nil {
 		return CheckResult{}, err
