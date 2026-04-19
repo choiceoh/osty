@@ -178,6 +178,56 @@ fn main() {
 	}
 }
 
+func TestStdStringsHasSuffixRoutesToRuntime(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.strings as strings
+
+fn main() {
+    if strings.hasSuffix("osty", "sty") {
+        println(1)
+    } else {
+        println(0)
+    }
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/std_strings_hassuffix.osty"})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	for _, want := range []string{
+		"declare i1 @osty_rt_strings_HasSuffix(ptr, ptr)",
+		"call i1 @osty_rt_strings_HasSuffix",
+	} {
+		if !strings.Contains(string(ir), want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, string(ir))
+		}
+	}
+}
+
+func TestStdStringsTrimPrefixSuffixRouteToRuntime(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.strings as strings
+
+fn main() {
+    let left = strings.trimPrefix("fn(Int)", "fn")
+    let right = strings.trimSuffix(left, ")")
+    println(right)
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/std_strings_trim_prefix_suffix.osty"})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	for _, want := range []string{
+		"declare ptr @osty_rt_strings_TrimPrefix(ptr, ptr)",
+		"declare ptr @osty_rt_strings_TrimSuffix(ptr, ptr)",
+		"call ptr @osty_rt_strings_TrimPrefix",
+		"call ptr @osty_rt_strings_TrimSuffix",
+	} {
+		if !strings.Contains(string(ir), want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, string(ir))
+		}
+	}
+}
+
 func TestCollectStdStringsAliasesIgnoresRuntimeFFI(t *testing.T) {
 	file := parseLLVMGenFile(t, `use runtime.strings as strings {
     fn HasPrefix(s: String, prefix: String) -> Bool

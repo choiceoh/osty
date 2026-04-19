@@ -1,16 +1,16 @@
 // stdlib_shim.go — targeted backend shims for Osty surface the pure-Osty
 // lowering path can't yet handle.
 //
-//   1. Qualified calls through `use std.strings as X` routed to the
-//      `osty_rt_strings_*` C runtime helpers. The pure Osty bodies (see
-//      internal/stdlib/modules/strings.osty) depend on Char iteration /
-//      List<Char> indexing which the backend doesn't lower yet.
+//  1. Qualified calls through `use std.strings as X` routed to the
+//     `osty_rt_strings_*` C runtime helpers. The pure Osty bodies (see
+//     internal/stdlib/modules/strings.osty) depend on Char iteration /
+//     List<Char> indexing which the backend doesn't lower yet.
 //
-//   2. Bare `None` / `Some(x)` construction for ptr-backed Option<T>. The
-//      backend already encodes `T?` as a nullable `ptr` for every `T` (see
-//      llvmType), so `None` → `null` and `Some(x)` → pass-through when x
-//      is `ptr`. Scalar-backed Option<Int> / Option<Bool> still need
-//      boxing and stay unsupported here.
+//  2. Bare `None` / `Some(x)` construction for ptr-backed Option<T>. The
+//     backend already encodes `T?` as a nullable `ptr` for every `T` (see
+//     llvmType), so `None` → `null` and `Some(x)` → pass-through when x
+//     is `ptr`. Scalar-backed Option<Int> / Option<Bool> still need
+//     boxing and stay unsupported here.
 //
 // Both shims retire once the flag-gated stdlib-body injection + richer
 // Option codegen land.
@@ -60,11 +60,20 @@ func (g *generator) emitStdStringsCall(call *ast.CallExpr) (value, bool, error) 
 	case "hasPrefix":
 		v, err := g.emitStdStringsBinary(call, "hasPrefix", "i1", llvmStringRuntimeHasPrefixSymbol())
 		return v, true, err
+	case "hasSuffix":
+		v, err := g.emitStdStringsBinary(call, "hasSuffix", "i1", llvmStringRuntimeHasSuffixSymbol())
+		return v, true, err
 	case "join":
 		v, err := g.emitStdStringsJoin(call)
 		return v, true, err
 	case "split":
 		v, err := g.emitStdStringsSplit(call)
+		return v, true, err
+	case "trimPrefix":
+		v, err := g.emitStdStringsBinaryString(call, "trimPrefix", llvmStringRuntimeTrimPrefixSymbol())
+		return v, true, err
+	case "trimSuffix":
+		v, err := g.emitStdStringsBinaryString(call, "trimSuffix", llvmStringRuntimeTrimSuffixSymbol())
 		return v, true, err
 	case "trim", "trimSpace":
 		v, err := g.emitStdStringsUnary(call, field.Name, llvmStringRuntimeTrimSpaceSymbol())
@@ -93,9 +102,9 @@ func (g *generator) stdStringsCallStaticResult(call *ast.CallExpr) (value, bool)
 	switch field.Name {
 	case "compare":
 		return value{typ: "i64"}, true
-	case "hasPrefix":
+	case "hasPrefix", "hasSuffix":
 		return value{typ: "i1"}, true
-	case "join", "trim", "trimSpace":
+	case "join", "trim", "trimSpace", "trimPrefix", "trimSuffix":
 		return value{typ: "ptr", gcManaged: true}, true
 	case "split":
 		return value{typ: "ptr", gcManaged: true, listElemTyp: "ptr", listElemString: true}, true
@@ -194,6 +203,15 @@ func (g *generator) emitStdStringsBinary(call *ast.CallExpr, name, retTyp, symbo
 	out := llvmCall(emitter, retTyp, symbol, []*LlvmValue{toOstyValue(left), toOstyValue(right)})
 	g.takeOstyEmitter(emitter)
 	return fromOstyValue(out), nil
+}
+
+func (g *generator) emitStdStringsBinaryString(call *ast.CallExpr, name, symbol string) (value, error) {
+	v, err := g.emitStdStringsBinary(call, name, "ptr", symbol)
+	if err != nil {
+		return value{}, err
+	}
+	v.gcManaged = true
+	return v, nil
 }
 
 func (g *generator) emitStdStringsArg(arg *ast.Arg, name string, index int) (value, error) {

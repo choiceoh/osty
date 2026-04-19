@@ -665,12 +665,15 @@ func TestGeneratedStringRuntimeSymbolsAreOstyOwned(t *testing.T) {
 	}{
 		{"equal", llvmStringRuntimeEqualSymbol(), "osty_rt_strings_Equal"},
 		{"hasPrefix", llvmStringRuntimeHasPrefixSymbol(), "osty_rt_strings_HasPrefix"},
+		{"hasSuffix", llvmStringRuntimeHasSuffixSymbol(), "osty_rt_strings_HasSuffix"},
 		{"split", llvmStringRuntimeSplitSymbol(), "osty_rt_strings_Split"},
 		{"concat", llvmStringRuntimeConcatSymbol(), "osty_rt_strings_Concat"},
 		{"int_to_string", llvmIntRuntimeToStringSymbol(), "osty_rt_int_to_string"},
 		{"float_to_string", llvmFloatRuntimeToStringSymbol(), "osty_rt_float_to_string"},
 		{"bool_to_string", llvmBoolRuntimeToStringSymbol(), "osty_rt_bool_to_string"},
 		{"byteLen", llvmStringRuntimeByteLenSymbol(), "osty_rt_strings_ByteLen"},
+		{"trimPrefix", llvmStringRuntimeTrimPrefixSymbol(), "osty_rt_strings_TrimPrefix"},
+		{"trimSuffix", llvmStringRuntimeTrimSuffixSymbol(), "osty_rt_strings_TrimSuffix"},
 	}
 	for _, c := range cases {
 		if c.got != c.want {
@@ -685,12 +688,15 @@ func TestGeneratedStringRuntimeDeclarationsAreOstyOwned(t *testing.T) {
 	want := []string{
 		"declare i1 @osty_rt_strings_Equal(ptr, ptr)",
 		"declare i1 @osty_rt_strings_HasPrefix(ptr, ptr)",
+		"declare i1 @osty_rt_strings_HasSuffix(ptr, ptr)",
 		"declare ptr @osty_rt_strings_Split(ptr, ptr)",
 		"declare ptr @osty_rt_strings_Concat(ptr, ptr)",
 		"declare ptr @osty_rt_int_to_string(i64)",
 		"declare ptr @osty_rt_float_to_string(double)",
 		"declare ptr @osty_rt_bool_to_string(i1)",
 		"declare i64 @osty_rt_strings_ByteLen(ptr)",
+		"declare ptr @osty_rt_strings_TrimPrefix(ptr, ptr)",
+		"declare ptr @osty_rt_strings_TrimSuffix(ptr, ptr)",
 	}
 	for _, w := range want {
 		assertGeneratedIRContains(t, decls, w)

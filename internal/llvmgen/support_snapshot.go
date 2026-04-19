@@ -2107,6 +2107,10 @@ func llvmStringRuntimeHasPrefixSymbol() string {
 	return "osty_rt_strings_HasPrefix"
 }
 
+func llvmStringRuntimeHasSuffixSymbol() string {
+	return "osty_rt_strings_HasSuffix"
+}
+
 func llvmStringRuntimeSplitSymbol() string {
 	return "osty_rt_strings_Split"
 }
@@ -2139,6 +2143,14 @@ func llvmStringRuntimeJoinSymbol() string {
 	return "osty_rt_strings_Join"
 }
 
+func llvmStringRuntimeTrimPrefixSymbol() string {
+	return "osty_rt_strings_TrimPrefix"
+}
+
+func llvmStringRuntimeTrimSuffixSymbol() string {
+	return "osty_rt_strings_TrimSuffix"
+}
+
 func llvmStringRuntimeTrimSpaceSymbol() string {
 	return "osty_rt_strings_TrimSpace"
 }
@@ -2147,6 +2159,7 @@ func llvmStringRuntimeDeclarations() []string {
 	return []string{
 		"declare i1 @osty_rt_strings_Equal(ptr, ptr)",
 		"declare i1 @osty_rt_strings_HasPrefix(ptr, ptr)",
+		"declare i1 @osty_rt_strings_HasSuffix(ptr, ptr)",
 		"declare ptr @osty_rt_strings_Split(ptr, ptr)",
 		"declare ptr @osty_rt_strings_Concat(ptr, ptr)",
 		"declare ptr @osty_rt_int_to_string(i64)",
@@ -2155,6 +2168,8 @@ func llvmStringRuntimeDeclarations() []string {
 		"declare i64 @osty_rt_strings_ByteLen(ptr)",
 		"declare i64 @osty_rt_strings_Compare(ptr, ptr)",
 		"declare ptr @osty_rt_strings_Join(ptr, ptr)",
+		"declare ptr @osty_rt_strings_TrimPrefix(ptr, ptr)",
+		"declare ptr @osty_rt_strings_TrimSuffix(ptr, ptr)",
 		"declare ptr @osty_rt_strings_TrimSpace(ptr)",
 	}
 }
@@ -2165,6 +2180,10 @@ func llvmStringEqual(emitter *LlvmEmitter, left *LlvmValue, right *LlvmValue) *L
 
 func llvmStringHasPrefix(emitter *LlvmEmitter, value *LlvmValue, prefix *LlvmValue) *LlvmValue {
 	return llvmCall(emitter, "i1", "osty_rt_strings_HasPrefix", []*LlvmValue{value, prefix})
+}
+
+func llvmStringHasSuffix(emitter *LlvmEmitter, value *LlvmValue, suffix *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "i1", "osty_rt_strings_HasSuffix", []*LlvmValue{value, suffix})
 }
 
 func llvmStringSplit(emitter *LlvmEmitter, value *LlvmValue, sep *LlvmValue) *LlvmValue {
@@ -2205,6 +2224,14 @@ func llvmStringRuntimeCompare(emitter *LlvmEmitter, left *LlvmValue, right *Llvm
 
 func llvmStringRuntimeJoin(emitter *LlvmEmitter, parts *LlvmValue, sep *LlvmValue) *LlvmValue {
 	return llvmCall(emitter, "ptr", "osty_rt_strings_Join", []*LlvmValue{parts, sep})
+}
+
+func llvmStringRuntimeTrimPrefix(emitter *LlvmEmitter, value *LlvmValue, prefix *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "ptr", "osty_rt_strings_TrimPrefix", []*LlvmValue{value, prefix})
+}
+
+func llvmStringRuntimeTrimSuffix(emitter *LlvmEmitter, value *LlvmValue, suffix *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "ptr", "osty_rt_strings_TrimSuffix", []*LlvmValue{value, suffix})
 }
 
 func llvmStringRuntimeTrimSpace(emitter *LlvmEmitter, value *LlvmValue) *LlvmValue {

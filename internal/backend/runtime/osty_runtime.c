@@ -204,7 +204,10 @@ static void *osty_gc_allocate_managed(size_t byte_size, int64_t object_kind, con
 static void osty_gc_mark_payload(void *payload);
 bool osty_rt_strings_Equal(const char *left, const char *right);
 int64_t osty_rt_strings_Compare(const char *left, const char *right);
+bool osty_rt_strings_HasSuffix(const char *value, const char *suffix);
 const char *osty_rt_strings_Join(void *raw_parts, const char *sep);
+const char *osty_rt_strings_TrimPrefix(const char *value, const char *prefix);
+const char *osty_rt_strings_TrimSuffix(const char *value, const char *suffix);
 const char *osty_rt_strings_TrimSpace(const char *value);
 bool osty_rt_set_insert_i64(void *raw_set, int64_t item);
 bool osty_rt_set_insert_i1(void *raw_set, bool item);
@@ -913,6 +916,20 @@ bool osty_rt_strings_HasPrefix(const char *value, const char *prefix) {
     return strncmp(value, prefix, prefix_len) == 0;
 }
 
+bool osty_rt_strings_HasSuffix(const char *value, const char *suffix) {
+    size_t value_len;
+    size_t suffix_len;
+    if (value == NULL || suffix == NULL) {
+        return false;
+    }
+    value_len = strlen(value);
+    suffix_len = strlen(suffix);
+    if (suffix_len > value_len) {
+        return false;
+    }
+    return strncmp(value + (value_len - suffix_len), suffix, suffix_len) == 0;
+}
+
 void *osty_rt_strings_Split(const char *value, const char *sep) {
     osty_rt_list *out = (osty_rt_list *)osty_rt_list_new();
     const char *cursor;
@@ -988,6 +1005,38 @@ const char *osty_rt_strings_Join(void *raw_parts, const char *sep) {
     }
     *cursor = '\0';
     return out;
+}
+
+const char *osty_rt_strings_TrimPrefix(const char *value, const char *prefix) {
+    const char *start;
+
+    if (value == NULL) {
+        return osty_rt_string_dup_site("", 0, "runtime.strings.trim_prefix.empty");
+    }
+    start = value;
+    if (prefix != NULL) {
+        size_t prefix_len = strlen(prefix);
+        if (prefix_len != 0 && strncmp(value, prefix, prefix_len) == 0) {
+            start = value + prefix_len;
+        }
+    }
+    return osty_rt_string_dup_site(start, strlen(start), "runtime.strings.trim_prefix");
+}
+
+const char *osty_rt_strings_TrimSuffix(const char *value, const char *suffix) {
+    size_t value_len;
+    size_t suffix_len;
+
+    if (value == NULL) {
+        return osty_rt_string_dup_site("", 0, "runtime.strings.trim_suffix.empty");
+    }
+    value_len = strlen(value);
+    suffix_len = (suffix == NULL) ? 0 : strlen(suffix);
+    if (suffix_len != 0 && suffix_len <= value_len &&
+        strncmp(value + (value_len - suffix_len), suffix, suffix_len) == 0) {
+        return osty_rt_string_dup_site(value, value_len - suffix_len, "runtime.strings.trim_suffix");
+    }
+    return osty_rt_string_dup_site(value, value_len, "runtime.strings.trim_suffix");
 }
 
 const char *osty_rt_strings_TrimSpace(const char *value) {

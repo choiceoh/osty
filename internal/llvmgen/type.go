@@ -367,6 +367,9 @@ func (g *generator) staticExprSourceType(expr ast.Expr) (ast.Type, bool) {
 		}
 		return unwrapOptionalSourceType(src)
 	case *ast.CallExpr:
+		if src, ok := g.staticStringMethodSourceType(e); ok {
+			return src, true
+		}
 		if id, ok := e.Fn.(*ast.Ident); ok {
 			if sig := g.functions[id.Name]; sig != nil && sig.returnSourceType != nil {
 				return sig.returnSourceType, true
@@ -463,6 +466,9 @@ func (g *generator) staticExprInfo(expr ast.Expr) (value, bool) {
 	case *ast.MapExpr:
 		return value{}, false
 	case *ast.CallExpr:
+		if out, ok := g.staticStringMethodResult(e); ok {
+			return out, true
+		}
 		if out, found, ok := g.staticCollectionMethodResult(e); found {
 			return out, ok
 		}
@@ -637,6 +643,85 @@ func (g *generator) staticExprListElemIsBytes(expr ast.Expr) bool {
 		return false
 	}
 	return llvmNamedTypeIsBytes(elemResolved)
+}
+
+func (g *generator) staticStringMethodSourceType(call *ast.CallExpr) (ast.Type, bool) {
+	field, ok := g.stringMethodInfo(call)
+	if !ok {
+		return nil, false
+	}
+	switch field.Name {
+	case "len":
+		return &ast.NamedType{Path: []string{"Int"}}, true
+	case "isEmpty", "startsWith":
+		return &ast.NamedType{Path: []string{"Bool"}}, true
+	case "split":
+		return &ast.NamedType{
+			Path: []string{"List"},
+			Args: []ast.Type{&ast.NamedType{Path: []string{"String"}}},
+		}, true
+	case "trim", "toString":
+		return &ast.NamedType{Path: []string{"String"}}, true
+	case "chars":
+		return &ast.NamedType{
+			Path: []string{"List"},
+			Args: []ast.Type{&ast.NamedType{Path: []string{"Char"}}},
+		}, true
+	case "bytes":
+		return &ast.NamedType{
+			Path: []string{"List"},
+			Args: []ast.Type{&ast.NamedType{Path: []string{"Byte"}}},
+		}, true
+	default:
+		return nil, false
+	}
+}
+
+func (g *generator) staticStringMethodResult(call *ast.CallExpr) (value, bool) {
+	field, ok := g.stringMethodInfo(call)
+	if !ok {
+		return value{}, false
+	}
+	switch field.Name {
+	case "len":
+		return value{typ: "i64"}, true
+	case "isEmpty", "startsWith":
+		return value{typ: "i1"}, true
+	case "split":
+		return value{typ: "ptr", gcManaged: true, listElemTyp: "ptr", listElemString: true}, true
+	case "trim", "toString":
+		return value{typ: "ptr", gcManaged: true}, true
+	case "chars":
+		return value{typ: "ptr", gcManaged: true, listElemTyp: "i32"}, true
+	case "bytes":
+		return value{typ: "ptr", gcManaged: true, listElemTyp: "i8"}, true
+	default:
+		return value{}, false
+	}
+}
+
+func (g *generator) stringMethodInfo(call *ast.CallExpr) (*ast.FieldExpr, bool) {
+	if call == nil {
+		return nil, false
+	}
+	field, ok := call.Fn.(*ast.FieldExpr)
+	if !ok || field.IsOptional || field.X == nil {
+		return nil, false
+	}
+	sourceType, ok := g.staticExprSourceType(field.X)
+	if !ok {
+		return nil, false
+	}
+	resolved, err := llvmResolveAliasType(sourceType, g.typeEnv(), map[string]bool{})
+	if err != nil || !llvmNamedTypeIsString(resolved) {
+		return nil, false
+	}
+	switch field.Name {
+	case "len", "isEmpty", "startsWith", "split", "trim", "toString", "chars", "bytes":
+		return field, true
+	default:
+		return nil, false
+	}
 }
 
 func (g *generator) staticCollectionMethodResult(call *ast.CallExpr) (value, bool, bool) {

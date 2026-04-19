@@ -1986,6 +1986,102 @@ func (g *generator) emitPrimitiveToStringCall(call *ast.CallExpr) (value, bool, 
 	return value{}, false, nil
 }
 
+func (g *generator) emitStringMethodCall(call *ast.CallExpr) (value, bool, error) {
+	field, ok := g.stringMethodInfo(call)
+	if !ok {
+		return value{}, false, nil
+	}
+	if field.X == nil {
+		return value{}, true, unsupported("call", "String method receiver is missing")
+	}
+	base, err := g.emitExpr(field.X)
+	if err != nil {
+		return value{}, true, err
+	}
+	base, err = g.loadIfPointer(base)
+	if err != nil {
+		return value{}, true, err
+	}
+	if base.typ != "ptr" {
+		return value{}, true, unsupportedf("type-system", "String receiver type %s, want ptr", base.typ)
+	}
+
+	switch field.Name {
+	case "len":
+		if len(call.Args) != 0 {
+			return value{}, true, unsupported("call", "String.len requires no arguments")
+		}
+		g.declareRuntimeSymbol(llvmStringRuntimeByteLenSymbol(), "i64", []paramInfo{{typ: "ptr"}})
+		emitter := g.toOstyEmitter()
+		out := llvmStringByteLen(emitter, toOstyValue(base))
+		g.takeOstyEmitter(emitter)
+		return fromOstyValue(out), true, nil
+	case "isEmpty":
+		if len(call.Args) != 0 {
+			return value{}, true, unsupported("call", "String.isEmpty requires no arguments")
+		}
+		g.declareRuntimeSymbol(llvmStringRuntimeByteLenSymbol(), "i64", []paramInfo{{typ: "ptr"}})
+		emitter := g.toOstyEmitter()
+		size := llvmStringByteLen(emitter, toOstyValue(base))
+		out := llvmCompare(emitter, "eq", size, llvmIntLiteral(0))
+		g.takeOstyEmitter(emitter)
+		return fromOstyValue(out), true, nil
+	case "startsWith":
+		if len(call.Args) != 1 || call.Args[0] == nil || call.Args[0].Name != "" || call.Args[0].Value == nil {
+			return value{}, true, unsupported("call", "String.startsWith requires one positional argument")
+		}
+		prefix, err := g.emitStdStringsArg(call.Args[0], "startsWith", 0)
+		if err != nil {
+			return value{}, true, err
+		}
+		g.declareRuntimeSymbol(llvmStringRuntimeHasPrefixSymbol(), "i1", []paramInfo{{typ: "ptr"}, {typ: "ptr"}})
+		emitter := g.toOstyEmitter()
+		out := llvmStringHasPrefix(emitter, toOstyValue(base), toOstyValue(prefix))
+		g.takeOstyEmitter(emitter)
+		return fromOstyValue(out), true, nil
+	case "split":
+		if len(call.Args) != 1 || call.Args[0] == nil || call.Args[0].Name != "" || call.Args[0].Value == nil {
+			return value{}, true, unsupported("call", "String.split requires one positional argument")
+		}
+		sep, err := g.emitStdStringsArg(call.Args[0], "split", 0)
+		if err != nil {
+			return value{}, true, err
+		}
+		g.declareRuntimeSymbol(llvmStringRuntimeSplitSymbol(), "ptr", []paramInfo{{typ: "ptr"}, {typ: "ptr"}})
+		emitter := g.toOstyEmitter()
+		out := llvmStringSplit(emitter, toOstyValue(base), toOstyValue(sep))
+		g.takeOstyEmitter(emitter)
+		parts := fromOstyValue(out)
+		parts.gcManaged = true
+		parts.listElemTyp = "ptr"
+		parts.listElemString = true
+		return parts, true, nil
+	case "trim":
+		if len(call.Args) != 0 {
+			return value{}, true, unsupported("call", "String.trim requires no arguments")
+		}
+		g.declareRuntimeSymbol(llvmStringRuntimeTrimSpaceSymbol(), "ptr", []paramInfo{{typ: "ptr"}})
+		emitter := g.toOstyEmitter()
+		out := llvmStringRuntimeTrimSpace(emitter, toOstyValue(base))
+		g.takeOstyEmitter(emitter)
+		v := fromOstyValue(out)
+		v.gcManaged = true
+		return v, true, nil
+	case "toString":
+		if len(call.Args) != 0 {
+			return value{}, true, unsupported("call", "String.toString requires no arguments")
+		}
+		base.gcManaged = true
+		return base, true, nil
+	case "chars":
+		return value{}, true, unsupported("type-system", "String.chars requires Char/List<Char> lowering in legacy llvmgen")
+	case "bytes":
+		return value{}, true, unsupported("type-system", "String.bytes requires Byte/List<Byte> lowering in legacy llvmgen")
+	default:
+		return value{}, true, unsupportedf("call", "String.%s is not supported by legacy llvmgen yet", field.Name)
+	}
+}
+
 func (g *generator) emitListMethodCall(call *ast.CallExpr) (value, bool, error) {
 	field, elemTyp, elemString, found := g.listMethodInfo(call)
 	if !found {
@@ -2436,6 +2532,9 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 		return v, err
 	}
 	if v, found, err := g.emitPrimitiveToStringCall(call); found || err != nil {
+		return v, err
+	}
+	if v, found, err := g.emitStringMethodCall(call); found || err != nil {
 		return v, err
 	}
 	if v, found, err := g.emitOptionalUserCall(call); found || err != nil {
