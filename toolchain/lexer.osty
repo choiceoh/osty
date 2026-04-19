@@ -396,7 +396,7 @@ fn ostyLexStringPartFromFront(
         ownerToken: part.ownerToken,
         kindCode: 0,
         text,
-        decodeEscapes: tok.kind == FrontString && !(tok.triple),
+        decodeEscapes: tok.kind == FrontString,
         exprTokenStart: 0,
         exprTokenCount: 0,
     }
@@ -411,7 +411,7 @@ fn ostyDefaultStringPart(units: List<String>, tok: FrontLexToken, owner: Int) ->
         ownerToken: owner,
         kindCode: 0,
         text,
-        decodeEscapes: tok.kind == FrontString && !(tok.triple),
+        decodeEscapes: tok.kind == FrontString,
         exprTokenStart: 0,
         exprTokenCount: 0,
     }

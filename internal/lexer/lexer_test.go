@@ -219,6 +219,47 @@ func TestLexTripleStringStripsIndent(t *testing.T) {
 	}
 }
 
+func TestLexTripleStringDecodesEscapesAfterIndentNormalize(t *testing.T) {
+	src := "let s = \"\"\"\n    line\\nnext\\{ok\\}\n    \"\"\""
+	l := New([]byte(src))
+	toks := l.Lex()
+	if errs := l.Errors(); len(errs) != 0 {
+		t.Fatalf("unexpected lex errors: %v", errs)
+	}
+	var got *token.Token
+	for i := range toks {
+		if toks[i].Kind == token.STRING && toks[i].Triple {
+			got = &toks[i]
+			break
+		}
+	}
+	if got == nil {
+		t.Fatalf("no triple STRING token; tokens=%v", toks)
+	}
+	if len(got.Parts) != 1 || got.Parts[0].Kind != token.PartText {
+		t.Fatalf("expected one PartText, got parts=%+v", got.Parts)
+	}
+	want := "line\nnext{ok}"
+	if got.Parts[0].Text != want {
+		t.Fatalf("triple body = %q; want %q", got.Parts[0].Text, want)
+	}
+}
+
+func TestLexCommentsAndErrorsAvailableWithoutLexCall(t *testing.T) {
+	src := "// note\nlet s = \"bad\\q\"\n"
+	l := New([]byte(src))
+	if got := len(l.Comments()); got != 1 {
+		t.Fatalf("Comments() count = %d; want 1", got)
+	}
+	errs := l.Errors()
+	if len(errs) != 1 {
+		t.Fatalf("Errors() count = %d; want 1", len(errs))
+	}
+	if errs[0].Code != "E0003" {
+		t.Fatalf("Errors()[0].Code = %q; want E0003", errs[0].Code)
+	}
+}
+
 func TestLexShebangAndBomIgnored(t *testing.T) {
 	src := "\ufeff#!/usr/bin/env osty\nfn main() {}\n"
 	l := New([]byte(src))
