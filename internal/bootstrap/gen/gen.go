@@ -106,6 +106,21 @@ type gen struct {
 	// invocation from field access to a function-valued field.
 	methodNames map[string]map[string]bool
 
+	// structFieldTypes[typeName][fieldName] is the syntactic field type
+	// annotation, used to coerce unannotated RHS expressions (notably
+	// empty list literals `[]`) when the native checker didn't attach a
+	// type to them. Populated alongside structTypes in indexStructDecl.
+	structFieldTypes map[string]map[string]ast.Type
+
+	// letStmtForIdentPat maps an IdentPat to its enclosing LetStmt, so
+	// syntactic fallback paths (e.g. receiver-type inference for
+	// List.len/isEmpty when the checker dropped the expression type)
+	// can recover the declared annotation. The resolver stores IdentPat
+	// as the symbol's Decl for bare-name bindings, so without this
+	// reverse map the LetStmt (and its `Type` annotation) is
+	// unreachable.
+	letStmtForIdentPat map[*ast.IdentPat]*ast.LetStmt
+
 	// freshCounter backs freshVar for synthesized match / IIFE names.
 	freshCounter int
 
@@ -213,6 +228,17 @@ type gen struct {
 	// rather than an explicit AST annotation.
 	currentRetGo string
 
+	// retHintType / retHintGo carry the enclosing function's return type
+	// as a *tail-position* hint. Set by emitReturn and the tail of
+	// emitBlockAsReturn; consumed (and cleared) by emitMatch and the
+	// Ok/Err handlers in emitBuiltinCall when the native checker didn't
+	// attach a type to the match/call expression. Outside tail position
+	// these are nil — non-passthrough emitters clear them before
+	// descending so a nested match/call in, say, a BinaryExpr RHS does
+	// not pick up a stale hint from the outer return.
+	retHintType ast.Type
+	retHintGo   string
+
 	// questionSubs maps a QuestionExpr AST node to the Go expression
 	// text that should be emitted in its place. Populated by the
 	// statement-level pre-lift pass (see preLiftQuestions); consumed by
@@ -262,8 +288,10 @@ func newGen(pkgName string, file *ast.File, res *resolve.Result, chk *check.Resu
 		imports:           map[string]string{},
 		variantOwner:      map[string]string{},
 		enumTypes:         map[string]bool{},
-		structTypes:       map[string]bool{},
-		methodNames:       map[string]map[string]bool{},
+		structTypes:        map[string]bool{},
+		structFieldTypes:   map[string]map[string]ast.Type{},
+		letStmtForIdentPat: map[*ast.IdentPat]*ast.LetStmt{},
+		methodNames:        map[string]map[string]bool{},
 		needStdlibOsty:    map[string]bool{},
 		emittedStdlibOsty: map[string]bool{},
 	}
@@ -281,8 +309,74 @@ func (g *gen) indexTypes() {
 		switch d := d.(type) {
 		case *ast.EnumDecl:
 			g.indexEnumDecl(d)
+			for _, m := range d.Methods {
+				g.indexLetStmtsInFn(m)
+			}
 		case *ast.StructDecl:
 			g.indexStructDecl(d)
+			for _, m := range d.Methods {
+				g.indexLetStmtsInFn(m)
+			}
+		case *ast.FnDecl:
+			g.indexLetStmtsInFn(d)
+		}
+	}
+}
+
+// indexLetStmtsInFn walks a function body to build the
+// IdentPat → LetStmt reverse map used by syntactic type fallback. Only
+// plain-ident patterns get recorded; destructuring let patterns lower
+// through emitLetPatternDestructure where each bound ident already
+// carries its own LetStmt-shaped type info via the checker.
+func (g *gen) indexLetStmtsInFn(fn *ast.FnDecl) {
+	if fn == nil || fn.Body == nil {
+		return
+	}
+	g.indexLetStmtsInBlock(fn.Body)
+}
+
+func (g *gen) indexLetStmtsInBlock(b *ast.Block) {
+	if b == nil {
+		return
+	}
+	for _, s := range b.Stmts {
+		g.indexLetStmtsInStmt(s)
+	}
+}
+
+func (g *gen) indexLetStmtsInStmt(s ast.Stmt) {
+	switch s := s.(type) {
+	case *ast.LetStmt:
+		if ip, ok := s.Pattern.(*ast.IdentPat); ok {
+			g.letStmtForIdentPat[ip] = s
+		}
+	case *ast.ExprStmt:
+		g.indexLetStmtsInExpr(s.X)
+	case *ast.ReturnStmt:
+		g.indexLetStmtsInExpr(s.Value)
+	case *ast.ForStmt:
+		g.indexLetStmtsInExpr(s.Iter)
+		g.indexLetStmtsInBlock(s.Body)
+	case *ast.AssignStmt:
+		g.indexLetStmtsInExpr(s.Value)
+	}
+}
+
+func (g *gen) indexLetStmtsInExpr(e ast.Expr) {
+	switch e := e.(type) {
+	case *ast.Block:
+		g.indexLetStmtsInBlock(e)
+	case *ast.IfExpr:
+		g.indexLetStmtsInExpr(e.Cond)
+		g.indexLetStmtsInExpr(e.Then)
+		g.indexLetStmtsInExpr(e.Else)
+	case *ast.MatchExpr:
+		for _, arm := range e.Arms {
+			g.indexLetStmtsInExpr(arm.Body)
+		}
+	case *ast.ClosureExpr:
+		if e.Body != nil {
+			g.indexLetStmtsInExpr(e.Body)
 		}
 	}
 }
@@ -327,6 +421,16 @@ func (g *gen) indexStructDecl(s *ast.StructDecl) {
 	}
 	for _, m := range s.Methods {
 		g.methodNames[s.Name][m.Name] = true
+	}
+	fields := g.structFieldTypes[s.Name]
+	if fields == nil {
+		fields = map[string]ast.Type{}
+		g.structFieldTypes[s.Name] = fields
+	}
+	for _, f := range s.Fields {
+		if f.Type != nil {
+			fields[f.Name] = f.Type
+		}
 	}
 }
 
@@ -2088,12 +2192,26 @@ func (g *gen) symbolFor(id *ast.Ident) *resolve.Symbol {
 }
 
 // typeOf returns the checked type of an expression, or nil when the
-// checker didn't visit it.
+// checker didn't visit it. For bare idents that the checker skipped, we
+// fall back to the resolver symbol's type — the checker may have typed
+// the binding even when it dropped the use-site expression (common on
+// `let mut x: List<T> = []` where the empty literal poisoned the RHS
+// but the symbol still carries its declared type).
 func (g *gen) typeOf(e ast.Expr) types.Type {
 	if g.chk == nil {
 		return nil
 	}
-	return g.chk.Types[e]
+	if t, ok := g.chk.Types[e]; ok && t != nil {
+		return t
+	}
+	if id, ok := e.(*ast.Ident); ok {
+		if sym := g.symbolFor(id); sym != nil {
+			if t := g.symTypeOf(sym); t != nil {
+				return t
+			}
+		}
+	}
+	return nil
 }
 
 // symTypeOf returns the checked type of a symbol, or nil.

@@ -1341,7 +1341,10 @@ func (g *gen) emitBlockAsReturn(b *ast.Block, wantReturn bool) {
 			}
 			g.preLiftQuestions(es.X)
 			g.body.write("return ")
+			prevHintType, prevHintGo := g.retHintType, g.retHintGo
+			g.retHintType, g.retHintGo = g.currentRetType, g.currentRetGo
 			g.emitExpr(es.X)
+			g.retHintType, g.retHintGo = prevHintType, prevHintGo
 			g.body.nl()
 			g.resetQuestionSubs()
 			g.body.dedent()

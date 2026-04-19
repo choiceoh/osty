@@ -80,10 +80,47 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("read patched selfhost code: %w", err)
 	}
+	return installWithBuildGate(root, outPath, data)
+}
+
+// installWithBuildGate atomically swaps generated.go for the freshly
+// emitted content, verifies that the selfhost package still compiles,
+// and rolls back on failure. Without this gate the regen pipeline
+// silently replaced the generated bridge with compile-broken Go —
+// any subsequent `go build` (including the next regen's native
+// checker build) then dies inside the very package the regen was
+// supposed to produce, and the only recovery was a hand-rolled
+// `git checkout --`.
+func installWithBuildGate(root, outPath string, data []byte) error {
+	prev, readErr := os.ReadFile(outPath)
+	if readErr != nil && !os.IsNotExist(readErr) {
+		return fmt.Errorf("read previous selfhost code: %w", readErr)
+	}
+	havePrev := readErr == nil
 	if err := os.WriteFile(outPath, data, 0o644); err != nil {
 		return fmt.Errorf("install generated selfhost code: %w", err)
 	}
-	return nil
+	cmd := exec.Command("go", "build", "./internal/selfhost/...")
+	cmd.Dir = root
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	if havePrev {
+		if restoreErr := os.WriteFile(outPath, prev, 0o644); restoreErr != nil {
+			return fmt.Errorf(
+				"generated selfhost code does not compile and restore failed: build=%v (%s); restore=%w",
+				err, bytes.TrimSpace(output), restoreErr,
+			)
+		}
+	} else {
+		_ = os.Remove(outPath)
+	}
+	return fmt.Errorf(
+		"generated selfhost code does not compile; refused to install broken code at %s\n%s",
+		outPath,
+		bytes.TrimSpace(output),
+	)
 }
 
 func buildNativeChecker(root, outPath string) error {
@@ -121,6 +158,24 @@ func generatedSelfhostUpToDate(root, outPath string) (bool, error) {
 	}
 	if err := checkPath(filepath.Join(root, "internal/selfhost/gen_selfhost.go")); err != nil {
 		return false, fmt.Errorf("stat selfhost generator: %w", err)
+	}
+	// bootstrap-gen is the Osty→Go transpiler driver — its sources
+	// directly shape generated.go, so a change here must trigger a
+	// regen. Without this, editing `internal/bootstrap/gen/*.go` would
+	// leave generated.go stale and every downstream test run would
+	// silently reflect the pre-edit output.
+	genDir := filepath.Join(root, "internal/bootstrap/gen")
+	genEntries, err := os.ReadDir(genDir)
+	if err != nil {
+		return false, fmt.Errorf("read bootstrap/gen: %w", err)
+	}
+	for _, entry := range genEntries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") {
+			continue
+		}
+		if err := checkPath(filepath.Join(genDir, entry.Name())); err != nil {
+			return false, fmt.Errorf("stat bootstrap/gen/%s: %w", entry.Name(), err)
+		}
 	}
 	for _, rel := range bundle.ToolchainCheckerFiles() {
 		if err := checkPath(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
