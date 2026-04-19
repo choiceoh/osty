@@ -8,9 +8,7 @@ import (
 )
 
 func TestBundledRuntimeDebugCollectRespectsRoots(t *testing.T) {
-	if _, err := exec.LookPath("clang"); err != nil {
-		t.Skip("clang not found on PATH")
-	}
+	parallelClangBackendTest(t)
 
 	dir := t.TempDir()
 	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
@@ -109,9 +107,7 @@ int main(void) {
 }
 
 func TestBundledRuntimeSafepointScansStackRoots(t *testing.T) {
-	if _, err := exec.LookPath("clang"); err != nil {
-		t.Skip("clang not found on PATH")
-	}
+	parallelClangBackendTest(t)
 
 	dir := t.TempDir()
 	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
@@ -179,9 +175,7 @@ int main(void) {
 }
 
 func TestBundledRuntimeAutoCollectsAtPressureSafepoints(t *testing.T) {
-	if _, err := exec.LookPath("clang"); err != nil {
-		t.Skip("clang not found on PATH")
-	}
+	parallelClangBackendTest(t)
 
 	dir := t.TempDir()
 	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
@@ -243,9 +237,7 @@ int main(void) {
 }
 
 func TestBundledRuntimePressureKeepsRootedListChildrenAlive(t *testing.T) {
-	if _, err := exec.LookPath("clang"); err != nil {
-		t.Skip("clang not found on PATH")
-	}
+	parallelClangBackendTest(t)
 
 	dir := t.TempDir()
 	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
@@ -314,9 +306,7 @@ int main(void) {
 }
 
 func TestBundledRuntimeTracesManagedAggregateListElements(t *testing.T) {
-	if _, err := exec.LookPath("clang"); err != nil {
-		t.Skip("clang not found on PATH")
-	}
+	parallelClangBackendTest(t)
 
 	dir := t.TempDir()
 	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
