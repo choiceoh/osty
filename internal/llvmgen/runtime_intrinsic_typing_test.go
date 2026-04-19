@@ -1,34 +1,34 @@
 package llvmgen
 
-// This file is the executable contract for the §19.11 native-checker
-// gap: stdlib member type inference for `use std.runtime.raw`.
+// Executable contract for the §19.5 intrinsic typing flow.
 //
-// As of the §19 spike series (PRs #284-#343), the front-end +
-// resolver bind `use std.runtime.raw` correctly, the stdlib loader
-// exposes the 13 §19.5 intrinsic stubs, and the privilege gate +
-// pod shape checker enforce the surface. But the native checker
-// does NOT flow stdlib intrinsic return types back to call sites:
-// `raw.null()` resolves but checks as `*ir.ErrType` because the
-// member-access type-inference path doesn't follow the import to
-// the stub's declared return type.
+// **Diagnostic correction.** The original landing of this file
+// (PR #345) attributed the failure to the native checker not
+// flowing stdlib intrinsic return types back to call sites. That
+// diagnosis was wrong — the native checker DOES return correct
+// types (`chk.Types[CallExpr] -> RawPtr`, `chk.LetTypes[LetStmt]
+// -> RawPtr`). The actual bug was in `internal/ir/lower.go`:
+// `primitiveByKind` and `primitiveByName` did not have cases for
+// `types.PRawPtr` (added in PR #312), so when `fromCheckerType`
+// converted a `*types.Primitive{Kind: PRawPtr}` it returned
+// `ErrTypeVal`. PR `claude/native-checker-stdlib-types` adds
+// `PrimRawPtr` to the IR primitive enum + `TRawPtr` singleton +
+// the missing `case` arms.
 //
-// Each test below states what the fixed behavior MUST look like.
-// Today every test calls `t.Skip(skipReason)` so the suite is green
-// while the gap is open. When the native checker is fixed, the
-// expected procedure is:
+// Three of these tests pass after that fix:
+//   - raw.null()       → RawPtr   ✓
+//   - raw.alloc(b, a)  → RawPtr   ✓
+//   - raw.bits(p)      → Int      ✓
 //
-//   1. Land the native-checker change (likely in `toolchain/check.osty`
-//      or the resolver/checker bridge).
-//   2. Run `go test ./internal/check/ -run TestRuntimeIntrinsicTyping`
-//      with the t.Skip lines removed in this file.
-//   3. Every test should pass without further changes.
-//   4. Update LANG_SPEC §19.11 status table: flip the
-//      "Stdlib member type inference for `use std.runtime.raw`"
-//      row from "gap" to "landed (PR #N)".
+// The remaining tests (raw.read::<T>, raw.write::<T>, raw.cas::<T>,
+// raw.sizeOf::<T>, chained alloc/write/read/free) still fail
+// because of a SEPARATE bug — the `host_boundary`'s
+// `writeSelfhostPackageImport` strips `<T: Pod>` generic params
+// when forwarding stdlib stub signatures to the native checker.
+// Those tests carry `t.Skip(genericSkipReason)`.
 //
-// If a test fails after un-skipping, that's a signal that the
-// contract was understood differently. Adjust the test, not the
-// code, ONLY if the spec wording supports the alternative.
+// When the boundary fix lands, removing the Skip lines should
+// flip the remaining tests green.
 
 import (
 	"testing"
@@ -41,8 +41,15 @@ import (
 	"github.com/osty/osty/internal/stdlib"
 )
 
-const skipReason = "blocked on native-checker stdlib member type inference — LANG_SPEC §19.11 known gap. " +
-	"Remove this Skip line when the native checker propagates `use std.runtime.raw` member return types to call sites."
+// genericSkipReason marks tests blocked on a still-open gap: the
+// host_boundary's `writeSelfhostPackageImport` strips generic params
+// from intrinsic signatures, so `fn read<T: Pod>(p: RawPtr) -> T`
+// reaches the native checker as `fn read(p: RawPtr) -> T` with `T`
+// undeclared. Tests for non-generic intrinsics (raw.null, raw.alloc,
+// raw.bits) pass after PR `claude/native-checker-stdlib-types`'s
+// `PrimRawPtr` fix; the generic ones await a boundary writer fix.
+const genericSkipReason = "blocked on host_boundary generic-param stripping — LANG_SPEC §19.11. " +
+	"Remove this Skip line when writeSelfhostPackageImport preserves `<T: Pod>` on intrinsic stubs."
 
 // firstLetTypeIn returns the printed type of the first `let` binding
 // inside the named function in `mod`. Returns "" if the fn or its
@@ -110,7 +117,6 @@ func lowerPrivileged(t *testing.T, src string) *ir.Module {
 // --- raw.null() -> RawPtr ---
 
 func TestRuntimeIntrinsicTypingRawNull(t *testing.T) {
-	t.Skip(skipReason)
 	src := `
 use std.runtime.raw
 
@@ -128,7 +134,6 @@ pub fn demo() {
 // --- raw.alloc(bytes, align) -> RawPtr ---
 
 func TestRuntimeIntrinsicTypingRawAlloc(t *testing.T) {
-	t.Skip(skipReason)
 	src := `
 use std.runtime.raw
 
@@ -146,7 +151,6 @@ pub fn demo() {
 // --- raw.bits(p) -> Int ---
 
 func TestRuntimeIntrinsicTypingRawBits(t *testing.T) {
-	t.Skip(skipReason)
 	src := `
 use std.runtime.raw
 
@@ -188,7 +192,7 @@ pub fn demo() {
 // --- raw.read::<T>(p) -> T ---
 
 func TestRuntimeIntrinsicTypingRawReadInt(t *testing.T) {
-	t.Skip(skipReason)
+	t.Skip(genericSkipReason)
 	src := `
 use std.runtime.raw
 
@@ -224,7 +228,7 @@ pub fn demo() {
 // --- raw.read::<T>(p) -> T (T=Float64) ---
 
 func TestRuntimeIntrinsicTypingRawReadFloat(t *testing.T) {
-	t.Skip(skipReason)
+	t.Skip(genericSkipReason)
 	src := `
 use std.runtime.raw
 
@@ -259,7 +263,7 @@ pub fn demo() {
 // --- raw.cas::<Int>(...) -> Bool ---
 
 func TestRuntimeIntrinsicTypingRawCas(t *testing.T) {
-	t.Skip(skipReason)
+	t.Skip(genericSkipReason)
 	src := `
 use std.runtime.raw
 
@@ -294,7 +298,7 @@ pub fn demo() {
 // --- raw.sizeOf::<T>() -> Int (compile-time constant typing) ---
 
 func TestRuntimeIntrinsicTypingSizeOf(t *testing.T) {
-	t.Skip(skipReason)
+	t.Skip(genericSkipReason)
 	src := `
 use std.runtime.raw
 
@@ -312,7 +316,7 @@ pub fn demo() {
 // --- end-to-end: chained intrinsics in a real-shaped fn ---
 
 func TestRuntimeIntrinsicTypingChainedAllocReadFree(t *testing.T) {
-	t.Skip(skipReason)
+	t.Skip(genericSkipReason)
 	src := `
 use std.runtime.raw
 

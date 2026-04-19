@@ -616,12 +616,13 @@ while the export symbol is link-reachable.
 | §19.7 lowering table (`raw.null` → `inttoptr i64 0`, etc.) | **deferred** | — |
 | §19.10 safepoint compiler-emitted root array | **deferred** | — |
 
-**Type system / native checker.** A known gap blocks intrinsic
-lowering even after the IR plumbing is in place.
+**Type system / native checker / IR lowering.** Multiple layers,
+partially landed.
 
 | Piece | Status | Notes |
 |---|---|---|
-| Stdlib member type inference for `use std.runtime.raw` | **gap** | Today `raw.null()` resolves but checks as `*ir.ErrType` because the native checker does not flow stdlib intrinsic return types back to call sites. Lowering work is blocked on this until fixed. The executable contract for the fix is `internal/llvmgen/runtime_intrinsic_typing_test.go` — 7 `t.Skip`'d tests state the expected typing for each intrinsic (`raw.null` → RawPtr, `raw.alloc` → RawPtr, `raw.bits` → Int, `raw.read::<T>` → T, `raw.cas::<T>` → Bool, `raw.sizeOf::<T>` → Int, chained `alloc/write/read/free`). The fix lands by removing the `t.Skip` lines and watching all 7 pass without further code changes. |
+| Native checker types `raw.null()` / `raw.alloc(b, a)` / `raw.bits(p)` correctly | **landed** | The native checker's `chk.Types[CallExpr]` and `chk.LetTypes[LetStmt]` already return `RawPtr` / `Int` for non-generic intrinsics. PR `claude/native-checker-stdlib-types` added `PrimRawPtr` to `internal/ir/PrimKind` + `TRawPtr` singleton + the missing case arms in `primitiveByKind` / `primitiveByName`, so `ir.Lower` now flows the type to `let.Type` instead of dropping to `ErrTypeVal`. (Original PR #345 misdiagnosed this as a native-checker gap; it was an IR lowerer gap.) |
+| Generic intrinsic typing — `raw.read::<T>` / `raw.write::<T>` / `raw.cas::<T>` / `raw.sizeOf::<T>` / `raw.alignOf::<T>` | **gap** | The `host_boundary`'s `writeSelfhostPackageImport` (`internal/check/host_boundary.go:1324`) strips `<T: Pod>` generic params when forwarding stdlib stub signatures to the native checker. Result: `fn read(p: RawPtr) -> T` reaches the checker with `T` undeclared, and turbofish call sites get `ErrType`. The executable contract is the 5 `t.Skip(genericSkipReason)`'d tests in `internal/llvmgen/runtime_intrinsic_typing_test.go`. The fix is to extend the boundary writer to emit `<T: Pod>` (and to verify the native checker accepts FFI-block generics). |
 
 **Out-of-scope (per §19.1) — never planned.**
 
