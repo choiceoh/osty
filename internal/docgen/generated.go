@@ -8692,7 +8692,7 @@ func ostyLexStringPartFromFront(units []string, tok *FrontLexToken, part *FrontS
 		// Osty: /tmp/docgen_merged.osty:6398:9
 		text = ostyNormalizeTripleSegment(text)
 	}
-	return &OstyLexStringPart{ownerToken: part.ownerToken, kindCode: 0, text: text, decodeEscapes: ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontString{})) && !(tok.triple), exprTokenStart: 0, exprTokenCount: 0}
+	return &OstyLexStringPart{ownerToken: part.ownerToken, kindCode: 0, text: text, decodeEscapes: ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontString{})), exprTokenStart: 0, exprTokenCount: 0}
 }
 
 // Osty: /tmp/docgen_merged.osty:6410:1
@@ -8705,7 +8705,7 @@ func ostyDefaultStringPart(units []string, tok *FrontLexToken, owner int) *OstyL
 		// Osty: /tmp/docgen_merged.osty:6413:9
 		text = ostyNormalizeTripleSegment(text)
 	}
-	return &OstyLexStringPart{ownerToken: owner, kindCode: 0, text: text, decodeEscapes: ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontString{})) && !(tok.triple), exprTokenStart: 0, exprTokenCount: 0}
+	return &OstyLexStringPart{ownerToken: owner, kindCode: 0, text: text, decodeEscapes: ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontString{})), exprTokenStart: 0, exprTokenCount: 0}
 }
 
 // Osty: /tmp/docgen_merged.osty:6425:1
