@@ -529,3 +529,65 @@ declares the same C ABI signature with `#[c_abi]` and the matching
 `#[export("...")]`, and is link-compatible with the existing
 `internal/backend/runtime/osty_runtime.c` so that switching from the C
 runtime to the Osty runtime is purely a build-system decision.
+
+### 19.11 Implementation Status
+
+This chapter ships in slices: the full surface is specified, but
+each piece is delivered by its own PR with focused tests. The
+table below records what is wired today vs. deferred. Update it
+in the same PR that lands a new piece.
+
+**Front-end (parser / resolver / checker / stdlib).** Closed.
+
+| Piece | Status | PR |
+|---|---|---|
+| Spec chapter (this file) | landed | #284 |
+| `#[no_alloc]` body walker (`E0772`) | landed | #288 |
+| Privilege gate (`E0770`) — annotations + `use std.runtime.*` + RawPtr/Pod type refs | landed | #292 |
+| `#[pod]` shape checker (`E0771`) | landed | #295 |
+| `RawPtr` registered as `types.PRawPtr` + prelude `SymBuiltin` | landed | #312 |
+| `Pod` in prelude as `SymBuiltin` + privilege gate covers generic bound clauses | landed | #314 |
+| Annotation arg validators (`#[repr(c)]`, `#[export("name")]`, no-arg flags) | landed | #316 |
+| `std.runtime.raw` stdlib module + nested-stub-path loader | landed | #319 |
+| Privilege gate body walker (let-types / turbofish / closure params inside fn bodies) | landed | #322 |
+| End-to-end fixture + regression test | landed | #325 |
+
+**IR layer.** Every §19.6 annotation is now representable on
+`ir.FnDecl` / `ir.StructDecl`. No codegen attached yet for most.
+
+| Piece | Status | PR |
+|---|---|---|
+| `ir.FnDecl.ExportSymbol string` from `#[export("name")]` | landed | #329 |
+| `ir.FnDecl.CABI bool` from `#[c_abi]` | landed | #330 |
+| `ir.FnDecl.IsIntrinsic bool` from `#[intrinsic]` | landed | #334 |
+| `ir.FnDecl.NoAlloc bool` from `#[no_alloc]` | landed | #336 |
+| `ir.StructDecl.Pod bool` from `#[pod]` | landed | #336 |
+| `ir.StructDecl.ReprC bool` from `#[repr(c)]` | landed | #336 |
+
+**MIR / LLVM emit.** Partial — the MIR pipeline (`GenerateFromMIR`,
+opt-in via `Options.UseMIR`) honors `ExportSymbol` and `CABI`.
+
+| Piece | Status | PR |
+|---|---|---|
+| MIR `Function.ExportSymbol` + `define @<symbol>` override | landed (MIR path only) | #329 |
+| MIR `Function.CABI` + `define ccc <ret> @<sym>(...)` emission | landed (MIR path only) | #330 |
+| MIR `Function.IsIntrinsic` propagation + backend-bail safety net | landed (MIR path only) | #334 |
+| Legacy `GenerateModule(IR)` honoring `#[export]` / `#[c_abi]` | **deferred** | — |
+| Per-intrinsic LLVM emit for the 13 §19.5 `raw.*` intrinsics | **deferred** | — |
+| §19.7 lowering table (`raw.null` → `inttoptr i64 0`, etc.) | **deferred** | — |
+| §19.10 safepoint compiler-emitted root array | **deferred** | — |
+
+**Type system / native checker.** A known gap blocks intrinsic
+lowering even after the IR plumbing is in place.
+
+| Piece | Status | Notes |
+|---|---|---|
+| Stdlib member type inference for `use std.runtime.raw` | **gap** | Today `raw.null()` resolves but checks as `*ir.ErrType` because the native checker does not flow stdlib intrinsic return types back to call sites. Lowering work is blocked on this until fixed. |
+
+**Out-of-scope (per §19.1) — never planned.**
+
+- A user-facing `unsafe` block (§14 still excludes it).
+- Stackmap *introspection* intrinsics (the runtime walks the
+  compiler-emitted root array per §19.10, not the stack).
+- Volatile / atomic-fence / inline-assembly primitives. The first
+  GC delivered through this surface is single-threaded STW.
