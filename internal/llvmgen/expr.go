@@ -1947,6 +1947,45 @@ func (g *generator) emitMapInsert(base, key, val value) error {
 	return nil
 }
 
+// stdlib primitives/{int,float,bool}.osty declare toString as
+// `#[intrinsic_methods]` placeholders with empty bodies, which would
+// otherwise lower to dead IR; this dispatcher routes to the same
+// runtime helpers that emitInterpolationStringPiece uses.
+func (g *generator) emitPrimitiveToStringCall(call *ast.CallExpr) (value, bool, error) {
+	field, ok := call.Fn.(*ast.FieldExpr)
+	if !ok || field.IsOptional || field.Name != "toString" {
+		return value{}, false, nil
+	}
+	if len(call.Args) != 0 {
+		return value{}, false, nil
+	}
+	baseInfo, ok := g.staticExprInfo(field.X)
+	if !ok {
+		return value{}, false, nil
+	}
+	switch baseInfo.typ {
+	case "i64", "double", "i1":
+	default:
+		return value{}, false, nil
+	}
+	base, err := g.emitExpr(field.X)
+	if err != nil {
+		return value{}, true, err
+	}
+	switch base.typ {
+	case "i64":
+		out, err := g.emitRuntimeIntToString(base)
+		return out, true, err
+	case "double":
+		out, err := g.emitRuntimeFloatToString(base)
+		return out, true, err
+	case "i1":
+		out, err := g.emitRuntimeBoolToString(base)
+		return out, true, err
+	}
+	return value{}, false, nil
+}
+
 func (g *generator) emitListMethodCall(call *ast.CallExpr) (value, bool, error) {
 	field, elemTyp, elemString, found := g.listMethodInfo(call)
 	if !found {
@@ -2394,6 +2433,9 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 		return v, err
 	}
 	if v, found, err := g.emitSetMethodCall(call); found || err != nil {
+		return v, err
+	}
+	if v, found, err := g.emitPrimitiveToStringCall(call); found || err != nil {
 		return v, err
 	}
 	if v, found, err := g.emitOptionalUserCall(call); found || err != nil {
