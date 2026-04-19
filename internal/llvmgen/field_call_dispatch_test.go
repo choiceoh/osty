@@ -83,14 +83,13 @@ fn main() {
 	}
 	got := string(ir)
 	for _, want := range []string{
-		// Env type def emitted when any fn-value is materialised.
-		"%osty.closure.env.ptr = type { ptr }",
 		// Thunk symbol for the top-level identity fn.
 		"define private i64 @__osty_closure_thunk_identity(ptr %env, i64 %arg0)",
 		// Thunk body delegates to real symbol.
 		"call i64 @identity(i64 %arg0)",
-		// Env alloca in main + store of thunk addr.
-		"alloca %osty.closure.env.ptr",
+		// Env allocated on the GC heap (not stack) so the value can
+		// outlive the enclosing frame.
+		"call ptr @osty.gc.alloc_v1(i64 1, i64 8,",
 		"store ptr @__osty_closure_thunk_identity, ptr",
 		// Indirect call at the use site: load fn ptr from env[0],
 		// invoke through the loaded ptr with env as implicit arg 0.
@@ -100,6 +99,12 @@ fn main() {
 		if !strings.Contains(got, want) {
 			t.Fatalf("generated IR missing %q:\n%s", want, got)
 		}
+	}
+	// The env must be registered as a GC root slot so a collection
+	// triggered between the env-alloc and the indirect call won't
+	// reclaim it.
+	if !strings.Contains(got, "osty.gc.root_bind_v1") {
+		t.Fatalf("env not registered as a GC root:\n%s", got)
 	}
 }
 
@@ -134,8 +139,9 @@ fn main() {
 		t.Fatalf("direct call to @double missing:\n%s", got)
 	}
 	if strings.Count(got, "__osty_closure_thunk_double") < 2 {
-		// One occurrence in the `define` header, one in the store that
-		// materialises the env.
+		// One occurrence in the `define` header, one in the `store`
+		// that materialises the env (the GC-alloc line itself doesn't
+		// reference the thunk name, only the post-alloc store does).
 		t.Fatalf("expected thunk define + env store for @double, got:\n%s", got)
 	}
 }
@@ -189,6 +195,8 @@ fn main() {
 		"%Hook = type { ptr }",
 		// Thunk for inc so the value form has the env-first ABI.
 		"define private i64 @__osty_closure_thunk_inc(ptr %env, i64 %arg0)",
+		// The env is GC-allocated rather than stack-allocated.
+		"call ptr @osty.gc.alloc_v1(i64 1, i64 8,",
 		// The FieldExpr call path loads the fn ptr from env and
 		// dispatches through it.
 		"= call i64 (ptr, i64)",
@@ -226,10 +234,9 @@ fn main() {
 		// apply takes a ptr env as its first user-visible param.
 		"define i64 @apply(ptr %f, i64 %x)",
 		// The call-site inside apply loads fn ptr from env and dispatches.
-		"= load ptr, ptr %f",
 		"= call i64 (ptr, i64)",
-		// main materialises a closure env for `inc` and passes it to apply.
-		"%osty.closure.env.ptr = type { ptr }",
+		// main materialises a GC-heap env for `inc` and passes it to apply.
+		"call ptr @osty.gc.alloc_v1(i64 1, i64 8,",
 		"define private i64 @__osty_closure_thunk_inc(ptr %env, i64 %arg0)",
 	} {
 		if !strings.Contains(got, want) {

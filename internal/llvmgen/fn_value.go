@@ -19,12 +19,6 @@ import (
 	"github.com/osty/osty/internal/ast"
 )
 
-// fnValueEnvTypeName is the module-level struct used for bare
-// (no-captures) fn-value envs. A 1-field env is sufficient — the
-// thunk pointer. Closure envs with captures get their own types in
-// phase 2+.
-const fnValueEnvTypeName = "osty.closure.env.ptr"
-
 func fnValueThunkSymbol(realSymbol string) string {
 	return "__osty_closure_thunk_" + realSymbol
 }
@@ -74,27 +68,50 @@ func (g *generator) ensureFnValueThunk(sig *fnSig) string {
 	return symbol
 }
 
+// fnValueEnvKind is the GC kind tag for closure envs. Uses the
+// generic kind (1) for now — phase 1 envs have no captures so the
+// default trace-none/destroy-none layout works. Phase 4 will want
+// its own kind with a trace that marks captured ptrs.
+const fnValueEnvKind = 1
+
+// fnValueEnvByteSize is the size in bytes of the bare 1-field env.
+// Stays a compile-time literal because the env layout is fixed: one
+// ptr slot, 8 bytes on every target this backend supports (LLVM
+// target triple is 64-bit).
+const fnValueEnvByteSize = 8
+
 // emitFnValueEnv materialises a 1-field closure env holding the
 // thunk pointer for the given top-level fn. Returns a `ptr`-typed
 // value tagged with fnSigRef so a subsequent call site can do
 // indirect dispatch with the correct signature.
 //
-// The alloca is emitted into the current function's body. Callers
-// must already be inside a function — there is no module-level
-// fn-value literal path (globals would need a separate constant
-// initialiser ABI; deferred until a user-visible need appears).
+// Allocation goes through the GC (`osty.gc.alloc_v1`) rather than a
+// stack alloca so the env can safely outlive the enclosing frame —
+// e.g. when stored in a `List<fn(...)>`, a struct field, or passed
+// into a higher-order fn that memoises it. The returned value is
+// tagged `gcManaged: true` so downstream `bindNamedLocal` registers
+// it as a frame root.
+//
+// Callers must already be inside a function — there is no
+// module-level fn-value literal path (globals would need a separate
+// constant initialiser ABI; deferred until a user-visible need
+// appears).
 func (g *generator) emitFnValueEnv(sig *fnSig) (value, error) {
 	if sig == nil {
 		return value{}, unsupportedf("call", "fn-value env for nil signature")
 	}
 	thunk := g.ensureFnValueThunk(sig)
-	g.fnValueEnvTypeNeeded = true
 	emitter := g.toOstyEmitter()
-	slot := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca %%%s", slot, fnValueEnvTypeName))
-	emitter.body = append(emitter.body, fmt.Sprintf("  store ptr @%s, ptr %s", thunk, slot))
+	env := llvmGcAlloc(emitter, fnValueEnvKind, fnValueEnvByteSize, "runtime.closure.env.ptr")
+	emitter.body = append(emitter.body, fmt.Sprintf("  store ptr @%s, ptr %s", thunk, env.name))
 	g.takeOstyEmitter(emitter)
-	return value{typ: "ptr", ref: slot, fnSigRef: sig}, nil
+	g.needsGCRuntime = true
+	return value{
+		typ:       "ptr",
+		ref:       env.name,
+		fnSigRef:  sig,
+		gcManaged: true,
+	}, nil
 }
 
 // emitFnValueIndirectCall lowers a call through a fn-value env.
@@ -160,13 +177,6 @@ func (g *generator) emitFnValueIndirectCall(envVal value, sig *fnSig, args []*Ll
 	out.gcManaged = valueNeedsManagedRoot(out)
 	out.rootPaths = g.rootPathsForType(out.typ)
 	return out, nil
-}
-
-// fnValueEnvTypeDef returns the module-level struct def for the bare
-// (1-field) fn-value env, emitted into the module's type-def block
-// when any fn-value has been materialised.
-func fnValueEnvTypeDef() string {
-	return fmt.Sprintf("%%%s = type { ptr }", fnValueEnvTypeName)
 }
 
 // synthFnSigFromFnType builds a call-site-only *fnSig from an
