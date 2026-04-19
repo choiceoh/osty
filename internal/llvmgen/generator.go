@@ -51,10 +51,6 @@ type generator struct {
 	// first / machinery second. See fn_value.go.
 	fnValueThunkDefs  map[string]string
 	fnValueThunkOrder []string
-	// True once any fn-value env has been materialised; gates the
-	// module-level `%osty.closure.env.ptr` typedef so plain programs
-	// that never touch first-class fns stay free of the noise.
-	fnValueEnvTypeNeeded bool
 
 	temp              int
 	label             int
@@ -228,9 +224,6 @@ func (g *generator) render(defs []string) []byte {
 	allDefs = append(allDefs, g.globalDefs...)
 	allDefs = append(allDefs, defs...)
 	typeDefs := make([]string, 0, len(g.structs)+len(g.enumsByType)+len(g.tupleTypes)+len(g.resultTypes))
-	if g.fnValueEnvTypeNeeded {
-		typeDefs = append(typeDefs, fnValueEnvTypeDef())
-	}
 	for _, info := range g.structs {
 		fieldTypes := make([]string, 0, len(info.fields))
 		for _, field := range info.fields {

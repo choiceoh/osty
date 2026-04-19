@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/parser"
 )
 
@@ -227,6 +228,65 @@ func TestSweepToolchainLargeTailLLVM015Subwalls(t *testing.T) {
 		}
 		t.Logf("  %s — %s", name, err.Error())
 	}
+}
+
+// TestSweepToolchainPackageLevel merges every non-test
+// toolchain/*.osty file into a SINGLE combined `ast.File` before
+// lowering. This matches what `osty build` does for a real package
+// — cross-file fn references (e.g. `stringUnitCount` defined in
+// `semver_parse.osty` but called from `frontend.osty`) resolve
+// because every top-level decl is in the same `g.functions` map.
+//
+// Contrast with TestSweepToolchainLargeTail which lowers each file
+// in isolation. The single-file view is useful for attributing a
+// wall to a specific source file, but it over-reports LLVM015 on
+// benign cross-file references (the "test-harness artifact" noted
+// in PR #375).
+//
+// Info-only: never fails. Prints CLEAN or the single wall so the
+// operator can tell whether the remaining single-file LLVM015 was a
+// true capability gap or just missing-symbol noise.
+func TestSweepToolchainPackageLevel(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+	dir := filepath.Join(root, "toolchain")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read toolchain: %v", err)
+	}
+
+	var merged ast.File
+	sourceCount := 0
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasSuffix(name, ".osty") || strings.HasSuffix(name, "_test.osty") {
+			continue
+		}
+		src, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			continue
+		}
+		file, _ := parser.ParseDiagnostics(src)
+		if file == nil {
+			continue
+		}
+		merged.Uses = append(merged.Uses, file.Uses...)
+		merged.Decls = append(merged.Decls, file.Decls...)
+		sourceCount++
+	}
+	t.Logf("merged %d source files into one package", sourceCount)
+
+	_, err = generateFromAST(&merged, Options{
+		PackageName: "toolchain",
+		SourcePath:  filepath.Join(dir, "<package>"),
+	})
+	if err == nil {
+		t.Logf("=== package-level wall === CLEAN")
+		return
+	}
+	t.Logf("=== package-level wall === %s", formatWall(err))
 }
 
 func wallCode(msg string) string {
