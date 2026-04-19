@@ -134,6 +134,7 @@ func (l *lowerer) lowerFnDecl(fn *ast.FnDecl) *FnDecl {
 		ExportSymbol: extractExportSymbol(fn.Annotations),
 		CABI:         hasNamedAnnotation(fn.Annotations, "c_abi"),
 		IsIntrinsic:  hasNamedAnnotation(fn.Annotations, "intrinsic"),
+		NoAlloc:      hasNamedAnnotation(fn.Annotations, "no_alloc"),
 	}
 	if out.Return == nil {
 		out.Return = TUnit
@@ -229,6 +230,8 @@ func (l *lowerer) lowerStructDecl(sd *ast.StructDecl) *StructDecl {
 		Name:     sd.Name,
 		Exported: sd.Pub,
 		SpanV:    nodeSpan(sd),
+		Pod:      hasNamedAnnotation(sd.Annotations, "pod"),
+		ReprC:    hasNamedAnnotation(sd.Annotations, "repr"),
 	}
 	for _, gp := range sd.Generics {
 		out.Generics = append(out.Generics, l.lowerTypeParam(gp, sd.Name))
