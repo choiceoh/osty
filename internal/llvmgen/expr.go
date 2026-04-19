@@ -2532,6 +2532,15 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 	if v, found, err := g.emitRuntimeFFICall(call); found || err != nil {
 		return v, err
 	}
+	// Interface downcast: `recv.downcast::<T>()` — compares the runtime
+	// vtable pointer embedded in the receiver's `%osty.iface` value
+	// against the vtable symbol known for `T`. Placed before the
+	// generic interface-method-call path so the turbofish shape isn't
+	// mistaken for a regular method call on a non-existent method
+	// named `downcast`. See iface_downcast.go for the lowering.
+	if v, found, err := g.emitInterfaceDowncastCall(call); found || err != nil {
+		return v, err
+	}
 	// Phase 6b: interface value method dispatch via `%osty.iface` vtable.
 	if v, found, err := g.emitInterfaceMethodCall(call); found || err != nil {
 		return v, err
