@@ -628,6 +628,8 @@ func llvmCStringEscape(text string) string {
 		} else if unit == "\\" {
 			// Osty: examples/selfhost-core/llvmgen.osty:401:13
 			encoded = fmt.Sprintf("%s\\5C", ostyToString(encoded))
+		} else if unit == "\x1f" {
+			encoded = fmt.Sprintf("%s\\1F", ostyToString(encoded))
 		} else {
 			// Osty: examples/selfhost-core/llvmgen.osty:403:13
 			encoded = fmt.Sprintf("%s%s", ostyToString(encoded), ostyToString(unit))
@@ -1334,7 +1336,7 @@ func llvmLogicalInstruction(op string) string {
 
 func llvmIsAsciiStringText(text string) bool {
 	for _, c := range text {
-		if c == '\n' || c == '\t' || c == '\r' {
+		if c == '\n' || c == '\t' || c == '\r' || c == '\x1f' {
 			continue
 		}
 		if c < ' ' || c > '~' {
