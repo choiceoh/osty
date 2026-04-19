@@ -75,6 +75,9 @@ func (g *generator) emitStdStringsCall(call *ast.CallExpr) (value, bool, error) 
 	case "split":
 		v, err := g.emitStdStringsSplit(call)
 		return v, true, err
+	case "splitN":
+		v, err := g.emitStdStringsSplitN(call)
+		return v, true, err
 	case "trimPrefix":
 		v, err := g.emitStdStringsBinaryString(call, "trimPrefix", llvmStringRuntimeTrimPrefixSymbol())
 		return v, true, err
@@ -112,7 +115,7 @@ func (g *generator) stdStringsCallStaticResult(call *ast.CallExpr) (value, bool)
 		return value{typ: "i1"}, true
 	case "concat", "join", "trim", "trimSpace", "trimPrefix", "trimSuffix":
 		return value{typ: "ptr", gcManaged: true}, true
-	case "split":
+	case "split", "splitN":
 		return value{typ: "ptr", gcManaged: true, listElemTyp: "ptr", listElemString: true}, true
 	}
 	return value{}, false
@@ -134,6 +137,50 @@ func (g *generator) emitStdStringsSplit(call *ast.CallExpr) (value, error) {
 	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "ptr"}, {typ: "ptr"}})
 	emitter := g.toOstyEmitter()
 	out := llvmCall(emitter, "ptr", symbol, []*LlvmValue{toOstyValue(s), toOstyValue(sep)})
+	g.takeOstyEmitter(emitter)
+	parts := fromOstyValue(out)
+	parts.gcManaged = true
+	parts.listElemTyp = "ptr"
+	parts.listElemString = true
+	return parts, nil
+}
+
+// emitStdStringsSplitN mirrors emitStdStringsSplit but threads a third
+// Int argument to the runtime cap. The runtime body lives in
+// osty_rt_strings_SplitN; semantics match the pure-Osty stdlib body.
+// `n` bypasses emitStdStringsArg because that helper enforces ptr
+// (String) for every argument — splitN's count is the one outlier.
+func (g *generator) emitStdStringsSplitN(call *ast.CallExpr) (value, error) {
+	if len(call.Args) != 3 {
+		return value{}, unsupportedf("call", "strings.splitN expects 3 arguments, got %d", len(call.Args))
+	}
+	s, err := g.emitStdStringsArg(call.Args[0], "splitN", 0)
+	if err != nil {
+		return value{}, err
+	}
+	sep, err := g.emitStdStringsArg(call.Args[1], "splitN", 1)
+	if err != nil {
+		return value{}, err
+	}
+	nArg := call.Args[2]
+	if nArg == nil || nArg.Name != "" || nArg.Value == nil {
+		return value{}, unsupportedf("call", "strings.splitN requires positional arguments")
+	}
+	nVal, err := g.emitExpr(nArg.Value)
+	if err != nil {
+		return value{}, err
+	}
+	nLoaded, err := g.loadIfPointer(nVal)
+	if err != nil {
+		return value{}, err
+	}
+	if nLoaded.typ != "i64" {
+		return value{}, unsupportedf("type-system", "strings.splitN arg 3 type %s, want Int", nLoaded.typ)
+	}
+	symbol := llvmStringRuntimeSplitNSymbol()
+	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "ptr"}, {typ: "ptr"}, {typ: "i64"}})
+	emitter := g.toOstyEmitter()
+	out := llvmCall(emitter, "ptr", symbol, []*LlvmValue{toOstyValue(s), toOstyValue(sep), toOstyValue(nLoaded)})
 	g.takeOstyEmitter(emitter)
 	parts := fromOstyValue(out)
 	parts.gcManaged = true

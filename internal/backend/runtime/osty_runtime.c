@@ -969,6 +969,63 @@ void *osty_rt_strings_Split(const char *value, const char *sep) {
     return out;
 }
 
+// osty_rt_strings_SplitN caps the output at `n` pieces, matching the
+// pure-Osty body in internal/stdlib/modules/strings.osty:
+//   n == 0 → empty list
+//   n <  0 → unbounded split (delegate to osty_rt_strings_Split)
+//   n == 1 → single-element list containing the original string
+//   n >  1 → split at the first n-1 separator occurrences, then append
+//            the remainder as the last element.
+// Empty separator falls back to byte-level expansion — we match the
+// surrounding Split semantics rather than Osty's char-level split,
+// because every other runtime here is byte-level. Toolchain callers
+// pass ASCII separators ("+", "-", "."), so this does not regress.
+void *osty_rt_strings_SplitN(const char *value, const char *sep, int64_t n) {
+    osty_rt_list *out;
+    const char *cursor;
+    const char *next;
+    size_t sep_len;
+    int64_t produced;
+
+    if (n == 0) {
+        return osty_rt_list_new();
+    }
+    if (n < 0) {
+        return osty_rt_strings_Split(value, sep);
+    }
+    out = (osty_rt_list *)osty_rt_list_new();
+    if (value == NULL) {
+        osty_rt_list_push_ptr(out, osty_rt_string_dup_range("", 0));
+        return out;
+    }
+    if (n == 1) {
+        osty_rt_list_push_ptr(out, osty_rt_string_dup_range(value, strlen(value)));
+        return out;
+    }
+    if (sep == NULL || sep[0] == '\0') {
+        produced = 0;
+        while (*value != '\0' && produced + 1 < n) {
+            char *piece = osty_rt_string_dup_range(value, 1);
+            osty_rt_list_push_ptr(out, piece);
+            value += 1;
+            produced++;
+        }
+        osty_rt_list_push_ptr(out, osty_rt_string_dup_range(value, strlen(value)));
+        return out;
+    }
+    sep_len = strlen(sep);
+    cursor = value;
+    produced = 0;
+    while (produced + 1 < n && (next = strstr(cursor, sep)) != NULL) {
+        char *piece = osty_rt_string_dup_range(cursor, (size_t)(next - cursor));
+        osty_rt_list_push_ptr(out, piece);
+        cursor = next + sep_len;
+        produced++;
+    }
+    osty_rt_list_push_ptr(out, osty_rt_string_dup_range(cursor, strlen(cursor)));
+    return out;
+}
+
 const char *osty_rt_strings_Join(void *raw_parts, const char *sep) {
     osty_rt_list *parts;
     int64_t i;

@@ -2119,6 +2119,10 @@ func llvmStringRuntimeSplitSymbol() string {
 	return "osty_rt_strings_Split"
 }
 
+func llvmStringRuntimeSplitNSymbol() string {
+	return "osty_rt_strings_SplitN"
+}
+
 func llvmStringRuntimeConcatSymbol() string {
 	return "osty_rt_strings_Concat"
 }
