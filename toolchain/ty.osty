@@ -16,7 +16,8 @@
 //
 // - Primitives are interned once at arena-creation time and returned as
 //   canonical indices (`tInt(arena)`, `tBool(arena)`, ...). Named /
-//   tuple / fn / var / optional types allocate fresh nodes.
+//   tuple / fn / optional / Self types also intern through a
+//   structural key so repeated rebuilds reuse the same indices.
 //
 // - `tyFromString` is a transitional bridge: it parses the legacy
 //   `"Head<Arg, ...>"` / `"fn(A) -> R"` / `"(A, B)"` serializations used
@@ -86,6 +87,8 @@ pub struct TyNode {
 /// never allocate a fresh node for `Int`, `Bool`, ...
 pub struct TyArena {
     pub nodes: List<TyNode>,
+    pub internKeys: List<String>,
+    pub internValues: List<Int>,
 
     pub idxErr: Int,
     pub idxInt: Int,
@@ -133,6 +136,8 @@ pub fn emptyTyNode() -> TyNode {
 pub fn emptyTyArena() -> TyArena {
     let mut arena = TyArena {
         nodes: [],
+        internKeys: [],
+        internValues: [],
         idxErr: -1,
         idxInt: -1, idxInt8: -1, idxInt16: -1, idxInt32: -1, idxInt64: -1,
         idxUInt8: -1, idxUInt16: -1, idxUInt32: -1, idxUInt64: -1,
@@ -186,15 +191,10 @@ fn tyAllocPrim(arena: TyArena, prim: PrimKind) -> Int {
     idx
 }
 
-/// tyNodeCount returns the arena node count. Used as an O(n) pre-push
-/// allocation index; callers inside hot loops should hoist this.
+/// tyNodeCount returns the arena node count. The underlying list length
+/// is already tracked by the runtime, so this stays O(1).
 pub fn tyNodeCount(arena: TyArena) -> Int {
-    let mut count = 0
-    for n in arena.nodes {
-        let _ = n
-        count = count + 1
-    }
-    count
+    arena.nodes.len()
 }
 
 // ---------------------------------------------------------------------
@@ -226,7 +226,8 @@ pub fn tUntypedInt(arena: TyArena) -> Int { arena.idxUntypedInt }
 pub fn tUntypedFloat(arena: TyArena) -> Int { arena.idxUntypedFloat }
 
 // ---------------------------------------------------------------------
-// Builders — always allocate a fresh node. No interning beyond prims.
+// Builders — primitives stay canonical, while composite type shapes
+// intern through structural keys.
 // ---------------------------------------------------------------------
 
 /// tyPrim returns the canonical index for a primitive kind. Prefer the
@@ -262,50 +263,42 @@ pub fn tyPrim(arena: TyArena, prim: PrimKind) -> Int {
 /// tyNamed allocates a named type `head<args...>` node. `args` may be
 /// empty, meaning a plain type like `String` used in type position.
 pub fn tyNamed(arena: TyArena, head: String, args: List<Int>) -> Int {
-    let idx = tyNodeCount(arena)
     let node = TyNode {
         kind: TkNamed, prim: PkInvalid, head, args, ret: -1,
         varId: 0, varName: "", varOwner: "",
     }
-    arena.nodes.push(node)
-    idx
+    tyInternNode(arena, tyKeyNamed(node.head, node.args), node)
 }
 
 /// tyTuple allocates a tuple-type node. `()` is represented by an empty
 /// elems list; callers that want the canonical unit type should use
 /// `tUnit` instead.
 pub fn tyTuple(arena: TyArena, elems: List<Int>) -> Int {
-    let idx = tyNodeCount(arena)
     let node = TyNode {
         kind: TkTuple, prim: PkInvalid, head: "", args: elems, ret: -1,
         varId: 0, varName: "", varOwner: "",
     }
-    arena.nodes.push(node)
-    idx
+    tyInternNode(arena, tyKeyTuple(node.args), node)
 }
 
 /// tyFn allocates an `fn(params...) -> ret` node. `ret` may be
 /// `tUnit(arena)` for Unit-returning functions and `tNever(arena)` for
 /// diverging ones; callers must pre-canonicalise.
 pub fn tyFn(arena: TyArena, params: List<Int>, ret: Int) -> Int {
-    let idx = tyNodeCount(arena)
     let node = TyNode {
         kind: TkFn, prim: PkInvalid, head: "", args: params, ret,
         varId: 0, varName: "", varOwner: "",
     }
-    arena.nodes.push(node)
-    idx
+    tyInternNode(arena, tyKeyFn(node.args, node.ret), node)
 }
 
 /// tyOptional allocates a `T?` node with `inner` as the wrapped index.
 pub fn tyOptional(arena: TyArena, inner: Int) -> Int {
-    let idx = tyNodeCount(arena)
     let node = TyNode {
         kind: TkOptional, prim: PkInvalid, head: "", args: [], ret: inner,
         varId: 0, varName: "", varOwner: "",
     }
-    arena.nodes.push(node)
-    idx
+    tyInternNode(arena, tyKeyOptional(node.ret), node)
 }
 
 /// tyVarFresh allocates a fresh unification variable. `owner` is the
@@ -325,13 +318,71 @@ pub fn tyVarFresh(arena: TyArena, owner: String, name: String) -> Int {
 /// impl). The elaborator substitutes it away once the receiver type is
 /// known.
 pub fn tySelf(arena: TyArena, owner: String) -> Int {
-    let idx = tyNodeCount(arena)
     let node = TyNode {
         kind: TkSelf, prim: PkInvalid, head: owner, args: [], ret: -1,
         varId: 0, varName: "", varOwner: "",
     }
+    tyInternNode(arena, tyKeySelf(node.head), node)
+}
+
+fn tyInternNode(arena: TyArena, key: String, node: TyNode) -> Int {
+    let existing = tyLookupInterned(arena, key)
+    if existing >= 0 {
+        return existing
+    }
+    let idx = tyNodeCount(arena)
     arena.nodes.push(node)
+    arena.internKeys.push(key)
+    arena.internValues.push(idx)
     idx
+}
+
+fn tyLookupInterned(arena: TyArena, key: String) -> Int {
+    let mut i = 0
+    let n = arena.internKeys.len()
+    for i < n {
+        if arena.internKeys[i] == key {
+            return arena.internValues[i]
+        }
+        i = i + 1
+    }
+    -1
+}
+
+fn tyKeyNamed(head: String, args: List<Int>) -> String {
+    "N|{head}|{tyKeyArgs(args)}"
+}
+
+fn tyKeyTuple(args: List<Int>) -> String {
+    "T|{tyKeyArgs(args)}"
+}
+
+fn tyKeyFn(args: List<Int>, ret: Int) -> String {
+    "F|{tyKeyArgs(args)}|{ret}"
+}
+
+fn tyKeyOptional(inner: Int) -> String {
+    "O|{inner}"
+}
+
+fn tyKeySelf(owner: String) -> String {
+    "S|{owner}"
+}
+
+fn tyKeyArgs(args: List<Int>) -> String {
+    if args.len() == 0 {
+        return ""
+    }
+    let mut out = ""
+    let mut i = 0
+    for arg in args {
+        if i > 0 {
+            out = "{out},"
+        }
+        out = "{out}{arg}"
+        i = i + 1
+    }
+    out
 }
 
 // ---------------------------------------------------------------------
@@ -342,17 +393,10 @@ pub fn tySelf(arena: TyArena, owner: String) -> Int {
 /// is out of range. Prefer the kind-specific helpers below for hot
 /// paths.
 pub fn tyGet(arena: TyArena, idx: Int) -> TyNode {
-    if idx < 0 {
+    if idx < 0 || idx >= arena.nodes.len() {
         return emptyTyNode()
     }
-    let mut i = 0
-    for n in arena.nodes {
-        if i == idx {
-            return n
-        }
-        i = i + 1
-    }
-    emptyTyNode()
+    arena.nodes[idx]
 }
 
 pub fn tyKindAt(arena: TyArena, idx: Int) -> TyKind {
@@ -512,23 +556,14 @@ fn tyEqList(arena: TyArena, xs: List<Int>, ys: List<Int>) -> Bool {
 }
 
 fn tyIntListLen(xs: List<Int>) -> Int {
-    let mut count = 0
-    for x in xs {
-        let _ = x
-        count = count + 1
-    }
-    count
+    xs.len()
 }
 
 fn tyIntAt(xs: List<Int>, idx: Int) -> Int {
-    let mut i = 0
-    for x in xs {
-        if i == idx {
-            return x
-        }
-        i = i + 1
+    if idx < 0 || idx >= xs.len() {
+        return -1
     }
-    -1
+    xs[idx]
 }
 
 // ---------------------------------------------------------------------

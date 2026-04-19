@@ -193,7 +193,7 @@ pub fn checkScopeMark(env: CheckEnv) -> Int {
 pub fn checkScopeDrop(env: CheckEnv, mark: Int) {
     // Repeatedly pop the tail until we are back at `mark`. Osty lists
     // support `.pop()`; the early-break guards against negative marks.
-    let mut current = checkBindingCount(env)
+    let mut current = env.bindings.len()
     for current > mark {
         let _ = env.bindings.pop()
         current = current - 1
@@ -201,12 +201,7 @@ pub fn checkScopeDrop(env: CheckEnv, mark: Int) {
 }
 
 pub fn checkBindingCount(env: CheckEnv) -> Int {
-    let mut n = 0
-    for b in env.bindings {
-        let _ = b
-        n = n + 1
-    }
-    n
+    env.bindings.len()
 }
 
 // ---------------------------------------------------------------------
@@ -244,23 +239,27 @@ pub fn checkBindSpan(env: CheckEnv, name: String, ty: Int, mutable: Bool, start:
 /// the most recent binding for `name`. Returns `-1` (no type) when
 /// `name` is not in scope.
 pub fn checkLookup(env: CheckEnv, name: String) -> Int {
-    let mut found = -1
-    for b in env.bindings {
+    let mut i = env.bindings.len() - 1
+    for i >= 0 {
+        let b = env.bindings[i]
         if b.name == name {
-            found = b.ty
+            return b.ty
         }
+        i = i - 1
     }
-    found
+    -1
 }
 
 pub fn checkLookupMutable(env: CheckEnv, name: String) -> Bool {
-    let mut mutable = false
-    for b in env.bindings {
+    let mut i = env.bindings.len() - 1
+    for i >= 0 {
+        let b = env.bindings[i]
         if b.name == name {
-            mutable = b.mutable
+            return b.mutable
         }
+        i = i - 1
     }
-    mutable
+    false
 }
 
 // ---------------------------------------------------------------------
@@ -272,10 +271,13 @@ pub fn checkRegisterFn(env: CheckEnv, sig: CheckFnSig) {
 }
 
 pub fn checkLookupFn(env: CheckEnv, name: String, owner: String) -> CheckFnSig {
-    for sig in env.fns {
+    let mut i = env.fns.len() - 1
+    for i >= 0 {
+        let sig = env.fns[i]
         if sig.name == name && sig.owner == owner {
             return sig
         }
+        i = i - 1
     }
     emptyCheckFnSig()
 }
@@ -317,10 +319,13 @@ pub fn checkRegisterField(env: CheckEnv, field: CheckFieldSig) {
 }
 
 pub fn checkLookupField(env: CheckEnv, owner: String, name: String) -> CheckFieldSig {
-    for f in env.fields {
+    let mut i = env.fields.len() - 1
+    for i >= 0 {
+        let f = env.fields[i]
         if f.owner == owner && f.name == name {
             return f
         }
+        i = i - 1
     }
     emptyCheckFieldSig()
 }
@@ -330,19 +335,25 @@ pub fn checkRegisterVariant(env: CheckEnv, variant: CheckVariantSig) {
 }
 
 pub fn checkLookupVariant(env: CheckEnv, name: String) -> CheckVariantSig {
-    for v in env.variants {
+    let mut i = env.variants.len() - 1
+    for i >= 0 {
+        let v = env.variants[i]
         if v.name == name {
             return v
         }
+        i = i - 1
     }
     emptyCheckVariantSig()
 }
 
 pub fn checkLookupVariantInOwner(env: CheckEnv, owner: String, name: String) -> CheckVariantSig {
-    for v in env.variants {
+    let mut i = env.variants.len() - 1
+    for i >= 0 {
+        let v = env.variants[i]
         if v.owner == owner && v.name == name {
             return v
         }
+        i = i - 1
     }
     emptyCheckVariantSig()
 }
@@ -352,10 +363,13 @@ pub fn checkRegisterAlias(env: CheckEnv, alias: CheckAliasSig) {
 }
 
 pub fn checkLookupAlias(env: CheckEnv, name: String) -> CheckAliasSig {
-    for a in env.aliases {
+    let mut i = env.aliases.len() - 1
+    for i >= 0 {
+        let a = env.aliases[i]
         if a.name == name {
             return a
         }
+        i = i - 1
     }
     emptyCheckAliasSig()
 }
@@ -365,10 +379,13 @@ pub fn checkRegisterType(env: CheckEnv, sig: CheckTypeSig) {
 }
 
 pub fn checkLookupType(env: CheckEnv, name: String) -> CheckTypeSig {
-    for t in env.types {
+    let mut i = env.types.len() - 1
+    for i >= 0 {
+        let t = env.types[i]
         if t.name == name {
             return t
         }
+        i = i - 1
     }
     emptyCheckTypeSig()
 }
@@ -419,13 +436,15 @@ pub fn checkAddGenericBound(env: CheckEnv, bound: CheckGenericBound) {
 }
 
 pub fn checkLookupGenericBound(env: CheckEnv, tyParam: String) -> Int {
-    let mut found = -1
-    for b in env.genericBounds {
+    let mut i = env.genericBounds.len() - 1
+    for i >= 0 {
+        let b = env.genericBounds[i]
         if b.tyParam == tyParam {
-            found = b.iface
+            return b.iface
         }
+        i = i - 1
     }
-    found
+    -1
 }
 
 pub fn checkGenericBoundsFor(env: CheckEnv, tyParam: String) -> List<Int> {
@@ -451,12 +470,7 @@ pub fn checkGenericBoundMark(env: CheckEnv) -> Int {
 }
 
 fn checkGenericBoundCount(env: CheckEnv) -> Int {
-    let mut n = 0
-    for b in env.genericBounds {
-        let _ = b
-        n = n + 1
-    }
-    n
+    env.genericBounds.len()
 }
 
 // ---------------------------------------------------------------------
@@ -880,12 +894,7 @@ fn checkConcreteMethodTy(env: CheckEnv, sig: CheckFnSig, ownerTy: Int) -> Int {
 // ---------------------------------------------------------------------
 
 fn checkIntListLen(xs: List<Int>) -> Int {
-    let mut n = 0
-    for x in xs {
-        let _ = x
-        n = n + 1
-    }
-    n
+    xs.len()
 }
 
 fn checkStringListLen(xs: List<String>) -> Int {
@@ -899,8 +908,9 @@ fn checkStringListLen(xs: List<String>) -> Int {
 
 fn checkIndexOfString(xs: List<String>, needle: String) -> Int {
     let mut i = 0
-    for x in xs {
-        if x == needle {
+    let n = xs.len()
+    for i < n {
+        if xs[i] == needle {
             return i
         }
         i = i + 1

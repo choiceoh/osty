@@ -118,6 +118,30 @@ fn testTyEqStructural() {
     testing.assert(!(tyEq(arena, f1, f3)))
 }
 
+fn testTyArenaInternsCompositeTypes() {
+    let arena = emptyTyArena()
+
+    let listA = tyNamed(arena, "List", [tInt(arena)])
+    let listB = tyNamed(arena, "List", [tInt(arena)])
+    testing.assertEq(listA, listB)
+
+    let fnA = tyFn(arena, [listA, tBool(arena)], tString(arena))
+    let fnB = tyFn(arena, [listB, tBool(arena)], tString(arena))
+    testing.assertEq(fnA, fnB)
+
+    let tupleA = tyTuple(arena, [listA, fnA])
+    let tupleB = tyTuple(arena, [listB, fnB])
+    testing.assertEq(tupleA, tupleB)
+
+    let optA = tyOptional(arena, tupleA)
+    let optB = tyOptional(arena, tupleB)
+    testing.assertEq(optA, optB)
+
+    let selfA = tySelf(arena, "Reader")
+    let selfB = tySelf(arena, "Reader")
+    testing.assertEq(selfA, selfB)
+}
+
 fn testTyFromStringUnknownYieldsErr() {
     let arena = emptyTyArena()
     testing.assertEq(tyToString(arena, tyFromString(arena, "")), "Invalid")

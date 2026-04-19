@@ -25909,6 +25909,8 @@ type TyNode struct {
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10195:5
 type TyArena struct {
 	nodes           []*TyNode
+	internKeys      []string
+	internValues    []int
 	idxErr          int
 	idxInt          int
 	idxInt8         int
@@ -25941,7 +25943,7 @@ func emptyTyNode() *TyNode {
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10241:5
 func emptyTyArena() *TyArena {
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10242:5
-	arena := &TyArena{nodes: make([]*TyNode, 0, 1), idxErr: -1, idxInt: -1, idxInt8: -1, idxInt16: -1, idxInt32: -1, idxInt64: -1, idxUInt8: -1, idxUInt16: -1, idxUInt32: -1, idxUInt64: -1, idxByte: -1, idxFloat: -1, idxFloat32: -1, idxFloat64: -1, idxBool: -1, idxChar: -1, idxString: -1, idxBytes: -1, idxUnit: -1, idxNever: -1, idxUntypedInt: -1, idxUntypedFloat: -1}
+	arena := &TyArena{nodes: make([]*TyNode, 0, 1), internKeys: make([]string, 0, 1), internValues: make([]int, 0, 1), idxErr: -1, idxInt: -1, idxInt8: -1, idxInt16: -1, idxInt32: -1, idxInt64: -1, idxUInt8: -1, idxUInt16: -1, idxUInt32: -1, idxUInt64: -1, idxByte: -1, idxFloat: -1, idxFloat32: -1, idxFloat64: -1, idxBool: -1, idxChar: -1, idxString: -1, idxBytes: -1, idxUnit: -1, idxNever: -1, idxUntypedInt: -1, idxUntypedFloat: -1}
 	_ = arena
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10252:10
 	arena.idxErr = tyAllocErr(arena)
@@ -26018,27 +26020,7 @@ func tyAllocPrim(arena *TyArena, prim PrimKind) int {
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10299:5
 func tyNodeCount(arena *TyArena) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10300:5
-	count := 0
-	_ = count
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10301:5
-	for _, n := range arena.nodes {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10302:9
-		_ = n
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10303:9
-		func() {
-			var _cur1957 int = count
-			var _rhs1958 int = 1
-			if _rhs1958 > 0 && _cur1957 > math.MaxInt-_rhs1958 {
-				panic("integer overflow")
-			}
-			if _rhs1958 < 0 && _cur1957 < math.MinInt-_rhs1958 {
-				panic("integer overflow")
-			}
-			count = _cur1957 + _rhs1958
-		}()
-	}
-	return count
+	return len(arena.nodes)
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10313:5
@@ -26228,54 +26210,34 @@ func tyPrim(arena *TyArena, prim PrimKind) int {
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10372:5
 func tyNamed(arena *TyArena, head string, args []int) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10373:5
-	idx := tyNodeCount(arena)
-	_ = idx
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10374:5
 	node := &TyNode{kind: TyKind(&TyKind_TkNamed{}), prim: PrimKind(&PrimKind_PkInvalid{}), head: head, args: args, ret: -1, varId: 0, varName: "", varOwner: ""}
 	_ = node
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10378:5
-	func() struct{} { arena.nodes = append(arena.nodes, node); return struct{}{} }()
-	return idx
+	return tyInternNode(arena, tyKeyNamed(node.head, node.args), node)
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10385:5
 func tyTuple(arena *TyArena, elems []int) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10386:5
-	idx := tyNodeCount(arena)
-	_ = idx
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10387:5
 	node := &TyNode{kind: TyKind(&TyKind_TkTuple{}), prim: PrimKind(&PrimKind_PkInvalid{}), head: "", args: elems, ret: -1, varId: 0, varName: "", varOwner: ""}
 	_ = node
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10391:5
-	func() struct{} { arena.nodes = append(arena.nodes, node); return struct{}{} }()
-	return idx
+	return tyInternNode(arena, tyKeyTuple(node.args), node)
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10398:5
 func tyFn(arena *TyArena, params []int, ret int) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10399:5
-	idx := tyNodeCount(arena)
-	_ = idx
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10400:5
 	node := &TyNode{kind: TyKind(&TyKind_TkFn{}), prim: PrimKind(&PrimKind_PkInvalid{}), head: "", args: params, ret: ret, varId: 0, varName: "", varOwner: ""}
 	_ = node
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10404:5
-	func() struct{} { arena.nodes = append(arena.nodes, node); return struct{}{} }()
-	return idx
+	return tyInternNode(arena, tyKeyFn(node.args, node.ret), node)
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10409:5
 func tyOptional(arena *TyArena, inner int) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10410:5
-	idx := tyNodeCount(arena)
-	_ = idx
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10411:5
 	node := &TyNode{kind: TyKind(&TyKind_TkOptional{}), prim: PrimKind(&PrimKind_PkInvalid{}), head: "", args: make([]int, 0, 1), ret: inner, varId: 0, varName: "", varOwner: ""}
 	_ = node
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10415:5
-	func() struct{} { arena.nodes = append(arena.nodes, node); return struct{}{} }()
-	return idx
+	return tyInternNode(arena, tyKeyOptional(node.ret), node)
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10422:5
@@ -26303,48 +26265,72 @@ func tyVarFresh(arena *TyArena, owner string, name string) int {
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10435:5
 func tySelf(arena *TyArena, owner string) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10436:5
-	idx := tyNodeCount(arena)
-	_ = idx
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10437:5
 	node := &TyNode{kind: TyKind(&TyKind_TkSelf{}), prim: PrimKind(&PrimKind_PkInvalid{}), head: owner, args: make([]int, 0, 1), ret: -1, varId: 0, varName: "", varOwner: ""}
 	_ = node
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10441:5
-	func() struct{} { arena.nodes = append(arena.nodes, node); return struct{}{} }()
+	return tyInternNode(arena, tyKeySelf(node.head), node)
+}
+
+func tyInternNode(arena *TyArena, key string, node *TyNode) int {
+	existing := tyLookupInterned(arena, key)
+	if existing >= 0 {
+		return existing
+	}
+	idx := tyNodeCount(arena)
+	arena.nodes = append(arena.nodes, node)
+	arena.internKeys = append(arena.internKeys, key)
+	arena.internValues = append(arena.internValues, idx)
 	return idx
+}
+
+func tyLookupInterned(arena *TyArena, key string) int {
+	for i := 0; i < len(arena.internKeys); i++ {
+		if arena.internKeys[i] == key {
+			return arena.internValues[i]
+		}
+	}
+	return -1
+}
+
+func tyKeyNamed(head string, args []int) string {
+	return fmt.Sprintf("N|%s|%s", head, tyKeyArgs(args))
+}
+
+func tyKeyTuple(args []int) string {
+	return fmt.Sprintf("T|%s", tyKeyArgs(args))
+}
+
+func tyKeyFn(args []int, ret int) string {
+	return fmt.Sprintf("F|%s|%d", tyKeyArgs(args), ret)
+}
+
+func tyKeyOptional(inner int) string {
+	return fmt.Sprintf("O|%d", inner)
+}
+
+func tyKeySelf(owner string) string {
+	return fmt.Sprintf("S|%s", owner)
+}
+
+func tyKeyArgs(args []int) string {
+	if len(args) == 0 {
+		return ""
+	}
+	out := fmt.Sprintf("%d", args[0])
+	for _, arg := range args[1:] {
+		out = fmt.Sprintf("%s,%d", out, arg)
+	}
+	return out
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10452:5
 func tyGet(arena *TyArena, idx int) *TyNode {
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10453:5
-	if idx < 0 {
+	if idx < 0 || idx >= len(arena.nodes) {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10454:9
 		return emptyTyNode()
 	}
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10456:5
-	i := 0
-	_ = i
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10457:5
-	for _, n := range arena.nodes {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10458:9
-		if i == idx {
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10459:13
-			return n
-		}
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10461:9
-		func() {
-			var _cur1962 int = i
-			var _rhs1963 int = 1
-			if _rhs1963 > 0 && _cur1962 > math.MaxInt-_rhs1963 {
-				panic("integer overflow")
-			}
-			if _rhs1963 < 0 && _cur1962 < math.MinInt-_rhs1963 {
-				panic("integer overflow")
-			}
-			i = _cur1962 + _rhs1963
-		}()
-	}
-	return emptyTyNode()
+	return arena.nodes[idx]
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10466:5
@@ -26565,55 +26551,15 @@ func tyEqList(arena *TyArena, xs []int, ys []int) bool {
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10622:1
 func tyIntListLen(xs []int) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10623:5
-	count := 0
-	_ = count
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10624:5
-	for _, x := range xs {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10625:9
-		_ = x
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10626:9
-		func() {
-			var _cur1967 int = count
-			var _rhs1968 int = 1
-			if _rhs1968 > 0 && _cur1967 > math.MaxInt-_rhs1968 {
-				panic("integer overflow")
-			}
-			if _rhs1968 < 0 && _cur1967 < math.MinInt-_rhs1968 {
-				panic("integer overflow")
-			}
-			count = _cur1967 + _rhs1968
-		}()
-	}
-	return count
+	return len(xs)
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10631:1
 func tyIntAt(xs []int, idx int) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10632:5
-	i := 0
-	_ = i
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10633:5
-	for _, x := range xs {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10634:9
-		if i == idx {
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10635:13
-			return x
-		}
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10637:9
-		func() {
-			var _cur1969 int = i
-			var _rhs1970 int = 1
-			if _rhs1970 > 0 && _cur1969 > math.MaxInt-_rhs1970 {
-				panic("integer overflow")
-			}
-			if _rhs1970 < 0 && _cur1969 < math.MinInt-_rhs1970 {
-				panic("integer overflow")
-			}
-			i = _cur1969 + _rhs1970
-		}()
+	if idx < 0 || idx >= len(xs) {
+		return -1
 	}
-	return -1
+	return xs[idx]
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10648:5
@@ -30777,27 +30723,7 @@ func checkScopeDrop(env *CheckEnv, mark int) {
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12905:5
 func checkBindingCount(env *CheckEnv) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12906:5
-	n := 0
-	_ = n
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12907:5
-	for _, b := range env.bindings {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12908:9
-		_ = b
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12909:9
-		func() {
-			var _cur2040 int = n
-			var _rhs2041 int = 1
-			if _rhs2041 > 0 && _cur2040 > math.MaxInt-_rhs2041 {
-				panic("integer overflow")
-			}
-			if _rhs2041 < 0 && _cur2040 < math.MinInt-_rhs2041 {
-				panic("integer overflow")
-			}
-			n = _cur2040 + _rhs2041
-		}()
-	}
-	return n
+	return len(env.bindings)
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12919:5
@@ -30829,34 +30755,22 @@ func checkBindSpan(env *CheckEnv, name string, ty int, mutable bool, start int, 
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12948:5
 func checkLookup(env *CheckEnv, name string) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12949:5
-	found := -1
-	_ = found
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12950:5
-	for _, b := range env.bindings {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12951:9
-		if b.name == name {
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12952:13
-			found = b.ty
+	for i := len(env.bindings) - 1; i >= 0; i-- {
+		if env.bindings[i].name == name {
+			return env.bindings[i].ty
 		}
 	}
-	return found
+	return -1
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12958:5
 func checkLookupMutable(env *CheckEnv, name string) bool {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12959:5
-	mutable := false
-	_ = mutable
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12960:5
-	for _, b := range env.bindings {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12961:9
-		if b.name == name {
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12962:13
-			mutable = b.mutable
+	for i := len(env.bindings) - 1; i >= 0; i-- {
+		if env.bindings[i].name == name {
+			return env.bindings[i].mutable
 		}
 	}
-	return mutable
+	return false
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12972:5
@@ -30867,11 +30781,9 @@ func checkRegisterFn(env *CheckEnv, sig *CheckFnSig) {
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12976:5
 func checkLookupFn(env *CheckEnv, name string, owner string) *CheckFnSig {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12977:5
-	for _, sig := range env.fns {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12978:9
+	for i := len(env.fns) - 1; i >= 0; i-- {
+		sig := env.fns[i]
 		if sig.name == name && sig.owner == owner {
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12979:13
 			return sig
 		}
 	}
@@ -30935,11 +30847,9 @@ func checkRegisterField(env *CheckEnv, field *CheckFieldSig) {
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13021:5
 func checkLookupField(env *CheckEnv, owner string, name string) *CheckFieldSig {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13022:5
-	for _, f := range env.fields {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13023:9
+	for i := len(env.fields) - 1; i >= 0; i-- {
+		f := env.fields[i]
 		if f.owner == owner && f.name == name {
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13024:13
 			return f
 		}
 	}
@@ -30954,11 +30864,9 @@ func checkRegisterVariant(env *CheckEnv, variant *CheckVariantSig) {
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13034:5
 func checkLookupVariant(env *CheckEnv, name string) *CheckVariantSig {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13035:5
-	for _, v := range env.variants {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13036:9
+	for i := len(env.variants) - 1; i >= 0; i-- {
+		v := env.variants[i]
 		if v.name == name {
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13037:13
 			return v
 		}
 	}
@@ -30967,11 +30875,9 @@ func checkLookupVariant(env *CheckEnv, name string) *CheckVariantSig {
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13043:5
 func checkLookupVariantInOwner(env *CheckEnv, owner string, name string) *CheckVariantSig {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13044:5
-	for _, v := range env.variants {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13045:9
+	for i := len(env.variants) - 1; i >= 0; i-- {
+		v := env.variants[i]
 		if v.owner == owner && v.name == name {
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13046:13
 			return v
 		}
 	}
@@ -30986,11 +30892,9 @@ func checkRegisterAlias(env *CheckEnv, alias *CheckAliasSig) {
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13056:5
 func checkLookupAlias(env *CheckEnv, name string) *CheckAliasSig {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13057:5
-	for _, a := range env.aliases {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13058:9
+	for i := len(env.aliases) - 1; i >= 0; i-- {
+		a := env.aliases[i]
 		if a.name == name {
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13059:13
 			return a
 		}
 	}
@@ -31005,11 +30909,9 @@ func checkRegisterType(env *CheckEnv, sig *CheckTypeSig) {
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13069:5
 func checkLookupType(env *CheckEnv, name string) *CheckTypeSig {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13070:5
-	for _, t := range env.types {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13071:9
+	for i := len(env.types) - 1; i >= 0; i-- {
+		t := env.types[i]
 		if t.name == name {
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13072:13
 			return t
 		}
 	}
@@ -31080,18 +30982,13 @@ func checkAddGenericBound(env *CheckEnv, bound *CheckGenericBound) {
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13123:5
 func checkLookupGenericBound(env *CheckEnv, tyParam string) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13124:5
-	found := -1
-	_ = found
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13125:5
-	for _, b := range env.genericBounds {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13126:9
+	for i := len(env.genericBounds) - 1; i >= 0; i-- {
+		b := env.genericBounds[i]
 		if b.tyParam == tyParam {
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13127:13
-			found = b.iface
+			return b.iface
 		}
 	}
-	return found
+	return -1
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13133:5
@@ -31150,27 +31047,7 @@ func checkGenericBoundMark(env *CheckEnv) int {
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13155:1
 func checkGenericBoundCount(env *CheckEnv) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13156:5
-	n := 0
-	_ = n
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13157:5
-	for _, b := range env.genericBounds {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13158:9
-		_ = b
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13159:9
-		func() {
-			var _cur2044 int = n
-			var _rhs2045 int = 1
-			if _rhs2045 > 0 && _cur2044 > math.MaxInt-_rhs2045 {
-				panic("integer overflow")
-			}
-			if _rhs2045 < 0 && _cur2044 < math.MinInt-_rhs2045 {
-				panic("integer overflow")
-			}
-			n = _cur2044 + _rhs2045
-		}()
-	}
-	return n
+	return len(env.genericBounds)
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13172:5
@@ -31992,27 +31869,7 @@ func checkConcreteMethodTy(env *CheckEnv, sig *CheckFnSig, ownerTy int) int {
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13584:1
 func checkIntListLen(xs []int) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13585:5
-	n := 0
-	_ = n
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13586:5
-	for _, x := range xs {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13587:9
-		_ = x
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13588:9
-		func() {
-			var _cur2072 int = n
-			var _rhs2073 int = 1
-			if _rhs2073 > 0 && _cur2072 > math.MaxInt-_rhs2073 {
-				panic("integer overflow")
-			}
-			if _rhs2073 < 0 && _cur2072 < math.MinInt-_rhs2073 {
-				panic("integer overflow")
-			}
-			n = _cur2072 + _rhs2073
-		}()
-	}
-	return n
+	return len(xs)
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13593:1
@@ -32042,28 +31899,10 @@ func checkStringListLen(xs []string) int {
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13602:1
 func checkIndexOfString(xs []string, needle string) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13603:5
-	i := 0
-	_ = i
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13604:5
-	for _, x := range xs {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13605:9
-		if x == needle {
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13606:13
+	for i := 0; i < len(xs); i++ {
+		if xs[i] == needle {
 			return i
 		}
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13608:9
-		func() {
-			var _cur2076 int = i
-			var _rhs2077 int = 1
-			if _rhs2077 > 0 && _cur2076 > math.MaxInt-_rhs2077 {
-				panic("integer overflow")
-			}
-			if _rhs2077 < 0 && _cur2076 < math.MinInt-_rhs2077 {
-				panic("integer overflow")
-			}
-			i = _cur2076 + _rhs2077
-		}()
 	}
 	return -1
 }
