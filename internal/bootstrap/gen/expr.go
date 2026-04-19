@@ -3800,7 +3800,6 @@ func (g *gen) emitIfLetInner(ie *ast.IfExpr, asExpr bool) {
 	g.body.indent()
 	g.emitPatternBindings(tmp, scrutT, ie.Pattern)
 	if asExpr {
-		g.body.write("return ")
 		g.emitArmBody(ie.Then)
 		g.body.nl()
 	} else {
@@ -3816,7 +3815,6 @@ func (g *gen) emitIfLetInner(ie *ast.IfExpr, asExpr bool) {
 		g.body.writeln("} else {")
 		g.body.indent()
 		if asExpr {
-			g.body.write("return ")
 			g.emitArmBody(els)
 			g.body.nl()
 		} else {
