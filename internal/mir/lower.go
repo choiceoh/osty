@@ -68,13 +68,13 @@ type lowerer struct {
 	src *ir.Module
 	out *Module
 
-	fnSig       map[string]*fnSignature
-	methods     map[string]*fnSignature
-	enums       map[string]*ir.EnumDecl
-	structs     map[string]*ir.StructDecl
-	globals     map[string]*ir.LetDecl
-	useAliases  map[string]*ir.UseDecl // alias name → use decl
-	closureSeq  int
+	fnSig      map[string]*fnSignature
+	methods    map[string]*fnSignature
+	enums      map[string]*ir.EnumDecl
+	structs    map[string]*ir.StructDecl
+	globals    map[string]*ir.LetDecl
+	useAliases map[string]*ir.UseDecl // alias name → use decl
+	closureSeq int
 }
 
 func (l *lowerer) noteIssue(format string, args ...any) {
@@ -1653,6 +1653,9 @@ func (bs *bodyState) lowerExprIntoPlace(e ir.Expr, dest Place, destT Type) {
 	case *ir.IntrinsicCall:
 		bs.lowerIntrinsicCallInto(x, &dest)
 		return
+	case *ir.MapLit:
+		bs.lowerMapLitInto(x, dest, destT)
+		return
 	}
 	// Default path: lower to an rvalue and assign.
 	rv := bs.lowerExprToRValue(e, destT)
@@ -2686,6 +2689,36 @@ func (bs *bodyState) lowerMethodCallInto(mc *ir.MethodCall, dest Place, destT Ty
 		Args:   callArgs,
 		SpanV:  mc.SpanV,
 	})
+}
+
+func (bs *bodyState) lowerMapLitInto(m *ir.MapLit, dest Place, destT Type) {
+	mapT := destT
+	if mapT == nil {
+		mapT = m.Type()
+	}
+	destPtr := &dest
+	if isUnit(mapT) {
+		destPtr = nil
+	}
+	bs.emit(&IntrinsicInstr{
+		Dest:  destPtr,
+		Kind:  IntrinsicMapNew,
+		SpanV: m.SpanV,
+	})
+	if len(m.Entries) == 0 {
+		return
+	}
+	for _, entry := range m.Entries {
+		bs.emit(&IntrinsicInstr{
+			Kind: IntrinsicMapSet,
+			Args: []Operand{
+				&CopyOp{Place: dest, T: mapT},
+				bs.lowerExprAsOperand(entry.Key),
+				bs.lowerExprAsOperand(entry.Value),
+			},
+			SpanV: entry.SpanV,
+		})
+	}
 }
 
 func (bs *bodyState) lowerIntrinsicCallInto(ic *ir.IntrinsicCall, dest *Place) {

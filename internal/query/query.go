@@ -4,7 +4,6 @@ import (
 	"bytes"
 
 	"github.com/osty/osty/internal/resolve"
-	"github.com/osty/osty/internal/stdlib"
 )
 
 // ---- Frame ----
@@ -55,7 +54,7 @@ func (c *Ctx) Prelude() *resolve.Scope { return c.db.prelude }
 
 // Stdlib returns the process-lifetime stdlib registry. Not dependency-
 // tracked for the same reason as Prelude.
-func (c *Ctx) Stdlib() *stdlib.Registry { return c.db.stdlib }
+func (c *Ctx) Stdlib() resolve.StdlibProvider { return c.db.stdlib }
 
 // ---- QueryFn, Query, Input ----
 

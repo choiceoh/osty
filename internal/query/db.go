@@ -23,7 +23,6 @@ import (
 	"sync"
 
 	"github.com/osty/osty/internal/resolve"
-	"github.com/osty/osty/internal/stdlib"
 )
 
 // Revision is a monotonically increasing counter stamped onto every
@@ -88,13 +87,13 @@ type Database struct {
 	// [Ctx.Prelude] / [Ctx.Stdlib] without recording a dep edge —
 	// they never change.
 	prelude *resolve.Scope
-	stdlib  *stdlib.Registry
+	stdlib  resolve.StdlibProvider
 }
 
 // NewDatabase constructs a Database with the given process-lifetime
 // prelude and stdlib registry. Both may be nil for test harnesses that
 // don't need them.
-func NewDatabase(prelude *resolve.Scope, reg *stdlib.Registry) *Database {
+func NewDatabase(prelude *resolve.Scope, reg resolve.StdlibProvider) *Database {
 	return &Database{
 		slots:      make(map[QueryID]map[any]*slot),
 		names:      make(map[QueryID]string),

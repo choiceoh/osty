@@ -69,6 +69,23 @@ func ParseDetailed(src []byte) Result {
 	}
 }
 
+// ParseCanonical parses already-canonical source without running the
+// source-level compatibility rewrites that ParseDetailed applies for
+// user-authored code. Callers should use this only for trusted inputs that do
+// not rely on stable-alias keywords, scoped-import expansion, or `pub use`
+// visibility repair.
+//
+// Unlike calling selfhost.Parse directly, this still applies the parser's
+// AST-only lowerings so canonical sources that use lowered surface forms such
+// as builtin `len(...)` continue to match the rest of the compiler pipeline.
+func ParseCanonical(src []byte) (*ast.File, []*diag.Diagnostic) {
+	file, diags := selfhost.Parse(src)
+	if file != nil {
+		lowerStableAST(file)
+	}
+	return file, diags
+}
+
 // ParseDiagnostics lexes and parses src, returning the AST and rich
 // diagnostics. This is the primary entry point for all compiler passes.
 func ParseDiagnostics(src []byte) (*ast.File, []*diag.Diagnostic) {
