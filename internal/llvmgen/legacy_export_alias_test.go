@@ -93,10 +93,55 @@ fn main() {}
 	}
 }
 
+func TestLegacyCABIExportSurface(t *testing.T) {
+	src := `
+#[export("osty.gc.legacy_cabi_v1")]
+#[c_abi]
+#[no_alloc]
+pub fn legacy_cabi_v1() -> Int { 13 }
+
+fn main() {}
+`
+	out := buildLegacyIR(t, src)
+	got := string(out)
+
+	if !strings.Contains(got, "define ccc i64 @legacy_cabi_v1(") {
+		t.Fatalf("expected legacy path to preserve `#[c_abi]` as `define ccc`:\n%s", got)
+	}
+	if !strings.Contains(got, "@osty.gc.legacy_cabi_v1 = dso_local alias ptr, ptr @legacy_cabi_v1") {
+		t.Fatalf("expected legacy path to preserve `#[export]` alias alongside `#[c_abi]`:\n%s", got)
+	}
+}
+
+func TestLegacyIntrinsicRejectedExplicitly(t *testing.T) {
+	src := `
+#[intrinsic]
+pub fn raw_null() -> Int
+
+fn main() {}
+`
+	_, err := buildLegacyIRResult(t, src)
+	if err == nil {
+		t.Fatal("expected legacy GenerateModule to reject #[intrinsic], got nil error")
+	}
+	if !strings.Contains(err.Error(), "intrinsic function declaration raw_null") {
+		t.Fatalf("legacy intrinsic rejection must stay explicit, got: %v", err)
+	}
+}
+
 // buildLegacyIR drives the full source-level pipeline through
 // `GenerateModule` (the default, legacy AST-based emit path) and
 // returns the raw LLVM IR bytes.
 func buildLegacyIR(t *testing.T, src string) []byte {
+	t.Helper()
+	out, err := buildLegacyIRResult(t, src)
+	if err != nil {
+		t.Fatalf("GenerateModule error: %v", err)
+	}
+	return out
+}
+
+func buildLegacyIRResult(t *testing.T, src string) ([]byte, error) {
 	t.Helper()
 	file := parseLLVMGenFile(t, src)
 	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
@@ -111,12 +156,8 @@ func buildLegacyIR(t *testing.T, src string) []byte {
 	})
 	mod, _ := ir.Lower("main", file, res, chk)
 	monoMod, _ := ir.Monomorphize(mod)
-	out, err := GenerateModule(monoMod, Options{
+	return GenerateModule(monoMod, Options{
 		PackageName: "main",
 		SourcePath:  "/tmp/legacy_export_test.osty",
 	})
-	if err != nil {
-		t.Fatalf("GenerateModule error: %v", err)
-	}
-	return out
 }

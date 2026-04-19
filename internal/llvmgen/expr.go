@@ -109,10 +109,11 @@ func (g *generator) emitInterpolatedString(lit *ast.StringLit) (value, error) {
 		if err != nil {
 			return value{}, err
 		}
-		if v.typ != "ptr" || v.listElemTyp != "" || v.mapKeyTyp != "" {
-			return value{}, unsupportedf("type-system", "interpolation of %s value requires .toString() which the LLVM backend does not yet lower", v.typ)
+		piece, err := g.emitInterpolationStringPiece(v)
+		if err != nil {
+			return value{}, err
 		}
-		pieces = append(pieces, v)
+		pieces = append(pieces, piece)
 	}
 	result := pieces[0]
 	for i := 1; i < len(pieces); i++ {
@@ -123,6 +124,20 @@ func (g *generator) emitInterpolatedString(lit *ast.StringLit) (value, error) {
 		result = r
 	}
 	return result, nil
+}
+
+func (g *generator) emitInterpolationStringPiece(v value) (value, error) {
+	switch v.typ {
+	case "ptr":
+		if v.listElemTyp == "" && v.mapKeyTyp == "" && v.setElemTyp == "" {
+			return v, nil
+		}
+	case "i64":
+		return g.emitRuntimeIntToString(v)
+	case "double":
+		return g.emitRuntimeFloatToString(v)
+	}
+	return value{}, unsupportedf("type-system", "interpolation of %s value requires .toString() which the LLVM backend does not yet lower", v.typ)
 }
 
 func (g *generator) emitExpr(expr ast.Expr) (value, error) {
@@ -905,14 +920,39 @@ func (g *generator) emitQuestionExprResult(expr *ast.QuestionExpr, info builtinR
 }
 
 func (g *generator) emitRuntimeStringConcat(left, right value) (value, error) {
-	g.declareRuntimeSymbol("osty_rt_strings_Concat", "ptr", []paramInfo{
+	symbol := llvmStringRuntimeConcatSymbol()
+	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{
 		{typ: "ptr"},
 		{typ: "ptr"},
 	})
 	emitter := g.toOstyEmitter()
 	out := llvmStringConcat(emitter, toOstyValue(left), toOstyValue(right))
 	g.takeOstyEmitter(emitter)
-	return fromOstyValue(out), nil
+	joined := fromOstyValue(out)
+	joined.gcManaged = true
+	return joined, nil
+}
+
+func (g *generator) emitRuntimeIntToString(v value) (value, error) {
+	symbol := llvmIntRuntimeToStringSymbol()
+	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "i64"}})
+	emitter := g.toOstyEmitter()
+	out := llvmIntRuntimeToString(emitter, toOstyValue(v))
+	g.takeOstyEmitter(emitter)
+	text := fromOstyValue(out)
+	text.gcManaged = true
+	return text, nil
+}
+
+func (g *generator) emitRuntimeFloatToString(v value) (value, error) {
+	symbol := llvmFloatRuntimeToStringSymbol()
+	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "double"}})
+	emitter := g.toOstyEmitter()
+	out := llvmFloatRuntimeToString(emitter, toOstyValue(v))
+	g.takeOstyEmitter(emitter)
+	text := fromOstyValue(out)
+	text.gcManaged = true
+	return text, nil
 }
 
 func (g *generator) emitRuntimeStringCompare(op token.Kind, left, right value) (value, error) {

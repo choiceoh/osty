@@ -667,6 +667,8 @@ func TestGeneratedStringRuntimeSymbolsAreOstyOwned(t *testing.T) {
 		{"hasPrefix", llvmStringRuntimeHasPrefixSymbol(), "osty_rt_strings_HasPrefix"},
 		{"split", llvmStringRuntimeSplitSymbol(), "osty_rt_strings_Split"},
 		{"concat", llvmStringRuntimeConcatSymbol(), "osty_rt_strings_Concat"},
+		{"int_to_string", llvmIntRuntimeToStringSymbol(), "osty_rt_int_to_string"},
+		{"float_to_string", llvmFloatRuntimeToStringSymbol(), "osty_rt_float_to_string"},
 		{"byteLen", llvmStringRuntimeByteLenSymbol(), "osty_rt_strings_ByteLen"},
 	}
 	for _, c := range cases {
@@ -684,6 +686,8 @@ func TestGeneratedStringRuntimeDeclarationsAreOstyOwned(t *testing.T) {
 		"declare i1 @osty_rt_strings_HasPrefix(ptr, ptr)",
 		"declare ptr @osty_rt_strings_Split(ptr, ptr)",
 		"declare ptr @osty_rt_strings_Concat(ptr, ptr)",
+		"declare ptr @osty_rt_int_to_string(i64)",
+		"declare ptr @osty_rt_float_to_string(double)",
 		"declare i64 @osty_rt_strings_ByteLen(ptr)",
 	}
 	for _, w := range want {
@@ -696,6 +700,8 @@ func TestGeneratedStringConcatSmokeIR(t *testing.T) {
 
 	assertGeneratedIRContains(t, ir, "source_filename = \"/tmp/string_concat.osty\"")
 	assertGeneratedIRContains(t, ir, "declare ptr @osty_rt_strings_Concat(ptr, ptr)")
+	assertGeneratedIRContains(t, ir, "declare ptr @osty_rt_int_to_string(i64)")
+	assertGeneratedIRContains(t, ir, "declare ptr @osty_rt_float_to_string(double)")
 	assertGeneratedIRContains(t, ir, "declare i1 @osty_rt_strings_HasPrefix(ptr, ptr)")
 	assertGeneratedIRContains(t, ir, "declare i64 @osty_rt_strings_ByteLen(ptr)")
 	assertGeneratedIRContains(t, ir, "@.str0 = private unnamed_addr constant [8 x i8] c\"hello, \\00\"")
@@ -706,6 +712,30 @@ func TestGeneratedStringConcatSmokeIR(t *testing.T) {
 	assertGeneratedIRContains(t, ir, "call i32 (ptr, ...) @printf(ptr @.fmt_i64, i64 %t2)")
 	assertGeneratedIRContains(t, ir, "call i32 (ptr, ...) @printf(ptr @.fmt_str, ptr %t0)")
 	assertGeneratedIRContains(t, ir, "ret i32 0")
+}
+
+func TestGenerateInterpolatedIntAndFloatUseRuntimeToString(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn render(n: Int, f: Float) -> String {
+    "{n}:{f}"
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/interp_numeric.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	assertGeneratedIRContains(t, got, "declare ptr @osty_rt_int_to_string(i64)")
+	assertGeneratedIRContains(t, got, "declare ptr @osty_rt_float_to_string(double)")
+	assertGeneratedIRContains(t, got, "call ptr @osty_rt_int_to_string(i64")
+	assertGeneratedIRContains(t, got, "call ptr @osty_rt_float_to_string(double")
+	if strings.Count(got, "call ptr @osty_rt_strings_Concat") != 2 {
+		t.Fatalf("expected exactly 2 string concat calls, got IR:\n%s", got)
+	}
 }
 
 func TestGeneratedMapRuntimeSymbolsAreOstyOwned(t *testing.T) {

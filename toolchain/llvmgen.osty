@@ -2227,6 +2227,14 @@ pub fn llvmStringRuntimeConcatSymbol() -> String {
     "osty_rt_strings_Concat"
 }
 
+pub fn llvmIntRuntimeToStringSymbol() -> String {
+    "osty_rt_int_to_string"
+}
+
+pub fn llvmFloatRuntimeToStringSymbol() -> String {
+    "osty_rt_float_to_string"
+}
+
 pub fn llvmStringRuntimeByteLenSymbol() -> String {
     "osty_rt_strings_ByteLen"
 }
@@ -2239,9 +2247,10 @@ pub fn llvmStringRuntimeJoinSymbol() -> String {
     "osty_rt_strings_Join"
 }
 
-/// LLVM forward declarations for the `osty_rt_strings_*` C runtime
-/// surface. All string values cross the ABI as null-terminated `ptr`,
-/// and returned strings are GC-managed by the runtime (kind
+/// LLVM forward declarations for the string runtime surface plus the
+/// scalar `Int`/`Float` -> `String` helpers used by interpolation.
+/// All string values cross the ABI as null-terminated `ptr`, and
+/// returned strings are GC-managed by the runtime (kind
 /// `OSTY_GC_KIND_STRING`); callers must treat the result as owned by
 /// the managed heap, not by `free`.
 pub fn llvmStringRuntimeDeclarations() -> List<String> {
@@ -2250,6 +2259,8 @@ pub fn llvmStringRuntimeDeclarations() -> List<String> {
         "declare i1 @osty_rt_strings_HasPrefix(ptr, ptr)",
         "declare ptr @osty_rt_strings_Split(ptr, ptr)",
         "declare ptr @osty_rt_strings_Concat(ptr, ptr)",
+        "declare ptr @osty_rt_int_to_string(i64)",
+        "declare ptr @osty_rt_float_to_string(double)",
         "declare i64 @osty_rt_strings_ByteLen(ptr)",
         "declare i64 @osty_rt_strings_Compare(ptr, ptr)",
         "declare ptr @osty_rt_strings_Join(ptr, ptr)",
@@ -2270,6 +2281,14 @@ pub fn llvmStringSplit(emitter: LlvmEmitter, value: LlvmValue, sep: LlvmValue) -
 
 pub fn llvmStringConcat(emitter: LlvmEmitter, left: LlvmValue, right: LlvmValue) -> LlvmValue {
     llvmCall(emitter, "ptr", "osty_rt_strings_Concat", [left, right])
+}
+
+pub fn llvmIntRuntimeToString(emitter: LlvmEmitter, value: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "ptr", "osty_rt_int_to_string", [value])
+}
+
+pub fn llvmFloatRuntimeToString(emitter: LlvmEmitter, value: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "ptr", "osty_rt_float_to_string", [value])
 }
 
 pub fn llvmStringCompare(

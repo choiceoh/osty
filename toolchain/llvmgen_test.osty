@@ -1208,6 +1208,8 @@ fn testLlvmStringRuntimeSymbolsAreOstyOwned() {
     testing.assertEq(llvmStringRuntimeHasPrefixSymbol(), "osty_rt_strings_HasPrefix")
     testing.assertEq(llvmStringRuntimeSplitSymbol(), "osty_rt_strings_Split")
     testing.assertEq(llvmStringRuntimeConcatSymbol(), "osty_rt_strings_Concat")
+    testing.assertEq(llvmIntRuntimeToStringSymbol(), "osty_rt_int_to_string")
+    testing.assertEq(llvmFloatRuntimeToStringSymbol(), "osty_rt_float_to_string")
     testing.assertEq(llvmStringRuntimeByteLenSymbol(), "osty_rt_strings_ByteLen")
 }
 
@@ -1218,6 +1220,8 @@ fn testLlvmStringRuntimeDeclarationsAreOstyOwned() {
     assertLlvmContains(declarations, "declare i1 @osty_rt_strings_HasPrefix(ptr, ptr)")
     assertLlvmContains(declarations, "declare ptr @osty_rt_strings_Split(ptr, ptr)")
     assertLlvmContains(declarations, "declare ptr @osty_rt_strings_Concat(ptr, ptr)")
+    assertLlvmContains(declarations, "declare ptr @osty_rt_int_to_string(i64)")
+    assertLlvmContains(declarations, "declare ptr @osty_rt_float_to_string(double)")
     assertLlvmContains(declarations, "declare i64 @osty_rt_strings_ByteLen(ptr)")
 }
 
@@ -1226,6 +1230,8 @@ fn testLlvmSmokeStringConcatIsOstyOwned() {
 
     assertLlvmContains(ir, "source_filename = \"/tmp/string_concat.osty\"")
     assertLlvmContains(ir, "declare ptr @osty_rt_strings_Concat(ptr, ptr)")
+    assertLlvmContains(ir, "declare ptr @osty_rt_int_to_string(i64)")
+    assertLlvmContains(ir, "declare ptr @osty_rt_float_to_string(double)")
     assertLlvmContains(ir, "declare i1 @osty_rt_strings_HasPrefix(ptr, ptr)")
     assertLlvmContains(ir, "declare i64 @osty_rt_strings_ByteLen(ptr)")
     assertLlvmContains(ir, "@.str0 = private unnamed_addr constant [8 x i8] c\"hello, \\00\"")
