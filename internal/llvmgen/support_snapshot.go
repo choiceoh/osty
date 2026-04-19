@@ -2119,6 +2119,14 @@ func llvmStringRuntimeByteLenSymbol() string {
 	return "osty_rt_strings_ByteLen"
 }
 
+func llvmStringRuntimeCompareSymbol() string {
+	return "osty_rt_strings_Compare"
+}
+
+func llvmStringRuntimeJoinSymbol() string {
+	return "osty_rt_strings_Join"
+}
+
 func llvmStringRuntimeDeclarations() []string {
 	return []string{
 		"declare i1 @osty_rt_strings_Equal(ptr, ptr)",
@@ -2126,6 +2134,8 @@ func llvmStringRuntimeDeclarations() []string {
 		"declare ptr @osty_rt_strings_Split(ptr, ptr)",
 		"declare ptr @osty_rt_strings_Concat(ptr, ptr)",
 		"declare i64 @osty_rt_strings_ByteLen(ptr)",
+		"declare i64 @osty_rt_strings_Compare(ptr, ptr)",
+		"declare ptr @osty_rt_strings_Join(ptr, ptr)",
 	}
 }
 
@@ -2155,6 +2165,14 @@ func llvmStringCompare(emitter *LlvmEmitter, op string, left *LlvmValue, right *
 
 func llvmStringByteLen(emitter *LlvmEmitter, value *LlvmValue) *LlvmValue {
 	return llvmCall(emitter, "i64", "osty_rt_strings_ByteLen", []*LlvmValue{value})
+}
+
+func llvmStringRuntimeCompare(emitter *LlvmEmitter, left *LlvmValue, right *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "i64", "osty_rt_strings_Compare", []*LlvmValue{left, right})
+}
+
+func llvmStringRuntimeJoin(emitter *LlvmEmitter, parts *LlvmValue, sep *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "ptr", "osty_rt_strings_Join", []*LlvmValue{parts, sep})
 }
 
 func llvmBuiltinType(name string) string {

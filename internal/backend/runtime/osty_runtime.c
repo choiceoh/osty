@@ -202,6 +202,8 @@ static void *osty_gc_allocate_managed(size_t byte_size, int64_t object_kind, con
 
 static void osty_gc_mark_payload(void *payload);
 bool osty_rt_strings_Equal(const char *left, const char *right);
+int64_t osty_rt_strings_Compare(const char *left, const char *right);
+const char *osty_rt_strings_Join(void *raw_parts, const char *sep);
 bool osty_rt_set_insert_i64(void *raw_set, int64_t item);
 bool osty_rt_set_insert_i1(void *raw_set, bool item);
 bool osty_rt_set_insert_f64(void *raw_set, double item);
@@ -800,6 +802,27 @@ bool osty_rt_strings_Equal(const char *left, const char *right) {
     return strcmp(left, right) == 0;
 }
 
+int64_t osty_rt_strings_Compare(const char *left, const char *right) {
+    int result;
+    if (left == NULL) {
+        if (right == NULL || right[0] == '\0') {
+            return 0;
+        }
+        return -1;
+    }
+    if (right == NULL) {
+        return left[0] == '\0' ? 0 : 1;
+    }
+    result = strcmp(left, right);
+    if (result < 0) {
+        return -1;
+    }
+    if (result > 0) {
+        return 1;
+    }
+    return 0;
+}
+
 int64_t osty_rt_strings_ByteLen(const char *value) {
     if (value == NULL) {
         return 0;
@@ -855,6 +878,55 @@ void *osty_rt_strings_Split(const char *value, const char *sep) {
         cursor = next + sep_len;
     }
     osty_rt_list_push_ptr(out, osty_rt_string_dup_range(cursor, strlen(cursor)));
+    return out;
+}
+
+const char *osty_rt_strings_Join(void *raw_parts, const char *sep) {
+    osty_rt_list *parts;
+    int64_t i;
+    int64_t count;
+    size_t sep_len;
+    size_t total;
+    char *out;
+    char *cursor;
+    const char *piece;
+    size_t piece_len;
+
+    parts = osty_rt_list_cast(raw_parts);
+    if (parts == NULL || parts->len == 0) {
+        out = (char *)osty_gc_allocate_managed(1, OSTY_GC_KIND_STRING, "runtime.strings.join.empty", NULL, NULL);
+        out[0] = '\0';
+        return out;
+    }
+    count = parts->len;
+    sep_len = (sep == NULL) ? 0 : strlen(sep);
+    total = 0;
+    for (i = 0; i < count; i++) {
+        piece = ((const char **)parts->data)[i];
+        if (piece != NULL) {
+            total += strlen(piece);
+        }
+        if (i + 1 < count) {
+            total += sep_len;
+        }
+    }
+    out = (char *)osty_gc_allocate_managed(total + 1, OSTY_GC_KIND_STRING, "runtime.strings.join", NULL, NULL);
+    cursor = out;
+    for (i = 0; i < count; i++) {
+        piece = ((const char **)parts->data)[i];
+        if (piece != NULL) {
+            piece_len = strlen(piece);
+            if (piece_len != 0) {
+                memcpy(cursor, piece, piece_len);
+                cursor += piece_len;
+            }
+        }
+        if (i + 1 < count && sep_len != 0) {
+            memcpy(cursor, sep, sep_len);
+            cursor += sep_len;
+        }
+    }
+    *cursor = '\0';
     return out;
 }
 

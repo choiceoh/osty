@@ -256,6 +256,7 @@ func generateASTFile(file *ast.File, opts Options) ([]byte, error) {
 		g.runtimeFFIPaths = collectRuntimeFFIPaths(file)
 		g.resultTypes = collectBuiltinResultTypes(file, env)
 		g.testingAliases = collectStdTestingAliases(file)
+		g.stdStringsAliases = collectStdStringsAliases(file)
 		mainIR, err := g.emitScriptMain(file.Stmts)
 		if err != nil {
 			return nil, err
@@ -283,6 +284,7 @@ func generateASTFile(file *ast.File, opts Options) ([]byte, error) {
 	g.runtimeFFI = collectRuntimeFFI(file, g.typeEnv())
 	g.runtimeFFIPaths = collectRuntimeFFIPaths(file)
 	g.testingAliases = collectStdTestingAliases(file)
+	g.stdStringsAliases = collectStdStringsAliases(file)
 	if err := g.emitGlobalLets(decls.globalsOrdered); err != nil {
 		return nil, err
 	}

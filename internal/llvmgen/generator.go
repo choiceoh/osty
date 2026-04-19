@@ -37,6 +37,7 @@ type generator struct {
 	runtimeFFI        map[string]map[string]*runtimeFFIFunction
 	runtimeFFIPaths   map[string]string
 	testingAliases    map[string]bool
+	stdStringsAliases map[string]bool
 	runtimeDecls      map[string]runtimeDecl
 	runtimeDeclOrder  []string
 	traceHelpers      map[string]string
@@ -54,6 +55,7 @@ type generator struct {
 	currentBlock      string
 	currentReachable  bool
 	resultContexts    []builtinResultContext
+	optionContexts    []builtinOptionContext
 
 	needsGCRuntime bool
 	gcRootSlots    []value
@@ -97,6 +99,11 @@ type builtinResultContext struct {
 	sourceType ast.Type
 }
 
+type builtinOptionContext struct {
+	inner      ast.Type
+	sourceType ast.Type
+}
+
 const (
 	llvmGcRuntimeFrameSlotKind = 5
 )
@@ -117,6 +124,7 @@ func (g *generator) beginFunction() {
 	g.currentReachable = true
 	g.loopStack = nil
 	g.resultContexts = nil
+	g.optionContexts = nil
 }
 
 func (g *generator) bindGCRootIfManagedPointer(emitter *LlvmEmitter, slot value) {
