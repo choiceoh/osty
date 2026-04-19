@@ -26,6 +26,19 @@ pub enum DiagnosticFamily {
 }
 
 /// diagnosticSeverity classifies a stable code by prefix.
+///
+/// Codes follow a simple range convention: `E0000-E9999` errors,
+/// `W0000-W9999` warnings, `L0000-L9999` lints. Anything outside
+/// these ranges is `SeverityUnknown` so unknown codes never silently
+/// pass as errors.
+///
+/// ```osty
+/// testing.assertEq(diagnosticSeverityName(diagnosticSeverity("E0001")), "error")
+/// testing.assertEq(diagnosticSeverityName(diagnosticSeverity("W0100")), "warning")
+/// testing.assertEq(diagnosticSeverityName(diagnosticSeverity("L0002")), "lint")
+/// testing.assertEq(diagnosticSeverityName(diagnosticSeverity("X9999")), "unknown")
+/// testing.assertEq(diagnosticSeverityName(diagnosticSeverity("")), "unknown")
+/// ```
 pub fn diagnosticSeverity(code: String) -> DiagnosticSeverity {
     if code >= "E0000" && code <= "E9999" {
         SeverityError
@@ -49,6 +62,17 @@ pub fn diagnosticSeverityName(severity: DiagnosticSeverity) -> String {
 }
 
 /// diagnosticFamily classifies codes into the ranges owned by compiler phases.
+///
+/// ```osty
+/// testing.assertEq(diagnosticFamilyName(diagnosticFamily("E0001")), "lexical")
+/// testing.assertEq(diagnosticFamilyName(diagnosticFamily("E0100")), "declaration")
+/// testing.assertEq(diagnosticFamilyName(diagnosticFamily("E0500")), "resolution")
+/// testing.assertEq(diagnosticFamilyName(diagnosticFamily("E0700")), "type-checking")
+/// testing.assertEq(diagnosticFamilyName(diagnosticFamily("E2000")), "manifest")
+/// testing.assertEq(diagnosticFamilyName(diagnosticFamily("L0001")), "lint")
+/// testing.assertEq(diagnosticFamilyName(diagnosticFamily("W0750")), "warning")
+/// testing.assertEq(diagnosticFamilyName(diagnosticFamily("E9999")), "unknown")
+/// ```
 pub fn diagnosticFamily(code: String) -> DiagnosticFamily {
     if code >= "E0001" && code <= "E0007" {
         FamilyLexical
@@ -99,6 +123,17 @@ pub fn diagnosticFamilyName(family: DiagnosticFamily) -> String {
 }
 
 /// diagnosticIsCompilerError reports whether a code blocks compilation.
+///
+/// Warnings and lints never gate compilation, even at strictest levels.
+/// Callers that want gate-on-warning must check severity explicitly.
+///
+/// ```osty
+/// testing.assert(diagnosticIsCompilerError("E0001"))
+/// testing.assert(diagnosticIsCompilerError("E0700"))
+/// testing.assert(!(diagnosticIsCompilerError("W0100")))
+/// testing.assert(!(diagnosticIsCompilerError("L0002")))
+/// testing.assert(!(diagnosticIsCompilerError("")))
+/// ```
 pub fn diagnosticIsCompilerError(code: String) -> Bool {
     match diagnosticSeverity(code) {
         SeverityError -> true,

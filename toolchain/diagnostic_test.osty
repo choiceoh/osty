@@ -1,4 +1,5 @@
 use std.testing
+use std.testing.gen as gen
 
 use std.strings as diagStrings
 
@@ -107,4 +108,44 @@ fn testDiagnosticFormatsLintDiagnosticsWithLocations() {
     assertDiagnosticTextContains(output, "lint")
     assertDiagnosticTextContains(output, "at 2:5")
     assertDiagnosticTextContains(output, "value is compared with itself `x`")
+}
+
+// Property-based tests (v0.5 G33). Stubs in std.testing.gen make
+// these no-ops at runtime today. `intRange(1000, 9999)` keeps
+// synthesised codes inside the 5-char classifier ranges.
+
+fn testDiagnosticPropErrorCodesAreErrors() {
+    testing.property(
+        "E-prefixed 4-digit codes classify as error severity",
+        gen.intRange(1000, 9999),
+        |n: Int| diagnosticSeverityName(diagnosticSeverity("E{n}")) == "error",
+    )
+}
+
+fn testDiagnosticPropWarningCodesAreWarnings() {
+    testing.property(
+        "W-prefixed 4-digit codes classify as warning severity",
+        gen.intRange(1000, 9999),
+        |n: Int| diagnosticSeverityName(diagnosticSeverity("W{n}")) == "warning",
+    )
+}
+
+fn testDiagnosticPropLintCodesAreLints() {
+    testing.property(
+        "L-prefixed 4-digit codes classify as lint severity",
+        gen.intRange(1000, 9999),
+        |n: Int| diagnosticSeverityName(diagnosticSeverity("L{n}")) == "lint",
+    )
+}
+
+fn testDiagnosticPropCompilerErrorMatchesSeverityBucket() {
+    testing.property(
+        "diagnosticIsCompilerError agrees with severity == error",
+        gen.oneOf(["E0001", "E2050", "E9999", "W0100", "W9999", "L0001", "L0041", "X0000", ""]),
+        |code: String| {
+            let err = diagnosticIsCompilerError(code)
+            let sev = diagnosticSeverityName(diagnosticSeverity(code))
+            if err { sev == "error" } else { sev != "error" }
+        },
+    )
 }

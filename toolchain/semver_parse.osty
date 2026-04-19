@@ -28,6 +28,20 @@ pub fn splitSummary(parts: List<String>) -> SemSplit {
 }
 
 /// parseSemVersionText parses the SemVer forms used by Osty's package manager.
+///
+/// Accepts `MAJOR.MINOR.PATCH[-PRE[.PRE[.PRE]]][+BUILD]` with an optional
+/// leading `v`. Build metadata is preserved but does not affect ordering.
+///
+/// ```osty
+/// let v = match parseSemVersionText("1.2.3") { Ok(val) -> val, Err(_) -> stableVersion(0, 0, 0), }
+/// testing.assertEq(v.major, 1)
+/// testing.assertEq(v.minor, 2)
+/// testing.assertEq(v.patch, 3)
+/// testing.assertEq(semVersionText(v), "1.2.3")
+/// testing.assert(parseSemVersionText("v1.0.0").isOk())
+/// testing.assert(parseSemVersionText("").isErr())
+/// testing.assert(parseSemVersionText("1.2").isErr())
+/// ```
 pub fn parseSemVersionText(raw: String) -> Result<SemVersion, String> {
     if raw == "" {
         return Err("empty version")
@@ -110,6 +124,17 @@ pub fn parseSemPreIdent(text: String) -> Result<SemPreIdent, String> {
 }
 
 /// parseSemNumber parses a non-negative decimal without leading zeroes.
+///
+/// A lone `"0"` is accepted; any other leading-zero form is rejected so
+/// `"01"` never aliases `"1"`.
+///
+/// ```osty
+/// testing.assertEq(match parseSemNumber("0") { Ok(n) -> n, Err(_) -> -1, }, 0)
+/// testing.assertEq(match parseSemNumber("42") { Ok(n) -> n, Err(_) -> -1, }, 42)
+/// testing.assert(parseSemNumber("").isErr())
+/// testing.assert(parseSemNumber("01").isErr())
+/// testing.assert(parseSemNumber("1a").isErr())
+/// ```
 pub fn parseSemNumber(text: String) -> Result<Int, String> {
     if text == "" {
         return Err("empty number")
@@ -142,6 +167,15 @@ pub fn buildIdentifiersValid(text: String) -> Bool {
 }
 
 /// identifierTextValid accepts ASCII alphanumeric and hyphen identifiers.
+///
+/// ```osty
+/// testing.assert(identifierTextValid("alpha"))
+/// testing.assert(identifierTextValid("rc-1"))
+/// testing.assert(identifierTextValid("0"))
+/// testing.assert(!(identifierTextValid("")))
+/// testing.assert(!(identifierTextValid("with space")))
+/// testing.assert(!(identifierTextValid("plus+sign")))
+/// ```
 pub fn identifierTextValid(text: String) -> Bool {
     if text == "" {
         return false
