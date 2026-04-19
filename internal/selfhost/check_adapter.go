@@ -9,13 +9,14 @@ type CheckSummary struct {
 	Assignments int
 	Accepted    int
 	Errors      int
-	// ErrorsByContext buckets the total Errors count by the enclosing
-	// native-checker function at each error-detection site. Populated by
-	// selfhostBumpError; consumed by `osty check --dump-native-diags`.
+	// ErrorsByContext buckets error-severity diagnostics by the native
+	// checker's stable bucket key. For the typed checker this is usually
+	// the diagnostic code (for example E0700); consumed by
+	// `osty check --dump-native-diags`.
 	ErrorsByContext map[string]int
 	// ErrorDetails optionally holds a second-level split under a given
-	// context. Populated only at sites that call selfhostBumpErrorWithDetail
-	// — currently frontCheckIdentHint (keyed by unresolved identifier).
+	// bucket. For the typed checker this is the rendered diagnostic
+	// message histogram underneath a code bucket.
 	ErrorDetails map[string]map[string]int
 }
 
@@ -102,25 +103,7 @@ func adaptCheckSummaryWithContext(checked *FrontCheckResult) CheckSummary {
 		return CheckSummary{}
 	}
 	s := adaptCheckSummary(checked.summary)
-	if len(checked.errorsByContext) > 0 {
-		s.ErrorsByContext = make(map[string]int, len(checked.errorsByContext))
-		for k, v := range checked.errorsByContext {
-			s.ErrorsByContext[k] = v
-		}
-	}
-	if len(checked.errorDetails) > 0 {
-		s.ErrorDetails = make(map[string]map[string]int, len(checked.errorDetails))
-		for ctx, inner := range checked.errorDetails {
-			if len(inner) == 0 {
-				continue
-			}
-			copied := make(map[string]int, len(inner))
-			for k, v := range inner {
-				copied[k] = v
-			}
-			s.ErrorDetails[ctx] = copied
-		}
-	}
+	s.ErrorsByContext, s.ErrorDetails = selfhostDiagnosticTelemetry(checked.diagnostics)
 	return s
 }
 

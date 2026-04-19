@@ -134,6 +134,7 @@ fn collectDecls(cx: ElabCx) {
             AstNEnumDecl -> collectEnumDecl(cx, declIdx, node),
             AstNInterfaceDecl -> collectInterfaceDecl(cx, declIdx, node),
             AstNTypeAlias -> collectTypeAlias(cx, declIdx, node),
+            AstNLet -> collectLetDecl(cx, declIdx, node),
             AstNLetDecl -> collectLetDecl(cx, declIdx, node),
             _ -> {},
         }
@@ -161,12 +162,15 @@ fn collectFnDecl(
         if paramNode.kind != AstNParam {
             continue
         }
+        if paramNode.text == "self" {
+            continue
+        }
         paramNames.push(paramNode.text)
         let declared = astTypeToTyInCollect(cx, paramNode.right)
         paramTys.push(if declared >= 0 { declared } else { tErr(cx.env.tys) })
     }
 
-    let retTy = astTypeToTyInCollect(cx, node.right)
+    let retTy = astTypeToTyInCollect(cx, node.left)
     let retEffective = if retTy >= 0 { retTy } else { tUnit(cx.env.tys) }
 
     let receiverTy = if owner == "" {
@@ -279,7 +283,7 @@ fn collectInterfaceDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
 
 fn collectTypeAlias(cx: ElabCx, declIdx: Int, node: AstNode) {
     let name = node.text
-    let generics = collectGenericNames(cx, node.children2)
+    let generics = collectGenericNames(cx, node.children)
     let target = astTypeToTyInCollect(cx, node.left)
     let ty = if target >= 0 { target } else { tErr(cx.env.tys) }
     checkRegisterAlias(cx.env, CheckAliasSig { name, ty, generics })
@@ -287,8 +291,16 @@ fn collectTypeAlias(cx: ElabCx, declIdx: Int, node: AstNode) {
 }
 
 fn collectLetDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
-    let name = node.text
-    let declared = astTypeToTyInCollect(cx, node.extra)
+    let name = topLevelLetBindingName(cx, node)
+    if name == "" {
+        return
+    }
+    let declaredIdx = if checkIntListLenLocal(node.children) > 0 {
+        checkIntListAtLocal(node.children, 0)
+    } else {
+        -1
+    }
+    let declared = astTypeToTyInCollect(cx, declaredIdx)
     let ty = if declared >= 0 { declared } else { tErr(cx.env.tys) }
     // Bind the name globally so ident lookups find it during
     // elaboration of fn bodies.
@@ -308,6 +320,7 @@ fn elaborateDecls(cx: ElabCx) {
             AstNStructDecl -> elaborateStructMethods(cx, node),
             AstNEnumDecl -> elaborateEnumMethods(cx, node),
             AstNInterfaceDecl -> {},
+            AstNLet -> elaborateLetDecl(cx, declIdx, node),
             AstNLetDecl -> elaborateLetDecl(cx, declIdx, node),
             _ -> {},
         }
@@ -329,6 +342,10 @@ fn elaborateFnBody(cx: ElabCx, node: AstNode, owner: String) {
         checkAddGenericBound(cx.env, bound)
     }
 
+    if sig.receiverTy >= 0 {
+        checkBindSpan(cx.env, "self", sig.receiverTy, true, node.start, node.end)
+    }
+
     // Bind parameters.
     let mut i = 0
     for pname in sig.paramNames {
@@ -337,9 +354,9 @@ fn elaborateFnBody(cx: ElabCx, node: AstNode, owner: String) {
         i = i + 1
     }
 
-    if node.left >= 0 {
-        // Fn body is stored in node.left as a block (AstNBlock).
-        let _ = elabCheck(cx, node.left, sig.retTy)
+    if node.right >= 0 {
+        // Fn body is stored in node.right as a block (AstNBlock).
+        let _ = elabCheck(cx, node.right, sig.retTy)
     }
 
     cx.env.returnTy = prevReturn
@@ -370,16 +387,10 @@ fn elaborateEnumMethods(cx: ElabCx, node: AstNode) {
 
 fn elaborateLetDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
     let _ = declIdx
-    if node.left < 0 {
+    if node.right < 0 {
         return
     }
-    let declared = checkLookup(cx.env, node.text)
-    let value = if declared >= 0 && !(tyIsErr(cx.env.tys, declared)) {
-        elabCheck(cx, node.left, declared)
-    } else {
-        elabInfer(cx, node.left)
-    }
-    let _ = value
+    let _ = elabLetStmt(cx, node)
 }
 
 // ---------------------------------------------------------------------
@@ -481,6 +492,54 @@ fn checkIntListAtLocal(xs: List<Int>, idx: Int) -> Int {
     -1
 }
 
+fn topLevelLetBindingName(cx: ElabCx, node: AstNode) -> String {
+    if node.left < 0 {
+        return ""
+    }
+    let pat = astArenaNodeAt(cx.ast.arena, node.left)
+    if pat.kind != AstNPattern {
+        return ""
+    }
+    if pat.extra == astPatternIdentKind() || pat.extra == astPatternBindingKind() {
+        return pat.text
+    }
+    ""
+}
+
+fn typedExprKindNameAt(ast: AstFile, idx: Int) -> String {
+    if idx < 0 {
+        return ""
+    }
+    let node = astArenaNodeAt(ast.arena, idx)
+    match node.kind {
+        AstNIntLit -> astNodeKindName(node.kind),
+        AstNFloatLit -> astNodeKindName(node.kind),
+        AstNStringLit -> astNodeKindName(node.kind),
+        AstNBoolLit -> astNodeKindName(node.kind),
+        AstNCharLit -> astNodeKindName(node.kind),
+        AstNByteLit -> astNodeKindName(node.kind),
+        AstNIdent -> astNodeKindName(node.kind),
+        AstNParen -> astNodeKindName(node.kind),
+        AstNBlock -> astNodeKindName(node.kind),
+        AstNUnary -> astNodeKindName(node.kind),
+        AstNBinary -> astNodeKindName(node.kind),
+        AstNIf -> astNodeKindName(node.kind),
+        AstNMatch -> astNodeKindName(node.kind),
+        AstNCall -> astNodeKindName(node.kind),
+        AstNField -> astNodeKindName(node.kind),
+        AstNIndex -> astNodeKindName(node.kind),
+        AstNList -> astNodeKindName(node.kind),
+        AstNMap -> astNodeKindName(node.kind),
+        AstNTuple -> astNodeKindName(node.kind),
+        AstNStructLit -> astNodeKindName(node.kind),
+        AstNRange -> astNodeKindName(node.kind),
+        AstNClosure -> astNodeKindName(node.kind),
+        AstNQuestion -> astNodeKindName(node.kind),
+        AstNTurbofish -> astNodeKindName(node.kind),
+        _ -> "",
+    }
+}
+
 // ---------------------------------------------------------------------
 // CoreModule → FrontCheckResult serialization.
 // ---------------------------------------------------------------------
@@ -493,13 +552,21 @@ fn serializeCheckResult(cx: ElabCx) -> FrontCheckResult {
     }
 
     let mut typedNodes: List<FrontCheckedNode> = []
-    for node in cx.env.typedNodes {
+    for node in cx.core.nodes {
+        if node.originAst < 0 || tyIsErr(cx.env.tys, node.ty) {
+            continue
+        }
+        let kind = typedExprKindNameAt(cx.ast, node.originAst)
+        if kind == "" {
+            continue
+        }
+        let astNode = astArenaNodeAt(cx.ast.arena, node.originAst)
         typedNodes.push(FrontCheckedNode {
-            node: node.node,
-            kind: node.kind,
+            node: node.originAst,
+            kind,
             typeName: tyToString(cx.env.tys, node.ty),
-            start: node.start,
-            end: node.end,
+            start: astNode.start,
+            end: astNode.end,
         })
     }
 
