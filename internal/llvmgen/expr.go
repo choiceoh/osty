@@ -2305,6 +2305,16 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 	if v, found, err := g.emitEnumVariantCall(call); found || err != nil {
 		return v, err
 	}
+	// Alias-qualified dispatchers (std.strings / runtime.*) — run before
+	// emitInterfaceMethodCall and the *MethodCall family, which eagerly
+	// lower the receiver via emitExpr and would otherwise fail with
+	// LLVM016 when the receiver is a module alias rather than a binding.
+	if v, found, err := g.emitStdStringsCall(call); found || err != nil {
+		return v, err
+	}
+	if v, found, err := g.emitRuntimeFFICall(call); found || err != nil {
+		return v, err
+	}
 	// Phase 6b: interface value method dispatch via `%osty.iface` vtable.
 	if v, found, err := g.emitInterfaceMethodCall(call); found || err != nil {
 		return v, err
@@ -2316,9 +2326,6 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 		return v, err
 	}
 	if v, found, err := g.emitSetMethodCall(call); found || err != nil {
-		return v, err
-	}
-	if v, found, err := g.emitRuntimeFFICall(call); found || err != nil {
 		return v, err
 	}
 	if v, found, err := g.emitOptionalUserCall(call); found || err != nil {

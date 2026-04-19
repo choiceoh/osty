@@ -202,6 +202,7 @@ static void *osty_gc_allocate_managed(size_t byte_size, int64_t object_kind, con
 
 static void osty_gc_mark_payload(void *payload);
 bool osty_rt_strings_Equal(const char *left, const char *right);
+int64_t osty_rt_strings_Compare(const char *left, const char *right);
 bool osty_rt_set_insert_i64(void *raw_set, int64_t item);
 bool osty_rt_set_insert_i1(void *raw_set, bool item);
 bool osty_rt_set_insert_f64(void *raw_set, double item);
@@ -798,6 +799,27 @@ bool osty_rt_strings_Equal(const char *left, const char *right) {
         return left == right;
     }
     return strcmp(left, right) == 0;
+}
+
+int64_t osty_rt_strings_Compare(const char *left, const char *right) {
+    int result;
+    if (left == NULL) {
+        if (right == NULL || right[0] == '\0') {
+            return 0;
+        }
+        return -1;
+    }
+    if (right == NULL) {
+        return left[0] == '\0' ? 0 : 1;
+    }
+    result = strcmp(left, right);
+    if (result < 0) {
+        return -1;
+    }
+    if (result > 0) {
+        return 1;
+    }
+    return 0;
 }
 
 int64_t osty_rt_strings_ByteLen(const char *value) {

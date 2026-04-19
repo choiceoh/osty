@@ -37,6 +37,7 @@ type generator struct {
 	runtimeFFI        map[string]map[string]*runtimeFFIFunction
 	runtimeFFIPaths   map[string]string
 	testingAliases    map[string]bool
+	stdStringsAliases map[string]bool
 	runtimeDecls      map[string]runtimeDecl
 	runtimeDeclOrder  []string
 	traceHelpers      map[string]string
