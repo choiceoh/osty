@@ -250,11 +250,11 @@ func interfaceNominalName(t ast.Type) string {
 }
 
 func (g *generator) emitAssign(stmt *ast.AssignStmt) error {
-	if stmt.Op != token.ASSIGN {
-		return unsupportedf("statement", "compound assignment %q", stmt.Op)
-	}
 	if len(stmt.Targets) != 1 {
 		return unsupported("statement", "multi-target assignment")
+	}
+	if stmt.Op != token.ASSIGN {
+		return g.emitCompoundAssign(stmt)
 	}
 	target, ok := stmt.Targets[0].(*ast.Ident)
 	if ok {
@@ -299,6 +299,66 @@ func (g *generator) emitAssign(stmt *ast.AssignStmt) error {
 		return unsupportedf("statement", "assignment target %T", stmt.Targets[0])
 	}
 	return g.emitFieldAssign(field, stmt.Value)
+}
+
+// compoundBinaryOp maps a compound-assignment token (`+=`, `-=`, …) to the
+// binary operator token it desugars to (`+`, `-`, …). Returns false when the
+// token is not a compound assignment.
+func compoundBinaryOp(op token.Kind) (token.Kind, bool) {
+	switch op {
+	case token.PLUSEQ:
+		return token.PLUS, true
+	case token.MINUSEQ:
+		return token.MINUS, true
+	case token.STAREQ:
+		return token.STAR, true
+	case token.SLASHEQ:
+		return token.SLASH, true
+	case token.PERCENTEQ:
+		return token.PERCENT, true
+	case token.BITANDEQ:
+		return token.BITAND, true
+	case token.BITOREQ:
+		return token.BITOR, true
+	case token.BITXOREQ:
+		return token.BITXOR, true
+	case token.SHLEQ:
+		return token.SHL, true
+	case token.SHREQ:
+		return token.SHR, true
+	default:
+		return 0, false
+	}
+}
+
+// emitCompoundAssign lowers `x op= v` to `x = x op v`. Index targets are
+// rejected up front because re-reading them would double-evaluate the index
+// expression; ident and single-level field targets are pure lookups and
+// safe to rewrite.
+func (g *generator) emitCompoundAssign(stmt *ast.AssignStmt) error {
+	binOp, ok := compoundBinaryOp(stmt.Op)
+	if !ok {
+		return unsupportedf("statement", "compound assignment %q", stmt.Op)
+	}
+	target := stmt.Targets[0]
+	if _, isIndex := target.(*ast.IndexExpr); isIndex {
+		return unsupportedf("statement", "compound assignment %q on index target not yet lowered", stmt.Op)
+	}
+	synth := &ast.BinaryExpr{
+		PosV:  target.Pos(),
+		EndV:  stmt.Value.End(),
+		Op:    binOp,
+		Left:  target,
+		Right: stmt.Value,
+	}
+	desugared := &ast.AssignStmt{
+		PosV:    stmt.PosV,
+		EndV:    stmt.EndV,
+		Op:      token.ASSIGN,
+		Targets: stmt.Targets,
+		Value:   synth,
+	}
+	return g.emitAssign(desugared)
 }
 
 func (g *generator) emitFieldAssign(target *ast.FieldExpr, rhs ast.Expr) error {

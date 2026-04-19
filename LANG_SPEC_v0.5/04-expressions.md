@@ -434,4 +434,69 @@ defer {
 }
 ```
 
+### 4.13 Assignment
+
+Assignment is a **statement**, not an expression. It never produces a
+value and may not appear in expression position (`let x = (y = 1)` is
+rejected by the grammar).
+
+```osty
+let mut n = 0
+n = n + 1
+n += 1
+```
+
+The left-hand side must be one of:
+
+- a **mutable identifier** (`x` declared with `let mut`, or a `mut self`
+  receiver parameter),
+- a **field access** on a mutable struct value (`obj.field`,
+  `self.field`),
+- an **indexed element** on a mutable collection (`xs[i]`, `m[k]`).
+
+The right-hand side is evaluated, then written to the place named by the
+left-hand side. For `=`, the RHS type must match the LHS type; no
+implicit numeric conversion occurs.
+
+#### 4.13.1 Compound Assignment
+
+For each binary operator that produces a value of the same type as its
+left operand — `+`, `-`, `*`, `/`, `%`, `&`, `|`, `^`, `<<`, `>>` —
+Osty provides a compound assignment form.
+
+| Compound | Desugars to       |
+|----------|-------------------|
+| `x += y` | `x = x + y`       |
+| `x -= y` | `x = x - y`       |
+| `x *= y` | `x = x * y`       |
+| `x /= y` | `x = x / y`       |
+| `x %= y` | `x = x % y`       |
+| `x &= y` | `x = x & y`       |
+| `x \|= y` | `x = x \| y`     |
+| `x ^= y` | `x = x ^ y`       |
+| `x <<= y`| `x = x << y`      |
+| `x >>= y`| `x = x >> y`      |
+
+Semantics:
+
+1. Compound assignment is a **statement** with the same precedence as
+   plain assignment (lowest, right-associative). It is grammar-level
+   statement-only — `(x += 1)` is rejected.
+2. The LHS place is evaluated **exactly once**. For an indexed target
+   `xs[i] += v`, the index expression `i` is evaluated once, not twice.
+3. Type rules follow the corresponding binary operator in §4 and §2:
+   `x op= y` is well-typed iff `x op y` is well-typed and its result
+   type is compatible with the LHS.
+4. The LHS must be a valid mutable place (same rules as §4.13).
+5. `+=` on `String` is equivalent to concatenation: `s += other` is
+   `s = s + other`. Numeric mixing between `Int` and `Float64` is
+   rejected, same as `+` (no implicit conversion).
+6. Compound assignment on an immutable binding or field produces the
+   same diagnostic as plain assignment (`E0601` et al.); there is no
+   separate code.
+
+There are no compound forms for `&&`, `||`, `??`, or comparison
+operators. `++` and `--` are explicitly excluded (§14) and are not
+reintroduced by the compound family.
+
 ---
