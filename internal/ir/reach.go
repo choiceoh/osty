@@ -33,14 +33,29 @@ func Reach(mod *Module) map[QualifiedRef]struct{} {
 
 type reachVisitor map[QualifiedRef]struct{}
 
+// Visit records qualifier.name pairs from two equivalent IR shapes:
+//   - CallExpr{Callee: FieldExpr{X: Ident, Name: …}} — what a module
+//     synthesised in a test or a direct IR builder looks like.
+//   - MethodCall{Receiver: Ident, Name: …} — what ir.Lower produces for
+//     every `x.m(args)` in source, whether `x` is a value, a stdlib
+//     module, or a user alias. The lowerer cannot disambiguate at its
+//     stage because method dispatch and module qualification share the
+//     same syntax.
+//
+// The scan treats both shapes uniformly; the caller filters against the
+// stdlib registry, so a user-defined method call on a local named
+// `strings` simply fails the registry lookup and is discarded.
 func (r reachVisitor) Visit(n Node) Visitor {
-	call, ok := n.(*CallExpr)
-	if !ok {
-		return r
-	}
-	if field, ok := call.Callee.(*FieldExpr); ok {
-		if ident, ok := field.X.(*Ident); ok && ident.Name != "" && field.Name != "" {
-			r[QualifiedRef{Qualifier: ident.Name, Name: field.Name}] = struct{}{}
+	switch call := n.(type) {
+	case *CallExpr:
+		if field, ok := call.Callee.(*FieldExpr); ok {
+			if ident, ok := field.X.(*Ident); ok && ident.Name != "" && field.Name != "" {
+				r[QualifiedRef{Qualifier: ident.Name, Name: field.Name}] = struct{}{}
+			}
+		}
+	case *MethodCall:
+		if ident, ok := call.Receiver.(*Ident); ok && ident.Name != "" && call.Name != "" {
+			r[QualifiedRef{Qualifier: ident.Name, Name: call.Name}] = struct{}{}
 		}
 	}
 	return r
