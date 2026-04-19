@@ -586,9 +586,10 @@ fn irAstAnnotationRoot(node: AstNode) -> Int {
         || node.kind == AstNLet
         || node.kind == AstNField_
         || node.kind == AstNVariant {
-        return node.extra
+        node.extra
+    } else {
+        -1
     }
-    -1
 }
 
 fn irAstAnnotationTreeContains(arena: AstArena, idx: Int, name: String) -> Bool {

@@ -1338,7 +1338,7 @@ fn charToDigit(ch: Char) -> Int {
     if s == "7" { return 7 }
     if s == "8" { return 8 }
     if s == "9" { return 9 }
-    -1
+    return -1
 }
 
 fn elabInferIndex(cx: ElabCx, node: AstNode) -> ElabResult {
@@ -3808,7 +3808,7 @@ fn pmDigitValueIn(ch: String, base: Int) -> Int {
         if ch == "e" || ch == "E" { return 14 }
         if ch == "f" || ch == "F" { return 15 }
     }
-    -1
+    return -1
 }
 
 fn pmDigitValue(ch: String) -> Int {
@@ -3822,7 +3822,7 @@ fn pmDigitValue(ch: String) -> Int {
     if ch == "7" { return 7 }
     if ch == "8" { return 8 }
     if ch == "9" { return 9 }
-    -1
+    return -1
 }
 
 pub struct PmInterval {
