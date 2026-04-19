@@ -512,6 +512,12 @@ const (
 	IntrinsicResultUnwrap
 	// IntrinsicResultUnwrapOr returns T. Args: [result, default].
 	IntrinsicResultUnwrapOr
+
+	// ---- LANG_SPEC §19 runtime sublanguage ----
+
+	// IntrinsicRawNull returns the null RawPtr. Args: [].
+	// Lowers to `inttoptr i64 0 to ptr` (or `ptr null`).
+	IntrinsicRawNull
 )
 
 // StorageLiveInstr marks a local as alive. Optional; backends that do

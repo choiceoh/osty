@@ -2368,6 +2368,10 @@ func (bs *bodyState) lowerCallExprInto(c *ir.CallExpr, dest *Place, destT Type) 
 				bs.emitConcurrencyIntrinsic(kind, c.Args, dest, destT, c.SpanV)
 				return
 			}
+			if kind := runtimeIntrinsicForFree(qualifierOf(use), fx.Name); kind != IntrinsicInvalid {
+				bs.emitRuntimeIntrinsic(kind, c.Args, dest, destT, c.SpanV)
+				return
+			}
 		}
 	}
 	args, callee := bs.resolveCall(c)
@@ -2395,6 +2399,23 @@ func (bs *bodyState) emitConcurrencyIntrinsic(kind IntrinsicKind, args []ir.Arg,
 		destPtr = nil
 	}
 	if isVoidConcurrencyIntrinsic(kind) {
+		destPtr = nil
+	}
+	bs.emit(&IntrinsicInstr{Dest: destPtr, Kind: kind, Args: out, SpanV: sp})
+}
+
+// emitRuntimeIntrinsic lowers args in source order and emits a single
+// IntrinsicInstr for a §19 runtime intrinsic. Void-returning kinds
+// (free / zero / copy / write) will need their own dest-clearing
+// branch when they land; today every supported runtime intrinsic
+// returns a value, so the unit-check above suffices.
+func (bs *bodyState) emitRuntimeIntrinsic(kind IntrinsicKind, args []ir.Arg, dest *Place, destT Type, sp Span) {
+	out := make([]Operand, len(args))
+	for i, a := range args {
+		out[i] = bs.lowerExprAsOperand(a.Value)
+	}
+	destPtr := dest
+	if destPtr != nil && isUnit(destT) {
 		destPtr = nil
 	}
 	bs.emit(&IntrinsicInstr{Dest: destPtr, Kind: kind, Args: out, SpanV: sp})
@@ -2584,6 +2605,10 @@ func (bs *bodyState) lowerMethodCallInto(mc *ir.MethodCall, dest Place, destT Ty
 	if use := bs.l.useAliasFor(mc.Receiver); use != nil {
 		if kind := concurrencyIntrinsicForFree(qualifierOf(use), mc.Name); kind != IntrinsicInvalid {
 			bs.emitConcurrencyIntrinsic(kind, mc.Args, &dest, destT, mc.SpanV)
+			return
+		}
+		if kind := runtimeIntrinsicForFree(qualifierOf(use), mc.Name); kind != IntrinsicInvalid {
+			bs.emitRuntimeIntrinsic(kind, mc.Args, &dest, destT, mc.SpanV)
 			return
 		}
 		args := make([]Operand, len(mc.Args))
@@ -2826,6 +2851,27 @@ func (bs *bodyState) lowerVariantLit(v *ir.VariantLit, hint Type) RValue {
 }
 
 // ==== concurrency intrinsic recognition ====
+
+// runtimeIntrinsicForFree maps a `std.runtime.raw`-qualified free
+// function call to its MIR intrinsic kind, per LANG_SPEC §19.5.
+// Returns IntrinsicInvalid when the qualifier/name pair is not a
+// known runtime intrinsic.
+//
+// `qualifier` is the `use`-level RawPath; for `use std.runtime.raw`
+// that is the literal "std.runtime.raw". Aliased forms
+// (`use std.runtime.raw as raw`) would arrive here with the same
+// RawPath, so the alias name is irrelevant — the resolver canonicalises
+// to the full path.
+func runtimeIntrinsicForFree(qualifier, name string) IntrinsicKind {
+	if qualifier != "std.runtime.raw" {
+		return IntrinsicInvalid
+	}
+	switch name {
+	case "null":
+		return IntrinsicRawNull
+	}
+	return IntrinsicInvalid
+}
 
 // concurrencyIntrinsicForFree maps a prelude / `thread`-namespaced
 // top-level function name to its MIR intrinsic kind. Returns
