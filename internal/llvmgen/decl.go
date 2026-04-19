@@ -1068,6 +1068,17 @@ func (g *generator) emitUserFunction(sig *fnSig) (string, error) {
 			setElemString:  p.setElemString,
 			sourceType:     p.sourceType,
 		}
+		// Phase 3: fn-typed parameter. The value arrives as a ptr to
+		// a closure env (same uniform ABI as phase 1), so we tag the
+		// binding with a synthesised *fnSig so subsequent `p(args)`
+		// inside the body dispatches through emitIndirectUserCall.
+		if ft, ok := p.sourceType.(*ast.FnType); ok {
+			fsig, err := synthFnSigFromFnType(ft, g.typeEnv())
+			if err != nil {
+				return "", err
+			}
+			v.fnSigRef = fsig
+		}
 		v.gcManaged = valueNeedsManagedRoot(v)
 		v.rootPaths = g.rootPathsForType(p.typ)
 		if p.byRef {

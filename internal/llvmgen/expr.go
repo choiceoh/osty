@@ -209,6 +209,13 @@ func (g *generator) emitIdent(name string) (value, error) {
 	if v, found, err := g.emitBuiltinOptionNone(name); found || err != nil {
 		return v, err
 	}
+	// Phase 1: bare top-level fn reference used in value position.
+	// Materialise a 1-field closure env pointing at a synthesised
+	// thunk so the uniform env-first-arg call ABI works for plain
+	// fn refs without captures. See internal/llvmgen/fn_value.go.
+	if sig, ok := g.functions[name]; ok && sig != nil && sig.receiverType == "" {
+		return g.emitFnValueEnv(sig)
+	}
 	return value{}, unsupportedf("name", "unknown identifier %q", name)
 }
 
@@ -2554,6 +2561,13 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 	if !found {
 		if id, ok := call.Fn.(*ast.Ident); ok && id.Name == "println" {
 			return value{}, unsupported("call", "println is only supported as a statement")
+		}
+		// Phase 1: indirect call through a first-class fn value held in a
+		// local/global binding. `f` was bound earlier (e.g. `let f =
+		// someFunc`) and carries fnSigRef so we recover the original
+		// signature for the call-site type string.
+		if v, ok, ierr := g.emitIndirectUserCall(call); ok || ierr != nil {
+			return v, ierr
 		}
 		return value{}, unsupportedf("call", "call target %T", call.Fn)
 	}
