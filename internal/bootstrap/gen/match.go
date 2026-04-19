@@ -30,7 +30,12 @@ func (g *gen) emitMatch(m *ast.MatchExpr) {
 	retType := "any"
 	if t := g.typeOf(m); t != nil && !types.IsError(t) && !types.IsUnit(t) {
 		retType = g.goType(t)
+	} else if g.retHintGo != "" {
+		retType = g.retHintGo
 	}
+	// Keep retHint alive through arm bodies: each arm returns the IIFE's
+	// value, whose type we just pinned above; a nested match/if/Ok/Err at
+	// the arm tail should see the same expected type as this match does.
 	name := g.freshVar("_m")
 	g.body.writef("func() %s { %s := ", retType, name)
 	g.emitExpr(m.Scrutinee)

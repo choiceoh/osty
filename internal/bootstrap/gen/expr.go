@@ -204,7 +204,7 @@ func (g *gen) emitStructLit(s *ast.StructLit) {
 			// Shorthand `Point { name }` → `Point{name: name}`.
 			g.body.write(mangleIdent(f.Name))
 		} else {
-			g.emitExpr(f.Value)
+			g.emitStructLitFieldValue(typeName, f.Name, f.Value)
 		}
 	}
 	if s.Spread != nil {
@@ -213,6 +213,25 @@ func (g *gen) emitStructLit(s *ast.StructLit) {
 		g.body.write(" /* TODO(phase3): ..spread on qualified type */ ")
 	}
 	g.body.write("}")
+}
+
+// emitStructLitFieldValue emits a struct-literal field RHS, coercing
+// empty list literals to the field's declared element type when the
+// checker failed to attach a type. Other expressions fall through to
+// plain emission.
+func (g *gen) emitStructLitFieldValue(typeName, fieldName string, value ast.Expr) {
+	if typeName != "" {
+		if fields := g.structFieldTypes[typeName]; fields != nil {
+			if ft := fields[fieldName]; ft != nil {
+				if elem := g.listElemGoTypeExpr(ft); elem != "" {
+					if g.emitExprWithExpectedListElem(value, elem) {
+						return
+					}
+				}
+			}
+		}
+	}
+	g.emitExpr(value)
 }
 
 // emitStructSpreadLit lowers `Type { f: v, ..base }` to an IIFE that
@@ -235,7 +254,7 @@ func (g *gen) emitStructSpreadLit(s *ast.StructLit, typeName string, refStruct b
 		if f.Value == nil {
 			g.body.write(mangleIdent(f.Name))
 		} else {
-			g.emitExpr(f.Value)
+			g.emitStructLitFieldValue(typeName, f.Name, f.Value)
 		}
 		g.body.write("; ")
 	}
@@ -1898,19 +1917,107 @@ func (g *gen) emitRandomGenericMethod(c *ast.CallExpr, f *ast.FieldExpr) bool {
 }
 
 func (g *gen) emitCollectionMethod(c *ast.CallExpr, f *ast.FieldExpr) bool {
-	n, ok := g.typeOf(f.X).(*types.Named)
-	if !ok || n.Sym == nil {
+	if n, ok := g.typeOf(f.X).(*types.Named); ok && n.Sym != nil {
+		switch n.Sym.Name {
+		case "List", "Iter":
+			if g.emitListMethod(c, f, n) {
+				return true
+			}
+		case "Map":
+			return g.emitMapMethod(c, f, n)
+		case "Set":
+			return g.emitSetMethod(c, f, n)
+		}
+	}
+	// Syntactic fallback: the native checker occasionally drops types on
+	// a receiver whose annotation is still visible through the AST. For
+	// the method shapes that don't care about the element type (len /
+	// isEmpty) this is enough to pick the right lowering.
+	return g.emitListMethodBySyntax(c, f)
+}
+
+// emitListMethodBySyntax handles the checker-miss fallback for
+// element-type-agnostic List methods. Extend this switch cautiously —
+// anything depending on element type should go through the semantic
+// path so it stays in sync with check.Types.
+func (g *gen) emitListMethodBySyntax(c *ast.CallExpr, f *ast.FieldExpr) bool {
+	if !g.receiverIsSyntacticList(f.X) {
 		return false
 	}
-	switch n.Sym.Name {
-	case "List", "Iter":
-		return g.emitListMethod(c, f, n)
-	case "Map":
-		return g.emitMapMethod(c, f, n)
-	case "Set":
-		return g.emitSetMethod(c, f, n)
+	switch f.Name {
+	case "len":
+		if len(c.Args) != 0 {
+			return false
+		}
+		g.body.write("len(")
+		g.emitExpr(f.X)
+		g.body.write(")")
+		return true
+	case "isEmpty":
+		if len(c.Args) != 0 {
+			return false
+		}
+		g.body.write("(len(")
+		g.emitExpr(f.X)
+		g.body.write(") == 0)")
+		return true
 	}
 	return false
+}
+
+// receiverIsSyntacticList reports whether an expression's declared
+// (syntactic) type is `List<T>` — used only as a fallback when the
+// checker didn't attach a semantic type.
+func (g *gen) receiverIsSyntacticList(e ast.Expr) bool {
+	t := g.syntacticType(e)
+	if t == nil {
+		return false
+	}
+	nt, ok := t.(*ast.NamedType)
+	if !ok || len(nt.Path) == 0 {
+		return false
+	}
+	last := nt.Path[len(nt.Path)-1]
+	return last == "List" || last == "Iter"
+}
+
+// syntacticType walks an expression and returns its declared AST type
+// annotation when derivable. Covers idents bound to let/param decls and
+// single-level struct field access. Returns nil when the annotation is
+// not locally visible.
+func (g *gen) syntacticType(e ast.Expr) ast.Type {
+	switch e := e.(type) {
+	case *ast.Ident:
+		sym := g.symbolFor(e)
+		if sym == nil {
+			return nil
+		}
+		switch d := sym.Decl.(type) {
+		case *ast.LetStmt:
+			return d.Type
+		case *ast.Param:
+			return d.Type
+		case *ast.Field:
+			return d.Type
+		case *ast.IdentPat:
+			if let, ok := g.letStmtForIdentPat[d]; ok {
+				return let.Type
+			}
+		}
+	case *ast.FieldExpr:
+		recvType := g.syntacticType(e.X)
+		nt, ok := recvType.(*ast.NamedType)
+		if !ok || len(nt.Path) == 0 {
+			return nil
+		}
+		name := nt.Path[len(nt.Path)-1]
+		if fields := g.structFieldTypes[name]; fields != nil {
+			if ft := fields[e.Name]; ft != nil {
+				return ft
+			}
+		}
+	}
+	return nil
 }
 
 func (g *gen) emitListMethod(c *ast.CallExpr, f *ast.FieldExpr, n *types.Named) bool {
@@ -3014,6 +3121,9 @@ func (g *gen) resultTypeArgsAt(callType types.Type, payloadType types.Type, isEr
 		tErr = g.goType(n.Args[1])
 		return tArg, tErr
 	}
+	if a, e, ok := g.resultArgsFromSyntax(g.retHintType); ok {
+		return a, e
+	}
 	// Fallback to payload type on the known side.
 	if payloadType != nil {
 		if isErr {
@@ -3023,6 +3133,25 @@ func (g *gen) resultTypeArgsAt(callType types.Type, payloadType types.Type, isEr
 		}
 	}
 	return tArg, tErr
+}
+
+// resultArgsFromSyntax pulls `Result<T, E>` type args out of a syntactic
+// type annotation — used when the native checker failed to attach a
+// semantic type to an Ok/Err call but the enclosing fn's `ReturnType`
+// tells us what Result shape is expected.
+func (g *gen) resultArgsFromSyntax(t ast.Type) (string, string, bool) {
+	nt, ok := t.(*ast.NamedType)
+	if !ok || len(nt.Args) != 2 {
+		return "", "", false
+	}
+	name := ""
+	if len(nt.Path) > 0 {
+		name = nt.Path[len(nt.Path)-1]
+	}
+	if name != "Result" {
+		return "", "", false
+	}
+	return g.goTypeExpr(nt.Args[0]), g.goTypeExpr(nt.Args[1]), true
 }
 
 // emitBuiltinCall handles prelude intrinsics. Returns true when it
@@ -3175,9 +3304,12 @@ func (g *gen) emitBuiltinCall(name string, args []*ast.Arg, call *ast.CallExpr) 
 				callType = g.typeOf(call)
 			}
 			tArg, tErr := g.resultTypeArgsAt(callType, g.typeOf(args[0].Value), false)
+			prevHintType, prevHintGo := g.retHintType, g.retHintGo
+			g.retHintType, g.retHintGo = nil, ""
 			g.body.writef("resultOk[%s, %s](", tArg, tErr)
 			g.emitExpr(args[0].Value)
 			g.body.write(")")
+			g.retHintType, g.retHintGo = prevHintType, prevHintGo
 			return true
 		}
 	case "Err":
@@ -3188,9 +3320,12 @@ func (g *gen) emitBuiltinCall(name string, args []*ast.Arg, call *ast.CallExpr) 
 				callType = g.typeOf(call)
 			}
 			tArg, tErr := g.resultTypeArgsAt(callType, g.typeOf(args[0].Value), true)
+			prevHintType, prevHintGo := g.retHintType, g.retHintGo
+			g.retHintType, g.retHintGo = nil, ""
 			g.body.writef("resultErr[%s, %s](", tArg, tErr)
 			g.emitExpr(args[0].Value)
 			g.body.write(")")
+			g.retHintType, g.retHintGo = prevHintType, prevHintGo
 			return true
 		}
 	}
@@ -3869,6 +4004,8 @@ func (g *gen) emitIfExpr(ie *ast.IfExpr) {
 	retType := "any"
 	if t := g.typeOf(ie); t != nil && !types.IsError(t) && !types.IsUnit(t) {
 		retType = g.goType(t)
+	} else if g.retHintGo != "" {
+		retType = g.retHintGo
 	}
 	g.body.writef("func() %s {", retType)
 	g.emitIfChain(ie, true)
