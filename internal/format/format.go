@@ -96,6 +96,14 @@ type printer struct {
 	pendingNL   bool
 	atLineStart bool
 
+	// inlineOnly suppresses every multi-line rendering decision made
+	// inside a single-quoted string interpolation. A `"..."` literal
+	// cannot hold a newline (§1.6.3 — only `"""..."""` can), so any
+	// `{expr}` nested in it must serialize flat regardless of width.
+	// Set by printStringLit around each interpolated-expression emit;
+	// printBracketedList and shouldBreakChain check it to force flat.
+	inlineOnly bool
+
 	// comments is the queue of yet-to-be-emitted comments in source
 	// order. commentIdx is the sliding front pointer.
 	comments   []token.Comment
@@ -136,6 +144,7 @@ type snapshot struct {
 	level       int
 	pendingNL   bool
 	atLineStart bool
+	inlineOnly  bool
 	commentIdx  int
 	lastSrcLine int
 	mapLen      int
@@ -147,6 +156,7 @@ func (p *printer) snapshot() snapshot {
 		level:       p.level,
 		pendingNL:   p.pendingNL,
 		atLineStart: p.atLineStart,
+		inlineOnly:  p.inlineOnly,
 		commentIdx:  p.commentIdx,
 		lastSrcLine: p.lastSrcLine,
 		mapLen:      p.maps.Snapshot(),
@@ -158,6 +168,7 @@ func (p *printer) restore(s snapshot) {
 	p.level = s.level
 	p.pendingNL = s.pendingNL
 	p.atLineStart = s.atLineStart
+	p.inlineOnly = s.inlineOnly
 	p.commentIdx = s.commentIdx
 	p.lastSrcLine = s.lastSrcLine
 	p.maps.Restore(s.mapLen)

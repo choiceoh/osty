@@ -309,6 +309,20 @@ func printBracketedList[T any](p *printer, open, close string, items []T, forceM
 		p.write(close)
 		return
 	}
+	// Inside a single-quoted string interpolation the list MUST stay
+	// flat — overflowing MaxLineWidth or containing an embedded newline
+	// is preferable to splitting, which would emit invalid source.
+	if p.inlineOnly {
+		p.write(open)
+		for i, it := range items {
+			if i > 0 {
+				p.write(", ")
+			}
+			emit(it)
+		}
+		p.write(close)
+		return
+	}
 	if !forceMulti {
 		snap := p.snapshot()
 		p.write(open)
@@ -938,7 +952,7 @@ func (p *printer) printExprInner(e ast.Expr) {
 		p.printExpr(n.X)
 		p.write("?")
 	case *ast.CallExpr:
-		if base, segs := collectChain(n); shouldBreakChain(base, segs) {
+		if base, segs := collectChain(n); !p.inlineOnly && shouldBreakChain(base, segs) {
 			p.printMethodChain(base, segs)
 			return
 		}
@@ -1053,13 +1067,22 @@ func (p *printer) printStringLit(s *ast.StringLit) {
 		return
 	}
 	p.write("\"")
+	// Interpolations inside a `"..."` literal must stay flat: the lexer
+	// rejects embedded newlines, so any multi-line rendering that
+	// printBracketedList / shouldBreakChain would normally pick for a
+	// long call or chain would round-trip as a parse error. Force flat
+	// only across the interpolation expression; literal segments are
+	// unaffected.
+	prevInline := p.inlineOnly
 	for _, part := range s.Parts {
 		if part.IsLit {
 			p.write(escapeStringText(part.Lit))
 			continue
 		}
 		p.write("{")
+		p.inlineOnly = true
 		p.printExpr(part.Expr)
+		p.inlineOnly = prevInline
 		p.write("}")
 	}
 	p.write("\"")
