@@ -13,6 +13,7 @@ import (
 
 	"github.com/osty/osty/internal/selfhost/bundle"
 )
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -157,6 +158,10 @@ func patchGenerated(path string) error {
 	}{
 		{name: "frontPositionAt", body: frontPositionAtReplacement},
 		{name: "frontUnitAt", body: frontUnitAtReplacement},
+		{name: "frontTokenListCount", body: frontTokenListCountReplacement},
+		{name: "frontTokenAtList", body: frontTokenAtListReplacement},
+		{name: "astArenaNodeCount", body: astArenaNodeCountReplacement},
+		{name: "astArenaNodeAt", body: astArenaNodeAtReplacement},
 	} {
 		var err error
 		src, err = replaceGeneratedFunction(src, fn.name, fn.body)
@@ -301,5 +306,31 @@ const frontUnitAtReplacement = `func frontUnitAt(units []string, target int) str
 		return ""
 	}
 	return units[target]
+}
+`
+
+const frontTokenListCountReplacement = `func frontTokenListCount(tokens []*FrontToken) int {
+	return len(tokens)
+}
+`
+
+const frontTokenAtListReplacement = `func frontTokenAtList(tokens []*FrontToken, target int) *FrontToken {
+	if target < 0 || target >= len(tokens) {
+		return frontEOF()
+	}
+	return tokens[target]
+}
+`
+
+const astArenaNodeCountReplacement = `func astArenaNodeCount(arena *AstArena) int {
+	return len(arena.nodes)
+}
+`
+
+const astArenaNodeAtReplacement = `func astArenaNodeAt(arena *AstArena, idx int) *AstNode {
+	if idx < 0 || idx >= len(arena.nodes) {
+		return emptyAstNode(AstNodeKind(&AstNodeKind_AstNError{}))
+	}
+	return arena.nodes[idx]
 }
 `
