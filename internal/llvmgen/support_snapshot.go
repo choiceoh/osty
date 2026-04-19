@@ -2123,6 +2123,10 @@ func llvmFloatRuntimeToStringSymbol() string {
 	return "osty_rt_float_to_string"
 }
 
+func llvmBoolRuntimeToStringSymbol() string {
+	return "osty_rt_bool_to_string"
+}
+
 func llvmStringRuntimeByteLenSymbol() string {
 	return "osty_rt_strings_ByteLen"
 }
@@ -2143,6 +2147,7 @@ func llvmStringRuntimeDeclarations() []string {
 		"declare ptr @osty_rt_strings_Concat(ptr, ptr)",
 		"declare ptr @osty_rt_int_to_string(i64)",
 		"declare ptr @osty_rt_float_to_string(double)",
+		"declare ptr @osty_rt_bool_to_string(i1)",
 		"declare i64 @osty_rt_strings_ByteLen(ptr)",
 		"declare i64 @osty_rt_strings_Compare(ptr, ptr)",
 		"declare ptr @osty_rt_strings_Join(ptr, ptr)",
@@ -2171,6 +2176,10 @@ func llvmIntRuntimeToString(emitter *LlvmEmitter, value *LlvmValue) *LlvmValue {
 
 func llvmFloatRuntimeToString(emitter *LlvmEmitter, value *LlvmValue) *LlvmValue {
 	return llvmCall(emitter, "ptr", "osty_rt_float_to_string", []*LlvmValue{value})
+}
+
+func llvmBoolRuntimeToString(emitter *LlvmEmitter, value *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "ptr", "osty_rt_bool_to_string", []*LlvmValue{value})
 }
 
 func llvmStringCompare(emitter *LlvmEmitter, op string, left *LlvmValue, right *LlvmValue) *LlvmValue {

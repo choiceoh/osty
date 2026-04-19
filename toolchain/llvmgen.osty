@@ -2235,6 +2235,10 @@ pub fn llvmFloatRuntimeToStringSymbol() -> String {
     "osty_rt_float_to_string"
 }
 
+pub fn llvmBoolRuntimeToStringSymbol() -> String {
+    "osty_rt_bool_to_string"
+}
+
 pub fn llvmStringRuntimeByteLenSymbol() -> String {
     "osty_rt_strings_ByteLen"
 }
@@ -2261,6 +2265,7 @@ pub fn llvmStringRuntimeDeclarations() -> List<String> {
         "declare ptr @osty_rt_strings_Concat(ptr, ptr)",
         "declare ptr @osty_rt_int_to_string(i64)",
         "declare ptr @osty_rt_float_to_string(double)",
+        "declare ptr @osty_rt_bool_to_string(i1)",
         "declare i64 @osty_rt_strings_ByteLen(ptr)",
         "declare i64 @osty_rt_strings_Compare(ptr, ptr)",
         "declare ptr @osty_rt_strings_Join(ptr, ptr)",
@@ -2289,6 +2294,10 @@ pub fn llvmIntRuntimeToString(emitter: LlvmEmitter, value: LlvmValue) -> LlvmVal
 
 pub fn llvmFloatRuntimeToString(emitter: LlvmEmitter, value: LlvmValue) -> LlvmValue {
     llvmCall(emitter, "ptr", "osty_rt_float_to_string", [value])
+}
+
+pub fn llvmBoolRuntimeToString(emitter: LlvmEmitter, value: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "ptr", "osty_rt_bool_to_string", [value])
 }
 
 pub fn llvmStringCompare(

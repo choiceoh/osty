@@ -136,6 +136,8 @@ func (g *generator) emitInterpolationStringPiece(v value) (value, error) {
 		return g.emitRuntimeIntToString(v)
 	case "double":
 		return g.emitRuntimeFloatToString(v)
+	case "i1":
+		return g.emitRuntimeBoolToString(v)
 	}
 	return value{}, unsupportedf("type-system", "interpolation of %s value requires .toString() which the LLVM backend does not yet lower", v.typ)
 }
@@ -949,6 +951,17 @@ func (g *generator) emitRuntimeFloatToString(v value) (value, error) {
 	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "double"}})
 	emitter := g.toOstyEmitter()
 	out := llvmFloatRuntimeToString(emitter, toOstyValue(v))
+	g.takeOstyEmitter(emitter)
+	text := fromOstyValue(out)
+	text.gcManaged = true
+	return text, nil
+}
+
+func (g *generator) emitRuntimeBoolToString(v value) (value, error) {
+	symbol := llvmBoolRuntimeToStringSymbol()
+	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "i1"}})
+	emitter := g.toOstyEmitter()
+	out := llvmBoolRuntimeToString(emitter, toOstyValue(v))
 	g.takeOstyEmitter(emitter)
 	text := fromOstyValue(out)
 	text.gcManaged = true

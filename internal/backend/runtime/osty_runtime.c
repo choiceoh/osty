@@ -824,6 +824,13 @@ const char *osty_rt_int_to_string(int64_t value) {
     return osty_rt_string_dup_site(buffer, (size_t)written, "runtime.int.to_string");
 }
 
+const char *osty_rt_bool_to_string(bool value) {
+    if (value) {
+        return osty_rt_string_dup_site("true", 4, "runtime.bool.to_string");
+    }
+    return osty_rt_string_dup_site("false", 5, "runtime.bool.to_string");
+}
+
 const char *osty_rt_float_to_string(double value) {
     char buffer[64];
     int precision;
