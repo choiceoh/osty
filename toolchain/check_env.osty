@@ -898,7 +898,7 @@ pub fn checkExpectAssignable(env: CheckEnv, expected: Int, got: Int, start: Int,
 pub fn checkIsAssignable(env: CheckEnv, dst: Int, src: Int) -> Bool {
     let d = checkResolveAliasDeep(env, dst)
     let s = checkResolveAliasDeep(env, src)
-    if tyIsErr(env.tys, d) || tyIsErr(env.tys, s) {
+    if tyIsBad(env.tys, d) || tyIsBad(env.tys, s) {
         return true
     }
     if tyIsNamedHead(env.tys, d, "Any") || tyIsNamedHead(env.tys, s, "Any") {
@@ -993,7 +993,7 @@ pub fn checkIsAssignable(env: CheckEnv, dst: Int, src: Int) -> Bool {
 pub fn checkTypeSatisfiesInterface(env: CheckEnv, concrete: Int, iface: Int) -> Bool {
     let concreteResolved = checkResolveAliasDeep(env, concrete)
     let ifaceResolved = checkResolveAliasDeep(env, iface)
-    if tyIsErr(env.tys, concreteResolved) || tyIsErr(env.tys, ifaceResolved) {
+    if tyIsBad(env.tys, concreteResolved) || tyIsBad(env.tys, ifaceResolved) {
         return true
     }
     if tyEq(env.tys, concreteResolved, ifaceResolved) {
