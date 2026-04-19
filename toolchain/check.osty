@@ -553,7 +553,7 @@ fn serializeCheckResult(cx: ElabCx) -> FrontCheckResult {
 
     let mut typedNodes: List<FrontCheckedNode> = []
     for node in cx.core.nodes {
-        if node.originAst < 0 || tyIsErr(cx.env.tys, node.ty) {
+        if node.originAst < 0 || tyIsBad(cx.env.tys, node.ty) {
             continue
         }
         let kind = typedExprKindNameAt(cx.ast, node.originAst)

@@ -1041,7 +1041,7 @@ func bindingPatternName(p ast.Pattern) string {
 func parseSelfhostTypeName(raw string, scope *resolve.Scope) types.Type {
 	text := strings.TrimSpace(raw)
 	switch text {
-	case "", "Invalid":
+	case "", "Invalid", "Poison":
 		return types.ErrorType
 	case "()", "Unit":
 		return types.Unit
