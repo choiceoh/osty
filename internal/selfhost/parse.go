@@ -9,5 +9,5 @@ import (
 // self-hosted arena into the compiler's public AST.
 func Parse(src []byte) (*ast.File, []*diag.Diagnostic) {
 	run := Run(src)
-	return astLowerPublicFile(run.parser.arena, run.Tokens()), run.Diagnostics()
+	return run.File(), run.Diagnostics()
 }

@@ -1,6 +1,7 @@
 package selfhost
 
 import (
+	"github.com/osty/osty/internal/ast"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -19,8 +20,9 @@ func Lex(src []byte) ([]token.Token, []*diag.Diagnostic, []token.Comment) {
 }
 
 // FrontendRun is one complete self-hosted front-end pass over a source file.
-// It owns the shared lex stream, parser arena, public token adaptation, and
-// diagnostic adaptation so callers do not accidentally re-run the front end.
+// It owns the shared lex stream, parser arena, public token adaptation,
+// lowered AST, and diagnostic adaptation so callers do not accidentally
+// re-run the front end.
 type FrontendRun struct {
 	text     string
 	rt       runeTable
@@ -29,6 +31,7 @@ type FrontendRun struct {
 	parser   *OstyParser
 	toks     []token.Token
 	comments []token.Comment
+	file     *ast.File
 	lexDiags []*diag.Diagnostic
 	diags    []*diag.Diagnostic
 	adapted  bool
@@ -67,6 +70,15 @@ func (r *FrontendRun) Tokens() []token.Token {
 func (r *FrontendRun) Comments() []token.Comment {
 	r.ensureLexAdapted()
 	return r.comments
+}
+
+// File returns the lowered semantic AST for this front-end pass.
+func (r *FrontendRun) File() *ast.File {
+	if r.file != nil {
+		return r.file
+	}
+	r.file = astLowerPublicFile(r.parser.arena, r.Tokens())
+	return r.file
 }
 
 // LexDiagnostics returns lexer-only diagnostics.

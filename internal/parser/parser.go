@@ -5,7 +5,6 @@ package parser
 import (
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
-	"github.com/osty/osty/internal/selfhost"
 )
 
 // Error is retained as an alias for back-compat. New code should use
@@ -34,55 +33,25 @@ func Parse(src []byte) (*ast.File, []error) {
 // ParseDetailed lexes, parses, and canonicalizes src, returning the semantic
 // AST plus parser-level provenance.
 func ParseDetailed(src []byte) Result {
-	normalized, aliases := normalizeStableAliases(src)
-	// v0.5 (G28): expand `use path::{a, b as c}` into flat `use
-	// path.a; use path.b as c` lines before the self-hosted parser
-	// runs. Pure source rewrite — no AST shape change, offsets shift
-	// downward from the expansion point and provenance records each
-	// expansion.
-	expanded, scopedSteps := expandScopedImports(normalized)
-	file, diags := selfhost.Parse(expanded)
-	prov := &Provenance{}
-	if len(aliases) > 0 {
-		prov.Aliases = aliases
-	}
-	if len(scopedSteps) > 0 {
-		prov.Lowerings = append(prov.Lowerings, scopedSteps...)
-	}
-	if file != nil {
-		if lowerings := lowerStableAST(file); len(lowerings) > 0 {
-			prov.Lowerings = append(prov.Lowerings, lowerings...)
-		}
-		// v0.5 (G30): the self-hosted parser silently drops `pub`
-		// before `use`; flip IsPub on affected UseDecls here until
-		// the bootstrap regen pipeline is restored and the flag can
-		// be carried through the AST lowerer.
-		markPubUseDecls(expanded, file)
-	}
-	if prov.Empty() {
-		prov = nil
-	}
-	return Result{
-		File:        file,
-		Diagnostics: diags,
-		Provenance:  prov,
-	}
+	pipeline := newParsePipeline(src)
+	pipeline.applySourceCompat()
+	file, diags := pipeline.parse()
+	pipeline.applyASTFixups(file)
+	return pipeline.result(file, diags)
 }
 
 // ParseCanonical parses already-canonical source without running the
 // source-level compatibility rewrites that ParseDetailed applies for
 // user-authored code. Callers should use this only for trusted inputs that do
-// not rely on stable-alias keywords, scoped-import expansion, or `pub use`
-// visibility repair.
+// not rely on stable-alias keywords or scoped-import expansion.
 //
 // Unlike calling selfhost.Parse directly, this still applies the parser's
-// AST-only lowerings so canonical sources that use lowered surface forms such
+// shared AST fixups so canonical sources that use lowered surface forms such
 // as builtin `len(...)` continue to match the rest of the compiler pipeline.
 func ParseCanonical(src []byte) (*ast.File, []*diag.Diagnostic) {
-	file, diags := selfhost.Parse(src)
-	if file != nil {
-		lowerStableAST(file)
-	}
+	pipeline := newParsePipeline(src)
+	file, diags := pipeline.parse()
+	pipeline.applyASTFixups(file)
 	return file, diags
 }
 

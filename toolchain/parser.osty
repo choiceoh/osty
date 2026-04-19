@@ -113,6 +113,36 @@ pub fn astPatternBindingKind() -> Int { 9 }
 pub fn astPatternFieldKind() -> Int { 10 }
 pub fn astPatternErrorKind() -> Int { 11 }
 
+pub fn astUseDeclFlagGo() -> Int { 1 }
+pub fn astUseDeclFlagPub() -> Int { 2 }
+
+fn astUseDeclFlags(isGo: Bool, isPub: Bool) -> Int {
+    if isGo && isPub {
+        return astUseDeclFlagGo() + astUseDeclFlagPub()
+    }
+    if isGo {
+        return astUseDeclFlagGo()
+    }
+    if isPub {
+        return astUseDeclFlagPub()
+    }
+    0
+}
+
+pub fn astUseDeclIsGo(n: AstNode) -> Bool {
+    if n.kind != AstNUseDecl {
+        return false
+    }
+    n.flags == astUseDeclFlagGo() || n.flags == astUseDeclFlagGo() + astUseDeclFlagPub()
+}
+
+pub fn astUseDeclIsPub(n: AstNode) -> Bool {
+    if n.kind != AstNUseDecl {
+        return false
+    }
+    n.flags == astUseDeclFlagPub() || n.flags == astUseDeclFlagGo() + astUseDeclFlagPub()
+}
+
 pub fn astArenaAdd(arena: AstArena, node: AstNode) -> Int {
     let idx = astArenaNodeCount(arena)
     arena.nodes.push(node)
@@ -1547,7 +1577,7 @@ fn opParseDecl(p: OstyParser) -> Int {
     if tok.kind == FrontEnum { return opParseEnumDecl(p, isPub, anns) }
     if tok.kind == FrontInterface { return opParseInterfaceDecl(p, isPub, anns) }
     if tok.kind == FrontType { return opParseTypeAliasDecl(p, isPub, anns) }
-    if tok.kind == FrontUse { return opParseUseDecl(p) }
+    if tok.kind == FrontUse { return opParseUseDecl(p, isPub) }
     if tok.kind == FrontLet { return opParseLetStmt(p, anns) }
     let errKindName = frontTokenKindName(tok.kind)
     opErrorFull(p, "expected declaration, got {errKindName}", "a declaration starts with `fn`, `struct`, `enum`, `interface`, `type`, `use`, or `let`", "", "E0030")
@@ -1746,7 +1776,7 @@ fn opParseTypeAliasDecl(p: OstyParser, isPub: Bool, anns: List<Int>) -> Int {
     opAddNode(p, n)
 }
 
-fn opParseUseDecl(p: OstyParser) -> Int {
+fn opParseUseDecl(p: OstyParser, isPub: Bool) -> Int {
     let start = p.pos
     let _ = opAdvance(p)
     let mut rawPath = ""
@@ -1788,7 +1818,7 @@ fn opParseUseDecl(p: OstyParser) -> Int {
     n.children = goItems
     n.start = start
     n.end = p.pos
-    if isGo { n.flags = 1 }
+    n.flags = astUseDeclFlags(isGo, isPub)
     if alias != "" {
         n.op = FrontIdent
         let mut aliasNode = emptyAstNode(AstNIdent)
@@ -1962,7 +1992,7 @@ pub fn astCountSummary(file: AstFile) -> FrontParseSummary {
             AstNTypeAlias -> { s.aliases = s.aliases + 1
             if n.flags == 1 { s.publicDecls = s.publicDecls + 1 } },
             AstNUseDecl -> { s.uses = s.uses + 1
-            if n.flags == 1 { s.goUses = s.goUses + 1 } },
+            if astUseDeclIsGo(n) { s.goUses = s.goUses + 1 } },
             AstNBlock -> { s.blocks = s.blocks + 1 },
             AstNLet -> { s.lets = s.lets + 1
             s.statements = s.statements + 1

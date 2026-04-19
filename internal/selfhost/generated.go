@@ -18520,6 +18520,47 @@ func astPatternErrorKind() int {
 	return 11
 }
 
+func astUseDeclFlagGo() int {
+	return 1
+}
+
+func astUseDeclFlagPub() int {
+	return 2
+}
+
+func astUseDeclFlags(isGo bool, isPub bool) int {
+	if isGo && isPub {
+		return astUseDeclFlagGo() + astUseDeclFlagPub()
+	}
+	if isGo {
+		return astUseDeclFlagGo()
+	}
+	if isPub {
+		return astUseDeclFlagPub()
+	}
+	return 0
+}
+
+func astUseDeclIsGo(n *AstNode) bool {
+	if n == nil {
+		return false
+	}
+	if !func() bool { _, ok := n.kind.(*AstNodeKind_AstNUseDecl); return ok }() {
+		return false
+	}
+	return n.flags == astUseDeclFlagGo() || n.flags == astUseDeclFlagGo()+astUseDeclFlagPub()
+}
+
+func astUseDeclIsPub(n *AstNode) bool {
+	if n == nil {
+		return false
+	}
+	if !func() bool { _, ok := n.kind.(*AstNodeKind_AstNUseDecl); return ok }() {
+		return false
+	}
+	return n.flags == astUseDeclFlagPub() || n.flags == astUseDeclFlagGo()+astUseDeclFlagPub()
+}
+
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6820:5
 func astArenaAdd(arena *AstArena, node *AstNode) int {
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6821:5
@@ -21729,7 +21770,7 @@ func opParseDecl(p *OstyParser) int {
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8254:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontUse{})) {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8254:31
-		return opParseUseDecl(p)
+		return opParseUseDecl(p, isPub)
 	}
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8255:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontLet{})) {
@@ -22199,7 +22240,7 @@ func opParseTypeAliasDecl(p *OstyParser, isPub bool, anns []int) int {
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8453:1
-func opParseUseDecl(p *OstyParser) int {
+func opParseUseDecl(p *OstyParser, isPub bool) int {
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8454:5
 	start := p.pos
 	_ = start
@@ -22288,10 +22329,7 @@ func opParseUseDecl(p *OstyParser) int {
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8494:6
 	n.end = p.pos
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8495:5
-	if isGo {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8495:16
-		n.flags = 1
-	}
+	n.flags = astUseDeclFlags(isGo, isPub)
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8496:5
 	if alias != "" {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8497:10
@@ -23030,7 +23068,7 @@ func astCountSummary(file *AstFile) *FrontParseSummary {
 					return _p1823 + _rhs1824
 				}()
 				// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8669:13
-				if n.flags == 1 {
+				if astUseDeclIsGo(n) {
 					// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8669:32
 					s.goUses = func() int {
 						var _p1825 int = s.goUses
@@ -50261,7 +50299,7 @@ func astLowerUseDecl(arena *AstArena, toks []astbridge.Token, n *AstNode) astbri
 	raw := astLowerUnquoteMaybe(n.text)
 	_ = raw
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23905:5
-	if n.flags == 1 {
+	if astUseDeclIsGo(n) {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23906:9
 		reconstructed := astLowerUseGoRawPath(toks, n)
 		_ = reconstructed
@@ -50309,11 +50347,11 @@ func astLowerUseDecl(arena *AstArena, toks []astbridge.Token, n *AstNode) astbri
 	var path []string = make([]string, 0, 1)
 	_ = path
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23929:5
-	if !(n.flags == 1) {
+	if !astUseDeclIsGo(n) {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23930:9
 		path = astLowerSplitPath(raw)
 	}
-	return astbridge.UseDeclNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), raw, path, n.flags == 1, alias, body)
+	return astbridge.UseDeclNodeFull(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), raw, path, astUseDeclIsGo(n), astUseDeclIsPub(n), alias, body)
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23935:1
