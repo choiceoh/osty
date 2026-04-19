@@ -249,6 +249,22 @@ fn opPeekPastNewlines(p: OstyParser) -> FrontToken {
 
 fn opAt(p: OstyParser, kind: FrontTokenKind) -> Bool { opPeek(p).kind == kind }
 
+fn opIsStableAlias(tok: FrontToken, text: String) -> Bool {
+    tok.kind == FrontIdent && tok.text == text
+}
+
+fn opIsFnHead(tok: FrontToken) -> Bool {
+    tok.kind == FrontFn || opIsStableAlias(tok, "func") || opIsStableAlias(tok, "def") || opIsStableAlias(tok, "function")
+}
+
+fn opIsUseHead(tok: FrontToken) -> Bool {
+    tok.kind == FrontUse || opIsStableAlias(tok, "import")
+}
+
+fn opIsForHead(tok: FrontToken) -> Bool {
+    tok.kind == FrontFor || opIsStableAlias(tok, "while")
+}
+
 fn opAdvance(p: OstyParser) -> FrontToken {
     if p.typeGtDebt > 0 {
         p.typeGtDebt = p.typeGtDebt - 1
@@ -304,8 +320,9 @@ fn opAddNode(p: OstyParser, node: AstNode) -> Int { astArenaAdd(p.arena, node) }
 
 fn opSyncDecl(p: OstyParser) {
     for !(opAt(p, FrontEOF)) {
-        let kind = opPeek(p).kind
-        if kind == FrontFn || kind == FrontStruct || kind == FrontEnum || kind == FrontInterface || kind == FrontType || kind == FrontUse || kind == FrontPub { return }
+        let tok = opPeek(p)
+        let kind = tok.kind
+        if opIsFnHead(tok) || kind == FrontStruct || kind == FrontEnum || kind == FrontInterface || kind == FrontType || opIsUseHead(tok) || kind == FrontPub { return }
         if kind == FrontHash && opPeekAt(p, 1).kind == FrontLBracket { return }
         let _ = opAdvance(p)
     }
@@ -313,13 +330,14 @@ fn opSyncDecl(p: OstyParser) {
 
 fn opSyncStmt(p: OstyParser) {
     for !(opAt(p, FrontEOF)) {
-        let kind = opPeek(p).kind
+        let tok = opPeek(p)
+        let kind = tok.kind
         if kind == FrontNewline {
             let _ = opAdvance(p)
             return
         }
         if kind == FrontRBrace { return }
-        if kind == FrontLet || kind == FrontReturn || kind == FrontBreak || kind == FrontContinue || kind == FrontDefer || kind == FrontFor || kind == FrontIf || kind == FrontMatch { return }
+        if kind == FrontLet || kind == FrontReturn || kind == FrontBreak || kind == FrontContinue || kind == FrontDefer || opIsForHead(tok) || kind == FrontIf || kind == FrontMatch { return }
         let _ = opAdvance(p)
     }
 }
@@ -645,8 +663,9 @@ fn opLooksLikeMap(p: OstyParser) -> Bool {
     opSkipNewlines(p)
     if opAt(p, FrontRBrace) { p.pos = save
     return false }
-    let kind = opPeek(p).kind
-    if kind == FrontLet || kind == FrontReturn || kind == FrontBreak || kind == FrontContinue || kind == FrontDefer || kind == FrontFor { p.pos = save
+    let tok = opPeek(p)
+    let kind = tok.kind
+    if kind == FrontLet || kind == FrontReturn || kind == FrontBreak || kind == FrontContinue || kind == FrontDefer || opIsForHead(tok) { p.pos = save
     return false }
     opParseExpr(p)
     let result = opAt(p, FrontColon) && opPeekAt(p, 1).kind != FrontColon
@@ -1001,7 +1020,7 @@ fn opParseStmt(p: OstyParser) -> Int {
         return opAddNode(p, n)
     }
     if tok.kind == FrontDefer { return opParseDeferStmt(p) }
-    if tok.kind == FrontFor { return opParseForStmt(p) }
+    if opIsForHead(tok) { return opParseForStmt(p) }
     let expr = opParseExpr(p)
     let next = opPeek(p)
     if next.kind == FrontChanArrow {
@@ -1367,7 +1386,7 @@ fn opParseType(p: OstyParser) -> Int {
 
 fn opParseTypeAtom(p: OstyParser) -> Int {
     let tok = opPeek(p)
-    if tok.kind == FrontFn { return opParseFnType(p) }
+    if opIsFnHead(tok) { return opParseFnType(p) }
     if tok.kind == FrontLParen { return opParseTupleType(p) }
     if tok.kind == FrontIdent {
         let start = p.pos
@@ -1580,12 +1599,12 @@ fn opParseDecl(p: OstyParser) -> Int {
     let mut isPub = false
     if opEat(p, FrontPub) { isPub = true }
     let tok = opPeek(p)
-    if tok.kind == FrontFn { return opParseFnDecl(p, isPub, anns) }
+    if opIsFnHead(tok) { return opParseFnDecl(p, isPub, anns) }
     if tok.kind == FrontStruct { return opParseStructDecl(p, isPub, anns) }
     if tok.kind == FrontEnum { return opParseEnumDecl(p, isPub, anns) }
     if tok.kind == FrontInterface { return opParseInterfaceDecl(p, isPub, anns) }
     if tok.kind == FrontType { return opParseTypeAliasDecl(p, isPub, anns) }
-    if tok.kind == FrontUse { return opParseUseDecl(p, isPub) }
+    if opIsUseHead(tok) { return opParseUseDecl(p, isPub) }
     if tok.kind == FrontLet { return opParseLetStmt(p, anns) }
     let errKindName = frontTokenKindName(tok.kind)
     opErrorFull(p, "expected declaration, got {errKindName}", "a declaration starts with `fn`, `struct`, `enum`, `interface`, `type`, `use`, or `let`", "", "E0030")

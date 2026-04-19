@@ -40,10 +40,8 @@ func ParseDetailed(src []byte) Result {
 	return pipeline.result(file, diags)
 }
 
-// ParseCanonical parses already-canonical source without running the
-// source-level compatibility rewrites that ParseDetailed applies for
-// user-authored code. Callers should use this only for trusted inputs that do
-// not rely on stable-alias keyword rewrites.
+// ParseCanonical parses trusted source without collecting the parser-owned
+// compatibility provenance that ParseDetailed records for user-authored code.
 //
 // Unlike calling selfhost.Parse directly, this still applies the parser's
 // shared AST fixups so canonical sources that use lowered surface forms such

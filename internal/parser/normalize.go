@@ -1,8 +1,6 @@
 package parser
 
 import (
-	"bytes"
-
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/token"
@@ -54,16 +52,9 @@ var stableAliasSpecs = map[string]stableAliasSpec{
 	},
 }
 
-type stableAliasEdit struct {
-	start int
-	end   int
-	text  []byte
-	step  ProvenanceStep
-}
-
-func normalizeStableAliases(src []byte) ([]byte, []ProvenanceStep) {
+func collectStableAliasProvenance(src []byte) []ProvenanceStep {
 	toks, _, _ := selfhost.Lex(src)
-	var edits []stableAliasEdit
+	var steps []ProvenanceStep
 
 	for i, tok := range toks {
 		if tok.Kind != token.IDENT {
@@ -93,46 +84,23 @@ func normalizeStableAliases(src []byte) ([]byte, []ProvenanceStep) {
 		if isAliasInExpressionPosition(toks, i) {
 			continue
 		}
-		replacement := aliasReplacement(spec.alias, spec.canonical)
-		edits = append(edits, stableAliasEdit{
-			start: tok.Pos.Offset,
-			end:   tok.End.Offset,
-			text:  replacement,
-			step: ProvenanceStep{
-				Kind:        spec.kind,
-				SourceHabit: spec.sourceHabit,
-				Span: diag.Span{
-					Start: tok.Pos,
-					End:   tok.End,
-				},
-				Detail: spec.detail,
+		steps = append(steps, ProvenanceStep{
+			Kind:        spec.kind,
+			SourceHabit: spec.sourceHabit,
+			Span: diag.Span{
+				Start: tok.Pos,
+				End:   tok.End,
 			},
+			Detail: spec.detail,
 		})
 	}
-	if len(edits) == 0 {
-		return src, nil
-	}
-
-	out := append([]byte(nil), src...)
-	steps := make([]ProvenanceStep, 0, len(edits))
-	lastStart := len(src) + 1
-	for i := len(edits) - 1; i >= 0; i-- {
-		edit := edits[i]
-		if edit.start < 0 || edit.end < edit.start || edit.end > len(src) || edit.end > lastStart {
-			continue
-		}
-		out = append(append([]byte(nil), out[:edit.start]...), append(edit.text, out[edit.end:]...)...)
-		lastStart = edit.start
-		steps = append(steps, edit.step)
-	}
-	reverseProvenanceSteps(steps)
-	return out, steps
+	return steps
 }
 
 // isAliasInExpressionPosition reports whether the identifier at
 // toks[i] is clearly used as a value / binding target / member access
-// rather than a statement-head keyword. When true, the alias rewrite
-// must be suppressed to avoid stomping user identifiers that happen
+// rather than a statement-head keyword. When true, stable-alias provenance
+// must be suppressed to avoid flagging user identifiers that happen
 // to share a spelling with a stable-alias source habit (common for
 // `def`, `func`, `while`, etc. used as variable names in toolchain
 // code).
@@ -186,19 +154,4 @@ func isAliasInExpressionPosition(toks []token.Token, i int) bool {
 		}
 	}
 	return false
-}
-
-func aliasReplacement(alias, canonical string) []byte {
-	buf := bytes.NewBuffer(make([]byte, 0, len(alias)))
-	buf.WriteString(canonical)
-	for i := len(canonical); i < len(alias); i++ {
-		buf.WriteByte(' ')
-	}
-	return buf.Bytes()
-}
-
-func reverseProvenanceSteps(steps []ProvenanceStep) {
-	for i, j := 0, len(steps)-1; i < j; i, j = i+1, j-1 {
-		steps[i], steps[j] = steps[j], steps[i]
-	}
 }

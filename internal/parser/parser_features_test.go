@@ -156,6 +156,28 @@ func TestParseAcceptsStableAliases(t *testing.T) {
 	}
 }
 
+func TestParseCanonicalAcceptsStableAliases(t *testing.T) {
+	src := []byte("import std.testing as t\nfunc main() {\n    while false {\n        break\n    }\n}\n")
+
+	file, diags := ParseCanonical(src)
+	if len(diags) > 0 {
+		t.Fatalf("ParseCanonical returned %d diagnostics: %v", len(diags), diags[0])
+	}
+	if file == nil || len(file.Uses) != 1 || len(file.Decls) != 1 {
+		t.Fatalf("parsed file = %#v, want one use and one decl", file)
+	}
+	fn, ok := file.Decls[0].(*ast.FnDecl)
+	if !ok {
+		t.Fatalf("decl[0] type = %T, want *ast.FnDecl", file.Decls[0])
+	}
+	if fn.Body == nil || len(fn.Body.Stmts) != 1 {
+		t.Fatalf("fn body stmt count = %d, want 1", len(fn.Body.Stmts))
+	}
+	if _, ok := fn.Body.Stmts[0].(*ast.ForStmt); !ok {
+		t.Fatalf("body stmt type = %T, want *ast.ForStmt from stable `while` alias", fn.Body.Stmts[0])
+	}
+}
+
 func TestParseStableAliasesPreservedAsIdentifiers(t *testing.T) {
 	// Identifiers named after stable aliases (def, func, function, import, while)
 	// must survive when they occupy `name : type` slots — parameters, struct

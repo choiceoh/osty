@@ -6,7 +6,7 @@ import (
 	"github.com/osty/osty/internal/selfhost"
 )
 
-// parsePipeline keeps parser-owned source rewrites and AST repairs in one
+// parsePipeline keeps parser-owned provenance collection and AST repairs in one
 // place so the various entrypoints do not drift on which stages they run.
 type parsePipeline struct {
 	parsedSrc  []byte
@@ -18,8 +18,7 @@ func newParsePipeline(src []byte) *parsePipeline {
 }
 
 func (p *parsePipeline) applySourceCompat() {
-	normalized, aliases := normalizeStableAliases(p.parsedSrc)
-	p.parsedSrc = normalized
+	aliases := collectStableAliasProvenance(p.parsedSrc)
 	if len(aliases) > 0 {
 		p.provenance.Aliases = append(p.provenance.Aliases, aliases...)
 	}
