@@ -46,6 +46,39 @@ to be written in C.
   with later concurrent algorithms; the v0.4 single-threaded GC is not
   required to exercise it.
 
+**GC × scheduler interaction.** §8 specifies an M:N scheduler; §19
+specifies a single-threaded STW collector. These compose as follows:
+
+- A collection cycle is initiated from a worker that reaches a
+  safepoint (§19.10) and finds the `stop_requested` flag set.
+- Every other worker must reach a safepoint before the collector
+  proceeds. Tasks parked at a language-level yield point (§8.0:
+  channel send/recv, `Handle.join`, `thread.yield`, `thread.sleep`,
+  `thread.select` blocking arms, cancellation checks) are treated as
+  having **passed** a safepoint; the runtime registers their live
+  root set when parking so the collector walks it in place.
+- FFI calls declared through §19 or `use go` are **not** implicit
+  safepoints; a worker stuck in a long blocking FFI call delays
+  collection for the whole process. A future revision may add a
+  `#[gc_safe]` annotation for FFI hand-off; v0.4 does not.
+- When all workers are parked at safepoints, the collector runs
+  single-threaded over the union of (a) the root array passed by the
+  initiating safepoint and (b) the per-task parked-root arrays. It
+  then releases the workers.
+
+The v0.4 collector **does not** walk fiber-saved register state or
+unregistered stack memory. Programs that allocate a value and hold it
+as a local across a yield point are safe only if the compiler-emitted
+safepoint at the yield point lists that local in the root array. The
+MIR lowering for `IntrinsicSpawn`, `IntrinsicHandleJoin`,
+`IntrinsicChanSend`, and `IntrinsicChanRecv` is required to emit a
+safepoint with the caller's live roots before dispatching to the
+corresponding `osty_rt_*` symbol. Runtime phases that do not yet
+satisfy this contract are called out in `RUNTIME_SCHEDULER.md` with
+their narrowing restriction (e.g., Phase 1A runs all tasks
+sequentially on a single worker, so the parked-root concern is vacuous
+but the contract is documented for Phase 1B and later).
+
 ### 19.2 Privileged Packages
 
 The runtime surface is **gated by package path**. A package is privileged

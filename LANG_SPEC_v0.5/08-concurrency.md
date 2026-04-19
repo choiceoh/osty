@@ -1,5 +1,53 @@
 ## 8. Concurrency
 
+### 8.0 Scheduler Model
+
+Osty specifies an **M:N scheduler**. Task-level units (`g.spawn(...)`, the
+helpers in §8.3, and the root task started by `taskGroup`) are **green
+tasks** multiplexed onto a pool of worker OS threads. The language does
+not expose the OS thread a task runs on, and implementations are free to
+migrate a task between workers between yield points.
+
+Programs **MUST NOT** rely on any of the following:
+
+- the identity of the OS thread executing a task (no thread-local
+  storage observable through the language surface; no `gettid`-style
+  introspection);
+- a specific task running concurrently with, or serialized against,
+  another task unless the synchronization is expressed through a
+  language primitive (`Handle.join`, a channel operation, or the
+  cancellation surface in §8.4);
+- the number of worker threads, a ratio of tasks to workers, or a
+  scheduling policy (FIFO vs work-stealing vs LIFO, fair vs unfair
+  among ready tasks). `race` tie-breaking in §8.3 is explicit about
+  this: deterministic within a run, unstable across runs.
+
+**Yield points.** A conforming runtime may treat the following as
+yield points (opportunities for the scheduler to run another task on
+the same worker): channel send/recv, `Handle.join`, `thread.yield`,
+`thread.sleep`, `thread.select` blocking arms, GC safepoints (§19.10),
+and cancellation checks (§8.4). Tight compute loops with no such
+points need not yield; programs that require progress on siblings
+must include an explicit yield, a channel op, or a cancellation
+check. A future revision may add compiler-inserted preemption at
+loop backedges; programs written to the yield-point contract keep
+working when that lands.
+
+**Parallelism.** Parallel execution across workers is **permitted but
+not guaranteed**. A single-worker implementation satisfies this
+chapter; so does a many-worker implementation. The observable
+contracts — structured lifetime (§8.1), failure propagation (§8.2),
+cancellation with cause (§8.4) — hold identically in both cases. The
+`RUNTIME_SCHEDULER.md` roadmap describes the delivery phases for the
+reference LLVM-backed runtime.
+
+**Thread-identity clause does not weaken FFI.** `use go` imports
+and the `#[c_abi]` surface in §19 still run on an OS thread with its
+own stack; blocking FFI calls do not freeze the whole scheduler, but
+they may pin a worker for the duration of the call. A runtime is free
+to grow its worker pool or hand off to a carrier thread to preserve
+progress on other tasks.
+
 ### 8.1 Structured Concurrency
 
 All concurrent tasks belong to a `taskGroup` scope. There is no detached
