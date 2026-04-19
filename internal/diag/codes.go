@@ -1,10 +1,15 @@
 package diag
 
 // Stable diagnostic codes. The doc comment on each constant is the
-// authoritative copy for ERROR_CODES.md — regenerate the markdown with
-// `go generate ./internal/diag/...` whenever you add or edit a code.
+// authoritative copy for ERROR_CODES.md AND the source for the Osty-side
+// code→family manifest consumed by toolchain/diagnostic.osty. Regenerate
+// both derived artifacts with `go generate ./internal/diag/...` whenever
+// you add or edit a code.
 //
 //go:generate go run ../../cmd/codesdoc -in codes.go -w ../../ERROR_CODES.md
+//go:generate go run ../../cmd/codesdoc -in codes.go -manifest ../../toolchain/diag_manifest.osty
+//go:generate go run ../../cmd/codesdoc -in codes.go -manifest ../../examples/selfhost-core/diag_manifest.osty
+//go:generate go run ../../cmd/codesdoc -in codes.go -harvest-cases ../../toolchain/diag_examples.osty
 
 const (
 	// Lexical.
@@ -709,6 +714,8 @@ const (
 	// Fix: migrate to the replacement noted in the `#[deprecated]` annotation.
 	CodeDeprecatedUse = "W0750"
 
+	// Type checking — control flow & const fn.
+
 	// Control flow diagnostics (E0760-E0769).
 	//
 	// CodeUnreachableCode: a statement appears after a divergent
@@ -857,6 +864,8 @@ const (
 	//      explicit.
 	CodeImplicitNarrowingConversion = "E0765"
 
+	// Name resolution — re-exports & scoped imports.
+
 	// Module-resolution diagnostics for v0.5 re-export and scoped
 	// imports (G28, G30).
 
@@ -878,6 +887,8 @@ const (
 	// v0.5 (G28) §5.
 	// Fix: remove the duplicate or use `as` to rename one side.
 	CodeUseDuplicateName = "E0554"
+
+	// Annotations — cfg.
 
 	// CodeCfgUnknownKey: `#[cfg(key = "...")]` used an unknown key.
 	// v0.5 (G29) recognises only `os`, `target`, `arch`, `feature`.

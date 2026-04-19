@@ -29,6 +29,8 @@ var toolchainCheckerFiles = []string{
 	"toolchain/parser.osty",
 	"examples/selfhost-core/formatter_ast.osty",
 	"toolchain/check_bridge.osty",
+	"toolchain/diag_manifest.osty",
+	"toolchain/diag_examples.osty",
 	"toolchain/diagnostic.osty",
 	"toolchain/check_diag.osty",
 	"toolchain/ty.osty",

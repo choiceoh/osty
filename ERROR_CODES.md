@@ -856,7 +856,7 @@ Covers literal / range / tuple-arity / struct / variant pattern shape errors —
 
 ---
 
-## Deprecation warning (W0750–E0405)
+## Deprecation warning (W0750)
 
 ### W0750 — `CodeDeprecatedUse`
 
@@ -867,6 +867,10 @@ Emitted as a `diag.Warning`. Tooling can promote it to error via build configura
 Spec: v0.4 §3.8.2
 
 **Fix**: migrate to the replacement noted in the `#[deprecated]` annotation.
+
+---
+
+## Type checking — control flow & const fn (E0760–E0765)
 
 ### E0760 — `CodeUnreachableCode`
 
@@ -988,6 +992,10 @@ CodeImplicitNarrowingConversion: an expression site required an implicit numeric
 
 **Fix**: call one of `.toInt32()`, `.toInt16()`, `.toInt8()`,
 
+---
+
+## Name resolution — re-exports & scoped imports (E0552–E0554)
+
 ### E0552 — `CodeReexportCycle`
 
 CodeReexportCycle: `pub use` re-export chain contains a cycle. v0.5 (G30) §5.
@@ -1007,6 +1015,10 @@ CodeReexportPrivate: `pub use` attempted to re-export a private symbol. v0.5 (G3
 CodeUseDuplicateName: a scoped `use path::{a, a}` names the same identifier twice, or two separate imports introduce the same local binding. v0.5 (G28) §5.
 
 **Fix**: remove the duplicate or use `as` to rename one side.
+
+---
+
+## Annotations — cfg (E0405)
 
 ### E0405 — `CodeCfgUnknownKey`
 
