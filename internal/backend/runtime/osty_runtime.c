@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 /* Active LLVM/native GC runtime path. See ../../../../RUNTIME_GC.md. */
 
@@ -1378,4 +1379,279 @@ int64_t osty_gc_debug_load_count(void) {
 
 int64_t osty_gc_debug_load_managed_count(void) {
     return osty_gc_load_managed_count;
+}
+
+/* ======================================================================
+ * Phase 1A: sequential scheduler (see RUNTIME_SCHEDULER.md)
+ *
+ * The public surface matches the ABI committed in `RUNTIME_SCHEDULER.md`
+ * §ABI contract. Every symbol here has a successor in Phase 1B (fibers)
+ * and Phase 2 (multi-worker) with the same signature.
+ *
+ * Semantics in this phase:
+ *   - `osty_rt_task_group(body)` runs `body` on the calling thread. The
+ *     group is live only for the duration of that call.
+ *   - `osty_rt_task_spawn(body)` and `osty_rt_task_group_spawn(g, body)`
+ *     run `body` immediately and return a handle holding the result.
+ *     `Handle.join` reads the stored result — no blocking, no parallelism.
+ *   - Cancellation: setting the group flag makes subsequent cancel checks
+ *     report true. Already-completed tasks are unaffected.
+ *   - `thread.yield` is a no-op; `thread.sleep` blocks the calling thread.
+ *   - Channels and `select` abort with a diagnostic: they require true
+ *     block/wake which arrives in Phase 1B.
+ *
+ * ABI abuse notice: MIR declares `osty_rt_task_group` and
+ * `osty_rt_task_handle_join` with the caller's Osty-side return type
+ * (usually i64 or ptr). This runtime returns pointer-width results via
+ * `void*`, which the linker treats as a compatible 64-bit return on
+ * x86_64 SysV and AArch64 AAPCS. Phase 1A supports scalar/pointer
+ * returns up to 8 bytes. Float and struct returns require Phase 2.
+ * ====================================================================== */
+
+typedef int64_t (*osty_task_group_body_fn)(void *env, void *group);
+typedef int64_t (*osty_task_spawn_body_fn)(void *env);
+
+typedef struct osty_rt_task_group_impl {
+    volatile int64_t cancelled; /* 0 = live, 1 = cancelled */
+    void *cause;                /* reserved for error propagation */
+} osty_rt_task_group_impl;
+
+typedef struct osty_rt_task_handle_impl {
+    int64_t result;
+    int32_t done;    /* 1 once body returned */
+    int32_t errored; /* reserved */
+} osty_rt_task_handle_impl;
+
+/* Thread-local current group pointer. Phase 1A uses a single OS thread,
+ * but declaring it _Thread_local makes Phase 2 (multi-worker) a drop-in
+ * upgrade — no callers change. */
+#if defined(__STDC_NO_THREADS__) || defined(__APPLE__)
+static __thread osty_rt_task_group_impl *osty_sched_current_group = NULL;
+#else
+static _Thread_local osty_rt_task_group_impl *osty_sched_current_group = NULL;
+#endif
+
+static osty_rt_task_handle_impl *osty_sched_alloc_handle(void) {
+    osty_rt_task_handle_impl *h = (osty_rt_task_handle_impl *)calloc(
+        1, sizeof(osty_rt_task_handle_impl));
+    if (h == NULL) {
+        osty_rt_abort("scheduler: handle allocation failed");
+    }
+    return h;
+}
+
+static void osty_sched_unsupported(const char *what) {
+    fprintf(stderr,
+            "osty llvm runtime: Phase 1A scheduler does not support %s. "
+            "Channels, select, and helpers land in Phase 1B / Phase 2 "
+            "(see RUNTIME_SCHEDULER.md).\n",
+            what);
+    abort();
+}
+
+int64_t osty_rt_task_group(void *body_env) {
+    if (body_env == NULL) {
+        osty_rt_abort("task_group: null body env");
+    }
+    osty_rt_task_group_impl group;
+    group.cancelled = 0;
+    group.cause = NULL;
+
+    osty_rt_task_group_impl *prev = osty_sched_current_group;
+    osty_sched_current_group = &group;
+
+    /* env[0] is the fn pointer per the closure ABI. */
+    osty_task_group_body_fn fn = (osty_task_group_body_fn)(*(void **)body_env);
+    int64_t result = fn(body_env, (void *)&group);
+
+    osty_sched_current_group = prev;
+    return result;
+}
+
+void *osty_rt_task_spawn(void *body_env) {
+    if (body_env == NULL) {
+        osty_rt_abort("task_spawn: null body env");
+    }
+    osty_rt_task_handle_impl *h = osty_sched_alloc_handle();
+    osty_task_spawn_body_fn fn = (osty_task_spawn_body_fn)(*(void **)body_env);
+    h->result = fn(body_env);
+    h->done = 1;
+    return h;
+}
+
+void *osty_rt_task_group_spawn(void *group, void *body_env) {
+    if (body_env == NULL) {
+        osty_rt_abort("task_group_spawn: null body env");
+    }
+    osty_rt_task_handle_impl *h = osty_sched_alloc_handle();
+
+    osty_rt_task_group_impl *prev = osty_sched_current_group;
+    if (group != NULL) {
+        osty_sched_current_group = (osty_rt_task_group_impl *)group;
+    }
+
+    osty_task_spawn_body_fn fn = (osty_task_spawn_body_fn)(*(void **)body_env);
+    h->result = fn(body_env);
+    h->done = 1;
+
+    osty_sched_current_group = prev;
+    return h;
+}
+
+int64_t osty_rt_task_handle_join(void *handle) {
+    if (handle == NULL) {
+        osty_rt_abort("task_handle_join: null handle");
+    }
+    osty_rt_task_handle_impl *h = (osty_rt_task_handle_impl *)handle;
+    if (!h->done) {
+        /* In Phase 1A all bodies run to completion before spawn returns,
+         * so an un-done handle is a runtime invariant violation. */
+        osty_rt_abort("task_handle_join: handle not completed (Phase 1A invariant)");
+    }
+    return h->result;
+}
+
+void osty_rt_task_group_cancel(void *group) {
+    if (group == NULL) {
+        return;
+    }
+    osty_rt_task_group_impl *g = (osty_rt_task_group_impl *)group;
+    g->cancelled = 1;
+}
+
+bool osty_rt_task_group_is_cancelled(void *group) {
+    if (group == NULL) {
+        return false;
+    }
+    osty_rt_task_group_impl *g = (osty_rt_task_group_impl *)group;
+    return g->cancelled != 0;
+}
+
+bool osty_rt_cancel_is_cancelled(void) {
+    osty_rt_task_group_impl *g = osty_sched_current_group;
+    if (g == NULL) {
+        return false;
+    }
+    return g->cancelled != 0;
+}
+
+void osty_rt_thread_yield(void) {
+    /* Phase 1A: no scheduler to yield to. No-op. Phase 1B adds a real
+     * fiber context switch here. */
+}
+
+void osty_rt_thread_sleep(int64_t nanos) {
+    if (nanos <= 0) {
+        return;
+    }
+    struct timespec req;
+    req.tv_sec = (time_t)(nanos / 1000000000LL);
+    req.tv_nsec = (long)(nanos % 1000000000LL);
+    struct timespec rem;
+    while (nanosleep(&req, &rem) == -1) {
+        req = rem;
+    }
+}
+
+/* ---- Channels: Phase 1B stubs. Abort with a clear message so programs
+ *      that reach these surfaces fail fast rather than silently. ---- */
+
+void *osty_rt_thread_chan_make(int64_t capacity) {
+    (void)capacity;
+    osty_sched_unsupported("thread.chan (Phase 1B)");
+    return NULL;
+}
+
+void osty_rt_thread_chan_close(void *ch) {
+    (void)ch;
+    osty_sched_unsupported("thread.chan.close (Phase 1B)");
+}
+
+bool osty_rt_thread_chan_is_closed(void *ch) {
+    (void)ch;
+    osty_sched_unsupported("thread.chan.is_closed (Phase 1B)");
+    return false;
+}
+
+#define OSTY_RT_CHAN_STUB_SEND(suffix, ctype)                             \
+    void osty_rt_thread_chan_send_##suffix(void *ch, ctype value) {       \
+        (void)ch;                                                         \
+        (void)value;                                                      \
+        osty_sched_unsupported("thread.chan.send (Phase 1B)");            \
+    }
+OSTY_RT_CHAN_STUB_SEND(i64, int64_t)
+OSTY_RT_CHAN_STUB_SEND(i1, bool)
+OSTY_RT_CHAN_STUB_SEND(f64, double)
+OSTY_RT_CHAN_STUB_SEND(ptr, void *)
+#undef OSTY_RT_CHAN_STUB_SEND
+
+void osty_rt_thread_chan_send_bytes_v1(void *ch, const void *src, int64_t sz) {
+    (void)ch;
+    (void)src;
+    (void)sz;
+    osty_sched_unsupported("thread.chan.send (bytes, Phase 1B)");
+}
+
+typedef struct osty_rt_chan_recv_result {
+    int64_t value;
+    int64_t ok;
+} osty_rt_chan_recv_result;
+
+#define OSTY_RT_CHAN_STUB_RECV(suffix)                                    \
+    osty_rt_chan_recv_result osty_rt_thread_chan_recv_##suffix(void *ch) { \
+        (void)ch;                                                         \
+        osty_sched_unsupported("thread.chan.recv (Phase 1B)");            \
+        osty_rt_chan_recv_result r = {0, 0};                              \
+        return r;                                                         \
+    }
+OSTY_RT_CHAN_STUB_RECV(i64)
+OSTY_RT_CHAN_STUB_RECV(i1)
+OSTY_RT_CHAN_STUB_RECV(f64)
+OSTY_RT_CHAN_STUB_RECV(ptr)
+OSTY_RT_CHAN_STUB_RECV(bytes_v1)
+#undef OSTY_RT_CHAN_STUB_RECV
+
+/* ---- Select / helpers: Phase 2 stubs. ---- */
+
+void osty_rt_select(void *s) {
+    (void)s;
+    osty_sched_unsupported("thread.select (Phase 2)");
+}
+
+void osty_rt_select_recv(void *s, void *ch, void *arm) {
+    (void)s; (void)ch; (void)arm;
+    osty_sched_unsupported("thread.select.recv (Phase 2)");
+}
+
+void osty_rt_select_send(void *s, void *ch, void *arm) {
+    (void)s; (void)ch; (void)arm;
+    osty_sched_unsupported("thread.select.send (Phase 2)");
+}
+
+void osty_rt_select_timeout(void *s, int64_t ns, void *arm) {
+    (void)s; (void)ns; (void)arm;
+    osty_sched_unsupported("thread.select.timeout (Phase 2)");
+}
+
+void osty_rt_select_default(void *s, void *arm) {
+    (void)s; (void)arm;
+    osty_sched_unsupported("thread.select.default (Phase 2)");
+}
+
+void *osty_rt_task_race(void *body) {
+    (void)body;
+    osty_sched_unsupported("race (Phase 2)");
+    return NULL;
+}
+
+void *osty_rt_task_collect_all(void *body) {
+    (void)body;
+    osty_sched_unsupported("collectAll (Phase 2)");
+    return NULL;
+}
+
+void *osty_rt_parallel(void *items, int64_t concurrency, void *f) {
+    (void)items; (void)concurrency; (void)f;
+    osty_sched_unsupported("parallel (Phase 2)");
+    return NULL;
 }
