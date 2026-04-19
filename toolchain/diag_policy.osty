@@ -19,6 +19,14 @@ use std.strings as strings
 /// `severity` follows internal/diag's stringly form ("error",
 /// "warning", "note"); "error" is the only severity that gates
 /// this branch.
+///
+/// ```osty
+/// testing.assert(isDeferredGenCheckDiag("error", "type checking unavailable for Foo"))
+/// testing.assert(!(isDeferredGenCheckDiag("error", "some other error")))
+/// testing.assert(!(isDeferredGenCheckDiag("warning", "type checking unavailable for Foo")))
+/// testing.assert(!(isDeferredGenCheckDiag("error", "")))
+/// testing.assert(!(isDeferredGenCheckDiag("note", "type checking unavailable for Bar")))
+/// ```
 pub fn isDeferredGenCheckDiag(severity: String, message: String) -> Bool {
     if severity != "error" {
         return false
@@ -39,6 +47,13 @@ pub fn isDeferredGenCheckDiag(severity: String, message: String) -> Bool {
 /// The only current user-error scaffold code is E2050
 /// (CodeScaffoldInvalidName). Add more branches here as the
 /// scaffold suite grows.
+///
+/// ```osty
+/// testing.assertEq(scaffoldExitCode(""), 0)
+/// testing.assertEq(scaffoldExitCode("E2050"), 2)
+/// testing.assertEq(scaffoldExitCode("E2000"), 1)
+/// testing.assertEq(scaffoldExitCode("E2051"), 1)
+/// ```
 pub fn scaffoldExitCode(diagCode: String) -> Int {
     if diagCode == "" {
         return 0

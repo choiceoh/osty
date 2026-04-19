@@ -1,4 +1,5 @@
 use std.testing
+use std.testing.gen as gen
 use std.strings as strings
 
 // -------------------------------------------------------------------
@@ -366,4 +367,34 @@ fn testLocateTokenSpan() {
     let loc = losslessTokenLocate(stream, tok)
     testing.assertEq(loc.line, 1)
     testing.assertEq(loc.column, 1)
+}
+
+// Property-based tests (v0.5 G33). Stubs in std.testing.gen make
+// these no-ops at runtime today. The invariant reconstruct(lex(s))
+// == s is the strongest safety net for lossless_lex.osty — once the
+// runner lands these will cover shapes example tests miss.
+
+fn testRoundTripPropAsciiStringsRoundTrip() {
+    testing.property(
+        "reconstruct(lex(s)) == s for ASCII inputs",
+        gen.asciiString(32),
+        |src: String| losslessRoundTripReport(src).ok,
+    )
+}
+
+fn testRoundTripPropCurlyBraceStringsRoundTrip() {
+    // Picks from a small hand-curated pool of Osty snippets. When
+    // shrinking lands these become useful counterexample minimizers.
+    testing.property(
+        "reconstruct(lex(snippet)) == snippet for representative shapes",
+        gen.oneOf([
+            "",
+            "x",
+            "fn f() \{\}",
+            "let x = 1\nlet y = 2",
+            "/// doc\nfn g() \{\}",
+            "// line\nfn h() \{ let z = 3 \}",
+        ]),
+        |src: String| losslessRoundTripReport(src).ok,
+    )
 }

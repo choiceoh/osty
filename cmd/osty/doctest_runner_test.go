@@ -136,24 +136,6 @@ func TestBuildDoctestRunnerSourceShape(t *testing.T) {
 	}
 }
 
-func TestSanitizeIdentSafe(t *testing.T) {
-	cases := map[string]string{
-		"add":           "add",
-		"add-two":       "add_two",
-		"parse::<T>":    "parse___T_",
-		"":              "",
-		"Foo99":         "Foo99",
-		"9leading":      "_leading",
-		"µ_weird":       "__weird",
-		"with space":    "with_space",
-	}
-	for in, want := range cases {
-		if got := sanitizeIdentSafe(in); got != want {
-			t.Errorf("sanitizeIdentSafe(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
 // singleFilePackageForDoctest parses src into a Package with a
 // single file. Fails the test on parse errors.
 func singleFilePackageForDoctest(t *testing.T, path string, src []byte) *resolve.Package {

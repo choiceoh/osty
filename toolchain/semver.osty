@@ -52,6 +52,14 @@ pub fn semVersion(
 }
 
 /// stableVersion constructs a release with no pre-release identifiers.
+///
+/// ```osty
+/// let v = stableVersion(1, 2, 3)
+/// testing.assertEq(v.major, 1)
+/// testing.assertEq(v.minor, 2)
+/// testing.assertEq(v.patch, 3)
+/// testing.assert(!(isSemPrerelease(v)))
+/// ```
 pub fn stableVersion(major: Int, minor: Int, patch: Int) -> SemVersion {
     semVersion(major, minor, patch, preNone(), preNone(), preNone(), "")
 }
@@ -78,6 +86,12 @@ pub fn versionWithBuild(major: Int, minor: Int, patch: Int, build: String) -> Se
 }
 
 /// isSemPrerelease reports whether a version has any pre-release identifier.
+///
+/// ```osty
+/// testing.assert(!(isSemPrerelease(stableVersion(2, 0, 0))))
+/// testing.assert(isSemPrerelease(prerelease1(2, 0, 0, preText("alpha"))))
+/// testing.assert(isSemPrerelease(prerelease1(2, 0, 0, preNumber(1))))
+/// ```
 pub fn isSemPrerelease(v: SemVersion) -> Bool {
     match v.pre1 {
         PreNone -> false,
@@ -86,6 +100,19 @@ pub fn isSemPrerelease(v: SemVersion) -> Bool {
 }
 
 /// compareSemVersion returns -1, 0, or 1 using SemVer precedence rules.
+///
+/// Core numbers dominate pre-release identifiers, which in turn dominate
+/// build metadata (build is ignored entirely).
+///
+/// ```osty
+/// testing.assertEq(compareSemVersion(stableVersion(1, 0, 0), stableVersion(1, 0, 0)), 0)
+/// testing.assertEq(compareSemVersion(stableVersion(1, 0, 0), stableVersion(2, 0, 0)), -1)
+/// testing.assertEq(compareSemVersion(stableVersion(2, 0, 0), stableVersion(1, 0, 0)), 1)
+/// let stable = stableVersion(1, 0, 0)
+/// let alpha = prerelease1(1, 0, 0, preText("alpha"))
+/// testing.assertEq(compareSemVersion(stable, alpha), 1)
+/// testing.assertEq(compareSemVersion(alpha, stable), -1)
+/// ```
 pub fn compareSemVersion(a: SemVersion, b: SemVersion) -> Int {
     let major = signInt(a.major, b.major)
     if major != 0 {
@@ -179,6 +206,14 @@ pub fn semPreIdentText(ident: SemPreIdent) -> String {
 }
 
 /// semVersionText renders the package-manager SemVer form used in locks.
+///
+/// ```osty
+/// testing.assertEq(semVersionText(stableVersion(1, 2, 3)), "1.2.3")
+/// testing.assertEq(semVersionText(versionWithBuild(1, 0, 0, "build.1")), "1.0.0+build.1")
+/// testing.assertEq(semVersionText(prerelease1(1, 0, 0, preText("alpha"))), "1.0.0-alpha")
+/// let rc1 = prerelease2(1, 0, 0, preText("rc"), preNumber(1))
+/// testing.assertEq(semVersionText(rc1), "1.0.0-rc.1")
+/// ```
 pub fn semVersionText(v: SemVersion) -> String {
     let mut out = "{v.major}.{v.minor}.{v.patch}"
     if isSemPrerelease(v) {

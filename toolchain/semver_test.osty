@@ -1,4 +1,5 @@
 use std.testing
+use std.testing.gen as gen
 
 fn testSemverComparesCoreNumbers() {
     testing.assertEq(compareSemVersion(stableVersion(1, 0, 0), stableVersion(1, 0, 0)), 0)
@@ -86,4 +87,46 @@ fn testSemverComparisonHelpersAreThreeWay() {
     testing.assertEq(signString("alpha", "beta"), -1)
     testing.assertEq(signString("beta", "alpha"), 1)
     testing.assertEq(signString("rc", "rc"), 0)
+}
+
+// Property-based tests (v0.5 G33). Stubs in std.testing.gen make
+// these no-ops at runtime today — see testing_gen.osty header.
+
+fn testSemverPropSignIntReflexive() {
+    testing.property(
+        "signInt(a, a) == 0",
+        gen.intRange(-1000, 1000),
+        |a: Int| signInt(a, a) == 0,
+    )
+}
+
+fn testSemverPropSignIntAntisymmetric() {
+    testing.property(
+        "signInt(a, b) + signInt(b, a) == 0",
+        gen.pair(gen.intRange(-1000, 1000), gen.intRange(-1000, 1000)),
+        |(a, b): (Int, Int)| signInt(a, b) + signInt(b, a) == 0,
+    )
+}
+
+fn testSemverPropCompareStableReflexive() {
+    testing.property(
+        "compareSemVersion(stable(a, b, c), same) == 0",
+        gen.triple(gen.intRange(0, 99), gen.intRange(0, 99), gen.intRange(0, 99)),
+        |(a, b, c): (Int, Int, Int)| {
+            let v = stableVersion(a, b, c)
+            compareSemVersion(v, v) == 0
+        },
+    )
+}
+
+fn testSemverPropBuildMetadataDoesNotAffectOrdering() {
+    testing.property(
+        "compareSemVersion ignores build metadata",
+        gen.triple(gen.intRange(0, 99), gen.intRange(0, 99), gen.intRange(0, 99)),
+        |(a, b, c): (Int, Int, Int)| {
+            let plain = stableVersion(a, b, c)
+            let tagged = versionWithBuild(a, b, c, "build.1")
+            compareSemVersion(plain, tagged) == 0
+        },
+    )
 }
