@@ -10,10 +10,11 @@ import (
 )
 
 // TestProbeSmallTailLower records the current lowering state of the
-// small-tail toolchain modules. pkg_policy.osty is expected to lower
-// cleanly after the std.strings shim + bare None/Some support; the
-// other two still hit broader walls (LLVM014 Iterable for-in, LLVM011
-// struct-param) tracked separately.
+// small-tail toolchain modules. pkg_policy.osty + profile_flags.osty
+// lower cleanly after the std.strings shim (compare/hasPrefix/join/
+// split/trim) + bare None/Some + List<String> for-in routing;
+// diagnostic.osty still hits LLVM011 (FrontLexStream struct-param)
+// tracked separately.
 func TestProbeSmallTailLower(t *testing.T) {
 	root, err := filepath.Abs("../..")
 	if err != nil {
@@ -25,7 +26,7 @@ func TestProbeSmallTailLower(t *testing.T) {
 		allowedWallSnippet string // err must contain this iff not clean
 	}{
 		{"toolchain/pkg_policy.osty", true, ""},
-		{"toolchain/profile_flags.osty", false, "LLVM014"},
+		{"toolchain/profile_flags.osty", true, ""},
 		{"toolchain/diagnostic.osty", false, "LLVM011"},
 	}
 	for _, tc := range cases {

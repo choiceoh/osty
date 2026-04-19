@@ -109,10 +109,11 @@ func (g *generator) emitInterpolatedString(lit *ast.StringLit) (value, error) {
 		if err != nil {
 			return value{}, err
 		}
-		if v.typ != "ptr" || v.listElemTyp != "" || v.mapKeyTyp != "" {
+		coerced, ok := g.coerceToInterpolationString(v)
+		if !ok {
 			return value{}, unsupportedf("type-system", "interpolation of %s value requires .toString() which the LLVM backend does not yet lower", v.typ)
 		}
-		pieces = append(pieces, v)
+		pieces = append(pieces, coerced)
 	}
 	result := pieces[0]
 	for i := 1; i < len(pieces); i++ {
