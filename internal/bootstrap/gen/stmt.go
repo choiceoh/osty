@@ -48,10 +48,12 @@ func (g *gen) emitStmt(s ast.Stmt) {
 			g.emitQuestionLift("_", e)
 			return
 		}
+		g.preLiftMatches(s.X)
 		g.preLiftQuestions(s.X)
 		g.emitExpr(s.X)
 		g.body.nl()
 		g.resetQuestionSubs()
+		g.resetMatchSubs()
 	case *ast.AssignStmt:
 		g.emitAssign(s)
 	case *ast.ReturnStmt:
@@ -121,7 +123,11 @@ func (g *gen) emitLetStmt(l *ast.LetStmt) {
 
 	// Any `?` nested inside a compound RHS (e.g. `let x = foo(bar()?)`)
 	// gets hoisted out via preLiftQuestions so the remaining expression
-	// is a straight substitution on the lifted temps.
+	// is a straight substitution on the lifted temps. The match lift
+	// runs first so a tainted match in the operand of a `?` is already
+	// substituted by the time the question lift evaluates the operand.
+	g.preLiftMatches(l.Value)
+	defer g.resetMatchSubs()
 	g.preLiftQuestions(l.Value)
 	defer g.resetQuestionSubs()
 
@@ -233,6 +239,8 @@ func (g *gen) emitQuestionLift(name string, q *ast.QuestionExpr) {
 // machinery for tuple / struct / nested subpatterns.
 func (g *gen) emitLetPatternDestructure(p ast.Pattern, value ast.Expr) {
 	tmp := g.freshVar("_p")
+	g.preLiftMatches(value)
+	defer g.resetMatchSubs()
 	g.preLiftQuestions(value)
 	defer g.resetQuestionSubs()
 	g.body.writef("%s := ", tmp)
@@ -245,11 +253,16 @@ func (g *gen) emitLetPatternDestructure(p ast.Pattern, value ast.Expr) {
 // multi-assign `(a, b) = (c, d)`. Multi-assign with a tuple RHS is
 // rewritten to Go's parallel assignment.
 func (g *gen) emitAssign(a *ast.AssignStmt) {
-	// Pre-lift any `?` in targets or value. Targets rarely contain `?`
-	// in practice, but we walk them for completeness.
+	// Pre-lift any escaping match / `?` in targets or value. Targets
+	// rarely contain either in practice, but we walk them for
+	// completeness. Match lift runs before the question lift so a
+	// tainted match feeding a `?` is already substituted.
 	for _, t := range a.Targets {
+		g.preLiftMatches(t)
 		g.preLiftQuestions(t)
 	}
+	g.preLiftMatches(a.Value)
+	defer g.resetMatchSubs()
 	g.preLiftQuestions(a.Value)
 	defer g.resetQuestionSubs()
 
@@ -493,6 +506,8 @@ func (g *gen) emitReturn(r *ast.ReturnStmt) {
 		g.body.writeln("return")
 		return
 	}
+	g.preLiftMatches(r.Value)
+	defer g.resetMatchSubs()
 	g.preLiftQuestions(r.Value)
 	defer g.resetQuestionSubs()
 	g.body.write("return ")

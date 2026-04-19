@@ -17,7 +17,16 @@ import (
 // A trailing `panic("unreachable match")` covers the non-exhaustive
 // case. Actual exhaustiveness checking is the type checker's job; the
 // transpiler just runs the generated code honestly.
+//
+// When the enclosing statement has lifted this match into statement
+// position (because an arm body contains an explicit `return`), the
+// IIFE is replaced by a reference to the result var recorded in
+// g.matchSubs — see preLiftMatches.
 func (g *gen) emitMatch(m *ast.MatchExpr) {
+	if sub, ok := g.matchSubs[m]; ok {
+		g.body.write(sub)
+		return
+	}
 	retType := "any"
 	if t := g.typeOf(m); t != nil && !types.IsError(t) && !types.IsUnit(t) {
 		retType = g.goType(t)
