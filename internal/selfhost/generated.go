@@ -25378,7 +25378,25 @@ func frontCheckCollectDecl(file *AstFile, env *FrontCheckEnv, declIdx int, decl 
 		// Osty: /tmp/selfhost_merged.osty:9823:9
 		if declared != "()" && declared != "Invalid" {
 			// Osty: /tmp/selfhost_merged.osty:9824:13
-			frontCheckBindPattern(file, env, decl.left, declared, decl.flags == 1)
+			// Top-level `pub let UpperName = …` is a constant binding,
+			// but the pattern-binding helpers (frontCheckBindPattern /
+			// frontCheckPatternIsBindingIdent) treat UpperName-style
+			// ident patterns as enum-variant matches and skip the bind.
+			// Valid at body scope (refutable match), wrong at file
+			// scope where the let is a constant. Bypass the filter so
+			// names like CheckFormat / ManifestCore land in
+			// env.bindings and subsequent ident lookups resolve.
+			if decl.left >= 0 {
+				pat := astArenaNodeAt(file.arena, decl.left)
+				if pat != nil && frontCheckPatternKind(pat) == "ident" {
+					name := frontCheckPatternName(pat)
+					if name != "" && name != "_" {
+						frontCheckBindNode(env, name, declared, decl.flags == 1, decl.left, pat.start, pat.end)
+					}
+				} else {
+					frontCheckBindPattern(file, env, decl.left, declared, decl.flags == 1)
+				}
+			}
 		}
 		// Osty: /tmp/selfhost_merged.osty:9826:9
 		return
