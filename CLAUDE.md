@@ -540,6 +540,7 @@ fn benchJsonDecode() {
 | 9 | Shebang | §1.1 |
 | 10 | 리터럴 다형성 | §2.2 |
 | 11 | `///` doc → API 문서 | §1.5 |
+| 74 | 컴파운드 대입 `x += y` 등 10종 | §4.13.1 |
 
 **전형 패턴** — 보간 + 쇼트핸드 + 스프레드 묶음:
 
@@ -547,6 +548,27 @@ fn benchJsonDecode() {
 let User { name, age, .. } = current
 let summary = "user {name} ({age})"
 let nextYear = User { ..current, age: age + 1 }
+```
+
+**전형 패턴** — 커서 전진/필드 뮤테이션에는 compound assignment:
+
+```osty
+struct Cursor {
+    pos: Int,
+
+    fn advance(mut self) {
+        self.pos += 1          // self.pos = self.pos + 1 장황함 제거
+    }
+}
+
+fn tally(tokens: List<String>) -> Int {
+    let mut n = 0
+    for _ in tokens { n += 1 }
+    n
+}
+
+// 10종: += -= *= /= %= &= |= ^= <<= >>=
+// 인덱스 타깃(xs[i] += v)은 아직 코드젠에서 미지원 — 평문 형태로 작성
 ```
 
 ## B.2 타입 시스템

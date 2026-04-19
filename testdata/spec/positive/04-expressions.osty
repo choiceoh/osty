@@ -133,3 +133,45 @@ fn defers(path: String) -> Result<(), Error> {
 fn open(_path: String) -> Result<Int, Error> { Ok(0) }
 fn close(_h: Int) { }
 fn connect() -> Result<Int, Error> { Ok(0) }
+
+struct CompoundCursor {
+    pos: Int,
+
+    fn advance(mut self, by: Int) {
+        self.pos += by
+    }
+}
+
+fn compound_assignment_idents() {
+    let mut n: Int = 100
+    n += 5
+    n -= 3
+    n *= 2
+    n /= 4
+    n %= 7
+    let _ = n
+}
+
+fn compound_assignment_bitwise() {
+    let mut bits: Int = 0b1100
+    bits &= 0b1010
+    bits |= 0b0001
+    bits ^= 0b0011
+    bits <<= 2
+    bits >>= 1
+    let _ = bits
+}
+
+fn compound_assignment_string() {
+    let mut msg: String = "hello"
+    msg += ", "
+    msg += "world"
+    let _ = msg
+}
+
+fn compound_assignment_field() {
+    let mut cur = CompoundCursor { pos: 0 }
+    cur.advance(3)
+    cur.pos += 1
+    let _ = cur.pos
+}
