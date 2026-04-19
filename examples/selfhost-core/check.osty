@@ -2117,6 +2117,19 @@ fn frontCheckTurbofishCall(file: AstFile, env: FrontCheckEnv, callIdx: Int, call
             }
             return "Chan<{frontCheckStringAt(typeArgs, 0)}>"
         }
+        // Generic package-fn dispatch — e.g. `raw.read::<Int>(p)`. The
+        // non-turbofish call path (`frontCheckCall`) already does this
+        // lookup; the turbofish path used to fall through to method
+        // lookup, which fails for stdlib intrinsics (the receiver is a
+        // `use go` alias, not a typed value). LANG_SPEC §19.5
+        // turbofish intrinsics depend on this branch.
+        if packageName != "" {
+            let pkgSig = frontCheckSigLookup(env, packageName)
+            if pkgSig.name != "" {
+                let pkgSubsts = frontCheckExplicitSubsts(env, pkgSig.generics, typeArgs)
+                return frontCheckCallSig(file, env, callIdx, pkgSig, args, 0, pkgSubsts)
+            }
+        }
         let recvType = frontCheckResolveAliasesDeep(env, frontCheckExpr(file, env, target.left))
         let owner = frontCheckTypeHead(recvType)
         let sig = frontCheckMethodLookup(env, owner, target.text)

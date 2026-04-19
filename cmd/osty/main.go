@@ -1330,8 +1330,8 @@ func printScopeNode(s *resolve.Scope, depth int) {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: osty [flags] (parse|tokens|resolve|check|typecheck|lint|fmt|airepair|gen) FILE")
-	fmt.Fprintln(os.Stderr, "       osty new [--lib] NAME     (scaffold a new project)")
-	fmt.Fprintln(os.Stderr, "       osty init [--lib]         (scaffold into the current directory)")
+	fmt.Fprintln(os.Stderr, "       osty new [--bin|--lib|--workspace|--cli|--service] [--member NAME] NAME")
+	fmt.Fprintln(os.Stderr, "       osty init [--bin|--lib|--workspace|--cli|--service] [--name NAME] [--member NAME]")
 	fmt.Fprintln(os.Stderr, "       osty build [DIR]          (manifest + deps + front end + backend artifacts)")
 	fmt.Fprintln(os.Stderr, "       osty add NAME[@VER]       (add a dependency; also --path, --git)")
 	fmt.Fprintln(os.Stderr, "       osty update [NAME...]     (refresh osty.lock)")
@@ -1354,6 +1354,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "       osty targets              (list declared cross-compilation targets)")
 	fmt.Fprintln(os.Stderr, "       osty features             (list declared opt-in features)")
 	fmt.Fprintln(os.Stderr, "       osty cache [ls|clean|info] (inspect / prune the build cache)")
+	fmt.Fprintln(os.Stderr, "       osty scaffold <fixture|schema|ffi> [flags] NAME")
 	fmt.Fprintln(os.Stderr, "       osty lsp                  (language server on stdio)")
 	fmt.Fprintln(os.Stderr, "       osty explain [CODE]       (describe a diagnostic code; no arg lists every code)")
 	fmt.Fprintln(os.Stderr, "       osty pipeline FILE|DIR    (run every front-end phase; per-stage timing; --gen supports --backend)")
@@ -1407,6 +1408,9 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  --lib              scaffold a library project (lib.osty, no main)")
 	fmt.Fprintln(os.Stderr, "  --bin              scaffold a binary project (main.osty) [default]")
 	fmt.Fprintln(os.Stderr, "  --workspace        scaffold a virtual workspace with one default member")
+	fmt.Fprintln(os.Stderr, "  --cli              scaffold a multi-file CLI app starter")
+	fmt.Fprintln(os.Stderr, "  --service          scaffold a multi-file HTTP service starter")
+	fmt.Fprintln(os.Stderr, "  --member NAME      workspace member directory name (default: core)")
 	fmt.Fprintln(os.Stderr, "add-specific flags (after the subcommand):")
 	fmt.Fprintln(os.Stderr, "  --path DIR         local-path dependency (no network)")
 	fmt.Fprintln(os.Stderr, "  --git URL          git dependency; also --tag, --branch, --rev")

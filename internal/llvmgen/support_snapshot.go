@@ -2115,6 +2115,18 @@ func llvmStringRuntimeConcatSymbol() string {
 	return "osty_rt_strings_Concat"
 }
 
+func llvmIntRuntimeToStringSymbol() string {
+	return "osty_rt_int_to_string"
+}
+
+func llvmFloatRuntimeToStringSymbol() string {
+	return "osty_rt_float_to_string"
+}
+
+func llvmBoolRuntimeToStringSymbol() string {
+	return "osty_rt_bool_to_string"
+}
+
 func llvmStringRuntimeByteLenSymbol() string {
 	return "osty_rt_strings_ByteLen"
 }
@@ -2127,8 +2139,8 @@ func llvmStringRuntimeJoinSymbol() string {
 	return "osty_rt_strings_Join"
 }
 
-func llvmI64ToStringSymbol() string {
-	return "osty_rt_i64_to_string"
+func llvmStringRuntimeTrimSpaceSymbol() string {
+	return "osty_rt_strings_TrimSpace"
 }
 
 func llvmStringRuntimeDeclarations() []string {
@@ -2137,10 +2149,13 @@ func llvmStringRuntimeDeclarations() []string {
 		"declare i1 @osty_rt_strings_HasPrefix(ptr, ptr)",
 		"declare ptr @osty_rt_strings_Split(ptr, ptr)",
 		"declare ptr @osty_rt_strings_Concat(ptr, ptr)",
+		"declare ptr @osty_rt_int_to_string(i64)",
+		"declare ptr @osty_rt_float_to_string(double)",
+		"declare ptr @osty_rt_bool_to_string(i1)",
 		"declare i64 @osty_rt_strings_ByteLen(ptr)",
 		"declare i64 @osty_rt_strings_Compare(ptr, ptr)",
 		"declare ptr @osty_rt_strings_Join(ptr, ptr)",
-		"declare ptr @osty_rt_i64_to_string(i64)",
+		"declare ptr @osty_rt_strings_TrimSpace(ptr)",
 	}
 }
 
@@ -2158,6 +2173,18 @@ func llvmStringSplit(emitter *LlvmEmitter, value *LlvmValue, sep *LlvmValue) *Ll
 
 func llvmStringConcat(emitter *LlvmEmitter, left *LlvmValue, right *LlvmValue) *LlvmValue {
 	return llvmCall(emitter, "ptr", "osty_rt_strings_Concat", []*LlvmValue{left, right})
+}
+
+func llvmIntRuntimeToString(emitter *LlvmEmitter, value *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "ptr", "osty_rt_int_to_string", []*LlvmValue{value})
+}
+
+func llvmFloatRuntimeToString(emitter *LlvmEmitter, value *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "ptr", "osty_rt_float_to_string", []*LlvmValue{value})
+}
+
+func llvmBoolRuntimeToString(emitter *LlvmEmitter, value *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "ptr", "osty_rt_bool_to_string", []*LlvmValue{value})
 }
 
 func llvmStringCompare(emitter *LlvmEmitter, op string, left *LlvmValue, right *LlvmValue) *LlvmValue {
@@ -2180,8 +2207,8 @@ func llvmStringRuntimeJoin(emitter *LlvmEmitter, parts *LlvmValue, sep *LlvmValu
 	return llvmCall(emitter, "ptr", "osty_rt_strings_Join", []*LlvmValue{parts, sep})
 }
 
-func llvmI64ToString(emitter *LlvmEmitter, value *LlvmValue) *LlvmValue {
-	return llvmCall(emitter, "ptr", llvmI64ToStringSymbol(), []*LlvmValue{value})
+func llvmStringRuntimeTrimSpace(emitter *LlvmEmitter, value *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "ptr", "osty_rt_strings_TrimSpace", []*LlvmValue{value})
 }
 
 func llvmBuiltinType(name string) string {

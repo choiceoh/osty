@@ -616,12 +616,12 @@ while the export symbol is link-reachable.
 | §19.7 lowering table (`raw.null` → `inttoptr i64 0`, etc.) | **deferred** | — |
 | §19.10 safepoint compiler-emitted root array | **deferred** | — |
 
-**Type system / native checker.** A known gap blocks intrinsic
-lowering even after the IR plumbing is in place.
+**Type system / native checker / IR lowering.** Closed.
 
 | Piece | Status | Notes |
 |---|---|---|
-| Stdlib member type inference for `use std.runtime.raw` | **gap** | Today `raw.null()` resolves but checks as `*ir.ErrType` because the native checker does not flow stdlib intrinsic return types back to call sites. Lowering work is blocked on this until fixed. The executable contract for the fix is `internal/llvmgen/runtime_intrinsic_typing_test.go` — 7 `t.Skip`'d tests state the expected typing for each intrinsic (`raw.null` → RawPtr, `raw.alloc` → RawPtr, `raw.bits` → Int, `raw.read::<T>` → T, `raw.cas::<T>` → Bool, `raw.sizeOf::<T>` → Int, chained `alloc/write/read/free`). The fix lands by removing the `t.Skip` lines and watching all 7 pass without further code changes. |
+| Native checker types `raw.null()` / `raw.alloc(b, a)` / `raw.bits(p)` correctly | **landed** | The native checker's `chk.Types[CallExpr]` and `chk.LetTypes[LetStmt]` already return `RawPtr` / `Int` for non-generic intrinsics. The IR-side fix (`PrimRawPtr` added to `ir.PrimKind` + `TRawPtr` singleton + missing case arms in `primitiveByKind` / `primitiveByName`) made the native-checker output reach `let.Type` instead of dropping to `ErrTypeVal`. (PR #345 originally misdiagnosed this as a native-checker gap; PR #349 corrected the diagnosis and landed the IR fix.) |
+| Generic intrinsic typing — `raw.read::<T>` / `raw.write::<T>` / `raw.cas::<T>` / `raw.sizeOf::<T>` / `raw.alignOf::<T>` | **landed** | Two fixes in PR `claude/boundary-preserve-generics`: (a) `host_boundary.writeSelfhostPackageImport` now emits `<T: Pod>` via the new `selfhostGenericParams` helper so the native checker sees the stub's generic params; (b) `frontCheckTurbofishCall` (in `examples/selfhost-core/check.osty` + `internal/selfhost/generated.go`) now tries `frontCheckSigLookup(env, packageName)` on package-qualified turbofish calls before falling through to method lookup, mirroring the non-turbofish dispatch. The cached `osty-native-checker` binary at `<projectRoot>/.osty/toolchain/<version>/` must be deleted so `EnsureNativeChecker` rebuilds. The contract suite at `internal/llvmgen/runtime_intrinsic_typing_test.go` now has 9/9 PASS. |
 
 **Out-of-scope (per §19.1) — never planned.**
 

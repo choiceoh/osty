@@ -23,6 +23,9 @@ func GenerateModule(mod *ostyir.Module, opts Options) ([]byte, error) {
 	if mod == nil {
 		return nil, unsupported("source-layout", "nil module")
 	}
+	if err := validateLegacyFFISurface(mod); err != nil {
+		return nil, err
+	}
 	if diag, ok := moduleUnsupportedDiagnostic(mod); ok {
 		return nil, &UnsupportedError{Diagnostic: diag}
 	}
@@ -34,7 +37,106 @@ func GenerateModule(mod *ostyir.Module, opts Options) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return appendExportAliases(out, mod), nil
+	return finalizeLegacyFFISurface(out, mod), nil
+}
+
+// validateLegacyFFISurface rejects FFI-only contracts the legacy
+// AST-based emitter cannot represent faithfully. `#[intrinsic]` bodies
+// must never become ordinary LLVM definitions, so we fail early with the
+// same explicit message the MIR emitter uses instead of letting the
+// bridge drift into a generic "has no body" source-layout error.
+func validateLegacyFFISurface(mod *ostyir.Module) error {
+	if mod == nil {
+		return nil
+	}
+	for _, decl := range mod.Decls {
+		switch d := decl.(type) {
+		case *ostyir.FnDecl:
+			if d != nil && d.IsIntrinsic {
+				return unsupported("mir-mvp", "intrinsic function declaration "+d.Name)
+			}
+		case *ostyir.StructDecl:
+			for _, method := range d.Methods {
+				if method != nil && method.IsIntrinsic {
+					return unsupported("mir-mvp", "intrinsic function declaration "+llvmMethodIRName(d.Name, method.Name))
+				}
+			}
+		case *ostyir.EnumDecl:
+			for _, method := range d.Methods {
+				if method != nil && method.IsIntrinsic {
+					return unsupported("mir-mvp", "intrinsic function declaration "+llvmMethodIRName(d.Name, method.Name))
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// finalizeLegacyFFISurface re-applies the runtime-sublanguage contracts
+// that the IR->AST bridge cannot encode directly today.
+func finalizeLegacyFFISurface(out []byte, mod *ostyir.Module) []byte {
+	out = applyLegacyCABICallingConvention(out, mod)
+	return appendExportAliases(out, mod)
+}
+
+// applyLegacyCABICallingConvention patches legacy-emitted `define`
+// lines for `#[c_abi]` functions so MIR fallback keeps the
+// calling-convention marker visible in the textual LLVM IR. The legacy
+// bridge emits user functions as definitions only, so constraining the
+// rewrite to `define` avoids touching unrelated runtime declarations
+// that might happen to share a symbol name.
+func applyLegacyCABICallingConvention(out []byte, mod *ostyir.Module) []byte {
+	if mod == nil || len(out) == 0 {
+		return out
+	}
+	cabiSymbols := legacyCABISymbols(mod)
+	if len(cabiSymbols) == 0 {
+		return out
+	}
+	lines := strings.Split(string(out), "\n")
+	for i, line := range lines {
+		if !strings.HasPrefix(line, "define ") {
+			continue
+		}
+		for symbol := range cabiSymbols {
+			if !strings.Contains(line, "@"+symbol+"(") {
+				continue
+			}
+			if !strings.HasPrefix(line, "define ccc ") {
+				lines[i] = strings.Replace(line, "define ", "define ccc ", 1)
+			}
+			break
+		}
+	}
+	return []byte(strings.Join(lines, "\n"))
+}
+
+func legacyCABISymbols(mod *ostyir.Module) map[string]struct{} {
+	if mod == nil {
+		return nil
+	}
+	out := map[string]struct{}{}
+	for _, decl := range mod.Decls {
+		switch d := decl.(type) {
+		case *ostyir.FnDecl:
+			if d != nil && d.CABI {
+				out[d.Name] = struct{}{}
+			}
+		case *ostyir.StructDecl:
+			for _, method := range d.Methods {
+				if method != nil && method.CABI {
+					out[llvmMethodIRName(d.Name, method.Name)] = struct{}{}
+				}
+			}
+		case *ostyir.EnumDecl:
+			for _, method := range d.Methods {
+				if method != nil && method.CABI {
+					out[llvmMethodIRName(d.Name, method.Name)] = struct{}{}
+				}
+			}
+		}
+	}
+	return out
 }
 
 // appendExportAliases scans the IR module for `*ostyir.FnDecl` with

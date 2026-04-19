@@ -274,7 +274,8 @@ func (g *mirGen) typeSupported(t mir.Type) bool {
 			ir.PrimUInt8, ir.PrimUInt16, ir.PrimUInt32, ir.PrimUInt64,
 			ir.PrimByte, ir.PrimBool, ir.PrimChar,
 			ir.PrimFloat, ir.PrimFloat32, ir.PrimFloat64,
-			ir.PrimString, ir.PrimBytes, ir.PrimUnit, ir.PrimNever:
+			ir.PrimString, ir.PrimBytes, ir.PrimRawPtr,
+			ir.PrimUnit, ir.PrimNever:
 			return true
 		}
 	case *ir.NamedType:
@@ -464,6 +465,9 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 		return true
 	case mir.IntrinsicParallel, mir.IntrinsicRace, mir.IntrinsicCollectAll:
 		return true
+	// LANG_SPEC §19 runtime sublanguage.
+	case mir.IntrinsicRawNull:
+		return true
 	}
 	return false
 }
@@ -479,6 +483,8 @@ func mirIntrinsicLabel(k mir.IntrinsicKind) string {
 		return "eprint"
 	case mir.IntrinsicEprintln:
 		return "eprintln"
+	case mir.IntrinsicRawNull:
+		return "raw.null"
 	}
 	return fmt.Sprintf("kind=%d", int(k))
 }
@@ -1406,6 +1412,8 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 		return g.emitCancelIntrinsic(i)
 	case mir.IntrinsicParallel, mir.IntrinsicRace, mir.IntrinsicCollectAll:
 		return g.emitConcurrencyHelperIntrinsic(i)
+	case mir.IntrinsicRawNull:
+		return g.emitRuntimeRawNull(i)
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("intrinsic %s", mirIntrinsicLabel(i.Kind)))
 }
@@ -3859,6 +3867,12 @@ func (g *mirGen) llvmType(t mir.Type) string {
 			return "float"
 		case ir.PrimString, ir.PrimBytes:
 			return "ptr"
+		case ir.PrimRawPtr:
+			// LANG_SPEC §19.3 — RawPtr is an opaque pointer-shaped
+			// scalar; in opaque-pointer LLVM (the toolchain's required
+			// version) it lowers to `ptr`. Width is `sizeof(uintptr_t)`,
+			// 8 bytes on the supported 64-bit targets.
+			return "ptr"
 		case ir.PrimUnit:
 			return "void"
 		case ir.PrimNever:
@@ -4096,6 +4110,17 @@ func (g *mirGen) storeIntrinsicResult(i *mir.IntrinsicInstr, result *LlvmValue) 
 	g.fnBuf.WriteString(g.localSlots[i.Dest.Local])
 	g.fnBuf.WriteByte('\n')
 	return nil
+}
+
+// emitRuntimeRawNull lowers `raw.null()` from LANG_SPEC §19.5. The
+// result is the pointer-shaped null constant: in opaque-pointer LLVM
+// (the toolchain's required version) that's just `null` as a `ptr`.
+// No instruction needed beyond the store into the dest slot.
+func (g *mirGen) emitRuntimeRawNull(i *mir.IntrinsicInstr) error {
+	if len(i.Args) != 0 {
+		return unsupported("mir-mvp", "raw.null() takes no arguments")
+	}
+	return g.storeIntrinsicResult(i, &LlvmValue{typ: "ptr", name: "null"})
 }
 
 // ==== helpers ====

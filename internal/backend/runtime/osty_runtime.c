@@ -1,5 +1,6 @@
 #include <stdbool.h>
 #include <stdint.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -204,6 +205,7 @@ static void osty_gc_mark_payload(void *payload);
 bool osty_rt_strings_Equal(const char *left, const char *right);
 int64_t osty_rt_strings_Compare(const char *left, const char *right);
 const char *osty_rt_strings_Join(void *raw_parts, const char *sep);
+const char *osty_rt_strings_TrimSpace(const char *value);
 bool osty_rt_set_insert_i64(void *raw_set, int64_t item);
 bool osty_rt_set_insert_i1(void *raw_set, bool item);
 bool osty_rt_set_insert_f64(void *raw_set, double item);
@@ -538,13 +540,25 @@ static void osty_rt_list_set_raw(void *raw_list, int64_t index, const void *valu
     memcpy(slot, value, elem_size);
 }
 
-static char *osty_rt_string_dup_range(const char *start, size_t len) {
-    char *out = (char *)osty_gc_allocate_managed(len + 1, OSTY_GC_KIND_STRING, "runtime.strings.split.part", NULL, NULL);
+static char *osty_rt_string_dup_site(const char *start, size_t len, const char *site) {
+    char *out = (char *)osty_gc_allocate_managed(len + 1, OSTY_GC_KIND_STRING, site, NULL, NULL);
     if (len != 0) {
         memcpy(out, start, len);
     }
     out[len] = '\0';
     return out;
+}
+
+static char *osty_rt_string_dup_range(const char *start, size_t len) {
+    return osty_rt_string_dup_site(start, len, "runtime.strings.split.part");
+}
+
+static bool osty_rt_f64_same_bits(double left, double right) {
+    uint64_t left_bits = 0;
+    uint64_t right_bits = 0;
+    memcpy(&left_bits, &left, sizeof(left_bits));
+    memcpy(&right_bits, &right, sizeof(right_bits));
+    return left_bits == right_bits;
 }
 
 void *osty_rt_list_new(void) {
@@ -802,6 +816,52 @@ bool osty_rt_strings_Equal(const char *left, const char *right) {
     return strcmp(left, right) == 0;
 }
 
+const char *osty_rt_int_to_string(int64_t value) {
+    char buffer[32];
+    int written = snprintf(buffer, sizeof(buffer), "%lld", (long long)value);
+    if (written < 0) {
+        osty_rt_abort("failed to format Int as String");
+    }
+    return osty_rt_string_dup_site(buffer, (size_t)written, "runtime.int.to_string");
+}
+
+const char *osty_rt_bool_to_string(bool value) {
+    if (value) {
+        return osty_rt_string_dup_site("true", 4, "runtime.bool.to_string");
+    }
+    return osty_rt_string_dup_site("false", 5, "runtime.bool.to_string");
+}
+
+const char *osty_rt_float_to_string(double value) {
+    char buffer[64];
+    int precision;
+
+    if (isnan(value)) {
+        return osty_rt_string_dup_site("NaN", 3, "runtime.float.to_string");
+    }
+    if (isinf(value)) {
+        if (value < 0) {
+            return osty_rt_string_dup_site("-Inf", 4, "runtime.float.to_string");
+        }
+        return osty_rt_string_dup_site("+Inf", 4, "runtime.float.to_string");
+    }
+
+    buffer[0] = '\0';
+    for (precision = 1; precision <= 17; precision++) {
+        char *end = NULL;
+        double parsed;
+
+        if (snprintf(buffer, sizeof(buffer), "%.*g", precision, value) < 0) {
+            osty_rt_abort("failed to format Float as String");
+        }
+        parsed = strtod(buffer, &end);
+        if (end != NULL && *end == '\0' && osty_rt_f64_same_bits(parsed, value)) {
+            break;
+        }
+    }
+    return osty_rt_string_dup_site(buffer, strlen(buffer), "runtime.float.to_string");
+}
+
 int64_t osty_rt_strings_Compare(const char *left, const char *right) {
     int result;
     if (left == NULL) {
@@ -841,16 +901,6 @@ const char *osty_rt_strings_Concat(const char *left, const char *right) {
         memcpy(out + left_len, right, right_len);
     }
     out[left_len + right_len] = '\0';
-    return out;
-}
-
-/* -2^63 needs 20 chars + sign + NUL = 22 bytes; 24 keeps alignment friendly. */
-const char *osty_rt_i64_to_string(int64_t value) {
-    char *out = (char *)osty_gc_allocate_managed(24, OSTY_GC_KIND_STRING, "runtime.int.toString", NULL, NULL);
-    int written = snprintf(out, 24, "%lld", (long long)value);
-    if (written < 0) {
-        out[0] = '\0';
-    }
     return out;
 }
 
@@ -937,6 +987,38 @@ const char *osty_rt_strings_Join(void *raw_parts, const char *sep) {
         }
     }
     *cursor = '\0';
+    return out;
+}
+
+const char *osty_rt_strings_TrimSpace(const char *value) {
+    const char *start;
+    const char *end;
+    size_t len;
+    char *out;
+
+    if (value == NULL) {
+        out = (char *)osty_gc_allocate_managed(1, OSTY_GC_KIND_STRING, "runtime.strings.trim_space.empty", NULL, NULL);
+        out[0] = '\0';
+        return out;
+    }
+    start = value;
+    while (*start == ' ' || *start == '\t' || *start == '\n' || *start == '\r' || *start == '\v' || *start == '\f') {
+        start++;
+    }
+    end = start + strlen(start);
+    while (end > start) {
+        char c = *(end - 1);
+        if (c != ' ' && c != '\t' && c != '\n' && c != '\r' && c != '\v' && c != '\f') {
+            break;
+        }
+        end--;
+    }
+    len = (size_t)(end - start);
+    out = (char *)osty_gc_allocate_managed(len + 1, OSTY_GC_KIND_STRING, "runtime.strings.trim_space", NULL, NULL);
+    if (len != 0) {
+        memcpy(out, start, len);
+    }
+    out[len] = '\0';
     return out;
 }
 

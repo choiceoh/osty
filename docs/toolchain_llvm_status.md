@@ -1,79 +1,100 @@
 # Toolchain × LLVM compilability — status report
 
-Snapshot date: 2026-04-18, against branch tip `5ace7c3`. Stage numbers
-shift week-over-week; for the live MIR-direct coverage see
+Snapshot date: 2026-04-19. This refresh revalidated the universal CLI / LLVM
+smoke path and the previously named `internal/llvmgen` regressions. The deeper
+`toolchain/*.osty` error-budget counts below are still the 2026-04-18 sample
+until they are re-run end-to-end. Stage numbers shift week-over-week; for the
+live MIR-direct coverage see
 [docs/mir_design.md](./mir_design.md) Stage 3.x + Stage 5 sections.
 
 ## TL;DR
 
-Today zero `toolchain/*.osty` files reach `internal/llvmgen`. The pipeline
-stops on one of:
+The old "CLI panic blocks any `osty gen --backend=llvm` call" statement is no
+longer true.
+
+As of 2026-04-19:
+
+- a fresh `fn main() { println(42) }` file goes through
+  `osty gen --backend=llvm` successfully and emits LLVM IR
+- the four targeted `internal/llvmgen` tests called out in the previous
+  snapshot now pass again
+- the parser-side `def: Expr` stable-alias issue remains fixed
+
+That means the universal LLVM entry wedge is closed. The remaining
+toolchain/selfhosting work is now about front-end/toolchain coverage, not "any
+CLI use of LLVM crashes before backend emission."
+
+The 2026-04-18 full-toolchain sample still showed the following blockers:
 
 | Layer | Where | What blocks |
 |---|---|---|
-| CLI wiring | `internal/check/host_boundary.go:578` | `osty gen --backend=llvm <any>.osty` segfaults (nil pointer in `selfhostSpanIndex.addNode`) before the backend is reached |
+| CLI wiring | historical 2026-04-18 blocker | **resolved in the 2026-04-19 refresh** — hello-world `osty gen --backend=llvm` now exits 0 and writes `.ll` output |
 | Front-end (lexer) | `internal/lexer` string-interpolation path | `"0_{label}"` / `"[a-z0-9_-]*"` inside string literals are flagged E0008 |
 | Front-end (resolver) | `internal/resolve` / `internal/stdlib` | `std.strings` module not in scope — 39 × E0500 in `toolchain/ast_lower.osty` alone |
-| Front-end (parser) | `internal/parser` | `fn …(def: Expr)` inside a `use "…" { … }` FFI block fails with E0001 |
+| Front-end (parser) | historical 2026-04-18 blocker | **resolved before this refresh** — `def: Expr` is no longer rewritten in `name: Type` positions |
 | Type checker | `internal/check` | 1700 aggregated errors across the package (but 97.6% of assignment/return/call checks still accept — tail is small per-file) |
 
 The MIR-direct emitter itself (Stages 3.1–3.11) covers most of the language
-shapes toolchain uses. What is blocking is *front-end bookkeeping and CLI
-plumbing*, not backend lowering.
+shapes toolchain uses. The 2026-04-19 refresh narrows the story further:
+backend entry is no longer the first blocker; the remaining wedge is front-end
+bookkeeping plus still-unported/selfhost-only toolchain usage.
 
 ## How the probe was run
 
 ```
 go build -o /tmp/osty ./cmd/osty
+/tmp/osty gen   --backend=llvm   /tmp/hello.osty      >/tmp/hello.ll
+go test ./internal/llvmgen -run 'TestGenerateModuleInterfaceVtableEmitted|TestGenerateSafepointKeepsImmutableManagedLocalsAndAggregateFields|TestGenerateManagedAggregateListsTraceNestedRoots|TestGenerateModulePtrBackedListToSetAndBoolPrint' -count=1
 /tmp/osty check --airepair=false toolchain > /tmp/tc.log 2>&1
-/tmp/osty gen   --backend=llvm   toolchain/core.osty  2>&1
-/tmp/osty gen   --backend=llvm   /tmp/hello.osty      2>&1
+/tmp/osty gen   --backend=llvm   toolchain/core.osty  2>&1   # historical 2026-04-18 sample
 /tmp/osty build --backend=llvm   examples/calc        2>&1
 ```
 
 `/tmp/hello.osty` was a 3-line `fn main() { println(42) }` baseline so the
-panic could be isolated from toolchain-specific issues.
+backend entry path could be isolated from toolchain-specific issues.
 
-## Layer 1 — CLI panic blocks any `osty gen --backend=llvm` call
+Observed in the 2026-04-19 refresh:
 
-Input: a single-line `fn main() { println(42) }`.
+- `/tmp/osty gen --backend=llvm /tmp/hello.osty` exited 0 and emitted a valid
+  `.ll` module containing `define i32 @main()`
+- the targeted `internal/llvmgen` regression set returned
+  `ok github.com/osty/osty/internal/llvmgen`
+
+## Layer 1 — universal CLI panic wedge (resolved)
+
+The previous snapshot's highest-priority blocker was:
 
 ```
 panic: runtime error: invalid memory address or nil pointer dereference
-[signal SIGSEGV: ...]
-  check.(*selfhostSpanIndex).addNode
-    internal/check/host_boundary.go:578
-  check.(*selfhostSpanIndex).addNode
-    internal/check/host_boundary.go:501
-  check.(*selfhostSpanIndex).addNode
-    internal/check/host_boundary.go:530
-  check.buildSelfhostSpanIndex
-    internal/check/host_boundary.go:433
-  check.overlaySelfhostResult
-    internal/check/host_boundary.go:360
-  check.applyNativeFileResult
-    internal/check/host_boundary.go:248
-  check.File
-    internal/check/check.go:108
+...
+check.(*selfhostSpanIndex).addNode
+  internal/check/host_boundary.go:578
 ```
 
-Same root cause as the four pre-existing `internal/llvmgen` test failures:
+That specific universal wedge is now closed.
+
+Current revalidation result:
+
+```text
+$ /tmp/osty gen --backend=llvm /tmp/hello.osty
+$ echo $?
+0
+```
+
+The same refresh also re-ran the four `internal/llvmgen` tests that were named
+as evidence for the panic and they now pass:
 
 - `TestGenerateModuleInterfaceVtableEmitted`
 - `TestGenerateSafepointKeepsImmutableManagedLocalsAndAggregateFields`
 - `TestGenerateManagedAggregateListsTraceNestedRoots`
 - `TestGenerateModulePtrBackedListToSetAndBoolPrint`
 
-These all route through `runMonoLowerPipeline → check.File → …addNode` and
-trip the same nil deref. The Go-side `TestLLVMBackendBinaryRunsBundledRuntime`
-path uses a different entry and passes cleanly, which is why most LLVM
-backend coverage still looks green — the pipeline that the CLI uses is
-broken, the pipeline the Go test harness uses is fine.
+So the current remaining work should no longer be framed as "LLVM CLI path is
+broken before backend reachability." The backend entry path is alive again; the
+next re-profile should focus on actual `toolchain/*.osty` diagnostics and
+selfhosting surface gaps.
 
-This is the single highest-ROI fix on the path to `toolchain/*.osty` through
-LLVM, because every other issue below only matters once this one is gone.
-
-## Layer 2 — front-end error budget in `toolchain/`
+## Layer 2 — front-end error budget in `toolchain/` (historical 2026-04-18 sample)
 
 Aggregated from `osty check --airepair=false toolchain`:
 
@@ -81,7 +102,7 @@ Aggregated from `osty check --airepair=false toolchain`:
 |---|---|---|---|
 | E0500 | 39 | undefined name — `strings` module not in scope | `toolchain/ast_lower.osty` (all 39) |
 | E0008 | 6 | numeric separator `_` must appear between two digits — false-positive inside string literals | `lsp.osty:415-423`, `ci.osty:546`, `manifest_validation.osty:283` |
-| E0001 | 4 | expected IDENT — parser loses sync at `fn ParamNode(…, def: Expr, …)` | `ast_lower.osty:91`, `:93` (× 2 each) |
+| E0001 | 4 (historical) | expected IDENT — parser lost sync at `fn ParamNode(…, def: Expr, …)` before the stable-alias fix | `ast_lower.osty:91`, `:93` (× 2 each) |
 | E0010 | 2 | cascading from E0001 | `ast_lower.osty:1051`, `:1054` |
 | E0700 | 1 | native checker summary — 1700 errors aggregated | `airepair_flags.osty:1` (summary anchor) |
 
@@ -167,13 +188,12 @@ runnable binary" is dominated by Layer 1 + Layer 2, not Layer 3.
 
 ## Recommended fix order (smallest → largest unlock)
 
-1. **Fix the `selfhostSpanIndex.addNode` nil panic** in
-   `internal/check/host_boundary.go`. Unblocks `osty gen --backend=llvm`
-   *and* four pre-existing test failures. Likely a missing nil guard on a
-   span field that is populated for AST-native files but empty for
-   selfhost-overlay files.
+1. **Re-run the full `toolchain` sample on the current tree** and replace the
+   historical 2026-04-18 counts. The universal CLI panic wedge is already
+   closed, so fresh numbers matter more than old ones now.
 
-2. **Fix the string-interpolation lexer bug** (E0008). Six sites today,
+2. **Fix the string-interpolation lexer bug** (E0008). Six sites in the last
+   full sample,
    pattern is well-defined, fixture is small. Unblocks `lsp.osty`,
    `ci.osty`, `manifest_validation.osty`.
 

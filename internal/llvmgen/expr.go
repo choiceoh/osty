@@ -109,18 +109,11 @@ func (g *generator) emitInterpolatedString(lit *ast.StringLit) (value, error) {
 		if err != nil {
 			return value{}, err
 		}
-		if v.typ == "i64" && v.listElemTyp == "" && v.mapKeyTyp == "" {
-			converted, convErr := g.emitRuntimeI64ToString(v)
-			if convErr != nil {
-				return value{}, convErr
-			}
-			pieces = append(pieces, converted)
-			continue
+		piece, err := g.emitInterpolationStringPiece(v)
+		if err != nil {
+			return value{}, err
 		}
-		if v.typ != "ptr" || v.listElemTyp != "" || v.mapKeyTyp != "" {
-			return value{}, unsupportedf("type-system", "interpolation of %s value requires .toString() which the LLVM backend does not yet lower", v.typ)
-		}
-		pieces = append(pieces, v)
+		pieces = append(pieces, piece)
 	}
 	result := pieces[0]
 	for i := 1; i < len(pieces); i++ {
@@ -131,6 +124,22 @@ func (g *generator) emitInterpolatedString(lit *ast.StringLit) (value, error) {
 		result = r
 	}
 	return result, nil
+}
+
+func (g *generator) emitInterpolationStringPiece(v value) (value, error) {
+	switch v.typ {
+	case "ptr":
+		if v.listElemTyp == "" && v.mapKeyTyp == "" && v.setElemTyp == "" {
+			return v, nil
+		}
+	case "i64":
+		return g.emitRuntimeIntToString(v)
+	case "double":
+		return g.emitRuntimeFloatToString(v)
+	case "i1":
+		return g.emitRuntimeBoolToString(v)
+	}
+	return value{}, unsupportedf("type-system", "interpolation of %s value requires .toString() which the LLVM backend does not yet lower", v.typ)
 }
 
 func (g *generator) emitExpr(expr ast.Expr) (value, error) {
@@ -913,27 +922,50 @@ func (g *generator) emitQuestionExprResult(expr *ast.QuestionExpr, info builtinR
 }
 
 func (g *generator) emitRuntimeStringConcat(left, right value) (value, error) {
-	g.declareRuntimeSymbol("osty_rt_strings_Concat", "ptr", []paramInfo{
+	symbol := llvmStringRuntimeConcatSymbol()
+	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{
 		{typ: "ptr"},
 		{typ: "ptr"},
 	})
 	emitter := g.toOstyEmitter()
 	out := llvmStringConcat(emitter, toOstyValue(left), toOstyValue(right))
 	g.takeOstyEmitter(emitter)
-	return fromOstyValue(out), nil
+	joined := fromOstyValue(out)
+	joined.gcManaged = true
+	return joined, nil
 }
 
-func (g *generator) emitRuntimeI64ToString(v value) (value, error) {
-	if v.typ != "i64" {
-		return value{}, unsupportedf("type-system", "i64.toString lowering received %s", v.typ)
-	}
-	g.declareRuntimeSymbol(llvmI64ToStringSymbol(), "ptr", []paramInfo{{typ: "i64"}})
+func (g *generator) emitRuntimeIntToString(v value) (value, error) {
+	symbol := llvmIntRuntimeToStringSymbol()
+	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "i64"}})
 	emitter := g.toOstyEmitter()
-	out := llvmI64ToString(emitter, toOstyValue(v))
+	out := llvmIntRuntimeToString(emitter, toOstyValue(v))
 	g.takeOstyEmitter(emitter)
-	res := fromOstyValue(out)
-	res.gcManaged = true
-	return res, nil
+	text := fromOstyValue(out)
+	text.gcManaged = true
+	return text, nil
+}
+
+func (g *generator) emitRuntimeFloatToString(v value) (value, error) {
+	symbol := llvmFloatRuntimeToStringSymbol()
+	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "double"}})
+	emitter := g.toOstyEmitter()
+	out := llvmFloatRuntimeToString(emitter, toOstyValue(v))
+	g.takeOstyEmitter(emitter)
+	text := fromOstyValue(out)
+	text.gcManaged = true
+	return text, nil
+}
+
+func (g *generator) emitRuntimeBoolToString(v value) (value, error) {
+	symbol := llvmBoolRuntimeToStringSymbol()
+	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "i1"}})
+	emitter := g.toOstyEmitter()
+	out := llvmBoolRuntimeToString(emitter, toOstyValue(v))
+	g.takeOstyEmitter(emitter)
+	text := fromOstyValue(out)
+	text.gcManaged = true
+	return text, nil
 }
 
 func (g *generator) emitRuntimeStringCompare(op token.Kind, left, right value) (value, error) {
@@ -1915,9 +1947,10 @@ func (g *generator) emitMapInsert(base, key, val value) error {
 	return nil
 }
 
-// stdlib `int.osty` declares Int.toString as an `#[intrinsic_methods]`
-// placeholder with an empty body, which would otherwise lower to dead
-// IR; this dispatcher routes to the runtime helper instead.
+// stdlib primitives/{int,float,bool}.osty declare toString as
+// `#[intrinsic_methods]` placeholders with empty bodies, which would
+// otherwise lower to dead IR; this dispatcher routes to the same
+// runtime helpers that emitInterpolationStringPiece uses.
 func (g *generator) emitPrimitiveToStringCall(call *ast.CallExpr) (value, bool, error) {
 	field, ok := call.Fn.(*ast.FieldExpr)
 	if !ok || field.IsOptional || field.Name != "toString" {
@@ -1927,21 +1960,30 @@ func (g *generator) emitPrimitiveToStringCall(call *ast.CallExpr) (value, bool, 
 		return value{}, false, nil
 	}
 	baseInfo, ok := g.staticExprInfo(field.X)
-	if !ok || baseInfo.typ != "i64" {
+	if !ok {
+		return value{}, false, nil
+	}
+	switch baseInfo.typ {
+	case "i64", "double", "i1":
+	default:
 		return value{}, false, nil
 	}
 	base, err := g.emitExpr(field.X)
 	if err != nil {
 		return value{}, true, err
 	}
-	if base.typ != "i64" {
-		return value{}, false, nil
+	switch base.typ {
+	case "i64":
+		out, err := g.emitRuntimeIntToString(base)
+		return out, true, err
+	case "double":
+		out, err := g.emitRuntimeFloatToString(base)
+		return out, true, err
+	case "i1":
+		out, err := g.emitRuntimeBoolToString(base)
+		return out, true, err
 	}
-	out, err := g.emitRuntimeI64ToString(base)
-	if err != nil {
-		return value{}, true, err
-	}
-	return out, true, nil
+	return value{}, false, nil
 }
 
 func (g *generator) emitListMethodCall(call *ast.CallExpr) (value, bool, error) {

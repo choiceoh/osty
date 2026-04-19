@@ -91,6 +91,9 @@ pub struct IrNode {
     pub end: Int,
     pub depth: Int,
     pub flags: Int,
+    pub noAlloc: Bool,
+    pub pod: Bool,
+    pub reprC: Bool,
     pub parent: Int,
     pub children: List<Int>,
     pub scope: Int,
@@ -190,6 +193,9 @@ pub fn emptyIrNode(kind: IrNodeKind) -> IrNode {
         end: 0,
         depth: 0,
         flags: 0,
+        noAlloc: false,
+        pod: false,
+        reprC: false,
         parent: -1,
         children: [],
         scope: -1,
@@ -292,6 +298,7 @@ pub fn irLowerSource(packageName: String, source: String) -> IrModule {
     let tokens = frontTokensFromSource(source, stream)
     let tree = frontendParseTree(source)
     let mut module = irLowerParseTree(packageName, tree)
+    irApplyFrontRuntimeAnnotations(module, tokens)
     irFinalizeSemanticGraph(module, tokens)
     module
 }
@@ -395,6 +402,9 @@ fn irLowerAstNodeInto(
     node.end = astNode.end
     node.depth = depth
     node.flags = astNode.flags
+    node.noAlloc = irAstHasRuntimeAnnotation(arena, astNode, "no_alloc")
+    node.pod = irAstHasRuntimeAnnotation(arena, astNode, "pod")
+    node.reprC = irAstHasRuntimeAnnotation(arena, astNode, "repr")
     node.parent = parent
 
     let idx = irArenaAdd(module.arena, node)
@@ -447,6 +457,160 @@ fn irFinalizeAstSemanticNames(module: IrModule, arena: AstArena) {
         }
         idx = idx + 1
     }
+}
+
+fn irApplyFrontRuntimeAnnotations(module: IrModule, tokens: List<FrontToken>) {
+    let mut idx = 0
+    for node in module.arena.nodes {
+        let mut updated = node
+        let runtime = irFrontRuntimeAnnotationsForNode(module, tokens, idx)
+        updated.noAlloc = runtime.noAlloc
+        updated.pod = runtime.pod
+        updated.reprC = runtime.reprC
+        module.arena.nodes[idx] = updated
+        idx = idx + 1
+    }
+}
+
+pub struct IrRuntimeAnnotations {
+    pub noAlloc: Bool,
+    pub pod: Bool,
+    pub reprC: Bool,
+}
+
+pub fn emptyIrRuntimeAnnotations() -> IrRuntimeAnnotations {
+    IrRuntimeAnnotations { noAlloc: false, pod: false, reprC: false }
+}
+
+fn irFrontRuntimeAnnotationsForNode(
+    module: IrModule,
+    tokens: List<FrontToken>,
+    nodeIdx: Int,
+) -> IrRuntimeAnnotations {
+    let node = irArenaNodeAt(module.arena, nodeIdx)
+    if node.kind != IrNodeFnDecl && node.kind != IrNodeStructDecl {
+        return emptyIrRuntimeAnnotations()
+    }
+    if node.parent < 0 {
+        return emptyIrRuntimeAnnotations()
+    }
+    let parent = irArenaNodeAt(module.arena, node.parent)
+    let pos = irIndexOfChild(parent.children, nodeIdx)
+    if pos <= 0 {
+        return emptyIrRuntimeAnnotations()
+    }
+    let mut out = emptyIrRuntimeAnnotations()
+    let mut i = pos - 1
+    let mut keepGoing = true
+    for keepGoing {
+        let siblingIdx = parent.children[i]
+        let sibling = irArenaNodeAt(module.arena, siblingIdx)
+        if sibling.kind == IrNodeAnnotation {
+            out = irMergeRuntimeAnnotations(
+                out,
+                irRuntimeAnnotationsFromTokenSpan(tokens, sibling.start, sibling.end),
+            )
+            if i == 0 {
+                keepGoing = false
+            } else {
+                i = i - 1
+            }
+        } else {
+            keepGoing = false
+        }
+    }
+    out
+}
+
+fn irIndexOfChild(children: List<Int>, target: Int) -> Int {
+    let mut idx = 0
+    for child in children {
+        if child == target {
+            return idx
+        }
+        idx = idx + 1
+    }
+    -1
+}
+
+fn irMergeRuntimeAnnotations(
+    left: IrRuntimeAnnotations,
+    right: IrRuntimeAnnotations,
+) -> IrRuntimeAnnotations {
+    IrRuntimeAnnotations {
+        noAlloc: left.noAlloc || right.noAlloc,
+        pod: left.pod || right.pod,
+        reprC: left.reprC || right.reprC,
+    }
+}
+
+fn irRuntimeAnnotationsFromTokenSpan(
+    tokens: List<FrontToken>,
+    start: Int,
+    end: Int,
+) -> IrRuntimeAnnotations {
+    let mut out = emptyIrRuntimeAnnotations()
+    let mut idx = start
+    let stop = if end < frontTokenListCount(tokens) { end } else { frontTokenListCount(tokens) }
+    for idx < stop {
+        let tok = frontTokenAtList(tokens, idx)
+        if tok.kind == FrontIdent {
+            if tok.text == "no_alloc" {
+                out.noAlloc = true
+            } else if tok.text == "pod" {
+                out.pod = true
+            } else if tok.text == "repr" {
+                out.reprC = true
+            }
+        }
+        idx = idx + 1
+    }
+    out
+}
+
+fn irAstHasRuntimeAnnotation(arena: AstArena, node: AstNode, name: String) -> Bool {
+    let extra = irAstAnnotationRoot(node)
+    if extra < 0 {
+        return false
+    }
+    irAstAnnotationTreeContains(arena, extra, name)
+}
+
+fn irAstAnnotationRoot(node: AstNode) -> Int {
+    if node.kind == AstNFnDecl
+        || node.kind == AstNStructDecl
+        || node.kind == AstNEnumDecl
+        || node.kind == AstNInterfaceDecl
+        || node.kind == AstNTypeAlias
+        || node.kind == AstNLetDecl
+        || node.kind == AstNLet
+        || node.kind == AstNField_
+        || node.kind == AstNVariant {
+        return node.extra
+    }
+    -1
+}
+
+fn irAstAnnotationTreeContains(arena: AstArena, idx: Int, name: String) -> Bool {
+    if idx < 0 {
+        return false
+    }
+    let node = astArenaNodeAt(arena, idx)
+    if node.kind != AstNAnnotation {
+        return false
+    }
+    if node.text == name {
+        return true
+    }
+    if node.text != "__group" {
+        return false
+    }
+    for child in node.children {
+        if irAstAnnotationTreeContains(arena, child, name) {
+            return true
+        }
+    }
+    false
 }
 
 fn irAstNameForIrNode(arena: AstArena, node: IrNode) -> String {
