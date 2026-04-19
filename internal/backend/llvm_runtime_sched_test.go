@@ -18,9 +18,7 @@ import (
 // uniform closure ABI (`int64_t body(void *env [, void *group])`)
 // described in §ABI contract of RUNTIME_SCHEDULER.md.
 func TestBundledRuntimeSchedulerPhase1A(t *testing.T) {
-	if _, err := exec.LookPath("clang"); err != nil {
-		t.Skip("clang not found on PATH")
-	}
+	parallelClangBackendTest(t)
 
 	dir := t.TempDir()
 	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
@@ -174,9 +172,7 @@ int main(void) {
 // link-failing or silently no-op'ing. A program that reaches these
 // calls in Phase 1A must fail loudly — Phase 1B replaces them.
 func TestBundledRuntimeSchedulerChannelStubAborts(t *testing.T) {
-	if _, err := exec.LookPath("clang"); err != nil {
-		t.Skip("clang not found on PATH")
-	}
+	parallelClangBackendTest(t)
 
 	dir := t.TempDir()
 	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
