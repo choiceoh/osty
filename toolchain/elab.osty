@@ -1033,8 +1033,11 @@ fn elabInferCall(cx: ElabCx, callIdx: Int, node: AstNode, expected: Int) -> Elab
 
     let sig = checkLookupFn(cx.env, baseCallee.text, "")
     if sig.name == "" {
-        cx.env.diagnostics.push(diagUnknownName(baseCallee.text, baseCallee.start, baseCallee.end))
-        return elabPoisonResult(cx, node.start, node.end)
+        // Call-position idents may resolve to local `fn(...)` values
+        // (`let printer = print; printer("x")`) that shadow or replace
+        // a top-level declaration. Fall back to the general fn-value
+        // call path before reporting an unknown name.
+        return elabInferFnValueCall(cx, node, argIdxs, expected)
     }
 
     if checkStringListLenHelper(sig.generics) == 0 && checkIntListLenHelper(explicitArgs) == 0 {
