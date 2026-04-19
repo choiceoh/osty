@@ -123,18 +123,42 @@ pub struct CheckEnv {
     // Lexical stack; binding operations push to the tail and `checkScopeDrop`
     // truncates to a previously captured mark.
     pub bindings: List<CheckBinding>,
+    pub bindingIndexNames: List<String>,
+    pub bindingIndexStacks: List<List<CheckBinding>>,
 
     // Module-level signatures.
     pub fns: List<CheckFnSig>,
+    pub fnIndexKeys: List<String>,
+    pub fnIndexValues: List<Int>,
     pub fields: List<CheckFieldSig>,
+    pub fieldIndexKeys: List<String>,
+    pub fieldIndexValues: List<Int>,
     pub variants: List<CheckVariantSig>,
+    pub variantIndexKeys: List<String>,
+    pub variantIndexValues: List<Int>,
+    pub variantOwnerIndexKeys: List<String>,
+    pub variantOwnerIndexValues: List<Int>,
     pub aliases: List<CheckAliasSig>,
+    pub aliasIndexKeys: List<String>,
+    pub aliasIndexValues: List<Int>,
     pub types: List<CheckTypeSig>,
+    pub typeIndexKeys: List<String>,
+    pub typeIndexValues: List<Int>,
     pub interfaces: List<String>,
+    pub interfaceIndexKeys: List<String>,
     pub interfaceExtends: List<CheckInterfaceExt>,
 
     // Generic bounds currently in scope (owner fn / struct / impl).
     pub genericBounds: List<CheckGenericBound>,
+    pub genericBoundIndexNames: List<String>,
+    pub genericBoundIndexStacks: List<List<Int>>,
+
+    // Memoized type rewrites. `aliasDeepCache` is indexed directly by
+    // type handle; substitution cache keys include the generic/arg
+    // environment because the same type can be specialised many ways.
+    pub aliasDeepCache: List<Int>,
+    pub substCacheKeys: List<String>,
+    pub substCacheValues: List<Int>,
 
     // Flow context.
     pub returnTy: Int,
@@ -157,14 +181,34 @@ pub fn emptyCheckEnv(tys: TyArena) -> CheckEnv {
     CheckEnv {
         tys,
         bindings: [],
+        bindingIndexNames: [],
+        bindingIndexStacks: [],
         fns: [],
+        fnIndexKeys: [],
+        fnIndexValues: [],
         fields: [],
+        fieldIndexKeys: [],
+        fieldIndexValues: [],
         variants: [],
+        variantIndexKeys: [],
+        variantIndexValues: [],
+        variantOwnerIndexKeys: [],
+        variantOwnerIndexValues: [],
         aliases: [],
+        aliasIndexKeys: [],
+        aliasIndexValues: [],
         types: [],
+        typeIndexKeys: [],
+        typeIndexValues: [],
         interfaces: [],
+        interfaceIndexKeys: [],
         interfaceExtends: [],
         genericBounds: [],
+        genericBoundIndexNames: [],
+        genericBoundIndexStacks: [],
+        aliasDeepCache: [],
+        substCacheKeys: [],
+        substCacheValues: [],
         returnTy: tErr(tys),
         fnName: "",
         inLoop: false,
@@ -195,7 +239,9 @@ pub fn checkScopeDrop(env: CheckEnv, mark: Int) {
     // support `.pop()`; the early-break guards against negative marks.
     let mut current = env.bindings.len()
     for current > mark {
+        let popped = env.bindings[current - 1]
         let _ = env.bindings.pop()
+        checkBindingIndexPop(env, popped.name)
         current = current - 1
     }
 }
@@ -210,56 +256,62 @@ pub fn checkBindingCount(env: CheckEnv) -> Int {
 
 /// checkBind pushes a new immutable binding onto the lexical stack.
 pub fn checkBind(env: CheckEnv, name: String, ty: Int) {
-    env.bindings.push(CheckBinding {
+    let binding = CheckBinding {
         name,
         ty,
         mutable: false,
         start: -1,
         end: -1,
-    })
+    }
+    env.bindings.push(binding)
+    checkBindingIndexPush(env, binding)
 }
 
 pub fn checkBindMut(env: CheckEnv, name: String, ty: Int) {
-    env.bindings.push(CheckBinding {
+    let binding = CheckBinding {
         name,
         ty,
         mutable: true,
         start: -1,
         end: -1,
-    })
+    }
+    env.bindings.push(binding)
+    checkBindingIndexPush(env, binding)
 }
 
 /// checkBindSpan pushes a binding while also remembering its AST span
 /// so the structured-output record can echo the exact source range.
 pub fn checkBindSpan(env: CheckEnv, name: String, ty: Int, mutable: Bool, start: Int, end: Int) {
-    env.bindings.push(CheckBinding { name, ty, mutable, start, end })
+    let binding = CheckBinding { name, ty, mutable, start, end }
+    env.bindings.push(binding)
+    checkBindingIndexPush(env, binding)
 }
 
 /// checkLookup walks the lexical stack from the tail back, returning
 /// the most recent binding for `name`. Returns `-1` (no type) when
 /// `name` is not in scope.
 pub fn checkLookup(env: CheckEnv, name: String) -> Int {
-    let mut i = env.bindings.len() - 1
-    for i >= 0 {
-        let b = env.bindings[i]
-        if b.name == name {
-            return b.ty
-        }
-        i = i - 1
+    let slot = checkNameIndex(env.bindingIndexNames, name)
+    if slot < 0 {
+        return -1
     }
-    -1
+    let stack = env.bindingIndexStacks[slot]
+    if stack.len() == 0 {
+        return -1
+    }
+    stack[stack.len() - 1].ty
 }
 
 pub fn checkLookupMutable(env: CheckEnv, name: String) -> Bool {
-    let mut i = env.bindings.len() - 1
-    for i >= 0 {
-        let b = env.bindings[i]
-        if b.name == name {
-            return b.mutable
-        }
-        i = i - 1
+    let slot = checkNameIndex(env.bindingIndexNames, name)
+    if slot < 0 {
+        return false
     }
-    false
+    let stack = env.bindingIndexStacks[slot]
+    if stack.len() == 0 {
+        return false
+    }
+    stack[stack.len() - 1].mutable
 }
 
 // ---------------------------------------------------------------------
@@ -267,17 +319,22 @@ pub fn checkLookupMutable(env: CheckEnv, name: String) -> Bool {
 // ---------------------------------------------------------------------
 
 pub fn checkRegisterFn(env: CheckEnv, sig: CheckFnSig) {
+    let idx = env.fns.len()
     env.fns.push(sig)
+    let key = checkFnKey(sig.name, sig.owner)
+    let slot = checkNameIndex(env.fnIndexKeys, key)
+    if slot < 0 {
+        env.fnIndexKeys.push(key)
+        env.fnIndexValues.push(idx)
+    } else {
+        env.fnIndexValues[slot] = idx
+    }
 }
 
 pub fn checkLookupFn(env: CheckEnv, name: String, owner: String) -> CheckFnSig {
-    let mut i = env.fns.len() - 1
-    for i >= 0 {
-        let sig = env.fns[i]
-        if sig.name == name && sig.owner == owner {
-            return sig
-        }
-        i = i - 1
+    let idx = checkLookupExactIndex(env.fnIndexKeys, env.fnIndexValues, checkFnKey(name, owner))
+    if idx >= 0 {
+        return env.fns[idx]
     }
     emptyCheckFnSig()
 }
@@ -315,77 +372,99 @@ pub fn checkFnExists(env: CheckEnv, name: String, owner: String) -> Bool {
 }
 
 pub fn checkRegisterField(env: CheckEnv, field: CheckFieldSig) {
+    let idx = env.fields.len()
     env.fields.push(field)
+    let key = checkOwnerKey(field.owner, field.name)
+    let slot = checkNameIndex(env.fieldIndexKeys, key)
+    if slot < 0 {
+        env.fieldIndexKeys.push(key)
+        env.fieldIndexValues.push(idx)
+    } else {
+        env.fieldIndexValues[slot] = idx
+    }
 }
 
 pub fn checkLookupField(env: CheckEnv, owner: String, name: String) -> CheckFieldSig {
-    let mut i = env.fields.len() - 1
-    for i >= 0 {
-        let f = env.fields[i]
-        if f.owner == owner && f.name == name {
-            return f
-        }
-        i = i - 1
+    let idx = checkLookupExactIndex(env.fieldIndexKeys, env.fieldIndexValues, checkOwnerKey(owner, name))
+    if idx >= 0 {
+        return env.fields[idx]
     }
     emptyCheckFieldSig()
 }
 
 pub fn checkRegisterVariant(env: CheckEnv, variant: CheckVariantSig) {
+    let idx = env.variants.len()
     env.variants.push(variant)
+    let nameSlot = checkNameIndex(env.variantIndexKeys, variant.name)
+    if nameSlot < 0 {
+        env.variantIndexKeys.push(variant.name)
+        env.variantIndexValues.push(idx)
+    } else {
+        env.variantIndexValues[nameSlot] = idx
+    }
+    let ownerKey = checkOwnerKey(variant.owner, variant.name)
+    let ownerSlot = checkNameIndex(env.variantOwnerIndexKeys, ownerKey)
+    if ownerSlot < 0 {
+        env.variantOwnerIndexKeys.push(ownerKey)
+        env.variantOwnerIndexValues.push(idx)
+    } else {
+        env.variantOwnerIndexValues[ownerSlot] = idx
+    }
 }
 
 pub fn checkLookupVariant(env: CheckEnv, name: String) -> CheckVariantSig {
-    let mut i = env.variants.len() - 1
-    for i >= 0 {
-        let v = env.variants[i]
-        if v.name == name {
-            return v
-        }
-        i = i - 1
+    let idx = checkLookupExactIndex(env.variantIndexKeys, env.variantIndexValues, name)
+    if idx >= 0 {
+        return env.variants[idx]
     }
     emptyCheckVariantSig()
 }
 
 pub fn checkLookupVariantInOwner(env: CheckEnv, owner: String, name: String) -> CheckVariantSig {
-    let mut i = env.variants.len() - 1
-    for i >= 0 {
-        let v = env.variants[i]
-        if v.owner == owner && v.name == name {
-            return v
-        }
-        i = i - 1
+    let idx = checkLookupExactIndex(env.variantOwnerIndexKeys, env.variantOwnerIndexValues, checkOwnerKey(owner, name))
+    if idx >= 0 {
+        return env.variants[idx]
     }
     emptyCheckVariantSig()
 }
 
 pub fn checkRegisterAlias(env: CheckEnv, alias: CheckAliasSig) {
+    let idx = env.aliases.len()
     env.aliases.push(alias)
+    let slot = checkNameIndex(env.aliasIndexKeys, alias.name)
+    if slot < 0 {
+        env.aliasIndexKeys.push(alias.name)
+        env.aliasIndexValues.push(idx)
+    } else {
+        env.aliasIndexValues[slot] = idx
+    }
+    env.aliasDeepCache = []
 }
 
 pub fn checkLookupAlias(env: CheckEnv, name: String) -> CheckAliasSig {
-    let mut i = env.aliases.len() - 1
-    for i >= 0 {
-        let a = env.aliases[i]
-        if a.name == name {
-            return a
-        }
-        i = i - 1
+    let idx = checkLookupExactIndex(env.aliasIndexKeys, env.aliasIndexValues, name)
+    if idx >= 0 {
+        return env.aliases[idx]
     }
     emptyCheckAliasSig()
 }
 
 pub fn checkRegisterType(env: CheckEnv, sig: CheckTypeSig) {
+    let idx = env.types.len()
     env.types.push(sig)
+    let slot = checkNameIndex(env.typeIndexKeys, sig.name)
+    if slot < 0 {
+        env.typeIndexKeys.push(sig.name)
+        env.typeIndexValues.push(idx)
+    } else {
+        env.typeIndexValues[slot] = idx
+    }
 }
 
 pub fn checkLookupType(env: CheckEnv, name: String) -> CheckTypeSig {
-    let mut i = env.types.len() - 1
-    for i >= 0 {
-        let t = env.types[i]
-        if t.name == name {
-            return t
-        }
-        i = i - 1
+    let idx = checkLookupExactIndex(env.typeIndexKeys, env.typeIndexValues, name)
+    if idx >= 0 {
+        return env.types[idx]
     }
     emptyCheckTypeSig()
 }
@@ -402,15 +481,13 @@ pub fn checkDeclaredTypeExists(env: CheckEnv, name: String) -> Bool {
 
 pub fn checkRegisterInterface(env: CheckEnv, name: String) {
     env.interfaces.push(name)
+    if checkNameIndex(env.interfaceIndexKeys, name) < 0 {
+        env.interfaceIndexKeys.push(name)
+    }
 }
 
 pub fn checkIsInterface(env: CheckEnv, name: String) -> Bool {
-    for i in env.interfaces {
-        if i == name {
-            return true
-        }
-    }
-    false
+    checkNameIndex(env.interfaceIndexKeys, name) >= 0
 }
 
 pub fn checkRegisterInterfaceExtends(env: CheckEnv, ext: CheckInterfaceExt) {
@@ -433,34 +510,35 @@ pub fn checkInterfaceExtendsList(env: CheckEnv, owner: String) -> List<Int> {
 
 pub fn checkAddGenericBound(env: CheckEnv, bound: CheckGenericBound) {
     env.genericBounds.push(bound)
+    checkGenericBoundIndexPush(env, bound.tyParam, bound.iface)
 }
 
 pub fn checkLookupGenericBound(env: CheckEnv, tyParam: String) -> Int {
-    let mut i = env.genericBounds.len() - 1
-    for i >= 0 {
-        let b = env.genericBounds[i]
-        if b.tyParam == tyParam {
-            return b.iface
-        }
-        i = i - 1
+    let slot = checkNameIndex(env.genericBoundIndexNames, tyParam)
+    if slot < 0 {
+        return -1
     }
-    -1
+    let stack = env.genericBoundIndexStacks[slot]
+    if stack.len() == 0 {
+        return -1
+    }
+    stack[stack.len() - 1]
 }
 
 pub fn checkGenericBoundsFor(env: CheckEnv, tyParam: String) -> List<Int> {
-    let mut out: List<Int> = []
-    for b in env.genericBounds {
-        if b.tyParam == tyParam {
-            out.push(b.iface)
-        }
+    let slot = checkNameIndex(env.genericBoundIndexNames, tyParam)
+    if slot < 0 {
+        return []
     }
-    out
+    env.genericBoundIndexStacks[slot]
 }
 
 pub fn checkClearGenericBoundsAfter(env: CheckEnv, mark: Int) {
     let mut current = checkGenericBoundCount(env)
     for current > mark {
+        let popped = env.genericBounds[current - 1]
         let _ = env.genericBounds.pop()
+        checkGenericBoundIndexPop(env, popped.tyParam)
         current = current - 1
     }
 }
@@ -471,6 +549,76 @@ pub fn checkGenericBoundMark(env: CheckEnv) -> Int {
 
 fn checkGenericBoundCount(env: CheckEnv) -> Int {
     env.genericBounds.len()
+}
+
+fn checkBindingIndexPush(env: CheckEnv, binding: CheckBinding) {
+    let slot = checkNameIndex(env.bindingIndexNames, binding.name)
+    if slot < 0 {
+        env.bindingIndexNames.push(binding.name)
+        env.bindingIndexStacks.push([binding])
+        return
+    }
+    env.bindingIndexStacks[slot].push(binding)
+}
+
+fn checkBindingIndexPop(env: CheckEnv, name: String) {
+    let slot = checkNameIndex(env.bindingIndexNames, name)
+    if slot < 0 {
+        return
+    }
+    if env.bindingIndexStacks[slot].len() > 0 {
+        let _ = env.bindingIndexStacks[slot].pop()
+    }
+}
+
+fn checkGenericBoundIndexPush(env: CheckEnv, name: String, iface: Int) {
+    let slot = checkNameIndex(env.genericBoundIndexNames, name)
+    if slot < 0 {
+        env.genericBoundIndexNames.push(name)
+        env.genericBoundIndexStacks.push([iface])
+        return
+    }
+    env.genericBoundIndexStacks[slot].push(iface)
+}
+
+fn checkGenericBoundIndexPop(env: CheckEnv, name: String) {
+    let slot = checkNameIndex(env.genericBoundIndexNames, name)
+    if slot < 0 {
+        return
+    }
+    if env.genericBoundIndexStacks[slot].len() > 0 {
+        let _ = env.genericBoundIndexStacks[slot].pop()
+    }
+}
+
+fn checkNameIndex(names: List<String>, name: String) -> Int {
+    let mut i = names.len() - 1
+    for i >= 0 {
+        if names[i] == name {
+            return i
+        }
+        i = i - 1
+    }
+    -1
+}
+
+fn checkLookupExactIndex(keys: List<String>, values: List<Int>, key: String) -> Int {
+    let mut i = keys.len() - 1
+    for i >= 0 {
+        if keys[i] == key {
+            return values[i]
+        }
+        i = i - 1
+    }
+    -1
+}
+
+fn checkFnKey(name: String, owner: String) -> String {
+    "{owner}\u{1f}{name}"
+}
+
+fn checkOwnerKey(owner: String, name: String) -> String {
+    "{owner}\u{1f}{name}"
 }
 
 // ---------------------------------------------------------------------
@@ -523,7 +671,13 @@ pub fn checkResolveAlias(env: CheckEnv, ty: Int) -> Int {
 /// elements, Fn params/ret, Optional inner) and re-allocates a
 /// canonical form with every alias expanded.
 pub fn checkResolveAliasDeep(env: CheckEnv, ty: Int) -> Int {
-    checkResolveAliasDeepAt(env, ty, 0)
+    let cached = checkAliasDeepCacheGet(env, ty)
+    if cached >= 0 {
+        return cached
+    }
+    let resolved = checkResolveAliasDeepAt(env, ty, 0)
+    checkAliasDeepCacheSet(env, ty, resolved)
+    resolved
 }
 
 fn checkResolveAliasDeepAt(env: CheckEnv, ty: Int, depth: Int) -> Int {
@@ -592,17 +746,23 @@ pub fn checkSubstituteTy(env: CheckEnv, ty: Int, generics: List<String>, args: L
     if ty < 0 {
         return ty
     }
+    let cached = checkSubstCacheGet(env, ty, generics, args)
+    if cached >= 0 {
+        return cached
+    }
     let kind = tyKindAt(env.tys, ty)
     // See note on checkResolveAliasDeepAt: match arms whose body
     // carries local let-bindings miscompile through the bootstrap
     // transpiler, so each compound arm delegates to a helper.
-    match kind {
+    let result = match kind {
         TkNamed    -> checkSubstituteTyNamed(env, ty, generics, args),
         TkTuple    -> checkSubstituteTyTuple(env, ty, generics, args),
         TkFn       -> checkSubstituteTyFn(env, ty, generics, args),
         TkOptional -> tyOptional(env.tys, checkSubstituteTy(env, tyInnerAt(env.tys, ty), generics, args)),
         _          -> ty,
     }
+    checkSubstCacheSet(env, ty, generics, args, result)
+    result
 }
 
 fn checkSubstituteTyNamed(env: CheckEnv, ty: Int, generics: List<String>, args: List<Int>) -> Int {
@@ -642,6 +802,40 @@ fn checkSubstituteTyFn(env: CheckEnv, ty: Int, generics: List<String>, args: Lis
     }
     let ret = checkSubstituteTy(env, tyRetAt(env.tys, ty), generics, args)
     tyFn(env.tys, outParams, ret)
+}
+
+fn checkAliasDeepCacheGet(env: CheckEnv, ty: Int) -> Int {
+    if ty < 0 || ty >= env.aliasDeepCache.len() {
+        return -1
+    }
+    env.aliasDeepCache[ty]
+}
+
+fn checkAliasDeepCacheSet(env: CheckEnv, ty: Int, resolved: Int) {
+    if ty < 0 {
+        return
+    }
+    let mut n = env.aliasDeepCache.len()
+    for n <= ty {
+        env.aliasDeepCache.push(-1)
+        n = n + 1
+    }
+    env.aliasDeepCache[ty] = resolved
+}
+
+fn checkSubstCacheGet(env: CheckEnv, ty: Int, generics: List<String>, args: List<Int>) -> Int {
+    let key = checkSubstCacheKey(ty, generics, args)
+    checkLookupExactIndex(env.substCacheKeys, env.substCacheValues, key)
+}
+
+fn checkSubstCacheSet(env: CheckEnv, ty: Int, generics: List<String>, args: List<Int>, resolved: Int) {
+    let key = checkSubstCacheKey(ty, generics, args)
+    env.substCacheKeys.push(key)
+    env.substCacheValues.push(resolved)
+}
+
+fn checkSubstCacheKey(ty: Int, generics: List<String>, args: List<Int>) -> String {
+    "{ty}\u{1f}{checkStringKey(generics)}\u{1f}{checkIntKey(args)}"
 }
 
 // ---------------------------------------------------------------------
@@ -898,12 +1092,7 @@ fn checkIntListLen(xs: List<Int>) -> Int {
 }
 
 fn checkStringListLen(xs: List<String>) -> Int {
-    let mut n = 0
-    for x in xs {
-        let _ = x
-        n = n + 1
-    }
-    n
+    xs.len()
 }
 
 fn checkIndexOfString(xs: List<String>, needle: String) -> Int {
@@ -916,6 +1105,34 @@ fn checkIndexOfString(xs: List<String>, needle: String) -> Int {
         i = i + 1
     }
     -1
+}
+
+fn checkIntKey(xs: List<Int>) -> String {
+    if xs.len() == 0 {
+        return ""
+    }
+    let mut out = "{xs[0]}"
+    let mut i = 1
+    let n = xs.len()
+    for i < n {
+        out = "{out},{xs[i]}"
+        i = i + 1
+    }
+    out
+}
+
+fn checkStringKey(xs: List<String>) -> String {
+    if xs.len() == 0 {
+        return ""
+    }
+    let mut out = xs[0]
+    let mut i = 1
+    let n = xs.len()
+    for i < n {
+        out = "{out},{xs[i]}"
+        i = i + 1
+    }
+    out
 }
 
 fn checkStringListContainsLocal(xs: List<String>, needle: String) -> Bool {

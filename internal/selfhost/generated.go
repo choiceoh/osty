@@ -30657,30 +30657,110 @@ type CheckInstantiationRecord struct {
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12822:5
 type CheckEnv struct {
-	tys              *TyArena
-	bindings         []*CheckBinding
-	fns              []*CheckFnSig
-	fields           []*CheckFieldSig
-	variants         []*CheckVariantSig
-	aliases          []*CheckAliasSig
-	types            []*CheckTypeSig
-	interfaces       []string
-	interfaceExtends []*CheckInterfaceExt
-	genericBounds    []*CheckGenericBound
-	returnTy         int
-	fnName           string
-	inLoop           bool
-	diagnostics      []*CheckDiagnostic
-	assignments      int
-	accepted         int
-	bindingRecords   []*CheckBindingRecord
-	symbolRecords    []*CheckSymbolRecord
-	instantiations   []*CheckInstantiationRecord
+	tys                     *TyArena
+	bindings                []*CheckBinding
+	bindingIndexNames       []string
+	bindingIndexStacks      [][]*CheckBinding
+	bindingIndexMap         map[string][]*CheckBinding
+	fns                     []*CheckFnSig
+	fnIndexKeys             []string
+	fnIndexValues           []int
+	fnIndexMap              map[string]int
+	fields                  []*CheckFieldSig
+	fieldIndexKeys          []string
+	fieldIndexValues        []int
+	fieldIndexMap           map[string]int
+	variants                []*CheckVariantSig
+	variantIndexKeys        []string
+	variantIndexValues      []int
+	variantOwnerIndexKeys   []string
+	variantOwnerIndexValues []int
+	variantIndexMap         map[string]int
+	variantOwnerIndexMap    map[string]int
+	aliases                 []*CheckAliasSig
+	aliasIndexKeys          []string
+	aliasIndexValues        []int
+	aliasIndexMap           map[string]int
+	types                   []*CheckTypeSig
+	typeIndexKeys           []string
+	typeIndexValues         []int
+	typeIndexMap            map[string]int
+	interfaces              []string
+	interfaceIndexKeys      []string
+	interfaceIndexMap       map[string]bool
+	interfaceExtends        []*CheckInterfaceExt
+	genericBounds           []*CheckGenericBound
+	genericBoundIndexNames  []string
+	genericBoundIndexStacks [][]int
+	genericBoundIndexMap    map[string][]int
+	aliasDeepCache          []int
+	substCacheKeys          []string
+	substCacheValues        []int
+	substCacheMap           map[string]int
+	returnTy                int
+	fnName                  string
+	inLoop                  bool
+	diagnostics             []*CheckDiagnostic
+	assignments             int
+	accepted                int
+	bindingRecords          []*CheckBindingRecord
+	symbolRecords           []*CheckSymbolRecord
+	instantiations          []*CheckInstantiationRecord
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12858:5
 func emptyCheckEnv(tys *TyArena) *CheckEnv {
-	return &CheckEnv{tys: tys, bindings: make([]*CheckBinding, 0, 1), fns: make([]*CheckFnSig, 0, 1), fields: make([]*CheckFieldSig, 0, 1), variants: make([]*CheckVariantSig, 0, 1), aliases: make([]*CheckAliasSig, 0, 1), types: make([]*CheckTypeSig, 0, 1), interfaces: make([]string, 0, 1), interfaceExtends: make([]*CheckInterfaceExt, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1), returnTy: tErr(tys), fnName: "", inLoop: false, diagnostics: make([]*CheckDiagnostic, 0, 1), assignments: 0, accepted: 0, bindingRecords: make([]*CheckBindingRecord, 0, 1), symbolRecords: make([]*CheckSymbolRecord, 0, 1), instantiations: make([]*CheckInstantiationRecord, 0, 1)}
+	return &CheckEnv{
+		tys:                     tys,
+		bindings:                make([]*CheckBinding, 0, 1),
+		bindingIndexNames:       make([]string, 0, 1),
+		bindingIndexStacks:      make([][]*CheckBinding, 0, 1),
+		bindingIndexMap:         make(map[string][]*CheckBinding),
+		fns:                     make([]*CheckFnSig, 0, 1),
+		fnIndexKeys:             make([]string, 0, 1),
+		fnIndexValues:           make([]int, 0, 1),
+		fnIndexMap:              make(map[string]int),
+		fields:                  make([]*CheckFieldSig, 0, 1),
+		fieldIndexKeys:          make([]string, 0, 1),
+		fieldIndexValues:        make([]int, 0, 1),
+		fieldIndexMap:           make(map[string]int),
+		variants:                make([]*CheckVariantSig, 0, 1),
+		variantIndexKeys:        make([]string, 0, 1),
+		variantIndexValues:      make([]int, 0, 1),
+		variantOwnerIndexKeys:   make([]string, 0, 1),
+		variantOwnerIndexValues: make([]int, 0, 1),
+		variantIndexMap:         make(map[string]int),
+		variantOwnerIndexMap:    make(map[string]int),
+		aliases:                 make([]*CheckAliasSig, 0, 1),
+		aliasIndexKeys:          make([]string, 0, 1),
+		aliasIndexValues:        make([]int, 0, 1),
+		aliasIndexMap:           make(map[string]int),
+		types:                   make([]*CheckTypeSig, 0, 1),
+		typeIndexKeys:           make([]string, 0, 1),
+		typeIndexValues:         make([]int, 0, 1),
+		typeIndexMap:            make(map[string]int),
+		interfaces:              make([]string, 0, 1),
+		interfaceIndexKeys:      make([]string, 0, 1),
+		interfaceIndexMap:       make(map[string]bool),
+		interfaceExtends:        make([]*CheckInterfaceExt, 0, 1),
+		genericBounds:           make([]*CheckGenericBound, 0, 1),
+		genericBoundIndexNames:  make([]string, 0, 1),
+		genericBoundIndexStacks: make([][]int, 0, 1),
+		genericBoundIndexMap:    make(map[string][]int),
+		aliasDeepCache:          make([]int, 0, 1),
+		substCacheKeys:          make([]string, 0, 1),
+		substCacheValues:        make([]int, 0, 1),
+		substCacheMap:           make(map[string]int),
+		returnTy:                tErr(tys),
+		fnName:                  "",
+		inLoop:                  false,
+		diagnostics:             make([]*CheckDiagnostic, 0, 1),
+		assignments:             0,
+		accepted:                0,
+		bindingRecords:          make([]*CheckBindingRecord, 0, 1),
+		symbolRecords:           make([]*CheckSymbolRecord, 0, 1),
+		instantiations:          make([]*CheckInstantiationRecord, 0, 1),
+	}
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12891:5
@@ -30695,17 +30775,11 @@ func checkScopeDrop(env *CheckEnv, mark int) {
 	_ = current
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12899:5
 	for current > mark {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12900:9
-		_ = func() **CheckBinding {
-			if len(env.bindings) == 0 {
-				return nil
-			}
-			v := env.bindings[len(env.bindings)-1]
-			var zero *CheckBinding
-			env.bindings[len(env.bindings)-1] = zero
-			env.bindings = env.bindings[:len(env.bindings)-1]
-			return &v
-		}()
+		popped := env.bindings[current-1]
+		var zero *CheckBinding
+		env.bindings[current-1] = zero
+		env.bindings = env.bindings[:current-1]
+		checkBindingIndexPop(env, popped.name)
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12901:9
 		func() {
 			var _cur2038 int = current
@@ -30728,64 +30802,54 @@ func checkBindingCount(env *CheckEnv) int {
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12919:5
 func checkBind(env *CheckEnv, name string, ty int) {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12920:5
-	func() struct{} {
-		env.bindings = append(env.bindings, &CheckBinding{name: name, ty: ty, mutable: false, start: -1, end: -1})
-		return struct{}{}
-	}()
+	binding := &CheckBinding{name: name, ty: ty, mutable: false, start: -1, end: -1}
+	env.bindings = append(env.bindings, binding)
+	checkBindingIndexPush(env, binding)
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12929:5
 func checkBindMut(env *CheckEnv, name string, ty int) {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12930:5
-	func() struct{} {
-		env.bindings = append(env.bindings, &CheckBinding{name: name, ty: ty, mutable: true, start: -1, end: -1})
-		return struct{}{}
-	}()
+	binding := &CheckBinding{name: name, ty: ty, mutable: true, start: -1, end: -1}
+	env.bindings = append(env.bindings, binding)
+	checkBindingIndexPush(env, binding)
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12941:5
 func checkBindSpan(env *CheckEnv, name string, ty int, mutable bool, start int, end int) {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12942:5
-	func() struct{} {
-		env.bindings = append(env.bindings, &CheckBinding{name: name, ty: ty, mutable: mutable, start: start, end: end})
-		return struct{}{}
-	}()
+	binding := &CheckBinding{name: name, ty: ty, mutable: mutable, start: start, end: end}
+	env.bindings = append(env.bindings, binding)
+	checkBindingIndexPush(env, binding)
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12948:5
 func checkLookup(env *CheckEnv, name string) int {
-	for i := len(env.bindings) - 1; i >= 0; i-- {
-		if env.bindings[i].name == name {
-			return env.bindings[i].ty
-		}
+	stack := env.bindingIndexMap[name]
+	if len(stack) == 0 {
+		return -1
 	}
-	return -1
+	return stack[len(stack)-1].ty
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12958:5
 func checkLookupMutable(env *CheckEnv, name string) bool {
-	for i := len(env.bindings) - 1; i >= 0; i-- {
-		if env.bindings[i].name == name {
-			return env.bindings[i].mutable
-		}
+	stack := env.bindingIndexMap[name]
+	if len(stack) == 0 {
+		return false
 	}
-	return false
+	return stack[len(stack)-1].mutable
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12972:5
 func checkRegisterFn(env *CheckEnv, sig *CheckFnSig) {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12973:5
-	func() struct{} { env.fns = append(env.fns, sig); return struct{}{} }()
+	idx := len(env.fns)
+	env.fns = append(env.fns, sig)
+	env.fnIndexMap[checkFnKey(sig.name, sig.owner)] = idx
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12976:5
 func checkLookupFn(env *CheckEnv, name string, owner string) *CheckFnSig {
-	for i := len(env.fns) - 1; i >= 0; i-- {
-		sig := env.fns[i]
-		if sig.name == name && sig.owner == owner {
-			return sig
-		}
+	if idx, ok := env.fnIndexMap[checkFnKey(name, owner)]; ok {
+		return env.fns[idx]
 	}
 	return emptyCheckFnSig()
 }
@@ -30841,79 +30905,70 @@ func checkFnExists(env *CheckEnv, name string, owner string) bool {
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13017:5
 func checkRegisterField(env *CheckEnv, field *CheckFieldSig) {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13018:5
-	func() struct{} { env.fields = append(env.fields, field); return struct{}{} }()
+	idx := len(env.fields)
+	env.fields = append(env.fields, field)
+	env.fieldIndexMap[checkOwnerKey(field.owner, field.name)] = idx
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13021:5
 func checkLookupField(env *CheckEnv, owner string, name string) *CheckFieldSig {
-	for i := len(env.fields) - 1; i >= 0; i-- {
-		f := env.fields[i]
-		if f.owner == owner && f.name == name {
-			return f
-		}
+	if idx, ok := env.fieldIndexMap[checkOwnerKey(owner, name)]; ok {
+		return env.fields[idx]
 	}
 	return emptyCheckFieldSig()
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13030:5
 func checkRegisterVariant(env *CheckEnv, variant *CheckVariantSig) {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13031:5
-	func() struct{} { env.variants = append(env.variants, variant); return struct{}{} }()
+	idx := len(env.variants)
+	env.variants = append(env.variants, variant)
+	env.variantIndexMap[variant.name] = idx
+	env.variantOwnerIndexMap[checkOwnerKey(variant.owner, variant.name)] = idx
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13034:5
 func checkLookupVariant(env *CheckEnv, name string) *CheckVariantSig {
-	for i := len(env.variants) - 1; i >= 0; i-- {
-		v := env.variants[i]
-		if v.name == name {
-			return v
-		}
+	if idx, ok := env.variantIndexMap[name]; ok {
+		return env.variants[idx]
 	}
 	return emptyCheckVariantSig()
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13043:5
 func checkLookupVariantInOwner(env *CheckEnv, owner string, name string) *CheckVariantSig {
-	for i := len(env.variants) - 1; i >= 0; i-- {
-		v := env.variants[i]
-		if v.owner == owner && v.name == name {
-			return v
-		}
+	if idx, ok := env.variantOwnerIndexMap[checkOwnerKey(owner, name)]; ok {
+		return env.variants[idx]
 	}
 	return emptyCheckVariantSig()
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13052:5
 func checkRegisterAlias(env *CheckEnv, alias *CheckAliasSig) {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13053:5
-	func() struct{} { env.aliases = append(env.aliases, alias); return struct{}{} }()
+	idx := len(env.aliases)
+	env.aliases = append(env.aliases, alias)
+	env.aliasIndexMap[alias.name] = idx
+	env.aliasDeepCache = make([]int, 0, 1)
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13056:5
 func checkLookupAlias(env *CheckEnv, name string) *CheckAliasSig {
-	for i := len(env.aliases) - 1; i >= 0; i-- {
-		a := env.aliases[i]
-		if a.name == name {
-			return a
-		}
+	if idx, ok := env.aliasIndexMap[name]; ok {
+		return env.aliases[idx]
 	}
 	return emptyCheckAliasSig()
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13065:5
 func checkRegisterType(env *CheckEnv, sig *CheckTypeSig) {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13066:5
-	func() struct{} { env.types = append(env.types, sig); return struct{}{} }()
+	idx := len(env.types)
+	env.types = append(env.types, sig)
+	env.typeIndexMap[sig.name] = idx
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13069:5
 func checkLookupType(env *CheckEnv, name string) *CheckTypeSig {
-	for i := len(env.types) - 1; i >= 0; i-- {
-		t := env.types[i]
-		if t.name == name {
-			return t
-		}
+	if idx, ok := env.typeIndexMap[name]; ok {
+		return env.types[idx]
 	}
 	return emptyCheckTypeSig()
 }
@@ -30935,21 +30990,13 @@ func checkDeclaredTypeExists(env *CheckEnv, name string) bool {
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13088:5
 func checkRegisterInterface(env *CheckEnv, name string) {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13089:5
-	func() struct{} { env.interfaces = append(env.interfaces, name); return struct{}{} }()
+	env.interfaces = append(env.interfaces, name)
+	env.interfaceIndexMap[name] = true
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13092:5
 func checkIsInterface(env *CheckEnv, name string) bool {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13093:5
-	for _, i := range env.interfaces {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13094:9
-		if i == name {
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13095:13
-			return true
-		}
-	}
-	return false
+	return env.interfaceIndexMap[name]
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13101:5
@@ -30976,35 +31023,25 @@ func checkInterfaceExtendsList(env *CheckEnv, owner string) []int {
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13119:5
 func checkAddGenericBound(env *CheckEnv, bound *CheckGenericBound) {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13120:5
-	func() struct{} { env.genericBounds = append(env.genericBounds, bound); return struct{}{} }()
+	env.genericBounds = append(env.genericBounds, bound)
+	checkGenericBoundIndexPush(env, bound.tyParam, bound.iface)
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13123:5
 func checkLookupGenericBound(env *CheckEnv, tyParam string) int {
-	for i := len(env.genericBounds) - 1; i >= 0; i-- {
-		b := env.genericBounds[i]
-		if b.tyParam == tyParam {
-			return b.iface
-		}
+	stack := env.genericBoundIndexMap[tyParam]
+	if len(stack) == 0 {
+		return -1
 	}
-	return -1
+	return stack[len(stack)-1]
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13133:5
 func checkGenericBoundsFor(env *CheckEnv, tyParam string) []int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13134:5
-	var out []int = make([]int, 0, 1)
-	_ = out
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13135:5
-	for _, b := range env.genericBounds {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13136:9
-		if b.tyParam == tyParam {
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13137:13
-			func() struct{} { out = append(out, b.iface); return struct{}{} }()
-		}
+	if stack, ok := env.genericBoundIndexMap[tyParam]; ok {
+		return stack
 	}
-	return out
+	return make([]int, 0, 1)
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13143:5
@@ -31014,17 +31051,11 @@ func checkClearGenericBoundsAfter(env *CheckEnv, mark int) {
 	_ = current
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13145:5
 	for current > mark {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13146:9
-		_ = func() **CheckGenericBound {
-			if len(env.genericBounds) == 0 {
-				return nil
-			}
-			v := env.genericBounds[len(env.genericBounds)-1]
-			var zero *CheckGenericBound
-			env.genericBounds[len(env.genericBounds)-1] = zero
-			env.genericBounds = env.genericBounds[:len(env.genericBounds)-1]
-			return &v
-		}()
+		popped := env.genericBounds[current-1]
+		var zero *CheckGenericBound
+		env.genericBounds[current-1] = zero
+		env.genericBounds = env.genericBounds[:current-1]
+		checkGenericBoundIndexPop(env, popped.tyParam)
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13147:9
 		func() {
 			var _cur2042 int = current
@@ -31048,6 +31079,66 @@ func checkGenericBoundMark(env *CheckEnv) int {
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13155:1
 func checkGenericBoundCount(env *CheckEnv) int {
 	return len(env.genericBounds)
+}
+
+// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13158:1
+func checkBindingIndexPush(env *CheckEnv, binding *CheckBinding) {
+	env.bindingIndexMap[binding.name] = append(env.bindingIndexMap[binding.name], binding)
+}
+
+// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13167:1
+func checkBindingIndexPop(env *CheckEnv, name string) {
+	stack := env.bindingIndexMap[name]
+	if len(stack) == 0 {
+		return
+	}
+	var zero *CheckBinding
+	stack[len(stack)-1] = zero
+	env.bindingIndexMap[name] = stack[:len(stack)-1]
+}
+
+// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13176:1
+func checkGenericBoundIndexPush(env *CheckEnv, name string, iface int) {
+	env.genericBoundIndexMap[name] = append(env.genericBoundIndexMap[name], iface)
+}
+
+// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13185:1
+func checkGenericBoundIndexPop(env *CheckEnv, name string) {
+	stack := env.genericBoundIndexMap[name]
+	if len(stack) == 0 {
+		return
+	}
+	env.genericBoundIndexMap[name] = stack[:len(stack)-1]
+}
+
+// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13194:1
+func checkNameIndex(names []string, name string) int {
+	for i := len(names) - 1; i >= 0; i-- {
+		if names[i] == name {
+			return i
+		}
+	}
+	return -1
+}
+
+// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13203:1
+func checkLookupExactIndex(keys []string, values []int, key string) int {
+	for i := len(keys) - 1; i >= 0; i-- {
+		if keys[i] == key {
+			return values[i]
+		}
+	}
+	return -1
+}
+
+// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13212:1
+func checkFnKey(name string, owner string) string {
+	return owner + "\x1f" + name
+}
+
+// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13216:1
+func checkOwnerKey(owner string, name string) string {
+	return owner + "\x1f" + name
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13172:5
@@ -31130,7 +31221,13 @@ func checkResolveAlias(env *CheckEnv, ty int) int {
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13213:5
 func checkResolveAliasDeep(env *CheckEnv, ty int) int {
-	return checkResolveAliasDeepAt(env, ty, 0)
+	cached := checkAliasDeepCacheGet(env, ty)
+	if cached >= 0 {
+		return cached
+	}
+	resolved := checkResolveAliasDeepAt(env, ty, 0)
+	checkAliasDeepCacheSet(env, ty, resolved)
+	return resolved
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13217:1
@@ -31312,10 +31409,14 @@ func checkSubstituteTy(env *CheckEnv, ty int, generics []string, args []int) int
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13281:9
 		return ty
 	}
+	cached := checkSubstCacheGet(env, ty, generics, args)
+	if cached >= 0 {
+		return cached
+	}
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13283:5
 	kind := tyKindAt(env.tys, ty)
 	_ = kind
-	return func() int {
+	result := func() int {
 		_m2061 := kind
 		_ = _m2061
 		if func() bool { _, ok := _m2061.(*TyKind_TkNamed); return ok }() {
@@ -31334,6 +31435,8 @@ func checkSubstituteTy(env *CheckEnv, ty int, generics []string, args []int) int
 			return ty
 		}
 	}()
+	checkSubstCacheSet(env, ty, generics, args, result)
+	return result
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13296:1
@@ -31412,6 +31515,45 @@ func checkSubstituteTyFn(env *CheckEnv, ty int, generics []string, args []int) i
 	ret := checkSubstituteTy(env, tyRetAt(env.tys, ty), generics, args)
 	_ = ret
 	return tyFn(env.tys, outParams, ret)
+}
+
+// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13334:1
+func checkAliasDeepCacheGet(env *CheckEnv, ty int) int {
+	if ty < 0 || ty >= len(env.aliasDeepCache) {
+		return -1
+	}
+	return env.aliasDeepCache[ty]
+}
+
+// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13341:1
+func checkAliasDeepCacheSet(env *CheckEnv, ty int, resolved int) {
+	if ty < 0 {
+		return
+	}
+	for len(env.aliasDeepCache) <= ty {
+		env.aliasDeepCache = append(env.aliasDeepCache, -1)
+	}
+	env.aliasDeepCache[ty] = resolved
+}
+
+// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13351:1
+func checkSubstCacheGet(env *CheckEnv, ty int, generics []string, args []int) int {
+	key := checkSubstCacheKey(ty, generics, args)
+	if resolved, ok := env.substCacheMap[key]; ok {
+		return resolved
+	}
+	return -1
+}
+
+// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13356:1
+func checkSubstCacheSet(env *CheckEnv, ty int, generics []string, args []int, resolved int) {
+	key := checkSubstCacheKey(ty, generics, args)
+	env.substCacheMap[key] = resolved
+}
+
+// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13362:1
+func checkSubstCacheKey(ty int, generics []string, args []int) string {
+	return fmt.Sprintf("%d\x1f%s\x1f%s", ty, ostyToString(checkStringKey(generics)), ostyToString(checkIntKey(args)))
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13339:5
@@ -31874,27 +32016,7 @@ func checkIntListLen(xs []int) int {
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13593:1
 func checkStringListLen(xs []string) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13594:5
-	n := 0
-	_ = n
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13595:5
-	for _, x := range xs {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13596:9
-		_ = x
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13597:9
-		func() {
-			var _cur2074 int = n
-			var _rhs2075 int = 1
-			if _rhs2075 > 0 && _cur2074 > math.MaxInt-_rhs2075 {
-				panic("integer overflow")
-			}
-			if _rhs2075 < 0 && _cur2074 < math.MinInt-_rhs2075 {
-				panic("integer overflow")
-			}
-			n = _cur2074 + _rhs2075
-		}()
-	}
-	return n
+	return len(xs)
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13602:1
@@ -31905,6 +32027,30 @@ func checkIndexOfString(xs []string, needle string) int {
 		}
 	}
 	return -1
+}
+
+// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13608:1
+func checkIntKey(xs []int) string {
+	if len(xs) == 0 {
+		return ""
+	}
+	out := fmt.Sprintf("%d", xs[0])
+	for i := 1; i < len(xs); i++ {
+		out = fmt.Sprintf("%s,%d", ostyToString(out), xs[i])
+	}
+	return out
+}
+
+// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13620:1
+func checkStringKey(xs []string) string {
+	if len(xs) == 0 {
+		return ""
+	}
+	out := xs[0]
+	for i := 1; i < len(xs); i++ {
+		out = fmt.Sprintf("%s,%s", ostyToString(out), ostyToString(xs[i]))
+	}
+	return out
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13613:1
@@ -34558,6 +34704,16 @@ func elabInferCall(cx *ElabCx, callIdx int, node *AstNode, expected int) *ElabRe
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15093:9
 		return elabErrResult(cx, node.start, node.end)
 	}
+	if checkStringListLenHelper(sig.generics) == 0 && checkIntListLenHelper(explicitArgs) == 0 {
+		coreFn := coreIdent(cx.core, baseCallee.text, IdentKind(&IdentKind_IkFn{}), fnSigToTy(cx.env, sig), baseCallee.start, baseCallee.end)
+		coreArgs := elabCallArgsMonomorphic(cx, sig.name, sig.paramTys, argIdxs, node.start, node.end)
+		retTy := sig.retTy
+		if !(tyIsErr(cx.env.tys, expected)) {
+			_ = checkExpectAssignable(cx.env, expected, retTy, node.start, node.end)
+		}
+		coreCallNode := coreCall(cx.core, coreFn, coreArgs, make([]int, 0, 1), retTy, node.start, node.end)
+		return &ElabResult{node: coreCallNode, ty: retTy}
+	}
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15096:5
 	solver := newSolver()
 	_ = solver
@@ -34654,6 +34810,15 @@ func elabInferMethodCall(cx *ElabCx, callNode *AstNode, fieldNode *AstNode, expe
 		}()
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15145:9
 		return elabErrResult(cx, callNode.start, callNode.end)
+	}
+	if checkStringListLenHelper(sig.generics) == 0 {
+		coreArgs := elabCallArgsMonomorphic(cx, sig.name, sig.paramTys, callNode.children, callNode.start, callNode.end)
+		retTy := sig.retTy
+		if !(tyIsErr(cx.env.tys, expected)) {
+			_ = checkExpectAssignable(cx.env, expected, retTy, callNode.start, callNode.end)
+		}
+		mcall := coreMethodCall(cx.core, recv.node, methodName, ownerName, coreArgs, make([]int, 0, 1), retTy, callNode.start, callNode.end)
+		return &ElabResult{node: mcall, ty: retTy}
 	}
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15148:5
 	solver := newSolver()
@@ -34892,6 +35057,32 @@ func elabCallArgs(cx *ElabCx, solver *Solver, sig *CheckFnSig, freshs []int, arg
 			}
 			i = _cur2133 + _rhs2134
 		}()
+	}
+	return coreArgs
+}
+
+// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15270:1
+func elabCallArgsMonomorphic(cx *ElabCx, callee string, paramTys []int, argIdxs []int, start int, end int) []int {
+	wantCount := checkIntListLenHelper(paramTys)
+	gotCount := checkIntListLenHelper(argIdxs)
+	if wantCount != gotCount {
+		func() struct{} {
+			cx.env.diagnostics = append(cx.env.diagnostics, diagArgCount(callee, wantCount, gotCount, start, end))
+			return struct{}{}
+		}()
+	}
+	var coreArgs []int = make([]int, 0, 1)
+	i := 0
+	for _, argIdx := range argIdxs {
+		if i >= wantCount {
+			r := elabInfer(cx, argIdx)
+			coreArgs = append(coreArgs, r.node)
+			i++
+			continue
+		}
+		r := elabCheck(cx, argIdx, checkIntListAt(paramTys, i))
+		coreArgs = append(coreArgs, r.node)
+		i++
 	}
 	return coreArgs
 }

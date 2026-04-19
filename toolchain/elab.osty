@@ -1019,6 +1019,17 @@ fn elabInferCall(cx: ElabCx, callIdx: Int, node: AstNode, expected: Int) -> Elab
         return elabErrResult(cx, node.start, node.end)
     }
 
+    if checkStringListLenHelper(sig.generics) == 0 && checkIntListLenHelper(explicitArgs) == 0 {
+        let coreFn = coreIdent(cx.core, baseCallee.text, IkFn, fnSigToTy(cx.env, sig), baseCallee.start, baseCallee.end)
+        let coreArgs = elabCallArgsMonomorphic(cx, sig.name, sig.paramTys, argIdxs, node.start, node.end)
+        let retTy = sig.retTy
+        if !(tyIsErr(cx.env.tys, expected)) {
+            let _ = checkExpectAssignable(cx.env, expected, retTy, node.start, node.end)
+        }
+        let coreCallNode = coreCall(cx.core, coreFn, coreArgs, [], retTy, node.start, node.end)
+        return ElabResult { node: coreCallNode, ty: retTy }
+    }
+
     let solver = newSolver()
     let freshs = elabFreshenGenerics(cx, solver, sig.generics, sig.name)
 
@@ -1069,6 +1080,26 @@ fn elabInferMethodCall(cx: ElabCx, callNode: AstNode, fieldNode: AstNode, expect
     if sig.name == "" {
         cx.env.diagnostics.push(diagUnknownMethod(ownerName, methodName, fieldNode.start, fieldNode.end))
         return elabErrResult(cx, callNode.start, callNode.end)
+    }
+
+    if checkStringListLenHelper(sig.generics) == 0 {
+        let coreArgs = elabCallArgsMonomorphic(cx, sig.name, sig.paramTys, callNode.children, callNode.start, callNode.end)
+        let retTy = sig.retTy
+        if !(tyIsErr(cx.env.tys, expected)) {
+            let _ = checkExpectAssignable(cx.env, expected, retTy, callNode.start, callNode.end)
+        }
+        let mcall = coreMethodCall(
+            cx.core,
+            recv.node,
+            methodName,
+            ownerName,
+            coreArgs,
+            [],
+            retTy,
+            callNode.start,
+            callNode.end,
+        )
+        return ElabResult { node: mcall, ty: retTy }
     }
 
     let solver = newSolver()
@@ -1189,6 +1220,35 @@ fn elabCallArgs(
             elabInfer(cx, argIdx)
         }
         let _ = unify(cx.env, solver, hint, r.ty)
+        coreArgs.push(r.node)
+        i = i + 1
+    }
+    coreArgs
+}
+
+fn elabCallArgsMonomorphic(
+    cx: ElabCx,
+    callee: String,
+    paramTys: List<Int>,
+    argIdxs: List<Int>,
+    start: Int,
+    end: Int,
+) -> List<Int> {
+    let wantCount = checkIntListLenHelper(paramTys)
+    let gotCount = checkIntListLenHelper(argIdxs)
+    if wantCount != gotCount {
+        cx.env.diagnostics.push(diagArgCount(callee, wantCount, gotCount, start, end))
+    }
+    let mut coreArgs: List<Int> = []
+    let mut i = 0
+    for argIdx in argIdxs {
+        if i >= wantCount {
+            let r = elabInfer(cx, argIdx)
+            coreArgs.push(r.node)
+            i = i + 1
+            continue
+        }
+        let r = elabCheck(cx, argIdx, checkIntListAt(paramTys, i))
         coreArgs.push(r.node)
         i = i + 1
     }
