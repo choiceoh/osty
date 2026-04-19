@@ -187,3 +187,65 @@ fn testIrAstSemanticCarriesEffectAndFlowMetadata() {
     testing.assert(summary.terminalNodes >= 1)
     testing.assertEq(summary.invalidScopes, 0)
 }
+
+fn testIrSourcePropagatesRuntimeAnnotationMetadata() {
+    let module = irLowerSource(
+        "main",
+        r"""
+            #[no_alloc]
+            fn pure_arith(a: Int, b: Int) -> Int { a + b }
+
+            #[pod]
+            #[repr(c)]
+            struct Header { size: Int }
+            """,
+    )
+    let pureNode = irNodeForSymbol(module, "pure_arith", "function")
+    let headerNode = irNodeForSymbol(module, "Header", "type")
+
+    testing.assertEq(pureNode.kind, irFnDeclKind())
+    testing.assert(pureNode.noAlloc)
+    testing.assert(!(pureNode.pod))
+    testing.assert(!(pureNode.reprC))
+
+    testing.assertEq(headerNode.kind, irStructDeclKind())
+    testing.assert(headerNode.pod)
+    testing.assert(headerNode.reprC)
+    testing.assert(!(headerNode.noAlloc))
+}
+
+fn testIrAstPropagatesRuntimeAnnotationMetadata() {
+    let file = astParse(
+        r"""
+            #[no_alloc]
+            fn pure_arith(a: Int, b: Int) -> Int { a + b }
+
+            #[pod]
+            #[repr(c)]
+            struct Header { size: Int }
+            """,
+    )
+    let module = irLowerAstFile("main", file)
+    let pureNode = irNodeForSymbol(module, "pure_arith", "function")
+    let headerNode = irNodeForSymbol(module, "Header", "type")
+
+    testing.assertEq(pureNode.kind, irFnDeclKind())
+    testing.assert(pureNode.noAlloc)
+    testing.assert(!(pureNode.pod))
+    testing.assert(!(pureNode.reprC))
+
+    testing.assertEq(headerNode.kind, irStructDeclKind())
+    testing.assert(headerNode.pod)
+    testing.assert(headerNode.reprC)
+    testing.assert(!(headerNode.noAlloc))
+}
+
+fn irNodeForSymbol(module: IrModule, name: String, kind: String) -> IrNode {
+    for symbol in module.semantic.symbols {
+        if symbol.name == name && irSymbolKindName(symbol.kind) == kind {
+            return irArenaNodeAt(module.arena, symbol.node)
+        }
+    }
+    testing.fail("missing symbol `{name}` ({kind})")
+    emptyIrNode(IrNodeError)
+}
