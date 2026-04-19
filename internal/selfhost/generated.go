@@ -32208,6 +32208,16 @@ func checkInstallPrelude(env *CheckEnv) {
 	checkRegisterVariant(env, &CheckVariantSig{owner: "Result", name: "Ok", fieldTys: []int{tyNamed(env.tys, "T", make([]int, 0, 1))}, generics: []string{"T", "E"}})
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13697:5
 	checkRegisterVariant(env, &CheckVariantSig{owner: "Result", name: "Err", fieldTys: []int{tyNamed(env.tys, "E", make([]int, 0, 1))}, generics: []string{"T", "E"}})
+	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13704:5
+	checkRegisterFn(env, &CheckFnSig{name: "print", owner: "", receiverTy: -1, retTy: tUnit(env.tys), paramNames: []string{"s"}, paramTys: []int{tString(env.tys)}, generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
+	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13713:5
+	checkRegisterFn(env, &CheckFnSig{name: "println", owner: "", receiverTy: -1, retTy: tUnit(env.tys), paramNames: []string{"s"}, paramTys: []int{tString(env.tys)}, generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
+	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13722:5
+	checkRegisterFn(env, &CheckFnSig{name: "eprint", owner: "", receiverTy: -1, retTy: tUnit(env.tys), paramNames: []string{"s"}, paramTys: []int{tString(env.tys)}, generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
+	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13731:5
+	checkRegisterFn(env, &CheckFnSig{name: "eprintln", owner: "", receiverTy: -1, retTy: tUnit(env.tys), paramNames: []string{"s"}, paramTys: []int{tString(env.tys)}, generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
+	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13740:5
+	checkRegisterFn(env, &CheckFnSig{name: "panic", owner: "", receiverTy: -1, retTy: tNever(env.tys), paramNames: []string{"message"}, paramTys: []int{tString(env.tys)}, generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13708:5
@@ -34808,12 +34818,7 @@ func elabInferCall(cx *ElabCx, callIdx int, node *AstNode, expected int) *ElabRe
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15091:5
 	if sig.name == "" {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15092:9
-		func() struct{} {
-			cx.env.diagnostics = append(cx.env.diagnostics, diagUnknownName(baseCallee.text, baseCallee.start, baseCallee.end))
-			return struct{}{}
-		}()
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15093:9
-		return elabPoisonResult(cx, node.start, node.end)
+		return elabInferFnValueCall(cx, node, argIdxs, expected)
 	}
 	if checkStringListLenHelper(sig.generics) == 0 && checkIntListLenHelper(explicitArgs) == 0 {
 		coreFn := coreIdent(cx.core, baseCallee.text, IdentKind(&IdentKind_IkFn{}), fnSigToTy(cx.env, sig), baseCallee.start, baseCallee.end)
