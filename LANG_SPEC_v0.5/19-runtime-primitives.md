@@ -597,15 +597,20 @@ in the same PR that lands a new piece.
 | `ir.StructDecl.Pod bool` from `#[pod]` | landed | #336 |
 | `ir.StructDecl.ReprC bool` from `#[repr(c)]` | landed | #336 |
 
-**MIR / LLVM emit.** Partial — the MIR pipeline (`GenerateFromMIR`,
-opt-in via `Options.UseMIR`) honors `ExportSymbol` and `CABI`.
+**MIR / LLVM emit.** Both backend paths now honor `#[export]`. The
+MIR pipeline (`GenerateFromMIR`, opt-in via `Options.UseMIR`)
+overrides the emitted `@<name>` directly; the legacy
+`GenerateModule` (default) preserves the original define and
+appends an `alias` line so in-module callers continue to resolve
+while the export symbol is link-reachable.
 
 | Piece | Status | PR |
 |---|---|---|
-| MIR `Function.ExportSymbol` + `define @<symbol>` override | landed (MIR path only) | #329 |
-| MIR `Function.CABI` + `define ccc <ret> @<sym>(...)` emission | landed (MIR path only) | #330 |
-| MIR `Function.IsIntrinsic` propagation + backend-bail safety net | landed (MIR path only) | #334 |
-| Legacy `GenerateModule(IR)` honoring `#[export]` / `#[c_abi]` | **deferred** | — |
+| MIR `Function.ExportSymbol` + `define @<symbol>` override | landed (MIR path) | #329 |
+| MIR `Function.CABI` + `define ccc <ret> @<sym>(...)` emission | landed (MIR path) | #330 |
+| MIR `Function.IsIntrinsic` propagation + backend-bail safety net | landed (MIR path) | #334 |
+| Legacy `GenerateModule(IR)` emits `@<symbol> = dso_local alias ptr, ptr @<fn>` per `#[export]`-tagged fn | landed (legacy path) | #341 |
+| Legacy `GenerateModule(IR)` honoring `#[c_abi]` | n/a — LLVM's default cc is `ccc`, so the legacy path is already correct semantically. The MIR path emits the `ccc ` keyword for documentation; if Osty later switches its native cc to a non-`ccc` form the legacy path will need a post-process inject. | — |
 | Per-intrinsic LLVM emit for the 13 §19.5 `raw.*` intrinsics | **deferred** | — |
 | §19.7 lowering table (`raw.null` → `inttoptr i64 0`, etc.) | **deferred** | — |
 | §19.10 safepoint compiler-emitted root array | **deferred** | — |
