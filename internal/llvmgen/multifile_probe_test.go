@@ -9,6 +9,99 @@ import (
 	"github.com/osty/osty/internal/parser"
 )
 
+// mergeToolchainSources concatenates toolchain files in order into a
+// single source buffer. The parser tolerates duplicate
+// `use std.strings as strings` stanzas, so repeats across files are
+// fine; this is the cheap whole-program approximation the AST path
+// supports.
+func mergeToolchainSources(t *testing.T, root string, files []string) []byte {
+	t.Helper()
+	var buf strings.Builder
+	for _, name := range files {
+		src, err := os.ReadFile(filepath.Join(root, "toolchain", name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		buf.WriteString("// === ")
+		buf.WriteString(name)
+		buf.WriteString(" ===\n")
+		buf.Write(src)
+		buf.WriteString("\n")
+	}
+	return []byte(buf.String())
+}
+
+// TestProbeLargeFileParity lowers ir.osty and check_env.osty merged
+// with their cross-module type declarations. Single-file sweeps flag
+// these as LLVM011 — merging reveals whether that wall is a real
+// backend gap or cross-module scope. Info-only.
+func TestProbeLargeFileParity(t *testing.T) {
+	if testing.Short() {
+		t.Skip("info-only; skipped in -short")
+	}
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+	cases := []struct {
+		name  string
+		files []string
+	}{
+		{
+			name:  "check_env",
+			files: []string{"frontend.osty", "lexer.osty", "diagnostic.osty", "ty.osty", "check_diag.osty", "check_env.osty"},
+		},
+		{
+			name:  "ir",
+			files: []string{"frontend.osty", "parser.osty", "ir.osty"},
+		},
+	}
+	for _, c := range cases {
+		merged := mergeToolchainSources(t, root, c.files)
+		file, _ := parser.ParseDiagnostics(merged)
+		if file == nil {
+			t.Logf("  %s (merged=%v): PARSE_FAIL", c.name, c.files)
+			continue
+		}
+		_, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/" + c.name + "_merged.osty"})
+		t.Logf("  %s (merged=%v): %s", c.name, c.files, formatWall(err))
+	}
+}
+
+// TestProbeWholeToolchainMerged lowers every non-test toolchain module
+// merged into one buffer — reveals the actual global backend surface
+// independent of cross-module scope. Info-only. Slow (~6 min), gated
+// by -short.
+func TestProbeWholeToolchainMerged(t *testing.T) {
+	if testing.Short() {
+		t.Skip("info-only; slow (~6 min); skipped in -short")
+	}
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+	dir := filepath.Join(root, "toolchain")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read toolchain: %v", err)
+	}
+	var files []string
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasSuffix(name, ".osty") || strings.HasSuffix(name, "_test.osty") {
+			continue
+		}
+		files = append(files, name)
+	}
+	merged := mergeToolchainSources(t, root, files)
+	file, _ := parser.ParseDiagnostics(merged)
+	if file == nil {
+		t.Fatalf("whole-toolchain merged parse returned nil (%d files, %d bytes)", len(files), len(merged))
+	}
+	_, err = generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/toolchain_merged.osty"})
+	t.Logf("WHOLE TOOLCHAIN first wall: %s", formatWall(err))
+}
+
 // TestProbeDiagnosticMergedWithLexer checks whether the LLVM011 wall on
 // diagnostic.osty is a real backend gap or just the single-file probe's
 // scope limitation. We concatenate diagnostic.osty + lexer.osty (which
