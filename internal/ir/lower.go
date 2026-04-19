@@ -1066,10 +1066,24 @@ func (l *lowerer) lowerCall(e *ast.CallExpr) Expr {
 	// Method call: x.name(args).
 	if fx, ok := fn.(*ast.FieldExpr); ok {
 		if id, ok := fx.X.(*ast.Ident); ok {
-			if sym := l.symbol(id); sym != nil &&
-				(sym.Kind == resolve.SymEnum || sym.Kind == resolve.SymStruct) {
-				if l.isVariantOfEnum(sym, fx.Name) {
-					return l.lowerVariantCall(e, sym.Name, fx.Name)
+			if sym := l.symbol(id); sym != nil {
+				if sym.Kind == resolve.SymEnum || sym.Kind == resolve.SymStruct {
+					if l.isVariantOfEnum(sym, fx.Name) {
+						return l.lowerVariantCall(e, sym.Name, fx.Name)
+					}
+				}
+				// Module-qualified call: `use std.strings` makes
+				// `strings.compare(...)` a free-function call on the
+				// stdlib module, not a method dispatch on a value.
+				// Preserving the qualified FieldExpr shape lets
+				// backends rewrite the callsite to a mangled symbol
+				// when the module body is injected (see
+				// backend.RewriteStdlibCallsites). Without this branch
+				// the call would fall into lowerMethodCall and emit a
+				// MethodCall node, which backends currently cannot
+				// dispatch.
+				if sym.Kind == resolve.SymPackage {
+					return l.lowerQualifiedCall(e, fx, typeArgs)
 				}
 			}
 		}
@@ -1141,6 +1155,35 @@ func (l *lowerer) isVariantOfEnum(sym *resolve.Symbol, variantName string) bool 
 
 // lowerMethodCall lowers `receiver.name(args)` into an IR MethodCall,
 // preserving turbofish type arguments.
+// lowerQualifiedCall lowers `module.fn(args)` — where `module` resolves
+// to a `use`-imported package alias — as a CallExpr whose callee is a
+// FieldExpr, preserving the `(module, fn)` pair for downstream passes
+// (stdlib reachability scan, callsite rewriting during stdlib body
+// injection). The FieldExpr shape is deliberately chosen to match how a
+// caller-constructed IR module would write the same call; a single
+// consumer shape keeps ir.Reach and backend.RewriteStdlibCallsites
+// uniform.
+func (l *lowerer) lowerQualifiedCall(e *ast.CallExpr, fx *ast.FieldExpr, typeArgs []Type) Expr {
+	if len(typeArgs) == 0 {
+		typeArgs = l.instantiationArgs(e)
+	}
+	out := &CallExpr{
+		Callee: &FieldExpr{
+			X:     l.lowerExpr(fx.X),
+			Name:  fx.Name,
+			T:     l.exprType(fx),
+			SpanV: nodeSpan(fx),
+		},
+		TypeArgs: typeArgs,
+		T:        l.exprType(e),
+		SpanV:    nodeSpan(e),
+	}
+	for _, a := range e.Args {
+		out.Args = append(out.Args, l.lowerArg(a))
+	}
+	return out
+}
+
 func (l *lowerer) lowerMethodCall(e *ast.CallExpr, fx *ast.FieldExpr, typeArgs []Type) Expr {
 	if len(typeArgs) == 0 {
 		typeArgs = l.instantiationArgs(e)
