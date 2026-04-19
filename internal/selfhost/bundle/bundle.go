@@ -56,6 +56,9 @@ const stringsPrelude = `use go "strings" as strings {
     fn TrimSpace(s: String) -> String
     fn TrimSuffix(s: String, suffix: String) -> String
 }
+
+fn ostyStringsConcat(a: String, b: String) -> String { a + b }
+fn ostyStringsChars(s: String) -> List<Char> { s.chars() }
 `
 
 func GeneratedFiles() []string {
@@ -138,6 +141,10 @@ func normalizeStdStringsCalls(src string) string {
 		{"strings.count(", "strings.Count("},
 		{"strings.fields(", "strings.Fields("},
 		{"strings.splitN(", "strings.SplitN("},
+		// std.strings extras not covered by the Go `strings` package: route
+		// through Osty shims defined at the top of the merged bundle.
+		{"strings.concat(", "ostyStringsConcat("},
+		{"strings.chars(", "ostyStringsChars("},
 	} {
 		src = strings.ReplaceAll(src, pair[0], pair[1])
 	}
