@@ -149,7 +149,15 @@ func (g *gen) emitLetStmt(l *ast.LetStmt) {
 		g.body.writef("var %s %s", safe, g.goTypeExpr(l.Type))
 		if l.Value != nil {
 			g.body.write(" = ")
-			g.emitExprAsType(l.Value, g.typeOf(l.Value))
+			elem := g.listElemGoTypeExpr(l.Type)
+			if elem == "" {
+				elem = g.listElemGoType(g.typeOf(l.Value))
+			}
+			if g.emitExprWithExpectedListElem(l.Value, elem) {
+				// handled — list literal coerced to annotated element type
+			} else {
+				g.emitExpr(l.Value)
+			}
 		}
 		g.body.nl()
 		return
@@ -511,7 +519,10 @@ func (g *gen) emitReturn(r *ast.ReturnStmt) {
 	g.preLiftQuestions(r.Value)
 	defer g.resetQuestionSubs()
 	g.body.write("return ")
+	prevHintType, prevHintGo := g.retHintType, g.retHintGo
+	g.retHintType, g.retHintGo = g.currentRetType, g.currentRetGo
 	g.emitExpr(r.Value)
+	g.retHintType, g.retHintGo = prevHintType, prevHintGo
 	g.body.nl()
 }
 
