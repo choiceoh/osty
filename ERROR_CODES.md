@@ -1018,7 +1018,7 @@ forward-compatibility hatch.
 
 ---
 
-## Runtime sublanguage (E0771–E0772)
+## Runtime sublanguage (E0771–E0773)
 
 ### E0771 — `CodePodShapeViolation`
 
@@ -1049,6 +1049,16 @@ CodeNoAllocViolation: a function carrying `#[no_alloc]` contains an expression t
 Spec: v0.5 §19.6.1
 
 **Fix**: replace the offending expression with raw-memory primitives
+
+### E0773 — `CodeIntrinsicNonEmptyBody`
+
+CodeIntrinsicNonEmptyBody: a function carrying `#[intrinsic]` has a non-empty body. LANG_SPEC §19.6 mandates that intrinsic declarations are body-less stubs whose implementation is supplied by the lowering layer at each call site. Permitting a body would be misleading because the backend ignores it (the MIR pipeline bails on intrinsic functions; the legacy path uses the body for its own reasons but the LLVM emit would still need per-intrinsic dispatch to produce correct code). The accepted forms per the spec are `fn foo() -> T` (signature only) or `fn foo() -> T {}` (empty block).
+
+empty `{}`. The actual implementation lives in the backend lowering table (§19.7).
+
+Spec: v0.5 §19.6
+
+**Fix**: drop the body — keep only the signature, or write an
 
 ---
 
