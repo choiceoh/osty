@@ -189,6 +189,9 @@ func (g *generator) emitIdent(name string) (value, error) {
 	if v, found, err := g.enumVariantIdent(name); found || err != nil {
 		return v, err
 	}
+	if v, found, err := g.emitBuiltinOptionNone(name); found || err != nil {
+		return v, err
+	}
 	return value{}, unsupportedf("name", "unknown identifier %q", name)
 }
 
@@ -1588,6 +1591,15 @@ func (g *generator) emitExprWithHintAndSourceType(expr ast.Expr, sourceType ast.
 			g.resultContexts = g.resultContexts[:len(g.resultContexts)-1]
 		}()
 	}
+	if inner, ok := unwrapOptionalSourceType(sourceType); ok {
+		g.optionContexts = append(g.optionContexts, builtinOptionContext{
+			inner:      inner,
+			sourceType: sourceType,
+		})
+		defer func() {
+			g.optionContexts = g.optionContexts[:len(g.optionContexts)-1]
+		}()
+	}
 	v, err := g.emitExprWithHint(expr, listElemTyp, listElemString, mapKeyTyp, mapValueTyp, mapKeyString, setElemTyp, setElemString)
 	if err != nil {
 		return value{}, err
@@ -2300,6 +2312,9 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 		return v, err
 	}
 	if v, found, err := g.emitBuiltinResultConstructor(call); found || err != nil {
+		return v, err
+	}
+	if v, found, err := g.emitBuiltinOptionSomeCall(call); found || err != nil {
 		return v, err
 	}
 	if v, found, err := g.emitEnumVariantCall(call); found || err != nil {

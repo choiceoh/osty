@@ -86,6 +86,51 @@ fn main() {
 	}
 }
 
+func TestStdStringsJoinRoutesToRuntime(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.strings as strings
+
+fn main() {
+    let parts: List<String> = ["a", "b", "c"]
+    let out = strings.join(parts, ", ")
+    println(out)
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/std_strings_join.osty"})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	for _, want := range []string{
+		"declare ptr @osty_rt_strings_Join(ptr, ptr)",
+		"call ptr @osty_rt_strings_Join",
+	} {
+		if !strings.Contains(string(ir), want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, string(ir))
+		}
+	}
+}
+
+func TestBareNoneSomeInPtrBackedOptional(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn pickNone() -> String? {
+    return None
+}
+
+fn pickSome() -> String? {
+    return Some("x")
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/option_none_some.osty"})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	if !strings.Contains(got, "ret ptr null") {
+		t.Fatalf("expected `ret ptr null` for bare None:\n%s", got)
+	}
+	if !strings.Contains(got, "ret ptr @.str0") {
+		t.Fatalf("expected `ret ptr @.str0` for Some(literal):\n%s", got)
+	}
+}
+
 func TestCollectStdStringsAliasesIgnoresRuntimeFFI(t *testing.T) {
 	file := parseLLVMGenFile(t, `use runtime.strings as strings {
     fn HasPrefix(s: String, prefix: String) -> Bool
