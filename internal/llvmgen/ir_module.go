@@ -30,7 +30,57 @@ func GenerateModule(mod *ostyir.Module, opts Options) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return generateASTFile(file, opts)
+	out, err := generateASTFile(file, opts)
+	if err != nil {
+		return nil, err
+	}
+	return appendExportAliases(out, mod), nil
+}
+
+// appendExportAliases scans the IR module for `*ostyir.FnDecl` with
+// non-empty `ExportSymbol` (set from `#[export("name")]` per
+// LANG_SPEC §19.6) and appends an LLVM IR `alias` line per fn:
+//
+//	@<symbol> = dso_local alias ptr, ptr @<fn.Name>
+//
+// This makes the export symbol resolvable at link time without
+// renaming the function (which would break in-module call sites).
+// The MIR pipeline (`GenerateFromMIR`, opt-in via Options.UseMIR)
+// uses a different mechanism — it overrides the emitted name
+// directly because MIR has no internal callers in the v0.4
+// surface today. Both paths converge at link-time on the same
+// exported symbol name.
+//
+// For C ABI purposes the LLVM-IR-side alias type need only be
+// `ptr` — the linker resolves the symbol by name and the C
+// consumer's header carries the actual function signature.
+func appendExportAliases(out []byte, mod *ostyir.Module) []byte {
+	if mod == nil {
+		return out
+	}
+	var aliases []byte
+	for _, decl := range mod.Decls {
+		fn, ok := decl.(*ostyir.FnDecl)
+		if !ok || fn == nil {
+			continue
+		}
+		if fn.ExportSymbol == "" || fn.ExportSymbol == fn.Name {
+			continue
+		}
+		aliases = append(aliases, "@"...)
+		aliases = append(aliases, fn.ExportSymbol...)
+		aliases = append(aliases, " = dso_local alias ptr, ptr @"...)
+		aliases = append(aliases, fn.Name...)
+		aliases = append(aliases, '\n')
+	}
+	if len(aliases) == 0 {
+		return out
+	}
+	if len(out) > 0 && out[len(out)-1] != '\n' {
+		out = append(out, '\n')
+	}
+	out = append(out, aliases...)
+	return out
 }
 
 func moduleUnsupportedDiagnostic(mod *ostyir.Module) (UnsupportedDiagnostic, bool) {
