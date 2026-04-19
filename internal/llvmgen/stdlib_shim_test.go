@@ -131,6 +131,53 @@ fn pickSome() -> String? {
 	}
 }
 
+func TestStdStringsSplitRoutesToRuntimeAndForInIterates(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.strings as strings
+
+fn main() {
+    for part in strings.split("a,b,c", ",") {
+        println(part)
+    }
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/std_strings_split_for.osty"})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"declare ptr @osty_rt_strings_Split(ptr, ptr)",
+		"call ptr @osty_rt_strings_Split",
+		"call i64 @osty_rt_list_len",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q (split-then-for-in plumbing broken):\n%s", want, got)
+		}
+	}
+}
+
+func TestStdStringsTrimSpaceRoutesToRuntime(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.strings as strings
+
+fn main() {
+    let s = strings.trimSpace("  hi  ")
+    println(s)
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/std_strings_trim.osty"})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	for _, want := range []string{
+		"declare ptr @osty_rt_strings_TrimSpace(ptr)",
+		"call ptr @osty_rt_strings_TrimSpace",
+	} {
+		if !strings.Contains(string(ir), want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, string(ir))
+		}
+	}
+}
+
 func TestCollectStdStringsAliasesIgnoresRuntimeFFI(t *testing.T) {
 	file := parseLLVMGenFile(t, `use runtime.strings as strings {
     fn HasPrefix(s: String, prefix: String) -> Bool

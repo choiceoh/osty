@@ -25,7 +25,7 @@ func TestProbeSmallTailLower(t *testing.T) {
 		allowedWallSnippet string // err must contain this iff not clean
 	}{
 		{"toolchain/pkg_policy.osty", true, ""},
-		{"toolchain/profile_flags.osty", false, "LLVM014"},
+		{"toolchain/profile_flags.osty", true, ""},
 		{"toolchain/diagnostic.osty", false, "LLVM011"},
 	}
 	for _, tc := range cases {

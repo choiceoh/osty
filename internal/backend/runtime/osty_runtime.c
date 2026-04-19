@@ -205,6 +205,7 @@ static void osty_gc_mark_payload(void *payload);
 bool osty_rt_strings_Equal(const char *left, const char *right);
 int64_t osty_rt_strings_Compare(const char *left, const char *right);
 const char *osty_rt_strings_Join(void *raw_parts, const char *sep);
+const char *osty_rt_strings_TrimSpace(const char *value);
 bool osty_rt_set_insert_i64(void *raw_set, int64_t item);
 bool osty_rt_set_insert_i1(void *raw_set, bool item);
 bool osty_rt_set_insert_f64(void *raw_set, double item);
@@ -979,6 +980,38 @@ const char *osty_rt_strings_Join(void *raw_parts, const char *sep) {
         }
     }
     *cursor = '\0';
+    return out;
+}
+
+const char *osty_rt_strings_TrimSpace(const char *value) {
+    const char *start;
+    const char *end;
+    size_t len;
+    char *out;
+
+    if (value == NULL) {
+        out = (char *)osty_gc_allocate_managed(1, OSTY_GC_KIND_STRING, "runtime.strings.trim_space.empty", NULL, NULL);
+        out[0] = '\0';
+        return out;
+    }
+    start = value;
+    while (*start == ' ' || *start == '\t' || *start == '\n' || *start == '\r' || *start == '\v' || *start == '\f') {
+        start++;
+    }
+    end = start + strlen(start);
+    while (end > start) {
+        char c = *(end - 1);
+        if (c != ' ' && c != '\t' && c != '\n' && c != '\r' && c != '\v' && c != '\f') {
+            break;
+        }
+        end--;
+    }
+    len = (size_t)(end - start);
+    out = (char *)osty_gc_allocate_managed(len + 1, OSTY_GC_KIND_STRING, "runtime.strings.trim_space", NULL, NULL);
+    if (len != 0) {
+        memcpy(out, start, len);
+    }
+    out[len] = '\0';
     return out;
 }
 

@@ -503,6 +503,9 @@ func (g *generator) staticExprInfo(expr ast.Expr) (value, bool) {
 		if fn, found, err := g.runtimeFFICallTarget(e); found && err == nil && fn.ret != "" && fn.ret != "void" {
 			return value{typ: fn.ret, listElemTyp: fn.listElemTyp, gcManaged: fn.listElemTyp != ""}, true
 		}
+		if out, ok := g.stdStringsCallStaticResult(e); ok {
+			return out, true
+		}
 	case *ast.FieldExpr:
 		if e.IsOptional {
 			return value{}, false
