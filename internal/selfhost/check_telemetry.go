@@ -1,7 +1,6 @@
 package selfhost
 
 import (
-	"runtime"
 	"strings"
 )
 
@@ -113,62 +112,98 @@ func selfhostUseDeclAlias(file *AstFile, decl *AstNode) string {
 			return aliasNode.text
 		}
 	}
-	last := frontCheckLastPathSegment(decl.text)
+	last := selfhostLastPathSegment(decl.text)
 	return strings.Trim(last, "\"")
 }
 
-
-// selfhostBumpError increments env.errors and records the caller's Go
-// function name in env.errorsByContext. The generated native checker
-// invokes this at every error-detection site so downstream tooling can
-// split the aggregate error count by category (see cmd/osty check
-// --dump-native-diags).
-//
-// The package-qualified function name is trimmed to the bare Go
-// identifier, which matches the shape of the enclosing Osty function
-// closely enough to serve as a category key without extra bookkeeping.
-func selfhostBumpError(env *FrontCheckEnv) {
-	env.errors++
-	if env.errorsByContext == nil {
-		env.errorsByContext = make(map[string]int)
+func selfhostLastPathSegment(path string) string {
+	parts := strings.Split(path, ".")
+	last := path
+	for _, part := range parts {
+		last = part
 	}
-	env.errorsByContext[selfhostErrorCallerContext(2)]++
+	return last
 }
 
-// selfhostBumpErrorWithDetail is the detail-carrying variant: it buckets the
-// caller context like selfhostBumpError, then drills one level deeper into
-// env.errorDetails[<context>][<detail>]. Used from sites where the category
-// alone hides the real hot spot — e.g. frontCheckIdentHint benefits from
-// seeing which identifier name went unresolved most often.
-func selfhostBumpErrorWithDetail(env *FrontCheckEnv, detail string) {
-	env.errors++
-	ctx := selfhostErrorCallerContext(2)
-	if env.errorsByContext == nil {
-		env.errorsByContext = make(map[string]int)
+// selfhostDiagnosticTelemetry derives the host-side error histogram from the
+// typed checker's structured diagnostics. The old checker reported caller-site
+// buckets directly; the typed checker instead exposes stable diagnostic codes,
+// so we bucket errors by code and retain the rendered message as detail rows.
+func selfhostDiagnosticTelemetry(diags []*CheckDiagnostic) (map[string]int, map[string]map[string]int) {
+	if len(diags) == 0 {
+		return nil, nil
 	}
-	env.errorsByContext[ctx]++
-	if env.errorDetails == nil {
-		env.errorDetails = make(map[string]map[string]int)
+	var byContext map[string]int
+	var details map[string]map[string]int
+	for _, d := range diags {
+		if !selfhostDiagnosticIsError(d) {
+			continue
+		}
+		ctx := selfhostDiagnosticBucket(d)
+		if ctx == "" {
+			ctx = "<error>"
+		}
+		if byContext == nil {
+			byContext = make(map[string]int)
+		}
+		byContext[ctx]++
+		detail := strings.TrimSpace(selfhostDiagnosticDetail(d))
+		if detail == "" {
+			continue
+		}
+		if details == nil {
+			details = make(map[string]map[string]int)
+		}
+		bucket := details[ctx]
+		if bucket == nil {
+			bucket = make(map[string]int)
+			details[ctx] = bucket
+		}
+		bucket[detail]++
 	}
-	bucket := env.errorDetails[ctx]
-	if bucket == nil {
-		bucket = make(map[string]int)
-		env.errorDetails[ctx] = bucket
-	}
-	bucket[detail]++
+	return byContext, details
 }
 
-// selfhostErrorCallerContext resolves a stack frame to a bare Go function
-// name. `skip` follows the runtime.Caller contract (0 = this helper, 1 =
-// its caller, 2 = the caller's caller, etc.).
-func selfhostErrorCallerContext(skip int) string {
-	pc, _, _, ok := runtime.Caller(skip)
-	if !ok {
-		return "<unknown>"
+func selfhostDiagnosticIsError(d *CheckDiagnostic) bool {
+	if d == nil {
+		return false
 	}
-	name := runtime.FuncForPC(pc).Name()
-	if i := strings.LastIndexByte(name, '.'); i >= 0 {
-		name = name[i+1:]
+	_, ok := d.severity.(*DiagnosticSeverity_SeverityError)
+	return ok
+}
+
+func selfhostDiagnosticBucket(d *CheckDiagnostic) string {
+	if d == nil {
+		return ""
 	}
-	return name
+	if code := strings.TrimSpace(d.code); code != "" {
+		return code
+	}
+	return selfhostDiagnosticSeverityLabel(d)
+}
+
+func selfhostDiagnosticDetail(d *CheckDiagnostic) string {
+	if d == nil {
+		return ""
+	}
+	if msg := strings.TrimSpace(d.message); msg != "" {
+		return msg
+	}
+	return selfhostDiagnosticSeverityLabel(d)
+}
+
+func selfhostDiagnosticSeverityLabel(d *CheckDiagnostic) string {
+	if d == nil {
+		return "<nil>"
+	}
+	switch d.severity.(type) {
+	case *DiagnosticSeverity_SeverityError:
+		return "error"
+	case *DiagnosticSeverity_SeverityWarning:
+		return "warning"
+	case *DiagnosticSeverity_SeverityLint:
+		return "lint"
+	default:
+		return "unknown"
+	}
 }

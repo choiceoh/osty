@@ -169,6 +169,7 @@ pub struct CoreNode {
     pub ty: Int,                 // Ty arena index, -1 for stmt/decl/pat
     pub start: Int,
     pub end: Int,
+    pub originAst: Int,          // Source AST node index for typed-expression coverage, -1 when not tracked
 
     pub text: String,            // literal text, ident name, field name, variant name, method name
     pub name: String,            // fn/struct/enum/interface/alias/let binding name
@@ -193,6 +194,7 @@ pub fn emptyCoreNode(kind: CoreKind) -> CoreNode {
         ty: -1,
         start: 0,
         end: 0,
+        originAst: -1,
         text: "",
         name: "",
         owner: "",
@@ -235,6 +237,15 @@ pub fn coreArenaNodeAt(arena: CoreArena, idx: Int) -> CoreNode {
         return emptyCoreNode(CkErr)
     }
     arena.nodes[idx]
+}
+
+pub fn coreSetOrigin(arena: CoreArena, idx: Int, originAst: Int) {
+    if idx < 0 {
+        return
+    }
+    let mut node = coreArenaNodeAt(arena, idx)
+    node.originAst = originAst
+    arena.nodes[idx] = node
 }
 
 /// CoreModule is the top-level container — one per Osty source file.

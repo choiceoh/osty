@@ -79,18 +79,11 @@ pub struct CheckGenericBound {
 }
 
 // ---------------------------------------------------------------------
-// Structured output records. Serialized by the host bridge through
-// `FrontCheckedNode` / `FrontCheckedBinding` / `FrontCheckedSymbol` /
-// `FrontCheckInstantiation` once the Core output stabilises.
+// Structured output records. Expression coverage now comes from Core
+// provenance during serialization; bindings / symbols /
+// instantiations are still accumulated here until they also move onto
+// Core-derived metadata.
 // ---------------------------------------------------------------------
-
-pub struct CheckTypedNode {
-    pub node: Int,
-    pub kind: String,
-    pub ty: Int,
-    pub start: Int,
-    pub end: Int,
-}
 
 pub struct CheckBindingRecord {
     pub node: Int,
@@ -155,7 +148,6 @@ pub struct CheckEnv {
     pub accepted: Int,
 
     // Structured output mirrors of the legacy summary.
-    pub typedNodes: List<CheckTypedNode>,
     pub bindingRecords: List<CheckBindingRecord>,
     pub symbolRecords: List<CheckSymbolRecord>,
     pub instantiations: List<CheckInstantiationRecord>,
@@ -179,7 +171,6 @@ pub fn emptyCheckEnv(tys: TyArena) -> CheckEnv {
         diagnostics: [],
         assignments: 0,
         accepted: 0,
-        typedNodes: [],
         bindingRecords: [],
         symbolRecords: [],
         instantiations: [],
@@ -643,10 +634,6 @@ fn checkSubstituteTyFn(env: CheckEnv, ty: Int, generics: List<String>, args: Lis
 // Structured output recording.
 // ---------------------------------------------------------------------
 
-pub fn checkRecordTypedNode(env: CheckEnv, nodeIdx: Int, kind: String, ty: Int, start: Int, end: Int) {
-    env.typedNodes.push(CheckTypedNode { node: nodeIdx, kind, ty, start, end })
-}
-
 pub fn checkRecordBinding(env: CheckEnv, nodeIdx: Int, name: String, ty: Int, mutable: Bool, start: Int, end: Int) {
     env.bindingRecords.push(CheckBindingRecord { node: nodeIdx, name, ty, mutable, start, end })
 }
@@ -836,25 +823,36 @@ pub fn checkTypeSatisfiesInterface(env: CheckEnv, concrete: Int, iface: Int) -> 
 }
 
 fn checkInterfaceMethodSet(env: CheckEnv, owner: String) -> List<CheckFnSig> {
-    let mut out: List<CheckFnSig> = []
-    let mut seen: List<String> = []
-    checkCollectInterfaceMethods(env, owner, out, seen)
-    out
+    checkCollectInterfaceMethods(env, owner, [], [])
 }
 
-fn checkCollectInterfaceMethods(env: CheckEnv, owner: String, out: List<CheckFnSig>, seen: List<String>) {
+fn checkCollectInterfaceMethods(env: CheckEnv, owner: String, out: List<CheckFnSig>, seen: List<String>) -> List<CheckFnSig> {
+    let mut nextOut: List<CheckFnSig> = out
+    let mut nextSeen: List<String> = seen
     for sig in env.fns {
-        if sig.owner == owner && !(checkStringListContainsLocal(seen, sig.name)) {
-            out.push(sig)
-            seen.push(sig.name)
+        if sig.owner == owner && !(checkStringListContainsLocal(nextSeen, sig.name)) {
+            nextOut.push(sig)
+            nextSeen.push(sig.name)
         }
     }
     for extTy in checkInterfaceExtendsList(env, owner) {
         let extHead = tyHeadAt(env.tys, checkResolveAliasDeep(env, extTy))
         if extHead != "" {
-            checkCollectInterfaceMethods(env, extHead, out, seen)
+            nextOut = checkCollectInterfaceMethods(env, extHead, nextOut, nextSeen)
+            nextSeen = checkFnSigNames(nextOut)
         }
     }
+    nextOut
+}
+
+fn checkFnSigNames(xs: List<CheckFnSig>) -> List<String> {
+    let mut out: List<String> = []
+    for sig in xs {
+        if !(checkStringListContainsLocal(out, sig.name)) {
+            out.push(sig.name)
+        }
+    }
+    out
 }
 
 fn checkConcreteMethodTy(env: CheckEnv, sig: CheckFnSig, ownerTy: Int) -> Int {

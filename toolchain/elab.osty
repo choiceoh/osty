@@ -73,12 +73,18 @@ pub fn newElabCx(ast: AstFile, tys: TyArena) -> ElabCx {
 // ---------------------------------------------------------------------
 
 pub fn elabInfer(cx: ElabCx, idx: Int) -> ElabResult {
+    let out = elabInferImpl(cx, idx)
+    elabRecordTypedExpr(cx, idx, out)
+    out
+}
+
+fn elabInferImpl(cx: ElabCx, idx: Int) -> ElabResult {
     if idx < 0 {
         return elabErrResult(cx, 0, 0)
     }
     let node = astArenaNodeAt(cx.ast.arena, idx)
     match node.kind {
-        AstNIntLit -> elabInferIntLit(cx, node),
+        AstNIntLit -> elabInferIntLit(cx, idx, node),
         AstNFloatLit -> elabInferFloatLit(cx, node),
         AstNStringLit -> elabInferStringLit(cx, node),
         AstNBoolLit -> elabInferBoolLit(cx, node),
@@ -107,15 +113,21 @@ pub fn elabInfer(cx: ElabCx, idx: Int) -> ElabResult {
 }
 
 pub fn elabCheck(cx: ElabCx, idx: Int, expected: Int) -> ElabResult {
+    let out = elabCheckImpl(cx, idx, expected)
+    elabRecordTypedExpr(cx, idx, out)
+    out
+}
+
+fn elabCheckImpl(cx: ElabCx, idx: Int, expected: Int) -> ElabResult {
     if idx < 0 {
         return elabErrResult(cx, 0, 0)
     }
     if tyIsErr(cx.env.tys, expected) {
-        return elabInfer(cx, idx)
+        return elabInferImpl(cx, idx)
     }
     let node = astArenaNodeAt(cx.ast.arena, idx)
     match node.kind {
-        AstNIntLit -> elabCheckIntLit(cx, node, expected),
+        AstNIntLit -> elabCheckIntLit(cx, idx, node, expected),
         AstNFloatLit -> elabCheckFloatLit(cx, node, expected),
         AstNParen -> elabCheck(cx, node.left, expected),
         AstNBlock -> elabCheckBlock(cx, idx, node, expected),
@@ -136,7 +148,7 @@ pub fn elabCheck(cx: ElabCx, idx: Int, expected: Int) -> ElabResult {
 /// infer, then subtype against `T` and emit a mismatch diagnostic if
 /// needed.
 fn elabCheckViaInfer(cx: ElabCx, idx: Int, expected: Int) -> ElabResult {
-    let r = elabInfer(cx, idx)
+    let r = elabInferImpl(cx, idx)
     if !(tyIsErr(cx.env.tys, r.ty)) {
         let start = coreStartAt(cx.core, r.node)
         let end = coreEndAt(cx.core, r.node)
@@ -149,7 +161,7 @@ fn elabCheckViaInfer(cx: ElabCx, idx: Int, expected: Int) -> ElabResult {
 // Literals.
 // ---------------------------------------------------------------------
 
-fn elabInferIntLit(cx: ElabCx, node: AstNode) -> ElabResult {
+fn elabInferIntLit(cx: ElabCx, idx: Int, node: AstNode) -> ElabResult {
     let ty = tUntypedInt(cx.env.tys)
     let coreIdx = coreIntLit(cx.core, node.text, ty, node.start, node.end)
     ElabResult { node: coreIdx, ty }
@@ -190,7 +202,7 @@ fn elabInferByteLit(cx: ElabCx, node: AstNode) -> ElabResult {
 /// expectation is a concrete numeric type the literal takes that type
 /// directly (rather than landing at `UntypedInt` and relying on a
 /// subsequent subtyping step).
-fn elabCheckIntLit(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
+fn elabCheckIntLit(cx: ElabCx, idx: Int, node: AstNode, expected: Int) -> ElabResult {
     let tys = cx.env.tys
     let resolved = checkResolveAliasDeep(cx.env, expected)
     if tyIsInteger(tys, resolved) || tyIsFloat(tys, resolved) {
@@ -199,7 +211,7 @@ fn elabCheckIntLit(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
     }
     // Fall back to infer-then-subtype; subtype logic emits the
     // mismatch against the expected type.
-    let inferred = elabInferIntLit(cx, node)
+    let inferred = elabInferIntLit(cx, idx, node)
     let _ = checkExpectAssignable(cx.env, expected, inferred.ty, node.start, node.end)
     inferred
 }
@@ -785,6 +797,64 @@ fn astIsExprKindAt(ast: AstFile, idx: Int) -> Bool {
     }
 }
 
+fn astExprEscapesMatchResult(ast: AstFile, idx: Int) -> Bool {
+    if idx < 0 {
+        return false
+    }
+    let node = astArenaNodeAt(ast.arena, idx)
+    if node.kind == AstNBlock {
+        return astBlockEscapesMatchResult(ast, node)
+    }
+    if node.kind == AstNIf {
+        if !(astBlockEscapesMatchResult(ast, astArenaNodeAt(ast.arena, node.right))) {
+            return false
+        }
+        let elseIdx = checkIntListAt(node.children, 0)
+        if elseIdx < 0 {
+            return false
+        }
+        return astExprEscapesMatchResult(ast, elseIdx)
+    }
+    if node.kind == AstNMatch {
+        if checkIntListLen(node.children) == 0 {
+            return false
+        }
+        for armIdx in node.children {
+            let arm = astArenaNodeAt(ast.arena, armIdx)
+            if !(astExprEscapesMatchResult(ast, arm.right)) {
+                return false
+            }
+        }
+        return true
+    }
+    false
+}
+
+fn astBlockEscapesMatchResult(ast: AstFile, node: AstNode) -> Bool {
+    if node.kind != AstNBlock || checkIntListLen(node.children) == 0 {
+        return false
+    }
+    let lastIdx = checkIntListAt(node.children, checkIntListLen(node.children) - 1)
+    if lastIdx < 0 {
+        return false
+    }
+    let last = astArenaNodeAt(ast.arena, lastIdx)
+    if last.kind == AstNReturn || last.kind == AstNBreak || last.kind == AstNContinue {
+        return true
+    }
+    if astIsExprKindAt(ast, lastIdx) {
+        return astExprEscapesMatchResult(ast, lastIdx)
+    }
+    false
+}
+
+fn elabRecordTypedExpr(cx: ElabCx, idx: Int, out: ElabResult) {
+    if idx < 0 || out.node < 0 || tyIsErr(cx.env.tys, out.ty) {
+        return
+    }
+    coreSetOrigin(cx.core, out.node, idx)
+}
+
 /// astTypeToTy materialises an AST type node into the typed arena.
 /// Returns -1 when `idx` is negative. Unknown heads fall back to
 /// `tyNamed` — the surrounding context is expected to decide whether
@@ -894,7 +964,7 @@ fn checkIntListAt(xs: List<Int>, idx: Int) -> Int {
         }
         i = i + 1
     }
-    -1
+    return -1
 }
 
 // =====================================================================
@@ -985,7 +1055,6 @@ fn elabInferCall(cx: ElabCx, callIdx: Int, node: AstNode, expected: Int) -> Elab
     }
 
     let coreCallNode = coreCall(cx.core, coreFn, coreArgs, typeArgsConcrete, retTy, node.start, node.end)
-    checkRecordTypedNode(cx.env, callIdx, "Call", retTy, node.start, node.end)
     ElabResult { node: coreCallNode, ty: retTy }
 }
 
@@ -1008,7 +1077,7 @@ fn elabInferMethodCall(cx: ElabCx, callNode: AstNode, fieldNode: AstNode, expect
     // Bind the receiver type params against the receiver's concrete args.
     let typeSig = checkLookupType(cx.env, ownerName)
     let ownerArgs = tyArgsAt(cx.env.tys, recvResolved)
-    if checkIntListLenHelper(typeSig.generics) == checkIntListLenHelper(ownerArgs) {
+    if checkStringListLenHelper(typeSig.generics) == checkIntListLenHelper(ownerArgs) {
         let mut i = 0
         for ownerGeneric in typeSig.generics {
             let freshIdx = elabFindFresh(freshs, sig.generics, ownerGeneric)
@@ -1114,7 +1183,11 @@ fn elabCallArgs(
         let rawWant = checkIntListAt(sig.paramTys, i)
         let specialisedWant = checkSubstituteTy(cx.env, rawWant, sig.generics, freshs)
         let hint = zonk(cx.env, solver, specialisedWant)
-        let r = elabCheck(cx, argIdx, hint)
+        let r = if isFullyResolved(cx.env, solver, hint) {
+            elabCheck(cx, argIdx, hint)
+        } else {
+            elabInfer(cx, argIdx)
+        }
         let _ = unify(cx.env, solver, hint, r.ty)
         coreArgs.push(r.node)
         i = i + 1
@@ -1142,7 +1215,7 @@ fn elabFindFresh(freshs: List<Int>, generics: List<String>, name: String) -> Int
         i = i + 1
     }
     let _ = freshs
-    -1
+    return -1
 }
 
 fn elabReportUnresolvedGenerics(
@@ -1315,7 +1388,7 @@ fn parseTupleIndex(text: String) -> Int {
     }
     let mut value = 0
     let mut any = false
-    for ch in strings.chars(text) {
+    for ch in strings.split(text, "") {
         let code = charToDigit(ch)
         if code < 0 {
             return -1
@@ -1326,18 +1399,17 @@ fn parseTupleIndex(text: String) -> Int {
     if any { value } else { -1 }
 }
 
-fn charToDigit(ch: Char) -> Int {
-    let s = "{ch}"
-    if s == "0" { return 0 }
-    if s == "1" { return 1 }
-    if s == "2" { return 2 }
-    if s == "3" { return 3 }
-    if s == "4" { return 4 }
-    if s == "5" { return 5 }
-    if s == "6" { return 6 }
-    if s == "7" { return 7 }
-    if s == "8" { return 8 }
-    if s == "9" { return 9 }
+fn charToDigit(ch: String) -> Int {
+    if ch == "0" { return 0 }
+    if ch == "1" { return 1 }
+    if ch == "2" { return 2 }
+    if ch == "3" { return 3 }
+    if ch == "4" { return 4 }
+    if ch == "5" { return 5 }
+    if ch == "6" { return 6 }
+    if ch == "7" { return 7 }
+    if ch == "8" { return 8 }
+    if ch == "9" { return 9 }
     return -1
 }
 
@@ -1428,10 +1500,9 @@ fn elabInferList(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
 fn elabInferMap(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
     let tys = cx.env.tys
     let entryIdxs = node.children
-    let expectedArgs = if tyIsNamedHead(tys, expected, "Map") && checkIntListLenHelper(tyArgsAt(tys, expected)) == 2 {
-        tyArgsAt(tys, expected)
-    } else {
-        []
+    let mut expectedArgs: List<Int> = []
+    if tyIsNamedHead(tys, expected, "Map") && checkIntListLenHelper(tyArgsAt(tys, expected)) == 2 {
+        expectedArgs = tyArgsAt(tys, expected)
     }
     let hasHint = checkIntListLenHelper(expectedArgs) == 2
     let mut keyTy = if hasHint { checkIntListAt(expectedArgs, 0) } else { tErr(tys) }
@@ -1470,7 +1541,10 @@ fn elabInferTuple(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
     let elemIdxs = node.children
     let arity = checkIntListLenHelper(elemIdxs)
     let expectedIsTuple = tyKindAt(tys, expected) == TkTuple
-    let expectedElems = if expectedIsTuple { tyArgsAt(tys, expected) } else { [] }
+    let mut expectedElems: List<Int> = []
+    if expectedIsTuple {
+        expectedElems = tyArgsAt(tys, expected)
+    }
     let mut coreElems: List<Int> = []
     let mut elemTys: List<Int> = []
     let mut i = 0
@@ -1503,7 +1577,7 @@ fn elabInferTuple(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
 
 fn elabInferStructLit(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
     let tys = cx.env.tys
-    let owner = node.text
+    let owner = structLitOwnerName(cx, node)
     let typeSig = checkLookupType(cx.env, owner)
     if typeSig.name == "" {
         cx.env.diagnostics.push(diagUnknownName(owner, node.start, node.end))
@@ -1591,6 +1665,17 @@ fn elabInferStructLit(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
     ElabResult { node: coreIdx, ty: resultTy }
 }
 
+fn structLitOwnerName(cx: ElabCx, node: AstNode) -> String {
+    if node.left < 0 {
+        return node.text
+    }
+    let ownerNode = astArenaNodeAt(cx.ast.arena, node.left)
+    if ownerNode.text != "" {
+        return ownerNode.text
+    }
+    node.text
+}
+
 fn stringListContains(xs: List<String>, needle: String) -> Bool {
     for x in xs {
         if x == needle {
@@ -1607,7 +1692,10 @@ fn stringListContains(xs: List<String>, needle: String) -> Bool {
 fn elabInferClosure(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
     let tys = cx.env.tys
     let expectedIsFn = tyKindAt(tys, expected) == TkFn
-    let expectedParams = if expectedIsFn { tyArgsAt(tys, expected) } else { [] }
+    let mut expectedParams: List<Int> = []
+    if expectedIsFn {
+        expectedParams = tyArgsAt(tys, expected)
+    }
     let expectedRet = if expectedIsFn { tyRetAt(tys, expected) } else { tErr(tys) }
 
     let paramIdxs = node.children
@@ -1761,8 +1849,12 @@ fn elabInferMatch(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
     for rawArmIdx in node.children {
         let armNode = astArenaNodeAt(cx.ast.arena, rawArmIdx)
         let patIdx = armNode.left
-        let guardIdx = armNode.right
-        let bodyIdx = armNode.extra
+        let bodyIdx = armNode.right
+        let guardIdx = if checkIntListLen(armNode.children) > 0 {
+            checkIntListAt(armNode.children, 0)
+        } else {
+            -1
+        }
 
         let mark = checkScopeMark(cx.env)
         let pat = elabPattern(cx, patIdx, scrutTy)
@@ -1774,14 +1866,15 @@ fn elabInferMatch(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
             -1
         }
 
+        let bodyEscapes = astExprEscapesMatchResult(cx.ast, bodyIdx)
         let body = if hasExpected {
             elabCheck(cx, bodyIdx, expected)
-        } else if armIdx == 0 {
+        } else if tyIsErr(cx.env.tys, resultTy) {
             elabInfer(cx, bodyIdx)
         } else {
             elabCheck(cx, bodyIdx, resultTy)
         }
-        if !hasExpected && armIdx == 0 {
+        if !hasExpected && tyIsErr(cx.env.tys, resultTy) && !bodyEscapes {
             resultTy = body.ty
         }
 
@@ -1968,22 +2061,22 @@ fn elabOrPattern(cx: ElabCx, node: AstNode, scrutTy: Int, mutable: Bool, recordB
     // flatten nested `A | B | C` into one alternative list for the
     // Core IR.
     let mut alts: List<Int> = []
-    orPatternFlatten(cx, node.left, scrutTy, mutable, recordBinding, alts)
-    orPatternFlatten(cx, node.right, scrutTy, mutable, recordBinding, alts)
+    alts = orPatternFlatten(cx, node.left, scrutTy, mutable, recordBinding, alts)
+    alts = orPatternFlatten(cx, node.right, scrutTy, mutable, recordBinding, alts)
     corePatOr(cx.core, alts, scrutTy, node.start, node.end)
 }
 
-fn orPatternFlatten(cx: ElabCx, idx: Int, scrutTy: Int, mutable: Bool, recordBinding: Bool, alts: List<Int>) {
+fn orPatternFlatten(cx: ElabCx, idx: Int, scrutTy: Int, mutable: Bool, recordBinding: Bool, alts: List<Int>) -> List<Int> {
     if idx < 0 {
-        return
+        return alts
     }
     let sub = astArenaNodeAt(cx.ast.arena, idx)
     if sub.kind == AstNPattern && sub.extra == astPatternOrKind() {
-        orPatternFlatten(cx, sub.left, scrutTy, mutable, recordBinding, alts)
-        orPatternFlatten(cx, sub.right, scrutTy, mutable, recordBinding, alts)
-        return
+        let left = orPatternFlatten(cx, sub.left, scrutTy, mutable, recordBinding, alts)
+        return orPatternFlatten(cx, sub.right, scrutTy, mutable, recordBinding, left)
     }
     alts.push(elabPatternMode(cx, idx, scrutTy, mutable, recordBinding))
+    alts
 }
 
 fn elabRangePattern(cx: ElabCx, node: AstNode, scrutTy: Int) -> Int {
@@ -2747,7 +2840,7 @@ fn patLiteralTextOf(cx: ElabCx, p: AstNode) -> String {
     if p.text == "-" && p.left >= 0 {
         let inner = astArenaNodeAt(cx.ast.arena, p.left)
         if inner.kind == AstNPattern && inner.extra == astPatternLiteralKind() {
-            return strings.concat("-", inner.text)
+            return "-{inner.text}"
         }
     }
     p.text
@@ -2810,7 +2903,7 @@ fn repeatedPlaceholder(count: Int, sep: String) -> String {
         if i == 0 {
             out = "_"
         } else {
-            out = strings.concat(strings.concat(out, sep), "_")
+            out = "{out}{sep}_"
         }
         i = i + 1
     }
@@ -2984,8 +3077,8 @@ fn pmArmHasRedundantOrAlt(cx: ElabCx, priorRows: List<List<Int>>, patIdx: Int, s
         return false
     }
     let mut alts: List<Int> = []
-    orPatternFlatten(cx, node.left, scrutTy, alts)
-    orPatternFlatten(cx, node.right, scrutTy, alts)
+    alts = pmOrPatternFlatten(cx, node.left, alts)
+    alts = pmOrPatternFlatten(cx, node.right, alts)
     let colTys: List<Int> = [scrutTy]
     let mut merged: List<List<Int>> = []
     for r in priorRows {
@@ -3273,8 +3366,8 @@ fn pmExpandRowCol0(cx: ElabCx, row: List<Int>, col0Ty: Int) -> List<List<Int>> {
     }
     if p.extra == astPatternOrKind() {
         let mut alts: List<Int> = []
-        orPatternFlatten(cx, p.left, col0Ty, alts)
-        orPatternFlatten(cx, p.right, col0Ty, alts)
+        alts = pmOrPatternFlatten(cx, p.left, alts)
+        alts = pmOrPatternFlatten(cx, p.right, alts)
         let mut out: List<List<Int>> = []
         for a in alts {
             out.push(intListConcat([a], rest))
@@ -3285,6 +3378,19 @@ fn pmExpandRowCol0(cx: ElabCx, row: List<Int>, col0Ty: Int) -> List<List<Int>> {
         return pmExpandRowCol0(cx, intListConcat([p.left], rest), col0Ty)
     }
     [row]
+}
+
+fn pmOrPatternFlatten(cx: ElabCx, idx: Int, alts: List<Int>) -> List<Int> {
+    if idx < 0 {
+        return alts
+    }
+    let sub = astArenaNodeAt(cx.ast.arena, idx)
+    if sub.kind == AstNPattern && sub.extra == astPatternOrKind() {
+        let left = pmOrPatternFlatten(cx, sub.left, alts)
+        return pmOrPatternFlatten(cx, sub.right, left)
+    }
+    alts.push(idx)
+    alts
 }
 
 // ---------------------------------------------------------------------
@@ -3675,7 +3781,7 @@ fn intListAt(xs: List<Int>, idx: Int) -> Int {
         }
         i = i + 1
     }
-    -1
+    return -1
 }
 
 fn intListDrop(xs: List<Int>, n: Int) -> List<Int> {
@@ -3735,13 +3841,14 @@ pub struct PmIntParse {
 /// context) are rejected. On any parse failure we return ok=false and
 /// the caller treats the literal as opaque for reachability.
 pub fn pmParseIntLit(text: String) -> PmIntParse {
-    let n = strings.len(text)
+    let units = strings.split(text, "")
+    let n = units.len()
     if n == 0 {
         return PmIntParse { ok: false, value: 0 }
     }
     let mut negative = false
     let mut i = 0
-    if strings.slice(text, 0, 1) == "-" {
+    if units[0] == "-" {
         negative = true
         i = 1
     }
@@ -3750,7 +3857,7 @@ pub fn pmParseIntLit(text: String) -> PmIntParse {
     }
     let mut base = 10
     if i + 1 < n {
-        let lead = strings.slice(text, i, i + 2)
+        let lead = "{units[i]}{units[i + 1]}"
         if lead == "0x" || lead == "0X" {
             base = 16
             i = i + 2
@@ -3768,7 +3875,7 @@ pub fn pmParseIntLit(text: String) -> PmIntParse {
     let mut value: Int = 0
     let mut digits = 0
     for i < n {
-        let ch = strings.slice(text, i, i + 1)
+        let ch = units[i]
         if ch == "_" {
             i = i + 1
             continue

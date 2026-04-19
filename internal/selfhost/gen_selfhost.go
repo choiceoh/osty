@@ -48,7 +48,9 @@ func run() error {
 	}
 	tmpOutPath := filepath.Join(tmpDir, "generated.go")
 	checkerPath := filepath.Join(tmpDir, "osty-native-checker")
-	if err := buildNativeChecker(root, checkerPath); err != nil {
+	if override := strings.TrimSpace(os.Getenv("OSTY_NATIVE_CHECKER_BIN")); override != "" {
+		checkerPath = override
+	} else if err := buildNativeChecker(root, checkerPath); err != nil {
 		return err
 	}
 
