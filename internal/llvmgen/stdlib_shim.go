@@ -57,6 +57,12 @@ func (g *generator) emitStdStringsCall(call *ast.CallExpr) (value, bool, error) 
 	case "compare":
 		v, err := g.emitStdStringsBinary(call, "compare", "i64", llvmStringRuntimeCompareSymbol())
 		return v, true, err
+	case "concat":
+		v, err := g.emitStdStringsBinaryString(call, "concat", llvmStringRuntimeConcatSymbol())
+		return v, true, err
+	case "contains":
+		v, err := g.emitStdStringsBinary(call, "contains", "i1", llvmStringRuntimeContainsSymbol())
+		return v, true, err
 	case "hasPrefix":
 		v, err := g.emitStdStringsBinary(call, "hasPrefix", "i1", llvmStringRuntimeHasPrefixSymbol())
 		return v, true, err
@@ -102,9 +108,9 @@ func (g *generator) stdStringsCallStaticResult(call *ast.CallExpr) (value, bool)
 	switch field.Name {
 	case "compare":
 		return value{typ: "i64"}, true
-	case "hasPrefix", "hasSuffix":
+	case "contains", "hasPrefix", "hasSuffix":
 		return value{typ: "i1"}, true
-	case "join", "trim", "trimSpace", "trimPrefix", "trimSuffix":
+	case "concat", "join", "trim", "trimSpace", "trimPrefix", "trimSuffix":
 		return value{typ: "ptr", gcManaged: true}, true
 	case "split":
 		return value{typ: "ptr", gcManaged: true, listElemTyp: "ptr", listElemString: true}, true

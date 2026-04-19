@@ -2111,6 +2111,10 @@ func llvmStringRuntimeHasSuffixSymbol() string {
 	return "osty_rt_strings_HasSuffix"
 }
 
+func llvmStringRuntimeContainsSymbol() string {
+	return "osty_rt_strings_Contains"
+}
+
 func llvmStringRuntimeSplitSymbol() string {
 	return "osty_rt_strings_Split"
 }
@@ -2160,6 +2164,7 @@ func llvmStringRuntimeDeclarations() []string {
 		"declare i1 @osty_rt_strings_Equal(ptr, ptr)",
 		"declare i1 @osty_rt_strings_HasPrefix(ptr, ptr)",
 		"declare i1 @osty_rt_strings_HasSuffix(ptr, ptr)",
+		"declare i1 @osty_rt_strings_Contains(ptr, ptr)",
 		"declare ptr @osty_rt_strings_Split(ptr, ptr)",
 		"declare ptr @osty_rt_strings_Concat(ptr, ptr)",
 		"declare ptr @osty_rt_int_to_string(i64)",

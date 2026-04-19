@@ -204,6 +204,7 @@ static void *osty_gc_allocate_managed(size_t byte_size, int64_t object_kind, con
 static void osty_gc_mark_payload(void *payload);
 bool osty_rt_strings_Equal(const char *left, const char *right);
 int64_t osty_rt_strings_Compare(const char *left, const char *right);
+bool osty_rt_strings_Contains(const char *value, const char *substr);
 bool osty_rt_strings_HasSuffix(const char *value, const char *suffix);
 const char *osty_rt_strings_Join(void *raw_parts, const char *sep);
 const char *osty_rt_strings_TrimPrefix(const char *value, const char *prefix);
@@ -905,6 +906,16 @@ const char *osty_rt_strings_Concat(const char *left, const char *right) {
     }
     out[left_len + right_len] = '\0';
     return out;
+}
+
+bool osty_rt_strings_Contains(const char *value, const char *substr) {
+    if (value == NULL || substr == NULL) {
+        return false;
+    }
+    if (substr[0] == '\0') {
+        return true;
+    }
+    return strstr(value, substr) != NULL;
 }
 
 bool osty_rt_strings_HasPrefix(const char *value, const char *prefix) {

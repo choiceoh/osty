@@ -42,6 +42,19 @@ type generator struct {
 	runtimeDeclOrder  []string
 	traceHelpers      map[string]string
 	traceHelperDefs   []string
+	// Closure-env thunks generated on demand when a top-level fn
+	// symbol is used as a first-class value. Mirror of the MIR
+	// closure ABI (internal/llvmgen/mir_generator.go:emitThunks): one
+	// thunk per original symbol, signature `(ptr env, <user params>)`,
+	// body delegates to the real symbol ignoring env. Rendered at the
+	// end of the module so the top-down read order matches user code
+	// first / machinery second. See fn_value.go.
+	fnValueThunkDefs  map[string]string
+	fnValueThunkOrder []string
+	// True once any fn-value env has been materialised; gates the
+	// module-level `%osty.closure.env.ptr` typedef so plain programs
+	// that never touch first-class fns stay free of the noise.
+	fnValueEnvTypeNeeded bool
 
 	temp              int
 	label             int
@@ -92,6 +105,11 @@ type value struct {
 	setElemString  bool
 	sourceType     ast.Type
 	rootPaths      [][]int
+	// fnSigRef is non-nil when this value is a first-class function
+	// value — an env pointer produced by emitFnValueEnv. The sig gives
+	// the call-site indirect-call dispatcher the LLVM signature to
+	// emit. See internal/llvmgen/fn_value.go.
+	fnSigRef *fnSig
 }
 
 type builtinResultContext struct {
@@ -195,10 +213,24 @@ func (g *generator) render(defs []string) []byte {
 	if len(g.traceHelperDefs) != 0 {
 		defs = append(append([]string(nil), g.traceHelperDefs...), defs...)
 	}
+	// Phase 1: closure thunks generated for first-class fn values
+	// live at the tail of the module so the top-down read order is
+	// user functions first, then machinery. Order is deterministic
+	// via fnValueThunkOrder (insertion-ordered).
+	if len(g.fnValueThunkOrder) != 0 {
+		thunks := make([]string, 0, len(g.fnValueThunkOrder))
+		for _, sym := range g.fnValueThunkOrder {
+			thunks = append(thunks, g.fnValueThunkDefs[sym])
+		}
+		defs = append(defs, thunks...)
+	}
 	allDefs := make([]string, 0, len(g.globalDefs)+len(defs))
 	allDefs = append(allDefs, g.globalDefs...)
 	allDefs = append(allDefs, defs...)
 	typeDefs := make([]string, 0, len(g.structs)+len(g.enumsByType)+len(g.tupleTypes)+len(g.resultTypes))
+	if g.fnValueEnvTypeNeeded {
+		typeDefs = append(typeDefs, fnValueEnvTypeDef())
+	}
 	for _, info := range g.structs {
 		fieldTypes := make([]string, 0, len(info.fields))
 		for _, field := range info.fields {
@@ -626,6 +658,7 @@ func copyContainerMetadata(dst *value, src value) {
 	dst.setElemTyp = src.setElemTyp
 	dst.setElemString = src.setElemString
 	dst.sourceType = src.sourceType
+	dst.fnSigRef = src.fnSigRef
 	dst.gcManaged = valueNeedsManagedRoot(*dst)
 }
 

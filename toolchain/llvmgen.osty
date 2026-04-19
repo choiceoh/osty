@@ -2223,6 +2223,10 @@ pub fn llvmStringRuntimeHasSuffixSymbol() -> String {
     "osty_rt_strings_HasSuffix"
 }
 
+pub fn llvmStringRuntimeContainsSymbol() -> String {
+    "osty_rt_strings_Contains"
+}
+
 pub fn llvmStringRuntimeSplitSymbol() -> String {
     "osty_rt_strings_Split"
 }
@@ -2278,6 +2282,7 @@ pub fn llvmStringRuntimeDeclarations() -> List<String> {
         "declare i1 @osty_rt_strings_Equal(ptr, ptr)",
         "declare i1 @osty_rt_strings_HasPrefix(ptr, ptr)",
         "declare i1 @osty_rt_strings_HasSuffix(ptr, ptr)",
+        "declare i1 @osty_rt_strings_Contains(ptr, ptr)",
         "declare ptr @osty_rt_strings_Split(ptr, ptr)",
         "declare ptr @osty_rt_strings_Concat(ptr, ptr)",
         "declare ptr @osty_rt_int_to_string(i64)",
