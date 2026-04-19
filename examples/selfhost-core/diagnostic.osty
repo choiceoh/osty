@@ -1,6 +1,4 @@
-use go "strings" as strings {
-    fn Join(elems: List<String>, sep: String) -> String
-}
+use std.strings as strings
 
 /// DiagnosticSeverity is the stable user-facing diagnostic bucket.
 pub enum DiagnosticSeverity {
@@ -212,7 +210,7 @@ pub fn diagnosticFormatSelfResolveDiagnostics(
     for diag in result.diagnostics {
         lines.push(diagnosticFormatSelfResolveDiagnostic(source, diag))
     }
-    strings.Join(lines, "\n")
+    strings.join(lines, "\n")
 }
 
 pub fn diagnosticFormatSelfLintDiagnostic(source: String, diag: SelfLintDiagnostic) -> String {
@@ -224,5 +222,5 @@ pub fn diagnosticFormatSelfLintDiagnostics(source: String, report: SelfLintRepor
     for diag in report.diagnostics {
         lines.push(diagnosticFormatSelfLintDiagnostic(source, diag))
     }
-    strings.Join(lines, "\n")
+    strings.join(lines, "\n")
 }
