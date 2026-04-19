@@ -18528,6 +18528,10 @@ func astUseDeclFlagPub() int {
 	return 2
 }
 
+func astUseDeclGroupMarker() int {
+	return 1
+}
+
 func astUseDeclFlags(isGo bool, isPub bool) int {
 	if isGo && isPub {
 		return astUseDeclFlagGo() + astUseDeclFlagPub()
@@ -18559,6 +18563,16 @@ func astUseDeclIsPub(n *AstNode) bool {
 		return false
 	}
 	return n.flags == astUseDeclFlagPub() || n.flags == astUseDeclFlagGo()+astUseDeclFlagPub()
+}
+
+func astUseDeclIsGroup(n *AstNode) bool {
+	if n == nil {
+		return false
+	}
+	if !func() bool { _, ok := n.kind.(*AstNodeKind_AstNUseDecl); return ok }() {
+		return false
+	}
+	return n.extra == astUseDeclGroupMarker()
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6820:5
@@ -22241,121 +22255,113 @@ func opParseTypeAliasDecl(p *OstyParser, isPub bool, anns []int) int {
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8453:1
 func opParseUseDecl(p *OstyParser, isPub bool) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8454:5
 	start := p.pos
-	_ = start
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8455:5
 	_ = opAdvance(p)
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8456:5
+
 	rawPath := ""
-	_ = rawPath
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8457:5
 	isGo := false
-	_ = isGo
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8458:5
 	alias := ""
-	_ = alias
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8459:5
 	aliasStart := -1
-	_ = aliasStart
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8460:5
+
 	if opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})) && opPeek(p).text == "go" {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8461:9
 		isGo = true
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8462:9
 		_ = opAdvance(p)
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8463:9
 		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontString{})) || opAt(p, FrontTokenKind(&FrontTokenKind_FrontRawString{})) {
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8463:62
 			rawPath = opAdvance(p).text
 		}
 	} else {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8465:9
 		rawPath = opParseUsePath(p)
+		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontColonColon{})) && ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
+			_ = opAdvance(p)
+			return opParseScopedUseDecl(p, start, rawPath, isPub)
+		}
 	}
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8467:5
+
 	if opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})) && opPeek(p).text == "as" {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8468:9
 		_ = opAdvance(p)
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8469:9
 		aliasStart = p.pos
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8470:9
 		alias = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})).text
 	}
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8472:5
-	var goItems []int = make([]int, 0, 1)
-	_ = goItems
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8473:5
+
+	goItems := make([]int, 0, 1)
 	if opEat(p, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8474:9
 		opSkipNewlines(p)
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8475:9
-		for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8476:13
+		for !opAt(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) && !opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{})) {
 			bodyAnns := opParseAnnotations(p)
-			_ = bodyAnns
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8477:13
 			if opAt(p, FrontTokenKind(&FrontTokenKind_FrontFn{})) {
-				// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8478:17
-				func() struct{} { goItems = append(goItems, opParseFnDecl(p, false, bodyAnns)); return struct{}{} }()
+				goItems = append(goItems, opParseFnDecl(p, false, bodyAnns))
 			} else if opAt(p, FrontTokenKind(&FrontTokenKind_FrontStruct{})) {
-				// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8480:17
-				func() struct{} { goItems = append(goItems, opParseStructDecl(p, false, bodyAnns)); return struct{}{} }()
+				goItems = append(goItems, opParseStructDecl(p, false, bodyAnns))
 			} else if opAt(p, FrontTokenKind(&FrontTokenKind_FrontType{})) {
-				// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8482:17
-				func() struct{} {
-					goItems = append(goItems, opParseTypeAliasDecl(p, false, bodyAnns))
-					return struct{}{}
-				}()
+				goItems = append(goItems, opParseTypeAliasDecl(p, false, bodyAnns))
 			} else {
-				// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8484:17
 				_ = opAdvance(p)
 			}
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8486:13
 			opSkipNewlines(p)
 		}
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8488:9
 		_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))
 	}
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8490:5
+
+	return opBuildUseDecl(p, start, p.pos, rawPath, isGo, isPub, alias, aliasStart, goItems)
+}
+
+func opBuildUseDecl(p *OstyParser, start int, end int, rawPath string, isGo bool, isPub bool, alias string, aliasStart int, body []int) int {
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNUseDecl{}))
-	_ = n
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8491:6
 	n.text = rawPath
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8492:6
-	n.children = goItems
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8493:6
+	n.children = body
 	n.start = start
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8494:6
-	n.end = p.pos
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8495:5
+	n.end = end
 	n.flags = astUseDeclFlags(isGo, isPub)
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8496:5
 	if alias != "" {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8497:10
 		n.op = FrontTokenKind(&FrontTokenKind_FrontIdent{})
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8498:9
 		aliasNode := emptyAstNode(AstNodeKind(&AstNodeKind_AstNIdent{}))
-		_ = aliasNode
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8499:18
 		aliasNode.text = alias
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8500:18
 		aliasNode.start = aliasStart
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8501:18
-		aliasNode.end = func() int {
-			var _p1781 int = aliasStart
-			var _rhs1782 int = 1
-			if _rhs1782 > 0 && _p1781 > math.MaxInt-_rhs1782 {
-				panic("integer overflow")
-			}
-			if _rhs1782 < 0 && _p1781 < math.MinInt-_rhs1782 {
-				panic("integer overflow")
-			}
-			return _p1781 + _rhs1782
-		}()
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8502:10
+		aliasNode.end = aliasStart + 1
 		n.children2 = []int{opAddNode(p, aliasNode)}
 	}
+	return opAddNode(p, n)
+}
+
+func opParseScopedUseDecl(p *OstyParser, start int, basePath string, isPub bool) int {
+	_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontLBrace{}))
+	items := make([]int, 0, 2)
+	opSkipNewlines(p)
+	for !opAt(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{})) && !opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{})) {
+		if opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{})) {
+			opSkipNewlines(p)
+			continue
+		}
+		if !opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})) {
+			gotName := frontTokenKindName(opPeek(p).kind)
+			opErrorFull(p, fmt.Sprintf("expected grouped import item, got %s", gotName), "grouped imports accept `name` or `name as alias` items", "", "E0001")
+			_ = opAdvance(p)
+			opSkipNewlines(p)
+			continue
+		}
+		itemName := opAdvance(p).text
+		alias := ""
+		aliasStart := -1
+		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})) && opPeek(p).text == "as" {
+			_ = opAdvance(p)
+			aliasStart = p.pos
+			alias = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})).text
+		}
+		items = append(items, opBuildUseDecl(p, start, p.pos, basePath+"."+itemName, false, isPub, alias, aliasStart, nil))
+		if !opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{})) {
+			break
+		}
+		opSkipNewlines(p)
+	}
+	_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))
+
+	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNUseDecl{}))
+	n.text = basePath
+	n.children = items
+	n.start = start
+	n.end = p.pos
+	n.flags = astUseDeclFlags(false, isPub)
+	n.extra = astUseDeclGroupMarker()
 	return opAddNode(p, n)
 }
 
@@ -23055,32 +23061,11 @@ func astCountSummary(file *AstFile) *FrontParseSummary {
 				}
 			}
 			if func() bool { _, ok := _m1802.(*AstNodeKind_AstNUseDecl); return ok }() {
-				// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8668:31
-				s.uses = func() int {
-					var _p1823 int = s.uses
-					var _rhs1824 int = 1
-					if _rhs1824 > 0 && _p1823 > math.MaxInt-_rhs1824 {
-						panic("integer overflow")
+				if !astUseDeclIsGroup(n) {
+					s.uses++
+					if astUseDeclIsGo(n) {
+						s.goUses++
 					}
-					if _rhs1824 < 0 && _p1823 < math.MinInt-_rhs1824 {
-						panic("integer overflow")
-					}
-					return _p1823 + _rhs1824
-				}()
-				// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8669:13
-				if astUseDeclIsGo(n) {
-					// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8669:32
-					s.goUses = func() int {
-						var _p1825 int = s.goUses
-						var _rhs1826 int = 1
-						if _rhs1826 > 0 && _p1825 > math.MaxInt-_rhs1826 {
-							panic("integer overflow")
-						}
-						if _rhs1826 < 0 && _p1825 < math.MinInt-_rhs1826 {
-							panic("integer overflow")
-						}
-						return _p1825 + _rhs1826
-					}()
 				}
 			}
 			if func() bool { _, ok := _m1802.(*AstNodeKind_AstNBlock); return ok }() {
@@ -48179,77 +48164,55 @@ func selfLintFirstUnit(name string) string {
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23227:1
 func astLowerPublicFile(arena *AstArena, toks []astbridge.Token) astbridge.File {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23228:5
 	uses := astbridge.EmptyDeclList()
-	_ = uses
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23229:5
 	decls := astbridge.EmptyDeclList()
-	_ = decls
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23230:5
 	stmts := astbridge.EmptyStmtList()
-	_ = stmts
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23231:5
 	for _, idx := range arena.decls {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23232:9
 		n := astArenaNodeAt(arena, idx)
-		_ = n
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23233:9
-		if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNLet{})) && !(astbridge.TokenIsPub(astLowerTok(toks, func() int {
-			var _p2437 int = n.start
-			var _rhs2438 int = 1
-			if _rhs2438 < 0 && _p2437 > math.MaxInt+_rhs2438 {
-				panic("integer overflow")
-			}
-			if _rhs2438 > 0 && _p2437 < math.MinInt+_rhs2438 {
-				panic("integer overflow")
-			}
-			return _p2437 - _rhs2438
-		}()))) {
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23234:13
+		if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNLet{})) && !astbridge.TokenIsPub(astLowerTok(toks, n.start-1)) {
 			stmt := astLowerStmt(arena, toks, idx)
-			_ = stmt
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23235:13
-			if !(astbridge.IsNilStmt(stmt)) {
-				// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23236:17
-				func() struct{} { stmts = append(stmts, stmt); return struct{}{} }()
+			if !astbridge.IsNilStmt(stmt) {
+				stmts = append(stmts, stmt)
 			}
-		} else {
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23239:13
-			decl := astLowerDecl(arena, toks, idx)
-			_ = decl
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23240:13
-			if !(astbridge.IsNilDecl(decl)) {
-				// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23241:17
-				if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNUseDecl{})) {
-					// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23242:21
-					func() struct{} { uses = append(uses, decl); return struct{}{} }()
-				} else {
-					// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23244:21
-					func() struct{} { decls = append(decls, decl); return struct{}{} }()
-				}
-			} else {
-				// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23247:17
-				stmt := astLowerStmt(arena, toks, idx)
-				_ = stmt
-				// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23248:17
-				if !(astbridge.IsNilStmt(stmt)) {
-					// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23249:21
-					func() struct{} { stmts = append(stmts, stmt); return struct{}{} }()
+			continue
+		}
+		if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNUseDecl{})) {
+			for _, useDecl := range astLowerUseDecls(arena, toks, n) {
+				if !astbridge.IsNilDecl(useDecl) {
+					uses = append(uses, useDecl)
 				}
 			}
+			continue
+		}
+		decl := astLowerDecl(arena, toks, idx)
+		if !astbridge.IsNilDecl(decl) {
+			decls = append(decls, decl)
+			continue
+		}
+		stmt := astLowerStmt(arena, toks, idx)
+		if !astbridge.IsNilStmt(stmt) {
+			stmts = append(stmts, stmt)
 		}
 	}
-	return astbridge.FileNode(astLowerPos(toks, 0), astLowerEnd(toks, func() int {
-		var _p2439 int = astLowerTokenCount(toks)
-		var _rhs2440 int = 1
-		if _rhs2440 < 0 && _p2439 > math.MaxInt+_rhs2440 {
-			panic("integer overflow")
+	return astbridge.FileNode(astLowerPos(toks, 0), astLowerEnd(toks, astLowerTokenCount(toks)-1), uses, decls, stmts)
+}
+
+func astLowerUseDecls(arena *AstArena, toks []astbridge.Token, n *AstNode) []astbridge.Decl {
+	out := astbridge.EmptyDeclList()
+	if astUseDeclIsGroup(n) {
+		for _, child := range n.children {
+			childDecl := astLowerUseDecl(arena, toks, astArenaNodeAt(arena, child))
+			if !astbridge.IsNilDecl(childDecl) {
+				out = append(out, childDecl)
+			}
 		}
-		if _rhs2440 > 0 && _p2439 < math.MinInt+_rhs2440 {
-			panic("integer overflow")
-		}
-		return _p2439 - _rhs2440
-	}()), uses, decls, stmts)
+		return out
+	}
+	decl := astLowerUseDecl(arena, toks, n)
+	if !astbridge.IsNilDecl(decl) {
+		out = append(out, decl)
+	}
+	return out
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23257:1
@@ -50295,60 +50258,29 @@ func astLowerTypeAliasDecl(arena *AstArena, toks []astbridge.Token, n *AstNode) 
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23903:1
 func astLowerUseDecl(arena *AstArena, toks []astbridge.Token, n *AstNode) astbridge.Decl {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23904:5
+	if astUseDeclIsGroup(n) {
+		return astbridge.NilDecl()
+	}
 	raw := astLowerUnquoteMaybe(n.text)
-	_ = raw
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23905:5
 	if astUseDeclIsGo(n) {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23906:9
-		reconstructed := astLowerUseGoRawPath(toks, n)
-		_ = reconstructed
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23907:9
-		if reconstructed != "" {
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23908:13
-			raw = reconstructed
-		}
-	} else {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23911:9
-		reconstructed := astLowerUseRawPath(toks, n)
-		_ = reconstructed
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23912:9
-		if reconstructed != "" {
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23913:13
+		if reconstructed := astLowerUseGoRawPath(toks, n); reconstructed != "" {
 			raw = reconstructed
 		}
 	}
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23916:5
 	alias := ""
-	_ = alias
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23917:5
 	if astLowerIntListCount(n.children2) > 0 {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23918:9
 		aliasNode := astArenaNodeAt(arena, astLowerIntListAt(n.children2, 0))
-		_ = aliasNode
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23919:9
 		alias = aliasNode.text
 	}
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23921:5
 	body := astbridge.EmptyDeclList()
-	_ = body
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23922:5
 	for _, child := range n.children {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23923:9
 		d := astLowerDecl(arena, toks, child)
-		_ = d
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23924:9
-		if !(astbridge.IsNilDecl(d)) {
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23925:13
-			func() struct{} { body = append(body, d); return struct{}{} }()
+		if !astbridge.IsNilDecl(d) {
+			body = append(body, d)
 		}
 	}
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23928:5
-	var path []string = make([]string, 0, 1)
-	_ = path
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23929:5
+	path := make([]string, 0, 1)
 	if !astUseDeclIsGo(n) {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23930:9
 		path = astLowerSplitPath(raw)
 	}
 	return astbridge.UseDeclNodeFull(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), raw, path, astUseDeclIsGo(n), astUseDeclIsPub(n), alias, body)

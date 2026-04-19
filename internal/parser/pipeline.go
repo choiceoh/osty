@@ -23,12 +23,6 @@ func (p *parsePipeline) applySourceCompat() {
 	if len(aliases) > 0 {
 		p.provenance.Aliases = append(p.provenance.Aliases, aliases...)
 	}
-
-	expanded, scopedSteps := expandScopedImports(p.parsedSrc)
-	p.parsedSrc = expanded
-	if len(scopedSteps) > 0 {
-		p.provenance.Lowerings = append(p.provenance.Lowerings, scopedSteps...)
-	}
 }
 
 func (p *parsePipeline) parse() (*ast.File, []*diag.Diagnostic) {
