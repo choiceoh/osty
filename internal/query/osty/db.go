@@ -1,6 +1,8 @@
 package osty
 
 import (
+	"sync"
+
 	"github.com/osty/osty/internal/query"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/stdlib"
@@ -29,21 +31,43 @@ type Engine struct {
 // input [Inputs.SourceText.Set] calls and serve derived queries via
 // [Queries].
 func NewEngine() *Engine {
-	return newEngineWith(resolve.NewPrelude(), stdlib.LoadCached())
+	return newEngineWith(resolve.NewPrelude(), newLazyStdlibProvider())
 }
 
 // NewEngineForTest constructs an Engine with custom prelude and stdlib,
 // typically used by test harnesses that want a fresh prelude per test
 // or want to simulate "no stdlib" environments.
-func NewEngineForTest(prelude *resolve.Scope, reg *stdlib.Registry) *Engine {
+func NewEngineForTest(prelude *resolve.Scope, reg resolve.StdlibProvider) *Engine {
 	return newEngineWith(prelude, reg)
 }
 
-func newEngineWith(prelude *resolve.Scope, reg *stdlib.Registry) *Engine {
+func newEngineWith(prelude *resolve.Scope, reg resolve.StdlibProvider) *Engine {
 	db := query.NewDatabase(prelude, reg)
 	inp := registerInputs(db)
 	qs := registerQueries(db, inp)
 	return &Engine{DB: db, Inputs: inp, Queries: qs}
+}
+
+type lazyStdlibProvider struct {
+	once sync.Once
+	reg  *stdlib.Registry
+}
+
+func newLazyStdlibProvider() resolve.StdlibProvider {
+	return &lazyStdlibProvider{}
+}
+
+func (p *lazyStdlibProvider) LookupPackage(dotPath string) *resolve.Package {
+	if p == nil {
+		return nil
+	}
+	p.once.Do(func() {
+		p.reg = stdlib.LoadCached()
+	})
+	if p.reg == nil {
+		return nil
+	}
+	return p.reg.LookupPackage(dotPath)
 }
 
 // Close is reserved for future cleanup hooks (e.g. releasing cached

@@ -133,7 +133,11 @@ func loadRegistry() *Registry {
 				Build())
 			continue
 		}
-		file, diags := parser.ParseDiagnostics(src)
+		// Embedded stdlib stubs are authored in canonical Osty syntax, so they
+		// can skip the parser's compatibility rewrites and their extra lex
+		// passes. This keeps startup from paying several full scans over the
+		// generated Unicode-heavy strings stub.
+		file, diags := parser.ParseCanonical(src)
 		r.Diags = append(r.Diags, diags...)
 		if file == nil {
 			continue

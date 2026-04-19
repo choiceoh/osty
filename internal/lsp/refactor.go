@@ -270,6 +270,24 @@ func fixAllAction(doc *document) *CodeAction {
 	if a == nil || a.file == nil {
 		return nil
 	}
+	// Parser canonicalization handles syntax-only rewrites such as
+	// `len(x)` -> `x.len()` and `append(x, y)` -> `x.push(y)`, but it
+	// deliberately does not rewrite semantic JS habits like `.length`.
+	// When that property is present, prefer airepair's broader repair so
+	// fix-all doesn't stop after a partial canonicalization.
+	if bytes.Contains(doc.src, []byte(".length")) {
+		if edit := airepairFixAllEdit(doc); edit != nil {
+			return &CodeAction{
+				Title: "Fix all auto-fixable problems",
+				Kind:  CodeActionSourceFixAllOsty,
+				Edit: &WorkspaceEdit{
+					Changes: map[string][]TextEdit{
+						doc.uri: []TextEdit{*edit},
+					},
+				},
+			}
+		}
+	}
 	if edit := parserCanonicalFixAllEdit(doc); edit != nil {
 		return &CodeAction{
 			Title: "Fix all auto-fixable problems",
