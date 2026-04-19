@@ -24611,6 +24611,16 @@ type FrontTypeView struct {
 	ret    string
 }
 
+var frontCheckTypeViewCache sync.Map
+
+var frontCheckInvalidTypeView = &FrontTypeView{
+	kind:   "invalid",
+	head:   "Invalid",
+	args:   []string{},
+	params: []string{},
+	ret:    "",
+}
+
 // Osty: /tmp/selfhost_merged.osty:9402:5
 type FrontInterfaceExtSig struct {
 	owner    string
@@ -26344,7 +26354,7 @@ func frontCheckTypeName(file *AstFile, idx int) string {
 
 // Osty: /tmp/selfhost_merged.osty:10359:1
 func frontCheckFnType(params []string, ret string) string {
-	return fmt.Sprintf("fn(%s) -> %s", ostyToString(frontCheckJoinTypes(params)), ostyToString(ret))
+	return "fn(" + frontCheckJoinTypes(params) + ") -> " + ret
 }
 
 // Osty: /tmp/selfhost_merged.osty:10363:1
@@ -26354,88 +26364,28 @@ func frontCheckJoinTypes(xs []string) string {
 
 // Osty: /tmp/selfhost_merged.osty:10367:1
 func frontCheckOneArgType(head string, arg string) string {
-	return fmt.Sprintf("%s<%s>", ostyToString(head), ostyToString(arg))
+	return head + "<" + arg + ">"
 }
 
 // Osty: /tmp/selfhost_merged.osty:10371:1
 func frontCheckTwoArgType(head string, left string, right string) string {
-	return fmt.Sprintf("%s<%s, %s>", ostyToString(head), ostyToString(left), ostyToString(right))
+	return head + "<" + left + ", " + right + ">"
 }
 
 // Osty: /tmp/selfhost_merged.osty:10375:1
 func frontCheckStringCount(xs []string) int {
-	// Osty: /tmp/selfhost_merged.osty:10376:5
-	count := 0
-	_ = count
-	// Osty: /tmp/selfhost_merged.osty:10377:5
-	for _, x := range xs {
-		// Osty: /tmp/selfhost_merged.osty:10378:9
-		_ = x
-		// Osty: /tmp/selfhost_merged.osty:10379:9
-		func() {
-			var _cur1984 int = count
-			var _rhs1985 int = 1
-			if _rhs1985 > 0 && _cur1984 > math.MaxInt-_rhs1985 {
-				panic("integer overflow")
-			}
-			if _rhs1985 < 0 && _cur1984 < math.MinInt-_rhs1985 {
-				panic("integer overflow")
-			}
-			count = _cur1984 + _rhs1985
-		}()
-	}
-	return count
+	return len(xs)
 }
 
 // Osty: /tmp/selfhost_merged.osty:10384:1
 func frontCheckIntCount(xs []int) int {
-	// Osty: /tmp/selfhost_merged.osty:10385:5
-	count := 0
-	_ = count
-	// Osty: /tmp/selfhost_merged.osty:10386:5
-	for _, x := range xs {
-		// Osty: /tmp/selfhost_merged.osty:10387:9
-		_ = x
-		// Osty: /tmp/selfhost_merged.osty:10388:9
-		func() {
-			var _cur1986 int = count
-			var _rhs1987 int = 1
-			if _rhs1987 > 0 && _cur1986 > math.MaxInt-_rhs1987 {
-				panic("integer overflow")
-			}
-			if _rhs1987 < 0 && _cur1986 < math.MinInt-_rhs1987 {
-				panic("integer overflow")
-			}
-			count = _cur1986 + _rhs1987
-		}()
-	}
-	return count
+	return len(xs)
 }
 
 // Osty: /tmp/selfhost_merged.osty:10393:1
 func frontCheckStringAt(xs []string, idx int) string {
-	// Osty: /tmp/selfhost_merged.osty:10394:5
-	i := 0
-	_ = i
-	// Osty: /tmp/selfhost_merged.osty:10395:5
-	for _, x := range xs {
-		// Osty: /tmp/selfhost_merged.osty:10396:9
-		if i == idx {
-			// Osty: /tmp/selfhost_merged.osty:10397:13
-			return x
-		}
-		// Osty: /tmp/selfhost_merged.osty:10399:9
-		func() {
-			var _cur1988 int = i
-			var _rhs1989 int = 1
-			if _rhs1989 > 0 && _cur1988 > math.MaxInt-_rhs1989 {
-				panic("integer overflow")
-			}
-			if _rhs1989 < 0 && _cur1988 < math.MinInt-_rhs1989 {
-				panic("integer overflow")
-			}
-			i = _cur1988 + _rhs1989
-		}()
+	if idx >= 0 && idx < len(xs) {
+		return xs[idx]
 	}
 	return "Invalid"
 }
@@ -26473,46 +26423,18 @@ func frontCheckStringDrop(xs []string, start int) []string {
 
 // Osty: /tmp/selfhost_merged.osty:10416:1
 func frontCheckIntAt(xs []int, idx int) int {
-	// Osty: /tmp/selfhost_merged.osty:10417:5
-	i := 0
-	_ = i
-	// Osty: /tmp/selfhost_merged.osty:10418:5
-	for _, x := range xs {
-		// Osty: /tmp/selfhost_merged.osty:10419:9
-		if i == idx {
-			// Osty: /tmp/selfhost_merged.osty:10420:13
-			return x
-		}
-		// Osty: /tmp/selfhost_merged.osty:10422:9
-		func() {
-			var _cur1992 int = i
-			var _rhs1993 int = 1
-			if _rhs1993 > 0 && _cur1992 > math.MaxInt-_rhs1993 {
-				panic("integer overflow")
-			}
-			if _rhs1993 < 0 && _cur1992 < math.MinInt-_rhs1993 {
-				panic("integer overflow")
-			}
-			i = _cur1992 + _rhs1993
-		}()
+	if idx >= 0 && idx < len(xs) {
+		return xs[idx]
 	}
 	return -1
 }
 
 // Osty: /tmp/selfhost_merged.osty:10427:1
 func frontCheckLastPathSegment(path string) string {
-	// Osty: /tmp/selfhost_merged.osty:10428:5
-	parts := strings.Split(path, ".")
-	_ = parts
-	// Osty: /tmp/selfhost_merged.osty:10429:5
-	last := path
-	_ = last
-	// Osty: /tmp/selfhost_merged.osty:10430:5
-	for _, part := range parts {
-		// Osty: /tmp/selfhost_merged.osty:10431:9
-		last = part
+	if idx := strings.LastIndexByte(path, '.'); idx >= 0 && idx+1 < len(path) {
+		return path[idx+1:]
 	}
-	return last
+	return path
 }
 
 // Osty: /tmp/selfhost_merged.osty:10436:1
@@ -26522,82 +26444,50 @@ func frontCheckTypeHead(typeName string) string {
 
 // Osty: /tmp/selfhost_merged.osty:10440:1
 func frontCheckParseType(typeName string) *FrontTypeView {
-	// Osty: /tmp/selfhost_merged.osty:10441:5
 	text := strings.TrimSpace(typeName)
-	_ = text
-	// Osty: /tmp/selfhost_merged.osty:10442:5
 	if text == "" {
-		// Osty: /tmp/selfhost_merged.osty:10443:9
-		return &FrontTypeView{kind: "invalid", head: "Invalid", args: make([]string, 0, 1), params: make([]string, 0, 1), ret: ""}
+		return frontCheckInvalidTypeView
 	}
-	// Osty: /tmp/selfhost_merged.osty:10445:5
+	if cached, ok := frontCheckTypeViewCache.Load(text); ok {
+		return cached.(*FrontTypeView)
+	}
+	view := frontCheckParseTypeSlow(text)
+	actual, _ := frontCheckTypeViewCache.LoadOrStore(text, view)
+	return actual.(*FrontTypeView)
+}
+
+func frontCheckParseTypeSlow(text string) *FrontTypeView {
 	if strings.HasPrefix(text, "(") && strings.HasSuffix(text, ")") {
-		// Osty: /tmp/selfhost_merged.osty:10446:9
-		inner := strings.TrimSuffix(strings.TrimPrefix(text, "("), ")")
-		_ = inner
-		// Osty: /tmp/selfhost_merged.osty:10447:9
-		var elems []string = make([]string, 0, 1)
-		_ = elems
-		// Osty: /tmp/selfhost_merged.osty:10448:9
+		inner := text[1 : len(text)-1]
+		elems := []string{}
 		if strings.TrimSpace(inner) != "" {
-			// Osty: /tmp/selfhost_merged.osty:10449:13
 			elems = frontCheckSplitTopLevel(inner)
 		}
-		// Osty: /tmp/selfhost_merged.osty:10451:9
-		return &FrontTypeView{kind: "tuple", head: "Tuple", args: elems, params: make([]string, 0, 1), ret: ""}
+		return &FrontTypeView{kind: "tuple", head: "Tuple", args: elems, params: []string{}, ret: ""}
 	}
-	// Osty: /tmp/selfhost_merged.osty:10453:5
 	if strings.HasPrefix(text, "fn(") {
-		// Osty: /tmp/selfhost_merged.osty:10454:9
 		paramsText := frontCheckFnParamsTextRaw(text)
-		_ = paramsText
-		// Osty: /tmp/selfhost_merged.osty:10455:9
-		var params []string = make([]string, 0, 1)
-		_ = params
-		// Osty: /tmp/selfhost_merged.osty:10456:9
+		params := []string{}
 		if strings.TrimSpace(paramsText) != "" {
-			// Osty: /tmp/selfhost_merged.osty:10457:13
 			params = frontCheckSplitTopLevel(paramsText)
 		}
-		// Osty: /tmp/selfhost_merged.osty:10459:9
 		ret := frontCheckFnReturnRaw(text)
-		_ = ret
-		// Osty: /tmp/selfhost_merged.osty:10460:9
-		return &FrontTypeView{kind: "fn", head: "fn", args: make([]string, 0, 1), params: params, ret: ret}
+		return &FrontTypeView{kind: "fn", head: "fn", args: []string{}, params: params, ret: ret}
 	}
-	// Osty: /tmp/selfhost_merged.osty:10462:5
 	head := frontCheckRawTypeHead(text)
-	_ = head
-	// Osty: /tmp/selfhost_merged.osty:10463:5
 	argsText := frontCheckGenericArgsTextRaw(text, head)
-	_ = argsText
-	// Osty: /tmp/selfhost_merged.osty:10464:5
-	var args []string = make([]string, 0, 1)
-	_ = args
-	// Osty: /tmp/selfhost_merged.osty:10465:5
-	if strings.TrimSpace(argsText) != "" {
-		// Osty: /tmp/selfhost_merged.osty:10466:9
-		args = frontCheckSplitTopLevel(argsText)
+	if argsText == "" {
+		return &FrontTypeView{kind: "named", head: head, args: []string{}, params: []string{}, ret: ""}
 	}
-	return &FrontTypeView{kind: "named", head: head, args: args, params: make([]string, 0, 1), ret: ""}
+	return &FrontTypeView{kind: "named", head: head, args: frontCheckSplitTopLevel(argsText), params: []string{}, ret: ""}
 }
 
 // Osty: /tmp/selfhost_merged.osty:10471:1
 func frontCheckRawTypeHead(typeName string) string {
-	// Osty: /tmp/selfhost_merged.osty:10472:5
-	head := ""
-	_ = head
-	// Osty: /tmp/selfhost_merged.osty:10473:5
-	for _, unit := range strings.Split(typeName, "") {
-		// Osty: /tmp/selfhost_merged.osty:10474:9
-		if unit == "<" {
-			// Osty: /tmp/selfhost_merged.osty:10475:13
-			return head
-		}
-		// Osty: /tmp/selfhost_merged.osty:10477:9
-		head = fmt.Sprintf("%s%s", ostyToString(head), ostyToString(unit))
+	if idx := strings.IndexByte(typeName, '<'); idx >= 0 {
+		return typeName[:idx]
 	}
-	return head
+	return typeName
 }
 
 // Osty: /tmp/selfhost_merged.osty:10482:1
@@ -26607,12 +26497,10 @@ func frontCheckGenericArgsText(typeName string) string {
 
 // Osty: /tmp/selfhost_merged.osty:10486:1
 func frontCheckGenericArgsTextRaw(typeName string, head string) string {
-	// Osty: /tmp/selfhost_merged.osty:10487:5
-	if !(strings.HasPrefix(typeName, fmt.Sprintf("%s<", ostyToString(head)))) || !(strings.HasSuffix(typeName, ">")) {
-		// Osty: /tmp/selfhost_merged.osty:10488:9
+	if len(typeName) <= len(head)+1 || !strings.HasPrefix(typeName, head) || typeName[len(head)] != '<' || typeName[len(typeName)-1] != '>' {
 		return ""
 	}
-	return strings.TrimSuffix(strings.TrimPrefix(typeName, fmt.Sprintf("%s<", ostyToString(head))), ">")
+	return typeName[len(head)+1 : len(typeName)-1]
 }
 
 // Osty: /tmp/selfhost_merged.osty:10493:1
@@ -26622,115 +26510,52 @@ func frontCheckGenericArgs(typeName string) []string {
 
 // Osty: /tmp/selfhost_merged.osty:10497:1
 func frontCheckNamedType(head string, args []string) string {
-	// Osty: /tmp/selfhost_merged.osty:10498:5
 	if frontCheckStringCount(args) == 0 {
-		// Osty: /tmp/selfhost_merged.osty:10499:9
 		return head
 	}
-	return fmt.Sprintf("%s<%s>", ostyToString(head), ostyToString(frontCheckJoinTypes(args)))
+	return head + "<" + frontCheckJoinTypes(args) + ">"
 }
 
 // Osty: /tmp/selfhost_merged.osty:10504:1
 func frontCheckTupleType(elems []string) string {
-	// Osty: /tmp/selfhost_merged.osty:10505:5
 	if frontCheckStringCount(elems) == 0 {
-		// Osty: /tmp/selfhost_merged.osty:10506:9
 		return "()"
 	}
-	return fmt.Sprintf("(%s)", ostyToString(frontCheckJoinTypes(elems)))
+	return "(" + frontCheckJoinTypes(elems) + ")"
 }
 
 // Osty: /tmp/selfhost_merged.osty:10511:1
 func frontCheckSplitTopLevel(text string) []string {
-	// Osty: /tmp/selfhost_merged.osty:10512:5
-	var out []string = make([]string, 0, 1)
-	_ = out
-	// Osty: /tmp/selfhost_merged.osty:10513:5
-	cur := ""
-	_ = cur
-	// Osty: /tmp/selfhost_merged.osty:10514:5
+	out := make([]string, 0, 1)
+	start := 0
 	angle := 0
-	_ = angle
-	// Osty: /tmp/selfhost_merged.osty:10515:5
 	paren := 0
-	_ = paren
-	// Osty: /tmp/selfhost_merged.osty:10516:5
-	for _, unit := range strings.Split(text, "") {
-		// Osty: /tmp/selfhost_merged.osty:10517:9
-		if unit == "<" {
-			// Osty: /tmp/selfhost_merged.osty:10518:13
-			func() {
-				var _cur1994 int = angle
-				var _rhs1995 int = 1
-				if _rhs1995 > 0 && _cur1994 > math.MaxInt-_rhs1995 {
-					panic("integer overflow")
+	for i := 0; i < len(text); i++ {
+		switch text[i] {
+		case '<':
+			angle++
+		case '>':
+			if angle > 0 {
+				angle--
+			}
+		case '(':
+			paren++
+		case ')':
+			if paren > 0 {
+				paren--
+			}
+		case ',':
+			if angle == 0 && paren == 0 {
+				part := strings.TrimSpace(text[start:i])
+				if part != "" {
+					out = append(out, part)
 				}
-				if _rhs1995 < 0 && _cur1994 < math.MinInt-_rhs1995 {
-					panic("integer overflow")
-				}
-				angle = _cur1994 + _rhs1995
-			}()
-			// Osty: /tmp/selfhost_merged.osty:10519:13
-			cur = fmt.Sprintf("%s%s", ostyToString(cur), ostyToString(unit))
-		} else if unit == ">" {
-			// Osty: /tmp/selfhost_merged.osty:10521:13
-			func() {
-				var _cur1996 int = angle
-				var _rhs1997 int = 1
-				if _rhs1997 < 0 && _cur1996 > math.MaxInt+_rhs1997 {
-					panic("integer overflow")
-				}
-				if _rhs1997 > 0 && _cur1996 < math.MinInt+_rhs1997 {
-					panic("integer overflow")
-				}
-				angle = _cur1996 - _rhs1997
-			}()
-			// Osty: /tmp/selfhost_merged.osty:10522:13
-			cur = fmt.Sprintf("%s%s", ostyToString(cur), ostyToString(unit))
-		} else if unit == "(" {
-			// Osty: /tmp/selfhost_merged.osty:10524:13
-			func() {
-				var _cur1998 int = paren
-				var _rhs1999 int = 1
-				if _rhs1999 > 0 && _cur1998 > math.MaxInt-_rhs1999 {
-					panic("integer overflow")
-				}
-				if _rhs1999 < 0 && _cur1998 < math.MinInt-_rhs1999 {
-					panic("integer overflow")
-				}
-				paren = _cur1998 + _rhs1999
-			}()
-			// Osty: /tmp/selfhost_merged.osty:10525:13
-			cur = fmt.Sprintf("%s%s", ostyToString(cur), ostyToString(unit))
-		} else if unit == ")" {
-			// Osty: /tmp/selfhost_merged.osty:10527:13
-			func() {
-				var _cur2000 int = paren
-				var _rhs2001 int = 1
-				if _rhs2001 < 0 && _cur2000 > math.MaxInt+_rhs2001 {
-					panic("integer overflow")
-				}
-				if _rhs2001 > 0 && _cur2000 < math.MinInt+_rhs2001 {
-					panic("integer overflow")
-				}
-				paren = _cur2000 - _rhs2001
-			}()
-			// Osty: /tmp/selfhost_merged.osty:10528:13
-			cur = fmt.Sprintf("%s%s", ostyToString(cur), ostyToString(unit))
-		} else if unit == "," && angle == 0 && paren == 0 {
-			// Osty: /tmp/selfhost_merged.osty:10530:13
-			func() struct{} { out = append(out, strings.TrimSpace(cur)); return struct{}{} }()
-			// Osty: /tmp/selfhost_merged.osty:10531:13
-			cur = ""
-		} else {
-			// Osty: /tmp/selfhost_merged.osty:10533:13
-			cur = fmt.Sprintf("%s%s", ostyToString(cur), ostyToString(unit))
+				start = i + 1
+			}
 		}
 	}
-	// Osty: /tmp/selfhost_merged.osty:10536:5
-	if strings.TrimSpace(cur) != "" {
-		// Osty: /tmp/selfhost_merged.osty:10537:9
-		func() struct{} { out = append(out, strings.TrimSpace(cur)); return struct{}{} }()
+	if part := strings.TrimSpace(text[start:]); part != "" {
+		out = append(out, part)
 	}
 	return out
 }
@@ -31809,74 +31634,14 @@ func frontCheckFnParamsText(typeName string) string {
 
 // Osty: /tmp/selfhost_merged.osty:13022:1
 func frontCheckFnParamsTextRaw(typeName string) string {
-	// Osty: /tmp/selfhost_merged.osty:13023:5
-	params := ""
-	_ = params
-	// Osty: /tmp/selfhost_merged.osty:13024:5
-	depth := 0
-	_ = depth
-	// Osty: /tmp/selfhost_merged.osty:13025:5
-	i := 0
-	_ = i
-	// Osty: /tmp/selfhost_merged.osty:13026:5
-	for _, unit := range strings.Split(typeName, "") {
-		// Osty: /tmp/selfhost_merged.osty:13027:9
-		if i >= 3 {
-			// Osty: /tmp/selfhost_merged.osty:13028:13
-			if unit == "(" {
-				// Osty: /tmp/selfhost_merged.osty:13029:17
-				func() {
-					var _cur2228 int = depth
-					var _rhs2229 int = 1
-					if _rhs2229 > 0 && _cur2228 > math.MaxInt-_rhs2229 {
-						panic("integer overflow")
-					}
-					if _rhs2229 < 0 && _cur2228 < math.MinInt-_rhs2229 {
-						panic("integer overflow")
-					}
-					depth = _cur2228 + _rhs2229
-				}()
-				// Osty: /tmp/selfhost_merged.osty:13030:17
-				params = fmt.Sprintf("%s%s", ostyToString(params), ostyToString(unit))
-			} else if unit == ")" {
-				// Osty: /tmp/selfhost_merged.osty:13032:17
-				if depth == 0 {
-					// Osty: /tmp/selfhost_merged.osty:13033:21
-					return params
-				}
-				// Osty: /tmp/selfhost_merged.osty:13035:17
-				func() {
-					var _cur2230 int = depth
-					var _rhs2231 int = 1
-					if _rhs2231 < 0 && _cur2230 > math.MaxInt+_rhs2231 {
-						panic("integer overflow")
-					}
-					if _rhs2231 > 0 && _cur2230 < math.MinInt+_rhs2231 {
-						panic("integer overflow")
-					}
-					depth = _cur2230 - _rhs2231
-				}()
-				// Osty: /tmp/selfhost_merged.osty:13036:17
-				params = fmt.Sprintf("%s%s", ostyToString(params), ostyToString(unit))
-			} else {
-				// Osty: /tmp/selfhost_merged.osty:13038:17
-				params = fmt.Sprintf("%s%s", ostyToString(params), ostyToString(unit))
-			}
-		}
-		// Osty: /tmp/selfhost_merged.osty:13041:9
-		func() {
-			var _cur2232 int = i
-			var _rhs2233 int = 1
-			if _rhs2233 > 0 && _cur2232 > math.MaxInt-_rhs2233 {
-				panic("integer overflow")
-			}
-			if _rhs2233 < 0 && _cur2232 < math.MinInt-_rhs2233 {
-				panic("integer overflow")
-			}
-			i = _cur2232 + _rhs2233
-		}()
+	if !strings.HasPrefix(typeName, "fn(") {
+		return ""
 	}
-	return params
+	end := frontCheckFnParamsEnd(typeName)
+	if end <= 3 {
+		return ""
+	}
+	return typeName[3:end]
 }
 
 // Osty: /tmp/selfhost_merged.osty:13046:1
@@ -31899,74 +31664,30 @@ func frontCheckFnReturnRaw(typeName string) string {
 
 // Osty: /tmp/selfhost_merged.osty:13058:1
 func frontCheckFnReturnTextRaw(typeName string) string {
-	// Osty: /tmp/selfhost_merged.osty:13059:5
-	rest := ""
-	_ = rest
-	// Osty: /tmp/selfhost_merged.osty:13060:5
-	depth := 0
-	_ = depth
-	// Osty: /tmp/selfhost_merged.osty:13061:5
-	i := 0
-	_ = i
-	// Osty: /tmp/selfhost_merged.osty:13062:5
-	found := false
-	_ = found
-	// Osty: /tmp/selfhost_merged.osty:13063:5
-	for _, unit := range strings.Split(typeName, "") {
-		// Osty: /tmp/selfhost_merged.osty:13064:9
-		if i >= 3 {
-			// Osty: /tmp/selfhost_merged.osty:13065:13
-			if found {
-				// Osty: /tmp/selfhost_merged.osty:13066:17
-				rest = fmt.Sprintf("%s%s", ostyToString(rest), ostyToString(unit))
-			} else if unit == "(" {
-				// Osty: /tmp/selfhost_merged.osty:13068:17
-				func() {
-					var _cur2234 int = depth
-					var _rhs2235 int = 1
-					if _rhs2235 > 0 && _cur2234 > math.MaxInt-_rhs2235 {
-						panic("integer overflow")
-					}
-					if _rhs2235 < 0 && _cur2234 < math.MinInt-_rhs2235 {
-						panic("integer overflow")
-					}
-					depth = _cur2234 + _rhs2235
-				}()
-			} else if unit == ")" {
-				// Osty: /tmp/selfhost_merged.osty:13070:17
-				if depth == 0 {
-					// Osty: /tmp/selfhost_merged.osty:13071:21
-					found = true
-				} else {
-					// Osty: /tmp/selfhost_merged.osty:13073:21
-					func() {
-						var _cur2236 int = depth
-						var _rhs2237 int = 1
-						if _rhs2237 < 0 && _cur2236 > math.MaxInt+_rhs2237 {
-							panic("integer overflow")
-						}
-						if _rhs2237 > 0 && _cur2236 < math.MinInt+_rhs2237 {
-							panic("integer overflow")
-						}
-						depth = _cur2236 - _rhs2237
-					}()
-				}
-			}
-		}
-		// Osty: /tmp/selfhost_merged.osty:13077:9
-		func() {
-			var _cur2238 int = i
-			var _rhs2239 int = 1
-			if _rhs2239 > 0 && _cur2238 > math.MaxInt-_rhs2239 {
-				panic("integer overflow")
-			}
-			if _rhs2239 < 0 && _cur2238 < math.MinInt-_rhs2239 {
-				panic("integer overflow")
-			}
-			i = _cur2238 + _rhs2239
-		}()
+	if !strings.HasPrefix(typeName, "fn(") {
+		return ""
 	}
-	return rest
+	end := frontCheckFnParamsEnd(typeName)
+	if end+1 >= len(typeName) {
+		return ""
+	}
+	return typeName[end+1:]
+}
+
+func frontCheckFnParamsEnd(typeName string) int {
+	depth := 0
+	for i := 3; i < len(typeName); i++ {
+		switch typeName[i] {
+		case '(':
+			depth++
+		case ')':
+			if depth == 0 {
+				return i
+			}
+			depth--
+		}
+	}
+	return len(typeName)
 }
 
 // Osty: /tmp/selfhost_merged.osty:13082:1
