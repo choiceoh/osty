@@ -584,6 +584,7 @@ in the same PR that lands a new piece.
 | `std.runtime.raw` stdlib module + nested-stub-path loader | landed | #319 |
 | Privilege gate body walker (let-types / turbofish / closure params inside fn bodies) | landed | #322 |
 | End-to-end fixture + regression test | landed | #325 |
+| `#[intrinsic]` body must be empty (`E0773`) | landed | #347 |
 
 **IR layer.** Every §19.6 annotation is now representable on
 `ir.FnDecl` / `ir.StructDecl`. No codegen attached yet for most.

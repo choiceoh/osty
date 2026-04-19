@@ -147,6 +147,9 @@ func File(f *ast.File, rr *resolve.Result, opts ...Opts) *Result {
 	if d := runNoAllocChecks(f, rr); len(d) > 0 {
 		result.Diags = append(result.Diags, d...)
 	}
+	if d := runIntrinsicBodyChecks(f); len(d) > 0 {
+		result.Diags = append(result.Diags, d...)
+	}
 	recordSelfhostDeclPass(opt.OnDecl, f, "collect")
 	recordSelfhostDeclPass(opt.OnDecl, f, "check")
 	return result
@@ -174,6 +177,9 @@ func Package(pkg *resolve.Package, pr *resolve.PackageResult, opts ...Opts) *Res
 			result.Diags = append(result.Diags, d...)
 		}
 		if d := runNoAllocChecks(pf.File, nil); len(d) > 0 {
+			result.Diags = append(result.Diags, d...)
+		}
+		if d := runIntrinsicBodyChecks(pf.File); len(d) > 0 {
 			result.Diags = append(result.Diags, d...)
 		}
 		recordSelfhostDeclPass(opt.OnDecl, pf.File, "collect")
@@ -234,6 +240,9 @@ func Workspace(
 				pkgResult.Diags = append(pkgResult.Diags, d...)
 			}
 			if d := runNoAllocChecks(pf.File, nil); len(d) > 0 {
+				pkgResult.Diags = append(pkgResult.Diags, d...)
+			}
+			if d := runIntrinsicBodyChecks(pf.File); len(d) > 0 {
 				pkgResult.Diags = append(pkgResult.Diags, d...)
 			}
 			recordSelfhostDeclPass(opt.OnDecl, pf.File, "collect")
