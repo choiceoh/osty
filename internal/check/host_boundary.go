@@ -35,7 +35,8 @@ type nativePackageChecker interface {
 }
 
 type nativeCheckRequest struct {
-	Source string `json:"source"`
+	Source  string                      `json:"source,omitempty"`
+	Package *selfhost.PackageCheckInput `json:"package,omitempty"`
 }
 
 type nativeCheckSummary struct {
@@ -95,7 +96,14 @@ type nativeCheckerExec struct {
 }
 
 func (e nativeCheckerExec) CheckSourceStructured(src []byte) (nativeCheckResult, error) {
-	req := nativeCheckRequest{Source: string(src)}
+	return e.run(nativeCheckRequest{Source: string(src)})
+}
+
+func (e nativeCheckerExec) CheckPackageStructured(input selfhost.PackageCheckInput) (nativeCheckResult, error) {
+	return e.run(nativeCheckRequest{Package: &input})
+}
+
+func (e nativeCheckerExec) run(req nativeCheckRequest) (nativeCheckResult, error) {
 	payload, err := json.Marshal(req)
 	if err != nil {
 		return nativeCheckResult{}, fmt.Errorf("marshal native checker request: %w", err)
@@ -305,11 +313,6 @@ func applySelfhostPackageResult(result *Result, pkg *resolve.Package, _ *resolve
 	switch r := runner.(type) {
 	case nativePackageChecker:
 		checked, err = r.CheckPackageStructured(input)
-	case nativeCheckerExec:
-		// The external checker protocol is still source-only; keep package and
-		// workspace runs on the structured in-process path until that protocol
-		// grows a package-native request shape.
-		checked, err = embeddedNativeChecker{}.CheckPackageStructured(input)
 	default:
 		checked, err = runner.CheckSourceStructured(src.source)
 	}

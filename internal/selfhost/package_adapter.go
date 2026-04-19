@@ -9,80 +9,80 @@ import (
 )
 
 type PackageCheckFile struct {
-	Source []byte
-	File   *ast.File
+	Source []byte    `json:"source,omitempty"`
+	File   *ast.File `json:"-"`
 	// SourceMap projects original parser AST spans into the canonical checker
 	// source held in Source. Nil when Source is a direct passthrough.
-	SourceMap *sourcemap.Map
-	Base      int
+	SourceMap *sourcemap.Map `json:"-"`
+	Base      int            `json:"base,omitempty"`
 	// Name is the display filename surfaced in diagnostic telemetry (typically
 	// a basename like `user.osty`). Empty when unknown; the telemetry suffix
 	// falls back to `@Lnn:Cnn` without a filename prefix in that case.
-	Name string
+	Name string `json:"name,omitempty"`
 }
 
 type PackageCheckGenericBound struct {
-	TyParam       string
-	InterfaceType string
+	TyParam       string `json:"tyParam,omitempty"`
+	InterfaceType string `json:"interfaceType,omitempty"`
 }
 
 type PackageCheckFn struct {
-	Name          string
-	Owner         string
-	ReceiverType  string
-	ReturnType    string
-	ParamNames    []string
-	ParamTypes    []string
-	Generics      []string
-	GenericBounds []PackageCheckGenericBound
+	Name          string                     `json:"name,omitempty"`
+	Owner         string                     `json:"owner,omitempty"`
+	ReceiverType  string                     `json:"receiverType,omitempty"`
+	ReturnType    string                     `json:"returnType,omitempty"`
+	ParamNames    []string                   `json:"paramNames,omitempty"`
+	ParamTypes    []string                   `json:"paramTypes,omitempty"`
+	Generics      []string                   `json:"generics,omitempty"`
+	GenericBounds []PackageCheckGenericBound `json:"genericBounds,omitempty"`
 }
 
 type PackageCheckField struct {
-	Owner      string
-	Name       string
-	TypeName   string
-	HasDefault bool
+	Owner      string `json:"owner,omitempty"`
+	Name       string `json:"name,omitempty"`
+	TypeName   string `json:"typeName,omitempty"`
+	HasDefault bool   `json:"hasDefault,omitempty"`
 }
 
 type PackageCheckVariant struct {
-	Owner      string
-	Name       string
-	FieldTypes []string
-	Generics   []string
+	Owner      string   `json:"owner,omitempty"`
+	Name       string   `json:"name,omitempty"`
+	FieldTypes []string `json:"fieldTypes,omitempty"`
+	Generics   []string `json:"generics,omitempty"`
 }
 
 type PackageCheckAlias struct {
-	Name     string
-	Target   string
-	Generics []string
+	Name     string   `json:"name,omitempty"`
+	Target   string   `json:"target,omitempty"`
+	Generics []string `json:"generics,omitempty"`
 }
 
 type PackageCheckType struct {
-	Name          string
-	Kind          string
-	Generics      []string
-	GenericBounds []PackageCheckGenericBound
+	Name          string                     `json:"name,omitempty"`
+	Kind          string                     `json:"kind,omitempty"`
+	Generics      []string                   `json:"generics,omitempty"`
+	GenericBounds []PackageCheckGenericBound `json:"genericBounds,omitempty"`
 }
 
 type PackageCheckInterfaceExt struct {
-	Owner         string
-	InterfaceType string
+	Owner         string `json:"owner,omitempty"`
+	InterfaceType string `json:"interfaceType,omitempty"`
 }
 
 type PackageCheckImport struct {
-	Alias           string
-	Functions       []PackageCheckFn
-	Fields          []PackageCheckField
-	Variants        []PackageCheckVariant
-	Aliases         []PackageCheckAlias
-	TypeDecls       []PackageCheckType
-	InterfaceExts   []PackageCheckInterfaceExt
-	RegisterAsIface []string
+	Alias           string                     `json:"alias,omitempty"`
+	Functions       []PackageCheckFn           `json:"functions,omitempty"`
+	Fields          []PackageCheckField        `json:"fields,omitempty"`
+	Variants        []PackageCheckVariant      `json:"variants,omitempty"`
+	Aliases         []PackageCheckAlias        `json:"aliases,omitempty"`
+	TypeDecls       []PackageCheckType         `json:"typeDecls,omitempty"`
+	InterfaceExts   []PackageCheckInterfaceExt `json:"interfaceExts,omitempty"`
+	RegisterAsIface []string                   `json:"registerAsIface,omitempty"`
 }
 
 type PackageCheckInput struct {
-	Files   []PackageCheckFile
-	Imports []PackageCheckImport
+	Files   []PackageCheckFile   `json:"files,omitempty"`
+	Imports []PackageCheckImport `json:"imports,omitempty"`
 }
 
 // CheckPackageStructured lowers one structured package input into a synthetic
