@@ -712,6 +712,49 @@ match 분해)를 추가한다.
 - C API/cgo binding은 incremental compile, object cache, debug metadata 품질이
   textual IR 방식의 한계에 닿았을 때만 재검토한다.
 
+## Bootstrap-only 호스트 어댑터 (astbridge 포함)
+
+**요약**: 현재 `toolchain/*.osty`의 4개 파일은 Go 호스트 바인딩을 통과하는 **bootstrap-only 어댑터**다. 이들은 LLVM 셀프-컴파일 경로 밖에 있고, whole-toolchain LLVM probe에서 자동으로 스킵된다. 이 구조 덕분에 sub-wall 히스토그램과 probe가 "셀프호스팅 시 진짜 남는 벽"만 보여준다.
+
+### 4개 bootstrap-only 파일
+
+| 파일 | FFI | 역할 | native 대체 경로 |
+|---|---|---|---|
+| `toolchain/ast_lower.osty` | `use runtime.golegacy.astbridge` | parser.osty AstArena → Go `*ast.File` 변환 | CLI가 Osty-native check/llvmgen을 호출하도록 재배선되면 dead code |
+| `toolchain/ci.osty` | `use go "github.com/osty/osty/internal/cihost"` | CI 드라이버 (format/lint/snapshot/manifest 호스트 호출) | native runtime ABI의 fs/process primitive 정의 후 포팅 |
+| `toolchain/docgen.osty` | `use go` | 문서 생성기 (파일 I/O + HTML emit) | 동상 |
+| `toolchain/manifest_validation.osty` | `use go` | manifest/lockfile 검증 (파일 해시, 경로 검사) | 동상 |
+
+### 분류 규칙
+
+`internal/llvmgen/multifile_probe_test.go:isBootstrapOnlyOstyFile`가 다음 두 패턴 중 하나라도 포함한 파일을 자동 bootstrap-only로 분류한다:
+
+- `use runtime.golegacy.*` — 명시적 legacy bootstrap 브릿지
+- `use go "..."` — 임의 Go 패키지 호스트 바인딩 (CLAUDE.md "호스트 경계" 허용 카테고리)
+
+두 패턴 모두 LLVM native lowering 없이는 LLVM binary로 self-compile 불가. 명시적 `// bootstrap-only` 주석 마커 대신 FFI 스탠자 존재를 시맨틱 시그널로 사용한다. 새 파일 추가 시 별도 작업 불필요 — `use go` / `use runtime.golegacy`를 쓰면 자동 분류됨.
+
+### Probe 쌍
+
+- `TestProbeWholeToolchainMerged` — 모든 파일 포함. 현재 첫 wall **LLVM002 `runtime.golegacy.astbridge`** (bootstrap artifact).
+- `TestProbeNativeToolchainMerged` — bootstrap-only 파일 제외. 현재 첫 wall **LLVM011 `fn_param_struct_type: Char`** (`charToDigit` param). **진짜 native 경로의 다음 벽**.
+
+두 probe의 첫-wall 차이 = bootstrap 브릿지가 히스토그램에 주입하는 노이즈 양. migration 진전은 native probe의 first-wall 이동으로 측정한다.
+
+### astbridge 제거 경로
+
+astbridge는 한 방에 제거하지 않고 **CLI 재배선이 완료되면 자동 dead code**가 되는 구조다:
+
+1. **현재 상태**: Go CLI (`cmd/osty`) → `internal/selfhost/parse.go:Parse` → `ast_lower.osty`가 `*ast.File` 생성 → Go `internal/check` / `internal/resolve` / `internal/llvmgen` 소비.
+2. **목표 상태**: Go CLI → Osty-native `check.osty`/`llvmgen.osty`/`resolve.osty` 직접 호출 → 이들은 이미 parser.osty `AstArena` + `AstNodeKind`를 네이티브 소비. `ast_lower.osty`와 `internal/selfhost/astbridge/` 둘 다 unused → 삭제.
+3. **전제 조건**: Osty-native downstream을 Go CLI에서 호출할 수 있는 ABI. 이는 Phase 4 runtime ABI 작업과 연결된다.
+
+중요: **`toolchain/ast.osty` 같은 신규 네이티브 AST 타입을 도입하지 않는다.** parser.osty의 `AstArena`가 이미 네이티브 AST 역할을 하고 있고, native downstream 모듈 전부 이를 이미 소비 중. 신규 AST 타입 도입은 순수 중복 작업이며 불필요하다 (이 결정은 PR #372에서 확정).
+
+### 비-bootstrap `use go` 파일이 앞으로 추가되면
+
+CLAUDE.md 호스트 경계 규칙상 `use go`는 특별 허가 영역(`cmd/*`, I/O, CLI glue)에서만 허용된다. 새로운 `use go` 파일이 들어오면 자동으로 bootstrap-only probe에서 스킵되므로 native path에는 영향 없음. 단, 그 파일의 LLVM native 대체 계획은 이 문서 § 4개 테이블에 추가 필수.
+
 ## 테스트 전략
 
 - Unit:
