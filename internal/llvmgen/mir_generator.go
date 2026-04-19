@@ -3620,6 +3620,9 @@ func (g *mirGen) emitBinary(op mir.BinaryOp, left, right string, argT, resT mir.
 	if (op == mir.BinEq || op == mir.BinNeq) && isHeapEqualityType(argT) {
 		return g.emitHeapEquality(op, left, right)
 	}
+	if isStringOrderingBinOp(op) && isStringPrimType(argT) {
+		return g.emitStringOrdering(op, left, right)
+	}
 	argLLVM := g.llvmType(argT)
 	resLLVM := g.llvmType(resT)
 	isFloat := isFloatType(argT)
@@ -3755,6 +3758,66 @@ func (g *mirGen) emitHeapEquality(op mir.BinaryOp, left, right string) (string, 
 	g.fnBuf.WriteString(eq)
 	g.fnBuf.WriteString(", true\n")
 	return neq, nil
+}
+
+// isStringPrimType reports whether t is the String primitive. Ordering
+// through osty_rt_strings_Compare is String-only; Bytes ordering has no
+// runtime support yet and still hits the raw-icmp path.
+func isStringPrimType(t mir.Type) bool {
+	p, ok := t.(*ir.PrimType)
+	return ok && p.Kind == ir.PrimString
+}
+
+func isStringOrderingBinOp(op mir.BinaryOp) bool {
+	switch op {
+	case mir.BinLt, mir.BinLeq, mir.BinGt, mir.BinGeq:
+		return true
+	}
+	return false
+}
+
+// emitStringOrdering lowers `<` / `<=` / `>` / `>=` on String values to
+// a call to `osty_rt_strings_Compare` (returning i64 -1/0/+1) followed
+// by `icmp <pred> i64 result, 0`. Without this routing the raw icmp
+// path would compare the underlying ptrs, which yields undefined
+// results for content ordering.
+func (g *mirGen) emitStringOrdering(op mir.BinaryOp, left, right string) (string, error) {
+	sym := llvmStringRuntimeCompareSymbol()
+	g.declareRuntime(sym, fmt.Sprintf("declare i64 @%s(ptr, ptr)", sym))
+	cmp := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(cmp)
+	g.fnBuf.WriteString(" = call i64 @")
+	g.fnBuf.WriteString(sym)
+	g.fnBuf.WriteString("(ptr ")
+	g.fnBuf.WriteString(left)
+	g.fnBuf.WriteString(", ptr ")
+	g.fnBuf.WriteString(right)
+	g.fnBuf.WriteString(")\n")
+	pred := stringOrderingPredicate(op)
+	out := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(out)
+	g.fnBuf.WriteString(" = icmp ")
+	g.fnBuf.WriteString(pred)
+	g.fnBuf.WriteString(" i64 ")
+	g.fnBuf.WriteString(cmp)
+	g.fnBuf.WriteString(", 0\n")
+	return out, nil
+}
+
+func stringOrderingPredicate(op mir.BinaryOp) string {
+	switch op {
+	case mir.BinLt:
+		return "slt"
+	case mir.BinLeq:
+		return "sle"
+	case mir.BinGt:
+		return "sgt"
+	case mir.BinGeq:
+		return "sge"
+	}
+	return ""
 }
 
 // ==== strings ====

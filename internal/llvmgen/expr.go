@@ -969,13 +969,20 @@ func (g *generator) emitRuntimeBoolToString(v value) (value, error) {
 }
 
 func (g *generator) emitRuntimeStringCompare(op token.Kind, left, right value) (value, error) {
-	if op != token.EQ && op != token.NEQ {
-		return value{}, unsupportedf("type-system", "compare type %s", left.typ)
+	switch op {
+	case token.EQ, token.NEQ:
+		g.declareRuntimeSymbol("osty_rt_strings_Equal", "i1", []paramInfo{
+			{typ: "ptr"},
+			{typ: "ptr"},
+		})
+	case token.LT, token.LEQ, token.GT, token.GEQ:
+		g.declareRuntimeSymbol(llvmStringRuntimeCompareSymbol(), "i64", []paramInfo{
+			{typ: "ptr"},
+			{typ: "ptr"},
+		})
+	default:
+		return value{}, unsupportedf("expression", "comparison operator %q", op)
 	}
-	g.declareRuntimeSymbol("osty_rt_strings_Equal", "i1", []paramInfo{
-		{typ: "ptr"},
-		{typ: "ptr"},
-	})
 	emitter := g.toOstyEmitter()
 	out := llvmStringCompare(emitter, op.String(), toOstyValue(left), toOstyValue(right))
 	g.takeOstyEmitter(emitter)

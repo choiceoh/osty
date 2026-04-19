@@ -1211,6 +1211,7 @@ fn testLlvmStringRuntimeSymbolsAreOstyOwned() {
     testing.assertEq(llvmIntRuntimeToStringSymbol(), "osty_rt_int_to_string")
     testing.assertEq(llvmFloatRuntimeToStringSymbol(), "osty_rt_float_to_string")
     testing.assertEq(llvmStringRuntimeByteLenSymbol(), "osty_rt_strings_ByteLen")
+    testing.assertEq(llvmStringRuntimeCompareSymbol(), "osty_rt_strings_Compare")
 }
 
 fn testLlvmStringRuntimeDeclarationsAreOstyOwned() {
@@ -1223,6 +1224,7 @@ fn testLlvmStringRuntimeDeclarationsAreOstyOwned() {
     assertLlvmContains(declarations, "declare ptr @osty_rt_int_to_string(i64)")
     assertLlvmContains(declarations, "declare ptr @osty_rt_float_to_string(double)")
     assertLlvmContains(declarations, "declare i64 @osty_rt_strings_ByteLen(ptr)")
+    assertLlvmContains(declarations, "declare i64 @osty_rt_strings_Compare(ptr, ptr)")
 }
 
 fn testLlvmSmokeStringConcatIsOstyOwned() {
