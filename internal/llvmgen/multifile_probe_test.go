@@ -102,6 +102,77 @@ func TestProbeWholeToolchainMerged(t *testing.T) {
 	t.Logf("WHOLE TOOLCHAIN first wall: %s", formatWall(err))
 }
 
+// isBootstrapOnlyOstyFile reports whether the source is a
+// host-boundary bootstrap adapter — i.e., whether it declares either
+//
+//   - a `use runtime.golegacy.*` FFI (the legacy Go AST bridge), or
+//   - a `use go "..."` FFI (arbitrary Go package host binding)
+//
+// Both forms require the Osty compiler to be running under the
+// Go-hosted bootstrap CLI; neither has native LLVM runtime lowering
+// by design. Files carrying either stanza are skipped by the
+// native-path whole-toolchain probe. See LLVM_MIGRATION_PLAN.md
+// § "astbridge bootstrap-only adapter" for the migration path.
+func isBootstrapOnlyOstyFile(src []byte) bool {
+	s := string(src)
+	return strings.Contains(s, "use runtime.golegacy.") ||
+		strings.Contains(s, "use go \"")
+}
+
+// TestProbeNativeToolchainMerged is the whole-toolchain probe with
+// bootstrap-only files (those that import runtime.golegacy.*) filtered
+// out. Reveals the first real LLVM wall along the native self-host
+// path — the wall that remains once the CLI is rewired off the
+// Go-hosted bridge adapter. Info-only.
+//
+// Pair with TestProbeWholeToolchainMerged: the difference between the
+// two walls tells us how much signal the bootstrap bridge is injecting
+// into the histogram. Today: whole-merged → LLVM002 (bridge FFI);
+// native-merged → the next real backend gap.
+func TestProbeNativeToolchainMerged(t *testing.T) {
+	if testing.Short() {
+		t.Skip("info-only; slow; skipped in -short")
+	}
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+	dir := filepath.Join(root, "toolchain")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read toolchain: %v", err)
+	}
+	var files []string
+	var skipped []string
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasSuffix(name, ".osty") || strings.HasSuffix(name, "_test.osty") {
+			continue
+		}
+		src, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			continue
+		}
+		if isBootstrapOnlyOstyFile(src) {
+			skipped = append(skipped, name)
+			continue
+		}
+		files = append(files, name)
+	}
+	if len(skipped) == 0 {
+		t.Logf("no bootstrap-only files detected; this probe is equivalent to TestProbeWholeToolchainMerged")
+	} else {
+		t.Logf("bootstrap-only files skipped (%d): %s", len(skipped), strings.Join(skipped, ", "))
+	}
+	merged := mergeToolchainSources(t, root, files)
+	file, _ := parser.ParseDiagnostics(merged)
+	if file == nil {
+		t.Fatalf("native-toolchain merged parse returned nil (%d files, %d bytes)", len(files), len(merged))
+	}
+	_, err = generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/toolchain_native_merged.osty"})
+	t.Logf("NATIVE TOOLCHAIN first wall: %s", formatWall(err))
+}
+
 // TestProbeDiagnosticMergedWithLexer checks whether the LLVM011 wall on
 // diagnostic.osty is a real backend gap or just the single-file probe's
 // scope limitation. We concatenate diagnostic.osty + lexer.osty (which

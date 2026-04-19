@@ -1,3 +1,26 @@
+// ast_lower.osty — Osty-side bootstrap bridge adapter.
+//
+// Converts the self-hosted parser.osty arena (AstArena + AstNodeKind)
+// into the Go compiler's *ast.File representation by calling
+// runtime.golegacy.astbridge FFI functions. This file is
+// **bootstrap-only** and is NOT part of the LLVM self-compilation path.
+//
+// Downstream native toolchain modules (check.osty, llvmgen.osty,
+// resolve.osty, elab.osty, lint.osty, formatter_ast.osty) consume
+// the AstArena directly via `match node.kind { AstN... -> ... }` and
+// do not go through this adapter. ast_lower.osty is required only
+// because the outer Go CLI (internal/selfhost/parse.go:Parse) still
+// needs to return *ast.File to feed Go-hosted internal/check,
+// internal/resolve, and internal/llvmgen.
+//
+// LLVM whole-toolchain probes SKIP this file: any file containing
+// `use runtime.golegacy.*` is treated as bootstrap-only. The
+// resulting LLVM002 `runtime.golegacy.astbridge` diagnostic is
+// expected and does not represent a real backend gap. See
+// LLVM_MIGRATION_PLAN.md (§ "astbridge bootstrap-only adapter") for
+// the migration path: this adapter becomes dead code once the Go
+// CLI is rewired to Osty-native check/llvmgen consumers of AstArena.
+
 use std.strings as strings
 
 use runtime.golegacy.astbridge as astbridge {
