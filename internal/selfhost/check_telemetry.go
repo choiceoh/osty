@@ -1,8 +1,20 @@
 package selfhost
 
 import (
+	"fmt"
 	"strings"
 )
+
+// selfhostTokenPos resolves a diagnostic's start-token index back to a
+// display filename plus 1-based (line, column) so telemetry can pinpoint
+// the source location of each bucketed error. Filename is empty for
+// callers that don't carry per-token file provenance (the single-file
+// path already surfaces the filename in the dump label). ok=false when
+// the token index is out of range, negative, or the underlying token
+// carried no position. Callers pass nil when source position enrichment
+// is not available (e.g. external exec runners that lost stream access)
+// — the detail strings stay un-suffixed in that case.
+type selfhostTokenPos func(tokenIdx int) (file string, line int, col int, ok bool)
 
 // selfhostTypesAliasEqual reports whether two type names differ only by
 // a leading `alias.` qualifier on one side. FFI collection registers a
@@ -129,7 +141,11 @@ func selfhostLastPathSegment(path string) string {
 // typed checker's structured diagnostics. The old checker reported caller-site
 // buckets directly; the typed checker instead exposes stable diagnostic codes,
 // so we bucket errors by code and retain the rendered message as detail rows.
-func selfhostDiagnosticTelemetry(diags []*CheckDiagnostic) (map[string]int, map[string]map[string]int) {
+// When posLookup is non-nil, each detail row is suffixed with `@Lnn:Cnn`
+// pointing at the diagnostic's primary span, which lets
+// `osty check --dump-native-diags` pinpoint individual parity failures
+// instead of collapsing structurally-identical messages into one bucket.
+func selfhostDiagnosticTelemetry(diags []*CheckDiagnostic, posLookup selfhostTokenPos) (map[string]int, map[string]map[string]int) {
 	if len(diags) == 0 {
 		return nil, nil
 	}
@@ -151,6 +167,9 @@ func selfhostDiagnosticTelemetry(diags []*CheckDiagnostic) (map[string]int, map[
 		if detail == "" {
 			continue
 		}
+		if suffix := selfhostDiagnosticPosSuffix(d, posLookup); suffix != "" {
+			detail = detail + " " + suffix
+		}
 		if details == nil {
 			details = make(map[string]map[string]int)
 		}
@@ -162,6 +181,27 @@ func selfhostDiagnosticTelemetry(diags []*CheckDiagnostic) (map[string]int, map[
 		bucket[detail]++
 	}
 	return byContext, details
+}
+
+// selfhostDiagnosticPosSuffix renders the source-position tag appended
+// to each detail row. `@<file>:Lnn:Cnn` when the lookup surfaces a
+// filename (package/workspace mode where the dump label covers multiple
+// files), otherwise `@Lnn:Cnn` (single-file mode where the filename is
+// already in the dump label). Empty when posLookup is nil, the
+// diagnostic carries no valid span, or the lookup reports the token as
+// unresolved.
+func selfhostDiagnosticPosSuffix(d *CheckDiagnostic, posLookup selfhostTokenPos) string {
+	if d == nil || posLookup == nil {
+		return ""
+	}
+	file, line, col, ok := posLookup(d.start)
+	if !ok || line <= 0 || col <= 0 {
+		return ""
+	}
+	if file == "" {
+		return fmt.Sprintf("@L%d:C%d", line, col)
+	}
+	return fmt.Sprintf("@%s:L%d:C%d", file, line, col)
 }
 
 func selfhostDiagnosticIsError(d *CheckDiagnostic) bool {

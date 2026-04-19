@@ -2,6 +2,7 @@ package check
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/osty/osty/internal/ast"
@@ -27,9 +28,14 @@ func selfhostPackageCheckInput(pkg *resolve.Package, ws *resolve.Workspace, stdl
 		if segmentIdx < len(layout.files) {
 			base = layout.files[segmentIdx].base
 		}
+		name := ""
+		if pf.Path != "" {
+			name = filepath.Base(pf.Path)
+		}
 		input.Files = append(input.Files, selfhost.PackageCheckFile{
 			Source: append([]byte(nil), src...),
 			Base:   base,
+			Name:   name,
 		})
 		segmentIdx++
 	}

@@ -5,6 +5,10 @@ import "fmt"
 type PackageCheckFile struct {
 	Source []byte
 	Base   int
+	// Name is the display filename surfaced in diagnostic telemetry (typically
+	// a basename like `user.osty`). Empty when unknown; the telemetry suffix
+	// falls back to `@Lnn:Cnn` without a filename prefix in that case.
+	Name string
 }
 
 type PackageCheckGenericBound struct {
@@ -90,8 +94,15 @@ func CheckPackageStructured(input PackageCheckInput) (CheckResult, error) {
 }
 
 type selfhostPackageTokenLayout struct {
-	starts []int
-	ends   []int
+	starts     []int
+	ends       []int
+	startLines []int
+	startCols  []int
+	// fileIdx[i] indexes into files for token i. -1 when the file carried no
+	// display name (selfhostLayoutTokenPos then emits an empty filename and
+	// the telemetry suffix drops back to `@Lnn:Cnn`).
+	fileIdx []int
+	files   []string
 }
 
 func selfhostBuildPackageAst(files []PackageCheckFile) (*AstFile, *selfhostPackageTokenLayout, error) {
@@ -111,7 +122,12 @@ func selfhostBuildPackageAst(files []PackageCheckFile) (*AstFile, *selfhostPacka
 			return nil, nil, fmt.Errorf("selfhost package adapter: parse errors: %s", astFormatErrors(parsed))
 		}
 		tokenBase := len(layout.starts)
-		selfhostAppendTokenLayout(layout, lexed, file.Base)
+		fileIdx := -1
+		if file.Name != "" {
+			fileIdx = len(layout.files)
+			layout.files = append(layout.files, file.Name)
+		}
+		selfhostAppendTokenLayout(layout, lexed, file.Base, fileIdx)
 		selfhostMergeAstArena(arena, parsed.arena, tokenBase)
 		haveFile = true
 	}
@@ -121,19 +137,77 @@ func selfhostBuildPackageAst(files []PackageCheckFile) (*AstFile, *selfhostPacka
 	return &AstFile{arena: arena}, layout, nil
 }
 
-func selfhostAppendTokenLayout(layout *selfhostPackageTokenLayout, lexed *OstyLexedSource, base int) {
+func selfhostAppendTokenLayout(layout *selfhostPackageTokenLayout, lexed *OstyLexedSource, base int, fileIdx int) {
 	if layout == nil || lexed == nil || lexed.stream == nil {
 		return
 	}
 	rt := newRuneTable(lexed.source)
+	// Grow all parallel slices in one amortised step — appends still happen
+	// per token inside the loop, but the underlying array is sized for the
+	// incoming stream up-front, so we avoid the repeated-realloc cost that
+	// multi-MB merged packages would otherwise pay on every `append`.
+	n := len(lexed.stream.tokens)
+	newLen := len(layout.starts) + n
+	layout.starts = selfhostGrowIntSlice(layout.starts, newLen)
+	layout.ends = selfhostGrowIntSlice(layout.ends, newLen)
+	layout.startLines = selfhostGrowIntSlice(layout.startLines, newLen)
+	layout.startCols = selfhostGrowIntSlice(layout.startCols, newLen)
+	layout.fileIdx = selfhostGrowIntSlice(layout.fileIdx, newLen)
 	for _, tok := range lexed.stream.tokens {
 		if tok == nil || tok.start == nil || tok.end == nil {
 			layout.starts = append(layout.starts, base)
 			layout.ends = append(layout.ends, base)
+			layout.startLines = append(layout.startLines, 0)
+			layout.startCols = append(layout.startCols, 0)
+			layout.fileIdx = append(layout.fileIdx, fileIdx)
 			continue
 		}
 		layout.starts = append(layout.starts, base+rt.byteOffset(tok.start.offset))
 		layout.ends = append(layout.ends, base+rt.byteOffset(tok.end.offset))
+		layout.startLines = append(layout.startLines, tok.start.line)
+		layout.startCols = append(layout.startCols, tok.start.column)
+		layout.fileIdx = append(layout.fileIdx, fileIdx)
+	}
+}
+
+// selfhostGrowIntSlice reserves capacity for at least `want` total elements
+// without changing the slice's logical length, so subsequent `append`s stay
+// allocation-free for large per-file token batches.
+func selfhostGrowIntSlice(xs []int, want int) []int {
+	if cap(xs) >= want {
+		return xs
+	}
+	grown := make([]int, len(xs), want)
+	copy(grown, xs)
+	return grown
+}
+
+// selfhostLayoutTokenPos returns a selfhostTokenPos backed by the per-file
+// (filename, line, column) slices recorded during selfhostAppendTokenLayout.
+// Mirrors selfhostStreamTokenPos for the package/workspace call paths where
+// the lex stream is materialised per-file and then discarded. Filename is
+// empty when the originating PackageCheckFile carried no Name, which lets
+// the telemetry suffix drop back to `@Lnn:Cnn` without lying about the file.
+func selfhostLayoutTokenPos(layout *selfhostPackageTokenLayout) selfhostTokenPos {
+	if layout == nil {
+		return nil
+	}
+	return func(tokenIdx int) (string, int, int, bool) {
+		if tokenIdx < 0 || tokenIdx >= len(layout.startLines) || tokenIdx >= len(layout.startCols) {
+			return "", 0, 0, false
+		}
+		line := layout.startLines[tokenIdx]
+		col := layout.startCols[tokenIdx]
+		if line <= 0 || col <= 0 {
+			return "", 0, 0, false
+		}
+		file := ""
+		if tokenIdx < len(layout.fileIdx) {
+			if idx := layout.fileIdx[tokenIdx]; idx >= 0 && idx < len(layout.files) {
+				file = layout.files[idx]
+			}
+		}
+		return file, line, col, true
 	}
 }
 
@@ -201,7 +275,7 @@ func selfhostShiftTokenIndex(idx, base int) int {
 
 func adaptCheckResultWithTokenLayout(checked *FrontCheckResult, layout *selfhostPackageTokenLayout) CheckResult {
 	result := CheckResult{
-		Summary:        adaptCheckSummaryWithContext(checked),
+		Summary:        adaptCheckSummaryWithContext(checked, selfhostLayoutTokenPos(layout)),
 		TypedNodes:     make([]CheckedNode, 0, len(checked.typedNodes)),
 		Bindings:       make([]CheckedBinding, 0, len(checked.bindings)),
 		Symbols:        make([]CheckedSymbol, 0, len(checked.symbols)),
