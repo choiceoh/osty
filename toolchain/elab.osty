@@ -259,6 +259,18 @@ fn elabInferIdent(cx: ElabCx, node: AstNode) -> ElabResult {
         let coreIdx = coreIdent(cx.core, node.text, IkFn, fnTy, node.start, node.end)
         return ElabResult { node: coreIdx, ty: fnTy }
     }
+    // Try enum variant in expression position. The Go-side resolver
+    // registers every variant as a top-level SymVariant, so toolchain
+    // code freely writes bare `FrontQDot` / `BoMul` / `AstNBlock` for
+    // the `Enum.Variant` value. Covers payload-free variants (the
+    // dominant usage in toolchain). Payload-ful variants as call
+    // targets (`Some(x)`) go through elabInferCall.
+    let variant = checkLookupVariant(cx.env, node.text)
+    if variant.name != "" && checkIntListLenHelper(variant.fieldTys) == 0 {
+        let variantTy = elabVariantOwnerType(cx, variant)
+        let coreIdx = coreIdent(cx.core, node.text, IkVariant, variantTy, node.start, node.end)
+        return ElabResult { node: coreIdx, ty: variantTy }
+    }
     // Fall through — unknown name.
     let suggestion = checkSuggestSimilar(
         checkVisibleBindingNames(cx.env),
@@ -270,6 +282,19 @@ fn elabInferIdent(cx: ElabCx, node: AstNode) -> ElabResult {
     )
     cx.env.diagnostics.push(diag)
     elabPoisonResult(cx, node.start, node.end)
+}
+
+/// elabVariantOwnerType builds the enum type `Owner<fresh args>` for a
+/// bare variant reference. For non-generic enums (`FrontTokenKind`) the
+/// result is `tyNamed(owner, [])`; for generic enums (`Option<T>`) we
+/// allocate fresh type variables per enum parameter so downstream
+/// unification can solve them via context.
+fn elabVariantOwnerType(cx: ElabCx, variant: CheckVariantSig) -> Int {
+    let mut args: List<Int> = []
+    for g in variant.generics {
+        args.push(freshTyVar(cx.env.tys, variant.owner, g))
+    }
+    tyNamed(cx.env.tys, variant.owner, args)
 }
 
 /// fnSigToTy builds an `fn(params) -> ret` type from a CheckFnSig.
