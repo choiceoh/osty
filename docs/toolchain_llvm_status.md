@@ -23,6 +23,14 @@ As of 2026-04-19:
 - the whole-toolchain merged LLVM probe still first-walls on the
   bootstrap-only `runtime.golegacy.astbridge` bridge
 - the native-only merged LLVM probe (with bootstrap-only files skipped)
+  now first-walls on `LLVM015 [method_call_field] call: call target
+  *ast.FieldExpr` (method call dispatch through a FieldExpr chain).
+  The LLVM012 statement-form category has been cleared for the
+  toolchain's actual shape: `LLVM011 [fn_param_struct_type]` Char wall
+  at `lspUtf16UnitsForChar` fell first (Char→i32 / Byte→i8 lowering),
+  then `LLVM012 *ast.MatchExpr is not a call` (match-as-statement for
+  tag enums), and most recently `LLVM012 field assignment base
+  *ast.FieldExpr` (nested field chain like `cx.env.returnTy = ...`)
   now first-walls on `LLVM012 statement: field assignment base *ast.FieldExpr`
   (nested field assignment like `a.b.c = x`). The previous
   `LLVM011 [fn_param_struct_type]` Char wall at `lspUtf16UnitsForChar`
@@ -55,6 +63,7 @@ Current-tree observations from the code re-audit:
 |---|---|---|
 | CLI wiring | universal LLVM entry wedge | **resolved** — hello-world `osty gen --backend=llvm` exits 0 and writes `.ll` output |
 | Bootstrap bridge | merged whole-toolchain probe | first wall is still `LLVM002 runtime-ffi` on `runtime.golegacy.astbridge`; this is a bootstrap artifact, not yet a native backend parity claim |
+| Native backend surface | merged native-only probe | first wall is now `LLVM015 [method_call_field] call target *ast.FieldExpr` (method call through a FieldExpr chain) after skipping 4 bootstrap-only files; the `LLVM011 Char`, `LLVM012 *ast.MatchExpr`, and `LLVM012 field assignment base *ast.FieldExpr` walls are all closed |
 | Native backend surface | merged native-only probe | first wall is now `LLVM012 statement: field assignment base *ast.FieldExpr` (nested field assignment) after skipping 4 bootstrap-only files; the earlier `LLVM011 [fn_param_struct_type]` Char wall and the subsequent `LLVM012 *ast.MatchExpr is not a call` wall are both closed |
 | Native backend surface | merged native-only probe | first wall is now `LLVM012` (statement form) after skipping 4 bootstrap-only files; the earlier `LLVM011 [fn_param_struct_type]` Char wall is closed |
 | Checker boundary | `internal/check` / `internal/toolchain` | host still manages an external `osty-native-checker` artifact and falls back to the embedded selfhost checker when it cannot be prepared |

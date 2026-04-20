@@ -383,51 +383,98 @@ func (g *generator) emitFieldAssign(target *ast.FieldExpr, rhs ast.Expr) error {
 	if target == nil {
 		return unsupported("statement", "nil field assignment target")
 	}
-	if target.IsOptional {
-		return unsupported("statement", "optional field assignment is not supported")
+	// Walk the field chain inside-out collecting names, then flip to
+	// outer→inner order. A single-level `a.f = v` produces fields=["f"],
+	// while `a.b.c = v` produces fields=["b", "c"] with base = `a`.
+	fields := []string{}
+	cur := target
+	for {
+		if cur == nil {
+			return unsupported("statement", "nil field assignment target")
+		}
+		if cur.IsOptional {
+			return unsupported("statement", "optional field assignment is not supported")
+		}
+		fields = append([]string{cur.Name}, fields...)
+		if next, ok := cur.X.(*ast.FieldExpr); ok {
+			cur = next
+			continue
+		}
+		break
 	}
-	baseIdent, ok := target.X.(*ast.Ident)
+	baseIdent, ok := cur.X.(*ast.Ident)
 	if !ok {
-		return unsupportedf("statement", "field assignment base %T", target.X)
+		return unsupportedf("statement", "field assignment base %T", cur.X)
 	}
 	slot, ok := g.lookupBinding(baseIdent.Name)
 	if !ok {
 		return unsupportedf("name", "assignment to unknown identifier %q", baseIdent.Name)
 	}
-	if !slot.ptr || !slot.mutable {
-		return unsupportedf("statement", "assignment to immutable field %q.%s", baseIdent.Name, target.Name)
+	if !slot.ptr {
+		return unsupportedf("statement", "field assignment on non-addressable binding %q", baseIdent.Name)
 	}
-	info := g.structsByType[slot.typ]
-	if info == nil {
-		return unsupportedf("type-system", "field assignment on %s", slot.typ)
+	// NB: we deliberately do not gate on `slot.mutable` here. Osty's
+	// checker accepts field-through-param writes for managed context
+	// structs (see `cx.env.returnTy = ...` throughout toolchain/), where
+	// the parameter itself is not `mut` but the struct carries GC roots
+	// so a writable alloca slot was materialised regardless. Mutability
+	// is a frontend rule; the backend just lowers what got past check.
+	// Resolve field chain against struct type info. Each step must land
+	// inside another struct for nested chains; the innermost field
+	// determines the rhs coercion target.
+	steps := make([]fieldInfo, len(fields))
+	curTyp := slot.typ
+	for i, name := range fields {
+		info := g.structsByType[curTyp]
+		if info == nil {
+			return unsupportedf("type-system", "field assignment on %s", curTyp)
+		}
+		field, ok := info.byName[name]
+		if !ok {
+			return unsupportedf("expression", "struct %q has no field %q", info.name, name)
+		}
+		steps[i] = field
+		curTyp = field.typ
 	}
-	field, ok := info.byName[target.Name]
-	if !ok {
-		return unsupportedf("expression", "struct %q has no field %q", info.name, target.Name)
-	}
-	v, err := g.emitExprWithHintAndSourceType(rhs, field.sourceType, field.listElemTyp, field.listElemString, field.mapKeyTyp, field.mapValueTyp, field.mapKeyString, field.setElemTyp, field.setElemString)
+	innermost := steps[len(steps)-1]
+	v, err := g.emitExprWithHintAndSourceType(rhs, innermost.sourceType, innermost.listElemTyp, innermost.listElemString, innermost.mapKeyTyp, innermost.mapValueTyp, innermost.mapKeyString, innermost.setElemTyp, innermost.setElemString)
 	if err != nil {
 		return err
 	}
-	if v.typ != field.typ {
-		return unsupportedf("type-system", "field assignment %q.%s type %s, value %s", baseIdent.Name, target.Name, field.typ, v.typ)
+	if v.typ != innermost.typ {
+		return unsupportedf("type-system", "field assignment %q.%s type %s, value %s", baseIdent.Name, strings.Join(fields, "."), innermost.typ, v.typ)
 	}
-	current, err := g.loadIfPointer(slot)
+	root, err := g.loadIfPointer(slot)
 	if err != nil {
 		return err
 	}
 	emitter := g.toOstyEmitter()
-	tmp := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf(
-		"  %s = insertvalue %s %s, %s %s, %d",
-		tmp,
-		current.typ,
-		current.ref,
-		v.typ,
-		v.ref,
-		field.index,
-	))
-	llvmStore(emitter, toOstyValue(slot), toOstyValue(value{typ: current.typ, ref: tmp}))
+	// Descend: extract each intermediate struct value so the insertvalue
+	// rebuild at the leaf has a live current-value to update.
+	levels := make([]value, len(steps))
+	levels[0] = root
+	for i := 1; i < len(steps); i++ {
+		prev := levels[i-1]
+		extracted := llvmExtractValue(emitter, toOstyValue(prev), steps[i-1].typ, steps[i-1].index)
+		levels[i] = fromOstyValue(extracted)
+	}
+	// Rebuild: innermost insert first, then propagate back up.
+	next := v
+	for i := len(steps) - 1; i >= 0; i-- {
+		tmp := llvmNextTemp(emitter)
+		parent := levels[i]
+		emitter.body = append(emitter.body, fmt.Sprintf(
+			"  %s = insertvalue %s %s, %s %s, %d",
+			tmp,
+			parent.typ,
+			parent.ref,
+			next.typ,
+			next.ref,
+			steps[i].index,
+		))
+		next = value{typ: parent.typ, ref: tmp}
+	}
+	llvmStore(emitter, toOstyValue(slot), toOstyValue(next))
 	g.takeOstyEmitter(emitter)
 	return nil
 }
