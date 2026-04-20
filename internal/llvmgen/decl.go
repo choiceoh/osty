@@ -1028,6 +1028,11 @@ func (g *generator) emitScriptMain(stmts []ast.Stmt) (string, error) {
 		return "", err
 	}
 	if g.currentReachable {
+		if err := g.emitAllPendingDefers(); err != nil {
+			return "", err
+		}
+	}
+	if g.currentReachable {
 		emitter := g.toOstyEmitter()
 		g.releaseGCRoots(emitter)
 		llvmReturnI32Zero(emitter)
@@ -1040,6 +1045,11 @@ func (g *generator) emitMainFunction(sig *fnSig) (string, error) {
 	g.beginFunction()
 	if err := g.emitBlock(sig.decl.Body.Stmts); err != nil {
 		return "", err
+	}
+	if g.currentReachable {
+		if err := g.emitAllPendingDefers(); err != nil {
+			return "", err
+		}
 	}
 	if g.currentReachable {
 		emitter := g.toOstyEmitter()
@@ -1092,6 +1102,11 @@ func (g *generator) emitUserFunction(sig *fnSig) (string, error) {
 	if sig.ret == "void" {
 		if err := g.emitBlock(sig.decl.Body.Stmts); err != nil {
 			return "", err
+		}
+		if g.currentReachable {
+			if err := g.emitAllPendingDefers(); err != nil {
+				return "", err
+			}
 		}
 		if g.currentReachable {
 			emitter := g.toOstyEmitter()
