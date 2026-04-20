@@ -96,14 +96,15 @@ type fieldInfo struct {
 }
 
 type enumInfo struct {
-	name         string
-	typ          string
-	decl         *ast.EnumDecl
-	hasPayload   bool
-	payloadTyp   string
-	payloadCount int
-	isBoxed      bool
-	variants     map[string]variantInfo
+	name             string
+	typ              string
+	decl             *ast.EnumDecl
+	hasPayload       bool
+	payloadTyp       string
+	payloadCount     int
+	payloadSlotTypes []string
+	isBoxed          bool
+	variants         map[string]variantInfo
 }
 
 type variantInfo struct {
@@ -890,13 +891,12 @@ func collectEnum(decl *ast.EnumDecl, env typeEnv) (*enumInfo, error) {
 				diag := llvmEnumPayloadDiagnostic(decl.Name, variant.Name, unsupportedMessage(err), "", "")
 				return nil, unsupported(diag.kind, diag.message)
 			}
-			if info.payloadTyp == "" && !info.isBoxed {
-				info.payloadTyp = typ
-			} else if info.payloadTyp != typ {
-				info.isBoxed = true
-				info.payloadTyp = ""
-			}
 			payloads = append(payloads, typ)
+			if fi >= len(info.payloadSlotTypes) {
+				info.payloadSlotTypes = append(info.payloadSlotTypes, typ)
+			} else if info.payloadSlotTypes[fi] != typ {
+				info.isBoxed = true
+			}
 			if fi == 0 {
 				if listElemTyp, ok, err := llvmListElementType(field, env); err != nil {
 					diag := llvmEnumPayloadDiagnostic(decl.Name, variant.Name, unsupportedMessage(err), "", "")
@@ -923,6 +923,18 @@ func collectEnum(decl *ast.EnumDecl, env typeEnv) (*enumInfo, error) {
 			tag:                i,
 			payloads:           payloads,
 			payloadListElemTyp: payloadListElemTyp,
+		}
+	}
+	if info.isBoxed {
+		info.payloadSlotTypes = nil
+		info.payloadTyp = ""
+	} else if len(info.payloadSlotTypes) > 0 {
+		info.payloadTyp = info.payloadSlotTypes[0]
+		for _, t := range info.payloadSlotTypes {
+			if t != info.payloadSlotTypes[0] {
+				info.payloadTyp = ""
+				break
+			}
 		}
 	}
 	info.typ = llvmEnumStorageType(info.name, info.hasPayload)

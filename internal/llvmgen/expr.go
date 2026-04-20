@@ -679,9 +679,19 @@ func (g *generator) emitEnumPayloadVariant(info *enumInfo, variant variantInfo, 
 		enumValue.rootPaths = g.rootPathsForType(info.typ)
 		return enumValue, nil
 	}
-	for _, p := range payloads {
-		if p.typ != info.payloadTyp {
-			return value{}, unsupportedf("type-system", "enum %q variant %q payload type %s, want %s", info.name, variant.name, p.typ, info.payloadTyp)
+	slotType := func(i int) string {
+		if i < len(info.payloadSlotTypes) {
+			return info.payloadSlotTypes[i]
+		}
+		if info.payloadTyp != "" {
+			return info.payloadTyp
+		}
+		return "i64"
+	}
+	for i, p := range payloads {
+		want := slotType(i)
+		if p.typ != want {
+			return value{}, unsupportedf("type-system", "enum %q variant %q payload slot %d type %s, want %s", info.name, variant.name, i, p.typ, want)
 		}
 	}
 	slotCount := info.payloadCount
@@ -695,7 +705,8 @@ func (g *generator) emitEnumPayloadVariant(info *enumInfo, variant variantInfo, 
 			fields = append(fields, toOstyValue(payloads[i]))
 			continue
 		}
-		fields = append(fields, &LlvmValue{typ: info.payloadTyp, name: llvmZeroLiteral(info.payloadTyp), pointer: false})
+		t := slotType(i)
+		fields = append(fields, &LlvmValue{typ: t, name: llvmZeroLiteral(t), pointer: false})
 	}
 	emitter := g.toOstyEmitter()
 	out := llvmStructLiteral(emitter, info.typ, fields)
