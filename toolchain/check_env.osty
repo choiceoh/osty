@@ -1144,6 +1144,25 @@ fn checkStringListContainsLocal(xs: List<String>, needle: String) -> Bool {
     false
 }
 
+/// checkVisibleBindingNames collects the identifiers reachable at the
+/// current elaboration point — all active lexical bindings plus every
+/// registered top-level free function. This is the candidate pool the
+/// unknown-ident diagnostic path hands to `checkSuggestSimilar`.
+pub fn checkVisibleBindingNames(env: CheckEnv) -> List<String> {
+    let mut out: List<String> = []
+    for b in env.bindings {
+        if !(checkStringListContainsLocal(out, b.name)) {
+            out.push(b.name)
+        }
+    }
+    for sig in env.fns {
+        if sig.owner == "" && !(checkStringListContainsLocal(out, sig.name)) {
+            out.push(sig.name)
+        }
+    }
+    out
+}
+
 pub fn emptyCheckBinding() -> CheckBinding {
     CheckBinding { name: "", ty: -1, mutable: false, start: -1, end: -1 }
 }
