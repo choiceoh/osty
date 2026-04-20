@@ -306,7 +306,7 @@ UsePath := DottedPath | UrlishPath
 - `UrlishPath`: 최소 1개 `/`, 첫 세그먼트에 `.` 포함 가능 (도메인).
 - 배타적. 혼합 금지.
 
-### R16. `use go "..."` 블록
+### R16. `use go "..."` / `use c "..."` 블록
 
 허용 선언:
 - `fn Name(params) -> ReturnType` (본문 없음).
@@ -314,13 +314,19 @@ UsePath := DottedPath | UrlishPath
 
 금지: 제네릭, 기본값, enum, interface, type, 본문 있는 fn, 중첩 use.
 
+`use c "<lib>" { ... }` (v0.5)는 파서 단계에서
+`use runtime.cabi.<lib> { ... }`로 desugar된다 — 즉 동일 AST.
+`c` 다음 토큰이 문자열 리터럴이 아닌 경우(`use c.foo` 같은 경로
+임포트)에는 lookahead가 desugar를 차단한다. 동일 본문 제약(R16)이
+양 형태에 모두 적용. 의미론은 LANG_SPEC §12.8 참조.
+
 ### R17. 함수 본문 필수성
 
 | 위치 | 본문 |
 |---|---|
 | 일반 `fn` | 필수 |
 | `interface` 내 `fn` | 선택 (기본 구현) |
-| `use go` 내 `fn` | 금지 |
+| `use go` / `use c` 내 `fn` | 금지 |
 
 ### R18. 기본 인자 제약
 

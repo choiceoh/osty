@@ -67,6 +67,58 @@ fn main() {
 	}
 }
 
+// TestGenerateUseCSurfaceLowersToExternC drives the full v0.5
+// `use c "libname" { ... }` surface through parse → resolve → check →
+// LLVM IR and verifies the desugared `runtime.cabi.<libname>` path
+// emits literal extern C declarations and calls. This is the
+// integration test for LANG_SPEC §12.8 surface syntax.
+func TestGenerateUseCSurfaceLowersToExternC(t *testing.T) {
+	file := parseLLVMGenFile(t, `use c "osty_demo" as demo {
+    fn osty_demo_double(x: Int) -> Int
+    fn osty_demo_is_zero(x: Int) -> Bool
+}
+
+fn main() {
+    let doubled = demo.osty_demo_double(21)
+    if demo.osty_demo_is_zero(doubled) {
+        println(0)
+    } else {
+        println(doubled)
+    }
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/use_c_surface.osty",
+		Target:      "x86_64-unknown-linux-gnu",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, forbidden := range []string{
+		"@osty_rt_cabi_osty_demo_osty_demo_double",
+		"LLVM001",
+		"LLVM002",
+	} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("generated IR must not contain %q (use c desugars to literal extern C symbols):\n%s", forbidden, got)
+		}
+	}
+	for _, want := range []string{
+		"declare i64 @osty_demo_double(i64)",
+		"declare i1 @osty_demo_is_zero(i64)",
+		"call i64 @osty_demo_double(",
+		"call i1 @osty_demo_is_zero(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // TestGenerateRuntimeCABIEmitsLiteralExternSymbol verifies that
 // `use runtime.cabi.<lib>` paths bypass the `osty_rt_` namespace and
 // declare the function name as the literal extern C symbol. This is

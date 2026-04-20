@@ -86,14 +86,14 @@ The following Osty features may **not** appear in `use go "..."` blocks:
 - **Go channels typed in the declaration.** Use message-passing via
   function calls instead; see §12.5 for the policy.
 
-### 12.8 Runtime FFI Surface (`use runtime.*`)
+### 12.8 Runtime FFI Surface (`use runtime.*`, `use c "..."`)
 
 The native (LLVM) backend exposes a parallel FFI surface keyed off the
 `runtime.*` import path. This is the only FFI form supported when
 compiling with `--backend llvm`; `use go "..."` is rejected with
 `LLVM001` because the native backend cannot embed the Go runtime.
 
-Two import shapes are recognized:
+Three surface forms are recognised:
 
 ```osty
 // 1. Runtime ABI symbols (osty_rt_* namespace, provided by the Osty
@@ -102,20 +102,33 @@ use runtime.strings as strings {
     fn HasPrefix(s: String, prefix: String) -> Bool
 }
 
-// 2. Arbitrary C ABI imports (link-time bound to literal extern
-//    symbols). The `runtime.cabi[.<libname>]` segment is descriptive
-//    only — the symbol is the function name as written.
-use runtime.cabi.libc as libc {
+// 2. Native C ABI imports — surface form. Each function name is
+//    bound to the literal extern C symbol; the library name is a
+//    descriptive tag for the linker.
+use c "osty_demo" as demo {
+    fn osty_demo_double(x: Int) -> Int
+}
+
+// 3. Native C ABI imports — canonical form. Equivalent to (2);
+//    `use c "<lib>" { ... }` is the surface sugar that desugars
+//    to this path at parse time.
+use runtime.cabi.osty_demo as demo {
     fn osty_demo_double(x: Int) -> Int
 }
 ```
+
+Forms (2) and (3) produce the same AST — `IsRuntimeFFI = true`,
+`RuntimePath = "runtime.cabi.<lib>"`. The canonical printer normalises
+both to form (2). The lookahead in form (2) requires a string literal
+immediately after `c`, so an ordinary `use c.foo` import path is
+unaffected.
 
 Symbol resolution:
 
 | Path prefix | Emitted LLVM symbol | Linker contract |
 |---|---|---|
 | `runtime.strings`, `runtime.path.filepath`, `runtime.package.*` | `osty_rt_<path>_<name>` | Provided by `internal/backend/runtime/osty_runtime.c` |
-| `runtime.cabi`, `runtime.cabi.<lib>` | `<name>` (literal) | Caller's responsibility — link the providing object/library |
+| `runtime.cabi`, `runtime.cabi.<lib>` (incl. `use c "<lib>"`) | `<name>` (literal) | Caller's responsibility — link the providing object/library |
 
 The constraints in §12.7 apply unchanged: no generics, no closures, no
 defaults/keywords, monomorphic signatures only. Type mapping uses the

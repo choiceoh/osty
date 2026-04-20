@@ -22375,6 +22375,16 @@ func opParseUseDecl(p *OstyParser, isPub bool) int {
 		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontString{})) || opAt(p, FrontTokenKind(&FrontTokenKind_FrontRawString{})) {
 			rawPath = opAdvance(p).text
 		}
+	} else if opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})) && opPeek(p).text == "c" &&
+		(ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontString{})) || ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontRawString{}))) {
+		// `use c "libname" { ... }` — surface syntax for native C ABI
+		// imports. Desugars at parse time to `runtime.cabi.<libname>`
+		// so the rest of the pipeline reuses the runtime-FFI path
+		// (LANG_SPEC §12.8). Lookahead for a string literal keeps
+		// ordinary `use c.foo` paths working.
+		_ = opAdvance(p)
+		lib := opStripUseCQuotes(opAdvance(p).text)
+		rawPath = "runtime.cabi." + lib
 	} else {
 		rawPath = opParseUsePath(p)
 		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontColonColon{})) && ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
@@ -22469,6 +22479,26 @@ func opParseScopedUseDecl(p *OstyParser, start int, basePath string, isPub bool)
 	n.flags = astUseDeclFlags(false, isPub)
 	n.extra = astUseDeclGroupMarker()
 	return opAddNode(p, n)
+}
+
+// opStripUseCQuotes removes the surrounding ASCII string-literal
+// quotes from a `use c "lib"` token text. Mirrors toolchain/parser.osty
+// `opStripUseCQuotes`. Plain `"..."` and raw `r"..."` forms are
+// recognised; anything else is returned unchanged so a malformed
+// token cannot crash the parse.
+func opStripUseCQuotes(raw string) string {
+	n := len(raw)
+	if n < 2 {
+		return raw
+	}
+	first := raw[0:1]
+	if first == "\"" && raw[n-1:n] == "\"" {
+		return raw[1 : n-1]
+	}
+	if first == "r" && n >= 3 && raw[1:2] == "\"" && raw[n-1:n] == "\"" {
+		return raw[2 : n-1]
+	}
+	return raw
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8507:1
