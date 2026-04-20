@@ -108,10 +108,11 @@ type enumInfo struct {
 }
 
 type variantInfo struct {
-	name               string
-	tag                int
-	payloads           []string
-	payloadListElemTyp string
+	name                string
+	tag                 int
+	payloads            []string
+	payloadListElemTyp  string
+	payloadListElemTyps []string
 }
 
 type enumVariantRef struct {
@@ -884,6 +885,7 @@ func collectEnum(decl *ast.EnumDecl, env typeEnv) (*enumInfo, error) {
 			return nil, unsupported(diag.kind, diag.message)
 		}
 		payloads := make([]string, 0, len(variant.Fields))
+		payloadListElemTyps := make([]string, 0, len(variant.Fields))
 		payloadListElemTyp := ""
 		for fi, field := range variant.Fields {
 			typ, err := llvmEnumPayloadType(field, env)
@@ -897,37 +899,55 @@ func collectEnum(decl *ast.EnumDecl, env typeEnv) (*enumInfo, error) {
 			} else if info.payloadSlotTypes[fi] != typ {
 				info.isBoxed = true
 			}
+			slotListElemTyp := ""
+			if listElemTyp, ok, err := llvmListElementType(field, env); err != nil {
+				diag := llvmEnumPayloadDiagnostic(decl.Name, variant.Name, unsupportedMessage(err), "", "")
+				return nil, unsupported(diag.kind, diag.message)
+			} else if ok {
+				slotListElemTyp = listElemTyp
+			}
+			payloadListElemTyps = append(payloadListElemTyps, slotListElemTyp)
 			if fi == 0 {
-				if listElemTyp, ok, err := llvmListElementType(field, env); err != nil {
-					diag := llvmEnumPayloadDiagnostic(decl.Name, variant.Name, unsupportedMessage(err), "", "")
-					return nil, unsupported(diag.kind, diag.message)
-				} else if ok {
-					payloadListElemTyp = listElemTyp
-				}
+				payloadListElemTyp = slotListElemTyp
 			}
 			info.hasPayload = true
 		}
 		if len(variant.Fields) > info.payloadCount {
 			info.payloadCount = len(variant.Fields)
 		}
-		if info.isBoxed && len(variant.Fields) > 1 {
-			diag := llvmEnumBoxedMultiFieldDiagnostic(decl.Name, variant.Name, len(variant.Fields))
-			return nil, unsupported(diag.kind, diag.message)
-		}
 		if _, exists := info.variants[variant.Name]; exists {
 			diag := llvmEnumVariantHeaderDiagnostic(decl.Name, variant.Name, true, len(variant.Fields), true)
 			return nil, unsupported(diag.kind, diag.message)
 		}
 		info.variants[variant.Name] = variantInfo{
-			name:               variant.Name,
-			tag:                i,
-			payloads:           payloads,
-			payloadListElemTyp: payloadListElemTyp,
+			name:                variant.Name,
+			tag:                 i,
+			payloads:            payloads,
+			payloadListElemTyp:  payloadListElemTyp,
+			payloadListElemTyps: payloadListElemTyps,
 		}
 	}
 	if info.isBoxed {
 		info.payloadSlotTypes = nil
 		info.payloadTyp = ""
+		for _, decl := range decl.Variants {
+			if decl == nil {
+				continue
+			}
+			v, ok := info.variants[decl.Name]
+			if !ok {
+				continue
+			}
+			if len(v.payloads) <= 1 {
+				continue
+			}
+			for _, ptyp := range v.payloads {
+				if ptyp == "ptr" {
+					diag := llvmEnumBoxedMultiFieldDiagnostic(info.name, v.name, len(v.payloads))
+					return nil, unsupported(diag.kind, diag.message)
+				}
+			}
+		}
 	} else if len(info.payloadSlotTypes) > 0 {
 		info.payloadTyp = info.payloadSlotTypes[0]
 		for _, t := range info.payloadSlotTypes {
