@@ -1,8 +1,15 @@
 package llvmgen
 
 import (
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/osty/osty/internal/check"
+	"github.com/osty/osty/internal/ir"
+	"github.com/osty/osty/internal/mir"
+	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/stdlib"
 )
 
 // The `recv.downcast::<T>()` AST recognizer is wired into emitCall
@@ -153,5 +160,78 @@ fn probe(p: Printable) -> Marker? {
 	}
 	if !strings.Contains(msg, "Printable") {
 		t.Fatalf("error does not name the receiver's interface %q: %v", "Printable", err)
+	}
+}
+
+// End-to-end: full compilation pipeline (parser → resolve → check →
+// ir.Lower → mir.Lower → GenerateFromMIR → fall back to
+// GenerateModule on ErrUnsupported) exercises the real `osty build`
+// route. Without this test the backend-only `generateFromAST` tests
+// don't prove anything about whether a user writing
+// `recv.downcast::<T>()` in a `.osty` source file actually reaches
+// the vtable-compare lowering.
+func TestInterfaceDowncastFullPipeline(t *testing.T) {
+	src := `interface Printable {
+    fn show(self) -> String
+}
+
+struct Note {
+    pub msg: String,
+
+    pub fn show(self) -> String {
+        self.msg
+    }
+}
+
+fn probe(p: Printable) -> Note? {
+    p.downcast::<Note>()
+}
+
+fn main() {}
+`
+	file := parseLLVMGenFile(t, src)
+	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
+	reg := stdlib.LoadCached()
+	chk := check.File(file, res, check.Opts{
+		UseGolegacy:   true,
+		Stdlib:        reg,
+		Primitives:    reg.Primitives,
+		ResultMethods: reg.ResultMethods,
+		Source:        []byte(src),
+		Privileged:    true,
+	})
+	mod, issues := ir.Lower("main", file, res, chk)
+	if len(issues) != 0 {
+		t.Fatalf("ir.Lower issues: %v", issues)
+	}
+	monoMod, monoErrs := ir.Monomorphize(mod)
+	if len(monoErrs) != 0 {
+		t.Fatalf("monomorphize: %v", monoErrs)
+	}
+	mirMod := mir.Lower(monoMod)
+	opts := Options{PackageName: "main", SourcePath: "/tmp/pipeline_downcast.osty"}
+
+	out, err := GenerateFromMIR(mirMod, opts)
+	if err != nil {
+		if !errors.Is(err, ErrUnsupported) {
+			t.Fatalf("GenerateFromMIR hard error (not ErrUnsupported): %v", err)
+		}
+		out, err = GenerateModule(mod, opts)
+		if err != nil {
+			t.Fatalf("GenerateModule fallback error: %v", err)
+		}
+	}
+
+	got := string(out)
+	for _, want := range []string{
+		"%osty.iface = type { ptr, ptr }",
+		"@osty.vtable.Note__Printable",
+		"extractvalue %osty.iface",
+		"icmp eq ptr",
+		"select i1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("full-pipeline IR missing %q:\n%s", want, got)
+		}
 	}
 }

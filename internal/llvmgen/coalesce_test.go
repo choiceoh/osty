@@ -1,8 +1,15 @@
 package llvmgen
 
 import (
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/osty/osty/internal/check"
+	"github.com/osty/osty/internal/ir"
+	"github.com/osty/osty/internal/mir"
+	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/stdlib"
 )
 
 // `a ?? b` on a `String?` (inner type is ptr) lowers to a branch+phi
@@ -135,5 +142,153 @@ func TestGenerateCoalesceChainsRightAssoc(t *testing.T) {
 	}
 	if count := strings.Count(got, "phi ptr"); count < 2 {
 		t.Fatalf("expected two phi nodes for chained `??`, got %d:\n%s", count, got)
+	}
+}
+
+// End-to-end: full compilation pipeline (parser → resolve → check →
+// ir.Lower → mir.Lower → GenerateFromMIR → fall back to
+// GenerateModule on ErrUnsupported) reaches the legacy emitter and
+// produces coalesce IR. This is the path that real `osty build`
+// takes, so the test is the definitive proof that `??` works.
+//
+// The MIR emitter currently refuses Option<String> locals with
+// LLVM000 ("unsupported local type <error>") so the backend
+// dispatcher falls back to the HIR→AST bridge automatically. The
+// fallback behavior is not under test here — what matters is that
+// *some* path produces working coalesce IR for the full pipeline.
+func TestGenerateCoalesceFullPipeline(t *testing.T) {
+	src := `fn resolve(name: String?) -> String {
+    name ?? "anonymous"
+}
+
+fn main() {}
+`
+	file := parseLLVMGenFile(t, src)
+	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
+	reg := stdlib.LoadCached()
+	chk := check.File(file, res, check.Opts{
+		UseGolegacy:   true,
+		Stdlib:        reg,
+		Primitives:    reg.Primitives,
+		ResultMethods: reg.ResultMethods,
+		Source:        []byte(src),
+		Privileged:    true,
+	})
+	mod, issues := ir.Lower("main", file, res, chk)
+	if len(issues) != 0 {
+		t.Fatalf("ir.Lower issues: %v", issues)
+	}
+	monoMod, monoErrs := ir.Monomorphize(mod)
+	if len(monoErrs) != 0 {
+		t.Fatalf("monomorphize: %v", monoErrs)
+	}
+	mirMod := mir.Lower(monoMod)
+	opts := Options{PackageName: "main", SourcePath: "/tmp/pipeline_coalesce.osty"}
+
+	// Mirror the dispatcher: MIR first, legacy fallback on ErrUnsupported.
+	out, err := GenerateFromMIR(mirMod, opts)
+	if err != nil {
+		if !errors.Is(err, ErrUnsupported) {
+			t.Fatalf("GenerateFromMIR hard error (not ErrUnsupported): %v", err)
+		}
+		out, err = GenerateModule(mod, opts)
+		if err != nil {
+			t.Fatalf("GenerateModule fallback error: %v", err)
+		}
+	}
+
+	got := string(out)
+	for _, want := range []string{
+		"define ptr @resolve(ptr %name)",
+		"coalesce.some",
+		"coalesce.none",
+		"coalesce.end",
+		"phi ptr",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("full-pipeline IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// Right-side side effects (and their GC-visible fallout) must
+// execute exactly once and only on the None path. Here the RHS is a
+// user function call that would normally emit an `osty.gc.safepoint`
+// marker — it must appear after the `coalesce.none` label, never
+// before the null-check, and never twice.
+func TestGenerateCoalesceRightSideEffectsLazy(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn compute() -> Int {
+    42
+}
+
+fn pick(age: Int?) -> Int {
+    age ?? compute()
+}
+`)
+
+	irOut, err := generateFromAST(file, Options{
+		PackageName: "core",
+		SourcePath:  "/tmp/coalesce_sideffect.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(irOut)
+
+	callIdx := strings.Index(got, "call i64 @compute()")
+	if callIdx < 0 {
+		t.Fatalf("RHS call `@compute` missing from IR:\n%s", got)
+	}
+	if strings.Count(got, "call i64 @compute()") != 1 {
+		t.Fatalf("expected exactly one call to @compute (lazy, once), got %d:\n%s",
+			strings.Count(got, "call i64 @compute()"), got)
+	}
+	noneIdx := strings.Index(got, "coalesce.none")
+	if noneIdx < 0 || callIdx < noneIdx {
+		t.Fatalf("RHS call (%d) must appear after `coalesce.none` label (%d):\n%s",
+			callIdx, noneIdx, got)
+	}
+}
+
+// Canonical spec pattern (LANG_SPEC_v0.5 §4 / CLAUDE.md §A.6):
+// `user?.profile?.title ?? "Untitled"` — optional chain feeding a
+// coalesce. Exercises the interaction between `?.` (each hop emits
+// its own null-check + phi) and `??` (final fallback) so a
+// regression in either direction surfaces here.
+func TestGenerateCoalesceOptionalChainFallback(t *testing.T) {
+	file := parseLLVMGenFile(t, `struct Profile {
+    title: String,
+}
+
+struct User {
+    pub profile: Profile?,
+}
+
+fn titleOf(user: User?) -> String {
+    user?.profile?.title ?? "Untitled"
+}
+`)
+
+	irOut, err := generateFromAST(file, Options{
+		PackageName: "core",
+		SourcePath:  "/tmp/coalesce_chain_opt.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(irOut)
+	// Each `?.` emits an `optional.*` label, and the `??` emits its
+	// own coalesce.* labels. Missing either means one half of the
+	// composition regressed.
+	for _, want := range []string{
+		"optional.then",
+		"optional.nil",
+		"coalesce.some",
+		"coalesce.none",
+		"phi ptr",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("optional-chain + coalesce IR missing %q:\n%s", want, got)
+		}
 	}
 }
