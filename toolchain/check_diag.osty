@@ -344,6 +344,162 @@ pub fn diagRefutablePattern(context: String, start: Int, end: Int) -> CheckDiagn
 }
 
 // ---------------------------------------------------------------------
+// Suggestion helpers — used to attach "did you mean `foo`?" hints to
+// diagnostics whose primary message is of the form "cannot find
+// `{name}` ...". Callers gather the candidate pool (in-scope bindings,
+// struct fields, enum variants, ...) and hand it off here; the
+// suggestion picks the nearest neighbour by bounded edit distance.
+// ---------------------------------------------------------------------
+
+/// checkSuggestSimilar returns the closest match from `candidates` for
+/// `name` using bounded Levenshtein distance, or `""` when no
+/// candidate is within edit distance 2. The early-exit logic keeps
+/// this usable at every unknown-name site without quadratic blowup —
+/// only candidates within ±(limit-1) characters get the full matrix.
+pub fn checkSuggestSimilar(candidates: List<String>, name: String) -> String {
+    if name == "" {
+        return ""
+    }
+    let mut best = ""
+    let mut bestDist = 3
+    let nameLen = checkDiagStringUnitCount(name)
+    for candidate in candidates {
+        if candidate == "" || candidate == name {
+            continue
+        }
+        let candLen = checkDiagStringUnitCount(candidate)
+        let diff = candLen - nameLen
+        if diff > bestDist - 1 || 0 - diff > bestDist - 1 {
+            continue
+        }
+        let dist = checkDiagLevenshteinBounded(name, candidate, bestDist)
+        if dist < bestDist {
+            best = candidate
+            bestDist = dist
+            if bestDist == 1 {
+                return best
+            }
+        }
+    }
+    best
+}
+
+/// diagDidYouMean formats `suggestion` as the canonical "did you mean
+/// `x`?" hint, or returns `""` when `suggestion` is empty. Keeping the
+/// formatting here means every diagnostic site phrases the hint
+/// identically without threading a literal template.
+pub fn diagDidYouMean(suggestion: String) -> String {
+    if suggestion == "" {
+        return ""
+    }
+    "did you mean `{suggestion}`?"
+}
+
+/// checkDiagAttachHint returns a copy of `d` with an extra
+/// "hint: {text}" note appended. When `text` is empty the diagnostic
+/// is returned unchanged so callers can funnel optional suggestions
+/// through without conditionals at the call site.
+pub fn checkDiagAttachHint(d: CheckDiagnostic, text: String) -> CheckDiagnostic {
+    if text == "" {
+        return d
+    }
+    let mut notes: List<String> = []
+    for existing in d.notes {
+        notes.push(existing)
+    }
+    notes.push("hint: {text}")
+    CheckDiagnostic {
+        code: d.code,
+        severity: d.severity,
+        message: d.message,
+        start: d.start,
+        end: d.end,
+        notes,
+    }
+}
+
+fn checkDiagStringUnitCount(text: String) -> Int {
+    let mut count = 0
+    for unit in strings.split(text, "") {
+        if unit != "" {
+            count = count + 1
+        }
+    }
+    count
+}
+
+fn checkDiagLevenshteinBounded(left: String, right: String, limit: Int) -> Int {
+    if left == right {
+        return 0
+    }
+    let leftUnits = strings.split(left, "")
+    let rightUnits = strings.split(right, "")
+    let leftLen = checkDiagStringUnitCount(left)
+    let rightLen = checkDiagStringUnitCount(right)
+    let diff = leftLen - rightLen
+    if diff >= limit || 0 - diff >= limit {
+        return limit
+    }
+    let mut prev: List<Int> = []
+    let mut cur: List<Int> = []
+    let mut j = 0
+    for j <= rightLen {
+        prev.push(j)
+        cur.push(0)
+        j = j + 1
+    }
+    let mut i = 1
+    for i <= leftLen {
+        cur[0] = i
+        let mut rowMin = cur[0]
+        j = 1
+        for j <= rightLen {
+            let leftUnit = checkDiagStringListAt(leftUnits, i - 1)
+            let rightUnit = checkDiagStringListAt(rightUnits, j - 1)
+            let cost = if leftUnit == rightUnit {
+                0
+            } else {
+                1
+            }
+            let mut dist = prev[j] + 1
+            if cur[j - 1] + 1 < dist {
+                dist = cur[j - 1] + 1
+            }
+            if prev[j - 1] + cost < dist {
+                dist = prev[j - 1] + cost
+            }
+            cur[j] = dist
+            if dist < rowMin {
+                rowMin = dist
+            }
+            j = j + 1
+        }
+        if rowMin >= limit {
+            return limit
+        }
+        j = 0
+        for j <= rightLen {
+            prev[j] = cur[j]
+            cur[j] = 0
+            j = j + 1
+        }
+        i = i + 1
+    }
+    prev[rightLen]
+}
+
+fn checkDiagStringListAt(items: List<String>, target: Int) -> String {
+    let mut idx = 0
+    for item in items {
+        if idx == target {
+            return item
+        }
+        idx = idx + 1
+    }
+    ""
+}
+
+// ---------------------------------------------------------------------
 // Store helpers — the elaborator keeps a `List<CheckDiagnostic>` on
 // its context. These helpers append without forgetting to stamp the
 // severity, and they count errors for the legacy summary contract.
