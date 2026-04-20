@@ -140,7 +140,7 @@ func firstOpt(opts []Opts) Opts {
 func File(f *ast.File, rr *resolve.Result, opts ...Opts) *Result {
 	opt := firstOpt(opts)
 	result := newResult()
-	if d := DesugarBuildersInFile(f); len(d) > 0 {
+	if d := DesugarBuildersInFile(f, rr); len(d) > 0 {
 		result.Diags = append(result.Diags, d...)
 	}
 	applyNativeFileResult(result, f, rr, opt.Source, opt.Stdlib)
@@ -174,7 +174,7 @@ func Package(pkg *resolve.Package, pr *resolve.PackageResult, opts ...Opts) *Res
 		if pf == nil {
 			continue
 		}
-		if d := DesugarBuildersInFile(pf.File); len(d) > 0 {
+		if d := DesugarBuildersInFile(pf.File, perFileResolveResult(pf)); len(d) > 0 {
 			result.Diags = append(result.Diags, d...)
 		}
 	}
@@ -242,7 +242,7 @@ func Workspace(
 			if pf == nil {
 				continue
 			}
-			if d := DesugarBuildersInFile(pf.File); len(d) > 0 {
+			if d := DesugarBuildersInFile(pf.File, perFileResolveResult(pf)); len(d) > 0 {
 				out[e.path].Diags = append(out[e.path].Diags, d...)
 			}
 		}
@@ -312,6 +312,17 @@ func recordSelfhostDeclPass(onDecl func(ast.Decl, string, time.Duration), file *
 	for _, d := range file.Decls {
 		onDecl(d, phase, 0)
 	}
+}
+
+// perFileResolveResult builds the minimal resolve.Result shape the
+// builder desugarer consumes (Refs for ident→symbol lookups) from a
+// single resolved PackageFile. Returns nil if the file has no refs
+// map yet, which leaves the desugarer in local-file-only mode.
+func perFileResolveResult(pf *resolve.PackageFile) *resolve.Result {
+	if pf == nil || pf.Refs == nil {
+		return nil
+	}
+	return &resolve.Result{Refs: pf.Refs, TypeRefs: pf.TypeRefs, FileScope: pf.FileScope}
 }
 
 func isProviderStdlibPackage(ws *resolve.Workspace, path string, pkg *resolve.Package) bool {

@@ -6,6 +6,7 @@ import (
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
+	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/token"
 )
 
@@ -14,28 +15,31 @@ import (
 // `CodeBuilderMissingRequiredField` (E0774) when a chain ends at
 // `.build()` without setters for every required `pub` field.
 //
-// The rewrite pattern is:
+// Two chain roots are recognised:
 //
-//	Point.builder().x(3).y(4).build()   =>   Point { x: 3, y: 4 }
+//	Type.builder().x(3).y(4).build()   =>   Type { x: 3, y: 4 }
+//	value.toBuilder().x(3).build()     =>   Type { ..value, x: 3 }
 //
 // Setter names become struct field names; their argument becomes the
-// field value. The original `.builder()` root identifies the struct,
-// whose decl must live in the same file (v0.5.first-slice scope —
-// cross-package builder resolution is follow-up work).
+// field value. The `.builder()` root identifies the struct by name;
+// the `.toBuilder()` root needs the receiver's type, which is
+// recovered statically from: (a) a struct-literal receiver, (b) a
+// `Type.builder()…build()` chain receiver, or (c) an identifier
+// bound earlier in the same block by one of those two forms.
 //
-// Mutation happens in place: every Expr slot the walker descends into
-// is reassigned with the rewritten value. Call sites that sit under
-// unsupported holders (closure bodies, match arm bodies, etc.) are
-// walked defensively but the rewrite still applies.
+// When `resolve.Result` is supplied, `Ident.builder()` calls resolve
+// through the resolver's ref map first, which finds structs imported
+// from other packages via `use`. A nil resolve result falls back to
+// the same-file struct table.
 //
 // Returns the diagnostics produced during the walk; the File is
-// mutated regardless of whether diagnostics were emitted, because a
-// partial chain may still be well-typed for downstream phases.
-func DesugarBuildersInFile(f *ast.File) []*diag.Diagnostic {
+// mutated regardless, because a partial chain may still be
+// well-typed for downstream phases.
+func DesugarBuildersInFile(f *ast.File, rr *resolve.Result) []*diag.Diagnostic {
 	if f == nil {
 		return nil
 	}
-	w := newBuilderDesugar(f)
+	w := newBuilderDesugar(f, rr)
 	for _, d := range f.Decls {
 		w.decl(d)
 	}
@@ -43,18 +47,97 @@ func DesugarBuildersInFile(f *ast.File) []*diag.Diagnostic {
 }
 
 type builderDesugar struct {
-	structs map[string]*ast.StructDecl
-	diags   []*diag.Diagnostic
+	localStructs map[string]*ast.StructDecl
+	refs         map[*ast.Ident]*resolve.Symbol
+	diags        []*diag.Diagnostic
+	// scope is a stack of per-block variable → struct-decl bindings
+	// used to recover the receiver type of `ident.toBuilder()` when
+	// `ident` was bound in the same block by a form we can trace.
+	scope []map[string]*ast.StructDecl
 }
 
-func newBuilderDesugar(f *ast.File) *builderDesugar {
-	out := &builderDesugar{structs: map[string]*ast.StructDecl{}}
+func newBuilderDesugar(f *ast.File, rr *resolve.Result) *builderDesugar {
+	out := &builderDesugar{
+		localStructs: map[string]*ast.StructDecl{},
+	}
+	if rr != nil {
+		out.refs = rr.Refs
+	}
 	for _, d := range f.Decls {
 		if sd, ok := d.(*ast.StructDecl); ok {
-			out.structs[sd.Name] = sd
+			out.localStructs[sd.Name] = sd
 		}
 	}
 	return out
+}
+
+// structByIdent returns the struct declaration an Ident resolves to.
+// The local-file table is consulted first so unit tests without a
+// resolve.Result keep working; on a miss, the resolver's Refs map
+// picks up imported structs whose decl lives in another file.
+func (w *builderDesugar) structByIdent(id *ast.Ident) *ast.StructDecl {
+	if id == nil {
+		return nil
+	}
+	if sd, ok := w.localStructs[id.Name]; ok {
+		return sd
+	}
+	if w.refs == nil {
+		return nil
+	}
+	sym := w.refs[id]
+	if sym == nil || sym.Kind != resolve.SymStruct {
+		return nil
+	}
+	if sd, ok := sym.Decl.(*ast.StructDecl); ok {
+		return sd
+	}
+	return nil
+}
+
+// ---- block-scope binding tracking (for Ident.toBuilder()) ----
+
+func (w *builderDesugar) pushScope() {
+	w.scope = append(w.scope, map[string]*ast.StructDecl{})
+}
+
+func (w *builderDesugar) popScope() {
+	if n := len(w.scope); n > 0 {
+		w.scope = w.scope[:n-1]
+	}
+}
+
+func (w *builderDesugar) bindLocal(name string, sd *ast.StructDecl) {
+	if name == "" || sd == nil || len(w.scope) == 0 {
+		return
+	}
+	w.scope[len(w.scope)-1][name] = sd
+}
+
+func (w *builderDesugar) lookupLocal(name string) *ast.StructDecl {
+	for i := len(w.scope) - 1; i >= 0; i-- {
+		if sd, ok := w.scope[i][name]; ok {
+			return sd
+		}
+	}
+	return nil
+}
+
+// structFromReceiver returns the struct declaration the receiver of
+// `.toBuilder()` resolves to, considering the three traceable shapes.
+// Returns nil when the type is unknown to static analysis.
+func (w *builderDesugar) structFromReceiver(e ast.Expr) *ast.StructDecl {
+	switch n := e.(type) {
+	case *ast.StructLit:
+		if id, ok := n.Type.(*ast.Ident); ok {
+			return w.structByIdent(id)
+		}
+	case *ast.Ident:
+		return w.lookupLocal(n.Name)
+	case *ast.ParenExpr:
+		return w.structFromReceiver(n.X)
+	}
+	return nil
 }
 
 // ---- decl / stmt / block walkers ----
@@ -99,6 +182,8 @@ func (w *builderDesugar) block(b *ast.Block) {
 	if b == nil {
 		return
 	}
+	w.pushScope()
+	defer w.popScope()
 	for _, s := range b.Stmts {
 		w.stmt(s)
 	}
@@ -112,6 +197,11 @@ func (w *builderDesugar) stmt(s ast.Stmt) {
 		if n.Value != nil {
 			n.Value = w.expr(n.Value)
 		}
+		// After rewriting, snapshot the bound variable's type when
+		// we can recover it statically. The check runs on the
+		// post-rewrite value so a builder chain already collapsed to
+		// a struct literal is discovered uniformly.
+		w.recordLetBinding(n)
 	case *ast.ExprStmt:
 		if n.X != nil {
 			n.X = w.expr(n.X)
@@ -146,11 +236,28 @@ func (w *builderDesugar) stmt(s ast.Stmt) {
 	}
 }
 
+// recordLetBinding registers `let x = StructLit` (after the rewriter
+// has a chance to collapse a chain) into the current block scope so
+// downstream `x.toBuilder()` call sites know the receiver's type.
+func (w *builderDesugar) recordLetBinding(ls *ast.LetStmt) {
+	if ls == nil || ls.Value == nil {
+		return
+	}
+	id, ok := ls.Pattern.(*ast.IdentPat)
+	if !ok || id.Name == "" {
+		return
+	}
+	if sd := w.structFromReceiver(ls.Value); sd != nil {
+		w.bindLocal(id.Name, sd)
+	}
+}
+
 // ---- expression walker ----
 
-// expr walks `e`, recursively rewriting child expressions, and finally
-// attempts to desugar the top node if it matches the builder pattern.
-// Returns the possibly-rewritten expression; callers must reassign.
+// expr walks `e`, recursively rewriting child expressions, and
+// finally attempts to desugar the top node if it matches the builder
+// pattern. Returns the possibly-rewritten expression; callers must
+// reassign.
 func (w *builderDesugar) expr(e ast.Expr) ast.Expr {
 	if e == nil {
 		return nil
@@ -275,12 +382,21 @@ func (w *builderDesugar) expr(e ast.Expr) ast.Expr {
 
 // ---- desugar core ----
 
+// builderSetter is the pending (fieldName, value) pair collected from
+// one `.field(value)` call in the chain, along with the source
+// position of the field name for diagnostics.
+type builderSetter struct {
+	name  string
+	value ast.Expr
+	pos   token.Pos
+}
+
 // tryDesugar checks whether `call` is the terminal `.build()` of an
 // auto-derived builder chain. When it is, tryDesugar validates the
-// required-field set, emits E0774 if any are missing, and returns the
-// equivalent struct literal. When the call is not a builder chain (or
-// the chain roots in an unknown type), tryDesugar returns nil so the
-// caller leaves the original expression in place.
+// required-field set, emits E0774 if any are missing, and returns
+// the equivalent struct literal. When the call is not a builder
+// chain (or the chain roots in an unknown type), tryDesugar returns
+// nil so the caller leaves the original expression in place.
 func (w *builderDesugar) tryDesugar(call *ast.CallExpr) ast.Expr {
 	if call == nil || len(call.Args) != 0 {
 		return nil
@@ -289,7 +405,6 @@ func (w *builderDesugar) tryDesugar(call *ast.CallExpr) ast.Expr {
 	if !ok || build.Name != "build" || build.IsOptional {
 		return nil
 	}
-	// Walk setters back to the root.
 	var setters []builderSetter
 	cursor := build.X
 	for {
@@ -305,15 +420,25 @@ func (w *builderDesugar) tryDesugar(call *ast.CallExpr) ast.Expr {
 			if len(inner.Args) != 0 {
 				return nil
 			}
-			typeName, ok := identName(fe.X)
+			id, ok := fe.X.(*ast.Ident)
 			if !ok {
 				return nil
 			}
-			sd, ok := w.structs[typeName]
-			if !ok {
+			sd := w.structByIdent(id)
+			if sd == nil {
 				return nil
 			}
-			return w.rewrite(call, sd, setters)
+			return w.rewriteFromBuilder(call, sd, setters)
+		}
+		if fe.Name == "toBuilder" {
+			if len(inner.Args) != 0 {
+				return nil
+			}
+			sd := w.structFromReceiver(fe.X)
+			if sd == nil {
+				return nil
+			}
+			return w.rewriteFromToBuilder(call, sd, fe.X, setters)
 		}
 		// Intermediate `.field(value)` setter. Must have exactly one
 		// positional arg; keyword args are not generated.
@@ -329,31 +454,51 @@ func (w *builderDesugar) tryDesugar(call *ast.CallExpr) ast.Expr {
 	}
 }
 
-// rewrite constructs the struct literal that replaces the builder
-// chain, in source order (setters were collected tail-first so the
-// last caller-visible setter wins when duplicated). Missing required
-// fields produce an E0774 diagnostic but still yield a literal — the
-// literal carries every set field so downstream type-checking can
-// diagnose additional problems without cascading "unknown identifier".
-// builderSetter is the pending (fieldName, value) pair collected from
-// one `.field(value)` call in the chain, along with the source
-// position of the field name for diagnostics.
-type builderSetter struct {
-	name  string
-	value ast.Expr
-	pos   token.Pos
-}
-
-func (w *builderDesugar) rewrite(
+// rewriteFromBuilder handles the `Type.builder()…build()` chain. The
+// resulting struct literal names the type, carries each set field in
+// declaration order, and omits required-but-missing fields after
+// recording a diagnostic (the downstream checker will then see a
+// partial literal that still type-checks for every written field).
+func (w *builderDesugar) rewriteFromBuilder(
 	call *ast.CallExpr,
 	sd *ast.StructDecl,
 	setters []builderSetter,
 ) ast.Expr {
-	// Last-write-wins across duplicated setters.
-	values := map[string]ast.Expr{}
-	positions := map[string]token.Pos{}
-	// setters is tail-first (we walked backwards); iterate tail-first so
-	// the first write we see is the rightmost `.x(...)` call.
+	values, positions := collapseSetters(setters)
+	required := requiredPubFieldNames(sd)
+	missing := missingRequired(required, values)
+	if len(missing) > 0 {
+		w.emitMissing(call, sd.Name, missing)
+	}
+	return buildStructLit(call, sd, values, positions, nil)
+}
+
+// rewriteFromToBuilder handles `receiver.toBuilder()…build()`. The
+// struct literal spreads the receiver so unset fields inherit their
+// prior values — per LANG_SPEC §3.3 "Returns a builder preloaded with
+// all current field values". G9 therefore does not apply: every
+// required field is already populated by the spread. The setters
+// simply overwrite the fields the user named.
+func (w *builderDesugar) rewriteFromToBuilder(
+	call *ast.CallExpr,
+	sd *ast.StructDecl,
+	spread ast.Expr,
+	setters []builderSetter,
+) ast.Expr {
+	values, positions := collapseSetters(setters)
+	return buildStructLit(call, sd, values, positions, spread)
+}
+
+// collapseSetters applies last-write-wins over duplicated field
+// names and returns the resulting value / position maps. `setters`
+// is tail-first (the walker pushed each as it descended), so the
+// first occurrence we see in iteration order is the rightmost
+// setter the user wrote.
+func collapseSetters(setters []builderSetter) (
+	values map[string]ast.Expr, positions map[string]token.Pos,
+) {
+	values = map[string]ast.Expr{}
+	positions = map[string]token.Pos{}
 	seen := map[string]struct{}{}
 	for _, s := range setters {
 		if _, dup := seen[s.name]; dup {
@@ -363,37 +508,52 @@ func (w *builderDesugar) rewrite(
 		values[s.name] = s.value
 		positions[s.name] = s.pos
 	}
+	return values, positions
+}
 
-	// Collect pub field names in declaration order so missing-field
-	// diagnostics match source layout.
-	var required []string
+// requiredPubFieldNames returns the pub-no-default field names in
+// declaration order, which is the G9 "must-be-set" set.
+func requiredPubFieldNames(sd *ast.StructDecl) []string {
+	var out []string
 	for _, f := range sd.Fields {
 		if f == nil || !f.Pub {
 			continue
 		}
 		if f.Default == nil {
-			required = append(required, f.Name)
+			out = append(out, f.Name)
 		}
 	}
+	return out
+}
 
-	// G9: every required field must appear in the setter map.
-	var missing []string
+// missingRequired returns the required field names absent from the
+// values map, in the original declaration order.
+func missingRequired(required []string, values map[string]ast.Expr) []string {
+	var out []string
 	for _, name := range required {
 		if _, ok := values[name]; !ok {
-			missing = append(missing, name)
+			out = append(out, name)
 		}
 	}
-	if len(missing) > 0 {
-		w.emitMissing(call, sd.Name, missing)
-	}
+	return out
+}
 
-	// Assemble the struct literal. Fields are emitted in declaration
-	// order so formatter and tests see a canonical shape regardless of
-	// the setter ordering the user wrote.
+// buildStructLit assembles the rewritten struct literal in
+// declaration order. When `spread` is non-nil the literal carries
+// `..spread` so unset fields inherit the receiver's values (the
+// `toBuilder` case).
+func buildStructLit(
+	call *ast.CallExpr,
+	sd *ast.StructDecl,
+	values map[string]ast.Expr,
+	positions map[string]token.Pos,
+	spread ast.Expr,
+) ast.Expr {
 	lit := &ast.StructLit{
-		PosV: call.PosV,
-		EndV: call.EndV,
-		Type: &ast.Ident{PosV: call.PosV, EndV: call.PosV, Name: sd.Name},
+		PosV:   call.PosV,
+		EndV:   call.EndV,
+		Type:   &ast.Ident{PosV: call.PosV, EndV: call.PosV, Name: sd.Name},
+		Spread: spread,
 	}
 	for _, f := range sd.Fields {
 		if f == nil || !f.Pub {
@@ -401,9 +561,6 @@ func (w *builderDesugar) rewrite(
 		}
 		val, ok := values[f.Name]
 		if !ok {
-			// Required-but-missing fields were already diagnosed; skip
-			// them in the literal so the downstream checker sees a
-			// shape that still parses.
 			continue
 		}
 		lit.Fields = append(lit.Fields, &ast.StructLitField{
@@ -432,14 +589,4 @@ func (w *builderDesugar) emitMissing(call *ast.CallExpr, typeName string, missin
 		Hint(hint).
 		Note("LANG_SPEC §3.3 (G9): builder rejects `.build()` until every `pub` field without a default is set")
 	w.diags = append(w.diags, b.Build())
-}
-
-// identName returns the bare name of `e` if it is a plain Ident. The
-// builder root must be an Ident referring to a struct in the same
-// file (FieldExpr/TurbofishExpr paths are follow-up work).
-func identName(e ast.Expr) (string, bool) {
-	if id, ok := e.(*ast.Ident); ok && id.Name != "" {
-		return id.Name, true
-	}
-	return "", false
 }
