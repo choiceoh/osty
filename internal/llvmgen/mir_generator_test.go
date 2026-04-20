@@ -2258,3 +2258,148 @@ func TestGenerateFromMIRStringOrdering(t *testing.T) {
 		})
 	}
 }
+
+// TestGenerateFromMIRSetRemove verifies Set.remove(item) dispatches
+// through the runtime `osty_rt_set_remove_<kind>` symbols. The ABI
+// mirrors set_insert — i1 return, typed by element LLVM kind.
+func TestGenerateFromMIRSetRemove(t *testing.T) {
+	setT := &ir.NamedType{Name: "Set", Args: []ir.Type{ir.TInt}, Builtin: true}
+	fn := &ir.FnDecl{
+		Name:   "drop",
+		Return: ir.TBool,
+		Params: []*ir.Param{
+			{Name: "s", Type: setT},
+			{Name: "v", Type: ir.TInt},
+		},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "s", Kind: ir.IdentParam, T: setT},
+				Name:     "remove",
+				Args: []ir.Arg{
+					{Value: &ir.Ident{Name: "v", Kind: ir.IdentParam, T: ir.TInt}},
+				},
+				T: ir.TBool,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/set_remove.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare i1 @osty_rt_set_remove_i64(ptr, i64)",
+		"call i1 @osty_rt_set_remove_i64(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+// TestGenerateFromMIRSetRemoveString verifies the string-key runtime
+// suffix variant — Set<String>.remove routes through the string
+// dispatch.
+func TestGenerateFromMIRSetRemoveString(t *testing.T) {
+	setT := &ir.NamedType{Name: "Set", Args: []ir.Type{ir.TString}, Builtin: true}
+	fn := &ir.FnDecl{
+		Name:   "drop",
+		Return: ir.TBool,
+		Params: []*ir.Param{
+			{Name: "s", Type: setT},
+			{Name: "v", Type: ir.TString},
+		},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "s", Kind: ir.IdentParam, T: setT},
+				Name:     "remove",
+				Args: []ir.Arg{
+					{Value: &ir.Ident{Name: "v", Kind: ir.IdentParam, T: ir.TString}},
+				},
+				T: ir.TBool,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/set_remove_string.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare i1 @osty_rt_set_remove_string(ptr, ptr)",
+		"call i1 @osty_rt_set_remove_string(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+// TestGenerateFromMIRBytesLen verifies Bytes.len() dispatches through
+// `osty_rt_bytes_len(ptr) -> i64`. Bytes is a primitive, lowered to
+// an opaque pointer at the LLVM level.
+func TestGenerateFromMIRBytesLen(t *testing.T) {
+	fn := &ir.FnDecl{
+		Name:   "sz",
+		Return: ir.TInt,
+		Params: []*ir.Param{{Name: "b", Type: ir.TBytes}},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "b", Kind: ir.IdentParam, T: ir.TBytes},
+				Name:     "len",
+				T:        ir.TInt,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/bytes_len.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare i64 @osty_rt_bytes_len(ptr)",
+		"call i64 @osty_rt_bytes_len(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+// TestGenerateFromMIRBytesIsEmpty verifies Bytes.isEmpty() dispatches
+// through `osty_rt_bytes_is_empty(ptr) -> i1`.
+func TestGenerateFromMIRBytesIsEmpty(t *testing.T) {
+	fn := &ir.FnDecl{
+		Name:   "blank",
+		Return: ir.TBool,
+		Params: []*ir.Param{{Name: "b", Type: ir.TBytes}},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "b", Kind: ir.IdentParam, T: ir.TBytes},
+				Name:     "isEmpty",
+				T:        ir.TBool,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/bytes_empty.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare i1 @osty_rt_bytes_is_empty(ptr)",
+		"call i1 @osty_rt_bytes_is_empty(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}

@@ -448,7 +448,9 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 		mir.IntrinsicMapRemove:
 		return true
 	case mir.IntrinsicSetInsert, mir.IntrinsicSetContains, mir.IntrinsicSetLen,
-		mir.IntrinsicSetToList:
+		mir.IntrinsicSetToList, mir.IntrinsicSetRemove:
+		return true
+	case mir.IntrinsicBytesLen, mir.IntrinsicBytesIsEmpty:
 		return true
 	// Concurrency — channels / tasks / select / cancellation / helpers.
 	case mir.IntrinsicChanMake, mir.IntrinsicChanSend, mir.IntrinsicChanRecv,
@@ -1396,8 +1398,10 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 		mir.IntrinsicMapRemove:
 		return g.emitMapIntrinsic(i)
 	case mir.IntrinsicSetInsert, mir.IntrinsicSetContains, mir.IntrinsicSetLen,
-		mir.IntrinsicSetToList:
+		mir.IntrinsicSetToList, mir.IntrinsicSetRemove:
 		return g.emitSetIntrinsic(i)
+	case mir.IntrinsicBytesLen, mir.IntrinsicBytesIsEmpty:
+		return g.emitBytesIntrinsic(i)
 	case mir.IntrinsicChanMake, mir.IntrinsicChanSend, mir.IntrinsicChanRecv,
 		mir.IntrinsicChanClose, mir.IntrinsicChanIsClosed:
 		return g.emitChannelIntrinsic(i)
@@ -1762,8 +1766,57 @@ func (g *mirGen) emitSetIntrinsic(i *mir.IntrinsicInstr) error {
 			elemString)
 		g.flushOstyEmitter(em)
 		return nil
+	case mir.IntrinsicSetRemove:
+		if len(i.Args) != 2 {
+			return unsupported("mir-mvp", "set_remove arity")
+		}
+		vReg, err := g.evalOperand(i.Args[1], elemT)
+		if err != nil {
+			return err
+		}
+		sym := setRuntimeRemoveSymbol(elemLLVM, elemString)
+		g.declareRuntime(sym, "declare i1 @"+sym+"(ptr, "+elemLLVM+")")
+		em := g.ostyEmitter()
+		result := llvmSetRemove(em,
+			&LlvmValue{typ: "ptr", name: setReg},
+			&LlvmValue{typ: elemLLVM, name: vReg},
+			elemString)
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("set intrinsic kind %d", i.Kind))
+}
+
+// emitBytesIntrinsic dispatches bytes primitive methods to runtime
+// symbols. Bytes values flow through the runtime as opaque pointers
+// to `osty_rt_bytes { ptr data; i64 len }`. The runtime functions
+// live beside the list/string helpers in osty_runtime.c.
+func (g *mirGen) emitBytesIntrinsic(i *mir.IntrinsicInstr) error {
+	if len(i.Args) < 1 {
+		return unsupported("mir-mvp", "bytes intrinsic with no receiver")
+	}
+	bytesOp := i.Args[0]
+	bytesReg, err := g.evalOperand(bytesOp, bytesOp.Type())
+	if err != nil {
+		return err
+	}
+	switch i.Kind {
+	case mir.IntrinsicBytesLen:
+		sym := "osty_rt_bytes_len"
+		g.declareRuntime(sym, "declare i64 @"+sym+"(ptr)")
+		em := g.ostyEmitter()
+		result := llvmCall(em, "i64", sym, []*LlvmValue{{typ: "ptr", name: bytesReg}})
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
+	case mir.IntrinsicBytesIsEmpty:
+		sym := "osty_rt_bytes_is_empty"
+		g.declareRuntime(sym, "declare i1 @"+sym+"(ptr)")
+		em := g.ostyEmitter()
+		result := llvmCall(em, "i1", sym, []*LlvmValue{{typ: "ptr", name: bytesReg}})
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
+	}
+	return unsupported("mir-mvp", fmt.Sprintf("bytes intrinsic kind %d", i.Kind))
 }
 
 // ==== concurrency intrinsics ====
