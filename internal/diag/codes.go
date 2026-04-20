@@ -960,6 +960,27 @@ const (
 	//      backend lowering table (§19.7).
 	CodeIntrinsicNonEmptyBody = "E0773"
 
+	// CodeBuilderMissingRequiredField: a call to the auto-derived
+	// `.build()` on `Type.builder()` did not set every `pub` field
+	// that lacks a default. LANG_SPEC §3.3 (G9) makes this a
+	// compile-time error and names the missing fields so the fix is
+	// a direct chain addition. The diagnostic points at the `.build()`
+	// call site because that is where the required-field predicate is
+	// evaluated; the `.builder()` root is attached as a supporting
+	// span.
+	//
+	// Spec: v0.5 §3.3, gap G9.
+	// Example:
+	//
+	//   pub struct Point { pub x: Int, pub y: Int }
+	//   let p = Point.builder().x(3).build()
+	//                                 ^^^^^ missing: y
+	//
+	// Fix: add `.y(<value>)` to the chain before `.build()`, or set
+	// the field at declaration time via a default (`pub y: Int = 0`)
+	// to drop it from the required set.
+	CodeBuilderMissingRequiredField = "E0774"
+
 	// Manifest — TOML syntax.
 
 	// Fallback TOML syntax error in `osty.toml`.

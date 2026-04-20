@@ -140,6 +140,9 @@ func firstOpt(opts []Opts) Opts {
 func File(f *ast.File, rr *resolve.Result, opts ...Opts) *Result {
 	opt := firstOpt(opts)
 	result := newResult()
+	if d := DesugarBuildersInFile(f, rr); len(d) > 0 {
+		result.Diags = append(result.Diags, d...)
+	}
 	applyNativeFileResult(result, f, rr, opt.Source, opt.Stdlib)
 	if d := runPrivilegeGate(f, opt.Privileged); len(d) > 0 {
 		result.Diags = append(result.Diags, d...)
@@ -166,6 +169,14 @@ func Package(pkg *resolve.Package, pr *resolve.PackageResult, opts ...Opts) *Res
 	result := newResult()
 	if pkg == nil || len(pkg.Files) == 0 {
 		return result
+	}
+	for _, pf := range pkg.Files {
+		if pf == nil {
+			continue
+		}
+		if d := DesugarBuildersInFile(pf.File, perFileResolveResult(pf)); len(d) > 0 {
+			result.Diags = append(result.Diags, d...)
+		}
 	}
 	applyNativePackageResult(result, pkg, pr, nil, opt.Stdlib)
 	privileged := isPrivilegedPackage(pkg)
@@ -227,6 +238,14 @@ func Workspace(
 	out := make(map[string]*Result, len(walk))
 	for _, e := range walk {
 		out[e.path] = resultWithSharedMaps(shared)
+		for _, pf := range e.pkg.Files {
+			if pf == nil {
+				continue
+			}
+			if d := DesugarBuildersInFile(pf.File, perFileResolveResult(pf)); len(d) > 0 {
+				out[e.path].Diags = append(out[e.path].Diags, d...)
+			}
+		}
 	}
 	applyNativeWorkspaceResults(ws, resolved, out, opt.Stdlib)
 	for _, e := range walk {
@@ -293,6 +312,17 @@ func recordSelfhostDeclPass(onDecl func(ast.Decl, string, time.Duration), file *
 	for _, d := range file.Decls {
 		onDecl(d, phase, 0)
 	}
+}
+
+// perFileResolveResult builds the minimal resolve.Result shape the
+// builder desugarer consumes (Refs for ident→symbol lookups) from a
+// single resolved PackageFile. Returns nil if the file has no refs
+// map yet, which leaves the desugarer in local-file-only mode.
+func perFileResolveResult(pf *resolve.PackageFile) *resolve.Result {
+	if pf == nil || pf.Refs == nil {
+		return nil
+	}
+	return &resolve.Result{Refs: pf.Refs, TypeRefs: pf.TypeRefs, FileScope: pf.FileScope}
 }
 
 func isProviderStdlibPackage(ws *resolve.Workspace, path string, pkg *resolve.Package) bool {

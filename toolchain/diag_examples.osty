@@ -31,6 +31,7 @@ pub fn diagHarvestCases() -> List<DiagHarvestCase> {
         DiagHarvestCase { code: "E0609", example: "#[deprecated]\n#[deprecated]           // rejected\npub fn f() \{\}", phase: "check" },
         DiagHarvestCase { code: "E0721", example: "let x: UInt8 = 300  // rejected", phase: "check" },
         DiagHarvestCase { code: "E0739", example: "#[json(key = 42)]   // `key` expects a String", phase: "check" },
+        DiagHarvestCase { code: "E0774", example: "pub struct Point \{ pub x: Int, pub y: Int \}\nlet p = Point.builder().x(3).build()\n                              ^^^^^ missing: y", phase: "check" },
         DiagHarvestCase { code: "L0001", example: "fn f() \{\n    let unused = 42   // warning: binding `unused` is never used\n    println(\"hi\")\n\}", phase: "lint" },
         DiagHarvestCase { code: "L0002", example: "fn greet(name: String, times: Int) \{   // warning on `times`\n    println(name)\n\}", phase: "lint" },
         DiagHarvestCase { code: "L0003", example: "use foo.bar.baz\n\nfn main() \{ println(\"hi\") \}   // warning: imported `baz` never used", phase: "lint" },

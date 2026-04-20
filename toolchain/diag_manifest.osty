@@ -139,11 +139,12 @@ pub fn diagnosticFamilyForCode(code: String) -> DiagnosticFamily {
     if code == "E0554" { return FamilyResolution }
     // Annotations — cfg (E0405)
     if code == "E0405" { return FamilyAnnotation }
-    // Runtime sublanguage (E0771–E0773)
+    // Runtime sublanguage (E0771–E0774)
     if code == "E0771" { return FamilyTypeChecking }
     if code == "E0770" { return FamilyTypeChecking }
     if code == "E0772" { return FamilyTypeChecking }
     if code == "E0773" { return FamilyTypeChecking }
+    if code == "E0774" { return FamilyTypeChecking }
     // Manifest — TOML syntax (E2000–E2004)
     if code == "E2000" { return FamilyManifest }
     if code == "E2001" { return FamilyManifest }
