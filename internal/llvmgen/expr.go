@@ -146,7 +146,10 @@ func (g *generator) emitExpr(expr ast.Expr) (value, error) {
 	switch e := expr.(type) {
 	case *ast.IntLit:
 		text := strings.ReplaceAll(e.Text, "_", "")
-		n, err := strconv.ParseInt(text, 10, 64)
+		// Base 0 so 0x / 0b / 0o prefixes parse correctly alongside
+		// plain decimal literals. Osty grammar allows all four; the
+		// previous base-10 pin silently rejected hex like 0x10000.
+		n, err := strconv.ParseInt(text, 0, 64)
 		if err != nil {
 			return value{}, unsupportedf("expression", "invalid Int literal %q", e.Text)
 		}
@@ -164,6 +167,10 @@ func (g *generator) emitExpr(expr ast.Expr) (value, error) {
 			return value{typ: "i1", ref: "true"}, nil
 		}
 		return value{typ: "i1", ref: "false"}, nil
+	case *ast.CharLit:
+		return value{typ: "i32", ref: strconv.FormatInt(int64(e.Value), 10)}, nil
+	case *ast.ByteLit:
+		return value{typ: "i8", ref: strconv.FormatInt(int64(e.Value), 10)}, nil
 	case *ast.StringLit:
 		return g.emitStringLiteral(e)
 	case *ast.Ident:
@@ -792,6 +799,16 @@ func (g *generator) emitCompare(op token.Kind, left, right value, isString bool)
 	switch left.typ {
 	case "i64", "i1":
 		pred := llvmIntComparePredicate(op.String())
+		if pred == "" {
+			g.takeOstyEmitter(emitter)
+			return value{}, unsupportedf("expression", "comparison operator %q", op)
+		}
+		out = llvmCompare(emitter, pred, toOstyValue(left), toOstyValue(right))
+	case "i32", "i8":
+		// Char (i32) and Byte (i8) compare with unsigned predicates so
+		// Byte values 128..255 compare above the low range rather than
+		// below (signed ordering would flip them to negative).
+		pred := llvmUnsignedIntComparePredicate(op.String())
 		if pred == "" {
 			g.takeOstyEmitter(emitter)
 			return value{}, unsupportedf("expression", "comparison operator %q", op)
@@ -1961,6 +1978,58 @@ func (g *generator) emitMapInsert(base, key, val value) error {
 	return nil
 }
 
+// emitCharByteConversionCall lowers the zero-arg width-only conversions
+// between Char (i32), Byte (i8), and Int (i64) that the stdlib
+// `primitives/{char,int}.osty` expose as `#[intrinsic_methods]`:
+//
+//   - `ch.toInt()`  on Char → zext i32 → i64
+//   - `b.toInt()`   on Byte → zext i8  → i64
+//   - `n.toChar()`  on Int  → trunc i64 → i32
+//
+// Other width-changing integer conversions (toInt8, toByte returning
+// Result, etc.) still fall through to the unsupported-call path.
+func (g *generator) emitCharByteConversionCall(call *ast.CallExpr) (value, bool, error) {
+	field, ok := call.Fn.(*ast.FieldExpr)
+	if !ok || field.IsOptional {
+		return value{}, false, nil
+	}
+	if len(call.Args) != 0 {
+		return value{}, false, nil
+	}
+	baseInfo, ok := g.staticExprInfo(field.X)
+	if !ok {
+		return value{}, false, nil
+	}
+	switch {
+	case field.Name == "toInt" && (baseInfo.typ == "i32" || baseInfo.typ == "i8"):
+	case field.Name == "toChar" && baseInfo.typ == "i64":
+	default:
+		return value{}, false, nil
+	}
+	base, err := g.emitExpr(field.X)
+	if err != nil {
+		return value{}, true, err
+	}
+	emitter := g.toOstyEmitter()
+	tmp := llvmNextTemp(emitter)
+	switch {
+	case field.Name == "toInt" && base.typ == "i32":
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = zext i32 %s to i64", tmp, base.ref))
+		g.takeOstyEmitter(emitter)
+		return value{typ: "i64", ref: tmp}, true, nil
+	case field.Name == "toInt" && base.typ == "i8":
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = zext i8 %s to i64", tmp, base.ref))
+		g.takeOstyEmitter(emitter)
+		return value{typ: "i64", ref: tmp}, true, nil
+	case field.Name == "toChar" && base.typ == "i64":
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = trunc i64 %s to i32", tmp, base.ref))
+		g.takeOstyEmitter(emitter)
+		return value{typ: "i32", ref: tmp}, true, nil
+	}
+	g.takeOstyEmitter(emitter)
+	return value{}, false, nil
+}
+
 // stdlib primitives/{int,float,bool}.osty declare toString as
 // `#[intrinsic_methods]` placeholders with empty bodies, which would
 // otherwise lower to dead IR; this dispatcher routes to the same
@@ -2555,6 +2624,9 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 		return v, err
 	}
 	if v, found, err := g.emitPrimitiveToStringCall(call); found || err != nil {
+		return v, err
+	}
+	if v, found, err := g.emitCharByteConversionCall(call); found || err != nil {
 		return v, err
 	}
 	if v, found, err := g.emitStringMethodCall(call); found || err != nil {

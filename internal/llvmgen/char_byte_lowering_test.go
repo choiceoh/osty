@@ -1,0 +1,146 @@
+package llvmgen
+
+import (
+	"strings"
+	"testing"
+)
+
+// Char/Byte parameter and return lowering — LLVM011 had previously
+// first-walled on `lspUtf16UnitsForChar(ch: Char)` in the native
+// toolchain probe. Once Char lowered to i32 and Byte to i8, parameter
+// signatures and return types accept them without a diagnostic.
+func TestCharParameterLowersAsI32(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn width(ch: Char) -> Int {
+    if ch.toInt() >= 128 {
+        return 2
+    }
+    return 1
+}
+
+fn main() {
+    println(width('A'))
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/char_param.osty"})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"define i64 @width(i32",
+		"zext i32",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestByteParameterLowersAsI8(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn ordByte(b: Byte) -> Int {
+    b.toInt()
+}
+
+fn main() {
+    println(ordByte(b'Z'))
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/byte_param.osty"})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"define i64 @ordByte(i8",
+		"zext i8",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// Char comparison lowers via unsigned icmp so codepoints above 127 don't
+// flip under signed ordering. The `'0' <= c && c <= '9'` pattern is the
+// classic lexer shape that the toolchain front-end relies on.
+func TestCharCompareUsesUnsignedPredicate(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn isDigit(c: Char) -> Bool {
+    '0' <= c && c <= '9'
+}
+
+fn main() {
+    if isDigit('5') {
+        println(1)
+    } else {
+        println(0)
+    }
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/char_compare.osty"})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"icmp ule i32",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "icmp sle i32") {
+		t.Fatalf("Char compare used signed predicate; want unsigned:\n%s", got)
+	}
+}
+
+// Int.toChar() lowers as a trunc so the Osty-level `(n + '0'.toInt()).toChar()`
+// pattern in stdlib/char.osty hex digit construction works.
+func TestIntToCharTruncates(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn digit(n: Int) -> Char {
+    ('0'.toInt() + n).toChar()
+}
+
+fn main() {
+    let c = digit(3)
+    if c == '3' {
+        println(1)
+    } else {
+        println(0)
+    }
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/int_to_char.osty"})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"trunc i64",
+		"icmp eq i32",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// lspUtf16UnitsForChar is the exact shape that blocked the native
+// toolchain probe with LLVM011. Once Char is lowered, this compiles
+// cleanly with no unsupported diagnostic.
+func TestLspUtf16ShapeCompiles(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn lspUtf16UnitsForChar(ch: Char) -> Int {
+    if ch.toInt() >= 0x10000 {
+        return 2
+    }
+    return 1
+}
+
+fn main() {
+    println(lspUtf16UnitsForChar('A'))
+}
+`)
+	_, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/lsp_utf16.osty"})
+	if err != nil {
+		t.Fatalf("lspUtf16UnitsForChar still errors: %v", err)
+	}
+}
