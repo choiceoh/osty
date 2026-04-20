@@ -174,7 +174,56 @@ func propagateBlock(bb *BasicBlock) bool {
 			changed = true
 		}
 	}
+	// After const prop, a branch / switch whose scrutinee is now a
+	// literal can collapse into an unconditional goto. We only fold
+	// BoolConst branches and IntConst switches — the only shapes the
+	// lowerer emits. Non-matching types are left alone.
+	if foldTerminator(bb) {
+		changed = true
+	}
 	return changed
+}
+
+// foldTerminator rewrites a BranchTerm with a literal bool condition
+// or a SwitchIntTerm with a literal integer scrutinee into a plain
+// GotoTerm. Returns true on rewrite. Preserves span for diagnostics.
+func foldTerminator(bb *BasicBlock) bool {
+	switch t := bb.Term.(type) {
+	case *BranchTerm:
+		co, ok := t.Cond.(*ConstOp)
+		if !ok {
+			return false
+		}
+		bc, ok := co.Const.(*BoolConst)
+		if !ok {
+			return false
+		}
+		target := t.Else
+		if bc.Value {
+			target = t.Then
+		}
+		bb.Term = &GotoTerm{Target: target, SpanV: t.SpanV}
+		return true
+	case *SwitchIntTerm:
+		co, ok := t.Scrutinee.(*ConstOp)
+		if !ok {
+			return false
+		}
+		ic, ok := co.Const.(*IntConst)
+		if !ok {
+			return false
+		}
+		target := t.Default
+		for _, c := range t.Cases {
+			if c.Value == ic.Value {
+				target = c.Target
+				break
+			}
+		}
+		bb.Term = &GotoTerm{Target: target, SpanV: t.SpanV}
+		return true
+	}
+	return false
 }
 
 // substituteConst returns a ConstOp replacement for op when it is a
@@ -205,7 +254,9 @@ func substituteConst(op Operand, known map[LocalID]*ConstOp) *ConstOp {
 }
 
 // rewriteRValue walks an RValue's operand fields and applies rewrite.
-// Returns whether any operand was changed.
+// Returns whether any operand was changed. Place-carrying rvalues are
+// walked via rewritePlaceProjections so index operands embedded in
+// projection chains still get substituted.
 func rewriteRValue(rv RValue, rewrite func(*Operand)) bool {
 	before := newChangeCounter()
 	record := func(op *Operand) {
@@ -213,6 +264,13 @@ func rewriteRValue(rv RValue, rewrite func(*Operand)) bool {
 		rewrite(op)
 		if *op != old {
 			before.n++
+		}
+	}
+	recordPlace := func(p *Place) {
+		for i := range p.Projections {
+			if ip, ok := p.Projections[i].(*IndexProj); ok {
+				record(&ip.Index)
+			}
 		}
 	}
 	switch x := rv.(type) {
@@ -229,8 +287,16 @@ func rewriteRValue(rv RValue, rewrite func(*Operand)) bool {
 		}
 	case *CastRV:
 		record(&x.Arg)
-	case *DiscriminantRV, *LenRV, *AddressOfRV, *RefRV, *NullaryRV, *GlobalRefRV:
-		// these take a Place directly or nothing — nothing to rewrite.
+	case *DiscriminantRV:
+		recordPlace(&x.Place)
+	case *LenRV:
+		recordPlace(&x.Place)
+	case *AddressOfRV:
+		recordPlace(&x.Place)
+	case *RefRV:
+		recordPlace(&x.Place)
+	case *NullaryRV, *GlobalRefRV:
+		// nothing to rewrite.
 	}
 	return before.n > 0
 }

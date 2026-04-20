@@ -295,6 +295,138 @@ func TestOptimizeRunsAllPassesAndLeavesModuleValid(t *testing.T) {
 	}
 }
 
+// Regression: const propagation must reach through IndexProj operands
+// embedded inside RValue-held places (DiscriminantRV, LenRV, etc.) —
+// the first cut of rewriteRValue treated those as "nothing to rewrite".
+func TestCopyPropagateRewritesRValuePlaceIndex(t *testing.T) {
+	fn, bb := newTestFunction("reach_through_proj", TInt)
+	xs := fn.NewLocal("xs", TInt, false, Span{})
+	idx := fn.NewLocal("idx", TInt, false, Span{})
+	fn.Locals[xs].IsParam = false // synthetic, not a real param in this test
+
+	// _idx = const 0
+	// _return = len _xs[_idx]
+	bb.Instrs = append(bb.Instrs,
+		&AssignInstr{
+			Dest: Place{Local: idx},
+			Src:  &UseRV{Op: &ConstOp{Const: &IntConst{Value: 0, T: TInt}, T: TInt}},
+		},
+		&AssignInstr{
+			Dest: Place{Local: fn.ReturnLocal},
+			Src: &LenRV{
+				Place: Place{
+					Local: xs,
+					Projections: []Projection{
+						&IndexProj{
+							Index:    &CopyOp{Place: Place{Local: idx}, T: TInt},
+							ElemType: TInt,
+						},
+					},
+				},
+				T: TInt,
+			},
+		},
+	)
+	copyPropagateFn(fn)
+	lr := bb.Instrs[1].(*AssignInstr).Src.(*LenRV)
+	ip := lr.Place.Projections[0].(*IndexProj)
+	if _, ok := ip.Index.(*ConstOp); !ok {
+		t.Fatalf("IndexProj.Index inside LenRV should be const-prop'd, got %T", ip.Index)
+	}
+}
+
+// After const propagation, a BranchTerm whose condition is now a bool
+// literal should collapse to a GotoTerm.
+func TestFoldConstantBranch(t *testing.T) {
+	fn, entry := newTestFunction("foldbr", TUnit)
+	cond := fn.NewLocal("c", TBool, false, Span{})
+	thenBB := fn.NewBlock(Span{})
+	elseBB := fn.NewBlock(Span{})
+	fn.Block(thenBB).SetTerminator(&ReturnTerm{})
+	fn.Block(elseBB).SetTerminator(&ReturnTerm{})
+
+	entry.Instrs = append(entry.Instrs, &AssignInstr{
+		Dest: Place{Local: cond},
+		Src:  &UseRV{Op: &ConstOp{Const: &BoolConst{Value: true}, T: TBool}},
+	})
+	entry.SetTerminator(&BranchTerm{
+		Cond: &CopyOp{Place: Place{Local: cond}, T: TBool},
+		Then: thenBB,
+		Else: elseBB,
+	})
+	copyPropagateFn(fn)
+
+	gt, ok := entry.Term.(*GotoTerm)
+	if !ok {
+		t.Fatalf("expected BranchTerm to fold to GotoTerm, got %T", entry.Term)
+	}
+	if gt.Target != thenBB {
+		t.Fatalf("expected goto -> bb%d (true arm), got bb%d", thenBB, gt.Target)
+	}
+}
+
+// SwitchIntTerm whose scrutinee is a literal should collapse to a
+// GotoTerm at the matching case (or Default when no case matches).
+func TestFoldConstantSwitchInt(t *testing.T) {
+	fn, entry := newTestFunction("foldsw", TUnit)
+	scrut := fn.NewLocal("s", TInt, false, Span{})
+	caseA := fn.NewBlock(Span{})
+	caseB := fn.NewBlock(Span{})
+	def := fn.NewBlock(Span{})
+	for _, id := range []BlockID{caseA, caseB, def} {
+		fn.Block(id).SetTerminator(&ReturnTerm{})
+	}
+
+	entry.Instrs = append(entry.Instrs, &AssignInstr{
+		Dest: Place{Local: scrut},
+		Src:  &UseRV{Op: &ConstOp{Const: &IntConst{Value: 1, T: TInt}, T: TInt}},
+	})
+	entry.SetTerminator(&SwitchIntTerm{
+		Scrutinee: &CopyOp{Place: Place{Local: scrut}, T: TInt},
+		Cases: []SwitchCase{
+			{Value: 0, Target: caseA},
+			{Value: 1, Target: caseB},
+		},
+		Default: def,
+	})
+	copyPropagateFn(fn)
+
+	gt, ok := entry.Term.(*GotoTerm)
+	if !ok {
+		t.Fatalf("expected SwitchIntTerm to fold to GotoTerm, got %T", entry.Term)
+	}
+	if gt.Target != caseB {
+		t.Fatalf("expected goto -> bb%d (value 1), got bb%d", caseB, gt.Target)
+	}
+}
+
+// Same, but scrutinee value doesn't match any case — collapse to Default.
+func TestFoldConstantSwitchIntFallsThroughToDefault(t *testing.T) {
+	fn, entry := newTestFunction("folddef", TUnit)
+	scrut := fn.NewLocal("s", TInt, false, Span{})
+	caseA := fn.NewBlock(Span{})
+	def := fn.NewBlock(Span{})
+	fn.Block(caseA).SetTerminator(&ReturnTerm{})
+	fn.Block(def).SetTerminator(&ReturnTerm{})
+	entry.Instrs = append(entry.Instrs, &AssignInstr{
+		Dest: Place{Local: scrut},
+		Src:  &UseRV{Op: &ConstOp{Const: &IntConst{Value: 99, T: TInt}, T: TInt}},
+	})
+	entry.SetTerminator(&SwitchIntTerm{
+		Scrutinee: &CopyOp{Place: Place{Local: scrut}, T: TInt},
+		Cases:     []SwitchCase{{Value: 0, Target: caseA}},
+		Default:   def,
+	})
+	copyPropagateFn(fn)
+	gt, ok := entry.Term.(*GotoTerm)
+	if !ok {
+		t.Fatalf("expected fold to GotoTerm, got %T", entry.Term)
+	}
+	if gt.Target != def {
+		t.Fatalf("expected goto -> default bb%d, got bb%d", def, gt.Target)
+	}
+}
+
 func TestOptimizeIsIdempotent(t *testing.T) {
 	fn, bb := newTestFunction("idem", TInt)
 	tmp := fn.NewLocal("tmp", TInt, false, Span{})
