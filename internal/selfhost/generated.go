@@ -18872,6 +18872,78 @@ func opAddNode(p *OstyParser, node *AstNode) int {
 	return astArenaAdd(p.arena, node)
 }
 
+// Hand-authored E0106 helpers (mirror toolchain/parser.osty opIsLiteralDefaultAt / opCheckLiteralDefault)
+// until the bootstrap regen pipeline is repaired.
+func opIsLiteralDefaultAt(p *OstyParser, idx int) bool {
+	if idx < 0 {
+		return true
+	}
+	node := astArenaNodeAt(p.arena, idx)
+	k := node.kind
+	if _, ok := k.(*AstNodeKind_AstNIntLit); ok {
+		return true
+	}
+	if _, ok := k.(*AstNodeKind_AstNFloatLit); ok {
+		return true
+	}
+	if _, ok := k.(*AstNodeKind_AstNStringLit); ok {
+		return true
+	}
+	if _, ok := k.(*AstNodeKind_AstNCharLit); ok {
+		return true
+	}
+	if _, ok := k.(*AstNodeKind_AstNByteLit); ok {
+		return true
+	}
+	if _, ok := k.(*AstNodeKind_AstNBoolLit); ok {
+		return true
+	}
+	if _, ok := k.(*AstNodeKind_AstNUnary); ok {
+		if _, ok := node.op.(*FrontTokenKind_FrontMinus); ok {
+			inner := astArenaNodeAt(p.arena, node.left)
+			if _, ok := inner.kind.(*AstNodeKind_AstNIntLit); ok {
+				return true
+			}
+			if _, ok := inner.kind.(*AstNodeKind_AstNFloatLit); ok {
+				return true
+			}
+		}
+		return false
+	}
+	if _, ok := k.(*AstNodeKind_AstNIdent); ok {
+		return node.text == "None"
+	}
+	if _, ok := k.(*AstNodeKind_AstNCall); ok {
+		callee := astArenaNodeAt(p.arena, node.left)
+		if _, ok := callee.kind.(*AstNodeKind_AstNIdent); ok {
+			if (callee.text == "Ok" || callee.text == "Err") && len(node.children) == 1 {
+				return opIsLiteralDefaultAt(p, node.children[0])
+			}
+		}
+		return false
+	}
+	if _, ok := k.(*AstNodeKind_AstNList); ok {
+		return len(node.children) == 0
+	}
+	if _, ok := k.(*AstNodeKind_AstNTuple); ok {
+		return len(node.children) == 0
+	}
+	if _, ok := k.(*AstNodeKind_AstNMap); ok {
+		return node.flags == 1
+	}
+	return false
+}
+
+func opCheckLiteralDefault(p *OstyParser, idx int) {
+	if idx < 0 {
+		return
+	}
+	if opIsLiteralDefaultAt(p, idx) {
+		return
+	}
+	opErrorFull(p, "default value must be a literal", "use a literal, `None`, `Ok(lit)`, `Err(lit)`, `[]`, `{:}`, or `()`", "spec v0.4 R18: parameter and field defaults are restricted to literal forms", "E0106")
+}
+
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6971:1
 func opSyncDecl(p *OstyParser) {
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6972:5
@@ -21884,6 +21956,7 @@ func opParseFnDecl(p *OstyParser, isPub bool, anns []int) int {
 			if opEat(p, FrontTokenKind(&FrontTokenKind_FrontAssign{})) {
 				// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8279:49
 				paramNode.left = opParseExpr(p)
+				opCheckLiteralDefault(p, paramNode.left)
 			}
 		}
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8281:18
@@ -22001,6 +22074,7 @@ func opParseStructDecl(p *OstyParser, isPub bool, anns []int) int {
 			if opEat(p, FrontTokenKind(&FrontTokenKind_FrontAssign{})) {
 				// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8323:40
 				defIdx = opParseExpr(p)
+				opCheckLiteralDefault(p, defIdx)
 			}
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8324:13
 			fNode := emptyAstNode(AstNodeKind(&AstNodeKind_AstNField_{}))
