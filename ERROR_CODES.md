@@ -1030,7 +1030,7 @@ forward-compatibility hatch.
 
 ---
 
-## Runtime sublanguage (E0771–E0773)
+## Runtime sublanguage (E0771–E0774)
 
 ### E0771 — `CodePodShapeViolation`
 
@@ -1071,6 +1071,22 @@ empty `{}`. The actual implementation lives in the backend lowering table (§19.
 Spec: v0.5 §19.6
 
 **Fix**: drop the body — keep only the signature, or write an
+
+### E0774 — `CodeBuilderMissingRequiredField`
+
+CodeBuilderMissingRequiredField: a call to the auto-derived `.build()` on `Type.builder()` did not set every `pub` field that lacks a default. LANG_SPEC §3.3 (G9) makes this a compile-time error and names the missing fields so the fix is a direct chain addition. The diagnostic points at the `.build()` call site because that is where the required-field predicate is evaluated; the `.builder()` root is attached as a supporting span.
+
+the field at declaration time via a default (`pub y: Int = 0`) to drop it from the required set.
+
+Spec: v0.5 §3.3, gap G9.
+
+```osty
+pub struct Point { pub x: Int, pub y: Int }
+let p = Point.builder().x(3).build()
+                              ^^^^^ missing: y
+```
+
+**Fix**: add `.y(<value>)` to the chain before `.build()`, or set
 
 ---
 

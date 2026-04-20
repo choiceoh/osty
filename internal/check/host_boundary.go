@@ -272,7 +272,7 @@ func applySelfhostFileResult(result *Result, file *ast.File, rr *resolve.Result,
 		))
 		return
 	}
-	result.Diags = nativeCheckerDiags(checkedSrc.source, checked)
+	result.Diags = append(result.Diags, nativeCheckerDiags(checkedSrc.source, checked)...)
 	result.NativeCheckerTelemetry = nativeCheckerTelemetry(checked)
 	overlaySelfhostResult(result, checkedSrc, checked)
 }
@@ -324,7 +324,7 @@ func applySelfhostPackageResult(result *Result, pkg *resolve.Package, _ *resolve
 		))
 		return
 	}
-	result.Diags = nativeCheckerDiags(src.source, checked)
+	result.Diags = append(result.Diags, nativeCheckerDiags(src.source, checked)...)
 	result.NativeCheckerTelemetry = nativeCheckerTelemetry(checked)
 	overlaySelfhostResult(result, src, checked)
 }

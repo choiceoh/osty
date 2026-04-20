@@ -140,6 +140,9 @@ func firstOpt(opts []Opts) Opts {
 func File(f *ast.File, rr *resolve.Result, opts ...Opts) *Result {
 	opt := firstOpt(opts)
 	result := newResult()
+	if d := DesugarBuildersInFile(f); len(d) > 0 {
+		result.Diags = append(result.Diags, d...)
+	}
 	applyNativeFileResult(result, f, rr, opt.Source, opt.Stdlib)
 	if d := runPrivilegeGate(f, opt.Privileged); len(d) > 0 {
 		result.Diags = append(result.Diags, d...)
@@ -166,6 +169,14 @@ func Package(pkg *resolve.Package, pr *resolve.PackageResult, opts ...Opts) *Res
 	result := newResult()
 	if pkg == nil || len(pkg.Files) == 0 {
 		return result
+	}
+	for _, pf := range pkg.Files {
+		if pf == nil {
+			continue
+		}
+		if d := DesugarBuildersInFile(pf.File); len(d) > 0 {
+			result.Diags = append(result.Diags, d...)
+		}
 	}
 	applyNativePackageResult(result, pkg, pr, nil, opt.Stdlib)
 	privileged := isPrivilegedPackage(pkg)
@@ -227,6 +238,14 @@ func Workspace(
 	out := make(map[string]*Result, len(walk))
 	for _, e := range walk {
 		out[e.path] = resultWithSharedMaps(shared)
+		for _, pf := range e.pkg.Files {
+			if pf == nil {
+				continue
+			}
+			if d := DesugarBuildersInFile(pf.File); len(d) > 0 {
+				out[e.path].Diags = append(out[e.path].Diags, d...)
+			}
+		}
 	}
 	applyNativeWorkspaceResults(ws, resolved, out, opt.Stdlib)
 	for _, e := range walk {
