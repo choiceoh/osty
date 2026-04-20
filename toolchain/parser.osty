@@ -292,7 +292,7 @@ fn opExpect(p: OstyParser, kind: FrontTokenKind) -> FrontToken {
     let tok = opPeek(p)
     let expectedName = frontTokenKindName(kind)
     let gotName = frontTokenKindName(tok.kind)
-    opErrorFull(p, "expected {expectedName}, got {gotName}", "", "", "E0001")
+    opErrorFull(p, "expected {expectedName}, got {gotName}", "", "", "E0204")
     tok
 }
 
@@ -581,7 +581,7 @@ fn opParsePrimary(p: OstyParser) -> Int {
     n.end = p.pos
     return opAddNode(p, n) }
     let errKindName = frontTokenKindName(tok.kind)
-    opErrorFull(p, "unexpected {errKindName} in expression", "an expression starts with a literal, identifier, `(`, `[`, `if`, `match`, or a closure", "", "E0010")
+    opErrorFull(p, "unexpected {errKindName} in expression", "an expression starts with a literal, identifier, `(`, `[`, `if`, `match`, or a closure", "", "E0204")
     opAdvance(p)
     let mut errNode = emptyAstNode(AstNError)
     errNode.start = p.pos - 1
@@ -740,7 +740,7 @@ fn opParseIfExpr(p: OstyParser) -> Int {
             elseIdx = opParseBlock(p)
         }
     } else if opPeekPastNewlines(p).kind == FrontElse {
-        opErrorFull(p, "`else` must be on the same line as `\}`", "move `else` to the same line: `\} else \{`", "v0.2 O2: `\} else` must sit on the same line", "E0201")
+        opErrorFull(p, "`else` must be on the same line as `\}`", "move `else` to the same line: `\} else \{`", "v0.2 O2: `\} else` must sit on the same line", "E0105")
     }
     let mut n = emptyAstNode(AstNIf)
     n.left = cond
@@ -844,7 +844,7 @@ fn opParseClosure(p: OstyParser) -> Int {
 
 fn opParseClosureBody(p: OstyParser, requireBlock: Bool) -> Int {
     if opAt(p, FrontLBrace) { return opParseBlock(p) }
-    if requireBlock { opErrorFull(p, "closure with return type requires block body", "add `\{ ... \}`", "", "E0011") }
+    if requireBlock { opErrorFull(p, "closure with return type requires block body", "add `\{ ... \}`", "", "E0203") }
     opParseExpr(p)
 }
 
@@ -1004,7 +1004,7 @@ fn opParseStmt(p: OstyParser) -> Int {
     if tok.kind == FrontBreak {
         let s = p.pos
         let _ = opAdvance(p)
-        if !(p.inLoop) { opErrorFull(p, "`break` outside of loop", "move inside a `for` loop", "", "E0100") }
+        if !(p.inLoop) { opErrorFull(p, "`break` outside of loop", "move inside a `for` loop", "", "E0600") }
         let mut n = emptyAstNode(AstNBreak)
         n.start = s
         n.end = p.pos
@@ -1013,7 +1013,7 @@ fn opParseStmt(p: OstyParser) -> Int {
     if tok.kind == FrontContinue {
         let s = p.pos
         let _ = opAdvance(p)
-        if !(p.inLoop) { opErrorFull(p, "`continue` outside of loop", "move inside a `for` loop", "", "E0101") }
+        if !(p.inLoop) { opErrorFull(p, "`continue` outside of loop", "move inside a `for` loop", "", "E0601") }
         let mut n = emptyAstNode(AstNContinue)
         n.start = s
         n.end = p.pos
@@ -1400,7 +1400,7 @@ fn opParseTypeAtom(p: OstyParser) -> Int {
         let mut typeArgs: List<Int> = []
         if opEat(p, FrontLt) {
             if opAt(p, FrontGt) || opAt(p, FrontShr) || opAt(p, FrontGeq) || opAt(p, FrontShrEq) {
-                opErrorFull(p, "type argument list requires at least one type", "remove `<>` or provide a type, e.g. `<Int>`", "", "E0020")
+                opErrorFull(p, "type argument list requires at least one type", "remove `<>` or provide a type, e.g. `<Int>`", "", "E0300")
             }
             for !(opAt(p, FrontGt)) && !(opAt(p, FrontShr)) && !(opAt(p, FrontGeq)) && !(opAt(p, FrontShrEq)) && !(opAt(p, FrontEOF)) { typeArgs.push(opParseType(p))
             if !(opEat(p, FrontComma)) { break } }
@@ -1413,7 +1413,7 @@ fn opParseTypeAtom(p: OstyParser) -> Int {
         n.end = p.pos
         return opAddNode(p, n)
     }
-    opErrorFull(p, "expected type", "a type is `Int`, `String`, `List<T>`, `fn(T) -> R`, or `(T, U)`", "", "E0020")
+    opErrorFull(p, "expected type", "a type is `Int`, `String`, `List<T>`, `fn(T) -> R`, or `(T, U)`", "", "E0300")
     opAdvance(p)
     let mut n = emptyAstNode(AstNType)
     n.text = "error"
@@ -1607,7 +1607,7 @@ fn opParseDecl(p: OstyParser) -> Int {
     if opIsUseHead(tok) { return opParseUseDecl(p, isPub) }
     if tok.kind == FrontLet { return opParseLetStmt(p, anns) }
     let errKindName = frontTokenKindName(tok.kind)
-    opErrorFull(p, "expected declaration, got {errKindName}", "a declaration starts with `fn`, `struct`, `enum`, `interface`, `type`, `use`, or `let`", "", "E0030")
+    opErrorFull(p, "expected declaration, got {errKindName}", "a declaration starts with `fn`, `struct`, `enum`, `interface`, `type`, `use`, or `let`", "", "E0100")
     opSyncDecl(p)
     let mut n = emptyAstNode(AstNError)
     n.start = p.pos
@@ -1876,7 +1876,7 @@ fn opParseScopedUseDecl(p: OstyParser, start: Int, basePath: String, isPub: Bool
         }
         if !(opAt(p, FrontIdent)) {
             let gotName = frontTokenKindName(opPeek(p).kind)
-            opErrorFull(p, "expected grouped import item, got {gotName}", "grouped imports accept `name` or `name as alias` items", "", "E0001")
+            opErrorFull(p, "expected grouped import item, got {gotName}", "grouped imports accept `name` or `name as alias` items", "", "E0204")
             let _ = opAdvance(p)
             opSkipNewlines(p)
             continue
