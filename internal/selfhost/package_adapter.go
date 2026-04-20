@@ -493,7 +493,7 @@ func selfhostTypeNameToTy(env *CheckEnv, typeName string) int {
 	if typeName == "()" {
 		return tUnit(env.tys)
 	}
-	if typeName == "Invalid" {
+	if typeName == "Invalid" || typeName == "Poison" {
 		return tErr(env.tys)
 	}
 	return tyFromString(env.tys, typeName)
