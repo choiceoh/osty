@@ -31,25 +31,29 @@ Phase 1A는 `osty_rt_task_*` / `osty_rt_thread_*` 심볼 집합을 먼저 링크
 **목표.** 실제 OS 스레드 기반 병렬 실행. 채널 block/wake 의미론 정확. 관찰 가능한 M:N 병렬성 제공.
 
 **구현.**
-- `osty_rt_task_spawn` / `osty_rt_task_group_spawn`: `pthread_create`로 새 OS 스레드에서 body 실행. 스레드 진입 시 `osty_concurrent_workers` 증가, 종료 시 감소.
+- `osty_rt_task_spawn` / `osty_rt_task_group_spawn`: `pthread_create`로 새 OS 스레드에서 body 실행. 스레드 진입 시 `osty_concurrent_workers` 증가. `pthread_cleanup_push`로 등록된 cleanup handler가 정상/비정상 종료 공히 카운터 감소와 `done` flag release store를 보장 (pthread_cancel / pthread_exit / body abort 경로에서도 누수 없음).
 - `osty_rt_task_handle_join`: `pthread_join`으로 스레드 완료 대기. handle의 result는 acquire-load로 읽음.
-- `osty_rt_task_group(body)`: 호출 스레드에서 body 실행하고 TLS에 group을 바인딩. 자식 스레드는 `h->group`을 통해 트램펄린에서 TLS를 상속받음.
+- `osty_rt_task_group(body)`: 호출 스레드에서 body 실행하고 TLS에 group을 바인딩. 자식 스레드는 `h->group`을 통해 트램펄린에서 TLS를 상속받음. body 리턴 시점에 `osty_rt_task_group_reap`가 group의 child 리스트를 훑고 unjoined 스레드를 pthread_join으로 회수 (spec §8.1 structured lifetime).
 - Cancellation: `cancelled` flag는 atomic (release store / acquire load). group flag set은 subsequent `is_cancelled` 호출에서 관찰 가능.
 - 채널: ring buffer + `pthread_mutex_t mu` + `pthread_cond_t not_full` + `pthread_cond_t not_empty`. Capacity 0은 1로 clamp (진짜 rendezvous는 Phase 1B fiber 영역, 미구현 표기).
+- `osty_rt_select` (recv / timeout / default 지원): 내부 builder 할당 → body에 `(env, s)` 로 호출 → body가 arm 등록 → polling 루프에서 recv 시도, default는 즉시 발화, timeout은 deadline 도달 시 발화. 500μs backoff로 busy-spin 회피.
+- `osty_rt_select_send`: 아직 MIR이 value-register surface를 emit하지 않아 보류 (`osty_sched_unimplemented`). 4-arg 시그니처로 전환될 때 완성.
 - `osty_rt_thread_yield`: `sched_yield()` 호출.
 - `osty_rt_thread_sleep(ns)`: 기존 `nanosleep` 경로 유지.
-- GC 상호작용: 모든 `osty_gc_allocate_managed` 호출은 recursive mutex `osty_gc_lock`으로 직렬화. 자동 collection은 `osty_concurrent_workers > 0`인 동안 **보류**된다 (현재 스레드만의 stack root로는 sibling 스레드의 root를 커버할 수 없음). 모든 worker가 join된 뒤 재개. Concurrent collection은 Phase 3.
+- GC 상호작용: 모든 `osty_gc_allocate_managed` 호출과 write barrier (`pre_write_v1`, `post_write_v1`, `load_v1`, `root_bind_v1`, `root_release_v1`)는 recursive mutex `osty_gc_lock`으로 직렬화. 자동 collection은 `osty_concurrent_workers > 0`인 동안 **보류**된다 (현재 스레드만의 stack root로는 sibling 스레드의 root를 커버할 수 없음). 모든 worker가 join된 뒤 재개. Concurrent collection은 Phase 3.
 
 **제약.**
-- `osty_rt_select*`, `osty_rt_task_race`, `osty_rt_task_collect_all`, `osty_rt_parallel`: 여전히 abort 스텁. 이들의 등록/실행 surface는 Osty-side builder allocation이 필요하고, MIR 경로가 아직 해당 surface를 포함하지 않음. 도달 시 `osty_sched_unimplemented("...")` 진단 후 abort.
+- `osty_rt_select_send`, `osty_rt_task_race`, `osty_rt_task_collect_all`, `osty_rt_parallel`: 여전히 abort 스텁. 이들의 등록/실행 surface는 MIR이 아직 emit하지 않는 register allocation (send의 경우 값 슬롯, parallel의 경우 list element size / trace fn) 을 필요로 함. 도달 시 `osty_sched_unimplemented("...")` 진단 후 abort.
 - GC는 worker-live 동안 일시 보류 → long-running concurrent workload에서 OOM 가능. Phase 3 concurrent collector가 해소.
 - Thread-per-task 모델 — 큰 task 수에서 TLS/stack 오버헤드. Chase-Lev deque + work-stealing 기반 worker pool은 Phase 2+ 후속 작업.
-- task_group이 body 리턴 전에 unjoined 자식을 자동으로 reap하지 않음. 호출자가 explicit `join`해야 스레드 누수 없음. 자동 reap는 후속 작업 (TODO in runtime).
 
 **수용 테스트.** `internal/backend/llvm_runtime_sched_test.go`:
 - `TestBundledRuntimeScheduler`: taskGroup + spawn/join + cancel 전파 + 4-way parallel spawn wall-clock 검증.
 - `TestBundledRuntimeSchedulerChannels`: 프로듀서/컨슈머 cross-thread, close-then-drain, `is_closed`.
-- `TestBundledRuntimeSchedulerSelectStubAborts`: select/helper가 여전히 loud-fail 함을 고정.
+- `TestBundledRuntimeSchedulerTaskGroupAutoReap`: body가 forgetful하게 자식을 남겨두고 리턴해도 group teardown이 pthread_join으로 회수함을 확인.
+- `TestBundledRuntimeSchedulerChannelStress`: 4 producer × 4 consumer × 250 items/producer = 1000 items 전송을 capacity-16 채널 위에서 돌려 produced/consumed 합 일치.
+- `TestBundledRuntimeSchedulerSelect`: recv-ready, timeout-only, default-present 3가지 시나리오에서 올바른 arm이 선택되는지 확인.
+- `TestBundledRuntimeSchedulerSelectSendStubAborts`: 미구현된 send arm이 loud-fail 함을 고정.
 
 ### Phase 1B — Single-worker cooperative fibers (대안 경로, 미채택)
 
@@ -189,4 +193,5 @@ void *osty_rt_task_collect_all(void *body);
 ## 변경 이력
 
 - 2026-04-19: 문서 신설, Phase 1A 착수.
-- 2026-04-20: pthread 기반 spawn/join + mutex/cond 채널 런타임 착수. task_group/spawn/handle_join/cancel이 실제 병렬로 동작. select/parallel/race/collectAll은 여전히 abort 스텁 (builder surface 후속). `osty_gc_lock` 도입, 자동 collection은 `osty_concurrent_workers > 0`인 동안 보류.
+- 2026-04-20: pthread 기반 spawn/join + mutex/cond 채널 런타임 착수. task_group/spawn/handle_join/cancel이 실제 병렬로 동작. `osty_gc_lock` 도입, 자동 collection은 `osty_concurrent_workers > 0`인 동안 보류.
+- 2026-04-20 (follow-up): write barrier / root bind/release 전부 `osty_gc_lock`으로 감쌈; pthread cleanup handler로 worker counter 누수 불가능; `task_group`에 auto-reap 도입; `thread.select`의 recv/timeout/default arm 구현. send arm만 보류.
