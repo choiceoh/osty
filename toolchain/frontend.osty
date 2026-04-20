@@ -1137,7 +1137,13 @@ pub fn frontStringMissingTripleLeadingNewline(
     if kind == FrontRawString {
         contentStart = start + 4
     }
-    frontUnitAt(units, contentStart) != "\n"
+    let first = frontUnitAt(units, contentStart)
+    // Accept any of the canonical line terminators: LF (Unix), CR (Mac
+    // classic), or CRLF (Windows). A Windows-checked-out source file
+    // carries `\r\n` between the opening `"""` / `r"""` and the first
+    // content line; the older `!= "\n"` check flagged every such file as
+    // E0006 (see toolchain/docgen.osty:1641).
+    first != "\n" && first != "\r"
 }
 
 pub fn frontStringScanHitNewline(
@@ -1644,6 +1650,12 @@ pub fn frontTripleNormalization(
     }
     let contentStartRaw = frontStringContentStart(units, start, kind, true)
     let mut contentStart = contentStartRaw
+    // Skip the leading newline after the opening `"""` / `r"""`. Treat
+    // LF, CR, and CRLF uniformly so that the per-line indent probe
+    // starts at actual content on Windows (CRLF) checkouts.
+    if frontUnitAt(units, contentStart) == "\r" {
+        contentStart = contentStart + 1
+    }
     if frontUnitAt(units, contentStart) == "\n" {
         contentStart = contentStart + 1
     }
@@ -2164,7 +2176,11 @@ pub fn frontStringLikeScan(
             triple = true
             consumed = 4
             contentStart = start + 4
-            if frontUnitAt(units, contentStart) != "\n" {
+            let first = frontUnitAt(units, contentStart)
+            // Accept LF, CR, or CRLF as the mandatory leading newline
+            // after `r"""`. See toolchain/frontend.osty's comment on
+            // frontStringMissingTripleLeadingNewline.
+            if first != "\n" && first != "\r" {
                 errors = errors + 1
             }
         }
@@ -2178,7 +2194,8 @@ pub fn frontStringLikeScan(
         triple = true
         consumed = 3
         contentStart = start + 3
-        if frontUnitAt(units, contentStart) != "\n" {
+        let first = frontUnitAt(units, contentStart)
+        if first != "\n" && first != "\r" {
             errors = errors + 1
         }
     }
