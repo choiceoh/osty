@@ -160,7 +160,8 @@ pub fn selfLintResolvedAstSource(
     let stream = frontendLexStream(source)
     let mut report = emptySelfLintReport(frontLexDiagnosticCount(stream) + astFileErrorCount(file))
     report.resolveErrors = selfResolveDiagnosticCount(resolved)
-    selfLintAstFile(file, resolved, report)
+    report = selfLintAstFile(file, resolved, report)
+    selfLintAstCheckMissingDocs(file, stream, report)
 }
 
 pub fn selfLintDiagnosticCount(report: SelfLintReport) -> Int {
@@ -2376,4 +2377,123 @@ fn selfLintIsLowerCamel(name: String) -> Bool {
 
 fn selfLintFirstUnit(name: String) -> String {
     frontUnitAt(strings.split(name, ""), 0)
+}
+
+/// selfLintAstCheckMissingDocs walks every decl (and every `pub` method
+/// nested under a struct or enum) and emits L0070 when the `pub` item
+/// carries no leading `///` doc comment.
+fn selfLintAstCheckMissingDocs(
+    file: AstFile,
+    stream: FrontLexStream,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    let mut out = report
+    for declIdx in file.arena.decls {
+        out = selfLintAstCheckMissingDocsDecl(file, stream, declIdx, out)
+    }
+    out
+}
+
+fn selfLintAstCheckMissingDocsDecl(
+    file: AstFile,
+    stream: FrontLexStream,
+    idx: Int,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    if idx < 0 {
+        return report
+    }
+    let node = selfLintAstNode(file, idx)
+    let mut out = report
+    if node.kind == AstNFnDecl {
+        out = selfLintAstEmitMissingDoc(out, stream, node, idx, "public function has no doc comment")
+    } else if node.kind == AstNStructDecl {
+        out = selfLintAstEmitMissingDoc(out, stream, node, idx, "public struct has no doc comment")
+        out = selfLintAstCheckMissingDocsMembers(file, stream, node.children, out)
+    } else if node.kind == AstNEnumDecl {
+        out = selfLintAstEmitMissingDoc(out, stream, node, idx, "public enum has no doc comment")
+        out = selfLintAstCheckMissingDocsMembers(file, stream, node.children, out)
+    } else if node.kind == AstNInterfaceDecl {
+        out = selfLintAstEmitMissingDoc(out, stream, node, idx, "public interface has no doc comment")
+    } else if node.kind == AstNTypeAlias {
+        out = selfLintAstEmitMissingDoc(out, stream, node, idx, "public type alias has no doc comment")
+    }
+    out
+}
+
+fn selfLintAstCheckMissingDocsMembers(
+    file: AstFile,
+    stream: FrontLexStream,
+    members: List<Int>,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    let mut out = report
+    for memberIdx in members {
+        let member = selfLintAstNode(file, memberIdx)
+        if member.kind == AstNFnDecl {
+            out = selfLintAstEmitMissingDoc(out, stream, member, memberIdx, "public method has no doc comment")
+        }
+    }
+    out
+}
+
+fn selfLintAstEmitMissingDoc(
+    report: SelfLintReport,
+    stream: FrontLexStream,
+    node: AstNode,
+    idx: Int,
+    message: String,
+) -> SelfLintReport {
+    if node.flags != 1 {
+        return report
+    }
+    if selfLintDeclHasLeadingDoc(stream, node.start) {
+        return report
+    }
+    selfLintEmitAtNode(report, "L0070", message, node.text, node.start, node.start + 1, idx)
+}
+
+/// selfLintDeclHasLeadingDoc reports whether any `///` doc comment is
+/// attached to the declaration whose first parsed token lives at
+/// `startTokenIdx`. The parser consumes `pub` and `#[...]` annotations
+/// before recording a decl's start token, so the doc marker may appear on
+/// one of those preceding tokens rather than on the decl keyword itself.
+fn selfLintDeclHasLeadingDoc(stream: FrontLexStream, startTokenIdx: Int) -> Bool {
+    let count = frontLexTokenCount(stream)
+    if count <= 0 || startTokenIdx < 0 || startTokenIdx >= count {
+        return false
+    }
+    if frontLexTokenAt(stream, startTokenIdx).leadingDocLines > 0 {
+        return true
+    }
+    let mut idx = startTokenIdx - 1
+    let mut budget = 32
+    for idx >= 0 && budget > 0 {
+        let tok = frontLexTokenAt(stream, idx)
+        if !(selfLintIsDeclPrefixTokenKind(tok.kind)) {
+            return false
+        }
+        if tok.leadingDocLines > 0 {
+            return true
+        }
+        idx = idx - 1
+        budget = budget - 1
+    }
+    false
+}
+
+fn selfLintIsDeclPrefixTokenKind(kind: FrontTokenKind) -> Bool {
+    kind == FrontPub
+        || kind == FrontHash
+        || kind == FrontLBracket
+        || kind == FrontRBracket
+        || kind == FrontIdent
+        || kind == FrontAssign
+        || kind == FrontComma
+        || kind == FrontString
+        || kind == FrontRawString
+        || kind == FrontInt
+        || kind == FrontNewline
+        || kind == FrontLParen
+        || kind == FrontRParen
 }
