@@ -502,9 +502,13 @@ func main() {
 		// Respect [lint] exclude before parsing. loadLintConfigWithBase
 		// looks upward from the file for `osty.toml`, returning the
 		// config + the manifest's directory so globs can be resolved
-		// relative to the project root.
-		if cfg, base, ok := loadLintConfigWithBase(path); ok && cfg.ShouldExclude(path, base) {
-			return
+		// relative to the project root. Announce the skip so exit 0
+		// isn't read as "lint clean".
+		if cfg, base, ok := loadLintConfigWithBase(path); ok {
+			if pat, matched := cfg.MatchingExclude(path, base); matched {
+				fmt.Fprintf(os.Stderr, "osty lint: skipping %s ([lint] exclude matches %q)\n", path, pat)
+				return
+			}
 		}
 		parsed := parser.ParseDetailed(src)
 		file, parseDiags := parsed.File, parsed.Diagnostics

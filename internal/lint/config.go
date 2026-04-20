@@ -46,13 +46,14 @@ type Config struct {
 	Exclude []string
 }
 
-// ShouldExclude reports whether `path` matches any Exclude glob. Call
-// sites should use this to skip files before parsing. `base` is the
-// directory of the osty.toml that produced this Config; `path` may be
-// absolute or relative to CWD.
-func (c Config) ShouldExclude(path, base string) bool {
+// MatchingExclude reports whether `path` matches any Exclude glob and
+// returns the matched pattern so callers can surface it in user-facing
+// messages. `base` is the directory of the osty.toml that produced this
+// Config; `path` may be absolute or relative to CWD. Returns ("", false)
+// when no pattern matches.
+func (c Config) MatchingExclude(path, base string) (string, bool) {
 	if len(c.Exclude) == 0 {
-		return false
+		return "", false
 	}
 	rel := path
 	if base != "" {
@@ -65,10 +66,10 @@ func (c Config) ShouldExclude(path, base string) bool {
 	rel = filepath.ToSlash(rel)
 	for _, pat := range c.Exclude {
 		if matchGlob(pat, rel) {
-			return true
+			return pat, true
 		}
 	}
-	return false
+	return "", false
 }
 
 // matchGlob implements filepath.Match-style globbing with the
