@@ -1133,6 +1133,76 @@ func SpanOfTerm(t Terminator) Span {
 	return t.At()
 }
 
+// ==== CFG helpers ====
+
+// Successors returns the successor block IDs of a terminator in source
+// order: Then before Else for BranchTerm, cases in declaration order
+// followed by Default for SwitchIntTerm. ReturnTerm and UnreachableTerm
+// return nil. A nil terminator also returns nil so callers can hand
+// unfinished blocks in without guarding.
+//
+// The result is a fresh slice; callers are free to mutate it.
+func Successors(t Terminator) []BlockID {
+	switch x := t.(type) {
+	case nil:
+		return nil
+	case *GotoTerm:
+		return []BlockID{x.Target}
+	case *BranchTerm:
+		return []BlockID{x.Then, x.Else}
+	case *SwitchIntTerm:
+		out := make([]BlockID, 0, len(x.Cases)+1)
+		for _, c := range x.Cases {
+			out = append(out, c.Target)
+		}
+		out = append(out, x.Default)
+		return out
+	case *ReturnTerm, *UnreachableTerm:
+		return nil
+	default:
+		return nil
+	}
+}
+
+// ReachableBlocks returns the set of block IDs reachable from fn.Entry
+// by walking terminator successors. Blocks not present in the returned
+// map are orphans — either the lowerer dropped instructions after a
+// terminator and never branched to the resulting block, or a later pass
+// disconnected them.
+//
+// Returns nil when fn has no blocks or fn.Entry is out of range.
+func ReachableBlocks(fn *Function) map[BlockID]bool {
+	if fn == nil || len(fn.Blocks) == 0 {
+		return nil
+	}
+	if int(fn.Entry) < 0 || int(fn.Entry) >= len(fn.Blocks) {
+		return nil
+	}
+	seen := make(map[BlockID]bool, len(fn.Blocks))
+	stack := []BlockID{fn.Entry}
+	for len(stack) > 0 {
+		id := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		bb := fn.Block(id)
+		if bb == nil {
+			continue
+		}
+		for _, next := range Successors(bb.Term) {
+			if int(next) < 0 || int(next) >= len(fn.Blocks) {
+				continue
+			}
+			if !seen[next] {
+				stack = append(stack, next)
+			}
+		}
+	}
+	return seen
+}
+
 // ==== Diagnostics helper ====
 
 // Unsupported returns a sentinel error signalling that MIR lowering
