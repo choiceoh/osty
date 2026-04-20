@@ -18880,6 +18880,9 @@ func opIsLiteralDefaultAt(p *OstyParser, idx int) bool {
 	}
 	node := astArenaNodeAt(p.arena, idx)
 	k := node.kind
+	if _, ok := k.(*AstNodeKind_AstNParen); ok {
+		return opIsLiteralDefaultAt(p, node.left)
+	}
 	if _, ok := k.(*AstNodeKind_AstNIntLit); ok {
 		return true
 	}

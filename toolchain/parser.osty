@@ -336,6 +336,7 @@ fn opIsLiteralDefaultAt(p: OstyParser, idx: Int) -> Bool {
     if idx < 0 { return true }
     let node = astArenaNodeAt(p.arena, idx)
     let k = node.kind
+    if k == AstNParen { return opIsLiteralDefaultAt(p, node.left) }
     if k == AstNIntLit || k == AstNFloatLit || k == AstNStringLit || k == AstNCharLit || k == AstNByteLit || k == AstNBoolLit {
         return true
     }
