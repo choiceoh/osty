@@ -2400,7 +2400,12 @@ func llvmStructFieldDiagnostic(structName string, fieldName string, identOk bool
 		return llvmUnsupportedDiagnostic("type-system", fmt.Sprintf("struct %q field %q: %s", structName, fieldName, detail))
 	}
 	if recursive {
-		return llvmUnsupportedDiagnostic("type-system", fmt.Sprintf("struct %q recursive field %q", structName, fieldName))
+		return llvmUnsupportedDiagnosticWith(
+			"LLVM011",
+			"type-system",
+			fmt.Sprintf("struct %q recursive field %q requires indirection", structName, fieldName),
+			"break the cycle via an arena index (Int id) or List<T> handle until the LLVM backend grows recursive-struct support",
+		)
 	}
 	return llvmUnsupportedDiagnosticWith("", "", "", "")
 }
@@ -2410,7 +2415,12 @@ func llvmEnumVariantHeaderDiagnostic(enumName string, variantName string, identO
 		return llvmUnsupportedDiagnostic("name", fmt.Sprintf("enum %q variant name %q", enumName, variantName))
 	}
 	if payloadCount > 1 {
-		return llvmUnsupportedDiagnostic("type-system", fmt.Sprintf("enum %q variant %q has %d payload fields; only one scalar payload is supported", enumName, variantName, payloadCount))
+		return llvmUnsupportedDiagnosticWith(
+			"LLVM011",
+			"type-system",
+			fmt.Sprintf("enum %q variant %q has %d payload fields; the LLVM backend only supports a single scalar or pointer payload per variant", enumName, variantName, payloadCount),
+			"flatten the variant to a single field (e.g. a tuple-wrapping struct passed by pointer) or adopt the arena + flat kind-discriminator pattern used by toolchain/core.osty",
+		)
 	}
 	if duplicate {
 		return llvmUnsupportedDiagnostic("source-layout", fmt.Sprintf("enum %q duplicate variant %q", enumName, variantName))

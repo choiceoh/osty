@@ -2598,9 +2598,11 @@ pub fn llvmStructFieldDiagnostic(
         )
     }
     if recursive {
-        return llvmUnsupportedDiagnostic(
+        return llvmUnsupportedDiagnosticWith(
+            "LLVM011",
             "type-system",
-            "struct \"{structName}\" recursive field \"{fieldName}\"",
+            "struct \"{structName}\" recursive field \"{fieldName}\" requires indirection",
+            "break the cycle via an arena index (Int id) or List<T> handle until the LLVM backend grows recursive-struct support",
         )
     }
     llvmUnsupportedDiagnosticWith("", "", "", "")
@@ -2620,9 +2622,11 @@ pub fn llvmEnumVariantHeaderDiagnostic(
         )
     }
     if payloadCount > 1 {
-        return llvmUnsupportedDiagnostic(
+        return llvmUnsupportedDiagnosticWith(
+            "LLVM011",
             "type-system",
-            "enum \"{enumName}\" variant \"{variantName}\" has {payloadCount} payload fields; only one scalar payload is supported",
+            "enum \"{enumName}\" variant \"{variantName}\" has {payloadCount} payload fields; the LLVM backend only supports a single scalar or pointer payload per variant",
+            "flatten the variant to a single field (e.g. a tuple-wrapping struct passed by pointer) or adopt the arena + flat kind-discriminator pattern used by toolchain/core.osty",
         )
     }
     if duplicate {

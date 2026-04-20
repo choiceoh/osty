@@ -248,8 +248,17 @@ func TestGeneratedComparePoliciesAreOstyOwned(t *testing.T) {
 	if got, want := llvmEnumVariantHeaderDiagnostic("Choice", "bad-name", false, 0, false).message, `enum "Choice" variant name "bad-name"`; got != want {
 		t.Fatalf("llvmEnumVariantHeaderDiagnostic(%q, %q, false, 0, false).message = %q, want %q", "Choice", "bad-name", got, want)
 	}
-	if got, want := llvmEnumVariantHeaderDiagnostic("Choice", "Some", true, 2, false).message, `enum "Choice" variant "Some" has 2 payload fields; only one scalar payload is supported`; got != want {
+	if got, want := llvmEnumVariantHeaderDiagnostic("Choice", "Some", true, 2, false).message, `enum "Choice" variant "Some" has 2 payload fields; the LLVM backend only supports a single scalar or pointer payload per variant`; got != want {
 		t.Fatalf("llvmEnumVariantHeaderDiagnostic(%q, %q, true, 2, false).message = %q, want %q", "Choice", "Some", got, want)
+	}
+	if got := llvmEnumVariantHeaderDiagnostic("Choice", "Some", true, 2, false); got.code != "LLVM011" || got.hint == "" {
+		t.Fatalf("llvmEnumVariantHeaderDiagnostic multi-field: code=%q hint=%q, want LLVM011 + non-empty hint", got.code, got.hint)
+	}
+	if got := llvmStructFieldDiagnostic("Tree", "left", true, false, false, true, ""); got.code != "LLVM011" || got.hint == "" {
+		t.Fatalf("llvmStructFieldDiagnostic recursive: code=%q hint=%q, want LLVM011 + non-empty hint", got.code, got.hint)
+	}
+	if got, want := llvmStructFieldDiagnostic("Tree", "left", true, false, false, true, "").message, `struct "Tree" recursive field "left" requires indirection`; got != want {
+		t.Fatalf("llvmStructFieldDiagnostic recursive message = %q, want %q", got, want)
 	}
 	if got, want := llvmEnumPayloadDiagnostic("Choice", "Some", "unsupported payload", "", "").message, `enum "Choice" variant "Some" payload: unsupported payload`; got != want {
 		t.Fatalf("llvmEnumPayloadDiagnostic(%q, %q, %q, %q, %q).message = %q, want %q", "Choice", "Some", "unsupported payload", "", "", got, want)
