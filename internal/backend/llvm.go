@@ -55,6 +55,7 @@ func (b LLVMBackend) Emit(ctx context.Context, req Request) (*Result, error) {
 	opts := llvmgen.Options{
 		PackageName: req.Entry.PackageName,
 		SourcePath:  req.Entry.SourcePath,
+		Source:      req.Entry.Source,
 		Target:      req.Layout.Target,
 		UseMIR:      useMIRBackend(req.Features, req.Emit),
 	}

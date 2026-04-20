@@ -65,6 +65,15 @@ fn testAddFails() {
 	if got := stdout.String(); !strings.Contains(got, "FAIL\ttestAddFails") || !strings.Contains(got, "testing.assertEq failed at") {
 		t.Fatalf("stdout = %q, want failing assertion output", got)
 	}
+	// The native harness quotes the original source text of each
+	// argument so the reader sees which expression diverged without
+	// cross-referencing the file. `add(1, 2)` is the left operand,
+	// `4` is the right — both must survive the LLVM emitter's span
+	// capture intact.
+	combined := stdout.String() + stderr.String()
+	if !strings.Contains(combined, "left=`add(1, 2)`") || !strings.Contains(combined, "right=`4`") {
+		t.Fatalf("output missing per-argument source text quoting:\nstdout:\n%s\nstderr:\n%s", stdout.String(), stderr.String())
+	}
 	if got := stderr.String(); !strings.Contains(got, "osty test: testAddFails: exit status 1") {
 		t.Fatalf("stderr = %q, want native failure summary", got)
 	}

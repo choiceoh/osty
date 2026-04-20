@@ -876,7 +876,9 @@ func (g *generator) emitTestingCompare(call *ast.CallExpr, op token.Kind, name s
 	if err != nil {
 		return err
 	}
-	return g.emitTestingAssertion(cond, g.testingFailureMessage(call, name))
+	leftText := g.sourceSpanText(call.Args[0].Value)
+	rightText := g.sourceSpanText(call.Args[1].Value)
+	return g.emitTestingAssertion(cond, g.testingCompareFailureMessage(call, name, leftText, rightText))
 }
 
 func (g *generator) emitTestingExpect(call *ast.CallExpr, wantErr bool) (value, error) {
@@ -990,6 +992,62 @@ func (g *generator) testingFailureMessage(call *ast.CallExpr, name string) strin
 		line = call.Pos().Line
 	}
 	return fmt.Sprintf("testing.%s failed at %s:%d", name, source, line)
+}
+
+// testingCompareFailureMessage extends the base location-only assertion
+// message with the original source text of each argument so developers
+// see which expression failed without cross-referencing the file. The
+// runtime values are not captured here yet — that requires per-type
+// formatter dispatch and is tracked separately; expression text alone
+// already lets a reader read `assertEq failed at foo.osty:4: left=`add(1, 2)` right=`4“ and infer the delta.
+func (g *generator) testingCompareFailureMessage(call *ast.CallExpr, name, leftText, rightText string) string {
+	base := g.testingFailureMessage(call, name)
+	if leftText == "" && rightText == "" {
+		return base
+	}
+	return fmt.Sprintf("%s: left=`%s` right=`%s`", base, leftText, rightText)
+}
+
+// sourceSpanText returns the original source text covered by expr's
+// span. Returns empty when the generator was not handed the source
+// bytes or when the recorded offsets fall outside the source (e.g.
+// synthesized nodes from the IR bridge). Interior whitespace is
+// collapsed so the quoted expression stays on the same line as the
+// location prefix.
+func (g *generator) sourceSpanText(expr ast.Expr) string {
+	if expr == nil || len(g.source) == 0 {
+		return ""
+	}
+	start := expr.Pos().Offset
+	end := expr.End().Offset
+	if start < 0 || end <= start || end > len(g.source) {
+		return ""
+	}
+	return normalizeAssertExprText(string(g.source[start:end]))
+}
+
+// normalizeAssertExprText flattens newlines/tabs to spaces and collapses
+// runs of whitespace so multi-line argument expressions (list literals,
+// struct literals) do not break the single-line failure message layout.
+func normalizeAssertExprText(text string) string {
+	var b strings.Builder
+	prevSpace := false
+	for _, r := range text {
+		switch r {
+		case '\n', '\r', '\t':
+			r = ' '
+		}
+		if r == ' ' {
+			if prevSpace {
+				continue
+			}
+			prevSpace = true
+		} else {
+			prevSpace = false
+		}
+		b.WriteRune(r)
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func (g *generator) emitIfStmt(expr *ast.IfExpr) error {
