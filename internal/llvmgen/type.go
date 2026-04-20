@@ -352,6 +352,10 @@ func (g *generator) staticExprSourceType(expr ast.Expr) (ast.Type, bool) {
 		return &ast.NamedType{Path: []string{"Float"}}, true
 	case *ast.BoolLit:
 		return &ast.NamedType{Path: []string{"Bool"}}, true
+	case *ast.CharLit:
+		return &ast.NamedType{Path: []string{"Char"}}, true
+	case *ast.ByteLit:
+		return &ast.NamedType{Path: []string{"Byte"}}, true
 	case *ast.StringLit:
 		return &ast.NamedType{Path: []string{"String"}}, true
 	case *ast.Ident:
@@ -438,6 +442,10 @@ func (g *generator) staticExprInfo(expr ast.Expr) (value, bool) {
 		return value{typ: "double"}, true
 	case *ast.BoolLit:
 		return value{typ: "i1"}, true
+	case *ast.CharLit:
+		return value{typ: "i32"}, true
+	case *ast.ByteLit:
+		return value{typ: "i8"}, true
 	case *ast.StringLit:
 		return value{typ: "ptr"}, true
 	case *ast.Ident:
@@ -449,6 +457,34 @@ func (g *generator) staticExprInfo(expr ast.Expr) (value, bool) {
 		}
 	case *ast.ParenExpr:
 		return g.staticExprInfo(e.X)
+	case *ast.UnaryExpr:
+		inner, ok := g.staticExprInfo(e.X)
+		if !ok {
+			return value{}, false
+		}
+		if llvmIsCompareOp(e.Op.String()) {
+			return value{typ: "i1"}, true
+		}
+		return value{typ: inner.typ}, true
+	case *ast.BinaryExpr:
+		// Compare/logical ops fold to i1; arithmetic keeps the operand
+		// type so Char/Byte conversion dispatch can see through e.g.
+		// `'0'.toInt() + n` as i64.
+		if llvmIsCompareOp(e.Op.String()) {
+			return value{typ: "i1"}, true
+		}
+		leftInfo, lok := g.staticExprInfo(e.Left)
+		rightInfo, rok := g.staticExprInfo(e.Right)
+		if lok && rok && leftInfo.typ == rightInfo.typ && leftInfo.typ != "" {
+			return value{typ: leftInfo.typ}, true
+		}
+		if lok && leftInfo.typ != "" {
+			return value{typ: leftInfo.typ}, true
+		}
+		if rok && rightInfo.typ != "" {
+			return value{typ: rightInfo.typ}, true
+		}
+		return value{}, false
 	case *ast.TupleExpr:
 		elemTypes := make([]string, 0, len(e.Elems))
 		for _, elem := range e.Elems {
@@ -467,6 +503,9 @@ func (g *generator) staticExprInfo(expr ast.Expr) (value, bool) {
 		return value{}, false
 	case *ast.CallExpr:
 		if out, ok := g.staticStringMethodResult(e); ok {
+			return out, true
+		}
+		if out, ok := g.staticCharByteConversionResult(e); ok {
 			return out, true
 		}
 		if out, found, ok := g.staticCollectionMethodResult(e); found {
@@ -675,6 +714,32 @@ func (g *generator) staticStringMethodSourceType(call *ast.CallExpr) (ast.Type, 
 	default:
 		return nil, false
 	}
+}
+
+// staticCharByteConversionResult mirrors emitCharByteConversionCall at
+// the type-inference layer so `.toInt()` / `.toChar()` on a Char/Byte/Int
+// receiver resolves statically — which in turn lets nested forms like
+// `('0'.toInt() + n).toChar()` type-check without materialising each
+// intermediate value.
+func (g *generator) staticCharByteConversionResult(call *ast.CallExpr) (value, bool) {
+	if call == nil || len(call.Args) != 0 {
+		return value{}, false
+	}
+	field, ok := call.Fn.(*ast.FieldExpr)
+	if !ok || field.IsOptional || field.X == nil {
+		return value{}, false
+	}
+	baseInfo, ok := g.staticExprInfo(field.X)
+	if !ok {
+		return value{}, false
+	}
+	switch {
+	case field.Name == "toInt" && (baseInfo.typ == "i32" || baseInfo.typ == "i8"):
+		return value{typ: "i64"}, true
+	case field.Name == "toChar" && baseInfo.typ == "i64":
+		return value{typ: "i32"}, true
+	}
+	return value{}, false
 }
 
 func (g *generator) staticStringMethodResult(call *ast.CallExpr) (value, bool) {

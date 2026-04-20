@@ -1,7 +1,7 @@
 set shell := ["bash", "-cu"]
 
 bin := ".bin/osty"
-front_packages := "./internal/lexer ./internal/parser ./internal/resolve ./internal/check ./internal/diag ./internal/format ./internal/lint ./internal/pipeline"
+front_packages := "./internal/lexer ./internal/parser ./internal/resolve ./internal/check ./internal/diag ./internal/format ./internal/lint ./internal/pipeline ./internal/speccorpus"
 
 default:
     just front
@@ -12,6 +12,9 @@ build:
 
 front:
     go test -count=1 {{front_packages}}
+
+spec:
+    go test -count=1 ./internal/speccorpus -v
 
 short:
     go test -short ./...

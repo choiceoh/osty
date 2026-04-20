@@ -453,6 +453,8 @@ const (
 	IntrinsicSetLen
 	// IntrinsicSetToList materialises a List<T>. Args: [set].
 	IntrinsicSetToList
+	// IntrinsicSetRemove deletes an element. Args: [set, elem]. Dest nil.
+	IntrinsicSetRemove
 
 	// ---- stdlib: String ----
 

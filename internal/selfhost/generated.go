@@ -18839,7 +18839,7 @@ func opExpect(p *OstyParser, kind FrontTokenKind) *FrontToken {
 	gotName := frontTokenKindName(tok.kind)
 	_ = gotName
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6945:5
-	opErrorFull(p, fmt.Sprintf("expected %s, got %s", ostyToString(expectedName), ostyToString(gotName)), "", "", "E0001")
+	opErrorFull(p, fmt.Sprintf("expected %s, got %s", ostyToString(expectedName), ostyToString(gotName)), "", "", "E0204")
 	return tok
 }
 
@@ -19537,7 +19537,7 @@ func opParsePrimary(p *OstyParser) int {
 	errKindName := frontTokenKindName(tok.kind)
 	_ = errKindName
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:7232:5
-	opErrorFull(p, fmt.Sprintf("unexpected %s in expression", ostyToString(errKindName)), "an expression starts with a literal, identifier, `(`, `[`, `if`, `match`, or a closure", "", "E0010")
+	opErrorFull(p, fmt.Sprintf("unexpected %s in expression", ostyToString(errKindName)), "an expression starts with a literal, identifier, `(`, `[`, `if`, `match`, or a closure", "", "E0204")
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:7233:5
 	opAdvance(p)
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:7234:5
@@ -19902,7 +19902,7 @@ func opParseIfExpr(p *OstyParser) int {
 		}
 	} else if ostyEqual(opPeekPastNewlines(p).kind, FrontTokenKind(&FrontTokenKind_FrontElse{})) {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:7390:9
-		opErrorFull(p, "`else` must be on the same line as `}`", "move `else` to the same line: `} else {`", "v0.2 O2: `} else` must sit on the same line", "E0201")
+		opErrorFull(p, "`else` must be on the same line as `}`", "move `else` to the same line: `} else {`", "v0.2 O2: `} else` must sit on the same line", "E0105")
 	}
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:7392:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNIf{}))
@@ -20133,7 +20133,7 @@ func opParseClosureBody(p *OstyParser, requireBlock bool) int {
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:7494:5
 	if requireBlock {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:7494:23
-		opErrorFull(p, "closure with return type requires block body", "add `{ ... }`", "", "E0011")
+		opErrorFull(p, "closure with return type requires block body", "add `{ ... }`", "", "E0203")
 	}
 	return opParseExpr(p)
 }
@@ -20486,7 +20486,7 @@ func opParseStmt(p *OstyParser) int {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:7654:9
 		if !(p.inLoop) {
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:7654:26
-			opErrorFull(p, "`break` outside of loop", "move inside a `for` loop", "", "E0100")
+			opErrorFull(p, "`break` outside of loop", "move inside a `for` loop", "", "E0600")
 		}
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:7655:9
 		n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNBreak{}))
@@ -20508,7 +20508,7 @@ func opParseStmt(p *OstyParser) int {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:7663:9
 		if !(p.inLoop) {
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:7663:26
-			opErrorFull(p, "`continue` outside of loop", "move inside a `for` loop", "", "E0101")
+			opErrorFull(p, "`continue` outside of loop", "move inside a `for` loop", "", "E0601")
 		}
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:7664:9
 		n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNContinue{}))
@@ -21358,7 +21358,7 @@ func opParseTypeAtom(p *OstyParser) int {
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8049:13
 			if opAt(p, FrontTokenKind(&FrontTokenKind_FrontGt{})) || opAt(p, FrontTokenKind(&FrontTokenKind_FrontShr{})) || opAt(p, FrontTokenKind(&FrontTokenKind_FrontGeq{})) || opAt(p, FrontTokenKind(&FrontTokenKind_FrontShrEq{})) {
 				// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8050:17
-				opErrorFull(p, "type argument list requires at least one type", "remove `<>` or provide a type, e.g. `<Int>`", "", "E0020")
+				opErrorFull(p, "type argument list requires at least one type", "remove `<>` or provide a type, e.g. `<Int>`", "", "E0300")
 			}
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8052:13
 			for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontGt{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontShr{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontGeq{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontShrEq{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
@@ -21388,7 +21388,7 @@ func opParseTypeAtom(p *OstyParser) int {
 		return opAddNode(p, n)
 	}
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8063:5
-	opErrorFull(p, "expected type", "a type is `Int`, `String`, `List<T>`, `fn(T) -> R`, or `(T, U)`", "", "E0020")
+	opErrorFull(p, "expected type", "a type is `Int`, `String`, `List<T>`, `fn(T) -> R`, or `(T, U)`", "", "E0300")
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8064:5
 	opAdvance(p)
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8065:5
@@ -21824,7 +21824,7 @@ func opParseDecl(p *OstyParser) int {
 	errKindName := frontTokenKindName(tok.kind)
 	_ = errKindName
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8257:5
-	opErrorFull(p, fmt.Sprintf("expected declaration, got %s", ostyToString(errKindName)), "a declaration starts with `fn`, `struct`, `enum`, `interface`, `type`, `use`, or `let`", "", "E0030")
+	opErrorFull(p, fmt.Sprintf("expected declaration, got %s", ostyToString(errKindName)), "a declaration starts with `fn`, `struct`, `enum`, `interface`, `type`, `use`, or `let`", "", "E0100")
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8258:5
 	opSyncDecl(p)
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8259:5
@@ -22363,7 +22363,7 @@ func opParseScopedUseDecl(p *OstyParser, start int, basePath string, isPub bool)
 		}
 		if !opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})) {
 			gotName := frontTokenKindName(opPeek(p).kind)
-			opErrorFull(p, fmt.Sprintf("expected grouped import item, got %s", gotName), "grouped imports accept `name` or `name as alias` items", "", "E0001")
+			opErrorFull(p, fmt.Sprintf("expected grouped import item, got %s", gotName), "grouped imports accept `name` or `name as alias` items", "", "E0204")
 			_ = opAdvance(p)
 			opSkipNewlines(p)
 			continue

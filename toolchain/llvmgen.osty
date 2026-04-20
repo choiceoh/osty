@@ -1109,6 +1109,32 @@ pub fn llvmIntComparePredicate(op: String) -> String {
     ""
 }
 
+// Unsigned compare predicates for Char (i32) and Byte (i8). Char
+// codepoints fit in non-negative i32 so signed would coincidentally
+// work, but Byte values 128..255 go negative under signed ordering
+// which would flip `b'\x80' > b'\x00'`. Unsigned is uniformly correct.
+pub fn llvmUnsignedIntComparePredicate(op: String) -> String {
+    if op == "==" {
+        return "eq"
+    }
+    if op == "!=" {
+        return "ne"
+    }
+    if op == "<" {
+        return "ult"
+    }
+    if op == ">" {
+        return "ugt"
+    }
+    if op == "<=" {
+        return "ule"
+    }
+    if op == ">=" {
+        return "uge"
+    }
+    ""
+}
+
 pub fn llvmFloatComparePredicate(op: String) -> String {
     if op == "==" {
         return "oeq"
@@ -2397,6 +2423,12 @@ pub fn llvmBuiltinType(name: String) -> String {
     if name == "Bool" {
         return "i1"
     }
+    if name == "Char" {
+        return "i32"
+    }
+    if name == "Byte" {
+        return "i8"
+    }
     if name == "String" || name == "Bytes" || name == "Error" {
         return "ptr"
     }
@@ -2404,14 +2436,14 @@ pub fn llvmBuiltinType(name: String) -> String {
 }
 
 pub fn llvmRuntimeAbiBuiltinType(name: String) -> String {
-    if name == "Int" || name == "Float" || name == "Bool" || name == "String" {
+    if name == "Int" || name == "Float" || name == "Bool" || name == "Char" || name == "Byte" || name == "String" {
         return llvmBuiltinType(name)
     }
     ""
 }
 
 pub fn llvmEnumPayloadBuiltinType(name: String) -> String {
-    if name == "Int" || name == "Float" || name == "String" {
+    if name == "Int" || name == "Float" || name == "Char" || name == "Byte" || name == "String" {
         return llvmBuiltinType(name)
     }
     ""

@@ -106,12 +106,14 @@ source → lexer → parser → resolve → check → (format / lint / ir / back
 
 - 모든 새 에러 코드는 포커스 테스트 1개 이상. `expectCode(t, src, diag.CodeXxx)` 헬퍼 사용
 - 퍼즈 크래시는 해당 코퍼스에 시드 추가 (`testdata/fuzz/...`)
-- 스펙 코퍼스:
-  - `testdata/spec/positive/NN-<chapter>.osty` — 0 diagnostic 보장
-  - `testdata/spec/negative/reject.osty` — `// === CASE: Exxxx ===` 블록별로 해당 코드 발화
+- 스펙 코퍼스 (드라이버: `internal/speccorpus`, `just spec` / `just front`에 포함):
+  - `testdata/spec/positive/NN-<chapter>.osty` — 파서 0 error 보장. 파일 추가는 디렉토리에 드롭하면 자동 발견. 현재 스펙과 어긋나는 파일은 `positiveWaivers` 맵에 코드 목록 + 이유 주석 등록
+  - `testdata/spec/negative/reject.osty` — `// === CASE: Exxxx ===` 블록별로 풀 파이프라인 실행 후 해당 코드 발화 검증. 새 CASE 블록은 추가만 하면 자동 참여. 현재 어긋나는 케이스는 `negativeWaivers`에 `"Exxxx/<hint>"` 키로 등록
+  - waiver는 갭 트래킹 용도. 컴파일러가 올바른 코드를 발화하기 시작하면 해당 waiver 엔트리는 테스트 실패와 함께 제거 요청
 - 골든 스냅샷: `go test ./internal/diag/ -run TestGolden -update` 후 diff 확인
 - 일상 루프는 `justfile`:
-  - `just front` — 프론트엔드 패키지만 (수 초)
+  - `just front` — 프론트엔드 패키지만 (수 초, 스펙 코퍼스 포함)
+  - `just spec` — 스펙 코퍼스만 verbose 출력
   - `just short` — `-short` 플래그로 러닝-헤비 제외
   - `just gen <TestName>` / `just lsp <TestName>`
   - `just pipe <path>` — 파이프라인 타이밍
