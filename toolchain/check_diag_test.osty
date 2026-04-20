@@ -71,6 +71,39 @@ fn testCheckDiagRenderIncludesCode() {
     testing.assert(stringsContains(rendered, "error"))
 }
 
+fn testCheckSuggestSimilarReturnsNearestName() {
+    let suggestion = checkSuggestSimilar(["length", "weight", "height"], "lenght")
+    testing.assertEq(suggestion, "length")
+}
+
+fn testCheckSuggestSimilarIgnoresSelfAndFarCandidates() {
+    let none = checkSuggestSimilar(["bar", "baz"], "completelyUnrelated")
+    testing.assertEq(none, "")
+
+    let selfSkipped = checkSuggestSimilar(["foo", "foobar"], "foo")
+    testing.assertEq(selfSkipped, "")
+}
+
+fn testDiagDidYouMeanFormatsSuggestion() {
+    testing.assertEq(diagDidYouMean("length"), "did you mean `length`?")
+    testing.assertEq(diagDidYouMean(""), "")
+}
+
+fn testCheckDiagAttachHintAppendsHintNote() {
+    let base = diagUnknownName("lenght", 0, 6)
+    let annotated = checkDiagAttachHint(base, diagDidYouMean("length"))
+    testing.assertEq(annotated.code, "E0745")
+    testing.assertEq(annotated.notes.len(), 1)
+    testing.assert(stringsContains(annotated.notes[0], "did you mean `length`"))
+    testing.assert(stringsContains(annotated.notes[0], "hint"))
+}
+
+fn testCheckDiagAttachHintIgnoresEmptyText() {
+    let base = diagUnknownName("foo", 0, 3)
+    let unchanged = checkDiagAttachHint(base, "")
+    testing.assertEq(unchanged.notes.len(), 0)
+}
+
 // Substring helper — thin wrapper on `std.strings.contains` so the
 // assertions above read like plain boolean checks.
 fn stringsContains(haystack: String, needle: String) -> Bool {

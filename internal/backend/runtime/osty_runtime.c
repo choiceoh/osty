@@ -1,3 +1,9 @@
+/* nanosleep (scheduler Phase 1A) requires POSIX.1-1993; without this macro
+ * glibc hides the declaration and strict clang (>=16) rejects the call. */
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 199309L
+#endif
+
 #include <stdbool.h>
 #include <stdint.h>
 #include <math.h>
@@ -54,6 +60,11 @@ typedef struct osty_rt_set {
     unsigned char *items;
 } osty_rt_set;
 
+typedef struct osty_rt_bytes {
+    unsigned char *data;
+    int64_t len;
+} osty_rt_bytes;
+
 #if defined(__APPLE__)
 #define OSTY_GC_SYMBOL(name) "_" name
 #else
@@ -66,6 +77,7 @@ enum {
     OSTY_GC_KIND_STRING = 1025,
     OSTY_GC_KIND_MAP = 1026,
     OSTY_GC_KIND_SET = 1027,
+    OSTY_GC_KIND_BYTES = 1028,
 };
 
 enum {
@@ -93,6 +105,52 @@ static int64_t osty_gc_post_write_count = 0;
 static int64_t osty_gc_post_write_managed_count = 0;
 static int64_t osty_gc_load_count = 0;
 static int64_t osty_gc_load_managed_count = 0;
+
+/* Global root slots. Each entry is the address of a storage location that may
+ * hold a managed pointer (i.e. `void **`). At mark time the slot is
+ * dereferenced and the current payload marked — so reassigning the slot
+ * automatically re-roots the new value without explicit churn. This differs
+ * from `root_bind_v1` which pins a specific payload by refcount. */
+static void **osty_gc_global_root_slots = NULL;
+static int64_t osty_gc_global_root_count = 0;
+static int64_t osty_gc_global_root_cap = 0;
+
+/* Write-barrier edge logs (RUNTIME_GC_DELTA §3.1 / §3.2).
+ *
+ * Under the current STW mark-sweep path these buffers are recorded but not
+ * yet consumed during collection — the marker still re-traces from roots on
+ * every cycle. They become active inputs when generational minor collection
+ * (§5) and incremental / concurrent marking (§4.3) land. Keeping the
+ * recording live now means the lowering's already-emitted
+ * `pre_write_v1` / `post_write_v1` calls stop being no-ops and start
+ * producing observable state that tests can assert on.
+ *
+ * `osty_gc_satb_log`: payloads captured by `pre_write_v1` (the value that
+ * WAS in the slot before the store). SATB is only required once marking
+ * becomes concurrent, at which point the log preserves the initial
+ * reachability snapshot. Recorded now, consumed later.
+ *
+ * `osty_gc_remembered_edges`: (owner_payload, value_payload) pairs captured
+ * by `post_write_v1`. Deduplicated via linear scan — fine while edges are
+ * sparse. Future generational code will filter by owner/value region.
+ *
+ * Both logs are cleared at the end of every full collection (the post-sweep
+ * heap state is a fresh baseline).
+ */
+static void **osty_gc_satb_log = NULL;
+static int64_t osty_gc_satb_log_count = 0;
+static int64_t osty_gc_satb_log_cap = 0;
+
+typedef struct osty_gc_remembered_edge {
+    void *owner;
+    void *value;
+} osty_gc_remembered_edge;
+
+static osty_gc_remembered_edge *osty_gc_remembered_edges = NULL;
+static int64_t osty_gc_remembered_edge_count = 0;
+static int64_t osty_gc_remembered_edge_cap = 0;
+
+static void osty_gc_barrier_logs_clear(void);
 
 void osty_gc_post_write_v1(void *owner, void *value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.post_write_v1"));
 void *osty_gc_load_v1(void *value) __asm__(OSTY_GC_SYMBOL("osty.gc.load_v1"));
@@ -386,6 +444,9 @@ static void osty_gc_collect_now_with_stack_roots(void *const *root_slots, int64_
     for (i = 0; i < root_slot_count; i++) {
         osty_gc_mark_root_slot((void *)root_slots[i]);
     }
+    for (i = 0; i < osty_gc_global_root_count; i++) {
+        osty_gc_mark_root_slot(osty_gc_global_root_slots[i]);
+    }
     header = osty_gc_objects;
     while (header != NULL) {
         next = header->next;
@@ -401,6 +462,7 @@ static void osty_gc_collect_now_with_stack_roots(void *const *root_slots, int64_
     osty_gc_collection_count += 1;
     osty_gc_allocated_since_collect = 0;
     osty_gc_collection_requested = false;
+    osty_gc_barrier_logs_clear();
 }
 
 static void osty_gc_collect_now(void) {
@@ -1509,12 +1571,37 @@ OSTY_RT_DEFINE_SET_KEY_OPS(f64, double)
 OSTY_RT_DEFINE_SET_KEY_OPS(ptr, void *)
 OSTY_RT_DEFINE_SET_KEY_OPS(string, const char *)
 
+/*
+ * Bytes primitive ABI. Values flow as `osty_rt_bytes *` — an opaque
+ * pointer to a `{unsigned char *data; int64_t len}` struct. Only the
+ * length / emptiness queries are wired up at the LLVM layer right now;
+ * construction (literals, string.bytes(), etc.) is not yet surfaced,
+ * but the ABI is fixed so future call sites can link against it.
+ */
+int64_t osty_rt_bytes_len(void *raw_bytes) {
+    osty_rt_bytes *b = (osty_rt_bytes *)raw_bytes;
+    if (b == NULL) {
+        return 0;
+    }
+    return b->len;
+}
+
+bool osty_rt_bytes_is_empty(void *raw_bytes) {
+    osty_rt_bytes *b = (osty_rt_bytes *)raw_bytes;
+    if (b == NULL) {
+        return true;
+    }
+    return b->len == 0;
+}
+
 void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
 void osty_gc_pre_write_v1(void *owner, void *old_value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.pre_write_v1"));
 void osty_gc_post_write_v1(void *owner, void *value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.post_write_v1"));
 void *osty_gc_load_v1(void *value) __asm__(OSTY_GC_SYMBOL("osty.gc.load_v1"));
 void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
 void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+void osty_gc_global_root_register_v1(void *slot) __asm__(OSTY_GC_SYMBOL("osty.gc.global_root_register_v1"));
+void osty_gc_global_root_unregister_v1(void *slot) __asm__(OSTY_GC_SYMBOL("osty.gc.global_root_unregister_v1"));
 void osty_gc_safepoint_v1(int64_t safepoint_id, void *const *root_slots, int64_t root_slot_count) __asm__(OSTY_GC_SYMBOL("osty.gc.safepoint_v1"));
 void *osty_rt_enum_alloc_ptr_v1(const char *site) __asm__(OSTY_GC_SYMBOL("osty.rt.enum_alloc_ptr_v1"));
 void *osty_rt_enum_alloc_scalar_v1(const char *site) __asm__(OSTY_GC_SYMBOL("osty.rt.enum_alloc_scalar_v1"));
@@ -1538,6 +1625,67 @@ void *osty_rt_enum_alloc_scalar_v1(const char *site) {
     return osty_gc_allocate_managed(8, OSTY_GC_KIND_GENERIC, site, NULL, NULL);
 }
 
+static void osty_gc_satb_log_grow(void) {
+    int64_t new_cap;
+    void **new_buf;
+
+    new_cap = osty_gc_satb_log_cap == 0 ? 16 : osty_gc_satb_log_cap * 2;
+    new_buf = (void **)realloc(osty_gc_satb_log, (size_t)new_cap * sizeof(void *));
+    if (new_buf == NULL) {
+        osty_rt_abort("out of memory (SATB log)");
+    }
+    osty_gc_satb_log = new_buf;
+    osty_gc_satb_log_cap = new_cap;
+}
+
+static void osty_gc_satb_log_append(void *payload) {
+    if (osty_gc_satb_log_count == osty_gc_satb_log_cap) {
+        osty_gc_satb_log_grow();
+    }
+    osty_gc_satb_log[osty_gc_satb_log_count] = payload;
+    osty_gc_satb_log_count += 1;
+}
+
+static void osty_gc_remembered_edges_grow(void) {
+    int64_t new_cap;
+    osty_gc_remembered_edge *new_buf;
+
+    new_cap = osty_gc_remembered_edge_cap == 0 ? 16 : osty_gc_remembered_edge_cap * 2;
+    new_buf = (osty_gc_remembered_edge *)realloc(osty_gc_remembered_edges, (size_t)new_cap * sizeof(osty_gc_remembered_edge));
+    if (new_buf == NULL) {
+        osty_rt_abort("out of memory (remembered edges)");
+    }
+    osty_gc_remembered_edges = new_buf;
+    osty_gc_remembered_edge_cap = new_cap;
+}
+
+static bool osty_gc_remembered_edges_contains(void *owner, void *value) {
+    int64_t i;
+    for (i = 0; i < osty_gc_remembered_edge_count; i++) {
+        if (osty_gc_remembered_edges[i].owner == owner && osty_gc_remembered_edges[i].value == value) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void osty_gc_remembered_edges_append(void *owner, void *value) {
+    if (osty_gc_remembered_edges_contains(owner, value)) {
+        return;
+    }
+    if (osty_gc_remembered_edge_count == osty_gc_remembered_edge_cap) {
+        osty_gc_remembered_edges_grow();
+    }
+    osty_gc_remembered_edges[osty_gc_remembered_edge_count].owner = owner;
+    osty_gc_remembered_edges[osty_gc_remembered_edge_count].value = value;
+    osty_gc_remembered_edge_count += 1;
+}
+
+static void osty_gc_barrier_logs_clear(void) {
+    osty_gc_satb_log_count = 0;
+    osty_gc_remembered_edge_count = 0;
+}
+
 void osty_gc_pre_write_v1(void *owner, void *old_value, int64_t slot_kind) {
     osty_gc_header *owner_header;
 
@@ -1550,6 +1698,7 @@ void osty_gc_pre_write_v1(void *owner, void *old_value, int64_t slot_kind) {
         return;
     }
     osty_gc_pre_write_managed_count += 1;
+    osty_gc_satb_log_append(old_value);
     owner_header = osty_gc_find_header(owner);
     if (owner_header != NULL && owner_header->root_count > 0) {
         osty_gc_collection_requested = true;
@@ -1572,6 +1721,7 @@ void osty_gc_post_write_v1(void *owner, void *value, int64_t slot_kind) {
         return;
     }
     osty_gc_post_write_managed_count += 1;
+    osty_gc_remembered_edges_append(owner, value);
     if (owner_header->root_count > 0) {
         osty_gc_collection_requested = true;
     }
@@ -1609,6 +1759,46 @@ void osty_gc_root_release_v1(void *root) {
         osty_rt_abort("GC root release underflow");
     }
     header->root_count -= 1;
+}
+
+static void osty_gc_global_roots_grow(void) {
+    int64_t new_cap;
+    void **new_slots;
+
+    new_cap = osty_gc_global_root_cap == 0 ? 8 : osty_gc_global_root_cap * 2;
+    new_slots = (void **)realloc(osty_gc_global_root_slots, (size_t)new_cap * sizeof(void *));
+    if (new_slots == NULL) {
+        osty_rt_abort("out of memory (global roots)");
+    }
+    osty_gc_global_root_slots = new_slots;
+    osty_gc_global_root_cap = new_cap;
+}
+
+void osty_gc_global_root_register_v1(void *slot) {
+    if (slot == NULL) {
+        return;
+    }
+    if (osty_gc_global_root_count == osty_gc_global_root_cap) {
+        osty_gc_global_roots_grow();
+    }
+    osty_gc_global_root_slots[osty_gc_global_root_count] = slot;
+    osty_gc_global_root_count += 1;
+}
+
+void osty_gc_global_root_unregister_v1(void *slot) {
+    int64_t i;
+
+    if (slot == NULL) {
+        return;
+    }
+    for (i = osty_gc_global_root_count - 1; i >= 0; i--) {
+        if (osty_gc_global_root_slots[i] == slot) {
+            memmove(&osty_gc_global_root_slots[i], &osty_gc_global_root_slots[i + 1],
+                    (size_t)(osty_gc_global_root_count - i - 1) * sizeof(void *));
+            osty_gc_global_root_count -= 1;
+            return;
+        }
+    }
 }
 
 void osty_gc_safepoint_v1(int64_t safepoint_id, void *const *root_slots, int64_t root_slot_count) {
@@ -1660,6 +1850,32 @@ int64_t osty_gc_debug_load_count(void) {
 
 int64_t osty_gc_debug_load_managed_count(void) {
     return osty_gc_load_managed_count;
+}
+
+int64_t osty_gc_debug_global_root_count(void) {
+    return osty_gc_global_root_count;
+}
+
+int64_t osty_gc_debug_satb_log_count(void) {
+    return osty_gc_satb_log_count;
+}
+
+int64_t osty_gc_debug_remembered_edge_count(void) {
+    return osty_gc_remembered_edge_count;
+}
+
+int osty_gc_debug_remembered_edge_contains(void *owner, void *value) {
+    return osty_gc_remembered_edges_contains(owner, value) ? 1 : 0;
+}
+
+int osty_gc_debug_satb_log_contains(void *payload) {
+    int64_t i;
+    for (i = 0; i < osty_gc_satb_log_count; i++) {
+        if (osty_gc_satb_log[i] == payload) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 /* ======================================================================

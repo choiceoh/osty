@@ -19,8 +19,10 @@ Today the runtime collector is a precise root-driven mark/sweep collector with:
 
 - managed runtime allocation via `osty.gc.alloc_v1`
 - explicit root bind/release via `osty.gc.root_bind_v1` and `osty.gc.root_release_v1`
+- global root slot registration via `osty.gc.global_root_register_v1` and `osty.gc.global_root_unregister_v1` (slot-address based — reassigning the slot automatically protects the new payload)
 - safepoint-driven stack-slot scanning via `osty.gc.safepoint_v1`
 - allocation-pressure-triggered collection requests fulfilled at safepoints
+- write-barrier edge logging — `osty.gc.pre_write_v1` accumulates a SATB log of overwritten values, `osty.gc.post_write_v1` records deduplicated (owner, value) edges; both cleared at the end of each collection. The live STW marker does not yet consume these logs, but they are produced so that generational minor collection and concurrent / incremental marking can plug in without revisiting emit sites.
 - managed temporary protection in LLVM lowering for params, locals, aggregates, loop iterables, and nested call arguments
 
 This is the implementation we are extending toward end-to-end native execution.
@@ -34,6 +36,11 @@ This is the implementation we are extending toward end-to-end native execution.
 - a historical design record
 
 It is not the active implementation path for new native runtime GC work. New implementation effort should land in the LLVM lowering/runtime path first, then selectively retire or archive overlapping model-only material.
+
+The per-feature gap between the model and the live runtime is tabulated in
+[`RUNTIME_GC_DELTA.md`](./RUNTIME_GC_DELTA.md). That document is a planning aid,
+not a spec — P1 items mark places where LLVM lowering already emits calls that
+the runtime treats as no-ops, so they have the highest leverage.
 
 ## Working rule
 

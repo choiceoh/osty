@@ -199,6 +199,74 @@ func extractExportSymbol(annots []*ast.Annotation) string {
 	return ""
 }
 
+// jsonFieldOptions extracts `#[json(...)]` metadata from a struct
+// field's annotation list. Returns (key, skip, optional) where an
+// empty key means "use the field name". The resolver has already
+// validated argument shape (E0407) and that `optional` only attaches
+// to Option-typed fields (E0408), so this helper accepts any
+// argument form silently — malformed inputs cannot reach IR.
+func jsonFieldOptions(annots []*ast.Annotation) (key string, skip, optional bool) {
+	for _, a := range annots {
+		if a == nil || a.Name != "json" {
+			continue
+		}
+		for _, arg := range a.Args {
+			switch arg.Key {
+			case "key":
+				if s, ok := annotationStringLit(arg.Value); ok {
+					key = s
+				}
+			case "skip":
+				skip = true
+			case "optional":
+				optional = true
+			}
+		}
+	}
+	return key, skip, optional
+}
+
+// jsonVariantOptions extracts `#[json(...)]` metadata from an enum
+// variant's annotation list. Returns (tag, skip); empty tag means
+// "use the variant name". Only `key` and `skip` are defined for
+// variants — `optional` is a field-level knob.
+func jsonVariantOptions(annots []*ast.Annotation) (tag string, skip bool) {
+	for _, a := range annots {
+		if a == nil || a.Name != "json" {
+			continue
+		}
+		for _, arg := range a.Args {
+			switch arg.Key {
+			case "key":
+				if s, ok := annotationStringLit(arg.Value); ok {
+					tag = s
+				}
+			case "skip":
+				skip = true
+			}
+		}
+	}
+	return tag, skip
+}
+
+// annotationStringLit concatenates the literal parts of a string
+// literal `ast.Expr`. Interpolation segments force a false return
+// since the resolver forbids non-literal annotation arguments.
+func annotationStringLit(e ast.Expr) (string, bool) {
+	lit, ok := e.(*ast.StringLit)
+	if !ok {
+		return "", false
+	}
+	var buf []byte
+	for _, p := range lit.Parts {
+		if !p.IsLit {
+			return "", false
+		}
+		buf = append(buf, p.Lit...)
+	}
+	return string(buf), true
+}
+
 func (l *lowerer) lowerParam(p *ast.Param) *Param {
 	out := &Param{
 		Type:  l.lowerType(p.Type),
@@ -246,6 +314,7 @@ func (l *lowerer) lowerStructDecl(sd *ast.StructDecl) *StructDecl {
 		if f.Default != nil {
 			field.Default = l.lowerExpr(f.Default)
 		}
+		field.JSONKey, field.JSONSkip, field.JSONOptional = jsonFieldOptions(f.Annotations)
 		out.Fields = append(out.Fields, field)
 	}
 	for _, m := range sd.Methods {
@@ -268,6 +337,7 @@ func (l *lowerer) lowerEnumDecl(ed *ast.EnumDecl) *EnumDecl {
 		for _, ty := range v.Fields {
 			variant.Payload = append(variant.Payload, l.lowerType(ty))
 		}
+		variant.JSONTag, variant.JSONSkip = jsonVariantOptions(v.Annotations)
 		out.Variants = append(out.Variants, variant)
 	}
 	for _, m := range ed.Methods {

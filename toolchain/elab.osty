@@ -260,7 +260,15 @@ fn elabInferIdent(cx: ElabCx, node: AstNode) -> ElabResult {
         return ElabResult { node: coreIdx, ty: fnTy }
     }
     // Fall through — unknown name.
-    cx.env.diagnostics.push(diagUnknownName(node.text, node.start, node.end))
+    let suggestion = checkSuggestSimilar(
+        checkVisibleBindingNames(cx.env),
+        node.text,
+    )
+    let diag = checkDiagAttachHint(
+        diagUnknownName(node.text, node.start, node.end),
+        diagDidYouMean(suggestion),
+    )
+    cx.env.diagnostics.push(diag)
     elabPoisonResult(cx, node.start, node.end)
 }
 

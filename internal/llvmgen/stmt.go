@@ -56,6 +56,12 @@ func (g *generator) emitReturningBlock(stmts []ast.Stmt, retType string, retSour
 			if v.typ != retType {
 				return unsupportedf("type-system", "return type %s, want %s", v.typ, retType)
 			}
+			if err := g.emitAllPendingDefers(); err != nil {
+				return err
+			}
+			if !g.currentReachable {
+				return nil
+			}
 			emitter := g.toOstyEmitter()
 			g.releaseGCRoots(emitter)
 			llvmReturn(emitter, toOstyValue(v))
@@ -77,6 +83,12 @@ func (g *generator) emitReturningBlock(stmts []ast.Stmt, retType string, retSour
 			}
 			if v.typ != retType {
 				return unsupportedf("type-system", "trailing expression type %s, want %s", v.typ, retType)
+			}
+			if err := g.emitAllPendingDefers(); err != nil {
+				return err
+			}
+			if !g.currentReachable {
+				return nil
 			}
 			emitter := g.toOstyEmitter()
 			g.releaseGCRoots(emitter)
@@ -122,6 +134,8 @@ func (g *generator) emitStmt(stmt ast.Stmt) error {
 		return g.emitBreak()
 	case *ast.ContinueStmt:
 		return g.emitContinue()
+	case *ast.DeferStmt:
+		return g.registerDefer(s)
 	case *ast.ExprStmt:
 		if ifExpr, ok := s.X.(*ast.IfExpr); ok {
 			return g.emitIfStmt(ifExpr)
@@ -721,6 +735,12 @@ func (g *generator) emitReturn(stmt *ast.ReturnStmt) error {
 		if ret.typ != g.returnType {
 			return unsupportedf("type-system", "return type %s, want %s", ret.typ, g.returnType)
 		}
+	}
+	if err := g.emitAllPendingDefers(); err != nil {
+		return err
+	}
+	if !g.currentReachable {
+		return nil
 	}
 	emitter := g.toOstyEmitter()
 	g.releaseGCRoots(emitter)

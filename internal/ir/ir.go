@@ -430,6 +430,24 @@ type Field struct {
 	Default  Expr
 	Exported bool
 	SpanV    Span
+
+	// JSONKey is the override from `#[json(key = "...")]`. Empty when
+	// no override is set; downstream backends should fall back to
+	// `Name` in that case. Populated by the IR lowerer from the AST
+	// annotation list so the resolver's validation (`E0407`,
+	// `E0408`) does not have to be re-run by each backend.
+	JSONKey string
+
+	// JSONSkip is true when `#[json(skip)]` is present on the field.
+	// Marshal paths must omit the field entirely; unmarshal paths
+	// must leave it at its zero/default value.
+	JSONSkip bool
+
+	// JSONOptional is true when `#[json(optional)]` is present. The
+	// resolver guarantees the field's declared type is an Option,
+	// so backends can always materialise `None` when the key is
+	// missing in input and elide `null` on output.
+	JSONOptional bool
 }
 
 func (f *Field) At() Span { return f.SpanV }
@@ -454,6 +472,18 @@ type Variant struct {
 	Name    string
 	Payload []Type
 	SpanV   Span
+
+	// JSONTag is the discriminator string override from
+	// `#[json(key = "...")]` on a variant. Empty when not overridden;
+	// backends fall back to `Name`. Lifted from the AST annotation
+	// list by the IR lowerer so backends do not redo the
+	// (resolver-validated) literal parse.
+	JSONTag string
+
+	// JSONSkip is true when `#[json(skip)]` is present on the
+	// variant. The resolver already refuses duplicate-after-skip
+	// collisions; encoders drop skipped variants from the case space.
+	JSONSkip bool
 }
 
 func (v *Variant) At() Span { return v.SpanV }

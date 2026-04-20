@@ -120,6 +120,30 @@ fn checkResultSymbolType(result: FrontCheckResult, kind: String, name: String, o
     found
 }
 
+fn testSelfCheckerSuggestsSimilarNameForTypoIdent() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn main() {
+                let length: Int = 10
+                let n: Int = lenght
+            }
+            """,
+    )
+
+    testing.assert(checked.summary.errors > 0)
+    let mut sawSuggestion = false
+    for d in checked.diagnostics {
+        if d.code == "E0745" {
+            for note in d.notes {
+                if note == "hint: did you mean `length`?" {
+                    sawSuggestion = true
+                }
+            }
+        }
+    }
+    testing.assert(sawSuggestion)
+}
+
 fn testSelfCheckerReportsAssignmentReturnAndCallErrors() {
     let checked = frontendCheckSource(
         r"""

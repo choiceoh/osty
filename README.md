@@ -589,12 +589,21 @@ just pipe-gen path/file.osty
 
 The **spec corpus** lives under `testdata/spec/`:
 
-- `positive/NN-<chapter>.osty` — one fixture per spec chapter;
-  `TestSpecPositiveCorpus` asserts the full pipeline emits **zero**
-  diagnostics for each.
+- `positive/NN-<chapter>.osty` — one fixture per spec chapter; the
+  `internal/speccorpus` driver auto-discovers every file in the
+  directory and asserts the parser emits zero error-severity
+  diagnostics. Known gaps between spec and implementation live in a
+  `positiveWaivers` map inside `speccorpus_test.go` with a comment
+  per entry — any new fixture either parses clean or is waived.
 - `negative/reject.osty` — a bundled file of `// === CASE: Exxxx ===`
-  blocks; `TestSpecNegativeCorpus` extracts each block and asserts the
-  declared diagnostic code fires.
+  blocks; the same driver splits each block and asserts the full
+  front-end (lex → parse → resolve → check → lint) emits a diagnostic
+  with the declared code. Cases the pipeline currently diverges on
+  live in `negativeWaivers`, keyed by `"Exxxx/<hint>"`.
+
+Run just the corpus driver with `go test ./internal/speccorpus/`. New
+`.osty` fixtures or new `// === CASE: ===` blocks are picked up with
+no Go-side registration; adding coverage is a one-file change.
 
 The **airepair corpus** lives under `internal/airepair/testdata/corpus/`:
 
