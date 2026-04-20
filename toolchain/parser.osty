@@ -1147,6 +1147,48 @@ fn opParseDeferStmt(p: OstyParser) -> Int {
     opAddNode(p, n)
 }
 
+/// opExprToForPattern converts an expression parsed on the LHS of a
+/// `for EXPR in ITER { ... }` (where EXPR turned out to be the
+/// binding pattern, not a condition) into a proper AstNPattern node.
+///
+/// Handles the shapes that can appear in an irrefutable for-in
+/// pattern — bare idents (`for x in xs`) and tuple destructurings
+/// (`for (k, v) in m.entries()`). Other shapes fall back to wrapping
+/// the original expression so later passes see an AstNPattern and
+/// can produce a structured diagnostic rather than a silent miss.
+fn opExprToForPattern(p: OstyParser, exprIdx: Int) -> Int {
+    if exprIdx < 0 {
+        return exprIdx
+    }
+    let node = astArenaNodeAt(p.arena, exprIdx)
+    if node.kind == AstNIdent {
+        let mut pat = emptyAstNode(AstNPattern)
+        pat.extra = astPatternIdentKind()
+        pat.text = node.text
+        pat.start = node.start
+        pat.end = node.end
+        return opAddNode(p, pat)
+    }
+    // Tuple destructure: `(a, b)` parsed as a tuple expression. Reuse
+    // the children indices and rewrap them each as ident patterns.
+    if node.kind == AstNTuple {
+        let mut elems: List<Int> = []
+        for childIdx in node.children {
+            elems.push(opExprToForPattern(p, childIdx))
+        }
+        let mut pat = emptyAstNode(AstNPattern)
+        pat.extra = astPatternTupleKind()
+        pat.children = elems
+        pat.start = node.start
+        pat.end = node.end
+        return opAddNode(p, pat)
+    }
+    // Unknown expression shape — keep the original index; the checker
+    // already emits E0741 (refutable pattern) when `elabBindPattern`
+    // sees a non-AstNPattern node.
+    exprIdx
+}
+
 fn opParseForStmt(p: OstyParser) -> Int {
     let start = p.pos
     let _ = opAdvance(p)
@@ -1187,7 +1229,13 @@ fn opParseForStmt(p: OstyParser) -> Int {
         if opAt(p, FrontIdent) && opPeek(p).text == "in" {
             let _ = opAdvance(p)
             kind = "forin"
-            patIdx = expr
+            // `for x in xs` takes this path — the grammar is
+            // pattern-or-cond ambiguous until the `in` keyword is
+            // seen, so we parse the LHS as an expression first and
+            // then convert it to a pattern. Otherwise downstream
+            // passes see an AstNIdent where they expect AstNPattern
+            // and silently fail to register the for-loop binding.
+            patIdx = opExprToForPattern(p, expr)
             let pv2 = p.noStructLit
             p.noStructLit = true
             iterIdx = opParseExpr(p)

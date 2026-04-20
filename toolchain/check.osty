@@ -455,21 +455,11 @@ fn genericListToTyArgs(cx: ElabCx, names: List<String>) -> List<Int> {
     out
 }
 
-/// astTypeToTyInCollect lowers an AST type node via the legacy string
-/// round-trip. Separate from the elaborator's `astTypeToTy` so the
-/// collect pass does not depend on a running `cx`.
+/// astTypeToTyInCollect lowers an AST type node. Thin alias over
+/// `elab.astTypeToTy`; exists as a stable entry point for the collect
+/// pass so callers don't reach across files in diffs.
 fn astTypeToTyInCollect(cx: ElabCx, idx: Int) -> Int {
-    if idx < 0 {
-        return -1
-    }
-    let node = astArenaNodeAt(cx.ast.arena, idx)
-    if node.kind != AstNType {
-        return -1
-    }
-    if node.text == "" {
-        return -1
-    }
-    tyFromString(cx.env.tys, node.text)
+    astTypeToTy(cx, idx)
 }
 
 fn checkIntListLenLocal(xs: List<Int>) -> Int {
