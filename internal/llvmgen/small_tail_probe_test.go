@@ -3,60 +3,71 @@ package llvmgen
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/osty/osty/internal/parser"
 )
 
-// TestProbeSmallTailLower records the current lowering state of the
-// small-tail toolchain modules. pkg_policy.osty is expected to lower
-// cleanly after the std.strings shim + bare None/Some support; the
-// other two still hit broader walls (LLVM014 Iterable for-in, LLVM011
-// struct-param) tracked separately.
+// TestProbeSmallTailLower is the regression ratchet for per-file LLVM
+// parity on the toolchain/*.osty modules. TestSweepToolchainLargeTail
+// is the info-only discovery probe; this test fails loudly if a
+// previously-clean module starts re-hitting a wall or if a tracked
+// wall moves off its expected code. Keep the clean set in sync with
+// the sweep's CLEAN count.
+//
+// wantWall is the expected wallCode() result for each module; "" means
+// CLEAN. When a walled entry actually lowers cleanly, the test logs a
+// promotion hint instead of failing.
 func TestProbeSmallTailLower(t *testing.T) {
 	root, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatalf("abs root: %v", err)
 	}
 	cases := []struct {
-		rel                string
-		expectClean        bool
-		allowedWallSnippet string // err must contain this iff not clean
+		rel      string
+		wantWall string
 	}{
-		{"toolchain/pkg_policy.osty", true, ""},
-		{"toolchain/profile_flags.osty", true, ""},
-		{"toolchain/diagnostic.osty", false, "LLVM011"},
+		{"toolchain/airepair_flags.osty", ""},
+		{"toolchain/diag_examples.osty", ""},
+		{"toolchain/diag_policy.osty", ""},
+		{"toolchain/diagnostic.osty", "LLVM011"},
+		{"toolchain/manifest_features.osty", ""},
+		{"toolchain/package_entry.osty", ""},
+		{"toolchain/pkg_policy.osty", ""},
+		{"toolchain/profile_flags.osty", ""},
+		{"toolchain/scaffold_policy.osty", ""},
+		{"toolchain/semver.osty", ""},
+		{"toolchain/test_runner.osty", ""},
+		{"toolchain/ty.osty", ""},
 	}
 	for _, tc := range cases {
-		path := filepath.Join(root, tc.rel)
-		src, err := os.ReadFile(path)
-		if err != nil {
-			t.Errorf("%s: read: %v", tc.rel, err)
-			continue
-		}
-		file, diags := parser.ParseDiagnostics(src)
-		if file == nil {
-			t.Errorf("%s: parse nil (%d diags)", tc.rel, len(diags))
-			continue
-		}
-		_, err = generateFromAST(file, Options{PackageName: "main", SourcePath: path})
-		if tc.expectClean {
+		tc := tc
+		t.Run(tc.rel, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(root, tc.rel)
+			src, err := os.ReadFile(path)
 			if err != nil {
-				t.Errorf("%s: expected clean lowering, got: %v", tc.rel, err)
-			} else {
-				t.Logf("%s: lowered cleanly", tc.rel)
+				t.Fatalf("read: %v", err)
 			}
-			continue
-		}
-		if err == nil {
-			t.Logf("%s: lowered cleanly (was expected to hit %s — revisit probe)", tc.rel, tc.allowedWallSnippet)
-			continue
-		}
-		if !strings.Contains(err.Error(), tc.allowedWallSnippet) {
-			t.Errorf("%s: unexpected wall (expected %s): %v", tc.rel, tc.allowedWallSnippet, err)
-		} else {
-			t.Logf("%s: still on expected wall %s: %v", tc.rel, tc.allowedWallSnippet, err)
-		}
+			file, diags := parser.ParseDiagnostics(src)
+			if file == nil {
+				t.Fatalf("parse nil (%d diags)", len(diags))
+			}
+			_, err = generateFromAST(file, Options{PackageName: "main", SourcePath: path})
+			got := ""
+			if err != nil {
+				got = wallCode(err.Error())
+			}
+			switch {
+			case got == tc.wantWall:
+				t.Logf("%s: %s", tc.rel, formatWall(err))
+			case tc.wantWall == "":
+				t.Fatalf("expected clean lowering, got %s: %v", got, err)
+			case got == "":
+				t.Logf("%s: lowered cleanly (was expected %s — promote to clean)", tc.rel, tc.wantWall)
+			default:
+				t.Fatalf("unexpected wall (want %s, got %s): %v", tc.wantWall, got, err)
+			}
+		})
 	}
 }
