@@ -3299,7 +3299,11 @@ func frontStringMissingTripleLeadingNewline(units []string, start int, kind Fron
 			contentStart = _cur182 + _rhs183
 		}()
 	}
-	return frontUnitAt(units, contentStart) != "\n"
+	// Accept LF, CR, or CRLF as the leading triple-quoted newline (Windows
+	// CRLF checkouts previously tripped E0006). Mirrored from
+	// toolchain/frontend.osty pending a regen fix.
+	first := frontUnitAt(units, contentStart)
+	return first != "\n" && first != "\r"
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:1537:5
@@ -4769,19 +4773,15 @@ func frontTripleNormalization(units []string, start int, scan *FrontScanResult, 
 	contentStart := contentStartRaw
 	_ = contentStart
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:2041:5
+	// Skip the leading newline after the opening `"""` / `r"""`. Treat LF,
+	// CR, and CRLF uniformly so per-line indent probing starts at actual
+	// content on Windows (CRLF) checkouts. Mirrored from
+	// toolchain/frontend.osty pending a regen fix.
+	if frontUnitAt(units, contentStart) == "\r" {
+		contentStart = contentStart + 1
+	}
 	if frontUnitAt(units, contentStart) == "\n" {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:2042:9
-		func() {
-			var _cur356 int = contentStart
-			var _rhs357 int = 1
-			if _rhs357 > 0 && _cur356 > math.MaxInt-_rhs357 {
-				panic("integer overflow")
-			}
-			if _rhs357 < 0 && _cur356 < math.MinInt-_rhs357 {
-				panic("integer overflow")
-			}
-			contentStart = _cur356 + _rhs357
-		}()
+		contentStart = contentStart + 1
 	}
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:2044:5
 	closeStart := func() int {
@@ -6200,7 +6200,9 @@ func frontStringLikeScan(units []string, start int, unitCount int, kind FrontTok
 				contentStart = _cur500 + _rhs501
 			}()
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:2561:13
-			if frontUnitAt(units, contentStart) != "\n" {
+			// Accept LF, CR, or CRLF as the leading newline. Mirrored
+			// from toolchain/frontend.osty pending a regen fix.
+			if first := frontUnitAt(units, contentStart); first != "\n" && first != "\r" {
 				// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:2562:17
 				func() {
 					var _cur502 int = errors
@@ -6273,7 +6275,8 @@ func frontStringLikeScan(units []string, start int, unitCount int, kind FrontTok
 			contentStart = _cur510 + _rhs511
 		}()
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:2575:9
-		if frontUnitAt(units, contentStart) != "\n" {
+		// Accept LF, CR, or CRLF. Mirrored from toolchain/frontend.osty.
+		if first := frontUnitAt(units, contentStart); first != "\n" && first != "\r" {
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:2576:13
 			func() {
 				var _cur512 int = errors
@@ -35234,6 +35237,15 @@ func elabCallArgs(cx *ElabCx, solver *Solver, sig *CheckFnSig, freshs []int, arg
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15270:1
+// elabIsToStringFormatter returns true when callee is one of the prelude
+// ToString-consuming formatters (Spec §17): print, println, eprint, eprintln.
+// These accept any `T: ToString`, so call sites must not be type-checked
+// against the String param the prelude signature advertises for fn-value
+// interop. Manually mirrored from toolchain/elab.osty pending a regen fix.
+func elabIsToStringFormatter(name string) bool {
+	return name == "print" || name == "println" || name == "eprint" || name == "eprintln"
+}
+
 func elabCallArgsMonomorphic(cx *ElabCx, callee string, paramTys []int, argIdxs []int, start int, end int) []int {
 	wantCount := checkIntListLenHelper(paramTys)
 	gotCount := checkIntListLenHelper(argIdxs)
@@ -35243,10 +35255,11 @@ func elabCallArgsMonomorphic(cx *ElabCx, callee string, paramTys []int, argIdxs 
 			return struct{}{}
 		}()
 	}
+	skipParamCheck := elabIsToStringFormatter(callee)
 	var coreArgs []int = make([]int, 0, 1)
 	i := 0
 	for _, argIdx := range argIdxs {
-		if i >= wantCount {
+		if i >= wantCount || skipParamCheck {
 			r := elabInfer(cx, argIdx)
 			coreArgs = append(coreArgs, r.node)
 			i++

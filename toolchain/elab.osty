@@ -1242,6 +1242,15 @@ fn elabCallArgs(
     coreArgs
 }
 
+/// elabIsToStringFormatter returns true when `callee` is one of the
+/// prelude ToString-consuming formatters (Spec §17): `print`, `println`,
+/// `eprint`, `eprintln`. These accept any `T: ToString` rather than a
+/// fixed `String`, so call sites must not be type-checked against the
+/// String param the prelude signature advertises for fn-value interop.
+fn elabIsToStringFormatter(name: String) -> Bool {
+    name == "print" || name == "println" || name == "eprint" || name == "eprintln"
+}
+
 fn elabCallArgsMonomorphic(
     cx: ElabCx,
     callee: String,
@@ -1255,10 +1264,11 @@ fn elabCallArgsMonomorphic(
     if wantCount != gotCount {
         cx.env.diagnostics.push(diagArgCount(callee, wantCount, gotCount, start, end))
     }
+    let skipParamCheck = elabIsToStringFormatter(callee)
     let mut coreArgs: List<Int> = []
     let mut i = 0
     for argIdx in argIdxs {
-        if i >= wantCount {
+        if i >= wantCount || skipParamCheck {
             let r = elabInfer(cx, argIdx)
             coreArgs.push(r.node)
             i = i + 1
