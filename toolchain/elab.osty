@@ -901,9 +901,29 @@ fn elabRecordTypedExpr(cx: ElabCx, idx: Int, out: ElabResult) {
 }
 
 /// astTypeToTy materialises an AST type node into the typed arena.
-/// Returns -1 when `idx` is negative. Unknown heads fall back to
-/// `tyNamed` — the surrounding context is expected to decide whether
-/// that is an error.
+/// Returns -1 when `idx` is negative.
+///
+/// Handles both AST shapes the checker receives:
+///
+/// 1. **Selfhost-parsed** (`CheckSourceStructured` → `opParseType`):
+///    structural tags in `.text` (`"optional"` / `"fn"` / `"tuple"`)
+///    or a bare head (`"List"`, `"Int"`) with children/left/right
+///    carrying subtypes. Recurse structurally so generic args are
+///    preserved (`List<Int>` ↦ `tyNamed("List", [Int])`).
+///
+/// 2. **Go-side lowered** (`CheckPackageStructured` →
+///    `selfhostRenderType`): the full textual form is flattened into
+///    `.text` (`"List<Int>"`, `"fn(Int) -> Int"`) with no structural
+///    children. Fall back to `tyFromString` — the legacy string
+///    round-trip — only in this case.
+///
+/// The older implementation always routed through `tyFromString`,
+/// which meant the selfhost parser's `text="List", children=[Int]`
+/// nodes silently lost every generic arg and the checker saw
+/// `fn(List) -> Int` for `fn sumList(xs: List<Int>) -> Int`. That
+/// cascaded into E0744 (`operator \`in\` cannot be applied to \`List\``)
+/// plus E0745 for the for-loop binding, which accounted for a large
+/// chunk of the remaining toolchain E0745 tail.
 fn astTypeToTy(cx: ElabCx, idx: Int) -> Int {
     if idx < 0 {
         return -1
@@ -912,26 +932,64 @@ fn astTypeToTy(cx: ElabCx, idx: Int) -> Int {
     if node.kind != AstNType {
         return -1
     }
-    // The legacy checker lowers AST type text through
-    // `frontCheckTypeName`; during the transition we round-trip the
-    // same textual form through the Ty bridge so Phase 6 does not need
-    // a parallel type-node lowerer.
-    let rendered = astTypeRendered(cx.ast, node)
-    if rendered == "" {
+    if node.text == "" {
         return -1
     }
-    tyFromString(cx.env.tys, rendered)
-}
 
-/// astTypeRendered reconstructs the textual form of an AST type node
-/// using its `text` field when present, or the legacy
-/// `frontCheckTypeName` helper otherwise.
-fn astTypeRendered(ast: AstFile, node: AstNode) -> String {
-    if node.text != "" {
-        return node.text
+    // Structural tags emitted by the selfhost parser.
+    if node.text == "optional" {
+        let inner = astTypeToTy(cx, node.left)
+        if inner < 0 {
+            return tErr(cx.env.tys)
+        }
+        return tyOptional(cx.env.tys, inner)
     }
-    let _ = ast
-    ""
+    if node.text == "fn" {
+        let mut params: List<Int> = []
+        for p in node.children {
+            let pt = astTypeToTy(cx, p)
+            params.push(if pt < 0 { tErr(cx.env.tys) } else { pt })
+        }
+        let retTy = if node.right < 0 {
+            tUnit(cx.env.tys)
+        } else {
+            let r = astTypeToTy(cx, node.right)
+            if r < 0 { tUnit(cx.env.tys) } else { r }
+        }
+        return tyFn(cx.env.tys, params, retTy)
+    }
+    if node.text == "tuple" {
+        let mut elems: List<Int> = []
+        for e in node.children {
+            let et = astTypeToTy(cx, e)
+            elems.push(if et < 0 { tErr(cx.env.tys) } else { et })
+        }
+        return tyTuple(cx.env.tys, elems)
+    }
+
+    // Named type. If the selfhost parser populated children, the text
+    // is a bare head and each child is an AstNType for one generic
+    // arg. Otherwise it's either a bare nominal (primitive, Self, or a
+    // zero-arg user type) or the Go-side's pre-rendered `"List<Int>"`
+    // form — delegate to `tyFromString` for both of those.
+    let mut args: List<Int> = []
+    for a in node.children {
+        let at = astTypeToTy(cx, a)
+        args.push(if at < 0 { tErr(cx.env.tys) } else { at })
+    }
+    if checkIntListLenHelper(args) > 0 {
+        if node.text == "Self" {
+            return tySelf(cx.env.tys, "")
+        }
+        // Primitives don't take args; fall through to the string
+        // parser so the error surface is consistent.
+        let prim = primKindFromName(node.text)
+        if prim != PkInvalid {
+            return tyFromString(cx.env.tys, node.text)
+        }
+        return tyNamed(cx.env.tys, node.text, args)
+    }
+    tyFromString(cx.env.tys, node.text)
 }
 
 // ---------------------------------------------------------------------

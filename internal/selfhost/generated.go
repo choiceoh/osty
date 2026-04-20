@@ -20785,6 +20785,37 @@ func opParseDeferStmt(p *OstyParser) int {
 	return opAddNode(p, n)
 }
 
+// opExprToForPattern converts an expression parsed on the LHS of a
+// `for EXPR in ITER { ... }` into a proper AstNPattern node. Mirrored
+// from toolchain/parser.osty pending a regen fix.
+func opExprToForPattern(p *OstyParser, exprIdx int) int {
+	if exprIdx < 0 {
+		return exprIdx
+	}
+	node := astArenaNodeAt(p.arena, exprIdx)
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNIdent{})) {
+		pat := emptyAstNode(AstNodeKind(&AstNodeKind_AstNPattern{}))
+		pat.extra = astPatternIdentKind()
+		pat.text = node.text
+		pat.start = node.start
+		pat.end = node.end
+		return opAddNode(p, pat)
+	}
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNTuple{})) {
+		elems := make([]int, 0, len(node.children))
+		for _, childIdx := range node.children {
+			elems = append(elems, opExprToForPattern(p, childIdx))
+		}
+		pat := emptyAstNode(AstNodeKind(&AstNodeKind_AstNPattern{}))
+		pat.extra = astPatternTupleKind()
+		pat.children = elems
+		pat.start = node.start
+		pat.end = node.end
+		return opAddNode(p, pat)
+	}
+	return exprIdx
+}
+
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:7746:1
 func opParseForStmt(p *OstyParser) int {
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:7747:5
@@ -20874,8 +20905,10 @@ func opParseForStmt(p *OstyParser) int {
 			_ = opAdvance(p)
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:7785:13
 			kind = "forin"
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:7786:13
-			patIdx = expr
+			// Convert the parsed expression to a pattern node so the
+			// checker's for-in binding path registers the loop variable.
+			// Mirrored from toolchain/parser.osty pending a regen fix.
+			patIdx = opExprToForPattern(p, expr)
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:7787:13
 			pv2 := p.noStructLit
 			_ = pv2
@@ -34620,41 +34653,80 @@ func elabRecordTypedExpr(cx *ElabCx, idx int, out *ElabResult) {
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14936:1
+// astTypeToTy materialises an AST type node into the typed arena.
+// Structural recursion over the selfhost parser's children; text-based
+// fallback for the Go-side lowerer's pre-rendered `"List<Int>"` form
+// and for bare nominals / primitives. Mirrored from toolchain/elab.osty
+// pending a regen fix; previously lost every generic arg because it
+// always routed through tyFromString(node.text) where .text held only
+// the head for selfhost-parsed nodes.
 func astTypeToTy(cx *ElabCx, idx int) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14937:5
 	if idx < 0 {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14938:9
 		return -1
 	}
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14940:5
 	node := astArenaNodeAt(cx.ast.arena, idx)
-	_ = node
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14941:5
 	if !ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNType{})) {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14942:9
 		return -1
 	}
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14948:5
-	rendered := astTypeRendered(cx.ast, node)
-	_ = rendered
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14949:5
-	if rendered == "" {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14950:9
+	if node.text == "" {
 		return -1
 	}
-	return tyFromString(cx.env.tys, rendered)
-}
-
-// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14958:1
-func astTypeRendered(ast *AstFile, node *AstNode) string {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14959:5
-	if node.text != "" {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14960:9
-		return node.text
+	// Structural tags emitted by opParseType / opParseTypeAtom.
+	if node.text == "optional" {
+		inner := astTypeToTy(cx, node.left)
+		if inner < 0 {
+			return tErr(cx.env.tys)
+		}
+		return tyOptional(cx.env.tys, inner)
 	}
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14962:5
-	_ = ast
-	return ""
+	if node.text == "fn" {
+		params := make([]int, 0, len(node.children))
+		for _, p := range node.children {
+			pt := astTypeToTy(cx, p)
+			if pt < 0 {
+				pt = tErr(cx.env.tys)
+			}
+			params = append(params, pt)
+		}
+		retTy := tUnit(cx.env.tys)
+		if node.right >= 0 {
+			r := astTypeToTy(cx, node.right)
+			if r >= 0 {
+				retTy = r
+			}
+		}
+		return tyFn(cx.env.tys, params, retTy)
+	}
+	if node.text == "tuple" {
+		elems := make([]int, 0, len(node.children))
+		for _, e := range node.children {
+			et := astTypeToTy(cx, e)
+			if et < 0 {
+				et = tErr(cx.env.tys)
+			}
+			elems = append(elems, et)
+		}
+		return tyTuple(cx.env.tys, elems)
+	}
+	args := make([]int, 0, len(node.children))
+	for _, a := range node.children {
+		at := astTypeToTy(cx, a)
+		if at < 0 {
+			at = tErr(cx.env.tys)
+		}
+		args = append(args, at)
+	}
+	if checkIntListLenHelper(args) > 0 {
+		if node.text == "Self" {
+			return tySelf(cx.env.tys, "")
+		}
+		prim := primKindFromName(node.text)
+		if !ostyEqual(prim, PrimKind(&PrimKind_PkInvalid{})) {
+			return tyFromString(cx.env.tys, node.text)
+		}
+		return tyNamed(cx.env.tys, node.text, args)
+	}
+	return tyFromString(cx.env.tys, node.text)
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14970:1
@@ -41504,27 +41576,11 @@ func genericListToTyArgs(cx *ElabCx, names []string) []int {
 	return out
 }
 
-// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18578:1
+// astTypeToTyInCollect is a thin alias over astTypeToTy — unified after
+// the legacy text round-trip was replaced with structural recursion.
+// Mirrored from toolchain/check.osty pending a regen fix.
 func astTypeToTyInCollect(cx *ElabCx, idx int) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18579:5
-	if idx < 0 {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18580:9
-		return -1
-	}
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18582:5
-	node := astArenaNodeAt(cx.ast.arena, idx)
-	_ = node
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18583:5
-	if !ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNType{})) {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18584:9
-		return -1
-	}
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18586:5
-	if node.text == "" {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18587:9
-		return -1
-	}
-	return tyFromString(cx.env.tys, node.text)
+	return astTypeToTy(cx, idx)
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18592:1
