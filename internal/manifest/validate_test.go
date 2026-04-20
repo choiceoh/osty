@@ -112,6 +112,87 @@ edition = "0.4"
 	}
 }
 
+// TestParseTargetLinkArray covers the v0.5 `[target.<triple>].link`
+// list-of-strings — system libraries the linker pulls in for `use c
+// "..."` extern symbols (LANG_SPEC §12.8). Source order is preserved
+// so manifest authors can express link order when it matters.
+func TestParseTargetLinkArray(t *testing.T) {
+	src := []byte(`
+[package]
+name = "demo"
+version = "1.0.0"
+edition = "0.5"
+
+[target.amd64-linux]
+cgo = false
+link = ["m", "pthread", "osty_demo"]
+`)
+	m, err := Parse(src)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(m.Targets) != 1 {
+		t.Fatalf("targets = %d, want 1", len(m.Targets))
+	}
+	tgt := m.Targets[0]
+	if got, want := tgt.Triple, "amd64-linux"; got != want {
+		t.Fatalf("triple = %q, want %q", got, want)
+	}
+	if got, want := tgt.Link, []string{"m", "pthread", "osty_demo"}; !equalStringSlices(got, want) {
+		t.Fatalf("link = %v, want %v", got, want)
+	}
+}
+
+func TestParseTargetLinkRejectsNonString(t *testing.T) {
+	src := []byte(`
+[package]
+name = "demo"
+version = "1.0.0"
+edition = "0.5"
+
+[target.amd64-linux]
+link = ["m", 42]
+`)
+	_, err := Parse(src)
+	if err == nil {
+		t.Fatal("Parse succeeded, want error for non-string link entry")
+	}
+	if !strings.Contains(err.Error(), "target.amd64-linux.link") {
+		t.Fatalf("error = %q, want it to mention target.amd64-linux.link", err)
+	}
+}
+
+func TestParseTargetLinkRejectsNonArray(t *testing.T) {
+	src := []byte(`
+[package]
+name = "demo"
+version = "1.0.0"
+edition = "0.5"
+
+[target.amd64-linux]
+link = "m"
+`)
+	_, err := Parse(src)
+	if err == nil {
+		t.Fatal("Parse succeeded, want error for non-array link")
+	}
+	if !strings.Contains(err.Error(), "must be an array of strings") {
+		t.Fatalf("error = %q, want array-of-strings rejection", err)
+	}
+}
+
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func countManifestCode(diags []*diag.Diagnostic, code string) int {
 	var count int
 	for _, d := range diags {

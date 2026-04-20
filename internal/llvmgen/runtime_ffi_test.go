@@ -67,6 +67,161 @@ fn main() {
 	}
 }
 
+// TestGenerateUseCSurfaceCharByteCoverage exercises `use c` with the
+// Char (i32) and Byte (i8) primitives that the runtime ABI gained in
+// LLVM011 follow-up work (#404). This is the regression net for
+// callable shapes like `int abs(int)` (Char ↔ i32) and
+// `unsigned char getc(...)` (Byte ↔ i8) — both pass through the
+// runtime.cabi path with literal extern C symbols.
+func TestGenerateUseCSurfaceCharByteCoverage(t *testing.T) {
+	file := parseLLVMGenFile(t, `use c "osty_demo" as demo {
+    fn osty_demo_byte_id(b: Byte) -> Byte
+    fn osty_demo_char_id(c: Char) -> Char
+}
+
+fn main() {
+    let b = demo.osty_demo_byte_id(b'a')
+    let c = demo.osty_demo_char_id('A')
+    if b == b'a' && c == 'A' {
+        println(1)
+    } else {
+        println(0)
+    }
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/use_c_char_byte.osty",
+		Target:      "x86_64-unknown-linux-gnu",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"declare i8 @osty_demo_byte_id(i8)",
+		"declare i32 @osty_demo_char_id(i32)",
+		"call i8 @osty_demo_byte_id(",
+		"call i32 @osty_demo_char_id(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestGenerateUseCSurfaceLowersToExternC drives the full v0.5
+// `use c "libname" { ... }` surface through parse → resolve → check →
+// LLVM IR and verifies the desugared `runtime.cabi.<libname>` path
+// emits literal extern C declarations and calls. This is the
+// integration test for LANG_SPEC §12.8 surface syntax.
+func TestGenerateUseCSurfaceLowersToExternC(t *testing.T) {
+	file := parseLLVMGenFile(t, `use c "osty_demo" as demo {
+    fn osty_demo_double(x: Int) -> Int
+    fn osty_demo_is_zero(x: Int) -> Bool
+}
+
+fn main() {
+    let doubled = demo.osty_demo_double(21)
+    if demo.osty_demo_is_zero(doubled) {
+        println(0)
+    } else {
+        println(doubled)
+    }
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/use_c_surface.osty",
+		Target:      "x86_64-unknown-linux-gnu",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, forbidden := range []string{
+		"@osty_rt_cabi_osty_demo_osty_demo_double",
+		"LLVM001",
+		"LLVM002",
+	} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("generated IR must not contain %q (use c desugars to literal extern C symbols):\n%s", forbidden, got)
+		}
+	}
+	for _, want := range []string{
+		"declare i64 @osty_demo_double(i64)",
+		"declare i1 @osty_demo_is_zero(i64)",
+		"call i64 @osty_demo_double(",
+		"call i1 @osty_demo_is_zero(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestGenerateRuntimeCABIEmitsLiteralExternSymbol verifies that
+// `use runtime.cabi.<lib>` paths bypass the `osty_rt_` namespace and
+// declare the function name as the literal extern C symbol. This is
+// the entry point for binding arbitrary C libraries from Osty: the
+// link step is the user's responsibility (link the providing object /
+// shared library via the manifest or build flags).
+//
+// The test sticks to the runtime ABI types the LLVM backend currently
+// supports for FFI (Int / Bool); broader C numeric coverage (Int32,
+// Float, etc.) is gated by separate type-system work.
+func TestGenerateRuntimeCABIEmitsLiteralExternSymbol(t *testing.T) {
+	file := parseLLVMGenFile(t, `use runtime.cabi.osty_demo as demo {
+    fn osty_demo_double(x: Int) -> Int
+    fn osty_demo_is_zero(x: Int) -> Bool
+}
+
+fn main() {
+    let doubled = demo.osty_demo_double(21)
+    if demo.osty_demo_is_zero(doubled) {
+        println(0)
+    } else {
+        println(doubled)
+    }
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/runtime_cabi_demo.osty",
+		Target:      "x86_64-unknown-linux-gnu",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, forbidden := range []string{
+		"@osty_rt_cabi_osty_demo_osty_demo_double",
+		"@osty_rt_cabi_osty_demo_osty_demo_is_zero",
+		"LLVM001",
+		"LLVM002",
+	} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("generated IR must not contain %q (cabi paths emit literal symbols):\n%s", forbidden, got)
+		}
+	}
+	for _, want := range []string{
+		"declare i64 @osty_demo_double(i64)",
+		"declare i1 @osty_demo_is_zero(i64)",
+		"call i64 @osty_demo_double(",
+		"call i1 @osty_demo_is_zero(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestGenerateUnknownRuntimeFFIStillReportsLLVM002(t *testing.T) {
 	file := parseLLVMGenFile(t, `use runtime.unknown as strings {
     fn HasPrefix(s: String, prefix: String) -> Bool

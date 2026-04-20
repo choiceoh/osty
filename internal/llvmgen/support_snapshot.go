@@ -1153,7 +1153,7 @@ func llvmUnsupportedDiagnostic(kind string, detail string) *LlvmUnsupportedDiagn
 			target = "<unknown>"
 		}
 		// Osty: examples/selfhost-core/llvmgen.osty:756:9
-		return &LlvmUnsupportedDiagnostic{code: "LLVM001", kind: "foreign-ffi", message: fmt.Sprintf("Go FFI import %s is not supported by the self-hosted native backend", ostyToString(target)), hint: "replace it with an Osty runtime FFI binding before using the native backend"}
+		return &LlvmUnsupportedDiagnostic{code: "LLVM001", kind: "foreign-ffi", message: fmt.Sprintf("Go FFI import %s is not supported by the self-hosted native backend", ostyToString(target)), hint: "rewrite the binding as `use runtime.cabi.<lib> { ... }` for extern C symbols, or `use runtime.<surface> { ... }` for an osty_rt_* runtime ABI helper (LANG_SPEC_v0.5 §12.8)"}
 	}
 	// Osty: examples/selfhost-core/llvmgen.osty:763:5
 	if kind == "runtime-ffi" {
@@ -1401,6 +1401,9 @@ func llvmIsKnownRuntimeFfiPath(path string) bool {
 	if llvmStrings.HasPrefix(path, "runtime.package.") {
 		return true
 	}
+	if llvmStrings.HasPrefix(path, "runtime.cabi.") || path == "runtime.cabi" {
+		return true
+	}
 	return path == "runtime.strings" || path == "runtime.path.filepath"
 }
 
@@ -1419,6 +1422,13 @@ func llvmRuntimeFfiAlias(explicitAlias string, lastPath string, runtimePath stri
 }
 
 func llvmRuntimeFfiSymbol(path string, name string) string {
+	// `runtime.cabi[.libname]` paths bypass the `osty_rt_` runtime
+	// namespace and emit the function name as the literal extern C
+	// symbol. Callers link the providing library via their build
+	// system; the segment after `runtime.cabi.` is descriptive only.
+	if path == "runtime.cabi" || llvmStrings.HasPrefix(path, "runtime.cabi.") {
+		return name
+	}
 	trimmed := path
 	if llvmStrings.HasPrefix(trimmed, "runtime.") {
 		trimmed = llvmStrings.TrimPrefix(trimmed, "runtime.")

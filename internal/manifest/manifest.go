@@ -148,12 +148,17 @@ type Profile struct {
 // Target mirrors one `[target.<triple>]` table. A triple follows the
 // `<arch>-<os>` convention (e.g. `amd64-linux`, `arm64-darwin`).
 // HasCGO distinguishes an absent CGO key from an explicit `cgo =
-// false`.
+// false`. Link names the system libraries the linker should pull in
+// for `use c "..."` extern symbols (LANG_SPEC §12.8); each entry is
+// passed through to the linker as `-l<name>` (or the platform
+// equivalent). The list preserves source order so manifest authors
+// can express link order when it matters.
 type Target struct {
 	Triple string
 	CGO    bool
 	HasCGO bool
 	Env    map[string]string
+	Link   []string
 	Pos    token.Pos
 }
 
@@ -524,8 +529,10 @@ func parseProfileSection(name string, t *tomlTable) (*Profile, error) {
 }
 
 // parseTargetSection extracts a [target.<triple>] table. Supported
-// keys today are `cgo` (bool) and `env` (table of strings); unknown
-// keys are rejected so typos surface immediately.
+// keys are `cgo` (bool), `env` (table of strings), and `link` (array
+// of strings — system library names for `use c "..."` extern symbols,
+// passed to the linker in source order). Unknown keys are rejected so
+// typos surface immediately.
 func parseTargetSection(triple string, t *tomlTable) (*Target, error) {
 	tgt := &Target{Triple: triple, Pos: token.Pos{Line: t.Line, Column: 1}}
 	for _, k := range t.keys {
@@ -548,6 +555,16 @@ func parseTargetSection(triple string, t *tomlTable) (*Target, error) {
 					return nil, fmt.Errorf("osty.toml:%d: target.%s.env.%s must be a string", ev.Line, triple, ek)
 				}
 				tgt.Env[ek] = *ev.Str
+			}
+		case "link":
+			if v.Arr == nil {
+				return nil, fmt.Errorf("osty.toml:%d: target.%s.link must be an array of strings", v.Line, triple)
+			}
+			for _, lv := range v.Arr.Values {
+				if lv.Str == nil {
+					return nil, fmt.Errorf("osty.toml:%d: target.%s.link entries must be strings", lv.Line, triple)
+				}
+				tgt.Link = append(tgt.Link, *lv.Str)
 			}
 		default:
 			return nil, fmt.Errorf("osty.toml:%d: unknown key `%s` in target.%s", v.Line, k, triple)

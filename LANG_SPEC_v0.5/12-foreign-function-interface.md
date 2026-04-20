@@ -86,4 +86,95 @@ The following Osty features may **not** appear in `use go "..."` blocks:
 - **Go channels typed in the declaration.** Use message-passing via
   function calls instead; see §12.5 for the policy.
 
+### 12.8 Runtime FFI Surface (`use runtime.*`, `use c "..."`)
+
+The native (LLVM) backend exposes a parallel FFI surface keyed off the
+`runtime.*` import path. This is the only FFI form supported when
+compiling with `--backend llvm`; `use go "..."` is rejected with
+`LLVM001` because the native backend cannot embed the Go runtime.
+
+Three surface forms are recognised:
+
+```osty
+// 1. Runtime ABI symbols (osty_rt_* namespace, provided by the Osty
+//    C runtime). Callable from non-privileged code.
+use runtime.strings as strings {
+    fn HasPrefix(s: String, prefix: String) -> Bool
+}
+
+// 2. Native C ABI imports — surface form. Each function name is
+//    bound to the literal extern C symbol; the library name is a
+//    descriptive tag for the linker.
+use c "osty_demo" as demo {
+    fn osty_demo_double(x: Int) -> Int
+}
+
+// 3. Native C ABI imports — canonical form. Equivalent to (2);
+//    `use c "<lib>" { ... }` is the surface sugar that desugars
+//    to this path at parse time.
+use runtime.cabi.osty_demo as demo {
+    fn osty_demo_double(x: Int) -> Int
+}
+```
+
+Forms (2) and (3) produce the same AST — `IsRuntimeFFI = true`,
+`RuntimePath = "runtime.cabi.<lib>"`. The canonical printer normalises
+both to form (2). The lookahead in form (2) requires a string literal
+immediately after `c`, so an ordinary `use c.foo` import path is
+unaffected.
+
+Symbol resolution:
+
+| Path prefix | Emitted LLVM symbol | Linker contract |
+|---|---|---|
+| `runtime.strings`, `runtime.path.filepath`, `runtime.package.*` | `osty_rt_<path>_<name>` | Provided by `internal/backend/runtime/osty_runtime.c` |
+| `runtime.cabi`, `runtime.cabi.<lib>` (incl. `use c "<lib>"`) | `<name>` (literal) | Caller's responsibility — link the providing object/library |
+
+The constraints in §12.7 apply unchanged: no generics, no closures, no
+defaults/keywords, monomorphic signatures only. Type mapping uses the
+runtime ABI rules:
+
+| Osty | LLVM | C equivalent (typical) |
+|---|---|---|
+| `Int` | `i64` | `int64_t` |
+| `Float` | `double` | `double` |
+| `Bool` | `i1` | `_Bool` (passed as `i1`) |
+| `Char` | `i32` | `int32_t` (Unicode codepoint) — usable for C `int` |
+| `Byte` | `i8` | `uint8_t` — usable for C `char` / `unsigned char` |
+| `String`, `Bytes`, `Error`, `T?`, `(...)`, `fn(...) -> R` | `ptr` | opaque pointer |
+
+`Int32` / `UInt8` / `Float32` and other narrow-width primitives are
+**not yet** part of the runtime ABI — for `int abs(int)` style libc
+calls the working bridge today is `Char` (i32). String marshalling
+between Osty `String` (length-prefixed, GC-managed) and `const char*`
+(NUL-terminated) requires an explicit `runtime.strings` helper at the
+call site; passing an Osty `String` directly to a C symbol declared as
+`String -> ptr` is **not** equivalent to passing a `const char*`.
+
+`runtime.cabi.*` does not relax §12.6 panic semantics: a foreign symbol
+that aborts the process aborts Osty too. Recoverable errors must surface
+through return values, not host-side exceptions.
+
+#### 12.8.1 Linking C Libraries
+
+`use c "..."` only declares the symbols — the providing library must
+be linked at the final native build step. The manifest's
+`[target.<triple>]` table carries a `link` array of system library
+names (passed to the linker as `-l<name>`, in source order):
+
+```toml
+[target.amd64-linux]
+link = ["m", "pthread", "osty_demo"]
+```
+
+Library names follow the platform's linker convention (no `lib`
+prefix, no extension on Unix; the linker resolves `libfoo.{a,so}` /
+`foo.lib` / `foo.dylib` per platform). Source order is preserved so
+authors can express link order when it matters (typical only with
+static archives that have inter-archive symbol references).
+
+The manifest never embeds full paths or `-L` directories; project-wide
+search paths come from the build environment. CI / package authors
+keep cross-platform link lists per `[target.<triple>]` table.
+
 ---

@@ -1871,6 +1871,16 @@ fn opParseUseDecl(p: OstyParser, isPub: Bool) -> Int {
         isGo = true
         let _ = opAdvance(p)
         if opAt(p, FrontString) || opAt(p, FrontRawString) { rawPath = opAdvance(p).text }
+    } else if opAt(p, FrontIdent) && opPeek(p).text == "c"
+        && (opPeekAt(p, 1).kind == FrontString || opPeekAt(p, 1).kind == FrontRawString) {
+        // `use c "libname" { ... }` — surface syntax for native C ABI
+        // imports. Desugars at parse time to `runtime.cabi.<libname>`
+        // so the rest of the pipeline reuses the runtime-FFI path
+        // (LANG_SPEC §12.8). Lookahead for a string literal keeps
+        // ordinary `use c.foo` paths working.
+        let _ = opAdvance(p)
+        let lib = opStripUseCQuotes(opAdvance(p).text)
+        rawPath = "runtime.cabi.{lib}"
     } else {
         rawPath = opParseUsePath(p)
         if opAt(p, FrontColonColon) && opPeekAt(p, 1).kind == FrontLBrace {
@@ -1961,6 +1971,21 @@ fn opParseScopedUseDecl(p: OstyParser, start: Int, basePath: String, isPub: Bool
     n.flags = astUseDeclFlags(false, isPub)
     n.extra = astUseDeclGroupMarker()
     opAddNode(p, n)
+}
+
+fn opStripUseCQuotes(raw: String) -> String {
+    let n = raw.len()
+    if n < 2 {
+        return raw
+    }
+    let first = raw[0..1]
+    if first == "\"" && raw[n - 1..n] == "\"" {
+        return raw[1..n - 1]
+    }
+    if first == "r" && n >= 3 && raw[1..2] == "\"" && raw[n - 1..n] == "\"" {
+        return raw[2..n - 1]
+    }
+    raw
 }
 
 fn opParseUsePath(p: OstyParser) -> String {

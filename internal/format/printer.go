@@ -135,6 +135,24 @@ func useSortKey(u *ast.UseDecl) string {
 	return strings.Join(u.Path, ".")
 }
 
+// useCSurfaceLibName recognizes a runtime FFI path of the form
+// `runtime.cabi.<lib>` (single trailing segment) and returns the
+// library name so the printer can round-trip it as `use c "<lib>"`
+// rather than the canonical runtime form. Multi-segment cabi paths
+// (e.g. `runtime.cabi.libc.subgroup`) fall through to the runtime
+// printer because `use c` only carries one library name.
+func useCSurfaceLibName(runtimePath string) (string, bool) {
+	const prefix = "runtime.cabi."
+	if !strings.HasPrefix(runtimePath, prefix) {
+		return "", false
+	}
+	lib := runtimePath[len(prefix):]
+	if lib == "" || strings.ContainsAny(lib, "./") {
+		return "", false
+	}
+	return lib, true
+}
+
 // chainSeg is one link in a method chain, e.g. `.map(|x| x * 2)` in
 // `iter.from(xs).map(|x| x * 2)`. The link before the first chainSeg
 // is the chain's base — itself an arbitrary expression (often a call).
@@ -384,7 +402,10 @@ func (p *printer) printUseDecl(u *ast.UseDecl) {
 			p.write("go ")
 			p.write(fmt.Sprintf("%q", u.GoPath))
 		} else if u.IsRuntimeFFI {
-			if u.RawPath != "" {
+			if lib, ok := useCSurfaceLibName(u.RuntimePath); ok {
+				p.write("c ")
+				p.write(fmt.Sprintf("%q", lib))
+			} else if u.RawPath != "" {
 				p.write(u.RawPath)
 			} else {
 				p.write(strings.Join(u.Path, "."))
