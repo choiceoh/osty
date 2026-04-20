@@ -735,6 +735,13 @@ func (g *generator) emitUnary(e *ast.UnaryExpr) (value, error) {
 }
 
 func (g *generator) emitBinary(e *ast.BinaryExpr) (value, error) {
+	// `??` lowers to a branch+phi rather than the usual eager binary
+	// shape — the right side is lazy per spec §7.3 (Option fallback).
+	// Intercept before emitExpr so the default is never evaluated when
+	// the left is Some.
+	if e.Op == token.QQ {
+		return g.emitCoalesce(e)
+	}
 	left, err := g.emitExpr(e.Left)
 	if err != nil {
 		return value{}, err
@@ -774,6 +781,111 @@ func (g *generator) emitBinary(e *ast.BinaryExpr) (value, error) {
 	out := llvmBinaryI64(emitter, op, toOstyValue(left), toOstyValue(right))
 	g.takeOstyEmitter(emitter)
 	return fromOstyValue(out), nil
+}
+
+// emitCoalesce lowers `left ?? right`, the Option-fallback operator.
+//
+// Semantics (LANG_SPEC_v0.5 §7.3): `left` has type `T?`, `right` has
+// type `T`. If `left` is Some(v), the result is v; if None, the
+// result is `right`. The right side is evaluated lazily — only when
+// the left side is None.
+//
+// Lowering mirrors the null-check/phi shape used by `?` and `?.`:
+//
+//   %is_nil = icmp eq ptr %left, null
+//   br i1 %is_nil, label %none, label %some
+//  some:
+//    ; unwrap: inner-ptr types use %left directly; others load the
+//    ; boxed payload via `load innerTyp, ptr %left`.
+//    br label %end
+//  none:
+//    ; evaluate %right (may be any side-effecting expression).
+//    br label %end
+//  end:
+//    %out = phi innerTyp [ %unwrapped, %some.pred ], [ %right, %none.pred ]
+//
+// Nil-coalesce is intentionally right-associative at the surface so
+// `a ?? b ?? c` parses as `a ?? (b ?? c)`; here we only see one
+// operator at a time, and the recursive emitExpr on `e.Right` handles
+// any chained `??` naturally.
+func (g *generator) emitCoalesce(e *ast.BinaryExpr) (value, error) {
+	leftSrc, ok := g.staticExprSourceType(e.Left)
+	if !ok {
+		return value{}, unsupported("type-system", "?? left source type unknown")
+	}
+	innerSrc, ok := unwrapOptionalSourceType(leftSrc)
+	if !ok {
+		return value{}, unsupported("type-system", "?? requires Option<T> on the left")
+	}
+	innerTyp, err := llvmType(innerSrc, g.typeEnv())
+	if err != nil {
+		return value{}, err
+	}
+	left, err := g.emitExpr(e.Left)
+	if err != nil {
+		return value{}, err
+	}
+	if left.typ != "ptr" {
+		return value{}, unsupportedf("type-system", "?? left type %s, want ptr", left.typ)
+	}
+
+	emitter := g.toOstyEmitter()
+	isNil := llvmCompare(emitter, "eq", toOstyValue(left), toOstyValue(value{typ: "ptr", ref: "null"}))
+	someLabel := llvmNextLabel(emitter, "coalesce.some")
+	noneLabel := llvmNextLabel(emitter, "coalesce.none")
+	endLabel := llvmNextLabel(emitter, "coalesce.end")
+	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", isNil.name, noneLabel, someLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", someLabel))
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(someLabel)
+
+	var leftUnwrapped value
+	if innerTyp == "ptr" {
+		leftUnwrapped = left
+		leftUnwrapped.sourceType = innerSrc
+	} else {
+		lv, err := g.loadTypedPointerValue(left, innerTyp)
+		if err != nil {
+			return value{}, err
+		}
+		lv.sourceType = innerSrc
+		leftUnwrapped = lv
+	}
+	somePred := g.currentBlock
+	g.branchTo(endLabel)
+
+	emitter = g.toOstyEmitter()
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", noneLabel))
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(noneLabel)
+
+	right, err := g.emitExpr(e.Right)
+	if err != nil {
+		return value{}, err
+	}
+	if right.typ != innerTyp {
+		return value{}, unsupportedf("type-system", "?? right type %s, want %s", right.typ, innerTyp)
+	}
+	nonePred := g.currentBlock
+	g.branchTo(endLabel)
+
+	emitter = g.toOstyEmitter()
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
+	tmp := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf(
+		"  %s = phi %s [ %s, %%%s ], [ %s, %%%s ]",
+		tmp, innerTyp, leftUnwrapped.ref, somePred, right.ref, nonePred,
+	))
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(endLabel)
+
+	out := value{typ: innerTyp, ref: tmp, sourceType: innerSrc}
+	out.rootPaths = g.rootPathsForType(innerTyp)
+	if innerTyp == "ptr" {
+		mergeContainerMetadata(&out, leftUnwrapped, right)
+		out.gcManaged = leftUnwrapped.gcManaged || right.gcManaged
+	}
+	return out, nil
 }
 
 func (g *generator) emitLogical(op token.Kind, left, right value) (value, error) {
