@@ -18,6 +18,7 @@ error E0009 "empty byte literal" ^[37:30-37:33]
 error E0105 "`else` must be on the same line as `}`" ^[52:6-53:1] hint="move `else` to the same line: `} else {`" note="v0.2 O2: `} else` must sit on the same line"
 error E0204 "unexpected else in expression" ^[53:5-53:9] hint="an expression starts with a literal, identifier, `(`, `[`, `if`, `match`, or a closure"
 error E0100 "expected declaration, got }" ^[56:1-56:2] hint="a declaration starts with `fn`, `struct`, `enum`, `interface`, `type`, `use`, or `let`"
+error E0106 "default value must be a literal" ^[61:30-61:31] hint="use a literal, `None`, `Ok(lit)`, `Err(lit)`, `[]`, `{:}`, or `()`" note="spec v0.4 R18: parameter and field defaults are restricted to literal forms"
 error E0200 "chained comparison operators require parentheses" ^[66:20-66:21] note="v0.2 R1: comparison operators are non-associative"
 error E0204 "unexpected :: in expression" ^[73:21-73:23] hint="an expression starts with a literal, identifier, `(`, `[`, `if`, `match`, or a closure"
 error E0203 "closure with return type requires block body" ^[78:34-78:35] hint="add `{ ... }`"

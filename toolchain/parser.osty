@@ -314,6 +314,57 @@ fn opError(p: OstyParser, msg: String) { opErrorFull(p, msg, "", "", "") }
 
 fn opAddNode(p: OstyParser, node: AstNode) -> Int { astArenaAdd(p.arena, node) }
 
+fn opIntListCount(xs: List<Int>) -> Int {
+    let mut c = 0
+    for x in xs {
+        let _ = x
+        c = c + 1
+    }
+    c
+}
+
+fn opIntListAt(xs: List<Int>, target: Int) -> Int {
+    let mut i = 0
+    for x in xs {
+        if i == target { return x }
+        i = i + 1
+    }
+    -1
+}
+
+fn opIsLiteralDefaultAt(p: OstyParser, idx: Int) -> Bool {
+    if idx < 0 { return true }
+    let node = astArenaNodeAt(p.arena, idx)
+    let k = node.kind
+    if k == AstNParen { return opIsLiteralDefaultAt(p, node.left) }
+    if k == AstNIntLit || k == AstNFloatLit || k == AstNStringLit || k == AstNCharLit || k == AstNByteLit || k == AstNBoolLit {
+        return true
+    }
+    if k == AstNUnary && node.op == FrontMinus {
+        let inner = astArenaNodeAt(p.arena, node.left)
+        if inner.kind == AstNIntLit || inner.kind == AstNFloatLit { return true }
+        return false
+    }
+    if k == AstNIdent && node.text == "None" { return true }
+    if k == AstNCall {
+        let callee = astArenaNodeAt(p.arena, node.left)
+        if callee.kind == AstNIdent && (callee.text == "Ok" || callee.text == "Err") && opIntListCount(node.children) == 1 {
+            return opIsLiteralDefaultAt(p, opIntListAt(node.children, 0))
+        }
+        return false
+    }
+    if k == AstNList && opIntListCount(node.children) == 0 { return true }
+    if k == AstNTuple && opIntListCount(node.children) == 0 { return true }
+    if k == AstNMap && node.flags == 1 { return true }
+    false
+}
+
+fn opCheckLiteralDefault(p: OstyParser, idx: Int) {
+    if idx < 0 { return }
+    if opIsLiteralDefaultAt(p, idx) { return }
+    opErrorFull(p, "default value must be a literal", "use a literal, `None`, `Ok(lit)`, `Err(lit)`, `[]`, `\{:\}`, or `()`", "spec v0.4 R18: parameter and field defaults are restricted to literal forms", "E0106")
+}
+
 // ===================================================================
 // ERROR RECOVERY
 // ===================================================================
@@ -1629,7 +1680,10 @@ fn opParseFnDecl(p: OstyParser, isPub: Bool, anns: List<Int>) -> Int {
         if opAt(p, FrontIdent) && opPeek(p).text == "self" { paramNode.text = opAdvance(p).text } else {
             paramNode.text = opExpect(p, FrontIdent).text
             if opEat(p, FrontColon) { paramNode.right = opParseType(p) }
-            if opEat(p, FrontAssign) { paramNode.left = opParseExpr(p) }
+            if opEat(p, FrontAssign) {
+                paramNode.left = opParseExpr(p)
+                opCheckLiteralDefault(p, paramNode.left)
+            }
         }
         paramNode.start = ps
         paramNode.end = p.pos
@@ -1673,7 +1727,10 @@ fn opParseStructDecl(p: OstyParser, isPub: Bool, anns: List<Int>) -> Int {
             let _ = opExpect(p, FrontColon)
             let ft = opParseType(p)
             let mut defIdx = -1
-            if opEat(p, FrontAssign) { defIdx = opParseExpr(p) }
+            if opEat(p, FrontAssign) {
+                defIdx = opParseExpr(p)
+                opCheckLiteralDefault(p, defIdx)
+            }
             let mut fNode = emptyAstNode(AstNField_)
             fNode.text = fn_
             fNode.right = ft
