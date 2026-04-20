@@ -417,6 +417,25 @@ type StructDecl struct {
 	// `raw.read`/`raw.write`. The backend will use this to lock the
 	// field layout to C ABI when codegen for §19 lands.
 	ReprC bool
+
+	// BuilderDerivable is true when the compiler should auto-derive
+	// `Type.builder()` / `value.toBuilder()` for this struct, per
+	// LANG_SPEC §3.3. The precondition is that every private (non-pub)
+	// field has an explicit default and the user has not supplied an
+	// override associated fn named `builder`. A false value means the
+	// struct does not receive a generated builder — either because a
+	// private field lacks a default (spec §3.3 "AuthToken" example)
+	// or because the user opted into a custom `builder` impl.
+	BuilderDerivable bool
+
+	// BuilderRequiredFields is the ordered list of `pub` field names
+	// that lack a default. These are the fields the user must set via
+	// setters before calling `.build()`; calling `.build()` with any
+	// of them unset is the G9 compile-time error. The list is in
+	// source order so diagnostics ("missing: url, port") match the
+	// declaration. Populated regardless of BuilderDerivable so tooling
+	// can explain *why* a builder is not generated when it is not.
+	BuilderRequiredFields []string
 }
 
 func (*StructDecl) declNode()          {}

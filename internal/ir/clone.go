@@ -243,11 +243,15 @@ func cloneFnDecl(fn *FnDecl) *FnDecl {
 
 func cloneStructDecl(s *StructDecl) *StructDecl {
 	out := &StructDecl{
-		Name:     s.Name,
-		Exported: s.Exported,
-		SpanV:    s.SpanV,
-		Pod:      s.Pod,
-		ReprC:    s.ReprC,
+		Name:             s.Name,
+		Exported:         s.Exported,
+		SpanV:            s.SpanV,
+		Pod:              s.Pod,
+		ReprC:            s.ReprC,
+		BuilderDerivable: s.BuilderDerivable,
+	}
+	if len(s.BuilderRequiredFields) > 0 {
+		out.BuilderRequiredFields = append([]string(nil), s.BuilderRequiredFields...)
 	}
 	if len(s.Fields) > 0 {
 		out.Fields = make([]*Field, len(s.Fields))

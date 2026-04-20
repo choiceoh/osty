@@ -320,7 +320,40 @@ func (l *lowerer) lowerStructDecl(sd *ast.StructDecl) *StructDecl {
 	for _, m := range sd.Methods {
 		out.Methods = append(out.Methods, l.lowerFnDecl(m))
 	}
+	out.BuilderDerivable, out.BuilderRequiredFields = classifyBuilderDerive(sd)
 	return out
+}
+
+// classifyBuilderDerive computes the LANG_SPEC §3.3 auto-derive
+// preconditions for a struct. `derivable` is true when every private
+// field carries an explicit default AND the user did not supply an
+// overriding associated fn named `builder` (the spec lets user
+// definitions replace auto-generated ones).
+//
+// `required` is the list of pub field names that lack a default — the
+// fields the user MUST set via generated setters before `.build()`.
+// It is returned even when derivable is false so diagnostics can
+// explain both the missing builder and what it would have required.
+func classifyBuilderDerive(sd *ast.StructDecl) (derivable bool, required []string) {
+	derivable = true
+	for _, f := range sd.Fields {
+		if !f.Pub && f.Default == nil {
+			derivable = false
+		}
+		if f.Pub && f.Default == nil {
+			required = append(required, f.Name)
+		}
+	}
+	for _, m := range sd.Methods {
+		if m == nil || m.Recv != nil {
+			continue
+		}
+		if m.Name == "builder" {
+			derivable = false
+			break
+		}
+	}
+	return derivable, required
 }
 
 func (l *lowerer) lowerEnumDecl(ed *ast.EnumDecl) *EnumDecl {

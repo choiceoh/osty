@@ -102,6 +102,12 @@ func (p *printer) printDecl(d Decl) {
 		if d.Exported {
 			p.b.WriteString(" pub")
 		}
+		if d.BuilderDerivable {
+			p.b.WriteString(" builder-derivable")
+		}
+		if len(d.BuilderRequiredFields) > 0 {
+			p.writef(" builder-required=[%s]", strings.Join(d.BuilderRequiredFields, ","))
+		}
 		p.indent++
 		for _, f := range d.Fields {
 			p.nl()
