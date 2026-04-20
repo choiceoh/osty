@@ -2052,13 +2052,19 @@ static __thread osty_rt_task_group_impl *osty_sched_current_group = NULL;
 static _Thread_local osty_rt_task_group_impl *osty_sched_current_group = NULL;
 #endif
 
+/* Handles live in the GC heap so they are reclaimed once the Osty
+ * `Handle<T>` reference drops. While the spawned thread runs,
+ * `osty_concurrent_workers > 0` keeps collection paused, so the
+ * handle pointer the trampoline carries cannot be freed under it.
+ * Once the thread exits and Osty drops its reference, the next
+ * collection sweeps the handle. No explicit free on the error path
+ * either — the handle becomes unreachable and gets reaped. */
 static osty_rt_task_handle_impl *osty_sched_alloc_handle(void) {
-    osty_rt_task_handle_impl *h = (osty_rt_task_handle_impl *)calloc(
-        1, sizeof(osty_rt_task_handle_impl));
-    if (h == NULL) {
-        osty_rt_abort("scheduler: handle allocation failed");
-    }
-    return h;
+    return (osty_rt_task_handle_impl *)osty_gc_allocate_managed(
+        sizeof(osty_rt_task_handle_impl),
+        OSTY_GC_KIND_GENERIC,
+        "runtime.task.handle",
+        NULL, NULL);
 }
 
 static void osty_sched_unimplemented(const char *what) {
@@ -2168,7 +2174,7 @@ static void *osty_rt_task_spawn_internal(void *group, void *body_env) {
     if (pthread_create(&h->thread, NULL,
                        osty_rt_task_thread_trampoline, h) != 0) {
         osty_sched_workers_dec();
-        free(h);
+        /* h is GC-managed — letting it go unreachable is enough. */
         osty_rt_abort("task_spawn: pthread_create failed");
     }
     h->has_thread = 1;
@@ -2281,6 +2287,21 @@ static osty_rt_chan_impl *osty_rt_chan_cast(void *ch, const char *op) {
     return (osty_rt_chan_impl *)ch;
 }
 
+static void osty_rt_chan_destroy(void *payload) {
+    /* Invoked by the GC sweep when no Osty reference remains. Closing
+     * is idempotent but we don't require the channel to be closed
+     * first — unreachable implies no live sender or receiver. */
+    osty_rt_chan_impl *ch = (osty_rt_chan_impl *)payload;
+    if (ch == NULL) {
+        return;
+    }
+    pthread_mutex_destroy(&ch->mu);
+    pthread_cond_destroy(&ch->not_full);
+    pthread_cond_destroy(&ch->not_empty);
+    free(ch->slots);
+    ch->slots = NULL;
+}
+
 void *osty_rt_thread_chan_make(int64_t capacity) {
     if (capacity < 0) {
         osty_rt_abort("thread.chan.make: negative capacity");
@@ -2290,13 +2311,15 @@ void *osty_rt_thread_chan_make(int64_t capacity) {
          * Clamp to 1 so single-step producer/consumer still works. */
         capacity = 1;
     }
-    osty_rt_chan_impl *ch = (osty_rt_chan_impl *)calloc(1, sizeof(*ch));
-    if (ch == NULL) {
-        osty_rt_abort("thread.chan.make: out of memory");
-    }
+    /* Channel lives on the GC heap so it is reclaimed when no Osty
+     * reference remains (including captures in spawned closures).
+     * The `slots` buffer and the pthread sync objects are owned by
+     * the channel and freed by osty_rt_chan_destroy on sweep. */
+    osty_rt_chan_impl *ch = (osty_rt_chan_impl *)osty_gc_allocate_managed(
+        sizeof(osty_rt_chan_impl), OSTY_GC_KIND_GENERIC,
+        "runtime.thread.chan", NULL, osty_rt_chan_destroy);
     ch->slots = (int64_t *)calloc((size_t)capacity, sizeof(int64_t));
     if (ch->slots == NULL) {
-        free(ch);
         osty_rt_abort("thread.chan.make: out of memory");
     }
     ch->cap = capacity;
@@ -2304,7 +2327,7 @@ void *osty_rt_thread_chan_make(int64_t capacity) {
         pthread_cond_init(&ch->not_full, NULL) != 0 ||
         pthread_cond_init(&ch->not_empty, NULL) != 0) {
         free(ch->slots);
-        free(ch);
+        ch->slots = NULL;
         osty_rt_abort("thread.chan.make: sync init failed");
     }
     return ch;
