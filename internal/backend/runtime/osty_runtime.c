@@ -1,7 +1,13 @@
-/* nanosleep (scheduler Phase 1A) requires POSIX.1-1993; without this macro
- * glibc hides the declaration and strict clang (>=16) rejects the call. */
+/* Feature test macros enable the POSIX 2008 surface (nanosleep,
+ * pthread_mutexattr_settype, sched_yield, PTHREAD_MUTEX_RECURSIVE)
+ * across glibc/musl/Darwin regardless of compiler default. 2008
+ * supersedes the earlier 199309L level previously used for nanosleep
+ * alone. */
 #ifndef _POSIX_C_SOURCE
-#define _POSIX_C_SOURCE 199309L
+#define _POSIX_C_SOURCE 200809L
+#endif
+#ifndef _XOPEN_SOURCE
+#define _XOPEN_SOURCE 700
 #endif
 
 #include <stdbool.h>
@@ -11,8 +17,21 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <pthread.h>
+#include <sched.h>
 
-/* Active LLVM/native GC runtime path. See ../../../../RUNTIME_GC.md. */
+/* Active LLVM/native GC runtime path. See ../../../../RUNTIME_GC.md.
+ *
+ * Concurrency is pthread-based (see ../../../../RUNTIME_SCHEDULER.md):
+ * task_spawn creates real OS threads, channels are mutex+cond ring
+ * buffers, and GC allocation is serialized by osty_gc_lock so that
+ * multi-threaded programs stay consistent. Automatic collection is
+ * paused while worker threads are live (osty_concurrent_workers > 0)
+ * because scanning only the current thread's stack would drop roots
+ * held by siblings. Manual collection via osty_gc_debug_collect is
+ * still available between phases. A concurrent collector lands in
+ * Phase 3 per the scheduler roadmap.
+ */
 
 typedef void (*osty_gc_trace_fn)(void *payload);
 typedef void (*osty_gc_destroy_fn)(void *payload);
@@ -161,6 +180,53 @@ static void osty_rt_abort(const char *message) {
     abort();
 }
 
+/* GC + runtime-wide lock. Recursive so that collection (invoked from
+ * within allocate_managed) can re-enter write-barriers and root scans
+ * without deadlocking. Initialized on first use so no constructor is
+ * required. */
+static pthread_once_t osty_gc_lock_once = PTHREAD_ONCE_INIT;
+static pthread_mutex_t osty_gc_lock;
+static int64_t osty_concurrent_workers = 0;
+
+static void osty_gc_lock_init(void) {
+    pthread_mutexattr_t attr;
+    if (pthread_mutexattr_init(&attr) != 0) {
+        osty_rt_abort("gc lock: mutexattr_init failed");
+    }
+    if (pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE) != 0) {
+        osty_rt_abort("gc lock: mutexattr_settype failed");
+    }
+    if (pthread_mutex_init(&osty_gc_lock, &attr) != 0) {
+        osty_rt_abort("gc lock: mutex_init failed");
+    }
+    pthread_mutexattr_destroy(&attr);
+}
+
+static void osty_gc_acquire(void) {
+    pthread_once(&osty_gc_lock_once, osty_gc_lock_init);
+    pthread_mutex_lock(&osty_gc_lock);
+}
+
+static void osty_gc_release(void) {
+    pthread_mutex_unlock(&osty_gc_lock);
+}
+
+static void osty_sched_workers_inc(void) {
+    osty_gc_acquire();
+    osty_concurrent_workers += 1;
+    osty_gc_release();
+}
+
+static void osty_sched_workers_dec(void) {
+    osty_gc_acquire();
+    if (osty_concurrent_workers <= 0) {
+        osty_gc_release();
+        osty_rt_abort("scheduler: worker counter underflow");
+    }
+    osty_concurrent_workers -= 1;
+    osty_gc_release();
+}
+
 static void osty_gc_link(osty_gc_header *header) {
     header->next = osty_gc_objects;
     header->prev = NULL;
@@ -254,8 +320,10 @@ static void *osty_gc_allocate_managed(size_t byte_size, int64_t object_kind, con
     header->destroy = destroy;
     header->site = site;
     header->payload = (void *)(header + 1);
+    osty_gc_acquire();
     osty_gc_link(header);
     osty_gc_note_allocation(payload_size);
+    osty_gc_release();
     return header->payload;
 }
 
@@ -1809,11 +1877,28 @@ void osty_gc_safepoint_v1(int64_t safepoint_id, void *const *root_slots, int64_t
     if (!osty_gc_safepoint_stress_enabled_now() && !osty_gc_collection_requested) {
         return;
     }
+    /* While worker threads are live we can only see the current stack's
+     * roots. A naive collection here would free objects that sibling
+     * threads still reference. Defer until workers drain; a concurrent
+     * collector is Phase 3. */
+    osty_gc_acquire();
+    if (osty_concurrent_workers > 0) {
+        osty_gc_release();
+        return;
+    }
     osty_gc_collect_now_with_stack_roots(root_slots, root_slot_count);
+    osty_gc_release();
 }
 
 void osty_gc_debug_collect(void) {
+    osty_gc_acquire();
+    if (osty_concurrent_workers > 0) {
+        /* Same cross-thread root safety gate as safepoint_v1. */
+        osty_gc_release();
+        return;
+    }
     osty_gc_collect_now();
+    osty_gc_release();
 }
 
 int64_t osty_gc_debug_live_count(void) {
@@ -1879,30 +1964,35 @@ int osty_gc_debug_satb_log_contains(void *payload) {
 }
 
 /* ======================================================================
- * Phase 1A: sequential scheduler (see RUNTIME_SCHEDULER.md)
+ * Scheduler: pthread-backed (RUNTIME_SCHEDULER.md Phase 1B/2 hybrid)
  *
- * The public surface matches the ABI committed in `RUNTIME_SCHEDULER.md`
- * §ABI contract. Every symbol here has a successor in Phase 1B (fibers)
- * and Phase 2 (multi-worker) with the same signature.
+ * The public ABI is unchanged from Phase 1A; this is the first
+ * implementation that runs tasks on real OS threads and gives channels
+ * proper block/wake semantics. Key points:
  *
- * Semantics in this phase:
- *   - `osty_rt_task_group(body)` runs `body` on the calling thread. The
- *     group is live only for the duration of that call.
- *   - `osty_rt_task_spawn(body)` and `osty_rt_task_group_spawn(g, body)`
- *     run `body` immediately and return a handle holding the result.
- *     `Handle.join` reads the stored result — no blocking, no parallelism.
- *   - Cancellation: setting the group flag makes subsequent cancel checks
- *     report true. Already-completed tasks are unaffected.
- *   - `thread.yield` is a no-op; `thread.sleep` blocks the calling thread.
- *   - Channels and `select` abort with a diagnostic: they require true
- *     block/wake which arrives in Phase 1B.
+ *   - task_spawn / task_group_spawn → pthread_create; handle_join →
+ *     pthread_join. Bodies run in parallel when CPU allows.
+ *   - task_group(body) runs body on the calling thread and activates
+ *     a group. Children created via task_group_spawn inherit the group
+ *     in their TLS (osty_sched_current_group). Callers are responsible
+ *     for joining handles; the group teardown does not auto-reap
+ *     stragglers yet (tracked in RUNTIME_SCHEDULER.md roadmap).
+ *   - Channels are bounded ring buffers with pthread_mutex + two
+ *     condition variables. send blocks while full, recv while empty.
+ *     close wakes both waits; recv after close-and-drain returns ok=0.
+ *     Capacity 0 is clamped to 1 (documented limitation; true
+ *     rendezvous lands with Phase 1B fibers).
+ *   - select / race / collectAll / parallel remain as loud aborts
+ *     because their registration surface needs Osty-side builder
+ *     allocation we have not wired yet; the message points at the
+ *     scheduler roadmap so programs that reach them fail fast.
  *
- * ABI abuse notice: MIR declares `osty_rt_task_group` and
- * `osty_rt_task_handle_join` with the caller's Osty-side return type
- * (usually i64 or ptr). This runtime returns pointer-width results via
- * `void*`, which the linker treats as a compatible 64-bit return on
- * x86_64 SysV and AArch64 AAPCS. Phase 1A supports scalar/pointer
- * returns up to 8 bytes. Float and struct returns require Phase 2.
+ * ABI abuse notice: MIR declares task_group / handle_join with the
+ * caller's Osty-side return type (usually i64 or ptr). pthread_join
+ * yields a `void *` that the linker treats as compatible 64-bit on
+ * x86_64 SysV and AArch64 AAPCS. Scalar/ptr returns up to 8 bytes are
+ * supported. Float returns travel as raw bits through int64_t; struct
+ * returns still require Phase 2 ABI work.
  * ====================================================================== */
 
 typedef int64_t (*osty_task_group_body_fn)(void *env, void *group);
@@ -1914,14 +2004,15 @@ typedef struct osty_rt_task_group_impl {
 } osty_rt_task_group_impl;
 
 typedef struct osty_rt_task_handle_impl {
-    int64_t result;
-    int32_t done;    /* 1 once body returned */
-    int32_t errored; /* reserved */
+    pthread_t thread;
+    int has_thread;                      /* 1 while thread is joinable */
+    void *body_env;
+    osty_rt_task_group_impl *group;      /* inherited group, may be NULL */
+    volatile int64_t result;
+    volatile int32_t done;
+    int32_t errored;                     /* reserved */
 } osty_rt_task_handle_impl;
 
-/* Thread-local current group pointer. Phase 1A uses a single OS thread,
- * but declaring it _Thread_local makes Phase 2 (multi-worker) a drop-in
- * upgrade — no callers change. */
 #if defined(__STDC_NO_THREADS__) || defined(__APPLE__)
 static __thread osty_rt_task_group_impl *osty_sched_current_group = NULL;
 #else
@@ -1937,13 +2028,25 @@ static osty_rt_task_handle_impl *osty_sched_alloc_handle(void) {
     return h;
 }
 
-static void osty_sched_unsupported(const char *what) {
+static void osty_sched_unimplemented(const char *what) {
     fprintf(stderr,
-            "osty llvm runtime: Phase 1A scheduler does not support %s. "
-            "Channels, select, and helpers land in Phase 1B / Phase 2 "
-            "(see RUNTIME_SCHEDULER.md).\n",
+            "osty llvm runtime: %s is not implemented yet "
+            "(see RUNTIME_SCHEDULER.md for roadmap).\n",
             what);
     abort();
+}
+
+static void *osty_rt_task_thread_trampoline(void *arg) {
+    osty_rt_task_handle_impl *h = (osty_rt_task_handle_impl *)arg;
+    if (h->group != NULL) {
+        osty_sched_current_group = h->group;
+    }
+    osty_task_spawn_body_fn fn = (osty_task_spawn_body_fn)(*(void **)h->body_env);
+    int64_t result = fn(h->body_env);
+    h->result = result;
+    __atomic_store_n(&h->done, 1, __ATOMIC_RELEASE);
+    osty_sched_workers_dec();
+    return NULL;
 }
 
 int64_t osty_rt_task_group(void *body_env) {
@@ -1957,7 +2060,6 @@ int64_t osty_rt_task_group(void *body_env) {
     osty_rt_task_group_impl *prev = osty_sched_current_group;
     osty_sched_current_group = &group;
 
-    /* env[0] is the fn pointer per the closure ABI. */
     osty_task_group_body_fn fn = (osty_task_group_body_fn)(*(void **)body_env);
     int64_t result = fn(body_env, (void *)&group);
 
@@ -1965,34 +2067,30 @@ int64_t osty_rt_task_group(void *body_env) {
     return result;
 }
 
-void *osty_rt_task_spawn(void *body_env) {
+static void *osty_rt_task_spawn_internal(void *group, void *body_env) {
     if (body_env == NULL) {
         osty_rt_abort("task_spawn: null body env");
     }
     osty_rt_task_handle_impl *h = osty_sched_alloc_handle();
-    osty_task_spawn_body_fn fn = (osty_task_spawn_body_fn)(*(void **)body_env);
-    h->result = fn(body_env);
-    h->done = 1;
+    h->body_env = body_env;
+    h->group = (osty_rt_task_group_impl *)group;
+    osty_sched_workers_inc();
+    if (pthread_create(&h->thread, NULL,
+                       osty_rt_task_thread_trampoline, h) != 0) {
+        osty_sched_workers_dec();
+        free(h);
+        osty_rt_abort("task_spawn: pthread_create failed");
+    }
+    h->has_thread = 1;
     return h;
 }
 
+void *osty_rt_task_spawn(void *body_env) {
+    return osty_rt_task_spawn_internal(NULL, body_env);
+}
+
 void *osty_rt_task_group_spawn(void *group, void *body_env) {
-    if (body_env == NULL) {
-        osty_rt_abort("task_group_spawn: null body env");
-    }
-    osty_rt_task_handle_impl *h = osty_sched_alloc_handle();
-
-    osty_rt_task_group_impl *prev = osty_sched_current_group;
-    if (group != NULL) {
-        osty_sched_current_group = (osty_rt_task_group_impl *)group;
-    }
-
-    osty_task_spawn_body_fn fn = (osty_task_spawn_body_fn)(*(void **)body_env);
-    h->result = fn(body_env);
-    h->done = 1;
-
-    osty_sched_current_group = prev;
-    return h;
+    return osty_rt_task_spawn_internal(group, body_env);
 }
 
 int64_t osty_rt_task_handle_join(void *handle) {
@@ -2000,11 +2098,15 @@ int64_t osty_rt_task_handle_join(void *handle) {
         osty_rt_abort("task_handle_join: null handle");
     }
     osty_rt_task_handle_impl *h = (osty_rt_task_handle_impl *)handle;
-    if (!h->done) {
-        /* In Phase 1A all bodies run to completion before spawn returns,
-         * so an un-done handle is a runtime invariant violation. */
-        osty_rt_abort("task_handle_join: handle not completed (Phase 1A invariant)");
+    if (h->has_thread) {
+        if (pthread_join(h->thread, NULL) != 0) {
+            osty_rt_abort("task_handle_join: pthread_join failed");
+        }
+        h->has_thread = 0;
     }
+    /* After pthread_join, h->done is acquire-visible via the implicit
+     * release on worker_dec; read via atomic for clarity. */
+    (void)__atomic_load_n(&h->done, __ATOMIC_ACQUIRE);
     return h->result;
 }
 
@@ -2013,7 +2115,7 @@ void osty_rt_task_group_cancel(void *group) {
         return;
     }
     osty_rt_task_group_impl *g = (osty_rt_task_group_impl *)group;
-    g->cancelled = 1;
+    __atomic_store_n(&g->cancelled, 1, __ATOMIC_RELEASE);
 }
 
 bool osty_rt_task_group_is_cancelled(void *group) {
@@ -2021,7 +2123,7 @@ bool osty_rt_task_group_is_cancelled(void *group) {
         return false;
     }
     osty_rt_task_group_impl *g = (osty_rt_task_group_impl *)group;
-    return g->cancelled != 0;
+    return __atomic_load_n(&g->cancelled, __ATOMIC_ACQUIRE) != 0;
 }
 
 bool osty_rt_cancel_is_cancelled(void) {
@@ -2029,12 +2131,13 @@ bool osty_rt_cancel_is_cancelled(void) {
     if (g == NULL) {
         return false;
     }
-    return g->cancelled != 0;
+    return __atomic_load_n(&g->cancelled, __ATOMIC_ACQUIRE) != 0;
 }
 
 void osty_rt_thread_yield(void) {
-    /* Phase 1A: no scheduler to yield to. No-op. Phase 1B adds a real
-     * fiber context switch here. */
+    /* Hand the OS scheduler a chance to run other threads. sched_yield
+     * is BSD-historical but portable on POSIX pthread platforms. */
+    sched_yield();
 }
 
 void osty_rt_thread_sleep(int64_t nanos) {
@@ -2050,105 +2153,227 @@ void osty_rt_thread_sleep(int64_t nanos) {
     }
 }
 
-/* ---- Channels: Phase 1B stubs. Abort with a clear message so programs
- *      that reach these surfaces fail fast rather than silently. ---- */
+/* ---- Channels: bounded ring buffer, mutex + two condition variables.
+ *
+ * Every channel slot is an int64_t holding either a scalar (i64/i1/f64
+ * bits / ptr bits) or a GC-managed pointer copy of the sent bytes. The
+ * element width encoding is the caller's responsibility — they reach
+ * here through one of the typed suffixes (send_i64, send_f64, ...) so
+ * the slot layout is uniform.
+ */
 
-void *osty_rt_thread_chan_make(int64_t capacity) {
-    (void)capacity;
-    osty_sched_unsupported("thread.chan (Phase 1B)");
-    return NULL;
-}
-
-void osty_rt_thread_chan_close(void *ch) {
-    (void)ch;
-    osty_sched_unsupported("thread.chan.close (Phase 1B)");
-}
-
-bool osty_rt_thread_chan_is_closed(void *ch) {
-    (void)ch;
-    osty_sched_unsupported("thread.chan.is_closed (Phase 1B)");
-    return false;
-}
-
-#define OSTY_RT_CHAN_STUB_SEND(suffix, ctype)                             \
-    void osty_rt_thread_chan_send_##suffix(void *ch, ctype value) {       \
-        (void)ch;                                                         \
-        (void)value;                                                      \
-        osty_sched_unsupported("thread.chan.send (Phase 1B)");            \
-    }
-OSTY_RT_CHAN_STUB_SEND(i64, int64_t)
-OSTY_RT_CHAN_STUB_SEND(i1, bool)
-OSTY_RT_CHAN_STUB_SEND(f64, double)
-OSTY_RT_CHAN_STUB_SEND(ptr, void *)
-#undef OSTY_RT_CHAN_STUB_SEND
-
-void osty_rt_thread_chan_send_bytes_v1(void *ch, const void *src, int64_t sz) {
-    (void)ch;
-    (void)src;
-    (void)sz;
-    osty_sched_unsupported("thread.chan.send (bytes, Phase 1B)");
-}
+typedef struct osty_rt_chan_impl {
+    pthread_mutex_t mu;
+    pthread_cond_t not_full;
+    pthread_cond_t not_empty;
+    int64_t cap;
+    int64_t head;
+    int64_t tail;
+    int64_t count;
+    int closed;
+    int64_t *slots;
+} osty_rt_chan_impl;
 
 typedef struct osty_rt_chan_recv_result {
     int64_t value;
     int64_t ok;
 } osty_rt_chan_recv_result;
 
-#define OSTY_RT_CHAN_STUB_RECV(suffix)                                    \
-    osty_rt_chan_recv_result osty_rt_thread_chan_recv_##suffix(void *ch) { \
-        (void)ch;                                                         \
-        osty_sched_unsupported("thread.chan.recv (Phase 1B)");            \
-        osty_rt_chan_recv_result r = {0, 0};                              \
-        return r;                                                         \
+static osty_rt_chan_impl *osty_rt_chan_cast(void *ch, const char *op) {
+    if (ch == NULL) {
+        char buf[64];
+        snprintf(buf, sizeof(buf), "%s: null channel", op);
+        osty_rt_abort(buf);
     }
-OSTY_RT_CHAN_STUB_RECV(i64)
-OSTY_RT_CHAN_STUB_RECV(i1)
-OSTY_RT_CHAN_STUB_RECV(f64)
-OSTY_RT_CHAN_STUB_RECV(ptr)
-OSTY_RT_CHAN_STUB_RECV(bytes_v1)
-#undef OSTY_RT_CHAN_STUB_RECV
+    return (osty_rt_chan_impl *)ch;
+}
 
-/* ---- Select / helpers: Phase 2 stubs. ---- */
+void *osty_rt_thread_chan_make(int64_t capacity) {
+    if (capacity < 0) {
+        osty_rt_abort("thread.chan.make: negative capacity");
+    }
+    if (capacity == 0) {
+        /* Rendezvous semantics (cap=0) require fiber handoff, Phase 1B.
+         * Clamp to 1 so single-step producer/consumer still works. */
+        capacity = 1;
+    }
+    osty_rt_chan_impl *ch = (osty_rt_chan_impl *)calloc(1, sizeof(*ch));
+    if (ch == NULL) {
+        osty_rt_abort("thread.chan.make: out of memory");
+    }
+    ch->slots = (int64_t *)calloc((size_t)capacity, sizeof(int64_t));
+    if (ch->slots == NULL) {
+        free(ch);
+        osty_rt_abort("thread.chan.make: out of memory");
+    }
+    ch->cap = capacity;
+    if (pthread_mutex_init(&ch->mu, NULL) != 0 ||
+        pthread_cond_init(&ch->not_full, NULL) != 0 ||
+        pthread_cond_init(&ch->not_empty, NULL) != 0) {
+        free(ch->slots);
+        free(ch);
+        osty_rt_abort("thread.chan.make: sync init failed");
+    }
+    return ch;
+}
+
+void osty_rt_thread_chan_close(void *raw) {
+    osty_rt_chan_impl *ch = osty_rt_chan_cast(raw, "thread.chan.close");
+    pthread_mutex_lock(&ch->mu);
+    ch->closed = 1;
+    pthread_cond_broadcast(&ch->not_empty);
+    pthread_cond_broadcast(&ch->not_full);
+    pthread_mutex_unlock(&ch->mu);
+}
+
+bool osty_rt_thread_chan_is_closed(void *raw) {
+    osty_rt_chan_impl *ch = osty_rt_chan_cast(raw, "thread.chan.is_closed");
+    pthread_mutex_lock(&ch->mu);
+    bool closed = ch->closed != 0;
+    pthread_mutex_unlock(&ch->mu);
+    return closed;
+}
+
+static void osty_rt_chan_send_raw(osty_rt_chan_impl *ch, int64_t slot) {
+    pthread_mutex_lock(&ch->mu);
+    while (ch->count == ch->cap && !ch->closed) {
+        pthread_cond_wait(&ch->not_full, &ch->mu);
+    }
+    if (ch->closed) {
+        pthread_mutex_unlock(&ch->mu);
+        osty_rt_abort("thread.chan.send: send on closed channel");
+    }
+    ch->slots[ch->tail] = slot;
+    ch->tail = (ch->tail + 1) % ch->cap;
+    ch->count += 1;
+    pthread_cond_signal(&ch->not_empty);
+    pthread_mutex_unlock(&ch->mu);
+}
+
+static osty_rt_chan_recv_result osty_rt_chan_recv_raw(osty_rt_chan_impl *ch) {
+    osty_rt_chan_recv_result r = {0, 0};
+    pthread_mutex_lock(&ch->mu);
+    while (ch->count == 0 && !ch->closed) {
+        pthread_cond_wait(&ch->not_empty, &ch->mu);
+    }
+    if (ch->count == 0 && ch->closed) {
+        pthread_mutex_unlock(&ch->mu);
+        return r;
+    }
+    r.value = ch->slots[ch->head];
+    r.ok = 1;
+    ch->head = (ch->head + 1) % ch->cap;
+    ch->count -= 1;
+    pthread_cond_signal(&ch->not_full);
+    pthread_mutex_unlock(&ch->mu);
+    return r;
+}
+
+void osty_rt_thread_chan_send_i64(void *raw, int64_t value) {
+    osty_rt_chan_send_raw(osty_rt_chan_cast(raw, "thread.chan.send"), value);
+}
+
+void osty_rt_thread_chan_send_i1(void *raw, bool value) {
+    osty_rt_chan_send_raw(osty_rt_chan_cast(raw, "thread.chan.send"),
+                          (int64_t)(value ? 1 : 0));
+}
+
+void osty_rt_thread_chan_send_f64(void *raw, double value) {
+    int64_t bits = 0;
+    memcpy(&bits, &value, sizeof(bits));
+    osty_rt_chan_send_raw(osty_rt_chan_cast(raw, "thread.chan.send"), bits);
+}
+
+void osty_rt_thread_chan_send_ptr(void *raw, void *value) {
+    osty_rt_chan_send_raw(osty_rt_chan_cast(raw, "thread.chan.send"),
+                          (int64_t)(uintptr_t)value);
+}
+
+void osty_rt_thread_chan_send_bytes_v1(void *raw, const void *src, int64_t sz) {
+    if (sz < 0) {
+        osty_rt_abort("thread.chan.send: negative byte size");
+    }
+    /* Copy into a GC-managed allocation so receiver sees a stable owner
+     * even after the producer's frame is gone. The collector will reap
+     * it once the receiver drops the pointer. */
+    void *copy = osty_gc_allocate_managed((size_t)sz, OSTY_GC_KIND_GENERIC,
+                                          "runtime.chan.bytes", NULL, NULL);
+    if (sz > 0 && src != NULL) {
+        memcpy(copy, src, (size_t)sz);
+    }
+    osty_rt_chan_send_raw(osty_rt_chan_cast(raw, "thread.chan.send"),
+                          (int64_t)(uintptr_t)copy);
+}
+
+osty_rt_chan_recv_result osty_rt_thread_chan_recv_i64(void *raw) {
+    return osty_rt_chan_recv_raw(osty_rt_chan_cast(raw, "thread.chan.recv"));
+}
+
+osty_rt_chan_recv_result osty_rt_thread_chan_recv_i1(void *raw) {
+    osty_rt_chan_recv_result r = osty_rt_chan_recv_raw(
+        osty_rt_chan_cast(raw, "thread.chan.recv"));
+    if (r.ok) {
+        r.value = r.value != 0 ? 1 : 0;
+    }
+    return r;
+}
+
+osty_rt_chan_recv_result osty_rt_thread_chan_recv_f64(void *raw) {
+    return osty_rt_chan_recv_raw(osty_rt_chan_cast(raw, "thread.chan.recv"));
+}
+
+osty_rt_chan_recv_result osty_rt_thread_chan_recv_ptr(void *raw) {
+    return osty_rt_chan_recv_raw(osty_rt_chan_cast(raw, "thread.chan.recv"));
+}
+
+osty_rt_chan_recv_result osty_rt_thread_chan_recv_bytes_v1(void *raw) {
+    return osty_rt_chan_recv_raw(osty_rt_chan_cast(raw, "thread.chan.recv"));
+}
+
+/* ---- Select / helpers remain pending. Their registration surface
+ *      needs Osty-side builder allocation that the MIR emitter has not
+ *      wired up; aborting here is the closest-to-correct behaviour
+ *      for programs that reach these entry points today. ---- */
 
 void osty_rt_select(void *s) {
     (void)s;
-    osty_sched_unsupported("thread.select (Phase 2)");
+    osty_sched_unimplemented("thread.select");
 }
 
 void osty_rt_select_recv(void *s, void *ch, void *arm) {
     (void)s; (void)ch; (void)arm;
-    osty_sched_unsupported("thread.select.recv (Phase 2)");
+    osty_sched_unimplemented("thread.select.recv");
 }
 
 void osty_rt_select_send(void *s, void *ch, void *arm) {
     (void)s; (void)ch; (void)arm;
-    osty_sched_unsupported("thread.select.send (Phase 2)");
+    osty_sched_unimplemented("thread.select.send");
 }
 
 void osty_rt_select_timeout(void *s, int64_t ns, void *arm) {
     (void)s; (void)ns; (void)arm;
-    osty_sched_unsupported("thread.select.timeout (Phase 2)");
+    osty_sched_unimplemented("thread.select.timeout");
 }
 
 void osty_rt_select_default(void *s, void *arm) {
     (void)s; (void)arm;
-    osty_sched_unsupported("thread.select.default (Phase 2)");
+    osty_sched_unimplemented("thread.select.default");
 }
 
 void *osty_rt_task_race(void *body) {
     (void)body;
-    osty_sched_unsupported("race (Phase 2)");
+    osty_sched_unimplemented("race");
     return NULL;
 }
 
 void *osty_rt_task_collect_all(void *body) {
     (void)body;
-    osty_sched_unsupported("collectAll (Phase 2)");
+    osty_sched_unimplemented("collectAll");
     return NULL;
 }
 
 void *osty_rt_parallel(void *items, int64_t concurrency, void *f) {
     (void)items; (void)concurrency; (void)f;
-    osty_sched_unsupported("parallel (Phase 2)");
+    osty_sched_unimplemented("parallel");
     return NULL;
 }

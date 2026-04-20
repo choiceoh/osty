@@ -7,17 +7,17 @@ import (
 	"testing"
 )
 
-// Phase 1A sequential scheduler smoke test. Exercises the public
-// `osty_rt_task_*` and `osty_rt_thread_*` surface the MIR backend
-// lowers to. The channel/select symbols are not exercised here —
-// Phase 1A implements them as abort stubs (see RUNTIME_SCHEDULER.md).
+// Scheduler smoke test. Exercises the public `osty_rt_task_*` and
+// `osty_rt_thread_*` surface the MIR backend lowers to, plus the
+// real channel implementation added in Phase 1B/2 (see
+// RUNTIME_SCHEDULER.md).
 //
 // The harness mimics what an Osty program would do after lowering:
 // allocate a closure env where env[0] is the fn pointer, then hand
 // the env to the scheduler runtime. Test body functions match the
 // uniform closure ABI (`int64_t body(void *env [, void *group])`)
 // described in §ABI contract of RUNTIME_SCHEDULER.md.
-func TestBundledRuntimeSchedulerPhase1A(t *testing.T) {
+func TestBundledRuntimeScheduler(t *testing.T) {
 	parallelClangBackendTest(t)
 
 	dir := t.TempDir()
@@ -62,6 +62,14 @@ static int64_t body_return_capture(void *env) {
     return e->capture;
 }
 
+/* spawn body: sleeps 2ms before returning, exposes real wall-clock
+ * parallelism when run across N spawns. */
+static int64_t body_sleep_then_capture(void *env) {
+    two_slot_env *e = (two_slot_env *)env;
+    osty_rt_thread_sleep(2000000LL); /* 2ms */
+    return e->capture;
+}
+
 /* spawn body: checks cancellation against current group. Returns 1
  * if cancelled, 0 otherwise. */
 static int64_t body_check_cancel(void *env) {
@@ -80,7 +88,7 @@ static int64_t body_taskgroup_two_spawns(void *env, void *group) {
     return a + b;
 }
 
-/* taskGroup body: cancels the group and then spawns a child whose
+/* taskGroup body: cancels the group before spawning a child whose
  * job is to report cancel_is_cancelled() against the rebound group.
  * Returns a 3-bit result: bit0 = outer thread-local check after
  * cancel, bit1 = group flag check, bit2 = child's cancel check. */
@@ -125,7 +133,7 @@ int main(void) {
     /* Test 4: outside any taskGroup, cancel_is_cancelled returns false. */
     printf("%d\n", osty_rt_cancel_is_cancelled() ? 1 : 0);
 
-    /* Test 5: thread.yield is a safe no-op. */
+    /* Test 5: thread.yield is a safe call. */
     osty_rt_thread_yield();
     printf("ok\n");
 
@@ -140,12 +148,36 @@ int main(void) {
                            (long long)(after.tv_nsec - before.tv_nsec);
     printf("%d\n", elapsed_ns >= 1000000LL ? 1 : 0);
 
+    /* Test 7: four 2ms-sleeping spawns joined. Wall-clock must be
+     * meaningfully less than 4×2ms=8ms if real parallelism exists. We
+     * accept up to 6ms as passing; tighter bounds are too flaky under
+     * CI load. Each spawn returns its capture; joined sum = 1+2+3+4=10. */
+    two_slot_env p_env_a = { (void *)body_sleep_then_capture, 1 };
+    two_slot_env p_env_b = { (void *)body_sleep_then_capture, 2 };
+    two_slot_env p_env_c = { (void *)body_sleep_then_capture, 3 };
+    two_slot_env p_env_d = { (void *)body_sleep_then_capture, 4 };
+    clock_gettime(CLOCK_MONOTONIC, &before);
+    void *pa = osty_rt_task_spawn((void *)&p_env_a);
+    void *pb = osty_rt_task_spawn((void *)&p_env_b);
+    void *pc = osty_rt_task_spawn((void *)&p_env_c);
+    void *pd = osty_rt_task_spawn((void *)&p_env_d);
+    int64_t total = osty_rt_task_handle_join(pa) +
+                    osty_rt_task_handle_join(pb) +
+                    osty_rt_task_handle_join(pc) +
+                    osty_rt_task_handle_join(pd);
+    clock_gettime(CLOCK_MONOTONIC, &after);
+    elapsed_ns = (long long)(after.tv_sec - before.tv_sec) * 1000000000LL +
+                 (long long)(after.tv_nsec - before.tv_nsec);
+    printf("%lld\n", (long long)total);
+    /* Report 1 iff wall-clock shows real parallelism (not strict 4x). */
+    printf("%d\n", elapsed_ns < 6000000LL ? 1 : 0);
+
     return 0;
 }
 `), 0o644); err != nil {
 		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
 	}
-	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	cmd := exec.Command("clang", "-std=c11", "-pthread", runtimePath, harnessPath, "-o", binaryPath)
 	buildOutput, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
@@ -159,52 +191,142 @@ int main(void) {
 	//   99        (detached spawn join)
 	//   7         (outer=1, flag=1, inner=1 → 0b111)
 	//   0         (cancel_is_cancelled outside any group)
-	//   ok        (yield no-op didn't crash)
+	//   ok        (yield didn't crash)
 	//   1         (sleep elapsed ≥ 1ms)
-	const want = "42\n99\n7\n0\nok\n1\n"
+	//   10        (1+2+3+4 across four parallel spawns)
+	//   1         (wall-clock shows real parallelism, not strict 4×2ms)
+	const want = "42\n99\n7\n0\nok\n1\n10\n1\n"
 	if got := string(runOutput); got != want {
 		t.Fatalf("scheduler harness stdout = %q, want %q", got, want)
 	}
 }
 
-// TestBundledRuntimeSchedulerChannelStubAborts documents that Phase 1A
-// channel send/recv/make surfaces abort with a diagnostic rather than
-// link-failing or silently no-op'ing. A program that reaches these
-// calls in Phase 1A must fail loudly — Phase 1B replaces them.
-func TestBundledRuntimeSchedulerChannelStubAborts(t *testing.T) {
+// Channels: producer/consumer across two threads via a buffered
+// channel. Exercises send_i64 / recv_i64 / close / is_closed and
+// verifies recv-after-close-and-drain signals ok=0.
+func TestBundledRuntimeSchedulerChannels(t *testing.T) {
 	parallelClangBackendTest(t)
 
 	dir := t.TempDir()
 	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
-	harnessPath := filepath.Join(dir, "runtime_chan_stub_harness.c")
-	binaryPath := filepath.Join(dir, "runtime_chan_stub_harness")
+	harnessPath := filepath.Join(dir, "runtime_chan_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_chan_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+
+typedef struct osty_rt_chan_recv_result {
+    int64_t value;
+    int64_t ok;
+} osty_rt_chan_recv_result;
+
+void *osty_rt_thread_chan_make(int64_t capacity);
+void osty_rt_thread_chan_close(void *ch);
+bool osty_rt_thread_chan_is_closed(void *ch);
+void osty_rt_thread_chan_send_i64(void *ch, int64_t v);
+osty_rt_chan_recv_result osty_rt_thread_chan_recv_i64(void *ch);
+
+void *osty_rt_task_spawn(void *body_env);
+int64_t osty_rt_task_handle_join(void *handle);
+
+typedef struct prod_env {
+    void *fn;
+    void *ch;
+    int64_t count;
+} prod_env;
+
+/* Producer: send 0..count-1, then close. */
+static int64_t body_produce(void *env) {
+    prod_env *e = (prod_env *)env;
+    for (int64_t i = 0; i < e->count; i++) {
+        osty_rt_thread_chan_send_i64(e->ch, i);
+    }
+    osty_rt_thread_chan_close(e->ch);
+    return e->count;
+}
+
+int main(void) {
+    /* Buffered capacity 4, producer sends 10 items → forces block/wake. */
+    void *ch = osty_rt_thread_chan_make(4);
+    prod_env penv = { (void *)body_produce, ch, 10 };
+    void *h = osty_rt_task_spawn((void *)&penv);
+
+    int64_t sum = 0;
+    for (;;) {
+        osty_rt_chan_recv_result r = osty_rt_thread_chan_recv_i64(ch);
+        if (!r.ok) {
+            break;
+        }
+        sum += r.value;
+    }
+    int64_t produced = osty_rt_task_handle_join(h);
+    printf("%lld\n", (long long)sum);        /* 0+1+...+9 = 45 */
+    printf("%lld\n", (long long)produced);   /* 10 */
+    printf("%d\n", osty_rt_thread_chan_is_closed(ch) ? 1 : 0); /* 1 */
+
+    /* Recv-after-drain still reports ok=0 (not a block). */
+    osty_rt_chan_recv_result empty = osty_rt_thread_chan_recv_i64(ch);
+    printf("%lld\n", (long long)empty.ok);    /* 0 */
+
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", "-pthread", runtimePath, harnessPath, "-o", binaryPath)
+	if buildOutput, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runOutput, err := exec.Command(binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	const want = "45\n10\n1\n0\n"
+	if got := string(runOutput); got != want {
+		t.Fatalf("channel harness stdout = %q, want %q", got, want)
+	}
+}
+
+// Select + parallel + race + collectAll are still deliberate aborts —
+// their registration surfaces need Osty-side builder work (see
+// RUNTIME_SCHEDULER.md roadmap). This test locks the "fail fast"
+// behaviour so programs reaching these surfaces don't silently
+// misbehave.
+func TestBundledRuntimeSchedulerSelectStubAborts(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_select_stub_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_select_stub_harness")
 	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
 		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
 	}
 	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
 #include <stdio.h>
 
-void *osty_rt_thread_chan_make(int64_t capacity);
+void osty_rt_select(void *s);
 
 int main(void) {
-    (void)osty_rt_thread_chan_make(4);
+    osty_rt_select(NULL);
     printf("should not reach\n");
     return 0;
 }
 `), 0o644); err != nil {
 		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
 	}
-	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	cmd := exec.Command("clang", "-std=c11", "-pthread", runtimePath, harnessPath, "-o", binaryPath)
 	if buildOutput, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
-	// The stub calls abort(); the process should exit non-zero and not
-	// print "should not reach".
 	runOutput, err := exec.Command(binaryPath).CombinedOutput()
 	if err == nil {
-		t.Fatalf("expected non-zero exit from chan stub, got success: %q", runOutput)
+		t.Fatalf("expected non-zero exit from select stub, got success: %q", runOutput)
 	}
 	if got := string(runOutput); got == "should not reach\n" {
-		t.Fatalf("channel stub silently succeeded; Phase 1A requires loud failure")
+		t.Fatalf("select stub silently succeeded; not-yet-implemented path must fail loudly")
 	}
 }
