@@ -737,8 +737,7 @@ match 분해)를 추가한다.
 ### Probe 쌍
 
 - `TestProbeWholeToolchainMerged` — 모든 파일 포함. 현재 첫 wall **LLVM002 `runtime.golegacy.astbridge`** (bootstrap artifact).
-- `TestProbeNativeToolchainMerged` — bootstrap-only 파일 제외. 현재 첫 wall **LLVM012 `field assignment base *ast.FieldExpr`** (중첩 필드 대입 `a.b.c = x`). 이전의 **LLVM011 `fn_param_struct_type: Char`** 벽(`lspUtf16UnitsForChar`)은 `Char`→i32 / `Byte`→i8 lowering + `Char.toInt()` / `Byte.toInt()` / `Int.toChar()` 폭 변환 + 부호 없는 비교 서술어 도입으로, 그 다음의 **LLVM012 `*ast.MatchExpr is not a call`** 벽은 tag-enum scrutinee + bare-variant/wildcard arm 용 match-as-statement lowering 추가로 해소됨.
-- `TestProbeNativeToolchainMerged` — bootstrap-only 파일 제외. 현재 첫 wall **LLVM012 (statement form)**. 이전의 **LLVM011 `fn_param_struct_type: Char`** 벽(`lspUtf16UnitsForChar`)은 `Char`→i32 / `Byte`→i8 lowering + `Char.toInt()` / `Byte.toInt()` / `Int.toChar()` 폭 변환 + 부호 없는 비교 서술어 도입으로 해소됨.
+- `TestProbeNativeToolchainMerged` — bootstrap-only 파일 제외. 현재 첫 wall **LLVM015 `call target *ast.FieldExpr`** (FieldExpr 체인 메서드 호출). LLVM012 카테고리는 toolchain 실제 shape에 대해 해소됨: (1) LLVM011 Char 벽(`lspUtf16UnitsForChar`) → Char→i32/Byte→i8 lowering + 폭 변환/부호 없는 비교. (2) LLVM012 `*ast.MatchExpr is not a call` 벽 → tag-enum match-as-statement lowering. (3) LLVM012 `field assignment base *ast.FieldExpr` 벽 → 중첩 필드 체인(`cx.env.returnTy = ...`) 지원.
 
 두 probe의 첫-wall 차이 = bootstrap 브릿지가 히스토그램에 주입하는 노이즈 양. migration 진전은 native probe의 first-wall 이동으로 측정한다.
 
