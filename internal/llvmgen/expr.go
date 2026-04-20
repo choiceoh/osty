@@ -629,7 +629,7 @@ func (g *generator) enumVariantConstant(info *enumInfo, variant variantInfo) (va
 		if len(variant.payloads) != 0 {
 			return value{}, unsupportedf("expression", "enum variant %q requires a payload", variant.name)
 		}
-		return g.emitEnumPayloadVariant(info, variant, value{typ: info.payloadTyp, ref: llvmZeroLiteral(info.payloadTyp)})
+		return g.emitEnumPayloadVariant(info, variant, nil)
 	}
 	out := llvmEnumVariant(info.name, variant.tag)
 	return fromOstyValue(out), nil
@@ -663,11 +663,39 @@ func (g *generator) enumVariantByField(expr *ast.FieldExpr) (enumVariantRef, boo
 	return enumVariantRef{enum: info, variant: variant}, true
 }
 
-func (g *generator) emitEnumPayloadVariant(info *enumInfo, variant variantInfo, payload value) (value, error) {
+func (g *generator) emitEnumPayloadVariant(info *enumInfo, variant variantInfo, payloads []value) (value, error) {
 	if !info.hasPayload {
 		return value{}, unsupportedf("expression", "enum %q has no payload layout", info.name)
 	}
 	if info.isBoxed {
+		if len(payloads) > 1 {
+			for _, p := range payloads {
+				if p.typ == "ptr" {
+					return value{}, unsupportedf("type-system", "enum %q boxed multi-field payload with ptr field is not supported", info.name)
+				}
+			}
+			emitter := g.toOstyEmitter()
+			site := "enum." + info.name + "." + variant.name
+			byteSize := len(payloads) * 8
+			heapPtr := llvmGcAlloc(emitter, 1, byteSize, site)
+			for i, p := range payloads {
+				gep := llvmNextTemp(emitter)
+				emitter.body = append(emitter.body, fmt.Sprintf("  %s = getelementptr i8, ptr %s, i64 %d", gep, heapPtr.name, i*8))
+				emitter.body = append(emitter.body, fmt.Sprintf("  store %s %s, ptr %s", p.typ, p.ref, gep))
+			}
+			out := llvmStructLiteral(emitter, info.typ, []*LlvmValue{llvmEnumVariant(info.typ, variant.tag), heapPtr})
+			g.takeOstyEmitter(emitter)
+			g.needsGCRuntime = true
+			enumValue := fromOstyValue(out)
+			enumValue.rootPaths = g.rootPathsForType(info.typ)
+			return enumValue, nil
+		}
+		var payload value
+		if len(payloads) == 1 {
+			payload = payloads[0]
+		} else {
+			payload = value{typ: "ptr", ref: "null"}
+		}
 		emitter := g.toOstyEmitter()
 		site := "enum." + info.name + "." + variant.name
 		out := llvmEnumBoxedPayloadVariant(emitter, info.typ, variant.tag, toOstyValue(payload), site)
@@ -677,11 +705,37 @@ func (g *generator) emitEnumPayloadVariant(info *enumInfo, variant variantInfo, 
 		enumValue.rootPaths = g.rootPathsForType(info.typ)
 		return enumValue, nil
 	}
-	if payload.typ != info.payloadTyp {
-		return value{}, unsupportedf("type-system", "enum %q variant %q payload type %s, want %s", info.name, variant.name, payload.typ, info.payloadTyp)
+	slotType := func(i int) string {
+		if i < len(info.payloadSlotTypes) {
+			return info.payloadSlotTypes[i]
+		}
+		if info.payloadTyp != "" {
+			return info.payloadTyp
+		}
+		return "i64"
+	}
+	for i, p := range payloads {
+		want := slotType(i)
+		if p.typ != want {
+			return value{}, unsupportedf("type-system", "enum %q variant %q payload slot %d type %s, want %s", info.name, variant.name, i, p.typ, want)
+		}
+	}
+	slotCount := info.payloadCount
+	if slotCount < 1 {
+		slotCount = 1
+	}
+	fields := make([]*LlvmValue, 0, 1+slotCount)
+	fields = append(fields, llvmEnumVariant(info.typ, variant.tag))
+	for i := 0; i < slotCount; i++ {
+		if i < len(payloads) {
+			fields = append(fields, toOstyValue(payloads[i]))
+			continue
+		}
+		t := slotType(i)
+		fields = append(fields, &LlvmValue{typ: t, name: llvmZeroLiteral(t), pointer: false})
 	}
 	emitter := g.toOstyEmitter()
-	out := llvmEnumPayloadVariant(emitter, info.typ, variant.tag, toOstyValue(payload))
+	out := llvmStructLiteral(emitter, info.typ, fields)
 	g.takeOstyEmitter(emitter)
 	enumValue := fromOstyValue(out)
 	enumValue.rootPaths = g.rootPathsForType(info.typ)
@@ -2570,20 +2624,55 @@ func (g *generator) bindPayloadEnumPattern(scrutinee value, pattern enumPatternI
 	if !pattern.hasPayloadBinding {
 		return nil
 	}
-	emitter := g.toOstyEmitter()
-	var payload *LlvmValue
-	if pattern.isBoxed {
-		heapPtr := llvmExtractValue(emitter, toOstyValue(scrutinee), "ptr", 1)
-		payload = llvmLoadFromSlot(emitter, heapPtr, pattern.payloadType)
-	} else {
-		payload = llvmExtractValue(emitter, toOstyValue(scrutinee), pattern.payloadType, 1)
+	if len(pattern.payloadBindings) == 0 {
+		return nil
 	}
-	g.takeOstyEmitter(emitter)
-	payloadValue := fromOstyValue(payload)
-	payloadValue.listElemTyp = pattern.payloadListElemTyp
-	payloadValue.gcManaged = pattern.payloadType == "ptr" || pattern.payloadListElemTyp != ""
-	payloadValue.rootPaths = g.rootPathsForType(pattern.payloadType)
-	g.bindNamedLocal(pattern.payloadName, payloadValue, false)
+	if pattern.isBoxed {
+		emitter := g.toOstyEmitter()
+		heapPtr := llvmExtractValue(emitter, toOstyValue(scrutinee), "ptr", 1)
+		if len(pattern.payloadBindings) > 1 {
+			for i, b := range pattern.payloadBindings {
+				if b.name == "" {
+					continue
+				}
+				gep := llvmNextTemp(emitter)
+				emitter.body = append(emitter.body, fmt.Sprintf("  %s = getelementptr i8, ptr %s, i64 %d", gep, heapPtr.name, i*8))
+				loadTmp := llvmNextTemp(emitter)
+				emitter.body = append(emitter.body, fmt.Sprintf("  %s = load %s, ptr %s", loadTmp, b.typ, gep))
+				payloadValue := value{typ: b.typ, ref: loadTmp}
+				payloadValue.rootPaths = g.rootPathsForType(b.typ)
+				g.bindNamedLocal(b.name, payloadValue, false)
+			}
+			g.takeOstyEmitter(emitter)
+			return nil
+		}
+		payload := llvmLoadFromSlot(emitter, heapPtr, pattern.payloadType)
+		g.takeOstyEmitter(emitter)
+		b := pattern.payloadBindings[0]
+		payloadValue := fromOstyValue(payload)
+		payloadValue.listElemTyp = pattern.payloadListElemTyp
+		payloadValue.gcManaged = b.typ == "ptr" || pattern.payloadListElemTyp != ""
+		payloadValue.rootPaths = g.rootPathsForType(b.typ)
+		g.bindNamedLocal(b.name, payloadValue, false)
+		return nil
+	}
+	for i, b := range pattern.payloadBindings {
+		if b.name == "" {
+			continue
+		}
+		emitter := g.toOstyEmitter()
+		payload := llvmExtractValue(emitter, toOstyValue(scrutinee), b.typ, b.index)
+		g.takeOstyEmitter(emitter)
+		payloadValue := fromOstyValue(payload)
+		if i < len(pattern.variant.payloadListElemTyps) {
+			payloadValue.listElemTyp = pattern.variant.payloadListElemTyps[i]
+		} else if b.index == 1 {
+			payloadValue.listElemTyp = pattern.payloadListElemTyp
+		}
+		payloadValue.gcManaged = b.typ == "ptr" || payloadValue.listElemTyp != ""
+		payloadValue.rootPaths = g.rootPathsForType(b.typ)
+		g.bindNamedLocal(b.name, payloadValue, false)
+	}
 	return nil
 }
 
@@ -2619,16 +2708,30 @@ func (g *generator) matchPayloadEnumPattern(info *enumInfo, pattern ast.Pattern)
 		}
 		out.payloadType = variant.payloads[0]
 		out.payloadListElemTyp = variant.payloadListElemTyp
-		switch arg := p.Args[0].(type) {
-		case *ast.IdentPat:
-			if !llvmIsIdent(arg.Name) {
-				return enumPatternInfo{}, true, unsupportedf("name", "enum payload binding name %q", arg.Name)
+		if info.isBoxed && len(p.Args) > 1 {
+			for _, pt := range variant.payloads {
+				if pt == "ptr" {
+					return enumPatternInfo{}, true, unsupportedf("expression", "enum variant pattern %q boxed multi-field payload with ptr field is not supported", name)
+				}
 			}
-			out.payloadName = arg.Name
-			out.hasPayloadBinding = true
-		case *ast.WildcardPat:
-		default:
-			return enumPatternInfo{}, true, unsupportedf("expression", "enum variant payload pattern %T", arg)
+		}
+		for idx, arg := range p.Args {
+			binding := enumPayloadBinding{typ: variant.payloads[idx], index: idx + 1}
+			switch a := arg.(type) {
+			case *ast.IdentPat:
+				if !llvmIsIdent(a.Name) {
+					return enumPatternInfo{}, true, unsupportedf("name", "enum payload binding name %q", a.Name)
+				}
+				binding.name = a.Name
+				out.hasPayloadBinding = true
+				if idx == 0 {
+					out.payloadName = a.Name
+				}
+			case *ast.WildcardPat:
+			default:
+				return enumPatternInfo{}, true, unsupportedf("expression", "enum variant payload pattern %T", a)
+			}
+			out.payloadBindings = append(out.payloadBindings, binding)
 		}
 		return out, true, nil
 	default:
@@ -3183,18 +3286,21 @@ func (g *generator) emitEnumVariantCall(call *ast.CallExpr) (value, bool, error)
 	if !ref.enum.hasPayload {
 		return value{}, true, unsupportedf("expression", "enum %q has no payload layout", ref.enum.name)
 	}
-	arg := call.Args[0]
-	if arg.Name != "" || arg.Value == nil {
-		return value{}, true, unsupportedf("call", "enum variant %q requires positional payload", ref.variant.name)
+	payloads := make([]value, 0, len(call.Args))
+	for i, arg := range call.Args {
+		if arg.Name != "" || arg.Value == nil {
+			return value{}, true, unsupportedf("call", "enum variant %q requires positional payload", ref.variant.name)
+		}
+		payload, err := g.emitExpr(arg.Value)
+		if err != nil {
+			return value{}, true, err
+		}
+		if payload.typ != ref.variant.payloads[i] {
+			return value{}, true, unsupportedf("type-system", "enum variant %q payload type %s, want %s", ref.variant.name, payload.typ, ref.variant.payloads[i])
+		}
+		payloads = append(payloads, payload)
 	}
-	payload, err := g.emitExpr(arg.Value)
-	if err != nil {
-		return value{}, true, err
-	}
-	if payload.typ != ref.variant.payloads[0] {
-		return value{}, true, unsupportedf("type-system", "enum variant %q payload type %s, want %s", ref.variant.name, payload.typ, ref.variant.payloads[0])
-	}
-	out, err := g.emitEnumPayloadVariant(ref.enum, ref.variant, payload)
+	out, err := g.emitEnumPayloadVariant(ref.enum, ref.variant, payloads)
 	return out, true, err
 }
 

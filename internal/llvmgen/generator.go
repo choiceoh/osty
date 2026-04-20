@@ -242,11 +242,29 @@ func (g *generator) render(defs []string) []byte {
 	}
 	for _, info := range g.enums {
 		if info.hasPayload {
-			payloadSlot := info.payloadTyp
+			var fields []string
 			if info.isBoxed {
-				payloadSlot = "ptr"
+				fields = []string{"i64", "ptr"}
+			} else {
+				slotCount := info.payloadCount
+				if slotCount < 1 {
+					slotCount = 1
+				}
+				fields = make([]string, 0, 1+slotCount)
+				fields = append(fields, "i64")
+				for s := 0; s < slotCount; s++ {
+					var slotTyp string
+					if s < len(info.payloadSlotTypes) {
+						slotTyp = info.payloadSlotTypes[s]
+					} else if info.payloadTyp != "" {
+						slotTyp = info.payloadTyp
+					} else {
+						slotTyp = "i64"
+					}
+					fields = append(fields, slotTyp)
+				}
 			}
-			typeDefs = append(typeDefs, llvmStructTypeDef(info.name, []string{"i64", payloadSlot}))
+			typeDefs = append(typeDefs, llvmStructTypeDef(info.name, fields))
 		}
 	}
 	if len(g.tupleTypes) != 0 {

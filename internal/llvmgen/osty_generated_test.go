@@ -263,8 +263,20 @@ func TestGeneratedComparePoliciesAreOstyOwned(t *testing.T) {
 	if got, want := llvmEnumVariantHeaderDiagnostic("Choice", "bad-name", false, 0, false).message, `enum "Choice" variant name "bad-name"`; got != want {
 		t.Fatalf("llvmEnumVariantHeaderDiagnostic(%q, %q, false, 0, false).message = %q, want %q", "Choice", "bad-name", got, want)
 	}
-	if got, want := llvmEnumVariantHeaderDiagnostic("Choice", "Some", true, 2, false).message, `enum "Choice" variant "Some" has 2 payload fields; only one scalar payload is supported`; got != want {
-		t.Fatalf("llvmEnumVariantHeaderDiagnostic(%q, %q, true, 2, false).message = %q, want %q", "Choice", "Some", got, want)
+	if got := llvmEnumVariantHeaderDiagnostic("Choice", "Some", true, 2, false); got.kind != "" {
+		t.Fatalf("llvmEnumVariantHeaderDiagnostic multi-field should no longer reject: kind=%q msg=%q", got.kind, got.message)
+	}
+	if got := llvmEnumBoxedMultiFieldDiagnostic("Choice", "Mix", 2); got.code != "LLVM011" || got.hint == "" {
+		t.Fatalf("llvmEnumBoxedMultiFieldDiagnostic: code=%q hint=%q, want LLVM011 + non-empty hint", got.code, got.hint)
+	}
+	if got, want := llvmEnumBoxedMultiFieldDiagnostic("Choice", "Mix", 2).message, `enum "Choice" variant "Mix" has 2 payload fields with heterogeneous types across variants; boxed multi-field payloads are not supported yet`; got != want {
+		t.Fatalf("llvmEnumBoxedMultiFieldDiagnostic message = %q, want %q", got, want)
+	}
+	if got := llvmStructFieldDiagnostic("Tree", "left", true, false, false, true, ""); got.code != "LLVM011" || got.hint == "" {
+		t.Fatalf("llvmStructFieldDiagnostic recursive: code=%q hint=%q, want LLVM011 + non-empty hint", got.code, got.hint)
+	}
+	if got, want := llvmStructFieldDiagnostic("Tree", "left", true, false, false, true, "").message, `struct "Tree" recursive field "left" requires indirection`; got != want {
+		t.Fatalf("llvmStructFieldDiagnostic recursive message = %q, want %q", got, want)
 	}
 	if got, want := llvmEnumPayloadDiagnostic("Choice", "Some", "unsupported payload", "", "").message, `enum "Choice" variant "Some" payload: unsupported payload`; got != want {
 		t.Fatalf("llvmEnumPayloadDiagnostic(%q, %q, %q, %q, %q).message = %q, want %q", "Choice", "Some", "unsupported payload", "", "", got, want)

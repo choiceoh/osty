@@ -1,0 +1,19 @@
+enum Event {
+    Click(Int, Int)
+    Tick(Int)
+    Close
+}
+
+fn area(e: Event) -> Int {
+    match e {
+        Click(x, y) -> x * y,
+        Tick(n) -> n,
+        Close -> 0,
+    }
+}
+
+fn main() {
+    println(area(Click(3, 4)))
+    println(area(Tick(7)))
+    println(area(Close))
+}

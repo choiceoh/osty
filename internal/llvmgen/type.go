@@ -278,10 +278,20 @@ func (g *generator) rootPathsForTypeSeen(typ string, seen map[string]bool) [][]i
 		if info.isBoxed {
 			return [][]int{{1}}
 		}
-		if info.payloadTyp == "ptr" {
-			return [][]int{{1}}
+		slotTypes := info.payloadSlotTypes
+		if len(slotTypes) == 0 && info.payloadTyp != "" {
+			slotTypes = []string{info.payloadTyp}
 		}
-		return prependRootIndex(1, g.rootPathsForTypeSeen(info.payloadTyp, seen))
+		var out [][]int
+		for i, slotTyp := range slotTypes {
+			slot := i + 1
+			if slotTyp == "ptr" {
+				out = append(out, []int{slot})
+				continue
+			}
+			out = append(out, prependRootIndex(slot, g.rootPathsForTypeSeen(slotTyp, seen))...)
+		}
+		return out
 	}
 	if info, ok := g.resultTypes[typ]; ok {
 		seen[typ] = true
@@ -325,13 +335,20 @@ func (g *generator) aggregateFieldType(typ string, index int) (string, bool) {
 		return "", false
 	}
 	if info := g.enumsByType[typ]; info != nil && info.hasPayload {
-		switch index {
-		case 0:
+		if index == 0 {
 			return "i64", true
-		case 1:
-			if info.isBoxed {
+		}
+		if info.isBoxed {
+			if index == 1 {
 				return "ptr", true
 			}
+			return "", false
+		}
+		slot := index - 1
+		if slot >= 0 && slot < len(info.payloadSlotTypes) {
+			return info.payloadSlotTypes[slot], true
+		}
+		if slot == 0 && info.payloadTyp != "" {
 			return info.payloadTyp, true
 		}
 	}

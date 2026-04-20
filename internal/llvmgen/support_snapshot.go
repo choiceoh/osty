@@ -2442,7 +2442,12 @@ func llvmStructFieldDiagnostic(structName string, fieldName string, identOk bool
 		return llvmUnsupportedDiagnostic("type-system", fmt.Sprintf("struct %q field %q: %s", structName, fieldName, detail))
 	}
 	if recursive {
-		return llvmUnsupportedDiagnostic("type-system", fmt.Sprintf("struct %q recursive field %q", structName, fieldName))
+		return llvmUnsupportedDiagnosticWith(
+			"LLVM011",
+			"type-system",
+			fmt.Sprintf("struct %q recursive field %q requires indirection", structName, fieldName),
+			"break the cycle via an arena index (Int id) or List<T> handle until the LLVM backend grows recursive-struct support",
+		)
 	}
 	return llvmUnsupportedDiagnosticWith("", "", "", "")
 }
@@ -2451,13 +2456,20 @@ func llvmEnumVariantHeaderDiagnostic(enumName string, variantName string, identO
 	if !identOk {
 		return llvmUnsupportedDiagnostic("name", fmt.Sprintf("enum %q variant name %q", enumName, variantName))
 	}
-	if payloadCount > 1 {
-		return llvmUnsupportedDiagnostic("type-system", fmt.Sprintf("enum %q variant %q has %d payload fields; only one scalar payload is supported", enumName, variantName, payloadCount))
-	}
 	if duplicate {
 		return llvmUnsupportedDiagnostic("source-layout", fmt.Sprintf("enum %q duplicate variant %q", enumName, variantName))
 	}
+	_ = payloadCount
 	return llvmUnsupportedDiagnosticWith("", "", "", "")
+}
+
+func llvmEnumBoxedMultiFieldDiagnostic(enumName string, variantName string, payloadCount int) *LlvmUnsupportedDiagnostic {
+	return llvmUnsupportedDiagnosticWith(
+		"LLVM011",
+		"type-system",
+		fmt.Sprintf("enum %q variant %q has %d payload fields with heterogeneous types across variants; boxed multi-field payloads are not supported yet", enumName, variantName, payloadCount),
+		"keep a single boxed payload per variant, or make all variant payloads share one scalar/pointer type so the inline multi-slot layout can be used",
+	)
 }
 
 func llvmEnumPayloadDiagnostic(enumName string, variantName string, detail string, expectedType string, actualType string) *LlvmUnsupportedDiagnostic {
