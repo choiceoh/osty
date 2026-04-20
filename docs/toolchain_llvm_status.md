@@ -23,8 +23,11 @@ As of 2026-04-19:
 - the whole-toolchain merged LLVM probe still first-walls on the
   bootstrap-only `runtime.golegacy.astbridge` bridge
 - the native-only merged LLVM probe (with bootstrap-only files skipped)
-  now first-walls on `LLVM011 [fn_param_struct_type]` for `Char`
-  (`lspUtf16UnitsForChar`)
+  now first-walls on `LLVM012` (statement-form restriction); the previous
+  `LLVM011 [fn_param_struct_type]` Char wall at `lspUtf16UnitsForChar`
+  has been resolved by lowering `Char` to `i32` and `Byte` to `i8`
+  together with `Char.toInt()` / `Byte.toInt()` / `Int.toChar()` width
+  conversions and unsigned compare predicates
 - the current `osty check --airepair=false toolchain` surface is an
   aggregate native-checker summary of `3846 error(s)` with
   `20657 / 20749` assignment/return/call checks accepted
@@ -43,10 +46,10 @@ Current-tree observations from the code re-audit:
 |---|---|---|
 | CLI wiring | universal LLVM entry wedge | **resolved** — hello-world `osty gen --backend=llvm` exits 0 and writes `.ll` output |
 | Bootstrap bridge | merged whole-toolchain probe | first wall is still `LLVM002 runtime-ffi` on `runtime.golegacy.astbridge`; this is a bootstrap artifact, not yet a native backend parity claim |
-| Native backend surface | merged native-only probe | first wall is `LLVM011 [fn_param_struct_type]` on `Char` (`lspUtf16UnitsForChar`) after skipping 4 bootstrap-only files |
+| Native backend surface | merged native-only probe | first wall is now `LLVM012` (statement form) after skipping 4 bootstrap-only files; the earlier `LLVM011 [fn_param_struct_type]` Char wall is closed |
 | Checker boundary | `internal/check` / `internal/toolchain` | host still manages an external `osty-native-checker` artifact and falls back to the embedded selfhost checker when it cannot be prepared |
 | Toolchain package health | `osty check --airepair=false toolchain` | current CLI surface is still an aggregate `E0700` summary (`3846 error(s)`) rather than a clean self-compile pass |
-| Stdlib / string surface | `internal/llvmgen/stdlib_shim.go`, `expr.go` | a subset of `std.strings` is shimmed through runtime helpers, but `Char`/`Byte` iteration (`String.chars`, `String.bytes`) still blocks the pure native path |
+| Stdlib / string surface | `internal/llvmgen/stdlib_shim.go`, `expr.go` | a subset of `std.strings` is shimmed through runtime helpers. `Char` and `Byte` parameters/returns, literals, comparisons, and width conversions now lower; `String.chars` / `String.bytes` still block the pure native path because `List<Char>` / `List<Byte>` collection lowering is separate work |
 
 The MIR-direct emitter itself (Stages 3.1–3.11) covers a growing subset of the
 language shapes toolchain uses. The 2026-04-19 refresh narrows the story
@@ -77,9 +80,10 @@ Observed in the 2026-04-19 refresh:
 - `TestProbeWholeToolchainMerged` reported
   `LLVM002 runtime-ffi: ... runtime.golegacy.astbridge ...`
 - `TestProbeNativeToolchainMerged` skipped
-  `ast_lower.osty, ci.osty, docgen.osty, manifest_validation.osty` and then
-  first-walled on
-  `LLVM011 [fn_param_struct_type] ... type "Char" ... lspUtf16UnitsForChar`
+  `ast_lower.osty, ci.osty, docgen.osty, manifest_validation.osty`. After the
+  `Char`/`Byte` lowering landed the probe first-walls on `LLVM012`
+  (statement form), not the previous `LLVM011 [fn_param_struct_type]` on
+  `Char` at `lspUtf16UnitsForChar`
 - `/tmp/osty check --airepair=false toolchain` exited with the aggregate
   summary
   `native checker reported type errors: 3846 error(s)` plus
