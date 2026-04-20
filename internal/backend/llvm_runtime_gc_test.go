@@ -373,3 +373,93 @@ int main(void) {
 		t.Fatalf("runtime aggregate list harness stdout = %q, want %q", got, want)
 	}
 }
+
+func TestBundledRuntimeGlobalRootKeepsSlotPayloadAlive(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_gc_global_root_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_gc_global_root_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
+void osty_gc_global_root_register_v1(void *slot) __asm__(OSTY_GC_SYMBOL("osty.gc.global_root_register_v1"));
+void osty_gc_global_root_unregister_v1(void *slot) __asm__(OSTY_GC_SYMBOL("osty.gc.global_root_unregister_v1"));
+
+void osty_gc_debug_collect(void);
+int64_t osty_gc_debug_live_count(void);
+int64_t osty_gc_debug_global_root_count(void);
+
+static void *g_slot_a = NULL;
+static void *g_slot_b = NULL;
+
+int main(void) {
+    /* Baseline — no globals registered, objects reclaimed. */
+    void *a = osty_gc_alloc_v1(7, 32, "a");
+    (void)a;
+    osty_gc_debug_collect();
+    printf("%lld\n", (long long)osty_gc_debug_live_count());
+
+    /* Register a global slot and verify the payload survives collection. */
+    g_slot_a = osty_gc_alloc_v1(8, 32, "global_a");
+    osty_gc_global_root_register_v1(&g_slot_a);
+    printf("%lld\n", (long long)osty_gc_debug_global_root_count());
+    osty_gc_debug_collect();
+    printf("%lld\n", (long long)osty_gc_debug_live_count());
+
+    /* Reassign the slot — old payload should now be collectable, new one protected. */
+    g_slot_a = osty_gc_alloc_v1(9, 32, "global_a_replaced");
+    osty_gc_debug_collect();
+    printf("%lld\n", (long long)osty_gc_debug_live_count());
+
+    /* Second global slot — both survive. */
+    g_slot_b = osty_gc_alloc_v1(10, 32, "global_b");
+    osty_gc_global_root_register_v1(&g_slot_b);
+    printf("%lld\n", (long long)osty_gc_debug_global_root_count());
+    osty_gc_debug_collect();
+    printf("%lld\n", (long long)osty_gc_debug_live_count());
+
+    /* Unregister first slot — its payload becomes collectable. */
+    osty_gc_global_root_unregister_v1(&g_slot_a);
+    printf("%lld\n", (long long)osty_gc_debug_global_root_count());
+    osty_gc_debug_collect();
+    printf("%lld\n", (long long)osty_gc_debug_live_count());
+
+    /* Unregistering an unknown slot is a no-op. */
+    void *never_registered = NULL;
+    osty_gc_global_root_unregister_v1(&never_registered);
+    printf("%lld\n", (long long)osty_gc_debug_global_root_count());
+
+    /* Clearing the slot before collect also releases the payload. */
+    g_slot_b = NULL;
+    osty_gc_debug_collect();
+    printf("%lld\n", (long long)osty_gc_debug_live_count());
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	buildOutput, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runOutput, err := exec.Command(binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	if got, want := string(runOutput), "0\n1\n1\n1\n2\n2\n1\n1\n1\n0\n"; got != want {
+		t.Fatalf("runtime global root harness stdout = %q, want %q", got, want)
+	}
+}

@@ -1,3 +1,9 @@
+/* nanosleep (scheduler Phase 1A) requires POSIX.1-1993; without this macro
+ * glibc hides the declaration and strict clang (>=16) rejects the call. */
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 199309L
+#endif
+
 #include <stdbool.h>
 #include <stdint.h>
 #include <math.h>
@@ -93,6 +99,15 @@ static int64_t osty_gc_post_write_count = 0;
 static int64_t osty_gc_post_write_managed_count = 0;
 static int64_t osty_gc_load_count = 0;
 static int64_t osty_gc_load_managed_count = 0;
+
+/* Global root slots. Each entry is the address of a storage location that may
+ * hold a managed pointer (i.e. `void **`). At mark time the slot is
+ * dereferenced and the current payload marked — so reassigning the slot
+ * automatically re-roots the new value without explicit churn. This differs
+ * from `root_bind_v1` which pins a specific payload by refcount. */
+static void **osty_gc_global_root_slots = NULL;
+static int64_t osty_gc_global_root_count = 0;
+static int64_t osty_gc_global_root_cap = 0;
 
 void osty_gc_post_write_v1(void *owner, void *value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.post_write_v1"));
 void *osty_gc_load_v1(void *value) __asm__(OSTY_GC_SYMBOL("osty.gc.load_v1"));
@@ -385,6 +400,9 @@ static void osty_gc_collect_now_with_stack_roots(void *const *root_slots, int64_
     }
     for (i = 0; i < root_slot_count; i++) {
         osty_gc_mark_root_slot((void *)root_slots[i]);
+    }
+    for (i = 0; i < osty_gc_global_root_count; i++) {
+        osty_gc_mark_root_slot(osty_gc_global_root_slots[i]);
     }
     header = osty_gc_objects;
     while (header != NULL) {
@@ -1515,6 +1533,8 @@ void osty_gc_post_write_v1(void *owner, void *value, int64_t slot_kind) __asm__(
 void *osty_gc_load_v1(void *value) __asm__(OSTY_GC_SYMBOL("osty.gc.load_v1"));
 void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
 void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+void osty_gc_global_root_register_v1(void *slot) __asm__(OSTY_GC_SYMBOL("osty.gc.global_root_register_v1"));
+void osty_gc_global_root_unregister_v1(void *slot) __asm__(OSTY_GC_SYMBOL("osty.gc.global_root_unregister_v1"));
 void osty_gc_safepoint_v1(int64_t safepoint_id, void *const *root_slots, int64_t root_slot_count) __asm__(OSTY_GC_SYMBOL("osty.gc.safepoint_v1"));
 void *osty_rt_enum_alloc_ptr_v1(const char *site) __asm__(OSTY_GC_SYMBOL("osty.rt.enum_alloc_ptr_v1"));
 void *osty_rt_enum_alloc_scalar_v1(const char *site) __asm__(OSTY_GC_SYMBOL("osty.rt.enum_alloc_scalar_v1"));
@@ -1611,6 +1631,46 @@ void osty_gc_root_release_v1(void *root) {
     header->root_count -= 1;
 }
 
+static void osty_gc_global_roots_grow(void) {
+    int64_t new_cap;
+    void **new_slots;
+
+    new_cap = osty_gc_global_root_cap == 0 ? 8 : osty_gc_global_root_cap * 2;
+    new_slots = (void **)realloc(osty_gc_global_root_slots, (size_t)new_cap * sizeof(void *));
+    if (new_slots == NULL) {
+        osty_rt_abort("out of memory (global roots)");
+    }
+    osty_gc_global_root_slots = new_slots;
+    osty_gc_global_root_cap = new_cap;
+}
+
+void osty_gc_global_root_register_v1(void *slot) {
+    if (slot == NULL) {
+        return;
+    }
+    if (osty_gc_global_root_count == osty_gc_global_root_cap) {
+        osty_gc_global_roots_grow();
+    }
+    osty_gc_global_root_slots[osty_gc_global_root_count] = slot;
+    osty_gc_global_root_count += 1;
+}
+
+void osty_gc_global_root_unregister_v1(void *slot) {
+    int64_t i;
+
+    if (slot == NULL) {
+        return;
+    }
+    for (i = osty_gc_global_root_count - 1; i >= 0; i--) {
+        if (osty_gc_global_root_slots[i] == slot) {
+            memmove(&osty_gc_global_root_slots[i], &osty_gc_global_root_slots[i + 1],
+                    (size_t)(osty_gc_global_root_count - i - 1) * sizeof(void *));
+            osty_gc_global_root_count -= 1;
+            return;
+        }
+    }
+}
+
 void osty_gc_safepoint_v1(int64_t safepoint_id, void *const *root_slots, int64_t root_slot_count) {
     (void)safepoint_id;
     if (root_slot_count < 0) {
@@ -1660,6 +1720,10 @@ int64_t osty_gc_debug_load_count(void) {
 
 int64_t osty_gc_debug_load_managed_count(void) {
     return osty_gc_load_managed_count;
+}
+
+int64_t osty_gc_debug_global_root_count(void) {
+    return osty_gc_global_root_count;
 }
 
 /* ======================================================================
