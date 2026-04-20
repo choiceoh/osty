@@ -35,6 +35,11 @@ This is the implementation we are extending toward end-to-end native execution.
 
 It is not the active implementation path for new native runtime GC work. New implementation effort should land in the LLVM lowering/runtime path first, then selectively retire or archive overlapping model-only material.
 
+The per-feature gap between the model and the live runtime is tabulated in
+[`RUNTIME_GC_DELTA.md`](./RUNTIME_GC_DELTA.md). That document is a planning aid,
+not a spec — P1 items mark places where LLVM lowering already emits calls that
+the runtime treats as no-ops, so they have the highest leverage.
+
 ## Working rule
 
 When there is tension between the model and the live runtime path:
