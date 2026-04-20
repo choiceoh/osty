@@ -237,7 +237,16 @@ func (g *generator) render(defs []string) []byte {
 			if info.isBoxed {
 				payloadSlot = "ptr"
 			}
-			typeDefs = append(typeDefs, llvmStructTypeDef(info.name, []string{"i64", payloadSlot}))
+			slotCount := info.payloadCount
+			if slotCount < 1 {
+				slotCount = 1
+			}
+			fields := make([]string, 0, 1+slotCount)
+			fields = append(fields, "i64")
+			for s := 0; s < slotCount; s++ {
+				fields = append(fields, payloadSlot)
+			}
+			typeDefs = append(typeDefs, llvmStructTypeDef(info.name, fields))
 		}
 	}
 	if len(g.tupleTypes) != 0 {

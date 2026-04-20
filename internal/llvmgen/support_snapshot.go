@@ -2414,18 +2414,20 @@ func llvmEnumVariantHeaderDiagnostic(enumName string, variantName string, identO
 	if !identOk {
 		return llvmUnsupportedDiagnostic("name", fmt.Sprintf("enum %q variant name %q", enumName, variantName))
 	}
-	if payloadCount > 1 {
-		return llvmUnsupportedDiagnosticWith(
-			"LLVM011",
-			"type-system",
-			fmt.Sprintf("enum %q variant %q has %d payload fields; the LLVM backend only supports a single scalar or pointer payload per variant", enumName, variantName, payloadCount),
-			"flatten the variant to a single field (e.g. a tuple-wrapping struct passed by pointer) or adopt the arena + flat kind-discriminator pattern used by toolchain/core.osty",
-		)
-	}
 	if duplicate {
 		return llvmUnsupportedDiagnostic("source-layout", fmt.Sprintf("enum %q duplicate variant %q", enumName, variantName))
 	}
+	_ = payloadCount
 	return llvmUnsupportedDiagnosticWith("", "", "", "")
+}
+
+func llvmEnumBoxedMultiFieldDiagnostic(enumName string, variantName string, payloadCount int) *LlvmUnsupportedDiagnostic {
+	return llvmUnsupportedDiagnosticWith(
+		"LLVM011",
+		"type-system",
+		fmt.Sprintf("enum %q variant %q has %d payload fields with heterogeneous types across variants; boxed multi-field payloads are not supported yet", enumName, variantName, payloadCount),
+		"keep a single boxed payload per variant, or make all variant payloads share one scalar/pointer type so the inline multi-slot layout can be used",
+	)
 }
 
 func llvmEnumPayloadDiagnostic(enumName string, variantName string, detail string, expectedType string, actualType string) *LlvmUnsupportedDiagnostic {

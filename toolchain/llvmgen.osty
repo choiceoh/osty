@@ -2621,21 +2621,27 @@ pub fn llvmEnumVariantHeaderDiagnostic(
             "enum \"{enumName}\" variant name \"{variantName}\"",
         )
     }
-    if payloadCount > 1 {
-        return llvmUnsupportedDiagnosticWith(
-            "LLVM011",
-            "type-system",
-            "enum \"{enumName}\" variant \"{variantName}\" has {payloadCount} payload fields; the LLVM backend only supports a single scalar or pointer payload per variant",
-            "flatten the variant to a single field (e.g. a tuple-wrapping struct passed by pointer) or adopt the arena + flat kind-discriminator pattern used by toolchain/core.osty",
-        )
-    }
     if duplicate {
         return llvmUnsupportedDiagnostic(
             "source-layout",
             "enum \"{enumName}\" duplicate variant \"{variantName}\"",
         )
     }
+    let _ = payloadCount
     llvmUnsupportedDiagnosticWith("", "", "", "")
+}
+
+pub fn llvmEnumBoxedMultiFieldDiagnostic(
+    enumName: String,
+    variantName: String,
+    payloadCount: Int,
+) -> LlvmUnsupportedDiagnostic {
+    llvmUnsupportedDiagnosticWith(
+        "LLVM011",
+        "type-system",
+        "enum \"{enumName}\" variant \"{variantName}\" has {payloadCount} payload fields with heterogeneous types across variants; boxed multi-field payloads are not supported yet",
+        "keep a single boxed payload per variant, or make all variant payloads share one scalar/pointer type so the inline multi-slot layout can be used",
+    )
 }
 
 pub fn llvmEnumPayloadDiagnostic(
