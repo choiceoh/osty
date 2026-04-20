@@ -524,6 +524,8 @@ func intrinsicName(k IntrinsicKind) string {
 		return "set_len"
 	case IntrinsicSetToList:
 		return "set_to_list"
+	case IntrinsicSetRemove:
+		return "set_remove"
 	case IntrinsicStringLen:
 		return "string_len"
 	case IntrinsicStringIsEmpty:

@@ -54,6 +54,11 @@ typedef struct osty_rt_set {
     unsigned char *items;
 } osty_rt_set;
 
+typedef struct osty_rt_bytes {
+    unsigned char *data;
+    int64_t len;
+} osty_rt_bytes;
+
 #if defined(__APPLE__)
 #define OSTY_GC_SYMBOL(name) "_" name
 #else
@@ -66,6 +71,7 @@ enum {
     OSTY_GC_KIND_STRING = 1025,
     OSTY_GC_KIND_MAP = 1026,
     OSTY_GC_KIND_SET = 1027,
+    OSTY_GC_KIND_BYTES = 1028,
 };
 
 enum {
@@ -1508,6 +1514,29 @@ OSTY_RT_DEFINE_SET_KEY_OPS(i1, bool)
 OSTY_RT_DEFINE_SET_KEY_OPS(f64, double)
 OSTY_RT_DEFINE_SET_KEY_OPS(ptr, void *)
 OSTY_RT_DEFINE_SET_KEY_OPS(string, const char *)
+
+/*
+ * Bytes primitive ABI. Values flow as `osty_rt_bytes *` — an opaque
+ * pointer to a `{unsigned char *data; int64_t len}` struct. Only the
+ * length / emptiness queries are wired up at the LLVM layer right now;
+ * construction (literals, string.bytes(), etc.) is not yet surfaced,
+ * but the ABI is fixed so future call sites can link against it.
+ */
+int64_t osty_rt_bytes_len(void *raw_bytes) {
+    osty_rt_bytes *b = (osty_rt_bytes *)raw_bytes;
+    if (b == NULL) {
+        return 0;
+    }
+    return b->len;
+}
+
+bool osty_rt_bytes_is_empty(void *raw_bytes) {
+    osty_rt_bytes *b = (osty_rt_bytes *)raw_bytes;
+    if (b == NULL) {
+        return true;
+    }
+    return b->len == 0;
+}
 
 void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
 void osty_gc_pre_write_v1(void *owner, void *old_value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.pre_write_v1"));

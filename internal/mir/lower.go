@@ -3072,6 +3072,8 @@ func stdlibIntrinsicForMethod(receiverType Type, name string) IntrinsicKind {
 			return IntrinsicSetLen
 		case "toList":
 			return IntrinsicSetToList
+		case "remove":
+			return IntrinsicSetRemove
 		}
 	case "Option", "Maybe":
 		switch name {
