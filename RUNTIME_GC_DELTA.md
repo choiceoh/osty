@@ -61,18 +61,18 @@ a spec. New implementation effort should land in the LLVM lowering/runtime path;
 
 | #   | 기능                                              | 시뮬 | 실  | 델타                                       | P      | 참조                                |
 | --- | ------------------------------------------------- | ---- | --- | ------------------------------------------ | ------ | ----------------------------------- |
-| 3.1 | **`pre_write_v1` (SATB snapshot)**                | ✅   | 🟡 | 카운터 + collection 플래그만               | **P1** | `osty_runtime.c:1541-1557`          |
-| 3.2 | **`post_write_v1` (generational / incremental)**  | ✅   | 🟡 | 카운터만, edge 기록 없음                   | **P1** | `osty_runtime.c:1559-1578`          |
+| 3.1 | ~~`pre_write_v1` (SATB snapshot)~~                | ✅   | ✅  | `osty_gc_satb_log` — pre-write시 old_value 적재, 컬렉션 완료 후 clear. concurrent mark 구현 시 소비처 연결 | ✅ done | `osty_runtime.c:osty_gc_satb_log*`  |
+| 3.2 | ~~`post_write_v1` (generational / incremental)~~  | ✅   | ✅  | `osty_gc_remembered_edges` — dedup된 (owner, value) 로그. 세대 구현 시 region 필터로 소비 | ✅ done | `osty_runtime.c:osty_gc_remembered_edges*` |
 | 3.3 | `load_v1` (relocation-ready)                      | ✅   | 🟡 | identity return                            | P3     | `osty_runtime.c:1580-1586`          |
 | 3.4 | `mark_slot_v1` (aggregate trace)                  | ✅   | ✅  | —                                          | —      | `osty_runtime.c:1588-1590`          |
 | 3.5 | 카드 테이블 (dirty card bitmap)                   | ✅   | ❌  | generational 전제                          | P2     | `lib.osty:183-189`                  |
 | 3.6 | Remembered set (old→young 정확 집합)              | ✅   | ❌  | generational 전제                          | P2     | `lib.osty:689, 1093-1114`           |
-| 3.7 | **필드 / 원소별 store site 배리어 hookup**        | ✅   | 🟡 | lowering은 call emit, 런타임이 no-op       | **P1** | `lib.osty:485-517` · `generator.go` |
+| 3.7 | ~~필드 / 원소별 store site 배리어 hookup~~        | ✅   | ✅  | lowering의 기존 call들이 이제 실 log 생성. 동일 emit 경로, 의미론만 채워짐 | ✅ done | `osty_runtime.c:osty_gc_pre_write_v1` / `post_write_v1` |
 
-lowering에서는 struct 필드, tuple/enum payload, receiver 필드, array/list/map/set
-원소, runtime frame, async frame 모든 store site에서 배리어를 부르도록 이미
-emit한다 (3.7). 런타임이 실동작을 붙이지 않아 3.1-3.2는 사실상 기장 역할만
-한다 — 이 격차가 P1의 본질.
+§3.1 / §3.2 / §3.7은 lowering은 그대로 두고 런타임 쪽에 실 log 구조를 붙여
+완료됐다 (SATB log + dedup된 remembered edge set). 현재 STW mark-sweep에선
+소비자가 없어 passive recording이지만, §5 (세대 minor GC)와 §4.3 (incremental
+/ concurrent marking) 랜딩 시 즉시 입력으로 사용된다.
 
 ## 4. 마킹
 
@@ -144,17 +144,17 @@ old→young edge를 놓친다.
 | 10.4 | 멀티스레드 (thread-local state)                                | ✅   | ❌  | 단일 스레드                             | P3 | `lib.osty:276-286`            |
 | 10.5 | Stress 모드 (every-safepoint GC)                               | ❌   | ✅  | 실만 가진 장점 — 시뮬 역이식 검토       | —  | `osty_runtime.c:410-424`      |
 
-## 권장 시작점 (P1 요약)
+## P1 진행 상태
 
-1. **실 write barrier (§3.1, §3.2, §3.7)**. lowering은 이미 모든 store site에서
-   pre/post-write를 부르고 있는데 런타임이 카운터만 증가시킨다. SATB log 또는
-   remembered-set buffer 중 하나를 선택해 실제 edge를 기록하기 시작 — 이게
-   §5 (세대)와 §4.3 (incremental)의 공통 전제.
-2. **Global / static root 테이블 (§2.3)**. stdlib / prelude의 전역 값이 늘어나면
-   바로 막힌다. 헤더 구조 + 등록 API + safepoint의 루트 스캔 순회에 합류.
+- ✅ **§2.3 Global / static root 테이블** — slot-address 기반 등록, safepoint
+  mark와 합류. 테스트 `TestBundledRuntimeGlobalRootKeepsSlotPayloadAlive`.
+- ✅ **§3.1 / §3.2 / §3.7 실 write barrier** — `osty_gc_satb_log` +
+  `osty_gc_remembered_edges`로 edge 실 기록. 컬렉션 완료 시 clear. 테스트
+  `TestBundledRuntimeWriteBarriersLogEdges`. 현재 STW에선 passive recording,
+  §5 (세대) / §4.3 (incremental) 때 소비.
 
-위 두 개가 끝나면 §5 (세대) → §4.3 (incremental) → §6.2-6.3 (compaction, stable
-ID §1.7 포함) 순으로 열린다.
+P1 완료. 다음 단계는 §5 (세대) → §4.3 (incremental) → §6.2-6.3 (compaction,
+§1.7 stable ID 포함) 순으로 열린다.
 
 ## 유지 규칙
 

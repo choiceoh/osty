@@ -109,6 +109,43 @@ static void **osty_gc_global_root_slots = NULL;
 static int64_t osty_gc_global_root_count = 0;
 static int64_t osty_gc_global_root_cap = 0;
 
+/* Write-barrier edge logs (RUNTIME_GC_DELTA §3.1 / §3.2).
+ *
+ * Under the current STW mark-sweep path these buffers are recorded but not
+ * yet consumed during collection — the marker still re-traces from roots on
+ * every cycle. They become active inputs when generational minor collection
+ * (§5) and incremental / concurrent marking (§4.3) land. Keeping the
+ * recording live now means the lowering's already-emitted
+ * `pre_write_v1` / `post_write_v1` calls stop being no-ops and start
+ * producing observable state that tests can assert on.
+ *
+ * `osty_gc_satb_log`: payloads captured by `pre_write_v1` (the value that
+ * WAS in the slot before the store). SATB is only required once marking
+ * becomes concurrent, at which point the log preserves the initial
+ * reachability snapshot. Recorded now, consumed later.
+ *
+ * `osty_gc_remembered_edges`: (owner_payload, value_payload) pairs captured
+ * by `post_write_v1`. Deduplicated via linear scan — fine while edges are
+ * sparse. Future generational code will filter by owner/value region.
+ *
+ * Both logs are cleared at the end of every full collection (the post-sweep
+ * heap state is a fresh baseline).
+ */
+static void **osty_gc_satb_log = NULL;
+static int64_t osty_gc_satb_log_count = 0;
+static int64_t osty_gc_satb_log_cap = 0;
+
+typedef struct osty_gc_remembered_edge {
+    void *owner;
+    void *value;
+} osty_gc_remembered_edge;
+
+static osty_gc_remembered_edge *osty_gc_remembered_edges = NULL;
+static int64_t osty_gc_remembered_edge_count = 0;
+static int64_t osty_gc_remembered_edge_cap = 0;
+
+static void osty_gc_barrier_logs_clear(void);
+
 void osty_gc_post_write_v1(void *owner, void *value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.post_write_v1"));
 void *osty_gc_load_v1(void *value) __asm__(OSTY_GC_SYMBOL("osty.gc.load_v1"));
 void osty_gc_mark_slot_v1(void *slot_addr) __asm__(OSTY_GC_SYMBOL("osty.gc.mark_slot_v1"));
@@ -419,6 +456,7 @@ static void osty_gc_collect_now_with_stack_roots(void *const *root_slots, int64_
     osty_gc_collection_count += 1;
     osty_gc_allocated_since_collect = 0;
     osty_gc_collection_requested = false;
+    osty_gc_barrier_logs_clear();
 }
 
 static void osty_gc_collect_now(void) {
@@ -1558,6 +1596,67 @@ void *osty_rt_enum_alloc_scalar_v1(const char *site) {
     return osty_gc_allocate_managed(8, OSTY_GC_KIND_GENERIC, site, NULL, NULL);
 }
 
+static void osty_gc_satb_log_grow(void) {
+    int64_t new_cap;
+    void **new_buf;
+
+    new_cap = osty_gc_satb_log_cap == 0 ? 16 : osty_gc_satb_log_cap * 2;
+    new_buf = (void **)realloc(osty_gc_satb_log, (size_t)new_cap * sizeof(void *));
+    if (new_buf == NULL) {
+        osty_rt_abort("out of memory (SATB log)");
+    }
+    osty_gc_satb_log = new_buf;
+    osty_gc_satb_log_cap = new_cap;
+}
+
+static void osty_gc_satb_log_append(void *payload) {
+    if (osty_gc_satb_log_count == osty_gc_satb_log_cap) {
+        osty_gc_satb_log_grow();
+    }
+    osty_gc_satb_log[osty_gc_satb_log_count] = payload;
+    osty_gc_satb_log_count += 1;
+}
+
+static void osty_gc_remembered_edges_grow(void) {
+    int64_t new_cap;
+    osty_gc_remembered_edge *new_buf;
+
+    new_cap = osty_gc_remembered_edge_cap == 0 ? 16 : osty_gc_remembered_edge_cap * 2;
+    new_buf = (osty_gc_remembered_edge *)realloc(osty_gc_remembered_edges, (size_t)new_cap * sizeof(osty_gc_remembered_edge));
+    if (new_buf == NULL) {
+        osty_rt_abort("out of memory (remembered edges)");
+    }
+    osty_gc_remembered_edges = new_buf;
+    osty_gc_remembered_edge_cap = new_cap;
+}
+
+static bool osty_gc_remembered_edges_contains(void *owner, void *value) {
+    int64_t i;
+    for (i = 0; i < osty_gc_remembered_edge_count; i++) {
+        if (osty_gc_remembered_edges[i].owner == owner && osty_gc_remembered_edges[i].value == value) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void osty_gc_remembered_edges_append(void *owner, void *value) {
+    if (osty_gc_remembered_edges_contains(owner, value)) {
+        return;
+    }
+    if (osty_gc_remembered_edge_count == osty_gc_remembered_edge_cap) {
+        osty_gc_remembered_edges_grow();
+    }
+    osty_gc_remembered_edges[osty_gc_remembered_edge_count].owner = owner;
+    osty_gc_remembered_edges[osty_gc_remembered_edge_count].value = value;
+    osty_gc_remembered_edge_count += 1;
+}
+
+static void osty_gc_barrier_logs_clear(void) {
+    osty_gc_satb_log_count = 0;
+    osty_gc_remembered_edge_count = 0;
+}
+
 void osty_gc_pre_write_v1(void *owner, void *old_value, int64_t slot_kind) {
     osty_gc_header *owner_header;
 
@@ -1570,6 +1669,7 @@ void osty_gc_pre_write_v1(void *owner, void *old_value, int64_t slot_kind) {
         return;
     }
     osty_gc_pre_write_managed_count += 1;
+    osty_gc_satb_log_append(old_value);
     owner_header = osty_gc_find_header(owner);
     if (owner_header != NULL && owner_header->root_count > 0) {
         osty_gc_collection_requested = true;
@@ -1592,6 +1692,7 @@ void osty_gc_post_write_v1(void *owner, void *value, int64_t slot_kind) {
         return;
     }
     osty_gc_post_write_managed_count += 1;
+    osty_gc_remembered_edges_append(owner, value);
     if (owner_header->root_count > 0) {
         osty_gc_collection_requested = true;
     }
@@ -1724,6 +1825,28 @@ int64_t osty_gc_debug_load_managed_count(void) {
 
 int64_t osty_gc_debug_global_root_count(void) {
     return osty_gc_global_root_count;
+}
+
+int64_t osty_gc_debug_satb_log_count(void) {
+    return osty_gc_satb_log_count;
+}
+
+int64_t osty_gc_debug_remembered_edge_count(void) {
+    return osty_gc_remembered_edge_count;
+}
+
+int osty_gc_debug_remembered_edge_contains(void *owner, void *value) {
+    return osty_gc_remembered_edges_contains(owner, value) ? 1 : 0;
+}
+
+int osty_gc_debug_satb_log_contains(void *payload) {
+    int64_t i;
+    for (i = 0; i < osty_gc_satb_log_count; i++) {
+        if (osty_gc_satb_log[i] == payload) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 /* ======================================================================

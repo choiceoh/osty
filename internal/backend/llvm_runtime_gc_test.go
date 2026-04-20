@@ -463,3 +463,95 @@ int main(void) {
 		t.Fatalf("runtime global root harness stdout = %q, want %q", got, want)
 	}
 }
+
+func TestBundledRuntimeWriteBarriersLogEdges(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_gc_barrier_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_gc_barrier_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
+void osty_gc_pre_write_v1(void *owner, void *old_value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.pre_write_v1"));
+void osty_gc_post_write_v1(void *owner, void *value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.post_write_v1"));
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+
+void osty_gc_debug_collect(void);
+int64_t osty_gc_debug_satb_log_count(void);
+int64_t osty_gc_debug_remembered_edge_count(void);
+int osty_gc_debug_satb_log_contains(void *payload);
+int osty_gc_debug_remembered_edge_contains(void *owner, void *value);
+
+int main(void) {
+    void *owner = osty_gc_alloc_v1(7, 32, "owner");
+    void *a = osty_gc_alloc_v1(8, 16, "a");
+    void *b = osty_gc_alloc_v1(9, 16, "b");
+    osty_gc_root_bind_v1(owner);
+
+    /* Baseline — no writes yet. */
+    printf("%lld\n", (long long)osty_gc_debug_satb_log_count());
+    printf("%lld\n", (long long)osty_gc_debug_remembered_edge_count());
+
+    /* Initial store: slot was NULL, so SATB is empty; post-write records (owner, a). */
+    osty_gc_pre_write_v1(owner, NULL, 0);
+    osty_gc_post_write_v1(owner, a, 0);
+    printf("%lld\n", (long long)osty_gc_debug_satb_log_count());
+    printf("%lld\n", (long long)osty_gc_debug_remembered_edge_count());
+    printf("%d\n", osty_gc_debug_remembered_edge_contains(owner, a));
+
+    /* Overwrite a -> b: SATB captures old value a; post-write records (owner, b). */
+    osty_gc_pre_write_v1(owner, a, 0);
+    osty_gc_post_write_v1(owner, b, 0);
+    printf("%lld\n", (long long)osty_gc_debug_satb_log_count());
+    printf("%d\n", osty_gc_debug_satb_log_contains(a));
+    printf("%lld\n", (long long)osty_gc_debug_remembered_edge_count());
+    printf("%d\n", osty_gc_debug_remembered_edge_contains(owner, b));
+
+    /* Duplicate edge — should not grow the remembered set. */
+    osty_gc_post_write_v1(owner, b, 0);
+    printf("%lld\n", (long long)osty_gc_debug_remembered_edge_count());
+
+    /* Unmanaged values are ignored by both logs. */
+    int stack_int = 0;
+    osty_gc_pre_write_v1(owner, &stack_int, 0);
+    osty_gc_post_write_v1(owner, &stack_int, 0);
+    printf("%lld\n", (long long)osty_gc_debug_satb_log_count());
+    printf("%lld\n", (long long)osty_gc_debug_remembered_edge_count());
+
+    /* Collection clears both logs. */
+    osty_gc_debug_collect();
+    printf("%lld\n", (long long)osty_gc_debug_satb_log_count());
+    printf("%lld\n", (long long)osty_gc_debug_remembered_edge_count());
+
+    osty_gc_root_release_v1(owner);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	buildOutput, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runOutput, err := exec.Command(binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	if got, want := string(runOutput), "0\n0\n0\n1\n1\n1\n1\n2\n1\n2\n1\n2\n0\n0\n"; got != want {
+		t.Fatalf("runtime write-barrier harness stdout = %q, want %q", got, want)
+	}
+}
