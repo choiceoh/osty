@@ -1164,6 +1164,34 @@ func Successors(t Terminator) []BlockID {
 	}
 }
 
+// Predecessors builds a predecessor index: block → list of block IDs
+// whose terminator jumps to it. Each successor edge discovered via
+// Successors contributes one entry; SwitchIntTerm with duplicate case
+// targets produces duplicates in the predecessor list (so the caller
+// can distinguish redundant edges from distinct ones if they care).
+//
+// Returns an empty map when fn has no blocks. The map only contains
+// keys for blocks that actually have predecessors; callers iterating
+// over all blocks should handle the zero-predecessor case themselves.
+func Predecessors(fn *Function) map[BlockID][]BlockID {
+	preds := map[BlockID][]BlockID{}
+	if fn == nil {
+		return preds
+	}
+	for _, bb := range fn.Blocks {
+		if bb == nil {
+			continue
+		}
+		for _, succ := range Successors(bb.Term) {
+			if int(succ) < 0 || int(succ) >= len(fn.Blocks) {
+				continue
+			}
+			preds[succ] = append(preds[succ], bb.ID)
+		}
+	}
+	return preds
+}
+
 // ReachableBlocks returns the set of block IDs reachable from fn.Entry
 // by walking terminator successors. Blocks not present in the returned
 // map are orphans — either the lowerer dropped instructions after a

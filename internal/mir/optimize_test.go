@@ -427,6 +427,189 @@ func TestFoldConstantSwitchIntFallsThroughToDefault(t *testing.T) {
 	}
 }
 
+// ==== cross-block const propagation ====
+
+// A const defined in the entry block and referenced in a successor
+// block must propagate through the Goto edge.
+func TestCrossBlockConstPropThroughGoto(t *testing.T) {
+	fn, entry := newTestFunction("across", TInt)
+	x := fn.NewLocal("x", TInt, false, Span{})
+	// entry: _x = const 42; goto body
+	entry.Instrs = append(entry.Instrs, &AssignInstr{
+		Dest: Place{Local: x},
+		Src:  &UseRV{Op: &ConstOp{Const: &IntConst{Value: 42, T: TInt}, T: TInt}},
+	})
+	body := fn.NewBlock(Span{})
+	entry.SetTerminator(&GotoTerm{Target: body})
+	bb := fn.Block(body)
+	// body: _return = _x + 1; return
+	bb.Instrs = append(bb.Instrs, &AssignInstr{
+		Dest: Place{Local: fn.ReturnLocal},
+		Src: &BinaryRV{
+			Op:    BinAdd,
+			Left:  &CopyOp{Place: Place{Local: x}, T: TInt},
+			Right: &ConstOp{Const: &IntConst{Value: 1, T: TInt}, T: TInt},
+			T:     TInt,
+		},
+	})
+	bb.SetTerminator(&ReturnTerm{})
+
+	if !copyPropagateFn(fn) {
+		t.Fatalf("expected cross-block prop to report change")
+	}
+	bin := bb.Instrs[0].(*AssignInstr).Src.(*BinaryRV)
+	if _, ok := bin.Left.(*ConstOp); !ok {
+		t.Fatalf("expected cross-block const on successor's BinaryRV.Left, got %T", bin.Left)
+	}
+}
+
+// When the same local is assigned distinct constants in two
+// predecessors of a join block, the cross-block analysis must *not*
+// propagate — the join sees mixed values and the binding drops.
+func TestCrossBlockConstPropDropsOnMismatch(t *testing.T) {
+	fn, entry := newTestFunction("mismatch", TInt)
+	x := fn.NewLocal("x", TInt, false, Span{})
+	c := fn.NewLocal("c", TBool, true, Span{})
+	// entry: (assume _c is set externally; don't assign it so the Branch
+	// cond isn't const-folded away.) branch _c → [thenBB, elseBB]
+	thenBB := fn.NewBlock(Span{})
+	elseBB := fn.NewBlock(Span{})
+	joinBB := fn.NewBlock(Span{})
+	entry.SetTerminator(&BranchTerm{
+		Cond: &CopyOp{Place: Place{Local: c}, T: TBool},
+		Then: thenBB,
+		Else: elseBB,
+	})
+	// thenBB: _x = const 5; goto join
+	fn.Block(thenBB).Instrs = append(fn.Block(thenBB).Instrs, &AssignInstr{
+		Dest: Place{Local: x},
+		Src:  &UseRV{Op: &ConstOp{Const: &IntConst{Value: 5, T: TInt}, T: TInt}},
+	})
+	fn.Block(thenBB).SetTerminator(&GotoTerm{Target: joinBB})
+	// elseBB: _x = const 7; goto join
+	fn.Block(elseBB).Instrs = append(fn.Block(elseBB).Instrs, &AssignInstr{
+		Dest: Place{Local: x},
+		Src:  &UseRV{Op: &ConstOp{Const: &IntConst{Value: 7, T: TInt}, T: TInt}},
+	})
+	fn.Block(elseBB).SetTerminator(&GotoTerm{Target: joinBB})
+	// joinBB: _return = _x; return
+	fn.Block(joinBB).Instrs = append(fn.Block(joinBB).Instrs, &AssignInstr{
+		Dest: Place{Local: fn.ReturnLocal},
+		Src:  &UseRV{Op: &CopyOp{Place: Place{Local: x}, T: TInt}},
+	})
+	fn.Block(joinBB).SetTerminator(&ReturnTerm{})
+
+	copyPropagateFn(fn)
+	// join's read of _x must NOT have been substituted with a const.
+	joinRV := fn.Block(joinBB).Instrs[0].(*AssignInstr).Src.(*UseRV)
+	if _, ok := joinRV.Op.(*ConstOp); ok {
+		t.Fatalf("join block must not propagate a const across mismatched predecessors: got %T", joinRV.Op)
+	}
+}
+
+// Matching constants from both arms of a branch do survive the meet —
+// the join block sees the same ConstOp on both entries.
+func TestCrossBlockConstPropSurvivesMatchingPredecessors(t *testing.T) {
+	fn, entry := newTestFunction("agree", TInt)
+	x := fn.NewLocal("x", TInt, false, Span{})
+	c := fn.NewLocal("c", TBool, true, Span{})
+	thenBB := fn.NewBlock(Span{})
+	elseBB := fn.NewBlock(Span{})
+	joinBB := fn.NewBlock(Span{})
+	entry.SetTerminator(&BranchTerm{
+		Cond: &CopyOp{Place: Place{Local: c}, T: TBool},
+		Then: thenBB,
+		Else: elseBB,
+	})
+	for _, bid := range []BlockID{thenBB, elseBB} {
+		fn.Block(bid).Instrs = append(fn.Block(bid).Instrs, &AssignInstr{
+			Dest: Place{Local: x},
+			Src:  &UseRV{Op: &ConstOp{Const: &IntConst{Value: 9, T: TInt}, T: TInt}},
+		})
+		fn.Block(bid).SetTerminator(&GotoTerm{Target: joinBB})
+	}
+	fn.Block(joinBB).Instrs = append(fn.Block(joinBB).Instrs, &AssignInstr{
+		Dest: Place{Local: fn.ReturnLocal},
+		Src:  &UseRV{Op: &CopyOp{Place: Place{Local: x}, T: TInt}},
+	})
+	fn.Block(joinBB).SetTerminator(&ReturnTerm{})
+
+	copyPropagateFn(fn)
+	joinRV := fn.Block(joinBB).Instrs[0].(*AssignInstr).Src.(*UseRV)
+	co, ok := joinRV.Op.(*ConstOp)
+	if !ok {
+		t.Fatalf("expected matching predecessors to propagate; got %T", joinRV.Op)
+	}
+	if ic, ok := co.Const.(*IntConst); !ok || ic.Value != 9 {
+		t.Fatalf("expected const 9 on join read, got %+v", co.Const)
+	}
+}
+
+// ==== dead call-dest + storage marker cleanup ====
+
+func TestDeadCallDestNiledWhenResultUnused(t *testing.T) {
+	fn, bb := newTestFunction("callvoid", TUnit)
+	tmp := fn.NewLocal("tmp", TInt, false, Span{})
+	// _tmp = call foo()  — but _tmp is never read. Pass should nil the Dest.
+	dest := Place{Local: tmp}
+	bb.Instrs = append(bb.Instrs, &CallInstr{
+		Dest:   &dest,
+		Callee: &FnRef{Symbol: "foo"},
+	})
+	if !deadAssignElim(fn) {
+		t.Fatalf("expected dead-call-dest cleanup to report change")
+	}
+	if bb.Instrs[0].(*CallInstr).Dest != nil {
+		t.Fatalf("call Dest should have been nilled")
+	}
+}
+
+// Storage{Live,Dead} on a fully dead local should be dropped.
+func TestDeadStorageMarkersDropped(t *testing.T) {
+	fn, bb := newTestFunction("markers", TUnit)
+	dead := fn.NewLocal("dead", TInt, false, Span{})
+	bb.Instrs = append(bb.Instrs,
+		&StorageLiveInstr{Local: dead},
+		&AssignInstr{
+			Dest: Place{Local: dead},
+			Src:  &UseRV{Op: &ConstOp{Const: &IntConst{Value: 0, T: TInt}, T: TInt}},
+		},
+		&StorageDeadInstr{Local: dead},
+	)
+	deadAssignElim(fn)
+	// All three should be gone: assign + both markers.
+	if len(bb.Instrs) != 0 {
+		t.Fatalf("expected all instrs dropped, got %d: %+v", len(bb.Instrs), bb.Instrs)
+	}
+}
+
+// Storage markers on a *read* local must be preserved.
+func TestStorageMarkersKeptForLiveLocal(t *testing.T) {
+	fn, bb := newTestFunction("alive", TInt)
+	v := fn.NewLocal("v", TInt, false, Span{})
+	bb.Instrs = append(bb.Instrs,
+		&StorageLiveInstr{Local: v},
+		&AssignInstr{
+			Dest: Place{Local: v},
+			Src:  &UseRV{Op: &ConstOp{Const: &IntConst{Value: 1, T: TInt}, T: TInt}},
+		},
+		&AssignInstr{
+			Dest: Place{Local: fn.ReturnLocal},
+			Src:  &UseRV{Op: &CopyOp{Place: Place{Local: v}, T: TInt}},
+		},
+	)
+	deadAssignElim(fn)
+	haveLive := false
+	for _, i := range bb.Instrs {
+		if _, ok := i.(*StorageLiveInstr); ok {
+			haveLive = true
+		}
+	}
+	if !haveLive {
+		t.Fatalf("StorageLive on live local must be kept; got %+v", bb.Instrs)
+	}
+}
+
 func TestOptimizeIsIdempotent(t *testing.T) {
 	fn, bb := newTestFunction("idem", TInt)
 	tmp := fn.NewLocal("tmp", TInt, false, Span{})
