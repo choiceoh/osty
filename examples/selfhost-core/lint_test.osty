@@ -27,6 +27,7 @@ fn testSelfLintFindsCoreRules() {
 fn testSelfLintLeavesCleanSnippetAlone() {
     let report = selfLintSource(
         r"""
+            /// A user record.
             pub struct User { pub name: String }
             enum Color { Red, Green }
 
@@ -39,6 +40,112 @@ fn testSelfLintLeavesCleanSnippetAlone() {
 
     testing.assertEq(report.parseErrors, 0)
     testing.assertEq(selfLintDiagnosticCount(report), 0)
+}
+
+fn testSelfLintFindsMissingDocOnPubDecls() {
+    let report = selfLintSource(
+        r"""
+            pub struct User { pub name: String }
+
+            pub enum Color { Red, Green }
+
+            pub interface Reader {}
+
+            pub type UserId = Int
+
+            pub fn greet(u: User) -> String {
+                u.name
+            }
+
+            fn internal() -> Int { 1 }
+            """,
+    )
+
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0070"), 5)
+}
+
+fn testSelfLintSkipsMissingDocWhenDocCommentPresent() {
+    let report = selfLintSource(
+        r"""
+            /// A user.
+            pub struct User { pub name: String }
+
+            /// A colour.
+            pub enum Color { Red, Green }
+
+            /// A reader.
+            pub interface Reader {}
+
+            /// Stable identifier.
+            pub type UserId = Int
+
+            /// Greet the user.
+            pub fn greet(u: User) -> String {
+                u.name
+            }
+            """,
+    )
+
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0070"), 0)
+}
+
+fn testSelfLintFindsMissingDocOnPubMembers() {
+    let report = selfLintSource(
+        r"""
+            /// A user.
+            pub struct User {
+                pub name: String,
+
+                pub fn greet(self) -> String { self.name }
+
+                fn internal(self) -> Int { 1 }
+            }
+
+            /// A colour.
+            pub enum Color {
+                Red,
+                Green,
+
+                pub fn label(self) -> String { "c" }
+            }
+            """,
+    )
+
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0070"), 2)
+}
+
+fn testSelfLintSkipsMissingDocOnNonPubDecls() {
+    let report = selfLintSource(
+        r"""
+            struct Internal { value: Int }
+
+            enum InternalColor { Red, Green }
+
+            fn helper() -> Int { 1 }
+            """,
+    )
+
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0070"), 0)
+}
+
+fn testSelfLintHonorsAnnotationsBeforePubDecl() {
+    let report = selfLintSource(
+        r"""
+            /// Documented annotated function.
+            #[deprecated(since = "0.5")]
+            pub fn oldApi() -> Int { 1 }
+
+            #[deprecated(since = "0.5")]
+            pub fn undocumented() -> Int { 1 }
+            """,
+    )
+
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0070"), 1)
 }
 
 fn testSelfLintFindsSimplifiableSelfOperations() {

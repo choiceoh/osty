@@ -131,8 +131,25 @@ func (g *generator) emitInterfaceDowncastCall(call *ast.CallExpr) (value, bool, 
 		return value{}, true, unsupportedf("call",
 			"downcast target must be a single-segment named type")
 	}
-	vtableSym, ok := g.lookupVtableSymForImpl(targetName)
+	// Prefer the receiver's exact interface when we can recover it from
+	// the static source type — that catches the spec-relevant class of
+	// mistake where `T` implements a *different* interface than the
+	// receiver (e.g. `Printable.downcast::<FsError>()` when FsError
+	// only implements Error). Falls through to the any-interface match
+	// when the receiver's source type isn't available (common in the
+	// legacy-bridge path where the receiver is a synthesized AST node
+	// with no attached source type).
+	ifaceName := ""
+	if src, ok := g.staticExprSourceType(fx.X); ok {
+		ifaceName = namedTypeSingleSegment(src)
+	}
+	vtableSym, ok := g.lookupVtableSymForDowncast(targetName, ifaceName)
 	if !ok {
+		if ifaceName != "" {
+			return value{}, true, unsupportedf("call",
+				"downcast target %q does not implement interface %q",
+				targetName, ifaceName)
+		}
 		return value{}, true, unsupportedf("call",
 			"downcast target %q does not implement any registered interface", targetName)
 	}
@@ -150,10 +167,10 @@ func (g *generator) emitInterfaceDowncastCall(call *ast.CallExpr) (value, bool, 
 // lookupVtableSymForImpl returns the vtable symbol emitted for the
 // named impl across any registered interface. The generator emits
 // one vtable per (impl, iface) pair; when an impl satisfies multiple
-// interfaces the first hit wins. downcast::<T>() is coarser than the
-// method-dispatch path: it compares the runtime vtable against the
-// target impl's vtable without re-selecting by interface, which is
-// safe because the spec pins downcast to the Error interface.
+// interfaces the first hit wins. This is the coarse lookup used when
+// the downcast receiver's interface can't be recovered statically —
+// callers that do know the interface name should prefer
+// lookupVtableSymForDowncast for stronger mismatch detection.
 func (g *generator) lookupVtableSymForImpl(implName string) (string, bool) {
 	for _, iface := range g.interfacesByName {
 		if iface == nil {
@@ -163,6 +180,37 @@ func (g *generator) lookupVtableSymForImpl(implName string) (string, bool) {
 			if impl.implName == implName {
 				return impl.vtableSym, true
 			}
+		}
+	}
+	return "", false
+}
+
+// lookupVtableSymForDowncast resolves the (impl, iface) vtable symbol
+// that should back `recv.downcast::<T>()` where `recv` is statically
+// known to satisfy `ifaceName`. When `ifaceName` is empty (source
+// type unavailable) the lookup falls back to the any-interface match,
+// preserving the behavior the backend shipped with when the checker
+// still blocked downcast end-to-end.
+//
+// The receiver-interface-aware form catches the mistake of
+// downcasting to a type that implements an *unrelated* interface:
+// e.g. `printable.downcast::<FsError>()` where FsError only impls
+// Error, not Printable. Without this check the lowering would still
+// emit a vtable compare, but against FsError's Error vtable — a
+// pointer that never matches the runtime Printable vtable embedded
+// in `printable`, so the result is always None. Raising an error at
+// compile time surfaces the bug at its source instead.
+func (g *generator) lookupVtableSymForDowncast(implName, ifaceName string) (string, bool) {
+	if ifaceName == "" {
+		return g.lookupVtableSymForImpl(implName)
+	}
+	iface := g.interfacesByName[ifaceName]
+	if iface == nil {
+		return "", false
+	}
+	for _, impl := range iface.impls {
+		if impl.implName == implName {
+			return impl.vtableSym, true
 		}
 	}
 	return "", false

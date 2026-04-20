@@ -1,8 +1,15 @@
 package llvmgen
 
 import (
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/osty/osty/internal/check"
+	"github.com/osty/osty/internal/ir"
+	"github.com/osty/osty/internal/mir"
+	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/stdlib"
 )
 
 // The `recv.downcast::<T>()` AST recognizer is wired into emitCall
@@ -95,7 +102,136 @@ fn probe(p: Printable) -> Unrelated? {
 	if err == nil {
 		t.Fatal("expected error for downcast target that implements no interface")
 	}
-	if !strings.Contains(err.Error(), "does not implement any registered interface") {
+	// Either the coarse ("any registered interface") or the precise
+	// ("does not implement interface %q") form is acceptable — the
+	// precise form fires when the receiver's source type carries the
+	// interface name, the coarse form when it doesn't.
+	msg := err.Error()
+	if !strings.Contains(msg, "does not implement any registered interface") &&
+		!strings.Contains(msg, "does not implement interface") {
 		t.Fatalf("error does not mention the missing-impl reason: %v", err)
+	}
+}
+
+// When the target type implements an *unrelated* interface — not the
+// one the receiver is statically typed at — the backend rejects the
+// downcast at compile time rather than emitting a vtable compare that
+// would always produce None at runtime.
+func TestInterfaceDowncastTargetMustImplementReceiverInterface(t *testing.T) {
+	file := parseLLVMGenFile(t, `interface Printable {
+    fn show(self) -> String
+}
+
+interface Tagged {
+    fn tag(self) -> Int
+}
+
+struct Note {
+    pub msg: String,
+
+    pub fn show(self) -> String {
+        self.msg
+    }
+}
+
+struct Marker {
+    pub n: Int,
+
+    pub fn tag(self) -> Int {
+        self.n
+    }
+}
+
+fn probe(p: Printable) -> Marker? {
+    p.downcast::<Marker>()
+}
+`)
+
+	_, err := generateFromAST(file, Options{
+		PackageName: "core",
+		SourcePath:  "/tmp/iface_downcast_wrong_iface.osty",
+	})
+	if err == nil {
+		t.Fatal("expected error when target implements a different interface than the receiver")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "does not implement interface") {
+		t.Fatalf("error does not mention the specific-interface mismatch: %v", err)
+	}
+	if !strings.Contains(msg, "Printable") {
+		t.Fatalf("error does not name the receiver's interface %q: %v", "Printable", err)
+	}
+}
+
+// End-to-end: full compilation pipeline (parser → resolve → check →
+// ir.Lower → mir.Lower → GenerateFromMIR → fall back to
+// GenerateModule on ErrUnsupported) exercises the real `osty build`
+// route. Without this test the backend-only `generateFromAST` tests
+// don't prove anything about whether a user writing
+// `recv.downcast::<T>()` in a `.osty` source file actually reaches
+// the vtable-compare lowering.
+func TestInterfaceDowncastFullPipeline(t *testing.T) {
+	src := `interface Printable {
+    fn show(self) -> String
+}
+
+struct Note {
+    pub msg: String,
+
+    pub fn show(self) -> String {
+        self.msg
+    }
+}
+
+fn probe(p: Printable) -> Note? {
+    p.downcast::<Note>()
+}
+
+fn main() {}
+`
+	file := parseLLVMGenFile(t, src)
+	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
+	reg := stdlib.LoadCached()
+	chk := check.File(file, res, check.Opts{
+		UseGolegacy:   true,
+		Stdlib:        reg,
+		Primitives:    reg.Primitives,
+		ResultMethods: reg.ResultMethods,
+		Source:        []byte(src),
+		Privileged:    true,
+	})
+	mod, issues := ir.Lower("main", file, res, chk)
+	if len(issues) != 0 {
+		t.Fatalf("ir.Lower issues: %v", issues)
+	}
+	monoMod, monoErrs := ir.Monomorphize(mod)
+	if len(monoErrs) != 0 {
+		t.Fatalf("monomorphize: %v", monoErrs)
+	}
+	mirMod := mir.Lower(monoMod)
+	opts := Options{PackageName: "main", SourcePath: "/tmp/pipeline_downcast.osty"}
+
+	out, err := GenerateFromMIR(mirMod, opts)
+	if err != nil {
+		if !errors.Is(err, ErrUnsupported) {
+			t.Fatalf("GenerateFromMIR hard error (not ErrUnsupported): %v", err)
+		}
+		out, err = GenerateModule(mod, opts)
+		if err != nil {
+			t.Fatalf("GenerateModule fallback error: %v", err)
+		}
+	}
+
+	got := string(out)
+	for _, want := range []string{
+		"%osty.iface = type { ptr, ptr }",
+		"@osty.vtable.Note__Printable",
+		"extractvalue %osty.iface",
+		"icmp eq ptr",
+		"select i1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("full-pipeline IR missing %q:\n%s", want, got)
+		}
 	}
 }

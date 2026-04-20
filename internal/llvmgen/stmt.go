@@ -14,6 +14,7 @@ package llvmgen
 import (
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/osty/osty/internal/ast"
@@ -55,6 +56,12 @@ func (g *generator) emitReturningBlock(stmts []ast.Stmt, retType string, retSour
 			if v.typ != retType {
 				return unsupportedf("type-system", "return type %s, want %s", v.typ, retType)
 			}
+			if err := g.emitAllPendingDefers(); err != nil {
+				return err
+			}
+			if !g.currentReachable {
+				return nil
+			}
 			emitter := g.toOstyEmitter()
 			g.releaseGCRoots(emitter)
 			llvmReturn(emitter, toOstyValue(v))
@@ -76,6 +83,12 @@ func (g *generator) emitReturningBlock(stmts []ast.Stmt, retType string, retSour
 			}
 			if v.typ != retType {
 				return unsupportedf("type-system", "trailing expression type %s, want %s", v.typ, retType)
+			}
+			if err := g.emitAllPendingDefers(); err != nil {
+				return err
+			}
+			if !g.currentReachable {
+				return nil
 			}
 			emitter := g.toOstyEmitter()
 			g.releaseGCRoots(emitter)
@@ -121,9 +134,14 @@ func (g *generator) emitStmt(stmt ast.Stmt) error {
 		return g.emitBreak()
 	case *ast.ContinueStmt:
 		return g.emitContinue()
+	case *ast.DeferStmt:
+		return g.registerDefer(s)
 	case *ast.ExprStmt:
 		if ifExpr, ok := s.X.(*ast.IfExpr); ok {
 			return g.emitIfStmt(ifExpr)
+		}
+		if matchExpr, ok := s.X.(*ast.MatchExpr); ok {
+			return g.emitMatchStmt(matchExpr)
 		}
 		return g.emitExprStmt(s.X)
 	default:
@@ -365,51 +383,98 @@ func (g *generator) emitFieldAssign(target *ast.FieldExpr, rhs ast.Expr) error {
 	if target == nil {
 		return unsupported("statement", "nil field assignment target")
 	}
-	if target.IsOptional {
-		return unsupported("statement", "optional field assignment is not supported")
+	// Walk the field chain inside-out collecting names, then flip to
+	// outer→inner order. A single-level `a.f = v` produces fields=["f"],
+	// while `a.b.c = v` produces fields=["b", "c"] with base = `a`.
+	fields := []string{}
+	cur := target
+	for {
+		if cur == nil {
+			return unsupported("statement", "nil field assignment target")
+		}
+		if cur.IsOptional {
+			return unsupported("statement", "optional field assignment is not supported")
+		}
+		fields = append([]string{cur.Name}, fields...)
+		if next, ok := cur.X.(*ast.FieldExpr); ok {
+			cur = next
+			continue
+		}
+		break
 	}
-	baseIdent, ok := target.X.(*ast.Ident)
+	baseIdent, ok := cur.X.(*ast.Ident)
 	if !ok {
-		return unsupportedf("statement", "field assignment base %T", target.X)
+		return unsupportedf("statement", "field assignment base %T", cur.X)
 	}
 	slot, ok := g.lookupBinding(baseIdent.Name)
 	if !ok {
 		return unsupportedf("name", "assignment to unknown identifier %q", baseIdent.Name)
 	}
-	if !slot.ptr || !slot.mutable {
-		return unsupportedf("statement", "assignment to immutable field %q.%s", baseIdent.Name, target.Name)
+	if !slot.ptr {
+		return unsupportedf("statement", "field assignment on non-addressable binding %q", baseIdent.Name)
 	}
-	info := g.structsByType[slot.typ]
-	if info == nil {
-		return unsupportedf("type-system", "field assignment on %s", slot.typ)
+	// NB: we deliberately do not gate on `slot.mutable` here. Osty's
+	// checker accepts field-through-param writes for managed context
+	// structs (see `cx.env.returnTy = ...` throughout toolchain/), where
+	// the parameter itself is not `mut` but the struct carries GC roots
+	// so a writable alloca slot was materialised regardless. Mutability
+	// is a frontend rule; the backend just lowers what got past check.
+	// Resolve field chain against struct type info. Each step must land
+	// inside another struct for nested chains; the innermost field
+	// determines the rhs coercion target.
+	steps := make([]fieldInfo, len(fields))
+	curTyp := slot.typ
+	for i, name := range fields {
+		info := g.structsByType[curTyp]
+		if info == nil {
+			return unsupportedf("type-system", "field assignment on %s", curTyp)
+		}
+		field, ok := info.byName[name]
+		if !ok {
+			return unsupportedf("expression", "struct %q has no field %q", info.name, name)
+		}
+		steps[i] = field
+		curTyp = field.typ
 	}
-	field, ok := info.byName[target.Name]
-	if !ok {
-		return unsupportedf("expression", "struct %q has no field %q", info.name, target.Name)
-	}
-	v, err := g.emitExprWithHintAndSourceType(rhs, field.sourceType, field.listElemTyp, field.listElemString, field.mapKeyTyp, field.mapValueTyp, field.mapKeyString, field.setElemTyp, field.setElemString)
+	innermost := steps[len(steps)-1]
+	v, err := g.emitExprWithHintAndSourceType(rhs, innermost.sourceType, innermost.listElemTyp, innermost.listElemString, innermost.mapKeyTyp, innermost.mapValueTyp, innermost.mapKeyString, innermost.setElemTyp, innermost.setElemString)
 	if err != nil {
 		return err
 	}
-	if v.typ != field.typ {
-		return unsupportedf("type-system", "field assignment %q.%s type %s, value %s", baseIdent.Name, target.Name, field.typ, v.typ)
+	if v.typ != innermost.typ {
+		return unsupportedf("type-system", "field assignment %q.%s type %s, value %s", baseIdent.Name, strings.Join(fields, "."), innermost.typ, v.typ)
 	}
-	current, err := g.loadIfPointer(slot)
+	root, err := g.loadIfPointer(slot)
 	if err != nil {
 		return err
 	}
 	emitter := g.toOstyEmitter()
-	tmp := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf(
-		"  %s = insertvalue %s %s, %s %s, %d",
-		tmp,
-		current.typ,
-		current.ref,
-		v.typ,
-		v.ref,
-		field.index,
-	))
-	llvmStore(emitter, toOstyValue(slot), toOstyValue(value{typ: current.typ, ref: tmp}))
+	// Descend: extract each intermediate struct value so the insertvalue
+	// rebuild at the leaf has a live current-value to update.
+	levels := make([]value, len(steps))
+	levels[0] = root
+	for i := 1; i < len(steps); i++ {
+		prev := levels[i-1]
+		extracted := llvmExtractValue(emitter, toOstyValue(prev), steps[i-1].typ, steps[i-1].index)
+		levels[i] = fromOstyValue(extracted)
+	}
+	// Rebuild: innermost insert first, then propagate back up.
+	next := v
+	for i := len(steps) - 1; i >= 0; i-- {
+		tmp := llvmNextTemp(emitter)
+		parent := levels[i]
+		emitter.body = append(emitter.body, fmt.Sprintf(
+			"  %s = insertvalue %s %s, %s %s, %d",
+			tmp,
+			parent.typ,
+			parent.ref,
+			next.typ,
+			next.ref,
+			steps[i].index,
+		))
+		next = value{typ: parent.typ, ref: tmp}
+	}
+	llvmStore(emitter, toOstyValue(slot), toOstyValue(next))
 	g.takeOstyEmitter(emitter)
 	return nil
 }
@@ -718,6 +783,12 @@ func (g *generator) emitReturn(stmt *ast.ReturnStmt) error {
 			return unsupportedf("type-system", "return type %s, want %s", ret.typ, g.returnType)
 		}
 	}
+	if err := g.emitAllPendingDefers(); err != nil {
+		return err
+	}
+	if !g.currentReachable {
+		return nil
+	}
 	emitter := g.toOstyEmitter()
 	g.releaseGCRoots(emitter)
 	switch {
@@ -736,7 +807,7 @@ func (g *generator) emitReturn(stmt *ast.ReturnStmt) error {
 func (g *generator) emitExprStmt(expr ast.Expr) error {
 	call, ok := expr.(*ast.CallExpr)
 	if !ok {
-		return unsupported("statement", "only println calls are supported as expression statements")
+		return unsupportedf("statement", "expression statement %T is not a call; only println and similar side-effect calls are supported as expression statements", expr)
 	}
 	if emitted, err := g.emitTestingCallStmt(call); emitted || err != nil {
 		return err
@@ -1094,6 +1165,129 @@ func (g *generator) emitElse(expr ast.Expr) error {
 		return g.emitIfStmt(e)
 	default:
 		return unsupportedf("control-flow", "else expression %T", expr)
+	}
+}
+
+// emitMatchStmt lowers a MatchExpr used in statement position (value is
+// discarded). Scope is deliberately narrow: bare enum tag scrutinees (the
+// `node.kind` shape the toolchain uses pervasively) with arms that are
+// either bare enum variants or a trailing wildcard. Arm bodies run as
+// statement blocks so they can contain void-returning calls or early
+// returns; their values are never consumed.
+//
+// Payload match / Result match / guarded match in statement position
+// still fall through to the unsupported path for now; they are rare in
+// toolchain surface and can land as follow-on work.
+func (g *generator) emitMatchStmt(expr *ast.MatchExpr) error {
+	if expr == nil || len(expr.Arms) == 0 {
+		return unsupported("statement", "empty match statement")
+	}
+	scrutinee, err := g.emitExpr(expr.Scrutinee)
+	if err != nil {
+		return err
+	}
+	if scrutinee.typ != "i64" {
+		return unsupportedf("statement", "match statement scrutinee type %s (only tag-enum i64 supported as statement for now)", scrutinee.typ)
+	}
+	return g.emitTagEnumMatchStmt(scrutinee, expr.Arms)
+}
+
+func (g *generator) emitTagEnumMatchStmt(scrutinee value, arms []*ast.MatchArm) error {
+	emitter := g.toOstyEmitter()
+	endLabel := llvmNextLabel(emitter, "match.end")
+	g.takeOstyEmitter(emitter)
+
+	anyReached := false
+	for i, arm := range arms {
+		if arm == nil {
+			return unsupported("statement", "nil match arm")
+		}
+		if arm.Guard != nil {
+			return unsupported("statement", "guarded match arms are not yet supported as statements")
+		}
+		_, isWildcard := arm.Pattern.(*ast.WildcardPat)
+		isLast := i == len(arms)-1
+
+		if isWildcard {
+			if !isLast {
+				return unsupported("statement", "wildcard match arm must be last")
+			}
+			baseState := g.captureScopeState()
+			if err := g.emitMatchArmBodyAsStmt(arm.Body); err != nil {
+				return err
+			}
+			if g.currentReachable {
+				g.branchTo(endLabel)
+				anyReached = true
+			}
+			g.restoreScopeState(baseState)
+			continue
+		}
+
+		tag, ok, err := g.matchEnumTag(arm.Pattern)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return unsupportedf("statement", "match statement arm must be a bare enum variant or wildcard, got %T", arm.Pattern)
+		}
+
+		emitter := g.toOstyEmitter()
+		cond := llvmCompare(emitter, "eq", toOstyValue(scrutinee), toOstyValue(value{typ: "i64", ref: strconv.Itoa(tag)}))
+		armLabel := llvmNextLabel(emitter, "match.arm")
+		nextLabel := llvmNextLabel(emitter, "match.next")
+		emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", cond.name, armLabel, nextLabel))
+		emitter.body = append(emitter.body, fmt.Sprintf("%s:", armLabel))
+		g.takeOstyEmitter(emitter)
+		g.enterBlock(armLabel)
+
+		baseState := g.captureScopeState()
+		if err := g.emitMatchArmBodyAsStmt(arm.Body); err != nil {
+			return err
+		}
+		if g.currentReachable {
+			g.branchTo(endLabel)
+			anyReached = true
+		}
+		g.restoreScopeState(baseState)
+
+		emitter = g.toOstyEmitter()
+		emitter.body = append(emitter.body, fmt.Sprintf("%s:", nextLabel))
+		g.takeOstyEmitter(emitter)
+		g.enterBlock(nextLabel)
+	}
+
+	// Match with no wildcard leaves the last nextLabel active — treat it
+	// as an implicit fall-through so inexhaustive tag-enum matches keep
+	// statement flow. The value-position path enforces exhaustiveness;
+	// as a statement the coverage check belongs to the checker, not the
+	// backend.
+	if g.currentReachable {
+		g.branchTo(endLabel)
+		anyReached = true
+	}
+
+	emitter = g.toOstyEmitter()
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(endLabel)
+	g.currentReachable = anyReached
+	return nil
+}
+
+func (g *generator) emitMatchArmBodyAsStmt(body ast.Expr) error {
+	if body == nil {
+		return nil
+	}
+	switch b := body.(type) {
+	case *ast.Block:
+		return g.emitScopedStmtBlock(b.Stmts)
+	case *ast.IfExpr:
+		return g.emitIfStmt(b)
+	case *ast.MatchExpr:
+		return g.emitMatchStmt(b)
+	default:
+		return g.emitExprStmt(body)
 	}
 }
 

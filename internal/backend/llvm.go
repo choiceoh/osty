@@ -172,7 +172,10 @@ func clangCompileCObjectArgs(target, sourcePath, objectPath string) []string {
 	if target != "" {
 		args = append(args, "-target", target)
 	}
-	args = append(args, "-std=c11", "-c", sourcePath, "-o", objectPath)
+	// `-pthread` enables _REENTRANT for the threading and channel
+	// implementations bundled in `runtime/osty_runtime.c`. The matching
+	// link flag is injected in `llvmClangLinkBinaryArgs`.
+	args = append(args, "-std=c11", "-pthread", "-c", sourcePath, "-o", objectPath)
 	return args
 }
 

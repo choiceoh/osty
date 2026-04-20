@@ -105,7 +105,17 @@ func (p *printer) printDecl(d Decl) {
 		p.indent++
 		for _, f := range d.Fields {
 			p.nl()
-			p.writef("(field %s %s)", f.Name, typeString(f.Type))
+			p.writef("(field %s %s", f.Name, typeString(f.Type))
+			if f.JSONKey != "" {
+				p.writef(" json-key=%q", f.JSONKey)
+			}
+			if f.JSONSkip {
+				p.b.WriteString(" json-skip")
+			}
+			if f.JSONOptional {
+				p.b.WriteString(" json-optional")
+			}
+			p.b.WriteByte(')')
 		}
 		for _, m := range d.Methods {
 			p.nl()
@@ -121,6 +131,12 @@ func (p *printer) printDecl(d Decl) {
 			p.writef("(variant %s", v.Name)
 			for _, pl := range v.Payload {
 				p.writef(" %s", typeString(pl))
+			}
+			if v.JSONTag != "" {
+				p.writef(" json-tag=%q", v.JSONTag)
+			}
+			if v.JSONSkip {
+				p.b.WriteString(" json-skip")
 			}
 			p.b.WriteByte(')')
 		}

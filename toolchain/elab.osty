@@ -260,7 +260,15 @@ fn elabInferIdent(cx: ElabCx, node: AstNode) -> ElabResult {
         return ElabResult { node: coreIdx, ty: fnTy }
     }
     // Fall through — unknown name.
-    cx.env.diagnostics.push(diagUnknownName(node.text, node.start, node.end))
+    let suggestion = checkSuggestSimilar(
+        checkVisibleBindingNames(cx.env),
+        node.text,
+    )
+    let diag = checkDiagAttachHint(
+        diagUnknownName(node.text, node.start, node.end),
+        diagDidYouMean(suggestion),
+    )
+    cx.env.diagnostics.push(diag)
     elabPoisonResult(cx, node.start, node.end)
 }
 
@@ -1091,7 +1099,13 @@ fn elabInferMethodCall(cx: ElabCx, callNode: AstNode, fieldNode: AstNode, expect
     let methodName = fieldNode.text
     let sig = checkLookupMethod(cx.env, ownerName, methodName)
     if sig.name == "" {
-        cx.env.diagnostics.push(diagUnknownMethod(ownerName, methodName, fieldNode.start, fieldNode.end))
+        let hint = diagDidYouMean(
+            checkSuggestSimilar(checkMethodNamesOf(cx.env, ownerName), methodName),
+        )
+        cx.env.diagnostics.push(checkDiagAttachHint(
+            diagUnknownMethod(ownerName, methodName, fieldNode.start, fieldNode.end),
+            hint,
+        ))
         return elabPoisonResult(cx, callNode.start, callNode.end)
     }
 
@@ -1466,7 +1480,13 @@ fn elabInferField(cx: ElabCx, node: AstNode) -> ElabResult {
             let owner = tyHeadAt(cx.env.tys, recvTy)
             let fieldSig = checkLookupField(cx.env, owner, fieldName)
             if fieldSig.name == "" {
-                cx.env.diagnostics.push(diagUnknownField(owner, fieldName, node.start, node.end))
+                let hint = diagDidYouMean(
+                    checkSuggestSimilar(checkFieldNamesOf(cx.env, owner), fieldName),
+                )
+                cx.env.diagnostics.push(checkDiagAttachHint(
+                    diagUnknownField(owner, fieldName, node.start, node.end),
+                    hint,
+                ))
                 return elabPoisonResult(cx, node.start, node.end)
             }
             // Substitute owner generics.
@@ -1744,7 +1764,13 @@ fn elabInferStructLit(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
         let fieldName = fieldNode.text
         let fieldSig = checkLookupField(cx.env, owner, fieldName)
         if fieldSig.name == "" {
-            cx.env.diagnostics.push(diagUnknownField(owner, fieldName, fieldNode.start, fieldNode.end))
+            let suggestion = diagDidYouMean(
+                checkSuggestSimilar(checkFieldNamesOf(cx.env, owner), fieldName),
+            )
+            cx.env.diagnostics.push(checkDiagAttachHint(
+                diagUnknownField(owner, fieldName, fieldNode.start, fieldNode.end),
+                suggestion,
+            ))
             continue
         }
         if stringListContains(seenNames, fieldName) {
@@ -2227,7 +2253,13 @@ fn elabVariantPattern(cx: ElabCx, node: AstNode, scrutTy: Int, mutable: Bool, re
         checkLookupVariant(cx.env, variantName)
     }
     if resolved.name == "" {
-        cx.env.diagnostics.push(diagUnknownVariant(scrutHead, variantName, node.start, node.end))
+        let suggestion = diagDidYouMean(
+            checkSuggestSimilar(checkVariantNamesOf(cx.env, scrutHead), variantName),
+        )
+        cx.env.diagnostics.push(checkDiagAttachHint(
+            diagUnknownVariant(scrutHead, variantName, node.start, node.end),
+            suggestion,
+        ))
         return corePatErr(cx.core, node.start, node.end)
     }
     let scrutArgs = tyArgsAt(tys, scrutTy)
@@ -2290,7 +2322,13 @@ fn elabStructPattern(cx: ElabCx, node: AstNode, scrutTy: Int, mutable: Bool, rec
         let fieldName = child.text
         let fieldSig = checkLookupField(cx.env, owner, fieldName)
         if fieldSig.name == "" {
-            cx.env.diagnostics.push(diagUnknownField(owner, fieldName, child.start, child.end))
+            let suggestion = diagDidYouMean(
+                checkSuggestSimilar(checkFieldNamesOf(cx.env, owner), fieldName),
+            )
+            cx.env.diagnostics.push(checkDiagAttachHint(
+                diagUnknownField(owner, fieldName, child.start, child.end),
+                suggestion,
+            ))
             continue
         }
         let substituted = if checkStringListLenHelper(typeSig.generics) == checkIntListLenHelper(ownerArgs) {

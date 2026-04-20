@@ -1110,6 +1110,9 @@ func llvmClangLinkBinaryArgs(target string, objectPaths []string, binaryPath str
 		// Osty: examples/selfhost-core/llvmgen.osty:724:9
 		func() struct{} { args = append(args, objectPath); return struct{}{} }()
 	}
+	// `-pthread` pulls libpthread / libSystem threading symbols, needed
+	// by the bundled runtime's task / channel implementations.
+	func() struct{} { args = append(args, "-pthread"); return struct{}{} }()
 	// Osty: examples/selfhost-core/llvmgen.osty:726:5
 	func() struct{} { args = append(args, "-o"); return struct{}{} }()
 	// Osty: examples/selfhost-core/llvmgen.osty:727:5
@@ -1257,6 +1260,31 @@ func llvmIntComparePredicate(op string) string {
 		return "sle"
 	case ">=":
 		return "sge"
+	default:
+		return ""
+	}
+}
+
+// llvmUnsignedIntComparePredicate returns LLVM `icmp` predicates with
+// unsigned ordering for Char/Byte compares. Char codepoints fit in
+// non-negative i32 so signed would coincidentally work, but Byte values
+// 128..255 are negative under signed ordering which would break
+// `b'\x80' > b'\x00'`. Using unsigned predicates makes both surfaces
+// correct uniformly.
+func llvmUnsignedIntComparePredicate(op string) string {
+	switch op {
+	case "==":
+		return "eq"
+	case "!=":
+		return "ne"
+	case "<":
+		return "ult"
+	case ">":
+		return "ugt"
+	case "<=":
+		return "ule"
+	case ">=":
+		return "uge"
 	default:
 		return ""
 	}
@@ -2260,6 +2288,10 @@ func llvmBuiltinType(name string) string {
 		return "double"
 	case "Bool":
 		return "i1"
+	case "Char":
+		return "i32"
+	case "Byte":
+		return "i8"
 	case "String", "Bytes", "Error":
 		return "ptr"
 	default:
@@ -2269,7 +2301,7 @@ func llvmBuiltinType(name string) string {
 
 func llvmRuntimeAbiBuiltinType(name string) string {
 	switch name {
-	case "Int", "Float", "Bool", "String":
+	case "Int", "Float", "Bool", "Char", "Byte", "String":
 		return llvmBuiltinType(name)
 	default:
 		return ""
@@ -2278,7 +2310,7 @@ func llvmRuntimeAbiBuiltinType(name string) string {
 
 func llvmEnumPayloadBuiltinType(name string) string {
 	switch name {
-	case "Int", "Float", "String":
+	case "Int", "Float", "Char", "Byte", "String":
 		return llvmBuiltinType(name)
 	default:
 		return ""

@@ -453,6 +453,8 @@ const (
 	IntrinsicSetLen
 	// IntrinsicSetToList materialises a List<T>. Args: [set].
 	IntrinsicSetToList
+	// IntrinsicSetRemove deletes an element. Args: [set, elem]. Dest nil.
+	IntrinsicSetRemove
 
 	// ---- stdlib: String ----
 
@@ -1356,6 +1358,8 @@ func (k IntrinsicKind) String() string {
 		return "set_len"
 	case IntrinsicSetToList:
 		return "set_to_list"
+	case IntrinsicSetRemove:
+		return "set_remove"
 	case IntrinsicStringLen:
 		return "string_len"
 	case IntrinsicStringIsEmpty:

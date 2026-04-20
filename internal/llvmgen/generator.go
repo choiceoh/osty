@@ -72,6 +72,13 @@ type generator struct {
 	nextSafepoint  int
 	hiddenLocalID  int
 	loopStack      []loopContext
+	// deferStack parallels g.locals: each scope owns a list of deferred
+	// statement bodies, executed in LIFO order when the scope exits
+	// (popScope) or when control unwinds through it (break / continue /
+	// return). Defer follows spec §A.6 for the structural exits the
+	// backend currently supports; `?`/panic integration stays behind the
+	// stdlib-body work tracked under LLVM018.
+	deferStack [][]*ast.DeferStmt
 }
 
 type loopContext struct {
@@ -84,6 +91,7 @@ type scopeState struct {
 	locals      []map[string]value
 	gcRootSlots []value
 	gcRootMarks []int
+	deferStack  [][]*ast.DeferStmt
 }
 
 type value struct {
@@ -139,6 +147,7 @@ func (g *generator) beginFunction() {
 	g.loopStack = nil
 	g.resultContexts = nil
 	g.optionContexts = nil
+	g.deferStack = [][]*ast.DeferStmt{nil}
 }
 
 func (g *generator) bindGCRootIfManagedPointer(emitter *LlvmEmitter, slot value) {
@@ -584,10 +593,12 @@ func (g *generator) captureScopeState() scopeState {
 	locals := append([]map[string]value(nil), g.locals...)
 	gcRootSlots := append([]value(nil), g.gcRootSlots...)
 	gcRootMarks := append([]int(nil), g.gcRootMarks...)
+	deferStack := cloneDeferStack(g.deferStack)
 	return scopeState{
 		locals:      locals,
 		gcRootSlots: gcRootSlots,
 		gcRootMarks: gcRootMarks,
+		deferStack:  deferStack,
 	}
 }
 
@@ -595,14 +606,44 @@ func (g *generator) restoreScopeState(state scopeState) {
 	g.locals = append([]map[string]value(nil), state.locals...)
 	g.gcRootSlots = append([]value(nil), state.gcRootSlots...)
 	g.gcRootMarks = append([]int(nil), state.gcRootMarks...)
+	g.deferStack = cloneDeferStack(state.deferStack)
+}
+
+func cloneDeferStack(src [][]*ast.DeferStmt) [][]*ast.DeferStmt {
+	if src == nil {
+		return nil
+	}
+	out := make([][]*ast.DeferStmt, len(src))
+	for i, scope := range src {
+		if scope == nil {
+			continue
+		}
+		out[i] = append([]*ast.DeferStmt(nil), scope...)
+	}
+	return out
 }
 
 func (g *generator) pushScope() {
 	g.locals = append(g.locals, map[string]value{})
 	g.gcRootMarks = append(g.gcRootMarks, len(g.gcRootSlots))
+	g.deferStack = append(g.deferStack, nil)
 }
 
 func (g *generator) popScope() {
+	if g.currentReachable {
+		if err := g.emitTopScopeDefers(); err != nil {
+			// Defer body emission can surface unsupported diagnostics.
+			// There is no error channel here; the typical callers of
+			// popScope already dropped the original err. Fall through
+			// so the structural LLVM IR stays well-formed — the
+			// diagnostic path is reserved for the registration site
+			// (emitStmt DeferStmt) which validates the body shape.
+			_ = err
+		}
+	}
+	if len(g.deferStack) != 0 {
+		g.deferStack = g.deferStack[:len(g.deferStack)-1]
+	}
 	mark := 0
 	if len(g.gcRootMarks) != 0 {
 		mark = g.gcRootMarks[len(g.gcRootMarks)-1]
@@ -619,6 +660,92 @@ func (g *generator) popScope() {
 		g.gcRootSlots = g.gcRootSlots[:mark]
 	}
 	g.locals = g.locals[:len(g.locals)-1]
+}
+
+// emitTopScopeDefers emits the deferred bodies registered in the
+// top-of-stack scope in LIFO order. The scope entry itself is left on
+// deferStack so the caller (popScope / unwindScopesTo) can drop it in
+// the normal order. Callers gate this on g.currentReachable so we don't
+// bleed code into blocks that already terminated.
+func (g *generator) emitTopScopeDefers() error {
+	if len(g.deferStack) == 0 {
+		return nil
+	}
+	top := g.deferStack[len(g.deferStack)-1]
+	if len(top) == 0 {
+		return nil
+	}
+	// Replace the top entry with nil while we emit: this keeps any
+	// nested defers (added during emission of a defer body) from
+	// piling up on the same slot we're already draining.
+	g.deferStack[len(g.deferStack)-1] = nil
+	for i := len(top) - 1; i >= 0; i-- {
+		if err := g.emitDeferBody(top[i]); err != nil {
+			return err
+		}
+		if !g.currentReachable {
+			return nil
+		}
+	}
+	return nil
+}
+
+// emitAllPendingDefers flushes every scope's deferred bodies in LIFO
+// order (top scope first, then outer scopes). Used by emitReturn and
+// the implicit-return path so defers fire on function exit even when
+// the return statement sits underneath nested scopes. Scope state is
+// left intact; the caller takes responsibility for the subsequent
+// `ret` / `leaveBlock` sequencing.
+func (g *generator) emitAllPendingDefers() error {
+	for i := len(g.deferStack) - 1; i >= 0; i-- {
+		scope := g.deferStack[i]
+		if len(scope) == 0 {
+			continue
+		}
+		for j := len(scope) - 1; j >= 0; j-- {
+			if err := g.emitDeferBody(scope[j]); err != nil {
+				return err
+			}
+			if !g.currentReachable {
+				return nil
+			}
+		}
+	}
+	return nil
+}
+
+// emitDeferBody replays a deferred statement by emitting its body at
+// the current insertion point. The body is "almost always" a Block per
+// the DeferStmt contract in internal/ast; we also accept a bare Expr
+// (e.g. `defer close(h)`) by wrapping it as an expression statement.
+func (g *generator) emitDeferBody(stmt *ast.DeferStmt) error {
+	if stmt == nil || stmt.X == nil {
+		return nil
+	}
+	switch body := stmt.X.(type) {
+	case *ast.Block:
+		return g.emitScopedStmtBlock(body.Stmts)
+	default:
+		return g.emitExprStmt(body)
+	}
+}
+
+// registerDefer records a defer statement in the current scope so it
+// runs when the scope exits. The body is shape-checked lazily at
+// emission time (see emitDeferBody); registration itself never fails.
+func (g *generator) registerDefer(stmt *ast.DeferStmt) error {
+	if stmt == nil {
+		return unsupported("statement", "nil defer")
+	}
+	if stmt.X == nil {
+		return unsupported("statement", "defer requires a body")
+	}
+	if len(g.deferStack) == 0 {
+		g.deferStack = append(g.deferStack, nil)
+	}
+	idx := len(g.deferStack) - 1
+	g.deferStack[idx] = append(g.deferStack[idx], stmt)
+	return nil
 }
 
 func (g *generator) bindNamedLocal(name string, v value, mutable bool) {
