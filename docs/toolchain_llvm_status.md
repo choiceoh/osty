@@ -23,6 +23,15 @@ As of 2026-04-19:
 - the whole-toolchain merged LLVM probe still first-walls on the
   bootstrap-only `runtime.golegacy.astbridge` bridge
 - the native-only merged LLVM probe (with bootstrap-only files skipped)
+  now first-walls on `LLVM012 statement: field assignment base *ast.FieldExpr`
+  (nested field assignment like `a.b.c = x`). The previous
+  `LLVM011 [fn_param_struct_type]` Char wall at `lspUtf16UnitsForChar`
+  was resolved by lowering `Char` to `i32` and `Byte` to `i8` together
+  with `Char.toInt()` / `Byte.toInt()` / `Int.toChar()` width
+  conversions and unsigned compare predicates. The subsequent
+  `LLVM012 statement: *ast.MatchExpr is not a call` wall was resolved
+  by adding a `MatchExpr` statement-position lowering for tag-enum
+  scrutinees with bare-variant / wildcard arms
   now first-walls on `LLVM012` (statement-form restriction); the previous
   `LLVM011 [fn_param_struct_type]` Char wall at `lspUtf16UnitsForChar`
   has been resolved by lowering `Char` to `i32` and `Byte` to `i8`
@@ -46,6 +55,7 @@ Current-tree observations from the code re-audit:
 |---|---|---|
 | CLI wiring | universal LLVM entry wedge | **resolved** — hello-world `osty gen --backend=llvm` exits 0 and writes `.ll` output |
 | Bootstrap bridge | merged whole-toolchain probe | first wall is still `LLVM002 runtime-ffi` on `runtime.golegacy.astbridge`; this is a bootstrap artifact, not yet a native backend parity claim |
+| Native backend surface | merged native-only probe | first wall is now `LLVM012 statement: field assignment base *ast.FieldExpr` (nested field assignment) after skipping 4 bootstrap-only files; the earlier `LLVM011 [fn_param_struct_type]` Char wall and the subsequent `LLVM012 *ast.MatchExpr is not a call` wall are both closed |
 | Native backend surface | merged native-only probe | first wall is now `LLVM012` (statement form) after skipping 4 bootstrap-only files; the earlier `LLVM011 [fn_param_struct_type]` Char wall is closed |
 | Checker boundary | `internal/check` / `internal/toolchain` | host still manages an external `osty-native-checker` artifact and falls back to the embedded selfhost checker when it cannot be prepared |
 | Toolchain package health | `osty check --airepair=false toolchain` | current CLI surface is still an aggregate `E0700` summary (`3846 error(s)`) rather than a clean self-compile pass |

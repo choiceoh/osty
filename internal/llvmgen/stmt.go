@@ -14,6 +14,7 @@ package llvmgen
 import (
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/osty/osty/internal/ast"
@@ -138,6 +139,9 @@ func (g *generator) emitStmt(stmt ast.Stmt) error {
 	case *ast.ExprStmt:
 		if ifExpr, ok := s.X.(*ast.IfExpr); ok {
 			return g.emitIfStmt(ifExpr)
+		}
+		if matchExpr, ok := s.X.(*ast.MatchExpr); ok {
+			return g.emitMatchStmt(matchExpr)
 		}
 		return g.emitExprStmt(s.X)
 	default:
@@ -756,7 +760,7 @@ func (g *generator) emitReturn(stmt *ast.ReturnStmt) error {
 func (g *generator) emitExprStmt(expr ast.Expr) error {
 	call, ok := expr.(*ast.CallExpr)
 	if !ok {
-		return unsupported("statement", "only println calls are supported as expression statements")
+		return unsupportedf("statement", "expression statement %T is not a call; only println and similar side-effect calls are supported as expression statements", expr)
 	}
 	if emitted, err := g.emitTestingCallStmt(call); emitted || err != nil {
 		return err
@@ -1114,6 +1118,129 @@ func (g *generator) emitElse(expr ast.Expr) error {
 		return g.emitIfStmt(e)
 	default:
 		return unsupportedf("control-flow", "else expression %T", expr)
+	}
+}
+
+// emitMatchStmt lowers a MatchExpr used in statement position (value is
+// discarded). Scope is deliberately narrow: bare enum tag scrutinees (the
+// `node.kind` shape the toolchain uses pervasively) with arms that are
+// either bare enum variants or a trailing wildcard. Arm bodies run as
+// statement blocks so they can contain void-returning calls or early
+// returns; their values are never consumed.
+//
+// Payload match / Result match / guarded match in statement position
+// still fall through to the unsupported path for now; they are rare in
+// toolchain surface and can land as follow-on work.
+func (g *generator) emitMatchStmt(expr *ast.MatchExpr) error {
+	if expr == nil || len(expr.Arms) == 0 {
+		return unsupported("statement", "empty match statement")
+	}
+	scrutinee, err := g.emitExpr(expr.Scrutinee)
+	if err != nil {
+		return err
+	}
+	if scrutinee.typ != "i64" {
+		return unsupportedf("statement", "match statement scrutinee type %s (only tag-enum i64 supported as statement for now)", scrutinee.typ)
+	}
+	return g.emitTagEnumMatchStmt(scrutinee, expr.Arms)
+}
+
+func (g *generator) emitTagEnumMatchStmt(scrutinee value, arms []*ast.MatchArm) error {
+	emitter := g.toOstyEmitter()
+	endLabel := llvmNextLabel(emitter, "match.end")
+	g.takeOstyEmitter(emitter)
+
+	anyReached := false
+	for i, arm := range arms {
+		if arm == nil {
+			return unsupported("statement", "nil match arm")
+		}
+		if arm.Guard != nil {
+			return unsupported("statement", "guarded match arms are not yet supported as statements")
+		}
+		_, isWildcard := arm.Pattern.(*ast.WildcardPat)
+		isLast := i == len(arms)-1
+
+		if isWildcard {
+			if !isLast {
+				return unsupported("statement", "wildcard match arm must be last")
+			}
+			baseState := g.captureScopeState()
+			if err := g.emitMatchArmBodyAsStmt(arm.Body); err != nil {
+				return err
+			}
+			if g.currentReachable {
+				g.branchTo(endLabel)
+				anyReached = true
+			}
+			g.restoreScopeState(baseState)
+			continue
+		}
+
+		tag, ok, err := g.matchEnumTag(arm.Pattern)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return unsupportedf("statement", "match statement arm must be a bare enum variant or wildcard, got %T", arm.Pattern)
+		}
+
+		emitter := g.toOstyEmitter()
+		cond := llvmCompare(emitter, "eq", toOstyValue(scrutinee), toOstyValue(value{typ: "i64", ref: strconv.Itoa(tag)}))
+		armLabel := llvmNextLabel(emitter, "match.arm")
+		nextLabel := llvmNextLabel(emitter, "match.next")
+		emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", cond.name, armLabel, nextLabel))
+		emitter.body = append(emitter.body, fmt.Sprintf("%s:", armLabel))
+		g.takeOstyEmitter(emitter)
+		g.enterBlock(armLabel)
+
+		baseState := g.captureScopeState()
+		if err := g.emitMatchArmBodyAsStmt(arm.Body); err != nil {
+			return err
+		}
+		if g.currentReachable {
+			g.branchTo(endLabel)
+			anyReached = true
+		}
+		g.restoreScopeState(baseState)
+
+		emitter = g.toOstyEmitter()
+		emitter.body = append(emitter.body, fmt.Sprintf("%s:", nextLabel))
+		g.takeOstyEmitter(emitter)
+		g.enterBlock(nextLabel)
+	}
+
+	// Match with no wildcard leaves the last nextLabel active — treat it
+	// as an implicit fall-through so inexhaustive tag-enum matches keep
+	// statement flow. The value-position path enforces exhaustiveness;
+	// as a statement the coverage check belongs to the checker, not the
+	// backend.
+	if g.currentReachable {
+		g.branchTo(endLabel)
+		anyReached = true
+	}
+
+	emitter = g.toOstyEmitter()
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(endLabel)
+	g.currentReachable = anyReached
+	return nil
+}
+
+func (g *generator) emitMatchArmBodyAsStmt(body ast.Expr) error {
+	if body == nil {
+		return nil
+	}
+	switch b := body.(type) {
+	case *ast.Block:
+		return g.emitScopedStmtBlock(b.Stmts)
+	case *ast.IfExpr:
+		return g.emitIfStmt(b)
+	case *ast.MatchExpr:
+		return g.emitMatchStmt(b)
+	default:
+		return g.emitExprStmt(body)
 	}
 }
 
