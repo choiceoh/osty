@@ -19,13 +19,20 @@ import (
 //   - Module is non-nil and carries a package name.
 //   - Every function has a non-empty block list when not external, an
 //     entry block whose ID is in range, and every block has a
-//     terminator.
-//   - No instruction follows a terminator inside a block.
+//     terminator. The block's Instrs slice and Term field are typed
+//     separately, so "no instruction after the terminator" is enforced
+//     structurally — the validator does not need to re-check it.
 //   - Every Place references a local that exists and every projection
 //     carries a non-nil Type.
 //   - Every Operand carries a non-nil Type.
 //   - Every RValue's inputs carry types.
 //   - Terminator successors reference existing blocks.
+//   - SwitchIntTerm cases have distinct .Value entries.
+//   - Locals[ReturnLocal] type matches fn.ReturnType; IsReturn marks
+//     only the return slot; IsParam marks exactly the locals in
+//     fn.Params; fn.Params contains no duplicates.
+//   - StorageLive / StorageDead do not target parameters or the return
+//     slot (those are always live within the function body).
 //   - No HIR-only node leaked into MIR: no ir.Pattern, no ir.MatchExpr,
 //     etc. (The design guarantees this at the type level by not
 //     importing the HIR node types directly; the validator's job is
@@ -108,18 +115,32 @@ func (v *validator) validateFunction(fn *Function) {
 			ret := fn.Locals[fn.ReturnLocal]
 			if ret == nil {
 				v.addf("function %q: ReturnLocal %d is nil", fn.Name, fn.ReturnLocal)
-			} else if !ret.IsReturn {
-				v.addf("function %q: ReturnLocal %d is not marked IsReturn", fn.Name, fn.ReturnLocal)
+			} else {
+				if !ret.IsReturn {
+					v.addf("function %q: ReturnLocal %d is not marked IsReturn", fn.Name, fn.ReturnLocal)
+				}
+				if fn.ReturnType != nil && ret.Type != nil {
+					if typeString(ret.Type) != typeString(fn.ReturnType) {
+						v.addf("function %q: ReturnLocal _%d type %s does not match declared return type %s",
+							fn.Name, fn.ReturnLocal, typeString(ret.Type), typeString(fn.ReturnType))
+					}
+				}
 			}
 		}
 	}
 
 	// Parameters reference existing locals and are flagged as params.
+	paramSet := make(map[LocalID]bool, len(fn.Params))
 	for i, pid := range fn.Params {
 		if int(pid) < 0 || int(pid) >= len(fn.Locals) {
 			v.addf("function %q: Params[%d]=%d out of range (locals=%d)", fn.Name, i, pid, len(fn.Locals))
 			continue
 		}
+		if paramSet[pid] {
+			v.addf("function %q: Params[%d]=_%d appears more than once", fn.Name, i, pid)
+			continue
+		}
+		paramSet[pid] = true
 		loc := fn.Locals[pid]
 		if loc == nil {
 			v.addf("function %q: Params[%d]=%d is nil", fn.Name, i, pid)
@@ -130,7 +151,10 @@ func (v *validator) validateFunction(fn *Function) {
 		}
 	}
 
-	// Locals carry types and unique IDs.
+	// Locals carry types and unique IDs. Flag the inverse IsParam /
+	// IsReturn invariants too — a local marked IsParam must appear in
+	// fn.Params, and IsReturn must match fn.ReturnLocal.
+	returnSeen := false
 	for i, loc := range fn.Locals {
 		if loc == nil {
 			v.addf("function %q: Locals[%d]: nil", fn.Name, i)
@@ -141,6 +165,18 @@ func (v *validator) validateFunction(fn *Function) {
 		}
 		if loc.Type == nil {
 			v.addf("function %q: Locals[%d]=_%d nil Type", fn.Name, i, loc.ID)
+		}
+		if loc.IsParam && !paramSet[loc.ID] {
+			v.addf("function %q: Locals[%d]=_%d is marked IsParam but not in fn.Params", fn.Name, i, loc.ID)
+		}
+		if loc.IsReturn {
+			if !fn.IsExternal && !fn.IsIntrinsic && loc.ID != fn.ReturnLocal {
+				v.addf("function %q: Locals[%d]=_%d is marked IsReturn but ReturnLocal=_%d", fn.Name, i, loc.ID, fn.ReturnLocal)
+			}
+			if returnSeen {
+				v.addf("function %q: Locals[%d]=_%d: more than one local marked IsReturn", fn.Name, i, loc.ID)
+			}
+			returnSeen = true
 		}
 	}
 
@@ -214,15 +250,32 @@ func (v *validator) validateInstr(fn *Function, bb *BasicBlock, idx int, instr I
 			v.validateOperand(fn, bb, op, fmt.Sprintf("IntrinsicInstr.Args[%d]", i))
 		}
 	case *StorageLiveInstr:
-		if int(x.Local) < 0 || int(x.Local) >= len(fn.Locals) {
-			v.addf("function %q bb%d instr[%d]: StorageLive _%d out of range", fn.Name, bb.ID, idx, x.Local)
-		}
+		v.validateStorageTarget(fn, bb, idx, x.Local, "StorageLive")
 	case *StorageDeadInstr:
-		if int(x.Local) < 0 || int(x.Local) >= len(fn.Locals) {
-			v.addf("function %q bb%d instr[%d]: StorageDead _%d out of range", fn.Name, bb.ID, idx, x.Local)
-		}
+		v.validateStorageTarget(fn, bb, idx, x.Local, "StorageDead")
 	default:
 		v.addf("function %q bb%d instr[%d]: unknown instruction %T", fn.Name, bb.ID, idx, instr)
+	}
+}
+
+// validateStorageTarget rejects storage markers whose target is out of
+// range, a parameter, or the return slot. Params are live on function
+// entry and the return slot is always live; any storage marker on them
+// is a lowerer bug.
+func (v *validator) validateStorageTarget(fn *Function, bb *BasicBlock, idx int, local LocalID, kind string) {
+	if int(local) < 0 || int(local) >= len(fn.Locals) {
+		v.addf("function %q bb%d instr[%d]: %s _%d out of range", fn.Name, bb.ID, idx, kind, local)
+		return
+	}
+	loc := fn.Locals[local]
+	if loc == nil {
+		return
+	}
+	if loc.IsParam {
+		v.addf("function %q bb%d instr[%d]: %s on parameter _%d (params are live on entry)", fn.Name, bb.ID, idx, kind, local)
+	}
+	if loc.IsReturn {
+		v.addf("function %q bb%d instr[%d]: %s on return slot _%d", fn.Name, bb.ID, idx, kind, local)
 	}
 }
 
@@ -392,8 +445,15 @@ func (v *validator) validateTerm(fn *Function, bb *BasicBlock, t Terminator) {
 		v.validateBlockRef(fn, bb, x.Else, "Branch.Else")
 	case *SwitchIntTerm:
 		v.validateOperand(fn, bb, x.Scrutinee, "SwitchInt.Scrutinee")
+		seenVals := make(map[int64]int, len(x.Cases))
 		for i, c := range x.Cases {
 			v.validateBlockRef(fn, bb, c.Target, fmt.Sprintf("SwitchInt.Cases[%d]", i))
+			if prev, dup := seenVals[c.Value]; dup {
+				v.addf("function %q bb%d: SwitchInt.Cases[%d] value %d duplicates Cases[%d]",
+					fn.Name, bb.ID, i, c.Value, prev)
+			} else {
+				seenVals[c.Value] = i
+			}
 		}
 		v.validateBlockRef(fn, bb, x.Default, "SwitchInt.Default")
 	case *ReturnTerm, *UnreachableTerm:

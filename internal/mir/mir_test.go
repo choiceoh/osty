@@ -2146,3 +2146,313 @@ func TestLowerStdlibRecognizerDoesNotShadowConcurrencyMethods(t *testing.T) {
 		t.Fatalf("expected chan_recv, got:\n%s", text)
 	}
 }
+
+// ==== CFG helper tests ====
+
+func TestSuccessorsCoversAllTerminators(t *testing.T) {
+	cases := []struct {
+		name string
+		term Terminator
+		want []BlockID
+	}{
+		{"nil", nil, nil},
+		{"goto", &GotoTerm{Target: 3}, []BlockID{3}},
+		{"branch", &BranchTerm{Then: 1, Else: 2}, []BlockID{1, 2}},
+		{
+			"switchInt",
+			&SwitchIntTerm{
+				Cases: []SwitchCase{
+					{Value: 0, Target: 4},
+					{Value: 1, Target: 5},
+				},
+				Default: 6,
+			},
+			[]BlockID{4, 5, 6},
+		},
+		{"return", &ReturnTerm{}, nil},
+		{"unreachable", &UnreachableTerm{}, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Successors(tc.term)
+			if len(got) != len(tc.want) {
+				t.Fatalf("Successors(%s) length: got %v, want %v", tc.name, got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("Successors(%s)[%d] = %d, want %d", tc.name, i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestReachableBlocksFollowsCFG(t *testing.T) {
+	fn := &Function{Name: "reach", ReturnType: TUnit}
+	fn.ReturnLocal = fn.NewLocal("_return", TUnit, false, Span{})
+	fn.Locals[fn.ReturnLocal].IsReturn = true
+	b0 := fn.NewBlock(Span{})
+	b1 := fn.NewBlock(Span{})
+	b2 := fn.NewBlock(Span{}) // orphan — never reached
+	fn.Entry = b0
+	fn.Block(b0).SetTerminator(&GotoTerm{Target: b1})
+	fn.Block(b1).SetTerminator(&ReturnTerm{})
+	fn.Block(b2).SetTerminator(&ReturnTerm{})
+
+	seen := ReachableBlocks(fn)
+	if !seen[b0] || !seen[b1] {
+		t.Fatalf("entry / goto target not reachable: %v", seen)
+	}
+	if seen[b2] {
+		t.Fatalf("orphan block _%d marked reachable: %v", b2, seen)
+	}
+}
+
+func TestReachableBlocksHandlesMissingEntry(t *testing.T) {
+	fn := &Function{Name: "bad", ReturnType: TUnit}
+	if got := ReachableBlocks(fn); got != nil {
+		t.Fatalf("expected nil for empty fn, got %v", got)
+	}
+}
+
+// ==== new validator checks ====
+
+func TestValidateRejectsReturnTypeMismatch(t *testing.T) {
+	fn := &Function{Name: "mismatch", ReturnType: TInt}
+	// Return local is Bool, not Int — the lowerer should never emit this
+	// shape; the validator must catch it.
+	fn.ReturnLocal = fn.NewLocal("_return", TBool, false, Span{})
+	fn.Locals[fn.ReturnLocal].IsReturn = true
+	bb := fn.NewBlock(Span{})
+	fn.Entry = bb
+	fn.Block(bb).SetTerminator(&ReturnTerm{})
+	mod := &Module{Package: "main", Functions: []*Function{fn}, Layouts: NewLayoutTable()}
+	errs := Validate(mod)
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "does not match declared return type") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected return-type-mismatch error, got %v", errs)
+	}
+}
+
+func TestValidateRejectsDuplicateSwitchCaseValue(t *testing.T) {
+	fn := &Function{Name: "dup_switch", ReturnType: TUnit}
+	fn.ReturnLocal = fn.NewLocal("_return", TUnit, false, Span{})
+	fn.Locals[fn.ReturnLocal].IsReturn = true
+	scrut := fn.NewLocal("s", TInt, false, Span{})
+	b0 := fn.NewBlock(Span{})
+	b1 := fn.NewBlock(Span{})
+	b2 := fn.NewBlock(Span{})
+	bDef := fn.NewBlock(Span{})
+	fn.Entry = b0
+	fn.Block(b0).SetTerminator(&SwitchIntTerm{
+		Scrutinee: &CopyOp{Place: Place{Local: scrut}, T: TInt},
+		Cases: []SwitchCase{
+			{Value: 0, Target: b1},
+			{Value: 0, Target: b2}, // duplicate value
+		},
+		Default: bDef,
+	})
+	fn.Block(b1).SetTerminator(&ReturnTerm{})
+	fn.Block(b2).SetTerminator(&ReturnTerm{})
+	fn.Block(bDef).SetTerminator(&ReturnTerm{})
+
+	mod := &Module{Package: "main", Functions: []*Function{fn}, Layouts: NewLayoutTable()}
+	errs := Validate(mod)
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "duplicates Cases") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected duplicate-switch-case error, got %v", errs)
+	}
+}
+
+func TestValidateRejectsStrayIsParam(t *testing.T) {
+	fn := &Function{Name: "strayparam", ReturnType: TUnit}
+	fn.ReturnLocal = fn.NewLocal("_return", TUnit, false, Span{})
+	fn.Locals[fn.ReturnLocal].IsReturn = true
+	// A local that claims to be a param but isn't listed in fn.Params.
+	stray := fn.NewLocal("x", TInt, false, Span{})
+	fn.Locals[stray].IsParam = true
+	bb := fn.NewBlock(Span{})
+	fn.Entry = bb
+	fn.Block(bb).SetTerminator(&ReturnTerm{})
+	mod := &Module{Package: "main", Functions: []*Function{fn}, Layouts: NewLayoutTable()}
+	errs := Validate(mod)
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "marked IsParam but not in fn.Params") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected stray-IsParam error, got %v", errs)
+	}
+}
+
+func TestValidateRejectsMultipleIsReturn(t *testing.T) {
+	fn := &Function{Name: "doublereturn", ReturnType: TUnit}
+	fn.ReturnLocal = fn.NewLocal("_return", TUnit, false, Span{})
+	fn.Locals[fn.ReturnLocal].IsReturn = true
+	// A second local mis-flagged as IsReturn.
+	extra := fn.NewLocal("also_return", TUnit, false, Span{})
+	fn.Locals[extra].IsReturn = true
+	bb := fn.NewBlock(Span{})
+	fn.Entry = bb
+	fn.Block(bb).SetTerminator(&ReturnTerm{})
+	mod := &Module{Package: "main", Functions: []*Function{fn}, Layouts: NewLayoutTable()}
+	errs := Validate(mod)
+	foundMulti := false
+	foundWrongLocal := false
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "more than one local marked IsReturn") {
+			foundMulti = true
+		}
+		if strings.Contains(e.Error(), "marked IsReturn but ReturnLocal=_") {
+			foundWrongLocal = true
+		}
+	}
+	if !foundMulti {
+		t.Fatalf("expected multi-IsReturn error, got %v", errs)
+	}
+	if !foundWrongLocal {
+		t.Fatalf("expected wrong-ReturnLocal error for stray IsReturn, got %v", errs)
+	}
+}
+
+// ==== stringer tests ====
+
+func TestEnumStringers(t *testing.T) {
+	cases := []struct {
+		got, want string
+	}{
+		{IntrinsicPrintln.String(), "println"},
+		{IntrinsicChanRecv.String(), "chan_recv"},
+		{IntrinsicListPush.String(), "list_push"},
+		{IntrinsicRawNull.String(), "raw_null"},
+		{IntrinsicInvalid.String(), "invalid"},
+		{IntrinsicKind(9999).String(), "invalid"},
+
+		{UnNeg.String(), "-"},
+		{UnNot.String(), "!"},
+		{UnaryOp(9999).String(), "?"},
+
+		{BinAdd.String(), "+"},
+		{BinLeq.String(), "<="},
+		{BinShr.String(), ">>"},
+		{BinaryOp(9999).String(), "?"},
+
+		{AggTuple.String(), "tuple"},
+		{AggClosure.String(), "closure"},
+		{AggregateKind(9999).String(), "?"},
+
+		{CastIntToFloat.String(), "int_to_float"},
+		{CastBitcast.String(), "bitcast"},
+		{CastKind(9999).String(), "?"},
+
+		{NullaryNone.String(), "none"},
+		{NullaryRVKind(9999).String(), "?"},
+	}
+	for _, tc := range cases {
+		if tc.got != tc.want {
+			t.Errorf("stringer: got %q, want %q", tc.got, tc.want)
+		}
+	}
+}
+
+// TestPrintUsesStringers confirms the printer still emits the expected
+// tokens now that it delegates to the enum Stringers.
+func TestPrintUsesStringers(t *testing.T) {
+	fn := &Function{Name: "show", ReturnType: TUnit}
+	fn.ReturnLocal = fn.NewLocal("_return", TUnit, false, Span{})
+	fn.Locals[fn.ReturnLocal].IsReturn = true
+	bb := fn.NewBlock(Span{})
+	fn.Entry = bb
+	fn.Block(bb).Append(&IntrinsicInstr{
+		Kind: IntrinsicPrintln,
+		Args: []Operand{&ConstOp{Const: &StringConst{Value: "hi"}, T: TString}},
+	})
+	fn.Block(bb).SetTerminator(&ReturnTerm{})
+	mod := &Module{Package: "main", Functions: []*Function{fn}, Layouts: NewLayoutTable()}
+	out := Print(mod)
+	if !strings.Contains(out, "intrinsic println(") {
+		t.Fatalf("printer should emit intrinsic println(...):\n%s", out)
+	}
+}
+
+// ==== storage-marker target tests ====
+
+func TestValidateRejectsStorageMarkerOnParam(t *testing.T) {
+	fn := &Function{Name: "bad_live", ReturnType: TUnit}
+	fn.ReturnLocal = fn.NewLocal("_return", TUnit, false, Span{})
+	fn.Locals[fn.ReturnLocal].IsReturn = true
+	pid := fn.NewLocal("x", TInt, false, Span{})
+	fn.Locals[pid].IsParam = true
+	fn.Params = append(fn.Params, pid)
+	bb := fn.NewBlock(Span{})
+	fn.Entry = bb
+	fn.Block(bb).Append(&StorageLiveInstr{Local: pid})
+	fn.Block(bb).SetTerminator(&ReturnTerm{})
+	mod := &Module{Package: "main", Functions: []*Function{fn}, Layouts: NewLayoutTable()}
+	errs := Validate(mod)
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "StorageLive on parameter") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected storage-on-param error, got %v", errs)
+	}
+}
+
+func TestValidateRejectsStorageMarkerOnReturnSlot(t *testing.T) {
+	fn := &Function{Name: "bad_dead", ReturnType: TUnit}
+	fn.ReturnLocal = fn.NewLocal("_return", TUnit, false, Span{})
+	fn.Locals[fn.ReturnLocal].IsReturn = true
+	bb := fn.NewBlock(Span{})
+	fn.Entry = bb
+	fn.Block(bb).Append(&StorageDeadInstr{Local: fn.ReturnLocal})
+	fn.Block(bb).SetTerminator(&ReturnTerm{})
+	mod := &Module{Package: "main", Functions: []*Function{fn}, Layouts: NewLayoutTable()}
+	errs := Validate(mod)
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "StorageDead on return slot") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected storage-on-return error, got %v", errs)
+	}
+}
+
+func TestValidateRejectsDuplicateParamID(t *testing.T) {
+	fn := &Function{Name: "dupparam", ReturnType: TUnit}
+	fn.ReturnLocal = fn.NewLocal("_return", TUnit, false, Span{})
+	fn.Locals[fn.ReturnLocal].IsReturn = true
+	pid := fn.NewLocal("x", TInt, false, Span{})
+	fn.Locals[pid].IsParam = true
+	fn.Params = []LocalID{pid, pid}
+	bb := fn.NewBlock(Span{})
+	fn.Entry = bb
+	fn.Block(bb).SetTerminator(&ReturnTerm{})
+	mod := &Module{Package: "main", Functions: []*Function{fn}, Layouts: NewLayoutTable()}
+	errs := Validate(mod)
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "appears more than once") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected duplicate-param error, got %v", errs)
+	}
+}

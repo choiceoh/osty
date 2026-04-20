@@ -254,7 +254,7 @@ func (p *printer) printInstr(instr Instr, f *Function) {
 			dest = placeString(*x.Dest, f) + " = "
 		}
 		args := operandsString(x.Args, f)
-		p.line("%sintrinsic %s(%s)", dest, intrinsicName(x.Kind), args)
+		p.line("%sintrinsic %s(%s)", dest, x.Kind, args)
 	case *StorageLiveInstr:
 		p.line("storage_live _%d", int(x.Local))
 	case *StorageDeadInstr:
@@ -348,31 +348,30 @@ func rvalueString(rv RValue, f *Function) string {
 	case *UseRV:
 		return "use " + operandString(x.Op, f)
 	case *UnaryRV:
-		return fmt.Sprintf("%s %s", unaryOpName(x.Op), operandString(x.Arg, f))
+		return fmt.Sprintf("%s %s", x.Op, operandString(x.Arg, f))
 	case *BinaryRV:
-		return fmt.Sprintf("%s %s %s", operandString(x.Left, f), binaryOpName(x.Op), operandString(x.Right, f))
+		return fmt.Sprintf("%s %s %s", operandString(x.Left, f), x.Op, operandString(x.Right, f))
 	case *AggregateRV:
-		kind := aggregateKindName(x.Kind)
 		if x.Kind == AggEnumVariant {
 			tag := x.VariantTag
 			if tag == "" {
 				tag = strconv.Itoa(x.VariantIdx)
 			}
-			return fmt.Sprintf("aggregate %s %s(%s)", kind, tag, operandsString(x.Fields, f))
+			return fmt.Sprintf("aggregate %s %s(%s)", x.Kind, tag, operandsString(x.Fields, f))
 		}
-		return fmt.Sprintf("aggregate %s(%s)", kind, operandsString(x.Fields, f))
+		return fmt.Sprintf("aggregate %s(%s)", x.Kind, operandsString(x.Fields, f))
 	case *DiscriminantRV:
 		return "discriminant " + placeString(x.Place, f)
 	case *LenRV:
 		return "len " + placeString(x.Place, f)
 	case *CastRV:
-		return fmt.Sprintf("cast %s %s as %s", castKindName(x.Kind), operandString(x.Arg, f), typeString(x.To))
+		return fmt.Sprintf("cast %s %s as %s", x.Kind, operandString(x.Arg, f), typeString(x.To))
 	case *AddressOfRV:
 		return "&" + placeString(x.Place, f)
 	case *RefRV:
 		return "ref " + placeString(x.Place, f)
 	case *NullaryRV:
-		return fmt.Sprintf("%s %s", nullaryKindName(x.Kind), typeString(x.T))
+		return fmt.Sprintf("%s %s", x.Kind, typeString(x.T))
 	case *GlobalRefRV:
 		return fmt.Sprintf("global %s %s", x.Name, typeString(x.T))
 	}
@@ -414,270 +413,6 @@ func constString(c Const) string {
 		return "const fn " + x.Symbol
 	}
 	return "(?)"
-}
-
-// ==== enum-style name tables ====
-
-func intrinsicName(k IntrinsicKind) string {
-	switch k {
-	case IntrinsicPrint:
-		return "print"
-	case IntrinsicPrintln:
-		return "println"
-	case IntrinsicEprint:
-		return "eprint"
-	case IntrinsicEprintln:
-		return "eprintln"
-	case IntrinsicAbort:
-		return "abort"
-	case IntrinsicStringConcat:
-		return "string_concat"
-	case IntrinsicChanMake:
-		return "chan_make"
-	case IntrinsicChanSend:
-		return "chan_send"
-	case IntrinsicChanRecv:
-		return "chan_recv"
-	case IntrinsicChanClose:
-		return "chan_close"
-	case IntrinsicChanIsClosed:
-		return "chan_is_closed"
-	case IntrinsicTaskGroup:
-		return "task_group"
-	case IntrinsicSpawn:
-		return "spawn"
-	case IntrinsicHandleJoin:
-		return "handle_join"
-	case IntrinsicGroupCancel:
-		return "group_cancel"
-	case IntrinsicGroupIsCancelled:
-		return "group_is_cancelled"
-	case IntrinsicParallel:
-		return "parallel"
-	case IntrinsicRace:
-		return "race"
-	case IntrinsicCollectAll:
-		return "collect_all"
-	case IntrinsicSelect:
-		return "select"
-	case IntrinsicSelectRecv:
-		return "select_recv"
-	case IntrinsicSelectSend:
-		return "select_send"
-	case IntrinsicSelectTimeout:
-		return "select_timeout"
-	case IntrinsicSelectDefault:
-		return "select_default"
-	case IntrinsicIsCancelled:
-		return "is_cancelled"
-	case IntrinsicCheckCancelled:
-		return "check_cancelled"
-	case IntrinsicYield:
-		return "yield"
-	case IntrinsicSleep:
-		return "sleep"
-
-	// ---- stdlib collections ----
-	case IntrinsicListPush:
-		return "list_push"
-	case IntrinsicListLen:
-		return "list_len"
-	case IntrinsicListGet:
-		return "list_get"
-	case IntrinsicListIsEmpty:
-		return "list_is_empty"
-	case IntrinsicListFirst:
-		return "list_first"
-	case IntrinsicListLast:
-		return "list_last"
-	case IntrinsicListSorted:
-		return "list_sorted"
-	case IntrinsicListContains:
-		return "list_contains"
-	case IntrinsicListIndexOf:
-		return "list_index_of"
-	case IntrinsicListToSet:
-		return "list_to_set"
-	case IntrinsicMapNew:
-		return "map_new"
-	case IntrinsicMapGet:
-		return "map_get"
-	case IntrinsicMapSet:
-		return "map_set"
-	case IntrinsicMapContains:
-		return "map_contains"
-	case IntrinsicMapLen:
-		return "map_len"
-	case IntrinsicMapKeys:
-		return "map_keys"
-	case IntrinsicMapValues:
-		return "map_values"
-	case IntrinsicMapRemove:
-		return "map_remove"
-	case IntrinsicSetNew:
-		return "set_new"
-	case IntrinsicSetInsert:
-		return "set_insert"
-	case IntrinsicSetContains:
-		return "set_contains"
-	case IntrinsicSetLen:
-		return "set_len"
-	case IntrinsicSetToList:
-		return "set_to_list"
-	case IntrinsicSetRemove:
-		return "set_remove"
-	case IntrinsicStringLen:
-		return "string_len"
-	case IntrinsicStringIsEmpty:
-		return "string_is_empty"
-	case IntrinsicStringContains:
-		return "string_contains"
-	case IntrinsicStringStartsWith:
-		return "string_starts_with"
-	case IntrinsicStringEndsWith:
-		return "string_ends_with"
-	case IntrinsicStringIndexOf:
-		return "string_index_of"
-	case IntrinsicStringSplit:
-		return "string_split"
-	case IntrinsicStringTrim:
-		return "string_trim"
-	case IntrinsicStringToUpper:
-		return "string_to_upper"
-	case IntrinsicStringToLower:
-		return "string_to_lower"
-	case IntrinsicStringReplace:
-		return "string_replace"
-	case IntrinsicStringChars:
-		return "string_chars"
-	case IntrinsicStringBytes:
-		return "string_bytes"
-	case IntrinsicBytesLen:
-		return "bytes_len"
-	case IntrinsicBytesIsEmpty:
-		return "bytes_is_empty"
-	case IntrinsicBytesGet:
-		return "bytes_get"
-	case IntrinsicOptionIsSome:
-		return "option_is_some"
-	case IntrinsicOptionIsNone:
-		return "option_is_none"
-	case IntrinsicOptionUnwrap:
-		return "option_unwrap"
-	case IntrinsicOptionUnwrapOr:
-		return "option_unwrap_or"
-	case IntrinsicResultIsOk:
-		return "result_is_ok"
-	case IntrinsicResultIsErr:
-		return "result_is_err"
-	case IntrinsicResultUnwrap:
-		return "result_unwrap"
-	case IntrinsicResultUnwrapOr:
-		return "result_unwrap_or"
-	}
-	return "invalid"
-}
-
-func unaryOpName(op UnaryOp) string {
-	switch op {
-	case UnNeg:
-		return "-"
-	case UnPlus:
-		return "+"
-	case UnNot:
-		return "!"
-	case UnBitNot:
-		return "~"
-	}
-	return "?"
-}
-
-func binaryOpName(op BinaryOp) string {
-	switch op {
-	case BinAdd:
-		return "+"
-	case BinSub:
-		return "-"
-	case BinMul:
-		return "*"
-	case BinDiv:
-		return "/"
-	case BinMod:
-		return "%"
-	case BinEq:
-		return "=="
-	case BinNeq:
-		return "!="
-	case BinLt:
-		return "<"
-	case BinLeq:
-		return "<="
-	case BinGt:
-		return ">"
-	case BinGeq:
-		return ">="
-	case BinAnd:
-		return "&&"
-	case BinOr:
-		return "||"
-	case BinBitAnd:
-		return "&"
-	case BinBitOr:
-		return "|"
-	case BinBitXor:
-		return "^"
-	case BinShl:
-		return "<<"
-	case BinShr:
-		return ">>"
-	}
-	return "?"
-}
-
-func aggregateKindName(k AggregateKind) string {
-	switch k {
-	case AggTuple:
-		return "tuple"
-	case AggStruct:
-		return "struct"
-	case AggEnumVariant:
-		return "variant"
-	case AggList:
-		return "list"
-	case AggMap:
-		return "map"
-	case AggClosure:
-		return "closure"
-	}
-	return "?"
-}
-
-func castKindName(k CastKind) string {
-	switch k {
-	case CastIntResize:
-		return "int_resize"
-	case CastIntToFloat:
-		return "int_to_float"
-	case CastFloatToInt:
-		return "float_to_int"
-	case CastFloatResize:
-		return "float_resize"
-	case CastOptionalWrap:
-		return "optional_wrap"
-	case CastOptionalUnwrap:
-		return "optional_unwrap"
-	case CastBitcast:
-		return "bitcast"
-	}
-	return "?"
-}
-
-func nullaryKindName(k NullaryRVKind) string {
-	switch k {
-	case NullaryNone:
-		return "none"
-	}
-	return "?"
 }
 
 // ==== misc helpers ====

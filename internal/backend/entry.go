@@ -79,8 +79,19 @@ func PrepareEntry(packageName, sourcePath string, file *ast.File, res *resolve.R
 	// validator adds any post-condition failures. MIR is not yet a
 	// backend-blocking contract — callers that consume it should check for
 	// nil and fall back to the HIR path.
+	//
+	// After lowering we run `mir.Optimize` in-place. The pass is
+	// conservative (cross-block const propagation, dead-assign /
+	// dead-call-dest / orphan-storage elimination, empty-goto collapse,
+	// constant-fold on terminators) and by construction preserves
+	// validator invariants, so it runs before `mir.Validate`. A
+	// `OSTY_MIR_OPTIMIZE=0` escape hatch is honoured so callers can
+	// bisect regressions.
 	mirMod := mir.Lower(mod)
 	if mirMod != nil {
+		if mirOptimizeEnabled() {
+			mir.Optimize(mirMod)
+		}
 		entry.MIRIssues = append(entry.MIRIssues, mirMod.Issues...)
 		if mirValidateErrs := mir.Validate(mirMod); len(mirValidateErrs) != 0 {
 			entry.MIRIssues = append(entry.MIRIssues, mirValidateErrs...)
@@ -88,4 +99,17 @@ func PrepareEntry(packageName, sourcePath string, file *ast.File, res *resolve.R
 		entry.MIR = mirMod
 	}
 	return entry, nil
+}
+
+// mirOptimizeEnabled reports whether `PrepareEntry` should call
+// `mir.Optimize` on each freshly lowered module. Defaults to ON; set
+// `OSTY_MIR_OPTIMIZE=0` (or `off`, `false`) to skip the pass — useful
+// for bisecting regressions or comparing MIR dumps with and without
+// optimisation.
+func mirOptimizeEnabled() bool {
+	switch os.Getenv("OSTY_MIR_OPTIMIZE") {
+	case "0", "false", "off":
+		return false
+	}
+	return true
 }

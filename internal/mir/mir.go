@@ -1135,6 +1135,104 @@ func SpanOfTerm(t Terminator) Span {
 	return t.At()
 }
 
+// ==== CFG helpers ====
+
+// Successors returns the successor block IDs of a terminator in source
+// order: Then before Else for BranchTerm, cases in declaration order
+// followed by Default for SwitchIntTerm. ReturnTerm and UnreachableTerm
+// return nil. A nil terminator also returns nil so callers can hand
+// unfinished blocks in without guarding.
+//
+// The result is a fresh slice; callers are free to mutate it.
+func Successors(t Terminator) []BlockID {
+	switch x := t.(type) {
+	case nil:
+		return nil
+	case *GotoTerm:
+		return []BlockID{x.Target}
+	case *BranchTerm:
+		return []BlockID{x.Then, x.Else}
+	case *SwitchIntTerm:
+		out := make([]BlockID, 0, len(x.Cases)+1)
+		for _, c := range x.Cases {
+			out = append(out, c.Target)
+		}
+		out = append(out, x.Default)
+		return out
+	case *ReturnTerm, *UnreachableTerm:
+		return nil
+	default:
+		return nil
+	}
+}
+
+// Predecessors builds a predecessor index: block → list of block IDs
+// whose terminator jumps to it. Each successor edge discovered via
+// Successors contributes one entry; SwitchIntTerm with duplicate case
+// targets produces duplicates in the predecessor list (so the caller
+// can distinguish redundant edges from distinct ones if they care).
+//
+// Returns an empty map when fn has no blocks. The map only contains
+// keys for blocks that actually have predecessors; callers iterating
+// over all blocks should handle the zero-predecessor case themselves.
+func Predecessors(fn *Function) map[BlockID][]BlockID {
+	preds := map[BlockID][]BlockID{}
+	if fn == nil {
+		return preds
+	}
+	for _, bb := range fn.Blocks {
+		if bb == nil {
+			continue
+		}
+		for _, succ := range Successors(bb.Term) {
+			if int(succ) < 0 || int(succ) >= len(fn.Blocks) {
+				continue
+			}
+			preds[succ] = append(preds[succ], bb.ID)
+		}
+	}
+	return preds
+}
+
+// ReachableBlocks returns the set of block IDs reachable from fn.Entry
+// by walking terminator successors. Blocks not present in the returned
+// map are orphans — either the lowerer dropped instructions after a
+// terminator and never branched to the resulting block, or a later pass
+// disconnected them.
+//
+// Returns nil when fn has no blocks or fn.Entry is out of range.
+func ReachableBlocks(fn *Function) map[BlockID]bool {
+	if fn == nil || len(fn.Blocks) == 0 {
+		return nil
+	}
+	if int(fn.Entry) < 0 || int(fn.Entry) >= len(fn.Blocks) {
+		return nil
+	}
+	seen := make(map[BlockID]bool, len(fn.Blocks))
+	stack := []BlockID{fn.Entry}
+	for len(stack) > 0 {
+		id := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		bb := fn.Block(id)
+		if bb == nil {
+			continue
+		}
+		for _, next := range Successors(bb.Term) {
+			if int(next) < 0 || int(next) >= len(fn.Blocks) {
+				continue
+			}
+			if !seen[next] {
+				stack = append(stack, next)
+			}
+		}
+	}
+	return seen
+}
+
 // ==== Diagnostics helper ====
 
 // Unsupported returns a sentinel error signalling that MIR lowering
@@ -1142,4 +1240,284 @@ func SpanOfTerm(t Terminator) Span {
 // decide whether to fall back to the HIR path.
 func Unsupported(format string, args ...any) error {
 	return fmt.Errorf("mir: unsupported: "+format, args...)
+}
+
+// ==== Stringer methods ====
+//
+// The MIR enum types (IntrinsicKind, UnaryOp, BinaryOp, AggregateKind,
+// CastKind, NullaryRVKind) implement fmt.Stringer so the printer,
+// validators and any downstream pass share one canonical name per
+// value. The token strings match the tokens the human-readable printer
+// emits, so callers can format diagnostics with `%s` without pulling
+// in the printer.
+
+// String renders an IntrinsicKind as its canonical MIR token
+// (`println`, `chan_recv`, `list_push`, …). Unknown values render as
+// `invalid` to match the printer's historical behaviour.
+func (k IntrinsicKind) String() string {
+	switch k {
+	case IntrinsicPrint:
+		return "print"
+	case IntrinsicPrintln:
+		return "println"
+	case IntrinsicEprint:
+		return "eprint"
+	case IntrinsicEprintln:
+		return "eprintln"
+	case IntrinsicAbort:
+		return "abort"
+	case IntrinsicStringConcat:
+		return "string_concat"
+	case IntrinsicChanMake:
+		return "chan_make"
+	case IntrinsicChanSend:
+		return "chan_send"
+	case IntrinsicChanRecv:
+		return "chan_recv"
+	case IntrinsicChanClose:
+		return "chan_close"
+	case IntrinsicChanIsClosed:
+		return "chan_is_closed"
+	case IntrinsicTaskGroup:
+		return "task_group"
+	case IntrinsicSpawn:
+		return "spawn"
+	case IntrinsicHandleJoin:
+		return "handle_join"
+	case IntrinsicGroupCancel:
+		return "group_cancel"
+	case IntrinsicGroupIsCancelled:
+		return "group_is_cancelled"
+	case IntrinsicParallel:
+		return "parallel"
+	case IntrinsicRace:
+		return "race"
+	case IntrinsicCollectAll:
+		return "collect_all"
+	case IntrinsicSelect:
+		return "select"
+	case IntrinsicSelectRecv:
+		return "select_recv"
+	case IntrinsicSelectSend:
+		return "select_send"
+	case IntrinsicSelectTimeout:
+		return "select_timeout"
+	case IntrinsicSelectDefault:
+		return "select_default"
+	case IntrinsicIsCancelled:
+		return "is_cancelled"
+	case IntrinsicCheckCancelled:
+		return "check_cancelled"
+	case IntrinsicYield:
+		return "yield"
+	case IntrinsicSleep:
+		return "sleep"
+	case IntrinsicListPush:
+		return "list_push"
+	case IntrinsicListLen:
+		return "list_len"
+	case IntrinsicListGet:
+		return "list_get"
+	case IntrinsicListIsEmpty:
+		return "list_is_empty"
+	case IntrinsicListFirst:
+		return "list_first"
+	case IntrinsicListLast:
+		return "list_last"
+	case IntrinsicListSorted:
+		return "list_sorted"
+	case IntrinsicListContains:
+		return "list_contains"
+	case IntrinsicListIndexOf:
+		return "list_index_of"
+	case IntrinsicListToSet:
+		return "list_to_set"
+	case IntrinsicMapNew:
+		return "map_new"
+	case IntrinsicMapGet:
+		return "map_get"
+	case IntrinsicMapSet:
+		return "map_set"
+	case IntrinsicMapContains:
+		return "map_contains"
+	case IntrinsicMapLen:
+		return "map_len"
+	case IntrinsicMapKeys:
+		return "map_keys"
+	case IntrinsicMapValues:
+		return "map_values"
+	case IntrinsicMapRemove:
+		return "map_remove"
+	case IntrinsicSetNew:
+		return "set_new"
+	case IntrinsicSetInsert:
+		return "set_insert"
+	case IntrinsicSetContains:
+		return "set_contains"
+	case IntrinsicSetLen:
+		return "set_len"
+	case IntrinsicSetToList:
+		return "set_to_list"
+	case IntrinsicSetRemove:
+		return "set_remove"
+	case IntrinsicStringLen:
+		return "string_len"
+	case IntrinsicStringIsEmpty:
+		return "string_is_empty"
+	case IntrinsicStringContains:
+		return "string_contains"
+	case IntrinsicStringStartsWith:
+		return "string_starts_with"
+	case IntrinsicStringEndsWith:
+		return "string_ends_with"
+	case IntrinsicStringIndexOf:
+		return "string_index_of"
+	case IntrinsicStringSplit:
+		return "string_split"
+	case IntrinsicStringTrim:
+		return "string_trim"
+	case IntrinsicStringToUpper:
+		return "string_to_upper"
+	case IntrinsicStringToLower:
+		return "string_to_lower"
+	case IntrinsicStringReplace:
+		return "string_replace"
+	case IntrinsicStringChars:
+		return "string_chars"
+	case IntrinsicStringBytes:
+		return "string_bytes"
+	case IntrinsicBytesLen:
+		return "bytes_len"
+	case IntrinsicBytesIsEmpty:
+		return "bytes_is_empty"
+	case IntrinsicBytesGet:
+		return "bytes_get"
+	case IntrinsicOptionIsSome:
+		return "option_is_some"
+	case IntrinsicOptionIsNone:
+		return "option_is_none"
+	case IntrinsicOptionUnwrap:
+		return "option_unwrap"
+	case IntrinsicOptionUnwrapOr:
+		return "option_unwrap_or"
+	case IntrinsicResultIsOk:
+		return "result_is_ok"
+	case IntrinsicResultIsErr:
+		return "result_is_err"
+	case IntrinsicResultUnwrap:
+		return "result_unwrap"
+	case IntrinsicResultUnwrapOr:
+		return "result_unwrap_or"
+	case IntrinsicRawNull:
+		return "raw_null"
+	}
+	return "invalid"
+}
+
+// String renders a UnaryOp as its source-level symbol. Unknown values
+// render as "?" to match the printer's historical behaviour.
+func (op UnaryOp) String() string {
+	switch op {
+	case UnNeg:
+		return "-"
+	case UnPlus:
+		return "+"
+	case UnNot:
+		return "!"
+	case UnBitNot:
+		return "~"
+	}
+	return "?"
+}
+
+// String renders a BinaryOp as its source-level symbol.
+func (op BinaryOp) String() string {
+	switch op {
+	case BinAdd:
+		return "+"
+	case BinSub:
+		return "-"
+	case BinMul:
+		return "*"
+	case BinDiv:
+		return "/"
+	case BinMod:
+		return "%"
+	case BinEq:
+		return "=="
+	case BinNeq:
+		return "!="
+	case BinLt:
+		return "<"
+	case BinLeq:
+		return "<="
+	case BinGt:
+		return ">"
+	case BinGeq:
+		return ">="
+	case BinAnd:
+		return "&&"
+	case BinOr:
+		return "||"
+	case BinBitAnd:
+		return "&"
+	case BinBitOr:
+		return "|"
+	case BinBitXor:
+		return "^"
+	case BinShl:
+		return "<<"
+	case BinShr:
+		return ">>"
+	}
+	return "?"
+}
+
+// String renders an AggregateKind as its canonical name.
+func (k AggregateKind) String() string {
+	switch k {
+	case AggTuple:
+		return "tuple"
+	case AggStruct:
+		return "struct"
+	case AggEnumVariant:
+		return "variant"
+	case AggList:
+		return "list"
+	case AggMap:
+		return "map"
+	case AggClosure:
+		return "closure"
+	}
+	return "?"
+}
+
+// String renders a CastKind as its canonical name.
+func (k CastKind) String() string {
+	switch k {
+	case CastIntResize:
+		return "int_resize"
+	case CastIntToFloat:
+		return "int_to_float"
+	case CastFloatToInt:
+		return "float_to_int"
+	case CastFloatResize:
+		return "float_resize"
+	case CastOptionalWrap:
+		return "optional_wrap"
+	case CastOptionalUnwrap:
+		return "optional_unwrap"
+	case CastBitcast:
+		return "bitcast"
+	}
+	return "?"
+}
+
+// String renders a NullaryRVKind as its canonical name.
+func (k NullaryRVKind) String() string {
+	switch k {
+	case NullaryNone:
+		return "none"
+	}
+	return "?"
 }
