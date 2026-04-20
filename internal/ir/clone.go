@@ -383,11 +383,14 @@ func cloneParam(p *Param) *Param {
 
 func cloneField(f *Field) *Field {
 	return &Field{
-		Name:     f.Name,
-		Type:     CloneType(f.Type),
-		Default:  cloneExprOrNil(f.Default),
-		Exported: f.Exported,
-		SpanV:    f.SpanV,
+		Name:         f.Name,
+		Type:         CloneType(f.Type),
+		Default:      cloneExprOrNil(f.Default),
+		Exported:     f.Exported,
+		SpanV:        f.SpanV,
+		JSONKey:      f.JSONKey,
+		JSONSkip:     f.JSONSkip,
+		JSONOptional: f.JSONOptional,
 	}
 }
 
@@ -400,7 +403,12 @@ func cloneTypeParam(tp *TypeParam) *TypeParam {
 }
 
 func cloneVariant(v *Variant) *Variant {
-	out := &Variant{Name: v.Name, SpanV: v.SpanV}
+	out := &Variant{
+		Name:     v.Name,
+		SpanV:    v.SpanV,
+		JSONTag:  v.JSONTag,
+		JSONSkip: v.JSONSkip,
+	}
 	if len(v.Payload) > 0 {
 		out.Payload = cloneTypes(v.Payload)
 	}

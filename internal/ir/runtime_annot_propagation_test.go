@@ -105,6 +105,173 @@ func TestPodAbsenceIsFalse(t *testing.T) {
 	t.Fatal("User not in module decls")
 }
 
+// --- #[json(...)] on struct fields -> ir.Field.JSON* ---
+
+func TestJSONFieldAnnotationsFlowToIR(t *testing.T) {
+	src := `
+pub struct ApiUser {
+    #[json(key = "user_id")]
+    pub id: Int,
+    #[json(key = "full_name")]
+    pub name: String,
+    #[json(skip)]
+    cache: Int,
+    #[json(optional)]
+    nickname: String?,
+    pub age: Int,
+}
+`
+	mod := lowerSrc(t, src)
+	var sd *StructDecl
+	for _, decl := range mod.Decls {
+		if s, ok := decl.(*StructDecl); ok && s.Name == "ApiUser" {
+			sd = s
+			break
+		}
+	}
+	if sd == nil {
+		t.Fatal("ApiUser not in module decls")
+	}
+
+	byName := map[string]*Field{}
+	for _, f := range sd.Fields {
+		byName[f.Name] = f
+	}
+
+	cases := []struct {
+		field    string
+		key      string
+		skip     bool
+		optional bool
+	}{
+		{"id", "user_id", false, false},
+		{"name", "full_name", false, false},
+		{"cache", "", true, false},
+		{"nickname", "", false, true},
+		{"age", "", false, false},
+	}
+	for _, c := range cases {
+		f := byName[c.field]
+		if f == nil {
+			t.Errorf("field %q missing from lowered struct", c.field)
+			continue
+		}
+		if f.JSONKey != c.key {
+			t.Errorf("field %q JSONKey = %q, want %q", c.field, f.JSONKey, c.key)
+		}
+		if f.JSONSkip != c.skip {
+			t.Errorf("field %q JSONSkip = %v, want %v", c.field, f.JSONSkip, c.skip)
+		}
+		if f.JSONOptional != c.optional {
+			t.Errorf("field %q JSONOptional = %v, want %v", c.field, f.JSONOptional, c.optional)
+		}
+	}
+}
+
+// --- #[json(...)] on enum variants -> ir.Variant.JSON* ---
+
+func TestJSONVariantAnnotationsFlowToIR(t *testing.T) {
+	src := `
+pub enum Shape {
+    #[json(key = "circle")]
+    Round(Int),
+    #[json(skip)]
+    Hidden,
+    Square(Int),
+}
+`
+	mod := lowerSrc(t, src)
+	var ed *EnumDecl
+	for _, decl := range mod.Decls {
+		if e, ok := decl.(*EnumDecl); ok && e.Name == "Shape" {
+			ed = e
+			break
+		}
+	}
+	if ed == nil {
+		t.Fatal("Shape not in module decls")
+	}
+
+	byName := map[string]*Variant{}
+	for _, v := range ed.Variants {
+		byName[v.Name] = v
+	}
+
+	cases := []struct {
+		variant string
+		tag     string
+		skip    bool
+	}{
+		{"Round", "circle", false},
+		{"Hidden", "", true},
+		{"Square", "", false},
+	}
+	for _, c := range cases {
+		v := byName[c.variant]
+		if v == nil {
+			t.Errorf("variant %q missing from lowered enum", c.variant)
+			continue
+		}
+		if v.JSONTag != c.tag {
+			t.Errorf("variant %q JSONTag = %q, want %q", c.variant, v.JSONTag, c.tag)
+		}
+		if v.JSONSkip != c.skip {
+			t.Errorf("variant %q JSONSkip = %v, want %v", c.variant, v.JSONSkip, c.skip)
+		}
+	}
+}
+
+// --- Ensure fields/variants without #[json] leave metadata empty ---
+
+func TestJSONMetadataAbsenceIsZero(t *testing.T) {
+	src := `
+pub struct Plain { pub x: Int }
+pub enum Color { Red, Green }
+`
+	mod := lowerSrc(t, src)
+	for _, decl := range mod.Decls {
+		if s, ok := decl.(*StructDecl); ok && s.Name == "Plain" {
+			for _, f := range s.Fields {
+				if f.JSONKey != "" || f.JSONSkip || f.JSONOptional {
+					t.Errorf("plain field carries json metadata: %+v", f)
+				}
+			}
+		}
+		if e, ok := decl.(*EnumDecl); ok && e.Name == "Color" {
+			for _, v := range e.Variants {
+				if v.JSONTag != "" || v.JSONSkip {
+					t.Errorf("plain variant carries json metadata: %+v", v)
+				}
+			}
+		}
+	}
+}
+
+// --- Cloning preserves JSON metadata ---
+
+func TestCloneFieldPreservesJSON(t *testing.T) {
+	orig := &Field{
+		Name:         "x",
+		Type:         TInt,
+		Exported:     true,
+		JSONKey:      "renamed",
+		JSONSkip:     false,
+		JSONOptional: true,
+	}
+	c := cloneField(orig)
+	if c.JSONKey != "renamed" || c.JSONOptional != true {
+		t.Errorf("cloneField dropped JSON metadata: %+v", c)
+	}
+}
+
+func TestCloneVariantPreservesJSON(t *testing.T) {
+	orig := &Variant{Name: "V", JSONTag: "v-renamed", JSONSkip: true}
+	c := cloneVariant(orig)
+	if c.JSONTag != "v-renamed" || !c.JSONSkip {
+		t.Errorf("cloneVariant dropped JSON metadata: %+v", c)
+	}
+}
+
 // --- combined: every runtime annotation in one fn ---
 
 func TestAllRuntimeAnnotationsCoexistOnFn(t *testing.T) {
