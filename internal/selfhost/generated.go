@@ -33395,12 +33395,31 @@ func elabInferIdent(cx *ElabCx, node *AstNode) *ElabResult {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14379:9
 		return &ElabResult{node: coreIdx, ty: fnTy}
 	}
+	// Try enum variant in expression position. Payload-free variants
+	// (FrontQDot, BoMul, AstNBlock, etc.) and generic enum tags like
+	// `None` resolve to `Enum<fresh>`. Payload-ful variant calls
+	// (`Some(x)`) are handled by elabInferCall. Mirrored from
+	// toolchain/elab.osty pending a regen fix.
+	if variant := checkLookupVariant(cx.env, node.text); variant.name != "" && checkIntListLenHelper(variant.fieldTys) == 0 {
+		variantTy := elabVariantOwnerType(cx, variant)
+		coreIdx := coreIdent(cx.core, node.text, IdentKind(&IdentKind_IkVariant{}), variantTy, node.start, node.end)
+		return &ElabResult{node: coreIdx, ty: variantTy}
+	}
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14382:5
 	func() struct{} {
 		cx.env.diagnostics = append(cx.env.diagnostics, diagUnknownName(node.text, node.start, node.end))
 		return struct{}{}
 	}()
 	return elabPoisonResult(cx, node.start, node.end)
+}
+
+// elabVariantOwnerType — mirror of toolchain/elab.osty.
+func elabVariantOwnerType(cx *ElabCx, variant *CheckVariantSig) int {
+	args := make([]int, 0, len(variant.generics))
+	for _, g := range variant.generics {
+		args = append(args, freshTyVar(cx.env.tys, variant.owner, g))
+	}
+	return tyNamed(cx.env.tys, variant.owner, args)
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14387:1
