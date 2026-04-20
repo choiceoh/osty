@@ -132,12 +132,49 @@ Symbol resolution:
 
 The constraints in §12.7 apply unchanged: no generics, no closures, no
 defaults/keywords, monomorphic signatures only. Type mapping uses the
-runtime ABI rules (`Int` → `i64`, `Bool` → `i1`, `String` → `ptr`,
-optional/aggregate/function types → `ptr`); broader C numeric coverage
-(`Int32`, `Float32`, …) is gated on separate runtime-type work.
+runtime ABI rules:
+
+| Osty | LLVM | C equivalent (typical) |
+|---|---|---|
+| `Int` | `i64` | `int64_t` |
+| `Float` | `double` | `double` |
+| `Bool` | `i1` | `_Bool` (passed as `i1`) |
+| `Char` | `i32` | `int32_t` (Unicode codepoint) — usable for C `int` |
+| `Byte` | `i8` | `uint8_t` — usable for C `char` / `unsigned char` |
+| `String`, `Bytes`, `Error`, `T?`, `(...)`, `fn(...) -> R` | `ptr` | opaque pointer |
+
+`Int32` / `UInt8` / `Float32` and other narrow-width primitives are
+**not yet** part of the runtime ABI — for `int abs(int)` style libc
+calls the working bridge today is `Char` (i32). String marshalling
+between Osty `String` (length-prefixed, GC-managed) and `const char*`
+(NUL-terminated) requires an explicit `runtime.strings` helper at the
+call site; passing an Osty `String` directly to a C symbol declared as
+`String -> ptr` is **not** equivalent to passing a `const char*`.
 
 `runtime.cabi.*` does not relax §12.6 panic semantics: a foreign symbol
 that aborts the process aborts Osty too. Recoverable errors must surface
 through return values, not host-side exceptions.
+
+#### 12.8.1 Linking C Libraries
+
+`use c "..."` only declares the symbols — the providing library must
+be linked at the final native build step. The manifest's
+`[target.<triple>]` table carries a `link` array of system library
+names (passed to the linker as `-l<name>`, in source order):
+
+```toml
+[target.amd64-linux]
+link = ["m", "pthread", "osty_demo"]
+```
+
+Library names follow the platform's linker convention (no `lib`
+prefix, no extension on Unix; the linker resolves `libfoo.{a,so}` /
+`foo.lib` / `foo.dylib` per platform). Source order is preserved so
+authors can express link order when it matters (typical only with
+static archives that have inter-archive symbol references).
+
+The manifest never embeds full paths or `-L` directories; project-wide
+search paths come from the build environment. CI / package authors
+keep cross-platform link lists per `[target.<triple>]` table.
 
 ---
