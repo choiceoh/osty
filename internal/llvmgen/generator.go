@@ -18,6 +18,7 @@ import (
 
 type generator struct {
 	sourcePath        string
+	source            []byte
 	target            string
 	functions         map[string]*fnSig
 	methods           map[string]map[string]*fnSig

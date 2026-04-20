@@ -120,13 +120,20 @@ type Backend interface {
 type Entry struct {
 	PackageName string
 	SourcePath  string
-	File        *ast.File
-	Resolve     *resolve.Result
-	Check       *check.Result
-	IR          *ir.Module
-	IRIssues    []error
-	MIR         *mir.Module
-	MIRIssues   []error
+	// Source carries the original UTF-8 source bytes for the primary
+	// file so diagnostic-oriented backends can resolve byte offsets back
+	// to source text. Optional — callers that don't wire it leave the
+	// backend on its current "location only" error rendering. The native
+	// test harness in particular uses it to quote the original
+	// expression text of `testing.assertEq` arguments on failure.
+	Source    []byte
+	File      *ast.File
+	Resolve   *resolve.Result
+	Check     *check.Result
+	IR        *ir.Module
+	IRIssues  []error
+	MIR       *mir.Module
+	MIRIssues []error
 }
 
 // Request is the backend-neutral build request shared by gen/build/run/test

@@ -65,6 +65,18 @@ fn testAddFails() {
 	if got := stdout.String(); !strings.Contains(got, "FAIL\ttestAddFails") || !strings.Contains(got, "testing.assertEq failed at") {
 		t.Fatalf("stdout = %q, want failing assertion output", got)
 	}
+	// The native harness quotes the original source text of each
+	// argument so the reader sees which expression diverged without
+	// cross-referencing the file. `add(1, 2)` is the left operand,
+	// `4` is the right — both must survive the LLVM emitter's span
+	// capture intact. For scalar arguments (Int here) the runtime
+	// value is also appended so the reader sees `= 3` for the
+	// computed left side and `= 4` for the expected right side — the
+	// actual delta in one glance.
+	combined := stdout.String() + stderr.String()
+	if !strings.Contains(combined, "left=`add(1, 2)` = 3") || !strings.Contains(combined, "right=`4` = 4") {
+		t.Fatalf("output missing per-argument source text + runtime value quoting:\nstdout:\n%s\nstderr:\n%s", stdout.String(), stderr.String())
+	}
 	if got := stderr.String(); !strings.Contains(got, "osty test: testAddFails: exit status 1") {
 		t.Fatalf("stderr = %q, want native failure summary", got)
 	}
@@ -133,8 +145,76 @@ fn testExpectOkFails() {
 	if got := stdout.String(); !strings.Contains(got, "FAIL\ttestExpectOkFails") || !strings.Contains(got, "testing.expectOk failed at") {
 		t.Fatalf("stdout = %q, want expectOk failure output", got)
 	}
+	// expectOk also quotes the Result-producing expression so the
+	// reader knows which call returned an error without jumping to
+	// the source. Runtime value capture of the Result payload is
+	// deferred (tracked separately with ToString protocol dispatch).
+	combined := stdout.String() + stderr.String()
+	if !strings.Contains(combined, "expr=`div(1, 0)`") {
+		t.Fatalf("output missing expectOk expression quoting:\nstdout:\n%s\nstderr:\n%s", stdout.String(), stderr.String())
+	}
 	if got := stderr.String(); !strings.Contains(got, "osty test: testExpectOkFails: exit status 1") {
 		t.Fatalf("stderr = %q, want native expectOk failure summary", got)
+	}
+}
+
+func TestRunTestMainReportsNativeLLVMAssertTrueFailure(t *testing.T) {
+	requireClangForNativeTest(t)
+
+	dir := t.TempDir()
+	writeNativeTestFile(t, dir, "lib.osty", `pub fn even(n: Int) -> Bool {
+    n % 2 == 0
+}
+`)
+	writeNativeTestFile(t, dir, "lib_test.osty", `use std.testing
+
+fn testAssertTrueFails() {
+    testing.assertTrue(even(3))
+}
+`)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := runTestMain([]string{dir}, cliFlags{}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("runTestMain() exit = %d, want 1\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	}
+	combined := stdout.String() + stderr.String()
+	// assertTrue quotes the condition expression — no runtime value
+	// capture for Bool since it carries no extra information beyond
+	// "failed" (the cond is always false on failure).
+	if !strings.Contains(combined, "testing.assertTrue failed at") || !strings.Contains(combined, "cond=`even(3)`") {
+		t.Fatalf("output missing assertTrue cond quoting:\nstdout:\n%s\nstderr:\n%s", stdout.String(), stderr.String())
+	}
+}
+
+func TestRunTestMainReportsNativeLLVMAssertEqStringFailure(t *testing.T) {
+	requireClangForNativeTest(t)
+
+	dir := t.TempDir()
+	writeNativeTestFile(t, dir, "lib.osty", `pub fn greet(name: String) -> String {
+    "hi " + name
+}
+`)
+	writeNativeTestFile(t, dir, "lib_test.osty", `use std.testing
+
+fn testGreetFails() {
+    testing.assertEq(greet("ada"), "hello ada")
+}
+`)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := runTestMain([]string{dir}, cliFlags{}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("runTestMain() exit = %d, want 1\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	}
+	combined := stdout.String() + stderr.String()
+	// Strings are ptrs the runtime already knows how to print, so
+	// the dispatcher emits them directly — `hi ada` and `hello ada`
+	// must both appear verbatim alongside the quoted source text.
+	if !strings.Contains(combined, "left=`greet(\"ada\")` = hi ada") || !strings.Contains(combined, `right=`+"`"+`"hello ada"`+"`"+` = hello ada`) {
+		t.Fatalf("output missing String runtime value capture:\nstdout:\n%s\nstderr:\n%s", stdout.String(), stderr.String())
 	}
 }
 

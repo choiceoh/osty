@@ -51,9 +51,14 @@ var ErrUnsupported = errors.New("llvmgen: unsupported source shape")
 type Options struct {
 	PackageName string
 	SourcePath  string
-	Target      string
-	UseMIR      bool
-	EmitGC      bool
+	// Source carries the UTF-8 source bytes of the primary file. The
+	// emitter uses it for diagnostic-oriented lookups like rendering
+	// the original expression text of `testing.assertEq` arguments in
+	// failure messages. Optional — leave nil to skip text capture.
+	Source []byte
+	Target string
+	UseMIR bool
+	EmitGC bool
 }
 
 // SmokeExecutableCase describes one LLVM executable parity case. The data is
@@ -238,6 +243,7 @@ func generateASTFile(file *ast.File, opts Options) ([]byte, error) {
 	}
 	g := &generator{
 		sourcePath:      filepath.ToSlash(llvmFirstNonEmpty(opts.SourcePath, "<unknown>")),
+		source:          opts.Source,
 		target:          opts.Target,
 		runtimeFFI:      map[string]map[string]*runtimeFFIFunction{},
 		runtimeFFIPaths: map[string]string{},

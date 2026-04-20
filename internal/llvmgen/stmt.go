@@ -847,7 +847,10 @@ func (g *generator) emitTestingCallStmt(call *ast.CallExpr) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		return true, g.emitTestingAssertion(cond, g.testingFailureMessage(call, method))
+		condText := g.sourceSpanText(call.Args[0].Value)
+		return true, g.emitTestingAssertionLazy(cond, func() (value, error) {
+			return g.buildAssertCondMessage(call, method, condText)
+		})
 	case "assertFalse":
 		if len(call.Args) != 1 || call.Args[0] == nil || call.Args[0].Name != "" || call.Args[0].Value == nil {
 			return true, unsupported("call", "testing.assertFalse requires one positional argument")
@@ -862,7 +865,10 @@ func (g *generator) emitTestingCallStmt(call *ast.CallExpr) (bool, error) {
 		emitter := g.toOstyEmitter()
 		negated := llvmNotI1(emitter, toOstyValue(cond))
 		g.takeOstyEmitter(emitter)
-		return true, g.emitTestingAssertion(fromOstyValue(negated), g.testingFailureMessage(call, "assertFalse"))
+		condText := g.sourceSpanText(call.Args[0].Value)
+		return true, g.emitTestingAssertionLazy(fromOstyValue(negated), func() (value, error) {
+			return g.buildAssertCondMessage(call, "assertFalse", condText)
+		})
 	case "assertEq":
 		return true, g.emitTestingCompare(call, token.EQ, "assertEq")
 	case "assertNe":
@@ -918,12 +924,21 @@ func (g *generator) emitTestingCompare(call *ast.CallExpr, op token.Kind, name s
 	if err != nil {
 		return err
 	}
-	isString := g.staticExprIsString(call.Args[0].Value) || g.staticExprIsString(call.Args[1].Value)
-	cond, err := g.emitCompare(op, left, right, isString)
+	isStringLeft := g.staticExprIsString(call.Args[0].Value)
+	isStringRight := g.staticExprIsString(call.Args[1].Value)
+	cond, err := g.emitCompare(op, left, right, isStringLeft || isStringRight)
 	if err != nil {
 		return err
 	}
-	return g.emitTestingAssertion(cond, g.testingFailureMessage(call, name))
+	leftText := g.sourceSpanText(call.Args[0].Value)
+	rightText := g.sourceSpanText(call.Args[1].Value)
+	// Runtime value capture happens lazily on the fail branch so a
+	// passing assertion pays nothing. The SSA names of `left` and
+	// `right` are still valid inside the fail block because the
+	// comparison block dominates it.
+	return g.emitTestingAssertionLazy(cond, func() (value, error) {
+		return g.buildAssertCompareMessage(call, name, leftText, rightText, left, isStringLeft, right, isStringRight)
+	})
 }
 
 func (g *generator) emitTestingExpect(call *ast.CallExpr, wantErr bool) (value, error) {
@@ -957,9 +972,22 @@ func (g *generator) emitTestingExpect(call *ast.CallExpr, wantErr bool) (value, 
 	failLabel := llvmNextLabel(emitter, "test.expect.fail")
 	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", cond.name, okLabel, failLabel))
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", failLabel))
-	g.emitTestingAbortWithEmitter(emitter, g.testingFailureMessage(call, method), okLabel)
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = failLabel
+	exprText := g.sourceSpanText(call.Args[0].Value)
+	msg, err := g.buildAssertCondMessage(call, method, exprText)
+	if err != nil {
+		return value{}, err
+	}
+	emitter = g.toOstyEmitter()
+	llvmPrintlnString(emitter, toOstyValue(msg))
+	g.declareRuntimeSymbol("exit", "void", []paramInfo{{typ: "i32"}})
+	emitter.body = append(emitter.body, "  call void @exit(i32 1)")
+	emitter.body = append(emitter.body, "  unreachable")
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", okLabel))
 	payload := llvmExtractValue(emitter, toOstyValue(result), payloadType, payloadIndex)
 	g.takeOstyEmitter(emitter)
+	g.currentBlock = okLabel
 	out := fromOstyValue(payload)
 	out.gcManaged = payloadType == "ptr"
 	out.rootPaths = g.rootPathsForType(out.typ)
@@ -1037,6 +1065,229 @@ func (g *generator) testingFailureMessage(call *ast.CallExpr, name string) strin
 		line = call.Pos().Line
 	}
 	return fmt.Sprintf("testing.%s failed at %s:%d", name, source, line)
+}
+
+// emitTestingAssertionLazy mirrors emitTestingAssertion but builds the
+// failure message inside the fail branch via buildMessage. Lazy
+// construction keeps the passing path cheap: Int/Float/Bool value
+// formatting and string concatenation only run on an actual failure,
+// never during the hot path where millions of assertions succeed.
+//
+// buildMessage runs under the fail label so any runtime calls it
+// emits (osty_rt_int_to_string, osty_rt_strings_Concat, …) land in
+// that block. The returned ptr value is then printed and the program
+// exits with status 1.
+func (g *generator) emitTestingAssertionLazy(cond value, buildMessage func() (value, error)) error {
+	if cond.typ != "i1" {
+		return unsupportedf("type-system", "testing assertion condition type %s, want i1", cond.typ)
+	}
+	emitter := g.toOstyEmitter()
+	okLabel := llvmNextLabel(emitter, "test.ok")
+	failLabel := llvmNextLabel(emitter, "test.fail")
+	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", cond.ref, okLabel, failLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", failLabel))
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = failLabel
+	msg, err := buildMessage()
+	if err != nil {
+		return err
+	}
+	emitter = g.toOstyEmitter()
+	llvmPrintlnString(emitter, toOstyValue(msg))
+	g.declareRuntimeSymbol("exit", "void", []paramInfo{{typ: "i32"}})
+	emitter.body = append(emitter.body, "  call void @exit(i32 1)")
+	emitter.body = append(emitter.body, "  unreachable")
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", okLabel))
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = okLabel
+	return nil
+}
+
+// buildAssertCompareMessage composes the failure message for
+// assertEq/assertNe, quoting each argument's original source text and,
+// when a runtime formatter is available (Int/Float/Bool/String),
+// appending the computed value. Falls back to source-text-only when
+// the source bytes were not wired through (no span capture) and to
+// location-only when both text and values are missing.
+func (g *generator) buildAssertCompareMessage(call *ast.CallExpr, name, leftText, rightText string, left value, isStringLeft bool, right value, isStringRight bool) (value, error) {
+	base := g.testingFailureMessage(call, name)
+	leftStr, leftHasVal := g.emitAssertArgToString(left, isStringLeft)
+	rightStr, rightHasVal := g.emitAssertArgToString(right, isStringRight)
+	if leftText == "" && rightText == "" && !leftHasVal && !rightHasVal {
+		return g.foldAssertionMessage(staticAssertPart(base))
+	}
+	parts := []assertMsgPart{staticAssertPart(fmt.Sprintf("%s: left=`%s`", base, leftText))}
+	if leftHasVal {
+		parts = append(parts, staticAssertPart(" = "), dynamicAssertPart(leftStr))
+	}
+	parts = append(parts, staticAssertPart(fmt.Sprintf(" right=`%s`", rightText)))
+	if rightHasVal {
+		parts = append(parts, staticAssertPart(" = "), dynamicAssertPart(rightStr))
+	}
+	return g.foldAssertionMessage(parts...)
+}
+
+// buildAssertCondMessage composes the failure message for
+// single-argument assertions (assertTrue/assertFalse/expectOk/
+// expectError). The argument expression's source text is quoted after
+// the location prefix. Runtime value capture is not emitted here:
+// Bool values add no information beyond "failed", and Result payload
+// stringification requires per-variant formatter dispatch that is
+// tracked as a follow-up.
+func (g *generator) buildAssertCondMessage(call *ast.CallExpr, name, exprText string) (value, error) {
+	base := g.testingFailureMessage(call, name)
+	if exprText == "" {
+		return g.foldAssertionMessage(staticAssertPart(base))
+	}
+	label := "cond"
+	if name == "expectOk" || name == "expectError" {
+		label = "expr"
+	}
+	return g.foldAssertionMessage(staticAssertPart(fmt.Sprintf("%s: %s=`%s`", base, label, exprText)))
+}
+
+// assertMsgPart is a single fragment of a failure message: either a
+// compile-time string literal or a runtime ptr-String value produced
+// by llvmStringLiteral / osty_rt_*_to_string. foldAssertionMessage
+// stitches a part sequence into one String via left-folded
+// osty_rt_strings_Concat calls.
+type assertMsgPart struct {
+	static  string
+	dynamic value
+	isDyn   bool
+}
+
+func staticAssertPart(s string) assertMsgPart { return assertMsgPart{static: s} }
+func dynamicAssertPart(v value) assertMsgPart { return assertMsgPart{dynamic: v, isDyn: true} }
+
+// foldAssertionMessage materializes the fragment list into a single
+// runtime String value. Adjacent static parts are coalesced first so
+// we avoid pointless concat calls for purely-static messages.
+func (g *generator) foldAssertionMessage(parts ...assertMsgPart) (value, error) {
+	coalesced := coalesceAssertParts(parts)
+	if len(coalesced) == 0 {
+		emitter := g.toOstyEmitter()
+		lit := llvmStringLiteral(emitter, "")
+		g.takeOstyEmitter(emitter)
+		return value{typ: "ptr", ref: lit.name, gcManaged: true}, nil
+	}
+	var acc value
+	for i, p := range coalesced {
+		piece := p.dynamic
+		if !p.isDyn {
+			emitter := g.toOstyEmitter()
+			lit := llvmStringLiteral(emitter, p.static)
+			g.takeOstyEmitter(emitter)
+			piece = value{typ: "ptr", ref: lit.name, gcManaged: true}
+		}
+		if i == 0 {
+			acc = piece
+			continue
+		}
+		joined, err := g.emitRuntimeStringConcat(acc, piece)
+		if err != nil {
+			return value{}, err
+		}
+		acc = joined
+	}
+	return acc, nil
+}
+
+func coalesceAssertParts(parts []assertMsgPart) []assertMsgPart {
+	var out []assertMsgPart
+	for _, p := range parts {
+		if p.isDyn {
+			out = append(out, p)
+			continue
+		}
+		if p.static == "" {
+			continue
+		}
+		if n := len(out); n > 0 && !out[n-1].isDyn {
+			out[n-1].static += p.static
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// emitAssertArgToString converts a computed assertion argument into a
+// display String value. Returns (value, true) when the type has a
+// runtime formatter — Int (i64), Float (double), Bool (i1), or
+// String (ptr, when the checker marked the expression as String). For
+// every other type (structs, Lists, Maps, enums…) returns (zero,
+// false) so the caller falls back to source-text-only rendering;
+// those shapes need ToString protocol dispatch which is tracked
+// separately.
+func (g *generator) emitAssertArgToString(v value, isString bool) (value, bool) {
+	switch v.typ {
+	case "i64":
+		out, err := g.emitRuntimeIntToString(v)
+		if err != nil {
+			return value{}, false
+		}
+		return out, true
+	case "double":
+		out, err := g.emitRuntimeFloatToString(v)
+		if err != nil {
+			return value{}, false
+		}
+		return out, true
+	case "i1":
+		out, err := g.emitRuntimeBoolToString(v)
+		if err != nil {
+			return value{}, false
+		}
+		return out, true
+	case "ptr":
+		if isString {
+			return v, true
+		}
+	}
+	return value{}, false
+}
+
+// sourceSpanText returns the original source text covered by expr's
+// span. Returns empty when the generator was not handed the source
+// bytes or when the recorded offsets fall outside the source (e.g.
+// synthesized nodes from the IR bridge). Interior whitespace is
+// collapsed so the quoted expression stays on the same line as the
+// location prefix.
+func (g *generator) sourceSpanText(expr ast.Expr) string {
+	if expr == nil || len(g.source) == 0 {
+		return ""
+	}
+	start := expr.Pos().Offset
+	end := expr.End().Offset
+	if start < 0 || end <= start || end > len(g.source) {
+		return ""
+	}
+	return normalizeAssertExprText(string(g.source[start:end]))
+}
+
+// normalizeAssertExprText flattens newlines/tabs to spaces and collapses
+// runs of whitespace so multi-line argument expressions (list literals,
+// struct literals) do not break the single-line failure message layout.
+func normalizeAssertExprText(text string) string {
+	var b strings.Builder
+	prevSpace := false
+	for _, r := range text {
+		switch r {
+		case '\n', '\r', '\t':
+			r = ' '
+		}
+		if r == ' ' {
+			if prevSpace {
+				continue
+			}
+			prevSpace = true
+		} else {
+			prevSpace = false
+		}
+		b.WriteRune(r)
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func (g *generator) emitIfStmt(expr *ast.IfExpr) error {

@@ -417,6 +417,11 @@ func compileAndRunNativeTest(ctx context.Context, b backend.Backend, emitMode ba
 	if err != nil {
 		return nativeTestRun{}, err
 	}
+	// Hand the concatenated source bytes to the backend so the LLVM
+	// emitter can quote the original expression text of
+	// `testing.assertEq` arguments in failure messages. Without this
+	// the backend falls back to location-only output.
+	entry.Source = src
 	req := backend.Request{
 		Layout: backend.Layout{
 			Root:    layoutRoot,
