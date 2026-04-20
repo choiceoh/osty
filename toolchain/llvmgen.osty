@@ -968,7 +968,7 @@ pub fn llvmUnsupportedDiagnostic(kind: String, detail: String) -> LlvmUnsupporte
             code: "LLVM001",
             kind: "foreign-ffi",
             message: "Go FFI import {target} is not supported by the self-hosted native backend",
-            hint: "replace it with an Osty runtime FFI binding before using the native backend",
+            hint: "rewrite the binding as `use runtime.cabi.<lib> { ... }` for extern C symbols, or `use runtime.<surface> { ... }` for an osty_rt_* runtime ABI helper (LANG_SPEC_v0.5 §12.8)",
         }
     }
     if kind == "runtime-ffi" {
@@ -1258,6 +1258,9 @@ pub fn llvmIsKnownRuntimeFfiPath(path: String) -> Bool {
     if path.startsWith("runtime.package.") {
         return true
     }
+    if path.startsWith("runtime.cabi.") || path == "runtime.cabi" {
+        return true
+    }
     path == "runtime.strings" || path == "runtime.path.filepath"
 }
 
@@ -1276,6 +1279,14 @@ pub fn llvmRuntimeFfiAlias(explicitAlias: String, lastPath: String, runtimePath:
 }
 
 pub fn llvmRuntimeFfiSymbol(path: String, name: String) -> String {
+    // `runtime.cabi[.libname]` paths bypass the `osty_rt_` runtime
+    // namespace and emit the function name as the literal extern C
+    // symbol. Callers are expected to link the providing library via
+    // their build system. The library segment after `runtime.cabi.` is
+    // descriptive only — symbol resolution is by name, not path.
+    if path == "runtime.cabi" || path.startsWith("runtime.cabi.") {
+        return name
+    }
     let mut trimmed = path
     if trimmed.startsWith("runtime.") {
         trimmed = trimmed.trimPrefix("runtime.")

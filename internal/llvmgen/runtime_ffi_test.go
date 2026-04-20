@@ -67,6 +67,64 @@ fn main() {
 	}
 }
 
+// TestGenerateRuntimeCABIEmitsLiteralExternSymbol verifies that
+// `use runtime.cabi.<lib>` paths bypass the `osty_rt_` namespace and
+// declare the function name as the literal extern C symbol. This is
+// the entry point for binding arbitrary C libraries from Osty: the
+// link step is the user's responsibility (link the providing object /
+// shared library via the manifest or build flags).
+//
+// The test sticks to the runtime ABI types the LLVM backend currently
+// supports for FFI (Int / Bool); broader C numeric coverage (Int32,
+// Float, etc.) is gated by separate type-system work.
+func TestGenerateRuntimeCABIEmitsLiteralExternSymbol(t *testing.T) {
+	file := parseLLVMGenFile(t, `use runtime.cabi.osty_demo as demo {
+    fn osty_demo_double(x: Int) -> Int
+    fn osty_demo_is_zero(x: Int) -> Bool
+}
+
+fn main() {
+    let doubled = demo.osty_demo_double(21)
+    if demo.osty_demo_is_zero(doubled) {
+        println(0)
+    } else {
+        println(doubled)
+    }
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/runtime_cabi_demo.osty",
+		Target:      "x86_64-unknown-linux-gnu",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, forbidden := range []string{
+		"@osty_rt_cabi_osty_demo_osty_demo_double",
+		"@osty_rt_cabi_osty_demo_osty_demo_is_zero",
+		"LLVM001",
+		"LLVM002",
+	} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("generated IR must not contain %q (cabi paths emit literal symbols):\n%s", forbidden, got)
+		}
+	}
+	for _, want := range []string{
+		"declare i64 @osty_demo_double(i64)",
+		"declare i1 @osty_demo_is_zero(i64)",
+		"call i64 @osty_demo_double(",
+		"call i1 @osty_demo_is_zero(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestGenerateUnknownRuntimeFFIStillReportsLLVM002(t *testing.T) {
 	file := parseLLVMGenFile(t, `use runtime.unknown as strings {
     fn HasPrefix(s: String, prefix: String) -> Bool

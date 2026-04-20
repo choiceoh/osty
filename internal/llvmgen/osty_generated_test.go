@@ -134,6 +134,21 @@ func TestGeneratedComparePoliciesAreOstyOwned(t *testing.T) {
 	if got, want := llvmRuntimeFfiSymbol("runtime.strings", "HasPrefix"), "osty_rt_strings_HasPrefix"; got != want {
 		t.Fatalf("llvmRuntimeFfiSymbol(%q, %q) = %q, want %q", "runtime.strings", "HasPrefix", got, want)
 	}
+	if !llvmIsKnownRuntimeFfiPath("runtime.cabi") {
+		t.Fatal(`llvmIsKnownRuntimeFfiPath("runtime.cabi") = false, want true`)
+	}
+	if !llvmIsKnownRuntimeFfiPath("runtime.cabi.libm") {
+		t.Fatal(`llvmIsKnownRuntimeFfiPath("runtime.cabi.libm") = false, want true`)
+	}
+	if got, want := llvmRuntimeFfiSymbol("runtime.cabi.libm", "cos"), "cos"; got != want {
+		t.Fatalf("llvmRuntimeFfiSymbol(%q, %q) = %q, want %q", "runtime.cabi.libm", "cos", got, want)
+	}
+	if got, want := llvmRuntimeFfiSymbol("runtime.cabi", "abort"), "abort"; got != want {
+		t.Fatalf("llvmRuntimeFfiSymbol(%q, %q) = %q, want %q", "runtime.cabi", "abort", got, want)
+	}
+	if got, want := llvmRuntimeFfiAlias("", "libm", "runtime.cabi.libm"), "libm"; got != want {
+		t.Fatalf("llvmRuntimeFfiAlias(%q, %q, %q) = %q, want %q", "", "libm", "runtime.cabi.libm", got, want)
+	}
 	if got, want := llvmBuiltinType("Int"), "i64"; got != want {
 		t.Fatalf("llvmBuiltinType(%q) = %q, want %q", "Int", got, want)
 	}
