@@ -131,17 +131,73 @@ fn testSelfCheckerSuggestsSimilarNameForTypoIdent() {
     )
 
     testing.assert(checked.summary.errors > 0)
-    let mut sawSuggestion = false
-    for d in checked.diagnostics {
-        if d.code == "E0745" {
-            for note in d.notes {
-                if note == "hint: did you mean `length`?" {
-                    sawSuggestion = true
+    testing.assert(sawDiagnosticWithNote(checked, "E0745", "hint: did you mean `length`?"))
+}
+
+fn testSelfCheckerSuggestsSimilarNameForTypoField() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            struct User { name: String, age: Int }
+
+            fn labelOf(user: User) -> String {
+                user.nmae
+            }
+            """,
+    )
+
+    testing.assert(checked.summary.errors > 0)
+    testing.assert(sawDiagnosticWithNote(checked, "E0702", "hint: did you mean `name`?"))
+}
+
+fn testSelfCheckerSuggestsSimilarNameForTypoMethod() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            struct Counter {
+                value: Int
+
+                fn increment(self) -> Int { self.value + 1 }
+            }
+
+            fn bump(counter: Counter) -> Int {
+                counter.incremnt()
+            }
+            """,
+    )
+
+    testing.assert(checked.summary.errors > 0)
+    testing.assert(sawDiagnosticWithNote(checked, "E0703", "hint: did you mean `increment`?"))
+}
+
+fn testSelfCheckerSuggestsSimilarNameForTypoVariant() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            enum Color { Red, Green, Blue }
+
+            fn code(color: Color) -> Int {
+                match color {
+                    Red -> 1,
+                    Gren -> 2,
+                    Blue -> 3,
+                }
+            }
+            """,
+    )
+
+    testing.assert(checked.summary.errors > 0)
+    testing.assert(sawDiagnosticWithNote(checked, "E0728", "hint: did you mean `Green`?"))
+}
+
+fn sawDiagnosticWithNote(result: FrontCheckResult, code: String, note: String) -> Bool {
+    for d in result.diagnostics {
+        if d.code == code {
+            for n in d.notes {
+                if n == note {
+                    return true
                 }
             }
         }
     }
-    testing.assert(sawSuggestion)
+    false
 }
 
 fn testSelfCheckerReportsAssignmentReturnAndCallErrors() {
