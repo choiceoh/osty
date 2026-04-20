@@ -1110,6 +1110,9 @@ func llvmClangLinkBinaryArgs(target string, objectPaths []string, binaryPath str
 		// Osty: examples/selfhost-core/llvmgen.osty:724:9
 		func() struct{} { args = append(args, objectPath); return struct{}{} }()
 	}
+	// `-pthread` pulls libpthread / libSystem threading symbols, needed
+	// by the bundled runtime's task / channel implementations.
+	func() struct{} { args = append(args, "-pthread"); return struct{}{} }()
 	// Osty: examples/selfhost-core/llvmgen.osty:726:5
 	func() struct{} { args = append(args, "-o"); return struct{}{} }()
 	// Osty: examples/selfhost-core/llvmgen.osty:727:5
