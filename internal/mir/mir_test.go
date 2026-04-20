@@ -2327,6 +2327,113 @@ func TestValidateRejectsMultipleIsReturn(t *testing.T) {
 	}
 }
 
+// ==== stringer tests ====
+
+func TestEnumStringers(t *testing.T) {
+	cases := []struct {
+		got, want string
+	}{
+		{IntrinsicPrintln.String(), "println"},
+		{IntrinsicChanRecv.String(), "chan_recv"},
+		{IntrinsicListPush.String(), "list_push"},
+		{IntrinsicRawNull.String(), "raw_null"},
+		{IntrinsicInvalid.String(), "invalid"},
+		{IntrinsicKind(9999).String(), "invalid"},
+
+		{UnNeg.String(), "-"},
+		{UnNot.String(), "!"},
+		{UnaryOp(9999).String(), "?"},
+
+		{BinAdd.String(), "+"},
+		{BinLeq.String(), "<="},
+		{BinShr.String(), ">>"},
+		{BinaryOp(9999).String(), "?"},
+
+		{AggTuple.String(), "tuple"},
+		{AggClosure.String(), "closure"},
+		{AggregateKind(9999).String(), "?"},
+
+		{CastIntToFloat.String(), "int_to_float"},
+		{CastBitcast.String(), "bitcast"},
+		{CastKind(9999).String(), "?"},
+
+		{NullaryNone.String(), "none"},
+		{NullaryRVKind(9999).String(), "?"},
+	}
+	for _, tc := range cases {
+		if tc.got != tc.want {
+			t.Errorf("stringer: got %q, want %q", tc.got, tc.want)
+		}
+	}
+}
+
+// TestPrintUsesStringers confirms the printer still emits the expected
+// tokens now that it delegates to the enum Stringers.
+func TestPrintUsesStringers(t *testing.T) {
+	fn := &Function{Name: "show", ReturnType: TUnit}
+	fn.ReturnLocal = fn.NewLocal("_return", TUnit, false, Span{})
+	fn.Locals[fn.ReturnLocal].IsReturn = true
+	bb := fn.NewBlock(Span{})
+	fn.Entry = bb
+	fn.Block(bb).Append(&IntrinsicInstr{
+		Kind: IntrinsicPrintln,
+		Args: []Operand{&ConstOp{Const: &StringConst{Value: "hi"}, T: TString}},
+	})
+	fn.Block(bb).SetTerminator(&ReturnTerm{})
+	mod := &Module{Package: "main", Functions: []*Function{fn}, Layouts: NewLayoutTable()}
+	out := Print(mod)
+	if !strings.Contains(out, "intrinsic println(") {
+		t.Fatalf("printer should emit intrinsic println(...):\n%s", out)
+	}
+}
+
+// ==== storage-marker target tests ====
+
+func TestValidateRejectsStorageMarkerOnParam(t *testing.T) {
+	fn := &Function{Name: "bad_live", ReturnType: TUnit}
+	fn.ReturnLocal = fn.NewLocal("_return", TUnit, false, Span{})
+	fn.Locals[fn.ReturnLocal].IsReturn = true
+	pid := fn.NewLocal("x", TInt, false, Span{})
+	fn.Locals[pid].IsParam = true
+	fn.Params = append(fn.Params, pid)
+	bb := fn.NewBlock(Span{})
+	fn.Entry = bb
+	fn.Block(bb).Append(&StorageLiveInstr{Local: pid})
+	fn.Block(bb).SetTerminator(&ReturnTerm{})
+	mod := &Module{Package: "main", Functions: []*Function{fn}, Layouts: NewLayoutTable()}
+	errs := Validate(mod)
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "StorageLive on parameter") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected storage-on-param error, got %v", errs)
+	}
+}
+
+func TestValidateRejectsStorageMarkerOnReturnSlot(t *testing.T) {
+	fn := &Function{Name: "bad_dead", ReturnType: TUnit}
+	fn.ReturnLocal = fn.NewLocal("_return", TUnit, false, Span{})
+	fn.Locals[fn.ReturnLocal].IsReturn = true
+	bb := fn.NewBlock(Span{})
+	fn.Entry = bb
+	fn.Block(bb).Append(&StorageDeadInstr{Local: fn.ReturnLocal})
+	fn.Block(bb).SetTerminator(&ReturnTerm{})
+	mod := &Module{Package: "main", Functions: []*Function{fn}, Layouts: NewLayoutTable()}
+	errs := Validate(mod)
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "StorageDead on return slot") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected storage-on-return error, got %v", errs)
+	}
+}
+
 func TestValidateRejectsDuplicateParamID(t *testing.T) {
 	fn := &Function{Name: "dupparam", ReturnType: TUnit}
 	fn.ReturnLocal = fn.NewLocal("_return", TUnit, false, Span{})
