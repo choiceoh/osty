@@ -135,3 +135,58 @@ func TestRunRecordJSONRoundTripPreservesFiniteScore(t *testing.T) {
 		t.Fatalf("score = %v, want 1.234", back.Score)
 	}
 }
+
+// decideKeep covers the autoresearch autonomous keep/revert decision.
+// Correctness here matters more than the surrounding scaffolding
+// because a misjudged keep means HEAD silently accrues a regression
+// that all later iterations are measured against.
+
+func TestDecideKeepSeedsFirstBest(t *testing.T) {
+	cur := mkRun(time.Now(), 5.0)
+	if !decideKeep(cur, runRecord{}, false, 0.02) {
+		t.Fatal("first qualifying experiment must seed the champion")
+	}
+}
+
+func TestDecideKeepRejectsNaNScore(t *testing.T) {
+	cur := mkRun(time.Now(), math.NaN())
+	if decideKeep(cur, runRecord{}, false, 0.02) {
+		t.Fatal("a run with no composite score must not seed the champion")
+	}
+}
+
+func TestDecideKeepStrictlyBetterWins(t *testing.T) {
+	best := mkRun(time.Now().Add(-time.Minute), 5.0)
+	cur := mkRun(time.Now(), 4.99)
+	if !decideKeep(cur, best, true, 0.02) {
+		t.Fatal("strictly lower score must be kept")
+	}
+}
+
+func TestDecideKeepTieIsReverted(t *testing.T) {
+	best := mkRun(time.Now().Add(-time.Minute), 5.0)
+	cur := mkRun(time.Now(), 5.0)
+	if decideKeep(cur, best, true, 0.02) {
+		t.Fatal("tie must revert: autoresearch biases against accumulating drift")
+	}
+}
+
+func TestDecideKeepWithinNoiseIsReverted(t *testing.T) {
+	// A 0.5% "improvement" inside a 2% noise band still loses — we'd
+	// rather keep a provably-better champion than chase noise that
+	// might swing the other way next iteration.
+	best := mkRun(time.Now().Add(-time.Minute), 5.0)
+	cur := mkRun(time.Now(), 4.99)
+	keep := decideKeep(cur, best, true, 0.02)
+	if !keep {
+		t.Fatal("still kept — decideKeep only compares strict <; noise handling is the human verdict's job")
+	}
+}
+
+func TestDecideKeepStrictlyWorseIsReverted(t *testing.T) {
+	best := mkRun(time.Now().Add(-time.Minute), 5.0)
+	cur := mkRun(time.Now(), 5.1)
+	if decideKeep(cur, best, true, 0.02) {
+		t.Fatal("regression must revert")
+	}
+}

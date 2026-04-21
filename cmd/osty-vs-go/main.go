@@ -219,6 +219,9 @@ func main() {
 	research := fs.Bool("research", false, "skip running and summarize history as an autoresearch journal (champion, latest, per-bench deltas)")
 	loopInterval := fs.Duration("loop", 0, "if >0, keep running in a loop with this interval between runs — compiles/edits land between ticks and each run prints a vs-best verdict")
 	noiseFrac := fs.Float64("noise", 0.02, "delta fraction below which a vs-best verdict is reported as within-noise (default 2%)")
+	autoresearch := fs.Bool("autoresearch", false, "fully autonomous keep-the-best loop (karpathy/autoresearch-style): before each bench sweep run --mutator, then git-commit on NEW BEST or `git reset --hard HEAD` on regression/noise. Requires --mutator and --max-experiments. Moves HEAD to an autoresearch/<ts> branch so the source branch is never modified in place.")
+	mutatorCmd := fs.String("mutator", "", "shell command run before each autoresearch iteration. Must modify the working tree; the exit code gates whether the iteration proceeds (nonzero = skip). Stateless — the same command runs every iteration, and it sees the current champion at HEAD.")
+	maxExperiments := fs.Int("max-experiments", 0, "cap for --autoresearch: stop after this many bench sweeps (including regressions). 0 = unlimited, use with care.")
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		os.Exit(2)
 	}
@@ -252,6 +255,34 @@ func main() {
 			os.Exit(2)
 		}
 		pairRE = re
+	}
+
+	if *autoresearch {
+		if *mutatorCmd == "" {
+			fmt.Fprintln(os.Stderr, "osty-vs-go: --autoresearch requires --mutator '<cmd>'")
+			os.Exit(2)
+		}
+		if *maxExperiments <= 0 {
+			fmt.Fprintln(os.Stderr, "osty-vs-go: --autoresearch requires --max-experiments N (>0) so the loop can't run forever unattended")
+			os.Exit(2)
+		}
+		cfg := autoresearchConfig{
+			Mutator:        *mutatorCmd,
+			MaxExperiments: *maxExperiments,
+			BenchTime:      *benchTime,
+			PairsDir:       *pairsDir,
+			OstyBin:        osty,
+			GoBin:          *goBin,
+			Label:          *label,
+			NoiseFrac:      *noiseFrac,
+			PairRE:         pairRE,
+			Interval:       *loopInterval,
+		}
+		if err := runAutoresearch(cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "osty-vs-go: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	if *loopInterval > 0 {
@@ -365,6 +396,251 @@ func runLoop(interval time.Duration, benchTime, pairsDir, ostyBin, goBin, label 
 		case <-ticker.C:
 		}
 	}
+}
+
+// autoresearchConfig bundles the per-run autoresearch parameters.
+// Collecting them in a struct keeps the main dispatcher from growing
+// an unreadable 10-arg function signature and makes it trivial to pass
+// the same config into tests that mock out the bench sweep.
+type autoresearchConfig struct {
+	Mutator        string
+	MaxExperiments int
+	BenchTime      string
+	PairsDir       string
+	OstyBin        string
+	GoBin          string
+	Label          string
+	NoiseFrac      float64
+	PairRE         *regexp.Regexp
+	Interval       time.Duration
+}
+
+// runAutoresearch is the closest faithful take on karpathy/autoresearch
+// we can ship without an in-process LLM: the caller supplies a mutator
+// command (any executable that edits the working tree), and this loop
+// runs mutate → bench → keep-or-revert against the captured champion.
+//
+// Safety rails:
+//   - Must run inside a git checkout; tree must be clean at launch.
+//   - Creates and checks out `autoresearch/<ts>` so the user's source
+//     branch is never written to in place. The start branch is printed
+//     so the user can `git checkout <it>` when the session ends.
+//   - `git reset --hard HEAD` is only called against commits this loop
+//     itself made (the autoresearch branch tip). It cannot reach pre-
+//     session work because that lives on the start branch.
+//   - `--max-experiments` is mandatory so a hung mutator loop can't run
+//     indefinitely and burn the machine.
+//   - SIGINT / SIGTERM drain gracefully between iterations.
+func runAutoresearch(cfg autoresearchConfig) error {
+	if err := requireCleanTree(); err != nil {
+		return err
+	}
+	startBranch, err := currentBranch()
+	if err != nil {
+		return fmt.Errorf("read current branch: %w", err)
+	}
+	workBranch := fmt.Sprintf("autoresearch/%s", time.Now().Format("20060102-150405"))
+	if _, err := gitRun("checkout", "-b", workBranch); err != nil {
+		return fmt.Errorf("create autoresearch branch %s: %w", workBranch, err)
+	}
+	fmt.Printf("# osty-vs-go autoresearch — branch %s (from %s)\n", workBranch, startBranch)
+	fmt.Printf("  mutator: %s\n", cfg.Mutator)
+	fmt.Printf("  budget:  %d experiments (interval between ticks: %s)\n\n",
+		cfg.MaxExperiments, cfg.Interval)
+
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sig)
+
+	stats := autoresearchStats{startBranch: startBranch, workBranch: workBranch}
+	for i := 1; i <= cfg.MaxExperiments; i++ {
+		select {
+		case <-sig:
+			fmt.Fprintln(os.Stderr, "\nosty-vs-go: autoresearch interrupted, exiting")
+			stats.interrupted = true
+			break
+		default:
+		}
+		if stats.interrupted {
+			break
+		}
+		if err := runAutoresearchIter(cfg, i, &stats); err != nil {
+			fmt.Fprintf(os.Stderr, "osty-vs-go: experiment #%d: %v\n", i, err)
+			stats.errors++
+			continue
+		}
+		if cfg.Interval > 0 && i < cfg.MaxExperiments {
+			fmt.Printf("\n(sleeping %s before next experiment; Ctrl-C to stop)\n", cfg.Interval)
+			select {
+			case <-sig:
+				stats.interrupted = true
+			case <-time.After(cfg.Interval):
+			}
+		}
+	}
+
+	printAutoresearchSummary(stats)
+	return nil
+}
+
+// autoresearchStats aggregates the session counters for the final
+// summary. `kept` counts only real NEW BEST promotions; first-run and
+// kept-by-tolerance paths still count as kept because they moved HEAD.
+type autoresearchStats struct {
+	startBranch string
+	workBranch  string
+	attempted   int
+	kept        int
+	reverted    int
+	mutatorFail int
+	errors      int
+	interrupted bool
+	best        runRecord // champion of this session
+	hasBest     bool
+}
+
+func runAutoresearchIter(cfg autoresearchConfig, iter int, stats *autoresearchStats) error {
+	stats.attempted++
+	fmt.Printf("\n=== autoresearch experiment #%d ===\n", iter)
+
+	// Phase 1: run the mutator. Nonzero exit → skip this iteration's
+	// bench sweep and revert anything the mutator wrote. This keeps a
+	// flaky mutator from contaminating HEAD.
+	if err := runMutator(cfg.Mutator); err != nil {
+		stats.mutatorFail++
+		fmt.Fprintf(os.Stderr, "  mutator failed (%v); reverting any partial writes\n", err)
+		_, _ = gitRun("reset", "--hard", "HEAD")
+		_, _ = gitRun("clean", "-fd")
+		return nil
+	}
+
+	// Phase 2: run the bench sweep. runOnce already writes the history
+	// file and prints the verdict relative to all-time history.
+	rec, err := runOnce(cfg.BenchTime, cfg.PairsDir, cfg.OstyBin, cfg.GoBin, cfg.Label, cfg.NoiseFrac, cfg.PairRE)
+	if err != nil {
+		// Bench failure shouldn't leave the mutator's changes on HEAD.
+		_, _ = gitRun("reset", "--hard", "HEAD")
+		_, _ = gitRun("clean", "-fd")
+		return err
+	}
+
+	// Phase 3: the autonomous decision — against THIS SESSION'S
+	// champion, not all-time history. Otherwise a pre-session run on
+	// a different machine could lock out every mutation.
+	keep := decideKeep(rec, stats.best, stats.hasBest, cfg.NoiseFrac)
+	if keep {
+		if err := commitKept(iter, rec); err != nil {
+			return fmt.Errorf("commit kept experiment #%d: %w", iter, err)
+		}
+		stats.kept++
+		stats.best = rec
+		stats.hasBest = true
+		fmt.Printf("  -> KEPT (committed on %s)\n", stats.workBranch)
+	} else {
+		if _, err := gitRun("reset", "--hard", "HEAD"); err != nil {
+			return fmt.Errorf("revert rejected experiment #%d: %w", iter, err)
+		}
+		if _, err := gitRun("clean", "-fd"); err != nil {
+			return fmt.Errorf("clean untracked in rejected experiment #%d: %w", iter, err)
+		}
+		stats.reverted++
+		fmt.Printf("  -> REVERTED (HEAD unchanged on %s)\n", stats.workBranch)
+	}
+	return nil
+}
+
+// decideKeep is the one-metric keep-or-discard decision. Pulled into
+// a plain function so unit tests can cover the branching matrix
+// without spinning up a tmp git repo.
+func decideKeep(cur runRecord, best runRecord, hasBest bool, noiseFrac float64) bool {
+	if math.IsNaN(cur.Score) {
+		// No verdict possible; treat as no improvement so HEAD stays
+		// at the session's last committed state.
+		return false
+	}
+	if !hasBest {
+		// First qualifying experiment in the session always seeds the
+		// champion. Otherwise we'd discard the only data point.
+		return true
+	}
+	// Strictly lower is a keep. Tie-or-worse is a revert — even within
+	// the noise band, because "kept a regression by accident" is a
+	// worse failure mode than "rejected an indistinguishable improvement".
+	// The noise knob still matters for the human-facing verdict; here
+	// we want the autonomous loop biased toward reverting noise.
+	return cur.Score < best.Score
+}
+
+func runMutator(cmdStr string) error {
+	cmd := exec.Command("sh", "-c", cmdStr)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Env = os.Environ()
+	return cmd.Run()
+}
+
+func commitKept(iter int, rec runRecord) error {
+	if _, err := gitRun("add", "-A"); err != nil {
+		return err
+	}
+	// Empty stage (mutator made no real change) is a valid "kept" only
+	// if it's the very first iter; otherwise `git commit` without
+	// --allow-empty would error out. We prefer --allow-empty here so
+	// the linear history of "one commit per accepted experiment"
+	// survives even a degenerate mutator.
+	msg := fmt.Sprintf("autoresearch #%d: score %.4f (kept)", iter, rec.Score)
+	if _, err := gitRun("commit", "--allow-empty", "-m", msg); err != nil {
+		return err
+	}
+	return nil
+}
+
+func requireCleanTree() error {
+	if _, err := exec.LookPath("git"); err != nil {
+		return fmt.Errorf("autoresearch requires git in PATH: %w", err)
+	}
+	if out, err := gitRun("rev-parse", "--is-inside-work-tree"); err != nil || strings.TrimSpace(out) != "true" {
+		return fmt.Errorf("autoresearch must run inside a git working tree")
+	}
+	out, err := gitRun("status", "--porcelain")
+	if err != nil {
+		return fmt.Errorf("check tree state: %w", err)
+	}
+	if strings.TrimSpace(out) != "" {
+		return fmt.Errorf("autoresearch refuses to run with a dirty tree; commit or stash first\n%s", out)
+	}
+	return nil
+}
+
+func currentBranch() (string, error) {
+	out, err := gitRun("rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+func gitRun(args ...string) (string, error) {
+	out, err := exec.Command("git", args...).CombinedOutput()
+	return string(out), err
+}
+
+func printAutoresearchSummary(s autoresearchStats) {
+	fmt.Println("\n=== autoresearch summary ===")
+	fmt.Printf("  started from: %s\n", s.startBranch)
+	fmt.Printf("  work branch:  %s\n", s.workBranch)
+	fmt.Printf("  experiments:  %d attempted, %d kept, %d reverted, %d mutator failures, %d errors\n",
+		s.attempted, s.kept, s.reverted, s.mutatorFail, s.errors)
+	if s.hasBest {
+		fmt.Printf("  session best: score %.4f\n", s.best.Score)
+	} else {
+		fmt.Println("  session best: none (no experiment produced a valid score)")
+	}
+	if s.interrupted {
+		fmt.Println("  status:       interrupted")
+	}
+	fmt.Printf("\n  to return to your original branch: git checkout %s\n", s.startBranch)
+	fmt.Printf("  to inspect kept experiments:       git log %s\n", s.workBranch)
 }
 
 // resolveOstyBin picks the Osty binary: explicit flag beats the local
