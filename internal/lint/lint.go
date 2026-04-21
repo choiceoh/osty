@@ -146,6 +146,7 @@ func Package(pkg *resolve.Package, pr *resolve.PackageResult, chk *check.Result)
 		l.lintNaming()
 		l.lintSimplify()
 		l.filterSuppressed()
+		diag.StampFile(local.Diags, pf.Path)
 		res.Diags = append(res.Diags, local.Diags...)
 	}
 	return res
