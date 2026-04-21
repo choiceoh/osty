@@ -146,6 +146,10 @@ func (g *generator) emitInterpolationStringPiece(v value) (value, error) {
 		return g.emitRuntimeFloatToString(v)
 	case "i1":
 		return g.emitRuntimeBoolToString(v)
+	case "i32":
+		return g.emitRuntimeCharToString(v)
+	case "i8":
+		return g.emitRuntimeByteToString(v)
 	}
 	return value{}, unsupportedf("type-system", "interpolation of %s value requires .toString() which the LLVM backend does not yet lower", v.typ)
 }
@@ -533,6 +537,9 @@ func (g *generator) emitIndexExpr(expr *ast.IndexExpr) (value, error) {
 	if expr == nil {
 		return value{}, unsupported("expression", "nil index expression")
 	}
+	if rng, ok := expr.Index.(*ast.RangeExpr); ok {
+		return g.emitStringSliceIndex(expr, rng)
+	}
 	base, err := g.emitExpr(expr.X)
 	if err != nil {
 		return value{}, err
@@ -598,6 +605,83 @@ func (g *generator) emitIndexExpr(expr *ast.IndexExpr) (value, error) {
 	default:
 		return value{}, unsupportedf("expression", "index expression on %s", base.typ)
 	}
+}
+
+// emitStringSliceIndex lowers `s[start..end]` and `s[start..=end]` on a
+// String receiver to `osty_rt_strings_Slice`. Missing bounds default to
+// 0 and the string's byte-length respectively. Used by the toolchain's
+// string slicing in parser.osty (`raw[1..n - 1]`, `raw[0..1]`, ...).
+// Non-String index-range targets fall through to the generic index
+// path, which will surface a more specific error.
+func (g *generator) emitStringSliceIndex(expr *ast.IndexExpr, rng *ast.RangeExpr) (value, error) {
+	base, err := g.emitExpr(expr.X)
+	if err != nil {
+		return value{}, err
+	}
+	if base.typ != "ptr" {
+		return value{}, unsupportedf("type-system", "slice indexing on %s, want String (ptr)", base.typ)
+	}
+	baseIsString := false
+	if sourceType, ok := g.staticExprSourceType(expr.X); ok {
+		if resolved, resErr := llvmResolveAliasType(sourceType, g.typeEnv(), map[string]bool{}); resErr == nil {
+			baseIsString = llvmNamedTypeIsString(resolved)
+		}
+	}
+	if !baseIsString {
+		return value{}, unsupported("type-system", "slice indexing is only supported on String receivers")
+	}
+	base, err = g.loadIfPointer(base)
+	if err != nil {
+		return value{}, err
+	}
+
+	var startVal value
+	if rng.Start == nil {
+		startVal = value{typ: "i64", ref: "0"}
+	} else {
+		v, err := g.emitExpr(rng.Start)
+		if err != nil {
+			return value{}, err
+		}
+		if v.typ != "i64" {
+			return value{}, unsupportedf("type-system", "slice start type %s, want Int", v.typ)
+		}
+		startVal = v
+	}
+
+	var endVal value
+	if rng.Stop == nil {
+		g.declareRuntimeSymbol(llvmStringRuntimeByteLenSymbol(), "i64", []paramInfo{{typ: "ptr"}})
+		emitter := g.toOstyEmitter()
+		lenVal := llvmCall(emitter, "i64", llvmStringRuntimeByteLenSymbol(), []*LlvmValue{toOstyValue(base)})
+		g.takeOstyEmitter(emitter)
+		endVal = fromOstyValue(lenVal)
+	} else {
+		v, err := g.emitExpr(rng.Stop)
+		if err != nil {
+			return value{}, err
+		}
+		if v.typ != "i64" {
+			return value{}, unsupportedf("type-system", "slice end type %s, want Int", v.typ)
+		}
+		endVal = v
+		if rng.Inclusive {
+			emitter := g.toOstyEmitter()
+			tmp := llvmNextTemp(emitter)
+			emitter.body = append(emitter.body, fmt.Sprintf("  %s = add i64 %s, 1", tmp, endVal.ref))
+			g.takeOstyEmitter(emitter)
+			endVal = value{typ: "i64", ref: tmp}
+		}
+	}
+
+	g.declareRuntimeSymbol(llvmStringRuntimeSliceSymbol(), "ptr", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: "i64"}})
+	emitter := g.toOstyEmitter()
+	out := llvmStringRuntimeSlice(emitter, toOstyValue(base), toOstyValue(startVal), toOstyValue(endVal))
+	g.takeOstyEmitter(emitter)
+	sliced := fromOstyValue(out)
+	sliced.gcManaged = true
+	sliced.sourceType = &ast.NamedType{Path: []string{"String"}}
+	return sliced, nil
 }
 
 func (g *generator) enumVariantValue(expr *ast.FieldExpr) (value, bool, error) {
@@ -1160,6 +1244,35 @@ func (g *generator) emitRuntimeBoolToString(v value) (value, error) {
 	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "i1"}})
 	emitter := g.toOstyEmitter()
 	out := llvmBoolRuntimeToString(emitter, toOstyValue(v))
+	g.takeOstyEmitter(emitter)
+	text := fromOstyValue(out)
+	text.gcManaged = true
+	return text, nil
+}
+
+// emitRuntimeCharToString materialises a single-char UTF-8 String from a
+// Char (i32) codepoint via the osty_rt_char_to_string runtime helper.
+// The helper handles all four UTF-8 width classes plus the out-of-range
+// replacement-char fallback — see internal/backend/runtime/osty_runtime.c.
+func (g *generator) emitRuntimeCharToString(v value) (value, error) {
+	symbol := "osty_rt_char_to_string"
+	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "i32"}})
+	emitter := g.toOstyEmitter()
+	out := llvmCall(emitter, "ptr", symbol, []*LlvmValue{toOstyValue(v)})
+	g.takeOstyEmitter(emitter)
+	text := fromOstyValue(out)
+	text.gcManaged = true
+	return text, nil
+}
+
+// emitRuntimeByteToString materialises a single-byte String from a Byte
+// (i8) via osty_rt_byte_to_string. Treats the byte as a raw octet; useful
+// when iterating over text.bytes() and rebuilding the original bytes.
+func (g *generator) emitRuntimeByteToString(v value) (value, error) {
+	symbol := "osty_rt_byte_to_string"
+	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "i8"}})
+	emitter := g.toOstyEmitter()
+	out := llvmCall(emitter, "ptr", symbol, []*LlvmValue{toOstyValue(v)})
 	g.takeOstyEmitter(emitter)
 	text := fromOstyValue(out)
 	text.gcManaged = true
@@ -1814,11 +1927,17 @@ func builtinResultPayloadSourceType(sourceType ast.Type, constructor string) ast
 
 func (g *generator) emitExprWithHintAndSourceType(expr ast.Expr, sourceType ast.Type, listElemTyp string, listElemString bool, mapKeyTyp string, mapValueTyp string, mapKeyString bool, setElemTyp string, setElemString bool) (value, error) {
 	if sourceType != nil {
-		if listElemTyp == "" {
-			if elemTyp, elemString, ok, err := llvmListElementInfo(sourceType, g.typeEnv()); err != nil {
-				return value{}, err
-			} else if ok {
+		if elemTyp, elemString, ok, err := llvmListElementInfo(sourceType, g.typeEnv()); err != nil {
+			return value{}, err
+		} else if ok {
+			if listElemTyp == "" {
 				listElemTyp = elemTyp
+				listElemString = elemString
+			} else if listElemTyp == elemTyp && !listElemString {
+				// Caller knew the elem IR type but not the String flag.
+				// Pull the flag from the richer sourceType so list-literal
+				// lowering doesn't trip `list_mixed_ptr` on List<String>
+				// return shapes where the caller only wired retListElemTyp.
 				listElemString = elemString
 			}
 		}
@@ -1830,12 +1949,20 @@ func (g *generator) emitExprWithHintAndSourceType(expr ast.Expr, sourceType ast.
 				mapValueTyp = valueTyp
 				mapKeyString = keyString
 			}
+		} else if keyTyp, valueTyp, keyString, ok, err := llvmMapTypes(sourceType, g.typeEnv()); err == nil && ok {
+			if keyTyp == mapKeyTyp && valueTyp == mapValueTyp && !mapKeyString {
+				mapKeyString = keyString
+			}
 		}
 		if setElemTyp == "" {
 			if elemTyp, elemString, ok, err := llvmSetElementType(sourceType, g.typeEnv()); err != nil {
 				return value{}, err
 			} else if ok {
 				setElemTyp = elemTyp
+				setElemString = elemString
+			}
+		} else if elemTyp, elemString, ok, err := llvmSetElementType(sourceType, g.typeEnv()); err == nil && ok {
+			if elemTyp == setElemTyp && !setElemString {
 				setElemString = elemString
 			}
 		}
@@ -2177,6 +2304,8 @@ func (g *generator) emitCharByteConversionCall(call *ast.CallExpr) (value, bool,
 	switch {
 	case field.Name == "toInt" && (baseInfo.typ == "i32" || baseInfo.typ == "i8"):
 	case field.Name == "toChar" && baseInfo.typ == "i64":
+	case field.Name == "toChar" && baseInfo.typ == "i8":
+	case field.Name == "toByte" && baseInfo.typ == "i64":
 	default:
 		return value{}, false, nil
 	}
@@ -2197,6 +2326,23 @@ func (g *generator) emitCharByteConversionCall(call *ast.CallExpr) (value, bool,
 		return value{typ: "i64", ref: tmp}, true, nil
 	case field.Name == "toChar" && base.typ == "i64":
 		emitter.body = append(emitter.body, fmt.Sprintf("  %s = trunc i64 %s to i32", tmp, base.ref))
+		g.takeOstyEmitter(emitter)
+		return value{typ: "i32", ref: tmp}, true, nil
+	case field.Name == "toByte" && base.typ == "i64":
+		// Spec §2.2 narrows Int→Byte as `Result<Byte, Error>`, but the
+		// toolchain uses it as an infallible truncation — the self-host
+		// emitter (`toolchain/llvmgen.osty:532`) relies on this shape.
+		// Lower as plain `trunc i64 to i8` so the comparisons that
+		// follow (`b == '\\'.toInt().toByte()`) type-check against the
+		// Byte receiver without an extra `.unwrap()` layer.
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = trunc i64 %s to i8", tmp, base.ref))
+		g.takeOstyEmitter(emitter)
+		return value{typ: "i8", ref: tmp}, true, nil
+	case field.Name == "toChar" && base.typ == "i8":
+		// Byte → Char widens a u8 to a Char code point via zero extend.
+		// `b.toChar().toString()` in the llvmgen C-string escape loop
+		// materialises a one-byte UTF-8 string for printable ASCII.
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = zext i8 %s to i32", tmp, base.ref))
 		g.takeOstyEmitter(emitter)
 		return value{typ: "i32", ref: tmp}, true, nil
 	}
@@ -2221,7 +2367,7 @@ func (g *generator) emitPrimitiveToStringCall(call *ast.CallExpr) (value, bool, 
 		return value{}, false, nil
 	}
 	switch baseInfo.typ {
-	case "i64", "double", "i1":
+	case "i64", "double", "i1", "i32", "i8":
 	default:
 		return value{}, false, nil
 	}
@@ -2238,6 +2384,12 @@ func (g *generator) emitPrimitiveToStringCall(call *ast.CallExpr) (value, bool, 
 		return out, true, err
 	case "i1":
 		out, err := g.emitRuntimeBoolToString(base)
+		return out, true, err
+	case "i32":
+		out, err := g.emitRuntimeCharToString(base)
+		return out, true, err
+	case "i8":
+		out, err := g.emitRuntimeByteToString(base)
 		return out, true, err
 	}
 	return value{}, false, nil

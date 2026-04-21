@@ -839,6 +839,19 @@ func (g *generator) staticCharByteConversionResult(call *ast.CallExpr) (value, b
 		return value{typ: "i64"}, true
 	case field.Name == "toChar" && baseInfo.typ == "i64":
 		return value{typ: "i32"}, true
+	case field.Name == "toChar" && baseInfo.typ == "i8":
+		// Byte → Char is infallible widening (every u8 is a valid
+		// ASCII-range codepoint). Toolchain uses `b.toChar().toString()`
+		// to format a Byte as a single-char UTF-8 string.
+		return value{typ: "i32"}, true
+	case field.Name == "toByte" && baseInfo.typ == "i64":
+		// Int → Byte is spec'd as `Result<Byte, Error>`, but the
+		// toolchain consistently treats it as an infallible truncation
+		// at call sites (`'\\'.toInt().toByte()`, `0x20.toByte()`).
+		// Mirror that here so the narrow static-type path resolves the
+		// receiver to i8 and the eq/<= comparisons that follow type
+		// through emitBinary without an extra unwrap.
+		return value{typ: "i8"}, true
 	}
 	return value{}, false
 }

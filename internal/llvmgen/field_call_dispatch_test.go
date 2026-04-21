@@ -265,6 +265,31 @@ fn render(parts: List<String>, flag: Int) -> String {
 	}
 }
 
+// A List<String>-typed function body whose last expression is a
+// multi-element list literal of plain String literals previously
+// tripped `list_mixed_ptr` because emitExprWithHintAndSourceType only
+// derived `listElemString = true` from the return sourceType when the
+// caller had not already wired `listElemTyp`. Now the elemString flag
+// is backfilled whenever sourceType encodes List<String> and matches
+// the caller's listElemTyp.
+func TestGenerateListOfStringLiteralsReturnKeepsStringFlag(t *testing.T) {
+	file := parseLLVMGenFile(t, `pub fn gcDecls() -> List<String> {
+    [
+        "declare ptr @osty.gc.alloc_v1(i64, i64, ptr)",
+        "declare void @osty.gc.pre_write_v1(ptr, ptr, i64)",
+    ]
+}
+
+fn main() {
+    let xs = gcDecls()
+}
+`)
+	_, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/list_ret_strings.osty"})
+	if err != nil {
+		t.Fatalf("List<String> return of plain String literals tripped: %v", err)
+	}
+}
+
 // Phase 1 of the first-class fn value lowering: a top-level fn used
 // in value position materialises a closure env + thunk, and the
 // subsequent call through the bound name dispatches indirectly.
