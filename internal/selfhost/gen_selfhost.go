@@ -118,6 +118,14 @@ func installWithBuildGate(root, outPath string, data []byte) error {
 	if err == nil {
 		return nil
 	}
+	// Preserve the rejected output alongside the restored file so
+	// contributors can diff it against the known-good committed state
+	// and locate the Osty-source shape that tripped bootstrap-gen
+	// without re-running regen + scraping stderr. The broken dump is
+	// under `.gitignore` (`*.broken`), so it never accidentally lands
+	// in a commit.
+	brokenPath := outPath + ".broken"
+	_ = os.WriteFile(brokenPath, data, 0o644)
 	if havePrev {
 		if restoreErr := os.WriteFile(outPath, prev, 0o644); restoreErr != nil {
 			return fmt.Errorf(
@@ -129,8 +137,9 @@ func installWithBuildGate(root, outPath string, data []byte) error {
 		_ = os.Remove(outPath)
 	}
 	return fmt.Errorf(
-		"generated selfhost code does not compile; refused to install broken code at %s\n%s",
+		"generated selfhost code does not compile; refused to install broken code at %s\nrejected output preserved at %s for diff\n%s",
 		outPath,
+		brokenPath,
 		bytes.TrimSpace(output),
 	)
 }
