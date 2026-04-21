@@ -903,27 +903,102 @@ int main(void) {
 	}
 }
 
-// Select.send is still a deliberate abort — its signature needs a
-// value-register the MIR path doesn't emit yet. Locks the "fail loud"
-// contract for now.
-func TestBundledRuntimeSchedulerSelectSendStubAborts(t *testing.T) {
+// Select.send: fires a send arm into a buffered channel, then a
+// second select picks up the value on the other side. Exercises the
+// i64 variant of `osty_rt_select_send_*`, the post-enqueue arm
+// closure, and the polling-loop send path added alongside them.
+func TestBundledRuntimeSchedulerSelectSend(t *testing.T) {
 	parallelClangBackendTest(t)
 
 	dir := t.TempDir()
 	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
-	harnessPath := filepath.Join(dir, "runtime_select_send_stub_harness.c")
-	binaryPath := filepath.Join(dir, "runtime_select_send_stub_harness")
+	harnessPath := filepath.Join(dir, "runtime_select_send_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_select_send_harness")
 	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
 		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
 	}
-	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 
-void osty_rt_select_send(void *s, void *ch, void *arm);
+void *osty_rt_thread_chan_make(int64_t capacity);
+typedef struct { int64_t value; int64_t ok; } chan_recv_result;
+chan_recv_result osty_rt_thread_chan_recv_i64(void *raw);
+
+void osty_rt_select(void *body_env);
+void osty_rt_select_send_i64(void *s, void *ch, int64_t value, void *arm);
+void osty_rt_select_recv(void *s, void *ch, void *arm);
+
+/* Send arm closure: plain () -> () signature — fired by the select
+ * loop after the value is enqueued. Env slot 0 holds the fn pointer. */
+typedef struct plain_arm_env {
+    void *fn;
+    int *ran;
+} plain_arm_env;
+
+static void plain_arm_body(void *env) {
+    plain_arm_env *e = (plain_arm_env *)env;
+    *e->ran += 1;
+}
+
+typedef struct send_env {
+    void *fn;
+    void *ch;
+    void *arm_env;
+} send_env;
+
+static void send_body(void *env, void *s) {
+    send_env *e = (send_env *)env;
+    osty_rt_select_send_i64(s, e->ch, 42, e->arm_env);
+}
+
+/* Recv arm: i64 body-with-value — the drained value is passed in as
+ * arg 2, and env slot 0 holds the fn pointer per the closure ABI. */
+typedef struct recv_arm_env {
+    void *fn;
+    int64_t *out;
+} recv_arm_env;
+
+static void recv_arm_body(void *env, int64_t value) {
+    recv_arm_env *e = (recv_arm_env *)env;
+    *e->out = value;
+}
+
+typedef struct recv_body_env {
+    void *fn;
+    void *ch;
+    void *arm_env;
+} recv_body_env;
+
+static void recv_body(void *env, void *s) {
+    recv_body_env *e = (recv_body_env *)env;
+    osty_rt_select_recv(s, e->ch, e->arm_env);
+}
 
 int main(void) {
-    osty_rt_select_send(NULL, NULL, NULL);
-    printf("should not reach\n");
+    void *ch = osty_rt_thread_chan_make(1);
+
+    int ran = 0;
+    plain_arm_env pae = { (void *)plain_arm_body, &ran };
+    send_env se = { (void *)send_body, ch, (void *)&pae };
+    osty_rt_select((void *)&se);
+    printf("%d\n", ran);  /* 1 — arm ran after enqueue */
+
+    chan_recv_result r = osty_rt_thread_chan_recv_i64(ch);
+    printf("%lld\n", (long long)r.ok);    /* 1 */
+    printf("%lld\n", (long long)r.value); /* 42 */
+
+    /* Drain through a second select with a recv arm to cover the
+     * cross-select path (sender + receiver both through select). */
+    send_env se2 = { (void *)send_body, ch, (void *)&pae };
+    osty_rt_select((void *)&se2);
+
+    int64_t captured = 0;
+    recv_arm_env ae = { (void *)recv_arm_body, &captured };
+    recv_body_env rbe = { (void *)recv_body, ch, (void *)&ae };
+    osty_rt_select((void *)&rbe);
+    printf("%lld\n", (long long)captured); /* 42 */
+    printf("%d\n", ran);                   /* 2 — arm ran twice */
     return 0;
 }
 `), 0o644); err != nil {
@@ -934,10 +1009,11 @@ int main(void) {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
 	runOutput, err := exec.Command(binaryPath).CombinedOutput()
-	if err == nil {
-		t.Fatalf("expected non-zero exit from select.send stub, got success: %q", runOutput)
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
-	if got := string(runOutput); got == "should not reach\n" {
-		t.Fatalf("select.send stub silently succeeded; not-yet-implemented path must fail loudly")
+	const want = "1\n1\n42\n42\n2\n"
+	if got := string(runOutput); got != want {
+		t.Fatalf("select_send harness stdout = %q, want %q", got, want)
 	}
 }

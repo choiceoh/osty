@@ -508,6 +508,18 @@ MIR tests isolated from front-end churn.
   validator, lowering, and tests. `internal/llvmgen` is untouched.
   `docs/mir_design.md` is this document.
 
+- **Stage 1 — Osty port (landed, `#503`).** `toolchain/mir.osty`
+  mirrors the MIR core (intrinsic-kind enum with the full
+  `MirIntrinsic*` set, printer label table, operand / instr shape
+  notes) so the compiler's IR vocabulary participates in the spec
+  corpus alongside the rest of the front-end. Go (`internal/mir`)
+  stays authoritative — the Osty port is a read path and will become
+  a source path as more HIR/MIR lowering moves into `toolchain/*.osty`
+  per the "Osty로 짤 수 있는 건 Go로 짜지 마" rule in AGENTS.md /
+  CLAUDE.md. If the intrinsic-kind set changes in Go, `toolchain/mir.osty`
+  updates in the same commit; a printer-label mismatch surfaces as a
+  spec corpus diff.
+
 - **Stage 2a (landed).** Expand MIR coverage for the most common
   HIR-only shapes and tighten two correctness bugs spotted in code
   review:
@@ -618,7 +630,16 @@ MIR tests isolated from front-end churn.
     four always carry `Dest: nil`, matching the Osty spec where
     those builder methods are treated as fire-and-forget arm
     registrations even though the surface signature returns
-    `Select`.
+    `Select`. Backend note: `IntrinsicSelectSend` lowers in
+    `internal/llvmgen/mir_generator.go` via `emitSelectSend`, which
+    reads the channel's `Channel<T>` element type off `Args[1]` and
+    dispatches to the typed runtime entry
+    `osty_rt_select_send_{i64,i1,f64,ptr}(ptr s, ptr ch, <elemLLVM>
+    value, ptr arm)` for scalar elements or
+    `osty_rt_select_send_bytes_v1(ptr s, ptr ch, ptr src, i64 size,
+    ptr arm)` for composite elements. The `arm` pointer is the Osty
+    `() -> ()` closure env the runtime invokes after a successful
+    enqueue (`#496`, RUNTIME_SCHEDULER.md 2026-04-21 follow-up).
 
   Closure-to-SSA captures are still deferred until the borrow rules
   land in the language spec — `AggClosure` stays as-is for now and

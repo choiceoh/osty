@@ -19,7 +19,7 @@ pub struct Select {
         self
     }
 
-    pub fn send<T>(self, ch: Channel<T>, value: T) -> Select {
+    pub fn send<T>(self, ch: Channel<T>, value: T, f: fn() -> ()) -> Select {
         self
     }
 

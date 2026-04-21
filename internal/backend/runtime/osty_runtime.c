@@ -4728,45 +4728,50 @@ osty_rt_chan_recv_result osty_rt_thread_chan_recv_bytes_v1(void *raw) {
     return osty_rt_chan_recv_raw(osty_rt_chan_cast(raw, "thread.chan.recv"));
 }
 
-/* ---- Select: polling builder with recv / timeout / default arms.
+/* ---- Select: polling builder with recv / send / timeout / default arms.
  *
- * Surface contract (stable with Phase 1A abort stubs):
- *   osty_rt_select(body_env)                 // 1-arg
- *   osty_rt_select_recv(s, ch, arm)          // 3-arg
- *   osty_rt_select_send(s, ch, arm)          // 3-arg — NOT YET WIRED
- *   osty_rt_select_timeout(s, ns, arm)       // 3-arg
- *   osty_rt_select_default(s, arm)           // 2-arg
+ * Surface contract:
+ *   osty_rt_select(body_env)                            // 1-arg
+ *   osty_rt_select_recv(s, ch, arm)                     // 3-arg
+ *   osty_rt_select_send_<suffix>(s, ch, value, arm)     // 4-arg scalar; suffix ∈ i64/i1/f64/ptr
+ *   osty_rt_select_send_bytes_v1(s, ch, src, size, arm) // 5-arg composite
+ *   osty_rt_select_timeout(s, ns, arm)                  // 3-arg
+ *   osty_rt_select_default(s, arm)                      // 2-arg
  *
  * `body_env` is a closure env whose slot-0 is the body function. The
  * body is invoked as `body(env, s)` where `s` is a stack-allocated
  * builder this function owns. Arms the body registers are evaluated
  * non-blockingly in their registration order; if none is ready we
- * sleep 1ms and retry, firing the first timeout arm whose deadline
+ * sleep 500μs and retry, firing the first timeout arm whose deadline
  * elapses. A default arm fires immediately if present and no other
  * arm is ready on the first pass.
  *
  * Arm closures are void-returning; the Osty frontend is expected to
  * capture the result slot inside the closure (same pattern as
  * taskGroup body's result propagation). Recv-arm closures receive
- * the drained value as their second argument.
+ * the drained value as their second argument. Send-arm closures take
+ * no args — they are invoked after the value has been enqueued, the
+ * "Go-case-body-after-arrow" moral equivalent of `case ch <- v: body`.
  *
- * Send arms require a value register alongside the channel — that
- * shape is not yet emitted by MIR, so `osty_rt_select_send` aborts
- * with a diagnostic if reached. A 4-arg surface (value register)
- * will replace this when the emitter catches up.
+ * The scalar variants funnel through a single int64 slot (matching
+ * the `osty_rt_chan_send_*` lane); composite values go through the
+ * bytes_v1 route which copies into a GC-managed buffer before
+ * queueing — same contract as `osty_rt_thread_chan_send_bytes_v1`.
  */
 
 typedef enum {
     OSTY_RT_SELECT_ARM_RECV = 0,
     OSTY_RT_SELECT_ARM_TIMEOUT = 1,
     OSTY_RT_SELECT_ARM_DEFAULT = 2,
+    OSTY_RT_SELECT_ARM_SEND = 3,
 } osty_rt_select_arm_kind;
 
 typedef struct osty_rt_select_arm {
     osty_rt_select_arm_kind kind;
-    void *ch;              /* recv: channel ptr; otherwise NULL */
+    void *ch;              /* recv/send: channel ptr; otherwise NULL */
     int64_t timeout_ns;    /* timeout arm only */
-    void *arm_env;         /* closure env */
+    int64_t send_value;    /* send arm only — scalar bits or ptr to GC copy */
+    void *arm_env;         /* closure env; send arms run it plain after the enqueue */
 } osty_rt_select_arm;
 
 #define OSTY_RT_SELECT_ARM_CAPACITY 32
@@ -4793,6 +4798,7 @@ static osty_rt_select_impl *osty_rt_select_cast(void *s, const char *op) {
 static void osty_rt_select_arm_push(osty_rt_select_impl *sel,
                                     osty_rt_select_arm_kind kind,
                                     void *ch, int64_t timeout_ns,
+                                    int64_t send_value,
                                     void *arm_env) {
     osty_rt_mu_lock(&sel->mu);
     if (sel->count >= OSTY_RT_SELECT_ARM_CAPACITY) {
@@ -4802,6 +4808,7 @@ static void osty_rt_select_arm_push(osty_rt_select_impl *sel,
     sel->arms[sel->count].kind = kind;
     sel->arms[sel->count].ch = ch;
     sel->arms[sel->count].timeout_ns = timeout_ns;
+    sel->arms[sel->count].send_value = send_value;
     sel->arms[sel->count].arm_env = arm_env;
     sel->count += 1;
     osty_rt_mu_unlock(&sel->mu);
@@ -4812,13 +4819,50 @@ void osty_rt_select_recv(void *s, void *ch, void *arm) {
     if (ch == NULL) {
         osty_rt_abort("thread.select.recv: null channel");
     }
-    osty_rt_select_arm_push(sel, OSTY_RT_SELECT_ARM_RECV, ch, 0, arm);
+    osty_rt_select_arm_push(sel, OSTY_RT_SELECT_ARM_RECV, ch, 0, 0, arm);
 }
 
-void osty_rt_select_send(void *s, void *ch, void *arm) {
-    (void)s; (void)ch; (void)arm;
-    osty_sched_unimplemented(
-        "thread.select.send (awaiting value-register surface from MIR)");
+static void osty_rt_select_send_common(void *s, void *ch, int64_t value,
+                                       void *arm) {
+    osty_rt_select_impl *sel = osty_rt_select_cast(s, "thread.select.send");
+    if (ch == NULL) {
+        osty_rt_abort("thread.select.send: null channel");
+    }
+    osty_rt_select_arm_push(sel, OSTY_RT_SELECT_ARM_SEND, ch, 0, value, arm);
+}
+
+void osty_rt_select_send_i64(void *s, void *ch, int64_t value, void *arm) {
+    osty_rt_select_send_common(s, ch, value, arm);
+}
+
+void osty_rt_select_send_i1(void *s, void *ch, bool value, void *arm) {
+    osty_rt_select_send_common(s, ch, (int64_t)(value ? 1 : 0), arm);
+}
+
+void osty_rt_select_send_f64(void *s, void *ch, double value, void *arm) {
+    int64_t bits = 0;
+    memcpy(&bits, &value, sizeof(bits));
+    osty_rt_select_send_common(s, ch, bits, arm);
+}
+
+void osty_rt_select_send_ptr(void *s, void *ch, void *value, void *arm) {
+    osty_rt_select_send_common(s, ch, (int64_t)(uintptr_t)value, arm);
+}
+
+void osty_rt_select_send_bytes_v1(void *s, void *ch, const void *src,
+                                  int64_t sz, void *arm) {
+    if (sz < 0) {
+        osty_rt_abort("thread.select.send: negative byte size");
+    }
+    /* Same contract as osty_rt_thread_chan_send_bytes_v1 — copy into a
+     * GC-managed buffer so the receiver's pointer survives the sender's
+     * frame exit. */
+    void *copy = osty_gc_allocate_managed((size_t)sz, OSTY_GC_KIND_GENERIC,
+                                          "runtime.select.bytes", NULL, NULL);
+    if (sz > 0 && src != NULL) {
+        memcpy(copy, src, (size_t)sz);
+    }
+    osty_rt_select_send_common(s, ch, (int64_t)(uintptr_t)copy, arm);
 }
 
 void osty_rt_select_timeout(void *s, int64_t ns, void *arm) {
@@ -4826,12 +4870,12 @@ void osty_rt_select_timeout(void *s, int64_t ns, void *arm) {
     if (ns < 0) {
         osty_rt_abort("thread.select.timeout: negative duration");
     }
-    osty_rt_select_arm_push(sel, OSTY_RT_SELECT_ARM_TIMEOUT, NULL, ns, arm);
+    osty_rt_select_arm_push(sel, OSTY_RT_SELECT_ARM_TIMEOUT, NULL, ns, 0, arm);
 }
 
 void osty_rt_select_default(void *s, void *arm) {
     osty_rt_select_impl *sel = osty_rt_select_cast(s, "thread.select.default");
-    osty_rt_select_arm_push(sel, OSTY_RT_SELECT_ARM_DEFAULT, NULL, 0, arm);
+    osty_rt_select_arm_push(sel, OSTY_RT_SELECT_ARM_DEFAULT, NULL, 0, 0, arm);
 }
 
 static int osty_rt_select_try_recv(osty_rt_chan_impl *ch, int64_t *out) {
@@ -4841,6 +4885,29 @@ static int osty_rt_select_try_recv(osty_rt_chan_impl *ch, int64_t *out) {
         ch->head = (ch->head + 1) % ch->cap;
         ch->count -= 1;
         osty_rt_cond_signal(&ch->not_full);
+        osty_rt_mu_unlock(&ch->mu);
+        return 1;
+    }
+    osty_rt_mu_unlock(&ch->mu);
+    return 0;
+}
+
+/* Non-blocking enqueue: enqueue into a channel if there is capacity and
+ * the channel is not closed. Returns 1 on success, 0 if full. Aborts on
+ * a closed channel — the same loudness the blocking send path gives,
+ * because the Osty semantics treat send-after-close as a programmer
+ * error regardless of the select arm it was registered on. */
+static int osty_rt_select_try_send(osty_rt_chan_impl *ch, int64_t value) {
+    osty_rt_mu_lock(&ch->mu);
+    if (ch->closed) {
+        osty_rt_mu_unlock(&ch->mu);
+        osty_rt_abort("thread.select.send: send on closed channel");
+    }
+    if (ch->count < ch->cap) {
+        ch->slots[ch->tail] = value;
+        ch->tail = (ch->tail + 1) % ch->cap;
+        ch->count += 1;
+        osty_rt_cond_signal(&ch->not_empty);
         osty_rt_mu_unlock(&ch->mu);
         return 1;
     }
@@ -4907,21 +4974,32 @@ void osty_rt_select(void *body_env) {
     }
 
     for (;;) {
-        /* Poll recv arms in registration order. */
+        /* Poll recv/send arms in registration order. A send arm fires
+         * when the channel has room; a recv arm when there is at least
+         * one queued value. The first arm that succeeds wins. */
         for (int i = 0; i < sel.count; i++) {
-            if (sel.arms[i].kind != OSTY_RT_SELECT_ARM_RECV) {
-                continue;
-            }
-            osty_rt_chan_impl *ch = (osty_rt_chan_impl *)sel.arms[i].ch;
-            int64_t value = 0;
-            if (osty_rt_select_try_recv(ch, &value)) {
-                osty_rt_mu_destroy(&sel.mu);
-                osty_rt_select_invoke_recv(&sel.arms[i], value);
-                return;
+            osty_rt_select_arm *arm = &sel.arms[i];
+            if (arm->kind == OSTY_RT_SELECT_ARM_RECV) {
+                osty_rt_chan_impl *ch = (osty_rt_chan_impl *)arm->ch;
+                int64_t value = 0;
+                if (osty_rt_select_try_recv(ch, &value)) {
+                    osty_rt_mu_destroy(&sel.mu);
+                    osty_rt_select_invoke_recv(arm, value);
+                    return;
+                }
+            } else if (arm->kind == OSTY_RT_SELECT_ARM_SEND) {
+                osty_rt_chan_impl *ch = (osty_rt_chan_impl *)arm->ch;
+                if (osty_rt_select_try_send(ch, arm->send_value)) {
+                    osty_rt_mu_destroy(&sel.mu);
+                    if (arm->arm_env != NULL) {
+                        osty_rt_select_invoke_plain(arm);
+                    }
+                    return;
+                }
             }
         }
 
-        /* Default arm fires if no recv is ready on the first pass. */
+        /* Default arm fires if no recv/send is ready on the first pass. */
         if (default_idx >= 0) {
             osty_rt_mu_destroy(&sel.mu);
             osty_rt_select_invoke_plain(&sel.arms[default_idx]);
