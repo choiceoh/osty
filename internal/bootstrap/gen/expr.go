@@ -3615,12 +3615,26 @@ func (g *gen) emitRangeExpr(r *ast.RangeExpr) {
 // the tuple type is the checker's job; at the expression level we rely
 // on positional Fi naming, which matches what enum variant structs
 // already use.
+//
+// Two sibling tuple literals in the same function must produce
+// structurally identical Go structs — otherwise Go refuses to coerce
+// one early-return shape into the other. When the checker typed the
+// whole tuple (the common case) we decompose its Tuple.Elems so each
+// field gets the same Go type every sibling sees, even when a bool
+// literal or variable in one arm is left individually untyped.
 func (g *gen) emitTupleExpr(tup *ast.TupleExpr) {
-	// Prefer element types from the checker, fall back to any.
 	types_ := make([]string, len(tup.Elems))
+	var tupleElemTypes []types.Type
+	if t := g.typeOf(tup); t != nil {
+		if tt, ok := t.(*types.Tuple); ok && len(tt.Elems) == len(tup.Elems) {
+			tupleElemTypes = tt.Elems
+		}
+	}
 	for i, e := range tup.Elems {
 		if t := g.typeOf(e); t != nil {
 			types_[i] = g.goType(t)
+		} else if i < len(tupleElemTypes) && tupleElemTypes[i] != nil {
+			types_[i] = g.goType(tupleElemTypes[i])
 		} else {
 			types_[i] = "any"
 		}
@@ -4006,6 +4020,18 @@ func (g *gen) emitIfExpr(ie *ast.IfExpr) {
 		retType = g.goType(t)
 	} else if g.retHintGo != "" {
 		retType = g.retHintGo
+	}
+	// Ultimate fallback: when neither the checker nor the retHint give
+	// us a concrete type, the if-expr's value usually still flows to the
+	// enclosing function's return (via let-chain / outer block tail), so
+	// the function-level Go return type is the correct shape. This is
+	// the only handle we have for deeply-nested inner ifs whose branch
+	// expressions are untyped idents or calls the checker skipped —
+	// e.g. `let retTy = if x { tUnit(...) } else { let r = f(...); if r < 0 { ... } else { r } }`
+	// where the checker types the outer if but leaves the inner one bare
+	// so `func() any {...}()` ends up where `func() int {...}()` belongs.
+	if retType == "any" && g.currentRetGo != "" {
+		retType = g.currentRetGo
 	}
 	g.body.writef("func() %s {", retType)
 	g.emitIfChain(ie, true)
