@@ -13,10 +13,23 @@ import (
 // Lex runs the bootstrapped pure-Osty lexer and adapts its stream to the
 // compiler's public token surface.
 func Lex(src []byte) ([]token.Token, []*diag.Diagnostic, []token.Comment) {
-	text := string(src)
+	text := normalizeSourceNewlines(string(src))
 	rt := newRuneTable(text)
 	stream := frontendLexStream(text)
 	return adaptLexStream(rt, stream, ostyLexFactsFromStream(text, stream))
+}
+
+// normalizeSourceNewlines rewrites \r\n and lone \r to \n, mirroring
+// the self-hosted ostyNormalizeSource wrapper so offsets reported by
+// the Go-facing Lex/Run entry points match what the Osty-authored
+// front-end normalizer would have produced.
+func normalizeSourceNewlines(text string) string {
+	if !strings.ContainsRune(text, '\r') {
+		return text
+	}
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	return text
 }
 
 // FrontendRun is one complete self-hosted front-end pass over a source file.
@@ -44,7 +57,7 @@ func Run(src []byte) *FrontendRun {
 }
 
 func runFrontend(src []byte, adaptTokens bool) *FrontendRun {
-	text := string(src)
+	text := normalizeSourceNewlines(string(src))
 	rt := newRuneTable(text)
 	stream := frontendLexStream(text)
 	frontToks := frontTokensFromSource(text, stream)
