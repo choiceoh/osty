@@ -1025,3 +1025,137 @@ fn testSelfLintAllowIsDeclScoped() {
     // Only the second fn should still emit L0001 — the first is suppressed.
     testing.assertEq(selfLintCodeCount(report, "L0001"), 1)
 }
+
+fn testSelfLintFindsLetReturnSimplify() {
+    let report = selfLintSource(
+        r"""
+            fn doubleN(n: Int) -> Int {
+                let out = n * 2
+                out
+            }
+            """,
+    )
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0047"), 1)
+}
+
+fn testSelfLintSkipsLetReturnWhenMut() {
+    let report = selfLintSource(
+        r"""
+            fn doubleN(n: Int) -> Int {
+                let mut out = n
+                out = out * 2
+                out
+            }
+            """,
+    )
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0047"), 0)
+}
+
+fn testSelfLintSkipsLetReturnWhenUsedTwice() {
+    let report = selfLintSource(
+        r"""
+            fn use(n: Int) -> Int {
+                let tmp = n + 1
+                println(tmp)
+                tmp
+            }
+            """,
+    )
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0047"), 0)
+}
+
+fn testSelfLintFindsNeedlessParensInIf() {
+    let report = selfLintSource(
+        r"""
+            fn pick(flag: Bool) -> Int {
+                if (flag) { 1 } else { 0 }
+            }
+            """,
+    )
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0048"), 1)
+}
+
+fn testSelfLintSkipsBareIfCondition() {
+    let report = selfLintSource(
+        r"""
+            fn pick(flag: Bool) -> Int {
+                if flag { 1 } else { 0 }
+            }
+            """,
+    )
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0048"), 0)
+}
+
+fn testSelfLintFindsInfiniteLoopLiteral() {
+    let report = selfLintSource(
+        r"""
+            fn spin() {
+                for true {
+                    break
+                }
+            }
+            """,
+    )
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0049"), 1)
+}
+
+fn testSelfLintSkipsBareForInfinite() {
+    let report = selfLintSource(
+        r"""
+            fn spin() {
+                for {
+                    break
+                }
+            }
+            """,
+    )
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0049"), 0)
+}
+
+fn testSelfLintFindsMissingTestAssertion() {
+    let report = selfLintSource(
+        r"""
+            fn testParsesEmpty() {
+                let r = parse("")
+                let _ = r
+            }
+            """,
+    )
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0080"), 1)
+}
+
+fn testSelfLintSkipsTestWithTestingCall() {
+    let report = selfLintSource(
+        r"""
+            use std.testing
+
+            fn testParsesEmpty() {
+                let r = parse("")
+                testing.assertEq(r, 0)
+            }
+            """,
+    )
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0080"), 0)
+}
+
+fn testSelfLintSkipsNonTestFunction() {
+    let report = selfLintSource(
+        r"""
+            fn normalFn() {
+                let r = 1
+                let _ = r
+            }
+            """,
+    )
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0080"), 0)
+}
