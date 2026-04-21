@@ -1,6 +1,6 @@
 # Toolchain × LLVM compilability — status report
 
-Snapshot date: 2026-04-19. This refresh revalidated the universal CLI / LLVM
+Snapshot date: 2026-04-21. This refresh revalidated the universal CLI / LLVM
 smoke path, re-ran the whole/native merged toolchain probes, and cross-checked
 the current code paths (`internal/check`, `internal/selfhost`,
 `internal/llvmgen`, `internal/bootstrap/gen`) so this report distinguishes
@@ -13,7 +13,7 @@ week-over-week; for the live MIR-direct coverage see
 The old "CLI panic blocks any `osty gen --backend=llvm` call" statement is no
 longer true.
 
-As of 2026-04-19:
+As of 2026-04-21:
 
 - a fresh `fn main() { println(42) }` file goes through
   `osty gen --backend=llvm` successfully and emits LLVM IR
@@ -42,29 +42,23 @@ As of 2026-04-19:
   go through the `osty_rt_list_pop_discard` helper; nested `IndexExpr`
   propagates List / Map / Set element shapes via
   `decorateStaticValueFromSourceType`.
-  The LLVM012 statement-form category has been cleared for the
-  toolchain's actual shape: `LLVM011 [fn_param_struct_type]` Char wall
-  at `lspUtf16UnitsForChar` fell first (Char→i32 / Byte→i8 lowering),
-  then `LLVM012 *ast.MatchExpr is not a call` (match-as-statement for
-  tag enums), and most recently `LLVM012 field assignment base
-  *ast.FieldExpr` (nested field chain like `cx.env.returnTy = ...`)
-  now first-walls on `LLVM012 statement: field assignment base *ast.FieldExpr`
-  (nested field assignment like `a.b.c = x`). The previous
-  `LLVM011 [fn_param_struct_type]` Char wall at `lspUtf16UnitsForChar`
-  was resolved by lowering `Char` to `i32` and `Byte` to `i8` together
-  with `Char.toInt()` / `Byte.toInt()` / `Int.toChar()` width
-  conversions and unsigned compare predicates. The subsequent
-  `LLVM012 statement: *ast.MatchExpr is not a call` wall was resolved
-  by adding a `MatchExpr` statement-position lowering for tag-enum
-  scrutinees with bare-variant / wildcard arms
-  now first-walls on `LLVM012` (statement-form restriction); the previous
-  `LLVM011 [fn_param_struct_type]` Char wall at `lspUtf16UnitsForChar`
-  has been resolved by lowering `Char` to `i32` and `Byte` to `i8`
-  together with `Char.toInt()` / `Byte.toInt()` / `Int.toChar()` width
-  conversions and unsigned compare predicates
+  The LLVM012 statement-form category is now fully cleared for the
+  toolchain's actual shape. The sequence: `LLVM011 [fn_param_struct_type]`
+  Char wall at `lspUtf16UnitsForChar` fell first (Char→i32 / Byte→i8
+  lowering with `Char.toInt()` / `Byte.toInt()` / `Int.toChar()` width
+  conversions + unsigned compare predicates), then
+  `LLVM012 *ast.MatchExpr is not a call` (match-as-statement for
+  tag enums, resolved by adding a `MatchExpr` statement-position
+  lowering for tag-enum scrutinees with bare-variant / wildcard arms),
+  and most recently `LLVM012 field assignment base *ast.FieldExpr`
+  (nested field chain like `cx.env.returnTy = ...` / `a.b.c = x`,
+  resolved in [internal/llvmgen/stmt.go](../internal/llvmgen/stmt.go)
+  by walking the field chain inside-out, extracting each intermediate
+  struct and rebuilding with insertvalue from the innermost outward
+  before a single `store` at the root slot)
 - the current `osty check --airepair=false toolchain` surface is an
-  aggregate native-checker summary of `3846 error(s)` with
-  `20657 / 20749` assignment/return/call checks accepted
+  aggregate native-checker summary of `949 error(s)` with
+  `26811 / 27501` assignment/return/call checks accepted
 - code-path inspection shows the remaining gap is no longer best described as
   "no collections / no Result / no closures": list/map literals and some
   methods, `Result<T, E>` `?`, runtime-backed `std.strings` shims, and MIR
@@ -80,18 +74,17 @@ Current-tree observations from the code re-audit:
 |---|---|---|
 | CLI wiring | universal LLVM entry wedge | **resolved** — hello-world `osty gen --backend=llvm` exits 0 and writes `.ll` output |
 | Bootstrap bridge | merged whole-toolchain probe | first wall is still `LLVM002 runtime-ffi` on `runtime.golegacy.astbridge`; this is a bootstrap artifact, not yet a native backend parity claim |
-| Native backend surface | merged native-only probe | first wall is now `LLVM011 [list_mixed_ptr] list literal mixes String and non-String ptr-backed values` (heterogeneous ptr element types in a single `[...]` literal) after skipping 4 bootstrap-only files; the earlier `logical not on %PmCheckOutcome` wall was a parser precedence bug — `!x.y` was emitted as `(!x).y` instead of `!(x.y)` by the self-hosted front-end, now hoisted at stable-AST lowering time; List / Map / Set `isEmpty`, nested `IndexExpr`, and `list.pop()` discard sites all remain closed |
-| Native backend surface | merged native-only probe | first wall is now `LLVM012 statement: field assignment base *ast.FieldExpr` (nested field assignment) after skipping 4 bootstrap-only files; the earlier `LLVM011 [fn_param_struct_type]` Char wall and the subsequent `LLVM012 *ast.MatchExpr is not a call` wall are both closed |
-| Native backend surface | merged native-only probe | first wall is now `LLVM012` (statement form) after skipping 4 bootstrap-only files; the earlier `LLVM011 [fn_param_struct_type]` Char wall is closed |
+| Native backend surface | merged native-only probe | first wall is now `LLVM011 [list_mixed_ptr] list literal mixes String and non-String ptr-backed values` (heterogeneous ptr element types in a single `[...]` literal) after skipping 4 bootstrap-only files. Previously cleared in this chain: the `logical not on %PmCheckOutcome` wall (parser precedence bug — `!x.y` now parses as `!(x.y)`); the `LLVM011 [fn_param_struct_type]` Char wall (Char→i32, Byte→i8 lowering); `LLVM012 *ast.MatchExpr is not a call` (statement-position match for tag enums); and `LLVM012 field assignment base *ast.FieldExpr` (nested `a.b.c = x` via inside-out extractvalue + outside-in insertvalue rebuild). List / Map / Set `isEmpty`, nested `IndexExpr`, and `list.pop()` discard sites also remain closed |
 | Checker boundary | `internal/check` / `internal/toolchain` | host still manages an external `osty-native-checker` artifact and falls back to the embedded selfhost checker when it cannot be prepared |
-| Toolchain package health | `osty check --airepair=false toolchain` | current CLI surface is still an aggregate `E0700` summary (`3846 error(s)`) rather than a clean self-compile pass |
+| Toolchain package health | `osty check --airepair=false toolchain` | current CLI surface is still an aggregate `E0700` summary (`949 error(s)`, `26811 / 27501` accepted) rather than a clean self-compile pass |
 | Stdlib / string surface | `internal/llvmgen/stdlib_shim.go`, `expr.go` | a subset of `std.strings` is shimmed through runtime helpers. `Char` and `Byte` parameters/returns, literals, comparisons, and width conversions now lower; `String.chars` / `String.bytes` still block the pure native path because `List<Char>` / `List<Byte>` collection lowering is separate work |
 
 The MIR-direct emitter itself (Stages 3.1–3.11) covers a growing subset of the
-language shapes toolchain uses. The 2026-04-19 refresh narrows the story
+language shapes toolchain uses. The 2026-04-21 refresh narrows the story
 further: backend entry is no longer the first blocker, but the current tree is
 still not "fully self-hosted" because the bootstrap bridge, checker boundary,
-and `Char`/runtime surface all remain live.
+heterogeneous ptr-backed list literals, and `List<Char>` / `List<Byte>`
+string-iteration surface all remain live.
 
 ## How the probe was run
 
@@ -107,7 +100,7 @@ go test ./internal/llvmgen -run 'TestProbeWholeToolchainMerged|TestProbeNativeTo
 `/tmp/hello.osty` was a 3-line `fn main() { println(42) }` baseline so the
 backend entry path could be isolated from toolchain-specific issues.
 
-Observed in the 2026-04-19 refresh:
+Observed in the 2026-04-21 refresh:
 
 - `/tmp/osty gen --backend=llvm /tmp/hello.osty` exited 0 and emitted a valid
   `.ll` module containing `define i32 @main()`
@@ -116,14 +109,16 @@ Observed in the 2026-04-19 refresh:
 - `TestProbeWholeToolchainMerged` reported
   `LLVM002 runtime-ffi: ... runtime.golegacy.astbridge ...`
 - `TestProbeNativeToolchainMerged` skipped
-  `ast_lower.osty, ci.osty, docgen.osty, manifest_validation.osty`. After the
-  `Char`/`Byte` lowering landed the probe first-walls on `LLVM012`
-  (statement form), not the previous `LLVM011 [fn_param_struct_type]` on
-  `Char` at `lspUtf16UnitsForChar`
+  `ast_lower.osty, ci.osty, docgen.osty, manifest_validation.osty` and
+  first-walled on `LLVM011 [list_mixed_ptr]` (heterogeneous ptr-backed
+  elements in a single `[...]` literal). Previously walled on `LLVM012`
+  statement-form cases — nested field assignment and match-as-statement —
+  both now closed; before that on `LLVM011 [fn_param_struct_type]` Char
+  at `lspUtf16UnitsForChar`, closed by `Char`/`Byte` lowering
 - `/tmp/osty check --airepair=false toolchain` exited with the aggregate
   summary
-  `native checker reported type errors: 3846 error(s)` plus
-  `native checker accepted 20657 of 20749 assignment/return/call checks`
+  `native checker reported type errors: 949 error(s)` plus
+  `native checker accepted 26811 of 27501 assignment/return/call checks`
 
 ## Layer 1 — universal CLI panic wedge (resolved)
 
@@ -165,8 +160,8 @@ Current-tree command surface:
 
 ```text
 $ /tmp/osty check --airepair=false toolchain
-error[E0700]: native checker reported type errors: 3846 error(s)
-= note: native checker accepted 20657 of 20749 assignment/return/call checks
+error[E0700]: native checker reported type errors: 949 error(s)
+= note: native checker accepted 26811 of 27501 assignment/return/call checks
 ```
 
 That means the older per-file breakdown below is no longer current-tree ground
@@ -246,9 +241,12 @@ it rewrote every `IDENT` token matching `def` / `func` / `function` /
 had `def` silently rewritten to `fn`, producing four E0001 diagnostics at
 `ast_lower.osty:91` and `:93`.
 
-Fix: in `normalizeStableAliases`, skip the rewrite when the identifier is
-immediately followed by `:` (parameter / struct field / keyword-argument
-slot). Regression test in
+Fix: in `collectStableAliasProvenance`, suppress the alias provenance
+step when the identifier is immediately followed by `:` (parameter /
+struct field / keyword-argument slot), and more generally when
+`isAliasInExpressionPosition` detects LHS-of-assign / `.`-access / `,` /
+`)` / `]` / `let`/`mut` / return / arrow / binary-op surroundings that
+make keyword interpretation impossible. Regression test in
 `internal/parser/parser_features_test.go::TestParseStableAliasesPreservedAsIdentifiers`.
 
 ### E0700 — aggregate checker summary
@@ -258,12 +256,13 @@ native checker reported type errors: 1700 error(s)
 note: native checker accepted 26191 of 26850 assignment/return/call checks
 ```
 
-On the current tree the visible summary is larger (`3846` errors with
-`20657 / 20749` accepted), so the old `1700` figure should now be treated as a
-historical snapshot only. The same general caveat still applies: large summary
-counts are likely to hide a much smaller set of root-cause wedges, and the
-whole/native probe results suggest `Char` + bootstrap-only host boundaries are
-now higher-priority roots than the old parser alias bug.
+On the current tree the visible summary is `949` errors with
+`26811 / 27501` accepted, so the old `1700` figure should now be treated as a
+historical snapshot only. The error count dropped substantially as the native
+checker coverage grew; large summary counts still hide a much smaller set of
+root-cause wedges, and the whole/native probe results suggest
+`List<String>` / ptr-backed collection lowering and bootstrap-only host
+boundaries are now higher-priority roots than the old parser alias bug.
 
 ## Layer 3 — MIR-direct backend coverage (for context)
 
@@ -285,17 +284,22 @@ rewire the remaining Go-hosted boundaries."
 ## Recommended fix order (smallest → largest unlock)
 
 1. **Treat the merged native probe as the current primary signal.**
-   The first real wall is now `Char` parameter lowering, not the old CLI panic
-   and not the already-fixed `def: Expr` alias issue.
+   The first real wall is now `LLVM011 [list_mixed_ptr]` (a single `[...]`
+   literal mixing `String` with non-`String` ptr-backed elements), not the
+   old CLI panic, not the `Char`-parameter wall (closed), and not the
+   already-fixed `def: Expr` alias issue.
 
 2. **Shrink the aggregate checker summary on the current tree.**
-   Re-profile the `3846`-error native-checker summary into a current histogram
-   before making more claims from the 2026-04-18 sample.
+   Re-profile the `949`-error native-checker summary into a current histogram
+   before making more claims from the 2026-04-18 sample — the drop from the
+   earlier `1700` / `3846` figures already suggests the root-cause set has
+   shifted.
 
-3. **Finish the `Char` / `Byte` / string iteration surface.**
-   The native probe's first wall and the current `std.strings` shim both point
-   at the same missing runtime/type area (`String.chars`, `String.bytes`,
-   `List<Char>`, and related ABI details).
+3. **Close the ptr-backed heterogeneous-list surface, then finish
+   `Char` / `Byte` / string iteration.**
+   `Char` and `Byte` parameter/return lowering landed already; the remaining
+   string-side gap is `String.chars` / `String.bytes` → `List<Char>` /
+   `List<Byte>`, which also unblocks the `std.strings` shim's final removal.
 
 4. **Retire the bootstrap-only bridge files from the critical path.**
    Whole-toolchain merged lowering still first-walls on
@@ -305,5 +309,5 @@ rewire the remaining Go-hosted boundaries."
 
 5. **Then re-run `osty check toolchain` and per-file `osty gen --backend=llvm`
    probes.**
-   Once the `Char`/bootstrap wedges move, the remaining tail should become a
-   much narrower backend/runtime parity queue.
+   Once the `list_mixed_ptr` / string-iteration / bootstrap wedges move, the
+   remaining tail should become a much narrower backend/runtime parity queue.
