@@ -1455,8 +1455,20 @@ func legacyMethodCallFromIR(expr *ostyir.MethodCall) (ast.Expr, error) {
 	// (already encoded by the specialized receiver type) but trip
 	// the legacy emitter with LLVM015 when wrapped in TurbofishExpr.
 	// Drop them here when the receiver is a specialized built-in.
+	//
+	// The receiver type can be:
+	//   - `*ir.NamedType` with a `_ZTS…` mangled name for specialized
+	//     struct/enum owners (Map, List, Set, specialized Result),
+	//   - `*ir.OptionalType` — surface form for `Option<T>`, which
+	//     keeps the unmangled shape because `T?` has a direct LLVM
+	//     representation as a nullable ptr. Method calls on it
+	//     (`x.unwrap()`, `x.isSome()`) are still specialized-builtin
+	//     dispatches and carry the same redundant owner-level args.
 	if len(typeArgs) != 0 && expr.Receiver != nil {
-		if named, ok := expr.Receiver.Type().(*ostyir.NamedType); ok && strings.HasPrefix(named.Name, "_ZTS") {
+		rt := expr.Receiver.Type()
+		if opt, ok := rt.(*ostyir.OptionalType); ok && opt != nil {
+			typeArgs = nil
+		} else if named, ok := rt.(*ostyir.NamedType); ok && strings.HasPrefix(named.Name, "_ZTS") {
 			typeArgs = nil
 		}
 	}

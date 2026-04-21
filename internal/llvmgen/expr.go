@@ -3942,7 +3942,7 @@ func (g *generator) emitOptionMethodCall(call *ast.CallExpr) (value, bool, error
 	if !ok || field.IsOptional {
 		return value{}, false, nil
 	}
-	if field.Name != "isSome" && field.Name != "isNone" {
+	if field.Name != "isSome" && field.Name != "isNone" && field.Name != "unwrap" {
 		return value{}, false, nil
 	}
 	if len(call.Args) != 0 {
@@ -3952,7 +3952,8 @@ func (g *generator) emitOptionMethodCall(call *ast.CallExpr) (value, bool, error
 	if !ok {
 		return value{}, false, nil
 	}
-	if _, isOpt := baseSrc.(*ast.OptionalType); !isOpt {
+	optType, isOpt := baseSrc.(*ast.OptionalType)
+	if !isOpt {
 		return value{}, false, nil
 	}
 	base, err := g.emitExpr(field.X)
@@ -3961,6 +3962,9 @@ func (g *generator) emitOptionMethodCall(call *ast.CallExpr) (value, bool, error
 	}
 	if base.typ != "ptr" {
 		return value{}, true, unsupportedf("type-system", "Option.%s receiver type %s, want ptr", field.Name, base.typ)
+	}
+	if field.Name == "unwrap" {
+		return g.emitOptionUnwrap(base, optType, call)
 	}
 	emitter := g.toOstyEmitter()
 	cmp := llvmNextTemp(emitter)
@@ -3971,6 +3975,44 @@ func (g *generator) emitOptionMethodCall(call *ast.CallExpr) (value, bool, error
 	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp %s ptr %s, null", cmp, op, base.ref))
 	g.takeOstyEmitter(emitter)
 	return value{typ: "i1", ref: cmp}, true, nil
+}
+
+// emitOptionUnwrap lowers `opt.unwrap()` for a ptr-backed `Option<T>`:
+// if the receiver is non-null the payload ptr is the result; null
+// aborts with a "called unwrap on None" message (matching the spec's
+// panic shape). Uses the same print+exit+unreachable contract as
+// `emitTestingAbortWithEmitter` so the abort path is visible in
+// stderr without pulling in the full testing harness.
+//
+// Scalar Option (Option<Int>, Option<Bool>, …) still routes through
+// the caller's generic fallback — ptr-backed is where the injection
+// pipeline (`List<T>.first(self) -> T?`, `self.indexOf(k).isSome()`
+// chains, …) needs unwrap first.
+func (g *generator) emitOptionUnwrap(base value, optType *ast.OptionalType, call *ast.CallExpr) (value, bool, error) {
+	emitter := g.toOstyEmitter()
+	isNone := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp eq ptr %s, null", isNone, base.ref))
+	someLabel := llvmNextLabel(emitter, "unwrap.some")
+	noneLabel := llvmNextLabel(emitter, "unwrap.none")
+	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", isNone, noneLabel, someLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", noneLabel))
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(noneLabel)
+
+	emitter = g.toOstyEmitter()
+	msg := fmt.Sprintf("unwrap on None at %s", g.sourceLineLabel(call.Pos().Line, "<unwrap>"))
+	msgPtr := llvmStringLiteral(emitter, msg)
+	llvmPrintlnString(emitter, msgPtr)
+	g.declareRuntimeSymbol("exit", "void", []paramInfo{{typ: "i32"}})
+	emitter.body = append(emitter.body, "  call void @exit(i32 1)")
+	emitter.body = append(emitter.body, "  unreachable")
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", someLabel))
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(someLabel)
+
+	out := base
+	out.sourceType = optType.Inner
+	return out, true, nil
 }
 
 func (g *generator) emitSetMethodCall(call *ast.CallExpr) (value, bool, error) {
