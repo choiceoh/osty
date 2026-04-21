@@ -52,5 +52,6 @@ pub fn diagHarvestCases() -> List<DiagHarvestCase> {
         DiagHarvestCase { code: "L0031", example: "fn LoadConfig() \{ \}          // warning: should be `loadConfig`\nfn f(User_Id: Int) \{\}        // warning: should be `userId`", phase: "lint" },
         DiagHarvestCase { code: "L0032", example: "enum Color \{ red, Green \}   // warning on `red`", phase: "lint" },
         DiagHarvestCase { code: "L0045", example: "let x = !true      // warning: use `false` directly", phase: "lint" },
+        DiagHarvestCase { code: "L0046", example: "fn parse(s: String) -> Result<Int, Error> \{\n    Ok(s.len())              // warning: fn never returns Err\n\}", phase: "lint" },
     ]
 }

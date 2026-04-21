@@ -203,6 +203,7 @@ fn selfLintFullPipeline(
     report.resolveErrors = selfResolveDiagnosticCount(resolved)
     report = selfLintAstFile(file, resolved, report)
     report = selfLintAstCheckUnusedMembersWith(file, access, report)
+    report = selfLintAstCheckUnnecessaryWrap(file, report)
     if hints.enabled {
         report = selfLintAstCheckIgnoredResult(file, hints, report)
     }
@@ -3139,6 +3140,7 @@ pub fn selfLintAllRules() -> List<SelfLintRuleInfo> {
     rules.push(selfLintMakeRule("L0043", "double_negation", "simplify", "!! collapses to the inner expression", true))
     rules.push(selfLintMakeRule("L0044", "bool_literal_compare", "simplify", "compare against bool literal can be simplified", true))
     rules.push(selfLintMakeRule("L0045", "negated_bool_literal", "simplify", "!true / !false can be written directly", false))
+    rules.push(selfLintMakeRule("L0046", "unnecessary_wrap", "simplify", "function returns Result/Option but never errors", false))
     rules.push(selfLintMakeRule("L0050", "too_many_params", "complexity", "function takes too many parameters", false))
     rules.push(selfLintMakeRule("L0052", "function_too_long", "complexity", "function body is too long", false))
     rules.push(selfLintMakeRule("L0053", "deep_nesting", "complexity", "control flow is nested too deeply", false))
@@ -3400,6 +3402,185 @@ fn selfLintDiagIsAllowed(diag: SelfLintDiagnostic, scopes: List<SelfLintAllowSco
             return true
         }
         if selfLintStringListContains(scope.codes, diag.code) {
+            return true
+        }
+    }
+    false
+}
+
+// ============================================================
+// L0046 unnecessary_wrap
+// ============================================================
+//
+// A fn declared `-> Result<T, E>` or `-> Option<T>` whose body cannot
+// return `Err(...)` / `None` and does not propagate via `?` is wrapping
+// for no reason — every caller has to unwrap. Flag it so the author can
+// drop the wrapper and declare the plain return type.
+//
+// Heuristic (AST-only): skip when the body uses `?` or directly
+// constructs `Err(...)` / `None`; emit only when at least one exit path
+// actually wraps via `Ok(...)` / `Some(...)`. Callers that never reach
+// the end of the body (e.g. `for {}` infinite loop) never show a wrap
+// and therefore never trip the rule.
+
+fn selfLintAstCheckUnnecessaryWrap(
+    file: AstFile,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    let mut out = report
+    for declIdx in file.arena.decls {
+        out = selfLintUnnecessaryWrapDecl(file, declIdx, out)
+    }
+    out
+}
+
+fn selfLintUnnecessaryWrapDecl(
+    file: AstFile,
+    idx: Int,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    if idx < 0 {
+        return report
+    }
+    let node = selfLintAstNode(file, idx)
+    if node.kind == AstNFnDecl {
+        return selfLintUnnecessaryWrapCheckFn(file, idx, node, report)
+    }
+    if node.kind == AstNStructDecl
+        || node.kind == AstNEnumDecl
+        || node.kind == AstNInterfaceDecl {
+        let mut out = report
+        for memberIdx in node.children {
+            let member = selfLintAstNode(file, memberIdx)
+            if member.kind == AstNFnDecl {
+                out = selfLintUnnecessaryWrapCheckFn(file, memberIdx, member, out)
+            }
+        }
+        return out
+    }
+    report
+}
+
+fn selfLintUnnecessaryWrapCheckFn(
+    file: AstFile,
+    idx: Int,
+    node: AstNode,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    if node.right < 0 || node.left < 0 {
+        return report
+    }
+    let retType = selfLintAstNode(file, node.left)
+    let kind = selfLintReturnWrapKind(retType)
+    if kind == "" {
+        return report
+    }
+    if selfLintBodyHasFallibleExit(file, node.right, kind) {
+        return report
+    }
+    if !(selfLintBodyWrapsExit(file, node.right, kind)) {
+        return report
+    }
+    let mut message = "function always returns Some(...) — drop the Option wrapping"
+    if kind == "result" {
+        message = "function always returns Ok(...) — drop the Result wrapping"
+    }
+    selfLintEmitAtNode(
+        report,
+        "L0046",
+        message,
+        node.text,
+        node.start,
+        node.end,
+        idx,
+    )
+}
+
+fn selfLintReturnWrapKind(typeNode: AstNode) -> String {
+    if typeNode.kind != AstNType {
+        return ""
+    }
+    if typeNode.text == "Result" {
+        return "result"
+    }
+    if typeNode.text == "Option" || typeNode.text == "optional" {
+        return "option"
+    }
+    ""
+}
+
+fn selfLintBodyHasFallibleExit(file: AstFile, idx: Int, kind: String) -> Bool {
+    if idx < 0 {
+        return false
+    }
+    let node = selfLintAstNode(file, idx)
+    if node.kind == AstNQuestion {
+        return true
+    }
+    if node.kind == AstNCall && node.left >= 0 {
+        let callee = selfLintAstNode(file, node.left)
+        if callee.kind == AstNIdent {
+            if kind == "result" && callee.text == "Err" {
+                return true
+            }
+            if kind == "option" && callee.text == "None" {
+                return true
+            }
+        }
+    }
+    if node.kind == AstNIdent {
+        if kind == "option" && node.text == "None" {
+            return true
+        }
+    }
+    if selfLintBodyHasFallibleExit(file, node.left, kind) {
+        return true
+    }
+    if selfLintBodyHasFallibleExit(file, node.right, kind) {
+        return true
+    }
+    for child in node.children {
+        if selfLintBodyHasFallibleExit(file, child, kind) {
+            return true
+        }
+    }
+    for child in node.children2 {
+        if selfLintBodyHasFallibleExit(file, child, kind) {
+            return true
+        }
+    }
+    false
+}
+
+fn selfLintBodyWrapsExit(file: AstFile, idx: Int, kind: String) -> Bool {
+    if idx < 0 {
+        return false
+    }
+    let node = selfLintAstNode(file, idx)
+    if node.kind == AstNCall && node.left >= 0 {
+        let callee = selfLintAstNode(file, node.left)
+        if callee.kind == AstNIdent {
+            if kind == "result" && callee.text == "Ok" {
+                return true
+            }
+            if kind == "option" && callee.text == "Some" {
+                return true
+            }
+        }
+    }
+    if selfLintBodyWrapsExit(file, node.left, kind) {
+        return true
+    }
+    if selfLintBodyWrapsExit(file, node.right, kind) {
+        return true
+    }
+    for child in node.children {
+        if selfLintBodyWrapsExit(file, child, kind) {
+            return true
+        }
+    }
+    for child in node.children2 {
+        if selfLintBodyWrapsExit(file, child, kind) {
             return true
         }
     }
