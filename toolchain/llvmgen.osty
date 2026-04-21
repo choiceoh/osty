@@ -1017,7 +1017,7 @@ pub fn llvmUnsupportedDiagnostic(kind: String, detail: String) -> LlvmUnsupporte
             code: "LLVM001",
             kind: "foreign-ffi",
             message: "Go FFI import {target} is not supported by the self-hosted native backend",
-            hint: "rewrite the binding as `use runtime.cabi.<lib> \{ ... \}` for extern C symbols, or `use runtime.<surface> \{ ... \}` for an osty_rt_* runtime ABI helper (LANG_SPEC_v0.5 §12.8)",
+            hint: "rewrite the binding as `use runtime.cabi.<lib>` with an item block for extern C symbols, or `use runtime.<surface>` with an item block for an osty_rt_* runtime ABI helper (LANG_SPEC_v0.5 §12.8)",
         }
     }
     if kind == "runtime-ffi" {
@@ -1348,7 +1348,7 @@ pub fn llvmRuntimeFfiSymbol(path: String, name: String) -> String {
     }
     let mut trimmed = path
     if trimmed.startsWith("runtime.") {
-        trimmed = trimmed.trimPrefix("runtime.")
+        trimmed = llvmStrings.trimPrefix(trimmed, "runtime.")
     }
     let mut out = "osty_rt_"
     for c in trimmed.chars() {

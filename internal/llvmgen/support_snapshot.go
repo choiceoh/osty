@@ -1156,7 +1156,7 @@ func llvmUnsupportedDiagnostic(kind string, detail string) *LlvmUnsupportedDiagn
 			target = "<unknown>"
 		}
 		// Osty: examples/selfhost-core/llvmgen.osty:756:9
-		return &LlvmUnsupportedDiagnostic{code: "LLVM001", kind: "foreign-ffi", message: fmt.Sprintf("Go FFI import %s is not supported by the self-hosted native backend", ostyToString(target)), hint: "rewrite the binding as `use runtime.cabi.<lib> { ... }` for extern C symbols, or `use runtime.<surface> { ... }` for an osty_rt_* runtime ABI helper (LANG_SPEC_v0.5 §12.8)"}
+		return &LlvmUnsupportedDiagnostic{code: "LLVM001", kind: "foreign-ffi", message: fmt.Sprintf("Go FFI import %s is not supported by the self-hosted native backend", ostyToString(target)), hint: "rewrite the binding as `use runtime.cabi.<lib>` with an item block for extern C symbols, or `use runtime.<surface>` with an item block for an osty_rt_* runtime ABI helper (LANG_SPEC_v0.5 §12.8)"}
 	}
 	// Osty: examples/selfhost-core/llvmgen.osty:763:5
 	if kind == "runtime-ffi" {
