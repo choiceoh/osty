@@ -12,20 +12,13 @@
 // `internal/check/*.go`; the Osty-first rule (CLAUDE.md) requires that
 // new gate logic go here instead.
 //
-// Migration status (Phase 1):
+// Migration status:
 //
-//   The gate body below is live on the Osty side and bundled into the
-//   native-checker (see `internal/selfhost/bundle/bundle.go`). The
-//   structured-diagnostics bridge (`FrontCheckResult.diagnostics`
-//   -> `selfhost.CheckResult.Diagnostics`
-//   -> `nativeCheckResult.Diagnostics`
-//   -> `*diag.Diagnostic`) is in place. Until
-//   `internal/selfhost/generated.go` regenerates cleanly (tracked
-//   separately in internal/bootstrap/gen), the embedded/native checker
-//   still runs an older bundle; the Go-side gate in
-//   `internal/check/intrinsic_body.go` therefore remains authoritative
-//   for now. When regen lands, drop the Go gate + its call sites in
-//   `internal/check/check.go` and this file becomes the source of truth.
+//   The gates below are the authoritative policy source. The host bridge maps
+//   their structured diagnostics into ordinary Go diagnostics, keeps the
+//   minimal privilege-aware filtering for `E0770`, and only leaves a temporary
+//   package/workspace fallback while the structured package adapter reaches
+//   parity with file-mode gate emission.
 //
 // Gates implemented:
 //
