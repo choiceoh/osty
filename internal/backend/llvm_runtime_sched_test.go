@@ -613,6 +613,296 @@ int main(void) {
 	}
 }
 
+// collectAll: body spawns four children into the injected group, each
+// returns its captured int. The runtime joins them all and returns a
+// List<Result<Int, Error>> whose i-th element has disc=1 (Ok) and
+// payload = the i-th handle's result. We reach into the raw list
+// via elem_size=16 / read-bytes to verify layout without needing the
+// frontend.
+func TestBundledRuntimeSchedulerCollectAll(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_collect_all_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_collect_all_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+
+void *osty_rt_task_collect_all(void *body_env);
+void *osty_rt_task_group_spawn(void *group, void *body_env);
+void *osty_rt_list_new(void);
+int64_t osty_rt_list_len(void *raw_list);
+void osty_rt_list_push_ptr(void *raw_list, void *value);
+void osty_rt_list_get_bytes(void *raw_list, int64_t index, void *out, int64_t elem_size, void *trace_elem);
+
+typedef struct child_env {
+    void *fn;
+    int64_t capture;
+} child_env;
+
+typedef struct body_env {
+    void *fn;
+    child_env *children;
+    int64_t count;
+} body_env;
+
+static int64_t child_body(void *env) {
+    child_env *e = (child_env *)env;
+    return e->capture;
+}
+
+static void *body_spawn_all(void *env, void *group) {
+    body_env *be = (body_env *)env;
+    void *list = osty_rt_list_new();
+    for (int64_t i = 0; i < be->count; i++) {
+        void *h = osty_rt_task_group_spawn(group, (void *)&be->children[i]);
+        osty_rt_list_push_ptr(list, h);
+    }
+    return list;
+}
+
+int main(void) {
+    child_env kids[4] = {
+        { (void *)child_body, 11 },
+        { (void *)child_body, 22 },
+        { (void *)child_body, 33 },
+        { (void *)child_body, 44 },
+    };
+    body_env be = { (void *)body_spawn_all, kids, 4 };
+    void *out = osty_rt_task_collect_all((void *)&be);
+
+    int64_t n = osty_rt_list_len(out);
+    printf("%lld\n", (long long)n);
+
+    struct { int64_t disc; int64_t payload; } slot;
+    for (int64_t i = 0; i < n; i++) {
+        memset(&slot, 0, sizeof(slot));
+        osty_rt_list_get_bytes(out, i, &slot, sizeof(slot), NULL);
+        printf("%lld:%lld\n", (long long)slot.disc, (long long)slot.payload);
+    }
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", "-pthread", runtimePath, harnessPath, "-o", binaryPath)
+	if buildOutput, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runOutput, err := exec.Command(binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	// disc=1 means Ok per variantIndexByName("Ok") == 1.
+	const want = "4\n1:11\n1:22\n1:33\n1:44\n"
+	if got := string(runOutput); got != want {
+		t.Fatalf("collectAll harness stdout = %q, want %q", got, want)
+	}
+}
+
+// race: three children spawned into the injected group. Child 0 wins
+// by sleeping only 10ms; children 1-2 sleep 2s but check cancellation
+// every 20ms, so they exit soon after race() broadcasts cancel.
+// Asserts (a) the winner's Ok-wrapped payload is child 0's capture,
+// (b) total wall-clock is well below the 2s sibling floor.
+func TestBundledRuntimeSchedulerRace(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_race_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_race_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <time.h>
+
+typedef struct result_enum {
+    int64_t disc;
+    int64_t payload;
+} result_enum;
+
+result_enum osty_rt_task_race(void *body_env);
+void *osty_rt_task_group_spawn(void *group, void *body_env);
+void *osty_rt_list_new(void);
+void osty_rt_list_push_ptr(void *raw_list, void *value);
+void osty_rt_thread_sleep(int64_t nanos);
+bool osty_rt_cancel_is_cancelled(void);
+
+typedef struct child_env {
+    void *fn;
+    int64_t capture;
+    int64_t sleep_ns;
+    int64_t step_ns;
+} child_env;
+
+typedef struct body_env {
+    void *fn;
+    child_env *children;
+    int64_t count;
+} body_env;
+
+/* Child body: sleep in step_ns-sized chunks, checking cancellation
+ * between steps. Returns early with capture + 1000 if it observed
+ * cancel, so the main process can distinguish winner from losers. */
+static int64_t child_body(void *env) {
+    child_env *e = (child_env *)env;
+    int64_t remaining = e->sleep_ns;
+    while (remaining > 0) {
+        if (osty_rt_cancel_is_cancelled()) {
+            return e->capture + 1000;
+        }
+        int64_t step = remaining < e->step_ns ? remaining : e->step_ns;
+        osty_rt_thread_sleep(step);
+        remaining -= step;
+    }
+    return e->capture;
+}
+
+static void *body_spawn_racers(void *env, void *group) {
+    body_env *be = (body_env *)env;
+    void *list = osty_rt_list_new();
+    for (int64_t i = 0; i < be->count; i++) {
+        void *h = osty_rt_task_group_spawn(group, (void *)&be->children[i]);
+        osty_rt_list_push_ptr(list, h);
+    }
+    return list;
+}
+
+int main(void) {
+    /* child 0: sleeps ~10ms then wins. Others sleep up to 2s but
+     * step-check cancellation every 20ms. */
+    child_env kids[3] = {
+        { (void *)child_body, 7,  10000000LL,    5000000LL  },
+        { (void *)child_body, 99, 2000000000LL, 20000000LL },
+        { (void *)child_body, 88, 2000000000LL, 20000000LL },
+    };
+    body_env be = { (void *)body_spawn_racers, kids, 3 };
+
+    struct timespec before, after;
+    clock_gettime(CLOCK_MONOTONIC, &before);
+    result_enum r = osty_rt_task_race((void *)&be);
+    clock_gettime(CLOCK_MONOTONIC, &after);
+    long long elapsed_ns = (long long)(after.tv_sec - before.tv_sec) * 1000000000LL +
+                           (long long)(after.tv_nsec - before.tv_nsec);
+
+    printf("%lld\n", (long long)r.disc);      /* 1 = Ok */
+    printf("%lld\n", (long long)r.payload);   /* 7 = child 0's capture */
+    /* Siblings must cooperate with cancellation: total wall-clock
+     * should be under 500ms even though the slow children nominally
+     * sleep 2s. Conservative ceiling to tolerate CI jitter. */
+    printf("%d\n", elapsed_ns < 500000000LL ? 1 : 0);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", "-pthread", runtimePath, harnessPath, "-o", binaryPath)
+	if buildOutput, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runOutput, err := exec.Command(binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	const want = "1\n7\n1\n"
+	if got := string(runOutput); got != want {
+		t.Fatalf("race harness stdout = %q, want %q", got, want)
+	}
+}
+
+// parallel: 10 items × concurrency 4 × f(x) = x*x. Verifies every
+// output slot holds Ok(x*x) and the sum matches 0^2 + ... + 9^2 = 285.
+func TestBundledRuntimeSchedulerParallel(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_parallel_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_parallel_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+
+void *osty_rt_parallel(void *items, int64_t concurrency, void *f_env);
+void *osty_rt_list_new(void);
+int64_t osty_rt_list_len(void *raw_list);
+void osty_rt_list_push_i64(void *raw_list, int64_t value);
+void osty_rt_list_get_bytes(void *raw_list, int64_t index, void *out, int64_t elem_size, void *trace_elem);
+
+typedef struct f_env_t {
+    void *fn;
+} f_env_t;
+
+/* f(item) = item * item. Closure env has no captures beyond the fn
+ * pointer itself, so slot 0 holds the fn. */
+static int64_t f_square(void *env, int64_t item) {
+    (void)env;
+    return item * item;
+}
+
+int main(void) {
+    void *items = osty_rt_list_new();
+    for (int64_t i = 0; i < 10; i++) {
+        osty_rt_list_push_i64(items, i);
+    }
+    f_env_t fe = { (void *)f_square };
+    void *out = osty_rt_parallel(items, 4, (void *)&fe);
+
+    int64_t n = osty_rt_list_len(out);
+    printf("%lld\n", (long long)n);
+
+    struct { int64_t disc; int64_t payload; } slot;
+    int64_t sum = 0;
+    int all_ok = 1;
+    for (int64_t i = 0; i < n; i++) {
+        memset(&slot, 0, sizeof(slot));
+        osty_rt_list_get_bytes(out, i, &slot, sizeof(slot), NULL);
+        if (slot.disc != 1 || slot.payload != i * i) {
+            all_ok = 0;
+        }
+        sum += slot.payload;
+    }
+    printf("%d\n", all_ok);
+    printf("%lld\n", (long long)sum); /* 0+1+4+9+...+81 = 285 */
+
+    /* Edge case: empty input. Output length 0, no worker spawned. */
+    void *empty = osty_rt_list_new();
+    void *empty_out = osty_rt_parallel(empty, 4, (void *)&fe);
+    printf("%lld\n", (long long)osty_rt_list_len(empty_out));
+
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", "-pthread", runtimePath, harnessPath, "-o", binaryPath)
+	if buildOutput, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runOutput, err := exec.Command(binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	const want = "10\n1\n285\n0\n"
+	if got := string(runOutput); got != want {
+		t.Fatalf("parallel harness stdout = %q, want %q", got, want)
+	}
+}
+
 // Select.send is still a deliberate abort — its signature needs a
 // value-register the MIR path doesn't emit yet. Locks the "fail loud"
 // contract for now.
