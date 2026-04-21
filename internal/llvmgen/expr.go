@@ -2339,6 +2339,44 @@ func (g *generator) emitListAggregatePush(listValue, elem value) error {
 	return nil
 }
 
+// emitListAggregateInsert mirrors emitListAggregatePush but for an
+// arbitrary index — the underlying runtime memmoves the tail right by
+// one slot and copies the value bytes into slot `index`. Pointer-bearing
+// struct fields go through the *_roots variant so GC sees the new edges.
+func (g *generator) emitListAggregateInsert(listValue, idx, elem value) error {
+	emitter := g.toOstyEmitter()
+	slot := g.emitAggregateScratchSlot(emitter, elem.typ, elem.ref)
+	size := g.emitAggregateByteSize(emitter, elem.typ)
+	offsetsPtr, offsetCount, err := g.emitAggregateRootOffsets(emitter, elem.typ)
+	if err != nil {
+		return err
+	}
+	if offsetCount == 0 {
+		g.declareRuntimeSymbol(listRuntimeInsertBytesV1Symbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}, {typ: "i64"}})
+		emitter.body = append(emitter.body, fmt.Sprintf(
+			"  call void @%s(%s)",
+			listRuntimeInsertBytesV1Symbol(),
+			llvmCallArgs([]*LlvmValue{toOstyValue(listValue), toOstyValue(idx), toOstyValue(value{typ: "ptr", ref: slot.ref}), toOstyValue(size)}),
+		))
+	} else {
+		g.declareRuntimeSymbol(listRuntimeInsertBytesRootsSymbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}, {typ: "i64"}})
+		emitter.body = append(emitter.body, fmt.Sprintf(
+			"  call void @%s(%s)",
+			listRuntimeInsertBytesRootsSymbol(),
+			llvmCallArgs([]*LlvmValue{
+				toOstyValue(listValue),
+				toOstyValue(idx),
+				toOstyValue(value{typ: "ptr", ref: slot.ref}),
+				toOstyValue(size),
+				toOstyValue(offsetsPtr),
+				toOstyValue(value{typ: "i64", ref: strconv.Itoa(offsetCount)}),
+			}),
+		))
+	}
+	g.takeOstyEmitter(emitter)
+	return nil
+}
+
 func (g *generator) emitListAggregateGet(listValue value, index value, elemTyp string) (value, error) {
 	g.declareRuntimeSymbol(listRuntimeGetBytesV1Symbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}, {typ: "i64"}})
 	emitter := g.toOstyEmitter()
@@ -2707,6 +2745,64 @@ func (g *generator) emitStringMethodCall(call *ast.CallExpr) (value, bool, error
 		out := llvmStringHasPrefix(emitter, toOstyValue(base), toOstyValue(prefix))
 		g.takeOstyEmitter(emitter)
 		return fromOstyValue(out), true, nil
+	case "endsWith":
+		if len(call.Args) != 1 || call.Args[0] == nil || call.Args[0].Name != "" || call.Args[0].Value == nil {
+			return value{}, true, unsupported("call", "String.endsWith requires one positional argument")
+		}
+		suffix, err := g.emitStdStringsArg(call.Args[0], "endsWith", 0)
+		if err != nil {
+			return value{}, true, err
+		}
+		g.declareRuntimeSymbol(llvmStringRuntimeHasSuffixSymbol(), "i1", []paramInfo{{typ: "ptr"}, {typ: "ptr"}})
+		emitter := g.toOstyEmitter()
+		out := llvmCall(emitter, "i1", llvmStringRuntimeHasSuffixSymbol(), []*LlvmValue{toOstyValue(base), toOstyValue(suffix)})
+		g.takeOstyEmitter(emitter)
+		return fromOstyValue(out), true, nil
+	case "contains":
+		if len(call.Args) != 1 || call.Args[0] == nil || call.Args[0].Name != "" || call.Args[0].Value == nil {
+			return value{}, true, unsupported("call", "String.contains requires one positional argument")
+		}
+		needle, err := g.emitStdStringsArg(call.Args[0], "contains", 0)
+		if err != nil {
+			return value{}, true, err
+		}
+		g.declareRuntimeSymbol(llvmStringRuntimeContainsSymbol(), "i1", []paramInfo{{typ: "ptr"}, {typ: "ptr"}})
+		emitter := g.toOstyEmitter()
+		out := llvmCall(emitter, "i1", llvmStringRuntimeContainsSymbol(), []*LlvmValue{toOstyValue(base), toOstyValue(needle)})
+		g.takeOstyEmitter(emitter)
+		return fromOstyValue(out), true, nil
+	case "trimPrefix":
+		if len(call.Args) != 1 || call.Args[0] == nil || call.Args[0].Name != "" || call.Args[0].Value == nil {
+			return value{}, true, unsupported("call", "String.trimPrefix requires one positional argument")
+		}
+		prefix, err := g.emitStdStringsArg(call.Args[0], "trimPrefix", 0)
+		if err != nil {
+			return value{}, true, err
+		}
+		g.declareRuntimeSymbol(llvmStringRuntimeTrimPrefixSymbol(), "ptr", []paramInfo{{typ: "ptr"}, {typ: "ptr"}})
+		emitter := g.toOstyEmitter()
+		out := llvmCall(emitter, "ptr", llvmStringRuntimeTrimPrefixSymbol(), []*LlvmValue{toOstyValue(base), toOstyValue(prefix)})
+		g.takeOstyEmitter(emitter)
+		v := fromOstyValue(out)
+		v.gcManaged = true
+		v.sourceType = &ast.NamedType{Path: []string{"String"}}
+		return v, true, nil
+	case "trimSuffix":
+		if len(call.Args) != 1 || call.Args[0] == nil || call.Args[0].Name != "" || call.Args[0].Value == nil {
+			return value{}, true, unsupported("call", "String.trimSuffix requires one positional argument")
+		}
+		suffix, err := g.emitStdStringsArg(call.Args[0], "trimSuffix", 0)
+		if err != nil {
+			return value{}, true, err
+		}
+		g.declareRuntimeSymbol(llvmStringRuntimeTrimSuffixSymbol(), "ptr", []paramInfo{{typ: "ptr"}, {typ: "ptr"}})
+		emitter := g.toOstyEmitter()
+		out := llvmCall(emitter, "ptr", llvmStringRuntimeTrimSuffixSymbol(), []*LlvmValue{toOstyValue(base), toOstyValue(suffix)})
+		g.takeOstyEmitter(emitter)
+		v := fromOstyValue(out)
+		v.gcManaged = true
+		v.sourceType = &ast.NamedType{Path: []string{"String"}}
+		return v, true, nil
 	case "split":
 		if len(call.Args) != 1 || call.Args[0] == nil || call.Args[0].Name != "" || call.Args[0].Value == nil {
 			return value{}, true, unsupported("call", "String.split requires one positional argument")

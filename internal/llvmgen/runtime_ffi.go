@@ -327,6 +327,18 @@ func listRuntimeSetSymbol(elemTyp string) string {
 	return llvmListRuntimeSetSymbol(llvmListElementSuffix(elemTyp))
 }
 
+func listRuntimeInsertSymbol(elemTyp string) string {
+	return llvmListRuntimeInsertSymbol(llvmListElementSuffix(elemTyp))
+}
+
+func listRuntimeInsertBytesV1Symbol() string {
+	return "osty_rt_list_insert_bytes_v1"
+}
+
+func listRuntimeInsertBytesRootsSymbol() string {
+	return "osty_rt_list_insert_bytes_roots_v1"
+}
+
 func listRuntimeSortedSymbol(elemTyp string, elemString bool) string {
 	return llvmListRuntimeSortedSymbol(elemTyp, elemString)
 }
