@@ -39383,7 +39383,17 @@ func pmUsefulFlat(cx *ElabCx, rows [][]int, row []int, colTys []int) bool {
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:17287:1
+// pmWitnessMaxDepth caps recursion when specialising into self-
+// referential enum payloads (`enum Expr { Add(Expr, Expr), ... }`).
+// Above the cap we fall back to "covered" so the solver doesn't
+// infinite-loop. Mirrored from toolchain/elab.osty pending a regen fix.
+func pmWitnessMaxDepth() int { return 6 }
+
 func pmExhaustivenessWitness(cx *ElabCx, rows [][]int, colTys []int) *PmExhRes {
+	return pmExhaustivenessWitnessAt(cx, rows, colTys, 0)
+}
+
+func pmExhaustivenessWitnessAt(cx *ElabCx, rows [][]int, colTys []int, depth int) *PmExhRes {
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:17288:5
 	nCols := checkIntListLenHelper(colTys)
 	_ = nCols
@@ -39396,6 +39406,11 @@ func pmExhaustivenessWitness(cx *ElabCx, rows [][]int, colTys []int) *PmExhRes {
 		}
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:17295:9
 		return &PmExhRes{exhaustive: false, witnesses: []string{""}}
+	}
+	// Depth guard: recursive ADT expansion past the cap is reported as
+	// covered to avoid an unbounded descent. Mirrored.
+	if depth >= pmWitnessMaxDepth() {
+		return &PmExhRes{exhaustive: true, witnesses: make([]string, 0, 1)}
 	}
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:17298:5
 	col0Ty := checkIntListAt(colTys, 0)
@@ -39417,7 +39432,7 @@ func pmExhaustivenessWitness(cx *ElabCx, rows [][]int, colTys []int) *PmExhRes {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:17307:9
 		if !(pmExistsWildCol0(cx, flatRows, col0Ty)) {
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:17308:13
-			sub := pmExhaustivenessWitness(cx, drows, restTys)
+			sub := pmExhaustivenessWitnessAt(cx, drows, restTys, depth+1)
 			_ = sub
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:17309:13
 			ws := pmPrependWitnesses("_", sub.witnesses, 0)
@@ -39426,7 +39441,7 @@ func pmExhaustivenessWitness(cx *ElabCx, rows [][]int, colTys []int) *PmExhRes {
 			return &PmExhRes{exhaustive: false, witnesses: ws}
 		}
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:17312:9
-		sub := pmExhaustivenessWitness(cx, drows, restTys)
+		sub := pmExhaustivenessWitnessAt(cx, drows, restTys, depth+1)
 		_ = sub
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:17313:9
 		if sub.exhaustive {
@@ -39456,7 +39471,7 @@ func pmExhaustivenessWitness(cx *ElabCx, rows [][]int, colTys []int) *PmExhRes {
 		newTys := intListConcat(c.subTys, restTys)
 		_ = newTys
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:17328:9
-		sub := pmExhaustivenessWitness(cx, srows, newTys)
+		sub := pmExhaustivenessWitnessAt(cx, srows, newTys, depth+1)
 		_ = sub
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:17329:9
 		if !sub.exhaustive {

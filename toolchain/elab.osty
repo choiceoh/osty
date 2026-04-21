@@ -3718,6 +3718,20 @@ fn pmUsefulFlat(cx: ElabCx, rows: List<List<Int>>, row: List<Int>, colTys: List<
 /// the user sees several missing cases at once rather than having to
 /// re-compile after each individual fix.
 fn pmExhaustivenessWitness(cx: ElabCx, rows: List<List<Int>>, colTys: List<Int>) -> PmExhRes {
+    pmExhaustivenessWitnessAt(cx, rows, colTys, 0)
+}
+
+/// pmWitnessMaxDepth caps the recursion when specialising into a
+/// self-referential enum payload such as `enum Expr { Add(Expr, Expr),
+/// ... }`. Specialising on `Add` pushes two fresh `Expr` columns onto
+/// the matrix, and every recursion is one more level of nesting — an
+/// unbounded descent for recursive ADTs. Above the cap we stop
+/// expanding constructors and fall back to an opaque "_" witness,
+/// which matches how other solvers (Rust's usefulness algorithm, for
+/// example) guard themselves.
+fn pmWitnessMaxDepth() -> Int { 6 }
+
+fn pmExhaustivenessWitnessAt(cx: ElabCx, rows: List<List<Int>>, colTys: List<Int>, depth: Int) -> PmExhRes {
     let nCols = checkIntListLenHelper(colTys)
     if nCols == 0 {
         // Vacuously exhaustive if any row is present, else missing the
@@ -3726,6 +3740,12 @@ fn pmExhaustivenessWitness(cx: ElabCx, rows: List<List<Int>>, colTys: List<Int>)
             return PmExhRes { exhaustive: true, witnesses: [] }
         }
         return PmExhRes { exhaustive: false, witnesses: [""] }
+    }
+    // Recursion guard: on deeply nested recursive ADTs the refinement
+    // explodes. Treat the remainder as covered so the caller doesn't
+    // infinite-loop.
+    if depth >= pmWitnessMaxDepth() {
+        return PmExhRes { exhaustive: true, witnesses: [] }
     }
 
     let col0Ty = checkIntListAt(colTys, 0)
@@ -3738,11 +3758,11 @@ fn pmExhaustivenessWitness(cx: ElabCx, rows: List<List<Int>>, colTys: List<Int>)
         // Non-enumerable column (scalar).
         let drows = pmDefault(cx, flatRows, col0Ty)
         if !(pmExistsWildCol0(cx, flatRows, col0Ty)) {
-            let sub = pmExhaustivenessWitness(cx, drows, restTys)
+            let sub = pmExhaustivenessWitnessAt(cx, drows, restTys, depth + 1)
             let ws = pmPrependWitnesses("_", sub.witnesses, 0)
             return PmExhRes { exhaustive: false, witnesses: ws }
         }
-        let sub = pmExhaustivenessWitness(cx, drows, restTys)
+        let sub = pmExhaustivenessWitnessAt(cx, drows, restTys, depth + 1)
         if sub.exhaustive {
             return PmExhRes { exhaustive: true, witnesses: [] }
         }
@@ -3758,7 +3778,7 @@ fn pmExhaustivenessWitness(cx: ElabCx, rows: List<List<Int>>, colTys: List<Int>)
         }
         let srows = pmSpecialize(cx, flatRows, col0Ty, c)
         let newTys = intListConcat(c.subTys, restTys)
-        let sub = pmExhaustivenessWitness(cx, srows, newTys)
+        let sub = pmExhaustivenessWitnessAt(cx, srows, newTys, depth + 1)
         if !sub.exhaustive {
             for subW in sub.witnesses {
                 if pmWitnessesCount(out) >= pmMaxWitnesses() {
