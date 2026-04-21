@@ -1170,6 +1170,23 @@ func (g *generator) emitCompare(op token.Kind, left, right value, isString bool)
 	case "ptr":
 		g.takeOstyEmitter(emitter)
 		if !isString {
+			// `==` / `!=` between two opaque managed pointers fall back
+			// to identity comparison — the same `icmp eq/ne ptr` shape
+			// LLVM uses for null checks. This is the only sensible
+			// semantics for non-String ptr values until structural
+			// equality is wired in. Ordering ops stay rejected; they
+			// have no meaning for identities.
+			opStr := op.String()
+			if opStr == "==" || opStr == "!=" {
+				pred := "eq"
+				if opStr == "!=" {
+					pred = "ne"
+				}
+				emitter := g.toOstyEmitter()
+				out := llvmCompare(emitter, pred, toOstyValue(left), toOstyValue(right))
+				g.takeOstyEmitter(emitter)
+				return fromOstyValue(out), nil
+			}
 			return value{}, unsupportedf("type-system", "comparison operator %q on non-String ptr values is not yet lowered", op)
 		}
 		return g.emitRuntimeStringCompare(op, left, right)
