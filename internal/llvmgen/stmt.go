@@ -848,6 +848,12 @@ func (g *generator) emitExprStmt(expr ast.Expr) error {
 	if emitted, err := g.emitUserCallStmt(call); emitted || err != nil {
 		return err
 	}
+	if emitted, err := g.emitIndirectUserCallStmt(call); emitted || err != nil {
+		return err
+	}
+	if id, ok := call.Fn.(*ast.Ident); ok && id.Name == "println" {
+		return g.emitPrintln(call)
+	}
 	return g.emitPrintln(call)
 }
 
@@ -1953,10 +1959,189 @@ func (g *generator) emitMatchStmt(expr *ast.MatchExpr) error {
 	if err != nil {
 		return err
 	}
+	if sourceType, ok := g.staticExprSourceType(expr.Scrutinee); ok {
+		resolved, resolveErr := llvmResolveAliasType(sourceType, g.typeEnv(), map[string]bool{})
+		if resolveErr == nil {
+			if opt, ok := resolved.(*ast.OptionalType); ok && scrutinee.typ == "ptr" {
+				return g.emitOptionalMatchStmt(scrutinee, opt.Inner, expr.Arms)
+			}
+		}
+	}
 	if scrutinee.typ != "i64" {
 		return unsupportedf("statement", "match statement scrutinee type %s (only tag-enum i64 supported as statement for now)", scrutinee.typ)
 	}
 	return g.emitTagEnumMatchStmt(scrutinee, expr.Arms)
+}
+
+type optionalMatchPatternInfo struct {
+	isSome      bool
+	isNone      bool
+	isWildcard  bool
+	payloadName string
+}
+
+func matchOptionalPattern(pattern ast.Pattern) (optionalMatchPatternInfo, bool, error) {
+	switch p := pattern.(type) {
+	case *ast.WildcardPat:
+		return optionalMatchPatternInfo{isWildcard: true}, true, nil
+	case *ast.IdentPat:
+		switch p.Name {
+		case "None":
+			return optionalMatchPatternInfo{isNone: true}, true, nil
+		case "Some":
+			return optionalMatchPatternInfo{}, true, unsupported("statement", "optional Some arm must bind or wildcard its payload")
+		default:
+			return optionalMatchPatternInfo{}, false, nil
+		}
+	case *ast.VariantPat:
+		if len(p.Path) == 0 || len(p.Path) > 2 {
+			return optionalMatchPatternInfo{}, false, nil
+		}
+		name := p.Path[len(p.Path)-1]
+		switch name {
+		case "None":
+			if len(p.Args) != 0 {
+				return optionalMatchPatternInfo{}, true, unsupported("statement", "None arm cannot bind a payload")
+			}
+			return optionalMatchPatternInfo{isNone: true}, true, nil
+		case "Some":
+			if len(p.Args) != 1 {
+				return optionalMatchPatternInfo{}, true, unsupported("statement", "Some arm must bind exactly one payload")
+			}
+			switch arg := p.Args[0].(type) {
+			case *ast.IdentPat:
+				return optionalMatchPatternInfo{isSome: true, payloadName: arg.Name}, true, nil
+			case *ast.WildcardPat:
+				return optionalMatchPatternInfo{isSome: true}, true, nil
+			default:
+				return optionalMatchPatternInfo{}, true, unsupportedf("statement", "optional Some payload pattern %T", arg)
+			}
+		default:
+			return optionalMatchPatternInfo{}, false, nil
+		}
+	default:
+		return optionalMatchPatternInfo{}, false, nil
+	}
+}
+
+func (g *generator) bindOptionalMatchPayload(scrutinee value, innerSource ast.Type, pattern optionalMatchPatternInfo) error {
+	if pattern.payloadName == "" {
+		return nil
+	}
+	innerTyp, err := llvmType(innerSource, g.typeEnv())
+	if err != nil {
+		return err
+	}
+	payload := value{typ: innerTyp}
+	if innerTyp == "ptr" {
+		payload.ref = scrutinee.ref
+	} else {
+		emitter := g.toOstyEmitter()
+		payload = g.loadValueFromAddress(emitter, innerTyp, scrutinee.ref)
+		g.takeOstyEmitter(emitter)
+	}
+	payload.sourceType = innerSource
+	if listElemTyp, listElemString, ok, err := llvmListElementInfo(innerSource, g.typeEnv()); err == nil && ok {
+		payload.listElemTyp = listElemTyp
+		payload.listElemString = listElemString
+	}
+	if mapKeyTyp, mapValueTyp, mapKeyString, ok, err := llvmMapTypes(innerSource, g.typeEnv()); err == nil && ok {
+		payload.mapKeyTyp = mapKeyTyp
+		payload.mapValueTyp = mapValueTyp
+		payload.mapKeyString = mapKeyString
+	}
+	if setElemTyp, setElemString, ok, err := llvmSetElementType(innerSource, g.typeEnv()); err == nil && ok {
+		payload.setElemTyp = setElemTyp
+		payload.setElemString = setElemString
+	}
+	payload.gcManaged = valueNeedsManagedRoot(payload)
+	payload.rootPaths = g.rootPathsForType(payload.typ)
+	g.bindNamedLocal(pattern.payloadName, payload, false)
+	return nil
+}
+
+func (g *generator) emitOptionalMatchStmt(scrutinee value, innerSource ast.Type, arms []*ast.MatchArm) error {
+	emitter := g.toOstyEmitter()
+	endLabel := llvmNextLabel(emitter, "match.end")
+	isNil := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp eq ptr %s, null", isNil, scrutinee.ref))
+	g.takeOstyEmitter(emitter)
+
+	anyReached := false
+	for i, arm := range arms {
+		if arm == nil {
+			return unsupported("statement", "nil match arm")
+		}
+		if arm.Guard != nil {
+			return unsupported("statement", "guarded optional match arms are not yet supported as statements")
+		}
+		pattern, ok, err := matchOptionalPattern(arm.Pattern)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return unsupportedf("statement", "optional match arm must be Some/None/wildcard, got %T", arm.Pattern)
+		}
+		isLast := i == len(arms)-1
+		if pattern.isWildcard {
+			if !isLast {
+				return unsupported("statement", "wildcard match arm must be last")
+			}
+			baseState := g.captureScopeState()
+			if err := g.emitMatchArmBodyAsStmt(arm.Body); err != nil {
+				return err
+			}
+			if g.currentReachable {
+				g.branchTo(endLabel)
+				anyReached = true
+			}
+			g.restoreScopeState(baseState)
+			continue
+		}
+
+		emitter := g.toOstyEmitter()
+		armLabel := llvmNextLabel(emitter, "match.arm")
+		nextLabel := llvmNextLabel(emitter, "match.next")
+		if pattern.isSome {
+			emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", isNil, nextLabel, armLabel))
+		} else {
+			emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", isNil, armLabel, nextLabel))
+		}
+		emitter.body = append(emitter.body, fmt.Sprintf("%s:", armLabel))
+		g.takeOstyEmitter(emitter)
+		g.enterBlock(armLabel)
+
+		baseState := g.captureScopeState()
+		if pattern.isSome {
+			if err := g.bindOptionalMatchPayload(scrutinee, innerSource, pattern); err != nil {
+				return err
+			}
+		}
+		if err := g.emitMatchArmBodyAsStmt(arm.Body); err != nil {
+			return err
+		}
+		if g.currentReachable {
+			g.branchTo(endLabel)
+			anyReached = true
+		}
+		g.restoreScopeState(baseState)
+
+		emitter = g.toOstyEmitter()
+		emitter.body = append(emitter.body, fmt.Sprintf("%s:", nextLabel))
+		g.takeOstyEmitter(emitter)
+		g.enterBlock(nextLabel)
+	}
+
+	if g.currentReachable {
+		g.branchTo(endLabel)
+		anyReached = true
+	}
+	emitter = g.toOstyEmitter()
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(endLabel)
+	g.currentReachable = anyReached
+	return nil
 }
 
 func (g *generator) emitTagEnumMatchStmt(scrutinee value, arms []*ast.MatchArm) error {
@@ -2825,4 +3010,9 @@ func (g *generator) emitUserCallStmt(call *ast.CallExpr) (bool, error) {
 	g.takeOstyEmitter(emitter)
 	g.popScope()
 	return true, nil
+}
+
+func (g *generator) emitIndirectUserCallStmt(call *ast.CallExpr) (bool, error) {
+	_, found, err := g.emitIndirectUserCall(call)
+	return found, err
 }

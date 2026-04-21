@@ -823,21 +823,70 @@ func mergeEnv(receiver, method SubstEnv) SubstEnv {
 	return out
 }
 
-// extractOwnerNominal peels Optional wrappers off a Type to find the
-// enclosing NamedType name. Returns "" for types that don't resolve to
-// a nominal owner (function pointers, tuples, etc.) — callers should
-// treat that as "not a method-on-nominal" and bail.
+// extractOwnerNominal recovers the source-level nominal owner for a
+// method receiver type. OptionalType is the surface form of Option<T>,
+// so its owner is `Option` rather than the wrapped inner type. Returns
+// "" for types that don't resolve to a nominal owner (function
+// pointers, tuples, etc.) — callers should treat that as "not a
+// method-on-nominal" and bail.
 func extractOwnerNominal(t Type) string {
-	for {
-		switch x := t.(type) {
-		case *NamedType:
-			return x.Name
-		case *OptionalType:
-			t = x.Inner
-		default:
-			return ""
-		}
+	switch x := t.(type) {
+	case *NamedType:
+		return x.Name
+	case *OptionalType:
+		return "Option"
+	default:
+		return ""
 	}
+}
+
+// builtinReceiverTypeArgArity reports the source-level generic arity of
+// builtin receiver types when checker metadata attached the receiver's
+// concrete type args directly to a nongeneric method call. This lets
+// monomorph clear stale TypeArgs even when the owner template itself
+// was not injected into the module (e.g. List.push in a specialized Map
+// body, or Option.isSome on an OptionalType receiver).
+func builtinReceiverTypeArgArity(t Type) int {
+	switch x := t.(type) {
+	case *NamedType:
+		switch x.Name {
+		case "List", "Set", "Option":
+			return 1
+		case "Map", "Result":
+			return 2
+		}
+	case *OptionalType:
+		return 1
+	}
+	return 0
+}
+
+var builtinNonGenericMethods = map[string]map[string]bool{
+	"List": {
+		"push":   true,
+		"pop":    true,
+		"insert": true,
+		"clear":  true,
+	},
+	"Option": {
+		"isSome": true,
+		"isNone": true,
+	},
+}
+
+func builtinMethodCarriesReceiverTypeArgsOnly(receiver Type, method string, got int) bool {
+	if got == 0 {
+		return false
+	}
+	owner := extractOwnerNominal(receiver)
+	if owner == "" {
+		return false
+	}
+	methods := builtinNonGenericMethods[owner]
+	if !methods[method] {
+		return false
+	}
+	return builtinReceiverTypeArgArity(receiver) == got
 }
 
 // resolveOwner turns an owner nominal (either the mangled `_ZTSN…E`
@@ -912,6 +961,9 @@ func (s *monoState) rewriteGenericMethodCall(c *MethodCall) {
 	}
 	kind, ownerMangled, origStruct, origEnum, receiverEnv, ok := s.resolveOwner(nominal)
 	if !ok {
+		if builtinMethodCarriesReceiverTypeArgsOnly(c.Receiver.Type(), c.Name, len(c.TypeArgs)) {
+			c.TypeArgs = nil
+		}
 		return
 	}
 	var origMethods []*FnDecl
@@ -926,8 +978,14 @@ func (s *monoState) rewriteGenericMethodCall(c *MethodCall) {
 		return
 	}
 	if len(origMethod.Generics) == 0 {
-		// Call had type args but the declared method has no method-local
-		// generics. Let the existing non-generic path through.
+		// Checker-instantiation metadata on a method call can carry the
+		// owner's concrete receiver args even when the method itself has
+		// no method-local generics (e.g. `Map<String, Int>.containsKey`).
+		// Once the receiver type has been rewritten to the concrete owner
+		// specialization, those TypeArgs are semantically redundant and
+		// must be cleared so downstream AST lowering doesn't reintroduce a
+		// bogus turbofish node.
+		c.TypeArgs = nil
 		return
 	}
 	// The checker's Instantiations table records the full call-site

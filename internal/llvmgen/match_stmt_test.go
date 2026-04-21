@@ -110,3 +110,34 @@ fn main() {
 		t.Fatalf("expected match.end label so control flow converges:\n%s", got)
 	}
 }
+
+// ptr-backed optional matches show up in specialized stdlib bodies like
+// `Map.mergeWith`, where `match out.get(key)` branches on Option<V> in
+// statement position. This regression net keeps that path open for both
+// the null-check and the scalar payload load.
+func TestMatchStmtOptionalFromMapGet(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn main() {
+    let mut m: Map<String, Int> = {:}
+    m.insert("a", 7)
+    match m.get("a") {
+        Some(v) -> println(v),
+        None -> println(0),
+    }
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/match_stmt_option.osty"})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"call i1 @osty_rt_map_get_string(",
+		"icmp eq ptr",
+		"load i64, ptr",
+		"match.end",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
