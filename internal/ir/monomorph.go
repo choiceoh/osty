@@ -980,11 +980,13 @@ func (s *monoState) rewriteGenericMethodCall(c *MethodCall) {
 	if len(origMethod.Generics) == 0 {
 		// Checker-instantiation metadata on a method call can carry the
 		// owner's concrete receiver args even when the method itself has
-		// no method-local generics (e.g. `Map<String, Int>.containsKey`).
-		// Once the receiver type has been rewritten to the concrete owner
+		// no method-local generics (e.g. `Map<String, Int>.containsKey`,
+		// `Option<String>.unwrap()` inside a specialized body). Once the
+		// receiver type has been rewritten to the concrete owner
 		// specialization, those TypeArgs are semantically redundant and
-		// must be cleared so downstream AST lowering doesn't reintroduce a
-		// bogus turbofish node.
+		// must be cleared so the IR→AST bridge doesn't wrap the call
+		// site in a stray TurbofishExpr that no llvmgen dispatcher
+		// recognises.
 		c.TypeArgs = nil
 		return
 	}

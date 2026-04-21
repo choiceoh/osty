@@ -272,36 +272,154 @@ func genericParamNames(params []*ir.TypeParam) []string {
 	return out
 }
 
-// filterMethodsAvoidingOwnerRecursion drops methods whose param or
-// return types reintroduce owner with modified type args, and drops
-// body-less intrinsic declarations (`fn len(self) -> Int` with no
-// body) since their specializations would fail ir.Validate ("nil
-// Body") — those intrinsics are lowered by the backend directly
-// (`osty_rt_list_len` et al.), not from an injected template. The
-// returned slice preserves every safe method in its original order.
+// filterMethodsAvoidingOwnerRecursion drops methods the backend cannot
+// safely specialize from an injected template:
+//
+//  1. Owner-recursive sigs (`List<T>.chunked(self) -> List<List<T>>`) —
+//     eagerly specialising the owner would queue `List<List<Foo>>` and
+//     diverge. See methodRecursesOwner for the exact shape test.
+//
+//  2. **Dispatch cascade:** bodied methods that call a body-less
+//     intrinsic method on `self` whose dispatch the backend has not
+//     whitelisted. Their bodies would survive into the specialization
+//     but the `self.<missing>(...)` site has no lowering target, so
+//     the legacy llvmgen bridge walls on `*ast.TurbofishExpr` /
+//     `self.<missing>` when it later tries to emit them. The canonical
+//     List example: `List<T>.contains { self.indexOf(item).isSome() }`
+//     — `indexOf` is body-less and not in `listMethodInfo`, so the
+//     specialized `contains` can never resolve the call and the
+//     enclosing `.isSome()` chain loses its source type. Map's shape
+//     is the same but `mapMethodInfo` whitelists every body-less
+//     intrinsic (`get`, `insert`, …), so its bodied helpers all
+//     survive.
+//
+// Body-less declarations themselves are preserved on the specialized
+// struct — ir.Validate is loosened to allow them for builtin-source
+// specializations — so source-type propagation stays intact for any
+// remaining caller. Only the bodied methods whose emission is
+// guaranteed to fail get dropped.
+//
+// Generic methods (`List<T>.map<R>`) are preserved here unchanged;
+// monomorphize's `keepNonGenericMethods` skips generic methods anyway
+// and defers their specialization to actual call sites.
 func filterMethodsAvoidingOwnerRecursion(owner string, generics []string, methods []*ir.FnDecl) []*ir.FnDecl {
 	if len(methods) == 0 {
 		return methods
 	}
-	out := methods[:0:0]
+	// Pass 1: strip owner-recursive methods. Body-less declarations stay
+	// so their signatures remain visible for source-type propagation
+	// (e.g. `self.get(k) -> V?` feeding a later `.isSome()` dispatch).
+	ownerUndispatchable := ownerUndispatchableMethodSet(owner)
+	droppedSelfCall := map[string]bool{}
+	survived := make([]*ir.FnDecl, 0, len(methods))
 	for _, m := range methods {
 		if m == nil {
 			continue
 		}
-		if m.Body == nil {
+		if m.Body != nil && len(m.Generics) == 0 && methodRecursesOwner(owner, generics, m) {
+			droppedSelfCall[m.Name] = true
 			continue
 		}
-		// Generic methods (`List<T>.map<R>`) are preserved as templates
-		// by keepNonGenericMethods and only specialized at actual call
-		// sites, so their signatures never drive eager recursion. Only
-		// non-generic methods on the owner participate in the eager
-		// sig-scanning path, so the recursion filter runs against them.
-		if len(m.Generics) == 0 && methodRecursesOwner(owner, generics, m) {
-			continue
-		}
-		out = append(out, m)
+		survived = append(survived, m)
 	}
-	return out
+	// Pass 2: cascade-drop bodied methods whose body calls any
+	// owner-undispatchable (or already-dropped) method on `self`.
+	// Repeat until the set is stable — a bodied helper may only touch
+	// an undispatchable intrinsic via another bodied helper that we
+	// strip in this pass.
+	for {
+		before := len(droppedSelfCall)
+		next := survived[:0:0]
+		for _, m := range survived {
+			if m == nil {
+				continue
+			}
+			if m.Body != nil && methodBodyCallsUndispatchableSelfMethod(m, ownerUndispatchable, droppedSelfCall) {
+				droppedSelfCall[m.Name] = true
+				continue
+			}
+			next = append(next, m)
+		}
+		survived = next
+		if len(droppedSelfCall) == before {
+			break
+		}
+	}
+	return survived
+}
+
+// ownerUndispatchableMethodSet returns the set of **body-less
+// intrinsic** method names the backend cannot lower from a bare
+// `self.<name>(...)` call site on a specialization of `owner`. The
+// cascade only uses these as starting points — bodied methods that
+// only call dispatched intrinsics stay.
+//
+// Kept in sync with the backend's `listMethodInfo` / `mapMethodInfo` /
+// `setMethodInfo` whitelists in `internal/llvmgen/type.go`. When a new
+// dispatch lands there, drop the corresponding name here so its
+// callers stop getting cascade-stripped.
+func ownerUndispatchableMethodSet(owner string) map[string]bool {
+	switch owner {
+	case "List":
+		// Body-less declarations on List<T> (see
+		// `internal/stdlib/modules/collections.osty`): len, get,
+		// indexOf, sorted, push, pop, insert, removeAt, sort,
+		// reverse, clear. listMethodInfo whitelist covers all except
+		// indexOf / removeAt / sort / reverse.
+		return map[string]bool{
+			"indexOf":  true,
+			"removeAt": true,
+			"sort":     true,
+			"reverse":  true,
+		}
+	}
+	// Map: every body-less intrinsic (get, insert, remove, keys,
+	// entries, len, isEmpty, clear) is in mapMethodInfo.
+	// Set: every body-less intrinsic (len, isEmpty, contains, insert,
+	// remove, toList) is in setMethodInfo.
+	// Option / Result: isSome / isNone are handled via
+	// emitOptionMethodCall directly off ptr source types.
+	return nil
+}
+
+// methodBodyCallsUndispatchableSelfMethod walks m.Body for any
+// `self.<name>(...)` call whose name is in either `undispatchable`
+// (hard-coded owner gap) or `cascade` (already-dropped by a previous
+// pass). Returns true on the first match. Non-self receivers are
+// ignored; this is about the specialized owner's own dispatch surface
+// only.
+func methodBodyCallsUndispatchableSelfMethod(m *ir.FnDecl, undispatchable, cascade map[string]bool) bool {
+	if m == nil || m.Body == nil {
+		return false
+	}
+	if len(undispatchable) == 0 && len(cascade) == 0 {
+		return false
+	}
+	missing := func(name string) bool {
+		return undispatchable[name] || cascade[name]
+	}
+	found := false
+	ir.Walk(ir.VisitorFunc(func(n ir.Node) bool {
+		if found {
+			return false
+		}
+		switch x := n.(type) {
+		case *ir.MethodCall:
+			if id, ok := x.Receiver.(*ir.Ident); ok && id.Name == "self" && missing(x.Name) {
+				found = true
+				return false
+			}
+		case *ir.CallExpr:
+			if fx, ok := x.Callee.(*ir.FieldExpr); ok {
+				if id, ok := fx.X.(*ir.Ident); ok && id.Name == "self" && missing(fx.Name) {
+					found = true
+					return false
+				}
+			}
+		}
+		return true
+	}), m.Body)
+	return found
 }
 
 // methodRecursesOwner reports whether any param or return type of m

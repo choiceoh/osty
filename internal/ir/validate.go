@@ -79,8 +79,17 @@ func (v *validator) validateDecl(d Decl) {
 				v.validateExpr(f.Default)
 			}
 		}
+		// Builtin-source specializations (`_ZTS…` clones tagged with
+		// BuiltinSource = "List" / "Map" / …) keep body-less intrinsic
+		// method declarations so source-type propagation still works
+		// for downstream dispatch (e.g. `self.get(k).isSome()`). Their
+		// lowering happens in the backend's intrinsic dispatch
+		// (`listMethodInfo` / `mapMethodInfo` / `setMethodInfo`), not
+		// from an injected body — so accept a nil Body here rather
+		// than reporting it as a broken lowering contract.
+		allowNoBody := d.BuiltinSource != ""
 		for _, m := range d.Methods {
-			v.validateFnDecl(m, false)
+			v.validateFnDecl(m, allowNoBody)
 		}
 	case *EnumDecl:
 		seen := map[string]bool{}
@@ -100,8 +109,9 @@ func (v *validator) validateDecl(d Decl) {
 				v.validateType(p, fmt.Sprintf("enum %s variant %s payload[%d]", d.Name, vr.Name, i))
 			}
 		}
+		enumAllowNoBody := d.BuiltinSource != ""
 		for _, m := range d.Methods {
-			v.validateFnDecl(m, false)
+			v.validateFnDecl(m, enumAllowNoBody)
 		}
 	case *InterfaceDecl:
 		v.validateTypeParams("interface "+d.Name, d.Generics)
