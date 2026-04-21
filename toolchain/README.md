@@ -9,7 +9,6 @@ The exact merge inputs are defined in
 Today they pull from:
 
 - `toolchain/*.osty` for the front-end/checker/backend-facing logic
-- `examples/selfhost-core/*.osty` for the committed selfhost bundle pieces
 - `internal/selfhost/ast_lower.osty` for the Go-bridge lowering step
 
 Mainstream Go packages should call `internal/lexer`, `internal/parser`, and
