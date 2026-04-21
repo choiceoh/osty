@@ -252,14 +252,35 @@ func patchGenerated(path string) error {
 	return nil
 }
 
+// normalizeGeneratedSourceComment rewrites both the top-level
+// `// Osty source: …` header and the per-declaration
+// `// Osty: …selfhost_merged.osty:LINE:COL` markers so the generated
+// file is byte-stable across platforms. Without this pass the source
+// paths inherit the host tmpdir — `/var/folders/…` on macOS,
+// `C:\Users\…\AppData\Local\Temp\…` on Windows — producing a ~thousand-
+// line diff on every cross-platform regen. The canonical placeholder is
+// `/tmp/selfhost_merged.osty`; line/column suffixes are preserved.
 func normalizeGeneratedSourceComment(src string) string {
-	const prefix = "// Osty source: "
+	const (
+		topPrefix  = "// Osty source: "
+		declPrefix = "// Osty: "
+		mergedFile = "selfhost_merged.osty"
+		canonical  = "/tmp/" + mergedFile
+	)
 	lines := strings.Split(src, "\n")
 	for i, line := range lines {
-		if strings.HasPrefix(line, prefix) && strings.HasSuffix(line, "selfhost_merged.osty") {
-			lines[i] = prefix + "/tmp/selfhost_merged.osty"
-			break
+		if strings.HasPrefix(line, topPrefix) && strings.HasSuffix(line, mergedFile) {
+			lines[i] = topPrefix + canonical
+			continue
 		}
+		if !strings.HasPrefix(line, declPrefix) {
+			continue
+		}
+		idx := strings.Index(line, mergedFile)
+		if idx < 0 {
+			continue
+		}
+		lines[i] = declPrefix + canonical + line[idx+len(mergedFile):]
 	}
 	return strings.Join(lines, "\n")
 }
