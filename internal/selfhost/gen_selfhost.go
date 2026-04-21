@@ -335,6 +335,16 @@ func patchGenerated(path string) error {
 			return err
 		}
 	}
+	src = strings.NewReplacer(
+		`strings.Split(source, "")`, `splitStringUnits(source)`,
+		`strings.Split(text, "")`, `splitStringUnits(text)`,
+		`strings.Split(line, "")`, `splitStringUnits(line)`,
+		`strings.Split(lexed.source, "")`, `splitStringUnits(lexed.source)`,
+		`strings.Split(left, "")`, `splitStringUnits(left)`,
+		`strings.Split(right, "")`, `splitStringUnits(right)`,
+		`strings.Split(s, "")`, `splitStringUnits(s)`,
+		`strings.Split(name, "")`, `splitStringUnits(name)`,
+	).Replace(src)
 	for _, fn := range []struct {
 		name string
 		body string

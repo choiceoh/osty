@@ -831,7 +831,7 @@ func parseSemNumber(text string) Result[int, string] {
 	out := 0
 	_ = out
 	// Osty: /tmp/selfhost_merged.osty:403:5
-	for _, unit := range strings.Split(text, "") {
+	for _, unit := range splitStringUnits(text) {
 		// Osty: /tmp/selfhost_merged.osty:404:9
 		digit := digitStringValue(unit)
 		_ = digit
@@ -909,7 +909,7 @@ func identifierTextValid(text string) bool {
 		return false
 	}
 	// Osty: /tmp/selfhost_merged.osty:440:5
-	for _, unit := range strings.Split(text, "") {
+	for _, unit := range splitStringUnits(text) {
 		// Osty: /tmp/selfhost_merged.osty:441:9
 		if !(isSemIdentUnit(unit)) {
 			// Osty: /tmp/selfhost_merged.osty:442:13
@@ -927,7 +927,7 @@ func allAsciiDigits(text string) bool {
 		return false
 	}
 	// Osty: /tmp/selfhost_merged.osty:453:5
-	for _, unit := range strings.Split(text, "") {
+	for _, unit := range splitStringUnits(text) {
 		// Osty: /tmp/selfhost_merged.osty:454:9
 		if digitStringValue(unit) < 0 {
 			// Osty: /tmp/selfhost_merged.osty:455:13
@@ -1974,7 +1974,7 @@ func emptyFrontLexSummary() *FrontLexSummary {
 // Osty: /tmp/selfhost_merged.osty:1067:5
 func frontendLexStream(source string) *FrontLexStream {
 	// Osty: /tmp/selfhost_merged.osty:1068:5
-	units := strings.Split(source, "")
+	units := splitStringUnits(source)
 	_ = units
 	// Osty: /tmp/selfhost_merged.osty:1069:5
 	unitCount := len(units)
@@ -5228,7 +5228,7 @@ func frontTokensFromStream(stream *FrontLexStream) []*FrontToken {
 // Osty: /tmp/selfhost_merged.osty:2317:5
 func frontTokensFromSource(source string, stream *FrontLexStream) []*FrontToken {
 	// Osty: /tmp/selfhost_merged.osty:2318:5
-	units := strings.Split(source, "")
+	units := splitStringUnits(source)
 	_ = units
 	// Osty: /tmp/selfhost_merged.osty:2319:5
 	var parseTokens []*FrontToken = make([]*FrontToken, 0, 1)
@@ -5271,7 +5271,7 @@ func frontLexemeFromUnits(units []string, start int, length int) string {
 // Osty: /tmp/selfhost_merged.osty:2343:5
 func frontendLexSummary(source string) *FrontLexSummary {
 	// Osty: /tmp/selfhost_merged.osty:2344:5
-	units := strings.Split(source, "")
+	units := splitStringUnits(source)
 	_ = units
 	// Osty: /tmp/selfhost_merged.osty:2345:5
 	unitCount := stringUnitCount(source)
@@ -7233,7 +7233,7 @@ func isFrontIdentText(text string) bool {
 	count := 0
 	_ = count
 	// Osty: /tmp/selfhost_merged.osty:3080:5
-	for _, unit := range strings.Split(text, "") {
+	for _, unit := range splitStringUnits(text) {
 		// Osty: /tmp/selfhost_merged.osty:3081:9
 		if count == 0 {
 			// Osty: /tmp/selfhost_merged.osty:3082:13
@@ -16791,7 +16791,7 @@ func ostyLex(source string) *OstyLexResult {
 	lexed := ostyLexSource(source)
 	_ = lexed
 	// Osty: /tmp/selfhost_merged.osty:6199:5
-	units := strings.Split(lexed.source, "")
+	units := splitStringUnits(lexed.source)
 	_ = units
 	// Osty: /tmp/selfhost_merged.osty:6200:5
 	stream := lexed.stream
@@ -16842,7 +16842,7 @@ func ostyLexFactsFromStream(source string, stream *FrontLexStream) *OstyLexFacts
 	// Osty: /tmp/selfhost_merged.osty:6240:5
 	units := stream.units
 	if units == nil {
-		units = strings.Split(source, "")
+		units = splitStringUnits(source)
 	}
 	_ = units
 	// Osty: /tmp/selfhost_merged.osty:6242:5
@@ -17662,7 +17662,7 @@ func ostyFirstNonBlankIndent(lines []string) string {
 		// Osty: /tmp/selfhost_merged.osty:6545:9
 		if strings.TrimSpace(line) != "" {
 			// Osty: /tmp/selfhost_merged.osty:6546:13
-			units := strings.Split(line, "")
+			units := splitStringUnits(line)
 			_ = units
 			// Osty: /tmp/selfhost_merged.osty:6547:13
 			idx := 0
@@ -17770,7 +17770,7 @@ func ostyTrimBlankTail(lines []string) []string {
 // Osty: /tmp/selfhost_merged.osty:6582:1
 func ostyDropPrefixUnits(text string, count int) string {
 	// Osty: /tmp/selfhost_merged.osty:6583:5
-	units := strings.Split(text, "")
+	units := splitStringUnits(text)
 	_ = units
 	return frontLexemeFromUnits(units, count, func() int {
 		var _p1709 int = ostyStringListCount(units)
@@ -17788,7 +17788,7 @@ func ostyDropPrefixUnits(text string, count int) string {
 // Osty: /tmp/selfhost_merged.osty:6587:1
 func ostyDropSuffixUnits(text string, count int) string {
 	// Osty: /tmp/selfhost_merged.osty:6588:5
-	units := strings.Split(text, "")
+	units := splitStringUnits(text)
 	_ = units
 	return frontLexemeFromUnits(units, 0, func() int {
 		var _p1711 int = ostyStringListCount(units)
@@ -20393,7 +20393,7 @@ func opParseStructLit(p *OstyParser, name int) int {
 // Osty: /tmp/selfhost_merged.osty:7786:1
 func astIsUpperName(text string) bool {
 	// Osty: /tmp/selfhost_merged.osty:7787:5
-	units := strings.Split(text, "")
+	units := splitStringUnits(text)
 	_ = units
 	// Osty: /tmp/selfhost_merged.osty:7788:5
 	first := frontUnitAt(units, 0)
@@ -24173,7 +24173,7 @@ func ostyAstFormatSource(source string) *OstyFormatResult {
 	tokens := frontTokensFromSource(source, stream)
 	_ = tokens
 	// Osty: /tmp/selfhost_merged.osty:9193:5
-	units := strings.Split(source, "")
+	units := splitStringUnits(source)
 	_ = units
 	// Osty: /tmp/selfhost_merged.osty:9194:5
 	f := ostyAstFormatter(file.arena, tokens, stream, units)
@@ -27054,7 +27054,7 @@ func checkDiagStringUnitCount(text string) int {
 	count := 0
 	_ = count
 	// Osty: /tmp/selfhost_merged.osty:10833:5
-	for _, unit := range strings.Split(text, "") {
+	for _, unit := range splitStringUnits(text) {
 		// Osty: /tmp/selfhost_merged.osty:10834:9
 		if unit != "" {
 			// Osty: /tmp/selfhost_merged.osty:10835:13
@@ -27082,10 +27082,10 @@ func checkDiagLevenshteinBounded(left string, right string, limit int) int {
 		return 0
 	}
 	// Osty: /tmp/selfhost_merged.osty:10845:5
-	leftUnits := strings.Split(left, "")
+	leftUnits := splitStringUnits(left)
 	_ = leftUnits
 	// Osty: /tmp/selfhost_merged.osty:10846:5
-	rightUnits := strings.Split(right, "")
+	rightUnits := splitStringUnits(right)
 	_ = rightUnits
 	// Osty: /tmp/selfhost_merged.osty:10847:5
 	leftLen := checkDiagStringUnitCount(left)
@@ -28714,7 +28714,7 @@ func typeHeadRaw(text string) string {
 	head := ""
 	_ = head
 	// Osty: /tmp/selfhost_merged.osty:11728:5
-	for _, unit := range strings.Split(text, "") {
+	for _, unit := range splitStringUnits(text) {
 		// Osty: /tmp/selfhost_merged.osty:11729:9
 		if unit == "<" {
 			// Osty: /tmp/selfhost_merged.osty:11730:13
@@ -28806,7 +28806,7 @@ func splitFnParamsText(text string) string {
 	started := false
 	_ = started
 	// Osty: /tmp/selfhost_merged.osty:11776:5
-	for _, unit := range strings.Split(text, "") {
+	for _, unit := range splitStringUnits(text) {
 		// Osty: /tmp/selfhost_merged.osty:11777:9
 		out = fmt.Sprintf("%s%s", ostyToString(out), ostyToString(unit))
 		// Osty: /tmp/selfhost_merged.osty:11778:9
@@ -28879,7 +28879,7 @@ func splitTopLevel(text string) []string {
 	paren := 0
 	_ = paren
 	// Osty: /tmp/selfhost_merged.osty:11813:5
-	for _, unit := range strings.Split(text, "") {
+	for _, unit := range splitStringUnits(text) {
 		// Osty: /tmp/selfhost_merged.osty:11814:9
 		if unit == "<" {
 			// Osty: /tmp/selfhost_merged.osty:11815:13
@@ -39048,7 +39048,7 @@ func parseTupleIndex(text string) int {
 	any := false
 	_ = any
 	// Osty: /tmp/selfhost_merged.osty:18115:5
-	for _, ch := range strings.Split(text, "") {
+	for _, ch := range splitStringUnits(text) {
 		// Osty: /tmp/selfhost_merged.osty:18116:9
 		code := charToDigit(ch)
 		_ = code
@@ -43649,7 +43649,7 @@ type PmIntParse struct {
 // Osty: /tmp/selfhost_merged.osty:20664:5
 func pmParseIntLit(text string) *PmIntParse {
 	// Osty: /tmp/selfhost_merged.osty:20665:5
-	units := strings.Split(text, "")
+	units := splitStringUnits(text)
 	_ = units
 	// Osty: /tmp/selfhost_merged.osty:20666:5
 	n := pmStringListLen(units)
@@ -44816,7 +44816,7 @@ func useDeclTailAfter(s string, sep string) string {
 	i := 0
 	_ = i
 	// Osty: /tmp/selfhost_merged.osty:21500:5
-	for _, unit := range strings.Split(s, "") {
+	for _, unit := range splitStringUnits(s) {
 		// Osty: /tmp/selfhost_merged.osty:21501:9
 		_ = unit
 		// Osty: /tmp/selfhost_merged.osty:21502:9
@@ -44839,7 +44839,7 @@ func useDeclTailAfter(s string, sep string) string {
 	j := 0
 	_ = j
 	// Osty: /tmp/selfhost_merged.osty:21507:5
-	for _, unit := range strings.Split(s, "") {
+	for _, unit := range splitStringUnits(s) {
 		// Osty: /tmp/selfhost_merged.osty:21508:9
 		if unit == sep {
 			// Osty: /tmp/selfhost_merged.osty:21509:13
@@ -44869,7 +44869,7 @@ func useDeclTailAfter(s string, sep string) string {
 	k := 0
 	_ = k
 	// Osty: /tmp/selfhost_merged.osty:21519:5
-	for _, unit := range strings.Split(s, "") {
+	for _, unit := range splitStringUnits(s) {
 		// Osty: /tmp/selfhost_merged.osty:21520:9
 		if k > idx {
 			// Osty: /tmp/selfhost_merged.osty:21521:13
@@ -47179,7 +47179,7 @@ func classifyAllocatingString(text string) string {
 // Osty: /tmp/selfhost_merged.osty:23114:1
 func containsInterpolation(text string) bool {
 	// Osty: /tmp/selfhost_merged.osty:23118:5
-	units := strings.Split(text, "")
+	units := splitStringUnits(text)
 	_ = units
 	// Osty: /tmp/selfhost_merged.osty:23119:5
 	i := 0
@@ -49686,10 +49686,10 @@ func srLevenshteinBounded(left string, right string, limit int) int {
 		return 0
 	}
 	// Osty: /tmp/selfhost_merged.osty:24768:5
-	leftUnits := strings.Split(left, "")
+	leftUnits := splitStringUnits(left)
 	_ = leftUnits
 	// Osty: /tmp/selfhost_merged.osty:24769:5
-	rightUnits := strings.Split(right, "")
+	rightUnits := splitStringUnits(right)
 	_ = rightUnits
 	// Osty: /tmp/selfhost_merged.osty:24770:5
 	leftLen := srStringUnitCount(left)
@@ -49973,7 +49973,7 @@ func srStringUnitCount(text string) int {
 	count := 0
 	_ = count
 	// Osty: /tmp/selfhost_merged.osty:24826:5
-	for _, unit := range strings.Split(text, "") {
+	for _, unit := range splitStringUnits(text) {
 		// Osty: /tmp/selfhost_merged.osty:24827:9
 		if unit != "" {
 			// Osty: /tmp/selfhost_merged.osty:24828:13
@@ -50449,7 +50449,7 @@ func selfLintApplyFixes(source string, report *SelfLintReport) *SelfLintApplyRes
 	stream := frontendLexStream(source)
 	_ = stream
 	// Osty: /tmp/selfhost_merged.osty:25219:5
-	units := strings.Split(source, "")
+	units := splitStringUnits(source)
 	_ = units
 	// Osty: /tmp/selfhost_merged.osty:25220:5
 	unitCount := stringUnitCount(source)
@@ -50622,7 +50622,7 @@ func selfLintApplyEdits(source string, edits []*SelfLintEdit, skippedBeforeApply
 // Osty: /tmp/selfhost_merged.osty:25289:1
 func selfLintApplyOneEdit(source string, edit *SelfLintEdit) string {
 	// Osty: /tmp/selfhost_merged.osty:25290:5
-	units := strings.Split(source, "")
+	units := splitStringUnits(source)
 	_ = units
 	// Osty: /tmp/selfhost_merged.osty:25291:5
 	unitCount := stringUnitCount(source)
@@ -53658,7 +53658,7 @@ func selfLintIsLowerCamel(name string) bool {
 // Osty: /tmp/selfhost_merged.osty:27366:1
 func selfLintFirstUnit(name string) string {
 	// Osty: /tmp/selfhost_merged.osty:27367:5
-	units := strings.Split(name, "")
+	units := splitStringUnits(name)
 	_ = units
 	// Osty: /tmp/selfhost_merged.osty:27368:5
 	if selfLintStringListLen(units) == 0 {
@@ -55026,7 +55026,7 @@ func selfLintIsLintCode(name string) bool {
 		return false
 	}
 	// Osty: /tmp/selfhost_merged.osty:28289:5
-	units := strings.Split(name, "")
+	units := splitStringUnits(name)
 	_ = units
 	// Osty: /tmp/selfhost_merged.osty:28290:5
 	if units[0] != "L" {
@@ -55719,7 +55719,7 @@ func selfLintIsTestFnName(name string) bool {
 // Osty: /tmp/selfhost_merged.osty:28822:1
 func selfLintStringUnitAt(text string, idx int) string {
 	// Osty: /tmp/selfhost_merged.osty:28823:5
-	units := strings.Split(text, "")
+	units := splitStringUnits(text)
 	_ = units
 	// Osty: /tmp/selfhost_merged.osty:28824:5
 	if idx < 0 || idx >= selfLintStringListLen(units) {
@@ -57242,7 +57242,7 @@ func astLowerDecodeEscapes(s string) string {
 		return s
 	}
 	// Osty: /tmp/selfhost_merged.osty:29556:5
-	units := strings.Split(s, "")
+	units := splitStringUnits(s)
 	_ = units
 	// Osty: /tmp/selfhost_merged.osty:29557:5
 	n := astLowerStringListLen(units)
