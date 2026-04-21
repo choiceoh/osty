@@ -1,5 +1,11 @@
 // check.osty — entry point for the toolchain type checker.
 //
+// strings import is used only for the small helpers in
+// `useDeclLastSegment` / `registerStdStringsAliasFns`; the hot path
+// stays index-based.
+//
+// (import line follows the header block)
+//
 // Phase 10 replaces the 4241-line string-based legacy checker with a
 // thin orchestrator that drives the bidirectional elaborator
 // (`elab.osty`) to completion and serialises the resulting
@@ -23,6 +29,8 @@
 // All four structured variants now carry the `diagnostics` list
 // populated by `check_diag.osty`; the summary counters are derived
 // values kept in sync for bridge stability.
+
+use std.strings as strings
 
 // ---------------------------------------------------------------------
 // Bridge record types (preserved for Go host compatibility).
@@ -186,6 +194,23 @@ fn collectUseDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
     if node.text == "std.strings" {
         registerStdStringsAliasFns(env, alias)
     }
+    // `use std.testing` (examples use this without an explicit alias,
+    // so the alias defaults to "testing" via useDeclAliasName).
+    if node.text == "std.testing" {
+        registerStdTestingAliasFns(env, alias)
+    }
+    if node.text == "std.fs" {
+        registerStdFsAliasFns(env, alias)
+    }
+    if node.text == "std.debug" {
+        registerStdDebugAliasFns(env, alias)
+    }
+    if node.text == "std.thread" {
+        registerStdThreadAliasFns(env, alias)
+    }
+    if node.text == "std.io" {
+        registerStdIoAliasFns(env, alias)
+    }
 }
 
 /// registerStdStringsAliasFns registers the hot subset of std.strings
@@ -344,23 +369,241 @@ fn registerStdStringsAliasFns(env: CheckEnv, alias: String) {
     })
 }
 
-/// useDeclAliasName returns the declared alias (`as X`) or "" when the
-/// alias is missing. The Go-side resolver falls back to the last path
-/// segment; toolchain code always spells the alias explicitly so we
-/// keep the minimal form here.
+/// registerStdTestingAliasFns registers the hot subset of std.testing
+/// exports under `alias` so `testing.assertEq(...)` etc. resolve in
+/// `examples/**/*_test.osty` files. The bounds-bearing generics
+/// (`<T: Equal>`) are registered with empty bounds on purpose: the
+/// checker's bound-satisfaction pass is still incomplete for arbitrary
+/// enums, and these helpers are exclusively used from tests where a
+/// false-positive bound violation would be more disruptive than a
+/// missed one.
+fn registerStdTestingAliasFns(env: CheckEnv, alias: String) {
+    let tys = env.tys
+    let tString_ = tString(tys)
+    let tBool_ = tBool(tys)
+    let tInt_ = tInt(tys)
+    let tUnit_ = tUnit(tys)
+    let tT = tyNamed(tys, "T", [])
+    let tE = tyNamed(tys, "E", [])
+    let tResultTE = tyNamed(tys, "Result", [tT, tE])
+    let tFnUnit = tyFn(tys, [], tUnit_)
+    let tFnResUnit = tyFn(tys, [], tyNamed(tys, "Result", [tUnit_, tyNamed(tys, "Error", [])]))
+
+    let emptyGenerics: List<String> = []
+    let emptyBounds: List<CheckGenericBound> = []
+    let gT: List<String> = ["T"]
+    let gTE: List<String> = ["T", "E"]
+
+    checkRegisterFn(env, CheckFnSig {
+        name: "assert", owner: alias, receiverTy: -1, retTy: tUnit_,
+        paramNames: ["cond"], paramTys: [tBool_],
+        generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "assertTrue", owner: alias, receiverTy: -1, retTy: tUnit_,
+        paramNames: ["cond"], paramTys: [tBool_],
+        generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "assertFalse", owner: alias, receiverTy: -1, retTy: tUnit_,
+        paramNames: ["cond"], paramTys: [tBool_],
+        generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "assertEq", owner: alias, receiverTy: -1, retTy: tUnit_,
+        paramNames: ["actual", "expected"], paramTys: [tT, tT],
+        generics: gT, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "assertNe", owner: alias, receiverTy: -1, retTy: tUnit_,
+        paramNames: ["actual", "expected"], paramTys: [tT, tT],
+        generics: gT, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "expectOk", owner: alias, receiverTy: -1, retTy: tT,
+        paramNames: ["result"], paramTys: [tResultTE],
+        generics: gTE, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "expectError", owner: alias, receiverTy: -1, retTy: tE,
+        paramNames: ["result"], paramTys: [tResultTE],
+        generics: gTE, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "fail", owner: alias, receiverTy: -1, retTy: tNever(tys),
+        paramNames: ["msg"], paramTys: [tString_],
+        generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "context", owner: alias, receiverTy: -1, retTy: tUnit_,
+        paramNames: ["msg", "body"], paramTys: [tString_, tFnUnit],
+        generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "benchmark", owner: alias, receiverTy: -1, retTy: tUnit_,
+        paramNames: ["iterations", "body"], paramTys: [tInt_, tFnResUnit],
+        generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "snapshot", owner: alias, receiverTy: -1, retTy: tUnit_,
+        paramNames: ["name", "output"], paramTys: [tString_, tString_],
+        generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+}
+
+/// useDeclAliasName returns the declared alias (`as X`) if present,
+/// otherwise falls back to the last path segment (`use std.testing`
+/// → "testing"), matching the Go-side resolver's default.
 fn useDeclAliasName(cx: ElabCx, node: AstNode) -> String {
-    if checkIntListLenLocal(node.children2) == 0 {
+    if checkIntListLenLocal(node.children2) > 0 {
+        let aliasIdx = checkIntListAtLocal(node.children2, 0)
+        if aliasIdx >= 0 {
+            let aliasNode = astArenaNodeAt(cx.ast.arena, aliasIdx)
+            if aliasNode.kind == AstNIdent && aliasNode.text != "" {
+                return aliasNode.text
+            }
+        }
+    }
+    useDeclLastSegment(node.text)
+}
+
+/// registerStdFsAliasFns — hot subset of std.fs.
+fn registerStdFsAliasFns(env: CheckEnv, alias: String) {
+    let tys = env.tys
+    let tString_ = tString(tys)
+    let tBool_ = tBool(tys)
+    let tUnit_ = tUnit(tys)
+    let tResUnit = tyNamed(tys, "Result", [tUnit_, tyNamed(tys, "Error", [])])
+    let tResString = tyNamed(tys, "Result", [tString_, tyNamed(tys, "Error", [])])
+    let emptyGenerics: List<String> = []
+    let emptyBounds: List<CheckGenericBound> = []
+    let add = [
+        CheckFnSig { name: "exists", owner: alias, receiverTy: -1, retTy: tBool_,
+            paramNames: ["path"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds },
+        CheckFnSig { name: "readToString", owner: alias, receiverTy: -1, retTy: tResString,
+            paramNames: ["path"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds },
+        CheckFnSig { name: "writeString", owner: alias, receiverTy: -1, retTy: tResUnit,
+            paramNames: ["path", "contents"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds },
+        CheckFnSig { name: "remove", owner: alias, receiverTy: -1, retTy: tResUnit,
+            paramNames: ["path"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds },
+        CheckFnSig { name: "create", owner: alias, receiverTy: -1, retTy: tResUnit,
+            paramNames: ["path"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds },
+    ]
+    for sig in add {
+        checkRegisterFn(env, sig)
+    }
+}
+
+/// registerStdDebugAliasFns — dbg.
+fn registerStdDebugAliasFns(env: CheckEnv, alias: String) {
+    let tys = env.tys
+    let tT = tyNamed(tys, "T", [])
+    checkRegisterFn(env, CheckFnSig {
+        name: "dbg", owner: alias, receiverTy: -1, retTy: tT,
+        paramNames: ["value"], paramTys: [tT],
+        generics: ["T"], genericBounds: [],
+    })
+}
+
+/// registerStdThreadAliasFns — subset of std.thread.
+fn registerStdThreadAliasFns(env: CheckEnv, alias: String) {
+    let tys = env.tys
+    let tT = tyNamed(tys, "T", [])
+    let tHandleT = tyNamed(tys, "Handle", [tT])
+    let tChanT = tyNamed(tys, "Channel", [tT])
+    let tInt_ = tInt(tys)
+    let tBool_ = tBool(tys)
+    let tUnit_ = tUnit(tys)
+    let tResUnit = tyNamed(tys, "Result", [tUnit_, tyNamed(tys, "Error", [])])
+    let gT: List<String> = ["T"]
+    checkRegisterFn(env, CheckFnSig {
+        name: "spawn", owner: alias, receiverTy: -1, retTy: tHandleT,
+        paramNames: ["body"], paramTys: [tyFn(tys, [], tT)],
+        generics: gT, genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "chan", owner: alias, receiverTy: -1, retTy: tChanT,
+        paramNames: ["capacity"], paramTys: [tInt_],
+        generics: gT, genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "sleep", owner: alias, receiverTy: -1, retTy: tResUnit,
+        paramNames: ["duration"], paramTys: [tyNamed(tys, "Duration", [])],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "yield", owner: alias, receiverTy: -1, retTy: tUnit_,
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "isCancelled", owner: alias, receiverTy: -1, retTy: tBool_,
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
+}
+
+/// registerStdIoAliasFns — print helpers when imported via alias.
+fn registerStdIoAliasFns(env: CheckEnv, alias: String) {
+    let tys = env.tys
+    let tString_ = tString(tys)
+    let tUnit_ = tUnit(tys)
+    for n in ["print", "println", "eprint", "eprintln"] {
+        checkRegisterFn(env, CheckFnSig {
+            name: n, owner: alias, receiverTy: -1, retTy: tUnit_,
+            paramNames: ["s"], paramTys: [tString_],
+            generics: [], genericBounds: [],
+        })
+    }
+    checkRegisterFn(env, CheckFnSig {
+        name: "readLine", owner: alias, receiverTy: -1, retTy: tString_,
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
+}
+
+/// useDeclLastSegment returns the last `.`/`/`-delimited segment of a
+/// use path. `std.testing` → "testing"; `github.com/x/y` → "y";
+/// bare `core` → "core"; empty → empty.
+fn useDeclLastSegment(path: String) -> String {
+    if path == "" {
         return ""
     }
-    let aliasIdx = checkIntListAtLocal(node.children2, 0)
-    if aliasIdx < 0 {
-        return ""
+    // Walk the bytes manually so this helper stays free of the
+    // `std.strings` import tax (check.osty would need one otherwise).
+    let afterSlash = useDeclTailAfter(path, "/")
+    useDeclTailAfter(afterSlash, ".")
+}
+
+fn useDeclTailAfter(s: String, sep: String) -> String {
+    let mut out = s
+    let mut i = 0
+    for unit in strings.split(s, "") {
+        let _ = unit
+        i = i + 1
     }
-    let aliasNode = astArenaNodeAt(cx.ast.arena, aliasIdx)
-    if aliasNode.kind != AstNIdent {
-        return ""
+    // Scan from end to find last occurrence of `sep` (single char).
+    let mut idx = -1
+    let mut j = 0
+    for unit in strings.split(s, "") {
+        if unit == sep {
+            idx = j
+        }
+        j = j + 1
     }
-    aliasNode.text
+    if idx < 0 {
+        return out
+    }
+    // Collect units after idx.
+    out = ""
+    let mut k = 0
+    for unit in strings.split(s, "") {
+        if k > idx {
+            out = "{out}{unit}"
+        }
+        k = k + 1
+    }
+    out
 }
 
 

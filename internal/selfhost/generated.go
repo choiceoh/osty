@@ -32410,8 +32410,54 @@ func checkInstallPrelude(env *CheckEnv) {
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13740:5
 	checkRegisterFn(env, &CheckFnSig{name: "panic", owner: "", receiverTy: -1, retTy: tNever(env.tys), paramNames: []string{"message"}, paramTys: []int{tString(env.tys)}, generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
 
+	// Prelude concurrency helpers (§B.6). Mirrored.
+	{
+		tys := env.tys
+		tT := tyNamed(tys, "T", nil)
+		tR := tyNamed(tys, "R", nil)
+		tGroup := tyNamed(tys, "Group", nil)
+		tHandleT := tyNamed(tys, "Handle", []int{tT})
+		tListHandleT := tyNamed(tys, "List", []int{tHandleT})
+		tListT := tyNamed(tys, "List", []int{tT})
+		tResultT := tyNamed(tys, "Result", []int{tT, tyNamed(tys, "Error", nil)})
+		tFnGroupListHandle := tyFn(tys, []int{tGroup}, tListHandleT)
+		tFnT := tyFn(tys, []int{}, tT)
+		gT := []string{"T"}
+		checkRegisterFn(env, &CheckFnSig{name: "taskGroup", owner: "", receiverTy: -1, retTy: tResultT, paramNames: []string{"body"}, paramTys: []int{tFnGroupListHandle}, generics: gT, genericBounds: make([]*CheckGenericBound, 0)})
+		checkRegisterFn(env, &CheckFnSig{name: "spawn", owner: "", receiverTy: -1, retTy: tHandleT, paramNames: []string{"body"}, paramTys: []int{tFnT}, generics: gT, genericBounds: make([]*CheckGenericBound, 0)})
+		checkRegisterFn(env, &CheckFnSig{name: "parallel", owner: "", receiverTy: -1, retTy: tyNamed(tys, "List", []int{tR}), paramNames: []string{"items", "workers", "f"}, paramTys: []int{tListT, tInt(tys), tyFn(tys, []int{tT}, tR)}, generics: []string{"T", "R"}, genericBounds: make([]*CheckGenericBound, 0)})
+	}
+
 	// Mirrored from toolchain/check_env.osty pending a regen fix.
 	checkInstallBuiltinMethods(env)
+	checkInstallChannelIntrinsics(env)
+	checkInstallImplicitModules(env)
+}
+
+// checkInstallImplicitModules — mirror.
+func checkInstallImplicitModules(env *CheckEnv) {
+	tys := env.tys
+	for _, name := range []string{"thread", "debug", "fmt"} {
+		ty := tyNamed(tys, name, nil)
+		checkBindSpan(env, name, ty, false, 0, 0)
+	}
+	registerStdThreadAliasFns(env, "thread")
+	registerStdDebugAliasFns(env, "debug")
+}
+
+// checkInstallChannelIntrinsics — mirror.
+func checkInstallChannelIntrinsics(env *CheckEnv) {
+	tys := env.tys
+	tT := tyNamed(tys, "T", nil)
+	tChanT := tyNamed(tys, "Channel", []int{tT})
+	tOptT := tyOptional(tys, tT)
+	gT := []string{"T"}
+	bounds := func() []*CheckGenericBound { return make([]*CheckGenericBound, 0) }
+	checkRegisterFn(env, &CheckFnSig{name: "close", owner: "Channel", receiverTy: tChanT, retTy: tUnit(tys), paramNames: []string{}, paramTys: []int{}, generics: gT, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "recv", owner: "Channel", receiverTy: tChanT, retTy: tOptT, paramNames: []string{}, paramTys: []int{}, generics: gT, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "send", owner: "Channel", receiverTy: tChanT, retTy: tUnit(tys), paramNames: []string{"value"}, paramTys: []int{tT}, generics: gT, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "len", owner: "Channel", receiverTy: tChanT, retTy: tInt(tys), paramNames: []string{}, paramTys: []int{}, generics: gT, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "isClosed", owner: "Channel", receiverTy: tChanT, retTy: tBool(tys), paramNames: []string{}, paramTys: []int{}, generics: gT, genericBounds: bounds()})
 }
 
 // checkInstallBuiltinMethods registers the intrinsic methods spec §10.6
@@ -32455,6 +32501,47 @@ func checkInstallBuiltinMethods(env *CheckEnv) {
 	checkRegisterFn(env, &CheckFnSig{name: "len", owner: "Map", receiverTy: tMapKV, retTy: tInt(tys), paramNames: empty(), paramTys: []int{}, generics: gKV, genericBounds: bounds()})
 	checkRegisterFn(env, &CheckFnSig{name: "isEmpty", owner: "Map", receiverTy: tMapKV, retTy: tBool(tys), paramNames: empty(), paramTys: []int{}, generics: gKV, genericBounds: bounds()})
 	checkRegisterFn(env, &CheckFnSig{name: "containsKey", owner: "Map", receiverTy: tMapKV, retTy: tBool(tys), paramNames: []string{"key"}, paramTys: []int{tK}, generics: gKV, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "clear", owner: "Map", receiverTy: tMapKV, retTy: tUnit(tys), paramNames: empty(), paramTys: []int{}, generics: gKV, genericBounds: bounds()})
+
+	// Set<T>
+	tSetT := tyNamed(tys, "Set", []int{tT})
+	checkRegisterFn(env, &CheckFnSig{name: "len", owner: "Set", receiverTy: tSetT, retTy: tInt(tys), paramNames: empty(), paramTys: []int{}, generics: gT, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "isEmpty", owner: "Set", receiverTy: tSetT, retTy: tBool(tys), paramNames: empty(), paramTys: []int{}, generics: gT, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "contains", owner: "Set", receiverTy: tSetT, retTy: tBool(tys), paramNames: []string{"item"}, paramTys: []int{tT}, generics: gT, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "insert", owner: "Set", receiverTy: tSetT, retTy: tUnit(tys), paramNames: []string{"item"}, paramTys: []int{tT}, generics: gT, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "remove", owner: "Set", receiverTy: tSetT, retTy: tBool(tys), paramNames: []string{"item"}, paramTys: []int{tT}, generics: gT, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "clear", owner: "Set", receiverTy: tSetT, retTy: tUnit(tys), paramNames: empty(), paramTys: []int{}, generics: gT, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "toList", owner: "Set", receiverTy: tSetT, retTy: tListT, paramNames: empty(), paramTys: []int{}, generics: gT, genericBounds: bounds()})
+
+	// List<T> helpers
+	checkRegisterFn(env, &CheckFnSig{name: "contains", owner: "List", receiverTy: tListT, retTy: tBool(tys), paramNames: []string{"item"}, paramTys: []int{tT}, generics: gT, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "toSet", owner: "List", receiverTy: tListT, retTy: tSetT, paramNames: empty(), paramTys: []int{}, generics: gT, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "sorted", owner: "List", receiverTy: tListT, retTy: tListT, paramNames: empty(), paramTys: []int{}, generics: gT, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "first", owner: "List", receiverTy: tListT, retTy: tOptT, paramNames: empty(), paramTys: []int{}, generics: gT, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "last", owner: "List", receiverTy: tListT, retTy: tOptT, paramNames: empty(), paramTys: []int{}, generics: gT, genericBounds: bounds()})
+	tR := tyNamed(tys, "R", nil)
+	tListR := tyNamed(tys, "List", []int{tR})
+	tFnTR := tyFn(tys, []int{tT}, tR)
+	tFnTBool := tyFn(tys, []int{tT}, tBool(tys))
+	tA := tyNamed(tys, "A", nil)
+	tFnAT := tyFn(tys, []int{tA, tT}, tA)
+	checkRegisterFn(env, &CheckFnSig{name: "map", owner: "List", receiverTy: tListT, retTy: tListR, paramNames: []string{"f"}, paramTys: []int{tFnTR}, generics: []string{"T", "R"}, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "filter", owner: "List", receiverTy: tListT, retTy: tListT, paramNames: []string{"pred"}, paramTys: []int{tFnTBool}, generics: gT, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "fold", owner: "List", receiverTy: tListT, retTy: tA, paramNames: []string{"init", "f"}, paramTys: []int{tA, tFnAT}, generics: []string{"T", "A"}, genericBounds: bounds()})
+
+	// Result<T, E>
+	tE := tyNamed(tys, "E", nil)
+	tResTE := tyNamed(tys, "Result", []int{tT, tE})
+	checkRegisterFn(env, &CheckFnSig{name: "unwrap", owner: "Result", receiverTy: tResTE, retTy: tT, paramNames: empty(), paramTys: []int{}, generics: []string{"T", "E"}, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "unwrapErr", owner: "Result", receiverTy: tResTE, retTy: tE, paramNames: empty(), paramTys: []int{}, generics: []string{"T", "E"}, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "isOk", owner: "Result", receiverTy: tResTE, retTy: tBool(tys), paramNames: empty(), paramTys: []int{}, generics: []string{"T", "E"}, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "isErr", owner: "Result", receiverTy: tResTE, retTy: tBool(tys), paramNames: empty(), paramTys: []int{}, generics: []string{"T", "E"}, genericBounds: bounds()})
+	// Option<T> receiver typed as TkOptional — the elabOwnerNameForReceiver
+	// helper maps TkOptional to "Option" when dispatching method lookups.
+	tOptTAlias := tyOptional(tys, tT)
+	checkRegisterFn(env, &CheckFnSig{name: "unwrap", owner: "Option", receiverTy: tOptTAlias, retTy: tT, paramNames: empty(), paramTys: []int{}, generics: gT, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "isSome", owner: "Option", receiverTy: tOptTAlias, retTy: tBool(tys), paramNames: empty(), paramTys: []int{}, generics: gT, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "isNone", owner: "Option", receiverTy: tOptTAlias, retTy: tBool(tys), paramNames: empty(), paramTys: []int{}, generics: gT, genericBounds: bounds()})
 
 	// String
 	tString_ := tString(tys)
@@ -35311,6 +35398,10 @@ func elabOwnerNameForReceiver(tys *TyArena, ty int) string {
 	if head != "" {
 		return head
 	}
+	// `T?` interns as TkOptional — method calls dispatch under "Option".
+	if ostyEqual(tyKindAt(tys, ty), TyKind(&TyKind_TkOptional{})) {
+		return "Option"
+	}
 	if !ostyEqual(tyKindAt(tys, ty), TyKind(&TyKind_TkPrim{})) {
 		return ""
 	}
@@ -37519,15 +37610,18 @@ func elabVariantPattern(cx *ElabCx, node *AstNode, scrutTy int, mutable bool, re
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:16171:5
 	scrutHead := tyHeadAt(tys, scrutCanon)
 	_ = scrutHead
+	// Strip enum prefix from dotted variant patterns (`Expr.Add` →
+	// `Add`) before lookup. Mirrored from toolchain/elab.osty.
+	bareName := lastPathSegment(variantName)
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:16172:5
-	variant := checkLookupVariantInOwner(cx.env, scrutHead, variantName)
+	variant := checkLookupVariantInOwner(cx.env, scrutHead, bareName)
 	_ = variant
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:16173:5
 	resolved := func() *CheckVariantSig {
 		if variant.name != "" {
 			return variant
 		} else {
-			return checkLookupVariant(cx.env, variantName)
+			return checkLookupVariant(cx.env, bareName)
 		}
 	}()
 	_ = resolved
@@ -41353,6 +41447,77 @@ func collectUseDecl(cx *ElabCx, declIdx int, node *AstNode) {
 	if node.text == "std.strings" {
 		registerStdStringsAliasFns(env, alias)
 	}
+	// Mirrored from toolchain/check.osty pending a regen fix.
+	if node.text == "std.testing" {
+		registerStdTestingAliasFns(env, alias)
+	}
+	if node.text == "std.fs" {
+		registerStdFsAliasFns(env, alias)
+	}
+	if node.text == "std.debug" {
+		registerStdDebugAliasFns(env, alias)
+	}
+	if node.text == "std.thread" {
+		registerStdThreadAliasFns(env, alias)
+	}
+	if node.text == "std.io" {
+		registerStdIoAliasFns(env, alias)
+	}
+}
+
+// registerStdFsAliasFns — mirror of toolchain/check.osty.
+func registerStdFsAliasFns(env *CheckEnv, alias string) {
+	tys := env.tys
+	tString_ := tString(tys)
+	tBool_ := tBool(tys)
+	tUnit_ := tUnit(tys)
+	tResUnit := tyNamed(tys, "Result", []int{tUnit_, tyNamed(tys, "Error", nil)})
+	tResString := tyNamed(tys, "Result", []int{tString_, tyNamed(tys, "Error", nil)})
+	empty := func() []string { return make([]string, 0) }
+	bounds := func() []*CheckGenericBound { return make([]*CheckGenericBound, 0) }
+	checkRegisterFn(env, &CheckFnSig{name: "exists", owner: alias, receiverTy: -1, retTy: tBool_, paramNames: []string{"path"}, paramTys: []int{tString_}, generics: empty(), genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "readToString", owner: alias, receiverTy: -1, retTy: tResString, paramNames: []string{"path"}, paramTys: []int{tString_}, generics: empty(), genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "writeString", owner: alias, receiverTy: -1, retTy: tResUnit, paramNames: []string{"path", "contents"}, paramTys: []int{tString_, tString_}, generics: empty(), genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "remove", owner: alias, receiverTy: -1, retTy: tResUnit, paramNames: []string{"path"}, paramTys: []int{tString_}, generics: empty(), genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "create", owner: alias, receiverTy: -1, retTy: tResUnit, paramNames: []string{"path"}, paramTys: []int{tString_}, generics: empty(), genericBounds: bounds()})
+}
+
+// registerStdDebugAliasFns — mirror.
+func registerStdDebugAliasFns(env *CheckEnv, alias string) {
+	tys := env.tys
+	tT := tyNamed(tys, "T", nil)
+	checkRegisterFn(env, &CheckFnSig{name: "dbg", owner: alias, receiverTy: -1, retTy: tT, paramNames: []string{"value"}, paramTys: []int{tT}, generics: []string{"T"}, genericBounds: make([]*CheckGenericBound, 0)})
+}
+
+// registerStdThreadAliasFns — mirror.
+func registerStdThreadAliasFns(env *CheckEnv, alias string) {
+	tys := env.tys
+	tT := tyNamed(tys, "T", nil)
+	tHandleT := tyNamed(tys, "Handle", []int{tT})
+	tChanT := tyNamed(tys, "Channel", []int{tT})
+	tInt_ := tInt(tys)
+	tBool_ := tBool(tys)
+	tUnit_ := tUnit(tys)
+	tResUnit := tyNamed(tys, "Result", []int{tUnit_, tyNamed(tys, "Error", nil)})
+	gT := []string{"T"}
+	bounds := func() []*CheckGenericBound { return make([]*CheckGenericBound, 0) }
+	checkRegisterFn(env, &CheckFnSig{name: "spawn", owner: alias, receiverTy: -1, retTy: tHandleT, paramNames: []string{"body"}, paramTys: []int{tyFn(tys, []int{}, tT)}, generics: gT, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "chan", owner: alias, receiverTy: -1, retTy: tChanT, paramNames: []string{"capacity"}, paramTys: []int{tInt_}, generics: gT, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "sleep", owner: alias, receiverTy: -1, retTy: tResUnit, paramNames: []string{"duration"}, paramTys: []int{tyNamed(tys, "Duration", nil)}, generics: []string{}, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "yield", owner: alias, receiverTy: -1, retTy: tUnit_, paramNames: []string{}, paramTys: []int{}, generics: []string{}, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "isCancelled", owner: alias, receiverTy: -1, retTy: tBool_, paramNames: []string{}, paramTys: []int{}, generics: []string{}, genericBounds: bounds()})
+}
+
+// registerStdIoAliasFns — mirror.
+func registerStdIoAliasFns(env *CheckEnv, alias string) {
+	tys := env.tys
+	tString_ := tString(tys)
+	tUnit_ := tUnit(tys)
+	bounds := func() []*CheckGenericBound { return make([]*CheckGenericBound, 0) }
+	for _, n := range []string{"print", "println", "eprint", "eprintln"} {
+		checkRegisterFn(env, &CheckFnSig{name: n, owner: alias, receiverTy: -1, retTy: tUnit_, paramNames: []string{"s"}, paramTys: []int{tString_}, generics: []string{}, genericBounds: bounds()})
+	}
+	checkRegisterFn(env, &CheckFnSig{name: "readLine", owner: alias, receiverTy: -1, retTy: tString_, paramNames: []string{}, paramTys: []int{}, generics: []string{}, genericBounds: bounds()})
 }
 
 // registerStdStringsAliasFns registers the hot subset of std.strings
@@ -41415,18 +41580,78 @@ func registerStdStringsAliasFns(env *CheckEnv, alias string) {
 }
 
 func useDeclAliasName(cx *ElabCx, node *AstNode) string {
-	if checkIntListLenLocal(node.children2) == 0 {
+	if checkIntListLenLocal(node.children2) > 0 {
+		aliasIdx := checkIntListAtLocal(node.children2, 0)
+		if aliasIdx >= 0 {
+			aliasNode := astArenaNodeAt(cx.ast.arena, aliasIdx)
+			if _, ok := aliasNode.kind.(*AstNodeKind_AstNIdent); ok && aliasNode.text != "" {
+				return aliasNode.text
+			}
+		}
+	}
+	// Fallback: last dotted/slash segment. Mirrored from
+	// toolchain/check.osty pending a regen fix.
+	return useDeclLastSegment(node.text)
+}
+
+func useDeclLastSegment(path string) string {
+	if path == "" {
 		return ""
 	}
-	aliasIdx := checkIntListAtLocal(node.children2, 0)
-	if aliasIdx < 0 {
-		return ""
+	last := path
+	if i := lastIndexOfByte(last, '/'); i >= 0 {
+		last = last[i+1:]
 	}
-	aliasNode := astArenaNodeAt(cx.ast.arena, aliasIdx)
-	if _, ok := aliasNode.kind.(*AstNodeKind_AstNIdent); !ok {
-		return ""
+	if i := lastIndexOfByte(last, '.'); i >= 0 {
+		last = last[i+1:]
 	}
-	return aliasNode.text
+	return last
+}
+
+func lastIndexOfByte(s string, b byte) int {
+	for i := len(s) - 1; i >= 0; i-- {
+		if s[i] == b {
+			return i
+		}
+	}
+	return -1
+}
+
+// registerStdTestingAliasFns — mirror of toolchain/check.osty.
+func registerStdTestingAliasFns(env *CheckEnv, alias string) {
+	tys := env.tys
+	tString_ := tString(tys)
+	tBool_ := tBool(tys)
+	tInt_ := tInt(tys)
+	tUnit_ := tUnit(tys)
+	tT := tyNamed(tys, "T", nil)
+	tE := tyNamed(tys, "E", nil)
+	tResultTE := tyNamed(tys, "Result", []int{tT, tE})
+	tFnUnit := tyFn(tys, []int{}, tUnit_)
+	tFnResUnit := tyFn(tys, []int{}, tyNamed(tys, "Result", []int{tUnit_, tyNamed(tys, "Error", nil)}))
+
+	empty := func() []string { return make([]string, 0) }
+	bounds := func() []*CheckGenericBound { return make([]*CheckGenericBound, 0) }
+	gT := []string{"T"}
+	gTE := []string{"T", "E"}
+	add := func(name string, ret int, params []string, ptys []int, gen []string) {
+		checkRegisterFn(env, &CheckFnSig{
+			name: name, owner: alias, receiverTy: -1, retTy: ret,
+			paramNames: params, paramTys: ptys,
+			generics: gen, genericBounds: bounds(),
+		})
+	}
+	add("assert", tUnit_, []string{"cond"}, []int{tBool_}, empty())
+	add("assertTrue", tUnit_, []string{"cond"}, []int{tBool_}, empty())
+	add("assertFalse", tUnit_, []string{"cond"}, []int{tBool_}, empty())
+	add("assertEq", tUnit_, []string{"actual", "expected"}, []int{tT, tT}, gT)
+	add("assertNe", tUnit_, []string{"actual", "expected"}, []int{tT, tT}, gT)
+	add("expectOk", tT, []string{"result"}, []int{tResultTE}, gTE)
+	add("expectError", tE, []string{"result"}, []int{tResultTE}, gTE)
+	add("fail", tNever(tys), []string{"msg"}, []int{tString_}, empty())
+	add("context", tUnit_, []string{"msg", "body"}, []int{tString_, tFnUnit}, empty())
+	add("benchmark", tUnit_, []string{"iterations", "body"}, []int{tInt_, tFnResUnit}, empty())
+	add("snapshot", tUnit_, []string{"name", "output"}, []int{tString_, tString_}, empty())
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18261:1
