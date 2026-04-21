@@ -319,6 +319,13 @@ type docAnalysis struct {
 	// offset-keyed lookups don't have to scan `resolve.Refs` in
 	// O(n) per query.
 	identIndex map[int]*resolve.Symbol
+	// semanticTokenData memoizes the encoded reply payload for
+	// textDocument/semanticTokens/full. Editors often request this
+	// repeatedly for an unchanged buffer, so caching avoids re-lexing
+	// and re-encoding until the next analysis refresh replaces the
+	// whole docAnalysis.
+	semanticTokenOnce sync.Once
+	semanticTokenData []uint32
 }
 
 // buildIdentIndex walks the file-level Refs/TypeRefs and inverts them
