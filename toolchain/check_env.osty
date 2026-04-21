@@ -1355,6 +1355,172 @@ pub fn checkInstallPrelude(env: CheckEnv) {
         generics: [],
         genericBounds: [],
     })
+
+    checkInstallBuiltinMethods(env)
+}
+
+/// checkInstallBuiltinMethods registers the intrinsic methods spec
+/// §10.6 gives `List<T>` / `Map<K, V>` / `String`. These are not
+/// user-written — the backend lowers them directly — but the checker
+/// still needs a signature to type the call.
+///
+/// Scope intentionally covers only what `toolchain/*.osty` actually
+/// uses today (verified via the `osty check toolchain` histogram):
+/// 796 `.push`, 72 `.len`, 9 `.chars`, 6 `.pop`, 5 `.insert`, 4
+/// `.startsWith`, plus a handful of single-site calls. Registering a
+/// minimal set first keeps the diff reviewable; more helpers can
+/// follow when they surface as the next histogram wall.
+fn checkInstallBuiltinMethods(env: CheckEnv) {
+    let tys = env.tys
+    let tT = tyNamed(tys, "T", [])
+    let tK = tyNamed(tys, "K", [])
+    let tV = tyNamed(tys, "V", [])
+    let tListT = tyNamed(tys, "List", [tT])
+    let tListK = tyNamed(tys, "List", [tK])
+    let tListV = tyNamed(tys, "List", [tV])
+    let tListChar = tyNamed(tys, "List", [tChar(tys)])
+    let tListByte = tyNamed(tys, "List", [tByte(tys)])
+    let tMapKV = tyNamed(tys, "Map", [tK, tV])
+    let tOptT = tyOptional(tys, tT)
+    let tOptV = tyOptional(tys, tV)
+
+    // ----- List<T> intrinsics (spec §10.6) -----
+    checkRegisterFn(env, CheckFnSig {
+        name: "push", owner: "List", receiverTy: tListT, retTy: tUnit(tys),
+        paramNames: ["item"], paramTys: [tT],
+        generics: ["T"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "pop", owner: "List", receiverTy: tListT, retTy: tOptT,
+        paramNames: [], paramTys: [],
+        generics: ["T"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "len", owner: "List", receiverTy: tListT, retTy: tInt(tys),
+        paramNames: [], paramTys: [],
+        generics: ["T"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "isEmpty", owner: "List", receiverTy: tListT, retTy: tBool(tys),
+        paramNames: [], paramTys: [],
+        generics: ["T"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "insert", owner: "List", receiverTy: tListT, retTy: tUnit(tys),
+        paramNames: ["index", "item"], paramTys: [tInt(tys), tT],
+        generics: ["T"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "get", owner: "List", receiverTy: tListT, retTy: tOptT,
+        paramNames: ["index"], paramTys: [tInt(tys)],
+        generics: ["T"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "clear", owner: "List", receiverTy: tListT, retTy: tUnit(tys),
+        paramNames: [], paramTys: [],
+        generics: ["T"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "reverse", owner: "List", receiverTy: tListT, retTy: tUnit(tys),
+        paramNames: [], paramTys: [],
+        generics: ["T"], genericBounds: [],
+    })
+
+    // ----- Map<K, V> intrinsics (spec §10.6) -----
+    checkRegisterFn(env, CheckFnSig {
+        name: "insert", owner: "Map", receiverTy: tMapKV, retTy: tUnit(tys),
+        paramNames: ["key", "value"], paramTys: [tK, tV],
+        generics: ["K", "V"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "get", owner: "Map", receiverTy: tMapKV, retTy: tOptV,
+        paramNames: ["key"], paramTys: [tK],
+        generics: ["K", "V"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "remove", owner: "Map", receiverTy: tMapKV, retTy: tOptV,
+        paramNames: ["key"], paramTys: [tK],
+        generics: ["K", "V"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "keys", owner: "Map", receiverTy: tMapKV, retTy: tListK,
+        paramNames: [], paramTys: [],
+        generics: ["K", "V"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "values", owner: "Map", receiverTy: tMapKV, retTy: tListV,
+        paramNames: [], paramTys: [],
+        generics: ["K", "V"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "len", owner: "Map", receiverTy: tMapKV, retTy: tInt(tys),
+        paramNames: [], paramTys: [],
+        generics: ["K", "V"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "isEmpty", owner: "Map", receiverTy: tMapKV, retTy: tBool(tys),
+        paramNames: [], paramTys: [],
+        generics: ["K", "V"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "containsKey", owner: "Map", receiverTy: tMapKV, retTy: tBool(tys),
+        paramNames: ["key"], paramTys: [tK],
+        generics: ["K", "V"], genericBounds: [],
+    })
+
+    // ----- String intrinsics -----
+    let tString_ = tString(tys)
+    checkRegisterFn(env, CheckFnSig {
+        name: "len", owner: "String", receiverTy: tString_, retTy: tInt(tys),
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "isEmpty", owner: "String", receiverTy: tString_, retTy: tBool(tys),
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "chars", owner: "String", receiverTy: tString_, retTy: tListChar,
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "bytes", owner: "String", receiverTy: tString_, retTy: tListByte,
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "startsWith", owner: "String", receiverTy: tString_, retTy: tBool(tys),
+        paramNames: ["prefix"], paramTys: [tString_],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "endsWith", owner: "String", receiverTy: tString_, retTy: tBool(tys),
+        paramNames: ["suffix"], paramTys: [tString_],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "contains", owner: "String", receiverTy: tString_, retTy: tBool(tys),
+        paramNames: ["needle"], paramTys: [tString_],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "trimPrefix", owner: "String", receiverTy: tString_, retTy: tString_,
+        paramNames: ["prefix"], paramTys: [tString_],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "trimSuffix", owner: "String", receiverTy: tString_, retTy: tString_,
+        paramNames: ["suffix"], paramTys: [tString_],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "toInt", owner: "String", receiverTy: tString_,
+        retTy: tyNamed(tys, "Result", [tInt(tys), tyNamed(tys, "Error", [])]),
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
 }
 
 // Preserve a surface-level mirror of `frontCheckResult*`-style bridge

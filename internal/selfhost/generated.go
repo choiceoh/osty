@@ -32375,6 +32375,65 @@ func checkInstallPrelude(env *CheckEnv) {
 	checkRegisterFn(env, &CheckFnSig{name: "eprintln", owner: "", receiverTy: -1, retTy: tUnit(env.tys), paramNames: []string{"s"}, paramTys: []int{tString(env.tys)}, generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13740:5
 	checkRegisterFn(env, &CheckFnSig{name: "panic", owner: "", receiverTy: -1, retTy: tNever(env.tys), paramNames: []string{"message"}, paramTys: []int{tString(env.tys)}, generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
+
+	// Mirrored from toolchain/check_env.osty pending a regen fix.
+	checkInstallBuiltinMethods(env)
+}
+
+// checkInstallBuiltinMethods registers the intrinsic methods spec §10.6
+// gives List<T> / Map<K, V> / String. Mirrored from
+// toolchain/check_env.osty pending a regen fix.
+func checkInstallBuiltinMethods(env *CheckEnv) {
+	tys := env.tys
+	tT := tyNamed(tys, "T", nil)
+	tK := tyNamed(tys, "K", nil)
+	tV := tyNamed(tys, "V", nil)
+	tListT := tyNamed(tys, "List", []int{tT})
+	tListK := tyNamed(tys, "List", []int{tK})
+	tListV := tyNamed(tys, "List", []int{tV})
+	tListChar := tyNamed(tys, "List", []int{tChar(tys)})
+	tListByte := tyNamed(tys, "List", []int{tByte(tys)})
+	tMapKV := tyNamed(tys, "Map", []int{tK, tV})
+	tOptT := tyOptional(tys, tT)
+	tOptV := tyOptional(tys, tV)
+
+	gT := []string{"T"}
+	gKV := []string{"K", "V"}
+	empty := func() []string { return make([]string, 0) }
+	bounds := func() []*CheckGenericBound { return make([]*CheckGenericBound, 0) }
+
+	// List<T>
+	checkRegisterFn(env, &CheckFnSig{name: "push", owner: "List", receiverTy: tListT, retTy: tUnit(tys), paramNames: []string{"item"}, paramTys: []int{tT}, generics: gT, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "pop", owner: "List", receiverTy: tListT, retTy: tOptT, paramNames: empty(), paramTys: []int{}, generics: gT, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "len", owner: "List", receiverTy: tListT, retTy: tInt(tys), paramNames: empty(), paramTys: []int{}, generics: gT, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "isEmpty", owner: "List", receiverTy: tListT, retTy: tBool(tys), paramNames: empty(), paramTys: []int{}, generics: gT, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "insert", owner: "List", receiverTy: tListT, retTy: tUnit(tys), paramNames: []string{"index", "item"}, paramTys: []int{tInt(tys), tT}, generics: gT, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "get", owner: "List", receiverTy: tListT, retTy: tOptT, paramNames: []string{"index"}, paramTys: []int{tInt(tys)}, generics: gT, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "clear", owner: "List", receiverTy: tListT, retTy: tUnit(tys), paramNames: empty(), paramTys: []int{}, generics: gT, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "reverse", owner: "List", receiverTy: tListT, retTy: tUnit(tys), paramNames: empty(), paramTys: []int{}, generics: gT, genericBounds: bounds()})
+
+	// Map<K, V>
+	checkRegisterFn(env, &CheckFnSig{name: "insert", owner: "Map", receiverTy: tMapKV, retTy: tUnit(tys), paramNames: []string{"key", "value"}, paramTys: []int{tK, tV}, generics: gKV, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "get", owner: "Map", receiverTy: tMapKV, retTy: tOptV, paramNames: []string{"key"}, paramTys: []int{tK}, generics: gKV, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "remove", owner: "Map", receiverTy: tMapKV, retTy: tOptV, paramNames: []string{"key"}, paramTys: []int{tK}, generics: gKV, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "keys", owner: "Map", receiverTy: tMapKV, retTy: tListK, paramNames: empty(), paramTys: []int{}, generics: gKV, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "values", owner: "Map", receiverTy: tMapKV, retTy: tListV, paramNames: empty(), paramTys: []int{}, generics: gKV, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "len", owner: "Map", receiverTy: tMapKV, retTy: tInt(tys), paramNames: empty(), paramTys: []int{}, generics: gKV, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "isEmpty", owner: "Map", receiverTy: tMapKV, retTy: tBool(tys), paramNames: empty(), paramTys: []int{}, generics: gKV, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "containsKey", owner: "Map", receiverTy: tMapKV, retTy: tBool(tys), paramNames: []string{"key"}, paramTys: []int{tK}, generics: gKV, genericBounds: bounds()})
+
+	// String
+	tString_ := tString(tys)
+	checkRegisterFn(env, &CheckFnSig{name: "len", owner: "String", receiverTy: tString_, retTy: tInt(tys), paramNames: empty(), paramTys: []int{}, generics: empty(), genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "isEmpty", owner: "String", receiverTy: tString_, retTy: tBool(tys), paramNames: empty(), paramTys: []int{}, generics: empty(), genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "chars", owner: "String", receiverTy: tString_, retTy: tListChar, paramNames: empty(), paramTys: []int{}, generics: empty(), genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "bytes", owner: "String", receiverTy: tString_, retTy: tListByte, paramNames: empty(), paramTys: []int{}, generics: empty(), genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "startsWith", owner: "String", receiverTy: tString_, retTy: tBool(tys), paramNames: []string{"prefix"}, paramTys: []int{tString_}, generics: empty(), genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "endsWith", owner: "String", receiverTy: tString_, retTy: tBool(tys), paramNames: []string{"suffix"}, paramTys: []int{tString_}, generics: empty(), genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "contains", owner: "String", receiverTy: tString_, retTy: tBool(tys), paramNames: []string{"needle"}, paramTys: []int{tString_}, generics: empty(), genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "trimPrefix", owner: "String", receiverTy: tString_, retTy: tString_, paramNames: []string{"prefix"}, paramTys: []int{tString_}, generics: empty(), genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "trimSuffix", owner: "String", receiverTy: tString_, retTy: tString_, paramNames: []string{"suffix"}, paramTys: []int{tString_}, generics: empty(), genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "toInt", owner: "String", receiverTy: tString_, retTy: tyNamed(tys, "Result", []int{tInt(tys), tyNamed(tys, "Error", nil)}), paramNames: empty(), paramTys: []int{}, generics: empty(), genericBounds: bounds()})
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13708:5
