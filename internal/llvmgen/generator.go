@@ -244,18 +244,39 @@ func (g *generator) emitGCSafepointKind(emitter *LlvmEmitter, kind safepointKind
 		{typ: "ptr"},
 		{typ: "i64"},
 	})
-	// Resolve each root's address before the chunked emit so per-root
-	// `getelementptr inbounds` instructions sit above the safepoint
-	// blocks. The Osty helper then splits oversized frames into
-	// `safepointRootChunkSize`-bounded polls (RUNTIME_GC_DELTA §10.2).
 	roots := g.visibleSafepointRoots()
-	addresses := make([]string, len(roots))
-	for i, root := range roots {
-		addresses[i] = g.safepointRootAddress(emitter, root)
+	if len(roots) == 0 {
+		serial := g.nextSafepoint
+		g.nextSafepoint++
+		llvmEmitSafepointEmpty(emitter, encodeSafepointID(kind, serial))
+		g.needsGCRuntime = true
+		return
 	}
-	g.nextSafepoint = llvmEmitSafepointChunked(
-		emitter, int(kind), g.nextSafepoint, addresses, safepointRootChunkSize,
-	)
+	/* Phase A6 depth (RUNTIME_GC_DELTA §10.2): split frames whose
+	 * visible root set exceeds `safepointRootChunkSize` into multiple
+	 * safepoint calls so no single `alloca ptr, i64 N` grows the C
+	 * stack beyond a bounded chunk. Each chunk reuses the same kind
+	 * tag but bumps the serial, so per-kind counters in the runtime
+	 * still reflect the logical event count without losing the
+	 * classification. */
+	chunkSize := safepointRootChunkSize
+	if chunkSize <= 0 {
+		chunkSize = len(roots)
+	}
+	for start := 0; start < len(roots); start += chunkSize {
+		end := start + chunkSize
+		if end > len(roots) {
+			end = len(roots)
+		}
+		chunk := roots[start:end]
+		addresses := make([]string, len(chunk))
+		for i, root := range chunk {
+			addresses[i] = g.safepointRootAddress(emitter, root)
+		}
+		serial := g.nextSafepoint
+		g.nextSafepoint++
+		llvmEmitSafepointWithRoots(emitter, encodeSafepointID(kind, serial), addresses)
+	}
 	g.needsGCRuntime = true
 }
 
