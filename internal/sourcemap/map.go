@@ -2,6 +2,7 @@ package sourcemap
 
 import (
 	"sort"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/osty/osty/internal/diag"
@@ -20,6 +21,14 @@ type Entry struct {
 // the formatter and the original spans carried on the AST.
 type Map struct {
 	entries []Entry
+
+	originalExactOnce sync.Once
+	originalExact     map[spanKey]*Entry
+}
+
+type spanKey struct {
+	start int
+	end   int
 }
 
 // Empty reports whether the map carries any span mappings.
@@ -47,11 +56,48 @@ func (m *Map) RemapSpan(span diag.Span) (diag.Span, bool) {
 // GeneratedSpanForOriginal projects an original AST/source span into the
 // canonical/generated source.
 func (m *Map) GeneratedSpanForOriginal(span diag.Span) (diag.Span, bool) {
+	if entry := m.exactOriginalEntry(span.Start.Offset, span.End.Offset); entry != nil {
+		return entry.Generated, true
+	}
 	entry := m.entryForOriginal(span.Start.Offset, span.End.Offset)
 	if entry == nil {
 		return diag.Span{}, false
 	}
 	return entry.Generated, true
+}
+
+func (m *Map) exactOriginalEntry(start, end int) *Entry {
+	if m == nil {
+		return nil
+	}
+	if end < start {
+		end = start
+	}
+	m.originalExactOnce.Do(func() {
+		if len(m.entries) == 0 {
+			return
+		}
+		cache := make(map[spanKey]*Entry, len(m.entries))
+		for i := range m.entries {
+			entry := &m.entries[i]
+			os := entry.Original.Start.Offset
+			oe := entry.Original.End.Offset
+			if oe < os {
+				oe = os
+			}
+			key := spanKey{start: os, end: oe}
+			if prev := cache[key]; prev != nil {
+				prevGenerated := prev.Generated.End.Offset - prev.Generated.Start.Offset
+				nextGenerated := entry.Generated.End.Offset - entry.Generated.Start.Offset
+				if nextGenerated <= prevGenerated {
+					continue
+				}
+			}
+			cache[key] = entry
+		}
+		m.originalExact = cache
+	})
+	return m.originalExact[spanKey{start: start, end: end}]
 }
 
 // RemapDiagnostic returns a deep-cloned diagnostic whose spans and structured

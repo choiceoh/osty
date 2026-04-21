@@ -1097,7 +1097,7 @@ fn containsInterpolation(text: String) -> Bool {
     let n = units.len()
     for i < n {
         let unit = units[i]
-        if unit == "{" {
+        if unit == r"{" {
             let prev = if i == 0 { "" } else { units[i - 1] }
             if prev != "\\" {
                 return true
