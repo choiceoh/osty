@@ -1605,7 +1605,7 @@ func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
 	if !found {
 		return false, nil
 	}
-	if field.Name != "push" && field.Name != "pop" && field.Name != "insert" {
+	if field.Name != "push" && field.Name != "pop" && field.Name != "insert" && field.Name != "clear" {
 		return false, nil
 	}
 	g.pushScope()
@@ -1634,6 +1634,20 @@ func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
 		emitter.body = append(emitter.body, fmt.Sprintf(
 			"  call void @%s(%s)",
 			listRuntimePopDiscardSymbol(),
+			llvmCallArgs([]*LlvmValue{toOstyValue(baseValue)}),
+		))
+		g.takeOstyEmitter(emitter)
+		return true, nil
+	}
+	if field.Name == "clear" {
+		if len(call.Args) != 0 {
+			return true, unsupported("call", "list.clear requires no arguments")
+		}
+		g.declareRuntimeSymbol(listRuntimeClearSymbol(), "void", []paramInfo{{typ: "ptr"}})
+		emitter = g.toOstyEmitter()
+		emitter.body = append(emitter.body, fmt.Sprintf(
+			"  call void @%s(%s)",
+			listRuntimeClearSymbol(),
 			llvmCallArgs([]*LlvmValue{toOstyValue(baseValue)}),
 		))
 		g.takeOstyEmitter(emitter)

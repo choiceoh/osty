@@ -68,16 +68,19 @@ and falls back to the embedded selfhost bridge when that executable is
 unavailable, and `go generate ./internal/selfhost` still shells out to
 `cmd/osty-bootstrap-gen` to refresh `internal/selfhost/generated.go`. The
 whole-toolchain LLVM probe still first-walls on the bootstrap-only
-`runtime.golegacy.astbridge` bridge; when those bootstrap-only files are
-excluded, the current native probe first-walls on `LLVM011 [other]
-String.bytes requires Byte/List<Byte> lowering`. The earlier `Char` parameter
-lowering (`lspUtf16UnitsForChar`), `list_mixed_ptr`, non-ASCII string literal,
-match-as-statement, and nested-field assignment walls are all closed. The C
-runtime already ships `osty_rt_strings_Chars` / `osty_rt_strings_Bytes` with
-full UTF-8 coverage (including maximal-subpart recovery on ill-formed input);
-what remains is wiring `String.chars()` / `String.bytes()` lowering to those
-symbols so pure Osty `std.strings` bodies no longer depend on the runtime
-shim. `Result<T, E>` `?` propagation is wired; collection literals and a
+`runtime.golegacy.astbridge` bridge; the native-only merged
+probe (with bootstrap-only files skipped) now lowers CLEAN — the last
+wall (`LLVM015 [method_call_field]` on `buf.clear()` in ty.osty's
+generic-arg splitter) was closed by wiring `List<T>.clear()` through a
+new `osty_rt_list_clear` runtime helper. The earlier `Char` parameter
+lowering (`lspUtf16UnitsForChar`), `list_mixed_ptr`, non-ASCII string
+literal, match-as-statement, nested-field assignment, and
+`String.bytes()` / `String.chars()` intrinsic walls are all closed:
+`String.chars()` / `String.bytes()` dispatch at
+`internal/llvmgen/expr.go` to `osty_rt_strings_Chars` /
+`osty_rt_strings_Bytes` (full UTF-8 coverage including maximal-subpart
+recovery on ill-formed input), tagging the result list element width
+(`i32` / `i8`) so downstream iteration takes the `_bytes_v1` ABI. `Result<T, E>` `?` propagation is wired; collection literals and a
 substantial slice of collection methods lower; MIR capturing-closure env
 emission has landed with tests — so the remaining work is a narrow
 runtime/backend parity queue rather than a single missing subsystem.
