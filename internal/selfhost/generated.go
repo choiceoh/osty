@@ -19007,29 +19007,8 @@ func opSyncStmt(p *OstyParser) {
 	}
 }
 
-// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6993:1
 func opErrorCount(p *OstyParser) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6994:5
-	c := 0
-	_ = c
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6995:5
-	for _, e := range p.arena.errors {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6995:31
-		_ = e
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6996:5
-		func() {
-			var _cur1767 int = c
-			var _rhs1768 int = 1
-			if _rhs1768 > 0 && _cur1767 > math.MaxInt-_rhs1768 {
-				panic("integer overflow")
-			}
-			if _rhs1768 < 0 && _cur1767 < math.MinInt-_rhs1768 {
-				panic("integer overflow")
-			}
-			c = _cur1767 + _rhs1768
-		}()
-	}
-	return c
+	return len(p.arena.errors)
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:7000:1
@@ -27877,29 +27856,8 @@ func emptyCoreArena() *CoreArena {
 	return &CoreArena{nodes: make([]*CoreNode, 0, 1)}
 }
 
-// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:11134:5
 func coreArenaNodeCount(arena *CoreArena) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:11135:5
-	count := 0
-	_ = count
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:11136:5
-	for _, n := range arena.nodes {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:11137:9
-		_ = n
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:11138:9
-		func() {
-			var _cur1985 int = count
-			var _rhs1986 int = 1
-			if _rhs1986 > 0 && _cur1985 > math.MaxInt-_rhs1986 {
-				panic("integer overflow")
-			}
-			if _rhs1986 < 0 && _cur1985 < math.MinInt-_rhs1986 {
-				panic("integer overflow")
-			}
-			count = _cur1985 + _rhs1986
-		}()
-	}
-	return count
+	return len(arena.nodes)
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:11143:1
@@ -27912,11 +27870,8 @@ func coreArenaAdd(arena *CoreArena, node *CoreNode) int {
 	return idx
 }
 
-// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:11149:5
 func coreArenaNodeAt(arena *CoreArena, idx int) *CoreNode {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:11150:5
-	if idx < 0 {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:11151:9
+	if idx < 0 || idx >= len(arena.nodes) {
 		return emptyCoreNode(CoreKind(&CoreKind_CkErr{}))
 	}
 	return arena.nodes[idx]
