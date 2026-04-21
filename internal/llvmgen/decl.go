@@ -1105,6 +1105,7 @@ func signatureOf(fn *ast.FnDecl, ownerName string, env typeEnv) (*fnSig, error) 
 
 func (g *generator) emitScriptMain(stmts []ast.Stmt) (string, error) {
 	g.beginFunction()
+	g.emitEnvArgsPrologue()
 	if err := g.emitBlock(stmts); err != nil {
 		return "", err
 	}
@@ -1119,11 +1120,12 @@ func (g *generator) emitScriptMain(stmts []ast.Stmt) (string, error) {
 		llvmReturnI32Zero(emitter)
 		g.takeOstyEmitter(emitter)
 	}
-	return g.renderFunction("i32", "main", nil), nil
+	return g.renderFunction("i32", "main", g.mainEntryParams()), nil
 }
 
 func (g *generator) emitMainFunction(sig *fnSig) (string, error) {
 	g.beginFunction()
+	g.emitEnvArgsPrologue()
 	if err := g.emitBlock(sig.decl.Body.Stmts); err != nil {
 		return "", err
 	}
@@ -1138,7 +1140,44 @@ func (g *generator) emitMainFunction(sig *fnSig) (string, error) {
 		llvmReturnI32Zero(emitter)
 		g.takeOstyEmitter(emitter)
 	}
-	return g.renderFunction("i32", "main", nil), nil
+	return g.renderFunction("i32", "main", g.mainEntryParams()), nil
+}
+
+const (
+	ostyEnvArgsArgcParam = "osty_env_argc"
+	ostyEnvArgsArgvParam = "osty_env_argv"
+)
+
+// mainEntryParams widens `main` to `(i32 argc, ptr argv)` when a
+// package imports `std.env` so the prologue can hand raw argv to the
+// env runtime. Without the import we keep the bare signature so
+// smoke-test IR snapshots stay stable.
+func (g *generator) mainEntryParams() []paramInfo {
+	if len(g.stdEnvAliases) == 0 {
+		return nil
+	}
+	return []paramInfo{
+		{name: ostyEnvArgsArgcParam, typ: "i32", irTyp: "i32"},
+		{name: ostyEnvArgsArgvParam, typ: "ptr", irTyp: "ptr"},
+	}
+}
+
+// emitEnvArgsPrologue runs right after beginFunction so the
+// osty_rt_env_args_init call precedes any user statement that could
+// reach env.args(). The sext to i64 bridges C's `int argc` to the
+// runtime ABI declared below.
+func (g *generator) emitEnvArgsPrologue() {
+	if len(g.stdEnvAliases) == 0 {
+		return
+	}
+	g.declareRuntimeSymbol(ostyRtEnvArgsInitSymbol, "void", []paramInfo{
+		{typ: "i64"}, {typ: "ptr"},
+	})
+	argcI64 := fmt.Sprintf("%%%s.i64", ostyEnvArgsArgcParam)
+	g.body = append(g.body,
+		fmt.Sprintf("  %s = sext i32 %%%s to i64", argcI64, ostyEnvArgsArgcParam),
+		fmt.Sprintf("  call void @%s(i64 %s, ptr %%%s)", ostyRtEnvArgsInitSymbol, argcI64, ostyEnvArgsArgvParam),
+	)
 }
 
 func (g *generator) emitUserFunction(sig *fnSig) (string, error) {

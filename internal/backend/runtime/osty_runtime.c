@@ -6501,3 +6501,38 @@ void osty_rt_test_snapshot(const char *name, const char *output, const char *sou
     free(snap_path);
     exit(1);
 }
+
+/* std.env command-line argument surface.
+ *
+ * The emitter (see internal/llvmgen/stdlib_env_shim.go) routes the Osty
+ * call `env.args()` to `osty_rt_env_args`, and when a script/binary's
+ * package imports `std.env` the generated `main` is widened to
+ * (i32 argc, ptr argv) and begins with a call to `osty_rt_env_args_init`.
+ * The init call hands us the raw C argv; each `env.args()` invocation
+ * materializes a fresh GC-managed List<String> by duplicating every
+ * argv entry through the string allocator. Freshness matters because
+ * the returned list is mutable from Osty and must not alias process
+ * argv storage. */
+static int64_t osty_rt_env_stored_argc = 0;
+static char *const *osty_rt_env_stored_argv = NULL;
+
+void osty_rt_env_args_init(int64_t argc, void *argv) {
+    osty_rt_env_stored_argc = argc < 0 ? 0 : argc;
+    osty_rt_env_stored_argv = (char *const *)argv;
+}
+
+void *osty_rt_env_args(void) {
+    void *out = osty_rt_list_new();
+    int64_t i;
+    for (i = 0; i < osty_rt_env_stored_argc; i++) {
+        const char *raw = (osty_rt_env_stored_argv != NULL)
+            ? osty_rt_env_stored_argv[i]
+            : NULL;
+        if (raw == NULL) {
+            raw = "";
+        }
+        char *copy = osty_rt_string_dup_site(raw, strlen(raw), "runtime.env.args.entry");
+        osty_rt_list_push_ptr(out, copy);
+    }
+    return out;
+}
