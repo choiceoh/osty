@@ -2,10 +2,13 @@ package check
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -212,6 +215,148 @@ func UseEmbeddedNativeChecker() {
 	nativeCheckerFactory = func() (nativeChecker, string) {
 		return embeddedNativeChecker{}, ""
 	}
+}
+
+// UseCachedEmbeddedNativeChecker forces the in-process selfhost checker and
+// persists structured results under cacheDir. validity scopes cached entries
+// to a specific checker version — callers typically pass a hex digest of
+// internal/selfhost/generated.go so cache entries are transparently
+// invalidated whenever the compiled-in checker changes.
+//
+// The regen pipeline is the primary consumer: iterating on
+// internal/bootstrap/gen/*.go rebuilds osty-bootstrap-gen but leaves the
+// merged toolchain source and the selfhost checker byte-identical, so the
+// ~tens-of-seconds CheckPackageStructured call collapses to a JSON read
+// on the second and subsequent runs.
+//
+// cacheDir is created on demand. A misformatted cache entry is silently
+// rebuilt. The cache is plain JSON so it is trivially introspectable
+// with `cat`; no schema migration is attempted, so bump validity if the
+// nativeCheckResult shape changes.
+func UseCachedEmbeddedNativeChecker(cacheDir, validity string) {
+	checker := cachedEmbeddedChecker{
+		dir:      filepath.Join(cacheDir, validity),
+		validity: validity,
+	}
+	nativeCheckerFactory = func() (nativeChecker, string) {
+		return checker, ""
+	}
+}
+
+type cachedEmbeddedChecker struct {
+	dir      string
+	validity string
+}
+
+func (c cachedEmbeddedChecker) CheckSourceStructured(src []byte) (nativeCheckResult, error) {
+	key := cachedEmbeddedKey("src", src)
+	if res, ok := c.read(key); ok {
+		return res, nil
+	}
+	res, err := embeddedNativeChecker{}.CheckSourceStructured(src)
+	if err == nil {
+		c.write(key, res)
+	}
+	return res, err
+}
+
+func (c cachedEmbeddedChecker) CheckPackageStructured(input selfhost.PackageCheckInput) (nativeCheckResult, error) {
+	// Key on the raw source + a stable subset of the import surface.
+	// Hashing the full PackageCheckInput through json.Marshal would
+	// traverse the entire parsed AST — multi-second for the regen
+	// bundle, and unstable when pointer-graph ordering differs across
+	// runs (map iteration, slice identity) — which both defeats the
+	// cache and makes the hit path slower than the call it replaces.
+	key := cachedEmbeddedKey("pkg", packageCheckFingerprint(input))
+	if res, ok := c.read(key); ok {
+		return res, nil
+	}
+	res, err := embeddedNativeChecker{}.CheckPackageStructured(input)
+	if err == nil {
+		c.write(key, res)
+	}
+	return res, err
+}
+
+func packageCheckFingerprint(input selfhost.PackageCheckInput) []byte {
+	h := sha256.New()
+	for _, f := range input.Files {
+		fmt.Fprintf(h, "file=%s base=%d len=%d\n", f.Name, f.Base, len(f.Source))
+		h.Write(f.Source)
+		h.Write([]byte{'\n'})
+	}
+	for _, imp := range input.Imports {
+		fmt.Fprintf(h, "import=%s fns=%d types=%d variants=%d fields=%d aliases=%d iface=%d\n",
+			imp.Alias,
+			len(imp.Functions),
+			len(imp.TypeDecls),
+			len(imp.Variants),
+			len(imp.Fields),
+			len(imp.Aliases),
+			len(imp.InterfaceExts),
+		)
+		for _, fn := range imp.Functions {
+			fmt.Fprintf(h, "  fn=%s owner=%s recv=%s ret=%s params=%d\n",
+				fn.Name, fn.Owner, fn.ReceiverType, fn.ReturnType, len(fn.ParamTypes))
+			for i, pt := range fn.ParamTypes {
+				fmt.Fprintf(h, "    p%d=%s\n", i, pt)
+			}
+		}
+		for _, td := range imp.TypeDecls {
+			fmt.Fprintf(h, "  type=%s kind=%s generics=%d\n", td.Name, td.Kind, len(td.Generics))
+		}
+		for _, v := range imp.Variants {
+			fmt.Fprintf(h, "  variant=%s/%s fields=%d\n", v.Owner, v.Name, len(v.FieldTypes))
+		}
+	}
+	sum := h.Sum(nil)
+	return sum[:]
+}
+
+func (c cachedEmbeddedChecker) read(key string) (nativeCheckResult, bool) {
+	data, err := os.ReadFile(filepath.Join(c.dir, key+".json"))
+	if err != nil {
+		return nativeCheckResult{}, false
+	}
+	var res nativeCheckResult
+	if err := json.Unmarshal(data, &res); err != nil {
+		return nativeCheckResult{}, false
+	}
+	return res, true
+}
+
+func (c cachedEmbeddedChecker) write(key string, res nativeCheckResult) {
+	data, err := json.Marshal(res)
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(c.dir, 0o755); err != nil {
+		return
+	}
+	// Atomic swap: write to a sibling file then rename. Avoids a racing
+	// reader seeing a half-written entry if two regen pipelines overlap.
+	tmp, err := os.CreateTemp(c.dir, key+"-*.tmp")
+	if err != nil {
+		return
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return
+	}
+	if err := os.Rename(tmpPath, filepath.Join(c.dir, key+".json")); err != nil {
+		os.Remove(tmpPath)
+	}
+}
+
+func cachedEmbeddedKey(tag string, data []byte) string {
+	sum := sha256.Sum256(data)
+	return tag + "-" + hex.EncodeToString(sum[:])
 }
 
 func defaultNativeChecker() (nativeChecker, string) {
