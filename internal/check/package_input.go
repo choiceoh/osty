@@ -45,35 +45,60 @@ func selfhostPackageCheckInput(pkg *resolve.Package, ws *resolve.Workspace, stdl
 	return input
 }
 
+func selfhostSingleFileCheckInput(file *ast.File, src []byte, stdlib resolve.StdlibProvider) selfhost.PackageCheckInput {
+	input := selfhost.PackageCheckInput{
+		Imports: selfhostUsesImportSurfaces(fileUses(file), nil, stdlib),
+	}
+	if len(src) == 0 {
+		return input
+	}
+	input.Files = append(input.Files, selfhost.PackageCheckFile{
+		Source: append([]byte(nil), src...),
+		File:   file,
+		Base:   0,
+	})
+	return input
+}
+
 func selfhostPackageImportSurfaces(pkg *resolve.Package, ws *resolve.Workspace, stdlib resolve.StdlibProvider) []selfhost.PackageCheckImport {
+	return selfhostUsesImportSurfaces(selfhostPackageUses(pkg), ws, stdlib)
+}
+
+func selfhostPackageUses(pkg *resolve.Package) []*ast.UseDecl {
 	if pkg == nil {
 		return nil
 	}
-	seen := map[string]string{}
-	var out []selfhost.PackageCheckImport
+	var uses []*ast.UseDecl
 	for _, pf := range pkg.Files {
 		if pf == nil || pf.File == nil {
 			continue
 		}
-		for _, use := range pf.File.Uses {
-			target := selfhostLookupPackageImport(use, ws, stdlib)
-			if target == nil {
-				continue
-			}
-			alias := selfhostUseAlias(use)
-			if alias == "" {
-				continue
-			}
-			key := strings.Join(use.Path, ".")
-			if prev, ok := seen[alias]; ok {
-				if prev == key {
-					continue
-				}
-				continue
-			}
-			seen[alias] = key
-			out = append(out, selfhostBuildImportSurface(alias, target))
+		uses = append(uses, pf.File.Uses...)
+	}
+	return uses
+}
+
+func selfhostUsesImportSurfaces(uses []*ast.UseDecl, ws *resolve.Workspace, stdlib resolve.StdlibProvider) []selfhost.PackageCheckImport {
+	seen := map[string]string{}
+	var out []selfhost.PackageCheckImport
+	for _, use := range uses {
+		target := selfhostLookupPackageImport(use, ws, stdlib)
+		if target == nil {
+			continue
 		}
+		alias := selfhostUseAlias(use)
+		if alias == "" {
+			continue
+		}
+		key := strings.Join(use.Path, ".")
+		if prev, ok := seen[alias]; ok {
+			if prev == key {
+				continue
+			}
+			continue
+		}
+		seen[alias] = key
+		out = append(out, selfhostBuildImportSurface(alias, target))
 	}
 	return out
 }

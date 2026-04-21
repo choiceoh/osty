@@ -35019,12 +35019,15 @@ func checkInstallBuiltinMethods(env *CheckEnv) {
 	// Osty: /tmp/selfhost_merged.osty:15673:5
 	checkRegisterFn(env, &CheckFnSig{name: "toInt", owner: "String", receiverTy: tString_, retTy: tyNamed(tys, "Result", []int{tInt(tys), tyNamed(tys, "Error", make([]int, 0, 1))}), paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:15674:5
-	checkRegisterFn(env, &CheckFnSig{name: "from", owner: "Bytes", receiverTy: -1, retTy: tBytes_, paramNames: []string{"items"}, paramTys: []int{tListByte}, generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
+	tBytes_ := tBytes(tys)
+	_ = tBytes_
 	// Osty: /tmp/selfhost_merged.osty:15675:5
-	checkRegisterFn(env, &CheckFnSig{name: "len", owner: "Bytes", receiverTy: tBytes_, retTy: tInt(tys), paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
+	checkRegisterFn(env, &CheckFnSig{name: "from", owner: "Bytes", receiverTy: -1, retTy: tBytes_, paramNames: []string{"items"}, paramTys: []int{tListByte}, generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:15676:5
-	checkRegisterFn(env, &CheckFnSig{name: "isEmpty", owner: "Bytes", receiverTy: tBytes_, retTy: tBool(tys), paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
+	checkRegisterFn(env, &CheckFnSig{name: "len", owner: "Bytes", receiverTy: tBytes_, retTy: tInt(tys), paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:15677:5
+	checkRegisterFn(env, &CheckFnSig{name: "isEmpty", owner: "Bytes", receiverTy: tBytes_, retTy: tBool(tys), paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
+	// Osty: /tmp/selfhost_merged.osty:15678:5
 	checkRegisterFn(env, &CheckFnSig{name: "get", owner: "Bytes", receiverTy: tBytes_, retTy: tyOptional(tys, tByte(tys)), paramNames: []string{"index"}, paramTys: []int{tInt(tys)}, generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:15681:5
 	checkRegisterFn(env, &CheckFnSig{name: "toInt", owner: "Char", receiverTy: tChar(tys), retTy: tInt(tys), paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})

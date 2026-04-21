@@ -441,11 +441,29 @@ func applySelfhostFileResult(result *Result, file *ast.File, rr *resolve.Result,
 		))
 		return
 	}
-	checkedSrc := selfhostFileSource(file, rr, src, stdlib)
-	if dump := os.Getenv("OSTY_NATIVE_CHECKER_SOURCE_DUMP"); dump != "" {
-		_ = os.WriteFile(dump, checkedSrc.source, 0o644)
+	var (
+		checked    nativeCheckResult
+		checkedSrc selfhostCheckedSource
+		err        error
+	)
+	switch r := runner.(type) {
+	case nativePackageChecker:
+		// File-mode callers already hold the parsed public AST, so prefer the
+		// structured package request: it reuses the package checker's direct
+		// public-AST -> selfhost-AstArena lowering and avoids routing single-file
+		// checks back through the astbridge/public-AST adapter path.
+		checkedSrc = selfhostFileStructuredSource(file, rr, src)
+		if dump := os.Getenv("OSTY_NATIVE_CHECKER_SOURCE_DUMP"); dump != "" {
+			_ = os.WriteFile(dump, checkedSrc.source, 0o644)
+		}
+		checked, err = r.CheckPackageStructured(selfhostSingleFileCheckInput(file, src, stdlib))
+	default:
+		checkedSrc = selfhostFileSource(file, rr, src, stdlib)
+		if dump := os.Getenv("OSTY_NATIVE_CHECKER_SOURCE_DUMP"); dump != "" {
+			_ = os.WriteFile(dump, checkedSrc.source, 0o644)
+		}
+		checked, err = runner.CheckSourceStructured(checkedSrc.source)
 	}
-	checked, err := runner.CheckSourceStructured(checkedSrc.source)
 	if err != nil {
 		result.Diags = append(result.Diags, checkerUnavailableDiag(
 			"file",
@@ -1593,6 +1611,31 @@ func selfhostFileSource(file *ast.File, rr *resolve.Result, src []byte, stdlib r
 			scope:     scope,
 			refs:      refs,
 			base:      base,
+			sourceMap: canonicalMap,
+		}},
+	}
+}
+
+func selfhostFileStructuredSource(file *ast.File, rr *resolve.Result, src []byte) selfhostCheckedSource {
+	var canonicalMap *sourcemap.Map
+	if file != nil {
+		if canonicalSrc, sm := canonical.SourceWithMap(src, file); len(canonicalSrc) > 0 && bytes.Equal(canonicalSrc, src) {
+			canonicalMap = sm
+		}
+	}
+	var scope *resolve.Scope
+	var refs map[*ast.Ident]*resolve.Symbol
+	if rr != nil {
+		scope = rr.FileScope
+		refs = rr.Refs
+	}
+	return selfhostCheckedSource{
+		source: append([]byte(nil), src...),
+		files: []selfhostFileSegment{{
+			file:      file,
+			scope:     scope,
+			refs:      refs,
+			base:      0,
 			sourceMap: canonicalMap,
 		}},
 	}
