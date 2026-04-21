@@ -2451,7 +2451,7 @@ func (g *generator) emitListExprWithHint(expr *ast.ListExpr, hintedElemTyp strin
 		emittedElems = append(emittedElems, g.protectManagedTemporary("list.elem", v))
 	}
 	if elemTyp == "" {
-		return value{}, unsupported("expression", "empty list literal requires an explicit List<T> type")
+		return value{}, unsupportedf("expression", "empty list literal %s requires an explicit List<T> type", exprPosLabel(expr))
 	}
 	useAggregateABI := g.usesAggregateListABI(elemTyp)
 	g.declareRuntimeSymbol(listRuntimeNewSymbol(), "ptr", nil)

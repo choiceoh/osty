@@ -534,6 +534,31 @@ func TestGenerateManagedListPushStmtUsesSafepoint(t *testing.T) {
 	}
 }
 
+func TestGenerateNestedListPushStmtHintsEmptyListArg(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn seed(mut preds: List<List<Int>>) {
+    preds.push([])
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "core",
+		SourcePath:  "/tmp/list_push_empty_nested.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"call ptr @osty_rt_list_new()",
+		"call void @osty_rt_list_push_ptr(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestGenerateForInOverListStringUsesRuntimeABI(t *testing.T) {
 	file := parseLLVMGenFile(t, `fn visit(items: List<String>) {
     for item in items {
