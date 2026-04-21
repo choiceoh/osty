@@ -2354,6 +2354,14 @@ pub fn llvmStringRuntimeTrimSpaceSymbol() -> String {
     "osty_rt_strings_TrimSpace"
 }
 
+pub fn llvmStringRuntimeCharsSymbol() -> String {
+    "osty_rt_strings_Chars"
+}
+
+pub fn llvmStringRuntimeBytesSymbol() -> String {
+    "osty_rt_strings_Bytes"
+}
+
 /// LLVM forward declarations for the string runtime surface plus the
 /// scalar `Int`/`Float` -> `String` helpers used by interpolation.
 /// All string values cross the ABI as null-terminated `ptr`, and
@@ -2377,6 +2385,8 @@ pub fn llvmStringRuntimeDeclarations() -> List<String> {
         "declare ptr @osty_rt_strings_TrimPrefix(ptr, ptr)",
         "declare ptr @osty_rt_strings_TrimSuffix(ptr, ptr)",
         "declare ptr @osty_rt_strings_TrimSpace(ptr)",
+        "declare ptr @osty_rt_strings_Chars(ptr)",
+        "declare ptr @osty_rt_strings_Bytes(ptr)",
     ]
 }
 
@@ -2466,6 +2476,14 @@ pub fn llvmStringRuntimeTrimSuffix(
 
 pub fn llvmStringRuntimeTrimSpace(emitter: LlvmEmitter, value: LlvmValue) -> LlvmValue {
     llvmCall(emitter, "ptr", "osty_rt_strings_TrimSpace", [value])
+}
+
+pub fn llvmStringChars(emitter: LlvmEmitter, value: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "ptr", "osty_rt_strings_Chars", [value])
+}
+
+pub fn llvmStringBytes(emitter: LlvmEmitter, value: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "ptr", "osty_rt_strings_Bytes", [value])
 }
 
 pub fn llvmBuiltinType(name: String) -> String {

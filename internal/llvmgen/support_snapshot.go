@@ -2219,6 +2219,14 @@ func llvmStringRuntimeTrimSpaceSymbol() string {
 	return "osty_rt_strings_TrimSpace"
 }
 
+func llvmStringRuntimeCharsSymbol() string {
+	return "osty_rt_strings_Chars"
+}
+
+func llvmStringRuntimeBytesSymbol() string {
+	return "osty_rt_strings_Bytes"
+}
+
 func llvmStringRuntimeDeclarations() []string {
 	return []string{
 		"declare i1 @osty_rt_strings_Equal(ptr, ptr)",
@@ -2240,6 +2248,8 @@ func llvmStringRuntimeDeclarations() []string {
 		"declare ptr @osty_rt_strings_TrimPrefix(ptr, ptr)",
 		"declare ptr @osty_rt_strings_TrimSuffix(ptr, ptr)",
 		"declare ptr @osty_rt_strings_TrimSpace(ptr)",
+		"declare ptr @osty_rt_strings_Chars(ptr)",
+		"declare ptr @osty_rt_strings_Bytes(ptr)",
 	}
 }
 
@@ -2324,6 +2334,14 @@ func llvmStringRuntimeTrimSuffix(emitter *LlvmEmitter, value *LlvmValue, suffix 
 
 func llvmStringRuntimeTrimSpace(emitter *LlvmEmitter, value *LlvmValue) *LlvmValue {
 	return llvmCall(emitter, "ptr", "osty_rt_strings_TrimSpace", []*LlvmValue{value})
+}
+
+func llvmStringChars(emitter *LlvmEmitter, value *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "ptr", "osty_rt_strings_Chars", []*LlvmValue{value})
+}
+
+func llvmStringBytes(emitter *LlvmEmitter, value *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "ptr", "osty_rt_strings_Bytes", []*LlvmValue{value})
 }
 
 func llvmBuiltinType(name string) string {
