@@ -693,6 +693,19 @@ typedef struct osty_gc_stats {
     int64_t index_count;
     int64_t index_tombstones;
     int64_t index_find_ops_total;
+    int64_t minor_count;
+    int64_t major_count;
+    int64_t minor_nanos_total;
+    int64_t major_nanos_total;
+    int64_t young_count;
+    int64_t young_bytes;
+    int64_t old_count;
+    int64_t old_bytes;
+    int64_t promoted_count_total;
+    int64_t promoted_bytes_total;
+    int64_t allocated_since_minor;
+    int64_t nursery_limit_bytes;
+    int64_t promote_age;
 } osty_gc_stats;
 
 void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
@@ -1472,5 +1485,359 @@ int main(void) {
 	if !strings.Contains(text, "safepoint root slot count") ||
 		!strings.Contains(text, "exceeds cap") {
 		t.Fatalf("expected abort message about safepoint root overflow, got:\n%s", text)
+	}
+}
+
+// TestBundledRuntimeMinorCollectSweepsYoungOnly covers Phase B3/B6 —
+// after `osty_gc_debug_collect_minor`, unreachable YOUNG objects are
+// freed, YOUNG survivors stay YOUNG with age bumped, and OLD objects
+// are untouched regardless of reachability (they only fall in a
+// major). The minor tier counter and nanos_total increment; major
+// counters stay flat.
+func TestBundledRuntimeMinorCollectSweepsYoungOnly(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_gc_minor_sweep_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_gc_minor_sweep_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+
+void osty_gc_debug_collect_minor(void);
+void osty_gc_debug_collect_major(void);
+int64_t osty_gc_debug_live_count(void);
+int64_t osty_gc_debug_minor_count(void);
+int64_t osty_gc_debug_major_count(void);
+int64_t osty_gc_debug_young_count(void);
+int64_t osty_gc_debug_old_count(void);
+int64_t osty_gc_debug_generation_of(void *payload);
+int64_t osty_gc_debug_age_of(void *payload);
+int64_t osty_gc_debug_validate_heap(void);
+
+int main(void) {
+    /* Allocate a rooted survivor plus a piece of garbage. Both start
+     * YOUNG. */
+    void *keep = osty_gc_alloc_v1(7, 32, "keep");
+    void *garbage = osty_gc_alloc_v1(7, 32, "garbage");
+    (void)garbage;
+    osty_gc_root_bind_v1(keep);
+    printf("%lld %lld\n",
+        (long long)osty_gc_debug_generation_of(keep),
+        (long long)osty_gc_debug_generation_of(garbage));
+
+    /* Minor: garbage swept, keep stays YOUNG, age bumps to 1. */
+    osty_gc_debug_collect_minor();
+    printf("%lld %lld %lld %lld\n",
+        (long long)osty_gc_debug_minor_count(),
+        (long long)osty_gc_debug_major_count(),
+        (long long)osty_gc_debug_live_count(),
+        (long long)osty_gc_debug_young_count());
+    printf("%lld %lld\n",
+        (long long)osty_gc_debug_generation_of(keep),
+        (long long)osty_gc_debug_age_of(keep));
+
+    /* validate_heap stays green across the minor cycle. */
+    printf("%lld\n", (long long)osty_gc_debug_validate_heap());
+
+    /* Major pass for cleanup so validate passes at exit. */
+    osty_gc_root_release_v1(keep);
+    osty_gc_debug_collect_major();
+    printf("%lld %lld\n",
+        (long long)osty_gc_debug_live_count(),
+        (long long)osty_gc_debug_major_count());
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	buildOutput, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runOutput, err := exec.Command(binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	if got, want := string(runOutput), "0 0\n1 0 1 1\n0 1\n0\n0 1\n"; got != want {
+		t.Fatalf("runtime minor-sweep harness stdout = %q, want %q", got, want)
+	}
+}
+
+// TestBundledRuntimePromotesAfterAgeThreshold covers Phase B3 promotion:
+// a YOUNG object survives `promote_age` minor cycles and gets moved to
+// OLD in place. Its address stays stable (no compaction), the OLD
+// counter bumps, and `promoted_count_total` reflects the movement.
+func TestBundledRuntimePromotesAfterAgeThreshold(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_gc_promotion_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_gc_promotion_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+
+void osty_gc_debug_collect_minor(void);
+void osty_gc_debug_collect_major(void);
+int64_t osty_gc_debug_generation_of(void *payload);
+int64_t osty_gc_debug_age_of(void *payload);
+int64_t osty_gc_debug_young_count(void);
+int64_t osty_gc_debug_old_count(void);
+int64_t osty_gc_debug_promoted_count_total(void);
+int64_t osty_gc_debug_promote_age(void);
+
+int main(void) {
+    /* With promote_age lowered to 2 via env, the first minor bumps age
+     * 0->1 (stays YOUNG), the second bumps 1->2 which crosses the
+     * threshold and triggers promotion to OLD. */
+    printf("%lld\n", (long long)osty_gc_debug_promote_age());
+
+    void *keep = osty_gc_alloc_v1(7, 32, "keep");
+    void *addr0 = keep;
+    osty_gc_root_bind_v1(keep);
+    printf("%lld %lld\n",
+        (long long)osty_gc_debug_generation_of(keep),
+        (long long)osty_gc_debug_age_of(keep));
+
+    osty_gc_debug_collect_minor();
+    printf("%lld %lld\n",
+        (long long)osty_gc_debug_generation_of(keep),
+        (long long)osty_gc_debug_age_of(keep));
+
+    osty_gc_debug_collect_minor();
+    /* Post-second-minor: promoted to OLD, age reset to 0. */
+    printf("%lld %lld\n",
+        (long long)osty_gc_debug_generation_of(keep),
+        (long long)osty_gc_debug_age_of(keep));
+    printf("%lld %lld\n",
+        (long long)osty_gc_debug_young_count(),
+        (long long)osty_gc_debug_old_count());
+    printf("%lld\n", (long long)osty_gc_debug_promoted_count_total());
+    /* Address unchanged — no compaction yet. */
+    printf("%d\n", keep == addr0);
+
+    osty_gc_root_release_v1(keep);
+    osty_gc_debug_collect_major();
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	buildOutput, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runCmd := exec.Command(binaryPath)
+	runCmd.Env = append(os.Environ(), "OSTY_GC_PROMOTE_AGE=2")
+	runOutput, err := runCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	if got, want := string(runOutput), "2\n0 0\n0 1\n1 0\n0 1\n1\n1\n"; got != want {
+		t.Fatalf("runtime promotion harness stdout = %q, want %q", got, want)
+	}
+}
+
+// TestBundledRuntimeMinorUsesRememberedSetForOldToYoung is the headline
+// Phase B4 test: after promoting an OLD owner, store a fresh YOUNG
+// child into one of its slots via the write-barrier ABI, then run a
+// minor collection. The remembered set must carry the YOUNG child
+// through even though it is neither directly rooted nor reachable
+// from any YOUNG object.
+func TestBundledRuntimeMinorUsesRememberedSetForOldToYoung(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_gc_remembered_minor_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_gc_remembered_minor_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
+void osty_gc_pre_write_v1(void *owner, void *old_value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.pre_write_v1"));
+void osty_gc_post_write_v1(void *owner, void *value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.post_write_v1"));
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+
+void osty_gc_debug_collect_minor(void);
+void osty_gc_debug_collect_major(void);
+int64_t osty_gc_debug_generation_of(void *payload);
+int64_t osty_gc_debug_live_count(void);
+int64_t osty_gc_debug_young_count(void);
+int64_t osty_gc_debug_old_count(void);
+int64_t osty_gc_debug_remembered_edge_count(void);
+int64_t osty_gc_debug_validate_heap(void);
+
+int main(void) {
+    /* Step 1: allocate an owner, root-bind it, and promote it to OLD
+     * via repeated minor cycles (promote_age=1 via env). */
+    void *owner = osty_gc_alloc_v1(7, 32, "owner");
+    osty_gc_root_bind_v1(owner);
+    osty_gc_debug_collect_minor();
+    printf("%lld\n", (long long)osty_gc_debug_generation_of(owner));
+
+    /* Step 2: allocate a fresh YOUNG child, NOT root-bound. Install
+     * it into the OLD owner via the write-barrier ABI. The remembered
+     * set must now contain (owner, child). */
+    void *child = osty_gc_alloc_v1(8, 16, "child");
+    osty_gc_pre_write_v1(owner, NULL, 0);
+    osty_gc_post_write_v1(owner, child, 0);
+    printf("%lld %lld\n",
+        (long long)osty_gc_debug_generation_of(child),
+        (long long)osty_gc_debug_remembered_edge_count());
+
+    /* Step 3: a minor collection must keep the child alive — the
+     * remembered set is the only path. If B4 is broken, child gets
+     * swept and live_count collapses. */
+    int64_t live_before = osty_gc_debug_live_count();
+    osty_gc_debug_collect_minor();
+    int64_t live_after = osty_gc_debug_live_count();
+    printf("%lld %lld\n", live_before, live_after);
+    printf("%lld\n", (long long)osty_gc_debug_validate_heap());
+
+    /* Step 4: promote the child too — this exercises the compact-
+     * after-minor step (rem edge of (OLD, YOUNG) drops to (OLD, OLD)
+     * and should be filtered out). */
+    osty_gc_debug_collect_minor();
+    printf("%lld %lld\n",
+        (long long)osty_gc_debug_generation_of(child),
+        (long long)osty_gc_debug_remembered_edge_count());
+
+    osty_gc_root_release_v1(owner);
+    osty_gc_debug_collect_major();
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	buildOutput, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runCmd := exec.Command(binaryPath)
+	runCmd.Env = append(os.Environ(), "OSTY_GC_PROMOTE_AGE=1")
+	runOutput, err := runCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	/* Expected:
+	 *  1           — owner is OLD after first minor
+	 *  0 1         — child starts YOUNG; remembered edge count is 1
+	 *  2 2         — live before minor = 2 (owner+child); after = 2 (both survived)
+	 *  0           — validate_heap green
+	 *  1 0         — child now OLD (age crossed 1 promotes); rem edges compacted to 0
+	 */
+	if got, want := string(runOutput), "1\n0 1\n2 2\n0\n1 0\n"; got != want {
+		t.Fatalf("runtime remembered-minor harness stdout = %q, want %q", got, want)
+	}
+}
+
+// TestBundledRuntimeNurseryLimitTriggersMinor covers Phase B5 — the
+// pressure tier split. A nursery budget lower than the major heap
+// threshold means safepoint polls fire minor collections before major
+// ever runs. We assert on the minor/major counters after enough
+// allocation to cross the nursery line but stay under the heap line.
+func TestBundledRuntimeNurseryLimitTriggersMinor(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_gc_nursery_trigger_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_gc_nursery_trigger_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
+void osty_gc_safepoint_v1(int64_t id, void *const *roots, int64_t n) __asm__(OSTY_GC_SYMBOL("osty.gc.safepoint_v1"));
+
+int64_t osty_gc_debug_minor_count(void);
+int64_t osty_gc_debug_major_count(void);
+int64_t osty_gc_debug_nursery_limit_bytes(void);
+
+int main(void) {
+    printf("%lld\n", (long long)osty_gc_debug_nursery_limit_bytes());
+    /* Allocate unreferenced objects — any safepoint poll should
+     * trigger a minor, not a major, because the major threshold is
+     * much higher than the nursery limit. */
+    for (int i = 0; i < 32; i++) {
+        (void)osty_gc_alloc_v1(7, 128, "g");
+    }
+    osty_gc_safepoint_v1(0, 0, 0);
+    /* Exactly one minor expected (allocations pushed the young bytes
+     * above the nursery limit; the single safepoint drains it). No
+     * major. */
+    printf("%lld %lld\n",
+        (long long)osty_gc_debug_minor_count(),
+        (long long)osty_gc_debug_major_count());
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	buildOutput, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runCmd := exec.Command(binaryPath)
+	runCmd.Env = append(os.Environ(),
+		"OSTY_GC_NURSERY_BYTES=1024",
+		"OSTY_GC_THRESHOLD_BYTES=1048576",
+	)
+	runOutput, err := runCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	if got, want := string(runOutput), "1024\n1 0\n"; got != want {
+		t.Fatalf("runtime nursery-trigger harness stdout = %q, want %q", got, want)
 	}
 }
